@@ -187,7 +187,7 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
 | `gate` | `rework` | ② 통합 실패·병합 충돌 |
 | `planning`,`approval`,`ready` | `cancelled` | CP remove, 실행 이력 없음(D-16) |
 
-`done`·`cancelled`는 종료. 차단은 저장하지 않는 계산값. SS 선행은 `planning/approval/ready`가 아니면 충족, FS는 `done`(P `depMet` L3677). P의 SS는 `cancelled`도 시작으로 보지만, 취소된 선행은 관계가 제거되므로 [결정] 무시한다.
+`done`·`cancelled`는 종료. 차단은 저장하지 않는 계산값. SS 선행은 `planning/approval/ready`가 아니면 충족, FS는 `done`(P `depMet` L3677). **시작 전 취소된 선행의 SS 관계는 취소 반영 트랜잭션에서 제거**하고 제거 이력·후속 차단 재계산을 남긴다(owner 2026-11-25, D-27). P의 SS 판정과 달리 `cancelled`는 시작으로 세지 않는다. 다른 선행이 미충족이면 후속은 계속 차단된다. FS도 P `simulate`처럼 관계를 제거한다.
 
 #### 시도 종류별 claim 허용
 
