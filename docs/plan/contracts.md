@@ -176,10 +176,10 @@ GET  /api/runner/commands                → {currentEpoch, commands:[{id,kind:"
 POST /api/runner/commands/:id/result     → {status, items:[{name,ok,detail}]}
 POST /api/runner/jobs/claim {kinds[],capacity} → 200 {job:{id,kind,payload,leaseUntil,fence}} | 204
 POST /api/runner/jobs/:id/renew {fence}  → {leaseUntil}         409 LEASE_LOST
-POST /api/runner/jobs/:id/start {fence,hostId,bootId,processGroup?,headSha,installedSubagents[]} → {attemptId?}
-POST /api/runner/jobs/:id/process {fence,processGroup,cgroup}      → 프로세스 생성 직후 보유에 기록
+POST /api/runner/jobs/:id/start {fence,hostId,bootId,headSha?,installedSubagents[]} → {attemptId?}
+POST /api/runner/jobs/:id/process {fence,processGroup,cgroup}      → 프로세스 생성 직후 기록: slot_state reserved→active
 POST /api/runner/jobs/:id/slots/release {fence,hostId,proof,at}      → 물리 슬롯만 반환, 논리 잠금 유지
-POST /api/runner/jobs/:id/slots/acquire {fence,hostId,processGroup}  → 같은 시도의 CLI 재기동 전 용량 재획득·그룹 등록
+POST /api/runner/jobs/:id/slots/acquire {fence,hostId}  → CLI·① 실행 전 용량 재획득: slot_state none→reserved(그룹은 생성 뒤 /process)
 POST /api/runner/jobs/:id/release {fence,hostId,proof,at}            → 잔여 보유 해제(낡은 fence도 허용, 아래)
 POST /api/runner/jobs/:id/reconcile {fence,evidence}                  → 외부 상태 대조 결과
 POST /api/runner/jobs/:id/finish {fence,status,result?,error?}
@@ -198,7 +198,7 @@ POST /api/runner/jobs/:id/finish {fence,status,result?,error?}
 규칙:
 
 1. 정리 명령이 남아 있으면 claim은 409 CLEANUP_PENDING.
-2. `attempt` claim 시 서버가 한 트랜잭션에서 선행·Task 상태·상한·Agent 상한·충돌 묶음·readiness·사용량·관측 미확인·등급과 **다른 job의 미해제 보유**를 확인하고 슬롯 `reserved`·잠금 `held`로 예약한다(인계받은 job은 자기 잠금을 그대로 사용). 시도는 아직 만들지 않는다. 설치 성공 뒤 `start`는 [data-model §2.5-1](data-model.md#25-1-실행-보유의-단일-정의)의 **자기 보유**만 예외로 인정하고 다른 job의 보유와 전체 용량을 다시 검사한 뒤 `slot_state reserved→active`·시도 생성·Task 전이를 한 트랜잭션으로 처리한다. 중복 start는 같은 attemptId를 재생하고 전환은 1회다. claim 실패 시 job은 대기하고 `reasons[]`를 화면에 보인다(§4.6).
+2. `attempt` claim 시 서버가 한 트랜잭션에서 선행·Task 상태·상한·Agent 상한·충돌 묶음·readiness·사용량·관측 미확인·등급과 **다른 job의 미해제 보유**를 확인하고 슬롯 `reserved`·잠금 `held`로 예약한다(인계받은 job은 자기 잠금을 그대로 사용). 시도는 아직 만들지 않는다. 설치 성공 뒤 `start`는 [data-model §2.5-1](data-model.md#25-1-실행-보유의-단일-정의)의 **자기 보유**만 예외로 인정하고 다른 job의 보유와 전체 용량을 다시 검사한 뒤 시도 생성·Task 전이를 한 트랜잭션으로 처리한다(`slot_state`는 `reserved` 유지, `/process`에서 active). `headSha`는 attempt와 통합 계열(`integrate`·`deploy_check`·`ci_retry`)만 필수이고 그 외 job은 보내지 않는다(빠짐·불필요한 값 400, 서버가 job kind로 판정). 중복 start는 같은 attemptId를 재생하고 전환은 1회다. claim 실패 시 job은 대기하고 `reasons[]`를 화면에 보인다(§4.6).
 3. lease 60초, 20초마다 renew [결정]. lease 만료는 **자원 해제가 아니다**. 조회 전용 job(`repo_check`)만 바로 재할당한다. attempt와 외부 효과 job은 §3.4.
 4. job에서 나온 모든 보고는 `fence`를 포함하고 낡은 fence는 409 LEASE_LOST. 경로에 job/시도가 없는 11종 — CI run 시작, 병합 상태, design snapshot, estimates, replans, planning sessions·analyses·reviews·proposals, task plan, 기술 결정 POST — 은 본문에 `jobId`도 필수. 저장소 확인 결과는 경로 ID로 job을 찾고 fence만 받는다. CI run 갱신은 시작 때 저장한 run→job과 fence를 대조한다. **job 없이 시작한 야간 점검만** jobId 없이 시작하고 갱신 fence는 null(다른 run의 null은 거부). job 밖 telemetry(heartbeat·sessions·host·readiness·models·usage·concurrency·input-changes·github/status)와 메시지 ack·응답은 fence가 없다. `subagent-usage`는 세션 종료 뒤 사후 확정(§6.7-7)이므로 job이 끝났어도 **그 job의 마지막 fence**면 받는다. 예외: `release`는 **원래 job·host·boot·process group이 일치**할 때 낡은 fence도 받되 보유 해제 외 상태는 바꾸지 않는다.
 5. 야간 점검과 입력 변경 확인은 Runner가 `policy` 시각으로 시작한다. 중복은 멱등 키 `night:<date>`로 막는다.
@@ -219,8 +219,14 @@ POST /api/runner/jobs/:id/finish {fence,status,result?,error?}
 ### 3.4 실행 보유와 복구
 
 1. **시도 종료 ≠ 자원 반환.** heartbeat 3회 누락이면 §6.5대로 시도 `interrupted`, Task `paused`로 기록하지만 보유는 `slot_state=unconfirmed`, `lock_state=held`로 남는다. 슬롯·충돌 묶음·Task 재개를 계속 막고 사유를 화면에 보인다(§6.7 L804-806).
-2. 해제 증거 `proof`: `{kind:"no_process",bootId}` · `{kind:"group_empty",bootId,processGroup}` · `{kind:"boot_changed",bootId,processGroup|null,currentBootId}`. `bootId`·`processGroup`은 **보유를 만든 원래 값**이고 저장값과 같아야 하며, `currentBootId`는 host가 보고한 현재 값과 같고 원래 값과 달라야 한다. 뜻: `no_process`(프로세스를 만든 적 없음), `group_empty`(Runner가 그룹·자손 empty 확인), `boot_changed`(같은 host의 boot ID 변경 — 이전 프로세스가 존재할 수 없음). 출력 단절·lease 만료·시간 경과는 증거가 아니다.
-3. Runner는 프로세스 생성 **전에** 예정된 그룹/cgroup 이름을 로컬에 영속화한다. 재시작 시 로컬 기록과 서버 보유를 대조해 정리하고 release한다. 기록이 없거나 확인할 수 없으면 `unconfirmed`를 유지하고 알린다.
+2. 해제 증거 `proof`: `{kind:"no_process",bootId}` · `{kind:"group_empty",bootId,processGroup}` · `{kind:"boot_changed",bootId,processGroup|null,currentBootId}`. `bootId`·`processGroup`은 **보유를 만든 원래 값**이고 저장값과 같아야 하며, `currentBootId`는 host가 보고한 현재 값과 같고 원래 값과 달라야 한다. 뜻: `no_process`(실행 명령을 시작한 적 없고 남은 래퍼도 없음을 3번 절차로 확인), `group_empty`(Runner가 그룹·자손 empty 확인), `boot_changed`(같은 host의 boot ID 변경 — 이전 프로세스가 존재할 수 없음). 출력 단절·lease 만료·시간 경과는 증거가 아니다.
+3. **생성과 기록 사이의 정리.** 모든 CLI·① 명령·설치 명령은 같은 절차로 띄운다.
+   - (가) 생성 전: 로컬에 launch 기록(`launchId`, job, hostId, bootId, 예정 cgroup 이름)을 fsync로 영속화. (나) **대기 래퍼**를 새 프로세스 그룹으로 생성(cgroup을 쓸 수 있으면 예정 cgroup 안에서). 래퍼 환경에 비밀값이 아닌 `launchId`를 둔다. (다) pgid를 로컬에 영속화하고 `/process`를 보낸다. (라) `/process`가 성공한 뒤에만 래퍼에 실행을 허가해 실제 명령을 exec한다.
+   - Runner가 (라) 전에 죽으면 허가 파이프가 닫혀 래퍼는 **실제 명령을 실행하지 않고 종료**한다. `/process`가 거부되면(LEASE_LOST 등) 허가하지 않고 그룹을 종료한다. 응답 유실은 같은 멱등 키로 재시도하고 확인 전에는 허가하지 않는다.
+   - 프로세스가 기록 전에 스스로 죽으면: 그룹·cgroup·`launchId` 프로세스가 없음을 확인 → 서버에 pgid가 없으면 `no_process`, 이미 기록됐으면 `group_empty`로 슬롯 해제. 시도가 시작됐으면 `failed`로 보고하고 잠금은 §3.4-9를 따른다.
+   - Runner 재시작 시 claim 전에 launch 기록과 서버 보유를 대조한다. 예정 cgroup의 프로세스, 기록된 pgid, `/proc`의 같은 사용자·같은 `launchId` 프로세스를 찾아 그룹 단위로 종료하고 **비었음을 다시 확인**한다. pgid는 재사용될 수 있으므로 프로세스 시작 시각 또는 `launchId`가 맞을 때만 종료한다.
+   - `no_process`는 서버 보유에 pgid가 없고 위 확인이 끝났을 때만 쓴다(단순히 「기록 없음」은 근거가 아님). 서버에 pgid가 있으면 `no_process`를 거부한다. 로컬 launch 기록을 잃었거나 확인할 수 없으면 `unconfirmed`를 유지하고 알리며, 같은 host에서는 boot 변경만이 남은 해제 근거다.
+   - 서버 쪽: `reserved`인 채 연결이 끊기거나 lease가 만료되면 자동 해제하지 않고 `unconfirmed`로 바꾼다. `/process`는 `reserved`에서만 새 pgid를 받고, 같은 pgid 재전송은 성공, 다른 pgid는 409 INVALID_TRANSITION.
 4. 같은 PC에서 증거 없이 보유를 푸는 강제 API는 두지 않는다.
 5. **PC 변경**: §6.6 L749-751이 새 PC에서 새 시도 재개를 확정했으므로, 이전 host 보유는 슬롯 `unconfirmed`·잠금 `orphaned`로 남기되 새 host의 슬롯 계산과 재개 차단에서 제외한다. host 식별자 변경 없는 단순 재시작에는 적용하지 않는다. **로컬 재개와 공유 외부 쓰기는 분리한다.** `renew`·fence는 GitHub가 알지 못하므로 외부 쓰기 격리 근거로 쓰지 않는다.
    - host가 바뀌면 서버가 `external_write_authority`를 generation+1, `blocked`로 바꾼다. 새 host는 로컬 worktree의 dev·①·QA까지만 하고 push·PR·commit status·병합·design_apply·초기화 되돌림을 포함한 GitHub 쓰기는 409 `EXTERNAL_WRITE_BLOCKED`로 막는다. 사유는 기존 실행 불가 사유·관리자 개입 알림에 표시한다. 배포 확인은 host별 로컬 compose만 대상으로 하고, 공유 대상이면 같은 차단을 적용한다.

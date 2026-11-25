@@ -58,7 +58,7 @@ M0 기반 → M1 데이터·계약·순수 판정 → M2 서버 핵심 → {M3 �
 | M2-02 | Task·의존성·명세·설계·체크리스트 CRUD, 동시 수정 | `W --filter api test -- tasks` (동시 순환 추가·이력, 삭제/의존성/**승인 요청**/승인 낡은 버전 409, **승인 요청→승인/반려: 필수 항목 미충족 400·다른 상태 409·중복 요청**, **활성 Task를 새로 차단하는 의존성 추가 409(D-35)**, **착수 승인 판단 보류(D-33)**) | `apps/api/src/tasks` | M2-01 후 ∥ | Claude / Codex |
 | M2-03 | 프로젝트 등록·기술 결정·bootstrap·승인·입력 변경·분석 안 함 | `W --filter api test -- project` (초기 WBS 승인의 판단 보류(D-33)) | `apps/api/src/project` | ∥ | Claude / Codex |
 | M2-04 | 초기화·명령·정리 대기·내보내기·파일 삭제 큐 | `W --filter api test -- reset` (중간 실패 주입, 설정 유지/삭제 표, middleware 통과 후 정지한 host 보고·worker와 초기화 경합, 명령 epoch 불일치) | `apps/api/src/reset` | M2-03 후 | Codex / Claude |
-| M2-05 | Runner 보고·jobs lease·시도 claim·heartbeat 감시·PC 변경·상한 | `W --filter api test -- runner` (동시 claim 100회, 중복 보고, **네트워크 단절+자손 생존+재개 거부→해제 후 허용**, 설치 실패 후 Task/예약/이력/재시도, 외부 효과 job reconcile, **renew 성공→정지→host 전환→옛 호출 재개 시 새 외부 쓰기 차단·대조**, ① 실패 직전 같은 묶음 claim 거부, 잠금 인계 원자성, 자기 예약 start·중복 start, 인계받은 QA job의 claim·start 성공과 타 job 거부, 부분 unique 경합, 시작 버튼 필수·자동 재시도 2(총 3회, 같은 종류 연속)·재작업 3 경계, **D-29·D-30 run-grade·claim**) | `apps/api/src/runner` | ∥ | Codex / Claude |
+| M2-05 | Runner 보고·jobs lease·시도 claim·heartbeat 감시·PC 변경·상한 | `W --filter api test -- runner` (동시 claim 100회, 중복 보고, **네트워크 단절+자손 생존+재개 거부→해제 후 허용**, 설치 실패 후 Task/예약/이력/재시도, 외부 효과 job reconcile, **renew 성공→정지→host 전환→옛 호출 재개 시 새 외부 쓰기 차단·대조**, ① 실패 직전 같은 묶음 claim 거부, 잠금 인계 원자성, 자기 예약 start·중복 start, 인계받은 QA job의 claim·start 성공과 타 job 거부, 부분 unique 경합, 시작 버튼 필수·자동 재시도 2(총 3회, 같은 종류 연속)·재작업 3 경계, **D-29·D-30 run-grade·claim**, **start 뒤 /process 전 끊김→unconfirmed 유지, pgid 있는 보유의 no_process 거부, job 종류별 headSha**) | `apps/api/src/runner` | ∥ | Codex / Claude |
 | M2-06 | 시도 결과·검증·결함·Evidence·Gate 판정·완료 | `W --filter api test -- execution` (QA 오류·BLOCKED 새 시도, 낡은 head/명세 PASS 거부) | `apps/api/src/execution` | M2-05 후 | Codex / Claude |
 | M2-07 | Planning·CP(미리보기=반영·자동/보류)·추정·재조정·분할 | `W --filter api test -- planning` (**취소 반영과 SS 제거·이력·재조정이 한 트랜잭션, 미리보기 영향=반영 결과**, **D-33~35 보류: 자동·수동 승인·반영 동일, 재시뮬레이션 때 다시 판정**) | `apps/api/src/planning` | ∥ | Claude / Codex |
 | M2-08 | 정책·모델·하위 Agent·메시지·이력·변경 이벤트·무결성 점검 | `W --filter api test -- policy messages changes` (**허용 해제→재판단→재개 이력(D-29)**) | `apps/api/src/{policy,messages,changes}` | ∥ | Claude / Codex |
@@ -95,7 +95,7 @@ M0 기반 → M1 데이터·계약·순수 판정 → M2 서버 핵심 → {M3 �
 | ID | 범위 | 완료 조건(검증) | 디렉토리 | 병렬 | 담당 / 리뷰 |
 |---|---|---|---|---|---|
 | M5-01 | Claude/Codex CLI 어댑터, 출력 파싱, env allowlist | `R test -- cli` (기록 fixture·모르는 이벤트) | `src/cli` | ∥ | Claude / Codex |
-| M5-02 | 세션 실행·하위 Agent 설치·예산·resume·중단 | `R test -- exec` (자손 남김·강제 종료·스트림 단절·Runner 재시작 대조·설치 실패·정의 hash/버전 불일치) | `src/exec` | — | Codex / Claude |
+| M5-02 | 세션 실행·하위 Agent 설치·예산·resume·중단 | `R test -- exec` (자손 남김·강제 종료·스트림 단절·Runner 재시작 대조·설치 실패·정의 hash/버전 불일치, **생성→로컬 기록→/process→exec 각 경계의 Runner kill: 실제 명령 미실행·잔여 0·재시작 정리, pgid 재사용 프로세스 미종료, launch 기록 유실→unconfirmed**) | `src/exec` | — | Codex / Claude |
 | M5-03 | 프로세스 그룹/cgroup 실증과 관측 등급 기록 | `R test:host -- cgroup` 결과를 `docs/plan/` 검증 기록에 남김 | `src/exec` | M5-02 후 | Codex / Claude |
 | M5-04 | 초기 분석·차이 분석·추정·분할 orchestration | `R test -- planning` (단계 실패 후 재개, 초안 스키마, `judgedRules`·`splitJudgements` 두 Agent 합의 출력) | `src/planning` | ∥ | Claude / Codex |
 | M5-05 | 시도 흐름 결합: claim→①(자리표시)→QA→재작업→Gate **대기까지**, 메시지 | `W test:scenario -- attempt-flow` (fake CLI, 시나리오 7·9, 6의 Gate 대기까지; 완료는 M7-06) | `src/jobs`, e2e | — | Codex / Claude |
