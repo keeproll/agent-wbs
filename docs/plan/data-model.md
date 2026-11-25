@@ -55,15 +55,67 @@
 | `task_estimates` | 추가 전용: est/lo/hi hours(`lo<=est<=hi` CHECK), tokens_k, confidence, basis, agreed_by | §8.3 |
 | `task_grades` | role(`dev/qa`), model_id, effort, reason, locked, locked_by, effective_from | §7.1 |
 | `task_subagents` | role, subagent_id, basis | §7.4 |
-| `task_splits` | basis, judged_rules(jsonb), exceptions(jsonb: rule·why·by·at) | §5.2-1 |
+| `task_splits` | basis, judged_rules(jsonb, §2.3-1), exceptions(jsonb: rule·why·by·at) | §5.2-1 |
 | `task_source_links` | fix_task → origin_task(버그 수정), split_from | §5.2-1 L622 |
+
+#### 2.3-1 `judged_rules` 정의 (D-33)
+
+```ts
+type JudgedRules = {
+  schemaVersion: 1;
+  items: Judgement<'revert' | 'contract' | 'refactor'>[];   // 규칙 5·7·9, rule별 최대 1건
+};
+type SplitJudgements = {                                    // 분할 CP (D-34)
+  schemaVersion: 1;
+  items: Judgement<'ac_meaning' | 'layer_order' | 'test_included'>[];
+};
+type Judgement<R> = {
+  rule: R;
+  result: 'met' | 'not_met';          // 충족 | 불충족
+  agreedBy: ('Claude' | 'Codex')[];   // 합의 주체. 중복 없이 둘 다 필요
+  basis: string;                      // 근거, 공백 제거 후 1자 이상
+  subjectHash: string;                // 판단 대상의 정규화 SHA-256
+  judgedAt: string;                   // UTC ISO 8601
+  sourceRef: string;                  // planning job/session ID
+};
+```
+
+- 기록은 Planning API만 쓴다. 다시 판단하면 최신값으로 바꾸고 이전·이후를 `task_history`에 추가한다.
+- `subjectHash` 대상: `judged_rules`는 아래 `JudgedContent`, `split_judgements`는 판단 기록을 뺀 CP `ops` **전체** + 각 대상 Task의 현재 `JudgedContent`. `JudgedContent` = `{title, scope[], out[], doneCond, spec, ac[], outputs[{name,kind,required,verify}], designs[{kind,content}], conflictGroup}` — 제목·범위·제외·**완료 조건**·명세(`task_specs.spec`)·AC·산출물·기술 설계·충돌 묶음. **완료 조건이 바뀌면 판단의 전제가 바뀌므로 포함**하며 `doneCond`만 바꾸는 CP도 다시 판단한다. 목적·배경·선행 조건, 산출물 제출 여부(`delivered`), Task의 우선순위·담당·상태는 제외(단 분할 hash의 `ops`에 든 새 Task 값은 포함). **계산은 서버만** 한다. 새 Task·초안·CP는 내용과 판단을 함께 받아 저장 때 계산하므로 요청에서 생략하고, 기존 Task 재판단은 작업 payload로 받은 값을 그대로 돌려보내 불일치를 검출한다. 저장된 CP의 판단(`/planning/proposals/:id/judgements`)도 같다. 판단 기록 자체(`judgedRules`·`taskJudgements`·`splitJudgements`)와 Task 키·ref는 hash 대상에서 **제외**한다(자기 참조 방지, NEW-n→TASK-n 변환에도 동일).
+- **유효한 기록** = 형식이 맞고 합의 주체가 둘 다이며 현재 대상 hash와 일치. 아니면 「기록 없음」으로 본다 [결정].
+- 켜진 규칙마다 유효한 `met`이 있어야 승인 가능. 없으면 `JUDGEMENT_MISSING`, `not_met`이면 `JUDGEMENT_NOT_MET`. 자동 규칙의 예외 사유로 대신하지 않는다. 화면 상태는 G의 「판단」을 쓰고 충족/불충족/기록 없음을 글로 구분한다.
+- **저장 위치**
+
+| 판단 대상 | 반영 전 | 반영 후 |
+|---|---|---|
+| CP의 새 Task | `change_proposals.ops[].t.judgedRules` | 새 Task의 `task_splits.judged_rules` |
+| CP가 내용을 바꾸는 기존 Task | `change_proposals.task_judgements` = `[{taskKey, judgedRules}]`(taskKey 중복 금지) | 그 Task의 `task_splits.judged_rules` 교체 + 이력 |
+| 분할 CP | `change_proposals.split_judgements` | CP에 그대로 보존 |
+| 초기 초안 | `wbs_drafts.content` | `task_splits.judged_rules` |
+
+  반영 전에는 기존 Task의 `task_splits`를 바꾸지 않는다. 반영 트랜잭션에서 실제 적용 내용으로 hash를 다시 계산해 대조하고, 다르면 「기록 없음」으로 보류한다.
+- CP의 기존 Task 판정은 `task_judgements` 항목이 있으면 그것을, 없으면 현재 `task_splits.judged_rules`를 쓴다. 어느 쪽이든 **변경 후 hash**와 일치해야 유효하다.
+- CP 검사 대상: 추가된 Task와 hash 대상 내용이 바뀐 Task만. 판단 규칙과 무관한 CP(우선순위 변경 등)는 막지 않는다.
+
+#### 2.3-2 분할의 순서 보장 판정 (D-34)
+
+원래 Task T를 T1…Tn으로 나눌 때, T의 선후행 관계마다 변경 후 그래프에서 확인한다. 조사 Task가 추가되면 그래프에 포함한다.
+
+| 원래 관계 | 변경 후 필요한 보장 |
+|---|---|
+| A FS T | A에서 **모든 Ti**로, 첫 변이 FS인 경로 |
+| A SS T | A에서 **모든 Ti**로의 경로(FS·SS) |
+| T FS B | **모든 Ti**에서 B로, 첫 변이 FS인 경로 |
+| T SS B | **하나 이상의 Ti**에서 B로의 경로(FS·SS) |
+
+첫 변이 FS면 이후 변이 FS·SS여도 도착 Task 시작 ≥ 출발 Task 종료가 유지된다. 이미 충족된 선행(FS는 완료, SS는 시작됨)은 검사하지 않는다 [결정]. 하나라도 보장되지 않으면 `ORDER_NOT_PRESERVED`. 분할이 아닌 취소 CP는 D-27을 따른다.
 
 ### 2.4 Planning · 변경 제안
 
 | 테이블 | 주요 컬럼 · 제약 | 근거 |
 |---|---|---|
 | `plannings` / `planning_analyses` / `planning_reviews` | 세션 / Agent별 독립 분석 unique(planning, agent) / 주제별 일치·이견·조정 | §4.5 |
-| `change_proposals` | cp_key, source(planning/message/manual/split/input/decision), status(§3.6), ops(jsonb §5.6), id_map, preview_hash, hold_reasons | §4.8 §5.6 |
+| `change_proposals` | cp_key, source(planning/message/manual/split/input/decision), status(§3.6), ops(jsonb §5.6), id_map, preview_hash, hold_reasons(jsonb `{holdReasons,issues}`, contracts §2.1), split_judgements(jsonb null, §2.3-1; 분할 CP만), **task_judgements(jsonb not null default `[]`**, §2.3-1) | §4.8 §5.6 |
 | `change_proposal_events` | 제출·승인·반려·반영·보류, actor, comment — 추가 전용 | §4.8 |
 
 ### 2.5 실행 · 검증
@@ -97,6 +149,7 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
 | | `orphaned` | host 변경으로 잠금 효력만 제거, 감사용(종료값) |
 
 - **미해제** = `slot_state ≠ none` 또는 `lock_state = held`. 둘 다 아니면 `closed_at`을 채우며, 닫힌 행은 다시 열지 않는다.
+- `reserved`는 프로세스 생성·`/process` 기록 전까지다. 이 구간에서 끊기면 pgid가 없는 채 `unconfirmed`가 되고 contracts §3.4-3의 확인 뒤에만 해제한다.
 - 슬롯 전이: `none→reserved→active→none`, `reserved→none`, `reserved/active→unconfirmed→none`. `none`으로 가려면 release_proof 필요. CLI 재기동은 `none→reserved→active`를 다시 밟는다.
 - 잠금 전이: `none→held`(claim), `held→handed_over/released/orphaned`. `released`는 같은 host에서 `slot_state=none`일 때만, `handed_over`도 이전 job의 `slot_state=none`일 때만 가능.
 - host 변경: 이전 host 행은 `lock_state=orphaned`, 남은 슬롯은 `unconfirmed`. 새 host의 용량·잠금 계산에서 제외하고 이전 host 정리 대상으로 남긴다. 외부 쓰기는 contracts §3.4-5.
@@ -107,7 +160,7 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
 
 1. 인계는 한 트랜잭션: 이전 행 `held→handed_over, handed_to_job=B` → B의 보유 행을 `lock_state=held, slot_state=none, lock_from_job=A, host/fence=null`로 생성. 사이에 다른 claim이 끼지 못한다.
 2. **자기 보유 = `hold.job = 요청 job`**이고 epoch가 같은 행. claim은 자기 행의 `held` 잠금을 충돌에서 제외하고, 그 행에 host·fence를 기록하며 `slot_state none→reserved`로 바꾼다(새 행을 만들지 않음). 인계 없는 최초 claim은 새 행을 만든다.
-3. `start`·`slots/acquire`·`release`는 자기 행이면서 host·fence가 일치해야 한다(낡은 fence의 release 예외는 contracts §3.2-4). 자기 슬롯은 용량에서 한 번만 세고 타 job 행은 모두 검사한다.
+3. `start`·`slots/acquire`·`release`는 자기 행이면서 host·fence가 일치해야 한다(낡은 fence의 release 예외는 contracts §3.2-4). 자기 슬롯은 용량에서 한 번만 세고 타 job 행은 모두 검사한다. `start`는 슬롯을 `reserved`로 두고 `/process`가 `active`로 바꾼다.
 4. B가 claim 전에 취소되면 B의 잠금을 `released`로 닫는다. 이전 job A는 인계 뒤 자기 보유로 인정되지 않는다.
 
 ### 2.6 Runner · 정책
@@ -172,13 +225,13 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
 |---|---|---|
 | (없음) | `planning` | 수동 생성·CP add (P `newTask`) |
 | (없음) | `ready` | 초기 WBS 승인(P `draftWbs`) |
-| `planning` | `approval` | 명세 필수 항목 충족 |
+| `planning` | `approval` | 팀장 착수 승인 요청 + 명세 필수 항목 충족(contracts §2.5). 자동 전이 없음 |
 | `approval` | `ready` / `planning` | 팀장 착수 승인(owner Q-02) / 반려 |
 | `ready` | `running` | 팀장 시작 → claim 예약 → 설치 → `start` 재검사 통과 |
 | `running` | `qa` / `verifying` | dev→① 통과→QA / rework→① 통과→재검증 |
 | `running` | `failed` / `paused` | 실행 실패 / 중단(보유 해제와 별개) |
 | `failed` | `running` / `qa` / `verifying` | 실패한 시도와 **같은 종류**의 새 시도 |
-| `paused` | `running` / `qa` / `verifying` | 중단된 종류로 새 시도(같은 등급) |
+| `paused` | `running` / `qa` / `verifying` | 중단된 종류로 새 시도(같은 등급. 모델 허용 해제 시 재판단한 새 등급, D-29) |
 | `qa`,`verifying` | `gate` / `rework` / `paused` / `failed` | PASS / FAIL / 중단 / QA 프로세스 자체 실패. **BLOCKED는 상태 유지**(시도는 completed, verif=blocked, P `registerQa`) |
 | `qa` / `verifying` | 같은 상태 | BLOCKED 뒤 원인 해결 → **새 qa/reverify 시도·새 검증**. 기존 검증은 불변 |
 | `rework` | `running` | rework 시도 |
@@ -187,7 +240,7 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
 | `gate` | `rework` | ② 통합 실패·병합 충돌 |
 | `planning`,`approval`,`ready` | `cancelled` | CP remove, 실행 이력 없음(D-16) |
 
-`done`·`cancelled`는 종료. 차단은 저장하지 않는 계산값. SS 선행은 `planning/approval/ready`가 아니면 충족, FS는 `done`(P `depMet` L3677). P의 SS는 `cancelled`도 시작으로 보지만, 취소된 선행은 관계가 제거되므로 [결정] 무시한다.
+`done`·`cancelled`는 종료. 차단은 저장하지 않는 계산값. SS 선행은 `planning/approval/ready`가 아니면 충족, FS는 `done`(P `depMet` L3677). **시작 전 취소된 선행의 SS 관계는 취소 반영 트랜잭션에서 제거**하고 제거 이력·후속 차단 재계산을 남긴다(owner 2026-11-25, D-27). P의 SS 판정과 달리 `cancelled`는 시작으로 세지 않는다. 다른 선행이 미충족이면 후속은 계속 차단된다. FS도 P `simulate`처럼 관계를 제거한다.
 
 #### 시도 종류별 claim 허용
 
@@ -199,7 +252,7 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
 | `rework` | rework | 최근 검증 FAIL 또는 통합 실패. 자동 3회까지, 초과는 팀장 버튼 |
 | `qa` | qa | ① 통과, 최초 또는 직전 qa가 BLOCKED |
 | `verifying` | reverify | rework의 ① 통과, 직전 reverify가 BLOCKED, 또는 근거 무효화 |
-| `paused` | 중단된 종류 | 직전 시도 interrupted, 같은 등급. 재개는 팀장 버튼(P) |
+| `paused` | 중단된 종류 | 직전 시도 interrupted, 같은 등급. 모델이 허용 해제됐으면 재판단 완료 후 새 등급 + 이력(D-29). 재개는 팀장 버튼(P) |
 | `failed` | 실패한 종류 | 직전 시도 failed. 같은 종류 연속 실패에 자동 재시도 2회(최초 포함 총 3회), 이후 팀장 버튼 |
 | 그 외 | 없음 | 409 |
 
