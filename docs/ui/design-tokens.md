@@ -1,6 +1,6 @@
 # 디자인 값과 반응형 규칙
 
-원본은 별도 디자인 토큰 시스템이 아니라 CSS 변수·클래스·인라인 스타일·동적 문자열을 함께 사용한다. 아래 값은 원본 그대로이며, 없는 다크 테마나 임의 spacing scale을 보충하지 않았다. 전체 CSS·인라인 값·SVG는 뒤의 기계 추출 부록이 정본이다. 브라우저 실측은 하지 못했다.
+원본은 별도 디자인 토큰 시스템이 아니라 CSS 변수·클래스·인라인 스타일·동적 문자열을 함께 사용한다. 아래 값은 원본 그대로이며, 없는 다크 테마나 임의 spacing scale을 보충하지 않았다. 전체 CSS·인라인 값·SVG는 뒤의 기계 추출 부록이 정본이다. 저자의 최초 브라우저 실행은 막혔지만 독립 리뷰의 고정시각 스크린샷·실측을 받아 대조했다(screenshots.md). 원문 CSS 선언과 실제 인쇄·좁은 폭 결함을 구분한다.
 
 ## 색과 테마
 
@@ -77,9 +77,15 @@ SVG `.ico`는 18×18px, fill:none, stroke:currentColor, stroke-width:1.7, round 
 | max-width:1100px | detail fixed top:64px, 좌우0, bottom0, z-index30; summary2열; kv110px+나머지; cols2/frow1열; choice2열; gate-r1fr auto | 643 |
 | max-width:760px | nav60px, 메뉴문구/phase숨김; 프로젝트/헤더구분/phase/user숨김; page14px 12px 0; search100%; cmp-row1열 | 644 |
 | prefers-reduced-motion:reduce | split 전환·skeleton 정지; topbar 고정; 버튼 스피너 2s로 감속(완전정지 아님) | 150,580,599 |
-| print | body 전체 visibility:hidden, rpt-doc와 그 자식 visibility:visible, 문서 좌상단/폭100%/경계0/패딩0; 부록 새페이지 | 532–538,552 |
+| print 선언 | body visibility:hidden, rpt-doc/자식 visible, 문서 absolute left:0/top:0/width:100%/패딩0; 부록 새페이지. 실제 기준점 결함은 아래 참조 | 532–538,552 |
 
 `meta viewport`는 메일 HTML에는 있고 본문 head에는 없다(1–9줄 vs 4029줄). 모바일 브라우저 실측이 필요하다. 데스크톱 1920×1080은 script preview 속성일 뿐, 고정 런타임 viewport가 아니다(2903줄).
+
+## 독립 리뷰에서 확인한 인쇄·좁은 폭 결함
+
+P532–538의 left/top:0 선언만으로 페이지 좌상단이라고 판정할 수 없다. P594의 .main position:relative 때문에 Ctrl+P 출력은 (180,64) 기준에서 시작하고 PDF 실측 폭614px로 줄어든다(독립 리뷰 B3, desktop/UI-11-print.pdf·png). P5000 iframe 인쇄는 별도 경로다. 제품은 서버 PDF와 브라우저 인쇄 모두 출력가능영역 좌상단·열잘림없음으로 검증한다(MM-31, UAT-REPORT-05/06).
+
+독립 리뷰의1024px WBS 표는 내용1048px/가시794px로 오른쪽 열이 잘리고, 768px 문서는814px, 390px 도구막대는475px까지 넘친다. viewport meta 부재로 실제 모바일 에뮬레이션은980px로 렌더된다. 이는 원본 결함이며 복제 목표가 아니다. owner 추가 결정으로1280이상 전체 지원, 그 아래 표 가로스크롤, 휴대폰 Task/CI/CP 상세 열람을 판정한다(UAT-RESP-01/02).
 
 <!-- GENERATED: extract.py -->
 
@@ -1390,4 +1396,75 @@ const SKR = (cols, cells) => ({style:'grid-template-columns: ' + cols, cells});
       depGrid:'grid-template-columns: 110px minmax(160px,1fr) 150px 120px 90px 70px', succGrid:'grid-template-columns: 110px minmax(160px,1fr) 150px 120px 150px',
 // L7099
       clGrid:'grid-template-columns: 56px 100px minmax(180px,1fr) 70px 150px 170px 120px', histGrid:'grid-template-columns: 148px 80px 100px minmax(200px,1fr) minmax(140px,220px)',
+```
+
+## 메일 HTML 생성 원문(메일 전용 색·인라인 값 포함)
+
+웹 CSS와 별개인 메일 값도 정본에 포함한다. 예: #E1E5EA 경계(P4008).
+
+```js
+// L4003
+  mailHtml(d, r, view, to) {
+// L4004
+    const D = r.data, e = Sel.esc, dm = n => n == null ? '—' : Cal.md(n), dl = n => n == null ? '—' : Cal.ymd(n), per = r.from === r.to ? r.from : r.from + ' ~ ' + r.to;
+// L4005
+    const F = "font-family:'Pretendard GOV','Apple SD Gothic Neo','Malgun Gothic',sans-serif;", ext = view === 'ext', slack = D.fc != null && D.tgt != null ? D.tgt - D.fc : null;
+// L4006
+    const kp = ext ? [['완료', D.done.length + '건', '누적 ' + D.doneN + ' / ' + D.n], ['진척률', D.workPct + '%', '기간 시작 ' + D.workPctFrom + '%'], ['완료 예상일', dl(D.fc), '범위 ' + dm(D.lo) + ' ~ ' + dm(D.hi)], ['목표일 대비', slack == null ? '—' : (slack >= 0 ? '여유 ' + slack + '일' : (-slack) + '일 초과'), '목표 ' + dl(D.tgt)]]
+// L4007
+      : [['완료 (기간)', D.done.length + '건', '누적 ' + D.doneN + ' / ' + D.n], ['완료율 (작업량)', D.workPct + '%', '기간 시작 ' + D.workPctFrom + '%'], ['완료 예상 (v' + D.v + ')', dm(D.fc), '범위 ' + dm(D.lo) + ' ~ ' + dm(D.hi)], ['가동률', D.up + '%', D.gaps.length ? '중단 ' + D.gaps.length + '회' : '중단 없음']];
+// L4008
+    const cell = x => '<td style="padding:10px 12px;border:1px solid #E1E5EA;width:25%;vertical-align:top;' + F + '"><div style="font-size:12px;color:#6B7480">' + e(x[0]) + '</div><div style="font-size:20px;font-weight:700;color:#1F2933;margin:2px 0">' + e(x[1]) + '</div><div style="font-size:12px;color:#6B7480">' + e(x[2]) + '</div></td>';
+// L4009
+    const sec = (t, rows) => '<tr><td style="padding:18px 0 6px;' + F + 'font-size:15px;font-weight:700;color:#1F2933;border-bottom:1px solid #E1E5EA">' + e(t) + '</td></tr><tr><td style="padding:6px 0 0;' + F + 'font-size:13.5px;line-height:1.65;color:#3E4651">' + (rows.length ? rows.join('') : '<div style="color:#8A939E">없음</div>') + '</td></tr>';
+// L4010
+    const li = t => '<div style="padding:3px 0">• ' + e(t) + '</div>';
+// L4011
+    let body;
+// L4012
+    if (ext) {
+// L4013
+      const risks = []; if (slack != null && slack < 0) risks.push('목표일 초과 예상 — 범위 조정 또는 일정 협의 필요'); if (D.failN) risks.push('품질 보완 작업 ' + D.failN + '건 — 보완 후 재검증 예정'); if (D.blocked) risks.push('선행 작업 대기 ' + D.blocked + '건'); if (!risks.length) risks.push('특이 위험 없음');
+// L4014
+      body = sec('요약', ['기간 중 ' + D.done.length + '건 완료, 누적 ' + D.doneN + ' / ' + D.n + '건 (작업량 기준 ' + D.workPct + '%).', D.fc != null ? '완료 예상일 ' + dl(D.fc) + ' (범위 ' + dm(D.lo) + ' ~ ' + dm(D.hi) + ').' : '완료 예상일 산정 전.', D.failN ? '품질 검증 ' + D.failN + '건 보완 진행.' : '품질 검증 이상 없음.'].map(li))
+// L4015
+        + sec('주요 완료 항목', D.done.map(x => li(x.title))) + sec('위험 · 이슈', risks.map(li)) + sec('다음 계획', D.next.map(x => li(x.title + ' (' + dm(x.fs) + ' ~ ' + dm(x.fe) + ')')));
+// L4016
+    } else {
+// L4017
+      body = sec('팀장 확인 필요', D.issues.map(x => li(x.t))) + sec('완료한 Task', D.done.map(x => li(x.id + ' ' + x.title)))
+// L4018
+        + sec('진행 중 · 확인 필요', ((D.det && D.det.actDet) || []).slice(0, 6).map(x => li(x.id + ' ' + x.title + ' — ' + x.st + ' · 다음: ' + x.next)))
+// L4019
+        + sec('QA 실패', D.fails.map(x => li(x.task + ' ' + x.title + ' — ' + x.actual))) + sec('일정 재조정', D.rps.map(x => li(x.id + ' ' + x.trigger + ' (' + (x.before == null ? '최초' : dm(x.before)) + ' → ' + dm(x.after) + ')')))
+// L4020
+        + sec(r.kind === 'daily' ? '다음 날 예정' : '다음 주 예정', D.next.map(x => li(x.id + ' ' + x.title + ' (' + dm(x.fs) + ' ~ ' + dm(x.fe) + ')')));
+// L4021
+    }
+// L4022
+    return '<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>' + e(Sel.mailSubject(d, r, view)) + '</title></head>'
+// L4023
+      + '<body style="margin:0;padding:0;background:#F2F4F7"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F2F4F7"><tr><td align="center" style="padding:24px 12px">'
+// L4024
+      + '<table role="presentation" width="640" cellpadding="0" cellspacing="0" style="max-width:640px;width:100%;background:#FFFFFF;border:1px solid #E1E5EA;border-radius:8px"><tr><td style="padding:24px 28px">'
+// L4025
+      + '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">'
+// L4026
+      + '<tr><td style="' + F + 'font-size:12px;font-weight:700;color:#2453CF">' + e({daily:'일간 보고서', weekly:'주간 보고서', custom:'기간 보고서'}[r.kind] + (ext ? ' · 보고용' : ' · 팀장용')) + '</td></tr>'
+// L4027
+      + '<tr><td style="' + F + 'font-size:20px;font-weight:700;color:#1F2933;padding:4px 0 2px">' + e(d.project.name) + '</td></tr>'
+// L4028
+      + '<tr><td style="' + F + 'font-size:13px;color:#6B7480;padding-bottom:14px;border-bottom:2px solid #1F2933">기간 ' + e(per) + ' · 생성 ' + e(r.at) + ' · ' + e(r.id) + '</td></tr>'
+// L4029
+      + '<tr><td style="padding:14px 0 0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse"><tr>' + kp.map(cell).join('') + '</tr></table></td></tr>'
+// L4030
+      + body
+// L4031
+      + ((d.appUrl || '').trim() ? '<tr><td style="padding:22px 0 0"><a href="' + e(d.appUrl.trim().replace(/\/$/, '')) + '/reports/' + e(r.id) + '" style="display:inline-block;padding:10px 16px;background:#2453CF;color:#FFFFFF;text-decoration:none;border-radius:6px;' + F + 'font-size:14px;font-weight:600">Agent WBS에서 전체 보고서 보기</a></td></tr>' : '')
+// L4032
+      + '<tr><td style="padding:18px 0 0;' + F + 'font-size:11.5px;color:#8A939E;line-height:1.6">이 메일은 Agent WBS가 보고서 생성 직후 자동으로 보냈습니다' + (to ? ' (수신: ' + e(to) + ')' : '') + '. 보고서는 생성 시점의 스냅샷이며 이후 변경은 반영되지 않습니다. 수신 설정은 Agent WBS → 설정 → 보고서 · 메일에서 바꿀 수 있습니다.</td></tr>'
+// L4033
+      + '</table></td></tr></table></td></tr></table></body></html>';
+// L4034
+  },
 ```

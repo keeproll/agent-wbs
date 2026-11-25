@@ -30,6 +30,28 @@ def catalog():
     return out
 
 
+def acceptance_cases(records):
+    out = []
+    known = {r['id'] for r in records} | {'UI-AUTH'}
+    for line in (HERE/'acceptance-cases.tsv').read_text().splitlines():
+        if not line or line.startswith('#'):
+            continue
+        cells = line.split('|')
+        assert len(cells) == 9, line
+        aid, screens, method, given, action, expected, source, mismatches, milestones = cells
+        row = dict(id=aid, screens=screens.split(','), method=method, given=given,
+                   action=action, expected=expected, source=source,
+                   mismatches=[] if mismatches == '-' else mismatches.split(','), milestones=milestones)
+        assert set(row['screens']) <= known, row
+        assert all([given, action, expected, method, source]), row
+        out.append(row)
+    assert len({r['id'] for r in out}) == len(out), '인수 ID 중복'
+    covered = {sid for r in out for sid in r['screens']}
+    assert covered == known - {'UI-13', 'UI-12-06A'}, f'제품 화면 대조 누락: {known-covered}'
+    assert {m for r in out for m in r['mismatches']} == {f'MM-{i:02}' for i in range(1,32)}
+    return out
+
+
 class Template(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -104,6 +126,7 @@ def main():
     source = SOURCE.read_text()
     template = source[:source.index('<script type="text/x-dc"')]
     records = catalog()
+    cases = acceptance_cases(records)
     p = Template()
     p.feed(template)
     events_regex = re.findall(r'\bon[A-Z][A-Za-z]*\s*=\s*"[^"]*"', template)
@@ -140,6 +163,8 @@ def main():
         name = re.sub(r'^{{\s*|\s*}}$', '', ev['handler']).split('.')[-1]
         ev['bindingCandidates'] = [i for i, line in enumerate(lines, 1) if i >= 4458 and re.search(r'(?<![\w$])'+re.escape(name)+r'\s*[:=]', line)]
         ev['label'] = ' '.join(ev['node']['text']) or ev['node']['attrs'].get('aria-label') or ev['node']['attrs'].get('title') or ev['node']['attrs'].get('placeholder') or ev['node']['tag']
+        if ev['line'] == 2313:
+            ev['runtimeNote'] = '죽은 잔재: ag.run/ag.slotOpts 제공 안 됨. 제품 행 제거(MM-24, 독립 리뷰 B1).'
 
     fields = [dict(line=n['line'], tag=n['tag'], attrs=n['attrs'], screens=owners(n['line']), conditions=n['conditions']) for n in p.nodes if n['tag'] in {'input', 'textarea', 'select'}]
     buttons_no_events = [dict(line=n['line'], text=' '.join(n['text']), attrs=n['attrs'], screens=owners(n['line'])) for n in p.nodes if n['tag'] == 'button' and not any(re.fullmatch('on[a-z]+', a) for a in n['attrs'])]
@@ -148,9 +173,11 @@ def main():
                    events=len(p.events), clickActions=sum(x['event']=='onclick' for x in p.events),
                    uniqueHandlerExpressions=len({x['handler'] for x in p.events}), conditions=len(p.conditions), loops=len(p.loops),
                    fields=len(fields), unclassified=missing, missingCount=len(missing),
-                   acceptanceBehaviorItems=sum(len(r['results']) for r in records),
-                   acceptanceConditionItems=len(p.conditions), buttonsWithoutEvent=len(buttons_no_events),
-                   browserVerified=False)
+                   inventoryBehaviorDescriptions=sum(len(r['results']) for r in records),
+                   acceptanceBehaviorItems=len(cases), acceptanceConditionItems=0,
+                   acceptanceMethods=dict(Counter(c['method'] for c in cases)),
+                   buttonsWithoutEvent=len(buttons_no_events), browserVerified=False,
+                   independentBrowserReview='evidence/browser.md')
     summary['acceptanceTotal'] = summary['acceptanceBehaviorItems'] + summary['acceptanceConditionItems']
     evidence = dict(summary=summary, catalog=records, events=p.events, conditions=p.conditions, loops=p.loops,
                     fields=fields, inlineStyles=p.styles, icons=p.icons, buttonsWithoutEvent=buttons_no_events, logicIndex=markers)
@@ -180,7 +207,8 @@ def main():
                 dis = e['node']['attrs'].get('disabled')
                 if dis is not None:
                     guards = guards + ['disabled='+str(dis)]
-                inv.append(f'| {e["id"]} | {e["line"]} | {cell(e["event"]+" "+e["handler"])} | {cell(e["label"])} | {cell(" ∧ ".join(guards))} |')
+                label = e['label'] + (' — ' + e['runtimeNote'] if 'runtimeNote' in e else '')
+                inv.append(f'| {e["id"]} | {e["line"]} | {cell(e["event"]+" "+e["handler"])} | {cell(label)} | {cell(" ∧ ".join(guards))} |')
             inv.append('')
         local_fields = [f for f in fields if r['id'] in f['screens']]
         if local_fields:
@@ -198,18 +226,24 @@ def main():
     inv += [f'| {x["name"]} | {x["line"]}–{x["end"]} |' for x in markers]
     replace_generated(HERE/'inventory.md', '\n'.join(inv), opt.check)
 
-    ac = ['## 화면별 인수 항목', '', '모든 체크박스는 아직 실행 전이다. `[자동:E2E]`는 브라우저 자동화 가능, `[자동:API+E2E]`는 실제 서버/Runner 계약과 화면 검증 필요, `[수동+자동]`는 시각·접근성 수동 확인을 병행한다. 모사 기능은 결과를 보여 주는 시뮬레이터 자체를 제품 기능으로 요구하지 않고 실제 API 이벤트로 같은 화면 상태를 만들 것을 요구한다.', '']
-    for r in records:
-        ac += [f'### {r["id"]} — {r["title"]}', '']
-        auto = '수동+자동' if r['id'] in {'UI-03C','UI-04-01','UI-11B','UI-11C','UI-11D','MOD-03','SYS-01'} else '자동:API+E2E'
-        for i, result in enumerate(r['results'], 1):
-            ac.append(f'- [ ] **AC-{r["id"]}-{i:02}** [{auto}] {r["entry"]}에서 {result}. (원본 {r["start"]}–{r["end"]})')
-        ac.append('')
-    ac += ['## 조건별 표시 인수(기계 대조)', '', '각 항목은 해당 화면의 상위 조건과 반복 데이터를 먼저 충족시킨 뒤 확인한다. 장식용 code/plain 같은 분기도 제외하지 않았다. 분기 true/false 기대값은 템플릿의 실제 콘텐츠이며 JSON의 줄 번호로 특정한다.', '']
-    for x in p.conditions:
-        expected = ('원본 compact=false 고정으로 항상 숨김; 죽은 true 분기는 제품 인수 대상에서 제외(MM-25).'
-                    if x['expression'] == '{{compact}}' else 'true에서는 해당 하위 콘텐츠 표시, false에서는 숨김.')
-        ac.append(f'- [ ] **AC-{x["id"]}** [자동:E2E] {", ".join(x["screens"])} / 원본 {x["line"]}: `{x["expression"]}` {expected}')
+    ac = ['## 집계', '', f'실제 판정 항목 **{len(cases)}개**. 이전933개(원본 설명404 + 기계 조건529)에서 교체했다. 조건529개는 인수 총계에서 제외하고 inventory의 CD 추적 색인에만 남긴다.', '',
+          '검증 방법별: ' + ', '.join(f'{k} {v}개' for k,v in summary['acceptanceMethods'].items()) + '.', '',
+          '## 화면 ID → 판정 항목', '', '| 화면 ID | 판정 ID |', '|---|---|']
+    for sid in [r['id'] for r in records] + ['UI-AUTH']:
+        ids = [c['id'] for c in cases if sid in c['screens']]
+        reason = '정상 제품화면 제외; 모르는 URL404는 UAT-SHELL-05' if sid=='UI-13' else '주입 도구 제외; 실제 상태는 UAT-STATE/ERROR 및 업무 시나리오로 검증'
+        ac.append(f'| {sid} | {", ".join(ids) if ids else reason} |')
+    ac += ['', '## 판정 가능한 시나리오', '']
+    for c in cases:
+        ac += [f'### {c["id"]} · {", ".join(c["screens"])}', '',
+               f'- 전제: {c["given"]}.', f'- 동작/사건: {c["action"]}.',
+               f'- [ ] **{c["id"]}** [{c["method"]}] {c["expected"]}.',
+               f'- 근거: {c["source"]}; 작업: {c["milestones"]}.',
+               '- 불일치: ' + (', '.join(c['mismatches']) if c['mismatches'] else '없음') + '.', '']
+    ac += ['## 불일치 → 판정 항목', '', '| 불일치 | 판정 ID |', '|---|---|']
+    for i in range(1,32):
+        mid = f'MM-{i:02}'
+        ac.append(f'| {mid} | '+', '.join(c['id'] for c in cases if mid in c['mismatches'])+' |')
     replace_generated(HERE/'acceptance.md', '\n'.join(ac), opt.check)
 
     tokens = ['## 원본 CSS 전체(값의 정본)', '', '줄 번호는 `Main.dc.html`의 원본 줄 번호다. 원본에 토큰 이름이 없는 숫자를 임의의 spacing scale로 정규화하지 않았다.', '', '```css']
@@ -221,6 +255,9 @@ def main():
     tokens += ['```', '', 'NAV path 원문(3063–3076):', '', '```js'] + lines[3062:3076] + ['```']
     tokens += ['', '## 로직에서 만드는 동적 스타일', '', '스타일·레이아웃 관련 원문 문자열을 포함한 로직 줄이다. 비율/좌표/표 컬럼은 고정 토큰이 아니라 데이터에서 계산한다.', '', '```js']
     tokens += [f'// L{i}\n{line}' for i,line in enumerate(lines,1) if i>=2904 and re.search(r'grid-template|\bstyle\s*:|Style\s*=|cssText|@page',line)]
+    tokens += ['```', '', '## 메일 HTML 생성 원문(메일 전용 색·인라인 값 포함)', '',
+               '웹 CSS와 별개인 메일 값도 정본에 포함한다. 예: #E1E5EA 경계(P4008).', '', '```js']
+    tokens += [f'// L{i}\n{line}' for i,line in enumerate(lines,1) if 4003<=i<=4034]
     tokens += ['```']
     replace_generated(HERE/'design-tokens.md','\n'.join(tokens),opt.check)
     model_path = HERE/'evidence/data-model.json'
@@ -238,7 +275,8 @@ def main():
     assert set(re.findall(r'CD-\d{4}', inventory)) == {c['id'] for c in p.conditions}
     assert set(re.findall(r'LP-\d{4}', inventory)) == {l['id'] for l in p.loops}
     assert len(re.findall(r'^- \[ \]', acceptance, re.M)) == summary['acceptanceTotal']
-    assert all(f'### {r["id"]} ' in acceptance for r in records)
+    assert not re.search(r'^- \[ \].*AC-CD-', acceptance, re.M)
+    assert all(f'| {r["id"]} |' in acceptance for r in records)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 

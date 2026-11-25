@@ -43,6 +43,9 @@ WBS 번호는 Phase/WP 내 위치로 계산하는 표시값이며 참조 키는 
 
 | 항목 | 원본 값 |
 |---|---|
+| 프로젝트 상태 | 준비, 진행 중, 보류, 종료 (P6490) |
+| 병합 대기열 상태 | 검증 대기, 통합 확인 중, 통합 실패 — 재작업 요청, 병합됨 (원본 CI_MOCK·CI VM) |
+| 불안정 테스트 상태 | 격리, 정상, 정상 (격리 해제); 원본은 토글시 정상 (격리 해제) 표시(P4764) |
 | Task type | Analysis, Design, Implementation, Configuration, Test, Verification, Documentation, Integration |
 | domain | FE, BE, DB, DevOps, API, QA, Architecture, Common |
 | status 표시 순서 | planning, approval, ready, running, paused, qa, rework, verifying, gate, failed, done, cancelled |
@@ -54,7 +57,7 @@ WBS 번호는 Phase/WP 내 위치로 계산하는 표시값이며 참조 키는 
 | Message.dir / type | out,in / 추가 지시,수정 요청,질문,일반 의견,응답 |
 | Message.delivery | Draft, Queued, Sent, Acknowledged, Failed, Cancelled |
 | Dependency | FS, SS |
-| Effort 공통 | low(1),medium(2),high(3),xhigh(4),max(5). 실제 CLI 매핑은 미결 |
+| Effort 공통 | low(1),medium(2),high(3),xhigh(4),max(5). 제품 CLI 매핑은 owner Q-06 승인표를 적용하고 ultra/미확인 값은 사용하지 않음 |
 | CP.status | draft,review,changes,approved,rejected,applied |
 | CP op | add,modify,remove,dep-add,dep-remove; 작성 모달은 scopeAdd,doneCond,priority,assignee,acAdd,depAdd,depRemove만 노출 |
 | project.phase | none,boot,active |
@@ -72,11 +75,11 @@ WBS 번호는 Phase/WP 내 위치로 계산하는 표시값이며 참조 키는 
 | split result | 통과,의심,위반,주의,판단,예외,꺼짐 |
 | FE design state / index / output kind | Loading,Empty,Error,Success,Disabled / BTREE,UNIQUE,GIN,HASH / 코드,문서,Migration,테스트,설정 |
 
-추정 신뢰도 상/중/하, 재작업정책 same/up1/top, 사용량정책 wait/down, 기본 lowPct20/escNotify2, 기본 분할 maxH4/minH0.5/maxFiles8, 예산 dev2/qa3, 기본 heartbeat60초, 일정 threshold1일/assumeRate0.6. 값은 [data-model.json](evidence/data-model.json)의 constants 및 schema와 함께 확인한다. 고정 수치는 제품 요구와 Mock 가정을 구분해야 하며 가이드 1088–1125에 교체 목록이 있다.
+추정 신뢰도 상/중/하, 재작업정책 same/up1/top, 사용량정책 wait/down, 기본 lowPct20/escNotify2, 기본 분할 maxH4/minH0.5/maxFiles8, 예산 dev2/qa3, 기본 heartbeat60초, 일정 threshold1일/assumeRate0.6. 위 표는 **원본 열거값**이다. 제품은 owner Q-02 착수승인·자동done, Q-04 자동재시도2회/총3회·자동재작업3회, Q-05 BLOCKED 대표상태유지, Q-06 Effort표, Q-12 최신CLI/미검증재검증을 우선한다. 추가 owner 결정으로 시작전취소 SS 관계를 제거하고 CP영향에 풀리는후속을 표시한다. 값은 [data-model.json](evidence/data-model.json)의 constants 및 schema와 함께 확인한다. 고정 수치는 제품 요구와 Mock 가정을 구분해야 하며 가이드 1088–1125에 교체 목록이 있다.
 
 ## UI 상태와 영속 변경의 구분
 
-검색·필터·정렬·접힘·선택 Task/탭·레일·상세 위치·읽기/편집 전환·모달·입력 초안은 원본 UI state다. 메시지 초안은 Task별 drafts에만 보관되고 reload 보존은 없다. 실제 제품 URL 요구(`/wbs/:id`, `/settings/:tab`)는 가이드 280–282,347줄이며 원본에는 라우팅이 없다.
+검색·필터·정렬·접힘·선택 Task/탭·레일·상세 위치·읽기/편집 전환·모달·입력 초안은 원본 UI state다. 메시지 초안은 Task별 drafts에만 보관되고 reload 보존은 없다. owner Q-01의 UI-AUTH는 원본에 없으며 LAN password 입력/실패/429, loopback link token 일회소비/URL제거/로그인후복귀가 추가 데이터다. 비밀번호·링크토큰을 샘플 엔티티나 내보내기에 넣지 않는다. 실제 제품 URL 요구(`/wbs/:id`, `/settings/:tab`)는 가이드283,348줄이며 원본에는 라우팅이 없다.
 
 저장되는 업무 변경은 Task/명세/설계/체크리스트/의존성/등급/정책/메시지/실행결과/검증/Evidence/CP/승인/일정기준/보고서/수신·연결설정/알림규칙/초기화다. 메시지 본문이 Task 명세를 직접 바꾸지 않으며 CP 승인/반영이 필요하다. 실제 서버에서는 트랜잭션·버전 충돌·멱등성을 함께 구현해야 한다. 원본의 낙관적 잠금 오류는 주입 UI일 뿐 실제 동시 저장을 재현하지 않는다.
 
@@ -156,7 +159,7 @@ Task ID 기반 참조, 목록→선택→상세의 동일 버전 데이터, 서�
 | UI-05-02 일정 재조정 이력 | RP/v/at/by/trigger/end/range/rate/moved before/after/delta | RP마다 계기·주체·새 기준·범위·가동률 표시 / 변경 Task 펼치면 전후·차이와 Task 이동 / Mock Planning 실행은 재조정 기록 추가 | 4284-4305 |
 | UI-06 작업 실행 | 왼쪽 Task·시도; 중앙 다음 작업·기록; 오른쪽 메시지 | 3영역을 구분 / 현재 단계별 다음 액션 제공 / Runner 끊김·차단·사용량0·용량·관측미확인·준비실패·충돌묶음 사유 표시 / 새 시도에 실제 등급과 하위 Agent 설치 기록 | 6019-6092 |
 | UI-06A 개발 결과 등록 | result/summary/files/fail/tok | 성공 시 요약 필수, 실패 시 사유 필수 / 토큰 숫자 입력(원본 검증 누락은 MM-11) / 파일 경로 일치 산출물 제출 처리 / 성공하면 QA 새 시도 자동 요청 / 실패는 이전 결과를 보존 | 5857-5901 |
-| UI-06B QA·재검증 결과 등록 | result/cmd/expected/actual/evidence/defects/checks/tok | 명령·실제결과 필수, FAIL은 결함 필수 / Evidence를 검증과 선택 체크리스트에 연결 / PASS는 Gate, FAIL은 재작업, BLOCKED는 검증 대기 상태로 전환 / 이전 Verification 보존 | 5870-5920 |
+| UI-06B QA·재검증 결과 등록 | result/cmd/expected/actual/evidence/defects/checks/tok | 명령·실제결과 필수, FAIL은 결함 필수 / Evidence를 검증과 선택 체크리스트에 연결 / PASS는 Gate, FAIL은 재작업, BLOCKED는 대표 상태를 유지하고 verif=blocked로 기록 / 이전 Verification 보존 | 5870-5920 |
 | UI-06C 재작업 지시 | 지시 body; 대상 Task/Agent | 빈 지시는 제출 거부 / 수정 요청 메시지 기록 후 새 재작업 시도 생성 / 정책에 따라 등급 상향, 중단 후 재개는 동일 등급 | 5864-5928 |
 | UI-06D 실행 Gate·선택 시도 | 5개 Gate 조건; Attempt 결과; Verification; CI 링크 | Gate 판정 사유와 완료 불가 사유 표시 / 완료 처리 시 확인 창 제공 / 시도별 요약·실패·파일·검증·CI 표시 / 실제 완료 판정은 불일치 MM-01 참조 | 5806-5856 |
 | UI-06E 실행 연결 메시지 | 방향/유형/전달/본문/시각/시도 | 실행 기록과 메시지는 분리 / 메시지 작성은 Task 메시지 탭으로 이동 / Task 메시지에서 보기로 관련 상세 이동 | 6019-6079 |
@@ -176,7 +179,7 @@ Task ID 기반 참조, 목록→선택→상세의 동일 버전 데이터, 서�
 | UI-09A CP 상세·승인·반영 | reason/source/ops/diff/impact/comment/approvals/idMap | 승인 전에 WBS가 변경되지 않음 / 문제 있는 변경은 승인·반영 차단 / 수정 요청/반려 시 의견 필수 / 수정 요청 중 항목 제외와 재제출 / 승인 후 WBS 반영 시 동일 시뮬레이션 결과와 Task·의존성·이력·일정 갱신 / 완료 Task와 기존 검증 결과 보존 | 5725-5763 |
 | UI-10 전체 이력 | 내용 검색; Task ID; 유형; 주체; at/actor/kind/task/text/before/after | 검색·Task·유형·주체 필터와 초기화 / 최신순·전후 표시 / Task 링크 이동 / 기간 필터는 원본 미구현 불일치 참조 | 6448-6460 |
 | UI-11 보고서 | daily/weekly/custom; 기간/보기; 보고서 목록·스냅샷 | 종류 필터와 보고서 선택 / 정기 생성 Mock 점검은 누락분만 생성 / 생성 시점 스냅샷을 열 때 재계산하지 않음 / 생성 후 일정변경은 별도 안내 / 문서 부분 로딩만 표시 | 6370-6447 |
-| UI-11A 기간 지정 보고서 | from/to/aud; 날짜 단축 선택 | 날짜 둘 다 필수, from≤to≤오늘, 포함 93일까지 허용 / 오늘/어제/지난주 등 단축 기간 적용 / 선택한 보기로 custom 보고서 생성 후 선택 | 4989-4999 |
+| UI-11A 기간 지정 보고서 | from/to/aud; 날짜 단축 선택 | 날짜 둘 다 필수, from≤to≤오늘, 포함 93일까지 허용 / 이번 주/지난 주/최근 30일 단축 기간 적용 / 선택한 보기로 custom 보고서 생성 후 선택 | 4989-4999 |
 | UI-11B 팀장용 보고서 | 4 KPI; 확인필요; 완료/진행/QA실패 상세; 실행/재조정/중단/메시지/예정; 전체Task 부록 | 세부 Task 판단 정보와 증거를 문서에 포함 / 주간·기간 일별 추세 표시 / 보고서 Task 링크는 현재 WBS 상세 이동 / 전체 Task 부록은 인쇄 새 페이지 | 3797-3869 |
 | UI-11C 보고용 보고서 | 4 KPI; 요약; 추세; 주요완료; 위험; 다음계획 | 팀장용과 동일 스냅샷 숫자 사용 / 내부 Task ID·모델·토큰 대신 요약 문장 표시 / 기간/생성시각·스냅샷 기준 표시 | 6370-6447 |
 | UI-11D 보고서 출력·발송 | aud; 발송 at/to/st/why; 파일명 | 메일 미리보기와 수신자 선택 모달 열림 / 발송기록 펼침 / PDF 다운로드는 프로토타입에서 iframe 인쇄이며 실제 제품은 서버 PDF 필요 / PDF 실패 후 재시도 가능 | 4997-5012 |

@@ -18,25 +18,30 @@
 | 전체 이벤트 / 고유 핸들러 표현식 | 486 / 361 |
 | sc-if 조건 / sc-for 반복 | 529 / 293 |
 | 입력 요소 / 인라인 style 발생 | 109 / 551 |
-| 인수 항목 | 933 (동작404 + 조건529) |
+| 제품 인수 항목 | 122 (933에서 교체, CD529는총계제외) |
+| owner 추가 화면 | UI-AUTH 로그인1개(원본14화면과별도) |
 | 추출→화면 미분류 | **0** |
 | 추출 ID→인벤토리 누락 | **0** |
 | 이벤트 없는 button | 0 (동작의 실효성은 별도) |
 | 일반/오류 상태 미리보기 실제 수 | 9 / 21 |
 | 원본 샘플 모델 필드 경로 | 1,131 |
-| 불일치 항목 | 30 + 가이드 미결 목록 |
+| 불일치 항목 | 기존30 + 인쇄MM-31, 모두UAT연결 |
 
 집계는 데이터 행 개수가 아니라 템플릿 발생 수다. 반복 별칭이 같은 핸들러도 줄·상위조건·반복문맥을 보존했다. 바인딩 후보가 없는 이벤트는0이며, 이름검색 후보를 실제 실행완료나 compiler resolution으로 과장하지 않는다. 최초 Api fixture는 Task12/Phase3/의존성15/Attempt7/Verification2/Message3/Planning2/CP2다. Component 생성자는 실행일에 맞춰 보고서 누락분을 보충하므로 이번 VM의 Report33은 고정 요구 수가 아니다.
 
-실행한 검증:
+최초조사와이번개정의검증을구분한다:
 
-1. `node docs/ui/probe.mjs`: 원본 JavaScript를 VM에서 평가, 실제 모델 필드 추출, 메뉴/Task/Gate/ChatID/GitHub주소 assert. DOM·네트워크 없음, 타이머는 큐에만 넣음.
-2. `python3 docs/ui/extract.py`: Python HTMLParser와 별도 정규식의 이벤트 개수 일치; sc-if/sc-for 개수 일치; 모든 발생의 화면 ID 분류 및 모든 문서 ID 대조; 생성한 인수 체크박스 총계 assert.
+1. 최초조사의 `node docs/ui/probe.mjs`: 원본 JavaScript를 VM에서 평가, 실제 모델 필드 추출, 메뉴/Task/Gate/ChatID/GitHub주소 assert. DOM·네트워크 없음, 타이머는 큐에만 넣음.
+2. `python3 docs/ui/extract.py`: Python HTMLParser와 별도 정규식의 이벤트 개수 일치; sc-if/sc-for 개수 일치; 모든 발생의 화면 ID 분류 및 모든 문서 ID 대조; 122개인수체크박스·고유ID·전제/사건/기대값·원본제품ID102개+로그인·MM31건연결·CD체크박스0 assert.
 3. `python3 docs/ui/extract.py --check`: 재생성 결과와 문서·JSON 일치 확인.
 4. 문서 링크·화면 ID·출처 범위·원본 변경 여부와 git 공백 검사. 제품 테스트는 제품 코드가 없고 문서만 수정하므로 수행 대상 없음.
 
 VM으로 확인한 핵심 결과: SS 취소/실패도 충족 처리, 코드 수정 요청 전후 메시지3→3, 음수 토큰 exErrs 오류0, Telegram 저장500에서 저장값 유지·초안null, 초기승인 직후 WP-06 없음. 원본 `integrity` 점검은 의도한 샘플의 승인대기1/불일치2 때문에1항목 FAIL이며 숨기지 않았다. UI 검증 성공으로 취급하지 않는다.
 
-브라우저는 [시도 기록](browser.md)의 `desktop_browser_bridge_unavailable`로 미확인. 스크린샷/실제 UI클릭/반응형/접근성/인쇄 검수는 남아 있다. 인수 체크박스는 모두 실행 전이다.
+최초Orca브리지는실패했으나이후독립리뷰가원본14화면/31탭/8모달등을브라우저확인했다. 제공454개화면배정PNG·5개별도증거와PDF를커밋하지않고 [대응표](../screenshots.md)만추가했다. net/e400·실OS인쇄창·스크린리더등미확인범위는 [시도 기록](browser.md)에있다. 제품122개UAT는모두실행전이다.
 
 중요 인수 위험은 MM-01 완료 근거 누락, MM-02 Telegram의 미확인 완료/실패 확정문구, MM-03 저장실패 초안소실, MM-04 입력경로 정규식, MM-05 없는WP, MM-06 실제 요청없는 설계 처리버튼이다. 상세와 출처는 [mismatches.md](../mismatches.md).
+
+## 리뷰 반영 개정
+
+리뷰A1–A6/B1–B8/C1–C4처리와추천부분채택근거는 [review-response.md](../review-response.md). owner계획dc202a5와추가메시지msg_9950161226e1를반영했다. 두원본오기(BLOCKED대표상태유지, 이번주/지난주/최근30일)를catalog정본에서고쳤으며재생성후에도유지한다. 시작전취소SS관계제거/CP영향표시와1280/좁은표/휴대폰상세지원은owner답이와미결해제했다.
