@@ -43,12 +43,12 @@ M0 기반 → M1 데이터·계약·순수 판정 → M2 서버 핵심 → {M3 �
 
 | ID | 범위 | 완료 조건(검증) | 디렉토리 | 병렬 | 담당 / 리뷰 |
 |---|---|---|---|---|---|
-| M1-01 | 전체 schema·제약·추가 전용·초기화 함수·system/demo seed(SUB_MOCK과 미승인 값은 demo만) | `W test:db -- schema`(빈 DB up, 제약 위반, 앱 역할 UPDATE 거부, system seed에 Mock 정의·Q 미승인 값 0건) | `packages/db` | — | Codex / Claude |
+| M1-01 | 전체 schema·제약·추가 전용·초기화 함수·system/demo seed(owner 승인값 포함, SUB_MOCK과 미승인 값은 demo만) | `W test:db -- schema`(빈 DB up, 제약 위반, 앱 역할 UPDATE 거부, system seed에 Mock 정의·미승인 값 0건, owner 승인 Q-03·04·06 값 일치) | `packages/db` | — | Codex / Claude |
 | M1-02 | TypeBox API 스키마 → OpenAPI, 오류 코드, Runner client 생성 | `W openapi:check && R client:check`, G§8 경로 대조 테스트 | `packages/shared/src/api`, `contracts/`, `agent-runner/src/api` | ∥ | Claude / Codex |
-| M1-03 | 상태 전이·번호·차단·순환·Gate·체크리스트·SS/FS | `W --filter shared test -- domain` (모든 전이 쌍·상태×시도 종류 표, QA 프로세스 실패→같은 종류 재시도, BLOCKED→새 검증→PASS, SHA 변경→재검증) | `packages/shared/src/domain` | ∥ | Codex / Claude |
+| M1-03 | 상태 전이·번호·차단·순환·Gate·체크리스트·SS/FS | `W --filter shared test -- domain` (**owner 승인 Q-05 표와 일치**, 모든 전이 쌍·상태×시도 종류 표, QA 프로세스 실패→같은 종류 재시도, BLOCKED→새 검증→PASS, SHA 변경→재검증) | `packages/shared/src/domain` | ∥ | Codex / Claude |
 | M1-04 | 일정: 3시나리오·가동률·슬롯·충돌 묶음·리셋·불가일·재조정 diff·driftCheck | `W --filter shared test -- schedule` (P `Sel.schedule`과 demo 결과 대조, 200 Task 시간 기록) | `packages/shared/src/schedule` | ∥ | Codex / Claude |
 | M1-05 | CP 시뮬레이션·영향·분할 점검 10규칙·분할 제안 검증 | `W --filter shared test -- proposal split` | `packages/shared/src/{proposal,split}` | M1-03 후 | Claude / Codex |
-| M1-06 | 등급 상향·하향·재개·최저선, 상한 공식, 보유 계산, 제한 요인 | `W --filter shared test -- grade capacity` (§6.6 예시 3개 값 일치) | `packages/shared/src/{grade,capacity}` | ∥ | Claude / Codex |
+| M1-06 | 등급 상향·하향·재개·최저선, 상한 공식, 보유 계산, 제한 요인 | `W --filter shared test -- grade capacity` (§6.6 예시 3개 값 일치, **owner 승인 Q-06 매핑 일치**·ultra/미확인 거부) | `packages/shared/src/{grade,capacity}` | ∥ | Claude / Codex |
 
 ### M2 — 서버 핵심
 
@@ -58,7 +58,7 @@ M0 기반 → M1 데이터·계약·순수 판정 → M2 서버 핵심 → {M3 �
 | M2-02 | Task·의존성·명세·설계·체크리스트 CRUD, 동시 수정 | `W --filter api test -- tasks` (동시 순환 추가·이력, 삭제/의존성/승인 낡은 버전 409) | `apps/api/src/tasks` | M2-01 후 ∥ | Claude / Codex |
 | M2-03 | 프로젝트 등록·기술 결정·bootstrap·승인·입력 변경·분석 안 함 | `W --filter api test -- project` | `apps/api/src/project` | ∥ | Claude / Codex |
 | M2-04 | 초기화·명령·정리 대기·내보내기·파일 삭제 큐 | `W --filter api test -- reset` (중간 실패 주입, 설정 유지/삭제 표, middleware 통과 후 정지한 host 보고·worker와 초기화 경합, 명령 epoch 불일치) | `apps/api/src/reset` | M2-03 후 | Codex / Claude |
-| M2-05 | Runner 보고·jobs lease·시도 claim·heartbeat 감시·PC 변경·상한 | `W --filter api test -- runner` (동시 claim 100회, 중복 보고, **네트워크 단절+자손 생존+재개 거부→해제 후 허용**, 설치 실패 후 Task/예약/이력/재시도, 외부 효과 job reconcile, PC 변경, 시작 버튼 필수·자동 재시도 2·재작업 3 경계) | `apps/api/src/runner` | ∥ | Codex / Claude |
+| M2-05 | Runner 보고·jobs lease·시도 claim·heartbeat 감시·PC 변경·상한 | `W --filter api test -- runner` (동시 claim 100회, 중복 보고, **네트워크 단절+자손 생존+재개 거부→해제 후 허용**, 설치 실패 후 Task/예약/이력/재시도, 외부 효과 job reconcile, **renew 성공→정지→host 전환→옛 호출 재개 시 새 외부 쓰기 차단·대조**, ① 실패 직전 같은 묶음 claim 거부, 잠금 인계 원자성, 자기 예약 start·중복 start, 인계받은 QA job의 claim·start 성공과 타 job 거부, 부분 unique 경합, 시작 버튼 필수·자동 재시도 2(총 3회, 같은 종류 연속)·재작업 3 경계) | `apps/api/src/runner` | ∥ | Codex / Claude |
 | M2-06 | 시도 결과·검증·결함·Evidence·Gate 판정·완료 | `W --filter api test -- execution` (QA 오류·BLOCKED 새 시도, 낡은 head/명세 PASS 거부) | `apps/api/src/execution` | M2-05 후 | Codex / Claude |
 | M2-07 | Planning·CP(미리보기=반영·자동/보류)·추정·재조정·분할 | `W --filter api test -- planning` | `apps/api/src/planning` | ∥ | Claude / Codex |
 | M2-08 | 정책·모델·하위 Agent·메시지·이력·변경 이벤트·무결성 점검 | `W --filter api test -- policy messages changes` | `apps/api/src/{policy,messages,changes}` | ∥ | Claude / Codex |
@@ -85,7 +85,8 @@ M0 기반 → M1 데이터·계약·순수 판정 → M2 서버 핵심 → {M3 �
 | M4-02 | host·readiness·usage·models·concurrency 조절 | `R test -- resources` | `src/{resources,readiness}` | ∥ | Claude / Codex |
 | M4-03 | git 안전 계층: clone·worktree·입력 읽기 전용·보호 경로·초기화 정리 | `R test -- git` (로컬 bare 저장소, symlink·submodule·rename 공격) | `src/git` | ∥ | Codex / Claude |
 | M4-04 | GitHub 어댑터(확인·PR·status·병합·봉인 자격 증명) + fake | `R test -- github` | `src/github` | ∥ | Claude / Codex |
-| M4-05 | Codex·Claude 최신 확인·유휴 적용·실패 보존·미검증 전환(architecture §5.1) | `R test -- cli-update` (fake registry: 세션/보유 있으면 보류, 확인↔claim 경합, 다운로드·점검 실패·교체 중 crash, 전역 설치 불변, 하향 0) | `src/cli-update` | M4-01·02 후 | Codex / Claude |
+| M4-05 | Codex·Claude 최신 확인·유휴 적용·실패 보존·미검증 전환(architecture §5.1) | `R test -- cli-update` (fake registry: 세션/보유 있으면 보류, 확인↔claim 경합, 다운로드·점검 실패·교체 중 crash, 전역 설치 불변, 하향 0, **과거 host 보유 존재+현재 host 유휴면 적용**) | `src/cli-update` | M4-01·02 후 | Codex / Claude |
+| M4-06 | 시험 저장소에서 보호 규칙·병합 API·시스템 커밋·자격 증명 폐기 실증(Agent 호출 없음) | 실환경 기록: head 변경 409, main 이동 거부, int 없는 병합 거부, Runner 우회 불가, CODEOWNERS, 병합 tree=H' tree, 폐기 토큰 401 | `agent-runner/src/github` 검증 스크립트 | M4-04·Q-09 후 | Codex / Claude |
 
 ### M5 — 실행 · Planning
 
@@ -115,7 +116,7 @@ M0 기반 → M1 데이터·계약·순수 판정 → M2 서버 핵심 → {M3 �
 | ID | 범위 | 완료 조건(검증) | 디렉토리 | 병렬 | 담당 / 리뷰 |
 |---|---|---|---|---|---|
 | M7-01 | pipeline.yaml 스키마·main 고정·①Task 검사 | `R test -- ci-task` (정의 변조·보호 경로·테스트 삭제) | `agent-runner/src/ci` | — | Codex / Claude |
-| M7-02 | ②통합 확인·병합 대기열·묶음 확인 | `R test -- ci-int` (검사 후 main A→B, QA 후 H 변경, push 직전 이동 각각 미병합·재검사; 병합 tree=검사 tree; pipeline SHA; 병합 직후 crash 대조) | `src/ci/integration` | M7-01 후 | Codex / Claude |
+| M7-02 | ②통합 확인·병합 대기열·묶음 확인 | `R test -- ci-int` (검사 후 main A→B, QA 후 H 변경, 병합 호출 직전 이동 각각 미병합·재검사; H→H' 추가 변경·충돌 거부; 병합 tree=H' tree; pipeline SHA; 병합 직후 crash 대조) | `src/ci/integration` | M7-01·**M4-06** 후 | Codex / Claude |
 | M7-03 | ③야간(화면 비교·응답 시간·불안정)·④배포 확인·보존 정책 | `R test -- ci-night ci-deploy` | `src/ci/{night,deploy}` | M7-02 후 | Claude / Codex |
 | M7-04 | 서버 CI API·완료 판정 연결·알림 | `W --filter api test -- ci` | `apps/api/src/ci` | ∥ | Codex / Claude |
 | M7-05 | 빌드·통합 화면 5탭 | `W e2e -- ci` (32) | `features/ci` | M7-04 후 | Claude / Codex |
@@ -129,7 +130,7 @@ M0 기반 → M1 데이터·계약·순수 판정 → M2 서버 핵심 → {M3 �
 | M8-02 | 장애·부하: DB 재시작·Runner kill·PC 변경·200 Task·수십 세션(fake) | `W test:resilience` | 양쪽 | ∥ | Codex / Claude |
 | M8-03 | 보안 검토·비밀값 유출 검사 | `W test:secrets && R test:secrets` + 리뷰 지적 0건 미해결 | 양쪽 | ∥ | Codex / Claude |
 | M8-04 | CLI 실측: Codex·Claude 하위 Agent 관측 항목(§6.7, §11-6·8) | 실환경 기록 + 등급 등록(승인된 모델·호출 한도 안에서만) | `agent-runner` | Q-08·Q-12-잔여 gate 후 | Codex / Claude |
-| M8-05 | 실 GitHub 저장소로 등록→분석→Task 1건→병합→초기화 | 실환경 증거. **보호 규칙 적용 확인**(미검증 직접 병합 거부, 우회 커밋 종류 제한, CODEOWNERS), 병합본 push 방식 실증 | 양쪽 | Q-08·Q-09 gate 후(시험 저장소, owner Q-10) | Claude / Codex |
+| M8-05 | 실 GitHub 저장소로 등록→분석→Task 1건→병합→초기화 | 실환경 증거. **보호 규칙 적용 확인**(미검증 직접 병합 거부, 우회 커밋 종류 제한, CODEOWNERS) — M4-06 결과 재확인 | 양쪽 | Q-08·Q-09 gate 후(시험 저장소, owner Q-10) | Claude / Codex |
 | M8-06 | 운영 이미지·systemd·백업/복원·실 SMTP/Telegram | `docker compose … config`, 복원 리허설, 실환경 기록 | 양쪽 | Q-13·Q-15·Q-16 gate 후 | Claude / Codex |
 
 ## 4. 추적표 — 가이드 절 → 마일스톤
@@ -153,7 +154,7 @@ M0 기반 → M1 데이터·계약·순수 판정 → M2 서버 핵심 → {M3 �
 | 3 | 변경된 결정 표 | 각 해당 절 | 행별 요구는 4~9절에 포함 |
 | 4 | 화면 공통 원칙(Task 이동) | M3-01, M3-07 | |
 | 4.1 | 대시보드 | M3-07 | |
-| 4.2 | 프로젝트 3흐름 | M2-03, M2-04, M3-04, M4-03, M4-04, M5-04, M8-05 | Q-09 |
+| 4.2 | 프로젝트 3흐름 | M2-03, M2-04, M3-04, M4-03, M4-04, M4-06, M5-04, M8-05 | Q-09 |
 | 4.3 | WBS | M3-02 | |
 | 4.4 | Task 상세 | M2-02, M3-03 | |
 | 4.5 | Planning | M2-07, M3-05, M5-04 | |
@@ -170,7 +171,7 @@ M0 기반 → M1 데이터·계약·순수 판정 → M2 서버 핵심 → {M3 �
 | 5.1 | 논리 객체 | M1-01 | |
 | 5.2 | 분류 | M1-01, M1-03 | |
 | 5.2-1 | 분할 기준 | M1-05, M2-07, M3-03, M3-08, M5-04 | |
-| 5.3 | 상태 모델 | M1-03 | Q-05 |
+| 5.3 | 상태 모델 | M1-03 | owner Q-05 |
 | 5.4 | 의존성 | M1-03, M2-02 | D-08 |
 | 5.5 | Gate | M1-03, M2-06, M7-04, M7-06 | owner Q-02 |
 | 5.6 | CP 유형 | M1-05, M2-07 | D-16·D-20 |
@@ -184,7 +185,7 @@ M0 기반 → M1 데이터·계약·순수 판정 → M2 서버 핵심 → {M3 �
 | 6.7 | 관측 | M1-06, M3-08, M4-05, M5-01~03, M8-04 | D-26, Q-12-잔여 |
 | 7 | 실행 정책 | M1-06 | |
 | 7.1 | 분담 | M2-08, M5-04 | |
-| 7.2 | 등급 | M1-06, M2-08, M4-02 | Q-06 |
+| 7.2 | 등급 | M1-06, M2-08, M4-02 | owner Q-06 |
 | 7.3 | 정책 | M1-06, M2-08, M3-08 | |
 | 7.4 | 하위 Agent·준비 상태 | M2-08, M3-08, M4-02, M5-02, M5-06 | D-24 |
 | 8 | API 계약 | M1-02 | |
@@ -204,7 +205,7 @@ M0 기반 → M1 데이터·계약·순수 판정 → M2 서버 핵심 → {M3 �
 | 9.5 | 등록·초기화·보호 경로·인증 | M2-04, M4-03, M4-04, M7-01, M8-03 | |
 | 9.6 | 보고서 | M6-01~03 | |
 | 9.6-1 | 설계 | M6-05~07 | |
-| 9.6-2 | 빌드·GitHub | M4-04, M7-01~04 | |
+| 9.6-2 | 빌드·GitHub | M4-04, M4-06, M7-01~04 | |
 | 9.6-3 | Telegram | M6-04 | |
 | 9.7 | UI | M0-04, M3-01, M3-02, M3-07 | |
 | 10 | Mock 교체 목록 | 아래 4.1 | |
@@ -280,8 +281,8 @@ G§4.11 L381-392의 각 번호가 값과 빈 상태를 모두 가진다.
 
 | # | 처리 | 위치 |
 |---|---|---|
-| 1 P1 | 반영. 단 PC 변경은 이전 host 확인 없이 새 PC 재개 허용 — G§6.6 L749-751 확정 사항. fence·push 조건으로 격리 | contracts §3.2, §3.4, §4.3; data-model §2.5; M2-05·M5-02 |
-| 2 P1 | 반영. head 조건부 병합만으로는 main 이동을 막지 못한다는 지적이 맞아 검사한 병합본의 fast-forward push로 변경 | contracts §4.1; data-model §2.5·2.8·3.1; M7-02 |
+| 1 P1 | 반영. 단 PC 변경은 이전 host 확인 없이 새 PC **로컬 재개** 허용 — G§6.6 L749-751. 외부 쓰기 격리는 아래 R1로 대체 | contracts §3.2, §3.4, §4.3; data-model §2.5; M2-05·M5-02 |
+| 2 P1 | 반영. head 조건부 병합만으로는 main 이동을 막지 못한다는 지적이 맞아 검사 커밋을 병합과 묶음. 병합 방식은 아래 R3으로 대체 | contracts §4.1; data-model §2.5·2.8·3.1; M7-02 |
 | 3 P1 | 반영 | data-model §3.1 전이·claim 표; M1-03·M2-06 |
 | 4 P1 | 반영. 이미 외부 전송을 시작한 요청은 회수 불가임을 명시 | data-model §5·5.1; contracts §1·8; M2-04·M6-02·M6-03 |
 | 5 P2 | 반영. 보호 규칙 없는 인수는 추천에서 제거하고 범위 변경 승인이 필요함을 명시 | open-questions Q-09; M8-05 |
@@ -293,3 +294,15 @@ G§4.11 L381-392의 각 번호가 값과 빈 상태를 모두 가진다.
 | 11 P2 | 반영 | open-questions §1; M2-09·M3-06·M5-05·M7-02/03·M7-06 |
 | 12 P2 | 반영 | M6-01~03; §1·§4 머리말 |
 | 13 P3 | 반영. 204 유지 + 헤더 | contracts §1·3.1; D-04 |
+
+### 6.1 재리뷰 R1~R6 처리 (대상 9d57829, 2026-11-25)
+
+| # | 처리 | 위치 |
+|---|---|---|
+| R1 P1 | 반영. 로컬 재개와 외부 쓰기를 분리하고 자격 증명 폐기 또는 옛 host 확인 + 대조 전 차단 | contracts §3.4-5·8; data-model `external_write_authority`; M2-05·M4-06 |
+| R2 P1 | 반영. 물리 슬롯/논리 잠금 분리, ① 동안 잠금 유지·재기동 재획득·QA 인계 | contracts §3.2·3.4-8/9·4.1; data-model `execution_holds`; M2-05 |
+| R3 P2 | 반영. FF push 폐기, strict + 예상 head PR 병합 API 단일 경로, 선행 실증 | contracts §4.1·6; Q-09; M4-06·M7-02 |
+| R4 P2 | 반영 후 owner 답으로 확정: 자동 재시도 2회(총 3회), 같은 종류 연속. 잠정 표시 해제 | open-questions §0; contracts §3.5; data-model §2.6·3.1 |
+| R5 P2 | 반영 | contracts §3.2 규칙 2; M2-05 |
+| R6 P2 | 반영 | architecture §5.1; M4-05 |
+| P3 메모 2건 | 반영. 보유 `state` 제거, 두 축·부분 unique·인계 자기 보유를 한 정의로 고정 | data-model §2.5-1; contracts §3.2·3.4; M2-05 |
