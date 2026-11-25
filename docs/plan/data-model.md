@@ -55,7 +55,7 @@
 | `task_estimates` | 추가 전용: est/lo/hi hours(`lo<=est<=hi` CHECK), tokens_k, confidence, basis, agreed_by | §8.3 |
 | `task_grades` | role(`dev/qa`), model_id, effort, reason, locked, locked_by, effective_from | §7.1 |
 | `task_subagents` | role, subagent_id, basis | §7.4 |
-| `task_splits` | basis, judged_rules(jsonb, §2.3-1), exceptions(jsonb: rule·why·by·at) | §5.2-1 |
+| `task_splits` | basis(분할 근거 text. CP add의 `t.splitBasis`·초안 `splitBasis`에서 저장. 일반 CP에서 생략하면 빈 문자열 = 미기록이며 P L4056처럼 문구를 자동 합성하지 않음), judged_rules(jsonb, §2.3-1), exceptions(jsonb: rule·why·by·at) | §5.2-1 |
 | `task_source_links` | fix_task → origin_task(버그 수정), split_from | §5.2-1 L622 |
 
 #### 2.3-1 `judged_rules` 정의 (D-33)
@@ -117,6 +117,22 @@ type Judgement<R> = {
 | `plannings` / `planning_analyses` / `planning_reviews` | 세션 / Agent별 독립 분석 unique(planning, agent) / 주제별 일치·이견·조정 | §4.5 |
 | `change_proposals` | cp_key, source(planning/message/manual/split/input/decision), status(§3.6), ops(jsonb §5.6), id_map, preview_hash, hold_reasons(jsonb `{holdReasons,issues}`, contracts §2.1), split_judgements(jsonb null, §2.3-1; 분할 CP만), **task_judgements(jsonb not null default `[]`**, §2.3-1) | §4.8 §5.6 |
 | `change_proposal_events` | 제출·승인·반려·반영·보류, actor, comment — 추가 전용 | §4.8 |
+
+#### 2.4-1 CP add Task의 선택 필드
+
+| 필드 | 형식(기존 Task와 같음) | 저장 | 생략 시 |
+|---|---|---|---|
+| `scope` | `string[]` | `task_specs.overview.scope` | `[]` (P `newTask` L3716) |
+| `files` | `string[]` (Task `spec.files`와 같음) | `task_specs.spec.files` | `[]` (P `emptySpec`) |
+| `design` | `[{kind:"DB"\|"API"\|"FE"\|"DevOps", content}]`, kind 중복 금지(Task `designs` 요소와 같음) | `task_designs` | 영역에 맞는 빈 구역(P `recKinds(domain, rel)`). 명시한 `[]`는 구역 없음 |
+| `conflictGroup` | 공백 아닌 문자열 또는 null | `tasks.conflict_group` | 일반 CP: null(P `cg ''`). **분할 CP: 아래 상속** |
+
+- `conflictGroup`은 Planning 작성 CP만 쓴다(충돌 묶음은 Planning 지정, §6.6 L741·§6.2). 팀장 작성에 있으면 400. 팀장 작성 분할 CP도 생략 = 상속.
+- **분할의 충돌 묶음 상속**: 원래 Task(`source.id`)를 취소하는 분할 CP에서, 원래 Task를 대신하는 Task(M1-05 `parts`: 조사 Task 제외, 원래가 Analysis면 추가 Task 전부)가 `conflictGroup`을 생략하면 **원래 Task의 묶음**을 쓴다. P `proposeSplit`은 묶음을 옮기지 않아 사라지므로 따르지 않는다. 조사 Task는 생략 시 null이고, 원래 Task를 유지하는 조사 분할에서는 원래 Task의 묶음이 그대로다.
+- 다른 묶음이나 명시한 null로 바꾸는 것은 허용하되 `diff`에 `field=conflictGroup`, before=원래 묶음, after=새 값을 **반드시** 남긴다. 상속도 같은 묶음으로 diff에 보인다.
+- 상속은 저장 때 굳히지 않고 미리보기·승인·반영 때마다 현재 원래 Task에서 계산한다. 판단 hash는 생략 규칙을 적용한 뒤의 `JudgedContent`로 계산하므로 원래 묶음이 바뀌면 다시 판단한다.
+- `scope`·`files`·`design`은 원래 Task에서 상속하지 않는다(전체를 복사하면 나눈 Task마다 원래 범위·파일·설계를 모두 가진 것으로 점검됨). 대신 원래 Task에 변경 파일이나 설계 항목이 있는데 나눈 Task의 값이 비면 규칙 3(파일)·2와 8(설계)을 「통과」로 보이지 않고 **「주의 — 변경 범위 미기재」**로 표시한다 [결정]. 더 무거운 위반·의심 결과가 있으면 그것이 우선한다. 원래 Task의 명세는 취소 뒤에도 보존된다.
+- 규칙 6은 상속을 적용한 묶음 하나로 점검한다.
 
 ### 2.5 실행 · 검증
 
