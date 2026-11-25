@@ -120,6 +120,13 @@ describe('상향·하향', () => {
       const c = codex(['gpt-6-luna', ['low', 'medium']], ['gpt-6-terra', EFFORTS], ['gpt-5.5', ['low', 'medium', 'xhigh']], ['gpt-6-sol', EFFORTS, false], ['gpt-6.2-sol', EFFORTS]);
       expect(escalate(c, { modelId: 'gpt-6-luna', effort: 'medium' })?.grade).toEqual({ modelId: 'gpt-6.2-sol', effort: 'high' });
     });
+    test.each([
+      ['같은 모델에 더 높은 단계가 있어도 점프하지 않음', codex(['gpt-6-luna', ['low', 'medium', 'max']], ['gpt-5.5', ['low', 'medium']])],
+      ['위 모델의 같은 단계로 옮기지 않음', codex(['gpt-6-luna', ['low', 'medium']], ['gpt-5.5', ['low', 'medium', 'xhigh']])],
+      ['낮은 순위 모델이 다음 단계를 지원해도 옮기지 않음', codex(['gpt-6-sol', EFFORTS], ['gpt-6-luna', ['low', 'medium']])],
+    ])('D-30 다음 단계가 없으면 상향 없음: %s', (_l, c) => {
+      expect(escalate(c, { modelId: 'gpt-6-luna', effort: 'medium' })).toBeNull();
+    });
     test('그 모델에 다음 단계가 있으면 모델을 바꾸지 않는다', () => {
       const c = codex(['gpt-6-luna', EFFORTS], ['gpt-6-sol', EFFORTS]);
       expect(escalate(c, { modelId: 'gpt-6-luna', effort: 'medium' })?.grade).toEqual({ modelId: 'gpt-6-luna', effort: 'high' });

@@ -69,6 +69,12 @@ describe('재작업', () => {
     const history = [past('dev', OPUS, 'max'), past('rework', OPUS, 'max', 'failed'), past('rework', OPUS, 'max', 'interrupted'), past('rework', OPUS, 'max')];
     expect(run({ kind: 'rework', history })).toMatchObject({ notify: { count: 4 } });
   });
+  test('D-30: 5단계 미만이라도 올릴 등급이 없으면 같은 등급으로 재시도하고 알림 횟수를 센다', () => {
+    const c: Catalog = { agent: 'Claude', models: [{ modelId: SONNET, rank: 2, allowed: true, efforts: ['low', 'medium', 'max'] }, { modelId: OPUS, rank: 3, allowed: true, efforts: ['low', 'medium'] }] };
+    expect(run({ kind: 'rework', catalog: c, taskGrade: { modelId: SONNET, effort: 'medium', locked: false }, history: [past('dev', SONNET, 'medium'), past('rework', SONNET, 'medium')] })).toMatchObject({
+      ok: true, grade: { modelId: SONNET, effort: 'medium' }, adjust: { kind: 'up', steps: [], alreadyTop: true }, notify: { count: 2 },
+    });
+  });
   test('고정 Task도 재작업 상향은 적용된다(고정은 하향만 막는다)', () => {
     expect(run({ kind: 'rework', taskGrade: { modelId: SONNET, effort: 'high', locked: true }, history: [past('dev', SONNET, 'high')] })).toMatchObject({ grade: { effort: 'xhigh' } });
   });
@@ -173,6 +179,20 @@ describe('쓸 수 없는 등급', () => {
     // 중단된 재작업도 다시 상향하지 않고 재판단 등급 그대로
     expect(run({ ...o, kind: 'rework', history: [past('dev', OPUS, 'high'), past('rework', OPUS, 'max', 'interrupted')] })).toMatchObject(resumed);
     expect(run({ ...o, kind: 'qa', history: [past('qa', OPUS, 'max', 'interrupted')] })).toMatchObject(resumed);
+  });
+  test.each([
+    ['모델 미보고', 'claude-haiku-5-5', 'high', 'MODEL_UNKNOWN'],
+    ['Effort 미매핑', OPUS, 'ultra', 'EFFORT_UNMAPPED'],
+    ['Effort 미보고', OPUS, 'max', 'EFFORT_NOT_REPORTED'],
+  ])('%s로 직전 등급을 못 쓰면 재개·재작업 모두 재판단된 등급을 쓴다', (_l, modelId, effort, reason) => {
+    const c: Catalog = { agent: 'Claude', models: [{ modelId: OPUS, rank: 3, allowed: true, efforts: ['low', 'high', 'ultra'] }, { modelId: SONNET, rank: 2, allowed: true, efforts: E }] };
+    const replacedBy = { grade: { modelId, effort }, reason };
+    expect(run({ catalog: c, history: [past('dev', modelId, effort, 'interrupted')] })).toMatchObject({
+      ok: true, grade: { modelId: SONNET, effort: 'high' }, adjust: { kind: 'regrade', replaced: replacedBy },
+    });
+    expect(run({ kind: 'rework', catalog: c, history: [past('dev', modelId, effort)] })).toMatchObject({
+      ok: true, grade: { modelId: SONNET, effort: 'xhigh' }, adjust: { kind: 'up', replaced: replacedBy },
+    });
   });
   test('재판단되지 않은 Task 등급으로는 재개하지 않는다', () => {
     expect(run({ catalog: revoked, taskGrade: { modelId: OPUS, effort: 'max', locked: true }, history: [past('dev', OPUS, 'max', 'interrupted')] })).toEqual({ ok: false, code: 'MODEL_NOT_ALLOWED' });

@@ -156,8 +156,8 @@ const change = (from: Grade, modelId: string, effort: string): GradeChange => {
  * 한 단계 상향. 더 올릴 등급이 없으면 null.
  * 1. 같은 모델의 바로 다음 공통 단계
  * 2. 그 단계가 없으면 그 단계를 지원하는 다음 허용 모델 (owner 2026-11-25 아이템 3)
- * 3. 그런 모델도 없으면 같은 모델에 보고된 더 높은 단계 (P `escalate`)
- * 4. Effort가 최상위면 같은 단계를 지원하는 다음 허용 모델 (G §7.3)
+ * 3. 이미 최대(5)면 최대를 지원하는 다음 허용 모델 (G §7.3)
+ * 「다음 허용 모델」은 순위가 더 높은 모델만 뜻한다. 5단계 미만에서 1·2가 없으면 상향하지 않는다(D-30).
  */
 export function escalate(catalog: Catalog, grade: Grade): GradeChange | null {
   const model = catalog.models.find((m) => m.modelId === grade.modelId);
@@ -178,11 +178,7 @@ export function escalate(catalog: Catalog, grade: Grade): GradeChange | null {
 
   const next = own.find((e) => e.level === level + 1);
   if (next) return change(grade, model.modelId, next.effort);
-  const viaModel = onHigherModel(level + 1);
-  if (viaModel) return viaModel;
-  const jump = own.find((e) => e.level > level);
-  if (jump) return change(grade, model.modelId, jump.effort);
-  return onHigherModel(level);
+  return onHigherModel(level === 5 ? level : level + 1);
 }
 
 /** 사용량 절약 하향 — Effort 한 단계. 최저선 아래이거나 더 낮출 단계가 없으면 null. */
