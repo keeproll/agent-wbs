@@ -28,13 +28,17 @@ export interface ResolveInput {
 }
 
 export interface GradeAdjust {
-  kind: 'none' | 'resume' | 'keep' | 'up' | 'down';
+  /** `regrade` = 재개하되 직전 등급을 쓸 수 없어 재판단한 등급을 씀 */
+  kind: 'none' | 'resume' | 'regrade' | 'keep' | 'up' | 'down';
   from: Grade;
   steps: GradeStep[];
   /** 상향하려 했으나 더 올릴 등급이 없었음 */
   alreadyTop: boolean;
-  /** 직전 시도 등급을 더는 쓸 수 없어 재판단된 Task 등급을 기준으로 삼음 (G §7.2) */
-  previousUnusable: GradeError | null;
+  /**
+   * 직전 시도 등급을 쓸 수 없어 재판단된 Task 등급으로 대체한 기록(G §7.2, owner 2026-11-25 아이템 3).
+   * 호출자는 이 값을 이력에 남긴다.
+   */
+  replaced: { grade: Grade; reason: GradeError } | null;
 }
 
 export type ResolveResult =
@@ -60,19 +64,21 @@ export function resolveRunGrade(input: ResolveInput): ResolveResult {
   const prev = input.history.findLast((a) => roleOf(a.kind) === role);
 
   let base = stored;
-  let previousUnusable: GradeError | null = null;
+  let replaced: GradeAdjust['replaced'] = null;
   const resuming = prev?.status === 'interrupted' && prev.kind === kind;
   if (kind === 'rework' && !prev) return { ok: false, code: 'PREVIOUS_DEV_MISSING' };
   if (prev && (resuming || kind === 'rework')) {
-    previousUnusable = gradeError(catalog, prev);
-    if (previousUnusable === null) base = { modelId: prev.modelId, effort: prev.effort };
+    const grade = { modelId: prev.modelId, effort: prev.effort };
+    const reason = gradeError(catalog, grade);
+    if (reason === null) base = grade;
+    else replaced = { grade, reason };
   }
   if (base === stored && taskError) return { ok: false, code: taskError };
 
-  const adjust: GradeAdjust = { kind: 'none', from: base, steps: [], alreadyTop: false, previousUnusable };
+  const adjust: GradeAdjust = { kind: 'none', from: base, steps: [], alreadyTop: false, replaced };
 
   // 중단 후 재개는 항상 같은 등급 — 하향도 하지 않는다.
-  if (resuming) return { ok: true, grade: base, adjust: { ...adjust, kind: 'resume' }, notify: null };
+  if (resuming && !replaced) return { ok: true, grade: base, adjust: { ...adjust, kind: 'resume' }, notify: null };
 
   const floor = floorOf(role, input.task, policy.floors);
   // 최저선은 조정을 마친 최종 후보에 적용한다. 미달이면 올리지 않고 Planning 재판단 대상으로 거부한다.
@@ -82,6 +88,9 @@ export function resolveRunGrade(input: ResolveInput): ResolveResult {
     if (below) return { ok: false, code: 'BELOW_FLOOR' };
     return { ok: true, grade, adjust: adjusted, notify };
   };
+
+  // 재판단한 등급은 새 등급이라 최저선을 확인하되, 재개이므로 상향·하향은 하지 않는다.
+  if (resuming) return finish(base, { ...adjust, kind: 'regrade' }, null);
 
   if (kind === 'rework' && policy.onRework !== 'same') {
     let grade = base;

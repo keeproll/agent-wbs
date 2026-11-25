@@ -91,23 +91,39 @@ describe('상향·하향', () => {
     expect(escalate(claude, { modelId: 'claude-sonnet-5-5', effort: 'xhigh' })?.grade).toEqual({ modelId: 'claude-sonnet-5-5', effort: 'max' });
     expect(escalate(claude, { modelId: 'claude-sonnet-5-5', effort: 'max' })).toEqual({
       grade: { modelId: 'claude-opus-5-5', effort: 'max' },
-      step: { kind: 'model', from: 'claude-sonnet-5-5', to: 'claude-opus-5-5' },
+      step: { kind: 'model', from: { modelId: 'claude-sonnet-5-5', effort: 'max' }, to: { modelId: 'claude-opus-5-5', effort: 'max' } },
     });
     expect(escalate(claude, { modelId: 'claude-opus-5-5', effort: 'max' })).toBeNull();
   });
-  test('ultra로 올리지 않고, 같은 단계가 없는 위 모델로 Effort를 낮추며 옮기지 않는다', () => {
-    const c: Catalog = {
-      agent: 'Codex',
-      models: [
-        { modelId: 'gpt-6-luna', rank: 1, allowed: true, efforts: [...EFFORTS, 'ultra'] },
-        { modelId: 'gpt-5.5', rank: 2, allowed: true, efforts: EFFORTS },
-        { modelId: 'gpt-new', rank: 3, allowed: true, efforts: EFFORTS },
-        { modelId: 'gpt-6.2-sol', rank: 4, allowed: true, efforts: [...EFFORTS, 'ultra'] },
-      ],
-    };
+  const codex = (...rows: [string, string[], boolean?][]): Catalog => ({
+    agent: 'Codex',
+    models: rows.map(([modelId, efforts, allowed = true], i) => ({ modelId, rank: i + 1, allowed, efforts })),
+  });
+  test('ultra로는 올리지 않고, 최대를 지원하지 않거나 미매핑인 모델은 건너뛴다', () => {
+    const c = codex(['gpt-6-luna', [...EFFORTS, 'ultra']], ['gpt-5.5', EFFORTS], ['gpt-new', EFFORTS], ['gpt-6.2-sol', [...EFFORTS, 'ultra']]);
     expect(escalate(c, { modelId: 'gpt-6-luna', effort: 'max' })?.grade).toEqual({ modelId: 'gpt-6.2-sol', effort: 'max' });
     expect(escalate(c, { modelId: 'gpt-6.2-sol', effort: 'max' })).toBeNull();
-    expect(escalate(c, { modelId: 'gpt-5.5', effort: 'xhigh' })?.grade).toEqual({ modelId: 'gpt-6.2-sol', effort: 'xhigh' });
+  });
+  describe('owner 아이템 3: 바로 다음 단계가 그 모델에 없으면 그 단계를 지원하는 다음 허용 모델', () => {
+    test('gpt-5.5 매우 높음 → 최대를 지원하는 다음 모델의 최대 (같은 단계로만 옮기지 않음)', () => {
+      const c = codex(['gpt-5.5', EFFORTS], ['gpt-6-luna', EFFORTS], ['gpt-6.2-sol', EFFORTS]);
+      expect(escalate(c, { modelId: 'gpt-5.5', effort: 'xhigh' })).toEqual({
+        grade: { modelId: 'gpt-6-luna', effort: 'max' },
+        step: { kind: 'model', from: { modelId: 'gpt-5.5', effort: 'xhigh' }, to: { modelId: 'gpt-6-luna', effort: 'max' } },
+      });
+    });
+    test('같은 모델의 더 높은 단계로 건너뛰기 전에 다음 단계를 가진 모델을 찾는다', () => {
+      const c = codex(['gpt-6-luna', ['low', 'medium', 'max']], ['gpt-6-sol', EFFORTS]);
+      expect(escalate(c, { modelId: 'gpt-6-luna', effort: 'medium' })?.grade).toEqual({ modelId: 'gpt-6-sol', effort: 'high' });
+    });
+    test('그 단계가 없는 모델·미허용 모델은 순위가 가까워도 건너뛴다', () => {
+      const c = codex(['gpt-6-luna', ['low', 'medium']], ['gpt-6-terra', EFFORTS], ['gpt-5.5', ['low', 'medium', 'xhigh']], ['gpt-6-sol', EFFORTS, false], ['gpt-6.2-sol', EFFORTS]);
+      expect(escalate(c, { modelId: 'gpt-6-luna', effort: 'medium' })?.grade).toEqual({ modelId: 'gpt-6.2-sol', effort: 'high' });
+    });
+    test('그 모델에 다음 단계가 있으면 모델을 바꾸지 않는다', () => {
+      const c = codex(['gpt-6-luna', EFFORTS], ['gpt-6-sol', EFFORTS]);
+      expect(escalate(c, { modelId: 'gpt-6-luna', effort: 'medium' })?.grade).toEqual({ modelId: 'gpt-6-luna', effort: 'high' });
+    });
   });
   test('얼린 catalog로 모델을 올려도 입력을 바꾸지 않는다', () => {
     const models = claude.models.map((m) => Object.freeze({ ...m, efforts: Object.freeze([...m.efforts]) }));

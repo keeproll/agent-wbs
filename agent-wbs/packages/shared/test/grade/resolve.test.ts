@@ -44,7 +44,9 @@ describe('재작업', () => {
   test('최상위로 상향은 모든 단계를 기록한다', () => {
     const r = run({ kind: 'rework', history: [past('dev', SONNET, 'high')], policy: { ...DEFAULT_EXEC_POLICY, onRework: 'top' } });
     expect(r).toMatchObject({ grade: { modelId: OPUS, effort: 'max' }, notify: null });
-    expect(r.ok && r.adjust.steps.map((s) => s.to)).toEqual(['xhigh', 'max', OPUS]);
+    expect(r.ok && r.adjust.steps.map((s) => s.to)).toEqual([
+      { modelId: SONNET, effort: 'xhigh' }, { modelId: SONNET, effort: 'max' }, { modelId: OPUS, effort: 'max' },
+    ]);
   });
   test('같은 등급 유지 정책은 직전 등급을 유지하고 알리지 않는다', () => {
     const history = [past('dev', OPUS, 'max'), past('rework', OPUS, 'max'), past('rework', OPUS, 'max')];
@@ -157,13 +159,35 @@ describe('쓸 수 없는 등급', () => {
   ])('%s는 고정이어도 실행하지 않는다', (_l, modelId, effort, code) => {
     expect(run({ taskGrade: { modelId, effort, locked: true } })).toEqual({ ok: false, code });
   });
-  test('직전 모델의 허용이 해제되면 재판단된 Task 등급에서 시작한다', () => {
-    const c: Catalog = { agent: 'Claude', models: [{ modelId: OPUS, rank: 3, allowed: false, efforts: E }, { modelId: SONNET, rank: 2, allowed: true, efforts: E }] };
-    expect(run({ kind: 'rework', catalog: c, history: [past('dev', OPUS, 'low')] })).toMatchObject({
-      grade: { modelId: SONNET, effort: 'xhigh' }, adjust: { previousUnusable: 'MODEL_NOT_ALLOWED' },
+  const revoked: Catalog = { agent: 'Claude', models: [{ modelId: OPUS, rank: 3, allowed: false, efforts: E }, { modelId: SONNET, rank: 2, allowed: true, efforts: E }] };
+  const replaced = (effort: string) => ({ grade: { modelId: OPUS, effort }, reason: 'MODEL_NOT_ALLOWED' });
+  test('재작업의 직전 모델이 허용 해제되면 재판단된 Task 등급에서 상향한다', () => {
+    expect(run({ kind: 'rework', catalog: revoked, history: [past('dev', OPUS, 'low')] })).toMatchObject({
+      grade: { modelId: SONNET, effort: 'xhigh' }, adjust: { kind: 'up', replaced: replaced('low') },
     });
-    expect(run({ catalog: c, history: [past('dev', OPUS, 'low', 'interrupted')] })).toMatchObject({
-      grade: { modelId: SONNET, effort: 'high' }, adjust: { kind: 'resume', previousUnusable: 'MODEL_NOT_ALLOWED' },
+  });
+  test('owner 아이템 3: 중단된 작업의 모델이 허용 해제되면 재판단한 등급으로 재개하고 전후를 남긴다', () => {
+    const resumed = { ok: true, grade: { modelId: SONNET, effort: 'high' }, adjust: { kind: 'regrade', steps: [], replaced: replaced('max') }, notify: null };
+    const o = { catalog: revoked, policy: DOWN, remainPct: 5 }; // 재개이므로 하향하지 않는다
+    expect(run({ ...o, history: [past('dev', OPUS, 'max', 'interrupted')] })).toMatchObject(resumed);
+    // 중단된 재작업도 다시 상향하지 않고 재판단 등급 그대로
+    expect(run({ ...o, kind: 'rework', history: [past('dev', OPUS, 'high'), past('rework', OPUS, 'max', 'interrupted')] })).toMatchObject(resumed);
+    expect(run({ ...o, kind: 'qa', history: [past('qa', OPUS, 'max', 'interrupted')] })).toMatchObject(resumed);
+  });
+  test('재판단되지 않은 Task 등급으로는 재개하지 않는다', () => {
+    expect(run({ catalog: revoked, taskGrade: { modelId: OPUS, effort: 'max', locked: true }, history: [past('dev', OPUS, 'max', 'interrupted')] })).toEqual({ ok: false, code: 'MODEL_NOT_ALLOWED' });
+  });
+  test('재판단 등급은 새 등급이므로 최저선을 만족해야 한다 — 팀장 고정은 예외', () => {
+    const o = (locked: boolean): Partial<ResolveInput> => ({
+      catalog: revoked,
+      taskGrade: { modelId: SONNET, effort: 'low', locked },
+      task: { primaryDomain: 'DB', relatedDomains: [], devLevel: 1 },
+      history: [past('dev', OPUS, 'max', 'interrupted')],
     });
+    expect(run(o(false))).toEqual({ ok: false, code: 'BELOW_FLOOR' });
+    expect(run(o(true))).toMatchObject({ ok: true, grade: { modelId: SONNET, effort: 'low' }, adjust: { kind: 'regrade' } });
+  });
+  test('직전 모델을 쓸 수 있으면 replaced는 null', () => {
+    expect(run({ history: [past('dev', OPUS, 'max', 'interrupted')] })).toMatchObject({ adjust: { kind: 'resume', replaced: null } });
   });
 });

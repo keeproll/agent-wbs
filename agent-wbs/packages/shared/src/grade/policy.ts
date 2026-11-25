@@ -129,39 +129,60 @@ export function belowFloor(
 
 // ── 상향 · 하향 ──────────────────────────────────────
 
-export type GradeStep =
-  | { kind: 'effort'; from: string; to: string }
-  | { kind: 'model'; from: string; to: string };
+export interface GradeStep {
+  kind: 'effort' | 'model';
+  from: Grade;
+  to: Grade;
+}
+
+interface GradeChange {
+  grade: Grade;
+  step: GradeStep;
+}
+
+const change = (from: Grade, modelId: string, effort: string): GradeChange => {
+  const to = { modelId, effort };
+  return {
+    grade: to,
+    step: {
+      kind: from.modelId === modelId ? 'effort' : 'model',
+      from: { modelId: from.modelId, effort: from.effort },
+      to,
+    },
+  };
+};
 
 /**
- * 한 단계 상향. Effort가 최상위면 허용 모델 중 한 단계 위 모델로, 공통 단계는 유지한다(P `escalate`).
- * 같은 공통 단계를 쓸 수 없는 모델은 건너뛴다. 더 올릴 등급이 없으면 null.
+ * 한 단계 상향. 더 올릴 등급이 없으면 null.
+ * 1. 같은 모델의 바로 다음 공통 단계
+ * 2. 그 단계가 없으면 그 단계를 지원하는 다음 허용 모델 (owner 2026-11-25 아이템 3)
+ * 3. 그런 모델도 없으면 같은 모델에 보고된 더 높은 단계 (P `escalate`)
+ * 4. Effort가 최상위면 같은 단계를 지원하는 다음 허용 모델 (G §7.3)
  */
-export function escalate(catalog: Catalog, grade: Grade): { grade: Grade; step: GradeStep } | null {
+export function escalate(catalog: Catalog, grade: Grade): GradeChange | null {
   const model = catalog.models.find((m) => m.modelId === grade.modelId);
   const level = effortLevel(catalog.agent, grade.modelId, grade.effort);
   if (!model || level === null) return null;
 
-  const next = usableEfforts(catalog, model).find((e) => e.level > level);
-  if (next) {
-    return {
-      grade: { modelId: model.modelId, effort: next.effort },
-      step: { kind: 'effort', from: grade.effort, to: next.effort },
-    };
-  }
+  const own = usableEfforts(catalog, model);
   const higher = catalog.models
     .filter((m) => m.allowed && m.rank > model.rank)
     .sort((a, b) => a.rank - b.rank);
-  for (const m of higher) {
-    const same = usableEfforts(catalog, m).find((e) => e.level === level);
-    if (same) {
-      return {
-        grade: { modelId: m.modelId, effort: same.effort },
-        step: { kind: 'model', from: model.modelId, to: m.modelId },
-      };
+  const onHigherModel = (want: number): GradeChange | null => {
+    for (const m of higher) {
+      const hit = usableEfforts(catalog, m).find((e) => e.level === want);
+      if (hit) return change(grade, m.modelId, hit.effort);
     }
-  }
-  return null;
+    return null;
+  };
+
+  const next = own.find((e) => e.level === level + 1);
+  if (next) return change(grade, model.modelId, next.effort);
+  const viaModel = onHigherModel(level + 1);
+  if (viaModel) return viaModel;
+  const jump = own.find((e) => e.level > level);
+  if (jump) return change(grade, model.modelId, jump.effort);
+  return onHigherModel(level);
 }
 
 /** 사용량 절약 하향 — Effort 한 단계. 최저선 아래이거나 더 낮출 단계가 없으면 null. */
@@ -169,14 +190,11 @@ export function lower(
   catalog: Catalog,
   grade: Grade,
   floor: Floor,
-): { grade: Grade; step: GradeStep } | null {
+): GradeChange | null {
   const model = catalog.models.find((m) => m.modelId === grade.modelId);
   const level = effortLevel(catalog.agent, grade.modelId, grade.effort);
   if (!model || level === null) return null;
   const prev = usableEfforts(catalog, model).findLast((e) => e.level < level);
   if (!prev || prev.level < floor.level) return null;
-  return {
-    grade: { modelId: model.modelId, effort: prev.effort },
-    step: { kind: 'effort', from: grade.effort, to: prev.effort },
-  };
+  return change(grade, model.modelId, prev.effort);
 }
