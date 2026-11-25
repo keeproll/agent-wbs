@@ -29,7 +29,7 @@ export function completion(patch: Partial<CompletionInput> = {}): CompletionInpu
     checklist: [{ required: true, done: true }],
     outputs: [{ name: 'artifact', required: true, delivered: true }],
     basis, verification: pass, taskCheck: { ...basis, result: 'PASS' }, unresolvedBlockingDefects: 0,
-    planningApprovedAt: '2026-11-25T00:00:00Z', headSync: null,
+    planningApprovedAt: '2026-11-25T00:00:00Z', headSync: null, basePipelineSha: 'pipeline',
     integration: { result: 'PASS', qaHeadSha: 'head', headSha: 'head', baseSha: 'base',
       pipelineSha: 'pipeline', treeSha: 'tree' },
     merge: { mergeSha: 'merged', headSha: 'head', baseSha: 'base', treeSha: 'tree' }, ...patch,

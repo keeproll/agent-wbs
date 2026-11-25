@@ -102,6 +102,8 @@ export function canIntegrate(input: IntegrationEntryInput): boolean {
 }
 
 export interface CompletionInput extends GateInput {
+  // Server-resolved pipeline definition at merge base A, independent of the post-merge current main.
+  basePipelineSha: string;
   integration: Integration | null;
   merge: { mergeSha: string; headSha: string; baseSha: string; treeSha: string } | null;
 }
@@ -110,6 +112,9 @@ export function completionReasons(input: CompletionInput): string[] {
   const reasons = completionGate(input).filter(condition => condition.result !== 'PASS').map(condition => condition.reason);
   const { integration, merge, verification } = input;
   if (!integration || integration.result !== 'PASS') reasons.push('② 통합 확인 PASS가 필요합니다.');
+  if (integration && integration.pipelineSha !== input.basePipelineSha) {
+    reasons.push('② 통합 확인의 pipeline SHA가 병합 기준 main 정의와 다릅니다.');
+  }
   if (integration && (integration.qaHeadSha !== verification?.headSha || integration.headSha !== input.basis.headSha)) {
     reasons.push('② 통합 확인의 QA/head 근거가 현재 검증과 다릅니다.');
   }
