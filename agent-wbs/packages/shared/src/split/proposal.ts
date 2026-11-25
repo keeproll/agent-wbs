@@ -128,7 +128,7 @@ export function validateSplitProposal(
   }
   const holds = [...proposalJudgementHolds(base, simulation, judgement.taskHashes, judgement.taskJudgements, settings),
     ...splitJudgementHolds(judgement.splitJudgements, judgement.splitSubjectHash)];
-  for (const { code, taskKey = targetId, rule, message } of holds) problems.push({ code, taskKey, rule, message });
+  for (const { code, taskKey = targetId, rule, message } of holds) problems.push({ code, taskKey, message, ...(rule ? { rule } : {}) });
   for (const task of added) {
     if (!task.estimate) fail('ESTIMATE_MISSING', '나눈 Task의 추정이 없어 크기를 판정할 수 없습니다', task.id);
     if (!task.splitBasis.trim()) fail('SPLIT_BASIS_MISSING', '분할 근거가 없습니다', task.id);

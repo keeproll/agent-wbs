@@ -185,31 +185,59 @@ describe('taskJudgements: judgement of existing Tasks carried by the CP (data-mo
   test('without a CP record the stored one is used, against the after hash too', () => {
     expect(run(at('after'), [])).toEqual([]);
     expect(run(at('before'), [])).toEqual(['JUDGEMENT_MISSING']);
-    expect(run(at('after'), [of(at('after', 'not_met'), 'O')])).toEqual([]);
   });
   test.each([['stale', at('older')], ['before', at('before')], ['empty', null]])('a CP record with %s hash is missing, with no fallback', (_name, record) => {
     expect(run(at('after'), [of(record)])).toEqual(['JUDGEMENT_MISSING']);
   });
-  test('duplicate taskKey is void, even if identical and the stored record is valid', () => {
-    expect(run(at('after'), [of(at('after')), of(at('after'))])).toEqual(['JUDGEMENT_MISSING']);
-    expect(run(at('after'), [of(at('after')), of(at('x'), 'O'), of(at('x'), 'O')])).toEqual([]);
+  test('a duplicate taskKey is rejected and voids the record instead of falling back', () => {
+    expect(run(at('after'), [of(at('after')), of(at('after'))])).toEqual(['VALIDATION_FAILED', 'JUDGEMENT_MISSING']);
   });
-  test('priority-only change is not held whatever the CP carries', () => {
-    const same = { before: { T: 'before' }, after: { T: 'before' } };
+  describe('the whole array is validated before any Task or rule filter', () => {
+    const all = ['VALIDATION_FAILED'];
+    const same = { before: { T: 'before', O: 'o' }, after: { T: 'before', O: 'o', 'TASK-0021': 'new' } };
+    const changed = { ...same, after: { ...same.after, T: 'after' } };
     const priority: ProposalOp[] = [{ op: 'modify', task: 'T', field: 'priority', after: 0 }];
-    for (const list of [[], [of(at('older'))], [of(at('before', 'not_met'))], [of(null), of(null)]]) {
-      expect(run(null, list, priority, same)).toEqual([]);
-    }
+    const holds = (ops: ProposalOp[], list: readonly unknown[], hashes: SubjectHashes, settings = DEFAULT_SPLIT_SETTINGS) => {
+      const base = snapshot([task('T', 'ready', { judgedRules: at('after') }), task('O'), task('D', 'done')]);
+      return proposalJudgementHolds(base, simulateProposal(base, ops),
+        { before: { ...hashes.before, D: 'd' }, after: { ...hashes.after, D: 'd' } }, list as TaskJudgement[], settings);
+    };
+    const rejected = (...args: Parameters<typeof holds>) => holds(...args).map(item => [item.code, item.taskKey]);
+    test.each([['unchanged Task', 'O'], ['unknown Task', 'TASK-9999'], ['done Task', 'D']])('%s: single or duplicate', (_name, key) => {
+      expect(rejected(title, [of(at('o'), key)], changed)).toEqual([['VALIDATION_FAILED', key]]);
+      expect(rejected(title, [of(at('o'), key), of(at('o'), key)], changed)).toEqual([['VALIDATION_FAILED', key]]);
+    });
+    test('priority-only: the change itself passes, a stray or duplicate judgement does not', () => {
+      expect(rejected(priority, [], same)).toEqual([]);
+      expect(rejected(priority, [of(at('before'))], same)).toEqual([['VALIDATION_FAILED', 'T']]);
+      expect(rejected(priority, [of(null), of(null)], same)).toEqual([['VALIDATION_FAILED', 'T']]);
+    });
+    test('all judge rules off', () => {
+      const enabled = { ...DEFAULT_SPLIT_SETTINGS.enabled, revert: false, contract: false, refactor: false };
+      const off = { ...DEFAULT_SPLIT_SETTINGS, enabled };
+      expect(rejected(title, [of(at('after'))], changed, off)).toEqual([]);
+      expect(rejected(title, [of(at('after')), of(at('after'))], changed, off)).toEqual([['VALIDATION_FAILED', 'T']]);
+    });
+    test('a new Task by ref or assigned ID, and a Task the proposal cancels', () => {
+      for (const key of ['N', 'TASK-0021']) {
+        expect(rejected([add('N', { judgedRules: at('new') })], [of(at('new'), key)], same)).toEqual([['VALIDATION_FAILED', key]]);
+      }
+      expect(rejected([{ op: 'remove', task: 'T' }], [of(at('before'))], same)).toEqual([['VALIDATION_FAILED', 'T']]);
+    });
+    test('a key-less entry, next to a valid one', () => {
+      for (const bad of [null, {}, { taskKey: 1 }]) {
+        expect(holds(title, [of(at('after')), bad], changed).map(item => item.code)).toEqual(all);
+      }
+    });
+    test('a split proposal reports it as a problem', () => {
+      const input: SplitJudgementInput = { ...agreed, taskJudgements: [of(at(HASH), 'S'), of(at(HASH), 'S')] };
+      expect(validate(world(), 'T', cut(), input).problems.map(item => [item.code, item.taskKey])).toEqual([['VALIDATION_FAILED', 'S']]);
+    });
   });
   test('no after hash from the server is missing, no before hash still judges the after content', () => {
     expect(run(null, [of(at('after'))], title, { before: { T: 'before' }, after: {} })).toEqual(['JUDGEMENT_MISSING']);
     expect(run(null, [of(at('after'))], title, { before: {}, after: { T: 'after' } })).toEqual([]);
     expect(run(null, [], title, { before: {}, after: { T: 'after' } })).toEqual(['JUDGEMENT_MISSING']);
-  });
-  test('a new Task is judged by its add op only', () => {
-    const same = { before: { T: 'before' }, after: { T: 'before', 'TASK-0021': 'new' } };
-    expect(run(null, [of(at('new'), 'TASK-0021')], [add('N', { judgedRules: null })], same)).toEqual(['JUDGEMENT_MISSING']);
-    expect(run(null, [of(at('new', 'not_met'), 'TASK-0021')], [add('N', { judgedRules: at('new') })], same)).toEqual([]);
   });
   test('validateSplitProposal applies the same input', () => {
     const input = (taskJudgements: readonly TaskJudgement[]): SplitJudgementInput =>
