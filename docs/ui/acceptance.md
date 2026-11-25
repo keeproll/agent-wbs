@@ -1,8 +1,8 @@
 # 구현 완료 판정용 인수 체크리스트
 
-이 문서는 **제품의 기대 동작**이다. [inventory.md](inventory.md)·[catalog.tsv](catalog.tsv)는 원본의 현재 동작을 기록하므로, 원본 결함이나 Mock 버튼이 인수 기준으로 승격되지 않는다. 충돌 시 owner 결정 → 계획 기준선 b258334 → 가이드 → 원본 순으로 적용한다. owner Q-01/02/03/04/05/06/11/12는 계획의 open-questions §0, 마일스톤은 milestones를 따른다.
+이 문서는 **제품의 기대 동작**이다. [inventory.md](inventory.md)·[catalog.tsv](catalog.tsv)는 원본의 현재 동작을 기록하므로, 원본 결함이나 Mock 버튼이 인수 기준으로 승격되지 않는다. 충돌 시 owner 결정 → 계획 기준선 a60216d → 가이드 → 원본 순으로 적용한다. owner Q-01/02/03/04/05/06/11/12는 계획의 open-questions §0, 마일스톤은 milestones를 따른다.
 
-owner 확정 사항은 계획 b258334의 open-questions §0·D-27·D-28을 따른다. **시작 전 취소 선행의 SS 관계는 원자적으로 제거하되 다른 미충족 선행은 계속 차단하고, CP 영향에서 실제 풀리는 후속을 구분**한다. **1280px 이상 전체 지원, 그 아래 표는 영역 내 가로 스크롤, 390px 휴대폰은 알림 링크의 Task·CI·변경 제안 상세 열람**이다. 즉시 전달·실 격리·외부 자격 증명 등 나머지 gate는 계획대로 남는다.
+owner 확정 사항은 계획 a60216d의 open-questions §0·D-27·D-28을 따른다. **시작 전 취소 선행의 SS 관계는 원자적으로 제거하되 다른 미충족 선행은 계속 차단하고, CP 영향에서 실제 풀리는 후속을 구분**한다. **1280px 이상 전체 지원, 그 아래 표는 영역 내 가로 스크롤, 390px 휴대폰은 알림 링크의 Task·CI·변경 제안 상세 열람**이다. 즉시 전달·실 격리·외부 자격 증명 등 나머지 gate는 계획대로 남는다.
 
 로그인 화면(UI-AUTH)은 owner 추가 범위다. 착수 승인을 거친 뒤 팀장 시작 버튼을 누르면 후속 실행·재작업은 자동(자동 재시도2회/총3회, 자동 재작업3회)이며 Gate+②통합+병합 확인 후 서버가 자동 완료한다. CLI는 최신 유지, 미검증 시 보수 계산·재검증 안내를 제공하고 버전 고정/하향을 합격 조건으로 요구하지 않는다.
 
@@ -10,7 +10,9 @@ owner 확정 사항은 계획 b258334의 open-questions §0·D-27·D-28을 따�
 
 검증 방법은 항목별로 다르게 적었다. API/E2E/Runner/SMTP/BotAPI/PDF검사는 자동화 가능하고 시각 비교는 자동 보조와 수동 검수를 병행한다. E2E는 UI·키보드·라우팅, API+E2E는 저장/검증/재조회, API+Runner+E2E는 보고·실행·Git 연계, API+SMTP/BotAPI+E2E는 실제 프로토콜을 처리하는 로컬 시험 서버까지, PDF검사는 생성 파일·텍스트/폰트/페이지 검사, 시각·수동은 렌더/인쇄·포커스 확인을 뜻한다. M3 fake Runner는 테스트 준비 수단이며 제품의 가짜 성공 근거가 아니다. 외부 자격 증명/유료 실호출은 해당 owner gate 뒤의 M8 인수에서 수행한다.
 
-모든 M3 UI 사례는 공통으로1280/1920px 전체 기능·페이지 가로 스크롤 없음과1280 미만 표 영역 가로 스크롤을 만족해야 한다(plan b258334 milestones M3 공통 완료 조건). 390px 상세 열람은 Task M3-03, CP M3-05, CI M7-05에서 각각 판정한다. 수동 시각/접근성 검수가 필요한 부분을 자동 API 성공으로 대신하지 않는다.
+모든 M3 UI 사례는 공통으로1280/1920px 전체 기능·페이지 가로 스크롤 없음과1280 미만 표 영역 가로 스크롤을 만족해야 한다(plan a60216d milestones M3 공통 완료 조건). 390px 상세 열람은 Task M3-03, CP M3-05, CI M7-05에서 각각 판정한다. 수동 시각/접근성 검수가 필요한 부분을 자동 API 성공으로 대신하지 않는다.
+
+M3-01의 공통 상태 완료는 업무 화면 대신 공통 컴포넌트 시험 화면으로 계획의 e2e -- states를 통과한다. 실제 WBS/Task/대시보드/제품 모달 회귀는 각 화면이 있는 UAT 지정 마일스톤에서 통과한다. 전체 UAT의 화면·API 가용 시점과 선행 그래프는 [milestone-audit.md](milestone-audit.md)에 대조했다.
 
 모든 체크박스는 **제품에서 아직 실행 전**이다. 독립 리뷰의 프로토타입 브라우저 확인과 스크린샷은 [screenshots.md](screenshots.md)에 대응시키며 제품 통과로 체크하지 않는다. 원본 문구·라벨의 정본은 P의 해당 화면 줄 범위다. UI-AUTH와 owner/불일치 수정 대상 문구는 이 기준서가 우선한다.
 
@@ -18,9 +20,9 @@ owner 확정 사항은 계획 b258334의 open-questions §0·D-27·D-28을 따�
 
 ## 집계
 
-실제 판정 항목 **148개**. 이전933개(원본 설명404 + 기계 조건529)에서 교체했다. 조건529개는 인수 총계에서 제외하고 inventory의 CD 추적 색인에만 남긴다.
+실제 판정 항목 **149개**. 이전933개(원본 설명404 + 기계 조건529)에서 교체했다. 조건529개는 인수 총계에서 제외하고 inventory의 CD 추적 색인에만 남긴다.
 
-검증 방법별: API+E2E 70개, E2E 22개, 시각+수동 2개, E2E+시각 6개, E2E+수동 1개, API+Runner+E2E 35개, E2E+PDF검사 1개, API+E2E+PDF검사 1개, 수동+시각 1개, API+SMTP+E2E 3개, API+BotAPI+E2E 6개.
+검증 방법별: API+E2E 69개, E2E 23개, 시각+수동 2개, E2E+시각 6개, E2E+수동 1개, API+Runner+E2E 36개, E2E+PDF검사 1개, API+E2E+PDF검사 1개, 수동+시각 1개, API+SMTP+E2E 3개, API+BotAPI+E2E 6개.
 
 ## 필수 통과 마일스톤
 
@@ -28,18 +30,17 @@ owner 확정 사항은 계획 b258334의 open-questions §0·D-27·D-28을 따�
 
 | 마일스톤 | UAT 수 | 필수 판정 ID |
 |---|---:|---|
-| M3-01 | 11 | UAT-AUTH-01, UAT-AUTH-02, UAT-AUTH-03, UAT-SHELL-05, UAT-STATE-01, UAT-STATE-04, UAT-STATE-05, UAT-STATE-07, UAT-STATE-08, UAT-STATE-10, UAT-STATE-02-UI |
-| M3-02 | 9 | UAT-WBS-01, UAT-WBS-02, UAT-WBS-04, UAT-WBS-05, UAT-WIZ-01, UAT-WIZ-02, UAT-WIZ-03, UAT-WIZ-04, UAT-EMPTY-10 |
-| M3-03 | 14 | UAT-STATE-06, UAT-STATE-09, UAT-WBS-03, UAT-TASK-01, UAT-TASK-02, UAT-TASK-03, UAT-TASK-05, UAT-TASK-07, UAT-TASK-08, UAT-TASK-09, UAT-TASK-10, UAT-APPROVE-01, UAT-EMPTY-01, UAT-RESP-02-TASK |
+| M3-01 | 7 | UAT-AUTH-01, UAT-AUTH-02, UAT-AUTH-03, UAT-SHELL-05, UAT-STATE-04, UAT-STATE-05, UAT-STATE-07 |
+| M3-02 | 8 | UAT-WBS-01, UAT-WBS-02, UAT-WBS-05, UAT-WIZ-01, UAT-WIZ-02, UAT-WIZ-04, UAT-STATE-02-UI, UAT-EMPTY-10 |
+| M3-03 | 16 | UAT-STATE-06, UAT-STATE-08, UAT-STATE-09, UAT-WBS-03, UAT-WBS-04, UAT-WIZ-03, UAT-TASK-01, UAT-TASK-02, UAT-TASK-03, UAT-TASK-05, UAT-TASK-07, UAT-TASK-08, UAT-TASK-09, UAT-APPROVE-01, UAT-EMPTY-01, UAT-RESP-02-TASK |
 | M3-04 | 10 | UAT-SHELL-02, UAT-PROJECT-02, UAT-PROJECT-06, UAT-PROJECT-07, UAT-PROJECT-09, UAT-PROJECT-10, UAT-RESET-01, UAT-RESET-02, UAT-PROJECT-UI, UAT-RESET-UI |
-| M3-05 | 9 | UAT-TASK-06, UAT-PLAN-02, UAT-CP-01, UAT-CP-02, UAT-CP-03, UAT-PLAN-UI, UAT-RESP-01-UI, UAT-RESP-02-UI, UAT-EMPTY-02 |
-| M3-06 | 6 | UAT-MSG-01, UAT-EXEC-09, UAT-EXEC-UI, UAT-MSG-UI, UAT-SHELL-04-UI, UAT-EMPTY-03 |
-| M3-07 | 8 | UAT-PROJECT-11, UAT-TASK-11, UAT-VERIFY-01, UAT-VERIFY-02, UAT-VERIFY-03, UAT-HISTORY-01, UAT-DASH-01, UAT-EMPTY-04 |
+| M3-05 | 10 | UAT-STATE-10, UAT-TASK-06, UAT-PLAN-02, UAT-CP-01, UAT-CP-02, UAT-CP-03, UAT-PLAN-UI, UAT-RESP-01-UI, UAT-RESP-02-UI, UAT-EMPTY-02 |
+| M3-06 | 7 | UAT-TASK-10, UAT-MSG-01, UAT-EXEC-09, UAT-EXEC-UI, UAT-MSG-UI, UAT-SHELL-04-UI, UAT-EMPTY-03 |
+| M3-07 | 9 | UAT-STATE-01, UAT-PROJECT-11, UAT-TASK-11, UAT-VERIFY-01, UAT-VERIFY-02, UAT-VERIFY-03, UAT-HISTORY-01, UAT-DASH-01, UAT-EMPTY-04 |
 | M3-08 | 11 | UAT-SHELL-01, UAT-STATE-03, UAT-TASK-04, UAT-POLICY-01, UAT-POLICY-03, UAT-POLICY-04, UAT-POLICY-05, UAT-RUNNER-UI, UAT-GITHUB-UI, UAT-POLICY-UI, UAT-EMPTY-11 |
 | M4-01 | 2 | UAT-SHELL-03, UAT-RESET-04 |
 | M4-02 | 4 | UAT-EXEC-03, UAT-RUNNER-01, UAT-RUNNER-03, UAT-RUNNER-04 |
-| M4-03 | 1 | UAT-RESET-03 |
-| M4-04 | 3 | UAT-PROJECT-01, UAT-PROJECT-08, UAT-GITHUB-01 |
+| M4-04 | 4 | UAT-PROJECT-01, UAT-PROJECT-08, UAT-RESET-03, UAT-GITHUB-01 |
 | M5-02 | 1 | UAT-EXEC-08 |
 | M5-03 | 1 | UAT-RUNNER-05 |
 | M5-04 | 4 | UAT-PROJECT-03, UAT-PROJECT-04, UAT-PROJECT-05, UAT-PLAN-01 |
@@ -48,16 +49,16 @@ owner 확정 사항은 계획 b258334의 open-questions §0·D-27·D-28을 따�
 | M6-01 | 5 | UAT-STATE-02, UAT-REPORT-01, UAT-REPORT-02, UAT-REPORT-03, UAT-EMPTY-06 |
 | M6-02 | 2 | UAT-REPORT-04, UAT-REPORT-05 |
 | M6-03 | 7 | UAT-MAIL-01, UAT-MAIL-02, UAT-MAIL-03, UAT-MAIL-04, UAT-MAIL-05, UAT-MAIL-06, UAT-EMPTY-07 |
-| M6-04 | 9 | UAT-TG-01, UAT-TG-02, UAT-TG-03, UAT-TG-04, UAT-TG-06, UAT-TG-07, UAT-TG-08, UAT-TG-09, UAT-EMPTY-08 |
+| M6-04 | 8 | UAT-TG-01, UAT-TG-02, UAT-TG-03, UAT-TG-04, UAT-TG-06, UAT-TG-07, UAT-TG-08, UAT-EMPTY-08 |
 | M6-07 | 5 | UAT-DESIGN-01, UAT-DESIGN-02, UAT-DESIGN-03, UAT-DESIGN-04, UAT-EMPTY-09 |
-| M7-01 | 1 | UAT-EXEC-02 |
-| M7-05 | 8 | UAT-RESP-01, UAT-RESP-02, UAT-CI-01, UAT-CI-03, UAT-CI-04, UAT-CI-05, UAT-CI-06, UAT-EMPTY-05 |
+| M7-04 | 1 | UAT-EXEC-02 |
+| M7-05 | 10 | UAT-RESP-01, UAT-RESP-02, UAT-CI-01, UAT-CI-03, UAT-CI-04, UAT-CI-05, UAT-CI-06, UAT-TG-09, UAT-EMPTY-05, UAT-TASK-10-CI |
 | M7-06 | 5 | UAT-EXEC-06, UAT-GATE-01, UAT-GATE-02, UAT-CI-02, UAT-TG-05 |
 | M8-01 | 2 | UAT-SHELL-04, UAT-REPORT-06 |
 | M8-03 | 1 | UAT-GITHUB-02 |
 | M8-04 | 1 | UAT-RUNNER-02 |
 
-단계 합계: M3 78개, M4 10개, M5 14개, M6 28개, M7 14개, M8 4개.
+단계 합계: M3 78개, M4 10개, M5 14개, M6 27개, M7 16개, M8 4개.
 
 M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runner 보고 fixture로 화면·저장·전이·보류를 확인하고 Gate 대기까지 검사한다. M4 이후에는 각 항목에 적힌 실제 adapter/프로세스/프로토콜을 사용한다. M7-06도 유료 CLI·실 GitHub 인수가 아니라 fake CLI·로컬 git·fake GitHub를 거치는 실제 ①/② 파이프라인 결합이다. 유료 CLI/실 GitHub/실 SMTP·BotAPI는 계획 M8 gate를 별도로 충족한다.
 
@@ -89,7 +90,7 @@ M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runne
 | UI-03-03 | UAT-TASK-06, UAT-EMPTY-01 |
 | UI-03-04 | UAT-TASK-07, UAT-TASK-08, UAT-DESIGN-03 |
 | UI-03-05 | UAT-TASK-09, UAT-EMPTY-01 |
-| UI-03-06 | UAT-TASK-10, UAT-EXEC-02, UAT-POLICY-02, UAT-EXEC-09, UAT-POLICY-UI, UAT-EMPTY-01 |
+| UI-03-06 | UAT-TASK-10, UAT-EXEC-02, UAT-POLICY-02, UAT-EXEC-09, UAT-POLICY-UI, UAT-EMPTY-01, UAT-TASK-10-CI |
 | UI-03-07 | UAT-TASK-10, UAT-EXEC-04, UAT-EMPTY-01 |
 | UI-03-08 | UAT-TASK-10, UAT-HISTORY-01, UAT-APPROVE-01, UAT-EMPTY-01 |
 | UI-03-09 | UAT-MSG-01, UAT-MSG-02, UAT-MSG-03, UAT-MSG-UI, UAT-EMPTY-01 |
@@ -118,7 +119,7 @@ M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runne
 | UI-07-03 | UAT-GATE-01, UAT-GATE-02, UAT-VERIFY-03 |
 | UI-08 | UAT-CI-01 |
 | UI-08-01 | UAT-RESP-01, UAT-CI-01, UAT-EMPTY-05 |
-| UI-08-01A | UAT-RESP-02, UAT-CI-01, UAT-CI-02, UAT-CI-04, UAT-CI-05 |
+| UI-08-01A | UAT-RESP-02, UAT-CI-01, UAT-CI-02, UAT-CI-04, UAT-CI-05, UAT-TASK-10-CI |
 | UI-08-02 | UAT-CI-02, UAT-CI-03, UAT-EMPTY-05 |
 | UI-08-03 | UAT-CI-05 |
 | UI-08-04 | UAT-CI-04, UAT-CI-06 |
@@ -208,6 +209,7 @@ M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runne
 - 동작/사건: 메뉴 접기/펼치기와 12개 메뉴·설정 6탭 선택.
 - [ ] **UAT-SHELL-01** [E2E] 아래 기대를 모두 만족한다.
   - a) 메뉴 폭180/56px, 헤더64px이며 선택 강조·화면·URL이 함께 바뀌고 새로고침/뒤로가기가 같은 화면을 복원한다.
+  - b) M3에서는12메뉴·설정6탭의 라우트·선택 강조·URL/복원만 판정하고 설계/보고서/CI 본문과 메일/알림 탭 내용은 해당 M6/M7 UAT에서 판정한다.
 - 근거: P27–60,3063–3076; G348; **필수 통과: M3-08**.
 - 불일치: MM-21, MM-29.
 
@@ -244,6 +246,8 @@ M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runne
 - 동작/사건: 직접 접속.
 - [ ] **UAT-SHELL-05** [E2E] 아래 기대를 모두 만족한다.
   - a) 제작 예정 Phase 카드 대신404 화면을 제공하며 정상12개 메뉴에 가짜 메뉴를 추가하지 않는다.
+  - b) 이 항목의 M3 통과는 미등록 URL404와 정상 메뉴 라우트 구분에 한정한다.
+  - c) 정상 후속 메뉴의 본문/제작 예정 표시 최종 판정은 SHELL-04(M8-01)의 범위다.
 - 근거: P2678–2688,7062; review MM-26 권고 채택; **필수 통과: M3-01**.
 - 불일치: MM-26.
 
@@ -253,7 +257,7 @@ M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runne
 - 동작/사건: 헤더/도구막대와표의오른쪽열탐색.
 - [ ] **UAT-RESP-01** [E2E+시각] 아래 기대를 모두 만족한다.
   - a) viewport meta가CSS폭을실제기기폭과일치시키고페이지/도구막대비의도넘침없이1280미만표는영역내가로스크롤로모든열을읽을수있으며overflow:hidden으로자를수없다.
-- 근거: plan b258334 open-questions §0/D-28; review B4; **필수 통과: M7-05**.
+- 근거: plan a60216d open-questions §0/D-28; review B4; **필수 통과: M7-05**.
 - 불일치: MM-29.
 
 ### UAT-RESP-02 · UI-03E, UI-08-01A, UI-09A, UI-12-05D
@@ -262,7 +266,7 @@ M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runne
 - 동작/사건: Telegram알림의Task/CI/변경제안링크각각열기.
 - [ ] **UAT-RESP-02** [E2E+시각] 아래 기대를 모두 만족한다.
   - a) 로그인후지정상세를직접열고핵심필드·상태·실패사유/Diff·근거링크를잘림없이열람하며메뉴/목록전체기능을휴대폰필수범위로확장하지않는다.
-- 근거: plan b258334 open-questions §0/D-28; G499–501; **필수 통과: M7-05**.
+- 근거: plan a60216d open-questions §0/D-28; G499–501; **필수 통과: M7-05**.
 - 불일치: MM-29.
 
 ### UAT-STATE-01 · SYS-01, UI-03, UI-01
@@ -271,7 +275,7 @@ M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runne
 - 동작/사건: 처음 WBS와 대시보드 열기.
 - [ ] **UAT-STATE-01** [E2E] 아래 기대를 모두 만족한다.
   - a) 각 화면 배치의 skeleton을 표시하고 응답 후 실제 콘텐츠로 교체하며200ms 이내 응답은 표시 생략, 표시한 skeleton은 약300ms 유지한다.
-- 근거: P684–691; G76–85; **필수 통과: M3-01**.
+- 근거: P684–691; G76–85; **필수 통과: M3-07**.
 - 불일치: MM-17.
 
 ### UAT-STATE-02 · SYS-01, UI-03, UI-11
@@ -334,7 +338,7 @@ M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runne
 - 동작/사건: 먼저 저장한 뒤 낡은 버전으로 저장.
 - [ ] **UAT-STATE-08** [API+E2E] 아래 기대를 모두 만족한다.
   - a) 409와 해당 Task의 서버 최신 변경·내 변경을 표시하고 다른 Task 마지막 이력을 대신 표시하지 않으며 내 변경 버림/최신 위 재적용이 각 선택대로 저장된다.
-- 근거: P2692–2704,6853–6858; G73,1010; **필수 통과: M3-01**.
+- 근거: P2692–2704,6853–6858; G73,1010; **필수 통과: M3-03**.
 - 불일치: MM-20.
 
 ### UAT-STATE-09 · MOD-08, UI-03F
@@ -352,7 +356,7 @@ M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runne
 - 동작/사건: 키보드 Tab/Shift+Tab/Esc 조작.
 - [ ] **UAT-STATE-10** [E2E+수동] 아래 기대를 모두 만족한다.
   - a) 포커스가 모달 내부로 이동·순환하고 배경으로 빠지지 않으며 닫으면 원래 컨트롤로 복원되고 접근성 제목 ID가 유일하다.
-- 근거: P2694,2889; G283; review B5 권고 채택; 메일/TG 모달은 MAIL-03/TG-04의 공통 접근성 회귀; **필수 통과: M3-01**.
+- 근거: P2694,2889; G283; review B5 권고 채택; 메일/TG 모달은 MAIL-03/TG-04의 공통 접근성 회귀; **필수 통과: M3-05**.
 - 불일치: MM-29.
 
 ### UAT-PROJECT-01 · UI-02A
@@ -482,7 +486,7 @@ M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runne
 - 동작/사건: 설정유지/삭제 각각으로 초기화.
 - [ ] **UAT-RESET-03** [API+Runner+E2E] 아래 기대를 모두 만족한다.
   - a) 서버 데이터삭제·epoch증가 후 등록전 복귀, 기록한 Agent브랜치/PR만 정리하고 main되돌림커밋·입력보존을 확인한 뒤 정리완료로 표시하며 강제push를 하지 않는다.
-- 근거: P4708–4724; G257,1037; owner Q-11; **필수 통과: M4-03**.
+- 근거: P4708–4724; G257,1037; owner Q-11; **필수 통과: M4-04**.
 - 불일치: MM-19.
 
 ### UAT-RESET-04 · MOD-05, UI-02A, UI-02B
@@ -527,7 +531,7 @@ M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runne
 - 동작/사건: Gantt 전환 후 Task막대 선택.
 - [ ] **UAT-WBS-04** [E2E+시각] 아래 기대를 모두 만족한다.
   - a) 전체기간맞춤으로 기준/예측/진척/낙관비관범위/현재/목표/불가일을 구분하고 Task로 이동하며 일주확대·전체상세토글·compact안내 잔재를 노출하지 않는다.
-- 근거: P899–921,6975,7080–7086; G274; **필수 통과: M3-02**.
+- 근거: P899–921,6975,7080–7086; G274; **필수 통과: M3-03**.
 - 불일치: MM-25.
 
 ### UAT-WBS-05 · UI-03B
@@ -563,7 +567,7 @@ M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runne
 - 동작/사건: 확인단계에서 생성.
 - [ ] **UAT-WIZ-03** [API+E2E] 아래 기대를 모두 만족한다.
   - a) 고유Task ID와 계산WBS번호·분류/Agent·설계섹션·FS선행을 표시하고 planning으로 생성하여 차단안내·이력·일정에 반영하며 작업명세탭을 연다.
-- 근거: P2813–2843,6795–6811; **필수 통과: M3-02**.
+- 근거: P2813–2843,6795–6811; **필수 통과: M3-03**.
 - 불일치: 없음.
 
 ### UAT-WIZ-04 · MOD-06, MOD-08
@@ -632,7 +636,7 @@ M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runne
   - c) 시작 전 취소 선행의 SS 관계는 취소 반영과 원자적으로 제거하고 취소를 시작으로 간주하지 않는다.
   - d) 다른 미충족 선행이 남으면 계속 차단한다.
   - e) 취소 CP는 removedDependencies와 unblockedSuccessors/remainingBlockers로 제거 관계·실제 풀리는 후속·계속 차단되는 후속을 구분한다.
-- 근거: P1159–1211,3677–3711; G650–655; plan b258334 D-27/contracts §2.1; **필수 통과: M3-05**.
+- 근거: P1159–1211,3677–3711; G650–655; plan a60216d D-27/contracts §2.1; **필수 통과: M3-05**.
 - 불일치: MM-09.
 
 ### UAT-TASK-07 · UI-03-04, UI-03F
@@ -668,11 +672,11 @@ M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runne
 ### UAT-TASK-10 · UI-03-06, UI-03-07, UI-03-08
 
 - 전제: 재작업·검증이 누적된Task.
-- 동작/사건: 실행/검증/이력탭과 CI참조 선택.
+- 동작/사건: 실행/검증/이력탭과 실행 화면 링크 선택.
 - [ ] **UAT-TASK-10** [E2E] 아래 기대를 모두 만족한다.
-  - a) 이전Attempt/Verification을덮어쓰지않고 실제등급·조정사유·지정/실제하위Agent·실패/파일/증거·전후이력을표시하며 CI참조는해당실행으로이동한다.
+  - a) 이전Attempt/Verification을덮어쓰지않고 실제등급·조정사유·지정/실제하위Agent·실패/파일/증거·전후이력을표시한다.
   - b) 실행 탭의 실행 화면 링크는 해당 Task의 실행 화면으로 이동한다.
-- 근거: P1303–1349; P1303–1324; **필수 통과: M3-03**.
+- 근거: P1303–1349; P1303–1324; **필수 통과: M3-06**.
 - 불일치: 없음.
 
 ### UAT-TASK-11 · UI-03, UI-03D, UI-07-01A
@@ -702,7 +706,7 @@ M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runne
   - b) 꺼짐은202 pending만 기록하고 기준선을 바꾸지 않는다.
   - c) Planning의 재조정 실행은 POST /api/replans/run으로 재계산·확정한다.
   - d) RP별 계기/주체/새기준/예상범위/가동률·Task 전후날짜와 차이를 표시하고 이전 버전을 보존한다.
-- 근거: P1618–1637,4284–4303; plan b258334 D-10/contracts §2.2 replans; **필수 통과: M3-05**.
+- 근거: P1618–1637,4284–4303; plan a60216d D-10/contracts §2.2 replans; **필수 통과: M3-05**.
 - 불일치: 없음.
 
 ### UAT-CP-01 · UI-09, UI-09A, MOD-07
@@ -755,7 +759,7 @@ M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runne
   - b) ①통과 전 QA로 넘기지 않는다.
   - c) 실패 사유 누락은 거부하고 유효 실패는 사유와 failed를 표시한다.
   - d) 팀장 수동 결과입력으로 Runner 검사를 대체하지 않는다.
-- 근거: P1767–1779,5870–5901; plan D-18; **필수 통과: M7-01**.
+- 근거: P1767–1779,5870–5901; plan D-18; **필수 통과: M7-04**.
 - 불일치: 없음.
 
 ### UAT-EXEC-03 · UI-06A, UI-06B, UI-12-01C
@@ -792,9 +796,9 @@ M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runne
 - [ ] **UAT-EXEC-06** [API+Runner+E2E] 아래 기대를 모두 만족한다.
   - a) 같은 종류 연속 프로세스 실패는 자동2회/총3회이고 성공하면 카운터0으로 복귀한다.
   - b) QA+통합 FAIL 합산 자동 재작업은3회이며 재작업 중 프로세스 실패는 재작업 횟수를 늘리지 않고 중단·BLOCKED·재개는 두 카운터에 포함하지 않는다.
-  - c) 시작 전 실패는 항상 다시 시도 버튼을 제공하고 BLOCKED는 원인 해소 뒤 수동 재개하며 자동 반복하지 않는다.
+  - c) 시작 전 실패는 항상 다시 시도 버튼을 제공하고 BLOCKED는 원인 해결 후 새 검증 시도를 만들며 자동 반복하지 않는다.
   - d) 한도 소진 뒤 사유·팀장 조치를 표시하고 수동 버튼은1회 실행만 허용하며 카운터를 초기화하지 않는다.
-- 근거: P1801–1809; owner Q-04/Q-05; plan b258334 contracts §3.5; **필수 통과: M7-06**.
+- 근거: P1801–1809; owner Q-04/Q-05; plan a60216d contracts §3.5; **필수 통과: M7-06**.
 - 불일치: MM-07.
 
 ### UAT-EXEC-07 · UI-06, UI-03-01A
@@ -1317,7 +1321,7 @@ M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runne
 - [ ] **UAT-TG-09** [API+E2E] 아래 기대를 모두 만족한다.
   - a) 빈값링크생략·localhost경고·유효주소공통적용이며이력선택은Task/CP/CI/설정/프로젝트/설계의올바른URL로이동하고수락을읽음/도착으로표시하지않는다.
   - b) 전송 이력은 전체/업무/테스트로 필터하고 행을 펼치면 실제 발송한 메시지를 표시한다.
-- 근거: P2621–2645,6601–6604; P2639–2640; **필수 통과: M6-04**.
+- 근거: P2621–2645,6601–6604; P2639–2640; **필수 통과: M7-05**.
 - 불일치: 없음.
 
 ### UAT-APPROVE-01 · UI-03E, UI-03-02, UI-03-08
@@ -1329,7 +1333,7 @@ M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runne
   - b) 팀장 승인은 ready, 반려는 planning으로 돌아간다.
   - c) 권한 없는 승인은 거부하고 각 요청/승인/반려의 주체·시각·사유를 이력에 보존한다.
   - d) 착수 승인만으로 실행/완료하지 않는다.
-- 근거: owner Q-02/Q-05 #2·#3; plan b258334 contracts §2.1 approve/reject; M3-03; **필수 통과: M3-03**.
+- 근거: owner Q-02/Q-05 #2·#3; plan a60216d contracts §2.1 approve/reject; M3-03; **필수 통과: M3-03**.
 - 불일치: 없음.
 
 ### UAT-EXEC-09 · UI-06, UI-06D, UI-03-06
@@ -1340,18 +1344,18 @@ M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runne
   - a) 기존 시도는 interrupted로 보존하고 Task는 paused로 표시한다.
   - b) 보유 미해제면 재개를 거부하고 사유를 표시한다.
   - c) 해제 확인 뒤 재개는 같은 단계·같은 등급의 새 시도를 만들고 중단 횟수는 재시도/재작업에 가산하지 않는다.
-- 근거: owner Q-05 #10; plan b258334 contracts §2.1 runs/resume·§3.4·§4.3; **필수 통과: M3-06**.
+- 근거: owner Q-05 #10; plan a60216d contracts §2.1 runs/resume·§3.4·§4.3; **필수 통과: M3-06**.
 - 불일치: 없음.
 
 ### UAT-EXEC-09-RUNNER · UI-06, UI-12-01C
 
 - 전제: 같은 host에서 실제 Runner·fake CLI 프로세스 그룹, 실행 중 Task.
 - 동작/사건: Runner 중단/재연결 후 물리 그룹 종료를 확인하고 재개.
-- [ ] **UAT-EXEC-09-RUNNER** [API+E2E] 아래 기대를 모두 만족한다.
+- [ ] **UAT-EXEC-09-RUNNER** [API+Runner+E2E] 아래 기대를 모두 만족한다.
   - a) 기존 중단 시도와 paused를 보존한다.
   - b) 실제 보유 미해제면409 CLAIM_REJECTED를 표시한다.
   - c) 그룹 종료/해제 확인 후에만 같은 단계·같은 등급의 새 시도를 실제 시작한다.
-- 근거: plan b258334 contracts §3.4·§4.3; M5-03/M5-05; **필수 통과: M5-05**.
+- 근거: plan a60216d contracts §3.4·§4.3; M5-03/M5-05; **필수 통과: M5-05**.
 - 불일치: 없음.
 
 ### UAT-PROJECT-UI · UI-02A, UI-02B, UI-02C, UI-02E
@@ -1454,7 +1458,7 @@ M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runne
 - 동작/사건: 필터/정렬 API 응답을 지연한 뒤 응답.
 - [ ] **UAT-STATE-02-UI** [API+E2E] 아래 기대를 모두 만족한다.
   - a) 이전 목록과 상단 진행막대를 유지하고 성공 응답 뒤 새 조건의 데이터로 교체한다.
-- 근거: G79–83; plan M3-01; **필수 통과: M3-01**.
+- 근거: G79–83; plan M3-01; **필수 통과: M3-02**.
 - 불일치: 없음.
 
 ### UAT-SHELL-04-UI · UI-00, UI-03, UI-06
@@ -1476,7 +1480,7 @@ M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runne
   - a) viewport meta가 실제 기기 폭과 일치한다.
   - b) 페이지/도구막대는 비의도 넘침이 없고1280 미만 표는 영역 내 가로 스크롤로 모든 열을 읽는다.
   - c) overflow:hidden으로 자르지 않는다.
-- 근거: plan b258334 D-28/M3-01/M3-02/M3-05; **필수 통과: M3-05**.
+- 근거: plan a60216d D-28/M3-01/M3-02/M3-05; **필수 통과: M3-05**.
 - 불일치: MM-29.
 
 ### UAT-RESP-02-UI · UI-09A
@@ -1487,7 +1491,7 @@ M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runne
   - a) 지정 CP 상세의 핵심 필드·상태·Diff·근거 링크를 잘림 없이 읽는다.
   - b) 휴대폰 편집/승인/전체 목록 기능을 필수화하지 않는다.
   - c) Telegram 발송 링크/CI는 RESP-02의 후속 통합 판정이다.
-- 근거: plan b258334 D-28/M3-03/M3-05; **필수 통과: M3-05**.
+- 근거: plan a60216d D-28/M3-03/M3-05; **필수 통과: M3-05**.
 - 불일치: MM-29.
 
 ### UAT-EMPTY-01 · UI-03-01, UI-03-03, UI-03-06, UI-03-07, UI-03-08, UI-03-09, UI-03-05
@@ -1591,7 +1595,7 @@ M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runne
 - 동작/사건: Task 링크 열기와 로그인 복귀.
 - [ ] **UAT-RESP-02-TASK** [E2E+시각] 아래 기대를 모두 만족한다.
   - a) 지정 Task 상세의 핵심 필드·상태·실패 사유·근거 링크를 잘림 없이 읽고 휴대폰 편집/승인을 필수로 요구하지 않는다.
-- 근거: plan b258334 D-28/M3-03; **필수 통과: M3-03**.
+- 근거: plan a60216d D-28/M3-03; **필수 통과: M3-03**.
 - 불일치: MM-29.
 
 ### UAT-EMPTY-11 · UI-12-01C, UI-12-01D, UI-12-02A, UI-12-03A, UI-12-03C
@@ -1601,6 +1605,15 @@ M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runne
 - [ ] **UAT-EMPTY-11** [API+E2E] 아래 기대를 모두 만족한다.
   - a) 각 영역은 기록 없음/충돌 대기 없음·생기는 조건을 안내하고 임의 세션이나 경고를 만들지 않는다.
 - 근거: P2301,2349–2355,2389,2430,2471,2487; G37,86; **필수 통과: M3-08**.
+- 불일치: 없음.
+
+### UAT-TASK-10-CI · UI-03-06, UI-08-01A
+
+- 전제: CI 참조가 있는 Task 실행 시도.
+- 동작/사건: Task 실행 탭의 CI 참조 선택.
+- [ ] **UAT-TASK-10-CI** [E2E] 아래 기대를 모두 만족한다.
+  - a) 참조한 CI 실행의 상세로 이동하고 CI ID·Task·시도 연결이 선택한 기록과 일치한다.
+- 근거: P1303–1324,1405–1449; plan a60216d M3-03/M7-05; **필수 통과: M7-05**.
 - 불일치: 없음.
 
 ## 불일치 → 판정 항목

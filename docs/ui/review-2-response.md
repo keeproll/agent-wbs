@@ -1,5 +1,7 @@
 # 재확인 REVIEW-2a85416 처리 기록
 
+최종 배치/표현 정정과 현행 기준 **a60216d**는 [milestone-audit.md](milestone-audit.md)를 따른다. 아래 집계와 기준 커밋은 이전 리뷰 처리 이력이다.
+
 검토 대상은 `~/.cache/agent-wbs-baseline/REVIEW-2a85416.md` 전문이다. 계획 기준을 **keeproll/plan-baseline b258334**로 갱신하고 `open-questions.md` §0, `architecture.md` D-10/D-27/D-28, `contracts.md` §2.1/§3.4/§3.5/§4.3, `milestones.md`를 `git show b258334:…`로 읽었다. P는 원본 Main.dc.html, G는 구현 가이드 줄 번호다. 제품/원본/계획 파일은 수정하지 않았다.
 
 이번 지적의 기능 요구에는 이견이 없다. P1-3의 제안인 ‘동일 UAT에 두 통과 열’은 이번 task가 요구한 **UAT당 하나의 필수 통과 마일스톤**에 맞춰 별도 화면/API ID와 후속 통합 ID로 구현했다. 기존 원본의6단계 표시는 P5942–5946의 **개발·QA·재작업·재검증·Gate·완료**를 유지하며,①/② 검사를 새6단계 라벨로 만들어 대체하지 않았다. 모든 UAT는 아직 실행 전이다.

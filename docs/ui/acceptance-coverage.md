@@ -1,6 +1,6 @@
 # 빈 상태·오류 판정의 화면별 근거
 
-계획 기준선은 `keeproll/plan-baseline`의 **b258334**다. P는 `prototype/uiux/Main.dc.html`, G는 구현 가이드의 줄 번호다. 아래 표는 [acceptance.md](acceptance.md)의 UAT 기대를 구체화한다. 별도 체크박스를 추가하지 않는다. 스크린샷 대응은 [screenshots.md](screenshots.md)에 유지한다.
+계획 기준선은 `keeproll/plan-baseline`의 **a60216d**다. P는 `prototype/uiux/Main.dc.html`, G는 구현 가이드의 줄 번호다. 아래 표는 [acceptance.md](acceptance.md)의 UAT 기대를 구체화한다. 별도 체크박스를 추가하지 않는다. 스크린샷 대응은 [screenshots.md](screenshots.md)에 유지한다.
 
 G37의 초기 승인 직후 fixture로 12개 메뉴와 Task 9탭을 열고, 업무 기록이 없는 상태를 확인한다. 초기 승인이 스스로 생성하는 기준선·생성 이력까지 없애라는 뜻은 아니다. 각 기록이 없는 경우는 별도 API fixture로 준비한다. 아직 구현되지 않은 M6/M7 화면은 M3 통과로 치지 않고 해당 마일스톤의 EMPTY 항목에서 검사한다.
 

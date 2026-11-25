@@ -1,8 +1,10 @@
 # Claude 독립 리뷰 처리 기록
 
+최종 배치/표현 정정과 현행 기준 **a60216d**는 [milestone-audit.md](milestone-audit.md)를 따른다. 아래 집계와 기준 커밋은 이전 리뷰 처리 이력이다.
+
 대상: eda7591의 docs/ui. 리뷰 원문은 로컬 `~/.cache/agent-wbs-baseline/REVIEW.md`이며 스크린샷은 복사/커밋하지 않았다. 원본 P와 가이드 G를 재대조했고 당시 기준 계획은 `dc202a50a66f6d634e48fe7ba471f937343332d7`의 open-questions/milestones, 필요한 D-17/D-26·인증/내보내기 계약을 git show로 확인했다. 이 변경은 문서·증거만이며 원본/제품/계획을 수정하지 않는다.
 
-현재 판정 기준은 **b258334**이며 아래는 1차 처리 이력이다. A1/A5/C1의 잔여와 2차 P1/P2·유실 대응은 [review-2-response.md](review-2-response.md)가 대체한다. 당시 UAT-ERROR-01은 현재 삭제했고 [오류 참조표](acceptance-coverage.md)로 대체했다.
+현재 판정 기준은 **a60216d**이며 아래는 1차 처리 이력이다. A1/A5/C1의 잔여와 2차 P1/P2·유실 대응은 [review-2-response.md](review-2-response.md)가 대체한다. 당시 UAT-ERROR-01은 현재 삭제했고 [오류 참조표](acceptance-coverage.md)로 대체했다.
 
 ## 당시 결론과 집계 변화
 
