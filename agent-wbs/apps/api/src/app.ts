@@ -1,0 +1,28 @@
+import { pingDatabase, type Pool } from '@awbs/db';
+import { errorBody, type DbHealthResponse, type ErrorBody, type HealthResponse } from '@awbs/shared';
+import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
+
+export function buildApp(pool: Pool, logger: FastifyServerOptions['logger'] = false): FastifyInstance {
+  const app = Fastify({ logger });
+
+  app.get('/health', (): HealthResponse => ({ status: 'ok' }));
+
+  app.get('/health/db', async (request, reply): Promise<DbHealthResponse | ErrorBody> => {
+    try {
+      return { db: 'ok', latencyMs: await pingDatabase(pool) };
+    } catch (error) {
+      request.log.error({ err: error }, 'DB 확인 실패');
+      return reply.code(503).send(
+        errorBody({
+          code: 'UNAVAILABLE',
+          message: 'DB에 연결할 수 없습니다.',
+          action: 'DB 상태 확인',
+          fix: 'PostgreSQL 컨테이너 상태를 확인하고 다시 시도하세요.',
+          requestId: request.id,
+        }),
+      );
+    }
+  });
+
+  return app;
+}

@@ -1,5 +1,5 @@
 {
   "extends": "./tsconfig.base.json",
-  "compilerOptions": { "noEmit": true },
-  "include": ["scripts", "*.config.ts"]
+  "compilerOptions": { "noEmit": true, "customConditions": ["awbs-source"] },
+  "include": ["scripts", "*.config.ts", "vitest.d.ts"]
 }

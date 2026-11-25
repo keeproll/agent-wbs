@@ -1,0 +1,33 @@
+# 항상 `docker compose -p awbs -f agent-wbs/compose.yaml`로 실행한다.
+name: awbs
+
+services:
+  postgres:
+    container_name: awbs-postgres
+    # 16-alpine
+    image: postgres:16-alpine@sha256:f2f98726820d0342055351c6e9d36e705f5bfffb3dd53ff556325114b08afb6d
+    environment:
+      POSTGRES_USER: awbs_owner
+      # 기본값을 두지 않는다. 비어 있으면 postgres가 초기화를 거부한다(`pnpm env:init`).
+      POSTGRES_PASSWORD: ${AWBS_DB_PASSWORD-}
+      POSTGRES_DB: awbs_dev
+    ports:
+      - '127.0.0.1:25442:5432'
+    volumes:
+      - awbs-pgdata:/var/lib/postgresql/data
+    networks:
+      - awbs-net
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -U awbs_owner -d awbs_dev']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    stop_grace_period: 30s
+
+volumes:
+  awbs-pgdata:
+    name: awbs-pgdata
+
+networks:
+  awbs-net:
+    name: awbs-net
