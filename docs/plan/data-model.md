@@ -55,7 +55,7 @@
 | `task_estimates` | 추가 전용: est/lo/hi hours(`lo<=est<=hi` CHECK), tokens_k, confidence, basis, agreed_by | §8.3 |
 | `task_grades` | role(`dev/qa`), model_id, effort, reason, locked, locked_by, effective_from | §7.1 |
 | `task_subagents` | role, subagent_id, basis | §7.4 |
-| `task_splits` | basis, judged_rules(jsonb, §2.3-1), exceptions(jsonb: rule·why·by·at) | §5.2-1 |
+| `task_splits` | basis(분할 근거 text. CP add의 `t.splitBasis`·초안 `splitBasis`에서 저장. 일반 CP에서 생략하면 빈 문자열 = 미기록이며 P L4056처럼 문구를 자동 합성하지 않음), judged_rules(jsonb, §2.3-1), exceptions(jsonb: rule·why·by·at) | §5.2-1 |
 | `task_source_links` | fix_task → origin_task(버그 수정), split_from | §5.2-1 L622 |
 
 #### 2.3-1 `judged_rules` 정의 (D-33)
