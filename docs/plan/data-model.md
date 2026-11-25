@@ -104,7 +104,7 @@ type Judgement<R> = {
 | 테이블 | 주요 컬럼 · 제약 | 근거 |
 |---|---|---|
 | `plannings` / `planning_analyses` / `planning_reviews` | 세션 / Agent별 독립 분석 unique(planning, agent) / 주제별 일치·이견·조정 | §4.5 |
-| `change_proposals` | cp_key, source(planning/message/manual/split/input/decision), status(§3.6), ops(jsonb §5.6), id_map, preview_hash, hold_reasons, split_judgements(jsonb, §2.3-1; 분할 CP만) | §4.8 §5.6 |
+| `change_proposals` | cp_key, source(planning/message/manual/split/input/decision), status(§3.6), ops(jsonb §5.6), id_map, preview_hash, hold_reasons(jsonb `{holdReasons,issues}`, contracts §2.1), split_judgements(jsonb, §2.3-1; 분할 CP만) | §4.8 §5.6 |
 | `change_proposal_events` | 제출·승인·반려·반영·보류, actor, comment — 추가 전용 | §4.8 |
 
 ### 2.5 실행 · 검증
