@@ -172,13 +172,13 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
 |---|---|---|
 | (없음) | `planning` | 수동 생성·CP add (P `newTask`) |
 | (없음) | `ready` | 초기 WBS 승인(P `draftWbs`) |
-| `planning` | `approval` | 명세 필수 항목 충족 |
+| `planning` | `approval` | 팀장 착수 승인 요청 + 명세 필수 항목 충족(contracts §2.5). 자동 전이 없음 |
 | `approval` | `ready` / `planning` | 팀장 착수 승인(owner Q-02) / 반려 |
 | `ready` | `running` | 팀장 시작 → claim 예약 → 설치 → `start` 재검사 통과 |
 | `running` | `qa` / `verifying` | dev→① 통과→QA / rework→① 통과→재검증 |
 | `running` | `failed` / `paused` | 실행 실패 / 중단(보유 해제와 별개) |
 | `failed` | `running` / `qa` / `verifying` | 실패한 시도와 **같은 종류**의 새 시도 |
-| `paused` | `running` / `qa` / `verifying` | 중단된 종류로 새 시도(같은 등급) |
+| `paused` | `running` / `qa` / `verifying` | 중단된 종류로 새 시도(같은 등급. 모델 허용 해제 시 재판단한 새 등급, D-29) |
 | `qa`,`verifying` | `gate` / `rework` / `paused` / `failed` | PASS / FAIL / 중단 / QA 프로세스 자체 실패. **BLOCKED는 상태 유지**(시도는 completed, verif=blocked, P `registerQa`) |
 | `qa` / `verifying` | 같은 상태 | BLOCKED 뒤 원인 해결 → **새 qa/reverify 시도·새 검증**. 기존 검증은 불변 |
 | `rework` | `running` | rework 시도 |
@@ -187,7 +187,7 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
 | `gate` | `rework` | ② 통합 실패·병합 충돌 |
 | `planning`,`approval`,`ready` | `cancelled` | CP remove, 실행 이력 없음(D-16) |
 
-`done`·`cancelled`는 종료. 차단은 저장하지 않는 계산값. SS 선행은 `planning/approval/ready`가 아니면 충족, FS는 `done`(P `depMet` L3677). P의 SS는 `cancelled`도 시작으로 보지만, 취소된 선행은 관계가 제거되므로 [결정] 무시한다.
+`done`·`cancelled`는 종료. 차단은 저장하지 않는 계산값. SS 선행은 `planning/approval/ready`가 아니면 충족, FS는 `done`(P `depMet` L3677). **시작 전 취소된 선행의 SS 관계는 취소 반영 트랜잭션에서 제거**하고 제거 이력·후속 차단 재계산을 남긴다(owner 2026-11-25, D-27). P의 SS 판정과 달리 `cancelled`는 시작으로 세지 않는다. 다른 선행이 미충족이면 후속은 계속 차단된다. FS도 P `simulate`처럼 관계를 제거한다.
 
 #### 시도 종류별 claim 허용
 
@@ -199,7 +199,7 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
 | `rework` | rework | 최근 검증 FAIL 또는 통합 실패. 자동 3회까지, 초과는 팀장 버튼 |
 | `qa` | qa | ① 통과, 최초 또는 직전 qa가 BLOCKED |
 | `verifying` | reverify | rework의 ① 통과, 직전 reverify가 BLOCKED, 또는 근거 무효화 |
-| `paused` | 중단된 종류 | 직전 시도 interrupted, 같은 등급. 재개는 팀장 버튼(P) |
+| `paused` | 중단된 종류 | 직전 시도 interrupted, 같은 등급. 모델이 허용 해제됐으면 재판단 완료 후 새 등급 + 이력(D-29). 재개는 팀장 버튼(P) |
 | `failed` | 실패한 종류 | 직전 시도 failed. 같은 종류 연속 실패에 자동 재시도 2회(최초 포함 총 3회), 이후 팀장 버튼 |
 | 그 외 | 없음 | 409 |
 

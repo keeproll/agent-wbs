@@ -48,7 +48,7 @@ G§0.3 L73 「모든 수정 API」를 따른다. 본문이 있으면 `updatedAt`
 
 | 명령 | 비교 대상(aggregate) |
 |---|---|
-| Task PATCH·DELETE·승인·반려·완료·등급·분할·예외 | `tasks.updatedAt` (명세·설계·체크리스트·산출물 변경도 증가시킴) |
+| Task PATCH·DELETE·**착수 승인 요청**·승인·반려·완료·등급·분할·예외 | `tasks.updatedAt` (명세·설계·체크리스트·산출물 변경도 증가시킴) |
 | 실행 요청·중단·재개 | Task + 중단은 시도 `updatedAt` |
 | 의존성 추가·삭제 | **후속 Task** `updatedAt`. 변경 시 후속 Task도 증가, 순환은 잠금 안에서 별도 판정 |
 | CP 제출·승인·반려·반영 | `change_proposals.updatedAt` + 미리보기는 `previewHash` |
@@ -82,7 +82,8 @@ G§0.3 L73 「모든 수정 API」를 따른다. 본문이 있으면 `updatedAt`
 | API | 용도 |
 |---|---|
 | PATCH `/api/tasks/:taskKey/{spec,design/:kind,checklist/:itemKey,outputs}` · POST/DELETE checklist | 섹션별 편집(§4.4). §1.3 |
-| POST `/api/tasks/:taskKey/approve` · `/reject` | 계획 승인 |
+| POST `/api/tasks/:taskKey/request-approval` `{updatedAt, comment?}` | **착수 승인 요청**(Q-05 2행). `planning`만, 명세 필수 항목 충족 시 → `approval`. 200 `{task,changes[]}`. 미충족 400 VALIDATION_FAILED(`errors[]`에 항목), 다른 상태 409 INVALID_TRANSITION, 낡은 버전 409 VERSION_CONFLICT, 없음 404 TASK_NOT_FOUND. 자동 전이하지 않음. 상태·이력을 한 트랜잭션에 기록 |
+| POST `/api/tasks/:taskKey/approve` · `/reject` `{updatedAt, comment?}` | 착수 승인 / 반려(Q-05 3행). `approval`만 → `ready`(`planning_approved_at` 기록) / `planning`. 승인은 필수 항목을 다시 검사. 응답·오류는 위와 같음(반려는 필수 항목 검사 없음) |
 | GET `/api/tasks/:taskKey/gate` · POST `/complete` | Gate 조회, 완료 **판정 요청**(미충족 409 GATE_NOT_PASSED + 조건별 사유) |
 | GET `/api/tasks/:taskKey/{history,attempts,verifications,messages}` | 탭 |
 | PUT `/api/tasks/:taskKey/grade` · DELETE | 등급 고정·해제 → 재추정·재조정 |
@@ -90,7 +91,7 @@ G§0.3 L73 「모든 수정 API」를 따른다. 본문이 있으면 `updatedAt`
 | POST `/api/tasks/:taskKey/runs` `{kind}` · POST `/api/attempts/:id/stop` · `/resume` | 실행 요청 job 생성 / 중단 / 재개. 불가 시 409 CLAIM_REJECTED `{reasons[]}` |
 | GET/POST `/api/messages`, PATCH 초안, POST `/:id/{send,cancel,resend,read}` | §4.10. 초안 서버 보존 |
 | GET/POST `/api/plannings`, POST `/api/plannings/:id/reviews/:rid/choice` · `/proposals` | §4.5 |
-| GET/POST `/api/proposals`, GET `/:id/preview`, POST `/:id/{submit,approve,reject,request-changes,apply}` | 미리보기와 반영은 같은 함수. apply는 재시뮬레이션 |
+| GET/POST `/api/proposals`, GET `/:id/preview`, POST `/:id/{submit,approve,reject,request-changes,apply}` | 미리보기와 반영은 같은 함수. apply는 재시뮬레이션. 응답 `impact`에 `removedDependencies[{pred,succ,type,reason}]`·**`unblockedSuccessors[{taskKey,remainingBlockers[]}]`** — 취소로 관계가 제거된 후속과, 남은 선행이 없어 실제로 풀리는지를 구분(D-27) |
 | GET `/api/dashboard`, `/api/schedule`, `/api/replans`, POST `/api/replans/run` | §4.1, §6 |
 | GET `/api/verifications`, `/api/evidence`, `/api/evidence/:id/content`, `/api/gates`, `/api/history` | §4.7, §4.9. 콘텐츠는 attachment + nosniff |
 | GET/PUT `/api/settings/{workflow,exec-policy,models,split,schedule,blackouts,concurrency,obs-budget,subagents,ci}` | §4.9 탭 |
@@ -128,6 +129,10 @@ G§8.5, §8.5-1, §8.6, §8.7의 표 전체를 그대로 구현한다(재기술�
 - `{method:"password",password}`: LAN 모드만. 횟수 제한 429, 성공 시 세션 교체. 비밀번호 분실은 이 PC CLI로 재설정.
 - 로그인 화면 1개에 LAN 비밀번호 입력과 「이 PC에서는 새 링크 발급」 안내를 둔다. Origin 검사는 로그인에도 적용한다.
 
+### 2.5 착수 승인의 명세 필수 항목
+
+목적·완료 조건(P Wizard `wizErrs` L6787 필수), AC 1개 이상·체크리스트 1개 이상(G§5.2-1 규칙 4, §5.5), 필수 산출물 1개 이상(G§5.5), 담당·검증 Agent 지정. G는 「명세 완료」의 항목을 열거하지 않으므로 이 목록은 Gate를 통과할 수 있는 최소 조합으로 정한 것이다 [결정]. 판정은 shared 순수 함수 하나로 하고 요청·승인이 함께 쓴다. Task 착수 승인 요청은 G§4.14 「승인 요청」 이벤트 목록(L515)에 없으므로 Telegram을 보내지 않는다.
+
 ## 3. Runner API
 
 ### 3.1 가이드 정의 (§8.2, 요청 상세는 P TASK-0012)
@@ -137,7 +142,7 @@ G§8.5, §8.5-1, §8.6, §8.7의 표 전체를 그대로 구현한다(재기술�
 | POST `/runner/heartbeat` `{runnerId,version,epoch}` | 204 + `X-Current-Epoch`. 60초 |
 | POST `/runner/sessions` | stop은 열린 세션만. `reason=unknown`은 서버만 |
 | POST `/runner/host` `/readiness` `/models` `/usage` `/concurrency` | readiness key에 `obs`★ `gh`★ `lfs`★ 추가. concurrency는 세션별 `{attemptId,observed,reserved,state}`★ 포함 |
-| GET `/runner/tasks/:taskKey/run-grade?role=` | 등급 정책 단일 출처. 재작업 상향·재개·하향을 서버가 계산해 `{model,effort,adjust}`★로도 준다 |
+| GET `/runner/tasks/:taskKey/run-grade?role=` | 등급 정책 단일 출처. 재작업 상향·재개·하향을 서버가 계산해 `{model,effort,adjust}`★로도 준다. 허용 해제 재개(D-29)와 모델 이동 상향(D-30)은 `adjust`에 이전·이후·사유를 담고, 재판단 전이면 claim `reasons[]`로 거부 |
 | GET `/runner/tasks/:taskKey/subagents?role=` | 모델·effort 없음. hash 검증 후 설치 |
 | GET `/runner/messages?cursor=` · POST `/:id/ack` | G의 `since` 대신 **cursor**를 우선 사용(같은 시각 유실 방지). `since`도 호환 |
 | POST `/runner/messages/:id/response`★ | Agent 응답 `{text,workState}`. 전달 상태와 분리(§9.4-1) |
