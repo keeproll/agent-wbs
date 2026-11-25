@@ -81,6 +81,7 @@ export interface ScheduleResult {
   warnings: ScheduleWarning[];
   by: Record<string, ScheduleItem>;
   capacity: {
+    warnings: ScheduleWarning[];
     days: { date: string; rate: number }[];
     measured: number;
     enough: boolean;
@@ -104,10 +105,22 @@ export interface ScheduleResult {
   };
 }
 
-export interface ScheduleWarning {
+export type ScheduleWarning = {
   code: 'USAGE_RESET_UNKNOWN';
   agent: Agent;
-}
+} | {
+  code: 'CLOCK_SKEW_CLAMPED';
+  taskId: string;
+  field: 'actStart' | 'actEnd';
+  before: string;
+  after: string;
+} | {
+  code: 'CLOCK_SKEW_CLAMPED';
+  sessionFrom: string;
+  field: 'lastHeartbeatAt' | 'to';
+  before: string;
+  after: string;
+};
 
 export interface Baseline {
   v: number;

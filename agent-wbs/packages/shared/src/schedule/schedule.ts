@@ -27,16 +27,20 @@ export function capacity(input: Pick<ScheduleInput, 'now' | 'sessions' | 'assume
   finite(heartbeat.missLimit, 1, 'missed heartbeat limit');
   if (!Number.isSafeInteger(heartbeat.missLimit)) throw new RangeError('Missed heartbeat limit must be an integer');
   finite(input.assumeRate, 0, 'assumed uptime', 1);
+  const warnings: ScheduleWarning[] = [];
   const sessions = input.sessions.map(s => {
     const from = instant(s.from);
     let to = s.to ? instant(s.to) : now;
+    if (from > now) return { from, to };
     if (!s.to) {
-      const last = s.lastHeartbeatAt ?? s.from, lastDay = instant(last);
-      if (lastDay < from) throw new RangeError('Heartbeat precedes Runner session');
-      if (Date.parse(input.now) - Date.parse(last) >= heartbeat.intervalSec * heartbeat.missLimit * 1000) to = lastDay;
+      const reported = s.lastHeartbeatAt ?? s.from, lastDay = instant(reported);
+      const last = lastDay < from ? s.from : lastDay > now ? input.now : reported;
+      if (last !== reported) warnings.push({ code: 'CLOCK_SKEW_CLAMPED', sessionFrom: s.from, field: 'lastHeartbeatAt', before: reported, after: last });
+      if (Date.parse(input.now) - Date.parse(last) >= heartbeat.intervalSec * heartbeat.missLimit * 1000) to = instant(last);
     }
-    if (s.to && to < from) throw new RangeError('Runner session ends before it starts');
-    return { from, to: Math.min(to, now) };
+    const end = Math.max(from, Math.min(to, now));
+    if (end !== to) warnings.push({ code: 'CLOCK_SKEW_CLAMPED', sessionFrom: s.from, field: 'to', before: s.to ?? input.now, after: end === from ? s.from : input.now });
+    return { from, to: end };
   }).filter(s => s.from <= now).sort((a, b) => a.from - b.from);
   const merged: typeof sessions = [];
   for (const s of sessions) {
@@ -52,7 +56,7 @@ export function capacity(input: Pick<ScheduleInput, 'now' | 'sessions' | 'assume
   const sorted = days.map(d => d.rate).sort((a, b) => a - b);
   const rate = Math.max(p.minRate, enough ? measured : input.assumeRate);
   return {
-    days, logged, enough, measured, rate,
+    days, logged, enough, measured, rate, warnings,
     rLo: Math.min(rate, Math.max(p.minRate, enough ? required(sorted[Math.floor((sorted.length - 1) * p.lowQuantile)]) : rate * p.lowRateFactor)),
     rHi: Math.max(rate, enough ? required(sorted[Math.floor((sorted.length - 1) * p.highQuantile)]) : Math.min(1, rate * p.highRateFactor)),
     todayRate: onIn(today, now) / Math.max(1 / 1440, now - today),
@@ -61,6 +65,7 @@ export function capacity(input: Pick<ScheduleInput, 'now' | 'sessions' | 'assume
 
 export function schedule(input: ScheduleInput): ScheduleResult {
   const now = instant(input.now), today = ymd(now), cap = capacity(input);
+  const warnings = [...cap.warnings];
   const blackouts = new Set(input.blackouts.map(date));
   const tasks = new Map<string, ScheduleTask>();
   const cancelled = new Set(input.tasks.filter(t => t.status === 'cancelled').map(t => t.id));
@@ -74,8 +79,15 @@ export function schedule(input: ScheduleInput): ScheduleResult {
       finite(t.est, 0, 'estimate'); finite(t.lo, 0, 'optimistic estimate'); finite(t.hi, t.lo, 'pessimistic estimate');
       if (t.lo > t.est || t.est > t.hi) throw new RangeError('Expected lo <= est <= hi');
       if (t.fixStart) date(t.fixStart);
-      if (t.actStart && instant(t.actStart) > now) t = { ...t, actStart: input.now };
-      if (t.actEnd && (!t.actStart || instant(t.actEnd) < instant(t.actStart) || instant(t.actEnd) > now)) throw new RangeError('Invalid actual end');
+      if (t.actStart && instant(t.actStart) > now) {
+        warnings.push({ code: 'CLOCK_SKEW_CLAMPED', taskId: t.id, field: 'actStart', before: t.actStart, after: input.now });
+        t = { ...t, actStart: input.now };
+      }
+      if (t.actEnd && instant(t.actEnd) > now) {
+        warnings.push({ code: 'CLOCK_SKEW_CLAMPED', taskId: t.id, field: 'actEnd', before: t.actEnd, after: input.now });
+        t = { ...t, actEnd: input.now };
+      }
+      if (t.actEnd && (!t.actStart || instant(t.actEnd) < instant(t.actStart))) throw new RangeError('Invalid actual end');
       if (t.status === 'done' && (!t.actStart || !t.actEnd)) throw new RangeError('Completed task needs actual start and end');
     } catch (error) {
       if (error instanceof RangeError) throw new ScheduleError('SCHEDULE_INVALID_TASK', error.message, [t.id]);
@@ -96,7 +108,6 @@ export function schedule(input: ScheduleInput): ScheduleResult {
   finite(c.total, 0, 'total concurrency'); finite(c.current, 0, 'current concurrency');
   const poolN = taskSlots(Math.min(c.total, c.current), c.subRatio);
   const agentN = { Claude: taskSlots(c.Claude, c.subRatio), Codex: taskSlots(c.Codex, c.subRatio) };
-  const warnings: ScheduleWarning[] = [];
   for (const ag of ['Claude', 'Codex'] as const) {
     const u = input.usage[ag];
     if (!u) continue;

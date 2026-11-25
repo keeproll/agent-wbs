@@ -212,3 +212,71 @@ describe('general zero-capacity start boundary', () => {
     expect(schedule(input({ usage: { Claude: { remain: 0, resetAt: '2026-11-03T15:00:00Z' } } })).by['1']?.start).toBe('2026-11-04');
   });
 });
+
+describe('P2-7 clock skew clipping', () => {
+  test.each([
+    ['2026-11-03T03:00:00Z', 59 / 43_200],
+    ['2026-11-03T03:02:00Z', 179 / 43_320],
+    ['2026-11-03T03:02:01Z', 0],
+  ] as const)('heartbeat before session start is clipped to from, including the timeout boundary (%s)', (now, expectedRate) => {
+    const i = input({ now, sessions: [{ from: '2026-11-03T02:59:01Z', lastHeartbeatAt: '2026-11-03T02:59:00Z' }] });
+    const c = capacity(i);
+    expect(c.todayRate).toBeCloseTo(expectedRate, 10);
+    expect(c).toMatchObject({ warnings: [{ code: 'CLOCK_SKEW_CLAMPED', sessionFrom: '2026-11-03T02:59:01Z',
+      field: 'lastHeartbeatAt', before: '2026-11-03T02:59:00Z', after: '2026-11-03T02:59:01Z' }] });
+  });
+
+  test('done actual end in the future is clipped to now with a Task warning', () => {
+    const i = input({ tasks: [task('1', { status: 'done', actStart: '2026-11-02T03:00:00Z', actEnd: '2026-11-03T03:00:01Z' })] });
+    const original = structuredClone(i), r = schedule(i);
+    expect(r.by['1']).toMatchObject({ start: '2026-11-02', end: '2026-11-03', done: true });
+    expect(r.warnings).toEqual([{ code: 'CLOCK_SKEW_CLAMPED', taskId: '1', field: 'actEnd', before: '2026-11-03T03:00:01Z', after: i.now }]);
+    expect(i).toEqual(original);
+  });
+
+  test('done start and end both in the future are clipped in order, with both warnings', () => {
+    const i = input({ tasks: [task('1', { status: 'done', actStart: '2026-11-03T03:00:01Z', actEnd: '2026-11-03T03:00:02Z' })] });
+    const r = schedule(i);
+    expect(r.by['1']).toMatchObject({ start: '2026-11-03', end: '2026-11-03', done: true });
+    expect(r.warnings).toEqual([
+      { code: 'CLOCK_SKEW_CLAMPED', taskId: '1', field: 'actStart', before: '2026-11-03T03:00:01Z', after: i.now },
+      { code: 'CLOCK_SKEW_CLAMPED', taskId: '1', field: 'actEnd', before: '2026-11-03T03:00:02Z', after: i.now },
+    ]);
+  });
+
+  test('reversed closed session becomes zero time and its warning propagates once', () => {
+    const i = input({ sessions: [{ from: '2026-11-03T02:59:01Z', to: '2026-11-03T02:59:00Z' }] });
+    const original = structuredClone(i), c = capacity(i);
+    const warnings = [{ code: 'CLOCK_SKEW_CLAMPED', sessionFrom: '2026-11-03T02:59:01Z', field: 'to',
+      before: '2026-11-03T02:59:00Z', after: '2026-11-03T02:59:01Z' }];
+    expect(c.todayRate).toBe(0);
+    expect(c).toMatchObject({ warnings });
+    expect(schedule(i).warnings).toEqual(warnings);
+    expect(replan(i, [], meta).warnings).toEqual(warnings);
+    expect(driftCheck(i, [], { thresholdDays: 1, autoReplan: true }, meta)?.warnings).toEqual(warnings);
+    expect(i).toEqual(original);
+  });
+
+  test('existing future actual start clipping is observable for a running Task', () => {
+    const i = input({ tasks: [task('1', { status: 'running', actStart: '2026-11-03T03:00:01Z' })] });
+    expect(schedule(i).warnings).toEqual([{ code: 'CLOCK_SKEW_CLAMPED', taskId: '1', field: 'actStart', before: '2026-11-03T03:00:01Z', after: i.now }]);
+  });
+
+  test('existing future session end clipping and future heartbeat clipping are observable', () => {
+    const from = '2026-11-02T15:00:00Z', future = '2026-11-03T03:00:01Z';
+    for (const field of ['to', 'lastHeartbeatAt'] as const) {
+      const i = input({ sessions: [{ from, [field]: future }] });
+      const c = capacity(i);
+      expect(c.todayRate).toBe(1);
+      expect(c).toMatchObject({ warnings: [{ code: 'CLOCK_SKEW_CLAMPED', sessionFrom: from, field, before: future, after: i.now }] });
+    }
+  });
+
+  test('timestamps exactly at their bounds do not warn and ignored future sessions stay ignored', () => {
+    const i = input({ sessions: [{ from: '2026-11-02T15:00:00Z', lastHeartbeatAt: '2026-11-02T15:00:00Z' },
+      { from: '2026-11-03T03:00:00Z', to: '2026-11-03T03:00:00Z' },
+      { from: '2026-11-04T03:00:00Z', lastHeartbeatAt: '2026-11-03T03:00:00Z' }],
+      tasks: [task('1', { status: 'done', actStart: '2026-11-02T03:00:00Z', actEnd: '2026-11-03T03:00:00Z' })] });
+    expect(schedule(i).warnings).toEqual([]);
+  });
+});

@@ -195,7 +195,6 @@ describe('schedule validation', () => {
     input({ deps: [{ pred: '1', succ: '1', type: 'FS' }] }),
     input({ tasks: [task('1'), task('2')], deps: [{ pred: '1', succ: '2', type: 'FS' }, { pred: '2', succ: '1', type: 'SS' }] }),
     input({ usage: { Claude: { remain: 101 } } }),
-    input({ sessions: [{ from: '2026-11-02T00:00:00Z', to: '2026-11-01T00:00:00Z' }] }),
   ])('rejects malformed input without inventing a forecast (%#)', i => expect(() => schedule(i)).toThrow(RangeError));
 });
 
