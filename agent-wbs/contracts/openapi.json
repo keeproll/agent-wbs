@@ -32175,6 +32175,7 @@
           "title",
           "scope",
           "out",
+          "doneCond",
           "spec",
           "ac",
           "outputs",
@@ -32196,6 +32197,9 @@
             "items": {
               "type": "string"
             }
+          },
+          "doneCond": {
+            "type": "string"
           },
           "spec": {
             "type": "object",

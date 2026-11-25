@@ -359,7 +359,7 @@ test('N1 판단 job은 판단 대상의 변경 전·후 내용과 hash를 함께
 test('N1 snapshot은 hash 계산 대상과 같은 범위다(data-model §2.3-1)', () => {
   const proposal = claim('lead-proposal').job.payload.proposal as { ops: object[]; targets: { after: object }[] };
   expect(Object.keys(proposal.targets[0]?.after ?? {})).toEqual([
-    'title', 'scope', 'out', 'spec', 'ac', 'outputs', 'designs', 'conflictGroup',
+    'title', 'scope', 'out', 'doneCond', 'spec', 'ac', 'outputs', 'designs', 'conflictGroup',
   ]);
   const reject = (extra: object) => {
     const response = claim('lead-proposal');
@@ -412,5 +412,18 @@ test('R2 Runner 상태가 최근 중단 구간과 사유를 준다(P L6684)', ()
   expect(responds('getRunnerState', { ...state, gaps })).toBe(true);
   for (const bad of [{ from: T, to: T }, { to: T, reason: 'reboot' }, { from: T, to: T, reason: '재부팅' }]) {
     expect(responds('getRunnerState', { ...state, gaps: [bad] })).toBe(false);
+  }
+});
+
+test('완료 조건은 판단 대상이라 변경 전·후가 구분되고 빠질 수 없다', () => {
+  const targets = () => claim('lead-proposal').job.payload.proposal as { targets: { before: { doneCond: string }; after: { doneCond: string } }[] };
+  const [target] = targets().targets;
+  expect(target?.before.doneCond).not.toBe(target?.after.doneCond);
+  for (const name of ['lead-proposal', 'split-proposal', 'rejudge']) {
+    const text = JSON.stringify(claim(name));
+    expect(responds('claimJob', JSON.parse(text))).toBe(true);
+    const one = text.replace(/"doneCond":"[^"]*","spec"/, '"spec"');
+    expect(one).not.toBe(text);
+    expect(responds('claimJob', JSON.parse(one)), name).toBe(false);
   }
 });

@@ -234,6 +234,7 @@ export type JudgedContent = {
   title: string;
   scope: (string)[];
   out: (string)[];
+  doneCond: string;
   spec: {
     req: (string)[];
     work: (string)[];

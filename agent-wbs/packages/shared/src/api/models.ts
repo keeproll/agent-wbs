@@ -184,6 +184,7 @@ export const JudgedContent = Type.Object(
     title: Type.String(),
     scope: lines,
     out: lines,
+    doneCond: Type.String(),
     spec: c.Body(specBody),
     ac: List(c.Body(ac)),
     // 제출 여부는 상태라서 뺀다.
