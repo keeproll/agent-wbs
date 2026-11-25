@@ -1,9 +1,18 @@
 import { pingDatabase, type Pool } from '@awbs/db';
 import { errorBody, type DbHealthResponse, type ErrorBody, type HealthResponse } from '@awbs/shared';
-import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyServerOptions } from 'fastify';
 
 export function buildApp(pool: Pool, logger: FastifyServerOptions['logger'] = false): FastifyInstance {
-  const app = Fastify({ logger });
+  const app = Fastify({
+    logger,
+    // 기본 처리기는 원문 URL을 로그와 응답에 넣는다. 오류 형식 전체는 M2-01에서 정한다.
+    frameworkErrors: (_error, _request, reply: FastifyReply) => {
+      void reply.code(400).send({ statusCode: 400, error: 'Bad Request' });
+    },
+  });
+  app.setNotFoundHandler((_request, reply) => {
+    void reply.code(404).send({ statusCode: 404, error: 'Not Found' });
+  });
 
   app.get('/health', (): HealthResponse => ({ status: 'ok' }));
 

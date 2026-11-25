@@ -1,7 +1,8 @@
 import { expect, test, vi } from 'vitest';
 import { assertTestDatabaseUrl, parseDatabaseUrl, recreateTestDatabase } from '../src/index.ts';
 
-const base = 'postgres://u:secret@127.0.0.1:25442';
+// 보호 조건이 깨져도 실제 DB에 닿지 않도록 비어 있는 포트를 쓴다.
+const base = 'postgres://u:secret@127.0.0.1:1';
 
 test('awbs_test_ DB는 허용한다', () => {
   expect(assertTestDatabaseUrl(`${base}/awbs_test_m0_abc123`)).toBe('awbs_test_m0_abc123');
