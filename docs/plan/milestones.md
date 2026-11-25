@@ -46,9 +46,9 @@ M0 기반 → M1 데이터·계약·순수 판정 → M2 서버 핵심 → {M3 �
 | M1-01 | 전체 schema·제약·추가 전용·초기화 함수·system/demo seed(owner 승인값 포함, SUB_MOCK과 미승인 값은 demo만) | `W test:db -- schema`(빈 DB up, 제약 위반, 앱 역할 UPDATE 거부, system seed에 Mock 정의·미승인 값 0건, owner 승인 Q-03·04·06 값 일치) | `packages/db` | — | Codex / Claude |
 | M1-02 | TypeBox API 스키마 → OpenAPI, 오류 코드, Runner client 생성 | `W openapi:check && R client:check`, G§8 경로 대조 테스트 | `packages/shared/src/api`, `contracts/`, `agent-runner/src/api` | ∥ | Claude / Codex |
 | M1-03 | 상태 전이·번호·차단·순환·Gate·체크리스트·SS/FS | `W --filter shared test -- domain` (**owner 승인 Q-05 표와 일치**, 모든 전이 쌍·상태×시도 종류 표, QA 프로세스 실패→같은 종류 재시도, BLOCKED→새 검증→PASS, SHA 변경→재검증, **시작 전 취소 선행의 SS 제거→후속 해제, 다른 선행이 남으면 계속 차단, `cancelled`≠시작됨**) | `packages/shared/src/domain` | ∥ | Codex / Claude |
-| M1-04 | 일정: 3시나리오·가동률·슬롯·충돌 묶음·리셋·불가일·재조정 diff·driftCheck | `W --filter shared test -- schedule` (P `Sel.schedule`과 demo 결과 대조, 200 Task 시간 기록, **SS 선행 취소 후 그 관계 없이 후속 재배치**) | `packages/shared/src/schedule` | ∥ | Codex / Claude |
+| M1-04 | 일정: 3시나리오·가동률·슬롯·충돌 묶음·리셋·불가일·재조정 diff·driftCheck | `W --filter shared test -- schedule` (P `Sel.schedule`과 demo 결과 대조, 200 Task 시간 기록, **SS 선행 취소 후 그 관계 없이 후속 재배치**, **용량 0인 날→다음 가용일 시작(D-31), rLo≤rate(D-32)**) | `packages/shared/src/schedule` | ∥ | Codex / Claude |
 | M1-05 | CP 시뮬레이션·영향·분할 점검 10규칙·분할 제안 검증 | `W --filter shared test -- proposal split` (**취소 CP 영향 목록에 풀리는 후속·남은 차단 표시**) | `packages/shared/src/{proposal,split}` | M1-03 후 | Claude / Codex |
-| M1-06 | 등급 상향·하향·재개·최저선, 상한 공식, 보유 계산, 제한 요인 | `W --filter shared test -- grade capacity` (§6.6 예시 3개 값 일치, **owner 승인 Q-06 매핑 일치**·ultra/미확인 거부) | `packages/shared/src/{grade,capacity}` | ∥ | Claude / Codex |
+| M1-06 | 등급 상향·하향·재개·최저선, 상한 공식, 보유 계산, 제한 요인 | `W --filter shared test -- grade capacity` (§6.6 예시 3개 값 일치, **owner 승인 Q-06 매핑 일치**·ultra/미확인 거부, **허용 해제 재개(D-29), 없는 단계의 모델 이동 상향·대상 없음(D-30)**) | `packages/shared/src/{grade,capacity}` | ∥ | Claude / Codex |
 
 ### M2 — 서버 핵심
 
@@ -58,10 +58,10 @@ M0 기반 → M1 데이터·계약·순수 판정 → M2 서버 핵심 → {M3 �
 | M2-02 | Task·의존성·명세·설계·체크리스트 CRUD, 동시 수정 | `W --filter api test -- tasks` (동시 순환 추가·이력, 삭제/의존성/승인 낡은 버전 409) | `apps/api/src/tasks` | M2-01 후 ∥ | Claude / Codex |
 | M2-03 | 프로젝트 등록·기술 결정·bootstrap·승인·입력 변경·분석 안 함 | `W --filter api test -- project` | `apps/api/src/project` | ∥ | Claude / Codex |
 | M2-04 | 초기화·명령·정리 대기·내보내기·파일 삭제 큐 | `W --filter api test -- reset` (중간 실패 주입, 설정 유지/삭제 표, middleware 통과 후 정지한 host 보고·worker와 초기화 경합, 명령 epoch 불일치) | `apps/api/src/reset` | M2-03 후 | Codex / Claude |
-| M2-05 | Runner 보고·jobs lease·시도 claim·heartbeat 감시·PC 변경·상한 | `W --filter api test -- runner` (동시 claim 100회, 중복 보고, **네트워크 단절+자손 생존+재개 거부→해제 후 허용**, 설치 실패 후 Task/예약/이력/재시도, 외부 효과 job reconcile, **renew 성공→정지→host 전환→옛 호출 재개 시 새 외부 쓰기 차단·대조**, ① 실패 직전 같은 묶음 claim 거부, 잠금 인계 원자성, 자기 예약 start·중복 start, 인계받은 QA job의 claim·start 성공과 타 job 거부, 부분 unique 경합, 시작 버튼 필수·자동 재시도 2(총 3회, 같은 종류 연속)·재작업 3 경계) | `apps/api/src/runner` | ∥ | Codex / Claude |
+| M2-05 | Runner 보고·jobs lease·시도 claim·heartbeat 감시·PC 변경·상한 | `W --filter api test -- runner` (동시 claim 100회, 중복 보고, **네트워크 단절+자손 생존+재개 거부→해제 후 허용**, 설치 실패 후 Task/예약/이력/재시도, 외부 효과 job reconcile, **renew 성공→정지→host 전환→옛 호출 재개 시 새 외부 쓰기 차단·대조**, ① 실패 직전 같은 묶음 claim 거부, 잠금 인계 원자성, 자기 예약 start·중복 start, 인계받은 QA job의 claim·start 성공과 타 job 거부, 부분 unique 경합, 시작 버튼 필수·자동 재시도 2(총 3회, 같은 종류 연속)·재작업 3 경계, **D-29·D-30 run-grade·claim**) | `apps/api/src/runner` | ∥ | Codex / Claude |
 | M2-06 | 시도 결과·검증·결함·Evidence·Gate 판정·완료 | `W --filter api test -- execution` (QA 오류·BLOCKED 새 시도, 낡은 head/명세 PASS 거부) | `apps/api/src/execution` | M2-05 후 | Codex / Claude |
 | M2-07 | Planning·CP(미리보기=반영·자동/보류)·추정·재조정·분할 | `W --filter api test -- planning` (**취소 반영과 SS 제거·이력·재조정이 한 트랜잭션, 미리보기 영향=반영 결과**) | `apps/api/src/planning` | ∥ | Claude / Codex |
-| M2-08 | 정책·모델·하위 Agent·메시지·이력·변경 이벤트·무결성 점검 | `W --filter api test -- policy messages changes` | `apps/api/src/{policy,messages,changes}` | ∥ | Claude / Codex |
+| M2-08 | 정책·모델·하위 Agent·메시지·이력·변경 이벤트·무결성 점검 | `W --filter api test -- policy messages changes` (**허용 해제→재판단→재개 이력(D-29)**) | `apps/api/src/{policy,messages,changes}` | ∥ | Claude / Codex |
 | M2-09 | fake Runner 시나리오 드라이버 | `W test:scenario -- runner-basic` (8·9·10, 6은 QA FAIL→재작업→재검증 PASS **까지만**) | `agent-wbs/e2e/fakes` | M2-05 후 | Codex / Claude |
 
 ### M3 — 핵심 화면 (M2 API 사용)

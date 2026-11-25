@@ -178,7 +178,7 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
 | `running` | `qa` / `verifying` | dev→① 통과→QA / rework→① 통과→재검증 |
 | `running` | `failed` / `paused` | 실행 실패 / 중단(보유 해제와 별개) |
 | `failed` | `running` / `qa` / `verifying` | 실패한 시도와 **같은 종류**의 새 시도 |
-| `paused` | `running` / `qa` / `verifying` | 중단된 종류로 새 시도(같은 등급) |
+| `paused` | `running` / `qa` / `verifying` | 중단된 종류로 새 시도(같은 등급. 모델 허용 해제 시 재판단한 새 등급, D-29) |
 | `qa`,`verifying` | `gate` / `rework` / `paused` / `failed` | PASS / FAIL / 중단 / QA 프로세스 자체 실패. **BLOCKED는 상태 유지**(시도는 completed, verif=blocked, P `registerQa`) |
 | `qa` / `verifying` | 같은 상태 | BLOCKED 뒤 원인 해결 → **새 qa/reverify 시도·새 검증**. 기존 검증은 불변 |
 | `rework` | `running` | rework 시도 |
@@ -199,7 +199,7 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
 | `rework` | rework | 최근 검증 FAIL 또는 통합 실패. 자동 3회까지, 초과는 팀장 버튼 |
 | `qa` | qa | ① 통과, 최초 또는 직전 qa가 BLOCKED |
 | `verifying` | reverify | rework의 ① 통과, 직전 reverify가 BLOCKED, 또는 근거 무효화 |
-| `paused` | 중단된 종류 | 직전 시도 interrupted, 같은 등급. 재개는 팀장 버튼(P) |
+| `paused` | 중단된 종류 | 직전 시도 interrupted, 같은 등급. 모델이 허용 해제됐으면 재판단 완료 후 새 등급 + 이력(D-29). 재개는 팀장 버튼(P) |
 | `failed` | 실패한 종류 | 직전 시도 failed. 같은 종류 연속 실패에 자동 재시도 2회(최초 포함 총 3회), 이후 팀장 버튼 |
 | 그 외 | 없음 | 409 |
 

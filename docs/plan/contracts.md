@@ -137,7 +137,7 @@ G§8.5, §8.5-1, §8.6, §8.7의 표 전체를 그대로 구현한다(재기술�
 | POST `/runner/heartbeat` `{runnerId,version,epoch}` | 204 + `X-Current-Epoch`. 60초 |
 | POST `/runner/sessions` | stop은 열린 세션만. `reason=unknown`은 서버만 |
 | POST `/runner/host` `/readiness` `/models` `/usage` `/concurrency` | readiness key에 `obs`★ `gh`★ `lfs`★ 추가. concurrency는 세션별 `{attemptId,observed,reserved,state}`★ 포함 |
-| GET `/runner/tasks/:taskKey/run-grade?role=` | 등급 정책 단일 출처. 재작업 상향·재개·하향을 서버가 계산해 `{model,effort,adjust}`★로도 준다 |
+| GET `/runner/tasks/:taskKey/run-grade?role=` | 등급 정책 단일 출처. 재작업 상향·재개·하향을 서버가 계산해 `{model,effort,adjust}`★로도 준다. 허용 해제 재개(D-29)와 모델 이동 상향(D-30)은 `adjust`에 이전·이후·사유를 담고, 재판단 전이면 claim `reasons[]`로 거부 |
 | GET `/runner/tasks/:taskKey/subagents?role=` | 모델·effort 없음. hash 검증 후 설치 |
 | GET `/runner/messages?cursor=` · POST `/:id/ack` | G의 `since` 대신 **cursor**를 우선 사용(같은 시각 유실 방지). `since`도 호환 |
 | POST `/runner/messages/:id/response`★ | Agent 응답 `{text,workState}`. 전달 상태와 분리(§9.4-1) |
