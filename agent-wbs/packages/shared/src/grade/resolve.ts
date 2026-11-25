@@ -71,6 +71,8 @@ export function resolveRunGrade(input: ResolveInput): ResolveResult {
     const grade = { modelId: prev.modelId, effort: prev.effort };
     const reason = gradeError(catalog, grade);
     if (reason === null) base = grade;
+    // 재개의 등급 대체는 허용 해제일 때만 한다(D-29). 그 외에는 같은 등급을 쓸 수 있을 때까지 거절한다.
+    else if (resuming && reason !== 'MODEL_NOT_ALLOWED') return { ok: false, code: reason };
     else replaced = { grade, reason };
   }
   if (base === stored && taskError) return { ok: false, code: taskError };
@@ -83,7 +85,9 @@ export function resolveRunGrade(input: ResolveInput): ResolveResult {
   const floor = floorOf(role, input.task, policy.floors);
   // 최저선은 조정을 마친 최종 후보에 적용한다. 미달이면 올리지 않고 Planning 재판단 대상으로 거부한다.
   const finish = (grade: Grade, adjusted: GradeAdjust, notify: { count: number } | null): ResolveResult => {
-    const below = belowFloor(catalog.agent, { ...grade, locked: taskGrade.locked }, floor);
+    // 팀장 고정은 최저선 예외지만, 재판단 재개의 새 등급에는 예외를 두지 않는다.
+    const locked = taskGrade.locked && !resuming;
+    const below = belowFloor(catalog.agent, { ...grade, locked }, floor);
     if (below === null) return { ok: false, code: 'FLOOR_UNDETERMINED' };
     if (below) return { ok: false, code: 'BELOW_FLOOR' };
     return { ok: true, grade, adjust: adjusted, notify };

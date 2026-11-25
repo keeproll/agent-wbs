@@ -184,12 +184,13 @@ describe('쓸 수 없는 등급', () => {
     ['모델 미보고', 'claude-haiku-5-5', 'high', 'MODEL_UNKNOWN'],
     ['Effort 미매핑', OPUS, 'ultra', 'EFFORT_UNMAPPED'],
     ['Effort 미보고', OPUS, 'max', 'EFFORT_NOT_REPORTED'],
-  ])('%s로 직전 등급을 못 쓰면 재개·재작업 모두 재판단된 등급을 쓴다', (_l, modelId, effort, reason) => {
+  ])('D-29 %s로 직전 등급을 못 쓰면 재개는 거절하고, 재작업만 재판단된 등급에서 올린다', (_l, modelId, effort, reason) => {
     const c: Catalog = { agent: 'Claude', models: [{ modelId: OPUS, rank: 3, allowed: true, efforts: ['low', 'high', 'ultra'] }, { modelId: SONNET, rank: 2, allowed: true, efforts: E }] };
     const replacedBy = { grade: { modelId, effort }, reason };
-    expect(run({ catalog: c, history: [past('dev', modelId, effort, 'interrupted')] })).toMatchObject({
-      ok: true, grade: { modelId: SONNET, effort: 'high' }, adjust: { kind: 'regrade', replaced: replacedBy },
-    });
+    const refused = { ok: false, code: reason };
+    expect(run({ catalog: c, history: [past('dev', modelId, effort, 'interrupted')] })).toEqual(refused);
+    expect(run({ kind: 'rework', catalog: c, history: [past('rework', modelId, effort, 'interrupted')] })).toEqual(refused);
+    expect(run({ kind: 'qa', catalog: c, history: [past('qa', modelId, effort, 'interrupted')] })).toEqual(refused);
     expect(run({ kind: 'rework', catalog: c, history: [past('dev', modelId, effort)] })).toMatchObject({
       ok: true, grade: { modelId: SONNET, effort: 'xhigh' }, adjust: { kind: 'up', replaced: replacedBy },
     });
@@ -197,7 +198,7 @@ describe('쓸 수 없는 등급', () => {
   test('재판단되지 않은 Task 등급으로는 재개하지 않는다', () => {
     expect(run({ catalog: revoked, taskGrade: { modelId: OPUS, effort: 'max', locked: true }, history: [past('dev', OPUS, 'max', 'interrupted')] })).toEqual({ ok: false, code: 'MODEL_NOT_ALLOWED' });
   });
-  test('재판단 등급은 새 등급이므로 최저선을 만족해야 한다 — 팀장 고정은 예외', () => {
+  test('재판단 등급은 새 등급이므로 최저선을 만족해야 한다 — 팀장 고정도 예외가 아니다', () => {
     const o = (locked: boolean): Partial<ResolveInput> => ({
       catalog: revoked,
       taskGrade: { modelId: SONNET, effort: 'low', locked },
@@ -205,7 +206,9 @@ describe('쓸 수 없는 등급', () => {
       history: [past('dev', OPUS, 'max', 'interrupted')],
     });
     expect(run(o(false))).toEqual({ ok: false, code: 'BELOW_FLOOR' });
-    expect(run(o(true))).toMatchObject({ ok: true, grade: { modelId: SONNET, effort: 'low' }, adjust: { kind: 'regrade' } });
+    expect(run(o(true))).toEqual({ ok: false, code: 'BELOW_FLOOR' });
+    expect(run({ ...o(true), kind: 'qa', task: { primaryDomain: 'FE', relatedDomains: [], devLevel: null }, history: [past('qa', OPUS, 'max', 'interrupted')] })).toEqual({ ok: false, code: 'FLOOR_UNDETERMINED' });
+    expect(run({ ...o(true), taskGrade: { modelId: SONNET, effort: 'high', locked: true } })).toMatchObject({ ok: true, adjust: { kind: 'regrade' } });
   });
   test('직전 모델을 쓸 수 있으면 replaced는 null', () => {
     expect(run({ history: [past('dev', OPUS, 'max', 'interrupted')] })).toMatchObject({ adjust: { kind: 'resume', replaced: null } });
