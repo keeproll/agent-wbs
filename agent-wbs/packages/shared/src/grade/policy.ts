@@ -1,5 +1,8 @@
 import { effortLevel } from './effort.ts';
-import type { AgentName, EffortLevel } from './effort.ts';
+import type { EffortLevel } from './effort.ts';
+import type { Agent, AttemptKind, RunRole } from '../vocabulary.ts';
+
+export type { AttemptKind };
 
 export interface Grade {
   modelId: string;
@@ -16,7 +19,7 @@ export interface CatalogModel {
 }
 
 export interface Catalog {
-  agent: AgentName;
+  agent: Agent;
   models: readonly CatalogModel[];
 }
 
@@ -26,7 +29,7 @@ export interface ExecPolicy {
   lowPct: number;
   onRework: 'same' | 'up1' | 'top';
   /** 최상위 등급 재작업 알림 횟수. 0 = 알리지 않음 */
-  escNotify: number;
+  notifyAt: number;
   floors: { verifyGeDev: boolean; dbHigh: boolean };
 }
 
@@ -35,12 +38,11 @@ export const DEFAULT_EXEC_POLICY: ExecPolicy = {
   onUsage: 'wait',
   lowPct: 20,
   onRework: 'up1',
-  escNotify: 2,
+  notifyAt: 2,
   floors: { verifyGeDev: true, dbHigh: true },
 };
 
-export type GradeRole = 'dev' | 'qa';
-export type AttemptKind = 'dev' | 'rework' | 'qa' | 'reverify';
+export type GradeRole = RunRole;
 
 export const roleOf = (kind: AttemptKind): GradeRole =>
   kind === 'dev' || kind === 'rework' ? 'dev' : 'qa';
@@ -117,7 +119,7 @@ export function floorOf(
 
 /** Task 등급이 최저선 아래인지. 팀장 고정은 최저선 재판단 대상이 아니다(P `normRuns`). 판정 불가는 null. */
 export function belowFloor(
-  agent: AgentName,
+  agent: Agent,
   grade: Grade & { locked: boolean },
   floor: Floor | null,
 ): boolean | null {

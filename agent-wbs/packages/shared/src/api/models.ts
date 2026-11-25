@@ -1,4 +1,5 @@
 import Type, { type TProperties, type TSchema } from 'typebox';
+import * as v from '../vocabulary.ts';
 import * as c from './common.ts';
 
 const { AnyOf, Nullable, Opt, List, Text } = c;
@@ -269,7 +270,7 @@ export const GradeAdjust = c.Body({
   to: RunGrade,
   reason: Text,
 });
-export const AttemptStatus = AnyOf('running', 'completed', 'failed', 'interrupted');
+export const AttemptStatus = AnyOf(...v.ATTEMPT_STATUSES);
 export const Attempt = Type.Object(
   {
     id: c.Id,
@@ -768,6 +769,19 @@ const projectSchedule = {
   doneCount: c.Count,
   taskCount: c.Count,
 };
+/** M1-04 경고. 시계 오차로 자른 값의 이전·이후를 보존한다(세션 또는 Task). */
+export const ScheduleWarning = Type.Union(
+  [
+    obj({ code: AnyOf('USAGE_RESET_UNKNOWN'), agent: c.Agent }),
+    obj({
+      code: AnyOf('CLOCK_SKEW_CLAMPED'), taskKey: c.TaskKey, field: AnyOf('actStart', 'actEnd'), before: Str, after: Str,
+    }),
+    obj({
+      code: AnyOf('CLOCK_SKEW_CLAMPED'), sessionFrom: Str, field: AnyOf('lastHeartbeatAt', 'to'), before: Str, after: Str,
+    }),
+  ],
+  { title: 'ScheduleWarning' },
+);
 export const Schedule = Type.Object(
   {
     calcVersion: c.Count,
@@ -807,7 +821,7 @@ export const Schedule = Type.Object(
       todayRate: Rate,
     }),
     blackouts: List(obj({ date: c.DateOnly, note: Str })),
-    warnings: List(obj({ code: AnyOf('USAGE_RESET_UNKNOWN'), agent: c.Agent })),
+    warnings: List(ScheduleWarning),
   },
   { title: 'Schedule' },
 );
@@ -819,10 +833,8 @@ export const Dashboard = Type.Object(
   {
     at: c.Timestamp,
     tasks: obj({ total: c.Count, done: c.Count, active: c.Count, blocked: c.Count }),
-    byWorkType: counts(
-      'Analysis', 'Design', 'Implementation', 'Configuration', 'Test', 'Verification', 'Documentation', 'Integration',
-    ),
-    byDomain: counts('FE', 'BE', 'DB', 'DevOps', 'API', 'QA', 'Architecture', 'Common'),
+    byWorkType: counts(...v.WORK_TYPES),
+    byDomain: counts(...v.DOMAINS),
     schedule: Nullable(obj({ ...projectSchedule, rate: Rate })),
     panels: obj({
       late: List(obj({ ...taskRef, baselineEnd: MaybeDate, end: c.DateOnly, slipDays: Nullable(N), paused: Type.Boolean() })),

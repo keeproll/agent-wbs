@@ -25,7 +25,7 @@ const floor1: Floor = { level: 1, reasons: [] };
 
 test('G §7.3 기본 정책', () => {
   expect(DEFAULT_EXEC_POLICY).toMatchObject({
-    onUsage: 'wait', onRework: 'up1', escNotify: 2, floors: { verifyGeDev: true, dbHigh: true },
+    onUsage: 'wait', onRework: 'up1', notifyAt: 2, floors: { verifyGeDev: true, dbHigh: true },
   });
 });
 

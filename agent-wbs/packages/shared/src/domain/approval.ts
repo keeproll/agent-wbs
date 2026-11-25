@@ -1,11 +1,13 @@
+import type { Agent } from '../vocabulary.ts';
+
 export interface ApprovalInput {
   purpose: string;
   doneCond: string;
   ac: readonly unknown[];
   checklist: readonly unknown[];
   outputs: readonly { required: boolean }[];
-  assignee: 'Claude' | 'Codex' | null;
-  verifier: 'Claude' | 'Codex' | null;
+  assignee: Agent | null;
+  verifier: Agent | null;
 }
 
 // contracts §2.5: request and approval both check the current stored specification.

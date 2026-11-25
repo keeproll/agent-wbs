@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { checkSplit, DEFAULT_SPLIT_SETTINGS, SPLIT_RULES, splitExceptionProblem, summarizeSplit } from '../../src/split/index.ts';
 import type { SplitRule } from '../../src/split/index.ts';
 import type { JudgedRules, ProposalTask } from '../../src/proposal/index.ts';
-import { WORK_TYPES } from '../../src/proposal/types.ts';
+import { WORK_TYPES } from '../../src/vocabulary.ts';
 import { TASK_STATUSES } from '../../src/domain/index.ts';
 import { HASH, JUDGED, judged, judgement, task } from '../proposal/fixtures.ts';
 import { original, toTask } from '../proposal/original.ts';

@@ -107,7 +107,8 @@ const task = [
         blocked: Type.Boolean(),
       }),
     },
-    errors: ['DEPENDENCY_SELF', 'DEPENDENCY_DUPLICATE', 'DEPENDENCY_CYCLE', 'ACTIVE_TASK_BLOCKED'],
+    // INVALID_TRANSITION: 취소된 Task를 선행으로 추가(D-27)
+    errors: ['DEPENDENCY_SELF', 'DEPENDENCY_DUPLICATE', 'DEPENDENCY_CYCLE', 'ACTIVE_TASK_BLOCKED', 'INVALID_TRANSITION'],
   }),
   operation({
     ...byQuery,

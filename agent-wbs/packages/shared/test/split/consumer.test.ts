@@ -1,11 +1,11 @@
 import { expect, test } from 'vitest';
 import { assertDependency, canonicalPreview, checkSplit, DomainError, simulateProposal, SPLIT_RULES, validateSplitProposal } from '@awbs/shared';
-import type { ProposalOp, ProposalSnapshot, SplitCheck, SplitProposalResult } from '@awbs/shared';
+import type { SimulationOp, ProposalSnapshot, SplitCheck, SplitProposalResult } from '@awbs/shared';
 import { HASH, snapshot, task } from '../proposal/fixtures.ts';
 
 test('a package consumer reaches proposal and split through the root entry', () => {
   const base: ProposalSnapshot = snapshot([task('P'), task('S')], [{ pred: 'P', succ: 'S', type: 'SS' }]);
-  const ops: ProposalOp[] = [{ op: 'remove', task: 'P' }];
+  const ops: SimulationOp[] = [{ op: 'remove', task: 'P' }];
   const result = simulateProposal(base, ops);
   expect(result.impact.unblockedSuccessors).toEqual([{ taskKey: 'S', remainingBlockers: [] }]);
   expect(canonicalPreview(result)).toContain('unblockedSuccessors');

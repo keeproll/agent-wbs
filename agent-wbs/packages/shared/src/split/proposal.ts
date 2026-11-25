@@ -2,7 +2,7 @@ import { dependencyMet } from '../domain/index.ts';
 import type { Dependency } from '../domain/index.ts';
 import { simulateProposal } from '../proposal/index.ts';
 import type {
-  AcceptanceCriterion, ProposalIssueCode, ProposalOp, ProposalSimulation, ProposalSnapshot, ProposalTask,
+  AcceptanceCriterion, ProposalIssueCode, SimulationOp, ProposalSimulation, ProposalSnapshot, ProposalTask,
   SplitJudgements, TaskJudgement,
 } from '../proposal/index.ts';
 import { checkSplit, DEFAULT_SPLIT_SETTINGS, flaggedRules, hasStarted } from './check.ts';
@@ -61,7 +61,7 @@ export interface SplitJudgementInput {
 }
 
 export function validateSplitProposal(
-  base: ProposalSnapshot, targetId: string, ops: readonly ProposalOp[], judgement: SplitJudgementInput,
+  base: ProposalSnapshot, targetId: string, ops: readonly SimulationOp[], judgement: SplitJudgementInput,
   settings: SplitSettings = DEFAULT_SPLIT_SETTINGS,
 ): SplitProposalResult {
   const simulation = simulateProposal(base, ops);

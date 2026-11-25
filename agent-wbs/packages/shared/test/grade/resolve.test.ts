@@ -56,9 +56,9 @@ describe('재작업', () => {
   });
   test.each([
     [1, 0, 1], [1, 1, 2], [2, 0, null], [2, 1, 2], [3, 1, null], [3, 2, 3], [0, 5, null],
-  ])('알림 %i회째, 최상위 등급의 이전 재작업 %i건 → %s', (escNotify, prior, want) => {
+  ])('알림 %i회째, 최상위 등급의 이전 재작업 %i건 → %s', (notifyAt, prior, want) => {
     const history = [past('dev', OPUS, 'max'), ...Array.from({ length: prior }, () => past('rework', OPUS, 'max'))];
-    const r = run({ kind: 'rework', history, policy: { ...DEFAULT_EXEC_POLICY, escNotify } });
+    const r = run({ kind: 'rework', history, policy: { ...DEFAULT_EXEC_POLICY, notifyAt } });
     expect(r).toMatchObject({ grade: { modelId: OPUS, effort: 'max' }, adjust: { kind: 'up', alreadyTop: true } });
     expect(r.ok && (r.notify?.count ?? null)).toBe(want);
   });

@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { isBlocked } from '../../src/domain/index.ts';
 import { simulateProposal } from '../../src/proposal/index.ts';
-import type { ProposalOp } from '../../src/proposal/index.ts';
+import type { SimulationOp } from '../../src/proposal/index.ts';
 import { original, toSnapshot } from './original.ts';
 
 const data = original.load();
@@ -10,7 +10,7 @@ const ids = Object.keys(data.tasks);
 const edges = (list: readonly { pred: string; succ: string; type: string }[]) => list.map(d => `${d.pred} ${d.type} ${d.succ}`);
 
 let intended = 0;
-function same(ops: ProposalOp[], originalOps: unknown[] = ops) {
+function same(ops: SimulationOp[], originalOps: unknown[] = ops) {
   const old = original.simulate(data, originalOps);
   const now = simulateProposal(base, ops);
   const label = JSON.stringify(ops);

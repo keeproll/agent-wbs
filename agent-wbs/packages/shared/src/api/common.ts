@@ -1,4 +1,5 @@
 import Type, { type TProperties, type TSchema } from 'typebox';
+import * as v from '../vocabulary.ts';
 import { ERROR_CODES } from './errors.ts';
 
 /** 요청 본문. 정의하지 않은 필드는 거부한다(예: Task PATCH의 status). */
@@ -49,27 +50,23 @@ export const Epoch = Type.Integer({ minimum: 0 });
 export const Hours = Type.Number({ minimum: 0 });
 export const Pct = Type.Number({ minimum: 0, maximum: 100 });
 
-export const Agent = Named('Agent', 'Claude', 'Codex');
-export const RunRole = Named('RunRole', 'dev', 'qa');
-export const AttemptKind = Named('AttemptKind', 'dev', 'qa', 'rework', 'reverify');
-export const TaskStatus = Named('TaskStatus',
-  'planning', 'approval', 'ready', 'running', 'paused', 'qa', 'rework', 'verifying', 'gate', 'failed', 'done', 'cancelled',
-);
+export const Agent = Named('Agent', ...v.AGENTS);
+export const RunRole = Named('RunRole', ...v.RUN_ROLES);
+export const AttemptKind = Named('AttemptKind', ...v.ATTEMPT_KINDS);
+export const TaskStatus = Named('TaskStatus', ...v.TASK_STATUSES);
 export const VerifState = Named('VerifState', 'none', 'running', 'pass', 'fail', 'blocked');
-export const WorkType = Named('WorkType',
-  'Analysis', 'Design', 'Implementation', 'Configuration', 'Test', 'Verification', 'Documentation', 'Integration',
-);
-export const Domain = Named('Domain', 'FE', 'BE', 'DB', 'DevOps', 'API', 'QA', 'Architecture', 'Common');
+export const WorkType = Named('WorkType', ...v.WORK_TYPES);
+export const Domain = Named('Domain', ...v.DOMAINS);
 export const Priority = Type.Integer({ minimum: 0, maximum: 3 });
-export const DepType = Named('DepType', 'FS', 'SS');
-export const DesignKind = Named('DesignKind', 'DB', 'API', 'FE', 'DevOps');
-export const Confidence = Named('Confidence', '상', '중', '하');
+export const DepType = Named('DepType', ...v.DEPENDENCY_TYPES);
+export const DesignKind = Named('DesignKind', ...v.DESIGN_KINDS);
+export const Confidence = Named('Confidence', ...v.CONFIDENCES);
 export const ReadinessKey = AnyOf(
   'claude', 'codex', 'git', 'node', 'pnpm', 'pg', 'repo', 'disk', 'subs', 'obs', 'gh', 'lfs',
 );
 export const ReadinessStatus = AnyOf('ok', 'warn', 'fail');
 export const ObservationState = AnyOf('ok', 'unconfirmed');
-export const PassFail = Named('PassFail', 'PASS', 'FAIL', 'BLOCKED');
+export const PassFail = Named('PassFail', ...v.VERIFICATION_RESULTS);
 export const StepStatus = Named('StepStatus', 'wait', 'run', 'done', 'fail');
 export const CiStage = Named('CiStage', 'task', 'int', 'night', 'deploy');
 export const CiStatus = Named('CiStatus', 'queued', 'run', 'pass', 'fail', 'skip');

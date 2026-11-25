@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'vitest';
 import { TASK_STATUSES } from '../../src/domain/index.ts';
 import { canonicalPreview, parseAcceptanceCriterion, simulateProposal } from '../../src/proposal/index.ts';
-import type { ProposalOp } from '../../src/proposal/index.ts';
+import type { SimulationOp } from '../../src/proposal/index.ts';
 import { ac, add, dep, newTask, snapshot, task } from './fixtures.ts';
 
 const codes = (base: ReturnType<typeof snapshot>, ...ops: unknown[]) =>
-  simulateProposal(base, ops as ProposalOp[]).issues.map(issue => issue.code);
+  simulateProposal(base, ops as SimulationOp[]).issues.map(issue => issue.code);
 const notesOf = (result: ReturnType<typeof simulateProposal>, id: string) =>
   result.impact.tasks.find(item => item.taskKey === id)?.notes;
 
@@ -203,12 +203,12 @@ describe('newly blocking a Task in execution is held (owner decision)', () => {
 });
 
 test('preview text: independent of jsonb key order, changes with any reviewed content', () => {
-  const ops: ProposalOp[] = [{ op: 'modify', task: 'A', field: 'acAdd', after: { given: 'g', when: 'w', then: 'n', method: '' } }];
-  const reordered: ProposalOp[] = [{ after: { method: '', then: 'n', when: 'w', given: 'g' }, field: 'acAdd', task: 'A', op: 'modify' }];
+  const ops: SimulationOp[] = [{ op: 'modify', task: 'A', field: 'acAdd', after: { given: 'g', when: 'w', then: 'n', method: '' } }];
+  const reordered: SimulationOp[] = [{ after: { method: '', then: 'n', when: 'w', given: 'g' }, field: 'acAdd', task: 'A', op: 'modify' }];
   const base = snapshot([task('A'), task('B')], [dep('B', 'A')]);
   const text = canonicalPreview(simulateProposal(base, ops));
   expect(canonicalPreview(simulateProposal(base, reordered))).toBe(text);
-  const title: ProposalOp[] = [{ op: 'modify', task: 'A', field: 'title', after: 'n' }];
+  const title: SimulationOp[] = [{ op: 'modify', task: 'A', field: 'title', after: 'n' }];
   const edited = snapshot([task('A', 'ready', { title: 'other' })]);
   expect(canonicalPreview(simulateProposal(edited, title)))
     .not.toBe(canonicalPreview(simulateProposal(snapshot([task('A')]), title)));

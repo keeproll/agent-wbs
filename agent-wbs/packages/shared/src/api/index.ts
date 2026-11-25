@@ -16,6 +16,7 @@ export const OPERATIONS: readonly Operation[] = [
   ...planningOperations,
 ];
 
+export * from './adapters.ts';
 export * from './errors.ts';
 export * from './operation.ts';
 export * from './openapi.ts';

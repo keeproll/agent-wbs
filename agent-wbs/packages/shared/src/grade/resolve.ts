@@ -9,9 +9,11 @@ import type {
   GradeStep,
 } from './policy.ts';
 
+import type { AttemptStatus } from '../vocabulary.ts';
+
 export interface PastAttempt extends Grade {
   kind: AttemptKind;
-  status: 'running' | 'completed' | 'failed' | 'interrupted';
+  status: AttemptStatus;
 }
 
 export interface ResolveInput {
@@ -27,7 +29,8 @@ export interface ResolveInput {
   remainPct: number | null;
 }
 
-export interface GradeAdjust {
+/** 판정 결과. 저장·API의 `adjust`(GradeAdjust)로는 api/adapters.ts가 바꾼다. */
+export interface ResolvedAdjust {
   /** `regrade` = 재개하되 직전 등급을 쓸 수 없어 재판단한 등급을 씀 */
   kind: 'none' | 'resume' | 'regrade' | 'keep' | 'up' | 'down';
   from: Grade;
@@ -45,7 +48,7 @@ export type ResolveResult =
   | {
       ok: true;
       grade: Grade;
-      adjust: GradeAdjust;
+      adjust: ResolvedAdjust;
       /** 최상위 등급 재작업 알림. 알리지 않으면 null. */
       notify: { count: number } | null;
     }
@@ -64,7 +67,7 @@ export function resolveRunGrade(input: ResolveInput): ResolveResult {
   const prev = input.history.findLast((a) => roleOf(a.kind) === role);
 
   let base = stored;
-  let replaced: GradeAdjust['replaced'] = null;
+  let replaced: ResolvedAdjust['replaced'] = null;
   const resuming = prev?.status === 'interrupted' && prev.kind === kind;
   if (kind === 'rework' && !prev) return { ok: false, code: 'PREVIOUS_DEV_MISSING' };
   if (prev && (resuming || kind === 'rework')) {
@@ -77,14 +80,14 @@ export function resolveRunGrade(input: ResolveInput): ResolveResult {
   }
   if (base === stored && taskError) return { ok: false, code: taskError };
 
-  const adjust: GradeAdjust = { kind: 'none', from: base, steps: [], alreadyTop: false, replaced };
+  const adjust: ResolvedAdjust = { kind: 'none', from: base, steps: [], alreadyTop: false, replaced };
 
   // 중단 후 재개는 항상 같은 등급 — 하향도 하지 않는다.
   if (resuming && !replaced) return { ok: true, grade: base, adjust: { ...adjust, kind: 'resume' }, notify: null };
 
   const floor = floorOf(role, input.task, policy.floors);
   // 최저선은 조정을 마친 최종 후보에 적용한다. 미달이면 올리지 않고 Planning 재판단 대상으로 거부한다.
-  const finish = (grade: Grade, adjusted: GradeAdjust, notify: { count: number } | null): ResolveResult => {
+  const finish = (grade: Grade, adjusted: ResolvedAdjust, notify: { count: number } | null): ResolveResult => {
     // 팀장 고정은 최저선 예외지만, 재판단 재개의 새 등급에는 예외를 두지 않는다.
     const locked = taskGrade.locked && !resuming;
     const below = belowFloor(catalog.agent, { ...grade, locked }, floor);
@@ -108,12 +111,12 @@ export function resolveRunGrade(input: ResolveInput): ResolveResult {
     }
     const alreadyTop = steps.length === 0;
     let notify: { count: number } | null = null;
-    if ((alreadyTop || policy.onRework === 'top') && policy.escNotify > 0) {
+    if ((alreadyTop || policy.onRework === 'top') && policy.notifyAt > 0) {
       const count =
         input.history.filter(
           (a) => a.kind === 'rework' && a.modelId === grade.modelId && a.effort === grade.effort,
         ).length + 1;
-      if (count >= policy.escNotify) notify = { count };
+      if (count >= policy.notifyAt) notify = { count };
     }
     return finish(grade, { ...adjust, kind: 'up', steps, alreadyTop }, notify);
   }

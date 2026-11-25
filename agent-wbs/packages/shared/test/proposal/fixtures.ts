@@ -1,5 +1,5 @@
 import type { Dependency, TaskStatus } from '../../src/domain/index.ts';
-import type { NewTask, ProposalOp, ProposalSnapshot, ProposalTask, JudgedRule, JudgedRules, Judgement } from '../../src/proposal/index.ts';
+import type { NewTask, SimulationOp, ProposalSnapshot, ProposalTask, JudgedRule, JudgedRules, Judgement } from '../../src/proposal/index.ts';
 
 export const ac = (then: string) => ({ given: 'g', when: 'w', then, method: '' });
 
@@ -40,5 +40,5 @@ export function newTask(patch: Partial<NewTask> = {}): NewTask {
   };
 }
 
-export const add = (ref: string, patch: Partial<NewTask> = {}, preds: Pick<Dependency, 'pred' | 'type'>[] = []): ProposalOp =>
+export const add = (ref: string, patch: Partial<NewTask> = {}, preds: Pick<Dependency, 'pred' | 'type'>[] = []): SimulationOp =>
   ({ op: 'add', ref, workPackageId: 'WP-1', task: newTask(patch), preds });

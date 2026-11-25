@@ -1,16 +1,7 @@
 import type { Dependency, Phase, Task } from '../domain/index.ts';
+import type { Agent, Confidence, DesignKind, TechDomain, WorkType } from '../vocabulary.ts';
 
 // Module-local contracts; M1-02/M2-07 adapters translate API and DB rows at the boundary.
-export const WORK_TYPES = [
-  'Analysis', 'Design', 'Implementation', 'Configuration', 'Test', 'Verification', 'Documentation', 'Integration',
-] as const;
-export type WorkType = typeof WORK_TYPES[number];
-export const DOMAINS = ['FE', 'BE', 'DB', 'DevOps', 'API', 'QA', 'Architecture', 'Common'] as const;
-export type TechDomain = typeof DOMAINS[number];
-export const AGENTS = ['Claude', 'Codex'] as const;
-export type Agent = typeof AGENTS[number];
-export type DesignKind = 'DB' | 'API' | 'FE' | 'DevOps';
-
 export interface AcceptanceCriterion {
   given: string;
   when: string;
@@ -75,7 +66,7 @@ interface TaskContent {
   // `items` are the changed design entities; an empty list is only a placeholder section.
   design: readonly { kind: DesignKind; items: readonly string[] }[];
   // A missing estimate stays null: the prototype's 4h default is mock data.
-  estimate: { est: number; lo: number | null; hi: number | null; confidence: '상' | '중' | '하' } | null;
+  estimate: { est: number; lo: number | null; hi: number | null; confidence: Confidence } | null;
   conflictGroup: string | null;
   splitBasis: string;
   judgedRules: JudgedRules | null;
@@ -92,7 +83,8 @@ export type NewTask = RequiredNewTask & Partial<Omit<TaskContent, keyof Required
 
 export type ModifyField = 'priority' | 'title' | 'doneCond' | 'assignee' | 'verifier' | 'scopeAdd' | 'acAdd';
 
-export type ProposalOp =
+// The simulator's input. The stored/wire `ProposalOp` (prototype keys) is the API schema; see api/adapters.ts.
+export type SimulationOp =
   | { op: 'add'; ref: string; workPackageId: string; task: NewTask; preds?: readonly Pick<Dependency, 'pred' | 'type'>[] }
   | { op: 'modify'; task: string; field: ModifyField; after: string | number | AcceptanceCriterion }
   | { op: 'remove'; task: string }
@@ -121,7 +113,7 @@ export interface ProposalIssue {
 
 export interface ProposalDiff {
   index: number;
-  op: ProposalOp['op'];
+  op: SimulationOp['op'];
   target: string;
   field: string;
   before: unknown;

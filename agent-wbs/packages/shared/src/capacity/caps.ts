@@ -1,3 +1,5 @@
+import type { Agent } from '../vocabulary.ts';
+
 /** 권장 상한 공식의 상수(G §6.6). [Mock 추정] 값이라 설정으로 바꿀 수 있게 입력으로 받는다. */
 export interface CapConstants {
   baseGb: number;
@@ -28,7 +30,7 @@ export interface HostSpec {
 
 export interface Caps {
   total: number;
-  perAgent: { Claude: number; Codex: number };
+  perAgent: Record<Agent, number>;
   heavy: number;
 }
 
@@ -75,7 +77,7 @@ export function recommendedCaps(
 }
 
 export interface CapOverrun {
-  key: 'total' | 'heavy' | 'Claude' | 'Codex';
+  key: 'total' | 'heavy' | Agent;
   set: number;
   recommended: number;
 }

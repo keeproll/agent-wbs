@@ -1,13 +1,8 @@
 // Domain-local contracts; API/DB adapters translate their rows at the boundary.
-export const TASK_STATUSES = [
-  'planning', 'approval', 'ready', 'running', 'paused', 'qa',
-  'rework', 'verifying', 'gate', 'failed', 'done', 'cancelled',
-] as const;
-export type TaskStatus = typeof TASK_STATUSES[number];
-export const ATTEMPT_KINDS = ['dev', 'qa', 'rework', 'reverify'] as const;
-export type AttemptKind = typeof ATTEMPT_KINDS[number];
-export type AttemptStatus = 'running' | 'completed' | 'failed' | 'interrupted';
-export type VerificationResult = 'PASS' | 'FAIL' | 'BLOCKED';
+import type { AttemptKind, AttemptStatus, DependencyType, TaskStatus, VerificationResult } from '../vocabulary.ts';
+
+export { ATTEMPT_KINDS, TASK_STATUSES } from '../vocabulary.ts';
+export type { AttemptKind, AttemptStatus, TaskStatus, VerificationResult };
 
 export interface Task {
   id: string;
@@ -17,7 +12,7 @@ export interface Task {
 export interface Dependency {
   pred: string;
   succ: string;
-  type: 'FS' | 'SS';
+  type: DependencyType;
 }
 
 export interface ChecklistItem {

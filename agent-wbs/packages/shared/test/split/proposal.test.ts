@@ -3,7 +3,7 @@ import { TASK_STATUSES } from '../../src/domain/index.ts';
 import { DEFAULT_SPLIT_SETTINGS, proposalJudgementHolds, validateSplitProposal } from '../../src/split/index.ts';
 import type { SplitJudgementInput, SubjectHashes } from '../../src/split/index.ts';
 import { simulateProposal } from '../../src/proposal/index.ts';
-import type { JudgedRules, NewTask, TaskJudgement, ProposalOp, ProposalTask } from '../../src/proposal/index.ts';
+import type { JudgedRules, NewTask, TaskJudgement, SimulationOp, ProposalTask } from '../../src/proposal/index.ts';
 import { ac, add, dep, HASH, JUDGED, judged, judgement, snapshot, SPLIT_JUDGED, task } from '../proposal/fixtures.ts';
 import { original, toSnapshot } from '../proposal/original.ts';
 
@@ -13,7 +13,7 @@ const world = (patch: Partial<ProposalTask> = {}, status: ProposalTask['status']
     [dep('P', 'T'), dep('Q', 'T', 'SS'), dep('T', 'S'), dep('T', 'V', 'SS')]);
 const preds = [{ pred: 'P', type: 'FS' as const }, { pred: 'Q', type: 'SS' as const }];
 
-function cut(first: Partial<NewTask> = {}, second: Partial<NewTask> = {}): ProposalOp[] {
+function cut(first: Partial<NewTask> = {}, second: Partial<NewTask> = {}): SimulationOp[] {
   return [
     add('N1', { ac: [ac('1'), ac('2')], ...first }, preds),
     add('N2', { ac: [ac('3')], ...second }, [{ pred: 'N1', type: 'FS' }]),
@@ -24,9 +24,9 @@ function cut(first: Partial<NewTask> = {}, second: Partial<NewTask> = {}): Propo
 const hashes = Object.fromEntries(['P', 'Q', 'T', 'S', 'V', 'U', 'TASK-0021', 'TASK-0022', 'TASK-0023'].map(id => [id, HASH]));
 const agreed: SplitJudgementInput = { splitSubjectHash: HASH, taskHashes: { before: hashes, after: hashes }, taskJudgements: [],
   splitJudgements: { schemaVersion: 1, items: SPLIT_JUDGED.map(rule => judgement(rule)) } };
-const validate = (base: ReturnType<typeof world>, target: string, ops: readonly ProposalOp[], input = agreed) =>
+const validate = (base: ReturnType<typeof world>, target: string, ops: readonly SimulationOp[], input = agreed) =>
   validateSplitProposal(base, target, ops, input);
-const codes = (base: ReturnType<typeof world>, ops: readonly ProposalOp[]) =>
+const codes = (base: ReturnType<typeof world>, ops: readonly SimulationOp[]) =>
   [...new Set(validate(base, 'T', ops).problems.map(problem => problem.code))];
 
 describe('valid splits', () => {
@@ -42,7 +42,7 @@ describe('valid splits', () => {
 
   test('uncertain only: an analysis Task in front, original kept', () => {
     const uncertain = { estimate: { est: 3, lo: 2, hi: 4, confidence: '하' as const } };
-    const ops: ProposalOp[] = [add('N0', { workType: 'Analysis' }, preds), { op: 'dep-add', pred: 'N0', succ: 'T' }];
+    const ops: SimulationOp[] = [add('N0', { workType: 'Analysis' }, preds), { op: 'dep-add', pred: 'N0', succ: 'T' }];
     expect(codes(world(uncertain), ops)).toEqual([]);
     expect(codes(world(uncertain), ops.slice(0, 1))).toEqual(['ANALYSIS_REQUIRED', 'RULE_VIOLATION']);
     expect(codes(world(uncertain), [add('N0', {}, preds), { op: 'dep-add', pred: 'N0', succ: 'T' }]))
@@ -95,14 +95,14 @@ describe('rejected splits', () => {
       'ORDER_NOT_PRESERVED'],
     ['unrelated edit', [...cut(), { op: 'modify', task: 'S', field: 'title', after: 'x' }], 'OUT_OF_SCOPE'],
     ['unrelated relation', [...cut(), { op: 'dep-add', pred: 'S', succ: 'V' }], 'OUT_OF_SCOPE'],
-  ] as [string, ProposalOp[], string][])('%s', (_name, ops, code) => {
+  ] as [string, SimulationOp[], string][])('%s', (_name, ops, code) => {
     expect(codes(world(), ops)).toEqual([code]);
   });
   test('original kept beside its parts', () => {
     expect(codes(world(), cut().slice(0, 4))).toEqual(['ORIGINAL_NOT_CANCELLED', 'RULE_VIOLATION']);
   });
   test('one part only', () => {
-    const ops: ProposalOp[] = [add('N1', { ac: big.ac }, preds), { op: 'dep-add', pred: 'N1', succ: 'S' },
+    const ops: SimulationOp[] = [add('N1', { ac: big.ac }, preds), { op: 'dep-add', pred: 'N1', succ: 'S' },
       { op: 'dep-add', pred: 'N1', succ: 'V', type: 'SS' }, { op: 'remove', task: 'T' }];
     expect(codes(world(), ops)).toEqual(['TOO_FEW_PARTS']);
   });
@@ -138,13 +138,13 @@ describe('rejected splits', () => {
 
 describe('any proposal: judgement holds only on added or re-hashed Tasks (D-33)', () => {
   const unjudged = snapshot([task('T', 'ready', { judgedRules: null }), task('O', 'ready', { judgedRules: null })]);
-  const holds = (ops: ProposalOp[], after: Record<string, string>, settings = DEFAULT_SPLIT_SETTINGS) =>
+  const holds = (ops: SimulationOp[], after: Record<string, string>, settings = DEFAULT_SPLIT_SETTINGS) =>
     proposalJudgementHolds(unjudged, simulateProposal(unjudged, ops), { before: { T: 'a', O: 'a' }, after }, [], settings);
   test('priority change leaves the hash alone and is not held', () => {
     expect(holds([{ op: 'modify', task: 'T', field: 'priority', after: 0 }], { T: 'a', O: 'a' })).toEqual([]);
   });
   test('changed content, a new Task and an unknown hash are held per enabled rule', () => {
-    const title: ProposalOp[] = [{ op: 'modify', task: 'T', field: 'title', after: 'x' }];
+    const title: SimulationOp[] = [{ op: 'modify', task: 'T', field: 'title', after: 'x' }];
     const changed = holds(title, { T: 'b', O: 'a' });
     expect(changed.map(item => [item.code, item.taskKey, item.rule])).toEqual(JUDGED.map(rule => ['JUDGEMENT_MISSING', 'T', rule]));
     expect(holds([add('N', { judgedRules: null })], { T: 'a', O: 'a', 'TASK-0021': HASH })).toHaveLength(3);
@@ -162,7 +162,7 @@ describe('any proposal: judgement holds only on added or re-hashed Tasks (D-33)'
 
 describe('taskJudgements: judgement of existing Tasks carried by the CP (data-model §2.3-1)', () => {
   const at = (subjectHash: string, result: 'met' | 'not_met' = 'met') => judged(JUDGED, { subjectHash, result });
-  const title: ProposalOp[] = [{ op: 'modify', task: 'T', field: 'title', after: 'x' }];
+  const title: SimulationOp[] = [{ op: 'modify', task: 'T', field: 'title', after: 'x' }];
   const run = (stored: JudgedRules | null, taskJudgements: readonly TaskJudgement[], ops = title, hashes: SubjectHashes =
   { before: { T: 'before' }, after: { T: 'after', 'TASK-0021': 'new' } }) => {
     const base = snapshot([task('T', 'ready', { judgedRules: stored })]);
@@ -196,8 +196,8 @@ describe('taskJudgements: judgement of existing Tasks carried by the CP (data-mo
     const all = ['VALIDATION_FAILED'];
     const same = { before: { T: 'before', O: 'o' }, after: { T: 'before', O: 'o', 'TASK-0021': 'new' } };
     const changed = { ...same, after: { ...same.after, T: 'after' } };
-    const priority: ProposalOp[] = [{ op: 'modify', task: 'T', field: 'priority', after: 0 }];
-    const holds = (ops: ProposalOp[], list: readonly unknown[], hashes: SubjectHashes, settings = DEFAULT_SPLIT_SETTINGS) => {
+    const priority: SimulationOp[] = [{ op: 'modify', task: 'T', field: 'priority', after: 0 }];
+    const holds = (ops: SimulationOp[], list: readonly unknown[], hashes: SubjectHashes, settings = DEFAULT_SPLIT_SETTINGS) => {
       const base = snapshot([task('T', 'ready', { judgedRules: at('after') }), task('O'), task('D', 'done')]);
       return proposalJudgementHolds(base, simulateProposal(base, ops),
         { before: { ...hashes.before, D: 'd' }, after: { ...hashes.after, D: 'd' } }, list as TaskJudgement[], settings);
@@ -251,7 +251,7 @@ describe('taskJudgements: judgement of existing Tasks carried by the CP (data-mo
 });
 
 describe('execution order (owner decision): equivalent indirect paths pass, lost order holds', () => {
-  const edit = (ref: string, list: typeof preds) => (op: ProposalOp): ProposalOp =>
+  const edit = (ref: string, list: typeof preds) => (op: SimulationOp): SimulationOp =>
     op.op === 'add' && op.ref === ref ? { ...op, preds: list } : op;
   test('parallel parts, each fully reconnected', () => {
     const ops = [...cut().map(edit('N2', preds)), { op: 'dep-add', pred: 'N1', succ: 'S' } as const];
@@ -282,7 +282,7 @@ describe('execution order (owner decision): equivalent indirect paths pass, lost
   });
   test('a kept original may move its predecessor behind research, not lose it', () => {
     const kept = { estimate: { est: 3, lo: 2, hi: 4, confidence: '하' as const } };
-    const ops = (list: typeof preds): ProposalOp[] => [add('R', { workType: 'Analysis' }, list),
+    const ops = (list: typeof preds): SimulationOp[] => [add('R', { workType: 'Analysis' }, list),
       { op: 'dep-add', pred: 'R', succ: 'T' }, { op: 'dep-remove', pred: 'P', succ: 'T' }];
     expect(codes(world(kept), ops(preds))).toEqual([]);
     expect(codes(world(kept), ops(preds.slice(1)))).toEqual(['ORDER_NOT_PRESERVED']);
@@ -294,7 +294,7 @@ describe('research must really precede the result (G§5.2-1 rule 10)', () => {
   const uncertain = { estimate: { ...big.estimate, confidence: '하' as const } };
   const research = add('R', { workType: 'Analysis' }, preds);
   const after = (pred: string, type: 'FS' | 'SS' = 'FS') => ({ pred, type });
-  const plan = (first: typeof preds, second: typeof preds, rest: ProposalOp[] = []): ProposalOp[] =>
+  const plan = (first: typeof preds, second: typeof preds, rest: SimulationOp[] = []): SimulationOp[] =>
     [research, add('N1', { ac: [ac('1'), ac('2')] }, first), add('N2', { ac: [ac('3')] }, second), ...cut().slice(2), ...rest];
 
   test.each([
@@ -328,12 +328,12 @@ test('original demo proposeSplit output: structure and relations hold, result sa
   const data = original.load();
   const base = toSnapshot(data);
   interface Old { op: string; ref?: string; t?: Record<string, unknown> & { wp: string; est: number; lo: number; hi: number } }
-  const convert = (raw: unknown): ProposalOp => {
+  const convert = (raw: unknown): SimulationOp => {
     const op = raw as Old;
-    if (op.op !== 'add' || !op.t) return raw as ProposalOp;
+    if (op.op !== 'add' || !op.t) return raw as SimulationOp;
     const { wp, est, lo, hi, type, domain, rel, basis, conf, ...rest } = op.t;
     return { ...op, op: 'add', workPackageId: wp, task: { ...rest, workType: type, primaryDomain: domain, relatedDomains: rel,
-      splitBasis: basis, estimate: { est, lo, hi, confidence: conf } } as unknown as NewTask } as ProposalOp;
+      splitBasis: basis, estimate: { est, lo, hi, confidence: conf } } as unknown as NewTask } as SimulationOp;
   };
   const all = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`TASK-${String(i + 1).padStart(4, '0')}`, HASH]));
   const run = (id: string) => validateSplitProposal(base, id, original.splitOps(data, id).map(convert),

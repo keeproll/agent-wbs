@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { expect, test } from 'vitest';
 import { EFFORT_MAP, effortLevel, effortValue } from '../../src/grade/index.ts';
-import type { AgentName, EffortLevel } from '../../src/grade/index.ts';
+import type { Agent, EffortLevel } from '../../src/grade/index.ts';
 
 const DOC = readFileSync(
   new URL('../../../../../docs/plan/open-questions.md', import.meta.url),
@@ -24,9 +24,9 @@ const approved = rows.filter((r) => r[2] === 'low');
 test('owner 승인 Q-06 표의 모든 모델·단계와 일치하고 그 밖의 모델은 없다', () => {
   expect(rows).toHaveLength(6);
   expect(approved).toHaveLength(4);
-  const seen: Record<AgentName, string[]> = { Claude: [], Codex: [] };
+  const seen: Record<Agent, string[]> = { Claude: [], Codex: [] };
   for (const r of approved) {
-    const agent = r[0] as AgentName;
+    const agent = r[0] as Agent;
     for (const id of modelIds(r[1] ?? '')) {
       seen[agent].push(id);
       r.slice(2, 7).forEach((cell, i) => {

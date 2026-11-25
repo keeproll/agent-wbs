@@ -1,10 +1,11 @@
 import { assertDependency, blockers, cancelBeforeStart, displayKey, DomainError } from '../domain/index.ts';
 import type { Dependency } from '../domain/index.ts';
 import { proposalImpact } from './impact.ts';
-import { AGENTS, DOMAINS, WORK_TYPES } from './types.ts';
+import { AGENTS, DEPENDENCY_TYPES, DOMAINS, WORK_TYPES } from '../vocabulary.ts';
+import type { DesignKind, TechDomain } from '../vocabulary.ts';
 import type {
-  AcceptanceCriterion, DesignKind, ModifyField, NewTask, ProposalDiff, ProposalIssue, ProposalIssueCode, ProposalOp,
-  ProposalSimulation, ProposalSnapshot, ProposalTask, RemovedDependency, TechDomain,
+  AcceptanceCriterion, ModifyField, NewTask, ProposalDiff, ProposalIssue, ProposalIssueCode, 
+  ProposalSimulation, ProposalSnapshot, ProposalTask, RemovedDependency, SimulationOp,
 } from './types.ts';
 
 const DOMAIN_TO_DESIGN: Partial<Record<TechDomain, DesignKind>> = {
@@ -26,7 +27,7 @@ const validTitle = (value: unknown) => filled(value) && value.length <= 200;
 const validPriority = (value: unknown) => Number.isInteger(value) && Number(value) >= 0 && Number(value) <= 3;
 const oneOf = (values: readonly string[], value: unknown) => values.includes(value as string);
 const validAc = (ac: AcceptanceCriterion) => filled(ac.then);
-const validDepType = (type: unknown) => type === 'FS' || type === 'SS';
+const validDepType = (type: unknown) => oneOf(DEPENDENCY_TYPES, type);
 const sameAc = (a: AcceptanceCriterion, b: AcceptanceCriterion) =>
   a.given === b.given && a.when === b.when && a.then === b.then;
 
@@ -64,7 +65,7 @@ function createTask(id: string, task: NewTask): ProposalTask {
 }
 
 /** The single function behind both preview and apply. A non-empty `issues` means hold; never persist `next` then. */
-export function simulateProposal(base: ProposalSnapshot, ops: readonly ProposalOp[]): ProposalSimulation {
+export function simulateProposal(base: ProposalSnapshot, ops: readonly SimulationOp[]): ProposalSimulation {
   const tasks = new Map(base.tasks.map(task => [task.id, task]));
   const phases = base.phases.map(phase => ({ ...phase, wps: phase.wps.map(wp => ({ ...wp, tasks: [...wp.tasks] })) }));
   const idMap = new Map<string, string>();

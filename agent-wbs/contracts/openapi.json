@@ -981,7 +981,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "ACTIVE_TASK_BLOCKED, DEPENDENCY_CYCLE, DEPENDENCY_DUPLICATE, IDEMPOTENCY_CONFLICT, VERSION_CONFLICT"
+            "description": "ACTIVE_TASK_BLOCKED, DEPENDENCY_CYCLE, DEPENDENCY_DUPLICATE, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, VERSION_CONFLICT"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -1011,6 +1011,7 @@
             "DEPENDENCY_CYCLE",
             "DEPENDENCY_DUPLICATE",
             "IDEMPOTENCY_CONFLICT",
+            "INVALID_TRANSITION",
             "VERSION_CONFLICT"
           ],
           "500": [
@@ -39410,25 +39411,97 @@
           "warnings": {
             "type": "array",
             "items": {
-              "type": "object",
-              "required": [
-                "code",
-                "agent"
-              ],
-              "properties": {
-                "code": {
-                  "enum": [
-                    "USAGE_RESET_UNKNOWN"
-                  ]
-                },
-                "agent": {
-                  "$ref": "#/components/schemas/Agent"
-                }
-              }
+              "$ref": "#/components/schemas/ScheduleWarning"
             }
           }
         },
         "title": "Schedule"
+      },
+      "ScheduleWarning": {
+        "anyOf": [
+          {
+            "type": "object",
+            "required": [
+              "code",
+              "agent"
+            ],
+            "properties": {
+              "code": {
+                "enum": [
+                  "USAGE_RESET_UNKNOWN"
+                ]
+              },
+              "agent": {
+                "$ref": "#/components/schemas/Agent"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "code",
+              "taskKey",
+              "field",
+              "before",
+              "after"
+            ],
+            "properties": {
+              "code": {
+                "enum": [
+                  "CLOCK_SKEW_CLAMPED"
+                ]
+              },
+              "taskKey": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "actStart",
+                  "actEnd"
+                ]
+              },
+              "before": {
+                "type": "string"
+              },
+              "after": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "code",
+              "sessionFrom",
+              "field",
+              "before",
+              "after"
+            ],
+            "properties": {
+              "code": {
+                "enum": [
+                  "CLOCK_SKEW_CLAMPED"
+                ]
+              },
+              "sessionFrom": {
+                "type": "string"
+              },
+              "field": {
+                "enum": [
+                  "lastHeartbeatAt",
+                  "to"
+                ]
+              },
+              "before": {
+                "type": "string"
+              },
+              "after": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "title": "ScheduleWarning"
       },
       "Sha": {
         "type": "string",

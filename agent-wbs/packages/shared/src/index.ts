@@ -1,5 +1,6 @@
 export * from './errors.ts';
 export * from './health.ts';
+export * from './vocabulary.ts';
 export * from './domain/index.ts';
 export * from './schedule/index.ts';
 export * from './proposal/index.ts';

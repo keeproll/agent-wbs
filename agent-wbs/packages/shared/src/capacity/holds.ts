@@ -1,4 +1,4 @@
-type AgentName = 'Claude' | 'Codex';
+import type { Agent } from '../vocabulary.ts';
 
 export type ObservationGrade = 'verified' | 'partial' | 'unverified';
 
@@ -56,7 +56,7 @@ export const heldSlots = (s: SessionObservation): number => 1 + heldSubagents(s)
 export interface HoldRow {
   jobId: string;
   hostId: string | null;
-  agent: AgentName;
+  agent: Agent;
   slots: number;
   heavy: boolean;
   slotState: 'none' | 'reserved' | 'active' | 'unconfirmed';
@@ -64,7 +64,7 @@ export interface HoldRow {
 
 export interface HeldTotals {
   total: number;
-  perAgent: Record<AgentName, number>;
+  perAgent: Record<Agent, number>;
   heavy: number;
   /** 종료를 확인하지 못한 job */
   unconfirmedJobs: string[];

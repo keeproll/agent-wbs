@@ -1,14 +1,17 @@
+import type { Dependency } from '../domain/types.ts';
+import type { Agent, TaskStatus } from '../vocabulary.ts';
+
+export type { Agent, Dependency };
+
 export const STAGE_PCT = {
   planning: 0, approval: 0, ready: 0, failed: 20, running: 35, paused: 40,
   rework: 50, qa: 65, verifying: 80, gate: 90, done: 100, cancelled: 0,
-} as const;
-
-export type Agent = 'Claude' | 'Codex';
+} as const satisfies Record<TaskStatus, number>;
 
 export interface ScheduleTask {
   id: string;
   wbs: string;
-  status: keyof typeof STAGE_PCT;
+  status: TaskStatus;
   priority: number;
   assignee: Agent;
   est: number;
@@ -18,12 +21,6 @@ export interface ScheduleTask {
   fixStart?: string;
   actStart?: string;
   actEnd?: string;
-}
-
-export interface Dependency {
-  pred: string;
-  succ: string;
-  type: 'FS' | 'SS';
 }
 
 // Instants are UTC/offset ISO strings; calendar dates and day boundaries use Asia/Seoul.

@@ -1,7 +1,7 @@
 import type {
   JudgedRule, JudgedRules, ProposalSimulation, ProposalSnapshot, ProposalTask, SplitJudgementRule, SplitJudgements, TaskJudgement,
 } from '../proposal/index.ts';
-import { AGENTS } from '../proposal/types.ts';
+import { AGENTS } from '../vocabulary.ts';
 import type { SplitSettings } from './check.ts';
 
 export type JudgementState = 'met' | 'not_met' | 'missing';
