@@ -216,7 +216,8 @@
          "assignee": "Claude",
          "verifier": "Codex",
          "purpose": "",
-         "doneCond": "통과"
+         "doneCond": "통과",
+         "splitBasis": "조회 API 하나 · 주 영역 BE · 테스트 포함"
         },
         "preds": []
        },
@@ -232,7 +233,8 @@
          "assignee": "Claude",
          "verifier": "Codex",
          "purpose": "",
-         "doneCond": "통과"
+         "doneCond": "통과",
+         "splitBasis": "수정 API 하나 · 주 영역 BE · 테스트 포함"
         },
         "preds": []
        },

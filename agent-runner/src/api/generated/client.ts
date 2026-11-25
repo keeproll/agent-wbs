@@ -69,7 +69,7 @@ export type ClaimedJob = {
       splitTasks: null;
     } | {
       id: Id;
-      ops: (LeadProposalOp)[];
+      ops: (LeadSplitProposalOp)[];
       targets: ({
         target: TaskKey;
         subjectHash: Sha256;
@@ -293,6 +293,96 @@ export type LeadProposalOp = {
       method?: string;
     })[];
     srcV?: number;
+    splitBasis?: string;
+  };
+  preds: ({
+    pred: Id;
+    type: DepType;
+  })[];
+} | {
+  op: "modify";
+  task: TaskKey;
+  field: "title";
+  before?: unknown;
+  after: string;
+} | {
+  op: "modify";
+  task: TaskKey;
+  field: "doneCond";
+  before?: unknown;
+  after: string;
+} | {
+  op: "modify";
+  task: TaskKey;
+  field: "scopeAdd";
+  before?: unknown;
+  after: string;
+} | {
+  op: "modify";
+  task: TaskKey;
+  field: "acAdd";
+  before?: unknown;
+  after: string;
+} | {
+  op: "modify";
+  task: TaskKey;
+  field: "priority";
+  before?: unknown;
+  after: number;
+} | {
+  op: "modify";
+  task: TaskKey;
+  field: "assignee";
+  before?: unknown;
+  after: Agent;
+} | {
+  op: "modify";
+  task: TaskKey;
+  field: "verifier";
+  before?: unknown;
+  after: Agent;
+} | {
+  op: "remove";
+  task: TaskKey;
+} | {
+  op: "dep-add";
+  pred: Id;
+  succ: Id;
+  type: DepType;
+} | {
+  op: "dep-remove";
+  pred: Id;
+  succ: Id;
+};
+
+export type LeadSplitProposalOp = {
+  op: "add";
+  ref: string;
+  t: {
+    title: string;
+    type: WorkType;
+    domain: Domain;
+    rel?: (Domain)[];
+    wp: Id;
+    priority: number;
+    assignee: Agent;
+    verifier: Agent;
+    purpose: string;
+    doneCond: string;
+    est?: number;
+    lo?: number;
+    hi?: number;
+    tok?: number;
+    conf?: Confidence;
+    basis?: string;
+    ac?: ({
+      given: string;
+      when: string;
+      then: string;
+      method?: string;
+    })[];
+    srcV?: number;
+    splitBasis: string;
   };
   preds: ({
     pred: Id;
@@ -383,6 +473,107 @@ export type PlanningProposalOp = {
       method?: string;
     })[];
     srcV?: number;
+    splitBasis?: string;
+    judgedRules?: {
+      schemaVersion: 1;
+      items: ({
+        rule: "revert" | "contract" | "refactor";
+        result: "met" | "not_met";
+        agreedBy: (Agent)[];
+        basis: string;
+        judgedAt: Timestamp;
+        sourceRef: string;
+      })[];
+    };
+  };
+  preds: ({
+    pred: Id;
+    type: DepType;
+  })[];
+} | {
+  op: "modify";
+  task: TaskKey;
+  field: "title";
+  before?: unknown;
+  after: string;
+} | {
+  op: "modify";
+  task: TaskKey;
+  field: "doneCond";
+  before?: unknown;
+  after: string;
+} | {
+  op: "modify";
+  task: TaskKey;
+  field: "scopeAdd";
+  before?: unknown;
+  after: string;
+} | {
+  op: "modify";
+  task: TaskKey;
+  field: "acAdd";
+  before?: unknown;
+  after: string;
+} | {
+  op: "modify";
+  task: TaskKey;
+  field: "priority";
+  before?: unknown;
+  after: number;
+} | {
+  op: "modify";
+  task: TaskKey;
+  field: "assignee";
+  before?: unknown;
+  after: Agent;
+} | {
+  op: "modify";
+  task: TaskKey;
+  field: "verifier";
+  before?: unknown;
+  after: Agent;
+} | {
+  op: "remove";
+  task: TaskKey;
+} | {
+  op: "dep-add";
+  pred: Id;
+  succ: Id;
+  type: DepType;
+} | {
+  op: "dep-remove";
+  pred: Id;
+  succ: Id;
+};
+
+export type PlanningSplitProposalOp = {
+  op: "add";
+  ref: string;
+  t: {
+    title: string;
+    type: WorkType;
+    domain: Domain;
+    rel?: (Domain)[];
+    wp: Id;
+    priority: number;
+    assignee: Agent;
+    verifier: Agent;
+    purpose: string;
+    doneCond: string;
+    est?: number;
+    lo?: number;
+    hi?: number;
+    tok?: number;
+    conf?: Confidence;
+    basis?: string;
+    ac?: ({
+      given: string;
+      when: string;
+      then: string;
+      method?: string;
+    })[];
+    srcV?: number;
+    splitBasis: string;
     judgedRules?: {
       schemaVersion: 1;
       items: ({
@@ -1728,13 +1919,6 @@ export interface Operations {
       body: {
         jobId: Id;
         fence: number;
-        title: string;
-        reason: string;
-        source: {
-          kind: "planning" | "message" | "manual" | "split" | "input" | "decision";
-          id?: Id;
-        };
-        ops: (PlanningProposalOp)[];
         splitJudgements?: {
           schemaVersion: 1;
           items: ({
@@ -1760,6 +1944,48 @@ export interface Operations {
             })[];
           };
         })[];
+        title: string;
+        reason: string;
+        source: {
+          kind: "planning" | "message" | "manual" | "input" | "decision";
+          id?: Id;
+        };
+        ops: (PlanningProposalOp)[];
+      } | {
+        jobId: Id;
+        fence: number;
+        splitJudgements?: {
+          schemaVersion: 1;
+          items: ({
+            rule: "ac_meaning" | "layer_order" | "test_included";
+            result: "met" | "not_met";
+            agreedBy: (Agent)[];
+            basis: string;
+            judgedAt: Timestamp;
+            sourceRef: string;
+          })[];
+        };
+        taskJudgements?: ({
+          taskKey: TaskKey;
+          judgedRules: {
+            schemaVersion: 1;
+            items: ({
+              rule: "revert" | "contract" | "refactor";
+              result: "met" | "not_met";
+              agreedBy: (Agent)[];
+              basis: string;
+              judgedAt: Timestamp;
+              sourceRef: string;
+            })[];
+          };
+        })[];
+        title: string;
+        reason: string;
+        source: {
+          kind: "split";
+          id?: Id;
+        };
+        ops: (PlanningSplitProposalOp)[];
       };
       epoch: number;
       idempotencyKey: string;

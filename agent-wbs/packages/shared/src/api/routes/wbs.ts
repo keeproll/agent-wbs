@@ -438,12 +438,7 @@ const planning = [
     method: 'POST',
     path: '/api/proposals',
     summary: 'Change Proposal 작성',
-    body: Body({
-      title: Text,
-      reason: Text,
-      source: Body({ kind: m.ProposalSource, id: Opt(c.Id) }),
-      ops: List(m.LeadProposalOp, { minItems: 1 }),
-    }),
+    body: m.proposalBody({}, m.LeadProposalOp, m.LeadSplitProposalOp),
     responses: { 201: m.Proposal },
   }),
   operation({

@@ -1077,7 +1077,8 @@
       "assignee": "Claude",
       "verifier": "Codex",
       "purpose": "목적",
-      "doneCond": "완료 조건"
+      "doneCond": "완료 조건",
+      "splitBasis": "응답 수신 처리 하나 · 주 영역 BE · 테스트 포함"
      },
      "preds": [
       {

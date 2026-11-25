@@ -27,6 +27,7 @@ interface WireTask {
   basis?: string;
   ac?: readonly (Omit<AcceptanceCriterion, 'method'> & { method?: string })[];
   srcV?: number;
+  splitBasis?: string;
   judgedRules?: JudgedRules;
 }
 export type WireProposalOp =
@@ -53,7 +54,7 @@ export function simulationOp(op: WireProposalOp): SimulationOp {
     priority: t.priority, assignee: t.assignee, verifier: t.verifier, purpose: t.purpose, doneCond: t.doneCond,
     ac: (t.ac ?? []).map((item) => ({ ...item, method: item.method ?? '' })),
     estimate: t.est === undefined ? null : { est: t.est, lo: t.lo ?? null, hi: t.hi ?? null, confidence: t.conf ?? '하' },
-    judgedRules: t.judgedRules ?? null,
+    splitBasis: t.splitBasis ?? '', judgedRules: t.judgedRules ?? null,
   };
   return { op: 'add', ref: op.ref, workPackageId: t.wp, task, preds: op.preds.map((item) => ({ ...item })) };
 }

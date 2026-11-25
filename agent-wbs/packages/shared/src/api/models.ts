@@ -26,6 +26,8 @@ export const JudgedRules = judgements(c.Body({ rule: splitRule, ...judgement, su
 export const SplitJudgements = judgements(c.Body({ rule: cpRule, ...judgement, subjectHash }));
 
 /* ---- Change Proposal 변경(P `ops`, G§5.6). 저장·시뮬레이션이 P의 키를 그대로 쓴다. ---- */
+/** Task별 분할 근거(G§5.2-1). 초안 Task와 CP가 추가하는 Task가 같은 정의를 쓴다. */
+const splitBasis = Text;
 const proposedTask = {
   title: Type.String({ minLength: 1, maxLength: 200 }),
   type: c.WorkType,
@@ -45,6 +47,7 @@ const proposedTask = {
   basis: Opt(Type.String()),
   ac: Opt(List(c.Body({ given: Text, when: Text, then: Text, method: Opt(Type.String()) }))),
   srcV: Opt(c.Count),
+  splitBasis: Opt(splitBasis),
 };
 const ModifyOp = (field: string, after: Parameters<typeof Opt>[0]) =>
   c.Body({ op: AnyOf('modify'), task: c.TaskKey, field: AnyOf(field), before: Opt(Type.Unknown()), after });
@@ -74,6 +77,9 @@ export const ProposalOp = proposalOp('ProposalOp', { judgedRules: Opt(JudgedRule
 /** 팀장 작성: 판단 기록은 쓸 수 없다. */
 export const LeadProposalOp = proposalOp('LeadProposalOp', {});
 export const PlanningProposalOp = proposalOp('PlanningProposalOp', { judgedRules: Opt(NewJudgedRules) });
+/** 분할 CP(source.kind=split)의 추가 Task는 분할 근거가 필수다. */
+export const LeadSplitProposalOp = proposalOp('LeadSplitProposalOp', { splitBasis });
+export const PlanningSplitProposalOp = proposalOp('PlanningSplitProposalOp', { splitBasis, judgedRules: Opt(NewJudgedRules) });
 
 /** 자동 반영은 held, 수동 승인·반영은 409(contracts §2.1) */
 export const HoldReason = Type.Object(
@@ -389,6 +395,12 @@ export const ProposalStatus = AnyOf(
   'draft', 'review', 'changes', 'approved', 'rejected', 'applied', 'held',
 );
 export const ProposalSource = AnyOf('planning', 'message', 'manual', 'split', 'input', 'decision');
+/** CP 제출 본문. 분할 CP만 추가 Task에 분할 근거를 요구한다. */
+export const proposalBody = <T extends TProperties, O extends TSchema, S extends TSchema>(extra: T, op: O, splitOp: S) => {
+  const body = <K extends TSchema, I extends TSchema>(kind: K, item: I) =>
+    c.Body({ ...extra, title: Text, reason: Text, source: c.Body({ kind, id: Opt(c.Id) }), ops: List(item, { minItems: 1 }) });
+  return Type.Union([body(AnyOf('planning', 'message', 'manual', 'input', 'decision'), op), body(AnyOf('split'), splitOp)]);
+};
 export const Proposal = Type.Object(
   {
     id: c.Id,
@@ -610,7 +622,7 @@ const draftTask = <T extends TSchema>(judgedRules: T) => c.Body({
   checklist: List(c.Body(ChecklistInput)),
   grades: roleGrades,
   subagents: roleSubagents,
-  splitBasis: Text,
+  splitBasis,
   judgedRules: Opt(judgedRules),
   conflictGroup: Nullable(Text),
   designItems: List(c.Body({ itemKey: Text, change: Text })),

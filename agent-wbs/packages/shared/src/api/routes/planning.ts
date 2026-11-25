@@ -108,17 +108,17 @@ export const planningOperations = [
     method: 'POST',
     path: '/api/planning/proposals',
     summary: 'Change Proposal 제출(정책에 따라 자동 반영/보류/검토)',
-    body: Body({
-      ...Job,
-      title: Text,
-      reason: Text,
-      source: Body({ kind: m.ProposalSource, id: Opt(c.Id) }),
-      ops: List(m.PlanningProposalOp, { minItems: 1 }),
-      // 분할 CP의 AC 의미·계층 순서·테스트 포함 판단(D-34)
-      splitJudgements: Opt(m.NewSplitJudgements),
-      // 내용이 바뀌는 기존 Task의 변경 후 판단(D-33). 새 Task는 add의 t.judgedRules에 쓴다.
-      taskJudgements: Opt(List(Body({ taskKey: c.TaskKey, judgedRules: m.NewJudgedRules }))),
-    }),
+    body: m.proposalBody(
+      {
+        ...Job,
+        // 분할 CP의 AC 의미·계층 순서·테스트 포함 판단(D-34)
+        splitJudgements: Opt(m.NewSplitJudgements),
+        // 내용이 바뀌는 기존 Task의 변경 후 판단(D-33). 새 Task는 add의 t.judgedRules에 쓴다.
+        taskJudgements: Opt(List(Body({ taskKey: c.TaskKey, judgedRules: m.NewJudgedRules }))),
+      },
+      m.PlanningProposalOp,
+      m.PlanningSplitProposalOp,
+    ),
     responses: { 201: Type.Object({ id: c.Id, cpKey: Type.String(), status: m.ProposalStatus }) },
   }),
   operation({
