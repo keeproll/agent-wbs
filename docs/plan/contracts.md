@@ -32,7 +32,7 @@ G§8이 정한 경로·의미는 그대로 두고 빈 곳을 **보강**(★)한�
 | 400 | `VALIDATION_FAILED` `DEPENDENCY_SELF` `LIMIT_EXCEEDS_CAP` | 수정 안내, 재시도 없음 |
 | 401/403 | 위 표 | Runner는 중지·경보 |
 | 404 | `TASK_NOT_FOUND` `PROJECT_NOT_FOUND` `WBS_NODE_NOT_FOUND` `DEPENDENCY_NOT_FOUND` `ATTEMPT_NOT_FOUND` `MESSAGE_NOT_FOUND` | 안내 |
-| 409 | `VERSION_CONFLICT` `EPOCH_MISMATCH` `DEPENDENCY_DUPLICATE` `DEPENDENCY_CYCLE` `TASK_HAS_SUCCESSORS` `PROJECT_EXISTS` `INPUT_UNCHANGED` `ATTEMPT_CLOSED` `SCHEDULE_CYCLE` `INVALID_TRANSITION`★ `GATE_NOT_PASSED`★ `CLAIM_REJECTED`★ `LEASE_LOST`★ `CLEANUP_PENDING`★ `IDEMPOTENCY_CONFLICT`★ `DECISIONS_PENDING`★ | 재시도하지 않고 최신 조회 |
+| 409 | `VERSION_CONFLICT` `EPOCH_MISMATCH` `DEPENDENCY_DUPLICATE` `DEPENDENCY_CYCLE` `TASK_HAS_SUCCESSORS` `EXTERNAL_WRITE_BLOCKED`★ `PROJECT_EXISTS` `INPUT_UNCHANGED` `ATTEMPT_CLOSED` `SCHEDULE_CYCLE` `INVALID_TRANSITION`★ `GATE_NOT_PASSED`★ `CLAIM_REJECTED`★ `LEASE_LOST`★ `CLEANUP_PENDING`★ `IDEMPOTENCY_CONFLICT`★ `DECISIONS_PENDING`★ | 재시도하지 않고 최신 조회 |
 | 412 | — 사용 안 함(409로 통일) | |
 | 422 | `SUBAGENT_INSTALL_FAILED`(job 결과 코드) | 시도 시작 안 함 |
 | 429 | `RATE_LIMITED`★ | `Retry-After` |
@@ -163,7 +163,9 @@ POST /api/runner/jobs/claim {kinds[],capacity} → 200 {job:{id,kind,payload,lea
 POST /api/runner/jobs/:id/renew {fence}  → {leaseUntil}         409 LEASE_LOST
 POST /api/runner/jobs/:id/start {fence,hostId,bootId,processGroup?,headSha,installedSubagents[]} → {attemptId?}
 POST /api/runner/jobs/:id/process {fence,processGroup,cgroup}      → 프로세스 생성 직후 보유에 기록
-POST /api/runner/jobs/:id/release {fence,hostId,proof,at}            → 보유 해제(낡은 fence도 허용, 아래)
+POST /api/runner/jobs/:id/slots/release {fence,hostId,proof,at}      → 물리 슬롯만 반환, 논리 잠금 유지
+POST /api/runner/jobs/:id/slots/acquire {fence,hostId,processGroup}  → 같은 시도의 CLI 재기동 전 용량 재획득·그룹 등록
+POST /api/runner/jobs/:id/release {fence,hostId,proof,at}            → 잔여 보유 해제(낡은 fence도 허용, 아래)
 POST /api/runner/jobs/:id/reconcile {fence,evidence}                  → 외부 상태 대조 결과
 POST /api/runner/jobs/:id/finish {fence,status,result?,error?}
 ```
@@ -181,7 +183,7 @@ POST /api/runner/jobs/:id/finish {fence,status,result?,error?}
 규칙:
 
 1. 정리 명령이 남아 있으면 claim은 409 CLEANUP_PENDING.
-2. `attempt` claim 시 서버가 한 트랜잭션에서 선행·Task 상태·상한·Agent 상한·충돌 묶음·readiness·사용량·관측 미확인·등급과 **미해제 보유**를 확인하고 슬롯·충돌 묶음을 `reserved`로 예약한다. 시도는 아직 만들지 않는다. 설치 성공 뒤 `start`가 같은 조건을 재확인하고 시도 생성·Task 전이를 한 트랜잭션으로 처리한다. claim 실패 시 job은 대기하고 `reasons[]`를 화면에 보인다(§4.6).
+2. `attempt` claim 시 서버가 한 트랜잭션에서 선행·Task 상태·상한·Agent 상한·충돌 묶음·readiness·사용량·관측 미확인·등급과 **미해제 보유**를 확인하고 슬롯·충돌 묶음을 `reserved`로 예약한다. 시도는 아직 만들지 않는다. 설치 성공 뒤 `start`는 **같은 job·fence·host가 소유한 reserved 보유만 자기 예약으로 인정**하고, 다른 job의 보유와 전체 용량(자기 예약은 1회만 계산)을 다시 검사한 뒤 보유 `reserved→active`·시도 생성·Task 전이를 한 트랜잭션으로 처리한다. 중복 start는 같은 attemptId를 재생하고 전환은 1회다. claim 실패 시 job은 대기하고 `reasons[]`를 화면에 보인다(§4.6).
 3. lease 60초, 20초마다 renew [결정]. lease 만료는 **자원 해제가 아니다**. 조회 전용 job(`repo_check`)만 바로 재할당한다. attempt와 외부 효과 job은 §3.4.
 4. 모든 보고는 `fence`를 포함하고 낡은 fence는 409 LEASE_LOST. 예외: `release`는 **원래 job·host·boot·process group이 일치**할 때 낡은 fence도 받되 보유 해제 외 상태는 바꾸지 않는다.
 5. 야간 점검과 입력 변경 확인은 Runner가 `policy` 시각으로 시작한다. 중복은 멱등 키 `night:<date>`로 막는다.
@@ -205,15 +207,22 @@ POST /api/runner/jobs/:id/finish {fence,status,result?,error?}
 2. 해제 증거: `no_process`(프로세스를 만든 적 없음), `group_empty`(Runner가 그룹·자손 empty 확인), `boot_changed`(같은 host의 boot ID 변경 — 이전 프로세스가 존재할 수 없음). 출력 단절·lease 만료·시간 경과는 증거가 아니다.
 3. Runner는 프로세스 생성 **전에** 예정된 그룹/cgroup 이름을 로컬에 영속화한다. 재시작 시 로컬 기록과 서버 보유를 대조해 정리하고 release한다. 기록이 없거나 확인할 수 없으면 `unconfirmed`를 유지하고 알린다.
 4. 같은 PC에서 증거 없이 보유를 푸는 강제 API는 두지 않는다.
-5. **PC 변경**: §6.6 L749-751이 새 PC에서 새 시도 재개를 확정했으므로, 이전 host 보유는 `unconfirmed`로 남기되 새 host의 슬롯 계산과 재개 차단에서 제외한다. 대신 이전 fence를 폐기하고 Runner는 push·PR·병합 직전에 `renew`로 fence를 확인한다. 이전 시도와 다른 head/worktree를 쓰고, 실패 시 외부 효과를 내지 않는다. host 식별자 변경 없는 단순 재시작에는 적용하지 않는다.
+5. **PC 변경**: §6.6 L749-751이 새 PC에서 새 시도 재개를 확정했으므로, 이전 host 보유는 `unconfirmed`로 남기되 새 host의 슬롯 계산과 재개 차단에서 제외한다. host 식별자 변경 없는 단순 재시작에는 적용하지 않는다. **로컬 재개와 공유 외부 쓰기는 분리한다.** `renew`·fence는 GitHub가 알지 못하므로 외부 쓰기 격리 근거로 쓰지 않는다.
+   - host가 바뀌면 서버가 `external_write_authority`를 generation+1, `blocked`로 바꾼다. 새 host는 로컬 worktree의 dev·①·QA까지만 하고 push·PR·commit status·병합·design_apply·초기화 되돌림을 포함한 GitHub 쓰기는 409 `EXTERNAL_WRITE_BLOCKED`로 막는다. 사유는 기존 실행 불가 사유·관리자 개입 알림에 표시한다. 배포 확인은 host별 로컬 compose만 대상으로 하고, 공유 대상이면 같은 차단을 적용한다.
+   - 해제 조건은 (a) 이전 host가 재연결해 프로세스·outbox 종료와 이전 호출 결과를 확인하거나 (b) 이전 쓰기 자격 증명을 **GitHub에서 폐기**하고 서버가 폐기를 확인(기존 토큰 호출 401)한 뒤 새 자격 증명을 등록하는 것이다. 이후 GitHub main·PR·브랜치·status를 조회해 이전 호출을 대조해야 `granted`가 된다. `gh` 로그인처럼 폐기를 확인할 수 없으면 (a)만 가능하다.
+   - 새 host 브랜치는 `agent/<TASK>-h<generation>`, PR도 새로 만든다. 이전 generation 브랜치·PR은 대조 뒤 병합 대상에서 제외하고 정리한다.
+   - 이전 host가 나중에 연결되면 정리·대조 명령만 받고 generation 없는 쓰기를 하지 않는다.
+   - 권한은 job마다 generation을 저장하고 `integrate` 시작·병합 API 직전·완료 판정 때 대조한다. 이것은 협조적 검사이고, 늦은 옛 호출의 최종 차단은 자격 증명 폐기와 대조다.
 6. 외부 효과 job(`integrate`,`deploy_check`,`design_apply`,`merge_followup`, 초기 분석의 커밋 단계): lease 상실 시 `reconcile`로 두고 재할당하지 않는다. 이전 그룹 종료를 확인하고 GitHub main/PR/status 또는 compose 상태를 실제 조회해 「효과 없음 / 완료됨 / 부분 적용」을 보고한 뒤에만 완료 확정 또는 새 실행을 허용한다. 부분 적용은 실패와 조치 안내로 남긴다.
-7. 원격 호출 직전 lease를 renew하고, 조건부 요청(비강제 push의 부모 커밋, PR head 확인)으로 fence 확인과 호출 사이의 짧은 경합을 막는다.
+7. 같은 host 안에서는 원격 호출 직전 lease를 renew한다. 호출 뒤 응답 유실은 조회로 대조한다. 다른 host 격리는 5번을 따른다.
+8. 논리 잠금(Task·충돌 묶음)은 claim부터 dev→①→(같은 시도 수정)→result까지 유지하고 다음 QA job으로 **원자적으로 인계**한다. QA 종료가 확정되면 해제하며 rework job이 함께 생성되면 그 job으로 인계한다. 물리 슬롯은 CLI·① 각각 실행할 때만 잡는다. ① 명령도 그룹·cgroup을 등록하고 무거운 작업 슬롯을 쓴다. 슬롯을 다시 못 잡으면 잠금을 유지한 채 대기하고 사유를 표시한다.
+9. QA가 사용량 등으로 오래 대기하면 같은 묶음도 대기한다(직렬화 우선, §6.6 L741). Task가 `paused`·`failed`·BLOCKED로 끝나면 그룹 empty 확인 후 논리 잠금을 해제하고 재개 때 다시 예약한다.
 
 ### 3.5 자동 진행 (owner Q-04)
 
 - 최초 dev는 팀장 `POST /tasks/:key/runs`가 있어야 job을 만든다. 이후 ①→QA→(FAIL) rework→reverify는 서버가 job을 만든다.
-- 실행 실패: 같은 종류의 **연속 실패에 대해 자동 재시도 최대 2회**. 설치 실패 등 시작 전 실패는 자동 재시도하지 않고 「다시 시도」 버튼(G L864, P).
-- QA FAIL과 통합 실패를 합쳐 Task당 **자동 재작업 최대 3회**. 재작업 안의 실행 실패는 위 실패 한도로 따로 센다. BLOCKED·중단은 세지 않고 자동 반복하지 않는다.
+- 실행 실패의 자동 재시도 **횟수와 집계 범위는 미승인(Q-04-잔여)**. 값은 인자·설정으로만 다루고 운영 seed에는 넣지 않으며, 값이 없으면 자동 재시도하지 않고 팀장 버튼을 기다린다. 시작 전 실패는 항상 「다시 시도」 버튼(G L864, P).
+- QA FAIL과 통합 실패를 합쳐 Task당 **자동 재작업 최대 3회**. 재작업 안의 실행 실패는 재작업 횟수로 세지 않는다. BLOCKED·중단은 세지 않고 자동 반복하지 않는다.
 - 초과하면 추가 job을 만들지 않고 팀장 알림. 팀장 버튼은 한도 카운터를 되돌리지 않고 1회만 허용한다.
 - Telegram 「Task 실패」: QA FAIL 확정, 실행 실패의 자동 한도 초과(§4.14). 자동 재시도 중 실패는 보내지 않는다.
 - 서버 재시작·중복 보고에도 원인 시도와 회차로 job 고유키를 둔다.
@@ -236,10 +245,14 @@ sequenceDiagram
     R->>W: jobs/start → attemptId (시도 생성·Task 전이)
     R->>W: status running(model, effort, adjust) + messages ack
     R->>R: CLI 실행 → 종료 → 프로세스 그룹 비움
-    R->>W: jobs/release (group_empty)
-    R->>W: ci/runs(task) … 실패 시 같은 시도에서 수정
+    R->>W: slots/release (group_empty) — Task·충돌 묶음 잠금은 유지
+    R->>W: ci/runs(task) ① (무거운 작업 슬롯)
+    opt ① 실패
+      R->>W: slots/acquire (그룹 등록·용량 재검사)
+      R->>R: 같은 시도에서 CLI 수정 → slots/release → ① 반복
+    end
     R->>W: evidence → result
-    W->>W: Task qa + QA job (같은 트랜잭션)
+    W->>W: Task qa + QA job + 논리 잠금 인계 (같은 트랜잭션)
   end
 ```
 
@@ -248,11 +261,18 @@ QA PASS → `gate` → `integrate` → ② 통과 → PR 병합 → `ci/queue me
 #### 코드 근거 고정
 
 1. 개발 종료 시 변경을 commit하고 ①·QA는 같은 `headSha`와 `specRevision`을 검사한다. QA는 읽기 전용 상태에서 시작하고 종료 시 SHA·worktree 청결을 다시 확인해 보고한다.
-2. head·명세·AC·명세가 참조하는 입력 버전이 바뀌면 이전 QA를 무효화하고 재검증한다. 낡은 SHA의 PASS는 거부한다.
-3. ②는 `baseSha=A`, `headSha=H`, 로컬 병합본 `mergeSha=M`, `treeSha`, `pipelineSha`(main A의 정의)를 고정해 **M을 검사**한다. A나 H가 바뀌면 결과를 무효화하고 다시 실행한다.
-4. 병합: GitHub에 PR head가 여전히 H인지 확인 → M에 int status를 기록 → 검사한 **M 자체를 main에 비강제 fast-forward push**. main이 A가 아니면 거부되므로 미검사 B+H가 병합되지 않는다. 원격 H가 push 직전에 바뀌어도 main에 들어가는 것은 검증된 M뿐이며 이후 H 변경은 새 작업으로 처리한다.
-5. push 뒤 main에 M이 포함되고 PR이 병합됨으로 표시됐는지 조회한다. 실제 병합 SHA·parent·tree를 기록하며 불일치는 완료하지 않고 알린다. GitHub가 이 push를 받아 PR을 병합됨으로 처리하는지는 보호 규칙에서 실증한다(M8-05, [추정]). 안 되면 **strict up-to-date 보호 + head 조건부 병합 + 실제 tree 대조**로 바꾸되 같은 불변식을 만족해야 한다.
-6. 묶음 확인(§4.13)도 각 PR의 QA SHA와 최종 병합본을 연결하고, 검사한 최종 병합본만 push한다.
+2. 사람이 만든 변경·Agent 변경으로 head가 바뀌거나 명세·AC·명세가 참조하는 입력 버전이 바뀌면 이전 QA를 무효화하고 재검증한다. 낡은 SHA의 PASS는 거부한다.
+3. **병합 경로는 하나다: strict up-to-date 보호 + 예상 head를 받는 PR 병합 API.** main 직접 fast-forward push로 일반 PR을 병합하지 않는다.
+   1. 병합 대기열 차례에 main A, QA한 head H를 고정한다. H가 A를 포함하지 않으면 Runner가 A를 PR 브랜치에 충돌 없이 병합해 H'를 만든다(부모 정확히 H,A, 자동 병합 결과 tree와 일치, 추가 변경 없음). 포함하면 H'=H. 충돌하면 `rework`.
+   2. H→H'는 위 조건을 기계로 확인한 경우에만 QA H의 근거를 잇고(§4.13의 「검증 PASS 후 main+PR 병합본 통합 확인」), ①과 ②를 **H'에서** 다시 실행한다. `pipelineSha`는 A의 정의다. 조건이 깨지면 QA 무효.
+   3. H'는 A를 포함하므로 검사 tree가 병합 결과 tree다. 대기열이 H'를 갱신한 이후 다른 push를 막을 수 없으므로 head가 바뀌면 결과를 버린다.
+   4. ② 통과 후 `agentwbs/int`를 **PR head H'**에 게시한다. 같은 context를 test merge commit에 게시하지 않는다(GitHub는 test merge commit에 status가 있으면 그것을, 없으면 head를 요구).
+   5. `PUT /repos/{owner}/{repo}/pulls/{n}/merge`를 `sha=H'`, `merge_method=merge`로 호출한다. head 변경은 409, main 이동·검사 미충족은 strict 보호가 405로 거부한다. 거부되면 main/head를 다시 조회하고 1부터 재시작하며, 같은 실패 반복은 알린다.
+   6. 응답 유실이면 PR 상태를 대조한다. 성공이면 병합 커밋의 부모가 A와 H', tree가 H'의 tree인지 확인하고 actual SHA를 기록한다. 다르면 `done`으로 만들지 않고 알린다. main을 자동으로 되돌리지 않는다(§9.6-2-3).
+   7. main 보호: int 필수, strict up-to-date, 강제 push·삭제 금지, CODEOWNERS 검토(`prototype/`, `.agentwbs/`). **일반 병합용 Runner 자격 증명에는 우회 권한을 주지 않는다.** 관리자 우회 기본값에 기대지 않도록 관리자가 아닌 별도 계정/앱을 쓰고 준비 점검에서 실효 규칙을 조회한다.
+   8. 실증은 M7-02 확정 전에 시험 저장소에서 한다(M4-06). 실패하면 M7-02를 닫지 않는다.
+   근거: [병합 API](https://docs.github.com/en/rest/pulls/pulls?apiVersion=2022-11-28#merge-a-pull-request)의 `sha` 불일치 409, [보호 브랜치](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)의 strict, [필수 검사 문제 해결](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks)의 검사 대상 커밋(2026-11-25 확인). 문서는 비동기 병합도 권장하지만 `PUT /merge`에 폐기 표시가 없고 결과를 한 번에 확정하므로 동기 API를 쓴다. stacked PR·GitHub merge queue는 쓰지 않는다.
+4. 묶음 확인(§4.13)은 **원인 탐색·예비 검사로만** 쓴다. 병합은 각 PR이 자기 H'에서 ②를 통과한 뒤 하나씩 위 경로로 한다.
 
 ### 4.2 전이 트랜잭션
 
@@ -280,7 +300,7 @@ QA PASS → `gate` → `integrate` → ② 통과 → PR 병합 → `ci/queue me
 
 ## 6. GitHub 계약 (Runner)
 
-브랜치 `agent/<TASK>`(P 표기), PR 1개/Task, main 직접 push는 최초 생성·초기화 되돌림·검사한 병합본 M 세 종류만 허용, status context `agentwbs/task|int|night|deploy`. 서버 보고와 GitHub 보고는 독립 outbox(§9.6-2-6). 초기화: PR 닫기 → `agent/*` 중 **이 시스템이 기록한 브랜치만** 삭제 → 기준 커밋 상태의 `src/ contracts/ .agentwbs/`로 되돌림 커밋(강제 push 없음). 등록 전 파일은 기준 커밋 내용으로 복원된다.
+브랜치 `agent/<TASK>`(P 표기), PR 1개/Task(host generation별 새 PR), main 직접 push는 최초 생성·초기화 되돌림 두 종류만 허용(별도 시스템 커밋 자격 증명 — Q-09), status context `agentwbs/task|int|night|deploy`. 서버 보고와 GitHub 보고는 독립 outbox(§9.6-2-6). 초기화: PR 닫기 → `agent/*` 중 **이 시스템이 기록한 브랜치만** 삭제 → 기준 커밋 상태의 `src/ contracts/ .agentwbs/`로 되돌림 커밋(강제 push 없음). 등록 전 파일은 기준 커밋 내용으로 복원된다.
 
 ## 7. 변경 이벤트
 
@@ -294,5 +314,6 @@ topic: `task` `dependency` `attempt` `verification` `message` `proposal` `planni
 - 같은 요청·응답 fixture를 WBS(inject)와 Runner(client)가 함께 통과.
 - Runner API 전체에 대해 무토큰·팀장 세션·낡은 epoch·멱등 재전송·키 충돌 5종 표 기반 테스트.
 - 초기화 경합: middleware 통과 뒤 정지한 host 보고, 생성 중 PDF, 발송 시작 직전/직후를 초기화와 교차.
-- 보유: 네트워크 단절+자손 생존+재개 요청은 거부, 그룹 종료 확인 뒤 허용.
+- 보유: 네트워크 단절+자손 생존+재개 요청은 거부, 그룹 종료 확인 뒤 허용. ① 실패 직전 같은 묶음 Task claim 거부. 자기 예약 start 성공, 타 job 예약 침범 거부.
+- host 전환: `renew 성공→정지→host 전환→옛 호출 재개`에서 새 쓰기는 대조 전 차단되고 옛 결과가 대조에 나타남.
 - P에 있는 Endpoint와 G§8 표의 모든 경로가 라우트 목록에 있는지 자동 비교.

@@ -72,7 +72,8 @@
 |---|---|---|
 | `runner_jobs` | kind, payload, state(`queued/leased/started/reconcile/done/failed/cancelled`), lease_owner, lease_until, fence int, epoch, attempts | D-03 |
 | `runner_job_events` | 추가 전용: prepared·prestart_failed·started·lease_lost·reconciled·finished, code, detail — **시작 전 실패 기록** | §1.2-4 §7.4-4 |
-| `execution_holds` | job, attempt?, epoch, host_id, boot_id, pgid/cgroup, task?, conflict_group?, agent, reserved_slots, heavy, state(`reserved/active/unconfirmed/released`), release_proof(`no_process/group_empty/boot_changed`), released_at. 시도·job 종료와 독립. 해제 전 삭제 금지(초기화는 §5) | §6.7 L795·804-806 |
+| `execution_holds` | job, attempt?, epoch, host_id, boot_id, pgid/cgroup, task?, conflict_group?, agent, reserved_slots, heavy, **slot_state(reserved/active/unconfirmed/released)·lock_state(held/handed_over/released)** — 물리 슬롯과 Task·충돌 묶음 논리 잠금을 분리, state(`reserved/active/unconfirmed/released`), release_proof(`no_process/group_empty/boot_changed`), handed_to_job, released_at. 해제 전 논리 잠금은 job당 1개 부분 unique(task, conflict_group). 시도·job 종료와 독립. 해제 전 삭제 금지(초기화는 §5) | §6.7 L795·804-806 |
+| `external_write_authority` | 단일 행: host_id, generation, state(`granted/blocked`), credential_fingerprint, blocked_reason, reconciled_at — GitHub 등 공유 외부 쓰기 권한 | contracts §3.4-5 |
 | `task_attempts` | attempt_key unique, job unique, task, base/head SHA, spec_revision, input_version, kind(`dev/qa/rework/reverify`), agent, status(§3.2), started/ended_at, model_id, effort, grade_adjust(kind·reason), summary, failure, tokens, resumed_from. **Task당 열린 시도 1개**(부분 unique). claim은 열린 시도뿐 아니라 **해제되지 않은 `execution_holds`**로 Task·충돌 묶음·슬롯을 판정 | §4.6 §6.6 |
 | `attempt_files` | 저장소 상대 경로 | §8.2 |
 | `attempt_subagents` | designated/installed/observed_used, version, def_hash, confirm(`confirmed/partial`) | §6.7-7 |
@@ -92,7 +93,7 @@
 | `runner_readiness` | key, status, detail, fix, at | §7.4 |
 | `agent_usage` | agent, remain_pct(0~100), reset_at, tokens_used | §6.2 |
 | `agent_models` / `agent_efforts` | 보고값, rank, allowed(신규=false), is_new / **CLI×모델별** 값→공통 1~5 명시 매핑(Q-06 전 미설정) | §7.2 |
-| `exec_policy` | on_usage, low_pct, on_rework, esc_notify, floors, live_inject, auto_retry_limit=2, auto_rework_limit=3 | §7.3, owner Q-04 |
+| `exec_policy` | on_usage, low_pct, on_rework, esc_notify, floors, live_inject, auto_retry_limit(**미승인 — null, 자동 재시도 안 함**, Q-04-잔여), auto_rework_limit=3 | §7.3, owner Q-04 |
 | `subagent_defs` | id, version, agent, role, tools, sandbox, text, hash, allowed, ref — 버전 불변 | §7.4 |
 | `cli_observation_grades` | cli+version+model+options unique, grade, verified_at, notes | §6.7 |
 
@@ -125,7 +126,7 @@
 | `design_files` / `design_items` / `design_edges` / `design_ownership` | 파일 파싱 결과(마지막 성공 유지) / unique(snapshot, item_key) / API×테이블·구성도 | §4.12 |
 | `design_drifts` / `design_versions` | item_key, kind, compat(호환/깨짐/`대조 안 함`), status, resolution | §4.12 §9.6-1-4 |
 | `ci_runs` / `ci_steps` | run_key, stage, **base_sha, head_sha, merge_sha, tree_sha, pipeline_sha**(단계별 해당 값), ref, pr, task?, attempt?, trigger, status, fail_step, log_excerpt, artifact_path, url | §4.13 |
-| `merge_queue` | pr, task unique(열림), position, status, head_sha, verification, ci_run, tested_merge_sha, **actual_merge_sha** | §4.13 |
+| `merge_queue` | pr, task unique(열림), position, status, qa_head_sha(H), synced_head_sha(H'), base_sha(A), verification, ci_run, tested_tree_sha, **actual_merge_sha·actual_tree_sha** | §4.13 |
 | `flaky_tests` | test_key, rate, quarantined, task | §4.13 |
 | `ci_settings` | night_at, retry=1, deploy_url | §4.13 |
 | `messages` | msg_key, task, attempt?, dir, type, to_agent, body, **delivery**, **pending_next**, **work_state**, fail_reason, read_at, draft — 세 상태 별도(§9.4-1) | §4.10 |
@@ -144,8 +145,8 @@
 | (없음) | `planning` | 수동 생성·CP add (P `newTask`) |
 | (없음) | `ready` | 초기 WBS 승인(P `draftWbs`) |
 | `planning` | `approval` | 명세 필수 항목 충족 |
-| `approval` | `ready` / `planning` | 팀장 승인 또는 자동 정책 / 반려 |
-| `ready` | `running` | 시도 claim: 선행·용량·충돌·준비·등급·정책 통과 |
+| `approval` | `ready` / `planning` | 팀장 착수 승인(owner Q-02) / 반려 |
+| `ready` | `running` | 팀장 시작 → claim 예약 → 설치 → `start` 재검사 통과 |
 | `running` | `qa` / `verifying` | dev→① 통과→QA / rework→① 통과→재검증 |
 | `running` | `failed` / `paused` | 실행 실패 / 중단(보유 해제와 별개) |
 | `failed` | `running` / `qa` / `verifying` | 실패한 시도와 **같은 종류**의 새 시도 |
@@ -171,7 +172,7 @@
 | `qa` | qa | ① 통과, 최초 또는 직전 qa가 BLOCKED |
 | `verifying` | reverify | rework의 ① 통과, 직전 reverify가 BLOCKED, 또는 근거 무효화 |
 | `paused` | 중단된 종류 | 직전 시도 interrupted, 같은 등급. 재개는 팀장 버튼(P) |
-| `failed` | 실패한 종류 | 직전 시도 failed. 자동 2회까지, 초과는 팀장 버튼 |
+| `failed` | 실패한 종류 | 직전 시도 failed. 자동 재시도 횟수는 Q-04-잔여(미승인이면 0), 그 외 팀장 버튼 |
 | 그 외 | 없음 | 409 |
 
 ### 3.2 시도와 시작 전 실패
@@ -230,5 +231,5 @@ event: `open → resolved`. outbox(메일·Telegram 공통): `queued → sending
 - 이름은 시각 기반(§9.6-2-4 권장). 병렬 작업 충돌을 피하려고 **schema 변경은 M1 이후 DB 담당 한 작업씩** 병합한다.
 - 검증: 빈 DB up, 직전 버전 DB up, schema drift 검사. P TASK-0004의 down SQL은 Mock Task 요구이므로 채택하지 않고, 운영 되돌림은 백업 복원 + 앞으로 고치는 migration을 쓴다 [결정].
 - 부트 시 자동 migrate 금지. `db:migrate` 명령으로만 실행.
-- Seed 두 가지: `system`(G가 확정한 기본 정책·분할 기준, owner 확정 Q-03·Q-04 값, 검토를 마친 하위 Agent v1 — M5-06), `demo`(P `MOCK` 12 Task·`SUB_MOCK`·Q 미승인 잠정값 — **테스트·화면 검증 전용**, 운영 DB에서 실행 거부).
+- Seed 두 가지: `system`(G가 확정한 기본 정책·분할 기준, owner 확정 Q-03 값·Q-04의 재작업 3회(시도 횟수는 제외), 검토를 마친 하위 Agent v1 — M5-06), `demo`(P `MOCK` 12 Task·`SUB_MOCK`·Q 미승인 잠정값 — **테스트·화면 검증 전용**, 운영 DB에서 실행 거부).
 - 추가 전용 보장 테스트: 앱 역할로 UPDATE/DELETE가 거부되는지 확인.
