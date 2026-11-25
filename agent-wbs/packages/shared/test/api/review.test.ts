@@ -27,7 +27,7 @@ const T = '2026-11-25T01:02:03.123456Z';
 
 const JOB_REPORTS = [
   'startCiRun', 'reportMergeQueue', 'reportDesignSnapshot', 'submitEstimates', 'requestReplan', 'createPlanningSession',
-  'submitPlanningAnalysis', 'submitPlanningReviews', 'submitPlanningProposal', 'submitTaskPlan', 'createDecision',
+  'submitPlanningAnalysis', 'submitPlanningReviews', 'submitPlanningProposal', 'submitTaskPlan', 'submitProposalJudgements', 'createDecision',
 ];
 test.each(JOB_REPORTS)('F1 %s: jobId와 fence가 없으면 거부하고 LEASE_LOST를 선언한다', (id) => {
   const body = runner(id);
@@ -285,4 +285,63 @@ test('contracts §1(47c8c8e) 작업을 만드는 팀장 요청은 202 {jobId}다
   const not202 = creates.filter((o) => !(202 in o.responses)).map((o) => o.id);
   expect(not202).toEqual(['createProject']); // §2.2가 201 {project,jobId}로 정함
   expect(responds('analyzeInputs', { jobId: 'j' }, 202)).toBe(true);
+});
+
+test('R1 기존 Task를 수정하는 Planning CP는 변경 후 판단을 함께 제출한다', () => {
+  const ops = [{ op: 'modify', task: 'TASK-0005', field: 'title', after: '새 제목' }];
+  const body = { ...runner('submitPlanningProposal'), ops };
+  const entry = (extra: object = {}) => ({ taskKey: 'TASK-0005', judgedRules: judged(judgement('revert')), ...extra });
+  expect(accepts('submitPlanningProposal', { ...body, taskJudgements: [entry()] })).toBe(true);
+  // 우선순위만 바꾸는 CP는 판단이 필요 없다.
+  expect(accepts('submitPlanningProposal', body)).toBe(true);
+  for (const bad of [
+    entry({ taskKey: 'NEW-1' }), // 새 Task는 add.t.judgedRules 한 곳에만 쓴다.
+    entry({ judgedRules: judged(judgement('revert', { subjectHash: HASH })) }), // CP 저장 때 서버가 계산한다.
+    entry({ judgedRules: judged(judgement('ac_meaning')) }),
+    { taskKey: 'TASK-0005' },
+  ]) expect(accepts('submitPlanningProposal', { ...body, taskJudgements: [bad] }), JSON.stringify(bad)).toBe(false);
+});
+
+test('R1 팀장이 만든 CP는 Planning이 판단만 덧붙이고 팀장은 쓸 수 없다', () => {
+  expect(op('submitProposalJudgements')).toMatchObject({
+    method: 'POST', path: '/api/planning/proposals/:id/judgements', principal: 'runner', idempotency: 'required',
+  });
+  expect(op('submitProposalJudgements').errors).toEqual(
+    expect.arrayContaining(['LEASE_LOST', 'EPOCH_MISMATCH', 'NOT_FOUND', 'VERSION_CONFLICT', 'INVALID_TRANSITION']));
+  const rules = judged(judgement('contract', { subjectHash: HASH }));
+  const body = { jobId: 'j', fence: 1, judgements: [{ target: 'TASK-0005', judgedRules: rules }, { target: 'NEW-1', judgedRules: rules }] };
+  expect(accepts('submitProposalJudgements', body)).toBe(true);
+  const split = judged(judgement('ac_meaning', { subjectHash: HASH }));
+  expect(accepts('submitProposalJudgements', { ...body, splitJudgements: split })).toBe(true);
+  expect(accepts('submitProposalJudgements', { jobId: 'j', judgements: body.judgements })).toBe(false);
+  expect(accepts('submitProposalJudgements', { ...body, ops: [] })).toBe(false);
+  // 낡은 내용의 판단을 걸러야 하므로 hash가 필수다.
+  expect(accepts('submitProposalJudgements', { ...body, judgements: [{ target: 'NEW-1', judgedRules: judged(judgement('revert')) }] })).toBe(false);
+  const lead = { title: 't', reason: 'r', source: { kind: 'manual' }, ops: [{ op: 'remove', task: 'TASK-0005' }] };
+  expect(accepts('createProposal', lead)).toBe(true);
+  expect(accepts('createProposal', { ...lead, taskJudgements: [] })).toBe(false);
+});
+
+test('R1 판단 작업은 변경 후 hash를 받고 저장된 CP는 판단을 돌려준다', () => {
+  const job = (proposal: unknown) => ({
+    job: { id: 'j', leaseUntil: T, fence: 1, kind: 'planning', payload: { tasks: [], policy: {}, proposal } },
+  });
+  const target = { target: 'TASK-0005', subjectHash: HASH };
+  expect(responds('claimJob', job({ id: 'cp-1', targets: [target], splitSubjectHash: null }))).toBe(true);
+  expect(responds('claimJob', job(null))).toBe(true);
+  expect(responds('claimJob', job({ id: 'cp-1', targets: [{ target: 'TASK-0005' }], splitSubjectHash: null }))).toBe(false);
+  const applied = fixtures<{ id: string; response: { proposal: Record<string, unknown> } }>('lead').find((f) => f.id === 'applyProposal')?.response;
+  const stored = (taskJudgements: unknown) => responds('applyProposal', { ...applied, proposal: { ...applied?.proposal, taskJudgements } });
+  expect(stored([{ taskKey: 'TASK-0005', judgedRules: judged(judgement('revert', { subjectHash: HASH })) }])).toBe(true);
+  expect(stored(undefined)).toBe(false);
+});
+
+test('R2 Runner 상태가 최근 중단 구간과 사유를 준다(P L6684)', () => {
+  const state = fixtures<{ id: string; response: Record<string, unknown> }>('lead').find((f) => f.id === 'getRunnerState')?.response;
+  const gaps = [{ from: T, to: T, reason: 'reboot' }, { from: T, to: null, reason: 'unknown' }];
+  expect(state?.gaps).toHaveLength(2);
+  expect(responds('getRunnerState', { ...state, gaps })).toBe(true);
+  for (const bad of [{ from: T, to: T }, { to: T, reason: 'reboot' }, { from: T, to: T, reason: '재부팅' }]) {
+    expect(responds('getRunnerState', { ...state, gaps: [bad] })).toBe(false);
+  }
 });

@@ -1106,6 +1106,33 @@
     {
      "op": "remove",
      "task": "TASK-0011"
+    },
+    {
+     "op": "modify",
+     "task": "TASK-0012",
+     "field": "title",
+     "after": "새 제목"
+    }
+   ],
+   "taskJudgements": [
+    {
+     "taskKey": "TASK-0012",
+     "judgedRules": {
+      "schemaVersion": 1,
+      "items": [
+       {
+        "rule": "contract",
+        "result": "met",
+        "agreedBy": [
+         "Claude",
+         "Codex"
+        ],
+        "basis": "공유 계약 변경 없음",
+        "judgedAt": "2026-11-25T01:02:03.123456Z",
+        "sourceRef": "job-1"
+       }
+      ]
+     }
     }
    ]
   },
@@ -1180,5 +1207,38 @@
    "at": "2026-11-25T01:02:03.123456Z",
    "updatedAt": "2026-11-25T01:02:03.123456Z"
   }
+ },
+ {
+  "id": "submitProposalJudgements",
+  "params": {
+   "id": "cp-1"
+  },
+  "body": {
+   "jobId": "job-1",
+   "fence": 3,
+   "judgements": [
+    {
+     "target": "TASK-0012",
+     "judgedRules": {
+      "schemaVersion": 1,
+      "items": [
+       {
+        "rule": "contract",
+        "result": "met",
+        "agreedBy": [
+         "Claude",
+         "Codex"
+        ],
+        "basis": "공유 계약 변경 없음",
+        "judgedAt": "2026-11-25T01:02:03.123456Z",
+        "sourceRef": "job-1",
+        "subjectHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  "status": 204
  }
 ]

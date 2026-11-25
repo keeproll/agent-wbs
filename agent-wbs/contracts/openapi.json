@@ -28421,6 +28421,88 @@
                       }
                     },
                     "additionalProperties": false
+                  },
+                  "taskJudgements": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "taskKey",
+                        "judgedRules"
+                      ],
+                      "properties": {
+                        "taskKey": {
+                          "$ref": "#/components/schemas/TaskKey"
+                        },
+                        "judgedRules": {
+                          "type": "object",
+                          "required": [
+                            "schemaVersion",
+                            "items"
+                          ],
+                          "properties": {
+                            "schemaVersion": {
+                              "type": "number",
+                              "const": 1
+                            },
+                            "items": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "rule",
+                                  "result",
+                                  "agreedBy",
+                                  "basis",
+                                  "judgedAt",
+                                  "sourceRef"
+                                ],
+                                "properties": {
+                                  "rule": {
+                                    "enum": [
+                                      "revert",
+                                      "contract",
+                                      "refactor"
+                                    ]
+                                  },
+                                  "result": {
+                                    "enum": [
+                                      "met",
+                                      "not_met"
+                                    ]
+                                  },
+                                  "agreedBy": {
+                                    "type": "array",
+                                    "items": {
+                                      "$ref": "#/components/schemas/Agent"
+                                    },
+                                    "minItems": 2,
+                                    "uniqueItems": true
+                                  },
+                                  "basis": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "pattern": "\\S"
+                                  },
+                                  "judgedAt": {
+                                    "$ref": "#/components/schemas/Timestamp"
+                                  },
+                                  "sourceRef": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "pattern": "\\S"
+                                  }
+                                },
+                                "additionalProperties": false
+                              },
+                              "maxItems": 3
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      },
+                      "additionalProperties": false
+                    }
                   }
                 },
                 "additionalProperties": false
@@ -28514,6 +28596,286 @@
             "EPOCH_MISMATCH",
             "IDEMPOTENCY_CONFLICT",
             "LEASE_LOST"
+          ],
+          "429": [
+            "RATE_LIMITED"
+          ],
+          "500": [
+            "INTERNAL"
+          ],
+          "503": [
+            "UNAVAILABLE"
+          ]
+        }
+      }
+    },
+    "/api/planning/proposals/{id}/judgements": {
+      "post": {
+        "operationId": "submitProposalJudgements",
+        "summary": "저장된 CP(팀장 작성 포함)의 판단 기록. 작업 payload의 hash와 다르면 VERSION_CONFLICT",
+        "tags": [
+          "planning"
+        ],
+        "security": [
+          {
+            "runnerToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ProjectEpoch"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "jobId",
+                  "fence",
+                  "judgements"
+                ],
+                "properties": {
+                  "jobId": {
+                    "$ref": "#/components/schemas/Id"
+                  },
+                  "fence": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "judgements": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "target",
+                        "judgedRules"
+                      ],
+                      "properties": {
+                        "target": {
+                          "type": "string",
+                          "pattern": "^(TASK-[0-9]{4,}|NEW-[0-9]+)$"
+                        },
+                        "judgedRules": {
+                          "type": "object",
+                          "required": [
+                            "schemaVersion",
+                            "items"
+                          ],
+                          "properties": {
+                            "schemaVersion": {
+                              "type": "number",
+                              "const": 1
+                            },
+                            "items": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "rule",
+                                  "result",
+                                  "agreedBy",
+                                  "basis",
+                                  "judgedAt",
+                                  "sourceRef",
+                                  "subjectHash"
+                                ],
+                                "properties": {
+                                  "rule": {
+                                    "enum": [
+                                      "revert",
+                                      "contract",
+                                      "refactor"
+                                    ]
+                                  },
+                                  "result": {
+                                    "enum": [
+                                      "met",
+                                      "not_met"
+                                    ]
+                                  },
+                                  "agreedBy": {
+                                    "type": "array",
+                                    "items": {
+                                      "$ref": "#/components/schemas/Agent"
+                                    },
+                                    "minItems": 2,
+                                    "uniqueItems": true
+                                  },
+                                  "basis": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "pattern": "\\S"
+                                  },
+                                  "judgedAt": {
+                                    "$ref": "#/components/schemas/Timestamp"
+                                  },
+                                  "sourceRef": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "pattern": "\\S"
+                                  },
+                                  "subjectHash": {
+                                    "$ref": "#/components/schemas/Sha256"
+                                  }
+                                },
+                                "additionalProperties": false
+                              },
+                              "maxItems": 3
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "splitJudgements": {
+                    "type": "object",
+                    "required": [
+                      "schemaVersion",
+                      "items"
+                    ],
+                    "properties": {
+                      "schemaVersion": {
+                        "type": "number",
+                        "const": 1
+                      },
+                      "items": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "rule",
+                            "result",
+                            "agreedBy",
+                            "basis",
+                            "judgedAt",
+                            "sourceRef",
+                            "subjectHash"
+                          ],
+                          "properties": {
+                            "rule": {
+                              "enum": [
+                                "ac_meaning",
+                                "layer_order",
+                                "test_included"
+                              ]
+                            },
+                            "result": {
+                              "enum": [
+                                "met",
+                                "not_met"
+                              ]
+                            },
+                            "agreedBy": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/components/schemas/Agent"
+                              },
+                              "minItems": 2,
+                              "uniqueItems": true
+                            },
+                            "basis": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S"
+                            },
+                            "judgedAt": {
+                              "$ref": "#/components/schemas/Timestamp"
+                            },
+                            "sourceRef": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S"
+                            },
+                            "subjectHash": {
+                              "$ref": "#/components/schemas/Sha256"
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "maxItems": 3
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "저장된 CP(팀장 작성 포함)의 판단 기록. 작업 payload의 hash와 다르면 VERSION_CONFLICT",
+            "headers": {
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "IDEMPOTENCY_KEY_REQUIRED, VALIDATION_FAILED"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "RUNNER_UNAUTHORIZED"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "NOT_FOUND"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST, VERSION_CONFLICT"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited",
+            "description": "RATE_LIMITED"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "INTERNAL"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error",
+            "description": "UNAVAILABLE"
+          }
+        },
+        "x-error-codes": {
+          "400": [
+            "IDEMPOTENCY_KEY_REQUIRED",
+            "VALIDATION_FAILED"
+          ],
+          "401": [
+            "RUNNER_UNAUTHORIZED"
+          ],
+          "404": [
+            "NOT_FOUND"
+          ],
+          "409": [
+            "EPOCH_MISMATCH",
+            "IDEMPOTENCY_CONFLICT",
+            "INVALID_TRANSITION",
+            "LEASE_LOST",
+            "VERSION_CONFLICT"
           ],
           "429": [
             "RATE_LIMITED"
@@ -29677,7 +30039,8 @@
                 "type": "object",
                 "required": [
                   "tasks",
-                  "policy"
+                  "policy",
+                  "proposal"
                 ],
                 "properties": {
                   "tasks": {
@@ -29703,6 +30066,55 @@
                     "patternProperties": {
                       "^.*$": {}
                     }
+                  },
+                  "proposal": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "targets",
+                          "splitSubjectHash"
+                        ],
+                        "properties": {
+                          "id": {
+                            "$ref": "#/components/schemas/Id"
+                          },
+                          "targets": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "target",
+                                "subjectHash"
+                              ],
+                              "properties": {
+                                "target": {
+                                  "type": "string",
+                                  "pattern": "^(TASK-[0-9]{4,}|NEW-[0-9]+)$"
+                                },
+                                "subjectHash": {
+                                  "$ref": "#/components/schemas/Sha256"
+                                }
+                              }
+                            }
+                          },
+                          "splitSubjectHash": {
+                            "anyOf": [
+                              {
+                                "$ref": "#/components/schemas/Sha256"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 }
               }
@@ -34700,6 +35112,7 @@
           "ops",
           "idMap",
           "splitJudgements",
+          "taskJudgements",
           "holdReasons",
           "issues",
           "events",
@@ -34849,6 +35262,91 @@
                 "type": "null"
               }
             ]
+          },
+          "taskJudgements": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "taskKey",
+                "judgedRules"
+              ],
+              "properties": {
+                "taskKey": {
+                  "$ref": "#/components/schemas/TaskKey"
+                },
+                "judgedRules": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "items"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "number",
+                      "const": 1
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "rule",
+                          "result",
+                          "agreedBy",
+                          "basis",
+                          "judgedAt",
+                          "sourceRef",
+                          "subjectHash"
+                        ],
+                        "properties": {
+                          "rule": {
+                            "enum": [
+                              "revert",
+                              "contract",
+                              "refactor"
+                            ]
+                          },
+                          "result": {
+                            "enum": [
+                              "met",
+                              "not_met"
+                            ]
+                          },
+                          "agreedBy": {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/components/schemas/Agent"
+                            },
+                            "minItems": 2,
+                            "uniqueItems": true
+                          },
+                          "basis": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          },
+                          "judgedAt": {
+                            "$ref": "#/components/schemas/Timestamp"
+                          },
+                          "sourceRef": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          },
+                          "subjectHash": {
+                            "$ref": "#/components/schemas/Sha256"
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "maxItems": 3
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
           },
           "holdReasons": {
             "type": "array",
@@ -36950,7 +37448,13 @@
                   "minimum": 0
                 },
                 "reason": {
-                  "type": "string"
+                  "enum": [
+                    "reboot",
+                    "power_off",
+                    "error",
+                    "manual",
+                    "unknown"
+                  ]
                 }
               }
             }
@@ -37408,6 +37912,7 @@
           "unconfirmedHolds",
           "observation",
           "usage",
+          "gaps",
           "externalWrite"
         ],
         "properties": {
@@ -38083,6 +38588,41 @@
                 },
                 "at": {
                   "$ref": "#/components/schemas/Timestamp"
+                }
+              }
+            }
+          },
+          "gaps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "from",
+                "to",
+                "reason"
+              ],
+              "properties": {
+                "from": {
+                  "$ref": "#/components/schemas/Timestamp"
+                },
+                "to": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Timestamp"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "reason": {
+                  "enum": [
+                    "reboot",
+                    "power_off",
+                    "error",
+                    "manual",
+                    "unknown"
+                  ]
                 }
               }
             }

@@ -47,6 +47,8 @@ const proposedTask = {
 };
 const ModifyOp = (field: string, after: Parameters<typeof Opt>[0]) =>
   c.Body({ op: AnyOf('modify'), task: c.TaskKey, field: AnyOf(field), before: Opt(Type.Unknown()), after });
+/** CP가 바꾸는 기존 Task 또는 새 Task의 ref */
+export const ProposalTarget = Type.String({ pattern: '^(TASK-[0-9]{4,}|NEW-[0-9]+)$' });
 const proposalOp = (title: string, judged: TProperties) =>
   Type.Union(
     [
@@ -380,6 +382,8 @@ export const Proposal = Type.Object(
     ops: List(ProposalOp),
     idMap: Type.Record(Type.String(), c.TaskKey),
     splitJudgements: Nullable(SplitJudgements),
+    /** 기존 Task의 변경 후 내용에 대한 판단. 새 Task의 판단은 ops[].t.judgedRules */
+    taskJudgements: List(Type.Object({ taskKey: c.TaskKey, judgedRules: JudgedRules })),
     holdReasons: List(HoldReason),
     issues,
     events: List(
@@ -840,6 +844,8 @@ export const Dashboard = Type.Object(
   { title: 'Dashboard' },
 );
 
+/** unknown은 heartbeat 누락 때 서버가 기록한다. */
+const EndReason = AnyOf('reboot', 'power_off', 'error', 'manual', 'unknown');
 /** P conc L4118, integrity L4373, G§6.6·§6.7 */
 const ObservationGrade = AnyOf('verified', 'partial', 'unverified');
 export const RunnerState = Type.Object(
@@ -900,6 +906,8 @@ export const RunnerState = Type.Object(
       ),
     }),
     usage: List(obj({ agent: c.Agent, remainPct: c.Pct, resetAt: Nullable(c.Timestamp), at: c.Timestamp })),
+    // 최근 중단 구간. to가 null이면 아직 끊긴 상태(P L6684)
+    gaps: List(obj({ from: c.Timestamp, to: Nullable(c.Timestamp), reason: EndReason })),
     externalWrite: obj({ state: AnyOf('granted', 'blocked'), reason: MaybeStr }),
   },
   { title: 'RunnerState' },
@@ -976,7 +984,7 @@ export const ReportSnapshot = Type.Object(
     replans: List(
       obj({ replanId: Str, at: c.Timestamp, trigger: Str, before: MaybeDate, after: c.DateOnly, lo: c.DateOnly, hi: c.DateOnly, moved }),
     ),
-    gaps: List(obj({ from: c.Timestamp, to: Nullable(c.Timestamp), minutes: c.Count, reason: Str })),
+    gaps: List(obj({ from: c.Timestamp, to: Nullable(c.Timestamp), minutes: c.Count, reason: EndReason })),
     messages: List(
       obj({
         at: c.Timestamp, taskKey: c.TaskKey, dir: AnyOf('out', 'in'), agent: Nullable(c.Agent), type: Str,

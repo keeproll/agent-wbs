@@ -116,8 +116,24 @@ export const planningOperations = [
       ops: List(m.PlanningProposalOp, { minItems: 1 }),
       // 분할 CP의 AC 의미·계층 순서·테스트 포함 판단(D-34)
       splitJudgements: Opt(m.NewSplitJudgements),
+      // 내용이 바뀌는 기존 Task의 변경 후 판단(D-33). 새 Task는 add의 t.judgedRules에 쓴다.
+      taskJudgements: Opt(List(Body({ taskKey: c.TaskKey, judgedRules: m.NewJudgedRules }))),
     }),
     responses: { 201: Type.Object({ id: c.Id, cpKey: Type.String(), status: m.ProposalStatus }) },
+  }),
+  operation({
+    ...planning,
+    id: 'submitProposalJudgements',
+    method: 'POST',
+    path: '/api/planning/proposals/:id/judgements',
+    summary: '저장된 CP(팀장 작성 포함)의 판단 기록. 작업 payload의 hash와 다르면 VERSION_CONFLICT',
+    body: Body({
+      ...Job,
+      judgements: List(Body({ target: m.ProposalTarget, judgedRules: m.JudgedRules })),
+      splitJudgements: Opt(m.SplitJudgements),
+    }),
+    responses: { 204: null },
+    errors: ['VERSION_CONFLICT', 'INVALID_TRANSITION'],
   }),
   operation({
     ...planning,

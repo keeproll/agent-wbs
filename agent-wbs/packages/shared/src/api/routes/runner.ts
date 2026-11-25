@@ -95,7 +95,18 @@ export const ClaimedJob = Type.Union(
       instruction: Type.String(),
       resumeStep: Nullable(Type.String()),
     }),
-    Job('planning', { tasks: JudgedTasks, policy: c.Json }),
+    Job('planning', {
+      tasks: JudgedTasks,
+      policy: c.Json,
+      // 판단이 필요한 CP. hash는 변경을 적용한 뒤의 내용이며 submitProposalJudgements에 돌려보낸다.
+      proposal: Nullable(
+        Type.Object({
+          id: c.Id,
+          targets: List(Type.Object({ target: m.ProposalTarget, subjectHash: c.Sha256 })),
+          splitSubjectHash: Nullable(c.Sha256),
+        }),
+      ),
+    }),
     Job('estimate', { tasks: JudgedTasks, policy: c.Json }),
     Job('split', { tasks: JudgedTasks, policy: c.Json }),
     Job('attempt', {

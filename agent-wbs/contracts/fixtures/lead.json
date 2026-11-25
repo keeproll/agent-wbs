@@ -85,7 +85,8 @@
     "createdAt": "2026-11-25T01:02:03.123456Z",
     "updatedAt": "2026-11-25T01:02:03.123456Z",
     "splitJudgements": null,
-    "issues": []
+    "issues": [],
+    "taskJudgements": []
    },
    "issues": [],
    "idMap": {},
@@ -1003,7 +1004,19 @@
    "externalWrite": {
     "state": "blocked",
     "reason": "host 변경"
-   }
+   },
+   "gaps": [
+    {
+     "from": "2026-11-25T01:00:00Z",
+     "to": "2026-11-25T02:00:00Z",
+     "reason": "manual"
+    },
+    {
+     "from": "2026-11-24T10:00:00Z",
+     "to": "2026-11-24T10:15:00Z",
+     "reason": "reboot"
+    }
+   ]
   }
  },
  {

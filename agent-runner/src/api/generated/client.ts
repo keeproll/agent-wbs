@@ -50,6 +50,14 @@ export type ClaimedJob = {
       subjectHash: Sha256;
     })[];
     policy: Record<string, unknown>;
+    proposal: {
+      id: Id;
+      targets: ({
+        target: string;
+        subjectHash: Sha256;
+      })[];
+      splitSubjectHash: Sha256 | null;
+    } | null;
   };
 } | {
   id: Id;
@@ -1581,6 +1589,20 @@ export interface Operations {
             sourceRef: string;
           })[];
         };
+        taskJudgements?: ({
+          taskKey: TaskKey;
+          judgedRules: {
+            schemaVersion: 1;
+            items: ({
+              rule: "revert" | "contract" | "refactor";
+              result: "met" | "not_met";
+              agreedBy: (Agent)[];
+              basis: string;
+              judgedAt: Timestamp;
+              sourceRef: string;
+            })[];
+          };
+        })[];
       };
       epoch: number;
       idempotencyKey: string;
@@ -1591,6 +1613,50 @@ export interface Operations {
         cpKey: string;
         status: "draft" | "review" | "changes" | "approved" | "rejected" | "applied" | "held";
       };
+    };
+  };
+  /** 저장된 CP(팀장 작성 포함)의 판단 기록. 작업 payload의 hash와 다르면 VERSION_CONFLICT */
+  submitProposalJudgements: {
+    request: {
+      params: {
+        id: Id;
+      };
+      body: {
+        jobId: Id;
+        fence: number;
+        judgements: ({
+          target: string;
+          judgedRules: {
+            schemaVersion: 1;
+            items: ({
+              rule: "revert" | "contract" | "refactor";
+              result: "met" | "not_met";
+              agreedBy: (Agent)[];
+              basis: string;
+              judgedAt: Timestamp;
+              sourceRef: string;
+              subjectHash: Sha256;
+            })[];
+          };
+        })[];
+        splitJudgements?: {
+          schemaVersion: 1;
+          items: ({
+            rule: "ac_meaning" | "layer_order" | "test_included";
+            result: "met" | "not_met";
+            agreedBy: (Agent)[];
+            basis: string;
+            judgedAt: Timestamp;
+            sourceRef: string;
+            subjectHash: Sha256;
+          })[];
+        };
+      };
+      epoch: number;
+      idempotencyKey: string;
+    };
+    responses: {
+      204: undefined;
     };
   };
   /** 등급·하위 Agent·충돌 묶음·분할 판단과 근거. subjectHash 불일치는 VERSION_CONFLICT */
@@ -1693,5 +1759,6 @@ export const OPERATIONS = {
   submitPlanningAnalysis: { method: 'POST', path: '/api/planning/sessions/{id}/analyses', content: 'json', statuses: { 201: false } },
   submitPlanningReviews: { method: 'POST', path: '/api/planning/sessions/{id}/reviews', content: 'json', statuses: { 201: false } },
   submitPlanningProposal: { method: 'POST', path: '/api/planning/proposals', content: 'json', statuses: { 201: true } },
+  submitProposalJudgements: { method: 'POST', path: '/api/planning/proposals/{id}/judgements', content: 'json', statuses: { 204: false } },
   submitTaskPlan: { method: 'POST', path: '/api/planning/tasks/{taskKey}/plan', content: 'json', statuses: { 204: false } },
 } as const satisfies Record<keyof Operations, unknown>;
