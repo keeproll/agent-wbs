@@ -322,14 +322,83 @@ test('R1 팀장이 만든 CP는 Planning이 판단만 덧붙이고 팀장은 쓸
   expect(accepts('createProposal', { ...lead, taskJudgements: [] })).toBe(false);
 });
 
-test('R1 판단 작업은 변경 후 hash를 받고 저장된 CP는 판단을 돌려준다', () => {
-  const job = (proposal: unknown) => ({
-    job: { id: 'j', leaseUntil: T, fence: 1, kind: 'planning', payload: { tasks: [], policy: {}, proposal } },
-  });
-  const target = { target: 'TASK-0005', subjectHash: HASH };
-  expect(responds('claimJob', job({ id: 'cp-1', targets: [target], splitSubjectHash: null }))).toBe(true);
-  expect(responds('claimJob', job(null))).toBe(true);
-  expect(responds('claimJob', job({ id: 'cp-1', targets: [{ target: 'TASK-0005' }], splitSubjectHash: null }))).toBe(false);
+const claims = () => fixtures<{ kind: string; response: { job: { payload: Record<string, unknown> } } }>('judgement-jobs');
+const claim = (name: string) => {
+  const found = claims().find((item) => item.kind === name);
+  if (!found) throw new Error(name);
+  return structuredClone(found.response);
+};
+
+test('N1 판단 job은 판단 대상의 변경 전·후 내용과 hash를 함께 준다', () => {
+  expect(claims().map((item) => item.kind)).toEqual(['lead-proposal', 'split-proposal', 'rejudge']);
+  for (const item of claims()) expect(responds('claimJob', item.response), `${item.kind} ${ajv.errorsText()}`).toBe(true);
+  expect(responds('claimJob', { job: { ...claim('rejudge').job, payload: { tasks: [], policy: {}, proposal: null } } })).toBe(true);
+
+  // ID·hash만 있는 job은 판단할 수 없다.
+  const broken = (name: string, change: (proposal: Record<string, never> & { targets: Record<string, unknown>[] }) => void) => {
+    const response = claim(name);
+    change(response.job.payload.proposal as never);
+    return responds('claimJob', JSON.parse(JSON.stringify(response)));
+  };
+  expect(broken('lead-proposal', () => undefined)).toBe(true);
+  for (const key of ['ops', 'targets', 'splitSubjectHash', 'splitTasks']) {
+    expect(broken('lead-proposal', (p) => Reflect.deleteProperty(p, key)), key).toBe(false);
+  }
+  for (const key of ['before', 'after', 'subjectHash']) {
+    expect(broken('lead-proposal', (p) => Reflect.deleteProperty(p.targets[0] ?? {}, key)), key).toBe(false);
+  }
+  // 기존 Task는 변경 전 내용이 있어야 하고, 새 Task는 없어야 한다.
+  expect(broken('lead-proposal', (p) => Object.assign(p.targets[0] ?? {}, { before: null }))).toBe(false);
+  expect(broken('lead-proposal', (p) => Object.assign(p.targets[1] ?? {}, { before: p.targets[0]?.before }))).toBe(false);
+  // 분할 대상과 hash는 함께 있거나 함께 없다.
+  expect(broken('split-proposal', (p) => Object.assign(p, { splitTasks: null }))).toBe(false);
+  expect(broken('split-proposal', (p) => Object.assign(p, { splitTasks: [] }))).toBe(false);
+  expect(broken('lead-proposal', (p) => Object.assign(p, { splitSubjectHash: HASH }))).toBe(false);
+});
+
+test('N1 snapshot은 hash 계산 대상과 같은 범위다(data-model §2.3-1)', () => {
+  const proposal = claim('lead-proposal').job.payload.proposal as { ops: object[]; targets: { after: object }[] };
+  expect(Object.keys(proposal.targets[0]?.after ?? {})).toEqual([
+    'title', 'scope', 'out', 'spec', 'ac', 'outputs', 'designs', 'conflictGroup',
+  ]);
+  const reject = (extra: object) => {
+    const response = claim('lead-proposal');
+    Object.assign((response.job.payload.proposal as typeof proposal).targets[0]?.after ?? {}, extra);
+    return responds('claimJob', response);
+  };
+  for (const extra of [{ priority: 1 }, { assigneeAgent: 'Codex' }, { lifecycleStatus: 'ready' }, { judgedRules: null }, { taskKey: 'TASK-0005' }]) {
+    expect(reject(extra), JSON.stringify(extra)).toBe(false);
+  }
+  const after = proposal.targets[0]?.after as Record<string, unknown>;
+  for (const key of Object.keys(after)) expect(reject({ [key]: undefined }), key).toBe(false);
+  // 판단 기록은 ops에서도 뺀다.
+  const response = claim('lead-proposal');
+  const ops = (response.job.payload.proposal as { ops: { op: string; t?: object }[] }).ops;
+  const add = ops.find((item) => item.op === 'add');
+  Object.assign(add?.t ?? {}, { judgedRules: judged(judgement('revert', { subjectHash: HASH })) });
+  expect(responds('claimJob', response)).toBe(false);
+});
+
+test('N1 기존 Task 재판단 job도 현재 내용을 준다', () => {
+  const response = claim('rejudge');
+  const [task] = response.job.payload.tasks as Record<string, unknown>[];
+  Reflect.deleteProperty(task ?? {}, 'content');
+  expect(responds('claimJob', response)).toBe(false);
+});
+
+test('N1 팀장 CP → claim → 판단 제출이 같은 대상과 hash로 이어진다', () => {
+  const proposal = claim('split-proposal').job.payload.proposal as {
+    targets: { target: string; subjectHash: string }[]; splitSubjectHash: string;
+  };
+  expect(accepts('submitProposalJudgements', {
+    jobId: 'job-1',
+    fence: 1,
+    judgements: proposal.targets.map(({ target, subjectHash }) => ({ target, judgedRules: judged(judgement('revert', { subjectHash })) })),
+    splitJudgements: judged(judgement('ac_meaning', { subjectHash: proposal.splitSubjectHash })),
+  })).toBe(true);
+});
+
+test('R1 저장된 CP는 판단을 돌려준다', () => {
   const applied = fixtures<{ id: string; response: { proposal: Record<string, unknown> } }>('lead').find((f) => f.id === 'applyProposal')?.response;
   const stored = (taskJudgements: unknown) => responds('applyProposal', { ...applied, proposal: { ...applied?.proposal, taskJudgements } });
   expect(stored([{ taskKey: 'TASK-0005', judgedRules: judged(judgement('revert', { subjectHash: HASH })) }])).toBe(true);

@@ -170,6 +170,7 @@ POST /api/planning/sessions
 POST /api/planning/sessions/:id/analyses
 POST /api/planning/sessions/:id/reviews
 POST /api/planning/proposals
+POST /api/planning/proposals/:id/judgements
 POST /api/planning/tasks/:k/plan
 GET /api/changes
 `
@@ -207,16 +208,12 @@ test('계획의 보강 경로가 모두 있고 원문에 근거가 있다', () =
   }
 });
 
-// 팀장이 만든 CP도 Planning이 판단을 쓸 경로가 필요하다(D-33 재확인 R1). contracts §3.3에 보강해야 한다.
-const JUDGEMENT_ROUTES = [key('POST', '/api/planning/proposals/:id/judgements')];
-
 test('원본·계획에 없는 경로를 만들지 않았다', () => {
   const known = new Set([
     'GET /health',
     'GET /health/db',
     ...guideRoutes().map(({ route }) => route),
     ...prototypeRoutes(),
-    ...JUDGEMENT_ROUTES,
     ...SUPPLEMENTS.map((line) => key(line.split(' ')[0] ?? '', line.split(' ')[1] ?? '')),
   ]);
   expect([...routes.keys()].filter((route) => !known.has(route))).toEqual([]);

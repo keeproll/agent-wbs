@@ -48,15 +48,44 @@ export type ClaimedJob = {
     tasks: ({
       taskKey: TaskKey;
       subjectHash: Sha256;
+      content: JudgedContent;
     })[];
     policy: Record<string, unknown>;
     proposal: {
       id: Id;
+      ops: (LeadProposalOp)[];
       targets: ({
+        target: TaskKey;
+        subjectHash: Sha256;
+        before: JudgedContent;
+        after: JudgedContent;
+      } | {
         target: string;
         subjectHash: Sha256;
+        before: null;
+        after: JudgedContent;
       })[];
-      splitSubjectHash: Sha256 | null;
+      splitSubjectHash: null;
+      splitTasks: null;
+    } | {
+      id: Id;
+      ops: (LeadProposalOp)[];
+      targets: ({
+        target: TaskKey;
+        subjectHash: Sha256;
+        before: JudgedContent;
+        after: JudgedContent;
+      } | {
+        target: string;
+        subjectHash: Sha256;
+        before: null;
+        after: JudgedContent;
+      })[];
+      splitSubjectHash: Sha256;
+      splitTasks: ({
+        taskKey: TaskKey;
+        content: JudgedContent;
+      })[];
     } | null;
   };
 } | {
@@ -68,6 +97,7 @@ export type ClaimedJob = {
     tasks: ({
       taskKey: TaskKey;
       subjectHash: Sha256;
+      content: JudgedContent;
     })[];
     policy: Record<string, unknown>;
   };
@@ -80,6 +110,7 @@ export type ClaimedJob = {
     tasks: ({
       taskKey: TaskKey;
       subjectHash: Sha256;
+      content: JudgedContent;
     })[];
     policy: Record<string, unknown>;
   };
@@ -175,6 +206,8 @@ export type Decision = {
 
 export type DepType = "FS" | "SS";
 
+export type DesignKind = "DB" | "API" | "FE" | "DevOps";
+
 export type Domain = "FE" | "BE" | "DB" | "DevOps" | "API" | "QA" | "Architecture" | "Common";
 
 export type ErrorResponse = {
@@ -196,6 +229,129 @@ export type ErrorResponse = {
 export type GithubMode = "gh" | "token";
 
 export type Id = string;
+
+export type JudgedContent = {
+  title: string;
+  scope: (string)[];
+  out: (string)[];
+  spec: {
+    req: (string)[];
+    work: (string)[];
+    steps: (string)[];
+    inputs: (string)[];
+    outputs: (string)[];
+    files: (string)[];
+    constraints: (string)[];
+    errors: (string)[];
+    docs: (string)[];
+    verify: (string)[];
+  };
+  ac: ({
+    given: string;
+    when: string;
+    then: string;
+    method: string;
+  })[];
+  outputs: ({
+    name: string;
+    kind: string;
+    required: boolean;
+    verify: string;
+  })[];
+  designs: ({
+    kind: DesignKind;
+    content: Record<string, unknown>;
+  })[];
+  conflictGroup: string | null;
+};
+
+export type LeadProposalOp = {
+  op: "add";
+  ref: string;
+  t: {
+    title: string;
+    type: WorkType;
+    domain: Domain;
+    rel?: (Domain)[];
+    wp: Id;
+    priority: number;
+    assignee: Agent;
+    verifier: Agent;
+    purpose: string;
+    doneCond: string;
+    est?: number;
+    lo?: number;
+    hi?: number;
+    tok?: number;
+    conf?: Confidence;
+    basis?: string;
+    ac?: ({
+      given: string;
+      when: string;
+      then: string;
+      method?: string;
+    })[];
+    srcV?: number;
+  };
+  preds: ({
+    pred: Id;
+    type: DepType;
+  })[];
+} | {
+  op: "modify";
+  task: TaskKey;
+  field: "title";
+  before?: unknown;
+  after: string;
+} | {
+  op: "modify";
+  task: TaskKey;
+  field: "doneCond";
+  before?: unknown;
+  after: string;
+} | {
+  op: "modify";
+  task: TaskKey;
+  field: "scopeAdd";
+  before?: unknown;
+  after: string;
+} | {
+  op: "modify";
+  task: TaskKey;
+  field: "acAdd";
+  before?: unknown;
+  after: string;
+} | {
+  op: "modify";
+  task: TaskKey;
+  field: "priority";
+  before?: unknown;
+  after: number;
+} | {
+  op: "modify";
+  task: TaskKey;
+  field: "assignee";
+  before?: unknown;
+  after: Agent;
+} | {
+  op: "modify";
+  task: TaskKey;
+  field: "verifier";
+  before?: unknown;
+  after: Agent;
+} | {
+  op: "remove";
+  task: TaskKey;
+} | {
+  op: "dep-add";
+  pred: Id;
+  succ: Id;
+  type: DepType;
+} | {
+  op: "dep-remove";
+  pred: Id;
+  succ: Id;
+};
 
 export type PassFail = "PASS" | "FAIL" | "BLOCKED";
 

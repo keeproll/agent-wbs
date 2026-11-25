@@ -30049,7 +30049,8 @@
                       "type": "object",
                       "required": [
                         "taskKey",
-                        "subjectHash"
+                        "subjectHash",
+                        "content"
                       ],
                       "properties": {
                         "taskKey": {
@@ -30057,6 +30058,9 @@
                         },
                         "subjectHash": {
                           "$ref": "#/components/schemas/Sha256"
+                        },
+                        "content": {
+                          "$ref": "#/components/schemas/JudgedContent"
                         }
                       }
                     }
@@ -30070,46 +30074,188 @@
                   "proposal": {
                     "anyOf": [
                       {
-                        "type": "object",
-                        "required": [
-                          "id",
-                          "targets",
-                          "splitSubjectHash"
-                        ],
-                        "properties": {
-                          "id": {
-                            "$ref": "#/components/schemas/Id"
-                          },
-                          "targets": {
-                            "type": "array",
-                            "items": {
-                              "type": "object",
-                              "required": [
-                                "target",
-                                "subjectHash"
-                              ],
-                              "properties": {
-                                "target": {
-                                  "type": "string",
-                                  "pattern": "^(TASK-[0-9]{4,}|NEW-[0-9]+)$"
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "required": [
+                              "id",
+                              "ops",
+                              "targets",
+                              "splitSubjectHash",
+                              "splitTasks"
+                            ],
+                            "properties": {
+                              "id": {
+                                "$ref": "#/components/schemas/Id"
+                              },
+                              "ops": {
+                                "type": "array",
+                                "items": {
+                                  "$ref": "#/components/schemas/LeadProposalOp"
                                 },
-                                "subjectHash": {
-                                  "$ref": "#/components/schemas/Sha256"
+                                "minItems": 1
+                              },
+                              "targets": {
+                                "type": "array",
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "target",
+                                        "subjectHash",
+                                        "before",
+                                        "after"
+                                      ],
+                                      "properties": {
+                                        "target": {
+                                          "$ref": "#/components/schemas/TaskKey"
+                                        },
+                                        "subjectHash": {
+                                          "$ref": "#/components/schemas/Sha256"
+                                        },
+                                        "before": {
+                                          "$ref": "#/components/schemas/JudgedContent"
+                                        },
+                                        "after": {
+                                          "$ref": "#/components/schemas/JudgedContent"
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "target",
+                                        "subjectHash",
+                                        "before",
+                                        "after"
+                                      ],
+                                      "properties": {
+                                        "target": {
+                                          "type": "string",
+                                          "pattern": "^NEW-[0-9]+$"
+                                        },
+                                        "subjectHash": {
+                                          "$ref": "#/components/schemas/Sha256"
+                                        },
+                                        "before": {
+                                          "type": "null"
+                                        },
+                                        "after": {
+                                          "$ref": "#/components/schemas/JudgedContent"
+                                        }
+                                      }
+                                    }
+                                  ]
                                 }
+                              },
+                              "splitSubjectHash": {
+                                "type": "null"
+                              },
+                              "splitTasks": {
+                                "type": "null"
                               }
                             }
                           },
-                          "splitSubjectHash": {
-                            "anyOf": [
-                              {
+                          {
+                            "type": "object",
+                            "required": [
+                              "id",
+                              "ops",
+                              "targets",
+                              "splitSubjectHash",
+                              "splitTasks"
+                            ],
+                            "properties": {
+                              "id": {
+                                "$ref": "#/components/schemas/Id"
+                              },
+                              "ops": {
+                                "type": "array",
+                                "items": {
+                                  "$ref": "#/components/schemas/LeadProposalOp"
+                                },
+                                "minItems": 1
+                              },
+                              "targets": {
+                                "type": "array",
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "target",
+                                        "subjectHash",
+                                        "before",
+                                        "after"
+                                      ],
+                                      "properties": {
+                                        "target": {
+                                          "$ref": "#/components/schemas/TaskKey"
+                                        },
+                                        "subjectHash": {
+                                          "$ref": "#/components/schemas/Sha256"
+                                        },
+                                        "before": {
+                                          "$ref": "#/components/schemas/JudgedContent"
+                                        },
+                                        "after": {
+                                          "$ref": "#/components/schemas/JudgedContent"
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "target",
+                                        "subjectHash",
+                                        "before",
+                                        "after"
+                                      ],
+                                      "properties": {
+                                        "target": {
+                                          "type": "string",
+                                          "pattern": "^NEW-[0-9]+$"
+                                        },
+                                        "subjectHash": {
+                                          "$ref": "#/components/schemas/Sha256"
+                                        },
+                                        "before": {
+                                          "type": "null"
+                                        },
+                                        "after": {
+                                          "$ref": "#/components/schemas/JudgedContent"
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              },
+                              "splitSubjectHash": {
                                 "$ref": "#/components/schemas/Sha256"
                               },
-                              {
-                                "type": "null"
+                              "splitTasks": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "required": [
+                                    "taskKey",
+                                    "content"
+                                  ],
+                                  "properties": {
+                                    "taskKey": {
+                                      "$ref": "#/components/schemas/TaskKey"
+                                    },
+                                    "content": {
+                                      "$ref": "#/components/schemas/JudgedContent"
+                                    }
+                                  }
+                                },
+                                "minItems": 1
                               }
-                            ]
+                            }
                           }
-                        }
+                        ]
                       },
                       {
                         "type": "null"
@@ -30158,7 +30304,8 @@
                       "type": "object",
                       "required": [
                         "taskKey",
-                        "subjectHash"
+                        "subjectHash",
+                        "content"
                       ],
                       "properties": {
                         "taskKey": {
@@ -30166,6 +30313,9 @@
                         },
                         "subjectHash": {
                           "$ref": "#/components/schemas/Sha256"
+                        },
+                        "content": {
+                          "$ref": "#/components/schemas/JudgedContent"
                         }
                       }
                     }
@@ -30218,7 +30368,8 @@
                       "type": "object",
                       "required": [
                         "taskKey",
-                        "subjectHash"
+                        "subjectHash",
+                        "content"
                       ],
                       "properties": {
                         "taskKey": {
@@ -30226,6 +30377,9 @@
                         },
                         "subjectHash": {
                           "$ref": "#/components/schemas/Sha256"
+                        },
+                        "content": {
+                          "$ref": "#/components/schemas/JudgedContent"
                         }
                       }
                     }
@@ -32014,6 +32168,212 @@
           }
         },
         "title": "Integrity"
+      },
+      "JudgedContent": {
+        "type": "object",
+        "required": [
+          "title",
+          "scope",
+          "out",
+          "spec",
+          "ac",
+          "outputs",
+          "designs",
+          "conflictGroup"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "out": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "spec": {
+            "type": "object",
+            "required": [
+              "req",
+              "work",
+              "steps",
+              "inputs",
+              "outputs",
+              "files",
+              "constraints",
+              "errors",
+              "docs",
+              "verify"
+            ],
+            "properties": {
+              "req": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "work": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "steps": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "inputs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "outputs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "files": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "constraints": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "errors": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "docs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "verify": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "ac": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "given",
+                "when",
+                "then",
+                "method"
+              ],
+              "properties": {
+                "given": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "when": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "then": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "method": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "name",
+                "kind",
+                "required",
+                "verify"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "kind": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "required": {
+                  "type": "boolean"
+                },
+                "verify": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "designs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "kind",
+                "content"
+              ],
+              "properties": {
+                "kind": {
+                  "$ref": "#/components/schemas/DesignKind"
+                },
+                "content": {
+                  "type": "object",
+                  "patternProperties": {
+                    "^.*$": {}
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "conflictGroup": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "JudgedContent",
+        "additionalProperties": false
       },
       "LeadProposalOp": {
         "anyOf": [

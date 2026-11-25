@@ -105,6 +105,17 @@ test.each(fixtures)('$id: 계약 경로·헤더·본문으로 보내고 응답�
   }
 });
 
+const judgementJobs = JSON.parse(read(new URL('fixtures/judgement-jobs.json', contracts))) as { kind: string; response: unknown }[];
+test.each(judgementJobs)('판단 job($kind)의 내용과 hash를 타입으로 읽는다', async ({ response }) => {
+  reply(200, response);
+  const result = await api('claimJob', { epoch: 2, idempotencyKey: 'k', body: { kinds: ['planning'], capacity: 1 } });
+  if (result.status !== 200 || result.body.job.kind !== 'planning') throw new Error('planning job이 아니다');
+  const { proposal, tasks } = result.body.job.payload;
+  expect((proposal?.targets ?? tasks).length).toBeGreaterThan(0);
+  for (const target of proposal?.targets ?? []) expect(target.after.title).not.toBe('');
+  for (const task of proposal?.splitTasks ?? tasks) expect(task.content.title).not.toBe('');
+});
+
 test('멱등 키는 필요한 요청에서만 타입으로 강제된다', () => {
   expectTypeOf<ApiRequest<'ackMessage'>>().toHaveProperty('idempotencyKey').toEqualTypeOf<string>();
   expectTypeOf<ApiRequest<'updateCiRun'>>().toHaveProperty('idempotencyKey');

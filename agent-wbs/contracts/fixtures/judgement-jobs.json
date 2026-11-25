@@ -1,0 +1,447 @@
+[
+ {
+  "kind": "lead-proposal",
+  "response": {
+   "job": {
+    "id": "job-1",
+    "kind": "planning",
+    "leaseUntil": "2026-11-25T01:02:03.123456Z",
+    "fence": 1,
+    "payload": {
+     "tasks": [],
+     "policy": {},
+     "proposal": {
+      "id": "cp-1",
+      "ops": [
+       {
+        "op": "modify",
+        "task": "TASK-0005",
+        "field": "scopeAdd",
+        "after": "검색"
+       },
+       {
+        "op": "add",
+        "ref": "NEW-1",
+        "t": {
+         "title": "검색 인덱스",
+         "type": "Implementation",
+         "domain": "BE",
+         "wp": "WP-03",
+         "priority": 1,
+         "assignee": "Claude",
+         "verifier": "Codex",
+         "purpose": "",
+         "doneCond": "통과"
+        },
+        "preds": []
+       }
+      ],
+      "targets": [
+       {
+        "target": "TASK-0005",
+        "subjectHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "before": {
+         "title": "CRUD",
+         "scope": [
+          "API"
+         ],
+         "out": [],
+         "spec": {
+          "req": [],
+          "work": [],
+          "steps": [],
+          "inputs": [],
+          "outputs": [],
+          "files": [],
+          "constraints": [],
+          "errors": [],
+          "docs": [],
+          "verify": []
+         },
+         "ac": [
+          {
+           "given": "g",
+           "when": "w",
+           "then": "t",
+           "method": ""
+          }
+         ],
+         "outputs": [
+          {
+           "name": "a.ts",
+           "kind": "코드",
+           "required": true,
+           "verify": ""
+          }
+         ],
+         "designs": [
+          {
+           "kind": "API",
+           "content": {}
+          }
+         ],
+         "conflictGroup": null
+        },
+        "after": {
+         "title": "CRUD",
+         "scope": [
+          "API",
+          "검색"
+         ],
+         "out": [],
+         "spec": {
+          "req": [],
+          "work": [],
+          "steps": [],
+          "inputs": [],
+          "outputs": [],
+          "files": [],
+          "constraints": [],
+          "errors": [],
+          "docs": [],
+          "verify": []
+         },
+         "ac": [
+          {
+           "given": "g",
+           "when": "w",
+           "then": "t",
+           "method": ""
+          }
+         ],
+         "outputs": [
+          {
+           "name": "a.ts",
+           "kind": "코드",
+           "required": true,
+           "verify": ""
+          }
+         ],
+         "designs": [
+          {
+           "kind": "API",
+           "content": {}
+          }
+         ],
+         "conflictGroup": null
+        }
+       },
+       {
+        "target": "NEW-1",
+        "subjectHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "before": null,
+        "after": {
+         "title": "검색 인덱스",
+         "scope": [
+          "API"
+         ],
+         "out": [],
+         "spec": {
+          "req": [],
+          "work": [],
+          "steps": [],
+          "inputs": [],
+          "outputs": [],
+          "files": [],
+          "constraints": [],
+          "errors": [],
+          "docs": [],
+          "verify": []
+         },
+         "ac": [
+          {
+           "given": "g",
+           "when": "w",
+           "then": "t",
+           "method": ""
+          }
+         ],
+         "outputs": [
+          {
+           "name": "a.ts",
+           "kind": "코드",
+           "required": true,
+           "verify": ""
+          }
+         ],
+         "designs": [
+          {
+           "kind": "API",
+           "content": {}
+          }
+         ],
+         "conflictGroup": null
+        }
+       }
+      ],
+      "splitSubjectHash": null,
+      "splitTasks": null
+     }
+    }
+   }
+  }
+ },
+ {
+  "kind": "split-proposal",
+  "response": {
+   "job": {
+    "id": "job-1",
+    "kind": "planning",
+    "leaseUntil": "2026-11-25T01:02:03.123456Z",
+    "fence": 1,
+    "payload": {
+     "tasks": [],
+     "policy": {},
+     "proposal": {
+      "id": "cp-2",
+      "ops": [
+       {
+        "op": "add",
+        "ref": "NEW-1",
+        "t": {
+         "title": "조회",
+         "type": "Implementation",
+         "domain": "BE",
+         "wp": "WP-03",
+         "priority": 1,
+         "assignee": "Claude",
+         "verifier": "Codex",
+         "purpose": "",
+         "doneCond": "통과"
+        },
+        "preds": []
+       },
+       {
+        "op": "add",
+        "ref": "NEW-2",
+        "t": {
+         "title": "수정",
+         "type": "Implementation",
+         "domain": "BE",
+         "wp": "WP-03",
+         "priority": 1,
+         "assignee": "Claude",
+         "verifier": "Codex",
+         "purpose": "",
+         "doneCond": "통과"
+        },
+        "preds": []
+       },
+       {
+        "op": "remove",
+        "task": "TASK-0005"
+       }
+      ],
+      "targets": [
+       {
+        "target": "NEW-1",
+        "subjectHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "before": null,
+        "after": {
+         "title": "조회",
+         "scope": [
+          "API"
+         ],
+         "out": [],
+         "spec": {
+          "req": [],
+          "work": [],
+          "steps": [],
+          "inputs": [],
+          "outputs": [],
+          "files": [],
+          "constraints": [],
+          "errors": [],
+          "docs": [],
+          "verify": []
+         },
+         "ac": [
+          {
+           "given": "g",
+           "when": "w",
+           "then": "t",
+           "method": ""
+          }
+         ],
+         "outputs": [
+          {
+           "name": "a.ts",
+           "kind": "코드",
+           "required": true,
+           "verify": ""
+          }
+         ],
+         "designs": [
+          {
+           "kind": "API",
+           "content": {}
+          }
+         ],
+         "conflictGroup": null
+        }
+       },
+       {
+        "target": "NEW-2",
+        "subjectHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "before": null,
+        "after": {
+         "title": "수정",
+         "scope": [
+          "API"
+         ],
+         "out": [],
+         "spec": {
+          "req": [],
+          "work": [],
+          "steps": [],
+          "inputs": [],
+          "outputs": [],
+          "files": [],
+          "constraints": [],
+          "errors": [],
+          "docs": [],
+          "verify": []
+         },
+         "ac": [
+          {
+           "given": "g",
+           "when": "w",
+           "then": "t",
+           "method": ""
+          }
+         ],
+         "outputs": [
+          {
+           "name": "a.ts",
+           "kind": "코드",
+           "required": true,
+           "verify": ""
+          }
+         ],
+         "designs": [
+          {
+           "kind": "API",
+           "content": {}
+          }
+         ],
+         "conflictGroup": null
+        }
+       }
+      ],
+      "splitSubjectHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "splitTasks": [
+       {
+        "taskKey": "TASK-0005",
+        "content": {
+         "title": "CRUD",
+         "scope": [
+          "API"
+         ],
+         "out": [],
+         "spec": {
+          "req": [],
+          "work": [],
+          "steps": [],
+          "inputs": [],
+          "outputs": [],
+          "files": [],
+          "constraints": [],
+          "errors": [],
+          "docs": [],
+          "verify": []
+         },
+         "ac": [
+          {
+           "given": "g",
+           "when": "w",
+           "then": "t",
+           "method": ""
+          }
+         ],
+         "outputs": [
+          {
+           "name": "a.ts",
+           "kind": "코드",
+           "required": true,
+           "verify": ""
+          }
+         ],
+         "designs": [
+          {
+           "kind": "API",
+           "content": {}
+          }
+         ],
+         "conflictGroup": null
+        }
+       }
+      ]
+     }
+    }
+   }
+  }
+ },
+ {
+  "kind": "rejudge",
+  "response": {
+   "job": {
+    "id": "job-1",
+    "kind": "planning",
+    "leaseUntil": "2026-11-25T01:02:03.123456Z",
+    "fence": 1,
+    "payload": {
+     "tasks": [
+      {
+       "taskKey": "TASK-0005",
+       "subjectHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "content": {
+        "title": "CRUD",
+        "scope": [
+         "API"
+        ],
+        "out": [],
+        "spec": {
+         "req": [],
+         "work": [],
+         "steps": [],
+         "inputs": [],
+         "outputs": [],
+         "files": [],
+         "constraints": [],
+         "errors": [],
+         "docs": [],
+         "verify": []
+        },
+        "ac": [
+         {
+          "given": "g",
+          "when": "w",
+          "then": "t",
+          "method": ""
+         }
+        ],
+        "outputs": [
+         {
+          "name": "a.ts",
+          "kind": "코드",
+          "required": true,
+          "verify": ""
+         }
+        ],
+        "designs": [
+         {
+          "kind": "API",
+          "content": {}
+         }
+        ],
+        "conflictGroup": null
+       }
+      }
+     ],
+     "policy": {},
+     "proposal": null
+    }
+   }
+  }
+ }
+]

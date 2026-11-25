@@ -49,12 +49,13 @@ const ModifyOp = (field: string, after: Parameters<typeof Opt>[0]) =>
   c.Body({ op: AnyOf('modify'), task: c.TaskKey, field: AnyOf(field), before: Opt(Type.Unknown()), after });
 /** CP가 바꾸는 기존 Task 또는 새 Task의 ref */
 export const ProposalTarget = Type.String({ pattern: '^(TASK-[0-9]{4,}|NEW-[0-9]+)$' });
+export const NewTaskRef = Type.String({ pattern: '^NEW-[0-9]+$' });
 const proposalOp = (title: string, judged: TProperties) =>
   Type.Union(
     [
       c.Body({
         op: AnyOf('add'),
-        ref: Type.String({ pattern: '^NEW-[0-9]+$' }),
+        ref: NewTaskRef,
         t: c.Body({ ...proposedTask, ...judged }),
         preds: List(c.Body({ pred: c.Id, type: c.DepType })),
       }),
@@ -177,6 +178,21 @@ const output = {
   verify: Type.String(),
   delivered: Type.Boolean(),
 };
+/** 규칙 5·7·9의 판단 대상이자 subjectHash 계산 대상(data-model §2.3-1). 범위를 늘리거나 줄이지 않는다. */
+export const JudgedContent = Type.Object(
+  {
+    title: Type.String(),
+    scope: lines,
+    out: lines,
+    spec: c.Body(specBody),
+    ac: List(c.Body(ac)),
+    // 제출 여부는 상태라서 뺀다.
+    outputs: List(c.Body({ name: Text, kind: Text, required: Type.Boolean(), verify: Type.String() })),
+    designs: List(c.Body({ kind: c.DesignKind, content: c.Json })),
+    conflictGroup: Nullable(Type.String()),
+  },
+  { title: 'JudgedContent', additionalProperties: false },
+);
 const checklist = {
   content: Text,
   required: Type.Boolean(),
