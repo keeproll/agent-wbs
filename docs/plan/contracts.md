@@ -189,11 +189,13 @@ POST /api/runner/jobs/:id/finish {fence,status,result?,error?}
 |---|---|---|
 | `repo_check` | url | repo-checks result |
 | `bootstrap` / `input_diff` | 커밋, 지시, 이전 커밋, 재개 단계 | progress → draft / proposal |
-| `planning` / `estimate` / `split` | `tasks[{taskKey,subjectHash}]`, 정책. `planning`은 `proposal{id,targets[{target,subjectHash}],splitSubjectHash\|null}\|null`도 포함(hash는 변경 적용 후) | planning API. 재판단 보고에 hash를 그대로 돌려보냄(data-model §2.3-1) |
+| `planning` / `estimate` / `split` | `tasks[{taskKey,subjectHash,content}]`, 정책. `planning`은 `proposal{id,ops,targets[{target,subjectHash,before,after}],splitSubjectHash,splitTasks[{taskKey,content}]}\|null`도 포함(아래 판단 payload 규칙) | planning API. 재판단 보고에 hash를 그대로 돌려보냄(data-model §2.3-1) |
 | `attempt` | taskKey, kind, agent, 브랜치, 기준 커밋, 입력 버전, 작업 지시 묶음 | status → result/interrupt |
 | `stop_attempt` | attemptId, 사유 | interrupt |
 | `integrate` / `deploy_check` / `ci_retry` | PR·커밋 | ci runs, queue |
 | `design_apply` / `merge_followup` | 항목·PR | design snapshot |
+
+판단 payload: `content`·`before`·`after`는 data-model §2.3-1의 `JudgedContent`(**`doneCond` 포함**)이고 hash 계산 범위와 같다. `subjectHash`는 `after`(재판단은 `content`)의 hash. 기존 Task는 `before` 필수, 새 Task(`NEW-n`)는 null. `targets`는 추가된 Task와 `JudgedContent`가 바뀐 Task만. `ops`는 판단 기록을 뺀 값. 분할 CP만 `splitSubjectHash`(ops+splitTasks)와 `splitTasks`(대상 Task의 현재 내용, 1개 이상)를 함께 주고 아니면 둘 다 null. 내용과 hash는 한 트랜잭션의 같은 시점 값이며, Runner는 이 payload만으로 판단하고 CP·Task 조회 API를 두지 않는다.
 
 규칙:
 

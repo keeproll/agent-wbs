@@ -81,7 +81,7 @@ type Judgement<R> = {
 ```
 
 - 기록은 Planning API만 쓴다. 다시 판단하면 최신값으로 바꾸고 이전·이후를 `task_history`에 추가한다.
-- `subjectHash` 대상: `judged_rules`는 Task의 제목·범위·제외·명세·AC·산출물·기술 설계·충돌 묶음, `split_judgements`는 CP `ops` + 각 대상 Task의 현재 내용. 우선순위·담당·상태는 제외. **계산은 서버만** 한다. 새 Task·초안·CP는 내용과 판단을 함께 받아 저장 때 계산하므로 요청에서 생략하고, 기존 Task 재판단은 작업 payload로 받은 값을 그대로 돌려보내 불일치를 검출한다. 저장된 CP의 판단(`/planning/proposals/:id/judgements`)도 같다. 판단 기록 자체(`judgedRules`·`taskJudgements`·`splitJudgements`)와 Task 키·ref는 hash 대상에서 **제외**한다(자기 참조 방지, NEW-n→TASK-n 변환에도 동일).
+- `subjectHash` 대상: `judged_rules`는 아래 `JudgedContent`, `split_judgements`는 판단 기록을 뺀 CP `ops` **전체** + 각 대상 Task의 현재 `JudgedContent`. `JudgedContent` = `{title, scope[], out[], doneCond, spec, ac[], outputs[{name,kind,required,verify}], designs[{kind,content}], conflictGroup}` — 제목·범위·제외·**완료 조건**·명세(`task_specs.spec`)·AC·산출물·기술 설계·충돌 묶음. **완료 조건이 바뀌면 판단의 전제가 바뀌므로 포함**하며 `doneCond`만 바꾸는 CP도 다시 판단한다. 목적·배경·선행 조건, 산출물 제출 여부(`delivered`), Task의 우선순위·담당·상태는 제외(단 분할 hash의 `ops`에 든 새 Task 값은 포함). **계산은 서버만** 한다. 새 Task·초안·CP는 내용과 판단을 함께 받아 저장 때 계산하므로 요청에서 생략하고, 기존 Task 재판단은 작업 payload로 받은 값을 그대로 돌려보내 불일치를 검출한다. 저장된 CP의 판단(`/planning/proposals/:id/judgements`)도 같다. 판단 기록 자체(`judgedRules`·`taskJudgements`·`splitJudgements`)와 Task 키·ref는 hash 대상에서 **제외**한다(자기 참조 방지, NEW-n→TASK-n 변환에도 동일).
 - **유효한 기록** = 형식이 맞고 합의 주체가 둘 다이며 현재 대상 hash와 일치. 아니면 「기록 없음」으로 본다 [결정].
 - 켜진 규칙마다 유효한 `met`이 있어야 승인 가능. 없으면 `JUDGEMENT_MISSING`, `not_met`이면 `JUDGEMENT_NOT_MET`. 자동 규칙의 예외 사유로 대신하지 않는다. 화면 상태는 G의 「판단」을 쓰고 충족/불충족/기록 없음을 글로 구분한다.
 - **저장 위치**
