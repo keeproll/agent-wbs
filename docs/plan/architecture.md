@@ -70,7 +70,7 @@ React + TypeScript + Vite + Mantine / Node.js + Fastify + TypeScript / PostgreSQ
 
 ### 3.2 추천 1안 [결정]
 
-정확한 패키지 버전은 M0에서 설치 시점의 안정판으로 고정하고 lockfile을 커밋한다(가이드에 없는 버전을 문서에 지어내지 않는다).
+정확한 패키지 버전은 M0에서 설치 시점의 안정판으로 고정하고 lockfile을 커밋한다(가이드에 없는 버전을 문서에 지어내지 않는다). TypeScript는 6.0.3이다 — 최신 7.0.2는 typescript-eslint 8.74.0의 지원 범위(`<6.1.0`) 밖이다.
 
 | 항목 | 선택 | 이유 |
 |---|---|---|
@@ -145,7 +145,7 @@ Git 규칙: 강제 push 금지, 보호 경로(`prototype/`·`.agentwbs/`)와 빌
 | `ci` | 4단계 실행기(엔진이 아니라 순차 실행·기록) | §4.13 |
 | `readiness` | 시작 시 + 매일: CLI·git·node·pnpm·pg·repo·disk·subs·obs·git-lfs | §7.4 §6.7-8 §9.5-3 |
 
-이 PC 관측(2026-11-25, 읽기만 함): WSL2, PID 1 = systemd, cgroup v2 마운트, 사용자 slice controller `cpu memory pids`. 세션 scope 생성·측정은 아직 시험하지 않았으므로 **사용 가능 여부는 M5-03에서 확인**하고, 안 되면 프로세스 그룹 + `/proc` 합산을 쓴다(§6.7-6). 설치본은 Codex 0.172.0, Claude 2.1.332(같은 날 2.1.330에서 자동 갱신됨)이며 G의 검증 조합(Codex 0.167.0)과 다르므로 「미검증」에서 시작한다. `gh`와 `git-lfs`는 설치되어 있지 않다.
+이 PC 관측(2026-11-25, 읽기만 함): WSL2, PID 1 = systemd, cgroup v2 마운트, 사용자 slice controller `cpu memory pids`. 세션 scope 생성·측정은 아직 시험하지 않았으므로 **사용 가능 여부는 M5-03에서 확인**하고, 안 되면 프로세스 그룹 + `/proc` 합산을 쓴다(§6.7-6). 설치본은 Codex 0.172.0, Claude 2.1.332(같은 날 2.1.330에서 자동 갱신됨)이며 G의 검증 조합(Codex 0.167.0)과 다르므로 「미검증」에서 시작한다. `gh` 2.45.0과 `git-lfs`는 `/usr/bin`에 설치되어 있다(로그인 상태는 확인하지 않음).
 
 ### 5.1 CLI 최신 유지 (owner Q-12)
 
@@ -183,7 +183,8 @@ Git 규칙: 강제 push 금지, 보호 경로(`prototype/`·`.agentwbs/`)와 빌
 ### 6.3 실행 명령(M0에서 제공)
 
 ```
-docker compose -p awbs -f agent-wbs/compose.yaml up -d postgres   # 저장소 루트에서 실행
+pnpm -C agent-wbs env:init         # 최초 1회. .env와 PC 단위 DB 비밀번호 생성(커밋하지 않음)
+docker compose -p awbs -f agent-wbs/compose.yaml up -d --wait postgres   # 저장소 루트에서 실행
 pnpm -C agent-wbs install --frozen-lockfile && pnpm -C agent-wbs db:migrate && pnpm -C agent-wbs dev
 pnpm -C agent-runner start          # 토큰 발급 후
 ```
