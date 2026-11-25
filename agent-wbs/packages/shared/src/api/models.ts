@@ -44,6 +44,24 @@ export const ProposalOp = Type.Union(
   { title: 'ProposalOp' },
 );
 
+/** 취소로 제거된 관계와 실제로 풀리는 후속(contracts §2.1, D-27) */
+const Relation = { pred: c.TaskKey, succ: c.TaskKey, type: c.DepType };
+export const Impact = Type.Object(
+  {
+    removedDependencies: List(
+      Type.Object({ ...Relation, reason: AnyOf('pred-cancelled', 'succ-cancelled', 'dep-remove') }),
+    ),
+    unblockedSuccessors: List(
+      Type.Object({
+        taskKey: c.TaskKey,
+        // 비어 있을 때만 실제로 풀린다.
+        remainingBlockers: List(Type.Object({ ...Relation, predStatus: Nullable(c.TaskStatus) })),
+      }),
+    ),
+  },
+  { title: 'Impact' },
+);
+
 /* ---- Task ---- */
 export const WbsNode = Type.Object(
   {
@@ -80,8 +98,8 @@ const taskSummary = {
       loHours: c.Hours,
       hiHours: c.Hours,
       progressPct: c.Pct,
-      end: Nullable(c.Timestamp),
-      baselineEnd: Nullable(c.Timestamp),
+      end: Nullable(c.DateOnly),
+      baselineEnd: Nullable(c.DateOnly),
     }),
   ),
   updatedAt: c.Timestamp,
@@ -181,7 +199,15 @@ export const FieldChange = Type.Object({ field: Type.String(), before: Type.Unkn
 export const TaskChanged = Type.Object({ task: TaskDetail, changes: List(FieldChange) }, { title: 'TaskChanged' });
 
 /* ---- 실행 · 검증 ---- */
-export const GradeAdjust = c.Body({ kind: AnyOf('up', 'down', 'keep'), reason: Text });
+const RunGrade = c.Body({ model: Text, effort: Text });
+/** 조정의 이전·이후·사유. regrade는 허용 해제로 재판단한 재개(D-29), up은 모델 이동을 포함한다(D-30). */
+export const GradeAdjust = c.Body({
+  kind: AnyOf('up', 'down', 'keep', 'regrade'),
+  from: RunGrade,
+  to: RunGrade,
+  reason: Text,
+});
+export const AttemptStatus = AnyOf('running', 'completed', 'failed', 'interrupted');
 export const Attempt = Type.Object(
   {
     id: c.Id,
@@ -189,7 +215,7 @@ export const Attempt = Type.Object(
     taskKey: c.TaskKey,
     kind: c.AttemptKind,
     agent: c.Agent,
-    status: AnyOf('running', 'completed', 'failed', 'interrupted'),
+    status: AttemptStatus,
     startedAt: c.Timestamp,
     endedAt: Nullable(c.Timestamp),
     modelId: Nullable(Type.String()),
@@ -241,13 +267,14 @@ export const Verification = Type.Object(
   { title: 'Verification' },
 );
 /** G§5.5 5조건 */
+export const GateKey = AnyOf('checklist', 'outputs', 'verification', 'defects', 'approval');
 export const Gate = Type.Object(
   {
     taskKey: c.TaskKey,
     passed: Type.Boolean(),
     conditions: List(
       Type.Object({
-        key: AnyOf('checklist', 'outputs', 'verification', 'defects', 'approval'),
+        key: GateKey,
         result: c.PassFail,
         reason: Type.String(),
       }),
@@ -353,19 +380,22 @@ export const Planning = Type.Object(
   { title: 'Planning' },
 );
 
+export const MoveKind = AnyOf('delayed', 'advanced', 'new', 'excluded');
 /** P TASK-0012 replans 응답. 자동 반영 정책이 꺼져 있으면(202) 기준 버전이 없다(D-10). */
 export const ReplanSummary = Type.Object(
   {
     replanId: Type.String(),
     baselineVersion: Nullable(Type.Integer({ minimum: 1 })),
-    projectEnd: Type.String(),
-    range: Type.Object({ lo: Type.String(), hi: Type.String() }),
+    projectEnd: c.DateOnly,
+    range: Type.Object({ lo: c.DateOnly, hi: c.DateOnly }),
     moved: List(
       Type.Object({
         taskKey: c.TaskKey,
-        before: Type.String(),
-        after: Type.String(),
-        deltaDays: Type.Number(),
+        kind: MoveKind,
+        // 신규 편입은 before, 제외는 after가 없다.
+        before: Nullable(c.DateOnly),
+        after: Nullable(c.DateOnly),
+        deltaDays: Nullable(Type.Number()),
       }),
     ),
   },
@@ -404,13 +434,13 @@ export const Decision = Type.Object(
   },
   { title: 'Decision' },
 );
-export const TechProposal = c.Body({
+export const TechProposal = {
   area: Text,
   title: Text,
   choice: Text,
   reason: Text,
   alternatives: Type.String(),
-});
+};
 export const DesignStore = AnyOf('postgres', 'neo4j', 'questdb', 'redis');
 export const IfaceKind = AnyOf('REST', 'WebSocket', 'SSE', 'Kafka');
 export const Drift = Type.Object(
@@ -479,4 +509,509 @@ export const MergeQueueItem = Type.Object(
     actualMergeSha: Nullable(c.Sha),
   },
   { title: 'MergeQueueItem' },
+);
+
+/* ---- 추정 · 초안 ---- */
+export const Estimate = {
+  estHours: c.Hours,
+  loHours: c.Hours,
+  hiHours: c.Hours,
+  tokensK: Opt(Type.Number({ minimum: 0 })),
+  confidence: c.Confidence,
+  basis: Text,
+  agreedBy: List(c.Agent, { minItems: 1, uniqueItems: true }),
+};
+const GradeProposal = c.Body({ modelId: Text, effort: Text, reason: Text });
+export const roleGrades = c.Body({ dev: GradeProposal, qa: GradeProposal });
+export const roleSubagents = c.Body({ dev: List(c.Id), qa: List(c.Id), basis: Type.String() });
+/** 초안 안에서만 쓰는 참조(승인 때 Task ID가 정해진다) */
+const Ref = Text;
+
+const DraftTask = c.Body({
+  ref: Ref,
+  wpRef: Ref,
+  title: Type.String({ minLength: 1, maxLength: 200 }),
+  workType: c.WorkType,
+  primaryDomain: c.Domain,
+  relatedDomains: List(c.Domain),
+  priority: c.Priority,
+  assigneeAgent: c.Agent,
+  verifierAgent: c.Agent,
+  estimate: c.Body(Estimate),
+  ...SpecInput,
+  outputs: List(OutputInput),
+  checklist: List(c.Body(ChecklistInput)),
+  grades: roleGrades,
+  subagents: roleSubagents,
+  splitBasis: Text,
+  conflictGroup: Nullable(Text),
+  designItems: List(c.Body({ itemKey: Text, change: Text })),
+});
+
+/** 초기 WBS 초안(contracts §3.3) */
+export const WbsDraft = {
+  phases: List(c.Body({ ref: Ref, title: Text }), { minItems: 1 }),
+  wps: List(c.Body({ ref: Ref, phaseRef: Ref, title: Text }), { minItems: 1 }),
+  tasks: List(DraftTask, { minItems: 1 }),
+  deps: List(c.Body({ predRef: Ref, succRef: Ref, depType: c.DepType })),
+};
+
+/* ---- 화면 조회 응답. 필드 근거는 프로토타입 계산 결과(P 줄 번호)이고 표시 문자열 대신 값을 보낸다. ---- */
+const N = Type.Number();
+const Str = Type.String();
+const MaybeStr = Nullable(Type.String());
+const MaybeDate = Nullable(c.DateOnly);
+const obj = Type.Object;
+
+export const Alert = Type.Object(
+  { id: c.Id, key: Str, severity: Str, taskKey: Nullable(c.TaskKey), target: MaybeStr, text: Str, at: c.Timestamp },
+  { title: 'Alert' },
+);
+
+/** P simulate L4304, M1-05 결과 */
+const simulation = {
+  issues: List(obj({ index: Nullable(c.Count), code: Str, message: Str })),
+  idMap: Type.Record(Type.String(), c.TaskKey),
+  diff: List(
+    obj({ index: c.Count, op: Str, target: Str, field: Str, before: Type.Unknown(), after: Type.Unknown() }),
+  ),
+  impact: Impact,
+};
+export const ProposalPreview = Type.Object({ previewHash: Str, ...simulation }, { title: 'ProposalPreview' });
+/** 반영 결과. 문제가 있으면 status가 held이고 issues에 사유가 있다. */
+export const ProposalApplied = Type.Object({ proposal: Proposal, ...simulation }, { title: 'ProposalApplied' });
+
+/** P L4488·L4490 */
+const BOOT_STEPS = ['check', 'unzip', 'repo', 'codex', 'claude', 'cross', 'tech', 'draft', 'approve'] as const;
+const INPUT_STEPS = ['check', 'unzip', 'diff', 'impact', 'cp'] as const;
+export const JobStepKey = AnyOf(
+  'check', 'unzip', 'repo', 'codex', 'claude', 'cross', 'tech', 'draft', 'approve', 'diff', 'impact', 'cp',
+);
+const jobView = <const T extends readonly string[]>(...keys: T) => ({
+  jobId: c.Id,
+  runNo: Type.Integer({ minimum: 1 }),
+  status: AnyOf('queued', 'running', 'done', 'failed', 'cancelled'),
+  steps: List(obj({ key: AnyOf(...keys), status: c.StepStatus, at: Nullable(c.Timestamp), note: Str })),
+  logs: List(obj({ at: c.Timestamp, text: Str })),
+  fail: Nullable(obj({ reason: Str, fix: Str })),
+});
+const projectBase = {
+  epoch: c.Epoch,
+  cleanup: AnyOf('none', 'pending', 'running', 'failed'),
+};
+const registered = {
+  ...projectBase,
+  id: c.Id,
+  name: Str,
+  repo: obj({ url: c.RepoUrl, owner: Str, name: Str, branch: AnyOf('main'), baseCommit: Nullable(c.Sha) }),
+  targetDate: MaybeDate,
+  instruction: Str,
+  constraints: List(obj({ name: Str, level: AnyOf('must', 'cond', 'ban'), condition: Str })),
+  registeredAt: c.Timestamp,
+  inputs: List(
+    obj({
+      v: Type.Integer({ minimum: 1 }),
+      at: c.Timestamp,
+      commit: c.Sha,
+      mdList: List(c.RepoPath),
+      changes: List(obj({ path: c.RepoPath, change: AnyOf('added', 'modified', 'deleted') })),
+      instruction: Str,
+      result: MaybeStr,
+      taskCount: c.Count,
+    }),
+  ),
+  changeCommits: List(
+    obj({
+      sha: c.Sha,
+      at: c.Timestamp,
+      author: Str,
+      message: Str,
+      state: AnyOf('pending', 'skipped', 'analyzed'),
+      files: List(
+        obj({ path: c.RepoPath, change: AnyOf('added', 'modified', 'deleted'), added: c.Count, deleted: c.Count }),
+      ),
+    }),
+  ),
+  inputJob: Nullable(obj({ ...jobView(...INPUT_STEPS), version: Type.Integer({ minimum: 1 }), proposalId: Nullable(c.Id) })),
+  updatedAt: c.Timestamp,
+};
+/** 등록 전 / 초기 분석 / 진행 중(data-model §3.4, P project·boot) */
+export const ProjectState = Type.Union(
+  [
+    obj({ state: AnyOf('none'), ...projectBase }),
+    obj({
+      state: AnyOf('boot'),
+      ...registered,
+      bootstrap: obj({
+        ...jobView(...BOOT_STEPS),
+        decisions: List(Decision),
+        revision: Nullable(Type.Integer({ minimum: 1 })),
+        draft: Nullable(
+          obj({ ...WbsDraft, splitCheck: obj({ pass: c.Count, suspect: c.Count, violation: c.Count }) }),
+        ),
+      }),
+    }),
+    obj({ state: AnyOf('active'), ...registered, approvedAt: c.Timestamp, approvedTaskCount: c.Count }),
+  ],
+  { title: 'ProjectState' },
+);
+
+/** P resetImpact L4696 */
+export const ResetPreview = Type.Object(
+  {
+    epoch: c.Epoch,
+    projectName: Str,
+    counts: obj({
+      tasks: c.Count, running: c.Count, subagents: c.Count, attempts: c.Count, verifications: c.Count,
+      evidence: c.Count, proposals: c.Count, messages: c.Count, history: c.Count, reports: c.Count,
+      baselines: c.Count, inputs: c.Count,
+    }),
+    runner: obj({ branches: List(Str), worktrees: c.Count, mergedTasks: c.Count }),
+    repo: registered.repo,
+  },
+  { title: 'ResetPreview' },
+);
+
+/** P schedule L4279, M1-04 결과. 날짜는 Asia/Seoul */
+const Rate = Type.Number({ minimum: 0, maximum: 1 });
+const schedulePeriod = { s: N, e: N };
+const projectSchedule = {
+  start: c.DateOnly,
+  end: c.DateOnly,
+  lo: c.DateOnly,
+  hi: c.DateOnly,
+  baselineVersion: c.Count,
+  baselineEnd: MaybeDate,
+  firstBaselineEnd: MaybeDate,
+  target: MaybeDate,
+  slipDays: N,
+  slackDays: Nullable(N),
+  elapsedDays: N,
+  remainingDays: N,
+  totalHours: c.Hours,
+  doneHours: c.Hours,
+  remainHours: c.Hours,
+  progressPct: c.Pct,
+  plannedPct: c.Pct,
+  doneRatePct: c.Pct,
+  doneHoursRatePct: c.Pct,
+  doneCount: c.Count,
+  taskCount: c.Count,
+};
+export const Schedule = Type.Object(
+  {
+    calcVersion: c.Count,
+    at: c.Timestamp,
+    tasks: List(
+      obj({
+        taskKey: c.TaskKey,
+        start: c.DateOnly,
+        end: c.DateOnly,
+        lo: c.DateOnly,
+        hi: c.DateOnly,
+        estHours: c.Hours,
+        loHours: c.Hours,
+        hiHours: c.Hours,
+        progressPct: c.Pct,
+        started: Type.Boolean(),
+        done: Type.Boolean(),
+        isNew: Type.Boolean(),
+        baselineStart: MaybeDate,
+        baselineEnd: MaybeDate,
+        slipDays: Nullable(N),
+        // 유효 작업 시간 축(시나리오별)
+        mid: obj(schedulePeriod),
+        optimistic: obj(schedulePeriod),
+        pessimistic: obj(schedulePeriod),
+      }),
+    ),
+    project: obj(projectSchedule),
+    capacity: obj({
+      days: List(obj({ date: c.DateOnly, rate: Rate })),
+      measured: Rate,
+      enough: Type.Boolean(),
+      loggedHours: c.Hours,
+      rate: Rate,
+      rateLo: Rate,
+      rateHi: Rate,
+      todayRate: Rate,
+    }),
+    blackouts: List(obj({ date: c.DateOnly, note: Str })),
+    warnings: List(obj({ code: AnyOf('USAGE_RESET_UNKNOWN'), agent: c.Agent })),
+  },
+  { title: 'Schedule' },
+);
+
+/** P dashVM L6274 */
+const counts = <const T extends readonly string[]>(...keys: T) => List(obj({ key: AnyOf(...keys), count: c.Count }));
+const taskRef = { taskKey: c.TaskKey, title: Str };
+export const Dashboard = Type.Object(
+  {
+    at: c.Timestamp,
+    tasks: obj({ total: c.Count, done: c.Count, active: c.Count, blocked: c.Count }),
+    byWorkType: counts(
+      'Analysis', 'Design', 'Implementation', 'Configuration', 'Test', 'Verification', 'Documentation', 'Integration',
+    ),
+    byDomain: counts('FE', 'BE', 'DB', 'DevOps', 'API', 'QA', 'Architecture', 'Common'),
+    schedule: Nullable(obj({ ...projectSchedule, rate: Rate })),
+    panels: obj({
+      late: List(obj({ ...taskRef, baselineEnd: MaybeDate, end: c.DateOnly, slipDays: Nullable(N), paused: Type.Boolean() })),
+      approvals: List(
+        Type.Union([
+          obj({ kind: AnyOf('planning'), id: c.Id, title: Str, unresolved: c.Count }),
+          obj({ kind: AnyOf('proposal'), id: c.Id, title: Str, status: ProposalStatus }),
+        ]),
+      ),
+      executions: List(
+        Type.Union([
+          obj({ kind: AnyOf('running'), ...taskRef, attemptId: c.Id, attemptKind: c.AttemptKind, agent: c.Agent }),
+          obj({ kind: AnyOf('ready'), ...taskRef }),
+        ]),
+      ),
+      rework: List(obj({ ...taskRef, verificationId: Nullable(c.Id), result: Nullable(c.PassFail), defects: c.Count })),
+      gate: List(obj({ ...taskRef, unmet: List(GateKey) })),
+      messages: List(Message),
+    }),
+    recent: List(
+      Type.Union([
+        obj({ kind: AnyOf('attempt'), at: c.Timestamp, id: c.Id, taskKey: c.TaskKey, agent: c.Agent, text: Str, status: AttemptStatus }),
+        obj({ kind: AnyOf('verification'), at: c.Timestamp, id: c.Id, taskKey: c.TaskKey, agent: c.Agent, text: Str, result: c.PassFail }),
+      ]),
+    ),
+    grades: List(
+      obj({
+        agent: c.Agent, modelId: Str, effort: Str, attempts: c.Count, judged: c.Count, fails: c.Count,
+        // 판정 전이면 null
+        reworkRatePct: Nullable(c.Pct),
+        escalations: c.Count, tokens: c.Count,
+      }),
+    ),
+    alerts: List(Alert),
+  },
+  { title: 'Dashboard' },
+);
+
+/** P conc L4118, integrity L4373, G§6.6·§6.7 */
+const ObservationGrade = AnyOf('verified', 'partial', 'unverified');
+export const RunnerState = Type.Object(
+  {
+    connection: obj({
+      online: Type.Boolean(),
+      runnerId: MaybeStr,
+      version: MaybeStr,
+      lastHeartbeatAt: Nullable(c.Timestamp),
+      sessionStartedAt: Nullable(c.Timestamp),
+    }),
+    readiness: Nullable(
+      obj({
+        at: c.Timestamp,
+        items: List(obj({ key: c.ReadinessKey, status: c.ReadinessStatus, detail: Str, fix: MaybeStr })),
+      }),
+    ),
+    host: Nullable(
+      obj({
+        hostId: Str, bootId: Str, cpu: Str, cores: c.Count, memGB: N, swapGB: N, diskFreeGB: N, os: Str,
+        perSessionGB: Nullable(N), samples: c.Count, seenAt: c.Timestamp,
+        recommended: obj(Caps), warnings: List(Str),
+      }),
+    ),
+    hostHistory: List(obj({ hostId: Str, cpu: Str, cores: c.Count, memGB: N, seenAt: c.Timestamp })),
+    concurrency: obj({
+      mode: AnyOf('auto', 'manual'),
+      caps: obj(Caps),
+      memReserveGB: N,
+      limit: Nullable(c.Count),
+      used: obj({ total: c.Count, Claude: c.Count, Codex: c.Count }),
+      subagentsObserved: c.Count,
+      subagentsHeld: c.Count,
+      subRatio: N,
+      heavyJobs: c.Count,
+      resources: Nullable(obj({ cpuPct: N, memFreeGB: N, swapGB: N, at: c.Timestamp })),
+      parallelWidth: c.Count,
+      startable: c.Count,
+      factor: AnyOf('cap', 'runner_limit', 'parallel_tasks'),
+      pressure: Type.Boolean(),
+      conflictWaits: List(obj({ taskKey: c.TaskKey, conflictGroup: Str, by: c.TaskKey })),
+      adjustments: List(obj({ at: c.Timestamp, from: c.Count, to: c.Count, by: Str, reason: Str })),
+    }),
+    sessions: List(
+      obj({
+        attemptId: c.Id, taskKey: c.TaskKey, agent: c.Agent, observed: c.Count, reserved: c.Count,
+        state: c.ObservationState, grade: ObservationGrade,
+      }),
+    ),
+    unconfirmedHolds: List(obj({ jobId: c.Id, taskKey: Nullable(c.TaskKey), hostId: MaybeStr, slots: c.Count })),
+    observation: obj({
+      budget: SubagentBudget,
+      profiles: List(
+        obj({
+          agent: c.Agent, version: Str, model: Str, options: Str, grade: ObservationGrade,
+          verifiedVersion: MaybeStr, verifiedAt: Nullable(c.Timestamp), notes: Str,
+        }),
+      ),
+    }),
+    usage: List(obj({ agent: c.Agent, remainPct: c.Pct, resetAt: Nullable(c.Timestamp), at: c.Timestamp })),
+    externalWrite: obj({ state: AnyOf('granted', 'blocked'), reason: MaybeStr }),
+  },
+  { title: 'RunnerState' },
+);
+export const Integrity = Type.Object(
+  { checkedAt: c.Timestamp, items: List(obj({ key: Str, label: Str, ok: Type.Boolean(), detail: Str })) },
+  { title: 'Integrity' },
+);
+
+/** 보고서 12개 구성(G L379-392, P report L3796). int/ext 보기가 같은 값을 쓴다. */
+const rel = { taskKey: c.TaskKey, wbsPath: Str, title: Str };
+const actors = { assignee: Nullable(c.Agent), verifier: Nullable(c.Agent) };
+const ratio = obj({ done: c.Count, total: c.Count });
+const checklistCount = obj({ done: c.Count, total: c.Count, requiredLeft: c.Count });
+const grade = Nullable(obj({ modelId: Str, effort: Str }));
+const blockers = List(obj({ pred: c.TaskKey, type: c.DepType, status: c.TaskStatus }));
+const gateCount = obj({ passed: c.Count, unmet: List(GateKey) });
+const lastVerification = Nullable(obj({ id: c.Id, result: c.PassFail, cmd: Str, actual: Str }));
+const moved = List(
+  obj({ taskKey: c.TaskKey, title: Str, kind: MoveKind, before: MaybeDate, after: MaybeDate, deltaDays: Nullable(N) }),
+);
+export const ReportSnapshot = Type.Object(
+  {
+    summary: obj({
+      taskCount: c.Count, doneCount: c.Count, doneBefore: c.Count, workPct: c.Pct, workPctBefore: c.Pct,
+      baselineVersion: c.Count, forecast: MaybeDate, lo: MaybeDate, hi: MaybeDate, forecastBefore: MaybeDate,
+      target: MaybeDate, uptimePct: c.Pct, ratePct: c.Pct, blocked: c.Count,
+      statuses: List(obj({ status: c.TaskStatus, count: c.Count })),
+      started: List(obj({ ...rel, at: c.Timestamp })),
+      attempts: obj({
+        total: c.Count, dev: c.Count, qa: c.Count, pass: c.Count, fail: c.Count, escalated: c.Count,
+        interrupted: c.Count, tokens: c.Count,
+      }),
+    }),
+    issues: List(obj({ level: AnyOf('bad', 'warn', 'info'), text: Str, taskKey: Nullable(c.TaskKey) })),
+    series: List(
+      obj({ day: c.DateOnly, done: c.Count, attempts: c.Count, fails: c.Count, uptimePct: c.Pct, forecast: MaybeDate }),
+    ),
+    done: List(
+      obj({
+        ...rel, ...actors, workType: c.WorkType, domain: c.Domain,
+        actStart: Nullable(c.Timestamp), actEnd: c.Timestamp, estHours: c.Hours, actualHours: c.Hours,
+        attempts: c.Count, slipDays: Nullable(N), verification: lastVerification, checklist: checklistCount,
+        outputs: obj({ delivered: c.Count, names: List(Str) }), doneCond: Str,
+      }),
+    ),
+    active: List(
+      obj({
+        ...rel, ...actors, workType: c.WorkType, domain: c.Domain, status: c.TaskStatus, progressPct: c.Pct,
+        actStart: Nullable(c.Timestamp), end: MaybeDate, lo: MaybeDate, hi: MaybeDate, slipDays: Nullable(N),
+        remainHours: Nullable(c.Hours),
+        lastAttempt: Nullable(
+          obj({ attemptKey: Str, kind: c.AttemptKind, agent: c.Agent, grade, status: AttemptStatus, summary: Str }),
+        ),
+        verification: lastVerification, checklist: checklistCount, gate: gateCount,
+        blockingDefects: c.Count, blockers, next: Str,
+      }),
+    ),
+    failures: List(
+      obj({
+        verificationId: c.Id, taskKey: c.TaskKey, title: Str, agent: c.Agent, at: c.Timestamp, cmd: Str, expected: Str,
+        actual: Str, defects: List(Str), evidence: List(Str),
+        messages: List(obj({ msgKey: Str, delivery: Str })),
+        reworks: List(obj({ attemptKey: Str, status: AttemptStatus })),
+      }),
+    ),
+    attempts: List(
+      obj({
+        attemptKey: Str, taskKey: c.TaskKey, kind: c.AttemptKind, agent: c.Agent, grade, startedAt: c.Timestamp,
+        endedAt: Nullable(c.Timestamp), status: AttemptStatus, summary: Str, adjust: Nullable(GradeAdjust),
+        files: c.Count, tokens: c.Count,
+      }),
+    ),
+    replans: List(
+      obj({ replanId: Str, at: c.Timestamp, trigger: Str, before: MaybeDate, after: c.DateOnly, lo: c.DateOnly, hi: c.DateOnly, moved }),
+    ),
+    gaps: List(obj({ from: c.Timestamp, to: Nullable(c.Timestamp), minutes: c.Count, reason: Str })),
+    messages: List(
+      obj({
+        at: c.Timestamp, taskKey: c.TaskKey, dir: AnyOf('out', 'in'), agent: Nullable(c.Agent), type: Str,
+        delivery: MaybeStr, pendingNext: Type.Boolean(), firstLine: Str,
+      }),
+    ),
+    next: List(
+      obj({
+        ...rel, ...actors, status: c.TaskStatus, start: c.DateOnly, end: c.DateOnly, estHours: c.Hours, grade, blockers,
+        conflictGroup: MaybeStr,
+      }),
+    ),
+    all: List(
+      obj({
+        ...rel, ...actors, status: c.TaskStatus, progressPct: c.Pct, checklist: ratio, verifState: c.VerifState,
+        end: MaybeDate, slipDays: Nullable(N), blocked: Type.Boolean(),
+      }),
+    ),
+  },
+  { title: 'ReportSnapshot' },
+);
+
+/** P CI_PIPE L3525. 원문은 main 커밋의 것이며 해석하지 못하면 stages가 null이다. */
+export const Pipeline = Type.Object(
+  {
+    path: AnyOf('.agentwbs/pipeline.yaml'),
+    commit: Nullable(c.Sha),
+    status: AnyOf('ok', 'error', 'missing'),
+    error: MaybeStr,
+    raw: MaybeStr,
+    stages: Nullable(List(obj({ stage: c.CiStage, when: Str, gate: Str, steps: List(Str) }))),
+  },
+  { title: 'Pipeline' },
+);
+
+/** P DS_MOCK L3559 */
+const fileStatus = AnyOf('ok', 'draft', 'error');
+export const designOverview = {
+  components: List(obj({ id: c.Id, layer: Str, name: Str, tech: Str, note: Str, decisionId: Nullable(c.Id) })),
+  links: List(obj({ from: c.Id, to: c.Id, via: Str, contractPath: MaybeStr })),
+  files: List(
+    obj({ path: Str, kind: Str, format: Str, status: fileStatus, commit: Nullable(c.Sha), itemCount: c.Count, error: MaybeStr }),
+  ),
+  versions: List(obj({ v: Type.Integer({ minimum: 1 }), at: c.Timestamp, by: Str, note: Str, breaking: Type.Boolean() })),
+};
+/** 해석기가 없는 형식은 raw만 있고 content가 null이다(G L430, Q-14). */
+export const DesignSource = Type.Object(
+  { path: Str, format: Str, commit: Nullable(c.Sha), status: fileStatus, raw: MaybeStr },
+  { title: 'DesignSource' },
+);
+export const IfaceContent = Nullable(
+  Type.Union([
+    obj({
+      type: AnyOf('REST'), auth: Str, request: Str, response: Str, validation: List(Str),
+      errors: List(obj({ code: Str, http: Str, cond: Str })), tables: List(Str),
+    }),
+    obj({
+      type: AnyOf('message'), auth: Str, messages: List(obj({ name: Str, direction: Str, schema: Str })), rules: List(Str),
+      topic: Nullable(
+        obj({ key: Str, partitions: Str, retention: Str, delivery: Str, dlq: Str, compat: Str, consumers: List(Str) }),
+      ),
+    }),
+  ]),
+);
+export const DataContent = Nullable(
+  Type.Union([
+    obj({
+      type: AnyOf('postgres'),
+      columns: List(
+        obj({
+          name: Str, type: Str, nullable: Type.Boolean(), pk: Type.Boolean(), unique: Type.Boolean(), fk: MaybeStr,
+          default: MaybeStr, desc: Str,
+        }),
+      ),
+      constraints: List(Str),
+      indexes: List(obj({ name: Str, columns: Str, kind: Str })),
+      usedBy: List(Str),
+    }),
+    obj({ type: AnyOf('neo4j-label'), props: Str, note: Str, constraints: List(Str) }),
+    obj({ type: AnyOf('neo4j-relation'), from: Str, to: Str, props: Str }),
+    obj({
+      type: AnyOf('questdb'), timestamp: Str, partition: Str, retention: Str, dedup: Str, symbols: Str, columns: Str,
+      ingest: Str, aggregation: Str,
+    }),
+    obj({ type: AnyOf('redis'), use: Str, value: Str, ttl: Str, invalidation: Str, persistence: Str }),
+  ]),
 );

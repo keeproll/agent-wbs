@@ -11,13 +11,6 @@ export const Opt = Type.Optional;
 export const List = Type.Array;
 /** 자유 구조 JSON(명세·스냅샷). 저장 시 검증은 데이터를 소유하는 작업이 맡는다. */
 export const Json = Type.Record(Type.String(), Type.Unknown());
-/**
- * 계획·가이드·프로토타입 어디에도 응답 필드가 정의되지 않은 조회. 구현 작업에서 확정한다.
- * OpenAPI에 `x-awbs-pending`으로 남겨 확정된 계약으로 보이지 않게 한다.
- */
-export const Pending = (task: string) =>
-  Type.Object({}, { additionalProperties: true, 'x-awbs-pending': task });
-
 export const Text = Type.String({ minLength: 1, pattern: '\\S' });
 export const Id = Type.String({ title: 'Id', minLength: 1, maxLength: 128 });
 export const Uuid = Type.String({ title: 'Uuid', pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' });
@@ -71,6 +64,11 @@ export const Priority = Type.Integer({ minimum: 0, maximum: 3 });
 export const DepType = Named('DepType', 'FS', 'SS');
 export const DesignKind = Named('DesignKind', 'DB', 'API', 'FE', 'DevOps');
 export const Confidence = Named('Confidence', '상', '중', '하');
+export const ReadinessKey = AnyOf(
+  'claude', 'codex', 'git', 'node', 'pnpm', 'pg', 'repo', 'disk', 'subs', 'obs', 'gh', 'lfs',
+);
+export const ReadinessStatus = AnyOf('ok', 'warn', 'fail');
+export const ObservationState = AnyOf('ok', 'unconfirmed');
 export const PassFail = Named('PassFail', 'PASS', 'FAIL', 'BLOCKED');
 export const StepStatus = Named('StepStatus', 'wait', 'run', 'done', 'fail');
 export const CiStage = Named('CiStage', 'task', 'int', 'night', 'deploy');
@@ -84,6 +82,9 @@ export const GithubScopes = Type.Object({
   statuses: Type.Boolean(),
   metadata: Type.Boolean(),
 });
+
+/** job 결과 보고의 소유권(contracts §3.2-4). 낡은 fence는 LEASE_LOST */
+export const JobContext = { jobId: Id, fence: Fence };
 
 /** 편집 화면이 본 버전(contracts §1.3) */
 export const Version = { updatedAt: Timestamp };

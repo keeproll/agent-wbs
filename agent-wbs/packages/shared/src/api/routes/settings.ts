@@ -54,25 +54,26 @@ const settings = [
     autoRetryLimit: c.Count,
     autoReworkLimit: c.Count,
   }),
-  ...setting(
-    'ModelSettings',
-    '/api/settings/models',
-    '허용 모델',
-    {
+  // 모델 정보는 Runner 보고, 매핑은 owner 승인표다. 팀장은 허용만 정한다(G§7.1, Q-06).
+  ...setting('ModelSettings', '/api/settings/models', '허용 모델', {}, {
+    write: { models: List(Body({ agent: c.Agent, id: Text, allowed: Type.Boolean() })) },
+    read: {
       models: List(
-        Body({
+        Type.Object({
           agent: c.Agent,
-          id: Text,
-          label: Text,
+          id: Type.String(),
+          label: Type.String(),
           rank: Type.Integer(),
           allowed: Type.Boolean(),
           isNew: Type.Boolean(),
-          // 공통 단계 1~5. 미매핑·미확인은 null(owner Q-06)
-          efforts: List(Body({ key: Text, level: Nullable(Type.Integer({ minimum: 1, maximum: 5 })) })),
+          // 지원 값 미확인이면 null. 공통 단계가 없으면(ultra 등) level이 null
+          efforts: Nullable(
+            List(Type.Object({ key: Type.String(), level: Nullable(Type.Integer({ minimum: 1, maximum: 5 })) })),
+          ),
         }),
       ),
     },
-  ),
+  }),
   ...setting('SplitSettings', '/api/settings/split', 'Task 분할 기준', {
     maxHours: Type.Number({ exclusiveMinimum: 0 }),
     minHours: Type.Number({ exclusiveMinimum: 0 }),
@@ -241,6 +242,7 @@ const mail = [
     summary: '받는 사람 추가(중복 409, 구독 하나 이상)',
     body: Body({ email: c.Email, name: Type.String(), ...subscription }),
     responses: { 201: Recipient },
+    errors: ['RECIPIENT_DUPLICATE'],
   }),
   operation({
     ...byBody,

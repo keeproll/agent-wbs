@@ -29,7 +29,8 @@
    "diskFreeGB": 952,
    "os": "WSL2",
    "perSessionGB": 1.0,
-   "samples": 38
+   "samples": 38,
+   "bootId": "b1"
   },
   "status": 200,
   "response": {
@@ -60,6 +61,14 @@
      "detail": "없음",
      "fix": "git-lfs 설치"
     }
+   ],
+   "cli": [
+    {
+     "agent": "Codex",
+     "version": "0.172.0",
+     "model": "model-a",
+     "options": "exec --json"
+    }
    ]
   },
   "status": 204
@@ -70,14 +79,35 @@
    "agent": "Codex",
    "models": [
     {
-     "id": "model-a",
-     "label": "Model A",
-     "rank": 1
+     "id": "gpt-5.5",
+     "label": "5.5",
+     "rank": 1,
+     "efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+     ]
+    },
+    {
+     "id": "gpt-6-sol",
+     "label": "6 sol",
+     "rank": 2,
+     "efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra"
+     ]
+    },
+    {
+     "id": "hidden",
+     "label": "hidden",
+     "rank": 3,
+     "efforts": null
     }
-   ],
-   "efforts": [
-    "low",
-    "ultra"
    ]
   },
   "status": 200,
@@ -152,7 +182,15 @@
    "effort": "high",
    "adjust": {
     "kind": "up",
-    "reason": "재작업"
+    "from": {
+     "model": "model-a",
+     "effort": "medium"
+    },
+    "to": {
+     "model": "model-a",
+     "effort": "high"
+    },
+    "reason": "재작업 한 단계 상향"
    },
    "locked": false,
    "floorEffort": "medium",
@@ -242,8 +280,16 @@
    "model": "model-a",
    "effort": "high",
    "adjust": {
-    "kind": "keep",
-    "reason": "재개"
+    "kind": "up",
+    "from": {
+     "model": "model-a",
+     "effort": "medium"
+    },
+    "to": {
+     "model": "model-a",
+     "effort": "high"
+    },
+    "reason": "재작업 한 단계 상향"
    },
    "subagents": [
     {
@@ -406,6 +452,8 @@
  {
   "id": "startCiRun",
   "body": {
+   "jobId": "job-1",
+   "fence": 3,
    "stage": "task",
    "taskKey": "TASK-0005",
    "attemptId": "ATT-0005-1",
@@ -438,13 +486,16 @@
    "artifacts": [
     "runs/ci-1/log.txt"
    ],
-   "treeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   "treeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "fence": 3
   },
   "status": 204
  },
  {
   "id": "reportMergeQueue",
   "body": {
+   "jobId": "job-1",
+   "fence": 3,
    "pr": 8,
    "taskKey": "TASK-0005",
    "status": "merged",
@@ -457,6 +508,8 @@
  {
   "id": "reportDesignSnapshot",
   "body": {
+   "jobId": "job-1",
+   "fence": 3,
    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
    "files": [
     {
@@ -542,7 +595,7 @@
     {
      "id": "cmd-1",
      "kind": "reset-cleanup",
-     "epoch": 3,
+     "epoch": 2,
      "payload": {
       "branches": [
        "agent/TASK-0005"
@@ -653,7 +706,11 @@
   "body": {
    "fence": 3,
    "hostId": "h1",
-   "proof": "group_empty",
+   "proof": {
+    "kind": "group_empty",
+    "bootId": "b1",
+    "processGroup": 4321
+   },
    "at": "2026-11-25T01:02:03.123456Z"
   },
   "status": 204
@@ -678,7 +735,12 @@
   "body": {
    "fence": 2,
    "hostId": "h1",
-   "proof": "boot_changed",
+   "proof": {
+    "kind": "boot_changed",
+    "bootId": "b1",
+    "processGroup": 4321,
+    "currentBootId": "b2"
+   },
    "at": "2026-11-25T01:02:03.123456Z"
   },
   "status": 204
@@ -718,6 +780,8 @@
  {
   "id": "submitEstimates",
   "body": {
+   "jobId": "job-1",
+   "fence": 3,
    "items": [
     {
      "taskKey": "TASK-0005",
@@ -749,7 +813,8 @@
       "taskKey": "TASK-0005",
       "before": "2026-12-01",
       "after": "2026-12-02",
-      "deltaDays": 1
+      "deltaDays": 1,
+      "kind": "delayed"
      }
     ]
    }
@@ -758,6 +823,8 @@
  {
   "id": "requestReplan",
   "body": {
+   "jobId": "job-1",
+   "fence": 3,
    "trigger": "재추정",
    "capacity": {
     "rate": 0.6,
@@ -779,7 +846,15 @@
      "taskKey": "TASK-0005",
      "before": "2026-12-01",
      "after": "2026-12-02",
-     "deltaDays": 1
+     "deltaDays": 1,
+     "kind": "delayed"
+    },
+    {
+     "taskKey": "TASK-0013",
+     "kind": "new",
+     "before": null,
+     "after": "2026-12-05",
+     "deltaDays": null
     }
    ]
   }
@@ -905,6 +980,8 @@
  {
   "id": "createPlanningSession",
   "body": {
+   "jobId": "job-1",
+   "fence": 3,
    "title": "Phase 상세화",
    "scope": "WP-06"
   },
@@ -919,6 +996,8 @@
    "id": "pl-1"
   },
   "body": {
+   "jobId": "job-1",
+   "fence": 3,
    "agent": "Codex",
    "summary": "요약",
    "items": [
@@ -933,6 +1012,8 @@
    "id": "pl-1"
   },
   "body": {
+   "jobId": "job-1",
+   "fence": 3,
    "reviews": [
     {
      "topic": "주제",
@@ -973,6 +1054,8 @@
  {
   "id": "submitPlanningProposal",
   "body": {
+   "jobId": "job-1",
+   "fence": 3,
    "title": "제목",
    "reason": "사유",
    "source": {
@@ -1040,6 +1123,8 @@
    "taskKey": "TASK-0005"
   },
   "body": {
+   "jobId": "job-1",
+   "fence": 3,
    "grades": {
     "dev": {
      "modelId": "model-a",
@@ -1063,5 +1148,38 @@
    }
   },
   "status": 204
+ },
+ {
+  "id": "createDecision",
+  "params": {
+   "projectId": "p-1"
+  },
+  "body": {
+   "jobId": "job-1",
+   "fence": 3,
+   "authority": "agent",
+   "area": "통신",
+   "title": "화면 갱신",
+   "choice": "SSE",
+   "reason": "단방향",
+   "alternatives": "WebSocket"
+  },
+  "status": 201,
+  "response": {
+   "id": "td-1",
+   "tdKey": "TD-12",
+   "area": "통신",
+   "title": "화면 갱신",
+   "choice": "SSE",
+   "authority": "agent",
+   "level": null,
+   "condition": "",
+   "status": "pending",
+   "reason": "단방향",
+   "alternatives": "WebSocket",
+   "by": "Codex",
+   "at": "2026-11-25T01:02:03.123456Z",
+   "updatedAt": "2026-11-25T01:02:03.123456Z"
+  }
  }
 ]

@@ -116,7 +116,7 @@ export function buildOpenApi(operations: readonly Operation[]): Json {
     item[method] = {
       operationId: op.id,
       summary: op.summary,
-      tags: [usesEpoch(op) ? (op.path.split('/')[2] ?? '') : op.principal],
+      tags: [op.path.startsWith('/api/planning/') ? 'planning' : op.principal],
       security: op.principal === 'none' ? [] : [op.principal === 'lead' ? { leadSession: [] } : { runnerToken: [] }],
       ...(op.version && { 'x-version-rule': op.version }),
       ...(allParameters.length > 0 && { parameters: allParameters }),

@@ -3,7 +3,7 @@ import * as c from '../common.ts';
 import * as m from '../models.ts';
 import { operation } from '../operation.ts';
 
-const { AnyOf, Body, Nullable, Opt, List, Text, Pending, Page, PageQuery } = c;
+const { AnyOf, Body, Nullable, Opt, List, Text, Page, PageQuery } = c;
 const lead = { principal: 'lead' } as const;
 const byBody = { ...lead, version: 'body' } as const;
 const byQuery = { ...lead, version: 'query' } as const;
@@ -103,7 +103,7 @@ const task = [
     body: Body({ ...V, predTaskKey: c.TaskKey, depType: c.DepType }),
     responses: {
       201: Type.Object({
-        dependency: Type.Object({ pred: c.TaskKey, succ: c.TaskKey, type: c.DepType }),
+        dependency: m.Dependency,
         blocked: Type.Boolean(),
       }),
     },
@@ -173,13 +173,23 @@ const task = [
     body: Body({ ...V, outputs: List(m.OutputInput) }),
     responses: Changed,
   }),
+  operation({
+    ...byBody,
+    id: 'requestTaskApproval',
+    method: 'POST',
+    path: '/api/tasks/:taskKey/request-approval',
+    summary: '착수 승인 요청. 명세 필수 항목 미충족은 400 errors[]',
+    body: Body({ ...V, comment }),
+    responses: Changed,
+    errors: ['INVALID_TRANSITION'],
+  }),
   ...(['approve', 'reject'] as const).map((action) =>
     operation({
       ...byBody,
       id: `${action}Task`,
       method: 'POST',
       path: `/api/tasks/:taskKey/${action}`,
-      summary: action === 'approve' ? '착수 승인' : '착수 반려',
+      summary: action === 'approve' ? '착수 승인(필수 항목 재검사)' : '착수 반려',
       body: Body({ ...V, comment }),
       responses: Changed,
       errors: ['INVALID_TRANSITION'],
@@ -298,7 +308,7 @@ const task = [
     summary: '실행 중단. Task와 시도의 버전을 모두 비교',
     body: Body({ ...V, attemptUpdatedAt: c.Timestamp }),
     responses: jobCreated,
-    errors: ['ATTEMPT_CLOSED'],
+    errors: ['ATTEMPT_CLOSED', 'CLAIM_REJECTED'],
   }),
   operation({
     ...byBody,
@@ -441,7 +451,7 @@ const planning = [
     method: 'GET',
     path: '/api/proposals/:id/preview',
     summary: '반영과 같은 함수로 계산한 미리보기',
-    responses: { 200: Type.Object({ previewHash: Type.String(), problems: List(Type.String()), result: Pending('M2-07') }) },
+    responses: { 200: m.ProposalPreview },
   }),
   ...(['submit', 'reject', 'request-changes'] as const).map((action) =>
     operation({
@@ -463,7 +473,7 @@ const planning = [
       path: `/api/proposals/:id/${action}`,
       summary: action === 'apply' ? '재시뮬레이션 후 반영(문제가 있으면 보류)' : '승인',
       body: Body({ ...V, previewHash: Text, comment }),
-      responses: { 200: m.Proposal },
+      responses: { 200: action === 'apply' ? m.ProposalApplied : m.Proposal },
       errors: ['INVALID_TRANSITION'],
     }),
   ),
@@ -476,7 +486,7 @@ const overview = [
     method: 'GET',
     path: '/api/dashboard',
     summary: '대시보드',
-    responses: { 200: Pending('M3-07') },
+    responses: { 200: m.Dashboard },
   }),
   operation({
     ...lead,
@@ -484,7 +494,7 @@ const overview = [
     method: 'GET',
     path: '/api/schedule',
     summary: '일정',
-    responses: { 200: Pending('M1-04') },
+    responses: { 200: m.Schedule },
   }),
   operation({
     ...lead,
@@ -540,6 +550,7 @@ const overview = [
     path: '/api/evidence/:id/content',
     summary: 'Evidence 원본(attachment + nosniff)',
     binary: 'application/octet-stream',
+    responseHeaders: ['Content-Disposition', 'X-Content-Type-Options'],
     responses: { 200: null },
   }),
   operation({
@@ -571,7 +582,7 @@ const overview = [
     method: 'GET',
     path: '/api/runner-state',
     summary: '연결·준비·PC·동시 실행·관측·제한 요인',
-    responses: { 200: Pending('M2-05') },
+    responses: { 200: m.RunnerState },
   }),
   operation({
     ...lead,
@@ -581,16 +592,7 @@ const overview = [
     summary: '현재 알림',
     responses: {
       200: Type.Object({
-        items: List(
-          Type.Object({
-            id: c.Id,
-            key: Type.String(),
-            severity: Type.String(),
-            target: Nullable(Type.String()),
-            text: Type.String(),
-            at: c.Timestamp,
-          }),
-        ),
+        items: List(m.Alert),
       }),
     },
   }),
@@ -600,7 +602,7 @@ const overview = [
     method: 'GET',
     path: '/api/system/integrity',
     summary: '데이터 정합성 점검',
-    responses: { 200: Pending('M2-08') },
+    responses: { 200: m.Integrity },
   }),
   operation({
     ...lead,
@@ -657,7 +659,15 @@ const auth = [
     method: 'GET',
     path: '/api/session',
     summary: '현재 세션',
-    responses: { 200: Pending('M2-01') },
+    responses: {
+      200: Type.Object({
+        principal: AnyOf('lead'),
+        method: AnyOf('link', 'password'),
+        expiresAt: c.Timestamp,
+        // 변경 요청의 X-CSRF-Token 값
+        csrfToken: Type.String({ minLength: 1 }),
+      }),
+    },
   }),
 ];
 

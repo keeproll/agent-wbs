@@ -25,7 +25,7 @@ export interface Operation {
   readonly responses: Readonly<Record<number, TSchema | null>>;
   /** JSON이 아닌 성공 응답의 형식 */
   readonly binary?: string;
-  readonly responseHeaders?: readonly ('X-Current-Epoch' | 'ETag')[];
+  readonly responseHeaders?: readonly ('X-Current-Epoch' | 'ETag' | 'Content-Disposition' | 'X-Content-Type-Options')[];
   readonly ifNoneMatch?: true;
   readonly errors: readonly ErrorCode[];
   readonly version?: VersionRule;
@@ -38,7 +38,8 @@ export type BodyOf<T extends Operation> = T['body'] extends TSchema ? Static<T['
 
 export const pathParams = (path: string): string[] => [...path.matchAll(/:(\w+)/g)].map((m) => m[1] ?? '');
 
-export const usesEpoch = (op: Pick<Operation, 'path'>): boolean => /^\/api\/(runner|planning)\//.test(op.path);
+/** Runner 토큰을 쓰는 모든 요청은 epoch를 보낸다. 경로가 아니라 주체가 기준이다(G§8.6). */
+export const usesEpoch = (op: Pick<Operation, 'principal'>): boolean => op.principal === 'runner';
 
 type Input = Omit<Operation, 'errors' | 'idempotency' | 'responses'> & {
   responses: Operation['responses'];
@@ -46,8 +47,14 @@ type Input = Omit<Operation, 'errors' | 'idempotency' | 'responses'> & {
   idempotency?: Operation['idempotency'];
 };
 
-const properties = (schema: TSchema | undefined): TProperties =>
-  (schema as { properties?: TProperties } | undefined)?.properties ?? {};
+/** 본문이 union이면 모든 갈래의 필드 */
+const properties = (schema: TSchema | undefined): TProperties => {
+  const { properties: own, anyOf } = (schema ?? {}) as { properties?: TProperties; anyOf?: TSchema[] };
+  return own ?? Object.assign({}, ...(anyOf ?? []).map(properties)) as TProperties;
+};
+
+/** 전용 404 코드가 있거나 자원이 아닌 경로 값 */
+const COVERED_PARAMS = new Set(['taskKey', 'projectId', 'attemptId', 'messageId', 'dependencyId', 'kind']);
 
 /** 라우트 정의. 공통 오류와 멱등 규칙을 채우고, 계약 위반이면 정의 시점에 실패한다. */
 export function operation<const T extends Input>(input: T): T & Pick<Operation, 'errors' | 'idempotency'> {
@@ -71,6 +78,7 @@ export function operation<const T extends Input>(input: T): T & Pick<Operation, 
   if (params.includes('attemptId')) errors.add('ATTEMPT_NOT_FOUND');
   if (params.includes('messageId')) errors.add('MESSAGE_NOT_FOUND');
   if (params.includes('dependencyId')) errors.add('DEPENDENCY_NOT_FOUND');
+  if (params.some((name) => !COVERED_PARAMS.has(name)) || 'jobId' in body) errors.add('NOT_FOUND');
   if ('fence' in body) errors.add('LEASE_LOST');
 
   const idempotency =
@@ -96,7 +104,7 @@ export function operation<const T extends Input>(input: T): T & Pick<Operation, 
     if (input.version && !has[input.version]) fail(`version '${input.version}' 필드가 없다.`);
     if (input.version !== 'none') errors.add('VERSION_CONFLICT');
   } else if (input.version) fail('version은 팀장 수정에만 쓴다.');
-  if (principal === 'runner' && !usesEpoch(input)) fail('Runner 라우트는 /api/runner 또는 /api/planning 아래에 둔다.');
+  if (principal !== 'runner' && /^\/api\/(runner|planning)\//.test(path)) fail('Runner 경로는 Runner 토큰만 쓴다.');
 
   return {
     ...input,

@@ -6,6 +6,7 @@ import { operation } from '../operation.ts';
 const { AnyOf, Body, Nullable, Opt, List, Text } = c;
 const runner = { principal: 'runner' } as const;
 const fence = c.Fence;
+const Pid = Type.Integer({ minimum: 1 });
 
 const PushedCommit = Body({ sha: c.Sha, at: c.Timestamp, author: Type.String(), message: Type.String() });
 const ChangedInput = Body({
@@ -15,9 +16,18 @@ const ChangedInput = Body({
   added: c.Count,
   deleted: c.Count,
 });
-const Session = Body({ attemptId: c.Id, observed: c.Count, reserved: c.Count, state: AnyOf('ok', 'unconfirmed') });
+const Session = Body({ attemptId: c.Id, observed: c.Count, reserved: c.Count, state: c.ObservationState });
 const InstalledSubagent = Body({ id: c.Id, version: c.Count, hash: Text });
-const ReleaseProof = AnyOf('no_process', 'group_empty', 'boot_changed');
+/**
+ * 해제 증거. bootId·processGroup은 보유를 만든 원래 값이고, 서버가 저장된 보유와 같을 때만 그 보유를 닫는다.
+ * 낡은 fence의 release도 같은 조건이라 새 프로세스의 보유를 풀 수 없다(contracts §3.2-4·§3.4-2).
+ */
+const ReleaseProof = Type.Union([
+  Body({ kind: AnyOf('no_process'), bootId: Text }),
+  Body({ kind: AnyOf('group_empty'), bootId: Text, processGroup: Pid }),
+  // 예약만 하고 그룹이 없던 보유는 processGroup이 null이다. currentBootId는 host 보고의 bootId와 같아야 한다.
+  Body({ kind: AnyOf('boot_changed'), bootId: Text, processGroup: Nullable(Pid), currentBootId: Text }),
+]);
 /** contracts §4.1 근거 고정: 단계별로 해당하는 값만 보낸다. */
 const ciShas = {
   baseSha: Opt(c.Sha),
@@ -25,6 +35,15 @@ const ciShas = {
   mergeSha: Opt(c.Sha),
   treeSha: Opt(c.Sha),
   pipelineSha: Opt(c.Sha),
+};
+
+const ciStart = {
+  taskKey: Opt(c.TaskKey),
+  attemptId: Opt(c.Id),
+  ref: Text,
+  pr: Opt(Type.Integer({ minimum: 1 })),
+  trigger: Opt(Text),
+  ...ciShas,
 };
 
 /** QA 결과(contracts §3.1). 검사한 커밋·명세 버전이 없으면 근거로 쓸 수 없다. */
@@ -114,7 +133,8 @@ export const runnerOperations = [
     id: 'reportSession',
     method: 'POST',
     path: '/api/runner/sessions',
-    summary: '세션 시작·종료 보고(가동률 근거)',
+    summary: '세션 시작·종료 보고(가동률 근거). 열린 세션이 없는 stop은 409',
+    errors: ['INVALID_TRANSITION'],
     body: Body({
       runnerId: Text,
       event: AnyOf('start', 'stop'),
@@ -132,6 +152,8 @@ export const runnerOperations = [
     summary: '실행 PC 사양 보고',
     body: Body({
       hostId: Text,
+      // 재부팅 판정의 기준값(보유 해제 증거와 대조)
+      bootId: Text,
       cpu: Type.String(),
       cores: Type.Integer({ minimum: 1 }),
       memGB: Type.Number({ exclusiveMinimum: 0 }),
@@ -160,12 +182,14 @@ export const runnerOperations = [
       at: c.Timestamp,
       items: List(
         Body({
-          key: AnyOf('claude', 'codex', 'git', 'node', 'pnpm', 'pg', 'repo', 'disk', 'subs', 'obs', 'gh', 'lfs'),
-          status: AnyOf('ok', 'warn', 'fail'),
+          key: c.ReadinessKey,
+          status: c.ReadinessStatus,
           detail: Type.String(),
           fix: Opt(Type.String()),
         }),
       ),
+      // 관측 등급은 CLI×버전×모델×옵션 조합으로 서버가 판정한다(G§6.7).
+      cli: Opt(List(Body({ agent: c.Agent, version: Text, model: Text, options: Text }))),
     }),
     responses: { 204: null },
   }),
@@ -177,8 +201,16 @@ export const runnerOperations = [
     summary: '사용 가능 모델·Effort 보고(신규는 미허용)',
     body: Body({
       agent: c.Agent,
-      models: List(Body({ id: Text, label: Text, rank: Type.Integer() }), { minItems: 1 }),
-      efforts: List(Text, { minItems: 1 }),
+      models: List(
+        Body({
+          id: Text,
+          label: Text,
+          rank: Type.Integer(),
+          // 그 모델이 지원하는 CLI 값(낮은 순). 확인하지 못했으면 null. 공통 단계 매핑은 서버의 승인표가 정한다(Q-06).
+          efforts: Nullable(List(Text, { minItems: 1, uniqueItems: true })),
+        }),
+        { minItems: 1 },
+      ),
     }),
     responses: { 200: Type.Object({ newModels: List(Type.String()) }) },
   }),
@@ -223,6 +255,8 @@ export const runnerOperations = [
     path: '/api/runner/tasks/:taskKey/run-grade',
     summary: '실행 직전 등급 조회(등급 정책의 단일 출처)',
     query: Type.Object({ role: c.RunRole }),
+    // claim 뒤 허용이 해제되어 재판단 전인 경우(D-29)
+    errors: ['CLAIM_REJECTED'],
     responses: {
       200: Type.Object({
         model: Type.String(),
@@ -312,7 +346,6 @@ export const runnerOperations = [
       at: c.Timestamp,
       model: Text,
       effort: Text,
-      escalation: Opt(Text),
       adjust: Opt(m.GradeAdjust),
       // 실제 사용 여부는 사후 확정(subagent-usage, D-12)
       subagents: Opt(List(Body({ id: c.Id, version: c.Count, installed: Type.Boolean() }))),
@@ -407,7 +440,7 @@ export const runnerOperations = [
     method: 'POST',
     path: '/api/runner/bootstrap/:jobId/progress',
     summary: '초기 분석·차이 분석 단계 진행',
-    body: Body({ fence, stepKey: Text, status: c.StepStatus, at: c.Timestamp, note: Opt(Type.String()) }),
+    body: Body({ fence, stepKey: m.JobStepKey, status: c.StepStatus, at: c.Timestamp, note: Opt(Type.String()) }),
     responses: { 204: null },
   }),
   operation({
@@ -416,15 +449,11 @@ export const runnerOperations = [
     method: 'POST',
     path: '/api/runner/ci/runs',
     summary: '빌드·통합 실행 시작',
-    body: Body({
-      stage: c.CiStage,
-      taskKey: Opt(c.TaskKey),
-      attemptId: Opt(c.Id),
-      ref: Text,
-      pr: Opt(Type.Integer({ minimum: 1 })),
-      trigger: Opt(Text),
-      ...ciShas,
-    }),
+    // 야간 점검만 Runner가 정책 시각에 job 없이 시작한다(contracts §3.2-5).
+    body: Type.Union([
+      Body({ ...c.JobContext, stage: c.CiStage, ...ciStart }),
+      Body({ stage: AnyOf('night'), ...ciStart }),
+    ]),
     responses: { 201: Type.Object({ id: c.Id, runKey: Type.String() }) },
   }),
   operation({
@@ -432,9 +461,10 @@ export const runnerOperations = [
     id: 'updateCiRun',
     method: 'PATCH',
     path: '/api/runner/ci/runs/:id',
-    summary: '단계 진행·결과(로그 원문은 Runner PC)',
+    summary: '단계 진행·결과(로그 원문은 Runner PC). fence는 시작 때 저장한 job과 대조하고, job 없는 야간 점검만 null',
     body: Type.Object(
       {
+        fence: Nullable(fence),
         steps: Opt(List(m.CiStep)),
         status: Opt(c.CiStatus),
         logExcerpt: Opt(Type.String()),
@@ -442,7 +472,7 @@ export const runnerOperations = [
         url: Opt(c.HttpUrl),
         ...ciShas,
       },
-      { additionalProperties: false, minProperties: 1 },
+      { additionalProperties: false, minProperties: 2 },
     ),
     responses: { 204: null },
   }),
@@ -453,6 +483,7 @@ export const runnerOperations = [
     path: '/api/runner/ci/queue',
     summary: '병합 상태(PR·병합 커밋) 보고 → 서버가 완료 판정',
     body: Body({
+      ...c.JobContext,
       pr: Type.Integer({ minimum: 1 }),
       taskKey: c.TaskKey,
       status: c.QueueStatus,
@@ -474,6 +505,7 @@ export const runnerOperations = [
     path: '/api/runner/design/snapshot',
     summary: '커밋 기준 계약 파일 해석·대조 결과',
     body: Body({
+      ...c.JobContext,
       commit: c.Sha,
       files: List(
         Body({ path: c.RepoPath, kind: Text, format: Text, status: AnyOf('ok', 'draft', 'error'), error: Opt(Text) }),
@@ -558,7 +590,7 @@ export const runnerOperations = [
     id: 'reportCommandResult',
     method: 'POST',
     path: '/api/runner/commands/:id/result',
-    summary: '명령 결과. 명령 ID와 그 명령의 epoch가 일치해야 한다(D-04)',
+    summary: '명령 결과. X-Project-Epoch에 commands[].epoch를 그대로 보내며 명령 ID와 일치해야 한다(D-04)',
     staleEpoch: true,
     body: Body({
       status: AnyOf('done', 'failed'),
@@ -597,7 +629,7 @@ export const runnerOperations = [
       fence,
       hostId: Text,
       bootId: Text,
-      processGroup: Opt(Type.Integer({ minimum: 1 })),
+      processGroup: Opt(Pid),
       headSha: c.Sha,
       installedSubagents: List(InstalledSubagent),
     }),
@@ -610,7 +642,7 @@ export const runnerOperations = [
     method: 'POST',
     path: '/api/runner/jobs/:id/process',
     summary: '프로세스 생성 직후 보유에 기록',
-    body: Body({ fence, processGroup: Type.Integer({ minimum: 1 }), cgroup: Nullable(Text) }),
+    body: Body({ fence, processGroup: Pid, cgroup: Nullable(Text) }),
     responses: { 204: null },
   }),
   operation({
@@ -628,7 +660,7 @@ export const runnerOperations = [
     method: 'POST',
     path: '/api/runner/jobs/:id/slots/acquire',
     summary: '같은 시도의 CLI 재기동 전 용량 재획득',
-    body: Body({ fence, hostId: Text, processGroup: Type.Integer({ minimum: 1 }) }),
+    body: Body({ fence, hostId: Text, processGroup: Pid }),
     responses: { 204: null },
     errors: ['CLAIM_REJECTED'],
   }),

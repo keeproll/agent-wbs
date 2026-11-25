@@ -3,7 +3,7 @@ import * as c from '../common.ts';
 import * as m from '../models.ts';
 import { operation } from '../operation.ts';
 
-const { AnyOf, Body, Nullable, Opt, List, Text, Pending, Page, PageQuery } = c;
+const { AnyOf, Body, Nullable, Opt, List, Text, Page, PageQuery } = c;
 const lead = { principal: 'lead' } as const;
 const byBody = { ...lead, version: 'body' } as const;
 const noVersion = { ...lead, version: 'none' } as const;
@@ -45,7 +45,7 @@ const project = [
     id: 'createProject',
     method: 'POST',
     path: '/api/project',
-    summary: '프로젝트 등록 → 초기 분석 작업 생성',
+    summary: '프로젝트 등록 → 초기 분석 작업 생성(성공한 저장소 확인이 없으면 INVALID_TRANSITION)',
     body: Body({
       name: Text,
       url: c.RepoUrl,
@@ -60,7 +60,7 @@ const project = [
       repoCheckId: c.Id,
     }),
     responses: { 201: Type.Object({ project: Type.Object({ id: c.Id, name: Type.String() }), jobId: c.Id }) },
-    errors: ['PROJECT_EXISTS', 'CLEANUP_PENDING'],
+    errors: ['PROJECT_EXISTS', 'CLEANUP_PENDING', 'INVALID_TRANSITION', 'NOT_FOUND'],
   }),
   operation({
     ...lead,
@@ -68,7 +68,7 @@ const project = [
     method: 'GET',
     path: '/api/project',
     summary: '등록·입력·bootstrap·변경 감지',
-    responses: { 200: Pending('M2-03') },
+    responses: { 200: m.ProjectState },
   }),
   operation({
     ...lead,
@@ -93,12 +93,13 @@ const project = [
     errors: ['INVALID_TRANSITION'],
   }),
   operation({
-    ...byBody,
+    ...lead,
+    version: 'revision',
     id: 'retryBootstrap',
     method: 'POST',
     path: '/api/project/bootstrap/retry',
-    summary: '실패 단계부터 다시 시도',
-    body: Body(V),
+    summary: '실패 단계부터 다시 시도. 초안이 있으면 revision, 없으면 분석 회차(runNo)를 비교',
+    body: Type.Union([Body({ revision: Revision }), Body({ revision: Type.Null(), runNo: Revision })]),
     responses: jobCreated,
     errors: ['INVALID_TRANSITION', 'CLEANUP_PENDING'],
   }),
@@ -144,8 +145,8 @@ const project = [
     id: 'retryInputs',
     method: 'POST',
     path: '/api/project/inputs/retry',
-    summary: '차이 분석 다시 시도(끝난 단계는 건너뜀)',
-    body: Body(V),
+    summary: '차이 분석 다시 시도(끝난 단계는 건너뜀). version은 실패한 입력 버전',
+    body: Body({ ...V, version: Revision }),
     responses: jobCreated,
     errors: ['INVALID_TRANSITION'],
   }),
@@ -166,15 +167,17 @@ const project = [
     method: 'GET',
     path: '/api/project/reset-preview',
     summary: '삭제 건수·Runner 정리 내용',
-    responses: { 200: Pending('M2-04') },
+    responses: { 200: m.ResetPreview },
   }),
   operation({
     ...lead,
     id: 'exportProject',
     method: 'GET',
     path: '/api/project/export',
-    summary: '내보내기(비밀값·수신자 제외)',
-    responses: { 200: Pending('M2-04') },
+    summary: '내보내기 zip(데이터 JSON·보고서 PDF·Evidence. 비밀값·수신자 제외)',
+    binary: 'application/zip',
+    responseHeaders: ['Content-Disposition'],
+    responses: { 200: null },
   }),
   operation({
     ...lead,
@@ -238,8 +241,13 @@ const reports = [
     responses: {
       200: Type.Object({
         ...reportSummary,
-        snapshot: Pending('M6-01'),
-        changesSince: Pending('M6-01'),
+        snapshot: m.ReportSnapshot,
+        // 「생성 이후 일정 재조정 N회 — 현재 완료 예상 X (보고서 기준 Y)」
+        changesSince: Type.Object({
+          replans: c.Count,
+          currentEnd: Nullable(c.DateOnly),
+          reportEnd: Nullable(c.DateOnly),
+        }),
       }),
     },
   }),
@@ -251,6 +259,7 @@ const reports = [
     summary: 'PDF(서버 렌더링, 캐시)',
     query: Type.Object({ view: c.ReportView }),
     binary: 'application/pdf',
+    responseHeaders: ['Content-Disposition'],
     responses: { 200: null },
     errors: ['PDF_FAILED'],
   }),
@@ -265,7 +274,9 @@ const FlakyTest = Type.Object({
   taskKey: Nullable(c.TaskKey),
   updatedAt: c.Timestamp,
 });
-const ciSettings = Type.Object({ ...m.CiSettings, ...V });
+// 같은 설정 한 벌의 다른 경로(`/api/settings/ci`). 저장 전에는 updatedAt이 null이다.
+const settingVersion = { updatedAt: Nullable(c.Timestamp) };
+const ciSettings = Type.Object({ ...m.CiSettings, ...settingVersion });
 const ci = [
   operation({
     ...lead,
@@ -333,7 +344,7 @@ const ci = [
     method: 'GET',
     path: `${ciPath}/pipeline`,
     summary: '파이프라인 정의 표시',
-    responses: { 200: Pending('M7-05') },
+    responses: { 200: m.Pipeline },
   }),
   operation({
     ...lead,
@@ -351,7 +362,7 @@ const ci = [
     summary: 'CI 실행 설정 변경',
     body: Type.Object(
       {
-        ...V,
+        ...settingVersion,
         nightAt: Opt(m.CiSettings.nightAt),
         retry: Opt(m.CiSettings.retry),
         deployUrl: Opt(m.CiSettings.deployUrl),
@@ -377,8 +388,7 @@ const design = [
         decisions: c.Count,
         pending: c.Count,
         drifts: c.Count,
-        // 구성도·계약 파일·버전 목록(화면 탭 1·6)
-        detail: Pending('M6-05'),
+        ...m.designOverview,
       }),
     },
   }),
@@ -391,12 +401,12 @@ const design = [
     responses: { 200: Type.Object({ items: List(m.Decision) }) },
   }),
   operation({
-    ...noVersion,
+    principal: 'runner',
     id: 'createDecision',
     method: 'POST',
     path: `${designPath}/decisions`,
-    summary: '기술 결정 추가(Agent 제안)',
-    body: m.TechProposal,
+    summary: '기술 결정 추가. agent는 팀장 승인 대기, free는 재량 기록',
+    body: Body({ ...c.JobContext, authority: AnyOf('agent', 'free'), ...m.TechProposal }),
     responses: { 201: m.Decision },
   }),
   ...(['approve', 'reject'] as const).map((action) =>
@@ -436,7 +446,7 @@ const design = [
     method: 'GET',
     path: `${designPath}/interfaces/:key`,
     summary: '인터페이스 상세',
-    responses: { 200: Type.Object({ ...designItem, kind: m.IfaceKind, content: Pending('M6-05') }) },
+    responses: { 200: Type.Object({ ...designItem, kind: m.IfaceKind, source: m.DesignSource, content: m.IfaceContent }) },
   }),
   operation({
     ...lead,
@@ -453,7 +463,7 @@ const design = [
     method: 'GET',
     path: `${designPath}/data/:key`,
     summary: '데이터 항목 상세',
-    responses: { 200: Type.Object({ ...designItem, store: m.DesignStore, content: Pending('M6-05') }) },
+    responses: { 200: Type.Object({ ...designItem, store: m.DesignStore, source: m.DesignSource, content: m.DataContent }) },
   }),
   operation({
     ...lead,

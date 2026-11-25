@@ -1,0 +1,1638 @@
+[
+ {
+  "id": "previewProposal",
+  "status": 200,
+  "response": {
+   "previewHash": "h1",
+   "issues": [],
+   "idMap": {},
+   "diff": [
+    {
+     "index": 0,
+     "op": "remove",
+     "target": "TASK-0005",
+     "field": "status",
+     "before": "ready",
+     "after": "cancelled"
+    }
+   ],
+   "impact": {
+    "removedDependencies": [
+     {
+      "pred": "TASK-0005",
+      "succ": "TASK-0006",
+      "type": "SS",
+      "reason": "pred-cancelled"
+     },
+     {
+      "pred": "TASK-0005",
+      "succ": "TASK-0008",
+      "type": "SS",
+      "reason": "pred-cancelled"
+     }
+    ],
+    "unblockedSuccessors": [
+     {
+      "taskKey": "TASK-0006",
+      "remainingBlockers": []
+     },
+     {
+      "taskKey": "TASK-0008",
+      "remainingBlockers": [
+       {
+        "pred": "TASK-0003",
+        "succ": "TASK-0008",
+        "type": "FS",
+        "predStatus": "running"
+       }
+      ]
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": "applyProposal",
+  "status": 200,
+  "response": {
+   "proposal": {
+    "id": "cp-1",
+    "cpKey": "CP-002",
+    "title": "취소",
+    "reason": "범위 축소",
+    "source": {
+     "kind": "manual",
+     "id": null
+    },
+    "status": "applied",
+    "ops": [
+     {
+      "op": "remove",
+      "task": "TASK-0005"
+     }
+    ],
+    "idMap": {},
+    "holdReasons": [],
+    "events": [
+     {
+      "at": "2026-11-25T01:02:03.123456Z",
+      "actor": "팀장",
+      "action": "반영",
+      "comment": ""
+     }
+    ],
+    "createdAt": "2026-11-25T01:02:03.123456Z",
+    "updatedAt": "2026-11-25T01:02:03.123456Z"
+   },
+   "issues": [],
+   "idMap": {},
+   "diff": [
+    {
+     "index": 0,
+     "op": "remove",
+     "target": "TASK-0005",
+     "field": "status",
+     "before": "ready",
+     "after": "cancelled"
+    }
+   ],
+   "impact": {
+    "removedDependencies": [
+     {
+      "pred": "TASK-0005",
+      "succ": "TASK-0006",
+      "type": "SS",
+      "reason": "pred-cancelled"
+     },
+     {
+      "pred": "TASK-0005",
+      "succ": "TASK-0008",
+      "type": "SS",
+      "reason": "pred-cancelled"
+     }
+    ],
+    "unblockedSuccessors": [
+     {
+      "taskKey": "TASK-0006",
+      "remainingBlockers": []
+     },
+     {
+      "taskKey": "TASK-0008",
+      "remainingBlockers": [
+       {
+        "pred": "TASK-0003",
+        "succ": "TASK-0008",
+        "type": "FS",
+        "predStatus": "running"
+       }
+      ]
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": "getProject",
+  "status": 200,
+  "response": {
+   "state": "none",
+   "epoch": 1,
+   "cleanup": "pending"
+  }
+ },
+ {
+  "id": "getProject",
+  "status": 200,
+  "response": {
+   "state": "boot",
+   "epoch": 1,
+   "cleanup": "none",
+   "id": "p-1",
+   "name": "P",
+   "repo": {
+    "url": "https://github.com/o/r",
+    "owner": "o",
+    "name": "r",
+    "branch": "main",
+    "baseCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "targetDate": null,
+   "instruction": "",
+   "constraints": [
+    {
+     "name": "PostgreSQL 16",
+     "level": "must",
+     "condition": ""
+    }
+   ],
+   "registeredAt": "2026-11-25T01:02:03.123456Z",
+   "inputs": [
+    {
+     "v": 1,
+     "at": "2026-11-25T01:02:03.123456Z",
+     "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "mdList": [
+      "prototype/docs/a.md"
+     ],
+     "changes": [],
+     "instruction": "",
+     "result": null,
+     "taskCount": 3
+    }
+   ],
+   "changeCommits": [
+    {
+     "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "at": "2026-11-25T01:02:03.123456Z",
+     "author": "lead",
+     "message": "m",
+     "state": "pending",
+     "files": [
+      {
+       "path": "prototype/docs/a.md",
+       "change": "modified",
+       "added": 1,
+       "deleted": 0
+      }
+     ]
+    }
+   ],
+   "inputJob": {
+    "jobId": "j1",
+    "runNo": 1,
+    "status": "failed",
+    "steps": [
+     {
+      "key": "diff",
+      "status": "fail",
+      "at": "2026-11-25T01:02:03.123456Z",
+      "note": ""
+     }
+    ],
+    "logs": [
+     {
+      "at": "2026-11-25T01:02:03.123456Z",
+      "text": "시작"
+     }
+    ],
+    "fail": {
+     "reason": "checkout 실패",
+     "fix": "git-lfs 설치"
+    },
+    "version": 2,
+    "proposalId": null
+   },
+   "updatedAt": "2026-11-25T01:02:03.123456Z",
+   "bootstrap": {
+    "jobId": "j1",
+    "runNo": 1,
+    "status": "failed",
+    "steps": [
+     {
+      "key": "draft",
+      "status": "done",
+      "at": "2026-11-25T01:02:03.123456Z",
+      "note": "Task 11"
+     }
+    ],
+    "logs": [
+     {
+      "at": "2026-11-25T01:02:03.123456Z",
+      "text": "시작"
+     }
+    ],
+    "fail": {
+     "reason": "checkout 실패",
+     "fix": "git-lfs 설치"
+    },
+    "decisions": [
+     {
+      "id": "td-1",
+      "tdKey": "TD-12",
+      "area": "통신",
+      "title": "화면 갱신",
+      "choice": "SSE",
+      "authority": "agent",
+      "level": null,
+      "condition": "",
+      "status": "pending",
+      "reason": "단방향",
+      "alternatives": "WebSocket",
+      "by": "Codex",
+      "at": "2026-11-25T01:02:03.123456Z",
+      "updatedAt": "2026-11-25T01:02:03.123456Z"
+     }
+    ],
+    "revision": 1,
+    "draft": {
+     "phases": [
+      {
+       "ref": "P1",
+       "title": "기반"
+      }
+     ],
+     "wps": [
+      {
+       "ref": "W1",
+       "phaseRef": "P1",
+       "title": "환경"
+      }
+     ],
+     "tasks": [
+      {
+       "ref": "T1",
+       "wpRef": "W1",
+       "title": "Monorepo 구성",
+       "workType": "Configuration",
+       "primaryDomain": "DevOps",
+       "relatedDomains": [
+        "Common"
+       ],
+       "priority": 1,
+       "assigneeAgent": "Claude",
+       "verifierAgent": "Codex",
+       "estimate": {
+        "estHours": 2,
+        "loHours": 1,
+        "hiHours": 4,
+        "tokensK": 120,
+        "confidence": "중",
+        "basis": "유사 작업 기준",
+        "agreedBy": [
+         "Codex",
+         "Claude"
+        ]
+       },
+       "ac": [
+        {
+         "given": "클린",
+         "when": "빌드",
+         "then": "0",
+         "method": "명령"
+        }
+       ],
+       "outputs": [
+        {
+         "name": "package.json",
+         "kind": "설정",
+         "required": true,
+         "verify": "",
+         "delivered": false
+        }
+       ],
+       "checklist": [
+        {
+         "content": "설치",
+         "required": true
+        }
+       ],
+       "grades": {
+        "dev": {
+         "modelId": "model-a",
+         "effort": "high",
+         "reason": "보통 난이도"
+        },
+        "qa": {
+         "modelId": "model-a",
+         "effort": "high",
+         "reason": "보통 난이도"
+        }
+       },
+       "subagents": {
+        "dev": [],
+        "qa": [
+         "qa-verifier"
+        ],
+        "basis": "검증"
+       },
+       "splitBasis": "목적 하나",
+       "conflictGroup": null,
+       "designItems": []
+      }
+     ],
+     "deps": [],
+     "splitCheck": {
+      "pass": 9,
+      "suspect": 1,
+      "violation": 1
+     }
+    }
+   }
+  }
+ },
+ {
+  "id": "getProject",
+  "status": 200,
+  "response": {
+   "state": "boot",
+   "epoch": 1,
+   "cleanup": "none",
+   "id": "p-1",
+   "name": "P",
+   "repo": {
+    "url": "https://github.com/o/r",
+    "owner": "o",
+    "name": "r",
+    "branch": "main",
+    "baseCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "targetDate": null,
+   "instruction": "",
+   "constraints": [
+    {
+     "name": "PostgreSQL 16",
+     "level": "must",
+     "condition": ""
+    }
+   ],
+   "registeredAt": "2026-11-25T01:02:03.123456Z",
+   "inputs": [
+    {
+     "v": 1,
+     "at": "2026-11-25T01:02:03.123456Z",
+     "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "mdList": [
+      "prototype/docs/a.md"
+     ],
+     "changes": [],
+     "instruction": "",
+     "result": null,
+     "taskCount": 3
+    }
+   ],
+   "changeCommits": [
+    {
+     "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "at": "2026-11-25T01:02:03.123456Z",
+     "author": "lead",
+     "message": "m",
+     "state": "pending",
+     "files": [
+      {
+       "path": "prototype/docs/a.md",
+       "change": "modified",
+       "added": 1,
+       "deleted": 0
+      }
+     ]
+    }
+   ],
+   "inputJob": {
+    "jobId": "j1",
+    "runNo": 1,
+    "status": "failed",
+    "steps": [
+     {
+      "key": "diff",
+      "status": "fail",
+      "at": "2026-11-25T01:02:03.123456Z",
+      "note": ""
+     }
+    ],
+    "logs": [
+     {
+      "at": "2026-11-25T01:02:03.123456Z",
+      "text": "시작"
+     }
+    ],
+    "fail": {
+     "reason": "checkout 실패",
+     "fix": "git-lfs 설치"
+    },
+    "version": 2,
+    "proposalId": null
+   },
+   "updatedAt": "2026-11-25T01:02:03.123456Z",
+   "bootstrap": {
+    "jobId": "j1",
+    "runNo": 1,
+    "status": "failed",
+    "steps": [
+     {
+      "key": "unzip",
+      "status": "fail",
+      "at": "2026-11-25T01:02:03.123456Z",
+      "note": ""
+     }
+    ],
+    "logs": [
+     {
+      "at": "2026-11-25T01:02:03.123456Z",
+      "text": "시작"
+     }
+    ],
+    "fail": {
+     "reason": "checkout 실패",
+     "fix": "git-lfs 설치"
+    },
+    "decisions": [],
+    "revision": null,
+    "draft": null
+   }
+  }
+ },
+ {
+  "id": "getProject",
+  "status": 200,
+  "response": {
+   "state": "active",
+   "epoch": 1,
+   "cleanup": "none",
+   "id": "p-1",
+   "name": "P",
+   "repo": {
+    "url": "https://github.com/o/r",
+    "owner": "o",
+    "name": "r",
+    "branch": "main",
+    "baseCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "targetDate": null,
+   "instruction": "",
+   "constraints": [
+    {
+     "name": "PostgreSQL 16",
+     "level": "must",
+     "condition": ""
+    }
+   ],
+   "registeredAt": "2026-11-25T01:02:03.123456Z",
+   "inputs": [
+    {
+     "v": 1,
+     "at": "2026-11-25T01:02:03.123456Z",
+     "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "mdList": [
+      "prototype/docs/a.md"
+     ],
+     "changes": [],
+     "instruction": "",
+     "result": null,
+     "taskCount": 3
+    }
+   ],
+   "changeCommits": [
+    {
+     "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "at": "2026-11-25T01:02:03.123456Z",
+     "author": "lead",
+     "message": "m",
+     "state": "pending",
+     "files": [
+      {
+       "path": "prototype/docs/a.md",
+       "change": "modified",
+       "added": 1,
+       "deleted": 0
+      }
+     ]
+    }
+   ],
+   "inputJob": {
+    "jobId": "j1",
+    "runNo": 1,
+    "status": "failed",
+    "steps": [
+     {
+      "key": "diff",
+      "status": "fail",
+      "at": "2026-11-25T01:02:03.123456Z",
+      "note": ""
+     }
+    ],
+    "logs": [
+     {
+      "at": "2026-11-25T01:02:03.123456Z",
+      "text": "시작"
+     }
+    ],
+    "fail": {
+     "reason": "checkout 실패",
+     "fix": "git-lfs 설치"
+    },
+    "version": 2,
+    "proposalId": null
+   },
+   "updatedAt": "2026-11-25T01:02:03.123456Z",
+   "approvedAt": "2026-11-25T01:02:03.123456Z",
+   "approvedTaskCount": 11
+  }
+ },
+ {
+  "id": "previewReset",
+  "status": 200,
+  "response": {
+   "epoch": 1,
+   "projectName": "P",
+   "counts": {
+    "tasks": 1,
+    "running": 1,
+    "subagents": 1,
+    "attempts": 1,
+    "verifications": 1,
+    "evidence": 1,
+    "proposals": 1,
+    "messages": 1,
+    "history": 1,
+    "reports": 1,
+    "baselines": 1,
+    "inputs": 1
+   },
+   "runner": {
+    "branches": [
+     "agent/TASK-0005"
+    ],
+    "worktrees": 1,
+    "mergedTasks": 0
+   },
+   "repo": {
+    "url": "https://github.com/o/r",
+    "owner": "o",
+    "name": "r",
+    "branch": "main",
+    "baseCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   }
+  }
+ },
+ {
+  "id": "getSchedule",
+  "status": 200,
+  "response": {
+   "calcVersion": 4,
+   "at": "2026-11-25T01:02:03.123456Z",
+   "tasks": [
+    {
+     "taskKey": "TASK-0005",
+     "start": "2026-12-01",
+     "end": "2026-12-01",
+     "lo": "2026-12-01",
+     "hi": "2026-12-01",
+     "estHours": 6,
+     "loHours": 4,
+     "hiHours": 10,
+     "progressPct": 35,
+     "started": true,
+     "done": false,
+     "isNew": false,
+     "baselineStart": "2026-12-01",
+     "baselineEnd": "2026-12-01",
+     "slipDays": 0,
+     "mid": {
+      "s": 0,
+      "e": 2.5
+     },
+     "optimistic": {
+      "s": 0,
+      "e": 2.5
+     },
+     "pessimistic": {
+      "s": 0,
+      "e": 2.5
+     }
+    }
+   ],
+   "project": {
+    "start": "2026-12-01",
+    "end": "2026-12-01",
+    "lo": "2026-12-01",
+    "hi": "2026-12-01",
+    "baselineVersion": 1,
+    "baselineEnd": "2026-12-01",
+    "firstBaselineEnd": "2026-12-01",
+    "target": null,
+    "slipDays": 0,
+    "slackDays": null,
+    "elapsedDays": 3,
+    "remainingDays": 10,
+    "totalHours": 30,
+    "doneHours": 5,
+    "remainHours": 25,
+    "progressPct": 20,
+    "plannedPct": 25,
+    "doneRatePct": 10,
+    "doneHoursRatePct": 16,
+    "doneCount": 1,
+    "taskCount": 10
+   },
+   "capacity": {
+    "days": [
+     {
+      "date": "2026-12-01",
+      "rate": 0.5
+     }
+    ],
+    "measured": 0.5,
+    "enough": true,
+    "loggedHours": 100,
+    "rate": 0.5,
+    "rateLo": 0.4,
+    "rateHi": 0.7,
+    "todayRate": 0.2
+   },
+   "blackouts": [
+    {
+     "date": "2026-12-01",
+     "note": "점검"
+    }
+   ],
+   "warnings": [
+    {
+     "code": "USAGE_RESET_UNKNOWN",
+     "agent": "Codex"
+    }
+   ]
+  }
+ },
+ {
+  "id": "getDashboard",
+  "status": 200,
+  "response": {
+   "at": "2026-11-25T01:02:03.123456Z",
+   "tasks": {
+    "total": 10,
+    "done": 1,
+    "active": 2,
+    "blocked": 3
+   },
+   "byWorkType": [
+    {
+     "key": "Design",
+     "count": 1
+    }
+   ],
+   "byDomain": [
+    {
+     "key": "BE",
+     "count": 2
+    }
+   ],
+   "schedule": {
+    "start": "2026-12-01",
+    "end": "2026-12-01",
+    "lo": "2026-12-01",
+    "hi": "2026-12-01",
+    "baselineVersion": 1,
+    "baselineEnd": "2026-12-01",
+    "firstBaselineEnd": "2026-12-01",
+    "target": null,
+    "slipDays": 0,
+    "slackDays": null,
+    "elapsedDays": 3,
+    "remainingDays": 10,
+    "totalHours": 30,
+    "doneHours": 5,
+    "remainHours": 25,
+    "progressPct": 20,
+    "plannedPct": 25,
+    "doneRatePct": 10,
+    "doneHoursRatePct": 16,
+    "doneCount": 1,
+    "taskCount": 10,
+    "rate": 0.5
+   },
+   "panels": {
+    "late": [
+     {
+      "taskKey": "TASK-0005",
+      "title": "CRUD",
+      "baselineEnd": "2026-12-01",
+      "end": "2026-12-01",
+      "slipDays": 2,
+      "paused": false
+     }
+    ],
+    "approvals": [
+     {
+      "kind": "planning",
+      "id": "pl",
+      "title": "t",
+      "unresolved": 1
+     },
+     {
+      "kind": "proposal",
+      "id": "cp",
+      "title": "t",
+      "status": "held"
+     }
+    ],
+    "executions": [
+     {
+      "kind": "running",
+      "taskKey": "TASK-0005",
+      "title": "CRUD",
+      "attemptId": "a",
+      "attemptKind": "dev",
+      "agent": "Claude"
+     },
+     {
+      "kind": "ready",
+      "taskKey": "TASK-0005",
+      "title": "CRUD"
+     }
+    ],
+    "rework": [
+     {
+      "taskKey": "TASK-0005",
+      "title": "CRUD",
+      "verificationId": "v1",
+      "result": "FAIL",
+      "defects": 2
+     }
+    ],
+    "gate": [
+     {
+      "taskKey": "TASK-0005",
+      "title": "CRUD",
+      "unmet": [
+       "outputs"
+      ]
+     }
+    ],
+    "messages": [
+     {
+      "id": "m1",
+      "msgKey": "MSG-001",
+      "taskKey": "TASK-0005",
+      "attemptId": null,
+      "dir": "out",
+      "type": "질문",
+      "toAgent": "Codex",
+      "body": "확인",
+      "delivery": "Failed",
+      "pendingNext": false,
+      "workState": null,
+      "failReason": "연결 불가",
+      "readAt": null,
+      "createdAt": "2026-11-25T01:02:03.123456Z",
+      "updatedAt": "2026-11-25T01:02:03.123456Z"
+     }
+    ]
+   },
+   "recent": [
+    {
+     "kind": "attempt",
+     "at": "2026-11-25T01:02:03.123456Z",
+     "id": "a",
+     "taskKey": "TASK-0005",
+     "agent": "Claude",
+     "text": "x",
+     "status": "running"
+    },
+    {
+     "kind": "verification",
+     "at": "2026-11-25T01:02:03.123456Z",
+     "id": "v",
+     "taskKey": "TASK-0005",
+     "agent": "Codex",
+     "text": "x",
+     "result": "PASS"
+    }
+   ],
+   "grades": [
+    {
+     "agent": "Claude",
+     "modelId": "m",
+     "effort": "high",
+     "attempts": 1,
+     "judged": 0,
+     "fails": 0,
+     "reworkRatePct": null,
+     "escalations": 0,
+     "tokens": 90
+    }
+   ],
+   "alerts": [
+    {
+     "id": "a1",
+     "key": "ci|1",
+     "severity": "bad",
+     "taskKey": null,
+     "target": null,
+     "text": "실패",
+     "at": "2026-11-25T01:02:03.123456Z"
+    }
+   ]
+  }
+ },
+ {
+  "id": "getRunnerState",
+  "status": 200,
+  "response": {
+   "connection": {
+    "online": true,
+    "runnerId": "r1",
+    "version": "0",
+    "lastHeartbeatAt": "2026-11-25T01:02:03.123456Z",
+    "sessionStartedAt": "2026-11-25T01:02:03.123456Z"
+   },
+   "readiness": {
+    "at": "2026-11-25T01:02:03.123456Z",
+    "items": [
+     {
+      "key": "obs",
+      "status": "warn",
+      "detail": "미검증",
+      "fix": "재검증 후 등록"
+     }
+    ]
+   },
+   "host": {
+    "hostId": "h",
+    "bootId": "b1",
+    "cpu": "c",
+    "cores": 20,
+    "memGB": 23,
+    "swapGB": 4,
+    "diskFreeGB": 900,
+    "os": "WSL2",
+    "perSessionGB": null,
+    "samples": 0,
+    "seenAt": "2026-11-25T01:02:03.123456Z",
+    "recommended": {
+     "total": 16,
+     "Claude": 12,
+     "Codex": 12,
+     "heavy": 6
+    },
+    "warnings": []
+   },
+   "hostHistory": [
+    {
+     "hostId": "h",
+     "cpu": "c",
+     "cores": 20,
+     "memGB": 23,
+     "seenAt": "2026-11-25T01:02:03.123456Z"
+    }
+   ],
+   "concurrency": {
+    "mode": "auto",
+    "caps": {
+     "total": 16,
+     "Claude": 12,
+     "Codex": 12,
+     "heavy": 6
+    },
+    "memReserveGB": 4,
+    "limit": 10,
+    "used": {
+     "total": 6,
+     "Claude": 3,
+     "Codex": 3
+    },
+    "subagentsObserved": 1,
+    "subagentsHeld": 4,
+    "subRatio": 0.5,
+    "heavyJobs": 1,
+    "resources": {
+     "cpuPct": 31,
+     "memFreeGB": 9,
+     "swapGB": 0,
+     "at": "2026-11-25T01:02:03.123456Z"
+    },
+    "parallelWidth": 3,
+    "startable": 1,
+    "factor": "parallel_tasks",
+    "pressure": false,
+    "conflictWaits": [
+     {
+      "taskKey": "TASK-0008",
+      "conflictGroup": "DB",
+      "by": "TASK-0004"
+     }
+    ],
+    "adjustments": [
+     {
+      "at": "2026-11-25T01:02:03.123456Z",
+      "from": 6,
+      "to": 8,
+      "by": "Runner",
+      "reason": "여유"
+     }
+    ]
+   },
+   "sessions": [
+    {
+     "attemptId": "a",
+     "taskKey": "TASK-0005",
+     "agent": "Codex",
+     "observed": 1,
+     "reserved": 3,
+     "state": "unconfirmed",
+     "grade": "partial"
+    }
+   ],
+   "unconfirmedHolds": [
+    {
+     "jobId": "j",
+     "taskKey": null,
+     "hostId": "h",
+     "slots": 3
+    }
+   ],
+   "observation": {
+    "budget": {
+     "dev": 2,
+     "qa": 3
+    },
+    "profiles": [
+     {
+      "agent": "Codex",
+      "version": "0.172.0",
+      "model": "m",
+      "options": "exec --json",
+      "grade": "unverified",
+      "verifiedVersion": "0.167.0",
+      "verifiedAt": null,
+      "notes": ""
+     }
+    ]
+   },
+   "usage": [
+    {
+     "agent": "Claude",
+     "remainPct": 64,
+     "resetAt": null,
+     "at": "2026-11-25T01:02:03.123456Z"
+    }
+   ],
+   "externalWrite": {
+    "state": "blocked",
+    "reason": "host 변경"
+   }
+  }
+ },
+ {
+  "id": "getIntegrity",
+  "status": 200,
+  "response": {
+   "checkedAt": "2026-11-25T01:02:03.123456Z",
+   "items": [
+    {
+     "key": "no-cycle",
+     "label": "순환 의존성 없음",
+     "ok": true,
+     "detail": "없음"
+    }
+   ]
+  }
+ },
+ {
+  "id": "getSession",
+  "status": 200,
+  "response": {
+   "principal": "lead",
+   "method": "link",
+   "expiresAt": "2026-11-25T01:02:03.123456Z",
+   "csrfToken": "csrf-1"
+  }
+ },
+ {
+  "id": "getReport",
+  "status": 200,
+  "response": {
+   "id": "r1",
+   "kind": "weekly",
+   "from": "2026-12-01",
+   "to": "2026-12-01",
+   "view": "int",
+   "generatedAt": "2026-11-25T01:02:03.123456Z",
+   "dueAt": null,
+   "reason": null,
+   "snapshot": {
+    "summary": {
+     "taskCount": 10,
+     "doneCount": 2,
+     "doneBefore": 1,
+     "workPct": 20,
+     "workPctBefore": 10,
+     "baselineVersion": 2,
+     "forecast": "2026-12-01",
+     "lo": "2026-12-01",
+     "hi": "2026-12-01",
+     "forecastBefore": null,
+     "target": null,
+     "uptimePct": 70,
+     "ratePct": 60,
+     "blocked": 1,
+     "statuses": [
+      {
+       "status": "done",
+       "count": 2
+      }
+     ],
+     "started": [
+      {
+       "taskKey": "TASK-0005",
+       "title": "CRUD",
+       "wbsPath": "2.1.1",
+       "at": "2026-11-25T01:02:03.123456Z"
+      }
+     ],
+     "attempts": {
+      "total": 3,
+      "dev": 2,
+      "qa": 1,
+      "pass": 1,
+      "fail": 0,
+      "escalated": 0,
+      "interrupted": 1,
+      "tokens": 900
+     }
+    },
+    "issues": [
+     {
+      "level": "warn",
+      "text": "재작업",
+      "taskKey": "TASK-0005"
+     }
+    ],
+    "series": [
+     {
+      "day": "2026-12-01",
+      "done": 1,
+      "attempts": 2,
+      "fails": 0,
+      "uptimePct": 50,
+      "forecast": null
+     }
+    ],
+    "done": [
+     {
+      "taskKey": "TASK-0005",
+      "title": "CRUD",
+      "wbsPath": "2.1.1",
+      "assignee": "Claude",
+      "verifier": "Codex",
+      "workType": "Design",
+      "domain": "BE",
+      "actStart": "2026-11-25T01:02:03.123456Z",
+      "actEnd": "2026-11-25T01:02:03.123456Z",
+      "estHours": 3,
+      "actualHours": 2.5,
+      "attempts": 1,
+      "slipDays": null,
+      "verification": {
+       "id": "v1",
+       "result": "PASS",
+       "cmd": "pnpm test",
+       "actual": "0"
+      },
+      "checklist": {
+       "done": 1,
+       "total": 2,
+       "requiredLeft": 1
+      },
+      "outputs": {
+       "delivered": 1,
+       "names": [
+        "a.ts"
+       ]
+      },
+      "doneCond": "통과"
+     }
+    ],
+    "active": [
+     {
+      "taskKey": "TASK-0005",
+      "title": "CRUD",
+      "wbsPath": "2.1.1",
+      "assignee": "Claude",
+      "verifier": "Codex",
+      "workType": "Design",
+      "domain": "BE",
+      "status": "running",
+      "progressPct": 35,
+      "actStart": "2026-11-25T01:02:03.123456Z",
+      "end": "2026-12-01",
+      "lo": "2026-12-01",
+      "hi": "2026-12-01",
+      "slipDays": 1,
+      "remainHours": 2,
+      "lastAttempt": {
+       "attemptKey": "ATT-0005-1",
+       "kind": "dev",
+       "agent": "Claude",
+       "grade": {
+        "modelId": "model-a",
+        "effort": "high"
+       },
+       "status": "running",
+       "summary": "진행"
+      },
+      "verification": null,
+      "checklist": {
+       "done": 1,
+       "total": 2,
+       "requiredLeft": 1
+      },
+      "gate": {
+       "passed": 2,
+       "unmet": [
+        "outputs",
+        "verification",
+        "approval"
+       ]
+      },
+      "blockingDefects": 0,
+      "blockers": [
+       {
+        "pred": "TASK-0004",
+        "type": "SS",
+        "status": "ready"
+       }
+      ],
+      "next": "QA"
+     }
+    ],
+    "failures": [
+     {
+      "verificationId": "v1",
+      "taskKey": "TASK-0007",
+      "title": "t",
+      "agent": "Codex",
+      "at": "2026-11-25T01:02:03.123456Z",
+      "cmd": "c",
+      "expected": "e",
+      "actual": "a",
+      "defects": [
+       "d"
+      ],
+      "evidence": [
+       "p"
+      ],
+      "messages": [
+       {
+        "msgKey": "MSG-001",
+        "delivery": "Acknowledged"
+       }
+      ],
+      "reworks": []
+     }
+    ],
+    "attempts": [
+     {
+      "attemptKey": "ATT-0005-1",
+      "taskKey": "TASK-0005",
+      "kind": "dev",
+      "agent": "Claude",
+      "grade": {
+       "modelId": "model-a",
+       "effort": "high"
+      },
+      "startedAt": "2026-11-25T01:02:03.123456Z",
+      "endedAt": null,
+      "status": "running",
+      "summary": "",
+      "adjust": {
+       "kind": "up",
+       "from": {
+        "model": "model-a",
+        "effort": "medium"
+       },
+       "to": {
+        "model": "model-a",
+        "effort": "high"
+       },
+       "reason": "재작업 한 단계 상향"
+      },
+      "files": 1,
+      "tokens": 90
+     }
+    ],
+    "replans": [
+     {
+      "replanId": "RP-002",
+      "at": "2026-11-25T01:02:03.123456Z",
+      "trigger": "재추정",
+      "before": null,
+      "after": "2026-12-01",
+      "lo": "2026-12-01",
+      "hi": "2026-12-01",
+      "moved": [
+       {
+        "taskKey": "TASK-0005",
+        "title": "CRUD",
+        "kind": "new",
+        "before": null,
+        "after": "2026-12-01",
+        "deltaDays": null
+       }
+      ]
+     }
+    ],
+    "gaps": [
+     {
+      "from": "2026-11-25T01:02:03.123456Z",
+      "to": null,
+      "minutes": 30,
+      "reason": "reboot"
+     }
+    ],
+    "messages": [
+     {
+      "at": "2026-11-25T01:02:03.123456Z",
+      "taskKey": "TASK-0005",
+      "dir": "out",
+      "agent": "Codex",
+      "type": "질문",
+      "delivery": "Failed",
+      "pendingNext": false,
+      "firstLine": "확인"
+     }
+    ],
+    "next": [
+     {
+      "taskKey": "TASK-0005",
+      "title": "CRUD",
+      "wbsPath": "2.1.1",
+      "assignee": "Claude",
+      "verifier": "Codex",
+      "status": "ready",
+      "start": "2026-12-01",
+      "end": "2026-12-01",
+      "estHours": 2,
+      "grade": null,
+      "blockers": [],
+      "conflictGroup": null
+     }
+    ],
+    "all": [
+     {
+      "taskKey": "TASK-0005",
+      "title": "CRUD",
+      "wbsPath": "2.1.1",
+      "assignee": "Claude",
+      "verifier": "Codex",
+      "status": "done",
+      "progressPct": 100,
+      "checklist": {
+       "done": 2,
+       "total": 2
+      },
+      "verifState": "pass",
+      "end": "2026-12-01",
+      "slipDays": null,
+      "blocked": false
+     }
+    ]
+   },
+   "changesSince": {
+    "replans": 1,
+    "currentEnd": "2026-12-01",
+    "reportEnd": "2026-12-01"
+   }
+  }
+ },
+ {
+  "id": "getPipeline",
+  "status": 200,
+  "response": {
+   "path": ".agentwbs/pipeline.yaml",
+   "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "status": "ok",
+   "error": null,
+   "raw": "stages: []",
+   "stages": [
+    {
+     "stage": "task",
+     "when": "작업 종료 직후",
+     "gate": "통과",
+     "steps": [
+      "lint"
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "id": "getDesign",
+  "status": 200,
+  "response": {
+   "version": 3,
+   "decisions": 11,
+   "pending": 1,
+   "drifts": 2,
+   "components": [
+    {
+     "id": "pg",
+     "layer": "데이터",
+     "name": "PostgreSQL 16",
+     "tech": "운영 DB",
+     "note": "",
+     "decisionId": "td-1"
+    }
+   ],
+   "links": [
+    {
+     "from": "api",
+     "to": "pg",
+     "via": "SQL",
+     "contractPath": "contracts/db/postgres/migrations"
+    }
+   ],
+   "files": [
+    {
+     "path": "contracts/api/openapi.yaml",
+     "kind": "REST",
+     "format": "OpenAPI 3.1",
+     "status": "error",
+     "commit": null,
+     "itemCount": 0,
+     "error": "문법 오류"
+    }
+   ],
+   "versions": [
+    {
+     "v": 1,
+     "at": "2026-11-25T01:02:03.123456Z",
+     "by": "팀장",
+     "note": "",
+     "breaking": false
+    }
+   ]
+  }
+ },
+ {
+  "id": "getInterface",
+  "status": 200,
+  "response": {
+   "key": "GET /api/tasks",
+   "name": "GET /api/tasks",
+   "taskKey": "TASK-0005",
+   "status": "계획",
+   "kind": "REST",
+   "source": {
+    "path": "contracts/api/openapi.yaml",
+    "format": "OpenAPI 3.1",
+    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "status": "ok",
+    "raw": null
+   },
+   "content": {
+    "type": "REST",
+    "auth": "팀장 세션",
+    "request": "",
+    "response": "200",
+    "validation": [],
+    "errors": [
+     {
+      "code": "X",
+      "http": "404",
+      "cond": "없음"
+     }
+    ],
+    "tables": [
+     "tasks"
+    ]
+   }
+  }
+ },
+ {
+  "id": "getInterface",
+  "status": 200,
+  "response": {
+   "key": "GET /api/tasks",
+   "name": "GET /api/tasks",
+   "taskKey": "TASK-0005",
+   "status": "계획",
+   "kind": "Kafka",
+   "source": {
+    "path": "contracts/api/openapi.yaml",
+    "format": "OpenAPI 3.1",
+    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "status": "ok",
+    "raw": null
+   },
+   "content": {
+    "type": "message",
+    "auth": "—",
+    "messages": [
+     {
+      "name": "A",
+      "direction": "Runner → 토픽",
+      "schema": "{}"
+     }
+    ],
+    "rules": [],
+    "topic": {
+     "key": "k",
+     "partitions": "3",
+     "retention": "7일",
+     "delivery": "최소 1회",
+     "dlq": "d",
+     "compat": "하위 호환",
+     "consumers": [
+      "x"
+     ]
+    }
+   }
+  }
+ },
+ {
+  "id": "getInterface",
+  "status": 200,
+  "response": {
+   "key": "GET /api/tasks",
+   "name": "GET /api/tasks",
+   "taskKey": "TASK-0005",
+   "status": "계획",
+   "kind": "REST",
+   "source": {
+    "path": "contracts/api/openapi.yaml",
+    "format": "OpenAPI 3.1",
+    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "status": "ok",
+    "raw": "unparsed"
+   },
+   "content": null
+  }
+ },
+ {
+  "id": "getDataItem",
+  "status": 200,
+  "response": {
+   "key": "GET /api/tasks",
+   "name": "GET /api/tasks",
+   "taskKey": "TASK-0005",
+   "status": "계획",
+   "store": "postgres",
+   "source": {
+    "path": "contracts/api/openapi.yaml",
+    "format": "OpenAPI 3.1",
+    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "status": "ok",
+    "raw": null
+   },
+   "content": {
+    "type": "postgres",
+    "columns": [
+     {
+      "name": "id",
+      "type": "uuid",
+      "nullable": false,
+      "pk": true,
+      "unique": false,
+      "fk": null,
+      "default": null,
+      "desc": ""
+     }
+    ],
+    "constraints": [],
+    "indexes": [
+     {
+      "name": "i",
+      "columns": "id",
+      "kind": "BTREE"
+     }
+    ],
+    "usedBy": [
+     "GET /api/tasks"
+    ]
+   }
+  }
+ },
+ {
+  "id": "getDataItem",
+  "status": 200,
+  "response": {
+   "key": "GET /api/tasks",
+   "name": "GET /api/tasks",
+   "taskKey": "TASK-0005",
+   "status": "계획",
+   "store": "neo4j",
+   "source": {
+    "path": "contracts/api/openapi.yaml",
+    "format": "OpenAPI 3.1",
+    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "status": "ok",
+    "raw": null
+   },
+   "content": {
+    "type": "neo4j-label",
+    "props": "p",
+    "note": "",
+    "constraints": []
+   }
+  }
+ },
+ {
+  "id": "getDataItem",
+  "status": 200,
+  "response": {
+   "key": "GET /api/tasks",
+   "name": "GET /api/tasks",
+   "taskKey": "TASK-0005",
+   "status": "계획",
+   "store": "neo4j",
+   "source": {
+    "path": "contracts/api/openapi.yaml",
+    "format": "OpenAPI 3.1",
+    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "status": "ok",
+    "raw": null
+   },
+   "content": {
+    "type": "neo4j-relation",
+    "from": "A",
+    "to": "B",
+    "props": ""
+   }
+  }
+ },
+ {
+  "id": "getDataItem",
+  "status": 200,
+  "response": {
+   "key": "GET /api/tasks",
+   "name": "GET /api/tasks",
+   "taskKey": "TASK-0005",
+   "status": "계획",
+   "store": "questdb",
+   "source": {
+    "path": "contracts/api/openapi.yaml",
+    "format": "OpenAPI 3.1",
+    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "status": "ok",
+    "raw": null
+   },
+   "content": {
+    "type": "questdb",
+    "timestamp": "ts",
+    "partition": "DAY",
+    "retention": "14일",
+    "dedup": "ts",
+    "symbols": "s",
+    "columns": "c",
+    "ingest": "ILP",
+    "aggregation": "a"
+   }
+  }
+ },
+ {
+  "id": "getDataItem",
+  "status": 200,
+  "response": {
+   "key": "GET /api/tasks",
+   "name": "GET /api/tasks",
+   "taskKey": "TASK-0005",
+   "status": "계획",
+   "store": "redis",
+   "source": {
+    "path": "contracts/api/openapi.yaml",
+    "format": "OpenAPI 3.1",
+    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "status": "ok",
+    "raw": null
+   },
+   "content": {
+    "type": "redis",
+    "use": "u",
+    "value": "v",
+    "ttl": "30초",
+    "invalidation": "i",
+    "persistence": "불필요"
+   }
+  }
+ }
+]
