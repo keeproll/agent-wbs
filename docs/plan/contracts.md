@@ -225,7 +225,7 @@ POST /api/runner/jobs/:id/finish {fence,status,result?,error?}
    - Runner가 (라) 전에 죽으면 허가 파이프가 닫혀 래퍼는 **실제 명령을 실행하지 않고 종료**한다. `/process`가 거부되면(LEASE_LOST 등) 허가하지 않고 그룹을 종료한다. 응답 유실은 같은 멱등 키로 재시도하고 확인 전에는 허가하지 않는다.
    - 프로세스가 기록 전에 스스로 죽으면: 그룹·cgroup·`launchId` 프로세스가 없음을 확인 → 서버에 pgid가 없으면 `no_process`, 이미 기록됐으면 `group_empty`로 슬롯 해제. 시도가 시작됐으면 `failed`로 보고하고 잠금은 §3.4-9를 따른다.
    - Runner 재시작 시 claim 전에 launch 기록과 서버 보유를 대조한다. 예정 cgroup의 프로세스, 기록된 pgid, `/proc`의 같은 사용자·같은 `launchId` 프로세스를 찾아 그룹 단위로 종료하고 **비었음을 다시 확인**한다. pgid는 재사용될 수 있으므로 프로세스 시작 시각 또는 `launchId`가 맞을 때만 종료한다.
-   - `no_process`는 서버 보유에 pgid가 없고 위 확인이 끝났을 때만 쓴다(단순히 「기록 없음」은 근거가 아님). 서버에 pgid가 있으면 `no_process`를 거부한다. 로컬 launch 기록을 잃었거나 확인할 수 없으면 `unconfirmed`를 유지하고 알리며, 같은 host에서는 boot 변경만이 남은 해제 근거다.
+   - `no_process`는 서버 보유에 pgid가 없고 위 확인이 끝났을 때만 쓴다(단순히 「기록 없음」은 근거가 아님). 서버 보유에 pgid가 있으면 `no_process` 해제(`slots/release`·`release`)를 409 INVALID_TRANSITION으로 거부하고 보유를 바꾸지 않는다. 로컬 launch 기록을 잃었거나 확인할 수 없으면 `unconfirmed`를 유지하고 알리며, 같은 host에서는 boot 변경만이 남은 해제 근거다.
    - 서버 쪽: `reserved`인 채 연결이 끊기거나 lease가 만료되면 자동 해제하지 않고 `unconfirmed`로 바꾼다. `/process`는 `reserved`에서만 새 pgid를 받고, 같은 pgid 재전송은 성공, 다른 pgid는 409 INVALID_TRANSITION.
 4. 같은 PC에서 증거 없이 보유를 푸는 강제 API는 두지 않는다.
 5. **PC 변경**: §6.6 L749-751이 새 PC에서 새 시도 재개를 확정했으므로, 이전 host 보유는 슬롯 `unconfirmed`·잠금 `orphaned`로 남기되 새 host의 슬롯 계산과 재개 차단에서 제외한다. host 식별자 변경 없는 단순 재시작에는 적용하지 않는다. **로컬 재개와 공유 외부 쓰기는 분리한다.** `renew`·fence는 GitHub가 알지 못하므로 외부 쓰기 격리 근거로 쓰지 않는다.
