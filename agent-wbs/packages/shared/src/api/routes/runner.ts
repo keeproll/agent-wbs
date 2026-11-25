@@ -1,0 +1,736 @@
+import Type from 'typebox';
+import * as c from '../common.ts';
+import * as m from '../models.ts';
+import { operation } from '../operation.ts';
+
+const { AnyOf, Body, Nullable, Opt, List, Text } = c;
+const runner = { principal: 'runner' } as const;
+const fence = c.Fence;
+const Pid = Type.Integer({ minimum: 1 });
+
+const PushedCommit = Body({ sha: c.Sha, at: c.Timestamp, author: Type.String(), message: Type.String() });
+const ChangedInput = Body({
+  commitSha: c.Sha,
+  path: c.RepoPath,
+  change: AnyOf('added', 'modified', 'deleted'),
+  added: c.Count,
+  deleted: c.Count,
+});
+const Session = Body({ attemptId: c.Id, observed: c.Count, reserved: c.Count, state: c.ObservationState });
+const InstalledSubagent = Body({ id: c.Id, version: c.Count, hash: Text });
+/**
+ * 해제 증거. bootId·processGroup은 보유를 만든 원래 값이고, 서버가 저장된 보유와 같을 때만 그 보유를 닫는다.
+ * 낡은 fence의 release도 같은 조건이라 새 프로세스의 보유를 풀 수 없다(contracts §3.2-4·§3.4-2).
+ */
+const ReleaseProof = Type.Union([
+  Body({ kind: AnyOf('no_process'), bootId: Text }),
+  Body({ kind: AnyOf('group_empty'), bootId: Text, processGroup: Pid }),
+  // 예약만 하고 그룹이 없던 보유는 processGroup이 null이다. currentBootId는 host 보고의 bootId와 같아야 한다.
+  Body({ kind: AnyOf('boot_changed'), bootId: Text, processGroup: Nullable(Pid), currentBootId: Text }),
+]);
+/** contracts §4.1 근거 고정: 단계별로 해당하는 값만 보낸다. */
+const ciShas = {
+  baseSha: Opt(c.Sha),
+  headSha: Opt(c.Sha),
+  mergeSha: Opt(c.Sha),
+  treeSha: Opt(c.Sha),
+  pipelineSha: Opt(c.Sha),
+};
+
+const ciStart = {
+  taskKey: Opt(c.TaskKey),
+  attemptId: Opt(c.Id),
+  ref: Text,
+  pr: Opt(Type.Integer({ minimum: 1 })),
+  trigger: Opt(Text),
+  ...ciShas,
+};
+
+/** QA 결과(contracts §3.1). 검사한 커밋·명세 버전이 없으면 근거로 쓸 수 없다. */
+const VerificationReport = Body({
+  headSha: c.Sha,
+  specRevision: c.Count,
+  result: c.PassFail,
+  cmd: Text,
+  expected: Text,
+  actual: Text,
+  defects: List(Body({ text: Text, blocking: Type.Boolean() })),
+  checklist: List(Body({ itemKey: c.Id, done: Type.Boolean(), evidence: Opt(c.Id), note: Opt(Type.String()) })),
+});
+const resultCommon = {
+  fence,
+  summary: Type.String(),
+  changedFiles: List(c.RepoPath),
+  /** 먼저 올린 Evidence의 id */
+  evidence: List(c.Id),
+  failure: Opt(Type.String()),
+  tokens: Opt(c.Count),
+};
+/** 시도 종류와 본문 형식의 일치는 서버가 저장된 kind로 판정한다. */
+export const AttemptResult = Type.Union([
+  Body(resultCommon),
+  Body({ ...resultCommon, verification: VerificationReport }),
+]);
+
+/* ---- job ---- */
+const commit = c.Sha;
+export const JOB_KINDS = [
+  'repo_check', 'bootstrap', 'input_diff', 'planning', 'estimate', 'split', 'attempt', 'stop_attempt',
+  'integrate', 'deploy_check', 'ci_retry', 'design_apply', 'merge_followup',
+] as const;
+export type JobKind = (typeof JOB_KINDS)[number];
+const JobKindSchema = AnyOf(...JOB_KINDS);
+const lease = { id: c.Id, leaseUntil: c.Timestamp, fence };
+const Job = <const K extends JobKind, P extends Record<string, Parameters<typeof Opt>[0]>>(kind: K, payload: P) =>
+  Type.Object({ ...lease, kind: AnyOf(kind), payload: Type.Object(payload) });
+/** 현재 내용과 그 hash. hash는 재판단 보고에 그대로 돌려보낸다(data-model §2.3-1). */
+const JudgedTasks = List(
+  Type.Object({ taskKey: c.TaskKey, subjectHash: c.Sha256, content: m.JudgedContent }),
+);
+/**
+ * 판단할 CP의 snapshot. 내용과 hash는 같은 시점의 값이며 Runner는 이것만으로 판단한다.
+ * subjectHash는 after의 hash, splitSubjectHash는 ops와 splitTasks(대상 Task의 현재 내용)의 hash다.
+ */
+const judgedProposal = {
+  id: c.Id,
+  // 판단 기록을 뺀 변경
+  ops: List(m.LeadProposalOp, { minItems: 1 }),
+  targets: List(
+    Type.Union([
+      Type.Object({ target: c.TaskKey, subjectHash: c.Sha256, before: m.JudgedContent, after: m.JudgedContent }),
+      Type.Object({ target: m.NewTaskRef, subjectHash: c.Sha256, before: Type.Null(), after: m.JudgedContent }),
+    ]),
+  ),
+};
+const JudgedProposal = Type.Union([
+  Type.Object({ ...judgedProposal, splitSubjectHash: Type.Null(), splitTasks: Type.Null() }),
+  Type.Object({
+    ...judgedProposal,
+    splitSubjectHash: c.Sha256,
+    splitTasks: List(Type.Object({ taskKey: c.TaskKey, content: m.JudgedContent }), { minItems: 1 }),
+  }),
+]);
+export const ClaimedJob = Type.Union(
+  [
+    Job('repo_check', { repoCheckId: c.Id, url: c.RepoUrl }),
+    Job('bootstrap', { commit, instruction: Type.String(), resumeStep: Nullable(Type.String()) }),
+    Job('input_diff', {
+      commit,
+      previousCommit: commit,
+      instruction: Type.String(),
+      resumeStep: Nullable(Type.String()),
+    }),
+    Job('planning', {
+      tasks: JudgedTasks,
+      policy: c.Json,
+      proposal: Nullable(JudgedProposal),
+    }),
+    Job('estimate', { tasks: JudgedTasks, policy: c.Json }),
+    Job('split', { tasks: JudgedTasks, policy: c.Json }),
+    Job('attempt', {
+      taskKey: c.TaskKey,
+      kind: c.AttemptKind,
+      agent: c.Agent,
+      branch: Text,
+      baseCommit: commit,
+      inputVersion: Type.Integer({ minimum: 1 }),
+      instructions: c.Json,
+    }),
+    Job('stop_attempt', { attemptId: c.Id, reason: Type.String() }),
+    Job('integrate', { pr: Type.Integer({ minimum: 1 }), commit }),
+    Job('deploy_check', { commit }),
+    Job('ci_retry', { runId: c.Id, pr: Nullable(Type.Integer({ minimum: 1 })), commit }),
+    Job('design_apply', { itemKey: Text, driftId: c.Id }),
+    Job('merge_followup', { pr: Type.Integer({ minimum: 1 }) }),
+  ],
+  { title: 'ClaimedJob' },
+);
+
+export const runnerOperations = [
+  operation({
+    ...runner,
+    id: 'heartbeat',
+    method: 'POST',
+    path: '/api/runner/heartbeat',
+    summary: '생존 보고(60초 주기)',
+    body: Body({ runnerId: Text, version: Text, epoch: c.Epoch }),
+    responses: { 204: null },
+    responseHeaders: ['X-Current-Epoch'],
+    idempotency: 'none',
+    staleEpoch: true,
+  }),
+  operation({
+    ...runner,
+    id: 'reportSession',
+    method: 'POST',
+    path: '/api/runner/sessions',
+    summary: '세션 시작·종료 보고(가동률 근거). 열린 세션이 없는 stop은 409',
+    errors: ['INVALID_TRANSITION'],
+    body: Body({
+      runnerId: Text,
+      event: AnyOf('start', 'stop'),
+      at: c.Timestamp,
+      // unknown은 heartbeat 누락 때 서버만 기록한다.
+      reason: Opt(AnyOf('reboot', 'power_off', 'error', 'manual')),
+    }),
+    responses: { 204: null },
+  }),
+  operation({
+    ...runner,
+    id: 'reportHost',
+    method: 'POST',
+    path: '/api/runner/host',
+    summary: '실행 PC 사양 보고',
+    body: Body({
+      hostId: Text,
+      // 재부팅 판정의 기준값(보유 해제 증거와 대조)
+      bootId: Text,
+      cpu: Type.String(),
+      cores: Type.Integer({ minimum: 1 }),
+      memGB: Type.Number({ exclusiveMinimum: 0 }),
+      swapGB: Type.Number({ minimum: 0 }),
+      diskFreeGB: Type.Number({ minimum: 0 }),
+      os: Type.String(),
+      perSessionGB: Opt(Type.Number({ exclusiveMinimum: 0 })),
+      samples: Opt(c.Count),
+    }),
+    responses: {
+      200: Type.Object({
+        mode: AnyOf('auto', 'manual'),
+        caps: Type.Object(m.Caps),
+        recommended: Type.Object(m.Caps),
+        hostChanged: Type.Boolean(),
+      }),
+    },
+  }),
+  operation({
+    ...runner,
+    id: 'reportReadiness',
+    method: 'POST',
+    path: '/api/runner/readiness',
+    summary: '실행 환경 준비 상태 보고',
+    body: Body({
+      at: c.Timestamp,
+      items: List(
+        Body({
+          key: c.ReadinessKey,
+          status: c.ReadinessStatus,
+          detail: Type.String(),
+          fix: Opt(Type.String()),
+        }),
+      ),
+      // 관측 등급은 CLI×버전×모델×옵션 조합으로 서버가 판정한다(G§6.7).
+      cli: Opt(List(Body({ agent: c.Agent, version: Text, model: Text, options: Text }))),
+    }),
+    responses: { 204: null },
+  }),
+  operation({
+    ...runner,
+    id: 'reportModels',
+    method: 'POST',
+    path: '/api/runner/models',
+    summary: '사용 가능 모델·Effort 보고(신규는 미허용)',
+    body: Body({
+      agent: c.Agent,
+      models: List(
+        Body({
+          id: Text,
+          label: Text,
+          rank: Type.Integer(),
+          // 그 모델이 지원하는 CLI 값(낮은 순). 확인하지 못했으면 null. 공통 단계 매핑은 서버의 승인표가 정한다(Q-06).
+          efforts: Nullable(List(Text, { minItems: 1, uniqueItems: true })),
+        }),
+        { minItems: 1 },
+      ),
+    }),
+    responses: { 200: Type.Object({ newModels: List(Type.String()) }) },
+  }),
+  operation({
+    ...runner,
+    id: 'reportUsage',
+    method: 'POST',
+    path: '/api/runner/usage',
+    summary: '남은 사용량·리셋 시각 보고',
+    body: Body({ agent: c.Agent, remainPct: c.Pct, resetAt: Opt(c.Timestamp), tokensUsed: Opt(c.Count) }),
+    responses: { 204: null },
+  }),
+  operation({
+    ...runner,
+    id: 'reportConcurrency',
+    method: 'POST',
+    path: '/api/runner/concurrency',
+    summary: '동시 실행 상태·한도 조절 보고',
+    body: Body({
+      at: c.Timestamp,
+      limit: c.Count,
+      running: Body({ Claude: c.Count, Codex: c.Count }),
+      subagents: c.Count,
+      heavyJobs: c.Count,
+      resources: Body({
+        cpuPct: Type.Number({ minimum: 0 }),
+        memFreeGB: Type.Number({ minimum: 0 }),
+        swapGB: Type.Number({ minimum: 0 }),
+      }),
+      sessions: List(Session),
+      adjust: Opt(Body({ from: c.Count, to: c.Count, reason: Text })),
+    }),
+    responses: {
+      200: Type.Object({ caps: Type.Object({ ...m.Caps, memReserveGB: Type.Number({ minimum: 0 }) }) }),
+    },
+    errors: ['LIMIT_EXCEEDS_CAP'],
+  }),
+  operation({
+    ...runner,
+    id: 'getRunGrade',
+    method: 'GET',
+    path: '/api/runner/tasks/:taskKey/run-grade',
+    summary: '실행 직전 등급 조회(등급 정책의 단일 출처)',
+    query: Type.Object({ role: c.RunRole }),
+    // claim 뒤 허용이 해제되어 재판단 전인 경우(D-29)
+    errors: ['CLAIM_REJECTED'],
+    responses: {
+      200: Type.Object({
+        model: Type.String(),
+        effort: Type.String(),
+        adjust: Nullable(m.GradeAdjust),
+        locked: Type.Boolean(),
+        floorEffort: Type.String(),
+        allowedModels: List(Type.String()),
+        policy: Type.Object(m.ExecPolicy),
+      }),
+    },
+  }),
+  operation({
+    ...runner,
+    id: 'getTaskSubagents',
+    method: 'GET',
+    path: '/api/runner/tasks/:taskKey/subagents',
+    summary: '실행 직전 설치할 하위 Agent 정의(모델·effort 없음)',
+    query: Type.Object({ role: c.RunRole }),
+    responses: {
+      200: Type.Object({
+        enabled: Type.Boolean(),
+        items: List(
+          Type.Object({
+            id: c.Id,
+            agent: c.Agent,
+            version: c.Count,
+            hash: Type.String(),
+            file: Type.String(),
+            sandbox: Type.String(),
+          }),
+        ),
+      }),
+    },
+  }),
+  operation({
+    ...runner,
+    id: 'pollMessages',
+    method: 'GET',
+    path: '/api/runner/messages',
+    summary: '대기 메시지 조회. cursor 우선, since는 호환용',
+    query: Type.Object({ cursor: Opt(Text), since: Opt(c.Timestamp) }),
+    responses: {
+      200: Type.Object({
+        messages: List(
+          Type.Object({
+            id: c.Id,
+            taskKey: c.TaskKey,
+            attemptId: Nullable(c.Id),
+            toAgent: c.Agent,
+            type: m.MessageType,
+            body: Type.String(),
+            pendingNext: Type.Boolean(),
+            createdAt: c.Timestamp,
+          }),
+        ),
+        nextCursor: Nullable(Type.String()),
+      }),
+    },
+  }),
+  operation({
+    ...runner,
+    id: 'ackMessage',
+    method: 'POST',
+    path: '/api/runner/messages/:messageId/ack',
+    summary: '수신 확인(작업 완료 보고와 별개)',
+    responses: { 204: null },
+  }),
+  operation({
+    ...runner,
+    id: 'respondMessage',
+    method: 'POST',
+    path: '/api/runner/messages/:messageId/response',
+    summary: 'Agent 응답(전달 상태와 별개)',
+    body: Body({ text: Text, workState: Text }),
+    responses: { 204: null },
+  }),
+  operation({
+    ...runner,
+    id: 'reportAttemptStatus',
+    method: 'POST',
+    path: '/api/runner/attempts/:attemptId/status',
+    summary: '실행 상태 + 실제 모델·Effort·조정 사유',
+    body: Body({
+      fence,
+      status: AnyOf('running', 'succeeded', 'failed'),
+      at: c.Timestamp,
+      model: Text,
+      effort: Text,
+      adjust: Opt(m.GradeAdjust),
+      // 실제 사용 여부는 사후 확정(subagent-usage, D-12)
+      subagents: Opt(List(Body({ id: c.Id, version: c.Count, installed: Type.Boolean() }))),
+    }),
+    responses: { 204: null },
+    errors: ['ATTEMPT_CLOSED'],
+  }),
+  operation({
+    ...runner,
+    id: 'interruptAttempt',
+    method: 'POST',
+    path: '/api/runner/attempts/:attemptId/interrupt',
+    summary: '실행 중단 보고 → Task paused',
+    body: Body({
+      fence,
+      reason: AnyOf('reboot', 'power_off', 'usage_limit', 'error'),
+      at: c.Timestamp,
+      progressNote: Opt(Type.String()),
+      tokensUsed: Opt(c.Count),
+    }),
+    responses: { 200: Type.Object({ taskStatus: AnyOf('paused') }) },
+    errors: ['ATTEMPT_CLOSED'],
+  }),
+  operation({
+    ...runner,
+    id: 'reportAttemptResult',
+    method: 'POST',
+    path: '/api/runner/attempts/:attemptId/result',
+    summary: '결과 보고. qa·reverify는 verification 필수',
+    body: AttemptResult,
+    responses: { 201: null },
+    errors: ['ATTEMPT_CLOSED', 'INVALID_TRANSITION', 'LEASE_LOST'],
+  }),
+  operation({
+    ...runner,
+    id: 'uploadEvidence',
+    method: 'POST',
+    path: '/api/runner/attempts/:attemptId/evidence',
+    summary: 'Evidence 1파일 업로드(결과 보고 전). sha256·크기 검증',
+    multipart: true,
+    body: Body({
+      file: Type.Unsafe<unknown>({ contentMediaType: 'application/octet-stream' }),
+      kind: Text,
+      sha256: c.Sha256,
+      size: c.Count,
+      fence,
+    }),
+    responses: { 201: Type.Object({ id: c.Id }) },
+    errors: ['ATTEMPT_CLOSED'],
+  }),
+  operation({
+    ...runner,
+    id: 'reportSubagentUsage',
+    method: 'POST',
+    path: '/api/runner/attempts/:attemptId/subagent-usage',
+    summary: '실제 사용한 하위 Agent 사후 확정. job이 끝났어도 그 job의 마지막 fence면 받음',
+    body: Body({
+      fence,
+      confirm: AnyOf('confirmed', 'partial'),
+      items: List(Body({ id: c.Id, version: Nullable(c.Count), hash: Nullable(Text) })),
+    }),
+    responses: { 204: null },
+  }),
+  operation({
+    ...runner,
+    id: 'reportInputChanges',
+    method: 'POST',
+    path: '/api/runner/input-changes',
+    summary: '입력 경로를 바꾼 main 커밋 보고',
+    body: Body({ commits: List(PushedCommit, { minItems: 1 }), files: List(ChangedInput, { minItems: 1 }) }),
+    responses: { 204: null },
+  }),
+  operation({
+    ...runner,
+    id: 'reportRepoCheck',
+    method: 'POST',
+    path: '/api/runner/repo-checks/:id/result',
+    summary: '저장소 접근·private·main 커밋·필수 구조',
+    body: Body({
+      fence,
+      access: Type.Boolean(),
+      private: Nullable(Type.Boolean()),
+      commit: Nullable(c.Sha),
+      structure: Nullable(m.RepoStructure),
+      error: Opt(Text),
+    }),
+    responses: { 204: null },
+  }),
+  operation({
+    ...runner,
+    id: 'reportBootstrapProgress',
+    method: 'POST',
+    path: '/api/runner/bootstrap/:jobId/progress',
+    summary: '초기 분석·차이 분석 단계 진행',
+    body: Body({ fence, stepKey: m.JobStepKey, status: c.StepStatus, at: c.Timestamp, note: Opt(Type.String()) }),
+    responses: { 204: null },
+  }),
+  operation({
+    ...runner,
+    id: 'startCiRun',
+    method: 'POST',
+    path: '/api/runner/ci/runs',
+    summary: '빌드·통합 실행 시작',
+    // 야간 점검만 Runner가 정책 시각에 job 없이 시작한다(contracts §3.2-5).
+    body: Type.Union([
+      Body({ ...c.JobContext, stage: c.CiStage, ...ciStart }),
+      Body({ stage: AnyOf('night'), ...ciStart }),
+    ]),
+    responses: { 201: Type.Object({ id: c.Id, runKey: Type.String() }) },
+  }),
+  operation({
+    ...runner,
+    id: 'updateCiRun',
+    method: 'PATCH',
+    path: '/api/runner/ci/runs/:id',
+    summary: '단계 진행·결과(로그 원문은 Runner PC). fence는 시작 때 저장한 job과 대조하고, job 없는 야간 점검만 null',
+    body: Type.Object(
+      {
+        fence: Nullable(fence),
+        steps: Opt(List(m.CiStep)),
+        status: Opt(c.CiStatus),
+        logExcerpt: Opt(Type.String()),
+        artifacts: Opt(List(Type.String())),
+        url: Opt(c.HttpUrl),
+        ...ciShas,
+      },
+      { additionalProperties: false, minProperties: 2 },
+    ),
+    responses: { 204: null },
+  }),
+  operation({
+    ...runner,
+    id: 'reportMergeQueue',
+    method: 'POST',
+    path: '/api/runner/ci/queue',
+    summary: '병합 상태(PR·병합 커밋) 보고 → 서버가 완료 판정',
+    body: Body({
+      ...c.JobContext,
+      pr: Type.Integer({ minimum: 1 }),
+      taskKey: c.TaskKey,
+      status: c.QueueStatus,
+      qaHeadSha: Opt(c.Sha),
+      syncedHeadSha: Opt(c.Sha),
+      baseSha: Opt(c.Sha),
+      ciRunId: Opt(c.Id),
+      testedTreeSha: Opt(c.Sha),
+      actualMergeSha: Opt(c.Sha),
+      actualTreeSha: Opt(c.Sha),
+    }),
+    responses: { 204: null },
+    errors: ['INVALID_TRANSITION', 'GATE_NOT_PASSED', 'EXTERNAL_WRITE_BLOCKED'],
+  }),
+  operation({
+    ...runner,
+    id: 'reportDesignSnapshot',
+    method: 'POST',
+    path: '/api/runner/design/snapshot',
+    summary: '커밋 기준 계약 파일 해석·대조 결과',
+    body: Body({
+      ...c.JobContext,
+      commit: c.Sha,
+      files: List(
+        Body({ path: c.RepoPath, kind: Text, format: Text, status: AnyOf('ok', 'draft', 'error'), error: Opt(Text) }),
+      ),
+      items: List(Body({ itemKey: Text, kind: Text, path: c.RepoPath, content: c.Json })),
+      drifts: List(
+        Body({
+          itemKey: Text,
+          kind: Text,
+          where: Text,
+          text: Text,
+          taskKey: Opt(c.TaskKey),
+          compat: AnyOf('compatible', 'breaking', 'unchecked'),
+        }),
+      ),
+    }),
+    responses: { 204: null },
+  }),
+  operation({
+    ...runner,
+    id: 'reportGithubStatus',
+    method: 'POST',
+    path: '/api/runner/github/status',
+    summary: 'GitHub 인증 방식·계정·권한·만료(비밀값 없음)',
+    body: Body({
+      mode: c.GithubMode,
+      ok: Type.Boolean(),
+      account: Nullable(Text),
+      scopes: Nullable(Body(c.GithubScopes.properties)),
+      expiresAt: Nullable(c.Timestamp),
+      error: Opt(Text),
+    }),
+    responses: { 204: null },
+  }),
+  operation({
+    ...runner,
+    id: 'getGithubCredential',
+    method: 'GET',
+    path: '/api/runner/github/credential',
+    summary: '토큰 방식: Runner 공개키로 봉인한 값(평문 없음)',
+    responses: { 200: Type.Object({ sealed: Type.String() }) },
+  }),
+  operation({
+    ...runner,
+    id: 'getRunnerPolicy',
+    method: 'GET',
+    path: '/api/runner/policy',
+    summary: '상한·예산·주기·CI 설정 묶음',
+    ifNoneMatch: true,
+    responseHeaders: ['ETag'],
+    responses: {
+      200: Type.Object({
+        caps: Type.Object({ ...m.Caps, memReserveGB: Type.Number({ minimum: 0 }) }),
+        subagentBudget: m.SubagentBudget,
+        heartbeatSeconds: Type.Integer({ minimum: 1 }),
+        inputCheckMinutes: Type.Integer({ minimum: 1 }),
+        ci: Type.Object(m.CiSettings),
+      }),
+      304: null,
+    },
+  }),
+
+  /* ---- 명령·작업(contracts §3.2) ---- */
+  operation({
+    ...runner,
+    id: 'getCommands',
+    method: 'GET',
+    path: '/api/runner/commands',
+    summary: '정리 명령(다른 작업보다 먼저)',
+    staleEpoch: true,
+    responses: {
+      200: Type.Object({
+        currentEpoch: c.Epoch,
+        commands: List(
+          Type.Object({ id: c.Id, kind: AnyOf('reset-cleanup'), epoch: c.Epoch, payload: c.Json }),
+        ),
+      }),
+    },
+  }),
+  operation({
+    ...runner,
+    id: 'reportCommandResult',
+    method: 'POST',
+    path: '/api/runner/commands/:id/result',
+    summary: '명령 결과. X-Project-Epoch에 commands[].epoch를 그대로 보내며 명령 ID와 일치해야 한다(D-04)',
+    staleEpoch: true,
+    body: Body({
+      status: AnyOf('done', 'failed'),
+      items: List(Body({ name: Text, ok: Type.Boolean(), detail: Type.String() })),
+    }),
+    responses: { 204: null },
+    errors: ['EPOCH_MISMATCH'],
+  }),
+  operation({
+    ...runner,
+    id: 'claimJob',
+    method: 'POST',
+    path: '/api/runner/jobs/claim',
+    summary: '작업 임대(attempt는 예약만)',
+    body: Body({ kinds: List(JobKindSchema, { minItems: 1, uniqueItems: true }), capacity: c.Count }),
+    responses: { 200: Type.Object({ job: ClaimedJob }), 204: null },
+    errors: ['CLEANUP_PENDING'],
+  }),
+  operation({
+    ...runner,
+    id: 'renewJob',
+    method: 'POST',
+    path: '/api/runner/jobs/:id/renew',
+    summary: '임대 연장',
+    body: Body({ fence }),
+    responses: { 200: Type.Object({ leaseUntil: c.Timestamp }) },
+    errors: ['EXTERNAL_WRITE_BLOCKED'],
+  }),
+  operation({
+    ...runner,
+    id: 'startJob',
+    method: 'POST',
+    path: '/api/runner/jobs/:id/start',
+    summary: '시작 확정(attempt는 시도 생성·Task 전이). 슬롯은 reserved 유지',
+    body: Body({
+      fence,
+      hostId: Text,
+      bootId: Text,
+      // attempt·integrate·deploy_check·ci_retry만 필수, 그 외 job은 보내지 않는다(서버가 kind로 판정, 어기면 400).
+      headSha: Opt(c.Sha),
+      installedSubagents: List(InstalledSubagent),
+    }),
+    responses: { 200: Type.Object({ attemptId: Opt(c.Id) }) },
+    errors: ['CLAIM_REJECTED', 'INVALID_TRANSITION', 'EXTERNAL_WRITE_BLOCKED'],
+  }),
+  operation({
+    ...runner,
+    id: 'reportJobProcess',
+    method: 'POST',
+    path: '/api/runner/jobs/:id/process',
+    summary: '프로세스 생성 직후 기록(reserved→active). 같은 pgid 재전송은 성공, 다른 pgid는 INVALID_TRANSITION',
+    errors: ['INVALID_TRANSITION'],
+    body: Body({ fence, processGroup: Pid, cgroup: Nullable(Text) }),
+    responses: { 204: null },
+  }),
+  operation({
+    ...runner,
+    id: 'releaseJobSlots',
+    method: 'POST',
+    path: '/api/runner/jobs/:id/slots/release',
+    summary: '물리 슬롯만 반환(논리 잠금 유지). 서버 보유에 pgid가 있으면 no_process는 INVALID_TRANSITION',
+    errors: ['INVALID_TRANSITION'],
+    body: Body({ fence, hostId: Text, proof: ReleaseProof, at: c.Timestamp }),
+    responses: { 204: null },
+  }),
+  operation({
+    ...runner,
+    id: 'acquireJobSlots',
+    method: 'POST',
+    path: '/api/runner/jobs/:id/slots/acquire',
+    summary: 'CLI·① 실행 전 용량 재획득(none→reserved). 그룹은 생성 뒤 /process',
+    body: Body({ fence, hostId: Text }),
+    responses: { 204: null },
+    errors: ['CLAIM_REJECTED'],
+  }),
+  operation({
+    ...runner,
+    id: 'releaseJob',
+    method: 'POST',
+    path: '/api/runner/jobs/:id/release',
+    summary: '잔여 보유 해제(원래 job·host·boot·group이 맞으면 낡은 fence 허용). 서버 보유에 pgid가 있으면 no_process는 INVALID_TRANSITION',
+    errors: ['INVALID_TRANSITION'],
+    body: Body({ fence, hostId: Text, proof: ReleaseProof, at: c.Timestamp }),
+    responses: { 204: null },
+  }),
+  operation({
+    ...runner,
+    id: 'reconcileJob',
+    method: 'POST',
+    path: '/api/runner/jobs/:id/reconcile',
+    summary: '외부 상태 대조 결과(효과 없음/완료됨/부분 적용)',
+    body: Body({
+      fence,
+      evidence: Body({ outcome: AnyOf('none', 'done', 'partial'), checkedAt: c.Timestamp, detail: c.Json }),
+    }),
+    responses: { 204: null },
+  }),
+  operation({
+    ...runner,
+    id: 'finishJob',
+    method: 'POST',
+    path: '/api/runner/jobs/:id/finish',
+    summary: '작업 종료. 설치 실패는 error.code=SUBAGENT_INSTALL_FAILED',
+    body: Body({
+      fence,
+      status: AnyOf('done', 'failed', 'cancelled'),
+      result: Opt(c.Json),
+      error: Opt(Body({ code: Text, message: Text })),
+    }),
+    responses: { 204: null },
+  }),
+];
