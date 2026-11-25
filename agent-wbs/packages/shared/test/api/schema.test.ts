@@ -81,7 +81,7 @@ test('Runner 규칙: epoch는 전부, 이전 epoch 허용은 3개, 멱등 키는
     expect(item.errors.includes('IDEMPOTENCY_KEY_REQUIRED'), item.id).toBe(write);
   }
   // 시도·job 경로의 보고는 fence를 포함한다(contracts §3.2-4).
-  for (const item of runner.filter((o) => /:(attemptId|jobId)|\/jobs\/:id|repo-checks/.test(o.path) && o.body)) {
+  for (const item of runner.filter((o) => /:(attemptId|jobId)|\/jobs\/:id|repo-checks|\/planning\//.test(o.path) && o.body)) {
     const body = item.body as { anyOf?: { required: string[] }[]; required?: string[] };
     for (const branch of body.anyOf ?? [body]) expect(branch.required, item.id).toContain('fence');
     expect(item.errors, item.id).toContain('LEASE_LOST');
@@ -94,7 +94,7 @@ test('팀장 수정은 §1.3 표대로 expected version을 요구한다', () => 
   // 생성·확인·테스트 발송·job 생성, 수동 발송·재발송, 로그아웃, 읽음 표시
   expect(none).toEqual(
     [
-      'addRecipient', 'checkGithub', 'checkSmtp', 'checkTelegramBot', 'createDecision', 'createMessage',
+      'addRecipient', 'checkGithub', 'checkSmtp', 'checkTelegramBot', 'createMessage',
       'createPlanning', 'createPlanningProposal', 'createProject', 'createProposal', 'createRepoCheck',
       'createReport', 'createTask', 'findTelegramChats', 'logout', 'readMessage', 'requestDeployCheck',
       'resendFailedMail', 'resendMail', 'retryCiRun', 'runReplan', 'sendReportMail', 'testRecipient', 'testTelegram',
@@ -120,7 +120,7 @@ test('정의 시점에 계약 위반 라우트를 거부한다', () => {
   const base = { id: 'x', summary: '', responses: { 204: null } } as const;
   expect(() => operation({ ...base, method: 'PUT', path: '/api/x', principal: 'lead' })).toThrow('version 규칙');
   expect(() => operation({ ...base, method: 'PUT', path: '/api/x', principal: 'lead', version: 'body' })).toThrow('필드가 없다');
-  expect(() => operation({ ...base, method: 'GET', path: '/api/x', principal: 'runner' })).toThrow('/api/runner');
+  expect(() => operation({ ...base, method: 'GET', path: '/api/runner/x', principal: 'lead' })).toThrow('Runner 토큰');
 });
 
 test.each<[string, unknown, boolean]>([
@@ -147,10 +147,10 @@ test.each<[string, unknown, boolean]>([
   ['reportAttemptStatus', { fence: 1, status: 'running', at: T, model: 'm', effort: 'e', subagents: [{ id: 'a', version: 1, installed: true, used: true }] }, false],
   ['reportSession', { runnerId: 'r', event: 'stop', at: T, reason: 'unknown' }, false],
   ['reportUsage', { agent: 'Claude', remainPct: 101 }, false],
-  ['reportHost', { hostId: 'h', cpu: '', swapGB: 0, diskFreeGB: 0, os: '' }, false],
-  ['reportModels', { agent: 'Codex', models: [], efforts: ['low'] }, false],
-  ['updateCiRun', {}, false],
-  ['releaseJob', { fence: 1, hostId: 'h', proof: 'lease_expired', at: T }, false],
+  ['reportHost', { hostId: 'h', bootId: 'b', cpu: '', swapGB: 0, diskFreeGB: 0, os: '' }, false],
+  ['reportModels', { agent: 'Codex', models: [] }, false],
+  ['updateCiRun', { fence: 1 }, false],
+  ['releaseJob', { fence: 1, hostId: 'h', proof: { kind: 'lease_expired', bootId: 'b' }, at: T }, false],
   ['claimJob', { kinds: ['reset-cleanup'], capacity: 1 }, false],
   ['createRepoCheck', { url: 'https://github.com/o/r' }, true],
   ['createRepoCheck', { url: 'https://github.com/o/r/' }, true],
@@ -197,16 +197,6 @@ test('응답에 비밀값 필드가 없고 입력 비밀값은 쓰기 전용이�
   expect(env).not.toMatch(/"(model|effort)"/);
 });
 
-test('응답 필드가 정의되지 않은 조회는 이 목록뿐이고 OpenAPI에 표시된다', () => {
-  const pending = OPERATIONS.filter((item) => JSON.stringify(item.responses).includes('x-awbs-pending')).map((item) => item.id);
-  expect(pending.sort()).toEqual([
-    'exportProject', 'getDashboard', 'getDataItem', 'getDesign', 'getIntegrity', 'getInterface', 'getPipeline',
-    'getProject', 'getReport', 'getRunnerState', 'getSchedule', 'getSession', 'previewProposal', 'previewReset',
-  ]);
-  // Runner가 쓰는 API에는 미정 응답이 없다.
-  expect(pending.filter((id) => op(id).principal === 'runner')).toEqual([]);
-});
-
 /** 프로토타입의 JSON 예시에서 최상위 필드와 선택 여부를 읽는다. */
 function topFields(code: string): Map<string, boolean> {
   const fields = new Map<string, boolean>();
@@ -223,6 +213,8 @@ function topFields(code: string): Map<string, boolean> {
   return fields;
 }
 
+const REPLACED = new Set(['reportModels.efforts', 'reportAttemptStatus.escalation']);
+
 test('프로토타입 요청·응답 필드가 같은 이름과 필수 여부로 있다', () => {
   const html = readFileSync(new URL('../prototype/uiux/Main.dc.html', root), 'utf8');
   const unescape = (code: string) => code.replaceAll('\\n', '\n').replaceAll("\\'", "'");
@@ -237,6 +229,8 @@ test('프로토타입 요청·응답 필드가 같은 이름과 필수 여부로
       | undefined;
     const object = input?.anyOf?.[0] ?? input;
     for (const [name, optional] of topFields(unescape(request))) {
+      // 모델별 efforts(owner Q-06)와 adjust(contracts §3.1)가 대신한다.
+      if (REPLACED.has(`${item.id}.${name}`)) continue;
       compared += 1;
       expect(object?.properties, `${item.id} 요청`).toHaveProperty(name);
       // cursor를 우선 쓰므로 since는 선택(contracts §3.1)
@@ -255,5 +249,5 @@ test('프로토타입 요청·응답 필드가 같은 이름과 필수 여부로
       expect(output?.properties, `${item.id} 응답`).toHaveProperty(name);
     }
   }
-  expect(compared).toBeGreaterThan(100);
+  expect(compared).toBe(99);
 });

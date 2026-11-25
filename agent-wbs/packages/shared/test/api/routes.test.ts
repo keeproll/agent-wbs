@@ -68,6 +68,7 @@ PATCH /api/tasks/:k/checklist/:itemKey
 PATCH /api/tasks/:k/outputs
 POST /api/tasks/:k/checklist
 DELETE /api/tasks/:k/checklist/:itemKey
+POST /api/tasks/:k/request-approval
 POST /api/tasks/:k/approve
 POST /api/tasks/:k/reject
 GET /api/tasks/:k/gate
@@ -182,8 +183,9 @@ test('가이드 §8의 모든 경로가 있고 주체가 같다', () => {
   for (const { route, principal } of guide) {
     const op = routes.get(route);
     expect(op, route).toBeDefined();
+    // 혼합 절(§8.5-1·§8.6)에서 /design/decisions POST는 용도가 「Agent 제안」이라 Runner다(G L978).
     const expected = principal === 'mixed'
-      ? (/ \/api\/(runner|planning)\//.test(route) ? 'runner' : 'lead')
+      ? (/ \/api\/(runner|planning)\//.test(route) || route === 'POST /api/projects/:/design/decisions' ? 'runner' : 'lead')
       : principal;
     expect(op?.principal, route).toBe(expected);
   }
@@ -218,6 +220,9 @@ test('원본·계획에 없는 경로를 만들지 않았다', () => {
   expect(new Set(OPERATIONS.map((op) => op.id)).size).toBe(OPERATIONS.length);
 });
 
+/** 리뷰 판정표의 기술 결정(D1·D2). contracts §1.1에 보강해야 한다. */
+const ADDED = ['NOT_FOUND', 'RECIPIENT_DUPLICATE'];
+
 test('오류 코드는 계획 §1.1 표·본문과 상태가 같다', () => {
   const contracts = read('docs/plan/contracts.md');
   const table = contracts.slice(contracts.indexOf('### 1.1'), contracts.indexOf('### 1.2'));
@@ -228,14 +233,14 @@ test('오류 코드는 계획 §1.1 표·본문과 상태가 같다', () => {
     const list = statuses.split('/').map(Number);
     codes.forEach((code, i) => (listed[code] = list[Math.min(i, list.length - 1)] ?? 0));
   }
-  expect(Object.keys(listed)).toHaveLength(30);
+  expect(Object.keys(listed)).toHaveLength(33);
   expect(ERROR_STATUS).toMatchObject(listed);
 
   // §1·§2.3·§2.4 본문에만 있는 코드
   const inText: Record<string, number> = {};
   for (const [, status, code = ''] of contracts.matchAll(/(400|401|403|503) `([A-Z]+_[A-Z_]+)`/g)) inText[code] = Number(status);
   expect(inText).toMatchObject({ IDEMPOTENCY_KEY_REQUIRED: 400, LOGIN_FAILED: 401, PDF_FAILED: 503 });
-  expect(Object.keys(ERROR_STATUS).sort()).toEqual([...new Set([...Object.keys(listed), ...Object.keys(inText)])].sort());
+  expect(Object.keys(ERROR_STATUS).sort()).toEqual([...new Set([...Object.keys(listed), ...Object.keys(inText), ...ADDED])].sort());
 });
 
 test('프로토타입 Endpoint가 정한 오류 코드·상태를 선언한다', () => {

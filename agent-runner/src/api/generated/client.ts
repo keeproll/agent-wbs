@@ -45,7 +45,10 @@ export type ClaimedJob = {
   fence: number;
   kind: "planning";
   payload: {
-    taskKeys: (TaskKey)[];
+    tasks: ({
+      taskKey: TaskKey;
+      subjectHash: Sha256;
+    })[];
     policy: Record<string, unknown>;
   };
 } | {
@@ -54,7 +57,10 @@ export type ClaimedJob = {
   fence: number;
   kind: "estimate";
   payload: {
-    taskKeys: (TaskKey)[];
+    tasks: ({
+      taskKey: TaskKey;
+      subjectHash: Sha256;
+    })[];
     policy: Record<string, unknown>;
   };
 } | {
@@ -63,7 +69,10 @@ export type ClaimedJob = {
   fence: number;
   kind: "split";
   payload: {
-    taskKeys: (TaskKey)[];
+    tasks: ({
+      taskKey: TaskKey;
+      subjectHash: Sha256;
+    })[];
     policy: Record<string, unknown>;
   };
 } | {
@@ -137,13 +146,32 @@ export type ClaimedJob = {
 
 export type Confidence = "상" | "중" | "하";
 
+export type DateOnly = string;
+
+export type Decision = {
+  id: Id;
+  tdKey: string;
+  area: string;
+  title: string;
+  choice: string;
+  authority: "lead" | "agent" | "free";
+  level: "must" | "cond" | "ban" | null;
+  condition: string;
+  status: "fixed" | "approved" | "pending" | "rejected" | "noted" | "change";
+  reason: string;
+  alternatives: string;
+  by: string;
+  at: Timestamp;
+  updatedAt: Timestamp;
+};
+
 export type DepType = "FS" | "SS";
 
 export type Domain = "FE" | "BE" | "DB" | "DevOps" | "API" | "QA" | "Architecture" | "Common";
 
 export type ErrorResponse = {
   error: {
-    code: "VALIDATION_FAILED" | "DEPENDENCY_SELF" | "LIMIT_EXCEEDS_CAP" | "IDEMPOTENCY_KEY_REQUIRED" | "LEAD_UNAUTHORIZED" | "RUNNER_UNAUTHORIZED" | "LOGIN_FAILED" | "FORBIDDEN_PRINCIPAL" | "TASK_NOT_FOUND" | "PROJECT_NOT_FOUND" | "WBS_NODE_NOT_FOUND" | "DEPENDENCY_NOT_FOUND" | "ATTEMPT_NOT_FOUND" | "MESSAGE_NOT_FOUND" | "VERSION_CONFLICT" | "EPOCH_MISMATCH" | "DEPENDENCY_DUPLICATE" | "DEPENDENCY_CYCLE" | "TASK_HAS_SUCCESSORS" | "EXTERNAL_WRITE_BLOCKED" | "PROJECT_EXISTS" | "INPUT_UNCHANGED" | "ATTEMPT_CLOSED" | "SCHEDULE_CYCLE" | "INVALID_TRANSITION" | "GATE_NOT_PASSED" | "CLAIM_REJECTED" | "LEASE_LOST" | "CLEANUP_PENDING" | "IDEMPOTENCY_CONFLICT" | "DECISIONS_PENDING" | "SUBAGENT_INSTALL_FAILED" | "RATE_LIMITED" | "INTERNAL" | "UNAVAILABLE" | "PDF_FAILED";
+    code: "VALIDATION_FAILED" | "DEPENDENCY_SELF" | "LIMIT_EXCEEDS_CAP" | "IDEMPOTENCY_KEY_REQUIRED" | "LEAD_UNAUTHORIZED" | "RUNNER_UNAUTHORIZED" | "LOGIN_FAILED" | "FORBIDDEN_PRINCIPAL" | "TASK_NOT_FOUND" | "PROJECT_NOT_FOUND" | "WBS_NODE_NOT_FOUND" | "DEPENDENCY_NOT_FOUND" | "ATTEMPT_NOT_FOUND" | "MESSAGE_NOT_FOUND" | "NOT_FOUND" | "VERSION_CONFLICT" | "EPOCH_MISMATCH" | "DEPENDENCY_DUPLICATE" | "RECIPIENT_DUPLICATE" | "DEPENDENCY_CYCLE" | "TASK_HAS_SUCCESSORS" | "EXTERNAL_WRITE_BLOCKED" | "PROJECT_EXISTS" | "INPUT_UNCHANGED" | "ATTEMPT_CLOSED" | "SCHEDULE_CYCLE" | "INVALID_TRANSITION" | "SPLIT_JUDGEMENT_REQUIRED" | "ACTIVE_TASK_BLOCKED" | "ORDER_NOT_PRESERVED" | "GATE_NOT_PASSED" | "CLAIM_REJECTED" | "LEASE_LOST" | "CLEANUP_PENDING" | "IDEMPOTENCY_CONFLICT" | "DECISIONS_PENDING" | "SUBAGENT_INSTALL_FAILED" | "RATE_LIMITED" | "INTERNAL" | "UNAVAILABLE" | "PDF_FAILED";
     message: string;
     action: string;
     fix: string;
@@ -163,7 +191,7 @@ export type Id = string;
 
 export type PassFail = "PASS" | "FAIL" | "BLOCKED";
 
-export type ProposalOp = {
+export type PlanningProposalOp = {
   op: "add";
   ref: string;
   t: {
@@ -190,6 +218,17 @@ export type ProposalOp = {
       method?: string;
     })[];
     srcV?: number;
+    judgedRules?: {
+      schemaVersion: 1;
+      items: ({
+        rule: "revert" | "contract" | "refactor";
+        result: "met" | "not_met";
+        agreedBy: (Agent)[];
+        basis: string;
+        judgedAt: Timestamp;
+        sourceRef: string;
+      })[];
+    };
   };
   preds: ({
     pred: Id;
@@ -256,16 +295,17 @@ export type QueueStatus = "waiting_verify" | "queued" | "checking" | "merged" | 
 export type ReplanSummary = {
   replanId: string;
   baselineVersion: number | null;
-  projectEnd: string;
+  projectEnd: DateOnly;
   range: {
-    lo: string;
-    hi: string;
+    lo: DateOnly;
+    hi: DateOnly;
   };
   moved: ({
     taskKey: TaskKey;
-    before: string;
-    after: string;
-    deltaDays: number;
+    kind: "delayed" | "advanced" | "new" | "excluded";
+    before: DateOnly | null;
+    after: DateOnly | null;
+    deltaDays: number | null;
   })[];
 };
 
@@ -288,6 +328,29 @@ export type Timestamp = string;
 export type WorkType = "Analysis" | "Design" | "Implementation" | "Configuration" | "Test" | "Verification" | "Documentation" | "Integration";
 
 export interface Operations {
+  /** 기술 결정 추가. agent는 팀장 승인 대기, free는 재량 기록 */
+  createDecision: {
+    request: {
+      params: {
+        projectId: Id;
+      };
+      body: {
+        jobId: Id;
+        fence: number;
+        authority: "agent" | "free";
+        area: string;
+        title: string;
+        choice: string;
+        reason: string;
+        alternatives: string;
+      };
+      epoch: number;
+      idempotencyKey: string;
+    };
+    responses: {
+      201: Decision;
+    };
+  };
   /** 생존 보고(60초 주기) */
   heartbeat: {
     request: {
@@ -302,7 +365,7 @@ export interface Operations {
       204: undefined;
     };
   };
-  /** 세션 시작·종료 보고(가동률 근거) */
+  /** 세션 시작·종료 보고(가동률 근거). 열린 세션이 없는 stop은 409 */
   reportSession: {
     request: {
       body: {
@@ -323,6 +386,7 @@ export interface Operations {
     request: {
       body: {
         hostId: string;
+        bootId: string;
         cpu: string;
         cores: number;
         memGB: number;
@@ -365,6 +429,12 @@ export interface Operations {
           detail: string;
           fix?: string;
         })[];
+        cli?: ({
+          agent: Agent;
+          version: string;
+          model: string;
+          options: string;
+        })[];
       };
       epoch: number;
       idempotencyKey: string;
@@ -382,8 +452,8 @@ export interface Operations {
           id: string;
           label: string;
           rank: number;
+          efforts: (string)[] | null;
         })[];
-        efforts: (string)[];
       };
       epoch: number;
       idempotencyKey: string;
@@ -470,7 +540,15 @@ export interface Operations {
         model: string;
         effort: string;
         adjust: {
-          kind: "up" | "down" | "keep";
+          kind: "up" | "down" | "keep" | "regrade";
+          from: {
+            model: string;
+            effort: string;
+          };
+          to: {
+            model: string;
+            effort: string;
+          };
           reason: string;
         } | null;
         locked: boolean;
@@ -577,9 +655,16 @@ export interface Operations {
         at: Timestamp;
         model: string;
         effort: string;
-        escalation?: string;
         adjust?: {
-          kind: "up" | "down" | "keep";
+          kind: "up" | "down" | "keep" | "regrade";
+          from: {
+            model: string;
+            effort: string;
+          };
+          to: {
+            model: string;
+            effort: string;
+          };
           reason: string;
         };
         subagents?: ({
@@ -768,7 +853,7 @@ export interface Operations {
       };
       body: {
         fence: number;
-        stepKey: string;
+        stepKey: "check" | "unzip" | "repo" | "codex" | "claude" | "cross" | "tech" | "draft" | "approve" | "diff" | "impact" | "cp";
         status: StepStatus;
         at: Timestamp;
         note?: string;
@@ -784,7 +869,21 @@ export interface Operations {
   startCiRun: {
     request: {
       body: {
+        jobId: Id;
+        fence: number;
         stage: CiStage;
+        taskKey?: TaskKey;
+        attemptId?: Id;
+        ref: string;
+        pr?: number;
+        trigger?: string;
+        baseSha?: Sha;
+        headSha?: Sha;
+        mergeSha?: Sha;
+        treeSha?: Sha;
+        pipelineSha?: Sha;
+      } | {
+        stage: "night";
         taskKey?: TaskKey;
         attemptId?: Id;
         ref: string;
@@ -806,13 +905,14 @@ export interface Operations {
       };
     };
   };
-  /** 단계 진행·결과(로그 원문은 Runner PC) */
+  /** 단계 진행·결과(로그 원문은 Runner PC). fence는 시작 때 저장한 job과 대조하고, job 없는 야간 점검만 null */
   updateCiRun: {
     request: {
       params: {
         id: Id;
       };
       body: {
+        fence: number | null;
         steps?: ({
           name: string;
           status: CiStatus;
@@ -839,6 +939,8 @@ export interface Operations {
   reportMergeQueue: {
     request: {
       body: {
+        jobId: Id;
+        fence: number;
         pr: number;
         taskKey: TaskKey;
         status: QueueStatus;
@@ -861,6 +963,8 @@ export interface Operations {
   reportDesignSnapshot: {
     request: {
       body: {
+        jobId: Id;
+        fence: number;
         commit: Sha;
         files: ({
           path: RepoPath;
@@ -972,7 +1076,7 @@ export interface Operations {
       };
     };
   };
-  /** 명령 결과. 명령 ID와 그 명령의 epoch가 일치해야 한다(D-04) */
+  /** 명령 결과. X-Project-Epoch에 commands[].epoch를 그대로 보내며 명령 ID와 일치해야 한다(D-04) */
   reportCommandResult: {
     request: {
       params: {
@@ -1082,7 +1186,19 @@ export interface Operations {
       body: {
         fence: number;
         hostId: string;
-        proof: "no_process" | "group_empty" | "boot_changed";
+        proof: {
+          kind: "no_process";
+          bootId: string;
+        } | {
+          kind: "group_empty";
+          bootId: string;
+          processGroup: number;
+        } | {
+          kind: "boot_changed";
+          bootId: string;
+          processGroup: number | null;
+          currentBootId: string;
+        };
         at: Timestamp;
       };
       epoch: number;
@@ -1119,7 +1235,19 @@ export interface Operations {
       body: {
         fence: number;
         hostId: string;
-        proof: "no_process" | "group_empty" | "boot_changed";
+        proof: {
+          kind: "no_process";
+          bootId: string;
+        } | {
+          kind: "group_empty";
+          bootId: string;
+          processGroup: number;
+        } | {
+          kind: "boot_changed";
+          bootId: string;
+          processGroup: number | null;
+          currentBootId: string;
+        };
         at: Timestamp;
       };
       epoch: number;
@@ -1176,6 +1304,8 @@ export interface Operations {
   submitEstimates: {
     request: {
       body: {
+        jobId: Id;
+        fence: number;
         items: ({
           taskKey: TaskKey;
           estHours: number;
@@ -1200,6 +1330,8 @@ export interface Operations {
   requestReplan: {
     request: {
       body: {
+        jobId: Id;
+        fence: number;
         trigger: string;
         capacity: {
           rate: number;
@@ -1307,6 +1439,17 @@ export interface Operations {
             basis: string;
           };
           splitBasis: string;
+          judgedRules?: {
+            schemaVersion: 1;
+            items: ({
+              rule: "revert" | "contract" | "refactor";
+              result: "met" | "not_met";
+              agreedBy: (Agent)[];
+              basis: string;
+              judgedAt: Timestamp;
+              sourceRef: string;
+            })[];
+          };
           conflictGroup: string | null;
           designItems: ({
             itemKey: string;
@@ -1355,6 +1498,8 @@ export interface Operations {
   createPlanningSession: {
     request: {
       body: {
+        jobId: Id;
+        fence: number;
         title: string;
         scope: string;
       };
@@ -1374,6 +1519,8 @@ export interface Operations {
         id: Id;
       };
       body: {
+        jobId: Id;
+        fence: number;
         agent: Agent;
         summary: string;
         items: (string)[];
@@ -1392,14 +1539,16 @@ export interface Operations {
         id: Id;
       };
       body: {
+        jobId: Id;
+        fence: number;
         reviews: ({
           topic: string;
           kind: string;
           codex: string;
           claude: string;
-          ops?: (ProposalOp)[];
-          codexOps?: (ProposalOp)[];
-          claudeOps?: (ProposalOp)[];
+          ops?: (PlanningProposalOp)[];
+          codexOps?: (PlanningProposalOp)[];
+          claudeOps?: (PlanningProposalOp)[];
           memo?: string;
         })[];
       };
@@ -1414,13 +1563,26 @@ export interface Operations {
   submitPlanningProposal: {
     request: {
       body: {
+        jobId: Id;
+        fence: number;
         title: string;
         reason: string;
         source: {
           kind: "planning" | "message" | "manual" | "split" | "input" | "decision";
           id?: Id;
         };
-        ops: (ProposalOp)[];
+        ops: (PlanningProposalOp)[];
+        splitJudgements?: {
+          schemaVersion: 1;
+          items: ({
+            rule: "ac_meaning" | "layer_order" | "test_included";
+            result: "met" | "not_met";
+            agreedBy: (Agent)[];
+            basis: string;
+            judgedAt: Timestamp;
+            sourceRef: string;
+          })[];
+        };
       };
       epoch: number;
       idempotencyKey: string;
@@ -1433,13 +1595,15 @@ export interface Operations {
       };
     };
   };
-  /** 등급·하위 Agent·충돌 묶음 판단과 근거 */
+  /** 등급·하위 Agent·충돌 묶음·분할 판단과 근거. subjectHash 불일치는 VERSION_CONFLICT */
   submitTaskPlan: {
     request: {
       params: {
         taskKey: TaskKey;
       };
       body: {
+        jobId: Id;
+        fence: number;
         grades: {
           dev: {
             modelId: string;
@@ -1461,6 +1625,18 @@ export interface Operations {
           name: string;
           reason: string;
         } | null;
+        judgedRules?: {
+          schemaVersion: 1;
+          items: ({
+            rule: "revert" | "contract" | "refactor";
+            result: "met" | "not_met";
+            agreedBy: (Agent)[];
+            basis: string;
+            judgedAt: Timestamp;
+            sourceRef: string;
+            subjectHash: Sha256;
+          })[];
+        };
       };
       epoch: number;
       idempotencyKey: string;
@@ -1472,6 +1648,7 @@ export interface Operations {
 }
 
 export const OPERATIONS = {
+  createDecision: { method: 'POST', path: '/api/projects/{projectId}/design/decisions', content: 'json', statuses: { 201: true } },
   heartbeat: { method: 'POST', path: '/api/runner/heartbeat', content: 'json', statuses: { 204: false } },
   reportSession: { method: 'POST', path: '/api/runner/sessions', content: 'json', statuses: { 204: false } },
   reportHost: { method: 'POST', path: '/api/runner/host', content: 'json', statuses: { 200: true } },

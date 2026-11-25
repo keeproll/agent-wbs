@@ -1,10 +1,31 @@
-import Type from 'typebox';
+import Type, { type TProperties, type TSchema } from 'typebox';
 import * as c from './common.ts';
 
 const { AnyOf, Nullable, Opt, List, Text } = c;
 
+/* ---- 판단 기록(data-model §2.3-1, D-33·D-34). 이름과 구조를 그대로 쓴다. ---- */
+const judgement = {
+  result: AnyOf('met', 'not_met'),
+  agreedBy: List(c.Agent, { minItems: 2, uniqueItems: true }),
+  basis: Text,
+  judgedAt: c.Timestamp,
+  sourceRef: Text,
+};
+const splitRule = AnyOf('revert', 'contract', 'refactor');
+const cpRule = AnyOf('ac_meaning', 'layer_order', 'test_included');
+const subjectHash = c.Sha256;
+/** rule별 최대 1건은 서버가 검사한다. */
+const judgements = <T extends TSchema>(item: T) =>
+  c.Body({ schemaVersion: Type.Literal(1), items: List(item, { maxItems: 3 }) });
+/** 새 Task·초안·CP: hash는 서버가 저장할 때 계산한다. */
+export const NewJudgedRules = judgements(c.Body({ rule: splitRule, ...judgement }));
+export const NewSplitJudgements = judgements(c.Body({ rule: cpRule, ...judgement }));
+/** 저장된 기록, 그리고 작업 payload의 hash를 돌려보내는 기존 Task 재판단 */
+export const JudgedRules = judgements(c.Body({ rule: splitRule, ...judgement, subjectHash }));
+export const SplitJudgements = judgements(c.Body({ rule: cpRule, ...judgement, subjectHash }));
+
 /* ---- Change Proposal 변경(P `ops`, G§5.6). 저장·시뮬레이션이 P의 키를 그대로 쓴다. ---- */
-const ProposedTask = c.Body({
+const proposedTask = {
   title: Type.String({ minLength: 1, maxLength: 200 }),
   type: c.WorkType,
   domain: c.Domain,
@@ -23,25 +44,46 @@ const ProposedTask = c.Body({
   basis: Opt(Type.String()),
   ac: Opt(List(c.Body({ given: Text, when: Text, then: Text, method: Opt(Type.String()) }))),
   srcV: Opt(c.Count),
-});
+};
 const ModifyOp = (field: string, after: Parameters<typeof Opt>[0]) =>
   c.Body({ op: AnyOf('modify'), task: c.TaskKey, field: AnyOf(field), before: Opt(Type.Unknown()), after });
-export const ProposalOp = Type.Union(
-  [
-    c.Body({
-      op: AnyOf('add'),
-      ref: Type.String({ pattern: '^NEW-[0-9]+$' }),
-      t: ProposedTask,
-      preds: List(c.Body({ pred: c.Id, type: c.DepType })),
-    }),
-    ...['title', 'doneCond', 'scopeAdd', 'acAdd'].map((field) => ModifyOp(field, Text)),
-    ModifyOp('priority', c.Priority),
-    ...['assignee', 'verifier'].map((field) => ModifyOp(field, c.Agent)),
-    c.Body({ op: AnyOf('remove'), task: c.TaskKey }),
-    c.Body({ op: AnyOf('dep-add'), pred: c.Id, succ: c.Id, type: c.DepType }),
-    c.Body({ op: AnyOf('dep-remove'), pred: c.Id, succ: c.Id }),
-  ],
-  { title: 'ProposalOp' },
+const proposalOp = (title: string, judged: TProperties) =>
+  Type.Union(
+    [
+      c.Body({
+        op: AnyOf('add'),
+        ref: Type.String({ pattern: '^NEW-[0-9]+$' }),
+        t: c.Body({ ...proposedTask, ...judged }),
+        preds: List(c.Body({ pred: c.Id, type: c.DepType })),
+      }),
+      ...['title', 'doneCond', 'scopeAdd', 'acAdd'].map((field) => ModifyOp(field, Text)),
+      ModifyOp('priority', c.Priority),
+      ...['assignee', 'verifier'].map((field) => ModifyOp(field, c.Agent)),
+      c.Body({ op: AnyOf('remove'), task: c.TaskKey }),
+      c.Body({ op: AnyOf('dep-add'), pred: c.Id, succ: c.Id, type: c.DepType }),
+      c.Body({ op: AnyOf('dep-remove'), pred: c.Id, succ: c.Id }),
+    ],
+    { title },
+  );
+/** 저장된 변경 */
+export const ProposalOp = proposalOp('ProposalOp', { judgedRules: Opt(JudgedRules) });
+/** 팀장 작성: 판단 기록은 쓸 수 없다. */
+export const LeadProposalOp = proposalOp('LeadProposalOp', {});
+export const PlanningProposalOp = proposalOp('PlanningProposalOp', { judgedRules: Opt(NewJudgedRules) });
+
+/** 자동 반영은 held, 수동 승인·반영은 409(contracts §2.1) */
+export const HoldReason = Type.Object(
+  {
+    code: AnyOf('JUDGEMENT_MISSING', 'JUDGEMENT_NOT_MET', 'ORDER_NOT_PRESERVED', 'ACTIVE_TASK_BLOCKED'),
+    taskKey: Opt(c.TaskKey),
+    rule: Opt(Type.Union([splitRule, cpRule])),
+    message: Type.String(),
+  },
+  { title: 'HoldReason' },
+);
+/** D-33~35 외의 반영 불가 사유(완료 Task 수정, 순환 등) */
+const issues = List(
+  Type.Object({ index: Nullable(c.Count), code: Type.String(), message: Type.String() }),
 );
 
 /** 취소로 제거된 관계와 실제로 풀리는 후속(contracts §2.1, D-27) */
@@ -187,6 +229,7 @@ export const TaskDetail = Type.Object(
     split: Nullable(
       Type.Object({
         basis: Type.String(),
+        judgedRules: Nullable(JudgedRules),
         exceptions: List(
           Type.Object({ rule: Type.String(), why: Type.String(), by: Type.String(), at: c.Timestamp }),
         ),
@@ -336,7 +379,9 @@ export const Proposal = Type.Object(
     status: ProposalStatus,
     ops: List(ProposalOp),
     idMap: Type.Record(Type.String(), c.TaskKey),
-    holdReasons: List(Type.String()),
+    splitJudgements: Nullable(SplitJudgements),
+    holdReasons: List(HoldReason),
+    issues,
     events: List(
       Type.Object({ at: c.Timestamp, actor: Type.String(), action: Type.String(), comment: Type.String() }),
     ),
@@ -527,7 +572,7 @@ export const roleSubagents = c.Body({ dev: List(c.Id), qa: List(c.Id), basis: Ty
 /** 초안 안에서만 쓰는 참조(승인 때 Task ID가 정해진다) */
 const Ref = Text;
 
-const DraftTask = c.Body({
+const draftTask = <T extends TSchema>(judgedRules: T) => c.Body({
   ref: Ref,
   wpRef: Ref,
   title: Type.String({ minLength: 1, maxLength: 200 }),
@@ -544,17 +589,20 @@ const DraftTask = c.Body({
   grades: roleGrades,
   subagents: roleSubagents,
   splitBasis: Text,
+  judgedRules: Opt(judgedRules),
   conflictGroup: Nullable(Text),
   designItems: List(c.Body({ itemKey: Text, change: Text })),
 });
 
-/** 초기 WBS 초안(contracts §3.3) */
-export const WbsDraft = {
+/** 초기 WBS 초안(contracts §3.3). 저장된 초안의 판단에는 hash가 있다. */
+const wbsDraft = <T extends TSchema>(judgedRules: T) => ({
   phases: List(c.Body({ ref: Ref, title: Text }), { minItems: 1 }),
   wps: List(c.Body({ ref: Ref, phaseRef: Ref, title: Text }), { minItems: 1 }),
-  tasks: List(DraftTask, { minItems: 1 }),
+  tasks: List(draftTask(judgedRules), { minItems: 1 }),
   deps: List(c.Body({ predRef: Ref, succRef: Ref, depType: c.DepType })),
-};
+});
+export const WbsDraft = wbsDraft(NewJudgedRules);
+const StoredDraft = wbsDraft(JudgedRules);
 
 /* ---- 화면 조회 응답. 필드 근거는 프로토타입 계산 결과(P 줄 번호)이고 표시 문자열 대신 값을 보낸다. ---- */
 const N = Type.Number();
@@ -570,7 +618,8 @@ export const Alert = Type.Object(
 
 /** P simulate L4304, M1-05 결과 */
 const simulation = {
-  issues: List(obj({ index: Nullable(c.Count), code: Str, message: Str })),
+  issues,
+  holdReasons: List(HoldReason),
   idMap: Type.Record(Type.String(), c.TaskKey),
   diff: List(
     obj({ index: c.Count, op: Str, target: Str, field: Str, before: Type.Unknown(), after: Type.Unknown() }),
@@ -647,7 +696,7 @@ export const ProjectState = Type.Union(
         decisions: List(Decision),
         revision: Nullable(Type.Integer({ minimum: 1 })),
         draft: Nullable(
-          obj({ ...WbsDraft, splitCheck: obj({ pass: c.Count, suspect: c.Count, violation: c.Count }) }),
+          obj({ ...StoredDraft, splitCheck: obj({ pass: c.Count, suspect: c.Count, violation: c.Count }) }),
         ),
       }),
     }),

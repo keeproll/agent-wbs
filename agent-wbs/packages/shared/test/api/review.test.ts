@@ -205,3 +205,64 @@ test('착수 승인 요청·승인·반려(contracts §2.1)', () => {
   }
   expect(op('requestTaskApproval').path).toBe('/api/tasks/:taskKey/request-approval');
 });
+
+/* ---- D-33~35 (data-model §2.3-1) ---- */
+const HASH = 'd'.repeat(64);
+const judgement = (rule: string, extra: object = {}) => ({
+  rule, result: 'met', agreedBy: ['Claude', 'Codex'], basis: '근거', judgedAt: T, sourceRef: 'job-1', ...extra,
+});
+const judged = (...items: object[]) => ({ schemaVersion: 1, items });
+
+test('D-33 초안·CP의 새 Task 판단은 hash 없이 받고, 기존 Task 재판단은 받은 hash를 돌려보낸다', () => {
+  const draft = (judgedRules: unknown) => {
+    const body = structuredClone(runner('submitDraft')) as { tasks: Record<string, unknown>[] };
+    Object.assign(body.tasks[0] ?? {}, { judgedRules });
+    return accepts('submitDraft', JSON.parse(JSON.stringify(body)));
+  };
+  const plan = (item: object) => accepts('submitTaskPlan', { ...runner('submitTaskPlan'), judgedRules: judged(item) });
+  for (const rule of ['revert', 'contract', 'refactor']) {
+    expect(draft(judged(judgement(rule)))).toBe(true);
+    expect(draft(judged(judgement(rule, { subjectHash: HASH })))).toBe(false);
+    expect(plan(judgement(rule, { subjectHash: HASH }))).toBe(true);
+    expect(plan(judgement(rule))).toBe(false);
+  }
+  // 미기록·불충족도 저장한다. 보류는 승인에서 한다.
+  expect(draft(undefined)).toBe(true);
+  expect(draft(judged(judgement('revert', { result: 'not_met' })))).toBe(true);
+  for (const bad of [
+    judgement('size'), judgement('revert', { agreedBy: ['Codex'] }), judgement('revert', { agreedBy: ['Codex', 'Codex'] }),
+    judgement('revert', { basis: '  ' }), judgement('revert', { result: 'ok' }),
+  ]) expect(draft(judged(bad)), JSON.stringify(bad)).toBe(false);
+  expect(draft({ schemaVersion: 2, items: [] })).toBe(false);
+  expect(op('submitTaskPlan').errors).toContain('VERSION_CONFLICT');
+});
+
+test('D-33·D-34 판단 기록은 Planning API만 쓴다', () => {
+  const body = runner('submitPlanningProposal') as { ops: { op: string; t: object }[] };
+  const ops = body.ops.map((item) => (item.op === 'add' ? { ...item, t: { ...item.t, judgedRules: judged(judgement('contract')) } } : item));
+  expect(accepts('submitPlanningProposal', { ...body, ops })).toBe(true);
+  for (const rule of ['ac_meaning', 'layer_order', 'test_included']) {
+    expect(accepts('submitPlanningProposal', { ...body, splitJudgements: judged(judgement(rule)) })).toBe(true);
+  }
+  expect(accepts('submitPlanningProposal', { ...body, splitJudgements: judged(judgement('revert')) })).toBe(false);
+  const lead = { title: 't', reason: 'r', source: { kind: 'manual' }, ops: body.ops };
+  expect(accepts('createProposal', lead)).toBe(true);
+  expect(accepts('createProposal', { ...lead, ops })).toBe(false);
+  expect(accepts('createProposal', { ...lead, splitJudgements: judged(judgement('ac_meaning')) })).toBe(false);
+});
+
+test('D-33~35 보류 사유와 오류 코드', () => {
+  expect(ERROR_STATUS).toMatchObject({ SPLIT_JUDGEMENT_REQUIRED: 409, ORDER_NOT_PRESERVED: 409, ACTIVE_TASK_BLOCKED: 409 });
+  for (const id of ['approveProposal', 'applyProposal']) {
+    expect(op(id).errors).toEqual(expect.arrayContaining(['SPLIT_JUDGEMENT_REQUIRED', 'ORDER_NOT_PRESERVED', 'ACTIVE_TASK_BLOCKED']));
+  }
+  expect(op('addDependency').errors).toContain('ACTIVE_TASK_BLOCKED');
+  expect(op('approveTask').errors).toContain('SPLIT_JUDGEMENT_REQUIRED');
+  expect(op('rejectTask').errors).not.toContain('SPLIT_JUDGEMENT_REQUIRED');
+  expect(op('approveBootstrap').errors).toContain('SPLIT_JUDGEMENT_REQUIRED');
+  const preview = fixtures<{ id: string; response: Record<string, unknown> }>('lead').find((item) => item.id === 'previewProposal')?.response;
+  for (const code of ['JUDGEMENT_MISSING', 'JUDGEMENT_NOT_MET', 'ORDER_NOT_PRESERVED', 'ACTIVE_TASK_BLOCKED']) {
+    expect(responds('previewProposal', { ...preview, holdReasons: [{ code, taskKey: 'TASK-0001', message: 'm' }] }), code).toBe(true);
+  }
+  expect(responds('previewProposal', { ...preview, holdReasons: ['문자열'] })).toBe(false);
+});

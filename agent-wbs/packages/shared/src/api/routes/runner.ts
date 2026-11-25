@@ -83,6 +83,8 @@ const JobKindSchema = AnyOf(...JOB_KINDS);
 const lease = { id: c.Id, leaseUntil: c.Timestamp, fence };
 const Job = <const K extends JobKind, P extends Record<string, Parameters<typeof Opt>[0]>>(kind: K, payload: P) =>
   Type.Object({ ...lease, kind: AnyOf(kind), payload: Type.Object(payload) });
+/** subjectHash는 재판단 보고에 그대로 돌려보낸다(data-model §2.3-1). */
+const JudgedTasks = List(Type.Object({ taskKey: c.TaskKey, subjectHash: c.Sha256 }));
 export const ClaimedJob = Type.Union(
   [
     Job('repo_check', { repoCheckId: c.Id, url: c.RepoUrl }),
@@ -93,9 +95,9 @@ export const ClaimedJob = Type.Union(
       instruction: Type.String(),
       resumeStep: Nullable(Type.String()),
     }),
-    Job('planning', { taskKeys: List(c.TaskKey), policy: c.Json }),
-    Job('estimate', { taskKeys: List(c.TaskKey), policy: c.Json }),
-    Job('split', { taskKeys: List(c.TaskKey), policy: c.Json }),
+    Job('planning', { tasks: JudgedTasks, policy: c.Json }),
+    Job('estimate', { tasks: JudgedTasks, policy: c.Json }),
+    Job('split', { tasks: JudgedTasks, policy: c.Json }),
     Job('attempt', {
       taskKey: c.TaskKey,
       kind: c.AttemptKind,

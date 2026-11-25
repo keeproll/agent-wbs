@@ -38,7 +38,7 @@ const KNOWN = new Set([
   '$ref', 'type', 'enum', 'const', 'anyOf', 'items', 'properties', 'required', 'patternProperties', 'contentMediaType',
   // 타입에 영향이 없는 검증 규칙
   'title', 'pattern', 'minLength', 'maxLength', 'minimum', 'maximum', 'exclusiveMinimum', 'minItems', 'uniqueItems',
-  'minProperties', 'additionalProperties',
+  'maxItems', 'minProperties', 'additionalProperties',
 ]);
 
 export function generateClient(doc: OpenApiDocument): string {

@@ -164,6 +164,12 @@ test('ETag 조건부 조회: If-None-Match를 보내고 304를 성공으로 돌�
   expect(requests[0]?.headers['if-none-match']).toBe('"v1"');
 });
 
+test('명령 결과는 명령의 epoch를 헤더로 보낸다(현재 epoch로 덮지 않는다)', async () => {
+  reply(204);
+  await api('reportCommandResult', { params: { id: 'c' }, epoch: 2, idempotencyKey: 'k', body: { status: 'done', items: [] } });
+  expect(requests[0]?.headers['x-project-epoch']).toBe('2');
+});
+
 test('heartbeat는 멱등 키 없이 보내고 X-Current-Epoch를 읽을 수 있다', async () => {
   reply(204, undefined, { 'x-current-epoch': '3' });
   const result = await api('heartbeat', beat);
@@ -189,7 +195,9 @@ test.each([
   expect(() => generateClient(withSchema(schema))).toThrow();
 });
 
-test('생성기는 팀장 API를 포함하지 않는다', () => {
+test('생성기는 팀장 API를 포함하지 않는다. 예외는 원본 경로의 기술 결정 제안(G§8.6)뿐이다', () => {
   const paths = Object.values(OPERATIONS).map((op) => op.path);
-  expect(paths.filter((path) => !/^\/api\/(runner|planning)\//.test(path))).toEqual([]);
+  expect(paths.filter((path) => !/^\/api\/(runner|planning)\//.test(path))).toEqual([
+    '/api/projects/{projectId}/design/decisions',
+  ]);
 });

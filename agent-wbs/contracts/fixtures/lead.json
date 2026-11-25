@@ -48,7 +48,8 @@
       ]
      }
     ]
-   }
+   },
+   "holdReasons": []
   }
  },
  {
@@ -82,7 +83,9 @@
      }
     ],
     "createdAt": "2026-11-25T01:02:03.123456Z",
-    "updatedAt": "2026-11-25T01:02:03.123456Z"
+    "updatedAt": "2026-11-25T01:02:03.123456Z",
+    "splitJudgements": null,
+    "issues": []
    },
    "issues": [],
    "idMap": {},
@@ -128,7 +131,8 @@
       ]
      }
     ]
-   }
+   },
+   "holdReasons": []
   }
  },
  {

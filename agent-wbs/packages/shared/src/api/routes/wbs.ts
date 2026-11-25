@@ -107,7 +107,7 @@ const task = [
         blocked: Type.Boolean(),
       }),
     },
-    errors: ['DEPENDENCY_SELF', 'DEPENDENCY_DUPLICATE', 'DEPENDENCY_CYCLE'],
+    errors: ['DEPENDENCY_SELF', 'DEPENDENCY_DUPLICATE', 'DEPENDENCY_CYCLE', 'ACTIVE_TASK_BLOCKED'],
   }),
   operation({
     ...byQuery,
@@ -192,7 +192,7 @@ const task = [
       summary: action === 'approve' ? '착수 승인(필수 항목 재검사)' : '착수 반려',
       body: Body({ ...V, comment }),
       responses: Changed,
-      errors: ['INVALID_TRANSITION'],
+      errors: action === 'approve' ? ['INVALID_TRANSITION', 'SPLIT_JUDGEMENT_REQUIRED'] : ['INVALID_TRANSITION'],
     }),
   ),
   operation({
@@ -441,7 +441,7 @@ const planning = [
       title: Text,
       reason: Text,
       source: Body({ kind: m.ProposalSource, id: Opt(c.Id) }),
-      ops: List(m.ProposalOp, { minItems: 1 }),
+      ops: List(m.LeadProposalOp, { minItems: 1 }),
     }),
     responses: { 201: m.Proposal },
   }),
@@ -474,7 +474,7 @@ const planning = [
       summary: action === 'apply' ? '재시뮬레이션 후 반영(문제가 있으면 보류)' : '승인',
       body: Body({ ...V, previewHash: Text, comment }),
       responses: { 200: action === 'apply' ? m.ProposalApplied : m.Proposal },
-      errors: ['INVALID_TRANSITION'],
+      errors: ['INVALID_TRANSITION', 'SPLIT_JUDGEMENT_REQUIRED', 'ORDER_NOT_PRESERVED', 'ACTIVE_TASK_BLOCKED'],
     }),
   ),
 ];

@@ -79,7 +79,7 @@ const project = [
     summary: '초기 WBS 승인 → WBS + 기준 v1(한 트랜잭션)',
     body: Body({ revision: Revision }),
     responses: { 200: Type.Object({ baselineVersion: Type.Literal(1), taskCount: c.Count }) },
-    errors: ['INVALID_TRANSITION'],
+    errors: ['INVALID_TRANSITION', 'SPLIT_JUDGEMENT_REQUIRED'],
   }),
   operation({
     ...lead,
