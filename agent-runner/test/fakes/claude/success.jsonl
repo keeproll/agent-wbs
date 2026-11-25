@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init","session_id":"fake-claude-session","model":"fake-model","tools":[]}
+{"type":"assistant","session_id":"fake-claude-session","message":{"role":"assistant","content":[{"type":"text","text":"fake 완료"}]}}
+{"type":"result","subtype":"success","is_error":false,"session_id":"fake-claude-session","result":"fake 완료","usage":{"input_tokens":0,"output_tokens":0}}
