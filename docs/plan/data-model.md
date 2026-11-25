@@ -172,7 +172,7 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
 |---|---|---|
 | (없음) | `planning` | 수동 생성·CP add (P `newTask`) |
 | (없음) | `ready` | 초기 WBS 승인(P `draftWbs`) |
-| `planning` | `approval` | 명세 필수 항목 충족 |
+| `planning` | `approval` | 팀장 착수 승인 요청 + 명세 필수 항목 충족(contracts §2.5). 자동 전이 없음 |
 | `approval` | `ready` / `planning` | 팀장 착수 승인(owner Q-02) / 반려 |
 | `ready` | `running` | 팀장 시작 → claim 예약 → 설치 → `start` 재검사 통과 |
 | `running` | `qa` / `verifying` | dev→① 통과→QA / rework→① 통과→재검증 |

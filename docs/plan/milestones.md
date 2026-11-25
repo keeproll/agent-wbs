@@ -44,7 +44,7 @@ M0 기반 → M1 데이터·계약·순수 판정 → M2 서버 핵심 → {M3 �
 | ID | 범위 | 완료 조건(검증) | 디렉토리 | 병렬 | 담당 / 리뷰 |
 |---|---|---|---|---|---|
 | M1-01 | 전체 schema·제약·추가 전용·초기화 함수·system/demo seed(owner 승인값 포함, SUB_MOCK과 미승인 값은 demo만) | `W test:db -- schema`(빈 DB up, 제약 위반, 앱 역할 UPDATE 거부, system seed에 Mock 정의·미승인 값 0건, owner 승인 Q-03·04·06 값 일치) | `packages/db` | — | Codex / Claude |
-| M1-02 | TypeBox API 스키마 → OpenAPI, 오류 코드, Runner client 생성 | `W openapi:check && R client:check`, G§8 경로 대조 테스트 | `packages/shared/src/api`, `contracts/`, `agent-runner/src/api` | ∥ | Claude / Codex |
+| M1-02 | TypeBox API 스키마 → OpenAPI, 오류 코드, Runner client 생성 | `W openapi:check && R client:check`, G§8 경로 대조 테스트, **착수 승인 요청 API(contracts §2.1) 포함** | `packages/shared/src/api`, `contracts/`, `agent-runner/src/api` | ∥ | Claude / Codex |
 | M1-03 | 상태 전이·번호·차단·순환·Gate·체크리스트·SS/FS | `W --filter shared test -- domain` (**owner 승인 Q-05 표와 일치**, 모든 전이 쌍·상태×시도 종류 표, QA 프로세스 실패→같은 종류 재시도, BLOCKED→새 검증→PASS, SHA 변경→재검증, **시작 전 취소 선행의 SS 제거→후속 해제, 다른 선행이 남으면 계속 차단, `cancelled`≠시작됨**) | `packages/shared/src/domain` | ∥ | Codex / Claude |
 | M1-04 | 일정: 3시나리오·가동률·슬롯·충돌 묶음·리셋·불가일·재조정 diff·driftCheck | `W --filter shared test -- schedule` (P `Sel.schedule`과 demo 결과 대조, 200 Task 시간 기록, **SS 선행 취소 후 그 관계 없이 후속 재배치**, **용량 0인 날→다음 가용일 시작(D-31), rLo≤rate(D-32)**) | `packages/shared/src/schedule` | ∥ | Codex / Claude |
 | M1-05 | CP 시뮬레이션·영향·분할 점검 10규칙·분할 제안 검증 | `W --filter shared test -- proposal split` (**취소 CP 영향 목록에 풀리는 후속·남은 차단 표시**) | `packages/shared/src/{proposal,split}` | M1-03 후 | Claude / Codex |
@@ -55,7 +55,7 @@ M0 기반 → M1 데이터·계약·순수 판정 → M2 서버 핵심 → {M3 �
 | ID | 범위 | 완료 조건(검증) | 디렉토리 | 병렬 | 담당 / 리뷰 |
 |---|---|---|---|---|---|
 | M2-01 | 인증 2종·CSRF·epoch·멱등·오류 형식·마스킹 | `W --filter api test -- security` (contracts §8 5종 표, 링크 재사용·비loopback 거부, LAN 비밀번호 미설정 기동 거부·횟수 제한) | `apps/api/src/platform` | — | Codex / Claude |
-| M2-02 | Task·의존성·명세·설계·체크리스트 CRUD, 동시 수정 | `W --filter api test -- tasks` (동시 순환 추가·이력, 삭제/의존성/승인 낡은 버전 409) | `apps/api/src/tasks` | M2-01 후 ∥ | Claude / Codex |
+| M2-02 | Task·의존성·명세·설계·체크리스트 CRUD, 동시 수정 | `W --filter api test -- tasks` (동시 순환 추가·이력, 삭제/의존성/**승인 요청**/승인 낡은 버전 409, **승인 요청→승인/반려: 필수 항목 미충족 400·다른 상태 409·중복 요청**) | `apps/api/src/tasks` | M2-01 후 ∥ | Claude / Codex |
 | M2-03 | 프로젝트 등록·기술 결정·bootstrap·승인·입력 변경·분석 안 함 | `W --filter api test -- project` | `apps/api/src/project` | ∥ | Claude / Codex |
 | M2-04 | 초기화·명령·정리 대기·내보내기·파일 삭제 큐 | `W --filter api test -- reset` (중간 실패 주입, 설정 유지/삭제 표, middleware 통과 후 정지한 host 보고·worker와 초기화 경합, 명령 epoch 불일치) | `apps/api/src/reset` | M2-03 후 | Codex / Claude |
 | M2-05 | Runner 보고·jobs lease·시도 claim·heartbeat 감시·PC 변경·상한 | `W --filter api test -- runner` (동시 claim 100회, 중복 보고, **네트워크 단절+자손 생존+재개 거부→해제 후 허용**, 설치 실패 후 Task/예약/이력/재시도, 외부 효과 job reconcile, **renew 성공→정지→host 전환→옛 호출 재개 시 새 외부 쓰기 차단·대조**, ① 실패 직전 같은 묶음 claim 거부, 잠금 인계 원자성, 자기 예약 start·중복 start, 인계받은 QA job의 claim·start 성공과 타 job 거부, 부분 unique 경합, 시작 버튼 필수·자동 재시도 2(총 3회, 같은 종류 연속)·재작업 3 경계, **D-29·D-30 run-grade·claim**) | `apps/api/src/runner` | ∥ | Codex / Claude |
@@ -70,7 +70,7 @@ M0 기반 → M1 데이터·계약·순수 판정 → M2 서버 핵심 → {M3 �
 |---|---|---|---|---|---|
 | M3-01 | **로그인 화면 1개(Q-01)**, 로딩 5종·오류 막대·충돌 창·빈 상태·잠금·편집 보호 공통 | `W e2e -- states` (§0.3 오류·로딩, **1280·1920 전체·1280 미만 표 컨테이너만 가로 스크롤**) | `apps/web/src/shared` | — | Claude / Codex |
 | M3-02 | WBS 표·필터 9·레일·Gantt·Wizard·가상 스크롤 | `W e2e -- wbs` (시나리오 1·27, 화면 1280·1920 가로 스크롤 없음(목록 영역 약 1,000px), 1280 미만 표 가로 스크롤, 200/1,000행 측정 기록) | `features/wbs` | M3-01 후 ∥ | Claude / Codex |
-| M3-03 | Task 상세 9탭 | `W e2e -- task-detail` (1·2·3·4·13·23 일부, **390px 알림 링크 Task 상세 열람**) | `features/task` | ∥ | Claude / Codex |
+| M3-03 | Task 상세 9탭 | `W e2e -- task-detail` (1·2·3·4·13·23 일부, **390px 알림 링크 Task 상세 열람**, **착수 승인 요청→승인·반려**) | `features/task` | ∥ | Claude / Codex |
 | M3-04 | 프로젝트 3흐름·기술 결정 확정·초기화 | `W e2e -- project` (19·29·30·31) | `features/project` | ∥ | Claude / Codex |
 | M3-05 | Planning·변경 제안 | `W e2e -- planning` (5, **취소 CP 영향 목록의 풀리는 후속**, **390px 알림 링크 변경 제안 상세 열람**) | `features/{planning,change}` | ∥ | Claude / Codex |
 | M3-06 | 작업 실행 3분할·메시지 | `W e2e -- exec` (7·8, 6은 Gate 대기까지 fake) | `features/exec` | ∥ | Claude / Codex |
