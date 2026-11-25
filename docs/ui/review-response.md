@@ -1,8 +1,10 @@
 # Claude 독립 리뷰 처리 기록
 
-대상: eda7591의 docs/ui. 리뷰 원문은 로컬 `~/.cache/agent-wbs-baseline/REVIEW.md`이며 스크린샷은 복사/커밋하지 않았다. 원본 P와 가이드 G를 재대조했고 기준 계획은 `dc202a50a66f6d634e48fe7ba471f937343332d7`의 open-questions/milestones, 필요한 D-17/D-26·인증/내보내기 계약을 git show로 확인했다. 이 변경은 문서·증거만이며 원본/제품/계획을 수정하지 않는다.
+대상: eda7591의 docs/ui. 리뷰 원문은 로컬 `~/.cache/agent-wbs-baseline/REVIEW.md`이며 스크린샷은 복사/커밋하지 않았다. 원본 P와 가이드 G를 재대조했고 당시 기준 계획은 `dc202a50a66f6d634e48fe7ba471f937343332d7`의 open-questions/milestones, 필요한 D-17/D-26·인증/내보내기 계약을 git show로 확인했다. 이 변경은 문서·증거만이며 원본/제품/계획을 수정하지 않는다.
 
-## 결론과 집계 변화
+현재 판정 기준은 **b258334**이며 아래는 1차 처리 이력이다. A1/A5/C1의 잔여와 2차 P1/P2·유실 대응은 [review-2-response.md](review-2-response.md)가 대체한다. 당시 UAT-ERROR-01은 현재 삭제했고 [오류 참조표](acceptance-coverage.md)로 대체했다.
+
+## 당시 결론과 집계 변화
 
 기존933개(원본 동작설명404 + CD529)의 자동생성을 폐기하고 **122개**의 전제·동작·관찰결과가 있는 UAT로 교체했다. 529개 조건은 inventory/JSON의 추적 색인으로만 유지한다. 원본404개 결과설명은 원본 관측 catalog에 남으며 제품 합격 조건으로 생성되지 않는다. 화면 ID→UAT와 MM-01~31→UAT를 양방향 대조한다. UI-13/Prototype주입패널은 제품에서 제외, UI-AUTH는 owner 추가 화면이다.
 

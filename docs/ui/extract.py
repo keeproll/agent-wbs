@@ -39,6 +39,7 @@ def acceptance_cases(records):
         cells = line.split('|')
         assert len(cells) == 9, line
         aid, screens, method, given, action, expected, source, mismatches, milestones = cells
+        assert re.fullmatch(r'M[0-8]-\d{2}', milestones), f'필수 통과 마일스톤은 하나: {aid} {milestones}'
         row = dict(id=aid, screens=screens.split(','), method=method, given=given,
                    action=action, expected=expected, source=source,
                    mismatches=[] if mismatches == '-' else mismatches.split(','), milestones=milestones)
@@ -179,6 +180,8 @@ def main():
                    buttonsWithoutEvent=len(buttons_no_events), browserVerified=False,
                    independentBrowserReview='evidence/browser.md')
     summary['acceptanceTotal'] = summary['acceptanceBehaviorItems'] + summary['acceptanceConditionItems']
+    summary['acceptanceMilestones'] = dict(sorted(Counter(c['milestones'] for c in cases).items()))
+    summary['acceptanceStages'] = dict(sorted(Counter(c['milestones'].split('-')[0] for c in cases).items()))
     evidence = dict(summary=summary, catalog=records, events=p.events, conditions=p.conditions, loops=p.loops,
                     fields=fields, inlineStyles=p.styles, icons=p.icons, buttonsWithoutEvent=buttons_no_events, logicIndex=markers)
     json_body = json.dumps(evidence, ensure_ascii=False, indent=2) + '\n'
@@ -228,17 +231,26 @@ def main():
 
     ac = ['## 집계', '', f'실제 판정 항목 **{len(cases)}개**. 이전933개(원본 설명404 + 기계 조건529)에서 교체했다. 조건529개는 인수 총계에서 제외하고 inventory의 CD 추적 색인에만 남긴다.', '',
           '검증 방법별: ' + ', '.join(f'{k} {v}개' for k,v in summary['acceptanceMethods'].items()) + '.', '',
-          '## 화면 ID → 판정 항목', '', '| 화면 ID | 판정 ID |', '|---|---|']
+          '## 필수 통과 마일스톤', '',
+          '각 UAT는 아래 **하나의 마일스톤에서 전체 기대 결과를 통과**해야 한다. M3 화면/API 사례와 M4 이후 실행 결합 사례는 서로 다른 ID다. 앞 단계의 fixture 성공으로 뒤 단계 체크박스를 체크하지 않는다. 세부 기대 a/b/c 중 하나라도 실패하면 해당 UAT 전체는 미통과다.', '',
+          '| 마일스톤 | UAT 수 | 필수 판정 ID |', '|---|---:|---|']
+    for ms, count in summary['acceptanceMilestones'].items():
+        ac.append(f'| {ms} | {count} | '+', '.join(c['id'] for c in cases if c['milestones']==ms)+' |')
+    ac += ['', '단계 합계: ' + ', '.join(f'{ms} {n}개' for ms,n in summary['acceptanceStages'].items()) + '.', '',
+           'M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runner 보고 fixture로 화면·저장·전이·보류를 확인하고 Gate 대기까지 검사한다. M4 이후에는 각 항목에 적힌 실제 adapter/프로세스/프로토콜을 사용한다. M7-06도 유료 CLI·실 GitHub 인수가 아니라 fake CLI·로컬 git·fake GitHub를 거치는 실제 ①/② 파이프라인 결합이다. 유료 CLI/실 GitHub/실 SMTP·BotAPI는 계획 M8 gate를 별도로 충족한다.', '',
+           '빈 상태 문구·생성 조건과 오류별 판정 ID는 [acceptance-coverage.md](acceptance-coverage.md)를 따른다. 원본의 동일 빈 문구로 구분되지 않는 경우 G86의 기록 없음/조건 불일치 구분이 제품 기준이다.', '',
+           '## 화면 ID → 판정 항목', '', '| 화면 ID | 판정 ID |', '|---|---|']
     for sid in [r['id'] for r in records] + ['UI-AUTH']:
         ids = [c['id'] for c in cases if sid in c['screens']]
-        reason = '정상 제품화면 제외; 모르는 URL404는 UAT-SHELL-05' if sid=='UI-13' else '주입 도구 제외; 실제 상태는 UAT-STATE/ERROR 및 업무 시나리오로 검증'
+        reason = '정상 제품화면 제외; 모르는 URL404는 UAT-SHELL-05' if sid=='UI-13' else '주입 도구 제외; 실제 상태는 UAT-STATE 및 acceptance-coverage 오류 참조표로 검증'
         ac.append(f'| {sid} | {", ".join(ids) if ids else reason} |')
     ac += ['', '## 판정 가능한 시나리오', '']
     for c in cases:
         ac += [f'### {c["id"]} · {", ".join(c["screens"])}', '',
                f'- 전제: {c["given"]}.', f'- 동작/사건: {c["action"]}.',
-               f'- [ ] **{c["id"]}** [{c["method"]}] {c["expected"]}.',
-               f'- 근거: {c["source"]}; 작업: {c["milestones"]}.',
+               f'- [ ] **{c["id"]}** [{c["method"]}] 아래 기대를 모두 만족한다.',
+               *[f'  - {chr(97+i)}) {part}.' for i,part in enumerate(c['expected'].split('；'))],
+               f'- 근거: {c["source"]}; **필수 통과: {c["milestones"]}**.',
                '- 불일치: ' + (', '.join(c['mismatches']) if c['mismatches'] else '없음') + '.', '']
     ac += ['## 불일치 → 판정 항목', '', '| 불일치 | 판정 ID |', '|---|---|']
     for i in range(1,32):

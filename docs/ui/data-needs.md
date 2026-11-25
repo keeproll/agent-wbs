@@ -1,5 +1,17 @@
 # 화면 데이터와 변경 동작
 
+현재 제품 판정/계약 기준은 `keeproll/plan-baseline` **b258334**다. 아래 생성 영역은 원본 메모리 모델의 관측이며, 원본에 없는 owner 동작도 다음 계약 데이터가 필요하다.
+
+| 화면 / 판정 | 제품에서 추가로 조회·변경하는 데이터 | 근거 |
+|---|---|---|
+| UI-03E/명세·이력 / UAT-APPROVE-01 | 명세 완료 여부·approval 상태·승인/반려 요청 결과·주체/시각/사유 이력. 승인=ready, 반려=planning; 로그인/권한 실패는 상태 미변경 | open-questions §0 Q-02/Q-05 #2·#3; contracts §2.1 approve/reject |
+| UI-06·Runner / UAT-EXEC-09 | 중단 시도 interrupted·Task paused·보유/잠금 해제 증거·재개 거부 reasons[]·동일 단계/등급의 새 attempt. 같은 host의 그룹 해제와 PC 변경의 별도 격리 규칙은 구분 | contracts §3.4/§4.3; Q-05 #10 |
+| UI-03-03·UI-09A / UAT-TASK-06 | 실제 actStart·미충족 선행 목록·원자적으로 제거된 SS 관계; impact.removedDependencies[{pred,succ,type,reason}], unblockedSuccessors[{taskKey,remainingBlockers[]}]. 실제 해소와 남은 차단을 구분 | D-27; contracts §2.1 proposals |
+| UI-05-02 / UAT-PLAN-02 | 자동 정책·202 pending 기록·기준선 버전·수동 재조정 실행 결과·RP 전후/주체/계기. 자동 꺼짐 pending만으로 기준 변경 없음, 실행 확정은 POST /api/replans/run | D-10; contracts §2.1 replans |
+| UI-06 / UAT-EXEC-06 | 종류별 연속 프로세스 실패 횟수·성공 초기화·QA+통합 합산 재작업 횟수·1회 수동 실행 허용. 중단/BLOCKED와 시작 전 실패는 별도 조치 | contracts §3.5 |
+
+빈 목록은 데이터 존재 여부와 필터 결과 개수를 구분할 수 있어야 한다. 구체 화면·문구·발생 조건·판정 ID는 [acceptance-coverage.md](acceptance-coverage.md)에 있다. 원본 타이머·하드코딩을 실제 보고로 바꾸는 요구는 기존 Mock 교체 표와 각 UAT를 따른다.
+
 조회는 원본 `Api.loadProject()`(3308–3387), 전시 데이터는 `MOCK`(3091–3306), 설계 샘플은 `DESIGNS`(2988–3062), 추가 모델은 3395–3662줄이다. 원본은 클라이언트 메모리뿐이며 reload하면 초기화된다. `Sel`은 판정/계산, `*VM`은 전시 변환, `mutate`(5017–5035)는 복제→변경→상태전이 알림→실행등급 정규화→추가 이력 저장을 수행한다. 실제 결정은 가이드 157–169,1004–1012에 따라 서버에서 수행해야 한다.
 
 ## 데이터 객체와 키
