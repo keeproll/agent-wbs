@@ -81,9 +81,20 @@ type Judgement<R> = {
 ```
 
 - 기록은 Planning API만 쓴다. 다시 판단하면 최신값으로 바꾸고 이전·이후를 `task_history`에 추가한다.
-- `subjectHash` 대상: `judged_rules`는 Task의 제목·범위·제외·명세·AC·산출물·기술 설계·충돌 묶음, `split_judgements`는 CP `ops` + 각 대상 Task의 현재 내용. 우선순위·담당·상태는 제외. **계산은 서버만** 한다. 새 Task·초안·CP는 내용과 판단을 함께 받아 저장 때 계산하므로 요청에서 생략하고, 기존 Task 재판단은 작업 payload로 받은 값을 그대로 돌려보내 불일치를 검출한다.
+- `subjectHash` 대상: `judged_rules`는 Task의 제목·범위·제외·명세·AC·산출물·기술 설계·충돌 묶음, `split_judgements`는 CP `ops` + 각 대상 Task의 현재 내용. 우선순위·담당·상태는 제외. **계산은 서버만** 한다. 새 Task·초안·CP는 내용과 판단을 함께 받아 저장 때 계산하므로 요청에서 생략하고, 기존 Task 재판단은 작업 payload로 받은 값을 그대로 돌려보내 불일치를 검출한다. 저장된 CP의 판단(`/planning/proposals/:id/judgements`)도 같다. 판단 기록 자체(`judgedRules`·`taskJudgements`·`splitJudgements`)와 Task 키·ref는 hash 대상에서 **제외**한다(자기 참조 방지, NEW-n→TASK-n 변환에도 동일).
 - **유효한 기록** = 형식이 맞고 합의 주체가 둘 다이며 현재 대상 hash와 일치. 아니면 「기록 없음」으로 본다 [결정].
 - 켜진 규칙마다 유효한 `met`이 있어야 승인 가능. 없으면 `JUDGEMENT_MISSING`, `not_met`이면 `JUDGEMENT_NOT_MET`. 자동 규칙의 예외 사유로 대신하지 않는다. 화면 상태는 G의 「판단」을 쓰고 충족/불충족/기록 없음을 글로 구분한다.
+- **저장 위치**
+
+| 판단 대상 | 반영 전 | 반영 후 |
+|---|---|---|
+| CP의 새 Task | `change_proposals.ops[].t.judgedRules` | 새 Task의 `task_splits.judged_rules` |
+| CP가 내용을 바꾸는 기존 Task | `change_proposals.task_judgements` = `[{taskKey, judgedRules}]`(taskKey 중복 금지) | 그 Task의 `task_splits.judged_rules` 교체 + 이력 |
+| 분할 CP | `change_proposals.split_judgements` | CP에 그대로 보존 |
+| 초기 초안 | `wbs_drafts.content` | `task_splits.judged_rules` |
+
+  반영 전에는 기존 Task의 `task_splits`를 바꾸지 않는다. 반영 트랜잭션에서 실제 적용 내용으로 hash를 다시 계산해 대조하고, 다르면 「기록 없음」으로 보류한다.
+- CP의 기존 Task 판정은 `task_judgements` 항목이 있으면 그것을, 없으면 현재 `task_splits.judged_rules`를 쓴다. 어느 쪽이든 **변경 후 hash**와 일치해야 유효하다.
 - CP 검사 대상: 추가된 Task와 hash 대상 내용이 바뀐 Task만. 판단 규칙과 무관한 CP(우선순위 변경 등)는 막지 않는다.
 
 #### 2.3-2 분할의 순서 보장 판정 (D-34)
@@ -104,7 +115,7 @@ type Judgement<R> = {
 | 테이블 | 주요 컬럼 · 제약 | 근거 |
 |---|---|---|
 | `plannings` / `planning_analyses` / `planning_reviews` | 세션 / Agent별 독립 분석 unique(planning, agent) / 주제별 일치·이견·조정 | §4.5 |
-| `change_proposals` | cp_key, source(planning/message/manual/split/input/decision), status(§3.6), ops(jsonb §5.6), id_map, preview_hash, hold_reasons(jsonb `{holdReasons,issues}`, contracts §2.1), split_judgements(jsonb, §2.3-1; 분할 CP만) | §4.8 §5.6 |
+| `change_proposals` | cp_key, source(planning/message/manual/split/input/decision), status(§3.6), ops(jsonb §5.6), id_map, preview_hash, hold_reasons(jsonb `{holdReasons,issues}`, contracts §2.1), split_judgements(jsonb null, §2.3-1; 분할 CP만), **task_judgements(jsonb not null default `[]`**, §2.3-1) | §4.8 §5.6 |
 | `change_proposal_events` | 제출·승인·반려·반영·보류, actor, comment — 추가 전용 | §4.8 |
 
 ### 2.5 실행 · 검증
