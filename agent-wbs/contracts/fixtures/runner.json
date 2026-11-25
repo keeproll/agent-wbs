@@ -722,8 +722,7 @@
   },
   "body": {
    "fence": 3,
-   "hostId": "h1",
-   "processGroup": 4321
+   "hostId": "h1"
   },
   "status": 204
  },

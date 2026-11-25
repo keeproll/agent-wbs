@@ -770,7 +770,7 @@ export interface Operations {
       };
     };
   };
-  /** 실제 사용한 하위 Agent 사후 확정 */
+  /** 실제 사용한 하위 Agent 사후 확정. job이 끝났어도 그 job의 마지막 fence면 받음 */
   reportSubagentUsage: {
     request: {
       params: {
@@ -1132,7 +1132,7 @@ export interface Operations {
       };
     };
   };
-  /** 시작 확정(attempt는 시도 생성·Task 전이) */
+  /** 시작 확정(attempt는 시도 생성·Task 전이). 슬롯은 reserved 유지 */
   startJob: {
     request: {
       params: {
@@ -1142,8 +1142,7 @@ export interface Operations {
         fence: number;
         hostId: string;
         bootId: string;
-        processGroup?: number;
-        headSha: Sha;
+        headSha?: Sha;
         installedSubagents: ({
           id: Id;
           version: number;
@@ -1159,7 +1158,7 @@ export interface Operations {
       };
     };
   };
-  /** 프로세스 생성 직후 보유에 기록 */
+  /** 프로세스 생성 직후 기록(reserved→active). 같은 pgid 재전송은 성공, 다른 pgid는 INVALID_TRANSITION */
   reportJobProcess: {
     request: {
       params: {
@@ -1177,7 +1176,7 @@ export interface Operations {
       204: undefined;
     };
   };
-  /** 물리 슬롯만 반환(논리 잠금 유지) */
+  /** 물리 슬롯만 반환(논리 잠금 유지). 서버 보유에 pgid가 있으면 no_process는 INVALID_TRANSITION */
   releaseJobSlots: {
     request: {
       params: {
@@ -1208,7 +1207,7 @@ export interface Operations {
       204: undefined;
     };
   };
-  /** 같은 시도의 CLI 재기동 전 용량 재획득 */
+  /** CLI·① 실행 전 용량 재획득(none→reserved). 그룹은 생성 뒤 /process */
   acquireJobSlots: {
     request: {
       params: {
@@ -1217,7 +1216,6 @@ export interface Operations {
       body: {
         fence: number;
         hostId: string;
-        processGroup: number;
       };
       epoch: number;
       idempotencyKey: string;
@@ -1226,7 +1224,7 @@ export interface Operations {
       204: undefined;
     };
   };
-  /** 잔여 보유 해제(원래 job·host·boot·group이 맞으면 낡은 fence 허용) */
+  /** 잔여 보유 해제(원래 job·host·boot·group이 맞으면 낡은 fence 허용). 서버 보유에 pgid가 있으면 no_process는 INVALID_TRANSITION */
   releaseJob: {
     request: {
       params: {

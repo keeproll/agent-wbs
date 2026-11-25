@@ -128,7 +128,7 @@ const project = [
       commits: List(c.Sha, { minItems: 1, uniqueItems: true }),
       instr: Opt(Type.String()),
     }),
-    responses: { 201: Type.Object({ version: Type.Integer({ minimum: 1 }), jobId: c.Id }) },
+    responses: jobCreated,
     errors: ['INPUT_UNCHANGED', 'CLEANUP_PENDING'],
   }),
   operation({

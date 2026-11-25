@@ -8993,7 +8993,7 @@
           }
         },
         "responses": {
-          "201": {
+          "202": {
             "description": "「이 버전으로 분석」. commits는 팀장이 확인한 목록",
             "headers": {
               "Idempotency-Replayed": {
@@ -9007,14 +9007,9 @@
                 "schema": {
                   "type": "object",
                   "required": [
-                    "version",
                     "jobId"
                   ],
                   "properties": {
-                    "version": {
-                      "type": "integer",
-                      "minimum": 1
-                    },
                     "jobId": {
                       "$ref": "#/components/schemas/Id"
                     }
@@ -23026,7 +23021,7 @@
     "/api/runner/attempts/{attemptId}/subagent-usage": {
       "post": {
         "operationId": "reportSubagentUsage",
-        "summary": "실제 사용한 하위 Agent 사후 확정",
+        "summary": "실제 사용한 하위 Agent 사후 확정. job이 끝났어도 그 job의 마지막 fence면 받음",
         "tags": [
           "runner"
         ],
@@ -23121,7 +23116,7 @@
         },
         "responses": {
           "204": {
-            "description": "실제 사용한 하위 Agent 사후 확정",
+            "description": "실제 사용한 하위 Agent 사후 확정. job이 끝났어도 그 job의 마지막 fence면 받음",
             "headers": {
               "Idempotency-Replayed": {
                 "schema": {
@@ -25433,7 +25428,7 @@
     "/api/runner/jobs/{id}/start": {
       "post": {
         "operationId": "startJob",
-        "summary": "시작 확정(attempt는 시도 생성·Task 전이)",
+        "summary": "시작 확정(attempt는 시도 생성·Task 전이). 슬롯은 reserved 유지",
         "tags": [
           "runner"
         ],
@@ -25468,7 +25463,6 @@
                   "fence",
                   "hostId",
                   "bootId",
-                  "headSha",
                   "installedSubagents"
                 ],
                 "properties": {
@@ -25485,10 +25479,6 @@
                     "type": "string",
                     "minLength": 1,
                     "pattern": "\\S"
-                  },
-                  "processGroup": {
-                    "type": "integer",
-                    "minimum": 1
                   },
                   "headSha": {
                     "$ref": "#/components/schemas/Sha"
@@ -25527,7 +25517,7 @@
         },
         "responses": {
           "200": {
-            "description": "시작 확정(attempt는 시도 생성·Task 전이)",
+            "description": "시작 확정(attempt는 시도 생성·Task 전이). 슬롯은 reserved 유지",
             "headers": {
               "Idempotency-Replayed": {
                 "schema": {
@@ -25611,7 +25601,7 @@
     "/api/runner/jobs/{id}/process": {
       "post": {
         "operationId": "reportJobProcess",
-        "summary": "프로세스 생성 직후 보유에 기록",
+        "summary": "프로세스 생성 직후 기록(reserved→active). 같은 pgid 재전송은 성공, 다른 pgid는 INVALID_TRANSITION",
         "tags": [
           "runner"
         ],
@@ -25676,7 +25666,7 @@
         },
         "responses": {
           "204": {
-            "description": "프로세스 생성 직후 보유에 기록",
+            "description": "프로세스 생성 직후 기록(reserved→active). 같은 pgid 재전송은 성공, 다른 pgid는 INVALID_TRANSITION",
             "headers": {
               "Idempotency-Replayed": {
                 "schema": {
@@ -25699,7 +25689,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, LEASE_LOST"
+            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited",
@@ -25728,6 +25718,7 @@
           "409": [
             "EPOCH_MISMATCH",
             "IDEMPOTENCY_CONFLICT",
+            "INVALID_TRANSITION",
             "LEASE_LOST"
           ],
           "429": [
@@ -25745,7 +25736,7 @@
     "/api/runner/jobs/{id}/slots/release": {
       "post": {
         "operationId": "releaseJobSlots",
-        "summary": "물리 슬롯만 반환(논리 잠금 유지)",
+        "summary": "물리 슬롯만 반환(논리 잠금 유지). 서버 보유에 pgid가 있으면 no_process는 INVALID_TRANSITION",
         "tags": [
           "runner"
         ],
@@ -25890,7 +25881,7 @@
         },
         "responses": {
           "204": {
-            "description": "물리 슬롯만 반환(논리 잠금 유지)",
+            "description": "물리 슬롯만 반환(논리 잠금 유지). 서버 보유에 pgid가 있으면 no_process는 INVALID_TRANSITION",
             "headers": {
               "Idempotency-Replayed": {
                 "schema": {
@@ -25913,7 +25904,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, LEASE_LOST"
+            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited",
@@ -25942,6 +25933,7 @@
           "409": [
             "EPOCH_MISMATCH",
             "IDEMPOTENCY_CONFLICT",
+            "INVALID_TRANSITION",
             "LEASE_LOST"
           ],
           "429": [
@@ -25959,7 +25951,7 @@
     "/api/runner/jobs/{id}/slots/acquire": {
       "post": {
         "operationId": "acquireJobSlots",
-        "summary": "같은 시도의 CLI 재기동 전 용량 재획득",
+        "summary": "CLI·① 실행 전 용량 재획득(none→reserved). 그룹은 생성 뒤 /process",
         "tags": [
           "runner"
         ],
@@ -25992,8 +25984,7 @@
                 "type": "object",
                 "required": [
                   "fence",
-                  "hostId",
-                  "processGroup"
+                  "hostId"
                 ],
                 "properties": {
                   "fence": {
@@ -26004,10 +25995,6 @@
                     "type": "string",
                     "minLength": 1,
                     "pattern": "\\S"
-                  },
-                  "processGroup": {
-                    "type": "integer",
-                    "minimum": 1
                   }
                 },
                 "additionalProperties": false
@@ -26017,7 +26004,7 @@
         },
         "responses": {
           "204": {
-            "description": "같은 시도의 CLI 재기동 전 용량 재획득",
+            "description": "CLI·① 실행 전 용량 재획득(none→reserved). 그룹은 생성 뒤 /process",
             "headers": {
               "Idempotency-Replayed": {
                 "schema": {
@@ -26087,7 +26074,7 @@
     "/api/runner/jobs/{id}/release": {
       "post": {
         "operationId": "releaseJob",
-        "summary": "잔여 보유 해제(원래 job·host·boot·group이 맞으면 낡은 fence 허용)",
+        "summary": "잔여 보유 해제(원래 job·host·boot·group이 맞으면 낡은 fence 허용). 서버 보유에 pgid가 있으면 no_process는 INVALID_TRANSITION",
         "tags": [
           "runner"
         ],
@@ -26232,7 +26219,7 @@
         },
         "responses": {
           "204": {
-            "description": "잔여 보유 해제(원래 job·host·boot·group이 맞으면 낡은 fence 허용)",
+            "description": "잔여 보유 해제(원래 job·host·boot·group이 맞으면 낡은 fence 허용). 서버 보유에 pgid가 있으면 no_process는 INVALID_TRANSITION",
             "headers": {
               "Idempotency-Replayed": {
                 "schema": {
@@ -26255,7 +26242,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, LEASE_LOST"
+            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited",
@@ -26284,6 +26271,7 @@
           "409": [
             "EPOCH_MISMATCH",
             "IDEMPOTENCY_CONFLICT",
+            "INVALID_TRANSITION",
             "LEASE_LOST"
           ],
           "429": [

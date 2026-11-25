@@ -266,3 +266,23 @@ test('D-33~35 보류 사유와 오류 코드', () => {
   }
   expect(responds('previewProposal', { ...preview, holdReasons: ['문자열'] })).toBe(false);
 });
+
+test('contracts §3.2·§3.4(7ad2e04) 프로세스 그룹은 생성 뒤 /process로만 등록한다', () => {
+  const start = { fence: 1, hostId: 'h', bootId: 'b', installedSubagents: [] };
+  // headSha 필요 여부는 job kind를 아는 서버가 판정한다.
+  expect(accepts('startJob', start)).toBe(true);
+  expect(accepts('startJob', { ...start, headSha: 'a'.repeat(40) })).toBe(true);
+  expect(accepts('startJob', { ...start, headSha: 'main' })).toBe(false);
+  expect(accepts('startJob', { ...start, processGroup: 1 })).toBe(false);
+  expect(op('startJob').errors).toContain('VALIDATION_FAILED');
+  expect(accepts('acquireJobSlots', { fence: 1, hostId: 'h' })).toBe(true);
+  expect(accepts('acquireJobSlots', { fence: 1, hostId: 'h', processGroup: 1 })).toBe(false);
+  for (const id of ['reportJobProcess', 'releaseJob', 'releaseJobSlots']) expect(op(id).errors, id).toContain('INVALID_TRANSITION');
+});
+
+test('contracts §1(47c8c8e) 작업을 만드는 팀장 요청은 202 {jobId}다', () => {
+  const creates = OPERATIONS.filter((o) => o.principal === 'lead' && o.method === 'POST' && JSON.stringify(o.responses).includes('"jobId"'));
+  const not202 = creates.filter((o) => !(202 in o.responses)).map((o) => o.id);
+  expect(not202).toEqual(['createProject']); // §2.2가 201 {project,jobId}로 정함
+  expect(responds('analyzeInputs', { jobId: 'j' }, 202)).toBe(true);
+});
