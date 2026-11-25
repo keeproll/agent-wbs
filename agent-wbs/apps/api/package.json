@@ -1,0 +1,19 @@
+{
+  "name": "@awbs/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file-if-exists=../../.env --conditions=awbs-source --watch src/main.ts",
+    "start": "node --env-file-if-exists=../../.env dist/main.js",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node ../../scripts/vitest.ts --config ../../vitest.config.ts"
+  },
+  "dependencies": {
+    "@awbs/db": "workspace:*",
+    "@awbs/shared": "workspace:*",
+    "fastify": "5.12.8",
+    "pg": "8.23.1"
+  }
+}
