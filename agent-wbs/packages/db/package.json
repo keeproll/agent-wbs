@@ -14,13 +14,17 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node ../../scripts/vitest.ts --config ../../vitest.config.ts",
-    "migrate": "node --env-file-if-exists=../../.env --conditions=awbs-source src/migrate-cli.ts"
+    "migrate": "node --env-file-if-exists=../../.env --conditions=awbs-source src/migrate-cli.ts",
+    "generate": "drizzle-kit generate",
+    "seed:system": "node --env-file-if-exists=../../.env src/seed-cli.ts system",
+    "seed:demo": "node --env-file-if-exists=../../.env src/seed-cli.ts demo"
   },
   "dependencies": {
     "drizzle-orm": "0.45.4",
     "pg": "8.23.1"
   },
   "devDependencies": {
-    "@types/pg": "8.23.1"
+    "@types/pg": "8.23.1",
+    "drizzle-kit": "0.31.11"
   }
 }

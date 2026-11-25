@@ -1,0 +1,1576 @@
+{
+  "mock": {
+    "project": {
+      "id": "PRJ-001",
+      "name": "Verum-SDN Agent WBS — Self Development",
+      "desc": "Agent WBS 자체를 Agent WBS로 관리하는 Self Development 프로젝트. Codex · Claude 협업 Workflow와 Runner 연동을 단계적으로 구현한다.",
+      "status": "진행 중",
+      "start": "2026-10-27",
+      "target": "2026-12-18",
+      "lead": "팀장"
+    },
+    "phases": [
+      {
+        "id": "PH-1",
+        "title": "기반 구성",
+        "wps": [
+          {
+            "id": "WP-01",
+            "title": "개발 환경",
+            "tasks": [
+              "TASK-0001",
+              "TASK-0002"
+            ]
+          },
+          {
+            "id": "WP-02",
+            "title": "데이터 모델",
+            "tasks": [
+              "TASK-0003",
+              "TASK-0004"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "PH-2",
+        "title": "Core WBS",
+        "wps": [
+          {
+            "id": "WP-03",
+            "title": "Task API",
+            "tasks": [
+              "TASK-0005",
+              "TASK-0006"
+            ]
+          },
+          {
+            "id": "WP-04",
+            "title": "WBS UI",
+            "tasks": [
+              "TASK-0007",
+              "TASK-0008",
+              "TASK-0009"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "PH-3",
+        "title": "Workflow",
+        "wps": [
+          {
+            "id": "WP-05",
+            "title": "Planning · Gate",
+            "tasks": [
+              "TASK-0010",
+              "TASK-0011"
+            ]
+          },
+          {
+            "id": "WP-06",
+            "title": "Runner 연동",
+            "tasks": [
+              "TASK-0012"
+            ]
+          }
+        ]
+      }
+    ],
+    "tasks": {
+      "TASK-0001": {
+        "id": "TASK-0001",
+        "title": "Monorepo 구성",
+        "type": "Configuration",
+        "domain": "DevOps",
+        "rel": [
+          "Common"
+        ],
+        "status": "done",
+        "priority": 1,
+        "assignee": "Claude",
+        "verifier": "Codex",
+        "verif": "pass",
+        "approved": true,
+        "defects": 0,
+        "updated": "2026-10-28 16:40",
+        "purpose": "FE·BE·공통 패키지를 하나의 pnpm Workspace에서 빌드·실행할 수 있도록 저장소 구조를 확정한다.",
+        "background": "이후 모든 Task가 동일한 패키지 경계와 스크립트를 전제로 작성되므로 가장 먼저 고정해야 한다.",
+        "scope": [
+          "`apps/web`(Vite + React), `apps/api`(Fastify), `packages/shared`, `packages/db` 구성",
+          "루트 `pnpm-workspace.yaml`, 공통 `tsconfig.base.json`",
+          "lint · format · typecheck 루트 스크립트"
+        ],
+        "out": [
+          "CI 파이프라인 구성 (별도 Task)",
+          "배포용 Docker 이미지"
+        ],
+        "precond": "없음 — 최초 Task",
+        "doneCond": "루트에서 `pnpm install && pnpm -r build`가 오류 없이 완료된다.",
+        "outputs": [
+          {
+            "name": "pnpm-workspace.yaml",
+            "delivered": true
+          },
+          {
+            "name": "tsconfig.base.json",
+            "delivered": true
+          },
+          {
+            "name": "루트 package.json 스크립트",
+            "delivered": true
+          }
+        ],
+        "spec": {
+          "req": [
+            "pnpm 9.x로 고정하고 루트 `package.json`에 `packageManager` 필드를 명시한다.",
+            "공통 타입은 `packages/shared`에서만 export하고 앱 간 직접 import를 금지한다."
+          ],
+          "work": [
+            "저장소 디렉터리 구조 생성",
+            "공통 tsconfig · path alias 설정",
+            "루트 스크립트 정의"
+          ],
+          "steps": [
+            "`pnpm init` 후 `pnpm-workspace.yaml` 작성",
+            "`apps/*`, `packages/*` 스캐폴딩",
+            "`tsconfig.base.json` 작성 후 각 패키지에서 extends",
+            "`pnpm -r build`로 전체 빌드 확인"
+          ],
+          "inputs": [
+            "기술 전제: React + TS + Vite + Mantine / Fastify + TS / PostgreSQL + Drizzle"
+          ],
+          "outputs": [
+            "빌드 가능한 빈 Monorepo"
+          ],
+          "files": [
+            "pnpm-workspace.yaml",
+            "tsconfig.base.json",
+            "apps/web/package.json",
+            "apps/api/package.json",
+            "packages/shared/src/index.ts"
+          ],
+          "constraints": [
+            "Node.js 20 LTS",
+            "ESM only — `\"type\": \"module\"`"
+          ],
+          "errors": [
+            "패키지 간 순환 import는 typecheck 단계에서 실패해야 한다"
+          ],
+          "docs": [
+            "docs/architecture.md"
+          ],
+          "ac": [
+            "Given 클린 체크아웃, When `pnpm install && pnpm -r build`, Then 종료 코드 0",
+            "Given `apps/web`에서 `apps/api` 직접 import, When typecheck, Then 오류로 차단된다"
+          ],
+          "verify": [
+            "Codex가 클린 컨테이너에서 설치·빌드 로그를 Evidence로 첨부"
+          ]
+        },
+        "checklist": [
+          {
+            "id": "CL-0001-1",
+            "text": "pnpm install 성공",
+            "required": true,
+            "done": true,
+            "method": "명령 실행",
+            "evidence": "logs/install.txt",
+            "note": "52.4s"
+          },
+          {
+            "id": "CL-0001-2",
+            "text": "전체 빌드 성공",
+            "required": true,
+            "done": true,
+            "method": "pnpm -r build",
+            "evidence": "logs/build.txt",
+            "note": ""
+          },
+          {
+            "id": "CL-0001-3",
+            "text": "README에 개발 명령 정리",
+            "required": false,
+            "done": true,
+            "method": "문서 검토",
+            "evidence": "",
+            "note": ""
+          }
+        ]
+      },
+      "TASK-0002": {
+        "id": "TASK-0002",
+        "title": "PostgreSQL 연결",
+        "type": "Configuration",
+        "domain": "DevOps",
+        "rel": [
+          "DB"
+        ],
+        "status": "done",
+        "priority": 1,
+        "assignee": "Claude",
+        "verifier": "Codex",
+        "verif": "pass",
+        "approved": true,
+        "defects": 0,
+        "updated": "2026-10-29 11:05",
+        "purpose": "로컬 개발용 PostgreSQL 16을 Docker Compose로 구성하고 API 서버에서 연결 풀을 사용한다.",
+        "background": "Schema 설계(TASK-0004)와 CRUD API(TASK-0005)가 실제 DB에 대해 검증되어야 한다.",
+        "scope": [
+          "`docker-compose.yml`에 postgres:16 서비스 정의",
+          "`DATABASE_URL` 환경 변수와 연결 풀 설정",
+          "API 기동 시 연결 확인"
+        ],
+        "out": [
+          "운영 DB 구성",
+          "백업·복구 자동화"
+        ],
+        "precond": "Docker Desktop 설치",
+        "doneCond": "`docker compose up -d` 후 API의 `/health/db`가 200을 반환한다.",
+        "outputs": [
+          {
+            "name": "docker-compose.yml",
+            "delivered": true
+          },
+          {
+            "name": "apps/api/src/db/pool.ts",
+            "delivered": true
+          }
+        ],
+        "spec": {
+          "req": [
+            "연결 풀 최대 10, idle 30초",
+            "연결 실패 시 API 기동을 중단하고 원인을 로그로 남긴다"
+          ],
+          "work": [],
+          "steps": [
+            "Compose 서비스 정의",
+            "`.env.example`에 `DATABASE_URL` 추가",
+            "`pool.ts` 작성 및 `/health/db` 추가"
+          ],
+          "inputs": [],
+          "outputs": [
+            "로컬 DB 컨테이너",
+            "DB Health Check"
+          ],
+          "files": [
+            "docker-compose.yml",
+            ".env.example",
+            "apps/api/src/db/pool.ts"
+          ],
+          "constraints": [
+            "PostgreSQL 16"
+          ],
+          "errors": [
+            "`ECONNREFUSED` 시 3회 재시도 후 종료"
+          ],
+          "docs": [],
+          "ac": [
+            "Given DB 컨테이너 실행, When `GET /health/db`, Then 200과 응답 시간(ms)을 반환한다"
+          ],
+          "verify": [
+            "Codex가 컨테이너 중지 상태에서 기동 실패 로그를 함께 확인"
+          ]
+        },
+        "checklist": [
+          {
+            "id": "CL-0002-1",
+            "text": "DB 컨테이너 기동",
+            "required": true,
+            "done": true,
+            "method": "docker compose ps",
+            "evidence": "logs/compose.txt",
+            "note": ""
+          },
+          {
+            "id": "CL-0002-2",
+            "text": "/health/db 200",
+            "required": true,
+            "done": true,
+            "method": "curl",
+            "evidence": "logs/health-db.txt",
+            "note": "12ms"
+          }
+        ]
+      },
+      "TASK-0003": {
+        "id": "TASK-0003",
+        "title": "Task 데이터 모델 설계",
+        "type": "Analysis",
+        "domain": "Architecture",
+        "rel": [
+          "DB"
+        ],
+        "status": "done",
+        "priority": 0,
+        "assignee": "Codex",
+        "verifier": "Claude",
+        "verif": "pass",
+        "approved": true,
+        "defects": 0,
+        "updated": "2026-10-30 18:10",
+        "purpose": "Agent WBS의 논리 객체(Project, WBS Node, Task, Dependency, Checklist, Execution Attempt, Verification, Evidence, Change Proposal, Approval, History 등)와 관계를 정의한다.",
+        "background": "Lifecycle · Approval · Execution · Verification · Completion Gate 상태를 하나의 Enum에 섞지 않기 위해 객체 경계를 먼저 정해야 한다.",
+        "scope": [
+          "논리 객체 13종 정의와 관계(1:N, N:M)",
+          "상태 모델 분리 원칙",
+          "Task ID와 WBS 번호 분리 원칙"
+        ],
+        "out": [
+          "물리 테이블 확정 (TASK-0004)",
+          "인덱스 설계"
+        ],
+        "precond": "",
+        "doneCond": "`docs/data-model.md` v1.2가 교차 검토 후 승인된다.",
+        "outputs": [
+          {
+            "name": "docs/data-model.md",
+            "delivered": true
+          }
+        ],
+        "spec": {
+          "req": [
+            "각 상태 축(Lifecycle, Approval, Execution, Verification, Gate)을 별도 객체 또는 필드로 분리한다.",
+            "Task 참조는 불변 ID로 하고 WBS 번호는 표시용 파생값으로 둔다."
+          ],
+          "work": [
+            "객체 목록 및 관계 정의",
+            "상태 전이 표 작성"
+          ],
+          "steps": [],
+          "inputs": [
+            "요구사항 문서 §16"
+          ],
+          "outputs": [
+            "논리 데이터 모델 문서"
+          ],
+          "files": [
+            "docs/data-model.md"
+          ],
+          "constraints": [],
+          "errors": [],
+          "docs": [
+            "docs/data-model.md"
+          ],
+          "ac": [
+            "Given 논리 모델, When Claude 교차 검토, Then 이견 0건 또는 조정 완료"
+          ],
+          "verify": [
+            "Claude 교차 검토 결과 첨부"
+          ]
+        },
+        "checklist": [
+          {
+            "id": "CL-0003-1",
+            "text": "객체 13종 정의",
+            "required": true,
+            "done": true,
+            "method": "문서 검토",
+            "evidence": "docs/data-model.md",
+            "note": ""
+          },
+          {
+            "id": "CL-0003-2",
+            "text": "상태 전이 표",
+            "required": true,
+            "done": true,
+            "method": "문서 검토",
+            "evidence": "docs/data-model.md#states",
+            "note": ""
+          },
+          {
+            "id": "CL-0003-3",
+            "text": "교차 검토 이견 조정",
+            "required": true,
+            "done": true,
+            "method": "Claude 리뷰",
+            "evidence": "reviews/TASK-0003.md",
+            "note": "이견 2건 조정"
+          }
+        ]
+      },
+      "TASK-0004": {
+        "id": "TASK-0004",
+        "title": "Drizzle Schema 설계",
+        "type": "Design",
+        "domain": "DB",
+        "rel": [
+          "BE"
+        ],
+        "status": "qa",
+        "priority": 0,
+        "assignee": "Claude",
+        "verifier": "Codex",
+        "verif": "running",
+        "approved": true,
+        "defects": 0,
+        "updated": "2026-11-03 18:22",
+        "purpose": "논리 모델 중 Phase A 범위(WBS Node, Task, Task Dependency, Checklist Item)를 Drizzle Schema와 Migration으로 확정한다.",
+        "background": "Task CRUD API와 Dependency 검증이 이 Schema를 기준으로 구현되므로, 제약조건을 DB와 Service 중 어디서 보장할지 명확히 해야 한다.",
+        "scope": [
+          "`wbs_nodes`, `tasks`, `task_dependencies`, `checklist_items` 4개 테이블",
+          "Enum 정의 (work_type, domain, task_lifecycle, dep_type, agent)",
+          "Migration `0001_core_wbs.sql`과 Seed 스크립트"
+        ],
+        "out": [
+          "Execution · Verification · Evidence 테이블 (Phase C)",
+          "Change Proposal · Approval 테이블",
+          "순환 의존성 검증 로직 (TASK-0006, Service 계층)"
+        ],
+        "precond": "TASK-0003 논리 모델 v1.2 승인",
+        "doneCond": "빈 DB에 migrate → seed가 성공하고, 제약 위반 SQL 3종이 모두 거부된다.",
+        "outputs": [
+          {
+            "name": "packages/db/src/schema/*.ts",
+            "kind": "코드",
+            "required": true,
+            "delivered": true,
+            "verify": "tsc 통과, 테이블 4종 export"
+          },
+          {
+            "name": "drizzle/0001_core_wbs.sql",
+            "kind": "Migration",
+            "required": true,
+            "delivered": true,
+            "verify": "빈 DB에서 migrate 성공"
+          },
+          {
+            "name": "packages/db/src/seed/self-dev.ts",
+            "kind": "코드",
+            "required": true,
+            "delivered": false,
+            "verify": "Seed 후 tasks 12건"
+          },
+          {
+            "name": "docs/erd.png",
+            "kind": "문서",
+            "required": false,
+            "delivered": false,
+            "verify": "Schema와 일치"
+          }
+        ],
+        "spec": {
+          "req": [
+            "Task ID(`task_key`, 예: `TASK-0024`)와 WBS 번호(`wbs_path`)를 별도 컬럼으로 분리한다. 다른 테이블의 참조는 항상 `tasks.id`(uuid)로 한다.",
+            "모든 테이블에 `created_at`, `updated_at`(timestamptz)을 둔다.",
+            "상태 Enum은 Lifecycle만 포함한다. Approval · Execution · Verification 상태는 이후 별도 테이블에서 관리한다."
+          ],
+          "work": [
+            "Enum 5종 정의",
+            "테이블 4종 정의와 FK · Index",
+            "Migration 생성 및 SQL 검토",
+            "Seed 스크립트로 본 프로젝트 WBS 12건 입력"
+          ],
+          "steps": [
+            "`packages/db/src/schema/` 아래 테이블별 파일 생성",
+            "`wbs_nodes` → `tasks` → `task_dependencies` → `checklist_items` 순으로 정의",
+            "`pnpm drizzle-kit generate`로 Migration 생성 후 SQL 검토",
+            "`pnpm db:seed`로 Seed 입력 및 건수 확인"
+          ],
+          "inputs": [
+            "TASK-0003 산출물 `docs/data-model.md` (논리 모델 v1.2)"
+          ],
+          "outputs": [
+            "Drizzle schema 파일 4개",
+            "Migration `0001_core_wbs.sql`",
+            "Seed 스크립트"
+          ],
+          "files": [
+            "packages/db/src/schema/wbs-nodes.ts",
+            "packages/db/src/schema/tasks.ts",
+            "packages/db/src/schema/task-dependencies.ts",
+            "packages/db/src/schema/checklist-items.ts",
+            "packages/db/drizzle/0001_core_wbs.sql",
+            "packages/db/src/seed/self-dev.ts"
+          ],
+          "constraints": [
+            "PostgreSQL 16, Drizzle ORM 기준",
+            "Enum은 `pgEnum` 사용",
+            "물리 삭제 금지 — `deleted_at` soft delete"
+          ],
+          "errors": [
+            "자기 참조 의존성은 CHECK 제약(`pred_task_id <> succ_task_id`)으로 DB에서 차단",
+            "순환 의존성은 DB가 아닌 Service 계층(TASK-0006)에서 검증",
+            "FK는 `ON DELETE RESTRICT` — 참조 중인 Task는 삭제 불가"
+          ],
+          "docs": [
+            "docs/data-model.md",
+            "Drizzle ORM — PostgreSQL column types"
+          ],
+          "ac": [
+            "Given 빈 DB, When `pnpm db:migrate`, Then 4개 테이블과 인덱스가 오류 없이 생성된다",
+            "Given Seed 실행 후, When 같은 `task_key`로 INSERT, Then UNIQUE 위반으로 거부된다",
+            "Given 의존성 INSERT, When `pred_task_id = succ_task_id`, Then CHECK 위반으로 거부된다"
+          ],
+          "verify": [
+            "Codex가 빈 DB 컨테이너에서 migrate → seed → 제약 위반 SQL 3종을 실행하고 결과 로그를 Evidence로 첨부"
+          ]
+        },
+        "checklist": [
+          {
+            "id": "CL-0004-1",
+            "text": "테이블 4종 정의",
+            "required": true,
+            "done": true,
+            "method": "Schema 코드 리뷰",
+            "evidence": "schema/*.ts",
+            "note": ""
+          },
+          {
+            "id": "CL-0004-2",
+            "text": "task_key UNIQUE 제약",
+            "required": true,
+            "done": true,
+            "method": "제약 위반 SQL",
+            "evidence": "qa/unique.sql",
+            "note": ""
+          },
+          {
+            "id": "CL-0004-3",
+            "text": "자기 참조 CHECK 제약",
+            "required": true,
+            "done": true,
+            "method": "제약 위반 SQL",
+            "evidence": "qa/check.sql",
+            "note": ""
+          },
+          {
+            "id": "CL-0004-4",
+            "text": "Seed 12건 입력",
+            "required": true,
+            "done": false,
+            "method": "SELECT count(*) FROM tasks",
+            "evidence": "",
+            "note": "Seed 스크립트 미제출"
+          },
+          {
+            "id": "CL-0004-5",
+            "text": "ERD 이미지 갱신",
+            "required": false,
+            "done": false,
+            "method": "문서 검토",
+            "evidence": "",
+            "note": ""
+          }
+        ]
+      },
+      "TASK-0005": {
+        "id": "TASK-0005",
+        "title": "Task CRUD API",
+        "type": "Implementation",
+        "domain": "BE",
+        "rel": [
+          "API"
+        ],
+        "status": "running",
+        "priority": 0,
+        "assignee": "Claude",
+        "verifier": "Codex",
+        "verif": "none",
+        "approved": true,
+        "defects": 0,
+        "updated": "2026-11-03 19:55",
+        "purpose": "WBS 화면이 사용할 Task 조회·생성·수정·soft delete REST API를 Fastify로 구현한다.",
+        "background": "Phase A 화면의 Mock 데이터 접근 지점(`Api.*`)을 실제 API로 교체하기 위한 첫 번째 Backend Task다.",
+        "scope": [
+          "Task 목록(트리) · 단건 조회",
+          "Task 생성 · 부분 수정 · soft delete",
+          "변경 시 Task History 기록"
+        ],
+        "out": [
+          "의존성 추가·순환 검증 (TASK-0006)",
+          "인증 · 권한 (Phase A는 단일 팀장 사용자 가정)"
+        ],
+        "precond": "Schema Migration이 적용된 로컬 DB",
+        "doneCond": "통합 테스트 전 항목 통과, Codex QA PASS.",
+        "outputs": [
+          {
+            "name": "apps/api/src/routes/tasks.ts",
+            "kind": "코드",
+            "required": true,
+            "delivered": false,
+            "verify": "Endpoint 5종 등록"
+          },
+          {
+            "name": "apps/api/src/services/task.service.ts",
+            "kind": "코드",
+            "required": true,
+            "delivered": false,
+            "verify": "업무 규칙 단위 테스트 통과"
+          },
+          {
+            "name": "apps/api/test/tasks.int.test.ts",
+            "kind": "테스트",
+            "required": true,
+            "delivered": false,
+            "verify": "통합 테스트 전 항목 PASS"
+          },
+          {
+            "name": "docs/api/tasks.md",
+            "kind": "문서",
+            "required": false,
+            "delivered": false,
+            "verify": "Endpoint 표와 일치"
+          }
+        ],
+        "spec": {
+          "req": [
+            "응답의 Task 식별자는 `taskKey`, 내부 참조는 `id`를 함께 반환한다.",
+            "PATCH는 변경된 필드만 받고 변경 전/후 값을 Task History에 기록한다.",
+            "DELETE는 `deleted_at`만 설정하며, 후속 Task가 있으면 409로 거부한다."
+          ],
+          "work": [
+            "Route · Service · Repository 3계층 구성",
+            "Zod 기반 Request Validation",
+            "통합 테스트 작성"
+          ],
+          "steps": [
+            "`routes/tasks.ts`에 5개 Endpoint 등록",
+            "`task.service.ts`에 업무 규칙(후속 존재 시 삭제 거부) 구현",
+            "`task.repo.ts`에 Drizzle 쿼리 구현",
+            "`tasks.int.test.ts`로 정상·오류 케이스 검증"
+          ],
+          "inputs": [
+            "TASK-0004 Schema",
+            "packages/shared `TaskDto` 타입"
+          ],
+          "outputs": [
+            "REST Endpoint 5종",
+            "통합 테스트"
+          ],
+          "files": [
+            "apps/api/src/routes/tasks.ts",
+            "apps/api/src/services/task.service.ts",
+            "apps/api/src/repositories/task.repo.ts",
+            "packages/shared/src/dto/task.ts",
+            "apps/api/test/tasks.int.test.ts"
+          ],
+          "constraints": [
+            "Fastify 플러그인 구조, Route에서 DB 직접 접근 금지",
+            "Validation 실패는 400 + 필드별 오류 배열"
+          ],
+          "errors": [
+            "존재하지 않는 `taskKey` → 404 `TASK_NOT_FOUND`",
+            "후속 Task가 있는 삭제 → 409 `TASK_HAS_SUCCESSORS`",
+            "동시 수정 충돌 → 409 `VERSION_CONFLICT` (`updatedAt` 비교)"
+          ],
+          "docs": [
+            "docs/api/tasks.md"
+          ],
+          "ac": [
+            "Given 유효한 생성 요청, When `POST /api/projects/:projectId/tasks`, Then 201과 새 `taskKey`를 반환한다",
+            "Given 후속 Task가 있는 Task, When DELETE, Then 409 `TASK_HAS_SUCCESSORS`",
+            "Given PATCH로 `title` 변경, When 이력 조회, Then 이전/이후 값이 기록되어 있다"
+          ],
+          "verify": [
+            "Codex: `pnpm --filter api test -- tasks` 실행 결과와 커버리지 리포트 첨부"
+          ]
+        },
+        "checklist": [
+          {
+            "id": "CL-0005-1",
+            "text": "Endpoint 5종 등록",
+            "required": true,
+            "done": true,
+            "method": "Route 목록 확인",
+            "evidence": "",
+            "note": ""
+          },
+          {
+            "id": "CL-0005-2",
+            "text": "Validation 오류 400 응답",
+            "required": true,
+            "done": false,
+            "method": "통합 테스트",
+            "evidence": "",
+            "note": ""
+          },
+          {
+            "id": "CL-0005-3",
+            "text": "후속 존재 시 삭제 409",
+            "required": true,
+            "done": false,
+            "method": "통합 테스트",
+            "evidence": "",
+            "note": ""
+          },
+          {
+            "id": "CL-0005-4",
+            "text": "PATCH 이력 기록",
+            "required": true,
+            "done": false,
+            "method": "통합 테스트",
+            "evidence": "",
+            "note": ""
+          },
+          {
+            "id": "CL-0005-5",
+            "text": "API 문서 갱신",
+            "required": false,
+            "done": false,
+            "method": "문서 검토",
+            "evidence": "",
+            "note": ""
+          }
+        ]
+      },
+      "TASK-0006": {
+        "id": "TASK-0006",
+        "title": "Dependency 검증",
+        "type": "Implementation",
+        "domain": "BE",
+        "rel": [],
+        "status": "ready",
+        "priority": 1,
+        "assignee": "Claude",
+        "verifier": "Codex",
+        "verif": "none",
+        "approved": true,
+        "defects": 0,
+        "updated": "2026-11-02 10:30",
+        "purpose": "선행 관계 추가 시 자기 참조 · 중복 · 순환을 Service 계층에서 검증하고 실행 차단 여부를 계산한다.",
+        "background": "DB CHECK는 자기 참조만 막을 수 있어 순환 검증은 애플리케이션에서 해야 한다.",
+        "scope": [
+          "`POST /api/tasks/:taskKey/dependencies` 검증",
+          "순환 시 경로를 포함한 409 응답",
+          "차단 여부 계산 함수 (FS / SS)"
+        ],
+        "out": [
+          "임계 경로(Critical Path) 계산"
+        ],
+        "precond": "",
+        "doneCond": "순환 시나리오 테스트 통과, Codex QA PASS.",
+        "outputs": [
+          {
+            "name": "apps/api/src/services/dependency.service.ts",
+            "delivered": false
+          }
+        ],
+        "spec": {
+          "req": [
+            "순환 검사는 추가하려는 선행 Task에서 선행 방향 DFS로 현재 Task 도달 여부를 확인한다.",
+            "순환이면 409 `DEPENDENCY_CYCLE`과 함께 경로(`TASK-A → TASK-B → TASK-A`)를 반환한다."
+          ],
+          "work": [],
+          "steps": [],
+          "inputs": [],
+          "outputs": [],
+          "files": [
+            "apps/api/src/services/dependency.service.ts"
+          ],
+          "constraints": [],
+          "errors": [
+            "자기 참조 → 400 `DEPENDENCY_SELF`",
+            "중복 → 409 `DEPENDENCY_DUPLICATE`"
+          ],
+          "docs": [],
+          "ac": [
+            "Given A→B 관계, When B를 A의 선행으로 추가, Then 409와 경로 A → B → A"
+          ],
+          "verify": []
+        },
+        "checklist": [
+          {
+            "id": "CL-0006-1",
+            "text": "자기 참조 차단",
+            "required": true,
+            "done": false,
+            "method": "단위 테스트",
+            "evidence": "",
+            "note": ""
+          },
+          {
+            "id": "CL-0006-2",
+            "text": "순환 경로 응답",
+            "required": true,
+            "done": false,
+            "method": "단위 테스트",
+            "evidence": "",
+            "note": ""
+          },
+          {
+            "id": "CL-0006-3",
+            "text": "FS/SS 차단 계산",
+            "required": true,
+            "done": false,
+            "method": "단위 테스트",
+            "evidence": "",
+            "note": ""
+          }
+        ]
+      },
+      "TASK-0007": {
+        "id": "TASK-0007",
+        "title": "WBS Tree UI",
+        "type": "Implementation",
+        "domain": "FE",
+        "rel": [],
+        "status": "rework",
+        "priority": 1,
+        "assignee": "Claude",
+        "verifier": "Codex",
+        "verif": "fail",
+        "approved": true,
+        "defects": 2,
+        "updated": "2026-11-01 14:09",
+        "purpose": "Phase → Work Package → Task 계층을 Tree Table로 표시하고 검색 · 필터 · 펼치기/접기 · 정렬을 제공한다.",
+        "background": "WBS가 중심 업무 화면이므로 1,000행 규모에서도 즉시 반응해야 한다.",
+        "scope": [
+          "`WbsTreeTable` 컴포넌트",
+          "필터 9종과 초기화",
+          "컬럼 표시 설정"
+        ],
+        "out": [
+          "Task 상세 패널 (TASK-0008)",
+          "드래그로 WBS 순서 변경"
+        ],
+        "precond": "",
+        "doneCond": "Codex QA의 기능 · 성능 케이스 전부 PASS.",
+        "outputs": [
+          {
+            "name": "apps/web/src/features/wbs/WbsTreeTable.tsx",
+            "kind": "코드",
+            "required": true,
+            "delivered": true,
+            "verify": "행 가상화 적용"
+          },
+          {
+            "name": "apps/web/src/features/wbs/useWbsTree.ts",
+            "kind": "코드",
+            "required": true,
+            "delivered": true,
+            "verify": "withAncestors 적용"
+          },
+          {
+            "name": "apps/web/test/wbs-tree.test.tsx",
+            "kind": "테스트",
+            "required": true,
+            "delivered": false,
+            "verify": "14/14 PASS, 성능 100ms 이내"
+          }
+        ],
+        "spec": {
+          "req": [
+            "필터 결과에는 매칭 Task의 상위 Phase · Work Package가 항상 함께 표시된다.",
+            "상태는 색상과 텍스트를 함께 표시한다.",
+            "1,000행에서 펼치기/접기 응답 100ms 이내."
+          ],
+          "work": [
+            "Tree 평탄화 훅 구현",
+            "가상 스크롤 적용"
+          ],
+          "steps": [
+            "`useWbsTree`에서 트리 → 표시 행 배열 변환",
+            "필터 후 `withAncestors()` 적용",
+            "`@tanstack/react-virtual`로 행 가상화"
+          ],
+          "inputs": [
+            "`GET /api/projects/:projectId/tasks` 응답 (TASK-0005)"
+          ],
+          "outputs": [
+            "WBS Tree Table 화면"
+          ],
+          "files": [
+            "apps/web/src/features/wbs/WbsTreeTable.tsx",
+            "apps/web/src/features/wbs/useWbsTree.ts"
+          ],
+          "constraints": [
+            "Mantine Table 스타일 토큰 사용",
+            "상태 Badge는 공통 `StatusBadge` 컴포넌트만 사용"
+          ],
+          "errors": [
+            "API 실패 시 재시도 버튼이 있는 Error 상태"
+          ],
+          "docs": [],
+          "ac": [
+            "Given 필터 「상태=재작업 필요」, When 적용, Then 매칭 Task와 상위 노드만 표시된다",
+            "Given 1,000행, When 모두 펼치기, Then 100ms 이내 렌더"
+          ],
+          "verify": [
+            "Codex: `pnpm --filter web test -- wbs-tree` + 성능 측정 스크립트"
+          ]
+        },
+        "checklist": [
+          {
+            "id": "CL-0007-1",
+            "text": "계층 표시 및 펼치기/접기",
+            "required": true,
+            "done": true,
+            "method": "UI 테스트",
+            "evidence": "qa-1/vitest.txt",
+            "note": ""
+          },
+          {
+            "id": "CL-0007-2",
+            "text": "필터 9종 동작",
+            "required": true,
+            "done": true,
+            "method": "UI 테스트",
+            "evidence": "qa-1/vitest.txt",
+            "note": ""
+          },
+          {
+            "id": "CL-0007-3",
+            "text": "필터 시 상위 노드 유지",
+            "required": true,
+            "done": false,
+            "method": "UI 테스트",
+            "evidence": "qa-1/filter-missing-parent.png",
+            "note": "QA-1 FAIL"
+          },
+          {
+            "id": "CL-0007-4",
+            "text": "1,000행 100ms 이내",
+            "required": true,
+            "done": false,
+            "method": "성능 측정",
+            "evidence": "qa-1/perf.json",
+            "note": "412ms"
+          },
+          {
+            "id": "CL-0007-5",
+            "text": "컬럼 표시 설정 저장",
+            "required": false,
+            "done": true,
+            "method": "수동 확인",
+            "evidence": "",
+            "note": ""
+          }
+        ]
+      },
+      "TASK-0008": {
+        "id": "TASK-0008",
+        "title": "Task Detail UI",
+        "type": "Implementation",
+        "domain": "FE",
+        "rel": [],
+        "status": "ready",
+        "priority": 1,
+        "assignee": "Claude",
+        "verifier": "Codex",
+        "verif": "none",
+        "approved": true,
+        "defects": 0,
+        "updated": "2026-11-02 09:00",
+        "purpose": "선택한 Task의 Summary와 9개 탭(개요 · 작업 명세 · 의존성 · 기술 설계 · 체크리스트 · 실행 · 검증·Evidence · 이력 · 메시지)을 구현한다.",
+        "background": "이 제품에서 가장 중요한 화면 — 개발자가 별도 해석 없이 작업할 수 있어야 한다.",
+        "scope": [
+          "고정 Summary 영역",
+          "읽기/편집 분리",
+          "관련 Task 이동 후 복귀"
+        ],
+        "out": [
+          "기술 설계 편집기 (Phase B)"
+        ],
+        "precond": "",
+        "doneCond": "",
+        "outputs": [
+          {
+            "name": "apps/web/src/features/task-detail/*",
+            "delivered": false
+          }
+        ],
+        "spec": {
+          "req": [
+            "기본은 읽기 모드, 섹션별 편집 버튼으로 수정한다."
+          ],
+          "work": [],
+          "steps": [],
+          "inputs": [],
+          "outputs": [],
+          "files": [],
+          "constraints": [],
+          "errors": [],
+          "docs": [],
+          "ac": [],
+          "verify": []
+        },
+        "checklist": [
+          {
+            "id": "CL-0008-1",
+            "text": "Summary 고정 표시",
+            "required": true,
+            "done": false,
+            "method": "UI 테스트",
+            "evidence": "",
+            "note": ""
+          },
+          {
+            "id": "CL-0008-2",
+            "text": "탭 9종",
+            "required": true,
+            "done": false,
+            "method": "UI 테스트",
+            "evidence": "",
+            "note": ""
+          }
+        ]
+      },
+      "TASK-0009": {
+        "id": "TASK-0009",
+        "title": "Checklist 기능",
+        "type": "Implementation",
+        "domain": "FE",
+        "rel": [
+          "BE",
+          "DB"
+        ],
+        "status": "planning",
+        "priority": 2,
+        "assignee": "Claude",
+        "verifier": "Codex",
+        "verif": "none",
+        "approved": false,
+        "defects": 0,
+        "updated": "2026-11-02 09:05",
+        "purpose": "Task별 체크리스트 항목의 등록 · 완료 처리 · Evidence 연결과 진행률 계산을 구현한다.",
+        "background": "",
+        "scope": [],
+        "out": [],
+        "precond": "",
+        "doneCond": "",
+        "outputs": [],
+        "spec": {
+          "req": [],
+          "work": [],
+          "steps": [],
+          "inputs": [],
+          "outputs": [],
+          "files": [],
+          "constraints": [],
+          "errors": [],
+          "docs": [],
+          "ac": [],
+          "verify": []
+        },
+        "checklist": []
+      },
+      "TASK-0010": {
+        "id": "TASK-0010",
+        "title": "Planning Workflow",
+        "type": "Design",
+        "domain": "Architecture",
+        "rel": [],
+        "status": "approval",
+        "priority": 1,
+        "assignee": "Codex",
+        "verifier": "Claude",
+        "verif": "none",
+        "approved": false,
+        "defects": 0,
+        "updated": "2026-11-02 17:30",
+        "purpose": "Codex · Claude 독립 분석 → 교차 검토 → 이견 조정 → Change Proposal → 팀장 승인 → WBS 반영의 상태 모델과 화면 흐름을 설계한다.",
+        "background": "승인되지 않은 제안이 WBS에 반영되지 않도록 Proposal과 실제 WBS 데이터를 분리해야 한다.",
+        "scope": [
+          "7단계 상태 모델",
+          "승인 전후 WBS Diff 표현"
+        ],
+        "out": [
+          "알림 · 메일 발송"
+        ],
+        "precond": "",
+        "doneCond": "팀장 승인",
+        "outputs": [
+          {
+            "name": "docs/planning-workflow.md",
+            "delivered": true
+          }
+        ],
+        "spec": {
+          "req": [
+            "Proposal은 승인 전까지 WBS 스냅샷과 분리된 변경 집합으로 저장한다.",
+            "반려 · 수정 요청 시 사유를 필수로 기록한다."
+          ],
+          "work": [],
+          "steps": [],
+          "inputs": [],
+          "outputs": [],
+          "files": [
+            "docs/planning-workflow.md"
+          ],
+          "constraints": [],
+          "errors": [],
+          "docs": [],
+          "ac": [
+            "Given 미승인 Proposal, When WBS 조회, Then 변경이 반영되지 않는다"
+          ],
+          "verify": []
+        },
+        "checklist": [
+          {
+            "id": "CL-0010-1",
+            "text": "상태 전이도",
+            "required": true,
+            "done": true,
+            "method": "문서 검토",
+            "evidence": "docs/planning-workflow.md",
+            "note": ""
+          },
+          {
+            "id": "CL-0010-2",
+            "text": "Diff 표현 규칙",
+            "required": true,
+            "done": true,
+            "method": "문서 검토",
+            "evidence": "",
+            "note": ""
+          }
+        ]
+      },
+      "TASK-0011": {
+        "id": "TASK-0011",
+        "title": "Completion Gate",
+        "type": "Implementation",
+        "domain": "BE",
+        "rel": [
+          "QA"
+        ],
+        "status": "planning",
+        "priority": 1,
+        "assignee": "Claude",
+        "verifier": "Codex",
+        "verif": "none",
+        "approved": false,
+        "defects": 0,
+        "updated": "2026-11-02 17:40",
+        "purpose": "Task 완료 처리를 상태 변경이 아닌 5개 조건(필수 Checklist · 필수 산출물 · Verification · 차단 결함 · 승인) 판정으로 수행한다.",
+        "background": "",
+        "scope": [
+          "조건별 PASS / FAIL / BLOCKED 판정 API"
+        ],
+        "out": [],
+        "precond": "",
+        "doneCond": "",
+        "outputs": [],
+        "spec": {
+          "req": [
+            "조건이 하나라도 미충족이면 완료 요청을 거부하고 조건별 사유를 반환한다."
+          ],
+          "work": [],
+          "steps": [],
+          "inputs": [],
+          "outputs": [],
+          "files": [],
+          "constraints": [],
+          "errors": [],
+          "docs": [],
+          "ac": [],
+          "verify": []
+        },
+        "checklist": []
+      },
+      "TASK-0012": {
+        "id": "TASK-0012",
+        "title": "Runner API 계약",
+        "type": "Design",
+        "domain": "API",
+        "rel": [
+          "Architecture"
+        ],
+        "status": "approval",
+        "priority": 0,
+        "assignee": "Codex",
+        "verifier": "Claude",
+        "verif": "none",
+        "approved": false,
+        "defects": 0,
+        "updated": "2026-11-03 09:15",
+        "purpose": "Agent WBS ↔ Agent Runner 간 REST 계약(실행 요청, 상태 보고, 결과 · Evidence 업로드, 메시지 전달)을 정의한다.",
+        "background": "Runner는 별도 개발되므로 계약이 먼저 고정되어야 양쪽이 병렬로 개발할 수 있다.",
+        "scope": [
+          "Runner → WBS 보고 API",
+          "WBS → Runner 메시지 Polling 방식",
+          "heartbeat"
+        ],
+        "out": [
+          "Runner 내부 세션 관리",
+          "실시간 세션 관찰 (Session Observer 미도입)"
+        ],
+        "precond": "",
+        "doneCond": "Codex · Claude 교차 검토 후 팀장 승인",
+        "outputs": [
+          {
+            "name": "docs/api/runner-contract.md",
+            "delivered": true
+          }
+        ],
+        "spec": {
+          "req": [
+            "Runner는 Polling으로 대기 메시지를 가져가며 `ack`로 수신 확인을 보고한다.",
+            "수신 확인(ack)과 작업 완료 보고는 별도 이벤트다."
+          ],
+          "work": [],
+          "steps": [],
+          "inputs": [],
+          "outputs": [],
+          "files": [
+            "docs/api/runner-contract.md"
+          ],
+          "constraints": [
+            "WBS가 Runner로 push하지 않는다 (2계층 · Polling)"
+          ],
+          "errors": [
+            "heartbeat 60초 미수신 시 Runner 오프라인 처리"
+          ],
+          "docs": [],
+          "ac": [],
+          "verify": []
+        },
+        "checklist": [
+          {
+            "id": "CL-0012-1",
+            "text": "Endpoint 목록 확정",
+            "required": true,
+            "done": true,
+            "method": "문서 검토",
+            "evidence": "",
+            "note": ""
+          },
+          {
+            "id": "CL-0012-2",
+            "text": "오류 코드 정의",
+            "required": true,
+            "done": false,
+            "method": "문서 검토",
+            "evidence": "",
+            "note": ""
+          }
+        ]
+      }
+    },
+    "deps": [
+      {
+        "id": "DEP-001",
+        "pred": "TASK-0001",
+        "succ": "TASK-0002",
+        "type": "FS"
+      },
+      {
+        "id": "DEP-002",
+        "pred": "TASK-0001",
+        "succ": "TASK-0003",
+        "type": "FS"
+      },
+      {
+        "id": "DEP-003",
+        "pred": "TASK-0002",
+        "succ": "TASK-0004",
+        "type": "FS"
+      },
+      {
+        "id": "DEP-004",
+        "pred": "TASK-0003",
+        "succ": "TASK-0004",
+        "type": "FS"
+      },
+      {
+        "id": "DEP-005",
+        "pred": "TASK-0004",
+        "succ": "TASK-0005",
+        "type": "SS"
+      },
+      {
+        "id": "DEP-006",
+        "pred": "TASK-0003",
+        "succ": "TASK-0005",
+        "type": "FS"
+      },
+      {
+        "id": "DEP-007",
+        "pred": "TASK-0005",
+        "succ": "TASK-0006",
+        "type": "FS"
+      },
+      {
+        "id": "DEP-008",
+        "pred": "TASK-0003",
+        "succ": "TASK-0007",
+        "type": "FS"
+      },
+      {
+        "id": "DEP-009",
+        "pred": "TASK-0007",
+        "succ": "TASK-0008",
+        "type": "FS"
+      },
+      {
+        "id": "DEP-010",
+        "pred": "TASK-0005",
+        "succ": "TASK-0008",
+        "type": "FS"
+      },
+      {
+        "id": "DEP-011",
+        "pred": "TASK-0008",
+        "succ": "TASK-0009",
+        "type": "FS"
+      },
+      {
+        "id": "DEP-012",
+        "pred": "TASK-0003",
+        "succ": "TASK-0010",
+        "type": "FS"
+      },
+      {
+        "id": "DEP-013",
+        "pred": "TASK-0009",
+        "succ": "TASK-0011",
+        "type": "FS"
+      },
+      {
+        "id": "DEP-014",
+        "pred": "TASK-0010",
+        "succ": "TASK-0011",
+        "type": "FS"
+      },
+      {
+        "id": "DEP-015",
+        "pred": "TASK-0003",
+        "succ": "TASK-0012",
+        "type": "FS"
+      }
+    ]
+  },
+  "sub": {
+    "defs": [
+      {
+        "id": "fe-implementer",
+        "role": "FE 구현",
+        "agent": "Claude",
+        "tools": "Read · Write · Edit · Bash · Glob · Grep",
+        "sandbox": "worktree 쓰기",
+        "v": 3,
+        "hash": "4c1e9a",
+        "updated": "2026-11-02 18:10",
+        "allowed": true,
+        "ref": "awesome-claude-code-subagents · react-specialist 점검 목록 일부",
+        "text": "React + TypeScript + Vite + Mantine 화면을 Task 명세의 FE 설계(화면 · 컴포넌트 · Interaction · API 연결 · Loading/Empty/Error 상태)대로 구현한다.\n- 프로토타입(Main.dc.html)의 같은 화면 · 문구 · 상태를 그대로 맞춘다.\n- 제외 범위에 있는 화면은 건드리지 않는다.\n- 완료 전에 Acceptance Criteria를 하나씩 직접 확인하고 결과를 남긴다."
+      },
+      {
+        "id": "be-implementer",
+        "role": "BE 구현",
+        "agent": "Claude",
+        "tools": "Read · Write · Edit · Bash · Glob · Grep",
+        "sandbox": "worktree 쓰기",
+        "v": 3,
+        "hash": "91b07d",
+        "updated": "2026-11-02 18:10",
+        "allowed": true,
+        "ref": "awesome-claude-code-subagents · backend-developer 점검 목록 일부",
+        "text": "Fastify + TypeScript로 Task 명세의 API 설계(Endpoint · Request/Response · Validation · Error)를 구현한다.\n- 판정 로직(차단 · 순환 · Gate · 일정)은 packages/shared 순수 함수를 쓴다.\n- 모든 수정 API는 updatedAt 버전을 비교한다(409 VERSION_CONFLICT)."
+      },
+      {
+        "id": "db-migrator",
+        "role": "DB · Migration",
+        "agent": "Claude",
+        "tools": "Read · Write · Edit · Bash",
+        "sandbox": "worktree 쓰기",
+        "v": 2,
+        "hash": "0a77f3",
+        "updated": "2026-10-30 11:20",
+        "allowed": true,
+        "ref": "awesome-claude-code-subagents · postgres-pro 점검 목록 일부",
+        "text": "Drizzle Schema · Migration을 Task의 DB 설계(컬럼 · 제약 · Index · Seed)대로 작성한다.\n- 되돌리기(down) Migration을 함께 작성하고 worktree 전용 DB에서 up → down → up을 실행해 결과를 Evidence로 남긴다."
+      },
+      {
+        "id": "api-contract-reviewer",
+        "role": "API 계약 검토",
+        "agent": "Claude",
+        "tools": "Read · Glob · Grep",
+        "sandbox": "읽기 전용",
+        "v": 1,
+        "hash": "d2e410",
+        "updated": "2026-10-28 09:00",
+        "allowed": true,
+        "ref": "",
+        "text": "Runner ↔ Agent WBS API 계약(요청 · 응답 · 오류 코드 · 멱등성 · 초기화 번호)을 설계 문서 8장과 대조해 누락 · 불일치를 보고한다. 코드는 수정하지 않는다."
+      },
+      {
+        "id": "code-reviewer",
+        "role": "코드 리뷰",
+        "agent": "Claude",
+        "tools": "Read · Glob · Grep · Bash(읽기 명령)",
+        "sandbox": "읽기 전용",
+        "v": 2,
+        "hash": "7f5c22",
+        "updated": "2026-11-01 16:40",
+        "allowed": true,
+        "ref": "awesome-claude-code-subagents · code-reviewer 점검 목록 일부",
+        "text": "변경 파일을 Task 명세 · 제외 범위 · 기술적 제약과 대조해 검토한다. 문제는 파일 · 줄 · 이유 · 제안으로 남기고 직접 고치지 않는다."
+      },
+      {
+        "id": "doc-writer",
+        "role": "문서화",
+        "agent": "Claude",
+        "tools": "Read · Write · Edit · Glob",
+        "sandbox": "worktree 쓰기 (docs/ 만)",
+        "v": 1,
+        "hash": "3b9e01",
+        "updated": "2026-10-28 09:00",
+        "allowed": true,
+        "ref": "",
+        "text": "설계 · 결정 · 실행 방법을 docs/ 아래 Markdown으로 정리한다. 코드와 다른 내용이 없도록 실제 명령으로 확인한 결과만 쓴다."
+      },
+      {
+        "id": "qa-verifier",
+        "role": "QA 검증",
+        "agent": "Codex",
+        "tools": "shell · read",
+        "sandbox": "읽기 전용 (테스트 실행 허용)",
+        "v": 4,
+        "hash": "e81d5c",
+        "updated": "2026-11-03 10:05",
+        "allowed": true,
+        "ref": "awesome-codex-subagents · reviewer 점검 목록 일부",
+        "text": "Task의 검증 방법 · Acceptance Criteria대로 명령을 실행하고 기대 / 실제 결과를 비교한다.\n- 결과는 PASS / FAIL / BLOCKED와 Evidence 경로(evidence/<Task>/<시도>/)로 보고한다.\n- 실패는 재현 방법과 함께 결함으로 등록한다."
+      },
+      {
+        "id": "test-writer",
+        "role": "테스트 작성",
+        "agent": "Codex",
+        "tools": "shell · read · write",
+        "sandbox": "worktree 쓰기 (tests/ 만)",
+        "v": 2,
+        "hash": "5c03aa",
+        "updated": "2026-10-31 14:30",
+        "allowed": true,
+        "ref": "",
+        "text": "Acceptance Criteria마다 자동 테스트(vitest · playwright)를 작성한다. 구현 코드는 수정하지 않는다."
+      },
+      {
+        "id": "security-reviewer",
+        "role": "보안 검토",
+        "agent": "Codex",
+        "tools": "read",
+        "sandbox": "읽기 전용",
+        "v": 1,
+        "hash": "a4f2b8",
+        "updated": "2026-10-29 13:00",
+        "allowed": true,
+        "ref": "awesome-codex-subagents · security-auditor 점검 목록 일부",
+        "text": "입력 검증 · 인증(Runner 토큰) · 경로 조작 · 압축 해제(../ · 심볼릭 링크) · 비밀값 노출을 점검하고 위험도와 함께 보고한다."
+      },
+      {
+        "id": "planner-estimator",
+        "role": "Planning · 추정",
+        "agent": "Codex",
+        "tools": "read",
+        "sandbox": "읽기 전용",
+        "v": 2,
+        "hash": "c90e17",
+        "updated": "2026-10-27 09:30",
+        "allowed": false,
+        "ref": "",
+        "text": "입력 자료와 설계 문서를 읽고 Task 후보 · 선행 관계 · 작업량(예상 · 낙관 · 비관) · 근거를 제안한다. (Planning 세션 전용 — 일반 Task에는 지정하지 않음)"
+      }
+    ]
+  },
+  "sched": {
+    "TASK-0001": {
+      "est": 1.5,
+      "lo": 1,
+      "hi": 2.5,
+      "tok": 180,
+      "conf": "상",
+      "basis": "Monorepo 템플릿 구성 — 유사 작업 이력 기준",
+      "actStart": "2026-10-28 14:02",
+      "actEnd": "2026-10-28 16:40"
+    },
+    "TASK-0002": {
+      "est": 1,
+      "lo": 0.5,
+      "hi": 2,
+      "tok": 120,
+      "conf": "상",
+      "basis": "Compose + 연결 풀 — 표준 구성",
+      "actStart": "2026-10-29 09:10",
+      "actEnd": "2026-10-29 11:05"
+    },
+    "TASK-0003": {
+      "est": 3,
+      "lo": 2,
+      "hi": 5,
+      "tok": 420,
+      "conf": "중",
+      "basis": "논리 객체 13종 정의 + 교차 검토 1회",
+      "actStart": "2026-10-29 13:00",
+      "actEnd": "2026-10-30 18:10"
+    },
+    "TASK-0004": {
+      "est": 4,
+      "lo": 3,
+      "hi": 6,
+      "tok": 560,
+      "conf": "중",
+      "basis": "테이블 4종 + Migration + Seed, QA 1회 가정",
+      "actStart": "2026-11-03 15:10"
+    },
+    "TASK-0005": {
+      "est": 6,
+      "lo": 4,
+      "hi": 10,
+      "tok": 900,
+      "conf": "중",
+      "basis": "Endpoint 5종 + 통합 테스트, 재작업 1회 가능성",
+      "actStart": "2026-11-03 19:58"
+    },
+    "TASK-0006": {
+      "est": 3,
+      "lo": 2,
+      "hi": 5,
+      "tok": 380,
+      "conf": "중",
+      "basis": "DFS 순환 검증 + 오류 코드 3종"
+    },
+    "TASK-0007": {
+      "est": 5,
+      "lo": 3.5,
+      "hi": 9,
+      "tok": 760,
+      "conf": "하",
+      "basis": "가상 스크롤 성능 요구 — 재작업 위험 높음",
+      "actStart": "2026-11-01 10:02"
+    },
+    "TASK-0008": {
+      "est": 6,
+      "lo": 4,
+      "hi": 10,
+      "tok": 880,
+      "conf": "하",
+      "basis": "탭 9종 UI — 범위 큼"
+    },
+    "TASK-0009": {
+      "est": 4,
+      "lo": 3,
+      "hi": 7,
+      "tok": 520,
+      "conf": "하",
+      "basis": "명세 미작성 — 추정 불확실"
+    },
+    "TASK-0010": {
+      "est": 2.5,
+      "lo": 1.5,
+      "hi": 4,
+      "tok": 300,
+      "conf": "중",
+      "basis": "상태 모델 문서화 + 교차 검토",
+      "fixStart": "2026-11-05"
+    },
+    "TASK-0011": {
+      "est": 3.5,
+      "lo": 2.5,
+      "hi": 6,
+      "tok": 480,
+      "conf": "하",
+      "basis": "Gate 판정 API — 선행 확정 전 추정"
+    },
+    "TASK-0012": {
+      "est": 2.5,
+      "lo": 1.5,
+      "hi": 4,
+      "tok": 320,
+      "conf": "중",
+      "basis": "계약 문서 + Endpoint 9종 정의"
+    }
+  }
+}

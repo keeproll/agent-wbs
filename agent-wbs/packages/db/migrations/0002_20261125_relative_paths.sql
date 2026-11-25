@@ -1,0 +1,2 @@
+ALTER TABLE "attempt_files" DROP CONSTRAINT "relative_file_path";--> statement-breakpoint
+ALTER TABLE "attempt_files" ADD CONSTRAINT "relative_file_path" CHECK ("attempt_files"."path"<>'' and "attempt_files"."path" not like '/%' and position(chr(92) in "attempt_files"."path")=0 and "attempt_files"."path" !~ '(^|/)[.][.](/|$)');

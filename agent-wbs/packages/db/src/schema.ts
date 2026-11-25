@@ -1,0 +1,1603 @@
+import { sql } from 'drizzle-orm';
+import {
+  pgTable,
+  pgEnum,
+  uuid,
+  text,
+  integer,
+  bigint,
+  bigserial,
+  boolean,
+  timestamp,
+  date,
+  numeric,
+  jsonb,
+  check,
+  unique,
+  uniqueIndex,
+  type AnyPgColumn,
+} from 'drizzle-orm/pg-core';
+
+export const agent = pgEnum('agent', ['Claude', 'Codex']);
+export const role = pgEnum('task_role', ['dev', 'qa']);
+export const taskStatus = pgEnum('task_status', [
+  'planning',
+  'approval',
+  'ready',
+  'running',
+  'qa',
+  'verifying',
+  'rework',
+  'paused',
+  'failed',
+  'gate',
+  'done',
+  'cancelled',
+]);
+export const workType = pgEnum('work_type', [
+  'Analysis',
+  'Design',
+  'Implementation',
+  'Configuration',
+  'Test',
+  'Verification',
+  'Documentation',
+  'Integration',
+]);
+export const domain = pgEnum('domain', [
+  'FE',
+  'BE',
+  'DB',
+  'DevOps',
+  'API',
+  'QA',
+  'Architecture',
+  'Common',
+]);
+export const attemptKind = pgEnum('attempt_kind', ['dev', 'qa', 'rework', 'reverify']);
+export const attemptStatus = pgEnum('attempt_status', [
+  'running',
+  'completed',
+  'failed',
+  'interrupted',
+]);
+export const verificationResult = pgEnum('verification_result', ['PASS', 'FAIL', 'BLOCKED']);
+export const jobState = pgEnum('job_state', [
+  'queued',
+  'leased',
+  'started',
+  'reconcile',
+  'done',
+  'failed',
+  'cancelled',
+]);
+export const jobKind = pgEnum('job_kind', [
+  'repo_check',
+  'bootstrap',
+  'input_diff',
+  'planning',
+  'estimate',
+  'split',
+  'attempt',
+  'stop_attempt',
+  'integrate',
+  'deploy_check',
+  'ci_retry',
+  'design_apply',
+  'merge_followup',
+]);
+export const slotState = pgEnum('slot_state', ['none', 'reserved', 'active', 'unconfirmed']);
+export const lockState = pgEnum('lock_state', [
+  'none',
+  'held',
+  'handed_over',
+  'released',
+  'orphaned',
+]);
+export const releaseProof = pgEnum('release_proof', ['no_process', 'group_empty', 'boot_changed']);
+export const cleanupStatus = pgEnum('cleanup_status', ['none', 'pending', 'running', 'failed']);
+export const deliveryState = pgEnum('delivery_state', [
+  'queued',
+  'sending',
+  'accepted',
+  'retry_wait',
+  'failed',
+  'unknown',
+]);
+export const messageDelivery = pgEnum('message_delivery', [
+  'Draft',
+  'Queued',
+  'Sent',
+  'Acknowledged',
+  'Cancelled',
+  'Failed',
+]);
+export const proposalStatus = pgEnum('proposal_status', [
+  'draft',
+  'review',
+  'approved',
+  'applied',
+  'changes',
+  'rejected',
+  'held',
+]);
+export const ciStatus = pgEnum('ci_status', ['queued', 'run', 'pass', 'fail', 'skip']);
+export const queueStatus = pgEnum('queue_status', [
+  'waiting_verify',
+  'queued',
+  'checking',
+  'merged',
+  'failed',
+  'removed',
+]);
+export const nodeKind = pgEnum('node_kind', ['phase', 'work_package']);
+export const dependencyType = pgEnum('dependency_type', ['FS', 'SS']);
+export const projectPhase = pgEnum('project_phase', ['boot', 'active']);
+export const stepStatus = pgEnum('step_status', ['wait', 'run', 'done', 'fail']);
+export const changeState = pgEnum('input_change_state', ['pending', 'skipped', 'analyzed']);
+export const designKind = pgEnum('task_design_kind', ['DB', 'API', 'FE', 'DevOps']);
+export const techLevel = pgEnum('tech_level', ['must', 'cond', 'ban']);
+export const authority = pgEnum('decision_authority', ['lead', 'agent', 'free']);
+export const decisionStatus = pgEnum('decision_status', [
+  'fixed',
+  'approved',
+  'pending',
+  'rejected',
+  'noted',
+  'change',
+]);
+export const reportKind = pgEnum('report_kind', ['daily', 'weekly', 'custom']);
+export const reportView = pgEnum('report_view', ['int', 'ext']);
+
+const at = (name: string) => timestamp(name, { withTimezone: true, mode: 'string' });
+const timestamps = () => ({
+  created_at: at('created_at').defaultNow().notNull(),
+  updated_at: at('updated_at').defaultNow().notNull(),
+});
+const row = () => ({ id: uuid().defaultRandom().primaryKey(), ...timestamps() });
+const version = () => ({ schema_version: integer().notNull().default(1) });
+const singleton = () => boolean().notNull().default(true).unique();
+
+export const systemState = pgTable(
+  'system_state',
+  {
+    id: integer().primaryKey().default(1),
+    epoch: integer().notNull().default(1),
+    cleanup_status: cleanupStatus().notNull().default('none'),
+  },
+  (t) => [
+    check('system_state_singleton', sql`${t.id}=1`),
+    check('epoch_positive', sql`${t.epoch}>0`),
+  ],
+);
+export const resetLog = pgTable('reset_log', {
+  ...row(),
+  epoch: integer().notNull().unique(),
+  at: at('at').defaultNow().notNull(),
+  actor: text().notNull(),
+  deleted_task_count: integer().notNull(),
+  keep_settings: boolean().notNull(),
+  runner_cleanup_status: text().notNull(),
+  finished_at: at('finished_at'),
+});
+export const runnerCommands = pgTable(
+  'runner_commands',
+  {
+    ...row(),
+    kind: text().notNull(),
+    epoch: integer().notNull(),
+    payload: jsonb().notNull(),
+    ...version(),
+    status: text().notNull(),
+    attempts: integer().notNull().default(0),
+    result: jsonb(),
+  },
+  (t) => [check('command_kind', sql`${t.kind}='reset-cleanup'`)],
+);
+export const fileDeleteQueue = pgTable(
+  'file_delete_queue',
+  {
+    ...row(),
+    epoch: integer().notNull(),
+    path: text().notNull(),
+    reason: text().notNull(),
+    attempts: integer().notNull().default(0),
+    last_error: text(),
+  },
+  (t) => [unique().on(t.epoch, t.path)],
+);
+export const leadSessions = pgTable('lead_sessions', {
+  ...row(),
+  token_hash: text().notNull().unique(),
+  expires_at: at('expires_at').notNull(),
+  csrf: text().notNull(),
+});
+export const leadLoginTokens = pgTable('lead_login_tokens', {
+  ...row(),
+  token_hash: text().notNull().unique(),
+  expires_at: at('expires_at').notNull(),
+  used_at: at('used_at'),
+});
+export const leadCredentials = pgTable(
+  'lead_credentials',
+  { ...row(), singleton: singleton(), password_hash: text().notNull() },
+  (t) => [check('lead_credentials_singleton', sql`${t.singleton}`)],
+);
+export const runnerTokens = pgTable('runner_tokens', {
+  ...row(),
+  token_hash: text().notNull().unique(),
+  runner_id: text().notNull(),
+  public_key: text().notNull(),
+  revoked_at: at('revoked_at'),
+});
+export const secrets = pgTable('secrets', {
+  key: text().primaryKey(),
+  ciphertext: text().notNull(),
+  nonce: text().notNull(),
+  key_version: integer().notNull(),
+  last4: text().notNull(),
+});
+export const projects = pgTable(
+  'projects',
+  {
+    ...row(),
+    singleton: singleton(),
+    name: text().notNull(),
+    repo_url: text().notNull(),
+    repo_owner: text().notNull(),
+    repo_name: text().notNull(),
+    branch: text().notNull().default('main'),
+    base_commit: text(),
+    target_date: date(),
+    lead_instruction: text().notNull(),
+    phase: projectPhase().notNull(),
+  },
+  (t) => [
+    check('project_singleton', sql`${t.singleton}`),
+    check('project_main', sql`${t.branch}='main'`),
+  ],
+);
+const project = () => ({
+  project_id: uuid()
+    .notNull()
+    .references(() => projects.id, { onDelete: 'restrict' }),
+});
+export const counters = pgTable(
+  'counters',
+  { ...row(), ...project(), kind: text().notNull(), value: bigint({ mode: 'number' }).notNull() },
+  (t) => [unique().on(t.project_id, t.kind), check('counter_positive', sql`${t.value}>0`)],
+);
+export const repoChecks = pgTable('repo_checks', {
+  ...row(),
+  project_id: uuid().references(() => projects.id, { onDelete: 'restrict' }),
+  url: text().notNull(),
+  status: text().notNull(),
+  result: jsonb(),
+  ...version(),
+  error: text(),
+});
+export const inputVersions = pgTable(
+  'input_versions',
+  {
+    ...row(),
+    ...project(),
+    v: integer().notNull(),
+    commit_sha: text().notNull(),
+    files: jsonb().notNull(),
+    md_list: jsonb().notNull(),
+    changes: jsonb().notNull(),
+    instruction: text().notNull(),
+    result: jsonb(),
+    ...version(),
+  },
+  (t) => [
+    unique().on(t.project_id, t.v),
+    unique().on(t.project_id, t.commit_sha),
+    check('input_version_positive', sql`${t.v}>0`),
+  ],
+);
+export const inputChangeCommits = pgTable(
+  'input_change_commits',
+  {
+    ...row(),
+    ...project(),
+    sha: text().notNull(),
+    files: jsonb().notNull(),
+    ...version(),
+    state: changeState().notNull(),
+    analyzed_in_version: uuid().references(() => inputVersions.id, { onDelete: 'restrict' }),
+  },
+  (t) => [unique().on(t.project_id, t.sha)],
+);
+export const planningJobs = pgTable(
+  'planning_jobs',
+  {
+    ...row(),
+    ...project(),
+    kind: text().notNull(),
+    run_no: integer().notNull(),
+    status: text().notNull(),
+    fail: jsonb(),
+    instruction: text().notNull(),
+  },
+  (t) => [
+    check(
+      'planning_kind',
+      sql`${t.kind} in ('bootstrap','input_diff','planning','estimate','split')`,
+    ),
+    check('planning_status', sql`${t.status} in ('queued','running','done','failed','cancelled')`),
+    uniqueIndex('one_open_bootstrap')
+      .on(t.project_id)
+      .where(sql`${t.kind}='bootstrap' and ${t.status} in ('queued','running')`),
+  ],
+);
+export const planningJobSteps = pgTable(
+  'planning_job_steps',
+  {
+    ...row(),
+    ...project(),
+    job: uuid()
+      .notNull()
+      .references(() => planningJobs.id, { onDelete: 'restrict' }),
+    step_key: text().notNull(),
+    status: stepStatus().notNull(),
+    note: text(),
+    started_at: at('started_at'),
+    finished_at: at('finished_at'),
+  },
+  (t) => [unique().on(t.job, t.step_key)],
+);
+export const planningJobLogs = pgTable('planning_job_logs', {
+  ...row(),
+  ...project(),
+  job: uuid()
+    .notNull()
+    .references(() => planningJobs.id, { onDelete: 'restrict' }),
+  at: at('at').notNull().defaultNow(),
+  text: text().notNull(),
+});
+export const wbsDrafts = pgTable(
+  'wbs_drafts',
+  {
+    ...row(),
+    ...project(),
+    job: uuid()
+      .notNull()
+      .references(() => planningJobs.id, { onDelete: 'restrict' }),
+    revision: integer().notNull(),
+    content: jsonb().notNull(),
+    split_check: jsonb().notNull(),
+    ...version(),
+    status: text().notNull(),
+  },
+  (t) => [unique().on(t.job, t.revision)],
+);
+export const wbsNodes = pgTable(
+  'wbs_nodes',
+  {
+    ...row(),
+    ...project(),
+    node_key: text().notNull().unique(),
+    kind: nodeKind().notNull(),
+    parent_id: uuid().references((): AnyPgColumn => wbsNodes.id, { onDelete: 'restrict' }),
+    title: text().notNull(),
+    sort_order: integer().notNull(),
+  },
+  (t) => [
+    check(
+      'node_parent',
+      sql`(${t.kind}='phase' and ${t.parent_id} is null) or (${t.kind}='work_package' and ${t.parent_id} is not null)`,
+    ),
+    check('node_not_self', sql`${t.parent_id}<>${t.id}`),
+  ],
+);
+export const tasks = pgTable(
+  'tasks',
+  {
+    ...row(),
+    ...project(),
+    task_key: text().notNull().unique(),
+    wbs_node_id: uuid()
+      .notNull()
+      .references(() => wbsNodes.id, { onDelete: 'restrict' }),
+    sort_order: integer().notNull(),
+    title: text().notNull(),
+    work_type: workType().notNull(),
+    primary_domain: domain().notNull(),
+    related_domains: domain().array().notNull(),
+    priority: integer().notNull(),
+    assignee_agent: agent().notNull(),
+    verifier_agent: agent().notNull(),
+    status: taskStatus().notNull(),
+    verif_state: text().notNull(),
+    planning_approved_at: at('planning_approved_at'),
+    fix_start: date(),
+    act_start: at('act_start'),
+    act_end: at('act_end'),
+    conflict_group: text(),
+    src_input_version: uuid().references(() => inputVersions.id, { onDelete: 'restrict' }),
+    deleted_at: at('deleted_at'),
+  },
+  (t) => [
+    check('task_title_length', sql`char_length(${t.title}) between 1 and 200`),
+    check('task_priority', sql`${t.priority} between 0 and 3`),
+    check('task_related_domains', sql`${t.primary_domain} <> all(${t.related_domains})`),
+  ],
+);
+const task = () => ({
+  task: uuid()
+    .notNull()
+    .references(() => tasks.id, { onDelete: 'restrict' }),
+});
+export const taskSpecs = pgTable(
+  'task_specs',
+  {
+    ...timestamps(),
+    ...project(),
+    task: uuid()
+      .primaryKey()
+      .references(() => tasks.id, { onDelete: 'restrict' }),
+    overview: jsonb().notNull(),
+    spec: jsonb().notNull(),
+    ac: jsonb().notNull(),
+    ...version(),
+    revision: integer().notNull(),
+  },
+  (t) => [check('ac_array', sql`jsonb_typeof(${t.ac})='array'`)],
+);
+export const taskDesigns = pgTable(
+  'task_designs',
+  {
+    ...row(),
+    ...project(),
+    ...task(),
+    kind: designKind().notNull(),
+    content: jsonb().notNull(),
+    ...version(),
+  },
+  (t) => [unique().on(t.task, t.kind)],
+);
+export const taskDesignItems = pgTable(
+  'task_design_items',
+  { ...row(), ...project(), ...task(), item_key: text().notNull(), change: text().notNull() },
+  (t) => [unique().on(t.task, t.item_key)],
+);
+export const taskDependencies = pgTable(
+  'task_dependencies',
+  {
+    ...row(),
+    ...project(),
+    pred: uuid()
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'restrict' }),
+    succ: uuid()
+      .notNull()
+      .references(() => tasks.id, { onDelete: 'restrict' }),
+    dep_type: dependencyType().notNull(),
+  },
+  (t) => [unique().on(t.pred, t.succ), check('dependency_not_self', sql`${t.pred}<>${t.succ}`)],
+);
+export const checklistItems = pgTable(
+  'checklist_items',
+  {
+    ...row(),
+    ...project(),
+    ...task(),
+    item_key: text().notNull(),
+    content: text().notNull(),
+    required: boolean().notNull(),
+    done: boolean().notNull(),
+    verify_method: text().notNull(),
+    evidence: jsonb(),
+    note: text(),
+    sort_order: integer().notNull(),
+  },
+  (t) => [unique().on(t.task, t.item_key)],
+);
+export const taskEstimates = pgTable(
+  'task_estimates',
+  {
+    ...row(),
+    ...project(),
+    ...task(),
+    est: numeric().notNull(),
+    lo: numeric().notNull(),
+    hi: numeric().notNull(),
+    tokens_k: numeric(),
+    confidence: text().notNull(),
+    basis: text().notNull(),
+    agreed_by: text().notNull(),
+  },
+  (t) => [check('estimate_bounds', sql`0<=${t.lo} and ${t.lo}<=${t.est} and ${t.est}<=${t.hi}`)],
+);
+export const agentModels = pgTable(
+  'agent_models',
+  {
+    ...row(),
+    agent: agent().notNull(),
+    model_id: text().notNull(),
+    rank: integer(),
+    allowed: boolean().notNull().default(false),
+    is_new: boolean().notNull().default(true),
+    report: jsonb(),
+  },
+  (t) => [unique().on(t.agent, t.model_id)],
+);
+export const agentEfforts = pgTable(
+  'agent_efforts',
+  {
+    ...row(),
+    agent: agent().notNull(),
+    model_id: text().notNull(),
+    value: text().notNull(),
+    common_level: integer(),
+    supported: boolean(),
+    confirmation: text().notNull(),
+  },
+  (t) => [
+    unique().on(t.agent, t.model_id, t.value),
+    check('effort_level', sql`${t.common_level} between 1 and 5`),
+    check('effort_no_ultra', sql`${t.value}<>'ultra' or ${t.common_level} is null`),
+  ],
+);
+export const subagentDefs = pgTable(
+  'subagent_defs',
+  {
+    ...row(),
+    def_key: text().notNull(),
+    version: integer().notNull(),
+    agent: agent().notNull(),
+    role: text().notNull(),
+    tools: text().array().notNull(),
+    sandbox: text().notNull(),
+    text: text().notNull(),
+    hash: text().notNull(),
+    allowed: boolean().notNull().default(false),
+    ref: text(),
+  },
+  (t) => [unique().on(t.def_key, t.version)],
+);
+export const taskGrades = pgTable('task_grades', {
+  ...row(),
+  ...project(),
+  ...task(),
+  role: role().notNull(),
+  model_id: text().notNull(),
+  effort: text().notNull(),
+  reason: text().notNull(),
+  locked: boolean().notNull(),
+  locked_by: text(),
+  effective_from: at('effective_from').notNull(),
+});
+export const taskSubagents = pgTable(
+  'task_subagents',
+  {
+    ...row(),
+    ...project(),
+    ...task(),
+    role: role().notNull(),
+    subagent_id: uuid()
+      .notNull()
+      .references(() => subagentDefs.id, { onDelete: 'restrict' }),
+    basis: text().notNull(),
+  },
+  (t) => [unique().on(t.task, t.role, t.subagent_id)],
+);
+export const taskSplits = pgTable('task_splits', {
+  ...row(),
+  ...project(),
+  ...task(),
+  basis: text().notNull(),
+  judged_rules: jsonb().notNull(),
+  exceptions: jsonb().notNull(),
+  ...version(),
+});
+export const taskSourceLinks = pgTable('task_source_links', {
+  ...row(),
+  ...project(),
+  fix_task: uuid()
+    .notNull()
+    .references(() => tasks.id, { onDelete: 'restrict' }),
+  origin_task: uuid().references(() => tasks.id, { onDelete: 'restrict' }),
+  split_from: uuid().references(() => tasks.id, { onDelete: 'restrict' }),
+});
+export const plannings = pgTable('plannings', {
+  ...row(),
+  ...project(),
+  planning_key: text().notNull().unique(),
+  title: text().notNull(),
+  scope: jsonb().notNull(),
+  ...version(),
+  status: text().notNull(),
+});
+export const planningAnalyses = pgTable(
+  'planning_analyses',
+  {
+    ...row(),
+    ...project(),
+    planning: uuid()
+      .notNull()
+      .references(() => plannings.id, { onDelete: 'restrict' }),
+    agent: agent().notNull(),
+    analysis: jsonb().notNull(),
+    ...version(),
+  },
+  (t) => [unique().on(t.planning, t.agent)],
+);
+export const planningReviews = pgTable('planning_reviews', {
+  ...row(),
+  ...project(),
+  planning: uuid()
+    .notNull()
+    .references(() => plannings.id, { onDelete: 'restrict' }),
+  topic: text().notNull(),
+  kind: text().notNull(),
+  codex: jsonb().notNull(),
+  claude: jsonb().notNull(),
+  choice: text(),
+  memo: text(),
+  ...version(),
+});
+export const changeProposals = pgTable(
+  'change_proposals',
+  {
+    ...row(),
+    ...project(),
+    cp_key: text().notNull().unique(),
+    source: text().notNull(),
+    status: proposalStatus().notNull(),
+    ops: jsonb().notNull(),
+    id_map: jsonb(),
+    preview_hash: text(),
+    hold_reasons: jsonb(),
+    ...version(),
+  },
+  (t) => [
+    check(
+      'proposal_source',
+      sql`${t.source} in ('planning','message','manual','split','input','decision')`,
+    ),
+  ],
+);
+export const changeProposalEvents = pgTable('change_proposal_events', {
+  ...row(),
+  ...project(),
+  proposal: uuid()
+    .notNull()
+    .references(() => changeProposals.id, { onDelete: 'restrict' }),
+  kind: text().notNull(),
+  actor: text().notNull(),
+  comment: text().notNull(),
+});
+export const runnerJobs = pgTable('runner_jobs', {
+  ...row(),
+  project_id: uuid().references(() => projects.id, { onDelete: 'restrict' }),
+  kind: jobKind().notNull(),
+  payload: jsonb().notNull(),
+  ...version(),
+  state: jobState().notNull(),
+  lease_owner: text(),
+  lease_until: at('lease_until'),
+  fence: integer().notNull().default(0),
+  epoch: integer().notNull(),
+  attempts: integer().notNull().default(0),
+  generation: integer(),
+});
+export const runnerJobEvents = pgTable(
+  'runner_job_events',
+  {
+    ...row(),
+    project_id: uuid().references(() => projects.id, { onDelete: 'restrict' }),
+    job: uuid()
+      .notNull()
+      .references(() => runnerJobs.id, { onDelete: 'restrict' }),
+    kind: text().notNull(),
+    code: text(),
+    detail: jsonb(),
+    ...version(),
+  },
+  (t) => [
+    check(
+      'job_event_kind',
+      sql`${t.kind} in ('prepared','prestart_failed','started','lease_lost','reconciled','finished')`,
+    ),
+  ],
+);
+export const taskAttempts = pgTable(
+  'task_attempts',
+  {
+    ...row(),
+    ...project(),
+    ...task(),
+    attempt_key: text().notNull().unique(),
+    attempt_no: integer().notNull(),
+    branch: text(),
+    pr: integer(),
+    generation: integer(),
+    job: uuid()
+      .notNull()
+      .unique()
+      .references(() => runnerJobs.id, { onDelete: 'restrict' }),
+    base_sha: text().notNull(),
+    head_sha: text().notNull(),
+    spec_revision: integer().notNull(),
+    input_version: uuid().references(() => inputVersions.id, { onDelete: 'restrict' }),
+    kind: attemptKind().notNull(),
+    agent: agent().notNull(),
+    status: attemptStatus().notNull(),
+    started_at: at('started_at').notNull(),
+    ended_at: at('ended_at'),
+    model_id: text().notNull(),
+    effort: text().notNull(),
+    grade_adjust: jsonb(),
+    summary: text(),
+    failure: jsonb(),
+    tokens: bigint({ mode: 'number' }),
+    resumed_from: uuid().references((): AnyPgColumn => taskAttempts.id, { onDelete: 'restrict' }),
+  },
+  (t) => [
+    unique().on(t.task, t.attempt_no),
+    check('attempt_number_positive', sql`${t.attempt_no}>0`),
+    uniqueIndex('one_open_attempt')
+      .on(t.task)
+      .where(sql`${t.status}='running'`),
+  ],
+);
+export const executionHolds = pgTable(
+  'execution_holds',
+  {
+    ...row(),
+    project_id: uuid().references(() => projects.id, { onDelete: 'restrict' }),
+    job: uuid()
+      .notNull()
+      .unique()
+      .references(() => runnerJobs.id, { onDelete: 'restrict' }),
+    attempt: uuid().references(() => taskAttempts.id, { onDelete: 'restrict' }),
+    epoch: integer().notNull(),
+    host_id: text(),
+    boot_id: text(),
+    fence: integer(),
+    pgid: integer(),
+    cgroup: text(),
+    task: uuid().references(() => tasks.id, { onDelete: 'restrict' }),
+    conflict_group: text(),
+    agent: agent().notNull(),
+    slots: integer().notNull(),
+    heavy: boolean().notNull(),
+    slot_state: slotState().notNull(),
+    lock_state: lockState().notNull(),
+    lock_from_job: uuid().references(() => runnerJobs.id, { onDelete: 'restrict' }),
+    handed_to_job: uuid().references(() => runnerJobs.id, { onDelete: 'restrict' }),
+    release_proof: releaseProof(),
+    closed_at: at('closed_at'),
+  },
+  (t) => [
+    check('hold_slots', sql`${t.slots}>=0`),
+    check(
+      'hold_closed',
+      sql`(${t.closed_at} is null) = (${t.slot_state}<>'none' or ${t.lock_state}='held')`,
+    ),
+    check(
+      'handover_slots',
+      sql`${t.lock_state} not in ('handed_over','released') or ${t.slot_state}='none'`,
+    ),
+    check('handover_target', sql`${t.lock_state}<>'handed_over' or ${t.handed_to_job} is not null`),
+    uniqueIndex('one_task_lock')
+      .on(t.task)
+      .where(sql`${t.lock_state}='held'`),
+    uniqueIndex('one_conflict_lock')
+      .on(t.conflict_group)
+      .where(sql`${t.lock_state}='held' and ${t.conflict_group} is not null`),
+  ],
+);
+export const externalWriteAuthority = pgTable(
+  'external_write_authority',
+  {
+    ...row(),
+    singleton: singleton(),
+    host_id: text().notNull(),
+    generation: integer().notNull(),
+    state: text().notNull(),
+    credential_fingerprint: text(),
+    blocked_reason: text(),
+    reconciled_at: at('reconciled_at'),
+  },
+  (t) => [
+    check('external_singleton', sql`${t.singleton}`),
+    check('external_state', sql`${t.state} in ('granted','blocked')`),
+  ],
+);
+export const attemptFiles = pgTable(
+  'attempt_files',
+  {
+    ...row(),
+    ...project(),
+    attempt: uuid()
+      .notNull()
+      .references(() => taskAttempts.id, { onDelete: 'restrict' }),
+    path: text().notNull(),
+  },
+  (t) => [
+    unique().on(t.attempt, t.path),
+    check(
+      'relative_file_path',
+      sql`${t.path}<>'' and ${t.path} not like '/%' and position(chr(92) in ${t.path})=0 and ${t.path} !~ '(^|/)[.][.](/|$)'`,
+    ),
+  ],
+);
+export const attemptSubagents = pgTable(
+  'attempt_subagents',
+  {
+    ...row(),
+    ...project(),
+    attempt: uuid()
+      .notNull()
+      .references(() => taskAttempts.id, { onDelete: 'restrict' }),
+    subagent: uuid()
+      .notNull()
+      .references(() => subagentDefs.id, { onDelete: 'restrict' }),
+    designated: boolean().notNull(),
+    installed: boolean().notNull(),
+    observed_used: boolean(),
+    version: integer().notNull(),
+    def_hash: text().notNull(),
+    confirm: text(),
+  },
+  (t) => [check('usage_confirmation', sql`${t.confirm} in ('confirmed','partial')`)],
+);
+export const attemptObservations = pgTable(
+  'attempt_observations',
+  {
+    ...row(),
+    ...project(),
+    attempt: uuid()
+      .notNull()
+      .references(() => taskAttempts.id, { onDelete: 'restrict' }),
+    cli: text().notNull(),
+    version: text().notNull(),
+    grade: text().notNull(),
+    observed: integer(),
+    reserved: integer().notNull(),
+    state: text().notNull(),
+    process_state: jsonb().notNull(),
+    at: at('at').notNull(),
+  },
+  (t) => [check('observation_state', sql`${t.state} in ('ok','unconfirmed')`)],
+);
+export const verifications = pgTable('verifications', {
+  ...row(),
+  ...project(),
+  attempt: uuid()
+    .notNull()
+    .unique()
+    .references(() => taskAttempts.id, { onDelete: 'restrict' }),
+  result: verificationResult().notNull(),
+  head_sha: text().notNull(),
+  spec_revision: integer().notNull(),
+  cmd: text().notNull(),
+  expected: text().notNull(),
+  actual: text().notNull(),
+});
+export const verificationInvalidations = pgTable('verification_invalidations', {
+  ...row(),
+  ...project(),
+  verification: uuid()
+    .notNull()
+    .references(() => verifications.id, { onDelete: 'restrict' }),
+  reason: text().notNull(),
+});
+export const defects = pgTable('defects', {
+  ...row(),
+  ...project(),
+  def_key: text().notNull().unique(),
+  verification: uuid()
+    .notNull()
+    .references(() => verifications.id, { onDelete: 'restrict' }),
+  blocking: boolean().notNull(),
+  content: text().notNull(),
+});
+export const defectEvents = pgTable('defect_events', {
+  ...row(),
+  ...project(),
+  defect: uuid()
+    .notNull()
+    .references(() => defects.id, { onDelete: 'restrict' }),
+  kind: text().notNull(),
+  resolved_by_verification: uuid().references(() => verifications.id, { onDelete: 'restrict' }),
+  detail: jsonb(),
+});
+export const taskOutputs = pgTable('task_outputs', {
+  ...row(),
+  ...project(),
+  ...task(),
+  name: text().notNull(),
+  kind: text().notNull(),
+  required: boolean().notNull(),
+  verify: text().notNull(),
+  delivered: boolean().notNull(),
+  delivered_attempt: uuid().references(() => taskAttempts.id, { onDelete: 'restrict' }),
+});
+export const evidence = pgTable(
+  'evidence',
+  {
+    ...row(),
+    ...project(),
+    ...task(),
+    attempt: uuid().references(() => taskAttempts.id, { onDelete: 'restrict' }),
+    verification: uuid().references(() => verifications.id, { onDelete: 'restrict' }),
+    checklist: uuid().references(() => checklistItems.id, { onDelete: 'restrict' }),
+    kind: text().notNull(),
+    storage_path: text().notNull(),
+    sha256: text().notNull(),
+    size: bigint({ mode: 'number' }).notNull(),
+  },
+  (t) => [check('evidence_hash_size', sql`${t.sha256} ~ '^[a-f0-9]{64}$' and ${t.size}>=0`)],
+);
+export const runnerSessions = pgTable('runner_sessions', {
+  ...row(),
+  runner_id: text().notNull(),
+  started_at: at('started_at').notNull(),
+  ended_at: at('ended_at'),
+  end_reason: text(),
+  last_heartbeat_at: at('last_heartbeat_at').notNull(),
+});
+export const runnerHosts = pgTable('runner_hosts', {
+  ...row(),
+  host_id: text().notNull(),
+  cpu: text().notNull(),
+  cores: integer().notNull(),
+  mem_gb: numeric().notNull(),
+  swap_gb: numeric().notNull(),
+  disk_gb: numeric().notNull(),
+  os: text().notNull(),
+  per_session_gb: numeric(),
+  samples: integer().notNull(),
+  seen_at: at('seen_at').notNull(),
+});
+export const runnerConcurrencyLog = pgTable('runner_concurrency_log', {
+  ...row(),
+  host_id: text().notNull(),
+  limit: integer().notNull(),
+  running: integer().notNull(),
+  subagents: jsonb().notNull(),
+  heavy: integer().notNull(),
+  resources: jsonb().notNull(),
+  adjust: jsonb(),
+  ...version(),
+});
+export const concurrencySettings = pgTable(
+  'concurrency_settings',
+  {
+    ...row(),
+    singleton: singleton(),
+    mode: text().notNull(),
+    caps: jsonb(),
+    mem_reserve_gb: numeric(),
+    subagent_budget: jsonb(),
+    ...version(),
+  },
+  (t) => [
+    check('concurrency_singleton', sql`${t.singleton}`),
+    check('concurrency_mode', sql`${t.mode} in ('auto','manual')`),
+  ],
+);
+export const runnerReadiness = pgTable('runner_readiness', {
+  ...row(),
+  key: text().notNull(),
+  status: text().notNull(),
+  detail: text().notNull(),
+  fix: text().notNull(),
+  at: at('at').notNull(),
+});
+export const agentUsage = pgTable(
+  'agent_usage',
+  {
+    ...row(),
+    agent: agent().notNull(),
+    remain_pct: numeric().notNull(),
+    reset_at: at('reset_at').notNull(),
+    tokens_used: bigint({ mode: 'number' }),
+  },
+  (t) => [check('usage_percent', sql`${t.remain_pct} between 0 and 100`)],
+);
+export const execPolicy = pgTable(
+  'exec_policy',
+  {
+    ...row(),
+    singleton: singleton(),
+    on_usage: text().notNull(),
+    low_pct: integer(),
+    on_rework: text().notNull(),
+    esc_notify: integer().notNull(),
+    floors: jsonb().notNull(),
+    live_inject: boolean().notNull().default(false),
+    auto_retry_limit: integer().notNull(),
+    auto_rework_limit: integer().notNull(),
+    ...version(),
+  },
+  (t) => [
+    check('exec_singleton', sql`${t.singleton}`),
+    check('exec_usage', sql`${t.on_usage} in ('wait','down')`),
+    check('exec_rework', sql`${t.on_rework} in ('same','up1','top')`),
+    check('exec_limits', sql`${t.auto_retry_limit}>=0 and ${t.auto_rework_limit}>=0`),
+  ],
+);
+export const cliObservationGrades = pgTable(
+  'cli_observation_grades',
+  {
+    ...row(),
+    cli: text().notNull(),
+    version: text().notNull(),
+    model: text().notNull(),
+    options: text().notNull(),
+    grade: text().notNull(),
+    verified_at: at('verified_at'),
+    notes: text().notNull(),
+  },
+  (t) => [unique().on(t.cli, t.version, t.model, t.options)],
+);
+export const schedulePolicy = pgTable(
+  'schedule_policy',
+  {
+    ...row(),
+    singleton: singleton(),
+    auto_replan: boolean(),
+    cp_auto: boolean(),
+    threshold_days: numeric(),
+    assume_rate: numeric(),
+    window_days: integer().notNull(),
+    min_hours: integer().notNull(),
+  },
+  (t) => [
+    check('schedule_singleton', sql`${t.singleton}`),
+    check('assume_rate_range', sql`${t.assume_rate} between 0 and 1`),
+  ],
+);
+export const blackoutDays = pgTable('blackout_days', {
+  ...row(),
+  date: date().notNull().unique(),
+  note: text().notNull(),
+});
+export const scheduleBaselines = pgTable(
+  'schedule_baselines',
+  {
+    ...row(),
+    ...project(),
+    v: integer().notNull(),
+    expected: jsonb().notNull(),
+    range: jsonb().notNull(),
+    applied_rate: numeric().notNull(),
+    ...version(),
+  },
+  (t) => [unique().on(t.project_id, t.v)],
+);
+export const baselineItems = pgTable(
+  'baseline_items',
+  {
+    ...row(),
+    ...project(),
+    ...task(),
+    baseline: uuid()
+      .notNull()
+      .references(() => scheduleBaselines.id, { onDelete: 'restrict' }),
+    start: at('start').notNull(),
+    end: at('end').notNull(),
+    lo: at('lo').notNull(),
+    hi: at('hi').notNull(),
+  },
+  (t) => [unique().on(t.baseline, t.task)],
+);
+export const replans = pgTable(
+  'replans',
+  {
+    ...row(),
+    ...project(),
+    rp_key: text().notNull().unique(),
+    trigger: text().notNull(),
+    actor: text().notNull(),
+    baseline_v: integer(),
+    status: text().notNull(),
+    before: jsonb().notNull(),
+    after: jsonb().notNull(),
+    ...version(),
+  },
+  (t) => [check('replan_status', sql`${t.status} in ('applied','pending')`)],
+);
+export const replanMoves = pgTable('replan_moves', {
+  ...row(),
+  ...project(),
+  ...task(),
+  replan: uuid()
+    .notNull()
+    .references(() => replans.id, { onDelete: 'restrict' }),
+  kind: text().notNull(),
+  before: jsonb(),
+  after: jsonb(),
+  ...version(),
+});
+export const reports = pgTable(
+  'reports',
+  {
+    ...row(),
+    ...project(),
+    report_key: text().notNull().unique(),
+    kind: reportKind().notNull(),
+    from: date().notNull(),
+    to: date().notNull(),
+    view: reportView().notNull().default('int'),
+    snapshot: jsonb().notNull(),
+    ...version(),
+    generated_at: at('generated_at').notNull(),
+    due_at: at('due_at'),
+    reason: text().notNull(),
+  },
+  (t) => [
+    check('report_period', sql`${t.from}<=${t.to}`),
+    uniqueIndex('one_periodic_report')
+      .on(t.project_id, t.kind, t.from, t.to)
+      .where(sql`${t.kind} in ('daily','weekly')`),
+  ],
+);
+export const reportPdfs = pgTable(
+  'report_pdfs',
+  {
+    ...row(),
+    ...project(),
+    report: uuid()
+      .notNull()
+      .references(() => reports.id, { onDelete: 'restrict' }),
+    view: reportView().notNull(),
+    path: text().notNull(),
+    sha256: text().notNull(),
+  },
+  (t) => [unique().on(t.report, t.view)],
+);
+export const mailSettings = pgTable(
+  'mail_settings',
+  {
+    ...row(),
+    singleton: singleton(),
+    host: text(),
+    port: integer(),
+    security: text(),
+    from: text(),
+    user: text(),
+    secret_key: text().references(() => secrets.key, { onDelete: 'restrict' }),
+    checked_at: at('checked_at'),
+    status: text(),
+    error: text(),
+  },
+  (t) => [check('mail_singleton', sql`${t.singleton}`)],
+);
+export const mailRecipients = pgTable(
+  'mail_recipients',
+  {
+    ...row(),
+    email: text().notNull(),
+    name: text().notNull(),
+    active: boolean().notNull(),
+    daily: boolean().notNull(),
+    weekly: boolean().notNull(),
+    pdf: boolean().notNull(),
+    view: reportView().notNull(),
+  },
+  (t) => [
+    uniqueIndex('recipient_email_lower').on(sql`lower(${t.email})`),
+    check('recipient_schedule', sql`not ${t.active} or ${t.daily} or ${t.weekly}`),
+  ],
+);
+export const mailOutbox = pgTable(
+  'mail_outbox',
+  {
+    ...row(),
+    ...project(),
+    delivery_id: uuid().notNull(),
+    epoch: integer().notNull(),
+    report: uuid()
+      .notNull()
+      .references(() => reports.id, { onDelete: 'restrict' }),
+    recipient: uuid().notNull(),
+    email: text().notNull(),
+    try_no: integer().notNull(),
+    state: deliveryState().notNull(),
+    next_at: at('next_at'),
+    error: text(),
+  },
+  (t) => [
+    unique().on(t.report, t.recipient, t.try_no),
+    check('mail_try_positive', sql`${t.try_no}>0`),
+  ],
+);
+export const mailLog = pgTable('mail_log', {
+  ...row(),
+  ...project(),
+  delivery_id: uuid().notNull(),
+  report: uuid()
+    .notNull()
+    .references(() => reports.id, { onDelete: 'restrict' }),
+  email: text().notNull(),
+  state: deliveryState().notNull(),
+  error: text(),
+  at: at('at').notNull(),
+});
+export const notifySettings = pgTable(
+  'notify_settings',
+  {
+    ...row(),
+    singleton: singleton(),
+    enabled: boolean().notNull(),
+    chat_id: text(),
+    target_name: text(),
+    bot: jsonb(),
+    test_fingerprint: text(),
+    secret_key: text().references(() => secrets.key, { onDelete: 'restrict' }),
+  },
+  (t) => [check('notify_singleton', sql`${t.singleton}`)],
+);
+export const notifyRules = pgTable('notify_rules', {
+  ...row(),
+  key: text().notNull().unique(),
+  enabled: boolean().notNull(),
+});
+export const notifyEvents = pgTable(
+  'notify_events',
+  {
+    ...row(),
+    ...project(),
+    dedup_key: text().notNull(),
+    kind: text().notNull(),
+    ref: jsonb().notNull(),
+    resolved_at: at('resolved_at'),
+    dup_count: integer().notNull().default(0),
+  },
+  (t) => [
+    uniqueIndex('one_open_notify_key')
+      .on(t.dedup_key)
+      .where(sql`${t.resolved_at} is null`),
+  ],
+);
+export const notifyOutbox = pgTable(
+  'notify_outbox',
+  {
+    ...row(),
+    ...project(),
+    event: uuid().references(() => notifyEvents.id, { onDelete: 'restrict' }),
+    delivery_id: uuid().notNull(),
+    epoch: integer().notNull(),
+    state: deliveryState().notNull(),
+    attempts: integer().notNull().default(0),
+    next_at: at('next_at'),
+    payload: jsonb().notNull(),
+    ...version(),
+    kind: text().notNull(),
+    error: text(),
+  },
+  (t) => [
+    uniqueIndex('one_unsettled_event_outbox')
+      .on(t.event)
+      .where(sql`${t.state} in ('queued','sending','retry_wait','unknown')`),
+  ],
+);
+export const notifyLog = pgTable('notify_log', {
+  ...row(),
+  ...project(),
+  delivery_id: uuid().notNull(),
+  kind: text().notNull(),
+  state: deliveryState().notNull(),
+  error: text(),
+  at: at('at').notNull(),
+});
+export const alerts = pgTable(
+  'alerts',
+  {
+    ...row(),
+    ...project(),
+    key: text().notNull(),
+    severity: text().notNull(),
+    target: jsonb().notNull(),
+    resolved_at: at('resolved_at'),
+  },
+  (t) => [
+    uniqueIndex('one_open_alert_key')
+      .on(t.key)
+      .where(sql`${t.resolved_at} is null`),
+  ],
+);
+export const appSettings = pgTable(
+  'app_settings',
+  {
+    ...row(),
+    singleton: singleton(),
+    app_url: text(),
+    heartbeat_seconds: integer().notNull(),
+    heartbeat_misses: integer().notNull(),
+    split: jsonb().notNull(),
+    workflow: jsonb(),
+    stage_pct: jsonb().notNull(),
+    timezone: text().notNull(),
+    ...version(),
+  },
+  (t) => [
+    check('app_singleton', sql`${t.singleton}`),
+    check('heartbeat_positive', sql`${t.heartbeat_seconds}>0 and ${t.heartbeat_misses}>0`),
+  ],
+);
+export const githubSettings = pgTable(
+  'github_settings',
+  {
+    ...row(),
+    singleton: singleton(),
+    mode: text().notNull(),
+    status: text().notNull(),
+    scopes: text().array().notNull(),
+    expires_at: at('expires_at'),
+    account: text(),
+    secret_key: text().references(() => secrets.key, { onDelete: 'restrict' }),
+  },
+  (t) => [check('github_singleton', sql`${t.singleton}`)],
+);
+export const techConstraints = pgTable('tech_constraints', {
+  ...row(),
+  ...project(),
+  name: text().notNull(),
+  level: techLevel().notNull(),
+  condition: text(),
+});
+export const techDecisions = pgTable('tech_decisions', {
+  ...row(),
+  ...project(),
+  td_key: text().notNull().unique(),
+  title: text().notNull(),
+  authority: authority().notNull(),
+  status: decisionStatus().notNull(),
+  content: jsonb().notNull(),
+  ...version(),
+});
+export const techDecisionEvents = pgTable('tech_decision_events', {
+  ...row(),
+  ...project(),
+  decision: uuid()
+    .notNull()
+    .references(() => techDecisions.id, { onDelete: 'restrict' }),
+  actor: text().notNull(),
+  kind: text().notNull(),
+  detail: jsonb(),
+  ...version(),
+});
+export const designSnapshots = pgTable(
+  'design_snapshots',
+  {
+    ...row(),
+    ...project(),
+    commit: text().notNull(),
+    ref: text().notNull(),
+    parse_status: text().notNull(),
+    error: text(),
+  },
+  (t) => [unique().on(t.project_id, t.commit, t.ref)],
+);
+export const designFiles = pgTable(
+  'design_files',
+  {
+    ...row(),
+    ...project(),
+    snapshot: uuid()
+      .notNull()
+      .references(() => designSnapshots.id, { onDelete: 'restrict' }),
+    path: text().notNull(),
+    format: text().notNull(),
+    parse_status: text().notNull(),
+    content: jsonb(),
+    last_success: jsonb(),
+    ...version(),
+    error: text(),
+  },
+  (t) => [unique().on(t.snapshot, t.path)],
+);
+export const designItems = pgTable(
+  'design_items',
+  {
+    ...row(),
+    ...project(),
+    snapshot: uuid()
+      .notNull()
+      .references(() => designSnapshots.id, { onDelete: 'restrict' }),
+    file: uuid().references(() => designFiles.id, { onDelete: 'restrict' }),
+    item_key: text().notNull(),
+    kind: text().notNull(),
+    content: jsonb().notNull(),
+    ...version(),
+  },
+  (t) => [unique().on(t.snapshot, t.item_key)],
+);
+export const designEdges = pgTable('design_edges', {
+  ...row(),
+  ...project(),
+  snapshot: uuid()
+    .notNull()
+    .references(() => designSnapshots.id, { onDelete: 'restrict' }),
+  from_item: uuid()
+    .notNull()
+    .references(() => designItems.id, { onDelete: 'restrict' }),
+  to_item: uuid()
+    .notNull()
+    .references(() => designItems.id, { onDelete: 'restrict' }),
+  kind: text().notNull(),
+});
+export const designOwnership = pgTable('design_ownership', {
+  ...row(),
+  ...project(),
+  snapshot: uuid()
+    .notNull()
+    .references(() => designSnapshots.id, { onDelete: 'restrict' }),
+  item_key: text().notNull(),
+  owner: text().notNull(),
+  task: uuid().references(() => tasks.id, { onDelete: 'restrict' }),
+});
+export const designDrifts = pgTable(
+  'design_drifts',
+  {
+    ...row(),
+    ...project(),
+    item_key: text().notNull(),
+    kind: text().notNull(),
+    compat: text().notNull(),
+    status: text().notNull(),
+    resolution: jsonb(),
+    ...version(),
+  },
+  (t) => [check('drift_compat', sql`${t.compat} in ('호환','깨짐','대조 안 함')`)],
+);
+export const designVersions = pgTable('design_versions', {
+  ...row(),
+  ...project(),
+  item_key: text().notNull(),
+  kind: text().notNull(),
+  compat: text().notNull(),
+  status: text().notNull(),
+  resolution: jsonb(),
+  snapshot: uuid()
+    .notNull()
+    .references(() => designSnapshots.id, { onDelete: 'restrict' }),
+  ...version(),
+});
+export const ciRuns = pgTable(
+  'ci_runs',
+  {
+    ...row(),
+    ...project(),
+    run_key: text().notNull().unique(),
+    stage: integer().notNull(),
+    base_sha: text(),
+    head_sha: text(),
+    merge_sha: text(),
+    tree_sha: text(),
+    pipeline_sha: text().notNull(),
+    ref: text().notNull(),
+    pr: integer(),
+    task: uuid().references(() => tasks.id, { onDelete: 'restrict' }),
+    attempt: uuid().references(() => taskAttempts.id, { onDelete: 'restrict' }),
+    trigger: text().notNull(),
+    status: ciStatus().notNull(),
+    fail_step: text(),
+    log_excerpt: text(),
+    artifact_path: text(),
+    url: text(),
+  },
+  (t) => [check('ci_stage', sql`${t.stage} between 1 and 4`)],
+);
+export const ciSteps = pgTable(
+  'ci_steps',
+  {
+    ...row(),
+    ...project(),
+    run: uuid()
+      .notNull()
+      .references(() => ciRuns.id, { onDelete: 'restrict' }),
+    step_key: text().notNull(),
+    status: ciStatus().notNull(),
+    command: text().notNull(),
+    exit_code: integer(),
+    log_excerpt: text(),
+  },
+  (t) => [unique().on(t.run, t.step_key)],
+);
+export const mergeQueue = pgTable(
+  'merge_queue',
+  {
+    ...row(),
+    ...project(),
+    ...task(),
+    pr: integer().notNull(),
+    position: integer().notNull(),
+    status: queueStatus().notNull(),
+    qa_head_sha: text().notNull(),
+    synced_head_sha: text(),
+    base_sha: text(),
+    verification: uuid()
+      .notNull()
+      .references(() => verifications.id, { onDelete: 'restrict' }),
+    ci_run: uuid().references(() => ciRuns.id, { onDelete: 'restrict' }),
+    tested_tree_sha: text(),
+    actual_merge_sha: text(),
+    actual_tree_sha: text(),
+  },
+  (t) => [
+    uniqueIndex('one_open_merge_task')
+      .on(t.task)
+      .where(sql`${t.status} in ('waiting_verify','queued','checking')`),
+  ],
+);
+export const flakyTests = pgTable(
+  'flaky_tests',
+  {
+    ...row(),
+    ...project(),
+    test_key: text().notNull().unique(),
+    rate: numeric().notNull(),
+    quarantined: boolean().notNull(),
+    task: uuid().references(() => tasks.id, { onDelete: 'restrict' }),
+  },
+  (t) => [check('flaky_rate', sql`${t.rate} between 0 and 1`)],
+);
+export const ciSettings = pgTable(
+  'ci_settings',
+  {
+    ...row(),
+    singleton: singleton(),
+    night_at: text(),
+    retry: integer().notNull(),
+    deploy_url: text(),
+  },
+  (t) => [check('ci_singleton', sql`${t.singleton}`)],
+);
+export const messages = pgTable('messages', {
+  ...row(),
+  ...project(),
+  ...task(),
+  msg_key: text().notNull().unique(),
+  attempt: uuid().references(() => taskAttempts.id, { onDelete: 'restrict' }),
+  dir: text().notNull(),
+  type: text().notNull(),
+  to_agent: agent().notNull(),
+  body: text().notNull(),
+  delivery: messageDelivery().notNull(),
+  pending_next: boolean().notNull(),
+  work_state: text().notNull(),
+  fail_reason: text(),
+  read_at: at('read_at'),
+  draft: boolean().notNull(),
+});
+export const taskHistory = pgTable('task_history', {
+  ...row(),
+  ...project(),
+  at: at('at').notNull().defaultNow(),
+  actor: text().notNull(),
+  task: uuid().references(() => tasks.id, { onDelete: 'restrict' }),
+  kind: text().notNull(),
+  text: text().notNull(),
+  before: jsonb(),
+  after: jsonb(),
+  ref: jsonb(),
+});
+export const idempotencyKeys = pgTable(
+  'idempotency_keys',
+  {
+    ...row(),
+    ...project(),
+    principal: text().notNull(),
+    key: text().notNull(),
+    request_hash: text().notNull(),
+    response: jsonb().notNull(),
+    epoch: integer().notNull(),
+    ...version(),
+  },
+  (t) => [unique().on(t.principal, t.key)],
+);
+export const changeEvents = pgTable('change_events', {
+  ...project(),
+  seq: bigserial({ mode: 'number' }).primaryKey(),
+  topic: text().notNull(),
+  ref: jsonb().notNull(),
+  at: at('at').notNull().defaultNow(),
+});
