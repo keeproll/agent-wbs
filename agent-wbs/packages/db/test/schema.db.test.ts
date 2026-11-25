@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runInNewContext } from 'node:vm';
 import pg from 'pg';
 import { is, Table } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { getTableConfig } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, expect, inject, test } from 'vitest';
+import { prototypeFixture } from './prototype-fixture.ts';
 import {
   createPool,
   recreateTestDatabase,
@@ -86,7 +86,7 @@ async function job(c: pg.PoolClient, p: string) {
   return required(
     (
       await c.query<{ id: string }>(
-        "insert into runner_jobs(project_id,kind,payload,state,epoch) values($1,'attempt','{}','queued',1) returning id",
+        "insert into runner_jobs(project_id,kind,payload,state,epoch,dedup_key) values($1,'attempt','{}','queued',1,gen_random_uuid()::text) returning id",
         [p],
       )
     ).rows[0]?.id,
@@ -138,7 +138,7 @@ test('schema: all planned tables and Drizzle columns match the migrated database
         col.getSQLType().replace('bigserial', 'bigint'),
       );
   }
-  expect(tables).toHaveLength(99);
+  expect(tables).toHaveLength(100);
 });
 
 test('schema: previous migration upgrades with data preserved and repeated migrate is inert', async () => {
@@ -419,13 +419,13 @@ test('schema: holds keep task/conflict locks with unconfirmed slots, require rel
     await c.query("update execution_holds set slot_state='unconfirmed' where id=$1", [h]);
     await rejected(
       c,
-      "insert into execution_holds(project_id,job,task,epoch,agent,slots,heavy,slot_state,lock_state) values($1,$2,$3,1,'Codex',1,false,'reserved','held')",
+      "insert into execution_holds(project_id,job,task,epoch,agent,slots,heavy,host_id,boot_id,fence,slot_state,lock_state) values($1,$2,$3,1,'Codex',1,false,'host','boot',1,'reserved','held')",
       '23505',
       [p, j2, t],
     );
     await rejected(
       c,
-      "insert into execution_holds(project_id,job,task,conflict_group,epoch,agent,slots,heavy,slot_state,lock_state) values($1,$2,$3,'shared',1,'Codex',1,false,'reserved','held')",
+      "insert into execution_holds(project_id,job,task,conflict_group,epoch,agent,slots,heavy,host_id,boot_id,fence,slot_state,lock_state) values($1,$2,$3,'shared',1,'Codex',1,false,'host','boot',1,'reserved','held')",
       '23505',
       [p, j2, t2],
     );
@@ -474,7 +474,7 @@ test('schema: hold handover uses the receiving job row and host change preserves
       (await c.query('select count(*)::int as n from execution_holds where job=$1', [b])).rows[0]
         ?.n,
     ).toBe(1);
-    await c.query("update execution_holds set slot_state='active' where job=$1", [b]);
+    await c.query("update execution_holds set slot_state='active',pgid=123 where job=$1", [b]);
     await c.query(
       "update execution_holds set lock_state='orphaned',slot_state='unconfirmed' where job=$1",
       [b],
@@ -532,7 +532,7 @@ test('schema: app role cannot UPDATE append-only tables, DELETE, TRUNCATE or spo
     await rejected(c, 'delete from task_history', '42501');
     await rejected(c, 'update system_state set epoch=900', '42501');
     expect((await c.query('select lock_epoch(1) as epoch')).rows[0]?.epoch).toBe(1);
-    await rejected(c, 'select lock_epoch(9)', '40001');
+    await rejected(c, 'select lock_epoch(9)', 'AW001');
   }));
 
 test('schema: even the owner cannot overwrite immutable evidence/history, and updated_at increases monotonically', () =>
@@ -593,13 +593,13 @@ test.each([true, false])(
       );
       await c.query("insert into mail_settings(secret_key) values('smtp')");
       await c.query('set local role awbs_app');
-      await rejected(c, "select reset_project(9,'schema-test',$1,'lead')", '40001', [keep]);
+      await rejected(c, "select reset_project(9,'schema-test',$1,'lead')", 'AW001', [keep]);
       await rejected(c, "select reset_project(1,'wrong',$1,'lead')", '22023', [keep]);
       expect(
         (await c.query("select reset_project(1,'schema-test',$1,'lead') as epoch", [keep])).rows[0]
           ?.epoch,
       ).toBe(2);
-      await rejected(c, 'select lock_epoch(1)', '40001');
+      await rejected(c, 'select lock_epoch(1)', 'AW001');
       for (const table of [
         'tasks',
         'task_history',
@@ -625,9 +625,7 @@ test.each([true, false])(
       expect(cmd.epoch).toBe(1);
       expect(cmd.payload.holds).toHaveLength(1);
       expect(cmd.payload.baseCommit).toBe('base-sha');
-      expect((await c.query('select count(*)::int as n from app_settings')).rows[0]?.n).toBe(
-        keep ? 1 : 0,
-      );
+      expect((await c.query('select count(*)::int as n from app_settings')).rows[0]?.n).toBe(1);
       expect((await c.query('select count(*)::int as n from mail_settings')).rows[0]?.n).toBe(
         keep ? 1 : 0,
       );
@@ -701,23 +699,13 @@ test('schema: demo loads exactly P twelve tasks, dependencies, checklists and te
     await readFile(new URL('../seed/demo.json', import.meta.url), 'utf8'),
   ) as {
     mock: {
-      tasks: Record<string, { title: string; status: string; spec?: { ac?: string[] } }>;
+      tasks: Record<string, { title: string; status: string; spec?: { ac?: unknown[] } }>;
       deps: unknown[];
     };
     sub: { defs: unknown[] };
   };
   const prototype = await source('prototype/uiux/Main.dc.html');
-  const originalMock = runInNewContext(
-    prototype.slice(prototype.indexOf('const MOCK ='), prototype.indexOf('/* 데이터 접근 지점')) +
-      '\nMOCK',
-  ) as { tasks: unknown; deps: unknown };
-  const subStart = prototype.indexOf('const SUB_MOCK =');
-  const originalSub = runInNewContext(
-    prototype.slice(subStart, prototype.indexOf('/* CLI별 하위 Agent', subStart)) + '\nSUB_MOCK',
-  ) as { defs: unknown };
-  expect(fixture.mock.tasks).toEqual(originalMock.tasks);
-  expect(fixture.mock.deps).toEqual(originalMock.deps);
-  expect(fixture.sub.defs).toEqual(originalSub.defs);
+  expect(fixture).toEqual(prototypeFixture(prototype));
   await seedDemo(pool, url);
   {
     const { rows } = await pool.query('select task_key,title,status from tasks order by task_key');

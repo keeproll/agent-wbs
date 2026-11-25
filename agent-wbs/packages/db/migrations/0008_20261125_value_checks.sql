@@ -1,0 +1,2 @@
+ALTER TABLE "design_versions" ADD CONSTRAINT "design_versions_compat_value" CHECK ("design_versions"."compat" in ('호환', '깨짐', '대조 안 함'));--> statement-breakpoint
+ALTER TABLE "runner_sessions" ADD CONSTRAINT "runner_sessions_end_reason_value" CHECK ("runner_sessions"."end_reason" in ('reboot', 'power_off', 'error', 'manual', 'unknown'));

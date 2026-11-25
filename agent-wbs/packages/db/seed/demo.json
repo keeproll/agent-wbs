@@ -7,7 +7,83 @@
       "status": "진행 중",
       "start": "2026-10-27",
       "target": "2026-12-18",
-      "lead": "팀장"
+      "lead": "팀장",
+      "registered": true,
+      "phase": "active",
+      "epoch": 1,
+      "regAt": "2026-10-27 09:40",
+      "regBy": "팀장",
+      "instr": "GitHub 저장소의 prototype/uiux/ 와 prototype/docs/ 설계 문서를 분석하고 Task 식별을 시작하자.",
+      "repo": {
+        "url": "https://github.com/verum-sdn/agent-wbs",
+        "owner": "verum-sdn",
+        "name": "agent-wbs",
+        "branch": "main",
+        "base": "a1b2c3d",
+        "clone": "~/agentwbs/repos/agent-wbs"
+      },
+      "inputs": [
+        {
+          "v": 1,
+          "at": "2026-10-27 09:40",
+          "commit": "a1b2c3d",
+          "msg": "prototype v1 · 설계 의도 문서 초안",
+          "proto": "HTML 3 · JS 4 · CSS 2 · 이미지 6",
+          "md": [
+            "prototype/docs/Agent-WBS-설계의도-및-구현가이드.md",
+            "prototype/docs/화면-정의서.md",
+            "prototype/docs/용어-정의.md"
+          ],
+          "changes": [],
+          "note": "최초 등록",
+          "result": "초기 분석 PL-000 → 초기 WBS 11건 팀장 승인 (2026-10-27 10:20)"
+        }
+      ],
+      "inPending": [
+        {
+          "sha": "e7d41b0",
+          "at": "2026-11-05 21:12",
+          "author": "team-lead",
+          "msg": "설계 문서: 보고서 메일 발송 요구사항 추가",
+          "files": [
+            {
+              "p": "prototype/docs/Agent-WBS-설계의도-및-구현가이드.md",
+              "ch": "수정",
+              "d": "+42 −3"
+            }
+          ]
+        },
+        {
+          "sha": "9c03f2e",
+          "at": "2026-11-05 21:40",
+          "author": "team-lead",
+          "msg": "prototype: 설정 화면 탭 구성 · 보고서 메일 탭",
+          "files": [
+            {
+              "p": "prototype/uiux/settings.html",
+              "ch": "수정",
+              "d": "+118 −64"
+            },
+            {
+              "p": "prototype/uiux/js/settings.js",
+              "ch": "수정",
+              "d": "+86 −12"
+            },
+            {
+              "p": "prototype/uiux/mail-preview.html",
+              "ch": "추가",
+              "d": "+74"
+            }
+          ]
+        }
+      ],
+      "inSkipped": [],
+      "boot": {
+        "id": "PL-000",
+        "approvedAt": "2026-10-27 10:20",
+        "n": 11
+      },
+      "inJob": null
     },
     "phases": [
       {
@@ -109,16 +185,25 @@
         "doneCond": "루트에서 `pnpm install && pnpm -r build`가 오류 없이 완료된다.",
         "outputs": [
           {
-            "name": "pnpm-workspace.yaml",
-            "delivered": true
+            "kind": "설정",
+            "required": true,
+            "verify": "",
+            "delivered": true,
+            "name": "pnpm-workspace.yaml"
           },
           {
-            "name": "tsconfig.base.json",
-            "delivered": true
+            "kind": "설정",
+            "required": true,
+            "verify": "",
+            "delivered": true,
+            "name": "tsconfig.base.json"
           },
           {
-            "name": "루트 package.json 스크립트",
-            "delivered": true
+            "kind": "설정",
+            "required": true,
+            "verify": "",
+            "delivered": true,
+            "name": "루트 package.json 스크립트"
           }
         ],
         "spec": {
@@ -161,8 +246,18 @@
             "docs/architecture.md"
           ],
           "ac": [
-            "Given 클린 체크아웃, When `pnpm install && pnpm -r build`, Then 종료 코드 0",
-            "Given `apps/web`에서 `apps/api` 직접 import, When typecheck, Then 오류로 차단된다"
+            {
+              "given": "클린 체크아웃",
+              "when": "`pnpm install && pnpm -r build`",
+              "then": "종료 코드 0",
+              "method": ""
+            },
+            {
+              "given": "`apps/web`에서 `apps/api` 직접 import",
+              "when": "typecheck",
+              "then": "오류로 차단된다",
+              "method": ""
+            }
           ],
           "verify": [
             "Codex가 클린 컨테이너에서 설치·빌드 로그를 Evidence로 첨부"
@@ -196,7 +291,108 @@
             "evidence": "",
             "note": ""
           }
-        ]
+        ],
+        "est": 1.5,
+        "lo": 1,
+        "hi": 2.5,
+        "tok": 180,
+        "conf": "상",
+        "basis": "Monorepo 템플릿 구성 — 유사 작업 이력 기준",
+        "estBy": "Planning Agent (Codex · Claude 합의)",
+        "fixStart": "",
+        "actStart": "2026-10-28 14:02",
+        "actEnd": "2026-10-28 16:40",
+        "design": [
+          {
+            "kind": "DevOps",
+            "ents": [],
+            "b": {
+              "targets": [
+                "로컬 개발 환경 — macOS / Windows(WSL2), Node.js 20 LTS"
+              ],
+              "files": [
+                {
+                  "path": "pnpm-workspace.yaml",
+                  "role": "Workspace 패키지 범위 (apps/*, packages/*)"
+                },
+                {
+                  "path": "tsconfig.base.json",
+                  "role": "공통 컴파일 옵션 · path alias"
+                },
+                {
+                  "path": ".nvmrc",
+                  "role": "Node.js 20 고정"
+                }
+              ],
+              "env": [
+                {
+                  "name": "NODE_ENV",
+                  "example": "development",
+                  "secret": false,
+                  "desc": "실행 모드"
+                },
+                {
+                  "name": "API_PORT",
+                  "example": "3000",
+                  "secret": false,
+                  "desc": "Fastify 포트"
+                },
+                {
+                  "name": "WEB_PORT",
+                  "example": "5173",
+                  "secret": false,
+                  "desc": "Vite dev 포트"
+                }
+              ],
+              "commands": "pnpm install\npnpm -r build\npnpm --filter web dev    # http://localhost:5173\npnpm --filter api dev    # http://localhost:3000",
+              "services": [],
+              "health": [
+                "`GET /health` → 200 `{ \"status\": \"ok\" }`",
+                "`pnpm -r typecheck` 통과"
+              ],
+              "deploy": [
+                "배포 없음 — 로컬 개발 전용"
+              ]
+            }
+          }
+        ],
+        "run": {
+          "model": "claude-sonnet-5-5",
+          "effort": "low",
+          "basis": "구성 작업 기본 낮음 · 정형 작업 → 허용 모델 중 차상위 Sonnet 5.5",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "at": "2026-10-27 10:20",
+          "locked": false
+        },
+        "vrun": {
+          "model": "codex-mini",
+          "effort": "medium",
+          "basis": "검증 기본 보통 — 명령 실행 · 기대 결과 비교 · 정형 작업 → 허용 모델 중 차상위 Codex Mini",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "at": "2026-10-27 10:20",
+          "locked": false
+        },
+        "split": {
+          "basis": "주 영역 DevOps · 구성 하나 · 예상 1.5h · AC 2개 · 테스트 포함",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "exc": []
+        },
+        "subs": {
+          "dev": [],
+          "qa": [
+            {
+              "id": "qa-verifier",
+              "why": "검증 방법 · Evidence 형식"
+            },
+            {
+              "id": "security-reviewer",
+              "why": "입력 검증 · 인증 · 경로 점검 (우선순위 높음)"
+            }
+          ],
+          "by": "Planning Agent (Codex · Claude 합의)"
+        },
+        "cg": "Repo 설정 (package.json · pnpm)",
+        "srcV": 1
       },
       "TASK-0002": {
         "id": "TASK-0002",
@@ -229,12 +425,18 @@
         "doneCond": "`docker compose up -d` 후 API의 `/health/db`가 200을 반환한다.",
         "outputs": [
           {
-            "name": "docker-compose.yml",
-            "delivered": true
+            "kind": "설정",
+            "required": true,
+            "verify": "",
+            "delivered": true,
+            "name": "docker-compose.yml"
           },
           {
-            "name": "apps/api/src/db/pool.ts",
-            "delivered": true
+            "kind": "코드",
+            "required": true,
+            "verify": "",
+            "delivered": true,
+            "name": "apps/api/src/db/pool.ts"
           }
         ],
         "spec": {
@@ -266,7 +468,12 @@
           ],
           "docs": [],
           "ac": [
-            "Given DB 컨테이너 실행, When `GET /health/db`, Then 200과 응답 시간(ms)을 반환한다"
+            {
+              "given": "DB 컨테이너 실행",
+              "when": "`GET /health/db`",
+              "then": "200과 응답 시간(ms)을 반환한다",
+              "method": ""
+            }
           ],
           "verify": [
             "Codex가 컨테이너 중지 상태에서 기동 실패 로그를 함께 확인"
@@ -291,7 +498,114 @@
             "evidence": "logs/health-db.txt",
             "note": "12ms"
           }
-        ]
+        ],
+        "est": 1,
+        "lo": 0.5,
+        "hi": 2,
+        "tok": 120,
+        "conf": "상",
+        "basis": "Compose + 연결 풀 — 표준 구성",
+        "estBy": "Planning Agent (Codex · Claude 합의)",
+        "fixStart": "",
+        "actStart": "2026-10-29 09:10",
+        "actEnd": "2026-10-29 11:05",
+        "design": [
+          {
+            "kind": "DevOps",
+            "ents": [],
+            "b": {
+              "targets": [
+                "로컬 개발 — Docker Compose"
+              ],
+              "files": [
+                {
+                  "path": "docker-compose.yml",
+                  "role": "postgres 서비스 · pgdata 볼륨"
+                },
+                {
+                  "path": ".env.example",
+                  "role": "DATABASE_URL 예시"
+                },
+                {
+                  "path": "apps/api/src/db/pool.ts",
+                  "role": "연결 풀 생성 · 종료 처리"
+                }
+              ],
+              "env": [
+                {
+                  "name": "DATABASE_URL",
+                  "example": "postgres://wbs:wbs@localhost:5432/agent_wbs",
+                  "secret": true,
+                  "desc": "연결 문자열"
+                },
+                {
+                  "name": "DB_POOL_MAX",
+                  "example": "10",
+                  "secret": false,
+                  "desc": "최대 연결 수"
+                }
+              ],
+              "commands": "docker compose up -d postgres\ncurl -s localhost:3000/health/db",
+              "services": [
+                {
+                  "name": "postgres",
+                  "image": "postgres:16-alpine",
+                  "port": "5432",
+                  "note": "볼륨 pgdata"
+                }
+              ],
+              "health": [
+                "`GET /health/db` → 200 `{ \"db\": \"ok\", \"latencyMs\": 12 }`"
+              ],
+              "deploy": [
+                "컨테이너 재시작 시 `pgdata` 볼륨 유지",
+                "연결 실패 시 3회 재시도 후 API 기동 중단"
+              ]
+            }
+          }
+        ],
+        "run": {
+          "model": "claude-opus-5-5",
+          "effort": "high",
+          "basis": "구성 작업 기본 낮음 · 최저선: DB · Migration 작업은 높음 이상 · 추론 깊이 필요 → 허용 모델 중 상위 Opus 5.5",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "at": "2026-10-27 10:20",
+          "locked": false
+        },
+        "vrun": {
+          "model": "codex-large",
+          "effort": "high",
+          "basis": "검증 기본 보통 — 명령 실행 · 기대 결과 비교 · 최저선: DB · Migration 작업은 높음 이상 · 추론 깊이 필요 → 허용 모델 중 상위 Codex Large",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "at": "2026-10-27 10:20",
+          "locked": false
+        },
+        "split": {
+          "basis": "주 영역 DevOps · 구성 하나 · 예상 1h · AC 1개 · 테스트 포함",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "exc": []
+        },
+        "subs": {
+          "dev": [
+            {
+              "id": "db-migrator",
+              "why": "Schema · Migration 변경"
+            }
+          ],
+          "qa": [
+            {
+              "id": "qa-verifier",
+              "why": "검증 방법 · Evidence 형식"
+            },
+            {
+              "id": "security-reviewer",
+              "why": "입력 검증 · 인증 · 경로 점검 (우선순위 높음)"
+            }
+          ],
+          "by": "Planning Agent (Codex · Claude 합의)"
+        },
+        "cg": "DB 연결 · 환경 변수",
+        "srcV": 1
       },
       "TASK-0003": {
         "id": "TASK-0003",
@@ -324,8 +638,11 @@
         "doneCond": "`docs/data-model.md` v1.2가 교차 검토 후 승인된다.",
         "outputs": [
           {
-            "name": "docs/data-model.md",
-            "delivered": true
+            "kind": "문서",
+            "required": true,
+            "verify": "",
+            "delivered": true,
+            "name": "docs/data-model.md"
           }
         ],
         "spec": {
@@ -353,7 +670,12 @@
             "docs/data-model.md"
           ],
           "ac": [
-            "Given 논리 모델, When Claude 교차 검토, Then 이견 0건 또는 조정 완료"
+            {
+              "given": "논리 모델",
+              "when": "Claude 교차 검토",
+              "then": "이견 0건 또는 조정 완료",
+              "method": ""
+            }
           ],
           "verify": [
             "Claude 교차 검토 결과 첨부"
@@ -387,7 +709,51 @@
             "evidence": "reviews/TASK-0003.md",
             "note": "이견 2건 조정"
           }
-        ]
+        ],
+        "est": 3,
+        "lo": 2,
+        "hi": 5,
+        "tok": 420,
+        "conf": "중",
+        "basis": "논리 객체 13종 정의 + 교차 검토 1회",
+        "estBy": "Planning Agent (Codex · Claude 합의)",
+        "fixStart": "",
+        "actStart": "2026-10-29 13:00",
+        "actEnd": "2026-10-30 18:10",
+        "design": [],
+        "run": {
+          "model": "codex-large",
+          "effort": "xhigh",
+          "basis": "분석 작업 기본 높음 · 구조 · 계약 결정 — 후속 Task 영향 큼 (+1) · 추론 깊이 필요 → 허용 모델 중 상위 Codex Large",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "at": "2026-10-27 10:20",
+          "locked": false
+        },
+        "vrun": {
+          "model": "claude-opus-5-5",
+          "effort": "xhigh",
+          "basis": "검증 기본 보통 — 명령 실행 · 기대 결과 비교 · 판정 기준 해석 필요 (+1) · 최저선: DB · Migration 작업은 높음 이상 · 최저선: 검증 Effort ≥ 개발 Effort (매우 높음) · 추론 깊이 필요 → 허용 모델 중 상위 Opus 5.5",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "at": "2026-10-27 10:20",
+          "locked": false
+        },
+        "split": {
+          "basis": "주 영역 Architecture · 분석 하나 · 예상 3h · AC 1개 · 테스트 포함",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "exc": []
+        },
+        "subs": {
+          "dev": [],
+          "qa": [
+            {
+              "id": "code-reviewer",
+              "why": "명세 · 제외 범위 대조 검토"
+            }
+          ],
+          "by": "Planning Agent (Codex · Claude 합의)"
+        },
+        "cg": "",
+        "srcV": 1
       },
       "TASK-0004": {
         "id": "TASK-0004",
@@ -421,32 +787,32 @@
         "doneCond": "빈 DB에 migrate → seed가 성공하고, 제약 위반 SQL 3종이 모두 거부된다.",
         "outputs": [
           {
-            "name": "packages/db/src/schema/*.ts",
             "kind": "코드",
             "required": true,
+            "verify": "tsc 통과, 테이블 4종 export",
             "delivered": true,
-            "verify": "tsc 통과, 테이블 4종 export"
+            "name": "packages/db/src/schema/*.ts"
           },
           {
-            "name": "drizzle/0001_core_wbs.sql",
             "kind": "Migration",
             "required": true,
+            "verify": "빈 DB에서 migrate 성공",
             "delivered": true,
-            "verify": "빈 DB에서 migrate 성공"
+            "name": "drizzle/0001_core_wbs.sql"
           },
           {
-            "name": "packages/db/src/seed/self-dev.ts",
             "kind": "코드",
             "required": true,
+            "verify": "Seed 후 tasks 12건",
             "delivered": false,
-            "verify": "Seed 후 tasks 12건"
+            "name": "packages/db/src/seed/self-dev.ts"
           },
           {
-            "name": "docs/erd.png",
             "kind": "문서",
             "required": false,
+            "verify": "Schema와 일치",
             "delivered": false,
-            "verify": "Schema와 일치"
+            "name": "docs/erd.png"
           }
         ],
         "spec": {
@@ -498,9 +864,24 @@
             "Drizzle ORM — PostgreSQL column types"
           ],
           "ac": [
-            "Given 빈 DB, When `pnpm db:migrate`, Then 4개 테이블과 인덱스가 오류 없이 생성된다",
-            "Given Seed 실행 후, When 같은 `task_key`로 INSERT, Then UNIQUE 위반으로 거부된다",
-            "Given 의존성 INSERT, When `pred_task_id = succ_task_id`, Then CHECK 위반으로 거부된다"
+            {
+              "given": "빈 DB",
+              "when": "`pnpm db:migrate`",
+              "then": "4개 테이블과 인덱스가 오류 없이 생성된다",
+              "method": "SQL 실행 로그"
+            },
+            {
+              "given": "Seed 실행 후",
+              "when": "같은 `task_key`로 INSERT",
+              "then": "UNIQUE 위반으로 거부된다",
+              "method": "SQL 실행 로그"
+            },
+            {
+              "given": "의존성 INSERT",
+              "when": "`pred_task_id = succ_task_id`",
+              "then": "CHECK 위반으로 거부된다",
+              "method": "SQL 실행 로그"
+            }
           ],
           "verify": [
             "Codex가 빈 DB 컨테이너에서 migrate → seed → 제약 위반 SQL 3종을 실행하고 결과 로그를 Evidence로 첨부"
@@ -552,7 +933,556 @@
             "evidence": "",
             "note": ""
           }
-        ]
+        ],
+        "est": 4,
+        "lo": 3,
+        "hi": 6,
+        "tok": 560,
+        "conf": "중",
+        "basis": "테이블 4종 + Migration + Seed, QA 1회 가정",
+        "estBy": "Planning Agent (Codex · Claude 합의)",
+        "fixStart": "",
+        "actStart": "2026-11-03 15:10",
+        "actEnd": "",
+        "design": [
+          {
+            "kind": "DB",
+            "ents": [
+              {
+                "f": {
+                  "name": "wbs_nodes",
+                  "change": "신규",
+                  "desc": "계층 노드 — Phase · Work Package"
+                },
+                "b": {
+                  "columns": [
+                    {
+                      "name": "id",
+                      "type": "uuid",
+                      "nullable": false,
+                      "pk": true,
+                      "fk": "",
+                      "unique": false,
+                      "def": "gen_random_uuid()",
+                      "desc": "내부 식별자"
+                    },
+                    {
+                      "name": "project_id",
+                      "type": "uuid",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "",
+                      "desc": "프로젝트 (projects 테이블은 Phase D)"
+                    },
+                    {
+                      "name": "parent_id",
+                      "type": "uuid",
+                      "nullable": true,
+                      "pk": false,
+                      "fk": "wbs_nodes.id",
+                      "unique": false,
+                      "def": "",
+                      "desc": "상위 노드 — Phase는 null"
+                    },
+                    {
+                      "name": "kind",
+                      "type": "wbs_node_kind_enum",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "",
+                      "desc": "phase | work_package"
+                    },
+                    {
+                      "name": "title",
+                      "type": "varchar(200)",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "",
+                      "desc": ""
+                    },
+                    {
+                      "name": "sort_order",
+                      "type": "integer",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "0",
+                      "desc": "형제 간 순서 — WBS 번호 계산 기준"
+                    },
+                    {
+                      "name": "created_at",
+                      "type": "timestamptz",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "now()",
+                      "desc": ""
+                    },
+                    {
+                      "name": "updated_at",
+                      "type": "timestamptz",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "now()",
+                      "desc": ""
+                    }
+                  ],
+                  "indexes": [
+                    {
+                      "name": "wbs_nodes_parent_idx",
+                      "cols": "parent_id, sort_order",
+                      "kind": "BTREE"
+                    }
+                  ]
+                }
+              },
+              {
+                "f": {
+                  "name": "tasks",
+                  "change": "신규",
+                  "desc": "Task 본문 — Lifecycle 상태만 보관"
+                },
+                "b": {
+                  "columns": [
+                    {
+                      "name": "id",
+                      "type": "uuid",
+                      "nullable": false,
+                      "pk": true,
+                      "fk": "",
+                      "unique": false,
+                      "def": "gen_random_uuid()",
+                      "desc": "내부 식별자"
+                    },
+                    {
+                      "name": "task_key",
+                      "type": "varchar(16)",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "",
+                      "unique": true,
+                      "def": "",
+                      "desc": "표시용 ID (TASK-0024)"
+                    },
+                    {
+                      "name": "wbs_node_id",
+                      "type": "uuid",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "wbs_nodes.id",
+                      "unique": false,
+                      "def": "",
+                      "desc": "상위 Work Package"
+                    },
+                    {
+                      "name": "wbs_path",
+                      "type": "varchar(32)",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "",
+                      "desc": "계층 번호 1.2.3 — 재계산 가능"
+                    },
+                    {
+                      "name": "title",
+                      "type": "varchar(200)",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "",
+                      "desc": ""
+                    },
+                    {
+                      "name": "work_type",
+                      "type": "work_type_enum",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "",
+                      "desc": "Analysis … Integration"
+                    },
+                    {
+                      "name": "primary_domain",
+                      "type": "domain_enum",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "",
+                      "desc": "주 기술 영역"
+                    },
+                    {
+                      "name": "related_domains",
+                      "type": "domain_enum[]",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "'{}'",
+                      "desc": "관련 기술 영역"
+                    },
+                    {
+                      "name": "lifecycle_status",
+                      "type": "task_lifecycle_enum",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "'planning'",
+                      "desc": "Lifecycle 상태만"
+                    },
+                    {
+                      "name": "priority",
+                      "type": "smallint",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "2",
+                      "desc": "0 긴급 … 3 낮음"
+                    },
+                    {
+                      "name": "assignee_agent",
+                      "type": "agent_enum",
+                      "nullable": true,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "",
+                      "desc": "담당 Agent"
+                    },
+                    {
+                      "name": "verifier_agent",
+                      "type": "agent_enum",
+                      "nullable": true,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "",
+                      "desc": "검증 Agent"
+                    },
+                    {
+                      "name": "created_at",
+                      "type": "timestamptz",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "now()",
+                      "desc": ""
+                    },
+                    {
+                      "name": "updated_at",
+                      "type": "timestamptz",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "now()",
+                      "desc": ""
+                    },
+                    {
+                      "name": "deleted_at",
+                      "type": "timestamptz",
+                      "nullable": true,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "",
+                      "desc": "soft delete"
+                    }
+                  ],
+                  "indexes": [
+                    {
+                      "name": "tasks_task_key_uq",
+                      "cols": "task_key",
+                      "kind": "UNIQUE"
+                    },
+                    {
+                      "name": "tasks_wbs_node_idx",
+                      "cols": "wbs_node_id",
+                      "kind": "BTREE"
+                    }
+                  ]
+                }
+              },
+              {
+                "f": {
+                  "name": "task_dependencies",
+                  "change": "신규",
+                  "desc": "선행 관계 — 자기 참조는 CHECK, 순환은 Service에서 차단"
+                },
+                "b": {
+                  "columns": [
+                    {
+                      "name": "id",
+                      "type": "uuid",
+                      "nullable": false,
+                      "pk": true,
+                      "fk": "",
+                      "unique": false,
+                      "def": "gen_random_uuid()",
+                      "desc": ""
+                    },
+                    {
+                      "name": "pred_task_id",
+                      "type": "uuid",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "tasks.id",
+                      "unique": false,
+                      "def": "",
+                      "desc": "선행 Task"
+                    },
+                    {
+                      "name": "succ_task_id",
+                      "type": "uuid",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "tasks.id",
+                      "unique": false,
+                      "def": "",
+                      "desc": "후속 Task"
+                    },
+                    {
+                      "name": "dep_type",
+                      "type": "dep_type_enum",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "'FS'",
+                      "desc": "FS 완료→시작 / SS 시작→시작"
+                    },
+                    {
+                      "name": "created_at",
+                      "type": "timestamptz",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "now()",
+                      "desc": ""
+                    }
+                  ],
+                  "indexes": [
+                    {
+                      "name": "task_dep_pair_uq",
+                      "cols": "pred_task_id, succ_task_id",
+                      "kind": "UNIQUE"
+                    },
+                    {
+                      "name": "task_dep_succ_idx",
+                      "cols": "succ_task_id",
+                      "kind": "BTREE"
+                    }
+                  ]
+                }
+              },
+              {
+                "f": {
+                  "name": "checklist_items",
+                  "change": "신규",
+                  "desc": "Task별 체크리스트 항목"
+                },
+                "b": {
+                  "columns": [
+                    {
+                      "name": "id",
+                      "type": "uuid",
+                      "nullable": false,
+                      "pk": true,
+                      "fk": "",
+                      "unique": false,
+                      "def": "gen_random_uuid()",
+                      "desc": ""
+                    },
+                    {
+                      "name": "task_id",
+                      "type": "uuid",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "tasks.id",
+                      "unique": false,
+                      "def": "",
+                      "desc": "소속 Task"
+                    },
+                    {
+                      "name": "item_key",
+                      "type": "varchar(24)",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "",
+                      "desc": "CL-0004-1"
+                    },
+                    {
+                      "name": "content",
+                      "type": "text",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "",
+                      "desc": "체크 내용"
+                    },
+                    {
+                      "name": "required",
+                      "type": "boolean",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "true",
+                      "desc": "필수 여부"
+                    },
+                    {
+                      "name": "done",
+                      "type": "boolean",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "false",
+                      "desc": "완료 여부"
+                    },
+                    {
+                      "name": "verify_method",
+                      "type": "text",
+                      "nullable": true,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "",
+                      "desc": "검증 방법"
+                    },
+                    {
+                      "name": "note",
+                      "type": "text",
+                      "nullable": true,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "",
+                      "desc": "결과 및 비고"
+                    },
+                    {
+                      "name": "sort_order",
+                      "type": "integer",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "0",
+                      "desc": ""
+                    },
+                    {
+                      "name": "created_at",
+                      "type": "timestamptz",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "now()",
+                      "desc": ""
+                    },
+                    {
+                      "name": "updated_at",
+                      "type": "timestamptz",
+                      "nullable": false,
+                      "pk": false,
+                      "fk": "",
+                      "unique": false,
+                      "def": "now()",
+                      "desc": ""
+                    }
+                  ],
+                  "indexes": [
+                    {
+                      "name": "checklist_key_uq",
+                      "cols": "task_id, item_key",
+                      "kind": "UNIQUE"
+                    },
+                    {
+                      "name": "checklist_task_idx",
+                      "cols": "task_id, sort_order",
+                      "kind": "BTREE"
+                    }
+                  ]
+                }
+              }
+            ],
+            "b": {
+              "migration": [
+                "`drizzle-kit generate`로 `0001_core_wbs.sql` 생성 — 생성된 SQL 수동 수정 금지",
+                "Enum 6종(work_type, domain, task_lifecycle, dep_type, agent, wbs_node_kind)을 테이블보다 먼저 생성",
+                "롤백: `0001_core_wbs.down.sql`로 역순 DROP"
+              ],
+              "seed": [
+                "본 프로젝트 Phase 3 · Work Package 6 · Task 12 · 의존성 15건",
+                "`task_key` 기준 upsert — 재실행해도 중복 없음"
+              ],
+              "integrity": [
+                "`CHECK (pred_task_id <> succ_task_id)` — 자기 참조 차단",
+                "FK는 `ON DELETE RESTRICT` — 참조 중인 Task 물리 삭제 불가",
+                "순환 의존성은 Service 계층 검증 (TASK-0006)",
+                "soft delete된 Task는 목록 조회에서 기본 제외"
+              ]
+            }
+          }
+        ],
+        "run": {
+          "model": "claude-opus-5-5",
+          "effort": "high",
+          "basis": "설계 작업 기본 높음 · 추론 깊이 필요 → 허용 모델 중 상위 Opus 5.5",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "at": "2026-10-27 10:20",
+          "locked": false
+        },
+        "vrun": {
+          "model": "codex-large",
+          "effort": "high",
+          "basis": "검증 기본 보통 — 명령 실행 · 기대 결과 비교 · 판정 기준 해석 필요 (+1) · 추론 깊이 필요 → 허용 모델 중 상위 Codex Large",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "at": "2026-10-27 10:20",
+          "locked": false
+        },
+        "split": {
+          "basis": "주 영역 DB · 설계 하나 · 예상 4h · AC 3개 · 테스트 포함",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "exc": []
+        },
+        "subs": {
+          "dev": [
+            {
+              "id": "db-migrator",
+              "why": "Schema · Migration 변경"
+            }
+          ],
+          "qa": [
+            {
+              "id": "qa-verifier",
+              "why": "검증 방법 · Evidence 형식"
+            }
+          ],
+          "by": "Planning Agent (Codex · Claude 합의)"
+        },
+        "cg": "DB Schema · Migration",
+        "srcV": 1
       },
       "TASK-0005": {
         "id": "TASK-0005",
@@ -585,32 +1515,32 @@
         "doneCond": "통합 테스트 전 항목 통과, Codex QA PASS.",
         "outputs": [
           {
-            "name": "apps/api/src/routes/tasks.ts",
             "kind": "코드",
             "required": true,
+            "verify": "Endpoint 5종 등록",
             "delivered": false,
-            "verify": "Endpoint 5종 등록"
+            "name": "apps/api/src/routes/tasks.ts"
           },
           {
-            "name": "apps/api/src/services/task.service.ts",
             "kind": "코드",
             "required": true,
+            "verify": "업무 규칙 단위 테스트 통과",
             "delivered": false,
-            "verify": "업무 규칙 단위 테스트 통과"
+            "name": "apps/api/src/services/task.service.ts"
           },
           {
-            "name": "apps/api/test/tasks.int.test.ts",
             "kind": "테스트",
             "required": true,
+            "verify": "통합 테스트 전 항목 PASS",
             "delivered": false,
-            "verify": "통합 테스트 전 항목 PASS"
+            "name": "apps/api/test/tasks.int.test.ts"
           },
           {
-            "name": "docs/api/tasks.md",
             "kind": "문서",
             "required": false,
+            "verify": "Endpoint 표와 일치",
             "delivered": false,
-            "verify": "Endpoint 표와 일치"
+            "name": "docs/api/tasks.md"
           }
         ],
         "spec": {
@@ -658,9 +1588,24 @@
             "docs/api/tasks.md"
           ],
           "ac": [
-            "Given 유효한 생성 요청, When `POST /api/projects/:projectId/tasks`, Then 201과 새 `taskKey`를 반환한다",
-            "Given 후속 Task가 있는 Task, When DELETE, Then 409 `TASK_HAS_SUCCESSORS`",
-            "Given PATCH로 `title` 변경, When 이력 조회, Then 이전/이후 값이 기록되어 있다"
+            {
+              "given": "유효한 생성 요청",
+              "when": "`POST /api/projects/:projectId/tasks`",
+              "then": "201과 새 `taskKey`를 반환한다",
+              "method": "통합 테스트"
+            },
+            {
+              "given": "후속 Task가 있는 Task",
+              "when": "DELETE",
+              "then": "409 `TASK_HAS_SUCCESSORS`",
+              "method": "통합 테스트"
+            },
+            {
+              "given": "PATCH로 `title` 변경",
+              "when": "이력 조회",
+              "then": "이전/이후 값이 기록되어 있다",
+              "method": "통합 테스트"
+            }
           ],
           "verify": [
             "Codex: `pnpm --filter api test -- tasks` 실행 결과와 커버리지 리포트 첨부"
@@ -712,7 +1657,229 @@
             "evidence": "",
             "note": ""
           }
-        ]
+        ],
+        "est": 6,
+        "lo": 4,
+        "hi": 10,
+        "tok": 900,
+        "conf": "중",
+        "basis": "Endpoint 5종 + 통합 테스트, 재작업 1회 가능성",
+        "estBy": "Planning Agent (Codex · Claude 합의)",
+        "fixStart": "",
+        "actStart": "2026-11-03 19:58",
+        "actEnd": "",
+        "design": [
+          {
+            "kind": "API",
+            "ents": [
+              {
+                "f": {
+                  "method": "GET",
+                  "path": "/api/projects/:projectId/tasks",
+                  "desc": "WBS 트리용 Task 목록",
+                  "auth": "팀장 세션"
+                },
+                "b": {
+                  "request": "Query\n  status?: TaskLifecycle\n  q?: string                 // taskKey 또는 제목\n  includeDeleted?: boolean   // 기본 false",
+                  "response": "200 {\n  \"nodes\": WbsNode[],\n  \"tasks\": TaskSummary[]     // wbsPath는 서버 계산\n}",
+                  "validation": [
+                    "`includeDeleted`는 true | false 문자열만 허용"
+                  ],
+                  "errors": [
+                    {
+                      "code": "PROJECT_NOT_FOUND",
+                      "http": "404",
+                      "cond": "projectId 없음"
+                    }
+                  ],
+                  "tables": [
+                    "wbs_nodes",
+                    "tasks"
+                  ]
+                }
+              },
+              {
+                "f": {
+                  "method": "GET",
+                  "path": "/api/tasks/:taskKey",
+                  "desc": "Task 단건 상세",
+                  "auth": "팀장 세션"
+                },
+                "b": {
+                  "request": "",
+                  "response": "200 TaskDetail",
+                  "validation": [],
+                  "errors": [
+                    {
+                      "code": "TASK_NOT_FOUND",
+                      "http": "404",
+                      "cond": "taskKey 없음 또는 삭제됨"
+                    }
+                  ],
+                  "tables": [
+                    "tasks",
+                    "checklist_items",
+                    "task_dependencies"
+                  ]
+                }
+              },
+              {
+                "f": {
+                  "method": "POST",
+                  "path": "/api/projects/:projectId/tasks",
+                  "desc": "Task 생성",
+                  "auth": "팀장 세션"
+                },
+                "b": {
+                  "request": "{\n  \"title\": string,            // 1..200\n  \"wbsNodeId\": uuid,          // 상위 Work Package\n  \"workType\": WorkType,\n  \"primaryDomain\": Domain,\n  \"relatedDomains\"?: Domain[],\n  \"priority\"?: 0 | 1 | 2 | 3,\n  \"assigneeAgent\"?: \"Claude\" | \"Codex\",\n  \"verifierAgent\"?: \"Claude\" | \"Codex\"\n}",
+                  "response": "201 {\n  \"id\": \"6f1c…\",\n  \"taskKey\": \"TASK-0013\",\n  \"wbsPath\": \"2.1.3\",\n  \"lifecycleStatus\": \"planning\"\n}",
+                  "validation": [
+                    "`title` 1~200자",
+                    "`workType` · `primaryDomain`은 Enum 값만",
+                    "`relatedDomains`에 `primaryDomain` 중복 불가"
+                  ],
+                  "errors": [
+                    {
+                      "code": "VALIDATION_FAILED",
+                      "http": "400",
+                      "cond": "필드 검증 실패 — errors[] 포함"
+                    },
+                    {
+                      "code": "WBS_NODE_NOT_FOUND",
+                      "http": "404",
+                      "cond": "wbsNodeId가 Work Package가 아님"
+                    }
+                  ],
+                  "tables": [
+                    "tasks"
+                  ]
+                }
+              },
+              {
+                "f": {
+                  "method": "PATCH",
+                  "path": "/api/tasks/:taskKey",
+                  "desc": "부분 수정 + 변경 이력 기록",
+                  "auth": "팀장 세션"
+                },
+                "b": {
+                  "request": "{\n  \"updatedAt\": string,        // 동시 수정 검사\n  \"title\"?: string,\n  \"priority\"?: 0 | 1 | 2 | 3,\n  \"assigneeAgent\"?: Agent,\n  \"verifierAgent\"?: Agent\n}",
+                  "response": "200 {\n  \"task\": TaskDetail,\n  \"changes\": [{ \"field\": \"title\", \"before\": \"…\", \"after\": \"…\" }]\n}",
+                  "validation": [
+                    "변경 필드 1개 이상",
+                    "`updatedAt` 필수"
+                  ],
+                  "errors": [
+                    {
+                      "code": "VALIDATION_FAILED",
+                      "http": "400",
+                      "cond": "필드 검증 실패"
+                    },
+                    {
+                      "code": "TASK_NOT_FOUND",
+                      "http": "404",
+                      "cond": "taskKey 없음"
+                    },
+                    {
+                      "code": "VERSION_CONFLICT",
+                      "http": "409",
+                      "cond": "updatedAt 불일치"
+                    }
+                  ],
+                  "tables": [
+                    "tasks",
+                    "task_history"
+                  ]
+                }
+              },
+              {
+                "f": {
+                  "method": "DELETE",
+                  "path": "/api/tasks/:taskKey",
+                  "desc": "soft delete — 후속 Task가 있으면 거부",
+                  "auth": "팀장 세션"
+                },
+                "b": {
+                  "request": "",
+                  "response": "204",
+                  "validation": [],
+                  "errors": [
+                    {
+                      "code": "TASK_HAS_SUCCESSORS",
+                      "http": "409",
+                      "cond": "후속 Task가 있는 삭제 요청"
+                    },
+                    {
+                      "code": "TASK_NOT_FOUND",
+                      "http": "404",
+                      "cond": "taskKey 없음"
+                    }
+                  ],
+                  "tables": [
+                    "tasks",
+                    "task_dependencies"
+                  ]
+                }
+              }
+            ],
+            "b": {
+              "resp": [
+                "Route: 입력 검증, DTO 변환, 상태 코드 결정",
+                "Service: 업무 규칙 (삭제 가능 여부, 이력 생성)",
+                "Repository: Drizzle 쿼리만 — 업무 규칙 금지"
+              ]
+            }
+          }
+        ],
+        "run": {
+          "model": "claude-opus-5-5",
+          "effort": "high",
+          "basis": "구현 작업 기본 보통 · 업무 규칙 · 오류 처리 구현 (+1) · 추론 깊이 필요 → 허용 모델 중 상위 Opus 5.5",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "at": "2026-10-27 10:20",
+          "locked": false
+        },
+        "vrun": {
+          "model": "codex-large",
+          "effort": "high",
+          "basis": "검증 기본 보통 — 명령 실행 · 기대 결과 비교 · 최저선: 검증 Effort ≥ 개발 Effort (높음) · 추론 깊이 필요 → 허용 모델 중 상위 Codex Large",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "at": "2026-10-27 10:20",
+          "locked": false
+        },
+        "split": {
+          "basis": "주 영역 BE · 구현 하나 · 예상 6h · AC 3개 · 테스트 포함",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "exc": [
+            {
+              "rule": "size",
+              "why": "이미 실행 중 — 남은 범위(오류 응답 정리)가 작아 분할하지 않음",
+              "by": "Codex · Claude 합의",
+              "at": "2026-11-03 20:10"
+            }
+          ]
+        },
+        "subs": {
+          "dev": [
+            {
+              "id": "be-implementer",
+              "why": "API · 서비스 구현"
+            }
+          ],
+          "qa": [
+            {
+              "id": "qa-verifier",
+              "why": "검증 방법 · Evidence 형식"
+            },
+            {
+              "id": "security-reviewer",
+              "why": "입력 검증 · 인증 · 경로 점검 (우선순위 높음)"
+            }
+          ],
+          "by": "Planning Agent (Codex · Claude 합의)"
+        },
+        "cg": "BE Task API (apps/api/src/tasks)",
+        "srcV": 1
       },
       "TASK-0006": {
         "id": "TASK-0006",
@@ -742,8 +1909,11 @@
         "doneCond": "순환 시나리오 테스트 통과, Codex QA PASS.",
         "outputs": [
           {
-            "name": "apps/api/src/services/dependency.service.ts",
-            "delivered": false
+            "kind": "코드",
+            "required": true,
+            "verify": "",
+            "delivered": false,
+            "name": "apps/api/src/services/dependency.service.ts"
           }
         ],
         "spec": {
@@ -765,7 +1935,12 @@
           ],
           "docs": [],
           "ac": [
-            "Given A→B 관계, When B를 A의 선행으로 추가, Then 409와 경로 A → B → A"
+            {
+              "given": "A→B 관계",
+              "when": "B를 A의 선행으로 추가",
+              "then": "409와 경로 A → B → A",
+              "method": ""
+            }
           ],
           "verify": []
         },
@@ -797,7 +1972,131 @@
             "evidence": "",
             "note": ""
           }
-        ]
+        ],
+        "est": 3,
+        "lo": 2,
+        "hi": 5,
+        "tok": 380,
+        "conf": "중",
+        "basis": "DFS 순환 검증 + 오류 코드 3종",
+        "estBy": "Planning Agent (Codex · Claude 합의)",
+        "fixStart": "",
+        "actStart": "",
+        "actEnd": "",
+        "design": [
+          {
+            "kind": "API",
+            "ents": [
+              {
+                "f": {
+                  "method": "POST",
+                  "path": "/api/tasks/:taskKey/dependencies",
+                  "desc": "선행 Task 추가 — 자기 참조 · 중복 · 순환 검증",
+                  "auth": "팀장 세션"
+                },
+                "b": {
+                  "request": "{\n  \"predTaskKey\": string,\n  \"depType\": \"FS\" | \"SS\"\n}",
+                  "response": "201 {\n  \"dependency\": { \"pred\": \"TASK-0005\", \"succ\": \"TASK-0006\", \"type\": \"FS\" },\n  \"blocked\": boolean\n}",
+                  "validation": [
+                    "`depType`은 FS | SS"
+                  ],
+                  "errors": [
+                    {
+                      "code": "DEPENDENCY_SELF",
+                      "http": "400",
+                      "cond": "자기 자신을 선행으로 지정"
+                    },
+                    {
+                      "code": "DEPENDENCY_DUPLICATE",
+                      "http": "409",
+                      "cond": "이미 등록된 관계"
+                    },
+                    {
+                      "code": "DEPENDENCY_CYCLE",
+                      "http": "409",
+                      "cond": "순환 발생 — path[] 포함"
+                    }
+                  ],
+                  "tables": [
+                    "task_dependencies",
+                    "tasks"
+                  ]
+                }
+              },
+              {
+                "f": {
+                  "method": "DELETE",
+                  "path": "/api/dependencies/:dependencyId",
+                  "desc": "선행 관계 삭제",
+                  "auth": "팀장 세션"
+                },
+                "b": {
+                  "request": "",
+                  "response": "204",
+                  "validation": [],
+                  "errors": [
+                    {
+                      "code": "DEPENDENCY_NOT_FOUND",
+                      "http": "404",
+                      "cond": "관계 없음"
+                    }
+                  ],
+                  "tables": [
+                    "task_dependencies"
+                  ]
+                }
+              }
+            ],
+            "b": {
+              "resp": [
+                "Service: 선행 방향 DFS로 순환 검사, FS/SS 기준 차단 여부 계산",
+                "Repository: 관계 INSERT/DELETE만 담당"
+              ]
+            }
+          }
+        ],
+        "run": {
+          "model": "claude-opus-5-5",
+          "effort": "high",
+          "basis": "구현 작업 기본 보통 · 업무 규칙 · 오류 처리 구현 (+1) · 추론 깊이 필요 → 허용 모델 중 상위 Opus 5.5",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "at": "2026-10-27 10:20",
+          "locked": false
+        },
+        "vrun": {
+          "model": "codex-large",
+          "effort": "high",
+          "basis": "검증 기본 보통 — 명령 실행 · 기대 결과 비교 · 최저선: 검증 Effort ≥ 개발 Effort (높음) · 추론 깊이 필요 → 허용 모델 중 상위 Codex Large",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "at": "2026-10-27 10:20",
+          "locked": false
+        },
+        "split": {
+          "basis": "주 영역 BE · 구현 하나 · 예상 3h · AC 1개 · 테스트 포함",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "exc": []
+        },
+        "subs": {
+          "dev": [
+            {
+              "id": "be-implementer",
+              "why": "API · 서비스 구현"
+            }
+          ],
+          "qa": [
+            {
+              "id": "qa-verifier",
+              "why": "검증 방법 · Evidence 형식"
+            },
+            {
+              "id": "security-reviewer",
+              "why": "입력 검증 · 인증 · 경로 점검 (우선순위 높음)"
+            }
+          ],
+          "by": "Planning Agent (Codex · Claude 합의)"
+        },
+        "cg": "FE WBS 화면 (apps/web/src/wbs)",
+        "srcV": 1
       },
       "TASK-0007": {
         "id": "TASK-0007",
@@ -828,25 +2127,25 @@
         "doneCond": "Codex QA의 기능 · 성능 케이스 전부 PASS.",
         "outputs": [
           {
-            "name": "apps/web/src/features/wbs/WbsTreeTable.tsx",
             "kind": "코드",
             "required": true,
+            "verify": "행 가상화 적용",
             "delivered": true,
-            "verify": "행 가상화 적용"
+            "name": "apps/web/src/features/wbs/WbsTreeTable.tsx"
           },
           {
-            "name": "apps/web/src/features/wbs/useWbsTree.ts",
             "kind": "코드",
             "required": true,
+            "verify": "withAncestors 적용",
             "delivered": true,
-            "verify": "withAncestors 적용"
+            "name": "apps/web/src/features/wbs/useWbsTree.ts"
           },
           {
-            "name": "apps/web/test/wbs-tree.test.tsx",
             "kind": "테스트",
             "required": true,
+            "verify": "14/14 PASS, 성능 100ms 이내",
             "delivered": false,
-            "verify": "14/14 PASS, 성능 100ms 이내"
+            "name": "apps/web/test/wbs-tree.test.tsx"
           }
         ],
         "spec": {
@@ -883,8 +2182,18 @@
           ],
           "docs": [],
           "ac": [
-            "Given 필터 「상태=재작업 필요」, When 적용, Then 매칭 Task와 상위 노드만 표시된다",
-            "Given 1,000행, When 모두 펼치기, Then 100ms 이내 렌더"
+            {
+              "given": "필터 「상태=재작업 필요」",
+              "when": "적용",
+              "then": "매칭 Task와 상위 노드만 표시된다",
+              "method": ""
+            },
+            {
+              "given": "1,000행",
+              "when": "모두 펼치기",
+              "then": "100ms 이내 렌더",
+              "method": ""
+            }
           ],
           "verify": [
             "Codex: `pnpm --filter web test -- wbs-tree` + 성능 측정 스크립트"
@@ -936,7 +2245,131 @@
             "evidence": "",
             "note": ""
           }
-        ]
+        ],
+        "est": 5,
+        "lo": 3.5,
+        "hi": 9,
+        "tok": 760,
+        "conf": "하",
+        "basis": "가상 스크롤 성능 요구 — 재작업 위험 높음",
+        "estBy": "Planning Agent (Codex · Claude 합의)",
+        "fixStart": "",
+        "actStart": "2026-11-01 10:02",
+        "actEnd": "",
+        "design": [
+          {
+            "kind": "FE",
+            "ents": [],
+            "b": {
+              "screens": [
+                {
+                  "name": "WBS",
+                  "route": "/projects/:projectId/wbs",
+                  "purpose": "계층형 Task 목록 · 검색 · 필터 · 상세 패널"
+                }
+              ],
+              "components": [
+                {
+                  "name": "WbsTreeTable",
+                  "path": "features/wbs/WbsTreeTable.tsx",
+                  "role": "행 렌더 · 가상 스크롤"
+                },
+                {
+                  "name": "WbsFilterBar",
+                  "path": "features/wbs/WbsFilterBar.tsx",
+                  "role": "검색 · 필터 9종 · 초기화"
+                },
+                {
+                  "name": "StatusBadge",
+                  "path": "shared/ui/StatusBadge.tsx",
+                  "role": "상태 색상 + 텍스트"
+                },
+                {
+                  "name": "useWbsTree",
+                  "path": "features/wbs/useWbsTree.ts",
+                  "role": "트리 평탄화 · 필터 · 정렬"
+                }
+              ],
+              "interactions": [
+                "행 클릭 → Task 상세 패널",
+                "캐럿 클릭 → 하위 펼치기/접기 (행 선택과 분리)",
+                "필터 변경 → URL query에 반영"
+              ],
+              "inputs": [
+                {
+                  "field": "검색어",
+                  "rule": "Task ID 또는 제목 부분 일치, 대소문자 무시",
+                  "req": false
+                },
+                {
+                  "field": "필터 9종",
+                  "rule": "URL query와 동기화, 초기화 시 모두 제거",
+                  "req": false
+                }
+              ],
+              "apis": [
+                "`GET /api/projects/:projectId/tasks` (TASK-0005)",
+                "필터는 클라이언트에서 처리 — 1,000행 기준"
+              ],
+              "states": [
+                {
+                  "state": "Loading",
+                  "display": "Skeleton 10행"
+                },
+                {
+                  "state": "Empty",
+                  "display": "「조건에 맞는 Task가 없습니다」 + 필터 초기화"
+                },
+                {
+                  "state": "Error",
+                  "display": "오류 메시지 + 재시도 버튼"
+                }
+              ],
+              "navigation": [
+                "행 클릭 → 우측 상세 패널, 전체 보기 시 `/tasks/:taskKey`",
+                "선행/후속 Task로 이동 후 「돌아가기」로 복귀"
+              ]
+            }
+          }
+        ],
+        "run": {
+          "model": "claude-opus-5-5",
+          "effort": "high",
+          "basis": "구현 작업 기본 보통 · 추정 신뢰도 하 — 불확실성 큼 (+1) · 추론 깊이 필요 → 허용 모델 중 상위 Opus 5.5",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "at": "2026-10-27 10:20",
+          "locked": false
+        },
+        "vrun": {
+          "model": "codex-large",
+          "effort": "high",
+          "basis": "검증 기본 보통 — 명령 실행 · 기대 결과 비교 · 판정 기준 해석 필요 (+1) · 추론 깊이 필요 → 허용 모델 중 상위 Codex Large",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "at": "2026-10-27 10:20",
+          "locked": false
+        },
+        "split": {
+          "basis": "주 영역 FE · 구현 하나 · 예상 5h · AC 2개 · 테스트 포함",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "exc": []
+        },
+        "subs": {
+          "dev": [
+            {
+              "id": "fe-implementer",
+              "why": "FE 화면 구현"
+            }
+          ],
+          "qa": [
+            {
+              "id": "qa-verifier",
+              "why": "검증 방법 · Evidence 형식"
+            }
+          ],
+          "by": "Planning Agent (Codex · Claude 합의)"
+        },
+        "cg": "FE WBS 화면 (apps/web/src/wbs)",
+        "srcV": 1
       },
       "TASK-0008": {
         "id": "TASK-0008",
@@ -966,8 +2399,11 @@
         "doneCond": "",
         "outputs": [
           {
-            "name": "apps/web/src/features/task-detail/*",
-            "delivered": false
+            "kind": "코드",
+            "required": true,
+            "verify": "",
+            "delivered": false,
+            "name": "apps/web/src/features/task-detail/*"
           }
         ],
         "spec": {
@@ -1004,7 +2440,56 @@
             "evidence": "",
             "note": ""
           }
-        ]
+        ],
+        "est": 6,
+        "lo": 4,
+        "hi": 10,
+        "tok": 880,
+        "conf": "하",
+        "basis": "탭 9종 UI — 범위 큼",
+        "estBy": "Planning Agent (Codex · Claude 합의)",
+        "fixStart": "",
+        "actStart": "",
+        "actEnd": "",
+        "design": [],
+        "run": {
+          "model": "claude-opus-5-5",
+          "effort": "high",
+          "basis": "구현 작업 기본 보통 · 추정 신뢰도 하 — 불확실성 큼 (+1) · 추론 깊이 필요 → 허용 모델 중 상위 Opus 5.5",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "at": "2026-10-27 10:20",
+          "locked": false
+        },
+        "vrun": {
+          "model": "codex-large",
+          "effort": "high",
+          "basis": "검증 기본 보통 — 명령 실행 · 기대 결과 비교 · 판정 기준 해석 필요 (+1) · 추론 깊이 필요 → 허용 모델 중 상위 Codex Large",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "at": "2026-10-27 10:20",
+          "locked": false
+        },
+        "split": {
+          "basis": "주 영역 FE · 구현 하나 · 예상 6h · AC 0개 · 테스트 포함",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "exc": []
+        },
+        "subs": {
+          "dev": [
+            {
+              "id": "fe-implementer",
+              "why": "FE 화면 구현"
+            }
+          ],
+          "qa": [
+            {
+              "id": "qa-verifier",
+              "why": "검증 방법 · Evidence 형식"
+            }
+          ],
+          "by": "Planning Agent (Codex · Claude 합의)"
+        },
+        "cg": "BE Task API (apps/api/src/tasks)",
+        "srcV": 1
       },
       "TASK-0009": {
         "id": "TASK-0009",
@@ -1043,7 +2528,60 @@
           "ac": [],
           "verify": []
         },
-        "checklist": []
+        "checklist": [],
+        "est": 4,
+        "lo": 3,
+        "hi": 7,
+        "tok": 520,
+        "conf": "하",
+        "basis": "명세 미작성 — 추정 불확실",
+        "estBy": "Planning Agent (Codex · Claude 합의)",
+        "fixStart": "",
+        "actStart": "",
+        "actEnd": "",
+        "design": [],
+        "run": {
+          "model": "claude-opus-5-5",
+          "effort": "high",
+          "basis": "구현 작업 기본 보통 · 추정 신뢰도 하 — 불확실성 큼 (+1) · 추론 깊이 필요 → 허용 모델 중 상위 Opus 5.5",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "at": "2026-10-27 10:20",
+          "locked": false
+        },
+        "vrun": {
+          "model": "codex-large",
+          "effort": "high",
+          "basis": "검증 기본 보통 — 명령 실행 · 기대 결과 비교 · 판정 기준 해석 필요 (+1) · 추론 깊이 필요 → 허용 모델 중 상위 Codex Large",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "at": "2026-10-27 10:20",
+          "locked": false
+        },
+        "split": {
+          "basis": "주 영역 FE · 구현 하나 · 예상 4h · AC 0개 · 테스트 포함",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "exc": []
+        },
+        "subs": {
+          "dev": [
+            {
+              "id": "fe-implementer",
+              "why": "FE 화면 구현"
+            },
+            {
+              "id": "db-migrator",
+              "why": "Schema · Migration 변경"
+            }
+          ],
+          "qa": [
+            {
+              "id": "qa-verifier",
+              "why": "검증 방법 · Evidence 형식"
+            }
+          ],
+          "by": "Planning Agent (Codex · Claude 합의)"
+        },
+        "cg": "BE Task API (apps/api/src/tasks)",
+        "srcV": 1
       },
       "TASK-0010": {
         "id": "TASK-0010",
@@ -1072,8 +2610,11 @@
         "doneCond": "팀장 승인",
         "outputs": [
           {
-            "name": "docs/planning-workflow.md",
-            "delivered": true
+            "kind": "문서",
+            "required": true,
+            "verify": "",
+            "delivered": true,
+            "name": "docs/planning-workflow.md"
           }
         ],
         "spec": {
@@ -1092,7 +2633,12 @@
           "errors": [],
           "docs": [],
           "ac": [
-            "Given 미승인 Proposal, When WBS 조회, Then 변경이 반영되지 않는다"
+            {
+              "given": "미승인 Proposal",
+              "when": "WBS 조회",
+              "then": "변경이 반영되지 않는다",
+              "method": ""
+            }
           ],
           "verify": []
         },
@@ -1115,7 +2661,51 @@
             "evidence": "",
             "note": ""
           }
-        ]
+        ],
+        "est": 2.5,
+        "lo": 1.5,
+        "hi": 4,
+        "tok": 300,
+        "conf": "중",
+        "basis": "상태 모델 문서화 + 교차 검토",
+        "estBy": "Planning Agent (Codex · Claude 합의)",
+        "fixStart": "2026-11-05",
+        "actStart": "",
+        "actEnd": "",
+        "design": [],
+        "run": {
+          "model": "codex-large",
+          "effort": "xhigh",
+          "basis": "설계 작업 기본 높음 · 구조 · 계약 결정 — 후속 Task 영향 큼 (+1) · 추론 깊이 필요 → 허용 모델 중 상위 Codex Large",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "at": "2026-10-27 10:20",
+          "locked": false
+        },
+        "vrun": {
+          "model": "claude-opus-5-5",
+          "effort": "xhigh",
+          "basis": "검증 기본 보통 — 명령 실행 · 기대 결과 비교 · 판정 기준 해석 필요 (+1) · 최저선: 검증 Effort ≥ 개발 Effort (매우 높음) · 추론 깊이 필요 → 허용 모델 중 상위 Opus 5.5",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "at": "2026-10-27 10:20",
+          "locked": false
+        },
+        "split": {
+          "basis": "주 영역 Architecture · 설계 하나 · 예상 2.5h · AC 1개 · 테스트 포함",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "exc": []
+        },
+        "subs": {
+          "dev": [],
+          "qa": [
+            {
+              "id": "code-reviewer",
+              "why": "명세 · 제외 범위 대조 검토"
+            }
+          ],
+          "by": "Planning Agent (Codex · Claude 합의)"
+        },
+        "cg": "",
+        "srcV": 1
       },
       "TASK-0011": {
         "id": "TASK-0011",
@@ -1157,7 +2747,60 @@
           "ac": [],
           "verify": []
         },
-        "checklist": []
+        "checklist": [],
+        "est": 3.5,
+        "lo": 2.5,
+        "hi": 6,
+        "tok": 480,
+        "conf": "하",
+        "basis": "Gate 판정 API — 선행 확정 전 추정",
+        "estBy": "Planning Agent (Codex · Claude 합의)",
+        "fixStart": "",
+        "actStart": "",
+        "actEnd": "",
+        "design": [],
+        "run": {
+          "model": "claude-opus-5-5",
+          "effort": "xhigh",
+          "basis": "구현 작업 기본 보통 · 추정 신뢰도 하 — 불확실성 큼 (+1) · 업무 규칙 · 오류 처리 구현 (+1) · 추론 깊이 필요 → 허용 모델 중 상위 Opus 5.5",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "at": "2026-10-27 10:20",
+          "locked": false
+        },
+        "vrun": {
+          "model": "codex-large",
+          "effort": "xhigh",
+          "basis": "검증 기본 보통 — 명령 실행 · 기대 결과 비교 · 판정 기준 해석 필요 (+1) · 최저선: 검증 Effort ≥ 개발 Effort (매우 높음) · 추론 깊이 필요 → 허용 모델 중 상위 Codex Large",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "at": "2026-10-27 10:20",
+          "locked": false
+        },
+        "split": {
+          "basis": "주 영역 BE · 구현 하나 · 예상 3.5h · AC 0개 · 테스트 포함",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "exc": []
+        },
+        "subs": {
+          "dev": [
+            {
+              "id": "be-implementer",
+              "why": "API · 서비스 구현"
+            }
+          ],
+          "qa": [
+            {
+              "id": "qa-verifier",
+              "why": "검증 방법 · Evidence 형식"
+            },
+            {
+              "id": "security-reviewer",
+              "why": "입력 검증 · 인증 · 경로 점검 (우선순위 높음)"
+            }
+          ],
+          "by": "Planning Agent (Codex · Claude 합의)"
+        },
+        "cg": "Gate 모듈",
+        "srcV": 1
       },
       "TASK-0012": {
         "id": "TASK-0012",
@@ -1190,8 +2833,11 @@
         "doneCond": "Codex · Claude 교차 검토 후 팀장 승인",
         "outputs": [
           {
-            "name": "docs/api/runner-contract.md",
-            "delivered": true
+            "kind": "문서",
+            "required": true,
+            "verify": "",
+            "delivered": true,
+            "name": "docs/api/runner-contract.md"
           }
         ],
         "spec": {
@@ -1235,7 +2881,460 @@
             "evidence": "",
             "note": ""
           }
-        ]
+        ],
+        "est": 2.5,
+        "lo": 1.5,
+        "hi": 4,
+        "tok": 320,
+        "conf": "중",
+        "basis": "계약 문서 + Endpoint 9종 정의",
+        "estBy": "Planning Agent (Codex · Claude 합의)",
+        "fixStart": "",
+        "actStart": "",
+        "actEnd": "",
+        "design": [
+          {
+            "kind": "API",
+            "ents": [
+              {
+                "f": {
+                  "method": "POST",
+                  "path": "/api/runner/heartbeat",
+                  "desc": "Runner 생존 보고 (60초 주기)",
+                  "auth": "Runner 토큰"
+                },
+                "b": {
+                  "request": "{ \"runnerId\": string, \"version\": string }",
+                  "response": "204",
+                  "validation": [],
+                  "errors": [
+                    {
+                      "code": "RUNNER_UNAUTHORIZED",
+                      "http": "401",
+                      "cond": "토큰 없음 또는 만료"
+                    }
+                  ],
+                  "tables": []
+                }
+              },
+              {
+                "f": {
+                  "method": "GET",
+                  "path": "/api/runner/messages",
+                  "desc": "대기 메시지 Polling",
+                  "auth": "Runner 토큰"
+                },
+                "b": {
+                  "request": "Query\n  since: string   // 마지막으로 받은 메시지 시각",
+                  "response": "200 { \"messages\": RunnerMessage[] }",
+                  "validation": [],
+                  "errors": [
+                    {
+                      "code": "RUNNER_UNAUTHORIZED",
+                      "http": "401",
+                      "cond": "토큰 없음 또는 만료"
+                    }
+                  ],
+                  "tables": []
+                }
+              },
+              {
+                "f": {
+                  "method": "POST",
+                  "path": "/api/runner/messages/:messageId/ack",
+                  "desc": "메시지 수신 확인",
+                  "auth": "Runner 토큰"
+                },
+                "b": {
+                  "request": "",
+                  "response": "204",
+                  "validation": [
+                    "ack는 수신 확인만 의미 — 작업 완료 보고와 분리"
+                  ],
+                  "errors": [
+                    {
+                      "code": "MESSAGE_NOT_FOUND",
+                      "http": "404",
+                      "cond": "메시지 없음"
+                    }
+                  ],
+                  "tables": []
+                }
+              },
+              {
+                "f": {
+                  "method": "POST",
+                  "path": "/api/runner/attempts/:attemptId/status",
+                  "desc": "실행 상태 보고",
+                  "auth": "Runner 토큰"
+                },
+                "b": {
+                  "request": "{\n  \"status\": \"running\" | \"succeeded\" | \"failed\",\n  \"at\": string,\n  \"model\": string,            // 실제 사용 모델\n  \"effort\": string,\n  \"escalation\"?: string,      // 자율 상향 사유\n  \"subagents\"?: [{ \"id\": string, \"version\": number, \"installed\": boolean, \"used\": boolean }]\n}",
+                  "response": "204",
+                  "validation": [],
+                  "errors": [
+                    {
+                      "code": "ATTEMPT_NOT_FOUND",
+                      "http": "404",
+                      "cond": "실행 시도 없음"
+                    }
+                  ],
+                  "tables": []
+                }
+              },
+              {
+                "f": {
+                  "method": "POST",
+                  "path": "/api/runner/attempts/:attemptId/result",
+                  "desc": "결과 · 변경 파일 · Evidence 업로드",
+                  "auth": "Runner 토큰"
+                },
+                "b": {
+                  "request": "{\n  \"summary\": string,\n  \"changedFiles\": string[],\n  \"evidence\": { \"path\": string, \"kind\": string }[],\n  \"failure\"?: string\n}",
+                  "response": "201",
+                  "validation": [
+                    "`changedFiles`는 저장소 상대 경로"
+                  ],
+                  "errors": [
+                    {
+                      "code": "ATTEMPT_NOT_FOUND",
+                      "http": "404",
+                      "cond": "실행 시도 없음"
+                    }
+                  ],
+                  "tables": []
+                }
+              },
+              {
+                "f": {
+                  "method": "POST",
+                  "path": "/api/runner/sessions",
+                  "desc": "Runner 세션 시작 · 종료 보고 (가동률 산정 근거)",
+                  "auth": "Runner 토큰"
+                },
+                "b": {
+                  "request": "{\n  \"runnerId\": string,\n  \"event\": \"start\" | \"stop\",\n  \"at\": string,\n  \"reason\"?: \"reboot\" | \"power_off\" | \"error\" | \"manual\"\n}",
+                  "response": "204",
+                  "validation": [
+                    "stop은 열린 세션이 있을 때만",
+                    "heartbeat 3회 미수신 시 서버가 stop(reason=unknown) 자동 기록"
+                  ],
+                  "errors": [
+                    {
+                      "code": "RUNNER_UNAUTHORIZED",
+                      "http": "401",
+                      "cond": "토큰 없음 또는 만료"
+                    }
+                  ],
+                  "tables": [
+                    "runner_sessions"
+                  ]
+                }
+              },
+              {
+                "f": {
+                  "method": "POST",
+                  "path": "/api/runner/usage",
+                  "desc": "Agent 스스로 조회한 남은 사용량 보고",
+                  "auth": "Runner 토큰"
+                },
+                "b": {
+                  "request": "{\n  \"agent\": \"Claude\" | \"Codex\",\n  \"remainPct\": number,        // 0..100\n  \"resetAt\"?: string,\n  \"tokensUsed\"?: number       // 직전 보고 이후\n}",
+                  "response": "204",
+                  "validation": [
+                    "`remainPct` 0~100"
+                  ],
+                  "errors": [
+                    {
+                      "code": "VALIDATION_FAILED",
+                      "http": "400",
+                      "cond": "범위 밖 값"
+                    }
+                  ],
+                  "tables": [
+                    "agent_usage"
+                  ]
+                }
+              },
+              {
+                "f": {
+                  "method": "POST",
+                  "path": "/api/runner/attempts/:attemptId/interrupt",
+                  "desc": "실행 중단 보고 — 재부팅 · PC 꺼짐 · 사용량 한도",
+                  "auth": "Runner 토큰"
+                },
+                "b": {
+                  "request": "{\n  \"reason\": \"reboot\" | \"power_off\" | \"usage_limit\" | \"error\",\n  \"at\": string,\n  \"progressNote\"?: string,\n  \"tokensUsed\"?: number\n}",
+                  "response": "200 { \"taskStatus\": \"paused\" }",
+                  "validation": [
+                    "열린 시도만 중단 가능"
+                  ],
+                  "errors": [
+                    {
+                      "code": "ATTEMPT_NOT_FOUND",
+                      "http": "404",
+                      "cond": "실행 시도 없음"
+                    },
+                    {
+                      "code": "ATTEMPT_CLOSED",
+                      "http": "409",
+                      "cond": "이미 종료된 시도"
+                    }
+                  ],
+                  "tables": [
+                    "task_attempts",
+                    "tasks"
+                  ]
+                }
+              },
+              {
+                "f": {
+                  "method": "POST",
+                  "path": "/api/planning/estimates",
+                  "desc": "Planning Agent의 Task별 추정 등록 · 재추정",
+                  "auth": "Runner 토큰"
+                },
+                "b": {
+                  "request": "{\n  \"items\": [{\n    \"taskKey\": string,\n    \"estHours\": number, \"loHours\": number, \"hiHours\": number,\n    \"tokensK\"?: number,\n    \"confidence\": \"상\" | \"중\" | \"하\",\n    \"basis\": string,\n    \"agreedBy\": (\"Claude\" | \"Codex\")[]\n  }]\n}",
+                  "response": "200 { \"replan\"?: ReplanSummary }",
+                  "validation": [
+                    "lo ≤ est ≤ hi",
+                    "완료 Task는 재추정 불가"
+                  ],
+                  "errors": [
+                    {
+                      "code": "VALIDATION_FAILED",
+                      "http": "400",
+                      "cond": "범위 역전"
+                    },
+                    {
+                      "code": "TASK_NOT_FOUND",
+                      "http": "404",
+                      "cond": "taskKey 없음"
+                    }
+                  ],
+                  "tables": [
+                    "task_estimates"
+                  ]
+                }
+              },
+              {
+                "f": {
+                  "method": "POST",
+                  "path": "/api/planning/replans",
+                  "desc": "전체 일정 재조정 → 새 기준 일정 버전 (정책에 따라 자동 반영)",
+                  "auth": "Runner 토큰"
+                },
+                "b": {
+                  "request": "{\n  \"trigger\": string,\n  \"capacity\": { \"rate\": number, \"concurrency\": number, \"subRatio\": number }\n}",
+                  "response": "201 {\n  \"replanId\": \"RP-004\",\n  \"baselineVersion\": 4,\n  \"projectEnd\": string,\n  \"range\": { \"lo\": string, \"hi\": string },\n  \"moved\": [{ \"taskKey\": string, \"before\": string, \"after\": string, \"deltaDays\": number }]\n}",
+                  "validation": [
+                    "자동 반영 정책이 꺼져 있으면 201 대신 202(검토 대기)"
+                  ],
+                  "errors": [
+                    {
+                      "code": "SCHEDULE_CYCLE",
+                      "http": "409",
+                      "cond": "선행 관계 순환으로 배치 불가"
+                    }
+                  ],
+                  "tables": [
+                    "schedule_baselines",
+                    "replans",
+                    "task_history"
+                  ]
+                }
+              },
+              {
+                "f": {
+                  "method": "POST",
+                  "path": "/api/runner/models",
+                  "desc": "Runner가 조회한 사용 가능 모델 · Effort 단계 보고 (신규 모델은 미허용으로 등록)",
+                  "auth": "Runner 토큰"
+                },
+                "b": {
+                  "request": "{\n  \"agent\": \"Claude\" | \"Codex\",\n  \"models\": [{ \"id\": string, \"label\": string, \"rank\": number }],\n  \"efforts\": string[]          // CLI 고유 값, 낮은 순\n}",
+                  "response": "200 { \"newModels\": string[] }",
+                  "validation": [
+                    "`efforts`는 공통 단계(1~5)로 매핑 가능해야 함"
+                  ],
+                  "errors": [
+                    {
+                      "code": "VALIDATION_FAILED",
+                      "http": "400",
+                      "cond": "빈 목록"
+                    }
+                  ],
+                  "tables": [
+                    "agent_models"
+                  ]
+                }
+              },
+              {
+                "f": {
+                  "method": "GET",
+                  "path": "/api/runner/tasks/:taskKey/run-grade",
+                  "desc": "실행 직전 등급 조회 — Task 등급 · 허용 모델 · 최저선 · 상향 한계",
+                  "auth": "Runner 토큰"
+                },
+                "b": {
+                  "request": "Query\n  role: \"dev\" | \"qa\"",
+                  "response": "200 {\n  \"model\": string, \"effort\": string,\n  \"locked\": boolean,\n  \"floorEffort\": string,\n  \"allowedModels\": string[],\n  \"policy\": {\n    \"onUsage\": \"wait\" | \"down\", \"lowPct\": number,\n    \"onRework\": \"same\" | \"up1\" | \"top\", \"notifyAt\": number\n  }\n}",
+                  "validation": [],
+                  "errors": [
+                    {
+                      "code": "TASK_NOT_FOUND",
+                      "http": "404",
+                      "cond": "taskKey 없음"
+                    }
+                  ],
+                  "tables": [
+                    "tasks",
+                    "agent_models"
+                  ]
+                }
+              },
+              {
+                "f": {
+                  "method": "POST",
+                  "path": "/api/runner/concurrency",
+                  "desc": "Runner의 동시 실행 상태 · 한도 조절 보고 (하위 Agent 포함)",
+                  "auth": "Runner 토큰"
+                },
+                "b": {
+                  "request": "{\n  \"at\": string,\n  \"limit\": number,              // Runner가 조절한 현재 한도 (팀장 상한 이하)\n  \"running\": { \"Claude\": number, \"Codex\": number },   // 세션 + 하위 Agent\n  \"subagents\": number,\n  \"heavyJobs\": number,\n  \"resources\": { \"cpuPct\": number, \"memFreeGB\": number, \"swapGB\": number },\n  \"adjust\"?: { \"from\": number, \"to\": number, \"reason\": string }\n}",
+                  "response": "200 {\n  \"caps\": { \"total\": number, \"Claude\": number, \"Codex\": number, \"heavy\": number, \"memReserveGB\": number }\n}",
+                  "validation": [
+                    "`limit` ≤ 팀장 전체 상한 — 초과 시 400",
+                    "하위 Agent 수는 Agent가 시작 · 종료 시 Runner에 알림"
+                  ],
+                  "errors": [
+                    {
+                      "code": "LIMIT_EXCEEDS_CAP",
+                      "http": "400",
+                      "cond": "팀장 상한 초과"
+                    }
+                  ],
+                  "tables": [
+                    "runner_concurrency_log"
+                  ]
+                }
+              },
+              {
+                "f": {
+                  "method": "POST",
+                  "path": "/api/runner/host",
+                  "desc": "실행 PC 사양 보고 — Runner 시작 · PC 변경 시 (권장 상한 계산 근거)",
+                  "auth": "Runner 토큰"
+                },
+                "b": {
+                  "request": "{\n  \"hostId\": string,             // 머신 식별자 (hostname + machine-id 해시)\n  \"cpu\": string, \"cores\": number,  // nproc\n  \"memGB\": number, \"swapGB\": number,  // /proc/meminfo — WSL 할당량 기준\n  \"diskFreeGB\": number,         // worktree 위치 기준 df\n  \"os\": string,\n  \"perSessionGB\"?: number,      // 관측 세션 평균 메모리\n  \"samples\"?: number\n}",
+                  "response": "200 {\n  \"mode\": \"auto\" | \"manual\",\n  \"caps\": { \"total\": number, \"Claude\": number, \"Codex\": number, \"heavy\": number },\n  \"recommended\": { ... },\n  \"hostChanged\": boolean\n}",
+                  "validation": [
+                    "hostId가 바뀌면 열린 실행 시도를 중단 처리하고 새 Runner 세션 시작",
+                    "auto 모드면 상한을 권장값으로 갱신 후 일정 재계산"
+                  ],
+                  "errors": [
+                    {
+                      "code": "VALIDATION_FAILED",
+                      "http": "400",
+                      "cond": "cores · memGB 누락"
+                    }
+                  ],
+                  "tables": [
+                    "runner_hosts",
+                    "runner_concurrency_log"
+                  ]
+                }
+              },
+              {
+                "f": {
+                  "method": "GET",
+                  "path": "/api/runner/tasks/:taskKey/subagents",
+                  "desc": "실행 직전 설치할 하위 Agent 정의 조회 (지정된 것 · 허용 버전만)",
+                  "auth": "Runner 토큰"
+                },
+                "b": {
+                  "request": "Query\n  role: \"dev\" | \"qa\"",
+                  "response": "200 {\n  \"enabled\": boolean,\n  \"items\": [{ \"id\": string, \"agent\": \"Claude\" | \"Codex\", \"version\": number, \"hash\": string,\n    \"file\": string,            // .claude/agents/<id>.md 또는 .codex/agents/<id>.toml 내용\n    \"sandbox\": string }]\n}",
+                  "validation": [
+                    "model · effort 필드는 포함하지 않음 — Runner가 실행 정책 값으로 채움"
+                  ],
+                  "errors": [
+                    {
+                      "code": "TASK_NOT_FOUND",
+                      "http": "404",
+                      "cond": "taskKey 없음"
+                    }
+                  ],
+                  "tables": [
+                    "subagent_defs",
+                    "tasks"
+                  ]
+                }
+              },
+              {
+                "f": {
+                  "method": "POST",
+                  "path": "/api/runner/readiness",
+                  "desc": "실행 환경 준비 상태 보고 (시작 시 · 매일)",
+                  "auth": "Runner 토큰"
+                },
+                "b": {
+                  "request": "{\n  \"at\": string,\n  \"items\": [{ \"key\": \"claude\" | \"codex\" | \"git\" | \"node\" | \"pnpm\" | \"pg\" | \"repo\" | \"disk\" | \"subs\",\n    \"status\": \"ok\" | \"warn\" | \"fail\", \"detail\": string, \"fix\"?: string }]\n}",
+                  "response": "204",
+                  "validation": [
+                    "fail 항목이 있으면 해당 Agent 실행을 멈추고 알림 생성"
+                  ],
+                  "errors": [],
+                  "tables": [
+                    "runner_readiness",
+                    "alerts"
+                  ]
+                }
+              }
+            ],
+            "b": {
+              "resp": [
+                "Runner 인증은 Runner 토큰(Bearer) — 팀장 세션과 분리",
+                "WBS는 Runner로 push하지 않음 (Polling 2계층 구조)"
+              ]
+            }
+          }
+        ],
+        "run": {
+          "model": "codex-large",
+          "effort": "xhigh",
+          "basis": "설계 작업 기본 높음 · 구조 · 계약 결정 — 후속 Task 영향 큼 (+1) · 추론 깊이 필요 → 허용 모델 중 상위 Codex Large",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "at": "2026-10-27 10:20",
+          "locked": false
+        },
+        "vrun": {
+          "model": "claude-opus-5-5",
+          "effort": "xhigh",
+          "basis": "검증 기본 보통 — 명령 실행 · 기대 결과 비교 · 판정 기준 해석 필요 (+1) · 최저선: 검증 Effort ≥ 개발 Effort (매우 높음) · 추론 깊이 필요 → 허용 모델 중 상위 Opus 5.5",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "at": "2026-10-27 10:20",
+          "locked": false
+        },
+        "split": {
+          "basis": "주 영역 API · 설계 하나 · 예상 2.5h · AC 0개 · 테스트 포함",
+          "by": "Planning Agent (Codex · Claude 합의)",
+          "exc": []
+        },
+        "subs": {
+          "dev": [],
+          "qa": [
+            {
+              "id": "code-reviewer",
+              "why": "명세 · 제외 범위 대조 검토"
+            }
+          ],
+          "by": "Planning Agent (Codex · Claude 합의)"
+        },
+        "cg": "Runner API (apps/api/src/runner)",
+        "srcV": 0
       }
     },
     "deps": [
@@ -1328,6 +3427,888 @@
         "pred": "TASK-0003",
         "succ": "TASK-0012",
         "type": "FS"
+      }
+    ],
+    "attempts": [
+      {
+        "id": "ATT-0001-1",
+        "task": "TASK-0001",
+        "kind": "개발",
+        "agent": "Claude",
+        "status": "완료",
+        "start": "2026-10-28 14:02",
+        "end": "15:10",
+        "summary": "Workspace 구조와 공통 tsconfig 구성, 루트 스크립트 추가.",
+        "files": [
+          "pnpm-workspace.yaml",
+          "tsconfig.base.json",
+          "package.json"
+        ],
+        "fail": "",
+        "tok": 210,
+        "model": "claude-sonnet-5-5",
+        "effort": "low",
+        "esc": "",
+        "subs": [],
+        "subInst": "ok",
+        "sub": 0,
+        "obsSt": "ok"
+      },
+      {
+        "id": "ATT-0001-2",
+        "task": "TASK-0001",
+        "kind": "QA",
+        "agent": "Codex",
+        "status": "완료",
+        "start": "2026-10-28 15:30",
+        "end": "16:20",
+        "summary": "클린 컨테이너 설치·빌드 검증 — PASS (V-0001-1).",
+        "files": [],
+        "fail": "",
+        "tok": 60,
+        "model": "codex-mini",
+        "effort": "medium",
+        "esc": "",
+        "subs": [
+          {
+            "id": "qa-verifier",
+            "v": 4
+          },
+          {
+            "id": "security-reviewer",
+            "v": 1
+          }
+        ],
+        "subInst": "ok",
+        "sub": 0,
+        "obsSt": "ok",
+        "used": {
+          "list": [
+            {
+              "id": "qa-verifier",
+              "v": 4,
+              "n": 1
+            },
+            {
+              "id": "security-reviewer",
+              "v": 1,
+              "n": 1
+            }
+          ],
+          "conf": "일부 관측",
+          "at": "16:20"
+        }
+      },
+      {
+        "id": "ATT-0004-1",
+        "task": "TASK-0004",
+        "kind": "개발",
+        "agent": "Claude",
+        "status": "완료",
+        "start": "2026-11-03 15:10",
+        "end": "17:48",
+        "summary": "Schema 4종과 Migration 생성. Seed 스크립트는 미작성.",
+        "files": [
+          "packages/db/src/schema/tasks.ts",
+          "packages/db/src/schema/task-dependencies.ts",
+          "packages/db/drizzle/0001_core_wbs.sql"
+        ],
+        "fail": "",
+        "tok": 380,
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "esc": "",
+        "subs": [
+          {
+            "id": "db-migrator",
+            "v": 2
+          }
+        ],
+        "subInst": "ok",
+        "sub": 0,
+        "obsSt": "ok",
+        "used": {
+          "list": [
+            {
+              "id": "db-migrator",
+              "v": 2,
+              "n": 2
+            },
+            {
+              "id": "Explore",
+              "v": 0,
+              "n": 1
+            }
+          ],
+          "conf": "세션 기록 확인",
+          "at": "17:48"
+        }
+      },
+      {
+        "id": "ATT-0004-2",
+        "task": "TASK-0004",
+        "kind": "QA",
+        "agent": "Codex",
+        "status": "실행 중",
+        "start": "2026-11-03 18:22",
+        "end": "",
+        "summary": "빈 DB에서 migrate 및 제약 위반 SQL 실행 중.",
+        "files": [],
+        "fail": "",
+        "tok": 40,
+        "model": "codex-large",
+        "effort": "high",
+        "esc": "",
+        "subs": [
+          {
+            "id": "qa-verifier",
+            "v": 4
+          }
+        ],
+        "subInst": "ok",
+        "sub": 1,
+        "obsSt": "ok"
+      },
+      {
+        "id": "ATT-0005-1",
+        "task": "TASK-0005",
+        "kind": "개발",
+        "agent": "Claude",
+        "status": "실행 중",
+        "start": "2026-11-03 19:58",
+        "end": "",
+        "summary": "Route 등록 완료, Service 계층 작성 중.",
+        "files": [
+          "apps/api/src/routes/tasks.ts"
+        ],
+        "fail": "",
+        "tok": 150,
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "esc": "",
+        "subs": [
+          {
+            "id": "be-implementer",
+            "v": 3
+          }
+        ],
+        "subInst": "ok",
+        "sub": 2,
+        "obsSt": "ok"
+      },
+      {
+        "id": "ATT-0007-1",
+        "task": "TASK-0007",
+        "kind": "개발",
+        "agent": "Claude",
+        "status": "완료",
+        "start": "2026-11-01 10:02",
+        "end": "11:40",
+        "summary": "Tree 평탄화 훅과 Table 컴포넌트 구현, 필터 9종 연결.",
+        "files": [
+          "apps/web/src/features/wbs/WbsTreeTable.tsx",
+          "apps/web/src/features/wbs/useWbsTree.ts",
+          "apps/web/src/features/wbs/WbsFilterBar.tsx"
+        ],
+        "fail": "",
+        "tok": 520,
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "esc": "",
+        "subs": [
+          {
+            "id": "fe-implementer",
+            "v": 3
+          }
+        ],
+        "subInst": "ok",
+        "sub": 0,
+        "obsSt": "ok",
+        "used": {
+          "list": [
+            {
+              "id": "Explore",
+              "v": 0,
+              "n": 1
+            }
+          ],
+          "conf": "세션 기록 확인",
+          "at": "11:40"
+        }
+      },
+      {
+        "id": "ATT-0007-2",
+        "task": "TASK-0007",
+        "kind": "QA",
+        "agent": "Codex",
+        "status": "완료",
+        "start": "2026-11-01 13:10",
+        "end": "13:35",
+        "summary": "기능 · 성능 QA — 14건 중 2건 FAIL (V-0007-1). 재작업 요청.",
+        "files": [],
+        "fail": "",
+        "tok": 90,
+        "model": "codex-large",
+        "effort": "high",
+        "esc": "",
+        "subs": [
+          {
+            "id": "qa-verifier",
+            "v": 4
+          }
+        ],
+        "subInst": "ok",
+        "sub": 0,
+        "obsSt": "ok",
+        "used": {
+          "list": [
+            {
+              "id": "qa-verifier",
+              "v": 4,
+              "n": 1
+            }
+          ],
+          "conf": "일부 관측",
+          "at": "13:35"
+        }
+      }
+    ],
+    "verifs": [
+      {
+        "id": "V-0001-1",
+        "task": "TASK-0001",
+        "attempt": "ATT-0001-2",
+        "agent": "Codex",
+        "result": "PASS",
+        "at": "2026-10-28 16:20",
+        "cmd": "pnpm install && pnpm -r build",
+        "expected": "종료 코드 0",
+        "actual": "종료 코드 0 (52.4s)",
+        "evidence": [
+          "evidence/TASK-0001/install.log",
+          "evidence/TASK-0001/build.log"
+        ],
+        "defects": []
+      },
+      {
+        "id": "V-0007-1",
+        "task": "TASK-0007",
+        "attempt": "ATT-0007-2",
+        "agent": "Codex",
+        "result": "FAIL",
+        "at": "2026-11-01 13:35",
+        "cmd": "pnpm --filter web test -- wbs-tree",
+        "expected": "14/14 통과, 1,000행 펼치기 100ms 이내",
+        "actual": "12/14 통과 — 필터 시 상위 Phase 행 누락, 1,000행 펼치기 412ms",
+        "evidence": [
+          "evidence/TASK-0007/qa-1/vitest.txt",
+          "evidence/TASK-0007/qa-1/perf.json",
+          "evidence/TASK-0007/qa-1/filter-missing-parent.png"
+        ],
+        "defects": [
+          "DEF-0007-1 필터 결과에서 상위 노드 누락 (차단 결함)",
+          "DEF-0007-2 대량 펼치기 성능 기준 미달 (차단 결함)"
+        ]
+      }
+    ],
+    "msgs": [
+      {
+        "id": "MSG-001",
+        "task": "TASK-0007",
+        "dir": "out",
+        "from": "팀장",
+        "to": "Claude",
+        "type": "수정 요청",
+        "at": "2026-11-01 14:02",
+        "attempt": "ATT-0007-2",
+        "delivery": "Acknowledged",
+        "work": "",
+        "failReason": "",
+        "pendingNext": false,
+        "unread": false,
+        "body": "QA-1 실패 2건을 재작업해 주세요.\n1. 필터 적용 시 매칭 Task의 상위 Phase / Work Package가 항상 표시되어야 합니다.\n2. 1,000행 펼치기 100ms 기준 — 가상 스크롤 적용을 검토해 주세요.\n```ts\n// 기대 동작\nconst visibleRows = withAncestors(applyFilters(tasks, filters));\n```\n관련 파일: `apps/web/src/features/wbs/useWbsTree.ts`"
+      },
+      {
+        "id": "MSG-002",
+        "task": "TASK-0007",
+        "dir": "in",
+        "from": "Claude",
+        "to": "팀장",
+        "type": "응답",
+        "at": "2026-11-01 14:09",
+        "attempt": "ATT-0007-2",
+        "delivery": "",
+        "work": "재작업 대기 — 다음 실행(ATT-0007-3)",
+        "failReason": "",
+        "pendingNext": false,
+        "unread": true,
+        "body": "수정 요청을 수신했습니다. 재작업 계획입니다.\n- `withAncestors()` 유틸을 추가하고 필터 파이프라인 마지막 단계에 적용\n- `@tanstack/react-virtual`로 행을 가상화하고 펼치기 시 재계산 범위를 축소\n다음 실행에서 반영하고 Codex 재검증을 요청하겠습니다."
+      },
+      {
+        "id": "MSG-003",
+        "task": "TASK-0005",
+        "dir": "out",
+        "from": "팀장",
+        "to": "Codex",
+        "type": "질문",
+        "at": "2026-11-03 19:42",
+        "attempt": "",
+        "delivery": "Failed",
+        "work": "",
+        "failReason": "Runner 연결 불가 — 19:40 이후 heartbeat 없음 (Mock)",
+        "pendingNext": false,
+        "unread": false,
+        "body": "Task CRUD API QA 시 soft delete된 Task가 목록 조회에서 제외되는지도 확인 항목에 넣을 수 있을까요?"
+      }
+    ],
+    "plannings": [
+      {
+        "id": "PLN-001",
+        "title": "Workflow Phase 상세화 — Runner 메시지 · 응답 연동",
+        "scope": "WP-05 Planning · Gate, WP-06 Runner 연동",
+        "at": "2026-11-03 10:20",
+        "cp": "",
+        "analyses": [
+          {
+            "agent": "Codex",
+            "at": "2026-11-03 11:05",
+            "summary": "Runner 메시지 응답 처리가 WBS에 빠져 있습니다. Message 상태 머신은 별도 설계 Task로 분리하는 것이 검증에 유리합니다.",
+            "items": [
+              "WP-06에 「Runner 응답 수신 처리」 BE Task 추가 필요",
+              "Message 상태 머신(Draft~Cancelled)을 별도 설계 Task로 분리",
+              "TASK-0011 Completion Gate의 선행 TASK-0009 유지 — Checklist 데이터 확정 후 구현",
+              "TASK-0012 완료 조건에 ack와 작업 완료 보고 분리를 명시",
+              "TASK-0010 우선순위는 현행(높음) 유지"
+            ]
+          },
+          {
+            "agent": "Claude",
+            "at": "2026-11-03 11:40",
+            "summary": "응답 수신 Task 추가에 동의합니다. Gate는 Checklist 데이터 모델(TASK-0004)만 있으면 BE 구현이 가능하므로 선행을 조정하는 편이 일정에 유리합니다.",
+            "items": [
+              "WP-06에 「Runner 응답 수신 처리」 BE Task 추가 — 동의",
+              "Message 상태 머신은 TASK-0012 계약 범위에 포함 — 별도 Task 불필요",
+              "TASK-0011 선행을 TASK-0009 → TASK-0005로 교체",
+              "TASK-0012 완료 조건 보강 — 동의",
+              "TASK-0010 우선순위를 긴급으로 상향 (Runner 계약과 병행 검토)"
+            ]
+          }
+        ],
+        "review": [
+          {
+            "id": "R1",
+            "topic": "Runner 응답 수신 처리 Task 추가",
+            "kind": "agree",
+            "codex": "WP-06에 BE Task 추가, 선행 TASK-0012",
+            "claude": "동일 의견",
+            "choice": "agree",
+            "memo": "",
+            "ops": [
+              {
+                "op": "add",
+                "ref": "NEW-1",
+                "t": {
+                  "title": "Runner 응답 수신 처리",
+                  "type": "Implementation",
+                  "domain": "BE",
+                  "rel": [
+                    "API"
+                  ],
+                  "wp": "WP-06",
+                  "priority": 1,
+                  "assignee": "Claude",
+                  "verifier": "Codex",
+                  "purpose": "Runner가 반환한 Agent 응답을 Task · Execution Attempt에 연결해 저장하고 미확인 응답을 표시한다.",
+                  "doneCond": "응답이 Task 메시지 탭과 작업 실행 화면에 표시된다."
+                },
+                "preds": [
+                  {
+                    "pred": "TASK-0012",
+                    "type": "FS"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "R2",
+            "topic": "TASK-0012 완료 조건 보강",
+            "kind": "agree",
+            "codex": "ack와 작업 완료 보고를 분리해 명시",
+            "claude": "동일 의견",
+            "choice": "agree",
+            "memo": "",
+            "ops": [
+              {
+                "op": "modify",
+                "task": "TASK-0012",
+                "field": "doneCond",
+                "after": "ack(수신 확인)와 작업 완료 보고가 별도 이벤트로 정의되고, Codex · Claude 교차 검토 후 팀장 승인"
+              }
+            ]
+          },
+          {
+            "id": "R3",
+            "topic": "Message 상태 머신 설계 위치",
+            "kind": "diff",
+            "codex": "별도 설계 Task 「Message 상태 머신 설계」(설계 / Architecture)를 WP-06에 추가",
+            "claude": "TASK-0012 작업 범위에 포함 — 별도 Task 불필요",
+            "choice": "",
+            "memo": "",
+            "codexOps": [
+              {
+                "op": "add",
+                "ref": "NEW-2",
+                "t": {
+                  "title": "Message 상태 머신 설계",
+                  "type": "Design",
+                  "domain": "Architecture",
+                  "rel": [
+                    "API"
+                  ],
+                  "wp": "WP-06",
+                  "priority": 1,
+                  "assignee": "Codex",
+                  "verifier": "Claude",
+                  "purpose": "Draft · Queued · Sent · Acknowledged · Failed · Cancelled 전이와 재전송 규칙을 정의한다.",
+                  "doneCond": "상태 전이표 교차 검토 후 승인"
+                },
+                "preds": [
+                  {
+                    "pred": "TASK-0003",
+                    "type": "FS"
+                  }
+                ]
+              }
+            ],
+            "claudeOps": [
+              {
+                "op": "modify",
+                "task": "TASK-0012",
+                "field": "scopeAdd",
+                "after": "Message 전달 상태 머신(Draft~Cancelled)과 재전송 규칙"
+              }
+            ]
+          },
+          {
+            "id": "R4",
+            "topic": "TASK-0011 Completion Gate 선행 관계",
+            "kind": "diff",
+            "codex": "선행 TASK-0009 유지 — Checklist 기능 확정 후 구현",
+            "claude": "선행 TASK-0009 제거, TASK-0005 추가 — BE Gate는 Checklist UI 없이 구현 가능",
+            "choice": "",
+            "memo": "",
+            "codexOps": [],
+            "claudeOps": [
+              {
+                "op": "dep-remove",
+                "pred": "TASK-0009",
+                "succ": "TASK-0011"
+              },
+              {
+                "op": "dep-add",
+                "pred": "TASK-0005",
+                "succ": "TASK-0011",
+                "type": "FS"
+              }
+            ]
+          },
+          {
+            "id": "R5",
+            "topic": "TASK-0010 우선순위",
+            "kind": "diff",
+            "codex": "높음 유지",
+            "claude": "긴급으로 상향 — Runner 계약과 병행 검토 필요",
+            "choice": "",
+            "memo": "",
+            "codexOps": [],
+            "claudeOps": [
+              {
+                "op": "modify",
+                "task": "TASK-0010",
+                "field": "priority",
+                "after": 0
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "PLN-000",
+        "title": "초기 WBS 수립 — Runner API 계약 분리",
+        "scope": "전체",
+        "at": "2026-11-02 09:00",
+        "cp": "CP-001",
+        "analyses": [
+          {
+            "agent": "Codex",
+            "at": "2026-11-02 10:10",
+            "summary": "Runner는 별도 개발이므로 WBS ↔ Runner 계약을 독립 Task로 먼저 고정해야 합니다.",
+            "items": [
+              "WP-06에 Runner API 계약 Task 신규"
+            ]
+          },
+          {
+            "agent": "Claude",
+            "at": "2026-11-02 10:40",
+            "summary": "동의합니다. 계약은 Polling 기반 2계층 구조를 전제로 합니다.",
+            "items": [
+              "WP-06에 Runner API 계약 Task 신규 — 동의",
+              "Session Observer는 도입하지 않음"
+            ]
+          }
+        ],
+        "review": [
+          {
+            "id": "R1",
+            "topic": "Runner API 계약 Task 분리",
+            "kind": "agree",
+            "codex": "WP-06에 계약 Task 신규",
+            "claude": "동일 의견",
+            "choice": "agree",
+            "memo": "",
+            "ops": []
+          }
+        ]
+      }
+    ],
+    "proposals": [
+      {
+        "id": "CP-001",
+        "title": "Runner API 계약 Task 추가",
+        "reason": "Runner를 별도 개발하므로 WBS ↔ Runner 계약을 독립 Task로 먼저 고정한다.",
+        "source": {
+          "kind": "planning",
+          "id": "PLN-000"
+        },
+        "status": "applied",
+        "author": "Planning (Codex · Claude)",
+        "at": "2026-11-02 15:00",
+        "idMap": {
+          "NEW-1": "TASK-0012"
+        },
+        "ops": [
+          {
+            "op": "add",
+            "ref": "NEW-1",
+            "t": {
+              "title": "Runner API 계약",
+              "type": "Design",
+              "domain": "API",
+              "rel": [
+                "Architecture"
+              ],
+              "wp": "WP-06",
+              "priority": 0,
+              "assignee": "Codex",
+              "verifier": "Claude",
+              "purpose": "",
+              "doneCond": ""
+            },
+            "preds": [
+              {
+                "pred": "TASK-0003",
+                "type": "FS"
+              }
+            ]
+          }
+        ],
+        "approvals": [
+          {
+            "at": "2026-11-02 15:00",
+            "actor": "Planning (Codex · Claude)",
+            "action": "제출",
+            "comment": ""
+          },
+          {
+            "at": "2026-11-02 17:10",
+            "actor": "팀장",
+            "action": "승인",
+            "comment": "계약 우선 고정"
+          },
+          {
+            "at": "2026-11-02 17:12",
+            "actor": "팀장",
+            "action": "WBS 반영",
+            "comment": "NEW-1 → TASK-0012"
+          }
+        ]
+      },
+      {
+        "id": "CP-002",
+        "title": "Dependency 검증을 Task CRUD API와 병행 착수",
+        "reason": "Service 계층의 순환 검사 로직은 CRUD Route와 독립적이므로 선행 관계를 시작→시작(SS)으로 바꿔 병행한다.",
+        "source": {
+          "kind": "manual",
+          "id": ""
+        },
+        "status": "review",
+        "author": "팀장",
+        "at": "2026-11-03 19:30",
+        "idMap": {},
+        "ops": [
+          {
+            "op": "dep-remove",
+            "pred": "TASK-0005",
+            "succ": "TASK-0006"
+          },
+          {
+            "op": "dep-add",
+            "pred": "TASK-0005",
+            "succ": "TASK-0006",
+            "type": "SS"
+          }
+        ],
+        "approvals": [
+          {
+            "at": "2026-11-03 19:30",
+            "actor": "팀장",
+            "action": "제출",
+            "comment": ""
+          }
+        ]
+      }
+    ],
+    "hist": [
+      {
+        "at": "2026-10-27 10:00",
+        "actor": "팀장",
+        "task": "TASK-0012",
+        "kind": "생성",
+        "text": "Task 생성 (초기 WBS)",
+        "before": "",
+        "after": "",
+        "id": "H-0001"
+      },
+      {
+        "at": "2026-10-27 10:00",
+        "actor": "팀장",
+        "task": "TASK-0011",
+        "kind": "생성",
+        "text": "Task 생성 (초기 WBS)",
+        "before": "",
+        "after": "",
+        "id": "H-0002"
+      },
+      {
+        "at": "2026-10-27 10:00",
+        "actor": "팀장",
+        "task": "TASK-0010",
+        "kind": "생성",
+        "text": "Task 생성 (초기 WBS)",
+        "before": "",
+        "after": "",
+        "id": "H-0003"
+      },
+      {
+        "at": "2026-10-27 10:00",
+        "actor": "팀장",
+        "task": "TASK-0009",
+        "kind": "생성",
+        "text": "Task 생성 (초기 WBS)",
+        "before": "",
+        "after": "",
+        "id": "H-0004"
+      },
+      {
+        "at": "2026-10-27 10:00",
+        "actor": "팀장",
+        "task": "TASK-0008",
+        "kind": "생성",
+        "text": "Task 생성 (초기 WBS)",
+        "before": "",
+        "after": "",
+        "id": "H-0005"
+      },
+      {
+        "at": "2026-10-27 10:00",
+        "actor": "팀장",
+        "task": "TASK-0006",
+        "kind": "생성",
+        "text": "Task 생성 (초기 WBS)",
+        "before": "",
+        "after": "",
+        "id": "H-0006"
+      },
+      {
+        "at": "2026-10-27 10:00",
+        "actor": "팀장",
+        "task": "TASK-0005",
+        "kind": "생성",
+        "text": "Task 생성 (초기 WBS)",
+        "before": "",
+        "after": "",
+        "id": "H-0007"
+      },
+      {
+        "at": "2026-10-27 10:00",
+        "actor": "팀장",
+        "task": "TASK-0004",
+        "kind": "생성",
+        "text": "Task 생성 (초기 WBS)",
+        "before": "",
+        "after": "",
+        "id": "H-0008"
+      },
+      {
+        "at": "2026-10-27 10:00",
+        "actor": "팀장",
+        "task": "TASK-0003",
+        "kind": "생성",
+        "text": "Task 생성 (초기 WBS)",
+        "before": "",
+        "after": "",
+        "id": "H-0009"
+      },
+      {
+        "at": "2026-10-27 10:00",
+        "actor": "팀장",
+        "task": "TASK-0002",
+        "kind": "생성",
+        "text": "Task 생성 (초기 WBS)",
+        "before": "",
+        "after": "",
+        "id": "H-0010"
+      },
+      {
+        "at": "2026-10-27 10:00",
+        "actor": "팀장",
+        "task": "TASK-0001",
+        "kind": "생성",
+        "text": "Task 생성 (초기 WBS)",
+        "before": "",
+        "after": "",
+        "id": "H-0011"
+      },
+      {
+        "at": "2026-10-28 16:40",
+        "actor": "팀장",
+        "task": "TASK-0001",
+        "kind": "완료",
+        "text": "Completion Gate 5/5 통과 — 완료 처리",
+        "before": "QA 진행",
+        "after": "완료",
+        "id": "H-0012"
+      },
+      {
+        "at": "2026-10-30 09:12",
+        "actor": "팀장",
+        "task": "TASK-0007",
+        "kind": "생성",
+        "text": "Task 생성",
+        "before": "",
+        "after": "",
+        "id": "H-0013"
+      },
+      {
+        "at": "2026-11-01 10:02",
+        "actor": "Runner",
+        "task": "TASK-0007",
+        "kind": "실행",
+        "text": "ATT-0007-1 개발 실행 시작 (Claude)",
+        "before": "실행 대기",
+        "after": "실행 중",
+        "id": "H-0014"
+      },
+      {
+        "at": "2026-11-01 11:40",
+        "actor": "Runner",
+        "task": "TASK-0007",
+        "kind": "실행",
+        "text": "ATT-0007-1 완료, QA 요청",
+        "before": "실행 중",
+        "after": "QA 진행",
+        "id": "H-0015"
+      },
+      {
+        "at": "2026-11-01 13:35",
+        "actor": "Codex",
+        "task": "TASK-0007",
+        "kind": "검증",
+        "text": "V-0007-1 QA FAIL — 차단 결함 2건",
+        "before": "QA 진행",
+        "after": "재작업 필요",
+        "id": "H-0016"
+      },
+      {
+        "at": "2026-11-01 14:02",
+        "actor": "팀장",
+        "task": "TASK-0007",
+        "kind": "메시지",
+        "text": "MSG-001 수정 요청 → Claude",
+        "before": "",
+        "after": "Acknowledged",
+        "id": "H-0017"
+      },
+      {
+        "at": "2026-11-02 10:20",
+        "actor": "팀장",
+        "task": "TASK-0005",
+        "kind": "승인",
+        "text": "착수 승인",
+        "before": "승인 대기",
+        "after": "실행 대기",
+        "id": "H-0018"
+      },
+      {
+        "at": "2026-11-02 17:12",
+        "actor": "팀장",
+        "task": "TASK-0012",
+        "kind": "재계획",
+        "text": "CP-001 반영 — 신규 Task 생성",
+        "before": "NEW-1",
+        "after": "TASK-0012",
+        "id": "H-0019"
+      },
+      {
+        "at": "2026-11-03 17:48",
+        "actor": "Runner",
+        "task": "TASK-0004",
+        "kind": "실행",
+        "text": "ATT-0004-1 완료 — Seed 스크립트 미제출",
+        "before": "실행 중",
+        "after": "QA 진행",
+        "id": "H-0020"
+      },
+      {
+        "at": "2026-11-03 18:22",
+        "actor": "Runner",
+        "task": "TASK-0004",
+        "kind": "실행",
+        "text": "ATT-0004-2 Codex QA 시작",
+        "before": "",
+        "after": "",
+        "id": "H-0021"
+      },
+      {
+        "at": "2026-11-03 19:30",
+        "actor": "팀장",
+        "task": "TASK-0006",
+        "kind": "변경 제안",
+        "text": "CP-002 제출 — 승인 전 WBS 미반영",
+        "before": "",
+        "after": "승인 대기",
+        "id": "H-0022"
+      },
+      {
+        "at": "2026-11-03 19:42",
+        "actor": "팀장",
+        "task": "TASK-0005",
+        "kind": "메시지",
+        "text": "MSG-003 질문 → Codex 전달 실패",
+        "before": "Queued",
+        "after": "Failed",
+        "id": "H-0023"
+      },
+      {
+        "at": "2026-11-03 19:58",
+        "actor": "Runner",
+        "task": "TASK-0005",
+        "kind": "실행",
+        "text": "ATT-0005-1 개발 실행 시작 (Claude) — Runner 재부팅 후 재연결",
+        "before": "실행 대기",
+        "after": "실행 중",
+        "id": "H-0024"
       }
     ]
   },

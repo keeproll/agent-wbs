@@ -5,135 +5,8 @@ import type { Pool } from './pool.ts';
 import { assertConnectedToTestDatabase, assertTestDatabaseUrl } from './test-database.ts';
 import * as s from './schema.ts';
 
-// owner Q-03, P STAGE_PCT; remaining defaults: G §5.2-1, §7.3, §8.2, §10.
-export const stagePercent = {
-  planning: 0,
-  approval: 0,
-  ready: 0,
-  failed: 20,
-  running: 35,
-  paused: 40,
-  rework: 50,
-  qa: 65,
-  verifying: 80,
-  gate: 90,
-  done: 100,
-  cancelled: 0,
-};
-export const splitDefaults = {
-  maxH: 4,
-  minH: 0.5,
-  maxFiles: 8,
-  testIn: true,
-  dir: 'layer',
-  on: {
-    one: true,
-    domain: true,
-    size: true,
-    verify: true,
-    revert: true,
-    cg: true,
-    contract: true,
-    irrev: true,
-    refactor: true,
-    unknown: true,
-  },
-};
-// G §4.14 fixes these defaults; P TG_RULES0 supplies their keys.
-export const notifyDefaults = {
-  done: false,
-  fail: true,
-  admin: true,
-  approve: true,
-  buildOk: false,
-  buildFail: true,
-};
-
-// Mapping approval is distinct from model availability or permission to run it.
-export const effortModels = {
-  Codex: [
-    'gpt-6.2-sol',
-    'gpt-6.2-astra',
-    'gpt-6.1-sol',
-    'gpt-6.1-terra',
-    'gpt-6-sol',
-    'gpt-6-astra',
-    'gpt-5.6-sol',
-    'gpt-5.6-terra',
-    'gpt-6-luna',
-    'gpt-5.6-luna',
-    'gpt-5.5',
-  ],
-  Claude: ['claude-fable-5-2', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'],
-};
-
 export async function seedSystem(pool: Pool): Promise<void> {
-  await drizzle(pool).transaction(async (tx) => {
-    await tx.insert(s.systemState).values({ id: 1 }).onConflictDoNothing();
-    await tx.execute('select epoch from system_state where id=1 for share');
-    await tx
-      .insert(s.appSettings)
-      .values({
-        singleton: true,
-        heartbeat_seconds: 60,
-        heartbeat_misses: 3,
-        split: splitDefaults,
-        stage_pct: stagePercent,
-        timezone: 'Asia/Seoul',
-      })
-      .onConflictDoNothing();
-    await tx
-      .insert(s.execPolicy)
-      .values({
-        singleton: true,
-        on_usage: 'wait',
-        on_rework: 'up1',
-        esc_notify: 2,
-        floors: { verifyGeDev: true, dbHigh: true },
-        live_inject: false,
-        auto_retry_limit: 2,
-        auto_rework_limit: 3,
-      })
-      .onConflictDoNothing();
-    await tx
-      .insert(s.schedulePolicy)
-      .values({ singleton: true, window_days: 7, min_hours: 72 })
-      .onConflictDoNothing();
-    await tx
-      .insert(s.ciSettings)
-      .values({ singleton: true, night_at: '02:00', retry: 1 })
-      .onConflictDoNothing();
-    await tx
-      .insert(s.notifySettings)
-      .values({ singleton: true, enabled: false })
-      .onConflictDoNothing();
-    for (const [key, enabled] of Object.entries(notifyDefaults)) {
-      await tx.insert(s.notifyRules).values({ key, enabled }).onConflictDoNothing();
-    }
-    for (const cli of ['Codex', 'Claude'] as const) {
-      for (const model of effortModels[cli]) {
-        for (const [i, value] of ['low', 'medium', 'high', 'xhigh', 'max'].entries()) {
-          if (model === 'gpt-5.5' && value === 'max') continue;
-          await tx
-            .insert(s.agentEfforts)
-            .values({
-              agent: cli,
-              model_id: model,
-              value,
-              common_level: i + 1,
-              supported: cli === 'Claude' || model === 'gpt-5.5' ? null : true,
-              confirmation:
-                cli === 'Claude'
-                  ? 'bundled-api-docs; cli-per-model-unconfirmed'
-                  : model === 'gpt-5.5'
-                    ? 'bundled-only; availability-unconfirmed'
-                    : 'bundled-and-local-cache',
-            })
-            .onConflictDoNothing();
-        }
-      }
-    }
-  });
+  await pool.query('select public.seed_system()');
 }
 
 interface DemoTask {
@@ -153,7 +26,17 @@ interface DemoTask {
   out: string[];
   precond: string;
   doneCond: string;
-  spec?: { ac?: string[] };
+  spec?: { ac?: unknown[] };
+  approved: boolean;
+  updated: string;
+  actStart: string;
+  actEnd: string;
+  cg: string;
+  srcV: number;
+  run: { model: string; effort: string; basis: string; locked: boolean; at: string };
+  vrun: DemoTask['run'];
+  design: { kind: (typeof s.designKind.enumValues)[number] }[];
+  outputs: { name: string; kind: string; required: boolean; verify: string; delivered: boolean }[];
   checklist: {
     id: string;
     text: string;
@@ -166,10 +49,96 @@ interface DemoTask {
 }
 interface Demo {
   mock: {
-    project: { name: string; target: string };
+    project: {
+      name: string;
+      target: string;
+      regAt: string;
+      instr: string;
+      repo: { url: string; owner: string; name: string; base: string };
+      boot: { approvedAt: string };
+      inputs: {
+        v: number;
+        at: string;
+        commit: string;
+        proto: string;
+        md: string[];
+        changes: unknown[];
+        result: string;
+      }[];
+    };
     phases: { id: string; title: string; wps: { id: string; title: string; tasks: string[] }[] }[];
     tasks: Record<string, DemoTask>;
     deps: { pred: string; succ: string; type: 'FS' | 'SS' }[];
+    attempts: {
+      id: string;
+      task: string;
+      kind: '개발' | 'QA' | '재작업' | '재검증';
+      agent: 'Claude' | 'Codex';
+      status: '완료' | '실행 중' | '실패' | '중단';
+      start: string;
+      end: string;
+      summary: string;
+      files: string[];
+      fail: string;
+      tok: number;
+      model: string;
+      effort: string;
+    }[];
+    verifs: {
+      id: string;
+      attempt: string;
+      result: 'PASS' | 'FAIL' | 'BLOCKED';
+      cmd: string;
+      expected: string;
+      actual: string;
+      defects: string[];
+    }[];
+    msgs: {
+      id: string;
+      task: string;
+      attempt: string;
+      dir: 'in' | 'out';
+      from: '팀장' | 'Claude' | 'Codex';
+      to: '팀장' | 'Claude' | 'Codex';
+      type: string;
+      body: string;
+      at: string;
+      delivery: (typeof s.messageDelivery.enumValues)[number] | '';
+      work: string;
+      failReason: string;
+      pendingNext: boolean;
+    }[];
+    plannings: {
+      id: string;
+      title: string;
+      scope: string;
+      analyses: { agent: 'Claude' | 'Codex' }[];
+      review: {
+        topic: string;
+        kind: string;
+        codex: string;
+        claude: string;
+        choice: string;
+        memo: string;
+      }[];
+    }[];
+    proposals: {
+      id: string;
+      source: { kind: string };
+      status: (typeof s.proposalStatus.enumValues)[number];
+      ops: unknown[];
+      idMap: unknown;
+      approvals: { actor: string; action: string; comment: string }[];
+    }[];
+    hist: {
+      at: string;
+      actor: string;
+      task: string;
+      kind: string;
+      text: string;
+      before: string;
+      after: string;
+    }[];
   };
   sub: {
     defs: {
@@ -191,6 +160,17 @@ interface Demo {
   >;
 }
 
+// P uses local Seoul time; unknown timestamps remain null rather than being invented.
+const demoTime = (value: string) => {
+  if (!value) throw new Error('demo timestamp is missing');
+  return `${value.replace(' ', 'T')}:00+09:00`;
+};
+function demoRef(ids: Map<string, string>, key: string): string {
+  const id = ids.get(key);
+  if (!id) throw new Error(`missing demo reference ${key}`);
+  return id;
+}
+
 /** Demo is restricted to the same disposable local DB boundary as destructive tests. */
 export async function seedDemo(pool: Pool, testDatabaseUrl: string): Promise<void> {
   assertTestDatabaseUrl(testDatabaseUrl);
@@ -200,23 +180,47 @@ export async function seedDemo(pool: Pool, testDatabaseUrl: string): Promise<voi
   ) as Demo;
   await seedSystem(pool);
   await drizzle(pool).transaction(async (tx) => {
-    await tx.execute('select epoch from system_state where id=1 for share');
+    const epochResult = await tx.execute<{ epoch: number }>(
+      'select epoch from system_state where id=1 for share',
+    );
+    const epoch = epochResult.rows[0]?.epoch;
+    if (!epoch) throw new Error('system epoch is missing');
     if ((await tx.select().from(s.projects)).length)
       throw new Error('demo seed requires an empty project');
-    // P does not supply a real repository: keep it empty rather than inventing a URL.
     const [p] = await tx
       .insert(s.projects)
       .values({
         name: demo.mock.project.name,
-        repo_url: '',
-        repo_owner: '',
-        repo_name: '',
+        repo_url: demo.mock.project.repo.url,
+        repo_owner: demo.mock.project.repo.owner,
+        repo_name: demo.mock.project.repo.name,
+        base_commit: demo.mock.project.repo.base,
         target_date: demo.mock.project.target,
-        lead_instruction: '',
+        lead_instruction: demo.mock.project.instr,
         phase: 'active',
       })
       .returning();
     if (!p) throw new Error('demo project insert failed');
+    const inputs = new Map<number, string>();
+    for (const input of demo.mock.project.inputs) {
+      const [version] = await tx
+        .insert(s.inputVersions)
+        .values({
+          project_id: p.id,
+          v: input.v,
+          commit_sha: input.commit,
+          files: { summary: input.proto },
+          md_list: input.md,
+          changes: input.changes,
+          instruction: '',
+        })
+        .returning();
+      if (!version) throw new Error('demo input insert failed');
+      inputs.set(input.v, version.id);
+      await tx
+        .insert(s.inputVersionResults)
+        .values({ project_id: p.id, input_version: version.id, result: input.result });
+    }
     const ids = new Map<string, string>();
     for (const [phaseIndex, phase] of demo.mock.phases.entries()) {
       const [ph] = await tx
@@ -262,10 +266,42 @@ export async function seedDemo(pool: Pool, testDatabaseUrl: string): Promise<voi
               verifier_agent: t.verifier,
               status: t.status,
               verif_state: t.verif,
+              act_start: t.actStart ? demoTime(t.actStart) : null,
+              act_end: t.actEnd ? demoTime(t.actEnd) : null,
+              conflict_group: t.cg || null,
+              src_input_version: inputs.get(t.srcV) ?? null,
+              planning_approved_at: t.approved
+                ? demoTime(
+                    demo.mock.hist.filter((h) => h.task === key && h.kind === '승인').at(-1)?.at ??
+                      demo.mock.project.boot.approvedAt,
+                  )
+                : null,
             })
             .returning();
           if (!task) throw new Error('demo task insert failed');
           ids.set(key, task.id);
+          for (const [role, grade] of [
+            ['dev', t.run],
+            ['qa', t.vrun],
+          ] as const)
+            await tx
+              .insert(s.taskGrades)
+              .values({
+                project_id: p.id,
+                task: task.id,
+                role,
+                model_id: grade.model,
+                effort: grade.effort,
+                reason: grade.basis,
+                locked: grade.locked,
+                effective_from: demoTime(grade.at),
+              });
+          for (const output of t.outputs)
+            await tx.insert(s.taskOutputs).values({ project_id: p.id, task: task.id, ...output });
+          for (const design of t.design)
+            await tx
+              .insert(s.taskDesigns)
+              .values({ project_id: p.id, task: task.id, kind: design.kind, content: design });
           await tx.insert(s.taskSpecs).values({
             project_id: p.id,
             task: task.id,
@@ -319,6 +355,172 @@ export async function seedDemo(pool: Pool, testDatabaseUrl: string): Promise<voi
         .insert(s.taskDependencies)
         .values({ project_id: p.id, pred, succ, dep_type: d.type });
     }
+    const attempts = new Map<string, string>();
+    const kinds = { 개발: 'dev', QA: 'qa', 재작업: 'rework', 재검증: 'reverify' } as const;
+    const statuses = {
+      완료: 'completed',
+      '실행 중': 'running',
+      실패: 'failed',
+      중단: 'interrupted',
+    } as const;
+    for (const a of demo.mock.attempts) {
+      const [job] = await tx
+        .insert(s.runnerJobs)
+        .values({
+          project_id: p.id,
+          kind: 'attempt',
+          payload: { taskKey: a.task, kind: kinds[a.kind], demo: true },
+          epoch,
+          state: a.status === '실행 중' ? 'started' : a.status === '완료' ? 'done' : 'failed',
+          dedup_key: `demo:${a.id}`,
+        })
+        .returning();
+      if (!job) throw new Error('demo job insert failed');
+      const [attempt] = await tx
+        .insert(s.taskAttempts)
+        .values({
+          project_id: p.id,
+          task: demoRef(ids, a.task),
+          attempt_key: a.id,
+          attempt_no: Number(a.id.split('-').at(-1)),
+          job: job.id,
+          base_sha: demo.mock.project.repo.base,
+          // P supplies no attempt head SHA; an empty value remains visibly unverified.
+          head_sha: '',
+          spec_revision: 1,
+          kind: kinds[a.kind],
+          agent: a.agent,
+          status: statuses[a.status],
+          started_at: demoTime(a.start),
+          ended_at: a.end ? demoTime(`${a.start.slice(0, 10)} ${a.end}`) : null,
+          model_id: a.model,
+          effort: a.effort,
+          summary: a.summary,
+          failure: a.fail || null,
+          tokens: a.tok,
+        })
+        .returning();
+      if (!attempt) throw new Error('demo attempt insert failed');
+      attempts.set(a.id, attempt.id);
+      for (const path of a.files)
+        await tx.insert(s.attemptFiles).values({ project_id: p.id, attempt: attempt.id, path });
+    }
+    for (const v of demo.mock.verifs) {
+      const [verification] = await tx
+        .insert(s.verifications)
+        .values({
+          project_id: p.id,
+          attempt: demoRef(attempts, v.attempt),
+          result: v.result,
+          head_sha: '',
+          spec_revision: 1,
+          cmd: v.cmd,
+          expected: v.expected,
+          actual: v.actual,
+        })
+        .returning();
+      if (!verification) throw new Error('demo verification insert failed');
+      for (const defect of v.defects) {
+        const [key, ...content] = defect.split(' ');
+        if (!key) throw new Error('demo defect key is missing');
+        await tx
+          .insert(s.defects)
+          .values({
+            project_id: p.id,
+            def_key: key,
+            verification: verification.id,
+            blocking: defect.includes('(차단 결함)'),
+            content: content.join(' '),
+          });
+      }
+    }
+    for (const m of demo.mock.msgs)
+      await tx
+        .insert(s.messages)
+        .values({
+          project_id: p.id,
+          task: demoRef(ids, m.task),
+          msg_key: m.id,
+          attempt: m.attempt ? demoRef(attempts, m.attempt) : null,
+          dir: m.dir,
+          type: m.type,
+          to_agent: m.to === '팀장' ? null : m.to,
+          from_agent: m.from === '팀장' ? null : m.from,
+          body: m.body,
+          delivery: m.delivery || null,
+          pending_next: m.pendingNext,
+          work_state: m.work,
+          fail_reason: m.failReason || null,
+          draft: m.delivery === 'Draft',
+          created_at: demoTime(m.at),
+        });
+    for (const session of demo.mock.plannings) {
+      const [planning] = await tx
+        .insert(s.plannings)
+        .values({
+          project_id: p.id,
+          planning_key: session.id,
+          title: session.title,
+          scope: session.scope,
+          status: 'unconfirmed',
+        })
+        .returning();
+      if (!planning) throw new Error('demo planning insert failed');
+      for (const analysis of session.analyses)
+        await tx
+          .insert(s.planningAnalyses)
+          .values({ project_id: p.id, planning: planning.id, agent: analysis.agent, analysis });
+      for (const review of session.review)
+        await tx
+          .insert(s.planningReviews)
+          .values({
+            project_id: p.id,
+            planning: planning.id,
+            topic: review.topic,
+            kind: review.kind,
+            codex: review.codex,
+            claude: review.claude,
+            choice: review.choice,
+            memo: review.memo,
+          });
+    }
+    for (const cp of demo.mock.proposals) {
+      const [proposal] = await tx
+        .insert(s.changeProposals)
+        .values({
+          project_id: p.id,
+          cp_key: cp.id,
+          source: cp.source.kind,
+          status: cp.status,
+          ops: cp.ops,
+          id_map: cp.idMap,
+        })
+        .returning();
+      if (!proposal) throw new Error('demo proposal insert failed');
+      for (const event of cp.approvals)
+        await tx
+          .insert(s.changeProposalEvents)
+          .values({
+            project_id: p.id,
+            proposal: proposal.id,
+            kind: event.action,
+            actor: event.actor,
+            comment: event.comment,
+          });
+    }
+    for (const h of demo.mock.hist)
+      await tx
+        .insert(s.taskHistory)
+        .values({
+          project_id: p.id,
+          task: h.task ? demoRef(ids, h.task) : null,
+          at: demoTime(h.at),
+          actor: h.actor,
+          kind: h.kind,
+          text: h.text,
+          before: h.before,
+          after: h.after,
+        });
     for (const d of demo.sub.defs) {
       await tx
         .insert(s.subagentDefs)
@@ -332,6 +534,7 @@ export async function seedDemo(pool: Pool, testDatabaseUrl: string): Promise<voi
           text: d.text,
           hash: d.hash,
           allowed: d.allowed,
+          is_demo: true,
           ref: d.ref,
         })
         .onConflictDoNothing();
