@@ -1,0 +1,1067 @@
+[
+ {
+  "id": "heartbeat",
+  "body": {
+   "runnerId": "r1",
+   "version": "0.0.0",
+   "epoch": 2
+  },
+  "status": 204
+ },
+ {
+  "id": "reportSession",
+  "body": {
+   "runnerId": "r1",
+   "event": "stop",
+   "at": "2026-11-25T01:02:03.123456Z",
+   "reason": "reboot"
+  },
+  "status": 204
+ },
+ {
+  "id": "reportHost",
+  "body": {
+   "hostId": "h1",
+   "cpu": "cpu",
+   "cores": 20,
+   "memGB": 23,
+   "swapGB": 4,
+   "diskFreeGB": 952,
+   "os": "WSL2",
+   "perSessionGB": 1.0,
+   "samples": 38
+  },
+  "status": 200,
+  "response": {
+   "mode": "auto",
+   "caps": {
+    "total": 16,
+    "Claude": 12,
+    "Codex": 12,
+    "heavy": 6
+   },
+   "recommended": {
+    "total": 16,
+    "Claude": 12,
+    "Codex": 12,
+    "heavy": 6
+   },
+   "hostChanged": false
+  }
+ },
+ {
+  "id": "reportReadiness",
+  "body": {
+   "at": "2026-11-25T01:02:03.123456Z",
+   "items": [
+    {
+     "key": "lfs",
+     "status": "fail",
+     "detail": "없음",
+     "fix": "git-lfs 설치"
+    }
+   ]
+  },
+  "status": 204
+ },
+ {
+  "id": "reportModels",
+  "body": {
+   "agent": "Codex",
+   "models": [
+    {
+     "id": "model-a",
+     "label": "Model A",
+     "rank": 1
+    }
+   ],
+   "efforts": [
+    "low",
+    "ultra"
+   ]
+  },
+  "status": 200,
+  "response": {
+   "newModels": [
+    "model-a"
+   ]
+  }
+ },
+ {
+  "id": "reportUsage",
+  "body": {
+   "agent": "Claude",
+   "remainPct": 64,
+   "resetAt": "2026-11-25T01:02:03.123456Z",
+   "tokensUsed": 10
+  },
+  "status": 204
+ },
+ {
+  "id": "reportConcurrency",
+  "body": {
+   "at": "2026-11-25T01:02:03.123456Z",
+   "limit": 10,
+   "running": {
+    "Claude": 2,
+    "Codex": 1
+   },
+   "subagents": 1,
+   "heavyJobs": 1,
+   "resources": {
+    "cpuPct": 31,
+    "memFreeGB": 9.4,
+    "swapGB": 0
+   },
+   "sessions": [
+    {
+     "attemptId": "ATT-0005-1",
+     "observed": 1,
+     "reserved": 3,
+     "state": "unconfirmed"
+    }
+   ],
+   "adjust": {
+    "from": 8,
+    "to": 10,
+    "reason": "여유"
+   }
+  },
+  "status": 200,
+  "response": {
+   "caps": {
+    "total": 16,
+    "Claude": 12,
+    "Codex": 12,
+    "heavy": 6,
+    "memReserveGB": 4
+   }
+  }
+ },
+ {
+  "id": "getRunGrade",
+  "params": {
+   "taskKey": "TASK-0005"
+  },
+  "query": {
+   "role": "dev"
+  },
+  "status": 200,
+  "response": {
+   "model": "model-a",
+   "effort": "high",
+   "adjust": {
+    "kind": "up",
+    "reason": "재작업"
+   },
+   "locked": false,
+   "floorEffort": "medium",
+   "allowedModels": [
+    "model-a"
+   ],
+   "policy": {
+    "onUsage": "wait",
+    "lowPct": 20,
+    "onRework": "up1",
+    "notifyAt": 2
+   }
+  }
+ },
+ {
+  "id": "getTaskSubagents",
+  "params": {
+   "taskKey": "TASK-0005"
+  },
+  "query": {
+   "role": "qa"
+  },
+  "status": 200,
+  "response": {
+   "enabled": true,
+   "items": [
+    {
+     "id": "qa-verifier",
+     "agent": "Codex",
+     "version": 4,
+     "hash": "e81d5c",
+     "file": "내용",
+     "sandbox": "읽기 전용"
+    }
+   ]
+  }
+ },
+ {
+  "id": "pollMessages",
+  "query": {
+   "cursor": "c1"
+  },
+  "status": 200,
+  "response": {
+   "messages": [
+    {
+     "id": "m1",
+     "taskKey": "TASK-0005",
+     "attemptId": null,
+     "toAgent": "Claude",
+     "type": "추가 지시",
+     "body": "지시",
+     "pendingNext": true,
+     "createdAt": "2026-11-25T01:02:03.123456Z"
+    }
+   ],
+   "nextCursor": "c2"
+  }
+ },
+ {
+  "id": "ackMessage",
+  "params": {
+   "messageId": "m1"
+  },
+  "status": 204
+ },
+ {
+  "id": "respondMessage",
+  "params": {
+   "messageId": "m1"
+  },
+  "body": {
+   "text": "확인",
+   "workState": "다음 실행에 반영"
+  },
+  "status": 204
+ },
+ {
+  "id": "reportAttemptStatus",
+  "params": {
+   "attemptId": "ATT-0005-1"
+  },
+  "body": {
+   "fence": 3,
+   "status": "running",
+   "at": "2026-11-25T01:02:03.123456Z",
+   "model": "model-a",
+   "effort": "high",
+   "adjust": {
+    "kind": "keep",
+    "reason": "재개"
+   },
+   "subagents": [
+    {
+     "id": "qa-verifier",
+     "version": 4,
+     "installed": true
+    }
+   ]
+  },
+  "status": 204
+ },
+ {
+  "id": "interruptAttempt",
+  "params": {
+   "attemptId": "ATT-0005-1"
+  },
+  "body": {
+   "fence": 3,
+   "reason": "usage_limit",
+   "at": "2026-11-25T01:02:03.123456Z",
+   "progressNote": "절반",
+   "tokensUsed": 5
+  },
+  "status": 200,
+  "response": {
+   "taskStatus": "paused"
+  }
+ },
+ {
+  "id": "reportAttemptResult",
+  "params": {
+   "attemptId": "ATT-0005-1"
+  },
+  "body": {
+   "fence": 3,
+   "summary": "QA 완료",
+   "changedFiles": [],
+   "evidence": [
+    "ev-1"
+   ],
+   "tokens": 90,
+   "verification": {
+    "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "specRevision": 2,
+    "result": "FAIL",
+    "cmd": "pnpm test",
+    "expected": "0",
+    "actual": "1",
+    "defects": [
+     {
+      "text": "누락",
+      "blocking": true
+     }
+    ],
+    "checklist": [
+     {
+      "itemKey": "CL-0005-1",
+      "done": false
+     }
+    ]
+   }
+  },
+  "status": 201
+ },
+ {
+  "id": "uploadEvidence",
+  "params": {
+   "attemptId": "ATT-0005-1"
+  },
+  "body": {
+   "file": "로그 내용",
+   "kind": "log",
+   "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+   "size": 13,
+   "fence": 3
+  },
+  "status": 201,
+  "response": {
+   "id": "ev-1"
+  }
+ },
+ {
+  "id": "reportSubagentUsage",
+  "params": {
+   "attemptId": "ATT-0005-1"
+  },
+  "body": {
+   "fence": 3,
+   "confirm": "partial",
+   "items": [
+    {
+     "id": "qa-verifier",
+     "version": null,
+     "hash": null
+    }
+   ]
+  },
+  "status": 204
+ },
+ {
+  "id": "reportInputChanges",
+  "body": {
+   "commits": [
+    {
+     "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "at": "2026-11-25T01:02:03.123456Z",
+     "author": "lead",
+     "message": "문서 갱신"
+    }
+   ],
+   "files": [
+    {
+     "commitSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "path": "prototype/docs/a.md",
+     "change": "modified",
+     "added": 42,
+     "deleted": 3
+    }
+   ]
+  },
+  "status": 204
+ },
+ {
+  "id": "reportRepoCheck",
+  "params": {
+   "id": "rc-1"
+  },
+  "body": {
+   "fence": 1,
+   "access": true,
+   "private": true,
+   "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "structure": {
+    "uiux": true,
+    "uiuxFiles": 3,
+    "docs": [
+     "prototype/docs/a.md"
+    ],
+    "src": false,
+    "contracts": false,
+    "agentwbs": false
+   }
+  },
+  "status": 204
+ },
+ {
+  "id": "reportBootstrapProgress",
+  "params": {
+   "jobId": "job-1"
+  },
+  "body": {
+   "fence": 1,
+   "stepKey": "codex",
+   "status": "run",
+   "at": "2026-11-25T01:02:03.123456Z",
+   "note": "분석 중"
+  },
+  "status": 204
+ },
+ {
+  "id": "startCiRun",
+  "body": {
+   "stage": "task",
+   "taskKey": "TASK-0005",
+   "attemptId": "ATT-0005-1",
+   "ref": "agent/TASK-0005",
+   "pr": 8,
+   "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "pipelineSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "status": 201,
+  "response": {
+   "id": "ci-1",
+   "runKey": "CI-0118"
+  }
+ },
+ {
+  "id": "updateCiRun",
+  "params": {
+   "id": "ci-1"
+  },
+  "body": {
+   "steps": [
+    {
+     "name": "lint",
+     "status": "pass",
+     "durationMs": 1200
+    }
+   ],
+   "status": "pass",
+   "logExcerpt": "",
+   "artifacts": [
+    "runs/ci-1/log.txt"
+   ],
+   "treeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "status": 204
+ },
+ {
+  "id": "reportMergeQueue",
+  "body": {
+   "pr": 8,
+   "taskKey": "TASK-0005",
+   "status": "merged",
+   "qaHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "syncedHeadSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "actualMergeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "status": 204
+ },
+ {
+  "id": "reportDesignSnapshot",
+  "body": {
+   "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "files": [
+    {
+     "path": "contracts/api/openapi.yaml",
+     "kind": "REST",
+     "format": "OpenAPI 3.1",
+     "status": "ok"
+    }
+   ],
+   "items": [
+    {
+     "itemKey": "GET /api/tasks",
+     "kind": "REST",
+     "path": "contracts/api/openapi.yaml",
+     "content": {}
+    }
+   ],
+   "drifts": [
+    {
+     "itemKey": "GET /api/tasks",
+     "kind": "REST",
+     "where": "main",
+     "text": "필드 차이",
+     "compat": "unchecked"
+    }
+   ]
+  },
+  "status": 204
+ },
+ {
+  "id": "reportGithubStatus",
+  "body": {
+   "mode": "token",
+   "ok": true,
+   "account": "lead",
+   "scopes": {
+    "contents": true,
+    "pulls": true,
+    "statuses": true,
+    "metadata": true
+   },
+   "expiresAt": "2026-11-25T01:02:03.123456Z"
+  },
+  "status": 204
+ },
+ {
+  "id": "getGithubCredential",
+  "status": 200,
+  "response": {
+   "sealed": "c2VhbGVk"
+  }
+ },
+ {
+  "id": "getRunnerPolicy",
+  "status": 200,
+  "response": {
+   "caps": {
+    "total": 16,
+    "Claude": 12,
+    "Codex": 12,
+    "heavy": 6,
+    "memReserveGB": 4
+   },
+   "subagentBudget": {
+    "dev": 2,
+    "qa": 3
+   },
+   "heartbeatSeconds": 60,
+   "inputCheckMinutes": 5,
+   "ci": {
+    "nightAt": "02:00",
+    "retry": 1,
+    "deployUrl": null
+   }
+  }
+ },
+ {
+  "id": "getCommands",
+  "status": 200,
+  "response": {
+   "currentEpoch": 3,
+   "commands": [
+    {
+     "id": "cmd-1",
+     "kind": "reset-cleanup",
+     "epoch": 3,
+     "payload": {
+      "branches": [
+       "agent/TASK-0005"
+      ]
+     }
+    }
+   ]
+  }
+ },
+ {
+  "id": "reportCommandResult",
+  "params": {
+   "id": "cmd-1"
+  },
+  "body": {
+   "status": "done",
+   "items": [
+    {
+     "name": "브랜치 삭제",
+     "ok": true,
+     "detail": "1개"
+    }
+   ]
+  },
+  "status": 204
+ },
+ {
+  "id": "claimJob",
+  "body": {
+   "kinds": [
+    "attempt",
+    "repo_check"
+   ],
+   "capacity": 2
+  },
+  "status": 200,
+  "response": {
+   "job": {
+    "id": "job-1",
+    "kind": "attempt",
+    "leaseUntil": "2026-11-25T01:02:03.123456Z",
+    "fence": 3,
+    "payload": {
+     "taskKey": "TASK-0005",
+     "kind": "dev",
+     "agent": "Claude",
+     "branch": "agent/TASK-0005",
+     "baseCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "inputVersion": 1,
+     "instructions": {}
+    }
+   }
+  }
+ },
+ {
+  "id": "renewJob",
+  "params": {
+   "id": "job-1"
+  },
+  "body": {
+   "fence": 3
+  },
+  "status": 200,
+  "response": {
+   "leaseUntil": "2026-11-25T01:02:03.123456Z"
+  }
+ },
+ {
+  "id": "startJob",
+  "params": {
+   "id": "job-1"
+  },
+  "body": {
+   "fence": 3,
+   "hostId": "h1",
+   "bootId": "b1",
+   "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "installedSubagents": [
+    {
+     "id": "qa-verifier",
+     "version": 4,
+     "hash": "e81d5c"
+    }
+   ]
+  },
+  "status": 200,
+  "response": {
+   "attemptId": "ATT-0005-1"
+  }
+ },
+ {
+  "id": "reportJobProcess",
+  "params": {
+   "id": "job-1"
+  },
+  "body": {
+   "fence": 3,
+   "processGroup": 4321,
+   "cgroup": null
+  },
+  "status": 204
+ },
+ {
+  "id": "releaseJobSlots",
+  "params": {
+   "id": "job-1"
+  },
+  "body": {
+   "fence": 3,
+   "hostId": "h1",
+   "proof": "group_empty",
+   "at": "2026-11-25T01:02:03.123456Z"
+  },
+  "status": 204
+ },
+ {
+  "id": "acquireJobSlots",
+  "params": {
+   "id": "job-1"
+  },
+  "body": {
+   "fence": 3,
+   "hostId": "h1",
+   "processGroup": 4321
+  },
+  "status": 204
+ },
+ {
+  "id": "releaseJob",
+  "params": {
+   "id": "job-1"
+  },
+  "body": {
+   "fence": 2,
+   "hostId": "h1",
+   "proof": "boot_changed",
+   "at": "2026-11-25T01:02:03.123456Z"
+  },
+  "status": 204
+ },
+ {
+  "id": "reconcileJob",
+  "params": {
+   "id": "job-1"
+  },
+  "body": {
+   "fence": 3,
+   "evidence": {
+    "outcome": "partial",
+    "checkedAt": "2026-11-25T01:02:03.123456Z",
+    "detail": {
+     "pr": 8
+    }
+   }
+  },
+  "status": 204
+ },
+ {
+  "id": "finishJob",
+  "params": {
+   "id": "job-1"
+  },
+  "body": {
+   "fence": 3,
+   "status": "failed",
+   "error": {
+    "code": "SUBAGENT_INSTALL_FAILED",
+    "message": "hash 불일치"
+   }
+  },
+  "status": 204
+ },
+ {
+  "id": "submitEstimates",
+  "body": {
+   "items": [
+    {
+     "taskKey": "TASK-0005",
+     "estHours": 2,
+     "loHours": 1,
+     "hiHours": 4,
+     "tokensK": 120,
+     "confidence": "중",
+     "basis": "유사 작업 기준",
+     "agreedBy": [
+      "Codex",
+      "Claude"
+     ]
+    }
+   ]
+  },
+  "status": 200,
+  "response": {
+   "replan": {
+    "replanId": "RP-004",
+    "baselineVersion": 4,
+    "projectEnd": "2026-12-18",
+    "range": {
+     "lo": "2026-12-10",
+     "hi": "2026-12-28"
+    },
+    "moved": [
+     {
+      "taskKey": "TASK-0005",
+      "before": "2026-12-01",
+      "after": "2026-12-02",
+      "deltaDays": 1
+     }
+    ]
+   }
+  }
+ },
+ {
+  "id": "requestReplan",
+  "body": {
+   "trigger": "재추정",
+   "capacity": {
+    "rate": 0.6,
+    "concurrency": 10,
+    "subRatio": 0.5
+   }
+  },
+  "status": 202,
+  "response": {
+   "replanId": "RP-004",
+   "baselineVersion": null,
+   "projectEnd": "2026-12-18",
+   "range": {
+    "lo": "2026-12-10",
+    "hi": "2026-12-28"
+   },
+   "moved": [
+    {
+     "taskKey": "TASK-0005",
+     "before": "2026-12-01",
+     "after": "2026-12-02",
+     "deltaDays": 1
+    }
+   ]
+  }
+ },
+ {
+  "id": "submitDraft",
+  "params": {
+   "jobId": "job-1"
+  },
+  "body": {
+   "fence": 1,
+   "phases": [
+    {
+     "ref": "P1",
+     "title": "기반"
+    }
+   ],
+   "wps": [
+    {
+     "ref": "W1",
+     "phaseRef": "P1",
+     "title": "환경"
+    }
+   ],
+   "tasks": [
+    {
+     "ref": "T1",
+     "wpRef": "W1",
+     "title": "Monorepo 구성",
+     "workType": "Configuration",
+     "primaryDomain": "DevOps",
+     "relatedDomains": [
+      "Common"
+     ],
+     "priority": 1,
+     "assigneeAgent": "Claude",
+     "verifierAgent": "Codex",
+     "estimate": {
+      "estHours": 2,
+      "loHours": 1,
+      "hiHours": 4,
+      "tokensK": 120,
+      "confidence": "중",
+      "basis": "유사 작업 기준",
+      "agreedBy": [
+       "Codex",
+       "Claude"
+      ]
+     },
+     "ac": [
+      {
+       "given": "클린",
+       "when": "빌드",
+       "then": "0",
+       "method": "명령"
+      }
+     ],
+     "outputs": [
+      {
+       "name": "package.json",
+       "kind": "설정",
+       "required": true,
+       "verify": "",
+       "delivered": false
+      }
+     ],
+     "checklist": [
+      {
+       "content": "설치",
+       "required": true
+      }
+     ],
+     "grades": {
+      "dev": {
+       "modelId": "model-a",
+       "effort": "high",
+       "reason": "보통 난이도"
+      },
+      "qa": {
+       "modelId": "model-a",
+       "effort": "high",
+       "reason": "보통 난이도"
+      }
+     },
+     "subagents": {
+      "dev": [],
+      "qa": [
+       "qa-verifier"
+      ],
+      "basis": "검증"
+     },
+     "splitBasis": "목적 하나",
+     "conflictGroup": null,
+     "designItems": []
+    }
+   ],
+   "deps": []
+  },
+  "status": 201,
+  "response": {
+   "revision": 1
+  }
+ },
+ {
+  "id": "submitTechProposals",
+  "params": {
+   "jobId": "job-1"
+  },
+  "body": {
+   "fence": 1,
+   "decisions": [
+    {
+     "area": "통신",
+     "title": "화면 갱신",
+     "choice": "SSE",
+     "reason": "단방향",
+     "alternatives": "WebSocket"
+    }
+   ]
+  },
+  "status": 201
+ },
+ {
+  "id": "createPlanningSession",
+  "body": {
+   "title": "Phase 상세화",
+   "scope": "WP-06"
+  },
+  "status": 201,
+  "response": {
+   "id": "pl-1"
+  }
+ },
+ {
+  "id": "submitPlanningAnalysis",
+  "params": {
+   "id": "pl-1"
+  },
+  "body": {
+   "agent": "Codex",
+   "summary": "요약",
+   "items": [
+    "항목"
+   ]
+  },
+  "status": 201
+ },
+ {
+  "id": "submitPlanningReviews",
+  "params": {
+   "id": "pl-1"
+  },
+  "body": {
+   "reviews": [
+    {
+     "topic": "주제",
+     "kind": "agree",
+     "codex": "의견",
+     "claude": "동일",
+     "ops": [
+      {
+       "op": "add",
+       "ref": "NEW-1",
+       "t": {
+        "title": "Runner 응답 수신 처리",
+        "type": "Implementation",
+        "domain": "BE",
+        "rel": [
+         "API"
+        ],
+        "wp": "WP-06",
+        "priority": 1,
+        "assignee": "Claude",
+        "verifier": "Codex",
+        "purpose": "목적",
+        "doneCond": "완료 조건"
+       },
+       "preds": [
+        {
+         "pred": "TASK-0012",
+         "type": "FS"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "status": 201
+ },
+ {
+  "id": "submitPlanningProposal",
+  "body": {
+   "title": "제목",
+   "reason": "사유",
+   "source": {
+    "kind": "planning",
+    "id": "pl-1"
+   },
+   "ops": [
+    {
+     "op": "add",
+     "ref": "NEW-1",
+     "t": {
+      "title": "Runner 응답 수신 처리",
+      "type": "Implementation",
+      "domain": "BE",
+      "rel": [
+       "API"
+      ],
+      "wp": "WP-06",
+      "priority": 1,
+      "assignee": "Claude",
+      "verifier": "Codex",
+      "purpose": "목적",
+      "doneCond": "완료 조건"
+     },
+     "preds": [
+      {
+       "pred": "TASK-0012",
+       "type": "FS"
+      }
+     ]
+    },
+    {
+     "op": "modify",
+     "task": "TASK-0012",
+     "field": "priority",
+     "after": 0
+    },
+    {
+     "op": "dep-remove",
+     "pred": "TASK-0005",
+     "succ": "TASK-0006"
+    },
+    {
+     "op": "dep-add",
+     "pred": "NEW-1",
+     "succ": "TASK-0006",
+     "type": "SS"
+    },
+    {
+     "op": "remove",
+     "task": "TASK-0011"
+    }
+   ]
+  },
+  "status": 201,
+  "response": {
+   "id": "cp-1",
+   "cpKey": "CP-002",
+   "status": "held"
+  }
+ },
+ {
+  "id": "submitTaskPlan",
+  "params": {
+   "taskKey": "TASK-0005"
+  },
+  "body": {
+   "grades": {
+    "dev": {
+     "modelId": "model-a",
+     "effort": "high",
+     "reason": "보통 난이도"
+    },
+    "qa": {
+     "modelId": "model-a",
+     "effort": "high",
+     "reason": "보통 난이도"
+    }
+   },
+   "subagents": {
+    "dev": [],
+    "qa": [],
+    "basis": ""
+   },
+   "conflictGroup": {
+    "name": "DB Schema",
+    "reason": "같은 테이블"
+   }
+  },
+  "status": 204
+ }
+]

@@ -1,0 +1,464 @@
+import Type, { type TProperties } from 'typebox';
+import * as c from '../common.ts';
+import * as m from '../models.ts';
+import { operation } from '../operation.ts';
+
+const { AnyOf, Body, Nullable, Opt, List, Text, Page, PageQuery } = c;
+const lead = { principal: 'lead' } as const;
+const byBody = { ...lead, version: 'body' } as const;
+const noVersion = { ...lead, version: 'none' } as const;
+/** 아직 저장한 적이 없으면 null(초기화 직후) */
+const settingVersion = { updatedAt: Nullable(c.Timestamp) };
+const jobCreated = { 202: Type.Object({ jobId: c.Id }) };
+
+/** GET·PUT 쌍. 응답은 저장값 + updatedAt */
+const setting = <T extends TProperties>(
+  name: string,
+  path: string,
+  summary: string,
+  fields: T,
+  extra: { write?: TProperties; read?: TProperties } = {},
+) => [
+  operation({
+    ...lead,
+    id: `get${name}`,
+    method: 'GET',
+    path,
+    summary: `${summary} 조회`,
+    responses: { 200: Type.Object({ ...fields, ...extra.read, ...settingVersion }) },
+  }),
+  operation({
+    ...byBody,
+    id: `put${name}`,
+    method: 'PUT',
+    path,
+    summary: `${summary} 저장`,
+    body: Body({ ...settingVersion, ...fields, ...extra.write }),
+    responses: { 200: Type.Object({ ...fields, ...extra.read, ...settingVersion }) },
+  }),
+];
+
+const SPLIT_RULES = ['one', 'domain', 'size', 'verify', 'revert', 'cg', 'contract', 'irrev', 'refactor', 'unknown'];
+
+const settings = [
+  ...setting('WorkflowSettings', '/api/settings/workflow', 'Agent 역할·기본 Workflow', {
+    devAgent: c.Agent,
+    qaAgent: c.Agent,
+    liveInject: Type.Boolean(),
+    heartbeatSeconds: Type.Integer({ minimum: 1 }),
+    missedHeartbeats: Type.Integer({ minimum: 1 }),
+  }),
+  ...setting('ExecPolicy', '/api/settings/exec-policy', '실행 정책', {
+    ...m.ExecPolicy,
+    floors: Body({ verifyGeDev: Type.Boolean(), dbHigh: Type.Boolean() }),
+    autoRetryLimit: c.Count,
+    autoReworkLimit: c.Count,
+  }),
+  ...setting(
+    'ModelSettings',
+    '/api/settings/models',
+    '허용 모델',
+    {
+      models: List(
+        Body({
+          agent: c.Agent,
+          id: Text,
+          label: Text,
+          rank: Type.Integer(),
+          allowed: Type.Boolean(),
+          isNew: Type.Boolean(),
+          // 공통 단계 1~5. 미매핑·미확인은 null(owner Q-06)
+          efforts: List(Body({ key: Text, level: Nullable(Type.Integer({ minimum: 1, maximum: 5 })) })),
+        }),
+      ),
+    },
+  ),
+  ...setting('SplitSettings', '/api/settings/split', 'Task 분할 기준', {
+    maxHours: Type.Number({ exclusiveMinimum: 0 }),
+    minHours: Type.Number({ exclusiveMinimum: 0 }),
+    maxFiles: Type.Integer({ minimum: 1 }),
+    testIn: Type.Boolean(),
+    dir: AnyOf('layer'),
+    on: Body(Object.fromEntries(SPLIT_RULES.map((rule) => [rule, Type.Boolean()]))),
+  }),
+  ...setting('ScheduleSettings', '/api/settings/schedule', '일정 재조정 정책', {
+    autoReplan: Type.Boolean(),
+    cpAuto: Type.Boolean(),
+    thresholdDays: Type.Number({ minimum: 0 }),
+    assumeRate: Type.Number({ exclusiveMinimum: 0, maximum: 1 }),
+    windowDays: Type.Integer({ minimum: 1 }),
+    minHours: c.Hours,
+  }),
+  ...setting('Blackouts', '/api/settings/blackouts', '작업 불가일', {
+    days: List(Body({ date: c.DateOnly, note: Type.String() })),
+  }),
+  ...setting('Concurrency', '/api/settings/concurrency', '동시 실행 상한', {
+    mode: AnyOf('auto', 'manual'),
+    caps: Body(m.Caps),
+    memReserveGB: Type.Number({ minimum: 0 }),
+  }),
+  ...setting('ObsBudget', '/api/settings/obs-budget', '하위 Agent 동시 예산', { budget: m.SubagentBudget }),
+  ...setting(
+    'SubagentSettings',
+    '/api/settings/subagents',
+    '하위 Agent 사용·허용',
+    { enabled: Type.Boolean() },
+    {
+      write: { allowed: List(Body({ id: c.Id, allowed: Type.Boolean() })) },
+      read: {
+        defs: List(
+          Type.Object({
+            id: c.Id,
+            version: c.Count,
+            agent: c.Agent,
+            role: Type.String(),
+            tools: Type.String(),
+            sandbox: Type.String(),
+            text: Type.String(),
+            hash: Type.String(),
+            allowed: Type.Boolean(),
+            ref: Nullable(Type.String()),
+          }),
+        ),
+      },
+    },
+  ),
+  ...setting('CiDefaults', '/api/settings/ci', 'CI 실행 설정', m.CiSettings),
+  ...setting(
+    'GithubSettings',
+    '/api/settings/github',
+    'GitHub 연결',
+    { mode: c.GithubMode },
+    {
+      write: { token: Opt(c.SecretInput) },
+      read: {
+        tokenSet: Type.Boolean(),
+        status: Type.String(),
+        account: Nullable(Type.String()),
+        scopes: Nullable(c.GithubScopes),
+        expiresAt: Nullable(c.Timestamp),
+      },
+    },
+  ),
+  operation({
+    ...noVersion,
+    id: 'checkGithub',
+    method: 'POST',
+    path: '/api/settings/github/check',
+    summary: 'GitHub 연결 확인 요청(Runner)',
+    responses: jobCreated,
+  }),
+  ...setting(
+    'AppUrl',
+    '/api/settings/app-url',
+    'Agent WBS 접속 주소(메일·Telegram 공용, 빈 값이면 링크 없음)',
+    { appUrl: Nullable(c.HttpUrl) },
+  ),
+];
+
+/* ---- 메일(G§8.5) ---- */
+const smtp = {
+  host: Text,
+  port: Type.Integer({ minimum: 1, maximum: 65535 }),
+  // 값 목록이 원본에 없다(P Mock은 STARTTLS)
+  sec: Text,
+  from: Text,
+  user: Type.String(),
+};
+const subscription = { daily: Type.Boolean(), weekly: Type.Boolean(), view: c.ReportView, pdf: Type.Boolean() };
+const Recipient = Type.Object(
+  {
+    id: c.Id,
+    email: Type.String(),
+    name: Type.String(),
+    ...subscription,
+    active: Type.Boolean(),
+    updatedAt: c.Timestamp,
+  },
+  { title: 'Recipient' },
+);
+const MailLog = Type.Object(
+  {
+    id: c.Id,
+    reportId: c.Id,
+    recipientId: Nullable(c.Id),
+    to: Type.String(),
+    subject: Type.String(),
+    view: c.ReportView,
+    tryNo: Type.Integer({ minimum: 1 }),
+    state: AnyOf('queued', 'sending', 'accepted', 'retry_wait', 'failed', 'unknown'),
+    error: Nullable(Type.String()),
+    reason: Type.String(),
+    at: c.Timestamp,
+  },
+  { title: 'MailLog' },
+);
+const queued = { 202: Type.Object({ ids: List(c.Id) }) };
+
+const mail = [
+  operation({
+    ...lead,
+    id: 'getSmtp',
+    method: 'GET',
+    path: '/api/settings/mail/smtp',
+    summary: 'SMTP 설정(비밀번호는 pwSet만)',
+    responses: {
+      200: Type.Object({ ...smtp, host: Type.String(), from: Type.String(), pwSet: Type.Boolean(), ...settingVersion }),
+    },
+  }),
+  operation({
+    ...byBody,
+    id: 'putSmtp',
+    method: 'PUT',
+    path: '/api/settings/mail/smtp',
+    summary: 'SMTP 저장. password는 교체할 때만',
+    body: Body({ ...settingVersion, ...smtp, password: Opt(c.SecretInput) }),
+    responses: { 200: Type.Object({ ...smtp, pwSet: Type.Boolean(), ...settingVersion }) },
+  }),
+  operation({
+    ...noVersion,
+    id: 'checkSmtp',
+    method: 'POST',
+    path: '/api/settings/mail/smtp/check',
+    summary: 'SMTP 연결 확인',
+    responses: {
+      200: Type.Object({ ok: Type.Boolean(), checkedAt: c.Timestamp, error: Nullable(Type.String()) }),
+    },
+  }),
+  operation({
+    ...lead,
+    id: 'listRecipients',
+    method: 'GET',
+    path: '/api/settings/mail/recipients',
+    summary: '받는 사람',
+    responses: { 200: Type.Object({ items: List(Recipient) }) },
+  }),
+  operation({
+    ...noVersion,
+    id: 'addRecipient',
+    method: 'POST',
+    path: '/api/settings/mail/recipients',
+    summary: '받는 사람 추가(중복 409, 구독 하나 이상)',
+    body: Body({ email: c.Email, name: Type.String(), ...subscription }),
+    responses: { 201: Recipient },
+  }),
+  operation({
+    ...byBody,
+    id: 'updateRecipient',
+    method: 'PATCH',
+    path: '/api/settings/mail/recipients/:id',
+    summary: '구독·보기·PDF·받는 중 변경',
+    body: Type.Object(
+      {
+        ...c.Version,
+        daily: Opt(Type.Boolean()),
+        weekly: Opt(Type.Boolean()),
+        view: Opt(c.ReportView),
+        pdf: Opt(Type.Boolean()),
+        active: Opt(Type.Boolean()),
+      },
+      { additionalProperties: false, minProperties: 2 },
+    ),
+    responses: { 200: Recipient },
+  }),
+  operation({
+    ...lead,
+    version: 'query',
+    id: 'deleteRecipient',
+    method: 'DELETE',
+    path: '/api/settings/mail/recipients/:id',
+    summary: '받는 사람 삭제(발송 기록 유지)',
+    query: Type.Object(c.Version),
+    responses: { 204: null },
+  }),
+  operation({
+    ...noVersion,
+    id: 'testRecipient',
+    method: 'POST',
+    path: '/api/settings/mail/recipients/:id/test',
+    summary: '테스트 발송(최신 보고서)',
+    responses: queued,
+  }),
+  operation({
+    ...noVersion,
+    id: 'sendReportMail',
+    method: 'POST',
+    path: '/api/reports/:reportId/mail',
+    summary: '수동 발송',
+    body: Body({ recipientIds: List(c.Id, { minItems: 1, uniqueItems: true }), view: Opt(c.ReportView) }),
+    responses: queued,
+  }),
+  operation({
+    ...lead,
+    id: 'previewReportMail',
+    method: 'GET',
+    path: '/api/reports/:reportId/mail/preview',
+    summary: '메일 HTML 미리보기(실제 발송과 같은 함수)',
+    query: Type.Object({ view: Opt(c.ReportView), to: Opt(c.Id) }),
+    responses: {
+      200: Type.Object({
+        subject: Type.String(),
+        from: Type.String(),
+        to: Type.String(),
+        html: Type.String(),
+        attachment: Nullable(Type.String()),
+      }),
+    },
+  }),
+  operation({
+    ...lead,
+    id: 'listMailLog',
+    method: 'GET',
+    path: '/api/mail/log',
+    summary: '발송 기록',
+    query: Type.Object({ ...PageQuery, status: Opt(AnyOf('failed')) }),
+    responses: { 200: Page(MailLog) },
+  }),
+  operation({
+    ...noVersion,
+    id: 'resendMail',
+    method: 'POST',
+    path: '/api/mail/log/:id/resend',
+    summary: '다시 보내기',
+    responses: queued,
+  }),
+  operation({
+    ...noVersion,
+    id: 'resendFailedMail',
+    method: 'POST',
+    path: '/api/mail/log/resend-failed',
+    summary: '실패 전체 다시 보내기',
+    responses: queued,
+  }),
+];
+
+/* ---- Telegram(G§8.7) ---- */
+const TelegramError = AnyOf(
+  'token_invalid', 'chat_not_found', 'forbidden', 'rate_limited', 'network', 'webhook_in_use', 'chat_migrated',
+);
+const Bot = Type.Object({ id: Type.Integer(), username: Type.String(), name: Type.String() });
+const Chat = Type.Object({ chatId: c.ChatId, title: Type.String(), type: Type.String() });
+const TelegramSettings = Type.Object(
+  {
+    enabled: Type.Boolean(),
+    targetName: Type.String(),
+    chatId: Nullable(c.ChatId),
+    tokenSet: Type.Boolean(),
+    tokenLast4: Nullable(Type.String({ maxLength: 4 })),
+    bot: Nullable(Bot),
+    chat: Nullable(Chat),
+    test: Nullable(Type.Object({ ok: Type.Boolean(), error: Nullable(TelegramError), at: c.Timestamp })),
+    ...settingVersion,
+  },
+  { title: 'TelegramSettings' },
+);
+const telegramResult = { ok: Type.Boolean(), error: Nullable(TelegramError), retryAfter: Nullable(c.Count) };
+const TOKEN_OPTIONAL = { botToken: Opt(c.BotToken) };
+const NotifyEvent = AnyOf('done', 'fail', 'admin', 'approve', 'buildOk', 'buildFail');
+const NotifyRules = {
+  done: Type.Boolean(),
+  fail: Type.Boolean(),
+  admin: Type.Boolean(),
+  approve: Type.Boolean(),
+  buildOk: Type.Boolean(),
+  buildFail: Type.Boolean(),
+};
+const notifyLog = {
+  id: c.Id,
+  at: c.Timestamp,
+  kind: AnyOf('biz', 'test'),
+  event: Nullable(NotifyEvent),
+  target: Type.String(),
+  // unknown은 화면에서 「실패 — 수락 여부 불명」(data-model §3.7)
+  state: AnyOf('queued', 'sending', 'accepted', 'retry_wait', 'failed', 'unknown'),
+  attempts: c.Count,
+  duplicates: c.Count,
+  error: Nullable(Type.String()),
+};
+
+const notify = [
+  operation({
+    ...lead,
+    id: 'getTelegram',
+    method: 'GET',
+    path: '/api/notify/telegram',
+    summary: '연결 설정(토큰은 끝 4자리만)',
+    responses: { 200: TelegramSettings },
+  }),
+  operation({
+    ...byBody,
+    id: 'putTelegram',
+    method: 'PUT',
+    path: '/api/notify/telegram',
+    summary: '연결 설정 저장. botToken은 교체할 때만',
+    body: Body({
+      ...settingVersion,
+      enabled: Type.Boolean(),
+      ...TOKEN_OPTIONAL,
+      targetName: Type.String(),
+      chatId: c.ChatId,
+    }),
+    responses: { 200: TelegramSettings },
+  }),
+  operation({
+    ...noVersion,
+    id: 'checkTelegramBot',
+    method: 'POST',
+    path: '/api/notify/telegram/check-bot',
+    summary: '봇 확인(getMe)',
+    body: Body(TOKEN_OPTIONAL),
+    responses: { 200: Type.Object({ ...telegramResult, bot: Nullable(Bot) }) },
+  }),
+  operation({
+    ...noVersion,
+    id: 'findTelegramChats',
+    method: 'POST',
+    path: '/api/notify/telegram/find-chats',
+    summary: '최근 대화 후보(getUpdates). 자동 선택·저장하지 않음',
+    body: Body(TOKEN_OPTIONAL),
+    responses: {
+      200: Type.Object({
+        ...telegramResult,
+        candidates: List(Type.Object({ ...Chat.properties, lastAt: c.Timestamp })),
+      }),
+    },
+  }),
+  operation({
+    ...noVersion,
+    id: 'testTelegram',
+    method: 'POST',
+    path: '/api/notify/telegram/test',
+    summary: '테스트 알림(저장 전 값으로 발송)',
+    body: Body({ ...TOKEN_OPTIONAL, chatId: c.ChatId, targetName: Type.String() }),
+    responses: { 200: Type.Object(telegramResult) },
+  }),
+  ...setting('NotifyRules', '/api/projects/:projectId/notify/rules', '알림 규칙 6종', NotifyRules),
+  operation({
+    ...lead,
+    id: 'listNotifyLog',
+    method: 'GET',
+    path: '/api/projects/:projectId/notify/log',
+    summary: '전송 이력',
+    query: Type.Object({ ...PageQuery, kind: Opt(AnyOf('biz', 'test')) }),
+    responses: { 200: Page(Type.Object(notifyLog)) },
+  }),
+  operation({
+    ...lead,
+    id: 'getNotifyLog',
+    method: 'GET',
+    path: '/api/projects/:projectId/notify/log/:id',
+    summary: '전송 이력 상세·보낸 메시지',
+    responses: { 200: Type.Object({ ...notifyLog, message: Type.String() }) },
+  }),
+  operation({
+    ...lead,
+    id: 'previewNotify',
+    method: 'GET',
+    path: '/api/projects/:projectId/notify/preview',
+    summary: '메시지 미리보기(예시 데이터)',
+    query: Type.Object({ event: NotifyEvent }),
+    responses: { 200: Type.Object({ text: Type.String({ maxLength: 4096 }) }) },
+  }),
+];
+
+export const settingsOperations = [...settings, ...mail, ...notify];

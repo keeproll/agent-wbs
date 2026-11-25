@@ -8,11 +8,23 @@
       "awbs-source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./api": {
+      "awbs-source": "./src/api/index.ts",
+      "types": "./dist/api/index.d.ts",
+      "default": "./dist/api/index.js"
     }
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node ../../scripts/vitest.ts --config ../../vitest.config.ts"
+  },
+  "dependencies": {
+    "typebox": "1.4.7"
+  },
+  "devDependencies": {
+    "@seriousme/openapi-schema-validator": "2.12.0",
+    "ajv": "8.20.0"
   }
 }
