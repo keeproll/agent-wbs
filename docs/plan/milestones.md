@@ -43,11 +43,11 @@ M0 기반 → M1 데이터·계약·순수 판정 → M2 서버 핵심 → {M3 �
 
 | ID | 범위 | 완료 조건(검증) | 디렉토리 | 병렬 | 담당 / 리뷰 |
 |---|---|---|---|---|---|
-| M1-01 | 전체 schema·제약·추가 전용·초기화 함수·system/demo seed(owner 승인값 포함, SUB_MOCK과 미승인 값은 demo만) | `W test:db -- schema`(빈 DB up, 제약 위반, 앱 역할 UPDATE 거부, system seed에 Mock 정의·미승인 값 0건, owner 승인 Q-03·04·06 값 일치) | `packages/db` | — | Codex / Claude |
-| M1-02 | TypeBox API 스키마 → OpenAPI, 오류 코드, Runner client 생성 | `W openapi:check && R client:check`, G§8 경로 대조 테스트, **착수 승인 요청 API(contracts §2.1) 포함** | `packages/shared/src/api`, `contracts/`, `agent-runner/src/api` | ∥ | Claude / Codex |
+| M1-01 | 전체 schema·제약·추가 전용·초기화 함수·system/demo seed(owner 승인값 포함, SUB_MOCK과 미승인 값은 demo만) | `W test:db -- schema`(빈 DB up, 제약 위반, 앱 역할 UPDATE 거부, system seed에 Mock 정의·미승인 값 0건, owner 승인 Q-03·04·06 값 일치, `judged_rules`·`split_judgements` 스키마) | `packages/db` | — | Codex / Claude |
+| M1-02 | TypeBox API 스키마 → OpenAPI, 오류 코드, Runner client 생성 | `W openapi:check && R client:check`, G§8 경로 대조 테스트, **착수 승인 요청 API(contracts §2.1) 포함**, **D-33~35 스키마·오류 코드** | `packages/shared/src/api`, `contracts/`, `agent-runner/src/api` | ∥ | Claude / Codex |
 | M1-03 | 상태 전이·번호·차단·순환·Gate·체크리스트·SS/FS | `W --filter shared test -- domain` (**owner 승인 Q-05 표와 일치**, 모든 전이 쌍·상태×시도 종류 표, QA 프로세스 실패→같은 종류 재시도, BLOCKED→새 검증→PASS, SHA 변경→재검증, **시작 전 취소 선행의 SS 제거→후속 해제, 다른 선행이 남으면 계속 차단, `cancelled`≠시작됨**) | `packages/shared/src/domain` | ∥ | Codex / Claude |
 | M1-04 | 일정: 3시나리오·가동률·슬롯·충돌 묶음·리셋·불가일·재조정 diff·driftCheck | `W --filter shared test -- schedule` (P `Sel.schedule`과 demo 결과 대조, 200 Task 시간 기록, **SS 선행 취소 후 그 관계 없이 후속 재배치**, **용량 0인 날→다음 가용일 시작(D-31), rLo≤rate(D-32)**) | `packages/shared/src/schedule` | ∥ | Codex / Claude |
-| M1-05 | CP 시뮬레이션·영향·분할 점검 10규칙·분할 제안 검증 | `W --filter shared test -- proposal split` (**취소 CP 영향 목록에 풀리는 후속·남은 차단 표시**) | `packages/shared/src/{proposal,split}` | M1-03 후 | Claude / Codex |
+| M1-05 | CP 시뮬레이션·영향·분할 점검 10규칙·분할 제안 검증 | `W --filter shared test -- proposal split` (**취소 CP 영향 목록에 풀리는 후속·남은 차단 표시**, **규칙 5·7·9 충족/불충족/미기록/합의 1인/낡은 hash, 순서 보장 4종·간접 경로, running/qa/verifying 새 차단 보류(D-33~35)**) | `packages/shared/src/{proposal,split}` | M1-03 후 | Claude / Codex |
 | M1-06 | 등급 상향·하향·재개·최저선, 상한 공식, 보유 계산, 제한 요인 | `W --filter shared test -- grade capacity` (§6.6 예시 3개 값 일치, **owner 승인 Q-06 매핑 일치**·ultra/미확인 거부, **허용 해제 재개(D-29), 없는 단계의 모델 이동 상향·대상 없음(D-30)**) | `packages/shared/src/{grade,capacity}` | ∥ | Claude / Codex |
 
 ### M2 — 서버 핵심
@@ -55,12 +55,12 @@ M0 기반 → M1 데이터·계약·순수 판정 → M2 서버 핵심 → {M3 �
 | ID | 범위 | 완료 조건(검증) | 디렉토리 | 병렬 | 담당 / 리뷰 |
 |---|---|---|---|---|---|
 | M2-01 | 인증 2종·CSRF·epoch·멱등·오류 형식·마스킹 | `W --filter api test -- security` (contracts §8 5종 표, 링크 재사용·비loopback 거부, LAN 비밀번호 미설정 기동 거부·횟수 제한) | `apps/api/src/platform` | — | Codex / Claude |
-| M2-02 | Task·의존성·명세·설계·체크리스트 CRUD, 동시 수정 | `W --filter api test -- tasks` (동시 순환 추가·이력, 삭제/의존성/**승인 요청**/승인 낡은 버전 409, **승인 요청→승인/반려: 필수 항목 미충족 400·다른 상태 409·중복 요청**) | `apps/api/src/tasks` | M2-01 후 ∥ | Claude / Codex |
-| M2-03 | 프로젝트 등록·기술 결정·bootstrap·승인·입력 변경·분석 안 함 | `W --filter api test -- project` | `apps/api/src/project` | ∥ | Claude / Codex |
+| M2-02 | Task·의존성·명세·설계·체크리스트 CRUD, 동시 수정 | `W --filter api test -- tasks` (동시 순환 추가·이력, 삭제/의존성/**승인 요청**/승인 낡은 버전 409, **승인 요청→승인/반려: 필수 항목 미충족 400·다른 상태 409·중복 요청**, **활성 Task를 새로 차단하는 의존성 추가 409(D-35)**, **착수 승인 판단 보류(D-33)**) | `apps/api/src/tasks` | M2-01 후 ∥ | Claude / Codex |
+| M2-03 | 프로젝트 등록·기술 결정·bootstrap·승인·입력 변경·분석 안 함 | `W --filter api test -- project` (초기 WBS 승인의 판단 보류(D-33)) | `apps/api/src/project` | ∥ | Claude / Codex |
 | M2-04 | 초기화·명령·정리 대기·내보내기·파일 삭제 큐 | `W --filter api test -- reset` (중간 실패 주입, 설정 유지/삭제 표, middleware 통과 후 정지한 host 보고·worker와 초기화 경합, 명령 epoch 불일치) | `apps/api/src/reset` | M2-03 후 | Codex / Claude |
 | M2-05 | Runner 보고·jobs lease·시도 claim·heartbeat 감시·PC 변경·상한 | `W --filter api test -- runner` (동시 claim 100회, 중복 보고, **네트워크 단절+자손 생존+재개 거부→해제 후 허용**, 설치 실패 후 Task/예약/이력/재시도, 외부 효과 job reconcile, **renew 성공→정지→host 전환→옛 호출 재개 시 새 외부 쓰기 차단·대조**, ① 실패 직전 같은 묶음 claim 거부, 잠금 인계 원자성, 자기 예약 start·중복 start, 인계받은 QA job의 claim·start 성공과 타 job 거부, 부분 unique 경합, 시작 버튼 필수·자동 재시도 2(총 3회, 같은 종류 연속)·재작업 3 경계, **D-29·D-30 run-grade·claim**) | `apps/api/src/runner` | ∥ | Codex / Claude |
 | M2-06 | 시도 결과·검증·결함·Evidence·Gate 판정·완료 | `W --filter api test -- execution` (QA 오류·BLOCKED 새 시도, 낡은 head/명세 PASS 거부) | `apps/api/src/execution` | M2-05 후 | Codex / Claude |
-| M2-07 | Planning·CP(미리보기=반영·자동/보류)·추정·재조정·분할 | `W --filter api test -- planning` (**취소 반영과 SS 제거·이력·재조정이 한 트랜잭션, 미리보기 영향=반영 결과**) | `apps/api/src/planning` | ∥ | Claude / Codex |
+| M2-07 | Planning·CP(미리보기=반영·자동/보류)·추정·재조정·분할 | `W --filter api test -- planning` (**취소 반영과 SS 제거·이력·재조정이 한 트랜잭션, 미리보기 영향=반영 결과**, **D-33~35 보류: 자동·수동 승인·반영 동일, 재시뮬레이션 때 다시 판정**) | `apps/api/src/planning` | ∥ | Claude / Codex |
 | M2-08 | 정책·모델·하위 Agent·메시지·이력·변경 이벤트·무결성 점검 | `W --filter api test -- policy messages changes` (**허용 해제→재판단→재개 이력(D-29)**) | `apps/api/src/{policy,messages,changes}` | ∥ | Claude / Codex |
 | M2-09 | fake Runner 시나리오 드라이버 | `W test:scenario -- runner-basic` (8·9·10, 6은 QA FAIL→재작업→재검증 PASS **까지만**) | `agent-wbs/e2e/fakes` | M2-05 후 | Codex / Claude |
 
@@ -72,7 +72,7 @@ M0 기반 → M1 데이터·계약·순수 판정 → M2 서버 핵심 → {M3 �
 | M3-02 | WBS 표·필터 9·레일·Gantt·Wizard·가상 스크롤 | `W e2e -- wbs` (시나리오 1·27, 화면 1280·1920 가로 스크롤 없음(목록 영역 약 1,000px), 1280 미만 표 가로 스크롤, 200/1,000행 측정 기록) | `features/wbs` | M3-01 후 ∥ | Claude / Codex |
 | M3-03 | Task 상세 9탭 | `W e2e -- task-detail` (1·2·3·4·13·23 일부, **390px 알림 링크 Task 상세 열람**, **착수 승인 요청→승인·반려**) | `features/task` | ∥ | Claude / Codex |
 | M3-04 | 프로젝트 3흐름·기술 결정 확정·초기화 | `W e2e -- project` (19·29·30·31) | `features/project` | ∥ | Claude / Codex |
-| M3-05 | Planning·변경 제안 | `W e2e -- planning` (5, **취소 CP 영향 목록의 풀리는 후속**, **390px 알림 링크 변경 제안 상세 열람**) | `features/{planning,change}` | ∥ | Claude / Codex |
+| M3-05 | Planning·변경 제안 | `W e2e -- planning` (5, **취소 CP 영향 목록의 풀리는 후속**, **390px 알림 링크 변경 제안 상세 열람**, 보류 사유·판단 결과 표시) | `features/{planning,change}` | ∥ | Claude / Codex |
 | M3-06 | 작업 실행 3분할·메시지 | `W e2e -- exec` (7·8, 6은 Gate 대기까지 fake) | `features/exec` | ∥ | Claude / Codex |
 | M3-07 | 검증·이력·대시보드 | `W e2e -- verify history dashboard` (15) | `features/{verify,history,dashboard}` | ∥ | Claude / Codex |
 | M3-08 | 설정: Runner·Agent·일정 탭, 점검 | `W e2e -- settings-core` (9~14·22·24·26) | `features/settings` | ∥ | Claude / Codex |
@@ -97,7 +97,7 @@ M0 기반 → M1 데이터·계약·순수 판정 → M2 서버 핵심 → {M3 �
 | M5-01 | Claude/Codex CLI 어댑터, 출력 파싱, env allowlist | `R test -- cli` (기록 fixture·모르는 이벤트) | `src/cli` | ∥ | Claude / Codex |
 | M5-02 | 세션 실행·하위 Agent 설치·예산·resume·중단 | `R test -- exec` (자손 남김·강제 종료·스트림 단절·Runner 재시작 대조·설치 실패·정의 hash/버전 불일치) | `src/exec` | — | Codex / Claude |
 | M5-03 | 프로세스 그룹/cgroup 실증과 관측 등급 기록 | `R test:host -- cgroup` 결과를 `docs/plan/` 검증 기록에 남김 | `src/exec` | M5-02 후 | Codex / Claude |
-| M5-04 | 초기 분석·차이 분석·추정·분할 orchestration | `R test -- planning` (단계 실패 후 재개, 초안 스키마) | `src/planning` | ∥ | Claude / Codex |
+| M5-04 | 초기 분석·차이 분석·추정·분할 orchestration | `R test -- planning` (단계 실패 후 재개, 초안 스키마, `judgedRules`·`splitJudgements` 두 Agent 합의 출력) | `src/planning` | ∥ | Claude / Codex |
 | M5-05 | 시도 흐름 결합: claim→①(자리표시)→QA→재작업→Gate **대기까지**, 메시지 | `W test:scenario -- attempt-flow` (fake CLI, 시나리오 7·9, 6의 Gate 대기까지; 완료는 M7-06) | `src/jobs`, e2e | — | Codex / Claude |
 | M5-06 | 실제 하위 Agent v1 정의 작성·교차 검토(Mock 미사용) | `W subagents:check` (hash·버전·model/effort 부재·허용 도구·SUB_MOCK 문안과 충돌 지시 0건) + 리뷰 기록 | `packages/db/seed/subagents` | ∥ | Claude / Codex |
 
