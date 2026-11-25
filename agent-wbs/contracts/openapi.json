@@ -30347,7 +30347,7 @@
                               "ops": {
                                 "type": "array",
                                 "items": {
-                                  "$ref": "#/components/schemas/LeadProposalOp"
+                                  "$ref": "#/components/schemas/JudgedProposalOp"
                                 },
                                 "minItems": 1
                               },
@@ -30429,7 +30429,7 @@
                               "ops": {
                                 "type": "array",
                                 "items": {
-                                  "$ref": "#/components/schemas/LeadSplitProposalOp"
+                                  "$ref": "#/components/schemas/JudgedSplitProposalOp"
                                 },
                                 "minItems": 1
                               },
@@ -32635,6 +32635,983 @@
         "title": "JudgedContent",
         "additionalProperties": false
       },
+      "JudgedProposalOp": {
+        "anyOf": [
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "ref",
+              "t",
+              "preds"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "add"
+                ]
+              },
+              "ref": {
+                "type": "string",
+                "pattern": "^NEW-[0-9]+$"
+              },
+              "t": {
+                "type": "object",
+                "required": [
+                  "title",
+                  "type",
+                  "domain",
+                  "wp",
+                  "priority",
+                  "assignee",
+                  "verifier",
+                  "purpose",
+                  "doneCond"
+                ],
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "type": {
+                    "$ref": "#/components/schemas/WorkType"
+                  },
+                  "domain": {
+                    "$ref": "#/components/schemas/Domain"
+                  },
+                  "rel": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/Domain"
+                    }
+                  },
+                  "wp": {
+                    "$ref": "#/components/schemas/Id"
+                  },
+                  "priority": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 3
+                  },
+                  "assignee": {
+                    "$ref": "#/components/schemas/Agent"
+                  },
+                  "verifier": {
+                    "$ref": "#/components/schemas/Agent"
+                  },
+                  "purpose": {
+                    "type": "string"
+                  },
+                  "doneCond": {
+                    "type": "string"
+                  },
+                  "est": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "lo": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "hi": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "tok": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "conf": {
+                    "$ref": "#/components/schemas/Confidence"
+                  },
+                  "basis": {
+                    "type": "string"
+                  },
+                  "ac": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "given",
+                        "when",
+                        "then"
+                      ],
+                      "properties": {
+                        "given": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "when": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "then": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "method": {
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "srcV": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "splitBasis": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "scope": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "design": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "content"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "$ref": "#/components/schemas/DesignKind"
+                        },
+                        "content": {
+                          "type": "object",
+                          "patternProperties": {
+                            "^.*$": {}
+                          }
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "maxItems": 4
+                  },
+                  "conflictGroup": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              },
+              "preds": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "pred",
+                    "type"
+                  ],
+                  "properties": {
+                    "pred": {
+                      "$ref": "#/components/schemas/Id"
+                    },
+                    "type": {
+                      "$ref": "#/components/schemas/DepType"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "title"
+                ]
+              },
+              "before": {},
+              "after": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "doneCond"
+                ]
+              },
+              "before": {},
+              "after": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "scopeAdd"
+                ]
+              },
+              "before": {},
+              "after": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "acAdd"
+                ]
+              },
+              "before": {},
+              "after": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "priority"
+                ]
+              },
+              "before": {},
+              "after": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "assignee"
+                ]
+              },
+              "before": {},
+              "after": {
+                "$ref": "#/components/schemas/Agent"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "verifier"
+                ]
+              },
+              "before": {},
+              "after": {
+                "$ref": "#/components/schemas/Agent"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "remove"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "pred",
+              "succ",
+              "type"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "dep-add"
+                ]
+              },
+              "pred": {
+                "$ref": "#/components/schemas/Id"
+              },
+              "succ": {
+                "$ref": "#/components/schemas/Id"
+              },
+              "type": {
+                "$ref": "#/components/schemas/DepType"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "pred",
+              "succ"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "dep-remove"
+                ]
+              },
+              "pred": {
+                "$ref": "#/components/schemas/Id"
+              },
+              "succ": {
+                "$ref": "#/components/schemas/Id"
+              }
+            },
+            "additionalProperties": false
+          }
+        ],
+        "title": "JudgedProposalOp"
+      },
+      "JudgedSplitProposalOp": {
+        "anyOf": [
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "ref",
+              "t",
+              "preds"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "add"
+                ]
+              },
+              "ref": {
+                "type": "string",
+                "pattern": "^NEW-[0-9]+$"
+              },
+              "t": {
+                "type": "object",
+                "required": [
+                  "title",
+                  "type",
+                  "domain",
+                  "wp",
+                  "priority",
+                  "assignee",
+                  "verifier",
+                  "purpose",
+                  "doneCond",
+                  "splitBasis"
+                ],
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "type": {
+                    "$ref": "#/components/schemas/WorkType"
+                  },
+                  "domain": {
+                    "$ref": "#/components/schemas/Domain"
+                  },
+                  "rel": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/Domain"
+                    }
+                  },
+                  "wp": {
+                    "$ref": "#/components/schemas/Id"
+                  },
+                  "priority": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 3
+                  },
+                  "assignee": {
+                    "$ref": "#/components/schemas/Agent"
+                  },
+                  "verifier": {
+                    "$ref": "#/components/schemas/Agent"
+                  },
+                  "purpose": {
+                    "type": "string"
+                  },
+                  "doneCond": {
+                    "type": "string"
+                  },
+                  "est": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "lo": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "hi": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "tok": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "conf": {
+                    "$ref": "#/components/schemas/Confidence"
+                  },
+                  "basis": {
+                    "type": "string"
+                  },
+                  "ac": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "given",
+                        "when",
+                        "then"
+                      ],
+                      "properties": {
+                        "given": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "when": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "then": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "method": {
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "srcV": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "splitBasis": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "scope": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "design": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "content"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "$ref": "#/components/schemas/DesignKind"
+                        },
+                        "content": {
+                          "type": "object",
+                          "patternProperties": {
+                            "^.*$": {}
+                          }
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "maxItems": 4
+                  },
+                  "conflictGroup": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              },
+              "preds": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "pred",
+                    "type"
+                  ],
+                  "properties": {
+                    "pred": {
+                      "$ref": "#/components/schemas/Id"
+                    },
+                    "type": {
+                      "$ref": "#/components/schemas/DepType"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "title"
+                ]
+              },
+              "before": {},
+              "after": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "doneCond"
+                ]
+              },
+              "before": {},
+              "after": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "scopeAdd"
+                ]
+              },
+              "before": {},
+              "after": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "acAdd"
+                ]
+              },
+              "before": {},
+              "after": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "priority"
+                ]
+              },
+              "before": {},
+              "after": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "assignee"
+                ]
+              },
+              "before": {},
+              "after": {
+                "$ref": "#/components/schemas/Agent"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "verifier"
+                ]
+              },
+              "before": {},
+              "after": {
+                "$ref": "#/components/schemas/Agent"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "remove"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "pred",
+              "succ",
+              "type"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "dep-add"
+                ]
+              },
+              "pred": {
+                "$ref": "#/components/schemas/Id"
+              },
+              "succ": {
+                "$ref": "#/components/schemas/Id"
+              },
+              "type": {
+                "$ref": "#/components/schemas/DepType"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "pred",
+              "succ"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "dep-remove"
+                ]
+              },
+              "pred": {
+                "$ref": "#/components/schemas/Id"
+              },
+              "succ": {
+                "$ref": "#/components/schemas/Id"
+              }
+            },
+            "additionalProperties": false
+          }
+        ],
+        "title": "JudgedSplitProposalOp"
+      },
       "LeadProposalOp": {
         "anyOf": [
           {
@@ -32768,6 +33745,41 @@
                     "type": "string",
                     "minLength": 1,
                     "pattern": "\\S"
+                  },
+                  "scope": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "design": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "content"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "$ref": "#/components/schemas/DesignKind"
+                        },
+                        "content": {
+                          "type": "object",
+                          "patternProperties": {
+                            "^.*$": {}
+                          }
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "maxItems": 4
                   }
                 },
                 "additionalProperties": false
@@ -33210,6 +34222,41 @@
                     "type": "string",
                     "minLength": 1,
                     "pattern": "\\S"
+                  },
+                  "scope": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "design": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "content"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "$ref": "#/components/schemas/DesignKind"
+                        },
+                        "content": {
+                          "type": "object",
+                          "patternProperties": {
+                            "^.*$": {}
+                          }
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "maxItems": 4
                   }
                 },
                 "additionalProperties": false
@@ -34117,6 +35164,53 @@
                     "minLength": 1,
                     "pattern": "\\S"
                   },
+                  "scope": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "design": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "content"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "$ref": "#/components/schemas/DesignKind"
+                        },
+                        "content": {
+                          "type": "object",
+                          "patternProperties": {
+                            "^.*$": {}
+                          }
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "maxItems": 4
+                  },
+                  "conflictGroup": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
                   "judgedRules": {
                     "type": "object",
                     "required": [
@@ -34692,6 +35786,53 @@
                     "type": "string",
                     "minLength": 1,
                     "pattern": "\\S"
+                  },
+                  "scope": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "design": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "content"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "$ref": "#/components/schemas/DesignKind"
+                        },
+                        "content": {
+                          "type": "object",
+                          "patternProperties": {
+                            "^.*$": {}
+                          }
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "maxItems": 4
+                  },
+                  "conflictGroup": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   "judgedRules": {
                     "type": "object",
@@ -36958,6 +38099,9 @@
                 "code": {
                   "type": "string"
                 },
+                "taskKey": {
+                  "$ref": "#/components/schemas/TaskKey"
+                },
                 "message": {
                   "type": "string"
                 }
@@ -37036,6 +38180,9 @@
                 },
                 "code": {
                   "type": "string"
+                },
+                "taskKey": {
+                  "$ref": "#/components/schemas/TaskKey"
                 },
                 "message": {
                   "type": "string"
@@ -37227,6 +38374,53 @@
                     "type": "string",
                     "minLength": 1,
                     "pattern": "\\S"
+                  },
+                  "scope": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "design": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "content"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "$ref": "#/components/schemas/DesignKind"
+                        },
+                        "content": {
+                          "type": "object",
+                          "patternProperties": {
+                            "^.*$": {}
+                          }
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "maxItems": 4
+                  },
+                  "conflictGroup": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   "judgedRules": {
                     "type": "object",
@@ -37642,6 +38836,9 @@
                 },
                 "code": {
                   "type": "string"
+                },
+                "taskKey": {
+                  "$ref": "#/components/schemas/TaskKey"
                 },
                 "message": {
                   "type": "string"

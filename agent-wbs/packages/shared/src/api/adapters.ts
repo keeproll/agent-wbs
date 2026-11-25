@@ -4,7 +4,7 @@ import type { Grade, ResolvedAdjust, ResolveResult } from '../grade/index.ts';
 import type { AcceptanceCriterion, JudgedRules, NewTask, SimulationOp } from '../proposal/index.ts';
 import type { ScheduleError, ScheduleWarning as DomainScheduleWarning } from '../schedule/index.ts';
 import type { JudgementHold } from '../split/index.ts';
-import type { Agent, Confidence, DependencyType, TechDomain, WorkType } from '../vocabulary.ts';
+import type { Agent, Confidence, DependencyType, DesignKind, TechDomain, WorkType } from '../vocabulary.ts';
 import type { ErrorCode } from './errors.ts';
 
 /* ---- 변경 제안 ops. 스키마(models.ts ProposalOp·LeadProposalOp)와의 일치는 test/integration이 검사한다. ---- */
@@ -28,6 +28,10 @@ interface WireTask {
   ac?: readonly (Omit<AcceptanceCriterion, 'method'> & { method?: string })[];
   srcV?: number;
   splitBasis?: string;
+  scope?: readonly string[];
+  files?: readonly string[];
+  design?: readonly { kind: DesignKind; content: Readonly<Record<string, unknown>> }[];
+  conflictGroup?: string | null;
   judgedRules?: JudgedRules;
 }
 export type WireProposalOp =
@@ -37,8 +41,13 @@ export type WireProposalOp =
   | { op: 'dep-add'; pred: string; succ: string; type: DependencyType }
   | { op: 'dep-remove'; pred: string; succ: string };
 
+/** 변경 설계 항목은 P DESIGN의 `ents`다(P splitCheck). 판정은 개수만 쓴다. */
+const designItems = ({ ents }: Readonly<Record<string, unknown>>): string[] =>
+  Array.isArray(ents) ? ents.map((item) => JSON.stringify(item)) : [];
+
 /**
  * 저장·요청의 op(P 키)를 시뮬레이션 입력으로 바꾼다. 스키마를 통과한 값만 받는다.
+ * 선택 필드는 생략과 명시한 값(null·빈 배열)을 구분해 그대로 넘긴다(data-model §2.4-1).
  * 추정이 없으면 null로 둔다(P의 4h는 Mock). 추정만 있고 신뢰도가 없으면 P newTask와 같이 「하」다.
  */
 export function simulationOp(op: WireProposalOp): SimulationOp {
@@ -55,6 +64,10 @@ export function simulationOp(op: WireProposalOp): SimulationOp {
     ac: (t.ac ?? []).map((item) => ({ ...item, method: item.method ?? '' })),
     estimate: t.est === undefined ? null : { est: t.est, lo: t.lo ?? null, hi: t.hi ?? null, confidence: t.conf ?? '하' },
     splitBasis: t.splitBasis ?? '', judgedRules: t.judgedRules ?? null,
+    ...(t.scope !== undefined && { scope: t.scope }),
+    ...(t.files !== undefined && { files: t.files }),
+    ...(t.design !== undefined && { design: t.design.map(({ kind, content }) => ({ kind, items: designItems(content) })) }),
+    ...(t.conflictGroup !== undefined && { conflictGroup: t.conflictGroup }),
   };
   return { op: 'add', ref: op.ref, workPackageId: t.wp, task, preds: op.preds.map((item) => ({ ...item })) };
 }
@@ -84,10 +97,10 @@ interface Problem {
 
 export function proposalReasons(problems: readonly Problem[]) {
   const holdReasons: WireHoldReason[] = [];
-  const issues: { index: number | null; code: string; message: string }[] = [];
+  const issues: { index: number | null; code: string; taskKey?: string; message: string }[] = [];
   for (const { code, index = null, taskKey, rule, message } of problems) {
     if (isHold(code)) holdReasons.push({ code, ...(taskKey !== undefined && { taskKey }), ...(rule && { rule }), message });
-    else issues.push({ index, code, message });
+    else issues.push({ index, code, ...(taskKey !== undefined && { taskKey }), message });
   }
   return { holdReasons, issues };
 }

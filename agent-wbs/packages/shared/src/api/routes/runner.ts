@@ -91,7 +91,7 @@ const JudgedTasks = List(
  * 판단할 CP의 snapshot. 내용과 hash는 같은 시점의 값이며 Runner는 이것만으로 판단한다.
  * subjectHash는 after의 hash, splitSubjectHash는 ops와 splitTasks(대상 Task의 현재 내용)의 hash다.
  */
-const judgedProposal = <T extends typeof m.LeadProposalOp | typeof m.LeadSplitProposalOp>(op: T) => ({
+const judgedProposal = <T extends typeof m.JudgedProposalOp | typeof m.JudgedSplitProposalOp>(op: T) => ({
   id: c.Id,
   // 판단 기록을 뺀 변경
   ops: List(op, { minItems: 1 }),
@@ -103,9 +103,9 @@ const judgedProposal = <T extends typeof m.LeadProposalOp | typeof m.LeadSplitPr
   ),
 });
 const JudgedProposal = Type.Union([
-  Type.Object({ ...judgedProposal(m.LeadProposalOp), splitSubjectHash: Type.Null(), splitTasks: Type.Null() }),
+  Type.Object({ ...judgedProposal(m.JudgedProposalOp), splitSubjectHash: Type.Null(), splitTasks: Type.Null() }),
   Type.Object({
-    ...judgedProposal(m.LeadSplitProposalOp),
+    ...judgedProposal(m.JudgedSplitProposalOp),
     splitSubjectHash: c.Sha256,
     splitTasks: List(Type.Object({ taskKey: c.TaskKey, content: m.JudgedContent }), { minItems: 1 }),
   }),

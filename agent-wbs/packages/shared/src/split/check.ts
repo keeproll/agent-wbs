@@ -55,15 +55,26 @@ export interface SplitCheck {
 
 const LAYER = { DB: 'DB', API: 'BE', FE: 'FE', DevOps: 'DevOps' } as const;
 type Finding = readonly [SplitStatus, string];
+/** A part's files and design are not inherited, so an empty list is unknown, not "none" (data-model §2.4-1). */
+export const SCOPE_MISSING = '변경 범위 미기재';
+export type SplitOriginal = Pick<ProposalTask, 'files' | 'design'>;
+const changedDesign = (task: Pick<ProposalTask, 'design'>) => task.design.filter(section => section.items.length);
+// Violations and suspicions win; another caution is shown together.
+const unscoped = (finding: Finding, missing: boolean): Finding => {
+  if (!missing || finding[0] !== '통과' && finding[0] !== '주의') return finding;
+  return ['주의', finding[0] === '주의' ? `${finding[1]} · ${SCOPE_MISSING}` : SCOPE_MISSING];
+};
 
 function autoFindings(
-  task: ProposalTask, preds: readonly Pick<ProposalTask, 'workType'>[], settings: SplitSettings,
+  task: ProposalTask, preds: readonly Pick<ProposalTask, 'workType'>[], settings: SplitSettings, original: SplitOriginal | null,
 ): Partial<Record<SplitRule, Finding>> {
   const est = task.estimate?.est ?? 0;
   // Unlike the prototype's `||`, an optimistic estimate of 0 is a value, not a missing one.
   const lo = task.estimate?.lo ?? est;
   const hi = task.estimate?.hi ?? est;
-  const changed = task.design.filter(section => section.items.length);
+  const changed = changedDesign(task);
+  const filesMissing = !!original?.files.length && !task.files.length;
+  const designMissing = !!original && changedDesign(original).length > 0 && !changed.length;
   const layers = [...new Set(changed.map(section => LAYER[section.kind]))];
   const dbDesign = changed.some(section => section.kind === 'DB');
   const analysed = preds.some(pred => pred.workType === 'Analysis');
@@ -89,15 +100,15 @@ function autoFindings(
     one: /( 및 |그리고| \+ |\/)/.test(task.title)
       ? ['의심', '제목에 둘 이상의 목적 표현 (「및 · 그리고 · / · +」)'] : ['통과', `「${task.title}」`],
     // G§5.2-1 has no work-type exemption; the prototype's Implementation/Configuration limit is not followed.
-    domain: layers.length > 1
-      ? ['의심', `설계상 변경 영역 ${layers.join(' · ')} — 계층별 분리 기준(A)`] : ['통과', `주 영역 ${task.primaryDomain}`],
-    size,
+    domain: unscoped(layers.length > 1
+      ? ['의심', `설계상 변경 영역 ${layers.join(' · ')} — 계층별 분리 기준(A)`] : ['통과', `주 영역 ${task.primaryDomain}`], designMissing),
+    size: unscoped(size, filesMissing),
     verify,
     // conflict_group is one nullable column, so two groups cannot be stored.
     cg: ['통과', task.conflictGroup ? `「${task.conflictGroup}」 하나` : '충돌 묶음 없음'],
-    irrev: task.workType === 'Implementation' && task.primaryDomain !== 'DB' && dbDesign
+    irrev: unscoped(task.workType === 'Implementation' && task.primaryDomain !== 'DB' && dbDesign
       ? ['의심', `DB 설계(Migration)와 ${task.primaryDomain} 코드가 한 Task`]
-      : ['통과', dbDesign ? 'DB 변경 전용 Task' : '되돌리기 어려운 변경 없음'],
+      : ['통과', dbDesign ? 'DB 변경 전용 Task' : '되돌리기 어려운 변경 없음'], designMissing),
     unknown: uncertain && !analysed
       ? ['위반', `신뢰도 ${task.estimate?.confidence ?? '-'} · 범위 ${lo}h~${hi}h — 선행 분석 Task 없음`]
       : ['통과', analysed ? '분석 Task 선행' : '추정 범위 안정'],
@@ -107,8 +118,10 @@ function autoFindings(
 export function checkSplit(
   task: ProposalTask, preds: readonly Pick<ProposalTask, 'workType'>[], subjectHash: string | null,
   settings: SplitSettings = DEFAULT_SPLIT_SETTINGS,
+  // The Task this one was split from (`split_from`), if any.
+  original: SplitOriginal | null = null,
 ): SplitCheck {
-  const auto = autoFindings(task, preds, settings);
+  const auto = autoFindings(task, preds, settings, original);
   const items = SPLIT_RULES.map(({ key, label, mode }): SplitItem => {
     const item = { rule: key, label, mode, judgement: null };
     if (!settings.enabled[key]) return { ...item, status: '꺼짐', detail: '설정에서 끔' };

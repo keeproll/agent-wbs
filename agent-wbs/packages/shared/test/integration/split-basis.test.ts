@@ -53,7 +53,7 @@ describe.each([
 
 test('초안 Task의 분할 근거와 같은 정의다', () => {
   const draft = m.WbsDraft.tasks as unknown as { items: { properties: { splitBasis: unknown } } };
-  for (const schema of [m.ProposalOp, m.LeadProposalOp, m.PlanningProposalOp, m.LeadSplitProposalOp, m.PlanningSplitProposalOp]) {
+  for (const schema of [m.ProposalOp, m.LeadProposalOp, m.PlanningProposalOp, m.LeadSplitProposalOp, m.PlanningSplitProposalOp, m.JudgedProposalOp, m.JudgedSplitProposalOp]) {
     const [first] = (schema as unknown as { anyOf: { properties: { t: { properties: Record<string, object> } } }[] }).anyOf;
     expect(JSON.stringify(first?.properties.t.properties.splitBasis)).toBe(JSON.stringify(draft.items.properties.splitBasis));
   }

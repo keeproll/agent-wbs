@@ -39,6 +39,9 @@ function newTaskProblem(task: NewTask): string | null {
     related.includes(task.primaryDomain)) return '주 · 관련 기술 영역이 올바르지 않습니다';
   if (!validPriority(task.priority)) return '우선순위는 0~3이어야 합니다';
   if (!oneOf(AGENTS, task.assignee) || !oneOf(AGENTS, task.verifier)) return '담당 · 검증 Agent가 올바르지 않습니다';
+  if (task.conflictGroup !== undefined && task.conflictGroup !== null && !filled(task.conflictGroup)) return '충돌 묶음이 비어 있습니다';
+  const kinds = (task.design ?? []).map(section => section.kind);
+  if (new Set(kinds).size !== kinds.length) return '설계 종류가 중복됩니다';
   if ((task.ac ?? []).some(ac => !validAc(ac))) return 'Acceptance Criteria가 비어 있습니다';
   if (task.estimate) {
     const { est, lo, hi } = task.estimate;
@@ -64,8 +67,25 @@ function createTask(id: string, task: NewTask): ProposalTask {
   };
 }
 
+/**
+ * New Tasks that stand in for the original in a split; the research in front of it does not.
+ * The only definition of `parts` (data-model §2.4-1).
+ */
+export function replacesOriginal(task: Pick<ProposalTask, 'workType'>, original: Pick<ProposalTask, 'workType'>): boolean {
+  return task.workType !== 'Analysis' || original.workType === 'Analysis';
+}
+
+export interface SimulationOptions {
+  /** Split CP only: key of the original Task (`source.id`). Recomputed on every preview, approval and apply. */
+  splitOf?: string | null;
+}
+
 /** The single function behind both preview and apply. A non-empty `issues` means hold; never persist `next` then. */
-export function simulateProposal(base: ProposalSnapshot, ops: readonly SimulationOp[]): ProposalSimulation {
+export function simulateProposal(
+  base: ProposalSnapshot, ops: readonly SimulationOp[], { splitOf = null }: SimulationOptions = {},
+): ProposalSimulation {
+  // Only a split that cancels its original hands the conflict group over.
+  const original = ops.some(op => op.op === 'remove' && op.task === splitOf) ? base.tasks.find(task => task.id === splitOf) : undefined;
   const tasks = new Map(base.tasks.map(task => [task.id, task]));
   const phases = base.phases.map(phase => ({ ...phase, wps: phase.wps.map(wp => ({ ...wp, tasks: [...wp.tasks] })) }));
   const idMap = new Map<string, string>();
@@ -84,8 +104,10 @@ export function simulateProposal(base: ProposalSnapshot, ops: readonly Simulatio
   if (!ops.length) issues.push({ index: null, code: 'EMPTY_PROPOSAL', message: '변경 항목이 없습니다' });
 
   ops.forEach((op, index) => {
-    const hold = (code: ProposalIssueCode, message: string) => {
-      issues.push({ index, code, message: `항목 ${index + 1} — ${message}` });
+    // `taskKey` only for an identified Task; a new one uses its expected key.
+    const hold = (code: ProposalIssueCode, message: string, taskKey?: string) => {
+      issues.push({ index, code, message: `항목 ${index + 1} — ${message}`,
+        ...(taskKey !== undefined && tasks.has(taskKey) ? { taskKey } : {}) });
     };
     const record = (target: string, field: string, before: unknown, after: unknown) => {
       diff.push({ index, op: op.op, target, field, before, after });
@@ -95,19 +117,19 @@ export function simulateProposal(base: ProposalSnapshot, ops: readonly Simulatio
       const task = tasks.get(id);
       if (!task) hold('TASK_NOT_FOUND', `${id}이(가) 없습니다`);
       else if (task.status === 'done') {
-        hold('COMPLETED_TASK', `${id}은(는) 완료된 Task입니다 — ${action}할 수 없으며 수정 Task로 제안해야 합니다`);
-      } else if (task.status === 'cancelled') hold('CANCELLED_TASK', `${id}은(는) 취소된 Task입니다`);
+        hold('COMPLETED_TASK', `${id}은(는) 완료된 Task입니다 — ${action}할 수 없으며 수정 Task로 제안해야 합니다`, id);
+      } else if (task.status === 'cancelled') hold('CANCELLED_TASK', `${id}은(는) 취소된 Task입니다`, id);
       else return task;
       return null;
     };
     const addDependency = (candidate: Dependency): boolean => {
       const { pred, succ, type } = candidate;
       if (!validDepType(type)) {
-        hold('VALIDATION_FAILED', '선행 유형은 FS 또는 SS여야 합니다');
+        hold('VALIDATION_FAILED', '선행 유형은 FS 또는 SS여야 합니다', succ);
         return false;
       }
       if (tasks.get(pred)?.status === 'cancelled') {
-        hold('CANCELLED_TASK', `취소된 ${pred}을(를) 선행으로 지정할 수 없습니다`);
+        hold('CANCELLED_TASK', `취소된 ${pred}을(를) 선행으로 지정할 수 없습니다`, succ);
         return false;
       }
       try {
@@ -116,7 +138,7 @@ export function simulateProposal(base: ProposalSnapshot, ops: readonly Simulatio
         if (!(error instanceof DomainError)) throw error;
         const path = error.details.path as string[] | undefined;
         hold(DEPENDENCY_CODES.find(code => code === error.code) ?? 'VALIDATION_FAILED',
-          `${error.message} (${pred} → ${succ})${path ? `: ${path.join(' → ')}` : ''}`);
+          `${error.message} (${pred} → ${succ})${path ? `: ${path.join(' → ')}` : ''}`, succ);
         return false;
       }
       dependencies = [...dependencies, { pred, succ, type }];
@@ -130,22 +152,28 @@ export function simulateProposal(base: ProposalSnapshot, ops: readonly Simulatio
           return;
         }
         const problem = newTaskProblem(op.task);
-        if (problem) hold('VALIDATION_FAILED', problem);
         const wp = phases.flatMap(phase => phase.wps).find(item => item.id === op.workPackageId);
-        if (!wp) hold('WBS_NODE_NOT_FOUND', `Work Package ${op.workPackageId}이(가) 없습니다`);
+        const noWp = `Work Package ${op.workPackageId}이(가) 없습니다`;
         // Keep going after an issue, like the original, so later ops do not produce cascading errors.
         taskSequence += 1;
         const id = displayKey('TASK', taskSequence);
         if (tasks.has(id)) {
+          if (problem) hold('VALIDATION_FAILED', problem);
+          if (!wp) hold('WBS_NODE_NOT_FOUND', noWp);
           hold('VALIDATION_FAILED', `Task 순번 ${id}이(가) 이미 사용되었습니다`);
           return;
         }
         idMap.set(op.ref, id);
-        tasks.set(id, createTask(id, op.task));
+        const part = original && replacesOriginal(op.task, original) ? original : null;
+        const conflictGroup = op.task.conflictGroup === undefined ? part?.conflictGroup ?? null : op.task.conflictGroup;
+        tasks.set(id, { ...createTask(id, op.task), conflictGroup });
+        if (problem) hold('VALIDATION_FAILED', problem, id);
+        if (!wp) hold('WBS_NODE_NOT_FOUND', noWp, id);
         wp?.tasks.push(id);
         const preds = (op.preds ?? []).map(pred => ({ pred: resolve(pred.pred), type: pred.type }));
         preds.forEach(pred => addDependency({ ...pred, succ: id }));
         record(id, 'task', null, { workPackageId: op.workPackageId, ...op.task, preds });
+        if (part && (part.conflictGroup !== null || conflictGroup !== null)) record(id, 'conflictGroup', part.conflictGroup, conflictGroup);
         return;
       }
       case 'modify': {
@@ -153,7 +181,7 @@ export function simulateProposal(base: ProposalSnapshot, ops: readonly Simulatio
         const task = editable(id, '수정');
         if (!task) return;
         const change = modifyTask(task, op.field, op.after);
-        if ('code' in change) hold(change.code, `${id} ${op.field}: ${change.message}`);
+        if ('code' in change) hold(change.code, `${id} ${op.field}: ${change.message}`, id);
         else {
           tasks.set(id, change.task);
           record(id, op.field, change.before, op.after);
@@ -163,10 +191,10 @@ export function simulateProposal(base: ProposalSnapshot, ops: readonly Simulatio
       case 'remove': {
         const id = resolve(op.task);
         const task = tasks.get(id);
-        if (task?.status === 'cancelled') return hold('ALREADY_APPLIED', `${id}은(는) 이미 취소되었습니다`);
+        if (task?.status === 'cancelled') return hold('ALREADY_APPLIED', `${id}은(는) 이미 취소되었습니다`, id);
         if (!editable(id, '삭제') || !task) return;
         if (task.hasExecutionHistory || !['planning', 'approval', 'ready'].includes(task.status)) {
-          return hold('EXECUTION_HISTORY', `${id}에는 실행 이력이 있어 취소할 수 없습니다`);
+          return hold('EXECUTION_HISTORY', `${id}에는 실행 이력이 있어 취소할 수 없습니다`, id);
         }
         const result = cancelBeforeStart([...tasks.values()], dependencies, id, task.hasExecutionHistory);
         tasks.set(id, { ...task, status: 'cancelled' });
@@ -188,7 +216,7 @@ export function simulateProposal(base: ProposalSnapshot, ops: readonly Simulatio
         const pred = resolve(op.pred);
         const succ = resolve(op.succ);
         const target = dependencies.find(dep => dep.pred === pred && dep.succ === succ);
-        if (!target) return hold('DEPENDENCY_NOT_FOUND', `${pred} → ${succ} 관계가 없습니다`);
+        if (!target) return hold('DEPENDENCY_NOT_FOUND', `${pred} → ${succ} 관계가 없습니다`, succ);
         if (!editable(succ, '선행을 삭제')) return;
         dependencies = dependencies.filter(dep => dep !== target);
         dropped(target, 'dep-remove');

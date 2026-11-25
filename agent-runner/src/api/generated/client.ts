@@ -53,7 +53,7 @@ export type ClaimedJob = {
     policy: Record<string, unknown>;
     proposal: {
       id: Id;
-      ops: (LeadProposalOp)[];
+      ops: (JudgedProposalOp)[];
       targets: ({
         target: TaskKey;
         subjectHash: Sha256;
@@ -69,7 +69,7 @@ export type ClaimedJob = {
       splitTasks: null;
     } | {
       id: Id;
-      ops: (LeadSplitProposalOp)[];
+      ops: (JudgedSplitProposalOp)[];
       targets: ({
         target: TaskKey;
         subjectHash: Sha256;
@@ -266,7 +266,7 @@ export type JudgedContent = {
   conflictGroup: string | null;
 };
 
-export type LeadProposalOp = {
+export type JudgedProposalOp = {
   op: "add";
   ref: string;
   t: {
@@ -294,6 +294,13 @@ export type LeadProposalOp = {
     })[];
     srcV?: number;
     splitBasis?: string;
+    scope?: (string)[];
+    files?: (string)[];
+    design?: ({
+      kind: DesignKind;
+      content: Record<string, unknown>;
+    })[];
+    conflictGroup?: string | null;
   };
   preds: ({
     pred: Id;
@@ -355,7 +362,7 @@ export type LeadProposalOp = {
   succ: Id;
 };
 
-export type LeadSplitProposalOp = {
+export type JudgedSplitProposalOp = {
   op: "add";
   ref: string;
   t: {
@@ -383,6 +390,13 @@ export type LeadSplitProposalOp = {
     })[];
     srcV?: number;
     splitBasis: string;
+    scope?: (string)[];
+    files?: (string)[];
+    design?: ({
+      kind: DesignKind;
+      content: Record<string, unknown>;
+    })[];
+    conflictGroup?: string | null;
   };
   preds: ({
     pred: Id;
@@ -474,6 +488,13 @@ export type PlanningProposalOp = {
     })[];
     srcV?: number;
     splitBasis?: string;
+    scope?: (string)[];
+    files?: (string)[];
+    design?: ({
+      kind: DesignKind;
+      content: Record<string, unknown>;
+    })[];
+    conflictGroup?: string | null;
     judgedRules?: {
       schemaVersion: 1;
       items: ({
@@ -574,6 +595,13 @@ export type PlanningSplitProposalOp = {
     })[];
     srcV?: number;
     splitBasis: string;
+    scope?: (string)[];
+    files?: (string)[];
+    design?: ({
+      kind: DesignKind;
+      content: Record<string, unknown>;
+    })[];
+    conflictGroup?: string | null;
     judgedRules?: {
       schemaVersion: 1;
       items: ({

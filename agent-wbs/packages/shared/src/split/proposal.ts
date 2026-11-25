@@ -1,12 +1,12 @@
 import { dependencyMet } from '../domain/index.ts';
 import type { Dependency } from '../domain/index.ts';
-import { simulateProposal } from '../proposal/index.ts';
+import { replacesOriginal, simulateProposal } from '../proposal/index.ts';
 import type {
   AcceptanceCriterion, ProposalIssueCode, SimulationOp, ProposalSimulation, ProposalSnapshot, ProposalTask,
   SplitJudgements, TaskJudgement,
 } from '../proposal/index.ts';
-import { checkSplit, DEFAULT_SPLIT_SETTINGS, flaggedRules, hasStarted } from './check.ts';
-import type { SplitRule, SplitSettings } from './check.ts';
+import { checkSplit, DEFAULT_SPLIT_SETTINGS, flaggedRules, hasStarted, SCOPE_MISSING } from './check.ts';
+import type { SplitOriginal, SplitRule, SplitSettings } from './check.ts';
 import { proposalJudgementHolds, splitJudgementHolds } from './judgement.ts';
 import type { JudgementHold, SubjectHashes } from './judgement.ts';
 
@@ -17,7 +17,10 @@ export type SplitProblemCode = ProposalIssueCode
 
 export interface SplitProblem {
   code: SplitProblemCode;
-  taskKey: string;
+  // Op index of a simulation issue.
+  index?: number | null;
+  // Absent when a simulation issue names no identified Task.
+  taskKey?: string;
   rule?: JudgementHold['rule'];
   message: string;
 }
@@ -64,14 +67,14 @@ export function validateSplitProposal(
   base: ProposalSnapshot, targetId: string, ops: readonly SimulationOp[], judgement: SplitJudgementInput,
   settings: SplitSettings = DEFAULT_SPLIT_SETTINGS,
 ): SplitProposalResult {
-  const simulation = simulateProposal(base, ops);
+  const simulation = simulateProposal(base, ops, { splitOf: targetId });
   const problems: SplitProblem[] = [];
   const warnings: SplitProposalResult['warnings'] = [];
   const fail = (code: SplitProblemCode, message: string, taskKey = targetId) => {
     problems.push({ code, taskKey, message });
   };
   const result = { problems, warnings, simulation };
-  simulation.issues.forEach(issue => fail(issue.code, issue.message, issue.taskKey));
+  simulation.issues.forEach(issue => problems.push(issue));
 
   const target = base.tasks.find(task => task.id === targetId);
   if (!target) {
@@ -82,9 +85,9 @@ export function validateSplitProposal(
     fail('ALREADY_STARTED', '이미 시작된 Task는 나누지 않습니다 — 예외 사유를 기록하거나 남은 일을 후속 Task로 제안합니다');
     return result;
   }
-  const checkIn = (snapshot: ProposalSnapshot, task: ProposalTask, hashes: SubjectHashes['after']) => checkSplit(task, snapshot.dependencies
+  const checkIn = (snapshot: ProposalSnapshot, task: ProposalTask, hashes: SubjectHashes['after'], from: SplitOriginal | null = null) => checkSplit(task, snapshot.dependencies
     .filter(dep => dep.succ === task.id)
-    .flatMap(dep => snapshot.tasks.find(candidate => candidate.id === dep.pred) ?? []), hashes[task.id] ?? null, settings);
+    .flatMap(dep => snapshot.tasks.find(candidate => candidate.id === dep.pred) ?? []), hashes[task.id] ?? null, settings, from);
   const original = checkIn(base, target, judgement.taskHashes.before);
   const flagged = flaggedRules(original);
   const mustCut = flagged.some(rule => CUT_RULES.includes(rule)) ||
@@ -104,7 +107,7 @@ export function validateSplitProposal(
   const { next } = simulation;
   const created = new Set(Object.values(simulation.idMap));
   const added = next.tasks.filter(task => created.has(task.id));
-  const parts = added.filter(task => task.workType !== 'Analysis' || target.workType === 'Analysis');
+  const parts = added.filter(task => replacesOriginal(task, target));
   const cancelled = ops.some(op => op.op === 'remove' && op.task === targetId);
 
   if (!cancelled && (mustCut || parts.length)) fail('ORIGINAL_NOT_CANCELLED', '나눈 원래 Task를 취소해야 합니다');
@@ -121,14 +124,18 @@ export function validateSplitProposal(
 
   // Every resulting Task must itself satisfy the criteria, including a target kept behind an analysis Task.
   for (const task of cancelled ? added : [...added, ...next.tasks.filter(item => item.id === targetId)]) {
-    for (const item of checkIn(next, task, judgement.taskHashes.after).items) {
+    for (const item of checkIn(next, task, judgement.taskHashes.after, cancelled && parts.includes(task) ? target : null).items) {
       if (item.status === '위반') fail('RULE_VIOLATION', `${item.label}: ${item.detail}`, task.id);
-      else if (item.status === '의심') warnings.push({ taskKey: task.id, message: `${item.label}: ${item.detail}` });
+      else if (item.status === '의심' || item.status === '주의' && item.detail.includes(SCOPE_MISSING)) warnings.push({ taskKey: task.id, message: `${item.label}: ${item.detail}` });
     }
   }
   const holds = [...proposalJudgementHolds(base, simulation, judgement.taskHashes, judgement.taskJudgements, settings),
     ...splitJudgementHolds(judgement.splitJudgements, judgement.splitSubjectHash)];
-  for (const { code, taskKey = targetId, rule, message } of holds) problems.push({ code, taskKey, message, ...(rule ? { rule } : {}) });
+  for (const { code, rule, message, ...hold } of holds) {
+    // A malformed taskJudgements entry without a key names no Task; the split judgements are about the original.
+    const taskKey = hold.taskKey ?? (rule ? targetId : undefined);
+    problems.push({ code, message, ...(taskKey === undefined ? {} : { taskKey }), ...(rule ? { rule } : {}) });
+  }
   for (const task of added) {
     if (!task.estimate) fail('ESTIMATE_MISSING', '나눈 Task의 추정이 없어 크기를 판정할 수 없습니다', task.id);
     if (!task.splitBasis.trim()) fail('SPLIT_BASIS_MISSING', '분할 근거가 없습니다', task.id);

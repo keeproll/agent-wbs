@@ -28,6 +28,7 @@ export const SplitJudgements = judgements(c.Body({ rule: cpRule, ...judgement, s
 /* ---- Change Proposal 변경(P `ops`, G§5.6). 저장·시뮬레이션이 P의 키를 그대로 쓴다. ---- */
 /** Task별 분할 근거(G§5.2-1). 초안 Task와 CP가 추가하는 Task가 같은 정의를 쓴다. */
 const splitBasis = Text;
+const lines = List(Type.String());
 const proposedTask = {
   title: Type.String({ minLength: 1, maxLength: 200 }),
   type: c.WorkType,
@@ -48,7 +49,13 @@ const proposedTask = {
   ac: Opt(List(c.Body({ given: Text, when: Text, then: Text, method: Opt(Type.String()) }))),
   srcV: Opt(c.Count),
   splitBasis: Opt(splitBasis),
+  // 선택 필드(data-model §2.4-1). design의 kind 중복은 시뮬레이션이 검사한다.
+  scope: Opt(lines),
+  files: Opt(lines),
+  design: Opt(List(c.Body({ kind: c.DesignKind, content: c.Json }), { maxItems: 4 })),
 };
+/** 충돌 묶음은 Planning만 지정한다(G§6.6). 생략과 명시한 null은 다르다: 분할 CP의 생략은 상속이다. */
+const planned = { conflictGroup: Opt(Nullable(Text)) };
 const ModifyOp = (field: string, after: Parameters<typeof Opt>[0]) =>
   c.Body({ op: AnyOf('modify'), task: c.TaskKey, field: AnyOf(field), before: Opt(Type.Unknown()), after });
 /** CP가 바꾸는 기존 Task 또는 새 Task의 ref */
@@ -73,13 +80,18 @@ const proposalOp = (title: string, judged: TProperties) =>
     { title },
   );
 /** 저장된 변경 */
-export const ProposalOp = proposalOp('ProposalOp', { judgedRules: Opt(JudgedRules) });
-/** 팀장 작성: 판단 기록은 쓸 수 없다. */
+export const ProposalOp = proposalOp('ProposalOp', { ...planned, judgedRules: Opt(JudgedRules) });
+/** 팀장 작성: 판단 기록과 충돌 묶음은 쓸 수 없다. */
 export const LeadProposalOp = proposalOp('LeadProposalOp', {});
-export const PlanningProposalOp = proposalOp('PlanningProposalOp', { judgedRules: Opt(NewJudgedRules) });
+export const PlanningProposalOp = proposalOp('PlanningProposalOp', { ...planned, judgedRules: Opt(NewJudgedRules) });
 /** 분할 CP(source.kind=split)의 추가 Task는 분할 근거가 필수다. */
 export const LeadSplitProposalOp = proposalOp('LeadSplitProposalOp', { splitBasis });
-export const PlanningSplitProposalOp = proposalOp('PlanningSplitProposalOp', { splitBasis, judgedRules: Opt(NewJudgedRules) });
+export const PlanningSplitProposalOp = proposalOp('PlanningSplitProposalOp', {
+  ...planned, splitBasis, judgedRules: Opt(NewJudgedRules),
+});
+/** 판단 job이 주는 ops: 저장된 변경에서 판단 기록만 뺀 것 */
+export const JudgedProposalOp = proposalOp('JudgedProposalOp', planned);
+export const JudgedSplitProposalOp = proposalOp('JudgedSplitProposalOp', { ...planned, splitBasis });
 
 /** 자동 반영은 held, 수동 승인·반영은 409(contracts §2.1) */
 export const HoldReason = Type.Object(
@@ -93,7 +105,8 @@ export const HoldReason = Type.Object(
 );
 /** D-33~35 외의 반영 불가 사유(완료 Task 수정, 순환 등) */
 const issues = List(
-  Type.Object({ index: Nullable(c.Count), code: Type.String(), message: Type.String() }),
+  // taskKey는 특정 Task의 문제일 때만. 새 Task는 idMap의 예상 키
+  Type.Object({ index: Nullable(c.Count), code: Type.String(), taskKey: Opt(c.TaskKey), message: Type.String() }),
 );
 
 /** 취소로 제거된 관계와 실제로 풀리는 후속(contracts §2.1, D-27) */
@@ -163,7 +176,6 @@ export const Dependency = Type.Object(
   { title: 'Dependency' },
 );
 
-const lines = List(Type.String());
 /** data-model §2.3 task_specs, P SPEC_GROUPS */
 const specOverview = {
   purpose: Type.String(),
