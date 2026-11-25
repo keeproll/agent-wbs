@@ -64,9 +64,9 @@ describe('ten rules at their boundaries', () => {
       ['unknown result', { result: 'maybe' }, 'missing'], ['no source', { sourceRef: '' }, 'missing'],
       ['local time', { judgedAt: '2026-11-25T00:00:00+09:00' }, 'missing'], ['bad time', { judgedAt: '2026-13-25T00:00:00Z' }, 'missing'],
       ...['2026-02-30T00:00:00Z', '2026-02-29T00:00:00Z', '2026-04-31T12:00:00.5Z', '2026-11-25T24:00:00Z', '2026-11-25T23:59:60Z']
-        .map(judgedAt => [judgedAt, { judgedAt }, 'missing'] as const),
-      ...['2028-02-29T00:00:00Z', '2026-11-25T00:00:00+00:00', '2026-11-25T23:59:59.9999999Z', '2026-11-25T23:59:59.123456Z'].map(judgedAt => [judgedAt, { judgedAt }, 'met'] as const),
-    ])('%s', (_name, patch, expected) => {
+        .map(judgedAt => [judgedAt, { judgedAt }, 'missing'] as [string, object, string]),
+      ...['2028-02-29T00:00:00Z', '2026-11-25T00:00:00+00:00', '2026-11-25T23:59:59.9999999Z', '2026-11-25T23:59:59.123456Z'].map(judgedAt => [judgedAt, { judgedAt }, 'met'] as [string, object, string]),
+    ] as [string, object, string][])('%s', (_name, patch, expected) => {
       const result = check([...others, { ...judgement(rule), ...patch }]);
       expect(result.items.find(item => item.rule === rule)).toMatchObject({ status: '판단', judgement: expected });
       expect(result.approvalHolds).toEqual(expected === 'met' ? [] : [rule]);

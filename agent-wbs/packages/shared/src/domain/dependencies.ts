@@ -3,7 +3,7 @@ import type { Dependency, Task } from './types.ts';
 
 export function dependencyMet(tasks: readonly Task[], dependency: Dependency): boolean {
   const pred = tasks.find(task => task.id === dependency.pred);
-  if (!pred) return false;
+  if (!pred) return false; // Coordinator R9: a missing reference never satisfies a dependency.
   if (dependency.type === 'FS') return pred.status === 'done';
   // Owner D-27: cancellation removes the edge; cancellation itself is not a start.
   return !['planning', 'approval', 'ready', 'cancelled'].includes(pred.status);
@@ -41,6 +41,9 @@ export function assertDependency(
   }
   if (candidate.pred === candidate.succ) {
     throw new DomainError('DEPENDENCY_SELF', '자기 자신을 선행으로 지정할 수 없습니다.');
+  }
+  if (tasks.some(task => task.id === candidate.pred && task.status === 'cancelled')) {
+    throw new DomainError('INVALID_TRANSITION', '취소된 Task를 선행으로 추가할 수 없습니다.');
   }
   if (dependencies.some(dep => dep.pred === candidate.pred && dep.succ === candidate.succ)) {
     throw new DomainError('DEPENDENCY_DUPLICATE', '이미 있는 선행 관계입니다.');
