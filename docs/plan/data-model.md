@@ -55,15 +55,56 @@
 | `task_estimates` | 추가 전용: est/lo/hi hours(`lo<=est<=hi` CHECK), tokens_k, confidence, basis, agreed_by | §8.3 |
 | `task_grades` | role(`dev/qa`), model_id, effort, reason, locked, locked_by, effective_from | §7.1 |
 | `task_subagents` | role, subagent_id, basis | §7.4 |
-| `task_splits` | basis, judged_rules(jsonb), exceptions(jsonb: rule·why·by·at) | §5.2-1 |
+| `task_splits` | basis, judged_rules(jsonb, §2.3-1), exceptions(jsonb: rule·why·by·at) | §5.2-1 |
 | `task_source_links` | fix_task → origin_task(버그 수정), split_from | §5.2-1 L622 |
+
+#### 2.3-1 `judged_rules` 정의 (D-33)
+
+```ts
+type JudgedRules = {
+  schemaVersion: 1;
+  items: Judgement<'revert' | 'contract' | 'refactor'>[];   // 규칙 5·7·9, rule별 최대 1건
+};
+type SplitJudgements = {                                    // 분할 CP (D-34)
+  schemaVersion: 1;
+  items: Judgement<'ac_meaning' | 'layer_order' | 'test_included'>[];
+};
+type Judgement<R> = {
+  rule: R;
+  result: 'met' | 'not_met';          // 충족 | 불충족
+  agreedBy: ('Claude' | 'Codex')[];   // 합의 주체. 중복 없이 둘 다 필요
+  basis: string;                      // 근거, 공백 제거 후 1자 이상
+  subjectHash: string;                // 판단 대상의 정규화 SHA-256
+  judgedAt: string;                   // UTC ISO 8601
+  sourceRef: string;                  // planning job/session ID
+};
+```
+
+- 기록은 Planning API만 쓴다. 다시 판단하면 최신값으로 바꾸고 이전·이후를 `task_history`에 추가한다.
+- `subjectHash` 대상: `judged_rules`는 Task의 제목·범위·제외·명세·AC·산출물·기술 설계·충돌 묶음, `split_judgements`는 CP `ops` + 각 대상 Task의 현재 내용. 우선순위·담당·상태는 제외. **계산은 서버만** 한다. 새 Task·초안·CP는 내용과 판단을 함께 받아 저장 때 계산하므로 요청에서 생략하고, 기존 Task 재판단은 작업 payload로 받은 값을 그대로 돌려보내 불일치를 검출한다.
+- **유효한 기록** = 형식이 맞고 합의 주체가 둘 다이며 현재 대상 hash와 일치. 아니면 「기록 없음」으로 본다 [결정].
+- 켜진 규칙마다 유효한 `met`이 있어야 승인 가능. 없으면 `JUDGEMENT_MISSING`, `not_met`이면 `JUDGEMENT_NOT_MET`. 자동 규칙의 예외 사유로 대신하지 않는다. 화면 상태는 G의 「판단」을 쓰고 충족/불충족/기록 없음을 글로 구분한다.
+- CP 검사 대상: 추가된 Task와 hash 대상 내용이 바뀐 Task만. 판단 규칙과 무관한 CP(우선순위 변경 등)는 막지 않는다.
+
+#### 2.3-2 분할의 순서 보장 판정 (D-34)
+
+원래 Task T를 T1…Tn으로 나눌 때, T의 선후행 관계마다 변경 후 그래프에서 확인한다. 조사 Task가 추가되면 그래프에 포함한다.
+
+| 원래 관계 | 변경 후 필요한 보장 |
+|---|---|
+| A FS T | A에서 **모든 Ti**로, 첫 변이 FS인 경로 |
+| A SS T | A에서 **모든 Ti**로의 경로(FS·SS) |
+| T FS B | **모든 Ti**에서 B로, 첫 변이 FS인 경로 |
+| T SS B | **하나 이상의 Ti**에서 B로의 경로(FS·SS) |
+
+첫 변이 FS면 이후 변이 FS·SS여도 도착 Task 시작 ≥ 출발 Task 종료가 유지된다. 이미 충족된 선행(FS는 완료, SS는 시작됨)은 검사하지 않는다 [결정]. 하나라도 보장되지 않으면 `ORDER_NOT_PRESERVED`. 분할이 아닌 취소 CP는 D-27을 따른다.
 
 ### 2.4 Planning · 변경 제안
 
 | 테이블 | 주요 컬럼 · 제약 | 근거 |
 |---|---|---|
 | `plannings` / `planning_analyses` / `planning_reviews` | 세션 / Agent별 독립 분석 unique(planning, agent) / 주제별 일치·이견·조정 | §4.5 |
-| `change_proposals` | cp_key, source(planning/message/manual/split/input/decision), status(§3.6), ops(jsonb §5.6), id_map, preview_hash, hold_reasons | §4.8 §5.6 |
+| `change_proposals` | cp_key, source(planning/message/manual/split/input/decision), status(§3.6), ops(jsonb §5.6), id_map, preview_hash, hold_reasons, split_judgements(jsonb, §2.3-1; 분할 CP만) | §4.8 §5.6 |
 | `change_proposal_events` | 제출·승인·반려·반영·보류, actor, comment — 추가 전용 | §4.8 |
 
 ### 2.5 실행 · 검증
