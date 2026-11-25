@@ -1,4 +1,4 @@
-import { escalate, floorOf, gradeError, lower, roleOf } from './policy.ts';
+import { belowFloor, escalate, floorOf, gradeError, lower, roleOf } from './policy.ts';
 import type {
   AttemptKind,
   Catalog,
@@ -45,7 +45,7 @@ export type ResolveResult =
       /** 최상위 등급 재작업 알림. 알리지 않으면 null. */
       notify: { count: number } | null;
     }
-  | { ok: false; code: 'USAGE_EXHAUSTED' | 'FLOOR_UNDETERMINED' | 'PREVIOUS_DEV_MISSING' | GradeError };
+  | { ok: false; code: 'USAGE_EXHAUSTED' | 'BELOW_FLOOR' | 'FLOOR_UNDETERMINED' | 'PREVIOUS_DEV_MISSING' | GradeError };
 
 /** 시도를 시작할 때 쓸 등급을 정한다(G §7.3, §6.5). 정책의 단일 출처다(§9.3-3). */
 export function resolveRunGrade(input: ResolveInput): ResolveResult {
@@ -74,6 +74,15 @@ export function resolveRunGrade(input: ResolveInput): ResolveResult {
   // 중단 후 재개는 항상 같은 등급 — 하향도 하지 않는다.
   if (resuming) return { ok: true, grade: base, adjust: { ...adjust, kind: 'resume' }, notify: null };
 
+  const floor = floorOf(role, input.task, policy.floors);
+  // 최저선은 조정을 마친 최종 후보에 적용한다. 미달이면 올리지 않고 Planning 재판단 대상으로 거부한다.
+  const finish = (grade: Grade, adjusted: GradeAdjust, notify: { count: number } | null): ResolveResult => {
+    const below = belowFloor(catalog.agent, { ...grade, locked: taskGrade.locked }, floor);
+    if (below === null) return { ok: false, code: 'FLOOR_UNDETERMINED' };
+    if (below) return { ok: false, code: 'BELOW_FLOOR' };
+    return { ok: true, grade, adjust: adjusted, notify };
+  };
+
   if (kind === 'rework' && policy.onRework !== 'same') {
     let grade = base;
     const steps: GradeStep[] = [];
@@ -93,26 +102,18 @@ export function resolveRunGrade(input: ResolveInput): ResolveResult {
         ).length + 1;
       if (count >= policy.escNotify) notify = { count };
     }
-    return { ok: true, grade, adjust: { ...adjust, kind: 'up', steps, alreadyTop }, notify };
+    return finish(grade, { ...adjust, kind: 'up', steps, alreadyTop }, notify);
   }
 
   if (
     policy.onUsage === 'down' &&
     remainPct !== null &&
     remainPct < policy.lowPct &&
-    !taskGrade.locked
+    !taskGrade.locked &&
+    floor
   ) {
-    const floor = floorOf(role, input.task, policy.floors);
-    if (!floor) return { ok: false, code: 'FLOOR_UNDETERMINED' };
     const down = lower(catalog, base, floor);
-    if (down) {
-      return { ok: true, grade: down.grade, adjust: { ...adjust, kind: 'down', steps: [down.step] }, notify: null };
-    }
+    if (down) return finish(down.grade, { ...adjust, kind: 'down', steps: [down.step] }, null);
   }
-  return {
-    ok: true,
-    grade: base,
-    adjust: { ...adjust, kind: kind === 'rework' ? 'keep' : 'none' },
-    notify: null,
-  };
+  return finish(base, { ...adjust, kind: kind === 'rework' ? 'keep' : 'none' }, null);
 }

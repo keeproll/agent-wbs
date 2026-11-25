@@ -109,6 +109,13 @@ describe('상향·하향', () => {
     expect(escalate(c, { modelId: 'gpt-6.2-sol', effort: 'max' })).toBeNull();
     expect(escalate(c, { modelId: 'gpt-5.5', effort: 'xhigh' })?.grade).toEqual({ modelId: 'gpt-6.2-sol', effort: 'xhigh' });
   });
+  test('얼린 catalog로 모델을 올려도 입력을 바꾸지 않는다', () => {
+    const models = claude.models.map((m) => Object.freeze({ ...m, efforts: Object.freeze([...m.efforts]) }));
+    const frozen = Object.freeze({ agent: 'Claude' as const, models: Object.freeze(models) });
+    const g = Object.freeze({ modelId: 'claude-sonnet-5-5', effort: 'max' });
+    expect(escalate(frozen, g)?.grade).toEqual({ modelId: 'claude-opus-5-5', effort: 'max' });
+    expect(models.map((m) => m.rank)).toEqual([4, 3, 2, 1]);
+  });
   test('하향은 최저선까지만, 가장 낮으면 없음', () => {
     const g = { modelId: 'claude-opus-5-5', effort: 'high' };
     expect(lower(claude, g, floor1)?.grade.effort).toBe('medium');

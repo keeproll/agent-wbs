@@ -60,11 +60,47 @@ describe('재작업', () => {
     expect(r).toMatchObject({ grade: { modelId: OPUS, effort: 'max' }, adjust: { kind: 'up', alreadyTop: true } });
     expect(r.ok && (r.notify?.count ?? null)).toBe(want);
   });
+  test('프로세스 실패한 재작업의 재시도도 직전 시도에서 한 단계 올린다 (P L5818)', () => {
+    expect(run({ kind: 'rework', history: [past('dev', SONNET, 'high'), past('rework', SONNET, 'xhigh', 'failed')] })).toMatchObject({ grade: { modelId: SONNET, effort: 'max' }, adjust: { kind: 'up' } });
+  });
+  test('알림 횟수는 실패·중단된 최상위 재작업도 센다 (P L5826)', () => {
+    const history = [past('dev', OPUS, 'max'), past('rework', OPUS, 'max', 'failed'), past('rework', OPUS, 'max', 'interrupted'), past('rework', OPUS, 'max')];
+    expect(run({ kind: 'rework', history })).toMatchObject({ notify: { count: 4 } });
+  });
   test('고정 Task도 재작업 상향은 적용된다(고정은 하향만 막는다)', () => {
     expect(run({ kind: 'rework', taskGrade: { modelId: SONNET, effort: 'high', locked: true }, history: [past('dev', SONNET, 'high')] })).toMatchObject({ grade: { effort: 'xhigh' } });
   });
   test('직전 개발 시도가 없으면 등급을 추정하지 않는다', () => {
     expect(run({ kind: 'rework' })).toEqual({ ok: false, code: 'PREVIOUS_DEV_MISSING' });
+  });
+});
+
+describe('최저선은 최종 후보에 적용한다', () => {
+  const DB = { primaryDomain: 'DB', relatedDomains: [], devLevel: 3 as const };
+  const at = (effort: string, locked = false) => ({ modelId: SONNET, effort, locked });
+  const below = { ok: false, code: 'BELOW_FLOOR' };
+  test('저장 등급이 미달이면 사용량·정책과 무관하게 재판단 대상으로 거부', () => {
+    expect(run({ task: DB, taskGrade: at('low') })).toEqual(below);
+    expect(run({ kind: 'qa', taskGrade: at('medium') })).toEqual(below);
+    expect(run({ kind: 'reverify', taskGrade: at('medium') })).toEqual(below);
+    expect(run({ task: DB, taskGrade: at('low'), policy: DOWN, remainPct: 5 })).toEqual(below);
+  });
+  test('개발 등급이 미매핑이면 대기 정책에서도 검증을 거부, 개발은 영향 없음', () => {
+    const task = { primaryDomain: 'FE', relatedDomains: [], devLevel: null };
+    expect(run({ kind: 'qa', task })).toEqual({ ok: false, code: 'FLOOR_UNDETERMINED' });
+    expect(run({ task })).toMatchObject({ ok: true });
+  });
+  test('재작업은 상향한 결과로 판정한다 — 저장값이 미달이어도 충족하면 허용, 올려도 미달이면 거부', () => {
+    const o = { kind: 'rework' as const, task: DB, taskGrade: at('low') };
+    expect(run({ ...o, history: [past('dev', SONNET, 'medium')] })).toMatchObject({ ok: true, grade: { effort: 'high' } });
+    expect(run({ ...o, history: [past('dev', SONNET, 'low')] })).toEqual(below);
+    expect(run({ ...o, history: [past('dev', SONNET, 'medium')], policy: { ...DEFAULT_EXEC_POLICY, onRework: 'same' } })).toEqual(below);
+  });
+  test('팀장 고정과 중단 재개는 예외, 해제한 최저선은 적용하지 않음', () => {
+    expect(run({ task: DB, taskGrade: at('low', true) })).toMatchObject({ ok: true, grade: { effort: 'low' } });
+    expect(run({ kind: 'qa', taskGrade: at('low', true), task: { ...DB, devLevel: null } })).toMatchObject({ ok: true });
+    expect(run({ task: DB, history: [past('dev', SONNET, 'low', 'interrupted')] })).toMatchObject({ ok: true, grade: { effort: 'low' }, adjust: { kind: 'resume' } });
+    expect(run({ task: DB, taskGrade: at('low'), policy: { ...DEFAULT_EXEC_POLICY, floors: { verifyGeDev: true, dbHigh: false } } })).toMatchObject({ ok: true });
   });
 });
 
