@@ -12,10 +12,10 @@ export function applyChecklistVerification(
   items: readonly ChecklistItem[], selectedIds: readonly string[], result: VerificationResult,
   verificationId: string, evidence: readonly string[],
 ): readonly ChecklistItem[] {
+  if (result === 'BLOCKED') return items;
   if (selectedIds.some(id => !items.some(item => item.id === id))) {
     throw new DomainError('VALIDATION_FAILED', '알 수 없는 체크리스트 항목입니다.');
   }
-  if (result === 'BLOCKED') return items;
   return items.map(item => selectedIds.includes(item.id) ? {
     ...item,
     done: result === 'PASS',

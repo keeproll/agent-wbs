@@ -40,6 +40,7 @@ export interface Verification extends CodeBasis {
 }
 
 type DomainErrorCode = 'INVALID_TRANSITION' | 'VALIDATION_FAILED' | 'TASK_NOT_FOUND' |
+  'GATE_NOT_PASSED' | 'CLAIM_REJECTED' | 'ATTEMPT_CLOSED' | 'CLEANUP_PENDING' | 'SUBAGENT_INSTALL_FAILED' |
   'DEPENDENCY_SELF' | 'DEPENDENCY_DUPLICATE' | 'DEPENDENCY_CYCLE' | 'TASK_HAS_SUCCESSORS';
 
 export class DomainError extends Error {

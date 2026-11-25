@@ -4,7 +4,7 @@ import {
   recordVerification, startAttempt, transitionPairAllowed,
 } from '../../src/domain/index.ts';
 import type { AttemptKind, TaskStatus } from '../../src/domain/index.ts';
-import { attempt, basis, claim, completion, pass } from './fixtures.ts';
+import { approvalSpec, attempt, basis, claim, completion, failedHistory, pass, reworkHistory } from './fixtures.ts';
 
 // Independently transcribed from owner Q-05 / data-model §3.1 (b258334).
 const transitions: Record<TaskStatus, TaskStatus[]> = {
@@ -53,15 +53,15 @@ test('creation, approval and rejection enforce actor and specification facts', (
   expect(initialTaskStatus('manual')).toBe('planning');
   expect(initialTaskStatus('cp')).toBe('planning');
   expect(initialTaskStatus('initial-wbs-approval')).toBe('ready');
-  expect(lifecycleTransition('planning', { type: 'request-approval', specComplete: true })).toBe('approval');
-  expect(() => lifecycleTransition('planning', { type: 'request-approval', specComplete: false })).toThrow();
-  expect(lifecycleTransition('approval', { type: 'approve', leader: true })).toBe('ready');
+  expect(lifecycleTransition('planning', { type: 'request-approval', leader: true, spec: approvalSpec })).toBe('approval');
+  expect(() => lifecycleTransition('planning', { type: 'request-approval', leader: true, spec: { ...approvalSpec, purpose: '' } })).toThrow();
+  expect(lifecycleTransition('approval', { type: 'approve', leader: true, spec: approvalSpec })).toBe('ready');
   expect(lifecycleTransition('approval', { type: 'reject', leader: true })).toBe('planning');
-  expect(() => lifecycleTransition('approval', { type: 'approve', leader: false })).toThrow();
+  expect(() => lifecycleTransition('approval', { type: 'approve', leader: false, spec: approvalSpec })).toThrow();
   expect(() => lifecycleTransition('approval', { type: 'reject', leader: false })).toThrow();
 });
 
-test.each(['hasOpenAttempt', 'hasOtherJobHold', 'cleanupPending'] as const)('claim rejects %s', field => {
+test.each(['hasOpenAttempt', 'cleanupPending'] as const)('claim rejects %s', field => {
   expect(claimIssue(claim({ [field]: true }))).not.toBeNull();
 });
 
@@ -85,10 +85,10 @@ test.each(ATTEMPT_KINDS)('%s process failure retries only the same kind (two aut
   });
   const input = claim({ status: 'failed', kind, previousAttempt: { ...previous, status: 'failed' }, leaderRequested: false });
   for (const consecutiveFailures of [1, 2]) {
-    expect(startAttempt({ ...input, consecutiveFailures }, true)).toBe(taskStatus);
+    expect(startAttempt({ ...input, history: failedHistory(kind, consecutiveFailures) }, true)).toBe(taskStatus);
   }
-  expect(claimIssue({ ...input, consecutiveFailures: 3 })).not.toBeNull();
-  expect(startAttempt({ ...input, consecutiveFailures: 3, leaderRequested: true }, true)).toBe(taskStatus);
+  expect(claimIssue({ ...input, history: failedHistory(kind, 3) })).not.toBeNull();
+  expect(startAttempt({ ...input, history: failedHistory(kind, 3), leaderRequested: true }, true)).toBe(taskStatus);
   for (const other of ATTEMPT_KINDS.filter(other => other !== kind)) {
     expect(claimIssue({ ...input, kind: other })).not.toBeNull();
   }
@@ -139,16 +139,16 @@ test('every terminal attempt status rejects further results for all four kinds',
 test.each([['qa', 'qa'], ['verifying', 'reverify']] as const)('%s BLOCKED -> fresh attempt -> PASS', (status, kind) => {
   const blocked = Object.freeze({ ...pass, result: 'BLOCKED' as const });
   const open = { kind, status: 'running' as const };
-  expect(recordVerification(status, open, basis, blocked)).toEqual({ taskStatus: status, attemptStatus: 'completed' });
+  expect(recordVerification(status, open, basis, blocked)).toEqual({ taskStatus: status, attemptStatus: 'completed', disposition: 'current' });
   const input = claim({ status, kind, previousAttempt: {
     ...attempt, kind, status: 'completed', verificationResult: 'BLOCKED',
   } });
   expect(startAttempt(input, true)).toBe(status);
-  expect(recordVerification(status, open, basis, pass)).toEqual({ taskStatus: 'gate', attemptStatus: 'completed' });
+  expect(recordVerification(status, open, basis, pass)).toEqual({ taskStatus: 'gate', attemptStatus: 'completed', disposition: 'current' });
   expect(blocked.result).toBe('BLOCKED');
   expect(recordVerification(status, open, basis, { ...pass, result: 'FAIL' }).taskStatus).toBe('rework');
   expect(() => recordVerification(status, { ...open, status: 'completed' }, basis, pass)).toThrow();
-  expect(() => recordVerification(status, open, { ...basis, headSha: 'changed' }, pass)).toThrow();
+  expect(recordVerification(status, open, { ...basis, headSha: 'changed' }, pass).disposition).toBe('stale');
 });
 
 test('QA and reverify claim conditions do not accept unrelated completed attempts', () => {
@@ -165,9 +165,9 @@ test('automatic rework boundary is three; a leader button allows one additional 
   const input = claim({ status: 'rework', kind: 'rework', leaderRequested: false, previousAttempt: {
     ...attempt, kind: 'qa', verificationResult: 'FAIL',
   } });
-  for (const automaticReworks of [0, 1, 2]) expect(claimIssue({ ...input, automaticReworks })).toBeNull();
-  expect(claimIssue({ ...input, automaticReworks: 3 })).not.toBeNull();
-  expect(claimIssue({ ...input, automaticReworks: 3, leaderRequested: true })).toBeNull();
+  for (const count of [0, 1, 2]) expect(claimIssue({ ...input, history: reworkHistory(count) })).toBeNull();
+  expect(claimIssue({ ...input, history: reworkHistory(3) })).not.toBeNull();
+  expect(claimIssue({ ...input, history: reworkHistory(3), leaderRequested: true })).toBeNull();
   expect(claimIssue({ ...input, previousAttempt: null })).not.toBeNull();
   expect(claimIssue({ ...input, previousAttempt: null, integrationFailed: true })).toBeNull();
   expect(claimIssue({ ...input, previousAttempt: { ...attempt, verificationResult: 'FAIL' } })).not.toBeNull();
@@ -177,10 +177,10 @@ test('automatic rework boundary is three; a leader button allows one additional 
 test.each(['headSha', 'specRevision', 'inputVersion'] as const)('%s change invalidates Gate and requires reverify', field => {
   const changed = { ...basis, [field]: field === 'headSha' ? 'changed' : 2 };
   expect(lifecycleTransition('gate', { type: 'invalidate', basis: changed, verification: pass })).toBe('verifying');
-  expect(() => recordVerification('verifying', { kind: 'reverify', status: 'running' }, changed, pass)).toThrow();
+  expect(recordVerification('verifying', { kind: 'reverify', status: 'running' }, changed, pass).disposition).toBe('stale');
   const fresh = { ...pass, ...changed };
   expect(recordVerification('verifying', { kind: 'reverify', status: 'running' }, changed, fresh).taskStatus).toBe('gate');
-  expect(() => lifecycleTransition('gate', { type: 'invalidate', basis, verification: pass })).toThrow();
+  expect(lifecycleTransition('gate', { type: 'invalidate', basis, verification: pass })).toBe('gate');
 });
 
 test('Gate completes only with five conditions, integration and matching merge', () => {

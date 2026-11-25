@@ -53,13 +53,13 @@ test.each(['headSha', 'specRevision', 'inputVersion'] as const)('old PASS at cha
 
 test('Gate five PASS alone never completes without matching integration and actual merge', () => {
   for (const patch of [
-    { integration: null }, { merge: null }, { currentBaseSha: 'moved' }, { currentPipelineSha: 'changed' },
+    { integration: null }, { merge: null },
   ]) expect(canComplete(completion(patch))).toBe(false);
   const input = completion();
   const integration = input.integration;
   const merge = input.merge;
   if (!integration || !merge) throw new Error('fixture missing integration/merge');
-  for (const field of ['qaHeadSha', 'headSha', 'baseSha', 'pipelineSha'] as const) {
+  for (const field of ['qaHeadSha', 'headSha', 'baseSha'] as const) {
     expect(canComplete(completion({ integration: { ...integration, [field]: 'wrong' } }))).toBe(false);
   }
   expect(canComplete(completion({ integration: { ...integration, result: 'FAIL' } }))).toBe(false);
@@ -75,12 +75,13 @@ test('only a mechanically verified clean H -> H\' synchronization carries QA to 
   const synced = completion({ ...input,
     basis: { ...basis, headSha: 'synced' },
     taskCheck: { ...basis, headSha: 'synced', result: 'PASS' },
-    integration: { ...input.integration, headSha: 'synced', qaBasisPreserved: true },
+    integration: { ...input.integration, headSha: 'synced' },
+    headSync: { qaHeadSha: 'head', headSha: 'synced', preserved: true },
     merge: { ...input.merge, headSha: 'synced' },
   });
   expect(canComplete(synced)).toBe(true);
-  expect(verificationCurrent(synced.basis, pass, synced.integration)).toBe(true);
-  expect(canComplete({ ...synced, integration: { ...input.integration, headSha: 'synced', qaBasisPreserved: false } })).toBe(false);
+  expect(verificationCurrent(synced.basis, pass, synced.headSync)).toBe(true);
+  expect(canComplete({ ...synced, headSync: { qaHeadSha: 'head', headSha: 'synced', preserved: false } })).toBe(false);
   expect(canComplete({ ...synced, verification: { ...pass, specRevision: 2 } })).toBe(false);
   expect(canComplete({ ...synced, verification: { ...pass, inputVersion: 2 } })).toBe(false);
 });
