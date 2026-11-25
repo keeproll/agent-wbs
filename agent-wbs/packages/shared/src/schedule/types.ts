@@ -30,7 +30,25 @@ export interface Dependency {
 export interface RunnerSession {
   from: string;
   to?: string;
+  // Without a first heartbeat, only the session start is known to be online.
+  lastHeartbeatAt?: string;
 }
+
+export interface ScheduleCapacityPolicy {
+  windowDays: number;
+  minHours: number;
+  minRate: number;
+  lowRateFactor: number;
+  highRateFactor: number;
+  lowQuantile: number;
+  highQuantile: number;
+}
+
+// P capacity: seven days, 72h, 5% floor, 0.6/1.3 factors, sorted ranks 1 and 5 out of 7.
+export const DEFAULT_SCHEDULE_CAPACITY_POLICY: Readonly<ScheduleCapacityPolicy> = Object.freeze({
+  windowDays: 7, minHours: 72, minRate: 0.05, lowRateFactor: 0.6, highRateFactor: 1.3,
+  lowQuantile: 1 / 6, highQuantile: 5 / 6,
+});
 
 export interface ScheduleInput {
   now: string;
@@ -38,6 +56,9 @@ export interface ScheduleInput {
   deps: readonly Dependency[];
   sessions: readonly RunnerSession[];
   assumeRate: number;
+  policy?: Partial<ScheduleCapacityPolicy>;
+  // D-21 defaults: 60 seconds, three misses; open intervals close at their last heartbeat.
+  heartbeat?: { intervalSec: number; missLimit: number };
   blackouts: readonly string[];
   concurrency: { total: number; current: number; subRatio: number; Claude: number; Codex: number };
   usage: Partial<Record<Agent, { remain: number; resetAt?: string }>>;
@@ -57,6 +78,7 @@ export interface ScheduleItem {
 }
 
 export interface ScheduleResult {
+  warnings: ScheduleWarning[];
   by: Record<string, ScheduleItem>;
   capacity: {
     days: { date: string; rate: number }[];
@@ -82,6 +104,11 @@ export interface ScheduleResult {
   };
 }
 
+export interface ScheduleWarning {
+  code: 'USAGE_RESET_UNKNOWN';
+  agent: Agent;
+}
+
 export interface Baseline {
   v: number;
   at: string;
@@ -98,13 +125,14 @@ export interface Baseline {
 
 export interface ReplanMove {
   task: string;
-  kind: 'delayed' | 'advanced' | 'new' | 'excluded' | 'shifted';
+  kind: 'delayed' | 'advanced' | 'new' | 'excluded';
   before: Baseline['items'][string] | null;
   after: Baseline['items'][string] | null;
   delta: number | null;
 }
 
 export interface ReplanResult {
+  warnings: ScheduleWarning[];
   status: 'applied' | 'pending';
   at: string;
   trigger: string;

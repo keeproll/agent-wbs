@@ -2,6 +2,17 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import type { ScheduleInput } from '../../src/schedule/index.ts';
 
+export function prototypeCapacity(input: ScheduleInput) {
+  const source = readFileSync(new URL('../../../../../prototype/uiux/Main.dc.html', import.meta.url), 'utf8');
+  const method = source.slice(source.indexOf('  capacity(d, now) {'), source.indexOf('  /* 일정 산정:'));
+  const cal = source.slice(source.indexOf('function pad2'), source.indexOf('function attHours'));
+  const local = (value: string) => new Date(Date.parse(value) + 9 * 3_600_000).toISOString().slice(0, 16).replace('T', ' ');
+  return runInNewContext(`${cal}\nconst Sel = {${method}}; Sel.capacity(d, now);`, {
+    now: local(input.now), d: { sched: { policy: { assumeRate: input.assumeRate } },
+      runner: { sessions: input.sessions.map(s => ({ from: local(s.from), to: s.to ? local(s.to) : '' })) } },
+  }, { timeout: 2000 }) as { rate: number; rLo: number; rHi: number };
+}
+
 // Execute the actual prototype methods and demo values, rather than maintaining a copied oracle.
 export function prototypeDemo() {
   const source = readFileSync(new URL('../../../../../prototype/uiux/Main.dc.html', import.meta.url), 'utf8');
@@ -27,7 +38,7 @@ export function prototypeDemo() {
       ({
         stage:STAGE_PCT, expected,
         input:{now:iso(now), tasks:Object.values(d.tasks).map(t => ({...t, wbs:n[t.id], actStart:iso(t.actStart), actEnd:iso(t.actEnd)})),
-          deps:d.deps, sessions:d.runner.sessions.map(s => ({from:iso(s.from), to:iso(s.to)})),
+          deps:d.deps, sessions:d.runner.sessions.map(s => ({from:iso(s.from), to:iso(s.to), lastHeartbeatAt:iso(now)})),
           assumeRate:sched.policy.assumeRate, blackouts:sched.blackouts.map(b => b.date),
           concurrency:{total:conc.cap.total, current:conc.cur, subRatio:conc.subRatio, Claude:conc.cap.Claude, Codex:conc.cap.Codex},
           usage:Object.fromEntries(Object.entries(d.usage).map(([ag,u]) => [ag,{remain:u.remain, resetAt:iso(u.reset)}]))}

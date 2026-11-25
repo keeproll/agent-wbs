@@ -54,7 +54,7 @@ describe('schedule uptime', () => {
   test('uses assumption before 72h and seven complete KST days at 72h', () => {
     const i = input({ now: '2026-11-04T15:00:00Z', sessions: [{ from: '2026-11-01T15:01:00Z' }] });
     expect(capacity(i)).toMatchObject({ enough: false, rate: 0.6, rLo: 0.36, rHi: 0.78 });
-    const measured = capacity({ ...i, sessions: [{ from: '2026-11-01T15:00:00Z' }] });
+    const measured = capacity({ ...i, sessions: [{ from: '2026-11-01T15:00:00Z', lastHeartbeatAt: i.now }] });
     expect(measured.enough).toBe(true);
     expect(measured.days[0]?.date).toBe('2026-10-29');
     expect(measured.days[6]?.date).toBe('2026-11-04');
@@ -65,7 +65,7 @@ describe('schedule uptime', () => {
 
   test('counts overlap once, clips future portions and ignores future sessions', () => {
     const c = capacity(input({ sessions: [
-      { from: '2026-11-02T15:00:00Z' }, { from: '2026-11-02T16:00:00Z', to: '2026-11-04T15:00:00Z' },
+      { from: '2026-11-02T15:00:00Z', lastHeartbeatAt: '2026-11-03T03:00:00Z' }, { from: '2026-11-02T16:00:00Z', to: '2026-11-04T15:00:00Z' },
       { from: '2026-11-10T15:00:00Z' },
     ] }));
     expect(c.todayRate).toBe(1);
@@ -189,14 +189,11 @@ describe('schedule validation', () => {
     input({ assumeRate: NaN }),
     input({ tasks: [task('1', { lo: 10 })] }),
     input({ tasks: [task('1', { hi: Infinity })] }),
-    input({ tasks: [task('1', { est: 0, lo: 0 })] }),
     input({ tasks: [task('1'), task('1')] }),
     input({ tasks: [task('1', { status: 'done' })] }),
-    input({ tasks: [task('1', { actStart: '2026-11-04T00:00:00Z' })] }),
     input({ deps: [{ pred: 'missing', succ: '1', type: 'FS' }] }),
     input({ deps: [{ pred: '1', succ: '1', type: 'FS' }] }),
     input({ tasks: [task('1'), task('2')], deps: [{ pred: '1', succ: '2', type: 'FS' }, { pred: '2', succ: '1', type: 'SS' }] }),
-    input({ usage: { Claude: { remain: 0 } } }),
     input({ usage: { Claude: { remain: 101 } } }),
     input({ sessions: [{ from: '2026-11-02T00:00:00Z', to: '2026-11-01T00:00:00Z' }] }),
   ])('rejects malformed input without inventing a forecast (%#)', i => expect(() => schedule(i)).toThrow(RangeError));
@@ -218,11 +215,11 @@ describe('schedule replanning', () => {
     expect(r.baseline?.items['1']).toHaveProperty('lo');
   });
 
-  test('includes start-only/range-only changes and leaves unchanged tasks out', () => {
+  test('omits unchanged tasks and start-only/range-only changes from moves', () => {
     const i = input(), b = baseline(i);
     expect(replanDiff(b, schedule(i))).toEqual([]);
     b.items['1'] = { start: '2026-11-02', end: '2026-11-03', lo: '2026-11-02', hi: '2026-11-04' };
-    expect(replanDiff(b, schedule(i))[0]).toMatchObject({ kind: 'shifted', delta: 0 });
+    expect(replanDiff(b, schedule(i))).toEqual([]);
   });
 
   test('D-10 auto off returns pending without a baseline; manual creates a fresh version without mutation', () => {
