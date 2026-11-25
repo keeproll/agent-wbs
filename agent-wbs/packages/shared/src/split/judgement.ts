@@ -1,5 +1,5 @@
 import type {
-  JudgedRule, JudgedRules, ProposalSimulation, ProposalSnapshot, SplitJudgementRule, SplitJudgements,
+  JudgedRule, JudgedRules, ProposalSimulation, ProposalSnapshot, ProposalTask, SplitJudgementRule, SplitJudgements, TaskJudgement,
 } from '../proposal/index.ts';
 import { AGENTS } from '../proposal/types.ts';
 import type { SplitSettings } from './check.ts';
@@ -59,15 +59,22 @@ function hold(
 
 /** Any CP: added Tasks and Tasks whose judged content changes; other Tasks never hold it. */
 export function proposalJudgementHolds(
-  base: ProposalSnapshot, { next }: Pick<ProposalSimulation, 'next'>, hashes: SubjectHashes, settings: SplitSettings,
+  base: ProposalSnapshot, { next }: Pick<ProposalSimulation, 'next'>, hashes: SubjectHashes,
+  taskJudgements: readonly TaskJudgement[], settings: SplitSettings,
 ): JudgementHold[] {
   const existing = new Set(base.tasks.map(task => task.id));
+  // The CP's record replaces the stored one for judging only; a duplicated key is void rather than a fallback.
+  const recordOf = (task: ProposalTask): JudgedRules | null => {
+    const carried = existing.has(task.id) ? taskJudgements.filter(entry => entry.taskKey === task.id) : [];
+    if (!carried.length) return task.judgedRules;
+    return carried.length === 1 ? carried[0]?.judgedRules ?? null : null;
+  };
   return next.tasks.filter(task => {
     const after = hashes.after[task.id];
     return task.status !== 'done' && task.status !== 'cancelled' &&
       (!existing.has(task.id) || after === undefined || after !== hashes.before[task.id]);
   }).flatMap(task => JUDGED_RULES.filter(rule => settings.enabled[rule])
-    .flatMap(rule => hold(task.judgedRules, rule, hashes.after[task.id] ?? null, task.id)));
+    .flatMap(rule => hold(recordOf(task), rule, hashes.after[task.id] ?? null, task.id)));
 }
 
 /** Split CP only (D-34): AC meaning, layer order and test inclusion are Planning's recorded judgement. */

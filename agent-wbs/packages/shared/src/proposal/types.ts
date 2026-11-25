@@ -41,6 +41,11 @@ export interface JudgedRules {
   schemaVersion: 1;
   items: readonly Judgement<JudgedRule>[];
 }
+// change_proposals.task_judgements element: existing Tasks whose content the CP changes.
+export interface TaskJudgement {
+  taskKey: string;
+  judgedRules: JudgedRules | null;
+}
 export type SplitJudgementRule = 'ac_meaning' | 'layer_order' | 'test_included';
 export interface SplitJudgements {
   schemaVersion: 1;

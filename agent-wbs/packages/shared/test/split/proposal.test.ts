@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'vitest';
 import { TASK_STATUSES } from '../../src/domain/index.ts';
 import { DEFAULT_SPLIT_SETTINGS, proposalJudgementHolds, validateSplitProposal } from '../../src/split/index.ts';
-import type { SplitJudgementInput } from '../../src/split/index.ts';
+import type { SplitJudgementInput, SubjectHashes } from '../../src/split/index.ts';
 import { simulateProposal } from '../../src/proposal/index.ts';
-import type { NewTask, ProposalOp, ProposalTask } from '../../src/proposal/index.ts';
+import type { JudgedRules, NewTask, TaskJudgement, ProposalOp, ProposalTask } from '../../src/proposal/index.ts';
 import { ac, add, dep, HASH, JUDGED, judged, judgement, snapshot, SPLIT_JUDGED, task } from '../proposal/fixtures.ts';
 import { original, toSnapshot } from '../proposal/original.ts';
 
@@ -22,7 +22,7 @@ function cut(first: Partial<NewTask> = {}, second: Partial<NewTask> = {}): Propo
   ];
 }
 const hashes = Object.fromEntries(['P', 'Q', 'T', 'S', 'V', 'U', 'TASK-0021', 'TASK-0022', 'TASK-0023'].map(id => [id, HASH]));
-const agreed: SplitJudgementInput = { splitSubjectHash: HASH, taskHashes: { before: hashes, after: hashes },
+const agreed: SplitJudgementInput = { splitSubjectHash: HASH, taskHashes: { before: hashes, after: hashes }, taskJudgements: [],
   splitJudgements: { schemaVersion: 1, items: SPLIT_JUDGED.map(rule => judgement(rule)) } };
 const validate = (base: ReturnType<typeof world>, target: string, ops: readonly ProposalOp[], input = agreed) =>
   validateSplitProposal(base, target, ops, input);
@@ -139,7 +139,7 @@ describe('rejected splits', () => {
 describe('any proposal: judgement holds only on added or re-hashed Tasks (D-33)', () => {
   const unjudged = snapshot([task('T', 'ready', { judgedRules: null }), task('O', 'ready', { judgedRules: null })]);
   const holds = (ops: ProposalOp[], after: Record<string, string>, settings = DEFAULT_SPLIT_SETTINGS) =>
-    proposalJudgementHolds(unjudged, simulateProposal(unjudged, ops), { before: { T: 'a', O: 'a' }, after }, settings);
+    proposalJudgementHolds(unjudged, simulateProposal(unjudged, ops), { before: { T: 'a', O: 'a' }, after }, [], settings);
   test('priority change leaves the hash alone and is not held', () => {
     expect(holds([{ op: 'modify', task: 'T', field: 'priority', after: 0 }], { T: 'a', O: 'a' })).toEqual([]);
   });
@@ -150,13 +150,75 @@ describe('any proposal: judgement holds only on added or re-hashed Tasks (D-33)'
     expect(holds([add('N', { judgedRules: null })], { T: 'a', O: 'a', 'TASK-0021': HASH })).toHaveLength(3);
     expect(holds([add('N')], { T: 'a', O: 'a', 'TASK-0021': HASH })).toEqual([]);
     expect(holds(title, { O: 'a' })).toHaveLength(3);
-    expect(proposalJudgementHolds(unjudged, simulateProposal(unjudged, title), { before: {}, after: {} }, DEFAULT_SPLIT_SETTINGS))
+    expect(proposalJudgementHolds(unjudged, simulateProposal(unjudged, title), { before: {}, after: {} }, [], DEFAULT_SPLIT_SETTINGS))
       .toHaveLength(6);
     const enabled = { ...DEFAULT_SPLIT_SETTINGS.enabled, revert: false };
     expect(holds(title, { T: 'b', O: 'a' }, { ...DEFAULT_SPLIT_SETTINGS, enabled })).toHaveLength(2);
   });
   test('a Task the proposal cancels needs no judgement', () => {
     expect(holds([{ op: 'remove', task: 'T' }], { O: 'a' })).toEqual([]);
+  });
+});
+
+describe('taskJudgements: judgement of existing Tasks carried by the CP (data-model §2.3-1)', () => {
+  const at = (subjectHash: string, result: 'met' | 'not_met' = 'met') => judged(JUDGED, { subjectHash, result });
+  const title: ProposalOp[] = [{ op: 'modify', task: 'T', field: 'title', after: 'x' }];
+  const run = (stored: JudgedRules | null, taskJudgements: readonly TaskJudgement[], ops = title, hashes: SubjectHashes =
+  { before: { T: 'before' }, after: { T: 'after', 'TASK-0021': 'new' } }) => {
+    const base = snapshot([task('T', 'ready', { judgedRules: stored })]);
+    const copy = structuredClone(base);
+    const simulation = simulateProposal(base, ops);
+    const next = structuredClone(simulation.next);
+    const holds = proposalJudgementHolds(base, simulation, hashes, taskJudgements, DEFAULT_SPLIT_SETTINGS);
+    expect(base).toEqual(copy);
+    expect(simulation.next).toEqual(next);
+    return [...new Set(holds.map(item => item.code))];
+  };
+  const of = (judgedRules: JudgedRules | null, taskKey = 'T'): TaskJudgement => ({ taskKey, judgedRules });
+
+  test('the CP record wins over the stored one, both ways', () => {
+    expect(run(at('before'), [of(at('after'))])).toEqual([]);
+    expect(run(null, [of(at('after'))])).toEqual([]);
+    expect(run(at('after'), [of(at('after', 'not_met'))])).toEqual(['JUDGEMENT_NOT_MET']);
+    expect(run(at('after', 'not_met'), [of(at('after'))])).toEqual([]);
+  });
+  test('without a CP record the stored one is used, against the after hash too', () => {
+    expect(run(at('after'), [])).toEqual([]);
+    expect(run(at('before'), [])).toEqual(['JUDGEMENT_MISSING']);
+    expect(run(at('after'), [of(at('after', 'not_met'), 'O')])).toEqual([]);
+  });
+  test.each([['stale', at('older')], ['before', at('before')], ['empty', null]])('a CP record with %s hash is missing, with no fallback', (_name, record) => {
+    expect(run(at('after'), [of(record)])).toEqual(['JUDGEMENT_MISSING']);
+  });
+  test('duplicate taskKey is void, even if identical and the stored record is valid', () => {
+    expect(run(at('after'), [of(at('after')), of(at('after'))])).toEqual(['JUDGEMENT_MISSING']);
+    expect(run(at('after'), [of(at('after')), of(at('x'), 'O'), of(at('x'), 'O')])).toEqual([]);
+  });
+  test('priority-only change is not held whatever the CP carries', () => {
+    const same = { before: { T: 'before' }, after: { T: 'before' } };
+    const priority: ProposalOp[] = [{ op: 'modify', task: 'T', field: 'priority', after: 0 }];
+    for (const list of [[], [of(at('older'))], [of(at('before', 'not_met'))], [of(null), of(null)]]) {
+      expect(run(null, list, priority, same)).toEqual([]);
+    }
+  });
+  test('no after hash from the server is missing, no before hash still judges the after content', () => {
+    expect(run(null, [of(at('after'))], title, { before: { T: 'before' }, after: {} })).toEqual(['JUDGEMENT_MISSING']);
+    expect(run(null, [of(at('after'))], title, { before: {}, after: { T: 'after' } })).toEqual([]);
+    expect(run(null, [], title, { before: {}, after: { T: 'after' } })).toEqual(['JUDGEMENT_MISSING']);
+  });
+  test('a new Task is judged by its add op only', () => {
+    const same = { before: { T: 'before' }, after: { T: 'before', 'TASK-0021': 'new' } };
+    expect(run(null, [of(at('new'), 'TASK-0021')], [add('N', { judgedRules: null })], same)).toEqual(['JUDGEMENT_MISSING']);
+    expect(run(null, [of(at('new', 'not_met'), 'TASK-0021')], [add('N', { judgedRules: at('new') })], same)).toEqual([]);
+  });
+  test('validateSplitProposal applies the same input', () => {
+    const input = (taskJudgements: readonly TaskJudgement[]): SplitJudgementInput =>
+      ({ ...agreed, taskJudgements, taskHashes: { before: { ...hashes, S: 'old' }, after: hashes } });
+    const base = world();
+    const unjudged = { ...base, tasks: base.tasks.map(item => item.id === 'S' ? { ...item, judgedRules: null } : item) };
+    expect(validate(unjudged, 'T', cut(), input([])).problems.map(item => [item.code, item.taskKey]))
+      .toEqual(Array(3).fill(['JUDGEMENT_MISSING', 'S']));
+    expect(validate(unjudged, 'T', cut(), input([of(at(HASH), 'S')])).problems).toEqual([]);
   });
 });
 
@@ -247,7 +309,7 @@ test('original demo proposeSplit output: structure and relations hold, result sa
   };
   const all = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`TASK-${String(i + 1).padStart(4, '0')}`, HASH]));
   const run = (id: string) => validateSplitProposal(base, id, original.splitOps(data, id).map(convert),
-    { splitJudgements: null, splitSubjectHash: null, taskHashes: { before: all, after: all } });
+    { splitJudgements: null, splitSubjectHash: null, taskHashes: { before: all, after: all }, taskJudgements: [] });
   // TASK-0009/0011: uncertain only. TASK-0008: 6h and uncertain, so also cut in two.
   // The mock records no Planning judgement, so after the owner decision that is the only thing left to hold on.
   expect(original.splitOps(data, 'TASK-0008')).toHaveLength(5);

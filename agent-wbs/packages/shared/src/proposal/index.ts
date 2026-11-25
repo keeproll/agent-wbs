@@ -2,6 +2,6 @@
 export type {
   AcceptanceCriterion, ImpactNote, JudgedRule, JudgedRules, Judgement, ModifyField, NewTask, ProposalDiff, ProposalImpact, ProposalIssue,
   ProposalIssueCode, ProposalOp, ProposalSimulation, ProposalSnapshot, ProposalTask, RemovedDependency,
-  SplitException, SplitJudgementRule, SplitJudgements, TaskChecklistItem,
+  SplitException, SplitJudgementRule, SplitJudgements, TaskChecklistItem, TaskJudgement,
 } from './types.ts';
 export * from './simulate.ts';

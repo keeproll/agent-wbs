@@ -3,7 +3,7 @@ import type { Dependency } from '../domain/index.ts';
 import { simulateProposal } from '../proposal/index.ts';
 import type {
   AcceptanceCriterion, ProposalIssueCode, ProposalOp, ProposalSimulation, ProposalSnapshot, ProposalTask,
-  SplitJudgements,
+  SplitJudgements, TaskJudgement,
 } from '../proposal/index.ts';
 import { checkSplit, DEFAULT_SPLIT_SETTINGS, flaggedRules, hasStarted } from './check.ts';
 import type { SplitRule, SplitSettings } from './check.ts';
@@ -57,6 +57,7 @@ export interface SplitJudgementInput {
   // Server-computed hash of the ops and the current content of their Tasks.
   splitSubjectHash: string | null;
   taskHashes: SubjectHashes;
+  taskJudgements: readonly TaskJudgement[];
 }
 
 export function validateSplitProposal(
@@ -125,7 +126,7 @@ export function validateSplitProposal(
       else if (item.status === '의심') warnings.push({ taskKey: task.id, message: `${item.label}: ${item.detail}` });
     }
   }
-  const holds = [...proposalJudgementHolds(base, simulation, judgement.taskHashes, settings),
+  const holds = [...proposalJudgementHolds(base, simulation, judgement.taskHashes, judgement.taskJudgements, settings),
     ...splitJudgementHolds(judgement.splitJudgements, judgement.splitSubjectHash)];
   for (const { code, taskKey = targetId, rule, message } of holds) problems.push({ code, taskKey, rule, message });
   for (const task of added) {

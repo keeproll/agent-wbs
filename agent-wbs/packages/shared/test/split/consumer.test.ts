@@ -12,7 +12,7 @@ test('a package consumer reaches proposal and split through the root entry', () 
   const check: SplitCheck = checkSplit(task('S'), [], HASH);
   expect(check.items).toHaveLength(SPLIT_RULES.length);
   const split: SplitProposalResult = validateSplitProposal(base, 'P', ops,
-    { splitJudgements: null, splitSubjectHash: null, taskHashes: { before: {}, after: {} } });
+    { splitJudgements: null, splitSubjectHash: null, taskHashes: { before: {}, after: {} }, taskJudgements: [] });
   expect(split.problems.map(problem => problem.code)).toContain('NOTHING_TO_SPLIT');
 });
 
