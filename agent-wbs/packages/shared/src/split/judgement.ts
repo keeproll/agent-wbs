@@ -10,8 +10,13 @@ export const JUDGED_RULES: readonly JudgedRule[] = ['revert', 'contract', 'refac
 export const SPLIT_JUDGEMENT_RULES: readonly SplitJudgementRule[] = ['ac_meaning', 'layer_order', 'test_included'];
 
 const filled = (value: unknown) => typeof value === 'string' && value.trim().length > 0;
-const utcIso = (value: unknown) =>
-  typeof value === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/.test(value) && !Number.isNaN(Date.parse(value));
+// Date rolls 02-30 over to March, so the calendar part must survive a round trip. `+00:00` is UTC as much as `Z`.
+const utcIso = (value: unknown) => {
+  const local = typeof value === 'string' && /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.\d+)?(?:Z|\+00:00)$/.exec(value)?.[1];
+  if (!local) return false;
+  const date = new Date(`${local}Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().startsWith(local);
+};
 
 /** jsonb input: anything not exactly a valid, both-agreed record of the current subject is no record (data-model §2.3-1). */
 export function judgementOf(

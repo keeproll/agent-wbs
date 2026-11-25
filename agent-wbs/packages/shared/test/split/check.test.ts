@@ -63,6 +63,9 @@ describe('ten rules at their boundaries', () => {
       ['stale hash', { subjectHash: 'old' }, 'missing'], ['blank basis', { basis: ' ' }, 'missing'],
       ['unknown result', { result: 'maybe' }, 'missing'], ['no source', { sourceRef: '' }, 'missing'],
       ['local time', { judgedAt: '2026-11-25T00:00:00+09:00' }, 'missing'], ['bad time', { judgedAt: '2026-13-25T00:00:00Z' }, 'missing'],
+      ...['2026-02-30T00:00:00Z', '2026-02-29T00:00:00Z', '2026-04-31T12:00:00.5Z', '2026-11-25T24:00:00Z', '2026-11-25T23:59:60Z']
+        .map(judgedAt => [judgedAt, { judgedAt }, 'missing'] as const),
+      ...['2028-02-29T00:00:00Z', '2026-11-25T00:00:00+00:00', '2026-11-25T23:59:59.9999999Z', '2026-11-25T23:59:59.123456Z'].map(judgedAt => [judgedAt, { judgedAt }, 'met'] as const),
     ])('%s', (_name, patch, expected) => {
       const result = check([...others, { ...judgement(rule), ...patch }]);
       expect(result.items.find(item => item.rule === rule)).toMatchObject({ status: '판단', judgement: expected });
