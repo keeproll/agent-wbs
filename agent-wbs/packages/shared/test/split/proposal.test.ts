@@ -37,7 +37,7 @@ describe('valid splits', () => {
     const uncertain = { estimate: { est: 3, lo: 2, hi: 4, confidence: '하' as const } };
     const ops: ProposalOp[] = [add('N0', { workType: 'Analysis' }, preds), { op: 'dep-add', pred: 'N0', succ: 'T' }];
     expect(codes(world(uncertain), ops)).toEqual([]);
-    expect(codes(world(uncertain), ops.slice(0, 1))).toEqual(['RULE_VIOLATION']);
+    expect(codes(world(uncertain), ops.slice(0, 1))).toEqual(['ANALYSIS_REQUIRED', 'RULE_VIOLATION']);
     expect(codes(world(uncertain), [add('N0', {}, preds), { op: 'dep-add', pred: 'N0', succ: 'T' }]))
       .toEqual(['ORIGINAL_NOT_CANCELLED', 'ANALYSIS_REQUIRED', 'RULE_VIOLATION']);
   });
@@ -97,6 +97,40 @@ describe('rejected splits', () => {
     const result = validateSplitProposal(world(), 'T', ops);
     expect(result.problems).toEqual([]);
     expect(result.warnings).toEqual([{ taskKey: 'T', message: '후속 S (FS) 관계가 TASK-0021에는 이어지지 않습니다' }]);
+  });
+});
+
+describe('research must really precede the result (G§5.2-1 rule 10)', () => {
+  const uncertain = { estimate: { ...big.estimate, confidence: '하' as const } };
+  const research = add('R', { workType: 'Analysis' }, preds);
+  const after = (pred: string, type: 'FS' | 'SS' = 'FS') => ({ pred, type });
+  const plan = (first: typeof preds, second: typeof preds, rest: ProposalOp[] = []): ProposalOp[] =>
+    [research, add('N1', { ac: [ac('1'), ac('2')] }, first), add('N2', { ac: [ac('3')] }, second), ...cut().slice(2), ...rest];
+
+  test.each([
+    ['in front of both through the chain', plan([after('R')], [after('N1')]), false],
+    ['in front of both directly', plan([after('R')], [after('R')]), false],
+    ['behind an SS link between the parts', plan([after('R')], [after('N1', 'SS')]), false],
+    ['detached', plan(preds, [after('N1')]), true],
+    ['in front of one part only', plan([after('R')], preds), true],
+    ['attached by SS only', plan([after('R', 'SS')], [after('N1')]), true],
+    ['behind the parts', plan(preds, [after('N1')], [{ op: 'dep-add', pred: 'N2', succ: 'R' }]), true],
+    ['in front of an unrelated successor only', plan(preds, [after('N1')], [{ op: 'dep-add', pred: 'R', succ: 'S' }]), true],
+  ])('%s', (_name, ops, rejected) => {
+    expect(codes(world(uncertain), ops).includes('ANALYSIS_REQUIRED')).toBe(rejected);
+  });
+
+  test('an original kept behind research needs FS as well', () => {
+    const kept = { estimate: { est: 3, lo: 2, hi: 4, confidence: '하' as const } };
+    expect(codes(world(kept), [research, { op: 'dep-add', pred: 'R', succ: 'T', type: 'SS' }])).toEqual(['ANALYSIS_REQUIRED']);
+  });
+
+  test('an uncertain Analysis Task: leading research passes, detached research does not', () => {
+    const target = { ...uncertain, workType: 'Analysis' as const };
+    const analysis = (first: typeof preds) => plan(first, [after('N1')]).map(op =>
+      op.op === 'add' ? { ...op, task: { ...op.task, workType: 'Analysis' as const } } : op);
+    expect(codes(world(target), analysis([after('R')]))).not.toContain('ANALYSIS_REQUIRED');
+    expect(codes(world(target), analysis(preds))).toContain('ANALYSIS_REQUIRED');
   });
 });
 

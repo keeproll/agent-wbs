@@ -56,8 +56,9 @@ function autoFindings(
   task: ProposalTask, preds: readonly Pick<ProposalTask, 'workType'>[], settings: SplitSettings,
 ): Partial<Record<SplitRule, Finding>> {
   const est = task.estimate?.est ?? 0;
-  const lo = task.estimate?.lo || est;
-  const hi = task.estimate?.hi || est;
+  // Unlike the prototype's `||`, an optimistic estimate of 0 is a value, not a missing one.
+  const lo = task.estimate?.lo ?? est;
+  const hi = task.estimate?.hi ?? est;
   const changed = task.design.filter(section => section.items.length);
   const layers = [...new Set(changed.map(section => LAYER[section.kind]))];
   const dbDesign = changed.some(section => section.kind === 'DB');
@@ -83,7 +84,8 @@ function autoFindings(
   return {
     one: /( 및 |그리고| \+ |\/)/.test(task.title)
       ? ['의심', '제목에 둘 이상의 목적 표현 (「및 · 그리고 · / · +」)'] : ['통과', `「${task.title}」`],
-    domain: (task.workType === 'Implementation' || task.workType === 'Configuration') && layers.length > 1
+    // G§5.2-1 has no work-type exemption; the prototype's Implementation/Configuration limit is not followed.
+    domain: layers.length > 1
       ? ['의심', `설계상 변경 영역 ${layers.join(' · ')} — 계층별 분리 기준(A)`] : ['통과', `주 영역 ${task.primaryDomain}`],
     size,
     verify,

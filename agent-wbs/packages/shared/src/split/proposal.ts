@@ -94,8 +94,14 @@ export function validateSplitProposal(
 
   if (!cancelled && (mustCut || parts.length)) fail('ORIGINAL_NOT_CANCELLED', '나눈 원래 Task를 취소해야 합니다');
   if (cancelled && parts.length < 2) fail('TOO_FEW_PARTS', '원래 Task를 둘 이상으로 나눠야 합니다');
-  if (mustAnalyse && !added.some(task => task.workType === 'Analysis')) {
-    fail('ANALYSIS_REQUIRED', '「불확실하면 조사부터」 위반은 분석 Task를 앞에 둬야 합니다');
+  if (mustAnalyse) {
+    // Research counts only where its completion really gates the work, directly or through earlier parts.
+    const research = added.filter(task => task.workType === 'Analysis');
+    const precedes = (from: ProposalTask, to: ProposalTask) => preserves(next.dependencies, from.id, to.id, 'FS');
+    const ready = (cancelled ? parts : [target]).every(task => research.some(item => precedes(item, task)) ||
+      // When the original is itself an Analysis, the leading part is the research.
+      task.workType === 'Analysis' && task.id !== targetId && parts.some(part => precedes(task, part)));
+    if (!research.length || !ready) fail('ANALYSIS_REQUIRED', '「불확실하면 조사부터」 위반은 분석 Task를 앞에 둬야 합니다');
   }
 
   // Every resulting Task must itself satisfy the criteria, including a target kept behind an analysis Task.

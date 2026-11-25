@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { checkSplit, DEFAULT_SPLIT_SETTINGS, SPLIT_RULES, splitExceptionProblem, summarizeSplit } from '../../src/split/index.ts';
 import type { SplitRule } from '../../src/split/index.ts';
 import type { ProposalTask } from '../../src/proposal/index.ts';
+import { WORK_TYPES } from '../../src/proposal/types.ts';
 import { TASK_STATUSES } from '../../src/domain/index.ts';
 import { task } from '../proposal/fixtures.ts';
 import { original, toTask } from '../proposal/original.ts';
@@ -25,7 +26,8 @@ describe('ten rules at their boundaries', () => {
     ['one', { title: 'A 및 B' }, '의심'], ['one', { title: 'A 그리고 B' }, '의심'], ['one', { title: 'A/B' }, '의심'],
     ['one', { title: 'A + B' }, '의심'], ['one', { title: 'C++ 및정' }, '통과'],
     ['domain', design('API', 'FE'), '의심'], ['domain', { workType: 'Configuration', ...design('API', 'FE') }, '의심'],
-    ['domain', { workType: 'Design', ...design('API', 'FE') }, '통과'], ['domain', design('FE'), '통과'],
+    ...WORK_TYPES.map(workType => ['domain', { workType, ...design('DB', 'FE') }, '의심']),
+    ['domain', { workType: 'Design', ...design('FE') }, '통과'], ['domain', design('FE'), '통과'],
     ['domain', { design: [{ kind: 'FE', items: ['x'] }, { kind: 'DB', items: [] }] }, '통과'],
     ['size', est(4, 3, 5), '통과'], ['size', est(4.01, 3, 5), '위반'], ['size', est(0.5, 0.5, 0.5), '통과'],
     ['size', est(0.49, 0.4, 0.5), '주의'], ['size', { files: files(8) }, '통과'], ['size', { files: files(9) }, '위반'],
@@ -36,7 +38,11 @@ describe('ten rules at their boundaries', () => {
     ['irrev', design('DB'), '의심'], ['irrev', { primaryDomain: 'DB', ...design('DB') }, '통과'],
     ['irrev', { workType: 'Design', ...design('DB') }, '통과'],
     ['unknown', est(2, 1.5, 3, '하'), '위반'], ['unknown', est(2, 1, 3.1), '위반'], ['unknown', est(2.5, 2, 5), '통과'],
-    ['unknown', est(1, 0.5, 2.5), '통과'],
+    ['unknown', est(1, 0.5, 2.5), '통과'], ['unknown', est(1, 0.5, 2.51), '위반'],
+    ['unknown', est(1, 0, 3), '위반'], ['unknown', est(1, 0, 2), '통과'],
+    ['unknown', { estimate: { est: 1, lo: null, hi: 3, confidence: '중' } }, '통과'],
+    ['unknown', { estimate: { est: 1, lo: null, hi: 3.01, confidence: '중' } }, '위반'],
+    ['unknown', { estimate: { est: 4, lo: 0, hi: null, confidence: '중' } }, '위반'],
   ] as [SplitRule, Partial<ProposalTask>, string][])('%s %j → %s', (rule, patch, expected) => {
     expect(status(rule, patch)).toBe(expected);
   });
