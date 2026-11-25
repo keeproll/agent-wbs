@@ -1,13 +1,15 @@
 import { describe, expect, test } from 'vitest';
 import { TASK_STATUSES } from '../../src/domain/index.ts';
-import { validateSplitProposal } from '../../src/split/index.ts';
+import { DEFAULT_SPLIT_SETTINGS, proposalJudgementHolds, validateSplitProposal } from '../../src/split/index.ts';
+import type { SplitJudgementInput } from '../../src/split/index.ts';
+import { simulateProposal } from '../../src/proposal/index.ts';
 import type { NewTask, ProposalOp, ProposalTask } from '../../src/proposal/index.ts';
-import { ac, add, dep, snapshot, task } from '../proposal/fixtures.ts';
+import { ac, add, dep, HASH, JUDGED, judged, judgement, snapshot, SPLIT_JUDGED, task } from '../proposal/fixtures.ts';
 import { original, toSnapshot } from '../proposal/original.ts';
 
 const big = { estimate: { est: 6, lo: 5, hi: 7, confidence: '중' as const }, ac: [ac('1'), ac('2'), ac('3')] };
 const world = (patch: Partial<ProposalTask> = {}, status: ProposalTask['status'] = 'ready') =>
-  snapshot([task('P', 'done'), task('Q', 'running'), task('T', status, { ...big, ...patch }), task('S'), task('V')],
+  snapshot([task('P'), task('Q'), task('T', status, { ...big, ...patch }), task('S'), task('V')],
     [dep('P', 'T'), dep('Q', 'T', 'SS'), dep('T', 'S'), dep('T', 'V', 'SS')]);
 const preds = [{ pred: 'P', type: 'FS' as const }, { pred: 'Q', type: 'SS' as const }];
 
@@ -19,12 +21,17 @@ function cut(first: Partial<NewTask> = {}, second: Partial<NewTask> = {}): Propo
     { op: 'remove', task: 'T' },
   ];
 }
+const hashes = Object.fromEntries(['P', 'Q', 'T', 'S', 'V', 'U', 'TASK-0021', 'TASK-0022', 'TASK-0023'].map(id => [id, HASH]));
+const agreed: SplitJudgementInput = { splitSubjectHash: HASH, taskHashes: { before: hashes, after: hashes },
+  splitJudgements: { schemaVersion: 1, items: SPLIT_JUDGED.map(rule => judgement(rule)) } };
+const validate = (base: ReturnType<typeof world>, target: string, ops: readonly ProposalOp[], input = agreed) =>
+  validateSplitProposal(base, target, ops, input);
 const codes = (base: ReturnType<typeof world>, ops: readonly ProposalOp[]) =>
-  [...new Set(validateSplitProposal(base, 'T', ops).problems.map(problem => problem.code))];
+  [...new Set(validate(base, 'T', ops).problems.map(problem => problem.code))];
 
 describe('valid splits', () => {
   test('two parts, relations reconnected, original cancelled with its relations', () => {
-    const result = validateSplitProposal(world(), 'T', cut());
+    const result = validate(world(), 'T', cut());
     expect(result.problems).toEqual([]);
     expect(result.simulation.next.tasks.find(item => item.id === 'T')?.status).toBe('cancelled');
     expect(result.simulation.next.dependencies.some(item => item.pred === 'T' || item.succ === 'T')).toBe(false);
@@ -42,11 +49,16 @@ describe('valid splits', () => {
       .toEqual(['ORIGINAL_NOT_CANCELLED', 'ANALYSIS_REQUIRED', 'RULE_VIOLATION']);
   });
 
-  test('suspicions and missing judgements are warnings, not rejection', () => {
-    const result = validateSplitProposal(world(), 'T', cut({ title: 'A/B', judgements: [] }));
+  test('suspicions are warnings, not rejection', () => {
+    const result = validate(world(), 'T', cut({ title: 'A/B' }));
     expect(result.problems).toEqual([]);
-    expect(result.warnings.map(item => item.message.split(':')[0]))
-      .toEqual(['목적이 하나', '혼자 되돌릴 수 있음', '공유 계약 변경은 따로', '정리와 기능 변경은 따로']);
+    expect(result.warnings.map(item => item.message.split(':')[0])).toEqual(['목적이 하나']);
+  });
+
+  test('an unsatisfied judgement is itself a reason to cut', () => {
+    const small = { estimate: { est: 2, lo: 1.5, hi: 3, confidence: '중' as const } };
+    expect(codes(world({ ...small, judgedRules: judged(['revert'], { result: 'not_met' }) }), cut())).toEqual([]);
+    expect(codes(world({ ...small, judgedRules: null }), cut())).toEqual(['NOTHING_TO_SPLIT']);
   });
 });
 
@@ -69,12 +81,18 @@ describe('rejected splits', () => {
     ['AC duplicated', cut({}, { ac: [ac('2'), ac('3')] }), 'AC_NOT_PARTITIONED'],
     ['AC lost', cut({}, { ac: [ac('other')] }), 'AC_NOT_PARTITIONED'],
     ['part without AC', cut({ ac: [ac('1'), ac('2'), ac('3')] }, { ac: [] }), 'AC_MISSING'],
-    ['successor dropped', cut().filter(op => !(op.op === 'dep-add' && op.succ === 'S')), 'DEPENDENCY_NOT_RECONNECTED'],
-    ['SS successor dropped', cut().filter(op => !(op.op === 'dep-add' && op.succ === 'V')), 'DEPENDENCY_NOT_RECONNECTED'],
+    ['successor dropped', cut().filter(op => !(op.op === 'dep-add' && op.succ === 'S')), 'ORDER_NOT_PRESERVED'],
+    ['predecessor kept by the first part only', cut().map(op => op.op === 'add' && op.ref === 'N2' ? { ...op, preds: [] } : op),
+      'ORDER_NOT_PRESERVED'],
+    ['SS predecessor lost by one part', cut().map(op => op.op === 'add' && op.ref === 'N2' ? { ...op, preds: preds.slice(0, 1) } : op),
+      'ORDER_NOT_PRESERVED'],
+    ['FS successor released before one part ends', cut().map(op => op.op === 'add' && op.ref === 'N2' ? { ...op, preds } : op),
+      'ORDER_NOT_PRESERVED'],
+    ['SS successor dropped', cut().filter(op => !(op.op === 'dep-add' && op.succ === 'V')), 'ORDER_NOT_PRESERVED'],
     ['FS successor weakened to SS', cut().map(op => op.op === 'dep-add' && op.succ === 'S' ? { ...op, type: 'SS' as const } : op),
-      'DEPENDENCY_NOT_RECONNECTED'],
+      'ORDER_NOT_PRESERVED'],
     ['predecessor dropped', cut().map(op => op.op === 'add' && op.ref === 'N1' ? { ...op, preds: preds.slice(1) } : op),
-      'DEPENDENCY_NOT_RECONNECTED'],
+      'ORDER_NOT_PRESERVED'],
     ['unrelated edit', [...cut(), { op: 'modify', task: 'S', field: 'title', after: 'x' }], 'OUT_OF_SCOPE'],
     ['unrelated relation', [...cut(), { op: 'dep-add', pred: 'S', succ: 'V' }], 'OUT_OF_SCOPE'],
   ] as [string, ProposalOp[], string][])('%s', (_name, ops, code) => {
@@ -90,13 +108,95 @@ describe('rejected splits', () => {
   });
   test('simulation holds are passed through; unknown target', () => {
     expect(codes(world(), [...cut(), { op: 'dep-remove', pred: 'N2', succ: 'P' }])).toEqual(['DEPENDENCY_NOT_FOUND']);
-    expect(validateSplitProposal(world(), 'NO', cut()).problems.map(item => item.code)).toEqual(['TASK_NOT_FOUND']);
+    expect(validate(world(), 'NO', cut()).problems.map(item => item.code)).toEqual(['TASK_NOT_FOUND']);
   });
-  test('a part that releases an FS successor early is warned about', () => {
-    const ops = cut().map(op => op.op === 'add' && op.ref === 'N2' ? { ...op, preds } : op);
-    const result = validateSplitProposal(world(), 'T', ops);
-    expect(result.problems).toEqual([]);
-    expect(result.warnings).toEqual([{ taskKey: 'T', message: '후속 S (FS) 관계가 TASK-0021에는 이어지지 않습니다' }]);
+  describe.each(JUDGED)('rule judgement %s', rule => {
+    const others = judged(JUDGED.filter(key => key !== rule)).items;
+    test.each([['missing', [], 'JUDGEMENT_MISSING'], ['not met', [judgement(rule, { result: 'not_met' })], 'JUDGEMENT_NOT_MET'],
+      ['stale', [judgement(rule, { subjectHash: 'old' })], 'JUDGEMENT_MISSING'],
+    ] as const)('%s on one new Task holds the split', (_name, own, code) => {
+      const judgedRules = { schemaVersion: 1, items: [...others, ...own] } as const;
+      expect(validate(world(), 'T', cut({}, { judgedRules })).problems.map(({ code: c, taskKey, rule: r }) => [c, taskKey, r]))
+        .toEqual([[code, 'TASK-0022', rule]]);
+    });
+  });
+  describe.each(SPLIT_JUDGED)('split judgement %s', rule => {
+    const others = SPLIT_JUDGED.filter(key => key !== rule).map(key => judgement(key));
+    test.each([['missing', [], 'JUDGEMENT_MISSING'], ['not met', [judgement(rule, { result: 'not_met' })], 'JUDGEMENT_NOT_MET'],
+      ['stale', [judgement(rule, { subjectHash: 'old' })], 'JUDGEMENT_MISSING'],
+    ] as const)('%s holds the split', (_name, own, code) => {
+      const input: SplitJudgementInput = { ...agreed, splitJudgements: { schemaVersion: 1, items: [...others, ...own] } };
+      expect(validate(world(), 'T', cut(), input).problems.map(item => [item.code, item.rule])).toEqual([[code, rule]]);
+    });
+  });
+  test('no split record, or no current hash from the server, holds', () => {
+    for (const input of [{ ...agreed, splitJudgements: null }, { ...agreed, splitSubjectHash: null }]) {
+      expect(validate(world(), 'T', cut(), input).problems.map(item => item.code)).toEqual(Array(3).fill('JUDGEMENT_MISSING'));
+    }
+  });
+});
+
+describe('any proposal: judgement holds only on added or re-hashed Tasks (D-33)', () => {
+  const unjudged = snapshot([task('T', 'ready', { judgedRules: null }), task('O', 'ready', { judgedRules: null })]);
+  const holds = (ops: ProposalOp[], after: Record<string, string>, settings = DEFAULT_SPLIT_SETTINGS) =>
+    proposalJudgementHolds(unjudged, simulateProposal(unjudged, ops), { before: { T: 'a', O: 'a' }, after }, settings);
+  test('priority change leaves the hash alone and is not held', () => {
+    expect(holds([{ op: 'modify', task: 'T', field: 'priority', after: 0 }], { T: 'a', O: 'a' })).toEqual([]);
+  });
+  test('changed content, a new Task and an unknown hash are held per enabled rule', () => {
+    const title: ProposalOp[] = [{ op: 'modify', task: 'T', field: 'title', after: 'x' }];
+    const changed = holds(title, { T: 'b', O: 'a' });
+    expect(changed.map(item => [item.code, item.taskKey, item.rule])).toEqual(JUDGED.map(rule => ['JUDGEMENT_MISSING', 'T', rule]));
+    expect(holds([add('N', { judgedRules: null })], { T: 'a', O: 'a', 'TASK-0021': HASH })).toHaveLength(3);
+    expect(holds([add('N')], { T: 'a', O: 'a', 'TASK-0021': HASH })).toEqual([]);
+    expect(holds(title, { O: 'a' })).toHaveLength(3);
+    expect(proposalJudgementHolds(unjudged, simulateProposal(unjudged, title), { before: {}, after: {} }, DEFAULT_SPLIT_SETTINGS))
+      .toHaveLength(6);
+    const enabled = { ...DEFAULT_SPLIT_SETTINGS.enabled, revert: false };
+    expect(holds(title, { T: 'b', O: 'a' }, { ...DEFAULT_SPLIT_SETTINGS, enabled })).toHaveLength(2);
+  });
+  test('a Task the proposal cancels needs no judgement', () => {
+    expect(holds([{ op: 'remove', task: 'T' }], { O: 'a' })).toEqual([]);
+  });
+});
+
+describe('execution order (owner decision): equivalent indirect paths pass, lost order holds', () => {
+  const edit = (ref: string, list: typeof preds) => (op: ProposalOp): ProposalOp =>
+    op.op === 'add' && op.ref === ref ? { ...op, preds: list } : op;
+  test('parallel parts, each fully reconnected', () => {
+    const ops = [...cut().map(edit('N2', preds)), { op: 'dep-add', pred: 'N1', succ: 'S' } as const];
+    expect(codes(world(), ops)).toEqual([]);
+  });
+  test('successor and predecessor order kept only through another Task', () => {
+    const base = world();
+    const indirect = { ...base, tasks: [...base.tasks, task('U')],
+      dependencies: [...base.dependencies, dep('T', 'U'), dep('U', 'S')] };
+    const ops = cut().map(op => op.op === 'dep-add' && op.succ === 'S' ? { ...op, succ: 'U' } : op);
+    expect(codes(indirect, ops)).toEqual([]);
+    expect(codes(indirect, ops.map(op => op.op === 'dep-add' && op.succ === 'U' ? { ...op, type: 'SS' as const } : op)))
+      .toEqual(['ORDER_NOT_PRESERVED']);
+  });
+  test('an SS predecessor may be strengthened to FS, an FS one not weakened to SS', () => {
+    const swap = (type: 'FS' | 'SS') => cut().map(edit('N1', [{ pred: 'P', type }, { pred: 'Q', type: 'FS' }]));
+    expect(codes(world(), swap('FS'))).toEqual([]);
+    expect(codes(world(), swap('SS'))).toEqual(['ORDER_NOT_PRESERVED']);
+  });
+  test.each([['P', 'done', 'FS'], ['Q', 'running', 'SS']] as const)('%s already met (%s) need not be reconnected', (id, status, type) => {
+    const base = world();
+    const met = { ...base, tasks: base.tasks.map(item => item.id === id ? task(id, status) : item) };
+    const ops = cut().map(edit('N1', preds.filter(pred => pred.pred !== id)));
+    expect(codes(met, ops)).toEqual([]);
+    expect(codes(base, ops)).toEqual(['ORDER_NOT_PRESERVED']);
+    const other = { ...met, dependencies: met.dependencies.map(item => item.pred === id ? { ...item, type: 'FS' as const } : item) };
+    if (type === 'SS') expect(codes(other, ops)).toEqual(['ORDER_NOT_PRESERVED']);
+  });
+  test('a kept original may move its predecessor behind research, not lose it', () => {
+    const kept = { estimate: { est: 3, lo: 2, hi: 4, confidence: '하' as const } };
+    const ops = (list: typeof preds): ProposalOp[] => [add('R', { workType: 'Analysis' }, list),
+      { op: 'dep-add', pred: 'R', succ: 'T' }, { op: 'dep-remove', pred: 'P', succ: 'T' }];
+    expect(codes(world(kept), ops(preds))).toEqual([]);
+    expect(codes(world(kept), ops(preds.slice(1)))).toEqual(['ORDER_NOT_PRESERVED']);
+    expect(codes(world(kept), [...ops(preds), { op: 'dep-remove', pred: 'T', succ: 'S' }])).toEqual(['ORDER_NOT_PRESERVED']);
   });
 });
 
@@ -145,9 +245,13 @@ test('original demo proposeSplit output: structure and relations hold, result sa
     return { ...op, op: 'add', workPackageId: wp, task: { ...rest, workType: type, primaryDomain: domain, relatedDomains: rel,
       splitBasis: basis, estimate: { est, lo, hi, confidence: conf } } as unknown as NewTask } as ProposalOp;
   };
-  const run = (id: string) => validateSplitProposal(base, id, original.splitOps(data, id).map(convert));
+  const all = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`TASK-${String(i + 1).padStart(4, '0')}`, HASH]));
+  const run = (id: string) => validateSplitProposal(base, id, original.splitOps(data, id).map(convert),
+    { splitJudgements: null, splitSubjectHash: null, taskHashes: { before: all, after: all } });
   // TASK-0009/0011: uncertain only. TASK-0008: 6h and uncertain, so also cut in two.
-  for (const id of ['TASK-0009', 'TASK-0011']) expect(run(id).problems, id).toEqual([]);
+  // The mock records no Planning judgement, so after the owner decision that is the only thing left to hold on.
   expect(original.splitOps(data, 'TASK-0008')).toHaveLength(5);
-  expect(run('TASK-0008').problems).toEqual([]);
+  for (const id of ['TASK-0008', 'TASK-0009', 'TASK-0011']) {
+    expect([...new Set(run(id).problems.map(problem => problem.code))], id).toEqual(['JUDGEMENT_MISSING']);
+  }
 });

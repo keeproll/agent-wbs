@@ -50,7 +50,7 @@ export function toTask(t: OriginalTask, data: OriginalData): ProposalTask {
     priority: t.priority, assignee: t.assignee, verifier: t.verifier, purpose: t.purpose, scope: t.scope, doneCond: t.doneCond,
     ac: t.spec.ac, files: t.spec.files ?? [], design: t.design.map(x => ({ kind: x.kind, items: (x.ents ?? []).map(() => 'entity') })),
     estimate: { est: t.est, lo: t.lo, hi: t.hi, confidence: t.conf }, conflictGroup: t.cg || null, splitBasis: '',
-    judgements: [], checklist: t.checklist, exceptions: t.split?.exc ?? [],
+    judgedRules: null, checklist: t.checklist, exceptions: t.split?.exc ?? [],
     hasExecutionHistory: data.attempts.some(a => a.task === t.id),
   };
 }

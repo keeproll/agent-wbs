@@ -9,11 +9,15 @@ const base = toSnapshot(data);
 const ids = Object.keys(data.tasks);
 const edges = (list: readonly { pred: string; succ: string; type: string }[]) => list.map(d => `${d.pred} ${d.type} ${d.succ}`);
 
+let intended = 0;
 function same(ops: ProposalOp[], originalOps: unknown[] = ops) {
   const old = original.simulate(data, originalOps);
   const now = simulateProposal(base, ops);
   const label = JSON.stringify(ops);
-  expect(now.issues.length > 0, label).toBe(old.issues.length > 0);
+  // Intended difference (owner): the original lets a proposal newly block a Task in execution.
+  const activeBlocked = now.issues.length > 0 && now.issues.every(issue => issue.code === 'ACTIVE_TASK_BLOCKED');
+  if (activeBlocked) intended += 1;
+  expect(activeBlocked || now.issues.length === 0, label).toBe(old.issues.length === 0);
   expect(now.idMap).toEqual(old.idMap);
   expect(now.next.tasks.map(t => [t.id, t.status])).toEqual(Object.values(old.x.tasks).map(t => [t.id, t.status]));
   expect(edges(now.next.dependencies), label).toEqual(edges(old.x.deps));
@@ -49,6 +53,10 @@ test('every dep-add on an unfinished successor and every dep-remove match', () =
       }
     }
   }
+});
+
+test('the intended difference really occurs in the demo', () => {
+  expect(intended).toBeGreaterThan(0);
 });
 
 test('modify on every Task and a chained add match', () => {

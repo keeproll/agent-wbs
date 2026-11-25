@@ -26,13 +26,31 @@ export interface TaskChecklistItem {
   method: string;
 }
 
-export interface SplitJudgement {
+// data-model §2.3-1 (D-33/D-34), same names and shape.
+export interface Judgement<R extends string> {
+  rule: R;
+  result: 'met' | 'not_met';
+  agreedBy: readonly Agent[];
+  basis: string;
+  subjectHash: string;
+  judgedAt: string;
+  sourceRef: string;
+}
+export type JudgedRule = 'revert' | 'contract' | 'refactor';
+export interface JudgedRules {
+  schemaVersion: 1;
+  items: readonly Judgement<JudgedRule>[];
+}
+export type SplitJudgementRule = 'ac_meaning' | 'layer_order' | 'test_included';
+export interface SplitJudgements {
+  schemaVersion: 1;
+  items: readonly Judgement<SplitJudgementRule>[];
+}
+
+export interface SplitException {
   rule: string;
   why: string;
   by: string;
-}
-
-export interface SplitException extends SplitJudgement {
   at: string;
 }
 
@@ -55,7 +73,7 @@ interface TaskContent {
   estimate: { est: number; lo: number | null; hi: number | null; confidence: '상' | '중' | '하' } | null;
   conflictGroup: string | null;
   splitBasis: string;
-  judgements: readonly SplitJudgement[];
+  judgedRules: JudgedRules | null;
 }
 
 export interface ProposalTask extends Task, TaskContent {
@@ -86,12 +104,13 @@ export interface ProposalSnapshot {
 
 export type ProposalIssueCode =
   | 'EMPTY_PROPOSAL' | 'VALIDATION_FAILED' | 'TASK_NOT_FOUND' | 'WBS_NODE_NOT_FOUND' | 'COMPLETED_TASK'
-  | 'CANCELLED_TASK' | 'EXECUTION_HISTORY' | 'ALREADY_APPLIED' | 'DEPENDENCY_SELF' | 'DEPENDENCY_DUPLICATE'
+  | 'CANCELLED_TASK' | 'EXECUTION_HISTORY' | 'ACTIVE_TASK_BLOCKED' | 'ALREADY_APPLIED' | 'DEPENDENCY_SELF' | 'DEPENDENCY_DUPLICATE'
   | 'DEPENDENCY_CYCLE' | 'DEPENDENCY_NOT_FOUND';
 
 export interface ProposalIssue {
   index: number | null;
   code: ProposalIssueCode;
+  taskKey?: string;
   message: string;
 }
 

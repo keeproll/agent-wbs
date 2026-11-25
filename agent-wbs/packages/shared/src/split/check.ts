@@ -1,4 +1,6 @@
-import type { ProposalTask, SplitException } from '../proposal/index.ts';
+import type { JudgedRule, ProposalTask, SplitException } from '../proposal/index.ts';
+import { judgementOf } from './judgement.ts';
+import type { JudgementState } from './judgement.ts';
 
 // G§5.2-1 and prototype SPLIT_RULES / splitCheck.
 export const SPLIT_RULES = [
@@ -37,8 +39,8 @@ export interface SplitItem {
   mode: 'auto' | 'judge';
   status: SplitStatus;
   detail: string;
-  // A judge rule without a Planning Agent record is never presented as an agreement.
-  judgementMissing: boolean;
+  // Only for enabled judge rules.
+  judgement: JudgementState | null;
 }
 
 export interface SplitCheck {
@@ -47,6 +49,8 @@ export interface SplitCheck {
   suspicions: number;
   cautions: number;
   exceptions: number;
+  // Judge rules with no valid record or `not_met`: approval waits (D-33); exceptions do not replace them.
+  approvalHolds: SplitRule[];
 }
 
 const LAYER = { DB: 'DB', API: 'BE', FE: 'FE', DevOps: 'DevOps' } as const;
@@ -101,18 +105,17 @@ function autoFindings(
 }
 
 export function checkSplit(
-  task: ProposalTask, preds: readonly Pick<ProposalTask, 'workType'>[],
+  task: ProposalTask, preds: readonly Pick<ProposalTask, 'workType'>[], subjectHash: string | null,
   settings: SplitSettings = DEFAULT_SPLIT_SETTINGS,
 ): SplitCheck {
   const auto = autoFindings(task, preds, settings);
   const items = SPLIT_RULES.map(({ key, label, mode }): SplitItem => {
-    const item = { rule: key, label, mode, judgementMissing: false };
+    const item = { rule: key, label, mode, judgement: null };
     if (!settings.enabled[key]) return { ...item, status: '꺼짐', detail: '설정에서 끔' };
     const finding = auto[key];
     if (!finding) {
-      const record = task.judgements.find(judgement => judgement.rule === key);
-      return record ? { ...item, status: '판단', detail: `${record.why} (${record.by})` }
-        : { ...item, status: '판단', detail: 'Planning Agent 판단 기록 없음', judgementMissing: true };
+      const { state, detail } = judgementOf(task.judgedRules, key as JudgedRule, subjectHash);
+      return { ...item, status: '판단', detail, judgement: state };
     }
     const exception = task.exceptions.find(entry => entry.rule === key);
     return exception && (finding[0] === '위반' || finding[0] === '의심')
@@ -122,6 +125,7 @@ export function checkSplit(
   const count = (status: SplitStatus) => items.filter(item => item.status === status).length;
   return {
     items, violations: count('위반'), suspicions: count('의심'), cautions: count('주의'), exceptions: count('예외'),
+    approvalHolds: items.filter(item => item.judgement && item.judgement !== 'met').map(item => item.rule),
   };
 }
 
@@ -136,6 +140,7 @@ export function summarizeSplit(checks: readonly SplitCheck[]) {
   return {
     passed: checks.length - violations - suspicions, suspicions, violations,
     exceptions: checks.reduce((sum, check) => sum + check.exceptions, 0),
+    approvalHeld: checks.filter(check => check.approvalHolds.length).length,
   };
 }
 

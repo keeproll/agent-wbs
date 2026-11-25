@@ -1,4 +1,4 @@
-import { assertDependency, cancelBeforeStart, displayKey, DomainError } from '../domain/index.ts';
+import { assertDependency, blockers, cancelBeforeStart, displayKey, DomainError } from '../domain/index.ts';
 import type { Dependency } from '../domain/index.ts';
 import { proposalImpact } from './impact.ts';
 import { AGENTS, DOMAINS, WORK_TYPES } from './types.ts';
@@ -55,7 +55,7 @@ function createTask(id: string, task: NewTask): ProposalTask {
   const kinds = [task.primaryDomain, ...(task.relatedDomains ?? [])].flatMap(domain => DOMAIN_TO_DESIGN[domain] ?? []);
   return {
     relatedDomains: [], purpose: '', scope: [], doneCond: '', files: [], estimate: null, conflictGroup: null,
-    splitBasis: '', judgements: [], design: [...new Set(kinds)].map(kind => ({ kind, items: [] })), ...task,
+    splitBasis: '', judgedRules: null, design: [...new Set(kinds)].map(kind => ({ kind, items: [] })), ...task,
     ac, id, status: 'planning', exceptions: [], hasExecutionHistory: false,
     checklist: ac.map((item, i) => ({
       id: `CL-${id.slice(5)}-${i + 1}`, text: item.then, required: true, done: false, method: item.method || '자동 테스트',
@@ -200,7 +200,16 @@ export function simulateProposal(base: ProposalSnapshot, ops: readonly ProposalO
   });
 
   const next: ProposalSnapshot = { phases, tasks: [...tasks.values()], dependencies, taskSequence };
-  return { next, idMap: Object.fromEntries(idMap), issues, diff, impact: proposalImpact(base, next, diff, removed) };
+  const impact = proposalImpact(base, next, diff, removed);
+  // Judged on the final state: a relation added and withdrawn within one proposal blocks nothing.
+  for (const { taskKey, notes } of impact.tasks) {
+    const status = tasks.get(taskKey)?.status ?? '';
+    if (!['running', 'qa', 'verifying'].includes(status) || !notes.some(note => note.kind === 'newly-blocked')) continue;
+    const preds = blockers(next.tasks, dependencies, taskKey).map(dep => dep.pred).join(', ');
+    issues.push({ index: null, code: 'ACTIVE_TASK_BLOCKED', taskKey,
+      message: `실행 · 검증 중인 ${taskKey}을(를) 새로 차단합니다 (선행 ${preds})` });
+  }
+  return { next, idMap: Object.fromEntries(idMap), issues, diff, impact };
 }
 
 function modifyTask(task: ProposalTask, field: ModifyField, after: string | number | AcceptanceCriterion):

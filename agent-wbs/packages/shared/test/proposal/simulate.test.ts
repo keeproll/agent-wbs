@@ -178,6 +178,30 @@ describe('cancellation impact (owner D-27)', () => {
   });
 });
 
+describe('newly blocking a Task in execution is held (owner decision)', () => {
+  const held: readonly string[] = ['running', 'qa', 'verifying'];
+  test.each(TASK_STATUSES.filter(status => status !== 'done' && status !== 'cancelled'))('%s', status => {
+    const base = snapshot([task('A'), task('T', status)]);
+    for (const type of ['FS', 'SS'] as const) {
+      expect(codes(base, { op: 'dep-add', pred: 'A', succ: 'T', type }))
+        .toEqual(held.includes(status) ? ['ACTIVE_TASK_BLOCKED'] : []);
+    }
+  });
+  test.each(held)('%s: met, withdrawn or pre-existing blocks do not hold', status => {
+    const active = task('T', status as 'running');
+    expect(codes(snapshot([task('D', 'done'), active]), { op: 'dep-add', pred: 'D', succ: 'T' })).toEqual([]);
+    expect(codes(snapshot([task('B', 'paused'), active]), { op: 'dep-add', pred: 'B', succ: 'T', type: 'SS' })).toEqual([]);
+    expect(codes(snapshot([task('A'), active]), { op: 'dep-add', pred: 'A', succ: 'T' }, { op: 'remove', task: 'A' })).toEqual([]);
+    expect(codes(snapshot([task('A'), active], [dep('A', 'T')]), { op: 'modify', task: 'T', field: 'title', after: 'x' })).toEqual([]);
+  });
+  test('a new Task as predecessor is held and still shown in the impact list', () => {
+    const result = simulateProposal(snapshot([task('T', 'running')]), [add('N'), { op: 'dep-add', pred: 'N', succ: 'T' }]);
+    expect(result.issues).toEqual([{ index: null, code: 'ACTIVE_TASK_BLOCKED', taskKey: 'T',
+      message: '실행 · 검증 중인 T을(를) 새로 차단합니다 (선행 TASK-0021)' }]);
+    expect(notesOf(result, 'T')).toContainEqual({ kind: 'newly-blocked' });
+  });
+});
+
 test('preview text: independent of jsonb key order, changes with any reviewed content', () => {
   const ops: ProposalOp[] = [{ op: 'modify', task: 'A', field: 'acAdd', after: { given: 'g', when: 'w', then: 'n', method: '' } }];
   const reordered: ProposalOp[] = [{ after: { method: '', then: 'n', when: 'w', given: 'g' }, field: 'acAdd', task: 'A', op: 'modify' }];

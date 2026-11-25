@@ -1,19 +1,24 @@
+import { dependencyMet } from '../domain/index.ts';
 import type { Dependency } from '../domain/index.ts';
 import { simulateProposal } from '../proposal/index.ts';
 import type {
   AcceptanceCriterion, ProposalIssueCode, ProposalOp, ProposalSimulation, ProposalSnapshot, ProposalTask,
+  SplitJudgements,
 } from '../proposal/index.ts';
 import { checkSplit, DEFAULT_SPLIT_SETTINGS, flaggedRules, hasStarted } from './check.ts';
 import type { SplitRule, SplitSettings } from './check.ts';
+import { proposalJudgementHolds, splitJudgementHolds } from './judgement.ts';
+import type { JudgementHold, SubjectHashes } from './judgement.ts';
 
 export type SplitProblemCode = ProposalIssueCode
   | 'ALREADY_STARTED' | 'NOTHING_TO_SPLIT' | 'OUT_OF_SCOPE' | 'ORIGINAL_NOT_CANCELLED' | 'TOO_FEW_PARTS'
   | 'ANALYSIS_REQUIRED' | 'RULE_VIOLATION' | 'ESTIMATE_MISSING' | 'SPLIT_BASIS_MISSING' | 'AC_MISSING'
-  | 'AC_NOT_PARTITIONED' | 'DEPENDENCY_NOT_RECONNECTED';
+  | 'AC_NOT_PARTITIONED' | JudgementHold['code'] | 'ORDER_NOT_PRESERVED';
 
 export interface SplitProblem {
   code: SplitProblemCode;
   taskKey: string;
+  rule?: JudgementHold['rule'];
   message: string;
 }
 
@@ -47,8 +52,15 @@ function preserves(dependencies: readonly Dependency[], from: string, to: string
   return false;
 }
 
+export interface SplitJudgementInput {
+  splitJudgements: SplitJudgements | null;
+  // Server-computed hash of the ops and the current content of their Tasks.
+  splitSubjectHash: string | null;
+  taskHashes: SubjectHashes;
+}
+
 export function validateSplitProposal(
-  base: ProposalSnapshot, targetId: string, ops: readonly ProposalOp[],
+  base: ProposalSnapshot, targetId: string, ops: readonly ProposalOp[], judgement: SplitJudgementInput,
   settings: SplitSettings = DEFAULT_SPLIT_SETTINGS,
 ): SplitProposalResult {
   const simulation = simulateProposal(base, ops);
@@ -58,7 +70,7 @@ export function validateSplitProposal(
     problems.push({ code, taskKey, message });
   };
   const result = { problems, warnings, simulation };
-  simulation.issues.forEach(issue => fail(issue.code, issue.message));
+  simulation.issues.forEach(issue => fail(issue.code, issue.message, issue.taskKey));
 
   const target = base.tasks.find(task => task.id === targetId);
   if (!target) {
@@ -69,11 +81,13 @@ export function validateSplitProposal(
     fail('ALREADY_STARTED', '이미 시작된 Task는 나누지 않습니다 — 예외 사유를 기록하거나 남은 일을 후속 Task로 제안합니다');
     return result;
   }
-  const checkIn = (snapshot: ProposalSnapshot, task: ProposalTask) => checkSplit(task, snapshot.dependencies
+  const checkIn = (snapshot: ProposalSnapshot, task: ProposalTask, hashes: SubjectHashes['after']) => checkSplit(task, snapshot.dependencies
     .filter(dep => dep.succ === task.id)
-    .flatMap(dep => snapshot.tasks.find(candidate => candidate.id === dep.pred) ?? []), settings);
-  const flagged = flaggedRules(checkIn(base, target));
-  const mustCut = flagged.some(rule => CUT_RULES.includes(rule));
+    .flatMap(dep => snapshot.tasks.find(candidate => candidate.id === dep.pred) ?? []), hashes[task.id] ?? null, settings);
+  const original = checkIn(base, target, judgement.taskHashes.before);
+  const flagged = flaggedRules(original);
+  const mustCut = flagged.some(rule => CUT_RULES.includes(rule)) ||
+    original.items.some(item => item.judgement === 'not_met');
   const mustAnalyse = flagged.includes('unknown');
   if (!mustCut && !mustAnalyse) fail('NOTHING_TO_SPLIT', '나눌 위반 · 의심 항목이 없습니다');
 
@@ -106,18 +120,34 @@ export function validateSplitProposal(
 
   // Every resulting Task must itself satisfy the criteria, including a target kept behind an analysis Task.
   for (const task of cancelled ? added : [...added, ...next.tasks.filter(item => item.id === targetId)]) {
-    for (const item of checkIn(next, task).items) {
+    for (const item of checkIn(next, task, judgement.taskHashes.after).items) {
       if (item.status === '위반') fail('RULE_VIOLATION', `${item.label}: ${item.detail}`, task.id);
-      else if (item.status === '의심' || item.judgementMissing) {
-        warnings.push({ taskKey: task.id, message: `${item.label}: ${item.detail}` });
-      }
+      else if (item.status === '의심') warnings.push({ taskKey: task.id, message: `${item.label}: ${item.detail}` });
     }
   }
+  const holds = [...proposalJudgementHolds(base, simulation, judgement.taskHashes, settings),
+    ...splitJudgementHolds(judgement.splitJudgements, judgement.splitSubjectHash)];
+  for (const { code, taskKey = targetId, rule, message } of holds) problems.push({ code, taskKey, rule, message });
   for (const task of added) {
     if (!task.estimate) fail('ESTIMATE_MISSING', '나눈 Task의 추정이 없어 크기를 판정할 수 없습니다', task.id);
     if (!task.splitBasis.trim()) fail('SPLIT_BASIS_MISSING', '분할 근거가 없습니다', task.id);
     // Not delegated to rule 4: a planning Task without AC is only a caution there.
     if (!task.ac.length || !task.checklist.length) fail('AC_MISSING', '나눈 Task는 AC와 체크리스트를 가져야 합니다', task.id);
+  }
+  // The original's execution order must survive for what replaces it; an equivalent indirect path is enough.
+  const replacements = cancelled ? parts : [target];
+  for (const dep of base.dependencies.filter(item => item.pred === targetId || item.succ === targetId)) {
+    const incoming = dep.succ === targetId;
+    if (incoming && dependencyMet(base.tasks, dep)) continue;
+    const lost = replacements.filter(task => incoming
+      ? !preserves(next.dependencies, dep.pred, task.id, dep.type)
+      : !preserves(next.dependencies, task.id, dep.succ, dep.type));
+    // An SS successor only waited for the original's start, which any one part represents.
+    const kept = !incoming && dep.type === 'SS' ? lost.length < replacements.length : !lost.length;
+    if (!kept) {
+      fail('ORDER_NOT_PRESERVED', `${incoming ? '선행' : '후속'} ${incoming ? dep.pred : dep.succ} (${dep.type}) 실행 순서가 ` +
+        `${lost.map(task => task.id).join(', ')}에 보장되지 않습니다`);
+    }
   }
   if (!cancelled) return result;
 
@@ -126,25 +156,6 @@ export function validateSplitProposal(
   for (const key of new Set(target.ac.map(acKey))) {
     if (count(partAc, key) !== count(target.ac, key)) {
       fail('AC_NOT_PARTITIONED', `원래 Acceptance Criteria는 나뉜 Task 중 하나에만 있어야 합니다: ${key}`);
-    }
-  }
-
-  for (const dep of base.dependencies.filter(item => item.pred === targetId || item.succ === targetId)) {
-    const incoming = dep.succ === targetId;
-    const kept = parts.filter(part => incoming
-      ? preserves(next.dependencies, dep.pred, part.id, dep.type)
-      : preserves(next.dependencies, part.id, dep.succ, dep.type));
-    const other = incoming ? dep.pred : dep.succ;
-    const label = `${incoming ? '선행' : '후속'} ${other} (${dep.type})`;
-    // A direct relation of the same type keeps e.g. FS → SS on the last part from passing via an earlier part.
-    const relinked = next.dependencies.some(item => item.type === dep.type && (incoming
-      ? item.pred === other && created.has(item.succ)
-      : created.has(item.pred) && item.succ === other));
-    if (!kept.length || !relinked) fail('DEPENDENCY_NOT_RECONNECTED', `${label} 관계가 다시 연결되지 않았습니다`);
-    // An SS successor only waited for the original's start, which any one part represents.
-    else if ((incoming || dep.type === 'FS') && kept.length < parts.length) {
-      const missing = parts.filter(part => !kept.includes(part)).map(part => part.id);
-      warnings.push({ taskKey: targetId, message: `${label} 관계가 ${missing.join(', ')}에는 이어지지 않습니다` });
     }
   }
   return result;

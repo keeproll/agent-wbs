@@ -1,14 +1,14 @@
 import { describe, expect, test } from 'vitest';
 import { checkSplit, DEFAULT_SPLIT_SETTINGS, SPLIT_RULES, splitExceptionProblem, summarizeSplit } from '../../src/split/index.ts';
 import type { SplitRule } from '../../src/split/index.ts';
-import type { ProposalTask } from '../../src/proposal/index.ts';
+import type { JudgedRules, ProposalTask } from '../../src/proposal/index.ts';
 import { WORK_TYPES } from '../../src/proposal/types.ts';
 import { TASK_STATUSES } from '../../src/domain/index.ts';
-import { task } from '../proposal/fixtures.ts';
+import { HASH, JUDGED, judged, judgement, task } from '../proposal/fixtures.ts';
 import { original, toTask } from '../proposal/original.ts';
 
 const status = (rule: SplitRule, patch: Partial<ProposalTask> = {}, preds: { workType: ProposalTask['workType'] }[] = []) =>
-  checkSplit(task('T', 'ready', patch), preds).items.find(item => item.rule === rule)?.status;
+  checkSplit(task('T', 'ready', patch), preds, HASH).items.find(item => item.rule === rule)?.status;
 const est = (value: number, lo: number, hi: number, confidence: '상' | '중' | '하' = '중') =>
   ({ estimate: { est: value, lo, hi, confidence } });
 const files = (n: number) => Array.from({ length: n }, (_, i) => `f${i}`);
@@ -52,37 +52,70 @@ describe('ten rules at their boundaries', () => {
     expect(status('unknown', est(2, 1.5, 3, '하'), [{ workType: 'Design' }])).toBe('위반');
   });
 
-  test.each(['revert', 'contract', 'refactor'] as const)('%s never claims an unrecorded agreement', rule => {
-    const missing = checkSplit(task('T'), []).items.find(item => item.rule === rule);
-    expect(missing).toMatchObject({ status: '판단', judgementMissing: true });
-    const recorded = checkSplit(task('T', 'ready', { judgements: [{ rule, why: '단독 커밋', by: 'Codex · Claude 합의' }] }), []);
-    expect(recorded.items.find(item => item.rule === rule)).toMatchObject({ status: '판단', judgementMissing: false,
-      detail: '단독 커밋 (Codex · Claude 합의)' });
+  describe.each(JUDGED)('%s: D-33 recorded judgement', rule => {
+    const others = judged(JUDGED.filter(key => key !== rule)).items;
+    const check = (items: unknown, hash: string | null = HASH, schemaVersion = 1, patch: Partial<ProposalTask> = {}) =>
+      checkSplit(task('T', 'ready', { ...patch, judgedRules: { schemaVersion, items } as unknown as JudgedRules }), [], hash);
+    test.each([
+      ['met', {}, 'met'], ['not met', { result: 'not_met' }, 'not_met'], ['one Agent', { agreedBy: ['Claude'] }, 'missing'],
+      ['same Agent twice', { agreedBy: ['Codex', 'Codex'] }, 'missing'],
+      ['extra Agent', { agreedBy: ['Claude', 'Codex', 'Other'] }, 'missing'],
+      ['stale hash', { subjectHash: 'old' }, 'missing'], ['blank basis', { basis: ' ' }, 'missing'],
+      ['unknown result', { result: 'maybe' }, 'missing'], ['no source', { sourceRef: '' }, 'missing'],
+      ['local time', { judgedAt: '2026-11-25T00:00:00+09:00' }, 'missing'], ['bad time', { judgedAt: '2026-13-25T00:00:00Z' }, 'missing'],
+    ])('%s', (_name, patch, expected) => {
+      const result = check([...others, { ...judgement(rule), ...patch }]);
+      expect(result.items.find(item => item.rule === rule)).toMatchObject({ status: '판단', judgement: expected });
+      expect(result.approvalHolds).toEqual(expected === 'met' ? [] : [rule]);
+    });
+    test('absent, duplicated, hashless or malformed records are no record', () => {
+      const one = judgement(rule);
+      expect(check(others).approvalHolds).toEqual([rule]);
+      expect(check([...others, one, { ...one, result: 'not_met' }]).approvalHolds).toEqual([rule]);
+      expect(check([...others, one], null).approvalHolds).toContain(rule);
+      expect(check([...others, one], HASH, 2).approvalHolds).toContain(rule);
+      expect(check([...others, null]).approvalHolds).toEqual([rule]);
+      expect(check('x').approvalHolds).toContain(rule);
+      expect(checkSplit(task('T', 'ready', { judgedRules: null }), [], HASH).approvalHolds).toContain(rule);
+    });
+    test('text carries result, basis and both Agents; an exception does not replace it', () => {
+      const result = check([...others, judgement(rule, { result: 'not_met', basis: '사용처와 함께 수정' })], HASH, 1,
+        { exceptions: [{ rule, why: 'x', by: 'y', at: 'z' }] });
+      expect(result.items.find(item => item.rule === rule)).toMatchObject({ status: '판단', detail: '불충족 — 사용처와 함께 수정 (Claude · Codex)' });
+      expect(result.approvalHolds).toEqual([rule]);
+    });
+    test('a disabled rule does not hold', () => {
+      const enabled = { ...DEFAULT_SPLIT_SETTINGS.enabled, [rule]: false };
+      expect(checkSplit(task('T', 'ready', { judgedRules: null }), [], HASH, { ...DEFAULT_SPLIT_SETTINGS, enabled }).approvalHolds)
+        .not.toContain(rule);
+    });
   });
 });
 
 test('off beats exception, exception replaces only violation/suspicion, settings are honoured', () => {
   const exception = { rule: 'size', why: '이유', by: '합의', at: 'now' };
   const big = task('T', 'running', { ...est(6, 5, 7), exceptions: [exception] });
-  expect(checkSplit(big, []).items[2]?.status).toBe('예외');
-  expect(checkSplit({ ...big, ...est(2, 1.5, 3) }, []).items[2]?.status).toBe('통과');
+  expect(checkSplit(big, [], HASH).items[2]?.status).toBe('예외');
+  expect(checkSplit({ ...big, ...est(2, 1.5, 3) }, [], HASH).items[2]?.status).toBe('통과');
   const off = { ...DEFAULT_SPLIT_SETTINGS, enabled: { ...DEFAULT_SPLIT_SETTINGS.enabled, size: false } };
-  expect(checkSplit(big, [], off).items[2]?.status).toBe('꺼짐');
-  expect(checkSplit({ ...big, exceptions: [] }, [], { ...DEFAULT_SPLIT_SETTINGS, maxHours: 6 }).items[2]?.status).toBe('통과');
+  expect(checkSplit(big, [], HASH, off).items[2]?.status).toBe('꺼짐');
+  expect(checkSplit({ ...big, exceptions: [] }, [], HASH, { ...DEFAULT_SPLIT_SETTINGS, maxHours: 6 }).items[2]?.status).toBe('통과');
 });
 
 test('summary counts each Task once, violation first', () => {
-  const ok = checkSplit(task('A'), []);
-  const suspect = checkSplit(task('B', 'ready', { title: 'A/B' }), []);
-  const both = checkSplit(task('C', 'ready', { title: 'A/B', ...est(6, 5, 7) }), []);
+  const ok = checkSplit(task('A'), [], HASH);
+  const suspect = checkSplit(task('B', 'ready', { title: 'A/B' }), [], HASH);
+  const both = checkSplit(task('C', 'ready', { title: 'A/B', ...est(6, 5, 7) }), [], HASH);
   expect(both).toMatchObject({ violations: 1, suspicions: 1 });
-  expect(summarizeSplit([ok, suspect, both])).toEqual({ passed: 1, suspicions: 1, violations: 1, exceptions: 0 });
+  expect(summarizeSplit([ok, suspect, both])).toEqual({ passed: 1, suspicions: 1, violations: 1, exceptions: 0, approvalHeld: 0 });
+  const held = checkSplit(task('D', 'ready', { judgedRules: null }), [], HASH);
+  expect(summarizeSplit([ok, held])).toEqual({ passed: 2, suspicions: 0, violations: 0, exceptions: 0, approvalHeld: 1 });
 });
 
 test('exceptions need a started Task, a flagged rule and a reason', () => {
   const big = est(6, 5, 7);
   const entry = { rule: 'size', why: '작음', by: '합의', at: 'now' };
-  const problem = (subject: ProposalTask, value = entry) => splitExceptionProblem(subject, checkSplit(subject, []), value);
+  const problem = (subject: ProposalTask, value = entry) => splitExceptionProblem(subject, checkSplit(subject, [], HASH), value);
   for (const state of TASK_STATUSES) {
     const started = !['planning', 'approval', 'ready'].includes(state);
     expect(problem(task('T', state, big)) === null, state).toBe(started);
@@ -102,7 +135,7 @@ test('all original Tasks, and perturbed copies, get the original rule statuses',
         const t = { ...source, ...variant, spec: { ...source.spec, ac: bare ? [] : source.spec.ac, files: source.spec.files ?? [] } };
         const preds = data.deps.filter(d => d.succ === t.id).map(d => ({ workType: data.tasks[d.pred]?.type ?? 'Design' }));
         const old = original.splitCheck(data, t);
-        const now = checkSplit(toTask(t, data), preds);
+        const now = checkSplit(toTask(t, data), preds, HASH);
         expect(now.items.map(item => [item.rule, item.status])).toEqual(old.items.map(item => [item.k, item.st]));
         expect([now.violations, now.suspicions, now.cautions, now.exceptions]).toEqual([old.viol, old.sus, old.warn, old.exc]);
         flagged += old.viol + old.sus;
