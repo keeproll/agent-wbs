@@ -104,7 +104,7 @@ type Judgement<R> = {
 | 테이블 | 주요 컬럼 · 제약 | 근거 |
 |---|---|---|
 | `plannings` / `planning_analyses` / `planning_reviews` | 세션 / Agent별 독립 분석 unique(planning, agent) / 주제별 일치·이견·조정 | §4.5 |
-| `change_proposals` | cp_key, source(planning/message/manual/split/input/decision), status(§3.6), ops(jsonb §5.6), id_map, preview_hash, hold_reasons, split_judgements(jsonb, §2.3-1; 분할 CP만) | §4.8 §5.6 |
+| `change_proposals` | cp_key, source(planning/message/manual/split/input/decision), status(§3.6), ops(jsonb §5.6), id_map, preview_hash, hold_reasons(jsonb `{holdReasons,issues}`, contracts §2.1), split_judgements(jsonb, §2.3-1; 분할 CP만) | §4.8 §5.6 |
 | `change_proposal_events` | 제출·승인·반려·반영·보류, actor, comment — 추가 전용 | §4.8 |
 
 ### 2.5 실행 · 검증
@@ -138,6 +138,7 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
 | | `orphaned` | host 변경으로 잠금 효력만 제거, 감사용(종료값) |
 
 - **미해제** = `slot_state ≠ none` 또는 `lock_state = held`. 둘 다 아니면 `closed_at`을 채우며, 닫힌 행은 다시 열지 않는다.
+- `reserved`는 프로세스 생성·`/process` 기록 전까지다. 이 구간에서 끊기면 pgid가 없는 채 `unconfirmed`가 되고 contracts §3.4-3의 확인 뒤에만 해제한다.
 - 슬롯 전이: `none→reserved→active→none`, `reserved→none`, `reserved/active→unconfirmed→none`. `none`으로 가려면 release_proof 필요. CLI 재기동은 `none→reserved→active`를 다시 밟는다.
 - 잠금 전이: `none→held`(claim), `held→handed_over/released/orphaned`. `released`는 같은 host에서 `slot_state=none`일 때만, `handed_over`도 이전 job의 `slot_state=none`일 때만 가능.
 - host 변경: 이전 host 행은 `lock_state=orphaned`, 남은 슬롯은 `unconfirmed`. 새 host의 용량·잠금 계산에서 제외하고 이전 host 정리 대상으로 남긴다. 외부 쓰기는 contracts §3.4-5.
@@ -148,7 +149,7 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
 
 1. 인계는 한 트랜잭션: 이전 행 `held→handed_over, handed_to_job=B` → B의 보유 행을 `lock_state=held, slot_state=none, lock_from_job=A, host/fence=null`로 생성. 사이에 다른 claim이 끼지 못한다.
 2. **자기 보유 = `hold.job = 요청 job`**이고 epoch가 같은 행. claim은 자기 행의 `held` 잠금을 충돌에서 제외하고, 그 행에 host·fence를 기록하며 `slot_state none→reserved`로 바꾼다(새 행을 만들지 않음). 인계 없는 최초 claim은 새 행을 만든다.
-3. `start`·`slots/acquire`·`release`는 자기 행이면서 host·fence가 일치해야 한다(낡은 fence의 release 예외는 contracts §3.2-4). 자기 슬롯은 용량에서 한 번만 세고 타 job 행은 모두 검사한다.
+3. `start`·`slots/acquire`·`release`는 자기 행이면서 host·fence가 일치해야 한다(낡은 fence의 release 예외는 contracts §3.2-4). 자기 슬롯은 용량에서 한 번만 세고 타 job 행은 모두 검사한다. `start`는 슬롯을 `reserved`로 두고 `/process`가 `active`로 바꾼다.
 4. B가 claim 전에 취소되면 B의 잠금을 `released`로 닫는다. 이전 job A는 인계 뒤 자기 보유로 인정되지 않는다.
 
 ### 2.6 Runner · 정책
