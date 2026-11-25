@@ -183,7 +183,7 @@ POST /api/runner/jobs/:id/finish {fence,status,result?,error?}
 규칙:
 
 1. 정리 명령이 남아 있으면 claim은 409 CLEANUP_PENDING.
-2. `attempt` claim 시 서버가 한 트랜잭션에서 선행·Task 상태·상한·Agent 상한·충돌 묶음·readiness·사용량·관측 미확인·등급과 **미해제 보유**를 확인하고 슬롯·충돌 묶음을 `reserved`로 예약한다. 시도는 아직 만들지 않는다. 설치 성공 뒤 `start`는 **같은 job·fence·host가 소유한 reserved 보유만 자기 예약으로 인정**하고, 다른 job의 보유와 전체 용량(자기 예약은 1회만 계산)을 다시 검사한 뒤 보유 `reserved→active`·시도 생성·Task 전이를 한 트랜잭션으로 처리한다. 중복 start는 같은 attemptId를 재생하고 전환은 1회다. claim 실패 시 job은 대기하고 `reasons[]`를 화면에 보인다(§4.6).
+2. `attempt` claim 시 서버가 한 트랜잭션에서 선행·Task 상태·상한·Agent 상한·충돌 묶음·readiness·사용량·관측 미확인·등급과 **다른 job의 미해제 보유**를 확인하고 슬롯 `reserved`·잠금 `held`로 예약한다(인계받은 job은 자기 잠금을 그대로 사용). 시도는 아직 만들지 않는다. 설치 성공 뒤 `start`는 [data-model §2.5-1](data-model.md#25-1-실행-보유의-단일-정의)의 **자기 보유**만 예외로 인정하고 다른 job의 보유와 전체 용량을 다시 검사한 뒤 `slot_state reserved→active`·시도 생성·Task 전이를 한 트랜잭션으로 처리한다. 중복 start는 같은 attemptId를 재생하고 전환은 1회다. claim 실패 시 job은 대기하고 `reasons[]`를 화면에 보인다(§4.6).
 3. lease 60초, 20초마다 renew [결정]. lease 만료는 **자원 해제가 아니다**. 조회 전용 job(`repo_check`)만 바로 재할당한다. attempt와 외부 효과 job은 §3.4.
 4. 모든 보고는 `fence`를 포함하고 낡은 fence는 409 LEASE_LOST. 예외: `release`는 **원래 job·host·boot·process group이 일치**할 때 낡은 fence도 받되 보유 해제 외 상태는 바꾸지 않는다.
 5. 야간 점검과 입력 변경 확인은 Runner가 `policy` 시각으로 시작한다. 중복은 멱등 키 `night:<date>`로 막는다.
@@ -203,11 +203,11 @@ POST /api/runner/jobs/:id/finish {fence,status,result?,error?}
 
 ### 3.4 실행 보유와 복구
 
-1. **시도 종료 ≠ 자원 반환.** heartbeat 3회 누락이면 §6.5대로 시도 `interrupted`, Task `paused`로 기록하지만 보유는 `unconfirmed`로 남는다. 슬롯·충돌 묶음·Task 재개를 계속 막고 사유를 화면에 보인다(§6.7 L804-806).
+1. **시도 종료 ≠ 자원 반환.** heartbeat 3회 누락이면 §6.5대로 시도 `interrupted`, Task `paused`로 기록하지만 보유는 `slot_state=unconfirmed`, `lock_state=held`로 남는다. 슬롯·충돌 묶음·Task 재개를 계속 막고 사유를 화면에 보인다(§6.7 L804-806).
 2. 해제 증거: `no_process`(프로세스를 만든 적 없음), `group_empty`(Runner가 그룹·자손 empty 확인), `boot_changed`(같은 host의 boot ID 변경 — 이전 프로세스가 존재할 수 없음). 출력 단절·lease 만료·시간 경과는 증거가 아니다.
 3. Runner는 프로세스 생성 **전에** 예정된 그룹/cgroup 이름을 로컬에 영속화한다. 재시작 시 로컬 기록과 서버 보유를 대조해 정리하고 release한다. 기록이 없거나 확인할 수 없으면 `unconfirmed`를 유지하고 알린다.
 4. 같은 PC에서 증거 없이 보유를 푸는 강제 API는 두지 않는다.
-5. **PC 변경**: §6.6 L749-751이 새 PC에서 새 시도 재개를 확정했으므로, 이전 host 보유는 `unconfirmed`로 남기되 새 host의 슬롯 계산과 재개 차단에서 제외한다. host 식별자 변경 없는 단순 재시작에는 적용하지 않는다. **로컬 재개와 공유 외부 쓰기는 분리한다.** `renew`·fence는 GitHub가 알지 못하므로 외부 쓰기 격리 근거로 쓰지 않는다.
+5. **PC 변경**: §6.6 L749-751이 새 PC에서 새 시도 재개를 확정했으므로, 이전 host 보유는 슬롯 `unconfirmed`·잠금 `orphaned`로 남기되 새 host의 슬롯 계산과 재개 차단에서 제외한다. host 식별자 변경 없는 단순 재시작에는 적용하지 않는다. **로컬 재개와 공유 외부 쓰기는 분리한다.** `renew`·fence는 GitHub가 알지 못하므로 외부 쓰기 격리 근거로 쓰지 않는다.
    - host가 바뀌면 서버가 `external_write_authority`를 generation+1, `blocked`로 바꾼다. 새 host는 로컬 worktree의 dev·①·QA까지만 하고 push·PR·commit status·병합·design_apply·초기화 되돌림을 포함한 GitHub 쓰기는 409 `EXTERNAL_WRITE_BLOCKED`로 막는다. 사유는 기존 실행 불가 사유·관리자 개입 알림에 표시한다. 배포 확인은 host별 로컬 compose만 대상으로 하고, 공유 대상이면 같은 차단을 적용한다.
    - 해제 조건은 (a) 이전 host가 재연결해 프로세스·outbox 종료와 이전 호출 결과를 확인하거나 (b) 이전 쓰기 자격 증명을 **GitHub에서 폐기**하고 서버가 폐기를 확인(기존 토큰 호출 401)한 뒤 새 자격 증명을 등록하는 것이다. 이후 GitHub main·PR·브랜치·status를 조회해 이전 호출을 대조해야 `granted`가 된다. `gh` 로그인처럼 폐기를 확인할 수 없으면 (a)만 가능하다.
    - 새 host 브랜치는 `agent/<TASK>-h<generation>`, PR도 새로 만든다. 이전 generation 브랜치·PR은 대조 뒤 병합 대상에서 제외하고 정리한다.
@@ -221,7 +221,7 @@ POST /api/runner/jobs/:id/finish {fence,status,result?,error?}
 ### 3.5 자동 진행 (owner Q-04)
 
 - 최초 dev는 팀장 `POST /tasks/:key/runs`가 있어야 job을 만든다. 이후 ①→QA→(FAIL) rework→reverify는 서버가 job을 만든다.
-- 실행 실패의 자동 재시도 **횟수와 집계 범위는 미승인(Q-04-잔여)**. 값은 인자·설정으로만 다루고 운영 seed에는 넣지 않으며, 값이 없으면 자동 재시도하지 않고 팀장 버튼을 기다린다. 시작 전 실패는 항상 「다시 시도」 버튼(G L864, P).
+- 실행 실패: **같은 종류(dev/qa/rework/reverify)의 연속 실패에 자동 재시도 2회, 최초 포함 총 3회**. 그 종류가 완료되면 연속 횟수를 0으로 되돌린다. 중단은 실패로 세지 않고 횟수를 바꾸지 않는다. 시작 전 실패는 항상 「다시 시도」 버튼(G L864, P).
 - QA FAIL과 통합 실패를 합쳐 Task당 **자동 재작업 최대 3회**. 재작업 안의 실행 실패는 재작업 횟수로 세지 않는다. BLOCKED·중단은 세지 않고 자동 반복하지 않는다.
 - 초과하면 추가 job을 만들지 않고 팀장 알림. 팀장 버튼은 한도 카운터를 되돌리지 않고 1회만 허용한다.
 - Telegram 「Task 실패」: QA FAIL 확정, 실행 실패의 자동 한도 초과(§4.14). 자동 재시도 중 실패는 보내지 않는다.

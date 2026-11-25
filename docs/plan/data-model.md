@@ -72,15 +72,43 @@
 |---|---|---|
 | `runner_jobs` | kind, payload, state(`queued/leased/started/reconcile/done/failed/cancelled`), lease_owner, lease_until, fence int, epoch, attempts | D-03 |
 | `runner_job_events` | 추가 전용: prepared·prestart_failed·started·lease_lost·reconciled·finished, code, detail — **시작 전 실패 기록** | §1.2-4 §7.4-4 |
-| `execution_holds` | job, attempt?, epoch, host_id, boot_id, pgid/cgroup, task?, conflict_group?, agent, reserved_slots, heavy, **slot_state(reserved/active/unconfirmed/released)·lock_state(held/handed_over/released)** — 물리 슬롯과 Task·충돌 묶음 논리 잠금을 분리, state(`reserved/active/unconfirmed/released`), release_proof(`no_process/group_empty/boot_changed`), handed_to_job, released_at. 해제 전 논리 잠금은 job당 1개 부분 unique(task, conflict_group). 시도·job 종료와 독립. 해제 전 삭제 금지(초기화는 §5) | §6.7 L795·804-806 |
+| `execution_holds` | job unique, attempt?, epoch, host_id?, boot_id?, fence?, pgid/cgroup, task?, conflict_group?, agent, slots, heavy, **slot_state**, **lock_state**, lock_from_job?, handed_to_job?, release_proof(`no_process/group_empty/boot_changed`), closed_at. 별도 `state` 컬럼 없음 — 정의는 §2.5-1. 닫히기 전 삭제 금지(초기화는 §5) | §6.7 L795·804-806 |
 | `external_write_authority` | 단일 행: host_id, generation, state(`granted/blocked`), credential_fingerprint, blocked_reason, reconciled_at — GitHub 등 공유 외부 쓰기 권한 | contracts §3.4-5 |
-| `task_attempts` | attempt_key unique, job unique, task, base/head SHA, spec_revision, input_version, kind(`dev/qa/rework/reverify`), agent, status(§3.2), started/ended_at, model_id, effort, grade_adjust(kind·reason), summary, failure, tokens, resumed_from. **Task당 열린 시도 1개**(부분 unique). claim은 열린 시도뿐 아니라 **해제되지 않은 `execution_holds`**로 Task·충돌 묶음·슬롯을 판정 | §4.6 §6.6 |
+| `task_attempts` | attempt_key unique, job unique, task, base/head SHA, spec_revision, input_version, kind(`dev/qa/rework/reverify`), agent, status(§3.2), started/ended_at, model_id, effort, grade_adjust(kind·reason), summary, failure, tokens, resumed_from. **Task당 열린 시도 1개**(부분 unique). claim은 열린 시도뿐 아니라 **미해제 `execution_holds`(§2.5-1)**로 Task·충돌 묶음·슬롯을 판정 | §4.6 §6.6 |
 | `attempt_files` | 저장소 상대 경로 | §8.2 |
 | `attempt_subagents` | designated/installed/observed_used, version, def_hash, confirm(`confirmed/partial`) | §6.7-7 |
 | `attempt_observations` | cli, version, grade, observed, reserved, state(`ok/unconfirmed`), pgid/cgroup 상태, at | §6.7 |
 | `verifications` | attempt unique, result(`PASS/FAIL/BLOCKED`), **head_sha, spec_revision**, cmd, expected, actual — 추가 전용. 근거 무효화는 `verification_invalidations` 행으로 추가 | §4.7 |
 | `defects` | def_key, verification, blocking, resolved_by_verification — **원 행은 불변, 해소는 이벤트 행** | §5.5 |
 | `evidence` | task, attempt?, verification?, checklist?, kind, storage_path, sha256, size | §4.7 |
+
+#### 2.5-1 실행 보유의 단일 정의
+
+job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며 **전체 상태는 저장하지 않고 계산**한다.
+
+| 축 | 값 | 뜻 |
+|---|---|---|
+| `slot_state` | `none` | 지금 잡은 슬롯 없음(최초·CLI와 ① 사이·종료) |
+| | `reserved` → `active` | 용량만 예약 → 프로세스 그룹 등록·실행 |
+| | `unconfirmed` | 종료를 확인하지 못함. 같은 host에서는 용량을 계속 차지 |
+| `lock_state` | `none` | Task·묶음 잠금이 필요 없는 job |
+| | `held` | 잠금 소유 |
+| | `handed_over` / `released` | 다음 job에 인계 / 반환(종료값) |
+| | `orphaned` | host 변경으로 잠금 효력만 제거, 감사용(종료값) |
+
+- **미해제** = `slot_state ≠ none` 또는 `lock_state = held`. 둘 다 아니면 `closed_at`을 채우며, 닫힌 행은 다시 열지 않는다.
+- 슬롯 전이: `none→reserved→active→none`, `reserved→none`, `reserved/active→unconfirmed→none`. `none`으로 가려면 release_proof 필요. CLI 재기동은 `none→reserved→active`를 다시 밟는다.
+- 잠금 전이: `none→held`(claim), `held→handed_over/released/orphaned`. `released`는 같은 host에서 `slot_state=none`일 때만, `handed_over`도 이전 job의 `slot_state=none`일 때만 가능.
+- host 변경: 이전 host 행은 `lock_state=orphaned`, 남은 슬롯은 `unconfirmed`. 새 host의 용량·잠금 계산에서 제외하고 이전 host 정리 대상으로 남긴다. 외부 쓰기는 contracts §3.4-5.
+- 부분 unique(모두 `WHERE lock_state='held'`): `(task)` 그리고 `conflict_group IS NOT NULL`인 `(conflict_group)`. 슬롯 상태는 이 조건에 넣지 않으므로 `unconfirmed`여도 잠금이 남는다. 열린 시도 unique와 별개.
+- 용량 합계: 현재 host에서 `slot_state IN (reserved, active, unconfirmed)`인 행의 `slots`(하위 Agent 보유 계산 포함).
+
+**인계와 자기 보유**
+
+1. 인계는 한 트랜잭션: 이전 행 `held→handed_over, handed_to_job=B` → B의 보유 행을 `lock_state=held, slot_state=none, lock_from_job=A, host/fence=null`로 생성. 사이에 다른 claim이 끼지 못한다.
+2. **자기 보유 = `hold.job = 요청 job`**이고 epoch가 같은 행. claim은 자기 행의 `held` 잠금을 충돌에서 제외하고, 그 행에 host·fence를 기록하며 `slot_state none→reserved`로 바꾼다(새 행을 만들지 않음). 인계 없는 최초 claim은 새 행을 만든다.
+3. `start`·`slots/acquire`·`release`는 자기 행이면서 host·fence가 일치해야 한다(낡은 fence의 release 예외는 contracts §3.2-4). 자기 슬롯은 용량에서 한 번만 세고 타 job 행은 모두 검사한다.
+4. B가 claim 전에 취소되면 B의 잠금을 `released`로 닫는다. 이전 job A는 인계 뒤 자기 보유로 인정되지 않는다.
 
 ### 2.6 Runner · 정책
 
@@ -92,8 +120,8 @@
 | `concurrency_settings` | mode(auto/manual), caps, mem_reserve_gb, subagent_budget(dev/qa) | §6.6 §6.7 |
 | `runner_readiness` | key, status, detail, fix, at | §7.4 |
 | `agent_usage` | agent, remain_pct(0~100), reset_at, tokens_used | §6.2 |
-| `agent_models` / `agent_efforts` | 보고값, rank, allowed(신규=false), is_new / **CLI×모델별** 값→공통 1~5 명시 매핑(Q-06 전 미설정) | §7.2 |
-| `exec_policy` | on_usage, low_pct, on_rework, esc_notify, floors, live_inject, auto_retry_limit(**미승인 — null, 자동 재시도 안 함**, Q-04-잔여), auto_rework_limit=3 | §7.3, owner Q-04 |
+| `agent_models` / `agent_efforts` | 보고값, rank, allowed(신규=false), is_new / **CLI×모델별** 값→공통 1~5 명시 매핑(owner Q-06 승인표, ultra·미확인은 미매핑=사용 안 함) | §7.2 |
+| `exec_policy` | on_usage, low_pct, on_rework, esc_notify, floors, live_inject, auto_retry_limit=2, auto_rework_limit=3 | §7.3, owner Q-04 |
 | `subagent_defs` | id, version, agent, role, tools, sandbox, text, hash, allowed, ref — 버전 불변 | §7.4 |
 | `cli_observation_grades` | cli+version+model+options unique, grade, verified_at, notes | §6.7 |
 
@@ -136,7 +164,7 @@
 
 ## 3. 상태 전이
 
-`packages/shared`에 표로 두고 서버가 강제한다(§9.1-5·7). 표에 없는 전이는 409 `INVALID_TRANSITION`. **§3.1은 G가 [미결 3]으로 둔 항목**이므로 아래는 G·P에서 도출한 추천안이며 Q-05 확인 전까지 잠정이다.
+`packages/shared`에 표로 두고 서버가 강제한다(§9.1-5·7). 표에 없는 전이는 409 `INVALID_TRANSITION`. §3.1은 G [미결 3]에 대해 **owner가 승인한 표**다(Q-05, 2026-11-25). 바꾸려면 owner 승인이 필요하다.
 
 ### 3.1 Task 대표 상태
 
@@ -156,14 +184,14 @@
 | `rework` | `running` | rework 시도 |
 | `gate` | `verifying` | 검증 뒤 head SHA·명세 revision이 바뀜 → 근거 무효, 재검증 |
 | `gate` | `done` | Gate 5조건 + 현재 head에 유효한 QA + ② 통과 + 검사한 병합본과 실제 병합 일치를 서버가 같은 트랜잭션에서 판정(§5.5, §4.13). 「필요한 승인」은 **착수 승인**(`planning_approved_at`)이며 별도 완료 승인 없음(owner Q-02) |
-| `gate` | `rework` | ② 통합 실패 |
+| `gate` | `rework` | ② 통합 실패·병합 충돌 |
 | `planning`,`approval`,`ready` | `cancelled` | CP remove, 실행 이력 없음(D-16) |
 
 `done`·`cancelled`는 종료. 차단은 저장하지 않는 계산값. SS 선행은 `planning/approval/ready`가 아니면 충족, FS는 `done`(P `depMet` L3677). P의 SS는 `cancelled`도 시작으로 보지만, 취소된 선행은 관계가 제거되므로 [결정] 무시한다.
 
 #### 시도 종류별 claim 허용
 
-공통: 열린 시도 없음, Task·충돌 묶음에 해제되지 않은 보유 없음(타 PC 예외는 contracts §3.4), 정리 대기 없음.
+공통: 열린 시도 없음, Task·충돌 묶음에 **다른 job의** `held` 잠금 없음(자기 보유·타 PC 예외는 §2.5-1), 정리 대기 없음.
 
 | Task 상태 | 허용 종류 | 추가 조건 |
 |---|---|---|
@@ -172,7 +200,7 @@
 | `qa` | qa | ① 통과, 최초 또는 직전 qa가 BLOCKED |
 | `verifying` | reverify | rework의 ① 통과, 직전 reverify가 BLOCKED, 또는 근거 무효화 |
 | `paused` | 중단된 종류 | 직전 시도 interrupted, 같은 등급. 재개는 팀장 버튼(P) |
-| `failed` | 실패한 종류 | 직전 시도 failed. 자동 재시도 횟수는 Q-04-잔여(미승인이면 0), 그 외 팀장 버튼 |
+| `failed` | 실패한 종류 | 직전 시도 failed. 같은 종류 연속 실패에 자동 재시도 2회(최초 포함 총 3회), 이후 팀장 버튼 |
 | 그 외 | 없음 | 409 |
 
 ### 3.2 시도와 시작 전 실패
@@ -231,5 +259,5 @@ event: `open → resolved`. outbox(메일·Telegram 공통): `queued → sending
 - 이름은 시각 기반(§9.6-2-4 권장). 병렬 작업 충돌을 피하려고 **schema 변경은 M1 이후 DB 담당 한 작업씩** 병합한다.
 - 검증: 빈 DB up, 직전 버전 DB up, schema drift 검사. P TASK-0004의 down SQL은 Mock Task 요구이므로 채택하지 않고, 운영 되돌림은 백업 복원 + 앞으로 고치는 migration을 쓴다 [결정].
 - 부트 시 자동 migrate 금지. `db:migrate` 명령으로만 실행.
-- Seed 두 가지: `system`(G가 확정한 기본 정책·분할 기준, owner 확정 Q-03 값·Q-04의 재작업 3회(시도 횟수는 제외), 검토를 마친 하위 Agent v1 — M5-06), `demo`(P `MOCK` 12 Task·`SUB_MOCK`·Q 미승인 잠정값 — **테스트·화면 검증 전용**, 운영 DB에서 실행 거부).
+- Seed 두 가지: `system`(G가 확정한 기본 정책·분할 기준, owner 확정 Q-03 값·Q-04(자동 재시도 2·재작업 3)·Q-06 매핑, 검토를 마친 하위 Agent v1 — M5-06), `demo`(P `MOCK` 12 Task·`SUB_MOCK`·Q 미승인 잠정값 — **테스트·화면 검증 전용**, 운영 DB에서 실행 거부).
 - 추가 전용 보장 테스트: 앱 역할로 UPDATE/DELETE가 거부되는지 확인.
