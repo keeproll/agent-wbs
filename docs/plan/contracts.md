@@ -99,11 +99,11 @@ G§0.3 L73 「모든 수정 API」를 따른다. 본문이 있으면 `updatedAt`
 | POST `/api/tasks/:taskKey/runs` `{kind}` · POST `/api/attempts/:id/stop` · `/resume` | 실행 요청 job 생성 / 중단 / 재개. 불가 시 409 CLAIM_REJECTED `{reasons[]}` |
 | GET/POST `/api/messages`, PATCH 초안, POST `/:id/{send,cancel,resend,read}` | §4.10. 초안 서버 보존 |
 | GET/POST `/api/plannings`, POST `/api/plannings/:id/reviews/:rid/choice` · `/proposals` | §4.5 |
-| GET/POST `/api/proposals`, GET `/:id/preview`, POST `/:id/{submit,approve,reject,request-changes,apply}` | 미리보기와 반영은 같은 함수. apply는 재시뮬레이션. 보류 사유 `holdReasons[{code,taskKey?,rule?,message}]`: `JUDGEMENT_MISSING` `JUDGEMENT_NOT_MET` `ORDER_NOT_PRESERVED` `ACTIVE_TASK_BLOCKED`(D-33~35). 하나라도 있으면 자동 반영은 `held`, 수동 승인·반영은 409(판단은 `SPLIT_JUDGEMENT_REQUIRED`, 순서는 `ORDER_NOT_PRESERVED`, 차단은 `ACTIVE_TASK_BLOCKED`)이고 강제 우회 없음. D-33~35 외의 반영 불가 사유(완료 Task·순환·없는 대상 등, §5.6)는 `issues[{index,code,message}]`에 담고, 수동 apply에서 이것만 있으면 200으로 `status=held`를 돌려준다. preview는 `{previewHash,impact,issues,holdReasons,diff,idMap}`, apply는 `{proposal,impact,issues,holdReasons,diff,idMap}`. DB `hold_reasons`에는 `{holdReasons,issues}`를 함께 저장. `impact`에 `removedDependencies[{pred,succ,type,reason}]`·**`unblockedSuccessors[{taskKey,remainingBlockers[]}]`** — 취소로 관계가 제거된 후속과, 남은 선행이 없어 실제로 풀리는지를 구분(D-27) |
+| GET/POST `/api/proposals`, GET `/:id/preview`, POST `/:id/{submit,approve,reject,request-changes,apply}` | 미리보기와 반영은 같은 함수. apply는 재시뮬레이션. 보류 사유 `holdReasons[{code,taskKey?,rule?,message}]`: `JUDGEMENT_MISSING` `JUDGEMENT_NOT_MET` `ORDER_NOT_PRESERVED` `ACTIVE_TASK_BLOCKED`(D-33~35). 하나라도 있으면 자동 반영은 `held`, 수동 승인·반영은 409(판단은 `SPLIT_JUDGEMENT_REQUIRED`, 순서는 `ORDER_NOT_PRESERVED`, 차단은 `ACTIVE_TASK_BLOCKED`)이고 강제 우회 없음. D-33~35 외의 반영 불가 사유(완료 Task·순환·없는 대상 등, §5.6)는 `issues[{index,code,message}]`에 담고, 수동 apply에서 이것만 있으면 200으로 `status=held`를 돌려준다. preview는 `{previewHash,impact,issues,holdReasons,diff,idMap}`, apply는 `{proposal,impact,issues,holdReasons,diff,idMap}`. 팀장 작성 POST는 판단 필드를 받지 않음(400). 판단이 필요한 CP가 `review`에 들어오면 서버가 `planning` 판단 job을 만들고, 승인·미리보기·반영에서 대상 hash가 달라진 것을 발견하면 다시 만든다(CP와 hash 조합당 열린 job 1개 [결정]). 조회 응답에 `taskJudgements[]`·`splitJudgements`. DB `hold_reasons`에는 `{holdReasons,issues}`를 함께 저장. `impact`에 `removedDependencies[{pred,succ,type,reason}]`·**`unblockedSuccessors[{taskKey,remainingBlockers[]}]`** — 취소로 관계가 제거된 후속과, 남은 선행이 없어 실제로 풀리는지를 구분(D-27) |
 | GET `/api/dashboard`, `/api/schedule`, `/api/replans`, POST `/api/replans/run` | §4.1, §6. 조회 응답의 필드 구조는 openapi.json이 정본 |
 | GET `/api/verifications`, `/api/evidence`, `/api/evidence/:id/content`, `/api/gates`, `/api/history` | §4.7, §4.9. 콘텐츠는 attachment + nosniff |
 | GET/PUT `/api/settings/{workflow,exec-policy,models,split,schedule,blackouts,concurrency,obs-budget,subagents,ci}` | §4.9 탭. `settings/ci`와 §2.3의 `ci/settings`는 **같은 설정 한 벌**(같은 행·버전). 저장 전 `updatedAt`은 null. `models` PUT은 `{agent,id,allowed}`만 받고 이름·rank·efforts는 읽기 전용(§7.1, Q-06) |
-| GET `/api/runner-state` | 연결·준비·PC·동시 실행·관측·제한 요인 묶음 |
+| GET `/api/runner-state` | 연결·준비·PC·동시 실행·관측·제한 요인 묶음 + 최근 중단 구간 `gaps[{from,to\|null,reason}]` 최대 6개·최신순(P L6684), reason `reboot/power_off/error/manual/unknown`, 진행 중이면 `to=null` |
 | GET `/api/alerts`, GET `/api/system/integrity` | 현재 알림 / 정합성 점검 |
 | POST `/api/auth/session` · DELETE, GET `/api/session` | §2.4 |
 
@@ -189,7 +189,7 @@ POST /api/runner/jobs/:id/finish {fence,status,result?,error?}
 |---|---|---|
 | `repo_check` | url | repo-checks result |
 | `bootstrap` / `input_diff` | 커밋, 지시, 이전 커밋, 재개 단계 | progress → draft / proposal |
-| `planning` / `estimate` / `split` | `tasks[{taskKey,subjectHash}]`, 정책 | planning API. 재판단 보고에 hash를 그대로 돌려보냄(data-model §2.3-1) |
+| `planning` / `estimate` / `split` | `tasks[{taskKey,subjectHash}]`, 정책. `planning`은 `proposal{id,targets[{target,subjectHash}],splitSubjectHash\|null}\|null`도 포함(hash는 변경 적용 후) | planning API. 재판단 보고에 hash를 그대로 돌려보냄(data-model §2.3-1) |
 | `attempt` | taskKey, kind, agent, 브랜치, 기준 커밋, 입력 버전, 작업 지시 묶음 | status → result/interrupt |
 | `stop_attempt` | attemptId, 사유 | interrupt |
 | `integrate` / `deploy_check` / `ci_retry` | PR·커밋 | ci runs, queue |
@@ -200,7 +200,7 @@ POST /api/runner/jobs/:id/finish {fence,status,result?,error?}
 1. 정리 명령이 남아 있으면 claim은 409 CLEANUP_PENDING.
 2. `attempt` claim 시 서버가 한 트랜잭션에서 선행·Task 상태·상한·Agent 상한·충돌 묶음·readiness·사용량·관측 미확인·등급과 **다른 job의 미해제 보유**를 확인하고 슬롯 `reserved`·잠금 `held`로 예약한다(인계받은 job은 자기 잠금을 그대로 사용). 시도는 아직 만들지 않는다. 설치 성공 뒤 `start`는 [data-model §2.5-1](data-model.md#25-1-실행-보유의-단일-정의)의 **자기 보유**만 예외로 인정하고 다른 job의 보유와 전체 용량을 다시 검사한 뒤 시도 생성·Task 전이를 한 트랜잭션으로 처리한다(`slot_state`는 `reserved` 유지, `/process`에서 active). `headSha`는 attempt와 통합 계열(`integrate`·`deploy_check`·`ci_retry`)만 필수이고 그 외 job은 보내지 않는다(빠짐·불필요한 값 400, 서버가 job kind로 판정). 중복 start는 같은 attemptId를 재생하고 전환은 1회다. claim 실패 시 job은 대기하고 `reasons[]`를 화면에 보인다(§4.6).
 3. lease 60초, 20초마다 renew [결정]. lease 만료는 **자원 해제가 아니다**. 조회 전용 job(`repo_check`)만 바로 재할당한다. attempt와 외부 효과 job은 §3.4.
-4. job에서 나온 모든 보고는 `fence`를 포함하고 낡은 fence는 409 LEASE_LOST. 경로에 job/시도가 없는 11종 — CI run 시작, 병합 상태, design snapshot, estimates, replans, planning sessions·analyses·reviews·proposals, task plan, 기술 결정 POST — 은 본문에 `jobId`도 필수. 저장소 확인 결과는 경로 ID로 job을 찾고 fence만 받는다. CI run 갱신은 시작 때 저장한 run→job과 fence를 대조한다. **job 없이 시작한 야간 점검만** jobId 없이 시작하고 갱신 fence는 null(다른 run의 null은 거부). job 밖 telemetry(heartbeat·sessions·host·readiness·models·usage·concurrency·input-changes·github/status)와 메시지 ack·응답은 fence가 없다. `subagent-usage`는 세션 종료 뒤 사후 확정(§6.7-7)이므로 job이 끝났어도 **그 job의 마지막 fence**면 받는다. 예외: `release`는 **원래 job·host·boot·process group이 일치**할 때 낡은 fence도 받되 보유 해제 외 상태는 바꾸지 않는다.
+4. job에서 나온 모든 보고는 `fence`를 포함하고 낡은 fence는 409 LEASE_LOST. 경로에 job/시도가 없는 12종 — CI run 시작, 병합 상태, design snapshot, estimates, replans, planning sessions·analyses·reviews·proposals, CP judgements, task plan, 기술 결정 POST — 은 본문에 `jobId`도 필수. 저장소 확인 결과는 경로 ID로 job을 찾고 fence만 받는다. CI run 갱신은 시작 때 저장한 run→job과 fence를 대조한다. **job 없이 시작한 야간 점검만** jobId 없이 시작하고 갱신 fence는 null(다른 run의 null은 거부). job 밖 telemetry(heartbeat·sessions·host·readiness·models·usage·concurrency·input-changes·github/status)와 메시지 ack·응답은 fence가 없다. `subagent-usage`는 세션 종료 뒤 사후 확정(§6.7-7)이므로 job이 끝났어도 **그 job의 마지막 fence**면 받는다. 예외: `release`는 **원래 job·host·boot·process group이 일치**할 때 낡은 fence도 받되 보유 해제 외 상태는 바꾸지 않는다.
 5. 야간 점검과 입력 변경 확인은 Runner가 `policy` 시각으로 시작한다. 중복은 멱등 키 `night:<date>`로 막는다.
 6. 자동 실행과 한도는 §3.5.
 
@@ -213,7 +213,8 @@ POST /api/runner/jobs/:id/finish {fence,status,result?,error?}
 | POST `/planning/bootstrap/:jobId/draft` | phases·wps·tasks(분류·담당·추정·명세·AC·체크리스트·등급·하위 Agent·분할 근거·`judgedRules`·충돌 묶음·설계 항목)·deps. 판단 미기록·불충족 초안도 저장해 화면에 보이되 승인에서 보류. 순환·참조·필수 검증, 실패 400 |
 | POST `/planning/bootstrap/:jobId/tech`★ | 기술 결정 제안(근거·대안) |
 | POST `/planning/sessions`★ · `/:id/analyses` · `/:id/reviews` | §4.5 두 분석·교차 검토 |
-| POST `/planning/proposals`★ | CP 제출. 서버 정책에 따라 자동 반영/보류/검토. add op의 Task에 `judgedRules`, 분할 CP에 `splitJudgements` |
+| POST `/planning/proposals`★ | CP 제출. 서버 정책에 따라 자동 반영/보류/검토. 새 Task의 판단은 add op의 `t.judgedRules`, 내용이 바뀌는 기존 Task는 `taskJudgements[{taskKey,judgedRules}]`, 분할 CP는 `splitJudgements`. 모두 `subjectHash` 없이 보내고 서버가 **변경 적용 후 내용**으로 계산 |
+| POST `/planning/proposals/:id/judgements`★ | 저장된 CP(팀장 작성 포함)에 판단만 덧붙임. `{jobId,fence,judgements[{target:"TASK-n"\|"NEW-n",judgedRules}],splitJudgements?}` → 204. payload hash와 현재 hash가 다르면 409 VERSION_CONFLICT, `applied`·`rejected` CP는 409 INVALID_TRANSITION. ops의 변경 내용은 바꾸지 않고 CP `updatedAt`을 올림(낡은 화면의 승인은 409) |
 | POST `/planning/tasks/:taskKey/plan`★ | 등급·하위 Agent·충돌 묶음 판단과 근거, `judgedRules`(data-model §2.3-1). `subjectHash` 불일치 409 VERSION_CONFLICT |
 
 ### 3.4 실행 보유와 복구
