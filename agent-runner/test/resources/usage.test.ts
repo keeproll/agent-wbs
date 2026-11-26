@@ -31,10 +31,12 @@ describe('UsageTracker — POST /runner/usage(G §8.2: 남은 사용량 %·리�
     expect(u.drain()).toEqual([{ agent: 'Codex', remainPct: 5, tokensUsed: 10 }]);
   });
 
-  test('소수는 반올림, 0~100 밖은 거부', () => {
+  test('소수는 그대로 보낸다 — 반올림하면 기준 20% 미만을 넘겨 버린다(리뷰 5), 0~100 밖은 거부', () => {
     const u = new UsageTracker();
     u.update('Codex', { remainPct: 19.6 });
-    expect(u.drain()[0]?.remainPct).toBe(20);
+    expect(u.drain()[0]?.remainPct).toBe(19.6);
+    u.update('Codex', { remainPct: 0.4 });
+    expect(u.drain()[0]?.remainPct).toBe(0.4);
     expect(() => u.update('Codex', { remainPct: 101 })).toThrow(RangeError);
     expect(() => u.update('Codex', { remainPct: -1 })).toThrow(RangeError);
     expect(() => u.update('Codex', { remainPct: Number.NaN })).toThrow(RangeError);

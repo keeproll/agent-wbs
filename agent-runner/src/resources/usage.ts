@@ -20,7 +20,8 @@ export class UsageTracker {
     }
     if (resetAt && Number.isNaN(resetAt.getTime())) throw new RangeError('리셋 시각이 올바르지 않습니다.');
     const s = this.#get(agent);
-    const pct = Math.round(remainPct);
+    // 반올림하지 않는다 — 19.6%가 20%로 바뀌면 「20% 미만」 정책을 비켜 간다. 표시 반올림은 화면이 한다.
+    const pct = remainPct;
     const at = resetAt?.toISOString();
     if (s.remainPct === pct && s.resetAt === at) return;
     s.remainPct = pct;

@@ -31,7 +31,11 @@ export function nodeHostSources(): HostSources {
 }
 
 const KIB_PER_GIB = 1024 * 1024;
-/** 크게 보고하면 상한이 부풀므로 버림한다. */
+/**
+ * PC 전체 용량(메모리·swap 크기·디스크)은 크게 보고하면 상한이 부풀므로 소수 둘째 자리에서 버림한다.
+ * 판단에 쓰는 값(swap 사용량·여유 메모리)과 공식의 분모(세션 평균)에는 쓰지 않는다 — 버리면 작은 swap이 0이 되고
+ * 세션 평균이 작아져 오히려 상한이 커진다(리뷰 4·7).
+ */
 const gb = (n: number): number => Math.floor(n * 100 + 1e-9) / 100;
 
 /** /proc/meminfo의 kB 값. WSL에서는 Windows가 WSL에 할당한 양이다(G §6.6). */
@@ -68,7 +72,7 @@ export class SessionMemory {
   }
 
   report(): { perSessionGB?: number; samples?: number } {
-    return this.#n === 0 ? {} : { perSessionGB: gb(this.#sum / this.#n), samples: this.#n };
+    return this.#n === 0 ? {} : { perSessionGB: this.#sum / this.#n, samples: this.#n };
   }
 }
 
@@ -102,8 +106,8 @@ export async function collectHost(src: HostSources, worktreeRoot: string, sessio
 export async function sampleResources(src: HostSources): Promise<{ memFreeGB: number; swapUsedGB: number }> {
   const mem = meminfo(await src.readFile('/proc/meminfo'));
   return {
-    memFreeGB: gb(need(mem, 'MemAvailable') / KIB_PER_GIB),
-    swapUsedGB: gb(Math.max(0, need(mem, 'SwapTotal') - need(mem, 'SwapFree')) / KIB_PER_GIB),
+    memFreeGB: need(mem, 'MemAvailable') / KIB_PER_GIB,
+    swapUsedGB: Math.max(0, need(mem, 'SwapTotal') - need(mem, 'SwapFree')) / KIB_PER_GIB,
   };
 }
 

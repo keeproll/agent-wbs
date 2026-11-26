@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, test } from 'vitest';
+import { memoryPressure } from '../../src/resources/concurrency.ts';
 import { CpuMeter, SessionMemory, collectHost, nodeHostSources, sampleResources, type HostSources } from '../../src/resources/host.ts';
 
 const GiB = 1024 ** 3;
@@ -88,6 +89,24 @@ describe('sampleResources — /runner/concurrency resources', () => {
   test('여유 메모리는 MemAvailable, swap은 사용량(전체−여유)', async () => {
     const src = fake({ ...FILES, '/proc/meminfo': meminfo(8 * 1048576, 3 * 1048576, 2 * 1048576, 1.5 * 1048576) });
     expect(await sampleResources(src)).toEqual({ memFreeGB: 3, swapUsedGB: 0.5 });
+  });
+});
+
+describe('리뷰 4·7 — 판단 입력은 버림하지 않는다', () => {
+  test('swap 사용이 4KiB뿐이어도 0이 아니고 압박으로 판단된다', async () => {
+    const src = fake({ ...FILES, '/proc/meminfo': meminfo(8 * 1048576, 6 * 1048576, 2 * 1048576, 2 * 1048576 - 4) });
+    const r = await sampleResources(src);
+    expect(r.swapUsedGB).toBeGreaterThan(0);
+    expect(memoryPressure(r.memFreeGB, r.swapUsedGB, 4)).toBe(true);
+  });
+
+  test('세션 평균 메모리는 정밀도를 지킨다 — 0이나 작게 잘린 값을 보내지 않는다', () => {
+    const tiny = new SessionMemory();
+    tiny.record(0.001);
+    expect(tiny.report()).toEqual({ perSessionGB: 0.001, samples: 1 });
+    const m = new SessionMemory();
+    m.record(1.009);
+    expect(m.report().perSessionGB).toBe(1.009);
   });
 });
 
