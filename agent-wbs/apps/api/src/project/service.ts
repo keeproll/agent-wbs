@@ -6,10 +6,11 @@ import {
 } from './db.ts';
 import { draftErrors, draftHolds, draftSplitSummary, storeDraft, type DraftInput, type StoredDraft } from './draft.ts';
 import { ProjectError } from './errors.ts';
-import { mergeChanges, mergeCommitOrder, nextMdList, type Change, type PathChange } from './inputs.ts';
+import { mergeChanges, nextMdList, type Change, type PathChange } from './inputs.ts';
 import {
   bootstrapJob, createPlanningJob, currentRunnerJob, followUpJob, lockPlanningJob, log, resetSteps, setStep, steps, type PlanningJob,
 } from './jobs.ts';
+import { analyze, latestOpen, receive, type CommitState, type Ledger } from './ledger.ts';
 import { parseRepoUrl } from './repo.ts';
 import { BOOT_STEPS, INPUT_STEPS, LEAD_STEPS, RERUN_STEPS, type StepStatus } from './steps.ts';
 
@@ -444,7 +445,7 @@ async function resume(db: Db, job: PlanningJob, epoch: number): Promise<string> 
 
 /* ---------------- ② 입력 자료 변경 ---------------- */
 
-interface PushedCommit { sha: string; at: string; author: string; message: string }
+interface PushedCommit { sha: string; depth: number; at: string; author: string; message: string }
 interface ChangedInput { commitSha: string; path: string; change: Change; added: number; deleted: number }
 
 /** Runner의 주기 확인 결과(G§8.4). 이미 받은 커밋·이미 입력 버전인 커밋은 다시 올리지 않는다. */
@@ -456,29 +457,48 @@ export async function reportInputChanges(db: Db, body: { commits: PushedCommit[]
   // prototype/ 밖(src/ 등 Agent 작업)은 입력 변경이 아니다. 입력 파일이 하나도 없는 커밋은 올리지 않는다(G§4.2 ②, 리뷰 6).
   const inputFiles = new Map(body.commits.map((c) => [c.sha,
     body.files.filter((f) => f.commitSha === c.sha && isInput(f.path)).map(({ path, change, added, deleted }) => ({ path, change, added, deleted }))]));
-  const rows = (await db.query<{ sha: string; state: string; seq: string | null }>(
-    "select sha,state,files->>'seq' seq from input_change_commits where project_id=$1 for update", [project.id])).rows;
-  const existing = rows.filter((r) => r.state !== 'analyzed').sort((a, b) => Number(a.seq) - Number(b.seq)).map((r) => r.sha);
-  const settled = new Set([...rows.filter((r) => r.state === 'analyzed').map((r) => r.sha),
-    ...(await db.query<{ sha: string }>('select commit_sha sha from input_versions where project_id=$1', [project.id])).rows.map((r) => r.sha)]);
-  // commits는 main 이력 순서(오래된 것 먼저)다. 이미 받은 커밋과 겹치면 그 상대 순서로 새 커밋의 자리를 정한다(재리뷰 R1).
-  const batch = body.commits.map((c) => c.sha).filter((sha) => settled.has(sha) || existing.includes(sha) || (inputFiles.get(sha)?.length ?? 0) > 0);
-  const order = mergeCommitOrder(existing, batch, settled);
-  if (!order) throw new ProjectError('VALIDATION_FAILED', { errors: [{ path: 'commits', rule: 'order', message: '이미 받은 커밋 순서와 다른 순서로 보고했습니다. main 이력 순서(오래된 것 먼저)로 다시 보고하세요.' }] });
-  // seq는 「아직 분석하지 않은 커밋」의 순서다. 합친 순서대로 기존 최댓값 뒤에 다시 매긴다(분석한 커밋의 seq는 그대로).
-  const base = Math.max(0, ...rows.map((r) => Number(r.seq ?? 0)));
-  for (const [i, sha] of order.entries()) {
-    const seq = base + i + 1;
-    if (existing.includes(sha)) {
-      await db.query("update input_change_commits set files=jsonb_set(files,'{seq}',to_jsonb($3::int)) where project_id=$1 and sha=$2", [project.id, sha, seq]);
-      continue;
-    }
-    const commit = body.commits.find((c) => c.sha === sha);
-    // input_change_commits에는 커밋 정보 열이 없어 files jsonb에 {seq,at,author,message,files[]}를 함께 둔다.
-    await db.query("insert into input_change_commits(project_id,sha,files,state) values($1,$2,$3::jsonb,'pending')",
-      [project.id, sha, JSON.stringify({ seq, at: commit?.at, author: commit?.author, message: commit?.message, files: inputFiles.get(sha) ?? [] })]);
-  }
+  const before = await loadLedger(db, project.id);
+  // 순서는 도착 순서가 아니라 커밋의 depth로 정한다(입력 원장 불변식, ledger.ts).
+  const result = receive(before, body.commits.map((c) => ({ sha: c.sha, depth: c.depth, hasInput: (inputFiles.get(c.sha)?.length ?? 0) > 0 })));
+  if ('error' in result) throw new ProjectError('VALIDATION_FAILED', { errors: [result.error] });
+  await persistLedger(db, project.id, before, result.ledger, new Map(body.commits.map((c) => [c.sha, { at: c.at, author: c.author, message: c.message, files: inputFiles.get(c.sha) ?? [] }])));
   await changeEvent(db, project.id, { kind: 'input_changes' });
+}
+
+interface CommitMeta { at: string; author: string; message: string; files: unknown[] }
+/** DB의 입력 버전·입력 커밋을 원장으로 읽는다. 버전 커밋의 깊이는 같은 SHA의 입력 커밋 행에서 읽는다. */
+async function loadLedger(db: Db, projectId: string): Promise<Ledger> {
+  const rows = (await db.query<{ sha: string; depth: number; state: CommitState; v: number | null }>(
+    `select c.sha,(c.files->>'depth')::int depth,c.state,v.v from input_change_commits c left join input_versions v on v.id=c.analyzed_in_version
+     where c.project_id=$1 for update of c`, [projectId])).rows;
+  const versions = (await db.query<{ v: number; sha: string }>('select v,commit_sha sha from input_versions where project_id=$1 order by v', [projectId])).rows;
+  return {
+    versions: versions.map((v) => ({ v: v.v, sha: v.sha, depth: rows.find((r) => r.sha === v.sha)?.depth ?? null })),
+    commits: rows.map((r) => ({ sha: r.sha, depth: r.depth, state: r.state, version: r.v })),
+  };
+}
+/** 원장의 바뀐 부분만 DB에 쓴다. 새 커밋은 추가하고, 상태·포함 버전이 바뀐 커밋은 고친다. */
+async function persistLedger(db: Db, projectId: string, before: Ledger, after: Ledger, meta: ReadonlyMap<string, CommitMeta>): Promise<void> {
+  const versionIds = new Map((await db.query<{ v: number; id: string }>('select v,id from input_versions where project_id=$1', [projectId])).rows.map((r) => [r.v, r.id]));
+  for (const c of after.commits) {
+    const old = before.commits.find((b) => b.sha === c.sha);
+    const versionId = c.version === null ? null : versionIds.get(c.version) ?? null;
+    if (!old) {
+      // input_change_commits에는 커밋 정보 열이 없어 files jsonb에 {depth,at,author,message,files[]}를 함께 둔다.
+      await db.query('insert into input_change_commits(project_id,sha,files,state,analyzed_in_version) values($1,$2,$3::jsonb,$4,$5)',
+        [projectId, c.sha, JSON.stringify({ depth: c.depth, ...meta.get(c.sha) }), c.state, versionId]);
+    } else if (old.state !== c.state || old.version !== c.version) {
+      await db.query('update input_change_commits set state=$3,analyzed_in_version=$4 where project_id=$1 and sha=$2', [projectId, c.sha, c.state, versionId]);
+    }
+  }
+  // 깊이를 몰랐던 확정 커밋(등록 커밋 v1)의 깊이를 처음 알게 되면 그 버전에 묶인 행으로 남긴다.
+  for (const v of after.versions) {
+    const old = before.versions.find((b) => b.v === v.v);
+    if (v.depth !== null && old?.depth === null && !after.commits.some((c) => c.sha === v.sha)) {
+      await db.query("insert into input_change_commits(project_id,sha,files,state,analyzed_in_version) values($1,$2,$3::jsonb,'analyzed',$4) on conflict (project_id,sha) do nothing",
+        [projectId, v.sha, JSON.stringify({ depth: v.depth, ...meta.get(v.sha), files: [] }), versionIds.get(v.v)]);
+    }
+  }
 }
 
 async function pendingShas(db: Db, projectId: string): Promise<string[]> {
@@ -513,11 +533,12 @@ export async function analyzeInputs(db: Db, body: { updatedAt: string; commit: s
   }
   await assertCleanupDone(db);
   await assertSeen(db, project, body.updatedAt, body.commits);
-  // 최신 커밋만 고정한다. 옛 커밋을 고정하면서 그 뒤 커밋의 변경까지 분석 완료로 처리하면 입력 버전과 실제 내용이 어긋난다(리뷰 2).
-  const latest = (await db.query<{ sha: string }>(
-    "select sha from input_change_commits where project_id=$1 and state in ('pending','skipped') order by (files->>'seq')::bigint desc limit 1", [project.id])).rows[0]?.sha;
-  if (latest !== body.commit) {
-    throw new ProjectError('VALIDATION_FAILED', { errors: [{ path: 'commit', rule: 'latest', message: '감지된 커밋 중 가장 최근 커밋으로 분석해야 합니다.' }], details: { latest } });
+  // 원장 규칙: 가장 깊은(최신) 분석 대상 커밋만, 마지막 확정 커밋보다 깊을 때만 고정한다(입력 원장 불변식).
+  const ledger = await loadLedger(db, project.id);
+  const plan = analyze(ledger, body.commit);
+  if ('error' in plan) {
+    if (plan.error === 'unchanged') throw new ProjectError('INPUT_UNCHANGED');
+    throw new ProjectError('VALIDATION_FAILED', { errors: [{ path: 'commit', rule: plan.error === 'latest' ? 'latest' : 'reference', message: '감지된 커밋 중 가장 최근 커밋으로 분석해야 합니다.' }], details: { latest: latestOpen(ledger)?.sha } });
   }
   if (project.phase !== 'active') throw new ProjectError('INVALID_TRANSITION', { message: '초기 WBS를 승인한 뒤에 입력 변경을 분석합니다.' });
   if ((await db.query("select 1 from planning_jobs where project_id=$1 and kind='input_diff' and status in ('queued','running')", [project.id])).rowCount) {
@@ -526,18 +547,21 @@ export async function analyzeInputs(db: Db, body: { updatedAt: string; commit: s
   const previous = (await db.query<{ v: number; commit_sha: string; md_list: string[] }>(
     'select v,commit_sha,md_list from input_versions where project_id=$1 order by v desc limit 1', [project.id])).rows[0];
   if (!previous) throw new Error('입력 v1이 없습니다.');
-  // 분석 범위 = 이전 입력 커밋 다음부터 고정할 커밋까지의 아직 분석하지 않은 커밋(대기·분석 안 함), 받은 순서(seq)대로.
-  const commits = (await db.query<{ id: string; sha: string; files: { seq: number; files: (PathChange & { added: number; deleted: number })[] } }>(
-    "select id,sha,files from input_change_commits where project_id=$1 and state in ('pending','skipped') order by (files->>'seq')::bigint for update", [project.id])).rows;
+  // 분석 범위 = 원장이 정한 범위(마지막 확정 커밋보다 깊고 고정 커밋 이하인 분석 대상), 깊이 순.
+  const range = plan.range.map((c) => c.sha);
+  const commits = (await db.query<{ id: string; sha: string; files: { depth: number; files: (PathChange & { added: number; deleted: number })[] } }>(
+    "select id,sha,files from input_change_commits where project_id=$1 and sha=any($2::text[]) order by (files->>'depth')::int", [project.id, range])).rows;
   const ordered = commits.flatMap((c) => c.files.files);
   const changes = mergeChanges(ordered);
   const stats = changes.map((c) => ({ ...c, added: ordered.filter((f) => f.path === c.path).reduce((s, f) => s + f.added, 0),
     deleted: ordered.filter((f) => f.path === c.path).reduce((s, f) => s + f.deleted, 0) }));
   const version = previous.v + 1;
-  const versionId = (await db.query<{ id: string }>(
-    'insert into input_versions(project_id,v,commit_sha,files,md_list,changes,instruction) values($1,$2,$3,$4::jsonb,$5::jsonb,$6::jsonb,$7) returning id',
-    [project.id, version, body.commit, JSON.stringify(stats), JSON.stringify(nextMdList(previous.md_list, changes)), JSON.stringify(changes), body.instr ?? ''])).rows[0]?.id;
-  await db.query("update input_change_commits set state='analyzed',analyzed_in_version=$2 where id=any($1::uuid[])", [commits.map((c) => c.id), versionId]);
+  // 새 버전 행을 먼저 만든다. persistLedger가 버전 번호로 이 행을 찾아 범위 커밋을 묶는다.
+  await db.query(
+    'insert into input_versions(project_id,v,commit_sha,files,md_list,changes,instruction) values($1,$2,$3,$4::jsonb,$5::jsonb,$6::jsonb,$7)',
+    [project.id, version, body.commit, JSON.stringify(stats), JSON.stringify(nextMdList(previous.md_list, changes)), JSON.stringify(changes), body.instr ?? '']);
+  if (plan.version.v !== version) throw new Error('입력 버전 번호가 원장과 다릅니다.');
+  await persistLedger(db, project.id, ledger, plan.ledger, new Map());
   const jobId = await createPlanningJob(db, { projectId: project.id, kind: 'input_diff', instruction: body.instr ?? '', stepKeys: INPUT_STEPS });
   await log(db, { id: jobId, project_id: project.id }, `입력 v${String(version)} 고정 — 차이 분석 대기`);
   await enqueueJob(db, { projectId: project.id, kind: 'input_diff', epoch, dedupKey: `input_diff:${jobId}:1`,

@@ -38,6 +38,8 @@ const SHA1 = 'a'.repeat(40);
 const SHA2 = 'b'.repeat(40);
 const SHA3 = 'c'.repeat(40);
 const SHA4 = 'd'.repeat(40);
+/** 테스트 이력의 main 첫 부모 깊이: 등록 커밋 A(SHA1) 다음으로 B=2, C=3, D=4 */
+const depthOf = (sha: string) => ({ a: 1, b: 2, c: 3, d: 4 } as Record<string, number>)[sha.slice(0, 1)] ?? 1;
 const REPO = 'https://github.com/acme/web';
 const STRUCTURE = { uiux: true, uiuxFiles: 12, docs: ['prototype/docs/guide.md'], src: false, contracts: false, agentwbs: false };
 let cookie = '';
@@ -125,7 +127,8 @@ beforeAll(async () => {
   await ownerPool.query('update schedule_policy set assume_rate=0.5');
   // M2-05: 초기 분석·차이 분석은 외부 효과 job이라 현재 PC가 외부 쓰기 권한을 가져야 보고를 받는다.
   await ownerPool.query("insert into external_write_authority(singleton,host_id,generation,state) values(true,'host-1',1,'granted')");
-});
+// 테스트 DB를 새로 만들고 마이그레이션 전체를 돌린다. 다른 작업과 PC를 함께 쓸 때 기본 10초를 넘긴 적이 있어 넉넉히 둔다.
+}, 60_000);
 afterAll(async () => { await app.close(); await pool.end(); await ownerPool.end(); });
 
 describe('project 등록(G§4.2 ①, contracts §2.2)', () => {
@@ -479,7 +482,7 @@ describe('project 초기 WBS 초안과 승인(D-33)', () => {
 describe('project 입력 자료 변경·분석·분석 안 함(G§4.2 ②)', () => {
   const files = (sha: string, path: string, change = 'modified') => ({ commitSha: sha, path, change, added: 3, deleted: 1 });
   const report = (commits: string[], changed: object[]) => runner('/api/runner/input-changes', {
-    commits: commits.map((sha, i) => ({ sha, at: `2026-11-2${String(6 + i)}T0${String(i)}:00:00Z`, author: '팀장', message: `입력 수정 ${String(i)}` })), files: changed });
+    commits: commits.map((sha, i) => ({ sha, depth: depthOf(sha), at: `2026-11-2${String(6 + i)}T0${String(i)}:00:00Z`, author: '팀장', message: `입력 수정 ${String(i)}` })), files: changed });
 
   test('Runner가 보고한 입력 커밋을 감지 목록에 올리고, 같은 보고는 한 번만 남긴다', async () => {
     const changes = [files(SHA2, 'prototype/docs/guide.md'), files(SHA2, 'prototype/docs/new.md', 'added')];
@@ -575,7 +578,7 @@ describe('project 리뷰 지적 회귀(M2-03-REVIEW 1~8)', () => {
     expect((await runner(`/api/planning/bootstrap/${current.id}/draft`, { fence: current.fence, ...d })).statusCode).toBe(201);
     return { current, s: await state() };
   }
-  const commit = (sha: string, at: string) => ({ sha, at, author: 'reviewer', message: sha.slice(0, 1) });
+  const commit = (sha: string, at: string) => ({ sha, depth: depthOf(sha), at, author: 'reviewer', message: sha.slice(0, 1) });
   const file = (sha: string, path: string) => ({ commitSha: sha, path, change: 'added', added: 1, deleted: 0 });
   const progressOf = (job: { id: string; fence: number }, stepKey: string, status: string, note?: string) =>
     runner(`/api/runner/bootstrap/${job.id}/progress`, { fence: job.fence, stepKey, status, at: AT_NOW(), ...(note && { note }) });
@@ -683,6 +686,25 @@ describe('project 리뷰 지적 회귀(M2-03-REVIEW 1~8)', () => {
     expect((await runner('/api/runner/input-changes', { commits: [commit(SHA2, '2026-11-26T01:00:00Z'), commit(SHA3, '2026-11-26T01:00:00Z'), commit(SHA4, '2026-11-26T01:00:00Z')],
       files: [file(SHA2, 'prototype/docs/older.md'), file(SHA4, 'prototype/docs/later.md')] })).statusCode).toBe(204);
     expect((await state()).changeCommits.map((c) => `${c.sha.slice(0, 1)}:${c.state}`)).toEqual(['b:analyzed', 'c:analyzed', 'd:pending']);
+  });
+
+  test('F1. 확정한 C보다 앞의 B가 나중에 따로 들어와도 분석 대상이 아니고 입력 버전이 거꾸로 가지 않는다(리뷰 재현)', async () => {
+    const { s } = await fresh();
+    expect((await lead('POST', '/api/project/bootstrap/approve', { revision: s.bootstrap.revision })).statusCode).toBe(200);
+    expect((await runner('/api/runner/input-changes', { commits: [commit(SHA3, AT_NOW())], files: [file(SHA3, 'prototype/docs/newer.md')] })).statusCode).toBe(204);
+    const before = await state();
+    expect((await lead('POST', '/api/project/inputs', { updatedAt: before.updatedAt, commit: SHA3, commits: [SHA3] })).statusCode).toBe(202);
+    const diff = await lease('input_diff');
+    await progress(diff.id, diff.fence, 'check', 'fail', '차이 분석 실패');
+    await finishJob(diff.id);
+    expect((await runner('/api/runner/input-changes', { commits: [commit(SHA2, AT_NOW())], files: [file(SHA2, 'prototype/docs/older.md')] })).statusCode).toBe(204);
+    expect((await runner('/api/runner/input-changes', { commits: [commit(SHA2, AT_NOW()), commit(SHA3, AT_NOW())],
+      files: [file(SHA2, 'prototype/docs/older.md'), file(SHA3, 'prototype/docs/newer.md')] })).statusCode).toBe(204);
+    const after = await state();
+    expect(after.changeCommits.map((c) => `${c.sha.slice(0, 1)}:${c.state}`)).toEqual(['b:analyzed', 'c:analyzed']);
+    const back = await lead('POST', '/api/project/inputs', { updatedAt: after.updatedAt, commit: SHA2, commits: [SHA2] });
+    expect(back.statusCode).toBe(409);
+    expect((await state()).inputs.map((i) => i.commit)).toEqual([SHA1, SHA3]);
   });
 
   test('R1. 이미 받은 순서와 어긋나는 보고는 400이고 아무것도 바꾸지 않는다', async () => {

@@ -4,7 +4,7 @@ import { OPERATIONS } from '@awbs/shared/api';
 import { describe, expect, test } from 'vitest';
 import { draftErrors, draftHolds, draftSplitSummary, storeDraft } from '../src/project/draft.ts';
 import { canonicalJson, judgedContent, subjectHash } from '../src/project/hash.ts';
-import { mergeChanges, mergeCommitOrder, nextMdList } from '../src/project/inputs.ts';
+import { mergeChanges, nextMdList } from '../src/project/inputs.ts';
 import { parseRepoUrl } from '../src/project/repo.ts';
 import { bootPhase, BOOT_STEPS } from '../src/project/steps.ts';
 import { draft, met, task } from './project-fixture.ts';
@@ -161,16 +161,3 @@ describe('project 계약의 오류 선언(리뷰 9)', () => {
   });
 });
 
-describe('project 입력 커밋 순서 합치기(재리뷰 R1)', () => {
-  test('새 커밋은 배치 안에서 뒤따르는 기존 커밋 바로 앞에 놓는다', () => {
-    expect(mergeCommitOrder(['C'], ['B', 'C'], new Set())).toEqual(['B', 'C']);
-    expect(mergeCommitOrder(['A', 'D'], ['A', 'B', 'C', 'D', 'E'], new Set())).toEqual(['A', 'B', 'C', 'D', 'E']);
-    expect(mergeCommitOrder(['A'], ['B'], new Set())).toEqual(['A', 'B']);
-  });
-  test('이미 고정한 커밋과 그 앞의 커밋은 버린다', () => {
-    expect(mergeCommitOrder([], ['B', 'C', 'D'], new Set(['C']))).toEqual(['D']);
-  });
-  test('기존 순서와 어긋나면 null', () => {
-    expect(mergeCommitOrder(['B', 'C'], ['C', 'D', 'B'], new Set())).toBeNull();
-  });
-});

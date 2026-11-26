@@ -54,9 +54,9 @@ export async function projectState(db: Db) {
     `select v.v,${iso('v.created_at')} at,v.commit_sha commit,v.md_list "mdList",v.changes,v.instruction,r.result->>'text' result,
        (select count(*)::int from tasks t where t.src_input_version=v.id and t.deleted_at is null) "taskCount"
      from input_versions v left join input_version_results r on r.input_version=v.id where v.project_id=$1 order by v.v`, [p.id])).rows;
-  // 받은 순서(seq) = main 이력 순서. 커밋 시각으로 정렬하지 않는다.
+  // 커밋 순서는 depth(main 첫 부모 이력의 깊이)다. 입력 파일이 없는 행은 확정 커밋의 깊이만 기록한 것이라 목록에 넣지 않는다.
   const changeCommits = (await db.query<{ sha: string; state: 'pending' | 'skipped' | 'analyzed'; files: { at: string; author: string; message: string; files: unknown[] } }>(
-    "select sha,state,files from input_change_commits where project_id=$1 order by (files->>'seq')::bigint", [p.id])).rows
+    "select sha,state,files from input_change_commits where project_id=$1 and jsonb_array_length(files->'files')>0 order by (files->>'depth')::int", [p.id])).rows
     .map((c) => ({ sha: c.sha, at: c.files.at, author: c.files.author, message: c.files.message, state: c.state, files: c.files.files }));
   const inputPlanning = (await db.query<PlanningJob & { version: string | null }>(
     `select j.id,j.project_id,j.kind,j.run_no,j.status,j.instruction,
