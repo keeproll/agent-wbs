@@ -4,7 +4,7 @@
  */
 import type { Route } from '@playwright/test';
 import type { ResponseOf } from '../../src/shared/api/contract.ts';
-import { json, type FakeApi } from './fake-api.ts';
+import { ACTIVE_PROJECT, json, type FakeApi } from './fake-api.ts';
 
 export const V1 = '2026-11-05T01:00:00.000Z';
 export const V2 = '2026-11-05T02:00:00.000Z';
@@ -140,6 +140,7 @@ export function echoPut(api: FakeApi, path: string, initial: { updatedAt: string
 
 /** 설정 화면에 필요한 GET을 모두 기본값으로 건다. */
 export function settingsApi(api: FakeApi, runner: ResponseOf<'getRunnerState'> = RUNNER_FULL) {
+  api.on('GET /api/project', (route) => json(route, 200, { ...ACTIVE_PROJECT, repo: { url: 'https://github.com/verum-sdn/agent-wbs', owner: 'verum-sdn', name: 'agent-wbs', branch: 'main', baseCommit: null } }));
   api.on('GET /api/runner-state', (route) => json(route, 200, runner));
   api.on('GET /api/schedule', (route) => json(route, 200, SCHEDULE));
   api.on('GET /api/alerts', (route) => json(route, 200, { items: [] }));

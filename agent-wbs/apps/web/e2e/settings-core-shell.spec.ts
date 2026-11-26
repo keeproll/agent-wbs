@@ -43,7 +43,9 @@ test('UAT-SHELL-01 설정 6탭: 주소·선택 강조가 함께 바뀌고 새로
 });
 
 test('등록 전에도 설정은 열리고 등록 전 안내를 보인다(P L6878)', async ({ page }) => {
-  settingsApi(await fakeApi(page, { project: NO_PROJECT }));
+  const api = await fakeApi(page);
+  settingsApi(api);
+  api.on('GET /api/project', (route) => json(route, 200, NO_PROJECT));
   await page.goto('/settings/agent');
   await expect(page.getByRole('note').filter({ hasText: '프로젝트 등록 전 — 실행 환경 · 정책 설정은 지금 정해 두면 등록 후 그대로 적용됩니다.' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Agent 역할 · 기본 Workflow' })).toBeVisible();

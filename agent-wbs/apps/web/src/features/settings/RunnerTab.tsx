@@ -28,16 +28,38 @@ type RunnerState = ResponseOf<'getRunnerState'>;
 const at = (value: string | null | undefined) => (value ? formatDateTime(value) : '—');
 const pct = (rate: number) => `${String(Math.round(rate * 100))}%`;
 
-export function RunnerTab() {
+/**
+ * 빠진 목록을 빈 목록으로 채운다. 계약상 서버는 모두 보내지만, 한 칸이 빠져도 화면 전체가 깨지지 않게 한다
+ * (예: 앱 틀 시험의 가짜 API는 connection만 보낸다).
+ */
+function normalize(data: RunnerState | undefined): RunnerState | undefined {
+  if (!data) return undefined;
+  const conc = (data as Partial<RunnerState>).concurrency;
+  return {
+    ...data,
+    readiness: data.readiness ?? null,
+    host: data.host ?? null,
+    hostHistory: data.hostHistory ?? [],
+    sessions: data.sessions ?? [],
+    unconfirmedHolds: data.unconfirmedHolds ?? [],
+    usage: data.usage ?? [],
+    gaps: data.gaps ?? [],
+    observation: data.observation ?? { budget: { dev: 0, qa: 0 }, profiles: [] },
+    concurrency: conc ? { ...conc, conflictWaits: conc.conflictWaits ?? [], adjustments: conc.adjustments ?? [] } : (undefined as unknown as RunnerState['concurrency']),
+  };
+}
+
+export function RunnerTab({ repoUrl }: { repoUrl: string | null }) {
   const runner = useApiQuery('getRunnerState', {}, { topics: ['runner'] });
   useRefreshError(runner, 'Runner 상태 최신 내용 불러오기');
+  const data = normalize(runner.data);
   return (
     <>
-      <GithubCard />
-      <ConnectionCard runner={runner.data} />
+      <GithubCard repoUrl={repoUrl} />
+      <ConnectionCard runner={data} />
       <ReadinessCard runner={runner} />
-      <CapacityCard runner={runner.data} />
-      <ConcurrencyCard runner={runner.data} />
+      <CapacityCard runner={data} />
+      <ConcurrencyCard runner={data} />
     </>
   );
 }
@@ -46,7 +68,7 @@ export function RunnerTab() {
 
 const TOKEN_RE = /^(github_pat_|ghp_)[A-Za-z0-9_]{20,}$/;
 
-function GithubCard() {
+function GithubCard({ repoUrl }: { repoUrl: string | null }) {
   const { client } = useApi();
   const notify = useNotice();
   const { query, queryKey, load } = useSettingQuery('getGithubSettings', 'GitHub 연결', ['settings', 'runner']);
@@ -114,6 +136,7 @@ function GithubCard() {
           </Row>
           <div className="kv" style={{ gridTemplateColumns: '130px minmax(0,1fr)', margin: '8px 0' }}>
             <span className="kv-l">계정</span><span className="kv-v mono">{data.account ?? '—'}</span>
+            <span className="kv-l">저장소</span><span className="kv-v mono">{repoUrl ? `${repoUrl} (private)` : '프로젝트 등록 전'}</span>
             <span className="kv-l">토큰</span>
             <span className="kv-v">{data.mode === 'gh' ? '사용 안 함 (gh 로그인)' : (data.tokenSet ? `●●●● 저장됨 · 만료 ${data.expiresAt ? at(data.expiresAt) : '—'}` : '없음')}</span>
           </div>
@@ -374,7 +397,7 @@ function ConcurrencyCard({ runner }: { runner: RunnerState | undefined }) {
   });
 
   const host = runner?.host ?? null;
-  const conc = runner?.concurrency;
+  const conc = runner?.concurrency as RunnerState['concurrency'] | undefined;
   const rec = host?.recommended;
   const form = cc.form;
   const isAuto = form?.mode === 'auto';
@@ -554,8 +577,8 @@ function ConcurrencyCard({ runner }: { runner: RunnerState | undefined }) {
           <TableScroll minWidth={420} label="조절 기록 표">
             <div className="gtb" style={{ margin: 0 }}>
               <div className="gtr h" style={{ gridTemplateColumns: '148px 72px 76px minmax(120px,1fr)', minWidth: 0 }}><span className="gc">시각</span><span className="gc">주체</span><span className="gc">한도</span><span className="gc">사유</span></div>
-              {runner && runner.concurrency.adjustments.length === 0 && <div className="gtr"><span className="gc muted">조절 기록이 없습니다. Runner가 한도를 바꾸면 여기에 남습니다.</span></div>}
-              {runner?.concurrency.adjustments.slice().reverse().slice(0, 6).map((a) => (
+              {runner?.concurrency && runner.concurrency.adjustments.length === 0 && <div className="gtr"><span className="gc muted">조절 기록이 없습니다. Runner가 한도를 바꾸면 여기에 남습니다.</span></div>}
+              {runner?.concurrency?.adjustments.slice().reverse().slice(0, 6).map((a) => (
                 <div key={`${a.at}-${String(a.to)}`} className="gtr" style={{ gridTemplateColumns: '148px 72px 76px minmax(120px,1fr)', minWidth: 0 }}>
                   <span className="gc mono">{at(a.at)}</span><span className="gc">{a.by}</span>
                   <span className="gc"><span className={a.to > a.from ? 'sc sc-ok' : a.to < a.from ? 'sc sc-warn' : 'sc sc-none'}>{a.from} → {a.to}</span></span>

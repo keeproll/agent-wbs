@@ -28,9 +28,15 @@ export function SettingsPage() {
   if (tab !== undefined && !isSettingsTab(tab)) return <Navigate to="/settings/runner" replace />;
   return (
     <MenuScreen menu="settings">
-      {(project) => <SettingsBody tab={tab ?? 'runner'} preReg={preRegNotice(project.state)} />}
+      {(project) => <SettingsBody tab={tab ?? 'runner'} preReg={preRegNotice(project.state)} repoUrl={repoUrlOf(project)} />}
     </MenuScreen>
   );
+}
+
+/** 등록된 프로젝트의 저장소 주소. 등록 전이면 null */
+function repoUrlOf(project: unknown): string | null {
+  const repo = (project as { repo?: { url?: unknown } }).repo;
+  return typeof repo?.url === 'string' ? repo.url : null;
 }
 
 /** 초기 WBS 승인 전 안내(P L6878 문구 그대로) */
@@ -51,7 +57,7 @@ function useBadges(): Partial<Record<SettingsTab, { count: number; alert: boolea
   return { runner: { count, alert: count > 0 } };
 }
 
-function SettingsBody({ tab, preReg }: { tab: SettingsTab; preReg: string | null }) {
+function SettingsBody({ tab, preReg, repoUrl }: { tab: SettingsTab; preReg: string | null; repoUrl: string | null }) {
   const { anyDirty, report } = useDirtyRegistry();
   useEditGuard(anyDirty);
   const badges = useBadges();
@@ -81,7 +87,7 @@ function SettingsBody({ tab, preReg }: { tab: SettingsTab; preReg: string | null
           })}
         </nav>
         <p className="fhint" style={{ margin: '-4px 0 12px' }}>{current.desc}</p>
-        {tab === 'runner' && <RunnerTab />}
+        {tab === 'runner' && <RunnerTab repoUrl={repoUrl} />}
         {tab === 'agent' && <AgentTab />}
         {tab === 'plan' && <PlanTab />}
         {tab === 'system' && <SystemTab />}
