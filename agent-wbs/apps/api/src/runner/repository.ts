@@ -1,5 +1,5 @@
 import type { PoolClient, schema, ExecPolicyRow } from '@awbs/db';
-import { placeModel, modelRanks, type ModelSettings, type Agent, type AttemptKind } from '@awbs/shared';
+import { attemptKey, placeModel, modelRanks, type ModelSettings, type Agent, type AttemptKind } from '@awbs/shared';
 import assert from 'node:assert/strict';
 
 export function required<T>(value: T | null | undefined): T { assert(value !== null && value !== undefined); return value; }
@@ -105,7 +105,7 @@ export class RunnerRepository {
     const n = (await this.history(task.id)).length + 1;
     const row = required((await this.client.query<{ id: string }>(`insert into task_attempts(project_id,task,attempt_key,attempt_no,job,base_sha,head_sha,spec_revision,input_version,kind,agent,status,started_at,model_id,effort,grade_adjust,resumed_from,branch,generation)
       values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'running',clock_timestamp(),$12,$13,$14,$15,$16,$17) returning id`,
-    [task.project_id, task.id, `${task.task_key}-A${n}`, n, job.id, job.payload.baseCommit, head, required(spec).revision, input?.id ?? task.src_input_version, kind,
+    [task.project_id, task.id, attemptKey(task.task_key, n), n, job.id, job.payload.baseCommit, head, required(spec).revision, input?.id ?? task.src_input_version, kind,
       job.payload.agent, model, effort, adjust, resumed, job.payload.branch, job.generation])).rows[0]);
     await this.client.query('update execution_holds set attempt=$2 where job=$1', [job.id, row.id]);
     await this.client.query("update tasks set status=$2,verif_state=$3,execution_head_sha=$4,act_start=coalesce(act_start,clock_timestamp()) where id=$1", [task.id, kind === 'qa' ? 'qa' : kind === 'reverify' ? 'verifying' : 'running',kind === 'qa' || kind === 'reverify' ? 'running' : 'none',head]);

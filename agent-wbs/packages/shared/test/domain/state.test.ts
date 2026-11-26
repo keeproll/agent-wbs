@@ -174,6 +174,15 @@ test('automatic rework boundary is three; a leader button allows one additional 
   expect(claimIssue({ ...input, previousAttempt: { ...attempt, kind: 'qa', status: 'failed', verificationResult: 'FAIL' } })).not.toBeNull();
 });
 
+test('claim은 자동 재시도·재작업의 저장된 한도를 따른다', () => {
+  const retry = claim({ status: 'failed', kind: 'dev', previousAttempt: { ...attempt, status: 'failed' }, leaderRequested: false });
+  expect(claimIssue({ ...retry, autoRetryLimit: 4, history: failedHistory('dev', 4) })).toBeNull();
+  expect(claimIssue({ ...retry, autoRetryLimit: 0, history: failedHistory('dev', 1) })).not.toBeNull();
+  const rework = claim({ status: 'rework', kind: 'rework', leaderRequested: false, previousAttempt: { ...attempt, kind: 'qa', verificationResult: 'FAIL' } });
+  expect(claimIssue({ ...rework, autoReworkLimit: 4, history: reworkHistory(3) })).toBeNull();
+  expect(claimIssue({ ...rework, autoReworkLimit: 0, history: [] })).not.toBeNull();
+});
+
 test.each(['headSha', 'specRevision', 'inputVersion'] as const)('%s change invalidates Gate and requires reverify', field => {
   const changed = { ...basis, [field]: field === 'headSha' ? 'changed' : 2 };
   expect(lifecycleTransition('gate', { type: 'invalidate', basis: changed, verification: pass })).toBe('verifying');

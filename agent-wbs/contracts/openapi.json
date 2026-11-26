@@ -14908,6 +14908,596 @@
         }
       }
     },
+    "/api/settings/split/violations": {
+      "get": {
+        "operationId": "getSplitViolations",
+        "summary": "분할 기준 위반·의심 목록과 배지",
+        "tags": [
+          "lead"
+        ],
+        "security": [
+          {
+            "leadSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "분할 기준 위반·의심 목록과 배지",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "count",
+                    "items"
+                  ],
+                  "properties": {
+                    "count": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "taskKey",
+                          "title",
+                          "wbs",
+                          "violations",
+                          "suspicions",
+                          "cautions",
+                          "exceptions",
+                          "approvalHolds",
+                          "items"
+                        ],
+                        "properties": {
+                          "taskKey": {
+                            "$ref": "#/components/schemas/TaskKey"
+                          },
+                          "title": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          },
+                          "wbs": {
+                            "type": "string"
+                          },
+                          "violations": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "suspicions": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "cautions": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "exceptions": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "approvalHolds": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "items": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "rule",
+                                "label",
+                                "mode",
+                                "status",
+                                "detail",
+                                "judgement"
+                              ],
+                              "properties": {
+                                "rule": {
+                                  "type": "string"
+                                },
+                                "label": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "pattern": "\\S"
+                                },
+                                "mode": {
+                                  "enum": [
+                                    "auto",
+                                    "judge"
+                                  ]
+                                },
+                                "status": {
+                                  "enum": [
+                                    "통과",
+                                    "의심",
+                                    "위반",
+                                    "주의",
+                                    "판단",
+                                    "예외",
+                                    "꺼짐"
+                                  ]
+                                },
+                                "detail": {
+                                  "type": "string"
+                                },
+                                "judgement": {
+                                  "anyOf": [
+                                    {
+                                      "enum": [
+                                        "met",
+                                        "not_met",
+                                        "missing"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "LEAD_UNAUTHORIZED"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "FORBIDDEN_PRINCIPAL"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "INTERNAL"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error",
+            "description": "UNAVAILABLE"
+          }
+        },
+        "x-error-codes": {
+          "401": [
+            "LEAD_UNAUTHORIZED"
+          ],
+          "403": [
+            "FORBIDDEN_PRINCIPAL"
+          ],
+          "500": [
+            "INTERNAL"
+          ],
+          "503": [
+            "UNAVAILABLE"
+          ]
+        }
+      }
+    },
+    "/api/settings/agent-usage": {
+      "get": {
+        "operationId": "getAgentUsage",
+        "summary": "팀장 고정 Task·모델·하위 Agent 사용 현황",
+        "tags": [
+          "lead"
+        ],
+        "security": [
+          {
+            "leadSession": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "팀장 고정 Task·모델·하위 Agent 사용 현황",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "lockedTasks",
+                    "models",
+                    "subagents"
+                  ],
+                  "properties": {
+                    "lockedTasks": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "taskKey",
+                          "title",
+                          "role",
+                          "agent",
+                          "modelId",
+                          "effort"
+                        ],
+                        "properties": {
+                          "taskKey": {
+                            "$ref": "#/components/schemas/TaskKey"
+                          },
+                          "title": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          },
+                          "role": {
+                            "enum": [
+                              "dev",
+                              "qa"
+                            ]
+                          },
+                          "agent": {
+                            "$ref": "#/components/schemas/Agent"
+                          },
+                          "modelId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          },
+                          "effort": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          }
+                        }
+                      }
+                    },
+                    "models": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "agent",
+                          "modelId",
+                          "taskKeys"
+                        ],
+                        "properties": {
+                          "agent": {
+                            "$ref": "#/components/schemas/Agent"
+                          },
+                          "modelId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          },
+                          "taskKeys": {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/components/schemas/TaskKey"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "subagents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "defKey",
+                          "version",
+                          "taskKeys",
+                          "lastTaskKey",
+                          "lastAttemptKey",
+                          "lastUsedAt",
+                          "decisions",
+                          "failures",
+                          "reworkRate"
+                        ],
+                        "properties": {
+                          "id": {
+                            "$ref": "#/components/schemas/Id"
+                          },
+                          "defKey": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          },
+                          "version": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 2147483647
+                          },
+                          "taskKeys": {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/components/schemas/TaskKey"
+                            }
+                          },
+                          "lastTaskKey": {
+                            "anyOf": [
+                              {
+                                "$ref": "#/components/schemas/TaskKey"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "lastAttemptKey": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1,
+                                "pattern": "\\S"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "lastUsedAt": {
+                            "anyOf": [
+                              {
+                                "$ref": "#/components/schemas/Timestamp"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "decisions": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "failures": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "reworkRate": {
+                            "anyOf": [
+                              {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 1
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "LEAD_UNAUTHORIZED"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "FORBIDDEN_PRINCIPAL"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "INTERNAL"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error",
+            "description": "UNAVAILABLE"
+          }
+        },
+        "x-error-codes": {
+          "401": [
+            "LEAD_UNAUTHORIZED"
+          ],
+          "403": [
+            "FORBIDDEN_PRINCIPAL"
+          ],
+          "500": [
+            "INTERNAL"
+          ],
+          "503": [
+            "UNAVAILABLE"
+          ]
+        }
+      }
+    },
+    "/api/alerts/{id}/ack": {
+      "post": {
+        "operationId": "ackAlert",
+        "summary": "알림 확인(반복 가능, 현재 목록에서 제외)",
+        "tags": [
+          "lead"
+        ],
+        "security": [
+          {
+            "leadSession": []
+          }
+        ],
+        "x-version-rule": "none",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/OptionalIdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "알림 확인(반복 가능, 현재 목록에서 제외)",
+            "headers": {
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "VALIDATION_FAILED"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "LEAD_UNAUTHORIZED"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "FORBIDDEN_PRINCIPAL"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "NOT_FOUND"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "IDEMPOTENCY_CONFLICT"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "INTERNAL"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error",
+            "description": "UNAVAILABLE"
+          }
+        },
+        "x-error-codes": {
+          "400": [
+            "VALIDATION_FAILED"
+          ],
+          "401": [
+            "LEAD_UNAUTHORIZED"
+          ],
+          "403": [
+            "FORBIDDEN_PRINCIPAL"
+          ],
+          "404": [
+            "NOT_FOUND"
+          ],
+          "409": [
+            "IDEMPOTENCY_CONFLICT"
+          ],
+          "500": [
+            "INTERNAL"
+          ],
+          "503": [
+            "UNAVAILABLE"
+          ]
+        }
+      }
+    },
+    "/api/settings/readiness/check": {
+      "post": {
+        "operationId": "checkReadiness",
+        "summary": "Runner 준비 상태 다시 점검 요청",
+        "tags": [
+          "lead"
+        ],
+        "security": [
+          {
+            "leadSession": []
+          }
+        ],
+        "x-version-rule": "none",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/OptionalIdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Runner 준비 상태 다시 점검 요청",
+            "headers": {
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "readinessCheckRequest"
+                  ],
+                  "properties": {
+                    "readinessCheckRequest": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "LEAD_UNAUTHORIZED"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "FORBIDDEN_PRINCIPAL"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "IDEMPOTENCY_CONFLICT"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "INTERNAL"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error",
+            "description": "UNAVAILABLE"
+          }
+        },
+        "x-error-codes": {
+          "401": [
+            "LEAD_UNAUTHORIZED"
+          ],
+          "403": [
+            "FORBIDDEN_PRINCIPAL"
+          ],
+          "409": [
+            "IDEMPOTENCY_CONFLICT"
+          ],
+          "500": [
+            "INTERNAL"
+          ],
+          "503": [
+            "UNAVAILABLE"
+          ]
+        }
+      }
+    },
     "/api/settings/workflow": {
       "get": {
         "operationId": "getWorkflowSettings",
@@ -18211,6 +18801,16 @@
                         }
                       ]
                     },
+                    "checkedAt": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/Timestamp"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "updatedAt": {
                       "anyOf": [
                         {
@@ -18388,6 +18988,16 @@
                       ]
                     },
                     "expiresAt": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/Timestamp"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "checkedAt": {
                       "anyOf": [
                         {
                           "$ref": "#/components/schemas/Timestamp"
@@ -26058,6 +26668,14 @@
                   "mode": {
                     "$ref": "#/components/schemas/GithubMode"
                   },
+                  "jobId": {
+                    "$ref": "#/components/schemas/Id"
+                  },
+                  "fence": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2147483647
+                  },
                   "ok": {
                     "type": "boolean"
                   },
@@ -26149,9 +26767,13 @@
             "$ref": "#/components/responses/Error",
             "description": "RUNNER_UNAUTHORIZED"
           },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "NOT_FOUND"
+          },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT"
+            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, LEASE_LOST"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited",
@@ -26174,9 +26796,13 @@
           "401": [
             "RUNNER_UNAUTHORIZED"
           ],
+          "404": [
+            "NOT_FOUND"
+          ],
           "409": [
             "EPOCH_MISMATCH",
-            "IDEMPOTENCY_CONFLICT"
+            "IDEMPOTENCY_CONFLICT",
+            "LEASE_LOST"
           ],
           "429": [
             "RATE_LIMITED"
@@ -26549,6 +27175,14 @@
                       "type": "integer",
                       "minimum": 0,
                       "maximum": 9007199254740991
+                    },
+                    "readinessCheckRequest": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "githubMode": {
+                      "$ref": "#/components/schemas/GithubMode"
                     },
                     "ci": {
                       "type": "object",
@@ -27342,7 +27976,8 @@
                         "deploy_check",
                         "ci_retry",
                         "design_apply",
-                        "merge_followup"
+                        "merge_followup",
+                        "github_check"
                       ]
                     },
                     "minItems": 1,
@@ -32356,6 +32991,45 @@
               },
               "kind": {
                 "enum": [
+                  "github_check"
+                ]
+              },
+              "payload": {
+                "type": "object",
+                "required": [
+                  "mode"
+                ],
+                "properties": {
+                  "mode": {
+                    "$ref": "#/components/schemas/GithubMode"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "leaseUntil",
+              "fence",
+              "kind",
+              "payload"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/Id"
+              },
+              "leaseUntil": {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              "fence": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 2147483647
+              },
+              "kind": {
+                "enum": [
                   "bootstrap"
                 ]
               },
@@ -33544,6 +34218,9 @@
                         "id": {
                           "$ref": "#/components/schemas/Id"
                         },
+                        "planningKey": {
+                          "type": "string"
+                        },
                         "title": {
                           "type": "string"
                         },
@@ -33570,6 +34247,9 @@
                         },
                         "id": {
                           "$ref": "#/components/schemas/Id"
+                        },
+                        "cpKey": {
+                          "type": "string"
                         },
                         "title": {
                           "type": "string"
@@ -33618,6 +34298,9 @@
                         },
                         "attemptId": {
                           "$ref": "#/components/schemas/Id"
+                        },
+                        "attemptKey": {
+                          "type": "string"
                         },
                         "attemptKind": {
                           "$ref": "#/components/schemas/AttemptKind"
@@ -33763,6 +34446,9 @@
                     "id": {
                       "$ref": "#/components/schemas/Id"
                     },
+                    "attemptKey": {
+                      "type": "string"
+                    },
                     "taskKey": {
                       "$ref": "#/components/schemas/TaskKey"
                     },
@@ -33804,6 +34490,9 @@
                     },
                     "id": {
                       "$ref": "#/components/schemas/Id"
+                    },
+                    "verificationKey": {
+                      "type": "string"
                     },
                     "taskKey": {
                       "$ref": "#/components/schemas/TaskKey"
@@ -45682,6 +46371,9 @@
         "properties": {
           "id": {
             "$ref": "#/components/schemas/Id"
+          },
+          "verificationKey": {
+            "type": "string"
           },
           "taskKey": {
             "$ref": "#/components/schemas/TaskKey"

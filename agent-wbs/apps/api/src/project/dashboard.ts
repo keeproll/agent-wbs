@@ -15,23 +15,24 @@ export async function dashboard(client: PoolClient) {
   const deps = (await client.query<{ pred: string; succ: string; type: 'FS' | 'SS' }>('select pred,succ,dep_type type from task_dependencies')).rows;
   const blocked = new Set(live.filter((t) => isBlocked(tasks, deps, t.id)).map((t) => t.id));
   const schedule = project && tasks.length ? await scheduleView(client, project.id) : null;
-  const approvals = (await client.query<{ id: string; title: string; unresolved: number }>(`select p.id,p.title,count(*)::int unresolved from plannings p join planning_reviews r on r.planning=p.id
+  const approvals = (await client.query<{ id: string; planningKey: string; title: string; unresolved: number }>(`select p.id,p.planning_key "planningKey",p.title,count(*)::int unresolved from plannings p join planning_reviews r on r.planning=p.id
     where r.kind in ('diff','이견') and r.choice is null group by p.id,p.title order by p.created_at,p.id`)).rows;
-  const proposals = (await client.query<{ id: string; title: string; status: string }>("select id,title,status from change_proposals where deleted_at is null and status in ('review','changes','approved') order by created_at,id")).rows;
-  const attempts = (await client.query<{ task: string; taskKey: string; title: string; attemptId: string; attemptKind: string; agent: string }>(`select a.task,t.task_key "taskKey",t.title,a.id "attemptId",a.kind "attemptKind",a.agent
+  const proposals = (await client.query<{ id: string; cpKey: string; title: string; status: string }>('select id,cp_key "cpKey",title,status from change_proposals where deleted_at is null and status in (\'review\',\'changes\',\'approved\') order by created_at,id')).rows;
+  const attempts = (await client.query<{ task: string; taskKey: string; title: string; attemptId: string; attemptKey: string; attemptKind: string; agent: string }>(`select a.task,t.task_key "taskKey",t.title,a.id "attemptId",a.attempt_key "attemptKey",a.kind "attemptKind",a.agent
     from task_attempts a join tasks t on t.id=a.task where a.status='running' and t.deleted_at is null and t.status<>'cancelled' order by a.created_at,a.id`)).rows;
   const verifications = (await client.query<{ task: string; id: string; result: string; defects: number }>(`select distinct on(a.task) a.task,v.id,v.result,
     (select count(*)::int from defects d where d.verification=v.id and not exists(select 1 from defect_events e where e.defect=d.id and e.kind='resolved')) defects
     from verifications v join task_attempts a on a.id=v.attempt order by a.task,a.attempt_no desc,v.id desc`)).rows;
   const verificationOf = new Map(verifications.map((v) => [v.task, v]));
   const gates = await gateInputs(client, live.filter((t) => t.status === 'gate' || t.verif_state === 'pass').map((t) => t.id));
-  const recent = (await client.query(`select 'attempt' kind,${iso('coalesce(a.started_at,a.created_at)')} at,a.id,t.task_key "taskKey",a.agent,coalesce(a.summary,'') text,a.status,null result
+  const recent = (await client.query(`select 'attempt' kind,${iso('coalesce(a.started_at,a.created_at)')} at,a.id,t.task_key "taskKey",a.agent,coalesce(a.summary,'') text,a.status,null result,a.attempt_key display_key
     from task_attempts a join tasks t on t.id=a.task where t.deleted_at is null
-    union all select 'verification',${iso('v.created_at')},v.id,t.task_key,a.agent,v.actual,null,v.result::text
+    union all select 'verification',${iso('v.created_at')},v.id,t.task_key,a.agent,v.actual,null,v.result::text,
+    'V-'||substring(t.task_key from 6)||'-'||(select count(*) from verifications prev join task_attempts pa on pa.id=prev.attempt where pa.task=a.task and pa.attempt_no<=a.attempt_no)
     from verifications v join task_attempts a on a.id=v.attempt join tasks t on t.id=a.task where t.deleted_at is null
     order by at desc,id desc limit 8`)).rows.map((r) => r.kind === 'attempt'
-    ? { kind: r.kind, at: r.at, id: r.id, taskKey: r.taskKey, agent: r.agent, text: r.text, status: r.status }
-    : { kind: r.kind, at: r.at, id: r.id, taskKey: r.taskKey, agent: r.agent, text: r.text, result: r.result });
+    ? { kind: r.kind, at: r.at, id: r.id, attemptKey: r.display_key, taskKey: r.taskKey, agent: r.agent, text: r.text, status: r.status }
+    : { kind: r.kind, at: r.at, id: r.id, verificationKey: r.display_key, taskKey: r.taskKey, agent: r.agent, text: r.text, result: r.result });
   // 개발·재작업 뒤 첫 QA의 PASS/FAIL만 판정 수에 넣는다. BLOCKED는 실패율 분모에서도 뺀다(P6320–6328).
   const grades = (await client.query<{ agent: string; modelId: string; effort: string; attempts: number; judged: number; fails: number; escalations: number; tokens: number }>(`select a.agent,a.model_id "modelId",a.effort,count(*)::int attempts,
     count(*) filter(where v.result in ('PASS','FAIL'))::int judged,count(*) filter(where v.result='FAIL')::int fails,
@@ -56,7 +57,7 @@ export async function dashboard(client: PoolClient) {
           ? [{ ...ref(t), baselineEnd: s.baselineEnd, end: s.end, slipDays: s.slipDays, paused: t.status === 'paused' }] : [];
       }).sort((a, b) => (b.slipDays ?? 0) - (a.slipDays ?? 0)),
       approvals: [...approvals.map((p) => ({ kind: 'planning', ...p })), ...proposals.map((p) => ({ kind: 'proposal', ...p }))],
-      executions: [...attempts.map((a) => ({ kind: 'running', ...ref(a), attemptId: a.attemptId, attemptKind: a.attemptKind, agent: a.agent })),
+      executions: [...attempts.map((a) => ({ kind: 'running', ...ref(a), attemptId: a.attemptId, attemptKey: a.attemptKey, attemptKind: a.attemptKind, agent: a.agent })),
         ...live.filter((t) => t.status === 'ready' && !blocked.has(t.id)).map((t) => ({ kind: 'ready', ...ref(t) }))],
       rework: live.filter((t) => t.status !== 'done' && (t.status === 'rework' || ['fail', 'blocked'].includes(t.verif_state))).map((t) => {
         const v = verificationOf.get(t.id);

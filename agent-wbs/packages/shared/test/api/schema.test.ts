@@ -94,7 +94,7 @@ test('팀장 수정은 §1.3 표대로 expected version을 요구한다', () => 
   // 생성·확인·테스트 발송·job 생성, 수동 발송·재발송, 로그아웃, 읽음 표시
   expect(none).toEqual(
     [
-      'addRecipient', 'addVerificationEvidence', 'checkGithub', 'checkSmtp', 'checkTelegramBot', 'createMessage',
+      'ackAlert', 'addRecipient', 'addVerificationEvidence', 'checkGithub', 'checkReadiness', 'checkSmtp', 'checkTelegramBot', 'createMessage',
       'createPlanning', 'createPlanningProposal', 'createProject', 'createProposal', 'createRepoCheck',
       'createReport', 'createTask', 'findTelegramChats', 'logout', 'readMessage', 'requestDeployCheck',
       'resendFailedMail', 'resendMail', 'retryCiRun', 'runReplan', 'sendReportMail', 'testRecipient', 'testTelegram',

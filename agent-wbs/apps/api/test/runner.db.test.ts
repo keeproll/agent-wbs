@@ -217,9 +217,10 @@ describe('runner 실제 PostgreSQL 검증', () => {
     expect((await owner.query("select 1 from change_events where topic='message'")).rowCount).toBeGreaterThan(0);
   });
 
-  test('같은 종류 실행 실패는 자동 2회만 재시도하고 중복 보고가 한도를 소모하지 않는다', async () => {
+  test.each([0, 1, 2, 4])('자동 재시도는 설정 한도 %i회를 따르고 중복 보고가 한도를 소모하지 않는다', async (limit) => {
+    await owner.query('update exec_policy set auto_retry_limit=$1 where singleton', [limit]);
     let current = await claimed();
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i <= limit; i++) {
       const started = await start(current.job);
       const attemptId = started.json<{ attemptId: string }>().attemptId;
       await release(current.job, { kind: 'no_process', bootId: 'boot-a' }, true);
@@ -230,10 +231,11 @@ describe('runner 실제 PostgreSQL 검증', () => {
         await retryFailedAttempt(c, attemptId);
       });
       const next = await claim();
-      expect(next.statusCode, next.body).toBe(i < 2 ? 200 : 204);
-      if (i < 2) current = { ...current, job: next.json().job };
+      expect(next.statusCode, next.body).toBe(i < limit ? 200 : 204);
+      if (i < limit) current = { ...current, job: next.json().job };
     }
     expect((await request(current.t.key)).statusCode).toBe(202);
+    await owner.query('update exec_policy set auto_retry_limit=2 where singleton');
   });
 
   test('renew 성공 뒤 정지·PC 전환은 옛 쓰기와 새 외부 job을 차단하고 대조 완료 뒤에만 허용한다', async () => {

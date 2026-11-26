@@ -203,7 +203,7 @@ export function installRunner(app: FastifyInstance, pool: Pool) {
     const cliGrades = (await repo.observations()).map(o => ({ agent:o.cli,version:o.version,model:o.model,options:o.options,grade:fromDb(OBSERVATION_GRADE,o.grade) }));
     // shortcut: 입력 확인은 5분 주기다. 공통 설정에 주기 항목이 생기면 그 값을 읽는다.
     return { caps: { ...wireCaps(c.caps), memReserveGB: c.memReserveGB }, subagentBudget: c.budget, heartbeatSeconds: settings.heartbeat_seconds,
-      inputCheckMinutes: 5, inputRecheck: await repo.inputRecheck(), inputCheckRequest: await repo.inputCheckRequest(), ci: { nightAt: ci.night_at, retry: ci.retry, deployUrl: ci.deploy_url },claudeModels:models.claudeModels,cliGrades };
+      inputCheckMinutes: 5, inputRecheck: await repo.inputRecheck(), inputCheckRequest: await repo.inputCheckRequest(), readinessCheckRequest: settings.readiness_check_request, githubMode: (await repo.githubSettings())?.mode ?? 'gh', ci: { nightAt: ci.night_at, retry: ci.retry, deployUrl: ci.deploy_url },claudeModels:models.claudeModels,cliGrades };
   });
   route('getRunnerState', repo => runnerState(repo));
 }

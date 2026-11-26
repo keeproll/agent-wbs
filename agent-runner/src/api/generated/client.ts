@@ -22,6 +22,14 @@ export type ClaimedJob = {
   id: Id;
   leaseUntil: Timestamp;
   fence: number;
+  kind: "github_check";
+  payload: {
+    mode: GithubMode;
+  };
+} | {
+  id: Id;
+  leaseUntil: Timestamp;
+  fence: number;
   kind: "bootstrap";
   payload: {
     commit: Sha;
@@ -1418,6 +1426,8 @@ export interface Operations {
     request: {
       body: {
         mode: GithubMode;
+        jobId?: Id;
+        fence?: number;
         ok: boolean;
         account: string | null;
         scopes: {
@@ -1493,6 +1503,8 @@ export interface Operations {
         inputCheckMinutes: number;
         inputRecheck: number;
         inputCheckRequest?: number;
+        readinessCheckRequest?: number;
+        githubMode?: GithubMode;
         ci: {
           nightAt: string;
           retry: number;
@@ -1597,7 +1609,7 @@ export interface Operations {
   claimJob: {
     request: {
       body: {
-        kinds: ("repo_check" | "bootstrap" | "input_diff" | "planning" | "estimate" | "split" | "attempt" | "stop_attempt" | "integrate" | "deploy_check" | "ci_retry" | "design_apply" | "merge_followup")[];
+        kinds: ("repo_check" | "bootstrap" | "input_diff" | "planning" | "estimate" | "split" | "attempt" | "stop_attempt" | "integrate" | "deploy_check" | "ci_retry" | "design_apply" | "merge_followup" | "github_check")[];
         capacity: number;
       };
       epoch: number;

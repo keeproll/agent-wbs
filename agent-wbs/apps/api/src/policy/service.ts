@@ -3,13 +3,14 @@ import {
   belowFloor, DEFAULT_EXEC_POLICY, effortLevel, floorOf, gradeError,
   type Agent, type AttemptKind, type ModelSettings, type ResolveResult, type TaskStatus,
 } from '@awbs/shared';
-import { ChangeBatch, deferChange, iso } from '../changes/events.ts';
+import { canonicalJson, ChangeBatch, deferChange, iso } from '../changes/events.ts';
 import { jobPayloadErrors } from '@awbs/shared/api';
 import { ApiError, assertSameVersion, invalid, isUuid, json } from '../changes/http.ts';
 import { judgedTasks } from './judged.ts';
 import { writeResumeRegrade } from './resume.ts';
 import { resolveGrade } from '../runner/service.ts';
 import { RunnerRepository } from '../runner/repository.ts';
+import { touchSetting, type SettingGroup } from '../settings/version.ts';
 import {
   AGENTS, catalogOf, completeOrder, gradesToRejudge, modelKey, planModelChange, ranksOf,
   type GradeRow, type ModelPut, type ModelRow, type Rejudge,
@@ -31,7 +32,8 @@ const DEFAULT_WORKFLOW = { devAgent: 'Claude', qaAgent: 'Codex', subagentsEnable
 interface WorkflowJson { devAgent?: Agent; qaAgent?: Agent; subagentsEnabled?: boolean }
 
 /** 설정 변경 이력(Task와 무관한 전역 이력, task=null). 이력 화면의 「유형=설정」으로 보인다. */
-async function settingsHistory(client: PoolClient, changes: ChangeBatch, text: string, before: unknown, after: unknown, key: string): Promise<void> {
+async function settingsHistory(client: PoolClient, changes: ChangeBatch, text: string, before: unknown, after: unknown, key: SettingGroup): Promise<void> {
+  await touchSetting(client, key);
   const project = (await client.query<{ id: string }>('select id from projects')).rows[0]?.id ?? null;
   await client.query("insert into task_history(project_id,at,actor,task,kind,text,before,after,ref) values($1,clock_timestamp(),$2,null,'설정',$3,$4::jsonb,$5::jsonb,$6::jsonb)",
     [project, LEAD, text, json(before), json(after), JSON.stringify({ key })]);
@@ -56,7 +58,7 @@ async function touchTask(client: PoolClient, changes: ChangeBatch, projectId: st
 /* ───────────── 실행 정책 ───────────── */
 
 interface ExecRow extends ExecPolicyRow { updated_at: string; live_inject: boolean }
-const EXEC_COLUMNS = `on_usage,low_pct,on_rework,esc_notify,floors,live_inject,auto_retry_limit,auto_rework_limit,${iso('updated_at')} as updated_at`;
+const EXEC_COLUMNS = `on_usage,low_pct,on_rework,esc_notify,floors,live_inject,auto_retry_limit,auto_rework_limit,${iso('settings_version')} as updated_at`;
 
 async function execRow(client: PoolClient, lock = false): Promise<ExecRow> {
   const row = (await client.query<ExecRow>(`select ${EXEC_COLUMNS} from exec_policy where singleton${lock ? ' for update' : ''}`)).rows[0];
@@ -82,7 +84,7 @@ export async function putExecPolicy(client: PoolClient, body: ExecPolicyPut) {
   await client.query('update exec_policy set on_usage=$1,low_pct=$2,on_rework=$3,esc_notify=$4,floors=$5::jsonb,auto_retry_limit=$6,auto_rework_limit=$7 where singleton',
     [body.onUsage, body.lowPct, body.onRework, body.notifyAt, JSON.stringify(body.floors), body.autoRetryLimit, body.autoReworkLimit]);
   const after = { onUsage: body.onUsage, lowPct: body.lowPct, onRework: body.onRework, notifyAt: body.notifyAt, floors: body.floors, autoRetryLimit: body.autoRetryLimit, autoReworkLimit: body.autoReworkLimit };
-  const changed = (Object.keys(after) as (keyof typeof after)[]).filter((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key]));
+  const changed = (Object.keys(after) as (keyof typeof after)[]).filter((key) => canonicalJson(before[key]) !== canonicalJson(after[key]));
   if (changed.length) await settingsHistory(client, changes, `실행 정책 변경 — ${changed.join('·')}`, before, after, 'exec-policy');
   if (changed.includes('floors')) {
     const floorText = `최저선 변경 — 검증≥개발 ${body.floors.verifyGeDev ? '적용' : '해제'}, DB·Migration 높음 이상 ${body.floors.dbHigh ? '적용' : '해제'}`;
@@ -96,10 +98,10 @@ export async function putExecPolicy(client: PoolClient, body: ExecPolicyPut) {
 
 /* ───────────── Agent 역할·기본 Workflow ───────────── */
 
-interface AppRow { workflow: WorkflowJson | null; heartbeat_seconds: number; heartbeat_misses: number; model_settings: ModelSettings; updated_at: string }
+interface AppRow { workflow: WorkflowJson | null; heartbeat_seconds: number; heartbeat_misses: number; model_settings: ModelSettings; workflow_version: string; models_version: string; subagents_version: string }
 
 async function appRow(client: PoolClient, lock = false): Promise<AppRow> {
-  const row = (await client.query<AppRow>(`select workflow,heartbeat_seconds,heartbeat_misses,model_settings,${iso('updated_at')} as updated_at from app_settings where singleton${lock ? ' for update' : ''}`)).rows[0];
+  const row = (await client.query<AppRow>(`select workflow,heartbeat_seconds,heartbeat_misses,model_settings,${iso('workflow_version')} workflow_version,${iso('models_version')} models_version,${iso('subagents_version')} subagents_version from app_settings where singleton${lock ? ' for update' : ''}`)).rows[0];
   if (!row) throw new ApiError('UNAVAILABLE', {}, [], '앱 설정 초기값이 없습니다. system seed를 실행하세요.');
   return row;
 }
@@ -110,7 +112,7 @@ export async function getWorkflow(client: PoolClient) {
   const app = await appRow(client);
   const exec = await execRow(client);
   const wf = workflowOf(app);
-  return { devAgent: wf.devAgent, qaAgent: wf.qaAgent, liveInject: exec.live_inject, heartbeatSeconds: app.heartbeat_seconds, missedHeartbeats: app.heartbeat_misses, updatedAt: app.updated_at };
+  return { devAgent: wf.devAgent, qaAgent: wf.qaAgent, liveInject: exec.live_inject, heartbeatSeconds: app.heartbeat_seconds, missedHeartbeats: app.heartbeat_misses, updatedAt: app.workflow_version };
 }
 
 export interface WorkflowPut { updatedAt: string | null; devAgent: Agent; qaAgent: Agent; liveInject: boolean; heartbeatSeconds: number; missedHeartbeats: number }
@@ -119,7 +121,7 @@ export interface WorkflowPut { updatedAt: string | null; devAgent: Agent; qaAgen
 export async function putWorkflow(client: PoolClient, body: WorkflowPut) {
   const app = await appRow(client, true);
   const before = await getWorkflow(client);
-  await assertSameVersion(client, app.updated_at, body.updatedAt, { current: before });
+  await assertSameVersion(client, app.workflow_version, body.updatedAt, { current: before });
   await client.query('update app_settings set workflow=$1::jsonb,heartbeat_seconds=$2,heartbeat_misses=$3 where singleton',
     [JSON.stringify({ ...workflowOf(app), devAgent: body.devAgent, qaAgent: body.qaAgent }), body.heartbeatSeconds, body.missedHeartbeats]);
   await client.query('update exec_policy set live_inject=$1 where singleton and live_inject is distinct from $1', [body.liveInject]);
@@ -145,9 +147,6 @@ const toModel = (row: AgentModelRow): ModelRow => ({
   allowed: row.allowed, isNew: row.is_new, efforts: Array.isArray(row.report?.efforts) ? row.report.efforts : null,
 });
 
-/** 모델 설정의 버전: 앱 설정(순서)과 모델 행(허용·보고) 중 가장 최근 것. Runner가 새 모델을 보고해도 화면 버전이 바뀐다. */
-const modelsVersion = (app: AppRow, rows: readonly AgentModelRow[]) => [app.updated_at, ...rows.map((r) => r.updated_at)].sort().at(-1) ?? app.updated_at;
-
 function modelsView(app: AppRow, rows: readonly AgentModelRow[]) {
   const models = rows.map(toModel);
   const settings = app.model_settings;
@@ -161,7 +160,7 @@ function modelsView(app: AppRow, rows: readonly AgentModelRow[]) {
         efforts: m.efforts === null ? null : m.efforts.map((key) => ({ key, level: effortLevel(m.agent, m.modelId, key) })),
       }))
       .sort((a, b) => a.agent.localeCompare(b.agent) || b.rank - a.rank),
-    updatedAt: modelsVersion(app, rows),
+    updatedAt: app.models_version,
   };
 }
 
@@ -176,7 +175,7 @@ export async function putModels(client: PoolClient, body: ModelPut & { updatedAt
   const changes = new ChangeBatch();
   const app = await appRow(client, true);
   const rows = await modelRows(client, true);
-  await assertSameVersion(client, modelsVersion(app, rows), body.updatedAt, { current: modelsView(app, rows) });
+  await assertSameVersion(client, app.models_version, body.updatedAt, { current: modelsView(app, rows) });
   const plan = planModelChange(rows.map(toModel), app.model_settings, body);
   if (plan.errors.length) throw invalid(plan.errors);
   for (const row of rows) {
@@ -187,7 +186,7 @@ export async function putModels(client: PoolClient, body: ModelPut & { updatedAt
   }
   await client.query('update app_settings set model_settings=$1::jsonb where singleton and model_settings is distinct from $1::jsonb', [JSON.stringify(plan.settings)]);
   const changedAllowed = plan.rows.filter((r) => rows.some((o) => o.agent === r.agent && o.model_id === r.modelId && o.allowed !== r.allowed));
-  const orderChanged = JSON.stringify(plan.settings) !== JSON.stringify({ ...app.model_settings, rankOrder: completeOrder(app.model_settings, rows.map(toModel)) });
+  const orderChanged = canonicalJson(plan.settings) !== canonicalJson({ ...app.model_settings, rankOrder: completeOrder(app.model_settings, rows.map(toModel)) });
   if (changedAllowed.length || orderChanged) {
     const text = [
       ...changedAllowed.map((r) => `${r.agent} ${r.modelId} ${r.allowed ? '허용' : '허용 해제'}`),
@@ -371,15 +370,13 @@ async function defRows(client: PoolClient, lock = false): Promise<DefRow[]> {
   return (await client.query<DefRow>(`select id,def_key,version,agent,role,tools,sandbox,text,hash,allowed,ref,${iso('updated_at')} as updated_at from subagent_defs order by ${lock ? 'id' : 'def_key,version'}${lock ? ' for update' : ''}`)).rows;
 }
 
-const subagentsVersion = (app: AppRow, defs: readonly DefRow[]) => [app.updated_at, ...defs.map((d) => d.updated_at)].sort().at(-1) ?? app.updated_at;
-
 function subagentsView(app: AppRow, defs: readonly DefRow[]) {
   return {
     enabled: workflowOf(app).subagentsEnabled,
     defs: [...defs].sort((a, b) => a.def_key.localeCompare(b.def_key) || a.version - b.version).map((d) => ({
       id: d.id, version: d.version, agent: d.agent, role: d.role, tools: d.tools.join(' · '), sandbox: d.sandbox, text: d.text, hash: d.hash, allowed: d.allowed, ref: d.ref,
     })),
-    updatedAt: subagentsVersion(app, defs),
+    updatedAt: app.subagents_version,
   };
 }
 
@@ -393,7 +390,7 @@ export async function putSubagents(client: PoolClient, body: { updatedAt: string
   const batch = new ChangeBatch();
   const app = await appRow(client, true);
   const defs = await defRows(client, true);
-  await assertSameVersion(client, subagentsVersion(app, defs), body.updatedAt, { current: subagentsView(app, defs) });
+  await assertSameVersion(client, app.subagents_version, body.updatedAt, { current: subagentsView(app, defs) });
   const errors = body.allowed.flatMap((item, index) => (defs.some((d) => d.id === item.id) ? [] : [{ path: `allowed.${String(index)}.id`, rule: 'exists', message: '없는 하위 Agent 정의입니다.' }]));
   if (errors.length) throw invalid(errors);
   const turnedOff: DefRow[] = [];
