@@ -1,8 +1,9 @@
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { GitCleanupError, GitRepository } from '../../src/git/repository.ts';
 
@@ -611,10 +612,10 @@ test('NE 먼저 열린 여러 객체가 순서대로 생성·삭제해도 최신
   await expect(lstat(work2)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
-test('NG clone 실패 뒤 폴더·기록·새 브랜치를 되돌려 같은 요청을 재시도한다', async () => {
+test.each(['--single-branch', 'checkout'])('NG %s 실패 뒤 폴더·기록·새 브랜치를 되돌려 같은 요청을 재시도한다', async (phase) => {
   repo = await clone();
   const bin = join(root, 'bin');
-  await file(join(bin, 'git'), '#!/bin/sh\nfor arg in "$@"; do\n  if [ "$arg" = "--single-branch" ]; then exit 17; fi\ndone\nexec /usr/bin/git "$@"\n');
+  await file(join(bin, 'git'), `#!/bin/sh\nfor arg in "$@"; do\n  if [ "$arg" = "${phase}" ]; then exit 17; fi\ndone\nexec /usr/bin/git "$@"\n`);
   await chmod(join(bin, 'git'), 0o755);
   vi.stubEnv('PATH', `${bin}:${process.env.PATH}`);
   await expect(repo.createWorktree('task-1', 'agent/TASK-1', baseline)).rejects.toThrow();
@@ -624,4 +625,42 @@ test('NG clone 실패 뒤 폴더·기록·새 브랜치를 되돌려 같은 요�
   expect(git(repo.path, 'branch', '--list', 'agent/TASK-1')).toBe('');
   vi.unstubAllEnvs();
   expect(git(await repo.createWorktree('task-1', 'agent/TASK-1', baseline), 'rev-parse', 'HEAD')).toBe(baseline);
+});
+
+test('ND 서로 다른 프로세스가 동시에 만든 작업 폴더 기록도 모두 보존한다', async () => {
+  repo = await clone();
+  const moduleUrl = new URL('../../src/git/repository.ts', import.meta.url).href;
+  const code = `import { GitRepository } from ${JSON.stringify(moduleUrl)}; const repo = await GitRepository.open(process.argv[1], 'project'); await repo.createWorktree(process.argv[2], 'agent/' + process.argv[2], process.argv[3]);`;
+  await Promise.all(['task-1', 'task-2'].map((name) => promisify(execFile)(process.execPath, [
+    '--input-type=module', '-e', code, join(root, 'runner'), name, baseline,
+  ])));
+  const record = JSON.parse(await readFile(join(root, 'runner/state/git/project.json'), 'utf8')) as { worktrees: string[] };
+  expect(record.worktrees.sort()).toEqual(['task-1', 'task-2']);
+  await repo.reset({ baseCommit: baseline, branches: ['agent/task-1', 'agent/task-2'], worktrees: ['task-1', 'task-2'], inputs: [] });
+  await expect(lstat(join(root, 'runner/state/git/project.json.lock'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test('NG 이미 있는 Agent 브랜치는 덮어쓰거나 실패 복구에서 지우지 않는다', async () => {
+  repo = await clone();
+  git(repo.path, 'branch', 'agent/occupied', baseline);
+  await expect(repo.createWorktree('task-1', 'agent/occupied', baseline)).rejects.toThrow();
+  expect(git(repo.path, 'rev-parse', 'refs/heads/agent/occupied')).toBe(baseline);
+  await expect(lstat(join(root, 'runner/worktrees/project/task-1'))).rejects.toMatchObject({ code: 'ENOENT' });
+  const record = JSON.parse(await readFile(join(root, 'runner/state/git/project.json'), 'utf8')) as { worktrees: string[] };
+  expect(record.worktrees).toEqual([]);
+});
+
+test('ND 잠금 대기 시간이 지나도 다른 실행의 잠금을 지우지 않는다', async () => {
+  repo = await clone();
+  const lockPath = join(root, 'runner/state/git/project.json.lock');
+  await writeFile(lockPath, '다른 실행의 잠금');
+  let now = 0;
+  const clock = vi.spyOn(Date, 'now').mockImplementation(() => { now += 30_000; return now; });
+  try {
+    await expect(repo.createWorktree('task-1', 'agent/TASK-1', baseline)).rejects.toThrow(/잠금 대기/);
+  } finally { clock.mockRestore(); }
+  expect(await readFile(lockPath, 'utf8')).toBe('다른 실행의 잠금');
+  await expect(lstat(join(root, 'runner/worktrees/project/task-1'))).rejects.toMatchObject({ code: 'ENOENT' });
+  await rm(lockPath);
+  await repo.createWorktree('task-1', 'agent/TASK-1', baseline);
 });
