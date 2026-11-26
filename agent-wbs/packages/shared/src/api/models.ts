@@ -578,6 +578,7 @@ export const Decision = Type.Object(
     // 조건부 선호에서 만든 결정: 원래 제약과 Planning의 조건 충족 판단(근거는 reason)
     constraintId: Opt(Nullable(c.Id)),
     conditionResult: Opt(Nullable(AnyOf('met', 'not_met'))),
+    change: Opt(c.Body({ choice: Text, reason: Text, previousStatus: AnyOf('fixed', 'approved') })),
   },
   { title: 'Decision' },
 );
@@ -603,6 +604,7 @@ export const Drift = Type.Object(
     compat: AnyOf('compatible', 'breaking', 'unchecked'),
     status: AnyOf('open', 'done'),
     updatedAt: c.Timestamp,
+    resolution: Opt(c.Json),
   },
   { title: 'Drift' },
 );
@@ -1144,7 +1146,7 @@ export const designOverview = {
   components: List(obj({ id: c.Id, layer: Str, name: Str, tech: Str, note: Str, decisionId: Nullable(c.Id) })),
   links: List(obj({ from: c.Id, to: c.Id, via: Str, contractPath: MaybeStr })),
   files: List(
-    obj({ path: Str, kind: Str, format: Str, status: fileStatus, commit: Nullable(c.Sha), itemCount: c.Count, error: MaybeStr }),
+    obj({ path: Str, kind: Str, format: Str, status: fileStatus, commit: Nullable(c.Sha), itemCount: c.Count, error: MaybeStr, raw: Opt(MaybeStr), sourceCommit: Opt(Nullable(c.Sha)) }),
   ),
   versions: List(obj({ v: c.PositiveInt4, at: c.Timestamp, by: Str, note: Str, breaking: Type.Boolean() })),
 };

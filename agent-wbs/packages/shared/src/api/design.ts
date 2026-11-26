@@ -1,6 +1,7 @@
 import Type, { type Static } from 'typebox';
+import { Value } from 'typebox/value';
 import * as c from './common.ts';
-import { designOverview } from './models.ts';
+import { DataContent, designOverview, IfaceContent } from './models.ts';
 
 /** 해석기가 만든 필드 목록. path는 JSON Pointer(중첩 필드의 고정 주소)다. 삭제·타입 변경·필수화를 서버가 비교한다. */
 export const DesignShape = c.Body({ fields: c.List(c.Body({ path: c.Text, type: c.Text, required: Type.Boolean() })) });
@@ -25,3 +26,12 @@ export const DesignSnapshot = c.Body({
 export type DesignShapeInput = Static<typeof DesignShape>;
 export type DesignSnapshotInput = Static<typeof DesignSnapshot>;
 export type DesignItemInput = DesignSnapshotInput['items'][number];
+
+/** 원문만 있는 항목은 빈 객체다. 해석한 내용은 화면이 쓰는 계약과 일치해야 한다. */
+export function designContentValid(item: DesignItemInput): boolean {
+  if (!Object.keys(item.content).length) return true;
+  const type = item.content.type;
+  if (item.kind === 'REST') return type === 'REST' && Value.Check(IfaceContent, item.content);
+  if (['WebSocket', 'SSE', 'Kafka'].includes(item.kind)) return type === 'message' && Value.Check(IfaceContent, item.content);
+  return typeof type === 'string' && (type === item.kind || item.kind === 'neo4j' && ['neo4j-label', 'neo4j-relation'].includes(type)) && Value.Check(DataContent, item.content);
+}

@@ -12868,6 +12868,26 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "raw": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "sourceCommit": {
+                            "anyOf": [
+                              {
+                                "$ref": "#/components/schemas/Sha"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         }
                       }
@@ -35001,6 +35021,33 @@
                 "type": "null"
               }
             ]
+          },
+          "change": {
+            "type": "object",
+            "required": [
+              "choice",
+              "reason",
+              "previousStatus"
+            ],
+            "properties": {
+              "choice": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "previousStatus": {
+                "enum": [
+                  "fixed",
+                  "approved"
+                ]
+              }
+            },
+            "additionalProperties": false
           }
         },
         "title": "Decision"
@@ -35182,6 +35229,12 @@
           },
           "updatedAt": {
             "$ref": "#/components/schemas/Timestamp"
+          },
+          "resolution": {
+            "type": "object",
+            "patternProperties": {
+              "^.*$": {}
+            }
           }
         },
         "title": "Drift"

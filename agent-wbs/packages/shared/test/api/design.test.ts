@@ -1,9 +1,11 @@
 import { Ajv } from 'ajv';
+import assert from 'node:assert/strict';
 import { expect, test } from 'vitest';
 import { OPERATIONS } from '../../src/api/index.ts';
 
 const ajv = new Ajv({ strict: false });
-const schema = OPERATIONS.find(op => op.id === 'reportDesignSnapshot')!.body!;
+const schema = OPERATIONS.find(op => op.id === 'reportDesignSnapshot')?.body;
+assert(schema);
 const snapshot = {
   jobId: 'job', fence: 1, commit: 'a'.repeat(40), ref: 'agent/TASK-0001',
   files: [{ path: 'contracts/api/openapi.yaml', kind: 'REST', format: 'OpenAPI 3.1', status: 'ok', raw: 'openapi: 3.1.0' }],
