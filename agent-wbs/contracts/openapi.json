@@ -31345,10 +31345,7 @@
                     }
                   },
                   "policy": {
-                    "type": "object",
-                    "patternProperties": {
-                      "^.*$": {}
-                    }
+                    "$ref": "#/components/schemas/EstimatePolicy"
                   }
                 }
               }
@@ -32431,7 +32428,7 @@
       "DateOnly": {
         "type": "string",
         "title": "DateOnly",
-        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        "pattern": "^(?:(?:19[7-9][0-9]|[2-9][0-9]{3})-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|02-(?:0[1-9]|1[0-9]|2[0-8]))|(?=19[7-9]|[2-9])(?:[0-9]{2}(?:0[48]|[2468][048]|[13579][26])|(?:[02468][048]|[13579][26])00)-02-29)$"
       },
       "Decision": {
         "type": "object",
@@ -32807,6 +32804,16 @@
           }
         },
         "title": "ErrorResponse"
+      },
+      "EstimatePolicy": {
+        "type": "object",
+        "properties": {
+          "rejudge": {
+            "$ref": "#/components/schemas/RejudgeRequest"
+          }
+        },
+        "title": "EstimatePolicy",
+        "additionalProperties": true
       },
       "Evidence": {
         "type": "object",
@@ -39728,6 +39735,54 @@
         },
         "title": "Recipient"
       },
+      "RejudgeRequest": {
+        "type": "object",
+        "required": [
+          "reason",
+          "trigger",
+          "targets"
+        ],
+        "properties": {
+          "reason": {
+            "enum": [
+              "model_disallowed",
+              "floor_changed",
+              "subagent_disallowed"
+            ]
+          },
+          "trigger": {
+            "type": "string",
+            "minLength": 1
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "taskKey",
+                "roles"
+              ],
+              "properties": {
+                "taskKey": {
+                  "$ref": "#/components/schemas/TaskKey"
+                },
+                "roles": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RunRole"
+                  },
+                  "minItems": 1,
+                  "uniqueItems": true
+                }
+              },
+              "additionalProperties": false
+            },
+            "minItems": 1
+          }
+        },
+        "title": "RejudgeRequest",
+        "additionalProperties": false
+      },
       "ReplanSummary": {
         "type": "object",
         "required": [
@@ -43766,7 +43821,7 @@
       "Timestamp": {
         "type": "string",
         "title": "Timestamp",
-        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?Z$"
+        "pattern": "^(?:(?:19[7-9][0-9]|[2-9][0-9]{3})-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|02-(?:0[1-9]|1[0-9]|2[0-8]))|(?=19[7-9]|[2-9])(?:[0-9]{2}(?:0[48]|[2468][048]|[13579][26])|(?:[02468][048]|[13579][26])00)-02-29)T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]{1,6})?Z$"
       },
       "Uuid": {
         "type": "string",

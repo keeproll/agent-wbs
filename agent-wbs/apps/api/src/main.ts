@@ -4,6 +4,8 @@ import { loadConfig } from './config.ts';
 import { loggerOptions } from './log.ts';
 import { assertLanPassword } from './platform/security.ts';
 import { installRunner } from './runner/routes.ts';
+import { startChangePruner } from './changes/events.ts';
+import { registerRunnerMessageRoutes } from './messages/routes.ts';
 
 const config = loadConfig(process.env);
 const pool = createPool(config.databaseUrl, {
@@ -14,11 +16,14 @@ const pool = createPool(config.databaseUrl, {
 });
 const app = buildApp(pool, loggerOptions(config.logLevel), config);
 installRunner(app, pool);
+registerRunnerMessageRoutes(app);
+const stopPruner = startChangePruner(pool, (error) => { app.log.error({ err: error }, '변경 이벤트 보존 정리 실패'); });
 
 // 신호와 기동 실패가 겹쳐도 한 번만 종료한다(pool.end는 두 번 부를 수 없다).
 let stopping: Promise<void> | undefined;
 const shutdown = (): Promise<void> =>
   (stopping ??= (async () => {
+    stopPruner();
     await app.close();
     await pool.end();
   })());

@@ -264,7 +264,8 @@ test('schema: system seed is repeatable, owner Q-03/Q-04 values match, no Mock o
         'select assume_rate,threshold_days,window_days,min_hours from schedule_policy',
       )
     ).rows[0],
-  ).toEqual({ assume_rate: null, threshold_days: null, window_days: 7, min_hours: 72 });
+  // 가정 가동률 60%·재조정 임계값 1일은 owner 결정(2026-11-26 아이템 7)으로 승인된 값이다(0019).
+  ).toEqual({ assume_rate: '0.6', threshold_days: '1', window_days: 7, min_hours: 72 });
   for (const t of [
     'subagent_defs',
     'agent_models',

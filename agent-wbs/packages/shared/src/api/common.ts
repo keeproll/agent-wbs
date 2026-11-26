@@ -16,12 +16,28 @@ export const Text = Type.String({ minLength: 1, pattern: '\\S' });
 export const Id = Type.String({ title: 'Id', minLength: 1, maxLength: 128 });
 export const Uuid = Type.String({ title: 'Uuid', pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' });
 export const TaskKey = Type.String({ title: 'TaskKey', pattern: '^TASK-[0-9]{4,}$' });
-/** UTC ISO 8601, 마이크로초까지 */
-export const Timestamp = Type.String({
-  title: 'Timestamp',
-  pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?Z$',
-});
-export const DateOnly = Type.String({ title: 'DateOnly', pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' });
+/*
+ * 시각·날짜의 허용 범위(M2-08 재리뷰 R2). 모양만 보는 정규식은 연도 0000·10000·2026-02-30 같은 값을 통과시켜
+ * DB(timestamptz·date) 변환에서 500이 났다. 여기 한 곳에서 1970~9999년의 실재하는 날짜·시각만 받는다.
+ * - 월별 일수와 윤년(4로 나눠지되 100의 배수는 400의 배수만)을 정규식으로 검사한다.
+ * - 시각은 00:00:00~23:59:59(윤초 60 없음), 소수점 아래 최대 6자리(µs), UTC(Z)만.
+ * 커서처럼 스키마 밖에서 받은 값은 isTimestamp·isDateOnly로 같은 규칙을 쓴다.
+ */
+const YEAR = '(?:19[7-9][0-9]|[2-9][0-9]{3})';
+const MONTH_DAY = '(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|02-(?:0[1-9]|1[0-9]|2[0-8]))';
+const LEAP_YEAR = '(?=19[7-9]|[2-9])(?:[0-9]{2}(?:0[48]|[2468][048]|[13579][26])|(?:[02468][048]|[13579][26])00)';
+const DATE = `(?:${YEAR}-${MONTH_DAY}|${LEAP_YEAR}-02-29)`;
+const TIME = '(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]{1,6})?';
+export const TIMESTAMP_PATTERN = `^${DATE}T${TIME}Z$`;
+export const DATE_PATTERN = `^${DATE}$`;
+const TIMESTAMP_RE = new RegExp(TIMESTAMP_PATTERN, 'u');
+const DATE_RE = new RegExp(DATE_PATTERN, 'u');
+export const isTimestamp = (value: unknown): value is string => typeof value === 'string' && TIMESTAMP_RE.test(value);
+export const isDateOnly = (value: unknown): value is string => typeof value === 'string' && DATE_RE.test(value);
+/** UTC ISO 8601, 마이크로초까지. 1970~9999년의 실재하는 시각만 */
+export const Timestamp = Type.String({ title: 'Timestamp', pattern: TIMESTAMP_PATTERN });
+/** 날짜(Asia/Seoul 기준 하루). 1970~9999년의 실재하는 날짜만 */
+export const DateOnly = Type.String({ title: 'DateOnly', pattern: DATE_PATTERN });
 export const ClockTime = Type.String({ pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' });
 export const Sha = Type.String({ title: 'Sha', pattern: '^[0-9a-f]{40}([0-9a-f]{24})?$' });
 export const Sha256 = Type.String({ title: 'Sha256', pattern: '^[0-9a-f]{64}$' });
