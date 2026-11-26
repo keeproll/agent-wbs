@@ -1,5 +1,6 @@
 import { splitSettingsToDomain } from '@awbs/db';
 import type { PoolClient } from '@awbs/db';
+import { observePipeline, type PipelineObservation } from '../ci/pipeline.ts';
 import { invalidateTaskGate } from '../execution/gate.ts';
 import type { Dependency } from '@awbs/shared';
 import { createBaseline, type BaselineTask } from './baseline.ts';
@@ -452,7 +453,7 @@ interface InputDiff {
   status: 'A' | 'M' | 'D' | 'R' | 'T'; path: string; from?: string;
   oldBlob: string | null; newBlob: string | null; oldMode: string | null; newMode: string | null; added: number; deleted: number;
 }
-interface InputBody { base: string; head: string; baseIsAncestor: boolean; treeHash: string; changes: InputDiff[]; commits: PushedCommit[] }
+interface InputBody { base: string; head: string; baseIsAncestor: boolean; treeHash: string; changes: InputDiff[]; commits: PushedCommit[]; pipelineObservation?: PipelineObservation }
 /** 저장하는 보고 하나(input_change_commits.files jsonb, sha = 보고의 head) */
 interface StoredReport { seq: number; base: string; head: string; tree: string; changes: InputDiff[]; commits: PushedCommit[]; receivedAt: string }
 
@@ -494,6 +495,7 @@ export async function reportInputChanges(db: Db, body: InputBody): Promise<{ hea
     if (r.state === 'pending') await changeEvent(db, project.id, { kind: 'input_changes' });
   }
   // 팀장 확인 항목은 분석이 볼 내용이 바뀐 보고에만 생긴다(실행 권한만 바뀐 보고는 head·트리만 옮김).
+  if (body.pipelineObservation) await observePipeline(db,project.id,body.head,body.pipelineObservation);
   return { head: result.head, recorded: result.report?.state === 'pending', historyRewritten: false };
 }
 

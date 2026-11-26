@@ -498,6 +498,8 @@ export const runnerOperations = [
       treeHash: c.Sha,
       changes: List(InputDiff),
       commits: List(PushedCommit),
+      // 입력 head와 같은 main 커밋에서 별도로 읽은 정의. CI 실행 보고로 대신하지 않는다.
+      pipelineObservation: Opt(Body({ baseSha: c.Sha, pipelineSha: Nullable(c.Sha), definition: m.Pipeline })),
     }),
     responses: { 200: Type.Object({ head: c.Sha, recorded: Type.Boolean(), historyRewritten: Type.Boolean() }) },
     errors: ['INVALID_TRANSITION', 'VERSION_CONFLICT'],
@@ -552,6 +554,7 @@ export const runnerOperations = [
         fence: Nullable(fence),
         steps: Opt(List(m.CiStep)),
         status: Opt(c.CiStatus),
+        failScope: Opt(AnyOf('baseline', 'task')),
         logExcerpt: Opt(Type.String()),
         artifacts: Opt(List(Type.String())),
         url: Opt(c.HttpUrl),
@@ -588,7 +591,7 @@ export const runnerOperations = [
       mergeParents: Opt(List(c.Sha, { minItems: 2, maxItems: 2 })),
     }),
     responses: { 204: null },
-    errors: ['INVALID_TRANSITION', 'GATE_NOT_PASSED', 'EXTERNAL_WRITE_BLOCKED'],
+    errors: ['INVALID_TRANSITION', 'GATE_NOT_PASSED', 'EXTERNAL_WRITE_BLOCKED', 'MERGE_MISMATCH'],
   }),
   operation({
     ...runner,

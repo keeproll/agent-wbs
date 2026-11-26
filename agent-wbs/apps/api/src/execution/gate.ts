@@ -28,7 +28,7 @@ export async function gateInputs(client: PoolClient, taskIds: string[], headSync
       from task_attempts qa left join verifications v on v.attempt=qa.id left join input_versions iv on iv.id=qa.input_version
       where qa.task=t.id and qa.kind in ('qa','reverify') order by qa.attempt_no desc limit 1) v on true
     left join lateral(select c.status,c.spec_revision,iv.v input_v from ci_runs c left join input_versions iv on iv.id=c.input_version
-      where c.project_id=t.project_id and c.task=t.id and c.stage=1 and c.head_sha=coalesce($2,t.execution_head_sha,a.head_sha) order by c.created_at desc,c.id desc limit 1) c on true
+      where c.project_id=t.project_id and c.task=t.id and c.stage=1 and c.head_sha=coalesce($2,t.execution_head_sha,a.head_sha) order by c.run_no desc limit 1) c on true
     where t.id=any($1::uuid[])`, [taskIds,headSync?.headSha ?? null])).rows;
   return new Map(rows.map(task => {
     const basis = { headSha:headSync?.headSha ?? task.head_sha ?? '',specRevision:task.revision ?? 0,inputVersion:task.input_v ?? 0 };
@@ -61,13 +61,13 @@ export async function completeMergedTask(client: PoolClient, taskKey: string, ba
     status: string; pipeline_sha: string; ci_head: string; ci_base: string; tree_sha: string; job: string; result: string;
     tested_tree_sha: string; head_sync: HeadProof | null; verification: string; ci_task: string; ci_fence: number; merge_parents: string[] | null }>(`
     select q.*,c.pipeline_sha,c.head_sha ci_head,c.base_sha ci_base,c.tree_sha,c.status result,c.job,c.task ci_task,c.fence ci_fence from merge_queue q
-    left join ci_runs c on c.id=q.ci_run and c.stage=2 and c.project_id=q.project_id where q.task=$1 order by q.created_at desc,q.id desc limit 1`, [task.id])).rows[0];
+    left join ci_runs c on c.id=q.ci_run and c.stage=2 and c.project_id=q.project_id where q.task=$1 order by q.queue_no desc limit 1`, [task.id])).rows[0];
   if (!basePipelineSha) throw new PlatformError('GATE_NOT_PASSED', { reasons:['병합 기준 main의 파이프라인 정의를 서버가 확인해야 합니다.'] });
   if (queue && (queue.ci_task !== task.id || queue.tested_tree_sha !== queue.tree_sha)) throw new PlatformError('GATE_NOT_PASSED');
   const latestVerification = (await client.query<{ id: string }>('select v.id from verifications v join task_attempts a on a.id=v.attempt where a.task=$1 order by a.attempt_no desc limit 1',[task.id])).rows[0];
   if (queue && queue.verification !== latestVerification?.id) throw new PlatformError('GATE_NOT_PASSED');
   const sync = queue ? preservedHead(queue.qa_head_sha,queue.synced_head_sha,queue.base_sha,queue.tree_sha,queue.head_sync) : headSync;
-  if (queue?.merge_parents && (queue.merge_parents.length !== 2 || queue.merge_parents[0] !== queue.base_sha || queue.merge_parents[1] !== queue.synced_head_sha)) throw new PlatformError('GATE_NOT_PASSED');
+  if (queue && (!queue.merge_parents || queue.merge_parents.length !== 2 || queue.merge_parents[0] !== queue.base_sha || queue.merge_parents[1] !== queue.synced_head_sha)) throw new PlatformError('GATE_NOT_PASSED');
   const evidence: CompletionInput = { ...await gateInput(client,task.id,sync),basePipelineSha,
     integration:queue?.pipeline_sha ? { result:queue.result === 'pass' ? 'PASS' : 'FAIL',qaHeadSha:queue.qa_head_sha,
       headSha:queue.ci_head,baseSha:queue.ci_base,pipelineSha:queue.pipeline_sha,treeSha:queue.tree_sha } : null,
@@ -110,7 +110,7 @@ export async function enqueueIntegration(client: PoolClient, taskId: string, epo
   if (!task || task.status !== 'gate' || !(await taskGate(client,task.id,task.task_key)).passed) return;
   const verification = required((await client.query<{ id: string; head_sha: string }>('select v.id,v.head_sha from verifications v join task_attempts a on a.id=v.attempt where a.task=$1 order by a.attempt_no desc limit 1', [task.id])).rows[0]);
   const a = (await repo.history(task.id)).at(-1);
-  const pr = a?.pr ?? (await client.query<{ pr: number }>('select pr from ci_runs where task=$1 and head_sha=$2 and pr is not null order by created_at desc,id desc limit 1',[task.id,verification.head_sha])).rows[0]?.pr;
+  const pr = a?.pr ?? (await client.query<{ pr: number }>('select pr from ci_runs where task=$1 and head_sha=$2 and pr is not null order by run_no desc limit 1',[task.id,verification.head_sha])).rows[0]?.pr;
   if (!pr) return;
   await repo.enqueue(task.project_id,epoch,'integrate',{ taskKey:task.task_key,qaHeadSha:verification.head_sha,branch:a?.branch,pr,commit:verification.head_sha },`integrate:${verification.id}`,(await repo.authority())?.generation ?? null);
 }

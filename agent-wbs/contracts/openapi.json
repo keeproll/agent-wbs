@@ -25390,6 +25390,33 @@
                       },
                       "additionalProperties": false
                     }
+                  },
+                  "pipelineObservation": {
+                    "type": "object",
+                    "required": [
+                      "baseSha",
+                      "pipelineSha",
+                      "definition"
+                    ],
+                    "properties": {
+                      "baseSha": {
+                        "$ref": "#/components/schemas/Sha"
+                      },
+                      "pipelineSha": {
+                        "anyOf": [
+                          {
+                            "$ref": "#/components/schemas/Sha"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "definition": {
+                        "$ref": "#/components/schemas/Pipeline"
+                      }
+                    },
+                    "additionalProperties": false
                   }
                 },
                 "additionalProperties": false
@@ -26134,6 +26161,12 @@
                   "status": {
                     "$ref": "#/components/schemas/CiStatus"
                   },
+                  "failScope": {
+                    "enum": [
+                      "baseline",
+                      "task"
+                    ]
+                  },
                   "logExcerpt": {
                     "type": "string"
                   },
@@ -26391,7 +26424,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "EPOCH_MISMATCH, EXTERNAL_WRITE_BLOCKED, GATE_NOT_PASSED, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST"
+            "description": "EPOCH_MISMATCH, EXTERNAL_WRITE_BLOCKED, GATE_NOT_PASSED, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST, MERGE_MISMATCH"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited",
@@ -26423,7 +26456,8 @@
             "GATE_NOT_PASSED",
             "IDEMPOTENCY_CONFLICT",
             "INVALID_TRANSITION",
-            "LEASE_LOST"
+            "LEASE_LOST",
+            "MERGE_MISMATCH"
           ],
           "429": [
             "RATE_LIMITED"
@@ -32921,6 +32955,19 @@
               }
             ]
           },
+          "failScope": {
+            "anyOf": [
+              {
+                "enum": [
+                  "baseline",
+                  "task"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "logExcerpt": {
             "anyOf": [
               {
@@ -34980,6 +35027,7 @@
                   "ACTIVE_TASK_BLOCKED",
                   "ORDER_NOT_PRESERVED",
                   "GATE_NOT_PASSED",
+                  "MERGE_MISMATCH",
                   "CLAIM_REJECTED",
                   "LEASE_LOST",
                   "CLEANUP_PENDING",

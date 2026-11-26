@@ -637,6 +637,7 @@ export const CiRun = Type.Object(
     pipelineSha: Nullable(c.Sha),
     steps: List(CiStep),
     failStep: Nullable(Type.String()),
+    failScope: Opt(Nullable(c.AnyOf('baseline', 'task'))),
     logExcerpt: Nullable(Type.String()),
     artifacts: lines,
     url: Nullable(Type.String()),

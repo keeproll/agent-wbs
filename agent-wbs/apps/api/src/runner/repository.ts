@@ -56,7 +56,7 @@ export class RunnerRepository {
     const check = (await this.client.query<{ passed: boolean }>(`select c.status='pass' and c.spec_revision=s.revision
       and c.input_version is not distinct from coalesce(t.src_input_version,(select id from input_versions where project_id=t.project_id order by v desc limit 1)) passed
       from ci_runs c join task_specs s on s.task=c.task join tasks t on t.id=c.task
-      where c.task=$1 and c.stage=1 and c.head_sha=$2 order by c.created_at desc,c.id desc limit 1`, [task.id, head ?? null])).rows[0];
+      where c.task=$1 and c.stage=1 and c.head_sha=$2 order by c.run_no desc limit 1`, [task.id, head ?? null])).rows[0];
     if (check) return Boolean(check.passed);
     // shortcut: M7-06에서 제거할 흐름 전용 자리표시다. 실제 CI가 있으면 그 결과가 우선하며 Gate의 ① 근거로 쓰지 않는다.
     return Boolean((await this.client.query(`select 1 from task_attempts a join tasks t on t.id=a.task join task_specs s on s.task=t.id
