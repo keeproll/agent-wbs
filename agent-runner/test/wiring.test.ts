@@ -63,6 +63,19 @@ test('설정: GitHub 저장소·방식과 CLI 업데이트 끄기', () => {
   expect(() => loadConfig({ AWBS_RUNNER_TOKEN, AWBS_GITHUB_REPO: 'https://github.com/acme/app', AWBS_GITHUB_API_URL: 'http://u:hunter2@x/' })).toThrow();
 });
 
+test('M4-06: 시스템 키 번호·소켓·서버 키 목록을 함께 받고, 비밀키 파일 설정은 만들지 않는다', () => {
+  const base = { AWBS_RUNNER_TOKEN: 'x'.repeat(43), AWBS_GITHUB_REPO: 'https://github.com/acme/app' };
+  const fields = { AWBS_SYSTEM_DEPLOY_KEY_ID: '7', AWBS_SYSTEM_SSH_AUTH_SOCK: '/run/user/1000/system.sock',
+    AWBS_SYSTEM_SSH_KNOWN_HOSTS: '/home/user/github-known-hosts' };
+  expect(loadConfig({ ...base, ...fields }).github).toMatchObject({ systemKey: {
+    id: 7, socket: fields.AWBS_SYSTEM_SSH_AUTH_SOCK, knownHosts: fields.AWBS_SYSTEM_SSH_KNOWN_HOSTS,
+  } });
+  expect(() => loadConfig({ ...base, AWBS_SYSTEM_DEPLOY_KEY_ID: '7' })).toThrow(/시스템/);
+  expect(() => loadConfig({ ...base, ...fields, AWBS_SYSTEM_DEPLOY_KEY_ID: '0' })).toThrow(/시스템/);
+  expect(() => loadConfig({ ...base, ...fields, AWBS_SYSTEM_SSH_AUTH_SOCK: 'relative.sock' })).toThrow(/절대 경로/);
+  expect(() => loadConfig({ ...fields, AWBS_RUNNER_TOKEN: 'x'.repeat(43) })).toThrow(/AWBS_GITHUB_REPO/);
+});
+
 test('봉인 형식 v1 고정 벡터: Runner 시험 사본이 공용 계약 fixture와 같다', async () => {
   const { readFile } = await import('node:fs/promises');
   const shared = await readFile(join(import.meta.dirname, '../../agent-wbs/contracts/fixtures/sealed-v1-vector.json'), 'utf8');

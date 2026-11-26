@@ -9,7 +9,8 @@ import { createResetCleanup, type ResetCleanupDeps } from './cleanup/reset.ts';
 import { CliUpdater, cliBinary, type CliRegistry } from './cli-update/manager.ts';
 import { cliAwareRun, cliEnvironment } from './cli-update/registry.ts';
 import { checkGitHost } from './git/probe.ts';
-import { createGitHubClient, type GitHubClient, type GithubMode, type RepoRef } from './github/client.ts';
+import { createGitHubClient, DeployKeyError, type GitHubClient, type GithubMode } from './github/client.ts';
+import type { GithubSettings } from './config.ts';
 import { GithubConnector } from './github/connector.ts';
 import { ghTokenSource, type TokenSource } from './github/token.ts';
 import { cgroupNote, checkReadiness, scheduleDaily, verifiedFromPolicy, type ReadinessDeps, type ReadinessReport } from './readiness/checks.ts';
@@ -25,12 +26,6 @@ import type { State } from './state/state.ts';
 export interface ActiveSession extends SessionState {
   /** 실행 중인 자식 프로세스 수(CLI 업데이트 유휴 판정용) */
   children: number;
-}
-
-export interface GithubSettings {
-  repo: RepoRef;
-  mode: GithubMode;
-  baseUrl?: string;
 }
 
 export interface RunnerAppDeps {
@@ -74,7 +69,7 @@ export class RunnerApp {
   readonly usage = new UsageTracker();
   readonly updater: CliUpdater;
   readonly sessions: ActiveSession[] = [];
-  readonly github: { client: GitHubClient; connector: GithubConnector; mode: GithubMode } | undefined;
+  readonly github: { client: GitHubClient; connector: GithubConnector; mode: GithubMode; checkDeployKeys(): Promise<void> } | undefined;
   readonly bins: { codex: string; claude: string };
   #identity: { hostId: string; bootId: string } | undefined;
   readonly #d: RunnerAppDeps;
@@ -107,6 +102,7 @@ export class RunnerApp {
       ...(d.now && { now: d.now }),
     });
     if (d.github) {
+      const systemKey = d.github.systemKey;
       const connector = new GithubConnector({
         api: d.api,
         epoch: () => d.state.snapshot.epoch,
@@ -125,21 +121,30 @@ export class RunnerApp {
         if (response.status === 401) source.invalidate();
         return response;
       };
+      const checkDeployKeys = async (): Promise<void> => {
+        try { await client.assertDeployKeys(systemKey?.id ?? null); }
+        catch (error) {
+          try { d.warn(message(error)); }
+          catch { /* 경고 출력 실패가 원래 거부 사유를 가리지 않게 한다. */ }
+          throw error;
+        }
+      };
       const client = createGitHubClient({
         repo: d.github.repo,
         token: () => source.token(),
         ...(d.github.baseUrl && { baseUrl: d.github.baseUrl }),
         fetch: githubFetch,
+        beforeWrite: checkDeployKeys,
         onPermissionDenied: async (event) => { await connector.reportPermissionDenied(event, client.permissions(), mode); },
       });
-      this.github = { client, connector, mode };
+      this.github = { client, connector, mode, checkDeployKeys };
     }
     const resetCleanup = createResetCleanup({
       home: d.home,
       identity: () => this.identity,
       // 원격 초기화는 GitHub 설정이 있을 때 실제 클라이언트로 연결한다(교차 리뷰 P1-2).
-      // 되돌림 push용 시스템 커밋 자격 증명은 Q-09 미결이라 공급원이 없다 → 되돌림이 필요한 초기화만 failed(조정자 결정 1-A).
-      ...(this.github && { remote: createGithubRemoteCleanup({ client: this.github.client }) }),
+      ...(this.github && { remote: createGithubRemoteCleanup({ client: this.github.client, warn: d.warn,
+        ...(d.github?.systemKey && { systemDeployKey: d.github.systemKey }) }) }),
       ...d.cleanup,
     });
     this.runner = new Runner({
@@ -245,6 +250,7 @@ export class RunnerApp {
     // 연결 재확인은 새로 판단한다. 자격 증명이 바뀌었을 수 있으므로 캐시한 토큰을 버린다(P1-5).
     this.#tokenSource?.invalidate();
     if (this.github.mode === 'token') await this.github.connector.register();
+    await this.github.checkDeployKeys();
     const status = await this.github.client.checkConnection(this.github.mode);
     // 연결 확인은 토큰 취득 실패를 ok:false로 바꾼다. WBS 인증 실패였으면 상태를 보고하지 않고 그 오류를 그대로 던진다.
     if (this.github.connector.authFailure !== undefined) throw this.github.connector.authFailure;
@@ -263,7 +269,7 @@ export class RunnerApp {
     await this.reportModels();
     await this.checkGithub().catch((error: unknown) => {
       // 키 등록·봉인 조회의 WBS 인증 실패는 Runner 토큰 문제이므로 위로 올려 앱을 멈춘다(P1-3).
-      if (authenticationFailed(error)) throw error;
+      if (authenticationFailed(error) || error instanceof DeployKeyError) throw error;
       this.#d.warn(`GitHub 연결 확인 실패: ${message(error)}`);
     });
     await this.runner.outbox.flush();

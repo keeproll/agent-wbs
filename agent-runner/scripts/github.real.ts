@@ -11,6 +11,7 @@ import { ghTokenSource } from '../src/github/token.ts';
 import { createGithubRemoteCleanup } from '../src/cleanup/remote.ts';
 import { createRedactor } from '../src/security/redact.ts';
 import { Secret } from '../src/security/secret.ts';
+import { GitRepository } from '../src/git/repository.ts';
 
 const repo = { owner: 'keeproll', repo: 'agent-wbs-sandbox' };
 const path = `/repos/${repo.owner}/${repo.repo}`;
@@ -34,10 +35,12 @@ if (lines) {
 }
 const redact = createRedactor([token.reveal(), ...(supplied ? [supplied.write.reveal(), supplied.read.reveal()] : [])]);
 const work = await mkdtemp(join(tmpdir(), 'agentwbs-m4-06-'));
-const results: Record<string, unknown> = { repository: https, startedAt: new Date().toISOString() };
+const results: Record<string, unknown> = { repository: https, startedAt: new Date().toISOString(),
+  deferred: 'owner 결정 10: 다른 작성자·비관리자 검증은 팀원 합류 때 진행' };
 const branches: string[] = [];
 const prs: number[] = [];
 let keyId: number | undefined;
+let extraKeyId: number | undefined;
 let agent: Record<string, string> = {};
 let baseline: string | undefined;
 let fixtureRoot: string | undefined;
@@ -110,6 +113,10 @@ async function git(args: string[], extra: Record<string, string> = {}, input?: s
 }
 
 async function push(sha: string, system: boolean) {
+  if (system) {
+    assert(keyId !== undefined);
+    await client.assertDeployKeys(keyId);
+  }
   const remote = system ? 'ssh://git@ssh.github.com:443/keeproll/agent-wbs-sandbox.git' : https;
   const auth = system ? agent : { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.extraHeader',
     GIT_CONFIG_VALUE_0: `AUTHORIZATION: Basic ${Buffer.from(`x-access-token:${token.reveal()}`).toString('base64')}` };
@@ -179,6 +186,19 @@ try {
   agent.GIT_SSH_COMMAND = `ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${join(work, 'known_hosts')}`;
   keyId = (await api<{ id: number }>('POST', `${path}/keys`, { title: `M4-06 ephemeral ${Date.now()}`, key: key.public, read_only: false }, 201)).id;
   await record('deployKey', { id: keyId, privateKeyStorage: 'ssh-agent memory only' });
+  await client.assertDeployKeys(keyId);
+  const extra = await run('python3', ['-c',
+    'from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey; from cryptography.hazmat.primitives.serialization import Encoding,PublicFormat; print(Ed25519PrivateKey.generate().public_key().public_bytes(Encoding.OpenSSH,PublicFormat.OpenSSH).decode())']);
+  assert.equal(extra.code, 0);
+  extraKeyId = (await api<{ id: number }>('POST', `${path}/keys`, { title: 'M4-06 other-key rejection', key: extra.stdout.trim(), read_only: true }, 201)).id;
+  try {
+    await assert.rejects(client.assertDeployKeys(keyId), /시스템 키 외/);
+    await record('otherDeployKeyDenied', { systemKeyId: keyId, otherKeyId: extraKeyId, blocked: true });
+  } finally {
+    await api('DELETE', `${path}/keys/${extraKeyId}`, undefined, 204);
+    extraKeyId = undefined;
+  }
+  await client.assertDeployKeys(keyId);
   const rules = { name: 'agentwbs M4-06 main', target: 'branch', enforcement: 'active',
     bypass_actors: [{ actor_type: 'DeployKey', actor_id: null, bypass_mode: 'always' }],
     conditions: { ref_name: { include: ['refs/heads/main'], exclude: [] } },
@@ -271,6 +291,7 @@ try {
     const writer = createGitHubClient({ repo, token: () => Promise.resolve(credentials.write), fetch: auditedFetch });
     await record('fineGrainedReadConnection', await reader.checkConnection('token'));
     await record('fineGrainedWriteConnection', await writer.checkConnection('token'));
+    await record('fineGrainedUnverified', writer.permissions());
     const branch = `agent/M4-06-permissions-${Date.now()}`;
     branches.push(branch);
     const head = await commit(lastMain, 'src/permissions.txt');
@@ -316,9 +337,13 @@ try {
       await record('ordinaryDirectPushDenied', { sha: reset.sha, ...denied });
       assert.notEqual(denied.code, 0);
       assert.equal(await client.mainSha(), lastMain);
-      const restored = await push(reset.sha, true);
-      await record('systemResetPush', { sha: reset.sha, parent: lastMain, baseline: fixtureRoot, tree: tree.sha, ...restored });
-      assert.equal(restored.code, 0);
+      assert(keyId !== undefined && agent.SSH_AUTH_SOCK);
+      const managed = await GitRepository.clone(join(work, 'runner'), 'sandbox', https);
+      assert.equal((await git(['-C', managed.path, 'fetch', '--', https, reset.sha])).code, 0);
+      await createGithubRemoteCleanup({ client, systemDeployKey: { id: keyId, socket: agent.SSH_AUTH_SOCK,
+        knownHosts: join(work, 'known_hosts') } }).pushReset(https, managed, reset.sha, lastMain);
+      await record('systemResetPush', { sha: reset.sha, parent: lastMain, baseline: fixtureRoot, tree: tree.sha, code: 0,
+        adapter: 'createGithubRemoteCleanup.pushReset -> GitRepository.pushSystemCommit' });
       assert.equal(await client.mainSha(), reset.sha);
       lastMain = reset.sha;
     }
@@ -327,11 +352,13 @@ try {
     process.exitCode = 1;
   }
   try {
+    if (extraKeyId !== undefined) await api('DELETE', `${path}/keys/${extraKeyId}`, undefined, 204);
     if (keyId !== undefined) {
       await api('DELETE', `${path}/keys/${keyId}`, undefined, 204);
       keyId = undefined;
       if (lastMain) {
-        const rejected = await push(lastMain, true);
+        // 폐기 검사는 사전 목록 검사 대신 같은 SSH 키로 실제 인증을 다시 시도한다.
+        const rejected = await git(['push', '--no-verify', '--', 'ssh://git@ssh.github.com:443/keeproll/agent-wbs-sandbox.git', `${lastMain}:refs/heads/main`], agent);
         await record('revokedDeployKeyDenied', rejected);
         assert.notEqual(rejected.code, 0);
       }
@@ -356,6 +383,6 @@ try {
   }
   input?.close();
   await record('finishedAt', new Date().toISOString());
-  console.log(JSON.stringify({ archive, failed: process.exitCode === 1, pending: supplied ? '다른 작성자의 CODEOWNERS 실증' : 'fine-grained 토큰·폐기 401·다른 작성자의 CODEOWNERS 실증' }));
-  process.exitCode ??= 2;
+  console.log(JSON.stringify({ archive, failed: process.exitCode === 1, pending: supplied ? null : 'fine-grained 토큰·폐기 401 실증', deferred: results.deferred }));
+  process.exitCode ??= supplied ? 0 : 2;
 }

@@ -176,6 +176,9 @@ pnpm -C agent-runner test -- github
 ## 실제 시험 저장소 실증(M4-06)
 
 실제 GitHub에 쓰는 명령은 일반 `test`와 분리했다.
+이 실증에는 Node.js 26, `gh`, Git, OpenSSH의 `ssh-agent`·`ssh-add`, Python 3와 설치된 `cryptography` 모듈이 필요하다.
+`cryptography`는 개인키 파일을 만들지 않고 시험용 키를 메모리에서 생성할 때만 쓴다.
+운영 Runner의 SSH 공급 연결에는 이 Python 모듈이 필요하지 않다.
 대상은 `keeproll/agent-wbs-sandbox` 하나로 고정했다.
 다른 주소로 쓰려고 하면 실행 전에 거부한다.
 왜: 개발 저장소의 코드나 설정을 시험 때문에 바꾸면 안 된다.
@@ -209,13 +212,45 @@ GitHub API의 `actor_id`는 `null`이다.
 그 뒤 같은 키로 push가 거부되는지 확인하고 메모리 보관 프로세스도 종료한다.
 
 GitHub는 키가 보낸 커밋이 최초 생성인지 초기화인지 판별하지 않는다.
-최초 생성과 초기화 되돌림만 키를 사용하도록 Runner 호출 경로를 제한해야 한다.
-현재 운영용 `systemCommitAuthorization`은 HTTP 인증 헤더 공급원이다.
-이 시험의 SSH 키를 운영 Runner에 연결하는 작업까지 끝났다는 뜻은 아니다.
+Runner의 `pushSystemCommit()`은 부모 없는 최초 생성 커밋을 허용한다.
+초기화 커밋은 예상 main 하나를 부모로 가져야 한다.
+초기화 대상 세 경로 밖을 바꾸면 전송 전에 거부한다.
+`RunnerApp`에서 초기화 실행기까지 시스템 SSH 설정을 연결했다.
+일반 PR 병합에는 이 SSH 키를 쓰지 않는다.
+
+시스템 키를 연결하려면 아래 공개 설정을 함께 넣는다.
+개인키는 전용 `ssh-agent`에 미리 넣어 둔다.
+`ssh-agent` 프로세스를 시작했다는 이유로 키가 들어 있는 것은 아니다.
+
+```sh
+AWBS_GITHUB_REPO=https://github.com/owner/repository
+AWBS_SYSTEM_DEPLOY_KEY_ID=7
+AWBS_SYSTEM_SSH_AUTH_SOCK=/run/user/1000/agentwbs-system.sock
+AWBS_SYSTEM_SSH_KNOWN_HOSTS=/home/user/github-known-hosts
+```
+
+`AWBS_SYSTEM_DEPLOY_KEY_ID`는 GitHub가 발급한 키 번호다.
+`AWBS_SYSTEM_SSH_AUTH_SOCK`는 메모리의 키로 인증을 요청할 소켓 경로다.
+`AWBS_SYSTEM_SSH_KNOWN_HOSTS`는 신뢰할 GitHub 서버 키 목록이다.
+서버 키 목록은 공개 정보다.
+개인키 파일 경로를 받는 설정은 없다.
+
+Runner는 연결 확인 전에 deploy key 목록을 조회한다.
+일반 GitHub 쓰기와 시스템 커밋 전에도 다시 조회한다.
+시스템 키 외 키가 하나라도 있으면 경고하고 GitHub 쓰기를 중단한다.
+시스템 키가 읽기 전용이거나 목록을 읽지 못한 경우에도 중단한다.
+시작할 때 점검에 실패하면 Runner 실행을 종료한다.
+왜: 규칙을 우회할 다른 키가 있는데도 연결 성공으로 보고하면 안 된다.
+
+목록 조회용 토큰에는 `Administration: read`가 추가로 필요하다.
+기존 Contents·Pull requests·Commit statuses 권한만으로 이 목록을 조회할 수 있다고 가정하지 않는다.
+이 읽기 권한은 저장소 설정을 바꾸는 쓰기 권한과 다르다.
+근거는 [GitHub의 deploy key 목록 조회 문서](https://docs.github.com/en/rest/deploy-keys/deploy-keys#list-deploy-keys)다.
 
 CODEOWNERS의 책임자와 PR 작성자가 모두 owner인 시험도 기록한다.
 그 경우 병합 허용을 다른 작성자의 변경까지 허용한다는 증거로 쓰지 않는다.
 다른 작성자가 보호 경로를 바꾼 PR의 거부는 별도 계정이나 앱으로 확인해야 한다.
+owner 결정 10에 따라 다른 작성자·비관리자 검증은 팀원 합류 때로 미뤘다.
 왜: 본인이 책임자인 경로를 본인이 바꾸는 경우와 다른 사람이 바꾸는 경우는 GitHub의 판단이 다르다.
 
 ### fine-grained 토큰과 폐기 확인
@@ -234,7 +269,7 @@ owner의 실제 터미널에서 다음 명령을 실행한다.
 토큰은 파이프(두 프로세스 사이의 메모리 통로)로만 넘긴다.
 
 ```sh
-python3 agent-runner/scripts/github-token-input.py | node agent-runner/scripts/github.real.ts /home/keeproll/.orca/bots/agentwbs/archive/2026-11-26/M4-06/새-토큰-실행-폴더 --tokens
+bash -o pipefail -c 'python3 agent-runner/scripts/github-token-input.py | node agent-runner/scripts/github.real.ts /home/keeproll/.orca/bots/agentwbs/archive/2026-11-26/M4-06/새-토큰-실행-폴더 --tokens'
 ```
 
 `토큰 검사 종료` 메시지가 나온 뒤 GitHub 설정에서 이번 토큰 두 개를 삭제한다.
@@ -243,8 +278,9 @@ python3 agent-runner/scripts/github-token-input.py | node agent-runner/scripts/g
 왜: 메모리에서 값을 지우는 것만으로는 이전 Runner가 가진 토큰을 막을 수 없다.
 이 PC의 기존 `gh` 로그인 토큰은 폐기하지 않는다.
 
-다른 작성자의 CODEOWNERS 실증이 남으면 종료 번호는 2다.
-토큰 없이 실행해도 종료 번호는 2다.
+owner가 미룬 검증은 결과의 `deferred`에 남긴다.
+토큰까지 검사하고 이번 토큰 두 개의 폐기 후 401을 확인하면 종료 번호는 0이다.
+토큰 없이 실행하면 해당 검증이 남아 있으므로 종료 번호는 2다.
 실증이나 정리가 실패하면 종료 번호는 1이다.
 왜: 일부 항목만 통과한 실행을 M4-06 전체 완료로 보고하지 않기 위해서다.
 
@@ -271,6 +307,11 @@ python3 agent-runner/scripts/github-token-input.py | node agent-runner/scripts/g
 - strict up-to-date: PR head가 최신 main을 포함해야 병합을 허용하는 규칙.
 - status: 특정 커밋에 붙이는 검사 결과 표시.
 - tree: 커밋 시점의 파일 전체 내용.
+- SSH: Secure Shell. 키로 인증하는 보안 통신 방식.
+- 소켓: 같은 PC의 프로세스끼리 요청을 주고받는 통로.
+- 공개키: 공유할 수 있는 인증 키의 공개 부분.
+- 개인키: 인증에 사용하는 비밀 부분.
+- Administration: GitHub 저장소 관리 권한 이름. 여기서는 키 목록 확인을 위한 읽기만 요구한다.
 - 응답 유실: GitHub는 요청을 처리했지만 호출자가 응답을 받지 못한 상황. 이 시험은 성공 응답을 받은 통신 경계에서 응답만 버려 재현한다.
 - 405: 보호 규칙 미충족이나 병합 가능 여부 계산 중에 올 수 있는 병합 거절.
 - 409: 계산이 끝난 PR에서 요청한 head SHA가 현재 head와 다를 때 오는 거절.
@@ -285,7 +326,8 @@ python3 agent-runner/scripts/github-token-input.py | node agent-runner/scripts/g
 2. 기록된 원격 Agent 브랜치 삭제(`deleteBranch`, Contents 쓰기). 이미 없으면(404·422) 성공으로 본다.
 3. 되돌림 커밋 일반 push.
    - main 직접 push는 **별도 시스템 커밋 자격 증명**으로만 한다(contracts §6, Q-09).
-   - Q-09가 미결이라 지금은 공급원이 없다. 그래서 되돌림이 필요한 초기화는 failed로 보고한다(조정자 결정 1-A).
+   - owner 결정 10에 따라 전용 deploy key의 메모리 키를 사용한다.
+   - 시스템 키 설정이 없거나 다른 deploy key가 있으면 실패로 보고한다.
    - 보내기 전에 GitHub의 main이 되돌림 커밋의 부모와 같은지 확인한다.
 
 로컬 저장소가 없으면 `topLevelEntries()`로 원격 main과 기준 커밋의 `src`·`contracts`·`.agentwbs`를 비교한다(쓰기 없음). 같으면 되돌림이 필요 없다.

@@ -148,6 +148,11 @@ export class GitHubError extends Error {
   }
 }
 
+/** 키 목록을 확인할 수 없는 경우에도 GitHub 쓰기를 중단한다. */
+export class DeployKeyError extends GitHubError {
+  override name = 'DeployKeyError';
+}
+
 const invalid = (message: string) => new GitHubError(message, -1, false);
 
 const CONTEXTS: readonly string[] = ['agentwbs/task', 'agentwbs/int', 'agentwbs/night', 'agentwbs/deploy'];
@@ -568,6 +573,37 @@ export function createGitHubClient(options: GitHubClientOptions) {
 
   return {
     repo,
+
+    /** owner 결정 10: 시스템 키 외 deploy key가 있으면 읽기 전용 키라도 중단한다. */
+    async assertDeployKeys(systemKeyId: number | null): Promise<void> {
+      if (systemKeyId !== null && (!Number.isSafeInteger(systemKeyId) || systemKeyId < 1)) {
+        throw new DeployKeyError('시스템 deploy key 번호가 올바르지 않습니다.', -1, false);
+      }
+      let found = false;
+      for (let page = 1; page <= 50; page += 1) {
+        const raw = await call('GET', `${repoPath}/keys`, { query: { per_page: '100', page: String(page) } }).catch(() => {
+          throw new DeployKeyError('deploy key 목록을 읽지 못했습니다. 인증 정보와 통신을 확인하세요.', 0, true);
+        });
+        if (raw.status !== 200) {
+          const error = failure(raw, 'deploy key 목록 확인 실패(Administration read 권한 필요)');
+          throw new DeployKeyError(error.message, error.status, error.retryable, error.retryAfterSeconds);
+        }
+        if (!Array.isArray(raw.body)) throw new DeployKeyError('deploy key 목록 형식을 확인하지 못했습니다.', -1, false);
+        for (const key of raw.body as { id: number; read_only: boolean }[]) {
+          if (!key || !Number.isSafeInteger(key.id) || key.id < 1 || typeof key.read_only !== 'boolean') {
+            throw new DeployKeyError('deploy key 목록의 키 정보를 확인하지 못했습니다.', -1, false);
+          }
+          if (key.id !== systemKeyId) throw new DeployKeyError('시스템 키 외 deploy key가 있습니다. GitHub 쓰기를 중단합니다.', -1, false);
+          if (key.read_only !== false) throw new DeployKeyError('시스템 deploy key가 쓰기 키가 아닙니다.', -1, false);
+          found = true;
+        }
+        if (!/rel="next"/.test(raw.headers.get('link') ?? '')) {
+          if (systemKeyId !== null && !found) throw new DeployKeyError('등록된 시스템 키(deploy key)를 찾지 못했습니다.', -1, false);
+          return;
+        }
+      }
+      throw new DeployKeyError('deploy key 목록을 끝까지 읽지 못했습니다. GitHub 쓰기를 중단합니다.', -1, false);
+    },
 
     /** 지금까지 알게 된 권한 상태(연결 확인 + 실제 쓰기 결과). 복사본을 돌려준다. */
     permissions(): Permissions {

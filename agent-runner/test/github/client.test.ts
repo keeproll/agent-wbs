@@ -380,6 +380,15 @@ describe('연결 확인', () => {
   });
 });
 
+test('M4-06: status 게시 201 직후 조회 반영이 늦으면 빈 목록일 수 있다', async () => {
+  const client = await setup();
+  const sha = model.branches.get('main') ?? '';
+  Object.assign(model, { statusReadLag: 1 });
+  await client.setCommitStatus({ sha, context: 'agentwbs/int', state: 'success' });
+  expect(await client.listCommitStatuses(sha)).toEqual([]);
+  expect(await client.listCommitStatuses(sha)).toMatchObject([{ context: 'agentwbs/int', state: 'success' }]);
+});
+
 describe('저장소 확인', () => {
   const FULL = [
     'prototype/uiux/Main.dc.html',
