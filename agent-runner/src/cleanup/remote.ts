@@ -1,6 +1,6 @@
 import { GitHubError, type GitHubClient } from '../github/client.ts';
 import { normalizeRepoUrl } from '../git/identity.ts';
-import type { GitRepository } from '../git/repository.ts';
+import type { GitRepository, SystemSsh } from '../git/repository.ts';
 
 /** 초기화 대상 경로(contracts §6 초기화 3단계). 이 셋만 기준 커밋으로 되돌린다. */
 const TARGETS = ['src', 'contracts', '.agentwbs'] as const;
@@ -40,21 +40,18 @@ export function sameRepository(a: string, b: string): boolean {
 
 export class SystemCredentialMissing extends Error {
   override name = 'SystemCredentialMissing';
-  constructor() { super('되돌림 push에 쓸 시스템 커밋 자격 증명이 없음(Q-09 미결) — 되돌림이 필요한 초기화는 완료할 수 없습니다.'); }
+  constructor() { super('되돌림 push에 쓸 시스템 SSH 키 설정이 없음 — 되돌림이 필요한 초기화는 완료할 수 없습니다.'); }
 }
 
 export interface GithubRemoteCleanupOptions {
   client: GitHubClient;
-  /**
-   * main 직접 push용 **시스템 커밋 자격 증명**(contracts §6 「별도 시스템 커밋 자격 증명 — Q-09」).
-   * `Authorization` 헤더 값(예: `Bearer …`)을 돌려준다. 없거나 null이면 되돌림 push를 하지 않는다.
-   * 왜 일반 GitHub 토큰을 쓰지 않나: 계약이 main 직접 push를 별도 자격 증명으로만 허용한다(조정자 결정 1-A).
-   */
-  systemCommitAuthorization?: () => Promise<string | null>;
+  /** owner 결정 10: 개인키는 전용 ssh-agent에 두고 공개 설정만 전달한다. */
+  systemDeployKey?: SystemSsh & { id: number };
+  warn?: (message: string) => void;
 }
 
 /** M4-04 GitHub 클라이언트로 만든 원격 정리. PR 닫기·브랜치 삭제는 일반 GitHub 토큰으로 한다. */
-export function createGithubRemoteCleanup({ client, systemCommitAuthorization }: GithubRemoteCleanupOptions): RemoteCleanup {
+export function createGithubRemoteCleanup({ client, systemDeployKey, warn }: GithubRemoteCleanupOptions): RemoteCleanup {
   const repository = `https://github.com/${client.repo.owner}/${client.repo.repo}`;
   const guard = (target: string) => { if (!sameRepository(target, repository)) throw new RepositoryMismatch(); };
   return {
@@ -86,11 +83,17 @@ export function createGithubRemoteCleanup({ client, systemCommitAuthorization }:
     },
     async pushReset(target, repo, commit, parent) {
       guard(target);
-      const authorization = (await systemCommitAuthorization?.()) ?? null;
-      if (authorization === null) throw new SystemCredentialMissing();
+      if (!systemDeployKey) throw new SystemCredentialMissing();
       const main = await client.mainSha();
       if (main !== parent) throw new Error('원격 main이 되돌림 커밋의 부모와 다름 — 최신 main으로 다시 초기화합니다.');
-      await repo.pushCommit(commit, 'main', authorization);
+      try {
+        await client.assertDeployKeys(systemDeployKey.id);
+      } catch (error) {
+        try { warn?.(error instanceof Error ? error.message : '시스템 deploy key 확인 실패'); }
+        catch { /* 경고 출력 실패가 원래 거부 사유를 가리지 않게 한다. */ }
+        throw error;
+      }
+      await repo.pushSystemCommit(commit, parent, systemDeployKey);
     },
   };
 }

@@ -6,8 +6,10 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { ApiError, type ApiClient } from '../src/api/client.ts';
 import { RunnerApp } from '../src/app.ts';
 import { sealCredential } from '../src/github/credential.ts';
+import { DeployKeyError } from '../src/github/client.ts';
 import type { HostSources } from '../src/resources/host.ts';
 import { State } from '../src/state/state.ts';
+import { protectedMainResponse } from './fakes/github/rules.ts';
 
 let home: string;
 let state: State;
@@ -20,13 +22,77 @@ const hostSources: HostSources = {
   readFile: (path) => Promise.resolve(({ '/etc/machine-id': 'm', '/proc/sys/kernel/random/boot_id': 'b', '/proc/meminfo': 'MemTotal: 1 kB\nSwapTotal: 0 kB\n' } as Record<string, string>)[path] ?? ''),
   hostname: () => 'h', kernel: () => 'k', cores: () => 1, diskFree: () => Promise.resolve(1),
 };
-function app(api: ApiClient = vi.fn() as unknown as ApiClient, githubFetch?: typeof fetch) {
-  return new RunnerApp({ state, api, home, version: 't', env: {}, warn: () => undefined, hostSources,
+function app(api: ApiClient = vi.fn() as unknown as ApiClient, githubFetch?: typeof fetch, warn: (message: string) => void = () => undefined) {
+  return new RunnerApp({ state, api, home, version: 't', env: {}, warn, hostSources,
     cliRegistry: { latest: () => Promise.resolve('1.0.0'), install: () => Promise.resolve(), probe: () => Promise.resolve() },
     ...(githubFetch && { github: { repo: { owner: 'o', repo: 'r' }, mode: 'token' as const }, githubFetch }),
   });
 }
 const settle = (p: Promise<unknown>) => { const r = { value: 'pending' }; p.then(() => { r.value = 'resolved'; }, () => { r.value = 'rejected'; }); return r; };
+
+test.each([false, true])('M4-06: 연결 확인과 쓰기 전에 다른 deploy key를 경고하고 중단한다(경고 출력 실패=%s)', async (warningFails) => {
+  let key = '';
+  const api = (async (operation: string, request: { body?: { publicKeyPem: string } }) => {
+    if (operation === 'registerGithubKey') { key = request.body?.publicKeyPem ?? ''; return { body: { keyId: 'k' } }; }
+    return { body: { sealed: sealCredential(key, 'guard-token') } };
+  }) as unknown as ApiClient;
+  const requests: string[] = []; const warnings: string[] = [];
+  const send = (async (input: string | URL) => {
+    requests.push(new URL(input).pathname);
+    return Response.json([{ id: 8, read_only: false }]);
+  }) as typeof fetch;
+  const a = app(api, send, (text) => { warnings.push(text); if (warningFails) throw new Error('경고 출력 장애'); }); await a.init();
+  await expect(a.checkGithub()).rejects.toBeInstanceOf(DeployKeyError);
+  await expect(a.github?.client.setCommitStatus({ sha: 'a'.repeat(40), context: 'agentwbs/int', state: 'success' })).rejects.toBeInstanceOf(DeployKeyError);
+  expect(requests).toEqual(['/repos/o/r/keys', '/repos/o/r/keys']);
+  expect(warnings).toHaveLength(2);
+  expect(warnings.every((text) => text.includes('시스템 키 외'))).toBe(true);
+});
+
+test('M4-06: 시작 점검에서 키 정책을 확인할 수 없으면 계속 실행하지 않는다', async () => {
+  const a = app();
+  vi.spyOn(a, 'reportHost').mockResolvedValue();
+  vi.spyOn(a.updater, 'recover').mockResolvedValue();
+  vi.spyOn(a, 'checkReadiness').mockResolvedValue({ at: new Date().toISOString(), items: [] });
+  vi.spyOn(a, 'reportModels').mockResolvedValue();
+  vi.spyOn(a, 'checkGithub').mockRejectedValue(new DeployKeyError('시스템 키 외 deploy key', -1, false));
+  await expect(a.bootstrap()).rejects.toBeInstanceOf(DeployKeyError);
+});
+
+test('M1: 다른 키가 확인된 시작 실패는 Runner 반복도 종료한다', async () => {
+  const a = app(); const controller = new AbortController();
+  vi.spyOn(a.runner, 'ready', 'get').mockReturnValue(true);
+  vi.spyOn(a.runner, 'run').mockImplementation((signal) => new Promise((resolve) => { signal.addEventListener('abort', () => resolve()); }));
+  vi.spyOn(a, 'bootstrap').mockRejectedValue(new DeployKeyError('시스템 키 외 deploy key', -1, false));
+  const running = a.run(controller.signal); const result = settle(running);
+  try {
+    await pause(50);
+    expect(result.value).toBe('rejected');
+  } finally { controller.abort(); await running.catch(() => undefined); }
+});
+
+test('H1: owner의 한정 토큰으로 키 목록을 읽고 우회 불가 연결 확인도 통과한다', async () => {
+  let key = '';
+  const api = (async (operation: string, request: { body?: { publicKeyPem: string } }) => {
+    if (operation === 'registerGithubKey') { key = request.body?.publicKeyPem ?? ''; return { body: { keyId: 'key' } }; }
+    return { body: { sealed: sealCredential(key, 'owner-fine-grained-fixture') } };
+  }) as unknown as ApiClient;
+  const paths: string[] = [];
+  const send = (async (input: string | URL) => {
+    const path = new URL(input).pathname; paths.push(path);
+    if (path.endsWith('/keys')) return Response.json([]);
+    if (path === '/user') return Response.json({ login: 'owner' });
+    return protectedMainResponse(path) ?? Response.json({ permissions: { admin: true, push: true, pull: true } });
+  }) as typeof fetch;
+  const a = app(api, send); await a.init();
+  if (!a.github) throw new Error('GitHub 시험 설정이 없습니다.');
+  const report = vi.spyOn(a.github.connector, 'reportConnection');
+  await a.checkGithub();
+  expect(report).toHaveBeenCalledWith(expect.objectContaining({ ok: true, account: 'owner',
+    permissions: { metadata: 'verified', contents: 'unverified', pulls: 'unverified', statuses: 'unverified' } }));
+  expect(paths).toContain('/repos/o/r/keys');
+  expect(paths).toContain('/repos/o/r/rulesets/1');
+});
 
 test('P1-3: 통신 반복의 치명적 오류는 외부 신호 없이도 run()을 끝내고 오류를 전한다', async () => {
   const a = app(); const controller = new AbortController();
@@ -93,6 +159,9 @@ test('P1-5: GitHub 연결을 다시 확인하면 새 봉인 토큰을 받는다'
     await Promise.resolve();
     const authorization = new Headers(init.headers).get('authorization') ?? ''; auth.push(authorization);
     if (authorization !== `Bearer ${currentToken}`) return Response.json({ message: 'Bad credentials' }, { status: 401 });
+    const protection = protectedMainResponse(new URL(input).pathname);
+    if (protection) return protection;
+    if (new URL(input).pathname.endsWith('/keys')) return Response.json([]);
     return Response.json(new URL(input).pathname === '/user' ? { login: 'user' } : { permissions: { push: true, pull: true, admin: false } });
   }) as typeof fetch;
   const a = app(api, githubFetch); await a.init();
@@ -107,10 +176,11 @@ test('P1-5: GitHub 401 응답은 토큰 캐시를 비워 다음 요청이 새 �
     if (operation === 'registerGithubKey') { key = request.body?.publicKeyPem ?? ''; return { status: 200, body: { keyId: 'key' }, headers: new Headers() }; }
     credentialCalls++; return { status: 200, body: { sealed: sealCredential(key, currentToken) }, headers: new Headers() };
   }) as unknown as ApiClient;
-  const githubFetch = (async (_input: string | URL, init: RequestInit) => {
+  const githubFetch = (async (input: string | URL, init: RequestInit) => {
     await Promise.resolve();
     const ok = new Headers(init.headers).get('authorization') === `Bearer ${currentToken}`;
-    return ok ? Response.json({}, { status: 201 }) : Response.json({ message: 'Bad credentials' }, { status: 401 });
+    if (!ok) return Response.json({ message: 'Bad credentials' }, { status: 401 });
+    return new URL(input).pathname.endsWith('/keys') ? Response.json([]) : Response.json({}, { status: 201 });
   }) as typeof fetch;
   const a = app(api, githubFetch); await a.init();
   await a.github?.client.setCommitStatus({ sha: 'a'.repeat(40), context: 'agentwbs/task', state: 'pending' });

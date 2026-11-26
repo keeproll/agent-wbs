@@ -10,6 +10,14 @@ export class GitSafetyError extends Error {
 }
 
 export interface CleanupFailure { name: string; path: string; detail: string }
+/** 개인키 대신 전용 ssh-agent 소켓과 공개 서버 키 목록만 받는다. */
+export interface SystemSsh { socket: string; knownHosts: string }
+
+/** 시험용 push도 운영 push와 같은 인증·서버 확인 경계를 사용한다. */
+export function systemSshCommand(knownHosts: string): string {
+  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  return `ssh -F /dev/null -o BatchMode=yes -o StrictHostKeyChecking=yes -o IdentityFile=none -o ForwardAgent=no -o GlobalKnownHostsFile=/dev/null -o UserKnownHostsFile=${quote(knownHosts)}`;
+}
 
 export class GitCleanupError extends GitSafetyError {
   override name = 'GitCleanupError';
@@ -425,6 +433,32 @@ export class GitRepository {
     const env: NodeJS.ProcessEnv = authorization === undefined ? {}
       : { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.extraHeader', GIT_CONFIG_VALUE_0: `AUTHORIZATION: ${authorization}` };
     await this.git(['push', '--no-verify', '--', source, `${commit}:refs/heads/${branch}`], undefined, env);
+  }
+
+  /** 시스템 직접 push는 최초 생성 또는 세 초기화 경로만 바꾸는 단일 부모 커밋에 한한다. 호출자가 GitHub 키 목록과 main을 먼저 대조한다. */
+  async pushSystemCommit(commit: string, parent: string | null, ssh: SystemSsh): Promise<void> {
+    sha(commit);
+    if (parent !== null) sha(parent);
+    const parents = (await this.git(['show', '-s', '--format=%P', commit])).toString().trim();
+    if (parent === null) {
+      if (parents !== '') throw new GitSafetyError('최초 생성 커밋에는 부모가 없어야 합니다.');
+    } else {
+      if (parents !== parent) throw new GitSafetyError('시스템 되돌림 커밋의 부모가 예상 main과 다릅니다.');
+      const outside = await this.git(['diff-tree', '--no-commit-id', '--name-only', '--no-renames', '-r', '-z', parent, commit, '--',
+        '.', ':(exclude)src', ':(exclude)contracts', ':(exclude).agentwbs']);
+      if (outside.length > 0) throw new GitSafetyError('시스템 되돌림 커밋이 초기화 대상 밖의 경로를 바꿉니다.');
+    }
+    const url = URL.parse((await this.trusted()).source);
+    if (!url || url.protocol !== 'https:' || url.hostname !== 'github.com' || url.port !== '' ||
+      !/^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/?$/.test(url.pathname)) {
+      throw new GitSafetyError('시스템 SSH push는 등록된 github.com 저장소만 허용합니다.');
+    }
+    if (!(await stat(await safePath(ssh.socket)))?.isSocket()) throw new GitSafetyError('시스템 SSH 소켓을 확인할 수 없습니다.');
+    if (!(await stat(await safePath(ssh.knownHosts)))?.isFile()) throw new GitSafetyError('서버 키 목록 파일을 확인할 수 없습니다.');
+    const remote = `ssh://git@ssh.github.com:443${url.pathname.replace(/\/$/, '').replace(/\.git$/, '')}.git`;
+    await this.git(['push', '--no-verify', '--', remote, `${commit}:refs/heads/main`], undefined, {
+      GIT_ALLOW_PROTOCOL: 'ssh', GIT_SSH_COMMAND: systemSshCommand(ssh.knownHosts), GIT_SSH_VARIANT: 'ssh', SSH_AUTH_SOCK: ssh.socket,
+    });
   }
 
   async head(): Promise<string> {
