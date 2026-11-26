@@ -14,7 +14,8 @@ const catalog = {
 };
 
 describe('parseCodexCatalog — 모델별 CLI Effort 값(contracts §3.1, Q-06)', () => {
-  test('목록에 보이는 모델만, 우선순위가 앞설수록 rank가 높다', () => {
+  // rank 출처는 owner에게 묻는 중이다. 아래 priority 기준은 「설정이 없을 때의 잠정 기본값」일 뿐 정답이 아니다.
+  test('[잠정 기본값] 목록에 보이는 모델만, 우선순위가 앞설수록 rank가 높다', () => {
     expect(parseCodexCatalog(JSON.stringify(catalog))).toEqual([
       { id: 'gpt-6.2-sol', label: 'GPT-6.2-Sol', rank: 3, efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
       { id: 'gpt-6-luna', label: 'GPT-6-Luna', rank: 2, efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
@@ -49,6 +50,40 @@ describe('parseCodexCatalog — 모델별 CLI Effort 값(contracts §3.1, Q-06)'
 
   test.each(['{깨짐', '{}', '{"models":[{"display_name":"x"}]}'])('형식이 다르면 추정하지 않고 오류: %s', (text) => {
     expect(() => parseCodexCatalog(text)).toThrow();
+  });
+});
+
+describe('rank 출처를 설정으로 바꿀 수 있다(owner 결정 대기)', () => {
+  test('rankOrder를 주면 그 순서(앞이 위)로 rank를 매기고, 목록에 없는 모델은 그 아래에 둔다', () => {
+    const ranked = parseCodexCatalog(JSON.stringify(catalog), { rankOrder: ['gpt-5.5', 'gpt-6.2-sol'] });
+    expect(ranked.map((m) => [m.id, m.rank])).toEqual([
+      ['gpt-5.5', 3],
+      ['gpt-6.2-sol', 2],
+      ['gpt-6-luna', 1],
+    ]);
+  });
+
+  test('collectModels가 Agent별 rankOrder 설정을 전달한다', async () => {
+    const run: RunCommand = () => Promise.resolve({ code: 0, stdout: JSON.stringify(catalog), stderr: '' });
+    const body = await collectModels('Codex', { run, codex: 'codex', claude: 'claude', claudeModelIds: [], rankOrder: { Codex: ['gpt-6-luna'] } });
+    expect(body?.models[0]).toMatchObject({ id: 'gpt-6-luna', rank: 3 });
+  });
+
+  test('Claude 모델 순서도 rankOrder로 바꿀 수 있다', () => {
+    expect(claudeModels(['a', 'b'], null, ['b']).map((m) => [m.id, m.rank])).toEqual([
+      ['b', 2],
+      ['a', 1],
+    ]);
+  });
+});
+
+describe('Claude Effort 출처를 설정으로 바꿀 수 있다(owner 결정 대기)', () => {
+  test("claudeEfforts: 'unknown'이면 도움말을 부르지 않고 efforts를 null(미확인)로 보낸다", async () => {
+    const calls: string[] = [];
+    const run: RunCommand = (cmd, args) => (calls.push([cmd, ...args].join(' ')), Promise.resolve({ code: 0, stdout: '--effort <l> (low)', stderr: '' }));
+    const body = await collectModels('Claude', { run, codex: 'codex', claude: 'claude', claudeModelIds: ['m'], claudeEfforts: 'unknown' });
+    expect(body).toEqual({ agent: 'Claude', models: [{ id: 'm', label: 'm', rank: 1, efforts: null }] });
+    expect(calls).toEqual([]);
   });
 });
 
@@ -103,7 +138,7 @@ describe('collectModels — 무료 로컬 명령만 부른다', () => {
     expect(body).toMatchObject({ agent: 'Codex', models: [{ id: 'gpt-6.2-sol' }, { id: 'gpt-6-luna' }, { id: 'gpt-5.5' }] });
   });
 
-  test('Claude는 `claude --help`', async () => {
+  test('[잠정 기본값] Claude는 `claude --help`의 Effort를 모든 설정 모델에 붙인다', async () => {
     const r = run({ 'claude --help': { code: 0, stdout: '  --effort <level>  Effort (low, medium)\n' } });
     const body = await collectModels('Claude', { run: r.fn, codex: 'codex', claude: 'claude', claudeModelIds: ['claude-opus-5-5'] });
     expect(r.calls).toEqual(['claude --help']);
