@@ -357,8 +357,10 @@ describe('planning 팀장 CP 판단 job: 생성·재요청, 저장 위치 이전
       expect(await judgementJobs(cp.id)).toHaveLength(1);
 
       // 기존 Task의 범위가 바뀌면 변경 후 내용의 hash가 달라진다. 승인 시도(409)에서도 새 job은 남는다.
+      // 미리보기를 다시 부르지 않고 이전 hash로 승인해, job이 승인 경로에서 만들어지는지 본다.
+      const oldHash = (await preview(cp.id)).previewHash;
       await ownerPool.query(`update task_specs set overview=jsonb_set(overview,'{scope}','["다른 범위"]') where task=$1`, [await idOf(existing)]);
-      const refused = await approve(cp.id);
+      const refused = await approve(cp.id, oldHash);
       expect(errorOf(refused).code).toBe('SPLIT_JUDGEMENT_REQUIRED');
       const jobs = await judgementJobs(cp.id);
       expect(jobs).toHaveLength(2);
@@ -494,16 +496,25 @@ describe('planning CP splitBasis와 add 선택 필드', () => {
       await ownerPool.query("update tasks set conflict_group='pay' where task_key=$1", [second]);
       await estimate(second, 10);
       await ownerPool.query('update task_specs set ac=$2 where task=$1', [await idOf(second), JSON.stringify(ac.map((x) => ({ ...x, method: '' })))]);
-      const opsTwo = ops.map((op) => ('task' in op ? { ...op, task: second } : op));
+      // 판단 규칙을 켜고 조각마다 판단을 함께 보낸다. 서버는 상속한 묶음을 넣은 내용으로 hash를 계산해 붙인다.
+      await judgedRulesOn(true);
+      const opsTwo = ops.map((op) => ('task' in op ? { ...op, task: second } : { ...op, t: { ...op.t, judgedRules: met(RULES) } }));
       const stored = await planningCp({ source: { kind: 'split', id: second }, ops: opsTwo, splitJudgements: met(['ac_meaning', 'layer_order', 'test_included']) });
       expect(stored.status).toBe('review');
       const first = await preview(stored.id);
+      expect(first.holdReasons).toEqual([]);
       expect(first.diff.filter((d) => d.field === 'conflictGroup').map((d) => [d.before, d.after])).toEqual([['pay', 'pay'], ['pay', 'pay']]);
       await ownerPool.query("update tasks set conflict_group='billing' where task_key=$1", [second]);
       const again = await preview(stored.id);
       expect(again.diff.filter((d) => d.field === 'conflictGroup').map((d) => [d.before, d.after])).toEqual([['billing', 'billing'], ['billing', 'billing']]);
       // 분할 판단은 원래 Task의 현재 내용(묶음 포함)으로 계산하므로 다시 판단이 필요하다.
-      expect(again.holdReasons.map((r) => r.code)).toEqual(['JUDGEMENT_MISSING', 'JUDGEMENT_MISSING', 'JUDGEMENT_MISSING']);
-    } finally { await ownerPool.query('update schedule_policy set cp_auto=true'); }
+      // 조각의 규칙 5·7·9 판단도 상속 묶음이 바뀌어 낡는다(조각마다 3개), 분할 판단 3개(원래 Task 기준)도 마찬가지다.
+      const byTask = again.holdReasons.filter((r) => r.code === 'JUDGEMENT_MISSING' && r.taskKey !== second);
+      expect(byTask.map((r) => r.taskKey).sort()).toEqual([...Array<string>(3).fill(again.idMap['NEW-1'] ?? ''), ...Array<string>(3).fill(again.idMap['NEW-2'] ?? '')]);
+      expect(again.holdReasons.filter((r) => r.taskKey === second).map((r) => r.rule)).toEqual(['ac_meaning', 'layer_order', 'test_included']);
+    } finally {
+      await ownerPool.query('update schedule_policy set cp_auto=true');
+      await judgedRulesOn(false);
+    }
   });
 });
