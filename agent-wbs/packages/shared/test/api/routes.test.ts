@@ -153,6 +153,7 @@ POST /api/runner/attempts/:id/evidence
 POST /api/runner/attempts/:id/subagent-usage
 POST /api/runner/ci/queue
 POST /api/runner/github/status
+POST /api/runner/github/key
 GET /api/runner/github/credential
 GET /api/runner/policy
 POST /api/runner/commands/:id/result

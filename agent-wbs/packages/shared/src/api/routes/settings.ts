@@ -54,10 +54,19 @@ const settings = [
     autoRetryLimit: c.Count,
     autoReworkLimit: c.Count,
   }),
-  // 모델 정보는 Runner 보고, 매핑은 owner 승인표다. 팀장은 허용만 정한다(G§7.1, Q-06).
-  ...setting('ModelSettings', '/api/settings/models', '허용 모델', {}, {
-    write: { models: List(Body({ agent: c.Agent, id: Text, allowed: Type.Boolean() })) },
+  // 모델 정보는 Runner 보고, 매핑은 owner 승인표다. 팀장은 허용과 순서·Claude 목록을 정한다(G§7.1, Q-06, owner 2026-11-26 아이템 8).
+  // rank는 rankOrder(아래부터)에서 서버가 계산한 값이다. 순서·목록은 바꿀 때만 보낸다.
+  ...setting('ModelSettings', '/api/settings/models', '허용 모델·모델 순서', {}, {
+    write: {
+      models: List(Body({ agent: c.Agent, id: Text, allowed: Type.Boolean() })),
+      rankOrder: Opt(m.ModelRankOrder),
+      codexFamilyOrder: Opt(m.CodexFamilyOrder),
+      claudeModels: Opt(m.ClaudeModels),
+    },
     read: {
+      rankOrder: m.ModelRankOrder,
+      codexFamilyOrder: m.CodexFamilyOrder,
+      claudeModels: m.ClaudeModels,
       models: List(
         Type.Object({
           agent: c.Agent,
@@ -137,6 +146,8 @@ const settings = [
         status: Type.String(),
         account: Nullable(Type.String()),
         scopes: Nullable(c.GithubScopes),
+        // 미확인 권한 등 알릴 것이 있을 때의 문구. 없으면 null
+        warning: Nullable(Type.String()),
         expiresAt: Nullable(c.Timestamp),
       },
     },

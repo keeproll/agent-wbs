@@ -69,10 +69,11 @@ test('F2 취소 CP의 영향: 풀리는 후속과 아직 막힌 후속을 구분
 });
 
 test('F3 모델별 Effort를 보고하고 미확인과 미매핑 값을 보존한다', () => {
-  const model = (id: string, efforts: unknown) => ({ id, label: id, rank: 1, efforts });
+  // rank는 서버 설정값이라 보고하지 않는다(owner 2026-11-26 아이템 8).
+  const model = (id: string, efforts: unknown) => ({ id, label: id, efforts });
   expect(accepts('reportModels', { agent: 'Codex', models: [model('gpt-5.5', ['low', 'xhigh']), model('gpt-6-sol', ['max', 'ultra'])] })).toBe(true);
   expect(accepts('reportModels', { agent: 'Codex', models: [model('hidden', null)] })).toBe(true);
-  expect(accepts('reportModels', { agent: 'Codex', models: [{ id: 'x', label: 'x', rank: 1 }], efforts: ['low'] })).toBe(false);
+  expect(accepts('reportModels', { agent: 'Codex', models: [{ id: 'x', label: 'x', efforts: null }], efforts: ['low'] })).toBe(false);
 });
 
 test('F4 기술 결정 제안은 원본 경로에서 Runner가 하고 승인은 팀장이 한다', () => {
@@ -98,14 +99,15 @@ test('F5 bootstrap 재시도는 초안 revision을 비교하고, 초안 전이�
   expect(op('retryBootstrap').errors).toContain('VERSION_CONFLICT');
 });
 
-test('F6 팀장은 모델 허용만 쓴다', () => {
+test('F6 팀장은 모델별로는 허용만 쓴다(순서는 rankOrder 설정으로)', () => {
   const entry = { agent: 'Codex', id: 'gpt-5.5', allowed: true };
   expect(accepts('putModelSettings', { updatedAt: T, models: [entry] })).toBe(true);
   for (const extra of [{ efforts: [{ key: 'ultra', level: 5 }] }, { rank: 9 }, { label: 'x' }, { isNew: false }]) {
     expect(accepts('putModelSettings', { updatedAt: T, models: [{ ...entry, ...extra }] }), JSON.stringify(extra)).toBe(false);
   }
   const read = { ...entry, label: '5.5', rank: 1, isNew: false, efforts: [{ key: 'ultra', level: null }] };
-  expect(responds('getModelSettings', { updatedAt: T, models: [read] })).toBe(true);
+  const order = { rankOrder: { Claude: [], Codex: ['gpt-5.5'] }, codexFamilyOrder: ['luna'], claudeModels: ['claude-haiku-5-5'] };
+  expect(responds('getModelSettings', { updatedAt: T, models: [read], ...order })).toBe(true);
 });
 
 test('F7 원본이 정한 거부 사례의 오류를 선언한다', () => {

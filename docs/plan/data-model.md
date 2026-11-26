@@ -493,6 +493,8 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
   - 근거: §6.2
 - `agent_models` / `agent_efforts`
   - `agent_models`: 보고값, rank, allowed(신규=false), is_new
+    - rank는 Runner 보고값이 아니다. 서버가 `app_settings.model_settings`의 순서(`rankOrder`)에서 계산해 넣는다(owner 2026-11-26 아이템 8, §6.2).
+    - 순서 설정이 바뀌면 rank도 다시 계산한다.
   - `agent_efforts`: **CLI×모델별** 값→공통 1~5 명시 매핑(owner Q-06 승인표, ultra·미확인은 미매핑=사용 안 함)
   - 근거: §7.2
 - `exec_policy`
@@ -560,10 +562,18 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
   - 열린 알림의 unique는 프로젝트 알림과 전역 알림(project_id null)을 따로 센다.
   - 근거: §4.1 §4.14 L522
 - `app_settings`
-  - app_url, heartbeat 주기·누락 횟수, 분할 기준, 작업 흐름 기본값, 시간대
+  - app_url, heartbeat 주기·누락 횟수, 분할 기준, 작업 흐름 기본값, 시간대, model_settings
+  - `model_settings`(jsonb): 모델 순서·Codex 계열 순서·Claude 모델 목록이다(owner 2026-11-26 아이템 8). 모양과 초기값은 §6.2.
+    - API `GET/PUT /api/settings/models`의 `rankOrder`·`codexFamilyOrder`·`claudeModels`와 이름이 같다.
+    - 세 항목이 모두 있어야 한다(CHECK `app_model_settings_shape`).
   - 근거: §4.9
 - `github_settings`
-  - mode, status, scopes, expires_at, account
+  - mode, status, scopes, warning, expires_at, account
+  - `scopes`(jsonb, null 가능): 권한별 확인 상태 `{contents,pulls,statuses,metadata}`. 값은 `verified`·`unverified`·`missing`이다(조정자 결정 2026-11-26).
+    - null은 「확인 안 함」이다. 네 권한이 정확히 있어야 하고 다른 키는 없어야 한다(CHECK `github_scopes_shape`).
+    - 마이그레이션 0016 전에는 `text[]`였다. 옛 값의 뜻을 알 수 없어 추정하지 않고 null로 바꿨다. 다음 연결 확인 보고가 채운다.
+  - `warning`(text, null 가능): 미확인 권한처럼 팀장에게 알릴 문구. 공백만 있는 값은 거부한다.
+  - Runner 봉인용 공개키 등록(`POST /runner/github/key`)은 DB에 저장하지 않는다. 서버 메모리에만 둔다(contracts §3.1).
   - 근거: §8.4
 
 ### 2.8 설계 · CI · 이력
@@ -850,10 +860,15 @@ epoch가 바뀌는 순간(초기화)과 다른 쓰기가 겹쳐도 옛 프로젝
 - 부트 시 자동 migrate 금지. `db:migrate` 명령으로만 실행.
   - 왜: 서버가 켜질 때마다 DB 구조가 몰래 바뀌면 사고를 알아채기 어렵다.
 - Seed 두 가지:
-  - `system`: G가 확정한 기본 정책·분할 기준, owner 확정 Q-03 값·Q-04(자동 재시도 2·재작업 3)·Q-06 매핑, 검토를 마친 하위 Agent v1 — M5-06
+  - `system`: G가 확정한 기본 정책·분할 기준, owner 확정 Q-03 값·Q-04(자동 재시도 2·재작업 3)·Q-06 매핑, 모델 순서·Claude 모델 목록(owner 2026-11-26 아이템 8, §6.2), 검토를 마친 하위 Agent v1 — M5-06
   - `demo`: P `MOCK` 12 Task·`SUB_MOCK`·Q 미승인 잠정값 — **테스트·화면 검증 전용**, 운영 DB에서 실행 거부
 - 추가 전용 보장 테스트: 앱 역할로 UPDATE/DELETE가 거부되는지 확인.
 - 마이그레이션 0013 전에 저장된 행의 처리는 §2.4 `change_proposals`와 §2.8 `ci_runs`에 있다. 이미 적용된 0000~0012는 고치지 않고 0013·0014를 추가했다.
+- 0016(계약 보완 2026-11-26)은 `github_settings.scopes`를 3상태 jsonb로 바꾸고 `warning`을 더했다. `app_settings.model_settings`를 더하고 `seed_system()`이 초기값을 넣게 했다.
+  - 0015는 M2 작업(`platform_epoch_lock`)의 마이그레이션이다. 계약 보완 브랜치는 M2-01(6d07221)을 먼저 합쳐, 어느 DB에서나 0015 다음에 0016이 실행되게 했다.
+    - 왜: 마이그레이션 도구는 마지막으로 적용한 항목의 시각보다 늦은 항목만 실행한다. 0016을 먼저 적용한 DB에 0015를 나중에 더하면 0015가 건너뛰어진다.
+    - 0015는 표 구조를 바꾸지 않는 SQL 전용 파일이라 snapshot(이전 스냅샷 ID로 이어지는 구조 기록)이 없다. 그래서 0016 snapshot은 0014 snapshot에 이어진다.
+  - 0016의 CHECK는 계약과 같은 조건을 검사한다. 권한 하나가 JSON null인 값, 목록 자리에 숫자·boolean·null이 든 값은 거부한다(검사 전체가 참일 때만 통과, `awbs_valid_id_list()`).
 
 ### 6.1 DB 권한과 보안 검사
 
@@ -866,3 +881,46 @@ epoch가 바뀌는 순간(초기화)과 다른 쓰기가 겹쳐도 옛 프로젝
 - 표를 새로 만들 때마다 모든 표의 권한과 보호 장치(트리거)를 빠짐없이 검사하는 테스트를 돌린다.
 - FK마다 그 열로 시작하는 인덱스(선두 인덱스)가 있는지도 검사한다.
   - 왜: 인덱스가 없으면 가리키는 행을 지우거나 고칠 때 표 전체를 훑느라 느려지고 잠금이 길어진다.
+
+### 6.2 system seed: 모델 순서와 Claude 모델 목록
+
+owner 결정(2026-11-26 아이템 8)을 system seed로 넣는 정의다. 사용량 부족 기준 20%(`exec_policy.low_pct`)는 이미 §2.6에 있다.
+
+- 저장 위치: `app_settings.model_settings`(jsonb) 한 칸이다.
+- 초기값의 단일 출처: SQL 함수 `public.default_model_settings()`다. `seed_system()`과 마이그레이션 0016의 기존 행 채우기가 함께 쓴다.
+  - shared의 `DEFAULT_MODEL_SETTINGS`와 값이 같아야 하고, DB 테스트가 둘을 대조한다.
+  - 왜 한 곳에 두나: 초기값이 두 곳에 있으면 한쪽만 고쳐져 어긋나기 쉽다.
+- seed는 행이 없을 때만 넣는다. 팀장이 바꾼 순서를 다시 seed해도 덮지 않는다. 설정까지 지우는 초기화(`keepSettings=false`)는 초기값으로 되돌린다.
+
+**모양** (목록은 모두 아래 등급부터)
+
+```json
+{
+  "rankOrder": {
+    "Claude": ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-2"],
+    "Codex": ["gpt-5.5", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-luna", "gpt-6-astra",
+              "gpt-6-sol", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6.2-astra", "gpt-6.2-sol"]
+  },
+  "codexFamilyOrder": ["luna", "terra", "astra", "sol"],
+  "claudeModels": ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-2"]
+}
+```
+
+**값을 이렇게 정한 근거**
+
+- Claude 순서: owner가 정한 Haiku 5.5 < Sonnet 5.5 < Opus 5.5 < Fable 5.2 그대로다.
+- Claude 모델 목록: Q-06 승인표(open-questions §0.2)의 Claude 모델 4개다.
+- Codex 순서: Q-06 승인표의 Codex 모델(숨김 모델 제외)을 owner 규칙으로 줄 세운 것이다.
+  - 세대가 높을수록 위다. 세대는 숫자로 비교한다(5.6 < 6 < 6.1 < 6.2).
+  - 같은 세대 안에서는 luna < terra < astra < sol이다.
+  - 예: gpt-6.1-sol이 gpt-6.1-terra보다 위다. CLI 목록의 표시 순서와는 다를 수 있다.
+- `rank` 값은 이 목록의 위치다. 아래부터 1, 2, …이고 클수록 위 등급이다.
+
+**설정에 없는 새 모델의 자리** [결정 — owner 규칙이 다루지 않은 부분]
+
+- 새 모델은 「미허용」으로 등록한다(G §7.2). 허용하기 전에 팀장이 자리를 확인한다.
+- Codex 새 모델은 규칙(세대·계열)으로 자리를 정한다. 규칙상 자기보다 아래인 모델 중 가장 위에 있는 것 바로 위에 넣는다. 팀장이 바꾼 순서는 건드리지 않는다.
+  - 예: 초기 순서에 gpt-6.1-astra가 새로 오면 gpt-6.1-terra와 gpt-6.1-sol 사이에 들어간다.
+- 계열이 없거나 모르는 계열인 Codex 모델은 그 세대의 맨 아래다(예: gpt-5.5).
+- 이름을 읽을 수 없는 Codex 모델과 Claude 새 모델은 맨 아래에 둔다.
+- 계산 함수는 shared의 `compareCodexModels`·`placeModel`·`modelRanks`다. 줄 세우기 규칙은 Runner(M4-02)가 쓰던 규칙과 같다.
