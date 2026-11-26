@@ -15,7 +15,7 @@ async function credentialWrite<T>(pool: Pool, fn: (client: PoolClient) => Promis
 }
 
 export async function hashPassword(password: string): Promise<string> {
-  if (!password || Buffer.byteLength(password) > 1024) throw new Error('비밀번호는 1~1024바이트여야 합니다.');
+  if ([...password].length < 12 || Buffer.byteLength(password) > 1024) throw new Error('비밀번호는 최소 12글자, 최대 1024바이트여야 합니다.');
   const salt = randomBytes(16).toString('hex');
   const hash = await derive(password, salt, 64) as Buffer;
   return `scrypt:${salt}:${hash.toString('hex')}`;
@@ -36,7 +36,10 @@ export async function issueLoginLink(pool: Pool): Promise<string> {
 
 export async function setPassword(pool: Pool, password: string): Promise<void> {
   const hash = await hashPassword(password);
-  await credentialWrite(pool, (client) => client.query('insert into lead_credentials(password_hash) values($1) on conflict(singleton) do update set password_hash=excluded.password_hash', [hash]));
+  await credentialWrite(pool, async (client) => {
+    await client.query('insert into lead_credentials(password_hash) values($1) on conflict(singleton) do update set password_hash=excluded.password_hash', [hash]);
+    await client.query("delete from lead_sessions where csrf like 'password.%'");
+  });
 }
 
 export async function issueRunnerToken(pool: Pool, runnerId: string, publicKey: string): Promise<string> {
