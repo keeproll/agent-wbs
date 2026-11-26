@@ -6,7 +6,7 @@ import {
 } from './db.ts';
 import { draftErrors, draftHolds, draftSplitSummary, storeDraft, type DraftInput, type StoredDraft } from './draft.ts';
 import { ProjectError } from './errors.ts';
-import { mergeChanges, nextMdList, type Change, type PathChange } from './inputs.ts';
+import { mergeChanges, mergeCommitOrder, nextMdList, type Change, type PathChange } from './inputs.ts';
 import {
   bootstrapJob, createPlanningJob, currentRunnerJob, followUpJob, lockPlanningJob, log, resetSteps, setStep, steps, type PlanningJob,
 } from './jobs.ts';
@@ -453,16 +453,30 @@ export async function reportInputChanges(db: Db, body: { commits: PushedCommit[]
   const errors = body.files.flatMap((file, i) => shas.has(file.commitSha) ? [] : [{ path: `files.${String(i)}.commitSha`, rule: 'reference', message: '보고한 커밋 목록에 없는 커밋입니다.' }]);
   if (errors.length) throw new ProjectError('VALIDATION_FAILED', { errors });
   const project = await requireProject(db);
-  for (const commit of body.commits) {
-    // prototype/ 밖(src/ 등 Agent 작업)은 입력 변경이 아니다. 입력 파일이 하나도 없는 커밋은 올리지 않는다(G§4.2 ②, 리뷰 6).
-    const files = body.files.filter((f) => f.commitSha === commit.sha && isInput(f.path)).map(({ path, change, added, deleted }) => ({ path, change, added, deleted }));
-    if (!files.length) continue;
-    if ((await db.query('select 1 from input_change_commits where project_id=$1 and sha=$2 union all select 1 from input_versions where project_id=$1 and commit_sha=$2', [project.id, commit.sha])).rowCount) continue;
-    // seq = 받은 순서. Runner는 main 이력 순서(오래된 것 먼저)로 보고하므로 이것이 커밋 순서다. 커밋 시각은 Git 순서를 보장하지 않는다(리뷰 2).
-    const seq = await nextNumber(db, project.id, 'input_commit', "select coalesce(max((files->>'seq')::bigint),0) from input_change_commits where project_id=$1");
+  // prototype/ 밖(src/ 등 Agent 작업)은 입력 변경이 아니다. 입력 파일이 하나도 없는 커밋은 올리지 않는다(G§4.2 ②, 리뷰 6).
+  const inputFiles = new Map(body.commits.map((c) => [c.sha,
+    body.files.filter((f) => f.commitSha === c.sha && isInput(f.path)).map(({ path, change, added, deleted }) => ({ path, change, added, deleted }))]));
+  const rows = (await db.query<{ sha: string; state: string; seq: string | null }>(
+    "select sha,state,files->>'seq' seq from input_change_commits where project_id=$1 for update", [project.id])).rows;
+  const existing = rows.filter((r) => r.state !== 'analyzed').sort((a, b) => Number(a.seq) - Number(b.seq)).map((r) => r.sha);
+  const settled = new Set([...rows.filter((r) => r.state === 'analyzed').map((r) => r.sha),
+    ...(await db.query<{ sha: string }>('select commit_sha sha from input_versions where project_id=$1', [project.id])).rows.map((r) => r.sha)]);
+  // commits는 main 이력 순서(오래된 것 먼저)다. 이미 받은 커밋과 겹치면 그 상대 순서로 새 커밋의 자리를 정한다(재리뷰 R1).
+  const batch = body.commits.map((c) => c.sha).filter((sha) => settled.has(sha) || existing.includes(sha) || (inputFiles.get(sha)?.length ?? 0) > 0);
+  const order = mergeCommitOrder(existing, batch, settled);
+  if (!order) throw new ProjectError('VALIDATION_FAILED', { errors: [{ path: 'commits', rule: 'order', message: '이미 받은 커밋 순서와 다른 순서로 보고했습니다. main 이력 순서(오래된 것 먼저)로 다시 보고하세요.' }] });
+  // seq는 「아직 분석하지 않은 커밋」의 순서다. 합친 순서대로 기존 최댓값 뒤에 다시 매긴다(분석한 커밋의 seq는 그대로).
+  const base = Math.max(0, ...rows.map((r) => Number(r.seq ?? 0)));
+  for (const [i, sha] of order.entries()) {
+    const seq = base + i + 1;
+    if (existing.includes(sha)) {
+      await db.query("update input_change_commits set files=jsonb_set(files,'{seq}',to_jsonb($3::int)) where project_id=$1 and sha=$2", [project.id, sha, seq]);
+      continue;
+    }
+    const commit = body.commits.find((c) => c.sha === sha);
     // input_change_commits에는 커밋 정보 열이 없어 files jsonb에 {seq,at,author,message,files[]}를 함께 둔다.
     await db.query("insert into input_change_commits(project_id,sha,files,state) values($1,$2,$3::jsonb,'pending')",
-      [project.id, commit.sha, JSON.stringify({ seq, at: commit.at, author: commit.author, message: commit.message, files })]);
+      [project.id, sha, JSON.stringify({ seq, at: commit?.at, author: commit?.author, message: commit?.message, files: inputFiles.get(sha) ?? [] })]);
   }
   await changeEvent(db, project.id, { kind: 'input_changes' });
 }

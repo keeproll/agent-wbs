@@ -60,21 +60,35 @@ export async function log(db: Db, job: Pick<PlanningJob, 'id' | 'project_id'>, t
  * 재개 단계·회차·지시만 바꾼다.
  */
 export async function followUpJob(db: Db, job: PlanningJob, epoch: number, change: { resumeStep: string | null; instruction?: string; base?: Record<string, unknown> }): Promise<string> {
+  // 실행 순번은 M2-03이 만든 job의 n 중 최댓값 + 1이다. reconcile이 만든 job(숫자=fence)은 세지 않는다.
   const previous = (await db.query<{ payload: Record<string, unknown>; n: string }>(
-    `select payload,(select count(*) from runner_jobs where payload->>'planningJobId'=$1) n from runner_jobs
-     where payload->>'planningJobId'=$1 order by created_at desc limit 1`, [job.id])).rows[0];
+    `select payload,(select coalesce(max((split_part(dedup_key,':',3))::int),0) from runner_jobs
+       where split_part(dedup_key,':',2)=$1 and split_part(dedup_key,':',1) in ('bootstrap','input_diff')) n
+     from runner_jobs where payload->>'planningJobId'=$1 order by created_at desc limit 1`, [job.id])).rows[0];
   const count = Number(previous?.n ?? 0);
   const payload = { ...previous?.payload, ...change.base, planningJobId: job.id, runNo: job.run_no, resumeStep: change.resumeStep, instruction: change.instruction ?? job.instruction };
   return enqueueJob(db, { projectId: job.project_id, kind: job.kind, payload, epoch, dedupKey: `${job.kind}:${job.id}:${String(count + 1)}` });
 }
 
 /**
- * Planning 작업이 지금 받아야 할 Runner job. job은 dedup_key `<종류>:<Planning ID>:<n>`의 n을 1부터 차례로 받으므로
- * n이 가장 큰 job이 현재 실행이다. 같은 트랜잭션 안의 시각 비교와 달리 순서가 겹치지 않는다.
+ * Planning 작업이 지금 받아야 할 Runner job(현재 실행).
+ * 1. M2-03이 만든 job은 dedup_key `<종류>:<Planning ID>:<n>`의 n(실행 순번)을 1부터 차례로 받는다. n이 가장 큰 job이 출발점이다.
+ * 2. M2-05 reconcile은 끊긴 job을 대신할 새 job을 `reconcile:<옛 job ID>:<fence>`로 만든다. 이 숫자는 fence라서
+ *    실행 순번과 비교하지 않는다. 대신 「옛 job을 대체한 job」 관계를 따라가 마지막 대체 job을 현재 실행으로 본다(재리뷰 R2).
+ * 시각 비교를 쓰지 않으므로 같은 트랜잭션·겹친 트랜잭션에서도 결과가 바뀌지 않는다.
  */
 export async function currentRunnerJob(db: Db, planningJobId: string): Promise<string | undefined> {
-  return (await db.query<{ id: string }>(
-    "select id from runner_jobs where payload->>'planningJobId'=$1 order by (split_part(dedup_key,':',3))::int desc limit 1", [planningJobId])).rows[0]?.id;
+  let current = (await db.query<{ id: string }>(
+    `select id from runner_jobs where split_part(dedup_key,':',2)=$1 and split_part(dedup_key,':',1) in ('bootstrap','input_diff')
+     order by (split_part(dedup_key,':',3))::int desc limit 1`, [planningJobId])).rows[0]?.id;
+  for (let depth = 0; current && depth < 1000; depth++) {
+    const replaced = (await db.query<{ id: string }>(
+      "select id from runner_jobs where split_part(dedup_key,':',1)='reconcile' and split_part(dedup_key,':',2)=$1 order by (split_part(dedup_key,':',3))::int desc limit 1",
+      [current])).rows[0]?.id;
+    if (!replaced) break;
+    current = replaced;
+  }
+  return current;
 }
 
 export async function jobView(db: Db, job: PlanningJob) {

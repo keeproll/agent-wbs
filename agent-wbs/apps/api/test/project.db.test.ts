@@ -5,6 +5,8 @@ import { afterAll, beforeAll, describe, expect, inject, test } from 'vitest';
 import { buildApp } from '../src/app.ts';
 import { issueLoginLink, issueRunnerToken } from '../src/platform/credentials.ts';
 import { installProjectRunner } from '../src/project/runner-routes.ts';
+import { installRunner } from '../src/runner/routes.ts';
+import { watchRunner } from '../src/runner/watch.ts';
 import { draft, met, task } from './project-fixture.ts';
 
 /*
@@ -20,6 +22,8 @@ appUrl.searchParams.set('options', '-c role=awbs_app');
 const pool = createPool(appUrl.href, { max: 12, onError: () => undefined });
 const app = buildApp(pool, process.env.PROJECT_DEBUG ? { level: 'error' } : false, { origin, lan: false });
 installProjectRunner(app, pool);
+// M2-05의 claim·release·reconcile 실제 경로로 복구 흐름을 검사한다(재리뷰 R2).
+installRunner(app, pool);
 
 const shared = createRequire(new URL('../../../packages/shared/package.json', import.meta.url));
 const { Ajv } = shared('ajv') as { Ajv: new (options: object) => { validate: (schema: unknown, data: unknown) => boolean; errorsText: () => string } };
@@ -660,6 +664,63 @@ describe('project 리뷰 지적 회귀(M2-03-REVIEW 1~8)', () => {
     expect(again.statusCode, again.body).toBe(201);
     expect(again.headers['idempotency-replayed']).toBe('true');
     expect(again.json()).toEqual(first.json());
+  });
+
+  test('R1. 겹쳐 도착한 입력 보고도 Git 순서를 지킨다: [C] 뒤 [B,C]면 B가 C보다 앞이다', async () => {
+    const { s } = await fresh();
+    expect((await lead('POST', '/api/project/bootstrap/approve', { revision: s.bootstrap.revision })).statusCode).toBe(200);
+    expect((await runner('/api/runner/input-changes', { commits: [commit(SHA3, '2026-11-26T01:00:00Z')], files: [file(SHA3, 'prototype/docs/newer.md')] })).statusCode).toBe(204);
+    // 늦게 도착한 따라잡기 보고. 배열은 오래된 것부터이고 이미 받은 C와 겹친다.
+    expect((await runner('/api/runner/input-changes', { commits: [commit(SHA2, '2026-11-26T01:00:00Z'), commit(SHA3, '2026-11-26T01:00:00Z')],
+      files: [file(SHA2, 'prototype/docs/older.md'), file(SHA3, 'prototype/docs/newer.md')] })).statusCode).toBe(204);
+    const before = await state();
+    expect(before.changeCommits.map((c) => c.sha)).toEqual([SHA2, SHA3]);
+    const old = await lead('POST', '/api/project/inputs', { updatedAt: before.updatedAt, commit: SHA2, commits: [SHA2, SHA3] });
+    expect(errorOf(old).errors).toEqual([expect.objectContaining({ path: 'commit', rule: 'latest' })]);
+    const ok = await lead('POST', '/api/project/inputs', { updatedAt: before.updatedAt, commit: SHA3, commits: [SHA2, SHA3] });
+    expect(ok.statusCode, ok.body).toBe(202);
+    // 이미 입력 버전으로 고정한 C보다 앞에 놓인 커밋은 그 버전의 차이에 포함되었으므로 다시 올리지 않는다.
+    expect((await runner('/api/runner/input-changes', { commits: [commit(SHA2, '2026-11-26T01:00:00Z'), commit(SHA3, '2026-11-26T01:00:00Z'), commit(SHA4, '2026-11-26T01:00:00Z')],
+      files: [file(SHA2, 'prototype/docs/older.md'), file(SHA4, 'prototype/docs/later.md')] })).statusCode).toBe(204);
+    expect((await state()).changeCommits.map((c) => `${c.sha.slice(0, 1)}:${c.state}`)).toEqual(['b:analyzed', 'c:analyzed', 'd:pending']);
+  });
+
+  test('R1. 이미 받은 순서와 어긋나는 보고는 400이고 아무것도 바꾸지 않는다', async () => {
+    const { s } = await fresh();
+    expect((await lead('POST', '/api/project/bootstrap/approve', { revision: s.bootstrap.revision })).statusCode).toBe(200);
+    const both = [file(SHA2, 'prototype/docs/a.md'), file(SHA3, 'prototype/docs/b.md')];
+    expect((await runner('/api/runner/input-changes', { commits: [commit(SHA2, AT_NOW()), commit(SHA3, AT_NOW())], files: both })).statusCode).toBe(204);
+    const swapped = await runner('/api/runner/input-changes', { commits: [commit(SHA3, AT_NOW()), commit(SHA4, AT_NOW()), commit(SHA2, AT_NOW())], files: [...both, file(SHA4, 'prototype/docs/c.md')] });
+    expect(swapped.statusCode).toBe(400);
+    expect(errorOf(swapped).errors).toEqual([expect.objectContaining({ path: 'commits', rule: 'order' })]);
+    expect((await state()).changeCommits.map((c) => c.sha)).toEqual([SHA2, SHA3]);
+  });
+
+  test('R2. M2-05 reconcile이 만든 새 job은 현재 실행이라 초안을 받는다(실제 claim·만료·release·reconcile 경로)', async () => {
+    await resetDb();
+    const check = await checkedRepo();
+    expect((await lead('POST', '/api/project', registration(check, { constraints: [] }))).statusCode).toBe(201);
+    const first = await lease('bootstrap');
+    for (const key of ['check', 'unzip', 'repo', 'codex', 'claude', 'cross']) await progress(first.id, first.fence, key);
+    expect((await runner(`/api/planning/bootstrap/${first.id}/tech`, { fence: first.fence, decisions: [] })).statusCode).toBe(201);
+    await finishJob(first.id);
+    const s = await state();
+    expect((await lead('POST', `/api/projects/${s.id}/boot/tech/confirm`, { decisions: [] })).statusCode).toBe(200);
+    const claim = async () => {
+      const claimed = await runner('/api/runner/jobs/claim', { kinds: ['bootstrap'], capacity: 10 });
+      expect(claimed.statusCode, claimed.body).toBe(200);
+      return claimed.json<{ job: { id: string; fence: number } }>().job;
+    };
+    const current = await claim();
+    expect(await watchRunner(pool, await epoch(), new Date(Date.now() + 61_000))).toBe(1);
+    expect((await runner(`/api/runner/jobs/${current.id}/release`, { fence: current.fence, hostId: 'host-1', proof: { kind: 'no_process', bootId: 'boot-1' }, at: AT_NOW() })).statusCode).toBe(204);
+    expect((await runner(`/api/runner/jobs/${current.id}/reconcile`, { fence: current.fence, evidence: { outcome: 'none', checkedAt: AT_NOW(), detail: { checked: true } } })).statusCode).toBe(204);
+    const next = await claim();
+    expect(next.id).not.toBe(current.id);
+    const result = await runner(`/api/planning/bootstrap/${next.id}/draft`, { fence: next.fence, ...draft() });
+    expect(result.statusCode, result.body).toBe(201);
+    // 대체된 옛 job은 더 이상 현재 실행이 아니다.
+    expect(errorOf(await progressOf(current, 'draft', 'fail')).code).not.toBe(undefined);
   });
 
   test('8. 선언하지 않은 필드 오류는 그 필드 경로를 알려 준다', async () => {
