@@ -13,7 +13,7 @@ Runner가 GitHub(git 저장소를 올려 두고 PR·검사·병합을 하는 서
 | --- | --- |
 | `credential.ts` | 봉인된 토큰을 연다. 봉인 형식의 기준 구현도 여기 있다. |
 | `token.ts` | 클라이언트에 토큰을 건네는 두 방식: 봉인 값(토큰 방식), `gh auth token`(gh 로그인 방식). |
-| `client.ts` | 연결·저장소 확인, PR, commit status, PR 병합. |
+| `client.ts` | 연결·저장소 확인, PR, commit status, PR 병합과 병합 재대조. |
 
 ## 1. 봉인 자격 증명
 
@@ -43,6 +43,7 @@ Runner가 GitHub(git 저장소를 올려 두고 PR·검사·병합을 하는 서
 | `getPullRequest()`·`closePullRequest()` | PR 조회·닫기 | |
 | `setCommitStatus()`·`listCommitStatuses()` | `agentwbs/task·int·night·deploy` status 게시·조회 | |
 | `mergePullRequest({pr, baseSha, headSha})` | **유일한 병합 경로** | `MergeOutcome` |
+| `reconcileMerge({pr, baseSha, headSha})` | `unknown` 병합을 쓰기 없이 다시 대조 | `MergeOutcome` |
 
 ### 병합: strict + 예상 head 단일 경로
 
@@ -52,8 +53,15 @@ Runner가 GitHub(git 저장소를 올려 두고 PR·검사·병합을 하는 서
 2. 결과 해석
    - 200 → 병합 커밋의 부모가 정확히 `[A, H′]`이고 tree(커밋 시점의 파일 전체 내용)가 H′의 tree인지 확인 → `merged`. 다르면 `verify_failed`(done 금지, main 자동 되돌림 없음).
    - 409 → `head_changed`(QA 뒤 head가 바뀜). 405 → `rejected`(main 이동·필수 검사 미충족).
-   - 통신 실패·5xx → **다시 병합하지 않고** PR을 조회해 대조한다 → `merged`/`verify_failed`(`reconciled: true`) 또는 `not_merged`. 조회도 실패하면 `unknown`.
+   - 통신 실패·5xx → **다시 병합하지 않고** PR을 조회해 대조한다.
+     - 병합이 보이면 `merged`/`verify_failed`(`reconciled: true`).
+     - 병합이 안 보이면 `unknown`(`observed: 'open' | 'closed'`), 조회도 실패하면 `unknown`(`observed: 'read_failed'`).
    - 왜 다시 부르지 않나: 응답만 잃었을 뿐 병합이 이미 됐을 수 있기 때문이다(contracts §3.4-6).
+   - 왜 「병합 안 됨」으로 확정하지 않나: 타임아웃은 GitHub 쪽 처리를 취소하지 않는다. 우리가 PR을 읽은 **뒤에** 원래 요청이 늦게 적용될 수 있다.
+     예: 100ms 만에 포기하고 PR을 읽으면 열려 있지만, 잠시 뒤 같은 요청이 병합을 끝낸다(fake `holdMerges()`로 재현).
+     그래서 결과 종류에 `not_merged`를 두지 않았다.
+   - `unknown`을 받은 호출자는 그 병합을 다음 작업으로 넘기지 말고, 나중에 `reconcileMerge({pr, baseSha, headSha})`로 **쓰기 없이** 다시 대조한다.
+     횟수나 시간이 찼다는 이유만으로 「효과 없음」을 확정하지 않는다. 언제 다음 작업을 허용할지는 §3.4 권한 계약(작업 대기열 쪽)이 정한다.
 3. main 직접 push, ref 갱신, squash/rebase 병합 함수는 만들지 않았다.
 
 ### 쓰기 차단과 비밀값
@@ -63,6 +71,58 @@ Runner가 GitHub(git 저장소를 올려 두고 PR·검사·병합을 하는 서
 - 토큰은 `Authorization` 헤더에만 싣고 URL에는 넣지 않는다. 리다이렉트는 따라가지 않는다(토큰이 다른 주소로 가지 않게).
 - 오류 메시지·status 설명의 비밀값은 가린다. status 설명은 가린 뒤 140자로 자른다.
 - 오류의 `retryable`: 통신 실패(status 0)·5xx·429·속도 제한 403만 true. 재시도 대기열(outbox)은 이 모듈 밖(M4-01 쪽)이다.
+  - 속도 제한 403이란: `Retry-After`가 있거나(보조 제한), `x-ratelimit-remaining: 0`이거나(기본 제한), 본문이 rate limit을 말하는 403이다.
+    그 밖의 403(권한 부족)은 기다려도 낫지 않으므로 재시도하지 않는다.
+    근거: [Exceeding the rate limit](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#exceeding-the-rate-limit) — 보조 제한도 403 또는 429이며 `Retry-After`를 따르라고 한다.
+  - `retryAfterSeconds`: `Retry-After` 초, 없으면 `x-ratelimit-reset`(UTC 초)까지 남은 초.
+  - 저장소 확인 중 속도 제한이면 「접근 불가」로 답하지 않고 재시도 오류를 던진다. 연결 확인은 던지지 않고 「속도 제한」 이유로 실패를 보고한다.
+
+### status 목록과 페이지
+
+- GitHub의 status 목록은 최신순이고 한 번에 최대 100개다([List commit statuses](https://docs.github.com/en/rest/commits/statuses?apiVersion=2022-11-28#list-commit-statuses-for-a-reference)). 한 SHA·context에 1000개까지 붙을 수 있어 100개를 넘는 것이 정상이다.
+- 그래서 `page=1,2,3…`을 올려 끝까지 읽는다. 끝은 `Link` 헤더에 `rel="next"`가 없을 때다.
+- `Link`에 적힌 주소로 직접 가지 않는다. 그 주소가 다른 서버를 가리키면 토큰이 새기 때문이다. 같은 API 경로에서 `page`만 바꾼다.
+- 50페이지(5000개)를 넘으면 잘라서 돌려주지 않고 오류를 던진다. 조용히 일부만 돌려주면 대조가 틀리기 때문이다.
+
+## 4. 필요한 권한과 확인 방법
+
+원본 가이드 §9.5-4-1이 정한 네 권한이다. 각 권한이 왜 필요한지는 GitHub 공식 문서의 API별 요구 권한이 근거다.
+
+| 권한 | 쓰는 곳 | 공식 근거 |
+| --- | --- | --- |
+| Contents 쓰기 | push, PR 병합 | [Merge a pull request](https://docs.github.com/en/rest/pulls/pulls?apiVersion=2022-11-28#merge-a-pull-request) |
+| Pull requests 쓰기 | PR 생성·닫기 | [Create a pull request](https://docs.github.com/en/rest/pulls/pulls?apiVersion=2022-11-28#create-a-pull-request) |
+| Commit statuses 쓰기 | status 게시 | [Create a commit status](https://docs.github.com/en/rest/commits/statuses?apiVersion=2022-11-28#create-a-commit-status) |
+| Metadata 읽기 | 저장소 조회 | [Get a repository](https://docs.github.com/en/rest/repos/repos?apiVersion=2022-11-28#get-a-repository) |
+
+연결 확인(`checkConnection`)이 이 권한을 어떻게 판단하나:
+
+- **classic 토큰·gh 로그인 토큰**: 응답 헤더 `x-oauth-scopes`에 `repo`가 있으면 네 권한이 모두 있다고 본다.
+- **fine-grained 토큰**: 토큰에 실제로 준 권한 목록을 돌려주는 API가 없다.
+  - 저장소 응답의 `permissions.push`는 **계정**의 권한이라 토큰 권한을 증명하지 못한다.
+  - 오류 응답의 `X-Accepted-GitHub-Permissions`는 그 API가 **요구하는** 권한일 뿐, 토큰이 가진 권한 목록이 아니다([문서](https://docs.github.com/en/rest/using-the-rest-api/troubleshooting-the-rest-api#resource-not-accessible)).
+  - 그래서 확인하지 못한 권한을 true로 추정하지 않는다. `ok:false`, `scopes:null`, 이유 「인증됨, 쓰기 권한 확인 안 됨」으로 보고한다. push조차 안 되는 계정이면 「쓰기 권한 없음」이다.
+  - 예: Contents 쓰기만 있고 Commit statuses 쓰기가 없는 토큰도 저장소 조회·push 값은 정상으로 보인다. 예전 코드는 이 토큰을 「정상」으로 보고했다(리뷰 R2).
+- 관리자 계정이면 권한과 관계없이 `ok:false`다(contracts §4.1-3-7 「관리자가 아닌 별도 계정/앱」).
+
+**M4-06 실증 항목**(실제 GitHub에서만 확인할 수 있어 여기서는 확인하지 못한 것):
+
+1. fine-grained 토큰의 Contents·Pull requests·Commit statuses 쓰기 권한을 쓰기 없이 확인할 방법이 있는지, 없으면 연결 확인을 어떤 계약으로 바꿀지.
+2. 권한이 빠진 토큰으로 PR 생성·status 게시·병합이 각각 403과 `X-Accepted-GitHub-Permissions`를 돌려주는지.
+3. 보조 속도 제한 403의 실제 헤더 모양(`Retry-After` 유무).
+4. 병합 PUT 타임아웃 뒤 실제로 늦게 적용되는 일이 있는지와 PR 조회 반영 지연. (어느 쪽이든 코드는 `unknown`으로 남긴다.)
+5. 실효 보호 규칙(strict·int 필수·우회 불가 계정·CODEOWNERS). fake는 규칙이 있다고 가정할 뿐이다.
+
+## 5. 봉인 키의 수명 (계약 보완안을 따름)
+
+- Runner 개인키는 프로세스 메모리에만 둔다. 파일로 저장하지 않는다.
+- Runner가 다시 시작하면 새 키 쌍을 만들어 등록하고 서버에서 새 봉인 값을 받는다. 예전 봉인 값이 새 키로 열리지 않는 것이 정상이다.
+- 등록 형식은 X25519 공개키 SPKI PEM(`generateRunnerKeyPair().publicKey`)이다. 봉인 값 안의 임시 공개키는 PEM이 아니라 raw 32바이트다.
+- 서버의 비밀값 암호화 키 `AWBS_SECRET_KEY`와 이 Runner 봉인 키는 전혀 다른 키다.
+- 봉인은 「누가 보냈는지」나 「최신 값인지」를 증명하지 않는다. 그것은 Runner API 인증과 키 등록 계약이 맡는다. 이 형식은 RFC 9180 HPKE와 같은 형식이라고 부르지 않는다.
+- 토큰 캐시: `invalidate()` 때마다 세대 번호를 올린다. 무효화 전에 시작한 조회가 늦게 끝나도 그 옛 토큰은 캐시하지도 돌려주지도 않고, 현재 세대로 다시 받는다. 같은 세대의 동시 호출은 조회 한 번을 함께 쓴다.
+- 고정 시험 벡터 `test/github/fixtures/sealed-v1-vector.json`(리뷰의 Python 독립 구현이 만든 값)으로 바이트 배치를 고정했다. 서버 구현도 이 벡터를 통과해야 한다.
+- 공개키 등록 API는 아직 계약에 없어 구현하지 않았다.
 
 ## 확인 명령
 
