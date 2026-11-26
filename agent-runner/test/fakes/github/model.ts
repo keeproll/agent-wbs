@@ -50,7 +50,16 @@ export interface ModelOptions {
   strict?: boolean;
   /** 트리 응답을 truncated로 준다. */
   truncatedTree?: boolean;
+  /**
+   * fine-grained 토큰처럼 엔드포인트마다 따로 주는 권한. 없으면 모두 write.
+   * 실제 GitHub는 PR 생성·닫기에 Pull requests 쓰기, status 게시에 Commit statuses 쓰기,
+   * PR 병합에 Contents 쓰기를 요구한다(README의 권한 근거 표).
+   */
+  tokenPermissions?: Partial<Record<Permission, 'none' | 'read' | 'write'>>;
 }
+
+export type Permission = 'contents' | 'pulls' | 'statuses';
+export type RateLimitKind = 'primary' | 'secondary' | 'secondary429';
 
 const sha1 = (text: string) => createHash('sha1').update(text).digest('hex');
 
@@ -68,7 +77,52 @@ export class GitHubModel {
   dropNextMerge = false;
   /** 병합 커밋을 일부러 잘못 만든다(부모·tree 검증 시험용). */
   corruptMerge: 'parents' | 'tree' | null = null;
+  /** 병합 후 이만큼의 PR 조회는 병합 전 모습을 돌려준다(조회 반영 지연). */
+  pullReadLag = 0;
+  #stale: { number: number; json: ReturnType<GitHubModel['pullJson']>; left: number } | null = null;
+  #mergeGate: Promise<undefined> | null = null;
+  #limit: { left: number; kind: RateLimitKind } | null = null;
   #seq = 0;
+
+  /**
+   * 병합 요청을 받아 두기만 하고 release() 전까지 적용하지 않는다.
+   * 클라이언트가 타임아웃으로 떠난 뒤에도 원래 요청이 늦게 적용되는 실제 순서를 흉내 낸다.
+   */
+  holdMerges(): () => void {
+    const gate = Promise.withResolvers<undefined>();
+    this.#mergeGate = gate.promise;
+    return () => {
+      this.#mergeGate = null;
+      gate.resolve(undefined);
+    };
+  }
+
+  /** 다음 count개 요청을 속도 제한으로 거부한다. */
+  limitNext(count: number, kind: RateLimitKind): void {
+    this.#limit = { left: count, kind };
+  }
+
+  #rateLimited(): FakeResponse | undefined {
+    if (!this.#limit || this.#limit.left <= 0) return undefined;
+    this.#limit.left -= 1;
+    const reset = String(Math.floor(Date.now() / 1000) + 120);
+    switch (this.#limit.kind) {
+      case 'primary':
+        return {
+          status: 403,
+          headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': reset },
+          body: { message: 'API rate limit exceeded for user ID 1.' },
+        };
+      case 'secondary':
+        return {
+          status: 403,
+          headers: { 'retry-after': '60', 'x-ratelimit-remaining': '4000', 'x-ratelimit-reset': reset },
+          body: { message: 'You have exceeded a secondary rate limit. Please wait a few minutes before you try again.' },
+        };
+      case 'secondary429':
+        return { status: 429, headers: { 'retry-after': '30' }, body: { message: 'You have exceeded a secondary rate limit.' } };
+    }
+  }
 
   constructor(options: ModelOptions = {}) {
     this.options = options;
@@ -190,7 +244,9 @@ export class GitHubModel {
     // 실제 GitHub처럼 병합 커밋이 head와 같은 tree를 가리킨다.
     if (commit && headTree && this.corruptMerge !== 'tree') this.commits.set(sha, { ...commit, tree: headTree });
     this.branches.set(pull.base, sha);
+    const before = this.pullJson(pull);
     Object.assign(pull, { state: 'closed', merged: true, mergeCommitSha: sha });
+    if (this.pullReadLag > 0) this.#stale = { number, json: before, left: this.pullReadLag };
     if (this.dropNextMerge) {
       this.dropNextMerge = false;
       return { drop: true };
@@ -201,15 +257,28 @@ export class GitHubModel {
   /** 서버에 REST 경로를 올린다. */
   install(github: FakeGitHub): void {
     const repoPath = '/repos/:owner/:repo';
-    const guard = (handler: (request: FakeRequest) => FakeResponse) => (request: FakeRequest) => {
-      if (request.params?.owner !== this.owner || request.params.repo !== this.repo) {
-        return { status: 404, body: { message: 'Not Found' } };
-      }
-      return handler(request);
-    };
+    const guard =
+      (handler: (request: FakeRequest) => FakeResponse | Promise<FakeResponse>, need?: Permission) =>
+      (request: FakeRequest) => {
+        const limited = this.#rateLimited();
+        if (limited) return limited;
+        if (request.params?.owner !== this.owner || request.params.repo !== this.repo) {
+          return { status: 404, body: { message: 'Not Found' } };
+        }
+        if (need && (this.options.tokenPermissions?.[need] ?? 'write') !== 'write') {
+          return {
+            status: 403,
+            headers: { 'x-accepted-github-permissions': `${need === 'pulls' ? 'pull_requests' : need}=write` },
+            body: { message: 'Resource not accessible by personal access token' },
+          };
+        }
+        return handler(request);
+      };
     const param = (request: FakeRequest, name: string) => request.params?.[name] ?? '';
 
     github.on('GET /user', () => {
+      const limited = this.#rateLimited();
+      if (limited) return limited;
       const headers: Record<string, string> = {};
       if (this.options.oauthScopes !== undefined) headers['x-oauth-scopes'] = this.options.oauthScopes;
       if (this.options.tokenExpiration !== undefined) {
@@ -297,12 +366,17 @@ export class GitHubModel {
         const pull = this.openPull(body.head, body.title);
         pull.body = body.body ?? '';
         return { status: 201, body: this.pullJson(pull) };
-      }),
+      }, 'pulls'),
     );
     github.on(
       `GET ${repoPath}/pulls/:number`,
       guard((request) => {
-        const pull = this.pulls.get(Number(param(request, 'number')));
+        const number = Number(param(request, 'number'));
+        if (this.#stale?.number === number && this.#stale.left > 0) {
+          this.#stale.left -= 1;
+          return { body: this.#stale.json };
+        }
+        const pull = this.pulls.get(number);
         return pull ? { body: this.pullJson(pull) } : { status: 404, body: { message: 'Not Found' } };
       }),
     );
@@ -314,11 +388,14 @@ export class GitHubModel {
         const body = request.body as { state?: 'open' | 'closed' };
         if (body.state !== undefined && !pull.merged) pull.state = body.state;
         return { body: this.pullJson(pull) };
-      }),
+      }, 'pulls'),
     );
     github.on(
       `PUT ${repoPath}/pulls/:number/merge`,
-      guard((request) => this.merge(Number(param(request, 'number')), request.body as { sha?: string; merge_method?: string })),
+      guard(async (request) => {
+        if (this.#mergeGate) await this.#mergeGate;
+        return this.merge(Number(param(request, 'number')), request.body as { sha?: string; merge_method?: string });
+      }, 'contents'),
     );
     github.on(
       `POST ${repoPath}/statuses/:sha`,
@@ -334,11 +411,22 @@ export class GitHubModel {
         };
         this.statuses.set(sha, [status, ...(this.statuses.get(sha) ?? [])]);
         return { status: 201, body: status };
-      }),
+      }, 'statuses'),
     );
     github.on(
       `GET ${repoPath}/commits/:sha/statuses`,
-      guard((request) => ({ body: this.statuses.get(param(request, 'sha')) ?? [] })),
+      guard((request) => {
+        // 실제 GitHub처럼 최신순, per_page 기본 30·최대 100, 다음 페이지는 Link rel="next"로 알린다.
+        const all = this.statuses.get(param(request, 'sha')) ?? [];
+        const perPage = Math.min(Number(request.query.per_page ?? 30) || 30, 100);
+        const page = Math.max(Number(request.query.page ?? 1) || 1, 1);
+        const body = all.slice((page - 1) * perPage, page * perPage);
+        const headers: Record<string, string> = {};
+        if (page * perPage < all.length) {
+          headers.link = `<${github.url}${request.path}?per_page=${String(perPage)}&page=${String(page + 1)}>; rel="next"`;
+        }
+        return { body, headers };
+      }),
     );
   }
 }
