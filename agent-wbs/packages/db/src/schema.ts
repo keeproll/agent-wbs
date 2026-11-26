@@ -1546,6 +1546,7 @@ export const designSnapshots = pgTable(
     ref: text().notNull(),
     parse_status: text().notNull(),
     error: text(),
+    content: jsonb().notNull().default({}),
   },
   (t) => [...textChecks('design_snapshots', t), unique().on(t.project_id, t.commit, t.ref)],
 );
@@ -1639,7 +1640,6 @@ export const designVersions = pgTable(
     status: text().notNull(),
     resolution: jsonb(),
     snapshot: uuid()
-      .notNull()
       .references(() => designSnapshots.id, { onDelete: 'restrict' }),
     ...version(),
   },

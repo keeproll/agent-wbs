@@ -13,11 +13,13 @@ test('0021·0022 snapshot이 단계별 구조와 연결을 보존하고 다음 g
   const observation = snapshot('0023');
   const settings = snapshot('0024');
   const versions = snapshot('0025');
+  const design = snapshot('0053');
   expect(project.prevId).toBe(before.id);
   expect(evidence.prevId).toBe(project.id);
   expect(observation.prevId).toBe(evidence.id);
   expect(settings.prevId).toBe(observation.id);
   expect(versions.prevId).toBe(settings.id);
+  expect(design.prevId).toBe(versions.id);
   expect(project.tables['public.projects']?.columns).toHaveProperty('input_checked_at');
   expect(project.tables['public.change_proposals']?.columns).toHaveProperty('deleted_at');
   expect(project.tables['public.evidence']).toEqual(before.tables['public.evidence']);
@@ -28,5 +30,9 @@ test('0021·0022 snapshot이 단계별 구조와 연결을 보존하고 다음 g
   expect(settings.tables['public.github_settings']?.columns).toHaveProperty('checked_at');
   expect(versions.tables['public.app_settings']?.columns).toHaveProperty('split_version');
   expect(versions.tables['public.concurrency_settings']?.columns).toHaveProperty('budget_version');
-  expect(await generateMigration(versions, generateDrizzleJson(schema, versions.id))).toEqual([]);
+  expect(await generateMigration(versions, design)).toEqual([
+    'ALTER TABLE "design_versions" ALTER COLUMN "snapshot" DROP NOT NULL;',
+    'ALTER TABLE "design_snapshots" ADD COLUMN "content" jsonb DEFAULT \'{}\'::jsonb NOT NULL;',
+  ]);
+  expect(await generateMigration(design, generateDrizzleJson(schema, design.id))).toEqual([]);
 });
