@@ -59,3 +59,10 @@ test('설정: GitHub 저장소·방식과 CLI 업데이트 끄기', () => {
   expect(() => loadConfig({ AWBS_RUNNER_TOKEN, AWBS_GITHUB_REPO: 'https://github.com/acme/app/tree/main' })).toThrow();
   expect(() => loadConfig({ AWBS_RUNNER_TOKEN, AWBS_GITHUB_REPO: 'https://github.com/acme/app', AWBS_GITHUB_MODE: 'pat' })).toThrow();
 });
+
+test('봉인 형식 v1 고정 벡터: Runner 시험 사본이 공용 계약 fixture와 같다', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const shared = await readFile(join(import.meta.dirname, '../../agent-wbs/contracts/fixtures/sealed-v1-vector.json'), 'utf8');
+  const local = await readFile(join(import.meta.dirname, 'github/fixtures/sealed-v1-vector.json'), 'utf8');
+  expect(JSON.parse(local)).toEqual(JSON.parse(shared));
+});
