@@ -8,7 +8,7 @@ import { draftErrors, draftHolds, draftSplitSummary, storeDraft, type DraftInput
 import { ProjectError } from './errors.ts';
 import { mergeChanges, nextMdList, type Change, type PathChange } from './inputs.ts';
 import {
-  bootstrapJob, createPlanningJob, followUpJob, lockPlanningJob, log, resetSteps, setStep, steps, type PlanningJob,
+  bootstrapJob, createPlanningJob, currentRunnerJob, followUpJob, lockPlanningJob, log, resetSteps, setStep, steps, type PlanningJob,
 } from './jobs.ts';
 import { parseRepoUrl } from './repo.ts';
 import { BOOT_STEPS, INPUT_STEPS, LEAD_STEPS, RERUN_STEPS, type StepStatus } from './steps.ts';
@@ -41,12 +41,19 @@ interface RepoStructure { uiux: boolean; uiuxFiles: number; docs: string[]; src:
 interface RepoResult { access: boolean; private: boolean | null; commit: string | null; structure: RepoStructure | null; error?: string }
 
 /** 등록을 막는 이유. 필수 구조가 없으면 무엇이 없는지 알린다(G§4.2). */
+const isDesignDoc = (path: string) => path.startsWith('prototype/docs/') && path.toLowerCase().endsWith('.md');
+/** 입력 자료는 prototype/ 전체다(G§4.2 「입력 변경 감지 · 보호 경로는 prototype/ 전체 기준」). */
+const isInput = (path: string) => path.startsWith('prototype/');
+
 function repoProblems(result: RepoResult): string[] {
   if (!result.access) return [result.error ?? '저장소에 접근할 수 없습니다. 설정의 GitHub 연결과 권한을 확인하세요.'];
   const problems: string[] = [];
   if (!result.commit) problems.push('main 브랜치의 최신 커밋을 확인하지 못했습니다');
   if (!result.structure?.uiux || result.structure.uiuxFiles === 0) problems.push('prototype/uiux/ 에 프로토타입 파일이 없습니다');
-  if (!result.structure?.docs.length) problems.push('prototype/docs/ 에 md 문서가 없습니다');
+  // 문서는 경로 형식(RepoPath)만으로 부족하다. prototype/docs/ 아래 md가 하나 이상이어야 한다(G§4.2 디렉토리 규칙).
+  if (!result.structure?.docs.some(isDesignDoc)) problems.push('prototype/docs/ 에 md 문서가 없습니다');
+  // 작업 저장소는 private 저장소다(G§4.2). 공개 여부를 확인하지 못한 경우(null)도 통과시키지 않는다.
+  if (result.private !== true) problems.push(result.private === false ? '공개 저장소입니다. private 저장소만 등록할 수 있습니다' : 'private 여부를 확인하지 못했습니다');
   if (result.error && problems.length) problems.push(result.error);
   return problems;
 }
@@ -107,7 +114,7 @@ export async function createProject(db: Db, body: Registration, epoch: number) {
   }
   // 등록 시 main 최신 커밋을 입력 v1로 고정하고 초기화 기준 커밋으로 기록한다(G§4.2).
   await db.query("insert into input_versions(project_id,v,commit_sha,files,md_list,changes,instruction) values($1,1,$2,$3::jsonb,$4::jsonb,'[]'::jsonb,$5)",
-    [project.id, commit, JSON.stringify({ uiuxFiles: structure.uiuxFiles }), JSON.stringify([...structure.docs].sort()), body.instruction]);
+    [project.id, commit, JSON.stringify({ uiuxFiles: structure.uiuxFiles }), JSON.stringify(structure.docs.filter(isDesignDoc).sort()), body.instruction]);
   const jobId = await createPlanningJob(db, { projectId: project.id, kind: 'bootstrap', instruction: body.instruction, stepKeys: BOOT_STEPS });
   await log(db, { id: jobId, project_id: project.id }, '프로젝트 등록 — Runner의 초기 분석을 기다립니다');
   await enqueueJob(db, { projectId: project.id, kind: 'bootstrap', epoch, dedupKey: `bootstrap:${jobId}:1`,
@@ -123,6 +130,11 @@ async function reportedJob(db: Db, jobId: string, fence: number, principal: stri
   const planningJobId = runnerJob.payload.planningJobId;
   if (typeof planningJobId !== 'string') throw new ProjectError('NOT_FOUND', { details: { resource: 'planning_job', id: jobId } });
   const job = await lockPlanningJob(db, planningJobId);
+  // 같은 Planning 작업의 현재 실행(가장 최근에 만든 Runner job)만 보고할 수 있다. 재분석·다시 시도·기술 결정 확정으로
+  // 새 job이 생기면 이전 job은 임대가 살아 있어도 늦은 보고를 거부한다(리뷰 1).
+  if (await currentRunnerJob(db, job.id) !== runnerJob.id) {
+    throw new ProjectError('LEASE_LOST', { message: '이 분석 작업은 새 실행으로 넘어가 이전 실행의 보고를 받지 않습니다.', details: { jobId } });
+  }
   if (!['queued', 'running'].includes(job.status)) throw new ProjectError('INVALID_TRANSITION', { message: `이 분석 작업은 이미 ${job.status === 'failed' ? '실패로 멈췄' : '끝났'}습니다.` });
   return job;
 }
@@ -160,22 +172,38 @@ async function addDecision(db: Db, projectId: string, input: { title: string; au
  * 기술 결정 제안을 받는다. 팀장이 등록한 제약 중 필수·금지는 그대로 확정되고, 조건부 선호는 조건 충족 판단을
  * 팀장이 승인하도록 대기로 둔다. Agent 제안(근거·대안)은 모두 대기다(G§4.12 결정 권한 3단계, P techProposal L3904).
  */
-export async function submitTechProposals(db: Db, jobId: string, body: { fence: number; decisions: TechProposal[] }, principal: string): Promise<void> {
+interface ConditionJudgement { constraintId: string; result: 'met' | 'not_met'; reason: string }
+
+export async function submitTechProposals(db: Db, jobId: string, body: { fence: number; decisions: TechProposal[]; conditionJudgements?: ConditionJudgement[] }, principal: string): Promise<void> {
   const job = await reportedJob(db, jobId, body.fence, principal, ['bootstrap']);
   const state = await steps(db, job.id);
   if (state.get('cross') !== 'done' || state.get('tech') !== 'wait') {
     throw new ProjectError('INVALID_TRANSITION', { message: '교차 검토가 끝나고 기술 결정이 아직 제안되지 않았을 때만 받을 수 있습니다.' });
   }
   const at = new Date().toISOString();
-  const constraints = (await db.query<{ name: string; level: 'must' | 'ban' | 'cond'; condition: string | null }>(
-    'select name,level,condition from tech_constraints where project_id=$1 order by created_at,id', [job.project_id])).rows;
+  const constraints = (await db.query<{ id: string; name: string; level: 'must' | 'ban' | 'cond'; condition: string | null }>(
+    'select id::text,name,level,condition from tech_constraints where project_id=$1 order by created_at,id', [job.project_id])).rows;
+  // 조건부 선호마다 Planning의 조건 충족 판단과 근거가 정확히 하나 있어야 팀장이 보고 승인할 수 있다(G§4.12, 리뷰 4).
+  const judgements = body.conditionJudgements ?? [];
+  const condIds = new Set(constraints.filter((c) => c.level === 'cond').map((c) => c.id));
+  const errors = judgements.flatMap((j, i) => {
+    const path = `conditionJudgements.${String(i)}`;
+    if (!condIds.has(j.constraintId)) return [{ path: `${path}.constraintId`, rule: 'reference', message: '등록한 조건부 선호가 아닙니다.' }];
+    if (judgements.findIndex((other) => other.constraintId === j.constraintId) !== i) return [{ path: `${path}.constraintId`, rule: 'unique', message: '같은 제약의 판단은 하나만 적습니다.' }];
+    return j.reason.trim() ? [] : [{ path: `${path}.reason`, rule: 'required', message: '판단 근거를 적으세요.' }];
+  });
+  for (const id of condIds) {
+    if (!judgements.some((j) => j.constraintId === id)) errors.push({ path: 'conditionJudgements', rule: 'required', message: `조건부 선호(${id})의 조건 충족 판단이 없습니다.` });
+  }
+  if (errors.length) throw new ProjectError('VALIDATION_FAILED', { errors });
   for (const c of constraints) {
     const cond = c.level === 'cond';
+    const judgement = judgements.find((j) => j.constraintId === c.id);
     await addDecision(db, job.project_id, {
       title: c.level === 'ban' ? '사용 금지' : cond ? '조건부 선호' : '필수 사용', authority: 'lead', status: cond ? 'pending' : 'fixed',
       content: { area: c.level === 'ban' ? '운영' : '데이터', choice: c.level === 'ban' ? `${c.name} — 사용 금지` : c.name, level: c.level, condition: c.condition ?? '',
-        // 조건 충족 판단의 근거를 실을 필드가 제안 본문에 없다(보고서 「계약 빈칸」).
-        reason: cond ? '' : '프로젝트 등록 시 기술 제약', alternatives: '', by: cond ? 'Planning Agent' : LEAD, at },
+        reason: judgement?.reason ?? '프로젝트 등록 시 기술 제약', alternatives: '', by: cond ? 'Planning Agent' : LEAD, at,
+        constraintId: c.id, conditionResult: judgement?.result ?? null },
     });
   }
   for (const p of body.decisions) {
@@ -426,12 +454,15 @@ export async function reportInputChanges(db: Db, body: { commits: PushedCommit[]
   if (errors.length) throw new ProjectError('VALIDATION_FAILED', { errors });
   const project = await requireProject(db);
   for (const commit of body.commits) {
-    const files = body.files.filter((f) => f.commitSha === commit.sha).map(({ path, change, added, deleted }) => ({ path, change, added, deleted }));
-    // input_change_commits에는 커밋 정보 열이 없어 files jsonb에 커밋 정보와 파일 목록을 함께 둔다(보고서 「계획과 다른 점」).
-    await db.query(
-      `insert into input_change_commits(project_id,sha,files,state) select $1,$2,$3::jsonb,'pending'
-       where not exists(select 1 from input_versions where project_id=$1 and commit_sha=$2) on conflict (project_id,sha) do nothing`,
-      [project.id, commit.sha, JSON.stringify({ at: commit.at, author: commit.author, message: commit.message, files })]);
+    // prototype/ 밖(src/ 등 Agent 작업)은 입력 변경이 아니다. 입력 파일이 하나도 없는 커밋은 올리지 않는다(G§4.2 ②, 리뷰 6).
+    const files = body.files.filter((f) => f.commitSha === commit.sha && isInput(f.path)).map(({ path, change, added, deleted }) => ({ path, change, added, deleted }));
+    if (!files.length) continue;
+    if ((await db.query('select 1 from input_change_commits where project_id=$1 and sha=$2 union all select 1 from input_versions where project_id=$1 and commit_sha=$2', [project.id, commit.sha])).rowCount) continue;
+    // seq = 받은 순서. Runner는 main 이력 순서(오래된 것 먼저)로 보고하므로 이것이 커밋 순서다. 커밋 시각은 Git 순서를 보장하지 않는다(리뷰 2).
+    const seq = await nextNumber(db, project.id, 'input_commit', "select coalesce(max((files->>'seq')::bigint),0) from input_change_commits where project_id=$1");
+    // input_change_commits에는 커밋 정보 열이 없어 files jsonb에 {seq,at,author,message,files[]}를 함께 둔다.
+    await db.query("insert into input_change_commits(project_id,sha,files,state) values($1,$2,$3::jsonb,'pending')",
+      [project.id, commit.sha, JSON.stringify({ seq, at: commit.at, author: commit.author, message: commit.message, files })]);
   }
   await changeEvent(db, project.id, { kind: 'input_changes' });
 }
@@ -468,6 +499,12 @@ export async function analyzeInputs(db: Db, body: { updatedAt: string; commit: s
   }
   await assertCleanupDone(db);
   await assertSeen(db, project, body.updatedAt, body.commits);
+  // 최신 커밋만 고정한다. 옛 커밋을 고정하면서 그 뒤 커밋의 변경까지 분석 완료로 처리하면 입력 버전과 실제 내용이 어긋난다(리뷰 2).
+  const latest = (await db.query<{ sha: string }>(
+    "select sha from input_change_commits where project_id=$1 and state in ('pending','skipped') order by (files->>'seq')::bigint desc limit 1", [project.id])).rows[0]?.sha;
+  if (latest !== body.commit) {
+    throw new ProjectError('VALIDATION_FAILED', { errors: [{ path: 'commit', rule: 'latest', message: '감지된 커밋 중 가장 최근 커밋으로 분석해야 합니다.' }], details: { latest } });
+  }
   if (project.phase !== 'active') throw new ProjectError('INVALID_TRANSITION', { message: '초기 WBS를 승인한 뒤에 입력 변경을 분석합니다.' });
   if ((await db.query("select 1 from planning_jobs where project_id=$1 and kind='input_diff' and status in ('queued','running')", [project.id])).rowCount) {
     throw new ProjectError('INVALID_TRANSITION', { message: '진행 중인 차이 분석이 끝난 뒤 다시 분석하세요.' });
@@ -475,9 +512,9 @@ export async function analyzeInputs(db: Db, body: { updatedAt: string; commit: s
   const previous = (await db.query<{ v: number; commit_sha: string; md_list: string[] }>(
     'select v,commit_sha,md_list from input_versions where project_id=$1 order by v desc limit 1', [project.id])).rows[0];
   if (!previous) throw new Error('입력 v1이 없습니다.');
-  const commits = (await db.query<{ id: string; files: { at: string; files: (PathChange & { added: number; deleted: number })[] } }>(
-    "select id,files from input_change_commits where project_id=$1 and state in ('pending','skipped') for update", [project.id])).rows
-    .sort((a, b) => (a.files.at < b.files.at ? -1 : a.files.at > b.files.at ? 1 : 0));
+  // 분석 범위 = 이전 입력 커밋 다음부터 고정할 커밋까지의 아직 분석하지 않은 커밋(대기·분석 안 함), 받은 순서(seq)대로.
+  const commits = (await db.query<{ id: string; sha: string; files: { seq: number; files: (PathChange & { added: number; deleted: number })[] } }>(
+    "select id,sha,files from input_change_commits where project_id=$1 and state in ('pending','skipped') order by (files->>'seq')::bigint for update", [project.id])).rows;
   const ordered = commits.flatMap((c) => c.files.files);
   const changes = mergeChanges(ordered);
   const stats = changes.map((c) => ({ ...c, added: ordered.filter((f) => f.path === c.path).reduce((s, f) => s + f.added, 0),

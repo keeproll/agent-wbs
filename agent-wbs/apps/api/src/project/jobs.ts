@@ -68,6 +68,15 @@ export async function followUpJob(db: Db, job: PlanningJob, epoch: number, chang
   return enqueueJob(db, { projectId: job.project_id, kind: job.kind, payload, epoch, dedupKey: `${job.kind}:${job.id}:${String(count + 1)}` });
 }
 
+/**
+ * Planning 작업이 지금 받아야 할 Runner job. job은 dedup_key `<종류>:<Planning ID>:<n>`의 n을 1부터 차례로 받으므로
+ * n이 가장 큰 job이 현재 실행이다. 같은 트랜잭션 안의 시각 비교와 달리 순서가 겹치지 않는다.
+ */
+export async function currentRunnerJob(db: Db, planningJobId: string): Promise<string | undefined> {
+  return (await db.query<{ id: string }>(
+    "select id from runner_jobs where payload->>'planningJobId'=$1 order by (split_part(dedup_key,':',3))::int desc limit 1", [planningJobId])).rows[0]?.id;
+}
+
 export async function jobView(db: Db, job: PlanningJob) {
   const stepRows = (await db.query<{ key: string; status: StepStatus; at: string | null; note: string | null }>(
     `select step_key as key,status,${iso('coalesce(finished_at,started_at)')} as at,note from planning_job_steps where job=$1`, [job.id])).rows;

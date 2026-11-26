@@ -17,7 +17,7 @@ async function view(db: Db, job: PlanningJob, order: readonly string[]) {
   return { ...rest, steps };
 }
 
-const DECISION_FIELDS = ['area', 'choice', 'level', 'condition', 'reason', 'alternatives', 'by', 'at'] as const;
+const DECISION_FIELDS = ['area', 'choice', 'level', 'condition', 'reason', 'alternatives', 'by', 'at', 'constraintId', 'conditionResult'] as const;
 async function decisions(db: Db, projectId: string) {
   const rows = (await db.query<{ id: string; td_key: string; title: string; authority: 'lead' | 'agent' | 'free'; status: string; content: Record<string, unknown>; updated_at: string }>(
     `select id,td_key,title,authority,status,content,${iso('updated_at')} as updated_at from tech_decisions where project_id=$1 order by td_key`, [projectId])).rows;
@@ -25,7 +25,8 @@ async function decisions(db: Db, projectId: string) {
     const c = Object.fromEntries(DECISION_FIELDS.map((key) => [key, row.content[key]]));
     return { id: row.id, tdKey: row.td_key, area: String(c.area ?? ''), title: row.title, choice: String(c.choice ?? ''), authority: row.authority,
       level: (c.level ?? null) as string | null, condition: String(c.condition ?? ''), status: row.status, reason: String(c.reason ?? ''),
-      alternatives: String(c.alternatives ?? ''), by: String(c.by ?? ''), at: new Date(String(c.at ?? row.updated_at)).toISOString(), updatedAt: row.updated_at };
+      alternatives: String(c.alternatives ?? ''), by: String(c.by ?? ''), at: new Date(String(c.at ?? row.updated_at)).toISOString(), updatedAt: row.updated_at,
+      constraintId: (c.constraintId ?? null) as string | null, conditionResult: (c.conditionResult ?? null) as 'met' | 'not_met' | null };
   });
 }
 
@@ -47,16 +48,16 @@ export async function projectState(db: Db) {
        ${iso('created_at')} created_at,${iso('updated_at')} updated_at from projects`)).rows[0];
   if (!p) return { state: 'none' as const, ...base };
 
-  const constraints = (await db.query<{ name: string; level: 'must' | 'cond' | 'ban'; condition: string | null }>(
-    'select name,level,condition from tech_constraints where project_id=$1 order by created_at,id', [p.id])).rows.map((c) => ({ ...c, condition: c.condition ?? '' }));
+  const constraints = (await db.query<{ id: string; name: string; level: 'must' | 'cond' | 'ban'; condition: string | null }>(
+    'select id::text,name,level,condition from tech_constraints where project_id=$1 order by created_at,id', [p.id])).rows.map((c) => ({ ...c, condition: c.condition ?? '' }));
   const inputs = (await db.query<{ v: number; at: string; commit: string; mdList: string[]; changes: { path: string; change: string }[]; instruction: string; result: string | null; taskCount: number }>(
     `select v.v,${iso('v.created_at')} at,v.commit_sha commit,v.md_list "mdList",v.changes,v.instruction,r.result->>'text' result,
        (select count(*)::int from tasks t where t.src_input_version=v.id and t.deleted_at is null) "taskCount"
      from input_versions v left join input_version_results r on r.input_version=v.id where v.project_id=$1 order by v.v`, [p.id])).rows;
+  // 받은 순서(seq) = main 이력 순서. 커밋 시각으로 정렬하지 않는다.
   const changeCommits = (await db.query<{ sha: string; state: 'pending' | 'skipped' | 'analyzed'; files: { at: string; author: string; message: string; files: unknown[] } }>(
-    'select sha,state,files from input_change_commits where project_id=$1', [p.id])).rows
-    .map((c) => ({ sha: c.sha, at: c.files.at, author: c.files.author, message: c.files.message, state: c.state, files: c.files.files }))
-    .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+    "select sha,state,files from input_change_commits where project_id=$1 order by (files->>'seq')::bigint", [p.id])).rows
+    .map((c) => ({ sha: c.sha, at: c.files.at, author: c.files.author, message: c.files.message, state: c.state, files: c.files.files }));
   const inputPlanning = (await db.query<PlanningJob & { version: string | null }>(
     `select j.id,j.project_id,j.kind,j.run_no,j.status,j.instruction,
        (select payload->>'version' from runner_jobs r where r.payload->>'planningJobId'=j.id::text order by r.created_at limit 1) version

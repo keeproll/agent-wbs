@@ -1,6 +1,7 @@
 import { errorBody } from '@awbs/shared';
 import { ERROR_STATUS, type ErrorCode } from '@awbs/shared/api';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifySchemaValidationError } from 'fastify';
+import { validationErrors } from '../platform/errors.ts';
 import { redact } from '../platform/redact.ts';
 
 /** 400 `errors[]` 한 줄. path는 본문 안의 위치(예: `tasks.0.wpRef`)다. */
@@ -45,24 +46,16 @@ export class ProjectError extends Error {
   }
 }
 
-interface Validation { instancePath?: string; message?: string; keyword?: string; params?: { missingProperty?: string } }
-const validationErrors = (error: { validation?: Validation[]; validationContext?: string }): InputError[] =>
-  (error.validation ?? []).map((item) => ({
-    path: [error.validationContext === 'body' ? '' : error.validationContext ?? '', ...(item.instancePath ?? '').split('/'), item.params?.missingProperty ?? '']
-      .filter(Boolean).join('.'),
-    rule: item.keyword ?? 'schema',
-    message: item.message ?? '형식이 올바르지 않습니다.',
-  }));
-
 /**
  * 프로젝트 라우트 범위의 오류 처리. 프로젝트 오류와 형식 검증 오류만 직접 답하고,
  * 그 밖의 오류(인증·세대·멱등·DB)는 공통 처리기(platform)로 넘긴다.
  */
 export function installProjectErrors(scope: FastifyInstance, action: (method: string, url: string) => string): void {
   scope.setErrorHandler((error, request, reply) => {
-    const failure = error as { validation?: Validation[]; validationContext?: string };
+    const failure = error as { validation?: FastifySchemaValidationError[] };
     if (!(error instanceof ProjectError) && !failure.validation) throw error;
-    const problem = error instanceof ProjectError ? error : new ProjectError('VALIDATION_FAILED', { errors: validationErrors(failure) });
+    // 형식 검증 오류의 경로·규칙 변환은 공통 처리(platform validationErrors)를 그대로 쓴다(리뷰 8).
+    const problem = error instanceof ProjectError ? error : new ProjectError('VALIDATION_FAILED', { errors: validationErrors(failure.validation ?? []) });
     return reply.code(ERROR_STATUS[problem.code]).send(errorBody({
       code: problem.code, message: problem.message, action: action(request.method, request.routeOptions.url ?? ''),
       fix: problem.fix ?? FIXES[problem.code] ?? '현재 상태를 다시 불러와 확인한 뒤 다시 시도하세요.',

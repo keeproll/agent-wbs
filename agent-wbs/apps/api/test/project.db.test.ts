@@ -49,10 +49,14 @@ async function epoch() { return (await ownerPool.query<{ epoch: number }>('selec
 async function runner(url: string, payload: unknown, key: string = crypto.randomUUID()) {
   return app.inject({ method: 'POST', url, headers: { authorization: `Bearer ${bearer}`, 'x-project-epoch': String(await epoch()), 'idempotency-key': key }, payload: payload as object });
 }
-/** M2-05의 claim 대신 queued job 하나를 이 Runner에 임대하고 새 fence를 돌려준다. */
+/**
+ * M2-05의 claim 대신 queued job 하나를 이 Runner에 임대하고 새 fence를 돌려준다.
+ * claim처럼 외부 효과 job에는 현재 외부 쓰기 권한의 generation을 붙인다.
+ */
 async function lease(kind: string): Promise<{ id: string; fence: number; payload: Record<string, unknown> }> {
   const row = (await ownerPool.query<{ id: string; fence: number; payload: Record<string, unknown> }>(
-    `update runner_jobs set state='leased',lease_owner='runner:test-runner',lease_until=now()+interval '60 seconds',fence=fence+1
+    `update runner_jobs set state='leased',lease_owner='runner:test-runner',lease_until=now()+interval '60 seconds',fence=fence+1,
+       generation=case when kind in ('bootstrap','input_diff') then (select generation from external_write_authority where singleton) end
      where id=(select id from runner_jobs where kind=$1 and state='queued' order by created_at desc limit 1) returning id,fence,payload`, [kind])).rows[0];
   if (!row) throw new Error(`${kind} job 없음`);
   return row;
@@ -63,7 +67,7 @@ async function state() {
   expect(response.statusCode, response.body).toBe(200);
   expectShape('getProject', 200, response.json());
   return response.json<{
-    state: string; id: string; updatedAt: string; epoch: number;
+    state: string; id: string; updatedAt: string; epoch: number; constraints: { id: string; level: string }[];
     bootstrap: { jobId: string; runNo: number; status: string; steps: { key: string; status: string; note: string }[]; logs: { text: string }[];
       fail: { reason: string } | null; revision: number | null; decisions: { id: string; tdKey: string; status: string; authority: string; level: string | null; updatedAt: string; title: string }[];
       draft: { tasks: { ref: string; judgedRules?: { items: { subjectHash: string }[] } }[]; splitCheck: { pass: number; suspect: number; violation: number } } | null };
@@ -115,6 +119,8 @@ beforeAll(async () => {
   // 기준 일정 v1 계산에 필요한 PC 사양 보고와 가정 가동률(G§6.2·§6.6).
   await ownerPool.query("insert into runner_hosts(host_id,boot_id,cpu,cores,mem_gb,swap_gb,disk_gb,os,samples,seen_at) values('host-1','boot-1','cpu',8,32,0,500,'linux',1,now())");
   await ownerPool.query('update schedule_policy set assume_rate=0.5');
+  // M2-05: 초기 분석·차이 분석은 외부 효과 job이라 현재 PC가 외부 쓰기 권한을 가져야 보고를 받는다.
+  await ownerPool.query("insert into external_write_authority(singleton,host_id,generation,state) values(true,'host-1',1,'granted')");
 });
 afterAll(async () => { await app.close(); await pool.end(); await ownerPool.end(); });
 
@@ -274,7 +280,19 @@ describe('project 기술 결정 확정(G§4.2·§4.12)', () => {
     for (const key of ['repo', 'codex', 'claude', 'cross']) await progress(jobId, fence, key);
     const early = await lead('POST', `/api/projects/${(await state()).id}/boot/tech/confirm`, { decisions: [] });
     expect(errorOf(early).code).toBe('INVALID_TRANSITION');
-    const response = await runner(`/api/planning/bootstrap/${jobId}/tech`, { fence, decisions: [
+    // 조건부 선호마다 조건 충족 판단과 근거가 정확히 하나 있어야 한다(G§4.12, 리뷰 4).
+    const constraints = (await state()).constraints;
+    const condId = constraints.find((c) => c.level === 'cond')?.id ?? '';
+    const mustId = constraints.find((c) => c.level === 'must')?.id ?? '';
+    const proposals = [{ area: 'a', title: 't', choice: 'c', reason: 'r', alternatives: '' }];
+    for (const conditionJudgements of [undefined, [], [{ constraintId: mustId, result: 'met', reason: '근거' }],
+      [{ constraintId: condId, result: 'met', reason: '근거' }, { constraintId: condId, result: 'met', reason: '근거' }],
+      [{ constraintId: condId, result: 'met', reason: '   ' }]]) {
+      const bad = await runner(`/api/planning/bootstrap/${jobId}/tech`, { fence, decisions: proposals, ...(conditionJudgements && { conditionJudgements }) });
+      expect(bad.statusCode, JSON.stringify(conditionJudgements)).toBe(400);
+    }
+    const response = await runner(`/api/planning/bootstrap/${jobId}/tech`, { fence,
+      conditionJudgements: [{ constraintId: condId, result: 'met', reason: '센서 시계열이 초당 수백 건' }], decisions: [
       { area: '통신', title: '실시간 갱신 방식', choice: 'SSE', reason: '단방향 알림이면 충분', alternatives: 'WebSocket' },
       { area: '데이터', title: '캐시', choice: 'Redis', reason: '세션 캐시', alternatives: '' },
     ] });
@@ -284,6 +302,7 @@ describe('project 기술 결정 확정(G§4.2·§4.12)', () => {
     expect(s.bootstrap.decisions.map((d) => `${d.tdKey}:${d.authority}:${d.level ?? '-'}:${d.status}`)).toEqual([
       'TD-01:lead:must:fixed', 'TD-02:lead:ban:fixed', 'TD-03:lead:cond:pending', 'TD-04:agent:-:pending', 'TD-05:agent:-:pending',
     ]);
+    expect(s.bootstrap.decisions[2]).toMatchObject({ constraintId: condId, conditionResult: 'met', reason: '센서 시계열이 초당 수백 건' });
     const twice = await runner(`/api/planning/bootstrap/${jobId}/tech`, { fence, decisions: [{ area: 'a', title: 't', choice: 'c', reason: 'r', alternatives: '' }] });
     expect(errorOf(twice).code).toBe('INVALID_TRANSITION');
     await finishJob(jobId);
@@ -535,6 +554,122 @@ describe('project 입력 자료 변경·분석·분석 안 함(G§4.2 ②)', () 
 });
 
 function AT_NOW() { return new Date().toISOString(); }
+
+describe('project 리뷰 지적 회귀(M2-03-REVIEW 1~8)', () => {
+  /** 초기화 뒤 새 프로젝트를 등록하고 초안 승인 대기까지 진행한다. */
+  async function fresh(d = draft()) {
+    await resetDb();
+    const check = await checkedRepo();
+    expect((await lead('POST', '/api/project', registration(check, { constraints: [] }))).statusCode).toBe(201);
+    const first = await lease('bootstrap');
+    for (const key of ['check', 'unzip', 'repo', 'codex', 'claude', 'cross']) await progress(first.id, first.fence, key);
+    expect((await runner(`/api/planning/bootstrap/${first.id}/tech`, { fence: first.fence, decisions: [] })).statusCode).toBe(201);
+    await finishJob(first.id);
+    const s = await state();
+    expect((await lead('POST', `/api/projects/${s.id}/boot/tech/confirm`, { decisions: [] })).statusCode).toBe(200);
+    const current = await lease('bootstrap');
+    expect((await runner(`/api/planning/bootstrap/${current.id}/draft`, { fence: current.fence, ...d })).statusCode).toBe(201);
+    return { current, s: await state() };
+  }
+  const commit = (sha: string, at: string) => ({ sha, at, author: 'reviewer', message: sha.slice(0, 1) });
+  const file = (sha: string, path: string) => ({ commitSha: sha, path, change: 'added', added: 1, deleted: 0 });
+  const progressOf = (job: { id: string; fence: number }, stepKey: string, status: string, note?: string) =>
+    runner(`/api/runner/bootstrap/${job.id}/progress`, { fence: job.fence, stepKey, status, at: AT_NOW(), ...(note && { note }) });
+
+  test('1. 재분석 뒤 이전 회차 job의 늦은 보고는 409이고 새 회차를 바꾸지 않는다', async () => {
+    const { current, s } = await fresh();
+    expect((await lead('POST', '/api/project/bootstrap/rerun', { revision: s.bootstrap.revision, instruction: 'new run' })).statusCode).toBe(202);
+    const late = await progressOf(current, 'codex', 'fail', 'late run1 error');
+    expect(late.statusCode).toBe(409);
+    expect(errorOf(late).code).toBe('LEASE_LOST');
+    expect((await state()).bootstrap).toMatchObject({ runNo: 2, status: 'queued', fail: null });
+    const draftLate = await runner(`/api/planning/bootstrap/${current.id}/draft`, { fence: current.fence, ...draft() });
+    expect(errorOf(draftLate).code).toBe('LEASE_LOST');
+  });
+
+  test('1. 다시 시도 뒤 이전 job의 늦은 실패 보고는 409이고 새 시도를 실패로 만들지 않는다', async () => {
+    const { current } = await fresh();
+    await progress(current.id, current.fence, 'codex', 'fail', 'first failure');
+    const s = await state();
+    expect((await lead('POST', '/api/project/bootstrap/retry', { revision: s.bootstrap.revision })).statusCode).toBe(202);
+    const next = await lease('bootstrap');
+    const late = await progressOf(current, 'codex', 'fail', 'old retry report');
+    expect(errorOf(late).code).toBe('LEASE_LOST');
+    expect((await state()).bootstrap).toMatchObject({ status: 'queued', fail: null });
+    expect((await progressOf(next, 'codex', 'run')).statusCode).toBe(204);
+  });
+
+  test('2. 확인한 커밋 중 최신(보고 순서상 마지막)만 고정하고, 옛 커밋 선택은 400이며 아무것도 소비하지 않는다', async () => {
+    const { s } = await fresh();
+    expect((await lead('POST', '/api/project/bootstrap/approve', { revision: s.bootstrap.revision })).statusCode).toBe(200);
+    // 커밋 시각은 Git 순서가 아니다. 보고 순서(main 이력 순서)가 기준이다: SHA3이 시각은 이르지만 나중 커밋이다.
+    expect((await runner('/api/runner/input-changes', { commits: [commit(SHA2, '2026-11-26T03:00:00Z'), commit(SHA3, '2026-11-26T02:00:00Z')],
+      files: [file(SHA2, 'prototype/docs/older.md'), file(SHA3, 'prototype/docs/newer.md')] })).statusCode).toBe(204);
+    const before = await state();
+    expect(before.changeCommits.map((c) => c.sha)).toEqual([SHA2, SHA3]);
+    const old = await lead('POST', '/api/project/inputs', { updatedAt: before.updatedAt, commit: SHA2, commits: [SHA2, SHA3] });
+    expect(old.statusCode).toBe(400);
+    expect(errorOf(old).errors).toEqual([expect.objectContaining({ path: 'commit', rule: 'latest' })]);
+    expect((await state()).changeCommits.map((c) => c.state)).toEqual(['pending', 'pending']);
+    const ok = await lead('POST', '/api/project/inputs', { updatedAt: before.updatedAt, commit: SHA3, commits: [SHA2, SHA3] });
+    expect(ok.statusCode, ok.body).toBe(202);
+    expect((await state()).inputs[1]).toMatchObject({ commit: SHA3, mdList: ['prototype/docs/guide.md', 'prototype/docs/newer.md', 'prototype/docs/older.md'] });
+  });
+
+  test('3. 외부 쓰기 권한이 막히면(PC 교체) 초기 분석 보고를 EXTERNAL_WRITE_BLOCKED로 거부한다', async () => {
+    const { current } = await fresh();
+    await ownerPool.query("update external_write_authority set host_id='host-new',generation=generation+1,state='blocked',blocked_reason='PC changed'");
+    try {
+      const result = await progressOf(current, 'codex', 'run');
+      expect(result.statusCode).toBe(409);
+      expect(errorOf(result).code).toBe('EXTERNAL_WRITE_BLOCKED');
+    } finally {
+      await ownerPool.query("update external_write_authority set host_id='host-1',generation=generation+1,state='granted',blocked_reason=null,reconciled_at=now()");
+    }
+  });
+
+  test('5. 공개 저장소와 prototype/docs 밖 문서로는 저장소 확인이 실패한다', async () => {
+    await resetDb();
+    for (const result of [{ private: false, structure: STRUCTURE }, { private: true, structure: { ...STRUCTURE, docs: ['src/readme.txt', 'prototype/docs/img.png'] } }]) {
+      const id = (await lead('POST', '/api/project/repo-checks', { url: REPO })).json<{ id: string }>().id;
+      const job = await lease('repo_check');
+      expect((await runner(`/api/runner/repo-checks/${id}/result`, { fence: job.fence, access: true, commit: SHA1, ...result })).statusCode).toBe(204);
+      await finishJob(job.id);
+      const check = (await lead('GET', `/api/project/repo-checks/${id}`)).json<{ status: string; error: string }>();
+      expect(check.status, JSON.stringify(result)).toBe('failed');
+      expect(errorOf(await lead('POST', '/api/project', registration(id))).code).toBe('INVALID_TRANSITION');
+    }
+  });
+
+  test('6. prototype/ 밖 파일은 입력 변경이 아니고, 입력 파일이 없는 커밋은 감지 목록에 올리지 않는다', async () => {
+    await fresh();
+    const response = await runner('/api/runner/input-changes', { commits: [commit(SHA2, '2026-11-26T01:00:00Z'), commit(SHA3, '2026-11-26T02:00:00Z'), commit(SHA4, '2026-11-26T03:00:00Z')],
+      files: [file(SHA2, 'src/agent.ts'), file(SHA4, 'prototype/extra.md'), file(SHA4, 'src/b.ts')] });
+    expect(response.statusCode, response.body).toBe(204);
+    const s = await state();
+    expect(s.changeCommits.map((c) => [c.sha, c.files.map((f) => f.path)])).toEqual([[SHA4, ['prototype/extra.md']]]);
+  });
+
+  test('7. 같은 멱등 키의 등록 재전송은 성공 응답을 재생한다', async () => {
+    await resetDb();
+    const id = await checkedRepo();
+    const key = crypto.randomUUID();
+    const first = await lead('POST', '/api/project', registration(id), { 'idempotency-key': key });
+    expect(first.statusCode).toBe(201);
+    const again = await lead('POST', '/api/project', registration(id), { 'idempotency-key': key });
+    expect(again.statusCode, again.body).toBe(201);
+    expect(again.headers['idempotency-replayed']).toBe('true');
+    expect(again.json()).toEqual(first.json());
+  });
+
+  test('8. 선언하지 않은 필드 오류는 그 필드 경로를 알려 준다', async () => {
+    const result = await lead('POST', '/api/project/repo-checks', { url: REPO, extraField: 'extra-value' });
+    expect(result.statusCode).toBe(400);
+    expect(errorOf(result).errors).toEqual([expect.objectContaining({ path: 'extraField', rule: 'additionalProperties' })]);
+    const wrongType = await lead('POST', '/api/project/bootstrap/approve', { revision: '1' });
+    expect(errorOf(wrongType).errors).toEqual([expect.objectContaining({ path: 'revision' })]);
+  });
+});
 
 describe('project 초기화 뒤 다시 등록', () => {
   test('초기화하면 state=none이고 정리가 끝나야 다시 등록할 수 있다', async () => {

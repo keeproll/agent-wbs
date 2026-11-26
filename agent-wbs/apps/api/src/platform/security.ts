@@ -137,8 +137,9 @@ export function installSecurity(app: FastifyInstance, pool: Pool, options: Secur
       if (operation?.id === 'resetProject' && context.epoch !== context.currentEpoch) throw new PlatformError('EPOCH_MISMATCH', { currentEpoch: context.currentEpoch });
     };
     if (typeof key !== 'string' || !operation || operation.idempotency === 'none') { checkResetEpoch(); return; }
-    // 초기화는 프로젝트 행을 지운다. 재전송 응답은 삭제되지 않는 전역 범위에 저장한다.
-    const project = operation.id === 'resetProject' ? null : (await client.query<{ id: string }>('select id from projects')).rows[0]?.id ?? null;
+    // 초기화는 프로젝트 행을 지우고, 등록은 프로젝트 행을 만든다. 처리 전후로 프로젝트 범위가 바뀌므로
+    // 두 요청의 재전송 응답은 바뀌지 않는 전역 범위(epoch·주체·키)에 저장한다.
+    const project = operation.id === 'resetProject' || operation.id === 'createProject' ? null : (await client.query<{ id: string }>('select id from projects')).rows[0]?.id ?? null;
     const hash = tokenHash(`${request.method}\n${request.url}\n${canonical(request.body)}`);
     const scope = canonical([project, context.epoch, context.principal, key]);
     await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [scope]);

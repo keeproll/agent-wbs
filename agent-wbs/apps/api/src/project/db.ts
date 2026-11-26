@@ -1,4 +1,6 @@
 import type { PoolClient } from '@awbs/db';
+import { RunnerRepository } from '../runner/repository.ts';
+import { checkedJob } from '../runner/service.ts';
 import { ProjectError } from './errors.ts';
 
 export type Db = Pick<PoolClient, 'query'>;
@@ -55,19 +57,18 @@ export async function nextNumber(db: Db, projectId: string, kind: string, existi
 
 export interface JobRow { id: string; kind: string; payload: Record<string, unknown>; project_id: string | null; fence: number }
 /**
- * Runner 보고의 fence 대조(contracts §3.2-4). 지금 이 Runner가 임대 중인 job의 현재 fence만 받는다.
- * claim·renew·finish는 M2-05 범위이고, 여기서는 같은 규칙으로 「보고를 받아도 되는가」만 판정한다.
+ * Runner 보고의 자격 판정. M2-05의 checkedJob을 그대로 쓴다(contracts §3.2-4):
+ * 지금 이 Runner가 임대 중인 job의 현재 fence여야 하고, 초기 분석·차이 분석 같은 외부 효과 job은
+ * 현재 PC가 외부 쓰기 권한을 가진 같은 generation이어야 한다(아니면 409 EXTERNAL_WRITE_BLOCKED).
  */
 export async function leasedJob(db: Db, where: { id?: string; repoCheckId?: string }, kinds: readonly string[], fence: number, principal: string): Promise<JobRow> {
-  const job = where.id !== undefined
-    ? isUuid(where.id) ? (await db.query<JobRow & { state: string; lease_owner: string | null; live: boolean }>(
-      'select id,kind,payload,project_id,fence,state,lease_owner,coalesce(lease_until>clock_timestamp(),false) live from runner_jobs where id=$1 for update', [where.id])).rows[0] : undefined
-    : (await db.query<JobRow & { state: string; lease_owner: string | null; live: boolean }>(
-      `select id,kind,payload,project_id,fence,state,lease_owner,coalesce(lease_until>clock_timestamp(),false) live from runner_jobs
-       where kind='repo_check' and payload->>'repoCheckId'=$1 order by created_at desc limit 1 for update`, [where.repoCheckId])).rows[0];
-  if (!job || !kinds.includes(job.kind)) throw new ProjectError('NOT_FOUND', { details: { resource: 'runner_job', id: where.id ?? where.repoCheckId } });
-  if (job.fence !== fence || job.lease_owner !== principal || !['leased', 'started'].includes(job.state) || !job.live) throw new ProjectError('LEASE_LOST');
-  return { id: job.id, kind: job.kind, payload: job.payload, project_id: job.project_id, fence: job.fence };
+  const id = where.id ?? (await db.query<{ id: string }>(
+    "select id from runner_jobs where kind='repo_check' and payload->>'repoCheckId'=$1 order by created_at desc limit 1", [where.repoCheckId])).rows[0]?.id;
+  const kind = id && isUuid(id) ? (await db.query<{ kind: string }>('select kind from runner_jobs where id=$1', [id])).rows[0]?.kind : undefined;
+  if (!id || !kind || !kinds.includes(kind)) throw new ProjectError('NOT_FOUND', { details: { resource: 'runner_job', id: where.id ?? where.repoCheckId } });
+  // RunnerRepository는 query만 쓴다. 공통 관문이 연 같은 트랜잭션의 연결을 그대로 넘긴다.
+  const job = await checkedJob(new RunnerRepository(db as PoolClient), id, fence, principal);
+  return { id: job.id, kind: job.kind, payload: job.payload as Record<string, unknown>, project_id: job.project_id, fence: job.fence };
 }
 
 /** Runner가 가져갈 job을 대기열에 넣는다. 같은 Planning 작업의 n번째 job이라는 이름으로 중복을 막는다. */

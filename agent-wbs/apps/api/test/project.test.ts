@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { DEFAULT_SPLIT_SETTINGS } from '@awbs/shared';
+import { OPERATIONS } from '@awbs/shared/api';
 import { describe, expect, test } from 'vitest';
 import { draftErrors, draftHolds, draftSplitSummary, storeDraft } from '../src/project/draft.ts';
 import { canonicalJson, judgedContent, subjectHash } from '../src/project/hash.ts';
@@ -140,5 +141,22 @@ describe('project 입력 변경 묶기(G§4.2 ②)', () => {
       { path: 'prototype/docs/c.md', change: 'added' }, { path: 'prototype/docs/a.md', change: 'deleted' },
       { path: 'prototype/uiux/x.md', change: 'added' }, { path: 'prototype/docs/img.png', change: 'added' },
     ])).toEqual(['prototype/docs/b.md', 'prototype/docs/c.md']);
+  });
+});
+
+describe('project 계약의 오류 선언(리뷰 9)', () => {
+  // 서버가 실제로 돌려주는 오류는 계약(OpenAPI)에 선언되어 있어야 클라이언트가 처리할 수 있다.
+  test.each([
+    ['analyzeInputs', ['INVALID_TRANSITION', 'INPUT_UNCHANGED', 'CLEANUP_PENDING']],
+    ['skipInputs', ['INVALID_TRANSITION', 'VERSION_CONFLICT']],
+    ['retryInputs', ['INVALID_TRANSITION', 'CLEANUP_PENDING']],
+    ['reportInputChanges', ['INVALID_TRANSITION']],
+    ['reportBootstrapProgress', ['INVALID_TRANSITION', 'EXTERNAL_WRITE_BLOCKED', 'LEASE_LOST', 'NOT_FOUND']],
+    ['submitDraft', ['INVALID_TRANSITION', 'EXTERNAL_WRITE_BLOCKED', 'LEASE_LOST']],
+    ['submitTechProposals', ['INVALID_TRANSITION', 'EXTERNAL_WRITE_BLOCKED', 'LEASE_LOST']],
+    ['reportRepoCheck', ['LEASE_LOST', 'NOT_FOUND']],
+  ] as const)('%s 는 %j 를 선언한다', (id, codes) => {
+    const op = OPERATIONS.find((item) => item.id === id);
+    expect(op?.errors).toEqual(expect.arrayContaining([...codes]));
   });
 });
