@@ -121,10 +121,39 @@ test('지금 확인은 요청만 접수하고, 실제 Runner 관측이 확인 �
   const policy = await app.inject({ url: '/api/runner/policy', headers: { authorization: `Bearer ${bearer}`, 'x-project-epoch': '1' } });
   expect(policy.statusCode, policy.body).toBe(200);
   expect(policy.json<{ inputCheckRequest: number }>().inputCheckRequest).toBe(requested.json<{ inputCheckRequest: number }>().inputCheckRequest);
+  const awaiting = await project();
   const observed = await runner('/api/runner/input-changes', { base: 'a'.repeat(40), head: 'a'.repeat(40), baseIsAncestor: true, treeHash: 'b'.repeat(40), changes: [], commits: [] });
   expect(observed.statusCode, observed.body).toBe(200);
   expect((await project()).inputCheckedAt).toMatch(/^\d{4}-/);
+  expect((await project()).updatedAt).toBe(awaiting.updatedAt);
   expect((await call('POST', '/api/project/inputs/check', { updatedAt: before.updatedAt })).statusCode).toBe(409);
+});
+
+test('빈 관측 반복은 변경 이벤트·일정 계산 버전을 늘리지 않고 읽어 둔 버전으로 프로젝트를 편집할 수 있다', async () => {
+  const before = await project();
+  const count = async () => (await owner.query<{ n: number }>('select count(*)::int n from change_events')).rows[0]?.n;
+  const events = await count();
+  const version = (await call('GET', '/api/schedule')).json<{ calcVersion: number }>().calcVersion;
+  for (let n = 0; n < 2; n++) {
+    const observed = await runner('/api/runner/input-changes', { base: 'a'.repeat(40), head: 'a'.repeat(40), baseIsAncestor: true, treeHash: 'b'.repeat(40), changes: [], commits: [] });
+    expect(observed.statusCode, observed.body).toBe(200);
+  }
+  expect(await count()).toBe(events);
+  expect((await call('GET', '/api/schedule')).json<{ calcVersion: number }>().calcVersion).toBe(version);
+  const edit = { ...before, description: '관측 뒤 편집' };
+  const payload = { updatedAt: edit.updatedAt, name: edit.name, description: edit.description, startDate: edit.startDate, targetDate: edit.targetDate };
+  expect((await call('PATCH', '/api/project', payload)).statusCode).toBe(200);
+  expect((await call('PATCH', '/api/project', payload)).statusCode).toBe(409);
+});
+
+test('이력 재작성으로 거부한 관측은 마지막 유효 관측 시각과 편집 버전을 보존한다', async () => {
+  const before = await project();
+  const rejected = await runner('/api/runner/input-changes', { base: 'a'.repeat(40), head: 'c'.repeat(40), baseIsAncestor: false, treeHash: 'c'.repeat(40), changes: [], commits: [] });
+  expect(rejected.statusCode, rejected.body).toBe(200);
+  expect(rejected.json()).toMatchObject({ historyRewritten: true });
+  expect(await project()).toMatchObject({ inputCheckedAt: before.inputCheckedAt, updatedAt: before.updatedAt });
+  // 복구된 유효 관측은 경고를 해소한다. 이후 시험에 재작성 경고를 남기지 않는다.
+  expect((await runner('/api/runner/input-changes', { base: 'a'.repeat(40), head: 'a'.repeat(40), baseIsAncestor: true, treeHash: 'b'.repeat(40), changes: [], commits: [] })).statusCode).toBe(200);
 });
 
 test('GitHub 상태 조회: 미확인·정상·권한 부족·만료를 저장된 사실대로 보여 주고 비밀을 숨긴다', async () => {
@@ -247,7 +276,7 @@ test('팀장은 기존 검증에 Evidence 경로를 추가할 수 있고 빈·�
   expect((await call('GET', '/api/project/export')).statusCode).toBe(200);
 });
 
-test('다른 멱등 키로 동시에 보내도 같은 Planning·같은 변경의 CP는 하나이며 반려 뒤에는 다시 작성할 수 있다', async () => {
+test('다른 멱등 키나 다른 내용이어도 Planning 세션당 살아 있는 CP는 하나이며 반려·삭제 뒤에는 다시 작성할 수 있다', async () => {
   const started = (await call('POST', '/api/plannings', { title: '중복 확인', scope: '범위' })).json<{ id: string; jobId: string }>();
   await owner.query("update runner_jobs set state='leased',fence=1 where id=$1", [started.jobId]);
   expect((await runner(`/api/planning/sessions/${started.id}/reviews`, { jobId: started.jobId, fence: 1,
@@ -258,9 +287,43 @@ test('다른 멱등 키로 동시에 보내도 같은 Planning·같은 변경의
   expect(responses.map((r) => r.statusCode).sort()).toEqual([201, 409]);
   const cp = responses.find((r) => r.statusCode === 201)?.json<Proposal>();
   if (!cp) throw new Error('생성된 CP가 없습니다.');
+  const edited = await call('PATCH', `/api/proposals/${cp.id}`, { title: '초안 수정', reason: '다른 내용', source: { kind: 'planning', id: started.id },
+    ops: [proposalBody().ops[1]], updatedAt: cp.updatedAt });
+  expect(edited.statusCode, edited.body).toBe(200);
+  expect((await call('POST', endpoint, { title: '다른 CP', reason: '내용 변경' })).statusCode).toBe(409);
+  expect((await call('POST', '/api/proposals', { ...proposalBody(), source: { kind: 'planning', id: started.id } })).statusCode).toBe(409);
+  const submitted = (await call('POST', `/api/proposals/${cp.id}/submit`, { updatedAt: edited.json<Proposal>().updatedAt })).json<Proposal>();
+  expect((await call('POST', `/api/proposals/${cp.id}/reject`, { updatedAt: submitted.updatedAt, comment: '재조정' })).statusCode).toBe(200);
+  const again = await call('POST', endpoint, { title: '다시 작성', reason: '반려 뒤' });
+  expect(again.statusCode).toBe(201);
+  const draft = again.json<Proposal>();
+  expect((await call('DELETE', `/api/proposals/${draft.id}?updatedAt=${encodeURIComponent(draft.updatedAt)}`)).statusCode).toBe(204);
+  expect((await call('POST', endpoint, { title: '다시 작성', reason: '삭제 뒤' })).statusCode).toBe(201);
+});
+
+test('CP가 있는 Planning 세션에서는 이견 선택과 메모도 잠그고 반려 뒤에는 다시 조정한다', async () => {
+  const started = (await call('POST', '/api/plannings', { title: '선택 잠금', scope: '범위' })).json<{ id: string; jobId: string }>();
+  await owner.query("update runner_jobs set state='leased',fence=1 where id=$1", [started.jobId]);
+  expect((await runner(`/api/planning/sessions/${started.id}/reviews`, { jobId: started.jobId, fence: 1,
+    reviews: [{ topic: '선택', kind: 'diff', codex: '', claude: '', codexOps: [proposalBody().ops[0]], claudeOps: [proposalBody().ops[1]] }] })).statusCode).toBe(201);
+  interface Review { id: string; updatedAt: string; choice: string; memo: string }
+  const session = (await call('GET', '/api/plannings')).json<{ items: { id: string; reviews: Review[] }[] }>().items.find((p) => p.id === started.id);
+  const review = session?.reviews[0];
+  if (!review) throw new Error('검토가 없습니다.');
+  const endpoint = `/api/plannings/${started.id}/reviews/${review.id}/choice`;
+  const chosen = await call('POST', endpoint, { updatedAt: review.updatedAt, choice: 'codex', memo: '원래 메모' });
+  const current = chosen.json<{ reviews: Review[] }>().reviews[0];
+  if (!current) throw new Error('선택 결과가 없습니다.');
+  const cp = (await call('POST', `/api/plannings/${started.id}/proposals`, { title: '제안', reason: '근거' })).json<Proposal>();
+  const change = { updatedAt: current.updatedAt, choice: 'claude', memo: '바꾼 메모' };
+  const blocked = await call('POST', endpoint, change);
+  expect(blocked.statusCode, blocked.body).toBe(409);
+  expect(blocked.json()).toMatchObject({ error: { code: 'INVALID_TRANSITION', details: { proposalId: cp.id } } });
+  const stored = (await call('GET', '/api/plannings')).json<{ items: { id: string; reviews: Review[] }[] }>().items.find((p) => p.id === started.id)?.reviews[0];
+  expect(stored).toMatchObject({ choice: 'codex', memo: '원래 메모', updatedAt: current.updatedAt });
   const submitted = (await call('POST', `/api/proposals/${cp.id}/submit`, { updatedAt: cp.updatedAt })).json<Proposal>();
   expect((await call('POST', `/api/proposals/${cp.id}/reject`, { updatedAt: submitted.updatedAt, comment: '재조정' })).statusCode).toBe(200);
-  expect((await call('POST', endpoint, { title: '다시 작성', reason: '반려 뒤' })).statusCode).toBe(201);
+  expect((await call('POST', endpoint, change)).statusCode).toBe(200);
 });
 
 test('초기화 뒤에는 대시보드도 빈 데이터이며 경로 참조·숨긴 CP까지 정리된다', async () => {

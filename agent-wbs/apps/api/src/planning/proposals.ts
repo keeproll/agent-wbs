@@ -7,8 +7,6 @@ import { TaskError } from '../tasks/errors.ts';
 import { iso } from '../tasks/read.ts';
 import type { ProposalInput } from './evaluate.ts';
 import { deferChange } from '../changes/events.ts';
-import { stripJudgements } from './content.ts';
-import { canonicalJson } from '../tasks/hash.ts';
 
 /** 변경 제안(CP) 행을 읽고 쓰는 공용 함수. 팀장·Planning 경로가 함께 쓴다. */
 
@@ -55,21 +53,21 @@ export async function event(client: PoolClient, row: Pick<CpRow, 'id' | 'project
   deferChange(client, row.project_id, 'proposal', { id: row.id });
 }
 
+/** P5954: 반려·삭제되지 않은 CP가 있으면 세션 조정과 새 작성을 함께 막는다. 같은 잠금으로 두 요청의 경합도 막는다. */
+export async function assertPlanningUnlocked(client: PoolClient, projectId: string, planningId: string): Promise<void> {
+  await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [`awbs:planning-proposal:${planningId}`]);
+  const existing = (await client.query<{ id: string }>(`select id from change_proposals where project_id=$1 and source='planning' and source_id=$2
+    and status<>'rejected' and deleted_at is null order by created_at desc,id desc limit 1`, [projectId, planningId])).rows[0];
+  if (existing) throw new TaskError('INVALID_TRANSITION', { proposalId: existing.id }, [], '이 Planning 세션에는 반려되지 않은 CP가 있어 조정하거나 새로 작성할 수 없습니다.');
+}
+
 /** CP 행을 만든다. 표시 ID(CP-001)는 프로젝트 counters로 재사용하지 않는다. */
 export async function insertCp(
   client: PoolClient, projectId: string, body: { title: string; reason: string; source: { kind: string; id?: string }; ops: WireProposalOp[] }, actor: string, status: string,
   judgements: { taskJudgements: TaskJudgement[]; splitJudgements: unknown } = { taskJudgements: [], splitJudgements: null },
 ): Promise<CpRow> {
-  // P5954의 세션 잠금: 다른 멱등 키여도 같은 변경을 새 CP로 중복 생성하지 않는다. 반려·삭제된 초안은 다시 작성할 수 있다.
   if (body.source.kind === 'planning' && body.source.id) {
-    await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [`awbs:planning-proposal:${body.source.id}`]);
-    const changes = (ops: WireProposalOp[]) => canonicalJson(stripJudgements(ops).map((op) => op.op === 'modify'
-      ? { op: op.op, task: op.task, field: op.field, after: op.after } : op));
-    const existing = (await client.query<{ id: string; ops: WireProposalOp[] }>(`select id,ops from change_proposals where project_id=$1 and source='planning' and source_id=$2
-      and status<>'rejected' and deleted_at is null order by created_at,id`, [projectId, body.source.id])).rows;
-    const content = changes(body.ops);
-    const duplicate = existing.find((row) => changes(row.ops) === content);
-    if (duplicate) throw new TaskError('INVALID_TRANSITION', { proposalId: duplicate.id }, [], '이 Planning 세션의 같은 변경으로 이미 작성된 CP가 있습니다.');
+    await assertPlanningUnlocked(client, projectId, body.source.id);
   }
   const sequence = (await client.query<{ value: number }>(
     `insert into counters(project_id,kind,value) values($1,'cp',(select coalesce(max((substring(cp_key from 4))::bigint),0)+1 from change_proposals where project_id=$1 and cp_key ~ '^CP-[0-9]+$'))

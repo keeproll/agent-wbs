@@ -162,6 +162,13 @@
       "when": 1795740000001,
       "tag": "0022_20261127_evidence_reference",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1795740000002,
+      "tag": "0023_20261127_project_observation_version",
+      "breakpoints": true
     }
   ]
 }

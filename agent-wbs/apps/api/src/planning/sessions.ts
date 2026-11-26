@@ -5,7 +5,7 @@ import { TaskError } from '../tasks/errors.ts';
 import { iso } from '../tasks/read.ts';
 import { LEAD, TIMESTAMP_MESSAGE } from '../tasks/write.ts';
 import { assertJob } from './jobs.ts';
-import { clientOf, idOf, insertCp, proposalView } from './proposals.ts';
+import { assertPlanningUnlocked, clientOf, idOf, insertCp, proposalView } from './proposals.ts';
 import type { RouteFn } from './split.ts';
 
 /*
@@ -102,6 +102,7 @@ export function registerSessionRoutes(route: RouteFn, pool: Pool, epochOf: (requ
     const body = request.body as { updatedAt: string; choice: string; memo?: string };
     const { rid = '' } = request.params as { rid?: string };
     const planning = await loadPlanning(client, idOf(request), true);
+    await assertPlanningUnlocked(client, planning.project_id, planning.id);
     const review = UUID.test(rid) ? (await client.query<{ updated_at: string }>(`select ${iso('updated_at')} as updated_at from planning_reviews where id=$1 and planning=$2 for update`, [rid, planning.id])).rows[0] : undefined;
     if (!review) throw new TaskError('NOT_FOUND', { resource: 'planning_review', id: rid });
     if (!isTimestamp(body.updatedAt)) throw new TaskError('VALIDATION_FAILED', {}, [{ path: 'updatedAt', rule: 'format', message: TIMESTAMP_MESSAGE }]);

@@ -549,6 +549,7 @@ describe('project 입력 자료 변경·분석·분석 안 함(G§4.2 ②)', () 
 
   test('「분석 안 함」은 화면이 본 커밋 목록·프로젝트 버전이 맞을 때만 확인함으로 기록한다', async () => {
     const s = await state();
+    expect((await chainReport([], [])).statusCode).toBe(200);
     const stale = await lead('POST', '/api/project/inputs/skip', { updatedAt: s.updatedAt, commits: [SHA2, SHA3] });
     expect(errorOf(stale).code).toBe('VERSION_CONFLICT');
     const old = await lead('POST', '/api/project/inputs/skip', { updatedAt: '2020-01-01T00:00:00Z', commits: [SHA2] });
@@ -564,6 +565,7 @@ describe('project 입력 자료 변경·분석·분석 안 함(G§4.2 ②)', () 
     expect((await report([SHA3], [files(SHA3, 'prototype/docs/new.md'), files(SHA3, 'prototype/uiux/a.html', 'deleted')])).statusCode).toBe(200);
     const s = await state();
     const same = await lead('POST', '/api/project/inputs', { updatedAt: s.updatedAt, commit: SHA1, commits: [SHA3] });
+    expect((await chainReport([], [])).statusCode).toBe(200);
     expect(errorOf(same).code).toBe('INPUT_UNCHANGED');
     const notListed = await lead('POST', '/api/project/inputs', { updatedAt: s.updatedAt, commit: SHA4, commits: [SHA3] });
     expect(notListed.statusCode).toBe(400);
