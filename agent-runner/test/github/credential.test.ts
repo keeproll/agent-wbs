@@ -1,3 +1,5 @@
+import { createPrivateKey } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { inspect } from 'node:util';
 import { describe, expect, test } from 'vitest';
 import {
@@ -78,5 +80,34 @@ describe('봉인 자격 증명', () => {
     const runner = generateRunnerKeyPair();
     expect(runner.publicKey).toMatch(/^-----BEGIN PUBLIC KEY-----/);
     expect(openSealedCredential(runner.privateKey, sealCredential(runner.publicKey, TOKEN)).reveal()).toBe(TOKEN);
+  });
+});
+
+describe('봉인 형식 v1 고정 벡터(서버 독립 구현과 맞추는 기준)', () => {
+  const vector = JSON.parse(
+    readFileSync(new URL('./fixtures/sealed-v1-vector.json', import.meta.url), 'utf8'),
+  ) as { sealed: string; recipientPrivateHex: string; recipientPem: string; token: string; ephemeralPublicHex: string; nonceHex: string };
+  // X25519 개인키 raw 32바이트 → PKCS#8 DER
+  const privateKey = createPrivateKey({
+    key: Buffer.concat([Buffer.from('302e020100300506032b656e04220420', 'hex'), Buffer.from(vector.recipientPrivateHex, 'hex')]),
+    format: 'der',
+    type: 'pkcs8',
+  });
+
+  test('다른 언어로 만든 v1 봉인 값을 연다', () => {
+    expect(openSealedCredential(privateKey, vector.sealed).reveal()).toBe(vector.token);
+  });
+
+  test('바이트 배치가 계약 보완안과 같다: 버전|임시 공개키|nonce|tag|암호문', () => {
+    const raw = Buffer.from(vector.sealed, 'base64url');
+    expect(raw[0]).toBe(1);
+    expect(raw.subarray(1, 33).toString('hex')).toBe(vector.ephemeralPublicHex);
+    expect(raw.subarray(33, 45).toString('hex')).toBe(vector.nonceHex);
+    expect(raw.length).toBe(61 + Buffer.byteLength(vector.token, 'utf8'));
+    expect(vector.sealed).not.toContain('=');
+  });
+
+  test('벡터의 공개키 PEM으로 봉인한 값도 같은 개인키로 열린다', () => {
+    expect(openSealedCredential(privateKey, sealCredential(vector.recipientPem, vector.token)).reveal()).toBe(vector.token);
   });
 });
