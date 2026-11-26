@@ -257,7 +257,11 @@ const mail = [
     path: '/api/settings/mail/smtp',
     summary: 'SMTP 설정(비밀번호는 pwSet만)',
     responses: {
-      200: Type.Object({ ...smtp, host: Type.String(), from: Type.String(), pwSet: Type.Boolean(), ...settingVersion }),
+      200: Type.Object({
+        ...smtp, host: Type.String(), from: Type.String(), pwSet: Type.Boolean(), ...settingVersion,
+        // M6-03: 마지막 연결 확인 결과(화면의 정상/실패 표시·실패 배너). 확인 전이거나 설정을 바꾼 뒤면 null
+        check: Nullable(Type.Object({ ok: Type.Boolean(), checkedAt: c.Timestamp, error: Nullable(Type.String()) })),
+      }),
     },
   }),
   operation({
@@ -267,7 +271,7 @@ const mail = [
     path: '/api/settings/mail/smtp',
     summary: 'SMTP 저장. password는 교체할 때만',
     body: Body({ ...settingVersion, ...smtp, password: Opt(c.SecretInput) }),
-    responses: { 200: Type.Object({ ...smtp, pwSet: Type.Boolean(), ...settingVersion }) },
+    responses: { 200: Type.Object({ ...smtp, pwSet: Type.Boolean(), ...settingVersion, check: Nullable(Type.Object({ ok: Type.Boolean(), checkedAt: c.Timestamp, error: Nullable(Type.String()) })) }) },
   }),
   operation({
     ...noVersion,

@@ -1303,6 +1303,8 @@ export const mailSettings = pgTable(
     checked_at: at('checked_at'),
     status: text(),
     error: text(),
+    // M6-03(0049): 편집 버전. 연결 확인 결과를 적어도 바뀌지 않는다.
+    settings_version: at('settings_version'),
   },
   (t) => [check('mail_singleton', sql`${t.singleton}`)],
 );

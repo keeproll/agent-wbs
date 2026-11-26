@@ -19419,7 +19419,8 @@
                     "from",
                     "user",
                     "pwSet",
-                    "updatedAt"
+                    "updatedAt",
+                    "check"
                   ],
                   "properties": {
                     "host": {
@@ -19448,6 +19449,39 @@
                       "anyOf": [
                         {
                           "$ref": "#/components/schemas/Timestamp"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "check": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": [
+                            "ok",
+                            "checkedAt",
+                            "error"
+                          ],
+                          "properties": {
+                            "ok": {
+                              "type": "boolean"
+                            },
+                            "checkedAt": {
+                              "$ref": "#/components/schemas/Timestamp"
+                            },
+                            "error": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          }
                         },
                         {
                           "type": "null"
@@ -19581,7 +19615,8 @@
                     "from",
                     "user",
                     "pwSet",
-                    "updatedAt"
+                    "updatedAt",
+                    "check"
                   ],
                   "properties": {
                     "host": {
@@ -19614,6 +19649,39 @@
                       "anyOf": [
                         {
                           "$ref": "#/components/schemas/Timestamp"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "check": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": [
+                            "ok",
+                            "checkedAt",
+                            "error"
+                          ],
+                          "properties": {
+                            "ok": {
+                              "type": "boolean"
+                            },
+                            "checkedAt": {
+                              "$ref": "#/components/schemas/Timestamp"
+                            },
+                            "error": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          }
                         },
                         {
                           "type": "null"

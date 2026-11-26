@@ -6,6 +6,7 @@ import { deferChange } from '../changes/events.ts';
 import { inEpoch } from '../platform/transaction.ts';
 import { scheduleView } from '../planning/schedule.ts';
 import { buildSnapshot } from './snapshot.ts';
+import { enqueueReportMail } from '../mail/queue.ts';
 
 /**
  * 보고서 생성·조회(G§4.11, §8.5, §9.6, contracts §2.3, data-model §2.7 `reports`).
@@ -62,7 +63,11 @@ export async function generateDueReports(pool: Pool, epoch: number, options: { n
     for (const d of due) {
       const snapshot = await buildSnapshot(client, project.id, { kind: d.kind, from: d.from, to: d.to, at: now });
       const reason = options.startup ? REASON.startup : Date.parse(now) - Date.parse(d.dueAt) > LATE_MS ? REASON.late : REASON.scheduled;
-      if (await insertReport(client, project.id, { key: reportKey(d.kind, d.from), kind: d.kind, from: d.from, to: d.to, view: 'int', snapshot, at: now, dueAt: d.dueAt, reason })) created++;
+      const inserted = await insertReport(client, project.id, { key: reportKey(d.kind, d.from), kind: d.kind, from: d.from, to: d.to, view: 'int', snapshot, at: now, dueAt: d.dueAt, reason });
+      if (!inserted) continue;
+      created++;
+      // M6-03: 생성 직후 구독자를 메일 큐에 넣는다(같은 트랜잭션, SMTP 호출 없음 — G L401·L1050).
+      await enqueueReportMail(client, inserted);
     }
     return created;
   });

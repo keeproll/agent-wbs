@@ -22,3 +22,8 @@ CREATE INDEX "mail_outbox_due" ON "mail_outbox" ("state","next_at");--> statemen
 ALTER TABLE "mail_log" ADD COLUMN "outbox" uuid;--> statement-breakpoint
 ALTER TABLE "mail_log" ADD COLUMN "try_no" integer;--> statement-breakpoint
 ALTER TABLE "mail_log" ADD CONSTRAINT "mail_log_try_positive" CHECK ("mail_log"."try_no" is null or "mail_log"."try_no">0);
+--> statement-breakpoint
+-- SMTP 설정의 편집 버전. 연결 확인 결과(status·checked_at)를 적어도 편집 버전은 바뀌지 않게 따로 둔다.
+-- 왜: 팀장이 수정 폼을 연 채 「연결 확인」을 눌렀다고 저장이 409 충돌이 되면 안 된다(설정 0025와 같은 방식).
+ALTER TABLE "mail_settings" ADD COLUMN "settings_version" timestamp with time zone;--> statement-breakpoint
+UPDATE "mail_settings" SET "settings_version"="updated_at";

@@ -3,6 +3,7 @@ import { loadConfig } from '../config.ts';
 import { watchRunner } from './watch.ts';
 import { deleteFiles } from '../reset/files.ts';
 import { generateDueReports } from '../reports/service.ts';
+import { deliverMail, recoverMail } from '../mail/deliver.ts';
 
 const config = loadConfig(process.env);
 const pool = createPool(config.databaseUrl, { onError: () => console.error('Runner 감시 DB 연결 오류') });
@@ -29,7 +30,25 @@ async function tick() {
 const run = () => { pending ??= tick().finally(() => { pending = undefined; }); };
 const timer = setInterval(run, 20_000);
 run();
-async function stop() { clearInterval(timer); await pending; await pool.end(); }
+
+/**
+ * 메일 발송(M6-03)은 따로 돈다. SMTP 응답을 오래 기다려도 Runner 생존 감시가 밀리지 않게 하기 위해서다.
+ * 시작 때 한 번, 앞 프로세스가 보내다 죽은 메일을 「수락 여부 불명」으로 정리한다(자동 재발송 없음, contracts §4.4).
+ */
+let mailPending: Promise<void> | undefined;
+let mailRecovered = false;
+async function mailTick() {
+  let epoch: number | undefined;
+  await step('세대 조회', async () => { epoch = (await pool.query<{ epoch: number }>('select epoch from system_state where id=1')).rows[0]?.epoch; });
+  if (epoch === undefined) return;
+  const current = epoch;
+  if (!mailRecovered) await step('메일 재시작 정리', async () => { await recoverMail(pool, current); mailRecovered = true; });
+  await step('보고서 메일 발송', () => deliverMail(pool, current));
+}
+const runMail = () => { mailPending ??= mailTick().finally(() => { mailPending = undefined; }); };
+const mailTimer = setInterval(runMail, 10_000);
+runMail();
+async function stop() { clearInterval(timer); clearInterval(mailTimer); await pending; await mailPending; await pool.end(); }
 let stopping = false;
 for (const signal of ['SIGINT','SIGTERM']) process.once(signal, () => {
   if (!stopping) { stopping = true; void stop(); }
