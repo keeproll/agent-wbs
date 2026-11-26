@@ -15,12 +15,24 @@ test.beforeEach(({ page }) => {
 });
 test.afterAll(() => { if (serverErrors.length) console.log(`[실제 API 5xx] ${serverErrors.join(' | ')}`); });
 
+/**
+ * 로그인은 처음 한 번만 화면으로 하고, 다음 시험은 그 세션 쿠키를 다시 쓴다.
+ * 왜: 서버는 비밀번호 로그인 횟수를 제한한다(UAT-AUTH-03). 시험마다 로그인하면 429로 로그인 화면에 멈춘다.
+ */
+let cookies: Awaited<ReturnType<import('@playwright/test').BrowserContext['cookies']>> = [];
 async function login(page: Page, path: string) {
+  if (cookies.length) {
+    await page.context().addCookies(cookies);
+    await page.goto(path);
+    await expect(page).toHaveURL(path);
+    return;
+  }
   await page.goto(path);
   await expect(page).toHaveURL(/\/login/);
   await page.getByLabel('비밀번호').fill(password);
   await page.getByRole('button', { name: '로그인' }).click();
   await expect(page).toHaveURL(path);
+  cookies = await page.context().cookies();
 }
 /** 같은 세션으로 서버 목록을 끝까지 읽는다. */
 const readAll = (page: Page, path: string) => page.evaluate(async (p) => {
