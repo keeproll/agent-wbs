@@ -28,7 +28,8 @@ export interface ReadinessDeps {
   cliProfiles?: { agent: Agent; model: string; options: string }[];
   /**
    * 관측이 검증된 CLI 조합(CLI·버전·모델·옵션) 목록. G §6.7-8 「CLI 버전 = 관측 검증된 버전인가」를 이것과 대조한다.
-   * 서버에서 받아 오는 계약 경로가 아직 없어 호출자가 넘긴다. 모르면 undefined → 확인 불가로 warn.
+   * 서버 정책 `GET /runner/policy`의 `cliGrades` 중 `grade==='verified'`로 채운다(`verifiedFromPolicy`, contracts §3.1).
+   * 정책을 아직 받지 못했으면 undefined → 확인 불가로 warn.
    */
   verifiedObservations?: { agent: Agent; version: string; model: string; options: string }[] | undefined;
 }
@@ -118,9 +119,20 @@ async function disk(d: ReadinessDeps): Promise<Check> {
   return { status: 'ok', detail: shown };
 }
 
-/** cgroup 노출 여부. 상태를 정하지 않는 보조 정보다 — 노출됐다고 세션 측정이 되는 것은 아니다(M5-03에서 실증). */
-async function cgroupNote(d: ReadinessDeps): Promise<string> {
-  const text = await d.readFile('/sys/fs/cgroup/cgroup.controllers').catch(() => '');
+/** 서버 정책의 CLI 관측 등급에서 `verified`만 골라 obs 대조 목록으로 만든다. 정책이 없으면 undefined(확인 불가). */
+export function verifiedFromPolicy(
+  cliGrades: readonly { agent: Agent; version: string; model: string; options: string; grade: string }[] | undefined,
+): ReadinessDeps['verifiedObservations'] {
+  if (!cliGrades) return undefined;
+  return cliGrades.filter((g) => g.grade === 'verified').map(({ agent, version, model, options }) => ({ agent, version, model, options }));
+}
+
+/**
+ * cgroup 노출 여부. 상태를 정하지 않는 보조 정보다 — 노출됐다고 세션 측정이 되는 것은 아니다(M5-03에서 실증).
+ * 준비 점검과 CLI 업데이트 보고가 같은 문구를 쓰도록 내보낸다(M4-05 M-1 표시 차이 정리).
+ */
+export async function cgroupNote(readFile: (path: string) => Promise<string>): Promise<string> {
+  const text = await readFile('/sys/fs/cgroup/cgroup.controllers').catch(() => '');
   const have = new Set(text.trim().split(/\s+/));
   const lacking = ['cpu', 'memory', 'pids'].filter((c) => !have.has(c));
   return lacking.length === 0
@@ -133,7 +145,7 @@ async function cgroupNote(d: ReadinessDeps): Promise<string> {
  * 실행은 계속하되 관측은 참고만 하고 보유는 보수 계산(1+예산), 재검증을 기다린다. CLI를 구버전으로 돌리라고 안내하지 않는다(Q-12).
  */
 async function obs(d: ReadinessDeps, versions: ReadonlyMap<Agent, string>): Promise<Check> {
-  const note = await cgroupNote(d);
+  const note = await cgroupNote(d.readFile);
   return checkCliObservation(d.cliProfiles ?? [], d.verifiedObservations, versions, note);
 }
 

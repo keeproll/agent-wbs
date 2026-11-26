@@ -328,6 +328,23 @@ export class GitRepository {
     }
   }
 
+  /** 생성 기록에 있는 작업 폴더 이름(초기화 정리에 넘길 목록). 읽기 전용이며 설정 지문을 먼저 검증한다. */
+  async recordedWorktrees(): Promise<string[]> {
+    return (await this.trusted()).worktrees.map((value) => value.id);
+  }
+
+  /** Runner가 만든 입력 사본 이름(`inputs/<projectId>` 아래). 관리 폴더 이름 형식에 맞는 것만 돌려준다. */
+  async inputIds(): Promise<string[]> {
+    await this.trusted();
+    const names = await readdir(await safePath(this.inputs)).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return []; throw error; });
+    return names.filter((name) => /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/.test(name)).sort();
+  }
+
+  /** 원격 `main`의 SHA(마지막 fetch 기준). 초기화 결과를 원격에 보내야 하는지 판단할 때 쓴다. */
+  async remoteMain(): Promise<string> {
+    return sha((await this.git(['rev-parse', '--verify', 'refs/remotes/origin/main^{commit}'])).toString().trim());
+  }
+
   async head(): Promise<string> {
     return sha((await this.git(['rev-parse', '--verify', 'refs/heads/main^{commit}'])).toString().trim());
   }

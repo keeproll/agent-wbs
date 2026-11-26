@@ -21,6 +21,17 @@ export interface UpdateDeps {
   profiles(): Profile[];
   verified(): (Profile & { version: string })[] | undefined;
   report(body: ReadinessReport): Promise<void>;
+  /** obs 항목 뒤에 붙일 보조 설명(cgroup 노출). 준비 점검(M4-02)과 같은 문구를 쓰게 한다(M-1). 없으면 빈 문자열. */
+  obsNote?: () => Promise<string>;
+}
+
+/**
+ * Runner가 관리하는 전용 설치의 실행 파일 경로. 준비 점검(M4-02)·CLI 업데이트(M4-05)·세션 실행이 모두 이 경로 하나를 쓴다(M-1).
+ * 왜: 전역 CLI의 정상 결과가 전용 설치의 실패를 덮어쓰면 새 실행을 잘못 허용한다.
+ */
+export function cliBinary(home: string, agent: Agent): string {
+  const name = agent.toLowerCase();
+  return join(home, 'cli', name, 'current', 'bin', name);
 }
 
 const AGENTS: Agent[] = ['Codex', 'Claude'];
@@ -229,7 +240,8 @@ export class CliUpdater {
       }
     }
     const profiles = this.#d.profiles();
-    items.push({ key: 'obs', ...checkCliObservation(profiles, this.#d.verified(), versions) });
+    const note = await (this.#d.obsNote?.() ?? Promise.resolve('')).catch(() => '');
+    items.push({ key: 'obs', ...checkCliObservation(profiles, this.#d.verified(), versions, note) });
     const cli = profiles.flatMap((p) => { const version = versions.get(p.agent); return version ? [{ ...p, version }] : []; });
     await this.#d.report({ at: new Date().toISOString(), items, ...(cli.length > 0 && { cli }) });
   }

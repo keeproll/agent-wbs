@@ -13,6 +13,18 @@ export function cliEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return { ...probeEnv(env), DISABLE_AUTOUPDATER: '1', DISABLE_UPDATES: '1' };
 }
 
+/**
+ * 준비 점검이 전용 설치 CLI를 부를 때도 세션 실행과 같은 인자·환경을 쓰게 감싼다(M-1 단일 출처).
+ * 다른 명령(git·node 등)은 원래 실행기로 그대로 보낸다.
+ */
+export function cliAwareRun(base: RunCommand, cli: RunCommand, bins: { codex: string; claude: string }): RunCommand {
+  return (cmd, args) => {
+    if (cmd === bins.codex) return cli(cmd, cliArguments('Codex', args));
+    if (cmd === bins.claude) return cli(cmd, cliArguments('Claude', args));
+    return base(cmd, args);
+  };
+}
+
 function checked(result: CommandResult): string {
   // 외부 명령의 출력에는 계정 정보가 있을 수 있으므로 오류에 원문을 넣지 않는다.
   if (result.code !== 0) throw new Error('CLI 다운로드·설치·무과금 점검 명령이 실패했습니다.');
