@@ -268,7 +268,8 @@ flowchart LR
   - 남은 일(2026-11-27, main 862e66a 기준):
     - readiness 거부 기록 key(계약 작업, contracts §1.2 [미정])
     - 결과 SHA push 실행기: 지금은 refspec 규칙(`resultRefspec`)만 있다(M5)
-    - launch 기록 대조(M5-02). 그 전까지 pgid 없는 같은 부팅 보유는 항상 증명 실패이고, contracts §3.4-3대로 `unconfirmed`를 유지한다.
+    - launch 기록 대조(M5-02). 그 전까지 물리 슬롯이 남아 있는데 pgid가 없는 같은 PC·부팅의 보유는 증명 실패로 두고, contracts §3.4-3대로 `unconfirmed`를 유지한다.
+      - 물리 슬롯 없이 논리 잠금만 남은 보유(`slot_state='none'`)는 지금도 `no_process`로 완료한다(contracts §3.2).
     - `CliUpdater.tryClaim`을 job claim에 연결(M5)
     - Runner가 외부 쓰기 권한 세대를 서버에 묻는 API는 아직 없다. Runner는 정리 결과의 `authority` 항목에 `generation`을 기록만 한다.
 

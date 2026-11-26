@@ -87,6 +87,7 @@
 - **env (환경 변수)** — 환경 변수. 프로그램이 시작할 때 받는 이름=값 설정. `.env` 파일에 모아 둔다.
 - **epoch** — 프로젝트 세대 번호. 초기화할 때마다 1 오르며, 옛 세대의 요청이 새 프로젝트를 건드리지 못하게 한다. → contracts §1, data-model §5.1
 - **Esc / J/K** — 키보드 단축키. J/K와 ↑↓는 목록 위아래 이동, Esc는 닫기.
+- **escape (JSON)** — 따옴표·줄바꿈 같은 특수 문자를 JSON 문자열 안에 적는 방식(예: 줄바꿈을 `\n`으로 적음). `subjectHash`는 JavaScript `JSON.stringify` 규칙을 따른다. → data-model §2.3-1
 - **ETag** — 응답 내용의 버전 표시. 같으면 다시 받을 필요가 없다.
 - **Evidence (검증 증거)** — 검증 결과를 뒷받침하는 파일(로그·스크린샷 등). → data-model §2.5
 - **exec** — 실행 중인 프로세스를 다른 명령으로 바꿔 실행하는 것. 대기 래퍼가 허가를 받은 뒤 실제 명령으로 바뀐다.
@@ -201,7 +202,7 @@
 - **registry (패키지 registry)** — 패키지(CLI 등)를 올려 두고 내려받는 서버. 테스트에서는 fake registry를 쓴다(M4-05). 메시지 스키마용 레지스트리는 「스키마 레지스트리」 항목 참고.
 - **rename (원자적 rename)** — 새 파일을 다 쓴 뒤 이름만 바꿔 끼우는 방법. 중간에 죽어도 반쯤 쓴 파일이 남지 않는다.
 - **renew** — lease를 연장하는 요청. → contracts §3.2
-- **repositoryIdFor** — 저장소 주소를 정규화해 SHA-256 앞 16자리로 만든 로컬 저장소 이름. Runner가 정리 명령의 `repoUrl`로 로컬 저장소를 찾을 때 쓴다. → contracts §3.2
+- **repositoryIdFor** — 저장소 주소를 정규화해 SHA-256을 구하고, 그 앞 16자리 앞에 `r-`를 붙인 로컬 저장소 이름(예: `r-0ef6f111ef40232e`). Runner가 정리 명령의 `repoUrl`로 로컬 저장소를 찾을 때 쓴다. → contracts §3.2
 - **REST** — HTTP의 GET·POST·PUT·PATCH·DELETE 요청으로 자원(데이터)을 주고받는 API 방식.
 - **Retry-After** — 서버가 「몇 초 뒤 다시 보내라」고 알려 주는 응답 헤더. 429와 함께 온다.
 - **rework / reverify** — 재작업 시도와, 재작업 후의 재검증 시도. → data-model §3.1
@@ -247,10 +248,12 @@
 - **timestamptz** — PostgreSQL에서 시간대를 반영해 UTC의 한 시점으로 저장하는 타입. 원래 시간대 정보는 보관하지 않는다. UTC로 저장하고 표시할 때 Asia/Seoul로 바꾼다.
 - **tree (git tree)** — 커밋 시점의 파일·폴더 전체 내용. tree가 같으면 파일 내용이 완전히 같다.
 - **treeHash** — 입력 변경 보고의 필드. head 커밋의 `prototype/` 폴더 전체(파일 모드 포함)를 나타내는 git 트리 SHA다. → contracts §3.1 입력 변경 보고
+- **trim** — 문자열 앞뒤의 공백을 지우는 처리. `subjectHash` 계산은 trim을 하지 않으므로 앞뒤 공백도 내용 차이다. → data-model §2.3-1
 - **TS / TypeScript** — 변수·함수에 타입을 붙여 실수를 미리 잡는 JavaScript. TS로 줄여 쓴다.
 - **TypeBox** — TypeScript로 스키마를 정의해 검증·타입·OpenAPI를 한 번에 만드는 도구. → architecture §3.2
 - **typescript-eslint** — TypeScript 코드에 lint 규칙을 적용하는 도구.
 - **TZ** — 프로세스의 시간대(time zone) 설정 환경 변수.
+- **Unicode 정규화 (NFC/NFD)** — 겉모양이 같은 글자의 서로 다른 문자 표현(예: 완성형 「한」과 자모를 조합한 「한」)을 하나로 맞추는 처리. `subjectHash` 계산은 이것을 하지 않는다. → data-model §2.3-1
 - **UTF-16 코드 단위 순서** — JavaScript가 문자열을 기본으로 비교하는 순서. `subjectHash` 계산에서 객체 키와 산출물 이름을 이 순서로 정렬한다. → data-model §2.3-1
 - **verified / unverified / missing (GitHub 권한 3상태)** — GitHub 권한 하나의 확인 상태. 확인됨·미확인(추정하지 않음)·부족. 조정자 결정(2026-11-26). → contracts §3.1
 - **UI** — 사용자 화면(User Interface).
@@ -285,6 +288,7 @@
 - **결함(defect)** — 검증에서 찾은 문제. 원 행은 바꾸지 않고 해소는 이벤트 행으로 남긴다. → data-model §2.5
 - **경계 변환** — DB에 저장한 값과 API 값의 철자가 다를 때, 서버가 DB↔API 사이에서 바꿔 주는 것. 예: CI 단계 DB `1` ↔ API `task`. → contracts §1 값 철자
 - **계열 (Codex 모델 계열)** — Codex 모델 이름 끝부분(luna·terra·astra·sol). 같은 세대 안의 등급 순서를 정한다. 초기 순서는 luna < terra < astra < sol. → data-model §6.2
+- **고정 벡터** — 입력과 정답(예: 지문·암호문)을 고정해 둔 시험 예시. 따로 만든 두 구현이 같은 결과를 내는지 확인한다. 수학의 벡터가 아니다. → data-model §2.3-1, contracts §6.1
 - **관측 등급** — CLI 버전·모델·옵션 조합별로 등록하는 관측 검증 결과(`cli_observation_grades`). 등록된 검증이 없으면 「미검증」으로 보고 보수 계산한다. → architecture §5.1, data-model §2.6
 - **교차 리뷰** — 담당이 아닌 쪽 Agent가 결과를 검토하는 것. → milestones §1
 - **교착(deadlock)** — 둘 이상이 서로 상대를 기다리느라 아무도 진행하지 못하는 상태. → architecture D-04, data-model §5.1
