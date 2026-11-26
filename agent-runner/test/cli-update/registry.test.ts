@@ -107,7 +107,9 @@ describe('cli-update — 공식 npm 채널·무과금 점검', () => {
   });
 
   test('실행 환경은 비밀을 거르고 자체 업데이트를 끄며 Codex 설정을 명시한다', () => {
-    const env = cliEnvironment({ HOME: '/home/u', PATH: '/bin', AWBS_RUNNER_TOKEN: 'secret', GITHUB_TOKEN: 'secret', DISABLE_AUTOUPDATER: '0', DISABLE_UPDATES: '0' });
+    const env = cliEnvironment({ HOME: '/home/u', PATH: '/bin', AWBS_RUNNER_TOKEN: 'secret', GITHUB_TOKEN: 'secret',
+      SSH_AUTH_SOCK: '/run/system.sock', AWBS_SYSTEM_SSH_AUTH_SOCK: '/run/system.sock', AWBS_SYSTEM_DEPLOY_KEY_ID: '7',
+      DISABLE_AUTOUPDATER: '0', DISABLE_UPDATES: '0' });
     expect(env).toEqual({ HOME: '/home/u', PATH: '/bin', DISABLE_AUTOUPDATER: '1', DISABLE_UPDATES: '1' });
     expect(cliArguments('Codex', ['exec', '--json'])).toEqual(['-c', 'check_for_update_on_startup=false', 'exec', '--json']);
     expect(cliArguments('Claude', ['-p', '--output-format', 'stream-json'])).toEqual(['-p', '--output-format', 'stream-json']);

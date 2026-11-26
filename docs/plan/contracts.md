@@ -120,6 +120,9 @@
 - **시도별 순서 보존**: 앞 보고가 막히면 뒤 보고를 보내지 않는다.
   - 왜: 「완료」 보고가 「시작」 보고보다 먼저 도착하면 서버가 상태를 잘못 판단한다.
 - 다른 4xx는 `rejected`로 보존하고 readiness 경고로 올린다.
+  - [미정] 이 경고에 쓸 readiness key는 아직 없다. 지금 key는 12개(§3.1)이고, 그중 거부 기록용 key가 없다.
+  - 지금(2026-11-27, main 862e66a)은 계약을 바꾸지 않았다. Runner는 거부 기록을 내부 상태와 로그에만 둔다(`withRejectionWarnings()`는 아직 아무것도 덧붙이지 않는다).
+  - 왜 미뤘나: 새 key를 만들면 서버 저장(readiness 표·DB CHECK)까지 함께 바뀐다. 그래서 M2 통합 뒤 계약 작업에서 정한다(조정자 결정 A, 2026-11-26).
 - 조회 timeout(정해진 시간 안에 응답이 없으면 포기) 10초, 업로드 120초 [결정].
 - 자동 처리 실패는 팀장 오류 막대가 아니라 반복 시 알림으로 올린다(§0.3 L71).
 
@@ -178,7 +181,9 @@
   - 오류: VERSION_CONFLICT
 - DELETE `/api/tasks/:taskKey`
   - 응답: 204
-  - 오류: TASK_HAS_SUCCESSORS
+  - 오류: TASK_HAS_SUCCESSORS, INVALID_TRANSITION
+  - INVALID_TRANSITION은 종료 상태(완료·취소됨)인 Task, 그리고 이미 시작했거나 실행 기록이 있는 Task를 지우려 할 때다.
+    - 왜: 실행 기록이 있는 Task를 지우면 시도·검증 이력이 주인 없이 남는다(M2-02 리뷰 P1-1).
 - POST `/api/tasks/:taskKey/dependencies`
   - 요청 → 응답: `{predTaskKey,depType}` → 201 `{dependency:{id,pred,succ,type},blocked}`(`id`는 삭제 API에 사용)
   - 오류: DEPENDENCY_*, ACTIVE_TASK_BLOCKED(D-35), INVALID_TRANSITION(취소된 Task를 선행으로 지정)
@@ -238,6 +243,10 @@
     - 초기값과 새 모델의 자리는 [data-model §6.2](data-model.md#62-system-seed-모델-순서와-claude-모델-목록)에 있다.
 - GET `/api/alerts`, GET `/api/system/integrity`
   - 용도: 현재 알림 / 정합성 점검
+  - `/api/alerts`는 열린 알림(해결 안 된 것)만 최신 먼저 준다. 항목은 `{id,key,severity,taskKey,target,text,at}`이다.
+    - `target`은 화면이 다시 읽을 참조 문자열이다(변경 이벤트 ref와 같은 규칙: taskKey → id → key, 없으면 정렬 JSON).
+    - `text`는 알림 내용의 `message`, 없으면 `key`다. `taskKey`는 내용에 Task가 있을 때만 채운다.
+    - Telegram 외부 발송(M6-04)과는 별개다. 현재 상태를 보여 주는 조회다(M2, 조정자 결정 2026-11-26).
 - POST `/api/auth/session` · DELETE, GET `/api/session`
   - 용도: §2.4
 
@@ -257,10 +266,22 @@
 - **보류 사유** `holdReasons[{code,taskKey?,rule?,message}]`: `JUDGEMENT_MISSING` `JUDGEMENT_NOT_MET` `ORDER_NOT_PRESERVED` `ACTIVE_TASK_BLOCKED`(D-33~35).
   - 하나라도 있으면 자동 반영은 `held`.
   - 수동 승인·반영은 409(판단은 `SPLIT_JUDGEMENT_REQUIRED`, 순서는 `ORDER_NOT_PRESERVED`, 차단은 `ACTIVE_TASK_BLOCKED`)이고 강제 우회 없음.
+  - **대표 409 코드 고르기**: 사유가 여럿이면 판단(`SPLIT_JUDGEMENT_REQUIRED`) → 순서(`ORDER_NOT_PRESERVED`) → 활성 차단(`ACTIVE_TASK_BLOCKED`) 순으로 먼저 걸린 것 하나를 코드로 쓴다.
+    - `details.holdReasons`에는 사유 전체를 보낸다.
+    - 왜: HTTP 오류 코드는 하나만 고를 수 있다. 화면은 코드 하나로 대표 안내를 보이고, 전체 사유는 목록으로 보여 준다.
 - **그 밖의 반영 불가 사유**
   - D-33~35 외의 반영 불가 사유(완료 Task·순환·없는 대상 등, §5.6)는 `issues[{index,code,taskKey?,message}]`에 담는다.
   - `taskKey`는 특정 Task의 문제일 때만. 새 Task는 `idMap`의 예상 키.
   - 수동 apply에서 이것만 있으면 200으로 `status=held`를 돌려준다.
+  - `holdReasons`가 없고 `issues`만 있으면 승인(`review`→`approved`)은 허용한다.
+    - 왜: 승인 자체는 WBS를 바꾸지 않는다. 실제로 바꾸는 apply가 그때의 현재 상태로 다시 판정한다.
+    - 예: 승인한 뒤 apply 때도 `issues`만 남아 있으면 200 `held`다.
+- **CP를 만드는 두 경로**
+  - 팀장 `POST /api/plannings/:id/proposals`는 Planning 검토에서 고른 변경으로 팀장 **draft**(초안)를 만든다. 검토에 넣으려면 팀장이 따로 `submit`한다.
+  - Runner(Planning Agent) `POST /planning/proposals`는 처음부터 **review**(검토 대기)로 제출한다.
+    - 일정 정책 `cp_auto`가 켜져 있으면 보류·반영 불가 사유가 있을 때 `held`, 없을 때 바로 `applied`가 된다.
+    - `cp_auto`가 꺼져 있으면 `review`로 남는다.
+  - 왜 다르게 두나: 팀장이 만든 초안은 팀장이 다듬은 뒤 보낼 수 있어야 한다. Agent의 제안은 정책에 따라 자동으로 처리된다(G§3 `cp_auto`).
 - **응답 모양**
   - preview는 `{previewHash,impact,issues,holdReasons,diff,idMap}`
   - apply는 `{proposal,impact,issues,holdReasons,diff,idMap}`
@@ -309,6 +330,16 @@
   - 미결정이 있으면 409 DECISIONS_PENDING
 - POST `/api/project/inputs` `{commit,instr?}` · `/inputs/skip` · `/inputs/retry`★
   - 409 INPUT_UNCHANGED
+- POST `/api/project/inputs/recheck` `{updatedAt}`★ — 입력 이력 재작성 「복구 확인·입력 확인 다시 시도」(조정자 결정 2026-11-26)
+  - 언제: Runner가 「마지막 입력 커밋이 새 main의 조상이 아님」(이력 재작성)을 보고해 경고 `input_history_rewritten`이 열려 있을 때다.
+  - 복구 순서는 넷이다.
+    1. owner가 정상 merge·복원 커밋으로 마지막 입력 커밋을 새 main의 조상으로 되돌린다(강제 push 없음).
+    2. 팀장이 이 API(화면의 「복구 확인·입력 확인 다시 시도」, 버튼은 M3-04)를 부른다. 서버는 Runner 정책 `inputRecheck`를 1 올리고 202 `{inputRecheck}`를 준다.
+    3. Runner가 바뀐 `inputRecheck`를 보고 조상 관계를 다시 관측해 보고한다.
+    4. 서버가 유효한 보고를 받아들이는 같은 트랜잭션에서 경고를 해소한다. 아직 연결이 안 됐으면 경고는 그대로이고 Runner는 다시 멈춘다.
+  - 왜: 재작성된 이력을 자동으로 받거나 옛 입력 버전을 지우면 입력 원장이 깨진다. 사람이 연결을 되돌리고, 사실 확인은 Runner의 git 관측으로 한다.
+  - 열린 재작성 경고가 없으면 409 INVALID_TRANSITION. `updatedAt`은 프로젝트 버전(§1.3)이다.
+  - 새 main을 기존 원장과 잇지 않고 기준으로 삼으려면 전체 초기화·재등록이 필요하다(별도 owner 결정).
 - POST `/api/project/reset` `{confirmName,keepSettings}` · GET `/reset-preview`★ · GET `/export`★
   - 건수·정리 내용 / 내보내기 **zip(여러 파일을 하나로 묶은 압축 파일)**(데이터 JSON·보고서 PDF·Evidence, P L4702 안내문. 비밀값·수신자 제외).
     - 용어 풀이: PDF = 인쇄용 문서 파일 형식.
@@ -421,6 +452,48 @@ Runner만 부르는 API다. Runner 토큰과 epoch 헤더가 필요하다(§1).
   - 세션 종료 후 사후 확정(`confirmed/partial`)
 - POST `/runner/input-changes`, `/runner/repo-checks/:id/result`, `/runner/bootstrap/:jobId/progress`
   - §8.4
+- **입력 변경 보고 `POST /runner/input-changes`의 모양** (M2-03 새 계약, 입력 원장)
+  - 입력 원장은 팀장 입력(`prototype/`)이 언제 어떻게 바뀌었는지 이어 붙여 기록하는 장부다.
+  - 정답은 커밋 목록이 아니라 **base와 head 사이의 `prototype/` 트리 차이**다.
+    - 왜: 커밋은 되돌리기·합치기로 여러 번 오갈 수 있다. 실제로 무엇이 바뀌었는지는 두 시점의 파일 전체(트리)를 비교해야 정확하다.
+  - 본문 `{base, head, baseIsAncestor, treeHash, changes[], commits[]}` → 200 `{head, recorded, historyRewritten}`.
+    - `base`: 서버가 마지막으로 받은 입력 head다(처음에는 등록 커밋). 200·409 응답의 head로 갱신한다.
+    - `head`: 이번에 본 원격 main의 끝 커밋이다. 차이가 비어 있어도 서버는 입력 head를 이 값으로 옮긴다.
+    - `baseIsAncestor`: `git merge-base --is-ancestor <base> <head>`의 결과다(종료 코드 0=true, 1=false). 그 밖의 종료 코드면 판정할 수 없으므로 보고하지 않는다.
+      - false면 이력 재작성이다. 서버는 아무것도 받지 않고 경고 `input_history_rewritten`을 연다(복구는 §2.2 `inputs/recheck`).
+    - `treeHash`: `git rev-parse <head>:prototype`, 즉 파일 모드까지 포함한 head의 `prototype/` 트리 SHA다.
+    - `changes[]`: `git diff --raw -M --numstat <base> <head> -- prototype/`의 줄마다 하나다. 비어 있지 않을 때만 팀장 확인 항목이 생긴다.
+    - `commits[]`: 화면 표시용 참고 정보다(`git rev-list --first-parent --reverse <base>..<head> -- prototype/`). 판정에 쓰지 않는다.
+  - **신뢰 전제**: 서버는 git을 직접 보지 않는다. 그래서 `baseIsAncestor`·`changes`·`treeHash`는 Runner의 관측을 믿는다.
+  - `changes[]` 한 항목: `{status, path, from?, oldBlob, newBlob, oldMode, newMode, added, deleted}`
+    - `status`는 `A`(추가)·`M`(수정)·`D`(삭제)·`R`(이름 변경, `from`=이전 경로)·`T`(종류 변경: 일반 파일 ↔ 심볼릭 링크) 중 하나다.
+    - `oldBlob`·`newBlob`은 바뀌기 전후 파일 내용의 git blob SHA다.
+    - `oldMode`·`newMode`는 전후 git 파일 모드(`100644`·`100755`·`120000` 같은 6자리 8진수)다.
+    - 없는 쪽(추가의 이전, 삭제의 이후)은 blob과 mode가 **둘 다** null이다. raw diff의 `000000`·`0000000…`은 null로 바꿔 보낸다.
+    - `added`·`deleted`는 numstat 줄 수다(바이너리는 0).
+  - **실행 권한만 바뀐 경우**
+    - git은 내용이 그대로여도 실행 권한만 바뀌면 `M`을 낸다. 그래서 `M`인데 `oldBlob`과 `newBlob`이 같을 수 있다.
+    - 이런 보고도 정상이다. 서버는 head와 트리만 옮기고, 팀장 확인 항목(`recorded:false`)도 입력 버전도 만들지 않는다.
+    - 「이 버전으로 분석」은 마지막 입력 버전과 비교한 **순 변경**으로 판단한다. 마지막 보고 하나만 보지 않는다.
+      - 순 변경이 없으면 409 INPUT_UNCHANGED다. 예: 마지막 입력 버전 뒤에 실행 권한만 바뀌었다.
+      - 앞서 받고 아직 분석하지 않은 내용 변경이 남아 있으면, 그 뒤에 실행 권한만 바뀐 보고가 왔더라도 그 내용 변경을 분석한다.
+    - 이후의 다른 변경(문서 추가 등)은 정상으로 받는다.
+    - 왜: 예전에는 「M이면 blob이 달라야 한다」고 거부했다. 거부된 보고는 head를 못 옮기고 같은 보고가 계속 들어와, 뒤의 모든 입력 변경이 막혔다(M2-03 FIX5 리뷰 N3).
+  - **서버의 판단 기준은 둘이다.**
+    - 보고를 받을지와 head를 옮길지는 모드를 포함한 전체 차이로 판단한다. 이어 붙일 때 이번 보고의 「이전 상태」가 지난 보고의 「이후 상태」와 blob·mode 모두 같은지 본다.
+    - 분석용 순 변경은 경로별 존재·내용 blob·파일과 링크 구분만 본다. 실행 권한만 바뀐 것은 내용 변경이 아니고, 같은 내용의 링크로 바뀐 것(`T`)은 내용 변경이다.
+    - 화면 값에서 `T`는 `modified`로 보인다.
+  - **base가 서버와 다를 때 (409)**
+    - 서버의 입력 head와 `base`가 다르면 409 VERSION_CONFLICT이고, `details.current.base`에 서버의 입력 head를 담는다.
+    - Runner는 그 값을 base로 삼아 차이를 **다시 계산**해 보낸다.
+    - Runner가 서버 head를 모를 때(처음 시작·재시작)는 head 자신을 base로 보내 409로 서버 head를 알아낸다.
+    - 다시 계산하는 사이에도 서버 head가 계속 바뀌면 3번까지 하고 다음 주기로 미룬다.
+  - **이력 재작성 뒤 Runner**
+    - 같은 epoch에서는 같은 base로 다시 보내지 않고 멈춘다.
+    - 정책 `inputRecheck`가 바뀌면(팀장의 복구 확인) 서버 head를 base로 다시 관측한다.
+    - epoch가 바뀌면(초기화) 이전 base와 멈춤 상태를 모두 버린다.
+  - 보고 주기는 정책 `inputCheckMinutes`다(지금 임시값 5분, open-questions §3). Runner에 GitHub 설정 저장소의 로컬 clone이 없으면 보고하지 않는다(clone은 M5 실행 계층이 만든다).
+  - 하위 모듈(gitlink `160000`)은 G가 「따라가지 않음」이라 별도 정책이 없다. 모드 형식으로는 받고 파일로 다룬다.
 - POST `/runner/ci/runs`, PATCH `/:id`
   - §8.5-1
 - POST `/runner/ci/queue`★
@@ -448,7 +521,33 @@ Runner만 부르는 API다. Runner 토큰과 epoch 헤더가 필요하다(§1).
     - 속도 제한·409·405 같은 다른 거절은 권한 상태를 바꾸지 않는다.
   - 연결 확인에 몰래 쓰기 시험(예: 시험용 PR 만들기)을 넣지 않는다.
     - 왜: 확인 버튼 한 번에 저장소에 흔적이 남으면 안 된다.
-  - 관리자 계정은 연결 확인에서도 막는다(§4.1 코드 근거 고정 3-7). 이것이 실효 보호 규칙 점검을 대신하지는 않는다.
+  - **main 보호와 우회 권한 확인** (M4-06 리뷰 반영, 조정자 결정 2026-11-26)
+    - 연결 확인은 main 필수 보호 규칙이 활성인지, 관련 ruleset(GitHub 보호 규칙 묶음)을 이 자격 증명이 우회할 수 없는지를 확인한다.
+    - 관리자 역할이라는 이유만으로 거부하지 않는다. 관리자가 아닌 역할이라도 우회할 수 있으면 거부한다.
+    - 왜: 막아야 하는 것은 역할 이름이 아니라 「필수 검사와 PR을 건너뛰는 우회 권한」이다.
+    - 확인 순서:
+      1. `GET /repos/{owner}/{repo}/rules/branches/main`으로 main에 실제 적용된 규칙을 모든 쪽까지 읽는다(같은 경로에서 `page`만 올린다).
+      2. PR·CODEOWNERS 검토·`agentwbs/int` 필수 검사·strict(PR이 최신 main을 포함해야 함)·강제 push 금지·삭제 금지가 모두 있는지 본다.
+      3. 그 규칙에 연결된 ruleset을 저장소 조회 API(`GET /repos/{owner}/{repo}/rulesets/{id}`)로 하나씩 읽는다.
+      4. 각 ruleset의 `enforcement`(적용 상태)가 `active`인지 본다.
+      5. 각 ruleset의 `current_user_can_bypass`(지금 호출자가 우회할 수 있는지)가 `never`인지 본다.
+    - 하나라도 빠지거나, 값이 없거나, 조회가 실패하면 연결을 허용하지 않는다(`ok:false`).
+      - 왜: 읽지 못한 값을 「보호됨」으로 추정하면 안 된다. `bypass_actors` 목록은 권한에 따라 비어 올 수 있으므로 판단 근거로 쓰지 않는다.
+    - main에 적용되지 않는 다른 브랜치의 ruleset은 조회하지 않는다.
+    - 쓰기 권한 3상태(위)는 그대로다. 이 확인은 권한 상태 필드 이름을 바꾸지 않는다.
+  - **deploy key 점검** (owner 2026-11-26 아이템 10)
+    - deploy key는 저장소 하나에 붙이는 SSH(키로 인증하는 보안 통신 방식) 키다.
+    - Runner는 저장소의 deploy key 목록(`GET /repos/{owner}/{repo}/keys`)을 끝까지 읽는다. 목록을 읽으려면 `Administration: read` 권한이 필요하다.
+    - 시스템 키(설정의 `AWBS_SYSTEM_DEPLOY_KEY_ID`) 외의 deploy key가 하나라도 있으면, 읽기 전용 키라도 경고하고 GitHub 쓰기를 중단한다.
+    - 시스템 키가 쓰기 키가 아니거나, 설정한 시스템 키가 목록에 없어도 중단한다.
+    - 이 점검은 시작할 때와 **GitHub 쓰기 직전마다** 한다.
+    - 왜: 시스템 커밋만 쓸 수 있어야 하는 우회 통로(deploy key)에 다른 키가 붙어 있으면, 그 키로 보호 규칙을 건너뛸 수 있다.
+  - **시작 점검의 일시 장애**
+    - deploy key 목록 조회가 통신 실패·5xx·속도 제한이면 최대 3번 조회한다. 대기는 1초, 2초이고 서버가 더 긴 대기(`Retry-After`)를 주면 그 이상 기다린다.
+    - 세 번 모두 실패하면 경고를 남기고 Runner의 다른 시작 절차는 계속한다. GitHub 쓰기 직전 점검은 그대로 남아 있어서, 그때 실패하면 쓰기는 계속 막힌다.
+    - 다른 키 발견·쓰기 아닌 시스템 키·목록 권한 부족처럼 다시 해도 같은 결과인 오류는 경고 뒤 Runner 시작을 거부한다.
+    - Agent WBS 서버의 401·403(Runner 토큰 문제)은 기다리지 않고 앱을 멈춘다(§1 표의 Runner 중지).
+    - 왜: GitHub가 잠깐 불안정하다고 다른 Runner 기능까지 시작하지 못하게 할 필요는 없다. 하지만 확인된 위험을 일시 장애처럼 넘기면 안 된다.
 - POST `/runner/github/key`★ (M4-04 계약 보완)
   - 본문 `{runnerId,hostId,bootId,publicKeyPem,sealedVersion:1}` → 200 `{keyId}`. Runner 인증과 epoch가 필요하다.
   - `publicKeyPem`은 X25519 공개키의 SubjectPublicKeyInfo PEM이다(§6.1).
@@ -469,6 +568,8 @@ Runner만 부르는 API다. Runner 토큰과 epoch 헤더가 필요하다(§1).
   - 봉인이나 `keyId`가 있다고 해서 외부 쓰기가 허가된 것은 아니다. 쓰기 허가는 §3.4-5의 권한 세대가 정한다.
 - GET `/runner/policy`★
   - 상한·예산·주기·ci 설정·입력 확인 주기 묶음(`ETag`)
+  - `inputRecheck`: 입력 확인 다시 시도 번호다. 열린 이력 재작성 경고에서 팀장이 복구 확인을 누를 때마다 1 오르고, 열린 경고가 없으면 0이다.
+    - Runner는 이력 재작성으로 입력 보고를 멈춘 뒤 이 값이 바뀌었을 때만 다시 관측한다. epoch가 바뀌면(초기화) 이전 보고 상태를 모두 버린다.
   - `claudeModels`: Runner가 보고할 Claude 모델 목록(설정값, §2.1).
   - `cliGrades[{agent,version,model,options,grade}]`: 서버에 등록된 CLI 조합별 관측 등급이다. `grade`는 `verified`·`partial`·`unverified`다.
     - Runner 준비 점검 `obs`는 실행할 조합(CLI·버전·모델·옵션)이 여기에 `verified`로 있는지 대조한다(G§6.7-8).
@@ -492,6 +593,34 @@ POST /api/runner/jobs/:id/release {fence,hostId,proof,at}            → 잔여 
 POST /api/runner/jobs/:id/reconcile {fence,evidence}                  → 외부 상태 대조 결과
 POST /api/runner/jobs/:id/finish {fence,status,result?,error?}
 ```
+
+**정리 명령 `reset-cleanup`의 payload** (M4 통합 교차 리뷰 P1-1 반영)
+
+- payload는 DB 함수 `reset_project()`가 만든다. Runner는 이 모양을 그대로 받는다.
+  - 공용 고정 예시는 `agent-wbs/contracts/fixtures/reset-cleanup-payloads.json`이다. DB 시험이 실제 `reset_project()` 출력과 이 파일을 대조하고, Runner 시험도 같은 파일을 읽는다.
+  - 왜 고정 예시를 두나: 만드는 쪽(DB)과 받는 쪽(Runner)이 따로 구현된다. 한 파일로 양쪽을 시험해야 모양이 어긋나지 않는다.
+- 항상 있는 필드:
+  - `epochPath`: 서버 파일 삭제용 epoch 폴더다(예: `1/`). Runner는 쓰지 않는다.
+  - `holds`: 남은 실행 보유 목록이다. `execution_holds` 행을 DB 필드 이름 그대로 담는다(`job`·`host_id`·`boot_id`·`pgid`·`slot_state`…).
+  - `generation`: 외부 쓰기 권한 세대 번호다(§3.4-5).
+  - `unparsedPrs`: 기록에서 PR 번호를 해석하지 못한 참조 목록이다.
+- 기준 커밋이 있을 때만 있는 필드: `repoUrl`, `baseCommit`, `branches`, `prs`.
+  - 기준 커밋이 없으면 저장소 정리를 하지 않는다(data-model §5).
+- Runner의 처리 규칙:
+  - 로컬 저장소는 `repoUrl`을 정규화해 만든 이름(`repositoryIdFor(repoUrl)`, 정규화한 주소의 SHA-256 앞 16자리 앞에 `r-`를 붙인 이름. 예: `r-0ef6f111ef40232e`)으로 찾는다. 등록된 원격 주소가 다르면 중지한다.
+  - 물리 슬롯 없이 논리 잠금만 남은 보유(`slot_state='none'`, pgid 없음)는 `no_process`로 본다 [결정]. 슬롯은 CLI·① 실행 때만 잡기 때문이다(§3.4-8).
+  - 모든 보유의 종료를 먼저 증명한다. 하나라도 못 하면 결과는 `failed`다.
+    - 왜: 하위 git·Agent 프로세스가 살아 있을 때 폴더를 지우면 안 된다.
+- **해석하지 못한 PR(`unparsedPrs`)**
+  - Runner는 처음 보는 참조를 결과 `items[]`에 `warn:manual-reconcile`(ok:false)로 남긴다. 이것이 「수동 대조 필요」 경고다.
+  - 이 경고는 정리 완료를 막지 않는다.
+  - 이미 알린 참조는 `AWBS_HOME/state/reset-warned.json`에 지문을 저장해 두고, 다음 초기화에서는 ok:true 「이미 알린 항목」으로만 남긴다.
+  - 서버는 ok:false인 `warn:manual-reconcile` 항목을 알림(`alerts`, key `reset:<명령 ID>:manual-reconcile`, `warn`)으로 바꾼다.
+  - 왜: 시스템이 자동으로 지울 수 없는 PR이 남았다는 사실을 팀장이 알아야 한다. 하지만 같은 경고를 초기화마다 다시 띄우면 소음이 된다.
+- **외부 쓰기 권한이 막혀 있을 때**
+  - 외부 쓰기 권한(§3.4-5)이 `blocked`이면, 서버는 `baseCommit`이 있는(원격 쓰기가 필요한) 정리 명령을 `GET /runner/commands`에 내주지 않는다. 명령은 원장에 그대로 남는다.
+  - 권한이 `granted`로 돌아오면 그때 내준다.
+  - 왜: 막힌 동안 Runner가 원격 정리(PR 닫기·브랜치 삭제·되돌림 push)를 하면 PC 변경의 격리가 깨진다.
 
 **명령 결과의 정리 증거(`holds[]`)**
 
@@ -563,6 +692,8 @@ Planning Agent(계획을 세우는 Agent)가 결과를 보고하는 API다.
 
 - POST `/planning/estimates`
   - P TASK-0012. 완료 Task 거부
+  - 완료 Task의 추정 등록은 409 INVALID_TRANSITION이다. 묶음 중 하나라도 해당하면 전체를 저장하지 않는다(M2-07 재작업 F7).
+    - 왜: 완료된 일의 추정을 바꾸면 이미 끝난 일정 기록이 흔들린다. 일부만 저장하면 어느 것이 반영됐는지 헷갈린다.
 - POST `/planning/replans`
   - 서버가 일정을 **다시 계산**. 제출 용량은 참고값. 정책 off → 202(D-10)
   - 왜 서버가 다시 계산하나: 일정 계산도 판정이므로 서버가 기준이다.
@@ -636,6 +767,11 @@ Planning Agent(계획을 세우는 Agent)가 결과를 보고하는 API다.
    - §6.6 L749-751이 새 PC에서 새 시도 재개를 확정했다.
    - 그래서 이전 host 보유는 슬롯 `unconfirmed`·잠금 `orphaned`로 남기되 새 host의 슬롯 계산과 재개 차단에서 제외한다.
    - host 식별자 변경 없는 단순 재시작에는 적용하지 않는다.
+   - **이전에 쓰던 PC로 돌아와도 새 「PC 변경」이다** (owner 2026-11-26 아이템 7).
+     - 서버는 마지막으로 권한을 가진 host와 지금 보고한 host가 다르면 PC 변경으로 본다. 예: A → B → A로 돌아오면 B → A도 PC 변경이다.
+     - 그래서 generation+1, 외부 쓰기 차단이 똑같이 일어나고, 이전 PC(B) 정리·대조 뒤에 허용된다(아래 해제 조건).
+     - 원래 PC(A)를 영구 차단하지 않는다.
+     - 왜: B에서 일하는 동안 A의 옛 상태는 이미 낡았다. 「원래 PC니까 괜찮다」고 보면 B가 남긴 쓰기와 부딪칠 수 있다.
    - **로컬 재개와 공유 외부 쓰기는 분리한다.** `renew`·fence는 GitHub(git 저장소를 호스팅하는 서비스)가 알지 못하므로 외부 쓰기 격리 근거로 쓰지 않는다.
      - 왜: 옛 PC가 아직 살아 있다면 GitHub에 늦게 push할 수 있다. GitHub는 우리 fence 번호를 모르니 그것을 막아 주지 않는다.
    - host가 바뀌면 서버가 `external_write_authority`를 generation+1, `blocked`로 바꾼다.
@@ -788,7 +924,10 @@ sequenceDiagram
         - 해소 조건은 §3.4-6 「병합의 결과 미확정」과 같다.
    7. main 보호: int 필수, strict up-to-date, 강제 push·삭제 금지, CODEOWNERS 검토(`prototype/`, `.agentwbs/`).
       - **일반 병합용 Runner 자격 증명에는 우회 권한을 주지 않는다.**
-      - 관리자 우회 기본값에 기대지 않도록 관리자가 아닌 별도 계정/앱을 쓰고 준비 점검에서 실효 규칙을 조회한다.
+      - 일반 병합에는 **우회할 수 없는 자격 증명**을 쓴다. 관리자 역할인지가 아니라, main 보호의 모든 관련 ruleset에서 `current_user_can_bypass`가 `never`인지로 판단한다(§3.1 `github/status`의 「main 보호와 우회 권한 확인」, M4-06 리뷰 반영).
+        - 왜: 관리자도 우회가 막혀 있을 수 있고, 관리자가 아니어도 우회 권한을 받을 수 있다. 실제 우회 가능 여부만이 근거다.
+      - 연결 확인에서 실효 규칙을 조회한다.
+      - 시스템 커밋(최초 생성·초기화 되돌림)은 이와 별개로 별도 시스템 deploy key 인증을 쓴다(§6, owner 2026-11-26 아이템 10).
    8. 실증은 M7-02 확정 전에 시험 저장소에서 한다(M4-06). 실패하면 M7-02를 닫지 않는다.
    - 근거: [병합 API](https://docs.github.com/en/rest/pulls/pulls?apiVersion=2022-11-28#merge-a-pull-request)의 `sha` 불일치 409, [보호 브랜치](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)의 strict, [필수 검사 문제 해결](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks)의 검사 대상 커밋(2026-11-25 확인).
    - 문서는 비동기 병합도 권장하지만 `PUT /merge`에 폐기 표시가 없고 결과를 한 번에 확정하므로 동기 API를 쓴다.
@@ -803,6 +942,10 @@ sequenceDiagram
 - 커밋 후 worker가 발송한다(§9.6-3-5).
   - 왜 커밋 후인가: 상태 저장이 실패했는데 알림만 나가는 일을 막는다.
 - 일정은 프로젝트당 합쳐 계산하고 결과에 `calcVersion`을 둔다.
+  - `calcVersion`은 그 프로젝트의 변경 이벤트(`change_events`, §7) 수다. 무엇이든 바뀌면 커지므로 화면이 낡은 계산을 알아챌 수 있다(M2-07 재작업).
+  - `GET /api/schedule`의 `project.start`(프로젝트 시작일)는 프로젝트 등록일(Asia/Seoul 날짜)이다.
+  - Task 목록·상세의 일정 요약(`schedule`)은 조회 응답(GET)에서만 계산한다. 쓰기 응답(예: Task 변경 결과)의 `schedule`은 null이다(계약상 null 가능).
+    - 왜: 일정 계산은 Task 수가 많으면 느리다. 쓰기마다 계산하면 쓰기 요청이 크게 느려진다.
 
 ### 4.3 Runner 끊김
 
@@ -844,7 +987,7 @@ Agent(Claude/Codex)가 일을 마치고 Runner에게 돌려주는 결과의 모�
 ## 6. GitHub 계약 (Runner)
 
 - 브랜치 `agent/<TASK>`(P 표기), PR 1개/Task(host generation별 새 PR).
-- main 직접 push는 최초 생성·초기화 되돌림 두 종류만 허용(별도 시스템 커밋 자격 증명 — Q-09).
+- main 직접 push는 최초 생성·초기화 되돌림 두 종류만 허용(별도 시스템 커밋 자격 증명 — Q-09). 시스템 커밋 자격 증명은 시스템 deploy key다(owner 2026-11-26 아이템 10).
 - status context `agentwbs/task|int|night|deploy`.
 - 서버 보고와 GitHub 보고는 독립 outbox(§9.6-2-6).
   - 왜: 서버가 잠깐 멈춰도 GitHub 보고가 막히지 않고, 그 반대도 마찬가지다.
@@ -853,6 +996,16 @@ Agent(Claude/Codex)가 일을 마치고 Runner에게 돌려주는 결과의 모�
   2. `agent/*` 중 **이 시스템이 기록한 브랜치만** 삭제
   3. 기준 커밋 상태의 `src/ contracts/ .agentwbs/`로 되돌림 커밋(강제 push 없음)
   - 등록 전 파일은 기준 커밋 내용으로 복원된다.
+  - 정리 명령의 모양과 Runner 처리 규칙은 §3.2 「정리 명령 `reset-cleanup`의 payload」에 있다.
+  - 정리 순서는 PR 닫기 → 브랜치 삭제 → 되돌림 push다(위 1~3).
+  - PR 닫기는 열린 PR만 닫는다. 닫힌 PR·없는 PR(404)은 건너뛴다.
+  - 원격 브랜치 삭제는 `agent/…` 브랜치만 받는다. 삭제 응답이 204가 아니면 그 브랜치를 다시 조회하고, 조회가 404일 때만 「이미 없음」으로 확정한다.
+    - 왜: 422 같은 거절 응답만 보고 「없다」고 추정하면, 실제로 남아 있는 브랜치를 놓칠 수 있다.
+  - 되돌림 push 직전에 GitHub main이 되돌림 커밋의 부모인지 확인한다. 다르면 push하지 않는다.
+  - 되돌림 push는 **시스템 커밋 자격 증명**(별도 시스템 deploy key의 SSH 인증, owner 2026-11-26 아이템 10)으로만 한다. push 직전에도 deploy key 점검(§3.1)을 다시 한다.
+    - 시스템 키 설정이 없으면 되돌림이 필요한 초기화는 `failed`로 보고하고 완료하지 않는다. 되돌림이 필요 없는 초기화는 `done`이다.
+    - 로컬 저장소가 없으면 원격 main과 기준 커밋의 `src`·`contracts`·`.agentwbs` 객체 SHA를 쓰기 없이 비교한다. 같으면 되돌림이 필요 없고, 다르면 `failed`다(clone에도 시스템 커밋 자격 증명이 필요하다).
+  - 왜: 되돌림은 main에 직접 쓰는 두 가지 예외 중 하나다. 그래서 정해진 시스템 키로만, main이 예상한 커밋일 때만 한다.
 - **재시도와 목록 읽기** (M4-04 계약 보완)
   - 재시도하는 것은 429와 「속도 제한 403」뿐이다.
     - 속도 제한 403은 `Retry-After` 헤더가 있거나, `x-ratelimit-remaining: 0`이거나, 본문이 rate limit(속도 제한)을 말하는 403이다.

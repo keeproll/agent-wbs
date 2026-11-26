@@ -1,3 +1,4 @@
+import { scheduleInput as baselineInput } from '../src/project/baseline.ts';
 import { createPool, recreateTestDatabase, runMigrations, seedSystem } from '@awbs/db';
 import { OPERATIONS } from '@awbs/shared/api';
 import { createHash } from 'node:crypto';
@@ -903,4 +904,22 @@ describe('project 초기화 뒤 다시 등록', () => {
     const created = await lead('POST', '/api/project', registration(id));
     expect(created.statusCode, created.body).toBe(201);
   });
+});
+
+
+test('기준 일정 v1도 owner 기본 가동률과 관측 창의 하위 Agent 비율을 쓴다', async () => {
+  const client = await ownerPool.connect();
+  try {
+    await client.query('begin');
+    await client.query('update schedule_policy set assume_rate=null,window_days=7');
+    await client.query('delete from runner_concurrency_log');
+    await client.query(`insert into runner_concurrency_log(host_id,"limit",running,subagents,heavy,resources,created_at)
+      values('host-1',2,2,'1',0,'{}',clock_timestamp()),('host-1',2,2,'{"observed":3}',0,'{}',clock_timestamp()),
+      ('host-1',2,1,'100',0,'{}',clock_timestamp()-interval '8 days')`);
+    const input = await baselineInput(client, [], []);
+    expect(input.assumeRate).toBe(0.6);
+    expect(input.concurrency.subRatio).toBe(1);
+    await client.query('update schedule_policy set assume_rate=0.8');
+    expect((await baselineInput(client, [], [])).assumeRate).toBe(0.8);
+  } finally { await client.query('rollback'); client.release(); }
 });

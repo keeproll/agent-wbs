@@ -115,7 +115,7 @@ export async function taskDetail(client: PoolClient, taskKey: string, withSchedu
   const { keyOf, summary } = summarize(graph, withSchedule ? await taskSchedules(client, found.project_id) : new Map());
   const task = graph.tasks.find((item) => item.task_key === taskKey);
   if (!task) return null;
-  const [spec, outputs, designs, checklist, grades, subagents, split] = await Promise.all([
+  const [spec, outputs, designs, checklist, grades, subagents, split, estimate, execution] = await Promise.all([
     client.query<{ overview: unknown; spec: Record<string, unknown>; ac: unknown }>('select overview,spec,ac from task_specs where task=$1', [task.id]),
     client.query<Output>('select name,kind,required,verify,delivered from task_outputs where task=$1 order by name', [task.id]),
     client.query<Design>('select kind,content from task_designs where task=$1 order by kind', [task.id]),
@@ -124,6 +124,13 @@ export async function taskDetail(client: PoolClient, taskKey: string, withSchedu
     client.query<{ role: 'dev' | 'qa'; model_id: string; effort: string; reason: string; locked: boolean }>('select role,model_id,effort,reason,locked from task_grades where task=$1', [task.id]),
     client.query<{ role: 'dev' | 'qa'; def_key: string }>('select s.role,d.def_key from task_subagents s join subagent_defs d on d.id=s.subagent_id where s.task=$1 order by d.def_key', [task.id]),
     client.query<{ basis: string; judged_rules: unknown; exceptions: unknown }>('select basis,judged_rules,exceptions from task_splits where task=$1', [task.id]),
+    client.query<{ estHours: number; loHours: number; hiHours: number; tokensK: number | null; confidence: string; basis: string; agreedBy: string; at: string }>(
+      `select est::float8 "estHours",lo::float8 "loHours",hi::float8 "hiHours",tokens_k::float8 "tokensK",confidence,basis,agreed_by "agreedBy",${iso('created_at')} at
+       from task_estimates where task=$1 order by created_at desc,id desc limit 1`, [task.id]),
+    client.query<{ fixStart: string | null; actStart: string | null; actEnd: string | null; actualHours: number }>(
+      `select to_char(fix_start,'YYYY-MM-DD') "fixStart",${iso('act_start')} "actStart",${iso('act_end')} "actEnd",
+       coalesce((select sum(greatest(0,extract(epoch from (coalesce(ended_at,clock_timestamp())-started_at)))/3600)::float8
+         from task_attempts where task=$1),0) "actualHours" from tasks where id=$1`, [task.id]),
   ]);
   const stored = spec.rows[0];
   const dependency = (dep: DepRow) => ({ id: dep.id, pred: keyOf.get(dep.pred) ?? '', succ: keyOf.get(dep.succ) ?? '', type: dep.dep_type });
@@ -146,6 +153,8 @@ export async function taskDetail(client: PoolClient, taskKey: string, withSchedu
     predecessors: graph.deps.filter((dep) => dep.succ === task.id).map(dependency).sort(byPred),
     successors: graph.deps.filter((dep) => dep.pred === task.id).map(dependency).sort(byKey),
     planningApprovedAt: task.planning_approved_at,
+    estimate: estimate.rows[0] ?? null,
+    ...execution.rows[0],
     conflictGroup: task.conflict_group,
     srcInputVersion: task.src_v,
     grades: { dev: grade('dev'), qa: grade('qa') },

@@ -16,8 +16,8 @@
     "test": "node ../../scripts/vitest.ts --config ../../vitest.config.ts",
     "migrate": "node --env-file-if-exists=../../.env --conditions=awbs-source src/migrate-cli.ts",
     "generate": "drizzle-kit generate",
-    "seed:system": "node --env-file-if-exists=../../.env src/seed-cli.ts system",
-    "seed:demo": "node --env-file-if-exists=../../.env src/seed-cli.ts demo"
+    "seed:system": "node --env-file-if-exists=../../.env --conditions=awbs-source src/seed-cli.ts system",
+    "seed:demo": "node --env-file-if-exists=../../.env --conditions=awbs-source src/seed-cli.ts demo"
   },
   "dependencies": {
     "drizzle-orm": "0.45.4",

@@ -18,7 +18,7 @@ export const OWNER_THRESHOLD_DAYS = 1;
 
 interface Policy { autoReplan: boolean; thresholdDays: number; assumeRate: number; windowDays: number; minHours: number }
 
-async function policyOf(client: PoolClient): Promise<Policy> {
+export async function policyOf(client: Pick<PoolClient, 'query'>): Promise<Policy> {
   const row = (await client.query<{ auto_replan: boolean | null; threshold_days: string | null; assume_rate: string | null; window_days: number; min_hours: number }>(
     'select auto_replan,threshold_days::text,assume_rate::text,window_days,min_hours from schedule_policy where singleton')).rows[0];
   return {
@@ -29,6 +29,14 @@ async function policyOf(client: PoolClient): Promise<Policy> {
     windowDays: row?.window_days ?? 7,
     minHours: row?.min_hours ?? 72,
   };
+}
+
+/** G§6.2: 초기 기준 일정과 재조정은 같은 관측 창의 하위 Agent 비율을 쓴다. */
+export async function observedSubRatio(client: Pick<PoolClient, 'query'>, windowDays: number): Promise<number> {
+  const row = (await client.query<{ ratio: string | null }>(
+    `select sum(case jsonb_typeof(subagents) when 'number' then (subagents#>>'{}')::numeric else coalesce((subagents->>'observed')::numeric,0) end)/nullif(sum(running),0) as ratio
+     from runner_concurrency_log where running>0 and created_at>=clock_timestamp()-make_interval(days=>$1)`, [windowDays])).rows[0];
+  return Number(row?.ratio ?? 0);
 }
 
 const ymd = `'YYYY-MM-DD'`;
@@ -54,11 +62,7 @@ export async function scheduleInput(client: PoolClient, projectId: string, polic
     client.query<{ heartbeat_seconds: number; heartbeat_misses: number }>('select heartbeat_seconds,heartbeat_misses from app_settings where singleton'),
     // 상한 안에서 Runner가 조절해 보고한 현재 한도(G§6.2). 가장 최근 보고를 쓴다.
     client.query<{ limit: number }>('select "limit" from runner_concurrency_log order by created_at desc,id desc limit 1'),
-    // 관측 하위 Agent 비율 = 관측 창 동안 실행 세션당 하위 Agent 수의 평균(G§6.2 「한도 ÷ (1 + 관측 하위 Agent 비율)」).
-    // subagents는 보고의 하위 Agent 수(숫자) 또는 {observed}로 저장된다.
-    client.query<{ ratio: string | null }>(
-      `select sum(case jsonb_typeof(subagents) when 'number' then (subagents#>>'{}')::numeric else coalesce((subagents->>'observed')::numeric,0) end)/nullif(sum(running),0) as ratio
-         from runner_concurrency_log where running>0 and created_at>=clock_timestamp()-make_interval(days=>$1)`, [policy.windowDays]),
+    observedSubRatio(client, policy.windowDays),
   ]);
   const paths = wbsPaths(
     nodes.rows.map((node) => ({ id: node.id, kind: node.kind, parentId: node.parent_id, sortOrder: node.sort_order })),
@@ -69,7 +73,7 @@ export async function scheduleInput(client: PoolClient, projectId: string, polic
   const total = cap.total ?? 2;
   // Runner 보고가 없을 때만 상한을 현재 한도로, 관측이 없을 때만 하위 Agent 비율 0으로 본다(P의 0.5는 Mock 값).
   const current = Math.min(total, runnerLimit.rows[0]?.limit ?? total);
-  const subRatio = Number(observed.rows[0]?.ratio ?? 0);
+  const subRatio = observed;
   const hb = heartbeat.rows[0];
   const input: ScheduleInput = {
     now: now.rows[0]?.now ?? new Date().toISOString(),
@@ -124,6 +128,8 @@ export interface ReplanSummary {
  * - `manual`: 팀장 「재조정 실행」. 항상 다시 계산해 확정한다.
  */
 export async function recordReplan(client: PoolClient, projectId: string, meta: { trigger: string; actor: string; mode: 'drift' | 'policy' | 'manual' }): Promise<ReplanSummary | null> {
+  // 기준 항목의 외래키도 Task를 잠근다. 내용 수정과 재조정이 서로 기다리지 않게 그래프 → Task → 재조정 순서를 지킨다.
+  await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [`awbs:task-graph:${projectId}`]);
   // 기준 버전은 「마지막 버전 + 1」이다. 입력과 기존 기준을 읽기 전에 프로젝트별로 줄을 세워야 두 재조정이 같은 버전을 만들지 않는다(리뷰 F2).
   // 그래프 잠금(CP 반영)을 잡은 호출도 있으므로 순서는 항상 그래프 → 재조정이다(이 잠금 뒤에 그래프 잠금을 잡지 않는다).
   await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [`awbs:replan:${projectId}`]);

@@ -26,9 +26,14 @@ export async function assertCleanupDone(db: Db): Promise<void> {
 export interface ProjectRow {
   id: string; name: string; phase: 'boot' | 'active'; base_commit: string | null; updated_at: string; lead_instruction: string;
 }
-/** 프로젝트 행을 잠근다. 같은 프로젝트를 바꾸는 요청은 이 잠금으로 한 줄로 선다. */
+/**
+ * 프로젝트 행을 잠근다. 같은 프로젝트를 바꾸는 요청은 이 잠금으로 한 줄로 선다.
+ * `FOR NO KEY UPDATE`를 쓴다(교차 리뷰 F1). 이력·Task 같은 자식 행 INSERT의 외래 키 검사는 프로젝트 행에 `KEY SHARE`를 잡는다.
+ * `FOR UPDATE`는 그것과 충돌해, 「프로젝트 → Task」 순서의 입력 분석과 「Task → 이력(프로젝트 KEY SHARE)」 순서의 Task 수정이 교착했다.
+ * 프로젝트를 바꾸는 요청끼리(NO KEY UPDATE)와 초기화의 삭제(FOR UPDATE)는 여전히 서로 기다린다.
+ */
 export async function lockProject(db: Db): Promise<ProjectRow | undefined> {
-  return (await db.query<ProjectRow>(`select id,name,phase,base_commit,${iso('updated_at')} as updated_at,lead_instruction from projects for update`)).rows[0];
+  return (await db.query<ProjectRow>(`select id,name,phase,base_commit,${iso('updated_at')} as updated_at,lead_instruction from projects for no key update`)).rows[0];
 }
 export async function requireProject(db: Db): Promise<ProjectRow> {
   const project = await lockProject(db);

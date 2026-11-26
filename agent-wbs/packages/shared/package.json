@@ -13,6 +13,11 @@
       "awbs-source": "./src/api/index.ts",
       "types": "./dist/api/index.d.ts",
       "default": "./dist/api/index.js"
+    },
+    "./judgement": {
+      "awbs-source": "./src/judgement.ts",
+      "types": "./dist/judgement.d.ts",
+      "default": "./dist/judgement.js"
     }
   },
   "scripts": {

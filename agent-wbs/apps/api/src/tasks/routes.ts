@@ -6,6 +6,9 @@ import {
 } from '@awbs/shared';
 import { OPERATIONS } from '@awbs/shared/api';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { changeGrade } from './grade.ts';
+import { recordReplan } from '../planning/schedule.ts';
+import { validateDesign } from './design.ts';
 import { approvalErrors } from './approval.ts';
 import { invalidateTaskGate } from '../execution/gate.ts';
 import { installTaskErrors, TaskError } from './errors.ts';
@@ -147,10 +150,13 @@ export function registerTaskRoutes(app: FastifyInstance, pool: Pool): void {
     });
 
     route('updateTask', TASK, 'Task 수정', async (request) => {
-      const body = request.body as Versioned & { title?: string; priority?: number; assigneeAgent?: Agent; verifierAgent?: Agent };
+      const body = request.body as Versioned & { title?: string; priority?: number; assigneeAgent?: Agent; verifierAgent?: Agent; fixStart?: string | null; estimate?: { estHours: number; loHours: number; hiHours: number; tokensK: number } };
+      const client = clientOf(request);
+      const found = (await client.query<{ project_id: string }>('select project_id from tasks where task_key=$1', [keyOf(request)])).rows[0];
+      if (found) await lockGraph(client, found.project_id);
       return edit(request, body.updatedAt, async (client, task) => {
-        const current = (await client.query<Record<string, unknown>>('select title,priority,assignee_agent,verifier_agent from tasks where id=$1', [task.id])).rows[0] ?? {};
-        const fields = [['title', 'title', '제목'], ['priority', 'priority', '우선순위'], ['assigneeAgent', 'assignee_agent', '담당 Agent'], ['verifierAgent', 'verifier_agent', '검증 Agent']] as const;
+        const current = (await client.query<Record<string, unknown>>(`select title,priority,assignee_agent,verifier_agent,to_char(fix_start,'YYYY-MM-DD') as fix_start from tasks where id=$1`, [task.id])).rows[0] ?? {};
+        const fields = [['title', 'title', '제목'], ['priority', 'priority', '우선순위'], ['assigneeAgent', 'assignee_agent', '담당 Agent'], ['verifierAgent', 'verifier_agent', '검증 Agent'], ['fixStart', 'fix_start', '고정 시작일']] as const;
         const changes: Change[] = [];
         for (const [field, column, label] of fields) {
           const after = body[field];
@@ -158,6 +164,20 @@ export function registerTaskRoutes(app: FastifyInstance, pool: Pool): void {
           await client.query(`update tasks set ${column}=$2 where id=$1`, [task.id, after]);
           await record(client, { projectId: task.project_id, taskId: task.id, kind: '수정', text: `${label} 변경`, before: current[column], after, ref: { field } });
           changes.push({ field, before: current[column], after });
+        }
+        if (body.estimate) {
+          const e = body.estimate;
+          if (!(e.loHours <= e.estHours && e.estHours <= e.hiHours)) throw new TaskError('VALIDATION_FAILED', {}, [{ path: 'estimate', rule: 'estimateBounds', message: '낙관 ≤ 예상 ≤ 비관이어야 합니다.' }]);
+          const before = (await taskDetail(client, task.task_key))?.estimate ?? null;
+          if (!before || (['estHours', 'loHours', 'hiHours', 'tokensK'] as const).some(k => before[k] !== e[k])) {
+            await client.query(`insert into task_estimates(project_id,task,est,lo,hi,tokens_k,confidence,basis,agreed_by) values($1,$2,$3,$4,$5,$6,$7,'팀장 조정','팀장 조정')`,
+              [task.project_id, task.id, e.estHours, e.loHours, e.hiHours, e.tokensK, before?.confidence ?? '하']);
+            await record(client, { projectId: task.project_id, taskId: task.id, kind: '추정', text: '작업량 팀장 조정', before, after: e, ref: { field: 'estimate' } });
+            changes.push({ field: 'estimate', before, after: e });
+          }
+        }
+        if (changes.some(c => ['estimate', 'fixStart', 'assigneeAgent'].includes(c.field))) {
+          await recordReplan(client, task.project_id, { trigger: '작업량 · 일정 조건 변경', actor: '팀장', mode: 'policy' });
         }
         return changes;
       });
@@ -287,7 +307,15 @@ export function registerTaskRoutes(app: FastifyInstance, pool: Pool): void {
     route('updateTaskDesign', DESIGN, '기술 설계 편집', async (request) => {
       const body = request.body as Versioned & { content: Record<string, unknown> };
       const { kind = '' } = paramsOf(request);
+      const client = clientOf(request);
+      const found = (await client.query<{ project_id: string }>('select project_id from tasks where task_key=$1', [keyOf(request)])).rows[0];
+      // 같은 이름을 동시에 등록하는 두 저장을 직렬화한다. Task 잠금보다 먼저 잡아 CP와 순서를 맞춘다.
+      if (found) await lockGraph(client, found.project_id);
       return edit(request, body.updatedAt, async (client, task) => {
+        const known = (await client.query<{ task: string; content: Record<string, unknown> }>(
+          `select d.task,d.content from task_designs d join tasks t on t.id=d.task where t.project_id=$1 and t.deleted_at is null and d.kind='DB' and d.task<>$2`, [task.project_id, task.id])).rows;
+        const errors = validateDesign(kind, body.content, known.map(d => d.content));
+        if (errors.length) throw new TaskError('VALIDATION_FAILED', {}, errors);
         const before = (await client.query<{ content: unknown }>('select content from task_designs where task=$1 and kind=$2 for update', [task.id, kind])).rows[0]?.content ?? null;
         if (before !== null && canonicalJson(before) === canonicalJson(body.content)) return [];
         await client.query(`insert into task_designs(project_id,task,kind,content) values($1,$2,$3,$4::jsonb)
@@ -405,6 +433,14 @@ export function registerTaskRoutes(app: FastifyInstance, pool: Pool): void {
         return [{ field: 'lifecycleStatus', before: task.status, after: next }];
       });
     };
+    route('lockTaskGrade', TASK, '등급 고정', async request => {
+      const body = request.body as Versioned & { role: 'dev' | 'qa'; modelId: string; effort: string };
+      return edit(request, body.updatedAt, (client, task) => changeGrade(client, task, body.role, body));
+    });
+    route('unlockTaskGrade', TASK, '등급 고정 해제', async request => {
+      const query = request.query as Versioned & { role: 'dev' | 'qa' };
+      return edit(request, query.updatedAt, (client, task) => changeGrade(client, task, query.role, null));
+    });
     route('requestTaskApproval', TASK, '착수 승인 요청', lifecycle('request-approval'));
     route('approveTask', TASK, '착수 승인', lifecycle('approve'));
     route('rejectTask', TASK, '착수 반려', lifecycle('reject'));
