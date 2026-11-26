@@ -1,5 +1,6 @@
 import { mkdir, mkdtemp, readFile, readlink, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, test, vi } from 'vitest';
@@ -7,13 +8,14 @@ import { CliUpdater, type Activity, type CliRegistry, type UpdateDeps } from '..
 import type { Agent } from '../../src/api/generated/client.ts';
 import type { ReadinessReport } from '../../src/readiness/checks.ts';
 
-const archive = '/home/keeproll/.orca/bots/agentwbs/archive/2026-11-26/M4-05';
+const archive = join(homedir(), '.orca/bots/agentwbs/archive/2026-11-26/M4-05');
 const homes: string[] = [];
 const owner = { hostId: 'pc-now', bootId: 'boot-now', runnerId: 'runner-now' };
 const profile = { agent: 'Codex' as const, model: 'gpt-6.1-sol', options: 'exec --json' };
 afterEach(async () => { vi.useRealTimers(); await Promise.all(homes.splice(0).map((p) => rm(p, { recursive: true, force: true }))); });
 
 async function fixture(extra: Partial<UpdateDeps> = {}) {
+  await mkdir(archive, { recursive: true });
   const home = await mkdtemp(join(archive, 'cli-test-'));
   homes.push(home);
   const reports: ReadinessReport[] = [];

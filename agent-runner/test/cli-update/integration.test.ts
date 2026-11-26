@@ -1,12 +1,15 @@
 import { chmod, mkdir, mkdtemp, readFile, readlink, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { expect, test } from 'vitest';
 import { CliUpdater } from '../../src/cli-update/manager.ts';
 import { createCliRegistry } from '../../src/cli-update/registry.ts';
 import type { ReadinessReport } from '../../src/readiness/checks.ts';
 
 test('가짜 npm·CLI를 실제 자식 프로세스로 실행해 전용 설치·로그인·옵션·환경·보고를 연결한다', async () => {
-  const home = await mkdtemp('/home/keeproll/.orca/bots/agentwbs/archive/2026-11-26/M4-05/process-test-');
+  const archive = join(homedir(), '.orca/bots/agentwbs/archive/2026-11-26/M4-05');
+  await mkdir(archive, { recursive: true });
+  const home = await mkdtemp(join(archive, 'process-test-'));
   try {
     const bin = join(home, 'fake-bin');
     await mkdir(bin);
