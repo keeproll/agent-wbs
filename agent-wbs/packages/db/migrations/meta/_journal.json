@@ -127,6 +127,13 @@
       "when": 1795687645429,
       "tag": "0017_20261126_message_read_touch",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1795687645430,
+      "tag": "0018_20261126_schedule_defaults",
+      "breakpoints": true
     }
   ]
 }
