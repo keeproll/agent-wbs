@@ -190,6 +190,7 @@ export function installRunner(app: FastifyInstance, pool: Pool) {
   route('getRunnerPolicy', async (repo) => {
     const c = await caps(repo), settings = await repo.appSettings();
     const ci = await repo.ciSettings();
+    // shortcut: 입력 확인은 5분 주기다. 공통 설정에 주기 항목이 생기면 그 값을 읽는다.
     return { caps: { ...wireCaps(c.caps), memReserveGB: c.memReserveGB }, subagentBudget: c.budget, heartbeatSeconds: settings.heartbeat_seconds,
       inputCheckMinutes: 5, ci: { nightAt: ci.night_at, retry: ci.retry, deployUrl: ci.deploy_url } };
   });
