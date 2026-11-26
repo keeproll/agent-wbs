@@ -52,7 +52,8 @@ test('UI-00 메뉴 접힘 56px', async ({ page }) => {
   await prepare(page);
   await page.goto('/wbs');
   await page.getByRole('button', { name: '메뉴 접기/펼치기' }).click();
-  await expect(page.getByText('이 화면은 아직 구현되지 않았습니다.')).toBeVisible();
+  // 왼쪽 메뉴(56px)만 비교한다. 본문은 WBS 화면(M3-02)이 그리므로 제목이 보일 때까지만 기다린다.
+  await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
   const png = await shot(page);
   const box = { x: 0, y: 64, width: 56, height: 1016 };
   record('UI-00-nav-collapsed', 0.01, '같아야 함', compareRegion('UI-00-nav-collapsed', 'desktop/UI-00-collapsed.png', box, png, box));
