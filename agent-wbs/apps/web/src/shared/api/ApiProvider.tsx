@@ -9,7 +9,7 @@
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createContext, use, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { readLoginToken } from '../auth/login-link.ts';
-import { announceLogout, browserStorage, browserTabId, persistRegisteredDrafts } from '../state/sessionDrafts.ts';
+import { announceLogout, browserStorage, browserTabId, markLoggedIn, mayPersistDrafts, persistRegisteredDrafts } from '../state/sessionDrafts.ts';
 import { ApiError, createApiClient, type ApiClient } from './client.ts';
 import type { ResponseOf } from './contract.ts';
 
@@ -75,7 +75,8 @@ function SessionProvider({ children }: { children: ReactNode }) {
       csrfToken: () => csrf.get(),
       onUnauthorized: () => {
         // 로그인된 상태에서 세션이 끊겼으면, 로그인 화면으로 가기 전에 편집 중 초안을 남긴다(조정자 결정).
-        if (queryClient.getQueryData(['getSession', {}])) {
+        // 로그아웃 뒤(이 탭·다른 탭)에는 새 로그인 전까지 보관하지 않는다.
+        if (queryClient.getQueryData(['getSession', {}]) && mayPersistDrafts()) {
           const storage = browserStorage();
           const tabId = browserTabId();
           if (storage && tabId) persistRegisteredDrafts(storage, tabId);
@@ -101,7 +102,8 @@ function SessionProvider({ children }: { children: ReactNode }) {
     started.current = true;
     history.replaceState(history.state, '', `${location.pathname}${location.search}${found.rest}`);
     client.call('login', { body: { method: 'link', token: found.token } }).then(
-      async () => { await queryClient.invalidateQueries({ queryKey: ['getSession'] }); setLinkLogin('idle'); },
+      async () => {
+        markLoggedIn(); await queryClient.invalidateQueries({ queryKey: ['getSession'] }); setLinkLogin('idle'); },
       () => { setLinkLogin('failed'); },
     );
   }, [client, queryClient]);

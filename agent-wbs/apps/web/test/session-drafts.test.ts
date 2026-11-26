@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  clearAllDrafts, discardStoredDraft, lastLogoutAt, persistRegisteredDrafts, readStoredDraft, recordLogout, registerDraft, resolveTabId, stripSecrets,
+  clearAllDrafts, discardStoredDraft, draftsAllowed, lastLogoutAt, persistRegisteredDrafts, readStoredDraft, recordLogout, registerDraft, resolveTabId, stripSecrets,
 } from '../src/shared/state/sessionDrafts.ts';
 
 class MemoryStorage {
@@ -109,5 +109,14 @@ describe('세션 만료 초안 보관(조정자 결정)', () => {
     const blocked = { length: 0, key: () => null, getItem: () => { throw new Error('b'); }, setItem: () => { throw new Error('b'); }, removeItem: () => undefined };
     expect(lastLogoutAt(blocked)).toBe(0);
     expect(() => { recordLogout(blocked, 1); }).not.toThrow();
+  });
+
+  // 재리뷰 64b29b9: 로그아웃 뒤에는 그 탭에서 새 로그인이 성공하기 전까지 보관하지 않는다.
+  it('보관 허용 규칙: 로그아웃 알림을 받았거나, 로그아웃 시각이 이 탭의 마지막 로그인 이후면 막는다', () => {
+    expect(draftsAllowed({ blocked: false, logoutAt: 0, loginAt: 100 })).toBe(true);
+    expect(draftsAllowed({ blocked: false, logoutAt: 50, loginAt: 100 })).toBe(true);
+    expect(draftsAllowed({ blocked: true, logoutAt: 0, loginAt: 100 })).toBe(false);
+    expect(draftsAllowed({ blocked: false, logoutAt: 100, loginAt: 100 })).toBe(false);
+    expect(draftsAllowed({ blocked: false, logoutAt: 150, loginAt: 100 })).toBe(false);
   });
 });

@@ -17,6 +17,7 @@ import { BusyButton } from '../../shared/ui/BusyButton.tsx';
 import { codeLabel } from '../../shared/ui/errors.ts';
 import { ICON, Icon } from '../../shared/ui/Icon.tsx';
 import { LOGIN_LINK_COMMAND } from './login-command.ts';
+import { markLoggedIn } from '../../shared/state/sessionDrafts.ts';
 
 
 interface Problem { kind: 'failed' | 'link' | 'limited' | 'other'; error?: ApiError }
@@ -59,6 +60,7 @@ export function LoginPage() {
     setBusy(true);
     try {
       await client.call('login', { body: { method: 'password', password } });
+      markLoggedIn();
       setPassword('');
       await refreshSession();
       void navigate(next, { replace: true });

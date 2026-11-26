@@ -132,7 +132,42 @@ export function onDraftsCleared(listener: () => void): () => void {
   return () => { clearedListeners.delete(listener); };
 }
 
+/**
+ * 초안 보관 허용 규칙(재리뷰 64b29b9). 규칙 하나:
+ * 로그아웃 알림을 받았거나(blocked) 로그아웃 시각이 이 탭의 마지막 로그인 이후(같은 시각 포함)면,
+ * 이 탭에서 새 로그인이 성공하기 전까지 어떤 401에서도 초안을 보관하지 않는다.
+ * 왜: 로그아웃 뒤에도 화면에 남은 옛 입력이 다음 401에서 「새 기록」으로 다시 저장되는 것을 막는다.
+ */
+export function draftsAllowed({ blocked, logoutAt, loginAt }: { blocked: boolean; logoutAt: number; loginAt: number }): boolean {
+  return !blocked && logoutAt < loginAt;
+}
+
+const LOGIN_KEY = 'awbs.loginAt';
+/** 이 페이지를 연 시각. 이 탭에서 로그인한 기록이 없을 때(이미 로그인된 세션으로 연 탭) 로그인 시각으로 본다. */
+const pageOpenedAt = Date.now();
+let blockedByLogout = false;
+
+/** 이 탭에서 로그인이 성공했다: 시각을 남기고 보관 차단을 푼다. */
+export function markLoggedIn(now: number = Date.now()): void {
+  blockedByLogout = false;
+  const storage = browserStorage();
+  try { storage?.setItem(LOGIN_KEY, String(now)); } catch { /* 무시 */ }
+}
+
+/** 지금 이 탭에서 만료 초안을 보관해도 되는가 */
+export function mayPersistDrafts(): boolean {
+  const storage = browserStorage();
+  let loginAt = pageOpenedAt;
+  try {
+    const value = Number(storage?.getItem(LOGIN_KEY));
+    if (Number.isFinite(value) && value > 0) loginAt = value;
+  } catch { /* 무시 */ }
+  return draftsAllowed({ blocked: blockedByLogout, logoutAt: browserLogoutAt(), loginAt });
+}
+
 function dropAllHere(): void {
+  // 이 탭이든 다른 탭이든 로그아웃했다: 새 로그인 전까지 보관을 막는다.
+  blockedByLogout = true;
   const storage = browserStorage();
   if (storage) clearAllDrafts(storage);
   for (const listener of clearedListeners) listener();

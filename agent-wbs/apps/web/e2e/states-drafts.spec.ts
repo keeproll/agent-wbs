@@ -159,3 +159,64 @@ test('로그아웃 알림을 못 받은 탭도 로그아웃 시각 이전에 보
   await page.getByLabel('대상', { exact: true }).selectOption('B');
   await expect(page.getByRole('region', { name: '대상 B 메모 — 저장하지 못한 초안' })).toBeVisible();
 });
+
+// 재리뷰 64b29b9: 로그아웃 알림을 받은 뒤 아직 편집 중인 탭이 401에서 옛 초안을 다시 보관하면 안 된다.
+async function editingTab(page: Page, context: BrowserContext) {
+  const api = await fakeApi(context);
+  let signedIn = true;
+  api.on('GET /api/session', (route) => (signedIn ? json(route, 200, SESSION) : json(route, 401, errorBody('LEAD_UNAUTHORIZED'))));
+  api.on('POST /api/auth/session', (route) => { signedIn = true; return route.fulfill({ status: 204 }); });
+  api.on('DELETE /api/auth/session', (route) => { signedIn = false; return route.fulfill({ status: 204 }); });
+  api.on('GET /api/tasks/TASK-0001', (route) => json(route, 200, { taskKey: 'TASK-0001', title: '원래 제목', updatedAt: V1 }));
+  api.on('PATCH /api/tasks/TASK-0001', (route) => json(route, 401, errorBody('LEAD_UNAUTHORIZED')));
+  await page.goto('/_states');
+  await page.getByRole('button', { name: '편집' }).click();
+  await page.getByLabel('제목').fill('로그아웃 전에 쓴 제목');
+  await page.getByLabel('메시지').fill('로그아웃 전 메시지');
+  return { setSignedIn: (v: boolean) => { signedIn = v; } };
+}
+
+test('다른 탭 로그아웃 알림을 받은 편집 중인 탭은 이후 401에서도 초안을 보관하지 않고, 다음 로그인에서 제안하지 않는다', async ({ page, context }) => {
+  await editingTab(page, context);
+  await page.evaluate(() => {
+    const w = window as unknown as { __logoutSeen: boolean };
+    w.__logoutSeen = false;
+    new BroadcastChannel('awbs.session').onmessage = () => { w.__logoutSeen = true; };
+  });
+  const other = await context.newPage();
+  await other.goto('/dashboard');
+  await other.getByRole('button', { name: '로그아웃' }).click();
+  await expect(other).toHaveURL(/\/login/);
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __logoutSeen: boolean }).__logoutSeen)).toBe(true);
+
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+  await expect(page).toHaveURL(/\/login/);
+  expect(await draftKeys(page)).toEqual([]);
+  await relogin(page);
+  await page.goto('/_states');
+  await expect(page.getByRole('heading', { level: 1, name: '공통 컴포넌트 견본' })).toBeVisible();
+  await expect(page.getByRole('region', { name: /저장하지 못한 초안/ })).toHaveCount(0);
+});
+
+test('알림을 못 받았어도 이 탭의 로그인 뒤에 로그아웃 시각이 기록돼 있으면 401에서 보관하지 않는다', async ({ page, context }) => {
+  await editingTab(page, context);
+  // 다른 탭의 로그아웃 기록만 남은 상황(알림 없음)
+  await page.evaluate(() => { localStorage.setItem('awbs.logoutAt', String(Date.now())); });
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+  await expect(page).toHaveURL(/\/login/);
+  expect(await draftKeys(page)).toEqual([]);
+});
+
+test('로그아웃 뒤 이 탭에서 다시 로그인에 성공하면 다시 만료 초안을 보관한다', async ({ page, context }) => {
+  const tab = await editingTab(page, context);
+  await page.evaluate(() => { localStorage.setItem('awbs.logoutAt', String(Date.now())); });
+  tab.setSignedIn(false);
+  await page.reload();
+  await relogin(page);
+  await expect(page).toHaveURL('/_states');
+  await page.getByRole('button', { name: '편집' }).click();
+  await page.getByLabel('제목').fill('새 로그인 뒤 쓴 제목');
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+  await expect(page).toHaveURL(/\/login/);
+  expect(await draftKeys(page)).toContain('awbs.draft:task:TASK-0001:title');
+});
