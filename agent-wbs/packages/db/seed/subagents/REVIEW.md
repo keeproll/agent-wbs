@@ -27,21 +27,47 @@
 | `version` | 버전이 1 이상의 정수가 아니거나, 파일 이름의 버전과 다르거나, 같은 정의·버전이 두 번 있는 경우 |
 | `review` | 이 파일에 정의·버전·현재 hash 줄이 없는 경우 |
 | `model-effort` | 설정 키 `model`·`effort`·`model_reasoning_effort` 등, 또는 지시문 속 모델 이름 |
-| `config-key` | 허용하지 않은 설정 키(예: `hooks`, `permissionMode`, `approval_policy`, `mcp_servers`)와 `danger-full-access` |
-| `tools` | 허용 목록 밖 도구, 파일과 manifest의 도구 차이, 권한 표시와 실제 도구·sandbox의 차이 |
+| `config-key` | 허용하지 않은 설정 키(예: `hooks`, `permissionMode`, `approval_policy`, `mcp_servers`). Codex의 `sandbox_mode`도 여기서 거부한다(아래 「권한」) |
+| `tools` | 허용 목록 밖 도구, Claude `tools` 줄 생략·빈 값, 파일과 manifest의 도구 차이, 권한 표시와 실제 권한의 차이 |
 | `mock-text` | Mock 정의 이름을 그대로 쓰거나 SUB_MOCK 문장을 옮겨 온 경우 |
 | `conflict` | 위 검토 기준 1·4와 충돌하는 지시 |
 | `common-rules` | 공통 규칙 블록(`common-rules.md`)이 빠지거나 바뀐 경우 |
-| `format`·`name` | 읽을 수 없는 파일 모양, 파일 안 name과 정의 이름의 차이, 빈 description |
+| `format`·`name` | 읽을 수 없는 파일 모양, 실제 YAML·TOML 분석기가 거부할 값(따옴표 없는 값 안의 「: 」, 특수 문자 시작, 여러 줄 문자열 안의 `"""`, 제어 문자), 파일 안 name과 정의 이름의 차이, 빈 description |
 
 ## 사람이 본 항목 (작성자 검토)
 
 - 정의마다 「맡은 일」 첫 줄이 한 가지 일만 말한다.
-- 읽기 전용 정의(Claude `change-reviewer`·`contract-checker`, Codex `security-checker`·`failure-investigator`)는 쓰기 도구가 없다.
-  - Claude 읽기 전용 정의에는 Bash도 주지 않았다. Bash로는 파일을 쓸 수 있어서 「읽기 전용」 표시가 거짓이 되기 때문이다.
-- `doc-editor`는 문서를 고쳐야 해서 Edit·Write가 있다. 명령 실행 도구(Bash)는 주지 않았다. 문서만 고친다는 제한이 도구로도 지켜지게 하려는 것이다.
-- Codex `ac-verifier`·`test-author`는 `workspace-write`다.
-  - 테스트 실행이 빌드 결과·캐시 파일을 만들기 때문이다. 구현 코드를 고치지 않는다는 제한은 지시문으로 둔다.
+- Claude 읽기 전용 정의(`change-reviewer`·`contract-checker`)는 `Read`·`Glob`·`Grep`만 가진다.
+  - Claude는 `tools` 줄에 적은 도구만 하위 Agent에 준다. 그래서 이 두 정의의 「읽기 전용」은 도구 목록이 지킨다.
+  - Bash도 주지 않았다. Bash로는 파일을 쓸 수 있어서 「읽기 전용」 표시가 거짓이 되기 때문이다.
+  - `tools` 줄을 생략하면 부모의 도구를 모두 물려받는다. 그래서 검사기는 `tools` 줄이 없거나 비면 실패로 본다.
+- `doc-editor`는 문서를 고쳐야 해서 Edit·Write가 있다. 명령 실행 도구(Bash)는 주지 않았다.
+  - Edit·Write는 경로를 고를 수 없다. 그래서 「문서 파일만 고친다」는 제한은 도구가 아니라 지시문으로 둔다.
+  - 권한 표시도 「worktree 쓰기 · 문서만(지시문)」으로 적어, 도구가 막는 범위와 지시문이 막는 범위를 구분한다.
+
+### 권한 — Codex 정의는 부모 세션의 권한을 물려받는다
+
+- Codex 하위 Agent 역할 파일에 적은 `sandbox_mode`는 적용되지 않는다.
+  - 하위 Agent는 부모 세션의 sandbox(파일 읽기·쓰기 범위를 막는 실행 환경)와 승인 정책을 그대로 물려받는다.
+  - 근거: openai/codex 소스 `codex-rs/core/src/agent/role.rs`의 `AgentRoleOverrides`에는 `sandbox_mode`가 없다. 같은 폴더 `child_config.rs`의 `apply_spawn_agent_runtime_overrides`가 부모의 승인 정책·권한을 자식에 복사한다. 시험 `apply_role_preserves_parent_sandbox_permissions`(`role_tests.rs`)도 이를 확인한다. Context7로 최신 소스를 확인했고, 리뷰는 같은 내용을 `rust-v0.172.0`에서 확인했다.
+  - 역할 파일이 바꿀 수 있는 것은 지시문·모델 관련 값과, `[features]`로 일부 기능을 끄는 것뿐이다. 모델 관련 값은 이 시스템에서 금지다.
+- 그래서 v1 Codex 정의는 `sandbox_mode`를 적지 않는다. 적으면 권한을 보장하는 것처럼 보이므로 검사기가 거부한다.
+- Codex 정의의 권한 표시는 「부모 세션 권한 상속」으로 시작한다. 읽기 전용·쓰기 권한을 약속하지 않는다.
+  - 「수정 금지」「테스트만」 같은 제한은 지시문 제한이다. 표시에도 「(지시문)」을 붙인다.
+  - 예: 부모 세션이 쓰기를 허용하면 `security-checker`도 기술적으로는 파일을 고칠 수 있다. 막는 것은 지시문뿐이다.
+- Codex 도구 표시는 모두 `shell · apply_patch`다. 역할 파일로 도구를 고를 수 없어 부모 세션의 도구를 물려받기 때문이다.
+- 읽기 전용이 꼭 필요한 검사를 기술적으로 보장하려면 Runner가 그 세션을 읽기 전용으로 시작해야 한다. 이 결정은 정의가 아니라 Runner 실행 정책의 일이다. 아래 「M8 확인 목록」에 남긴다.
+
+### M8 확인 목록 (실측이 필요해 지금 확인하지 않은 것)
+
+실제 CLI 실행은 유료 호출이라 M5-06에서 하지 않았다. 다음은 M8-04(최신 Codex·Claude의 하위 Agent 관측 확인)에서 실제로 확인한다.
+
+1. 설치된 Codex 버전에서 역할 파일의 `sandbox_mode`가 무시되고 부모 권한을 물려받는지.
+2. 부모 Codex 세션이 `read-only`일 때 `ac-verifier`·`test-author`가 테스트 실행·테스트 파일 작성을 할 수 없는지, 이때 BLOCKED로 보고하는지.
+3. Codex 검증(qa) 세션을 Runner가 어떤 sandbox로 시작해야 `security-checker`·`failure-investigator`의 수정 금지를 기술적으로 보장할 수 있는지.
+4. Claude Code가 `tools: Read, Glob, Grep` 정의에 다른 도구를 주지 않는지, `tools` 생략 시 부모 도구를 물려받는지.
+5. Claude Code와 Codex가 v1 정의 10개를 실제로 읽어 들이는지(YAML·TOML 분석 오류로 건너뛰지 않는지).
+
 - 모든 정의가 검증 결과를 「부모 세션에 보고」한다. Runner 보고 경로·결함 등록 같은 Runner 계약은 부모 세션의 몫이다.
 - SUB_MOCK과 이름이 겹치지 않는다. demo 정의와 실제 정의가 한 DB에 함께 있어도 섞이지 않게 하려는 것이다.
 - `planner-estimator`에 해당하는 정의는 두지 않았다.
@@ -57,10 +83,10 @@
 | `change-reviewer` v1 `4b2a5c2d094379dab7ab8f29f15f3ffd45b902d8a8506279e3808a31b0ed5adf` | Claude | 변경 검토 |
 | `contract-checker` v1 `d64fb63a709ea059ccc43bc50d16ff577c74ceea3dbb9569f5e10af0865a895d` | Claude | 인터페이스 계약 대조 |
 | `doc-editor` v1 `ac2a210a893583b08f205eaac37852062cbcf70d4615719d5a68e7ba90e0939e` | Claude | 문서 작성 |
-| `ac-verifier` v1 `095739ddc86fa0338eecc85c9a855e94e080a66331a8074ebf0e054ec5453ecb` | Codex | 인수 조건 검증 |
-| `test-author` v1 `9d44c885cea53ff8d9d0c22a24a77279dcb3ddd6faa2df39fbbd1caac1fc7c06` | Codex | 테스트 작성 |
-| `security-checker` v1 `5c95c520aebd8f75f3ee9c9b79f36da308faa10041716e136e61bed494fc6345` | Codex | 보안 점검 |
-| `failure-investigator` v1 `8812cd701e2d12fa442aa0db2d41f8048d27f704ce191d34912d20fdeff4f0b3` | Codex | 실패 원인 조사 |
+| `ac-verifier` v1 `2e532748bd491c4244e901b19c5952ec92ee3918cf8c96430ba22eea4b1179b4` | Codex | 인수 조건 검증 |
+| `test-author` v1 `ee8ea3abdeaf2707c46e263bed68ac0ad65843cecebf7db13008b2e3629758b3` | Codex | 테스트 작성 |
+| `security-checker` v1 `118453d3a627f3cbee47486ff3afee8e74ad23a877dba34050758a84c4ce310f` | Codex | 보안 점검 |
+| `failure-investigator` v1 `83750c10ed0353dff7cc894336ce80529c30dac50d8cd201161fa46eb41a6ef6` | Codex | 실패 원인 조사 |
 
 ## 검토자
 

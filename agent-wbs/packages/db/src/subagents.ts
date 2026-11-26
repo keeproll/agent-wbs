@@ -65,7 +65,30 @@ export async function loadMockSubagents(): Promise<MockSubagent[]> {
 
 /* ───────────── 파일 읽기(허용한 모양만) ───────────── */
 
-interface Parsed { name?: string; description?: string; keys: string[]; tools?: string[]; sandboxMode?: string; instructions: string }
+interface Parsed { name?: string; description?: string; keys: string[]; tools?: string[]; instructions: string }
+
+/** 탭·줄바꿈 밖의 제어 문자(U+0000~U+001F, U+007F)가 있는가. YAML·TOML 모두 이런 글자를 값으로 받지 않는다. */
+function hasControlChar(text: string): boolean {
+  for (const ch of text) {
+    const n = ch.codePointAt(0) ?? 0;
+    if ((n < 0x20 && n !== 0x09 && n !== 0x0a) || n === 0x7f) return true;
+  }
+  return false;
+}
+
+/**
+ * YAML 일반 값(따옴표 없는 값)으로 안전한지 본다. 검사기가 통과시킨 값은 실제 YAML 분석기도 읽어야 한다(리뷰 P2-3).
+ * 지원하는 모양을 좁게 둔다: 특수 문자로 시작하지 않고, 「: 」「 #」을 안에 두지 않고, 「:」로 끝나지 않는 한 줄 값.
+ * 왜: Claude Code는 YAML이 깨진 Agent 파일을 조용히 건너뛴다. 검사와 seed가 성공해도 설치 뒤 쓰이지 않는다.
+ */
+function yamlPlainProblem(value: string): string | null {
+  if (value === '') return null;
+  if (/^[-?:,[\]{}#&*!|>'"%@`]/.test(value)) return `YAML 값이 특수 문자(${value[0] ?? ''})로 시작합니다. 따옴표 없는 값으로 읽을 수 없습니다.`;
+  if (value.includes(': ') || value.endsWith(':')) return 'YAML 값 안에 「: 」가 있거나 「:」로 끝납니다(mapping values are not allowed).';
+  if (value.includes(' #')) return 'YAML 값 안의 「 #」 뒤는 주석으로 잘립니다.';
+  if (hasControlChar(value)) return 'YAML 값에 제어 문자가 있습니다.';
+  return null;
+}
 
 /** Claude: `---` 사이 `키: 값` 줄 + 본문. 여러 줄 값·목록은 허용하지 않는다(검사가 못 보는 설정이 숨지 않게). */
 function parseClaude(text: string): Parsed | string {
@@ -76,6 +99,8 @@ function parseClaude(text: string): Parsed | string {
     const kv = /^([A-Za-z_][\w-]*):\s?(.*)$/.exec(line);
     if (!kv) return `frontmatter 줄을 읽을 수 없습니다: ${line}`;
     const [, key = '', value = ''] = kv;
+    const problem = yamlPlainProblem(value.trim());
+    if (problem) return `${key}: ${problem}`;
     out.keys.push(key);
     if (key === 'name') out.name = value.trim();
     if (key === 'description') out.description = value.trim();
@@ -90,6 +115,8 @@ function parseClaude(text: string): Parsed | string {
  */
 function parseCodex(text: string): Parsed | string {
   if (text.includes('\\')) return 'TOML에 역슬래시(\\)를 쓸 수 없습니다.';
+  // TOML 기본 문자열은 탭 밖의 제어 문자를 받지 않는다.
+  if (hasControlChar(text)) return 'TOML에 제어 문자가 있습니다.';
   const out: Parsed = { keys: [], instructions: '' };
   const lines = text.split('\n');
   for (let i = 0; i < lines.length; i++) {
@@ -100,6 +127,8 @@ function parseCodex(text: string): Parsed | string {
       const end = lines.indexOf('"""', i + 1);
       if (end < 0) return `${multi[1] ?? ''}의 """ 끝을 찾을 수 없습니다.`;
       const value = lines.slice(i + 1, end).join('\n');
+      // 본문 안의 """는 문자열을 그 자리에서 끝낸다. 실제 TOML 분석기는 뒤의 글자를 오류로 본다(리뷰 P2-3).
+      if (value.includes('"""')) return `${multi[1] ?? ''} 본문 안에 """가 있습니다. 문자열이 그 자리에서 끝납니다.`;
       out.keys.push(multi[1] ?? '');
       if (multi[1] === 'developer_instructions') out.instructions = value;
       i = end;
@@ -115,7 +144,6 @@ function parseCodex(text: string): Parsed | string {
     out.keys.push(key);
     if (key === 'name') out.name = value.trim();
     if (key === 'description') out.description = value.trim();
-    if (key === 'sandbox_mode') out.sandboxMode = value;
   }
   return out;
 }
@@ -124,15 +152,22 @@ function parseCodex(text: string): Parsed | string {
 
 const KEY = /^[a-z][a-z0-9-]{1,62}$/;
 const CLAUDE_KEYS = new Set(['name', 'description', 'tools']);
-const CODEX_KEYS = new Set(['name', 'description', 'sandbox_mode', 'developer_instructions']);
+/**
+ * Codex 역할 파일에서 쓰는 키. `sandbox_mode`는 넣지 않는다.
+ * Codex는 역할 파일의 sandbox_mode를 적용하지 않고 부모 세션의 권한(sandbox·승인 정책)을 그대로 물려준다(리뷰 P2-1).
+ * 적어 두면 권한을 보장하는 것처럼 보이므로 거부한다. 근거: openai/codex `core/src/agent/role.rs`의 AgentRoleOverrides,
+ * `child_config.rs`의 apply_spawn_agent_runtime_overrides, 시험 apply_role_preserves_parent_sandbox_permissions.
+ */
+const CODEX_KEYS = new Set(['name', 'description', 'developer_instructions']);
 const MODEL_KEYS = new Set(['model', 'effort', 'model_reasoning_effort', 'model_reasoning_summary', 'model_verbosity', 'model_provider', 'reasoning_effort']);
 const MODEL_TEXT = /claude-(haiku|sonnet|opus|fable)|\bgpt-\d|\bo\d-(mini|pro)\b|model_reasoning_effort|\beffort\s*[:=]/i;
 /** Claude 도구 허용 목록. 하위 Agent를 더 띄우는 Agent·Task, 외부 접속 WebFetch·WebSearch, MCP 도구는 뺀다. */
 const CLAUDE_TOOLS = new Set(['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash']);
 const CLAUDE_WRITE = new Set(['Edit', 'Write', 'Bash']);
-/** Codex 도구 표기. 실제 권한은 sandbox_mode가 정한다. */
-const CODEX_TOOLS = new Set(['shell', 'apply_patch']);
-const SANDBOX: Record<string, string> = { 'read-only': '읽기 전용', 'workspace-write': 'worktree 쓰기' };
+/** Codex 도구 표기. 역할 파일로 도구를 고를 수 없어 부모 세션의 shell·apply_patch를 그대로 물려받는다. 표시도 둘 다 적는다. */
+const CODEX_TOOLS = ['shell', 'apply_patch'];
+/** Codex 권한 표시의 앞부분. 그 뒤에는 지시문으로 둔 제한만 「· …(지시문)」으로 덧붙인다. */
+export const CODEX_SANDBOX_LABEL = '부모 세션 권한 상속';
 
 /**
  * 일반 정의에 고정하면 안 되는 지시(D-24)와 승인된 정책과 맞지 않는 지시다.
@@ -194,6 +229,8 @@ export function checkSubagentSet(set: SubagentSet, mock: readonly MockSubagent[]
 
     // 도구·권한
     if (d.agent === 'Claude') {
+      // tools를 생략하면 Claude는 부모의 도구를 물려준다. 빈 목록과 같게 보면 안 된다(리뷰 P2-2).
+      if (parsed.tools === undefined || parsed.tools.length === 0) add(k, 'tools', 'Claude 정의에는 비어 있지 않은 tools 줄이 있어야 합니다. 생략하면 부모 세션의 도구를 모두 물려받습니다.');
       const fileTools = parsed.tools ?? [];
       if (fileTools.join(',') !== d.tools.join(',')) add(k, 'tools', `파일의 tools(${fileTools.join(', ')})와 manifest tools(${d.tools.join(', ')})가 다릅니다.`);
       for (const t of new Set([...fileTools, ...d.tools])) if (!CLAUDE_TOOLS.has(t)) add(k, 'tools', `허용하지 않은 도구입니다: ${t}`);
@@ -201,12 +238,9 @@ export function checkSubagentSet(set: SubagentSet, mock: readonly MockSubagent[]
       if (writes !== d.sandbox.startsWith('worktree 쓰기')) add(k, 'tools', `권한 표시(${d.sandbox})가 도구와 맞지 않습니다. 쓰기·명령 도구가 있으면 「worktree 쓰기」, 없으면 「읽기 전용」입니다.`);
       if (!writes && d.sandbox !== '읽기 전용') add(k, 'tools', '읽기 전용 정의의 권한 표시는 「읽기 전용」입니다.');
     } else {
-      const label = SANDBOX[parsed.sandboxMode ?? ''];
-      if (!label) add(k, 'config-key', `sandbox_mode는 read-only 또는 workspace-write만 씁니다(${parsed.sandboxMode ?? '없음'}).`);
-      else if (!d.sandbox.startsWith(label) || (label === '읽기 전용' && d.sandbox !== label)) add(k, 'tools', `권한 표시(${d.sandbox})가 sandbox_mode(${parsed.sandboxMode ?? ''})와 맞지 않습니다.`);
-      for (const t of d.tools) if (!CODEX_TOOLS.has(t)) add(k, 'tools', `허용하지 않은 도구입니다: ${t}`);
-      if (!d.tools.includes('shell')) add(k, 'tools', 'Codex 정의에는 shell이 있어야 합니다.');
-      if (d.tools.includes('apply_patch') !== (parsed.sandboxMode === 'workspace-write')) add(k, 'tools', 'apply_patch는 workspace-write 정의에만 씁니다.');
+      // 역할 파일은 권한을 줄이지도 넓히지도 못한다. 표시가 그 사실을 말해야 한다(리뷰 P2-1).
+      if (!d.sandbox.startsWith(CODEX_SANDBOX_LABEL) || /읽기 전용|worktree 쓰기/.test(d.sandbox)) add(k, 'tools', `Codex 권한 표시는 「${CODEX_SANDBOX_LABEL}」로 시작하고 읽기 전용·쓰기 권한을 약속하지 않습니다(${d.sandbox}).`);
+      if (d.tools.join(',') !== CODEX_TOOLS.join(',')) add(k, 'tools', `Codex 도구 표시는 물려받는 ${CODEX_TOOLS.join(', ')}입니다(${d.tools.join(', ')}).`);
     }
 
     // Mock과 충돌 지시

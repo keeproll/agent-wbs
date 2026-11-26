@@ -102,7 +102,7 @@
         "Edit",
         "Write"
       ],
-      "sandbox": "worktree 쓰기 (문서만)",
+      "sandbox": "worktree 쓰기 · 문서만(지시문)",
       "allowed": true,
       "ref": "https://code.claude.com/docs/en/sub-agents",
       "file": "claude/doc-editor.v1.md",
@@ -117,11 +117,11 @@
         "shell",
         "apply_patch"
       ],
-      "sandbox": "worktree 쓰기 (검증 실행용)",
+      "sandbox": "부모 세션 권한 상속 · 구현·테스트 수정 금지(지시문)",
       "allowed": true,
       "ref": "https://github.com/openai/codex/tree/main/codex-rs/agent-roles",
       "file": "codex/ac-verifier.v1.toml",
-      "hash": "095739ddc86fa0338eecc85c9a855e94e080a66331a8074ebf0e054ec5453ecb"
+      "hash": "2e532748bd491c4244e901b19c5952ec92ee3918cf8c96430ba22eea4b1179b4"
     },
     {
       "key": "test-author",
@@ -132,11 +132,11 @@
         "shell",
         "apply_patch"
       ],
-      "sandbox": "worktree 쓰기 (테스트만)",
+      "sandbox": "부모 세션 권한 상속 · 테스트만(지시문)",
       "allowed": true,
       "ref": "https://github.com/openai/codex/tree/main/codex-rs/agent-roles",
       "file": "codex/test-author.v1.toml",
-      "hash": "9d44c885cea53ff8d9d0c22a24a77279dcb3ddd6faa2df39fbbd1caac1fc7c06"
+      "hash": "ee8ea3abdeaf2707c46e263bed68ac0ad65843cecebf7db13008b2e3629758b3"
     },
     {
       "key": "security-checker",
@@ -144,13 +144,14 @@
       "agent": "Codex",
       "role": "보안 점검",
       "tools": [
-        "shell"
+        "shell",
+        "apply_patch"
       ],
-      "sandbox": "읽기 전용",
+      "sandbox": "부모 세션 권한 상속 · 수정 금지(지시문)",
       "allowed": true,
       "ref": "https://github.com/openai/codex/tree/main/codex-rs/agent-roles",
       "file": "codex/security-checker.v1.toml",
-      "hash": "5c95c520aebd8f75f3ee9c9b79f36da308faa10041716e136e61bed494fc6345"
+      "hash": "118453d3a627f3cbee47486ff3afee8e74ad23a877dba34050758a84c4ce310f"
     },
     {
       "key": "failure-investigator",
@@ -158,13 +159,14 @@
       "agent": "Codex",
       "role": "실패 원인 조사",
       "tools": [
-        "shell"
+        "shell",
+        "apply_patch"
       ],
-      "sandbox": "읽기 전용",
+      "sandbox": "부모 세션 권한 상속 · 수정 금지(지시문)",
       "allowed": true,
       "ref": "https://github.com/openai/codex/tree/main/codex-rs/agent-roles",
       "file": "codex/failure-investigator.v1.toml",
-      "hash": "8812cd701e2d12fa442aa0db2d41f8048d27f704ce191d34912d20fdeff4f0b3"
+      "hash": "83750c10ed0353dff7cc894336ce80529c30dac50d8cd201161fa46eb41a6ef6"
     }
   ]
 }

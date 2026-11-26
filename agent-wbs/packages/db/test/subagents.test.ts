@@ -41,7 +41,6 @@ function expectRule(s: SubagentSet, rule: SubagentRule) {
 const claude = () => must(set.defs.find((d) => d.agent === 'Claude' && d.sandbox.startsWith('worktree')), 'value');
 const claudeRead = () => must(set.defs.find((d) => d.agent === 'Claude' && d.sandbox === '읽기 전용'), 'value');
 const codex = () => must(set.defs.find((d) => d.agent === 'Codex'), 'value');
-const codexRead = () => must(set.defs.find((d) => d.agent === 'Codex' && d.sandbox === '읽기 전용'), 'value');
 
 describe('실제 하위 Agent v1 정의(M5-06)', () => {
   it('저장소의 정의 묶음은 모든 검사를 통과한다', () => {
@@ -105,7 +104,9 @@ describe('실제 하위 Agent v1 정의(M5-06)', () => {
     expectRule(mutate(claude().key, (d) => { d.text = d.text.replace('\ntools:', '\nhooks: x\ntools:'); }), 'config-key');
     expectRule(mutate(codex().key, (d) => { d.text = `approval_policy = "never"\n${d.text}`; }), 'config-key');
     expectRule(mutate(codex().key, (d) => { d.text = `${d.text}\n[mcp_servers.x]\ncommand = "x"\n`; }), 'config-key');
-    expectRule(mutate(codex().key, (d) => { d.text = d.text.replace('sandbox_mode = "workspace-write"', 'sandbox_mode = "danger-full-access"').replace('sandbox_mode = "read-only"', 'sandbox_mode = "danger-full-access"'); }), 'config-key');
+    // Codex 역할 파일의 sandbox_mode는 적용되지 않는다(부모 권한 상속). 적으면 권한을 보장하는 것처럼 보이므로 거부한다(리뷰 P2-1).
+    for (const mode of ['read-only', 'workspace-write', 'danger-full-access'])
+      expectRule(mutate(codex().key, (d) => { d.text = d.text.replace('developer_instructions = """', `sandbox_mode = "${mode}"\ndeveloper_instructions = """`); }), 'config-key');
   });
 
   it('name: 설치 파일 이름(def_key)으로 안전하지 않은 키를 잡는다', () => {
@@ -130,8 +131,19 @@ describe('실제 하위 Agent v1 정의(M5-06)', () => {
     expectRule(mutate(claude().key, (d) => { d.text = d.text.replace(/^tools: (.*)$/m, 'tools: $1, Agent'); d.tools.push('Agent'); }), 'tools');
     expectRule(mutate(claude().key, (d) => { d.tools = d.tools.filter((t) => t !== 'Grep'); }), 'tools');
     expectRule(mutate(claudeRead().key, (d) => { d.text = d.text.replace(/^tools: (.*)$/m, 'tools: $1, Edit'); d.tools.push('Edit'); }), 'tools');
-    expectRule(mutate(codexRead().key, (d) => { d.tools.push('apply_patch'); }), 'tools');
+    // Claude: tools를 생략하면 부모 도구를 상속한다. 빈 목록과 같게 보면 안 된다(리뷰 P2-2).
+    {
+      const s = mutate(claudeRead().key, (d) => { d.text = d.text.replace(/^tools: .*\n/m, ''); d.tools = []; });
+      expect(rules(s).has('format'), JSON.stringify(checkSubagentSet(s, mock))).toBe(false);
+      expectRule(s, 'tools');
+    }
+    expectRule(mutate(claudeRead().key, (d) => { d.text = d.text.replace(/^tools: .*$/m, 'tools:'); d.tools = []; }), 'tools');
+    // Codex: 역할 파일로 도구·권한을 줄일 수 없다. 표시는 「부모 세션 권한 상속」이어야 하고 「읽기 전용」을 약속하면 안 된다(리뷰 P2-1).
     expectRule(mutate(codex().key, (d) => { d.sandbox = '읽기 전용'; }), 'tools');
+    expectRule(mutate(codex().key, (d) => { d.sandbox = 'worktree 쓰기'; }), 'tools');
+    expectRule(mutate(codex().key, (d) => { d.sandbox = '부모 세션 권한 상속 · 읽기 전용'; }), 'tools');
+    expectRule(mutate(codex().key, (d) => { d.sandbox = '전체 권한'; }), 'tools');
+    expectRule(mutate(codex().key, (d) => { d.tools = ['shell']; }), 'tools');
   });
 
   it('mock-text: Mock 정의 이름을 그대로 쓰거나 Mock 문장을 옮겨 오면 잡는다', () => {
@@ -163,5 +175,17 @@ describe('실제 하위 Agent v1 정의(M5-06)', () => {
   it('format: Codex TOML이 허용한 모양(문자열 키와 """ 여러 줄 문자열)이 아니면 잡는다', () => {
     expectRule(mutate(codex().key, (d) => { d.text = d.text.replace('맡은 일', '맡은 \\t일'); }), 'format');
     expectRule(mutate(claude().key, (d) => { d.text = d.text.replace(/^---\n/, ''); }), 'format');
+  });
+
+  it('format: 실제 YAML·TOML 구문 분석기가 거부할 값을 잡는다(리뷰 P2-3)', () => {
+    // YAML: 따옴표 없는 값 안의 「: 」는 mapping values are not allowed here 오류다.
+    expectRule(mutate(claude().key, (d) => { d.text = d.text.replace(/^description: .*$/m, 'description: 역할: 화면 구현'); }), 'format');
+    for (const bad of ['"따옴표', "'작은따옴표", '- 목록', '[대괄호', '{중괄호', '&앵커', '*별표', '!태그', '|블록', '>접기', '%지시', '@예약', '`예약', '#주석', '값 #주석', '끝이 콜론:', '제어\u0001문자'])
+      expectRule(mutate(claude().key, (d) => { d.text = d.text.replace(/^description: .*$/m, `description: ${bad}`); }), 'format');
+    // TOML: 여러 줄 문자열 본문 안의 """는 문자열을 먼저 끝낸다.
+    expectRule(mutate(codex().key, (d) => { d.text = d.text.replace('맡은 일', '맡은 일\n- 출력 예: """hello"""'); }), 'format');
+    expectRule(mutate(codex().key, (d) => { d.text = d.text.replace('맡은 일', '맡은 일 """ 끝'); }), 'format');
+    // TOML 기본 문자열은 탭 밖의 제어 문자를 받지 않는다.
+    expectRule(mutate(codex().key, (d) => { d.text = d.text.replace('맡은 일', '맡은\u0001일'); }), 'format');
   });
 });
