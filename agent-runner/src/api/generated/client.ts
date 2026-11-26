@@ -49,6 +49,7 @@ export type ClaimedJob = {
       taskKey: TaskKey;
       subjectHash: Sha256;
       content: JudgedContent;
+      gradeChange?: Uuid | null;
     })[];
     policy: Record<string, unknown>;
     proposal: {
@@ -98,6 +99,7 @@ export type ClaimedJob = {
       taskKey: TaskKey;
       subjectHash: Sha256;
       content: JudgedContent;
+      gradeChange?: Uuid | null;
     })[];
     policy: EstimatePolicy;
   };
@@ -111,6 +113,7 @@ export type ClaimedJob = {
       taskKey: TaskKey;
       subjectHash: Sha256;
       content: JudgedContent;
+      gradeChange?: Uuid | null;
     })[];
     policy: Record<string, unknown>;
   };
@@ -230,6 +233,7 @@ export type ErrorResponse = {
 
 export type EstimatePolicy = {
   rejudge?: RejudgeRequest;
+  gradeChange?: Uuid;
 };
 
 export type GithubMode = "gh" | "token";
@@ -685,7 +689,7 @@ export type PlanningSplitProposalOp = {
 export type QueueStatus = "waiting_verify" | "queued" | "checking" | "merged" | "failed" | "removed";
 
 export type RejudgeRequest = {
-  reason: "model_disallowed" | "floor_changed" | "subagent_disallowed";
+  reason: "model_disallowed" | "floor_changed" | "subagent_disallowed" | "grade_changed";
   trigger: string;
   targets: ({
     taskKey: TaskKey;
@@ -725,6 +729,8 @@ export type StepStatus = "wait" | "run" | "done" | "fail";
 export type TaskKey = string;
 
 export type Timestamp = string;
+
+export type Uuid = string;
 
 export type WorkType = "Analysis" | "Design" | "Implementation" | "Configuration" | "Test" | "Verification" | "Documentation" | "Integration";
 
@@ -825,7 +831,7 @@ export interface Operations {
       body: {
         at: Timestamp;
         items: ({
-          key: "claude" | "codex" | "git" | "node" | "pnpm" | "pg" | "repo" | "disk" | "subs" | "obs" | "gh" | "lfs";
+          key: "claude" | "codex" | "git" | "node" | "pnpm" | "pg" | "repo" | "disk" | "subs" | "obs" | "gh" | "lfs" | "reports";
           status: "ok" | "warn" | "fail";
           detail: string;
           fix?: string;

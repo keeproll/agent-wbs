@@ -34,11 +34,14 @@ export async function reportHost(repo: RunnerRepository, body: HostBody) {
 
 type ConcurrencyBody = Parameters<RunnerRepository['saveConcurrency']>[1] & { at: string; sessions: { attemptId: string; observed: number; reserved: number; state: 'ok' | 'unconfirmed' }[] };
 export async function reportConcurrency(repo: RunnerRepository, b: ConcurrencyBody) {
+  if (b.running.Claude + b.running.Codex > 2147483647) throw new PlatformError('VALIDATION_FAILED', {}, [
+    { path: 'running', rule: 'maximum', message: '동시 실행 수의 합은 2147483647 이하여야 합니다.' },
+  ]);
   await repo.lock();
   const config = await caps(repo);
   if (b.limit > config.caps.total) throw new PlatformError('LIMIT_EXCEEDS_CAP');
   const registered = (await repo.observations()).map(r => ({ cli: r.cli, version: r.version, model: r.model, options: r.options, grade: fromDb(OBSERVATION_GRADE, r.grade) }));
-  for (const s of b.sessions) {
+  for (const [index, s] of b.sessions.entries()) {
     const a = await repo.attempt(s.attemptId);
     if (!a || a.status !== 'running') throw new PlatformError('ATTEMPT_CLOSED');
     const hold = await repo.hold(a.job);
@@ -49,6 +52,10 @@ export async function reportConcurrency(repo: RunnerRepository, b: ConcurrencyBo
     const prior = await repo.latestObservation(a.id);
     const state = prior?.state === 'unconfirmed' ? 'unconfirmed' : s.state;
     const reserved = heldSubagents({ grade, state, observed: s.observed, budget: config.budget[a.kind === 'dev' || a.kind === 'rework' ? 'dev' : 'qa'], previousHeld: prior?.reserved ?? Math.max(0, hold.slots - 1) });
+    // 슬롯에는 실행 중인 세션 자신도 1개 더해 저장한다.
+    if (hold.slot_state !== 'none' && reserved >= 2147483647) throw new PlatformError('VALIDATION_FAILED', {}, [
+      { path: `sessions.${String(index)}.observed`, rule: 'maximum', message: '세션 자신을 포함한 슬롯 수는 2147483647 이하여야 합니다.' },
+    ]);
     await repo.saveObservation(hold, a.agent, conditions.version, OBSERVATION_GRADE[grade], s.observed, reserved, state, b.at);
   }
   await repo.saveConcurrency(config.host.host_id, b);

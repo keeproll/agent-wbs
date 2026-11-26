@@ -9,6 +9,7 @@ pnpm -C agent-wbs env:init          # .env 생성(무작위 DB 비밀번호, 커
 docker compose -p awbs -f agent-wbs/compose.yaml up -d --wait postgres
 pnpm -C agent-wbs install --frozen-lockfile
 pnpm -C agent-wbs db:migrate
+pnpm -C agent-wbs --filter @awbs/db seed:system # 필수 기본 설정을 넣음. 없으면 Runner 상태를 읽을 수 없음
 pnpm -C agent-wbs dev               # web 127.0.0.1:5173, api 127.0.0.1:3100
 ```
 

@@ -10,7 +10,7 @@ import { lockGraph, LEAD, TIMESTAMP_MESSAGE } from '../tasks/write.ts';
 import { applyEvaluation, JudgementDrift } from './apply.ts';
 import { stripJudgements } from './content.ts';
 import { evaluate, type Evaluation } from './evaluate.ts';
-import { assertJob, requestJudgement } from './jobs.ts';
+import { assertGradeChange, assertJob, requestJudgement } from './jobs.ts';
 import { clientOf, CP_COLUMNS, event, idOf, inputOf, insertCp, loadCp, proposalView, type CpRow } from './proposals.ts';
 import { recordReplan, scheduleView } from './schedule.ts';
 import { registerSessionRoutes } from './sessions.ts';
@@ -307,11 +307,13 @@ export function registerPlanningRoutes(app: FastifyInstance, pool: Pool): void {
       const errors = body.items.flatMap((item, index) => (item.loHours <= item.estHours && item.estHours <= item.hiHours ? []
         : [{ path: `items.${String(index)}`, rule: 'estimateBounds', message: '추정은 낙관 ≤ 예상 ≤ 비관이어야 합니다.' }]));
       if (errors.length) throw new TaskError('VALIDATION_FAILED', {}, errors);
-      await assertJob(client, body.jobId, body.fence);
+      const job = await assertJob(client, body.jobId, body.fence);
       const projectId = await projectOf(client);
+      await lockGraph(client, projectId);
       for (const item of body.items) {
         const task = (await client.query<{ id: string; status: string }>('select id,status::text as status from tasks where task_key=$1 and deleted_at is null for update', [item.taskKey])).rows[0];
         if (!task) throw new TaskError('TASK_NOT_FOUND', { taskKey: item.taskKey });
+        await assertGradeChange(client, job.payload, task.id);
         // 완료 Task의 추정은 바꾸지 않는다(P TASK-0012 「완료 Task 거부」). 계약에 전용 코드가 없어 상태 불일치로 답한다.
         if (task.status === 'done') throw new TaskError('INVALID_TRANSITION', { taskKey: item.taskKey, status: task.status }, [], '완료된 Task는 다시 추정하지 않습니다.');
         await client.query('insert into task_estimates(project_id,task,est,lo,hi,tokens_k,confidence,basis,agreed_by) values($1,$2,$3,$4,$5,$6,$7,$8,$9)',
@@ -319,6 +321,7 @@ export function registerPlanningRoutes(app: FastifyInstance, pool: Pool): void {
         await client.query(`insert into task_history(project_id,at,actor,task,kind,text,after,ref)
           values($1,greatest(clock_timestamp(),(select updated_at+interval '1 microsecond' from tasks where id=$2)),$3,$2,'추정',$4,$5::jsonb,'{"field":"estimate"}'::jsonb)`,
         [projectId, task.id, PLANNING, `추정 ${String(item.estHours)}h (${String(item.loHours)}~${String(item.hiHours)}h, 신뢰도 ${item.confidence})`, JSON.stringify({ est: item.estHours, lo: item.loHours, hi: item.hiHours })]);
+        await client.query('update tasks set updated_at=clock_timestamp() where id=$1', [task.id]);
         deferChange(client, projectId, 'task', { taskKey: item.taskKey });
       }
       // 추정이 바뀌면 일정이 바뀐다. 임계값 이상 어긋나면 재조정을 같은 트랜잭션에 기록한다.

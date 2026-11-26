@@ -2,12 +2,13 @@ import type { PoolClient } from '@awbs/db';
 import { checkSplit, splitExceptionProblem, type JudgedRules } from '@awbs/shared';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { TaskError } from '../tasks/errors.ts';
-import { judgedContent, subjectHash, type JudgedSource } from '../tasks/hash.ts';
+import { subjectHash, type JudgedSource } from '../tasks/hash.ts';
 import { taskDetail, type TaskDetail } from '../tasks/read.ts';
 import { assertEditable, assertVersion, changed, LEAD, lockTask, record, touch, type LockedTask } from '../tasks/write.ts';
 import { ApiError } from '../changes/http.ts';
 import { applyRegrade } from '../policy/service.ts';
-import { assertJob } from './jobs.ts';
+import { judgedTasks } from '../policy/judged.ts';
+import { assertGradeChange, assertJob } from './jobs.ts';
 import { clientOf } from './proposals.ts';
 import { loadSnapshot } from './snapshot.ts';
 
@@ -51,17 +52,18 @@ export function registerSplitRoutes(route: RouteFn, epochOf: (request: FastifyRe
       throw new TaskError('INVALID_TRANSITION', { taskKey: task.task_key, status: task.status }, [], '이미 시작한 Task는 분할하지 않습니다. 예외 사유를 기록하거나 남은 일을 후속 Task로 제안하세요.');
     }
     const detail = await detailOf(client, task.task_key);
-    const source = sourceOf(detail);
-    const hash = subjectHash(source);
-    // 같은 내용(hash)의 열린 분할 job이 있으면 그 job을 돌려준다. 내용이 바뀌면 새 job이다.
-    const key = `split:${task.task_key}:${hash}`;
+    const tasks = await judgedTasks(client, [task.id]);
+    const hash = subjectHash(sourceOf(detail));
+    // 내용이나 등급이 바뀌면 옛 판단을 받지 않으므로 새 분할 job이 필요하다.
+    const marker = tasks[0]?.gradeChange;
+    const key = `split:${task.task_key}:${hash}${marker ? `:${marker}` : ''}`;
     await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [key]);
     const existing = (await client.query<{ id: string | null; n: number }>(
       "select (array_agg(id order by created_at desc) filter (where state::text=any($2)))[1] as id,count(*)::int as n from runner_jobs where dedup_key like $1",
       [`${key}:%`, OPEN])).rows[0];
     if (existing?.id) return reply.code(202).send({ jobId: existing.id });
     const settings = (await client.query<{ split: unknown }>('select split from app_settings where singleton')).rows[0]?.split ?? null;
-    const payload = { tasks: [{ taskKey: task.task_key, subjectHash: hash, content: judgedContent(source) }], policy: { split: settings }, proposal: null };
+    const payload = { tasks, policy: { split: settings }, proposal: null };
     const jobId = (await client.query<{ id: string }>(
       "insert into runner_jobs(project_id,kind,payload,state,epoch,dedup_key) values($1,'split',$2::jsonb,'queued',$3,$4) returning id",
       [task.project_id, JSON.stringify(payload), epochOf(request), `${key}:${String((existing?.n ?? 0) + 1)}`])).rows[0]?.id;
@@ -109,6 +111,7 @@ export function registerSplitRoutes(route: RouteFn, epochOf: (request: FastifyRe
     if (duplicates.length) throw new TaskError('VALIDATION_FAILED', {}, duplicates);
     const job = await assertJob(client, body.jobId, body.fence);
     const task = await lockTask(client, keyOf(request));
+    await assertGradeChange(client, job.payload, task.id);
     // 등급 재판단 작업(M2-08 requestRejudge가 만든 estimate job의 policy.rejudge)의 대상 역할이면 결과를 applyRegrade로 저장한다(G§7.2, D-29).
     const rejudgeRoles = ((job.payload as { policy?: { rejudge?: { targets?: { taskKey: string; roles: string[] }[] } } } | null)?.policy?.rejudge?.targets ?? [])
       .find((target) => target.taskKey === task.task_key)?.roles ?? [];
@@ -137,9 +140,9 @@ export function registerSplitRoutes(route: RouteFn, epochOf: (request: FastifyRe
     }
     for (const role of ['dev', 'qa'] as const) {
       const grade = body.grades[role];
-      const current = (await client.query<{ model_id: string; effort: string; locked: boolean }>('select model_id,effort,locked from task_grades where task=$1 and role=$2 for update', [task.id, role])).rows[0];
+      const current = (await client.query<{ model_id: string; effort: string; reason: string; locked: boolean }>('select model_id,effort,reason,locked from task_grades where task=$1 and role=$2 for update', [task.id, role])).rows[0];
       // 팀장이 고정한 등급은 Planning 판단으로 바꾸지 않는다(G§7.1).
-      if (current?.locked || (current?.model_id === grade.modelId && current.effort === grade.effort)) continue;
+      if (current?.locked || (current?.model_id === grade.modelId && current.effort === grade.effort && current.reason === grade.reason)) continue;
       if (rejudgeRoles.includes(role)) {
         // 허용·매핑·최저선을 검사하고 이전→이후 등급을 「실행 등급」 이력에 남긴다(M2-08). 오류는 이 범위의 TaskError로 바꿔 답한다.
         try {

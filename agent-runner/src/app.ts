@@ -406,13 +406,13 @@ export class RunnerApp {
   }
 }
 
-/**
- * M4-01 보고 거부 기록을 readiness 경고로 붙인다.
- * [미정] 계약의 readiness key 목록에 거부 기록 전용 키가 없다(plan-pending). 키가 정해지면 이 함수만 바꾼다.
- */
+/** 보고 거부는 별도 경고로 보낸다(contracts §1.2). 다른 준비 실패를 덮어쓰지 않는다. */
 export function withRejectionWarnings(body: ReadinessReport, warnings: readonly string[]): ReadinessReport {
-  void warnings;
-  return body;
+  return { ...body, items: [...body.items.filter(item => item.key !== 'reports'), {
+    key: 'reports', status: warnings.length ? 'warn' : 'ok',
+    detail: warnings.length ? warnings.join('\n') : '보고 거부 기록 없음',
+    fix: warnings.length ? 'Runner의 거부 기록을 확인하고 원인을 해결하세요.' : '',
+  }] };
 }
 
 function message(error: unknown): string {

@@ -34,7 +34,9 @@ export interface ReadinessDeps {
   verifiedObservations?: { agent: Agent; version: string; model: string; options: string }[] | undefined;
 }
 
-const KEYS: ReadinessKey[] = ['claude', 'codex', 'git', 'node', 'pnpm', 'pg', 'repo', 'disk', 'subs', 'obs', 'gh', 'lfs'];
+// reports는 로컬 도구 점검이 아니라 RunnerApp이 거부 기록으로 채운다.
+type EnvironmentKey = Exclude<ReadinessKey, 'reports'>;
+const KEYS: EnvironmentKey[] = ['claude', 'codex', 'git', 'node', 'pnpm', 'pg', 'repo', 'disk', 'subs', 'obs', 'gh', 'lfs'];
 /** P `recCap`의 DISK_LOW 기준 */
 const DISK_WARN_GB = 50;
 /** 이보다 적으면 clone·설치가 실패할 가능성이 커서 멈춘다 [결정] */
@@ -180,7 +182,7 @@ export async function checkReadiness(d: ReadinessDeps, now: Date): Promise<Readi
     delete rest.version;
     return rest;
   };
-  const checks: Record<ReadinessKey, () => Promise<Check>> = {
+  const checks: Record<EnvironmentKey, () => Promise<Check>> = {
     claude: () => claude(d, versions),
     codex: () => codex(d, versions),
     git: () => strip(tool(d, d.bins.git, ['--version'], 'git', 'fail', 'git을 설치하세요.')),
@@ -195,7 +197,7 @@ export async function checkReadiness(d: ReadinessDeps, now: Date): Promise<Readi
     gh: () => strip(tool(d, d.bins.gh, ['--version'], 'GitHub CLI(gh)', 'warn', 'gh 로그인 방식을 쓰려면 gh를 설치하세요.')),
     lfs: () => strip(tool(d, d.bins.git, ['lfs', 'version'], 'git-lfs', 'warn', 'LFS 파일이 있는 저장소를 쓰려면 git-lfs를 설치하세요.')),
   };
-  const runCheck = async (key: ReadinessKey): Promise<ReadinessItem> => {
+  const runCheck = async (key: EnvironmentKey): Promise<ReadinessItem> => {
     try {
       return { key, ...(await checks[key]()) };
     } catch (e) {
