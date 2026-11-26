@@ -197,6 +197,26 @@ const output = {
   verify: Type.String(),
   delivered: Type.Boolean(),
 };
+/**
+ * 재판단 요청(M2-08, G§7.2·D-29). 허용 해제·최저선 변경·하위 Agent 해제로 Planning Agent가 등급·하위 Agent 지정을
+ * 다시 판단해야 할 때 estimate job의 `policy.rejudge`에 싣는다. job payload 자체는 기존 estimate 모양 그대로다.
+ * - reason: model_disallowed(허용 해제) / floor_changed(최저선 변경) / subagent_disallowed(하위 Agent 해제)
+ * - trigger: 팀장 화면·이력에 보이는 사유 문구
+ * - targets: 다시 판단할 Task와 역할(dev·qa). payload `tasks`에도 같은 Task가 현재 내용·hash와 함께 있다.
+ */
+export const RejudgeRequest = Type.Object(
+  {
+    reason: AnyOf('model_disallowed', 'floor_changed', 'subagent_disallowed'),
+    trigger: Type.String({ minLength: 1 }),
+    targets: List(Type.Object({ taskKey: c.TaskKey, roles: List(c.RunRole, { minItems: 1, uniqueItems: true }) }, { additionalProperties: false }), { minItems: 1 }),
+  },
+  { title: 'RejudgeRequest', additionalProperties: false },
+);
+/** estimate job의 정책 묶음. 재판단이면 rejudge가 있다. 그 밖의 정책 값은 자유 형식(기존 계약 c.Json과 호환). */
+export const EstimatePolicy = Type.Object(
+  { rejudge: Type.Optional(RejudgeRequest) },
+  { title: 'EstimatePolicy', additionalProperties: true },
+);
 /** 규칙 5·7·9의 판단 대상이자 subjectHash 계산 대상(data-model §2.3-1). 범위를 늘리거나 줄이지 않는다. */
 export const JudgedContent = Type.Object(
   {
@@ -532,9 +552,14 @@ export const Decision = Type.Object(
     by: Type.String(),
     at: c.Timestamp,
     updatedAt: c.Timestamp,
+    // 조건부 선호에서 만든 결정: 원래 제약과 Planning의 조건 충족 판단(근거는 reason)
+    constraintId: Opt(Nullable(c.Id)),
+    conditionResult: Opt(Nullable(AnyOf('met', 'not_met'))),
   },
   { title: 'Decision' },
 );
+/** 조건부 선호 하나의 조건 충족 판단(G§4.12). 근거는 공백 아닌 문장 */
+export const ConditionJudgement = { constraintId: c.Id, result: AnyOf('met', 'not_met'), reason: Text };
 export const TechProposal = {
   area: Text,
   title: Text,
@@ -711,7 +736,7 @@ const registered = {
   repo: obj({ url: c.RepoUrl, owner: Str, name: Str, branch: AnyOf('main'), baseCommit: Nullable(c.Sha) }),
   targetDate: MaybeDate,
   instruction: Str,
-  constraints: List(obj({ name: Str, level: AnyOf('must', 'cond', 'ban'), condition: Str })),
+  constraints: List(obj({ id: c.Id, name: Str, level: AnyOf('must', 'cond', 'ban'), condition: Str })),
   registeredAt: c.Timestamp,
   inputs: List(
     obj({
@@ -737,6 +762,8 @@ const registered = {
       ),
     }),
   ),
+  /** 입력 사슬의 끝: Runner가 마지막으로 보고한 main 끝 커밋(처음에는 등록 커밋). 「이 버전으로 분석」은 이 커밋으로 고정한다. */
+  inputHead: c.Sha,
   inputJob: Nullable(obj({ ...jobView(...INPUT_STEPS), version: Type.Integer({ minimum: 1 }), proposalId: Nullable(c.Id) })),
   updatedAt: c.Timestamp,
 };

@@ -202,6 +202,9 @@ importers:
       '@awbs/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@fastify/ajv-compiler':
+        specifier: 4.0.8
+        version: 4.0.8
       fastify:
         specifier: 5.12.8
         version: 5.12.8

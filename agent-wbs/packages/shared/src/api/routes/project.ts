@@ -121,7 +121,7 @@ const project = [
     id: 'analyzeInputs',
     method: 'POST',
     path: '/api/project/inputs',
-    summary: '「이 버전으로 분석」. commits는 팀장이 확인한 목록',
+    summary: '「이 버전으로 분석」. commits는 팀장이 확인한 대기 커밋 목록, commit은 조회의 inputHead(입력 사슬 끝)',
     body: Body({
       ...V,
       commit: c.Sha,
@@ -129,7 +129,7 @@ const project = [
       instr: Opt(Type.String()),
     }),
     responses: jobCreated,
-    errors: ['INPUT_UNCHANGED', 'CLEANUP_PENDING'],
+    errors: ['INPUT_UNCHANGED', 'CLEANUP_PENDING', 'INVALID_TRANSITION'],
   }),
   operation({
     ...byBody,
@@ -139,6 +139,7 @@ const project = [
     summary: '「분석 안 함」',
     body: Body({ ...V, commits: List(c.Sha, { minItems: 1, uniqueItems: true }) }),
     responses: { 204: null },
+    errors: ['INVALID_TRANSITION'],
   }),
   operation({
     ...byBody,
@@ -148,6 +149,23 @@ const project = [
     summary: '차이 분석 다시 시도(끝난 단계는 건너뜀). version은 실패한 입력 버전',
     body: Body({ ...V, version: Revision }),
     responses: jobCreated,
+    errors: ['INVALID_TRANSITION', 'CLEANUP_PENDING'],
+  }),
+  operation({
+    ...byBody,
+    id: 'recheckInputs',
+    method: 'POST',
+    path: '/api/project/inputs/recheck',
+    /*
+     * 입력 이력 재작성 경고(alerts key=input_history_rewritten)의 「복구 확인·입력 확인 다시 시도」(조정자 결정 2026-11-26).
+     * owner가 정상 merge·복원 커밋으로 마지막 입력 커밋을 새 main의 조상으로 되돌린 뒤 팀장이 누른다.
+     * 서버는 Runner 정책의 inputRecheck를 1 올린다. Runner는 그 값이 바뀌면 조상 관계를 다시 관측해 보고한다.
+     * 경고는 이 요청이 아니라 서버가 유효한 입력 보고를 받아들이는 트랜잭션에서 해소된다. 재작성 이력을 자동으로 받거나 옛 입력 버전을 지우지 않는다.
+     * 열린 재작성 경고가 없으면 409 INVALID_TRANSITION.
+     */
+    summary: '입력 이력 재작성 복구 확인·입력 확인 다시 시도',
+    body: Body({ ...V }),
+    responses: { 202: Type.Object({ inputRecheck: c.Count }) },
     errors: ['INVALID_TRANSITION'],
   }),
   operation({
@@ -194,7 +212,7 @@ const project = [
             actor: Type.String(),
             deletedTaskCount: c.Count,
             keepSettings: Type.Boolean(),
-            runnerCleanupStatus: AnyOf('none', 'pending', 'running', 'failed'),
+            runnerCleanupStatus: AnyOf('none', 'pending', 'running', 'done', 'failed'),
             finishedAt: Nullable(c.Timestamp),
           }),
         ),

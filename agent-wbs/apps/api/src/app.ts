@@ -4,11 +4,22 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyServerOpt
 import { randomUUID } from 'node:crypto';
 import { platformErrorBody } from './platform/errors.ts';
 import { installSecurity, type SecurityOptions } from './platform/security.ts';
+import { buildValidator, validateTransport } from './platform/validation.ts';
+import { registerPlanningRoutes } from './planning/routes.ts';
+import { registerTaskRoutes } from './tasks/routes.ts';
+import { installExecution, type ExecutionOptions } from './execution/routes.ts';
+import { registerChangeRoutes } from './changes/routes.ts';
+import { registerMessageRoutes } from './messages/routes.ts';
+import { registerPolicyRoutes } from './policy/routes.ts';
+import { registerProjectRoutes } from './project/routes.ts';
+import { DATA_ROOT } from './reset/files.ts';
+import { registerResetRoutes } from './reset/routes.ts';
 
 export function buildApp(pool: Pool, logger: FastifyServerOptions['logger'] = false,
-  security: SecurityOptions = { origin: 'http://127.0.0.1:3100', lan: false }): FastifyInstance {
+  security: SecurityOptions = { origin: 'http://127.0.0.1:3100', lan: false }, execution: ExecutionOptions = {}): FastifyInstance {
   const app = Fastify({
     logger,
+    schemaController: { compilersFactory: { buildValidator } },
     clientErrorHandler: (error, socket) => {
       app.log.warn({ err: error }, 'client error');
       if (!socket.writable) return;
@@ -19,7 +30,17 @@ export function buildApp(pool: Pool, logger: FastifyServerOptions['logger'] = fa
       void reply.code(400).send(platformErrorBody('VALIDATION_FAILED', request.id));
     },
   });
+  app.addHook('preHandler', validateTransport);
   installSecurity(app, pool, security);
+  registerTaskRoutes(app, pool);
+  installExecution(app, pool, execution);
+  registerChangeRoutes(app, pool);
+  registerMessageRoutes(app, pool);
+  registerPolicyRoutes(app, pool);
+  registerPlanningRoutes(app, pool);
+  registerProjectRoutes(app, pool);
+  // Evidence 저장·내보내기·파일 삭제가 같은 루트를 쓴다(M2 통합: M2-06 evidenceRoot와 M2-04 dataRoot 통일).
+  registerResetRoutes(app, pool, execution.dataRoot ?? DATA_ROOT);
 
   app.get('/health', (): HealthResponse => ({ status: 'ok' }));
 

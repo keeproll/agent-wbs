@@ -99,7 +99,7 @@ export type ClaimedJob = {
       subjectHash: Sha256;
       content: JudgedContent;
     })[];
-    policy: Record<string, unknown>;
+    policy: EstimatePolicy;
   };
 } | {
   id: Id;
@@ -202,6 +202,8 @@ export type Decision = {
   by: string;
   at: Timestamp;
   updatedAt: Timestamp;
+  constraintId?: Id | null;
+  conditionResult?: "met" | "not_met" | null;
 };
 
 export type DepType = "FS" | "SS";
@@ -224,6 +226,10 @@ export type ErrorResponse = {
     details: Record<string, unknown>;
     requestId: string;
   };
+};
+
+export type EstimatePolicy = {
+  rejudge?: RejudgeRequest;
 };
 
 export type GithubMode = "gh" | "token";
@@ -677,6 +683,15 @@ export type PlanningSplitProposalOp = {
 };
 
 export type QueueStatus = "waiting_verify" | "queued" | "checking" | "merged" | "failed" | "removed";
+
+export type RejudgeRequest = {
+  reason: "model_disallowed" | "floor_changed" | "subagent_disallowed";
+  trigger: string;
+  targets: ({
+    taskKey: TaskKey;
+    roles: (RunRole)[];
+  })[];
+};
 
 export type ReplanSummary = {
   replanId: string;
@@ -1177,29 +1192,41 @@ export interface Operations {
       204: undefined;
     };
   };
-  /** 입력 경로를 바꾼 main 커밋 보고 */
+  /** 입력 변경 보고(비교 후 갱신). base가 서버의 입력 head와 다르면 409와 현재 head */
   reportInputChanges: {
     request: {
       body: {
+        base: Sha;
+        head: Sha;
+        baseIsAncestor: boolean;
+        treeHash: Sha;
+        changes: ({
+          status: "A" | "M" | "D" | "R" | "T";
+          path: RepoPath;
+          from?: RepoPath;
+          oldBlob: Sha | null;
+          newBlob: Sha | null;
+          oldMode: string | null;
+          newMode: string | null;
+          added: number;
+          deleted: number;
+        })[];
         commits: ({
           sha: Sha;
           at: Timestamp;
           author: string;
           message: string;
         })[];
-        files: ({
-          commitSha: Sha;
-          path: RepoPath;
-          change: "added" | "modified" | "deleted";
-          added: number;
-          deleted: number;
-        })[];
       };
       epoch: number;
       idempotencyKey: string;
     };
     responses: {
-      204: undefined;
+      200: {
+        head: Sha;
+        recorded: boolean;
+        historyRewritten: boolean;
+      };
     };
   };
   /** 저장소 접근·private·main 커밋·필수 구조 */
@@ -1458,6 +1485,7 @@ export interface Operations {
         };
         heartbeatSeconds: number;
         inputCheckMinutes: number;
+        inputRecheck: number;
         ci: {
           nightAt: string;
           retry: number;
@@ -1806,7 +1834,7 @@ export interface Operations {
       202: ReplanSummary;
     };
   };
-  /** 초기 WBS 초안 등록(승인 전 WBS 미반영) */
+  /** 초기 WBS 초안 등록(승인 전 WBS 미반영). 현재 실행 job만 받는다 */
   submitDraft: {
     request: {
       params: {
@@ -1930,7 +1958,7 @@ export interface Operations {
       };
     };
   };
-  /** 기술 결정 제안(근거·대안) */
+  /** 기술 결정 제안(근거·대안)과 조건부 선호별 조건 충족 판단. 등록한 조건부 제약마다 판단이 정확히 하나 필요 */
   submitTechProposals: {
     request: {
       params: {
@@ -1944,6 +1972,11 @@ export interface Operations {
           choice: string;
           reason: string;
           alternatives: string;
+        })[];
+        conditionJudgements?: ({
+          constraintId: Id;
+          result: "met" | "not_met";
+          reason: string;
         })[];
       };
       epoch: number;
@@ -2218,7 +2251,7 @@ export const OPERATIONS = {
   reportAttemptResult: { method: 'POST', path: '/api/runner/attempts/{attemptId}/result', content: 'json', statuses: { 201: false } },
   uploadEvidence: { method: 'POST', path: '/api/runner/attempts/{attemptId}/evidence', content: 'multipart', statuses: { 201: true } },
   reportSubagentUsage: { method: 'POST', path: '/api/runner/attempts/{attemptId}/subagent-usage', content: 'json', statuses: { 204: false } },
-  reportInputChanges: { method: 'POST', path: '/api/runner/input-changes', content: 'json', statuses: { 204: false } },
+  reportInputChanges: { method: 'POST', path: '/api/runner/input-changes', content: 'json', statuses: { 200: true } },
   reportRepoCheck: { method: 'POST', path: '/api/runner/repo-checks/{id}/result', content: 'json', statuses: { 204: false } },
   reportBootstrapProgress: { method: 'POST', path: '/api/runner/bootstrap/{jobId}/progress', content: 'json', statuses: { 204: false } },
   startCiRun: { method: 'POST', path: '/api/runner/ci/runs', content: 'json', statuses: { 201: true } },

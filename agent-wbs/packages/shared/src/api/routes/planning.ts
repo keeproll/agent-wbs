@@ -18,7 +18,8 @@ export const planningOperations = [
     summary: 'Task별 추정 등록·재추정(완료 Task 거부)',
     body: Body({ ...Job, items: List(Body({ taskKey: c.TaskKey, ...m.Estimate }), { minItems: 1 }) }),
     responses: { 200: Type.Object({ replan: Opt(m.ReplanSummary) }) },
-    errors: ['TASK_NOT_FOUND'],
+    // 완료 Task의 추정은 409 INVALID_TRANSITION이고 묶음 전체를 저장하지 않는다(M2-07 리뷰 F7, contracts §1.1 상태 오류).
+    errors: ['TASK_NOT_FOUND', 'INVALID_TRANSITION'],
   }),
   operation({
     ...planning,
@@ -44,21 +45,23 @@ export const planningOperations = [
     id: 'submitDraft',
     method: 'POST',
     path: '/api/planning/bootstrap/:jobId/draft',
-    summary: '초기 WBS 초안 등록(승인 전 WBS 미반영)',
+    summary: '초기 WBS 초안 등록(승인 전 WBS 미반영). 현재 실행 job만 받는다',
     body: Body({
       fence: c.Fence,
       ...m.WbsDraft,
     }),
     responses: { 201: Type.Object({ revision: Type.Integer({ minimum: 1 }) }) },
+    errors: ['INVALID_TRANSITION', 'EXTERNAL_WRITE_BLOCKED'],
   }),
   operation({
     ...planning,
     id: 'submitTechProposals',
     method: 'POST',
     path: '/api/planning/bootstrap/:jobId/tech',
-    summary: '기술 결정 제안(근거·대안)',
-    body: Body({ fence: c.Fence, decisions: List(Body(m.TechProposal)) }),
+    summary: '기술 결정 제안(근거·대안)과 조건부 선호별 조건 충족 판단. 등록한 조건부 제약마다 판단이 정확히 하나 필요',
+    body: Body({ fence: c.Fence, decisions: List(Body(m.TechProposal)), conditionJudgements: Opt(List(Body(m.ConditionJudgement))) }),
     responses: { 201: null },
+    errors: ['INVALID_TRANSITION', 'EXTERNAL_WRITE_BLOCKED'],
   }),
   operation({
     ...planning,

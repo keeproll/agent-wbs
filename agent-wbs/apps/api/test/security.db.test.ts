@@ -16,7 +16,13 @@ const appUrl = new URL(dbUrl);
 appUrl.searchParams.set('options', '-c role=awbs_app');
 const pool = createPool(appUrl.href, { max: 8, onError: () => undefined });
 const app = buildApp(pool, false, { origin, lan: false });
-const runnerOps = OPERATIONS.filter((op) => op.principal === 'runner');
+// 대역은 아직 실제 업무 경로가 없는 Runner 계약 경로에만 둔다. 실제 경로(M2-07 Planning 등)와 겹치면 Fastify가 중복 선언으로 기동을 거부한다.
+// 플러그인(app.register)으로 등록한 경로는 ready 뒤에야 hasRoute에 보이므로 별도 앱을 띄워 확인한다(M2-07 방식).
+const probe = buildApp(pool, false, { origin, lan: false });
+await probe.ready();
+const implemented = OPERATIONS.filter((op) => op.principal === 'runner' && probe.hasRoute({ method: op.method, url: op.path }));
+await probe.close();
+const runnerOps = OPERATIONS.filter((op) => op.principal === 'runner' && !implemented.includes(op));
 let bearer = '';
 let cookie = '';
 let csrf = '';
@@ -45,13 +51,7 @@ for (const op of runnerOps) {
     return { count: effects };
   } });
 }
-app.post('/api/project/reset', async (request) => {
-  assert(request.platform?.client);
-  const input = request.body as { epoch: number; confirmName: string };
-  const result = await request.platform.client.query<{ epoch: number }>('select public.reset_project($1,$2,true,\'lead\') as epoch', [input.epoch, input.confirmName]);
-  return result.rows[0];
-});
-for (const url of ['/api/project', '/api/tasks/:taskKey/approve']) app.post(url, () => ({ ok: true }));
+// 초기화(/api/project/reset)는 M2-04, 착수 승인(/api/tasks/:taskKey/approve)은 M2-02, 프로젝트 등록(/api/project)은 M2-03의 실제 경로가 같은 관문을 거치므로 대역을 두지 않는다.
 app.get('/api/dashboard', () => { throw new Error('Bearer hunter2 /bot123:hunter2/send'); });
 
 beforeAll(async () => {
@@ -74,6 +74,13 @@ const urlOf = (path: string) => path.replace(/:\w+/g, '11111111-1111-4111-8111-1
 function runnerHeaders(key = crypto.randomUUID(), epoch = '1') {
   return { authorization: `Bearer ${bearer}`, 'x-project-epoch': epoch, 'idempotency-key': key };
 }
+
+test.each(implemented)('$id: 실제 결과·Evidence 경로도 공통 인증·세대 관문을 거친다', async op => {
+  const request = { method:op.method,url:urlOf(op.path) };
+  expect((await app.inject(request)).statusCode).toBe(401);
+  expect((await app.inject({ ...request,headers:{ cookie,origin,'x-csrf-token':csrf } })).statusCode).toBe(401);
+  expect((await app.inject({ ...request,headers:runnerHeaders(undefined,'0') })).statusCode).toBe(409);
+});
 
 describe('security contracts §8 Runner 전체 5종 표', () => {
   for (const op of runnerOps) {
@@ -283,7 +290,7 @@ test('초기화 응답은 프로젝트 삭제 뒤에도 저장되어 같은 키 
   const login = await app.inject({ method: 'POST', url: '/api/auth/session', headers: { origin }, payload: { method: 'link', token } });
   const cookie = String(login.headers['set-cookie']).split(';')[0] ?? '';
   const session = (await app.inject({ url: '/api/session', headers: { cookie } })).json<{ csrfToken: string }>();
-  const request = { method: 'POST' as const, url: '/api/project/reset', headers: { cookie, origin, 'x-csrf-token': session.csrfToken, 'idempotency-key': 'reset-once' }, payload: { epoch: 2, confirmName: '재전송 시험' } };
+  const request = { method: 'POST' as const, url: '/api/project/reset', headers: { cookie, origin, 'x-csrf-token': session.csrfToken, 'idempotency-key': 'reset-once' }, payload: { epoch: 2, confirmName: '재전송 시험', keepSettings: true } };
   const first = await app.inject(request);
   expect(first.statusCode, first.body).toBe(200);
   expect(first.json()).toEqual({ epoch: 3 });

@@ -5,6 +5,7 @@ import { OPERATIONS, type Operation } from '@awbs/shared/api';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { randomToken, tokenHash, verifyPassword } from './credentials.ts';
 import { installErrors, PlatformError } from './errors.ts';
+import { dropChanges, flushChanges } from '../changes/events.ts';
 
 export interface SecurityOptions { origin: string; lan: boolean; port?: number }
 interface Session { token_hash: string; expires_at: Date; csrf: string }
@@ -17,6 +18,8 @@ interface Context {
   session?: Session;
   client?: PoolClient;
   idempotency?: { key: string; hash: string; project: string | null };
+  /** 오류 응답이어도 트랜잭션을 커밋한다. 업무 처리기가 「보류 판정과 함께 남길 기록(판단 job)」만 쓴 뒤 켠다. 500은 언제나 롤백. */
+  commitOnError?: boolean;
 }
 declare module 'fastify' { interface FastifyRequest { platform: Context | null } }
 
@@ -43,8 +46,11 @@ async function finish(request: FastifyRequest, commit: boolean): Promise<void> {
   const client = context?.client;
   if (!client || !context) return;
   delete context.client;
-  try { await client.query(commit ? 'commit' : 'rollback'); }
-  catch (error) { client.release(true); throw error; }
+  try {
+    // 트랜잭션 중간에 모아 둔 변경 이벤트는 모든 업무 잠금 뒤, 커밋 직전에 쓴다(changes/events.ts deferChange).
+    if (commit) await flushChanges(client); else dropChanges(client);
+    await client.query(commit ? 'commit' : 'rollback');
+  } catch (error) { dropChanges(client); client.release(true); throw error; }
   client.release();
 }
 
@@ -79,7 +85,12 @@ export function installSecurity(app: FastifyInstance, pool: Pool, options: Secur
       if (principal !== 'runner') throw new PlatformError('FORBIDDEN_PRINCIPAL');
       context.principal = `runner:${token.runner_id}`;
       const epoch = request.headers['x-project-epoch'];
-      if (typeof epoch !== 'string' || !/^(0|[1-9]\d*)$/.test(epoch) || Number(epoch) > 2_147_483_647) throw new PlatformError('VALIDATION_FAILED');
+      if (typeof epoch !== 'string' || !/^(0|[1-9]\d*)$/.test(epoch)) {
+        throw new PlatformError('VALIDATION_FAILED', {}, [{ path: 'x-project-epoch', rule: 'pattern', message: '세대 번호 헤더는 0 이상의 정수 형식이어야 합니다.' }]);
+      }
+      if (Number(epoch) > 2_147_483_647) {
+        throw new PlatformError('VALIDATION_FAILED', {}, [{ path: 'x-project-epoch', rule: 'maximum', message: '세대 번호는 2147483647 이하여야 합니다.' }]);
+      }
       context.epoch = Number(epoch);
       const body = request.body as { runnerId?: unknown } | undefined;
       if (body?.runnerId !== undefined && body.runnerId !== token.runner_id) throw new PlatformError('FORBIDDEN_PRINCIPAL');
@@ -120,16 +131,21 @@ export function installSecurity(app: FastifyInstance, pool: Pool, options: Secur
       assert(state);
       const current = state.epoch;
       const expected = (request.body as { epoch?: unknown } | undefined)?.epoch;
-      if (typeof expected !== 'number' || !Number.isInteger(expected) || expected < 0 || expected > 2_147_483_647) throw new PlatformError('VALIDATION_FAILED');
+      if (typeof expected !== 'number' || !Number.isInteger(expected) || expected < 0 || expected > 2_147_483_647) {
+        const rule = typeof expected !== 'number' || !Number.isInteger(expected) ? 'type' : expected < 0 ? 'minimum' : 'maximum';
+        throw new PlatformError('VALIDATION_FAILED', {}, [{ path: 'epoch', rule, message: '세대 번호는 0~2147483647의 정수여야 합니다.' }]);
+      }
       context.currentEpoch = current;
       context.epoch = expected;
     } else if (operation?.staleEpoch) {
-      const state = (await client.query<{ epoch: number }>('select public.lock_current_epoch() as epoch')).rows[0];
+      // 정리 완료 함수는 감사 행과 시스템 상태를 함께 바꾸므로 처음부터 배타적으로 잠근다.
+      const state = (await client.query<{ epoch: number }>(operation.id === 'reportCommandResult'
+        ? 'select public.lock_epoch_exclusive() as epoch' : 'select public.lock_current_epoch() as epoch')).rows[0];
       assert(state);
       context.currentEpoch = state.epoch;
     } else await client.query('select public.lock_epoch($1)', [context.epoch]);
     if (operation?.id === 'reportCommandResult') {
-      const command = (await client.query<{ epoch: number }>('select epoch from runner_commands where id=$1', [(request.params as { id: string }).id])).rows[0];
+      const command = (await client.query<{ epoch: number }>('select epoch from runner_commands where id::text=$1', [(request.params as { id: string }).id])).rows[0];
       if (!command) throw new PlatformError('NOT_FOUND', { resource: 'runner_command' });
       if (command.epoch !== context.epoch) throw new PlatformError('EPOCH_MISMATCH', { currentEpoch: context.currentEpoch });
     }
@@ -137,8 +153,9 @@ export function installSecurity(app: FastifyInstance, pool: Pool, options: Secur
       if (operation?.id === 'resetProject' && context.epoch !== context.currentEpoch) throw new PlatformError('EPOCH_MISMATCH', { currentEpoch: context.currentEpoch });
     };
     if (typeof key !== 'string' || !operation || operation.idempotency === 'none') { checkResetEpoch(); return; }
-    // 초기화는 프로젝트 행을 지운다. 재전송 응답은 삭제되지 않는 전역 범위에 저장한다.
-    const project = operation.id === 'resetProject' ? null : (await client.query<{ id: string }>('select id from projects')).rows[0]?.id ?? null;
+    // 초기화는 프로젝트 행을 지우고, 등록은 프로젝트 행을 만든다. 처리 전후로 프로젝트 범위가 바뀌므로
+    // 두 요청의 재전송 응답은 바뀌지 않는 전역 범위(epoch·주체·키)에 저장한다.
+    const project = operation.id === 'resetProject' || operation.id === 'createProject' ? null : (await client.query<{ id: string }>('select id from projects')).rows[0]?.id ?? null;
     const hash = tokenHash(`${request.method}\n${request.url}\n${canonical(request.body)}`);
     const scope = canonical([project, context.epoch, context.principal, key]);
     await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [scope]);
@@ -168,10 +185,11 @@ export function installSecurity(app: FastifyInstance, pool: Pool, options: Secur
       const { project, key, hash } = context.idempotency;
       await context.client.query('insert into idempotency_keys(project_id,epoch,principal,key,request_hash,response) values($1,$2,$3,$4,$5,$6)', [project, context.epoch, context.principal, key, hash, saved]);
     }
-    await finish(request, reply.statusCode < 400);
+    await finish(request, reply.statusCode < 400 || (context?.commitOnError === true && reply.statusCode < 500));
     return payload;
   });
-  app.addHook('onError', async (request) => { await finish(request, false); });
+  // onError는 onSend보다 먼저 실행된다. 보류 기록을 커밋하기로 한 요청은 onSend에서 커밋 여부를 정한다.
+  app.addHook('onError', async (request) => { if (!request.platform?.commitOnError) await finish(request, false); });
   app.addHook('onRequestAbort', async (request) => { await finish(request, false); });
   app.addHook('onTimeout', async (request) => { await finish(request, false); });
 

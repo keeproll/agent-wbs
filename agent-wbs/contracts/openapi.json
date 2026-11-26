@@ -750,7 +750,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "VERSION_CONFLICT"
+            "description": "INVALID_TRANSITION, VERSION_CONFLICT"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -775,6 +775,7 @@
             "TASK_NOT_FOUND"
           ],
           "409": [
+            "INVALID_TRANSITION",
             "VERSION_CONFLICT"
           ],
           "500": [
@@ -840,7 +841,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "TASK_HAS_SUCCESSORS, VERSION_CONFLICT"
+            "description": "INVALID_TRANSITION, TASK_HAS_SUCCESSORS, VERSION_CONFLICT"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -865,6 +866,7 @@
             "TASK_NOT_FOUND"
           ],
           "409": [
+            "INVALID_TRANSITION",
             "TASK_HAS_SUCCESSORS",
             "VERSION_CONFLICT"
           ],
@@ -1079,7 +1081,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "VERSION_CONFLICT"
+            "description": "INVALID_TRANSITION, VERSION_CONFLICT"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -1104,6 +1106,7 @@
             "DEPENDENCY_NOT_FOUND"
           ],
           "409": [
+            "INVALID_TRANSITION",
             "VERSION_CONFLICT"
           ],
           "500": [
@@ -1339,7 +1342,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "VERSION_CONFLICT"
+            "description": "INVALID_TRANSITION, VERSION_CONFLICT"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -1364,6 +1367,7 @@
             "TASK_NOT_FOUND"
           ],
           "409": [
+            "INVALID_TRANSITION",
             "VERSION_CONFLICT"
           ],
           "500": [
@@ -1464,7 +1468,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "VERSION_CONFLICT"
+            "description": "INVALID_TRANSITION, VERSION_CONFLICT"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -1489,6 +1493,7 @@
             "TASK_NOT_FOUND"
           ],
           "409": [
+            "INVALID_TRANSITION",
             "VERSION_CONFLICT"
           ],
           "500": [
@@ -1604,7 +1609,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "IDEMPOTENCY_CONFLICT, VERSION_CONFLICT"
+            "description": "IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, VERSION_CONFLICT"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -1630,6 +1635,7 @@
           ],
           "409": [
             "IDEMPOTENCY_CONFLICT",
+            "INVALID_TRANSITION",
             "VERSION_CONFLICT"
           ],
           "500": [
@@ -1765,7 +1771,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "VERSION_CONFLICT"
+            "description": "INVALID_TRANSITION, VERSION_CONFLICT"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -1791,6 +1797,7 @@
             "TASK_NOT_FOUND"
           ],
           "409": [
+            "INVALID_TRANSITION",
             "VERSION_CONFLICT"
           ],
           "500": [
@@ -1864,7 +1871,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "VERSION_CONFLICT"
+            "description": "INVALID_TRANSITION, VERSION_CONFLICT"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -1890,6 +1897,7 @@
             "TASK_NOT_FOUND"
           ],
           "409": [
+            "INVALID_TRANSITION",
             "VERSION_CONFLICT"
           ],
           "500": [
@@ -2011,7 +2019,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "VERSION_CONFLICT"
+            "description": "INVALID_TRANSITION, VERSION_CONFLICT"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -2036,6 +2044,7 @@
             "TASK_NOT_FOUND"
           ],
           "409": [
+            "INVALID_TRANSITION",
             "VERSION_CONFLICT"
           ],
           "500": [
@@ -8994,7 +9003,7 @@
     "/api/project/inputs": {
       "post": {
         "operationId": "analyzeInputs",
-        "summary": "「이 버전으로 분석」. commits는 팀장이 확인한 목록",
+        "summary": "「이 버전으로 분석」. commits는 팀장이 확인한 대기 커밋 목록, commit은 조회의 inputHead(입력 사슬 끝)",
         "tags": [
           "lead"
         ],
@@ -9049,7 +9058,7 @@
         },
         "responses": {
           "202": {
-            "description": "「이 버전으로 분석」. commits는 팀장이 확인한 목록",
+            "description": "「이 버전으로 분석」. commits는 팀장이 확인한 대기 커밋 목록, commit은 조회의 inputHead(입력 사슬 끝)",
             "headers": {
               "Idempotency-Replayed": {
                 "schema": {
@@ -9087,7 +9096,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "CLEANUP_PENDING, IDEMPOTENCY_CONFLICT, INPUT_UNCHANGED, VERSION_CONFLICT"
+            "description": "CLEANUP_PENDING, IDEMPOTENCY_CONFLICT, INPUT_UNCHANGED, INVALID_TRANSITION, VERSION_CONFLICT"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -9112,6 +9121,7 @@
             "CLEANUP_PENDING",
             "IDEMPOTENCY_CONFLICT",
             "INPUT_UNCHANGED",
+            "INVALID_TRANSITION",
             "VERSION_CONFLICT"
           ],
           "500": [
@@ -9197,7 +9207,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "IDEMPOTENCY_CONFLICT, VERSION_CONFLICT"
+            "description": "IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, VERSION_CONFLICT"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -9220,6 +9230,7 @@
           ],
           "409": [
             "IDEMPOTENCY_CONFLICT",
+            "INVALID_TRANSITION",
             "VERSION_CONFLICT"
           ],
           "500": [
@@ -9296,6 +9307,123 @@
                   "properties": {
                     "jobId": {
                       "$ref": "#/components/schemas/Id"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "VALIDATION_FAILED"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "LEAD_UNAUTHORIZED"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "FORBIDDEN_PRINCIPAL"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "CLEANUP_PENDING, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, VERSION_CONFLICT"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "INTERNAL"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error",
+            "description": "UNAVAILABLE"
+          }
+        },
+        "x-error-codes": {
+          "400": [
+            "VALIDATION_FAILED"
+          ],
+          "401": [
+            "LEAD_UNAUTHORIZED"
+          ],
+          "403": [
+            "FORBIDDEN_PRINCIPAL"
+          ],
+          "409": [
+            "CLEANUP_PENDING",
+            "IDEMPOTENCY_CONFLICT",
+            "INVALID_TRANSITION",
+            "VERSION_CONFLICT"
+          ],
+          "500": [
+            "INTERNAL"
+          ],
+          "503": [
+            "UNAVAILABLE"
+          ]
+        }
+      }
+    },
+    "/api/project/inputs/recheck": {
+      "post": {
+        "operationId": "recheckInputs",
+        "summary": "입력 이력 재작성 복구 확인·입력 확인 다시 시도",
+        "tags": [
+          "lead"
+        ],
+        "security": [
+          {
+            "leadSession": []
+          }
+        ],
+        "x-version-rule": "body",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/OptionalIdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "updatedAt"
+                ],
+                "properties": {
+                  "updatedAt": {
+                    "$ref": "#/components/schemas/Timestamp"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "입력 이력 재작성 복구 확인·입력 확인 다시 시도",
+            "headers": {
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "inputRecheck"
+                  ],
+                  "properties": {
+                    "inputRecheck": {
+                      "type": "integer",
+                      "minimum": 0
                     }
                   }
                 }
@@ -9656,6 +9784,7 @@
                               "none",
                               "pending",
                               "running",
+                              "done",
                               "failed"
                             ]
                           },
@@ -23402,7 +23531,7 @@
     "/api/runner/input-changes": {
       "post": {
         "operationId": "reportInputChanges",
-        "summary": "입력 경로를 바꾼 main 커밋 보고",
+        "summary": "입력 변경 보고(비교 후 갱신). base가 서버의 입력 head와 다르면 409와 현재 head",
         "tags": [
           "runner"
         ],
@@ -23426,10 +23555,110 @@
               "schema": {
                 "type": "object",
                 "required": [
-                  "commits",
-                  "files"
+                  "base",
+                  "head",
+                  "baseIsAncestor",
+                  "treeHash",
+                  "changes",
+                  "commits"
                 ],
                 "properties": {
+                  "base": {
+                    "$ref": "#/components/schemas/Sha"
+                  },
+                  "head": {
+                    "$ref": "#/components/schemas/Sha"
+                  },
+                  "baseIsAncestor": {
+                    "type": "boolean"
+                  },
+                  "treeHash": {
+                    "$ref": "#/components/schemas/Sha"
+                  },
+                  "changes": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "status",
+                        "path",
+                        "oldBlob",
+                        "newBlob",
+                        "oldMode",
+                        "newMode",
+                        "added",
+                        "deleted"
+                      ],
+                      "properties": {
+                        "status": {
+                          "enum": [
+                            "A",
+                            "M",
+                            "D",
+                            "R",
+                            "T"
+                          ]
+                        },
+                        "path": {
+                          "$ref": "#/components/schemas/RepoPath"
+                        },
+                        "from": {
+                          "$ref": "#/components/schemas/RepoPath"
+                        },
+                        "oldBlob": {
+                          "anyOf": [
+                            {
+                              "$ref": "#/components/schemas/Sha"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "newBlob": {
+                          "anyOf": [
+                            {
+                              "$ref": "#/components/schemas/Sha"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "oldMode": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[0-7]{6}$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "newMode": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[0-7]{6}$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "added": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "deleted": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
                   "commits": {
                     "type": "array",
                     "items": {
@@ -23455,46 +23684,7 @@
                         }
                       },
                       "additionalProperties": false
-                    },
-                    "minItems": 1
-                  },
-                  "files": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "required": [
-                        "commitSha",
-                        "path",
-                        "change",
-                        "added",
-                        "deleted"
-                      ],
-                      "properties": {
-                        "commitSha": {
-                          "$ref": "#/components/schemas/Sha"
-                        },
-                        "path": {
-                          "$ref": "#/components/schemas/RepoPath"
-                        },
-                        "change": {
-                          "enum": [
-                            "added",
-                            "modified",
-                            "deleted"
-                          ]
-                        },
-                        "added": {
-                          "type": "integer",
-                          "minimum": 0
-                        },
-                        "deleted": {
-                          "type": "integer",
-                          "minimum": 0
-                        }
-                      },
-                      "additionalProperties": false
-                    },
-                    "minItems": 1
+                    }
                   }
                 },
                 "additionalProperties": false
@@ -23503,12 +23693,35 @@
           }
         },
         "responses": {
-          "204": {
-            "description": "입력 경로를 바꾼 main 커밋 보고",
+          "200": {
+            "description": "입력 변경 보고(비교 후 갱신). base가 서버의 입력 head와 다르면 409와 현재 head",
             "headers": {
               "Idempotency-Replayed": {
                 "schema": {
                   "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "head",
+                    "recorded",
+                    "historyRewritten"
+                  ],
+                  "properties": {
+                    "head": {
+                      "$ref": "#/components/schemas/Sha"
+                    },
+                    "recorded": {
+                      "type": "boolean"
+                    },
+                    "historyRewritten": {
+                      "type": "boolean"
+                    }
+                  }
                 }
               }
             }
@@ -23523,7 +23736,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT"
+            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, VERSION_CONFLICT"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited",
@@ -23548,7 +23761,9 @@
           ],
           "409": [
             "EPOCH_MISMATCH",
-            "IDEMPOTENCY_CONFLICT"
+            "IDEMPOTENCY_CONFLICT",
+            "INVALID_TRANSITION",
+            "VERSION_CONFLICT"
           ],
           "429": [
             "RATE_LIMITED"
@@ -23854,7 +24069,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, LEASE_LOST"
+            "description": "EPOCH_MISMATCH, EXTERNAL_WRITE_BLOCKED, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited",
@@ -23882,7 +24097,9 @@
           ],
           "409": [
             "EPOCH_MISMATCH",
+            "EXTERNAL_WRITE_BLOCKED",
             "IDEMPOTENCY_CONFLICT",
+            "INVALID_TRANSITION",
             "LEASE_LOST"
           ],
           "429": [
@@ -25145,6 +25362,7 @@
                     "subagentBudget",
                     "heartbeatSeconds",
                     "inputCheckMinutes",
+                    "inputRecheck",
                     "ci",
                     "claudeModels",
                     "cliGrades"
@@ -25207,6 +25425,10 @@
                     "inputCheckMinutes": {
                       "type": "integer",
                       "minimum": 1
+                    },
+                    "inputRecheck": {
+                      "type": "integer",
+                      "minimum": 0
                     },
                     "ci": {
                       "type": "object",
@@ -27518,7 +27740,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, LEASE_LOST"
+            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited",
@@ -27548,6 +27770,7 @@
           "409": [
             "EPOCH_MISMATCH",
             "IDEMPOTENCY_CONFLICT",
+            "INVALID_TRANSITION",
             "LEASE_LOST"
           ],
           "429": [
@@ -27733,7 +27956,7 @@
     "/api/planning/bootstrap/{jobId}/draft": {
       "post": {
         "operationId": "submitDraft",
-        "summary": "초기 WBS 초안 등록(승인 전 WBS 미반영)",
+        "summary": "초기 WBS 초안 등록(승인 전 WBS 미반영). 현재 실행 job만 받는다",
         "tags": [
           "planning"
         ],
@@ -28387,7 +28610,7 @@
         },
         "responses": {
           "201": {
-            "description": "초기 WBS 초안 등록(승인 전 WBS 미반영)",
+            "description": "초기 WBS 초안 등록(승인 전 WBS 미반영). 현재 실행 job만 받는다",
             "headers": {
               "Idempotency-Replayed": {
                 "schema": {
@@ -28426,7 +28649,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, LEASE_LOST"
+            "description": "EPOCH_MISMATCH, EXTERNAL_WRITE_BLOCKED, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited",
@@ -28454,7 +28677,9 @@
           ],
           "409": [
             "EPOCH_MISMATCH",
+            "EXTERNAL_WRITE_BLOCKED",
             "IDEMPOTENCY_CONFLICT",
+            "INVALID_TRANSITION",
             "LEASE_LOST"
           ],
           "429": [
@@ -28472,7 +28697,7 @@
     "/api/planning/bootstrap/{jobId}/tech": {
       "post": {
         "operationId": "submitTechProposals",
-        "summary": "기술 결정 제안(근거·대안)",
+        "summary": "기술 결정 제안(근거·대안)과 조건부 선호별 조건 충족 판단. 등록한 조건부 제약마다 판단이 정확히 하나 필요",
         "tags": [
           "planning"
         ],
@@ -28550,6 +28775,34 @@
                       },
                       "additionalProperties": false
                     }
+                  },
+                  "conditionJudgements": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "constraintId",
+                        "result",
+                        "reason"
+                      ],
+                      "properties": {
+                        "constraintId": {
+                          "$ref": "#/components/schemas/Id"
+                        },
+                        "result": {
+                          "enum": [
+                            "met",
+                            "not_met"
+                          ]
+                        },
+                        "reason": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        }
+                      },
+                      "additionalProperties": false
+                    }
                   }
                 },
                 "additionalProperties": false
@@ -28559,7 +28812,7 @@
         },
         "responses": {
           "201": {
-            "description": "기술 결정 제안(근거·대안)",
+            "description": "기술 결정 제안(근거·대안)과 조건부 선호별 조건 충족 판단. 등록한 조건부 제약마다 판단이 정확히 하나 필요",
             "headers": {
               "Idempotency-Replayed": {
                 "schema": {
@@ -28582,7 +28835,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, LEASE_LOST"
+            "description": "EPOCH_MISMATCH, EXTERNAL_WRITE_BLOCKED, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited",
@@ -28610,7 +28863,9 @@
           ],
           "409": [
             "EPOCH_MISMATCH",
+            "EXTERNAL_WRITE_BLOCKED",
             "IDEMPOTENCY_CONFLICT",
+            "INVALID_TRANSITION",
             "LEASE_LOST"
           ],
           "429": [
@@ -31336,10 +31591,7 @@
                     }
                   },
                   "policy": {
-                    "type": "object",
-                    "patternProperties": {
-                      "^.*$": {}
-                    }
+                    "$ref": "#/components/schemas/EstimatePolicy"
                   }
                 }
               }
@@ -32422,7 +32674,7 @@
       "DateOnly": {
         "type": "string",
         "title": "DateOnly",
-        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        "pattern": "^(?:(?:19[7-9][0-9]|[2-9][0-9]{3})-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|02-(?:0[1-9]|1[0-9]|2[0-8]))|(?=19[7-9]|[2-9])(?:[0-9]{2}(?:0[48]|[2468][048]|[13579][26])|(?:[02468][048]|[13579][26])00)-02-29)$"
       },
       "Decision": {
         "type": "object",
@@ -32506,6 +32758,29 @@
           },
           "updatedAt": {
             "$ref": "#/components/schemas/Timestamp"
+          },
+          "constraintId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "conditionResult": {
+            "anyOf": [
+              {
+                "enum": [
+                  "met",
+                  "not_met"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "title": "Decision"
@@ -32798,6 +33073,16 @@
           }
         },
         "title": "ErrorResponse"
+      },
+      "EstimatePolicy": {
+        "type": "object",
+        "properties": {
+          "rejudge": {
+            "$ref": "#/components/schemas/RejudgeRequest"
+          }
+        },
+        "title": "EstimatePolicy",
+        "additionalProperties": true
       },
       "Evidence": {
         "type": "object",
@@ -37018,6 +37303,7 @@
               "registeredAt",
               "inputs",
               "changeCommits",
+              "inputHead",
               "inputJob",
               "updatedAt",
               "bootstrap"
@@ -37100,11 +37386,15 @@
                 "items": {
                   "type": "object",
                   "required": [
+                    "id",
                     "name",
                     "level",
                     "condition"
                   ],
                   "properties": {
+                    "id": {
+                      "$ref": "#/components/schemas/Id"
+                    },
                     "name": {
                       "type": "string"
                     },
@@ -37263,6 +37553,9 @@
                     }
                   }
                 }
+              },
+              "inputHead": {
+                "$ref": "#/components/schemas/Sha"
               },
               "inputJob": {
                 "anyOf": [
@@ -38195,6 +38488,7 @@
               "registeredAt",
               "inputs",
               "changeCommits",
+              "inputHead",
               "inputJob",
               "updatedAt",
               "approvedAt",
@@ -38278,11 +38572,15 @@
                 "items": {
                   "type": "object",
                   "required": [
+                    "id",
                     "name",
                     "level",
                     "condition"
                   ],
                   "properties": {
+                    "id": {
+                      "$ref": "#/components/schemas/Id"
+                    },
                     "name": {
                       "type": "string"
                     },
@@ -38441,6 +38739,9 @@
                     }
                   }
                 }
+              },
+              "inputHead": {
+                "$ref": "#/components/schemas/Sha"
               },
               "inputJob": {
                 "anyOf": [
@@ -39718,6 +40019,54 @@
           }
         },
         "title": "Recipient"
+      },
+      "RejudgeRequest": {
+        "type": "object",
+        "required": [
+          "reason",
+          "trigger",
+          "targets"
+        ],
+        "properties": {
+          "reason": {
+            "enum": [
+              "model_disallowed",
+              "floor_changed",
+              "subagent_disallowed"
+            ]
+          },
+          "trigger": {
+            "type": "string",
+            "minLength": 1
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "taskKey",
+                "roles"
+              ],
+              "properties": {
+                "taskKey": {
+                  "$ref": "#/components/schemas/TaskKey"
+                },
+                "roles": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RunRole"
+                  },
+                  "minItems": 1,
+                  "uniqueItems": true
+                }
+              },
+              "additionalProperties": false
+            },
+            "minItems": 1
+          }
+        },
+        "title": "RejudgeRequest",
+        "additionalProperties": false
       },
       "ReplanSummary": {
         "type": "object",
@@ -43757,7 +44106,7 @@
       "Timestamp": {
         "type": "string",
         "title": "Timestamp",
-        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?Z$"
+        "pattern": "^(?:(?:19[7-9][0-9]|[2-9][0-9]{3})-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|02-(?:0[1-9]|1[0-9]|2[0-8]))|(?=19[7-9]|[2-9])(?:[0-9]{2}(?:0[48]|[2468][048]|[13579][26])|(?:[02468][048]|[13579][26])00)-02-29)T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]{1,6})?Z$"
       },
       "Uuid": {
         "type": "string",

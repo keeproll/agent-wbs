@@ -9,6 +9,6 @@ export default defineConfig({
   ssr: { resolve: { conditions } },
   test: {
     include: ['**/test/**/*.test.ts'],
-    exclude: ['**/node_modules/**', '**/dist/**', '**/*.db.test.ts'],
+    exclude: ['**/node_modules/**', '**/dist/**', '**/*.db.test.ts', '**/*.scenario.test.ts'],
   },
 });
