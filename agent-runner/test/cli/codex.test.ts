@@ -47,7 +47,9 @@ describe('Codex exec --json 어댑터(fixture)', () => {
     expect(unknown[0]?.raw).toEqual({ type: 'thread.compacted', before_tokens: 9000 });
     expect(unknown[2]?.raw).toMatchObject({ tool: 'future_collab' });
     expect(events).toContainEqual({ type: 'error', message: 'startup warning: 설정 키를 모릅니다', fatal: false });
-    expect(o.snapshot()).toMatchObject({ observed: 0, peak: 0 });
+    // 알려진 도구의 모르는 상태: 끝났다고 추정하지 않고 실행 중으로 남긴 채 미확인
+    expect(events).toContainEqual({ type: 'subagent', id: 'th-y', phase: 'unknown', status: 'hibernating', parentId: 'th-unk' });
+    expect(o.snapshot()).toMatchObject({ observed: 1, active: ['th-y'], state: 'unconfirmed' });
   });
 
   test('turn.failed·error: 실패 결과', () => {
