@@ -35,6 +35,8 @@ export interface TaskCheckOptions {
   execute: (argv: readonly string[], cwd: string, signal?: AbortSignal) => Promise<CommandResult>;
   /** main의 테스트 명령에 해당하는 실제 수집 결과다. cwd 상대 경로와 테스트 이름으로 안정적인 식별자를 만든다. */
   collectTests: (argv: readonly string[], cwd: string, signal?: AbortSignal) => Promise<readonly string[]>;
+  /** ②가 고정한 main A의 정의다. 생략하면 ①이 직접 main을 고정한다. */
+  basis?: Awaited<ReturnType<GitRepository['mainPipeline']>>;
   redact?: Redact;
   signal?: AbortSignal;
 }
@@ -43,8 +45,8 @@ interface Snapshot { id: string; path: string; sha: string }
 const message = (error: unknown) => error instanceof Error ? error.message : '검사를 실행하지 못했습니다.';
 
 /** M7-06이 부를 ① 경로다. pass는 기계 검사 결과이며 QA의 명시적 확인을 대신하지 않는다. */
-export async function runTaskCheck({ repo, worktreeId, branch, heavy, execute, collectTests, redact = createRedactor(), signal }: TaskCheckOptions): Promise<TaskCheckResult> {
-  const { baseSha, pipelineSha, source } = await repo.mainPipeline();
+export async function runTaskCheck({ repo, worktreeId, branch, heavy, execute, collectTests, basis, redact = createRedactor(), signal }: TaskCheckOptions): Promise<TaskCheckResult> {
+  const { baseSha, pipelineSha, source } = basis ?? await repo.mainPipeline();
   const pipeline = parsePipeline(source);
   const headSha = await repo.importWorktree(worktreeId, branch);
   const baselineSha = await repo.taskBase(baseSha, headSha);

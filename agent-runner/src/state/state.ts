@@ -63,7 +63,7 @@ function validate(value: Document): void {
 export class StateLockError extends Error { override name = 'StateLockError'; }
 export class StateStorageError extends Error { override name = 'StateStorageError'; }
 
-async function acquireLock(directory: string): Promise<FileHandle> {
+export async function acquireLock(directory: string): Promise<FileHandle> {
   const lock = await open(join(directory, 'lock'), 'a+', 0o600);
   try {
     // 자식의 fd 3과 부모의 fd는 같은 열린 파일을 가리켜, 자식 종료 뒤에도 부모가 잠금을 보유한다.
