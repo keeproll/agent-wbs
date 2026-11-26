@@ -149,7 +149,11 @@ describe('API 호출 계층(api client)', () => {
     // @ts-expect-error 파일 응답 요청은 OperationId에서 빠진다.
     await expect(client.call('getReportPdf', { params: { reportId: 'r 1' } })).rejects.toThrow(/파일 응답/);
     expect(fetch).not.toHaveBeenCalled();
-    expect(apiUrl('getReportPdf', { params: { reportId: 'r 1' } })).toBe('/api/reports/r%201/pdf');
+    // 재리뷰 c16d765 #3: 계약의 필수 query(view)는 필수 인수다. 도우미가 임의로 고르지 않는다.
+    // @ts-expect-error 필수 query(view)가 없으면 타입 오류다.
+    expect(() => apiUrl('getReportPdf', { params: { reportId: 'r 1' } })).toThrow(/view/);
+    expect(apiUrl('getReportPdf', { params: { reportId: 'r 1' }, query: { view: 'int' } })).toBe('/api/reports/r%201/pdf?view=int');
+    expect(() => apiUrl('getReportPdf', { params: { reportId: 'r1' } } as never)).toThrow(/view/);
     expect(apiUrl('exportProject', {})).toBe('/api/project/export');
   });
 });
