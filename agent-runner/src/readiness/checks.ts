@@ -134,12 +134,20 @@ async function cgroupNote(d: ReadinessDeps): Promise<string> {
  */
 async function obs(d: ReadinessDeps, versions: ReadonlyMap<Agent, string>): Promise<Check> {
   const note = await cgroupNote(d);
+  return checkCliObservation(d.cliProfiles ?? [], d.verifiedObservations, versions, note);
+}
+
+/** 업데이트 직후에도 같은 조합 대조 규칙을 쓴다. 보유 수 계산과 등급 확정은 서버가 맡는다. */
+export function checkCliObservation(
+  profiles: NonNullable<ReadinessDeps['cliProfiles']>,
+  verified: ReadinessDeps['verifiedObservations'],
+  versions: ReadonlyMap<Agent, string>,
+  note = '',
+): Check {
   const conservative = '보수 계산(1+예산)으로 실행은 계속, 관측은 참고만 하고 재검증 대기';
   const fix = '최신 CLI를 그대로 쓰며, 이 조합의 관측 재검증이 등록되면 경고가 풀립니다.';
-  const profiles = d.cliProfiles ?? [];
   if (profiles.length === 0) return { status: 'warn', detail: `실행 조합(모델·옵션) 설정이 없어 관측 검증 여부를 확인할 수 없음 — 미검증으로 봄, ${conservative}. ${note}`, fix };
-  if (!d.verifiedObservations) return { status: 'warn', detail: `관측 검증 목록이 없어 확인할 수 없음 — 미검증으로 봄, ${conservative}. ${note}`, fix };
-  const verified = d.verifiedObservations;
+  if (!verified) return { status: 'warn', detail: `관측 검증 목록이 없어 확인할 수 없음 — 미검증으로 봄, ${conservative}. ${note}`, fix };
   const rows = profiles.map((p) => {
     const version = versions.get(p.agent);
     const label = `${p.agent} ${version ?? '버전 확인 불가'} · ${p.model} · ${p.options}`;
