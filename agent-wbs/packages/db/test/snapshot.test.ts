@@ -13,6 +13,7 @@ test('0021·0022 snapshot이 단계별 구조와 연결을 보존하고 다음 g
   const observation = snapshot('0023');
   const settings = snapshot('0024');
   const versions = snapshot('0025');
+  const ci = snapshot('0040');
   expect(project.prevId).toBe(before.id);
   expect(evidence.prevId).toBe(project.id);
   expect(observation.prevId).toBe(evidence.id);
@@ -28,5 +29,8 @@ test('0021·0022 snapshot이 단계별 구조와 연결을 보존하고 다음 g
   expect(settings.tables['public.github_settings']?.columns).toHaveProperty('checked_at');
   expect(versions.tables['public.app_settings']?.columns).toHaveProperty('split_version');
   expect(versions.tables['public.concurrency_settings']?.columns).toHaveProperty('budget_version');
-  expect(await generateMigration(versions, generateDrizzleJson(schema, versions.id))).toEqual([]);
+  expect(ci.prevId).toBe(versions.id);
+  expect(ci.tables['public.merge_queue']?.columns).toHaveProperty('head_sync');
+  expect(ci.tables['public.ci_steps']?.columns).toHaveProperty('duration_ms');
+  expect(await generateMigration(ci, generateDrizzleJson(schema, ci.id))).toEqual([]);
 });

@@ -579,6 +579,13 @@ export const runnerOperations = [
       testedTreeSha: Opt(c.Sha),
       actualMergeSha: Opt(c.Sha),
       actualTreeSha: Opt(c.Sha),
+      // H→H′의 자동 병합 보존과 실제 PR 병합 부모를 서버의 저장 근거와 대조한다.
+      headSync: Opt(Body({
+        qaHeadSha: c.Sha, headSha: c.Sha, preserved: Type.Boolean(),
+        parents: List(c.Sha, { minItems: 2, maxItems: 2 }),
+        autoMergeTreeSha: c.Sha, headTreeSha: c.Sha, additionalChanges: Type.Boolean(),
+      })),
+      mergeParents: Opt(List(c.Sha, { minItems: 2, maxItems: 2 })),
     }),
     responses: { 204: null },
     errors: ['INVALID_TRANSITION', 'GATE_NOT_PASSED', 'EXTERNAL_WRITE_BLOCKED'],

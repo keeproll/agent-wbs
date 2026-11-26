@@ -1673,6 +1673,7 @@ export const ciRuns = pgTable(
     job: uuid().references(() => runnerJobs.id, { onDelete: 'restrict' }),
     fence: integer(),
     artifacts: jsonb().notNull().default([]),
+    reporter: text(),
   },
   (t) => [
     check('ci_stage', sql`${t.stage} between 1 and 4`),
@@ -1691,12 +1692,13 @@ export const ciSteps = pgTable(
       .notNull()
       .references(() => ciRuns.id, { onDelete: 'restrict' }),
     step_key: text().notNull(),
+    duration_ms: bigint({ mode: 'number' }).notNull().default(0),
     status: ciStatus().notNull(),
     command: text().notNull(),
     exit_code: integer(),
     log_excerpt: text(),
   },
-  (t) => [unique().on(t.run, t.step_key)],
+  (t) => [unique().on(t.run, t.step_key), check('ci_step_duration', sql`${t.duration_ms} >= 0 and ${t.duration_ms} <= 9007199254740991`)],
 );
 export const mergeQueue = pgTable(
   'merge_queue',
@@ -1717,6 +1719,8 @@ export const mergeQueue = pgTable(
     tested_tree_sha: text(),
     actual_merge_sha: text(),
     actual_tree_sha: text(),
+    head_sync: jsonb(),
+    merge_parents: jsonb(),
   },
   (t) => [
     uniqueIndex('one_open_merge_task')

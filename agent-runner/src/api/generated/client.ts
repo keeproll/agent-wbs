@@ -1377,6 +1377,16 @@ export interface Operations {
         testedTreeSha?: Sha;
         actualMergeSha?: Sha;
         actualTreeSha?: Sha;
+        headSync?: {
+          qaHeadSha: Sha;
+          headSha: Sha;
+          preserved: boolean;
+          parents: (Sha)[];
+          autoMergeTreeSha: Sha;
+          headTreeSha: Sha;
+          additionalChanges: boolean;
+        };
+        mergeParents?: (Sha)[];
       };
       epoch: number;
       idempotencyKey: string;

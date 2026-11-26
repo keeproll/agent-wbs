@@ -183,6 +183,13 @@
       "when": 1795740000004,
       "tag": "0025_20261127_setting_versions",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1795740000040,
+      "tag": "0040_20261127_ci_reports",
+      "breakpoints": true
     }
   ]
 }
