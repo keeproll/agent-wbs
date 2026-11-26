@@ -16,6 +16,7 @@
     "e2e:api-exec": "node scripts/e2e-exec-api.ts",
     "e2e:api:m307": "node scripts/e2e-api-m307.ts",
     "e2e:api-settings": "node scripts/e2e-api-settings.ts",
+    "e2e:api:m3int": "node scripts/e2e-api-m3int.ts",
     "e2e:install": "playwright install chromium"
   },
   "dependencies": {

@@ -43,7 +43,7 @@ test('UAT-TASK-01 실제 서버 요약·9탭', async ({ page }) => {
   console.log(`[TASK-0004 탭] ${(await page.getByRole('tablist', { name: 'Task 상세 탭' }).innerText()).replace(/\n/g, ' ')}`);
 });
 
-test('UAT-APPROVE-01 실제 서버: 명세 미완료 요청 400 거부, 판단 기록 없는 승인 409 거부, 반려는 planning·사유 이력', async ({ page }) => {
+test('UAT-APPROVE-01 실제 서버: 명세 미완료 요청 400 거부, 판단 기록이 있는 승인은 실행 대기, 반려는 planning·사유 이력', async ({ page }) => {
   await login(page, '/wbs/TASK-0009');
   console.log(`[TASK-0009 상태] ${await status(page).innerText()}`);
   const bar = page.locator('.appr-bar');
@@ -55,20 +55,17 @@ test('UAT-APPROVE-01 실제 서버: 명세 미완료 요청 400 거부, 판단 �
     await expect(status(page)).toHaveText('계획 중');
   }
 
-  // 승인 대기 Task: demo seed에는 분할 기준 판단 기록(규칙 5·7·9)이 없어 서버가 승인을 409 SPLIT_JUDGEMENT_REQUIRED로 막는다(D-33).
-  // 판단 기록은 Planning Agent job만 만들 수 있어 이 시험에서는 「거부가 보이고 상태가 그대로」인지 확인한다. 승인 성공 흐름은 가짜 서버 시험(task-detail-flow)이 맡는다.
+  // 승인 대기 Task: 처음에는 demo seed에 분할 기준 판단 기록이 없어 409 SPLIT_JUDGEMENT_REQUIRED였다(D-33).
+  // M3 통합: 서버 후속(7788dcc)이 demo seed에 판단 기록(judged_rules)을 넣어 이제 실제 서버도 승인을 받아들인다. 그래서 승인 성공 흐름을 확인한다.
   await page.goto('/wbs/TASK-0010');
   await expect(status(page)).toHaveText('승인 대기');
   const [resp] = await Promise.all([
     page.waitForResponse((r) => r.url().endsWith('/api/tasks/TASK-0010/approve')),
     page.locator('.appr-bar').getByRole('button', { name: '승인', exact: true }).click(),
   ]);
-  expect(resp.status()).toBe(409);
-  const refused = page.getByRole('alert');
-  await expect(refused).toContainText('409 SPLIT_JUDGEMENT_REQUIRED');
-  await expect(refused).toContainText('대상: TASK-0010 착수 승인');
-  await expect(status(page)).toHaveText('승인 대기');
-  console.log(`[TASK-0010 승인 거부] ${(await refused.innerText()).replace(/\n/g, ' | ')}`);
+  expect(resp.status()).toBe(200);
+  await expect(status(page)).not.toHaveText('승인 대기');
+  console.log(`[TASK-0010 승인] ${await status(page).innerText()}`);
 
   // 승인 대기 Task: 반려(사유) → 계획 중
   await page.goto('/wbs/TASK-0012');
@@ -158,10 +155,12 @@ test('재리뷰2 P1 실제 서버: 편집 중 서버의 테이블 순서가 바�
   const names = before.ents.map((e: { f: { name: string } }) => e.f.name) as string[];
   expect(names.slice(0, 2)).toEqual(['wbs_nodes', 'tasks']);
   console.log('[재리뷰2] 이름', names.join(','));
-  // 둘째 테이블 tasks의 이름을 바꾼다(자기 참조 FK가 없어 이름 변경이 편집기 검사를 통과한다)
+  // 둘째 테이블 tasks의 설명을 바꾼다.
+  // M3 통합: 처음에는 테이블 이름을 바꿨다. 이제 서버가 설계의 외래키 대상을 검사해(서버 후속, 설계 서버 검사) 다른 테이블이 참조하는 tasks의 이름 변경은 400이다.
+  // 이 시험이 보려는 것(순서가 바뀌어도 편집을 시작한 그 테이블만 바뀜)은 설명 변경으로도 같다.
   await page.getByRole('group', { name: '테이블 tasks' }).getByRole('button', { name: '편집' }).click();
-  const renamed = `tasks_review_${String(Date.now() % 100000)}`;
-  await page.getByRole('form').getByLabel('테이블명', { exact: true }).fill(renamed);
+  const renamed = `재리뷰2 설명 ${String(Date.now() % 100000)}`;
+  await page.getByRole('form').getByLabel('테이블 설명', { exact: true }).fill(renamed);
   // 다른 사용자가 앞 두 테이블 순서를 바꿔 저장 → 화면 polling이 그 최신 Task를 읽을 때까지 기다린다
   const t = (await apiCall(page, 'tasks/TASK-0004')).body;
   const reordered = structuredClone(t.designs.find((x: { kind: string }) => x.kind === 'DB').content);
@@ -181,7 +180,8 @@ test('재리뷰2 P1 실제 서버: 편집 중 서버의 테이블 순서가 바�
   await modal.getByRole('button', { name: /다시 적용/ }).click();
   await expect(page.getByRole('form')).toHaveCount(0);
   const ents = (await apiCall(page, 'tasks/TASK-0004')).body.designs.find((x: { kind: string }) => x.kind === 'DB').content.ents as { f: { name: string; desc: string } }[];
-  // 편집을 시작한 tasks만 새 이름으로 바뀌고, 순서가 바뀌어 그 위치로 온 wbs_nodes 정의는 그대로 남는다
-  expect(ents.map((e) => e.f.name)).toEqual([renamed, 'wbs_nodes', ...names.slice(2)]);
+  // 편집을 시작한 tasks만 새 설명으로 바뀌고, 순서가 바뀌어 그 위치로 온 wbs_nodes 정의는 그대로 남는다
+  expect(ents.map((e) => e.f.name)).toEqual(['tasks', 'wbs_nodes', ...names.slice(2)]);
+  expect(ents[0]?.f.desc).toBe(renamed);
   expect(ents[1]?.f.desc).toBe(before.ents[0].f.desc);
 });

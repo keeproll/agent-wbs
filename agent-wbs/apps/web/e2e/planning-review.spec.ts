@@ -119,8 +119,9 @@ test('충돌 창: 최신 불러오기 중에 창을 닫으면(Esc) 늦게 온 �
   await page.getByRole('button', { name: '반려' }).click();
   const dialog = page.getByRole('alertdialog');
   await expect(dialog).toContainText('VERSION_CONFLICT');
-  const slow = hold((route) => json(route, 200, { items: server.state.proposals, nextCursor: null }));
-  api.on('GET /api/proposals', slow.handler);
+  // M3 통합: 최신 읽기는 단건 조회(getProposal)다. 그 요청을 붙잡아 「불러오는 중에 닫기」를 만든다.
+  const slow = hold((route) => json(route, 200, server.state.proposals.find((p) => p.id === CP2.id)));
+  api.on(`GET /api/proposals/${CP2.id}`, slow.handler);
   await dialog.getByRole('button', { name: /최신 내용 불러오기/ }).click();
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);

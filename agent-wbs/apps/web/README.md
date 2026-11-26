@@ -18,6 +18,7 @@ M3-02~08은 이 바탕 위에 각 메뉴의 본문을 얹는다.
 | `W build` | 전체 빌드 |
 | `W e2e` | 모든 E2E(가짜 API). 실제 API 시험(`api-*.spec.ts`)은 아래 `e2e:api*` 명령으로만 돈다 |
 | `W e2e -- nav-integration` | **M3 통합.** 화면 사이 이동·알림 링크 주소·390px 상세 열람·메뉴 12개 폭(§2-1) |
+| `W --filter @awbs/web e2e:api:m3int` | **M3 통합.** 서버 후속 2차 API에 새로 연결한 화면(프로젝트 편집·지금 확인·CP 제외·Planning 표시 키)을 실제 API·전용 DB(`m3int-e2e-pg-…`, 끝나면 삭제)로 확인 |
 | `W e2e -- visual` | 원본 스크린샷과 나란히 비교(§5). 화면별 비교는 각 기능 README |
 | `node apps/web/scripts/prototype-css.ts` | 원본 CSS를 다시 옮긴다(`--check`는 최신인지 확인만) |
 
