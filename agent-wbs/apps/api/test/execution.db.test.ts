@@ -301,6 +301,7 @@ test.each(['자동','버튼'])('%s 완료는 실제 병합·통합과 서버가 
   expect((await complete()).statusCode).toBe(409);
   const verification = ((await owner.query('select id from verifications where attempt=$1',[a.attempt])).rows[0] as { id: string }).id;
   const job = ((await owner.query("select id from runner_jobs where kind='integrate'")).rows[0] as { id: string }).id;
+  await owner.query('update runner_jobs set fence=1 where id=$1',[job]);
   const ci = ((await owner.query("insert into ci_runs(project_id,run_key,stage,pipeline_sha,head_sha,base_sha,tree_sha,ref,task,trigger,status,job,fence) values($1,$2,2,$3,$4,$4,$5,'agent/test',$6,'int','pass',$7,1) returning id",[project,randomUUID(),otherSha,sha,otherSha,a.id,job])).rows[0] as { id: string }).id;
   await owner.query("insert into merge_queue(project_id,task,pr,position,status,qa_head_sha,synced_head_sha,base_sha,verification,ci_run,tested_tree_sha,actual_merge_sha,actual_tree_sha) values($1,$2,1,1,'merged',$3,$3,$3,$4,$5,$6,$7,$6)",[project,a.id,sha,verification,ci,otherSha,'d'.repeat(40)]);
   expect((await complete()).json()).toMatchObject({ error:{ code:'GATE_NOT_PASSED' } });

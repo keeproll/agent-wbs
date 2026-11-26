@@ -5,6 +5,7 @@ import { RunnerRepository, required } from '../runner/repository.ts';
 import { assertExternal } from '../runner/service.ts';
 import { record, SYSTEM } from '../tasks/history.ts';
 import { deferChange } from '../changes/events.ts';
+import { preservedHead, type HeadProof } from '../ci/proof.ts';
 
 export async function gateInputs(client: PoolClient, taskIds: string[], headSync: HeadSync | null = null): Promise<Map<string, GateInput>> {
   const rows = (await client.query<{ id: string; planning_approved_at: Date | null; revision: number; input_v: number; head_sha: string; open_qa: boolean;
@@ -49,7 +50,7 @@ export async function taskGate(client: PoolClient, taskId: string, taskKey: stri
   return { taskKey,passed:conditions.every(c => c.result === 'PASS'),conditions };
 }
 
-/** M7의 병합 대조가 호출한다. pipeline SHA와 head 보존 증거는 서버가 직접 확인한 값이어야 한다. */
+/** M7의 병합 대조가 호출한다. 파이프라인·보존 증거는 저장된 Runner 관측과 대조한다. */
 export async function completeMergedTask(client: PoolClient, taskKey: string, basePipelineSha: string | null, headSync: HeadSync | null = null) {
   const repo = new RunnerRepository(client);
   await repo.lock();
@@ -57,17 +58,23 @@ export async function completeMergedTask(client: PoolClient, taskKey: string, ba
   if (!task) throw new PlatformError('TASK_NOT_FOUND');
   if (task.status !== 'gate') throw new PlatformError('INVALID_TRANSITION');
   const queue = (await client.query<{ qa_head_sha: string; synced_head_sha: string; base_sha: string; actual_merge_sha: string; actual_tree_sha: string;
-    status: string; pipeline_sha: string; ci_head: string; ci_base: string; tree_sha: string; job: string; result: string }>(`
-    select q.*,c.pipeline_sha,c.head_sha ci_head,c.base_sha ci_base,c.tree_sha,c.status result,c.job from merge_queue q
-    left join ci_runs c on c.id=q.ci_run and c.stage=2 where q.task=$1 order by q.created_at desc,q.id desc limit 1`, [task.id])).rows[0];
+    status: string; pipeline_sha: string; ci_head: string; ci_base: string; tree_sha: string; job: string; result: string;
+    tested_tree_sha: string; head_sync: HeadProof | null; verification: string; ci_task: string; ci_fence: number; merge_parents: string[] | null }>(`
+    select q.*,c.pipeline_sha,c.head_sha ci_head,c.base_sha ci_base,c.tree_sha,c.status result,c.job,c.task ci_task,c.fence ci_fence from merge_queue q
+    left join ci_runs c on c.id=q.ci_run and c.stage=2 and c.project_id=q.project_id where q.task=$1 order by q.created_at desc,q.id desc limit 1`, [task.id])).rows[0];
   if (!basePipelineSha) throw new PlatformError('GATE_NOT_PASSED', { reasons:['병합 기준 main의 파이프라인 정의를 서버가 확인해야 합니다.'] });
-  const evidence: CompletionInput = { ...await gateInput(client,task.id,headSync),basePipelineSha,
+  if (queue && (queue.ci_task !== task.id || queue.tested_tree_sha !== queue.tree_sha)) throw new PlatformError('GATE_NOT_PASSED');
+  const latestVerification = (await client.query<{ id: string }>('select v.id from verifications v join task_attempts a on a.id=v.attempt where a.task=$1 order by a.attempt_no desc limit 1',[task.id])).rows[0];
+  if (queue && queue.verification !== latestVerification?.id) throw new PlatformError('GATE_NOT_PASSED');
+  const sync = queue ? preservedHead(queue.qa_head_sha,queue.synced_head_sha,queue.base_sha,queue.tree_sha,queue.head_sync) : headSync;
+  if (queue?.merge_parents && (queue.merge_parents.length !== 2 || queue.merge_parents[0] !== queue.base_sha || queue.merge_parents[1] !== queue.synced_head_sha)) throw new PlatformError('GATE_NOT_PASSED');
+  const evidence: CompletionInput = { ...await gateInput(client,task.id,sync),basePipelineSha,
     integration:queue?.pipeline_sha ? { result:queue.result === 'pass' ? 'PASS' : 'FAIL',qaHeadSha:queue.qa_head_sha,
       headSha:queue.ci_head,baseSha:queue.ci_base,pipelineSha:queue.pipeline_sha,treeSha:queue.tree_sha } : null,
     merge:queue?.status === 'merged' ? { mergeSha:queue.actual_merge_sha,headSha:queue.synced_head_sha,baseSha:queue.base_sha,treeSha:queue.actual_tree_sha } : null };
   lifecycleTransition(task.status,{ type:'complete',evidence });
   const job = queue?.job ? await repo.job(queue.job) : undefined;
-  if (!job || job.kind !== 'integrate' || job.payload.taskKey !== taskKey) throw new PlatformError('GATE_NOT_PASSED');
+  if (!job || job.kind !== 'integrate' || job.payload.taskKey !== taskKey || job.fence !== queue?.ci_fence) throw new PlatformError('GATE_NOT_PASSED');
   await assertExternal(repo,job);
   await client.query("update tasks set status='done',act_end=greatest(coalesce(act_start,clock_timestamp()),clock_timestamp()) where id=$1", [task.id]);
   await repo.historyEvent(task,'완료',{ mergeSha:queue?.actual_merge_sha });
