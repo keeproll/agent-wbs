@@ -37,6 +37,9 @@ try {
     },
   });
   if (!isStopping() && config.lan) await assertLanPassword(pool);
+  if (!isStopping() && config.lan && config.origin.startsWith('http:')) {
+    app.log.warn('LAN 평문 HTTP에서는 같은 네트워크의 사용자가 비밀번호와 세션을 볼 수 있습니다. HTTPS를 사용하세요.');
+  }
   // 연결을 기다리는 동안 종료 신호를 받았으면 열지 않는다.
   if (!isStopping()) await app.listen({ host: config.host, port: config.port });
 } catch (error) {

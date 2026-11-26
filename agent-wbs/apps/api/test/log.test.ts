@@ -10,8 +10,8 @@ const app = buildApp(pool, {
   ...loggerOptions('trace'),
   stream: { write: (line: string) => void (output += line) },
 });
-app.get('/boom', () => {
-  throw Object.assign(new Error('고장'), { client: { secretKey: 'hunter2' } });
+app.addHook('preHandler', async (request) => {
+  if (request.url.includes('boom=1')) throw Object.assign(new Error('고장'), { client: { secretKey: 'hunter2' } });
 });
 afterAll(async () => {
   await app.close();
@@ -28,7 +28,7 @@ describe('요청 URL의 비밀값을 로그에 남기지 않는다', () => {
     ['없는 경로의 query', '/nope?token=hunter2', 404],
     ['없는 경로의 path', '/bot123456:hunter2/sendMessage', 404],
     ['잘못된 URL', '/%zz?token=hunter2', 400],
-    ['처리되지 않은 오류와 부가 객체', '/boom?token=hunter2', 500],
+    ['처리되지 않은 오류와 부가 객체', '/health?boom=1&token=hunter2', 500],
   ])('%s', async (_label, url, status) => {
     const response = await app.inject(url);
     expect(response.statusCode).toBe(status);
