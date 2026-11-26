@@ -9,6 +9,7 @@ import type { ApiError } from '../../../shared/api/client.ts';
 import type { ResponseOf } from '../../../shared/api/contract.ts';
 import { formatDateTime } from '../../../shared/format.ts';
 import { AreaLoading } from '../../../shared/ui/loading.tsx';
+import { EFF, useGradeSettings } from './OverviewTab.tsx';
 import { agCls, agInit, ATTEMPT_KIND, ATTEMPT_STATUS, FLOW_ORDER, type TaskDetailData } from '../labels.ts';
 
 type Attempts = UseQueryResult<ResponseOf<'getTaskAttempts'>, ApiError>;
@@ -33,6 +34,15 @@ function flowSteps(t: TaskDetailData, atts: Attempt[]) {
 
 export function ExecTab({ task: t, attempts }: { task: TaskDetailData; attempts: Attempts }) {
   const atts = attempts.data?.items ?? [];
+  const { models } = useGradeSettings();
+  /** 원본 gradeL(「Opus 5.5 · 높음」). 설정의 모델 이름을 못 읽으면 id 그대로 */
+  const gradeL = (m: string, e: string | null) => `${models.data?.models.find((x) => x.id === m)?.label ?? m} · ${EFF[e ?? '']?.l ?? e ?? ''}`;
+  /** 같은 날 끝났으면 끝 시각만(원본 「15:10 – 17:48」) */
+  const endL = (a: Attempt) => {
+    if (!a.endedAt) return '진행 중';
+    const s = formatDateTime(a.startedAt), e = formatDateTime(a.endedAt);
+    return s.slice(0, 10) === e.slice(0, 10) ? e.slice(11) : e;
+  };
   return (
     <div className="pane">
       <div className="pane-h"><div className="pane-hl"><h3>실행</h3><span className="muted">Execution Attempt — 실행 단위 기록 (재작업은 새 시도로 누적)</span></div><Link className="btn primary sm" to={`/exec?task=${t.taskKey}`}>작업 실행 화면에서 진행</Link></div>
@@ -47,10 +57,10 @@ export function ExecTab({ task: t, attempts }: { task: TaskDetailData; attempts:
             <div className="att-h">
               <span className="att-n mono">{a.attemptKey}</span><span className="wt">{ATTEMPT_KIND[String(a.kind)] ?? String(a.kind)}</span>
               <span className="agent"><span className={`ag-mk ${agCls(ag)}`} aria-hidden="true">{agInit(ag)}</span>{ag}</span>
-              <span className="tag">{a.modelId ? `${a.modelId} · ${a.effort ?? ''}` : '등급 미기록'}</span>
+              <span className="tag">{a.modelId ? gradeL(a.modelId, a.effort) : '등급 미기록'}</span>
               {a.gradeAdjust && <span className={a.gradeAdjust.kind === 'down' ? 'sc sc-none' : 'sc sc-warn'}>{a.gradeAdjust.reason}</span>}
               <span className={`st ${st.c}`}><span className="st-d" aria-hidden="true" />{st.l}</span>
-              <span className="mono muted">{formatDateTime(a.startedAt)} – {a.endedAt ? formatDateTime(a.endedAt) : '진행 중'}</span>
+              <span className="mono muted">{formatDateTime(a.startedAt)} – {endL(a)}</span>
             </div>
             {a.summary && <p>{a.summary}</p>}
             {a.failure && <div className="banner danger" style={{ marginTop: 6 }}><div className="banner-b"><b>실패 사유</b> — {a.failure}</div></div>}

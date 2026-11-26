@@ -25,7 +25,7 @@ type Node = ResponseOf<'listTasks'>['nodes'][number];
 type Attempt = ResponseOf<'getTaskAttempts'>['items'][number];
 const ROLE_LABEL = { dev: '개발', qa: '검증' } as const;
 /** P L3450 */
-const EFF: Record<string, { l: string; n: number }> = { low: { l: '낮음', n: 1 }, medium: { l: '보통', n: 2 }, high: { l: '높음', n: 3 }, xhigh: { l: '매우 높음', n: 4 }, max: { l: '최대', n: 5 } };
+export const EFF: Record<string, { l: string; n: number }> = { low: { l: '낮음', n: 1 }, medium: { l: '보통', n: 2 }, high: { l: '높음', n: 3 }, xhigh: { l: '매우 높음', n: 4 }, max: { l: '최대', n: 5 } };
 
 export function OverviewTab({ task: t, byKey, nodes, attempts, onOpenTask }: {
   task: TaskDetailData; byKey: Map<string, TaskSummaryData>; nodes: Node[]; attempts: Attempt[]; onOpenTask: (k: string, ref: boolean) => void;
@@ -179,7 +179,7 @@ function OverviewForm({ task: t }: { task: TaskDetailData }) {
  */
 interface ModelSettingsView { models: { agent: string; id: string; label: string; allowed: boolean; efforts: { key: string; level: number | null }[] | null }[] }
 interface ExecPolicyView { floors: { verifyGeDev: boolean; dbHigh: boolean } }
-function useGradeSettings() {
+export function useGradeSettings() {
   const client = useApiClient();
   const call = client.call as unknown as (id: string, args: { signal?: AbortSignal }) => Promise<unknown>;
   const models = useQuery({ queryKey: apiKey('getModelSettings' as 'getSession'), queryFn: ({ signal }) => call('getModelSettings', { signal }) as Promise<ModelSettingsView>, meta: { topics: ['settings'] } });

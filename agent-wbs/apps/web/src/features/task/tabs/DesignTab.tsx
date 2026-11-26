@@ -8,6 +8,7 @@
  */
 import { useQueries } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
+import { Link } from 'react-router';
 import { apiKey } from '../../../shared/api/queries.ts';
 import { useConfirm } from '../../../shared/ui/feedback.tsx';
 import { useEditSlot } from '../edit-slot.tsx';
@@ -127,6 +128,7 @@ export function DesignTab({ task: t, tasks }: { task: TaskDetailData; tasks: Tas
     setEd({ title: `${bk.l} 편집`, draft: { kind: 'blk', sec: kind, idx: -1, key: bk.k, f: {}, b: toDraft([bk], contentOf(kind).b) } });
   };
   const busyOrEditing = slot.current !== null || write.busy;
+  const dsLinks = secs.flatMap(({ kind, content }) => (kind === 'API' ? (content.ents ?? []).map((e) => `${e.f.method ?? ''} ${e.f.path ?? ''}`) : kind === 'DB' ? (content.ents ?? []).map((e) => e.f.name ?? '') : [])).slice(0, 12);
 
   return (
     <div className="pane">
@@ -136,6 +138,13 @@ export function DesignTab({ task: t, tasks }: { task: TaskDetailData; tasks: Tas
           ? `기술 영역 ${[String(t.primaryDomain), ...t.relatedDomains.map(String)].join(' · ')} 기준 권장 섹션: ${rec.map((k) => DESIGN[k].label).join(', ')} — 필요한 섹션만 작성합니다.`
           : `기술 영역(${String(t.primaryDomain)})에는 기본 설계 섹션이 없습니다. 필요한 경우에만 추가하세요.`}
       </p>
+      {dsLinks.length > 0 && (
+        // 제품 전체 설계에서 보기(P L1217). 설계 메뉴(M6)가 아직 없어 메뉴로만 이동한다.
+        <div className="ds-link"><span className="muted">제품 전체 설계에서 보기</span>
+          {dsLinks.map((l) => <Link key={l} className="btn ghost sm mono" to="/design">{l}</Link>)}
+          <span className="tid">기준은 저장소 계약 파일 — 이 Task의 변경은 브랜치 차이로 표시됩니다.</span>
+        </div>
+      )}
       {DESIGN_KINDS.some((k) => !have.includes(k)) && (
         <div className="secadd"><span className="muted">섹션 추가</span>
           {DESIGN_KINDS.filter((k) => !have.includes(k)).map((k) => (
