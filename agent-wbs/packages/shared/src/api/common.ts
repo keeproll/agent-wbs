@@ -73,11 +73,16 @@ export const CiStatus = Named('CiStatus', 'queued', 'run', 'pass', 'fail', 'skip
 export const QueueStatus = Named('QueueStatus', 'waiting_verify', 'queued', 'checking', 'merged', 'failed', 'removed');
 export const ReportView = Named('ReportView', 'int', 'ext');
 export const GithubMode = Named('GithubMode', 'gh', 'token');
+/**
+ * GitHub 권한 하나의 확인 상태(조정자 결정 2026-11-26). verified=확인됨, unverified=미확인(추정하지 않음), missing=부족.
+ * fine-grained 토큰은 응답으로 권한을 알 수 없어 쓰기 권한이 unverified로 시작하고, 첫 실제 쓰기 결과로 바뀐다.
+ */
+export const GithubPermission = Named('GithubPermission', 'verified', 'unverified', 'missing');
 export const GithubScopes = Type.Object({
-  contents: Type.Boolean(),
-  pulls: Type.Boolean(),
-  statuses: Type.Boolean(),
-  metadata: Type.Boolean(),
+  contents: GithubPermission,
+  pulls: GithubPermission,
+  statuses: GithubPermission,
+  metadata: GithubPermission,
 });
 
 /** job 결과 보고의 소유권(contracts §3.2-4). 낡은 fence는 LEASE_LOST */

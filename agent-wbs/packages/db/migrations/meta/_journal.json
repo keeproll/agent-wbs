@@ -113,6 +113,13 @@
       "when": 1795684151205,
       "tag": "0015_20261126_platform_epoch_lock",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1795687645428,
+      "tag": "0016_20261126_contract_sync",
+      "breakpoints": true
     }
   ]
 }

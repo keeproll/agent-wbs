@@ -1443,11 +1443,17 @@ export const appSettings = pgTable(
     workflow: jsonb(),
     stage_pct: jsonb().notNull(),
     timezone: text().notNull(),
+    // 모델 순서(아래부터)·Codex 계열 순서·Claude 모델 목록(owner 2026-11-26 아이템 8). 초기값은 seed의 default_model_settings()
+    model_settings: jsonb().notNull(),
     ...version(),
   },
   (t) => [
     check('app_singleton', sql`${t.singleton}`),
     check('heartbeat_positive', sql`${t.heartbeat_seconds}>0 and ${t.heartbeat_misses}>0`),
+    check(
+      'app_model_settings_shape',
+      sql`(jsonb_typeof(${t.model_settings})='object' and ${t.model_settings} ?& array['rankOrder','codexFamilyOrder','claudeModels'] and jsonb_typeof(${t.model_settings}->'rankOrder')='object' and (${t.model_settings}->'rankOrder') ?& array['Claude','Codex'] and public.awbs_valid_id_list(${t.model_settings}->'rankOrder'->'Claude',0) and public.awbs_valid_id_list(${t.model_settings}->'rankOrder'->'Codex',0) and public.awbs_valid_id_list(${t.model_settings}->'codexFamilyOrder',1) and public.awbs_valid_id_list(${t.model_settings}->'claudeModels',1)) is true`,
+    ),
   ],
 );
 export const githubSettings = pgTable(
@@ -1457,12 +1463,23 @@ export const githubSettings = pgTable(
     singleton: singleton(),
     mode: text().notNull(),
     status: text().notNull(),
-    scopes: text().array().notNull(),
+    // 권한별 verified·unverified·missing(조정자 결정 2026-11-26). null = 확인 안 함
+    scopes: jsonb(),
+    // 미확인 권한 등 화면에 알릴 문구
+    warning: text(),
     expires_at: at('expires_at'),
     account: text(),
     secret_key: text().references(() => secrets.key, { onDelete: 'restrict' }),
   },
-  (t) => [...textChecks('github_settings', t), check('github_singleton', sql`${t.singleton}`)],
+  (t) => [
+    ...textChecks('github_settings', t),
+    check('github_singleton', sql`${t.singleton}`),
+    check(
+      'github_scopes_shape',
+      sql`${t.scopes} is null or (jsonb_typeof(${t.scopes})='object' and ${t.scopes} ?& array['contents','pulls','statuses','metadata'] and (${t.scopes} - array['contents','pulls','statuses','metadata'])='{}'::jsonb and ${t.scopes}->>'contents' in ('verified','unverified','missing') and ${t.scopes}->>'pulls' in ('verified','unverified','missing') and ${t.scopes}->>'statuses' in ('verified','unverified','missing') and ${t.scopes}->>'metadata' in ('verified','unverified','missing')) is true`,
+    ),
+    check('github_warning_text', sql`${t.warning} is null or length(btrim(${t.warning}))>0`),
+  ],
 );
 export const techConstraints = pgTable('tech_constraints', {
   ...row(),

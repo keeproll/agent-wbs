@@ -227,7 +227,15 @@
   - 용도: §4.9 탭.
   - `settings/ci`와 §2.3의 `ci/settings`는 **같은 설정 한 벌**(같은 행·버전).
   - 저장 전 `updatedAt`은 null.
-  - `models` PUT은 `{agent,id,allowed}`만 받고 이름·rank·efforts는 읽기 전용(§7.1, Q-06)
+  - `models` PUT은 모델마다 `{agent,id,allowed}`만 받는다. 이름·rank·efforts는 읽기 전용이다(§7.1, Q-06).
+  - **모델 순서는 설정값이다** (owner 2026-11-26 아이템 8).
+    - 같은 `models` PUT에 `rankOrder`·`codexFamilyOrder`·`claudeModels`를 실어 바꾼다. 바꿀 때만 보내고, 빠진 항목은 그대로 둔다.
+    - `rankOrder`는 Agent별 모델 ID 목록이다. **아래 등급부터** 적는다. 같은 ID를 두 번 쓸 수 없다.
+    - `codexFamilyOrder`는 Codex 같은 세대 안의 계열(luna·terra 같은 이름 끝부분) 순서다. 역시 아래부터 적는다.
+    - `claudeModels`는 Runner가 보고할 Claude 모델 목록이다. 비울 수 없다.
+    - 조회 응답의 모델별 `rank`는 서버가 `rankOrder`에서 계산한 값이다. 아래부터 1, 2, …이고 클수록 위 등급이다.
+    - 왜: owner가 모델 순서를 「팀장이 바꿀 수 있는 설정값」으로 정했다. CLI가 보여 주는 목록 순서는 등급 순서가 아니므로 쓰지 않는다.
+    - 초기값과 새 모델의 자리는 [data-model §6.2](data-model.md#62-system-seed-모델-순서와-claude-모델-목록)에 있다.
 - GET `/api/alerts`, GET `/api/system/integrity`
   - 용도: 현재 알림 / 정합성 점검
 - POST `/api/auth/session` · DELETE, GET `/api/session`
@@ -308,7 +316,9 @@
 - GET `/api/system/resets`
   - 초기화 기록
 - GET·PUT `/api/settings/github`, POST `/check`★
-  - `tokenSet`만
+  - 토큰 값은 돌려주지 않고 `tokenSet`(등록 여부)만 보인다.
+  - 조회 응답의 `scopes`는 권한별 3상태(`verified`·`unverified`·`missing`)이고, 확인하지 못했으면 null이다. 뜻은 §3.1 `github/status`와 같다.
+  - `warning`은 미확인 권한처럼 팀장이 알아야 할 문구다. 없으면 null이다.
 
 ### 2.3 보고서·메일(§8.5) · CI(§8.5-1) · 설계(§8.6) · Telegram(§8.7)
 
@@ -380,7 +390,12 @@ Runner만 부르는 API다. Runner 토큰과 epoch 헤더가 필요하다(§1).
   - concurrency는 세션별 `{attemptId,observed,reserved,state}`★ 포함.
   - host에 `bootId`★(해제 증거 대조).
   - readiness에 `cli[{agent,version,model,options}]`★ — 관측 등급은 서버가 조합으로 판정.
-  - models는 `models[{id,label,rank,efforts}]`로 **모델별** CLI 값(낮은 순, 미확인 null)을 보고하고 P의 Agent 단위 `efforts`는 쓰지 않음(owner Q-06)
+  - models는 `models[{id,label,efforts}]`로 **모델별** CLI 값(낮은 순, 미확인 null)을 보고하고 P의 Agent 단위 `efforts`는 쓰지 않음(owner Q-06)
+  - models 보고에는 **`rank`를 싣지 않는다**. 보내면 400 VALIDATION_FAILED다(owner 2026-11-26 아이템 8).
+    - 모델 순서는 서버가 가진 설정값(`rankOrder`, §2.1)이다. Runner는 무엇이 있는지만 알린다.
+    - 설정에 없는 새 모델은 「미허용」으로 등록하고, 서버가 순서 안에 자리를 정해 넣는다(data-model §6.2).
+    - Claude CLI는 모델 목록을 알려 주지 않는다. 그래서 Runner는 `GET /runner/policy`의 `claudeModels`를 보고 대상으로 쓴다.
+    - 왜: 순서를 Runner마다 따로 정하면 등급 상향(rank가 큰 모델로 올림)이 PC마다 달라진다. 순서는 판정의 재료이므로 서버 한 곳에 둔다.
 - GET `/runner/tasks/:taskKey/run-grade?role=`
   - 등급 정책 단일 출처. 재작업 상향·재개·하향을 서버가 계산해 `{model,effort,adjust}`★로도 준다.
   - `adjust`는 조정이 없으면 null, 있으면 `{kind:"up"|"down"|"keep"|"regrade",from:{model,effort},to:{model,effort},reason}`(regrade=D-29, 모델 이동 상향 D-30은 up).
@@ -413,11 +428,52 @@ Runner만 부르는 API다. Runner 토큰과 epoch 헤더가 필요하다(§1).
 - POST `/runner/design/snapshot`
   - §8.6
 - POST `/runner/github/status`★
-  - 인증 방식·계정·권한·만료(비밀값 없음)
-- GET `/runner/github/credential`★
-  - 토큰 방식일 때만. Runner 공개키로 봉인한 값(평문 없음)
+  - 인증 방식·계정·권한·만료를 알린다. 비밀값은 싣지 않는다.
+  - **권한은 3상태로 보고한다** (조정자 결정 2026-11-26).
+    - `scopes`의 네 권한(`contents`·`pulls`·`statuses`·`metadata`)은 각각 `verified`(확인됨)·`unverified`(미확인)·`missing`(부족) 중 하나다.
+    - 저장소조차 읽지 못해 아무것도 확인하지 못했으면 `scopes`는 null이다.
+    - `ok`는 인증됐고 `missing`이 하나도 없을 때만 true다. `scopes`가 null이면 false다.
+    - `unverified`가 하나라도 있으면 `warning`(화면에 띄울 문구)을 꼭 보낸다.
+    - 이 세 규칙은 입력 규칙 `githubStatusConsistent`로 검사한다. 어기면 400 VALIDATION_FAILED다.
+  - 왜 3상태인가: fine-grained 토큰은 GitHub 응답만으로 쓰기 권한을 알 수 없다. 「있다」고 추정하면 거짓 보고가 되고, 「실패」로 두면 fine-grained 토큰(Q-09 인증 선택지 (나))으로는 영영 연결되지 않는다.
+  - 판단 방법:
+    - 저장소를 읽었으면 `metadata`는 `verified`다.
+    - classic 토큰·`gh` 로그인은 응답의 `x-oauth-scopes`에 `repo`가 있으면 쓰기 셋이 `verified`, 없으면 `missing`이다.
+    - fine-grained 토큰이고 계정이 push할 수 있으면 쓰기 셋은 `unverified`다. `ok`는 true이고 `warning`을 함께 보낸다. 실행은 막지 않는다.
+    - 계정이 push할 수 없으면 쓰기 셋은 `missing`이다.
+  - **첫 실제 쓰기에서 확정한다.**
+    - PR 생성·닫기는 `pulls`, status 게시는 `statuses`, 병합은 `contents`의 증거다.
+    - 성공(2xx)하면 그 권한을 `verified`로 바꾼다.
+    - 속도 제한이 아닌 403이면 `missing`으로 바꾸고 이 API로 다시 보고한다. 서버는 관리자 개입 알림을 만든다.
+    - 속도 제한·409·405 같은 다른 거절은 권한 상태를 바꾸지 않는다.
+  - 연결 확인에 몰래 쓰기 시험(예: 시험용 PR 만들기)을 넣지 않는다.
+    - 왜: 확인 버튼 한 번에 저장소에 흔적이 남으면 안 된다.
+  - 관리자 계정은 연결 확인에서도 막는다(§4.1 코드 근거 고정 3-7). 이것이 실효 보호 규칙 점검을 대신하지는 않는다.
+- POST `/runner/github/key`★ (M4-04 계약 보완)
+  - 본문 `{runnerId,hostId,bootId,publicKeyPem,sealedVersion:1}` → 200 `{keyId}`. Runner 인증과 epoch가 필요하다.
+  - `publicKeyPem`은 X25519 공개키의 SubjectPublicKeyInfo PEM이다(§6.1).
+  - 서버는 인증된 Runner와 보고된 host·boot에 키를 묶는다.
+  - `keyId`는 서버가 공개키의 SHA-256 지문으로 계산한다. 같은 등록을 다시 보내면 같은 `keyId`가 온다.
+  - Runner는 프로세스를 시작할 때마다 새 키를 만들어 다시 등록한다.
+  - 등록은 서버 메모리에만 둔다 [결정]. 서버가 다시 켜지면 등록이 사라지므로, Runner는 credential 조회에서 404를 받으면 다시 등록한다.
+    - 왜: 키는 Runner 프로세스가 살아 있는 동안만 쓰인다. 오래 보관할 이유가 없다.
+  - **404 뒤 다시 등록할 때는 새 `Idempotency-Key`를 만든 새 요청으로 보낸다.**
+    - 옛 등록 요청(outbox에 남은 것 포함)을 같은 키로 다시 보내면 서버는 저장된 응답만 재생한다(§1 멱등). 등록 처리는 실행되지 않으므로 credential은 계속 404다.
+    - 그 새 등록 요청 자체가 네트워크 문제로 응답을 못 받았을 때의 재전송은 같은 키를 유지한다.
+    - 공개키는 살아 있는 프로세스의 것을 그대로 써도 된다. 같은 공개키면 같은 `keyId`가 온다.
+    - 예: 등록 성공 → 서버 재시작 → credential 404 → 새 키 `github-key:<runnerId>:<새 uuid>`로 등록 → credential 200.
+  - 왜 등록 단계를 따로 두나: 아무 공개키나 받아서 바로 봉인해 주면, 그 키를 만든 사람 누구에게나 토큰이 간다. 공개키도 「어느 Runner의 것인지」 인증돼야 한다.
+- GET `/runner/github/credential?keyId=`★
+  - 토큰 방식일 때만 쓴다. 응답 `{sealed}`는 등록된 공개키로 봉인한 값이며 평문은 없다(형식은 §6.1).
+  - 그 Runner에 등록된 `keyId`만 받는다. 모르는 키나 다른 Runner의 키는 404 NOT_FOUND다.
+  - 봉인이나 `keyId`가 있다고 해서 외부 쓰기가 허가된 것은 아니다. 쓰기 허가는 §3.4-5의 권한 세대가 정한다.
 - GET `/runner/policy`★
   - 상한·예산·주기·ci 설정·입력 확인 주기 묶음(`ETag`)
+  - `claudeModels`: Runner가 보고할 Claude 모델 목록(설정값, §2.1).
+  - `cliGrades[{agent,version,model,options,grade}]`: 서버에 등록된 CLI 조합별 관측 등급이다. `grade`는 `verified`·`partial`·`unverified`다.
+    - Runner 준비 점검 `obs`는 실행할 조합(CLI·버전·모델·옵션)이 여기에 `verified`로 있는지 대조한다(G§6.7-8).
+    - 없거나 다르면 `obs`는 warn이다. 실행은 계속하고 보수 계산(1 + 하위 Agent 예산)을 쓴다. 구버전으로 내리라고 안내하지 않는다(Q-12).
+    - 왜: 「검증된 버전인가」를 Runner가 확인하려면 서버가 가진 등록 목록을 알아야 한다. 판정 근거는 서버에 있으므로 서버가 내려 준다.
 
 ### 3.2 명령과 작업 ★
 
@@ -601,6 +657,13 @@ Planning Agent(계획을 세우는 Agent)가 결과를 보고하는 API다.
    - 이전 그룹 종료를 확인하고 GitHub main/PR/status 또는 compose 상태를 실제 조회해 「효과 없음 / 완료됨 / 부분 적용」을 보고한 뒤에만 완료 확정 또는 새 실행을 허용한다.
    - 부분 적용은 실패와 조치 안내로 남긴다.
    - 왜: 이미 병합까지 끝났는데 다시 실행하면 같은 일이 두 번 일어난다.
+   - **병합의 「결과 미확정」** (M4-04 계약 보완)
+     - 병합 요청의 응답을 잃었는데 조회해 보니 PR이 아직 열려 있거나 병합 없이 닫혀 있으면, 「효과 없음」으로 확정하지 않는다. 「결과 미확정」으로 둔다.
+     - 왜: 타임아웃은 GitHub 쪽 처리를 취소하지 않는다. 조회한 뒤에 늦게 병합될 수 있다.
+     - 미확정 동안에는 같은 병합 요청을 다시 보내지 않는다. 쓰기 없는 재조회로만 해소한다.
+     - 미확정 동안에는 그 PR과 병합 대기열의 다음 통합을 시작하지 않는다.
+     - 재조회에서 병합이 보이면 §4.1 코드 근거 고정 3-6대로 부모·tree를 확인한다.
+     - 「효과 없음」으로 확정하는 조건(예: 이전 그룹 종료를 확인하고 정한 시간이 지난 뒤 재조회해도 PR이 열려 있고 head가 그대로)은 **아직 정하지 않았다**. M4-01(작업 대기열)에서 정해 이 절에 적는다.
 7. 같은 host 안에서는 원격 호출 직전 lease를 renew한다. 호출 뒤 응답 유실은 조회로 대조한다. 다른 host 격리는 5번을 따른다.
 8. **논리 잠금과 물리 슬롯**
    - 논리 잠금(Task·충돌 묶음)은 claim부터 dev→①→(같은 시도 수정)→result까지 유지하고 다음 QA job으로 **원자적으로 인계**한다.
@@ -718,6 +781,11 @@ sequenceDiagram
       - 성공이면 병합 커밋의 부모가 A와 H', tree가 H'의 tree인지 확인하고 actual SHA를 기록한다.
       - 다르면 `done`으로 만들지 않고 알린다.
       - main을 자동으로 되돌리지 않는다(§9.6-2-3).
+      - 대조에서 병합이 보이지 않으면 「결과 미확정」이다. 「병합 안 됨」으로 확정하지 않는다.
+        - 왜: 타임아웃은 GitHub 처리를 취소하지 않는다.
+        - 같은 병합을 다시 호출하지 않고, 쓰기 없는 재대조로만 해소한다.
+        - 미확정 동안 그 PR·대기열의 다음 통합을 시작하지 않는다.
+        - 해소 조건은 §3.4-6 「병합의 결과 미확정」과 같다.
    7. main 보호: int 필수, strict up-to-date, 강제 push·삭제 금지, CODEOWNERS 검토(`prototype/`, `.agentwbs/`).
       - **일반 병합용 Runner 자격 증명에는 우회 권한을 주지 않는다.**
       - 관리자 우회 기본값에 기대지 않도록 관리자가 아닌 별도 계정/앱을 쓰고 준비 점검에서 실효 규칙을 조회한다.
@@ -785,6 +853,65 @@ Agent(Claude/Codex)가 일을 마치고 Runner에게 돌려주는 결과의 모�
   2. `agent/*` 중 **이 시스템이 기록한 브랜치만** 삭제
   3. 기준 커밋 상태의 `src/ contracts/ .agentwbs/`로 되돌림 커밋(강제 push 없음)
   - 등록 전 파일은 기준 커밋 내용으로 복원된다.
+- **재시도와 목록 읽기** (M4-04 계약 보완)
+  - 재시도하는 것은 429와 「속도 제한 403」뿐이다.
+    - 속도 제한 403은 `Retry-After` 헤더가 있거나, `x-ratelimit-remaining: 0`이거나, 본문이 rate limit(속도 제한)을 말하는 403이다.
+    - `Retry-After`가 있으면 그만큼, 없으면 `x-ratelimit-reset`(제한이 풀리는 시각)까지 기다린다.
+  - 권한 부족 403은 재시도하지 않는다.
+    - 왜: 권한이 없으면 기다려도 결과가 같다. 같은 요청을 반복하면 GitHub가 보조 속도 제한(짧은 시간 동안 너무 많은 요청을 막는 제한)을 걸 수 있다.
+  - 목록 API(예: commit status 목록)는 같은 경로에 `page=1,2,…`를 올려 가며 끝까지 읽는다. `Link` 응답 헤더에 다음 쪽이 없을 때 멈춘다.
+  - `Link` 헤더에 적힌 주소를 그대로 따라가지 않는다.
+    - 왜: 그 주소가 다른 서버를 가리키면 토큰이 그쪽으로 새어 나갈 수 있다.
+  - 너무 많으면(50쪽, 5000개 초과) 잘라서 쓰지 않고 오류로 본다.
+    - 왜: 일부만 읽고 「검사 결과가 없다」고 판단하면 틀린 결론이 난다.
+
+### 6.1 봉인 형식 v1
+
+`GET /runner/github/credential`의 `sealed`는 GitHub 토큰을 Runner 공개키로 잠근 값이다. 이 형식은 이 프로젝트 전용 버전 1이다(M4-04 계약 보완).
+
+- 왜 형식을 바이트 단위로 정하나: 서버(WBS)와 Runner는 따로 구현한다. 한 바이트라도 해석이 다르면 토큰을 열 수 없다.
+- 용어: X25519는 두 키로 같은 비밀을 만드는 키 교환 방식, HKDF-SHA256은 그 비밀에서 암호 키를 뽑는 방식, AES-256-GCM은 암호화와 위조 검사를 함께 하는 방식, AAD는 암호화하지 않지만 위조 검사에 넣는 추가 데이터다.
+
+**바이트 배치**
+
+`sealed`는 padding(`=`) 없는 base64url 문자열이다. 풀면 아래 순서의 바이트가 나온다. offset은 0부터 센다.
+
+| offset | 길이 | 값 |
+|---:|---:|---|
+| 0 | 1 | 버전. 반드시 `0x01` |
+| 1 | 32 | 봉인할 때마다 새로 만든 임시 X25519 공개키(raw 32바이트) |
+| 33 | 12 | AES-GCM nonce(암호학적 난수) |
+| 45 | 16 | AES-GCM 인증 tag |
+| 61 | 1 이상 | GitHub 토큰(UTF-8)의 암호문 |
+
+**계산 방법**
+
+- Runner 공개키는 등록(`POST /runner/github/key`) 때 X25519 SubjectPublicKeyInfo PEM으로 보낸다. 봉인 안에 들어가는 공개키는 PEM이 아니라 raw 32바이트다.
+- 공유 비밀 `Z = X25519(임시 개인키, Runner 공개키)`.
+- 암호 키 `K = HKDF-SHA256(IKM=Z, salt=임시 공개키 raw ‖ Runner 공개키 raw, info="agentwbs/github-credential/v1", 길이 32)`.
+- 암호화는 AES-256-GCM, nonce 12바이트, tag 16바이트, `AAD = 0x01 ‖ 임시 공개키 raw`다.
+- 평문은 토큰 자체의 UTF-8 바이트다. JSON·끝 줄바꿈·길이 머리말을 붙이지 않는다. 빈 토큰은 거부한다.
+
+**지킬 것**
+
+- 임시 개인키는 봉인 한 번에만 쓴다. 같은 키와 nonce 쌍을 다시 쓰지 않는다.
+- 받는 쪽은 문법·최소 길이·버전·공개키·GCM tag를 검사하고, 하나라도 실패하면 쓰지 않는다. 공유 비밀이 모두 0이거나 키 종류가 틀려도 거부한다.
+- 모르는 버전은 오류다. 다른 버전이나 평문으로 다시 시도하지 않는다.
+- 오류 메시지에 토큰·키·봉인 원문을 넣지 않는다.
+- 이 형식이 RFC 9180 HPKE(공개키 암호화 표준)의 직렬화와 같다고 말하지 않는다. 바이트·AAD·파생식을 바꾸면 새 버전이다.
+- 서버와 Runner는 공용 고정 벡터 `agent-wbs/contracts/fixtures/sealed-v1-vector.json`을 열 수 있어야 한다. 이 벡터는 시험용 값이며 실제 키·토큰이 아니다.
+- 길이 상한, canonical base64url 검사, 잘못된 UTF-8 거부는 **아직 정하지 않았다**. 정하기 전에는 어느 한쪽 구현에만 몰래 넣지 않는다.
+  - 왜: 한쪽만 엄격하면 다른 쪽이 만든 정상 값을 거부할 수 있다.
+
+### 6.2 봉인 키의 수명
+
+- Runner 개인키는 프로세스 메모리에만 둔다. 파일로 저장하지 않는다.
+- Runner가 다시 시작하면 새 키를 만들어 등록하고, 서버에서 새 봉인을 받는다. 예전 `sealed`가 새 키로 열리지 않는 것이 정상이다.
+- 서버의 토큰 저장 암호화 키 `AWBS_SECRET_KEY`와 Runner 봉인 키는 서로 다른 키다.
+- 봉인은 서버가 보냈다는 것이나 토큰이 최신이라는 것을 증명하지 않는다. 그것은 Runner 인증·TLS 같은 연결 보호가 맡는다.
+- 평문 토큰과 개인키는 디스크·로그·Agent 환경·명령 인자에 넣지 않는다.
+- 자격 증명 교체·폐기·host 변경 때는 캐시를 비운다. 비우는 중에 도착한 옛 응답이 새 캐시에 들어가면 안 된다.
+- 이전 자격 증명이 GitHub에서 401인지 확인하는 최종 경계는 §3.4-5 그대로다.
 
 ## 7. 변경 이벤트
 
