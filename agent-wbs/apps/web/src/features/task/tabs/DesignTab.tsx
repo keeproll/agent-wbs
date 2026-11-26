@@ -43,7 +43,7 @@ const recKinds = (t: TaskDetailData): DesignKind[] => {
 const filled = (v: BlockValue | undefined, t: Block['t']) => (t === 'code' ? typeof v === 'string' && v.trim() !== '' : Array.isArray(v) && v.length > 0);
 
 /** 다른 Task가 정의한 DB 테이블(FK 검사·관계 테이블용). enabled일 때만 DB 관련 Task 상세를 읽는다. */
-function useKnown(t: TaskDetailData, tasks: TaskSummaryData[], enabled: boolean, skip: { task: string; idx: number } | null): Known {
+function useKnown(t: TaskDetailData, tasks: TaskSummaryData[], enabled: boolean, skip: { task: string; key: string } | null): Known {
   const client = useApiClient();
   const others = tasks.filter((x) => x.taskKey !== t.taskKey && [String(x.primaryDomain), ...x.relatedDomains.map(String)].some((d) => d === 'DB' || d === 'BE' || d === 'API'));
   const results = useQueries({
@@ -67,7 +67,7 @@ export function DesignTab({ task: t, tasks }: { task: TaskDetailData; tasks: Tas
   useEffect(() => { if (ed) slot.report(ed); }, [ed, slot]);
   const editing = slot.current === 'design' && ed !== null;
   const hasDb = secs.some((s) => s.kind === 'DB');
-  const known = useKnown(t, tasks, hasDb || (editing && ed.draft.sec === 'DB'), editing && ed.draft.kind === 'ent' ? { task: t.taskKey, idx: ed.draft.idx } : null);
+  const known = useKnown(t, tasks, hasDb || (editing && ed.draft.sec === 'DB'), editing && ed.draft.kind === 'ent' && ed.draft.target !== null ? { task: t.taskKey, key: ed.draft.target } : null);
   const have = secs.map((s) => s.kind);
   const rec = recKinds(t);
   const [pending, setPending] = useState<{ kind: DesignKind; op: DesignOp; notice: string; mine: string; draft: EditorDraft | null; base: string | null } | null>(null);
@@ -98,7 +98,7 @@ export function DesignTab({ task: t, tasks }: { task: TaskDetailData; tasks: Tas
 
   if (editing) {
     const d = ed.draft;
-    const own = d.sec === 'API' ? (contentOf('API').ents ?? []).filter((_, i) => i !== d.idx).map((e) => ({ method: e.f.method ?? '', path: e.f.path ?? '' })) : [];
+    const own = d.sec === 'API' ? (contentOf('API').ents ?? []).filter((e) => entKey('API', e) !== d.target).map((e) => ({ method: e.f.method ?? '', path: e.f.path ?? '' })) : [];
     const check = validateDraft(d, { known, ownApi: own });
     return (
       <>
@@ -109,16 +109,14 @@ export function DesignTab({ task: t, tasks }: { task: TaskDetailData; tasks: Tas
           onSave={() => {
             if (!d.sec) return;
             const kind = d.sec;
-            const cur = contentOf(kind);
             const val = fromDraft(draftBlocks(d), d.b);
             if (d.kind === 'ent') {
               const sc = DESIGN[kind].ent;
               const f = Object.fromEntries(Object.entries(d.f).map(([k, v]) => [k, v.trim()]));
               const ent: DesignEnt = { f, b: val };
               const nm = kind === 'DB' ? f.name ?? '' : `${f.method ?? ''} ${f.path ?? ''}`;
-              // 편집 전 엔티티 이름으로 최신 섹션에서 찾아 바꾼다(새로 추가는 null → 뒤에 붙임)
-              const before = d.idx < 0 ? undefined : (cur.ents ?? [])[d.idx];
-              commit(kind, { type: 'entUpsert', key: before ? entKey(kind, before) : null, ent }, `${sc?.label ?? ''} ${nm}을(를) 저장했습니다.`, `${DESIGN[kind].label} · ${sc?.label ?? ''} ${nm}`);
+              // 편집을 시작할 때 고정한 이름(d.target)으로 최신 섹션에서 찾아 바꾼다. 새로 추가는 null → 뒤에 붙임(재리뷰2 P1)
+              commit(kind, { type: 'entUpsert', key: d.target, ent }, `${sc?.label ?? ''} ${nm}을(를) 저장했습니다.`, `${DESIGN[kind].label} · ${sc?.label ?? ''} ${nm}`);
             } else {
               const bk = draftBlocks(d)[0];
               commit(kind, { type: 'blocks', b: val }, `「${bk?.l ?? ''}」을(를) 저장했습니다.`, `${DESIGN[kind].label} · ${bk?.l ?? ''}`);
@@ -131,16 +129,17 @@ export function DesignTab({ task: t, tasks }: { task: TaskDetailData; tasks: Tas
   }
 
   const openEnt = (kind: DesignKind, idx: number) => {
+    // idx는 지금 화면 목록에서 고른 위치일 뿐이다. 바로 그 엔티티의 이름을 고정해 이후에는 이름으로만 대상을 정한다.
     const sc = DESIGN[kind].ent;
     if (!sc) return;
     const en = idx < 0 ? blankEntity(kind) : (contentOf(kind).ents ?? [])[idx] ?? blankEntity(kind);
     const nm = kind === 'DB' ? en.f.name ?? '' : `${en.f.method ?? ''} ${en.f.path ?? ''}`;
     slot.open('design');
-    setEd({ title: idx < 0 ? `${sc.label} 추가` : `${sc.label} 편집 — ${nm}`, draft: { kind: 'ent', sec: kind, idx, key: '', f: { ...en.f }, b: toDraft(sc.blocks, en.b) }, base: t.updatedAt });
+    setEd({ title: idx < 0 ? `${sc.label} 추가` : `${sc.label} 편집 — ${nm}`, draft: { kind: 'ent', sec: kind, target: idx < 0 ? null : entKey(kind, en), key: '', f: { ...en.f }, b: toDraft(sc.blocks, en.b) }, base: t.updatedAt });
   };
   const openBlk = (kind: DesignKind, bk: Block) => {
     slot.open('design');
-    setEd({ title: `${bk.l} 편집`, draft: { kind: 'blk', sec: kind, idx: -1, key: bk.k, f: {}, b: toDraft([bk], contentOf(kind).b) }, base: t.updatedAt });
+    setEd({ title: `${bk.l} 편집`, draft: { kind: 'blk', sec: kind, target: null, key: bk.k, f: {}, b: toDraft([bk], contentOf(kind).b) }, base: t.updatedAt });
   };
   const busyOrEditing = slot.current !== null || write.busy;
   const dsLinks = secs.flatMap(({ kind, content }) => (kind === 'API' ? (content.ents ?? []).map((e) => `${e.f.method ?? ''} ${e.f.path ?? ''}`) : kind === 'DB' ? (content.ents ?? []).map((e) => e.f.name ?? '') : [])).slice(0, 12);

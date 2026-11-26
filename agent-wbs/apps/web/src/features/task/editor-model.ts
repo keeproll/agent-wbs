@@ -19,8 +19,11 @@ export interface EditorDraft {
   kind: 'ent' | 'blk' | 'spec';
   /** 설계 종류(ent·blk). spec이면 '' */
   sec: DesignKind | '';
-  /** 수정하는 엔티티 번호. 새로 추가는 -1 */
-  idx: number;
+  /**
+   * 수정하는 엔티티의 이름(DB 테이블명, API 「방식 경로」). **편집을 시작할 때 고정**한다. 새로 추가는 null.
+   * 왜 배열 번호가 아닌가: 편집 중 다른 사람이 순서를 바꾸면 같은 번호가 다른 엔티티를 가리켜 그 정의를 덮어쓴다(재리뷰2 P1).
+   */
+  target: string | null;
   /** blk·spec의 블록 키 */
   key: string;
   f: Record<string, string>;
@@ -87,13 +90,13 @@ export function normalizeDesign(kind: DesignKind, raw: unknown): { content: Desi
 }
 
 /** 모든 Task의 DB 설계에 정의된 테이블(삭제 제외). skip은 지금 편집 중인 엔티티(P L5454). */
-export function knownTables(tasks: { taskKey: string; designs: { kind: string; content: unknown }[] }[], skip: { task: string; idx: number } | null): Known {
+export function knownTables(tasks: { taskKey: string; designs: { kind: string; content: unknown }[] }[], skip: { task: string; key: string } | null): Known {
   const m: Known = {};
   for (const t of tasks) {
     for (const sec of t.designs) {
       if (sec.kind !== 'DB' || !isDesignPresent(sec.content)) continue;
-      (normalizeDesign('DB', sec.content).content.ents ?? []).forEach((en, i) => {
-        if (skip && skip.task === t.taskKey && skip.idx === i) return;
+      (normalizeDesign('DB', sec.content).content.ents ?? []).forEach((en) => {
+        if (skip && skip.task === t.taskKey && skip.key === en.f.name) return;
         const name = en.f.name;
         if (name && en.f.change !== '삭제') m[name] = { cols: ((en.b.columns ?? []) as Row[]).map((c) => String(c.name)), task: t.taskKey, change: en.f.change ?? '' };
       });

@@ -108,7 +108,7 @@ function SpecTableEditor({ task: t, which }: { task: TaskDetailData; which: 'ac'
   const source = (which === 'ac' ? t.spec.ac : t.outputs) as unknown as Row[];
   const restored = slot.restored as { draft: EditorDraft; base: string } | null;
   const [base] = useState(() => restored?.base ?? t.updatedAt);
-  const [draft, setDraft] = useState<EditorDraft>(() => restored?.draft ?? { kind: 'spec', sec: '', idx: -1, key: which, f: {}, b: toDraft([block], { [which]: source }) });
+  const [draft, setDraft] = useState<EditorDraft>(() => restored?.draft ?? { kind: 'spec', sec: '', target: null, key: which, f: {}, b: toDraft([block], { [which]: source }) });
   const [touched, setTouched] = useState(restored !== null);
   useEffect(() => { slot.report({ draft, base }); }, [draft, slot, base]);
   useEffect(() => { slot.setDirty(touched); }, [touched, slot]);
