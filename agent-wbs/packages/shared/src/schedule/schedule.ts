@@ -8,6 +8,44 @@ function required<T>(value: T | undefined): T {
   return value;
 }
 
+/** Same collation as `a.localeCompare(b, 'en', { numeric: true })` (ECMA-402 defines localeCompare through Intl.Collator). */
+const WBS_ORDER = new Intl.Collator('en', { numeric: true });
+
+interface ReadyTask { id: string; release: number; priority: number; wbs: number; order: number }
+/** Comparator of the former `ready.sort(...)`: release time, priority, numeric WBS, then input order (the stable-sort tie). */
+const before = (a: ReadyTask, b: ReadyTask) => (a.release - b.release || a.priority - b.priority || a.wbs - b.wbs || a.order - b.order) < 0;
+
+/** Binary min-heap of ready tasks. */
+class ReadyHeap {
+  private readonly items: ReadyTask[] = [];
+  push(item: ReadyTask): void {
+    const a = this.items;
+    a.push(item);
+    let i = a.length - 1;
+    while (i > 0) {
+      const parent = (i - 1) >> 1;
+      if (!before(required(a[i]), required(a[parent]))) break;
+      [a[i], a[parent]] = [required(a[parent]), required(a[i])];
+      i = parent;
+    }
+  }
+  pop(): ReadyTask | undefined {
+    const a = this.items, top = a[0], last = a.pop();
+    if (!a.length || last === undefined) return top;
+    a[0] = last;
+    for (let i = 0; ;) {
+      const l = 2 * i + 1, r = l + 1;
+      let m = i;
+      if (l < a.length && before(required(a[l]), required(a[m]))) m = l;
+      if (r < a.length && before(required(a[r]), required(a[m]))) m = r;
+      if (m === i) break;
+      [a[i], a[m]] = [required(a[m]), required(a[i])];
+      i = m;
+    }
+    return top;
+  }
+}
+
 export function taskSlots(limit: number, subRatio: number): number {
   finite(limit, 0, 'session limit');
   finite(subRatio, 0, 'subagent ratio');
@@ -115,6 +153,15 @@ export function schedule(input: ScheduleInput): ScheduleResult {
     if (u.resetAt) instant(u.resetAt);
     if (u.remain === 0 && !u.resetAt) warnings.push({ code: 'USAGE_RESET_UNKNOWN', agent: ag });
   }
+  // Numeric WBS rank, computed once: equal ranks mean localeCompare(…, 'en', { numeric: true }) === 0.
+  const order = new Map(ids.map((id, i) => [id, i]));
+  const wbsRank = new Map<string, number>();
+  const byWbs = [...ids].sort((a, b) => WBS_ORDER.compare(required(tasks.get(a)).wbs, required(tasks.get(b)).wbs));
+  byWbs.forEach((id, i) => {
+    const prev = byWbs[i - 1];
+    const same = prev !== undefined && WBS_ORDER.compare(required(tasks.get(prev)).wbs, required(tasks.get(id)).wbs) === 0;
+    wbsRank.set(id, prev !== undefined && same ? required(wbsRank.get(prev)) : i);
+  });
   const sim = (estimate: 'est' | 'lo' | 'hi', rate: number) => {
     const cal = calendar(now, rate, blackouts), pool = Array<number>(poolN).fill(0);
     const slots = new Map<Agent, number[]>(['Claude', 'Codex'].map(name => {
@@ -134,7 +181,6 @@ export function schedule(input: ScheduleInput): ScheduleResult {
     for (const t of [...tasks.values()].filter(t => t.status !== 'done' && t.actStart).sort((a, b) => instant(required(a.actStart)) - instant(required(b.actStart)))) {
       place(t, 0, (t[estimate] || t.est) * (1 - STAGE_PCT[t.status] / 100));
     }
-    const left = ids.filter(id => !out.has(id));
     const release = (id: string) => {
       const t = required(tasks.get(id));
       let h = t.fixStart ? cal.effectiveAt(date(t.fixStart)) : 0;
@@ -144,14 +190,40 @@ export function schedule(input: ScheduleInput): ScheduleResult {
       }
       return h;
     };
-    while (left.length) {
-      const ready = left.filter(id => required(preds.get(id)).every(dep => out.has(dep.pred)));
-      if (!ready.length) throw new ScheduleError('SCHEDULE_CYCLE', 'Dependency cycle prevents scheduling', left);
-      // Same release-time, priority, numeric WBS ordering as prototype Sel.schedule.
-      ready.sort((a, b) => release(a) - release(b) || required(tasks.get(a)).priority - required(tasks.get(b)).priority || required(tasks.get(a)).wbs.localeCompare(required(tasks.get(b)).wbs, 'en', { numeric: true }));
-      const id = required(ready[0]), t = required(tasks.get(id));
-      place(t, release(id), t[estimate] || t.est);
-      left.splice(left.indexOf(id), 1);
+    // Same release-time, priority, numeric WBS ordering as prototype Sel.schedule (ties keep input order, like the stable sort did).
+    // A task's release time is fixed once all its predecessors are placed, so each ready task is keyed once and kept in a heap
+    // instead of re-sorting every ready task on every placement (srv-perf: O(N² log N) → O(N log N)).
+    const ready = new ReadyHeap();
+    const waiting = new Map<string, number>(), succs = new Map<string, string[]>();
+    let left = 0;
+    const enqueue = (id: string) => {
+      const t = required(tasks.get(id));
+      ready.push({ id, release: release(id), priority: t.priority, wbs: required(wbsRank.get(id)), order: required(order.get(id)) });
+    };
+    for (const id of ids) {
+      if (out.has(id)) continue;
+      left++;
+      let n = 0;
+      for (const dep of required(preds.get(id))) {
+        if (out.has(dep.pred)) continue;
+        n++;
+        const list = succs.get(dep.pred);
+        if (list) list.push(id); else succs.set(dep.pred, [id]);
+      }
+      waiting.set(id, n);
+      if (!n) enqueue(id);
+    }
+    while (left) {
+      const next = ready.pop();
+      if (!next) throw new ScheduleError('SCHEDULE_CYCLE', 'Dependency cycle prevents scheduling', ids.filter(id => !out.has(id)));
+      const t = required(tasks.get(next.id));
+      place(t, next.release, t[estimate] || t.est);
+      left--;
+      for (const succ of succs.get(next.id) ?? []) {
+        const n = required(waiting.get(succ)) - 1;
+        waiting.set(succ, n);
+        if (!n) enqueue(succ);
+      }
     }
     return { out, cal };
   };

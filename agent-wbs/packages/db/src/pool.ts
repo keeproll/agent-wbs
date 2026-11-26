@@ -25,6 +25,18 @@ export function createPool(
   });
   // 유휴 연결이 끊기면 'error'가 발생한다. 처리하지 않으면 프로세스가 죽는다.
   pool.on('error', options.onError);
+  // 요청이 빌려 쓰는 중(checked out)인 연결이 끊기면 pool이 아니라 그 연결(client)에 'error'가 난다.
+  // pool의 'error'는 쉬고 있는 연결만 대신 받아 준다(node-postgres Pool 문서). 듣는 곳이 없으면 프로세스가 죽으므로
+  // 모든 연결에 처리기를 단다. 그 요청의 다음 질의는 실패하고(요청 단위 503), 끊긴 연결은 반납 때 pool이 버린다.
+  const inUse = new WeakSet<pg.PoolClient>();
+  pool.on('acquire', (client) => inUse.add(client));
+  pool.on('release', (_error, client) => inUse.delete(client));
+  pool.on('connect', (client) => {
+    client.on('error', (error) => {
+      // 쉬는 연결의 오류는 위의 pool 'error'가 이미 알린다. 같은 오류를 두 번 남기지 않는다.
+      if (inUse.has(client)) options.onError(error);
+    });
+  });
   return pool;
 }
 

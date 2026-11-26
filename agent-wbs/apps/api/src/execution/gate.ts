@@ -27,7 +27,7 @@ export async function gateInputs(client: PoolClient, taskIds: string[], headSync
       from task_attempts qa left join verifications v on v.attempt=qa.id left join input_versions iv on iv.id=qa.input_version
       where qa.task=t.id and qa.kind in ('qa','reverify') order by qa.attempt_no desc limit 1) v on true
     left join lateral(select c.status,c.spec_revision,iv.v input_v from ci_runs c left join input_versions iv on iv.id=c.input_version
-      where c.task=t.id and c.stage=1 and c.head_sha=coalesce($2,t.execution_head_sha,a.head_sha) order by c.created_at desc,c.id desc limit 1) c on true
+      where c.project_id=t.project_id and c.task=t.id and c.stage=1 and c.head_sha=coalesce($2,t.execution_head_sha,a.head_sha) order by c.created_at desc,c.id desc limit 1) c on true
     where t.id=any($1::uuid[])`, [taskIds,headSync?.headSha ?? null])).rows;
   return new Map(rows.map(task => {
     const basis = { headSha:headSync?.headSha ?? task.head_sha ?? '',specRevision:task.revision ?? 0,inputVersion:task.input_v ?? 0 };

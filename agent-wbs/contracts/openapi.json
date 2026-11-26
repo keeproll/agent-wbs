@@ -479,6 +479,30 @@
                       },
                       "additionalProperties": false
                     }
+                  },
+                  "estimate": {
+                    "type": "object",
+                    "required": [
+                      "estHours"
+                    ],
+                    "properties": {
+                      "estHours": {
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                        "maximum": 400
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "fixStart": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/DateOnly"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "additionalProperties": false

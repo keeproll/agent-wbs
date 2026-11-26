@@ -361,11 +361,13 @@ export function registerPlanningRoutes(app: FastifyInstance, pool: Pool): void {
     });
 
     route('listReplans', '재조정 기록 조회', async (request) => {
+      // 정렬은 RP 순번(counters로 발급, 단조 증가)이다. created_at은 트랜잭션 시작 시각(now())이라
+      // 같은 트랜잭션이나 거의 같은 때 시작한 재조정끼리 순서가 뒤집혀 간헐 실패가 났다.
       const query = request.query as { limit?: number; cursor?: string };
       const offset = offsetOf(query.cursor);
       const limit = Math.min(query.limit ?? 50, 200);
       const rows = (await pool.query<{ id: string; rp_key: string; trigger: string; actor: string; status: string; baseline_v: number | null; after: { end: string; lo: string; hi: string; rate: number }; at: string }>(
-        `select id,rp_key,trigger,actor,status,baseline_v,after,${iso('created_at')} as at from replans order by created_at desc,id desc offset $1 limit $2`, [offset, limit + 1])).rows;
+        `select id,rp_key,trigger,actor,status,baseline_v,after,${iso('created_at')} as at from replans order by substring(rp_key from 4)::bigint desc offset $1 limit $2`, [offset, limit + 1])).rows;
       const page = rows.slice(0, limit);
       const moves = (await pool.query<{ replan: string; task_key: string; kind: string; before: { end?: string } | null; after: { end?: string } | null }>(
         'select m.replan,t.task_key,m.kind,m.before,m.after from replan_moves m join tasks t on t.id=m.task where m.replan=any($1::uuid[]) order by t.task_key', [page.map((row) => row.id)])).rows;

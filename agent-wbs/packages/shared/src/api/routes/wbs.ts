@@ -31,6 +31,13 @@ const TaskCreate = Body({
   verifierAgent: Opt(c.Agent),
   ...m.SpecInput,
   checklist: Opt(List(Body(m.ChecklistInput))),
+  /**
+   * 예상 소요 시간. updateTask의 `estimate`와 같은 묶음 이름·필드 이름을 쓰되, 원본 Wizard처럼 estHours 하나만 받는다.
+   * 서버가 범위(×0.7~×1.6)·토큰(×140K)·신뢰도 「하」를 붙여 팀장 임시 추정으로 저장한다(Planning 재추정 전).
+   */
+  estimate: Opt(m.TaskCreateEstimateInput),
+  /** 고정 시작일(Asia/Seoul 날짜). 이 날 전에는 일정을 배치하지 않는다(data-model §2 tasks.fix_start). */
+  fixStart: Opt(Nullable(c.DateOnly)),
 });
 
 const task = [

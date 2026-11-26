@@ -16,11 +16,19 @@ const DOMAIN_TO_DESIGN: Partial<Record<TechDomain, DesignKind>> = { DB: 'DB', BE
 /** P newTask의 빈 설계 구역 내용 */
 export const emptyDesignContent = () => ({ ents: [], b: {} });
 
+/**
+ * 기술 영역에 맞는 빈 설계 구역(P recKinds). 주 영역 다음 관련 영역 순서이고, 같은 구역은 한 번만 만든다.
+ * CP add의 `design` 생략(data-model §2.4-1)과 Task 생성(createTask, P newTask·createTask)이 같은 규칙을 쓴다.
+ */
+export function recommendedDesigns(domain: TechDomain, rel: readonly TechDomain[] = []): { kind: DesignKind; content: Record<string, unknown> }[] {
+  const kinds = [domain, ...rel].flatMap((item) => DOMAIN_TO_DESIGN[item] ?? []);
+  return [...new Set(kinds)].map((kind) => ({ kind, content: emptyDesignContent() }));
+}
+
 /** CP add의 `design`을 생략했을 때의 구역(P recKinds). 명시한 `[]`는 구역 없음이다(data-model §2.4-1). */
 export function designsOf(t: AddTask): { kind: DesignKind; content: Record<string, unknown> }[] {
   if (t.design !== undefined) return t.design.map(({ kind, content }) => ({ kind, content: { ...content } }));
-  const kinds = [t.domain, ...(t.rel ?? [])].flatMap((domain) => DOMAIN_TO_DESIGN[domain] ?? []);
-  return [...new Set(kinds)].map((kind) => ({ kind, content: emptyDesignContent() }));
+  return recommendedDesigns(t.domain, t.rel ?? []);
 }
 
 /**

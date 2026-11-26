@@ -2,7 +2,10 @@ import { DomainError } from './types.ts';
 import type { Dependency, Task } from './types.ts';
 
 export function dependencyMet(tasks: readonly Task[], dependency: Dependency): boolean {
-  const pred = tasks.find(task => task.id === dependency.pred);
+  return predMet(tasks.find(task => task.id === dependency.pred), dependency);
+}
+
+function predMet(pred: Task | undefined, dependency: Dependency): boolean {
   if (!pred) return false; // Coordinator R9: a missing reference never satisfies a dependency.
   if (dependency.type === 'FS') return pred.status === 'done';
   // Owner D-27: cancellation removes the edge; cancellation itself is not a start.
@@ -16,6 +19,26 @@ export function blockers(tasks: readonly Task[], dependencies: readonly Dependen
 export function isBlocked(tasks: readonly Task[], dependencies: readonly Dependency[], taskId: string) {
   return tasks.some(task => task.id === taskId && task.status !== 'done') &&
     blockers(tasks, dependencies, taskId).length > 0;
+}
+
+/**
+ * 차단된 Task 전체를 한 번에 구한다. 결과는 Task마다 `isBlocked`를 부른 것과 같다.
+ * 목록 조회처럼 모든 Task의 차단 여부가 필요할 때 쓴다. Task마다 `isBlocked`를 부르면 Task 수의 제곱만큼 시간이 든다(srv-perf).
+ */
+export function blockedTasks(tasks: readonly Task[], dependencies: readonly Dependency[]): Set<string> {
+  // `dependencyMet`의 `tasks.find`처럼 같은 ID가 여럿이면 첫 Task를 본다.
+  const first = new Map<string, Task>();
+  // `isBlocked`의 첫 조건: 그 ID로 완료되지 않은 Task가 하나라도 있다.
+  const open = new Set<string>();
+  for (const task of tasks) {
+    if (!first.has(task.id)) first.set(task.id, task);
+    if (task.status !== 'done') open.add(task.id);
+  }
+  const blocked = new Set<string>();
+  for (const dep of dependencies) {
+    if (open.has(dep.succ) && !predMet(first.get(dep.pred), dep)) blocked.add(dep.succ);
+  }
+  return blocked;
 }
 
 export function cyclePath(dependencies: readonly Dependency[], candidate: Dependency): string[] | null {
