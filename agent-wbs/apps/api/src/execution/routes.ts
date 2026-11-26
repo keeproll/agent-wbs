@@ -1,11 +1,10 @@
 import assert from 'node:assert/strict';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import type { Pool, PoolClient } from '@awbs/db';
 import { completionGate, DomainError } from '@awbs/shared';
 import { OPERATIONS } from '@awbs/shared/api';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { PlatformError } from '../platform/errors.ts';
+import { DATA_ROOT } from '../reset/files.ts';
 import { inEpoch } from '../platform/transaction.ts';
 import { required, RunnerRepository } from '../runner/repository.ts';
 import { TaskError } from '../tasks/errors.ts';
@@ -16,13 +15,14 @@ import { attempts, evidenceList, verifications, type PageFilter } from './read.t
 import { reportResult, type ResultReport } from './result.ts';
 
 export interface ExecutionOptions {
-  evidenceRoot?: string;
+  /** 서버 파일 루트(기본 ~/.agentwbs/wbs). Evidence 저장·내보내기(M2-04)·파일 삭제 큐가 모두 이 루트를 쓴다. */
+  dataRoot?: string;
   /** M7이 main A에서 직접 읽은 정의. Runner가 보고한 pipelineSha로 대신하지 않는다. */
   resolveBasePipelineSha?: (client: PoolClient, baseSha: string) => Promise<string | null>;
 }
 
 export function installExecution(app: FastifyInstance, pool: Pool, options: ExecutionOptions = {}) {
-  const root = options.evidenceRoot ?? join(homedir(),'.agentwbs/wbs');
+  const root = options.dataRoot ?? DATA_ROOT;
   const uploads = new WeakMap<FastifyRequest,string[]>();
   app.addContentTypeParser('multipart/form-data',{ parseAs:'buffer' },(r,body,done) => {
     void multipartBody(String(r.headers['content-type']),body as Buffer).then(b => done(null,b),done);

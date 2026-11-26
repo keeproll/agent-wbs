@@ -138,12 +138,14 @@ export function installSecurity(app: FastifyInstance, pool: Pool, options: Secur
       context.currentEpoch = current;
       context.epoch = expected;
     } else if (operation?.staleEpoch) {
-      const state = (await client.query<{ epoch: number }>('select public.lock_current_epoch() as epoch')).rows[0];
+      // 정리 완료 함수는 감사 행과 시스템 상태를 함께 바꾸므로 처음부터 배타적으로 잠근다.
+      const state = (await client.query<{ epoch: number }>(operation.id === 'reportCommandResult'
+        ? 'select public.lock_epoch_exclusive() as epoch' : 'select public.lock_current_epoch() as epoch')).rows[0];
       assert(state);
       context.currentEpoch = state.epoch;
     } else await client.query('select public.lock_epoch($1)', [context.epoch]);
     if (operation?.id === 'reportCommandResult') {
-      const command = (await client.query<{ epoch: number }>('select epoch from runner_commands where id=$1', [(request.params as { id: string }).id])).rows[0];
+      const command = (await client.query<{ epoch: number }>('select epoch from runner_commands where id::text=$1', [(request.params as { id: string }).id])).rows[0];
       if (!command) throw new PlatformError('NOT_FOUND', { resource: 'runner_command' });
       if (command.epoch !== context.epoch) throw new PlatformError('EPOCH_MISMATCH', { currentEpoch: context.currentEpoch });
     }

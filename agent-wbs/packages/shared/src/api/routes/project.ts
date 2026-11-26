@@ -195,7 +195,7 @@ const project = [
             actor: Type.String(),
             deletedTaskCount: c.Count,
             keepSettings: Type.Boolean(),
-            runnerCleanupStatus: AnyOf('none', 'pending', 'running', 'failed'),
+            runnerCleanupStatus: AnyOf('none', 'pending', 'running', 'done', 'failed'),
             finishedAt: Nullable(c.Timestamp),
           }),
         ),

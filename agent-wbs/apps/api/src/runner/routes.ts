@@ -11,6 +11,7 @@ import { RunnerRepository, required } from './repository.ts';
 import { caps, claim, checkedJob, release, requestRun, runGrade, start, retryFailedAttempt, wireCaps, type Proof } from './service.ts';
 import { reportConcurrency, reportHost } from './telemetry.ts';
 import { runnerState } from './state.ts';
+import { installResetRunner } from '../reset/routes.ts';
 
 const params = (r: FastifyRequest) => r.params as { id: string; taskKey: string; attemptId: string };
 const body = <T>(r: FastifyRequest) => r.body as T;
@@ -18,6 +19,7 @@ const principal = (r: FastifyRequest) => { assert(r.platform); return r.platform
 
 /** 플랫폼이 연 트랜잭션을 그대로 사용한다. 별도 트랜잭션을 열면 멱등 응답과 업무 변경이 갈라진다. */
 export function installRunner(app: FastifyInstance, pool: Pool) {
+  installResetRunner(app, pool);
   const route = (id: string, handler: (repo: RunnerRepository, r: FastifyRequest) => Promise<unknown>, status = 200) => {
     const op = OPERATIONS.find(o => o.id === id);
     assert(op);

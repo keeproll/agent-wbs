@@ -51,13 +51,7 @@ for (const op of runnerOps) {
     return { count: effects };
   } });
 }
-app.post('/api/project/reset', async (request) => {
-  assert(request.platform?.client);
-  const input = request.body as { epoch: number; confirmName: string };
-  const result = await request.platform.client.query<{ epoch: number }>('select public.reset_project($1,$2,true,\'lead\') as epoch', [input.epoch, input.confirmName]);
-  return result.rows[0];
-});
-// 착수 승인(/api/tasks/:taskKey/approve)은 M2-02, 프로젝트 등록(/api/project)은 M2-03의 실제 경로가 같은 관문을 거치므로 대역을 두지 않는다.
+// 초기화(/api/project/reset)는 M2-04, 착수 승인(/api/tasks/:taskKey/approve)은 M2-02, 프로젝트 등록(/api/project)은 M2-03의 실제 경로가 같은 관문을 거치므로 대역을 두지 않는다.
 app.get('/api/dashboard', () => { throw new Error('Bearer hunter2 /bot123:hunter2/send'); });
 
 beforeAll(async () => {
@@ -296,7 +290,7 @@ test('초기화 응답은 프로젝트 삭제 뒤에도 저장되어 같은 키 
   const login = await app.inject({ method: 'POST', url: '/api/auth/session', headers: { origin }, payload: { method: 'link', token } });
   const cookie = String(login.headers['set-cookie']).split(';')[0] ?? '';
   const session = (await app.inject({ url: '/api/session', headers: { cookie } })).json<{ csrfToken: string }>();
-  const request = { method: 'POST' as const, url: '/api/project/reset', headers: { cookie, origin, 'x-csrf-token': session.csrfToken, 'idempotency-key': 'reset-once' }, payload: { epoch: 2, confirmName: '재전송 시험' } };
+  const request = { method: 'POST' as const, url: '/api/project/reset', headers: { cookie, origin, 'x-csrf-token': session.csrfToken, 'idempotency-key': 'reset-once' }, payload: { epoch: 2, confirmName: '재전송 시험', keepSettings: true } };
   const first = await app.inject(request);
   expect(first.statusCode, first.body).toBe(200);
   expect(first.json()).toEqual({ epoch: 3 });
