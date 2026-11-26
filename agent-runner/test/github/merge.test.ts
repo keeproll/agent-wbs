@@ -55,6 +55,7 @@ describe('PR 병합 — strict + 예상 head 단일 경로 (contracts §4.1 코�
     expect(nonGet()).toEqual([
       { method: 'PUT', path: '/repos/o/r/pulls/1/merge', query: {}, body: { sha: head, merge_method: 'merge' }, params: { owner: 'o', repo: 'r', number: '1' } },
     ]);
+    expect(client.permissions()?.contents).toBe('verified');
     github.assertNoUnexpected();
   });
 
@@ -192,6 +193,7 @@ describe('PR 병합 — strict + 예상 head 단일 경로 (contracts §4.1 코�
       status: 403,
       retryable: false,
     });
+    expect(client.permissions()?.contents).toBe('missing');
   });
 
   test('5xx도 결과를 모르는 것으로 보고 대조한다', async () => {

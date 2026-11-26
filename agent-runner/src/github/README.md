@@ -37,7 +37,8 @@ Runner가 GitHub(git 저장소를 올려 두고 PR·검사·병합을 하는 서
 
 | 함수 | 하는 일 | 돌려주는 것 |
 | --- | --- | --- |
-| `checkConnection(mode)` | 계정·권한·만료 확인. 실패해도 던지지 않는다 | `reportGithubStatus` 본문 모양 |
+| `checkConnection(mode)` | 계정·권한(3상태)·만료 확인. 실패해도 던지지 않는다 | `ConnectionStatus` |
+| `permissions()` | 지금까지 알게 된 권한 상태(연결 확인 + 실제 쓰기 결과) | 권한별 확인됨/미확인/부족 |
 | `checkRepository()` | 접근·private·main 커밋·필수 구조(G L233) | `reportRepoCheck` 본문(fence 제외) |
 | `ensurePullRequest()` | `agent/<TASK>` → main PR. 이미 있으면 그것을 돌려준다 | PR + `created` |
 | `getPullRequest()`·`closePullRequest()` | PR 조회·닫기 | |
@@ -95,19 +96,36 @@ Runner가 GitHub(git 저장소를 올려 두고 PR·검사·병합을 하는 서
 | Commit statuses 쓰기 | status 게시 | [Create a commit status](https://docs.github.com/en/rest/commits/statuses?apiVersion=2022-11-28#create-a-commit-status) |
 | Metadata 읽기 | 저장소 조회 | [Get a repository](https://docs.github.com/en/rest/repos/repos?apiVersion=2022-11-28#get-a-repository) |
 
-연결 확인(`checkConnection`)이 이 권한을 어떻게 판단하나:
+권한마다 상태를 3가지로 낸다(조정자 결정 2026-11-26).
 
-- **classic 토큰·gh 로그인 토큰**: 응답 헤더 `x-oauth-scopes`에 `repo`가 있으면 네 권한이 모두 있다고 본다.
+| 상태 | 뜻 | 실행 |
+| --- | --- | --- |
+| 확인됨(`verified`) | 읽기 응답·OAuth 범위·성공한 실제 쓰기로 확인했다 | 허용 |
+| 미확인(`unverified`) | 확인할 방법이 없었다 | **허용하고 경고만 띄운다** |
+| 부족(`missing`) | 범위에 없거나 실제 쓰기가 권한 부족 403을 받았다 | 연결 확인이면 실패, 쓰기 중이면 그 오류 |
+
+연결 확인(`checkConnection`)이 판단하는 방법:
+
+- 저장소를 읽었으면 Metadata 읽기는 **확인됨**이다.
+- **classic 토큰·gh 로그인 토큰**: 응답 헤더 `x-oauth-scopes`에 `repo`가 있으면 쓰기 셋 모두 확인됨, 없으면 부족(연결 실패).
 - **fine-grained 토큰**: 토큰에 실제로 준 권한 목록을 돌려주는 API가 없다.
-  - 저장소 응답의 `permissions.push`는 **계정**의 권한이라 토큰 권한을 증명하지 못한다.
+  - 저장소 응답의 `permissions.push`는 **계정**의 권한이다. 계정이 push할 수 없으면 토큰도 못 쓰므로 쓰기 셋은 부족(연결 실패)이다.
+  - 계정이 push할 수 있으면 쓰기 셋은 **미확인**이다. 연결은 성공(`ok:true`)으로 두고 `warning`으로 「쓰기 권한 미확인, 첫 쓰기에서 확인」을 알린다. 추정해서 확인됨으로 바꾸지 않는다.
   - 오류 응답의 `X-Accepted-GitHub-Permissions`는 그 API가 **요구하는** 권한일 뿐, 토큰이 가진 권한 목록이 아니다([문서](https://docs.github.com/en/rest/using-the-rest-api/troubleshooting-the-rest-api#resource-not-accessible)).
-  - 그래서 확인하지 못한 권한을 true로 추정하지 않는다. `ok:false`, `scopes:null`, 이유 「인증됨, 쓰기 권한 확인 안 됨」으로 보고한다. push조차 안 되는 계정이면 「쓰기 권한 없음」이다.
-  - 예: Contents 쓰기만 있고 Commit statuses 쓰기가 없는 토큰도 저장소 조회·push 값은 정상으로 보인다. 예전 코드는 이 토큰을 「정상」으로 보고했다(리뷰 R2).
 - 관리자 계정이면 권한과 관계없이 `ok:false`다(contracts §4.1-3-7 「관리자가 아닌 별도 계정/앱」).
+
+첫 실제 쓰기에서 바뀌는 규칙:
+
+- 쓰기(PR 생성·닫기 → Pull requests, status 게시 → Commit statuses, 병합 → Contents)가 2xx면 그 권한은 **확인됨**.
+- 속도 제한이 아닌 403이면 **부족**으로 바꾸고 `onPermissionDenied({permission, operation, message})`를 부른다. 호출자는 이것으로 팀장에게 알린다.
+  응답에 `X-Accepted-GitHub-Permissions`가 있으면 그 헤더가 가리키는 권한을 부족으로 표시한다.
+- 409·405·422·속도 제한 같은 다른 거부는 권한 증거가 아니므로 상태를 바꾸지 않는다.
+- 알림 콜백이 실패해도 원래 403 오류는 그대로 던진다.
+- 연결 확인을 다시 하면 쓰기에서 얻은 결과를 지우고 새로 판단한다. 예: 팀장이 토큰 권한을 고친 뒤 「연결 확인」을 누르면 부족 표시가 풀린다.
 
 **M4-06 실증 항목**(실제 GitHub에서만 확인할 수 있어 여기서는 확인하지 못한 것):
 
-1. fine-grained 토큰의 Contents·Pull requests·Commit statuses 쓰기 권한을 쓰기 없이 확인할 방법이 있는지, 없으면 연결 확인을 어떤 계약으로 바꿀지.
+1. fine-grained 토큰의 실제 권한 목록. 쓰기 없이 확인할 방법이 있는지(있으면 미확인 대신 확인됨으로 바꿀 수 있다).
 2. 권한이 빠진 토큰으로 PR 생성·status 게시·병합이 각각 403과 `X-Accepted-GitHub-Permissions`를 돌려주는지.
 3. 보조 속도 제한 403의 실제 헤더 모양(`Retry-After` 유무).
 4. 병합 PUT 타임아웃 뒤 실제로 늦게 적용되는 일이 있는지와 PR 조회 반영 지연. (어느 쪽이든 코드는 `unknown`으로 남긴다.)

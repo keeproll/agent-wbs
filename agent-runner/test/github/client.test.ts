@@ -58,55 +58,152 @@ describe('저장소 주소', () => {
 });
 
 describe('연결 확인', () => {
-  test('fine-grained 토큰: 계정·만료는 보고하되 확인 못 한 쓰기 권한을 true로 추정하지 않는다(리뷰 2)', async () => {
+  const UNVERIFIED = { metadata: 'verified', contents: 'unverified', pulls: 'unverified', statuses: 'unverified' };
+
+  test('fine-grained 토큰: 읽기로 확인한 것은 확인됨, 쓰기 권한은 미확인 경고이며 연결은 성공이다', async () => {
     const client = await setup({ login: 'bot', tokenExpiration: '2026-12-20 09:00:00 +0900' });
     const status = await client.checkConnection('token');
     expect(status).toEqual({
       mode: 'token',
-      ok: false,
+      ok: true,
       account: 'bot',
-      scopes: null,
+      permissions: UNVERIFIED,
       expiresAt: '2026-12-20T00:00:00.000Z',
-      error: expect.stringMatching(/인증됨.*확인 안 됨.*M4-06/) as unknown,
+      warning: expect.stringMatching(/미확인.*첫 쓰기.*M4-06/) as unknown,
     });
     expect(JSON.stringify(status)).not.toContain(TOKEN);
     expect(writes).toEqual([]);
+    expect(client.permissions()).toEqual(UNVERIFIED);
   });
 
-  test('classic/gh 토큰은 x-oauth-scopes로 권한을 판단한다', async () => {
+  test('classic/gh 토큰은 x-oauth-scopes로 확인됨·부족을 정한다', async () => {
     const client = await setup({ oauthScopes: 'read:org, gist' });
-    expect((await client.checkConnection('gh')).scopes).toEqual({
-      contents: false,
-      pulls: false,
-      statuses: false,
-      metadata: false,
+    const lacking = await client.checkConnection('gh');
+    expect(lacking).toMatchObject({
+      ok: false,
+      permissions: { metadata: 'verified', contents: 'missing', pulls: 'missing', statuses: 'missing' },
     });
+    expect(lacking.error).toMatch(/부족/);
     const repoScoped = await setup({ oauthScopes: 'repo, read:org' });
-    expect((await repoScoped.checkConnection('gh')).scopes).toEqual({
-      contents: true,
-      pulls: true,
-      statuses: true,
-      metadata: true,
+    const full = await repoScoped.checkConnection('gh');
+    expect(full).toMatchObject({
+      ok: true,
+      permissions: { metadata: 'verified', contents: 'verified', pulls: 'verified', statuses: 'verified' },
     });
+    expect(full.warning).toBeUndefined();
   });
 
-  test('저장소 push가 안 되면 쓰기 권한 없음으로 보고한다', async () => {
+  test('저장소 push가 안 되는 계정이면 쓰기 권한은 부족이고 연결 실패다', async () => {
     const client = await setup({ permissions: { admin: false, push: false, pull: true } });
     const status = await client.checkConnection('token');
-    expect(status).toMatchObject({ ok: false, scopes: null });
-    expect(status.error).toMatch(/쓰기 권한 없음/);
+    expect(status).toMatchObject({
+      ok: false,
+      permissions: { metadata: 'verified', contents: 'missing', pulls: 'missing', statuses: 'missing' },
+    });
+    expect(status.error).toMatch(/부족/);
   });
 
-  test('리뷰 R2: Contents 쓰기만 있고 Commit statuses 쓰기가 없는 토큰을 정상으로 보고하지 않는다', async () => {
-    const client = await setup({ tokenPermissions: { statuses: 'none' } });
+  test('리뷰 R2: 쓰기 권한이 빠진 토큰은 미확인으로 실행되고, 첫 쓰기 403에서 부족으로 바뀌며 알린다', async () => {
+    const denied: unknown[] = [];
+    const client = await setup(
+      { tokenPermissions: { statuses: 'none' } },
+      {
+        onPermissionDenied: (event) => {
+          denied.push(event);
+        },
+      },
+    );
     const sha = model.push('agent/TASK-0001');
     const status = await client.checkConnection('token');
+    expect(status).toMatchObject({ ok: true, permissions: UNVERIFIED });
     await expect(client.setCommitStatus({ sha, context: 'agentwbs/task', state: 'pending' })).rejects.toMatchObject({
       status: 403,
       retryable: false,
     });
-    expect(status.ok).toBe(false);
-    expect(status.scopes).toBeNull();
+    expect(client.permissions()?.statuses).toBe('missing');
+    expect(denied).toEqual([{ permission: 'statuses', operation: 'status', message: expect.stringContaining('403') as unknown }]);
+    expect(JSON.stringify(denied)).not.toContain(TOKEN);
+  });
+
+  test('첫 쓰기가 성공하면 그 권한은 확인됨이 된다', async () => {
+    const client = await setup();
+    await client.checkConnection('token');
+    const sha = model.push('agent/TASK-0001');
+    await client.setCommitStatus({ sha, context: 'agentwbs/task', state: 'pending' });
+    await client.ensurePullRequest({ branch: 'agent/TASK-0001', title: 't', body: '' });
+    expect(client.permissions()).toEqual({ metadata: 'verified', contents: 'unverified', pulls: 'verified', statuses: 'verified' });
+  });
+
+  test('PR 생성 403은 pulls를 부족으로 바꾼다', async () => {
+    const denied: { permission: string }[] = [];
+    const client = await setup({ tokenPermissions: { pulls: 'read' } }, { onPermissionDenied: (e) => denied.push(e) });
+    model.push('agent/TASK-0001');
+    await expect(client.ensurePullRequest({ branch: 'agent/TASK-0001', title: 't', body: '' })).rejects.toMatchObject({ status: 403 });
+    expect(client.permissions()?.pulls).toBe('missing');
+    expect(denied.map((e) => e.permission)).toEqual(['pulls']);
+  });
+
+  test('PR 닫기 403도 pulls를 부족으로 바꾼다', async () => {
+    const client = await setup({ tokenPermissions: { pulls: 'read' } });
+    model.push('agent/TASK-0001');
+    model.openPull('agent/TASK-0001');
+    await expect(client.closePullRequest(1)).rejects.toMatchObject({ status: 403 });
+    expect(client.permissions().pulls).toBe('missing');
+  });
+
+  test('permissions()는 복사본이라 바깥에서 바꿔도 내부 상태가 그대로다', async () => {
+    const client = await setup();
+    const copy = client.permissions();
+    copy.statuses = 'verified';
+    expect(client.permissions().statuses).toBe('unverified');
+  });
+
+  test('x-accepted-github-permissions가 가리키는 권한을 부족으로 표시한다', async () => {
+    const client = await setup();
+    const sha = model.push('agent/TASK-0001');
+    github.on('POST /repos/:owner/:repo/statuses/:sha', () => ({
+      status: 403,
+      headers: { 'x-accepted-github-permissions': 'contents=write' },
+      body: { message: 'Resource not accessible by personal access token' },
+    }));
+    await expect(client.setCommitStatus({ sha, context: 'agentwbs/task', state: 'pending' })).rejects.toThrow();
+    expect(client.permissions()).toMatchObject({ contents: 'missing', statuses: 'unverified' });
+  });
+
+  test('속도 제한 403은 권한 부족이 아니다', async () => {
+    const denied: unknown[] = [];
+    const client = await setup({}, { onPermissionDenied: (e) => denied.push(e) });
+    const sha = model.push('agent/TASK-0001');
+    model.limitNext(1, 'secondary');
+    await expect(client.setCommitStatus({ sha, context: 'agentwbs/task', state: 'pending' })).rejects.toMatchObject({
+      retryable: true,
+    });
+    expect(client.permissions()?.statuses).toBe('unverified');
+    expect(denied).toEqual([]);
+  });
+
+  test('연결 확인을 다시 하면 쓰기에서 얻은 결과를 지우고 새로 판단한다(토큰을 고친 뒤)', async () => {
+    const client = await setup({ tokenPermissions: { statuses: 'none' } });
+    const sha = model.push('agent/TASK-0001');
+    await client.setCommitStatus({ sha, context: 'agentwbs/task', state: 'pending' }).catch(() => undefined);
+    expect(client.permissions()?.statuses).toBe('missing');
+    await client.checkConnection('token');
+    expect(client.permissions()).toEqual(UNVERIFIED);
+  });
+
+  test('알림 콜백이 실패해도 원래 403 오류를 던진다', async () => {
+    const client = await setup(
+      { tokenPermissions: { statuses: 'none' } },
+      {
+        onPermissionDenied: () => {
+          throw new Error('알림 실패');
+        },
+      },
+    );
+    const sha = model.push('agent/TASK-0001');
+    await expect(client.setCommitStatus({ sha, context: 'agentwbs/task', state: 'pending' })).rejects.toMatchObject({
+      status: 403,
+    });
   });
 
   test('연결 확인 중 속도 제한이면 던지지 않고 이유를 보고한다', async () => {
@@ -127,7 +224,7 @@ describe('연결 확인', () => {
   test('토큰이 틀리면 401을 실패로 보고하고 던지지 않는다', async () => {
     const client = await setup({}, { token: () => Promise.resolve(new Secret('ghp_wrongwrongwrongwrongwrong0000')) });
     const status = await client.checkConnection('token');
-    expect(status).toMatchObject({ ok: false, account: null, scopes: null, expiresAt: null });
+    expect(status).toMatchObject({ ok: false, account: null, permissions: null, expiresAt: null });
     expect(status.error).toMatch(/401/);
   });
 
@@ -140,7 +237,7 @@ describe('연결 확인', () => {
     });
     expect(client).toBeDefined();
     const status = await other.checkConnection('token');
-    expect(status).toMatchObject({ ok: false, account: 'agentwbs-bot', scopes: null });
+    expect(status).toMatchObject({ ok: false, account: 'agentwbs-bot', permissions: null });
     expect(status.error).toMatch(/저장소/);
   });
 });

@@ -27,6 +27,24 @@ export type WriteOperation =
   | { kind: 'status'; sha: string; context: StatusContext }
   | { kind: 'merge'; pr: number; headSha: string };
 
+/** 권한 이름. 원본 가이드 §9.5-4-1의 네 권한(README §4). */
+export type PermissionName = 'contents' | 'pulls' | 'statuses' | 'metadata';
+/**
+ * 권한 상태 3가지.
+ * - verified(확인됨): 읽기 응답·OAuth 범위·성공한 실제 쓰기로 확인했다.
+ * - unverified(미확인): 확인할 방법이 없었다. 실행은 허용하고 경고만 띄운다.
+ * - missing(부족): 범위에 없거나 실제 쓰기가 권한 부족 403을 받았다.
+ */
+export type PermissionState = 'verified' | 'unverified' | 'missing';
+export type Permissions = Record<PermissionName, PermissionState>;
+
+/** 실제 쓰기가 권한 부족 403을 받았을 때 호출자에게 넘기는 알림(팀장 알림용). 비밀값 없음. */
+export interface PermissionDenied {
+  permission: PermissionName;
+  operation: WriteOperation['kind'];
+  message: string;
+}
+
 export interface GitHubClientOptions {
   repo: RepoRef;
   /** 요청마다 부른다. 봉인 값을 연 `Secret`이나 `gh auth token` 결과를 돌려준다. */
@@ -36,6 +54,8 @@ export interface GitHubClientOptions {
   /** 거부(throw)하면 GitHub를 호출하지 않는다. 예: 409 EXTERNAL_WRITE_BLOCKED. */
   beforeWrite?: (operation: WriteOperation) => Promise<void>;
   timeoutMs?: number;
+  /** 첫 실제 쓰기에서 권한 부족이 드러나면 부른다. 여기서 던져도 원래 오류는 그대로 던진다. */
+  onPermissionDenied?: (event: PermissionDenied) => void;
 }
 
 /** `reportGithubStatus` 본문과 같은 모양(비밀값 없음). */
@@ -43,8 +63,11 @@ export interface ConnectionStatus {
   mode: GithubMode;
   ok: boolean;
   account: string | null;
-  scopes: { contents: boolean; pulls: boolean; statuses: boolean; metadata: boolean } | null;
+  /** 인증·저장소 조회에 실패하면 null. */
+  permissions: Permissions | null;
   expiresAt: string | null;
+  /** ok이지만 알려야 할 것(예: 쓰기 권한 미확인). */
+  warning?: string;
   error?: string;
 }
 
@@ -212,6 +235,29 @@ function rateLimit(raw: Raw): { limited: boolean; retryAfterSeconds: number | nu
   return { limited, retryAfterSeconds: null };
 }
 
+const ACCEPTED_NAMES: Readonly<Record<string, PermissionName>> = {
+  contents: 'contents',
+  pull_requests: 'pulls',
+  statuses: 'statuses',
+  metadata: 'metadata',
+};
+
+/** `x-accepted-github-permissions: contents=write; pull_requests=write` → 처음 알아보는 권한. */
+function acceptedPermission(header: string | null): PermissionName | undefined {
+  for (const part of (header ?? '').split(/[;,]/)) {
+    const name = ACCEPTED_NAMES[part.split('=')[0]?.trim() ?? ''];
+    if (name) return name;
+  }
+  return undefined;
+}
+
+const unverifiedAll = (): Permissions => ({
+  metadata: 'unverified',
+  contents: 'unverified',
+  pulls: 'unverified',
+  statuses: 'unverified',
+});
+
 /** status 목록을 읽을 최대 페이지. 100개×50 = 5000개(한 SHA·context 상한 1000개 × context 4종을 넘는다). */
 const MAX_STATUS_PAGES = 50;
 
@@ -220,6 +266,26 @@ export function createGitHubClient(options: GitHubClientOptions) {
   const beforeWrite = options.beforeWrite ?? (() => Promise.resolve());
   const repoPath = `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.repo)}`;
   let redact = createRedactor();
+  let permissions = unverifiedAll();
+
+  /**
+   * 실제 쓰기 결과로 권한 상태를 고친다. 2xx면 확인됨, 속도 제한이 아닌 403이면 부족으로 바꾸고 알린다.
+   * 409·405·422 같은 다른 거부는 권한에 대한 증거가 아니므로 그대로 둔다.
+   */
+  const observeWrite = (raw: Raw, permission: PermissionName, operation: WriteOperation['kind'], what: string): void => {
+    if (raw.status >= 200 && raw.status < 300) {
+      permissions[permission] = 'verified';
+      return;
+    }
+    if (raw.status !== 403 || rateLimit(raw).limited) return;
+    const denied = acceptedPermission(raw.headers.get('x-accepted-github-permissions')) ?? permission;
+    permissions[denied] = 'missing';
+    try {
+      options.onPermissionDenied?.({ permission: denied, operation, message: failure(raw, what).message });
+    } catch {
+      // 알림 실패가 원래 오류를 가리지 않게 한다.
+    }
+  };
 
   const failure = (raw: Raw, what: string): GitHubError => {
     const message = (raw.body as { message?: unknown } | undefined)?.message;
@@ -334,13 +400,20 @@ export function createGitHubClient(options: GitHubClientOptions) {
   return {
     repo,
 
+    /** 지금까지 알게 된 권한 상태(연결 확인 + 실제 쓰기 결과). 복사본을 돌려준다. */
+    permissions(): Permissions {
+      return { ...permissions };
+    },
+
     /** 설정의 「연결 확인」. 던지지 않고 실패를 `ok:false`로 돌려준다. */
     async checkConnection(mode: GithubMode): Promise<ConnectionStatus> {
+      // 새 연결 확인은 새로 판단한다(토큰을 고친 뒤 다시 확인하는 경우). 이전 쓰기에서 얻은 결과는 지운다.
+      permissions = unverifiedAll();
       const fail = (error: string, rest: Partial<ConnectionStatus> = {}): ConnectionStatus => ({
         mode,
         ok: false,
         account: null,
-        scopes: null,
+        permissions: null,
         expiresAt: null,
         ...rest,
         error,
@@ -368,30 +441,37 @@ export function createGitHubClient(options: GitHubClientOptions) {
       if (repository.status !== 200) {
         return fail(`저장소에 접근할 수 없음(${String(repository.status)})`, { account, expiresAt });
       }
-      const permissions = (repository.body as { permissions?: { admin?: boolean; push?: boolean; pull?: boolean } }).permissions ?? {};
-      if (permissions.admin === true) {
+      const repoPermissions = (repository.body as { permissions?: { admin?: boolean; push?: boolean; pull?: boolean } }).permissions ?? {};
+      if (repoPermissions.admin === true) {
         return fail('관리자 권한 자격 증명은 쓰지 않음(보호 규칙 우회 가능). 관리자가 아닌 별도 계정/앱 필요', { account, expiresAt });
       }
+      // 저장소를 읽었으므로 Metadata 읽기는 확인됐다.
+      permissions.metadata = 'verified';
+      const writes = ['contents', 'pulls', 'statuses'] as const;
+      const base = { mode, account, expiresAt };
       const oauth = user.headers.get('x-oauth-scopes');
-      if (oauth === null) {
-        // fine-grained 토큰: 토큰에 실제로 준 권한 목록을 돌려주는 API가 없다.
-        // 저장소 permissions는 계정의 권한이고, X-Accepted-GitHub-Permissions는 API가 「요구하는」 권한일 뿐이다.
-        // 확인하지 못한 권한을 true로 추정하지 않는다(README 권한 근거 표, M4-06 실증 항목).
-        if (permissions.push !== true) return fail('쓰기 권한 없음: 이 계정은 저장소에 push할 수 없음', { account, expiresAt });
-        return fail(
-          '인증됨, 쓰기 권한(Contents·Pull requests·Commit statuses) 확인 안 됨: fine-grained 토큰은 부여된 권한을 조회할 수 없음(M4-06 실증 항목)',
-          { account, expiresAt },
-        );
+      if (oauth !== null) {
+        // classic 토큰·gh OAuth 토큰: `repo` 범위가 쓰기 권한 셋을 모두 포함한다(OAuth scopes 문서).
+        const has = oauth.split(',').map((scope) => scope.trim()).includes('repo');
+        for (const name of writes) permissions[name] = has ? 'verified' : 'missing';
+        if (!has) {
+          return { ...base, ok: false, permissions: { ...permissions }, error: '필요한 권한 부족: contents, pulls, statuses (repo 범위 없음)' };
+        }
+        return { ...base, ok: true, permissions: { ...permissions } };
       }
-      // classic 토큰·gh OAuth 토큰: `repo` 범위가 네 권한을 모두 포함한다(OAuth scopes 문서).
-      const has = oauth.split(',').map((s) => s.trim()).includes('repo');
-      const scopes = { contents: has, pulls: has, statuses: has, metadata: has };
-      const missing = Object.entries(scopes)
-        .filter(([, value]) => !value)
-        .map(([name]) => name);
-      const base = { mode, account, scopes, expiresAt };
-      if (missing.length > 0) return { ...base, ok: false, error: `필요한 권한 부족: ${missing.join(', ')}` };
-      return { ...base, ok: true };
+      // fine-grained 토큰: 토큰에 부여된 권한 목록을 조회하는 API가 없다(README §4).
+      // 계정이 push할 수 없으면 토큰도 쓸 수 없으므로 부족이다. 그 밖에는 추정하지 않고 미확인으로 두고 실행은 허용한다.
+      if (repoPermissions.push !== true) {
+        for (const name of writes) permissions[name] = 'missing';
+        return { ...base, ok: false, permissions: { ...permissions }, error: '쓰기 권한 부족: 이 계정은 저장소에 push할 수 없음' };
+      }
+      return {
+        ...base,
+        ok: true,
+        permissions: { ...permissions },
+        warning:
+          '쓰기 권한(Contents·Pull requests·Commit statuses) 미확인: fine-grained 토큰은 부여된 권한을 조회할 수 없어 첫 쓰기에서 확인함(M4-06 실증 항목)',
+      };
     },
 
     /** 프로젝트 등록의 「저장소 접근 확인」(G L233). 일시 장애(재시도 가능)는 던진다. */
@@ -443,6 +523,7 @@ export function createGitHubClient(options: GitHubClientOptions) {
       const raw = await call('POST', `${repoPath}/pulls`, {
         body: { title: input.title, head: input.branch, base: 'main', body: input.body },
       });
+      observeWrite(raw, 'pulls', 'pull_create', 'POST PR');
       if (raw.status === 201) return { ...toPull(raw.body as PullJson), created: true };
       if (raw.status === 422) {
         // 조회와 생성 사이에 다른 호출이 만들었다(응답 유실 뒤 재시도 등).
@@ -457,7 +538,9 @@ export function createGitHubClient(options: GitHubClientOptions) {
     async closePullRequest(pr: number): Promise<void> {
       if (!Number.isSafeInteger(pr) || pr < 1) throw invalid('PR 번호가 올바르지 않습니다.');
       await beforeWrite({ kind: 'pull_close', pr });
-      await ok('PATCH', `${repoPath}/pulls/${String(pr)}`, { body: { state: 'closed' } });
+      const raw = await call('PATCH', `${repoPath}/pulls/${String(pr)}`, { body: { state: 'closed' } });
+      observeWrite(raw, 'pulls', 'pull_close', 'PATCH PR');
+      if (raw.status !== 200) throw failure(raw, 'PATCH PR');
     },
 
     async setCommitStatus(input: {
@@ -478,7 +561,9 @@ export function createGitHubClient(options: GitHubClientOptions) {
         const secret = await token();
         body.description = truncate(createRedactor([secret.reveal()])(input.description), DESCRIPTION_MAX);
       }
-      await ok('POST', `${repoPath}/statuses/${input.sha}`, { body }, [201]);
+      const raw = await call('POST', `${repoPath}/statuses/${input.sha}`, { body });
+      observeWrite(raw, 'statuses', 'status', 'POST status');
+      if (raw.status !== 201) throw failure(raw, 'POST status');
     },
 
     async listCommitStatuses(sha: string): Promise<CommitStatus[]> {
@@ -514,6 +599,7 @@ export function createGitHubClient(options: GitHubClientOptions) {
       } catch {
         return reconcileMerge(pr, baseSha, headSha);
       }
+      observeWrite(raw, 'contents', 'merge', 'PUT merge');
       const message = redact(String((raw.body as { message?: unknown } | undefined)?.message ?? ''));
       if (raw.status === 200) {
         const mergeSha = (raw.body as { sha?: unknown } | undefined)?.sha;
