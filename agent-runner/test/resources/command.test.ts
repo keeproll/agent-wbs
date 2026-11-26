@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
@@ -11,6 +11,15 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
+
+const alive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 const script = (name: string, body: string) => {
   const path = join(dir, name);
@@ -44,6 +53,30 @@ describe('createRunCommand — 점검 명령 실행(shell 없이 argv)', () => {
     expect(r.code).toBeNull();
     expect(r.stderr).toMatch(/시간 초과/);
     expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  test('자손이 출력 파이프를 잡고 있어도 시간 제한 안에 끝내고 자손까지 정리한다(리뷰 6)', async () => {
+    const pidFile = join(dir, 'child.pid');
+    // 부모는 끝나지 않고, 출력 파이프를 물려받은 자손이 오래 대기한다.
+    const parent = script('parent', `sleep 30 & echo $! > '${pidFile}'; wait`);
+    const started = Date.now();
+    const r = await createRunCommand({ env: { PATH: '/usr/bin:/bin' }, timeoutMs: 200 })(parent, []);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(r.code).toBeNull();
+    const childPid = Number(readFileSync(pidFile, 'utf8'));
+    await new Promise((res) => setTimeout(res, 100));
+    expect(alive(childPid)).toBe(false);
+  });
+
+  test('부모는 끝났는데 자손이 파이프를 잡고 남아도 오래 기다리지 않는다(리뷰 6)', async () => {
+    const pidFile = join(dir, 'orphan.pid');
+    const parent = script('quick', `echo hi; sleep 30 & echo $! > '${pidFile}'`);
+    const started = Date.now();
+    const r = await createRunCommand({ env: { PATH: '/usr/bin:/bin' }, timeoutMs: 5_000 })(parent, []);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(r).toMatchObject({ code: 0, stdout: 'hi\n' });
+    await new Promise((res) => setTimeout(res, 100));
+    expect(alive(Number(readFileSync(pidFile, 'utf8')))).toBe(false);
   });
 
   test('출력이 너무 크면 자른다', async () => {

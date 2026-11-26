@@ -27,39 +27,74 @@ export interface RunCommandOptions {
   timeoutMs?: number;
   /** stdout·stderr 각각 이 바이트까지만 모은다. */
   maxBytes?: number;
+  /** 직접 실행한 프로세스가 끝난 뒤, 자손이 쥔 출력 파이프가 닫히기를 기다리는 시간 */
+  exitGraceMs?: number;
 }
 
-export function createRunCommand({ env, timeoutMs = 20_000, maxBytes = 4 * 1024 * 1024 }: RunCommandOptions): RunCommand {
+/** 프로세스 그룹 전체에 신호를 보낸다. 이미 없으면 무시한다. */
+function killGroup(pid: number | undefined): void {
+  if (pid === undefined) return;
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch {
+    // 이미 끝난 그룹
+  }
+}
+
+/**
+ * 점검 명령은 자기 프로세스 그룹(detached)으로 실행한다. 시간이 지나거나, 직접 실행한 프로세스가 끝났는데
+ * 자손이 출력 파이프를 쥐고 남아 있으면 그룹 전체를 죽이고 바로 결과를 돌려준다(리뷰 6).
+ * 그래서 어떤 경우에도 `timeoutMs`(+ 짧은 유예) 안에 끝나고 자손이 남지 않는다.
+ */
+export function createRunCommand({ env, timeoutMs = 20_000, maxBytes = 4 * 1024 * 1024, exitGraceMs = 300 }: RunCommandOptions): RunCommand {
   return (cmd, args) =>
     new Promise((resolve) => {
-      const child = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
       const out: Buffer[] = [];
       const err: Buffer[] = [];
       let outBytes = 0;
       let errBytes = 0;
       let reason = '';
+      let exitCode: number | null = null;
+      let settled = false;
+      let graceTimer: NodeJS.Timeout | undefined;
       const keep = (buf: Buffer[], used: number, chunk: Buffer): number => {
         const room = maxBytes - used;
         if (room > 0) buf.push(chunk.subarray(0, room));
         return used + Math.min(room > 0 ? room : 0, chunk.length);
       };
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        clearTimeout(graceTimer);
+        killGroup(child.pid);
+        child.stdout.destroy();
+        child.stderr.destroy();
+        const stderr = Buffer.concat(err).toString('utf8');
+        resolve({
+          code: reason ? null : exitCode,
+          stdout: Buffer.concat(out).toString('utf8'),
+          stderr: reason ? `${stderr}${stderr ? '\n' : ''}${reason}` : stderr,
+        });
+      };
       child.stdout.on('data', (c: Buffer) => (outBytes = keep(out, outBytes, c)));
       child.stderr.on('data', (c: Buffer) => (errBytes = keep(err, errBytes, c)));
       const timer = setTimeout(() => {
         reason = `시간 초과(${String(timeoutMs)}ms)`;
-        child.kill('SIGKILL');
+        finish();
       }, timeoutMs);
       child.on('error', (e) => {
         reason = e.message;
+        finish();
+      });
+      child.on('exit', (code) => {
+        exitCode = code;
+        graceTimer = setTimeout(finish, exitGraceMs);
       });
       child.on('close', (code) => {
-        clearTimeout(timer);
-        const stderr = Buffer.concat(err).toString('utf8');
-        resolve({
-          code: reason ? null : code,
-          stdout: Buffer.concat(out).toString('utf8'),
-          stderr: reason ? `${stderr}${stderr ? '\n' : ''}${reason}` : stderr,
-        });
+        exitCode ??= code;
+        finish();
       });
     });
 }
