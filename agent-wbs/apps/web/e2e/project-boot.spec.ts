@@ -2,7 +2,7 @@
  * UI-02B 초기 분석 · UI-02C 기술 결정 확정 · UI-02D WBS 초안 승인 — 시나리오 29, UAT-PROJECT-06·07, UAT-PROJECT-UI b·c.
  */
 import { expect, test, type Page } from '@playwright/test';
-import { errorBody, fakeApi, json, RUNNER, type FakeApi } from './support/fake-api.ts';
+import { errorBody, fakeApi, hold, json, RUNNER, type FakeApi } from './support/fake-api.ts';
 import { activeProject, bootProject, DECISIONS, PREVIEW, PROJECT_ID, steps, T0 } from './support/project-fixtures.ts';
 
 async function openBoot(page: Page, project: ReturnType<typeof bootProject>): Promise<FakeApi> {
@@ -238,4 +238,27 @@ test('재리뷰 P2-2: 기술 결정 충돌 창의 최신 불러오기가 실패�
   await expect(modal).toHaveCount(0);
   await expect(page.getByText('최신 내용을 불러왔습니다. 내 변경은 적용되지 않았습니다.')).toBeVisible();
   await expect(page.locator('[data-td="TD-05"]').getByRole('button', { name: '승인', exact: true })).toHaveAttribute('aria-pressed', 'false');
+});
+
+test('M3-08 재리뷰 P2: 최신 불러오기 중 Esc로 닫으면 늦은 응답이 새 선택을 지우지 않는다(signal)', async ({ page }) => {
+  const original = bootProject({ steps: steps('tech'), decisions: DECISIONS });
+  const api = await openBoot(page, original);
+  api.on(`POST /api/projects/${PROJECT_ID}/boot/tech/confirm`, (route) => json(route, 409, errorBody('VERSION_CONFLICT', { details: { current: null, changes: [] } })));
+  for (const td of ['TD-03', 'TD-05']) await page.locator(`[data-td="${td}"]`).getByRole('button', { name: '승인', exact: true }).click();
+  await page.getByRole('button', { name: '기술 결정 확정', exact: true }).click();
+  const modal = page.getByRole('alertdialog');
+  await expect(modal).toBeVisible();
+  const slow = hold((route) => json(route, 200, original).catch(() => undefined));
+  api.on('GET /api/project', slow.handler);
+  await modal.getByRole('button', { name: '최신 내용 불러오기 (내 변경 버림)' }).click();
+  await expect.poll(() => api.requests('GET /api/project').length).toBeGreaterThan(1);
+  await page.keyboard.press('Escape');
+  await expect(modal).toHaveCount(0);
+  const changed = page.locator('[data-td="TD-05"]').getByRole('button', { name: '반려', exact: true });
+  await changed.click();
+  slow.release();
+  await page.waitForTimeout(300);
+  await expect(changed).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('[data-td="TD-03"]').getByRole('button', { name: '승인', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByText('최신 내용을 불러왔습니다. 내 변경은 적용되지 않았습니다.')).toHaveCount(0);
 });

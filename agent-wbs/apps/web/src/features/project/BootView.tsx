@@ -140,9 +140,9 @@ function BootFailure({ project, stepLabel, onCancel }: { project: BootProject; s
     onSuccess: refresh,
     successNotice: '실패한 단계부터 다시 시도합니다.',
     onRejected: refresh,
-    onConflictReload: async () => { await reloadProject(); },
+    onConflictReload: async ({ signal }) => { await reloadProject(signal); },
     // 회차가 바뀌었으면 새 상태를 보고 팀장이 다시 누른다(자동 재시도하지 않음).
-    onConflictReapply: async () => { await reloadProject(); },
+    onConflictReapply: async ({ signal }) => { await reloadProject(signal); },
   });
   return (
     <div className="banner danger" data-testid="boot-fail">
@@ -197,10 +197,11 @@ function TechPanel({ project, techStep, onDirty }: { project: BootProject; techS
     successNotice: '기술 결정을 확정했습니다. 이 결정을 기준으로 WBS 초안을 작성합니다.',
     onRejected: refresh,
     // 최신을 실제로 읽은 뒤에만 선택을 버린다. 읽기에 실패하면 공통 창이 이유를 보이고 선택은 남는다(재리뷰 P2-2).
-    onConflictReload: async () => { await reloadProject(); setPicks({}); },
+    // signal: 창을 닫아 취소됐으면 reloadProject가 던져 아래 선택 지우기까지 가지 않는다(M3-08 재리뷰).
+    onConflictReload: async ({ signal }) => { await reloadProject(signal); setPicks({}); },
     // 다시 적용도 공통 useSave가 같은 run·결과 미확인 보관함으로 보낸다(재리뷰 P2-1).
-    reapplyRequest: async () => {
-      const latest = await reloadProject();
+    reapplyRequest: async ({ signal }) => {
+      const latest = await reloadProject(signal);
       if (!('bootstrap' in latest)) throw new Error('초기 분석 단계가 아닙니다.');
       return build(latest.bootstrap.decisions, chosen);
     },
@@ -270,11 +271,11 @@ function DraftPanel({ project, onDirty }: { project: BootProject; onDirty: (dirt
   const refresh = () => { void invalidateTopics(queryClient, ['project']); };
   /** 충돌(그사이 새 초안 도착): 본 적 없는 초안을 자동으로 승인·재분석하지 않는다. 최신 초안을 다시 읽고 팀장이 다시 누른다. */
   const reloadProject = useProjectReload();
-  const reloadOnly = async () => {
-    await reloadProject();
+  const reloadOnly = async ({ signal }: { signal: AbortSignal }) => {
+    await reloadProject(signal);
     notify('새 초안을 불러왔습니다. 새 초안을 확인한 뒤 다시 진행하세요.');
   };
-  const reload = async () => { await reloadProject(); };
+  const reload = async ({ signal }: { signal: AbortSignal }) => { await reloadProject(signal); };
 
   const approve = useSave<ResponseOf<'approveBootstrap'>, { revision: number }>({
     target: '초기 WBS 승인',

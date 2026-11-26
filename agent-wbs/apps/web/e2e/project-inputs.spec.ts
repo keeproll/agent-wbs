@@ -3,7 +3,7 @@
  * 입력 이력 재작성 경고의 「복구 확인 · 입력 확인 다시 시도」(POST /api/project/inputs/recheck, 조정자 결정 2026-11-26).
  */
 import { expect, test, type Page } from '@playwright/test';
-import { errorBody, fakeApi, json, type FakeApi } from './support/fake-api.ts';
+import { errorBody, fakeApi, hold, json, type FakeApi } from './support/fake-api.ts';
 import { activeProject, GITHUB_OK, PENDING, SHA1, SHA3, MD, T0, V1, V2 } from './support/project-fixtures.ts';
 
 async function openProject(page: Page, project = activeProject({ changeCommits: PENDING, inputHead: SHA3 })): Promise<FakeApi> {
@@ -256,4 +256,25 @@ test('재리뷰 P2-2: 입력 분석 충돌 창의 최신 불러오기가 실패�
   await expect(modal).toContainText('503 UNAVAILABLE');
   await expect(page.getByText('최신 내용을 불러왔습니다. 내 변경은 적용되지 않았습니다.')).toHaveCount(0);
   await expect(page.getByLabel('팀장 지시')).toHaveValue('유지할 지시');
+});
+
+test('M3-08 재리뷰 P2: 입력 분석 충돌의 최신 불러오기 중 Esc로 닫으면 늦은 응답을 화면에 적용하지 않는다(signal)', async ({ page }) => {
+  const api = await openProject(page);
+  api.on('POST /api/project/inputs', (route) => json(route, 409, errorBody('VERSION_CONFLICT', { details: { current: null, changes: [] } })));
+  await page.getByRole('button', { name: '이 버전으로 분석' }).click();
+  const modal = page.getByRole('alertdialog');
+  await expect(modal).toBeVisible();
+  // 늦게 오는 응답은 대기 커밋이 없는 프로젝트다. 적용되면 「입력 자료 변경 감지」 상자가 사라진다.
+  const slow = hold((route) => json(route, 200, activeProject({ updatedAt: V2 })).catch(() => undefined));
+  api.on('GET /api/project', slow.handler);
+  await modal.getByRole('button', { name: '최신 내용 불러오기 (내 변경 버림)' }).click();
+  await expect.poll(() => api.requests('GET /api/project').length).toBeGreaterThan(1);
+  await page.keyboard.press('Escape');
+  await expect(modal).toHaveCount(0);
+  await page.getByLabel('팀장 지시').fill('닫은 뒤 새로 쓴 지시');
+  slow.release();
+  await page.waitForTimeout(300);
+  await expect(page.getByTestId('input-pending')).toBeVisible();
+  await expect(page.getByLabel('팀장 지시')).toHaveValue('닫은 뒤 새로 쓴 지시');
+  await expect(page.getByText('최신 내용을 불러왔습니다. 내 변경은 적용되지 않았습니다.')).toHaveCount(0);
 });

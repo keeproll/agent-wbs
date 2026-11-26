@@ -99,13 +99,13 @@ function InputsCard({ project }: { project: Active }) {
   const refresh = () => { void invalidateTopics(queryClient, ['project', 'alert']); };
   const reloadProject = useProjectReload();
   /** 최신 프로젝트를 서버에서 읽는다(실패는 그대로 던진다). 충돌 창 「다시 적용」의 요청 내용을 만들 때 쓴다. */
-  const latest = async () => {
-    const p = await reloadProject();
+  const latest = async (signal: AbortSignal) => {
+    const p = await reloadProject(signal);
     if (!('changeCommits' in p)) throw new Error('등록된 프로젝트가 없습니다.');
     return p;
   };
   /** 충돌 창 「최신 내용 불러오기」: 실제로 읽혀야 성공이다. */
-  const reload = async () => { await reloadProject(); };
+  const reload = async ({ signal }: { signal: AbortSignal }) => { await reloadProject(signal); };
   interface AnalyzeBody { updatedAt: string; commit: string; commits: string[]; instr?: string }
   const analyzeBody = (p: Pick<Active, 'updatedAt' | 'inputHead' | 'changeCommits'>): AnalyzeBody => ({
     updatedAt: p.updatedAt, commit: p.inputHead, commits: p.changeCommits.filter((c) => c.state === 'pending').map((c) => c.sha),
@@ -122,7 +122,7 @@ function InputsCard({ project }: { project: Active }) {
     onRejected: refresh,
     onConflictReload: reload,
     // 다시 적용도 공통 useSave가 같은 run·결과 미확인 보관함으로 보낸다(재리뷰 P2-1).
-    reapplyRequest: async () => analyzeBody(await latest()),
+    reapplyRequest: async ({ signal }) => analyzeBody(await latest(signal)),
   });
   interface SkipBody { updatedAt: string; commits: string[] }
   const skip = useSave<unknown, SkipBody>({
@@ -135,8 +135,8 @@ function InputsCard({ project }: { project: Active }) {
     successNotice: '변경 커밋을 「확인함 · 분석 안 함」으로 남겼습니다. 다음 분석 때 이 변경도 함께 비교됩니다.',
     onRejected: refresh,
     onConflictReload: reload,
-    reapplyRequest: async () => {
-      const p = await latest();
+    reapplyRequest: async ({ signal }) => {
+      const p = await latest(signal);
       return { updatedAt: p.updatedAt, commits: p.changeCommits.filter((c) => c.state === 'pending').map((c) => c.sha) };
     },
   });
@@ -149,7 +149,7 @@ function InputsCard({ project }: { project: Active }) {
     successNotice: '차이 분석을 실패한 단계부터 다시 시도합니다.',
     onRejected: refresh,
     onConflictReload: reload,
-    reapplyRequest: async () => { const p = await latest(); return { updatedAt: p.updatedAt, version: p.inputJob?.version ?? 0 }; },
+    reapplyRequest: async ({ signal }) => { const p = await latest(signal); return { updatedAt: p.updatedAt, version: p.inputJob?.version ?? 0 }; },
   });
   const recheck = useSave<ResponseOf<'recheckInputs'>, { updatedAt: string }>({
     target: '입력 이력 복구 확인',
@@ -159,7 +159,7 @@ function InputsCard({ project }: { project: Active }) {
     onSuccess: (res) => { notify(`입력 확인을 다시 요청했습니다 (${String(res.inputRecheck)}번째). Runner가 main 이력을 다시 확인해 연결이 맞으면 경고가 풀립니다.`); refresh(); },
     onRejected: refresh,
     onConflictReload: reload,
-    reapplyRequest: async () => ({ updatedAt: (await latest()).updatedAt }),
+    reapplyRequest: async ({ signal }) => ({ updatedAt: (await latest(signal)).updatedAt }),
   });
   const busyAny = analyze.busy || skip.busy;
 
