@@ -11,11 +11,12 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useApi } from '../../shared/api/ApiProvider.tsx';
-import { apiUrl } from '../../shared/api/client.ts';
+import { ApiError, apiUrl } from '../../shared/api/client.ts';
 import type { ResponseOf } from '../../shared/api/contract.ts';
 import { invalidateTopics, useApiQuery } from '../../shared/api/queries.ts';
 import { useSave } from '../../shared/state/useSave.tsx';
 import { BusyButton } from '../../shared/ui/BusyButton.tsx';
+import { canRetry, causeMessage, causeTitle, codeLabel } from '../../shared/ui/errors.ts';
 import { useNotice } from '../../shared/ui/feedback.tsx';
 import { ICON, Icon } from '../../shared/ui/Icon.tsx';
 import { AreaLoading } from '../../shared/ui/loading.tsx';
@@ -56,12 +57,21 @@ export function ResetModal({ project, onClose }: { project: RegisteredProject; o
   const [confirmName, setConfirmName] = useState('');
   const name = preview.data?.projectName ?? project.name;
   const matches = confirmName.trim() === name;
+  /**
+   * 마지막 실패. 오류 막대(앱 틀)는 모달 overlay 아래에 있어 모달이 열린 동안 「다시 시도」를 누를 수 없다.
+   * 그래서 모달 안에도 같은 원인·조치와 「다시 시도」를 보인다. 다시 시도는 save()라 같은 요청 내용·멱등 키로 간다.
+   */
+  const [failure, setFailure] = useState<ApiError | null>(null);
 
   const reset = useSave<ResponseOf<'resetProject'>, { confirmName: string; keepSettings: boolean; epoch: number }>({
     target: '프로젝트 초기화',
     failTitle: '초기화하지 못했습니다',
     request: () => ({ confirmName: confirmName.trim(), keepSettings: keep, epoch: preview.data?.epoch ?? project.epoch }),
-    run: ({ payload, idempotencyKey }) => client.call('resetProject', { body: payload, idempotencyKey }),
+    run: async ({ payload, idempotencyKey }) => {
+      setFailure(null);
+      try { return await client.call('resetProject', { body: payload, idempotencyKey }); }
+      catch (error) { if (error instanceof ApiError && error.kind !== 'unauthorized') setFailure(error); throw error; }
+    },
     onSuccess: () => {
       onClose();
       notify(online
@@ -102,6 +112,13 @@ export function ResetModal({ project, onClose }: { project: RegisteredProject; o
         : <AreaLoading label="삭제 항목 불러오는 중" />}
       <p className="fhint" style={{ margin: '10px 0' }}>삭제하지 않음: 입력 자료(prototype/ (uiux · docs) — GitHub에 그대로), GitHub 연결 설정, 등록 이전부터 저장소에 있던 코드, 초기화 기록 한 줄(언제 · 누가 — 프로젝트 데이터와 별도).</p>
       {!online && <div className="banner warn"><div className="banner-b">Runner가 연결되어 있지 않습니다. Agent WBS 데이터는 바로 삭제되고, Runner 정리는 다시 연결될 때 실행됩니다. 그전까지 이전 작업의 보고는 초기화 번호가 달라 거부되고, 새 초기 분석은 시작되지 않습니다.</div></div>}
+      {failure && (
+        <div className="banner danger" data-testid="reset-fail" style={{ marginTop: 10 }}><div className="banner-b">
+          <b>초기화하지 못했습니다 — {causeTitle(failure)}</b> <span className="mono">{codeLabel(failure)}</span>
+          <div style={{ marginTop: 4 }}>{causeMessage(failure)}</div>
+          {canRetry(failure) && <div className="msg-acts" style={{ marginTop: 6 }}><BusyButton small busy={reset.busy} busyLabel="다시 시도 중…" onClick={() => { void reset.save(); }}>다시 시도</BusyButton></div>}
+        </div></div>
+      )}
       <div className="form" style={{ marginTop: 10 }}>
         <div className="frow"><span className="flabel">설정 · 실행 환경</span><div className="fctl">
           <div className="seg" role="group" aria-label="설정 · 실행 환경">
