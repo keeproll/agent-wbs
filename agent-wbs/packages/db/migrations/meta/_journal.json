@@ -129,6 +129,20 @@
       "breakpoints": true
     },
     {
+      "idx": 18,
+      "version": "7",
+      "when": 1795690000000,
+      "tag": "0018_20261126_message_read_touch",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1795690000001,
+      "tag": "0019_20261126_schedule_defaults",
+      "breakpoints": true
+    },
+    {
       "idx": 20,
       "version": "7",
       "when": 1795692433027,
