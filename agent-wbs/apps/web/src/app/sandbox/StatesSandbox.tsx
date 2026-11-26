@@ -33,8 +33,9 @@ function TitleEditor() {
   const { guard } = useEditGuard(dirty);
   // 「최신 내용」은 반드시 서버에서 새로 읽는다. queryClient.fetchQuery는 캐시를 돌려줄 수 있어
   // 충돌 뒤 다시 적용이 옛 버전으로 또 충돌하는 일이 있었다(부하 시험에서 재현).
-  const reload = async () => {
-    const latest = await client.call('getTask', { params: { taskKey: TASK } });
+  const reload = async (signal?: AbortSignal) => {
+    const latest = await client.call('getTask', { params: { taskKey: TASK }, ...(signal ? { signal } : {}) });
+    signal?.throwIfAborted();
     queryClient.setQueryData(apiKey('getTask', { params: { taskKey: TASK } }), latest);
     return latest;
   };
@@ -54,7 +55,8 @@ function TitleEditor() {
     successNotice: `${TASK} 제목을 저장했습니다.`,
     onFieldErrors: setFieldErrors,
     // 최신 불러오기가 끝날 때까지 기다린다. 실패하면 창이 열린 채 이유를 보인다(M3-02 7cddacd를 공통으로).
-    onConflictReload: async () => { await reload(); setDraft(null); },
+    // 창을 닫으면 signal이 취소돼 reload가 AbortError를 던지므로 아래 setDraft(null)까지 가지 않는다.
+    onConflictReload: async ({ signal }) => { await reload(signal); setDraft(null); },
     // 실패는 삼키지 않고 던진다. useSave가 충돌 창 안에 이유를 보인다.
     onConflictReapply: async () => {
       const latest = await reload();

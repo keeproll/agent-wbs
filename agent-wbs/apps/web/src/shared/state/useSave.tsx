@@ -54,21 +54,23 @@ export interface SaveOptions<T, P = undefined> {
    * 충돌 창 「최신 내용 불러오기(내 변경 버림)」: 편집을 버리고 서버 최신을 다시 읽는다.
    * Promise를 돌려주면 끝날 때까지 기다린다. 성공해야 창을 닫고 「불러왔습니다」를 안내한다.
    * 실패하면(ApiError를 던지면) 창을 열어 둔 채 이유를 보인다(M3-02 7cddacd: 조회 실패를 성공으로 숨기지 않기).
+   * 진행 중에 사용자가 창을 닫으면(Esc) signal이 취소된다. 요청에 signal을 넘기고, 취소됐으면 화면(편집 닫기 등)에 결과를 적용하지 않는다.
    */
-  onConflictReload?: () => void | Promise<void>;
+  onConflictReload?: (ctx: { signal: AbortSignal }) => void | Promise<void>;
   /**
    * 충돌 창 「최신 내용에 내 변경 다시 적용」: 최신 버전을 읽은 뒤 내 변경으로 다시 저장한다.
    * 실패하면 ApiError를 그대로 던진다(삼키지 않는다). 던지면 창이 열린 채 이유를 보이고, 끝까지 성공해야 창이 닫힌다.
    */
-  onConflictReapply?: () => Promise<void>;
+  onConflictReapply?: (ctx: { signal: AbortSignal }) => Promise<void>;
   /**
    * (권장, M3-04 재리뷰) 충돌 창 「다시 적용」의 요청 내용을 **최신 버전 기준으로 만든다**(서버에서 새로 읽어 payload를 돌려준다).
    * 이것을 주면 다시 적용도 일반 저장과 같은 `run`·`onSuccess`·「결과 미확인 요청」 보관함을 쓴다.
    * - 다시 적용의 응답을 잃으면(500·네트워크·10초·503) 그 내용과 키를 보관한다. 다음 다시 적용·오류 막대 「다시 시도」·일반 저장은
    *   최신을 다시 읽지 않고 **같은 내용·같은 키**로만 다시 보낸다. 창을 Esc로 닫아도 남고, 오류 막대로 알린다.
    * - 주면 onConflictReapply는 쓰지 않는다. 주지 않으면 예전처럼 onConflictReapply를 부른다(하위 호환).
+   * - 받은 `signal`은 최신 읽기 요청에 넘긴다(다른 콜백과 같은 규칙). 인수를 받지 않는 기존 함수도 그대로 동작한다.
    */
-  reapplyRequest?: () => Promise<P>;
+  reapplyRequest?: (ctx: { signal: AbortSignal }) => Promise<P>;
   onFieldErrors?: (errors: ApiError['fieldErrors']) => void;
   onRejected?: (error: ApiError) => void;
 }
@@ -91,6 +93,8 @@ export function useSave<T, P = undefined>(options: SaveOptions<T, P>): SaveHandl
   const [conflict, setConflict] = useState<{ error: ApiError; at: number; failure: ApiError | null; failedAction?: 'reload' | 'reapply' } | null>(null);
   const [reapplying, setReapplying] = useState(false);
   const inFlight = useRef(false);
+  /** 충돌 창에서 진행 중인 작업. 창을 닫을 때 불러오기는 취소하고, 다시 적용은 닫지 않는다. */
+  const pending = useRef<{ action: 'reload' | 'reapply'; controller: AbortController } | null>(null);
   /** 결과를 모르는 요청(재시도 가능한 실패). 다시 시도는 이 내용과 키로 보낸다. */
   const unresolved = useRef<{ key: string; payload: P; error: ApiError } | null>(null);
   /** 오류 막대의 「다시 시도」가 attempt를 부르기 위한 참조(선언 순서 때문에 ref로 잇는다) */
@@ -148,12 +152,12 @@ export function useSave<T, P = undefined>(options: SaveOptions<T, P>): SaveHandl
    * 일반 저장과 같은 보관함(unresolved)을 쓰므로 창을 닫은 뒤의 일반 저장도 이 요청을 먼저 해결해야 한다.
    * 실패는 그대로 던져 창 안에 보인다.
    */
-  const reapplyShared = useStableCallback(async (): Promise<void> => {
+  const reapplyShared = useStableCallback(async (signal: AbortSignal): Promise<void> => {
     const build = options.reapplyRequest;
     if (!build) return;
     const pending = unresolved.current;
     const key = pending?.key ?? crypto.randomUUID();
-    const payload = pending ? pending.payload : await build();
+    const payload = pending ? pending.payload : await build({ signal });
     try {
       const result = await options.run({ idempotencyKey: key, payload });
       unresolved.current = null;
@@ -192,32 +196,48 @@ export function useSave<T, P = undefined>(options: SaveOptions<T, P>): SaveHandl
       mine={options.mine ?? options.target}
       busy={reapplying}
       onClose={() => {
+        // 다시 적용(저장)은 서버에서 되돌릴 수 없으므로 끝날 때까지 닫지 않는다.
+        if (pending.current?.action === 'reapply') return;
+        // 최신 불러오기는 취소하고, 늦게 와도 결과를 화면에 적용하지 않는다(재리뷰 63d2a25).
+        pending.current?.controller.abort();
+        pending.current = null;
+        setReapplying(false);
         setConflict(null);
-        // 창 안 다시 적용의 결과를 모른 채 닫으면 오류 막대로 남겨 같은 키로 「다시 시도」할 수 있게 한다.
-        const pending = unresolved.current;
-        if (pending) showFailure(pending.error, pending.key, pending.payload);
+        // 창 안 다시 적용의 결과를 모른 채 닫으면 오류 막대로 남겨 같은 키로 「다시 시도」할 수 있게 한다(M3-04 0dcb8db).
+        const left = unresolved.current;
+        if (left) showFailure(left.error, left.key, left.payload);
       }}
       onReload={() => {
+        const controller = new AbortController();
+        pending.current = { action: 'reload', controller };
         setReapplying(true);
         void Promise.resolve()
-          .then(() => options.onConflictReload?.())
+          .then(() => options.onConflictReload?.({ signal: controller.signal }))
           .then(
             () => {
+              if (controller.signal.aborted) return;
               setConflict(null);
               notify('최신 내용을 불러왔습니다. 내 변경은 적용되지 않았습니다.');
             },
             (error: unknown) => {
+              if (controller.signal.aborted) return;
               if (!(error instanceof ApiError)) throw error;
               if (error.kind === 'unauthorized') { setConflict(null); return; }
               setConflict((c) => c && { ...c, failure: error, failedAction: 'reload' });
             },
           )
-          .finally(() => { setReapplying(false); });
+          .finally(() => {
+            if (pending.current?.controller !== controller) return;
+            pending.current = null;
+            setReapplying(false);
+          });
       }}
       onReapply={() => {
+        const controller = new AbortController();
+        pending.current = { action: 'reapply', controller };
         setReapplying(true);
         void Promise.resolve()
-          .then(() => (options.reapplyRequest ? reapplyShared() : options.onConflictReapply?.()))
+          .then(() => (options.reapplyRequest ? reapplyShared(controller.signal) : options.onConflictReapply?.({ signal: controller.signal })))
           .then(
             () => { setConflict(null); },
             (error: unknown) => {
@@ -227,7 +247,10 @@ export function useSave<T, P = undefined>(options: SaveOptions<T, P>): SaveHandl
               setConflict((c) => (error.kind === 'conflict' ? { error, at: Date.now(), failure: null } : c && { ...c, failure: error, failedAction: 'reapply' }));
             },
           )
-          .finally(() => { setReapplying(false); });
+          .finally(() => {
+            if (pending.current?.controller === controller) pending.current = null;
+            setReapplying(false);
+          });
       }}
     />
   ) : null;
