@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  evidenceRows, gateRows, orphanEvidence, position, resultRows, tabCounts, verificationKeys,
+  evidenceKind, evidenceName, evidenceRows, gateRows, orphanChecklist, position, resultRows, tabCounts, unknownAgentCount, verificationKeys,
   type AttemptInfo, type EvidenceItem, type GateItem, type TaskItem, type VerificationItem,
 } from '../src/features/verify/model.ts';
 
@@ -52,7 +52,39 @@ describe('검증 화면 계산(UI-07, P vfVM L6334–6369)', () => {
     expect(rows.map((r) => [r.id, r.verificationId, r.checklist])).toEqual([
       ['e2', 'v2', '미연결'], ['e1', 'v1', 'CL-01'], ['e3', null, 'CL-03'],
     ]);
-    expect(orphanEvidence(list).map((e) => e.id)).toEqual(['e3']);
+  });
+
+  it('고아 체크리스트 증거: 체크리스트 참조(Evidence id 또는 경로)가 그 Task 검증 결과의 Evidence에 없으면 경고(P L6354)', () => {
+    const list = [
+      ev('e1', 'TASK-0007', 'v2'),
+      { ...ev('e2', 'TASK-0007', 'v2'), kind: 'reference', path: 'evidence/qa/perf.json', sha256: null, size: null },
+      ev('e3', 'TASK-0007', null, 'CL-3'),
+    ];
+    const checklists = new Map([['TASK-0007', [
+      { itemKey: 'CL-1', evidence: 'e1' },
+      { itemKey: 'CL-2', evidence: 'evidence/qa/perf.json' },
+      { itemKey: 'CL-3', evidence: 'e3' },
+      { itemKey: 'CL-4', evidence: 'review-orphan/path.txt' },
+      { itemKey: 'CL-5', evidence: null },
+      { itemKey: 'CL-6', evidence: '—' },
+    ]]]);
+    expect(orphanChecklist(checklists, list)).toEqual([
+      { taskKey: 'TASK-0007', itemKey: 'CL-3', ref: 'log · ffffffffffff' },
+      { taskKey: 'TASK-0007', itemKey: 'CL-4', ref: 'review-orphan/path.txt' },
+    ]);
+  });
+
+  it('Evidence 이름: 경로가 있으면 경로, 파일이면 종류 · 지문. 종류는 경로 확장자로(P evKind L4371)', () => {
+    expect(evidenceName({ kind: 'log', sha256: 'f'.repeat(64), path: null })).toBe('log · ffffffffffff');
+    expect(evidenceName({ kind: 'reference', sha256: null, path: 'a/b.png' })).toBe('a/b.png');
+    expect(evidenceKind({ kind: 'reference', path: 'a/b.png' })).toBe('스크린샷');
+    expect(evidenceKind({ kind: 'reference', path: 'https://x.test/run' })).toBe('파일');
+    expect(evidenceKind({ kind: '로그', path: null })).toBe('로그');
+  });
+
+  it('Agent를 모르는 검증 수(실행 시도 조회 전·실패)', () => {
+    expect(unknownAgentCount(verifs, new Map([['a1', { attemptKey: 'x', agent: 'Codex' }]]))).toBe(2);
+    expect(unknownAgentCount(verifs, attempts)).toBe(0);
   });
 
   it('Gate: 취소 Task 제외, Task 번호순, 5조건 순서 고정, 미통과만 보기', () => {

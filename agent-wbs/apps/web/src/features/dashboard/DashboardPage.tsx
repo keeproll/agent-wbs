@@ -10,6 +10,7 @@
  * - 모든 항목은 주소가 있는 링크다(새로고침·뒤로 가기, MM-29). WBS 필터는 `/wbs?status=done` 같은 주소로 넘긴다.
  * - 알림의 「확인」(닫기) 버튼은 없다. 팀장이 알림을 닫는 API가 계약에 없어 가짜 버튼을 두지 않는다(보고함).
  */
+import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import { useApiQuery } from '../../shared/api/queries.ts';
 import { formatDateTime } from '../../shared/format.ts';
@@ -44,24 +45,46 @@ function DashboardBody() {
   useRefreshError(dash, '대시보드 최신 내용 불러오기');
   useRefreshError(alerts, '대시보드 알림 최신 내용 불러오기');
 
+  // 경고는 GET /api/alerts로 따로 읽는다. 본문이 아직 없거나 실패해도 받은 경고는 가리지 않는다(리뷰 2).
+  const banner = (
+    <AlertsBanner alerts={alerts.data?.items} failed={alerts.data === undefined && alerts.isError} onRetry={() => { void alerts.refetch(); }} />
+  );
   if (dash.data === undefined && dash.isError) {
-    return <LoadError title="대시보드" error={dash.error} retrying={dash.isFetching} onRetry={() => { void dash.refetch(); }} />;
+    return <LoadError title="대시보드" error={dash.error} retrying={dash.isFetching} onRetry={() => { void dash.refetch(); }}>{banner}</LoadError>;
   }
-  if (dash.data === undefined) return <div className="page scroll">{skeleton && <PageSkeleton menu="dashboard" />}</div>;
+  if (dash.data === undefined) return <div className="page scroll">{banner}{skeleton && <PageSkeleton menu="dashboard" />}</div>;
+  return <DashboardView d={dash.data} banner={banner} note={schedNote(dash.data.schedule, runner.data)} />;
+}
+
+function AlertsBanner({ alerts, failed, onRetry }: { alerts: AlertItem[] | undefined; failed: boolean; onRetry: () => void }) {
+  if (failed) {
+    return (
+      <div className="banner warn" role="status">
+        <div className="banner-b"><b>팀장 확인 필요</b> — 알림을 불러오지 못했습니다. <button type="button" className="btn ghost sm" onClick={onRetry}>다시 시도</button></div>
+      </div>
+    );
+  }
+  if (!alerts || alerts.length === 0) return null;
   return (
-    <DashboardView
-      d={dash.data}
-      alerts={alerts.data?.items}
-      alertsFailed={alerts.data === undefined && alerts.isError}
-      onRetryAlerts={() => { void alerts.refetch(); }}
-      note={schedNote(dash.data.schedule, runner.data)}
-    />
+    <div className="banner warn" role="region" aria-label="팀장 확인 필요">
+      <div className="banner-b">
+        <b>팀장 확인 필요</b>
+        {alerts.map((al) => {
+          const link = alertLink(al);
+          return (
+            <div key={al.id} className="al-row">
+              <span className="mono muted">{formatDateTime(al.at)}</span>
+              <span className="al-t">{al.text}</span>
+              <Link className="btn ghost sm" to={link.to}>{link.label}</Link>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
-function DashboardView({ d, alerts, alertsFailed, onRetryAlerts, note }: {
-  d: Dashboard; alerts: AlertItem[] | undefined; alertsFailed: boolean; onRetryAlerts: () => void; note: string;
-}) {
+function DashboardView({ d, banner, note }: { d: Dashboard; banner: ReactNode; note: string }) {
   const sched = schedCards(d.schedule);
   const grades = gradeRows(d.grades);
   const recent = recentRows(d.recent);
@@ -86,28 +109,7 @@ function DashboardView({ d, alerts, alertsFailed, onRetryAlerts, note }: {
       ) : (
         <p className="empty" style={{ margin: '0 0 16px' }}>아직 일정이 계산되지 않았습니다. 초기 WBS 승인 뒤 일정 재조정이 실행되면 여기에 진행률과 예상 완료일이 표시됩니다.</p>
       )}
-      {alertsFailed && (
-        <div className="banner warn" role="status">
-          <div className="banner-b"><b>팀장 확인 필요</b> — 알림을 불러오지 못했습니다. <button type="button" className="btn ghost sm" onClick={onRetryAlerts}>다시 시도</button></div>
-        </div>
-      )}
-      {alerts && alerts.length > 0 && (
-        <div className="banner warn" role="region" aria-label="팀장 확인 필요">
-          <div className="banner-b">
-            <b>팀장 확인 필요</b>
-            {alerts.map((al) => {
-              const link = alertLink(al);
-              return (
-                <div key={al.id} className="al-row">
-                  <span className="mono muted">{formatDateTime(al.at)}</span>
-                  <span className="al-t">{al.text}</span>
-                  <Link className="btn ghost sm" to={link.to}>{link.label}</Link>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      {banner}
       <h2 className="sh">Task 현황</h2>
       <div className="kpis">
         {taskKpis(d.tasks).map((k) => (

@@ -64,3 +64,7 @@ a.nav-i.off { cursor: not-allowed; }
 /* 12. 오류 막대는 모달 overlay(z-index 50, P L345) 위, 안내(.notice 60, P L367) 아래에 둔다.
        원본은 .errbar에 쌓임 순서가 없어 모달이 열리면 overlay 아래에 깔렸다. 모달 안 저장이 실패해도 「다시 시도」를 누를 수 있어야 한다(M3-04 보고 6). */
 .errbar { position: relative; z-index: 51; }
+
+/* 13. 표 스크롤 상자를 위치 기준으로 둔다. 안쪽의 화면 읽기 전용 글자(.sr, position:absolute)가 상자 밖 문서 폭을 늘리지 않게 한다.
+       없으면 390px에서 Gate 표의 숨은 사유 글자 때문에 페이지가 약 965px로 넓어졌다(M3-07 리뷰 5, D-28). */
+.tbl-x { position: relative; }

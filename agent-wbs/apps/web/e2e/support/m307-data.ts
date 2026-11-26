@@ -27,7 +27,7 @@ const TASKS: [string, string, string][] = [
 export const tasks = (): Task[] => TASKS.map(([taskKey, title, status], i) => ({
   id: `t${String(i + 1)}`, taskKey, wbsNodeId: 'wp1', wbsPath: `1.1.${String(i + 1)}`, title, workType: 'Implementation', primaryDomain: 'FE',
   relatedDomains: [], priority: 2, assigneeAgent: 'Claude', verifierAgent: 'Codex', lifecycleStatus: status, verifState: 'none', blocked: false,
-  preds: [], checklist: { done: 0, total: 3 }, gate: { passed: 0, total: 5 }, schedule: null, updatedAt: kst('2026-11-03 10:00'), deletedAt: null,
+  preds: [], checklist: { done: 0, total: taskKey === 'TASK-0007' ? 2 : 0 }, gate: { passed: 0, total: 5 }, schedule: null, updatedAt: kst('2026-11-03 10:00'), deletedAt: null,
 } as unknown as Task));
 
 /** 원본 UI-07-03 스크린샷의 조건 값(P Sel.gate) */
@@ -209,6 +209,10 @@ export function installM307(api: FakeApi, data: M307Data): void {
   });
   for (const taskKey of ['TASK-0001', 'TASK-0007']) {
     api.on(`GET /api/tasks/${taskKey}/attempts`, (route) => json(route, 200, { items: attempts(taskKey), nextCursor: null }));
-    api.on(`GET /api/tasks/${taskKey}`, (route) => json(route, 200, data.details.get(taskKey)));
+  }
+  for (const t of data.tasks) {
+    api.on(`GET /api/tasks/${t.taskKey}`, (route) => (data.details.has(t.taskKey)
+      ? json(route, 200, data.details.get(t.taskKey))
+      : json(route, 200, taskDetail(t.taskKey, []))));
   }
 }

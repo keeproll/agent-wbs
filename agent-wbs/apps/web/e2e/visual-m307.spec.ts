@@ -85,7 +85,7 @@ test('UI-07-01A 검증 상세(1920)', async ({ page }) => {
   const png = await shot(page);
   record('UI-07-01A-rail', 'desktop/UI-07-01A.png', { x: 204, y: 199, width: 262, height: 222 }, png, 0.02, '레일(검증 결과 2·펼치기·선택 강조). 같아야 함');
   record('UI-07-01A-detail', 'desktop/UI-07-01A.png', { x: 480, y: 199, width: 1416, height: 480 }, png, null,
-    'Evidence는 계약에 경로가 없어 「종류 · 지문 앞 12자리」와 「원본 내려받기」로 보임. 팀장용 Evidence 추가 API가 없어 경로 입력 칸 없음(조정자 결정). 명령·결함 문구는 시험 데이터 차이');
+    'Runner가 올린 파일 Evidence는 계약에 경로가 없어 「종류 · 지문 앞 12자리」와 「원본 내려받기」로 보임(팀장이 추가한 경로 Evidence는 경로 그대로). 경로 입력 칸·Evidence 추가 버튼은 원본과 같음. 체크리스트 수(원본 5, 시험 2)·명령·결함 문구는 시험 데이터 차이');
 });
 
 test('UI-07-02 Evidence(1920)', async ({ page }) => {
@@ -93,7 +93,7 @@ test('UI-07-02 Evidence(1920)', async ({ page }) => {
   const png = await shot(page);
   record('UI-07-02-head', 'desktop-clock20261105/UI-07-02.png', { x: MAIN_X, y: 65, width: W, height: 158 }, png, 0.02, '탭·안내 문구. 같아야 함');
   record('UI-07-02-table', 'desktop-clock20261105/UI-07-02.png', { x: MAIN_X, y: 223, width: W, height: 340 }, png, null,
-    'Evidence 이름이 파일 경로가 아니라 「종류 · 지문」. 원본의 경고 막대는 원본 데이터의 고아 체크리스트 경로 목록이라 다름(제품은 검증 없는 Evidence만)');
+    'Runner 파일 Evidence 이름이 경로가 아니라 「종류 · 지문」. 고아 경고 판정은 원본과 같으나(체크리스트 참조 대조), 시험 데이터의 체크리스트가 원본 Mock의 고아 경로를 가리키지 않아 경고 막대가 없음');
 });
 
 test('UI-07-03 Completion Gate(1920)', async ({ page }) => {

@@ -17,7 +17,7 @@ import { useEffect, useMemo, useRef, type KeyboardEvent as ReactKeyboardEvent } 
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useApi } from '../../shared/api/ApiProvider.tsx';
 import { fetchAllPages, useAllPages } from '../../shared/api/allPages.ts';
-import { useApiQuery } from '../../shared/api/queries.ts';
+import { apiKey, useApiQuery } from '../../shared/api/queries.ts';
 import { formatDateTime } from '../../shared/format.ts';
 import { MenuScreen, useRefreshError, useRevisitFetching, type ProjectState } from '../../shared/layout/MenuScreen.tsx';
 import { Page } from '../../shared/layout/Page.tsx';
@@ -28,7 +28,8 @@ import { useTopBar } from '../../shared/ui/feedback.tsx';
 import { EvidenceLinks } from './EvidenceLinks.tsx';
 import { GATE_LABEL, LINK, statusLabel, verdictClass } from './labels.ts';
 import {
-  evidenceName, evidenceRows, gateRows, orphanEvidence, position, resultRows, tabCounts, verificationKeys,
+  evidenceKind, evidenceName, evidenceRows, gateRows, orphanChecklist, position, resultRows, tabCounts, unknownAgentCount, verificationKeys,
+  type ChecklistRef,
   type AttemptInfo, type EvidenceItem, type GateItem, type TaskItem, type VerificationItem,
 } from './model.ts';
 import './screens.css';
@@ -81,6 +82,16 @@ function VerifyBody({ project }: { project: ProjectState }) {
       meta: { topics: ['attempt'] },
     })),
   });
+  // 체크리스트가 있는 Task의 상세(체크리스트 Evidence 참조). 고아 Evidence 판정에 쓴다(리뷰 3).
+  // query key는 useApiQuery('getTask')와 같아 상세 화면과 캐시를 나눠 쓴다.
+  const checklistKeys = useMemo(() => (tasks.data?.tasks ?? []).filter((t) => t.checklist.total > 0).map((t) => t.taskKey).sort(), [tasks.data]);
+  const detailQs = useQueries({
+    queries: checklistKeys.map((taskKey) => ({
+      queryKey: apiKey('getTask', { params: { taskKey } }),
+      queryFn: ({ signal }: { signal: AbortSignal }) => client.call('getTask', { params: { taskKey }, signal }),
+      meta: { topics: ['task'] },
+    })),
+  });
   const attempts = useMemo(() => {
     const m = new Map<string, AttemptInfo>();
     for (const q of attemptQs) for (const a of q.data?.items ?? []) m.set(a.id, { attemptKey: a.attemptKey, agent: String(a.agent) });
@@ -116,6 +127,12 @@ function VerifyBody({ project }: { project: ProjectState }) {
     verifs: allV, evidence: allE, tasks: tasks.data.tasks, attempts, keys: verificationKeys(allV),
     titles: new Map(tasks.data.tasks.map((t) => [t.taskKey, t.title])),
     attemptsLoading: attemptQs.some((q) => q.isPending),
+    attemptsFailed: attemptQs.some((q) => q.isError),
+    retryAttempts: () => { for (const q of attemptQs) if (q.isError) void q.refetch(); },
+    checklists: new Map(detailQs.flatMap((q, i) => (q.data ? [[checklistKeys[i] ?? '', q.data.checklistItems.map((c) => ({ itemKey: c.itemKey, evidence: c.evidence }))] as const] : []))),
+    checklistsLoading: detailQs.some((q) => q.isPending),
+    checklistsFailed: detailQs.some((q) => q.isError),
+    retryChecklists: () => { for (const q of detailQs) if (q.isError) void q.refetch(); },
   };
 
   return (
@@ -157,6 +174,12 @@ interface Ctx {
   keys: ReadonlyMap<string, string>;
   titles: ReadonlyMap<string, string>;
   attemptsLoading: boolean;
+  attemptsFailed: boolean;
+  retryAttempts: () => void;
+  checklists: ReadonlyMap<string, readonly ChecklistRef[]>;
+  checklistsLoading: boolean;
+  checklistsFailed: boolean;
+  retryChecklists: () => void;
 }
 
 const RESULT_OPTS = [['', '전체'], ['PASS', 'PASS'], ['FAIL', 'FAIL'], ['BLOCKED', 'BLOCKED']] as const;
@@ -192,6 +215,13 @@ function ResultsTab({ ctx, sel, filter, onFilter, onSelect, onStep, onOpenTask }
 
   const agentOf = (v: VerificationItem) => ctx.attempts.get(v.attemptId)?.agent ?? (ctx.attemptsLoading ? '…' : '—');
   const attemptOf = (v: VerificationItem) => ctx.attempts.get(v.attemptId)?.attemptKey ?? (ctx.attemptsLoading ? '…' : '—');
+  // 실행 시도를 못 읽은 검증은 Agent를 모른다. Agent 필터에서 빠진 것을 「조건 불일치」라고 단정하지 않는다(리뷰 4).
+  const unknownAgents = filter.agent ? unknownAgentCount(ctx.verifs.filter((v) => !filter.result || String(v.result) === filter.result), ctx.attempts) : 0;
+  const attemptsAlert = ctx.attemptsFailed && (
+    <div className="banner danger" role="alert">
+      <div className="banner-b"><b>실행 시도 정보를 불러오지 못했습니다</b> — Agent · 실행 시도 칸을 확인할 수 없고 Agent 필터가 정확하지 않을 수 있습니다. <button type="button" className="btn sm" onClick={ctx.retryAttempts}>다시 시도</button></div>
+    </div>
+  );
   const evCount = (id: string) => ctx.evidence.filter((e) => e.verificationId === id).length;
   const keyOf = (v: VerificationItem) => ctx.keys.get(v.id) ?? v.id.slice(0, 8);
 
@@ -214,6 +244,7 @@ function ResultsTab({ ctx, sel, filter, onFilter, onSelect, onStep, onOpenTask }
     };
     return (
       <>
+        {attemptsAlert}
         <div className="fbar">
           <span className="muted">판정</span>
           <div className="seg" role="group" aria-label="판정">
@@ -251,7 +282,12 @@ function ResultsTab({ ctx, sel, filter, onFilter, onSelect, onStep, onOpenTask }
                 <span className="gc muted" role="cell">아직 검증 결과가 없습니다. QA · 재검증이 끝나면 여기에 표시됩니다. 결과는 Runner가 실행 시도 단위로 보고합니다 — <Link to="/exec">작업 실행 열기</Link></span>
               </div>
             )}
-            {ctx.verifs.length > 0 && rows.length === 0 && (
+            {unknownAgents > 0 && (
+              <div className="gtr" role="row" data-empty="agent-unknown">
+                <span className="gc muted" role="cell">Agent 정보를 {ctx.attemptsFailed ? '불러오지 못한' : '불러오는 중인'} 검증 {unknownAgents}건은 이 Agent 필터에서 판정하지 못했습니다.</span>
+              </div>
+            )}
+            {ctx.verifs.length > 0 && rows.length === 0 && unknownAgents === 0 && (
               <div className="gtr" role="row" data-empty="filtered">
                 <span className="gc muted" role="cell">조건에 맞는 검증 결과가 없습니다. 필터를 바꿔 보세요. <button type="button" className="btn sm" onClick={() => { onFilter({ result: '', agent: '' }); }}>필터 초기화</button></span>
               </div>
@@ -264,6 +300,8 @@ function ResultsTab({ ctx, sel, filter, onFilter, onSelect, onStep, onOpenTask }
 
   const ev = ctx.evidence.filter((e) => e.verificationId === selected.id);
   return (
+    <>
+    {attemptsAlert}
     <div className="two">
       <aside className="side scrollc" aria-label="검증 결과 목록">
         <div className="rail-h">
@@ -315,15 +353,16 @@ function ResultsTab({ ctx, sel, filter, onFilter, onSelect, onStep, onOpenTask }
             )}
           </div>
           <h4 style={{ marginTop: 16 }}>Evidence <span className="muted" style={{ fontWeight: 400 }}>체크리스트 항목을 눌러 이 Evidence와 연결하거나 해제합니다</span></h4>
-          <TaskEvidence taskKey={selected.taskKey} evidence={ev} />
+          <TaskEvidence taskKey={selected.taskKey} verificationId={selected.id} evidence={ev} />
         </div>
       </div>
     </div>
+    </>
   );
 }
 
 /** 상세 Task의 체크리스트를 읽어 연결 토글을 그린다. 다른 Task로 옮기면 화면을 새로 만든다(key). */
-function TaskEvidence({ taskKey, evidence }: { taskKey: string; evidence: EvidenceItem[] }) {
+function TaskEvidence({ taskKey, verificationId, evidence }: { taskKey: string; verificationId: string; evidence: EvidenceItem[] }) {
   const task = useApiQuery('getTask', { params: { taskKey } }, { topics: ['task'], keepPrevious: false });
   useRefreshError(task, `${taskKey} 체크리스트 최신 내용 불러오기`);
   if (task.data === undefined && task.isError) {
@@ -334,12 +373,12 @@ function TaskEvidence({ taskKey, evidence }: { taskKey: string; evidence: Eviden
     );
   }
   if (task.data === undefined) return <AreaLoading label="체크리스트 불러오는 중" />;
-  return <EvidenceLinks key={taskKey} task={task.data} evidence={evidence} />;
+  return <EvidenceLinks key={verificationId} task={task.data} verificationId={verificationId} evidence={evidence} />;
 }
 
 function EvidenceTab({ ctx, onOpen }: { ctx: Ctx; onOpen: (verificationId: string) => void }) {
   const rows = evidenceRows(ctx.evidence, ctx.verifs);
-  const orphan = orphanEvidence(ctx.evidence);
+  const orphan = orphanChecklist(ctx.checklists, ctx.evidence);
   const byId = new Map(ctx.verifs.map((v) => [v.id, v]));
   return (
     <>
@@ -356,7 +395,7 @@ function EvidenceTab({ ctx, onOpen }: { ctx: Ctx; onOpen: (verificationId: strin
                 <span className="gc mono" role="cell">
                   {v ? <button type="button" className="reflink" style={{ fontWeight: 500 }} onClick={() => { onOpen(v.id); }}>{evidenceName(e)}</button> : evidenceName(e)}
                 </span>
-                <span className="gc" role="cell"><span className="tag">{e.kind}</span></span>
+                <span className="gc" role="cell"><span className="tag">{evidenceKind(e)}</span></span>
                 <span className="gc mono" role="cell">{v ? ctx.keys.get(v.id) : <span className="muted">검증 없음</span>}</span>
                 <span className="gc mono" role="cell">{e.taskKey}</span>
                 <span className={`gc mono ${e.linked ? '' : 'muted'}`.trim()} role="cell">{e.checklist}</span>
@@ -371,10 +410,15 @@ function EvidenceTab({ ctx, onOpen }: { ctx: Ctx; onOpen: (verificationId: strin
           )}
         </div>
       </TableScroll>
+      {ctx.checklistsFailed && (
+        <div className="banner danger" role="alert">
+          <div className="banner-b"><b>체크리스트를 불러오지 못해</b> 검증 결과에 없는 체크리스트 Evidence를 판정할 수 없습니다. <button type="button" className="btn sm" onClick={ctx.retryChecklists}>다시 시도</button></div>
+        </div>
+      )}
       {orphan.length > 0 && (
         <div className="banner warn" role="status">
           <div className="banner-b">
-            <b>검증 결과에 없는 체크리스트 Evidence</b> — {orphan.map((o) => `${o.taskKey} ${o.checklistItemKey ?? ''} → ${evidenceName(o)}`).join(' · ')}. 검증 결과에 속한 Evidence로 다시 연결하세요.
+            <b>검증 결과에 없는 체크리스트 Evidence</b> — {orphan.map((o) => `${o.taskKey} ${o.itemKey} → ${o.ref}`).join(' · ')}. 검증 결과에 Evidence를 추가해 연결하세요.
           </div>
         </div>
       )}

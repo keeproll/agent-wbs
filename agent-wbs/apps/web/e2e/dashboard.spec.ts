@@ -179,3 +179,22 @@ test('D-28 대시보드: 1280·1920 페이지 가로 스크롤 없음, 1280 미�
   expect(await pageOverflow()).toBeLessThanOrEqual(0);
   expect(await box.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
 });
+
+test('리뷰 2: 대시보드 본문 조회가 실패해도 받은 경고는 보이고, 본문은 다시 시도할 수 있다', async ({ page }) => {
+  const api = await fakeApi(page);
+  const data = m307Data();
+  installM307(api, data);
+  let fail = true;
+  api.on('GET /api/dashboard', (route) => (fail
+    ? json(route, 404, { error: { code: 'NOT_FOUND', message: '요청한 자원을 찾을 수 없습니다.', action: 'x', fix: 'y', errors: [], details: {}, requestId: 'r' } })
+    : json(route, 200, data.dashboard)));
+  await page.goto('/dashboard');
+  await expect(page.getByRole('region', { name: '대시보드 화면을 불러오지 못했습니다' })).toBeVisible();
+  const banner = page.getByRole('region', { name: '팀장 확인 필요' });
+  await expect(banner.locator('.al-row')).toHaveCount(2);
+  await expect(banner.getByRole('link', { name: '프로젝트 보기' })).toHaveAttribute('href', '/project');
+  fail = false;
+  await page.getByRole('button', { name: '다시 시도' }).click();
+  await expect(page.getByRole('link', { name: '전체 Task 12건 — WBS에서 보기' })).toBeVisible();
+  await expect(banner.locator('.al-row')).toHaveCount(2);
+});

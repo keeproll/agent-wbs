@@ -9,7 +9,11 @@
  * - 결과를 모르는 변경(저장 실패)이 남아 있으면 「저장하지 않은 연결 변경」으로 보고 편집 보호(useEditGuard)와
  *   세션 만료 초안(useSessionDraft)으로 지킨다. 성공·최신 불러오기·버리기에서만 지운다.
  *
- * Evidence 추가(경로 입력) 자리: 팀장용 Evidence 추가 API가 계약에 없어 비워 둔다(가짜 버튼 금지, 조정자 결정). 계약이 생기면 이 목록 아래에 붙인다.
+ * Evidence 추가(UAT-VERIFY-02, P L1945·6246–6252): POST /api/verifications/:id/evidence `{ path }`(서버 후속 2차 계약).
+ * - 빈 경로(공백만 포함)는 버튼을 막는다. 같은 검증에 이미 있는 경로는 보내지 않고 안내한다. 서버도 둘 다 400으로 거부한다.
+ * - 서버가 거부하면(400 VALIDATION_FAILED) 서버가 준 사유(details.reasons)를 입력 칸 아래에 보이고 입력은 그대로 둔다.
+ * - 입력 중인 경로는 초안이다: 편집 보호와 세션 만료 초안으로 지킨다. 성공하면 같은 내용일 때만 비운다.
+ * - 경로는 참조일 뿐이다. 서버가 그 파일을 읽지 않으므로 지문·크기가 없고 「원본 내려받기」도 없다.
  */
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
@@ -21,13 +25,17 @@ import { useEditGuard } from '../../shared/state/useEditGuard.ts';
 import { useSave } from '../../shared/state/useSave.tsx';
 import { useSessionDraft } from '../../shared/state/useSessionDraft.tsx';
 import { BusyButton } from '../../shared/ui/BusyButton.tsx';
-import { evidenceName, type EvidenceItem } from './model.ts';
+import { evidenceKind, evidenceName, type EvidenceItem } from './model.ts';
+import { ApiError } from '../../shared/api/client.ts';
 
 type TaskDetail = ResponseOf<'getTask'>;
 /** 저장할 연결 변경 하나. evidence가 null이면 연결 해제 */
 export interface LinkChange { taskKey: string; itemKey: string; evidence: string | null; label: string }
 
-export function EvidenceLinks({ task, evidence }: { task: TaskDetail; evidence: EvidenceItem[] }) {
+/** Evidence와 체크리스트 항목이 연결됐는가. 체크리스트 값은 Evidence id 또는 경로다(서버 listEvidence 판정과 같음). */
+export const isLinked = (value: string | null, e: Pick<EvidenceItem, 'id' | 'path'>) => value !== null && (value === e.id || (!!e.path && value === e.path));
+
+export function EvidenceLinks({ task, verificationId, evidence }: { task: TaskDetail; verificationId: string; evidence: EvidenceItem[] }) {
   const { client } = useApi();
   const queryClient = useQueryClient();
   const [pending, setPending] = useState<LinkChange | null>(null);
@@ -76,8 +84,48 @@ export function EvidenceLinks({ task, evidence }: { task: TaskDetail; evidence: 
     },
   });
 
-  const dirty = pending !== null;
+  // ---- Evidence 추가 ----
+  const [addPath, setAddPath] = useState('');
+  const [addProblem, setAddProblem] = useState<string | null>(null);
+  const addRef = useRef('');
+  useEffect(() => { addRef.current = addPath; }, [addPath]);
+  const added = useSave<ResponseOf<'addVerificationEvidence'>, { path: string }>({
+    target: 'Evidence 경로 추가',
+    request: () => ({ path: addRef.current.trim() }),
+    run: async ({ payload, idempotencyKey }) => {
+      try {
+        return await client.call('addVerificationEvidence', { params: { id: verificationId }, body: payload, idempotencyKey });
+      } catch (error) {
+        // 서버 거부 사유(빈 경로·형식·중복)는 입력 칸 아래에 그대로 보인다.
+        const reasons = error instanceof ApiError ? (error.body?.error.details as { reasons?: unknown } | undefined)?.reasons : undefined;
+        if (error instanceof ApiError && error.kind === 'validation') setAddProblem(Array.isArray(reasons) && reasons.length ? reasons.map(String).join(' ') : error.message);
+        throw error;
+      }
+    },
+    onSuccess: (_result, payload) => {
+      setAddProblem(null);
+      setAddPath((cur) => (cur.trim() === payload.path ? '' : cur));
+      void queryClient.invalidateQueries({ predicate: (q) => q.queryKey[0] === 'allPages' && q.queryKey[1] === 'listEvidence' });
+    },
+    successNotice: 'Evidence를 추가했습니다.',
+  });
+  const submitAdd = () => {
+    const path = addPath.trim();
+    if (!path) return;
+    if (evidence.some((e) => e.path === path)) { setAddProblem('이미 이 검증에 연결된 Evidence 경로입니다.'); return; }
+    setAddProblem(null);
+    void added.save();
+  };
+
+  // 한 화면에 편집 보호(useBlocker)는 하나만 둘 수 있어 두 초안을 합쳐 판단한다.
+  const dirty = pending !== null || addPath.trim() !== '';
   useEditGuard(dirty);
+  const { restoreOffer: addRestore } = useSessionDraft<{ path: string }>({
+    id: `verify:evidence-add:${verificationId}`,
+    label: 'Evidence 경로 입력',
+    value: addPath.trim() ? { path: addPath } : null,
+    onRestore: (data) => { setAddPath(data.path); },
+  });
   const { restoreOffer } = useSessionDraft<LinkChange>({
     id: `verify:evidence-link:${task.taskKey}`,
     label: `${task.taskKey} Evidence 연결 변경`,
@@ -86,7 +134,7 @@ export function EvidenceLinks({ task, evidence }: { task: TaskDetail; evidence: 
   });
 
   const toggle = (itemKey: string, content: string, current: string | null, e: EvidenceItem) => {
-    const linking = current !== e.id;
+    const linking = !isLinked(current, e);
     keep({ taskKey: task.taskKey, itemKey, evidence: linking ? e.id : null, label: `${itemKey} ${linking ? '←' : '연결 해제'} ${evidenceName(e)} (${content})` });
     void save();
   };
@@ -95,6 +143,7 @@ export function EvidenceLinks({ task, evidence }: { task: TaskDetail; evidence: 
   return (
     <>
       {restoreOffer}
+      {addRestore}
       {pending && !busy && (
         <div className="banner warn" role="status">
           <div className="banner-b">
@@ -104,18 +153,18 @@ export function EvidenceLinks({ task, evidence }: { task: TaskDetail; evidence: 
           </div>
         </div>
       )}
-      {evidence.length === 0 && <p className="empty">연결된 Evidence가 없습니다. Runner가 이 검증 결과와 함께 Evidence를 올리면 여기에 표시됩니다.</p>}
+      {evidence.length === 0 && <p className="empty">연결된 Evidence가 없습니다. Runner가 이 검증 결과와 함께 Evidence를 올리거나, 아래에서 경로를 추가하면 여기에 표시됩니다.</p>}
       {evidence.map((e) => (
         <div key={e.id} className="evrow">
-          <span className="tag">{e.kind}</span>
+          <span className="tag">{evidenceKind(e)}</span>
           <span className="mono evp">{evidenceName(e)}</span>
-          <a className="btn ghost sm" href={apiUrl('getEvidenceContent', { params: { id: e.id } })} download>원본 내려받기</a>
+          {e.sha256 && <a className="btn ghost sm" href={apiUrl('getEvidenceContent', { params: { id: e.id } })} download>원본 내려받기</a>}
           <span className="sp" />
           {items.length > 0 && <span className="muted">체크리스트</span>}
           {items.length > 0 && (
             <div className="seg" role="group" aria-label={`${evidenceName(e)} 체크리스트 연결`}>
               {items.map((c) => {
-                const on = c.evidence === e.id;
+                const on = isLinked(c.evidence, e);
                 return (
                   <button
                     key={c.itemKey}
@@ -133,7 +182,20 @@ export function EvidenceLinks({ task, evidence }: { task: TaskDetail; evidence: 
         </div>
       ))}
       {items.length === 0 && <p className="fhint">이 Task에는 체크리스트가 없어 Evidence를 항목에 연결할 수 없습니다.</p>}
+      <div className="addbox-r" style={{ marginTop: 10 }}>
+        <label className="sr" htmlFor={`ev-add-${verificationId}`}>Evidence 경로</label>
+        <input
+          id={`ev-add-${verificationId}`} className="inp mono-in" style={{ flex: 1, minWidth: 260 }}
+          placeholder="evidence/TASK-0000/... 파일 경로 또는 링크" value={addPath}
+          aria-invalid={addProblem !== null || undefined} aria-describedby={addProblem ? `ev-add-err-${verificationId}` : undefined}
+          onChange={(ev) => { setAddPath(ev.target.value); setAddProblem(null); }}
+          onKeyDown={(ev) => { if (ev.key === 'Enter') { ev.preventDefault(); submitAdd(); } }}
+        />
+        <BusyButton busy={added.busy} busyLabel="추가 중…" small variant="default" disabled={!addPath.trim()} onClick={submitAdd}>Evidence 추가</BusyButton>
+      </div>
+      {addProblem && <p id={`ev-add-err-${verificationId}`} className="fhint" role="alert" style={{ color: 'var(--dg)' }}>{addProblem}</p>}
       {conflictModal}
+      {added.conflictModal}
     </>
   );
 }

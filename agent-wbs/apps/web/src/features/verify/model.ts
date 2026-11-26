@@ -55,9 +55,35 @@ export function evidenceRows(list: readonly EvidenceItem[], verifs: readonly Ver
     .map((e) => ({ ...e, checklist: e.checklistItemKey ?? '미연결', linked: e.checklistItemKey !== null }));
 }
 
-/** 체크리스트에 연결됐지만 어느 검증 결과에도 속하지 않은 Evidence(P orphan L6354–6355의 제품 판정) */
-export const orphanEvidence = (list: readonly EvidenceItem[]): EvidenceItem[] =>
-  list.filter((e) => e.checklistItemKey !== null && e.verificationId === null);
+/** 체크리스트 한 항목의 Evidence 참조(TaskDetail.checklistItems의 일부) */
+export interface ChecklistRef { itemKey: string; evidence: string | null }
+export interface OrphanRef { taskKey: string; itemKey: string; ref: string }
+
+/**
+ * 검증 결과에 없는 체크리스트 Evidence(P orphan L6354–6355와 같은 판정).
+ * 체크리스트 항목의 evidence 값(Evidence id 또는 경로)이 같은 Task의 「검증에 속한 Evidence」 어디에도 없으면 고아다.
+ * 왜 Evidence 목록만으로 판정하지 않나: 체크리스트가 존재하지 않는 경로를 가리키면 Evidence 행 자체가 없어 놓친다(리뷰 3).
+ * ref: 맞는 Evidence 행이 있으면(검증 없음) 그 이름, 없으면 참조 문자열 그대로.
+ */
+export function orphanChecklist(checklists: ReadonlyMap<string, readonly ChecklistRef[]>, evidence: readonly EvidenceItem[]): OrphanRef[] {
+  const out: OrphanRef[] = [];
+  for (const [taskKey, items] of checklists) {
+    const own = evidence.filter((e) => e.taskKey === taskKey);
+    const verified = own.filter((e) => e.verificationId !== null);
+    const matches = (e: EvidenceItem, ref: string) => e.id === ref || (e.path ?? null) === ref;
+    for (const c of items) {
+      const ref = c.evidence?.trim();
+      if (!ref || ref === '—' || verified.some((e) => matches(e, ref))) continue;
+      const row = own.find((e) => matches(e, ref));
+      out.push({ taskKey, itemKey: c.itemKey, ref: row ? evidenceName(row) : ref });
+    }
+  }
+  return out;
+}
+
+/** 실행 시도를 아직 못 읽어(불러오는 중·실패) Agent를 모르는 검증 수. 0이 아니면 Agent 필터 결과를 「조건 불일치」로 단정하지 않는다. */
+export const unknownAgentCount = (verifs: readonly VerificationItem[], attempts: ReadonlyMap<string, AttemptInfo>): number =>
+  verifs.filter((v) => !attempts.has(v.attemptId)).length;
 
 export interface GateCell { key: string; result: string; reason: string }
 export interface GateRow { taskKey: string; title: string; status: string; cells: GateCell[]; passedN: number; total: string; all: boolean }
@@ -85,5 +111,16 @@ export function tabCounts(verifs: readonly VerificationItem[], evidence: readonl
   return { results: verifs.length, evidence: evidence.length, gateUnpassed: gateRows(gates, tasks, true).length };
 }
 
-/** Evidence 한 개의 짧은 이름: 종류 + 지문(sha256) 앞 12자리 */
-export const evidenceName = (e: Pick<EvidenceItem, 'kind' | 'sha256'>) => `${e.kind} · ${e.sha256.slice(0, 12)}`;
+/**
+ * Evidence 한 개의 짧은 이름. 팀장이 연결한 경로·링크(path)는 그대로, Runner가 올린 파일은 「종류 · 지문(sha256) 앞 12자리」.
+ */
+export const evidenceName = (e: Pick<EvidenceItem, 'kind' | 'sha256' | 'path'>) =>
+  e.path ? e.path : `${e.kind} · ${(e.sha256 ?? '').slice(0, 12)}`;
+
+/** 화면에 보이는 종류. 경로 참조는 원본 evKind(P L4371)처럼 확장자로 정한다. */
+export function evidenceKind(e: Pick<EvidenceItem, 'kind' | 'path'>): string {
+  const p = e.path;
+  if (!p) return e.kind;
+  return /\.(png|jpe?g|gif)$/i.test(p) ? '스크린샷' : /\.(log|txt)$/i.test(p) ? '로그' : /\.json$/i.test(p) ? '측정 데이터'
+    : /\.sql$/i.test(p) ? 'SQL' : /\.md$/i.test(p) ? '문서' : '파일';
+}

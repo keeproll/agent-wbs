@@ -2,8 +2,8 @@
  * M3-07 검증 결과(UI-07·07-01·07-01A) — UAT-VERIFY-01, UAT-TASK-11(검증 상세 키보드), UAT-EMPTY-04(검증 부분), D-28·390px.
  */
 import { expect, test, type Page } from '@playwright/test';
-import { fakeApi, type FakeApi } from './support/fake-api.ts';
-import { installM307, kst, m307Data, type M307Data } from './support/m307-data.ts';
+import { fakeApi, json, type FakeApi } from './support/fake-api.ts';
+import { attempts, installM307, kst, m307Data, type M307Data } from './support/m307-data.ts';
 
 async function open(page: Page, path = '/verify', change: (d: M307Data) => void = () => undefined): Promise<{ api: FakeApi; data: M307Data }> {
   const api = await fakeApi(page);
@@ -153,4 +153,33 @@ test('D-28 검증: 1280·1920 가로 스크롤 없음, 1280 미만은 표 상자
   await expect(detail).toBeVisible();
   await expect(detail).toContainText('12/14 통과');
   expect(await overflow()).toBeLessThanOrEqual(0);
+});
+
+test('리뷰 4: 실행 시도 조회가 실패하면 오류와 다시 시도를 보이고, Agent 필터는 「조건 불일치」로 단정하지 않는다', async ({ page }) => {
+  const api = await fakeApi(page);
+  const data = m307Data();
+  installM307(api, data);
+  let fail = true;
+  for (const k of ['TASK-0001', 'TASK-0007']) {
+    api.on(`GET /api/tasks/${k}/attempts`, (route) => (fail
+      ? json(route, 500, { error: { code: 'INTERNAL', message: '서버 오류', action: 'x', fix: 'y', errors: [], details: {}, requestId: 'r' } })
+      : json(route, 200, { items: attempts(k), nextCursor: null })));
+  }
+  await page.goto('/verify?agent=Codex');
+  const alert = page.getByRole('alert').filter({ hasText: '실행 시도 정보를 불러오지 못했습니다' });
+  await expect(alert).toBeVisible();
+  await expect(page.getByRole('table', { name: '검증 결과' }).locator('[data-empty="filtered"]')).toHaveCount(0);
+  await expect(page.getByRole('table', { name: '검증 결과' }).locator('[data-empty="agent-unknown"]')).toContainText('2건');
+  fail = false;
+  await alert.getByRole('button', { name: '다시 시도' }).click();
+  await expect(alert).toHaveCount(0);
+  await expect(page.locator('[data-vrow]')).toHaveCount(2);
+});
+
+test('리뷰 5: 390px Completion Gate 탭도 페이지 가로 넘침 없이 표 상자만 스크롤', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page, '/verify?tab=gate');
+  await expect(page.getByRole('table', { name: 'Completion Gate' })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  expect(await page.getByRole('region', { name: 'Completion Gate 표' }).evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
 });
