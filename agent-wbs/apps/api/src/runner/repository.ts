@@ -72,7 +72,8 @@ export class RunnerRepository {
   }
   async openJob(taskKey: string) { return (await this.client.query<Job>("select * from runner_jobs where kind='attempt' and payload->>'taskKey'=$1 and state in ('queued','leased','started','reconcile') limit 1", [taskKey])).rows[0]; }
   async lease(job: Job, owner: string, generation: number | null) {
-    return required((await this.client.query<Job>("update runner_jobs set state='leased',lease_owner=$2,lease_until=clock_timestamp()+interval '60 seconds',fence=fence+1,attempts=attempts+1,generation=$3 where id=$1 returning *", [job.id, owner, generation])).rows[0]);
+    return required((await this.client.query<Job>(`update runner_jobs set state='leased',lease_owner=$2,lease_until=clock_timestamp()+interval '60 seconds',fence=fence+1,attempts=attempts+1,generation=$3::int,
+      payload=case when kind='attempt' then payload||jsonb_build_object('branch','agent/'||(payload->>'taskKey')||'-h'||$3::text) else payload end where id=$1 returning *`, [job.id, owner, generation])).rows[0]);
   }
   async renew(job: string) { return required((await this.client.query<{ lease_until: Date }>("update runner_jobs set lease_until=clock_timestamp()+interval '60 seconds' where id=$1 returning lease_until", [job])).rows[0]).lease_until; }
   async state(job: string, state: string) { await this.client.query('update runner_jobs set state=$2 where id=$1', [job, state]); }

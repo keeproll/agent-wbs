@@ -385,4 +385,40 @@ describe.skipIf(!process.env.RUNNER_TEST_DATABASE_URL)('runner 실제 PostgreSQL
     expect((await release(job,{ kind:'boot_changed',bootId:'boot-a',processGroup:321,currentBootId:'거짓 부팅' })).statusCode).toBe(409);
     expect((await release(job,{ kind:'boot_changed',bootId:'boot-a',processGroup:321,currentBootId:'boot-new' })).statusCode).toBe(204);
   });
+
+  test('PC 변경 전 대기한 job도 새 세대 브랜치를 쓰며 옛 보유 해제 전 로컬 재개를 허용한다', async () => {
+    const { t,job }=await claimed();
+    await start(job);
+    const waiting=await task();
+    expect((await request(waiting.key)).statusCode).toBe(202);
+    await post('host',{ hostId:'host-b',bootId:'boot-b',cpu:'fake',cores:12,memGB:16,swapGB:0,diskFreeGB:100,os:'fake' });
+    expect(await hold(job.id)).toMatchObject({ slot_state:'unconfirmed',lock_state:'orphaned' });
+    expect((await request(t.key)).statusCode).toBe(202);
+    const queued=await claim();
+    expect(queued.json().job.payload.branch).toBe(`agent/${waiting.key}-h2`);
+    expect((await start(queued.json().job,{ hostId:'host-b',bootId:'boot-b' })).statusCode).toBe(200);
+    const resumed=await claim();
+    expect(resumed.statusCode,resumed.body).toBe(200);
+    expect((await start(resumed.json().job,{ hostId:'host-b',bootId:'boot-b' })).statusCode).toBe(200);
+    const state=await app.inject({ url:'/api/runner-state',headers:{ cookie } });
+    expect(state.json()).toMatchObject({ externalWrite:{ state:'blocked' } });
+  });
+
+  test('독립 감시 worker 진입점이 만료된 실행을 중단하고 종료 신호에 DB 연결을 닫는다', async () => {
+    const { job }=await claimed();
+    await start(job);
+    await owner.query("update runner_jobs set lease_until=now()-interval '1 second' where id=$1",[job.id]);
+    const worker=spawn(process.execPath,['--conditions=awbs-source',new URL('../src/runner/worker.ts',import.meta.url).pathname],{ env:{ ...process.env,DATABASE_URL:appUrl.href },stdio:'pipe' });
+    let found=false;
+    try {
+      for(let i=0;i<100;i++) {
+        if((await hold(job.id)).slot_state==='unconfirmed') { found=true;break; }
+        await new Promise(resolve=>setTimeout(resolve,20));
+      }
+      expect(found).toBe(true);
+      const ended=once(worker,'exit');
+      worker.kill('SIGTERM');
+      expect((await ended)[0]).toBe(0);
+    } finally { if(worker.exitCode===null) worker.kill('SIGKILL'); }
+  });
 });
