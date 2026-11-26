@@ -65,7 +65,7 @@ export function ProposalModal({ tasks, onDirty, onClose, onSubmitted }: {
       const cp = await client.call('createProposal', { body: payload, idempotencyKey });
       const preview = await client.call('previewProposal', { params: { id: cp.id } });
       if (preview.issues.length > 0) return { cp, preview, submitted: null };
-      const submitted = await client.call('submitProposal', { params: { id: cp.id }, body: { updatedAt: cp.updatedAt }, idempotencyKey: `${idempotencyKey}:submit` });
+      const submitted = await client.call('submitProposal', { params: { id: cp.id }, body: { updatedAt: cp.updatedAt } as { updatedAt: string; comment: string }, idempotencyKey: `${idempotencyKey}:submit` }); // submit의 comment는 계약상 선택(ProposalDetail call 주석)
       return { cp, preview, submitted };
     },
     onSuccess: (result, payload) => {

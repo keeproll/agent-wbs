@@ -3,6 +3,7 @@
  * 메뉴 제목·원인(코드)·확인할 것·마지막으로 불러온 시각·「다시 시도」를 보인다(UAT-STATE-04).
  * 원본의 「503 SERVICE_UNAVAILABLE」은 계약 코드 `503 UNAVAILABLE`로 바꿔 쓴다(contracts §1.1).
  */
+import type { ReactNode } from 'react';
 import { useApi } from '../api/ApiProvider.tsx';
 import type { ApiError } from '../api/client.ts';
 import { formatDateTime } from '../format.ts';
@@ -22,7 +23,10 @@ function reason(error: ApiError): string {
   return `서버가 요청을 처리하지 못했습니다 (${code}).${body ? ` ${body.message} ${body.fix}` : ' 잠시 후 다시 시도하세요.'}`;
 }
 
-export function LoadError({ title, error, onRetry, retrying }: { title: string; error: ApiError; onRetry: () => void; retrying: boolean }) {
+/**
+ * children: 오류 카드 아래에 함께 보일 내용. 본문 조회와 별개로 이미 받은 정보(예: 대시보드 경고)를 가리지 않기 위해 쓴다(M3-07 리뷰 2).
+ */
+export function LoadError({ title, error, onRetry, retrying, children }: { title: string; error: ApiError; onRetry: () => void; retrying: boolean; children?: ReactNode }) {
   const { lastSuccessAt } = useApi();
   const last = lastSuccessAt === null ? '마지막으로 불러온 시각 없음(이번 접속에서 아직 불러오지 못함)' : `마지막으로 불러온 시각 ${formatDateTime(lastSuccessAt)}`;
   return (
@@ -35,6 +39,7 @@ export function LoadError({ title, error, onRetry, retrying }: { title: string; 
           <BusyButton busy={retrying} busyLabel="다시 불러오는 중…" onClick={onRetry}>다시 시도</BusyButton>
         </div>
       </section>
+      {children}
     </Page>
   );
 }

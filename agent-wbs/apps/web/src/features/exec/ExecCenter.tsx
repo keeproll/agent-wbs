@@ -3,6 +3,7 @@
  * 팀장 확인 필요 알림(GET /api/alerts), Completion Gate(L1811–1818), 재작업 지시(L1801), 선택 시도 기록(L1820–1840).
  * 실행 기록과 메시지는 섞지 않는다(G§4.6). 메시지는 오른쪽 영역에 있다.
  */
+import { evidenceName } from '../verify/model.ts';
 import { Link } from 'react-router';
 import { apiUrl } from '../../shared/api/client.ts';
 import { useApiQuery } from '../../shared/api/queries.ts';
@@ -202,7 +203,7 @@ function AttemptCard({ attempt: a, verification: v, evidence, now }: { attempt: 
               ? <AreaError what="Evidence를" error={evidence.error} retrying={evidence.isFetching} onRetry={() => { void evidence.refetch(); }} />
               : evidence.data === undefined ? <span className="muted">불러오는 중…</span>
               : files.length > 0
-              ? <ul className="lst mono-list" style={{ margin: 0 }}>{files.map((e) => <li key={e.id}><a href={apiUrl('getEvidenceContent', { params: { id: e.id } })} download>{e.kind} · {e.sha256.slice(0, 12)}</a></li>)}</ul>
+              ? <ul className="lst mono-list" style={{ margin: 0 }}>{files.map((e) => <li key={e.id}>{e.sha256 ? <a href={apiUrl('getEvidenceContent', { params: { id: e.id } })} download>{evidenceName(e)}</a> : evidenceName(e)}</li>)}</ul>
               : <span className="muted">연결된 Evidence 없음</span>}
             {v.defects.length > 0 && (
               <>

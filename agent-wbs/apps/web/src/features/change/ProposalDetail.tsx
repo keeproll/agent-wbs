@@ -209,7 +209,9 @@ function Actions({ cp, preview, issues, holds, comment, setComment, err, setErr 
   };
   const call = (id: ActionId, payload: Payload, idempotencyKey: string) => {
     const params = { id: cp.id };
-    const base = { updatedAt: payload.updatedAt, ...(payload.comment.trim() ? { comment: payload.comment.trim() } : {}) };
+    // M3 통합: 계약의 submit·reject·request-changes는 `.map` 한 정의라 TS 타입이 「comment 필수」로 합쳐진다.
+    // 실제 계약(openapi)은 submit만 comment 선택, reject·request-changes는 필수다. 화면은 필수일 때 빈 의견을 막으므로(아래 사유 검사) 보내는 값은 그대로 두고 타입만 맞춘다.
+    const base = { updatedAt: payload.updatedAt, ...(payload.comment.trim() ? { comment: payload.comment.trim() } : {}) } as { updatedAt: string; comment: string };
     if (id === 'approveProposal') return client.call(id, { params, idempotencyKey, body: { ...base, previewHash: payload.previewHash } });
     if (id === 'applyProposal') return client.call(id, { params, idempotencyKey, body: { ...base, previewHash: payload.previewHash } });
     return client.call(id, { params, idempotencyKey, body: base });

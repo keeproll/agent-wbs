@@ -14,9 +14,12 @@ import { lazy, Suspense, type ComponentType } from 'react';
 import { createBrowserRouter, Navigate, type RouteObject } from 'react-router';
 import { LoginPage } from '../features/auth/LoginPage.tsx';
 import { ChangePage } from '../features/change/ChangePage.tsx';
+import { DashboardPage } from '../features/dashboard/DashboardPage.tsx';
 import { ExecPage } from '../features/exec/ExecPage.tsx';
+import { HistoryPage } from '../features/history/HistoryPage.tsx';
 import { PlanningPage } from '../features/planning/PlanningPage.tsx';
 import { ProjectPage } from '../features/project/ProjectPage.tsx';
+import { VerifyPage } from '../features/verify/VerifyPage.tsx';
 import { WbsPage } from '../features/wbs/WbsPage.tsx';
 import { RequireAuth } from '../shared/auth/RequireAuth.tsx';
 import { MENU, type MenuKey } from '../shared/layout/menu.ts';
@@ -32,11 +35,14 @@ const StatesSandbox = withSandbox ? lazy(() => import('./sandbox/StatesSandbox.t
  * 왜 표로 두나: 메뉴 하나를 연결할 때 이 표에 한 줄만 더하면 되고, 주소 규칙은 아래 한 곳에 남는다.
  */
 const SCREENS: Partial<Record<MenuKey, ComponentType>> = {
+  dashboard: DashboardPage, // M3-07
   project: ProjectPage, // M3-04
   wbs: WbsPage, // M3-02(+ M3-03 상세)
   planning: PlanningPage, // M3-05
   exec: ExecPage, // M3-06
+  verify: VerifyPage, // M3-07
   change: ChangePage, // M3-05
+  history: HistoryPage, // M3-07
 };
 
 /**

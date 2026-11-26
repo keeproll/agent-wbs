@@ -5,6 +5,7 @@
  */
 import { expect, test, type Page } from '@playwright/test';
 import { ACTIVE_PROJECT, errorBody, fakeApi, hold, json } from './support/fake-api.ts';
+import { installM307, m307Data } from './support/m307-data.ts';
 import { compareRegion, hasBaseline, writeSummary, type Box, type VisualResult } from './support/visual.ts';
 
 test.skip(!hasBaseline(), '원본 스크린샷 폴더가 없다(~/.cache/agent-wbs-baseline).');
@@ -18,7 +19,10 @@ const NOTE: Record<string, string> = {};
 
 async function prepare(page: Page) {
   await page.clock.install({ time: new Date('2026-11-05T20:00:00+09:00') });
-  return fakeApi(page);
+  const api = await fakeApi(page);
+  // 대시보드는 M3-07에서 구현됐다. 앱 틀 비교에 쓰는 대시보드 본문 데이터(원본 Mock과 같은 값)를 붙인다.
+  installM307(api, m307Data());
+  return api;
 }
 async function shot(page: Page) {
   await page.evaluate(() => document.fonts.ready);
@@ -40,7 +44,7 @@ const MAIN: Box = { x: 181, y: 65, width: 1739, height: 1015 };
 test('UI-00 앱 틀: 왼쪽 메뉴·헤더 왼쪽(1920)', async ({ page }) => {
   await prepare(page);
   await page.goto('/dashboard');
-  await expect(page.getByText('이 화면은 아직 구현되지 않았습니다.')).toBeVisible();
+  await expect(page.getByText('다음 행동을 결정하는 데 필요한 항목만 표시합니다', { exact: false })).toBeVisible();
   const png = await shot(page);
   record('UI-00-nav-1920', 0.01, '같아야 함(메뉴 12개·선택 강조·빈 단계 칸)', compareRegion('UI-00-nav-1920', 'desktop-clock20261105/SYS-01-error.png', NAV, png, NAV));
   record('UI-00-header-left-1920', 0.01, '같아야 함(햄버거·로고·프로젝트명)', compareRegion('UI-00-header-left-1920', 'desktop-clock20261105/SYS-01-error.png', HEADER_LEFT, png, HEADER_LEFT));
@@ -63,7 +67,7 @@ test('UI-00 1280×800 앱 틀', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await prepare(page);
   await page.goto('/dashboard');
-  await expect(page.getByText('이 화면은 아직 구현되지 않았습니다.')).toBeVisible();
+  await expect(page.getByText('다음 행동을 결정하는 데 필요한 항목만 표시합니다', { exact: false })).toBeVisible();
   const png = await shot(page);
   const nav = { x: 0, y: 64, width: 180, height: 736 };
   record('UI-00-nav-1280', 0.01, '같아야 함', compareRegion('UI-00-nav-1280', 'w1280/UI-01.png', nav, png, nav));

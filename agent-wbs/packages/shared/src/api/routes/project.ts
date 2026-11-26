@@ -70,6 +70,28 @@ const project = [
     summary: '등록·입력·bootstrap·변경 감지',
     responses: { 200: m.ProjectState },
   }),
+  // UAT-PROJECT-10, P6487–6492, G122·1016: 이름·설명·날짜만 편집한다. 상태는 기존 전이 규칙을 따른다.
+  operation({
+    ...byBody,
+    id: 'updateProject',
+    method: 'PATCH',
+    path: '/api/project',
+    summary: '프로젝트 정보 편집. 날짜 변경은 일정 재계산과 정책에 따른 기준 추가를 같은 트랜잭션에 기록',
+    body: Body({ ...V, name: Text, description: Type.String(), startDate: c.DateOnly, targetDate: Nullable(c.DateOnly) }),
+    responses: { 200: m.ProjectState },
+    errors: ['INVALID_TRANSITION', 'SCHEDULE_CYCLE'],
+  }),
+  // P4645–4651, UAT-PROJECT-09b: 요청 접수와 실제 main 관측 완료를 구분한다.
+  operation({
+    ...byBody,
+    id: 'checkInputs',
+    method: 'POST',
+    path: '/api/project/inputs/check',
+    summary: '지금 입력 확인 요청. Runner 정책의 inputCheckRequest 증가. 확인 시각은 실제 관측 보고를 받았을 때 갱신',
+    body: Body({ ...V }),
+    responses: { 202: Type.Object({ inputCheckRequest: c.Count }) },
+    errors: ['INVALID_TRANSITION'],
+  }),
   operation({
     ...lead,
     version: 'revision',

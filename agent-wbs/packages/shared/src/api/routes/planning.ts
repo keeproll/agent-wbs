@@ -92,7 +92,8 @@ export const planningOperations = [
       reviews: List(
         Body({
           topic: Text,
-          kind: Text,
+          // 원본 P plannings.review의 agree/diff. 한글 저장값은 서버가 조회 때만 변환한다.
+          kind: c.AnyOf('agree', 'diff', '일치', '이견'),
           codex: Type.String(),
           claude: Type.String(),
           ops: Opt(List(m.PlanningProposalOp)),
@@ -125,6 +126,7 @@ export const planningOperations = [
     ),
     inputRules: ['uniqueDesignKind'],
     responses: { 201: Type.Object({ id: c.Id, cpKey: Type.String(), status: m.ProposalStatus }) },
+    errors: ['INVALID_TRANSITION'],
   }),
   operation({
     ...planning,

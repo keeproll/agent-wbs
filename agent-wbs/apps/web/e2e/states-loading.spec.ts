@@ -19,13 +19,13 @@ test('UAT-STATE-04 응답 없음 10초 → 메뉴 제목·원인·마지막 성�
   const api = await fakeApi(page);
   const silent = hold((route) => json(route, 200, ACTIVE_PROJECT));
   api.on('GET /api/project', silent.handler);
-  await page.goto('/dashboard');
-  await expect(page.getByRole('status', { name: '대시보드 불러오는 중' })).toBeVisible();
+  await page.goto('/report');
+  await expect(page.getByRole('status', { name: '보고서 불러오는 중' })).toBeVisible();
   await page.clock.fastForward(9_000);
-  await expect(page.getByRole('status', { name: '대시보드 불러오는 중' })).toBeVisible();
+  await expect(page.getByRole('status', { name: '보고서 불러오는 중' })).toBeVisible();
   await page.clock.fastForward(1_100);
-  await expect(page.getByRole('heading', { level: 1, name: '대시보드' })).toBeVisible();
-  const card = page.getByRole('region', { name: '대시보드 화면을 불러오지 못했습니다' });
+  await expect(page.getByRole('heading', { level: 1, name: '보고서' })).toBeVisible();
+  const card = page.getByRole('region', { name: '보고서 화면을 불러오지 못했습니다' });
   await expect(card).toContainText('Agent WBS 서버가 응답하지 않습니다 (응답 없음 · 10초 초과)');
   await expect(card).toContainText('마지막으로 불러온 시각 2026-11-26 10:00');
 
@@ -65,7 +65,7 @@ test('0.2초 안에 온 응답은 skeleton을 보이지 않는다', async ({ pag
   const api = await fakeApi(page);
   const gate = hold((route) => json(route, 200, ACTIVE_PROJECT));
   api.on('GET /api/project', gate.handler);
-  await page.goto('/history');
+  await page.goto('/report');
   await expect.poll(() => api.requests('GET /api/project').length).toBeGreaterThan(0);
   await page.clock.runFor(50);
   gate.release();
@@ -87,15 +87,15 @@ test('늦은 첫 응답: 0.2초 뒤 메뉴 배치 모양 skeleton → 응답 →
   const api = await fakeApi(page);
   const gate = hold((route) => json(route, 200, ACTIVE_PROJECT));
   api.on('GET /api/project', gate.handler);
-  await page.goto('/dashboard');
+  await page.goto('/report');
   await expect.poll(() => api.requests('GET /api/project').length).toBeGreaterThan(0);
-  const skeleton = page.getByRole('status', { name: '대시보드 불러오는 중' });
+  const skeleton = page.getByRole('status', { name: '보고서 불러오는 중' });
   await page.clock.runFor(150);
   await expect(skeleton).toHaveCount(0);
   await page.clock.runFor(100);
   await expect(skeleton).toBeVisible();
-  // 대시보드 배치: 지표 카드 4 + 패널 6 + 큰 카드 1
-  await expect(skeleton.locator('.sk-c.card')).toHaveCount(11);
+  // 보고서 배치: 위쪽 큰 카드 1 + 오른쪽 문서 카드 1(왼쪽 목록은 카드 아님)
+  await expect(skeleton.locator('.sk-c.card')).toHaveCount(2);
   gate.release();
   await expect.poll(() => api.requests('GET /api/project').length).toBe(1);
   await page.clock.runFor(400);
@@ -105,13 +105,13 @@ test('늦은 첫 응답: 0.2초 뒤 메뉴 배치 모양 skeleton → 응답 →
 
 test('이미 본 화면으로 다시 오면 이전 화면을 유지하고 상단 진행 막대를 보인다', async ({ page }) => {
   const api = await fakeApi(page);
-  await page.goto('/dashboard');
+  await page.goto('/ci');
   await expect(page.getByText('이 화면은 아직 구현되지 않았습니다.')).toBeVisible();
   const slow = hold((route) => json(route, 200, ACTIVE_PROJECT));
   api.on('GET /api/project', slow.handler);
-  await page.getByRole('navigation', { name: '주 메뉴' }).getByRole('link', { name: '이력', exact: true }).click();
+  await page.getByRole('navigation', { name: '주 메뉴' }).getByRole('link', { name: '보고서', exact: true }).click();
   await expect(page.getByRole('progressbar', { name: '불러오는 중' })).toBeVisible();
-  await expect(page.getByRole('heading', { level: 1, name: '이력' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: '보고서' })).toBeVisible();
   await expect(page.locator('.skp')).toHaveCount(0);
   slow.release();
   await expect(page.getByRole('progressbar')).toHaveCount(0);

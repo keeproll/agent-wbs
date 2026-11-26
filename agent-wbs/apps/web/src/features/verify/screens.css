@@ -1,0 +1,22 @@
+/*
+ * M3-07 화면(대시보드·검증·이력)에만 필요한 추가 규칙. 원본(prototype.css)에 없거나 원본과 다르게 해야 하는 것만 적는다.
+ * 규칙마다 왜 필요한지 적는다.
+ */
+
+/* 1. 원본은 KPI·패널 항목·분포 막대·Task 링크가 button이다. 제품은 주소가 있는 링크(a)라서
+      새로고침·뒤로 가기·새 탭 열기가 된다(MM-29). 원본 a{color}·밑줄이 글자 모양을 바꾸지 않게 되돌린다. */
+a.kpi, a.kpi:hover, a.dl-i, a.dl-i:hover, a.bar-r, a.bar-r:hover, a.side-i, a.side-i:hover { color: inherit; text-decoration: none; }
+a.btn.ghost, a.btn.ghost:hover { color: inherit; }
+/* 원본 .reflink(button) 모양 그대로 a에도 쓴다. 글자색·밑줄은 원본 .reflink 값이다. */
+a.reflink, a.reflink:hover { color: inherit; }
+
+/* 2. 검증 결과·Gate 행 전체를 눌러도 열린다(원본 행 onClick). 손 모양 커서만 더한다. */
+.gtr.vrow { cursor: pointer; }
+.gtr.vrow:hover { background: var(--bg); }
+.gtr.vrow.pick:hover { background: #E4EBFA; }
+
+/* 3. 이력 기간 입력. 원본에 없는 필터(MM-18)라 원본 .inp 높이·테두리를 그대로 쓰고 폭만 정한다. */
+.hist-date { width: 150px; }
+
+/* 4. Evidence 이름(종류·지문)이 좁은 폭에서 가로로 넘치지 않게 줄을 바꾼다(390px 열람, D-28). */
+.evrow .evp { min-width: 0; overflow-wrap: anywhere; }
