@@ -25,7 +25,8 @@
   - `W --filter api test`는 실제 DB가 필요 없는 단위 시험만 돌린다(`*.db.test.ts`는 빠진다).
     - 실제 PostgreSQL로 하는 시험은 `W test:db -- <이름>`으로 따로 돌린다. 시험 전용 DB 주소(`TEST_DATABASE_URL`, 이름이 `awbs_test_`로 시작)가 필요하다.
     - 왜: 동시 요청·잠금·트랜잭션 되돌림 같은 핵심 검증은 DB 시험에만 있다. 단위 시험만 돌리면 그 검증을 건너뛰고도 종료 코드 0이 나온다(M2-04 리뷰 P3-1).
-    - 예: M2-05는 `W --filter api test -- runner`와 `W test:db -- runner`가 모두 종료 코드 0이어야 끝난다.
+    - 예: M2-04는 `W --filter api test -- reset`과 `W test:db -- reset`이 모두 종료 코드 0이어야 끝난다.
+    - 단위 시험 파일이 없는 작업(M2-05 `runner`)은 `W test:db`만 적는다. 맞는 파일이 없으면 `test`가 종료 코드 1로 끝나기 때문이다.
 - **병렬 표시**
   - `∥` 같은 마일스톤 안 동시 가능(디렉토리 비중첩), `—` 선행 대기.
   - 「M0-01 후」처럼 적힌 것은 그 작업이 끝나야 시작할 수 있다는 뜻이다.
@@ -160,7 +161,7 @@ flowchart LR
     - 명령 epoch 불일치
   - 디렉토리: `apps/api/src/reset` · 병렬: M2-03 후 · 담당 / 리뷰: Codex / Claude
 - **M2-05** — Runner 보고·jobs lease·시도 claim·heartbeat 감시·PC(개인용 컴퓨터) 변경·상한
-  - 완료 조건(검증): `W --filter api test -- runner` + `W test:db -- runner`
+  - 완료 조건(검증): `W test:db -- runner` (Runner 시험은 모두 DB 시험이라 단위 시험 파일이 없다)
     - 동시 claim 100회, 중복 보고
     - **네트워크 단절+자손(프로세스가 띄운 자식·손자 프로세스) 생존+재개 거부→해제 후 허용**
     - 설치 실패 후 Task/예약/이력/재시도, 외부 효과 job reconcile
