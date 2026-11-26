@@ -1,0 +1,119 @@
+import { describe, expect, it } from 'vitest';
+import {
+  detailSteps, formatDuration, githubLabel, lastDeploy, mainStatus, openFailures, position, queueRows, resultLabel, runDurationMs,
+  runRows, stageCounts, summaryLine, tabBadges,
+  type CiRun, type QueueItem,
+} from '../src/features/ci/model.ts';
+
+const run = (o: Partial<CiRun> & Pick<CiRun, 'id' | 'stage' | 'status'>): CiRun => ({
+  runKey: o.id.toUpperCase(), taskKey: null, attemptId: null, ref: 'main', pr: null, trigger: null, baseSha: null, headSha: null,
+  mergeSha: null, treeSha: null, pipelineSha: null, steps: [], failStep: null, failScope: null, logExcerpt: null, artifacts: [], url: null,
+  startedAt: '2026-11-03T00:00:00.000Z', ...o,
+} as CiRun);
+const sha = (c: string) => c.repeat(40);
+
+// 서버 순서(최근 먼저: created_at desc, run_no desc)
+const runs: CiRun[] = [
+  run({ id: 'r6', stage: 'night', status: 'pass', headSha: sha('c'), startedAt: '2026-11-02T17:00:00.000Z' }),
+  run({ id: 'r5', stage: 'task', status: 'pass', taskKey: 'TASK-0004', pr: 9, startedAt: '2026-11-03T08:47:00.000Z' }),
+  run({ id: 'r4', stage: 'task', status: 'fail', taskKey: 'TASK-0004', pr: 9, failStep: 'contract', startedAt: '2026-11-03T08:40:00.000Z' }),
+  run({ id: 'r3', stage: 'deploy', status: 'pass', url: 'http://localhost:8080', startedAt: '2026-11-02T09:05:00.000Z' }),
+  run({ id: 'r2', stage: 'int', status: 'fail', taskKey: 'TASK-0002', pr: 5, startedAt: '2026-10-29T08:02:00.000Z' }),
+  run({ id: 'r1', stage: 'task', status: 'pass', taskKey: 'TASK-0001', pr: 3, startedAt: '2026-10-28T06:11:00.000Z' }),
+];
+
+describe('빌드·통합 화면 계산(UI-08, P ciVM L4765–4801)', () => {
+  it('단계 필터: 전체는 서버 순서 그대로, 단계별 건수는 필터와 무관하게 전체에서 센다', () => {
+    expect(runRows(runs, '').map((r) => r.id)).toEqual(['r6', 'r5', 'r4', 'r3', 'r2', 'r1']);
+    expect(runRows(runs, 'task').map((r) => r.id)).toEqual(['r5', 'r4', 'r1']);
+    expect(stageCounts(runs)).toEqual({ '': 6, task: 3, int: 1, night: 1, deploy: 1 });
+  });
+
+  it('결과 표시: Task 탓 실패와 기준선(main) 실패를 다르게 보인다(조정자 결정: failScope=baseline)', () => {
+    expect(resultLabel(run({ id: 'a', stage: 'task', status: 'pass' }))).toEqual({ l: '통과', c: 'vf v-pass' });
+    expect(resultLabel(run({ id: 'a', stage: 'task', status: 'fail', failScope: 'task' }))).toEqual({ l: '실패', c: 'vf v-fail' });
+    expect(resultLabel(run({ id: 'a', stage: 'task', status: 'fail', failScope: 'baseline' }))).toEqual({ l: '기준선 실패', c: 'sc sc-warn' });
+    expect(resultLabel(run({ id: 'a', stage: 'task', status: 'skip' })).l).toBe('건너뜀');
+    expect(resultLabel(run({ id: 'a', stage: 'task', status: 'run' })).l).toBe('실행 중');
+  });
+
+  it('소요 시간은 보고된 단계 시간의 합. 단계가 없으면 「—」', () => {
+    const r = run({ id: 'a', stage: 'task', status: 'pass', steps: [{ name: 'a', status: 'pass', durationMs: 120_000 }, { name: 'b', status: 'pass', durationMs: 2_400 }] });
+    expect(runDurationMs(r)).toBe(122_400);
+    expect(formatDuration(122_400)).toBe('2분 02초');
+    expect(formatDuration(45_000)).toBe('45초');
+    expect(formatDuration(null)).toBe('—');
+  });
+
+  it('실패 뒤 실행하지 않은 단계는 「건너뜀」(UAT-CI-01 d). 실패 단계는 실패, 앞 단계는 보고값', () => {
+    const r = run({
+      id: 'a', stage: 'task', status: 'fail', failStep: 'lint',
+      steps: [
+        { name: 'install', status: 'pass', durationMs: 1000 }, { name: 'lint', status: 'fail', durationMs: 2000 },
+        { name: 'test', status: 'queued', durationMs: 0 }, { name: 'build', status: 'run', durationMs: 0 },
+      ],
+    });
+    expect(detailSteps(r).map((s) => [s.name, s.l])).toEqual([['install', '통과'], ['lint', '실패'], ['test', '건너뜀'], ['build', '건너뜀']]);
+    expect(detailSteps(r).map((s) => s.dur)).toEqual(['1초', '2초', '—', '—']);
+  });
+
+  it('실패 단계가 단계 목록에 보고되지 않았으면 맨 뒤에 실패로 더한다(어느 단계에서 멈췄는지 잃지 않기)', () => {
+    const r = run({ id: 'a', stage: 'task', status: 'fail', failStep: 'protected-paths', steps: [{ name: 'install', status: 'pass', durationMs: 1000 }] });
+    expect(detailSteps(r).map((s) => [s.name, s.l])).toEqual([['install', '통과'], ['protected-paths', '실패']]);
+  });
+
+  it('이전·다음 위치: 목록 안이면 「i / n」, 필터 때문에 목록 밖이면 「목록 밖」', () => {
+    const ids = ['r5', 'r4', 'r1'];
+    expect(position(ids, 'r4')).toEqual({ label: '2 / 3', prev: 'r5', next: 'r1' });
+    expect(position(ids, 'r5')).toEqual({ label: '1 / 3', prev: null, next: 'r4' });
+    expect(position(ids, 'r6')).toEqual({ label: '목록 밖', prev: null, next: null });
+  });
+
+  it('미해결 실패: 같은 단계·같은 Task(PR)의 더 최근 통과가 없는 실패만 센다', () => {
+    // r4(TASK-0004 task 실패)는 r5가 뒤에 통과 → 해결. r2(int 실패)는 미해결.
+    expect(openFailures(runs)).toBe(1);
+  });
+
+  it('main 상태: 가장 최근 야간 점검·병합된 통합 확인·기준선 실패로 정한다', () => {
+    expect(mainStatus(runs)).toEqual({ l: `main 정상 · ${'c'.repeat(7)} · 2026-11-03 02:00`, c: 'vf v-pass' });
+    const broken = [run({ id: 'b', stage: 'task', status: 'fail', failScope: 'baseline', baseSha: sha('d'), startedAt: '2026-11-04T00:00:00.000Z' }), ...runs];
+    expect(mainStatus(broken)).toEqual({ l: `main 깨짐 · 기준선 검사 실패 · ${'d'.repeat(7)} · 2026-11-04 09:00`, c: 'vf v-fail' });
+    expect(mainStatus([])).toEqual({ l: 'main 빌드 기록 없음', c: 'vf v-none' });
+    // 통합 확인 실패는 병합되지 않았으므로 main을 깨지 않는다
+    expect(mainStatus([run({ id: 'x', stage: 'int', status: 'fail', pr: 1 })]).l).toBe('main 빌드 기록 없음');
+  });
+
+  it('GitHub 칸: PR이 있으면 보고하는 검사 이름·상태, 없으면 main 대상', () => {
+    expect(githubLabel(run({ id: 'a', stage: 'int', status: 'fail', pr: 5 }))).toBe('GitHub PR #5 검사 상태 보고: agentwbs/int — failure');
+    expect(githubLabel(run({ id: 'a', stage: 'task', status: 'run', pr: 9 }))).toBe('GitHub PR #9 검사 상태 보고: agentwbs/task — pending');
+    expect(githubLabel(run({ id: 'a', stage: 'night', status: 'pass' }))).toBe('main 대상 — PR 없음');
+  });
+
+  it('병합 대기열: 상태 이름·색, 실제 병합 SHA가 있는데 병합됨이 아니면 MERGE_MISMATCH 경고(완료 보류)', () => {
+    const q = (o: Partial<QueueItem> & Pick<QueueItem, 'id' | 'status'>): QueueItem => ({
+      pr: 9, taskKey: 'TASK-0004', position: 1, qaHeadSha: null, syncedHeadSha: null, baseSha: null, ciRunId: null, actualMergeSha: null, ...o,
+    } as QueueItem);
+    const rows = queueRows([
+      q({ id: 'q1', status: 'merged', ciRunId: 'r2', actualMergeSha: sha('e') }),
+      q({ id: 'q2', status: 'checking' }),
+      q({ id: 'q3', status: 'failed' }),
+      q({ id: 'q4', status: 'checking', actualMergeSha: sha('f') }),
+      q({ id: 'q5', status: 'waiting_verify' }),
+    ], new Map([['TASK-0004', 'Drizzle Schema 설계']]), runs);
+    expect(rows.map((r) => [r.st, r.c])).toEqual([
+      ['병합됨', 'vf v-pass'], ['통합 확인 중', 'vf v-run'], ['통합 실패 — 병합 보류', 'vf v-fail'], ['통합 확인 중', 'vf v-run'], ['검증 대기', 'vf v-none'],
+    ]);
+    expect(rows.map((r) => r.mismatch)).toEqual([false, false, false, true, false]);
+    expect(rows[0]?.at).toBe('2026-10-29 17:02');
+    expect(rows[1]?.at).toBe('—');
+    expect(rows[0]?.title).toBe('Drizzle Schema 설계');
+  });
+
+  it('요약 한 줄과 탭 배지(실행=미해결 실패, 대기열=병합 전, 불안정=격리 수)', () => {
+    const queue = [{ status: 'merged' }, { status: 'queued' }, { status: 'removed' }] as QueueItem[];
+    expect(summaryLine(runs, queue)).toBe('실행 6 · 실패 미해결 1 · 병합 대기 1 · 마지막 배포 확인 2026-11-02 18:05 통과');
+    expect(summaryLine([], [])).toBe('실행 0 · 실패 미해결 0 · 병합 대기 0 · 마지막 배포 확인 없음');
+    expect(tabBadges(runs, queue, [{ quarantined: true }, { quarantined: false }] as never)).toEqual({ runs: 1, queue: 1, flaky: 1 });
+    expect(lastDeploy(runs)?.id).toBe('r3');
+  });
+});
