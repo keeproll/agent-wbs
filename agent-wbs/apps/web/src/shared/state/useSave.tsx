@@ -50,8 +50,12 @@ export interface SaveOptions<T, P = undefined> {
   failTitle?: string;
   /** 충돌 창의 「내 변경」 설명 */
   mine?: string;
-  /** 충돌 창 「최신 내용 불러오기(내 변경 버림)」: 편집을 버리고 서버 최신을 다시 읽는다. */
-  onConflictReload?: () => void;
+  /**
+   * 충돌 창 「최신 내용 불러오기(내 변경 버림)」: 편집을 버리고 서버 최신을 다시 읽는다.
+   * Promise를 돌려주면 끝날 때까지 기다린다. 성공해야 창을 닫고 「불러왔습니다」를 안내한다.
+   * 실패하면(ApiError를 던지면) 창을 열어 둔 채 이유를 보인다(M3-02 7cddacd: 조회 실패를 성공으로 숨기지 않기).
+   */
+  onConflictReload?: () => void | Promise<void>;
   /**
    * 충돌 창 「최신 내용에 내 변경 다시 적용」: 최신 버전을 읽은 뒤 내 변경으로 다시 저장한다.
    * 실패하면 ApiError를 그대로 던진다(삼키지 않는다). 던지면 창이 열린 채 이유를 보이고, 끝까지 성공해야 창이 닫힌다.
@@ -76,7 +80,7 @@ export function useSave<T, P = undefined>(options: SaveOptions<T, P>): SaveHandl
   const notify = useNotice();
   const [owner] = useState(() => Symbol('save'));
   const [busy, setBusy] = useState(false);
-  const [conflict, setConflict] = useState<{ error: ApiError; at: number; failure: ApiError | null } | null>(null);
+  const [conflict, setConflict] = useState<{ error: ApiError; at: number; failure: ApiError | null; failedAction?: 'reload' | 'reapply' } | null>(null);
   const [reapplying, setReapplying] = useState(false);
   const inFlight = useRef(false);
   /** 결과를 모르는 요청(재시도 가능한 실패). 다시 시도는 이 내용과 키로 보낸다. */
@@ -148,13 +152,26 @@ export function useSave<T, P = undefined>(options: SaveOptions<T, P>): SaveHandl
       error={conflict.error}
       at={conflict.at}
       failure={conflict.failure}
+      failureTitle={conflict.failedAction === 'reload' ? '최신 내용을 불러오지 못했습니다' : '다시 적용하지 못했습니다'}
       mine={options.mine ?? options.target}
       busy={reapplying}
       onClose={() => { setConflict(null); }}
       onReload={() => {
-        setConflict(null);
-        options.onConflictReload?.();
-        notify('최신 내용을 불러왔습니다. 내 변경은 적용되지 않았습니다.');
+        setReapplying(true);
+        void Promise.resolve()
+          .then(() => options.onConflictReload?.())
+          .then(
+            () => {
+              setConflict(null);
+              notify('최신 내용을 불러왔습니다. 내 변경은 적용되지 않았습니다.');
+            },
+            (error: unknown) => {
+              if (!(error instanceof ApiError)) throw error;
+              if (error.kind === 'unauthorized') { setConflict(null); return; }
+              setConflict((c) => c && { ...c, failure: error, failedAction: 'reload' });
+            },
+          )
+          .finally(() => { setReapplying(false); });
       }}
       onReapply={() => {
         setReapplying(true);
@@ -166,7 +183,7 @@ export function useSave<T, P = undefined>(options: SaveOptions<T, P>): SaveHandl
               if (!(error instanceof ApiError)) throw error;
               if (error.kind === 'unauthorized') { setConflict(null); return; }
               // 또 충돌하면 새 충돌 내용으로 바꾸고, 그 밖의 실패는 창 안에 이유를 보인다.
-              setConflict((c) => (error.kind === 'conflict' ? { error, at: Date.now(), failure: null } : c && { ...c, failure: error }));
+              setConflict((c) => (error.kind === 'conflict' ? { error, at: Date.now(), failure: null } : c && { ...c, failure: error, failedAction: 'reapply' }));
             },
           )
           .finally(() => { setReapplying(false); });

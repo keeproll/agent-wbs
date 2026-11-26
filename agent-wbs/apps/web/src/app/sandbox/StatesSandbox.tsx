@@ -18,6 +18,7 @@ import { EmptyState } from '../../shared/ui/EmptyState.tsx';
 import { useConfirm, useDim } from '../../shared/ui/feedback.tsx';
 import { AreaLoading } from '../../shared/ui/loading.tsx';
 import { TableScroll } from '../../shared/ui/TableScroll.tsx';
+import { Modal } from '../../shared/ui/Modal.tsx';
 
 const TASK = 'TASK-0001';
 
@@ -52,7 +53,8 @@ function TitleEditor() {
     },
     successNotice: `${TASK} 제목을 저장했습니다.`,
     onFieldErrors: setFieldErrors,
-    onConflictReload: () => { setDraft(null); void reload(); },
+    // 최신 불러오기가 끝날 때까지 기다린다. 실패하면 창이 열린 채 이유를 보인다(M3-02 7cddacd를 공통으로).
+    onConflictReload: async () => { await reload(); setDraft(null); },
     // 실패는 삼키지 않고 던진다. useSave가 충돌 창 안에 이유를 보인다.
     onConflictReapply: async () => {
       const latest = await reload();
@@ -158,6 +160,45 @@ function TargetDemo() {
   );
 }
 
+/** 모달 안에서 저장: 실패하면 오류 막대가 모달 위에 떠서 「다시 시도」를 누를 수 있어야 한다(M3-04 보고 6). */
+function ModalSaveDemo() {
+  const { client } = useApi();
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState('');
+  const { save, busy } = useSave({
+    target: `${TASK} 제목 저장(창)`,
+    request: () => ({ title }),
+    run: ({ payload }) => client.call('updateTask', { params: { taskKey: TASK }, body: { updatedAt: 'x', title: payload.title } }),
+    onSuccess: (result) => {
+      queryClient.setQueryData(apiKey('getTask', { params: { taskKey: TASK } }), result.task);
+      setOpen(false);
+    },
+  });
+  return (
+    <section className="card" aria-labelledby="sb-modal-save">
+      <h2 id="sb-modal-save" className="sb-h">모달 안 저장</h2>
+      <button type="button" className="btn sm" onClick={() => { setOpen(true); }}>창에서 제목 저장</button>
+      {open && (
+        <Modal
+          title="창에서 저장"
+          role="dialog"
+          onCancel={() => { setOpen(false); }}
+          footer={(
+            <>
+              <button type="button" className="btn" onClick={() => { setOpen(false); }}>닫기</button>
+              <BusyButton busy={busy} busyLabel="저장 중…" onClick={() => { void save(); }}>창에서 저장</BusyButton>
+            </>
+          )}
+        >
+          <label className="fsel-l" htmlFor="sb-modal-title">창 제목</label>
+          <input id="sb-modal-title" className="inp" value={title} onChange={(event) => { setTitle(event.target.value); }} />
+        </Modal>
+      )}
+    </section>
+  );
+}
+
 function RecalcDemo() {
   const { client } = useApi();
   const [running, setRunning] = useState(false);
@@ -209,6 +250,7 @@ export default function StatesSandbox() {
           <TitleEditor />
           <MessageDemo />
           <TargetDemo />
+          <ModalSaveDemo />
           <RecalcDemo />
           <ListDemo />
         </Page>
