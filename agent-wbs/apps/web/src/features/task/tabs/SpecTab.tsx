@@ -14,6 +14,7 @@ import { StructuredEditor } from '../StructuredEditor.tsx';
 import { specFilled } from '../TaskDetail.tsx';
 import { useApiClient, useTaskSave } from '../useTaskData.ts';
 
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const EMPTY_TEXT: Partial<Record<string, string>> = {
   __out: '제외 범위가 정의되지 않았습니다 — 구현 범위가 모호해질 수 있습니다.',
   __outputs: '산출물이 정의되지 않았습니다 — Completion Gate의 산출물 조건을 통과할 수 없습니다.',
@@ -61,7 +62,8 @@ function SpecLinesEditor({ task: t, sec, title }: { task: TaskDetailData; sec: S
   const slot = useEditSlot();
   const client = useApiClient();
   const initial = (sec === '__out' ? t.spec.overview.out : t.spec.spec[sec]).join('\n');
-  const [text, setText] = useState(initial);
+  const [text, setText] = useState(() => (typeof slot.restored === 'string' ? slot.restored : initial));
+  useEffect(() => { slot.report(text); }, [text, slot]);
   useEffect(() => { slot.setDirty(text !== initial); }, [text, initial, slot]);
   const save = useTaskSave(t.taskKey, {
     target: `${t.taskKey} 작업 명세 「${title}」 저장`,
@@ -71,7 +73,7 @@ function SpecLinesEditor({ task: t, sec, title }: { task: TaskDetailData; sec: S
       params: { taskKey: t.taskKey },
       body: sec === '__out' ? { updatedAt, overview: { ...p.overview, out: p.lines } } : { updatedAt, spec: { ...p.spec, [sec]: p.lines } },
     }),
-    onSuccess: () => { slot.close(); },
+    onSuccess: (_r, p) => { if (same(p.lines, toLines(text))) slot.close(); },
     onReload: () => { slot.close(); },
     successNotice: `「${title}」을(를) 저장했습니다.`,
   });
@@ -97,8 +99,9 @@ function SpecTableEditor({ task: t, which }: { task: TaskDetailData; which: 'ac'
   const client = useApiClient();
   const block = SPEC_TBL[which];
   const source = (which === 'ac' ? t.spec.ac : t.outputs) as unknown as Row[];
-  const [draft, setDraft] = useState<EditorDraft>(() => ({ kind: 'spec', sec: '', idx: -1, key: which, f: {}, b: toDraft([block], { [which]: source }) }));
-  const [touched, setTouched] = useState(false);
+  const [draft, setDraft] = useState<EditorDraft>(() => (slot.restored as EditorDraft | null) ?? { kind: 'spec', sec: '', idx: -1, key: which, f: {}, b: toDraft([block], { [which]: source }) });
+  const [touched, setTouched] = useState(slot.restored !== null);
+  useEffect(() => { slot.report(draft); }, [draft, slot]);
   useEffect(() => { slot.setDirty(touched); }, [touched, slot]);
   const check = validateDraft(draft, { known: {}, ownApi: [] });
   const value = () => fromDraft(draftBlocks(draft), draft.b)[which] as Row[];
@@ -109,7 +112,7 @@ function SpecTableEditor({ task: t, which }: { task: TaskDetailData; which: 'ac'
     run: ({ updatedAt, payload: rows }) => (which === 'ac'
       ? client.call('updateTaskSpec', { params: { taskKey: t.taskKey }, body: { updatedAt, ac: rows.map((r) => ({ given: String(r.given ?? ''), when: String(r.when ?? ''), then: String(r.then ?? ''), method: String(r.method ?? '') })) } })
       : client.call('updateTaskOutputs', { params: { taskKey: t.taskKey }, body: { updatedAt, outputs: rows.map((r) => ({ name: String(r.name ?? ''), kind: String(r.kind ?? ''), required: r.required === true, verify: String(r.verify ?? ''), delivered: r.delivered === true })) } })),
-    onSuccess: () => { slot.close(); },
+    onSuccess: (_r, p) => { if (same(p, value())) slot.close(); },
     onReload: () => { slot.close(); },
     successNotice: `「${block.l}」을(를) 저장했습니다.${which === 'outputs' ? ' Completion Gate가 다시 계산되었습니다.' : ''}`,
   });

@@ -14,7 +14,16 @@ export interface EditSlot {
   open: (id: string) => void;
   close: () => void;
   setDirty: (dirty: boolean) => void;
+  /**
+   * 편집기가 지금 초안을 알린다. 로그인이 끊기면(401) 이 초안을 탭 안에 보관했다가 다시 로그인하면 복원을 제안한다
+   * (M3-01 useSessionDraft). 편집기는 입력이 바뀔 때마다 부른다.
+   */
+  report: (draft: unknown) => void;
+  /** 복원한 초안. 편집기는 처음 열 때 이 값이 있으면 그것으로 시작한다. */
+  restored: unknown;
 }
 
-export const EditSlotContext = createContext<EditSlot>({ current: null, dirty: false, open: () => undefined, close: () => undefined, setDirty: () => undefined });
+export const EditSlotContext = createContext<EditSlot>({
+  current: null, dirty: false, open: () => undefined, close: () => undefined, setDirty: () => undefined, report: () => undefined, restored: null,
+});
 export const useEditSlot = () => useContext(EditSlotContext);

@@ -3,7 +3,7 @@
  * 편집 중 이동 보호(UAT-STATE-09). 시나리오 1의 「읽기/편집 전환」.
  */
 import { expect, test, type Page } from '@playwright/test';
-import { errorBody, fakeApi, json, type FakeApi } from './support/fake-api.ts';
+import { errorBody, fakeApi, json, SESSION, type FakeApi } from './support/fake-api.ts';
 import { mountTasks, newStore, type TaskStore } from './support/task-api.ts';
 
 async function open(page: Page, url = '/wbs/TASK-0004'): Promise<{ api: FakeApi; s: TaskStore }> {
@@ -153,4 +153,23 @@ test('UAT-STATE-09 삭제 확인을 취소하면 원본을 보존한다(선행 �
   await dialog.getByRole('button', { name: '취소' }).click();
   await expect(page.getByRole('table', { name: '선행 Task' })).toContainText('TASK-0003');
   expect(api.calls().filter((c) => c.startsWith('DELETE'))).toEqual([]);
+});
+
+test('세션 만료(401) 중 편집: 초안을 탭 안에 보관하고 다시 로그인하면 같은 탭·편집기로 복원을 제안한다(M3-01 useSessionDraft)', async ({ page }) => {
+  const { api } = await open(page, '/wbs/TASK-0004?tab=spec');
+  let loggedIn = true;
+  api.on('GET /api/session', (route) => (loggedIn ? json(route, 200, SESSION) : json(route, 401, errorBody('LEAD_UNAUTHORIZED'))));
+  api.on('POST /api/auth/session', (route) => { loggedIn = true; return route.fulfill({ status: 204 }); });
+  api.on('PATCH /api/tasks/TASK-0004/spec', (route) => { loggedIn = false; return json(route, 401, errorBody('LEAD_UNAUTHORIZED')); });
+  await page.getByRole('button', { name: '기술적 제약 편집' }).click();
+  await page.getByLabel('기술적 제약 편집').fill('세션 끊기기 전 입력');
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+  await expect(page).toHaveURL(/\/login/);
+  await page.getByLabel('비밀번호').fill('pw');
+  await page.getByRole('button', { name: '로그인' }).click();
+  await expect(page).toHaveURL('/wbs/TASK-0004?tab=spec');
+  const offer = page.getByRole('region', { name: /TASK-0004 편집 중이던 내용 — 저장하지 못한 초안/ });
+  await expect(offer).toBeVisible();
+  await offer.getByRole('button', { name: '복원' }).click();
+  await expect(page.getByLabel('기술적 제약 편집')).toHaveValue('세션 끊기기 전 입력');
 });

@@ -7,7 +7,7 @@
  * - 섹션 제거는 빈 내용 `{}` 저장으로 한다(설계 섹션 삭제 API가 없음, 보고함).
  */
 import { useQueries } from '@tanstack/react-query';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { apiKey } from '../../../shared/api/queries.ts';
 import { useConfirm } from '../../../shared/ui/feedback.tsx';
@@ -25,6 +25,7 @@ import { useApiClient, useTaskSave } from '../useTaskData.ts';
 export const presentDesigns = (t: TaskDetailData) =>
   t.designs.filter((d) => isDesignPresent(d.content)).map((d) => ({ kind: String(d.kind) as DesignKind, content: d.content as DesignContent }));
 
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const recKinds = (t: TaskDetailData): DesignKind[] => {
   const out: DesignKind[] = [];
   for (const x of [String(t.primaryDomain), ...t.relatedDomains.map(String)]) {
@@ -56,26 +57,28 @@ export function DesignTab({ task: t, tasks }: { task: TaskDetailData; tasks: Tas
   const client = useApiClient();
   const confirm = useConfirm();
   const secs = presentDesigns(t);
-  const [ed, setEd] = useState<{ draft: EditorDraft; title: string } | null>(null);
+  const [ed, setEd] = useState<{ draft: EditorDraft; title: string } | null>(() => (slot.current === 'design' ? (slot.restored as { draft: EditorDraft; title: string } | null) : null));
+  useEffect(() => { if (ed) slot.report(ed); }, [ed, slot]);
   const editing = slot.current === 'design' && ed !== null;
   const hasDb = secs.some((s) => s.kind === 'DB');
   const known = useKnown(t, tasks, hasDb || (editing && ed.draft.sec === 'DB'), editing && ed.draft.kind === 'ent' ? { task: t.taskKey, idx: ed.draft.idx } : null);
   const have = secs.map((s) => s.kind);
   const rec = recKinds(t);
-  const [pending, setPending] = useState<{ kind: DesignKind; content: DesignContent; notice: string; mine: string } | null>(null);
+  const [pending, setPending] = useState<{ kind: DesignKind; content: DesignContent; notice: string; mine: string; draft: EditorDraft | null } | null>(null);
   const write = useTaskSave(t.taskKey, {
     target: `${t.taskKey} 기술 설계 저장`,
     mine: pending?.mine ?? '',
-    request: () => pendingRef.current ?? { kind: 'DB' as DesignKind, content: {}, notice: '', mine: '' },
+    request: () => pendingRef.current ?? { kind: 'DB' as DesignKind, content: {}, notice: '', mine: '', draft: null },
     run: ({ updatedAt, payload: p }) => client.call('updateTaskDesign', { params: { taskKey: t.taskKey, kind: p.kind }, body: { updatedAt, content: p.content as Record<string, unknown> } }),
-    onSuccess: () => { setEd(null); slot.close(); },
+    // 저장한 초안과 지금 초안이 같을 때만 편집기를 닫는다(M3-01 useSave).
+    onSuccess: (_r, p) => { if (!ed || same(p.draft, ed.draft)) { setEd(null); slot.close(); } },
     onReload: () => { setEd(null); slot.close(); },
     notice: (p) => p.notice,
   });
   // 저장 요청은 누른 순간의 값을 보내야 해서 ref에도 둔다(상태는 다음 렌더에야 바뀐다).
   const pendingRef = useRef<typeof pending>(null);
   const commit = (kind: DesignKind, content: DesignContent, notice: string, mine: string) => {
-    pendingRef.current = { kind, content, notice, mine };
+    pendingRef.current = { kind, content, notice, mine, draft: ed?.draft ?? null };
     setPending(pendingRef.current);
     void write.save();
   };

@@ -12,6 +12,7 @@ import { AreaLoading } from '../../shared/ui/loading.tsx';
 import { useConfirm } from '../../shared/ui/feedback.tsx';
 import { useEditGuard } from '../../shared/state/useEditGuard.ts';
 import { useRefreshError } from '../../shared/layout/MenuScreen.tsx';
+import { useSessionDraft } from '../../shared/state/useSessionDraft.tsx';
 import { EditSlotContext, type EditSlot } from './edit-slot.tsx';
 import {
   agCls, agInit, GATE_LABEL, GATE_ORDER, priorityOf, SPEC_GROUPS, statusOf, TYPE_LABEL, VERIF, type TaskDetailData, type TaskSummaryData,
@@ -75,17 +76,28 @@ export function TaskDetail({ taskKey, projectId, tab, onTab, nav, onOpenTask }: 
   // 이미 보인 상세가 자동 갱신에 실패하면 화면(편집 중 입력 포함)은 그대로 두고 오류 막대로 알린다(M3-01 useRefreshError).
   useRefreshError(data.task, `${taskKey} 최신 내용 불러오기`);
   const [slot, setSlot] = useState<{ id: string; dirty: boolean } | null>(null);
+  const [draft, setDraft] = useState<unknown>(null);
+  const [restored, setRestored] = useState<unknown>(null);
+  // 로그인이 끊겨도 편집 중이던 내용을 잃지 않게 한다(M3-01 useSessionDraft). Task마다 편집 자리 하나라 초안도 하나다.
+  const { restoreOffer } = useSessionDraft<{ slot: string; tab: TabKey; data: unknown }>({
+    id: `task:${taskKey}:edit`,
+    label: `${taskKey} 편집 중이던 내용`,
+    value: slot?.dirty && draft !== null ? { slot: slot.id, tab, data: draft } : null,
+    onRestore: (d) => { setRestored(d.data); setDraft(d.data); setSlot({ id: d.slot, dirty: true }); if (d.tab !== tab) onTab(d.tab); },
+  });
   const [gateOpen, setGateOpen] = useState(false);
   const { guard } = useEditGuard(slot?.dirty ?? false);
   /** 편집을 버린다. 바로 다음 주소 이동이 편집 보호에 다시 막히지 않게 화면을 먼저 갱신한다. */
-  const discard = () => { flushSync(() => { setSlot(null); }); };
+  const discard = () => { flushSync(() => { setSlot(null); setDraft(null); setRestored(null); }); };
   const edit: EditSlot = useMemo(() => ({
     current: slot?.id ?? null,
     dirty: slot?.dirty ?? false,
-    open: (id) => { setSlot((s) => s ?? { id, dirty: false }); },
-    close: () => { setSlot(null); },
+    open: (id) => { setRestored(null); setSlot((s) => s ?? { id, dirty: false }); },
+    close: () => { setSlot(null); setDraft(null); setRestored(null); },
     setDirty: (dirty) => { setSlot((s) => (s && s.dirty !== dirty ? { ...s, dirty } : s)); },
-  }), [slot]);
+    report: (d) => { setDraft(d); },
+    restored,
+  }), [slot, restored]);
 
   const t = data.task.data;
   if (!t) {
@@ -199,6 +211,7 @@ export function TaskDetail({ taskKey, projectId, tab, onTab, nav, onOpenTask }: 
           </div>
         </div>
         <div className="dt-body" role="tabpanel">
+          {restoreOffer}
           {tab === 'overview' && <OverviewTab task={t} byKey={byKey} nodes={data.list.data?.nodes ?? []} attempts={attempts} onOpenTask={onOpenTask} />}
           {tab === 'spec' && <SpecTab task={t} />}
           {tab === 'deps' && <DepsTab task={t} tasks={tasks} byKey={byKey} blocked={blocked} onOpenTask={onOpenTask} />}

@@ -21,6 +21,8 @@ import { Lines, Segs, short } from '../parts.tsx';
 import { fmtH, slipState } from '../schedule.ts';
 import { useApiClient, useTaskSave } from '../useTaskData.ts';
 
+interface GradeEdit { role: 'dev' | 'qa'; model: string; effort: string }
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 type Node = ResponseOf<'listTasks'>['nodes'][number];
 type Attempt = ResponseOf<'getTaskAttempts'>['items'][number];
 const ROLE_LABEL = { dev: '개발', qa: '검증' } as const;
@@ -110,8 +112,10 @@ function OverviewForm({ task: t }: { task: TaskDetailData }) {
     title: t.title, priority: String(t.priority), assignee: t.assigneeAgent === null ? '' : String(t.assigneeAgent), verifier: t.verifierAgent === null ? '' : String(t.verifierAgent),
     purpose: ov.purpose, background: ov.background, scope: ov.scope.join('\n'), out: ov.out.join('\n'), precond: ov.precond, doneCond: ov.doneCond,
   };
-  const [d, setD] = useState(initial);
-  const [touched, setTouched] = useState(false);
+  // 로그인이 끊겼다 돌아와 복원했으면 그 초안으로 시작한다(edit-slot report/restored).
+  const [d, setD] = useState(() => (slot.restored as typeof initial | null) ?? initial);
+  const [touched, setTouched] = useState(slot.restored !== null);
+  useEffect(() => { slot.report(d); }, [d, slot]);
   const L: Record<keyof typeof initial, string> = { title: '제목', priority: '우선순위', assignee: '담당 Agent', verifier: '검증 Agent', purpose: '작업 목적', background: '작업 배경', scope: '작업 범위', out: '제외 범위', precond: '선행 조건', doneCond: '완료 조건' };
   const diff = (Object.keys(L) as (keyof typeof initial)[]).filter((k) => d[k].trim() !== initial[k].trim());
   const errs = overviewErrors(d);
@@ -145,7 +149,8 @@ function OverviewForm({ task: t }: { task: TaskDetailData }) {
       }
       return last;
     },
-    onSuccess: () => { slot.close(); },
+    // 저장한 내용과 지금 입력이 같을 때만 닫는다(재시도 사이에 더 고친 입력은 지키기, M3-01 useSave).
+    onSuccess: (_r, p) => { if (same(p.d, d)) slot.close(); },
     onReload: () => { slot.close(); },
     successNotice: `개요 ${String(diff.length)}개 항목을 저장했습니다.`,
   });
@@ -193,7 +198,8 @@ function GradeSection({ task: t, attempts }: { task: TaskDetailData; attempts: A
   const client = useApiClient();
   const confirm = useConfirm();
   const { models, policy } = useGradeSettings();
-  const [edit, setEdit] = useState<{ role: 'dev' | 'qa'; model: string; effort: string } | null>(null);
+  const [edit, setEdit] = useState<GradeEdit | null>(() => (slot.current?.startsWith('grade-') ? (slot.restored as GradeEdit | null) : null));
+  useEffect(() => { if (edit) slot.report(edit); }, [edit, slot]);
   const closed = ['done', 'cancelled'].includes(String(t.lifecycleStatus));
   const agentOf = (role: 'dev' | 'qa') => (role === 'dev' ? t.assigneeAgent : t.verifierAgent);
   const modelLabel = (id: string) => models.data?.models.find((m) => m.id === id)?.label ?? id;
@@ -203,7 +209,7 @@ function GradeSection({ task: t, attempts }: { task: TaskDetailData; attempts: A
     mine: edit ? `${ROLE_LABEL[edit.role]} 등급 ${gradeL({ modelId: edit.model, effort: edit.effort })}` : '',
     request: () => edit ?? { role: 'dev' as const, model: '', effort: '' },
     run: ({ updatedAt, payload: e }) => client.call('lockTaskGrade', { params: { taskKey: t.taskKey }, body: { updatedAt, role: e.role, modelId: e.model, effort: e.effort } }),
-    onSuccess: () => { setEdit(null); slot.close(); },
+    onSuccess: (_r, p) => { if (same(p, edit)) { setEdit(null); slot.close(); } },
     onReload: () => { setEdit(null); slot.close(); },
     notice: (e) => `${t.taskKey} ${ROLE_LABEL[e.role]} 등급을 고정했습니다. 등급이 바뀌면 작업량을 재추정하고 일정을 자동 재조정합니다.`,
   });
