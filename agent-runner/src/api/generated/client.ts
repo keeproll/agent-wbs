@@ -202,6 +202,8 @@ export type Decision = {
   by: string;
   at: Timestamp;
   updatedAt: Timestamp;
+  constraintId?: Id | null;
+  conditionResult?: "met" | "not_met" | null;
 };
 
 export type DepType = "FS" | "SS";
@@ -1774,7 +1776,7 @@ export interface Operations {
       202: ReplanSummary;
     };
   };
-  /** 초기 WBS 초안 등록(승인 전 WBS 미반영) */
+  /** 초기 WBS 초안 등록(승인 전 WBS 미반영). 현재 실행 job만 받는다 */
   submitDraft: {
     request: {
       params: {
@@ -1898,7 +1900,7 @@ export interface Operations {
       };
     };
   };
-  /** 기술 결정 제안(근거·대안) */
+  /** 기술 결정 제안(근거·대안)과 조건부 선호별 조건 충족 판단. 등록한 조건부 제약마다 판단이 정확히 하나 필요 */
   submitTechProposals: {
     request: {
       params: {
@@ -1912,6 +1914,11 @@ export interface Operations {
           choice: string;
           reason: string;
           alternatives: string;
+        })[];
+        conditionJudgements?: ({
+          constraintId: Id;
+          result: "met" | "not_met";
+          reason: string;
         })[];
       };
       epoch: number;

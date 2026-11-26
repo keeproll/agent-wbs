@@ -121,7 +121,7 @@ const project = [
     id: 'analyzeInputs',
     method: 'POST',
     path: '/api/project/inputs',
-    summary: '「이 버전으로 분석」. commits는 팀장이 확인한 목록',
+    summary: '「이 버전으로 분석」. commits는 팀장이 확인한 목록, commit은 그중 최신(보고 순서상 마지막) 커밋',
     body: Body({
       ...V,
       commit: c.Sha,
@@ -129,7 +129,7 @@ const project = [
       instr: Opt(Type.String()),
     }),
     responses: jobCreated,
-    errors: ['INPUT_UNCHANGED', 'CLEANUP_PENDING'],
+    errors: ['INPUT_UNCHANGED', 'CLEANUP_PENDING', 'INVALID_TRANSITION'],
   }),
   operation({
     ...byBody,
@@ -139,6 +139,7 @@ const project = [
     summary: '「분석 안 함」',
     body: Body({ ...V, commits: List(c.Sha, { minItems: 1, uniqueItems: true }) }),
     responses: { 204: null },
+    errors: ['INVALID_TRANSITION'],
   }),
   operation({
     ...byBody,
@@ -148,7 +149,7 @@ const project = [
     summary: '차이 분석 다시 시도(끝난 단계는 건너뜀). version은 실패한 입력 버전',
     body: Body({ ...V, version: Revision }),
     responses: jobCreated,
-    errors: ['INVALID_TRANSITION'],
+    errors: ['INVALID_TRANSITION', 'CLEANUP_PENDING'],
   }),
   operation({
     ...lead,

@@ -165,6 +165,7 @@
    "instruction": "",
    "constraints": [
     {
+     "id": "c0000000-0000-4000-8000-000000000001",
      "name": "PostgreSQL 16",
      "level": "must",
      "condition": ""
@@ -385,6 +386,7 @@
    "instruction": "",
    "constraints": [
     {
+     "id": "c0000000-0000-4000-8000-000000000001",
      "name": "PostgreSQL 16",
      "level": "must",
      "condition": ""
@@ -496,6 +498,7 @@
    "instruction": "",
    "constraints": [
     {
+     "id": "c0000000-0000-4000-8000-000000000001",
      "name": "PostgreSQL 16",
      "level": "must",
      "condition": ""

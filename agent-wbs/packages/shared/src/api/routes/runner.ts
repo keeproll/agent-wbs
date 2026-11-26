@@ -459,8 +459,10 @@ export const runnerOperations = [
     method: 'POST',
     path: '/api/runner/input-changes',
     summary: '입력 경로를 바꾼 main 커밋 보고',
+    // commits는 main 이력 순서(오래된 것 먼저)다. prototype/ 밖 파일은 무시하고, 입력 파일이 없는 커밋은 올리지 않는다.
     body: Body({ commits: List(PushedCommit, { minItems: 1 }), files: List(ChangedInput, { minItems: 1 }) }),
     responses: { 204: null },
+    errors: ['INVALID_TRANSITION'],
   }),
   operation({
     ...runner,
@@ -486,6 +488,7 @@ export const runnerOperations = [
     summary: '초기 분석·차이 분석 단계 진행',
     body: Body({ fence, stepKey: m.JobStepKey, status: c.StepStatus, at: c.Timestamp, note: Opt(Type.String()) }),
     responses: { 204: null },
+    errors: ['INVALID_TRANSITION', 'EXTERNAL_WRITE_BLOCKED'],
   }),
   operation({
     ...runner,

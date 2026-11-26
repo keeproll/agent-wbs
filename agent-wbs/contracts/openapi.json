@@ -8994,7 +8994,7 @@
     "/api/project/inputs": {
       "post": {
         "operationId": "analyzeInputs",
-        "summary": "「이 버전으로 분석」. commits는 팀장이 확인한 목록",
+        "summary": "「이 버전으로 분석」. commits는 팀장이 확인한 목록, commit은 그중 최신(보고 순서상 마지막) 커밋",
         "tags": [
           "lead"
         ],
@@ -9049,7 +9049,7 @@
         },
         "responses": {
           "202": {
-            "description": "「이 버전으로 분석」. commits는 팀장이 확인한 목록",
+            "description": "「이 버전으로 분석」. commits는 팀장이 확인한 목록, commit은 그중 최신(보고 순서상 마지막) 커밋",
             "headers": {
               "Idempotency-Replayed": {
                 "schema": {
@@ -9087,7 +9087,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "CLEANUP_PENDING, IDEMPOTENCY_CONFLICT, INPUT_UNCHANGED, VERSION_CONFLICT"
+            "description": "CLEANUP_PENDING, IDEMPOTENCY_CONFLICT, INPUT_UNCHANGED, INVALID_TRANSITION, VERSION_CONFLICT"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -9112,6 +9112,7 @@
             "CLEANUP_PENDING",
             "IDEMPOTENCY_CONFLICT",
             "INPUT_UNCHANGED",
+            "INVALID_TRANSITION",
             "VERSION_CONFLICT"
           ],
           "500": [
@@ -9197,7 +9198,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "IDEMPOTENCY_CONFLICT, VERSION_CONFLICT"
+            "description": "IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, VERSION_CONFLICT"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -9220,6 +9221,7 @@
           ],
           "409": [
             "IDEMPOTENCY_CONFLICT",
+            "INVALID_TRANSITION",
             "VERSION_CONFLICT"
           ],
           "500": [
@@ -9316,7 +9318,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, VERSION_CONFLICT"
+            "description": "CLEANUP_PENDING, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, VERSION_CONFLICT"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -9338,6 +9340,7 @@
             "FORBIDDEN_PRINCIPAL"
           ],
           "409": [
+            "CLEANUP_PENDING",
             "IDEMPOTENCY_CONFLICT",
             "INVALID_TRANSITION",
             "VERSION_CONFLICT"
@@ -23361,7 +23364,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT"
+            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited",
@@ -23386,7 +23389,8 @@
           ],
           "409": [
             "EPOCH_MISMATCH",
-            "IDEMPOTENCY_CONFLICT"
+            "IDEMPOTENCY_CONFLICT",
+            "INVALID_TRANSITION"
           ],
           "429": [
             "RATE_LIMITED"
@@ -23692,7 +23696,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, LEASE_LOST"
+            "description": "EPOCH_MISMATCH, EXTERNAL_WRITE_BLOCKED, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited",
@@ -23720,7 +23724,9 @@
           ],
           "409": [
             "EPOCH_MISMATCH",
+            "EXTERNAL_WRITE_BLOCKED",
             "IDEMPOTENCY_CONFLICT",
+            "INVALID_TRANSITION",
             "LEASE_LOST"
           ],
           "429": [
@@ -27356,7 +27362,7 @@
     "/api/planning/bootstrap/{jobId}/draft": {
       "post": {
         "operationId": "submitDraft",
-        "summary": "초기 WBS 초안 등록(승인 전 WBS 미반영)",
+        "summary": "초기 WBS 초안 등록(승인 전 WBS 미반영). 현재 실행 job만 받는다",
         "tags": [
           "planning"
         ],
@@ -28010,7 +28016,7 @@
         },
         "responses": {
           "201": {
-            "description": "초기 WBS 초안 등록(승인 전 WBS 미반영)",
+            "description": "초기 WBS 초안 등록(승인 전 WBS 미반영). 현재 실행 job만 받는다",
             "headers": {
               "Idempotency-Replayed": {
                 "schema": {
@@ -28049,7 +28055,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, LEASE_LOST"
+            "description": "EPOCH_MISMATCH, EXTERNAL_WRITE_BLOCKED, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited",
@@ -28077,7 +28083,9 @@
           ],
           "409": [
             "EPOCH_MISMATCH",
+            "EXTERNAL_WRITE_BLOCKED",
             "IDEMPOTENCY_CONFLICT",
+            "INVALID_TRANSITION",
             "LEASE_LOST"
           ],
           "429": [
@@ -28095,7 +28103,7 @@
     "/api/planning/bootstrap/{jobId}/tech": {
       "post": {
         "operationId": "submitTechProposals",
-        "summary": "기술 결정 제안(근거·대안)",
+        "summary": "기술 결정 제안(근거·대안)과 조건부 선호별 조건 충족 판단. 등록한 조건부 제약마다 판단이 정확히 하나 필요",
         "tags": [
           "planning"
         ],
@@ -28173,6 +28181,34 @@
                       },
                       "additionalProperties": false
                     }
+                  },
+                  "conditionJudgements": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "constraintId",
+                        "result",
+                        "reason"
+                      ],
+                      "properties": {
+                        "constraintId": {
+                          "$ref": "#/components/schemas/Id"
+                        },
+                        "result": {
+                          "enum": [
+                            "met",
+                            "not_met"
+                          ]
+                        },
+                        "reason": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        }
+                      },
+                      "additionalProperties": false
+                    }
                   }
                 },
                 "additionalProperties": false
@@ -28182,7 +28218,7 @@
         },
         "responses": {
           "201": {
-            "description": "기술 결정 제안(근거·대안)",
+            "description": "기술 결정 제안(근거·대안)과 조건부 선호별 조건 충족 판단. 등록한 조건부 제약마다 판단이 정확히 하나 필요",
             "headers": {
               "Idempotency-Replayed": {
                 "schema": {
@@ -28205,7 +28241,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, LEASE_LOST"
+            "description": "EPOCH_MISMATCH, EXTERNAL_WRITE_BLOCKED, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited",
@@ -28233,7 +28269,9 @@
           ],
           "409": [
             "EPOCH_MISMATCH",
+            "EXTERNAL_WRITE_BLOCKED",
             "IDEMPOTENCY_CONFLICT",
+            "INVALID_TRANSITION",
             "LEASE_LOST"
           ],
           "429": [
@@ -32129,6 +32167,29 @@
           },
           "updatedAt": {
             "$ref": "#/components/schemas/Timestamp"
+          },
+          "constraintId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "conditionResult": {
+            "anyOf": [
+              {
+                "enum": [
+                  "met",
+                  "not_met"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "title": "Decision"
@@ -36715,11 +36776,15 @@
                 "items": {
                   "type": "object",
                   "required": [
+                    "id",
                     "name",
                     "level",
                     "condition"
                   ],
                   "properties": {
+                    "id": {
+                      "$ref": "#/components/schemas/Id"
+                    },
                     "name": {
                       "type": "string"
                     },
@@ -37893,11 +37958,15 @@
                 "items": {
                   "type": "object",
                   "required": [
+                    "id",
                     "name",
                     "level",
                     "condition"
                   ],
                   "properties": {
+                    "id": {
+                      "$ref": "#/components/schemas/Id"
+                    },
                     "name": {
                       "type": "string"
                     },

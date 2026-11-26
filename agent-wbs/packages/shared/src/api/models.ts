@@ -525,9 +525,14 @@ export const Decision = Type.Object(
     by: Type.String(),
     at: c.Timestamp,
     updatedAt: c.Timestamp,
+    // 조건부 선호에서 만든 결정: 원래 제약과 Planning의 조건 충족 판단(근거는 reason)
+    constraintId: Opt(Nullable(c.Id)),
+    conditionResult: Opt(Nullable(AnyOf('met', 'not_met'))),
   },
   { title: 'Decision' },
 );
+/** 조건부 선호 하나의 조건 충족 판단(G§4.12). 근거는 공백 아닌 문장 */
+export const ConditionJudgement = { constraintId: c.Id, result: AnyOf('met', 'not_met'), reason: Text };
 export const TechProposal = {
   area: Text,
   title: Text,
@@ -704,7 +709,7 @@ const registered = {
   repo: obj({ url: c.RepoUrl, owner: Str, name: Str, branch: AnyOf('main'), baseCommit: Nullable(c.Sha) }),
   targetDate: MaybeDate,
   instruction: Str,
-  constraints: List(obj({ name: Str, level: AnyOf('must', 'cond', 'ban'), condition: Str })),
+  constraints: List(obj({ id: c.Id, name: Str, level: AnyOf('must', 'cond', 'ban'), condition: Str })),
   registeredAt: c.Timestamp,
   inputs: List(
     obj({
