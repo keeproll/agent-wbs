@@ -3,6 +3,7 @@
 import fc from 'fast-check';
 import { describe, expect, test } from 'vitest';
 import { createClaudeParser } from '../../src/cli/claude.ts';
+import { createCodexParser } from '../../src/cli/codex.ts';
 import { SubagentObserver } from '../../src/cli/observe.ts';
 
 type Line = Record<string, unknown>;
@@ -127,14 +128,17 @@ describe('property: 지나간 run의 메시지는 현재 상태를 바꾸지 않
   });
 });
 
-// ── 재리뷰 3: launch 경계·배경 도구 결과·이전 launch 완료까지 넣은 무작위 입력 ──
-// 기대값을 구현에서 구하지 않는다. 입력열만 보고 「줄여도 되는 근거」를 따로 계산하는 판정기(oracle)와 비교한다.
+// ── 재리뷰 3·4: launch 경계·배경 도구 결과·이전 launch 완료·Codex 상태까지 넣은 무작위 입력 ──
+// 기대값을 구현에서 구하지 않는다. 입력열만 보고 「어느 ID가 어느 대상인지」와 「그 대상의 시작이 이번 launch에서
+// 관측됐는지」를 따로 계산하는 판정기(oracle)와 비교한다. 사라진 ID마다 그 이벤트가 바로 그 대상의 끝(또는 같은 대상으로의
+// 합치기)을 증명하는지 본다. 무관한 대상이 줄면 실패한다(재리뷰 4).
 type Ev =
   | { k: 'call'; c: string }
   | { k: 'start'; t: string; c?: string | undefined; r?: string | undefined; bg: boolean }
   | { k: 'update'; t: string; r?: string | undefined; bg?: boolean | undefined; status?: string | undefined }
   | { k: 'notify'; t: string; c?: string | undefined; r?: string | undefined; status: string }
   | { k: 'result'; c: string }
+  | { k: 'codex'; th: string; tool: string; status: string }
   | { k: 'launch' }
   | { k: 'ok' };
 
@@ -142,18 +146,20 @@ const C = fc.constantFrom('c1', 'c2', 'c3');
 const T = fc.constantFrom('t1', 't2');
 const R = fc.option(fc.constantFrom('r1', 'r2'), { nil: undefined });
 const STATUS = fc.constantFrom('completed', 'failed', 'stopped', 'running', 'weird');
+const CODEX_STATUS = fc.constantFrom('pending_init', 'running', 'completed', 'errored', 'shutdown', 'interrupted', 'not_found', 'hibernating');
 const ev: fc.Arbitrary<Ev> = fc.oneof(
   { arbitrary: C.map((c) => ({ k: 'call' as const, c })), weight: 3 },
   { arbitrary: fc.record({ t: T, c: fc.option(C, { nil: undefined }), r: R, bg: fc.boolean() }, { requiredKeys: ['t', 'bg'] }).map((x) => ({ k: 'start' as const, ...x })), weight: 3 },
   { arbitrary: fc.record({ t: T, r: R, bg: fc.option(fc.boolean(), { nil: undefined }), status: fc.option(STATUS, { nil: undefined }) }, { requiredKeys: ['t'] }).map((x) => ({ k: 'update' as const, ...x })), weight: 2 },
   { arbitrary: fc.record({ t: T, c: fc.option(C, { nil: undefined }), r: R, status: STATUS }, { requiredKeys: ['t', 'status'] }).map((x) => ({ k: 'notify' as const, ...x })), weight: 2 },
   { arbitrary: C.map((c) => ({ k: 'result' as const, c })), weight: 3 },
+  { arbitrary: fc.record({ th: fc.constantFrom('th1', 'th2'), tool: fc.constantFrom('spawn_agent', 'wait'), status: CODEX_STATUS }).map((x) => ({ k: 'codex' as const, ...x })), weight: 3 },
   { arbitrary: fc.constant({ k: 'launch' as const }), weight: 1 },
   { arbitrary: fc.constant({ k: 'ok' as const }), weight: 1 },
 );
 
 const opt = (o: Record<string, unknown>) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined));
-function toLine(e: Exclude<Ev, { k: 'launch' }>): Line {
+function toLine(e: Exclude<Ev, { k: 'launch' | 'codex' }>): Line {
   switch (e.k) {
     case 'call': return { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Agent', id: e.c, input: {} }] } };
     case 'start': return opt({ type: 'system', subtype: 'task_started', task_id: e.t, task_type: 'local_agent', tool_use_id: e.c, run_id: e.r, is_backgrounded: e.bg });
@@ -163,60 +169,123 @@ function toLine(e: Exclude<Ev, { k: 'launch' }>): Line {
     case 'ok': return OK;
   }
 }
+/** Codex 원문 협업 도구 항목(재리뷰 4 재현과 같은 모양) */
+const codexLine = (e: Extract<Ev, { k: 'codex' }>): Line => ({
+  type: 'item.completed',
+  item: { id: `i-${e.th}-${e.status}`, type: 'collab_tool_call', tool: e.tool, sender_thread_id: 'parent', receiver_thread_ids: [e.th], agents_states: { [e.th]: { status: e.status, message: null } }, status: 'completed' },
+});
 
-describe('property: 증명되지 않은 이벤트는 어떤 수도 줄이지 않는다(launch 경계 포함)', () => {
-  test('수가 줄거나 Agent가 빠지는 단계에는 현재 launch 안의 시작 증명이 있다, ended는 이번 launch의 result만 본다', () => {
-    fc.assert(fc.property(fc.array(ev, { maxLength: 30 }), (events) => {
-      const p = createClaudeParser();
-      const o = new SubagentObserver();
-      // 판정기 상태: 이번 launch에서 본 호출, 그 호출에 묶인 시작이 있었던 task·호출
-      let calls = new Set<string>();
-      let provenTasks = new Set<string>();
-      let provenCalls = new Set<string>();
-      let okSeen = false;
-      for (const e of events) {
-        const before = o.snapshot();
-        if (e.k === 'launch') o.launch();
-        else for (const x of p(toLine(e))) o.apply(x);
-        const after = o.snapshot();
-        const lost = before.active.filter((id) => !after.active.includes(id));
-        if (after.observed < before.observed || lost.length > 0) {
-          const justified =
-            (e.k === 'start' && e.c !== undefined && calls.has(e.c)) ||
-            (e.k === 'result' && provenCalls.has(e.c)) ||
-            ((e.k === 'update' || e.k === 'notify') && provenTasks.has(e.t));
-          expect(justified, `근거 없이 줄어듦: ${JSON.stringify(e)} ${JSON.stringify(before)} → ${JSON.stringify(after)}`).toBe(true);
-        }
-        if (e.k === 'launch') {
-          calls = new Set();
-          provenTasks = new Set();
-          provenCalls = new Set();
-          okSeen = false;
-        }
-        if (e.k === 'call') calls.add(e.c);
-        if (e.k === 'start' && e.c !== undefined && calls.has(e.c)) {
-          provenTasks.add(e.t);
-          provenCalls.add(e.c);
-        }
-        if (e.k === 'ok') okSeen = true;
-        expect(after.ended).toBe(okSeen);
+function feed(o: SubagentObserver, parsers: { claude: ReturnType<typeof createClaudeParser>; codex: ReturnType<typeof createCodexParser> }, e: Ev) {
+  if (e.k === 'launch') return o.launch();
+  const out = e.k === 'codex' ? parsers.codex(codexLine(e)) : parsers.claude(toLine(e));
+  for (const x of out) o.apply(x);
+}
+
+/**
+ * 판정기. 구현 상태를 읽지 않는다.
+ * - 대상: Claude는 task(첫 시작에 묶인 호출 ID가 대상 ID), 호출만 본 것은 그 호출 ID가 대상, Codex는 thread ID가 대상.
+ * - 이번 launch의 「시작 관측」: Claude는 이번 launch에 본 호출에 묶인 task_started, Codex는 running·pending_init 보고.
+ */
+class Oracle {
+  calls = new Set<string>(); // 이번 launch에서 본 호출
+  bound = new Map<string, string>(); // 호출 → task (전 launch 포함)
+  owner = new Map<string, string>(); // task → 대상 ID(첫 묶인 호출)
+  startedTasks = new Set<string>(); // 이번 launch에서 시작이 관측된 task
+  startedCalls = new Set<string>(); // 이번 launch에서 시작에 묶인 호출
+  codexRunning = new Set<string>(); // 이번 launch에서 실행 중으로 보고된 thread
+  okSeen = false;
+
+  /** 이 이벤트로 ID `lost`가 빠져도 되는가 */
+  allows(e: Ev, lost: string): boolean {
+    switch (e.k) {
+      case 'start': {
+        // 같은 task로 이어지는 재개 호출의 임시 ID 합치기: 빠지는 것은 그 호출 자신이고, task에는 이미 다른 대상이 있다.
+        if (e.c === undefined || !this.calls.has(e.c) || lost !== e.c) return false;
+        const target = this.owner.get(e.t);
+        return target !== undefined && target !== e.c;
       }
-      const before = o.snapshot();
-      o.finish();
-      const end = o.snapshot();
-      expect(end.observed).toBe(before.observed);
-      if (!okSeen) expect(end.state).toBe('unconfirmed');
-    }), { numRuns: 3000 });
+      case 'result': {
+        const t = this.bound.get(e.c);
+        return this.startedCalls.has(e.c) && t !== undefined && this.owner.get(t) === lost;
+      }
+      case 'update':
+      case 'notify':
+        return this.startedTasks.has(e.t) && this.owner.get(e.t) === lost;
+      case 'codex':
+        return lost === e.th && this.codexRunning.has(e.th);
+      default:
+        return false;
+    }
+  }
+
+  after(e: Ev): void {
+    switch (e.k) {
+      case 'launch':
+        this.calls = new Set();
+        this.startedTasks = new Set();
+        this.startedCalls = new Set();
+        this.codexRunning = new Set();
+        this.okSeen = false;
+        return;
+      case 'call':
+        this.calls.add(e.c);
+        return;
+      case 'start':
+        if (e.c === undefined || !this.calls.has(e.c)) return;
+        if (!this.bound.has(e.c)) this.bound.set(e.c, e.t);
+        if (!this.owner.has(e.t)) this.owner.set(e.t, e.c);
+        this.startedTasks.add(e.t);
+        this.startedCalls.add(e.c);
+        return;
+      case 'codex':
+        if (e.status === 'running' || e.status === 'pending_init') this.codexRunning.add(e.th);
+        return;
+      case 'ok':
+        this.okSeen = true;
+        return;
+      default:
+        return;
+    }
+  }
+}
+
+function checkRun(events: Ev[]) {
+  const parsers = { claude: createClaudeParser(), codex: createCodexParser() };
+  const o = new SubagentObserver();
+  const oracle = new Oracle();
+  for (const e of events) {
+    const before = o.snapshot();
+    feed(o, parsers, e);
+    const after = o.snapshot();
+    for (const lost of before.active.filter((id) => !after.active.includes(id))) {
+      expect(oracle.allows(e, lost), `근거 없이 ${lost}가 빠짐: ${JSON.stringify(e)} ${JSON.stringify(before.active)} → ${JSON.stringify(after.active)}`).toBe(true);
+    }
+    // 한 이벤트는 많아야 대상 하나를 끝낸다(합치기는 수를 유지한다).
+    expect(before.observed - after.observed, `한 이벤트로 여러 대상이 줄어듦: ${JSON.stringify(e)}`).toBeLessThanOrEqual(1);
+    oracle.after(e);
+    expect(after.ended).toBe(oracle.okSeen);
+  }
+  const before = o.snapshot();
+  o.finish();
+  const end = o.snapshot();
+  expect(end.observed).toBe(before.observed);
+  if (!oracle.okSeen) expect(end.state).toBe('unconfirmed');
+}
+
+describe('property: 증명되지 않은 이벤트는 어떤 수도 줄이지 않는다(launch 경계·Codex 포함)', () => {
+  test('사라진 ID마다 바로 그 대상의 이번 launch 시작 관측이 있다, ended는 이번 launch의 result만 본다', () => {
+    fc.assert(fc.property(fc.array(ev, { maxLength: 30 }), checkRun), { numRuns: 3000 });
+  });
+
+  test('판정기 자체 확인: 재리뷰 4의 「무관한 Agent 삭제」 입력에서 원본은 c1·c2를 모두 유지한다', () => {
+    checkRun([{ k: 'call', c: 'c1' }, { k: 'start', t: 't1', c: 'c1', bg: true }, { k: 'call', c: 'c2' }, { k: 'start', t: 't2', c: 'c2', bg: true }]);
   });
 
   test('launch는 수를 줄이지 않고, 이전 launch의 Agent가 남아 있으면 미확인이다', () => {
     fc.assert(fc.property(fc.array(ev, { maxLength: 20 }), (events) => {
-      const p = createClaudeParser();
+      const parsers = { claude: createClaudeParser(), codex: createCodexParser() };
       const o = new SubagentObserver();
-      for (const e of events) {
-        if (e.k === 'launch') continue;
-        for (const x of p(toLine(e))) o.apply(x);
-      }
+      for (const e of events) if (e.k !== 'launch') feed(o, parsers, e);
       const before = o.snapshot();
       o.launch();
       const after = o.snapshot();
