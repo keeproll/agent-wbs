@@ -185,3 +185,111 @@ test('#6 로그아웃이 실패하면 화면에 실패와 다시 시도를 보�
   await bar.getByRole('button', { name: '다시 시도' }).click();
   await expect(page).toHaveURL(/\/login/);
 });
+
+// M3-04 보고 6: 오류 막대가 모달 overlay 아래에 깔리면 「다시 시도」를 누를 수 없다.
+test('모달 안 저장이 실패하면 오류 막대가 모달 위에 떠서 「다시 시도」를 누를 수 있고 키보드로도 닿는다', async ({ page }) => {
+  const api = await fakeApi(page);
+  api.on('GET /api/tasks/TASK-0001', (route) => json(route, 200, { taskKey: 'TASK-0001', title: '원래 제목', updatedAt: V1 }));
+  api.on('PATCH /api/tasks/TASK-0001', (route) => json(route, 500, errorBody('INTERNAL')));
+  await page.goto('/_states');
+  await page.getByRole('button', { name: '창에서 제목 저장' }).click();
+  const dialog = page.getByRole('dialog', { name: '창에서 저장' });
+  await dialog.getByLabel('창 제목').fill('창에서 고친 제목');
+  await dialog.getByRole('button', { name: '창에서 저장' }).click();
+  const bar = page.getByRole('alert').filter({ hasText: '500 INTERNAL' });
+  await expect(bar).toBeVisible();
+  // 맨 위에 있는 요소가 오류 막대의 버튼이어야 한다(overlay에 가려지지 않음).
+  const retry = bar.getByRole('button', { name: '다시 시도' });
+  const onTop = await retry.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2));
+  });
+  expect(onTop).toBe(true);
+  // 키보드: 모달 안에서 Tab을 돌면 오류 막대 버튼에도 닿는다.
+  let reached = false;
+  for (let i = 0; i < 8 && !reached; i++) {
+    await page.keyboard.press('Tab');
+    reached = await retry.evaluate((el) => el === document.activeElement);
+  }
+  expect(reached).toBe(true);
+
+  api.on('PATCH /api/tasks/TASK-0001', (route, request) => json(route, 200, { task: { taskKey: 'TASK-0001', title: (request.postDataJSON() as { title: string }).title, updatedAt: V2 }, changes: [] }));
+  await retry.click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(page.getByTestId('title')).toHaveText('창에서 고친 제목');
+});
+
+// M3-02 7cddacd를 공통으로: 충돌 창 「최신 내용 불러오기」는 끝날 때까지 기다리고, 실패하면 창을 열어 둔 채 이유를 보인다.
+test('충돌 창의 최신 불러오기가 실패하면 창을 닫지 않고 이유를 보이며, 다시 누르면 불러온다', async ({ page }) => {
+  const api = await fakeApi(page);
+  api.on('GET /api/tasks/TASK-0001', (route) => json(route, 200, { taskKey: 'TASK-0001', title: '원래 제목', updatedAt: V1 }));
+  api.on('PATCH /api/tasks/TASK-0001', (route) => json(route, 409, errorBody('VERSION_CONFLICT')));
+  await page.goto('/_states');
+  await page.getByRole('button', { name: '편집' }).click();
+  await page.getByLabel('제목').fill('내 제목');
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+  const dialog = page.getByRole('alertdialog', { name: '다른 변경이 먼저 저장되었습니다' });
+  api.on('GET /api/tasks/TASK-0001', (route) => json(route, 503, errorBody('UNAVAILABLE')));
+  await dialog.getByRole('button', { name: '최신 내용 불러오기 (내 변경 버림)' }).click();
+  await expect(dialog.getByRole('alert')).toContainText('최신 내용을 불러오지 못했습니다');
+  await expect(dialog.getByRole('alert')).toContainText('503 UNAVAILABLE');
+  await expect(page.getByLabel('제목')).toHaveValue('내 제목');
+  await expect(page.locator('.notice')).toHaveCount(0);
+
+  api.on('GET /api/tasks/TASK-0001', (route) => json(route, 200, { taskKey: 'TASK-0001', title: '서버 제목', updatedAt: V2 }));
+  await dialog.getByRole('button', { name: '최신 내용 불러오기 (내 변경 버림)' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator('.notice')).toContainText('최신 내용을 불러왔습니다');
+  await expect(page.getByTestId('title')).toHaveText('서버 제목');
+});
+
+// 재리뷰 63d2a25: 최신 불러오기 중 Esc로 창을 닫으면 진행 중 불러오기를 취소하고 결과를 화면에 적용하지 않는다.
+test('최신 불러오기 대기 중 Esc로 닫으면 불러오기가 취소되고, 그 뒤 쓴 입력은 늦은 응답에 지워지지 않는다', async ({ page }) => {
+  const api = await fakeApi(page);
+  api.on('GET /api/tasks/TASK-0001', (route) => json(route, 200, { taskKey: 'TASK-0001', title: '원래 제목', updatedAt: V1 }));
+  api.on('PATCH /api/tasks/TASK-0001', (route) => json(route, 409, errorBody('VERSION_CONFLICT')));
+  await page.goto('/_states');
+  await page.getByRole('button', { name: '편집' }).click();
+  await page.getByLabel('제목').fill('내 변경 A');
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+  const dialog = page.getByRole('alertdialog', { name: '다른 변경이 먼저 저장되었습니다' });
+  await expect(dialog).toBeVisible();
+
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  api.on('GET /api/tasks/TASK-0001', async (route) => {
+    await gate;
+    await json(route, 200, { taskKey: 'TASK-0001', title: '최신 서버 제목', updatedAt: V2 }).catch(() => undefined);
+  });
+  await dialog.getByRole('button', { name: '최신 내용 불러오기 (내 변경 버림)' }).click();
+  await expect(dialog.getByRole('button', { name: '최신 내용 불러오기 (내 변경 버림)' })).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await page.getByLabel('제목').fill('창을 닫은 뒤 새로 작성한 B');
+  release();
+  // 늦은 응답이 와도 입력·편집 상태는 그대로이고 「불러왔습니다」 안내도 없다.
+  await page.waitForTimeout(300);
+  await expect(page.getByLabel('제목')).toHaveValue('창을 닫은 뒤 새로 작성한 B');
+  await expect(page.locator('.notice')).toHaveCount(0);
+});
+
+test('다시 적용(저장) 진행 중에는 Esc로 창이 닫히지 않는다(서버 저장은 되돌릴 수 없으므로)', async ({ page }) => {
+  const api = await fakeApi(page);
+  api.on('GET /api/tasks/TASK-0001', (route) => json(route, 200, { taskKey: 'TASK-0001', title: '원래 제목', updatedAt: V1 }));
+  api.on('PATCH /api/tasks/TASK-0001', (route) => json(route, 409, errorBody('VERSION_CONFLICT')));
+  await page.goto('/_states');
+  await page.getByRole('button', { name: '편집' }).click();
+  await page.getByLabel('제목').fill('내 제목');
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+  const dialog = page.getByRole('alertdialog', { name: '다른 변경이 먼저 저장되었습니다' });
+  const slow = hold((route) => json(route, 200, { task: { taskKey: 'TASK-0001', title: '내 제목', updatedAt: V2 }, changes: [] }));
+  api.on('PATCH /api/tasks/TASK-0001', slow.handler);
+  await dialog.getByRole('button', { name: '최신 내용에 내 변경 다시 적용' }).click();
+  await expect(dialog.getByRole('button', { name: '다시 적용 중…' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeVisible();
+  slow.release();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByTestId('title')).toHaveText('내 제목');
+});
