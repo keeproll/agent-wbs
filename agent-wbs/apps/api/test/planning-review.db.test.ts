@@ -259,8 +259,11 @@ test('F3 보류 승인(409)에서도 판단 job은 같은 트랜잭션에 커밋
   } finally { await judgedRulesOn(false); }
 });
 
-test('F4 재조정 이력은 RP 키·전후 날짜와 확정/검토 대기를 구분해 남긴다', async () => {
+test('F4 재조정 이력은 RP 키·전후 날짜와 확정을 남기고, 검토 대기는 Task별 이력 없이 재조정 기록만 남긴다(G§9.2-1·D-10)', async () => {
   const k = await task(); await estimate(k, 3);
+  // Task별 이력은 이전 기준이 있을 때 날짜가 바뀐 Task에만 남는다. 먼저 기준을 만들고, 이 Task의 날짜를 바꾼 뒤 다시 확정한다.
+  expect((await call('POST', '/api/replans/run', {})).statusCode).toBe(201);
+  await estimate(k, 30);
   const run = await call('POST', '/api/replans/run', {});
   expect(run.statusCode, run.body).toBe(201);
   const { replanId } = run.json<{ replanId: string }>();
@@ -268,10 +271,14 @@ test('F4 재조정 이력은 RP 키·전후 날짜와 확정/검토 대기를 �
   expect(rows.at(-1)?.text).toContain(replanId);
   expect(rows.at(-1)?.text).toContain('확정');
   expect(rows.at(-1)?.ref).toMatchObject({ replanId, status: 'applied' });
+  const before = (await history(k)).filter((h) => h.kind === '재조정').length;
   await estimate(k, 300);
   const pending = await runner('/api/planning/replans', { jobId: await job(), fence: 1, trigger: '재추정', capacity: { rate: 0.5, concurrency: 1, subRatio: 0 } });
   expect(pending.statusCode, pending.body).toBe(202);
-  expect((await history(k)).filter((h) => h.kind === '재조정').at(-1)?.text).toContain('검토 대기');
+  const pendingId = pending.json<{ replanId: string }>().replanId;
+  expect((await history(k)).filter((h) => h.kind === '재조정')).toHaveLength(before);
+  expect((await ownerPool.query('select status from replans where rp_key=$1', [pendingId])).rows).toEqual([{ status: 'pending' }]);
+  expect((await ownerPool.query('select 1 from replan_moves m join replans r on r.id=m.replan where r.rp_key=$1', [pendingId])).rowCount).toBe(0);
 });
 
 test('F5 일정 조회와 Task 일정 요약은 같은 계산·기준을 쓴다', async () => {

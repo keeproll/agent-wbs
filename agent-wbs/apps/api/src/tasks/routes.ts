@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import { splitSettingsToDomain, type Pool, type PoolClient } from '@awbs/db';
 import {
   assertDependency, displayKey, DomainError, isBlocked, JUDGED_RULES, judgementOf, lifecycleTransition,
-  type Agent, type ApprovalInput, type JudgedRules, type TaskStatus,
+  type Agent, type ApprovalInput, type JudgedRules, type TaskStatus, type TechDomain,
 } from '@awbs/shared';
 import { OPERATIONS } from '@awbs/shared/api';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { changeGrade } from './grade.ts';
 import { recordReplan } from '../planning/schedule.ts';
+import { recommendedDesigns } from '../planning/content.ts';
 import { validateDesign } from './design.ts';
 import { approvalErrors } from './approval.ts';
 import { invalidateTaskGate } from '../execution/gate.ts';
@@ -15,7 +16,7 @@ import { installTaskErrors, TaskError } from './errors.ts';
 import { canonicalJson, specBody, subjectHash, type Ac, type Output, type Overview, type SpecBody } from './hash.ts';
 import { acOf, listTasks, overviewOf, publicDetail, taskDetail, type TaskDetail } from './read.ts';
 import {
-  assertEditable, assertVersion, changed, changeEvent, lockGraph, lockTask, lockTasks, nextChecklistKey, record, SYSTEM, touch,
+  assertEditable, assertVersion, changed, changeEvent, LEAD, lockGraph, lockTask, lockTasks, nextChecklistKey, record, SYSTEM, touch,
   type Change, type LockedTask,
 } from './write.ts';
 
@@ -111,8 +112,12 @@ export function registerTaskRoutes(app: FastifyInstance, pool: Pool): void {
         title: string; wbsNodeId: string; workType: string; primaryDomain: string; relatedDomains?: string[]; priority?: number;
         assigneeAgent?: Agent; verifierAgent?: Agent; overview?: Overview; spec?: SpecBody; ac?: Ac[];
         checklist?: { content: string; required: boolean; verifyMethod?: string | null }[];
+        estimate?: { estHours: number }; fixStart?: string | null;
       };
       if (!(await client.query('select 1 from projects where id=$1 for share', [projectId])).rowCount) throw new TaskError('PROJECT_NOT_FOUND', { projectId });
+      // 생성도 재조정을 기록한다(아래). 재조정은 그래프 잠금을 잡으므로, 순번(counters) 행보다 먼저 잡아
+      // CP 반영(그래프 → counters)과 같은 순서를 지킨다. 순서가 엇갈리면 두 트랜잭션이 서로 기다릴 수 있다.
+      await lockGraph(client, projectId);
       // Task의 부모는 같은 프로젝트의 Work Package다(data-model §2.3). 부모 노드가 그 사이 바뀌지 않게 잠근다.
       const node = (await client.query<{ kind: string }>('select kind from wbs_nodes where id=$1 and project_id=$2 for share', [body.wbsNodeId, projectId])).rows[0];
       if (node?.kind !== 'work_package') throw new TaskError('WBS_NODE_NOT_FOUND', { wbsNodeId: body.wbsNodeId });
@@ -129,20 +134,35 @@ export function registerTaskRoutes(app: FastifyInstance, pool: Pool): void {
          on conflict (project_id,kind) do update set value=counters.value+1 returning value::int as value`, [projectId])).rows[0]?.value ?? 0;
       const taskKey = displayKey('TASK', sequence);
       const inserted = (await client.query<{ id: string }>(
-        `insert into tasks(project_id,task_key,wbs_node_id,sort_order,title,work_type,primary_domain,related_domains,priority,assignee_agent,verifier_agent,status,verif_state)
-         values($1,$2,$3,(select coalesce(max(sort_order)+1,0) from tasks where wbs_node_id=$3),$4,$5,$6,$7::domain[],$8,$9,$10,'planning','none') returning id`,
+        `insert into tasks(project_id,task_key,wbs_node_id,sort_order,title,work_type,primary_domain,related_domains,priority,assignee_agent,verifier_agent,status,verif_state,fix_start)
+         values($1,$2,$3,(select coalesce(max(sort_order)+1,0) from tasks where wbs_node_id=$3),$4,$5,$6,$7::domain[],$8,$9,$10,'planning','none',$11::date) returning id`,
         [projectId, taskKey, body.wbsNodeId, body.title, body.workType, body.primaryDomain, related, body.priority ?? 2,
-          body.assigneeAgent ?? workflow?.devAgent ?? 'Claude', body.verifierAgent ?? workflow?.qaAgent ?? 'Codex'],
+          body.assigneeAgent ?? workflow?.devAgent ?? 'Claude', body.verifierAgent ?? workflow?.qaAgent ?? 'Codex', body.fixStart ?? null],
       )).rows[0];
       assert(inserted);
       const task = { id: inserted.id, project_id: projectId, task_key: taskKey };
+      if (body.estimate) {
+        // 원본 Wizard(P createTask)와 같은 팀장 임시 추정: 범위 ×0.7~×1.6(소수 첫째 자리), 토큰 ×140K, 신뢰도 하. Planning이 나중에 다시 추정한다.
+        const est = body.estimate.estHours;
+        const tenth = (value: number) => Math.round(value * 10) / 10;
+        await client.query(`insert into task_estimates(project_id,task,est,lo,hi,tokens_k,confidence,basis,agreed_by) values($1,$2,$3,$4,$5,$6,'하',$7,'팀장')`,
+          [projectId, task.id, est, Math.min(est, tenth(est * 0.7)), Math.max(est, tenth(est * 1.6)), Math.round(est * 140),
+            '팀장 등록 — Planning Agent 재추정 전 임시값 (범위 ×0.7~×1.6)']);
+      }
       await client.query('insert into task_specs(project_id,task,overview,spec,ac,revision) values($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,1)',
         [projectId, task.id, JSON.stringify(overviewOf(body.overview)), JSON.stringify(specBody(body.spec ?? {})), JSON.stringify(acOf(body.ac))]);
       for (const [index, item] of (body.checklist ?? []).entries()) {
         await client.query('insert into checklist_items(project_id,task,item_key,content,required,done,verify_method,sort_order) values($1,$2,$3,$4,$5,false,$6,$7)',
           [projectId, task.id, await nextChecklistKey(client, task), item.content, item.required, item.verifyMethod ?? '', index]);
       }
+      // 설계 구역: 원본 newTask·createTask처럼 영역에 맞는 빈 구역을 만든다(P recKinds, data-model §2.4-1과 같은 규칙).
+      for (const design of recommendedDesigns(body.primaryDomain as TechDomain, related as TechDomain[])) {
+        await client.query('insert into task_designs(project_id,task,kind,content) values($1,$2,$3,$4::jsonb)', [projectId, task.id, design.kind, JSON.stringify(design.content)]);
+      }
       await record(client, { projectId, taskId: task.id, kind: '생성', text: `Task 생성 — ${body.workType} / ${body.primaryDomain}`, after: 'planning' });
+      // 가이드 §6.4 재조정 계기 「Task 추가」. CP 반영과 같은 drift 규칙: 기준과 임계값 이상 어긋날 때(기준이 없으면 항상) 기록하고,
+      // 자동 재조정 정책이 켜져 있으면 확정, 꺼져 있으면 검토 대기다(D-10). 문구는 원본(P createTask)의 「신규 Task 등록」이다.
+      await recordReplan(client, projectId, { trigger: `${taskKey} 신규 Task 등록`, actor: LEAD, mode: 'drift' });
       // 버전은 이력보다 늦어야 충돌 창에 자기 생성 이력이 「그 뒤의 변경」으로 섞이지 않는다.
       await touch(client, { ...task, status: 'planning', updated_at: '', deleted_at: null });
       const detail = await taskDetail(client, taskKey);

@@ -49,6 +49,8 @@ const EXTRA_BODY: Record<string, Record<string, unknown>> = {
   requestChangesProposal: { comment: '수정 사유' },
   updateProject: { name: 'x', description: '', startDate: '2026-11-27', targetDate: null, updatedAt: '2026-11-27T00:00:00Z' },
   excludeProposalOp: { index: 0 },
+  // srv-perf: createTask에 고정 시작일(fixStart, DateOnly)이 생겼다. 나머지 필수 칸을 채워 날짜 칸만 망가지게 한다.
+  createTask: { title: 'x', wbsNodeId: UUID, workType: 'Implementation', primaryDomain: 'BE' },
   approveProposal: { previewHash: 'a'.repeat(64) },
   applyProposal: { previewHash: 'a'.repeat(64) },
   analyzeInputs: { commit: SHA, commits: [] },

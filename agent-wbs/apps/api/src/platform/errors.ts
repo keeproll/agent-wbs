@@ -42,6 +42,22 @@ export function platformErrorBody(code: ErrorCode, requestId: string, details: R
     fix: code === 'EPOCH_MISMATCH' ? '최신 프로젝트 상태를 조회하세요.' : '입력과 로그인 상태를 확인한 뒤 다시 시도하세요.', details: redact(details) as Record<string, unknown>, errors: redact(errors) as InputError[], requestId });
 }
 
+/** 잠시 뒤 다시 하면 될 수 있는 DB 오류 코드: 교착, 연결 예외(08xxx), 연결 거부·끊김, 관리자 종료·DB 재시작 중. */
+const TRANSIENT_CODES = new Set(['40P01', 'ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'ETIMEDOUT', '57P01', '57P02', '57P03']);
+/**
+ * node-postgres가 코드 없이 내는 연결 오류 문구. 연결 풀이 모두 사용 중이라 기다리다 끝난 경우(`connectionTimeoutMillis`)와
+ * 쓰던 연결이 끊긴 경우다. 이전에는 코드가 없어 500 INTERNAL이 되었다(M3-02 보고 §4-2·§4-3).
+ */
+const TRANSIENT_MESSAGES = [/timeout exceeded when trying to connect/i, /Connection terminated/i, /not queryable/i];
+
+/** 요청 하나만 실패시키면 되는 일시적인 DB 문제인지. 맞으면 503 UNAVAILABLE로 답한다(서버는 계속 돈다). */
+export function isUnavailable(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === 'string' && (TRANSIENT_CODES.has(code) || code.startsWith('08'))) return true;
+  return typeof code !== 'string' && TRANSIENT_MESSAGES.some((pattern) => pattern.test(error.message));
+}
+
 export function installErrors(app: FastifyInstance, pool: Pool): void {
   app.setNotFoundHandler((request, reply) => reply.code(404).send(platformErrorBody('NOT_FOUND', request.id)));
   app.setErrorHandler(async (error, request, reply) => {
@@ -54,7 +70,7 @@ export function installErrors(app: FastifyInstance, pool: Pool): void {
     else if (failure.code === 'AW001') {
       code = 'EPOCH_MISMATCH';
       details = { currentEpoch: (await pool.query<{ epoch: number }>('select epoch from system_state where id=1')).rows[0]?.epoch };
-    } else if (failure.code === '40P01' || failure.code?.startsWith('08') || ['ECONNREFUSED', '57P01', '57P03'].includes(failure.code ?? '')) code = 'UNAVAILABLE';
+    } else if (isUnavailable(error)) code = 'UNAVAILABLE';
     else if (failure.statusCode && failure.statusCode >= 400 && failure.statusCode < 500) code = 'VALIDATION_FAILED';
     if (ERROR_STATUS[code] >= 500) request.log.error({ err: error }, '요청 처리 실패');
     return reply.code(ERROR_STATUS[code]).send(platformErrorBody(code, request.id, details, errors));

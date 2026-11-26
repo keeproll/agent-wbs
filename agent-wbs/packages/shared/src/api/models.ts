@@ -271,6 +271,11 @@ const EditHours = Type.Number({ exclusiveMinimum: 0, maximum: 400 });
 export const TaskEstimateInput = c.Body({
   estHours: EditHours, loHours: EditHours, hiHours: EditHours, tokensK: c.Count,
 });
+/**
+ * Task 생성 때의 추정(srv-perf, 조정자 결정 2026-11-27). 원본 Wizard 입력은 예상 시간 하나다(P wizErrs·createTask).
+ * 필드 이름·범위는 TaskEstimateInput(updateTask)과 같다. 범위(×0.7~×1.6)·토큰(×140K)·신뢰도 「하」는 서버가 정한다.
+ */
+export const TaskCreateEstimateInput = c.Body({ estHours: EditHours });
 export const TaskEstimate = Type.Object({
   estHours: c.Hours, loHours: c.Hours, hiHours: c.Hours, tokensK: Nullable(Type.Number({ minimum: 0 })),
   confidence: c.Confidence, basis: Type.String(), agreedBy: Type.String(), at: c.Timestamp,

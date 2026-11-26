@@ -62,7 +62,14 @@ async function setStatus(key: string, status: string) {
 }
 const addDep = async (succ: string, pred: string, depType = 'FS') =>
   call('POST', `/api/tasks/${succ}/dependencies`, { updatedAt: await version(succ), predTaskKey: pred, depType });
+/**
+ * Task 생성도 재조정을 기록해 「재조정」 이력이 붙는다(G§6.4 「Task 추가」, srv-perf). 재조정 이력은 create-fields 시험이 따로 본다.
+ * 여기서는 각 시험이 보려는 업무 이력만 비교하도록 재조정 이력을 뺀다.
+ */
 async function history(key: string) {
+  return (await allHistory(key)).filter((row) => row.kind !== '재조정');
+}
+async function allHistory(key: string) {
   return (await ownerPool.query<{ kind: string; actor: string; text: string; before: unknown; after: unknown; ref: unknown }>(
     'select h.kind,h.actor,h.text,h.before,h.after,h.ref from task_history h join tasks t on t.id=h.task where t.task_key=$1 order by h.at,h.created_at', [key])).rows;
 }
