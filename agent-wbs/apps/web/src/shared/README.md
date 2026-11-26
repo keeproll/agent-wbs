@@ -71,7 +71,8 @@ const { save, busy, conflictModal } = useSave({
   onSuccess: (result, payload) => { /* 캐시 갱신 */ setDraft((d) => (d === payload.title ? null : d)); },
   successNotice: '제목을 저장했습니다.',
   onFieldErrors: setFieldErrors,            // 400의 고칠 항목
-  onConflictReload: () => { /* 편집 버리고 최신 다시 읽기 */ },
+  // Promise를 돌려주면 성공한 뒤에만 창을 닫고 「불러왔습니다」를 안내한다. 실패하면 던진다(창 안에 이유).
+  onConflictReload: async () => { /* 편집 버리고 최신 다시 읽기 */ },
   // 실패는 catch로 삼키지 말고 그대로 던진다. 창 안에 이유가 보이고, 끝까지 성공해야 창이 닫힌다.
   // reload는 client.call로 서버에서 새로 읽는다(queryClient.fetchQuery는 캐시를 돌려줄 수 있어 옛 버전으로 또 충돌한다).
   onConflictReapply: async () => { const latest = await reload(); await saveWith(latest.updatedAt, draft); },

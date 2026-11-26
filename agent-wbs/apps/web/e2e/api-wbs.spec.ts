@@ -111,7 +111,7 @@ test('시나리오 1(생성): Wizard로 만든 Task와 선행(FS)이 서버에 �
   expect(serverErrors).toEqual([]);
 });
 
-test('독립 리뷰 #1(실제 DB): 고른 선행이 지워져 선행 연결이 실패해도 Task는 하나만 생긴다', async ({ page }) => {
+test('독립 리뷰 #1·재리뷰 F1(실제 DB): 고른 선행이 지워지면 Task는 하나만 생기고, 그 선행을 해제해 남은 선행을 연결한다', async ({ page }) => {
   await login(page);
   const body = { workType: 'Design', primaryDomain: 'API', overview: { purpose: 'p', background: '', scope: [], out: [], precond: '', doneCond: 'd' } };
   const list0 = (await call(page, 'GET', `/api/projects/${projectId}/tasks`)).json as ListBody;
@@ -127,18 +127,26 @@ test('독립 리뷰 #1(실제 DB): 고른 선행이 지워져 선행 연결이 �
   await w.getByLabel('작업 목적').fill('p');
   await w.getByLabel('완료 조건').fill('d');
   await w.getByRole('button', { name: '다음' }).click();
-  await w.getByRole('group', { name: '선행 Task' }).locator('label').filter({ hasText: victim.taskKey }).getByRole('checkbox').check();
+  const group = w.getByRole('group', { name: '선행 Task' });
+  await group.locator('label').filter({ hasText: victim.taskKey }).getByRole('checkbox').check();
+  await group.locator('label').filter({ hasText: 'TASK-0005' }).getByRole('checkbox').check();
   // 선택한 뒤 다른 곳에서 그 Task를 정상 삭제한다.
   const v = (await call(page, 'GET', `/api/tasks/${victim.taskKey}`)).json as { updatedAt: string };
   expect((await call(page, 'DELETE', `/api/tasks/${victim.taskKey}?updatedAt=${encodeURIComponent(v.updatedAt)}`)).status).toBe(204);
   await w.getByRole('button', { name: 'Task 생성', exact: true }).click();
   await expect(w).toContainText('을(를) 이미 만들었습니다');
-  await w.getByRole('button', { name: '선행 연결', exact: true }).click();
   await expect(page.getByRole('alert').filter({ hasText: '선행 Task를 연결하지 못했습니다' })).toBeVisible();
-  await w.getByRole('button', { name: '선행 없이 마치기' }).click();
+  // 목록을 다시 읽으면 지워진 선행은 「목록에 없음」으로 남는다 → 해제 → 남은 TASK-0005 연결
+  const gone = group.locator('label').filter({ hasText: victim.taskKey });
+  await expect(gone).toContainText('목록에 없음');
+  await gone.getByRole('checkbox').click();
+  await expect(gone).toHaveCount(0);
+  await w.getByRole('button', { name: '선행 연결', exact: true }).click();
   await expect(page).toHaveURL(/\/wbs\/TASK-\d+\?tab=spec$/);
-  const after = (await call(page, 'GET', `/api/projects/${projectId}/tasks`)).json as { tasks: { title: string }[] };
+  const key = new URL(page.url()).pathname.split('/')[2] ?? '';
+  const after = (await call(page, 'GET', `/api/projects/${projectId}/tasks`)).json as { tasks: { taskKey: string; title: string; preds: string[] }[] };
   expect(after.tasks.filter((t) => t.title === '중복 금지 시험')).toHaveLength(1);
+  expect(after.tasks.find((t) => t.taskKey === key)?.preds).toEqual(['TASK-0005']);
 });
 
 test('UAT-WBS-05 실제 서버 200·1,000행: 응답 시간과 첫 행 표시 시간을 기록한다', async ({ page }) => {

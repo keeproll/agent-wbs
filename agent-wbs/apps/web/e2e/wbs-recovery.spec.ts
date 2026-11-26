@@ -213,3 +213,60 @@ test('7. Wizard 3단계 제목 순서가 접근성 검사를 통과한다', asyn
   const result = await new AxeBuilder({ page }).include('[role="dialog"]').analyze();
   expect(result.violations.map((v) => v.id)).toEqual([]);
 });
+
+test('F1. 고른 선행이 실제로 지워져 목록에서 빠져도, 선택에 남은 것을 해제하고 남은 유효한 선행을 연결할 수 있다', async ({ page }) => {
+  const api = await wbsApi(page);
+  await page.goto('/wbs');
+  const w = await fillToStep3(page, '삭제된 선행 복구');
+  await pred(page, 'TASK-0012').check();
+  await pred(page, 'TASK-0005').check();
+  // 다른 곳에서 TASK-0012를 삭제했다: 선행 추가는 404, 목록에서도 빠진다(새 Task 번호가 겹치지 않게 생성 뒤에 지운다).
+  await page.route('**/api/tasks/TASK-0013/dependencies', async (route, request) => {
+    if ((request.postDataJSON() as { predTaskKey: string }).predTaskKey === 'TASK-0012') {
+      api.list.tasks = api.list.tasks.filter((t) => t.taskKey !== 'TASK-0012');
+      await json(route, 404, errorBody('TASK_NOT_FOUND'));
+      return;
+    }
+    await route.fallback();
+  });
+  await w.getByRole('button', { name: 'Task 생성', exact: true }).click();
+  await expect(page.getByRole('alert').filter({ hasText: '선행 Task를 연결하지 못했습니다' })).toBeVisible();
+  // 목록을 다시 읽어도 고른 TASK-0012는 「목록에 없음」으로 남아 해제할 수 있다.
+  const gone = wiz(page).getByRole('group', { name: '선행 Task' }).locator('label').filter({ hasText: 'TASK-0012' });
+  await expect(gone).toContainText('목록에 없음');
+  // 해제하면 그 줄이 사라진다(uncheck는 사라진 요소의 상태를 기다리므로 click).
+  await gone.getByRole('checkbox').click();
+  await expect(gone).toHaveCount(0);
+  await expect(pred(page, 'TASK-0005')).toBeChecked();
+  await w.getByRole('button', { name: '선행 연결', exact: true }).click();
+  await expect(page).toHaveURL('/wbs/TASK-0013?tab=spec');
+  expect(api.list.tasks.find((t) => t.taskKey === 'TASK-0013')?.preds).toEqual(['TASK-0005']);
+  expect(api.requests(`POST /api/projects/${PROJECT_ID}/tasks`)).toHaveLength(1);
+});
+
+test('F2. 충돌창의 「최신 불러오기」가 실패(503)하면 창을 닫지 않고 이유를 보이며, 다시 누르면 불러온다', async ({ page }) => {
+  await wbsApi(page);
+  await page.goto('/wbs');
+  await page.route('**/api/tasks/TASK-0013/dependencies', (route) => json(route, 409, errorBody('VERSION_CONFLICT', { details: { changes: [] } })));
+  const w = await fillToStep3(page, '불러오기 실패');
+  await pred(page, 'TASK-0005').check();
+  // 충돌 이후의 최신 조회만 실패시킨다(선행 추가 전 조회는 성공).
+  let failReload = false;
+  await page.route('**/api/tasks/TASK-0013', async (route) => {
+    if (failReload) { await json(route, 503, errorBody('UNAVAILABLE', { message: 'DB에 연결할 수 없습니다.' })); return; }
+    await route.fallback();
+  });
+  await w.getByRole('button', { name: 'Task 생성', exact: true }).click();
+  const modal = page.getByRole('alertdialog').filter({ hasText: 'VERSION_CONFLICT' });
+  await expect(modal).toBeVisible();
+  failReload = true;
+  await modal.getByRole('button', { name: '최신 내용 불러오기 (내 변경 버림)' }).click();
+  await expect(modal).toContainText('503 UNAVAILABLE');
+  await expect(modal).toBeVisible();
+  await expect(page.locator('.notice')).toHaveCount(0);
+  failReload = false;
+  await modal.getByRole('button', { name: '최신 내용 불러오기 (내 변경 버림)' }).click();
+  await expect(modal).toHaveCount(0);
+  await expect(page.locator('.notice')).toContainText('최신 내용을 불러왔습니다');
+  await expect(w).toContainText('TASK-0013을(를) 이미 만들었습니다');
+});

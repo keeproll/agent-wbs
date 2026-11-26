@@ -106,9 +106,10 @@ export function TaskWizard({ projectId, nodes, tasks, defaultWp, initial, onDraf
       finish(true);
     },
     // 「최신 불러오기」: 선행을 붙이지 않고, 만든 Task의 최신 상태와 목록만 다시 읽는다. 선행 선택은 그대로 두어 다시 고를 수 있다.
-    onConflictReload: () => {
+    // 실패하면 던진다 → 충돌 창이 열린 채 이유를 보인다(재리뷰 F2).
+    onConflictReload: async () => {
       const c = createdRef.current;
-      if (c) void client.call('getTask', { params: { taskKey: c.taskKey } }).catch(() => undefined);
+      if (c) await client.call('getTask', { params: { taskKey: c.taskKey } });
       onRejected();
     },
   });
@@ -273,6 +274,13 @@ export function TaskWizard({ projectId, nodes, tasks, defaultWp, initial, onDraf
             <h3 className="wiz-h">선행 Task <span className="opt">선택 · 완료 → 시작(FS)으로 등록</span></h3>
             <div className="predpick" role="group" aria-label="선행 Task">
               {!tasks && <AreaLoading label="Task 목록 불러오는 중" />}
+              {/* 고른 선행이 그 사이 지워져 목록에서 빠져도 여기 남겨 해제할 수 있게 한다(재리뷰 F1). */}
+              {tasks && d.preds.filter((k) => !byKey.has(k)).map((k) => (
+                <label key={k}>
+                  <input type="checkbox" className="chk" checked onChange={() => { set({ preds: d.preds.filter((x) => x !== k) }); }} />
+                  <span className="mono muted">—</span><span className="mono">{k}</span><span className="ferr">목록에 없음 — 삭제되었을 수 있습니다. 선택을 해제하세요.</span><span />
+                </label>
+              ))}
               {[...(tasks ?? [])].filter((t) => !t.deletedAt).sort((a, b) => a.wbsPath.localeCompare(b.wbsPath, undefined, { numeric: true })).map((t) => (
                 <label key={t.taskKey}>
                   <input type="checkbox" className="chk" checked={d.preds.includes(t.taskKey)} onChange={() => { set({ preds: d.preds.includes(t.taskKey) ? d.preds.filter((x) => x !== t.taskKey) : [...d.preds, t.taskKey] }); }} />

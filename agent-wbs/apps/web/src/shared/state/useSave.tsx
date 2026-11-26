@@ -51,7 +51,11 @@ export interface SaveOptions<T, P = undefined> {
   /** 충돌 창의 「내 변경」 설명 */
   mine?: string;
   /** 충돌 창 「최신 내용 불러오기(내 변경 버림)」: 편집을 버리고 서버 최신을 다시 읽는다. */
-  onConflictReload?: () => void;
+  /**
+   * Promise를 돌려주면 끝날 때까지 기다린다. 성공해야 창을 닫고 「불러왔습니다」를 안내한다.
+   * 실패하면(ApiError를 던지면) 창을 열어 둔 채 이유를 보인다(M3-02 재리뷰 F2: 조회 실패를 성공으로 숨기지 않기).
+   */
+  onConflictReload?: () => void | Promise<void>;
   /**
    * 충돌 창 「최신 내용에 내 변경 다시 적용」: 최신 버전을 읽은 뒤 내 변경으로 다시 저장한다.
    * 실패하면 ApiError를 그대로 던진다(삼키지 않는다). 던지면 창이 열린 채 이유를 보이고, 끝까지 성공해야 창이 닫힌다.
@@ -152,9 +156,21 @@ export function useSave<T, P = undefined>(options: SaveOptions<T, P>): SaveHandl
       busy={reapplying}
       onClose={() => { setConflict(null); }}
       onReload={() => {
-        setConflict(null);
-        options.onConflictReload?.();
-        notify('최신 내용을 불러왔습니다. 내 변경은 적용되지 않았습니다.');
+        setReapplying(true);
+        void Promise.resolve()
+          .then(() => options.onConflictReload?.())
+          .then(
+            () => {
+              setConflict(null);
+              notify('최신 내용을 불러왔습니다. 내 변경은 적용되지 않았습니다.');
+            },
+            (error: unknown) => {
+              if (!(error instanceof ApiError)) throw error;
+              if (error.kind === 'unauthorized') { setConflict(null); return; }
+              setConflict((c) => c && { ...c, failure: error });
+            },
+          )
+          .finally(() => { setReapplying(false); });
       }}
       onReapply={() => {
         setReapplying(true);
