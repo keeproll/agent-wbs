@@ -99,6 +99,7 @@ async function checkAttempt(repo: RunnerRepository, job: Job, task: Task, advert
       slotState: h.slot_state, lockState: h.lock_state, lockFromJobId: h.lock_from_job, handedToJobId: h.handed_to_job })),
     cleanupPending: await repo.cleanup(), dependenciesMet: dependencies.every(d => d.dep_type === 'FS' ? d.status === 'done' : !['planning','approval','ready','cancelled'].includes(d.status)),
     leaderRequested: job.payload.leaderRequested === true, taskCheckPassed, integrationFailed: job.payload.integrationFailed === true,
+    autoRetryLimit: grade.policy.autoRetryLimit, autoReworkLimit: grade.policy.autoReworkLimit,
     evidenceInvalidated: job.payload.evidenceInvalidated === true, history: domainHistory(history), modelId: grade.result.grade.modelId, effort: grade.result.grade.effort,
     resumeGrade: { previousModelAllowed: !grade.result.adjust.replaced, reassessed: Boolean(grade.result.adjust.replaced), modelId: grade.result.grade.modelId,
       effort: grade.result.grade.effort, reason: grade.stored.reason },
@@ -151,7 +152,7 @@ export async function claim(repo: RunnerRepository, kinds: string[], capacity: n
       if (EXTERNAL_JOBS.includes(candidate.kind) && authority?.state !== 'granted') continue;
       const job = await repo.lease(candidate, principal, authority?.generation ?? null);
       // 조회 전용 작업은 이전 임대의 프로세스를 보유하지 않는다.
-      if (job.kind !== 'repo_check' && job.kind !== 'stop_attempt') await repo.reserve(job, cfg.host.host_id, required(cfg.host.boot_id), agent, slots, job.kind !== 'attempt', task);
+      if (!['repo_check', 'github_check', 'stop_attempt'].includes(job.kind)) await repo.reserve(job, cfg.host.host_id, required(cfg.host.boot_id), agent, slots, job.kind !== 'attempt', task);
       await repo.event(job, 'prepared');
       return { id: job.id, kind: job.kind, payload: job.payload, fence: job.fence, leaseUntil: required(job.lease_until).toISOString() };
     } catch (error) {
@@ -240,7 +241,7 @@ export async function handover(client: PoolClient, fromJob: string, kind: Attemp
   if (!task) throw new PlatformError('TASK_NOT_FOUND');
   const history = await repo.history(task.id);
   const reworkCause = (extra as { automaticCause?: string }).automaticCause ?? cause;
-  if (kind === 'rework' && !history.some(a => a.automatic_cause === reworkCause) && attemptPolicyCounts(domainHistory(history)).automaticReworks >= 3) {
+  if (kind === 'rework' && !history.some(a => a.automatic_cause === reworkCause) && attemptPolicyCounts(domainHistory(history)).automaticReworks >= (await repo.policy()).auto_rework_limit) {
     await repo.release(hold, required(hold.release_proof), true);
     await repo.alert(task.project_id, `rework-limit:${task.id}`, '자동 재작업 한도를 넘었습니다.', { cause,taskKey:task.task_key });
     return null;
@@ -264,7 +265,7 @@ export async function retryFailedAttempt(client: PoolClient, attemptId: string) 
   if (hold?.handed_to_job) return hold.handed_to_job;
   const count = attemptPolicyCounts(domainHistory(await repo.history(task.id))).consecutiveFailures[a.kind];
   const job = await repo.job(a.job);
-  if (count <= 2) return handover(client, a.job, a.kind, a.id, { automaticCause: job?.payload.automaticCause });
+  if (count <= (await repo.policy()).auto_retry_limit) return handover(client, a.job, a.kind, a.id, { automaticCause: job?.payload.automaticCause });
   if (job && !['done','failed','cancelled'].includes(job.state)) await repo.state(job.id, 'failed');
   if (hold?.slot_state === 'none' && !hold.closed_at) await repo.release(hold, required(hold.release_proof), true);
   await repo.alert(task.project_id, `retry:${a.id}`, '실행 실패의 자동 재시도 한도를 넘었습니다.', { taskKey: task.task_key, attemptId }, 'fail');

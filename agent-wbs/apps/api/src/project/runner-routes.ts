@@ -24,7 +24,7 @@ export function installProjectRunner(app: FastifyInstance, pool: Pool): void {
       const op = OPERATIONS.find((item) => item.id === 'reportGithubStatus');
       const errors = op ? inputErrors(op, ctx.request.body) : [];
       if (errors.length) throw new ProjectError('VALIDATION_FAILED', { errors });
-      await reportGithubStatus(ctx.client, body<GithubReport>(ctx));
+      await reportGithubStatus(ctx.client, body<GithubReport>(ctx), ctx.principal);
     }, 204);
     routeOf(scope, pool, 'reportRepoCheck', (ctx) => reportRepoCheck(ctx.client, param(ctx, 'id'), body(ctx), ctx.principal), 204);
     routeOf(scope, pool, 'reportInputChanges', (ctx) => reportInputChanges(ctx.client, body(ctx)));

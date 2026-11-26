@@ -18,6 +18,7 @@ export function claim(patch: Partial<ClaimInput> = {}): ClaimInput {
     jobId: 'job', epoch: 1, hostId: 'host', holds: [{ jobId: 'job', epoch: 1, hostId: 'host',
       slotState: 'reserved', lockState: 'held', lockFromJobId: null, handedToJobId: null }],
     cleanupPending: false, dependenciesMet: true, leaderRequested: true,
+    autoRetryLimit: 2, autoReworkLimit: 3,
     taskCheckPassed: true, integrationFailed: false, evidenceInvalidated: false,
     history: patch.previousAttempt ? [{ ...patch.previousAttempt, id: 'previous' }] : [],
     modelId: 'model', effort: 'high', ...patch,

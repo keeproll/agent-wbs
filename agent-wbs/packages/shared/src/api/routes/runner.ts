@@ -103,7 +103,7 @@ export const AttemptResult = Type.Union([
 const commit = c.Sha;
 export const JOB_KINDS = [
   'repo_check', 'bootstrap', 'input_diff', 'planning', 'estimate', 'split', 'attempt', 'stop_attempt',
-  'integrate', 'deploy_check', 'ci_retry', 'design_apply', 'merge_followup',
+  'integrate', 'deploy_check', 'ci_retry', 'design_apply', 'merge_followup', 'github_check',
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 const JobKindSchema = AnyOf(...JOB_KINDS);
@@ -141,6 +141,7 @@ const JudgedProposal = Type.Union([
 export const ClaimedJob = Type.Union(
   [
     Job('repo_check', { repoCheckId: c.Id, url: c.RepoUrl }),
+    Job('github_check', { mode: c.GithubMode }),
     Job('bootstrap', { commit, instruction: Type.String(), resumeStep: Nullable(Type.String()) }),
     Job('input_diff', {
       commit,
@@ -614,10 +615,13 @@ export const runnerOperations = [
     method: 'POST',
     path: '/api/runner/github/status',
     summary: 'GitHub 인증 방식·계정·권한 3상태·만료(비밀값 없음). 첫 쓰기 403이면 missing으로 다시 보고',
+    errors: ['VERSION_CONFLICT'],
     // ok는 인증되고 missing이 없을 때만 true, unverified가 있으면 warning 필수(입력 규칙)
     inputRules: ['githubStatusConsistent'],
     body: Body({
       mode: c.GithubMode,
+      jobId: Opt(c.Id),
+      fence: Opt(fence),
       ok: Type.Boolean(),
       account: Nullable(Text),
       scopes: Nullable(Body(c.GithubScopes.properties)),
@@ -672,6 +676,7 @@ export const runnerOperations = [
         inputRecheck: c.Count,
         // 서버 후속 2: 일반 「지금 확인」 번호. 이력 재작성 복구 번호와 분리해 경고 해소 때 새 요청이 사라지지 않게 한다.
         inputCheckRequest: Opt(c.Count),
+        readinessCheckRequest: Opt(c.Count),
         ci: Type.Object(m.CiSettings),
         // Runner가 보고할 Claude 모델(설정값, 초기값=Q-06 승인표). owner 2026-11-26 아이템 8
         claudeModels: List(Type.String(), { minItems: 1, uniqueItems: true }),

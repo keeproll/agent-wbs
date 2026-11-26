@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { afterAll, expect, inject, test } from 'vitest';
-import { createPool, recreateTestDatabase, runMigrations, type Pool } from '../src/index.ts';
+import { createPool, recreateTestDatabase, runMigrations, seedDemo, type Pool } from '../src/index.ts';
 
 /*
  * M2 통합: 마이그레이션 배정 번호(0015 platform, 0016 contract_sync, 0017 usage_reset_unknown, 0018~0019 M2-08, 0020 M2-06)를
@@ -47,11 +47,11 @@ test('빈 DB와 0014·0016(master)·0017·0018·0019·0020·0021 단계 DB가 �
   expect(journal.entries.slice(15).map((e) => e.tag)).toEqual([
     '0015_20261126_platform_epoch_lock', '0016_20261126_contract_sync', '0017_20261126_usage_reset_unknown',
     '0018_20261126_message_read_touch', '0019_20261126_schedule_defaults', '0020_20261126_execution_basis',
-    '0021_20261127_project_followup', '0022_20261127_evidence_reference', '0023_20261127_project_observation_version']);
+    '0021_20261127_project_followup', '0022_20261127_evidence_reference', '0023_20261127_project_observation_version', '0024_20261127_settings_followup']);
   const fresh = await database('fresh');
   await runMigrations(fresh);
   const expected = await schemaOf(fresh);
-  for (const stage of [14, 16, 17, 18, 19, 20, 21, 22]) {
+  for (const stage of [14, 16, 17, 18, 19, 20, 21, 22, 23]) {
     const pool = await database(String(stage));
     const folder = await mkdtemp(join(tmpdir(), `awbs-stage-${String(stage)}-`));
     try {
@@ -62,9 +62,27 @@ test('빈 DB와 0014·0016(master)·0017·0018·0019·0020·0021 단계 DB가 �
     await pool.query('select seed_system()');
     if (stage === 20) await pool.query(`insert into projects(name,repo_url,repo_owner,repo_name,lead_instruction,phase,created_at)
       values('기존 프로젝트','','','','','active','2000-01-01T20:00:00Z')`);
+    let attempts: unknown[] = [];
+    if (stage === 23) {
+      await seedDemo(pool, base.href);
+      await pool.query('alter table counters disable trigger counter_monotone');
+      await pool.query("update counters set value=1 where kind='message'");
+      await pool.query('alter table counters enable trigger counter_monotone');
+      await pool.query('alter table task_attempts disable trigger attempt_terminal');
+      await pool.query("update task_attempts a set attempt_key=t.task_key||'-A'||a.attempt_no from tasks t where t.id=a.task");
+      await pool.query('alter table task_attempts enable trigger attempt_terminal');
+      attempts = (await pool.query('select id,status,summary from task_attempts order by id')).rows;
+      await pool.query('update schedule_policy set assume_rate=0.8,threshold_days=3');
+    }
     await runMigrations(pool);
     if (stage === 20) expect((await pool.query("select description,to_char(start_date,'YYYY-MM-DD') start,input_checked_at from projects")).rows[0])
       .toEqual({ description: '', start: '2000-01-02', input_checked_at: null });
+    if (stage === 23) {
+      expect((await pool.query('select id,status,summary from task_attempts order by id')).rows).toEqual(attempts);
+      expect((await pool.query("select count(*)::int n from task_attempts where attempt_key !~ '^ATT-[0-9]{4,}-[0-9]+$'")).rows[0]?.n).toBe(0);
+      expect(Number((await pool.query("select value from counters where kind='message'")).rows[0]?.value)).toBe(3);
+      expect((await pool.query('select assume_rate,threshold_days from schedule_policy')).rows[0]).toEqual({ assume_rate: '0.8', threshold_days: '3' });
+    }
     expect(await schemaOf(pool), `단계 ${String(stage)}`).toBe(expected);
     expect((await pool.query<{ n: number }>('select count(*)::int n from drizzle.__drizzle_migrations')).rows[0]?.n, `단계 ${String(stage)}`).toBe(journal.entries.length);
   }

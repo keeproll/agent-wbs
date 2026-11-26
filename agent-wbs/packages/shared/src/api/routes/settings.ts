@@ -41,6 +41,47 @@ const setting = <const Name extends string, T extends TProperties, W extends TPr
 const SPLIT_RULES = ['one', 'domain', 'size', 'verify', 'revert', 'cg', 'contract', 'irrev', 'refactor', 'unknown'];
 
 const settings = [
+  // G§5.2-1·P L6703: 예외를 반영한 진행 전·진행 중 Task 위반 목록. count는 탭 배지의 Task 수다.
+  operation({
+    ...lead, id: 'getSplitViolations', method: 'GET', path: '/api/settings/split/violations',
+    summary: '분할 기준 위반·의심 목록과 배지',
+    responses: { 200: Type.Object({
+      count: c.Count,
+      items: List(Type.Object({
+        taskKey: c.TaskKey, title: Text, wbs: Type.String(),
+        violations: c.Count, suspicions: c.Count, cautions: c.Count, exceptions: c.Count,
+        approvalHolds: List(Type.String()),
+        items: List(Type.Object({
+          rule: Type.String(), label: Text, mode: AnyOf('auto', 'judge'),
+          status: AnyOf('통과', '의심', '위반', '주의', '판단', '예외', '꺼짐'),
+          detail: Type.String(), judgement: Nullable(AnyOf('met', 'not_met', 'missing')),
+        })),
+      })),
+    }) },
+  }),
+  // G L869·P L6710~6716·L6763: 지정 Task와 관측으로 확인한 실제 사용을 구분한다.
+  operation({
+    ...lead, id: 'getAgentUsage', method: 'GET', path: '/api/settings/agent-usage',
+    summary: '팀장 고정 Task·모델·하위 Agent 사용 현황',
+    responses: { 200: Type.Object({
+      lockedTasks: List(Type.Object({ taskKey: c.TaskKey, title: Text, role: AnyOf('dev', 'qa'), agent: c.Agent, modelId: Text, effort: Text })),
+      models: List(Type.Object({ agent: c.Agent, modelId: Text, taskKeys: List(c.TaskKey) })),
+      subagents: List(Type.Object({
+        id: c.Id, defKey: Text, version: c.PositiveInt4, taskKeys: List(c.TaskKey),
+        lastTaskKey: Nullable(c.TaskKey), lastAttemptKey: Nullable(Text), lastUsedAt: Nullable(c.Timestamp),
+        decisions: c.Count, failures: c.Count, reworkRate: Nullable(Type.Number({ minimum: 0, maximum: 1 })),
+      })),
+    }) },
+  }),
+  operation({
+    ...noVersion, id: 'ackAlert', method: 'POST', path: '/api/alerts/:id/ack',
+    summary: '알림 확인(반복 가능, 현재 목록에서 제외)', responses: { 204: null },
+  }),
+  // P L2282: 접수만으로 점검 결과를 바꾸지 않는다. Runner 정책의 증가 번호로 재점검을 전달한다.
+  operation({
+    ...noVersion, id: 'checkReadiness', method: 'POST', path: '/api/settings/readiness/check',
+    summary: 'Runner 준비 상태 다시 점검 요청', responses: { 202: Type.Object({ readinessCheckRequest: c.Count }) },
+  }),
   ...setting('WorkflowSettings', '/api/settings/workflow', 'Agent 역할·기본 Workflow', {
     devAgent: c.Agent,
     qaAgent: c.Agent,
@@ -149,6 +190,7 @@ const settings = [
         // 미확인 권한 등 알릴 것이 있을 때의 문구. 없으면 null
         warning: Nullable(Type.String()),
         expiresAt: Nullable(c.Timestamp),
+        checkedAt: Opt(Nullable(c.Timestamp)),
       },
     },
   ),

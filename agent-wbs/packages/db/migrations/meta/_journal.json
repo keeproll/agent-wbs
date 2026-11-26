@@ -169,6 +169,13 @@
       "when": 1795740000002,
       "tag": "0023_20261127_project_observation_version",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1795740000003,
+      "tag": "0024_20261127_settings_followup",
+      "breakpoints": true
     }
   ]
 }
