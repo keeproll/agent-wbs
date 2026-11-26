@@ -1,4 +1,4 @@
-// 0018: 일정 정책 기본값(owner 결정 2026-11-26 아이템 7) — 가정 가동률 60%, 재조정 임계값 1일.
+// 0019: 일정 정책 기본값(owner 결정 2026-11-26 아이템 7) — 가정 가동률 60%, 재조정 임계값 1일.
 // - 새 DB의 system seed가 넣는다. 둘 다 설정에서 바꿀 수 있다.
 // - 기존 DB는 값이 비어 있는(null) 칸만 채우고, 팀장이 이미 넣은 값은 덮어쓰지 않는다.
 // - 설정까지 지우는 초기화(keepSettings=false)는 이 기본값으로 되돌린다.
@@ -14,12 +14,15 @@ import { createPool, recreateTestDatabase, runMigrations, type Pool } from '../s
 const policy = async (pool: Pool) =>
   (await pool.query<{ assume_rate: string | null; threshold_days: string | null }>('select assume_rate::text,threshold_days::text from schedule_policy')).rows;
 
-test('journal: 0018이 0017 뒤에 있고 시각도 뒤다', async () => {
+test('journal: 0019가 0018 뒤에 있고 시각도 뒤다', async () => {
   const journal = JSON.parse(await readFile(new URL('../migrations/meta/_journal.json', import.meta.url), 'utf8')) as { entries: { idx: number; when: number; tag: string }[] };
-  const e17 = journal.entries.find((e) => e.idx === 17);
   const e18 = journal.entries.find((e) => e.idx === 18);
-  expect(e18?.tag).toBe('0018_20261126_schedule_defaults');
-  expect((e17?.when ?? Infinity) < (e18?.when ?? 0)).toBe(true);
+  const e19 = journal.entries.find((e) => e.idx === 19);
+  expect(e18?.tag).toBe('0018_20261126_message_read_touch');
+  expect(e19?.tag).toBe('0019_20261126_schedule_defaults');
+  expect((e18?.when ?? Infinity) < (e19?.when ?? 0)).toBe(true);
+  // M2-05의 0017(usage_reset_unknown, when 1795689908823)보다 늦어야 그 뒤에 실행된다.
+  expect(e18?.when).toBeGreaterThan(1795689908823);
 });
 
 describe('새 DB', () => {
@@ -56,7 +59,7 @@ describe.each([
   ['팀장이 둘 다 넣음', '0.4', '3', '0.4', '3'],
   ['가동률만 넣음', '0.7', null, '0.7', '1'],
   ['임계값만 넣음', null, '0.5', '0.6', '0.5'],
-])('0017까지 적용된 기존 DB(%s)', (name, rate, threshold, expectedRate, expectedThreshold) => {
+])('0018까지 적용된 기존 DB(%s)', (name, rate, threshold, expectedRate, expectedThreshold) => {
   const url = new URL(inject('testDatabaseUrl'));
   url.pathname += `_schedule_up_${String(rate)}_${String(threshold)}`.replace(/\./g, '');
   let pool: Pool;
@@ -68,7 +71,7 @@ describe.each([
       await cp(fileURLToPath(new URL('../migrations/', import.meta.url)), temp, { recursive: true });
       const path = join(temp, 'meta/_journal.json');
       const journal = JSON.parse(await readFile(path, 'utf8')) as { entries: { idx: number }[] };
-      journal.entries = journal.entries.filter((entry) => entry.idx <= 17);
+      journal.entries = journal.entries.filter((entry) => entry.idx <= 18);
       await writeFile(path, JSON.stringify(journal));
       await migrate(drizzle(pool), { migrationsFolder: temp });
     } finally {

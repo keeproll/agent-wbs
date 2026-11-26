@@ -137,7 +137,7 @@ export async function leadAction(client: PoolClient, id: string, action: 'send' 
   return view(client, id);
 }
 
-/** 읽음 표시. 내용·전달 상태를 바꾸지 않는 멱등 표시라 버전 비교가 없고 updatedAt도 오르지 않는다(contracts §1.3, 0017). */
+/** 읽음 표시. 내용·전달 상태를 바꾸지 않는 멱등 표시라 버전 비교가 없고 updatedAt도 오르지 않는다(contracts §1.3, 마이그레이션 0018). */
 export async function markRead(client: PoolClient, id: string): Promise<void> {
   if (!isUuid(id)) throw notFound(id);
   const row = (await client.query<{ project_id: string; read_at: string | null }>('select project_id,read_at from messages where id=$1', [id])).rows[0];

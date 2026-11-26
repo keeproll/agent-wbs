@@ -1,4 +1,4 @@
-// 0017: 메시지 읽음 표시(read_at)만 바뀌는 UPDATE는 updated_at을 올리지 않는다(contracts §1.3 「메시지 읽음」).
+// 0018: 메시지 읽음 표시(read_at)만 바뀌는 UPDATE는 updated_at을 올리지 않는다(contracts §1.3 「메시지 읽음」).
 // 왜: 읽음은 내용·전달 상태를 바꾸지 않는 멱등 표시라 화면의 편집 버전(updatedAt)을 낡게 만들면 안 된다.
 import { afterAll, beforeAll, expect, inject, test } from 'vitest';
 import { createPool, recreateTestDatabase, runMigrations, seedSystem, type Pool } from '../src/index.ts';
