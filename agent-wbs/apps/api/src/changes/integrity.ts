@@ -153,7 +153,7 @@ export async function loadIntegrity(client: PoolClient): Promise<IntegritySnapsh
 /**
  * 완료 Task의 Gate 입력을 저장된 근거에서 읽는다(리뷰 지적 4).
  * - 코드 근거(basis): 마지막 시도의 head SHA·입력 버전, 현재 명세 revision(완료 뒤에는 명세를 바꿀 수 없다).
- * - 검증: 그 Task의 가장 최근 검증과 무효화 여부. ① Task 검사: 가장 최근 1단계(task) CI 실행.
+ * - 검증: 그 Task의 가장 최근 QA·재검증 시도의 검증과 무효화 여부(시도가 진행 중이면 진행 중, 결과가 없으면 없음). ① Task 검사: 가장 최근 1단계(task) CI 실행.
  *   ci_runs에는 명세 revision·입력 버전이 없어 그 두 값은 코드 근거와 같다고 본다(head SHA는 대조한다).
  * - 결함: 그 Task 검증의 차단 결함 중 해결 검증(resolved_by_verification)이 기록되지 않은 것.
  * Gate 조회 API(M2-06)가 생기면 같은 근거 조회를 쓰도록 합친다.
@@ -161,19 +161,21 @@ export async function loadIntegrity(client: PoolClient): Promise<IntegritySnapsh
 async function loadGates(client: PoolClient): Promise<IntegritySnapshot['gates']> {
   const rows = (await client.query<{
     id: string; approved_at: string | null; revision: number | null; head_sha: string | null; input_version: string | null;
-    v_result: 'PASS' | 'FAIL' | 'BLOCKED' | null; v_head: string | null; v_revision: number | null; v_input: string | null; v_invalidated: boolean | null;
+    a_status: string | null; v_result: 'PASS' | 'FAIL' | 'BLOCKED' | null; v_head: string | null; v_revision: number | null; v_input: string | null; v_invalidated: boolean | null;
     c_status: string | null; c_head: string | null; defects: number;
   }>(
     `select t.id,t.planning_approved_at::text as approved_at,s.revision,la.head_sha,la.input_version::text as input_version,
-       lv.result as v_result,lv.head_sha as v_head,lv.spec_revision as v_revision,lv.input_version::text as v_input,lv.invalidated as v_invalidated,
+       lv.a_status,lv.result as v_result,lv.head_sha as v_head,lv.spec_revision as v_revision,lv.input_version::text as v_input,lv.invalidated as v_invalidated,
        lc.status::text as c_status,lc.head_sha as c_head,
        (select count(*)::int from defects d join verifications dv on dv.id=d.verification join task_attempts da on da.id=dv.attempt
           where da.task=t.id and d.blocking and not exists(select 1 from defect_events e where e.defect=d.id and e.resolved_by_verification is not null)) as defects
      from tasks t
      left join task_specs s on s.task=t.id
      left join lateral (select head_sha,input_version from task_attempts where task=t.id order by attempt_no desc,started_at desc limit 1) la on true
-     left join lateral (select v.result,v.head_sha,v.spec_revision,a.input_version,exists(select 1 from verification_invalidations i where i.verification=v.id) as invalidated
-                        from verifications v join task_attempts a on a.id=v.attempt where a.task=t.id order by v.created_at desc limit 1) lv on true
+     left join lateral (select a.status::text as a_status,v.result,v.head_sha,v.spec_revision,a.input_version,
+                          v.id is not null and exists(select 1 from verification_invalidations i where i.verification=v.id) as invalidated
+                        from task_attempts a left join verifications v on v.attempt=a.id
+                        where a.task=t.id and a.kind in ('qa','reverify') order by a.attempt_no desc,a.started_at desc limit 1) lv on true
      left join lateral (select status,head_sha from ci_runs where task=t.id and stage=1 order by created_at desc limit 1) lc on true
      where t.status='done' and t.deleted_at is null`)).rows;
   if (!rows.length) return [];
@@ -188,6 +190,8 @@ async function loadGates(client: PoolClient): Promise<IntegritySnapshot['gates']
       checklist: checklist.filter((c) => c.task === r.id).map((c) => ({ required: c.required, done: c.done })),
       outputs: outputs.filter((o) => o.task === r.id).map((o) => ({ name: o.name, required: o.required, delivered: o.delivered })),
       basis,
+      // 가장 최근 QA·재검증 시도 기준(재리뷰 R1). 진행 중이면 「검증 진행 중」, 결과가 없으면 예전 PASS를 쓰지 않고 「검증 미실시」.
+      verificationState: r.a_status === 'running' ? 'running' : r.a_status === null ? 'none' : 'completed',
       verification: r.v_result === null ? null : {
         result: r.v_result, headSha: r.v_head ?? '', specRevision: r.v_revision ?? -1, inputVersion: versionNo(r.v_input), invalidated: r.v_invalidated ?? false,
       },
