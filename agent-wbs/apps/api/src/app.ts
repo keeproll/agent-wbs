@@ -4,11 +4,13 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyServerOpt
 import { randomUUID } from 'node:crypto';
 import { platformErrorBody } from './platform/errors.ts';
 import { installSecurity, type SecurityOptions } from './platform/security.ts';
+import { buildValidator } from './platform/validation.ts';
 
 export function buildApp(pool: Pool, logger: FastifyServerOptions['logger'] = false,
   security: SecurityOptions = { origin: 'http://127.0.0.1:3100', lan: false }): FastifyInstance {
   const app = Fastify({
     logger,
+    schemaController: { compilersFactory: { buildValidator } },
     clientErrorHandler: (error, socket) => {
       app.log.warn({ err: error }, 'client error');
       if (!socket.writable) return;
