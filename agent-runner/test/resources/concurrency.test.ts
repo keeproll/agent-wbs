@@ -89,6 +89,12 @@ describe('AdaptiveLimiter — G §6.6 Runner 조절 규칙', () => {
     expect(l.limit).toBe(4);
   });
 
+  test('상한이 한도보다 1만 낮아도 내린다(경계)', () => {
+    const l = started(16);
+    expect(l.applyCaps(5, { restart: false }, MIN)).toEqual({ from: 6, to: 5, reason: LIMIT_REASON.cap });
+    expect(l.applyCaps(5, { restart: false }, 2 * MIN)).toBeNull();
+  });
+
   test('PC가 바뀌면 시작값부터 다시(조절 기록 남김)', () => {
     const l = started(16);
     l.observe(10 * MIN, calm);

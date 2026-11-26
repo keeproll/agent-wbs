@@ -164,6 +164,29 @@ describe('ResourceReporter.reportConcurrency', () => {
     expect(r.limit).toBe(3);
   });
 
+  test('LIMIT_EXCEEDS_CAP 뒤에는 새 상한을 넘는 쌓인 조절 기록을 버린다', async () => {
+    const sent: unknown[] = [];
+    const { r, at } = setup({
+      reportHost: hostReply(16),
+      reportConcurrency: (req) => {
+        const limit = req.body?.limit as number;
+        if (limit > 3) throw new ApiError('reportConcurrency', 400, { code: 'LIMIT_EXCEEDS_CAP', message: 'x' } as never, null);
+        sent.push(req.body?.adjust);
+        return concReply(3)();
+      },
+      getRunnerPolicy: () => ({
+        status: 200,
+        body: { caps: { ...caps(3), memReserveGB: 4 }, subagentBudget: { dev: 2, qa: 1 }, heartbeatSeconds: 60, inputCheckMinutes: 5, ci: { nightAt: '02:00', retry: 1, deployUrl: null } },
+        headers: new Headers(),
+      }),
+    });
+    await r.reportHost(HOST);
+    at(10 * MIN);
+    r.observe(res);
+    await r.reportConcurrency([], 0, res);
+    expect(sent).toEqual([{ from: 8, to: 3, reason: LIMIT_REASON.cap }]);
+  });
+
   test('다른 오류는 조절 기록을 잃지 않고 다시 던진다', async () => {
     let fail = true;
     const { r, calls, at } = setup({
