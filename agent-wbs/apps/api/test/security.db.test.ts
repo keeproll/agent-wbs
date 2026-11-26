@@ -16,7 +16,8 @@ const appUrl = new URL(dbUrl);
 appUrl.searchParams.set('options', '-c role=awbs_app');
 const pool = createPool(appUrl.href, { max: 8, onError: () => undefined });
 const app = buildApp(pool, false, { origin, lan: false });
-const runnerOps = OPERATIONS.filter((op) => op.principal === 'runner');
+const implemented = OPERATIONS.filter(op => op.principal === 'runner' && app.hasRoute({ method:op.method,url:op.path }));
+const runnerOps = OPERATIONS.filter((op) => op.principal === 'runner' && !implemented.includes(op));
 let bearer = '';
 let cookie = '';
 let csrf = '';
@@ -75,6 +76,13 @@ const urlOf = (path: string) => path.replace(/:\w+/g, '11111111-1111-4111-8111-1
 function runnerHeaders(key = crypto.randomUUID(), epoch = '1') {
   return { authorization: `Bearer ${bearer}`, 'x-project-epoch': epoch, 'idempotency-key': key };
 }
+
+test.each(implemented)('$id: 실제 결과·Evidence 경로도 공통 인증·세대 관문을 거친다', async op => {
+  const request = { method:op.method,url:urlOf(op.path) };
+  expect((await app.inject(request)).statusCode).toBe(401);
+  expect((await app.inject({ ...request,headers:{ cookie,origin,'x-csrf-token':csrf } })).statusCode).toBe(401);
+  expect((await app.inject({ ...request,headers:runnerHeaders(undefined,'0') })).statusCode).toBe(409);
+});
 
 describe('security contracts §8 Runner 전체 5종 표', () => {
   for (const op of runnerOps) {

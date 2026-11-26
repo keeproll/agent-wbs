@@ -16,7 +16,7 @@ const kindOf = (job: Job) => job.payload.kind as AttemptKind;
 const previous = (history: Attempt[]) => history.at(-1);
 export const wireCaps = (c: Caps) => ({ total: c.total, Claude: c.perAgent.Claude, Codex: c.perAgent.Codex, heavy: c.heavy });
 const domainHistory = (history: Attempt[]) => history.map(a => ({ id: a.id, kind: a.kind, status: a.status, modelId: a.model_id, effort: a.effort,
-  verificationResult: a.verification_result ?? null, automaticReworkCause: a.automatic_cause }));
+  verificationResult: a.verification_result ?? null, verificationDisposition:a.verification_disposition, automaticReworkCause: a.automatic_cause }));
 
 export async function caps(repo: RunnerRepository) {
   const host = await repo.host();
@@ -77,7 +77,7 @@ async function checkAttempt(repo: RunnerRepository, job: Job, task: Task, advert
   const prev = previous(history);
   const holds = await repo.holds();
   const dependencies = await repo.dependencies(task.id);
-  const taskCheckPassed = await repo.taskCheck(task, prev?.head_sha);
+  const taskCheckPassed = await repo.taskCheck(task, task.execution_head_sha ?? prev?.head_sha);
   const input: ClaimInput = {
     status: task.status, kind, previousAttempt: domainHistory(history).at(-1) ?? null, hasOpenAttempt: history.some(a => a.status === 'running'),
     jobId: job.id, epoch: job.epoch, hostId: cfg.host.host_id,
@@ -165,6 +165,7 @@ export async function start(repo: RunnerRepository, job: Job, body: { hostId: st
   if (!installed) throw new PlatformError('SUBAGENT_INSTALL_FAILED');
   startAttempt(check.input, true);
   const prev = previous(check.grade.history);
+  if ((kindOf(job) === 'qa' || kindOf(job) === 'reverify') && (task.execution_head_sha ?? prev?.head_sha) !== body.headSha) rejection(['①에서 검사한 현재 head로 검증해야 합니다.']);
   const attemptId = await repo.createAttempt(job, task, kindOf(job), body.hostId, required(body.headSha), check.grade.wire.model, check.grade.wire.effort, check.grade.wire.adjust,
     prev?.status === 'interrupted' ? prev.id : null);
   await repo.saveInstalled(task, attemptId, body.installedSubagents);
@@ -185,14 +186,15 @@ export async function release(repo: RunnerRepository, job: Job, host: string, pr
 }
 
 async function attemptPayload(repo: RunnerRepository, task: Task, kind: AttemptKind, extra: object) {
-  const input = await repo.input(task.project_id);
+  const input = await repo.input(task.project_id,task.src_input_version);
   const authority = await repo.authority();
   const spec = await repo.spec(task.id);
   if (!spec) rejection(['Task 명세가 필요합니다.']);
   const prev = previous(await repo.history(task.id));
   const agent = roleOf(kind) === 'dev' ? task.assignee_agent : task.verifier_agent;
   return { taskKey: task.task_key, kind, agent, branch: `agent/${task.task_key}-h${authority?.generation ?? 1}`,
-    baseCommit: input?.commit_sha ?? prev?.head_sha, inputVersion: input?.v ?? 1, instructions: { ...spec }, ...extra };
+    baseCommit: input?.commit_sha ?? prev?.head_sha, inputVersion: input?.v ?? 1, instructions: { ...spec },
+    evidenceInvalidated:task.status === 'verifying' && prev?.verification_disposition === 'stale',...extra };
 }
 
 export async function requestRun(repo: RunnerRepository, task: Task, kind: AttemptKind, epoch: number) {

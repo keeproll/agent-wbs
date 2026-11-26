@@ -16,6 +16,7 @@ import {
   check,
   unique,
   uniqueIndex,
+  index,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 
@@ -446,6 +447,7 @@ export const tasks = pgTable(
     act_end: at('act_end'),
     conflict_group: text(),
     src_input_version: uuid().references(() => inputVersions.id, { onDelete: 'restrict' }),
+    execution_head_sha: text(),
     deleted_at: at('deleted_at'),
   },
   (t) => [
@@ -1633,6 +1635,8 @@ export const ciRuns = pgTable(
     merge_sha: text(),
     tree_sha: text(),
     pipeline_sha: text().notNull(),
+    spec_revision: integer(),
+    input_version: uuid().references(() => inputVersions.id, { onDelete: 'restrict' }),
     ref: text().notNull(),
     pr: integer(),
     task: uuid().references(() => tasks.id, { onDelete: 'restrict' }),
@@ -1650,6 +1654,7 @@ export const ciRuns = pgTable(
   },
   (t) => [
     check('ci_stage', sql`${t.stage} between 1 and 4`),
+    index('ci_runs_input_version_idx').on(t.input_version),
     // job 없는 실행은 야간 점검뿐이라는 규칙은 0014의 트리거 ci_job_owner가 검사한다.
     check('ci_job_fence', sql`(${t.job} is null)=(${t.fence} is null) and (${t.fence} is null or ${t.fence}>=0)`),
     check('ci_artifacts_array', sql`jsonb_typeof(${t.artifacts})='array'`),

@@ -79,7 +79,7 @@ describe('runner 실제 PostgreSQL 검증', () => {
     const phase = ((await owner.query("insert into wbs_nodes(project_id,node_key,kind,title,sort_order) values($1,'PH-1','phase','단계',1) returning id", [project])).rows[0] as { id: string }).id;
     wp = ((await owner.query("insert into wbs_nodes(project_id,node_key,kind,parent_id,title,sort_order) values($1,'WP-1','work_package',$2,'묶음',1) returning id", [project, phase])).rows[0] as { id: string }).id;
     expect((await post('host', { hostId: 'host-a', bootId: 'boot-a', cpu: 'fake', cores: 20, memGB: 32, swapGB: 0, diskFreeGB: 100, os: 'fake' })).statusCode).toBe(200);
-    await post('models', { agent: 'Codex', models: [{ id: 'gpt-6.1-sol', label: '시험', rank: 1, efforts: ['high', 'xhigh', 'max'] }] });
+    await post('models', { agent: 'Codex', models: [{ id: 'gpt-6.1-sol', label: '시험', efforts: ['high', 'xhigh', 'max'] }] });
     await owner.query("update agent_models set allowed=true where agent='Codex' and model_id='gpt-6.1-sol'");
     await post('readiness', { at: now(), items: ['codex','git','node','pnpm','pg','repo','disk','subs'].map(key => ({ key, status: 'ok', detail: '' })) });
     await post('usage', { agent: 'Codex', remainPct: 100, resetAt: now() });
@@ -172,7 +172,7 @@ describe('runner 실제 PostgreSQL 검증', () => {
     const grade = await app.inject({ url: `/api/runner/tasks/${t.key}/run-grade?role=dev`, headers: headers() });
     expect(grade.json()).toMatchObject({ error: { code: 'CLAIM_REJECTED' } });
     expect((await request(t.key)).statusCode).toBe(409);
-    const model = await post('models', { agent: 'Codex', models: [{ id: 'gpt-6.2-sol', label: '새 모델', rank: 2, efforts: ['high','max'] }] });
+    const model = await post('models', { agent: 'Codex', models: [{ id: 'gpt-6.2-sol', label: '새 모델', efforts: ['high','max'] }] });
     expect(model.json()).toMatchObject({ newModels: ['gpt-6.2-sol'] });
     await owner.query("update agent_models set allowed=true where model_id='gpt-6.2-sol'");
     await owner.query("update task_grades set model_id='gpt-6.2-sol',reason='허용 해제 후 재판단',effective_from=now() where task=$1", [t.id]);
@@ -263,8 +263,9 @@ describe('runner 실제 PostgreSQL 검증', () => {
     const j=(await owner.query("insert into runner_jobs(project_id,kind,payload,state,epoch,dedup_key) values($1,'attempt','{}','done',1,'과거 개발') returning id",[project])).rows[0] as { id:string };
     await owner.query("insert into task_attempts(project_id,task,attempt_key,attempt_no,job,base_sha,head_sha,spec_revision,kind,agent,status,started_at,ended_at,model_id,effort) values($1,$2,'과거-1',1,$3,$4,$4,1,'dev','Codex','completed',now(),now(),'gpt-5.5','xhigh')",[project,t.id,j.id,sha]);
     await owner.query("update tasks set status='rework' where id=$1",[t.id]);
-    await post('models',{ agent:'Codex',models:[{ id:'gpt-5.5',label:'4단계',rank:1,efforts:['xhigh'] },{ id:'gpt-6.2-sol',label:'목표 미지원',rank:2,efforts:['xhigh'] },{ id:'gpt-6.2-astra',label:'목표 지원',rank:3,efforts:['max'] }] });
-    await owner.query("update agent_models set allowed=true where model_id in ('gpt-5.5','gpt-6.2-sol','gpt-6.2-astra')");
+    await owner.query("update app_settings set model_settings=jsonb_set(model_settings,'{rankOrder,Codex}','[\"gpt-5.5\",\"gpt-6.2-sol\",\"gpt-6.2-astra\"]')");
+    await post('models',{ agent:'Codex',models:[{ id:'gpt-5.5',label:'4단계',efforts:['xhigh'] },{ id:'gpt-6.2-sol',label:'목표 미지원',efforts:['xhigh'] },{ id:'gpt-6.2-astra',label:'목표 지원',efforts:['max'] }] });
+    await owner.query("update agent_models set allowed=(model_id in ('gpt-5.5','gpt-6.2-sol','gpt-6.2-astra'))");
     await owner.query("update task_grades set model_id='gpt-5.5',effort='xhigh' where task=$1 and role='dev'",[t.id]);
     const grade=await app.inject({ url:`/api/runner/tasks/${t.key}/run-grade?role=dev`,headers:headers() });
     expect(grade.json()).toMatchObject({ model:'gpt-6.2-astra',effort:'max',adjust:{ kind:'up' } });

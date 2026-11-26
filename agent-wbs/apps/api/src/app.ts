@@ -6,9 +6,10 @@ import { platformErrorBody } from './platform/errors.ts';
 import { installSecurity, type SecurityOptions } from './platform/security.ts';
 import { buildValidator } from './platform/validation.ts';
 import { registerTaskRoutes } from './tasks/routes.ts';
+import { installExecution, type ExecutionOptions } from './execution/routes.ts';
 
 export function buildApp(pool: Pool, logger: FastifyServerOptions['logger'] = false,
-  security: SecurityOptions = { origin: 'http://127.0.0.1:3100', lan: false }): FastifyInstance {
+  security: SecurityOptions = { origin: 'http://127.0.0.1:3100', lan: false }, execution: ExecutionOptions = {}): FastifyInstance {
   const app = Fastify({
     logger,
     schemaController: { compilersFactory: { buildValidator } },
@@ -24,6 +25,7 @@ export function buildApp(pool: Pool, logger: FastifyServerOptions['logger'] = fa
   });
   installSecurity(app, pool, security);
   registerTaskRoutes(app, pool);
+  installExecution(app, pool, execution);
 
   app.get('/health', (): HealthResponse => ({ status: 'ok' }));
 
