@@ -21,9 +21,12 @@ type AnyOp =
   | (typeof systemOperations)[number]
   | (typeof planningOperations)[number];
 
-/** 화면(팀장)이 부를 수 있는 요청. Runner 전용 요청은 빠진다. */
-type ScreenOp = Exclude<AnyOp, { principal: 'runner' }>;
+/** 화면(팀장)이 부를 수 있는 JSON 요청. Runner 전용 요청과 파일(바이너리) 응답 요청은 빠진다. */
+type ScreenOp = Exclude<AnyOp, { principal: 'runner' } | { binary: string }>;
 export type OperationId = ScreenOp['id'];
+/** 파일을 내려받는 요청(PDF·ZIP·Evidence 원본). `apiUrl`로 주소만 만들고 브라우저가 내려받는다. */
+type FileOp = Extract<AnyOp, { binary: string }>;
+export type FileOperationId = FileOp['id'];
 export type OperationOf<Id extends OperationId> = Extract<ScreenOp, { id: Id }>;
 
 type SchemaStatic<S> = S extends TSchema ? Static<S> : undefined;
@@ -43,6 +46,10 @@ type PathParams<P extends string> = P extends `${string}:${infer Name}/${infer R
 export type ParamsOf<Id extends OperationId> = [PathParams<OperationOf<Id>['path']>] extends [never]
   ? never
   : Record<PathParams<OperationOf<Id>['path']>, string>;
+export type FileParamsOf<Id extends FileOperationId> = [PathParams<Extract<FileOp, { id: Id }>['path']>] extends [never]
+  ? never
+  : Record<PathParams<Extract<FileOp, { id: Id }>['path']>, string>;
+export type FileQueryOf<Id extends FileOperationId> = Extract<FileOp, { id: Id }> extends { query: infer Q } ? Partial<SchemaStatic<Q>> : never;
 
 /** 오류 응답 본문(contracts §1.1) */
 export type ErrorBody = Static<typeof ErrorResponse>;

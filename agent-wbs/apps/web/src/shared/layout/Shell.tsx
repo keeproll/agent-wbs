@@ -13,6 +13,7 @@ import { useChangeFeed } from '../api/changes.ts';
 import { useApiQuery } from '../api/queries.ts';
 import { MainFeedback, useMainDimmed, useNotice } from '../ui/feedback.tsx';
 import { ICON, Icon } from '../ui/Icon.tsx';
+import { useSave } from '../state/useSave.tsx';
 import { MENU } from './menu.ts';
 import { isMenuLocked, lockMessage } from './MenuScreen.tsx';
 
@@ -28,20 +29,25 @@ function RunnerStatus() {
   );
 }
 
+/** 로그아웃. 서버가 세션을 지운 것을 확인한 뒤에만 로그인 화면으로 간다. 실패하면 오류 막대와 다시 시도(독립 리뷰 eebac50 #6). */
 function LogoutButton() {
-  const { client, refreshSession } = useApi();
+  const { client, clearSession } = useApi();
   const navigate = useNavigate();
+  const { save, busy } = useSave({
+    target: '로그아웃',
+    failTitle: '로그아웃하지 못했습니다',
+    run: () => client.call('logout', {}),
+    onSuccess: () => { clearSession(); void navigate('/login', { replace: true }); },
+  });
   return (
     <button
       type="button"
       className="iconbtn"
-      aria-label="로그아웃"
+      aria-label={busy ? '로그아웃 중' : '로그아웃'}
       title="로그아웃"
-      onClick={() => {
-        void client.call('logout', {}).catch(() => undefined).finally(() => {
-          void refreshSession().then(() => { void navigate('/login'); });
-        });
-      }}
+      disabled={busy}
+      aria-busy={busy || undefined}
+      onClick={() => { void save(); }}
     >
       <Icon d={ICON.logout} />
     </button>

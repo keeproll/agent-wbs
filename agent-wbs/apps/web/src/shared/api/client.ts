@@ -10,7 +10,7 @@
  */
 import { OPERATIONS } from '@awbs/shared/api';
 import { LOADING_RULES } from '../state/loading.ts';
-import type { BodyOf, ErrorBody, ErrorCode, OperationId, ParamsOf, QueryOf, ResponseOf } from './contract.ts';
+import type { BodyOf, ErrorBody, ErrorCode, FileOperationId, FileParamsOf, FileQueryOf, OperationId, ParamsOf, QueryOf, ResponseOf } from './contract.ts';
 
 /**
  * 화면이 오류를 다루는 갈래.
@@ -92,6 +92,32 @@ export interface ApiClient {
   call<Id extends OperationId>(id: Id, args: CallArgs<Id>): Promise<ResponseOf<Id>>;
 }
 
+function buildUrl(id: string, params?: Record<string, string>, query?: Record<string, unknown>) {
+  const op = OPERATIONS.find((candidate) => candidate.id === id);
+  if (!op) throw new Error(`계약에 없는 요청: ${id}`);
+  let url = op.path.replace(/:(\w+)/g, (_, name: string) => {
+    const value = params?.[name];
+    if (value === undefined) throw new Error(`${id}: 경로 값 ${name}이 없습니다.`);
+    return encodeURIComponent(value);
+  });
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(query ?? {})) if (value !== undefined && value !== null) search.set(key, String(value));
+  if (search.size > 0) url += `?${search.toString()}`;
+  return { op, url };
+}
+
+/**
+ * 파일(PDF·ZIP·Evidence 원본)을 내려받는 주소. `<a href={apiUrl(...)} download>`처럼 브라우저에 맡긴다.
+ * 왜 call로 읽지 않나: 파일은 JSON이 아니고, 큰 파일을 화면 메모리에 올릴 필요가 없다. 세션 쿠키는 같은 출처라 함께 간다.
+ */
+export function apiUrl<Id extends FileOperationId>(
+  id: Id,
+  args: ([FileParamsOf<Id>] extends [never] ? { params?: never } : { params: FileParamsOf<Id> }) & ([FileQueryOf<Id>] extends [never] ? { query?: never } : { query?: FileQueryOf<Id> }),
+): string {
+  const { params, query } = args as { params?: Record<string, string>; query?: Record<string, unknown> };
+  return buildUrl(id, params, query).url;
+}
+
 export function createApiClient(options: ApiClientOptions): ApiClient {
   const doFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
   const newKey = options.newKey ?? (() => crypto.randomUUID());
@@ -99,19 +125,13 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
 
   return {
     async call(id, args) {
-      const op = OPERATIONS.find((candidate) => candidate.id === id);
-      if (!op) throw new Error(`계약에 없는 요청: ${id}`);
       const { params, query, body, signal, idempotencyKey } = args as {
         params?: Record<string, string>; query?: Record<string, unknown>; body?: unknown; signal?: AbortSignal; idempotencyKey?: string;
       };
-      let url = op.path.replace(/:(\w+)/g, (_, name: string) => {
-        const value = params?.[name];
-        if (value === undefined) throw new Error(`${id}: 경로 값 ${name}이 없습니다.`);
-        return encodeURIComponent(value);
-      });
-      const search = new URLSearchParams();
-      for (const [key, value] of Object.entries(query ?? {})) if (value !== undefined && value !== null) search.set(key, String(value));
-      if (search.size > 0) url += `?${search.toString()}`;
+      const { op, url } = buildUrl(id, params, query);
+      if (op.binary) throw new Error(`${id}는 파일 응답(${op.binary}) 요청이라 call로 부를 수 없습니다. apiUrl로 내려받기 주소를 만드세요.`);
+      // 이미 취소된 요청은 보내지 않는다.
+      signal?.throwIfAborted();
 
       const headers = new Headers({ accept: 'application/json' });
       if (body !== undefined) headers.set('content-type', 'application/json');
@@ -121,11 +141,13 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       }
       if (op.method === 'POST' && op.idempotency !== 'none') headers.set('idempotency-key', idempotencyKey ?? newKey());
 
+      // 10초 제한과 취소는 응답 본문을 다 읽을 때까지 유지한다(헤더만 오고 본문이 멈추는 경우).
       const controller = new AbortController();
       const timer = setTimeout(() => { controller.abort(new DOMException('timeout', 'TimeoutError')); }, timeoutMs);
       const onAbort = () => { controller.abort(signal?.reason); };
       signal?.addEventListener('abort', onAbort, { once: true });
       let response: Response;
+      let text: string;
       try {
         response = await doFetch(url, {
           method: op.method,
@@ -134,6 +156,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
           signal: controller.signal,
           ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         });
+        text = await response.text();
       } catch (error) {
         if (signal?.aborted) throw error;
         if (controller.signal.aborted) throw new ApiError('timeout', null, 'TIMEOUT', null);
@@ -143,11 +166,17 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         signal?.removeEventListener('abort', onAbort);
       }
 
+      let parsed: unknown = null;
+      let parseFailed = false;
+      if (text !== '') {
+        try { parsed = JSON.parse(text); } catch { parseFailed = true; }
+      }
       if (response.ok) {
         if (response.status === 204) return undefined as ResponseOf<typeof id>;
-        return (await response.json()) as ResponseOf<typeof id>;
+        // 성공 상태인데 본문이 JSON이 아니면 서버(또는 중간 장치) 문제로 본다.
+        if (parseFailed || text === '') throw new ApiError('server', response.status, 'INTERNAL', null);
+        return parsed as ResponseOf<typeof id>;
       }
-      const parsed: unknown = await response.json().catch(() => null);
       const errorBody = isErrorBody(parsed) ? parsed : null;
       const code = (errorBody?.error.code as ErrorCode | undefined) ?? FALLBACK_CODE[response.status] ?? (response.status >= 500 ? 'INTERNAL' : 'VALIDATION_FAILED');
       const retryAfter = Number(response.headers.get('retry-after'));

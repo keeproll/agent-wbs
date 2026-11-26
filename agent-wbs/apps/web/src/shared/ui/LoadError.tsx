@@ -28,7 +28,7 @@ export function LoadError({ title, error, onRetry, retrying }: { title: string; 
   return (
     <Page title={title}>
       <section className="card load-err" aria-labelledby="load-err-t">
-        <h3 id="load-err-t">{title} 화면을 불러오지 못했습니다</h3>
+        <h2 id="load-err-t" className="load-err-t">{title} 화면을 불러오지 못했습니다</h2>
         <p>{reason(error)}</p>
         <p className="fhint">{last} — 저장하지 않은 변경은 없습니다. Runner는 서버와 별개로 동작하며, 서버가 복구되면 밀린 보고를 다시 보냅니다.</p>
         <div className="form-acts" style={{ justifyContent: 'flex-start' }}>

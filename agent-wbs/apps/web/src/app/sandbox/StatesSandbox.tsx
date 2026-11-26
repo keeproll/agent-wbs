@@ -8,6 +8,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useApi } from '../../shared/api/ApiProvider.tsx';
 import type { ApiError } from '../../shared/api/client.ts';
 import { apiKey, useApiQuery } from '../../shared/api/queries.ts';
+import { MenuScreen } from '../../shared/layout/MenuScreen.tsx';
 import { Page } from '../../shared/layout/Page.tsx';
 import { useEditGuard } from '../../shared/state/useEditGuard.ts';
 import { useSave } from '../../shared/state/useSave.tsx';
@@ -33,11 +34,13 @@ function TitleEditor() {
     queryFn: () => client.call('getTask', { params: { taskKey: TASK } }),
   });
 
-  const saveWith = (updatedAt: string) => client.call('updateTask', { params: { taskKey: TASK }, body: { updatedAt, title: draft ?? '' } });
+  const saveWith = (updatedAt: string, title: string) => client.call('updateTask', { params: { taskKey: TASK }, body: { updatedAt, title } });
   const { save, busy, conflictModal } = useSave({
     target: `${TASK} 제목 저장`,
     mine: `제목: ${draft ?? ''}`,
-    run: () => saveWith(task.data?.updatedAt ?? ''),
+    // 저장 버튼을 누른 순간의 내용을 찍어 둔다. 재시도는 이 값을 그대로 보낸다.
+    request: () => ({ updatedAt: task.data?.updatedAt ?? '', title: draft ?? '' }),
+    run: ({ payload }) => saveWith(payload.updatedAt, payload.title),
     onSuccess: (result) => {
       queryClient.setQueryData(apiKey('getTask', { params: { taskKey: TASK } }), result.task);
       setDraft(null);
@@ -45,20 +48,19 @@ function TitleEditor() {
     successNotice: `${TASK} 제목을 저장했습니다.`,
     onFieldErrors: setFieldErrors,
     onConflictReload: () => { setDraft(null); void reload(); },
+    // 실패는 삼키지 않고 던진다. useSave가 충돌 창 안에 이유를 보인다.
     onConflictReapply: async () => {
       const latest = await reload();
-      const result = await saveWith(latest.updatedAt).catch(() => null);
-      if (result) {
-        queryClient.setQueryData(apiKey('getTask', { params: { taskKey: TASK } }), result.task);
-        setDraft(null);
-      }
+      const result = await saveWith(latest.updatedAt, draft ?? '');
+      queryClient.setQueryData(apiKey('getTask', { params: { taskKey: TASK } }), result.task);
+      setDraft(null);
     },
   });
   const titleError = fieldErrors.find((e) => e.path === 'title' || e.path === '/title');
 
   return (
     <section className="card" aria-labelledby="sb-edit">
-      <h3 id="sb-edit" style={{ marginTop: 0 }}>저장·오류 막대·충돌 창·편집 보호</h3>
+      <h2 id="sb-edit" className="sb-h">저장·오류 막대·충돌 창·편집 보호</h2>
       {task.isPending && <AreaLoading label="Task 불러오는 중" />}
       {task.data && !editing && (
         <p>
@@ -84,13 +86,35 @@ function TitleEditor() {
   );
 }
 
+/** POST 저장의 재시도: 처음 요청 내용과 멱등 키를 그대로 다시 보낸다. */
+function MessageDemo() {
+  const { client } = useApi();
+  const [text, setText] = useState('');
+  const { save, busy } = useSave({
+    target: `${TASK} 메시지 초안 만들기`,
+    request: () => ({ taskKey: TASK, type: 'instruction', toAgent: 'Claude', body: text }),
+    run: ({ payload, idempotencyKey }) => client.call('createMessage', { body: payload as never, idempotencyKey }),
+    successNotice: '메시지 초안을 만들었습니다.',
+  });
+  return (
+    <section className="card" aria-labelledby="sb-msg">
+      <h2 id="sb-msg" className="sb-h">POST 재시도(멱등 키)</h2>
+      <label className="fsel-l" htmlFor="sb-msg-in">메시지</label>
+      <input id="sb-msg-in" className="inp" style={{ width: 360, display: 'block' }} value={text} onChange={(event) => { setText(event.target.value); }} />
+      <div className="form-acts" style={{ justifyContent: 'flex-start' }}>
+        <BusyButton busy={busy} busyLabel="만드는 중…" onClick={() => { void save(); }}>메시지 초안 만들기</BusyButton>
+      </div>
+    </section>
+  );
+}
+
 function RecalcDemo() {
   const { client } = useApi();
   const [running, setRunning] = useState(false);
   useDim(running ? '일정 다시 계산 중 — 잠시 후 갱신됩니다' : null);
   return (
     <section className="card" aria-labelledby="sb-dim">
-      <h3 id="sb-dim" style={{ marginTop: 0 }}>흐림(일정 재계산)</h3>
+      <h2 id="sb-dim" className="sb-h">흐림(일정 재계산)</h2>
       <BusyButton busy={running} busyLabel="재계산 중…" onClick={() => {
         setRunning(true);
         void client.call('runReplan', { body: {} as never }).catch(() => undefined).finally(() => { setRunning(false); });
@@ -106,7 +130,7 @@ function ListDemo() {
   const columns = ['WBS', 'Task', '유형 · 영역', '담당', '상태 · 검증', '우선순위', '선행 Task', '진행 · 체크리스트', '완료 예상 · 기준 대비', '예상 실행'];
   return (
     <section className="card" aria-labelledby="sb-list">
-      <h3 id="sb-list" style={{ marginTop: 0 }}>빈 상태·표 가로 스크롤·확인창</h3>
+      <h2 id="sb-list" className="sb-h">빈 상태·표 가로 스크롤·확인창</h2>
       {filtered
         ? <EmptyState kind="filtered" message="조건에 맞는 Task가 없습니다." onReset={() => { setFiltered(false); }} />
         : <EmptyState kind="none" message="아직 실행 기록이 없습니다." hint="Task를 실행하면 여기에 시도 기록이 표시됩니다." />}
@@ -127,11 +151,17 @@ function ListDemo() {
 }
 
 export default function StatesSandbox() {
+  // 메뉴 화면과 같은 조건에서 시험하도록 MenuScreen 안에 둔다(독립 리뷰 eebac50 #1).
   return (
-    <Page title="공통 컴포넌트 견본" sub="개발·시험용 화면입니다. 제품 빌드에는 들어가지 않습니다.">
-      <TitleEditor />
-      <RecalcDemo />
-      <ListDemo />
-    </Page>
+    <MenuScreen menu="project" title="공통 컴포넌트 견본">
+      {() => (
+        <Page title="공통 컴포넌트 견본" sub="개발·시험용 화면입니다. 제품 빌드에는 들어가지 않습니다.">
+          <TitleEditor />
+          <MessageDemo />
+          <RecalcDemo />
+          <ListDemo />
+        </Page>
+      )}
+    </MenuScreen>
   );
 }
