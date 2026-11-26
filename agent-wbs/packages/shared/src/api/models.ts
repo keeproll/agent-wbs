@@ -411,7 +411,10 @@ export const ProposalSource = AnyOf('planning', 'message', 'manual', 'split', 'i
 export const proposalBody = <T extends TProperties, O extends TSchema, S extends TSchema>(extra: T, op: O, splitOp: S) => {
   const body = <K extends TSchema, I extends TSchema>(kind: K, item: I) =>
     c.Body({ ...extra, title: Text, reason: Text, source: c.Body({ kind, id: Opt(c.Id) }), ops: List(item, { minItems: 1 }) });
-  return Type.Union([body(AnyOf('planning', 'message', 'manual', 'input', 'decision'), op), body(AnyOf('split'), splitOp)]);
+  // 분할 CP는 원래 Task 키가 필수다(조정자 결정 2026-11-26). 충돌 묶음 상속과 분할 검증의 기준이다.
+  const splitBody = <I extends TSchema>(item: I) =>
+    c.Body({ ...extra, title: Text, reason: Text, source: c.Body({ kind: AnyOf('split'), id: c.TaskKey }), ops: List(item, { minItems: 1 }) });
+  return Type.Union([body(AnyOf('planning', 'message', 'manual', 'input', 'decision'), op), splitBody(splitOp)]);
 };
 export const Proposal = Type.Object(
   {

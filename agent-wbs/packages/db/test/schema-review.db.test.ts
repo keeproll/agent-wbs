@@ -238,8 +238,8 @@ test('P1-5: cleanup collects CI and queued job refs as well as attempts', () =>
     await c.query("update task_attempts set branch='agent/attempt'");
     await c.query("insert into runner_commands(kind,epoch,payload,status) values('reset-cleanup',0,'{\"repoUrl\":\"https://github.com/o/current\",\"prs\":[45],\"branches\":[\"agent/previous\"]}','pending')");
     await c.query(
-      "insert into ci_runs(project_id,run_key,stage,pipeline_sha,ref,pr,trigger,status) values($1,'CI-1',2,'sha','agent/T1',42,'manual','queued')",
-      [f.p],
+      "insert into ci_runs(project_id,run_key,stage,pipeline_sha,ref,pr,trigger,status,job,fence) values($1,'CI-1',2,'sha','agent/T1',42,'manual','queued',$2,1)",
+      [f.p, f.job],
     );
     await c.query(
       "update runner_jobs set payload='{" + '"branch":"agent/prestart","pr":43' + "}' where id=$1",
@@ -406,7 +406,7 @@ test('P2-5: cleanup payload is protected and a recorded cgroup rules out no_proc
 test('D-34: hold reasons reject null codes and preserve nullable issue indexes', () =>
   transaction(async (c) => {
     const f = await fixture(c);
-    await c.query("insert into change_proposals(project_id,cp_key,source,status,ops) values($1,'CP-shape','manual','held','[]')", [f.p]);
+    await c.query("insert into change_proposals(project_id,cp_key,title,reason,source,status,ops) values($1,'CP-shape','t','r','manual','held','[]')", [f.p]);
     await rejects(c, 'update change_proposals set hold_reasons=$1', [{
       holdReasons: [{ code: null, message: 'reason' }], issues: [],
     }]);
@@ -836,7 +836,7 @@ test('D-33/D-34: judgements retain the approved names and reject malformed or du
     ])
       await rejects(c, 'update task_splits set judged_rules=$2 where task=$1', [f.task, bad]);
     await c.query(
-      "insert into change_proposals(project_id,cp_key,source,status,ops,split_judgements,hold_reasons) values($1,'CP-1','split','held','[]',$2,$3)",
+      "insert into change_proposals(project_id,cp_key,title,reason,source,source_id,status,ops,split_judgements,hold_reasons) values($1,'CP-1','t','r','split','TASK-1','held','[]',$2,$3)",
       [
         f.p,
         { schemaVersion: 1, items: [{ ...item, rule: 'ac_meaning' }] },

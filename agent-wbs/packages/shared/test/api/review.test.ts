@@ -44,8 +44,11 @@ test('F1 CI 갱신은 실행의 fence를 받고, job 없는 시작은 야간 점
   expect(accepts('updateCiRun', { fence: 3, status: 'pass' })).toBe(true);
   expect(accepts('updateCiRun', { fence: null, status: 'pass' })).toBe(true);
   expect(op('updateCiRun').errors).toContain('LEASE_LOST');
-  expect(accepts('startCiRun', { stage: 'night', ref: 'main' })).toBe(true);
-  for (const stage of ['task', 'int', 'deploy']) expect(accepts('startCiRun', { stage, ref: 'main' })).toBe(false);
+  // M1-01 통합: 시작 때 pipelineSha·trigger 필수(ci_runs NOT NULL)
+  const start = { ref: 'main', pipelineSha: 'a'.repeat(40), trigger: 'schedule' };
+  expect(accepts('startCiRun', { stage: 'night', ...start })).toBe(true);
+  expect(accepts('startCiRun', { stage: 'night', ref: 'main' })).toBe(false);
+  for (const stage of ['task', 'int', 'deploy']) expect(accepts('startCiRun', { stage, ...start })).toBe(false);
 });
 
 test('F2 취소 CP의 영향: 풀리는 후속과 아직 막힌 후속을 구분해야 한다', () => {

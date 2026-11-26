@@ -28,6 +28,17 @@ const ReleaseProof = Type.Union([
   // 예약만 하고 그룹이 없던 보유는 processGroup이 null이다. currentBootId는 host 보고의 bootId와 같아야 한다.
   Body({ kind: AnyOf('boot_changed'), bootId: Text, processGroup: Nullable(Pid), currentBootId: Text }),
 ]);
+/**
+ * 초기화 정리 명령의 보유별 정리 증거. 키는 명령 payload의 holds[]와 DB complete_cleanup()이 대조하는 이름이다.
+ * 완료(done)에는 payload의 모든 보유에 대한 증거가 필요하다. hostId·bootId는 예약 전 보유면 null이다.
+ */
+const cleanupBase = { job: c.Id, hostId: Nullable(Text), bootId: Nullable(Text) };
+const CleanupProof = Type.Union([
+  Body({ ...cleanupBase, proof: AnyOf('no_process') }),
+  Body({ ...cleanupBase, proof: AnyOf('group_empty'), processGroup: Pid }),
+  Body({ ...cleanupBase, proof: AnyOf('boot_changed'), processGroup: Opt(Nullable(Pid)), currentBootId: Text }),
+]);
+const CommandItems = List(Body({ name: Text, ok: Type.Boolean(), detail: Type.String() }));
 /** contracts §4.1 근거 고정: 단계별로 해당하는 값만 보낸다. */
 const ciShas = {
   baseSha: Opt(c.Sha),
@@ -37,13 +48,15 @@ const ciShas = {
   pipelineSha: Opt(c.Sha),
 };
 
+/** 시작 때 pipelineSha·trigger는 필수다. ci_runs에 기본값 없이 저장되는 근거다(M1-01 통합). */
 const ciStart = {
   taskKey: Opt(c.TaskKey),
   attemptId: Opt(c.Id),
   ref: Text,
   pr: Opt(Type.Integer({ minimum: 1 })),
-  trigger: Opt(Text),
+  trigger: Text,
   ...ciShas,
+  pipelineSha: c.Sha,
 };
 
 /** QA 결과(contracts §3.1). 검사한 커밋·명세 버전이 없으면 근거로 쓸 수 없다. */
@@ -623,10 +636,10 @@ export const runnerOperations = [
     path: '/api/runner/commands/:id/result',
     summary: '명령 결과. X-Project-Epoch에 commands[].epoch를 그대로 보내며 명령 ID와 일치해야 한다(D-04)',
     staleEpoch: true,
-    body: Body({
-      status: AnyOf('done', 'failed'),
-      items: List(Body({ name: Text, ok: Type.Boolean(), detail: Type.String() })),
-    }),
+    body: Type.Union([
+      Body({ status: AnyOf('done'), items: CommandItems, holds: List(CleanupProof) }),
+      Body({ status: AnyOf('failed'), items: CommandItems, holds: Opt(List(CleanupProof)) }),
+    ]),
     responses: { 204: null },
     errors: ['EPOCH_MISMATCH'],
   }),

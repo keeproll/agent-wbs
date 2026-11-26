@@ -1260,24 +1260,24 @@ export interface Operations {
         attemptId?: Id;
         ref: string;
         pr?: number;
-        trigger?: string;
+        trigger: string;
         baseSha?: Sha;
         headSha?: Sha;
         mergeSha?: Sha;
         treeSha?: Sha;
-        pipelineSha?: Sha;
+        pipelineSha: Sha;
       } | {
         stage: "night";
         taskKey?: TaskKey;
         attemptId?: Id;
         ref: string;
         pr?: number;
-        trigger?: string;
+        trigger: string;
         baseSha?: Sha;
         headSha?: Sha;
         mergeSha?: Sha;
         treeSha?: Sha;
-        pipelineSha?: Sha;
+        pipelineSha: Sha;
       };
       epoch: number;
       idempotencyKey: string;
@@ -1467,11 +1467,56 @@ export interface Operations {
         id: Id;
       };
       body: {
-        status: "done" | "failed";
+        status: "done";
         items: ({
           name: string;
           ok: boolean;
           detail: string;
+        })[];
+        holds: ({
+          job: Id;
+          hostId: string | null;
+          bootId: string | null;
+          proof: "no_process";
+        } | {
+          job: Id;
+          hostId: string | null;
+          bootId: string | null;
+          proof: "group_empty";
+          processGroup: number;
+        } | {
+          job: Id;
+          hostId: string | null;
+          bootId: string | null;
+          proof: "boot_changed";
+          processGroup?: number | null;
+          currentBootId: string;
+        })[];
+      } | {
+        status: "failed";
+        items: ({
+          name: string;
+          ok: boolean;
+          detail: string;
+        })[];
+        holds?: ({
+          job: Id;
+          hostId: string | null;
+          bootId: string | null;
+          proof: "no_process";
+        } | {
+          job: Id;
+          hostId: string | null;
+          bootId: string | null;
+          proof: "group_empty";
+          processGroup: number;
+        } | {
+          job: Id;
+          hostId: string | null;
+          bootId: string | null;
+          proof: "boot_changed";
+          processGroup?: number | null;
+          currentBootId: string;
         })[];
       };
       epoch: number;
@@ -2011,7 +2056,7 @@ export interface Operations {
         reason: string;
         source: {
           kind: "split";
-          id?: Id;
+          id: TaskKey;
         };
         ops: (PlanningSplitProposalOp)[];
       };

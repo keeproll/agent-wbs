@@ -125,7 +125,9 @@ interface Demo {
     }[];
     proposals: {
       id: string;
-      source: { kind: string };
+      title: string;
+      reason: string;
+      source: { kind: string; id: string };
       status: (typeof s.proposalStatus.enumValues)[number];
       ops: unknown[];
       idMap: unknown;
@@ -492,7 +494,11 @@ export async function seedDemo(pool: Pool, testDatabaseUrl: string): Promise<voi
         .values({
           project_id: p.id,
           cp_key: cp.id,
+          title: cp.title,
+          reason: cp.reason,
           source: cp.source.kind,
+          // P는 출처가 없으면 빈 문자열이다. 저장은 null로 한다.
+          source_id: cp.source.id || null,
           status: cp.status,
           ops: cp.ops,
           id_map: cp.idMap,

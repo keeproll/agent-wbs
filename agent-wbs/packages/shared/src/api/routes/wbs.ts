@@ -439,6 +439,7 @@ const planning = [
     path: '/api/proposals',
     summary: 'Change Proposal 작성',
     body: m.proposalBody({}, m.LeadProposalOp, m.LeadSplitProposalOp),
+    inputRules: ['uniqueDesignKind'],
     responses: { 201: m.Proposal },
   }),
   operation({
@@ -505,7 +506,8 @@ const overview = [
           ...m.ReplanSummary.properties,
           trigger: Type.String(),
           actor: Type.String(),
-          status: AnyOf('applied', 'pending'),
+          // discarded: 반영하지 않고 닫은 대기 재조정(M1-01 replans)
+          status: AnyOf('applied', 'pending', 'discarded'),
           rate: Type.Number(),
           at: c.Timestamp,
         }),

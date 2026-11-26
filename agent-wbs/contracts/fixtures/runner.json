@@ -459,6 +459,7 @@
    "attemptId": "ATT-0005-1",
    "ref": "agent/TASK-0005",
    "pr": 8,
+   "trigger": "PR #8",
    "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
    "pipelineSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   },
@@ -617,6 +618,15 @@
      "name": "브랜치 삭제",
      "ok": true,
      "detail": "1개"
+    }
+   ],
+   "holds": [
+    {
+     "job": "job-1",
+     "hostId": "h1",
+     "bootId": "b1",
+     "proof": "group_empty",
+     "processGroup": 4242
     }
    ]
   },

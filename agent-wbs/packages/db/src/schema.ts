@@ -702,7 +702,11 @@ export const changeProposals = pgTable(
     ...row(),
     ...project(),
     cp_key: text().notNull().unique(),
+    // API Proposal의 title·reason·source.id(M1 통합). 분할 CP의 source_id는 원래 Task 키다.
+    title: text().notNull(),
+    reason: text().notNull(),
     source: text().notNull(),
+    source_id: text(),
     status: proposalStatus().notNull(),
     ops: jsonb().notNull(),
     id_map: jsonb(),
@@ -719,6 +723,10 @@ export const changeProposals = pgTable(
       sql`public.awbs_valid_judgements(${t.split_judgements}, ARRAY['ac_meaning','layer_order','test_included'])`,
     ),
     check('hold_reasons_shape', sql`public.awbs_valid_hold_reasons(${t.hold_reasons})`),
+    check('cp_title_text', sql`length(btrim(${t.title}))>0`),
+    check('cp_reason_text', sql`length(btrim(${t.reason}))>0`),
+    check('cp_source_id_text', sql`${t.source_id} is null or length(btrim(${t.source_id}))>0`),
+    check('cp_split_source', sql`${t.source}<>'split' or ${t.source_id} is not null`),
     check(
       'proposal_source',
       sql`${t.source} in ('planning','message','manual','split','input','decision')`,
@@ -1045,6 +1053,8 @@ export const runnerSessions = pgTable('runner_sessions', {
 export const runnerHosts = pgTable('runner_hosts', {
   ...row(),
   host_id: text().notNull(),
+  // host 보고의 현재 bootId(M1 통합). 이 열이 생기기 전 행은 null이다.
+  boot_id: text(),
   cpu: text().notNull(),
   cores: integer().notNull(),
   mem_gb: numeric().notNull(),
@@ -1054,7 +1064,7 @@ export const runnerHosts = pgTable('runner_hosts', {
   per_session_gb: numeric(),
   samples: integer().notNull(),
   seen_at: at('seen_at').notNull(),
-});
+}, (t) => [check('runner_host_boot_text', sql`${t.boot_id} is null or length(btrim(${t.boot_id}))>0`)]);
 export const runnerConcurrencyLog = pgTable('runner_concurrency_log', {
   ...row(),
   host_id: text().notNull(),
@@ -1616,8 +1626,17 @@ export const ciRuns = pgTable(
     log_excerpt: text(),
     artifact_path: text(),
     url: text(),
+    // 시작한 job과 그 fence(M1 통합). 갱신 보고는 이것과 대조하고, job 없는 실행은 야간 점검(3)뿐이다.
+    job: uuid().references(() => runnerJobs.id, { onDelete: 'restrict' }),
+    fence: integer(),
+    artifacts: jsonb().notNull().default([]),
   },
-  (t) => [check('ci_stage', sql`${t.stage} between 1 and 4`)],
+  (t) => [
+    check('ci_stage', sql`${t.stage} between 1 and 4`),
+    check('ci_job_owner', sql`${t.stage}=3 or ${t.job} is not null`),
+    check('ci_job_fence', sql`(${t.job} is null)=(${t.fence} is null) and (${t.fence} is null or ${t.fence}>=0)`),
+    check('ci_artifacts_array', sql`jsonb_typeof(${t.artifacts})='array'`),
+  ],
 );
 export const ciSteps = pgTable(
   'ci_steps',

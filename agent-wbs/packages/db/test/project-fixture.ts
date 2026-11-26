@@ -103,6 +103,9 @@ export async function fillProjectTables(
         if (table === 'planning_jobs' && col.name === 'status') value = 'queued';
         if (table === 'change_proposals' && col.name === 'source') value = 'manual';
         if (table === 'replans' && col.name === 'status') value = 'pending';
+        // job 없는 CI 실행은 야간 점검(3)뿐이다(M1 통합).
+        if (table === 'ci_runs' && col.name === 'stage') value = 3;
+        if (table === 'ci_runs' && col.name === 'artifacts') value = '[]';
         if (table === 'design_drifts' && col.name === 'compat') value = '호환';
         if (table === 'messages' && col.name === 'dir') value = 'out';
         if (table === 'runner_job_events' && col.name === 'kind') value = 'prepared';

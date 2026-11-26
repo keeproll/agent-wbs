@@ -18,6 +18,7 @@ export const OPERATIONS: readonly Operation[] = [
 
 export * from './adapters.ts';
 export * from './errors.ts';
+export * from './input-rules.ts';
 export * from './operation.ts';
 export * from './openapi.ts';
 export { ErrorResponse } from './common.ts';

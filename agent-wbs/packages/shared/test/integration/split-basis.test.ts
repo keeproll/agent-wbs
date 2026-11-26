@@ -23,7 +23,8 @@ const t = (splitBasis?: string) => ({
 const add = (ref: string, splitBasis?: string) => ({ op: 'add', ref, t: t(splitBasis), preds: [] });
 const remove = { op: 'remove', task: 'TASK-0001' };
 const job = { jobId: 'job-1', fence: 1 };
-const body = (kind: string, ops: unknown[]) => ({ title: 't', reason: 'r', source: { kind, id: 'x' }, ops });
+// 분할 CP의 source.id는 원래 Task 키다(조정자 결정 2026-11-26).
+const body = (kind: string, ops: unknown[]) => ({ title: 't', reason: 'r', source: { kind, id: kind === 'split' ? 'TASK-0001' : 'x' }, ops });
 
 describe.each([
   ['submitPlanningProposal', job],

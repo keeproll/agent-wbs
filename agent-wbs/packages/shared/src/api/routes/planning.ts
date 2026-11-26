@@ -100,6 +100,7 @@ export const planningOperations = [
         { minItems: 1 },
       ),
     }),
+    inputRules: ['uniqueDesignKind'],
     responses: { 201: null },
   }),
   operation({
@@ -119,6 +120,7 @@ export const planningOperations = [
       m.PlanningProposalOp,
       m.PlanningSplitProposalOp,
     ),
+    inputRules: ['uniqueDesignKind'],
     responses: { 201: Type.Object({ id: c.Id, cpKey: Type.String(), status: m.ProposalStatus }) },
   }),
   operation({

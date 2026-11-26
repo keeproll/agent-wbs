@@ -58,7 +58,8 @@ test.each<[string, string[], string[]]>([
     all<GateCondition['key']>({ checklist: true, outputs: true, verification: true, defects: true, approval: true })],
   ['Gate 결과', values(m.Gate, 'conditions', '[]', 'result'), all<GateCondition['result']>({ PASS: true, FAIL: true, BLOCKED: true })],
   ['재조정 이동', values(m.MoveKind), all<ReplanMove['kind']>({ delayed: true, advanced: true, new: true, excluded: true })],
-  ['재조정 상태', values(ok('listReplans'), 'items', '[]', 'status'), all<ReplanResult['status']>({ applied: true, pending: true })],
+  // discarded는 대기 재조정을 닫는 저장 상태라 계산 결과(ReplanResult)에는 없다(M1-01 replans).
+  ['재조정 상태', values(ok('listReplans'), 'items', '[]', 'status'), [...all<ReplanResult['status']>({ applied: true, pending: true }), 'discarded']],
   ['일정 경고', values(m.Schedule, 'warnings', '[]', 'code'),
     all<ScheduleWarning['code']>({ USAGE_RESET_UNKNOWN: true, CLOCK_SKEW_CLAMPED: true })],
   ['일정 경고 필드', values(m.ScheduleWarning, 'field'),

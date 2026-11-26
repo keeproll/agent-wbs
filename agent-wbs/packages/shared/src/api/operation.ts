@@ -1,5 +1,6 @@
 import type { Static, TProperties, TSchema } from 'typebox';
 import { ERROR_STATUS, type ErrorCode } from './errors.ts';
+import { INPUT_RULES, type InputError, type InputRule } from './input-rules.ts';
 
 export type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 /** `none`은 인증 전 요청(로그인·health)뿐이다. */
@@ -32,6 +33,13 @@ export interface Operation {
   readonly idempotency: 'required' | 'optional' | 'none';
   /** 이전 epoch 허용(D-04) */
   readonly staleEpoch?: true;
+  /** 형식 검증 뒤 서버가 적용하는 규칙(input-rules.ts). 어기면 400 VALIDATION_FAILED */
+  readonly inputRules?: readonly InputRule[];
+}
+
+/** 형식 검증을 통과한 본문에 이 요청의 입력 규칙을 적용한다. 빈 배열이면 통과다. */
+export function inputErrors(op: Pick<Operation, 'inputRules'>, body: unknown): InputError[] {
+  return (op.inputRules ?? []).flatMap((rule) => INPUT_RULES[rule](body));
 }
 
 export type BodyOf<T extends Operation> = T['body'] extends TSchema ? Static<T['body']> : undefined;
@@ -70,6 +78,7 @@ export function operation<const T extends Input>(input: T): T & Pick<Operation, 
   const errors = new Set<ErrorCode>(['INTERNAL', 'UNAVAILABLE', ...(input.errors ?? [])]);
   // 빈 값·형식이 틀린 경로 값도 400이다.
   if (input.body || input.query || params.length > 0) errors.add('VALIDATION_FAILED');
+  if (input.inputRules?.length && !input.body) fail('입력 규칙은 본문이 있는 요청에만 쓴다.');
   if (principal === 'lead') errors.add('LEAD_UNAUTHORIZED').add('FORBIDDEN_PRINCIPAL');
   if (principal === 'runner') errors.add('RUNNER_UNAUTHORIZED').add('RATE_LIMITED');
   if (usesEpoch(input) && !input.staleEpoch) errors.add('EPOCH_MISMATCH');

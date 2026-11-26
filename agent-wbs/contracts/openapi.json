@@ -5478,6 +5478,9 @@
           }
         ],
         "x-version-rule": "none",
+        "x-input-rules": [
+          "uniqueDesignKind"
+        ],
         "parameters": [
           {
             "$ref": "#/components/parameters/OptionalIdempotencyKey"
@@ -5564,7 +5567,8 @@
                       "source": {
                         "type": "object",
                         "required": [
-                          "kind"
+                          "kind",
+                          "id"
                         ],
                         "properties": {
                           "kind": {
@@ -5573,7 +5577,7 @@
                             ]
                           },
                           "id": {
-                            "$ref": "#/components/schemas/Id"
+                            "$ref": "#/components/schemas/TaskKey"
                           }
                         },
                         "additionalProperties": false
@@ -6651,7 +6655,8 @@
                           "status": {
                             "enum": [
                               "applied",
-                              "pending"
+                              "pending",
+                              "discarded"
                             ]
                           },
                           "rate": {
@@ -23762,7 +23767,9 @@
                       "jobId",
                       "fence",
                       "stage",
-                      "ref"
+                      "ref",
+                      "trigger",
+                      "pipelineSha"
                     ],
                     "properties": {
                       "jobId": {
@@ -23817,7 +23824,9 @@
                     "type": "object",
                     "required": [
                       "stage",
-                      "ref"
+                      "ref",
+                      "trigger",
+                      "pipelineSha"
                     ],
                     "properties": {
                       "stage": {
@@ -25084,45 +25093,411 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "required": [
-                  "status",
-                  "items"
-                ],
-                "properties": {
-                  "status": {
-                    "enum": [
-                      "done",
-                      "failed"
-                    ]
-                  },
-                  "items": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "required": [
-                        "name",
-                        "ok",
-                        "detail"
-                      ],
-                      "properties": {
-                        "name": {
-                          "type": "string",
-                          "minLength": 1,
-                          "pattern": "\\S"
-                        },
-                        "ok": {
-                          "type": "boolean"
-                        },
-                        "detail": {
-                          "type": "string"
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "status",
+                      "items",
+                      "holds"
+                    ],
+                    "properties": {
+                      "status": {
+                        "enum": [
+                          "done"
+                        ]
+                      },
+                      "items": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "name",
+                            "ok",
+                            "detail"
+                          ],
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S"
+                            },
+                            "ok": {
+                              "type": "boolean"
+                            },
+                            "detail": {
+                              "type": "string"
+                            }
+                          },
+                          "additionalProperties": false
                         }
                       },
-                      "additionalProperties": false
-                    }
+                      "holds": {
+                        "type": "array",
+                        "items": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "required": [
+                                "job",
+                                "hostId",
+                                "bootId",
+                                "proof"
+                              ],
+                              "properties": {
+                                "job": {
+                                  "$ref": "#/components/schemas/Id"
+                                },
+                                "hostId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "pattern": "\\S"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "bootId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "pattern": "\\S"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "proof": {
+                                  "enum": [
+                                    "no_process"
+                                  ]
+                                }
+                              },
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "required": [
+                                "job",
+                                "hostId",
+                                "bootId",
+                                "proof",
+                                "processGroup"
+                              ],
+                              "properties": {
+                                "job": {
+                                  "$ref": "#/components/schemas/Id"
+                                },
+                                "hostId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "pattern": "\\S"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "bootId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "pattern": "\\S"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "proof": {
+                                  "enum": [
+                                    "group_empty"
+                                  ]
+                                },
+                                "processGroup": {
+                                  "type": "integer",
+                                  "minimum": 1
+                                }
+                              },
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "required": [
+                                "job",
+                                "hostId",
+                                "bootId",
+                                "proof",
+                                "currentBootId"
+                              ],
+                              "properties": {
+                                "job": {
+                                  "$ref": "#/components/schemas/Id"
+                                },
+                                "hostId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "pattern": "\\S"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "bootId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "pattern": "\\S"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "proof": {
+                                  "enum": [
+                                    "boot_changed"
+                                  ]
+                                },
+                                "processGroup": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": 1
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "currentBootId": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "pattern": "\\S"
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "status",
+                      "items"
+                    ],
+                    "properties": {
+                      "status": {
+                        "enum": [
+                          "failed"
+                        ]
+                      },
+                      "items": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "name",
+                            "ok",
+                            "detail"
+                          ],
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S"
+                            },
+                            "ok": {
+                              "type": "boolean"
+                            },
+                            "detail": {
+                              "type": "string"
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      },
+                      "holds": {
+                        "type": "array",
+                        "items": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "required": [
+                                "job",
+                                "hostId",
+                                "bootId",
+                                "proof"
+                              ],
+                              "properties": {
+                                "job": {
+                                  "$ref": "#/components/schemas/Id"
+                                },
+                                "hostId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "pattern": "\\S"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "bootId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "pattern": "\\S"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "proof": {
+                                  "enum": [
+                                    "no_process"
+                                  ]
+                                }
+                              },
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "required": [
+                                "job",
+                                "hostId",
+                                "bootId",
+                                "proof",
+                                "processGroup"
+                              ],
+                              "properties": {
+                                "job": {
+                                  "$ref": "#/components/schemas/Id"
+                                },
+                                "hostId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "pattern": "\\S"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "bootId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "pattern": "\\S"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "proof": {
+                                  "enum": [
+                                    "group_empty"
+                                  ]
+                                },
+                                "processGroup": {
+                                  "type": "integer",
+                                  "minimum": 1
+                                }
+                              },
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "required": [
+                                "job",
+                                "hostId",
+                                "bootId",
+                                "proof",
+                                "currentBootId"
+                              ],
+                              "properties": {
+                                "job": {
+                                  "$ref": "#/components/schemas/Id"
+                                },
+                                "hostId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "pattern": "\\S"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "bootId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "pattern": "\\S"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "proof": {
+                                  "enum": [
+                                    "boot_changed"
+                                  ]
+                                },
+                                "processGroup": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": 1
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "currentBootId": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "pattern": "\\S"
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "additionalProperties": false
                   }
-                },
-                "additionalProperties": false
+                ]
               }
             }
           }
@@ -28163,6 +28538,9 @@
             "runnerToken": []
           }
         ],
+        "x-input-rules": [
+          "uniqueDesignKind"
+        ],
         "parameters": [
           {
             "name": "id",
@@ -28336,6 +28714,9 @@
           {
             "runnerToken": []
           }
+        ],
+        "x-input-rules": [
+          "uniqueDesignKind"
         ],
         "parameters": [
           {
@@ -28737,7 +29118,8 @@
                       "source": {
                         "type": "object",
                         "required": [
-                          "kind"
+                          "kind",
+                          "id"
                         ],
                         "properties": {
                           "kind": {
@@ -28746,7 +29128,7 @@
                             ]
                           },
                           "id": {
-                            "$ref": "#/components/schemas/Id"
+                            "$ref": "#/components/schemas/TaskKey"
                           }
                         },
                         "additionalProperties": false

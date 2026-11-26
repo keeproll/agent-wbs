@@ -119,6 +119,7 @@ export function buildOpenApi(operations: readonly Operation[]): Json {
       tags: [op.path.startsWith('/api/planning/') ? 'planning' : op.principal],
       security: op.principal === 'none' ? [] : [op.principal === 'lead' ? { leadSession: [] } : { runnerToken: [] }],
       ...(op.version && { 'x-version-rule': op.version }),
+      ...(op.inputRules?.length && { 'x-input-rules': op.inputRules }),
       ...(allParameters.length > 0 && { parameters: allParameters }),
       ...(op.body && {
         requestBody: {
