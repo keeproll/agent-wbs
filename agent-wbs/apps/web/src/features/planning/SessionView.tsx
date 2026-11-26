@@ -58,7 +58,7 @@ export function SessionView({ planning, cpState, tasks, memos, setMemo, openCp }
   const makeCp = useSave<Proposal, { title: string; reason: string }>({
     target: `Planning ${planning.title} Change Proposal 작성`,
     failTitle: 'Change Proposal을 작성하지 못했습니다',
-    request: () => ({ title: planning.title, reason: cpReason(planning.title, planning.reviews) }),
+    request: () => ({ title: planning.title, reason: cpReason(planning.planningKey, planning.reviews) }),
     run: ({ payload, idempotencyKey }) => client.call('createPlanningProposal', { params: { id: planning.id }, body: payload, idempotencyKey }),
     onSuccess: (created) => {
       void refresh();

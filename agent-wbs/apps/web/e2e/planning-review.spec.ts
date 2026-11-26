@@ -75,14 +75,23 @@ test('3: 조정 메모를 모두 지우고 「메모 저장」하면 빈 메모�
   await expect(memo).toHaveValue('');
 });
 
-test('4: 수정 요청 CP는 항목마다 「제외」 자리를 두되, 서버 API가 없어 누를 수 없고 이유를 보인다', async ({ page }) => {
+test('4: 수정 요청 CP의 「제외」는 POST /api/proposals/:id/exclude로 그 항목 순번과 버전을 보낸다(서버 후속 2차)', async ({ page }) => {
   const api = await fakeApi(page);
-  planningServer(api, { proposals: [{ ...CP2, status: 'changes' } as Proposal] });
+  const changes = { ...CP2, status: 'changes' } as Proposal;
+  planningServer(api, { proposals: [changes] });
   await page.goto('/change/CP-002');
   const buttons = page.getByRole('region', { name: '변경 전 / 후 비교' }).getByRole('button', { name: /제외/ });
   await expect(buttons).toHaveCount(2);
-  for (const b of await buttons.all()) await expect(b).toBeDisabled();
-  await expect(page.getByText('항목 제외는 서버 기능이 준비되면 사용할 수 있습니다', { exact: false })).toBeVisible();
+  const after = { ...changes, ops: changes.ops.slice(0, 1), updatedAt: '2026-11-05T12:00:00.000Z' } as Proposal;
+  api.on(`POST /api/proposals/${CP2.id}/exclude`, (route) => {
+    api.on('GET /api/proposals', (r) => json(r, 200, { items: [after], nextCursor: null }));
+    return json(route, 200, after);
+  });
+  await buttons.nth(1).click();
+  await expect(page.getByText('CP-002에서 항목을 제외했습니다. 확인한 뒤 재제출하세요.')).toBeVisible();
+  const req = api.requests(`POST /api/proposals/${CP2.id}/exclude`)[0];
+  expect(req?.postDataJSON()).toEqual({ updatedAt: CP2.updatedAt, index: 1 });
+  await expect(buttons).toHaveCount(1);
 });
 
 test('5: 재조정 이력 첫 조회가 실패하면 오류와 「다시 시도」를 보이고, 다시 시도로 회복한다', async ({ page }) => {

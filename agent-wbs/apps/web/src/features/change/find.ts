@@ -6,6 +6,7 @@
  * 왜: 오래된 알림의 CP는 첫 쪽에 없을 수 있다. 첫 쪽만 보고 「없다」고 하면 팀장이 열 수 있는 CP를 못 연다.
  */
 import { findInPages as findInCursorPages, PAGE_LIMIT, pageQuery } from '../../shared/api/allPages.ts';
+import { ApiError, type ApiClient } from '../../shared/api/client.ts';
 import type { Proposal } from './types.ts';
 
 /** 한 쪽 크기(계약 최대 200). 공통 규칙(shared/api/allPages.ts)과 같은 값이다. */
@@ -27,4 +28,17 @@ export function findProposal<P extends Pick<Proposal, 'id' | 'cpKey'>>(list: Lis
   const wanted = ref.trim();
   const key = wanted.toUpperCase();
   return findInPages(list, (item) => item.id === wanted || item.cpKey.toUpperCase() === key);
+}
+
+/**
+ * CP 한 건을 서버에서 읽는다(서버 후속 2차 GET /api/proposals/:id — ref는 내부 ID 또는 표시 키 CP-007). 없으면 null.
+ * M3 통합: 단건 조회 API가 생겨 알림 링크·출처 링크의 CP는 목록을 끝까지 넘기지 않고 이것으로 찾는다.
+ */
+export async function getProposalOrNull(client: ApiClient, ref: string, signal?: AbortSignal): Promise<Proposal | null> {
+  try {
+    return await client.call('getProposal', { params: { id: ref.trim() }, ...(signal ? { signal } : {}) });
+  } catch (error) {
+    if (error instanceof ApiError && error.kind === 'notFound') return null;
+    throw error;
+  }
 }

@@ -24,6 +24,8 @@ export const MD = ['prototype/docs/Agent-WBS-설계의도-및-구현가이드.md
 const registered = {
   epoch: 1, cleanup: 'none', id: PROJECT_ID, name: NAME,
   repo: { url: 'https://github.com/verum-sdn/agent-wbs', owner: 'verum-sdn', name: 'agent-wbs', branch: 'main', baseCommit: SHA1 },
+  // 서버 후속 2차(updateProject·checkInputs)가 더한 필드. 등록된 상태에서 필수다.
+  description: 'Agent WBS를 Agent WBS로 개발한다.', startDate: '2026-10-27',
   targetDate: '2027-02-26', instruction: 'prototype/uiux/ 와 prototype/docs/ 설계 문서를 분석하고 Task 식별을 시작하자.',
   constraints: [
     { id: 'c1', name: 'PostgreSQL 16', level: 'must', condition: '' },
@@ -79,7 +81,7 @@ export function bootProject(over: { steps?: Step[]; decisions?: Decision[]; draf
 
 export function activeProject(over: Partial<Active> = {}): ProjectState {
   return {
-    state: 'active', ...registered, approvedAt: T0, approvedTaskCount: 3,
+    state: 'active', ...registered, approvedAt: T0, approvedTaskCount: 3, inputCheckedAt: '2026-11-05T12:45:00.000Z',
     inputs: [{ v: 1, at: T0, commit: SHA1, mdList: MD, changes: [], instruction: '', result: '초기 분석 → 초기 WBS 3건 팀장 승인', taskCount: 3 }],
     ...over,
   } as unknown as ProjectState;

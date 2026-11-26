@@ -255,14 +255,15 @@ test('UAT-EMPTY-02: CP가 없으면 비어 있음과 생기는 조건을 안내�
   await expect(page.locator('.gtr')).toHaveCount(0);
 });
 
-test('알림 링크의 CP가 최근 200건 밖이면 목록을 끝까지 넘겨 찾고, 끝까지 없을 때만 「찾지 못함」', async ({ page }) => {
+test('알림 링크의 CP가 최근 200건 밖이면 단건 조회(GET /api/proposals/:id)로 찾고, 없을 때만 「찾지 못함」', async ({ page }) => {
   const api = await fakeApi(page);
   const many = Array.from({ length: 450 }, (_, i) => cp(500 - i, { title: `CP ${String(500 - i)}`, status: 'applied' }));
   planningServer(api, { proposals: [...many, CP3] });
   await page.goto('/change/CP-003');
   await expect(page.locator('.cp-detail').getByRole('heading', { level: 2, name: 'Task CRUD API 취소' })).toBeVisible();
-  expect(api.calls().filter((c) => c.startsWith('GET /api/proposals?')).some((c) => c.includes('cursor=400'))).toBe(true);
-  expect(api.calls().filter((c) => c.startsWith('GET /api/proposals?')).every((c) => !c.includes('status='))).toBe(true);
+  // M3 통합: 서버 후속 2차가 단건 조회를 더해 목록을 끝까지 넘기지 않는다(표시 키 그대로 보냄).
+  expect(api.calls()).toContain('GET /api/proposals/CP-003');
+  expect(api.calls().filter((c) => c.startsWith('GET /api/proposals?')).every((c) => !c.includes('cursor='))).toBe(true);
   await page.goto('/change/CP-999');
   await expect(page.getByText('변경 제안 CP-999을(를) 찾지 못했습니다.')).toBeVisible();
 });

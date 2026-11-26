@@ -146,7 +146,7 @@ describe('승인 이력·출처 문구', () => {
   });
   it('출처', () => {
     expect(sourceLabel({ kind: 'manual', id: null })).toBe('팀장 직접 작성');
-    expect(sourceLabel({ kind: 'planning', id: 'p1' }, 'Planning 세션 제목')).toBe('Planning 세션 제목');
+    expect(sourceLabel({ kind: 'planning', id: 'p1' }, 'Planning PLN-001')).toBe('Planning PLN-001');
     expect(sourceLabel({ kind: 'message', id: 'MSG-3' })).toBe('메시지 MSG-3');
   });
 });

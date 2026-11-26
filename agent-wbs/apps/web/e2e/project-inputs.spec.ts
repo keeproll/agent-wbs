@@ -194,11 +194,61 @@ for (const c of [
   });
 }
 
-test('계약 대기 자리: 프로젝트 정보 편집·감지 확인 시각은 서버 준비 전까지 비활성 안내만 보인다', async ({ page }) => {
-  await openProject(page);
-  await expect(page.getByRole('region', { name: '프로젝트 정보' }).getByRole('button', { name: '편집' })).toBeDisabled();
-  await expect(page.getByTestId('contract-wait-edit')).toContainText('서버 기능이 준비되면');
-  await expect(page.getByTestId('contract-wait-checked')).toHaveText('Runner 확인 시각 — 서버 연결 대기');
+test('UAT-PROJECT-10: 프로젝트 정보 편집 — 필수·날짜 형식 검사, 저장은 PATCH /api/project(버전·멱등 키), 응답으로 다시 그린다', async ({ page }) => {
+  const api = await openProject(page, activeProject());
+  const card = page.getByRole('region', { name: '프로젝트 정보' });
+  await expect(card).toContainText('2026-10-27 ~ 2027-02-26');
+  await expect(card.getByTestId('pj-desc')).toHaveText('Agent WBS를 Agent WBS로 개발한다.');
+  await card.getByRole('button', { name: '편집' }).click();
+  await card.getByLabel('시작일').fill('2026/11/01');
+  await card.getByRole('button', { name: '저장' }).click();
+  await expect(card.getByRole('alert')).toHaveText('시작일은 필수이며, 날짜는 YYYY-MM-DD 형식이어야 합니다. 시작일을 바꾸면 전체 계획 일정이 다시 계산됩니다.');
+  expect(api.requests('PATCH /api/project')).toHaveLength(0);
+  await card.getByLabel('시작일').fill('2026-11-02');
+  await card.getByLabel('이름').fill('Agent WBS 2차');
+  await card.getByLabel('목표일').fill('');
+  const saved = activeProject({ name: 'Agent WBS 2차', startDate: '2026-11-02', targetDate: null, updatedAt: '2026-11-05T13:00:00.000000Z' } as never);
+  api.on('PATCH /api/project', (route) => { api.on('GET /api/project', (r) => json(r, 200, saved)); return json(route, 200, saved); });
+  await card.getByRole('button', { name: '저장' }).click();
+  await expect(page.getByText('프로젝트 정보를 저장했습니다.')).toBeVisible();
+  const req = api.requests('PATCH /api/project')[0];
+  // PATCH는 계약상 멱등 키 없이 버전(updatedAt)으로 충돌을 막는다.
+  expect(req?.postDataJSON()).toEqual({ updatedAt: (activeProject() as { updatedAt: string }).updatedAt, name: 'Agent WBS 2차', description: 'Agent WBS를 Agent WBS로 개발한다.', startDate: '2026-11-02', targetDate: null });
+  await expect(card).toContainText('2026-11-02 ~ —');
+  await expect(card.getByRole('button', { name: '편집' })).toBeVisible();
+});
+
+test('UAT-PROJECT-10: 편집 중에는 메뉴 이동을 확인하고, 400은 입력을 지킨 채 오류 막대로 알린다', async ({ page }) => {
+  const api = await openProject(page, activeProject());
+  const card = page.getByRole('region', { name: '프로젝트 정보' });
+  await card.getByRole('button', { name: '편집' }).click();
+  await card.getByLabel('이름').fill('바꾼 이름');
+  await page.getByRole('navigation', { name: '주 메뉴' }).getByRole('link', { name: '설정', exact: true }).click();
+  const dialog = page.getByRole('alertdialog');
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: '취소' }).click();
+  await expect(page).toHaveURL('/project');
+  api.on('PATCH /api/project', (route) => json(route, 400, errorBody('VALIDATION_FAILED', { errors: [{ path: '/startDate', rule: 'format', message: '날짜 형식이 아닙니다.' }] })));
+  await card.getByRole('button', { name: '저장' }).click();
+  await expect(page.getByRole('alert').filter({ hasText: '저장하지 못했습니다' })).toBeVisible();
+  await expect(card.getByLabel('이름')).toHaveValue('바꾼 이름');
+});
+
+test('UAT-PROJECT-09 b: 감지 확인 시각은 서버 inputCheckedAt, 「지금 확인」은 POST /api/project/inputs/check(202)만 보내고 시각을 꾸며 내지 않는다', async ({ page }) => {
+  const api = await openProject(page, activeProject());
+  await expect(page.getByTestId('input-checked-at')).toHaveText('Runner 확인 2026-11-05 21:45');
+  api.on('POST /api/project/inputs/check', (route) => json(route, 202, { inputCheckRequest: 3 }));
+  await page.getByRole('button', { name: '지금 확인' }).click();
+  await expect(page.getByText('main 확인을 요청했습니다 — Runner가 확인해 보고하면 확인 시각과 변경 목록이 바뀝니다.')).toBeVisible();
+  const req = api.requests('POST /api/project/inputs/check')[0];
+  expect(req?.postDataJSON()).toEqual({ updatedAt: (activeProject() as { updatedAt: string }).updatedAt });
+  expect(req?.headers()['idempotency-key']).toBeTruthy();
+  await expect(page.getByTestId('input-checked-at')).toHaveText('Runner 확인 2026-11-05 21:45');
+});
+
+test('UAT-PROJECT-09 b: 관측 보고가 아직 없으면 「확인 기록 없음」', async ({ page }) => {
+  await openProject(page, activeProject({ inputCheckedAt: null } as never));
+  await expect(page.getByTestId('input-checked-at')).toHaveText('Runner 확인 기록 없음');
 });
 
 test('GitHub 연결 상태를 읽지 못하면(서버 404) 상태를 모른다고 알린다', async ({ page }) => {

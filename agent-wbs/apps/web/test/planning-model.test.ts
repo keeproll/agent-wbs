@@ -46,8 +46,8 @@ describe('단계 표시(원본 plStep P L5704)', () => {
 
 describe('CP 사유 문구(원본 makeCpFromPlan P L5718)', () => {
   it('주제별 일치·채택 결과와 메모를 잇는다', () => {
-    expect(cpReason('세션 A', [rv({ topic: '응답 Task' }), rv({ topic: '설계 위치', kind: 'diff', choice: 'claude', memo: '범위 작음' })]))
-      .toBe('Planning 세션 A 교차 검토 결과 — 응답 Task: 일치 / 설계 위치: Claude 안 (범위 작음)');
+    expect(cpReason('PLN-007', [rv({ topic: '응답 Task' }), rv({ topic: '설계 위치', kind: 'diff', choice: 'claude', memo: '범위 작음' })]))
+      .toBe('Planning PLN-007 교차 검토 결과 — 응답 Task: 일치 / 설계 위치: Claude 안 (범위 작음)');
   });
 });
 

@@ -17,7 +17,7 @@ import { useSessionDraft } from '../../shared/state/useSessionDraft.tsx';
 import { AreaLoading } from '../../shared/ui/loading.tsx';
 import { LoadError } from '../../shared/ui/LoadError.tsx';
 import { useTaskInfo } from '../change/ChangePage.tsx';
-import { findInPages, findProposal, PAGE_LIMIT } from '../change/find.ts';
+import { findInPages, getProposalOrNull, PAGE_LIMIT } from '../change/find.ts';
 import type { Proposal } from '../change/types.ts';
 import { planStep, type Planning } from './model.ts';
 import { ReplanTab } from './ReplanTab.tsx';
@@ -46,7 +46,8 @@ function useLinkedProposal(proposalId: string | null, proposals: ReturnType<type
   const listed = proposalId ? proposals.data?.items.find((cp) => cp.id === proposalId) : undefined;
   const found = useQuery({
     queryKey: ['findProposal', proposalId ?? ''],
-    queryFn: ({ signal }) => findProposal((query) => client.call('listProposals', { query, signal }), proposalId ?? ''),
+    // 단건 조회(서버 후속 2차 getProposal). 없으면 null → 「찾지 못함」.
+    queryFn: ({ signal }) => getProposalOrNull(client, proposalId ?? '', signal),
     enabled: proposalId !== null && proposals.data !== undefined && !listed,
     meta: { topics: ['proposal'] },
   });
@@ -152,7 +153,7 @@ function PlanningBody({ projectId }: { projectId: string }) {
               return (
                 <button key={p.id} type="button" className={p.id === selected.id ? 'side-i on' : 'side-i'} aria-current={p.id === selected.id ? 'true' : undefined}
                   onClick={() => { go({ session: p.id }); }}>
-                  <span className="side-t">{p.title}</span>
+                  <span className="mono muted">{p.planningKey}</span><span className="side-t">{p.title}</span>
                   <span className="muted">{stepLabel(p)}</span>
                 </button>
               );

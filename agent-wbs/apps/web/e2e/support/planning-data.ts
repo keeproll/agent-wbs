@@ -108,7 +108,7 @@ const rv = (id: string, topic: string, kind: string, codex: string, claude: stri
 const mod = (task: string, field: string, after: unknown) => ({ op: 'modify', task, field, after });
 /** 원본 UI-05의 PLN-001(이견 3건 미조정) */
 export const PLANNING1 = {
-  id: PLN1, title: 'Workflow Phase 상세화 — Runner 메시지 · 응답 연동', scope: 'WP-05 Planning · Gate, WP-06 Runner 연동',
+  id: PLN1, planningKey: 'PLN-001', title: 'Workflow Phase 상세화 — Runner 메시지 · 응답 연동', scope: 'WP-05 Planning · Gate, WP-06 Runner 연동',
   analyses: [
     { agent: 'Codex', at: '2026-11-03T02:05:00.000Z', summary: 'Runner 메시지 응답 처리가 WBS에 빠져 있습니다. Message 상태 머신은 별도 설계 Task로 분리하는 것이 검증에 유리합니다.',
       items: ['WP-06에 「Runner 응답 수신 처리」 BE Task 추가 필요', 'Message 상태 머신(Draft~Cancelled)을 별도 설계 Task로 분리', 'TASK-0011 Completion Gate의 선행 TASK-0009 유지 — Checklist 데이터 확정 후 구현', 'TASK-0012 완료 조건에 ack와 작업 완료 보고 분리를 명시', 'TASK-0010 우선순위는 현행(높음) 유지'] },
@@ -134,7 +134,7 @@ export const PLANNING1 = {
   proposalId: null, createdAt: '2026-11-03T01:20:00.000Z', updatedAt: '2026-11-03T03:00:00.000Z',
 } as unknown as Planning;
 export const PLANNING0 = {
-  id: PLN0, title: '초기 WBS 수립 — Runner API 계약 분리', scope: '전체', analyses: [], reviews: [], proposalId: CP1.id,
+  id: PLN0, planningKey: 'PLN-000', title: '초기 WBS 수립 — Runner API 계약 분리', scope: '전체', analyses: [], reviews: [], proposalId: CP1.id,
   createdAt: '2026-10-27T01:20:00.000Z', updatedAt: '2026-10-27T01:20:00.000Z',
 } as unknown as Planning;
 
@@ -199,6 +199,9 @@ export function planningServer(api: FakeApi, init: { proposals?: Proposal[]; pla
     for (const p of state.proposals) api.on(`POST /api/proposals/${p.id}/${action}`, transition(to, ev, hash));
   }
   for (const p of state.proposals) api.on(`GET /api/proposals/${p.id}/preview`, (route) => json(route, 200, previewOf(byId(p.id) ?? p)));
+  // 단건 조회(서버 후속 2차 getProposal): 내부 ID 또는 표시 키. 없는 CP는 기본 404.
+  const mountGet = (p: Proposal) => { for (const ref of [p.id, p.cpKey]) api.on(`GET /api/proposals/${ref}`, (route) => json(route, 200, byId(p.id) ?? p)); };
+  state.proposals.forEach(mountGet);
 
   /** 새로 만든 CP에도 같은 경로를 단다. */
   const add = (p: Proposal) => {
@@ -207,6 +210,7 @@ export function planningServer(api: FakeApi, init: { proposals?: Proposal[]; pla
       api.on(`POST /api/proposals/${p.id}/${action}`, transition(to, ev, hash));
     }
     api.on(`GET /api/proposals/${p.id}/preview`, (route) => json(route, 200, previewOf(byId(p.id) ?? p)));
+    mountGet(p);
   };
   return { state, add, previewOf };
 }

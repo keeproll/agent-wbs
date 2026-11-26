@@ -198,10 +198,10 @@ const EVENT: Record<string, string> = {
 };
 export const eventLabel = (action: string) => EVENT[action] ?? action;
 
-export function sourceLabel(source: { kind: string | number; id: string | null }, planningTitle?: string): string {
+export function sourceLabel(source: { kind: string | number; id: string | null }, planningLabel?: string): string {
   const kind = String(source.kind);
   if (kind === 'manual') return '팀장 직접 작성';
-  if (kind === 'planning') return planningTitle ?? `Planning ${source.id ?? ''}`;
+  if (kind === 'planning') return planningLabel ?? `Planning ${source.id ?? ''}`;
   if (kind === 'message') return `메시지 ${source.id ?? ''}`;
   if (kind === 'split') return `분할 ${source.id ?? ''}`;
   if (kind === 'input') return `입력 자료 ${source.id ?? ''}`;

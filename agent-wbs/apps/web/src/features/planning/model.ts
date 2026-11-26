@@ -43,9 +43,9 @@ export function planStep(reviews: readonly PlanningReview[], cpStatus: string | 
 }
 
 const CHOICE: Record<string, string> = { codex: 'Codex 안', claude: 'Claude 안', hold: '변경 없음' };
-/** CP 사유(원본 makeCpFromPlan). 원본은 세션 ID를 쓰지만 계약 Planning에 표시 키가 없어 제목을 쓴다(보고서). */
-export function cpReason(title: string, reviews: readonly PlanningReview[]): string {
-  return `Planning ${title} 교차 검토 결과 — ${reviews.map((rv) => `${rv.topic}: ${!isDiff(rv.kind) ? '일치' : (CHOICE[rv.choice ?? ''] ?? '미조정')}${rv.memo ? ` (${rv.memo})` : ''}`).join(' / ')}`;
+/** CP 사유(원본 makeCpFromPlan: 「Planning PLN-001 교차 검토 결과 — …」). M3 통합: 서버 후속 2차의 표시 키 planningKey를 쓴다. */
+export function cpReason(planningKey: string, reviews: readonly PlanningReview[]): string {
+  return `Planning ${planningKey} 교차 검토 결과 — ${reviews.map((rv) => `${rv.topic}: ${!isDiff(rv.kind) ? '일치' : (CHOICE[rv.choice ?? ''] ?? '미조정')}${rv.memo ? ` (${rv.memo})` : ''}`).join(' / ')}`;
 }
 
 const md = (date: string | null) => (date ? date.slice(5, 10) : '—');

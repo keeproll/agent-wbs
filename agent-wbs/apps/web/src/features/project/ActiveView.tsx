@@ -9,11 +9,11 @@
  * 입력 이력 재작성 경고(alerts key=input_history_rewritten)가 열려 있으면 「복구 확인 · 입력 확인 다시 시도」(POST /inputs/recheck, 조정자 결정 2026-11-26)를 보인다.
  */
 import { useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { useApi } from '../../shared/api/ApiProvider.tsx';
 import type { ResponseOf } from '../../shared/api/contract.ts';
-import { invalidateTopics, useApiQuery } from '../../shared/api/queries.ts';
+import { apiKey, invalidateTopics, useApiQuery } from '../../shared/api/queries.ts';
 import { formatDateTime } from '../../shared/format.ts';
 import { useDocumentTitle } from '../../shared/layout/Page.tsx';
 import { useEditGuard } from '../../shared/state/useEditGuard.ts';
@@ -48,22 +48,15 @@ const lines = (a: number, d: number) => [a ? `+${String(a)}` : '', d ? `−${Str
 export function ActiveView({ project }: { project: Active }) {
   useDocumentTitle('프로젝트');
   const [resetOpen, setResetOpen] = useState(false);
+  // 한 화면에 편집 보호(useBlocker)는 하나만 둘 수 있다. 두 카드의 「입력 중」을 합쳐 한 번만 건다(M3-04 b7d57fa와 같은 규칙).
+  const [inputsDirty, setInputsDirty] = useState(false);
+  const [infoDirty, setInfoDirty] = useState(false);
+  useEditGuard(inputsDirty || infoDirty);
   return (
     <div className="page scroll">
       <div className="page-h"><div><h1>프로젝트</h1><p className="page-sub">프로젝트 정보 · 입력 자료 · 상태 · WBS 구조 · Agent 참여 현황 — 프로젝트는 하나만 등록되며, 처음부터 다시 시작하려면 「프로젝트 초기화」</p></div></div>
-      <InputsCard project={project} />
-      <section className="card" aria-labelledby="pj-info-h">
-        {/* 계약 대기(UAT-PROJECT-10): 프로젝트 정보 수정 API가 아직 계약에 없다. 서버 후속 작업이 계약을 정하면 편집 폼을 연결한다. */}
-        <div className="dp-h"><h2 id="pj-info-h">프로젝트 정보</h2><button type="button" className="btn sm" disabled aria-describedby="pj-edit-wait">편집</button></div>
-        <p id="pj-edit-wait" className="fhint" style={{ margin: '0 0 8px' }} data-testid="contract-wait-edit">이름 · 설명 · 시작일 · 목표일 편집은 서버 기능이 준비되면 사용할 수 있습니다.</p>
-        <div className="kv" style={{ gridTemplateColumns: '110px minmax(0,1fr)' }}>
-          <span className="kv-l">프로젝트 ID</span><span className="kv-v mono">{project.id}</span>
-          <span className="kv-l">이름</span><span className="kv-v">{project.name}</span>
-          <span className="kv-l">상태</span><span className="kv-v"><span className="tag">진행 중</span></span>
-          <span className="kv-l">목표일</span><span className="kv-v mono">{project.targetDate ?? '—'}</span>
-          <span className="kv-l">초기 WBS 승인</span><span className="kv-v">{formatDateTime(project.approvedAt)} · Task {project.approvedTaskCount}건 · 기준 일정 v1</span>
-        </div>
-      </section>
+      <InputsCard project={project} onDirty={setInputsDirty} />
+      <ProjectInfoCard project={project} onDirty={setInfoDirty} />
       <section className="card danger-zone" aria-labelledby="pj-reset-h">
         <div className="dp-h"><h2 id="pj-reset-h">프로젝트 초기화</h2><button type="button" className="btn danger" onClick={() => { setResetOpen(true); }}>프로젝트 초기화…</button></div>
         <p className="fhint" style={{ margin: 0 }}>진행 중인 모든 작업을 중지하고, 지금까지의 기록 · 결과 · 산출물을 <b>모두 삭제</b>합니다. Agent WBS와 Runner는 프로젝트 등록 전 상태로 돌아가고, 작업 저장소는 등록 시점 기준 커밋으로 되돌아갑니다. 삭제된 내용은 복구할 수 없습니다. 입력 자료(prototype/ (uiux · docs))와 등록 이전부터 저장소에 있던 코드는 삭제하지 않습니다.</p>
@@ -73,7 +66,104 @@ export function ActiveView({ project }: { project: Active }) {
   );
 }
 
-function InputsCard({ project }: { project: Active }) {
+/** 날짜 칸 형식(원본 P pj.dateErr: YYYY-MM-DD) */
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+interface InfoForm { name: string; description: string; startDate: string; targetDate: string }
+const infoOf = (p: Active): InfoForm => ({ name: p.name, description: p.description, startDate: p.startDate, targetDate: p.targetDate ?? '' });
+/** 저장 전 검사(원본 P L2056 문구). 이름·시작일 필수, 날짜는 YYYY-MM-DD. */
+export function infoProblem(f: InfoForm): string | null {
+  if (!f.name.trim()) return '이름을 입력하세요.';
+  if (!DATE_RE.test(f.startDate.trim()) || (f.targetDate.trim() !== '' && !DATE_RE.test(f.targetDate.trim()))) {
+    return '시작일은 필수이며, 날짜는 YYYY-MM-DD 형식이어야 합니다. 시작일을 바꾸면 전체 계획 일정이 다시 계산됩니다.';
+  }
+  return null;
+}
+
+/**
+ * 프로젝트 정보 읽기·편집(UI-02, 원본 P L2030–2058, UAT-PROJECT-10). 서버 후속 2차의 PATCH /api/project(updateProject)에 연결했다(M3 통합).
+ * - 저장은 공통 useSave: 버튼 「저장 중…」, 실패 시 입력 유지·오류 막대, 400은 칸 아래, 409는 충돌 창.
+ * - 날짜를 바꾸면 서버가 같은 트랜잭션에서 일정을 다시 계산하고, 정책 임계를 넘으면 새 기준을 추가한다(원래 v1은 보존). 화면은 응답으로 다시 그린다.
+ * - 상태(원본의 상태 버튼)는 편집하지 않는다. 계약 본문에 없고, 상태는 등록·승인·초기화 흐름이 정한다.
+ */
+function ProjectInfoCard({ project, onDirty }: { project: Active; onDirty: (dirty: boolean) => void }) {
+  const { client } = useApi();
+  const queryClient = useQueryClient();
+  const reloadProject = useProjectReload();
+  const [form, setForm] = useState<InfoForm | null>(null);
+  const [show, setShow] = useState(false);
+  const editing = form !== null;
+  const dirty = editing && JSON.stringify(form) !== JSON.stringify(infoOf(project));
+  useEffect(() => { onDirty(dirty); }, [dirty, onDirty]);
+  const { restoreOffer } = useSessionDraft<InfoForm>({
+    id: 'project:info', label: '프로젝트 정보 편집', value: dirty ? form : null,
+    onRestore: (data) => { setForm(data); },
+  });
+  const problem = form ? infoProblem(form) : null;
+  interface InfoBody { updatedAt: string; name: string; description: string; startDate: string; targetDate: string | null }
+  const bodyOf = (updatedAt: string, f: InfoForm): InfoBody => ({
+    updatedAt, name: f.name.trim(), description: f.description.trim(), startDate: f.startDate.trim(), targetDate: f.targetDate.trim() || null,
+  });
+  const save = useSave<ProjectState, InfoBody>({
+    target: '프로젝트 정보 저장',
+    failTitle: '저장하지 못했습니다',
+    mine: '프로젝트 정보 편집',
+    request: () => bodyOf(project.updatedAt, form ?? infoOf(project)),
+    run: ({ payload, idempotencyKey }) => client.call('updateProject', { body: payload, idempotencyKey }),
+    onSuccess: (result, payload) => {
+      queryClient.setQueryData(apiKey('getProject', {}), result);
+      void invalidateTopics(queryClient, ['project', 'schedule']);
+      // 저장한 내용과 지금 입력이 같을 때만 편집을 닫는다(그 사이 더 고쳤으면 이어서 편집).
+      setForm((cur) => (cur && JSON.stringify(bodyOf(payload.updatedAt, cur)) === JSON.stringify(payload) ? null : cur));
+      setShow(false);
+    },
+    successNotice: '프로젝트 정보를 저장했습니다.',
+    onConflictReload: async ({ signal }) => { await reloadProject(signal); setForm(null); },
+    // 다시 적용: 최신 버전 위에 내 입력을 그대로 보낸다(공통 reapplyRequest).
+    reapplyRequest: async ({ signal }) => {
+      const latest = await reloadProject(signal);
+      if (!('updatedAt' in latest)) throw new Error('등록된 프로젝트가 없습니다.');
+      return bodyOf(latest.updatedAt, form ?? infoOf(project));
+    },
+  });
+  const submit = () => {
+    setShow(true);
+    if (problem) return;
+    void save.save();
+  };
+  return (
+    <section className="card" aria-labelledby="pj-info-h">
+      {restoreOffer}
+      <div className="dp-h"><h2 id="pj-info-h">프로젝트 정보</h2>{!editing && <button type="button" className="btn sm" onClick={() => { setForm(infoOf(project)); setShow(false); }}>편집</button>}</div>
+      {!editing ? (
+        <>
+          <div className="kv" style={{ gridTemplateColumns: '110px minmax(0,1fr)' }}>
+            <span className="kv-l">프로젝트 ID</span><span className="kv-v mono">{project.id}</span>
+            <span className="kv-l">이름</span><span className="kv-v">{project.name}</span>
+            <span className="kv-l">상태</span><span className="kv-v"><span className="tag">진행 중</span></span>
+            <span className="kv-l">기간</span><span className="kv-v mono">{project.startDate} ~ {project.targetDate ?? '—'}</span>
+            <span className="kv-l">초기 WBS 승인</span><span className="kv-v">{formatDateTime(project.approvedAt)} · Task {project.approvedTaskCount}건 · 기준 일정 v1</span>
+          </div>
+          {project.description && <p style={{ margin: 0, color: '#3E4651' }} data-testid="pj-desc">{project.description}</p>}
+        </>
+      ) : (
+        <div className="form">
+          <div className="frow"><label className="flabel" htmlFor="pj-n">이름<span className="req">필수</span></label><div className="fctl"><input id="pj-n" className="inp" value={form.name} onChange={(e) => { setForm({ ...form, name: e.target.value }); }} /></div></div>
+          <div className="frow"><label className="flabel" htmlFor="pj-s">시작일<span className="req">필수</span></label><div className="fctl"><input id="pj-s" className="inp mono-in" style={{ maxWidth: 200 }} placeholder="YYYY-MM-DD" value={form.startDate} onChange={(e) => { setForm({ ...form, startDate: e.target.value }); }} /></div></div>
+          <div className="frow"><label className="flabel" htmlFor="pj-t">목표일<span className="opt">선택</span></label><div className="fctl"><input id="pj-t" className="inp mono-in" style={{ maxWidth: 200 }} placeholder="YYYY-MM-DD" value={form.targetDate} onChange={(e) => { setForm({ ...form, targetDate: e.target.value }); }} /></div></div>
+          {show && problem && <div className="frow"><span /><span className="ferr" role="alert">{problem}</span></div>}
+          <div className="frow"><label className="flabel" htmlFor="pj-d">설명<span className="opt">선택</span></label><div className="fctl"><textarea id="pj-d" rows={3} className="inp" value={form.description} onChange={(e) => { setForm({ ...form, description: e.target.value }); }} /></div></div>
+          <div className="form-acts">
+            <button type="button" className="btn" disabled={save.busy} onClick={() => { setForm(null); setShow(false); }}>취소</button>
+            <BusyButton busy={save.busy} busyLabel="저장 중…" disabled={show && !!problem} onClick={submit}>저장</BusyButton>
+          </div>
+        </div>
+      )}
+      {save.conflictModal}
+    </section>
+  );
+}
+
+function InputsCard({ project, onDirty }: { project: Active; onDirty: (dirty: boolean) => void }) {
   const { client } = useApi();
   const queryClient = useQueryClient();
   const notify = useNotice();
@@ -92,7 +182,7 @@ function InputsCard({ project }: { project: Active }) {
 
   const [instr, setInstr] = useState('');
   const dirty = instr.trim() !== '';
-  useEditGuard(dirty);
+  useEffect(() => { onDirty(dirty); }, [dirty, onDirty]);
   const { restoreOffer } = useSessionDraft<{ instr: string }>({
     id: `project:inputs:${project.inputHead}`, label: '입력 변경 분석 지시', value: dirty ? { instr } : null,
     onRestore: (data) => { setInstr(data.instr); },
@@ -162,12 +252,26 @@ function InputsCard({ project }: { project: Active }) {
     onConflictReload: reload,
     reapplyRequest: async ({ signal }) => ({ updatedAt: (await latest(signal)).updatedAt }),
   });
+  // 「지금 확인」(원본 P L1997 inp.fetch, UAT-PROJECT-09 b): 서버 후속 2차의 POST /api/project/inputs/check(checkInputs)에 연결(M3 통합).
+  // 서버는 요청 번호만 올리고(202), 실제 확인 시각(inputCheckedAt)은 Runner가 main을 관측해 보고할 때 바뀐다. 그래서 요청 직후 시각을 꾸며 내지 않는다.
+  const check = useSave<ResponseOf<'checkInputs'>, { updatedAt: string }>({
+    target: '입력 자료 지금 확인',
+    failTitle: '확인을 요청하지 못했습니다',
+    request: () => ({ updatedAt: project.updatedAt }),
+    run: ({ payload, idempotencyKey }) => client.call('checkInputs', { body: payload, idempotencyKey }),
+    onSuccess: () => { notify('main 확인을 요청했습니다 — Runner가 확인해 보고하면 확인 시각과 변경 목록이 바뀝니다.'); refresh(); },
+    onRejected: refresh,
+    onConflictReload: reload,
+    reapplyRequest: async ({ signal }) => ({ updatedAt: (await latest(signal)).updatedAt }),
+  });
   const busyAny = analyze.busy || skip.busy;
 
   const cols = '50px 148px 84px minmax(200px,1.4fr) minmax(160px,1fr) minmax(150px,1fr) 84px';
   return (
     <section className="card" aria-labelledby="in-h">
-      <div className="dp-h"><h2 id="in-h">입력 자료 · 저장소 <span className="tag">GitHub</span></h2></div>
+      <div className="dp-h"><h2 id="in-h">입력 자료 · 저장소 <span className="tag">GitHub</span></h2>
+        <BusyButton small variant="default" busy={check.busy} busyLabel="main 확인 중…" disabled={ghBad} title={ghBad ? 'GitHub 인증이 없어 확인할 수 없습니다 — 설정 → GitHub 연결을 확인하세요.' : undefined} onClick={() => { void check.save(); }}>지금 확인</BusyButton>
+      </div>
       {github.isError && !gh && <div className="banner warn" data-testid="gh-unknown"><div className="banner-b">GitHub 연결 상태를 확인하지 못했습니다 — 입력 변경 확인이 멈췄는지 알 수 없습니다. 설정 → Runner · 실행 환경 → GitHub 연결을 확인하세요.</div></div>}
       {ghBad && <div className="banner danger"><div className="banner-b">GitHub 인증 실패 — 입력 변경 확인이 멈춰 있습니다. 설정 → Runner · 실행 환경 → GitHub 연결을 확인하세요.</div></div>}
       {rewritten && (
@@ -190,7 +294,7 @@ function InputsCard({ project }: { project: Active }) {
       {pend.length > 0 ? (
         <div className="in-pend" data-testid="input-pending">
           {restoreOffer}
-          <div className="dec-h"><b>입력 자료 변경 감지</b><span className="sc sc-warn">팀장 확인 대기</span><span className="sp" /><span className="muted" style={{ fontSize: 12 }}><DetectCheckedAt /> · Runner가 main을 주기적으로 확인 (src/ 등 입력 외 경로 변경은 무시)</span></div>
+          <div className="dec-h"><b>입력 자료 변경 감지</b><span className="sc sc-warn">팀장 확인 대기</span><span className="sp" /><span className="muted" style={{ fontSize: 12 }}><DetectCheckedAt at={project.inputCheckedAt} /> · Runner가 main을 주기적으로 확인 (src/ 등 입력 외 경로 변경은 무시)</span></div>
           <p className="dec-p">분석하지 않은 입력 변경 커밋 {pend.length}개 — 파일 {files.length}개 (프로토타입 {files.filter((f) => f.area === '프로토타입').length} · 설계 문서 {files.filter((f) => f.area === '설계 문서').length})</p>
           <div className="gtb" style={{ margin: '8px 0' }} role="table" aria-label="변경 커밋">{pend.map((c) => <div key={c.sha} className="gtr" role="row" style={{ gridTemplateColumns: '80px 148px minmax(200px,1fr) 150px', minWidth: 0 }}><span className="gc mono" role="cell"><b>{shortSha(c.sha)}</b></span><span className="gc mono" role="cell">{formatDateTime(c.at)}</span><span className="gc" role="cell">{c.message}</span><span className="gc muted" role="cell">{c.author} · 파일 {c.files.length}</span></div>)}</div>
           <div className="gtb" style={{ margin: '0 0 8px' }} role="table" aria-label="변경 파일">{files.map((f) => { const [c, l] = CHANGE_CHIP[f.change] ?? ['sc sc-none', f.change]; return <div key={f.path} className="gtr" role="row" style={{ gridTemplateColumns: '90px minmax(220px,1fr) 60px 90px', minWidth: 0 }}><span className="gc" role="cell">{f.area}</span><span className="gc mono" role="cell">{f.path}</span><span className="gc" role="cell"><span className={c}>{l}</span></span><span className="gc mono muted" role="cell">{lines(f.added, f.deleted)}</span></div>; })}</div>
@@ -201,7 +305,7 @@ function InputsCard({ project }: { project: Active }) {
           </div>
         </div>
       ) : (
-        <p className="fhint" style={{ margin: '0 0 10px' }} data-testid="input-none">새 입력 변경 없음 — <DetectCheckedAt /> · Runner가 main을 주기적으로 확인합니다 (src/ 등 입력 외 경로 변경은 무시). prototype/uiux/ 또는 prototype/docs/ 를 바꿔 main에 push하면 여기에 나타나고, 팀장이 확인한 뒤 분석합니다.{skipped.length > 0 && ` 확인함 · 분석 안 함 ${String(skipped.length)}개 — 다음 분석 때 함께 비교.`}</p>
+        <p className="fhint" style={{ margin: '0 0 10px' }} data-testid="input-none">새 입력 변경 없음 — <DetectCheckedAt at={project.inputCheckedAt} /> · Runner가 main을 주기적으로 확인합니다 (src/ 등 입력 외 경로 변경은 무시). prototype/uiux/ 또는 prototype/docs/ 를 바꿔 main에 push하면 여기에 나타나고, 팀장이 확인한 뒤 분석합니다.{skipped.length > 0 && ` 확인함 · 분석 안 함 ${String(skipped.length)}개 — 다음 분석 때 함께 비교.`}</p>
       )}
       <div className="gtb" style={{ margin: 0 }} role="table" aria-label="입력 자료 버전">
         <div className="gtr h" role="row" style={{ gridTemplateColumns: cols, minWidth: 0 }}><span className="gc" role="columnheader">버전</span><span className="gc" role="columnheader">고정</span><span className="gc" role="columnheader">커밋</span><span className="gc" role="columnheader">변경 파일</span><span className="gc" role="columnheader">팀장 지시</span><span className="gc" role="columnheader">분석 결과</span><span className="gc" role="columnheader">출처 Task</span></div>
@@ -223,15 +327,15 @@ function InputsCard({ project }: { project: Active }) {
         </div>
       )}
       <RepoLayout cols="140px minmax(200px,1.4fr) minmax(160px,1fr)" margin="10px 0 0" />
-      {analyze.conflictModal}{skip.conflictModal}{retry.conflictModal}
+      {analyze.conflictModal}{skip.conflictModal}{retry.conflictModal}{check.conflictModal}
     </section>
   );
 }
 
 /**
- * 감지 확인 시각 자리(계약 대기, UAT-PROJECT-09 b). 지금 계약의 프로젝트 응답에는 Runner가 마지막으로 main을 확인한 시각이 없다.
- * 서버 후속 작업이 필드를 정하면 그 값을 formatDateTime으로 보인다. 그때까지 다른 시각으로 대신하지 않는다.
+ * 감지 확인 시각(UAT-PROJECT-09 b, 원본 P L6952 「Runner 확인 …」). 서버 후속 2차의 inputCheckedAt(Runner가 main을 마지막으로 관측한 시각)을 보인다.
+ * 아직 관측 보고가 없으면 다른 시각으로 대신하지 않고 「확인 기록 없음」을 보인다.
  */
-function DetectCheckedAt() {
-  return <span data-testid="contract-wait-checked">Runner 확인 시각 — 서버 연결 대기</span>;
+function DetectCheckedAt({ at }: { at: string | null }) {
+  return <span data-testid="input-checked-at">{at ? `Runner 확인 ${formatDateTime(at)}` : 'Runner 확인 기록 없음'}</span>;
 }

@@ -18,9 +18,9 @@ import { useSessionDraft } from '../../shared/state/useSessionDraft.tsx';
 import { BusyButton } from '../../shared/ui/BusyButton.tsx';
 import { useConfirm, useNotice } from '../../shared/ui/feedback.tsx';
 import { AreaLoading } from '../../shared/ui/loading.tsx';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useProposalRefresh } from './ChangePage.tsx';
-import { findProposal } from './find.ts';
+import { getProposalOrNull } from './find.ts';
 import { cpStatus, diffRows, eventLabel, holdReasonText, impactRows, judgementRows, sourceLabel, type TaskInfo } from './model.ts';
 import type { Proposal, ProposalPreview } from './types.ts';
 import { LINK } from '../../shared/links.ts';
@@ -51,10 +51,11 @@ const ACTION_NAME: Record<ActionId, string> = {
   submitProposal: '제출', rejectProposal: '반려', requestChangesProposal: '수정 요청', approveProposal: '승인', applyProposal: 'WBS 반영',
 };
 
-export function ProposalDetail({ cp, tasks, planningTitle, comment, setComment }: {
+export function ProposalDetail({ cp, tasks, planningLabel, comment, setComment }: {
   cp: Proposal;
   tasks: ReadonlyMap<string, TaskInfo> | null;
-  planningTitle: string | undefined;
+  /** 출처 Planning 표시(「Planning PLN-001」). 모르면 undefined */
+  planningLabel: string | undefined;
   comment: string;
   setComment: (value: string) => void;
 }) {
@@ -82,6 +83,7 @@ export function ProposalDetail({ cp, tasks, planningTitle, comment, setComment }
   const banner = BANNER[status] ?? ['info', st.l];
   const author = cp.events[0]?.actor ?? '';
   const noOps = cp.ops.length === 0;
+  const exclude = useExclude(cp);
 
   return (
     <div className="card cp-detail">
@@ -94,7 +96,7 @@ export function ProposalDetail({ cp, tasks, planningTitle, comment, setComment }
         </div>
         <span style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           {String(cp.source.kind) === 'planning' && cp.source.id && (
-            <Link className="btn sm" to={LINK.planning(cp.source.id)}>출처: {sourceLabel(cp.source, planningTitle ? `Planning ${planningTitle}` : undefined)}</Link>
+            <Link className="btn sm" to={LINK.planning(cp.source.id)}>출처: {sourceLabel(cp.source, planningLabel)}</Link>
           )}
           {!['manual', 'planning'].includes(String(cp.source.kind)) && <span className="muted">출처: {sourceLabel(cp.source)}</span>}
           <span className={st.c}>{st.l}</span>
@@ -117,18 +119,19 @@ export function ProposalDetail({ cp, tasks, planningTitle, comment, setComment }
               <span className="gc daft">{r.after}</span>
               <span className="gc">
                 {status === 'changes' && (
-                  // 원본의 「제외」 자리(P L1707). 계약에 CP 항목 제외 API가 없어 누를 수 없다(서버 후속 작업). 생기면 이 버튼에 연결한다.
-                  <button type="button" className="btn ghost sm" disabled aria-describedby={`cp-exclude-${cp.id}`} aria-label={`${r.target} ${r.field} 제외`}>제외</button>
+                  // 원본의 「제외」(P L1707). 서버 후속 2차의 POST /api/proposals/:id/exclude(excludeProposalOp)에 연결했다(M3 통합).
+                  <BusyButton small variant="ghost" busy={exclude.busyIndex === i} busyLabel="제외 중…" disabled={exclude.busyIndex !== null} aria-label={`${r.target} ${r.field} 제외`} onClick={() => { exclude.run(i); }}>제외</BusyButton>
                 )}
               </span>
             </div>
           ))}
         </div>
         {status === 'changes' && (
-          <p className="fhint" id={`cp-exclude-${cp.id}`} style={{ margin: '-8px 0 0' }}>
-            항목 제외는 서버 기능이 준비되면 사용할 수 있습니다. 지금은 변경 항목을 바꿀 수 없어, 그대로 재제출하거나 새 변경 제안을 작성해야 합니다.
+          <p className="fhint" style={{ margin: '-8px 0 0' }}>
+            받아들이지 않을 항목은 「제외」로 빼고 재제출합니다. 모든 항목을 빼면 재제출할 수 없으니 새 변경 제안을 작성하세요.
           </p>
         )}
+        {exclude.conflictModal}
       </div>
       {!closed && preview.isPending && <AreaLoading label="영향 분석 불러오는 중" />}
       {issues.length > 0 && (
@@ -203,7 +206,7 @@ function Actions({ cp, preview, issues, holds, comment, setComment, err, setErr 
 
   /** 충돌 뒤 다시 적용: 서버에서 이 CP와 미리보기를 새로 읽는다(캐시를 쓰지 않는다). */
   const latest = async (signal: AbortSignal) => {
-    const fresh = await findProposal((query) => client.call('listProposals', { query, signal }), cp.id);
+    const fresh = await getProposalOrNull(client, cp.id, signal);
     if (!fresh) throw new Error(`${cp.cpKey}를 다시 찾지 못했습니다.`);
     const hash = ['applied', 'rejected'].includes(String(fresh.status)) ? '' : (await client.call('previewProposal', { params: { id: cp.id }, signal })).previewHash;
     return { updatedAt: fresh.updatedAt, previewHash: hash };
@@ -319,3 +322,40 @@ function Actions({ cp, preview, issues, holds, comment, setComment, err, setErr 
   return modals;
 }
 
+/**
+ * 「제외」(수정 요청 중인 CP의 변경 항목 하나 빼기, excludeProposalOp). 공통 useSave 규칙을 쓴다.
+ * - 보내는 값: 화면이 본 CP 버전(updatedAt)과 항목 순번(index).
+ * - 충돌(409)의 「다시 적용」: 최신 CP를 읽어 **같은 내용의 항목**을 다시 찾아 그 순번으로 보낸다.
+ *   왜 순번을 그대로 쓰지 않나: 그 사이 다른 항목이 빠졌으면 같은 순번이 다른 항목을 가리킨다. 같은 항목이 없으면 이유를 보이고 보내지 않는다.
+ */
+function useExclude(cp: Proposal) {
+  const { client } = useApi();
+  const notify = useNotice();
+  const refresh = useProposalRefresh();
+  const [busyIndex, setBusyIndex] = useState<number | null>(null);
+  const picked = useRef<number | null>(null);
+  const sameOp = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  const { save, conflictModal } = useSave<Proposal, { updatedAt: string; index: number }>({
+    target: `${cp.cpKey} 항목 제외`,
+    failTitle: '제외하지 못했습니다',
+    mine: '변경 항목 제외',
+    request: () => ({ updatedAt: cp.updatedAt, index: picked.current ?? 0 }),
+    run: ({ payload, idempotencyKey }) => client.call('excludeProposalOp', { params: { id: cp.id }, body: payload, idempotencyKey }),
+    onSuccess: () => { notify(`${cp.cpKey}에서 항목을 제외했습니다. 확인한 뒤 재제출하세요.`); void refresh(); },
+    onRejected: () => { void refresh(); },
+    onConflictReload: async ({ signal }) => { await client.call('getProposal', { params: { id: cp.id }, signal }); if (!signal.aborted) await refresh(); },
+    reapplyRequest: async ({ signal }) => {
+      const latest = await client.call('getProposal', { params: { id: cp.id }, signal });
+      const op = cp.ops[picked.current ?? -1];
+      const index = latest.ops.findIndex((o) => sameOp(o, op));
+      if (index < 0) throw new Error('제외하려던 항목이 최신 변경 제안에 없습니다.');
+      return { updatedAt: latest.updatedAt, index };
+    },
+  });
+  const run = (index: number) => {
+    picked.current = index;
+    setBusyIndex(index);
+    void save().finally(() => { setBusyIndex(null); });
+  };
+  return { run, busyIndex, conflictModal };
+}

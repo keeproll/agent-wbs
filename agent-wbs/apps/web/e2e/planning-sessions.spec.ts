@@ -73,7 +73,7 @@ test('시나리오 5: 독립 분석 비교 → 미조정은 CP 작성 차단 →
   const created = api.requests(`POST /api/plannings/${PLANNING1.id}/proposals`)[0];
   expect(created?.postDataJSON()).toEqual({
     title: PLANNING1.title,
-    reason: `Planning ${PLANNING1.title} 교차 검토 결과 — Runner 응답 수신 처리 Task 추가: 일치 / TASK-0012 완료 조건 보강: 일치 / Message 상태 머신 설계 위치: Claude 안 (계약 범위가 작음) / TASK-0011 선행 관계: Codex 안 / TASK-0010 우선순위: Claude 안`,
+    reason: `Planning PLN-001 교차 검토 결과 — Runner 응답 수신 처리 Task 추가: 일치 / TASK-0012 완료 조건 보강: 일치 / Message 상태 머신 설계 위치: Claude 안 (계약 범위가 작음) / TASK-0011 선행 관계: Codex 안 / TASK-0010 우선순위: Claude 안`,
   });
   expect(created?.headers()['idempotency-key']).toBeTruthy();
   // 같은 Diff가 CP에 들어간다

@@ -47,7 +47,7 @@ describe('대시보드 계산(UI-01, P dashVM L6274–6333)', () => {
     expect(p[0]?.emptyT).toBe('지연 예상 Task가 없습니다.');
     expect(p[1]?.items[0]).toMatchObject({ tag: '승인 대기', tagC: 'cps c-review', to: '/change/cp1' });
     expect(p[1]?.nCls).toBe('bad');
-    expect(p[2]?.items[0]).toMatchObject({ tag: 'QA · Codex', to: '/exec?task=TASK-0004&attempt=a4' });
+    expect(p[2]?.items[0]).toMatchObject({ tag: 'QA · Codex', to: '/exec/TASK-0004?att=a4' });
     expect(p[2]?.nCls).toBe('');
     expect(p[3]?.items[0]).toMatchObject({ tag: 'FAIL · 결함 2', tagC: 'vf v-fail' });
     expect(p[4]?.items[0]).toMatchObject({ tag: '미충족 2 — 필수 산출물, 팀장 승인', to: '/wbs/TASK-0009?tab=checklist' });
@@ -77,13 +77,13 @@ describe('대시보드 계산(UI-01, P dashVM L6274–6333)', () => {
       ...(i % 2 ? { status: 'completed' } : { result: 'PASS' }),
     })) as unknown as Dashboard['recent']);
     expect(r).toHaveLength(8);
-    expect(r[0]).toMatchObject({ kind: '실행', tag: '완료', to: '/exec?task=TASK-0007&attempt=x9' });
+    expect(r[0]).toMatchObject({ kind: '실행', tag: '완료', to: '/exec/TASK-0007?att=x9' });
     expect(r[1]).toMatchObject({ kind: '검증', tag: 'PASS', to: '/verify?sel=x8' });
   });
 
   it('알림 이동: Task 알림은 그 Task 실행, 나머지는 해당 화면·설정 탭', () => {
     const a = (key: string, taskKey: string | null = null) => ({ id: '1', key, severity: 'warn', taskKey, target: null, text: 't', at: '2026-11-05T12:45:00.000Z' }) as AlertItem;
-    expect(alertLink(a('rework-limit:abc', 'TASK-0007'))).toEqual({ to: '/exec?task=TASK-0007', label: 'TASK-0007 실행 보기' });
+    expect(alertLink(a('rework-limit:abc', 'TASK-0007'))).toEqual({ to: '/exec/TASK-0007', label: 'TASK-0007 실행 보기' });
     expect(alertLink(a('input_history_rewritten')).to).toBe('/project');
     expect(alertLink(a('external-write-blocked')).to).toBe('/settings/runner');
     expect(alertLink(a('mail:fail')).to).toBe('/settings/report');

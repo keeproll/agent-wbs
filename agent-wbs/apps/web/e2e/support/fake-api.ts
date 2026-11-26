@@ -15,7 +15,7 @@ export const SESSION: ResponseOf<'getSession'> = {
 export const ACTIVE_PROJECT = {
   state: 'active', id: 'p1', name: 'Verum-SDN Agent WBS — Self Development', epoch: 1, cleanup: 'none',
   repo: { url: 'https://github.com/verum-sdn/agent-wbs', owner: 'verum-sdn', name: 'agent-wbs', branch: 'main', baseCommit: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678' },
-  targetDate: null, instruction: '', constraints: [], registeredAt: '2026-10-27T00:40:00.000Z',
+  targetDate: null, description: '', startDate: '2026-10-27', inputCheckedAt: null, instruction: '', constraints: [], registeredAt: '2026-10-27T00:40:00.000Z',
   inputs: [{ v: 1, at: '2026-10-27T00:40:00.000Z', commit: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678', mdList: [], changes: [], instruction: '', result: null, taskCount: 12 }],
   changeCommits: [], inputHead: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678', inputJob: null, updatedAt: '2026-11-01T00:00:00.000000Z',
   approvedAt: '2026-11-01T00:00:00.000Z', approvedTaskCount: 12,

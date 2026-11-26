@@ -16,7 +16,7 @@ import { Page } from '../../shared/layout/Page.tsx';
 import { useEditGuard } from '../../shared/state/useEditGuard.ts';
 import { AreaLoading } from '../../shared/ui/loading.tsx';
 import { LoadError } from '../../shared/ui/LoadError.tsx';
-import { findProposal, PAGE_LIMIT } from './find.ts';
+import { getProposalOrNull, PAGE_LIMIT } from './find.ts';
 import { cpStatus, sourceLabel, type TaskInfo } from './model.ts';
 import { ProposalDetail } from './ProposalDetail.tsx';
 import { ProposalModal } from './ProposalModal.tsx';
@@ -63,16 +63,17 @@ function ChangeBody({ projectId }: { projectId: string }) {
 
   const items = list.data?.items ?? [];
   const inList = cpRef ? items.find((p) => p.id === cpRef || p.cpKey.toUpperCase() === cpRef.toUpperCase()) : items[0];
-  // 주소의 CP가 최근 목록에 없으면 끝까지 넘겨 찾는다(첫 쪽에 없다고 「없음」으로 처리하지 않는다).
+  // 주소의 CP가 최근 목록에 없으면 서버에서 한 건을 읽는다(서버 후속 2차 getProposal — CP 키 또는 id). 첫 쪽에 없다고 「없음」으로 처리하지 않는다.
   const deep = useQuery({
     queryKey: ['findProposal', cpRef ?? ''],
-    queryFn: () => findProposal((query) => client.call('listProposals', { query }), cpRef ?? ''),
+    queryFn: ({ signal }) => getProposalOrNull(client, cpRef ?? '', signal),
     // 최근 목록(캐시)에 없으면 언제나 서버에서 새로 넘겨 본다. 방금 만든 CP처럼 캐시가 낡았을 수도 있기 때문이다.
     enabled: cpRef !== undefined && list.data !== undefined && !inList,
     meta: { topics: ['proposal'] },
   });
   const selected: Proposal | undefined = inList ?? deep.data ?? undefined;
-  const planningTitle = (id: string | null) => plannings.data?.items.find((p) => p.id === id)?.title;
+  /** 출처 Planning 표시(원본 P L5998 srcL 「Planning PLN-000」). 서버 후속 2차의 표시 키 planningKey를 쓴다. 목록에 없으면 sourceLabel이 id로 대신한다. */
+  const planningLabel = (id: string | null) => { const pl = plannings.data?.items.find((p) => p.id === id); return pl ? `Planning ${pl.planningKey}` : undefined; };
 
   const pick = (cp: Proposal) => { void guard(() => { setComment(''); void navigate(LINK.change(cp.cpKey)); }); };
 
@@ -97,7 +98,7 @@ function ChangeBody({ projectId }: { projectId: string }) {
               <button key={p.id} type="button" className={selected?.id === p.id ? 'side-i on' : 'side-i'} aria-current={selected?.id === p.id ? 'true' : undefined} onClick={() => { pick(p); }}>
                 <span className="side-r"><span className="mono muted">{p.cpKey}</span><span className={st.c}>{st.l}</span></span>
                 <span className="side-t">{p.title}</span>
-                <span className="muted">출처 {String(p.source.kind) === 'manual' ? '직접 작성' : sourceLabel(p.source, planningTitle(p.source.id))} · 변경 {p.ops.length}건</span>
+                <span className="muted">출처 {String(p.source.kind) === 'manual' ? '직접 작성' : sourceLabel(p.source, planningLabel(p.source.id))} · 변경 {p.ops.length}건</span>
               </button>
             );
           })}
@@ -123,7 +124,7 @@ function ChangeBody({ projectId }: { projectId: string }) {
               key={selected.id}
               cp={selected}
               tasks={tasks}
-              planningTitle={planningTitle(selected.source.id)}
+              planningLabel={planningLabel(selected.source.id)}
               comment={comment}
               setComment={setComment}
             />
