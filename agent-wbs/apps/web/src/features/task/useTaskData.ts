@@ -67,8 +67,9 @@ export function useTaskSave<T, P = undefined>(taskKey: string, options: TaskSave
   const last = useRef<{ updatedAt: string; data: P } | null>(null);
   const done = useStableCallback((result: T, payload: P) => {
     const changed = result as { task?: ResponseOf<'getTask'> } | undefined;
+    // 응답에 Task가 있으면(TaskChanged) 그것으로 바꾸고, 없으면(의존성 추가·삭제, 분할 요청 등) Task도 다시 읽는다.
     if (changed?.task) queryClient.setQueryData(key, changed.task);
-    void refresh(false);
+    void refresh(!changed?.task);
     options.onSuccess?.(result, payload);
     if (options.notice) notify(options.notice(payload));
   });
