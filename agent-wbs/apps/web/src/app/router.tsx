@@ -15,6 +15,7 @@ import { createBrowserRouter, Navigate, type RouteObject } from 'react-router';
 import { LoginPage } from '../features/auth/LoginPage.tsx';
 import { ChangePage } from '../features/change/ChangePage.tsx';
 import { DashboardPage } from '../features/dashboard/DashboardPage.tsx';
+import { DesignPage } from '../features/design/DesignPage.tsx';
 import { ExecPage } from '../features/exec/ExecPage.tsx';
 import { HistoryPage } from '../features/history/HistoryPage.tsx';
 import { PlanningPage } from '../features/planning/PlanningPage.tsx';
@@ -39,6 +40,7 @@ const SCREENS: Partial<Record<MenuKey, ComponentType>> = {
   dashboard: DashboardPage, // M3-07
   project: ProjectPage, // M3-04
   wbs: WbsPage, // M3-02(+ M3-03 상세)
+  design: DesignPage, // M6-07(탭·항목은 ?tab=&sel=)
   planning: PlanningPage, // M3-05
   exec: ExecPage, // M3-06
   verify: VerifyPage, // M3-07
