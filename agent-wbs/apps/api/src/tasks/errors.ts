@@ -1,9 +1,8 @@
 import { errorBody } from '@awbs/shared';
-import { ERROR_STATUS, type ErrorCode } from '@awbs/shared/api';
-import type { FastifyInstance } from 'fastify';
+import { ERROR_STATUS, type ErrorCode, type InputError } from '@awbs/shared/api';
+import type { FastifyInstance, FastifySchemaValidationError } from 'fastify';
+import { validationErrors } from '../platform/errors.ts';
 import { redact } from '../platform/redact.ts';
-
-export interface InputError { path: string; rule: string; message: string }
 
 const MESSAGES: Partial<Record<ErrorCode, string>> = {
   VALIDATION_FAILED: '입력이 올바르지 않습니다.',
@@ -44,14 +43,6 @@ export class TaskError extends Error {
   }
 }
 
-const validationErrors = (error: { validation?: { instancePath?: string; message?: string; keyword?: string; params?: { missingProperty?: string } }[]; validationContext?: string }) =>
-  (error.validation ?? []).map((item) => ({
-    path: [error.validationContext === 'body' ? '' : error.validationContext ?? '', ...(item.instancePath ?? '').split('/'), item.params?.missingProperty ?? '']
-      .filter(Boolean).join('.'),
-    rule: item.keyword ?? 'schema',
-    message: item.message ?? '형식이 올바르지 않습니다.',
-  }));
-
 /**
  * 이 범위(Task 라우트)의 오류 처리. Task 오류와 형식 검증 오류만 직접 답하고,
  * 그 밖의 오류(인증·세대·멱등·DB)는 공통 처리기(platform)로 넘긴다.
@@ -59,9 +50,10 @@ const validationErrors = (error: { validation?: { instancePath?: string; message
 export function installTaskErrors(scope: FastifyInstance, actions: ReadonlyMap<string, string>): void {
   scope.setErrorHandler((error, request, reply) => {
     const action = actions.get(`${request.method} ${request.routeOptions.url ?? ''}`) ?? 'Task 처리';
-    const failure = error as { validation?: unknown };
+    const failure = error as { validation?: FastifySchemaValidationError[] };
     if (!(error instanceof TaskError) && !failure.validation) throw error;
-    const task = error instanceof TaskError ? error : new TaskError('VALIDATION_FAILED', {}, validationErrors(error as Parameters<typeof validationErrors>[0]));
+    // 형식 오류의 항목 변환은 공통 규칙(platform)을 그대로 쓰고, 동작 이름·조치 안내만 Task 것으로 붙인다.
+    const task = error instanceof TaskError ? error : new TaskError('VALIDATION_FAILED', {}, validationErrors(failure.validation ?? []));
     return reply.code(ERROR_STATUS[task.code]).send(errorBody({
       code: task.code, message: task.message, action, fix: FIXES[task.code] ?? '입력과 현재 상태를 확인한 뒤 다시 시도하세요.',
       errors: task.errors, details: redact(task.details) as Record<string, unknown>, requestId: request.id,

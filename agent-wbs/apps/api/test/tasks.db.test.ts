@@ -675,6 +675,41 @@ describe('tasks 독립 리뷰 P1·P2 회귀', () => {
   });
 });
 
+describe('tasks 재리뷰 P2·공통 입력 검증', () => {
+  test('P2-A: 0000년 버전은 PATCH·DELETE 모두 500이 아니라 400 updatedAt 오류다', async () => {
+    const key = await create({ title: '원래' });
+    const patch = await call('PATCH', `/api/tasks/${key}`, { updatedAt: '0000-01-01T00:00:00Z', title: 'year zero' });
+    expect(patch.statusCode, patch.body).toBe(400);
+    expect(errorOf(patch).errors.map((e) => e.path)).toEqual(['updatedAt']);
+    const removed = await call('DELETE', `/api/tasks/${key}?updatedAt=${encodeURIComponent('0000-01-01T00:00:00Z')}`);
+    expect(removed.statusCode, removed.body).toBe(400);
+    expect(errorOf(removed).errors.map((e) => e.path)).toEqual(['updatedAt']);
+    expect((await detail(key)).title).toBe('원래');
+  });
+
+  test('본문은 타입을 바꿔 주지 않는다: priority "1"은 400 type 오류이고 저장되지 않는다', async () => {
+    const key = await create();
+    const response = await call('PATCH', `/api/tasks/${key}`, { updatedAt: await version(key), priority: '1' });
+    expect(response.statusCode, response.body).toBe(400);
+    const error = response.json<{ error: { code: string; action: string; errors: { path: string; rule: string; message: string }[] } }>().error;
+    expect(error).toMatchObject({ code: 'VALIDATION_FAILED', action: 'Task 수정' });
+    expect(error.errors).toEqual([{ path: 'priority', rule: 'type', message: '입력 형식과 조건을 확인하세요.' }]);
+    expect((await detail(key)).priority).toBe(2);
+  });
+
+  test('중첩된 미선언 필드와 누락 필드는 공통 경로·규칙으로 알려 준다', async () => {
+    const key = await create();
+    const nested = await call('PATCH', `/api/tasks/${key}/spec`, { updatedAt: await version(key), overview: { purpose: 'p', background: '', scope: [], out: [], precond: '', doneCond: '', extra: 1 } });
+    expect(nested.statusCode).toBe(400);
+    expect(errorOf(nested).errors).toEqual([{ path: 'overview.extra', rule: 'additionalProperties', message: '선언하지 않은 항목입니다.' }]);
+    // 바꿀 필드가 2개라 「필드 1개 이상」(minProperties) 조건은 맞고 updatedAt만 빠진다.
+    const missing = await call('PATCH', `/api/tasks/${key}`, { title: 'x', priority: 1 });
+    expect(errorOf(missing).errors).toEqual([{ path: 'updatedAt', rule: 'required', message: '필수 항목을 입력하세요.' }]);
+    // 쿼리는 문자열 변환을 유지한다.
+    expect((await call('GET', `/api/projects/${projectId}/tasks?includeDeleted=false`)).statusCode).toBe(200);
+  });
+});
+
 describe('tasks 착수 승인 요청→승인/반려', () => {
   test('필수 항목이 모자라면 400 errors[], 채우면 approval로 바꾸고 이력을 남긴다', async () => {
     const key = await create();

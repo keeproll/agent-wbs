@@ -4,13 +4,12 @@ import {
   assertDependency, displayKey, DomainError, isBlocked, JUDGED_RULES, judgementOf, lifecycleTransition, type VerificationResult,
   type Agent, type ApprovalInput, type JudgedRules, type TaskStatus,
 } from '@awbs/shared';
-import { OPERATIONS, type Operation } from '@awbs/shared/api';
+import { OPERATIONS } from '@awbs/shared/api';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { approvalErrors } from './approval.ts';
 import { installTaskErrors, TaskError } from './errors.ts';
 import { canonicalJson, specBody, subjectHash, type Ac, type Output, type Overview, type SpecBody } from './hash.ts';
 import { acOf, listTasks, overviewOf, publicDetail, taskDetail, type TaskDetail } from './read.ts';
-import { unknownFields } from './strict.ts';
 import {
   assertEditable, assertVersion, changed, changeEvent, lockGraph, lockTask, lockTasks, nextChecklistKey, record, SYSTEM, touch,
   type Change, type LockedTask,
@@ -62,25 +61,12 @@ const domainError = (error: unknown, keys: ReadonlyMap<string, string>): never =
 
 export function registerTaskRoutes(app: FastifyInstance, pool: Pool): void {
   void app.register((scope, _options, done) => {
-    const operations = new Map<string, Operation>();
     const actions = new Map<string, string>();
     installTaskErrors(scope, actions);
-
-    // TEMP-STRICT: 공통 validator 수정 뒤 이 훅과 strict.ts를 지운다.
-    // Fastify 기본 검증은 모르는 필드를 지우므로, 원래 본문에서 먼저 찾아 거부한다(contracts §2.1 PATCH의 status).
-    scope.addHook('preValidation', async (request) => {
-      const op = operations.get(`${request.method} ${request.routeOptions.url ?? ''}`);
-      if (!op?.body || request.body === undefined) return;
-      const unknown = unknownFields(op.body, request.body);
-      if (unknown.length) {
-        throw new TaskError('VALIDATION_FAILED', {}, unknown.map((path) => ({ path, rule: 'additionalProperties', message: '정의하지 않은 필드입니다.' })));
-      }
-    });
 
     const route = (id: string, schemaParams: object | undefined, action: string, handler: Handler) => {
       const op = OPERATIONS.find((item) => item.id === id);
       assert(op, `계약에 없는 Task 경로: ${id}`);
-      operations.set(`${op.method} ${op.path}`, op);
       actions.set(`${op.method} ${op.path}`, action);
       scope.route({
         method: op.method, url: op.path, handler,

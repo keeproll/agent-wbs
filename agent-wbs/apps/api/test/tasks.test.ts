@@ -3,14 +3,9 @@ import { OPERATIONS } from '@awbs/shared/api';
 import { describe, expect, test } from 'vitest';
 import { approvalErrors } from '../src/tasks/approval.ts';
 import { canonicalJson, judgedContent, subjectHash, type JudgedSource } from '../src/tasks/hash.ts';
-import { unknownFields } from '../src/tasks/strict.ts';
 import { wbsPaths } from '../src/tasks/wbs.ts';
+import { realTimestamp } from '../src/tasks/write.ts';
 
-const bodyOf = (id: string) => {
-  const op = OPERATIONS.find((item) => item.id === id);
-  if (!op?.body) throw new Error(`no body: ${id}`);
-  return op.body;
-};
 
 const source: JudgedSource = {
   title: '목록 API',
@@ -51,23 +46,6 @@ describe('tasks 판단 대상 hash(data-model §2.3-1)', () => {
     expect(subjectHash({ ...source, conflictGroup: 'cg-1' })).not.toBe(base);
     expect(subjectHash({ ...source, overview: { ...source.overview, purpose: '다른 목적', background: '', precond: '' } })).toBe(base);
     expect(subjectHash({ ...source, outputs: source.outputs.map((o) => ({ ...o, delivered: !o.delivered })).reverse() })).toBe(base);
-  });
-});
-
-describe('tasks 정의하지 않은 필드 거부', () => {
-  test('Task PATCH의 status는 알 수 없는 필드다', () => {
-    expect(unknownFields(bodyOf('updateTask'), { updatedAt: 'x', title: 't', status: 'done' })).toEqual(['status']);
-    expect(unknownFields(bodyOf('updateTask'), { updatedAt: 'x', title: 't' })).toEqual([]);
-  });
-
-  test('중첩된 명세와 목록 원소의 필드도 검사한다', () => {
-    expect(unknownFields(bodyOf('updateTaskSpec'), { updatedAt: 'x', overview: { purpose: 'p', extra: 1 }, ac: [{ given: 'g', bad: 1 }] }))
-      .toEqual(['overview.extra', 'ac.0.bad']);
-    expect(unknownFields(bodyOf('createTask'), { title: 't', checklist: [{ content: 'c', required: true, done: true }] })).toEqual(['checklist.0.done']);
-  });
-
-  test('자유 구조 JSON(설계 내용)은 어떤 키든 받는다', () => {
-    expect(unknownFields(bodyOf('updateTaskDesign'), { updatedAt: 'x', content: { anything: { deep: true } } })).toEqual([]);
   });
 });
 
@@ -135,9 +113,17 @@ describe('tasks subjectHash 계약 고정(독립 리뷰 §5)', () => {
   });
 });
 
-describe('tasks 정의하지 않은 필드 거부 — 상속 키', () => {
-  test('Object.prototype에 있는 이름(toString·constructor·__proto__)도 정의하지 않은 필드다', () => {
-    const body = JSON.parse('{"updatedAt":"x","title":"t","toString":"u","constructor":1,"__proto__":{"a":1}}') as unknown;
-    expect(unknownFields(bodyOf('updateTask'), body).sort()).toEqual(['__proto__', 'constructor', 'toString']);
+describe('tasks 재리뷰 P2-A·P2-B', () => {
+  test('버전 시각은 PostgreSQL이 받는 0001년 이상만 실제 값으로 본다', () => {
+    expect(realTimestamp('0000-01-01T00:00:00Z')).toBe(false);
+    expect(realTimestamp('0000-12-31T23:59:59.999999Z')).toBe(false);
+    expect(realTimestamp('0001-01-01T00:00:00Z')).toBe(true);
+    expect(realTimestamp('2024-02-29T23:59:59.123456Z')).toBe(true);
+  });
+
+  test('완료·취소 보호로 거부하는 9개 API는 계약에 409 INVALID_TRANSITION을 선언한다', () => {
+    const ids = ['updateTask', 'deleteTask', 'deleteDependency', 'updateTaskSpec', 'updateTaskDesign', 'addChecklistItem', 'updateChecklistItem', 'deleteChecklistItem', 'updateTaskOutputs'];
+    const missing = ids.filter((id) => !OPERATIONS.find((op) => op.id === id)?.errors.includes('INVALID_TRANSITION'));
+    expect(missing).toEqual([]);
   });
 });
