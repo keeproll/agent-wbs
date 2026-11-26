@@ -1,5 +1,6 @@
 import type { PoolClient } from '@awbs/db';
 import { completionGate, isBlocked, type Dependency as DomainDependency, type TaskStatus } from '@awbs/shared';
+import { gateInputs } from '../execution/gate.ts';
 import { specBody, type Ac, type Design, type Output, type Overview } from './hash.ts';
 import { wbsPaths } from './wbs.ts';
 
@@ -39,7 +40,8 @@ async function loadGraph(client: PoolClient, projectId: string) {
     client.query<{ task: string; required: boolean; done: boolean }>('select task,required,done from checklist_items where project_id=$1', [projectId]),
     client.query<{ task: string; name: string; required: boolean; delivered: boolean }>('select task,name,required,delivered from task_outputs where project_id=$1', [projectId]),
   ]);
-  return { tasks: tasks.rows, deps: deps.rows, nodes: nodes.rows, checklist: checklist.rows, outputs: outputs.rows };
+  const gates = new Map([...(await gateInputs(client,tasks.rows.map(task => task.id)))].map(([id,input]) => [id,completionGate(input)]));
+  return { tasks: tasks.rows, deps: deps.rows, nodes: nodes.rows, checklist: checklist.rows, outputs: outputs.rows, gates };
 }
 type Graph = Awaited<ReturnType<typeof loadGraph>>;
 
@@ -54,12 +56,7 @@ function summarize(graph: Graph) {
   );
   const summary = (task: TaskRow) => {
     const checklist = graph.checklist.filter((item) => item.task === task.id);
-    const outputs = graph.outputs.filter((item) => item.task === task.id);
-    // shortcut: 검증·결함 조건은 M2-06이 실행 기록으로 판정한다. 지금은 검증 기록이 없는 것으로 계산한다.
-    const gate = completionGate({
-      checklist, outputs, basis: { headSha: '', specRevision: 0, inputVersion: 0 }, verification: null, taskCheck: null,
-      unresolvedBlockingDefects: 0, planningApprovedAt: task.planning_approved_at, headSync: null,
-    });
+    const gate = graph.gates.get(task.id) ?? [];
     return {
       id: task.id, taskKey: task.task_key, wbsNodeId: task.wbs_node_id, wbsPath: paths.task.get(task.id) ?? '', title: task.title,
       workType: task.work_type, primaryDomain: task.primary_domain, relatedDomains: task.related_domains, priority: task.priority,

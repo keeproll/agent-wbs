@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import type { Pool } from '@awbs/db';
-import type { AttemptKind, RunRole } from '@awbs/shared';
+import type { Agent, AttemptKind, ModelSettings, RunRole } from '@awbs/shared';
+import { fromDb, OBSERVATION_GRADE } from '@awbs/db';
 import { OPERATIONS } from '@awbs/shared/api';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { PlatformError } from '../platform/errors.ts';
@@ -53,7 +54,7 @@ export function installRunner(app: FastifyInstance, pool: Pool) {
     for (const cli of b.cli ?? []) await repo.saveObservationConfig(cli.agent, { ...cli, cli: cli.agent });
   }, 204);
   route('reportModels', async (repo, r) => {
-    const b = body<{ agent: string; models: Parameters<RunnerRepository['saveModels']>[1] }>(r);
+    const b = body<{ agent: Agent; models: Parameters<RunnerRepository['saveModels']>[1] }>(r);
     return { newModels: await repo.saveModels(b.agent, b.models) };
   });
   route('reportUsage', async (repo, r) => { await repo.saveUsage(body<Parameters<RunnerRepository['saveUsage']>[0]>(r)); }, 204);
@@ -196,9 +197,11 @@ export function installRunner(app: FastifyInstance, pool: Pool) {
   route('getRunnerPolicy', async (repo) => {
     const c = await caps(repo), settings = await repo.appSettings();
     const ci = await repo.ciSettings();
+    const models = settings.model_settings as unknown as ModelSettings;
+    const cliGrades = (await repo.observations()).map(o => ({ agent:o.cli,version:o.version,model:o.model,options:o.options,grade:fromDb(OBSERVATION_GRADE,o.grade) }));
     // shortcut: 입력 확인은 5분 주기다. 공통 설정에 주기 항목이 생기면 그 값을 읽는다.
     return { caps: { ...wireCaps(c.caps), memReserveGB: c.memReserveGB }, subagentBudget: c.budget, heartbeatSeconds: settings.heartbeat_seconds,
-      inputCheckMinutes: 5, ci: { nightAt: ci.night_at, retry: ci.retry, deployUrl: ci.deploy_url } };
+      inputCheckMinutes: 5, ci: { nightAt: ci.night_at, retry: ci.retry, deployUrl: ci.deploy_url },claudeModels:models.claudeModels,cliGrades };
   });
   route('getRunnerState', repo => runnerState(repo));
 }

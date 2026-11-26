@@ -1,5 +1,5 @@
 import type { PoolClient, schema, ExecPolicyRow } from '@awbs/db';
-import type { AttemptKind } from '@awbs/shared';
+import { placeModel, modelRanks, type ModelSettings, type Agent, type AttemptKind } from '@awbs/shared';
 import assert from 'node:assert/strict';
 
 export function required<T>(value: T | null | undefined): T { assert(value !== null && value !== undefined); return value; }
@@ -8,7 +8,7 @@ type PgRow<T> = { [K in keyof T]: K extends `${string}_at` | 'lease_until' | 'ef
 export type Job = PgRow<typeof schema.runnerJobs.$inferSelect> & { payload: Record<string, unknown> };
 export type Hold = PgRow<typeof schema.executionHolds.$inferSelect>;
 export type Task = PgRow<typeof schema.tasks.$inferSelect>;
-export type Attempt = PgRow<typeof schema.taskAttempts.$inferSelect> & { verification_result: 'PASS' | 'FAIL' | 'BLOCKED' | null; automatic_cause: string | null };
+export type Attempt = PgRow<typeof schema.taskAttempts.$inferSelect> & { verification_result: 'PASS' | 'FAIL' | 'BLOCKED' | null; automatic_cause: string | null; verification_disposition: 'current' | 'stale' };
 
 /** 같은 트랜잭션의 잠금 순서: epoch → Runner 조정 잠금 → Task/job/보유. */
 export class RunnerRepository {
@@ -34,7 +34,8 @@ export class RunnerRepository {
   async holds() { return (await this.client.query<Hold>('select * from execution_holds where closed_at is null for update')).rows; }
   async hold(job: string) { return (await this.client.query<Hold>('select * from execution_holds where job=$1 for update', [job])).rows[0]; }
   async history(task: string) {
-    return (await this.client.query<Attempt>(`select a.*,v.result as verification_result,j.payload->>'automaticCause' as automatic_cause
+    return (await this.client.query<Attempt>(`select a.*,v.result as verification_result,j.payload->>'automaticCause' as automatic_cause,
+      case when exists(select 1 from verification_invalidations i where i.verification=v.id) then 'stale' else 'current' end verification_disposition
       from task_attempts a join runner_jobs j on j.id=a.job left join verifications v on v.attempt=a.id where a.task=$1 order by a.attempt_no`, [task])).rows;
   }
   async attempt(id: string) { return (await this.client.query<Attempt>('select * from task_attempts where id::text=$1 for update', [id])).rows[0]; }
@@ -52,11 +53,19 @@ export class RunnerRepository {
     return (await this.client.query<{ dep_type: 'FS' | 'SS'; status: Task['status'] }>('select d.dep_type,t.status from task_dependencies d join tasks t on t.id=d.pred where d.succ=$1', [task])).rows;
   }
   async taskCheck(task: Task, head?: string) {
-    return Boolean((await this.client.query(`select 1 from ci_runs c join task_specs s on s.task=c.task join task_attempts a on a.id=c.attempt where c.task=$1 and c.stage=1 and c.status='pass'
-      and c.head_sha=$2 and a.spec_revision=s.revision limit 1`, [task.id, head ?? null])).rowCount);
+    const check = (await this.client.query<{ passed: boolean }>(`select c.status='pass' and c.spec_revision=s.revision
+      and c.input_version is not distinct from coalesce(t.src_input_version,(select id from input_versions where project_id=t.project_id order by v desc limit 1)) passed
+      from ci_runs c join task_specs s on s.task=c.task join tasks t on t.id=c.task
+      where c.task=$1 and c.stage=1 and c.head_sha=$2 order by c.created_at desc,c.id desc limit 1`, [task.id, head ?? null])).rows[0];
+    if (check) return Boolean(check.passed);
+    // shortcut: M7-06에서 제거할 흐름 전용 자리표시다. 실제 CI가 있으면 그 결과가 우선하며 Gate의 ① 근거로 쓰지 않는다.
+    return Boolean((await this.client.query(`select 1 from task_attempts a join tasks t on t.id=a.task join task_specs s on s.task=t.id
+      where a.task=$1 and a.head_sha=$2 and a.kind in ('dev','rework') and a.status='completed' and a.spec_revision=s.revision
+      and a.input_version is not distinct from coalesce(t.src_input_version,(select id from input_versions where project_id=t.project_id order by v desc limit 1))
+      and exists(select 1 from runner_job_events e where e.job=a.job and e.kind='finished' and e.detail->>'taskCheckPlaceholder'='true') limit 1`, [task.id,head ?? null])).rowCount);
   }
   async spec(task: string) { return (await this.client.query<{ revision: number; overview: object; spec: object; ac: unknown[] }>('select revision,overview,spec,ac from task_specs where task=$1', [task])).rows[0]; }
-  async input(project: string) { return (await this.client.query<{ id: string; v: number; commit_sha: string }>('select id,v,commit_sha from input_versions where project_id=$1 order by v desc limit 1', [project])).rows[0]; }
+  async input(project: string, id: string | null = null) { return (await this.client.query<{ id: string; v: number; commit_sha: string }>('select id,v,commit_sha from input_versions where project_id=$1 and ($2::uuid is null or id=$2) order by v desc limit 1', [project,id])).rows[0]; }
   async subagents(task: string, role: string) {
     return (await this.client.query<typeof schema.subagentDefs.$inferSelect>(`select d.* from task_subagents s join subagent_defs d on d.id=s.subagent_id where s.task=$1 and s.role=$2`, [task, role])).rows;
   }
@@ -92,21 +101,21 @@ export class RunnerRepository {
   }
   async createAttempt(job: Job, task: Task, kind: AttemptKind, host: string, head: string, model: string, effort: string, adjust: object | null, resumed: string | null) {
     const spec = await this.spec(task.id);
-    const input = await this.input(task.project_id);
+    const input = await this.input(task.project_id,task.src_input_version);
     const n = (await this.history(task.id)).length + 1;
     const row = required((await this.client.query<{ id: string }>(`insert into task_attempts(project_id,task,attempt_key,attempt_no,job,base_sha,head_sha,spec_revision,input_version,kind,agent,status,started_at,model_id,effort,grade_adjust,resumed_from,branch,generation)
       values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'running',clock_timestamp(),$12,$13,$14,$15,$16,$17) returning id`,
     [task.project_id, task.id, `${task.task_key}-A${n}`, n, job.id, job.payload.baseCommit, head, required(spec).revision, input?.id ?? task.src_input_version, kind,
       job.payload.agent, model, effort, adjust, resumed, job.payload.branch, job.generation])).rows[0]);
     await this.client.query('update execution_holds set attempt=$2 where job=$1', [job.id, row.id]);
-    await this.client.query("update tasks set status=$2,act_start=coalesce(act_start,clock_timestamp()) where id=$1", [task.id, kind === 'qa' ? 'qa' : kind === 'reverify' ? 'verifying' : 'running']);
+    await this.client.query("update tasks set status=$2,verif_state=$3,execution_head_sha=$4,act_start=coalesce(act_start,clock_timestamp()) where id=$1", [task.id, kind === 'qa' ? 'qa' : kind === 'reverify' ? 'verifying' : 'running',kind === 'qa' || kind === 'reverify' ? 'running' : 'none',head]);
     await this.state(job.id, 'started');
     await this.event(job, 'started', null, { attemptId: row.id, host });
     return row.id;
   }
   async closeAttempt(a: Attempt, status: 'failed' | 'interrupted', at: Date, detail: object) {
     await this.client.query('update task_attempts set status=$2,ended_at=greatest(started_at,$3),failure=$4 where id=$1', [a.id, status, at, detail]);
-    await this.client.query('update tasks set status=$2 where id=$1', [a.task, status === 'failed' ? 'failed' : 'paused']);
+    await this.client.query("update tasks set status=$2,verif_state='none' where id=$1", [a.task, status === 'failed' ? 'failed' : 'paused']);
   }
   async transfer(from: Hold, next: string) {
     await this.client.query("update execution_holds set lock_state='handed_over',handed_to_job=$2,closed_at=clock_timestamp() where job=$1", [from.job, next]);
@@ -141,13 +150,21 @@ export class RunnerRepository {
   async saveReadiness(at: string, items: { key: string; status: string; detail: string; fix?: string }[]) {
     for (const item of items) await this.client.query('insert into runner_readiness(key,status,detail,fix,at) values($1,$2,$3,$4,$5) on conflict(key) do update set status=excluded.status,detail=excluded.detail,fix=excluded.fix,at=excluded.at where runner_readiness.at<=excluded.at', [item.key,item.status,item.detail,item.fix ?? '',at]);
   }
-  async saveModels(agent: string, models: { id: string; label: string; rank: number; efforts: string[] | null }[]) {
+  async saveModels(agent: Agent, models: { id: string; label: string; efforts: string[] | null }[]) {
     const added: string[] = [];
+    const settings = (await this.appSettings()).model_settings as unknown as ModelSettings;
+    let order = [...settings.rankOrder[agent]];
+    for (const model of models) order = placeModel(order,model.id,agent,settings.codexFamilyOrder);
+    const ranks = modelRanks(order);
     for (const model of models) {
       const exists = (await this.client.query('select 1 from agent_models where agent=$1 and model_id=$2', [agent, model.id])).rowCount;
       await this.client.query(`insert into agent_models(agent,model_id,rank,report) values($1,$2,$3,$4)
-        on conflict(agent,model_id) do update set rank=excluded.rank,report=agent_models.report||excluded.report`, [agent,model.id,model.rank,model]);
+        on conflict(agent,model_id) do update set rank=excluded.rank,report=agent_models.report||excluded.report`, [agent,model.id,ranks.get(model.id),model]);
       if (!exists) added.push(model.id);
+    }
+    if (JSON.stringify(order) !== JSON.stringify(settings.rankOrder[agent])) {
+      await this.client.query('update app_settings set model_settings=$1', [{ ...settings,rankOrder:{ ...settings.rankOrder,[agent]:order } }]);
+      await this.client.query('update agent_models set rank=ordering.ordinality from unnest($2::text[]) with ordinality as ordering(id,ordinality) where agent=$1 and model_id=ordering.id', [agent,order]);
     }
     return added;
   }

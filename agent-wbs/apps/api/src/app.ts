@@ -6,12 +6,13 @@ import { platformErrorBody } from './platform/errors.ts';
 import { installSecurity, type SecurityOptions } from './platform/security.ts';
 import { buildValidator, validateTransport } from './platform/validation.ts';
 import { registerTaskRoutes } from './tasks/routes.ts';
+import { installExecution, type ExecutionOptions } from './execution/routes.ts';
 import { registerChangeRoutes } from './changes/routes.ts';
 import { registerMessageRoutes } from './messages/routes.ts';
 import { registerPolicyRoutes } from './policy/routes.ts';
 
 export function buildApp(pool: Pool, logger: FastifyServerOptions['logger'] = false,
-  security: SecurityOptions = { origin: 'http://127.0.0.1:3100', lan: false }): FastifyInstance {
+  security: SecurityOptions = { origin: 'http://127.0.0.1:3100', lan: false }, execution: ExecutionOptions = {}): FastifyInstance {
   const app = Fastify({
     logger,
     schemaController: { compilersFactory: { buildValidator } },
@@ -28,6 +29,7 @@ export function buildApp(pool: Pool, logger: FastifyServerOptions['logger'] = fa
   app.addHook('preHandler', validateTransport);
   installSecurity(app, pool, security);
   registerTaskRoutes(app, pool);
+  installExecution(app, pool, execution);
   registerChangeRoutes(app, pool);
   registerMessageRoutes(app, pool);
   registerPolicyRoutes(app, pool);
