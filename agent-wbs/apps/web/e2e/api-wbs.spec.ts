@@ -36,7 +36,7 @@ async function call(page: Page, method: string, path: string, body?: unknown): P
     const t0 = performance.now();
     const r = await fetch(path, {
       method,
-      headers: { 'content-type': 'application/json', 'x-csrf-token': session.csrfToken, ...(method === 'POST' ? { 'idempotency-key': crypto.randomUUID() } : {}) },
+      headers: { ...(body === undefined ? {} : { 'content-type': 'application/json' }), 'x-csrf-token': session.csrfToken, ...(method === 'POST' ? { 'idempotency-key': crypto.randomUUID() } : {}) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
     const text = await r.text();
@@ -111,6 +111,36 @@ test('시나리오 1(생성): Wizard로 만든 Task와 선행(FS)이 서버에 �
   expect(serverErrors).toEqual([]);
 });
 
+test('독립 리뷰 #1(실제 DB): 고른 선행이 지워져 선행 연결이 실패해도 Task는 하나만 생긴다', async ({ page }) => {
+  await login(page);
+  const body = { workType: 'Design', primaryDomain: 'API', overview: { purpose: 'p', background: '', scope: [], out: [], precond: '', doneCond: 'd' } };
+  const list0 = (await call(page, 'GET', `/api/projects/${projectId}/tasks`)).json as ListBody;
+  const wp = list0.nodes.find((n) => n.kind === 'work_package');
+  const victim = (await call(page, 'POST', `/api/projects/${projectId}/tasks`, { ...body, title: '지워질 선행', wbsNodeId: wp?.id })).json as { taskKey: string };
+  await page.goto('/wbs');
+  await page.locator('.page-h').getByRole('button', { name: 'Task 생성' }).click();
+  const w = page.getByRole('dialog', { name: 'Task 생성' });
+  await w.getByLabel('Task 제목').fill('중복 금지 시험');
+  await w.getByRole('group', { name: '작업 유형' }).getByRole('button', { name: /설계/ }).click();
+  await w.getByRole('group', { name: '주 기술 영역' }).getByRole('button', { name: /^API/ }).click();
+  await w.getByRole('button', { name: '다음' }).click();
+  await w.getByLabel('작업 목적').fill('p');
+  await w.getByLabel('완료 조건').fill('d');
+  await w.getByRole('button', { name: '다음' }).click();
+  await w.getByRole('group', { name: '선행 Task' }).locator('label').filter({ hasText: victim.taskKey }).getByRole('checkbox').check();
+  // 선택한 뒤 다른 곳에서 그 Task를 정상 삭제한다.
+  const v = (await call(page, 'GET', `/api/tasks/${victim.taskKey}`)).json as { updatedAt: string };
+  expect((await call(page, 'DELETE', `/api/tasks/${victim.taskKey}?updatedAt=${encodeURIComponent(v.updatedAt)}`)).status).toBe(204);
+  await w.getByRole('button', { name: 'Task 생성', exact: true }).click();
+  await expect(w).toContainText('을(를) 이미 만들었습니다');
+  await w.getByRole('button', { name: '선행 연결', exact: true }).click();
+  await expect(page.getByRole('alert').filter({ hasText: '선행 Task를 연결하지 못했습니다' })).toBeVisible();
+  await w.getByRole('button', { name: '선행 없이 마치기' }).click();
+  await expect(page).toHaveURL(/\/wbs\/TASK-\d+\?tab=spec$/);
+  const after = (await call(page, 'GET', `/api/projects/${projectId}/tasks`)).json as { tasks: { title: string }[] };
+  expect(after.tasks.filter((t) => t.title === '중복 금지 시험')).toHaveLength(1);
+});
+
 test('UAT-WBS-05 실제 서버 200·1,000행: 응답 시간과 첫 행 표시 시간을 기록한다', async ({ page }) => {
   test.setTimeout(1_200_000);
   await login(page);
@@ -139,7 +169,7 @@ test('UAT-WBS-05 실제 서버 200·1,000행: 응답 시간과 첫 행 표시 �
     // 1,000행: API로 만든 Task 한 행을 복사해 전용 DB에 직접 넣는다(읽기 측정용, 생성 측정 아님).
     if (target > 200 && PG) {
       const sql = `insert into tasks(project_id,task_key,wbs_node_id,sort_order,title,work_type,primary_domain,related_domains,priority,assignee_agent,verifier_agent,status,verif_state)
-        select t.project_id,'TASK-'||lpad(g::text,4,'0'),t.wbs_node_id,100000+g,'대량 Task '||g,t.work_type,t.primary_domain,t.related_domains,t.priority,t.assignee_agent,t.verifier_agent,t.status,t.verif_state
+        select t.project_id,'TASK-'||(10000+g),t.wbs_node_id,100000+g,'대량 Task '||g,t.work_type,t.primary_domain,t.related_domains,t.priority,t.assignee_agent,t.verifier_agent,t.status,t.verif_state
         from (select * from tasks where title='대량 Task 200' limit 1) t, generate_series(${String(count + 1)},${String(target)}) g;
         insert into task_specs(project_id,task,overview,spec,ac,revision) select s.project_id,t.id,s.overview,s.spec,s.ac,1 from tasks t
           cross join (select project_id,overview,spec,ac from task_specs where task=(select id from tasks where title='대량 Task 200' limit 1)) s

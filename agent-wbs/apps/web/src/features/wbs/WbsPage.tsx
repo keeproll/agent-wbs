@@ -29,6 +29,8 @@ import { WbsTaskDetail } from './detail-slot.tsx';
 import { TaskRail } from './TaskRail.tsx';
 import { TaskWizard, type Draft as WizardDraft } from './TaskWizard.tsx';
 import { useSessionDraft } from '../../shared/state/useSessionDraft.tsx';
+import { useEditGuard } from '../../shared/state/useEditGuard.ts';
+import { codeLabel } from '../../shared/ui/errors.ts';
 import { WbsGantt } from './WbsGantt.tsx';
 import { WbsTable } from './WbsTable.tsx';
 import { WbsToolbar } from './WbsToolbar.tsx';
@@ -79,6 +81,12 @@ function WbsBody({ projectId }: { projectId: string }) {
     value: wizard && wizDraft && (wizDraft.title.trim() || wizDraft.purpose.trim()) ? wizDraft : null,
     onRestore: (data) => { setRestored(data); setWizDraft(data); setWizard(true); },
   });
+  // Wizard 입력 중 주소 이동(뒤로 가기·메뉴)·새로고침은 확인을 거친다(독립 리뷰 #2). Task를 만든 뒤에는 버릴 초안이 없다.
+  const wizardDirty = wizard && wizDraft !== null && (wizDraft.title.trim() !== '' || wizDraft.purpose.trim() !== '');
+  useEditGuard(wizardDirty);
+  /** 생성이 끝나 이동할 주소. Wizard를 닫은 뒤(편집 보호가 풀린 뒤) 이동한다. */
+  const [go, setGo] = useState<string | null>(null);
+  useEffect(() => { if (go) void navigate(go); }, [go, navigate]);
   const [exp, setExp] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const listScroll = useRef<HTMLDivElement>(null);
@@ -89,6 +97,8 @@ function WbsBody({ projectId }: { projectId: string }) {
   const tasksQ = useApiQuery('listTasks', { params: { projectId }, query }, { topics: ['task', 'dependency', 'schedule'] });
   const scheduleQ = useApiQuery('getSchedule', {}, { topics: ['schedule', 'task', 'dependency', 'settings'] });
   const runnerQ = useApiQuery('getRunnerState', {}, { topics: ['runner'] });
+  // Wizard의 선행 선택지는 표의 검색·상태 필터와 상관없이 프로젝트의 모든 Task다(독립 리뷰 #5). 필터가 없을 때의 목록과 같은 query다.
+  const allQ = useApiQuery('listTasks', { params: { projectId }, query: serverQuery({ filters: EMPTY_FILTERS, search: '' }) }, { enabled: wizard, topics: ['task', 'dependency', 'schedule'] });
   const detailQ = useApiQuery('getTask', { params: { taskKey: selKey ?? '' } }, { enabled: selKey !== null, topics: ['task', 'dependency', 'attempt', 'verification'], keepPrevious: false });
   useTopBar(useRevisitFetching(tasksQ));
   // 이미 보여 준 목록의 갱신이 실패하면 화면은 그대로 두고 오류 막대로 알린다(M3-01 공통 규칙).
@@ -195,6 +205,15 @@ function WbsBody({ projectId }: { projectId: string }) {
           </div>
         </div>
       )}
+      {selKey && !selTask && detailQ.isError && !notFound && (
+        <div className="banner danger" style={{ marginBottom: 10 }} role="alert">
+          <div className="banner-b">
+            <b>{selKey} 상세를 불러오지 못했습니다</b> <span className="mono">{codeLabel(detailQ.error)}</span> — {detailQ.error.body?.error.message ?? '서버가 응답하지 않습니다.'} 잠시 뒤 다시 시도하세요.{' '}
+            <button type="button" className="btn sm" onClick={() => { void detailQ.refetch(); }} disabled={detailQ.isFetching}>다시 시도</button>{' '}
+            <button type="button" className="reflink" onClick={() => { void navigate('/wbs', { replace: true }); }}>닫기</button>
+          </div>
+        </div>
+      )}
       {restoreOffer}
       <div className="page-h">
         <div>
@@ -202,7 +221,7 @@ function WbsBody({ projectId }: { projectId: string }) {
           <p className="page-sub">{wbsSubtitle(tasks)}</p>
           {scheduleQ.data && <p className="page-sub sch-sub">{scheduleLine(scheduleQ.data, limit)}</p>}
         </div>
-        <button type="button" className="btn primary" onClick={() => { setWizard(true); }}><SmIcon d={WBS_ICON.plus} />Task 생성</button>
+        <button type="button" className="btn primary" onClick={() => { setGo(null); setWizard(true); }}><SmIcon d={WBS_ICON.plus} />Task 생성</button>
       </div>
 
       <div className={splitCls}>
@@ -244,19 +263,21 @@ function WbsBody({ projectId }: { projectId: string }) {
 
       {wizard && (
         <TaskWizard
-          projectId={projectId} nodes={nodes} tasks={tasks} defaultWp={defaultWp}
+          projectId={projectId} nodes={nodes} tasks={allQ.data?.tasks} defaultWp={defaultWp}
           initial={restored} onDraft={setWizDraft}
           onClose={() => { setWizard(false); setWizDraft(null); setRestored(null); }}
           onRejected={() => { void invalidateTopics(queryClient, ['task']); }}
-          onCreated={(key, title) => {
+          onCreated={(key, title, linked) => {
             setWizard(false);
             setWizDraft(null);
             setRestored(null);
             // 새 Task가 속한 Phase·WP는 펼친다(P createTask L6811).
             setCollapsed(new Set());
             void invalidateTopics(queryClient, ['task', 'dependency', 'schedule']);
-            notify(`${key} 「${title}」을(를) 생성했습니다. 작업 명세를 작성하세요.`);
-            void navigate(`/wbs/${key}?tab=spec`);
+            notify(linked
+              ? `${key} 「${title}」을(를) 생성했습니다. 작업 명세를 작성하세요.`
+              : `${key} 「${title}」을(를) 생성했습니다. 선택한 선행 Task 중 연결하지 않은 것이 있습니다 — 의존성 탭에서 추가하세요.`);
+            setGo(`/wbs/${key}?tab=spec`);
           }}
         />
       )}

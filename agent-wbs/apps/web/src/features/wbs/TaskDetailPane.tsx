@@ -4,6 +4,8 @@
  */
 import { useQueryClient } from '@tanstack/react-query';
 import { useApiQuery } from '../../shared/api/queries.ts';
+import { BusyButton } from '../../shared/ui/BusyButton.tsx';
+import { codeLabel } from '../../shared/ui/errors.ts';
 import { SmIcon, StatusPill, WBS_ICON } from './cells.tsx';
 import { agentMark, planCell, priorityOf, TYPE_LABEL, verifOf, type TaskList, type TaskSummary } from './model.ts';
 import type { WbsTaskDetailProps } from './detail-slot.tsx';
@@ -20,6 +22,21 @@ export function TaskDetailPane({ taskKey, nav }: WbsTaskDetailProps) {
   const schedule = useApiQuery('getSchedule', {}, { topics: ['schedule', 'task', 'dependency', 'settings'] });
   const parentText = useParentText(detail.data?.wbsNodeId);
   const task = detail.data as TaskSummary | undefined;
+  // 첫 조회 실패: 계속 불러오는 것처럼 두지 않고 원인과 다시 시도를 보인다(독립 리뷰 #4).
+  if (!task && detail.isError) {
+    return (
+      <section className="detail" aria-label="Task 상세">
+        <div className="dt-body">
+          <div className="banner danger" role="alert" style={{ marginTop: 0 }}>
+            <div className="banner-b">
+              <b>{taskKey} 상세를 불러오지 못했습니다</b> <span className="mono">{codeLabel(detail.error)}</span> — {detail.error.body?.error.message ?? '서버가 응답하지 않습니다.'} 잠시 뒤 다시 시도하세요.{' '}
+              <BusyButton small variant="default" busy={detail.isFetching} busyLabel="다시 불러오는 중…" onClick={() => { void detail.refetch(); }}>다시 시도</BusyButton>
+            </div>
+          </div>
+        </div>
+      </section>
+    );
+  }
   if (!task) return <section className="detail" aria-label="Task 상세" aria-busy="true" />;
   const sched = schedule.data?.tasks.find((t) => t.taskKey === taskKey);
   const ag = agentMark(task.assigneeAgent);

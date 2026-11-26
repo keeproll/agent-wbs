@@ -16,6 +16,7 @@ import { BusyButton } from '../../shared/ui/BusyButton.tsx';
 import { useConfirm } from '../../shared/ui/feedback.tsx';
 import { Icon, ICON } from '../../shared/ui/Icon.tsx';
 import { Modal } from '../../shared/ui/Modal.tsx';
+import { AreaLoading } from '../../shared/ui/loading.tsx';
 import { StatusPill } from './cells.tsx';
 import { DOMAIN_LABEL, fmtH, lines, TYPE_LABEL, wizardErrors, wizardMissing, type TaskSummary, type WbsNode } from './model.ts';
 
@@ -32,13 +33,15 @@ export function TaskWizard({ projectId, nodes, tasks, defaultWp, initial, onDraf
   projectId: string;
   /** 세션 만료 뒤 복원한 초안(useSessionDraft). 없으면 빈 초안 */
   initial?: Draft | null;
-  /** 입력이 바뀔 때마다 알린다. WBS 화면이 세션 만료 대비 초안으로 등록한다. */
-  onDraft: (draft: Draft) => void;
+  /** 입력이 바뀔 때마다 알린다. WBS 화면이 편집 보호·세션 만료 초안에 쓴다. Task를 만든 뒤에는 null(버릴 초안이 없음). */
+  onDraft: (draft: Draft | null) => void;
   nodes: readonly WbsNode[];
-  tasks: readonly TaskSummary[];
+  /** 선행 선택지: 표의 필터와 상관없는 프로젝트의 모든 Task(독립 리뷰 #5). 아직 못 읽었으면 undefined */
+  tasks: readonly TaskSummary[] | undefined;
   defaultWp: string;
   onClose: () => void;
-  onCreated: (taskKey: string, title: string) => void;
+  /** 끝. linked=false면 선행 일부를 연결하지 않고 마쳤다. */
+  onCreated: (taskKey: string, title: string, linked: boolean) => void;
   onRejected: () => void;
 }) {
   const { client } = useApi();
@@ -51,47 +54,97 @@ export function TaskWizard({ projectId, nodes, tasks, defaultWp, initial, onDraf
     title: '', wbsNodeId: wps.some((w) => w.id === defaultWp) ? defaultWp : (wps[0]?.id ?? ''), type: '', domain: '', rel: [], priority: '2',
     assignee: 'Claude', verifier: 'Codex', est: '4', fixStart: '', purpose: '', background: '', scope: '', out: '', doneCond: '', preds: [],
   });
-  const set = (patch: Partial<Draft>) => { setD((x) => { const n = { ...x, ...patch }; onDraft(n); return n; }); };
+  const set = (patch: Partial<Draft>) => { setD((x) => { const n = { ...x, ...patch }; onDraft(createdRef.current ? null : n); return n; }); };
   const e = wizardErrors(d);
   const show = tried;
   const missing = show ? wizardMissing(step, e) : [];
-  const byKey = new Map(tasks.map((t) => [t.taskKey, t]));
+  const byKey = new Map((tasks ?? []).map((t) => [t.taskKey, t]));
   const wpLabel = (id: string) => { const w = wps.find((x) => x.id === id); return w ? `${w.wbsPath} ${w.title}` : ''; };
   const designs = [...new Set([d.domain, ...d.rel].map((x) => DOMAIN_TO_DESIGN[x]).filter((x): x is string => !!x))];
   const estOk = !e.est;
 
-  const { save, busy, conflictModal } = useSave({
+  /**
+   * 생성은 두 단계다. ① Task 만들기(createTask, 한 번만) ② 선행 연결(addDependency, 선행마다).
+   * ②가 실패해도 ①을 되돌리거나 다시 하지 않는다. 만든 Task를 기억하고 「선행 연결」만 다시 한다(독립 리뷰 #1: 중복 생성).
+   * ①은 useSave가 결과 모를 때 같은 멱등 키로만 다시 보낸다.
+   */
+  const createdRef = useRef<{ taskKey: string; title: string } | null>(null);
+  const [created, setCreated] = useState<{ taskKey: string; title: string } | null>(null);
+  const finish = (linked: boolean) => {
+    const c = createdRef.current;
+    if (c) onCreated(c.taskKey, c.title, linked);
+  };
+  /** 선행을 하나씩 FS로 붙인다. 이미 붙은 것은 건너뛴다. 매번 최신 updatedAt을 서버에서 읽는다. */
+  const linkAll = async (taskKey: string, preds: readonly string[], keyBase: string) => {
+    for (const pred of preds) {
+      const now = await client.call('getTask', { params: { taskKey } });
+      if (now.preds.includes(pred)) continue;
+      await client.call('addDependency', {
+        params: { taskKey },
+        body: { updatedAt: now.updatedAt, predTaskKey: pred, depType: 'FS' } as BodyOf<'addDependency'>,
+        idempotencyKey: `${keyBase}:${pred}:${now.updatedAt}`,
+      }).catch((error: unknown) => {
+        // 선행이 그 사이 지워졌으면 목록을 다시 읽어 선택지에서 빠지게 한다.
+        if (error instanceof ApiError && error.kind === 'notFound') onRejected();
+        throw error;
+      });
+    }
+  };
+
+  const link = useSave({
+    target: `${created?.taskKey ?? 'Task'} 선행 Task 연결`,
+    failTitle: '선행 Task를 연결하지 못했습니다',
+    mine: `선행 Task 연결: ${d.preds.join(', ') || '없음'}`,
+    request: () => ({ taskKey: createdRef.current?.taskKey ?? '', preds: d.preds }),
+    run: async ({ payload, idempotencyKey }) => { await linkAll(payload.taskKey, payload.preds, idempotencyKey); },
+    onSuccess: () => { finish(true); },
+    // 충돌: 「다시 적용」은 서버의 최신 버전을 다시 읽어 선행을 붙이고 마친다. 실패하면 던져서 창 안에 이유를 보인다.
+    onConflictReapply: async () => {
+      const c = createdRef.current;
+      if (!c) return;
+      await linkAll(c.taskKey, d.preds, crypto.randomUUID());
+      finish(true);
+    },
+    // 「최신 불러오기」: 선행을 붙이지 않고, 만든 Task의 최신 상태와 목록만 다시 읽는다. 선행 선택은 그대로 두어 다시 고를 수 있다.
+    onConflictReload: () => {
+      const c = createdRef.current;
+      if (c) void client.call('getTask', { params: { taskKey: c.taskKey } }).catch(() => undefined);
+      onRejected();
+    },
+  });
+
+  const create = useSave({
     target: 'Task 생성',
     failTitle: 'Task를 생성하지 못했습니다',
     // 「Task 생성」을 누른 순간의 입력을 찍어 둔다. 「다시 시도」는 화면의 최신 입력이 아니라 이 요청을 같은 멱등 키로 다시 보낸다.
     request: () => ({
-      body: {
-        title: d.title.trim(), wbsNodeId: d.wbsNodeId, workType: d.type, primaryDomain: d.domain, relatedDomains: d.rel,
-        priority: Number(d.priority), assigneeAgent: d.assignee, verifierAgent: d.verifier,
-        overview: { purpose: d.purpose.trim(), background: d.background.trim(), scope: lines(d.scope), out: lines(d.out), precond: '', doneCond: d.doneCond.trim() },
-      } as BodyOf<'createTask'>,
-      preds: d.preds,
-    }),
+      title: d.title.trim(), wbsNodeId: d.wbsNodeId, workType: d.type, primaryDomain: d.domain, relatedDomains: d.rel,
+      priority: Number(d.priority), assigneeAgent: d.assignee, verifierAgent: d.verifier,
+      overview: { purpose: d.purpose.trim(), background: d.background.trim(), scope: lines(d.scope), out: lines(d.out), precond: '', doneCond: d.doneCond.trim() },
+    } as BodyOf<'createTask'>),
     run: async ({ payload, idempotencyKey }) => {
-      const created = await client.call('createTask', { params: { projectId }, body: payload.body, idempotencyKey }).catch((error: unknown) => {
+      const result = await client.call('createTask', { params: { projectId }, body: payload, idempotencyKey }).catch((error: unknown) => {
         // 고른 Work Package가 그 사이 지워졌으면 목록을 다시 읽어 실제 WP만 남긴다(UAT-WIZ-02).
         if (error instanceof ApiError && error.code === 'WBS_NODE_NOT_FOUND') onRejected();
         throw error;
       });
-      // 선행은 하나씩 FS로 추가한다. 다시 시도할 때는 이미 붙은 선행을 건너뛴다(같은 멱등 키로 생성은 한 번만 된다).
-      for (const pred of payload.preds) {
-        const now = await client.call('getTask', { params: { taskKey: created.taskKey } });
-        if (now.preds.includes(pred)) continue;
-        await client.call('addDependency', { params: { taskKey: created.taskKey }, body: { updatedAt: now.updatedAt, predTaskKey: pred, depType: 'FS' } as BodyOf<'addDependency'>, idempotencyKey: `${idempotencyKey}:${pred}` });
-      }
-      return { ...created, title: payload.body.title };
+      return { taskKey: result.taskKey, title: payload.title };
     },
-    onSuccess: (created) => { onCreated(created.taskKey, created.title); },
-    onRejected: () => { onRejected(); },
+    onSuccess: (c) => {
+      createdRef.current = c;
+      setCreated(c);
+      // 이제 버릴 초안이 없다(편집 보호·세션 초안 해제).
+      onDraft(null);
+      if (d.preds.length === 0) finish(true);
+      else void link.save();
+    },
   });
+  const busy = create.busy || link.busy;
 
   const close = async () => {
     if (asking.current || busy) return;
+    // 이미 만든 Task는 버릴 수 없다. 닫으면 선행 없이 마치고 그 Task로 간다.
+    if (createdRef.current) { finish(false); return; }
     if (!d.title.trim() && !d.purpose.trim()) { onClose(); return; }
     asking.current = true;
     const ok = await confirm({ title: 'Task 생성 취소', body: '입력한 내용이 저장되지 않습니다. 생성을 취소할까요?', ok: '생성 취소', danger: true });
@@ -102,7 +155,7 @@ export function TaskWizard({ projectId, nodes, tasks, defaultWp, initial, onDraf
     const bad = step === 1 ? (e.title || e.wp || e.type || e.domain || e.est || e.fixStart) : step === 2 ? (e.purpose || e.doneCond) : false;
     if (bad) { setTried(true); return; }
     if (step < 3) { setStep(step + 1); setTried(false); return; }
-    void save();
+    void (createdRef.current ? link.save() : create.save());
   };
   const bad = (k: keyof typeof e) => (show && e[k] ? ' bad' : '');
   const choice = <T extends string>(list: readonly (readonly [T, string])[], value: string, pick: (v: T) => void, mono: 'first' | 'second') => (
@@ -126,11 +179,15 @@ export function TaskWizard({ projectId, nodes, tasks, defaultWp, initial, onDraf
       footer={(
         <>
           <span className="ferr wiz-err" role={missing.length ? 'alert' : undefined}>{missing.length ? `필수 항목을 입력하세요: ${missing.join(', ')}` : ''}</span>
-          <button type="button" className="btn" onClick={() => { void close(); }} disabled={busy}>취소</button>
-          <button type="button" className="btn" onClick={() => { setStep(step - 1); setTried(false); }} disabled={step === 1 || busy}>이전</button>
+          {created
+            ? <button type="button" className="btn" onClick={() => { finish(false); }} disabled={busy}>선행 없이 마치기</button>
+            : <button type="button" className="btn" onClick={() => { void close(); }} disabled={busy}>취소</button>}
+          <button type="button" className="btn" onClick={() => { setStep(step - 1); setTried(false); }} disabled={step === 1 || busy || !!created}>이전</button>
           {step < 3
             ? <button type="button" className="btn primary" onClick={next}>다음</button>
-            : <BusyButton busy={busy} busyLabel="생성 중…" onClick={next}>Task 생성</BusyButton>}
+            : created
+              ? <BusyButton busy={busy} busyLabel="연결 중…" onClick={next}>선행 연결</BusyButton>
+              : <BusyButton busy={busy} busyLabel="생성 중…" onClick={next}>Task 생성</BusyButton>}
         </>
       )}
     >
@@ -208,9 +265,15 @@ export function TaskWizard({ projectId, nodes, tasks, defaultWp, initial, onDraf
       {step === 3 && (
         <div className="cols2">
           <div>
-            <h4>선행 Task <span className="opt">선택 · 완료 → 시작(FS)으로 등록</span></h4>
+            {created && (
+              <div className="banner info" role="status" style={{ marginTop: 0 }}>
+                <div className="banner-b"><b>{created.taskKey}을(를) 이미 만들었습니다.</b> 선행 Task 연결만 남았습니다. 지워진 선행은 빼고 「선행 연결」을 누르거나, 「선행 없이 마치기」로 끝내세요. 다시 눌러도 Task를 또 만들지 않습니다.</div>
+              </div>
+            )}
+            <h3 className="wiz-h">선행 Task <span className="opt">선택 · 완료 → 시작(FS)으로 등록</span></h3>
             <div className="predpick" role="group" aria-label="선행 Task">
-              {[...tasks].filter((t) => !t.deletedAt).sort((a, b) => a.wbsPath.localeCompare(b.wbsPath, undefined, { numeric: true })).map((t) => (
+              {!tasks && <AreaLoading label="Task 목록 불러오는 중" />}
+              {[...(tasks ?? [])].filter((t) => !t.deletedAt).sort((a, b) => a.wbsPath.localeCompare(b.wbsPath, undefined, { numeric: true })).map((t) => (
                 <label key={t.taskKey}>
                   <input type="checkbox" className="chk" checked={d.preds.includes(t.taskKey)} onChange={() => { set({ preds: d.preds.includes(t.taskKey) ? d.preds.filter((x) => x !== t.taskKey) : [...d.preds, t.taskKey] }); }} />
                   <span className="mono muted">{t.wbsPath}</span><span className="mono">{t.taskKey}</span><span>{t.title}</span><StatusPill status={t.lifecycleStatus} />
@@ -222,7 +285,7 @@ export function TaskWizard({ projectId, nodes, tasks, defaultWp, initial, onDraf
             )}
           </div>
           <div>
-            <h4>생성 내용 확인</h4>
+            <h3 className="wiz-h">생성 내용 확인</h3>
             <div className="kv" style={{ gridTemplateColumns: '120px minmax(0,1fr)' }}>
               <span className="kv-l">Task ID</span><span className="kv-v mono">생성 시 자동 부여 <span className="muted">(바뀌지 않음)</span></span>
               <span className="kv-l">제목</span><span className="kv-v">{d.title}</span>
@@ -239,7 +302,8 @@ export function TaskWizard({ projectId, nodes, tasks, defaultWp, initial, onDraf
           </div>
         </div>
       )}
-      {conflictModal}
+      {create.conflictModal}
+      {link.conflictModal}
     </Modal>
   );
 }
