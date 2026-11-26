@@ -54,13 +54,14 @@ export interface SaveOptions<T, P = undefined> {
    * 충돌 창 「최신 내용 불러오기(내 변경 버림)」: 편집을 버리고 서버 최신을 다시 읽는다.
    * Promise를 돌려주면 끝날 때까지 기다린다. 성공해야 창을 닫고 「불러왔습니다」를 안내한다.
    * 실패하면(ApiError를 던지면) 창을 열어 둔 채 이유를 보인다(M3-02 7cddacd: 조회 실패를 성공으로 숨기지 않기).
+   * 진행 중에 사용자가 창을 닫으면(Esc) signal이 취소된다. 요청에 signal을 넘기고, 취소됐으면 화면(편집 닫기 등)에 결과를 적용하지 않는다.
    */
-  onConflictReload?: () => void | Promise<void>;
+  onConflictReload?: (ctx: { signal: AbortSignal }) => void | Promise<void>;
   /**
    * 충돌 창 「최신 내용에 내 변경 다시 적용」: 최신 버전을 읽은 뒤 내 변경으로 다시 저장한다.
    * 실패하면 ApiError를 그대로 던진다(삼키지 않는다). 던지면 창이 열린 채 이유를 보이고, 끝까지 성공해야 창이 닫힌다.
    */
-  onConflictReapply?: () => Promise<void>;
+  onConflictReapply?: (ctx: { signal: AbortSignal }) => Promise<void>;
   onFieldErrors?: (errors: ApiError['fieldErrors']) => void;
   onRejected?: (error: ApiError) => void;
 }
@@ -83,6 +84,8 @@ export function useSave<T, P = undefined>(options: SaveOptions<T, P>): SaveHandl
   const [conflict, setConflict] = useState<{ error: ApiError; at: number; failure: ApiError | null; failedAction?: 'reload' | 'reapply' } | null>(null);
   const [reapplying, setReapplying] = useState(false);
   const inFlight = useRef(false);
+  /** 충돌 창에서 진행 중인 작업. 창을 닫을 때 불러오기는 취소하고, 다시 적용은 닫지 않는다. */
+  const pending = useRef<{ action: 'reload' | 'reapply'; controller: AbortController } | null>(null);
   /** 결과를 모르는 요청(재시도 가능한 실패). 다시 시도는 이 내용과 키로 보낸다. */
   const unresolved = useRef<{ key: string; payload: P; error: ApiError } | null>(null);
   /** 오류 막대의 「다시 시도」가 attempt를 부르기 위한 참조(선언 순서 때문에 ref로 잇는다) */
@@ -155,28 +158,46 @@ export function useSave<T, P = undefined>(options: SaveOptions<T, P>): SaveHandl
       failureTitle={conflict.failedAction === 'reload' ? '최신 내용을 불러오지 못했습니다' : '다시 적용하지 못했습니다'}
       mine={options.mine ?? options.target}
       busy={reapplying}
-      onClose={() => { setConflict(null); }}
+      onClose={() => {
+        // 다시 적용(저장)은 서버에서 되돌릴 수 없으므로 끝날 때까지 닫지 않는다.
+        if (pending.current?.action === 'reapply') return;
+        // 최신 불러오기는 취소하고, 늦게 와도 결과를 화면에 적용하지 않는다(재리뷰 63d2a25).
+        pending.current?.controller.abort();
+        pending.current = null;
+        setReapplying(false);
+        setConflict(null);
+      }}
       onReload={() => {
+        const controller = new AbortController();
+        pending.current = { action: 'reload', controller };
         setReapplying(true);
         void Promise.resolve()
-          .then(() => options.onConflictReload?.())
+          .then(() => options.onConflictReload?.({ signal: controller.signal }))
           .then(
             () => {
+              if (controller.signal.aborted) return;
               setConflict(null);
               notify('최신 내용을 불러왔습니다. 내 변경은 적용되지 않았습니다.');
             },
             (error: unknown) => {
+              if (controller.signal.aborted) return;
               if (!(error instanceof ApiError)) throw error;
               if (error.kind === 'unauthorized') { setConflict(null); return; }
               setConflict((c) => c && { ...c, failure: error, failedAction: 'reload' });
             },
           )
-          .finally(() => { setReapplying(false); });
+          .finally(() => {
+            if (pending.current?.controller !== controller) return;
+            pending.current = null;
+            setReapplying(false);
+          });
       }}
       onReapply={() => {
+        const controller = new AbortController();
+        pending.current = { action: 'reapply', controller };
         setReapplying(true);
         void Promise.resolve()
-          .then(() => options.onConflictReapply?.())
+          .then(() => options.onConflictReapply?.({ signal: controller.signal }))
           .then(
             () => { setConflict(null); },
             (error: unknown) => {
@@ -186,7 +207,10 @@ export function useSave<T, P = undefined>(options: SaveOptions<T, P>): SaveHandl
               setConflict((c) => (error.kind === 'conflict' ? { error, at: Date.now(), failure: null } : c && { ...c, failure: error, failedAction: 'reapply' }));
             },
           )
-          .finally(() => { setReapplying(false); });
+          .finally(() => {
+            if (pending.current?.controller === controller) pending.current = null;
+            setReapplying(false);
+          });
       }}
     />
   ) : null;

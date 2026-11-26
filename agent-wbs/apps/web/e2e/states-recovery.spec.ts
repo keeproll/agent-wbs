@@ -243,3 +243,53 @@ test('충돌 창의 최신 불러오기가 실패하면 창을 닫지 않고 이
   await expect(page.locator('.notice')).toContainText('최신 내용을 불러왔습니다');
   await expect(page.getByTestId('title')).toHaveText('서버 제목');
 });
+
+// 재리뷰 63d2a25: 최신 불러오기 중 Esc로 창을 닫으면 진행 중 불러오기를 취소하고 결과를 화면에 적용하지 않는다.
+test('최신 불러오기 대기 중 Esc로 닫으면 불러오기가 취소되고, 그 뒤 쓴 입력은 늦은 응답에 지워지지 않는다', async ({ page }) => {
+  const api = await fakeApi(page);
+  api.on('GET /api/tasks/TASK-0001', (route) => json(route, 200, { taskKey: 'TASK-0001', title: '원래 제목', updatedAt: V1 }));
+  api.on('PATCH /api/tasks/TASK-0001', (route) => json(route, 409, errorBody('VERSION_CONFLICT')));
+  await page.goto('/_states');
+  await page.getByRole('button', { name: '편집' }).click();
+  await page.getByLabel('제목').fill('내 변경 A');
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+  const dialog = page.getByRole('alertdialog', { name: '다른 변경이 먼저 저장되었습니다' });
+  await expect(dialog).toBeVisible();
+
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  api.on('GET /api/tasks/TASK-0001', async (route) => {
+    await gate;
+    await json(route, 200, { taskKey: 'TASK-0001', title: '최신 서버 제목', updatedAt: V2 }).catch(() => undefined);
+  });
+  await dialog.getByRole('button', { name: '최신 내용 불러오기 (내 변경 버림)' }).click();
+  await expect(dialog.getByRole('button', { name: '최신 내용 불러오기 (내 변경 버림)' })).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await page.getByLabel('제목').fill('창을 닫은 뒤 새로 작성한 B');
+  release();
+  // 늦은 응답이 와도 입력·편집 상태는 그대로이고 「불러왔습니다」 안내도 없다.
+  await page.waitForTimeout(300);
+  await expect(page.getByLabel('제목')).toHaveValue('창을 닫은 뒤 새로 작성한 B');
+  await expect(page.locator('.notice')).toHaveCount(0);
+});
+
+test('다시 적용(저장) 진행 중에는 Esc로 창이 닫히지 않는다(서버 저장은 되돌릴 수 없으므로)', async ({ page }) => {
+  const api = await fakeApi(page);
+  api.on('GET /api/tasks/TASK-0001', (route) => json(route, 200, { taskKey: 'TASK-0001', title: '원래 제목', updatedAt: V1 }));
+  api.on('PATCH /api/tasks/TASK-0001', (route) => json(route, 409, errorBody('VERSION_CONFLICT')));
+  await page.goto('/_states');
+  await page.getByRole('button', { name: '편집' }).click();
+  await page.getByLabel('제목').fill('내 제목');
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+  const dialog = page.getByRole('alertdialog', { name: '다른 변경이 먼저 저장되었습니다' });
+  const slow = hold((route) => json(route, 200, { task: { taskKey: 'TASK-0001', title: '내 제목', updatedAt: V2 }, changes: [] }));
+  api.on('PATCH /api/tasks/TASK-0001', slow.handler);
+  await dialog.getByRole('button', { name: '최신 내용에 내 변경 다시 적용' }).click();
+  await expect(dialog.getByRole('button', { name: '다시 적용 중…' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeVisible();
+  slow.release();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByTestId('title')).toHaveText('내 제목');
+});
