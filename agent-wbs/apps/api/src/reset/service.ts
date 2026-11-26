@@ -20,7 +20,9 @@ export async function previewReset(db: PoolClient) {
   ) refs where branch like 'agent/%' order by branch`)).rows.map((r) => r.branch);
   // shortcut: 작업 폴더 수는 기록된 브랜치 수다. Runner가 실제 폴더 목록을 보고하면 그 값으로 바꾼다.
   return { epoch: (await db.query<{ epoch: number }>('select epoch from system_state')).rows[0]?.epoch,
-    projectName: p.name, counts, runner: { branches, worktrees: branches.length, mergedTasks: await count('tasks', "where status='done'") },
+    projectName: p.name, counts,
+    sending: { mail: await count('mail_outbox', "where state='sending'"), notify: await count('notify_outbox', "where state='sending'") },
+    runner: { branches, worktrees: branches.length, worktreesEstimated: true, mergedTasks: await count('tasks', "where status='done'") },
     repo: { url: p.repo_url, owner: p.repo_owner, name: p.repo_name, branch: 'main', baseCommit: p.base_commit } };
 }
 
@@ -47,8 +49,13 @@ export async function resetProject(db: PoolClient, input: { epoch: number; confi
 }
 
 export async function listResets(db: PoolClient) {
-  return { items: (await db.query(`select epoch,${iso('at')} at,actor,deleted_task_count "deletedTaskCount",keep_settings "keepSettings",
-    runner_cleanup_status "runnerCleanupStatus",${iso('finished_at')} "finishedAt" from reset_log order by epoch desc`)).rows };
+  return { items: (await db.query(`select r.epoch,${iso('r.at')} at,r.actor,deleted_task_count "deletedTaskCount",keep_settings "keepSettings",
+    runner_cleanup_status "runnerCleanupStatus",${iso('finished_at')} "finishedAt",
+    case when runner_cleanup_status not in ('pending','running') then null
+      when exists(select from runner_commands c where c.epoch=r.epoch-1 and c.status<>'done' and c.payload ? 'baseCommit')
+        and exists(select from external_write_authority where state='blocked') then 'external_write_blocked'
+      else 'runner' end "cleanupWaitReason"
+    from reset_log r order by r.epoch desc`)).rows };
 }
 
 export async function getCommands(db: PoolClient, epoch: number) {

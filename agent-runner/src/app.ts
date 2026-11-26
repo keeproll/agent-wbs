@@ -14,7 +14,8 @@ import { repositoryIdFor } from './git/identity.ts';
 import { InputChangeReporter, type InputReport, type InputSource } from './git/inputs.ts';
 import { checkGitHost } from './git/probe.ts';
 import { GitRepository } from './git/repository.ts';
-import { createGitHubClient, type GitHubClient, type GithubMode, type RepoRef } from './github/client.ts';
+import { createGitHubClient, DeployKeyError, type GitHubClient, type GithubMode } from './github/client.ts';
+import type { GithubSettings } from './config.ts';
 import { GithubConnector } from './github/connector.ts';
 import { ghTokenSource, type TokenSource } from './github/token.ts';
 import { cgroupNote, checkReadiness, scheduleDaily, verifiedFromPolicy, type ReadinessDeps, type ReadinessReport } from './readiness/checks.ts';
@@ -30,12 +31,6 @@ import type { State } from './state/state.ts';
 export interface ActiveSession extends SessionState {
   /** 실행 중인 자식 프로세스 수(CLI 업데이트 유휴 판정용) */
   children: number;
-}
-
-export interface GithubSettings {
-  repo: RepoRef;
-  mode: GithubMode;
-  baseUrl?: string;
 }
 
 export interface RunnerAppDeps {
@@ -89,7 +84,7 @@ export class RunnerApp {
   readonly usage = new UsageTracker();
   readonly updater: CliUpdater;
   readonly sessions: ActiveSession[] = [];
-  readonly github: { client: GitHubClient; connector: GithubConnector; mode: GithubMode } | undefined;
+  readonly github: { client: GitHubClient; connector: GithubConnector; mode: GithubMode; checkDeployKeys(): Promise<void> } | undefined;
   readonly bins: { codex: string; claude: string };
   readonly inputs: InputChangeReporter;
   #identity: { hostId: string; bootId: string } | undefined;
@@ -112,7 +107,7 @@ export class RunnerApp {
     // M-1: 준비 점검의 codex·claude도 전용 설치 경로를 세션 실행과 같은 인자·환경으로 부른다.
     this.#run = cliAwareRun(base, cli, this.bins);
     this.heavy = new HeavySemaphore(0);
-    this.inputs = new InputChangeReporter({ api: d.api, epoch: () => d.state.snapshot.epoch, warn: d.warn });
+    this.inputs = new InputChangeReporter({ api: d.api, epoch: () => d.state.snapshot.epoch, warn: d.warn, recheck: () => this.runner.policy?.inputRecheck });
     const runnerId = () => d.state.snapshot.runnerId;
     // eslint-disable-next-line @typescript-eslint/no-this-alias -- 아래 getter가 생성 중에도 현재 식별자를 읽는다.
     const app = this;
@@ -124,6 +119,7 @@ export class RunnerApp {
       ...(d.now && { now: d.now }),
     });
     if (d.github) {
+      const systemKey = d.github.systemKey;
       const connector = new GithubConnector({
         api: d.api,
         epoch: () => d.state.snapshot.epoch,
@@ -142,21 +138,30 @@ export class RunnerApp {
         if (response.status === 401) source.invalidate();
         return response;
       };
+      const checkDeployKeys = async (): Promise<void> => {
+        try { await client.assertDeployKeys(systemKey?.id ?? null); }
+        catch (error) {
+          try { if (!(error instanceof DeployKeyError) || !error.retryable) d.warn(message(error)); }
+          catch { /* 경고 출력 실패가 원래 거부 사유를 가리지 않게 한다. */ }
+          throw error;
+        }
+      };
       const client = createGitHubClient({
         repo: d.github.repo,
         token: () => source.token(),
         ...(d.github.baseUrl && { baseUrl: d.github.baseUrl }),
         fetch: githubFetch,
+        beforeWrite: checkDeployKeys,
         onPermissionDenied: async (event) => { await connector.reportPermissionDenied(event, client.permissions(), mode); },
       });
-      this.github = { client, connector, mode };
+      this.github = { client, connector, mode, checkDeployKeys };
     }
     const resetCleanup = createResetCleanup({
       home: d.home,
       identity: () => this.identity,
       // 원격 초기화는 GitHub 설정이 있을 때 실제 클라이언트로 연결한다(교차 리뷰 P1-2).
-      // 되돌림 push용 시스템 커밋 자격 증명은 Q-09 미결이라 공급원이 없다 → 되돌림이 필요한 초기화만 failed(조정자 결정 1-A).
-      ...(this.github && { remote: createGithubRemoteCleanup({ client: this.github.client }) }),
+      ...(this.github && { remote: createGithubRemoteCleanup({ client: this.github.client, warn: d.warn,
+        ...(d.github?.systemKey && { systemDeployKey: d.github.systemKey }) }) }),
       ...d.cleanup,
     });
     this.runner = new Runner({
@@ -257,11 +262,21 @@ export class RunnerApp {
   }
 
   /** GitHub 연결 확인 → 권한 3상태 보고(토큰 방식이면 키 등록·봉인 조회 포함). */
-  async checkGithub(): Promise<void> {
+  async checkGithub(signal?: AbortSignal): Promise<void> {
     if (!this.github) return;
+    signal?.throwIfAborted();
     // 연결 재확인은 새로 판단한다. 자격 증명이 바뀌었을 수 있으므로 캐시한 토큰을 버린다(P1-5).
     this.#tokenSource?.invalidate();
     if (this.github.mode === 'token') await this.github.connector.register();
+    for (let attempt = 0; ; attempt += 1) {
+      signal?.throwIfAborted();
+      try { await this.github.checkDeployKeys(); break; }
+      catch (error) {
+        if (!(error instanceof DeployKeyError) || !error.retryable || attempt >= 2) throw error;
+        await sleep(Math.max(error.retryAfterSeconds ?? 0, 2 ** attempt) * 1000, undefined, { signal });
+      }
+    }
+    signal?.throwIfAborted();
     const status = await this.github.client.checkConnection(this.github.mode);
     // 연결 확인은 토큰 취득 실패를 ok:false로 바꾼다. WBS 인증 실패였으면 상태를 보고하지 않고 그 오류를 그대로 던진다.
     if (this.github.connector.authFailure !== undefined) throw this.github.connector.authFailure;
@@ -293,17 +308,20 @@ export class RunnerApp {
    * Runner가 서버와 동기화된 뒤(`runner.ready`) 한 번 실행하는 시작 보고.
    * host → 준비 점검 → 모델 → GitHub 순서다. host 보고로 식별자와 상한을 먼저 받아야 나머지가 맞는 값을 쓴다.
    */
-  async bootstrap(): Promise<void> {
+  async bootstrap(signal?: AbortSignal): Promise<void> {
     if (this.#bootstrapped) return;
+    signal?.throwIfAborted();
     await this.reportHost();
     await this.updater.recover();
     await this.checkReadiness();
     await this.reportModels();
-    await this.checkGithub().catch((error: unknown) => {
+    await this.checkGithub(signal).catch((error: unknown) => {
+      if (signal?.aborted) throw error;
       // 키 등록·봉인 조회의 WBS 인증 실패는 Runner 토큰 문제이므로 위로 올려 앱을 멈춘다(P1-3).
-      if (authenticationFailed(error)) throw error;
+      if (authenticationFailed(error) || (error instanceof DeployKeyError && !error.retryable)) throw error;
       this.#d.warn(`GitHub 연결 확인 실패: ${message(error)}`);
     });
+    signal?.throwIfAborted();
     await this.runner.outbox.flush();
     this.#bootstrapped = true;
   }
@@ -361,10 +379,11 @@ export class RunnerApp {
       while (!internal.signal.aborted && !this.#bootstrapped) {
         if (this.runner.ready) {
           try {
-            await this.bootstrap();
+            await this.bootstrap(internal.signal);
             if (!internal.signal.aborted) this.startSchedules();
           } catch (error) {
-            if (authenticationFailed(error)) { halt(error); return; }
+            if (internal.signal.aborted) return;
+            if (authenticationFailed(error) || (error instanceof DeployKeyError && !error.retryable)) { halt(error); return; }
             this.#d.warn(`시작 보고 실패: ${message(error)}`);
           }
         }
@@ -387,13 +406,13 @@ export class RunnerApp {
   }
 }
 
-/**
- * M4-01 보고 거부 기록을 readiness 경고로 붙인다.
- * [미정] 계약의 readiness key 목록에 거부 기록 전용 키가 없다(plan-pending). 키가 정해지면 이 함수만 바꾼다.
- */
+/** 보고 거부는 별도 경고로 보낸다(contracts §1.2). 다른 준비 실패를 덮어쓰지 않는다. */
 export function withRejectionWarnings(body: ReadinessReport, warnings: readonly string[]): ReadinessReport {
-  void warnings;
-  return body;
+  return { ...body, items: [...body.items.filter(item => item.key !== 'reports'), {
+    key: 'reports', status: warnings.length ? 'warn' : 'ok',
+    detail: warnings.length ? warnings.join('\n') : '보고 거부 기록 없음',
+    fix: warnings.length ? 'Runner의 거부 기록을 확인하고 원인을 해결하세요.' : '',
+  }] };
 }
 
 function message(error: unknown): string {

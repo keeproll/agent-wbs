@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest';
 import { createGitHubClient, type ConnectionStatus, type PermissionState } from '../../src/github/client.ts';
 import { CredentialError } from '../../src/github/credential.ts';
 import { Secret } from '../../src/security/secret.ts';
+import { protectedMainResponse } from '../fakes/github/rules.ts';
 
 /**
  * 무작위 사건 순서 속성 테스트.
@@ -105,6 +106,8 @@ async function runScenario(seed: number) {
   });
 
   const respond = (p: Pending): void => {
+    const protection = protectedMainResponse(p.path);
+    if (protection) { p.resolve(protection); return; }
     if (p.path === '/user') {
       p.resolve(Response.json({ login: `user-${p.token}` }));
     } else if (p.method === 'GET') {

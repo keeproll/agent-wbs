@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { FakeGitHub, FakeRequest, FakeResponse } from './server.ts';
+import { protectedMainRules } from './rules.ts';
 
 /**
  * 가짜 GitHub 저장소 1개의 상태와 규칙.
@@ -72,13 +73,19 @@ export class GitHubModel {
   readonly branches = new Map<string, string>();
   readonly pulls = new Map<number, FakePull>();
   readonly statuses = new Map<string, FakeStatus[]>();
+  readonly deployKeys: { id: number; read_only: boolean }[] = [];
   readonly options: ModelOptions;
   /** 다음 병합 요청을 처리한 뒤 응답을 잃는다. */
   dropNextMerge = false;
+  /** M4-06 실측: head 갱신 뒤 병합 가능 여부 계산 중에는 sha 검사보다 먼저 405가 올 수 있다. */
+  mergeabilityPending = false;
   /** 병합 커밋을 일부러 잘못 만든다(부모·tree 검증 시험용). */
   corruptMerge: 'parents' | 'tree' | null = null;
   /** 병합 후 이만큼의 PR 조회는 병합 전 모습을 돌려준다(조회 반영 지연). */
   pullReadLag = 0;
+  /** M4-06 실측: status 게시 201 뒤에도 조회가 잠시 이전 목록을 반환할 수 있다. */
+  statusReadLag = 0;
+  #staleStatuses = new Map<string, { items: FakeStatus[]; left: number }>();
   #stale: { number: number; json: ReturnType<GitHubModel['pullJson']>; left: number } | null = null;
   #mergeGate: Promise<undefined> | null = null;
   #limit: { left: number; kind: RateLimitKind } | null = null;
@@ -221,6 +228,7 @@ export class GitHubModel {
     const pull = this.pulls.get(number);
     if (!pull) return { status: 404, body: { message: 'Not Found' } };
     if (pull.state !== 'open') return { status: 405, body: { message: 'Pull Request is not mergeable' } };
+    if (this.mergeabilityPending) return { status: 405, body: { message: 'Pull Request is not mergeable' } };
     const head = this.branches.get(pull.head) ?? '';
     const main = this.branches.get(pull.base) ?? '';
     if (body.sha !== undefined && body.sha !== head) {
@@ -296,6 +304,21 @@ export class GitHubModel {
           permissions: this.options.permissions ?? { admin: false, push: true, pull: true },
         },
       })),
+    );
+    github.on(
+      `GET ${repoPath}/rules/branches/main`,
+      guard(() => ({ body: protectedMainRules.map((rule) => rule.type === 'required_status_checks'
+        ? { ...rule, parameters: { strict_required_status_checks_policy: this.options.strict ?? true,
+          required_status_checks: (this.options.requiredContexts ?? ['agentwbs/int']).map((context) => ({ context })) } }
+        : rule) })),
+    );
+    github.on(
+      `GET ${repoPath}/rulesets/1`,
+      guard(() => ({ body: { enforcement: 'active', current_user_can_bypass: 'never' } })),
+    );
+    github.on(
+      `GET ${repoPath}/keys`,
+      guard(() => ({ body: this.deployKeys })),
     );
     github.on(
       `GET ${repoPath}/branches/:branch`,
@@ -427,6 +450,7 @@ export class GitHubModel {
           description: body.description ?? null,
           target_url: body.target_url ?? null,
         };
+        if (this.statusReadLag > 0) this.#staleStatuses.set(sha, { items: this.statuses.get(sha) ?? [], left: this.statusReadLag });
         this.statuses.set(sha, [status, ...(this.statuses.get(sha) ?? [])]);
         return { status: 201, body: status };
       }, 'statuses'),
@@ -435,7 +459,10 @@ export class GitHubModel {
       `GET ${repoPath}/commits/:sha/statuses`,
       guard((request) => {
         // 실제 GitHub처럼 최신순, per_page 기본 30·최대 100, 다음 페이지는 Link rel="next"로 알린다.
-        const all = this.statuses.get(param(request, 'sha')) ?? [];
+        const sha = param(request, 'sha');
+        const stale = this.#staleStatuses.get(sha);
+        const all = stale && stale.left > 0 ? stale.items : this.statuses.get(sha) ?? [];
+        if (stale && stale.left > 0) stale.left -= 1;
         const perPage = Math.min(Number(request.query.per_page ?? 30) || 30, 100);
         const page = Math.max(Number(request.query.page ?? 1) || 1, 1);
         const body = all.slice((page - 1) * perPage, page * perPage);

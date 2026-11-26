@@ -238,6 +238,36 @@ hash는 내용을 짧은 문자열로 줄인 지문이다. 내용이 조금이�
 - 판단 기록 자체(`judgedRules`·`taskJudgements`·`splitJudgements`)와 Task 키·ref는 hash 대상에서 **제외**한다.
   - 왜: 자기 참조 방지. NEW-n→TASK-n 변환에도 동일하다. (판단을 적으면 hash가 바뀌고, 그러면 판단이 낡아지는 일이 생기지 않게 한다.)
 
+**`subjectHash` 계산 규칙** (M2-02 독립 리뷰 §5, 지금 구현 `apps/api/src/tasks/hash.ts`와 같음)
+
+「정규화한 JSON」이라고만 쓰면 구현마다 값이 달라질 수 있다. 그래서 바이트 단위까지 아래처럼 고정한다.
+
+1. 위 `JudgedContent` 필드만 고른다. 제외 목록(목적·배경·선행 조건·담당·우선순위·상태·`delivered`·Task 키/ref·판단 기록)은 넣지 않는다.
+2. `spec`은 `req, work, steps, inputs, outputs, files, constraints, errors, docs, verify` 10개 키를 모두 가진다.
+   - 저장된 명세에 빠진 칸은 빈 목록 `[]`로 채운다.
+   - `conflictGroup`이 없으면 `null`이다.
+3. 배열 순서:
+   - `scope`·`out`·`spec`의 각 목록·`ac`는 저장된 순서를 그대로 둔다.
+   - 산출물(`outputs`)은 `name`의 문자열 비교 순서(UTF-16 코드 단위 순서, JavaScript 기본 비교)로 정렬하고 `{name,kind,required,verify}`만 남긴다.
+   - 설계(`designs`)는 DB → API → FE → DevOps 순서다.
+4. 모든 객체의 키는 재귀적으로 같은 UTF-16 순서로 정렬한다. 값이 `undefined`인 키는 뺀다.
+   - JSON에 공백·들여쓰기·끝 줄바꿈을 넣지 않는다.
+   - 문자열 escape(따옴표·줄바꿈 같은 특수 문자를 JSON에 적는 방식)와 숫자 표기는 JavaScript `JSON.stringify` 규칙을 따른다.
+5. 문자열에 앞뒤 공백 제거(trim)·대소문자 변환·줄바꿈 통일·Unicode 정규화(NFC/NFD, 겉모양이 같은 글자의 서로 다른 문자 표현을 하나로 맞추는 처리)를 하지 않는다. 공백이나 Unicode 표현 차이도 내용 차이다.
+   - 이런 정규화를 넣고 싶다면 지금 지문과 호환되지 않으므로 규칙 버전을 바꿔야 한다.
+6. 결과 JSON을 UTF-8로 인코딩해 SHA-256을 계산하고, **소문자 16진수 64자리**로 저장한다.
+7. Task 승인과 Planning·CP(M2-07)가 같은 함수 하나를 부른다.
+   - 왜: 같은 내용이 경로마다 다른 지문이 되면, 유효한 판단이 「기록 없음」으로 보류된다.
+
+- 고정 벡터(입력과 정답 지문을 고정해 둔 시험 예시): 제목 `예시`, 범위 `['기능']`, 완료 조건 `테스트 통과`, 나머지는 빈 목록·null인 내용의 지문은 `49813649157306979e9b5652a52674817589723f035e668c9b8a9e372027a1cb`다(`apps/api/test/tasks.test.ts`).
+
+**Task 판단 보고(`POST /planning/tasks/:taskKey/plan`)의 hash 처리**
+
+- 서버는 payload에 담긴 **변경 전** `subjectHash`를 지금 Task 내용의 hash와 대조한다. 다르면 409 VERSION_CONFLICT다.
+- 같은 보고에 충돌 묶음(`conflictGroup`) 판단이 함께 오면, 그 묶음을 반영한 내용으로 서버가 hash를 다시 계산해 판단 기록에 붙인다.
+- 대조·반영·저장 전체를 한 트랜잭션으로 처리한다.
+- 왜: 충돌 묶음도 `JudgedContent`에 들어 있다. 묶음을 바꾸고 옛 hash를 그대로 두면, 방금 한 판단이 곧바로 낡은 것이 된다.
+
 **유효한 기록과 승인 판정**
 
 - **유효한 기록** = 형식이 맞고 합의 주체가 둘 다이며 현재 대상 hash와 일치. 아니면 「기록 없음」으로 본다 [결정].
@@ -288,6 +318,9 @@ hash는 내용을 짧은 문자열로 줄인 지문이다. 내용이 조금이�
   - `plannings`: 세션
   - `planning_analyses`: Agent별 독립 분석 unique(planning, agent)
   - `planning_reviews`: 주제별 일치·이견·조정
+    - `codex` = `{text, ops, common}`, `claude` = `{text, ops}`이다(jsonb).
+    - `common`은 두 Agent가 함께 낸 공통 변경(ops)이다. 각자의 `ops`는 Agent별 대안이다.
+    - 왜 `common`을 codex 쪽에 두나: 새 열을 만들지 않으려는 선택이다(M2-07 구현).
   - 근거: §4.5
 - `change_proposals`
   - cp_key, title(공백 금지), reason(공백 금지), source(planning/message/manual/split/input/decision), source_id(출처 ID, 없으면 null), status(§3.6), ops(jsonb §5.6), id_map, preview_hash
@@ -484,6 +517,11 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
   - 근거: §6.6
 - `concurrency_settings`
   - mode(auto/manual), caps, mem_reserve_gb, subagent_budget(dev/qa)
+  - 일정 계산이 쓰는 동시 실행 값 (M2-07 재작업 F1):
+    - `caps`가 아직 없을 때만 전체 2·Agent별 1로 계산한다. 설정이 있으면 그 값을 쓴다.
+    - 현재 한도는 가장 최근 `runner_concurrency_log.limit`(상한 안으로 자름)이다. Runner 보고가 없으면 상한을 현재 한도로 본다.
+    - 하위 Agent 비율은 관측 창(`window_days`, 기본 7일) 동안 「하위 Agent 수 합 ÷ 실행 세션 수 합」이다. 관측이 없으면 0이다(P의 0.5는 Mock 값).
+    - 왜: 일정은 실제로 돌 수 있는 수만큼만 겹쳐 잡아야 한다. 관측이 있는데 상한만 쓰면 일정이 실제보다 빠르게 나온다.
   - 근거: §6.6 §6.7
 - `runner_readiness`
   - key unique, status, detail, fix, at
@@ -515,6 +553,15 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
 
 - `schedule_policy`
   - auto_replan, cp_auto, threshold_days, assume_rate, window_days=7, min_hours=72
+  - 기본값 (owner 2026-11-26 아이템 7, 마이그레이션 0019):
+    - 가정 가동률 `assume_rate` = 0.6(60%)
+    - 재조정 임계값 `threshold_days` = 1(1일)
+    - 둘 다 설정에서 바꿀 수 있다.
+    - 0019는 기존 DB에서 비어 있는(null) 칸만 채운다. 팀장이 이미 넣은 값은 덮지 않는다.
+  - 값이 null일 때 일정 계산(Planning·재조정, `GET /api/schedule`)이 쓰는 유효값:
+    - `auto_replan` null은 「끔」으로 읽는다. 재조정은 `pending`으로 기록되고 기준 버전이 생기지 않는다(D-10).
+    - `assume_rate` null은 0.6, `threshold_days` null은 1을 쓴다.
+    - 왜: G에 확정 근거가 없는 값(`auto_replan`)은 켜진 것으로 추정하지 않는다. owner가 정한 값은 seed와 계산이 같은 값을 쓴다.
   - 근거: §6.4 §10
 - `blackout_days`
   - date unique, note
@@ -802,12 +849,14 @@ claim은 Runner가 「이 일을 제가 하겠습니다」 하고 job을 예약�
 1. `system_state` 행 `FOR UPDATE` → 프로젝트 행 잠금 + `confirmName` 일치(§5.1).
 2. 해당 epoch 디렉토리 전체를 `file_delete_queue`에 기록, 정리 명령 payload(저장소·기준 커밋·브랜치)를 `runner_commands`에 기록. 기준 커밋이 없으면 저장소 정리는 명령에서 제외(§9.5-2).
    - 정리 명령 payload에는 외부 쓰기 권한의 generation과, 모든 기록 출처에 남은 Agent PR·브랜치도 담는다.
+   - payload의 정확한 필드와 공용 고정 예시는 contracts §3.2 「정리 명령 `reset-cleanup`의 payload」에 있다.
    - 왜: 프로젝트 데이터를 지운 뒤에는 어떤 PR·브랜치를 시스템이 만들었는지 다시 알 수 없다.
 3. 프로젝트 데이터 삭제. `keepSettings=false`면 설정·환경·Runner 가동 기록·메일/Telegram 설정도 삭제. **GitHub 연결은 항상 유지**(§4.2 L258), 전송 이력은 항상 삭제.
    - GitHub 연결과 함께 `external_write_authority`의 generation·차단 상태도 항상 유지한다(§2.5).
    - `keepSettings=false`여도 빈 설정으로 두지 않는다. 사용자 설정을 지우고 승인된 `system` 기본값을 같은 트랜잭션에서 다시 넣는다(§6).
      - `agent_efforts`와 검토를 마친 하위 Agent 정의는 보존하고, demo 하위 Agent 정의만 지운다.
      - 다시 넣는 일정 정책은 `cp_auto=true`이고, `auto_replan`은 G에 확정 근거가 없어 null이다.
+     - 가정 가동률은 0.6, 재조정 임계값은 1일로 다시 넣는다(owner 2026-11-26 아이템 7, §2.7).
      - 왜: 설정 표가 비면 서버가 기본값 없이 판단해야 한다. 승인된 기본값으로 돌아가는 것이 「처음 상태」다.
 4. epoch+1, `reset_log` 추가. 1~4는 한 트랜잭션(§9.5-1).
    - 왜 한 트랜잭션인가: 중간에 실패하면 반쯤 지워진 상태가 남지 않고 전부 원래대로 돌아간다.
@@ -869,6 +918,7 @@ epoch가 바뀌는 순간(초기화)과 다른 쓰기가 겹쳐도 옛 프로젝
     - 왜: 마이그레이션 도구는 마지막으로 적용한 항목의 시각보다 늦은 항목만 실행한다. 0016을 먼저 적용한 DB에 0015를 나중에 더하면 0015가 건너뛰어진다.
     - 0015는 표 구조를 바꾸지 않는 SQL 전용 파일이라 snapshot(이전 스냅샷 ID로 이어지는 구조 기록)이 없다. 그래서 0016 snapshot은 0014 snapshot에 이어진다.
   - 0016의 CHECK는 계약과 같은 조건을 검사한다. 권한 하나가 JSON null인 값, 목록 자리에 숫자·boolean·null이 든 값은 거부한다(검사 전체가 참일 때만 통과, `awbs_valid_id_list()`).
+- 0019(M2-08, 2026-11-26)는 일정 정책 기본값(가정 가동률 0.6, 재조정 임계값 1일, owner 아이템 7)을 `seed_system()`에 넣고, 기존 DB의 빈 칸만 채운다(§2.7).
 
 ### 6.1 DB 권한과 보안 검사
 

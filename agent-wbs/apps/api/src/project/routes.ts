@@ -5,7 +5,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { installProjectErrors } from './errors.ts';
 import { projectState } from './read.ts';
 import {
-  analyzeInputs, approveBootstrap, confirmTech, createProject, createRepoCheck, getRepoCheck, rerunBootstrap, retryBootstrap, retryInputs, skipInputs,
+  analyzeInputs, approveBootstrap, confirmTech, createProject, createRepoCheck, getRepoCheck, rerunBootstrap, retryBootstrap, retryInputs, recheckInputs, skipInputs,
   type Registration,
 } from './service.ts';
 
@@ -13,7 +13,7 @@ import {
 export const ACTIONS: Record<string, string> = {
   createRepoCheck: '저장소 접근 확인', getRepoCheck: '저장소 확인 결과 조회', createProject: '프로젝트 등록', getProject: '프로젝트 조회',
   approveBootstrap: '초기 WBS 승인', rerunBootstrap: '재분석 요청', retryBootstrap: '초기 분석 다시 시도', confirmTech: '기술 결정 확정',
-  analyzeInputs: '이 버전으로 분석', skipInputs: '분석 안 함', retryInputs: '차이 분석 다시 시도',
+  analyzeInputs: '이 버전으로 분석', skipInputs: '분석 안 함', retryInputs: '차이 분석 다시 시도', recheckInputs: '입력 이력 복구 확인',
   reportRepoCheck: '저장소 확인 결과 보고', reportInputChanges: '입력 변경 보고', reportBootstrapProgress: '분석 진행 보고',
   submitDraft: '초기 WBS 초안 등록', submitTechProposals: '기술 결정 제안',
 };
@@ -74,5 +74,6 @@ export function registerProjectRoutes(app: FastifyInstance, pool: Pool): void {
     routeOf(scope, pool, 'analyzeInputs', (ctx) => analyzeInputs(ctx.client, body<{ updatedAt: string; commit: string; commits: string[]; instr?: string }>(ctx), ctx.epoch), 202);
     routeOf(scope, pool, 'skipInputs', (ctx) => skipInputs(ctx.client, body<{ updatedAt: string; commits: string[] }>(ctx)), 204);
     routeOf(scope, pool, 'retryInputs', (ctx) => retryInputs(ctx.client, body<{ updatedAt: string; version: number }>(ctx), ctx.epoch), 202);
+    routeOf(scope, pool, 'recheckInputs', (ctx) => recheckInputs(ctx.client, body<{ updatedAt: string }>(ctx)), 202);
   });
 }
