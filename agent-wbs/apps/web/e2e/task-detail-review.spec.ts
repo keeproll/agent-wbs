@@ -43,7 +43,7 @@ test('R1 다른 사용자가 저장한 뒤 변경 polling으로 캐시가 최신
 test('R2 390px: 머리가 커도 본문(FAIL 결함·Evidence)을 세로로 스크롤해 실제로 읽을 수 있다', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await open(page, '/wbs/TASK-0007?tab=verif');
-  await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished)));
+  await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished.catch(() => undefined))));
   const defects = page.getByRole('article', { name: /FAIL/ }).locator('.ev');
   await defects.scrollIntoViewIfNeeded();
   await expect(defects).toBeInViewport({ ratio: 0.9 });

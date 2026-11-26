@@ -152,7 +152,7 @@ test('UAT-RESP-02-TASK 390px: 알림 링크(로그인 필요) → 로그인 → 
   await expect(fail).toContainText('DEF-0007-1 필터 결과에서 상위 노드 누락');
   await expect(fail.locator('.ev a').first()).toBeVisible();
   // 잘림 없음: 페이지 가로 넘침 없음, 상세 본문 글자 칸이 화면 안. 원본 열림 효과(0.24초, P L145)가 끝난 뒤 잰다.
-  await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished)));
+  await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished.catch(() => undefined))));
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBe(0);
   for (const el of await d.locator('.sum-i, .att-h, .ev, .tabs').all()) {
