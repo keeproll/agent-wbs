@@ -104,3 +104,40 @@ describe('tasks 착수 승인 필수 항목(contracts §2.1)', () => {
     expect(approvalErrors({ purpose: 'p', doneCond: 'd', ac: [1], checklist: [1], outputs: [{ required: true }], assignee: 'Claude', verifier: 'Codex' })).toEqual([]);
   });
 });
+
+describe('tasks subjectHash 계약 고정(독립 리뷰 §5)', () => {
+  const vector: JudgedSource = {
+    title: '예시',
+    overview: { purpose: '빠지는 목적', background: '빠지는 배경', scope: ['기능'], out: [], precond: '빠지는 선행', doneCond: '테스트 통과' },
+    spec: {}, ac: [], outputs: [], designs: [], conflictGroup: null,
+  };
+
+  test('고정 벡터: 정규 JSON 문자열과 SHA-256 소문자 16진수가 일치한다', () => {
+    expect(canonicalJson(judgedContent(vector))).toBe(
+      '{"ac":[],"conflictGroup":null,"designs":[],"doneCond":"테스트 통과","out":[],"outputs":[],"scope":["기능"],'
+      + '"spec":{"constraints":[],"docs":[],"errors":[],"files":[],"inputs":[],"outputs":[],"req":[],"steps":[],"verify":[],"work":[]},"title":"예시"}');
+    expect(subjectHash(vector)).toBe('49813649157306979e9b5652a52674817589723f035e668c9b8a9e372027a1cb');
+  });
+
+  test('객체 키와 산출물 이름은 UTF-16 코드 단위 순서로 정렬한다', () => {
+    // 'Z'(0x5A) < 'a'(0x61) < 'é'(0xE9) < '가'(0xAC00). localeCompare 순서와 다르다.
+    expect(canonicalJson({ 가: 1, a: 2, Z: 3, é: 4 })).toBe('{"Z":3,"a":2,"é":4,"가":1}');
+    const names = judgedContent({ ...vector, outputs: ['가', 'é', 'a', 'Z'].map((name) => ({ name, kind: 'k', required: true, verify: '', delivered: false })) })
+      .outputs.map((output) => output.name);
+    expect(names).toEqual(['Z', 'a', 'é', '가']);
+  });
+
+  test('문자열은 trim·대소문자·Unicode 정규화를 하지 않는다', () => {
+    const base = subjectHash(vector);
+    expect(subjectHash({ ...vector, title: ' 예시' })).not.toBe(base);
+    const composed = subjectHash({ ...vector, title: 'é' });
+    expect(subjectHash({ ...vector, title: 'é' })).not.toBe(composed);
+  });
+});
+
+describe('tasks 정의하지 않은 필드 거부 — 상속 키', () => {
+  test('Object.prototype에 있는 이름(toString·constructor·__proto__)도 정의하지 않은 필드다', () => {
+    const body = JSON.parse('{"updatedAt":"x","title":"t","toString":"u","constructor":1,"__proto__":{"a":1}}') as unknown;
+    expect(unknownFields(bodyOf('updateTask'), body).sort()).toEqual(['__proto__', 'constructor', 'toString']);
+  });
+});
