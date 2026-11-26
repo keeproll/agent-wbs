@@ -1,6 +1,6 @@
 /**
  * 주소(라우팅) 표. 메뉴 12개의 주소는 `/<메뉴 key>`다(shared/layout/menu.ts).
- * 하위 주소: `/wbs/:taskKey`(G§4.3), `/settings/:tab`(G§4.9).
+ * 하위 주소: `/wbs/:taskKey`(G§4.3), `/settings/:tab`(G§4.9), `/change/:cpRef`(M3-05 알림 링크).
  * M3-02~08은 feature 컴포넌트를 내보내고, 이 표에 연결하는 일은 병합 때 coordinator가 한다(shared/README §1).
  *
  * 편집 보호(useBlocker)를 쓰려면 data router(createBrowserRouter)가 필요하다.
@@ -12,6 +12,11 @@ import { RequireAuth } from '../shared/auth/RequireAuth.tsx';
 import { MENU } from '../shared/layout/menu.ts';
 import { Shell } from '../shared/layout/Shell.tsx';
 import { NotFoundPage, PendingPage } from './pages.tsx';
+import { ChangePage } from '../features/change/ChangePage.tsx';
+import { PlanningPage } from '../features/planning/PlanningPage.tsx';
+
+/** 구현을 마친 메뉴(M3-05: planning·change). 나머지는 PendingPage. */
+const DONE: Partial<Record<string, () => React.JSX.Element>> = { planning: PlanningPage, change: ChangePage };
 
 /** 공통 컴포넌트 견본(/_states). 개발 서버와 E2E 빌드에만 들어가고 제품 빌드에는 없다. */
 const withSandbox = import.meta.env.DEV || import.meta.env.MODE === 'e2e';
@@ -24,7 +29,12 @@ export const routes: RouteObject[] = [
     children: [
       { index: true, element: <Navigate to="/dashboard" replace /> },
       // key: 메뉴를 옮기면 화면을 새로 만든다. 같은 컴포넌트를 재사용하면 「재방문 갱신」(상단 진행 막대)이 일어나지 않는다.
-      ...MENU.map((item) => ({ path: `/${item.key}`, element: <PendingPage key={item.key} menu={item.key} /> })),
+      ...MENU.map((item) => {
+        const Done = DONE[item.key];
+        return { path: `/${item.key}`, element: Done ? <Done key={item.key} /> : <PendingPage key={item.key} menu={item.key} /> };
+      }),
+      // 알림 링크로 여는 CP 상세(CP 키 또는 id). key가 같아 목록에서 CP를 바꿔도 화면을 새로 만들지 않는다.
+      { path: '/change/:cpRef', element: <ChangePage key="change" /> },
       { path: '/wbs/:taskKey', element: <PendingPage key="wbs" menu="wbs" /> },
       { path: '/settings/:tab', element: <PendingPage key="settings" menu="settings" /> },
       ...(StatesSandbox ? [{ path: '/_states', element: <Suspense><StatesSandbox /></Suspense> }] : []),

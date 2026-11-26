@@ -24,9 +24,14 @@ import { findProposal } from './find.ts';
 import { cpStatus, diffRows, eventLabel, holdReasonText, impactRows, judgementRows, sourceLabel, type TaskInfo } from './model.ts';
 import type { Proposal, ProposalPreview } from './types.ts';
 
-export const DIFF_GRID = { gridTemplateColumns: '100px 230px 148px minmax(150px,1fr) minmax(150px,1fr) 64px' };
+/**
+ * 원본 diffGrid(P L7064)는 `100px 230px 148px minmax(150px,1fr) minmax(150px,1fr) 64px`.
+ * 1920에서는 같은 폭이 되고, 1280에서 표가 상세 칸(약 740px)을 넘지 않도록 대상 Task 열과 마지막 빈 열만 줄어들 수 있게 했다(D-28).
+ * 마지막 열은 원본의 「제외」 버튼 자리다(계약에 항목 제외 API가 없어 버튼은 없다).
+ */
+export const DIFF_GRID = { gridTemplateColumns: '100px minmax(150px,230px) 148px minmax(150px,1fr) minmax(150px,1fr) minmax(0,64px)' };
 export const IMP_GRID = { gridTemplateColumns: '110px minmax(160px,1fr) 120px minmax(220px,1.4fr)' };
-const JUDGE_GRID = { gridTemplateColumns: '110px 170px 70px 120px minmax(200px,1fr) 130px' };
+const JUDGE_GRID = { gridTemplateColumns: '110px minmax(120px,170px) 70px 120px minmax(200px,1fr) minmax(110px,130px)' };
 
 /** 원본 배너(P L5997) + 원본에 없는 보류(held) */
 const BANNER: Record<string, [string, string]> = {
@@ -95,9 +100,9 @@ export function ProposalDetail({ cp, tasks, planningTitle, comment, setComment }
         </span>
       </div>
       <div className={`banner ${banner[0]}`}><div className="banner-b">{banner[1]}</div></div>
-      <div className="sec" style={{ marginTop: 14 }}><h4>변경 사유</h4><p>{cp.reason}</p></div>
+      <div className="sec" style={{ marginTop: 14 }}><h3 className="h4">변경 사유</h3><p>{cp.reason}</p></div>
       <div className="sec">
-        <h4>변경 전 / 후 비교</h4>
+        <h3 className="h4">변경 전 / 후 비교</h3>
         {noOps && <p className="empty">변경 항목이 없습니다.</p>}
         <div className="gtb" role="region" aria-label="변경 전 / 후 비교" tabIndex={0}>
           <div className="gtr h" style={DIFF_GRID}><span className="gc">구분</span><span className="gc">대상 Task</span><span className="gc">항목</span><span className="gc">변경 전</span><span className="gc">변경 후</span><span className="gc" /></div>
@@ -133,7 +138,7 @@ export function ProposalDetail({ cp, tasks, planningTitle, comment, setComment }
       )}
       {judged.length > 0 && (
         <div className="sec">
-          <h4>판단 결과 <span className="muted" style={{ fontWeight: 400 }}>Planning(Codex · Claude)이 기록한 분할 규칙 판단</span></h4>
+          <h3 className="h4">판단 결과 <span className="muted" style={{ fontWeight: 400 }}>Planning(Codex · Claude)이 기록한 분할 규칙 판단</span></h3>
           <div className="gtb" role="region" aria-label="판단 결과" tabIndex={0}>
             <div className="gtr h" style={JUDGE_GRID}><span className="gc">대상</span><span className="gc">규칙</span><span className="gc">결과</span><span className="gc">합의</span><span className="gc">근거</span><span className="gc">판단 시각</span></div>
             {judged.map((j) => (
@@ -148,7 +153,7 @@ export function ProposalDetail({ cp, tasks, planningTitle, comment, setComment }
       )}
       {!closed && !noOps && (
         <div className="sec">
-          <h4>영향 분석 <span className="muted" style={{ fontWeight: 400 }}>반영 시 영향받는 Task — 차단 변화와 후속 Task 포함</span></h4>
+          <h3 className="h4">영향 분석 <span className="muted" style={{ fontWeight: 400 }}>반영 시 영향받는 Task — 차단 변화와 후속 Task 포함</span></h3>
           <div className="gtb" role="region" aria-label="영향 분석" tabIndex={0}>
             <div className="gtr h" style={IMP_GRID}><span className="gc">Task</span><span className="gc">제목</span><span className="gc">현재 상태</span><span className="gc">영향</span></div>
             {impact.map((im) => (
@@ -164,7 +169,7 @@ export function ProposalDetail({ cp, tasks, planningTitle, comment, setComment }
       )}
       <Actions cp={cp} preview={p} issues={issues.length} holds={holds.length} comment={comment} setComment={setComment} err={err} setErr={setErr} />
       <div className="sec">
-        <h4>승인 이력</h4>
+        <h3 className="h4">승인 이력</h3>
         <ul className="tl">
           {[...cp.events].reverse().map((e, n) => (
             <li key={`${e.at}-${String(n)}`}><span className="mono muted">{formatDateTime(e.at)}</span> <b>{e.actor}</b> <span className="tag">{eventLabel(e.action)}</span>{e.comment && <span className="muted"> — {e.comment}</span>}</li>
@@ -247,7 +252,7 @@ function Actions({ cp, preview, issues, holds, comment, setComment, err, setErr 
   if (status === 'review') {
     return (
       <div className="apbox">
-        <h4>팀장 승인</h4>
+        <h3 className="h4">팀장 승인</h3>
         <label className="sr" htmlFor={`cp-com-${cp.id}`}>승인 의견</label>
         <textarea id={`cp-com-${cp.id}`} rows={2} className="inp" placeholder="의견 — 반려 · 수정 요청 시 필수" value={comment}
           aria-invalid={err ? true : undefined} aria-describedby={err ? `cp-err-${cp.id}` : undefined}
@@ -266,7 +271,7 @@ function Actions({ cp, preview, issues, holds, comment, setComment, err, setErr 
     const label = status === 'draft' ? '제출 — 승인 요청' : '재제출';
     return (
       <div className="apbox">
-        <h4>{status === 'draft' ? '제출' : '수정 후 재제출'}</h4>
+        <h3 className="h4">{status === 'draft' ? '제출' : '수정 후 재제출'}</h3>
         <p className="fhint" style={{ margin: '0 0 8px' }}>
           {status === 'draft'
             ? '제출하면 승인 대기 상태가 됩니다. 팀장 승인과 「WBS 반영」 전까지 공식 Task 명세와 WBS는 바뀌지 않습니다.'
@@ -282,7 +287,7 @@ function Actions({ cp, preview, issues, holds, comment, setComment, err, setErr 
   if (status === 'approved') {
     return (
       <div className="apbox">
-        <h4>Replanning — WBS 반영</h4>
+        <h3 className="h4">Replanning — WBS 반영</h3>
         <p className="fhint" style={{ margin: '0 0 8px' }}>승인된 변경을 실제 WBS에 적용합니다. 완료 Task와 기존 검증 결과는 변경하지 않습니다.</p>
         <div className="form-acts" style={{ border: 0, paddingTop: 0 }}>
           <BusyButton busy={apply.busy} busyLabel="반영 중…" disabled={busy || noPreview || holds > 0} onClick={() => {

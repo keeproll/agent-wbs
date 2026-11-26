@@ -46,7 +46,7 @@ interface Judged { items: { rule: string | number; result: string | number; agre
 const loose = (op: ProposalOp) => op as unknown as LooseOp;
 
 const fieldValue = (field: string | undefined, value: unknown) =>
-  field === 'priority' ? (PRIORITY[Number(value)] ?? String(value)) : value === undefined || value === null || value === '' ? '—' : String(value);
+  value === undefined || value === null || value === '' ? '—' : field === 'priority' ? (PRIORITY[Number(value)] ?? String(value)) : String(value);
 
 export function opText(op: ProposalOp, idMap: Record<string, string> | null): string {
   const o = loose(op);
@@ -121,6 +121,8 @@ export function impactRows(ops: readonly ProposalOp[], idMap: Record<string, str
     else note(r(o.succ), `${o.op === 'dep-add' ? '선행 추가' : '선행 삭제'} ${r(o.pred)}`);
   }
   for (const dep of impact?.removedDependencies ?? []) {
+    // 관계 삭제 op로 지운 관계는 위에서 「선행 삭제」로 이미 적었다(원본 문구). 취소로 함께 지워진 관계만 따로 적는다.
+    if (String(dep.reason) === 'dep-remove') continue;
     const target = String(dep.reason) === 'succ-cancelled' ? dep.pred : dep.succ;
     note(target, `선행 관계 제거 ${dep.pred} → ${dep.succ} (${String(dep.type)}, ${REASON[String(dep.reason)] ?? String(dep.reason)})`);
   }

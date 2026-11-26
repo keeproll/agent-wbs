@@ -61,6 +61,12 @@ describe('변경 전/후 비교 행(원본 diffRows P L5651)', () => {
   });
 });
 
+describe('변경 전 값이 없으면 —', () => {
+  it('우선순위 변경 전 값을 모르면 「undefined」가 아니라 —', () => {
+    expect(diffRows(ops_([{ op: 'modify', task: 'TASK-0006', field: 'priority', after: 0 }]), {}, TASKS, [])[0]?.before).toBe('—');
+  });
+});
+
 describe('opText(원본 P L5642)', () => {
   it('Planning 검토의 「반영될 변경」 칩 문구', () => {
     expect(opText(ops_([{ op: 'modify', task: 'TASK-0006', field: 'priority', after: 1 }])[0] as ProposalOp, null)).toBe('TASK-0006 우선순위: 높음');
@@ -88,6 +94,19 @@ describe('영향 분석(D-27: 취소 CP의 제거 관계·풀리는 후속·계�
     ]);
     expect(rows[1]).toMatchObject({ unblocked: true, stL: '실행 대기' });
     expect(rows[2]).toMatchObject({ unblocked: false });
+  });
+});
+
+describe('영향 분석: 관계 삭제 op', () => {
+  it('직접 삭제한 관계는 「선행 삭제」로 한 번만 보이고, 풀리면 차단 해제를 붙인다(원본 UI-09 화면과 같은 문구)', () => {
+    const rows = impactRows(ops_([
+      { op: 'dep-remove', pred: 'TASK-0005', succ: 'TASK-0006' },
+      { op: 'dep-add', pred: 'TASK-0005', succ: 'TASK-0006', type: 'SS' },
+    ]), {}, TASKS, {
+      removedDependencies: [{ pred: 'TASK-0005', succ: 'TASK-0006', type: 'FS', reason: 'dep-remove' }],
+      unblockedSuccessors: [{ taskKey: 'TASK-0006', remainingBlockers: [] }],
+    });
+    expect(rows.map((r) => [r.id, r.notes])).toEqual([['TASK-0006', '선행 삭제 TASK-0005 · 선행 추가 TASK-0005 · 차단 해제 → 실행 가능']]);
   });
 });
 

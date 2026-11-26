@@ -7,7 +7,7 @@
  * - 편집 중인 입력(승인 의견·새 변경 제안)이 있으면 다른 CP·메뉴로 가기 전에 묻는다(useEditGuard는 이 화면에 하나).
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useApi } from '../../shared/api/ApiProvider.tsx';
 import { useApiQuery } from '../../shared/api/queries.ts';
@@ -22,6 +22,7 @@ import { cpStatus, sourceLabel, type TaskInfo } from './model.ts';
 import { ProposalDetail } from './ProposalDetail.tsx';
 import { ProposalModal } from './ProposalModal.tsx';
 import type { Proposal } from './types.ts';
+import './change.css';
 
 const SUB = 'Change Proposal · 영향 분석 · 승인 · Replanning — 승인 후 「WBS 반영」을 실행해야 WBS가 바뀝니다';
 
@@ -50,6 +51,16 @@ function ChangeBody({ projectId }: { projectId: string }) {
   const [modalOpen, setModalOpen] = useState(false);
   const { guard } = useEditGuard(comment.trim() !== '' || modalDirty);
   const confirm = useConfirm();
+  const refresh = useProposalRefresh();
+  // 제출 뒤 새 CP로 이동: 창 입력(dirty)이 지워진 화면이 그려진 다음에 이동한다.
+  // 같은 처리에서 바로 이동하면 편집 보호가 아직 옛 dirty로 「버리기」 확인을 띄운다.
+  const goTo = useRef<string | null>(null);
+  useEffect(() => {
+    if (goTo.current === null || modalDirty) return;
+    const to = goTo.current;
+    goTo.current = null;
+    void navigate(to);
+  }, [modalDirty, navigate]);
 
   const items = list.data?.items ?? [];
   const inList = cpRef ? items.find((p) => p.id === cpRef || p.cpKey.toUpperCase() === cpRef.toUpperCase()) : items[0];
@@ -57,7 +68,8 @@ function ChangeBody({ projectId }: { projectId: string }) {
   const deep = useQuery({
     queryKey: ['findProposal', cpRef ?? ''],
     queryFn: () => findProposal((query) => client.call('listProposals', { query }), cpRef ?? ''),
-    enabled: cpRef !== undefined && list.data !== undefined && !inList && list.data.nextCursor !== null,
+    // 최근 목록(캐시)에 없으면 언제나 서버에서 새로 넘겨 본다. 방금 만든 CP처럼 캐시가 낡았을 수도 있기 때문이다.
+    enabled: cpRef !== undefined && list.data !== undefined && !inList,
     meta: { topics: ['proposal'] },
   });
   const selected: Proposal | undefined = inList ?? deep.data ?? undefined;
@@ -69,7 +81,7 @@ function ChangeBody({ projectId }: { projectId: string }) {
     return <LoadError title="변경 제안" error={list.error} retrying={list.isFetching} onRetry={() => { void list.refetch(); }} />;
   }
 
-  const notFound = cpRef !== undefined && list.data !== undefined && !inList && (list.data.nextCursor === null || deep.data === null);
+  const notFound = cpRef !== undefined && !inList && deep.data === null;
   return (
     <Page
       title="변경 제안"
@@ -129,7 +141,7 @@ function ChangeBody({ projectId }: { projectId: string }) {
             if (!modalDirty) close();
             else void confirm(DISCARD_CONFIRM).then((ok) => { if (ok) close(); });
           }}
-          onSubmitted={(cp) => { setModalOpen(false); setModalDirty(false); setComment(''); void navigate(`/change/${cp.cpKey}`); }}
+          onSubmitted={(cp) => { setModalOpen(false); setModalDirty(false); goTo.current = `/change/${cp.cpKey}`; void refresh(); }}
         />
       )}
     </Page>

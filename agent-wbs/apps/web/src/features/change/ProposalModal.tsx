@@ -100,7 +100,7 @@ export function ProposalModal({ tasks, onDirty, onClose, onSubmitted }: {
         <div className="frow"><label className="flabel" htmlFor="cpm-reason">변경 사유<span className="req">필수</span></label><div className="fctl"><textarea id="cpm-reason" rows={3} className="inp" value={form.reason} onChange={(e) => { edit({ ...form, reason: e.target.value }); }} /></div></div>
         <div className="frow"><span className="flabel">출처</span><div className="fctl"><span style={{ paddingTop: 7 }}>팀장 직접 작성</span></div></div>
       </div>
-      <h4 style={{ marginTop: 16 }}>변경 항목</h4>
+      <h3 className="h4" style={{ marginTop: 16 }}>변경 항목</h3>
       <div className="gtb" role="region" aria-label="변경 항목" tabIndex={0}>
         <div className="gtr h" style={ROW_GRID}><span className="gc">유형</span><span className="gc">대상 Task</span><span className="gc">값</span><span className="gc" /></div>
         {form.rows.map((r, i) => (
@@ -128,7 +128,7 @@ export function ProposalModal({ tasks, onDirty, onClose, onSubmitted }: {
       )}
       {built.errs.length === 0 && preview.length > 0 && (
         <>
-          <h4 style={{ marginTop: 16 }}>변경 전 / 후 미리보기</h4>
+          <h3 className="h4" style={{ marginTop: 16 }}>변경 전 / 후 미리보기</h3>
           <div className="gtb" role="region" aria-label="변경 전 / 후 미리보기" tabIndex={0}>
             <div className="gtr h" style={DIFF_GRID}><span className="gc">구분</span><span className="gc">대상 Task</span><span className="gc">항목</span><span className="gc">변경 전</span><span className="gc">변경 후</span><span className="gc" /></div>
             {preview.map((r, i) => (
