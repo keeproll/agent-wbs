@@ -57,7 +57,10 @@ export async function assertVersion(client: PoolClient, task: LockedTask, expect
   });
 }
 
-/** 완료·취소는 종료 상태다(data-model §3.1). 완료 결과와 검증 당시 내용을 보존한다(data-model §4, G§5.2-1, D-20). */
+/**
+ * 완료·취소는 종료 상태다(Q-05, data-model §3.1). 완료 결과와 검증 당시 내용을 보존한다(data-model §4, G§5.2-1, D-20).
+ * 취소 Task도 완료와 같이 내용·의존성·체크리스트 변경을 모두 거부한다(조정자 결정 2026-11-26). 조회·이력은 영향 없다.
+ */
 export const TERMINAL: readonly TaskStatus[] = ['done', 'cancelled'];
 export function assertEditable(task: LockedTask): void {
   if (TERMINAL.includes(task.status)) {

@@ -582,6 +582,34 @@ describe('tasks 독립 리뷰 P1·P2 회귀', () => {
     }
   });
 
+  test('조정자 결정: 취소 Task는 종료 상태라 편집·의존성·체크리스트 변경은 409이고 조회·이력은 그대로다', async () => {
+    const pred = await create();
+    const key = await create({ title: '취소 대상', checklist: [{ content: '항목', required: true }] });
+    const { dependency } = (await addDep(key, pred)).json<{ dependency: { id: string } }>();
+    await setStatus(key, 'cancelled');
+    const before = await detail(key);
+    const historyBefore = await history(key);
+    const v = before.updatedAt;
+    const item = before.checklistItems[0]?.itemKey ?? '';
+    const results = [
+      await call('PATCH', `/api/tasks/${key}`, { updatedAt: v, priority: 0 }),
+      await call('PATCH', `/api/tasks/${key}/spec`, { updatedAt: v, ac: [{ given: 'g', when: 'w', then: 't', method: '' }] }),
+      await call('PATCH', `/api/tasks/${key}/outputs`, { updatedAt: v, outputs: [{ name: 'X', kind: '코드', required: true, verify: '', delivered: false }] }),
+      await call('POST', `/api/tasks/${key}/dependencies`, { updatedAt: v, predTaskKey: await create(), depType: 'SS' }),
+      await call('DELETE', `/api/dependencies/${dependency.id}?updatedAt=${encodeURIComponent(v)}`),
+      await call('POST', `/api/tasks/${key}/checklist`, { updatedAt: v, content: '새 항목', required: true }),
+      await call('PATCH', `/api/tasks/${key}/checklist/${item}`, { updatedAt: v, content: '바꾼 항목' }),
+      await call('DELETE', `/api/tasks/${key}/checklist/${item}?updatedAt=${encodeURIComponent(v)}`),
+    ];
+    expect(results.map((r) => r.statusCode)).toEqual(results.map(() => 409));
+    expect(results.map((r) => errorOf(r).code)).toEqual(results.map(() => 'INVALID_TRANSITION'));
+    // 조회는 그대로: 상세·목록에 남고 내용·이력은 바뀌지 않는다.
+    expect(await detail(key)).toEqual(before);
+    const list = (await call('GET', `/api/projects/${projectId}/tasks?status=cancelled`)).json<{ tasks: { taskKey: string }[] }>();
+    expect(list.tasks.map((t) => t.taskKey)).toContain(key);
+    expect(await history(key)).toEqual(historyBefore);
+  });
+
   test('P1-3: Gate 대기에서 명세를 바꾸면 검증 근거를 무효로 기록하고 verifying으로 바꾼다', async () => {
     const key = await create();
     await completeSpec(key);
