@@ -594,7 +594,8 @@
      "agent/TASK-0005"
     ],
     "worktrees": 1,
-    "mergedTasks": 0
+    "mergedTasks": 0,
+    "worktreesEstimated": true
    },
    "repo": {
     "url": "https://github.com/o/r",
@@ -602,6 +603,10 @@
     "name": "r",
     "branch": "main",
     "baseCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "sending": {
+    "mail": 0,
+    "notify": 0
    }
   }
  },

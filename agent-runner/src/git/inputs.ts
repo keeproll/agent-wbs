@@ -89,43 +89,56 @@ export interface InputReporterOptions {
   warn: (message: string) => void;
   /** 409 뒤 다시 계산하는 최대 횟수. 그 사이에도 서버 head가 계속 바뀌면 다음 주기로 미룬다. */
   maxAttempts?: number;
+  /** 서버 정책의 입력 확인 다시 시도 번호(inputRecheck). 재작성으로 멈춘 뒤 이 값이 바뀌면 다시 관측한다. */
+  recheck?: () => number | undefined;
 }
 
 export type InputReport = ApiResponse<'reportInputChanges'>['body'] | { skipped: 'history_rewritten' };
 
 /**
- * 입력 변경 보고기. 상태는 메모리에만 둔다.
+ * 입력 변경 보고기. 상태는 메모리에만 두고, 그 상태가 어느 epoch의 것인지 함께 기록한다.
  * - 처음(또는 재시작 뒤)에는 서버 head를 모르므로 head 자신을 base로 물어본다. 다르면 409가 서버 head를 알려 준다.
  * - 409 VERSION_CONFLICT: 응답의 `details.current.base`로 base를 바꿔 **다시 계산**해 보낸다(계약 「409 뒤 재계산」).
  * - historyRewritten: 서버가 이력 재작성으로 보고 아무것도 받지 않았다. 같은 base로는 다시 보내지 않고 멈춘다(재작성 시 중단).
- *   팀장 조치로 서버 head가 바뀌면(409로 새 base를 받으면) 다시 보낸다. 팀장 조치의 정의는 [결정 필요] 항목이다.
+ *   다시 보내는 때는 둘뿐이다(조정자 결정 2026-11-26).
+ *   1) 팀장이 「복구 확인·입력 확인 다시 시도」를 눌러 정책 inputRecheck가 바뀌었을 때: 서버 head를 base로 다시 관측한다.
+ *      관측 결과는 관측을 시작할 때 읽은 번호로만 기록한다. 그 사이 들어온 새 번호는 다음 관측이 쓴다.
+ *      owner가 정상 merge·복원 커밋으로 연결을 되돌렸다면 조상 관계가 성립해 서버가 받아들이고 경고를 해소한다. 아니면 다시 멈춘다.
+ *   2) epoch가 바뀌었을 때(프로젝트 초기화): 이전 base·중단 상태를 모두 버린다(교차 리뷰 F2, G§4.2 ③ 「등록 전 상태」).
  */
 export class InputChangeReporter {
   readonly #o: InputReporterOptions;
+  #epoch: number | undefined;
   #base: string | undefined;
-  #rewrittenBase: string | undefined;
+  #stopped: { base: string; recheck: number | undefined } | undefined;
 
   constructor(options: InputReporterOptions) { this.#o = options; }
 
   /** 서버가 마지막으로 받은 입력 head(알면). */
   get base(): string | undefined { return this.#base; }
   /** 이력 재작성으로 멈춘 경우 그 base. */
-  get stoppedAt(): string | undefined { return this.#rewrittenBase; }
+  get stoppedAt(): string | undefined { return this.#stopped?.base; }
 
   async report(source: InputSource): Promise<InputReport> {
+    const epoch = this.#o.epoch();
+    // 이 관측이 응답하는 복구 확인 번호는 시작 때 고정한다(재리뷰 N1). 관측 중에 팀장이 다음 확인을 누르면
+    // 늦게 온 결과가 그 번호를 소비하지 않고, 다음 주기에 새 번호로 다시 관측한다.
+    const recheck = this.#o.recheck?.();
+    if (this.#epoch !== epoch) { this.#epoch = epoch; this.#base = undefined; this.#stopped = undefined; }
+    if (this.#stopped && this.#stopped.recheck === recheck) return { skipped: 'history_rewritten' };
     const head = await source.fetch();
-    let base = this.#base ?? head;
-    if (this.#rewrittenBase !== undefined && this.#rewrittenBase === base) return { skipped: 'history_rewritten' };
+    // 복구 확인으로 다시 시도할 때는 서버 head(멈춘 base)를 base로 쓴다.
+    let base = this.#stopped?.base ?? this.#base ?? head;
     const limit = this.#o.maxAttempts ?? 3;
     for (let attempt = 0; attempt < limit; attempt++) {
       const observation = await source.inputObservation(base, head);
       try {
-        const response = await this.#o.api('reportInputChanges', { epoch: this.#o.epoch(), idempotencyKey: `inputs:${randomUUID()}`, body: { base, head, ...observation } });
+        const response = await this.#o.api('reportInputChanges', { epoch, idempotencyKey: `inputs:${randomUUID()}`, body: { base, head, ...observation } });
         this.#base = response.body.head;
         if (response.body.historyRewritten) {
-          this.#rewrittenBase = base;
-          this.#o.warn(`입력 이력 재작성: 마지막 입력 커밋 ${base}가 main ${head}의 조상이 아닙니다. 팀장 조치 전까지 입력 변경 보고를 멈춥니다.`);
-        } else this.#rewrittenBase = undefined;
+          this.#stopped = { base, recheck };
+          this.#o.warn(`입력 이력 재작성: 마지막 입력 커밋 ${base}가 main ${head}의 조상이 아닙니다. 팀장의 복구 확인 전까지 입력 변경 보고를 멈춥니다.`);
+        } else this.#stopped = undefined;
         return response.body;
       } catch (error) {
         const current = conflictBase(error);
@@ -133,7 +146,6 @@ export class InputChangeReporter {
         // 서버 head가 다르다(늦은·중복 보고, 재시작 뒤 첫 보고). 서버 head를 base로 다시 계산한다.
         base = current;
         this.#base = current;
-        if (this.#rewrittenBase !== undefined && this.#rewrittenBase === base) return { skipped: 'history_rewritten' };
       }
     }
     throw new Error(`입력 변경 보고: 서버 입력 head가 계속 바뀌어 ${String(limit)}번 안에 맞추지 못했습니다. 다음 주기에 다시 계산합니다.`);

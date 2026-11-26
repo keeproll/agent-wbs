@@ -475,11 +475,16 @@ export async function reportInputChanges(db: Db, body: InputBody): Promise<{ hea
   if (result.kind === 'invalid') throw new ProjectError('VALIDATION_FAILED', { errors: [result.error] });
   if (result.kind === 'rewritten') {
     // 이력 재작성은 금지된 상황이다(G§4.2 강제 push 금지). 자동 복구하지 않고 입력 변경을 받지 않은 채 팀장에게 알린다.
-    await db.query("insert into alerts(project_id,key,severity,target) values($1,'input_history_rewritten','error',$2::jsonb) on conflict do nothing",
-      [project.id, JSON.stringify({ base: body.base, head: body.head, message: `main 이력이 바뀌었습니다: 마지막 입력 커밋 ${body.base}가 새 main ${body.head}의 조상이 아닙니다. 입력 변경을 받지 않습니다.` })]);
+    // 열린 경고가 있으면 새 관측(head·문구)으로 갱신하고 복구 확인 번호(recheck)는 유지한다. 없으면 새로 연다.
+    const target = { base: body.base, head: body.head, message: `main 이력이 바뀌었습니다: 마지막 입력 커밋 ${body.base}가 새 main ${body.head}의 조상이 아닙니다. 입력 변경을 받지 않습니다.` };
+    const updated = await db.query("update alerts set target=target||$2::jsonb,updated_at=clock_timestamp() where project_id=$1 and key='input_history_rewritten' and resolved_at is null", [project.id, JSON.stringify(target)]);
+    if (!updated.rowCount) await db.query("insert into alerts(project_id,key,severity,target) values($1,'input_history_rewritten','error',$2::jsonb)", [project.id, JSON.stringify({ ...target, recheck: 0 })]);
     await changeEvent(db, project.id, { kind: 'alert', key: 'input_history_rewritten' }, 'alert');
     return { head: result.head, recorded: false, historyRewritten: true };
   }
+  // 유효한 보고를 받아들였다: 열린 이력 재작성 경고는 이 트랜잭션에서 해소한다(조정자 결정 2026-11-26, 복구 확인 뒤 Runner 재관측).
+  const resolved = await db.query("update alerts set resolved_at=clock_timestamp(),updated_at=clock_timestamp() where project_id=$1 and key='input_history_rewritten' and resolved_at is null", [project.id]);
+  if (resolved.rowCount) await changeEvent(db, project.id, { kind: 'alert', key: 'input_history_rewritten' }, 'alert');
   if (result.report) {
     const r = result.report;
     const stored: StoredReport = { seq: r.seq, base: r.base, head: r.head, tree: r.tree, changes: body.changes, commits: body.commits, receivedAt: new Date().toISOString() };
@@ -488,6 +493,23 @@ export async function reportInputChanges(db: Db, body: InputBody): Promise<{ hea
   }
   // 팀장 확인 항목은 분석이 볼 내용이 바뀐 보고에만 생긴다(실행 권한만 바뀐 보고는 head·트리만 옮김).
   return { head: result.head, recorded: result.report?.state === 'pending', historyRewritten: false };
+}
+
+/**
+ * 입력 이력 재작성 「복구 확인·입력 확인 다시 시도」(contracts recheckInputs).
+ * owner가 정상 merge·복원 커밋으로 연결을 되돌린 뒤 팀장이 누른다. 열린 경고의 recheck를 1 올리면 Runner 정책 inputRecheck가 바뀌어
+ * Runner가 다시 관측한다. 경고 해소는 서버가 유효한 보고를 받아들일 때(reportInputChanges) 한다. 재작성 이력을 자동으로 받지 않는다.
+ */
+export async function recheckInputs(db: Db, body: { updatedAt: string }): Promise<{ inputRecheck: number }> {
+  const project = await requireProject(db);
+  if (!(await sameTime(db, project.updated_at, body.updatedAt))) throw new ProjectError('VERSION_CONFLICT', { details: { current: { updatedAt: project.updated_at }, changes: [] } });
+  const alert = (await db.query<{ recheck: number }>(
+    `update alerts set target=jsonb_set(target,'{recheck}',to_jsonb(coalesce((target->>'recheck')::int,0)+1)) || jsonb_build_object('recheckAt',clock_timestamp()),updated_at=clock_timestamp()
+     where project_id=$1 and key='input_history_rewritten' and resolved_at is null returning (target->>'recheck')::int as recheck`, [project.id])).rows[0];
+  if (!alert) throw new ProjectError('INVALID_TRANSITION', { message: '열린 입력 이력 재작성 경고가 없습니다.' });
+  await touchProject(db, project.id);
+  await changeEvent(db, project.id, { kind: 'alert', key: 'input_history_rewritten' }, 'alert');
+  return { inputRecheck: alert.recheck };
 }
 
 /** DB의 입력 버전·입력 보고를 원장으로 읽는다. lock이면 보고 행을 잠근다. */

@@ -40,6 +40,19 @@ afterEach(async () => {
 });
 
 describe('PR 병합 — strict + 예상 head 단일 경로 (contracts §4.1 코드 근거 고정 3)', () => {
+  test('M4-06: head 갱신 뒤 GitHub 계산 중에는 SHA가 달라도 405이며, 계산이 끝나면 409다', async () => {
+    const { client, head, base } = await setup();
+    const changed = model.push(BRANCH);
+    model.setStatus(changed, 'agentwbs/int', 'success');
+    Object.assign(model, { mergeabilityPending: true });
+    await expect(client.mergePullRequest({ pr: 1, baseSha: base, headSha: head }))
+      .resolves.toMatchObject({ kind: 'rejected', status: 405 });
+    Object.assign(model, { mergeabilityPending: false });
+    await expect(client.mergePullRequest({ pr: 1, baseSha: base, headSha: head }))
+      .resolves.toMatchObject({ kind: 'head_changed', status: 409 });
+    expect(model.branches.get('main')).toBe(base);
+  });
+
   test('H′에 int가 있으면 sha=H′, merge_method=merge로 병합하고 부모·tree를 확인한다', async () => {
     const { client, head, base } = await setup();
     model.setStatus(head, 'agentwbs/int', 'success');

@@ -1,11 +1,10 @@
-import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { createGithubRemoteCleanup, RepositoryMismatch, SystemCredentialMissing } from '../../src/cleanup/remote.ts';
 import { createGitHubClient, type WriteOperation } from '../../src/github/client.ts';
-import { GitRepository } from '../../src/git/repository.ts';
+import type { GitRepository } from '../../src/git/repository.ts';
 import { Secret } from '../../src/security/secret.ts';
 import { GitHubModel } from '../fakes/github/model.ts';
 import { startFakeGitHub, type FakeGitHub } from '../fakes/github/server.ts';
@@ -55,36 +54,30 @@ test('targetsMatch: 초기화 대상(src·contracts·.agentwbs)이 기준과 같
   expect(await remote.targetsMatch(URL_, base)).toBe(false);
 });
 
-function git(cwd: string, ...args: string[]) {
-  return execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'core.hooksPath=/dev/null', ...args],
-    { cwd, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_ALLOW_PROTOCOL: 'file' } }).trim();
-}
-
-test('pushReset: 시스템 커밋 자격 증명이 없으면 보내지 않고, 원격 main이 부모와 다르면 보내지 않고, 맞으면 일반 push한다', async () => {
-  const source = join(home, 'source');
-  await mkdir(join(source, 'src'), { recursive: true });
-  git(source, 'init', '-b', 'main'); await writeFile(join(source, 'src/a'), '1'); git(source, 'add', '.'); git(source, 'commit', '-m', 'a');
-  const parent = git(source, 'rev-parse', 'HEAD');
-  const remote = join(home, 'remote.git'); git(source, 'clone', '--bare', source, remote);
-  const repo = await GitRepository.clone(home, 'p1', remote);
-  await writeFile(join(source, 'src/a'), '2'); git(source, 'commit', '-am', 'b');
-  const next = git(source, 'rev-parse', 'HEAD');
-  git(repo.path, 'fetch', source, 'main');
+test('M4-06 pushReset: 시스템 키 목록을 매번 확인하고, 다른 키가 있으면 경고 후 전송하지 않는다', async () => {
+  const parent = 'a'.repeat(40); const next = 'b'.repeat(40);
+  const pushSystemCommit = vi.fn().mockResolvedValue(undefined);
+  const repo = { pushSystemCommit } as unknown as GitRepository;
   model.branches.set('main', parent);
   await expect(createGithubRemoteCleanup({ client: client() }).pushReset(URL_, repo, next, parent)).rejects.toBeInstanceOf(SystemCredentialMissing);
-  const auth: string[] = [];
-  const withAuth = createGithubRemoteCleanup({ client: client(), systemCommitAuthorization: () => { auth.push('asked'); return Promise.resolve('Bearer system'); } });
-  await expect(withAuth.pushReset(URL_, repo, next, 'f'.repeat(40))).rejects.toThrow(/원격 main/);
-  expect(git(remote, 'rev-parse', 'main')).toBe(parent);
-  await withAuth.pushReset(URL_, repo, next, parent);
-  expect(git(remote, 'rev-parse', 'main')).toBe(next);
-  expect(auth.length).toBe(2);
+  const warnings: string[] = [];
+  const systemDeployKey = { id: 7, socket: '/run/system.sock', knownHosts: '/home/test/github-known-hosts' };
+  const withKey = createGithubRemoteCleanup({ client: client(), systemDeployKey, warn: (text) => { warnings.push(text); } });
+  model.deployKeys.push({ id: 7, read_only: false });
+  await expect(withKey.pushReset(URL_, repo, next, 'f'.repeat(40))).rejects.toThrow(/원격 main/);
+  expect(pushSystemCommit).not.toHaveBeenCalled();
+  await withKey.pushReset(URL_, repo, next, parent);
+  expect(pushSystemCommit).toHaveBeenCalledWith(next, parent, systemDeployKey);
+  model.deployKeys.push({ id: 8, read_only: true });
+  await expect(withKey.pushReset(URL_, repo, next, parent)).rejects.toThrow(/시스템 키 외/);
+  expect(pushSystemCommit).toHaveBeenCalledTimes(1);
+  expect(warnings).toEqual([expect.stringContaining('시스템 키 외')]);
 });
 
 test('이중 방어 2단계: 실행기는 명령 저장소가 자기 저장소와 다르면 어떤 요청도 보내지 않는다', async () => {
   model.push('agent/T1-h1');
   const pr = model.openPull('agent/T1-h1').number;
-  const remote = createGithubRemoteCleanup({ client: client(), systemCommitAuthorization: () => Promise.resolve('Bearer s') });
+  const remote = createGithubRemoteCleanup({ client: client(), systemDeployKey: { id: 7, socket: '/run/system.sock', knownHosts: '/home/test/known-hosts' } });
   const foreign = 'https://github.com/foreign/previous';
   const before = github.requests.length;
   await expect(remote.closePullRequests(foreign, [pr])).rejects.toBeInstanceOf(RepositoryMismatch);

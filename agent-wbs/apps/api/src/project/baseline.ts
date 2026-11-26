@@ -2,18 +2,19 @@ import {
   DEFAULT_MEM_RESERVE_GB, effectiveCaps, recommendedCaps, replan,
   type Agent, type Dependency, type ScheduleInput, type ScheduleTask,
 } from '@awbs/shared';
+import { observedSubRatio, policyOf } from '../planning/schedule.ts';
 import { nextNumber, type Db } from './db.ts';
 import { ProjectError } from './errors.ts';
 
 /*
  * 초기 WBS 승인 때 만드는 기준 일정 v1(G§4.2 「승인하면 WBS가 되고 기준 일정 v1」, §6.4).
  * 계산은 M1-04의 replan()을 그대로 쓰고, 여기서는 DB 값을 그 입력으로 모으기만 한다.
- * 값이 없을 때 임의 기본값을 지어내지 않는다. PC 사양·가정 가동률이 없으면 승인을 멈추고 이유를 알린다.
+ * PC 사양은 Runner 보고를 쓴다. 가정 가동률과 관측 창은 재조정과 같은 owner 기본값을 쓴다.
  */
 
 export interface BaselineTask extends Omit<ScheduleTask, 'cg'> { cg?: string; uuid: string }
 
-async function concurrency(db: Db): Promise<ScheduleInput['concurrency']> {
+async function concurrency(db: Db, windowDays: number): Promise<ScheduleInput['concurrency']> {
   const host = (await db.query<{ cores: number; mem_gb: string; disk_gb: string; per_session_gb: string | null }>(
     'select cores,mem_gb,disk_gb,per_session_gb from runner_hosts order by seen_at desc,created_at desc limit 1')).rows[0];
   if (!host) {
@@ -28,16 +29,11 @@ async function concurrency(db: Db): Promise<ScheduleInput['concurrency']> {
   const manual = settings?.caps;
   const caps = effectiveCaps(settings?.mode ?? 'auto', manual ? { total: manual.total, perAgent: { Claude: manual.Claude, Codex: manual.Codex }, heavy: manual.heavy } : recommended, recommended).caps;
   const current = (await db.query<{ limit: number }>('select "limit" from runner_concurrency_log order by created_at desc limit 1')).rows[0]?.limit ?? caps.total;
-  // 하위 Agent 비율은 저장된 관측값이 없어 0으로 둔다(보고서의 「계획과 다른 점」 참고).
-  return { total: caps.total, current, subRatio: 0, Claude: caps.perAgent.Claude, Codex: caps.perAgent.Codex };
+  return { total: caps.total, current, subRatio: await observedSubRatio(db, windowDays), Claude: caps.perAgent.Claude, Codex: caps.perAgent.Codex };
 }
 
 export async function scheduleInput(db: Db, tasks: readonly BaselineTask[], deps: readonly Dependency[]): Promise<ScheduleInput> {
-  const policy = (await db.query<{ assume_rate: string | null; window_days: number; min_hours: number }>('select assume_rate,window_days,min_hours from schedule_policy where singleton')).rows[0];
-  if (policy?.assume_rate == null) {
-    throw new ProjectError('INVALID_TRANSITION', { message: '가정 가동률이 설정되지 않아 기준 일정 v1을 계산할 수 없습니다.',
-      fix: '설정의 일정 정책에서 가정 가동률을 저장한 뒤 다시 승인하세요.' });
-  }
+  const policy = await policyOf(db);
   const heartbeat = (await db.query<{ heartbeat_seconds: number; heartbeat_misses: number }>('select heartbeat_seconds,heartbeat_misses from app_settings where singleton')).rows[0];
   const sessions = (await db.query<{ from: string; to: string | null; last: string }>(
     'select started_at::text as "from",ended_at::text as "to",last_heartbeat_at::text as last from runner_sessions order by started_at')).rows;
@@ -50,11 +46,11 @@ export async function scheduleInput(db: Db, tasks: readonly BaselineTask[], deps
     tasks: tasks.map((task) => ({ id: task.id, wbs: task.wbs, status: task.status, priority: task.priority, assignee: task.assignee, est: task.est, lo: task.lo, hi: task.hi, ...(task.cg && { cg: task.cg }) })),
     deps,
     sessions: sessions.map((s) => ({ from: iso(s.from), ...(s.to && { to: iso(s.to) }), lastHeartbeatAt: iso(s.last) })),
-    assumeRate: Number(policy.assume_rate),
-    policy: { windowDays: policy.window_days, minHours: policy.min_hours },
+    assumeRate: policy.assumeRate,
+    policy: { windowDays: policy.windowDays, minHours: policy.minHours },
     ...(heartbeat && { heartbeat: { intervalSec: heartbeat.heartbeat_seconds, missLimit: heartbeat.heartbeat_misses } }),
     blackouts,
-    concurrency: await concurrency(db),
+    concurrency: await concurrency(db, policy.windowDays),
     usage: Object.fromEntries(usageRows.map((row) => [row.agent, { remain: Number(row.remain), resetAt: iso(row.reset_at) }])),
   };
 }

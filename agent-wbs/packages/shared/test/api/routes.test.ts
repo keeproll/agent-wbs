@@ -142,6 +142,7 @@ GET /api/project/repo-checks/:id
 GET /api/project
 POST /api/project/bootstrap/retry
 POST /api/project/inputs/retry
+POST /api/project/inputs/recheck
 GET /api/project/reset-preview
 GET /api/project/export
 POST /api/settings/github/check

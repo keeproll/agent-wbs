@@ -3,6 +3,7 @@ import { createGitHubClient, GitHubError, parseRepoUrl, type GitHubClient, type 
 import { Secret } from '../../src/security/secret.ts';
 import { GitHubModel, type ModelOptions } from '../fakes/github/model.ts';
 import { startFakeGitHub, type FakeGitHub } from '../fakes/github/server.ts';
+import { protectedMainRules } from '../fakes/github/rules.ts';
 
 const TOKEN = 'ghp_FAKEfakeFAKEfakeFAKEfake0123456789';
 
@@ -352,11 +353,77 @@ describe('연결 확인', () => {
     expect(status.error).toMatch(/속도 제한/);
   });
 
-  test('관리자 권한 자격 증명은 ok가 아니다(일반 병합 자격 증명에 우회 권한 금지)', async () => {
+  test('H1: 관리자 역할이어도 실제 우회가 never이고 main 보호가 활성이면 한정 토큰을 허용한다', async () => {
     const client = await setup({ permissions: { admin: true, push: true, pull: true } });
+    github.on('GET /repos/o/r/rules/branches/main', () => ({ body: protectedMainRules }));
+    github.on('GET /repos/o/r/rulesets/1', () => ({ body: { enforcement: 'active', current_user_can_bypass: 'never' } }));
     const status = await client.checkConnection('token');
-    expect(status.ok).toBe(false);
-    expect(status.error).toMatch(/관리자/);
+    expect(status).toMatchObject({ ok: true, permissions: UNVERIFIED });
+  });
+
+  test.each([true, false])('H1: 역할과 관계없이 실제 우회 권한이 있으면 거부한다(admin=%s)', async (admin) => {
+    const client = await setup({ permissions: { admin, push: true, pull: true } });
+    github.on('GET /repos/o/r/rules/branches/main', () => ({ body: protectedMainRules }));
+    github.on('GET /repos/o/r/rulesets/1', () => ({ body: { enforcement: 'active', current_user_can_bypass: 'always' } }));
+    expect(await client.checkConnection('token')).toMatchObject({ ok: false, error: expect.stringContaining('우회') });
+  });
+
+  test.each(['pull_requests_only', 'exempt', null, undefined])('H1: PR 한정 우회와 알 수 없는 우회 상태도 거부한다: %s', async (bypass) => {
+    const client = await setup();
+    github.on('GET /repos/o/r/rules/branches/main', () => ({ body: protectedMainRules }));
+    github.on('GET /repos/o/r/rulesets/1', () => ({ body: { enforcement: 'active', current_user_can_bypass: bypass } }));
+    expect(await client.checkConnection('token')).toMatchObject({ ok: false, error: expect.stringContaining('우회') });
+  });
+
+  test.each(['disabled', 'evaluate'])('H1: main에 적용된 ruleset이 active가 아니면 거부한다: %s', async (enforcement) => {
+    const client = await setup();
+    github.on('GET /repos/o/r/rules/branches/main', () => ({ body: protectedMainRules }));
+    github.on('GET /repos/o/r/rulesets/1', () => ({ body: { enforcement, current_user_can_bypass: 'never' } }));
+    expect(await client.checkConnection('token')).toMatchObject({ ok: false, error: expect.stringContaining('active') });
+  });
+
+  test.each(protectedMainRules.map((rule) => rule.type))('H1: 필수 보호 규칙이 빠지면 거부한다: %s', async (missing) => {
+    const client = await setup();
+    github.on('GET /repos/o/r/rules/branches/main', () => ({ body: protectedMainRules.filter((rule) => rule.type !== missing) }));
+    github.on('GET /repos/o/r/rulesets/1', () => ({ body: { enforcement: 'active', current_user_can_bypass: 'never' } }));
+    expect(await client.checkConnection('token')).toMatchObject({ ok: false, error: expect.stringContaining('보호') });
+  });
+
+  test('H1: 다른 ruleset의 우회도 확인하고, main에 적용되지 않은 규칙은 조회하지 않는다', async () => {
+    const client = await setup();
+    github.on('GET /repos/o/r/rules/branches/main', () => ({ body: protectedMainRules.map((rule) => ({ ...rule, ruleset_id: rule.type === 'deletion' ? 2 : 1 })) }));
+    github.on('GET /repos/o/r/rulesets/1', () => ({ body: { enforcement: 'active', current_user_can_bypass: 'never' } }));
+    github.on('GET /repos/o/r/rulesets/2', () => ({ body: { enforcement: 'active', current_user_can_bypass: 'always' } }));
+    expect(await client.checkConnection('token')).toMatchObject({ ok: false, error: expect.stringContaining('우회') });
+    expect(github.requests.filter((request) => request.path.includes('/rulesets/')).map((request) => request.path))
+      .toEqual(['/repos/o/r/rulesets/1', '/repos/o/r/rulesets/2']);
+  });
+
+  test('H1: 보호 규칙 조회 실패는 역할로 대체하지 않고 거부한다', async () => {
+    const client = await setup();
+    github.on('GET /repos/o/r/rules/branches/main', () => ({ status: 503, body: { message: 'Service Unavailable' } }));
+    expect(await client.checkConnection('token')).toMatchObject({ ok: false, error: expect.stringContaining('503') });
+  });
+
+  test('H1: 다음 페이지에 있는 추가 ruleset의 우회도 거부한다', async () => {
+    const client = await setup();
+    github.on('GET /repos/o/r/rules/branches/main', (request) => request.query.page === '1'
+      ? { body: protectedMainRules, headers: { link: '<https://attacker.invalid/rules?page=2>; rel="next"' } }
+      : { body: [{ type: 'required_signatures', ruleset_id: 2 }] });
+    github.on('GET /repos/o/r/rulesets/1', () => ({ body: { enforcement: 'active', current_user_can_bypass: 'never' } }));
+    github.on('GET /repos/o/r/rulesets/2', () => ({ body: { enforcement: 'active', current_user_can_bypass: 'always' } }));
+    expect(await client.checkConnection('token')).toMatchObject({ ok: false, error: expect.stringContaining('우회') });
+    expect(github.requests.filter((request) => request.path.endsWith('/rules/branches/main')).map((request) => request.query.page)).toEqual(['1', '2']);
+  });
+
+  test.each([
+    { type: 'pull_request', parameters: { require_code_owner_review: false } },
+    { type: 'required_status_checks', parameters: { strict_required_status_checks_policy: false, required_status_checks: [{ context: 'agentwbs/int' }] } },
+    { type: 'required_status_checks', parameters: { strict_required_status_checks_policy: true, required_status_checks: [{ context: 'other' }] } },
+  ])('H1: 규칙 이름만 있고 필요한 보호 설정이 꺼져 있으면 거부한다: %j', async (changed) => {
+    const client = await setup();
+    github.on('GET /repos/o/r/rules/branches/main', () => ({ body: protectedMainRules.map((rule) => rule.type === changed.type ? { ...rule, ...changed } : rule) }));
+    expect(await client.checkConnection('token')).toMatchObject({ ok: false, error: expect.stringContaining('보호') });
   });
 
   test('토큰이 틀리면 401을 실패로 보고하고 던지지 않는다', async () => {
@@ -378,6 +445,15 @@ describe('연결 확인', () => {
     expect(status).toMatchObject({ ok: false, account: 'agentwbs-bot', permissions: null });
     expect(status.error).toMatch(/저장소/);
   });
+});
+
+test('M4-06: status 게시 201 직후 조회 반영이 늦으면 빈 목록일 수 있다', async () => {
+  const client = await setup();
+  const sha = model.branches.get('main') ?? '';
+  Object.assign(model, { statusReadLag: 1 });
+  await client.setCommitStatus({ sha, context: 'agentwbs/int', state: 'success' });
+  expect(await client.listCommitStatuses(sha)).toEqual([]);
+  expect(await client.listCommitStatuses(sha)).toMatchObject([{ context: 'agentwbs/int', state: 'success' }]);
 });
 
 describe('저장소 확인', () => {

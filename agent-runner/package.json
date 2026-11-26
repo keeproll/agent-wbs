@@ -14,6 +14,7 @@
     "lint": "eslint . --max-warnings 0",
     "test": "node scripts/vitest.ts",
     "test:cli-update:real": "node --test test/cli-update/npm.real.ts",
+    "test:github:real": "node scripts/github.real.ts",
     "client:generate": "node scripts/client.ts",
     "client:check": "node scripts/client.ts --check",
     "check": "pnpm run typecheck && pnpm run lint && pnpm run test"

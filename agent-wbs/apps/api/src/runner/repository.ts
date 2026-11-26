@@ -135,6 +135,8 @@ export class RunnerRepository {
   async closeSessions(at: Date) { return (await this.client.query(`update runner_sessions s set ended_at=last_heartbeat_at,end_reason='unknown' from app_settings cfg
     where cfg.singleton and ended_at is null and last_heartbeat_at<=$1::timestamptz-make_interval(secs=>cfg.heartbeat_seconds*cfg.heartbeat_misses)`, [at])).rowCount ?? 0; }
   async liveSession() { return Boolean((await this.client.query('select 1 from runner_sessions where ended_at is null limit 1')).rowCount); }
+  /** 열린 입력 이력 재작성 경고의 복구 확인 번호(없으면 0). Runner 정책 inputRecheck. */
+  async inputRecheck() { return (await this.client.query<{ n: number }>("select coalesce(max((target->>'recheck')::int),0)::int n from alerts where key='input_history_rewritten' and resolved_at is null")).rows[0]?.n ?? 0; }
   async heartbeat(runner: string) { await this.client.query('update runner_sessions set last_heartbeat_at=clock_timestamp() where runner_id=$1 and ended_at is null', [runner]); }
   async sessions() { return (await this.client.query<PgRow<typeof schema.runnerSessions.$inferSelect>>('select * from runner_sessions order by started_at')).rows; }
   async session(runner: string, event: string, at: string, reason?: string) {
