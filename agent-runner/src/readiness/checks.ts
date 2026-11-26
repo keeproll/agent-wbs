@@ -26,6 +26,11 @@ export interface ReadinessDeps {
   probes: Partial<Record<'repo' | 'subs', () => Promise<Check>>>;
   /** 세션을 실행할 때 쓸 모델·옵션. 관측 등급 판정용 `cli[]`에 버전과 함께 싣는다. */
   cliProfiles?: { agent: Agent; model: string; options: string }[];
+  /**
+   * 관측이 검증된 CLI 조합(CLI·버전·모델·옵션) 목록. G §6.7-8 「CLI 버전 = 관측 검증된 버전인가」를 이것과 대조한다.
+   * 서버에서 받아 오는 계약 경로가 아직 없어 호출자가 넘긴다. 모르면 undefined → 확인 불가로 warn.
+   */
+  verifiedObservations?: { agent: Agent; version: string; model: string; options: string }[] | undefined;
 }
 
 const KEYS: ReadinessKey[] = ['claude', 'codex', 'git', 'node', 'pnpm', 'pg', 'repo', 'disk', 'subs', 'obs', 'gh', 'lfs'];
@@ -113,16 +118,37 @@ async function disk(d: ReadinessDeps): Promise<Check> {
   return { status: 'ok', detail: shown };
 }
 
-async function obs(d: ReadinessDeps): Promise<Check> {
+/** cgroup 노출 여부. 상태를 정하지 않는 보조 정보다 — 노출됐다고 세션 측정이 되는 것은 아니다(M5-03에서 실증). */
+async function cgroupNote(d: ReadinessDeps): Promise<string> {
   const text = await d.readFile('/sys/fs/cgroup/cgroup.controllers').catch(() => '');
   const have = new Set(text.trim().split(/\s+/));
   const lacking = ['cpu', 'memory', 'pids'].filter((c) => !have.has(c));
-  if (lacking.length === 0) return { status: 'ok', detail: 'cgroup v2 cpu·memory·pids 사용 가능(세션 scope 실증은 M5-03)' };
-  return {
-    status: 'warn',
-    detail: `cgroup v2 ${lacking.join('·')} 없음 — 프로세스 그룹 + /proc 합산으로 대신 관측`,
-    fix: 'WSL에서 systemd를 켜면(/etc/wsl.conf) cgroup 측정을 쓸 수 있습니다.',
-  };
+  return lacking.length === 0
+    ? '참고: cgroup v2 cpu·memory·pids 노출됨(세션 측정 가능 여부는 M5-03에서 실증)'
+    : `참고: cgroup v2 ${lacking.join('·')} 없음 — 프로세스 그룹 + /proc 합산으로 대신 관측(실증은 M5-03)`;
+}
+
+/**
+ * G §6.7-8: 실행할 CLI 조합이 관측 검증된 조합과 같은가. 다르거나 확인할 수 없으면 warn —
+ * 실행은 계속하되 관측은 참고만 하고 보유는 보수 계산(1+예산), 재검증을 기다린다. CLI를 구버전으로 돌리라고 안내하지 않는다(Q-12).
+ */
+async function obs(d: ReadinessDeps, versions: ReadonlyMap<Agent, string>): Promise<Check> {
+  const note = await cgroupNote(d);
+  const conservative = '보수 계산(1+예산)으로 실행은 계속, 관측은 참고만 하고 재검증 대기';
+  const fix = '최신 CLI를 그대로 쓰며, 이 조합의 관측 재검증이 등록되면 경고가 풀립니다.';
+  const profiles = d.cliProfiles ?? [];
+  if (profiles.length === 0) return { status: 'warn', detail: `실행 조합(모델·옵션) 설정이 없어 관측 검증 여부를 확인할 수 없음 — 미검증으로 봄, ${conservative}. ${note}`, fix };
+  if (!d.verifiedObservations) return { status: 'warn', detail: `관측 검증 목록이 없어 확인할 수 없음 — 미검증으로 봄, ${conservative}. ${note}`, fix };
+  const verified = d.verifiedObservations;
+  const rows = profiles.map((p) => {
+    const version = versions.get(p.agent);
+    const label = `${p.agent} ${version ?? '버전 확인 불가'} · ${p.model} · ${p.options}`;
+    const ok = version !== undefined && verified.some((v) => v.agent === p.agent && v.version === version && v.model === p.model && v.options === p.options);
+    return { label, ok };
+  });
+  const unverified = rows.filter((r) => !r.ok).map((r) => r.label);
+  if (unverified.length > 0) return { status: 'warn', detail: `미검증: ${unverified.join(', ')} — ${conservative}. ${note}`, fix };
+  return { status: 'ok', detail: `관측 검증된 조합: ${rows.map((r) => r.label).join(', ')}. ${note}` };
 }
 
 const notChecked = (what: string): Check => ({ status: 'warn', detail: `${what} 점검이 아직 연결되지 않음(확인 안 함)` });
@@ -144,19 +170,21 @@ export async function checkReadiness(d: ReadinessDeps, now: Date): Promise<Readi
     repo: () => (d.probes.repo ?? (() => Promise.resolve(notChecked('작업 저장소'))))(),
     disk: () => disk(d),
     subs: () => (d.probes.subs ?? (() => Promise.resolve(notChecked('하위 Agent 정의 동기화'))))(),
-    obs: () => obs(d),
+    // CLI 버전을 알아야 하므로 아래에서 다른 점검이 끝난 뒤 따로 돈다.
+    obs: () => obs(d, versions),
     gh: () => strip(tool(d, d.bins.gh, ['--version'], 'GitHub CLI(gh)', 'warn', 'gh 로그인 방식을 쓰려면 gh를 설치하세요.')),
     lfs: () => strip(tool(d, d.bins.git, ['lfs', 'version'], 'git-lfs', 'warn', 'LFS 파일이 있는 저장소를 쓰려면 git-lfs를 설치하세요.')),
   };
-  const items = await Promise.all(
-    KEYS.map(async (key): Promise<ReadinessItem> => {
-      try {
-        return { key, ...(await checks[key]()) };
-      } catch (e) {
-        return { key, status: 'fail', detail: `점검 중 오류: ${e instanceof Error ? e.message : String(e)}`.slice(0, 300) };
-      }
-    }),
-  );
+  const runCheck = async (key: ReadinessKey): Promise<ReadinessItem> => {
+    try {
+      return { key, ...(await checks[key]()) };
+    } catch (e) {
+      return { key, status: 'fail', detail: `점검 중 오류: ${e instanceof Error ? e.message : String(e)}`.slice(0, 300) };
+    }
+  };
+  const first = await Promise.all(KEYS.filter((k) => k !== 'obs').map(runCheck));
+  const obsItem = await runCheck('obs');
+  const items = KEYS.map((k) => (k === 'obs' ? obsItem : first.find((i) => i.key === k))).filter((i): i is ReadinessItem => i !== undefined);
   const cli = (d.cliProfiles ?? []).flatMap((p) => {
     const version = versions.get(p.agent);
     return version ? [{ agent: p.agent, version, model: p.model, options: p.options }] : [];

@@ -20,6 +20,16 @@ const HEALTHY: Record<string, CommandResult> = {
   'pg_isready -h 127.0.0.1 -p 25442': ok('127.0.0.1:25442 - accepting connections\n'),
 };
 
+const PROFILES = [
+  { agent: 'Codex' as const, model: 'gpt-6.1-sol', options: 'exec --json' },
+  { agent: 'Claude' as const, model: 'claude-opus-5-5', options: '-p --output-format stream-json' },
+];
+/** 서버에 등록된 관측 검증 조합(시험용 가정값) */
+const VERIFIED = [
+  { agent: 'Codex' as const, version: '0.172.0', model: 'gpt-6.1-sol', options: 'exec --json' },
+  { agent: 'Claude' as const, version: '2.1.332', model: 'claude-opus-5-5', options: '-p --output-format stream-json' },
+];
+
 function deps(over: Record<string, CommandResult> = {}, extra: Partial<ReadinessDeps> = {}) {
   const calls: string[] = [];
   const table = { ...HEALTHY, ...over };
@@ -35,6 +45,8 @@ function deps(over: Record<string, CommandResult> = {}, extra: Partial<Readiness
     diskFree: () => Promise.resolve(900 * GiB),
     readFile: (p) => (p === '/sys/fs/cgroup/cgroup.controllers' ? Promise.resolve('cpuset cpu io memory hugetlb pids rdma misc\n') : Promise.reject(new Error('ENOENT'))),
     pg: { host: '127.0.0.1', port: 25442 },
+    cliProfiles: PROFILES,
+    verifiedObservations: VERIFIED,
     probes: {
       repo: () => Promise.resolve({ status: 'ok', detail: '작업 저장소 접근 가능' }),
       subs: () => Promise.resolve({ status: 'ok', detail: '하위 Agent 정의 10개 동기화' }),
@@ -84,7 +96,7 @@ describe('checkReadiness — POST /runner/readiness(G §7.4 「Runner 준비 상
   });
 
   test('cli 설정이 없으면 cli[]를 보내지 않고, 버전을 모르는 CLI는 빠진다', async () => {
-    expect((await checkReadiness(deps().d, AT)).cli).toBeUndefined();
+    expect((await checkReadiness(deps({}, { cliProfiles: [] }).d, AT)).cli).toBeUndefined();
     const report = await checkReadiness(
       deps({ 'claude --version': missing }, { cliProfiles: [{ agent: 'Claude', model: 'm', options: 'o' }] }).d,
       AT,
@@ -153,9 +165,41 @@ describe('checkReadiness — POST /runner/readiness(G §7.4 「Runner 준비 상
     expect(report.items.find((i) => i.key === 'subs')?.status).toBe('ok');
   });
 
-  test('cgroup v2에 cpu·memory·pids가 없으면 obs warn(프로세스 그룹 + /proc 대체, G §6.7-6)', async () => {
-    expect((await item('obs', {}, { readFile: () => Promise.resolve('cpu io\n') }))?.status).toBe('warn');
-    expect((await item('obs', {}, { readFile: () => Promise.reject(new Error('ENOENT')) }))?.status).toBe('warn');
+  test('obs: 모든 CLI 조합이 관측 검증된 조합과 같으면 ok', async () => {
+    expect((await item('obs'))?.status).toBe('ok');
+  });
+
+  test('obs: CLI 버전이 검증 버전과 다르면 warn — 미검증·보수 계산·재검증 대기, 실행은 계속(G §6.7-8, 리뷰 2)', async () => {
+    const obs = await item('obs', { 'codex --version': ok('codex-cli 99.0.0\n') });
+    expect(obs?.status).toBe('warn');
+    expect(obs?.detail).toContain('Codex 99.0.0');
+    expect(obs?.detail).toContain('미검증');
+    expect(obs?.detail).toContain('보수 계산');
+    expect(obs?.detail).toContain('재검증');
+    // 최신 유지(Q-12): 구버전으로 내리라고 안내하지 않는다.
+    expect(`${obs?.detail ?? ''} ${obs?.fix ?? ''}`).not.toMatch(/하향|내리|downgrade|0\.167/);
+  });
+
+  test('obs: 모델·옵션이 다른 조합도 미검증이다', async () => {
+    const profiles = [{ agent: 'Codex' as const, model: 'gpt-9', options: 'exec --json' }];
+    expect((await item('obs', {}, { cliProfiles: profiles }))?.status).toBe('warn');
+  });
+
+  test('obs: 검증 목록을 모르거나 실행 조합 설정이 없으면 확인할 수 없어 warn', async () => {
+    expect((await item('obs', {}, { verifiedObservations: undefined }))?.status).toBe('warn');
+    expect((await item('obs', {}, { cliProfiles: [] }))?.status).toBe('warn');
+  });
+
+  test('obs: 루트 cgroup에 controller가 있어도 CLI가 미검증이면 ok가 아니다(cgroup은 보조 정보)', async () => {
+    const obs = await item('obs', { 'claude --version': ok('2.2.0 (Claude Code)\n') }, { readFile: () => Promise.resolve('cpu memory pids\n') });
+    expect(obs?.status).toBe('warn');
+  });
+
+  test('obs: cgroup 정보는 detail에 보조로만 싣고 상태를 바꾸지 않는다', async () => {
+    const lacking = await item('obs', {}, { readFile: () => Promise.reject(new Error('ENOENT')) });
+    expect(lacking?.status).toBe('ok');
+    expect(lacking?.detail).toMatch(/cgroup/);
+    expect(lacking?.detail).toMatch(/M5-03/);
   });
 
   test('gh·git-lfs 미설치는 warn(토큰 방식·LFS 없는 저장소는 필요 없음)', async () => {
