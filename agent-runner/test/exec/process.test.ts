@@ -1,4 +1,6 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { afterEach, expect, test } from 'vitest';
@@ -95,5 +97,24 @@ test.each([false, true])('부모가 정상 종료해도 TERM을 무시하는 자
     expect(() => process.kill(descendant, 0)).toThrow();
   } finally {
     if (descendant > 1) try { process.kill(descendant, 'SIGKILL'); } catch { /* 이미 종료됨 */ }
+  }
+});
+
+test('정리 도중 SIGTERM을 받아 새 그룹으로 분리한 자손도 찾아 강제 종료한다', async () => {
+  const { home, launches } = await setup();
+  const pidFile = join(home, 'late-child');
+  const record = await launches.create(job);
+  const child = spawn(process.execPath, [join(import.meta.dirname, 'term-fork.ts'), pidFile], { detached: true, stdio: ['ignore', 'pipe', 'ignore'], env: { AWBS_LAUNCH_ID: record.launchId } });
+  try {
+    await once(child.stdout, 'data');
+    await launches.attach(record, child.pid ?? 0);
+    expect(await launches.reconcile({ job: job.id, ...launches.identity, processGroup: record.pgid }, 100)).toMatchObject({ kind: 'group_empty' });
+    const pid = Number(await readFile(pidFile, 'utf8'));
+    expect(pid).toBeGreaterThan(1);
+    expect(() => process.kill(pid, 0)).toThrow();
+  } finally {
+    child.kill('SIGKILL');
+    const pid = await readFile(pidFile, 'utf8').then(Number, () => 0);
+    if (pid > 1) try { process.kill(pid, 'SIGKILL'); } catch { /* 이미 종료됨 */ }
   }
 });

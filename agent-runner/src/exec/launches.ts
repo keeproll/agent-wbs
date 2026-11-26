@@ -23,6 +23,7 @@ export async function processInfo(pid: number): Promise<{ pgid: number; startTim
   return { pgid, startTime, state: parts[0] ?? '' };
 }
 
+// shortcut: 같은 사용자·launchId 보존 자손만 추적한다. Q-08 계정 제어 또는 운영 cgroup 연결 때 확장한다.
 async function processes(createdAfter: bigint): Promise<Proc[]> {
   const found: Proc[] = [];
   for (const name of await readdir('/proc')) {
@@ -131,6 +132,8 @@ export class Launches {
       if (!(await empty())) {
         // 다시 대조한다. 대기 중 번호가 재사용됐으면 새 프로세스를 죽이지 않는다.
         const current = await processes(createdAfter);
+        // TERM 처리 중 setsid로 새 그룹을 만든 자손도 launchId로 다시 찾는다.
+        for (const p of current) if (records.some(r => p.launchId === r.launchId)) groups.add(p.pgid);
         for (const g of groups) if (current.some(p => p.pgid === g && records.some(r => p.launchId === r.launchId || (p.pid === r.pgid && p.startTime === r.startTime)))) signalGroup(g, 'SIGKILL');
         deadline = Date.now() + 1000;
         while (!(await empty()) && Date.now() < deadline) await sleep(10);
