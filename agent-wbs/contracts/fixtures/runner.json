@@ -395,6 +395,7 @@
    "commits": [
     {
      "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "depth": 128,
      "at": "2026-11-25T01:02:03.123456Z",
      "author": "lead",
      "message": "문서 갱신"

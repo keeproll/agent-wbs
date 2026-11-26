@@ -1184,6 +1184,7 @@ export interface Operations {
       body: {
         commits: ({
           sha: Sha;
+          depth: number;
           at: Timestamp;
           author: string;
           message: string;

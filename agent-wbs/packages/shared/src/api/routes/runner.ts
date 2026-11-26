@@ -8,7 +8,11 @@ const runner = { principal: 'runner' } as const;
 const fence = c.Fence;
 const Pid = Type.Integer({ minimum: 1 });
 
-const PushedCommit = Body({ sha: c.Sha, at: c.Timestamp, author: Type.String(), message: Type.String() });
+/**
+ * depth = main 첫 부모 이력에서의 깊이(`git rev-list --count --first-parent <sha>`). 서버는 이 값으로만 커밋 순서를 정한다.
+ * 보고가 겹치거나·중복되거나·늦게 도착해도 순서가 흔들리지 않게 하기 위해서다(M2-03 입력 원장).
+ */
+const PushedCommit = Body({ sha: c.Sha, depth: Type.Integer({ minimum: 1 }), at: c.Timestamp, author: Type.String(), message: Type.String() });
 const ChangedInput = Body({
   commitSha: c.Sha,
   path: c.RepoPath,
@@ -459,7 +463,7 @@ export const runnerOperations = [
     method: 'POST',
     path: '/api/runner/input-changes',
     summary: '입력 경로를 바꾼 main 커밋 보고',
-    // commits는 main 이력 순서(오래된 것 먼저)다. prototype/ 밖 파일은 무시하고, 입력 파일이 없는 커밋은 올리지 않는다.
+    // commits는 depth가 커지는 순서다. prototype/ 밖 파일은 무시하고, 입력 파일이 없는 커밋은 올리지 않는다.
     body: Body({ commits: List(PushedCommit, { minItems: 1 }), files: List(ChangedInput, { minItems: 1 }) }),
     responses: { 204: null },
     errors: ['INVALID_TRANSITION'],

@@ -23277,6 +23277,7 @@
                       "type": "object",
                       "required": [
                         "sha",
+                        "depth",
                         "at",
                         "author",
                         "message"
@@ -23284,6 +23285,10 @@
                       "properties": {
                         "sha": {
                           "$ref": "#/components/schemas/Sha"
+                        },
+                        "depth": {
+                          "type": "integer",
+                          "minimum": 1
                         },
                         "at": {
                           "$ref": "#/components/schemas/Timestamp"
