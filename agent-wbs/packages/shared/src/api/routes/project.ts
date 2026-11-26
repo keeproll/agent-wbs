@@ -451,6 +451,7 @@ const design = [
     summary: '기술 결정 추가. agent는 팀장 승인 대기, free는 재량 기록',
     body: Body({ ...c.JobContext, authority: AnyOf('agent', 'free'), ...m.TechProposal }),
     responses: { 201: m.Decision },
+    errors: ['EXTERNAL_WRITE_BLOCKED'],
   }),
   ...(['approve', 'reject'] as const).map((action) =>
     operation({

@@ -13185,7 +13185,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, LEASE_LOST"
+            "description": "EPOCH_MISMATCH, EXTERNAL_WRITE_BLOCKED, IDEMPOTENCY_CONFLICT, LEASE_LOST"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited",
@@ -13214,6 +13214,7 @@
           ],
           "409": [
             "EPOCH_MISMATCH",
+            "EXTERNAL_WRITE_BLOCKED",
             "IDEMPOTENCY_CONFLICT",
             "LEASE_LOST"
           ],
@@ -26911,7 +26912,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, LEASE_LOST"
+            "description": "EPOCH_MISMATCH, EXTERNAL_WRITE_BLOCKED, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST, VERSION_CONFLICT"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited",
@@ -26939,8 +26940,11 @@
           ],
           "409": [
             "EPOCH_MISMATCH",
+            "EXTERNAL_WRITE_BLOCKED",
             "IDEMPOTENCY_CONFLICT",
-            "LEASE_LOST"
+            "INVALID_TRANSITION",
+            "LEASE_LOST",
+            "VERSION_CONFLICT"
           ],
           "429": [
             "RATE_LIMITED"
