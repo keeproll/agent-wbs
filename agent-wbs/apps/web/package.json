@@ -11,7 +11,8 @@
     "test": "node ../../scripts/vitest.ts --config ../../vitest.config.ts",
     "test:e2e": "node scripts/playwright.ts",
     "e2e:api": "node scripts/e2e-api.ts",
-    "e2e:install": "playwright install chromium"
+    "e2e:install": "playwright install chromium",
+    "e2e:api:task": "node scripts/e2e-api-task.ts"
   },
   "dependencies": {
     "@awbs/shared": "workspace:*",
