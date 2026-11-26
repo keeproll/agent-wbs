@@ -204,6 +204,8 @@ describe('다음 작업(P exVM L6033 → owner Q-04 자동 진행)', () => {
     const n = nextStep({ ...base, task, flow: flowOf(task, [d1], []), attempts: [d1], verifications: [] });
     expect(n.text).toBe('A-1 개발 실패 — CLI 종료 코드 1. 자동 재시도 한도(총 3회)를 넘었습니다. 원인을 확인한 뒤 한 번 더 요청할 수 있습니다.');
     expect(n.action).toEqual({ op: 'run', kind: 'dev', label: '개발 재실행 요청' });
+    const byAlert = nextStep({ ...base, alerts: [{ key: 'retry:id-A-1' }], flow: flowOf(T, [d1], []), attempts: [d1], verifications: [] });
+    expect(byAlert.action).toEqual({ op: 'run', kind: 'dev', label: '개발 재실행 요청' });
   });
   it('Gate 단계는 서버 자동 완료 안내', () => {
     const dev = at('A-1', 'dev', 'completed', '2026-11-01T00:00:00Z');

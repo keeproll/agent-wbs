@@ -152,7 +152,7 @@ export interface RunnerSlice {
   unconfirmedHolds: readonly { taskKey: string | null }[];
   concurrency: {
     limit: number | null;
-    used: { total: number };
+    used: { total: number } & Record<string, number>;
     conflictWaits: readonly { taskKey: string; conflictGroup: string; by: string }[];
   };
 }
@@ -223,7 +223,7 @@ export function nextStep({ task, flow, attempts, verifications, alerts, reason, 
   if (last?.status === 'failed') {
     const kind = KIND_LABEL[last.kind] ?? '';
     const head = `${last.attemptKey} ${kind} 실패 — ${last.failure ?? '원인 미보고'}.`;
-    if (task.lifecycleStatus === 'failed') {
+    if (task.lifecycleStatus === 'failed' || alerts.some((a) => a.key === `retry:${last.id}`)) {
       return out(`${head} 자동 재시도 한도(총 ${String(limits.retry)}회)를 넘었습니다. 원인을 확인한 뒤 한 번 더 요청할 수 있습니다.`,
         { op: 'run', kind: String(last.kind) as RunKind, label: `${kind} 재실행 요청` }, reason);
     }

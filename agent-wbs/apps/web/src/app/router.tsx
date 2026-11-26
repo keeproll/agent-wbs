@@ -8,6 +8,7 @@
 import { lazy, Suspense } from 'react';
 import { createBrowserRouter, Navigate, type RouteObject } from 'react-router';
 import { LoginPage } from '../features/auth/LoginPage.tsx';
+import { ExecPage } from '../features/exec/ExecPage.tsx';
 import { RequireAuth } from '../shared/auth/RequireAuth.tsx';
 import { MENU } from '../shared/layout/menu.ts';
 import { Shell } from '../shared/layout/Shell.tsx';
@@ -24,7 +25,9 @@ export const routes: RouteObject[] = [
     children: [
       { index: true, element: <Navigate to="/dashboard" replace /> },
       // key: 메뉴를 옮기면 화면을 새로 만든다. 같은 컴포넌트를 재사용하면 「재방문 갱신」(상단 진행 막대)이 일어나지 않는다.
-      ...MENU.map((item) => ({ path: `/${item.key}`, element: <PendingPage key={item.key} menu={item.key} /> })),
+      ...MENU.map((item) => ({ path: `/${item.key}`, element: item.key === 'exec' ? <ExecPage key="exec" /> : <PendingPage key={item.key} menu={item.key} /> })),
+      // M3-06 작업 실행: Task·시도를 주소로 연다(features/exec/ExecPage.tsx).
+      { path: '/exec/:taskKey', element: <ExecPage key="exec" /> },
       { path: '/wbs/:taskKey', element: <PendingPage key="wbs" menu="wbs" /> },
       { path: '/settings/:tab', element: <PendingPage key="settings" menu="settings" /> },
       ...(StatesSandbox ? [{ path: '/_states', element: <Suspense><StatesSandbox /></Suspense> }] : []),
