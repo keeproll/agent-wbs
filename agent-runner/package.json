@@ -13,6 +13,7 @@
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint . --max-warnings 0",
     "test": "node scripts/vitest.ts",
+    "test:host": "node scripts/vitest.ts --config vitest.host.config.ts",
     "test:cli-update:real": "node --test test/cli-update/npm.real.ts",
     "test:github:real": "node scripts/github.real.ts",
     "client:generate": "node scripts/client.ts",
