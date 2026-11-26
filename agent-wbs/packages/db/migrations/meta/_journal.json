@@ -78,6 +78,13 @@
       "when": 1795679547992,
       "tag": "0010_20261126_cleanup_proofs",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1795681327034,
+      "tag": "0011_20261126_reset_pr_refs",
+      "breakpoints": true
     }
   ]
 }

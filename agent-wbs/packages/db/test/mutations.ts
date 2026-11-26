@@ -66,6 +66,16 @@ const variants = [
     pattern: 'every table and SECURITY DEFINER',
     sql: 'REVOKE SELECT ON public.task_specs FROM awbs_app;',
   },
+  {
+    name: 'out of range PR cast',
+    pattern: 'P2-N1',
+    sql: `DO $$ BEGIN EXECUTE replace(pg_get_functiondef('public.reset_project(integer,text,boolean,text)'::regprocedure),$old$'2147483647'$old$,$new$'9999999999'$new$); END $$;`,
+  },
+  {
+    name: 'discard malformed PR references',
+    pattern: 'P2-N1',
+    sql: `DO $$ BEGIN EXECUTE replace(pg_get_functiondef('public.reset_project(integer,text,boolean,text)'::regprocedure),'FILTER (WHERE pr IS NULL)','FILTER (WHERE false)'); END $$;`,
+  },
 ];
 function run(pattern: string, folder?: string, index = 0) {
   const database = new URL(url as string);

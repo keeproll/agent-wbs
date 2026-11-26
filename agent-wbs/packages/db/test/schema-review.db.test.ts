@@ -251,6 +251,51 @@ test('P1-5: cleanup collects CI and queued job refs as well as attempts', () =>
     expect(payload.prs).toEqual([42, 43, 44, 45]);
   }));
 
+test.each(['runner_jobs', 'runner_commands'])(
+  'P2-N1: reset preserves valid and malformed PR values from %s, including closed jobs',
+  (source) => transaction(async (c) => {
+    const f = await fixture(c);
+    await c.query("update runner_jobs set payload='{\"pr\":44}',state='done' where id=$1", [f.job]);
+    const valid = [42, '0043', 2147483647];
+    const invalid = [3000000000, '99999999999', 'not-a-pr', 0, -1, null, true, { pr: 45 }, '9'.repeat(150000)];
+    const expected = [];
+    if (source === 'runner_jobs') {
+      for (const value of [...valid, ...invalid]) {
+        const job = await newJob(c, f.p);
+        await c.query("update runner_jobs set payload=$2,state='done' where id=$1", [job, { pr: value }]);
+        if (invalid.includes(value)) expected.push({ source, id: job, value });
+      }
+      await rejects(c, "update runner_jobs set payload='{}' where id=$1", [f.job]);
+    } else {
+      const command = await id(c, "insert into runner_commands(kind,epoch,payload,status) values('reset-cleanup',0,$1,'done')", [{ prs: [...valid, ...invalid] }]);
+      expected.push(...invalid.map((value) => ({ source, id: command, value })));
+    }
+    await c.query('set local role awbs_app');
+    await c.query("select reset_project(1,'review',true,'lead')");
+    const first = (await c.query('select payload from runner_commands where epoch=1')).rows[0]?.payload;
+    expect(first.prs).toEqual([42, 43, 44, 2147483647]);
+    expect(first.unparsedPrs).toHaveLength(expected.length);
+    expect(first.unparsedPrs).toEqual(expect.arrayContaining(expected));
+    await fixture(c);
+    await c.query("select reset_project(2,'review',true,'lead')");
+    const second = (await c.query('select payload from runner_commands where epoch=2')).rows[0]?.payload;
+    expect(second.prs).toEqual(first.prs);
+    expect(second.unparsedPrs).toEqual(first.unparsedPrs);
+  }),
+);
+
+test('P2-N1: reset preserves prior command PR values even when prs is not an array', () =>
+  transaction(async (c) => {
+    await fixture(c);
+    const command = await id(c, "insert into runner_commands(kind,epoch,payload,status) values('reset-cleanup',0,'{\"prs\":{\"original\":\"bad-list\"}}','done')");
+    await c.query("insert into runner_commands(kind,epoch,payload,status) values('reset-cleanup',0,'{\"prs\":\"46\"}','done')");
+    await c.query('set local role awbs_app');
+    await c.query("select reset_project(1,'review',true,'lead')");
+    const payload = (await c.query('select payload from runner_commands where epoch=1')).rows[0]?.payload;
+    expect(payload.prs).toEqual([46]);
+    expect(payload.unparsedPrs).toEqual([{ source: 'runner_commands', id: command, value: { original: 'bad-list' } }]);
+  }));
+
 test('P2-1: start retains reserved until process registration; duplicate process is inert', () =>
   transaction(async (c) => {
     const f = await fixture(c);
