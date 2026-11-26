@@ -232,6 +232,28 @@ describe('tasks 수정·삭제와 동시 수정', () => {
     expect((await call('PATCH', `/api/tasks/${key}`, { updatedAt: await version(key) })).statusCode).toBe(400);
   });
 
+  test('이력 시각은 DB 시계가 뒤로 가도 같은 Task의 현재 버전보다 늦다', async () => {
+    // 시계가 뒤로 간 상황: 버전(updated_at)이 지금보다 1시간 뒤인 Task를 직접 넣는다.
+    const key = 'TASK-8001';
+    await ownerPool.query(`insert into tasks(project_id,task_key,wbs_node_id,sort_order,title,work_type,primary_domain,related_domains,priority,
+      assignee_agent,verifier_agent,status,verif_state,updated_at) values($1,$2,$3,99,'미래','Implementation','BE','{}',2,'Claude','Codex','planning','none',now()+interval '1 hour')`,
+    [projectId, key, nodes.wp2]);
+    await ownerPool.query(`insert into task_specs(project_id,task,overview,spec,ac,revision) select project_id,id,'{}','{}','[]',1 from tasks where task_key=$1`, [key]);
+    const future = await version(key);
+    const response = await call('PATCH', `/api/tasks/${key}`, { updatedAt: future, title: '다음' });
+    expect(response.statusCode, response.body).toBe(200);
+    const at = (await ownerPool.query<{ ok: boolean }>(
+      `select h.at>$2::timestamptz as ok from task_history h join tasks t on t.id=h.task where t.task_key=$1`, [key, future])).rows;
+    expect(at).toEqual([{ ok: true }]);
+    // 그 버전 이후의 충돌 목록에는 그 뒤의 변경만 있고, 그 버전을 만든 자기 변경은 없다.
+    const seen = response.json<{ task: Detail }>().task.updatedAt;
+    expect((await call('PATCH', `/api/tasks/${key}`, { updatedAt: seen, title: '그다음' })).statusCode).toBe(200);
+    const stale = await call('PATCH', `/api/tasks/${key}`, { updatedAt: future, title: '낡음' });
+    expect((errorOf(stale).details.changes as { after: unknown }[]).map((c) => c.after)).toEqual(['다음', '그다음']);
+    const stale2 = await call('PATCH', `/api/tasks/${key}`, { updatedAt: seen, title: '낡음' });
+    expect((errorOf(stale2).details.changes as { after: unknown }[]).map((c) => c.after)).toEqual(['그다음']);
+  });
+
   test('같은 버전으로 동시에 고치면 하나만 성공한다', async () => {
     for (let round = 0; round < 5; round++) {
       const key = await create();
@@ -350,6 +372,21 @@ describe('tasks 의존성', () => {
       const results = await Promise.all([
         call('POST', `/api/tasks/${c}/dependencies`, { updatedAt: vc, predTaskKey: b, depType: 'SS' }),
         call('POST', `/api/tasks/${a}/dependencies`, { updatedAt: va, predTaskKey: c, depType: 'FS' }),
+      ]);
+      expect(results.map((r) => r.statusCode).sort()).toEqual([201, 409]);
+    }
+  });
+
+  test('겹치는 Task가 없는 두 관계가 동시에 4개짜리 순환을 만들면 하나만 저장한다', async () => {
+    // A→B, C→D가 있을 때 B→C와 D→A는 서로 다른 Task 행을 잠그므로 행 잠금만으로는 막히지 않는다.
+    for (let round = 0; round < 8; round++) {
+      const [a, b, c, d] = [await create(), await create(), await create(), await create()];
+      expect((await addDep(b, a)).statusCode).toBe(201);
+      expect((await addDep(d, c)).statusCode).toBe(201);
+      const [vc, va] = await Promise.all([version(c), version(a)]);
+      const results = await Promise.all([
+        call('POST', `/api/tasks/${c}/dependencies`, { updatedAt: vc, predTaskKey: b, depType: 'FS' }),
+        call('POST', `/api/tasks/${a}/dependencies`, { updatedAt: va, predTaskKey: d, depType: 'FS' }),
       ]);
       expect(results.map((r) => r.statusCode).sort()).toEqual([201, 409]);
     }
