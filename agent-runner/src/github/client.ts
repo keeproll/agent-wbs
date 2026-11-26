@@ -73,6 +73,11 @@ export interface ConnectionStatus {
   /** ok이지만 알려야 할 것(예: 쓰기 권한 미확인). */
   warning?: string;
   error?: string;
+  /**
+   * 이 확인이 끝나기 전에 더 새로운 연결 확인이 시작됐거나 토큰이 바뀌었다.
+   * 결과는 현재 연결의 상태가 아니며 `permissions()`에도 반영되지 않았다. 화면에 현재 상태로 보이지 않는다.
+   */
+  superseded?: true;
 }
 
 /** `reportRepoCheck` 본문에서 fence를 뺀 모양. */
@@ -282,6 +287,20 @@ export function createGitHubClient(options: GitHubClientOptions) {
   // 이전 세대에 보낸 요청의 응답은 호출자에게는 그대로 돌려주지만 현재 권한 상태·알림은 바꾸지 못한다.
   let generation = 0;
   let lastTokenDigest: string | undefined;
+  // 통신 실패로 Raw가 없을 때도 그 요청의 세대를 알 수 있게 한다.
+  const errorGeneration = new WeakMap<object, number>();
+  // 연결 확인 순번. 겹치면 나중에 시작한 확인만 반영한다.
+  let checkSeq = 0;
+
+  /**
+   * 연결 확인 결과를 권한 상태에 반영한다. 반영은 여기서만 한다.
+   * 이 확인이 가장 최근 것이고, 확인에 쓴 모든 요청이 현재 세대에서 보낸 것일 때만 반영한다.
+   */
+  const commitPermissions = (next: Permissions, generations: readonly number[], seq: number): boolean => {
+    if (seq !== checkSeq || generations.some((sent) => sent !== generation)) return false;
+    permissions = next;
+    return true;
+  };
 
   /**
    * 실제 쓰기 결과로 권한 상태를 고친다. 2xx면 확인됨, 속도 제한이 아닌 403이면 부족으로 바꾸고 알린다.
@@ -347,7 +366,9 @@ export function createGitHubClient(options: GitHubClientOptions) {
       return { status: response.status, body, headers: response.headers, generation: sentAt };
     } catch (error) {
       const reason = error instanceof Error ? error.name : 'Error';
-      throw new GitHubError(`${method} ${path}: 통신 실패(${reason})`, 0, true);
+      const failed = new GitHubError(`${method} ${path}: 통신 실패(${reason})`, 0, true);
+      errorGeneration.set(failed, sentAt);
+      throw failed;
     }
   };
 
@@ -418,6 +439,88 @@ export function createGitHubClient(options: GitHubClientOptions) {
     return verifyMerge(pull.mergeCommitSha, baseSha, headSha, true);
   };
 
+  /**
+   * 연결 확인의 실제 판단. 공유 권한 상태는 건드리지 않고, 반영할 값(next)과 보고할 결과만 만든다.
+   * 보낸 요청마다 세대를 generations에 모은다(늦은 응답 판별용).
+   */
+  const evaluateConnection = async (
+    mode: GithubMode,
+    generations: number[],
+  ): Promise<{ status: ConnectionStatus; next: Permissions }> => {
+    const next = unverifiedAll();
+    const fail = (error: string, rest: Partial<ConnectionStatus> = {}) => ({
+      status: { mode, ok: false, account: null, permissions: null, expiresAt: null, ...rest, error } satisfies ConnectionStatus,
+      next,
+    });
+    const get = async (path: string): Promise<Raw> => {
+      try {
+        const raw = await call('GET', path);
+        generations.push(raw.generation);
+        return raw;
+      } catch (error) {
+        generations.push(errorGeneration.get(error as object) ?? -1);
+        throw error;
+      }
+    };
+    let user: Raw;
+    try {
+      user = await get('/user');
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : '통신 실패');
+    }
+    if (user.status === 401) return fail('인증 실패(401): 토큰이 틀렸거나 만료·폐기됨');
+    if (rateLimit(user).limited) return fail(`GitHub 속도 제한: 잠시 뒤 다시 확인 (${failure(user, 'GET /user').message})`);
+    if (user.status !== 200) return fail(failure(user, 'GET /user').message);
+    const account = (user.body as { login?: string }).login ?? null;
+    const expiresAt = parseExpiration(user.headers.get('github-authentication-token-expiration'));
+    let repository: Raw;
+    try {
+      repository = await get(repoPath);
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : '통신 실패', { account, expiresAt });
+    }
+    if (rateLimit(repository).limited) {
+      return fail(`GitHub 속도 제한: 잠시 뒤 다시 확인 (${failure(repository, 'GET 저장소').message})`, { account, expiresAt });
+    }
+    if (repository.status !== 200) {
+      return fail(`저장소에 접근할 수 없음(${String(repository.status)})`, { account, expiresAt });
+    }
+    const repoPermissions = (repository.body as { permissions?: { admin?: boolean; push?: boolean; pull?: boolean } }).permissions ?? {};
+    if (repoPermissions.admin === true) {
+      return fail('관리자 권한 자격 증명은 쓰지 않음(보호 규칙 우회 가능). 관리자가 아닌 별도 계정/앱 필요', { account, expiresAt });
+    }
+    // 저장소를 읽었으므로 Metadata 읽기는 확인됐다.
+    next.metadata = 'verified';
+    const writes = ['contents', 'pulls', 'statuses'] as const;
+    const base = { mode, account, expiresAt };
+    const oauth = user.headers.get('x-oauth-scopes');
+    if (oauth !== null) {
+      // classic 토큰·gh OAuth 토큰: `repo` 범위가 쓰기 권한 셋을 모두 포함한다(OAuth scopes 문서).
+      const has = oauth.split(',').map((scope) => scope.trim()).includes('repo');
+      for (const name of writes) next[name] = has ? 'verified' : 'missing';
+      if (!has) {
+        return { status: { ...base, ok: false, permissions: { ...next }, error: '필요한 권한 부족: contents, pulls, statuses (repo 범위 없음)' }, next };
+      }
+      return { status: { ...base, ok: true, permissions: { ...next } }, next };
+    }
+    // fine-grained 토큰: 토큰에 부여된 권한 목록을 조회하는 API가 없다(README §4).
+    // 계정이 push할 수 없으면 토큰도 쓸 수 없으므로 부족이다. 그 밖에는 추정하지 않고 미확인으로 두고 실행은 허용한다.
+    if (repoPermissions.push !== true) {
+      for (const name of writes) next[name] = 'missing';
+      return { status: { ...base, ok: false, permissions: { ...next }, error: '쓰기 권한 부족: 이 계정은 저장소에 push할 수 없음' }, next };
+    }
+    return {
+      status: {
+        ...base,
+        ok: true,
+        permissions: { ...next },
+        warning:
+          '쓰기 권한(Contents·Pull requests·Commit statuses) 미확인: fine-grained 토큰은 부여된 권한을 조회할 수 없어 첫 쓰기에서 확인함(M4-06 실증 항목)',
+      },
+      next,
+    };
+  };
+
   return {
     repo,
 
@@ -428,71 +531,20 @@ export function createGitHubClient(options: GitHubClientOptions) {
 
     /** 설정의 「연결 확인」. 던지지 않고 실패를 `ok:false`로 돌려준다. */
     async checkConnection(mode: GithubMode): Promise<ConnectionStatus> {
-      // 새 연결 확인은 새로 판단한다(토큰을 고친 뒤 다시 확인하는 경우). 이전 쓰기에서 얻은 결과는 지운다.
-      permissions = unverifiedAll();
+      // 새 연결 확인은 새로 판단한다(토큰을 고친 뒤 다시 확인하는 경우). 세대를 올려 진행 중인 옛 응답이 상태를 못 바꾸게 한다.
       generation += 1;
-      const fail = (error: string, rest: Partial<ConnectionStatus> = {}): ConnectionStatus => ({
-        mode,
-        ok: false,
-        account: null,
-        permissions: null,
-        expiresAt: null,
-        ...rest,
-        error,
-      });
-      let user: Raw;
-      try {
-        user = await call('GET', '/user');
-      } catch (error) {
-        return fail(error instanceof Error ? error.message : '통신 실패');
-      }
-      if (user.status === 401) return fail('인증 실패(401): 토큰이 틀렸거나 만료·폐기됨');
-      if (rateLimit(user).limited) return fail(`GitHub 속도 제한: 잠시 뒤 다시 확인 (${failure(user, 'GET /user').message})`);
-      if (user.status !== 200) return fail(failure(user, 'GET /user').message);
-      const account = (user.body as { login?: string }).login ?? null;
-      const expiresAt = parseExpiration(user.headers.get('github-authentication-token-expiration'));
-      let repository: Raw;
-      try {
-        repository = await call('GET', repoPath);
-      } catch (error) {
-        return fail(error instanceof Error ? error.message : '통신 실패', { account, expiresAt });
-      }
-      if (rateLimit(repository).limited) {
-        return fail(`GitHub 속도 제한: 잠시 뒤 다시 확인 (${failure(repository, 'GET 저장소').message})`, { account, expiresAt });
-      }
-      if (repository.status !== 200) {
-        return fail(`저장소에 접근할 수 없음(${String(repository.status)})`, { account, expiresAt });
-      }
-      const repoPermissions = (repository.body as { permissions?: { admin?: boolean; push?: boolean; pull?: boolean } }).permissions ?? {};
-      if (repoPermissions.admin === true) {
-        return fail('관리자 권한 자격 증명은 쓰지 않음(보호 규칙 우회 가능). 관리자가 아닌 별도 계정/앱 필요', { account, expiresAt });
-      }
-      // 저장소를 읽었으므로 Metadata 읽기는 확인됐다.
-      permissions.metadata = 'verified';
-      const writes = ['contents', 'pulls', 'statuses'] as const;
-      const base = { mode, account, expiresAt };
-      const oauth = user.headers.get('x-oauth-scopes');
-      if (oauth !== null) {
-        // classic 토큰·gh OAuth 토큰: `repo` 범위가 쓰기 권한 셋을 모두 포함한다(OAuth scopes 문서).
-        const has = oauth.split(',').map((scope) => scope.trim()).includes('repo');
-        for (const name of writes) permissions[name] = has ? 'verified' : 'missing';
-        if (!has) {
-          return { ...base, ok: false, permissions: { ...permissions }, error: '필요한 권한 부족: contents, pulls, statuses (repo 범위 없음)' };
-        }
-        return { ...base, ok: true, permissions: { ...permissions } };
-      }
-      // fine-grained 토큰: 토큰에 부여된 권한 목록을 조회하는 API가 없다(README §4).
-      // 계정이 push할 수 없으면 토큰도 쓸 수 없으므로 부족이다. 그 밖에는 추정하지 않고 미확인으로 두고 실행은 허용한다.
-      if (repoPermissions.push !== true) {
-        for (const name of writes) permissions[name] = 'missing';
-        return { ...base, ok: false, permissions: { ...permissions }, error: '쓰기 권한 부족: 이 계정은 저장소에 push할 수 없음' };
-      }
+      checkSeq += 1;
+      const seq = checkSeq;
+      const generations: number[] = [];
+      const { status, next } = await evaluateConnection(mode, generations);
+      if (commitPermissions(next, generations, seq)) return status;
+      const rest: ConnectionStatus = { ...status };
+      delete rest.warning;
       return {
-        ...base,
-        ok: true,
-        permissions: { ...permissions },
-        warning:
-          '쓰기 권한(Contents·Pull requests·Commit statuses) 미확인: fine-grained 토큰은 부여된 권한을 조회할 수 없어 첫 쓰기에서 확인함(M4-06 실증 항목)',
+        ...rest,
+        ok: false,
+        superseded: true,
+        error: `더 새로운 연결 확인 또는 토큰 교체로 무효화된 결과${status.error ? ` (${status.error})` : ''}`,
       };
     },
 
