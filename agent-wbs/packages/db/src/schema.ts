@@ -726,7 +726,7 @@ export const changeProposals = pgTable(
     check('cp_title_text', sql`length(btrim(${t.title}))>0`),
     check('cp_reason_text', sql`length(btrim(${t.reason}))>0`),
     check('cp_source_id_text', sql`${t.source_id} is null or length(btrim(${t.source_id}))>0`),
-    check('cp_split_source', sql`${t.source}<>'split' or ${t.source_id} is not null`),
+    // 분할 CP의 source_id 필수는 0014의 트리거 cp_split_source가 검사한다(이전 행의 무관한 갱신 허용).
     check(
       'proposal_source',
       sql`${t.source} in ('planning','message','manual','split','input','decision')`,
@@ -1633,7 +1633,7 @@ export const ciRuns = pgTable(
   },
   (t) => [
     check('ci_stage', sql`${t.stage} between 1 and 4`),
-    check('ci_job_owner', sql`${t.stage}=3 or ${t.job} is not null`),
+    // job 없는 실행은 야간 점검뿐이라는 규칙은 0014의 트리거 ci_job_owner가 검사한다.
     check('ci_job_fence', sql`(${t.job} is null)=(${t.fence} is null) and (${t.fence} is null or ${t.fence}>=0)`),
     check('ci_artifacts_array', sql`jsonb_typeof(${t.artifacts})='array'`),
   ],

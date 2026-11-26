@@ -11,9 +11,10 @@ import { gradeAdjust, OPERATIONS, proposalReasons } from '@awbs/shared/api';
 import * as c from '../../shared/src/api/common.ts';
 import * as m from '../../shared/src/api/models.ts';
 import {
-  CI_STAGE, cleanupResult, createPool, DRIFT_COMPAT, execPolicyToApi, OBSERVATION_GRADE, recreateTestDatabase, seedSystem,
+  CI_STAGE, cleanupResult, createPool, DRIFT_COMPAT, execPolicyToApi, fromDb, OBSERVATION_GRADE, recreateTestDatabase, seedSystem,
   splitSettingsToDomain,
 } from '../src/index.ts';
+import type { CommandResultBody } from '../src/index.ts';
 
 const dbUrl = new URL(inject('testDatabaseUrl'));
 dbUrl.pathname += '_contract';
@@ -116,6 +117,35 @@ describe('DB 값 = API 값 = 도메인 값', () => {
     expect(sorted(Object.keys(map))).toEqual(sorted(api));
     expect(sorted(Object.values(map))).toEqual(sorted(await allowed(table, column)));
   });
+
+  // 교차 리뷰 지적 3: 목록만 비교하면 대응이 뒤집혀도 통과한다. 대응 하나하나를 고정한다.
+  test.each<[string, Record<string, string | number>, Record<string, string | number>]>([
+    ['설계 compat', DRIFT_COMPAT, { compatible: '호환', breaking: '깨짐', unchecked: '대조 안 함' }],
+    ['관측 등급', OBSERVATION_GRADE, { verified: 'ok', partial: 'partial', unverified: 'unver' }],
+    ['CI 단계', CI_STAGE, { task: 1, int: 2, night: 3, deploy: 4 }],
+  ])('%s: API 값마다 저장 값이 정해져 있고 되돌리면 같은 API 값이다', (_name, map, expected) => {
+    expect(map).toEqual(expected);
+    for (const [api, stored] of Object.entries(expected)) expect(fromDb(map, stored), String(stored)).toBe(api);
+    expect(() => fromDb(map, '모르는 값')).toThrow(RangeError);
+    expect(() => fromDb(map, null)).toThrow(RangeError);
+  });
+
+  test('화면 문구 「대조 안 함」은 unchecked다(contracts §1)', async () => {
+    const contracts = await import('node:fs').then(({ readFileSync }) =>
+      readFileSync(new URL('../../../../docs/plan/contracts.md', import.meta.url), 'utf8'));
+    expect(contracts).toContain('(화면 「대조 안 함」=unchecked)');
+    expect(fromDb(DRIFT_COMPAT, '대조 안 함')).toBe('unchecked');
+  });
+
+  test('저장된 변환 값은 실제 DB가 받고 다른 값은 거부한다', () => transaction(async (client) => {
+    const p = await project(client);
+    const drift = (compat: string) => client.query(
+      "insert into design_drifts(project_id,item_key,kind,compat,status) values($1,'i','k',$2,'open') returning compat", [p, compat]);
+    for (const stored of Object.values(DRIFT_COMPAT)) {
+      expect(fromDb(DRIFT_COMPAT, (await drift(stored)).rows[0]?.compat)).toBe(fromDb(DRIFT_COMPAT, stored));
+    }
+    await rejects(client, "insert into design_drifts(project_id,item_key,kind,compat,status) values($1,'i','k','compatible','open')", [p]);
+  }));
 
   test('CI 단계는 계약 순서의 번호다', async () => {
     expect(Object.keys(CI_STAGE)).toEqual(values(c.CiStage));
@@ -246,23 +276,45 @@ describe('API가 요구하는 저장 위치', () => {
     await client.query("select reset_project(1,'p',true,'lead')");
     const command = await one<{ id: string; epoch: number; payload: { holds: { job: string }[] } }>(client, 'select id,epoch,payload from runner_commands');
     expect(ajv.validate(op('getCommands').responses[200] ?? false, { currentEpoch: 2, commands: [{ id: command.id, kind: 'reset-cleanup', epoch: command.epoch, payload: command.payload }] })).toBe(true);
-    const report = (holds: unknown[], status = 'done') => ({ status, items: [{ name: 'worktree', ok: true, detail: '' }], holds });
-    const proof = { job, hostId: 'host', bootId: 'boot', proof: 'no_process' };
+    const report = (holds: CommandResultBody['holds'] = [], status: CommandResultBody['status'] = 'done'): CommandResultBody =>
+      ({ status, items: [{ name: 'worktree', ok: true, detail: '' }], holds });
+    const proof = { job, hostId: 'host', bootId: 'boot', proof: 'no_process' } as const;
     expect(ajv.validate(body('reportCommandResult') ?? false, report([proof])), ajv.errorsText()).toBe(true);
     expect(ajv.validate(body('reportCommandResult') ?? false, { status: 'done', items: [] })).toBe(false);
     expect(ajv.validate(body('reportCommandResult') ?? false, { status: 'failed', items: [] })).toBe(true);
-    expect(ajv.validate(body('reportCommandResult') ?? false, report([{ ...proof, proof: 'gone' }]))).toBe(false);
+    expect(ajv.validate(body('reportCommandResult') ?? false, { ...report([]), holds: [{ ...proof, proof: 'gone' }] })).toBe(false);
     await client.query('set local role awbs_app');
-    const call = (value: ReturnType<typeof report>) => {
-      const { succeeded, result } = cleanupResult(value as Parameters<typeof cleanupResult>[0]);
+    // 형변환 없이 API 본문 타입 그대로 넘긴다.
+    const call = (value: CommandResultBody) => {
+      const { succeeded, result } = cleanupResult(value);
       return client.query('select complete_cleanup($1,$2,$3,$4)', [command.id, command.epoch, succeeded, result]);
     };
     await client.query('savepoint wrong');
     await expect(call(report([{ ...proof, bootId: 'other' }]))).rejects.toMatchObject({ code: 'AW002' });
     await client.query('rollback to savepoint wrong');
+    // 교차 리뷰 지적 3: 실패 보고는 성공으로 닫지 않는다.
+    await client.query('savepoint failed');
+    await call(report([], 'failed'));
+    expect(await one(client, 'select status,result from runner_commands')).toEqual({
+      status: 'failed', result: { items: [{ name: 'worktree', ok: true, detail: '' }], holds: [] },
+    });
+    expect((await one(client, 'select cleanup_status from system_state')).cleanup_status).toBe('failed');
+    await client.query('rollback to savepoint failed');
     await call(report([proof]));
+    expect((await one(client, 'select status from runner_commands')).status).toBe('done');
     expect((await one(client, 'select cleanup_status from system_state')).cleanup_status).toBe('none');
   }));
+
+  test('API가 허용하는 정리 증거는 변환 함수가 형변환 없이 받는다(교차 리뷰 지적 2)', () => {
+    // 프로세스를 만들기 전에 예약만 한 보유는 부팅이 바뀌어도 processGroup이 null이다.
+    const result: CommandResultBody = { status: 'done', items: [], holds: [
+      { job: 'j1', hostId: null, bootId: null, proof: 'no_process' },
+      { job: 'j2', hostId: 'h', bootId: 'b1', proof: 'group_empty', processGroup: 42 },
+      { job: 'j3', hostId: 'h', bootId: 'b1', proof: 'boot_changed', processGroup: null, currentBootId: 'b2' },
+    ] };
+    expect(ajv.validate(body('reportCommandResult') ?? false, result), ajv.errorsText()).toBe(true);
+    expect(cleanupResult(result)).toEqual({ succeeded: true, result: { items: [], holds: result.holds } });
+  });
 
   test('등급 조정 저장 형식은 API GradeAdjust다', () => {
     const result = v.resolveRunGrade({

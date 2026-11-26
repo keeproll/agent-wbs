@@ -51,7 +51,8 @@ export interface CleanupProof {
   hostId: string | null;
   bootId: string | null;
   proof: 'no_process' | 'group_empty' | 'boot_changed';
-  processGroup?: number;
+  /** 예약만 하고 프로세스를 만들지 않은 보유가 부팅 변경으로 끝나면 null이다(API boot_changed). */
+  processGroup?: number | null;
   currentBootId?: string;
 }
 export interface CommandResultBody {
