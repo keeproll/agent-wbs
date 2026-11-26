@@ -113,6 +113,19 @@ test('출력 단절은 수를 0으로 확정하지 않고 보수 예산을 유�
   expect(t.requests.find(r => r.path.endsWith('/status') && r.body.status === 'failed')?.body).toMatchObject({ status: 'failed', model: 'gpt-6.2-sol', effort: 'high', fence: 9 });
 });
 
+test('M5-01 호환: 배경 여부가 빠진 Claude 호출은 전경으로 추정하지 않고 보유를 유지한다', async () => {
+  const t = await setup({ lines: [
+    { type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'tool_use', name: 'Agent', id: 'call-1' }] } },
+    { type: 'system', subtype: 'task_started', task_id: 'task-1', task_type: 'agent', tool_use_id: 'call-1' },
+    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'call-1' }] } },
+    { type: 'result', subtype: 'success', is_error: false },
+  ] });
+  t.options.binaries.Claude = t.fake.path;
+  const result = await t.exec.run({ ...job, payload: { ...job.payload, agent: 'Claude' } });
+  expect(result.observation).toMatchObject({ observed: 1, state: 'unconfirmed' });
+  expect(result.reserved).toBe(3);
+});
+
 test.each([{ cwd: '/다른/폴더' }, { agent: 'Claude' }, { model: '다른-model' }, { effort: 'low' }])('CLI resume 로컬 조건이 달라지면 새 세션: %j', async change => {
   const t = await setup();
   await t.exec.run(job);
