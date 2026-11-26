@@ -67,3 +67,18 @@ const result = await repo.reset({
 ## 검증
 
 `pnpm -C agent-runner test -- git`은 실제 외부 저장소에 접속하지 않고 로컬 bare 저장소로 검증한다. 임시 테스트 폴더는 운영체제의 `os.tmpdir()`를 사용하므로 다른 사용자와 CI에서도 실행할 수 있다. 이 작업의 증거를 남길 때는 `TMPDIR`을 지정된 보관 폴더 안의 ext4 경로로 설정한다. 테스트가 만든 폴더는 종료할 때 지운다.
+
+## 초기화 정리 연결(M4 통합)
+
+- **로컬 저장소 이름**은 `repositoryIdFor(repoUrl)`로 만든다(`src/git/identity.ts`).
+  - 서버 DB와 같은 규칙으로 주소를 정규화한다: 공백·끝 `/`·끝 `.git` 제거, 소문자.
+  - 왜: 정리 명령은 `repoUrl`만 알려 준다. clone하는 쪽과 정리하는 쪽이 같은 이름을 써야 한다.
+- 정리 명령의 `repoUrl`과 등록 원격(`source()`)이 다르면 정리를 중지한다.
+- **생성 차단**: `beginReset()`이 등록 기록에 `resetting`을 남긴다.
+  - 그동안 `createWorktree`·`checkoutInput`은 실패한다.
+  - `endReset()`은 생성 기록·작업 폴더·입력 사본이 하나도 남지 않았을 때만 차단을 푼다.
+  - 왜: 목록을 읽은 뒤 생긴 폴더가 남아 있는데 「정리 완료」를 보고하면 안 된다(교차 리뷰 P1-6).
+  - 기록이 디스크에 있으므로 강제 종료 뒤에도 유지된다. 정리 명령을 다시 실행하면 풀린다.
+- **push**: `pushCommit(commit, branch, authorization?)`은 일반 push만 한다(강제 push 없음).
+  - 로컬 브랜치를 옮기지 않는다.
+  - 인증 헤더는 명령 인자가 아니라 환경 변수(`GIT_CONFIG_*`)로 넘긴다.

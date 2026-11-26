@@ -58,6 +58,9 @@ test('설정: GitHub 저장소·방식과 CLI 업데이트 끄기', () => {
     .toMatchObject({ github: { repo: { owner: 'acme', repo: 'app' }, mode: 'token' }, cliUpdates: false });
   expect(() => loadConfig({ AWBS_RUNNER_TOKEN, AWBS_GITHUB_REPO: 'https://github.com/acme/app/tree/main' })).toThrow();
   expect(() => loadConfig({ AWBS_RUNNER_TOKEN, AWBS_GITHUB_REPO: 'https://github.com/acme/app', AWBS_GITHUB_MODE: 'pat' })).toThrow();
+  expect(loadConfig({ AWBS_RUNNER_TOKEN, AWBS_GITHUB_REPO: 'https://github.com/acme/app', AWBS_GITHUB_API_URL: 'http://127.0.0.1:9/' }).github)
+    .toMatchObject({ baseUrl: 'http://127.0.0.1:9' });
+  expect(() => loadConfig({ AWBS_RUNNER_TOKEN, AWBS_GITHUB_REPO: 'https://github.com/acme/app', AWBS_GITHUB_API_URL: 'http://u:hunter2@x/' })).toThrow();
 });
 
 test('봉인 형식 v1 고정 벡터: Runner 시험 사본이 공용 계약 fixture와 같다', async () => {

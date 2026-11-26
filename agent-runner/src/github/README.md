@@ -172,3 +172,18 @@ Runner가 GitHub(git 저장소를 올려 두고 PR·검사·병합을 하는 서
 ```sh
 pnpm -C agent-runner test -- github
 ```
+
+## 초기화 원격 정리(M4 통합)
+
+`src/cleanup/remote.ts`가 contracts §6 순서를 지킨다.
+
+1. 기록된 PR 닫기(`closePullRequest`). 이미 닫혔거나 없는 PR은 건너뛴다.
+2. 기록된 원격 Agent 브랜치 삭제(`deleteBranch`, Contents 쓰기). 이미 없으면(404·422) 성공으로 본다.
+3. 되돌림 커밋 일반 push.
+   - main 직접 push는 **별도 시스템 커밋 자격 증명**으로만 한다(contracts §6, Q-09).
+   - Q-09가 미결이라 지금은 공급원이 없다. 그래서 되돌림이 필요한 초기화는 failed로 보고한다(조정자 결정 1-A).
+   - 보내기 전에 GitHub의 main이 되돌림 커밋의 부모와 같은지 확인한다.
+
+로컬 저장소가 없으면 `topLevelEntries()`로 원격 main과 기준 커밋의 `src`·`contracts`·`.agentwbs`를 비교한다(쓰기 없음). 같으면 되돌림이 필요 없다.
+
+GitHub가 401을 주면 앱이 토큰 캐시를 비운다. 다음 요청은 새 봉인 값을 받는다. 연결 재확인도 캐시를 비운다.

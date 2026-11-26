@@ -25,6 +25,7 @@ export type StatusState = 'pending' | 'success' | 'failure' | 'error';
 export type WriteOperation =
   | { kind: 'pull_create'; branch: string }
   | { kind: 'pull_close'; pr: number }
+  | { kind: 'branch_delete'; branch: string }
   | { kind: 'status'; sha: string; context: StatusContext }
   | { kind: 'merge'; pr: number; headSha: string };
 
@@ -660,6 +661,36 @@ export function createGitHubClient(options: GitHubClientOptions) {
       const raw = await call('PATCH', `${repoPath}/pulls/${String(pr)}`, { body: { state: 'closed' } });
       observeWrite(raw, 'pulls', 'pull_close', 'PATCH PR');
       if (raw.status !== 200) throw failure(raw, 'PATCH PR');
+    },
+
+    /**
+     * 이 시스템이 기록한 원격 Agent 브랜치를 지운다(초기화 2단계, contracts §6). `agent/…`만 받는다.
+     * 이미 없으면(404·422) 지운 것과 같다. Contents 쓰기 권한의 증거다.
+     */
+    async deleteBranch(branch: string): Promise<void> {
+      if (!BRANCH.test(branch)) throw invalid('Agent 브랜치(agent/<TASK>)만 지울 수 있습니다.');
+      await beforeWrite({ kind: 'branch_delete', branch });
+      const raw = await call('DELETE', `${repoPath}/git/refs/heads/${branch.split('/').map(encodeURIComponent).join('/')}`);
+      observeWrite(raw, 'contents', 'branch_delete', 'DELETE ref');
+      if (raw.status === 204 || raw.status === 404 || raw.status === 422) return;
+      throw failure(raw, 'DELETE ref');
+    },
+
+    /** 원격 main의 SHA. 저장소가 비었으면 null. */
+    async mainSha(): Promise<string | null> {
+      const raw = await call('GET', `${repoPath}/branches/main`);
+      if (raw.status === 404) return null;
+      if (raw.status !== 200) throw failure(raw, 'GET main');
+      return (raw.body as { commit: { sha: string } }).commit.sha;
+    },
+
+    /** 커밋의 최상위 항목 이름 → 객체 SHA. 초기화 대상(src·contracts·.agentwbs)이 기준과 같은지 비교할 때 쓴다(쓰기 없음). */
+    async topLevelEntries(commit: string): Promise<Record<string, string>> {
+      if (!SHA.test(commit)) throw invalid('commit SHA 형식이 올바르지 않습니다.');
+      const tree = await ok<{ tree: { path: string; sha?: string }[] }>('GET', `${repoPath}/git/trees/${commit}`);
+      const out: Record<string, string> = {};
+      for (const entry of tree.tree) if (!entry.path.includes('/') && typeof entry.sha === 'string') out[entry.path] = entry.sha;
+      return out;
     },
 
     async setCommitStatus(input: {

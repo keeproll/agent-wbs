@@ -320,13 +320,22 @@ export class GitHubModel {
           body: {
             sha: commit.tree,
             truncated: this.options.truncatedTree ?? false,
+            // sha는 내용(아래 파일 목록)에서 만든다. 같은 내용이면 커밋이 달라도 같은 sha다(실제 Git과 같은 성질).
             tree: [
-              ...[...dirs].map((path) => ({ path, type: 'tree' })),
-              ...files.map((path) => ({ path, type: 'blob' })),
+              ...[...dirs].map((path) => ({ path, type: 'tree', sha: sha1(`tree:${files.filter((f) => f.startsWith(`${path}/`)).sort().join('\n')}`) })),
+              ...files.map((path) => ({ path, type: 'blob', sha: sha1(`blob:${path}`) })),
             ],
           },
         };
       }),
+    );
+    github.on(
+      `DELETE ${repoPath}/git/refs/heads/agent/:name`,
+      guard((request) => {
+        const branch = `agent/${param(request, 'name')}`;
+        if (!this.branches.delete(branch)) return { status: 422, body: { message: 'Reference does not exist' } };
+        return { status: 204 };
+      }, 'contents'),
     );
     github.on(
       `GET ${repoPath}/git/commits/:sha`,

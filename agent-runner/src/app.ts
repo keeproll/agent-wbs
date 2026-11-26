@@ -4,6 +4,7 @@ import type { ApiClient } from './api/client.ts';
 import type { Agent } from './api/generated/client.ts';
 import { Runner } from './api/runner.ts';
 import { authenticationFailed } from './api/outbox.ts';
+import { createGithubRemoteCleanup } from './cleanup/remote.ts';
 import { createResetCleanup, type ResetCleanupDeps } from './cleanup/reset.ts';
 import { CliUpdater, cliBinary, type CliRegistry } from './cli-update/manager.ts';
 import { cliAwareRun, cliEnvironment } from './cli-update/registry.ts';
@@ -105,25 +106,6 @@ export class RunnerApp {
       idempotencyKey: () => `resources:${runnerId()}:${randomUUID()}`,
       ...(d.now && { now: d.now }),
     });
-    this.runner = new Runner({
-      state: d.state,
-      api: d.api,
-      version: d.version,
-      warn: d.warn,
-      ...(d.now && { now: d.now }),
-      cleanup: createResetCleanup({ home: d.home, identity: () => this.identity, ...d.cleanup }),
-    });
-    this.updater = new CliUpdater({
-      home: d.home,
-      // CliUpdater는 생성 때 식별자를 검사하므로 host 식별자를 읽은 뒤(bootstrap) 실제 값으로 바뀐다.
-      owner: { get hostId() { return app.identity.hostId; }, get bootId() { return app.identity.bootId; }, get runnerId() { return runnerId(); } },
-      registry: d.cliRegistry,
-      activity: () => Promise.resolve([{ ...this.owner, children: this.sessions.reduce((n, s) => n + s.children, 0), held: this.sessions.reduce((n, s) => n + s.reserved, 0) }]),
-      profiles: () => d.cliProfiles?.() ?? [],
-      verified: () => verifiedFromPolicy(this.runner.policy?.cliGrades),
-      report: (body) => this.reportReadiness(body),
-      obsNote: () => cgroupNote((path) => d.hostSources.readFile(path)),
-    });
     if (d.github) {
       const connector = new GithubConnector({
         api: d.api,
@@ -150,6 +132,32 @@ export class RunnerApp {
       });
       this.github = { client, connector, mode };
     }
+    this.runner = new Runner({
+      state: d.state,
+      api: d.api,
+      version: d.version,
+      warn: d.warn,
+      ...(d.now && { now: d.now }),
+      cleanup: createResetCleanup({
+        home: d.home,
+        identity: () => this.identity,
+        // 원격 초기화는 GitHub 설정이 있을 때 실제 클라이언트로 연결한다(교차 리뷰 P1-2).
+        // 되돌림 push용 시스템 커밋 자격 증명은 Q-09 미결이라 공급원이 없다 → 되돌림이 필요한 초기화만 failed(조정자 결정 1-A).
+        ...(this.github && { remote: createGithubRemoteCleanup({ client: this.github.client }) }),
+        ...d.cleanup,
+      }),
+    });
+    this.updater = new CliUpdater({
+      home: d.home,
+      // CliUpdater는 생성 때 식별자를 검사하므로 host 식별자를 읽은 뒤(bootstrap) 실제 값으로 바뀐다.
+      owner: { get hostId() { return app.identity.hostId; }, get bootId() { return app.identity.bootId; }, get runnerId() { return runnerId(); } },
+      registry: d.cliRegistry,
+      activity: () => Promise.resolve([{ ...this.owner, children: this.sessions.reduce((n, s) => n + s.children, 0), held: this.sessions.reduce((n, s) => n + s.reserved, 0) }]),
+      profiles: () => d.cliProfiles?.() ?? [],
+      verified: () => verifiedFromPolicy(this.runner.policy?.cliGrades),
+      report: (body) => this.reportReadiness(body),
+      obsNote: () => cgroupNote((path) => d.hostSources.readFile(path)),
+    });
   }
 
   get identity(): { hostId: string; bootId: string } {

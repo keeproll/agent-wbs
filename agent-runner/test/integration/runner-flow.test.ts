@@ -11,6 +11,7 @@ import { RunnerApp } from '../../src/app.ts';
 import type { CliRegistry } from '../../src/cli-update/manager.ts';
 import { sealCredential } from '../../src/github/credential.ts';
 import { GitRepository } from '../../src/git/repository.ts';
+import { repositoryIdFor } from '../../src/git/identity.ts';
 import { resultRefspec } from '../../src/git/publish.ts';
 import type { RunCommand } from '../../src/readiness/command.ts';
 import type { HostSources } from '../../src/resources/host.ts';
@@ -30,6 +31,7 @@ import { startFakeGitHub, type FakeGitHub } from '../fakes/github/server.ts';
 const RUNNER_TOKEN = 'fake-runner-token-0123456789abcdef';
 const GITHUB_TOKEN = 'github_pat_FAKE0123456789fakeFAKEfake';
 const BOOT = 'e2e0b007-0000-4000-8000-00000000b007';
+const fixture = JSON.parse(await readFile(join(import.meta.dirname, '../../../agent-wbs/contracts/fixtures/reset-cleanup-payloads.json'), 'utf8')) as { withBase: { payload: { holds: Record<string, unknown>[] } & Record<string, unknown> } };
 
 interface Received { method: string; path: string; headers: IncomingMessage['headers']; body: Record<string, unknown> }
 
@@ -82,7 +84,7 @@ test('M4 결합: 연결부터 CLI 유휴 적용까지 한 시나리오', { timeo
   git(source, 'init', '--bare', '-b', 'main', remote);
   git(source, 'remote', 'add', 'origin', remote);
   git(source, 'push', 'origin', 'main');
-  const repo = await GitRepository.clone(home, 'p1', remote);
+  const repo = await GitRepository.clone(home, repositoryIdFor(remote), remote);
   const worktree = await repo.createWorktree('att-1', 'agent/T1-h1', baseline);
   await repo.checkoutInput('v1', baseline);
   // Agent가 결과 커밋을 만든다 → 결과 SHA를 원격 Agent 브랜치로 직접 push한다(로컬 Agent 브랜치는 옮기지 않음).
@@ -109,6 +111,9 @@ test('M4 결합: 연결부터 CLI 유휴 적용까지 한 시나리오', { timeo
   github = await startFakeGitHub(GITHUB_TOKEN);
   const model = new GitHubModel({ tokenPermissions: { statuses: 'read' } });
   model.install(github);
+  // 서버가 기록한 PR·원격 Agent 브랜치(초기화 1·2단계 대상)
+  model.push('agent/T1-h1');
+  const recordedPr = model.openPull('agent/T1-h1').number;
 
   // ── fake WBS 서버 ──
   let commandDone = false;
@@ -131,9 +136,10 @@ test('M4 결합: 연결부터 CLI 유휴 적용까지 한 시나리오', { timeo
         case 'POST /api/runner/heartbeat': res.writeHead(204, { 'x-current-epoch': '0' }).end(); return;
         case 'POST /api/runner/sessions': res.writeHead(204).end(); return;
         case 'GET /api/runner/commands':
+          // 실제 reset_project() 출력과 같은 공용 fixture(기준 있음)에서, 시험 환경 값만 바꾼다.
           json(res, { currentEpoch: 0, commands: commandDone ? [] : [{ id: 'cmd-1', kind: 'reset-cleanup', epoch: 0, payload: {
-            projectId: 'p1', baseCommit: baseline, branches: ['agent/T1-h1'],
-            holds: [{ job: 'job-1', hostId, bootId: BOOT, processGroup: pgid }],
+            ...fixture.withBase.payload, repoUrl: remote, baseCommit: baseline, branches: ['agent/T1-h1'], prs: [recordedPr],
+            holds: [{ ...fixture.withBase.payload.holds[0], job: 'job-1', host_id: hostId, boot_id: BOOT, pgid }],
           } }] });
           return;
         case 'POST /api/runner/commands/cmd-1/result': commandDone = true; res.writeHead(204).end(); return;
@@ -164,7 +170,7 @@ test('M4 결합: 연결부터 CLI 유휴 적용까지 한 시나리오', { timeo
           credentialCalls += 1;
           // 첫 조회는 서버 재시작으로 등록이 사라진 상황(404)을 흉내 낸다.
           if (credentialCalls === 1) { json(res, { error: { code: 'NOT_FOUND', message: '등록 없음', details: {} } }, 404); return; }
-          if (url.searchParams.get('keyId') !== 'key-2') { json(res, { error: { code: 'NOT_FOUND' } }, 404); return; }
+          if (![...keyIds.values()].includes(url.searchParams.get('keyId') ?? '')) { json(res, { error: { code: 'NOT_FOUND' } }, 404); return; }
           json(res, { sealed: sealCredential(publicKeyPem, GITHUB_TOKEN) });
           return;
         case 'POST /api/runner/github/status': res.writeHead(204).end(); return;
@@ -228,7 +234,6 @@ test('M4 결합: 연결부터 CLI 유휴 적용까지 한 시나리오', { timeo
   };
 
   state = await State.open(join(home, 'state'));
-  const remoteCalls: string[] = [];
   const app = new RunnerApp({
     state,
     api: createApiClient({ baseUrl: wbsUrl, token: new Secret(RUNNER_TOKEN) }),
@@ -242,7 +247,6 @@ test('M4 결합: 연결부터 CLI 유휴 적용까지 한 시나리오', { timeo
     cliRegistry: registry,
     cliProfiles: () => [{ agent: 'Codex', model: 'gpt-6.2-sol', options: 'exec --json' }],
     github: { repo: { owner: model.owner, repo: model.repo }, mode: 'token', baseUrl: github.url },
-    cleanup: { remote: { removeBranches: (branches) => { remoteCalls.push(...branches); return Promise.resolve(); }, pushReset: () => Promise.reject(new Error('되돌림 불필요')) } },
   });
   await app.init();
   const hostId = app.identity.hostId;
@@ -255,9 +259,13 @@ test('M4 결합: 연결부터 CLI 유휴 적용까지 한 시나리오', { timeo
   const result = received.find((r) => r.path === '/api/runner/commands/cmd-1/result');
   expect(result?.body).toMatchObject({ status: 'done', holds: [{ job: 'job-1', hostId, bootId: BOOT, proof: 'group_empty', processGroup: pgid }] });
   await expect(lstat(worktree)).rejects.toMatchObject({ code: 'ENOENT' });
-  await expect(lstat(join(home, 'inputs/p1/v1'))).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(lstat(join(home, 'inputs', repositoryIdFor(remote), 'v1'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect(git(repo.path, 'for-each-ref', 'refs/heads/agent')).toBe('');
-  expect(remoteCalls).toEqual(['agent/T1-h1']);
+  // 원격 정리는 실제 GitHub 클라이언트로: PR 닫기 → 기록된 원격 브랜치 삭제(되돌림은 필요 없음)
+  expect(model.pulls.get(recordedPr)?.state).toBe('closed');
+  expect(model.branches.has('agent/T1-h1')).toBe(false);
+  const order = github.requests.filter((r) => r.method !== 'GET').map((r) => `${r.method} ${r.path}`);
+  expect(order).toEqual([`PATCH /repos/o/r/pulls/${String(recordedPr)}`, 'DELETE /repos/o/r/git/refs/heads/agent/T1-h1']);
   expect(app.runner.ready).toBe(false);
   // 같은 이름으로 다음 시도를 만들 수 있다(결과 SHA push 원칙 덕분에 로컬 브랜치가 지워졌다).
   await repo.createWorktree('att-2', 'agent/T1-h1', baseline);
@@ -286,7 +294,8 @@ test('M4 결합: 연결부터 CLI 유휴 적용까지 한 시나리오', { timeo
   ]);
   // GitHub 키: 등록 → 404 → 새 Idempotency-Key로 재등록 → 봉인 조회 성공
   const keyRequests = received.filter((r) => r.path === '/api/runner/github/key');
-  expect(keyRequests).toHaveLength(2);
+  // 정리 단계에서 처음 토큰을 받을 때 404 → 새 키로 재등록, 시작 보고의 연결 확인에서 한 번 더 등록한다.
+  expect(keyRequests).toHaveLength(3);
   expect(keyRequests[0]?.headers['idempotency-key']).not.toBe(keyRequests[1]?.headers['idempotency-key']);
   expect(keyRequests[0]?.body).toMatchObject({ hostId, bootId: BOOT, sealedVersion: 1 });
   const status1 = posted('/api/runner/github/status')[0];

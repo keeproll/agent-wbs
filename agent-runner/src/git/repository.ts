@@ -36,7 +36,7 @@ export interface RejectedPath {
 
 interface TreeEntry { mode: string; oid: string; path: string }
 interface WorktreeRecord { id: string; branch?: string; startCommit?: string }
-interface Registration { source: string; configHash: string; worktrees: WorktreeRecord[] }
+interface Registration { source: string; configHash: string; worktrees: WorktreeRecord[]; resetting?: boolean }
 interface LockOwner { pid: number; bootId?: string; startTime?: string }
 const BOOT_ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 
@@ -193,7 +193,7 @@ async function removeReadonly(path: string): Promise<void> {
   await rm(path, { recursive: true, force: true });
 }
 
-/** 네트워크 쓰기는 GitHub 어댑터의 권한 확인 뒤 별도로 수행한다. 이 계층에는 push가 없다. */
+/** 네트워크 쓰기는 GitHub 어댑터의 권한 확인 뒤 별도로 수행한다. 이 계층의 push는 `pushCommit`(일반 push) 하나뿐이다. */
 export class GitRepository {
   readonly path: string;
   readonly repositoryId: string;
@@ -266,8 +266,9 @@ export class GitRepository {
       !('worktrees' in record) || !Array.isArray(record.worktrees)) {
       throw new GitSafetyError('저장소 등록 기록이 올바르지 않습니다.');
     }
+    const resetting = 'resetting' in record && record.resetting === true;
     return { source: sourceUrl(record.source), configHash: record.configHash,
-      worktrees: record.worktrees.map((value: unknown) => worktreeRecord(value)) };
+      worktrees: record.worktrees.map((value: unknown) => worktreeRecord(value)), ...(resetting && { resetting }) };
   }
 
   private async git(args: string[], input?: Buffer | string, env?: NodeJS.ProcessEnv, allowed?: number[]) {
@@ -345,6 +346,50 @@ export class GitRepository {
     return sha((await this.git(['rev-parse', '--verify', 'refs/remotes/origin/main^{commit}'])).toString().trim());
   }
 
+  /** 등록한 원격 주소(설정 지문 검증 뒤). 초기화 명령의 저장소와 같은지 대조할 때 쓴다. */
+  async source(): Promise<string> {
+    return (await this.trusted()).source;
+  }
+
+  /**
+   * 초기화 정리 시작(교차 리뷰 P1-6). 등록 기록에 `resetting`을 남겨, 끝날 때까지 새 작업 폴더·입력 사본 생성을 막는다.
+   * 기록이 디스크에 있으므로 다른 프로세스와 강제 종료 뒤 재시작에도 유지된다. 정리 명령 재시도가 다시 지운다.
+   */
+  async beginReset(): Promise<void> {
+    await this.worktreeUpdate(async () => {
+      const record = await this.trusted();
+      if (!record.resetting) await this.saveRegistration({ ...record, resetting: true });
+    });
+  }
+
+  /** 초기화 정리 끝. 생성 기록·작업 폴더·입력 사본이 하나라도 남아 있으면 해제하지 않고 실패한다. */
+  async endReset(): Promise<void> {
+    await this.worktreeUpdate(async () => {
+      const record = await this.trusted();
+      const folders = await readdir(await safePath(this.worktrees)).catch(() => []);
+      const inputs = await readdir(await safePath(this.inputs)).catch(() => []);
+      if (record.worktrees.length > 0 || folders.length > 0 || inputs.length > 0) {
+        throw new GitSafetyError(`초기화 뒤에도 남은 항목이 있습니다: 기록 ${String(record.worktrees.length)}개, 작업 폴더 ${String(folders.length)}개, 입력 ${String(inputs.length)}개`);
+      }
+      const next: Registration = { source: record.source, configHash: record.configHash, worktrees: record.worktrees };
+      await this.saveRegistration(next);
+    });
+  }
+
+  /**
+   * 커밋을 등록 원격의 브랜치로 **일반 push**한다(강제 push 없음, 로컬 브랜치를 옮기지 않음).
+   * 인증 헤더는 명령 인자가 아니라 환경 변수(GIT_CONFIG_*)로만 넘긴다. 왜: 인자는 다른 프로세스가 /proc에서 읽을 수 있다.
+   * 호출자(GitHub 원격 정리)가 외부 쓰기 권한과 원격 main 대조를 먼저 한다.
+   */
+  async pushCommit(commit: string, branch: string, authorization?: string): Promise<void> {
+    sha(commit);
+    if (branch !== 'main') await this.branch(branch);
+    const { source } = await this.trusted();
+    const env: NodeJS.ProcessEnv = authorization === undefined ? {}
+      : { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.extraHeader', GIT_CONFIG_VALUE_0: `AUTHORIZATION: ${authorization}` };
+    await this.git(['push', '--no-verify', '--', source, `${commit}:refs/heads/${branch}`], undefined, env);
+  }
+
   async head(): Promise<string> {
     return sha((await this.git(['rev-parse', '--verify', 'refs/heads/main^{commit}'])).toString().trim());
   }
@@ -368,6 +413,7 @@ export class GitRepository {
       sha(commit);
       if (await stat(path)) throw new GitSafetyError('이미 존재하는 작업 폴더를 덮어쓰지 않습니다.');
       const record = await this.trusted();
+      if (record.resetting) throw new GitSafetyError('초기화 정리 중에는 작업 폴더를 만들 수 없습니다.');
       if (record.worktrees.some((value) => value.id === worktreeId)) throw new GitSafetyError('이 작업 폴더는 정리 후 다시 만들어야 합니다.');
       const ref = `refs/heads/${branch}`;
       await this.git(['update-ref', ref, commit, '']);
@@ -449,6 +495,7 @@ export class GitRepository {
     const path = await safePath(join(this.inputs, id(inputId)));
     sha(commit);
     if (await stat(path)) throw new GitSafetyError('기존 입력 버전은 덮어쓰지 않습니다.');
+    if ((await this.trusted()).resetting) throw new GitSafetyError('초기화 정리 중에는 입력 사본을 만들 수 없습니다.');
     const entries = (await this.tree(commit)).filter((entry) => entry.path === 'prototype' || entry.path.startsWith('prototype/'));
     if (entries.length === 0) throw new GitSafetyError('prototype 입력이 없습니다.');
     for (const entry of entries) {
@@ -484,6 +531,8 @@ export class GitRepository {
         await chmod(folder, 0o555);
       }
       await lock(path);
+      // 만드는 사이 초기화 정리가 시작됐으면 이 사본도 정리 대상이다. 남기지 않고 실패한다.
+      if ((await this.trusted()).resetting) throw new GitSafetyError('초기화 정리가 시작되어 입력 사본을 지웠습니다.');
       return path;
     } catch (error) {
       await removeReadonly(path);

@@ -1,33 +1,40 @@
-import { lstat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { lstat, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ApiRequest, ApiResponse } from '../api/client.ts';
+import { normalizeRepoUrl, repositoryIdFor } from '../git/identity.ts';
 import { GitCleanupError, GitRepository } from '../git/repository.ts';
+import { atomicWrite } from '../state/files.ts';
+import { SystemCredentialMissing, type RemoteCleanup } from './remote.ts';
 
 type Command = ApiResponse<'getCommands'>['body']['commands'][number];
 export type CommandResult = ApiRequest<'reportCommandResult'>['body'];
 type HoldProof = Extract<CommandResult, { status: 'done' }>['holds'][number];
 type Item = CommandResult['items'][number];
 
-/** 정리 명령 payload의 보유 하나(data-model §5: 보유 중인 실행 목록 pgid·host·boot를 payload로 옮긴다). */
+/**
+ * 정리 명령 payload의 보유 하나. 서버 `reset_project()`가 `execution_holds` 행을 그대로 담는다(필드 이름도 DB 그대로).
+ * Runner는 그중 아래 값만 쓴다. 나머지 필드(id·agent·fence 등)는 읽지 않는다.
+ */
 export interface PayloadHold {
   job: string;
   hostId: string | null;
   bootId: string | null;
   processGroup: number | null;
+  slotState: string;
 }
 
 /**
- * `reset-cleanup` payload. 계약은 자유 형식(`Record<string, unknown>`)이라 Runner가 이 모양만 받는다 [결정].
- * - `projectId`: Runner 로컬 저장소 이름(`repos/<projectId>`).
- * - `baseCommit`: 등록 기준 커밋. null이면 저장소 정리를 생략한다(§9.5-2).
- * - `branches`: 서버가 기록한 Agent 브랜치. `agent/*` 검색 결과가 아니다.
- * - `holds`: 보유 중인 실행 목록. 모두 종료가 확인돼야 정리한다.
+ * `reset-cleanup` payload. 생산자는 서버 DB 함수 `reset_project()`(migrations 0012)다.
+ * 공용 고정 예시: `agent-wbs/contracts/fixtures/reset-cleanup-payloads.json`(DB 시험이 실제 출력과 같은지 확인한다).
+ * - 항상 있는 값: `epochPath`(서버 파일 삭제 대기열용, Runner는 쓰지 않음), `holds`, `generation`, `unparsedPrs`.
+ * - 기준 커밋이 있을 때만 있는 값: `repoUrl`, `baseCommit`, `branches`, `prs`. 없으면 저장소 정리를 하지 않는다(G §9.5-2).
  */
 export interface ResetPayload {
-  projectId: string;
-  baseCommit: string | null;
-  branches: string[];
   holds: PayloadHold[];
+  generation: number | null;
+  unparsedPrs: unknown[];
+  repo: { repoUrl: string; baseCommit: string; branches: string[]; prs: number[] } | null;
 }
 
 export class PayloadError extends Error {
@@ -35,24 +42,36 @@ export class PayloadError extends Error {
 }
 
 const isText = (v: unknown): v is string => typeof v === 'string' && v !== '';
+const optionalText = (v: unknown): string | null => {
+  if (v === null || v === undefined) return null;
+  if (!isText(v)) throw new PayloadError('보유 항목의 host_id·boot_id가 올바르지 않습니다.');
+  return v;
+};
 
 export function parseResetPayload(payload: Record<string, unknown>): ResetPayload {
-  const { projectId, baseCommit, branches, holds } = payload;
-  if (!isText(projectId) || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/.test(projectId)) throw new PayloadError('projectId가 올바르지 않습니다.');
-  if (baseCommit !== null && (typeof baseCommit !== 'string' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(baseCommit))) throw new PayloadError('baseCommit은 전체 SHA 또는 null이어야 합니다.');
-  if (!Array.isArray(branches) || !branches.every((b) => isText(b) && b.startsWith('agent/'))) throw new PayloadError('branches는 agent/ 브랜치 목록이어야 합니다.');
+  const { holds, generation, unparsedPrs, repoUrl, baseCommit, branches, prs } = payload;
   if (!Array.isArray(holds)) throw new PayloadError('holds 목록이 없습니다.');
+  if (generation !== null && generation !== undefined && !Number.isSafeInteger(generation)) throw new PayloadError('generation이 올바르지 않습니다.');
+  if (unparsedPrs !== undefined && !Array.isArray(unparsedPrs)) throw new PayloadError('unparsedPrs가 목록이 아닙니다.');
   const parsed = holds.map((h: unknown): PayloadHold => {
     if (!h || typeof h !== 'object') throw new PayloadError('보유 항목 형식이 올바르지 않습니다.');
-    const { job, hostId, bootId, processGroup } = h as Record<string, unknown>;
-    if (!isText(job)) throw new PayloadError('보유 항목에 job이 없습니다.');
-    if (hostId !== null && !isText(hostId)) throw new PayloadError('보유 항목의 hostId가 올바르지 않습니다.');
-    if (bootId !== null && !isText(bootId)) throw new PayloadError('보유 항목의 bootId가 올바르지 않습니다.');
-    const group = processGroup ?? null;
-    if (group !== null && (!Number.isSafeInteger(group) || (group as number) <= 1)) throw new PayloadError('보유 항목의 processGroup이 올바르지 않습니다.');
-    return { job, hostId, bootId, processGroup: group as number | null };
+    const row = h as Record<string, unknown>;
+    if (!isText(row.job)) throw new PayloadError('보유 항목에 job이 없습니다.');
+    const pgid = row.pgid ?? null;
+    if (pgid !== null && (!Number.isSafeInteger(pgid) || (pgid as number) <= 1)) throw new PayloadError('보유 항목의 pgid가 올바르지 않습니다.');
+    if (!isText(row.slot_state)) throw new PayloadError('보유 항목에 slot_state가 없습니다.');
+    return { job: row.job, hostId: optionalText(row.host_id), bootId: optionalText(row.boot_id), processGroup: pgid as number | null, slotState: row.slot_state };
   });
-  return { projectId, baseCommit, branches: branches as string[], holds: parsed };
+  let repo: ResetPayload['repo'] = null;
+  if (baseCommit !== undefined && baseCommit !== null) {
+    if (typeof baseCommit !== 'string' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(baseCommit)) throw new PayloadError('baseCommit은 전체 SHA여야 합니다.');
+    if (!isText(repoUrl)) throw new PayloadError('기준 커밋이 있는데 repoUrl이 없습니다.');
+    if (!Array.isArray(branches) || !branches.every((b) => isText(b) && b.startsWith('agent/'))) throw new PayloadError('branches는 agent/ 브랜치 목록이어야 합니다.');
+    const list = prs ?? [];
+    if (!Array.isArray(list) || !list.every((n) => Number.isSafeInteger(n) && (n as number) > 0)) throw new PayloadError('prs는 PR 번호 목록이어야 합니다.');
+    repo = { repoUrl, baseCommit, branches: branches as string[], prs: list as number[] };
+  }
+  return { holds: parsed, generation: (generation ?? null) as number | null, unparsedPrs: (unparsedPrs ?? []) as unknown[], repo };
 }
 
 /** 프로세스 그룹이 비었는가. ESRCH만 「비었음」이다. EPERM(다른 사용자 소유)은 살아 있는 것으로 본다. */
@@ -65,14 +84,6 @@ export function processGroupEmpty(pgid: number): boolean {
   }
 }
 
-/** 원격 정리(M4-04 GitHub 쓰기). 외부 쓰기 권한(§3.4-5) 확인과 함께 연결한다. 없으면 원격 작업이 필요한 정리는 실패로 보고한다. */
-export interface RemoteCleanup {
-  /** 서버가 기록한 Agent 브랜치의 열린 PR을 닫고 원격 브랜치를 지운다. */
-  removeBranches(branches: readonly string[]): Promise<void>;
-  /** 되돌림 커밋을 일반 push로 보낸다. 보내기 전 GitHub의 main이 `parent`인지 대조해야 한다. */
-  pushReset(repo: GitRepository, commit: string, parent: string): Promise<void>;
-}
-
 export interface ResetCleanupDeps {
   home: string;
   /** 현재 PC·부팅 식별자(host 보고와 같은 값) */
@@ -83,8 +94,20 @@ export interface ResetCleanupDeps {
    * `none`: 실행 명령도 래퍼도 없음을 확인. `unknown`: 확인할 수 없음 → unconfirmed 유지.
    */
   launchCheck?: (hold: PayloadHold) => Promise<'none' | 'unknown'>;
+  /** 원격 쓰기(PR 닫기·브랜치 삭제·되돌림 push). GitHub 설정이 없으면 없음 → 원격 작업이 필요한 정리는 failed. */
   remote?: RemoteCleanup;
 }
+
+/** 이미 팀장에게 알린 「수동 대조 필요」 PR 참조. 같은 참조를 다음 초기화에서 다시 경고하지 않는다(조정자 결정 3-A). */
+async function warnedRefs(home: string): Promise<Set<string>> {
+  try {
+    const value: unknown = JSON.parse(await readFile(join(home, 'state', 'reset-warned.json'), 'utf8'));
+    return new Set(Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+const refKey = (ref: unknown) => createHash('sha256').update(JSON.stringify(ref)).digest('hex');
 
 /**
  * M4-01 `RunnerOptions.cleanup`에 넘기는 초기화 정리.
@@ -92,8 +115,9 @@ export interface ResetCleanupDeps {
  * 순서가 중요하다.
  * 1. **먼저 모든 보유의 프로세스 종료를 증명한다.** 하나라도 증명하지 못하면 파일·브랜치를 건드리지 않고 failed로 보고한다.
  *    왜: M4-03의 잠금 회수는 잠금 주인 Node만 확인한다. 하위 git·Agent 프로세스가 살아 있는데 폴더를 지우면 안 된다(M4-03 최종 확인 §3).
- * 2. 그다음 로컬 Git 정리(M4-03 `reset`): 생성 기록의 작업 폴더·입력 사본·서버가 기록한 브랜치.
- * 3. 원격 정리(PR 닫기·원격 브랜치 삭제·되돌림 커밋 push)는 `remote`가 있을 때만 한다.
+ * 2. 로컬 저장소가 있으면 생성 차단(`beginReset`) → 로컬 Git 정리(M4-03 `reset`).
+ * 3. 원격 정리: PR 닫기 → 기록된 원격 브랜치 삭제 → 되돌림 커밋 push(contracts §6 순서).
+ * 4. 남은 작업 폴더·입력이 없음을 확인하고 생성 차단을 푼다(`endReset`). 남아 있으면 failed.
  */
 export function createResetCleanup(deps: ResetCleanupDeps): (command: Command) => Promise<CommandResult> {
   const groupEmpty = deps.groupEmpty ?? processGroupEmpty;
@@ -110,72 +134,101 @@ export function createResetCleanup(deps: ResetCleanupDeps): (command: Command) =
     const proofs: HoldProof[] = [];
     for (const hold of payload.holds) {
       const name = `hold:${hold.job}`;
+      const original = { job: hold.job, hostId: hold.hostId, bootId: hold.bootId };
       if (hold.hostId === null) {
         // 예약 전 보유: 어느 PC에서도 프로세스를 만든 적이 없다.
-        proofs.push({ job: hold.job, hostId: null, bootId: hold.bootId, proof: 'no_process' });
+        proofs.push({ ...original, proof: 'no_process' });
         items.push({ name, ok: true, detail: '예약 전 보유 — 실행된 프로세스 없음' });
       } else if (hold.hostId !== hostId) {
         items.push({ name, ok: false, detail: '다른 PC의 보유 — 이 PC에서는 종료를 증명할 수 없음' });
       } else if (hold.bootId !== bootId) {
-        proofs.push({ job: hold.job, hostId: hold.hostId, bootId: hold.bootId, proof: 'boot_changed', processGroup: hold.processGroup, currentBootId: bootId });
+        proofs.push({ ...original, proof: 'boot_changed', processGroup: hold.processGroup, currentBootId: bootId });
         items.push({ name, ok: true, detail: '부팅이 바뀜 — 이전 프로세스는 존재할 수 없음' });
       } else if (hold.processGroup !== null) {
         if (groupEmpty(hold.processGroup)) {
-          proofs.push({ job: hold.job, hostId: hold.hostId, bootId: hold.bootId, proof: 'group_empty', processGroup: hold.processGroup });
+          proofs.push({ ...original, proof: 'group_empty', processGroup: hold.processGroup });
           items.push({ name, ok: true, detail: `프로세스 그룹 ${String(hold.processGroup)} 비었음` });
         } else {
           // pgid 재사용 가능성 때문에 시작 시각·launchId 대조 없이 죽이지 않는다(§3.4-3). 실행 계층(M5-02)이 종료한 뒤 다시 시도된다.
           items.push({ name, ok: false, detail: `프로세스 그룹 ${String(hold.processGroup)}이 아직 살아 있음 — 종료 확인 뒤 다시 시도` });
         }
+      } else if (hold.slotState === 'none') {
+        // 물리 슬롯 없이 논리 잠금만 남은 보유: 슬롯은 CLI·① 실행 때만 잡으므로(§3.4-8) 실행 중인 프로세스가 없다.
+        proofs.push({ ...original, proof: 'no_process' });
+        items.push({ name, ok: true, detail: '물리 슬롯 없음(논리 잠금만) — 실행된 프로세스 없음' });
       } else if ((await launchCheck(hold)) === 'none') {
-        proofs.push({ job: hold.job, hostId: hold.hostId, bootId: hold.bootId, proof: 'no_process' });
+        proofs.push({ ...original, proof: 'no_process' });
         items.push({ name, ok: true, detail: 'launch 기록 대조 — 실행 명령·래퍼 없음' });
       } else {
         items.push({ name, ok: false, detail: 'launch 기록을 확인할 수 없음 — unconfirmed 유지' });
       }
     }
     if (proofs.length !== payload.holds.length) return { status: 'failed', items };
-
+    // 외부 쓰기 권한 확인은 서버 책임이다(조정자 결정 2-A). Runner는 받은 세대를 기록만 한다.
+    items.push({ name: 'authority', ok: true, detail: `외부 쓰기 권한 세대 ${payload.generation === null ? '없음' : String(payload.generation)}` });
     const failed = (item: Item): CommandResult => ({ status: 'failed', items: [...items, item], holds: proofs });
-    const repoPath = join(deps.home, 'repos', payload.projectId);
-    const exists = await lstat(repoPath).then(() => true, () => false);
-    if (!exists) {
-      // 이 PC에 받은 적 없는 저장소는 로컬 정리할 것이 없다. 원격 정리는 여전히 필요할 수 있다.
-      items.push({ name: 'git:local', ok: true, detail: '이 PC에 로컬 저장소 없음' });
-    } else {
-      let repo: GitRepository;
+
+    if (payload.repo) {
+      const { repoUrl, baseCommit, branches, prs } = payload.repo;
+      const repositoryId = repositoryIdFor(repoUrl);
+      const exists = await lstat(join(deps.home, 'repos', repositoryId)).then(() => true, () => false);
+      let repo: GitRepository | undefined;
+      let resetCommit: string | null = null;
+      let remoteMain: string | null = null;
       try {
-        repo = await GitRepository.open(deps.home, payload.projectId);
-      } catch (error) {
-        return failed({ name: 'git:open', ok: false, detail: error instanceof Error ? error.message : '저장소를 열 수 없음' });
-      }
-      try {
-        const worktrees = await repo.recordedWorktrees();
-        const inputs = await repo.inputIds();
-        const { commit } = await repo.reset({ baseCommit: payload.baseCommit, branches: payload.branches, worktrees, inputs });
-        items.push({ name: 'git:local', ok: true, detail: `작업 폴더 ${String(worktrees.length)}개·입력 ${String(inputs.length)}개·브랜치 ${String(payload.branches.length)}개 정리` });
-        if (commit !== null) {
-          const remoteMain = await repo.remoteMain();
-          if (commit !== remoteMain) {
-            if (!deps.remote) return failed({ name: 'git:push', ok: false, detail: '되돌림 커밋 전송(원격 쓰기)이 아직 연결되지 않음' });
-            await deps.remote.pushReset(repo, commit, remoteMain);
+        if (exists) {
+          repo = await GitRepository.open(deps.home, repositoryId);
+          if (normalizeRepoUrl(await repo.source()) !== normalizeRepoUrl(repoUrl)) {
+            return failed({ name: 'git:open', ok: false, detail: '로컬 저장소의 등록 원격이 명령의 저장소와 다름 — 정리를 중지합니다.' });
+          }
+          // 목록 조회부터 최종 확인까지 새 작업 폴더·입력 생성을 막는다(교차 리뷰 P1-6).
+          await repo.beginReset();
+          const worktrees = await repo.recordedWorktrees();
+          const inputs = await repo.inputIds();
+          resetCommit = (await repo.reset({ baseCommit, branches, worktrees, inputs })).commit;
+          remoteMain = await repo.remoteMain();
+          items.push({ name: 'git:local', ok: true, detail: `작업 폴더 ${String(worktrees.length)}개·입력 ${String(inputs.length)}개·브랜치 ${String(branches.length)}개 정리` });
+        } else {
+          items.push({ name: 'git:local', ok: true, detail: '이 PC에 로컬 저장소 없음' });
+        }
+        const needsRevert = repo ? resetCommit !== null && resetCommit !== remoteMain : null;
+        const remoteWork = prs.length > 0 || branches.length > 0 || needsRevert !== false;
+        if (remoteWork && !deps.remote) return failed({ name: 'github', ok: false, detail: '원격 정리가 필요하지만 GitHub 연결 설정이 없음(AWBS_GITHUB_REPO)' });
+        if (deps.remote) {
+          await deps.remote.closePullRequests(prs);
+          if (prs.length > 0) items.push({ name: 'github:prs', ok: true, detail: `PR ${String(prs.length)}개 닫음(이미 닫힌 것 포함)` });
+          await deps.remote.deleteBranches(branches);
+          if (branches.length > 0) items.push({ name: 'github:branches', ok: true, detail: `원격 브랜치 ${String(branches.length)}개 정리` });
+          if (needsRevert === true && repo && resetCommit && remoteMain) {
+            await deps.remote.pushReset(repo, resetCommit, remoteMain);
             items.push({ name: 'git:push', ok: true, detail: '되돌림 커밋 전송' });
+          } else if (needsRevert === null) {
+            if (!(await deps.remote.targetsMatch(baseCommit))) {
+              return failed({ name: 'git:push', ok: false, detail: '되돌림이 필요하지만 이 PC에 로컬 저장소가 없음(clone에 시스템 커밋 자격 증명 필요 — Q-09)' });
+            }
+            items.push({ name: 'git:push', ok: true, detail: '원격 main의 초기화 대상이 기준과 같음 — 되돌림 불필요' });
           }
         }
+        if (repo) await repo.endReset();
       } catch (error) {
         if (error instanceof GitCleanupError) {
           return failed({ name: 'git:cleanup', ok: false, detail: error.failures.map((f) => `${f.name}: ${f.detail}`).join('; ').slice(0, 500) });
         }
-        return failed({ name: 'git', ok: false, detail: error instanceof Error ? error.message : 'git 정리 실패' });
+        if (error instanceof SystemCredentialMissing) return failed({ name: 'git:push', ok: false, detail: error.message });
+        return failed({ name: 'cleanup', ok: false, detail: (error instanceof Error ? error.message : '정리 실패').slice(0, 500) });
       }
     }
-    if (payload.branches.length > 0) {
-      if (!deps.remote) return failed({ name: 'github:branches', ok: false, detail: '원격 PR·브랜치 정리(원격 쓰기)가 아직 연결되지 않음' });
-      try {
-        await deps.remote.removeBranches(payload.branches);
-        items.push({ name: 'github:branches', ok: true, detail: `원격 브랜치 ${String(payload.branches.length)}개 정리` });
-      } catch (error) {
-        return failed({ name: 'github:branches', ok: false, detail: error instanceof Error ? error.message : '원격 정리 실패' });
+
+    // 숫자로 해석하지 못한 PR 참조는 Runner가 닫을 수 없다. 완료는 막지 않되 팀장이 볼 경고로 남긴다(조정자 결정 3-A).
+    if (payload.unparsedPrs.length > 0) {
+      const warned = await warnedRefs(deps.home);
+      const fresh = payload.unparsedPrs.filter((ref) => !warned.has(refKey(ref)));
+      if (fresh.length > 0) {
+        items.push({ name: 'warn:manual-reconcile', ok: false, detail: `수동 대조 필요: 해석하지 못한 PR 참조 ${String(fresh.length)}건 — ${JSON.stringify(fresh).slice(0, 400)}` });
+        await mkdir(join(deps.home, 'state'), { recursive: true, mode: 0o700 });
+        await atomicWrite(join(deps.home, 'state'), 'reset-warned.json', JSON.stringify([...warned, ...fresh.map(refKey)]));
+      } else {
+        items.push({ name: 'manual-reconcile', ok: true, detail: `이미 알린 수동 대조 항목 ${String(payload.unparsedPrs.length)}건(새 경고 없음)` });
       }
     }
     return { status: 'done', items, holds: proofs };
