@@ -1,5 +1,5 @@
 import type { PoolClient } from '@awbs/db';
-import { completionGate, isBlocked, type Dependency as DomainDependency, type TaskStatus } from '@awbs/shared';
+import { blockedTasks, completionGate, type Dependency as DomainDependency, type TaskStatus } from '@awbs/shared';
 import { gateInputs } from '../execution/gate.ts';
 import { specBody, type Ac, type Design, type Output, type Overview } from './hash.ts';
 import { taskSchedules } from '../planning/schedule.ts';
@@ -57,16 +57,31 @@ function summarize(graph: Graph, schedules: Schedules) {
     graph.nodes.map((node) => ({ id: node.id, kind: node.kind, parentId: node.parent_id, sortOrder: node.sort_order })),
     graph.tasks.map((task) => ({ id: task.id, wbsNodeId: task.wbs_node_id, sortOrder: task.sort_order, deleted: task.deleted_at !== null })),
   );
+  // Task마다 전체 목록을 다시 훑지 않도록 한 번에 묶어 둔다(srv-perf: Task 수의 제곱 → 한 번 훑기).
+  const blocked = blockedTasks(domainTasks, domainDeps);
+  const checklistOf = new Map<string, { done: number; total: number }>();
+  for (const item of graph.checklist) {
+    const count = checklistOf.get(item.task) ?? { done: 0, total: 0 };
+    count.total++;
+    if (item.done) count.done++;
+    checklistOf.set(item.task, count);
+  }
+  const predsOf = new Map<string, string[]>();
+  for (const dep of graph.deps) {
+    const list = predsOf.get(dep.succ) ?? [];
+    list.push(keyOf.get(dep.pred) ?? '');
+    predsOf.set(dep.succ, list);
+  }
   const summary = (task: TaskRow) => {
-    const checklist = graph.checklist.filter((item) => item.task === task.id);
+    const checklist = checklistOf.get(task.id) ?? { done: 0, total: 0 };
     const gate = graph.gates.get(task.id) ?? [];
     return {
       id: task.id, taskKey: task.task_key, wbsNodeId: task.wbs_node_id, wbsPath: paths.task.get(task.id) ?? '', title: task.title,
       workType: task.work_type, primaryDomain: task.primary_domain, relatedDomains: task.related_domains, priority: task.priority,
       assigneeAgent: task.assignee_agent, verifierAgent: task.verifier_agent, lifecycleStatus: task.status, verifState: task.verif_state,
-      blocked: !task.deleted_at && isBlocked(domainTasks, domainDeps, task.id),
-      preds: graph.deps.filter((dep) => dep.succ === task.id).map((dep) => keyOf.get(dep.pred) ?? '').sort(),
-      checklist: { done: checklist.filter((item) => item.done).length, total: checklist.length },
+      blocked: !task.deleted_at && blocked.has(task.id),
+      preds: [...(predsOf.get(task.id) ?? [])].sort(),
+      checklist: { done: checklist.done, total: checklist.total },
       gate: { passed: gate.filter((condition) => condition.result === 'PASS').length, total: gate.length },
       // 일정 요약(M2-07 일정 계산). 계산할 수 없으면 null.
       schedule: schedules.get(task.task_key) ?? null,

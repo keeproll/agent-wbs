@@ -36,13 +36,14 @@ const isoAt = (column: string) => `to_char(${column} at time zone 'UTC','YYYY-MM
 
 /** 일정 계산 입력. 시각은 DB 시계 하나로 맞춘다. */
 export async function scheduleInput(client: PoolClient, projectId: string, policy: Policy): Promise<{ input: ScheduleInput; ids: Map<string, string> }> {
+  // task_estimates의 색인은 (project_id, task)다. 조건에 project_id를 함께 써야 Task마다 표 전체를 훑지 않는다(srv-perf: 5,000개에 0.6초 → 수 ms).
   const [now, tasks, deps, nodes, sessions, blackouts, caps, usage, heartbeat, runnerLimit, observed] = await Promise.all([
     client.query<{ now: string }>(`select ${isoAt('clock_timestamp()')} as now`),
     client.query<{ id: string; task_key: string; wbs_node_id: string; sort_order: number; status: TaskStatus; priority: number; assignee_agent: Agent | null;
       conflict_group: string | null; fix_start: string | null; act_start: string | null; act_end: string | null; updated_at: string; est: string | null; lo: string | null; hi: string | null }>(
       `select t.id,t.task_key,t.wbs_node_id,t.sort_order,t.status,t.priority,t.assignee_agent,t.conflict_group,to_char(t.fix_start,${ymd}) as fix_start,
               ${isoAt('t.act_start')} as act_start,${isoAt('t.act_end')} as act_end,${isoAt('t.updated_at')} as updated_at,e.est::text as est,e.lo::text as lo,e.hi::text as hi
-         from tasks t left join lateral (select est,lo,hi from task_estimates where task=t.id order by created_at desc,id desc limit 1) e on true
+         from tasks t left join lateral (select est,lo,hi from task_estimates where project_id=t.project_id and task=t.id order by created_at desc,id desc limit 1) e on true
         where t.project_id=$1 and t.deleted_at is null`, [projectId]),
     client.query<{ pred: string; succ: string; type: 'FS' | 'SS' }>(
       'select p.task_key as pred,s.task_key as succ,d.dep_type as type from task_dependencies d join tasks p on p.id=d.pred join tasks s on s.id=d.succ where d.project_id=$1 and p.deleted_at is null and s.deleted_at is null', [projectId]),
