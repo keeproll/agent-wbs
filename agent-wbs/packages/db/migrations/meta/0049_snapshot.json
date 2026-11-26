@@ -5145,6 +5145,12 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
+        },
+        "log_key": {
+          "name": "log_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
         }
       },
       "indexes": {
@@ -5207,6 +5213,14 @@
             "report",
             "recipient",
             "try_no"
+          ]
+        },
+        "mail_outbox_log_key_unique": {
+          "name": "mail_outbox_log_key_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "project_id",
+            "log_key"
           ]
         }
       },

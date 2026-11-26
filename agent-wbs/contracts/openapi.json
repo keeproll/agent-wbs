@@ -37650,6 +37650,7 @@
         "type": "object",
         "required": [
           "id",
+          "logKey",
           "reportId",
           "reportKey",
           "pdf",
@@ -37667,6 +37668,9 @@
         "properties": {
           "id": {
             "$ref": "#/components/schemas/Id"
+          },
+          "logKey": {
+            "type": "string"
           },
           "reportId": {
             "$ref": "#/components/schemas/Id"

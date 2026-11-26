@@ -4,7 +4,7 @@ import { BLANK_RECIPIENT, lastSend, recipientError, recipientSummary, smtpError,
 
 const rc = (email: string, over: Partial<Recipient> = {}): Recipient => ({ id: email, email, name: '', daily: true, weekly: false, view: 'int', pdf: false, active: true, createdAt: '2026-11-04T00:00:00.000000Z', updatedAt: '2026-11-04T00:00:00.000000Z', ...over });
 const lg = (over: Partial<MailLog>): MailLog => ({
-  id: 'l', reportId: 'r', reportKey: 'RPT-W-261026', pdf: false, pending: false, recipientId: 'qa@example.com', to: 'qa@example.com', subject: 's', view: 'int',
+  id: 'l', logKey: 'ML-0001', reportId: 'r', reportKey: 'RPT-W-261026', pdf: false, pending: false, recipientId: 'qa@example.com', to: 'qa@example.com', subject: 's', view: 'int',
   tryNo: 1, state: 'accepted', error: null, reason: '정기 발송', at: '2026-11-04T00:00:00.000000Z', ...over,
 });
 

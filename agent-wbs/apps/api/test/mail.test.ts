@@ -119,3 +119,40 @@ describe('메일 본문(G L403-404, L1049)', () => {
     expect(int.html).toContain('href="http://x/report/00000000-0000-4000-8000-000000000001"');
   });
 });
+
+describe('메일 지표 이름 · 요약 문장은 원본 메일 문구(P mailHtml L4006-4014), 숫자는 화면과 같은 계산', () => {
+  const filled = () => {
+    const s = emptySnapshot();
+    Object.assign(s.summary, { taskCount: 12, doneCount: 3, workPct: 13.1, workPctBefore: 0, baselineVersion: 2, forecast: '2026-11-29', lo: '2026-11-28', hi: '2026-12-02', target: '2026-11-25', uptimePct: 87, blocked: 2 });
+    s.gaps.push({ from: '2026-10-29T13:00:00.000Z', to: '2026-10-29T16:00:00.000Z', minutes: 180, reason: 'reboot' });
+    s.failures.push({ verificationId: 'v', taskKey: 'TASK-0007', title: 'WBS Tree UI', agent: 'Codex', at: '2026-10-30T01:00:00.000Z', cmd: '', expected: '', actual: '12/14 통과', defects: [], evidence: [], messages: [], reworks: [] });
+    return s;
+  };
+  test('팀장용 지표 4개: 완료 (기간) · 완료율 (작업량) · 완료 예상 (vN) · 가동률(중단 N회)', () => {
+    const m = renderMail({ projectName: 'P', report: report('weekly', filled()), view: 'int', to: null, appUrl: null });
+    expect(m.text).toContain('완료 (기간): 0건 (누적 3 / 12)');
+    expect(m.text).toContain('완료율 (작업량): 13.1% (기간 시작 0%)');
+    expect(m.text).toContain('완료 예상 (v2): 11-29 (범위 11-28 ~ 12-02)');
+    expect(m.text).toContain('가동률: 87% (중단 1회)');
+    expect(renderMail({ projectName: 'P', report: report('weekly'), view: 'int', to: null, appUrl: null }).text).toContain('가동률: 0% (중단 없음)');
+  });
+  test('보고용 지표 · 요약 · 위험(원본 문장)', () => {
+    const m = renderMail({ projectName: 'P', report: report('weekly', filled()), view: 'ext', to: null, appUrl: null });
+    expect(m.text).toContain('완료: 0건 (누적 3 / 12)');
+    expect(m.text).toContain('진척률: 13.1% (기간 시작 0%)');
+    expect(m.text).toContain('완료 예상일: 2026-11-29 (범위 11-28 ~ 12-02)');
+    expect(m.text).toContain('목표일 대비: 4일 초과 (목표 2026-11-25)');
+    expect(m.text).toContain('• 기간 중 0건 완료, 누적 3 / 12건 (작업량 기준 13.1%).');
+    expect(m.text).toContain('• 완료 예상일 2026-11-29 (범위 11-28 ~ 12-02).');
+    expect(m.text).toContain('• 품질 검증 1건 보완 진행.');
+    expect(m.text).toContain('• 목표일 초과 예상 — 범위 조정 또는 일정 협의 필요');
+    expect(m.text).toContain('• 품질 보완 작업 1건 — 보완 후 재검증 예정');
+    expect(m.text).toContain('• 선행 작업 대기 2건');
+    const empty = renderMail({ projectName: 'P', report: report('weekly'), view: 'ext', to: null, appUrl: null }).text;
+    expect(empty).toContain('• 완료 예상일 산정 전.');
+    expect(empty).toContain('• 품질 검증 이상 없음.');
+    expect(empty).toContain('• 특이 위험 없음');
+    expect(empty).toContain('목표일 대비: — (목표 —)');
+  });
+});
+

@@ -1348,9 +1348,11 @@ export const mailOutbox = pgTable(
     pdf: boolean().notNull().default(false),
     retried: boolean().notNull().default(false),
     sent_at: at('sent_at'),
+    log_key: text().notNull(),
   },
   (t) => [
     unique().on(t.report, t.recipient, t.try_no),
+    unique('mail_outbox_log_key_unique').on(t.project_id, t.log_key),
     check('mail_try_positive', sql`${t.try_no}>0`),
     check('mail_outbox_reason_text', sql`length(btrim(${t.reason}))>0`),
     check('mail_outbox_subject_text', sql`length(btrim(${t.subject}))>0`),

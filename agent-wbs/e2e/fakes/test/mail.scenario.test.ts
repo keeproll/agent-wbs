@@ -23,7 +23,7 @@ import { FakeSmtp, mimeHeader, mimePart } from '../smtp.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Body = any;
-interface Log { id: string; reportId: string; recipientId: string | null; to: string; subject: string; view: 'int' | 'ext'; tryNo: number; state: string; error: string | null; reason: string; at: string }
+interface Log { id: string; logKey: string; reportId: string; recipientId: string | null; to: string; subject: string; view: 'int' | 'ext'; tryNo: number; state: string; error: string | null; reason: string; at: string }
 
 const SECRET = 'fake-password';
 process.env.AWBS_SECRET_KEY ??= '34'.repeat(32);
@@ -219,6 +219,9 @@ describe('보고서 생성 직후 자동 발송(G L401-402)', () => {
     const l = await log();
     expect(l).toHaveLength(queued);
     expect(l.every((x) => x.state === 'accepted' && x.tryNo === 1)).toBe(true);
+    // 발송 표시 번호는 ML-0001부터 겹치지 않게 매긴다
+    expect(new Set(l.map((x) => x.logKey)).size).toBe(l.length);
+    expect(l.map((x) => x.logKey).sort()[0]).toBe('ML-0001');
     // 발송 기록(추가 전용)에도 결과가 한 줄씩 남는다
     expect((await owner.query<{ n: number }>("select count(*)::int n from mail_log where state='accepted'")).rows[0]?.n).toBe(queued);
   });
@@ -255,7 +258,9 @@ describe('메일 본문(G L403-404, §9.6-6 5: table · 인라인 스타일 · 6
     expect(html).toContain("font-family:'Pretendard GOV','Apple SD Gothic Neo','Malgun Gothic',sans-serif;");
     for (const t of ['팀장 확인 필요', '완료한 Task', '진행 중 · 확인 필요', 'QA 실패', '일정 재조정', '다음 주 예정']) expect(html).toContain(t);
     // 핵심 지표 4개는 화면과 같은 계산(같은 스냅샷)
-    for (const k of internalKpis(w.snapshot)) { expect(html).toContain(k.label); expect(html).toContain(k.value); }
+    // 지표 이름은 원본 메일 문구(P mailHtml L4007), 값은 화면과 같은 계산
+    for (const label of ['완료 (기간)', '완료율 (작업량)', `완료 예상 (v${String(w.snapshot.summary.baselineVersion)})`, '가동률']) expect(html).toContain(label);
+    for (const k of internalKpis(w.snapshot)) expect(html).toContain(k.value);
     expect(html).toContain(`http://127.0.0.1:5173/report/${w.id}`);
     expect(p.body.subject).toBe(`[Agent WBS] 주간 보고 ${w.from} ~ ${w.to} — 완료 ${String(w.snapshot.done.length)}건 · 완료 예상 ${w.snapshot.summary.forecast ? w.snapshot.summary.forecast.slice(5) : '—'}`);
     expect(p.body.from).toBe('Agent WBS <agent-wbs@example.com>');
@@ -397,7 +402,10 @@ describe('실패 · 15분 후 1회 자동 재시도 · 대시보드 알림 · �
     // 같은 보고서·같은 보기면 같은 본문(스냅샷이라 다시 보내도 같은 내용, G L407)
     expect(mimePart(sent, 'text/html')).toBe(pv.html);
     const row = (await log()).find((x) => x.id === r.body.ids[0]);
-    expect(row).toMatchObject({ state: 'accepted', reason: '다시 보내기', tryNo: failed.tryNo + 1 });
+    // 원본처럼 「다시 보내기 (ML-0001)」 — 어떤 실패 기록을 다시 보냈는지 발송 표시 번호로 보인다(P resend L4970)
+    expect(failed.logKey).toMatch(/^ML-\d{4}$/);
+    expect(row).toMatchObject({ state: 'accepted', reason: `다시 보내기 (${failed.logKey})`, tryNo: failed.tryNo + 1 });
+    expect(row?.logKey).not.toBe(failed.logKey);
     expect(await log(true)).toEqual([]);
     expect(await mailAlert()).toBeUndefined();
     // 이미 해소된 실패 행을 다시 보내기는 409(중복 발송 방지)

@@ -236,6 +236,8 @@ const Recipient = Type.Object(
 const MailLog = Type.Object(
   {
     id: c.Id,
+    // M6-03: 발송 표시 번호(P ML-0001). 「다시 보내기 (ML-0001)」 사유가 가리킨다.
+    logKey: Type.String(),
     reportId: c.Id,
     // M6-03: 보고서 표시 번호(RPT-…)·PDF 첨부 여부·아직 해소되지 않은 실패인지(같은 보고서·같은 사람의 마지막 발송이 실패)
     reportKey: Type.String(),

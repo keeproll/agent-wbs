@@ -10,10 +10,11 @@
  * - 글꼴은 `'Pretendard GOV','Apple SD Gothic Neo','Malgun Gothic',sans-serif` 순서다. Pretendard GOV가 없는 PC는 다음 글꼴로 보인다.
  * - 서식 없는 본문(text/plain)도 함께 만든다. HTML을 못 읽는 메일 앱을 위해서다.
  *
- * 숫자와 보고용 문장은 화면과 같은 계산(`internalKpis`·`externalView`, shared report/view)에서 온다.
+ * 지표 이름·요약 문장은 원본 메일 문구(P mailHtml L4006-4014) 그대로다(coordinator 판단 2026-11-27: 원본이 완료 기준).
+ * 숫자는 화면 보고서와 같은 계산(shared `reportFigures` — `internalKpis`·`externalView`가 쓰는 것)에서 온다.
  * 그래서 화면·메일·PDF가 같은 스냅샷에서 같은 숫자를 보인다(milestones §4.0).
  */
-import { externalView, internalKpis, monthDay, type Kpi, type ReportKind, type ReportSnapshotData } from '@awbs/shared';
+import { monthDay, reportFigures, type Kpi, type ReportKind, type ReportSnapshotData } from '@awbs/shared';
 
 export interface MailReport {
   id: string;
@@ -62,28 +63,56 @@ export function mailSubject(r: MailReport, view: 'int' | 'ext'): string {
 
 interface Section { title: string; items: string[] }
 
-/** 본문 섹션 목록(G L403: 팀장용 6개 / 보고용 4개). 팀장용 줄 모양은 P mailHtml L4017-4020 그대로다. */
+const pct = (n: number) => `${String(n)}%`;
+const day = (d: string | null) => d ?? '—';
+
+/**
+ * 본문 지표와 섹션 목록(G L403: 팀장용 6개 / 보고용 4개). 문구는 P mailHtml L4006-4020 그대로다.
+ * 원본 변수와 스냅샷의 대응: D.failN = QA 실패 목록 수(failures), D.blocked = 선행 대기(summary.blocked), D.gaps = 중단 구간(gaps).
+ */
 function sections(r: MailReport, view: 'int' | 'ext'): { kpis: Kpi[]; sections: Section[] } {
   const s = r.snapshot;
+  const f = reportFigures(s);
+  const failN = s.failures.length;
+  const range = `범위 ${monthDay(f.lo)} ~ ${monthDay(f.hi)}`;
   if (view === 'ext') {
-    const x = externalView(s, r.kind);
+    const slack = f.slackDays;
+    const risks: string[] = [];
+    if (slack !== null && slack < 0) risks.push('목표일 초과 예상 — 범위 조정 또는 일정 협의 필요');
+    if (failN) risks.push(`품질 보완 작업 ${String(failN)}건 — 보완 후 재검증 예정`);
+    if (f.blocked) risks.push(`선행 작업 대기 ${String(f.blocked)}건`);
+    if (!risks.length) risks.push('특이 위험 없음');
     return {
-      kpis: x.kpis,
+      kpis: [
+        { label: '완료', value: `${String(f.doneInPeriod)}건`, sub: `누적 ${String(f.doneTotal)} / ${String(f.taskCount)}` },
+        { label: '진척률', value: pct(f.workPct), sub: `기간 시작 ${pct(f.workPctBefore)}` },
+        { label: '완료 예상일', value: day(f.forecast), sub: range },
+        { label: '목표일 대비', value: slack === null ? '—' : slack >= 0 ? `여유 ${String(slack)}일` : `${String(-slack)}일 초과`, sub: `목표 ${day(f.target)}` },
+      ],
       sections: [
-        { title: '요약', items: x.summary },
-        { title: '주요 완료 항목', items: x.highlights },
-        { title: '위험 · 이슈', items: x.risks },
-        { title: '다음 계획', items: x.plan },
+        { title: '요약', items: [
+          `기간 중 ${String(f.doneInPeriod)}건 완료, 누적 ${String(f.doneTotal)} / ${String(f.taskCount)}건 (작업량 기준 ${pct(f.workPct)}).`,
+          f.forecast !== null ? `완료 예상일 ${f.forecast} (${range}).` : '완료 예상일 산정 전.',
+          failN ? `품질 검증 ${String(failN)}건 보완 진행.` : '품질 검증 이상 없음.',
+        ] },
+        { title: '주요 완료 항목', items: s.done.map((t) => t.title) },
+        { title: '위험 · 이슈', items: risks },
+        { title: '다음 계획', items: s.next.map((t) => `${t.title} (${monthDay(t.start)} ~ ${monthDay(t.end)})`) },
       ],
     };
   }
   return {
-    kpis: internalKpis(s),
+    kpis: [
+      { label: '완료 (기간)', value: `${String(f.doneInPeriod)}건`, sub: `누적 ${String(f.doneTotal)} / ${String(f.taskCount)}` },
+      { label: '완료율 (작업량)', value: pct(f.workPct), sub: `기간 시작 ${pct(f.workPctBefore)}` },
+      { label: `완료 예상 (v${String(f.baselineVersion)})`, value: monthDay(f.forecast), sub: range },
+      { label: '가동률', value: pct(f.uptimePct), sub: s.gaps.length ? `중단 ${String(s.gaps.length)}회` : '중단 없음' },
+    ],
     sections: [
       { title: '팀장 확인 필요', items: s.issues.map((i) => i.text) },
       { title: '완료한 Task', items: s.done.map((t) => `${t.taskKey} ${t.title}`) },
       { title: '진행 중 · 확인 필요', items: s.active.slice(0, 6).map((t) => `${t.taskKey} ${t.title} — ${STATUS[t.status] ?? t.status} · 다음: ${t.next}`) },
-      { title: 'QA 실패', items: s.failures.map((f) => `${f.taskKey} ${f.title} — ${f.actual}`) },
+      { title: 'QA 실패', items: s.failures.map((x) => `${x.taskKey} ${x.title} — ${x.actual}`) },
       { title: '일정 재조정', items: s.replans.map((p) => `${p.replanId} ${p.trigger} (${p.before === null ? '최초' : monthDay(p.before)} → ${monthDay(p.after)})`) },
       { title: r.kind === 'daily' ? '다음 날 예정' : '다음 주 예정', items: s.next.map((t) => `${t.taskKey} ${t.title} (${monthDay(t.start)} ~ ${monthDay(t.end)})`) },
     ],

@@ -52,10 +52,14 @@ async function enqueue(client: PoolClient, report: MailReport & { projectId: str
   const ids: string[] = [];
   for (const t of targets) {
     const view = mailView(report.kind, t.view);
+    // 발송 표시 번호 ML-0001(P mailReport L4011). 보고서 기간 지정 번호(report_custom)와 같은 카운터 방식이다.
+    const seq = (await client.query<{ value: number }>(
+      `insert into counters(project_id,kind,value) values($1,'mail_log',1)
+       on conflict (project_id,kind) do update set value=counters.value+1 returning value::int value`, [report.projectId])).rows[0]?.value ?? 1;
     const row = (await client.query<{ id: string }>(
-      `insert into mail_outbox(project_id,delivery_id,epoch,report,recipient,email,try_no,state,view,reason,subject,pdf)
-       values($1,$2,$3,$4,$5,$6,(select coalesce(max(try_no),0)+1 from mail_outbox where report=$4 and recipient=$5),'queued',$7,$8,$9,$10) returning id`,
-      [report.projectId, randomUUID(), epoch, report.id, t.id, t.email, view, reason, mailSubject(report, view), t.pdf && report.kind !== 'daily'])).rows[0];
+      `insert into mail_outbox(project_id,delivery_id,epoch,report,recipient,email,try_no,state,view,reason,subject,pdf,log_key)
+       values($1,$2,$3,$4,$5,$6,(select coalesce(max(try_no),0)+1 from mail_outbox where report=$4 and recipient=$5),'queued',$7,$8,$9,$10,$11) returning id`,
+      [report.projectId, randomUUID(), epoch, report.id, t.id, t.email, view, reason, mailSubject(report, view), t.pdf && report.kind !== 'daily', `ML-${String(seq).padStart(4, '0')}`])).rows[0];
     if (row) ids.push(row.id);
   }
   deferChange(client, report.projectId, 'mail', { key: 'log' });
@@ -108,8 +112,8 @@ const PENDING = `o.state in ('failed','unknown') and not exists(select from mail
 /** 다시 보내기(행별). 해소되지 않은 실패 줄만 받는다. 이미 해소됐으면 409 — 같은 메일이 두 번 나가지 않게 한다. */
 export async function resendMail(client: PoolClient, outboxId: string) {
   if (!isUuid(outboxId)) throw new ApiError('NOT_FOUND', { resource: 'mail_log', id: outboxId });
-  const row = (await client.query<{ report: string; recipient: string; email: string; view: 'int' | 'ext'; pdf: boolean; pending: boolean }>(
-    `select o.report,o.recipient,o.email,o.view,o.pdf,(${PENDING}) pending from mail_outbox o where o.id=$1`, [outboxId])).rows[0];
+  const row = (await client.query<{ report: string; recipient: string; email: string; view: 'int' | 'ext'; pdf: boolean; logKey: string; pending: boolean }>(
+    `select o.report,o.recipient,o.email,o.view,o.pdf,o.log_key "logKey",(${PENDING}) pending from mail_outbox o where o.id=$1`, [outboxId])).rows[0];
   if (!row) throw new ApiError('NOT_FOUND', { resource: 'mail_log', id: outboxId }, [], '발송 기록을 찾을 수 없습니다.');
   // 같은 보고서를 잠그고 다시 판정한다(두 탭에서 동시에 눌러도 한 번만).
   await client.query("select pg_advisory_xact_lock(hashtextextended('mail:report:' || $1,0))", [row.report]);
@@ -117,7 +121,8 @@ export async function resendMail(client: PoolClient, outboxId: string) {
   if (!still) throw new ApiError('INVALID_TRANSITION', { id: outboxId }, [], '이미 다시 보냈거나 실패가 아닌 발송입니다.', '발송 기록을 새로 고친 뒤 확인하세요.');
   const report = await loadReport(client, row.report);
   // 받는 사람을 지웠어도 기록의 주소로 다시 보낸다(같은 recipient ID로 번호를 이어 간다).
-  return { ids: await enqueue(client, report, [{ id: row.recipient, email: row.email, view: row.view, pdf: row.pdf }], MAIL_REASON.resend) };
+  // 사유는 원본처럼 「다시 보내기 (ML-0001)」 — 어떤 실패 기록을 다시 보냈는지 남긴다(P resend L4970).
+  return { ids: await enqueue(client, report, [{ id: row.recipient, email: row.email, view: row.view, pdf: row.pdf }], `${MAIL_REASON.resend} (${row.logKey})`) };
 }
 
 /** 실패 건 모두 다시 보내기 */
@@ -129,7 +134,7 @@ export async function resendFailed(client: PoolClient) {
 }
 
 export interface MailLogRow {
-  id: string; reportId: string; reportKey: string; recipientId: string | null; to: string; subject: string; view: 'int' | 'ext'; pdf: boolean;
+  id: string; logKey: string; reportId: string; reportKey: string; recipientId: string | null; to: string; subject: string; view: 'int' | 'ext'; pdf: boolean;
   tryNo: number; state: string; error: string | null; reason: string; at: string; pending: boolean;
 }
 
@@ -149,7 +154,7 @@ export async function listMailLog(client: PoolClient, query: { status?: 'failed'
   if (after) { values.push(...after); where.push(`(o.updated_at,o.id)<($${String(values.length - 1)}::timestamptz,$${String(values.length)}::uuid)`); }
   values.push(limit + 1);
   const rows = (await client.query<MailLogRow & { cursorAt: string }>(
-    `select o.id,o.report "reportId",r.report_key "reportKey",m.id "recipientId",o.email "to",o.subject,o.view,o.pdf,o.try_no "tryNo",o.state::text state,o.error,
+    `select o.id,o.log_key "logKey",o.report "reportId",r.report_key "reportKey",m.id "recipientId",o.email "to",o.subject,o.view,o.pdf,o.try_no "tryNo",o.state::text state,o.error,
        o.reason || case when o.retried then ' · ${AUTO_RETRY_NOTE}' else '' end reason,${iso('o.updated_at')} at,(${PENDING}) pending,${iso('o.updated_at')} "cursorAt"
      from mail_outbox o join reports r on r.id=o.report left join mail_recipients m on m.id=o.recipient
      where ${where.join(' and ')} order by o.updated_at desc,o.id desc limit $${String(values.length)}`, values)).rows;

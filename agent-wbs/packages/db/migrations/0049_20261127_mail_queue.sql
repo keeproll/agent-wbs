@@ -10,6 +10,12 @@ ALTER TABLE "mail_outbox" ALTER COLUMN "subject" DROP DEFAULT;--> statement-brea
 ALTER TABLE "mail_outbox" ADD COLUMN "pdf" boolean NOT NULL DEFAULT false;--> statement-breakpoint
 -- 15분 뒤 자동 재시도를 이미 한 번 했는지. 자동 재시도는 한 번뿐이다(contracts §2.3).
 ALTER TABLE "mail_outbox" ADD COLUMN "retried" boolean NOT NULL DEFAULT false;--> statement-breakpoint
+-- 발송 표시 번호(P 발송 기록 ML-0001). 「다시 보내기 (ML-0001)」처럼 어떤 기록을 다시 보냈는지 가리킨다.
+-- 번호는 프로젝트 카운터(counters kind='mail_log')로 매기고, 같은 프로젝트 안에서 겹치지 않는다. 초기화하면 1부터 다시 시작한다.
+ALTER TABLE "mail_outbox" ADD COLUMN "log_key" text;--> statement-breakpoint
+UPDATE "mail_outbox" SET "log_key"='ML-' || lpad(n::text,4,'0') FROM (SELECT id,row_number() OVER (PARTITION BY project_id ORDER BY created_at,id) n FROM "mail_outbox") x WHERE x.id="mail_outbox".id;--> statement-breakpoint
+ALTER TABLE "mail_outbox" ALTER COLUMN "log_key" SET NOT NULL;--> statement-breakpoint
+ALTER TABLE "mail_outbox" ADD CONSTRAINT "mail_outbox_log_key_unique" UNIQUE("project_id","log_key");--> statement-breakpoint
 -- 마지막으로 SMTP 호출을 시작한 시각(sending 커밋 시각). 진단과 「수락 여부 불명」 판정 기록에 쓴다.
 ALTER TABLE "mail_outbox" ADD COLUMN "sent_at" timestamp with time zone;--> statement-breakpoint
 ALTER TABLE "mail_outbox" ADD CONSTRAINT "mail_outbox_reason_text" CHECK (length(btrim("mail_outbox"."reason"))>0);--> statement-breakpoint

@@ -359,10 +359,10 @@ function LogRow({ l, canPreview, onPreview, refresh }: { l: MailLog; canPreview:
   });
   return (
     <div className="gtr lrow" data-testid={`mail-log-${l.id}`}>
-      <span className="gc mono">{at(l.at)}</span><span className="gc mono">{l.reportKey}</span><span className="gc mono" style={{ wordBreak: 'break-all' }}>{l.to}</span>
+      <span className="gc"><span className="tcell"><span className="mono">{at(l.at)}</span><span className="tid mono">{l.logKey}</span></span></span><span className="gc mono">{l.reportKey}</span><span className="gc mono" style={{ wordBreak: 'break-all' }}>{l.to}</span>
       <span className="gc">{VIEW_LABEL[l.view] + (l.pdf ? ' + PDF' : '')}</span>
       <span className="gc"><span className={s.cls}>{s.label}</span></span>
-      <span className="gc"><span className="tcell"><span>{`${l.reason}${l.tryNo > 1 ? ` · 발송 ${String(l.tryNo)}번째` : ''}`}</span>{l.error && <span className="tid" style={{ color: 'var(--dg)' }}>{l.error}</span>}</span></span>
+      <span className="gc"><span className="tcell"><span>{l.reason}</span>{l.error && <span className="tid" style={{ color: 'var(--dg)' }}>{l.error}</span>}</span></span>
       <span className="gc" style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
         {canPreview && <button type="button" className="btn ghost sm" onClick={onPreview}>메일 보기</button>}
         {l.pending && <BusyButton small variant="default" busy={resend.busy} busyLabel="보내는 중…" onClick={() => { void resend.save(); }}>다시 보내기</BusyButton>}
