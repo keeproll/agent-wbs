@@ -5,9 +5,12 @@ import { eq } from 'drizzle-orm';
 import type { Pool } from './pool.ts';
 import { assertConnectedToTestDatabase, assertTestDatabaseUrl } from './test-database.ts';
 import * as s from './schema.ts';
+import { seedSubagents } from './subagents.ts';
 
 export async function seedSystem(pool: Pool): Promise<void> {
   await pool.query('select public.seed_system()');
+  // 검토를 마친 하위 Agent v1(M5-06). 정의 파일이 원본이라 SQL 함수가 아니라 여기서 넣는다(data-model §6).
+  await seedSubagents(pool);
 }
 
 interface DemoTask {

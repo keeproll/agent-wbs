@@ -103,7 +103,8 @@ test('설정 사용 현황은 잠금·모델 Task·지정/실제 하위 Agent를
   expect(usage.status, JSON.stringify(usage.body)).toBe(200);
   expect(usage.body.lockedTasks).toEqual([expect.objectContaining({ taskKey: 'TASK-0001', role: 'dev', modelId: 'claude-opus-5-5' })]);
   expect(usage.body.models).toEqual(expect.arrayContaining([expect.objectContaining({ agent: 'Claude', modelId: 'claude-opus-5-5', taskKeys: ['TASK-0001'] })]));
-  expect(usage.body.subagents).toEqual([expect.objectContaining({ id: def, taskKeys: ['TASK-0001'], lastUsedAt: expect.any(String), lastTaskKey: 'TASK-0001', decisions: 0, failures: 0, reworkRate: null })]);
+  // system seed의 실제 하위 Agent v1(M5-06)도 목록에 있다. 이 시험이 넣은 정의만 본다.
+  expect(usage.body.subagents.filter((d: { defKey: string }) => d.defKey === 'sf3')).toEqual([expect.objectContaining({ id: def, taskKeys: ['TASK-0001'], lastUsedAt: expect.any(String), lastTaskKey: 'TASK-0001', decisions: 0, failures: 0, reworkRate: null })]);
   contract('getAgentUsage', 200, usage.body);
 });
 
@@ -138,13 +139,13 @@ test('검증 표시 번호는 결과 필터와 무관하며 대시보드도 같�
   expect(recent.recent).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'verification', id: failed.id, verificationKey: failed.verificationKey })]));
   contract('getDashboard', 200, recent);
   // 첫 QA가 PASS이면 뒤의 FAIL은 이 개발 시도의 실패율을 올리지 않는다.
-  const used = (await h.lead('GET', '/api/settings/agent-usage')).body.subagents[0];
+  const used = (await h.lead('GET', '/api/settings/agent-usage')).body.subagents.find((d: { defKey: string }) => d.defKey === 'sf3');
   expect(used).toMatchObject({ decisions: 1, failures: 0, reworkRate: 0 });
   const dev = await attemptFor(h.owner, p.project, p.tasks['TASK-0002'] ?? '', { status: 'completed' });
   await h.owner.query("insert into attempt_subagents(project_id,attempt,subagent,designated,installed,observed_used,version,def_hash) values($1,$2,$3,true,true,true,1,'hash')", [p.project, dev, used.id]);
   await verify('TASK-0002', 2, 'BLOCKED');
   await verify('TASK-0002', 3, 'FAIL');
-  expect((await h.lead('GET', '/api/settings/agent-usage')).body.subagents[0]).toMatchObject({ decisions: 1, failures: 0, reworkRate: 0 });
+  expect((await h.lead('GET', '/api/settings/agent-usage')).body.subagents.find((d: { defKey: string }) => d.defKey === 'sf3')).toMatchObject({ decisions: 1, failures: 0, reworkRate: 0 });
 });
 
 test('설정 저장이 후속 일정 기록에서 실패하면 설정·이력도 함께 되돌린다', async () => {
