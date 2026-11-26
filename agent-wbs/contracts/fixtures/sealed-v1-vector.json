@@ -1,0 +1,11 @@
+{
+  "note": "시험 전용 값. 실서비스 키·토큰이 아니다. M4-04 리뷰의 Python(cryptography) 독립 구현으로 만든 봉인 형식 v1 고정 벡터.",
+  "sealed": "AVhpr_RQVJcyy6rtXl35swptoxyw5XQrrVrUoado8aZ7AAECAwQFBgcICQoLHtZZp6B-USh1TeNXwsHfvScy4kUKJ6QMlpyYaqWuQAbREy964dCcFg",
+  "recipientPrivateHex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+  "recipientPublicHex": "07a37cbc142093c8b755dc1b10e86cb426374ad16aa853ed0bdfc0b2b86d1c7c",
+  "ephemeralPublicHex": "5869aff450549732cbaaed5e5df9b30a6da31cb0e5742bad5ad4a1a768f1a67b",
+  "nonceHex": "000102030405060708090a0b",
+  "derivedKeyHex": "f7e2bd7d156d966d870e2dcc37191678b035985f57ffdd1b07f8cb93ff5c0c1e",
+  "token": "review-only-token-한글",
+  "recipientPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VuAyEAB6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9/AsrhtHHw=\n-----END PUBLIC KEY-----\n"
+}

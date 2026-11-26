@@ -106,6 +106,13 @@
       "when": 1795684151204,
       "tag": "0014_20261126_legacy_updates",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1795687645428,
+      "tag": "0016_20261126_contract_sync",
+      "breakpoints": true
     }
   ]
 }

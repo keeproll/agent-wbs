@@ -14381,7 +14381,7 @@
     "/api/settings/models": {
       "get": {
         "operationId": "getModelSettings",
-        "summary": "허용 모델 조회",
+        "summary": "허용 모델·모델 순서 조회",
         "tags": [
           "lead"
         ],
@@ -14392,16 +14392,65 @@
         ],
         "responses": {
           "200": {
-            "description": "허용 모델 조회",
+            "description": "허용 모델·모델 순서 조회",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "required": [
+                    "rankOrder",
+                    "codexFamilyOrder",
+                    "claudeModels",
                     "models",
                     "updatedAt"
                   ],
                   "properties": {
+                    "rankOrder": {
+                      "type": "object",
+                      "required": [
+                        "Claude",
+                        "Codex"
+                      ],
+                      "properties": {
+                        "Claude": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "uniqueItems": true,
+                          "minItems": 0
+                        },
+                        "Codex": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "uniqueItems": true,
+                          "minItems": 0
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "codexFamilyOrder": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "uniqueItems": true,
+                      "minItems": 1
+                    },
+                    "claudeModels": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "uniqueItems": true,
+                      "minItems": 1
+                    },
                     "models": {
                       "type": "array",
                       "items": {
@@ -14520,7 +14569,7 @@
       },
       "put": {
         "operationId": "putModelSettings",
-        "summary": "허용 모델 저장",
+        "summary": "허용 모델·모델 순서 저장",
         "tags": [
           "lead"
         ],
@@ -14580,6 +14629,52 @@
                       },
                       "additionalProperties": false
                     }
+                  },
+                  "rankOrder": {
+                    "type": "object",
+                    "required": [
+                      "Claude",
+                      "Codex"
+                    ],
+                    "properties": {
+                      "Claude": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "uniqueItems": true,
+                        "minItems": 0
+                      },
+                      "Codex": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "uniqueItems": true,
+                        "minItems": 0
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "codexFamilyOrder": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "uniqueItems": true,
+                    "minItems": 1
+                  },
+                  "claudeModels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "uniqueItems": true,
+                    "minItems": 1
                   }
                 },
                 "additionalProperties": false
@@ -14589,16 +14684,65 @@
         },
         "responses": {
           "200": {
-            "description": "허용 모델 저장",
+            "description": "허용 모델·모델 순서 저장",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "required": [
+                    "rankOrder",
+                    "codexFamilyOrder",
+                    "claudeModels",
                     "models",
                     "updatedAt"
                   ],
                   "properties": {
+                    "rankOrder": {
+                      "type": "object",
+                      "required": [
+                        "Claude",
+                        "Codex"
+                      ],
+                      "properties": {
+                        "Claude": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "uniqueItems": true,
+                          "minItems": 0
+                        },
+                        "Codex": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "uniqueItems": true,
+                          "minItems": 0
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "codexFamilyOrder": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "uniqueItems": true,
+                      "minItems": 1
+                    },
+                    "claudeModels": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "uniqueItems": true,
+                      "minItems": 1
+                    },
                     "models": {
                       "type": "array",
                       "items": {
@@ -16822,6 +16966,7 @@
                     "status",
                     "account",
                     "scopes",
+                    "warning",
                     "expiresAt",
                     "updatedAt"
                   ],
@@ -16857,18 +17002,28 @@
                           ],
                           "properties": {
                             "contents": {
-                              "type": "boolean"
+                              "$ref": "#/components/schemas/GithubPermission"
                             },
                             "pulls": {
-                              "type": "boolean"
+                              "$ref": "#/components/schemas/GithubPermission"
                             },
                             "statuses": {
-                              "type": "boolean"
+                              "$ref": "#/components/schemas/GithubPermission"
                             },
                             "metadata": {
-                              "type": "boolean"
+                              "$ref": "#/components/schemas/GithubPermission"
                             }
                           }
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "warning": {
+                      "anyOf": [
+                        {
+                          "type": "string"
                         },
                         {
                           "type": "null"
@@ -16997,6 +17152,7 @@
                     "status",
                     "account",
                     "scopes",
+                    "warning",
                     "expiresAt",
                     "updatedAt"
                   ],
@@ -17032,18 +17188,28 @@
                           ],
                           "properties": {
                             "contents": {
-                              "type": "boolean"
+                              "$ref": "#/components/schemas/GithubPermission"
                             },
                             "pulls": {
-                              "type": "boolean"
+                              "$ref": "#/components/schemas/GithubPermission"
                             },
                             "statuses": {
-                              "type": "boolean"
+                              "$ref": "#/components/schemas/GithubPermission"
                             },
                             "metadata": {
-                              "type": "boolean"
+                              "$ref": "#/components/schemas/GithubPermission"
                             }
                           }
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "warning": {
+                      "anyOf": [
+                        {
+                          "type": "string"
                         },
                         {
                           "type": "null"
@@ -20978,7 +21144,7 @@
     "/api/runner/models": {
       "post": {
         "operationId": "reportModels",
-        "summary": "사용 가능 모델·Effort 보고(신규는 미허용)",
+        "summary": "사용 가능 모델·Effort 보고(신규는 미허용, 순서는 서버 설정)",
         "tags": [
           "runner"
         ],
@@ -21016,7 +21182,6 @@
                       "required": [
                         "id",
                         "label",
-                        "rank",
                         "efforts"
                       ],
                       "properties": {
@@ -21029,9 +21194,6 @@
                           "type": "string",
                           "minLength": 1,
                           "pattern": "\\S"
-                        },
-                        "rank": {
-                          "type": "integer"
                         },
                         "efforts": {
                           "anyOf": [
@@ -21063,7 +21225,7 @@
         },
         "responses": {
           "200": {
-            "description": "사용 가능 모델·Effort 보고(신규는 미허용)",
+            "description": "사용 가능 모델·Effort 보고(신규는 미허용, 순서는 서버 설정)",
             "headers": {
               "Idempotency-Replayed": {
                 "schema": {
@@ -24536,7 +24698,7 @@
     "/api/runner/github/status": {
       "post": {
         "operationId": "reportGithubStatus",
-        "summary": "GitHub 인증 방식·계정·권한·만료(비밀값 없음)",
+        "summary": "GitHub 인증 방식·계정·권한 3상태·만료(비밀값 없음). 첫 쓰기 403이면 missing으로 다시 보고",
         "tags": [
           "runner"
         ],
@@ -24544,6 +24706,9 @@
           {
             "runnerToken": []
           }
+        ],
+        "x-input-rules": [
+          "githubStatusConsistent"
         ],
         "parameters": [
           {
@@ -24597,16 +24762,16 @@
                         ],
                         "properties": {
                           "contents": {
-                            "type": "boolean"
+                            "$ref": "#/components/schemas/GithubPermission"
                           },
                           "pulls": {
-                            "type": "boolean"
+                            "$ref": "#/components/schemas/GithubPermission"
                           },
                           "statuses": {
-                            "type": "boolean"
+                            "$ref": "#/components/schemas/GithubPermission"
                           },
                           "metadata": {
-                            "type": "boolean"
+                            "$ref": "#/components/schemas/GithubPermission"
                           }
                         },
                         "additionalProperties": false
@@ -24626,6 +24791,11 @@
                       }
                     ]
                   },
+                  "warning": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
                   "error": {
                     "type": "string",
                     "minLength": 1,
@@ -24639,7 +24809,7 @@
         },
         "responses": {
           "204": {
-            "description": "GitHub 인증 방식·계정·권한·만료(비밀값 없음)",
+            "description": "GitHub 인증 방식·계정·권한 3상태·만료(비밀값 없음). 첫 쓰기 403이면 missing으로 다시 보고",
             "headers": {
               "Idempotency-Replayed": {
                 "schema": {
@@ -24697,10 +24867,10 @@
         }
       }
     },
-    "/api/runner/github/credential": {
-      "get": {
-        "operationId": "getGithubCredential",
-        "summary": "토큰 방식: Runner 공개키로 봉인한 값(평문 없음)",
+    "/api/runner/github/key": {
+      "post": {
+        "operationId": "registerGithubKey",
+        "summary": "봉인용 Runner 공개키 등록(프로세스 시작마다). keyId는 서버가 공개키 SHA-256 지문으로 계산",
         "tags": [
           "runner"
         ],
@@ -24712,11 +24882,160 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/ProjectEpoch"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "runnerId",
+                  "hostId",
+                  "bootId",
+                  "publicKeyPem",
+                  "sealedVersion"
+                ],
+                "properties": {
+                  "runnerId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "hostId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "bootId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "publicKeyPem": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "sealedVersion": {
+                    "type": "number",
+                    "const": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "봉인용 Runner 공개키 등록(프로세스 시작마다). keyId는 서버가 공개키 SHA-256 지문으로 계산",
+            "headers": {
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "keyId"
+                  ],
+                  "properties": {
+                    "keyId": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "IDEMPOTENCY_KEY_REQUIRED, VALIDATION_FAILED"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "RUNNER_UNAUTHORIZED"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited",
+            "description": "RATE_LIMITED"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "INTERNAL"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error",
+            "description": "UNAVAILABLE"
+          }
+        },
+        "x-error-codes": {
+          "400": [
+            "IDEMPOTENCY_KEY_REQUIRED",
+            "VALIDATION_FAILED"
+          ],
+          "401": [
+            "RUNNER_UNAUTHORIZED"
+          ],
+          "409": [
+            "EPOCH_MISMATCH",
+            "IDEMPOTENCY_CONFLICT"
+          ],
+          "429": [
+            "RATE_LIMITED"
+          ],
+          "500": [
+            "INTERNAL"
+          ],
+          "503": [
+            "UNAVAILABLE"
+          ]
+        }
+      }
+    },
+    "/api/runner/github/credential": {
+      "get": {
+        "operationId": "getGithubCredential",
+        "summary": "토큰 방식: 그 Runner에 등록된 keyId의 공개키로 봉인한 값(평문 없음, 봉인 형식 v1). 모르는 keyId는 404",
+        "tags": [
+          "runner"
+        ],
+        "security": [
+          {
+            "runnerToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "keyId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ProjectEpoch"
           }
         ],
         "responses": {
           "200": {
-            "description": "토큰 방식: Runner 공개키로 봉인한 값(평문 없음)",
+            "description": "토큰 방식: 그 Runner에 등록된 keyId의 공개키로 봉인한 값(평문 없음, 봉인 형식 v1). 모르는 keyId는 404",
             "content": {
               "application/json": {
                 "schema": {
@@ -24733,9 +25052,17 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "VALIDATION_FAILED"
+          },
           "401": {
             "$ref": "#/components/responses/Error",
             "description": "RUNNER_UNAUTHORIZED"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "NOT_FOUND"
           },
           "409": {
             "$ref": "#/components/responses/Error",
@@ -24755,8 +25082,14 @@
           }
         },
         "x-error-codes": {
+          "400": [
+            "VALIDATION_FAILED"
+          ],
           "401": [
             "RUNNER_UNAUTHORIZED"
+          ],
+          "404": [
+            "NOT_FOUND"
           ],
           "409": [
             "EPOCH_MISMATCH"
@@ -24776,7 +25109,7 @@
     "/api/runner/policy": {
       "get": {
         "operationId": "getRunnerPolicy",
-        "summary": "상한·예산·주기·CI 설정 묶음",
+        "summary": "상한·예산·주기·CI 설정·Claude 모델 목록·CLI 관측 등급 묶음",
         "tags": [
           "runner"
         ],
@@ -24795,7 +25128,7 @@
         ],
         "responses": {
           "200": {
-            "description": "상한·예산·주기·CI 설정 묶음",
+            "description": "상한·예산·주기·CI 설정·Claude 모델 목록·CLI 관측 등급 묶음",
             "headers": {
               "ETag": {
                 "schema": {
@@ -24812,7 +25145,9 @@
                     "subagentBudget",
                     "heartbeatSeconds",
                     "inputCheckMinutes",
-                    "ci"
+                    "ci",
+                    "claudeModels",
+                    "cliGrades"
                   ],
                   "properties": {
                     "caps": {
@@ -24901,6 +25236,48 @@
                           ]
                         }
                       }
+                    },
+                    "claudeModels": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "uniqueItems": true
+                    },
+                    "cliGrades": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "agent",
+                          "version",
+                          "model",
+                          "options",
+                          "grade"
+                        ],
+                        "properties": {
+                          "agent": {
+                            "$ref": "#/components/schemas/Agent"
+                          },
+                          "version": {
+                            "type": "string"
+                          },
+                          "model": {
+                            "type": "string"
+                          },
+                          "options": {
+                            "type": "string"
+                          },
+                          "grade": {
+                            "enum": [
+                              "verified",
+                              "partial",
+                              "unverified"
+                            ]
+                          }
+                        }
+                      }
                     }
                   }
                 }
@@ -24908,7 +25285,7 @@
             }
           },
           "304": {
-            "description": "상한·예산·주기·CI 설정 묶음",
+            "description": "상한·예산·주기·CI 설정·Claude 모델 목록·CLI 관측 등급 묶음",
             "headers": {
               "ETag": {
                 "schema": {
@@ -32535,6 +32912,14 @@
           "token"
         ],
         "title": "GithubMode"
+      },
+      "GithubPermission": {
+        "enum": [
+          "verified",
+          "unverified",
+          "missing"
+        ],
+        "title": "GithubPermission"
       },
       "Grade": {
         "type": "object",
