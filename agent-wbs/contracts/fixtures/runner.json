@@ -395,6 +395,26 @@
    "base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
    "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
    "baseIsAncestor": true,
+   "treeHash": "cccccccccccccccccccccccccccccccccccccccc",
+   "changes": [
+    {
+     "status": "M",
+     "path": "prototype/docs/a.md",
+     "oldBlob": "dddddddddddddddddddddddddddddddddddddddd",
+     "newBlob": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+     "added": 42,
+     "deleted": 3
+    },
+    {
+     "status": "R",
+     "path": "prototype/uiux/new.html",
+     "from": "prototype/uiux/old.html",
+     "oldBlob": "ffffffffffffffffffffffffffffffffffffffff",
+     "newBlob": "1111111111111111111111111111111111111111",
+     "added": 0,
+     "deleted": 0
+    }
+   ],
    "commits": [
     {
      "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -402,21 +422,12 @@
      "author": "lead",
      "message": "문서 갱신"
     }
-   ],
-   "files": [
-    {
-     "commitSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-     "path": "prototype/docs/a.md",
-     "change": "modified",
-     "added": 42,
-     "deleted": 3
-    }
    ]
   },
   "status": 200,
   "response": {
    "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-   "appended": 1,
+   "recorded": true,
    "historyRewritten": false
   }
  },

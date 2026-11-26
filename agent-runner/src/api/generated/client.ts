@@ -1178,25 +1178,28 @@ export interface Operations {
       204: undefined;
     };
   };
-  /** 입력 경로를 바꾼 main 커밋 보고(비교 후 추가). base가 서버의 입력 head와 다르면 409와 현재 head */
+  /** 입력 변경 보고(비교 후 갱신). base가 서버의 입력 head와 다르면 409와 현재 head */
   reportInputChanges: {
     request: {
       body: {
         base: Sha;
         head: Sha;
         baseIsAncestor: boolean;
+        treeHash: Sha;
+        changes: ({
+          status: "A" | "M" | "D" | "R";
+          path: RepoPath;
+          from?: RepoPath;
+          oldBlob: Sha | null;
+          newBlob: Sha | null;
+          added: number;
+          deleted: number;
+        })[];
         commits: ({
           sha: Sha;
           at: Timestamp;
           author: string;
           message: string;
-        })[];
-        files: ({
-          commitSha: Sha;
-          path: RepoPath;
-          change: "added" | "modified" | "deleted";
-          added: number;
-          deleted: number;
         })[];
       };
       epoch: number;
@@ -1205,7 +1208,7 @@ export interface Operations {
     responses: {
       200: {
         head: Sha;
-        appended: number;
+        recorded: boolean;
         historyRewritten: boolean;
       };
     };

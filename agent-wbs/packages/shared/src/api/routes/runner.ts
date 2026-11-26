@@ -9,10 +9,17 @@ const fence = c.Fence;
 const Pid = Type.Integer({ minimum: 1 });
 
 const PushedCommit = Body({ sha: c.Sha, at: c.Timestamp, author: Type.String(), message: Type.String() });
-const ChangedInput = Body({
-  commitSha: c.Sha,
+/**
+ * `git diff --raw -M --numstat <base> <head> -- prototype/` 한 줄.
+ * status A(추가)·M(수정)·D(삭제)·R(이름 변경, from=이전 경로). blob은 전후 내용의 git blob SHA(없으면 null).
+ * added·deleted는 numstat 줄 수(바이너리는 0).
+ */
+const InputDiff = Body({
+  status: AnyOf('A', 'M', 'D', 'R'),
   path: c.RepoPath,
-  change: AnyOf('added', 'modified', 'deleted'),
+  from: Opt(c.RepoPath),
+  oldBlob: Nullable(c.Sha),
+  newBlob: Nullable(c.Sha),
   added: c.Count,
   deleted: c.Count,
 });
@@ -458,23 +465,28 @@ export const runnerOperations = [
     id: 'reportInputChanges',
     method: 'POST',
     path: '/api/runner/input-changes',
-    summary: '입력 경로를 바꾼 main 커밋 보고(비교 후 추가). base가 서버의 입력 head와 다르면 409와 현재 head',
+    summary: '입력 변경 보고(비교 후 갱신). base가 서버의 입력 head와 다르면 409와 현재 head',
     /*
-     * 순서는 서버가 계산하지 않고 git이 정한다(M2-03 입력 원장).
+     * 입력 변경의 정답은 커밋 목록이 아니라 base와 head의 prototype/ 트리 차이다(M2-03 입력 원장).
+     * Runner는 base·head를 먼저 SHA로 고정하고, 전체 이력이 있는 같은 저장소에서 아래를 계산한다.
      * - base: 서버가 마지막으로 받은 입력 head(처음에는 등록 커밋). 200·409 응답의 head로 갱신한다.
-     * - head: 이번에 계산한 main 끝 커밋. 입력 버전은 이 커밋으로 고정한다.
-     * - baseIsAncestor: `git merge-base --is-ancestor <base> <head>` 결과. false면 이력 재작성으로 보고 붙이지 않고 팀장에게 경고한다.
-     * - commits: `git rev-list --first-parent --reverse <base>..<head> -- prototype/` 결과 그대로(오래된 것 먼저).
-     *   얕은 clone이면 이력을 다 받은 뒤 계산한다. files의 prototype/ 밖 경로는 무시한다.
+     * - head: 이번에 본 main 끝 커밋. 서버는 차이가 비어도 head를 이 값으로 옮긴다.
+     * - baseIsAncestor: `git merge-base --is-ancestor <base> <head>`의 종료 코드(0=true, 1=false, 그 밖은 보고 중단).
+     *   **신뢰 전제**: 서버는 git을 직접 보지 않으므로 이 값과 changes·treeHash는 Runner 관측을 믿는다.
+     *   false면 이력 재작성으로 보고 아무것도 받지 않으며 팀장에게 경고한다.
+     * - treeHash: `git rev-parse <head>:prototype`(head의 prototype/ 트리 SHA). 차이가 비었는지와 트리가 바뀌었는지의 대조에 쓴다.
+     * - changes: `git diff --raw -M --numstat <base> <head> -- prototype/` 결과. 비어 있지 않을 때만 입력 변경 항목이 생긴다.
+     * - commits: 참고 정보(화면 표시용). `git rev-list --first-parent --reverse <base>..<head> -- prototype/`. 판정에 쓰지 않는다.
      */
     body: Body({
       base: c.Sha,
       head: c.Sha,
       baseIsAncestor: Type.Boolean(),
+      treeHash: c.Sha,
+      changes: List(InputDiff),
       commits: List(PushedCommit),
-      files: List(ChangedInput),
     }),
-    responses: { 200: Type.Object({ head: c.Sha, appended: c.Count, historyRewritten: Type.Boolean() }) },
+    responses: { 200: Type.Object({ head: c.Sha, recorded: Type.Boolean(), historyRewritten: Type.Boolean() }) },
     errors: ['INVALID_TRANSITION', 'VERSION_CONFLICT'],
   }),
   operation({

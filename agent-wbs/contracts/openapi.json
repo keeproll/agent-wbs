@@ -23243,7 +23243,7 @@
     "/api/runner/input-changes": {
       "post": {
         "operationId": "reportInputChanges",
-        "summary": "입력 경로를 바꾼 main 커밋 보고(비교 후 추가). base가 서버의 입력 head와 다르면 409와 현재 head",
+        "summary": "입력 변경 보고(비교 후 갱신). base가 서버의 입력 head와 다르면 409와 현재 head",
         "tags": [
           "runner"
         ],
@@ -23270,8 +23270,9 @@
                   "base",
                   "head",
                   "baseIsAncestor",
-                  "commits",
-                  "files"
+                  "treeHash",
+                  "changes",
+                  "commits"
                 ],
                 "properties": {
                   "base": {
@@ -23282,6 +23283,68 @@
                   },
                   "baseIsAncestor": {
                     "type": "boolean"
+                  },
+                  "treeHash": {
+                    "$ref": "#/components/schemas/Sha"
+                  },
+                  "changes": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "status",
+                        "path",
+                        "oldBlob",
+                        "newBlob",
+                        "added",
+                        "deleted"
+                      ],
+                      "properties": {
+                        "status": {
+                          "enum": [
+                            "A",
+                            "M",
+                            "D",
+                            "R"
+                          ]
+                        },
+                        "path": {
+                          "$ref": "#/components/schemas/RepoPath"
+                        },
+                        "from": {
+                          "$ref": "#/components/schemas/RepoPath"
+                        },
+                        "oldBlob": {
+                          "anyOf": [
+                            {
+                              "$ref": "#/components/schemas/Sha"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "newBlob": {
+                          "anyOf": [
+                            {
+                              "$ref": "#/components/schemas/Sha"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "added": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "deleted": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "additionalProperties": false
+                    }
                   },
                   "commits": {
                     "type": "array",
@@ -23309,43 +23372,6 @@
                       },
                       "additionalProperties": false
                     }
-                  },
-                  "files": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "required": [
-                        "commitSha",
-                        "path",
-                        "change",
-                        "added",
-                        "deleted"
-                      ],
-                      "properties": {
-                        "commitSha": {
-                          "$ref": "#/components/schemas/Sha"
-                        },
-                        "path": {
-                          "$ref": "#/components/schemas/RepoPath"
-                        },
-                        "change": {
-                          "enum": [
-                            "added",
-                            "modified",
-                            "deleted"
-                          ]
-                        },
-                        "added": {
-                          "type": "integer",
-                          "minimum": 0
-                        },
-                        "deleted": {
-                          "type": "integer",
-                          "minimum": 0
-                        }
-                      },
-                      "additionalProperties": false
-                    }
                   }
                 },
                 "additionalProperties": false
@@ -23355,7 +23381,7 @@
         },
         "responses": {
           "200": {
-            "description": "입력 경로를 바꾼 main 커밋 보고(비교 후 추가). base가 서버의 입력 head와 다르면 409와 현재 head",
+            "description": "입력 변경 보고(비교 후 갱신). base가 서버의 입력 head와 다르면 409와 현재 head",
             "headers": {
               "Idempotency-Replayed": {
                 "schema": {
@@ -23369,16 +23395,15 @@
                   "type": "object",
                   "required": [
                     "head",
-                    "appended",
+                    "recorded",
                     "historyRewritten"
                   ],
                   "properties": {
                     "head": {
                       "$ref": "#/components/schemas/Sha"
                     },
-                    "appended": {
-                      "type": "integer",
-                      "minimum": 0
+                    "recorded": {
+                      "type": "boolean"
                     },
                     "historyRewritten": {
                       "type": "boolean"
