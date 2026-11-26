@@ -34,5 +34,28 @@ function uniqueDesignKind(body: unknown): InputError[] {
   return errors;
 }
 
-export const INPUT_RULES = { uniqueDesignKind } as const;
+/**
+ * GitHub 연결 상태 보고의 일관성(조정자 결정 2026-11-26, contracts §3.1).
+ * - ok는 인증되고 missing 권한이 없을 때만 true다. 권한을 확인하지 못했으면(scopes null) ok는 false다.
+ * - unverified(미확인) 권한이 있으면 화면에 띄울 warning이 필요하다.
+ */
+function githubStatusConsistent(body: unknown): InputError[] {
+  const errors: InputError[] = [];
+  const rule = 'githubStatusConsistent';
+  const b = body as { ok?: unknown; scopes?: Record<string, unknown> | null; warning?: unknown } | null;
+  if (typeof b !== 'object' || b === null) return errors;
+  const values = b.scopes ? Object.values(b.scopes) : [];
+  if (b.ok === true && b.scopes === null) {
+    errors.push({ path: 'ok', rule, message: '권한을 확인하지 못했으면(scopes null) ok는 false여야 합니다.' });
+  }
+  if (b.ok === true && values.includes('missing')) {
+    errors.push({ path: 'ok', rule, message: 'missing 권한이 있으면 ok는 false여야 합니다.' });
+  }
+  if (values.includes('unverified') && (typeof b.warning !== 'string' || b.warning.trim() === '')) {
+    errors.push({ path: 'warning', rule, message: '확인하지 못한 권한(unverified)이 있으면 warning이 필요합니다.' });
+  }
+  return errors;
+}
+
+export const INPUT_RULES = { uniqueDesignKind, githubStatusConsistent } as const;
 export type InputRule = keyof typeof INPUT_RULES;
