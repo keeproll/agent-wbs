@@ -23,6 +23,7 @@ function crop(png: PNG, box: Box): PNG {
 export interface VisualResult { name: string; ratio: number; diffPixels: number; size: string; file: string }
 
 /** baselineBox와 actualBox는 크기가 달라도 된다(겹치는 왼쪽 위 기준 최소 크기로 비교). */
+/** out: 결과 폴더. 작업마다 다른 폴더에 남기려면 넘긴다(기본은 OUT). */
 export function compareRegion(name: string, baselineFile: string, baselineBox: Box, actual: Buffer, actualBox: Box, out: string = OUT): VisualResult {
   const base = PNG.sync.read(readFileSync(join(BASELINE, baselineFile)));
   const ours = PNG.sync.read(actual);
