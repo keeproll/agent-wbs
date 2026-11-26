@@ -28,8 +28,8 @@ describe('이력 화면 계산(UI-10, P hVM L6448–6460)', () => {
     expect(filterHistory(rows, { ...EMPTY_HISTORY_FILTER, q: 'att-0007' }).map((r) => r.id)).toEqual(['a']);
   });
 
-  it('필터 선택지는 받은 이력에 실제로 있는 유형·주체만(중복 없이)', () => {
-    expect(historyOptions(rows)).toEqual({ kinds: ['실행', '승인', '검증', '재계획'], actors: ['Runner', '팀장', 'Codex'] });
+  it('필터 선택지는 받은 이력에 실제로 있는 유형·주체만(중복 없이), 오래된 기록에 처음 나온 순서(원본과 같은 순서)', () => {
+    expect(historyOptions(rows)).toEqual({ kinds: ['재계획', '실행', '승인', '검증'], actors: ['팀장', 'Runner', 'Codex'] });
   });
 
   it('건수 문구 — 원본과 같은 모양', () => {

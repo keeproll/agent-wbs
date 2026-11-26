@@ -100,6 +100,8 @@ export const history = (): History[] => [
   H('2026-10-30 09:12', '팀장', '생성', 'TASK-0007', 'Task 생성'),
   H('2026-10-28 16:40', '팀장', '완료', 'TASK-0001', 'Completion Gate 5/5 통과 — 완료 처리', 'QA 진행', '완료'),
   ...['TASK-0001', 'TASK-0002', 'TASK-0003', 'TASK-0004', 'TASK-0005', 'TASK-0006'].map((k, i) => H('2026-10-27 10:00', '팀장', '생성', k, 'Task 생성 (초기 WBS)', null, null, 9 - i)),
+  // 원본은 24건이다. 화면 아래(스크롤 밖) 5건은 같은 초기 WBS 생성 기록으로 채운다.
+  ...['TASK-0008', 'TASK-0009', 'TASK-0010', 'TASK-0011', 'TASK-0006'].map((k, i) => H('2026-10-27 09:00', '팀장', '생성', k, 'Task 생성 (초기 WBS)', null, null, 9 - i)),
 ];
 
 type Dash = ResponseOf<'getDashboard'>;

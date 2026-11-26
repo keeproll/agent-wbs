@@ -20,7 +20,7 @@ const count = (page: Page) => page.locator('.resbar');
 
 test('UAT-HISTORY-01: 최신순, 전후 값·주체·Task 이동', async ({ page }) => {
   await open(page);
-  await expect(count(page)).toHaveText('이력 19건');
+  await expect(count(page)).toHaveText('이력 24건');
   await expect(rows(page).first().getByRole('cell')).toHaveText([
     '2026-11-03 19:58', 'Runner', '실행', 'TASK-0005', 'ATT-0005-1 개발 실행 시작 (Claude) — Runner 재부팅 후 재연결', '실행 대기 → 실행 중',
   ]);
@@ -57,9 +57,9 @@ test('UAT-HISTORY-01 / UAT-EMPTY-04 b: 조건 불일치 안내와 필터 초기�
   await page.getByLabel('Task ID').fill('TASK-9999');
   await expect(table(page).locator('[data-empty="filtered"]')).toContainText('조건에 맞는 이력이 없습니다. 필터를 바꿔 보세요.');
   await expect(table(page).locator('[data-empty="none"]')).toHaveCount(0);
-  await expect(count(page)).toHaveText('이력 0건 (전체 19건 중)');
+  await expect(count(page)).toHaveText('이력 0건 (전체 24건 중)');
   await table(page).getByRole('button', { name: '필터 초기화' }).click();
-  await expect(rows(page)).toHaveCount(19);
+  await expect(rows(page)).toHaveCount(24);
   await expect(page.getByLabel('Task ID')).toHaveValue('');
   await expect(page.locator('.toolbar').getByRole('button', { name: '필터 초기화' })).toBeDisabled();
   // 기간만으로 0건이어도 「조건 불일치」다(기록이 없는 것이 아님).
@@ -85,7 +85,7 @@ test('UAT-HISTORY-01: 쪽 나눔 — 250건도 모두 읽어 건수가 맞다', 
   await open(page, '/history', (d) => {
     const base = d.history[0];
     if (!base) return;
-    for (let i = 0; i < 231; i++) d.history.push({ ...base, id: `extra-${String(i).padStart(3, '0')}`, at: '2026-10-01T00:00:00.000Z' });
+    for (let i = 0; i < 226; i++) d.history.push({ ...base, id: `extra-${String(i).padStart(3, '0')}`, at: '2026-10-01T00:00:00.000Z' });
   });
   await expect(count(page)).toHaveText('이력 250건');
   await expect(rows(page)).toHaveCount(250);

@@ -52,6 +52,9 @@ const tasks = useApiQuery('listTasks', { params: { projectId }, query: { status 
 - **이미 보여 준 데이터의 갱신이 실패해도 화면을 오류 카드로 바꾸지 않는다.** 바꾸면 그 안의 편집 중 입력이 사라진다.
   - `useRefreshError(query, '<무엇> 최신 내용 불러오기')`를 붙이면 오류 막대와 「다시 시도」로 알린다(MenuScreen은 이미 쓴다).
   - 오류 화면(`LoadError`)은 처음부터 데이터가 없을 때만 쓴다.
+- 쪽으로 나뉜 목록(`{ items, nextCursor }`)을 모두 읽어야 하면 `useAllPages`(`api/allPages.ts`, M3-07이 더함)를 쓴다.
+  - 예: `useAllPages('listVerifications', {}, { topics: ['verification'] })` → `data.items`가 모든 쪽을 이은 목록.
+  - 왜: 건수·필터를 첫 쪽만 보고 정하면 서버와 어긋난다. 한 번에 200건씩, 같은 cursor가 다시 오면 멈춘다.
 - 파일(PDF·ZIP·Evidence 원본)을 내려받는 요청(`getReportPdf`·`exportProject`·`getEvidenceContent`)은 `call`로 부를 수 없다(타입에서 빠짐).
   - `<a href={apiUrl('getReportPdf', { params: { reportId }, query: { view } })} download>`처럼 주소만 만들어 브라우저가 내려받게 한다.
   - 계약의 필수 query는 필수 인수다. PDF는 `view`(`'int'` 내부용 / `'ext'` 외부용)를 화면이 고른 값으로 꼭 넘긴다. 빠지면 typecheck 오류이고 실행해도 예외가 난다.

@@ -20,6 +20,8 @@ M3-02~08은 이 바탕 위에 각 메뉴의 본문을 얹는다.
 | `W e2e` | 모든 E2E(앱 틀 `shell`, 시각 비교 `visual` 포함) |
 | `W e2e -- visual` | 원본 스크린샷과 나란히 비교(§5) |
 | `W --filter @awbs/web e2e:api` | 실제 API·전용 DB로 로그인 E2E(§4) |
+| `W e2e -- verify history dashboard` | **M3-07 완료 조건.** 대시보드·검증·이력([features/verify/README.md](src/features/verify/README.md)) |
+| `W --filter @awbs/web e2e:api:m307` | 실제 API·전용 DB로 M3-07 핵심 흐름 |
 | `node apps/web/scripts/prototype-css.ts` | 원본 CSS를 다시 옮긴다(`--check`는 최신인지 확인만) |
 
 - `-- <이름>`은 시험 파일 이름 필터다. 예: `W e2e -- states`는 `states*.spec.ts`만 실행한다.

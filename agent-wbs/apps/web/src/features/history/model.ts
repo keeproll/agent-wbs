@@ -39,10 +39,14 @@ export function filterHistory(items: readonly HistoryItem[], f: HistoryFilter): 
     && (!q || `${h.text} ${h.before ?? ''} ${h.after ?? ''}`.toLowerCase().includes(q)));
 }
 
-/** 유형·주체 버튼. 받은 이력에 실제로 있는 값만, 처음 나온 순서로(P uniq L6450) */
+/**
+ * 유형·주체 버튼. 받은 이력에 실제로 있는 값만, 가장 오래된 기록부터 처음 나온 순서로(P uniq L6450).
+ * 원본은 기록된 순서(오래된 것부터)의 목록에서 뽑아 「생성 · 완료 · 실행 …」 순으로 보인다. 같은 순서를 지킨다.
+ */
 export function historyOptions(items: readonly HistoryItem[]): { kinds: string[]; actors: string[] } {
+  const oldest = sortHistory(items).reverse();
   const uniq = (values: string[]) => values.filter((v, i) => values.indexOf(v) === i);
-  return { kinds: uniq(items.map((h) => h.kind)), actors: uniq(items.map((h) => h.actor)) };
+  return { kinds: uniq(oldest.map((h) => h.kind)), actors: uniq(oldest.map((h) => h.actor)) };
 }
 
 export function countLabel(shown: number, total: number): string {
