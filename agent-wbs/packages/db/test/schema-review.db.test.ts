@@ -645,6 +645,15 @@ test('P3: every table and SECURITY DEFINER function has the declared policy', as
       )
     ).rows.map((r) => r.tgname);
     expect(triggers, table.tablename).toContain('guard_truncate');
+    const privileges = (await pool.query(
+      "select has_table_privilege('awbs_app',$1,'SELECT') readable,has_table_privilege('awbs_app',$1,'INSERT') insertable,has_table_privilege('awbs_app',$1,'DELETE') deletable,has_table_privilege('awbs_app',$1,'TRUNCATE') truncatable,has_any_column_privilege('awbs_app',$1,'UPDATE') updatable",
+      [table.tablename],
+    )).rows[0];
+    expect(privileges?.readable, table.tablename).toBe(true);
+    expect(privileges?.insertable, table.tablename).toBe(!['system_state', 'reset_log', 'runner_commands'].includes(table.tablename));
+    expect(privileges?.truncatable, table.tablename).toBe(false);
+    expect(privileges?.updatable, table.tablename).toBe(!triggers.includes('append_only') && !['system_state', 'reset_log', 'runner_commands'].includes(table.tablename));
+    if (!privileges?.deletable) expect(triggers.some((t) => ['guard_delete', 'authority_no_delete'].includes(t)), table.tablename).toBe(true);
     const cols = (
       await pool.query(
         "select column_name from information_schema.columns where table_schema='public' and table_name=$1",
@@ -664,6 +673,8 @@ test('P3: every table and SECURITY DEFINER function has the declared policy', as
     expect(f.rolsuper, f.name).toBe(false);
     expect(f.public_exec, f.name).toBe(false);
   }
+  const roles = (await pool.query("select rolname from pg_roles where rolname in ('awbs_app','awbs_data_owner') and (rolcanlogin or rolsuper or rolcreaterole or rolcreatedb or rolreplication or rolbypassrls or exists(select from pg_auth_members where member=pg_roles.oid))")).rows;
+  expect(roles).toEqual([]);
 });
 
 test('MUTATION: orphan observation FK and open merge queue unique reject actual conflicting rows', () =>

@@ -61,6 +61,11 @@ const variants = [
     pattern: 'hold reasons reject null codes',
     sql: `DO $$ BEGIN EXECUTE replace(pg_get_functiondef('public.awbs_valid_hold_reasons(jsonb)'::regprocedure),$old$jsonb_typeof(item->'code') IS DISTINCT FROM 'string' OR $old$,''); END $$;`,
   },
+  {
+    name: 'missing app table grant',
+    pattern: 'every table and SECURITY DEFINER',
+    sql: 'REVOKE SELECT ON public.task_specs FROM awbs_app;',
+  },
 ];
 function run(pattern: string, folder?: string, index = 0) {
   const database = new URL(url as string);
