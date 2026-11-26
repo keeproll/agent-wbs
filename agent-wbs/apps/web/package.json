@@ -9,23 +9,37 @@
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node ../../scripts/vitest.ts --config ../../vitest.config.ts",
-    "test:e2e": "playwright test",
+    "test:e2e": "node scripts/playwright.ts",
+    "e2e:api": "node scripts/e2e-api.ts",
+    "e2e:api-wbs": "node scripts/e2e-api-wbs.ts",
+    "e2e:api:task": "node scripts/e2e-api-task.ts",
+    "e2e:api-exec": "node scripts/e2e-exec-api.ts",
+    "e2e:api:m307": "node scripts/e2e-api-m307.ts",
+    "e2e:api-settings": "node scripts/e2e-api-settings.ts",
+    "e2e:api:m3int": "node scripts/e2e-api-m3int.ts",
     "e2e:install": "playwright install chromium"
   },
   "dependencies": {
+    "@awbs/shared": "workspace:*",
     "@mantine/core": "9.8.2",
     "@mantine/hooks": "9.8.2",
+    "@tanstack/react-query": "5.108.4",
+    "@tanstack/react-virtual": "3.13.2",
     "pretendard-gov": "1.3.9",
     "react": "19.3.1",
     "react-dom": "19.3.1",
-    "react-router": "8.5.2"
+    "react-router": "8.5.2",
+    "typebox": "1.4.7"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.14.0",
     "@playwright/test": "1.65.1",
+    "@types/pngjs": "6.0.5",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.3.0",
+    "pixelmatch": "8.0.0",
+    "pngjs": "7.0.0",
     "vite": "8.3.8"
   }
 }

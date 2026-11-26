@@ -1,0 +1,21 @@
+/*
+ * 변경 제안·Planning 화면 전용 규칙(M3-05). 원본 값만 다시 쓴다. 규칙마다 이유를 적는다.
+ */
+
+/* 1. 제목 순서(h1 → h2 → h3) 때문에 원본의 h4·h3 자리에 한 단계 높은 제목을 쓴 곳. 원본과 같은 크기·여백으로 보이게 한다.
+      원본 h4 = P L250, 원본 .dp-h h3 = P L618. 왜: 화면 읽기 프로그램이 제목 단계를 건너뛰지 않게(axe heading-order). */
+h3.h4 { margin: 0 0 6px; font-size: 13px; font-weight: 600; }
+.dp-h h2.dp-t { margin: 0; font-size: 14px; display: flex; gap: 6px; align-items: center; }
+
+/* 2. 휴대폰(390px) 알림 링크로 연 CP 상세(D-28, UAT-RESP-02-UI).
+      원본은 1100px 아래에서 .two를 한 줄로 쌓기만 한다(P L641). 상세를 바로 읽도록 목록을 상세 아래로 보내고,
+      표(.gtb)는 원본처럼 자체 가로 스크롤(overflow-x:auto)로 둔다. 페이지 자체는 넘치지 않는다. */
+@media (max-width: 760px) {
+  .cp-two > .side { order: 2; }
+  .cp-two > .mainc { order: 1; }
+  .cp-detail .pane-h > div { min-width: 0; }
+  .cp-detail .h2 { overflow-wrap: anywhere; }
+  /* 「출처: Planning <긴 세션 제목>」 버튼은 원본 .btn이 한 줄(nowrap)이라 휴대폰 폭을 넘는다. 여러 줄로 감싼다. */
+  .cp-detail .pane-h > span { min-width: 0; }
+  .cp-detail .pane-h .btn { white-space: normal; height: auto; min-height: 30px; padding-top: 4px; padding-bottom: 4px; text-align: left; overflow-wrap: anywhere; }
+}

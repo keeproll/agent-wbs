@@ -1,0 +1,75 @@
+/*
+ * 제품 전용 규칙 — 원본(prototype.css)에 없거나, 원본과 다르게 해야 하는 것만 적는다.
+ * 규칙마다 왜 다른지 적는다. 원본 값을 바꾸고 싶으면 여기서 덮어쓰지 말고 먼저 보고한다.
+ */
+
+/* 1. 키보드 포커스 표시. 원본에 없다(MM-29). */
+:focus-visible { outline: 2px solid var(--ac); outline-offset: -2px; }
+
+/* 2. 「본문으로 건너뛰기」 링크. 키보드 사용자가 메뉴 12개를 건너뛰게 한다(접근성 기본, M0-04). */
+.skip { position: absolute; top: 8px; left: 8px; z-index: 100; padding: 8px 12px; border-radius: 6px; background: var(--sf); color: var(--ac); }
+.skip:not(:focus) { clip-path: inset(50%); width: 1px; height: 1px; padding: 0; overflow: hidden; }
+
+/* 3. 메뉴·Runner 상태는 원본의 button 대신 주소가 있는 링크(a)다(새로고침·뒤로 가기 복원, MM-29).
+      원본 a{color}·a:hover 규칙이 메뉴 글자색을 바꾸지 않게 원본 메뉴 색을 다시 적는다. */
+a.nav-i, a.nav-i:hover { color: var(--ink2); text-decoration: none; }
+a.nav-i.on, a.nav-i.on:hover { color: var(--ac); }
+a.runner, a.runner:hover { color: inherit; text-decoration: none; }
+a.runner.off, a.runner.off:hover { color: var(--dg); }
+a.btn { text-decoration: none; color: inherit; }
+a.btn.primary, a.btn.primary:hover { color: #fff; }
+/* 잠긴 메뉴(원본 .nav-i.off L553 opacity .45)는 링크라도 누를 수 없는 것처럼 보이게 한다. */
+a.nav-i.off { cursor: not-allowed; }
+
+/* 4. 움직임 줄이기: 원본은 버튼 스피너를 2초로 늦추기만 한다(L599). 제품은 멈춘다(MM-17, UAT-STATE-05). */
+@media (prefers-reduced-motion: reduce) {
+  .bspin { animation: none; }
+  /* 원본 L150·L580·L599가 다루지 않는 나머지 움직임(메뉴 hover 전환, 캐럿 회전 등)도 멈춘다(G§0.3 「애니메이션은 동작 줄이기 시 멈춤」, M0-04). */
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* 5. 표 가로 스크롤 상자(D-28). 1280 미만에서 페이지 대신 이 상자만 가로로 스크롤한다. */
+.tbl-x { max-width: 100%; overflow-x: auto; overflow-y: visible; }
+.tbl-x-in { width: 100%; }
+
+/* 6. 오류 막대의 고칠 항목 목록(400). 원본은 문장만 있다. */
+.errbar-fields { margin: 4px 0 2px; padding-left: 18px; }
+
+/* 7. 충돌 창의 먼저 저장된 변경 목록. 원본은 한 줄(MM-20). */
+.cf-list { margin: 0; padding: 0; list-style: none; }
+
+/* 8. 화면 제목 오른쪽 버튼 묶음 */
+.page-acts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/* 9. 로그인 화면(UI-AUTH). 원본에 없는 화면이라 원본의 카드·글자 값만 조합한다. */
+.login { min-height: 100vh; display: grid; place-items: start center; padding: 64px 16px 24px; background: var(--bg); }
+.login-box { width: min(440px, 100%); display: flex; flex-direction: column; gap: 12px; }
+.login-box h1 { margin: 8px 0 0; font-size: 22px; font-weight: 700; letter-spacing: -.01em; }
+.login-box .page-sub { margin: 0; }
+.login-box .banner { margin-top: 0; }
+.login-card { margin-bottom: 0; display: flex; flex-direction: column; gap: 6px; }
+.login-card p { margin: 0; color: var(--ink2); }
+.login-h { margin: 0 0 4px; font-size: 14px; }
+.login-card .inp { width: 100%; }
+.login-cmd { margin: 0; padding: 8px 10px; border: 1px solid var(--ln); border-radius: 6px; background: var(--sf2); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12.5px; }
+
+/* 10. 제목 순서(h1 다음 h2) 때문에 원본의 h3 자리에 h2를 쓰는 곳. 원본 h3와 같은 크기·여백으로 보이게 한다(접근성 heading-order). */
+.load-err-t, .sb-h { font-size: 1.17em; margin: 0 0 1em; }
+
+/* 11. 카드 제목(.dp-h)과 카드 안 소제목. 원본은 h1 다음 바로 h3·h4를 써서 제목 순서(heading-order)를 어긴다.
+   제품은 한 단계씩 내려 h2·h3을 쓰고, 원본 .dp-h h3(P L618)·h4(P L250)와 같은 모양으로 보이게 한다(M3-04). */
+.dp-h h2 { margin: 0; font-size: 14px; display: flex; gap: 6px; align-items: center; }
+h3.h4l { margin: 0 0 6px; font-size: 13px; font-weight: 600; }
+
+/* 12. 오류 막대는 모달 overlay(z-index 50, P L345) 위, 안내(.notice 60, P L367) 아래에 둔다.
+       원본은 .errbar에 쌓임 순서가 없어 모달이 열리면 overlay 아래에 깔렸다. 모달 안 저장이 실패해도 「다시 시도」를 누를 수 있어야 한다(M3-04 보고 6). */
+.errbar { position: relative; z-index: 51; }
+
+/* 13. 표 스크롤 상자를 위치 기준으로 둔다. 안쪽의 화면 읽기 전용 글자(.sr, position:absolute)가 상자 밖 문서 폭을 늘리지 않게 한다.
+       없으면 390px에서 Gate 표의 숨은 사유 글자 때문에 페이지가 약 965px로 넓어졌다(M3-07 리뷰 5, D-28). */
+.tbl-x { position: relative; }

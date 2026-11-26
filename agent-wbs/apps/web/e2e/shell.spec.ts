@@ -1,5 +1,9 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
+import { fakeApi } from './support/fake-api.ts';
+
+// M3-01부터 모든 화면은 로그인 뒤에 열린다. 가짜 API가 로그인된 세션을 준다.
+test.beforeEach(async ({ page }) => { await fakeApi(page); });
 
 const MENU = [
   ['대시보드', '/dashboard'],
@@ -84,6 +88,7 @@ test('모든 글자가 번들에 포함된 Pretendard GOV를 쓴다', async ({ p
     if (!request.url().startsWith('http://127.0.0.1:')) external.push(request.url());
   });
   await page.goto('/');
+  await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
   const result = await page.evaluate(async () => {
     await document.fonts.ready;
     const families = ['body', 'h1', 'button', 'a'].map((selector) => {
@@ -109,6 +114,7 @@ test('모든 글자가 번들에 포함된 Pretendard GOV를 쓴다', async ({ p
 
 test('키보드로 본문에 건너뛰고 메뉴를 연다', async ({ page }) => {
   await page.goto('/');
+  await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
   await page.keyboard.press('Tab');
   const skip = page.getByRole('link', { name: '본문으로 건너뛰기' });
   await expect(skip).toBeFocused();
@@ -122,8 +128,10 @@ test('키보드로 본문에 건너뛰고 메뉴를 연다', async ({ page }) =>
 });
 
 test('자동 접근성 검사 위반 0건', async ({ page }) => {
-  for (const [, path] of MENU) {
+  for (const [label, path] of MENU) {
     await page.goto(path);
+    // 로그인 확인·API 응답 뒤 화면이 그려진 다음 검사한다(독립 리뷰 eebac50 #7).
+    await expect(page.getByRole('heading', { level: 1, name: label })).toBeVisible();
     expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   }
   await page.getByRole('button', { name: '메뉴 접기/펼치기' }).click();
@@ -142,9 +150,30 @@ test('움직임 줄이기 설정을 따른다', async ({ page }) => {
   expect(Number.parseFloat(duration)).toBeLessThan(0.001);
 });
 
-test('760px 이하에서는 메뉴가 56px이고 가로 스크롤이 없다', async ({ page }) => {
+// 원본 L644: 760px 이하에서 펼친 메뉴는 60px(글자 숨김), 접으면 56px(L50).
+test('760px 이하에서는 메뉴가 60px(접으면 56px)이고 가로 스크롤이 없다', async ({ page }) => {
   await page.setViewportSize({ width: 600, height: 800 });
   await page.goto('/');
+  await expect(nav(page).getByRole('link', { name: 'WBS', exact: true })).toBeVisible();
+  expect((await nav(page).boundingBox())?.width).toBe(60);
+  await expect(nav(page).locator('.nav-l').first()).toBeHidden();
+  await page.getByRole('button', { name: '메뉴 접기/펼치기' }).click();
   expect((await nav(page).boundingBox())?.width).toBe(56);
   await expectNoHorizontalScroll(page);
+});
+
+test('로그인·불러오기 실패·공통 부품 견본 화면도 자동 접근성 검사 위반 0건', async ({ page }) => {
+  await page.goto('/_states');
+  await expect(page.getByRole('heading', { level: 1, name: '공통 컴포넌트 견본' })).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+
+  await page.route('**/api/project', (route) => route.fulfill({ status: 503, contentType: 'application/json', body: '{}' }));
+  await page.goto('/wbs');
+  await expect(page.getByRole('region', { name: 'WBS 화면을 불러오지 못했습니다' })).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+
+  await page.route('**/api/session', (route) => route.fulfill({ status: 401, contentType: 'application/json', body: '{}' }));
+  await page.goto('/dashboard');
+  await expect(page.getByRole('heading', { level: 1, name: '로그인' })).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
 });

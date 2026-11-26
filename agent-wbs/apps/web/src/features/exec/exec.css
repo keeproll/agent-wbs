@@ -1,0 +1,12 @@
+/*
+ * 작업 실행 화면(M3-06)에만 쓰는 규칙. 원본 CSS(prototype.css)는 바꾸지 않는다.
+ * 규칙마다 이유를 적는다(apps/web README §3).
+ */
+
+/* 1. 본문 안내 문장은 12px 이상(MM-28, UAT-SHELL-04-UI b, M3-06 리뷰 #10). 원본 .fhint는 11.5px(P L341). */
+.exec-page .three .fhint { font-size: 12px; }
+
+/* 2. 제목 순서(h1 다음 h2, h2 다음 h3) 때문에 원본의 h4 자리에 h2·h3을 쓴다(리뷰 #12, axe heading-order).
+      원본 h4(P L250: 13px·굵기 600)와 같은 모양으로 보이게 한다. */
+.exec-page h2.ex-side-t { margin: 0; font-size: 13px; font-weight: 600; }
+.exec-page h3.ex-cmp-t { margin: 0 0 6px; font-size: 13px; font-weight: 600; }
