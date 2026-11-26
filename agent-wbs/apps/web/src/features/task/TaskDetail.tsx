@@ -10,7 +10,7 @@ import { codeLabel } from '../../shared/ui/errors.ts';
 import { BusyButton } from '../../shared/ui/BusyButton.tsx';
 import { AreaLoading } from '../../shared/ui/loading.tsx';
 import { useConfirm } from '../../shared/ui/feedback.tsx';
-import { useEditGuard } from '../../shared/state/useEditGuard.ts';
+import { useHostedEditGuard } from '../../shared/state/useEditGuard.ts';
 import { useRefreshError } from '../../shared/layout/MenuScreen.tsx';
 import { useSessionDraft } from '../../shared/state/useSessionDraft.tsx';
 import { EditSlotContext, type EditSlot } from './edit-slot.tsx';
@@ -90,7 +90,8 @@ export function TaskDetail({ taskKey, projectId, tab, onTab, nav, onOpenTask }: 
     onRestore: (d) => { setGen((n) => n + 1); setRestored(d.data); setDraft(d.data); setSlot({ id: d.slot, dirty: true }); if (d.tab !== tab) onTab(d.tab); },
   });
   const [gateOpen, setGateOpen] = useState(false);
-  const { guard } = useEditGuard(slot?.dirty ?? false);
+  // 주소 이동 막기는 부모 화면(WBS)이 한 번만 건다. 여기서는 「입력 중」을 알리고 탭 전환만 감싼다(교차 리뷰 지적 1).
+  const { guard } = useHostedEditGuard(slot?.dirty ?? false);
   /** 편집을 버린다. 바로 다음 주소 이동이 편집 보호에 다시 막히지 않게 화면을 먼저 갱신한다. */
   const discard = () => { flushSync(() => { setSlot(null); setDraft(null); setRestored(null); }); };
   const edit: EditSlot = useMemo(() => ({

@@ -27,6 +27,10 @@ import { RepoLayout } from './RegisterView.tsx';
 import { useProjectReload } from './reload.ts';
 import { ResetModal } from './ResetModal.tsx';
 import { LINK } from '../../shared/links.ts';
+import { TableScroll } from '../../shared/ui/TableScroll.tsx';
+import { agentMark } from '../settings/labels.ts';
+import { agentRows, planChangeCounts, structureRows } from './structure.ts';
+import { staleTargetError } from '../../shared/api/client.ts';
 
 type Active = Extract<ProjectState, { approvedAt: unknown }>;
 type ChangeCommit = Active['changeCommits'][number];
@@ -56,7 +60,12 @@ export function ActiveView({ project }: { project: Active }) {
     <div className="page scroll">
       <div className="page-h"><div><h1>프로젝트</h1><p className="page-sub">프로젝트 정보 · 입력 자료 · 상태 · WBS 구조 · Agent 참여 현황 — 프로젝트는 하나만 등록되며, 처음부터 다시 시작하려면 「프로젝트 초기화」</p></div></div>
       <InputsCard project={project} onDirty={setInputsDirty} />
-      <ProjectInfoCard project={project} onDirty={setInfoDirty} />
+      {/* 원본 P L2030: 왼쪽 프로젝트 정보, 오른쪽 Agent 참여 · 계획 변경. 아래 WBS 구조(L2073). UAT-PROJECT-11 */}
+      <div className="cmp" style={{ gridTemplateColumns: 'minmax(0,1.3fr) minmax(0,1fr)' }}>
+        <ProjectInfoCard project={project} onDirty={setInfoDirty} />
+        <AgentPlanCard projectId={project.id} />
+      </div>
+      <WbsStructureCard projectId={project.id} />
       <section className="card danger-zone" aria-labelledby="pj-reset-h">
         <div className="dp-h"><h2 id="pj-reset-h">프로젝트 초기화</h2><button type="button" className="btn danger" onClick={() => { setResetOpen(true); }}>프로젝트 초기화…</button></div>
         <p className="fhint" style={{ margin: 0 }}>진행 중인 모든 작업을 중지하고, 지금까지의 기록 · 결과 · 산출물을 <b>모두 삭제</b>합니다. Agent WBS와 Runner는 프로젝트 등록 전 상태로 돌아가고, 작업 저장소는 등록 시점 기준 커밋으로 되돌아갑니다. 삭제된 내용은 복구할 수 없습니다. 입력 자료(prototype/ (uiux · docs))와 등록 이전부터 저장소에 있던 코드는 삭제하지 않습니다.</p>
@@ -121,7 +130,7 @@ function ProjectInfoCard({ project, onDirty }: { project: Active; onDirty: (dirt
     // 다시 적용: 최신 버전 위에 내 입력을 그대로 보낸다(공통 reapplyRequest).
     reapplyRequest: async ({ signal }) => {
       const latest = await reloadProject(signal);
-      if (!('updatedAt' in latest)) throw new Error('등록된 프로젝트가 없습니다.');
+      if (!('updatedAt' in latest)) throw staleTargetError('등록된 프로젝트가 없습니다.', '프로젝트가 초기화됐을 수 있습니다. 화면을 새로 고치세요.', '프로젝트 정보 저장');
       return bodyOf(latest.updatedAt, form ?? infoOf(project));
     },
   });
@@ -192,7 +201,7 @@ function InputsCard({ project, onDirty }: { project: Active; onDirty: (dirty: bo
   /** 최신 프로젝트를 서버에서 읽는다(실패는 그대로 던진다). 충돌 창 「다시 적용」의 요청 내용을 만들 때 쓴다. */
   const latest = async (signal: AbortSignal) => {
     const p = await reloadProject(signal);
-    if (!('changeCommits' in p)) throw new Error('등록된 프로젝트가 없습니다.');
+    if (!('changeCommits' in p)) throw staleTargetError('등록된 프로젝트가 없습니다.', '프로젝트가 초기화됐을 수 있습니다. 화면을 새로 고치세요.', '입력 자료');
     return p;
   };
   /** 충돌 창 「최신 내용 불러오기」: 실제로 읽혀야 성공이다. */
@@ -338,4 +347,68 @@ function InputsCard({ project, onDirty }: { project: Active; onDirty: (dirty: bo
  */
 function DetectCheckedAt({ at }: { at: string | null }) {
   return <span data-testid="input-checked-at">{at ? `Runner 확인 ${formatDateTime(at)}` : 'Runner 확인 기록 없음'}</span>;
+}
+
+/** Agent 참여 현황 · 계획 변경(원본 P L2062–2071). 숫자는 서버 조회에서만 센다(structure.ts). */
+function AgentPlanCard({ projectId }: { projectId: string }) {
+  const list = useApiQuery('listTasks', { params: { projectId } }, { topics: ['task', 'dependency'] });
+  const dash = useApiQuery('getDashboard', {}, { topics: ['task', 'attempt', 'verification', 'planning', 'proposal'] });
+  const agents = list.data ? agentRows(list.data, dash.data) : [];
+  const counts = planChangeCounts(dash.data);
+  const n = (v: number | null) => (v === null ? '—' : String(v));
+  const grid = { gridTemplateColumns: 'minmax(120px,1fr) 70px 70px 70px 70px', minWidth: 0 };
+  return (
+    <section className="card">
+      <div role="region" aria-labelledby="pj-ag-h">
+        <div className="dp-h"><h2 id="pj-ag-h">Agent 참여 현황</h2></div>
+        {list.data === undefined && list.isError && <p className="ferr">Task 목록을 불러오지 못했습니다 <button type="button" className="btn sm" onClick={() => { void list.refetch(); }}>다시 시도</button></p>}
+        <div className="gtb" role="table" aria-label="Agent 참여 현황">
+          <div className="gtr h" role="row" style={grid}><span className="gc" role="columnheader">Agent</span><span className="gc" role="columnheader">담당</span><span className="gc" role="columnheader">검증</span><span className="gc" role="columnheader">실행 중</span><span className="gc" role="columnheader">시도</span></div>
+          {agents.map((a) => {
+            const mark = agentMark(a.name);
+            return (
+              <div key={a.name} className="gtr" role="row" aria-label={a.name} style={grid}>
+                <span className="gc" role="cell"><span className="agent"><span className={`ag-mk ${mark.cls}`} aria-hidden="true">{mark.init}</span>{a.name}</span></span>
+                <span className="gc mono" role="cell">{a.dev}</span><span className="gc mono" role="cell">{a.ver}</span>
+                <span className="gc mono" role="cell">{n(a.run)}</span><span className="gc mono" role="cell">{n(a.att)}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <div role="region" aria-labelledby="pj-plan-h">
+        <div className="dp-h" style={{ marginTop: 12 }}><h2 id="pj-plan-h">계획 변경</h2></div>
+        <Link className="dl-i" to="/planning"><span className="dl-t">이견 조정이 필요한 Planning</span><span className="mono">{n(counts.pl)}</span></Link>
+        <Link className="dl-i" to="/change"><span className="dl-t">승인 · 반영 대기 Change Proposal</span><span className="mono">{n(counts.cp)}</span></Link>
+      </div>
+    </section>
+  );
+}
+
+/** WBS 구조(원본 P L2073–2082). 행(이름)을 누르면 그 Phase로 거른 WBS(`/wbs?phase=<Phase id>`, WBS 화면이 주소에서 읽음). */
+function WbsStructureCard({ projectId }: { projectId: string }) {
+  const list = useApiQuery('listTasks', { params: { projectId } }, { topics: ['task', 'dependency'] });
+  const schedule = useApiQuery('getSchedule', {}, { topics: ['schedule', 'task', 'dependency', 'settings'] });
+  const rows = list.data ? structureRows(list.data, schedule.data) : [];
+  const grid = { gridTemplateColumns: '70px 110px minmax(180px,1fr) 56px 56px 56px 56px 76px 128px 150px', minWidth: 0 };
+  return (
+    <section className="card" style={{ marginTop: 16 }} aria-labelledby="pj-wbs-h">
+      <div className="dp-h"><h2 id="pj-wbs-h">WBS 구조</h2><span className="fhint">행을 누르면 해당 Phase로 필터된 WBS를 엽니다</span></div>
+      {list.data === undefined && list.isError && <p className="ferr">Task 목록을 불러오지 못했습니다 <button type="button" className="btn sm" onClick={() => { void list.refetch(); }}>다시 시도</button></p>}
+      <TableScroll minWidth={1000} label="WBS 구조 표">
+        <div className="gtb" role="table" aria-label="WBS 구조">
+          <div className="gtr h" role="row" style={grid}>{['WBS', '구분', '이름', 'Task', '완료', '진행', '차단', '예상 공수', '계획 기간 (지연)', '진행률 (공수 가중)'].map((h) => <span key={h} className="gc" role="columnheader">{h}</span>)}</div>
+          {rows.map((r) => (
+            <div key={r.id} className={r.kind === 'Phase' ? 'gtr ph' : 'gtr'} role="row" style={grid}>
+              <span className="gc mono" role="cell">{r.wbs}</span><span className="gc" role="cell"><span className="grp-k">{r.kind}</span></span>
+              <span className="gc" role="cell"><Link className="tlink" to={LINK.wbs({ phase: r.phaseId })}>{r.title}</Link></span>
+              <span className="gc mono" role="cell">{r.n}</span><span className="gc mono" role="cell">{r.done}</span><span className="gc mono" role="cell">{r.act}</span><span className="gc mono" role="cell">{r.blk}</span>
+              <span className="gc mono" role="cell">{r.est}</span><span className="gc mono" role="cell">{r.win}</span>
+              <span className="gc" role="cell"><span className="cl" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}><span className="bar"><span className="bar-f" style={{ width: `${String(r.pct)}%` }} /></span><span className="mono">{r.pct}%</span></span></span>
+            </div>
+          ))}
+        </div>
+      </TableScroll>
+    </section>
+  );
 }

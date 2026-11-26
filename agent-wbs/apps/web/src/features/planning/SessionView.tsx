@@ -11,6 +11,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useRef } from 'react';
 import { Link } from 'react-router';
 import { useApi } from '../../shared/api/ApiProvider.tsx';
+import { staleTargetError } from '../../shared/api/client.ts';
 import { formatDateTime } from '../../shared/format.ts';
 import { useSave } from '../../shared/state/useSave.tsx';
 import { BusyButton } from '../../shared/ui/BusyButton.tsx';
@@ -176,7 +177,7 @@ function ReviewCard({ planning, review, locked, memo, setMemo }: {
     // 「다시 적용」: 공통 reapplyRequest(M3-04). 최신 검토 버전으로 같은 선택·메모를 만든다. 보내기·성공 처리는 위 run·onSuccess가 한다.
     reapplyRequest: async ({ signal }) => {
       const fresh = (await findInPages((query) => client.call('listPlannings', { query, signal }), (p) => p.id === planning.id))?.reviews.find((r) => r.id === review.id);
-      if (!fresh) throw new Error('검토를 다시 찾지 못했습니다.');
+      if (!fresh) throw staleTargetError('검토를 다시 찾지 못했습니다.', '세션이 바뀌었을 수 있습니다. 「최신 내용 불러오기」로 지금 검토를 확인하세요.', `「${label}」 이견 조정`);
       return { updatedAt: fresh.updatedAt, choice: pending.current, memo: memoNow };
     },
     onRejected: () => { void refresh(); },

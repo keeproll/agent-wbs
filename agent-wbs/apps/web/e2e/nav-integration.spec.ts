@@ -40,6 +40,14 @@ test.describe('대시보드 →', () => {
     await expect(page.locator('.resbar')).toContainText(`필터 결과 ${String(blocked)}건`);
   });
 
+  test('프로젝트 WBS 구조의 Phase 주소(phase=<Phase id>)는 WBS를 그 Phase로 거른다(UAT-PROJECT-11)', async ({ page }) => {
+    const api = await wbsApi(page);
+    await page.goto('/wbs?phase=PH-2');
+    const under = new Set(api.list.nodes.filter((n) => n.id === 'PH-2' || n.parentId === 'PH-2').map((n) => n.id));
+    const n = api.list.tasks.filter((t) => !t.deletedAt && under.has(t.wbsNodeId)).length;
+    await expect(page.locator('.resbar')).toContainText(`필터 결과 ${String(n)}건`);
+  });
+
   test('일정 카드의 Gantt 주소(view=gantt)는 WBS를 Gantt 보기로 연다', async ({ page }) => {
     const api = await wbsApi(page);
     api.on('GET /api/dashboard', (route) => json(route, 200, dashboard()));

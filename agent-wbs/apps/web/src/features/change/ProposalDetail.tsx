@@ -10,6 +10,7 @@
  */
 import { Link } from 'react-router';
 import { useApi } from '../../shared/api/ApiProvider.tsx';
+import { staleTargetError } from '../../shared/api/client.ts';
 import { useApiQuery } from '../../shared/api/queries.ts';
 import { formatDateTime } from '../../shared/format.ts';
 import { useRefreshError } from '../../shared/layout/MenuScreen.tsx';
@@ -207,7 +208,7 @@ function Actions({ cp, preview, issues, holds, comment, setComment, err, setErr 
   /** 충돌 뒤 다시 적용: 서버에서 이 CP와 미리보기를 새로 읽는다(캐시를 쓰지 않는다). */
   const latest = async (signal: AbortSignal) => {
     const fresh = await getProposalOrNull(client, cp.id, signal);
-    if (!fresh) throw new Error(`${cp.cpKey}를 다시 찾지 못했습니다.`);
+    if (!fresh) throw staleTargetError(`${cp.cpKey}를 다시 찾지 못했습니다.`, '삭제됐을 수 있습니다. 변경 제안 목록을 다시 확인하세요.', `${cp.cpKey} 다시 읽기`);
     const hash = ['applied', 'rejected'].includes(String(fresh.status)) ? '' : (await client.call('previewProposal', { params: { id: cp.id }, signal })).previewHash;
     return { updatedAt: fresh.updatedAt, previewHash: hash };
   };
@@ -348,7 +349,7 @@ function useExclude(cp: Proposal) {
       const latest = await client.call('getProposal', { params: { id: cp.id }, signal });
       const op = cp.ops[picked.current ?? -1];
       const index = latest.ops.findIndex((o) => sameOp(o, op));
-      if (index < 0) throw new Error('제외하려던 항목이 최신 변경 제안에 없습니다.');
+      if (index < 0) throw staleTargetError('제외하려던 항목이 최신 변경 제안에 없습니다.', '다른 곳에서 먼저 제외했거나 바뀌었습니다. 「최신 내용 불러오기」로 지금 항목을 확인하세요.', `${cp.cpKey} 항목 제외`);
       return { updatedAt: latest.updatedAt, index };
     },
   });

@@ -49,6 +49,19 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * 화면이 최신 내용을 다시 읽어 보니 다시 적용할 대상이 이미 없을 때 쓰는 오류(M3 통합, 교차 리뷰 지적 4).
+ * 공통 useSave·충돌 창은 ApiError만 이유로 보여 준다. 일반 Error를 던지면 처리되지 않은 오류가 되고 창에 이유가 없다.
+ * 서버 응답이 아니므로 status는 null, 코드는 같은 상황의 서버 코드(VERSION_CONFLICT)를 쓴다.
+ * 종류는 'rejected'(지금 상태와 맞지 않음)다. 'conflict'로 두면 충돌 창이 「새 충돌」로 바꿔 이유를 지운다.
+ * 예: 다른 창이 같은 CP 항목을 먼저 제외했다 → 「제외하려던 항목이 최신 변경 제안에 없습니다.」
+ */
+export function staleTargetError(message: string, fix: string, action: string): ApiError {
+  return new ApiError('rejected', null, 'VERSION_CONFLICT', {
+    error: { code: 'VERSION_CONFLICT', message, action, fix, errors: [], details: {}, requestId: '' },
+  } as ErrorBody);
+}
+
 function kindOf(status: number, code: string): ErrorKind {
   if (status === 400) return 'validation';
   if (status === 401) return 'unauthorized';

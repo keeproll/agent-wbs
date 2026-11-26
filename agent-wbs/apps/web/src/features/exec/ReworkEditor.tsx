@@ -21,6 +21,7 @@ import { BusyButton } from '../../shared/ui/BusyButton.tsx';
 import type { Agent } from './messageDrafts.ts';
 import { sendMessage, type CreatedMessage } from './sendMessage.ts';
 import { EXEC_TOPICS } from './useTaskCommand.tsx';
+import { staleTargetError } from '../../shared/api/client.ts';
 
 export interface ReworkEditorProps {
   projectId: string;
@@ -58,7 +59,7 @@ export function ReworkEditor({ projectId, taskKey, agent, attemptId, updatedAt, 
   const latestVersion = async (signal?: AbortSignal) => {
     const list = await client.call('listTasks', { params: { projectId }, ...(signal ? { signal } : {}) });
     const task = list.tasks.find((t) => t.taskKey === taskKey);
-    if (!task) throw new Error(`${taskKey}를 찾을 수 없습니다.`);
+    if (!task) throw staleTargetError(`${taskKey}를 찾을 수 없습니다.`, '삭제됐거나 취소된 Task일 수 있습니다. 「최신 내용 불러오기」로 확인하세요.', `${taskKey} 재작업 지시`);
     return task.updatedAt;
   };
 

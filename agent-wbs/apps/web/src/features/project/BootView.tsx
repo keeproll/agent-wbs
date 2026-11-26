@@ -24,6 +24,7 @@ import { CleanupBanner } from './ResetHistory.tsx';
 import { useProjectReload } from './reload.ts';
 import { ResetModal } from './ResetModal.tsx';
 import { LINK } from '../../shared/links.ts';
+import { staleTargetError } from '../../shared/api/client.ts';
 
 type Pick = 'approve' | 'reject';
 type Draft = NonNullable<BootProject['bootstrap']['draft']>;
@@ -203,7 +204,7 @@ function TechPanel({ project, techStep, onDirty }: { project: BootProject; techS
     // 다시 적용도 공통 useSave가 같은 run·결과 미확인 보관함으로 보낸다(재리뷰 P2-1).
     reapplyRequest: async ({ signal }) => {
       const latest = await reloadProject(signal);
-      if (!('bootstrap' in latest)) throw new Error('초기 분석 단계가 아닙니다.');
+      if (!('bootstrap' in latest)) throw staleTargetError('초기 분석 단계가 아닙니다.', '프로젝트 상태가 바뀌었습니다. 「최신 내용 불러오기」로 지금 상태를 확인하세요.', '초기 분석 다시 적용');
       return build(latest.bootstrap.decisions, chosen);
     },
   });

@@ -10,6 +10,7 @@ import { findInPages, pageQuery } from '../../shared/api/allPages.ts';
 import type { ApiClient } from '../../shared/api/client.ts';
 import type { MessageDraft } from './messageDrafts.ts';
 import type { ExecMessage } from './model.ts';
+import { staleTargetError } from '../../shared/api/client.ts';
 
 /** 만든 메시지. sent면 전송까지 끝났다. */
 export interface CreatedMessage { id: string; msgKey: string; sent: boolean }
@@ -29,7 +30,7 @@ export interface SendInput {
 export async function latestMessage(client: ApiClient, taskKey: string, id: string, signal?: AbortSignal): Promise<ExecMessage> {
   // 끝까지 넘기며 찾는 규칙은 공통 findInPages(shared/api/allPages.ts)를 쓴다(M3 통합).
   const found = await findInPages((cursor) => client.call('getTaskMessages', { params: { taskKey }, query: pageQuery(cursor), ...(signal ? { signal } : {}) }), (m) => m.id === id);
-  if (!found) throw new Error('보낸 메시지를 찾을 수 없습니다.');
+  if (!found) throw staleTargetError('보낸 메시지를 찾을 수 없습니다.', '메시지가 삭제됐을 수 있습니다. 「최신 내용 불러오기」로 확인하세요.', `${taskKey} 메시지`);
   return found;
 }
 

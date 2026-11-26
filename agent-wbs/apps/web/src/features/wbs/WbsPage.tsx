@@ -29,7 +29,7 @@ import { WbsTaskDetail } from './detail-slot.tsx';
 import { TaskRail } from './TaskRail.tsx';
 import { TaskWizard, type Draft as WizardDraft } from './TaskWizard.tsx';
 import { useSessionDraft } from '../../shared/state/useSessionDraft.tsx';
-import { useEditGuard } from '../../shared/state/useEditGuard.ts';
+import { EditGuardHost, useEditGuard } from '../../shared/state/useEditGuard.ts';
 import { codeLabel } from '../../shared/ui/errors.ts';
 import { WbsGantt } from './WbsGantt.tsx';
 import { WbsTable } from './WbsTable.tsx';
@@ -92,7 +92,9 @@ function WbsBody({ projectId }: { projectId: string }) {
   });
   // Wizard 입력 중 주소 이동(뒤로 가기·메뉴)·새로고침은 확인을 거친다(독립 리뷰 #2). Task를 만든 뒤에는 버릴 초안이 없다.
   const wizardDirty = wizard && wizDraft !== null && (wizDraft.title.trim() !== '' || wizDraft.purpose.trim() !== '');
-  useEditGuard(wizardDirty);
+  // 편집 보호는 이 화면에 하나만 건다. Task 상세(레일 옆)의 「입력 중」도 EditGuardHost로 받아 합친다(교차 리뷰 지적 1).
+  const [detailDirty, setDetailDirty] = useState(false);
+  useEditGuard(wizardDirty || detailDirty);
   /** 생성이 끝나 이동할 주소. Wizard를 닫은 뒤(편집 보호가 풀린 뒤) 이동한다. */
   const [go, setGo] = useState<string | null>(null);
   useEffect(() => { if (go) void navigate(go); }, [go, navigate]);
@@ -146,12 +148,18 @@ function WbsBody({ projectId }: { projectId: string }) {
 
   const selTask: TaskSummary | undefined = selKey ? (byKey.get(selKey) ?? (detailQ.data as TaskSummary | undefined)) : undefined;
   const pos = selKey ? railKeys.indexOf(selKey) : -1;
-  const backTo = (location.state as { backTo?: string } | null)?.backTo ?? null;
+  /**
+   * 참조 복귀 스택(G§4.4, M3-03 승인 동작). 선행·후속 같은 참조 링크로 옮길 때 지금 Task를 쌓는다.
+   * 「← 원래 Task로 돌아가기」는 브라우저 뒤로 가기가 아니라 그 Task 주소로 직접 가고 스택을 하나 꺼낸다.
+   * 왜: 탭 전환도 브라우저 이력에 들어가므로 뒤로 가기는 버튼에 적힌 Task가 아닌 곳으로 갈 수 있다(교차 리뷰 지적 3).
+   */
+  const backStack = (location.state as { back?: string[] } | null)?.back ?? [];
+  const backTo = backStack.at(-1) ?? null;
 
-  const open = (key: string, opts: { replace?: boolean; backTo?: string } = {}) => {
+  const open = (key: string, opts: { replace?: boolean; push?: string; back?: string[] } = {}) => {
     // M3 통합: 상세의 탭(`?tab=`)은 다른 Task로 옮겨도 유지한다(M3-03 TaskDetailPage와 같은 규칙).
     const tab = new URLSearchParams(window.location.search).get('tab');
-    void navigate({ pathname: `/wbs/${key}`, search: tab ? `?tab=${tab}` : '' }, { replace: opts.replace ?? false, state: opts.backTo ? { backTo: opts.backTo } : null });
+    void navigate({ pathname: `/wbs/${key}`, search: tab ? `?tab=${tab}` : '' }, { replace: opts.replace ?? false, state: opts.back ? { back: opts.back } : opts.push ? { back: [...backStack, opts.push] } : null });
   };
   const close = () => {
     void navigate('/wbs');
@@ -260,16 +268,18 @@ function WbsBody({ projectId }: { projectId: string }) {
             : <WbsGantt rows={built.rows} schedule={scheduleQ.data} now={now} selected={selKey} onOpen={(k) => { open(k); }} onToggle={toggle} empty={empty} scrollRef={listScroll} />}
         </div>
         {selKey && selTask && (
+          <EditGuardHost.Provider value={setDetailDirty}>
           <WbsTaskDetail
             key={selKey}
             taskKey={selKey}
             projectId={projectId}
             nav={{
               pos: pos >= 0 ? `${String(pos + 1)} / ${String(railKeys.length)}` : '', prev, next, outside: pos < 0,
-              back: backTo ? { taskKey: backTo, go: () => { void navigate(-1); } } : null,
+              back: backTo ? { taskKey: backTo, go: () => { open(backTo, { back: backStack.slice(0, -1) }); } } : null,
             }}
-            onOpenTask={(k, ref) => { open(k, ref ? { backTo: selKey } : {}); }}
+            onOpenTask={(k, ref) => { open(k, ref ? { push: selKey } : {}); }}
           />
+          </EditGuardHost.Provider>
         )}
       </div>
 

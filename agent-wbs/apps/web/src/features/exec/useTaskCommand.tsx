@@ -12,6 +12,7 @@ import { apiKey, invalidateTopics } from '../../shared/api/queries.ts';
 import { useSave } from '../../shared/state/useSave.tsx';
 import { fetchAllAttempts } from './useExecData.ts';
 import type { ExecAttempt, RunKind } from './model.ts';
+import { staleTargetError } from '../../shared/api/client.ts';
 
 export type Command =
   | { op: 'run'; kind: RunKind; label: string }
@@ -45,12 +46,12 @@ export function useTaskCommand(projectId: string, taskKey: string, updatedAt: st
     signal?.throwIfAborted();
     queryClient.setQueryData(apiKey('listTasks', { params: { projectId } }), list);
     const task = list.tasks.find((t) => t.taskKey === taskKey);
-    if (!task) throw new Error(`${taskKey}를 찾을 수 없습니다.`);
+    if (!task) throw staleTargetError(`${taskKey}를 찾을 수 없습니다.`, '삭제됐거나 취소된 Task일 수 있습니다. 「최신 내용 불러오기」로 확인하세요.', `${taskKey} 실행 명령`);
     return task.updatedAt;
   };
   const latestAttempt = async (id: string, signal?: AbortSignal) => {
     const found = (await fetchAllAttempts(client, taskKey, signal)).find((a) => a.id === id);
-    if (!found) throw new Error('시도를 찾을 수 없습니다.');
+    if (!found) throw staleTargetError('시도를 찾을 수 없습니다.', '그 시도가 더 이상 없습니다. 「최신 내용 불러오기」로 지금 시도를 확인하세요.', `${taskKey} 실행 명령`);
     return found;
   };
 
