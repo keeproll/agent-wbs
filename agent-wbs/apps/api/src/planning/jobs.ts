@@ -27,6 +27,7 @@ export async function requestJudgement(client: PoolClient, cp: { id: string; pro
   const payload = {
     tasks: [],
     policy: { judgedRules: JUDGED_RULES.filter((rule) => ev.loaded.settings.enabled[rule]) },
+    planning: null,
     proposal: { id: cp.id, ops: stripJudgements(cp.ops), targets: ev.targets, splitSubjectHash: ev.splitHash, splitTasks: ev.splitTasks },
   };
   return (await client.query<{ id: string }>(

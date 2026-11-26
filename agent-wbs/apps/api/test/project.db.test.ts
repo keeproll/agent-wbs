@@ -11,6 +11,7 @@ import { installRunner } from '../src/runner/routes.ts';
 import { watchRunner } from '../src/runner/watch.ts';
 import { GitRepo } from './git-observe.ts';
 import { draft, met, task } from './project-fixture.ts';
+import { snapshotHash, wbsSnapshot } from '../src/planning/job-snapshot.ts';
 
 /*
  * M2-03 프로젝트 등록·기술 결정·bootstrap·초기 WBS 승인·입력 변경·분석 안 함(G§4.2, contracts §2.2·§3.3).
@@ -621,6 +622,229 @@ describe('project 입력 자료 변경·분석·분석 안 함(G§4.2 ②)', () 
 });
 
 function AT_NOW() { return new Date().toISOString(); }
+
+describe('서버 후속 4: Runner 계약과 분석 완료', () => {
+  async function finishClaim(job: { id: string; fence: number }) {
+    expect((await runner(`/api/runner/jobs/${job.id}/finish`, { fence: job.fence, status: 'done' })).statusCode).toBe(204);
+    expect((await runner(`/api/runner/jobs/${job.id}/release`, { fence: job.fence, hostId: 'host-1', proof: { kind: 'no_process', bootId: 'boot-1' }, at: AT_NOW() })).statusCode).toBe(204);
+  }
+  async function claim(kind: string) {
+    const response = await runner('/api/runner/jobs/claim', { kinds: [kind], capacity: 10 });
+    expect(response.statusCode, response.body).toBe(200);
+    expectShape('claimJob', 200, response.json());
+    return response.json<{ job: { id: string; fence: number; kind: string; leaseUntil: string; payload: Record<string, unknown> } }>().job;
+  }
+  async function confirmed(subagentDefs: Record<string, unknown>[] = []) {
+    await resetDb();
+    forgetRunnerView();
+    const check = await checkedRepo();
+    expect((await lead('POST', '/api/project', registration(check, {
+      constraints: [{ name: 'QuestDB', level: 'cond', condition: '시계열 데이터가 있으면' }],
+    }))).statusCode).toBe(201);
+    const first = await claim('bootstrap');
+    const constraints = (await ownerPool.query('select id,name,level,condition from tech_constraints order by created_at,id')).rows;
+    expect(first.payload).toEqual({
+      planningJobId: (await state()).bootstrap.jobId, runNo: 1, version: 1, commit: SHA1, previousCommit: null,
+      instruction: '계약 먼저', resumeStep: null, techConstraints: constraints, subagentDefs,
+      techDecisions: [], techDecisionVersion: snapshotHash([]),
+    });
+    expect(constraints).toEqual([{ id: expect.any(String), name: 'QuestDB', level: 'cond', condition: '시계열 데이터가 있으면' }]);
+    for (const field of ['planningJobId', 'runNo', 'version', 'techConstraints', 'techDecisionVersion']) {
+      const payload = Object.fromEntries(Object.entries(first.payload).filter(([key]) => key !== field));
+      expect(ajv.validate(OPERATIONS.find((op) => op.id === 'claimJob')?.responses[200], { job: { ...first, payload } }), field).toBe(false);
+    }
+    for (const key of ['check', 'unzip', 'repo', 'codex', 'claude', 'cross']) await progress(first.id, first.fence, key);
+    const proposed = await runner(`/api/planning/bootstrap/${first.id}/tech`, {
+      fence: first.fence,
+      decisions: [{ area: '데이터', title: '캐시', choice: 'Redis', reason: '속도', alternatives: '메모리' }],
+      conditionJudgements: [{ constraintId: constraints[0]?.id, result: 'not_met', reason: '시계열 데이터가 없습니다.' }],
+    });
+    expect(proposed.statusCode, proposed.body).toBe(201);
+    await finishClaim(first);
+    const s = await state();
+    expect((await lead('POST', `/api/projects/${s.id}/boot/tech/confirm`, {
+      decisions: s.bootstrap.decisions.map((decision) => ({ id: decision.id, choice: 'reject', updatedAt: decision.updatedAt })),
+    })).statusCode).toBe(200);
+    const next = await claim('bootstrap');
+    expect(next.payload).toMatchObject({ ...first.payload, resumeStep: 'draft', techDecisions: expect.any(Array), techDecisionVersion: expect.any(String) });
+    const decisions = next.payload.techDecisions as { id: string; status: string; updatedAt: string; content: { choice: string } }[];
+    expect(decisions.map((decision) => ({ status: decision.status, choice: decision.content.choice }))).toEqual([
+      { status: 'rejected', choice: 'QuestDB' }, { status: 'rejected', choice: 'Redis' },
+    ]);
+    expect(next.payload.techDecisionVersion).toBe(snapshotHash(decisions));
+    return { job: next, s: await state(), decisions };
+  }
+  async function active(content = draft()) {
+    const { job, s } = await confirmed();
+    const submitted = await runner(`/api/planning/bootstrap/${job.id}/draft`, { fence: job.fence, ...content });
+    expect(submitted.statusCode, submitted.body).toBe(201);
+    const approved = await lead('POST', '/api/project/bootstrap/approve', { revision: submitted.json<{ revision: number }>().revision });
+    expect(approved.statusCode, approved.body).toBe(200);
+    await finishClaim(job);
+    return s.id;
+  }
+  async function input(sha: string) {
+    expect((await chainReport([{ sha, at: AT_NOW(), author: '개발자', message: '입력 변경' }], [
+      { commitSha: sha, path: `prototype/docs/${sha[0] ?? ''}.md`, change: 'added', added: 1, deleted: 0 },
+    ])).statusCode).toBe(200);
+    const s = await state();
+    const response = await lead('POST', '/api/project/inputs', { updatedAt: s.updatedAt, commit: sha, commits: [sha] });
+    expect(response.statusCode, response.body).toBe(202);
+    return claim('input_diff');
+  }
+
+  test('조건부 제약의 실제 claim→제안→반려 후, 결정이 바뀌면 옛 초안을 거부한다', async () => {
+    const { job, decisions } = await confirmed();
+    await ownerPool.query("update tech_decisions set content=content||'{\"choice\":\"새 결정\"}'::jsonb where id=$1", [decisions[0]?.id]);
+    const stale = await runner(`/api/planning/bootstrap/${job.id}/draft`, { fence: job.fence, ...draft() });
+    expect(stale.statusCode, stale.body).toBe(409);
+    expect(errorOf(stale).code).toBe('VERSION_CONFLICT');
+    expect(await count('select count(*) n from wbs_drafts')).toBe(0);
+    await progress(job.id, job.fence, 'draft', 'fail', '기술 결정이 바뀜');
+    await finishClaim(job);
+    expect((await lead('POST', '/api/project/bootstrap/retry', { revision: null, runNo: 1 })).statusCode).toBe(202);
+    const retried = await claim('bootstrap');
+    expect(retried.payload).toMatchObject({ runNo: 2, version: 1, resumeStep: 'codex', techConstraints: job.payload.techConstraints });
+    expect(retried.payload.techDecisionVersion).not.toBe(job.payload.techDecisionVersion);
+    for (const key of ['codex', 'claude', 'cross']) await progress(retried.id, retried.fence, key);
+    expect((await runner(`/api/planning/bootstrap/${retried.id}/draft`, { fence: retried.fence, ...draft() })).statusCode).toBe(201);
+  });
+
+  test('저장한 초안도 결정이 바뀌면 승인할 수 없고 재분석은 새 결정 스냅샷을 받는다', async () => {
+    const { job, decisions } = await confirmed();
+    const submitted = await runner(`/api/planning/bootstrap/${job.id}/draft`, { fence: job.fence, ...draft() });
+    expect(submitted.statusCode, submitted.body).toBe(201);
+    const revision = submitted.json<{ revision: number }>().revision;
+    await ownerPool.query("update tech_decisions set content=content||'{\"choice\":\"새 결정\"}'::jsonb where id=$1", [decisions[0]?.id]);
+    const stale = await lead('POST', '/api/project/bootstrap/approve', { revision });
+    expect(errorOf(stale).code).toBe('VERSION_CONFLICT');
+    expect((await lead('POST', '/api/project/bootstrap/rerun', { revision, instruction: '새 결정으로 분석' })).statusCode).toBe(202);
+    await finishClaim(job);
+    const next = await claim('bootstrap');
+    expect(next.payload).toMatchObject({ runNo: 2, version: 1, resumeStep: 'codex', techConstraints: job.payload.techConstraints });
+    expect(next.payload.techDecisionVersion).not.toBe(job.payload.techDecisionVersion);
+    expect((next.payload.techDecisions as typeof decisions)[0]?.content.choice).toBe('새 결정');
+    for (const key of ['codex', 'claude', 'cross']) await progress(next.id, next.fence, key);
+    expect((await runner(`/api/planning/bootstrap/${next.id}/draft`, { fence: next.fence, ...draft() })).statusCode).toBe(201);
+  });
+
+  test('현재 WBS를 전달하고, 앞 단계가 끝난 cp:done 뒤 다음 차이 분석을 시작한다(변경 없음 포함)', async () => {
+    const projectId = await active();
+    const first = await input(SHA2);
+    expect(first.payload).toEqual({ planningJobId: (await state()).inputJob?.jobId, runNo: 1, version: 2,
+      commit: SHA2, previousCommit: SHA1, instruction: '', resumeStep: null, wbs: await wbsSnapshot(ownerPool, projectId) });
+    const wbs = first.payload.wbs as Awaited<ReturnType<typeof wbsSnapshot>>;
+    expect(wbs.tasks).toHaveLength(2);
+    expect(wbs.tasks[0]).toMatchObject({ taskKey: 'TASK-0001', status: 'ready', wp: expect.any(String), content: { title: '작업 t1' } });
+    expect(wbs.dependencies).toEqual([{ pred: 'TASK-0001', succ: 'TASK-0002', type: 'FS' }]);
+    const premature = await runner(`/api/runner/bootstrap/${first.id}/progress`, { fence: first.fence, stepKey: 'cp', status: 'done', at: AT_NOW() });
+    expect(errorOf(premature).code).toBe('INVALID_TRANSITION');
+    for (const key of ['check', 'unzip', 'diff', 'impact']) await progress(first.id, first.fence, key);
+    const complete = { fence: first.fence, stepKey: 'cp', status: 'done', at: AT_NOW(), note: '변경 없음' };
+    const key = crypto.randomUUID();
+    expect((await runner(`/api/runner/bootstrap/${first.id}/progress`, complete, key)).statusCode).toBe(204);
+    expect((await runner(`/api/runner/bootstrap/${first.id}/progress`, complete, key)).statusCode).toBe(204);
+    expect((await runner(`/api/runner/bootstrap/${first.id}/progress`, complete)).statusCode).toBe(204);
+    expect((await state()).inputJob?.status).toBe('done');
+    await finishClaim(first);
+    const second = await input(SHA3);
+    expect(second.payload).toMatchObject({ version: 3, previousCommit: SHA2 });
+    for (const step of ['check', 'unzip', 'diff', 'impact', 'cp']) await progress(second.id, second.fence, step);
+    expect((await state()).inputJob?.status).toBe('done');
+  });
+
+  test('차이 분석 중 내용·상태·작업 묶음·의존 관계가 바뀌면 제안을 거부한다', async () => {
+    await active();
+    const movedWp = (await ownerPool.query<{ id: string }>(`insert into wbs_nodes(project_id,node_key,kind,parent_id,title,sort_order)
+      select project_id,'WP-99','work_package',parent_id,'다른 묶음',99 from wbs_nodes where kind='work_package' limit 1 returning id`)).rows[0]?.id;
+    const job = await input(SHA2);
+    const submit = () => runner('/api/planning/proposals', { jobId: job.id, fence: job.fence, title: '완료 조건 수정', reason: '입력 변경', source: { kind: 'input' },
+      ops: [{ op: 'modify', task: 'TASK-0001', field: 'doneCond', after: '새 완료 조건' }] });
+    await ownerPool.query("update tasks set title='바뀐 제목' where task_key='TASK-0001'");
+    expect(errorOf(await submit()).code).toBe('VERSION_CONFLICT');
+    await ownerPool.query("update tasks set title='작업 t1',status='planning' where task_key='TASK-0001'");
+    expect(errorOf(await submit()).code).toBe('VERSION_CONFLICT');
+    await ownerPool.query("update tasks set status='ready' where task_key='TASK-0001'");
+    const oldWp = (job.payload.wbs as Awaited<ReturnType<typeof wbsSnapshot>>).tasks[0]?.wp;
+    await ownerPool.query("update tasks set wbs_node_id=$1 where task_key='TASK-0001'", [movedWp]);
+    expect(errorOf(await submit()).code).toBe('VERSION_CONFLICT');
+    await ownerPool.query("update tasks set wbs_node_id=$1 where task_key='TASK-0001'", [oldWp]);
+    await ownerPool.query("update task_dependencies set dep_type='SS'");
+    expect(errorOf(await submit()).code).toBe('VERSION_CONFLICT');
+    await ownerPool.query("update task_dependencies set dep_type='FS'");
+    const ok = await submit();
+    expect(ok.statusCode, ok.body).toBe(201);
+    const judgement = await claim('planning');
+    expect(judgement.payload).toMatchObject({ planning: null, proposal: { id: ok.json<{ id: string }>().id } });
+    await finishClaim(judgement);
+    for (const step of ['check', 'unzip', 'diff', 'impact', 'cp']) await progress(job.id, job.fence, step);
+    expect((await state()).inputJob?.status).toBe('done');
+    expect(errorOf(await submit()).code).toBe('INVALID_TRANSITION');
+  });
+
+  test('낡은 WBS로 실패한 차이 분석을 다시 시도하면 새 회차·현재 스냅샷으로 비교부터 한다', async () => {
+    await active();
+    const first = await input(SHA2);
+    for (const key of ['check', 'unzip', 'diff', 'impact']) await progress(first.id, first.fence, key);
+    await ownerPool.query("update tasks set title='수정한 제목' where task_key='TASK-0001'");
+    await progress(first.id, first.fence, 'cp', 'fail', '판단 대상이 바뀜');
+    await finishClaim(first);
+    const s = await state();
+    expect((await lead('POST', '/api/project/inputs/retry', { updatedAt: s.updatedAt, version: 2 })).statusCode).toBe(202);
+    const next = await claim('input_diff');
+    expect(next.payload).toMatchObject({ runNo: 2, version: 2, resumeStep: 'diff' });
+    expect((next.payload.wbs as Awaited<ReturnType<typeof wbsSnapshot>>).tasks[0]?.content.title).toBe('수정한 제목');
+    for (const key of ['diff', 'impact', 'cp']) await progress(next.id, next.fence, key);
+    expect((await state()).inputJob?.status).toBe('done');
+  });
+
+  test('분할 job은 원 Task의 작업 묶음과 양쪽 그래프를 전달하고 그래프가 바뀌면 거부한다', async () => {
+    await active(draft([task('t1'), task('t2'), task('t3')], [
+      { predRef: 't1', succRef: 't2', depType: 'FS' }, { predRef: 't2', succRef: 't3', depType: 'FS' },
+    ]));
+    const detail = async () => (await lead('GET', '/api/tasks/TASK-0002')).json<{ updatedAt: string }>();
+    const split = () => detail().then((d) => lead('POST', '/api/tasks/TASK-0002/split', { updatedAt: d.updatedAt }));
+    const queued = await split();
+    expect(queued.statusCode, queued.body).toBe(202);
+    const job = await claim('split');
+    const wbs = job.payload.wbs as Awaited<ReturnType<typeof wbsSnapshot>>;
+    const wp = wbs.tasks.find((item) => item.taskKey === 'TASK-0002')?.wp;
+    expect(wp).toEqual(expect.any(String));
+    expect(wbs.dependencies).toEqual([
+      { pred: 'TASK-0001', succ: 'TASK-0002', type: 'FS' }, { pred: 'TASK-0002', succ: 'TASK-0003', type: 'FS' },
+    ]);
+    const part = (ref: string) => ({ op: 'add', ref, preds: [{ pred: 'TASK-0001', type: 'FS' }],
+      t: { title: ref, type: 'Implementation', domain: 'BE', wp, priority: 1, assignee: 'Claude', verifier: 'Codex', purpose: '분할', doneCond: '완료', splitBasis: '목적별 분할' } });
+    const body = { jobId: job.id, fence: job.fence, title: '분할', reason: '목적별 분할', source: { kind: 'split', id: 'TASK-0002' }, ops: [
+      part('NEW-1'), part('NEW-2'), { op: 'remove', task: 'TASK-0002' },
+      { op: 'dep-add', pred: 'NEW-1', succ: 'TASK-0003', type: 'FS' }, { op: 'dep-add', pred: 'NEW-2', succ: 'TASK-0003', type: 'FS' },
+    ] };
+    await ownerPool.query("update task_dependencies set dep_type='SS' where pred=(select id from tasks where task_key='TASK-0001')");
+    expect(errorOf(await runner('/api/planning/proposals', body)).code).toBe('VERSION_CONFLICT');
+    expect((await split()).json<{ jobId: string }>().jobId).not.toBe(job.id);
+    await ownerPool.query("update task_dependencies set dep_type='FS'");
+    const result = await runner('/api/planning/proposals', body);
+    expect(result.statusCode, result.body).toBe(201);
+  });
+
+  test('Planning 세션의 실제 claim에는 세션 ID·제목·범위가 있다', async () => {
+    await active();
+    const started = await lead('POST', '/api/plannings', { title: '알림 개편', scope: '알림 API' });
+    expect(started.statusCode, started.body).toBe(202);
+    const job = await claim('planning');
+    expect(job.payload).toEqual({ tasks: [], policy: {}, proposal: null,
+      planning: { id: started.json<{ id: string }>().id, title: '알림 개편', scope: '알림 API' } });
+  });
+
+  test('허용한 하위 Agent 정의의 ID·버전·역할을 초기 분석과 후속 job에 전달한다', async () => {
+    const id = (await ownerPool.query<{ id: string }>(`insert into subagent_defs(def_key,version,agent,role,tools,sandbox,text,hash,allowed)
+      values('srv4-dev',1,'Claude','dev','{}','workspace-write','개발 역할',$1,true) returning id`, ['a'.repeat(64)])).rows[0]?.id;
+    try {
+      const { job } = await confirmed([{ id, defKey: 'srv4-dev', version: 1, agent: 'Claude', role: 'dev' }]);
+      expect(job.payload.subagentDefs).toEqual([{ id, defKey: 'srv4-dev', version: 1, agent: 'Claude', role: 'dev' }]);
+    } finally { await ownerPool.query('update subagent_defs set allowed=false where id=$1', [id]); }
+  });
+});
 
 describe('project 리뷰 지적 회귀(M2-03-REVIEW 1~8)', () => {
   /** 초기화 뒤 새 프로젝트를 등록하고 초안 승인 대기까지 진행한다. */

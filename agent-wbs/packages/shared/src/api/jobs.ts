@@ -1,6 +1,7 @@
 import { Value } from 'typebox/value';
 import { OPERATIONS } from './index.ts';
 import type { TSchema } from 'typebox';
+import Type from 'typebox';
 
 /**
  * 서버가 job을 큐에 넣기 전에 payload가 계약(claimJob 응답의 ClaimedJob)과 맞는지 검사한다.
@@ -10,9 +11,10 @@ import type { TSchema } from 'typebox';
 export function jobPayloadErrors(kind: string, payload: unknown): string[] {
   const claim = OPERATIONS.find((op) => op.id === 'claimJob');
   const job = (claim?.responses[200] as { properties?: { job?: { anyOf?: TSchema[] } } } | undefined)?.properties?.job;
-  const branch = job?.anyOf?.find((item) => (item as { properties?: { kind?: { enum?: string[]; const?: string } } }).properties?.kind?.enum?.includes(kind)
+  const branches = job?.anyOf?.filter((item) => (item as { properties?: { kind?: { enum?: string[]; const?: string } } }).properties?.kind?.enum?.includes(kind)
     || (item as { properties?: { kind?: { const?: string } } }).properties?.kind?.const === kind);
-  const schema = (branch as { properties?: { payload?: TSchema } } | undefined)?.properties?.payload;
-  if (!schema) return [`알 수 없는 job 종류: ${kind}`];
+  const schemas = branches?.map((branch) => (branch as { properties: { payload: TSchema } }).properties.payload) ?? [];
+  if (!schemas.length) return [`알 수 없는 job 종류: ${kind}`];
+  const schema = Type.Union(schemas);
   return [...Value.Errors(schema, payload)].map((error) => `${(error as { instancePath?: string }).instancePath || '/'}: ${error.message}`);
 }

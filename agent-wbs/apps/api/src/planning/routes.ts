@@ -16,6 +16,8 @@ import { recordReplan, scheduleView } from './schedule.ts';
 import { registerSessionRoutes } from './sessions.ts';
 import { registerSplitRoutes } from './split.ts';
 import { deferChange } from '../changes/events.ts';
+import { snapshotHash, wbsSnapshot } from './job-snapshot.ts';
+import { currentRunnerJob, lockPlanningJob } from '../project/jobs.ts';
 
 /*
  * Planning·변경 제안(CP) API(contracts §2.1 proposals 상세, §3.3 Planning API).
@@ -292,10 +294,23 @@ export function registerPlanningRoutes(app: FastifyInstance, pool: Pool): void {
       // 입력 차이 분석은 서버가 발급한 Planning 작업 ID로 연결한다. Agent가 다른 입력 버전을 가리키게 두지 않는다.
       const source = job.kind === 'input_diff' ? { kind: 'input', id: (job.payload as { planningJobId: string }).planningJobId } : body.source;
       if (job.kind === 'input_diff' && !source.id) throw new TaskError('INVALID_TRANSITION', {}, [], '입력 차이 분석 작업의 출처가 없습니다.');
+      if (job.kind === 'input_diff' && source.id) {
+        const planning = await lockPlanningJob(client, source.id);
+        if (await currentRunnerJob(client, source.id) !== job.id) throw new TaskError('LEASE_LOST', { jobId: job.id });
+        if (!['queued', 'running'].includes(planning.status)) throw new TaskError('INVALID_TRANSITION', { status: planning.status });
+      }
       if (job.kind === 'input_diff' && (body.source.kind !== 'input' || (body.source.id !== undefined && body.source.id !== source.id))) {
         throw new TaskError('VALIDATION_FAILED', {}, [{ path: 'source', rule: 'inputJob', message: '출처가 이 입력 차이 분석 작업과 다릅니다.' }]);
       }
       await lockGraph(client, projectId);
+      if (job.kind === 'input_diff' || job.kind === 'split') {
+        const before = (job.payload as { wbs?: unknown }).wbs;
+        const current = await wbsSnapshot(client, projectId);
+        // shortcut: WBS 전체 변경을 보수적으로 거부한다. 무관한 Task 변경으로 재시도가 잦아지면 대상·인접 그래프만 비교한다.
+        if (snapshotHash(before) !== snapshotHash(current)) {
+          throw new TaskError('VERSION_CONFLICT', { changes: [] }, [], '분석한 Task의 내용·상태·작업 묶음·의존 관계가 바뀌었습니다. 새 작업으로 다시 분석하세요.');
+        }
+      }
       // 판단의 subjectHash는 서버가 「변경 적용 후 내용」으로 계산해 붙인다(contracts §3.3). 판단을 뺀 상태로 먼저 평가한다.
       const plain = await evaluate(client, { projectId, source: body.source.kind, sourceId: body.source.id ?? null, ops: stripJudgements(body.ops), taskJudgements: [], splitJudgements: null });
       const stamp = (record: Judged, hash: string) => ({ ...record, items: record.items.map((item) => ({ ...item, subjectHash: hash })) }) as unknown as JudgedRules;

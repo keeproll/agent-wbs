@@ -10,6 +10,7 @@
     "payload": {
      "tasks": [],
      "policy": {},
+     "planning": null,
      "proposal": {
       "id": "cp-1",
       "ops": [
@@ -201,6 +202,7 @@
     "payload": {
      "tasks": [],
      "policy": {},
+     "planning": null,
      "proposal": {
       "id": "cp-2",
       "ops": [
@@ -454,6 +456,7 @@
       }
      ],
      "policy": {},
+     "planning": null,
      "proposal": null
     }
    }

@@ -337,7 +337,7 @@ const claim = (name: string) => {
 test('N1 판단 job은 판단 대상의 변경 전·후 내용과 hash를 함께 준다', () => {
   expect(claims().map((item) => item.kind)).toEqual(['lead-proposal', 'split-proposal', 'rejudge']);
   for (const item of claims()) expect(responds('claimJob', item.response), `${item.kind} ${ajv.errorsText()}`).toBe(true);
-  expect(responds('claimJob', { job: { ...claim('rejudge').job, payload: { tasks: [], policy: {}, proposal: null } } })).toBe(true);
+  expect(responds('claimJob', { job: { ...claim('rejudge').job, payload: { tasks: [], policy: {}, proposal: null, planning: null } } })).toBe(false);
 
   // ID·hash만 있는 job은 판단할 수 없다.
   const broken = (name: string, change: (proposal: Record<string, never> & { targets: Record<string, unknown>[] }) => void) => {
