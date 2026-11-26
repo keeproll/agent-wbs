@@ -4,7 +4,7 @@
  * 시험마다 `api.on('GET /api/project', handler)`로 바꾼다.
  * 응답 모양은 계약 타입(ResponseOf)으로 적어 서버 계약과 어긋나면 typecheck가 실패한다.
  */
-import type { Page, Request, Route } from '@playwright/test';
+import type { BrowserContext, Page, Request, Route } from '@playwright/test';
 import type { ErrorCode, ResponseOf } from '../../src/shared/api/contract.ts';
 
 export const SESSION: ResponseOf<'getSession'> = {
@@ -47,7 +47,8 @@ export interface FakeApi {
   requests: (key: string) => Request[];
 }
 
-export async function fakeApi(page: Page, options: { session?: boolean; project?: ResponseOf<'getProject'> } = {}): Promise<FakeApi> {
+/** page 대신 context를 주면 그 context에서 새로 열리는 탭(popup)도 같은 가짜 API를 쓴다. */
+export async function fakeApi(page: Page | BrowserContext, options: { session?: boolean; project?: ResponseOf<'getProject'> } = {}): Promise<FakeApi> {
   const handlers = new Map<string, Handler>([
     ['GET /api/session', (route) => (options.session === false ? json(route, 401, errorBody('LEAD_UNAUTHORIZED')) : json(route, 200, SESSION))],
     ['GET /api/project', (route) => json(route, 200, options.project ?? ACTIVE_PROJECT)],
