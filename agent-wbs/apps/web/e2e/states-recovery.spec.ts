@@ -68,19 +68,59 @@ test('#3 재시도는 처음 요청 내용과 멱등 키를 그대로 보내고,
   expect(third?.headers()['idempotency-key']).not.toBe(posts[0]?.headers()['idempotency-key']);
 });
 
-test('#3 오류 막대를 닫으면 결과를 모르는 이전 요청을 포기하고 새 저장을 보낼 수 있다', async ({ page }) => {
+test('재리뷰 #2 오류 막대를 닫아도 결과 모르는 요청은 남는다: 같은 입력은 같은 키로, 다른 입력은 막는다', async ({ page }) => {
   const api = await fakeApi(page);
   api.on('GET /api/tasks/TASK-0001', (route) => json(route, 200, { taskKey: 'TASK-0001', title: '원래 제목', updatedAt: V1 }));
-  api.on('POST /api/messages', (route) => route.abort('connectionrefused'));
+  // 서버는 처리했지만 응답만 잃은 상황
+  const processed = new Set<string>();
+  api.on('POST /api/messages', (route, request) => {
+    processed.add(request.headers()['idempotency-key'] ?? '');
+    return route.abort('connectionreset');
+  });
   await page.goto('/_states');
   await page.getByLabel('메시지').fill('첫 입력');
   await page.getByRole('button', { name: '메시지 초안 만들기' }).click();
+  await expect(page.getByRole('alert')).toContainText('NETWORK_ERROR');
   await page.getByRole('alert').getByRole('button', { name: '닫기' }).click();
-  api.on('POST /api/messages', (route) => json(route, 201, { id: 'm1' }));
-  await page.getByLabel('메시지').fill('새 입력');
+  await expect(page.getByRole('alert')).toHaveCount(0);
+
+  // 입력을 바꾸지 않고 다시 만들기 → 같은 키(서버가 중복으로 처리하지 않는다)
+  api.on('POST /api/messages', (route, request) => { processed.add(request.headers()['idempotency-key'] ?? ''); return json(route, 201, { id: 'm1' }); });
+  await page.getByLabel('메시지').fill('바뀐 입력');
+  await page.getByRole('button', { name: '메시지 초안 만들기' }).click();
+  await expect(page.getByRole('alert')).toContainText('이전 요청의 결과를 아직 모릅니다');
+  expect(api.requests('POST /api/messages')).toHaveLength(1);
+  await page.getByLabel('메시지').fill('첫 입력');
   await page.getByRole('button', { name: '메시지 초안 만들기' }).click();
   await expect.poll(() => api.requests('POST /api/messages').length).toBe(2);
-  expect((api.requests('POST /api/messages')[1]?.postDataJSON() as { body: string }).body).toBe('새 입력');
+  expect(processed.size).toBe(1);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
+test('재리뷰 #1 이전 요청의 재시도가 성공해도 그 뒤에 고친 초안은 지우지 않는다', async ({ page }) => {
+  const api = await fakeApi(page);
+  api.on('GET /api/tasks/TASK-0001', (route) => json(route, 200, { taskKey: 'TASK-0001', title: '원래 제목', updatedAt: V1 }));
+  api.on('PATCH /api/tasks/TASK-0001', (route) => json(route, 500, errorBody('INTERNAL')));
+  await page.goto('/_states');
+  await page.getByRole('button', { name: '편집' }).click();
+  await page.getByLabel('제목').fill('첫 입력 A');
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('500 INTERNAL');
+  await page.getByLabel('제목').fill('나중 입력 B');
+
+  api.on('PATCH /api/tasks/TASK-0001', (route, request) => {
+    const body = request.postDataJSON() as { title: string };
+    return json(route, 200, { task: { taskKey: 'TASK-0001', title: body.title, updatedAt: V2 }, changes: [] });
+  });
+  await page.getByRole('alert').getByRole('button', { name: '다시 시도' }).click();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  expect(api.requests('PATCH /api/tasks/TASK-0001').map((r) => (r.postDataJSON() as { title: string }).title)).toEqual(['첫 입력 A', '첫 입력 A']);
+  // 새 초안은 그대로, 편집도 열린 채다. 다시 저장하면 최신 버전 위에 B를 보낸다.
+  await expect(page.getByLabel('제목')).toHaveValue('나중 입력 B');
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+  await expect(page.getByTestId('title')).toHaveText('나중 입력 B');
+  const last = api.requests('PATCH /api/tasks/TASK-0001').at(-1)?.postDataJSON() as { title: string; updatedAt: string };
+  expect(last).toEqual({ title: '나중 입력 B', updatedAt: V2 });
 });
 
 test('#4 충돌 뒤 다시 적용이 실패하면 창을 닫지 않고 실패 이유를 보이며, 성공해야 닫힌다', async ({ page }) => {

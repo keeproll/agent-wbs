@@ -9,6 +9,7 @@
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createContext, use, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { readLoginToken } from '../auth/login-link.ts';
+import { browserStorage, persistRegisteredDrafts } from '../state/sessionDrafts.ts';
 import { ApiError, createApiClient, type ApiClient } from './client.ts';
 import type { ResponseOf } from './contract.ts';
 
@@ -72,7 +73,14 @@ function SessionProvider({ children }: { children: ReactNode }) {
   const client = useMemo<ApiClient>(() => {
     const inner = createApiClient({
       csrfToken: () => csrf.get(),
-      onUnauthorized: () => { queryClient.setQueryData(['getSession', {}], null); },
+      onUnauthorized: () => {
+        // 로그인된 상태에서 세션이 끊겼으면, 로그인 화면으로 가기 전에 편집 중 초안을 남긴다(조정자 결정).
+        if (queryClient.getQueryData(['getSession', {}])) {
+          const storage = browserStorage();
+          if (storage) persistRegisteredDrafts(storage);
+        }
+        queryClient.setQueryData(['getSession', {}], null);
+      },
     });
     return {
       call: async (id, args) => {
