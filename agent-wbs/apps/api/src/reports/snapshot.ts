@@ -51,7 +51,13 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
   const inRange = (v: string | null | undefined) => !!v && ms(v) >= ms(start) && ms(v) < ms(end);
   const upTo = (v: string | null | undefined) => !!v && ms(v) <= ms(at);
 
-  const q = <T extends object>(sql: string, args: unknown[] = []) => client.query<T>(sql, args).then((r) => r.rows);
+  // 한 연결에서 질의를 동시에 보내지 않는다(pg는 한 연결의 동시 질의를 차례로 줄 세우며, 그 방식은 다음 판에서 없어진다). 앞 질의가 끝난 뒤 다음을 보낸다.
+  let chain: Promise<unknown> = Promise.resolve();
+  const q = <T extends object>(sql: string, args: unknown[] = []): Promise<T[]> => {
+    const next = chain.then(() => client.query<T>(sql, args)).then((r) => r.rows);
+    chain = next.catch(() => undefined);
+    return next;
+  };
   const [project, tasks, nodes, deps, attempts, verifs, defects, evidence, messages, replans, moves, sessions, alerts, proposals, checklist, outputs, grades] = await Promise.all([
     q<{ target: string | null }>("select to_char(target_date,'YYYY-MM-DD') target from projects where id=$1", [projectId]),
     q<{ id: string; key: string; title: string; status: TaskStatus; work_type: string; domain: string; assignee: 'Claude' | 'Codex'; verifier: 'Claude' | 'Codex';

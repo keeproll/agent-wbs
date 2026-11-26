@@ -18,6 +18,7 @@ import { DashboardPage } from '../features/dashboard/DashboardPage.tsx';
 import { ExecPage } from '../features/exec/ExecPage.tsx';
 import { HistoryPage } from '../features/history/HistoryPage.tsx';
 import { PlanningPage } from '../features/planning/PlanningPage.tsx';
+import { ReportPage } from '../features/report/ReportPage.tsx';
 import { ProjectPage } from '../features/project/ProjectPage.tsx';
 import { SettingsPage } from '../features/settings/SettingsPage.tsx';
 import { VerifyPage } from '../features/verify/VerifyPage.tsx';
@@ -44,6 +45,7 @@ const SCREENS: Partial<Record<MenuKey, ComponentType>> = {
   verify: VerifyPage, // M3-07
   change: ChangePage, // M3-05
   history: HistoryPage, // M3-07
+  report: ReportPage, // M6-01
   settings: SettingsPage, // M3-08(/settings는 기본 Runner 탭)
 };
 
@@ -66,6 +68,7 @@ const DETAIL: Partial<Record<MenuKey, string>> = {
   exec: '/exec/:taskKey', // M3-06 작업 실행에서 그 Task(`?att=`로 시도)
   change: '/change/:cpRef', // M3-05 알림 링크로 여는 CP 상세(CP 키 또는 id)
   settings: '/settings/:tab', // G§4.9 설정 탭
+  report: '/report/:reportId', // M6-01 보고서 하나(메일 발송 기록의 보고서 링크)
 };
 
 function menuRoutes(key: MenuKey): RouteObject[] {

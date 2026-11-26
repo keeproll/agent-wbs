@@ -1,0 +1,9 @@
+/*
+ * 보고서 화면(M6-01)만의 보정. 원본 규칙(prototype.css L504–L531)은 그대로 두고, 좁은 화면에서 넘치는 것만 고친다.
+ * 왜: 1200px 이하에서 원본은 한 열(1fr)로 바꾸지만, 목록 줄의 긴 글자가 열 폭을 밀어 390px 화면 밖으로 넘쳤다.
+ */
+@media (max-width: 1200px) { .rp-wrap { grid-template-columns: minmax(0, 1fr); } }
+.rp-side, .rp-main { min-width: 0; }
+.rp-r2 { overflow-wrap: anywhere; }
+/* 넓은 표(실행 기록·예정·부록)는 좁은 화면에서 문서 안에서만 가로로 밀어 본다. */
+.rpt-doc .rpt-tbl, .rpt-doc .rpt-trend { overflow-x: auto; }
