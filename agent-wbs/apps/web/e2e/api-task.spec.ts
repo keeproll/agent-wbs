@@ -87,3 +87,56 @@ test('UAT-TASK-02·09 실제 서버: 개요 제목 저장·체크리스트 추�
   await expect(hist).toContainText('실제 서버 저장');
   await expect(hist).toContainText('실제 서버 항목');
 });
+
+/** 같은 세션으로 서버에 직접 요청한다(다른 사용자의 저장을 흉내 낸다). */
+async function apiCall(page: Page, path: string, method = 'GET', data?: unknown): Promise<{ status: number; body: any }> { // eslint-disable-line @typescript-eslint/no-explicit-any
+  const session = (await (await page.request.get('/api/session')).json()) as { csrfToken: string };
+  const origin = new URL(page.url()).origin;
+  const r = await page.request.fetch(`/api/${path}`, { method, headers: { origin, 'x-csrf-token': session.csrfToken, 'idempotency-key': crypto.randomUUID() }, ...(data === undefined ? {} : { data }) });
+  return { status: r.status(), body: await r.json().catch(() => null) };
+}
+
+test('재리뷰 P1 실제 서버: 설계 충돌 「다시 적용」은 내가 바꾼 블록만 최신 위에 얹고 상대가 고친 테이블 설명을 지키다', async ({ page }) => {
+  await login(page, '/wbs/TASK-0004?tab=tech');
+  const db = page.getByRole('region', { name: 'DB 설계', exact: true });
+  await db.getByRole('button', { name: 'Migration 요구사항 편집', exact: true }).click();
+  await page.getByRole('form').getByLabel('Migration 요구사항', { exact: true }).fill('내 Migration 요구사항');
+  // 다른 사용자가 같은 DB 설계의 첫 테이블 설명을 저장한다
+  const t = (await apiCall(page, 'tasks/TASK-0004')).body;
+  const d = t.designs.find((x: { kind: string }) => x.kind === 'DB');
+  const changed = structuredClone(d.content);
+  changed.ents[0].f.desc = '상대가 고친 테이블 설명';
+  expect((await apiCall(page, 'tasks/TASK-0004/design/DB', 'PATCH', { updatedAt: t.updatedAt, content: changed })).status).toBe(200);
+  await page.getByRole('button', { name: '저장', exact: true }).first().click();
+  const modal = page.getByRole('alertdialog');
+  await expect(modal).toContainText('409');
+  await modal.getByRole('button', { name: /다시 적용/ }).click();
+  await expect(page.getByRole('form')).toHaveCount(0);
+  const after = (await apiCall(page, 'tasks/TASK-0004')).body.designs.find((x: { kind: string }) => x.kind === 'DB').content;
+  expect(after.b.migration).toEqual(['내 Migration 요구사항']);
+  expect(after.ents[0].f.desc).toBe('상대가 고친 테이블 설명');
+  expect(after.ents.length).toBe(changed.ents.length);
+});
+
+test('재리뷰 P2 실제 서버: 첫 응답 유실 → 새 입력으로 추가 시도(차단) → 이전 요청 다시 시도 성공해도 새 입력은 남는다', async ({ page }) => {
+  await login(page, '/wbs/TASK-0006?tab=checklist');
+  let lose = true;
+  const sent: unknown[] = [];
+  await page.route('**/api/tasks/TASK-0006/checklist', async (route) => {
+    sent.push(route.request().postDataJSON());
+    const r = await route.fetch();
+    if (lose) { lose = false; await route.abort(); } else await route.fulfill({ response: r });
+  });
+  const input = page.getByLabel('체크 내용', { exact: true });
+  await input.fill('서버에 저장된 첫 항목');
+  await page.getByRole('button', { name: '추가', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('NETWORK_ERROR');
+  await input.fill('아직 저장하지 않은 둘째 항목');
+  await page.getByRole('button', { name: '추가', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('이전 요청');
+  await page.getByRole('alert').getByRole('button', { name: '다시 시도', exact: true }).click();
+  await expect(page.getByRole('table', { name: '체크리스트', exact: true })).toContainText('서버에 저장된 첫 항목');
+  await expect(page.getByRole('button', { name: '추가 중…' })).toHaveCount(0);
+  await expect(input).toHaveValue('아직 저장하지 않은 둘째 항목');
+  expect(sent.map((x) => (x as { content: string }).content)).toEqual(['서버에 저장된 첫 항목', '서버에 저장된 첫 항목']);
+});

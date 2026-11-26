@@ -109,3 +109,25 @@ describe('작업량 편집 검사(UAT-TASK-02, 서버 계약 확장 대기 — �
     expect(estimateErrors({ lo: '5', est: '4', hi: '6', tok: '1', fixStart: '2026-11-30' })).toEqual(['range: 0보다 큰 숫자로, 낙관 ≤ 예상 ≤ 비관 순서가 되어야 합니다.']);
   });
 });
+
+describe('설계 저장은 바꾼 블록·엔티티만 최신 위에 얹는다(재리뷰 P1)', () => {
+  const latest = { ents: [{ f: { name: 'a', change: '신규', desc: '상대가 고친 설명' }, b: { columns: [] } }, { f: { name: 'b', change: '신규' }, b: {} }], b: { migration: ['옛'], seed: ['상대 seed'] } };
+  it('블록 편집은 그 블록만 바꾸고 다른 엔티티·블록은 최신 값 유지', async () => {
+    const { applyDesignOp } = await import('../src/features/task/editor-model.ts');
+    expect(applyDesignOp('DB', latest, { type: 'blocks', b: { migration: ['내 것'] } })).toEqual({ ...latest, b: { migration: ['내 것'], seed: ['상대 seed'] } });
+  });
+  it('엔티티 편집은 편집 전 이름으로 찾아 그것만 바꾸고, 새 엔티티는 뒤에 붙인다', async () => {
+    const { applyDesignOp } = await import('../src/features/task/editor-model.ts');
+    const mine = { f: { name: 'b2', change: '변경' }, b: {} };
+    expect(applyDesignOp('DB', latest, { type: 'entUpsert', key: 'b', ent: mine }).ents?.map((e) => e.f.name)).toEqual(['a', 'b2']);
+    expect(applyDesignOp('DB', latest, { type: 'entUpsert', key: null, ent: mine }).ents?.map((e) => e.f.name)).toEqual(['a', 'b', 'b2']);
+    expect(applyDesignOp('DB', latest, { type: 'entUpsert', key: 'a', ent: mine }).ents?.[1]?.f.name).toBe('b');
+  });
+  it('엔티티 삭제는 이름으로, 섹션 추가는 있으면 그대로, 제거는 전체 교체', async () => {
+    const { applyDesignOp } = await import('../src/features/task/editor-model.ts');
+    expect(applyDesignOp('DB', latest, { type: 'entDelete', key: 'a' }).ents?.map((e) => e.f.name)).toEqual(['b']);
+    expect(applyDesignOp('DB', latest, { type: 'blocks', b: {} })).toEqual(latest);
+    expect(applyDesignOp('DB', undefined, { type: 'blocks', b: {} })).toEqual({ ents: [], b: {} });
+    expect(applyDesignOp('DB', latest, { type: 'replace', content: {} })).toEqual({});
+  });
+});
