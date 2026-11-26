@@ -1,0 +1,21 @@
+/*
+ * 설정 화면 전용 규칙. 원본(prototype.css)에 같은 모양이 없을 때만 적고, 규칙마다 이유를 적는다.
+ */
+
+/* 1. 카드 제목은 h1 다음이라 h2를 쓴다(접근성 heading-order). 원본 `.dp-h h3`(P L618)와 같은 크기·정렬로 보이게 한다. */
+.dp-h h2.dp-t { margin: 0; font-size: 14px; display: flex; gap: 6px; align-items: center; }
+
+/* 2. 카드 안 소제목은 h2 다음이라 h3을 쓴다. 원본 h4(P L250)와 같은 모양. */
+h3.h4 { margin: 0 0 6px; font-size: 13px; font-weight: 600; }
+
+/* 3. 영역 안 불러오기 실패. 원본에 영역 단위 실패 모양이 없어 원본 배너(.banner.danger)에 「다시 시도」만 붙인다. */
+.set-err { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/* 4. 모델 순서 버튼(owner 2026-11-26 아이템 8: 모델 순서는 설정값). 원본에는 순서를 바꾸는 버튼이 없다. */
+.rank-btns { display: inline-flex; gap: 2px; margin-left: 4px; }
+.rank-btns .btn { padding: 0 6px; min-width: 0; }
+
+/* 5. 탭은 주소가 있는 링크(a)다(새로고침·뒤로 가기 복원, MM-29). 원본 a 색·밑줄 규칙이 탭 모양(.tab, P L217–219)을 바꾸지 않게 한다. */
+a.tab, a.tab:hover { text-decoration: none; }
+a.tab { color: var(--ink3); }
+a.tab:hover, a.tab.on, a.tab.on:hover { color: var(--ink); }

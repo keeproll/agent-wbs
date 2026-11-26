@@ -11,6 +11,7 @@ import { LoginPage } from '../features/auth/LoginPage.tsx';
 import { RequireAuth } from '../shared/auth/RequireAuth.tsx';
 import { MENU } from '../shared/layout/menu.ts';
 import { Shell } from '../shared/layout/Shell.tsx';
+import { SettingsPage } from '../features/settings/SettingsPage.tsx';
 import { NotFoundPage, PendingPage } from './pages.tsx';
 
 /** 공통 컴포넌트 견본(/_states). 개발 서버와 E2E 빌드에만 들어가고 제품 빌드에는 없다. */
@@ -24,9 +25,11 @@ export const routes: RouteObject[] = [
     children: [
       { index: true, element: <Navigate to="/dashboard" replace /> },
       // key: 메뉴를 옮기면 화면을 새로 만든다. 같은 컴포넌트를 재사용하면 「재방문 갱신」(상단 진행 막대)이 일어나지 않는다.
-      ...MENU.map((item) => ({ path: `/${item.key}`, element: <PendingPage key={item.key} menu={item.key} /> })),
+      ...MENU.filter((item) => item.key !== 'settings').map((item) => ({ path: `/${item.key}`, element: <PendingPage key={item.key} menu={item.key} /> })),
+      // M3-08 설정 화면. /settings는 기본 Runner 탭, /settings/:tab은 그 탭(G§4.9).
+      { path: '/settings', element: <SettingsPage key="settings" /> },
       { path: '/wbs/:taskKey', element: <PendingPage key="wbs" menu="wbs" /> },
-      { path: '/settings/:tab', element: <PendingPage key="settings" menu="settings" /> },
+      { path: '/settings/:tab', element: <SettingsPage key="settings" /> },
       ...(StatesSandbox ? [{ path: '/_states', element: <Suspense><StatesSandbox /></Suspense> }] : []),
       { path: '*', element: <NotFoundPage /> },
     ],
