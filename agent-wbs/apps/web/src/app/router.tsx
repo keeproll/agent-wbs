@@ -11,6 +11,7 @@ import { LoginPage } from '../features/auth/LoginPage.tsx';
 import { RequireAuth } from '../shared/auth/RequireAuth.tsx';
 import { MENU } from '../shared/layout/menu.ts';
 import { Shell } from '../shared/layout/Shell.tsx';
+import { ProjectPage } from '../features/project/ProjectPage.tsx';
 import { SettingsPage } from '../features/settings/SettingsPage.tsx';
 import { NotFoundPage, PendingPage } from './pages.tsx';
 
@@ -25,7 +26,8 @@ export const routes: RouteObject[] = [
     children: [
       { index: true, element: <Navigate to="/dashboard" replace /> },
       // key: 메뉴를 옮기면 화면을 새로 만든다. 같은 컴포넌트를 재사용하면 「재방문 갱신」(상단 진행 막대)이 일어나지 않는다.
-      ...MENU.filter((item) => item.key !== 'settings').map((item) => ({ path: `/${item.key}`, element: <PendingPage key={item.key} menu={item.key} /> })),
+      // M3-04: 프로젝트 메뉴는 features/project. 나머지는 각 작업이 연결할 때까지 PendingPage.
+      ...MENU.filter((item) => item.key !== 'settings').map((item) => ({ path: `/${item.key}`, element: item.key === 'project' ? <ProjectPage key="project" /> : <PendingPage key={item.key} menu={item.key} /> })),
       // M3-08 설정 화면. /settings는 기본 Runner 탭, /settings/:tab은 그 탭(G§4.9).
       { path: '/settings', element: <SettingsPage key="settings" /> },
       { path: '/wbs/:taskKey', element: <PendingPage key="wbs" menu="wbs" /> },

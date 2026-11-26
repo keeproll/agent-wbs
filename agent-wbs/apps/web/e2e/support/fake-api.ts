@@ -11,8 +11,13 @@ export const SESSION: ResponseOf<'getSession'> = {
   principal: 'lead', method: 'password', expiresAt: '2026-11-26T13:00:00.000Z', csrfToken: 'password.csrf-test',
 };
 
+/** 계약의 active 모양을 모두 채운다(M3-04: 프로젝트 화면이 repo·inputs 등을 읽는다). */
 export const ACTIVE_PROJECT = {
   state: 'active', id: 'p1', name: 'Verum-SDN Agent WBS — Self Development', epoch: 1, cleanup: 'none',
+  repo: { url: 'https://github.com/verum-sdn/agent-wbs', owner: 'verum-sdn', name: 'agent-wbs', branch: 'main', baseCommit: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678' },
+  targetDate: null, instruction: '', constraints: [], registeredAt: '2026-10-27T00:40:00.000Z',
+  inputs: [{ v: 1, at: '2026-10-27T00:40:00.000Z', commit: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678', mdList: [], changes: [], instruction: '', result: null, taskCount: 12 }],
+  changeCommits: [], inputHead: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678', inputJob: null, updatedAt: '2026-11-01T00:00:00.000000Z',
   approvedAt: '2026-11-01T00:00:00.000Z', approvedTaskCount: 12,
 } as unknown as ResponseOf<'getProject'>;
 export const NO_PROJECT = { state: 'none', epoch: 1, cleanup: 'none' } as unknown as ResponseOf<'getProject'>;

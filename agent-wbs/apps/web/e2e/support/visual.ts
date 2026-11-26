@@ -23,7 +23,8 @@ function crop(png: PNG, box: Box): PNG {
 export interface VisualResult { name: string; ratio: number; diffPixels: number; size: string; file: string }
 
 /** baselineBox와 actualBox는 크기가 달라도 된다(겹치는 왼쪽 위 기준 최소 크기로 비교). */
-export function compareRegion(name: string, baselineFile: string, baselineBox: Box, actual: Buffer, actualBox: Box): VisualResult {
+/** out: 결과 폴더. 작업마다 다른 폴더에 남기려면 넘긴다(기본은 OUT). */
+export function compareRegion(name: string, baselineFile: string, baselineBox: Box, actual: Buffer, actualBox: Box, out: string = OUT): VisualResult {
   const base = PNG.sync.read(readFileSync(join(BASELINE, baselineFile)));
   const ours = PNG.sync.read(actual);
   const width = Math.min(baselineBox.width, actualBox.width);
@@ -38,17 +39,17 @@ export function compareRegion(name: string, baselineFile: string, baselineBox: B
   PNG.bitblt(a, sheet, 0, 0, width, height, 0, 0);
   PNG.bitblt(b, sheet, 0, 0, width, height, width + gap, 0);
   PNG.bitblt(diff, sheet, 0, 0, width, height, (width + gap) * 2, 0);
-  mkdirSync(OUT, { recursive: true });
-  const file = join(OUT, `${name}.png`);
+  mkdirSync(out, { recursive: true });
+  const file = join(out, `${name}.png`);
   writeFileSync(file, PNG.sync.write(sheet));
   return { name, ratio: diffPixels / (width * height), diffPixels, size: `${String(width)}×${String(height)}`, file };
 }
 
 export const hasBaseline = () => existsSync(BASELINE);
 
-export function writeSummary(results: VisualResult[], notes: Record<string, string>): void {
-  mkdirSync(OUT, { recursive: true });
+export function writeSummary(results: VisualResult[], notes: Record<string, string>, out: string = OUT): void {
+  mkdirSync(out, { recursive: true });
   const lines = ['| 영역 | 크기 | 차이 픽셀 | 비율 | 기준 | 차이 원인 |', '|---|---|---:|---:|---|---|'];
   for (const r of results) lines.push(`| ${r.name} | ${r.size} | ${String(r.diffPixels)} | ${(r.ratio * 100).toFixed(2)}% | ${notes[`${r.name}:limit`] ?? ''} | ${notes[r.name] ?? ''} |`);
-  writeFileSync(join(OUT, 'summary.md'), `${lines.join('\n')}\n`);
+  writeFileSync(join(out, 'summary.md'), `${lines.join('\n')}\n`);
 }

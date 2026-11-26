@@ -19,6 +19,7 @@ M3-02~08은 이 바탕 위에 각 메뉴의 본문을 얹는다.
 | `W e2e -- states` | **M3-01 완료 조건.** 로그인·로딩·오류·충돌·잠금·편집 보호·화면 폭 E2E |
 | `W e2e` | 모든 E2E(앱 틀 `shell`, 시각 비교 `visual` 포함) |
 | `W e2e -- visual` | 원본 스크린샷과 나란히 비교(§5) |
+| `W e2e -- project` | **M3-04 완료 조건.** 프로젝트 메뉴 E2E·폭·시각 비교(features/project/README.md) |
 | `W --filter @awbs/web e2e:api` | 실제 API·전용 DB로 로그인 E2E(§4) |
 | `node apps/web/scripts/prototype-css.ts` | 원본 CSS를 다시 옮긴다(`--check`는 최신인지 확인만) |
 
@@ -37,6 +38,7 @@ src/
     sandbox/               공통 부품 견본(/_states). 개발·E2E 빌드에만 들어간다
   features/
     auth/                  로그인 화면(UI-AUTH)
+    project/               M3-04 프로젝트 메뉴(등록·초기 분석·입력 변경·초기화). 사용법은 features/project/README.md
     <menu>/                M3-02~08이 만들 메뉴별 화면(예: features/wbs)
   shared/                  ★ 모든 화면이 함께 쓰는 것. 사용법은 shared/README.md
     api/                   API 호출 계층·계약 타입·세션·변경 이벤트 polling
