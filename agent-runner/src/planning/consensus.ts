@@ -18,8 +18,8 @@ type Result = 'met' | 'not_met';
 export interface Disagreement<R extends string = string> {
   target: string;
   rule: R;
-  /** disagree: 결론이 다름 · missing: 한쪽 답 없음 · blank_basis: 근거 없음 · ambiguous: 같은 규칙을 두 번 답함 */
-  reason: 'disagree' | 'missing' | 'blank_basis' | 'ambiguous';
+  /** disagree: 결론이 다름 · missing: 한쪽 답 없음 · blank_basis: 근거 없음 · ambiguous: 같은 규칙을 두 번 답함 · invalid: 결론·근거의 형식이 틀림 */
+  reason: 'disagree' | 'missing' | 'blank_basis' | 'ambiguous' | 'invalid';
   results?: Partial<Record<AgentName, Result>>;
 }
 export interface JudgementMeta {
@@ -38,9 +38,11 @@ function agreeOne<R extends string>(target: string, rule: R, answers: Record<Age
     const found = answers[agent];
     if (found.length === 0) return { disagreement: { target, rule, reason: 'missing' } };
     if (found.length > 1) return { disagreement: { target, rule, reason: 'ambiguous' } };
-    const [only] = found as [{ result: Result; basis: string }];
+    const [only] = found as [{ result: unknown; basis: unknown }];
+    // Agent 출력은 바깥 값이다. 형식이 틀리면 합의 재료로 쓰지 않는다(독립 리뷰 5와 같은 경계).
+    if ((only.result !== 'met' && only.result !== 'not_met') || typeof only.basis !== 'string') return { disagreement: { target, rule, reason: 'invalid' } };
     if (!only.basis.trim()) return { disagreement: { target, rule, reason: 'blank_basis' } };
-    picked[agent] = only;
+    picked[agent] = only as { result: Result; basis: string };
   }
   if (picked.Claude.result !== picked.Codex.result) {
     return { disagreement: { target, rule, reason: 'disagree', results: { Claude: picked.Claude.result, Codex: picked.Codex.result } } };
@@ -99,6 +101,14 @@ export function agreeEstimates(refs: readonly string[], verdicts: Record<AgentNa
       const found = verdicts[agent].filter((v) => v.ref === ref);
       if (found.length !== 1) throw new Error(`${agent}의 ${ref} 추정이 ${found.length ? '두 개 이상' : '없'}습니다.`);
       const [v] = found as [EstimateVerdict];
+      // Agent 출력은 바깥 값이다. 형식이 틀린 값을 「낮은 신뢰도」 같은 정상 값으로 바꾸지 않고 오류로 멈춘다(독립 리뷰 5).
+      // 실제 CLI 출력 파서(M5-01)가 같은 검사를 하더라도 합의 경계에서 다시 막는다.
+      const finite = (n: unknown) => typeof n === 'number' && Number.isFinite(n);
+      if (![v.estHours, v.loHours, v.hiHours].every(finite) || (v.tokensK !== undefined && !(finite(v.tokensK) && v.tokensK >= 0))) {
+        throw new Error(`${agent}의 ${ref} 추정 시간·토큰이 유한한 수가 아닙니다.`);
+      }
+      if (!CONFIDENCE.includes(v.confidence)) throw new Error(`${agent}의 ${ref} 추정 신뢰도가 하·중·상이 아닙니다: ${String(v.confidence)}`);
+      if (typeof v.basis !== 'string') throw new Error(`${agent}의 ${ref} 추정 근거가 문자열이 아닙니다.`);
       if (!(v.loHours > 0 && v.loHours <= v.estHours && v.estHours <= v.hiHours)) throw new Error(`${agent}의 ${ref} 추정은 낙관 ≤ 예상 ≤ 비관이어야 합니다.`);
       if (!v.basis.trim()) throw new Error(`${agent}의 ${ref} 추정 근거가 비었습니다.`);
       return v;
@@ -110,7 +120,7 @@ export function agreeEstimates(refs: readonly string[], verdicts: Record<AgentNa
     const estHours = Math.min(hiHours, Math.max(loHours, Math.round(((a.estHours + b.estHours) / 2) * 10) / 10));
     return {
       ref, estHours, loHours, hiHours, ...(tokens.length && { tokensK: Math.max(...tokens) }),
-      confidence: CONFIDENCE[Math.min(CONFIDENCE.indexOf(a.confidence), CONFIDENCE.indexOf(b.confidence))] ?? '하',
+      confidence: CONFIDENCE[Math.min(CONFIDENCE.indexOf(a.confidence), CONFIDENCE.indexOf(b.confidence))] as Confidence,
       basis: AGENTS.map((agent, i) => `${agent}: ${pair[i]?.basis.trim() ?? ''}`).join('\n'),
       agreedBy: [...AGENTS],
     };

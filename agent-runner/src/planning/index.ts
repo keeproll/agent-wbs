@@ -1,14 +1,17 @@
 import type { ClaimedJob } from '../api/generated/client.ts';
-import { runBootstrap, runNoOf } from './bootstrap.ts';
+import { createRedactor } from '../security/redact.ts';
+import { runBootstrap } from './bootstrap.ts';
 import { PlanningCheckpointError } from './checkpoint.ts';
 import { runInputDiff } from './input-diff.ts';
 import { PlanningReportFailed, PlanningStopped } from './reporter.ts';
-import { extra, JobRun, PlanningAgentFailed, type PlanningContext, type PlanningOutcome } from './run.ts';
+import { bootstrapPayload, inputDiffPayload, PlanningPayloadError } from './payload.ts';
+import { JobRun, PlanningAgentFailed, type PlanningContext, type PlanningOutcome } from './run.ts';
 import { runEstimate, runPlanning, runSplit } from './tasks.ts';
 
 export type { PlanningContext, PlanningOutcome, PlanningWorkspace } from './run.ts';
 export type { PlanningAgent, PlanningAgents } from './agents.ts';
-export { PlanningCheckpoints } from './checkpoint.ts';
+export { PlanningCheckpoints, planningStateDirectory } from './checkpoint.ts';
+export type { DecisionSnapshot, TechConstraint, WbsSnapshot } from './payload.ts';
 
 /** 이 폴더가 실행하는 job 종류 */
 export const PLANNING_KINDS = ['bootstrap', 'input_diff', 'planning', 'estimate', 'split'] as const;
@@ -21,24 +24,31 @@ export type PlanningJob = Extract<ClaimedJob, { kind: (typeof PLANNING_KINDS)[nu
  * - lost: 임대 상실·초기화 번호 변경·인증 거부. 서버가 이 job의 보고를 받지 않으므로 finish도 보내지 않는다.
  */
 export async function runPlanningJob(job: PlanningJob, ctx: PlanningContext): Promise<PlanningOutcome> {
+  // 실패·상실 결과는 finish 본문과 서버 job 이력으로 나간다. 모든 반환을 이 한 경계에서 가린다(독립 리뷰 2).
+  // 단계 메모는 run.note()가 이미 가리지만, Agent·일반 예외의 메시지는 여기서만 가려진다.
+  const redact = createRedactor(ctx.secrets ?? []);
+  return redact(await run(job, ctx));
+}
+
+async function run(job: PlanningJob, ctx: PlanningContext): Promise<PlanningOutcome> {
   try {
-    const stepped = job.kind === 'bootstrap' || job.kind === 'input_diff';
-    // 다시 시도·기술 결정 확정·재분석은 같은 Planning 작업에 새 Runner job을 만든다. 진행 기록은 Planning 작업 단위로 이어 쓴다.
-    const planningJobId = stepped ? extra(job.payload, 'planningJobId') : undefined;
-    const workKey = stepped ? `${job.kind}:${typeof planningJobId === 'string' ? planningJobId : job.payload.commit}` : `${job.kind}:${job.id}`;
-    const checkpoint = await ctx.checkpoints.load(workKey, stepped ? runNoOf(job.payload) : 1);
-    // 입력 사본 이름: 차이 분석은 입력 버전, 초기 분석은 Planning 작업 기준
-    const version = extra(job.payload, 'version');
-    const inputName = job.kind === 'input_diff' && typeof version === 'number' ? `v${String(version)}` : `planning-${workKey.replaceAll(/[^A-Za-z0-9-]/g, '-')}`;
     switch (job.kind) {
-      case 'bootstrap': return await runBootstrap(new JobRun(job, ctx, checkpoint), inputName);
-      case 'input_diff': return await runInputDiff(new JobRun(job, ctx, checkpoint), inputName);
-      case 'planning': return await runPlanning(new JobRun(job, ctx, checkpoint));
-      case 'estimate': return await runEstimate(new JobRun(job, ctx, checkpoint));
-      case 'split': return await runSplit(new JobRun(job, ctx, checkpoint));
+      case 'bootstrap': {
+        // 다시 시도·기술 결정 확정·재분석은 같은 Planning 작업에 새 Runner job을 만든다. 진행 기록은 Planning 작업 단위로 이어 쓴다.
+        const payload = bootstrapPayload(job);
+        return await runBootstrap(new JobRun(job, ctx, await ctx.checkpoints.load(ctx.epoch, payload.workKey, payload.runNo)), payload);
+      }
+      case 'input_diff': {
+        const payload = inputDiffPayload(job);
+        return await runInputDiff(new JobRun(job, ctx, await ctx.checkpoints.load(ctx.epoch, payload.workKey, payload.runNo)), payload);
+      }
+      case 'planning': return await runPlanning(new JobRun(job, ctx, await ctx.checkpoints.load(ctx.epoch, `planning:${job.id}`, 1)));
+      case 'estimate': return await runEstimate(new JobRun(job, ctx, await ctx.checkpoints.load(ctx.epoch, `estimate:${job.id}`, 1)));
+      case 'split': return await runSplit(new JobRun(job, ctx, await ctx.checkpoints.load(ctx.epoch, `split:${job.id}`, 1)));
     }
   } catch (error) {
     if (error instanceof PlanningStopped) return { status: 'lost', code: error.code, message: error.message };
+    if (error instanceof PlanningPayloadError) return { status: 'failed', error: { code: 'UNSUPPORTED_PAYLOAD', message: error.message } };
     if (error instanceof PlanningAgentFailed) return { status: 'failed', error: { code: 'PLANNING_AGENT_FAILED', message: error.message } };
     if (error instanceof PlanningReportFailed) return { status: 'failed', error: { code: error.code, message: error.message } };
     if (error instanceof PlanningCheckpointError) return { status: 'failed', error: { code: 'CHECKPOINT_UNREADABLE', message: error.message } };

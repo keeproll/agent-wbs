@@ -1,8 +1,10 @@
 import type { ClaimedJob } from '../api/generated/client.ts';
-import { SPLIT_RULES, type AgentName, type Analysis, type CrossReview } from './agents.ts';
+import { SPLIT_RULES, type AgentName, type Analysis } from './agents.ts';
+import { isAnalysis, isCross, isDisagreements } from './guards.ts';
+import type { BootstrapPayload } from './payload.ts';
 import { agreeEstimates, agreeJudgements, type Disagreement } from './consensus.ts';
 import { runSteps, type Step } from './steps.ts';
-import { extra, JobRun, PlanningAgentFailed, type PlanningOutcome } from './run.ts';
+import { JobRun, PlanningAgentFailed, type PlanningOutcome } from './run.ts';
 
 /*
  * 초기 분석(PL-000) — G§4.2 ①, 원본 단계 P L4488-4489.
@@ -26,27 +28,22 @@ export const LABELS: Record<string, string> = {
   cross: '교차 검토 · 이견 조정', draft: 'WBS 초안 작성', diff: '이전 버전과 비교', impact: '영향 분석', cp: '변경 제안 작성',
 };
 
-export function runNoOf(payload: object): number {
-  const value = extra(payload, 'runNo');
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 ? value : 1;
-}
-
-export async function runBootstrap(run: JobRun<BootJob>, inputName: string): Promise<PlanningOutcome> {
+export async function runBootstrap(run: JobRun<BootJob>, payload: BootstrapPayload): Promise<PlanningOutcome> {
   const { job, ctx, checkpoint } = run;
-  const { commit, instruction, resumeStep } = job.payload;
+  const { commit, instruction, resumeStep, runNo, inputName, techConstraints, decisions } = payload;
   const ws = ctx.workspace;
-  const runNo = runNoOf(job.payload);
   // 재분석이거나 초안 단계부터라면 기술 결정은 이미 확정됐다(서버 confirmTech가 resumeStep=draft job을 만든다).
   const techDone = runNo > 1 || resumeStep === 'draft';
   let inputPath = '';
-  const base = () => ({ kind: 'bootstrap' as const, jobId: job.id, instruction, inputPath, commit });
+  // 기술 제약은 분석·교차 검토에 넘긴다. 조건부 선호의 판단을 constraintId로 답하게 하기 위해서다(서버 후속 4 계약).
+  const base = () => ({ kind: 'bootstrap' as const, jobId: job.id, instruction, inputPath, commit, ...(techConstraints && { techConstraints }) });
   const analyses = () => {
-    const pair = { Codex: checkpoint.output<Analysis>('analysis:Codex'), Claude: checkpoint.output<Analysis>('analysis:Claude') };
+    const pair = { Codex: checkpoint.output('analysis:Codex', isAnalysis), Claude: checkpoint.output('analysis:Claude', isAnalysis) };
     if (!pair.Codex || !pair.Claude) throw new Error('독립 분석 결과가 없습니다.');
     return pair as Record<AgentName, Analysis>;
   };
   const analysisStep = (key: 'codex' | 'claude', agent: AgentName): Step => ({
-    key, label: LABELS[key] ?? key, kind: 'agent', saved: () => checkpoint.output(`analysis:${agent}`) !== undefined,
+    key, label: LABELS[key] ?? key, kind: 'agent', saved: () => checkpoint.output(`analysis:${agent}`, isAnalysis) !== undefined,
     run: async () => {
       // 독립 분석: 상대 Agent의 분석을 넘기지 않는다.
       const analysis = await run.call(ctx.agents[agent], LABELS[key] ?? key, (a) => a.analyze(base()));
@@ -68,7 +65,7 @@ export async function runBootstrap(run: JobRun<BootJob>, inputName: string): Pro
     analysisStep('codex', 'Codex'),
     analysisStep('claude', 'Claude'),
     {
-      key: 'cross', label: LABELS.cross ?? '', kind: 'agent', saved: () => checkpoint.output('cross') !== undefined,
+      key: 'cross', label: LABELS.cross ?? '', kind: 'agent', saved: () => checkpoint.output('cross', isCross) !== undefined,
       run: async () => {
         const cross = await run.ask(LABELS.cross ?? '', (a) => a.crossReview({ ...base(), analyses: analyses() }));
         await checkpoint.saveOutput('cross', cross);
@@ -79,11 +76,12 @@ export async function runBootstrap(run: JobRun<BootJob>, inputName: string): Pro
       key: 'draft', label: LABELS.draft ?? '', kind: 'agent', saved: () => false,
       run: async () => {
         const response = await run.reporter.send('submitDraft', 'draft', async () => {
-          const built = await buildDraft(run, { ...base(), cross: required(checkpoint.output<CrossReview>('cross')), analyses: analyses() });
+          // 확정 결정 스냅샷이 오면 함께 넘긴다. 교차 검토의 tech는 팀장이 정하기 전의 「제안」일 뿐이다(독립 리뷰 계약 3).
+          const built = await buildDraft(run, { ...base(), cross: required(checkpoint.output('cross', isCross)), analyses: analyses(), ...(decisions !== undefined && { decisions }) });
           await checkpoint.saveOutput(`draft:${job.id}`, { disagreements: built.disagreements });
           return { params: { jobId: job.id }, body: { fence: job.fence, ...built.body } };
         });
-        const saved = checkpoint.output<{ disagreements: Disagreement[] }>(`draft:${job.id}`);
+        const saved = checkpoint.output(`draft:${job.id}`, isDisagreements);
         result = { revision: response.body.revision, disagreements: saved?.disagreements ?? [] };
         // 초안 단계 완료는 서버가 초안 등록 때 기록한다(진행 보고로 끝내면 400).
         return null;
@@ -92,7 +90,7 @@ export async function runBootstrap(run: JobRun<BootJob>, inputName: string): Pro
   ];
 
   const submitTech = async () => {
-    const tech = required(checkpoint.output<CrossReview>('cross')).tech;
+    const tech = required(checkpoint.output('cross', isCross)).tech;
     await run.reporter.send('submitTechProposals', 'tech', {
       params: { jobId: job.id },
       body: { fence: job.fence, decisions: tech?.decisions ?? [], conditionJudgements: tech?.conditionJudgements ?? [] },

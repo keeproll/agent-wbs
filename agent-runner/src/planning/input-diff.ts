@@ -1,7 +1,8 @@
 import type { ApiRequest } from '../api/client.ts';
 import type { ClaimedJob, PlanningProposalOp } from '../api/generated/client.ts';
-import type { InputDiff } from '../git/inputs.ts';
-import { SPLIT_RULES, type AgentName, type Analysis, type ProposalOp, type SplitProposalOp } from './agents.ts';
+import { SPLIT_RULES, type ProposalOp, type SplitProposalOp } from './agents.ts';
+import { isAnalysisPair, isDiff, isDisagreements } from './guards.ts';
+import type { InputDiffPayload } from './payload.ts';
 import { LABELS } from './bootstrap.ts';
 import { agreeJudgements, type Disagreement } from './consensus.ts';
 import { runSteps, type Step } from './steps.ts';
@@ -22,14 +23,16 @@ import { JobRun, type PlanningOutcome } from './run.ts';
 
 type DiffJob = Extract<ClaimedJob, { kind: 'input_diff' }>;
 
-export async function runInputDiff(run: JobRun<DiffJob>, inputName: string): Promise<PlanningOutcome> {
+export async function runInputDiff(run: JobRun<DiffJob>, payload: InputDiffPayload): Promise<PlanningOutcome> {
   const { job, ctx, checkpoint } = run;
-  const { commit, previousCommit, instruction } = job.payload;
+  const { commit, previousCommit, instruction, inputName, wbs } = payload;
+  // 현재 WBS 스냅샷이 오면 영향 분석·CP 작성에 넘긴다(서버 후속 4 계약). 없으면 지금처럼 새 Task만 판단한다.
+  const withWbs = wbs !== undefined ? { wbs } : {};
   const ws = ctx.workspace;
   let inputPath = '';
   let result: { proposalId: string | null; cpKey: string | null; disagreements: Disagreement[] } = { proposalId: null, cpKey: null, disagreements: [] };
   const diff = () => {
-    const saved = checkpoint.output<InputDiff[]>('diff');
+    const saved = checkpoint.output('diff', isDiff);
     if (!saved) throw new Error('diff 결과가 없습니다.');
     return saved;
   };
@@ -39,7 +42,7 @@ export async function runInputDiff(run: JobRun<DiffJob>, inputName: string): Pro
     return changes;
   };
   const impact = () => {
-    const saved = checkpoint.output<Record<AgentName, Analysis>>('impact');
+    const saved = checkpoint.output('impact', isAnalysisPair);
     if (!saved) throw new Error('영향 분석 결과가 없습니다.');
     return saved;
   };
@@ -60,12 +63,12 @@ export async function runInputDiff(run: JobRun<DiffJob>, inputName: string): Pro
         return `변경 파일 ${String(changes.length)}개 (+${String(added)} −${String(deleted)})`;
       },
       // 다른 PC면 같은 두 커밋으로 다시 계산한다. 같은 커밋 쌍의 diff는 같다.
-      ensure: async () => { if (!checkpoint.output('diff')) await computeDiff(); },
+      ensure: async () => { if (!checkpoint.output('diff', isDiff)) await computeDiff(); },
     },
     {
-      key: 'impact', label: LABELS.impact ?? '', kind: 'agent', saved: () => checkpoint.output('impact') !== undefined,
+      key: 'impact', label: LABELS.impact ?? '', kind: 'agent', saved: () => checkpoint.output('impact', isAnalysisPair) !== undefined,
       run: async () => {
-        const analyses = await run.both(LABELS.impact ?? '', (a) => a.analyze({ kind: 'input_diff', jobId: job.id, instruction, inputPath, commit, previousCommit, diff: diff() }));
+        const analyses = await run.both(LABELS.impact ?? '', (a) => a.analyze({ kind: 'input_diff', jobId: job.id, instruction, inputPath, commit, previousCommit, diff: diff(), ...withWbs }));
         await checkpoint.saveOutput('impact', analyses);
         return `Codex: ${analyses.Codex.summary} / Claude: ${analyses.Claude.summary}`;
       },
@@ -75,14 +78,14 @@ export async function runInputDiff(run: JobRun<DiffJob>, inputName: string): Pro
       run: async () => {
         let empty = false;
         const response = await sendProposal(run, async () => {
-          const content = await run.ask(LABELS.cp ?? '', (a) => a.proposeChanges({ jobId: job.id, instruction, inputPath, diff: diff(), analyses: impact() }));
+          const content = await run.ask(LABELS.cp ?? '', (a) => a.proposeChanges({ jobId: job.id, instruction, inputPath, diff: diff(), analyses: impact(), ...withWbs }));
           if (content.ops.length === 0) { empty = true; return null; }
           const { ops, disagreements } = await judgeAdds(run, content.ops);
           await checkpoint.saveOutput(`cp:${job.id}`, { disagreements });
           return { body: { jobId: job.id, fence: job.fence, title: content.title, reason: content.reason, source: { kind: 'input' as const }, ops: ops as PlanningProposalOp[] } };
         });
         if (empty || !response) return '변경 없음 — 영향받는 Task가 없어 변경 제안을 만들지 않았습니다.';
-        const saved = checkpoint.output<{ disagreements: Disagreement[] }>(`cp:${job.id}`);
+        const saved = checkpoint.output(`cp:${job.id}`, isDisagreements);
         result = { proposalId: response.body.id, cpKey: response.body.cpKey, disagreements: saved?.disagreements ?? [] };
         return `${response.body.cpKey} 제출(${response.body.status})`;
       },

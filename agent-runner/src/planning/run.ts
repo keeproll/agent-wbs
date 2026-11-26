@@ -104,8 +104,3 @@ export class JobRun<J extends ClaimedJob = ClaimedJob> {
     return clean.length > MAX_NOTE ? `${clean.slice(0, MAX_NOTE - 1)}…` : clean;
   }
 }
-
-/** payload에 계약 밖으로 실려 오는 값(서버가 넣는 planningJobId·runNo·version)을 안전하게 읽는다. */
-export function extra(payload: object, name: string): unknown {
-  return (payload as Record<string, unknown>)[name];
-}
