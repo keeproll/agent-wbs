@@ -18,18 +18,19 @@ test('시나리오 6: Claude 개발 → Codex QA FAIL → 등급 상향 재작�
   await h.runner.result(qa, 'FAIL');
   expect((await h.lead('GET', '/api/tasks/TASK-0001/verifications')).body).toMatchObject({ items: [expect.objectContaining({ result: 'FAIL' })] });
   const rework = await h.runner.startNext();
-  expect(rework?.job.payload.kind).toBe('rework');
+  // 재작업은 개발 담당(Claude), 재검증은 검증 담당(Codex)이어야 한다(교차 리뷰 F5).
+  expect(rework?.job.payload).toMatchObject({ kind: 'rework', agent: 'Claude' });
   expect(rework?.grade).toMatchObject({ model: 'claude-sonnet-5-5', effort: 'xhigh' });
   if (!rework) throw new Error('재작업 시도가 필요합니다.');
   await h.runner.result(rework);
   const reverify = await h.runner.startNext();
-  expect(reverify?.job.payload.kind).toBe('reverify');
+  expect(reverify?.job.payload).toMatchObject({ kind: 'reverify', agent: 'Codex' });
   if (!reverify) throw new Error('재검증 시도가 필요합니다.');
   await h.runner.result(reverify, 'PASS');
   expect((await h.lead('GET', '/api/tasks/TASK-0001/verifications')).body).toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ result: 'FAIL' }), expect.objectContaining({ result: 'PASS' })]) });
-  expect((await h.rows('select kind,status,effort from task_attempts order by attempt_no'))).toMatchObject([
-    { kind: 'dev', status: 'completed', effort: 'high' }, { kind: 'qa', status: 'completed' },
-    { kind: 'rework', status: 'completed', effort: 'xhigh' }, { kind: 'reverify', status: 'completed' },
+  expect((await h.rows('select kind,agent,status,effort from task_attempts order by attempt_no'))).toMatchObject([
+    { kind: 'dev', agent: 'Claude', status: 'completed', effort: 'high' }, { kind: 'qa', agent: 'Codex', status: 'completed' },
+    { kind: 'rework', agent: 'Claude', status: 'completed', effort: 'xhigh' }, { kind: 'reverify', agent: 'Codex', status: 'completed' },
   ]);
 });
 

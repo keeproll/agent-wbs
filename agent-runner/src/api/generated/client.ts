@@ -1485,6 +1485,7 @@ export interface Operations {
         };
         heartbeatSeconds: number;
         inputCheckMinutes: number;
+        inputRecheck: number;
         ci: {
           nightAt: string;
           retry: number;

@@ -176,6 +176,7 @@ flowchart LR
   - 완료 조건(검증): `W --filter api test -- execution` + `W test:db -- execution` (QA 오류·BLOCKED 새 시도, 낡은 head/명세 PASS 거부)
   - 디렉토리: `apps/api/src/execution` · 병렬: M2-05 후 · 담당 / 리뷰: Codex / Claude
 - **M2-07** — Planning·CP(미리보기=반영·자동/보류)·추정·재조정·분할
+  - `GET /api/schedule`과 Task 일정 요약도 이 작업이 제공한다(M2-07 리뷰 판정, 재작업 F5에서 구현).
   - 완료 조건(검증): `W --filter api test -- planning` + `W test:db -- planning`
     - **취소 반영과 SS 제거·이력·재조정이 한 트랜잭션, 미리보기 영향=반영 결과**
     - **D-33~35 보류: 자동·수동 승인·반영 동일, 재시뮬레이션 때 다시 판정**
@@ -183,6 +184,8 @@ flowchart LR
     - CP `splitBasis` 선택/필수와 반영 저장, CP add 선택 필드 저장·상속 재계산
   - 디렉토리: `apps/api/src/planning` · 병렬: ∥ · 담당 / 리뷰: Claude / Codex
 - **M2-08** — 정책·모델·하위 Agent·메시지·이력·변경 이벤트·무결성 점검(저장된 데이터끼리 모순이 없는지 검사)
+  - Task 등급 고정·해제 API(`PUT/DELETE /api/tasks/:taskKey/grade`)와 추정 job 연결도 이 작업 몫이다(M2-07 리뷰 판정).
+    - 2026-11-27(main 862e66a) 기준 이 두 경로는 계약에만 있고 서버 구현이 없다. 남은 일이다.
   - 완료 조건(검증): `W --filter api test -- policy messages changes` + `W test:db -- policy messages changes` (**허용 해제→재판단→재개 이력(D-29)**)
   - 디렉토리: `apps/api/src/{policy,messages,changes}` · 병렬: ∥ · 담당 / 리뷰: Claude / Codex
 - **M2-09** — fake Runner 시나리오 드라이버
@@ -210,6 +213,11 @@ flowchart LR
   - 디렉토리: `features/project` · 병렬: ∥ · 담당 / 리뷰: Claude / Codex
 - **M3-05** — Planning·변경 제안
   - 완료 조건(검증): `W e2e -- planning` (5, **취소 CP 영향 목록의 풀리는 후속**, **390px 알림 링크 변경 제안 상세 열람**, 보류 사유·판단 결과 표시)
+  - 알림 링크의 CP 찾기 (M2-07 리뷰 판정):
+    - 지금 계약에는 CP 한 건을 읽는 API가 없다. 알림의 CP ID로 status 필터 없는 cursor 목록을 끝까지 넘기며 찾거나, 단건 GET 계약을 추가한다.
+    - 첫 50/200건에 없다는 이유로 「없는 CP」로 처리하지 않는다.
+    - 단건 API를 둘지는 M3-05 착수 전에 계약 담당과 확정한다.
+    - 왜: 오래된 알림의 CP는 목록 첫 쪽에 없을 수 있다. 첫 쪽만 보고 「없다」고 하면 팀장이 열 수 있는 CP를 못 연다.
   - 디렉토리: `features/{planning,change}` · 병렬: ∥ · 담당 / 리뷰: Claude / Codex
 - **M3-06** — 작업 실행 3분할·메시지
   - 완료 조건(검증): `W e2e -- exec` (7·8, 6은 Gate 대기까지 fake)
@@ -251,6 +259,19 @@ flowchart LR
 - **M4-06** — 시험 저장소에서 보호 규칙·병합 API·시스템 커밋·자격 증명 폐기 실증(Agent 호출 없음)
   - 완료 조건(검증): 실환경 기록: head 변경 409, main 이동 거부, int 없는 병합 거부, Runner 우회 불가, CODEOWNERS, 병합 tree(커밋 시점의 파일 전체 내용)=H' tree, 폐기 토큰 401
   - 디렉토리: `agent-runner/src/github` 검증 스크립트 · 병렬: M4-04·Q-09 후 · 담당 / 리뷰: Codex / Claude
+  - 리뷰 반영(2026-11-26): 연결 확인은 관리자 역할 대신 main 보호의 실제 우회 가능 여부(`current_user_can_bypass`)로 판정한다. deploy key 점검과 시작 점검의 일시 장애 처리를 더했다(contracts §3.1 `github/status`).
+    - 다른 작성자의 CODEOWNERS 거부와 관리자가 아닌 별도 계정의 실제 시험은 팀원 합류 때로 미룬다(owner 2026-11-26 아이템 10).
+- **M4 통합(2026-11-26)** — 6개 브랜치 병합, `RunnerApp` 연결, 결합 시험
+  - 결합 시험: `R test -- test/integration/runner-flow`(모듈 결합 시나리오)와 실제 진입점 `node src/main.ts`를 띄우는 `test/integration/main-entry`.
+    - 둘 다 실제 `reset_project()` 출력과 대조된 공용 fixture(`contracts/fixtures/reset-cleanup-payloads.json`)의 payload를 쓴다.
+  - 이후 교차 리뷰 수정으로 정리 명령 payload 고정(contracts §3.2)과 원격 정리(PR 닫기 → 브랜치 삭제 → 되돌림 push, contracts §6)가 연결됐다.
+  - 남은 일(2026-11-27, main 862e66a 기준):
+    - readiness 거부 기록 key(계약 작업, contracts §1.2 [미정])
+    - 결과 SHA push 실행기: 지금은 refspec 규칙(`resultRefspec`)만 있다(M5)
+    - launch 기록 대조(M5-02). 그 전까지 물리 슬롯이 남아 있는데 pgid가 없는 같은 PC·부팅의 보유는 증명 실패로 두고, contracts §3.4-3대로 `unconfirmed`를 유지한다.
+      - 물리 슬롯 없이 논리 잠금만 남은 보유(`slot_state='none'`)는 지금도 `no_process`로 완료한다(contracts §3.2).
+    - `CliUpdater.tryClaim`을 job claim에 연결(M5)
+    - Runner가 외부 쓰기 권한 세대를 서버에 묻는 API는 아직 없다. Runner는 정리 결과의 `authority` 항목에 `generation`을 기록만 한다.
 
 ### M5 — 실행 · Planning
 

@@ -9363,6 +9363,122 @@
         }
       }
     },
+    "/api/project/inputs/recheck": {
+      "post": {
+        "operationId": "recheckInputs",
+        "summary": "입력 이력 재작성 복구 확인·입력 확인 다시 시도",
+        "tags": [
+          "lead"
+        ],
+        "security": [
+          {
+            "leadSession": []
+          }
+        ],
+        "x-version-rule": "body",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/OptionalIdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "updatedAt"
+                ],
+                "properties": {
+                  "updatedAt": {
+                    "$ref": "#/components/schemas/Timestamp"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "입력 이력 재작성 복구 확인·입력 확인 다시 시도",
+            "headers": {
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "inputRecheck"
+                  ],
+                  "properties": {
+                    "inputRecheck": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "VALIDATION_FAILED"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "LEAD_UNAUTHORIZED"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "FORBIDDEN_PRINCIPAL"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, VERSION_CONFLICT"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "INTERNAL"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error",
+            "description": "UNAVAILABLE"
+          }
+        },
+        "x-error-codes": {
+          "400": [
+            "VALIDATION_FAILED"
+          ],
+          "401": [
+            "LEAD_UNAUTHORIZED"
+          ],
+          "403": [
+            "FORBIDDEN_PRINCIPAL"
+          ],
+          "409": [
+            "IDEMPOTENCY_CONFLICT",
+            "INVALID_TRANSITION",
+            "VERSION_CONFLICT"
+          ],
+          "500": [
+            "INTERNAL"
+          ],
+          "503": [
+            "UNAVAILABLE"
+          ]
+        }
+      }
+    },
     "/api/project/reset": {
       "post": {
         "operationId": "resetProject",
@@ -25246,6 +25362,7 @@
                     "subagentBudget",
                     "heartbeatSeconds",
                     "inputCheckMinutes",
+                    "inputRecheck",
                     "ci",
                     "claudeModels",
                     "cliGrades"
@@ -25308,6 +25425,10 @@
                     "inputCheckMinutes": {
                       "type": "integer",
                       "minimum": 1
+                    },
+                    "inputRecheck": {
+                      "type": "integer",
+                      "minimum": 0
                     },
                     "ci": {
                       "type": "object",

@@ -628,6 +628,7 @@
    },
    "heartbeatSeconds": 60,
    "inputCheckMinutes": 5,
+   "inputRecheck": 0,
    "ci": {
     "nightAt": "02:00",
     "retry": 1,

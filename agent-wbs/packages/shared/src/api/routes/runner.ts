@@ -481,7 +481,10 @@ export const runnerOperations = [
      * - head: 이번에 본 main 끝 커밋. 서버는 차이가 비어도 head를 이 값으로 옮긴다.
      * - baseIsAncestor: `git merge-base --is-ancestor <base> <head>`의 종료 코드(0=true, 1=false, 그 밖은 보고 중단).
      *   **신뢰 전제**: 서버는 git을 직접 보지 않으므로 이 값과 changes·treeHash는 Runner 관측을 믿는다.
-     *   false면 이력 재작성으로 보고 아무것도 받지 않으며 팀장에게 경고한다.
+     *   false면 이력 재작성으로 보고 아무것도 받지 않으며 팀장에게 경고한다(alerts key=input_history_rewritten).
+     *   Runner는 같은 epoch에서 같은 base로 다시 보내지 않고 멈춘다. 정책 inputRecheck가 바뀌면(팀장 복구 확인) 다시 관측한다.
+     *   서버는 유효한 보고(base=입력 head, baseIsAncestor=true)를 받아들이는 같은 트랜잭션에서 열린 재작성 경고를 해소한다.
+     *   0·1 밖의 종료 코드(판정 불가)는 보고하지 않는다. epoch가 바뀌면(초기화) Runner는 이전 보고 상태를 버린다.
      * - treeHash: `git rev-parse <head>:prototype`(모드를 포함한 head의 prototype/ 트리 SHA). 차이가 비었는지와 트리가 바뀌었는지의 대조에 쓴다.
      * - changes: `git diff --raw -M --numstat <base> <head> -- prototype/` 결과. 비어 있지 않을 때만 입력 변경 항목이 생긴다.
      * - commits: 참고 정보(화면 표시용). `git rev-list --first-parent --reverse <base>..<head> -- prototype/`. 판정에 쓰지 않는다.
@@ -663,6 +666,9 @@ export const runnerOperations = [
         subagentBudget: m.SubagentBudget,
         heartbeatSeconds: Type.Integer({ minimum: 1 }),
         inputCheckMinutes: Type.Integer({ minimum: 1 }),
+        // 입력 확인 다시 시도 번호(열린 재작성 경고에서 팀장이 복구 확인을 누를 때마다 1 증가, 열린 경고가 없으면 0).
+        // Runner는 이력 재작성으로 입력 보고를 멈춘 뒤 이 값이 바뀌면 다시 관측해 보고한다(POST /api/project/inputs/recheck).
+        inputRecheck: c.Count,
         ci: Type.Object(m.CiSettings),
         // Runner가 보고할 Claude 모델(설정값, 초기값=Q-06 승인표). owner 2026-11-26 아이템 8
         claudeModels: List(Type.String(), { minItems: 1, uniqueItems: true }),
