@@ -58,15 +58,16 @@ describe('저장소 주소', () => {
 });
 
 describe('연결 확인', () => {
-  test('fine-grained 토큰: 계정·만료·저장소 권한을 보고하고 비밀값은 싣지 않는다', async () => {
+  test('fine-grained 토큰: 계정·만료는 보고하되 확인 못 한 쓰기 권한을 true로 추정하지 않는다(리뷰 2)', async () => {
     const client = await setup({ login: 'bot', tokenExpiration: '2026-12-20 09:00:00 +0900' });
     const status = await client.checkConnection('token');
     expect(status).toEqual({
       mode: 'token',
-      ok: true,
+      ok: false,
       account: 'bot',
-      scopes: { contents: true, pulls: true, statuses: true, metadata: true },
+      scopes: null,
       expiresAt: '2026-12-20T00:00:00.000Z',
+      error: expect.stringMatching(/인증됨.*확인 안 됨.*M4-06/) as unknown,
     });
     expect(JSON.stringify(status)).not.toContain(TOKEN);
     expect(writes).toEqual([]);
@@ -89,12 +90,31 @@ describe('연결 확인', () => {
     });
   });
 
-  test('쓰기 권한이 없으면 contents·pulls·statuses가 false이고 ok가 아니다', async () => {
+  test('저장소 push가 안 되면 쓰기 권한 없음으로 보고한다', async () => {
     const client = await setup({ permissions: { admin: false, push: false, pull: true } });
     const status = await client.checkConnection('token');
+    expect(status).toMatchObject({ ok: false, scopes: null });
+    expect(status.error).toMatch(/쓰기 권한 없음/);
+  });
+
+  test('리뷰 R2: Contents 쓰기만 있고 Commit statuses 쓰기가 없는 토큰을 정상으로 보고하지 않는다', async () => {
+    const client = await setup({ tokenPermissions: { statuses: 'none' } });
+    const sha = model.push('agent/TASK-0001');
+    const status = await client.checkConnection('token');
+    await expect(client.setCommitStatus({ sha, context: 'agentwbs/task', state: 'pending' })).rejects.toMatchObject({
+      status: 403,
+      retryable: false,
+    });
     expect(status.ok).toBe(false);
-    expect(status.scopes).toEqual({ contents: false, pulls: false, statuses: false, metadata: true });
-    expect(status.error).toMatch(/권한/);
+    expect(status.scopes).toBeNull();
+  });
+
+  test('연결 확인 중 속도 제한이면 던지지 않고 이유를 보고한다', async () => {
+    const client = await setup();
+    model.limitNext(1, 'secondary');
+    const status = await client.checkConnection('token');
+    expect(status).toMatchObject({ ok: false, account: null });
+    expect(status.error).toMatch(/속도 제한/);
   });
 
   test('관리자 권한 자격 증명은 ok가 아니다(일반 병합 자격 증명에 우회 권한 금지)', async () => {
@@ -180,6 +200,15 @@ describe('저장소 확인', () => {
     });
     expect(await other.checkRepository()).toMatchObject({ access: false, private: null, commit: null, structure: null });
   });
+
+  test.each(['primary', 'secondary', 'secondary429'] as const)(
+    '리뷰 R4: 저장소 조회의 속도 제한(%s)은 access=false가 아니라 재시도 오류다',
+    async (kind) => {
+      const client = await setup({ files: FULL });
+      model.limitNext(1, kind);
+      await expect(client.checkRepository()).rejects.toMatchObject({ retryable: true });
+    },
+  );
 
   test('트리가 잘려 있으면 구조를 추정하지 않고 오류로 보고한다', async () => {
     const client = await setup({ files: FULL, truncatedTree: true });
@@ -271,6 +300,46 @@ describe('commit status', () => {
     ]);
   });
 
+  test('리뷰 R6: 100개가 넘는 status도 같은 API 경로의 page를 올려 모두 읽는다', async () => {
+    const sha = model.push('agent/TASK-0001');
+    model.setStatus(sha, 'agentwbs/int', 'success');
+    for (let i = 0; i < 230; i += 1) model.setStatus(sha, 'agentwbs/task', 'pending');
+    const list = await client.listCommitStatuses(sha);
+    expect(list).toHaveLength(231);
+    expect(list.at(-1)).toMatchObject({ context: 'agentwbs/int', state: 'success' });
+    const pages = github.requests.filter((r) => r.path.endsWith('/statuses')).map((r) => r.query);
+    expect(pages).toEqual([
+      { per_page: '100', page: '1' },
+      { per_page: '100', page: '2' },
+      { per_page: '100', page: '3' },
+    ]);
+  });
+
+  test('Link가 다른 주소를 가리켜도 그 주소로 토큰을 보내지 않는다', async () => {
+    const sha = model.push('agent/TASK-0001');
+    const seen: string[] = [];
+    github.on('GET /repos/:owner/:repo/commits/:sha/statuses', (request) => {
+      seen.push(request.query.page ?? '');
+      return request.query.page === '2'
+        ? { body: [{ context: 'agentwbs/int', state: 'success', description: null, target_url: null }] }
+        : {
+            headers: { link: '<http://evil.example/steal?page=2>; rel="next"' },
+            body: Array.from({ length: 100 }, () => ({ context: 'agentwbs/task', state: 'pending', description: null, target_url: null })),
+          };
+    });
+    expect(await client.listCommitStatuses(sha)).toHaveLength(101);
+    expect(seen).toEqual(['1', '2']);
+  });
+
+  test('페이지가 끝없이 이어지면 잘라 내지 않고 오류로 알린다', async () => {
+    const sha = model.push('agent/TASK-0001');
+    github.on('GET /repos/:owner/:repo/commits/:sha/statuses', () => ({
+      headers: { link: `<${github.url}/next>; rel="next"` },
+      body: Array.from({ length: 100 }, () => ({ context: 'agentwbs/task', state: 'pending', description: null, target_url: null })),
+    }));
+    await expect(client.listCommitStatuses(sha)).rejects.toThrow(GitHubError);
+  });
+
   test('허용되지 않은 context·잘못된 SHA는 호출 전에 거부한다', async () => {
     const sha = model.push('agent/TASK-0001');
     await expect(
@@ -356,6 +425,7 @@ describe('오류와 비밀값', () => {
     [502, {}, true],
     [429, { 'retry-after': '7' }, true],
     [403, { 'x-ratelimit-remaining': '0' }, true],
+    [403, { 'retry-after': '5' }, true],
     [403, {}, false],
     [401, {}, false],
     [404, {}, false],
@@ -364,6 +434,39 @@ describe('오류와 비밀값', () => {
     const client = await setup();
     github.on('GET /repos/:owner/:repo/pulls/:number', () => ({ status, headers, body: { message: 'x' } }));
     await expect(client.getPullRequest(1)).rejects.toMatchObject({ status, retryable });
+  });
+
+  test('리뷰 R3: 잔량이 남은 보조 속도 제한 403도 재시도 대상이고 Retry-After를 넘긴다', async () => {
+    const client = await setup();
+    model.limitNext(1, 'secondary');
+    await expect(client.getPullRequest(1)).rejects.toMatchObject({ status: 403, retryable: true, retryAfterSeconds: 60 });
+  });
+
+  test('헤더 없이 본문만 rate limit을 말하는 403도 재시도 대상이다', async () => {
+    const client = await setup();
+    github.on('GET /repos/:owner/:repo/pulls/:number', () => ({
+      status: 403,
+      body: { message: 'You have exceeded a secondary rate limit.' },
+    }));
+    await expect(client.getPullRequest(1)).rejects.toMatchObject({ status: 403, retryable: true, retryAfterSeconds: null });
+  });
+
+  test('기본 속도 제한 403은 x-ratelimit-reset까지 남은 초를 넘긴다', async () => {
+    const client = await setup();
+    model.limitNext(1, 'primary');
+    const error = (await client.getPullRequest(1).catch((e: unknown) => e)) as GitHubError;
+    expect(error).toMatchObject({ status: 403, retryable: true });
+    expect(error.retryAfterSeconds).toBeGreaterThan(100);
+    expect(error.retryAfterSeconds).toBeLessThanOrEqual(121);
+  });
+
+  test('권한 부족 403(속도 제한 신호 없음)은 재시도하지 않는다', async () => {
+    const client = await setup({ tokenPermissions: { pulls: 'read' } });
+    model.push('agent/TASK-0001');
+    await expect(client.ensurePullRequest({ branch: 'agent/TASK-0001', title: 't', body: '' })).rejects.toMatchObject({
+      status: 403,
+      retryable: false,
+    });
   });
 
   test('429의 Retry-After를 넘긴다', async () => {

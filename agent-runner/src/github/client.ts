@@ -91,10 +91,14 @@ export type MergeOutcome =
   | { kind: 'head_changed'; status: 409; message: string }
   /** 405: main 이동·필수 검사 미충족 등 strict 보호가 거부. */
   | { kind: 'rejected'; status: 405; message: string }
-  /** 응답 유실 뒤 대조해 보니 병합되지 않았다. */
-  | { kind: 'not_merged'; reconciled: true }
-  /** 응답도 대조도 실패했다. 결과를 모른다. */
-  | { kind: 'unknown'; error: string };
+  /**
+   * 결과를 모른다. 「병합 안 됨」을 확정하는 결과는 일부러 두지 않는다.
+   * 타임아웃은 GitHub 쪽 처리를 취소하지 않으므로, 열린 PR을 한 번 읽었다고 늦게 적용될 병합이 없다고 말할 수 없다.
+   * 호출자는 이 상태의 병합을 다음 작업으로 넘기지 말고 `reconcileMerge()`(쓰기 없음)로 다시 대조한다.
+   * - `open`·`closed`: 대조 때 본 PR 상태(아직 병합 안 됨으로 보임)
+   * - `read_failed`: 대조 조회 자체가 실패
+   */
+  | { kind: 'unknown'; observed: 'open' | 'closed' | 'read_failed'; error?: string };
 
 export class GitHubError extends Error {
   override name = 'GitHubError';
@@ -148,6 +152,13 @@ function truncate(text: string, max: number): string {
   return chars.length <= max ? text : `${chars.slice(0, max - 1).join('')}…`;
 }
 
+interface StatusJson {
+  context: string;
+  state: string;
+  description: string | null;
+  target_url: string | null;
+}
+
 interface Raw {
   status: number;
   body: unknown;
@@ -178,6 +189,32 @@ function toPull(json: PullJson): PullRequest {
   };
 }
 
+/**
+ * 속도 제한 판정(공식 문서 「Exceeding the rate limit」).
+ * - 429는 항상 속도 제한이다.
+ * - 403은 `Retry-After`가 있거나(보조 제한), `x-ratelimit-remaining: 0`이거나(기본 제한),
+ *   본문이 rate limit을 말할 때만 속도 제한이다. 그 밖의 403(권한 부족)은 재시도하지 않는다.
+ * - 기다릴 시간: `Retry-After` 초, 없으면 `x-ratelimit-reset`(UTC 초)까지 남은 시간.
+ */
+function rateLimit(raw: Raw): { limited: boolean; retryAfterSeconds: number | null } {
+  const retryAfter = Number(raw.headers.get('retry-after') ?? NaN);
+  const hasRetryAfter = Number.isFinite(retryAfter) && retryAfter > 0;
+  const message = String((raw.body as { message?: unknown } | undefined)?.message ?? '');
+  const limited =
+    raw.status === 429 ||
+    (raw.status === 403 &&
+      (hasRetryAfter || raw.headers.get('x-ratelimit-remaining') === '0' || /rate limit/i.test(message)));
+  if (hasRetryAfter) return { limited, retryAfterSeconds: retryAfter };
+  const reset = Number(raw.headers.get('x-ratelimit-reset') ?? NaN);
+  if (limited && Number.isFinite(reset)) {
+    return { limited, retryAfterSeconds: Math.max(1, Math.ceil(reset - Date.now() / 1000)) };
+  }
+  return { limited, retryAfterSeconds: null };
+}
+
+/** status 목록을 읽을 최대 페이지. 100개×50 = 5000개(한 SHA·context 상한 1000개 × context 4종을 넘는다). */
+const MAX_STATUS_PAGES = 50;
+
 export function createGitHubClient(options: GitHubClientOptions) {
   const { repo, token, baseUrl = 'https://api.github.com', fetch: send = fetch, timeoutMs = 30_000 } = options;
   const beforeWrite = options.beforeWrite ?? (() => Promise.resolve());
@@ -187,14 +224,8 @@ export function createGitHubClient(options: GitHubClientOptions) {
   const failure = (raw: Raw, what: string): GitHubError => {
     const message = (raw.body as { message?: unknown } | undefined)?.message;
     const text = redact(`${what}: ${String(raw.status)} ${typeof message === 'string' ? message : ''}`.trim());
-    const retryAfter = Number(raw.headers.get('retry-after'));
-    const rateLimited = raw.status === 429 || (raw.status === 403 && raw.headers.get('x-ratelimit-remaining') === '0');
-    return new GitHubError(
-      text,
-      raw.status,
-      raw.status >= 500 || rateLimited,
-      Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : null,
-    );
+    const limit = rateLimit(raw);
+    return new GitHubError(text, raw.status, raw.status >= 500 || limit.limited, limit.retryAfterSeconds);
   };
 
   /** 응답 상태와 관계없이 돌려준다. 통신 실패만 던진다. */
@@ -261,7 +292,11 @@ export function createGitHubClient(options: GitHubClientOptions) {
     try {
       [merge, head] = await Promise.all([commitOf(mergeSha), commitOf(headSha)]);
     } catch (error) {
-      return { kind: 'unknown', error: redact(`병합 커밋 확인 실패: ${error instanceof Error ? error.message : String(error)}`) };
+      return {
+        kind: 'unknown',
+        observed: 'read_failed',
+        error: redact(`병합 커밋 확인 실패: ${error instanceof Error ? error.message : String(error)}`),
+      };
     }
     const parents = merge.parents.map((p) => p.sha);
     if (parents.length !== 2 || parents[0] !== baseSha || parents[1] !== headSha) {
@@ -273,15 +308,26 @@ export function createGitHubClient(options: GitHubClientOptions) {
     return { kind: 'merged', mergeSha, treeSha: merge.tree.sha, ...extra };
   };
 
+  const checkMergeInput = ({ pr, baseSha, headSha }: { pr: number; baseSha: string; headSha: string }) => {
+    if (!Number.isSafeInteger(pr) || pr < 1) throw invalid('PR 번호가 올바르지 않습니다.');
+    if (!SHA.test(baseSha) || !SHA.test(headSha)) throw invalid('A·H′는 40자리 소문자 SHA여야 합니다.');
+    if (baseSha === headSha) throw invalid('H′가 A와 같으면 병합할 변경이 없습니다.');
+  };
+
+  /** 쓰기 없이 PR을 읽어 병합 결과를 대조한다. 병합이 보이지 않으면 확정하지 않고 unknown이다. */
   const reconcileMerge = async (pr: number, baseSha: string, headSha: string): Promise<MergeOutcome> => {
     let pull: PullRequest;
     try {
       pull = await getPullRequest(pr);
     } catch (error) {
-      return { kind: 'unknown', error: redact(`병합 대조 실패: ${error instanceof Error ? error.message : String(error)}`) };
+      return {
+        kind: 'unknown',
+        observed: 'read_failed',
+        error: redact(`병합 대조 실패: ${error instanceof Error ? error.message : String(error)}`),
+      };
     }
-    if (!pull.merged) return { kind: 'not_merged', reconciled: true };
-    if (!pull.mergeCommitSha) return { kind: 'unknown', error: '병합됐지만 병합 커밋 SHA가 없음' };
+    if (!pull.merged) return { kind: 'unknown', observed: pull.state };
+    if (!pull.mergeCommitSha) return { kind: 'unknown', observed: 'read_failed', error: '병합됐지만 병합 커밋 SHA가 없음' };
     return verifyMerge(pull.mergeCommitSha, baseSha, headSha, true);
   };
 
@@ -306,6 +352,7 @@ export function createGitHubClient(options: GitHubClientOptions) {
         return fail(error instanceof Error ? error.message : '통신 실패');
       }
       if (user.status === 401) return fail('인증 실패(401): 토큰이 틀렸거나 만료·폐기됨');
+      if (rateLimit(user).limited) return fail(`GitHub 속도 제한: 잠시 뒤 다시 확인 (${failure(user, 'GET /user').message})`);
       if (user.status !== 200) return fail(failure(user, 'GET /user').message);
       const account = (user.body as { login?: string }).login ?? null;
       const expiresAt = parseExpiration(user.headers.get('github-authentication-token-expiration'));
@@ -315,35 +362,43 @@ export function createGitHubClient(options: GitHubClientOptions) {
       } catch (error) {
         return fail(error instanceof Error ? error.message : '통신 실패', { account, expiresAt });
       }
+      if (rateLimit(repository).limited) {
+        return fail(`GitHub 속도 제한: 잠시 뒤 다시 확인 (${failure(repository, 'GET 저장소').message})`, { account, expiresAt });
+      }
       if (repository.status !== 200) {
         return fail(`저장소에 접근할 수 없음(${String(repository.status)})`, { account, expiresAt });
       }
       const permissions = (repository.body as { permissions?: { admin?: boolean; push?: boolean; pull?: boolean } }).permissions ?? {};
-      const oauth = user.headers.get('x-oauth-scopes');
-      let scopes: NonNullable<ConnectionStatus['scopes']>;
-      if (oauth !== null) {
-        // classic 토큰·gh OAuth 토큰: `repo` 범위가 네 권한을 모두 포함한다.
-        const has = oauth.split(',').map((s) => s.trim()).includes('repo');
-        scopes = { contents: has, pulls: has, statuses: has, metadata: has };
-      } else {
-        // fine-grained 토큰은 토큰 권한을 직접 조회하는 API가 없어 저장소 권한으로 추정한다(M4-06 실증 대상).
-        const push = permissions.push === true;
-        scopes = { contents: push, pulls: push, statuses: push, metadata: permissions.pull === true };
+      if (permissions.admin === true) {
+        return fail('관리자 권한 자격 증명은 쓰지 않음(보호 규칙 우회 가능). 관리자가 아닌 별도 계정/앱 필요', { account, expiresAt });
       }
+      const oauth = user.headers.get('x-oauth-scopes');
+      if (oauth === null) {
+        // fine-grained 토큰: 토큰에 실제로 준 권한 목록을 돌려주는 API가 없다.
+        // 저장소 permissions는 계정의 권한이고, X-Accepted-GitHub-Permissions는 API가 「요구하는」 권한일 뿐이다.
+        // 확인하지 못한 권한을 true로 추정하지 않는다(README 권한 근거 표, M4-06 실증 항목).
+        if (permissions.push !== true) return fail('쓰기 권한 없음: 이 계정은 저장소에 push할 수 없음', { account, expiresAt });
+        return fail(
+          '인증됨, 쓰기 권한(Contents·Pull requests·Commit statuses) 확인 안 됨: fine-grained 토큰은 부여된 권한을 조회할 수 없음(M4-06 실증 항목)',
+          { account, expiresAt },
+        );
+      }
+      // classic 토큰·gh OAuth 토큰: `repo` 범위가 네 권한을 모두 포함한다(OAuth scopes 문서).
+      const has = oauth.split(',').map((s) => s.trim()).includes('repo');
+      const scopes = { contents: has, pulls: has, statuses: has, metadata: has };
       const missing = Object.entries(scopes)
         .filter(([, value]) => !value)
         .map(([name]) => name);
       const base = { mode, account, scopes, expiresAt };
       if (missing.length > 0) return { ...base, ok: false, error: `필요한 권한 부족: ${missing.join(', ')}` };
-      if (permissions.admin === true) {
-        return { ...base, ok: false, error: '관리자 권한 자격 증명은 쓰지 않음(보호 규칙 우회 가능). 관리자가 아닌 별도 계정/앱 필요' };
-      }
       return { ...base, ok: true };
     },
 
     /** 프로젝트 등록의 「저장소 접근 확인」(G L233). 일시 장애(재시도 가능)는 던진다. */
     async checkRepository(): Promise<RepositoryCheck> {
       const repository = await call('GET', repoPath);
+      // 속도 제한 403은 접근 불가가 아니다. 재시도할 수 있게 던진다.
+      if (rateLimit(repository).limited) throw failure(repository, 'GET 저장소');
       if ([401, 403, 404].includes(repository.status)) {
         return { access: false, private: null, commit: null, structure: null, error: failure(repository, 'GET 저장소').message };
       }
@@ -428,11 +483,20 @@ export function createGitHubClient(options: GitHubClientOptions) {
 
     async listCommitStatuses(sha: string): Promise<CommitStatus[]> {
       if (!SHA.test(sha)) throw invalid('commit SHA 형식이 올바르지 않습니다.');
-      const list = await ok<{ context: string; state: string; description: string | null; target_url: string | null }[]>(
-        'GET',
-        `${repoPath}/commits/${sha}/statuses`,
-        { query: { per_page: '100' } },
-      );
+      const list: StatusJson[] = [];
+      // Link 헤더의 주소를 그대로 따라가지 않는다(토큰을 다른 주소로 보내지 않게). 같은 경로에서 page만 올린다.
+      for (let page = 1; ; page += 1) {
+        if (page > MAX_STATUS_PAGES) {
+          throw new GitHubError(`status가 ${String(MAX_STATUS_PAGES)}페이지를 넘어 모두 읽지 못함`, -1, false);
+        }
+        const raw = await call('GET', `${repoPath}/commits/${sha}/statuses`, {
+          query: { per_page: '100', page: String(page) },
+        });
+        if (raw.status !== 200) throw failure(raw, 'GET statuses');
+        const items = raw.body as StatusJson[];
+        list.push(...items);
+        if (!/rel="next"/.test(raw.headers.get('link') ?? '') || items.length === 0) break;
+      }
       return list.map((s) => ({ context: s.context, state: s.state, description: s.description, targetUrl: s.target_url }));
     },
 
@@ -442,9 +506,7 @@ export function createGitHubClient(options: GitHubClientOptions) {
      */
     async mergePullRequest(input: { pr: number; baseSha: string; headSha: string }): Promise<MergeOutcome> {
       const { pr, baseSha, headSha } = input;
-      if (!Number.isSafeInteger(pr) || pr < 1) throw invalid('PR 번호가 올바르지 않습니다.');
-      if (!SHA.test(baseSha) || !SHA.test(headSha)) throw invalid('A·H′는 40자리 소문자 SHA여야 합니다.');
-      if (baseSha === headSha) throw invalid('H′가 A와 같으면 병합할 변경이 없습니다.');
+      checkMergeInput(input);
       await beforeWrite({ kind: 'merge', pr, headSha });
       let raw: Raw;
       try {
@@ -462,6 +524,15 @@ export function createGitHubClient(options: GitHubClientOptions) {
       if (raw.status === 405) return { kind: 'rejected', status: 405, message };
       if (raw.status >= 500) return reconcileMerge(pr, baseSha, headSha);
       throw failure(raw, 'PUT merge');
+    },
+
+    /**
+     * 병합 결과를 **쓰기 없이** 다시 대조한다. `unknown`이었던 병합을 해소할 때 쓴다(contracts §3.4-6).
+     * 병합이 보이면 merged/verify_failed, 아직 안 보이면 다시 unknown이다. 횟수·시간이 찼다고 「효과 없음」을 확정하지 않는다.
+     */
+    async reconcileMerge(input: { pr: number; baseSha: string; headSha: string }): Promise<MergeOutcome> {
+      checkMergeInput(input);
+      return reconcileMerge(input.pr, input.baseSha, input.headSha);
     },
   };
 }

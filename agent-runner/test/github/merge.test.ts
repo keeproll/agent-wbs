@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { createGitHubClient, GitHubError, type WriteOperation } from '../../src/github/client.ts';
 import { Secret } from '../../src/security/secret.ts';
 import { GitHubModel, type ModelOptions } from '../fakes/github/model.ts';
@@ -11,7 +11,7 @@ let github: FakeGitHub;
 let model: GitHubModel;
 let writes: { op: WriteOperation; requestsBefore: number }[];
 
-async function setup(options: ModelOptions = {}) {
+async function setup(options: ModelOptions = {}, timeoutMs = 30_000) {
   github = await startFakeGitHub(TOKEN);
   model = new GitHubModel(options);
   model.install(github);
@@ -20,6 +20,7 @@ async function setup(options: ModelOptions = {}) {
     baseUrl: github.url,
     repo: { owner: model.owner, repo: model.repo },
     token: () => Promise.resolve(new Secret(TOKEN)),
+    timeoutMs,
     beforeWrite: (op) => {
       writes.push({ op, requestsBefore: github.requests.length });
       return Promise.resolve();
@@ -114,13 +115,83 @@ describe('PR 병합 — strict + 예상 head 단일 경로 (contracts §4.1 코�
     expect(nonGet()).toHaveLength(1);
   });
 
-  test('응답 유실 뒤 대조해 보니 병합되지 않았으면 not_merged (다시 호출하지 않음)', async () => {
+  test('응답 유실 뒤 열린 PR만 보이면 「병합 안 됨」으로 확정하지 않고 unknown(다시 호출하지 않음)', async () => {
     const { client, head, base } = await setup();
     model.setStatus(head, 'agentwbs/int', 'success');
     github.on('PUT /repos/:owner/:repo/pulls/:number/merge', () => ({ drop: true }));
     const outcome = await client.mergePullRequest({ pr: 1, baseSha: base, headSha: head });
-    expect(outcome).toMatchObject({ kind: 'not_merged', reconciled: true });
+    expect(outcome).toMatchObject({ kind: 'unknown', observed: 'open' });
     expect(nonGet()).toHaveLength(1);
+  });
+
+  test('리뷰 R1: 타임아웃 뒤 늦게 적용되는 병합 — unknown으로 남기고, 쓰기 없는 재대조로 merged를 확인한다', async () => {
+    const { client, head, base } = await setup({}, 100);
+    model.setStatus(head, 'agentwbs/int', 'success');
+    const release = model.holdMerges();
+    const outcome = await client.mergePullRequest({ pr: 1, baseSha: base, headSha: head });
+    expect(outcome).toMatchObject({ kind: 'unknown', observed: 'open' });
+    expect(model.pulls.get(1)?.merged).toBe(false);
+    release();
+    await vi.waitFor(() => {
+      expect(model.pulls.get(1)?.merged).toBe(true);
+    });
+    const writesBefore = writes.length;
+    const later = await client.reconcileMerge({ pr: 1, baseSha: base, headSha: head });
+    expect(later).toMatchObject({ kind: 'merged', mergeSha: model.branches.get('main'), reconciled: true });
+    expect(nonGet()).toHaveLength(1);
+    expect(writes).toHaveLength(writesBefore);
+  });
+
+  test('조회 반영이 늦어 병합 직후 PR이 열린 것으로 보여도 not_merged로 확정하지 않는다', async () => {
+    const { client, head, base } = await setup();
+    model.setStatus(head, 'agentwbs/int', 'success');
+    model.dropNextMerge = true;
+    model.pullReadLag = 1;
+    expect(await client.mergePullRequest({ pr: 1, baseSha: base, headSha: head })).toMatchObject({
+      kind: 'unknown',
+      observed: 'open',
+    });
+    expect(model.pulls.get(1)?.merged).toBe(true);
+    expect(await client.reconcileMerge({ pr: 1, baseSha: base, headSha: head })).toMatchObject({ kind: 'merged' });
+  });
+
+  test('닫힌 채 병합되지 않은 PR도 관찰 결과만 알려 주고 확정하지 않는다', async () => {
+    const { client, head, base } = await setup();
+    model.setStatus(head, 'agentwbs/int', 'success');
+    github.on('PUT /repos/:owner/:repo/pulls/:number/merge', () => {
+      const pull = model.pulls.get(1);
+      if (pull) pull.state = 'closed';
+      return { drop: true };
+    });
+    expect(await client.mergePullRequest({ pr: 1, baseSha: base, headSha: head })).toMatchObject({
+      kind: 'unknown',
+      observed: 'closed',
+    });
+  });
+
+  test('reconcileMerge 입력도 호출 전에 검사한다', async () => {
+    const { client } = await setup();
+    await expect(client.reconcileMerge({ pr: 1, baseSha: 'x', headSha: 'y' })).rejects.toThrow(GitHubError);
+    expect(github.requests).toEqual([]);
+  });
+
+  test('리뷰 R7: 병합 422는 재시도 불가 오류이고 PUT은 한 번뿐', async () => {
+    const { client, head, base } = await setup();
+    github.on('PUT /repos/:owner/:repo/pulls/:number/merge', () => ({ status: 422, body: { message: 'Validation Failed' } }));
+    await expect(client.mergePullRequest({ pr: 1, baseSha: base, headSha: head })).rejects.toMatchObject({
+      status: 422,
+      retryable: false,
+    });
+    expect(nonGet()).toHaveLength(1);
+  });
+
+  test('Contents 쓰기 권한이 없으면 병합 403은 재시도 불가 오류', async () => {
+    const { client, head, base } = await setup({ tokenPermissions: { contents: 'read' } });
+    model.setStatus(head, 'agentwbs/int', 'success');
+    await expect(client.mergePullRequest({ pr: 1, baseSha: base, headSha: head })).rejects.toMatchObject({
+      status: 403,
+      retryable: false,
+    });
   });
 
   test('5xx도 결과를 모르는 것으로 보고 대조한다', async () => {
