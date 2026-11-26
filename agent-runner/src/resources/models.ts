@@ -11,9 +11,43 @@ export type ModelEntry = ModelsReport['models'][number];
  * 공통 단계(1~5) 매핑·ultra 제외·미확인 처리는 서버의 owner 승인표(Q-06)가 한다(contracts §3.1).
  * rank는 「높을수록 위 등급」(shared grade `escalate`가 rank가 큰 모델로 상향한다).
  *
- * **rank의 출처는 owner 결정 대기다.** 설정 `rankOrder`(앞이 위 등급)를 주면 그 순서를 쓰고,
- * 없을 때만 잠정 기본값(Codex: 목록의 priority, Claude: 설정한 모델 ID 순서)을 쓴다. 기본값을 정답으로 보지 않는다.
+ * **owner 결정(2026-11-26 아이템 8)**: rank는 서버가 가진 설정값이고 팀장이 바꿀 수 있다. Runner는 그 초기값으로 보고만 한다.
+ * - CLI 목록의 표시 순서(priority)는 rank로 쓰지 않는다.
+ * - Codex 초기값: 세대가 높을수록 위(5.6 < 6 < 6.1 < 6.2), 같은 세대는 luna < terra < astra < sol.
+ * - Claude 초기값: Q-06 승인표의 모델, Haiku 5.5 < Sonnet 5.5 < Opus 5.5 < Fable 5.2.
+ * 설정 `rankOrder`(앞이 위)를 주면 그 순서가 우선한다.
  */
+
+/** Runner 모델 보고의 초기 설정값. 바꾸려면 설정으로 덮어쓴다(코드의 판단 규칙이 아니다). */
+export const DEFAULT_MODEL_SETTINGS = {
+  /** Q-06 승인표의 Claude 모델, 위 등급부터. 표에 없는 새 모델은 서버가 「미허용」으로만 등록한다. */
+  claudeModelIds: ['claude-fable-5-2', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'],
+  /** 같은 세대 안 Codex 계열 순서, 아래 등급부터 */
+  codexFamilyOrder: ['luna', 'terra', 'astra', 'sol'],
+} as const;
+
+/**
+ * Codex 모델 ID를 위 등급부터 줄 세운다. 이름 `gpt-<세대>[-<계열>]`을 읽는다.
+ * 계열이 없거나 모르는 계열은 그 세대의 맨 아래, 세대를 읽을 수 없는 이름은 전체 맨 아래(들어온 순서 유지)에 둔다[결정].
+ */
+export function codexRankOrder(ids: readonly string[], familyOrder: readonly string[] = DEFAULT_MODEL_SETTINGS.codexFamilyOrder): string[] {
+  const keyOf = (id: string) => {
+    const m = /^gpt-(\d+(?:\.\d+)*)(?:-([a-z]+))?/.exec(id);
+    if (!m?.[1]) return null;
+    return { gen: m[1].split('.').map(Number), family: m[2] ? familyOrder.indexOf(m[2]) : -1 };
+  };
+  const cmp = (a: string, b: string): number => {
+    const ka = keyOf(a);
+    const kb = keyOf(b);
+    if (!ka || !kb) return (ka ? 0 : 1) - (kb ? 0 : 1);
+    for (let i = 0; i < Math.max(ka.gen.length, kb.gen.length); i += 1) {
+      const d = (kb.gen[i] ?? 0) - (ka.gen[i] ?? 0);
+      if (d !== 0) return d;
+    }
+    return kb.family - ka.family;
+  };
+  return [...ids].sort(cmp);
+}
 
 /** rankOrder에 적힌 모델을 그 순서대로 앞에, 나머지는 원래 순서대로 뒤에 둔다. */
 function orderBy<T extends { id: string }>(items: T[], rankOrder: readonly string[] | undefined): T[] {
@@ -28,28 +62,29 @@ interface CodexModel {
   slug: string;
   display_name?: string;
   visibility?: string;
-  priority?: number;
   supported_reasoning_levels?: { effort?: unknown }[];
 }
 
 const uniqueStrings = (values: unknown[]): string[] => [...new Set(values.filter((v): v is string => typeof v === 'string' && v !== ''))];
 
-/** `codex debug models --bundled` JSON. 목록에 보이는(`visibility: list`) 모델만, priority가 작을수록 위 등급. */
-export function parseCodexCatalog(text: string, { rankOrder }: { rankOrder?: readonly string[] | undefined } = {}): ModelEntry[] {
+/** `codex debug models --bundled` JSON. 목록에 보이는(`visibility: list`) 모델만 보낸다. rank는 위 규칙(설정)을 따른다. */
+export function parseCodexCatalog(
+  text: string,
+  { rankOrder, familyOrder }: { rankOrder?: readonly string[] | undefined; familyOrder?: readonly string[] | undefined } = {},
+): ModelEntry[] {
   const data = JSON.parse(text) as { models?: unknown };
   if (!Array.isArray(data.models)) throw new Error('Codex 모델 목록 형식이 아닙니다(models 없음).');
   const models = data.models as CodexModel[];
   for (const m of models) {
     if (typeof m.slug !== 'string' || m.slug === '') throw new Error('Codex 모델 목록 형식이 아닙니다(slug 없음).');
   }
-  const listed = models
-    .filter((m) => m.visibility === 'list')
-    .sort((a, b) => (a.priority ?? Number.MAX_SAFE_INTEGER) - (b.priority ?? Number.MAX_SAFE_INTEGER));
+  const listed = models.filter((m) => m.visibility === 'list');
   const entries = listed.map((m) => {
     const efforts = uniqueStrings((m.supported_reasoning_levels ?? []).map((l) => l.effort));
     return { id: m.slug, label: m.display_name || m.slug, efforts: efforts.length ? efforts : null };
   });
-  return withRanks(orderBy(entries, rankOrder));
+  const order = rankOrder?.length ? rankOrder : codexRankOrder(entries.map((e) => e.id), familyOrder);
+  return withRanks(orderBy(entries, order));
 }
 
 /** `claude --help`의 `--effort <level> … (low, medium, …)`. 설명이 다음 줄로 넘어가도 다음 옵션 전까지 읽는다. */
@@ -68,7 +103,7 @@ export function parseClaudeEfforts(help: string): string[] | null {
 }
 
 /**
- * Claude Code CLI에는 무료 모델 목록 명령이 없다. 그래서 운영자가 설정한 모델 ID(앞일수록 위 등급)를
+ * Claude 모델 목록은 설정값(owner 결정: Q-06 승인표의 모델이 초기값)이다. 앞일수록 위 등급이며
  * 도움말의 Effort 값과 함께 보낸다. CLI에서 모델별 지원은 확인할 수 없다(Q-06 「CLI에서 모델별 동작은 미확인」).
  */
 export function claudeModels(ids: readonly string[], efforts: string[] | null, rankOrder?: readonly string[]): ModelEntry[] {
@@ -80,10 +115,12 @@ export interface ModelProbe {
   run: RunCommand;
   codex: string;
   claude: string;
-  /** Claude 모델 ID(앞일수록 위 등급). 수집 경로는 owner 결정 대기라 설정으로 받는다. */
-  claudeModelIds: readonly string[];
-  /** Agent별 등급 순서(앞이 위). 없으면 잠정 기본값. */
+  /** Claude 모델 ID(앞일수록 위 등급). 없으면 `DEFAULT_MODEL_SETTINGS.claudeModelIds`. 빈 배열이면 보고하지 않는다. */
+  claudeModelIds?: readonly string[];
+  /** Agent별 등급 순서(앞이 위). 없으면 초기 설정 규칙. */
   rankOrder?: Partial<Record<Agent, readonly string[]>>;
+  /** Codex 같은 세대 안 계열 순서(아래부터). 없으면 초기 설정값. */
+  codexFamilyOrder?: readonly string[];
   /**
    * Claude Effort 출처. `help`(잠정 기본값): 도움말의 값을 모든 설정 모델에 붙인다.
    * `unknown`: 모델별 지원을 확인하지 못했으므로 null(미확인)로 보낸다.
@@ -96,12 +133,13 @@ export async function collectModels(agent: Agent, p: ModelProbe): Promise<Models
   if (agent === 'Codex') {
     const r = await p.run(p.codex, ['debug', 'models', '--bundled']);
     if (r.code !== 0) return null;
-    const models = parseCodexCatalog(r.stdout, { rankOrder: p.rankOrder?.Codex });
+    const models = parseCodexCatalog(r.stdout, { rankOrder: p.rankOrder?.Codex, familyOrder: p.codexFamilyOrder });
     return models.length ? { agent, models } : null;
   }
-  if (p.claudeModelIds.every((id) => id.trim() === '')) return null;
-  if (p.claudeEfforts === 'unknown') return { agent, models: claudeModels(p.claudeModelIds, null, p.rankOrder?.Claude) };
+  const ids = p.claudeModelIds ?? DEFAULT_MODEL_SETTINGS.claudeModelIds;
+  if (ids.every((id) => id.trim() === '')) return null;
+  if (p.claudeEfforts === 'unknown') return { agent, models: claudeModels(ids, null, p.rankOrder?.Claude) };
   const r = await p.run(p.claude, ['--help']);
   if (r.code !== 0) return null;
-  return { agent, models: claudeModels(p.claudeModelIds, parseClaudeEfforts(r.stdout), p.rankOrder?.Claude) };
+  return { agent, models: claudeModels(ids, parseClaudeEfforts(r.stdout), p.rankOrder?.Claude) };
 }
