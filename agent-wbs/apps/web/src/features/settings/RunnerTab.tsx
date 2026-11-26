@@ -99,12 +99,16 @@ function GithubCard({ repoUrl }: { repoUrl: string | null }) {
     },
     successNotice: '토큰을 저장했습니다 — 서버에 암호화해 보관하고 다시 표시하지 않습니다.',
     mine: '새 토큰 저장',
-    onConflictReload: async ({ signal }) => { gh.apply(await load(signal)); },
-    onConflictReapply: async () => {
+    onConflictReload: async ({ signal }) => {
+      const latest = await load(signal);
+      if (signal.aborted) return;
+      gh.apply(latest);
+    },
+    // 다시 적용도 공통 useSave 경로(reapplyRequest)로 보낸다. 최신 버전 위에 같은 토큰을 보내고,
+    // 응답을 잃으면 같은 내용·같은 키로만 다시 보낸다(리뷰 624c334 지적 2, M3-04 0dcb8db).
+    reapplyRequest: async () => {
       const latest = await load();
-      const result = await client.call('putGithubSettings', { body: { updatedAt: latest.updatedAt, mode: 'token', token: token.trim() } });
-      gh.apply(result);
-      setToken('');
+      return { token: token.trim(), updatedAt: latest.updatedAt };
     },
   });
   const check = useSave<ResponseOf<'checkGithub'>>({
@@ -200,9 +204,7 @@ function ConnectionCard({ runner }: { runner: RunnerState | undefined }) {
     label: '실행 중 세션 전달',
     query, queryKey, load,
     toForm: (d) => ({ liveInject: d.liveInject }),
-    send: async (form, updatedAt) => {
-      const latest = query.data;
-      if (!latest) throw new Error('설정을 아직 읽지 못했습니다.');
+    send: (form, updatedAt, latest) => {
       return client.call('putWorkflowSettings', {
         body: { updatedAt, devAgent: latest.devAgent, qaAgent: latest.qaAgent, liveInject: form.liveInject, heartbeatSeconds: latest.heartbeatSeconds, missedHeartbeats: latest.missedHeartbeats },
       });

@@ -40,9 +40,7 @@ function WorkflowCard() {
     label: 'Agent 역할',
     ...q,
     toForm: (d) => ({ devAgent: String(d.devAgent) as AgentName, qaAgent: String(d.qaAgent) as AgentName }),
-    send: async (form, updatedAt) => {
-      const d = q.query.data;
-      if (!d) throw new Error('설정을 아직 읽지 못했습니다.');
+    send: (form, updatedAt, d) => {
       return client.call('putWorkflowSettings', {
         body: { updatedAt, devAgent: form.devAgent, qaAgent: form.qaAgent, liveInject: d.liveInject, heartbeatSeconds: d.heartbeatSeconds, missedHeartbeats: d.missedHeartbeats },
       });
@@ -95,12 +93,22 @@ function modelForm(d: ModelData): ModelForm {
   };
 }
 
-/** 화면 순서: 위 등급부터. 순서 목록(아래부터)에 있는 모델을 먼저, 없는 모델은 서버 rank 순으로 뒤에 둔다. */
+/**
+ * 화면 순서: 위 등급부터. 기준은 설정값인 순서 목록(rankOrder, 아래부터)이다(owner 2026-11-26 아이템 8).
+ * - Runner가 아직 보고하지 않은 모델도 순서 목록에 있으면 보인다(「보고 전」). 새 설치에서도 초기 순서를 보고 바꿀 수 있어야 한다(리뷰 624c334 지적 4).
+ * - 보고됐지만 순서 목록에 없는 모델은 서버 rank 순으로 아래에 둔다(「순서 없음」).
+ * - 보고 전 모델은 허용을 바꿀 수 없다. 순서만 바꾸고 허용 모델을 임의로 늘리지 않는다.
+ */
 function orderedModels(d: ModelData, form: ModelForm, agent: AgentName) {
   const order = form.rankOrder[agent];
   const own = d.models.filter((m) => m.agent === agent);
-  const rankOf = (id: string, fallback: number) => (order.includes(id) ? order.indexOf(id) + 1 : fallback);
-  return own.map((m) => ({ ...m, rank: rankOf(m.id, m.rank), listed: order.includes(m.id) })).sort((a, b) => b.rank - a.rank);
+  const listed = [...order].reverse().map((id, i) => {
+    const reported = own.find((m) => m.id === id);
+    return { id, label: reported?.label ?? id, rank: order.length - i, listed: true, reported: reported ?? null };
+  });
+  const unlisted = own.filter((m) => !order.includes(m.id)).sort((a, b) => b.rank - a.rank)
+    .map((m) => ({ id: m.id, label: m.label, rank: m.rank, listed: false, reported: m }));
+  return [...listed, ...unlisted];
 }
 
 function ExecPolicyCard() {
@@ -120,13 +128,12 @@ function ExecPolicyCard() {
       }
       return null;
     },
-    send: (form, updatedAt) => {
-      const d = mq.query.data;
-      const rankChanged = !d || JSON.stringify(form.rankOrder) !== JSON.stringify({ Claude: d.rankOrder.Claude, Codex: d.rankOrder.Codex });
+    send: (form, updatedAt, d) => {
+      const rankChanged = JSON.stringify(form.rankOrder) !== JSON.stringify({ Claude: d.rankOrder.Claude, Codex: d.rankOrder.Codex });
       return client.call('putModelSettings', {
         body: {
           updatedAt,
-          models: (d?.models ?? []).map((m) => ({ agent: m.agent, id: m.id, allowed: form.allowed[modelKey(String(m.agent), m.id)] ?? m.allowed })),
+          models: d.models.map((m) => ({ agent: m.agent, id: m.id, allowed: form.allowed[modelKey(String(m.agent), m.id)] ?? m.allowed })),
           ...(rankChanged ? { rankOrder: form.rankOrder } : {}),
         },
       });
@@ -162,7 +169,7 @@ function ExecPolicyCard() {
           {d && models.form && AGENTS.map((agent) => {
             const rows = orderedModels(d, models.form as ModelForm, agent);
             const mark = agentMark(agent);
-            const efforts = rows.find((m) => m.efforts)?.efforts ?? null;
+            const efforts = rows.find((m) => m.reported?.efforts)?.reported?.efforts ?? null;
             return (
               <div key={agent} className="agbox">
                 <div className="dp-h" style={{ margin: '0 0 6px' }}>
@@ -172,11 +179,12 @@ function ExecPolicyCard() {
                 <TableScroll minWidth={520} label={`${agent} 모델 표`}>
                   <div className="gtb" style={{ margin: 0 }}>
                     <div className="gtr h" style={{ gridTemplateColumns: 'minmax(110px,1fr) 96px 148px 84px', minWidth: 0 }}><span className="gc">모델</span><span className="gc">순위</span><span className="gc">상태</span><span className="gc" /></div>
-                    {rows.length === 0 && <div className="gtr"><span className="gc muted">아직 Runner가 보고한 모델이 없습니다. Runner가 연결되면 사용 가능한 모델을 보고합니다.</span></div>}
+                    {rows.length === 0 && <div className="gtr"><span className="gc muted">설정된 모델 순서도, Runner가 보고한 모델도 없습니다. Runner가 연결되면 사용 가능한 모델을 보고합니다.</span></div>}
                     {rows.map((m) => {
                       const key = modelKey(agent, m.id);
-                      const allowed = models.form?.allowed[key] ?? m.allowed;
-                      const st = allowed ? { l: '허용', c: 'sc sc-ok' } : m.isNew ? { l: '신규 보고 — 미허용', c: 'sc sc-warn' } : { l: '미허용', c: 'sc sc-none' };
+                      const allowed = m.reported ? (models.form?.allowed[key] ?? m.reported.allowed) : false;
+                      const st = !m.reported ? { l: '보고 전', c: 'sc sc-none' }
+                        : allowed ? { l: '허용', c: 'sc sc-ok' } : m.reported.isNew ? { l: '신규 보고 — 미허용', c: 'sc sc-warn' } : { l: '미허용', c: 'sc sc-none' };
                       const order = models.form?.rankOrder[agent] ?? [];
                       const pos = order.indexOf(m.id);
                       const move = (delta: number) => {
@@ -203,7 +211,7 @@ function ExecPolicyCard() {
                           </span>
                           <span className="gc"><span className={st.c}>{st.l}</span></span>
                           <span className="gc">
-                            <button type="button" className="btn ghost sm" onClick={() => { models.edit((f) => ({ ...f, allowed: { ...f.allowed, [key]: !allowed } })); }}>{allowed ? '허용 해제' : '허용'}</button>
+                            {m.reported && <button type="button" className="btn ghost sm" onClick={() => { models.edit((f) => ({ ...f, allowed: { ...f.allowed, [key]: !allowed } })); }}>{allowed ? '허용 해제' : '허용'}</button>}
                           </span>
                         </div>
                       );

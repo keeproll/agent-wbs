@@ -5,36 +5,50 @@
  * - 작업 불가일은 날짜(YYYY-MM-DD)가 키다. 같은 날짜는 두 번 넣을 수 없고, 해제도 날짜로 찾는다(배열 위치를 쓰지 않음).
  * - 원본 「Agent별 동시 실행 슬롯(최대 5)」 문구는 폐기된 규칙이라 바꿨다(MM-24, UAT-POLICY-04).
  */
-import { useState } from 'react';
+import { useContext, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { isDateOnly } from '@awbs/shared/api';
 import { useApi } from '../../shared/api/ApiProvider.tsx';
 import { apiKey } from '../../shared/api/queries.ts';
-import { useDim } from '../../shared/ui/feedback.tsx';
+import { useSessionDraft } from '../../shared/state/useSessionDraft.tsx';
+import { ApiError } from '../../shared/api/client.ts';
+import { useDim, useErrorBar, useStableCallback } from '../../shared/ui/feedback.tsx';
 import { TableScroll } from '../../shared/ui/TableScroll.tsx';
 import { hoursLabel, OPTIONS, SPLIT_RULES, STAGES, withValue } from './labels.ts';
 import { CardHead, QueryGate, Row, Seg, useSettingQuery } from './ui.tsx';
-import { useSettingForm } from './useSettingForm.tsx';
+import { DirtyContext, useSettingForm } from './useSettingForm.tsx';
 
 const pct = (rate: number) => `${String(Math.round(rate * 100))}%`;
 
 export function PlanTab() {
   const queryClient = useQueryClient();
   const { client } = useApi();
+  const errorBar = useErrorBar();
+  const [owner] = useState(() => Symbol('schedule-refresh'));
+  useEffect(() => () => { errorBar.clear(owner); }, [errorBar, owner]);
   const [recalc, setRecalc] = useState(0);
+  /** 오류 막대 「다시 시도」가 recalculate를 부르기 위한 참조(선언 순서 때문에 ref로 잇는다, useSave와 같은 방식) */
+  const retryRef = useRef<(() => Promise<void>) | null>(null);
   useDim(recalc > 0 ? '일정 다시 계산 중 — 잠시 후 갱신됩니다' : null);
   /** 일정에 영향을 주는 저장 뒤: 일정을 서버에서 다시 읽는 동안 흐리게 한다. */
-  const recalculate = async () => {
+  const recalculate = useStableCallback(async () => {
     setRecalc((n) => n + 1);
     try {
       // 이 탭에는 일정 query가 없을 수 있어 서버에서 직접 새로 읽고 캐시에 넣는다(대시보드·WBS·Runner 탭이 같은 값을 본다).
       queryClient.setQueryData(apiKey('getSchedule', {}), await client.call('getSchedule', {}));
-    } catch {
-      // 일정 읽기 실패는 저장 실패가 아니다. 일정을 쓰는 화면이 다음 변경 이벤트 때 다시 읽고, 실패하면 그 화면이 알린다.
+      errorBar.clear(owner);
+    } catch (error) {
+      // 설정 저장은 이미 성공했다. 다만 일정 갱신 실패를 숨기면 옛 일정을 새 일정으로 오해한다(리뷰 624c334 지적 6).
+      // 그래서 오류 막대와 「다시 시도」로 알린다. 다시 시도는 일정 읽기만 다시 한다.
+      if (!(error instanceof ApiError)) throw error;
+      if (error.kind !== 'unauthorized') {
+        errorBar.show({ owner, error, target: '일정 다시 계산 결과 불러오기', failTitle: '최신 일정을 불러오지 못했습니다', retry: () => { void retryRef.current?.(); } });
+      }
     } finally {
       setRecalc((n) => n - 1);
     }
-  };
+  });
+  useEffect(() => { retryRef.current = recalculate; });
   return (
     <>
       <SplitCard />
@@ -55,9 +69,7 @@ function SplitCard() {
     ...q,
     toForm: (d) => ({ maxHours: d.maxHours, minHours: d.minHours, maxFiles: d.maxFiles, on: { ...d.on } as Record<string, boolean> }),
     check: (f) => (f.minHours >= f.maxHours ? '크기 하한은 크기 상한보다 작아야 합니다.' : null),
-    send: (form, updatedAt) => {
-      const d = q.query.data;
-      if (!d) throw new Error('설정을 아직 읽지 못했습니다.');
+    send: (form, updatedAt, d) => {
       return client.call('putSplitSettings', { body: { updatedAt, ...form, testIn: d.testIn, dir: d.dir } as Parameters<typeof client.call<'putSplitSettings'>>[1]['body'] });
     },
     successNotice: '분할 기준을 바꿨습니다.',
@@ -128,9 +140,7 @@ function ScheduleCard({ onScheduleChanged }: { onScheduleChanged: () => Promise<
     label: '일정 재조정 정책',
     ...pq,
     toForm: (d) => ({ autoReplan: d.autoReplan, cpAuto: d.cpAuto, thresholdDays: d.thresholdDays, assumeRate: d.assumeRate }),
-    send: (form, updatedAt) => {
-      const d = pq.query.data;
-      if (!d) throw new Error('설정을 아직 읽지 못했습니다.');
+    send: (form, updatedAt, d) => {
       return client.call('putScheduleSettings', { body: { updatedAt, ...form, windowDays: d.windowDays, minHours: d.minHours } });
     },
     afterSave: onScheduleChanged,
@@ -150,6 +160,17 @@ function ScheduleCard({ onScheduleChanged }: { onScheduleChanged: () => Promise<
   const [date, setDate] = useState('');
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
+  // 아직 「추가」하지 않은 날짜·사유도 입력이다(리뷰 624c334 지적 5). 이동 전에 묻고, 세션 만료 때 보관한다.
+  const typing = date !== '' || note !== '';
+  const report = useContext(DirtyContext);
+  useEffect(() => { report('blackouts-input', typing); }, [report, typing]);
+  useEffect(() => () => { report('blackouts-input', false); }, [report]);
+  const { restoreOffer: inputOffer } = useSessionDraft<{ date: string; note: string }>({
+    id: 'settings:blackouts-input',
+    label: '설정 — 작업 불가일 추가 입력',
+    value: typing ? { date, note } : null,
+    onRestore: (data) => { setDate(data.date); setNote(data.note); },
+  });
   const p = pol.form;
   const days = bo.form?.days ?? [];
   const add = () => {
@@ -163,7 +184,7 @@ function ScheduleCard({ onScheduleChanged }: { onScheduleChanged: () => Promise<
   return (
     <section className="card" aria-labelledby="set-sched">
       <CardHead id="set-sched" title="일정 재조정 정책 · 작업 불가일"><span className="fhint">팀장 개입 최소화 — Agent 합의 결과를 일정에 자동 반영</span></CardHead>
-      {pol.restoreOffer}{bo.restoreOffer}
+      {pol.restoreOffer}{bo.restoreOffer}{inputOffer}
       <div className="cmp">
         <div>
           <QueryGate query={pq.query} label="일정 재조정 정책" />
