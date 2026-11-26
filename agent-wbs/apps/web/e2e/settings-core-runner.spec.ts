@@ -92,7 +92,7 @@ test('UAT-RUNNER-UI e: 예산 변경 응답으로 보유 계산을 갱신하되 
 test('UAT-GITHUB-UI a·b: 형식 오류 거부, 권한 누락·복구와 배지, 토큰을 다시 보이지 않음', async ({ page }) => {
   const api = await fakeApi(page);
   const s = settingsApi(api);
-  let github = { ...GITHUB, scopes: { ...GITHUB.scopes, statuses: 'missing' as const } };
+  let github: typeof GITHUB = { ...GITHUB, scopes: { contents: 'verified', pulls: 'verified', statuses: 'missing', metadata: 'verified' } };
   api.on('GET /api/settings/github', (route) => json(route, 200, github));
   await page.goto('/settings/runner');
   const card = page.getByRole('region', { name: 'GitHub 연결' });

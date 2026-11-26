@@ -130,7 +130,8 @@ export function echoPut(api: FakeApi, path: string, initial: { updatedAt: string
   api.on(`PUT ${path}`, (route: Route) => {
     const body = route.request().postDataJSON() as Record<string, unknown>;
     bodies.push(body);
-    const { token: _token, ...rest } = body;
+    // 토큰 같은 비밀값은 저장만 하고 응답에 싣지 않는다(서버 계약).
+    const rest = Object.fromEntries(Object.entries(body).filter(([key]) => key !== 'token'));
     current = { ...current, ...rest, ...extra(body), updatedAt: V2 };
     return json(route, 200, current);
   });
