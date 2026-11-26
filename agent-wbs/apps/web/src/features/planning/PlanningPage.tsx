@@ -23,6 +23,7 @@ import { planStep, type Planning } from './model.ts';
 import { ReplanTab } from './ReplanTab.tsx';
 import { SessionView } from './SessionView.tsx';
 import '../change/change.css';
+import { LINK } from '../../shared/links.ts';
 
 const SUB = 'Codex · Claude 독립 분석 → 교차 검토 → 이견 조정 → Change Proposal → (정책) 자동 승인 · WBS 반영 → 일정 자동 재조정';
 
@@ -166,7 +167,7 @@ function PlanningBody({ projectId }: { projectId: string }) {
               tasks={tasks}
               memos={memos}
               setMemo={(rid, memo) => { setMemos((m) => (memo === null ? Object.fromEntries(Object.entries(m).filter(([k]) => k !== rid)) : { ...m, [rid]: memo })); }}
-              openCp={(cpKey) => { void navigate(`/change/${cpKey}`); }}
+              openCp={(cpKey) => { void navigate(LINK.change(cpKey)); }}
             />
           </div>
         </div>

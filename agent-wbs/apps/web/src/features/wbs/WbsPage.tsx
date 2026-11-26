@@ -52,6 +52,14 @@ function useDebounced<T>(value: T, ms: number): T {
   return v;
 }
 
+/** 주소의 필터(`?status=done&blocked=y`). 이름은 Filters 필드 이름과 같고, 모르는 이름은 무시한다. */
+function filtersFromSearch(search: string): Filters {
+  const params = new URLSearchParams(search);
+  const out: Filters = { ...EMPTY_FILTERS };
+  for (const key of Object.keys(EMPTY_FILTERS) as (keyof Filters)[]) out[key] = params.get(key) ?? '';
+  return out;
+}
+
 function isTyping(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName));
 }
@@ -66,11 +74,12 @@ function WbsBody({ projectId }: { projectId: string }) {
   const notify = useNotice();
 
   const [search, setSearch] = useState('');
-  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
+  // 다른 화면의 링크(대시보드 「완료」·「선행 차단」 등, shared/links.ts LINK.wbs)가 실은 필터·보기는 처음 그릴 때 한 번 읽는다(M3 통합).
+  const [filters, setFilters] = useState<Filters>(() => filtersFromSearch(location.search));
   const [sort, setSort] = useState<SortKey>('wbs');
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [cols, setCols] = useState<ReadonlySet<ColKey>>(DEFAULT_COLS);
-  const [view, setView] = useState<'table' | 'gantt'>('table');
+  const [view, setView] = useState<'table' | 'gantt'>(() => (new URLSearchParams(location.search).get('view') === 'gantt' ? 'gantt' : 'table'));
   const [wizard, setWizard] = useState(false);
   /** Wizard에 입력한 초안. 로그인이 끊기면(401) 이 탭에 보관했다가 다시 로그인하면 복원을 제안한다(M3-01 useSessionDraft). */
   const [wizDraft, setWizDraft] = useState<WizardDraft | null>(null);

@@ -12,6 +12,7 @@
  */
 import { useEffect, useSyncExternalStore } from 'react';
 import { onDraftsCleared, registerDraft } from '../../shared/state/sessionDrafts.ts';
+import { LINK } from '../../shared/links.ts';
 
 export type MessageKind = '추가 지시' | '수정 요청' | '질문' | '일반 의견';
 export const MESSAGE_TYPES: readonly MessageKind[] = ['추가 지시', '수정 요청', '질문', '일반 의견'];
@@ -109,7 +110,7 @@ export function installDraftProtection(store = messageDrafts): void {
       live.add(taskKey);
       if (registered.has(taskKey)) continue;
       registered.set(taskKey, registerDraft(draftSessionId(taskKey), () => ({
-        label: `${taskKey} 메시지 작성`, path: `/exec/${encodeURIComponent(taskKey)}`, data: store.sessionData(taskKey, 'Claude'),
+        label: `${taskKey} 메시지 작성`, path: LINK.exec(taskKey), data: store.sessionData(taskKey, 'Claude'),
       })));
     }
     for (const [taskKey, off] of registered) if (!live.has(taskKey)) { off(); registered.delete(taskKey); }

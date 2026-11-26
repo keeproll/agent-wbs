@@ -12,6 +12,7 @@ import { AreaLoading } from '../../../shared/ui/loading.tsx';
 import { ListError } from '../parts.tsx';
 import { EFF, useGradeSettings } from './OverviewTab.tsx';
 import { agCls, agInit, ATTEMPT_KIND, ATTEMPT_STATUS, FLOW_ORDER, type TaskDetailData } from '../labels.ts';
+import { LINK } from '../../../shared/links.ts';
 
 type Attempts = UseQueryResult<ResponseOf<'getTaskAttempts'>, ApiError>;
 type Attempt = ResponseOf<'getTaskAttempts'>['items'][number];
@@ -46,7 +47,7 @@ export function ExecTab({ task: t, attempts }: { task: TaskDetailData; attempts:
   };
   return (
     <div className="pane">
-      <div className="pane-h"><div className="pane-hl"><h3>실행</h3><span className="muted">Execution Attempt — 실행 단위 기록 (재작업은 새 시도로 누적)</span></div><Link className="btn primary sm" to={`/exec?task=${t.taskKey}`}>작업 실행 화면에서 진행</Link></div>
+      <div className="pane-h"><div className="pane-hl"><h3>실행</h3><span className="muted">Execution Attempt — 실행 단위 기록 (재작업은 새 시도로 누적)</span></div><Link className="btn primary sm" to={`${LINK.exec(t.taskKey)}`}>작업 실행 화면에서 진행</Link></div>
       <ol className="flow" style={{ margin: '0 0 14px' }}>{flowSteps(t, atts).map((st) => <li key={st.n} className={st.cls}><span className="st-n">{st.n}</span>{st.l}</li>)}</ol>
       {attempts.data === undefined && (attempts.isError ? <ListError label="실행 기록" error={attempts.error} retrying={attempts.isFetching} onRetry={() => { void attempts.refetch(); }} /> : <AreaLoading label="실행 기록 불러오는 중" />)}
       {attempts.data !== undefined && !atts.length && <p className="empty">실행 기록이 없습니다.</p>}

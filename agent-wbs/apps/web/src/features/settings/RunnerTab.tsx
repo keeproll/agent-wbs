@@ -23,6 +23,7 @@ import {
 import { githubOk } from './githubOk.ts';
 import { CardHead, QueryGate, Row, Seg, useSettingQuery } from './ui.tsx';
 import { DirtyContext, useSettingForm } from './useSettingForm.tsx';
+import { LINK } from '../../shared/links.ts';
 
 type RunnerState = ResponseOf<'getRunnerState'>;
 const at = (value: string | null | undefined) => (value ? formatDateTime(value) : '—');
@@ -512,7 +513,7 @@ function ConcurrencyCard({ runner }: { runner: RunnerState | undefined }) {
                 const un = s.state === 'unconfirmed';
                 return (
                   <div key={s.attemptId} className="gtr orow">
-                    <span className="gc"><span className="tcell"><Link className="reflink mono" to={`/exec?task=${s.taskKey}`}>{s.taskKey}</Link><span className="tid">{s.agent}</span></span></span>
+                    <span className="gc"><span className="tcell"><Link className="reflink mono" to={LINK.exec(s.taskKey)}>{s.taskKey}</Link><span className="tid">{s.agent}</span></span></span>
                     <span className="gc"><span className={grade?.cls}>{grade?.label}</span></span>
                     <span className="gc mono">{s.observed}</span>
                     <span className="gc"><span className="tcell"><b className="mono">{s.reserved}</b><span className="tid">{un ? '미확인 — 마지막 관측 이상 보유' : s.grade === 'verified' ? '관측값' : '보수 계산(예산과 관측 중 큰 값)'}</span></span></span>

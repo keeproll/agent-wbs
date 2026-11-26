@@ -38,9 +38,9 @@ test('UAT-DASH-01 a: 6행동 패널 — 숫자·항목·이동 주소, 빈 패�
   await expect(panel('Planning · 승인 대기').locator('.dp-n')).toHaveText('2');
   await expect(panel('Planning · 승인 대기').locator('.dp-n')).toHaveClass(/bad/);
   await expect(panel('Planning · 승인 대기').getByRole('link', { name: /Dependency 검증/ })).toHaveAttribute('href', '/change/CP-002');
-  await expect(panel('Planning · 승인 대기').getByRole('link', { name: /Workflow Phase/ })).toHaveAttribute('href', '/planning?id=pln-001');
+  await expect(panel('Planning · 승인 대기').getByRole('link', { name: /Workflow Phase/ })).toHaveAttribute('href', '/planning?session=pln-001');
   await expect(panel('실행 진행 · 대기').locator('.dp-n')).not.toHaveClass(/bad/);
-  await expect(panel('실행 진행 · 대기').getByRole('link', { name: /Drizzle Schema 설계/ })).toHaveAttribute('href', '/exec?task=TASK-0004&attempt=att-0004-2');
+  await expect(panel('실행 진행 · 대기').getByRole('link', { name: /Drizzle Schema 설계/ })).toHaveAttribute('href', '/exec/TASK-0004?att=att-0004-2');
   await expect(panel('QA 실패 · 재작업').getByRole('link', { name: /WBS Tree UI/ })).toContainText('FAIL · 결함 2');
   await expect(panel('메시지 확인 필요').getByRole('link', { name: /MSG-003/ })).toContainText('전달 실패');
   await expect(panel('메시지 확인 필요').getByRole('link', { name: /MSG-002/ })).toHaveAttribute('href', '/wbs/TASK-0007?tab=msg');
@@ -77,7 +77,7 @@ test('UAT-DASH-01 b: 경고는 GET /api/alerts에서 읽고, 정책 임계 알�
   const banner = page.getByRole('region', { name: '팀장 확인 필요' });
   await expect(banner.locator('.al-row')).toHaveCount(3);
   await expect(banner).toContainText('2026-11-05 19:30');
-  await expect(banner.getByRole('link', { name: 'TASK-0007 실행 보기' })).toHaveAttribute('href', '/exec?task=TASK-0007');
+  await expect(banner.getByRole('link', { name: 'TASK-0007 실행 보기' })).toHaveAttribute('href', '/exec/TASK-0007');
   await expect(banner.getByRole('link', { name: '프로젝트 보기' })).toHaveAttribute('href', '/project');
   await expect(banner.getByRole('link', { name: '설계 보기' })).toHaveAttribute('href', '/design');
   // 닫기(확인) API가 계약에 없어 가짜 버튼을 두지 않는다.

@@ -160,7 +160,8 @@ test('4. 상세 첫 조회가 503이면 상세 자리에 원인과 다시 시도
   await page.goto('/wbs');
   await page.getByRole('table', { name: 'WBS Task 목록' }).getByRole('button', { name: 'Drizzle Schema 설계' }).click();
   const detail = page.getByRole('region', { name: 'Task 상세' });
-  const err = detail.getByRole('alert');
+  // M3 통합: 상세 자리는 M3-03 TaskDetail이 그린다. 첫 조회 실패는 그 상세 안의 「Task 불러오기 실패」 카드로 보인다(원인 코드·다시 시도).
+  const err = detail.getByRole('region', { name: 'Task 불러오기 실패' });
   await expect(err).toContainText('TASK-0004 상세를 불러오지 못했습니다');
   await expect(err).toContainText('503 UNAVAILABLE');
   await expect(detail).not.toHaveAttribute('aria-busy', 'true');

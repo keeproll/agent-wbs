@@ -22,6 +22,7 @@ import { ProposalDetail } from './ProposalDetail.tsx';
 import { ProposalModal } from './ProposalModal.tsx';
 import type { Proposal } from './types.ts';
 import './change.css';
+import { LINK } from '../../shared/links.ts';
 
 const SUB = 'Change Proposal · 영향 분석 · 승인 · Replanning — 승인 후 「WBS 반영」을 실행해야 WBS가 바뀝니다';
 
@@ -73,7 +74,7 @@ function ChangeBody({ projectId }: { projectId: string }) {
   const selected: Proposal | undefined = inList ?? deep.data ?? undefined;
   const planningTitle = (id: string | null) => plannings.data?.items.find((p) => p.id === id)?.title;
 
-  const pick = (cp: Proposal) => { void guard(() => { setComment(''); void navigate(`/change/${cp.cpKey}`); }); };
+  const pick = (cp: Proposal) => { void guard(() => { setComment(''); void navigate(LINK.change(cp.cpKey)); }); };
 
   if (list.data === undefined && list.isError) {
     return <LoadError title="변경 제안" error={list.error} retrying={list.isFetching} onRetry={() => { void list.refetch(); }} />;
@@ -134,7 +135,7 @@ function ChangeBody({ projectId }: { projectId: string }) {
           tasks={tasks}
           onDirty={setModalDirty}
           onClose={() => { setModalOpen(false); setModalDirty(false); }}
-          onSubmitted={(cp) => { setModalOpen(false); setModalDirty(false); goTo.current = `/change/${cp.cpKey}`; void refresh(); }}
+          onSubmitted={(cp) => { setModalOpen(false); setModalDirty(false); goTo.current = LINK.change(cp.cpKey); void refresh(); }}
         />
       )}
     </Page>

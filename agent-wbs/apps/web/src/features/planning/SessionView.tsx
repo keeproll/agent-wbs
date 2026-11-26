@@ -21,6 +21,7 @@ import { DIFF_GRID } from '../change/ProposalDetail.tsx';
 import type { Proposal } from '../change/types.ts';
 import type { LinkedCp } from './PlanningPage.tsx';
 import { cpReason, isDiff, openCount, planOps, planStep, type Planning, type PlanningReview } from './model.ts';
+import { LINK } from '../../shared/links.ts';
 
 const CHOICES = [['codex', 'Codex 안 채택'], ['claude', 'Claude 안 채택'], ['hold', '변경 없음 (보류)']] as const;
 const agCls = (a: string) => (a === 'Claude' ? 'ag-claude' : 'ag-codex');
@@ -85,7 +86,7 @@ export function SessionView({ planning, cpState, tasks, memos, setMemo, openCp }
             <h2 className="h2">{planning.title}</h2>
             <span className="muted">대상 범위: {planning.scope} · 요청 {formatDateTime(planning.createdAt)}</span>
           </div>
-          {cp && <Link className="btn sm" to={`/change/${cp.cpKey}`}>{cp.cpKey} · {cpStatus(cp.status).l}</Link>}
+          {cp && <Link className="btn sm" to={LINK.change(cp.cpKey)}>{cp.cpKey} · {cpStatus(cp.status).l}</Link>}
         </div>
         <ol className="flow" aria-label="진행 단계">
           {step.steps.map((s) => <li key={s.n} className={s.cls} aria-current={s.cls === 'cur' ? 'step' : undefined}><span className="st-n">{s.n}</span>{s.l}</li>)}

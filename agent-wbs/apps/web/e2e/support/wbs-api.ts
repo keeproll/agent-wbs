@@ -16,12 +16,19 @@ export interface WbsApi extends FakeApi {
   serveList: Handler;
 }
 
-const detailOf = (t: TaskSummary) => ({
+/**
+ * Task 상세 응답. M3 통합: 이제 /wbs/:taskKey 상세는 M3-03 TaskDetail이 그리므로 계약 모양을 빠짐없이 채운다(빈 명세·빈 설계).
+ * 타입을 계약(ResponseOf)으로 적어, 계약이 바뀌면 typecheck가 실패한다.
+ */
+const EMPTY_SPEC = { req: [], work: [], steps: [], inputs: [], outputs: [], files: [], constraints: [], errors: [], docs: [], verify: [] };
+const detailOf = (t: TaskSummary): ResponseOf<'getTask'> => ({
   ...t,
-  spec: { overview: { purpose: '', background: '', scope: [], out: [], precond: '', doneCond: '' }, spec: {}, ac: [] },
+  spec: { overview: { purpose: '', background: '', scope: [], out: [], precond: '', doneCond: '' }, spec: EMPTY_SPEC, ac: [] },
   outputs: [], designs: [], checklistItems: [], predecessors: [], successors: [], planningApprovedAt: null, conflictGroup: null,
+  estimate: null, fixStart: null, actStart: null, actEnd: null, actualHours: 0,
   srcInputVersion: null, grades: { dev: null, qa: null }, subagents: { dev: [], qa: [] }, split: null,
 });
+const emptyPage = { items: [], nextCursor: null };
 
 export async function wbsApi(page: Page, options: { list?: TaskList; schedule?: ScheduleData | null } = {}): Promise<WbsApi> {
   const api = await fakeApi(page);
@@ -38,6 +45,9 @@ export async function wbsApi(page: Page, options: { list?: TaskList; schedule?: 
   api.on(`GET /api/projects/${PROJECT_ID}/tasks`, serveList);
   const onTask = (t: TaskSummary) => {
     api.on(`GET /api/tasks/${t.taskKey}`, (route) => json(route, 200, detailOf(t)));
+    // Task 상세(M3-03)가 함께 읽는 요청. WBS 시험은 머리·레일만 보므로 빈 값으로 둔다.
+    api.on(`GET /api/tasks/${t.taskKey}/gate`, (route) => json(route, 200, { taskKey: t.taskKey, passed: false, conditions: [] }));
+    for (const sub of ['history', 'attempts', 'verifications', 'messages']) api.on(`GET /api/tasks/${t.taskKey}/${sub}`, (route) => json(route, 200, emptyPage));
     api.on(`POST /api/tasks/${t.taskKey}/dependencies`, async (route, request) => {
       const body = request.postDataJSON() as { predTaskKey: string };
       t.preds = [...t.preds, body.predTaskKey].sort();
@@ -47,6 +57,7 @@ export async function wbsApi(page: Page, options: { list?: TaskList; schedule?: 
     });
   };
   list.tasks.forEach(onTask);
+  api.on('GET /api/evidence', (route) => json(route, 200, emptyPage));
   api.on('GET /api/tasks/TASK-9999', (route) => json(route, 404, errorBody('TASK_NOT_FOUND', { message: 'Task를 찾을 수 없습니다.' })));
   api.on(`POST /api/projects/${PROJECT_ID}/tasks`, async (route, request) => {
     const body = request.postDataJSON() as { title: string; wbsNodeId: string; workType: string; primaryDomain: string; relatedDomains: string[]; priority: number; assigneeAgent: string; verifierAgent: string };

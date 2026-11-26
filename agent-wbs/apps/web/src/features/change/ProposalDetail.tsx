@@ -23,6 +23,7 @@ import { useProposalRefresh } from './ChangePage.tsx';
 import { findProposal } from './find.ts';
 import { cpStatus, diffRows, eventLabel, holdReasonText, impactRows, judgementRows, sourceLabel, type TaskInfo } from './model.ts';
 import type { Proposal, ProposalPreview } from './types.ts';
+import { LINK } from '../../shared/links.ts';
 
 /**
  * 원본 diffGrid(P L7064)는 `100px 230px 148px minmax(150px,1fr) minmax(150px,1fr) 64px`.
@@ -93,7 +94,7 @@ export function ProposalDetail({ cp, tasks, planningTitle, comment, setComment }
         </div>
         <span style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           {String(cp.source.kind) === 'planning' && cp.source.id && (
-            <Link className="btn sm" to={`/planning?session=${encodeURIComponent(cp.source.id)}`}>출처: {sourceLabel(cp.source, planningTitle ? `Planning ${planningTitle}` : undefined)}</Link>
+            <Link className="btn sm" to={LINK.planning(cp.source.id)}>출처: {sourceLabel(cp.source, planningTitle ? `Planning ${planningTitle}` : undefined)}</Link>
           )}
           {!['manual', 'planning'].includes(String(cp.source.kind)) && <span className="muted">출처: {sourceLabel(cp.source)}</span>}
           <span className={st.c}>{st.l}</span>

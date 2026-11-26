@@ -22,6 +22,7 @@ import { ExecMessages } from './ExecMessages.tsx';
 import { ExecRail } from './ExecRail.tsx';
 import { flowOf, nextStep, pickAttempt, runnerReason, sortAttempts, type RunnerSlice } from './model.ts';
 import { useExecData } from './useExecData.ts';
+import { LINK } from '../../shared/links.ts';
 
 /** contracts §3.5: 같은 종류 연속 실패는 최초 포함 총 3회, 자동 재작업은 Task당 3회 */
 export const AUTO_LIMITS = { retry: 3, rework: 3 } as const;
@@ -65,7 +66,7 @@ function ExecBody({ projectId }: { projectId: string }) {
 
   const task = data.task;
   const pick = (key: string, att: string | null) => {
-    void navigate(`/exec/${encodeURIComponent(key)}${att ? `?att=${encodeURIComponent(att)}` : ''}`);
+    void navigate(LINK.exec(key, att));
   };
   const own = data.own;
   const attempts = task ? sortAttempts(own.data ?? []) : [];

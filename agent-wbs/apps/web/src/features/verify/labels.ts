@@ -74,23 +74,5 @@ export const GATE_SHORT: Record<string, string> = {
 /** 「11-05」처럼 월-일. 날짜 문자열(YYYY-MM-DD)만 받는다. */
 export const monthDay = (date: string | null | undefined) => (date ? date.slice(5, 10) : '—');
 
-/**
- * 다른 화면으로 가는 주소. 주소 규칙은 각 화면 작업과 맞췄다.
- * - Task 상세: `/wbs/TASK-0007?tab=…`(M3-02·M3-03, 탭 이름은 M3-03의 overview·checklist·verif·hist·msg)
- * - WBS 필터: `/wbs?status=done` 등. 이름은 M3-02 Filters의 필드 이름과 같다(type·domain·status·blocked). 보기 전환은 `view=gantt`.
- * - 작업 실행: `/exec?task=TASK-0007&attempt=<시도 id>`(M3-06에 알림)
- * - 변경 제안: `/change/<CP 키 또는 id>`(M3-05), Planning: `/planning?id=<id>`
- * - 설정 탭: `/settings/<탭>`(G§4.9)
- */
-export const LINK = {
-  task: (taskKey: string, tab?: string) => `/wbs/${taskKey}${tab ? `?tab=${tab}` : ''}`,
-  wbs: (filter: Record<string, string> = {}) => {
-    const search = new URLSearchParams(filter).toString();
-    return `/wbs${search ? `?${search}` : ''}`;
-  },
-  exec: (taskKey: string, attemptId?: string | null) => `/exec?task=${taskKey}${attemptId ? `&attempt=${attemptId}` : ''}`,
-  verification: (id: string) => `/verify?sel=${id}`,
-  change: (ref: string) => `/change/${ref}`,
-  planning: (id: string) => `/planning?id=${id}`,
-  settings: (tab?: string) => (tab ? `/settings/${tab}` : '/settings'),
-};
+/** 다른 화면으로 가는 주소 — 공통 주소 표(shared/links.ts)를 그대로 쓴다(M3 통합). */
+export { LINK } from '../../shared/links.ts';

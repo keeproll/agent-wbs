@@ -34,7 +34,9 @@ test('UAT-SHELL-02 등록 전: 프로젝트·설정만 열리고 승인 뒤 잠�
   await expect(page.getByRole('note')).toContainText('초기 WBS를 승인하면 WBS 메뉴를 사용할 수 있습니다.');
   api.on('GET /api/project', (route) => json(route, 200, activeProject()));
   await page.goto('/wbs');
-  await expect(page.getByText('이 화면은 아직 구현되지 않았습니다.')).toBeVisible();
+  // M3 통합: WBS 메뉴가 실제 화면(M3-02)으로 열린다(잠금 안내가 없어야 한다).
+  await expect(page.getByRole('heading', { name: 'WBS', level: 1 })).toBeVisible();
+  await expect(page.getByRole('note')).toHaveCount(0);
   await expect(nav.getByRole('link', { name: 'WBS', exact: true })).not.toHaveAttribute('aria-disabled');
 });
 

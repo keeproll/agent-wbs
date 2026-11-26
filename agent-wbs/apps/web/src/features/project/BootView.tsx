@@ -23,6 +23,7 @@ import { BOOT_STEPS, fmtH, STEP_CHIP, TECH_AUTH, TECH_LV, TECH_ST, TYPE_LABEL, s
 import { CleanupBanner } from './ResetHistory.tsx';
 import { useProjectReload } from './reload.ts';
 import { ResetModal } from './ResetModal.tsx';
+import { LINK } from '../../shared/links.ts';
 
 type Pick = 'approve' | 'reject';
 type Draft = NonNullable<BootProject['bootstrap']['draft']>;
@@ -290,7 +291,7 @@ function DraftPanel({ project, onDirty }: { project: BootProject; onDirty: (dirt
         (list) => {
           const first = list.tasks.map((t) => t.taskKey).sort()[0];
           void invalidateTopics(queryClient, 'all');
-          void navigate(first ? `/wbs/${first}` : '/wbs');
+          void navigate(first ? LINK.task(first) : LINK.wbs());
         },
         () => { void invalidateTopics(queryClient, 'all'); void navigate('/wbs'); },
       );

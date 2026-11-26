@@ -79,7 +79,7 @@ test('UAT-VERIFY-01 a: 행 선택 → 레일+상세, 이전·다음, 펼치기, 
   await page.getByRole('button', { name: '↑ 이전' }).click();
   await expect(page).toHaveURL('/verify?sel=v-0007-1');
   await detail.getByRole('button', { name: '실행 ATT-0007-2' }).click();
-  await expect(page).toHaveURL('/exec?task=TASK-0007&attempt=att-0007-2');
+  await expect(page).toHaveURL('/exec/TASK-0007?att=att-0007-2');
   await page.goBack();
   await page.locator('.pane-h').getByRole('button', { name: 'TASK-0007 WBS Tree UI' }).click();
   await expect(page).toHaveURL('/wbs/TASK-0007?tab=verif');

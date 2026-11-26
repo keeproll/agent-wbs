@@ -270,7 +270,8 @@ export function nextStep({ task, flow, attempts, verifications, alerts, reason, 
 
 /** 시도 선택: 주소의 attemptKey(안정 키)가 이 Task에 있으면 그것, 아니면 실행 중 또는 마지막 시도. */
 export function pickAttempt(attempts: readonly ExecAttempt[], key: string | null): { attempt: ExecAttempt | null; explicit: boolean; missing: string | null } {
-  const chosen = key ? attempts.find((a) => a.attemptKey === key) : undefined;
+  // 시도 키(attemptKey) 또는 시도 id로 찾는다. 대시보드·검증 화면은 id로 링크한다(공통 주소 shared/links.ts).
+  const chosen = key ? attempts.find((a) => a.attemptKey === key || a.id === key) : undefined;
   if (chosen) return { attempt: chosen, explicit: true, missing: null };
   const sorted = sortAttempts(attempts);
   // 없는 시도 키는 고르지 않고, 그 사실을 화면이 알릴 수 있게 돌려준다(M3-06 리뷰 #4).

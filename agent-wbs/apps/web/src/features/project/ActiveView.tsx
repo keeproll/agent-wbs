@@ -26,6 +26,7 @@ import { useGithubSettings } from './github.ts';
 import { RepoLayout } from './RegisterView.tsx';
 import { useProjectReload } from './reload.ts';
 import { ResetModal } from './ResetModal.tsx';
+import { LINK } from '../../shared/links.ts';
 
 type Active = Extract<ProjectState, { approvedAt: unknown }>;
 type ChangeCommit = Active['changeCommits'][number];
@@ -217,7 +218,7 @@ function InputsCard({ project }: { project: Active }) {
       {job && (
         <div className="bsteps" style={{ marginTop: 10 }} data-testid="input-job"><b>입력 자료 v{job.version} 차이 분석</b>
           {job.steps.map((s, i) => { const [c, sl] = STEP_CHIP[s.status as StepStatus]; const key = String(s.key); return <div key={key} className="bs-row" data-step={key}><span className="bs-n">{i + 1}</span><span>{INPUT_STEPS[key]?.[0] ?? key}</span><span className={c}>{sl}</span>{s.note && <span className="muted">{s.note}</span>}</div>; })}
-          {job.proposalId && <Link className="btn ghost sm" to={`/change?cp=${job.proposalId}`}>Change Proposal 보기</Link>}
+          {job.proposalId && <Link className="btn ghost sm" to={LINK.change(job.proposalId)}>Change Proposal 보기</Link>}
           {job.fail && <div className="banner danger" style={{ margin: '6px 0 0' }}><div className="banner-b">{(INPUT_STEPS[String(job.steps.find((s) => s.status === 'fail')?.key ?? '')]?.[0] ?? '차이 분석')} 실패 — {job.fail.reason} {job.fail.fix} <BusyButton small busy={retry.busy} busyLabel="요청 중…" onClick={() => { void retry.save(); }}>다시 시도</BusyButton></div></div>}
         </div>
       )}

@@ -183,7 +183,16 @@ const page = <T>(items: T[]) => ({ items, nextCursor: null });
  */
 export function mountTasks(api: FakeApi, s: TaskStore = newStore()): TaskStore {
   const keys = () => [...s.tasks.keys()];
-  api.on('GET /api/projects/p1/tasks', (route) => json(route, 200, { nodes: nodes(), tasks: keys().map((k) => summary(s, k)) }));
+  // M3 통합: WBS 화면(M3-02)은 검색어(q)·상태(status)를 서버로 보낸다. 서버처럼 걸러 돌려준다(wbs-api.ts와 같은 규칙).
+  api.on('GET /api/projects/p1/tasks', (route, req) => {
+    const url = new URL(req.url());
+    const q = url.searchParams.get('q')?.toLowerCase();
+    const status = url.searchParams.get('status');
+    const tasks = keys().map((k) => summary(s, k)).filter((t) => (!status || t.lifecycleStatus === status) && (!q || t.title.toLowerCase().includes(q) || t.taskKey.toLowerCase().includes(q)));
+    return json(route, 200, { nodes: nodes(), tasks });
+  });
+  // 없는 Task는 서버처럼 404 TASK_NOT_FOUND(apps/api tasks 라우트).
+  api.on('GET /api/tasks/TASK-0999', (route) => json(route, 404, errorBody('TASK_NOT_FOUND', { message: 'Task를 찾을 수 없습니다.' })));
   for (const k of keys()) mountOne(api, s, k);
   api.on('GET /api/evidence', (route, req) => {
     const key = new URL(req.url()).searchParams.get('taskKey') ?? '';

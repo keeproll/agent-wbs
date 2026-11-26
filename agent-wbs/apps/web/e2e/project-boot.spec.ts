@@ -3,6 +3,7 @@
  */
 import { expect, test, type Page } from '@playwright/test';
 import { errorBody, fakeApi, hold, json, RUNNER, type FakeApi } from './support/fake-api.ts';
+import { NODES, TASKS } from './support/wbs-fixture.ts';
 import { activeProject, bootProject, DECISIONS, PREVIEW, PROJECT_ID, steps, T0 } from './support/project-fixtures.ts';
 
 async function openBoot(page: Page, project: ReturnType<typeof bootProject>): Promise<FakeApi> {
@@ -141,7 +142,8 @@ test('UAT-PROJECT-06 b: 초기 WBS 승인 → 기준 v1 안내 후 첫 Task 상�
     api.on('GET /api/project', (r) => json(r, 200, activeProject()));
     return json(route, 200, { baselineVersion: 1, taskCount: 3 });
   });
-  api.on(`GET /api/projects/${PROJECT_ID}/tasks`, (route) => json(route, 200, { nodes: [], tasks: [{ taskKey: 'TASK-0002' }, { taskKey: 'TASK-0001' }, { taskKey: 'TASK-0003' }] }));
+  // M3 통합: 이제 /wbs/:taskKey는 실제 WBS 화면이 그린다. 목록은 계약 모양(WBS 시험 자료)을 쓰고, 순서를 섞어 「Task 키 순서의 첫 번째」를 시험한다.
+  api.on(`GET /api/projects/${PROJECT_ID}/tasks`, (route) => json(route, 200, { nodes: NODES, tasks: [TASKS[1], TASKS[0], TASKS[2]] }));
   await page.getByRole('button', { name: '초기 WBS 승인' }).click();
   await expect(page).toHaveURL('/wbs/TASK-0001');
   await expect(page.getByText('초기 WBS 3건을 승인했습니다. 기준 일정 v1이 만들어졌고, 선행 조건이 없는 Task부터 Runner가 실행할 수 있습니다.')).toBeVisible();
