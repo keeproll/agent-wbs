@@ -15,6 +15,8 @@ export interface Scenario {
   hang?: boolean;
   /** SIGTERM을 무시한다. hang과 함께 쓴다. */
   ignoreSigterm?: boolean;
+  /** stdout 파이프만 닫고 프로세스는 계속 실행한다. */
+  closeStdout?: boolean;
 }
 
 export interface Call {

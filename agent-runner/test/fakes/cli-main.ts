@@ -1,5 +1,5 @@
 // installFakeCli가 만든 실행 파일의 본체. argv: <scenario> <calls> <CLI 인자...>
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, closeSync, readFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { Call, Scenario } from './cli.ts';
 
@@ -20,5 +20,6 @@ for (const [index, line] of (scenario.lines ?? []).entries()) {
   process.stdout.write(`${typeof line === 'string' ? line : JSON.stringify(line)}\n`);
 }
 if (scenario.stderr) process.stderr.write(scenario.stderr);
+if (scenario.closeStdout) closeSync(1);
 if (scenario.hang) setInterval(() => undefined, 60_000);
 process.exitCode = scenario.exitCode ?? 0;

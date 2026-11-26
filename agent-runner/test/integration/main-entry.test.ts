@@ -113,6 +113,7 @@ test('main: 실제 DB 모양의 정리 명령 → 그룹 종료 증명 → 로�
             } },
           ].filter((c) => !resulted.has(c.id)) });
           return;
+        case 'GET /api/runner/holds': json(res, { holds: [] }); return;
         case 'GET /api/runner/policy':
           json(res, { caps: { ...caps, memReserveGB: 4 }, subagentBudget: { dev: 1, qa: 1 }, heartbeatSeconds: 60, inputCheckMinutes: 10,
             ci: { nightAt: '02:00', retry: 1, deployUrl: null }, claudeModels: ['claude-opus-5-5'], cliGrades: [] });

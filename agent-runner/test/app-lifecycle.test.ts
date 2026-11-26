@@ -76,6 +76,7 @@ test.each([false, true])('M4-06: 연결 확인과 쓰기 전에 다른 deploy ke
 
 test('M4-06: 시작 점검에서 키 정책을 확인할 수 없으면 계속 실행하지 않는다', async () => {
   const a = app();
+  vi.spyOn(a.execution, 'recover').mockResolvedValue(true);
   vi.spyOn(a, 'reportHost').mockResolvedValue();
   vi.spyOn(a.updater, 'recover').mockResolvedValue();
   vi.spyOn(a, 'checkReadiness').mockResolvedValue({ at: new Date().toISOString(), items: [] });

@@ -26,6 +26,8 @@ import { collectModels } from './resources/models.ts';
 import { ResourceReporter, type SessionState } from './resources/reporter.ts';
 import { UsageTracker } from './resources/usage.ts';
 import type { State } from './state/state.ts';
+import { Execution, type ExecutionOptions } from './exec/session.ts';
+import { Launches } from './exec/launches.ts';
 
 /** 세션 실행 계층(M5)이 시도 하나를 실행하는 동안 등록하는 보유. 지금(M4)은 비어 있다. */
 export interface ActiveSession extends SessionState {
@@ -63,6 +65,8 @@ export interface RunnerAppDeps {
   inputSource?: () => Promise<InputSource | undefined>;
   /** 입력 확인 주기(시험용 덮어쓰기). 없으면 서버 정책 inputCheckMinutes, 그것도 없으면 5분. */
   inputIntervalMs?: number;
+  /** M5 실행은 기존 격리 경계를 그대로 쓴다. 없으면 실제 실행을 거부한다(Q-08). */
+  execution?: Pick<ExecutionOptions, 'prepare' | 'isolation' | 'verified'>;
 }
 
 /** 서버 정책을 받기 전 입력 확인 기본 주기(5분, 서버 정책 inputCheckMinutes의 기본값과 같음). */
@@ -78,6 +82,7 @@ export const INPUT_INTERVAL_MS = 5 * 60_000;
  * - `sessions`: CLI 업데이트 유휴 판정과 동시 실행 보고가 같은 목록을 본다.
  */
 export class RunnerApp {
+  readonly execution: Execution;
   readonly runner: Runner;
   readonly heavy: HeavySemaphore;
   readonly reporter: ResourceReporter;
@@ -159,6 +164,10 @@ export class RunnerApp {
     const resetCleanup = createResetCleanup({
       home: d.home,
       identity: () => this.identity,
+      launchCheck: async hold => {
+        if (!hold.hostId || !hold.bootId) return 'unknown';
+        return await new Launches(d.home, this.identity).reconcile({ job: hold.job, hostId: hold.hostId, bootId: hold.bootId, processGroup: hold.processGroup }) ? 'none' : 'unknown';
+      },
       // 원격 초기화는 GitHub 설정이 있을 때 실제 클라이언트로 연결한다(교차 리뷰 P1-2).
       ...(this.github && { remote: createGithubRemoteCleanup({ client: this.github.client, warn: d.warn,
         ...(d.github?.systemKey && { systemDeployKey: d.github.systemKey }) }) }),
@@ -178,11 +187,26 @@ export class RunnerApp {
       // CliUpdater는 생성 때 식별자를 검사하므로 host 식별자를 읽은 뒤(bootstrap) 실제 값으로 바뀐다.
       owner: { get hostId() { return app.identity.hostId; }, get bootId() { return app.identity.bootId; }, get runnerId() { return runnerId(); } },
       registry: d.cliRegistry,
-      activity: () => Promise.resolve([{ ...this.owner, children: this.sessions.reduce((n, s) => n + s.children, 0), held: this.sessions.reduce((n, s) => n + s.reserved, 0) }]),
+      activity: async () => {
+        const holds = (await d.api('getExecutionHolds', { epoch: d.state.snapshot.epoch })).body.holds;
+        const held = holds.filter(h => h.host_id === this.identity.hostId && h.boot_id === this.identity.bootId).length;
+        return [{ ...this.owner, children: this.sessions.reduce((n, s) => n + s.children, 0), held: held + this.sessions.reduce((n, s) => n + s.reserved, 0) }];
+      },
       profiles: () => d.cliProfiles?.() ?? [],
       verified: () => verifiedFromPolicy(this.runner.policy?.cliGrades),
       report: (body) => this.reportReadiness(body),
       obsNote: () => cgroupNote((path) => d.hostSources.readFile(path)),
+    });
+    this.execution = new Execution({
+      home: d.home, api: d.api, outbox: this.runner.outbox,
+      identity: { get hostId() { return app.identity.hostId; }, get bootId() { return app.identity.bootId; } },
+      epoch: () => d.state.snapshot.epoch, ready: () => this.runner.ready,
+      env: d.env, binaries: { Codex: this.bins.codex, Claude: this.bins.claude },
+      sessions: this.sessions, heavy: this.heavy,
+      budget: role => this.runner.policy?.subagentBudget[role] ?? 0,
+      updater: this.updater,
+      prepare: () => Promise.reject(new Error('작업 폴더 준비 공급원이 연결되지 않았습니다.')),
+      ...d.execution,
     });
   }
 
@@ -312,6 +336,8 @@ export class RunnerApp {
     if (this.#bootstrapped) return;
     signal?.throwIfAborted();
     await this.reportHost();
+    await this.runner.outbox.flush();
+    if (!await this.execution.recover(undefined, signal)) throw new Error('launch 대조 실패: unconfirmed 보유가 있어 새 실행을 보류합니다.');
     await this.updater.recover();
     await this.checkReadiness();
     await this.reportModels();
@@ -409,6 +435,7 @@ export class RunnerApp {
       const timers = this.#timers;
       this.#timers = [];
       await Promise.allSettled(timers.map((timer) => timer.stop()));
+      await this.execution.shutdown();
       signal.removeEventListener('abort', onAbort);
       this.#halt = undefined;
     }
