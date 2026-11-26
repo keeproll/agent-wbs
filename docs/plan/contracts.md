@@ -9,13 +9,16 @@ G§8이 정한 경로·의미는 그대로 두고 빈 곳을 **보강**(★)한�
 | 형식 | JSON UTF-8, 시각은 UTC ISO 8601(µs 허용), 날짜 `YYYY-MM-DD`(Asia/Seoul) |
 | 팀장 인증 | 세션 쿠키. 변경 요청은 `X-CSRF-Token`. 없으면 401 `LEAD_UNAUTHORIZED` |
 | Runner 인증 | `Authorization: Bearer`. 없음·폐기 401 `RUNNER_UNAUTHORIZED`. 팀장 API를 Runner로 부르면 403 `FORBIDDEN_PRINCIPAL` |
-| epoch | 모든 `/api/runner/*`, `/api/planning/*`에 `X-Project-Epoch`. 불일치 409 `EPOCH_MISMATCH` `{currentEpoch}`. **예외(D-04)**: heartbeat, `GET /runner/commands`, 명령 결과 — 이전 epoch 허용, heartbeat는 204 + `X-Current-Epoch` 헤더, commands는 본문 `currentEpoch`. 명령 결과는 명령 ID·명령 epoch 일치 필수. 그 외 요청은 트랜잭션 안에서 재확인(data-model §5.1) |
+| epoch | **Runner 토큰을 쓰는 모든 요청**(경로 접두어가 아니라 주체 기준. `POST …/design/decisions` 포함)에 `X-Project-Epoch`. 불일치 409 `EPOCH_MISMATCH` `{currentEpoch}`. **예외(D-04)**: heartbeat, `GET /runner/commands`, 명령 결과 — 이전 epoch 허용, heartbeat는 204 + `X-Current-Epoch` 헤더, commands는 본문 `currentEpoch`. 명령 결과는 헤더에 받은 `commands[].epoch`를 그대로 보내며 명령 ID의 epoch와 일치해야 한다(다르면 409 EPOCH_MISMATCH). 그 외 요청은 트랜잭션 안에서 재확인(data-model §5.1) |
 | epoch 전환 | Runner는 409를 받으면 새 일을 멈추고 이전 epoch outbox를 **버린 뒤** commands를 조회, 정리 완료 후에만 새 epoch 저장 |
 | 멱등 | Runner·Planning POST/PATCH는 `Idempotency-Key` 필수(없으면 400 `IDEMPOTENCY_KEY_REQUIRED`). 같은 키·같은 본문 → 저장된 응답 재생(`Idempotency-Replayed: true`), 다른 본문 → 409 `IDEMPOTENCY_CONFLICT`. 예외: heartbeat(자연 멱등) |
 | 키 구성 | 시도 이벤트 `att:<attemptId>:<event>:<at>`(§9.1-6), 그 외 `<kind>:<runnerId>:<uuid>`. outbox에 쓸 때 생성해 재전송 때 유지 |
 | 팀장 멱등 | 생성·승인·초기화·발송 POST는 선택적 `Idempotency-Key`. 화면은 항상 보낸다(버튼 이중 클릭·재시도) |
 | 동시 수정 | **모든 팀장 수정**에 §1.3의 expected version 필수. 불일치 409 `VERSION_CONFLICT` `{current, changes[{at,actor,field,before,after}]}` (§0.3 충돌 창에 필요) |
 | 페이지 | `?limit=&cursor=`, `{items,nextCursor}`. WBS 트리는 전체 요약 1회 |
+| ID | 서버가 준 불투명 문자열. 클라이언트가 형식을 만들거나 해석하지 않음. Task 참조만 `TASK-` + 숫자 4자리 이상 |
+| 비동기 | 작업을 만드는 팀장 요청은 202 `{jobId}`(저장소 확인은 `{id}`, Planning 시작은 `{id,jobId}`) |
+| 값 철자 | openapi.json이 정본. reconcile `none/done/partial`, drift compat `compatible/breaking/unchecked`(화면 「대조 안 함」=unchecked), 입력 변경 `added/modified/deleted`, CI stage `task/int/night/deploy`. DB 내부 값이 다르면 API 경계에서 변환 |
 | 속도 | Runner 429 + `Retry-After` 허용 |
 
 ### 1.1 오류 본문
@@ -31,12 +34,14 @@ G§8이 정한 경로·의미는 그대로 두고 빈 곳을 **보강**(★)한�
 |---|---|---|
 | 400 | `VALIDATION_FAILED` `DEPENDENCY_SELF` `LIMIT_EXCEEDS_CAP` | 수정 안내, 재시도 없음 |
 | 401/403 | 위 표 | Runner는 중지·경보 |
-| 404 | `TASK_NOT_FOUND` `PROJECT_NOT_FOUND` `WBS_NODE_NOT_FOUND` `DEPENDENCY_NOT_FOUND` `ATTEMPT_NOT_FOUND` `MESSAGE_NOT_FOUND` | 안내 |
-| 409 | `VERSION_CONFLICT` `EPOCH_MISMATCH` `DEPENDENCY_DUPLICATE` `DEPENDENCY_CYCLE` `TASK_HAS_SUCCESSORS` `EXTERNAL_WRITE_BLOCKED`★ `PROJECT_EXISTS` `INPUT_UNCHANGED` `ATTEMPT_CLOSED` `SCHEDULE_CYCLE` `INVALID_TRANSITION`★ `GATE_NOT_PASSED`★ `CLAIM_REJECTED`★ `LEASE_LOST`★ `CLEANUP_PENDING`★ `IDEMPOTENCY_CONFLICT`★ `DECISIONS_PENDING`★ | 재시도하지 않고 최신 조회 |
+| 404 | `TASK_NOT_FOUND` `PROJECT_NOT_FOUND` `WBS_NODE_NOT_FOUND` `DEPENDENCY_NOT_FOUND` `ATTEMPT_NOT_FOUND` `MESSAGE_NOT_FOUND`, 전용 코드가 없는 자원은 `NOT_FOUND`★ `details{resource,id}` | 안내 |
+| 409 | `VERSION_CONFLICT` `EPOCH_MISMATCH` `DEPENDENCY_DUPLICATE` `RECIPIENT_DUPLICATE`★(G§8.5 수신자 중복) `DEPENDENCY_CYCLE` `TASK_HAS_SUCCESSORS` `EXTERNAL_WRITE_BLOCKED`★ `PROJECT_EXISTS` `INPUT_UNCHANGED` `ATTEMPT_CLOSED` `SCHEDULE_CYCLE` `INVALID_TRANSITION`★ `SPLIT_JUDGEMENT_REQUIRED`★ `ACTIVE_TASK_BLOCKED`★ `ORDER_NOT_PRESERVED`★ `GATE_NOT_PASSED`★ `CLAIM_REJECTED`★ `LEASE_LOST`★ `CLEANUP_PENDING`★ `IDEMPOTENCY_CONFLICT`★ `DECISIONS_PENDING`★ | 재시도하지 않고 최신 조회 |
 | 412 | — 사용 안 함(409로 통일) | |
 | 422 | `SUBAGENT_INSTALL_FAILED`(job 결과 코드) | 시도 시작 안 함 |
 | 429 | `RATE_LIMITED`★ | `Retry-After` |
 | 500/503 | `INTERNAL` `UNAVAILABLE`★ | 다시 시도 / Runner 재시도 |
+
+`INVALID_TRANSITION`은 상태가 맞지 않는 요청에 쓴다: 성공한 저장소 확인 없는 등록, 열린 세션 없는 stop 등. 정리 대기 중 등록·초기 분석 재시도는 `CLEANUP_PENDING`. 실행 요청·중단·재개·슬롯 재획득·재판단 전 run-grade가 불가하면 `CLAIM_REJECTED`.
 
 ### 1.2 Runner 재시도
 
@@ -48,16 +53,19 @@ G§0.3 L73 「모든 수정 API」를 따른다. 본문이 있으면 `updatedAt`
 
 | 명령 | 비교 대상(aggregate) |
 |---|---|
-| Task PATCH·DELETE·승인·반려·완료·등급·분할·예외 | `tasks.updatedAt` (명세·설계·체크리스트·산출물 변경도 증가시킴) |
+| Task PATCH·DELETE·**착수 승인 요청**·승인·반려·완료·등급·분할·예외 | `tasks.updatedAt` (명세·설계·체크리스트·산출물 변경도 증가시킴) |
 | 실행 요청·중단·재개 | Task + 중단은 시도 `updatedAt` |
 | 의존성 추가·삭제 | **후속 Task** `updatedAt`. 변경 시 후속 Task도 증가, 순환은 잠금 안에서 별도 판정 |
 | CP 제출·승인·반려·반영 | `change_proposals.updatedAt` + 미리보기는 `previewHash` |
 | 기술 결정·불일치 처리 | 해당 행. 일괄 확정은 각 결정의 `updatedAt` 목록 |
 | 초기 WBS 승인·재분석 | 초안 revision |
+| 초기 분석 다시 시도 | 초안이 있으면 `{revision}`, 초안 전이면 `{revision:null, runNo}`(분석 회차) |
+| 차이 분석 다시 시도 | `projects.updatedAt` + `version`(실패한 입력 버전) |
 | 입력 분석·분석 안 함 | 확인한 커밋 목록 + `projects.updatedAt` |
 | 초기화 | `confirmName` + 화면이 본 epoch |
 | 설정 PUT·수신자·규칙·불가일·불안정 테스트 | 해당 설정/행 |
 | 메시지 초안·전송·취소·재전송 | `messages.updatedAt` |
+| 메시지 읽음 | 없음 — 내용·전달 상태를 바꾸지 않는 멱등 표시라 예외. `messages.updatedAt`도 올리지 않는다 |
 | 새 Task·메시지·보고서 생성, 연결 확인·미리보기·테스트 발송 | 기존 행을 수정하지 않음 — 멱등 키만. Task 생성은 잠금 안에서 부모 존재 판정 |
 | 수동 발송·재발송 | 멱등 키 + 현재 `mail_log` 상태 |
 
@@ -74,7 +82,7 @@ G§0.3 L73 「모든 수정 API」를 따른다. 본문이 있으면 `updatedAt`
 | POST `/api/projects/:projectId/tasks` | P TASK-0005 + 명세·AC·체크리스트(Wizard 3단계) → 201 `{id,taskKey,wbsPath,lifecycleStatus}` | VALIDATION_FAILED, WBS_NODE_NOT_FOUND |
 | PATCH `/api/tasks/:taskKey` | `{updatedAt, …}` → `{task,changes[]}`. **status 필드 없음**(§5.5) | VERSION_CONFLICT |
 | DELETE `/api/tasks/:taskKey` | 204 | TASK_HAS_SUCCESSORS |
-| POST `/api/tasks/:taskKey/dependencies` | `{predTaskKey,depType}` → 201 `{dependency,blocked}` | DEPENDENCY_* |
+| POST `/api/tasks/:taskKey/dependencies` | `{predTaskKey,depType}` → 201 `{dependency:{id,pred,succ,type},blocked}`(`id`는 삭제 API에 사용) | DEPENDENCY_*, ACTIVE_TASK_BLOCKED(D-35), INVALID_TRANSITION(취소된 Task를 선행으로 지정) |
 | DELETE `/api/dependencies/:id` | 204 | DEPENDENCY_NOT_FOUND |
 
 ★ 화면 동작용 보강:
@@ -82,7 +90,8 @@ G§0.3 L73 「모든 수정 API」를 따른다. 본문이 있으면 `updatedAt`
 | API | 용도 |
 |---|---|
 | PATCH `/api/tasks/:taskKey/{spec,design/:kind,checklist/:itemKey,outputs}` · POST/DELETE checklist | 섹션별 편집(§4.4). §1.3 |
-| POST `/api/tasks/:taskKey/approve` · `/reject` | 계획 승인 |
+| POST `/api/tasks/:taskKey/request-approval` `{updatedAt, comment?}` | **착수 승인 요청**(Q-05 2행). `planning`만, 명세 필수 항목 충족 시 → `approval`. 200 `{task,changes[]}`. 미충족 400 VALIDATION_FAILED(`errors[]`에 항목), 다른 상태 409 INVALID_TRANSITION, 낡은 버전 409 VERSION_CONFLICT, 없음 404 TASK_NOT_FOUND. 자동 전이하지 않음. 상태·이력을 한 트랜잭션에 기록 |
+| POST `/api/tasks/:taskKey/approve` · `/reject` `{updatedAt, comment?}` | 착수 승인 / 반려(Q-05 3행). `approval`만 → `ready`(`planning_approved_at` 기록) / `planning`. 승인은 필수 항목을 다시 검사하고, 규칙 5·7·9 판단이 유효한 충족이 아니면 409 SPLIT_JUDGEMENT_REQUIRED `{items[{rule,reason}]}`(D-33). 응답·오류는 위와 같음(반려는 필수 항목 검사 없음) |
 | GET `/api/tasks/:taskKey/gate` · POST `/complete` | Gate 조회, 완료 **판정 요청**(미충족 409 GATE_NOT_PASSED + 조건별 사유) |
 | GET `/api/tasks/:taskKey/{history,attempts,verifications,messages}` | 탭 |
 | PUT `/api/tasks/:taskKey/grade` · DELETE | 등급 고정·해제 → 재추정·재조정 |
@@ -90,11 +99,11 @@ G§0.3 L73 「모든 수정 API」를 따른다. 본문이 있으면 `updatedAt`
 | POST `/api/tasks/:taskKey/runs` `{kind}` · POST `/api/attempts/:id/stop` · `/resume` | 실행 요청 job 생성 / 중단 / 재개. 불가 시 409 CLAIM_REJECTED `{reasons[]}` |
 | GET/POST `/api/messages`, PATCH 초안, POST `/:id/{send,cancel,resend,read}` | §4.10. 초안 서버 보존 |
 | GET/POST `/api/plannings`, POST `/api/plannings/:id/reviews/:rid/choice` · `/proposals` | §4.5 |
-| GET/POST `/api/proposals`, GET `/:id/preview`, POST `/:id/{submit,approve,reject,request-changes,apply}` | 미리보기와 반영은 같은 함수. apply는 재시뮬레이션 |
-| GET `/api/dashboard`, `/api/schedule`, `/api/replans`, POST `/api/replans/run` | §4.1, §6 |
+| GET/POST `/api/proposals`, GET `/:id/preview`, POST `/:id/{submit,approve,reject,request-changes,apply}` | 미리보기와 반영은 같은 함수. apply는 재시뮬레이션. 보류 사유 `holdReasons[{code,taskKey?,rule?,message}]`: `JUDGEMENT_MISSING` `JUDGEMENT_NOT_MET` `ORDER_NOT_PRESERVED` `ACTIVE_TASK_BLOCKED`(D-33~35). 하나라도 있으면 자동 반영은 `held`, 수동 승인·반영은 409(판단은 `SPLIT_JUDGEMENT_REQUIRED`, 순서는 `ORDER_NOT_PRESERVED`, 차단은 `ACTIVE_TASK_BLOCKED`)이고 강제 우회 없음. D-33~35 외의 반영 불가 사유(완료 Task·순환·없는 대상 등, §5.6)는 `issues[{index,code,taskKey?,message}]`에 담고(`taskKey`는 특정 Task의 문제일 때만. 새 Task는 `idMap`의 예상 키), 수동 apply에서 이것만 있으면 200으로 `status=held`를 돌려준다. preview는 `{previewHash,impact,issues,holdReasons,diff,idMap}`, apply는 `{proposal,impact,issues,holdReasons,diff,idMap}`. add op의 `t`에는 `scope`·`files`·`design`·`conflictGroup`을 선택 필드로 둔다(정의와 생략 규칙은 [data-model §2.4-1](data-model.md#24-1-cp-add-task의-선택-필드)). add op의 `t.splitBasis`(분할 근거)는 **일반 CP는 선택, 분할 CP(`source.kind="split"`)의 추가 Task는 필수**이며 팀장·Planning 작성에 같이 적용. 형식은 초안의 `splitBasis`와 같은 공백 아닌 문자열. 분할 CP에서 빠지면 400 VALIDATION_FAILED, 저장된 CP의 시뮬레이션에서는 `issues`의 `SPLIT_BASIS_MISSING`. 팀장 작성 POST는 판단 필드를 받지 않음(400). 판단이 필요한 CP가 `review`에 들어오면 서버가 `planning` 판단 job을 만들고, 승인·미리보기·반영에서 대상 hash가 달라진 것을 발견하면 다시 만든다(CP와 hash 조합당 열린 job 1개 [결정]). 조회 응답에 `taskJudgements[]`·`splitJudgements`. DB `hold_reasons`에는 `{holdReasons,issues}`를 함께 저장. `impact`에 `removedDependencies[{pred,succ,type,reason}]`·**`unblockedSuccessors[{taskKey,remainingBlockers[]}]`** — 취소로 관계가 제거된 후속과, 남은 선행이 없어 실제로 풀리는지를 구분(D-27) |
+| GET `/api/dashboard`, `/api/schedule`, `/api/replans`, POST `/api/replans/run` | §4.1, §6. 조회 응답의 필드 구조는 openapi.json이 정본. `schedule.warnings[]`의 `CLOCK_SKEW_CLAMPED`는 시계 오차로 자른 값의 이전·이후를 보존: Task `{code,taskKey,field:"actStart"\|"actEnd",before,after}` 또는 세션 `{code,sessionFrom,field:"lastHeartbeatAt"\|"to",before,after}`. 계산에만 자른 값을 쓰고 저장 기록은 바꾸지 않음(§9.1-3) |
 | GET `/api/verifications`, `/api/evidence`, `/api/evidence/:id/content`, `/api/gates`, `/api/history` | §4.7, §4.9. 콘텐츠는 attachment + nosniff |
-| GET/PUT `/api/settings/{workflow,exec-policy,models,split,schedule,blackouts,concurrency,obs-budget,subagents,ci}` | §4.9 탭 |
-| GET `/api/runner-state` | 연결·준비·PC·동시 실행·관측·제한 요인 묶음 |
+| GET/PUT `/api/settings/{workflow,exec-policy,models,split,schedule,blackouts,concurrency,obs-budget,subagents,ci}` | §4.9 탭. `settings/ci`와 §2.3의 `ci/settings`는 **같은 설정 한 벌**(같은 행·버전). 저장 전 `updatedAt`은 null. `models` PUT은 `{agent,id,allowed}`만 받고 이름·rank·efforts는 읽기 전용(§7.1, Q-06) |
+| GET `/api/runner-state` | 연결·준비·PC·동시 실행·관측·제한 요인 묶음 + 최근 중단 구간 `gaps[{from,to\|null,reason}]` 최대 6개·최신순(P L6684), reason `reboot/power_off/error/manual/unknown`, 진행 중이면 `to=null` |
 | GET `/api/alerts`, GET `/api/system/integrity` | 현재 알림 / 정합성 점검 |
 | POST `/api/auth/session` · DELETE, GET `/api/session` | §2.4 |
 
@@ -105,10 +114,10 @@ G§0.3 L73 「모든 수정 API」를 따른다. 본문이 있으면 `updatedAt`
 | POST `/api/project/repo-checks` `{url}` | 형식 400 우선(저장소까지만) → 202 `{id}`, GET `/:id`★ 결과 |
 | POST `/api/project` | 이름·url·목표일·제약·지시·`repoCheckId`★. 성공한 확인이 없거나 정리 대기면 409. → 201 `{project,jobId}` |
 | GET `/api/project`★ | 등록·입력·bootstrap·변경 감지 |
-| POST `/api/project/bootstrap/approve` · `/rerun` · `/retry`★ | 초안 revision 지정. approve → WBS+기준 v1을 한 트랜잭션 |
+| POST `/api/project/bootstrap/approve` · `/rerun` · `/retry`★ | approve·rerun은 초안 revision, retry는 §1.3의 `{revision}` 또는 `{revision:null,runNo}`. approve → WBS+기준 v1을 한 트랜잭션. 켜진 규칙 5·7·9 판단이 유효한 충족이 아닌 Task가 있으면 409 SPLIT_JUDGEMENT_REQUIRED(D-33) |
 | POST `/api/projects/:projectId/boot/tech/confirm` `{decisions[{id,choice}]}` | 미결정이 있으면 409 DECISIONS_PENDING |
 | POST `/api/project/inputs` `{commit,instr?}` · `/inputs/skip` · `/inputs/retry`★ | 409 INPUT_UNCHANGED |
-| POST `/api/project/reset` `{confirmName,keepSettings}` · GET `/reset-preview`★ · GET `/export`★ | 건수·정리 내용 / 내보내기(비밀값·수신자 제외) |
+| POST `/api/project/reset` `{confirmName,keepSettings}` · GET `/reset-preview`★ · GET `/export`★ | 건수·정리 내용 / 내보내기 **zip**(데이터 JSON·보고서 PDF·Evidence, P L4702 안내문. 비밀값·수신자 제외). zip 내부 manifest는 M2-04에서 정함 |
 | GET `/api/system/resets` | 초기화 기록 |
 | GET·PUT `/api/settings/github`, POST `/check`★ | `tokenSet`만 |
 
@@ -118,15 +127,21 @@ G§8.5, §8.5-1, §8.6, §8.7의 표 전체를 그대로 구현한다(재기술�
 
 - 보고서: 기간 `from ≤ to ≤ 오늘`, 최대 93일 → 400. 수정·삭제 API 없음. PDF 실패 503 `PDF_FAILED`★.
 - 메일 큐 키 `reportId+recipientId+tryNo`, 실패 15분 후 1회 자동 재시도.
-- CI retry/deploy-check → 202 + job. `GET /ci/pipeline`★(정의 표시), GET·PATCH `/ci/settings`★.
+- CI retry/deploy-check → 202 `{jobId}`. 메일 발송·재발송·테스트 → 202 `{ids}`(발송 기록 ID). `GET /ci/pipeline`★(정의 표시), GET·PATCH `/ci/settings`★.
 - 불일치 `resolve{how:"contract"}`는 Runner job을 만들고 **결과 커밋이 보고된 뒤** resolved. 호환 깨짐은 기술 결정 승인 필요(§4.12).
+- `POST /api/projects/:projectId/design/decisions`는 **Runner 토큰**(Agent 제안, §8.6)이며 `{jobId,fence,authority:"agent"|"free",…}`. agent는 승인 대기, free는 기록. GET과 approve/reject/change는 팀장.
 - Telegram 오류: `token_invalid`(401) `chat_not_found`(400) `forbidden`(403) `rate_limited`(429) `network` `webhook_in_use` `chat_migrated`★(자동 교체 금지). 마스킹 문자열 토큰 400.
 
 ### 2.4 로그인 ★ (owner Q-01)
 
 - POST `/api/auth/session` `{method:"link",token}`: loopback 연결만, 토큰 1회 소비 → 204 + 세션 쿠키. 프록시 헤더를 믿지 않고 socket 주소로 판정한다. 실패는 구분 없이 401 `LOGIN_FAILED`.
 - `{method:"password",password}`: LAN 모드만. 횟수 제한 429, 성공 시 세션 교체. 비밀번호 분실은 이 PC CLI로 재설정.
+- GET `/api/session` → `{principal:"lead",method:"link"|"password",expiresAt,csrfToken}`. `csrfToken`을 `X-CSRF-Token`에 쓴다. 세션 쿠키 이름은 `awbs_session`.
 - 로그인 화면 1개에 LAN 비밀번호 입력과 「이 PC에서는 새 링크 발급」 안내를 둔다. Origin 검사는 로그인에도 적용한다.
+
+### 2.5 착수 승인의 명세 필수 항목
+
+목적·완료 조건(P Wizard `wizErrs` L6787 필수), AC 1개 이상·체크리스트 1개 이상(G§5.2-1 규칙 4, §5.5), 필수 산출물 1개 이상(G§5.5), 담당·검증 Agent 지정. G는 「명세 완료」의 항목을 열거하지 않으므로 이 목록은 Gate를 통과할 수 있는 최소 조합으로 정한 것이다 [결정]. 판정은 shared 순수 함수 하나로 하고 요청·승인이 함께 쓴다. Task 착수 승인 요청은 G§4.14 「승인 요청」 이벤트 목록(L515)에 없으므로 Telegram을 보내지 않는다.
 
 ## 3. Runner API
 
@@ -136,12 +151,12 @@ G§8.5, §8.5-1, §8.6, §8.7의 표 전체를 그대로 구현한다(재기술�
 |---|---|
 | POST `/runner/heartbeat` `{runnerId,version,epoch}` | 204 + `X-Current-Epoch`. 60초 |
 | POST `/runner/sessions` | stop은 열린 세션만. `reason=unknown`은 서버만 |
-| POST `/runner/host` `/readiness` `/models` `/usage` `/concurrency` | readiness key에 `obs`★ `gh`★ `lfs`★ 추가. concurrency는 세션별 `{attemptId,observed,reserved,state}`★ 포함 |
-| GET `/runner/tasks/:taskKey/run-grade?role=` | 등급 정책 단일 출처. 재작업 상향·재개·하향을 서버가 계산해 `{model,effort,adjust}`★로도 준다 |
+| POST `/runner/host` `/readiness` `/models` `/usage` `/concurrency` | readiness key에 `obs`★ `gh`★ `lfs`★ 추가. concurrency는 세션별 `{attemptId,observed,reserved,state}`★ 포함. host에 `bootId`★(해제 증거 대조). readiness에 `cli[{agent,version,model,options}]`★ — 관측 등급은 서버가 조합으로 판정. models는 `models[{id,label,rank,efforts}]`로 **모델별** CLI 값(낮은 순, 미확인 null)을 보고하고 P의 Agent 단위 `efforts`는 쓰지 않음(owner Q-06) |
+| GET `/runner/tasks/:taskKey/run-grade?role=` | 등급 정책 단일 출처. 재작업 상향·재개·하향을 서버가 계산해 `{model,effort,adjust}`★로도 준다. `adjust`는 조정이 없으면 null, 있으면 `{kind:"up"|"down"|"keep"|"regrade",from:{model,effort},to:{model,effort},reason}`(regrade=D-29, 모델 이동 상향 D-30은 up). 재판단 전이면 claim `reasons[]`, claim 뒤 해제됐으면 409 CLAIM_REJECTED |
 | GET `/runner/tasks/:taskKey/subagents?role=` | 모델·effort 없음. hash 검증 후 설치 |
 | GET `/runner/messages?cursor=` · POST `/:id/ack` | G의 `since` 대신 **cursor**를 우선 사용(같은 시각 유실 방지). `since`도 호환 |
 | POST `/runner/messages/:id/response`★ | Agent 응답 `{text,workState}`. 전달 상태와 분리(§9.4-1) |
-| POST `/runner/attempts/:id/status` | `subagents.used` 제거(D-12) |
+| POST `/runner/attempts/:id/status` | `subagents.used` 제거(D-12). P의 `escalation`은 같은 `adjust` 구조로 대체(호환 입력 없음) |
 | POST `/runner/attempts/:id/interrupt` | 200 `{taskStatus:"paused"}`, 종료된 시도 409 |
 | POST `/runner/attempts/:id/result` | dev·rework: summary·changedFiles·evidence·failure·tokens. qa·reverify: **`verification{headSha,specRevision,result,cmd,expected,actual,defects[],checklist[]}`**★ 필수 |
 | POST `/runner/attempts/:id/evidence`★ | multipart 1파일, sha256·크기 검증. 결과 보고 전 업로드하고 id로 참조 |
@@ -161,10 +176,10 @@ GET  /api/runner/commands                → {currentEpoch, commands:[{id,kind:"
 POST /api/runner/commands/:id/result     → {status, items:[{name,ok,detail}]}
 POST /api/runner/jobs/claim {kinds[],capacity} → 200 {job:{id,kind,payload,leaseUntil,fence}} | 204
 POST /api/runner/jobs/:id/renew {fence}  → {leaseUntil}         409 LEASE_LOST
-POST /api/runner/jobs/:id/start {fence,hostId,bootId,processGroup?,headSha,installedSubagents[]} → {attemptId?}
-POST /api/runner/jobs/:id/process {fence,processGroup,cgroup}      → 프로세스 생성 직후 보유에 기록
+POST /api/runner/jobs/:id/start {fence,hostId,bootId,headSha?,installedSubagents[]} → {attemptId?}
+POST /api/runner/jobs/:id/process {fence,processGroup,cgroup}      → 프로세스 생성 직후 기록: slot_state reserved→active
 POST /api/runner/jobs/:id/slots/release {fence,hostId,proof,at}      → 물리 슬롯만 반환, 논리 잠금 유지
-POST /api/runner/jobs/:id/slots/acquire {fence,hostId,processGroup}  → 같은 시도의 CLI 재기동 전 용량 재획득·그룹 등록
+POST /api/runner/jobs/:id/slots/acquire {fence,hostId}  → CLI·① 실행 전 용량 재획득: slot_state none→reserved(그룹은 생성 뒤 /process)
 POST /api/runner/jobs/:id/release {fence,hostId,proof,at}            → 잔여 보유 해제(낡은 fence도 허용, 아래)
 POST /api/runner/jobs/:id/reconcile {fence,evidence}                  → 외부 상태 대조 결과
 POST /api/runner/jobs/:id/finish {fence,status,result?,error?}
@@ -174,18 +189,20 @@ POST /api/runner/jobs/:id/finish {fence,status,result?,error?}
 |---|---|---|
 | `repo_check` | url | repo-checks result |
 | `bootstrap` / `input_diff` | 커밋, 지시, 이전 커밋, 재개 단계 | progress → draft / proposal |
-| `planning` / `estimate` / `split` | 대상 Task, 정책 | planning API |
+| `planning` / `estimate` / `split` | `tasks[{taskKey,subjectHash,content}]`, 정책. `planning`은 `proposal{id,ops,targets[{target,subjectHash,before,after}],splitSubjectHash,splitTasks[{taskKey,content}]}\|null`도 포함(아래 판단 payload 규칙) | planning API. 재판단 보고에 hash를 그대로 돌려보냄(data-model §2.3-1) |
 | `attempt` | taskKey, kind, agent, 브랜치, 기준 커밋, 입력 버전, 작업 지시 묶음 | status → result/interrupt |
 | `stop_attempt` | attemptId, 사유 | interrupt |
 | `integrate` / `deploy_check` / `ci_retry` | PR·커밋 | ci runs, queue |
 | `design_apply` / `merge_followup` | 항목·PR | design snapshot |
 
+판단 payload: `content`·`before`·`after`는 data-model §2.3-1의 `JudgedContent`(**`doneCond` 포함**)이고 hash 계산 범위와 같다. `subjectHash`는 `after`(재판단은 `content`)의 hash. 기존 Task는 `before` 필수, 새 Task(`NEW-n`)는 null. `targets`는 추가된 Task와 `JudgedContent`가 바뀐 Task만. `ops`는 판단 기록을 뺀 값. 분할 CP만 `splitSubjectHash`(ops+splitTasks)와 `splitTasks`(대상 Task의 현재 내용, 1개 이상)를 함께 주고 아니면 둘 다 null. 내용과 hash는 한 트랜잭션의 같은 시점 값이며, Runner는 이 payload만으로 판단하고 CP·Task 조회 API를 두지 않는다.
+
 규칙:
 
 1. 정리 명령이 남아 있으면 claim은 409 CLEANUP_PENDING.
-2. `attempt` claim 시 서버가 한 트랜잭션에서 선행·Task 상태·상한·Agent 상한·충돌 묶음·readiness·사용량·관측 미확인·등급과 **다른 job의 미해제 보유**를 확인하고 슬롯 `reserved`·잠금 `held`로 예약한다(인계받은 job은 자기 잠금을 그대로 사용). 시도는 아직 만들지 않는다. 설치 성공 뒤 `start`는 [data-model §2.5-1](data-model.md#25-1-실행-보유의-단일-정의)의 **자기 보유**만 예외로 인정하고 다른 job의 보유와 전체 용량을 다시 검사한 뒤 `slot_state reserved→active`·시도 생성·Task 전이를 한 트랜잭션으로 처리한다. 중복 start는 같은 attemptId를 재생하고 전환은 1회다. claim 실패 시 job은 대기하고 `reasons[]`를 화면에 보인다(§4.6).
+2. `attempt` claim 시 서버가 한 트랜잭션에서 선행·Task 상태·상한·Agent 상한·충돌 묶음·readiness·사용량·관측 미확인·등급과 **다른 job의 미해제 보유**를 확인하고 슬롯 `reserved`·잠금 `held`로 예약한다(인계받은 job은 자기 잠금을 그대로 사용). 시도는 아직 만들지 않는다. 설치 성공 뒤 `start`는 [data-model §2.5-1](data-model.md#25-1-실행-보유의-단일-정의)의 **자기 보유**만 예외로 인정하고 다른 job의 보유와 전체 용량을 다시 검사한 뒤 시도 생성·Task 전이를 한 트랜잭션으로 처리한다(`slot_state`는 `reserved` 유지, `/process`에서 active). `headSha`는 attempt와 통합 계열(`integrate`·`deploy_check`·`ci_retry`)만 필수이고 그 외 job은 보내지 않는다(빠짐·불필요한 값 400, 서버가 job kind로 판정). 중복 start는 같은 attemptId를 재생하고 전환은 1회다. claim 실패 시 job은 대기하고 `reasons[]`를 화면에 보인다(§4.6).
 3. lease 60초, 20초마다 renew [결정]. lease 만료는 **자원 해제가 아니다**. 조회 전용 job(`repo_check`)만 바로 재할당한다. attempt와 외부 효과 job은 §3.4.
-4. 모든 보고는 `fence`를 포함하고 낡은 fence는 409 LEASE_LOST. 예외: `release`는 **원래 job·host·boot·process group이 일치**할 때 낡은 fence도 받되 보유 해제 외 상태는 바꾸지 않는다.
+4. job에서 나온 모든 보고는 `fence`를 포함하고 낡은 fence는 409 LEASE_LOST. 경로에 job/시도가 없는 12종 — CI run 시작, 병합 상태, design snapshot, estimates, replans, planning sessions·analyses·reviews·proposals, CP judgements, task plan, 기술 결정 POST — 은 본문에 `jobId`도 필수. 저장소 확인 결과는 경로 ID로 job을 찾고 fence만 받는다. CI run 갱신은 시작 때 저장한 run→job과 fence를 대조한다. **job 없이 시작한 야간 점검만** jobId 없이 시작하고 갱신 fence는 null(다른 run의 null은 거부). job 밖 telemetry(heartbeat·sessions·host·readiness·models·usage·concurrency·input-changes·github/status)와 메시지 ack·응답은 fence가 없다. `subagent-usage`는 세션 종료 뒤 사후 확정(§6.7-7)이므로 job이 끝났어도 **그 job의 마지막 fence**면 받는다. 예외: `release`는 **원래 job·host·boot·process group이 일치**할 때 낡은 fence도 받되 보유 해제 외 상태는 바꾸지 않는다.
 5. 야간 점검과 입력 변경 확인은 Runner가 `policy` 시각으로 시작한다. 중복은 멱등 키 `night:<date>`로 막는다.
 6. 자동 실행과 한도는 §3.5.
 
@@ -195,17 +212,24 @@ POST /api/runner/jobs/:id/finish {fence,status,result?,error?}
 |---|---|
 | POST `/planning/estimates` | P TASK-0012. 완료 Task 거부 |
 | POST `/planning/replans` | 서버가 일정을 **다시 계산**. 제출 용량은 참고값. 정책 off → 202(D-10) |
-| POST `/planning/bootstrap/:jobId/draft` | phases·wps·tasks(분류·담당·추정·명세·AC·체크리스트·등급·하위 Agent·분할 근거·충돌 묶음·설계 항목)·deps. 순환·참조·필수 검증, 실패 400 |
+| POST `/planning/bootstrap/:jobId/draft` | phases·wps·tasks(분류·담당·추정·명세·AC·체크리스트·등급·하위 Agent·분할 근거·`judgedRules`·충돌 묶음·설계 항목)·deps. 판단 미기록·불충족 초안도 저장해 화면에 보이되 승인에서 보류. 순환·참조·필수 검증, 실패 400 |
 | POST `/planning/bootstrap/:jobId/tech`★ | 기술 결정 제안(근거·대안) |
 | POST `/planning/sessions`★ · `/:id/analyses` · `/:id/reviews` | §4.5 두 분석·교차 검토 |
-| POST `/planning/proposals`★ | CP 제출. 서버 정책에 따라 자동 반영/보류/검토 |
-| POST `/planning/tasks/:taskKey/plan`★ | 등급·하위 Agent·충돌 묶음 판단과 근거 |
+| POST `/planning/proposals`★ | CP 제출. 서버 정책에 따라 자동 반영/보류/검토. 새 Task의 판단은 add op의 `t.judgedRules`, 내용이 바뀌는 기존 Task는 `taskJudgements[{taskKey,judgedRules}]`, 분할 CP는 `splitJudgements`. 모두 `subjectHash` 없이 보내고 서버가 **변경 적용 후 내용**으로 계산 |
+| POST `/planning/proposals/:id/judgements`★ | 저장된 CP(팀장 작성 포함)에 판단만 덧붙임. `{jobId,fence,judgements[{target:"TASK-n"\|"NEW-n",judgedRules}],splitJudgements?}` → 204. payload hash와 현재 hash가 다르면 409 VERSION_CONFLICT, `applied`·`rejected` CP는 409 INVALID_TRANSITION. ops의 변경 내용은 바꾸지 않고 CP `updatedAt`을 올림(낡은 화면의 승인은 409) |
+| POST `/planning/tasks/:taskKey/plan`★ | 등급·하위 Agent·충돌 묶음 판단과 근거, `judgedRules`(data-model §2.3-1). `subjectHash` 불일치 409 VERSION_CONFLICT |
 
 ### 3.4 실행 보유와 복구
 
 1. **시도 종료 ≠ 자원 반환.** heartbeat 3회 누락이면 §6.5대로 시도 `interrupted`, Task `paused`로 기록하지만 보유는 `slot_state=unconfirmed`, `lock_state=held`로 남는다. 슬롯·충돌 묶음·Task 재개를 계속 막고 사유를 화면에 보인다(§6.7 L804-806).
-2. 해제 증거: `no_process`(프로세스를 만든 적 없음), `group_empty`(Runner가 그룹·자손 empty 확인), `boot_changed`(같은 host의 boot ID 변경 — 이전 프로세스가 존재할 수 없음). 출력 단절·lease 만료·시간 경과는 증거가 아니다.
-3. Runner는 프로세스 생성 **전에** 예정된 그룹/cgroup 이름을 로컬에 영속화한다. 재시작 시 로컬 기록과 서버 보유를 대조해 정리하고 release한다. 기록이 없거나 확인할 수 없으면 `unconfirmed`를 유지하고 알린다.
+2. 해제 증거 `proof`: `{kind:"no_process",bootId}` · `{kind:"group_empty",bootId,processGroup}` · `{kind:"boot_changed",bootId,processGroup|null,currentBootId}`. `bootId`·`processGroup`은 **보유를 만든 원래 값**이고 저장값과 같아야 하며, `currentBootId`는 host가 보고한 현재 값과 같고 원래 값과 달라야 한다. 뜻: `no_process`(실행 명령을 시작한 적 없고 남은 래퍼도 없음을 3번 절차로 확인), `group_empty`(Runner가 그룹·자손 empty 확인), `boot_changed`(같은 host의 boot ID 변경 — 이전 프로세스가 존재할 수 없음). 출력 단절·lease 만료·시간 경과는 증거가 아니다.
+3. **생성과 기록 사이의 정리.** 모든 CLI·① 명령·설치 명령은 같은 절차로 띄운다.
+   - (가) 생성 전: 로컬에 launch 기록(`launchId`, job, hostId, bootId, 예정 cgroup 이름)을 fsync로 영속화. (나) **대기 래퍼**를 새 프로세스 그룹으로 생성(cgroup을 쓸 수 있으면 예정 cgroup 안에서). 래퍼 환경에 비밀값이 아닌 `launchId`를 둔다. (다) pgid를 로컬에 영속화하고 `/process`를 보낸다. (라) `/process`가 성공한 뒤에만 래퍼에 실행을 허가해 실제 명령을 exec한다.
+   - Runner가 (라) 전에 죽으면 허가 파이프가 닫혀 래퍼는 **실제 명령을 실행하지 않고 종료**한다. `/process`가 거부되면(LEASE_LOST 등) 허가하지 않고 그룹을 종료한다. 응답 유실은 같은 멱등 키로 재시도하고 확인 전에는 허가하지 않는다.
+   - 프로세스가 기록 전에 스스로 죽으면: 그룹·cgroup·`launchId` 프로세스가 없음을 확인 → 서버에 pgid가 없으면 `no_process`, 이미 기록됐으면 `group_empty`로 슬롯 해제. 시도가 시작됐으면 `failed`로 보고하고 잠금은 §3.4-9를 따른다.
+   - Runner 재시작 시 claim 전에 launch 기록과 서버 보유를 대조한다. 예정 cgroup의 프로세스, 기록된 pgid, `/proc`의 같은 사용자·같은 `launchId` 프로세스를 찾아 그룹 단위로 종료하고 **비었음을 다시 확인**한다. pgid는 재사용될 수 있으므로 프로세스 시작 시각 또는 `launchId`가 맞을 때만 종료한다.
+   - `no_process`는 서버 보유에 pgid가 없고 위 확인이 끝났을 때만 쓴다(단순히 「기록 없음」은 근거가 아님). 서버 보유에 pgid가 있으면 `no_process` 해제(`slots/release`·`release`)를 409 INVALID_TRANSITION으로 거부하고 보유를 바꾸지 않는다. 로컬 launch 기록을 잃었거나 확인할 수 없으면 `unconfirmed`를 유지하고 알리며, 같은 host에서는 boot 변경만이 남은 해제 근거다.
+   - 서버 쪽: `reserved`인 채 연결이 끊기거나 lease가 만료되면 자동 해제하지 않고 `unconfirmed`로 바꾼다. `/process`는 `reserved`에서만 새 pgid를 받고, 같은 pgid 재전송은 성공, 다른 pgid는 409 INVALID_TRANSITION.
 4. 같은 PC에서 증거 없이 보유를 푸는 강제 API는 두지 않는다.
 5. **PC 변경**: §6.6 L749-751이 새 PC에서 새 시도 재개를 확정했으므로, 이전 host 보유는 슬롯 `unconfirmed`·잠금 `orphaned`로 남기되 새 host의 슬롯 계산과 재개 차단에서 제외한다. host 식별자 변경 없는 단순 재시작에는 적용하지 않는다. **로컬 재개와 공유 외부 쓰기는 분리한다.** `renew`·fence는 GitHub가 알지 못하므로 외부 쓰기 격리 근거로 쓰지 않는다.
    - host가 바뀌면 서버가 `external_write_authority`를 generation+1, `blocked`로 바꾼다. 새 host는 로컬 worktree의 dev·①·QA까지만 하고 push·PR·commit status·병합·design_apply·초기화 되돌림을 포함한 GitHub 쓰기는 409 `EXTERNAL_WRITE_BLOCKED`로 막는다. 사유는 기존 실행 불가 사유·관리자 개입 알림에 표시한다. 배포 확인은 host별 로컬 compose만 대상으로 하고, 공유 대상이면 같은 차단을 적용한다.
