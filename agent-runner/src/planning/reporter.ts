@@ -60,6 +60,8 @@ export class PlanningReporter {
    */
   async send<K extends ReportId>(operation: K, name: string, request: Request<K> | (() => Promise<Request<K>>)): Promise<ApiResponse<K>> {
     const { api, epoch, runnerId, jobId, checkpoint, maxAttempts = 6, now = Date.now, random = Math.random, signal } = this.options;
+    // 진행 기록은 초기화 번호별 파일이다. 다른 번호의 기록으로 보내지 않는다(독립 리뷰 1: 옛 요청에 새 번호를 붙이지 않음).
+    if (checkpoint.epoch !== epoch) throw new PlanningStopped('EPOCH_MISMATCH', `${operation}: 진행 기록의 초기화 번호(${String(checkpoint.epoch)})가 현재(${String(epoch)})와 다릅니다.`);
     let sent = checkpoint.sent(jobId, name);
     if (!sent) {
       sent = { key: `${operation}:${runnerId}:${randomUUID()}`, request: typeof request === 'function' ? await request() : request };

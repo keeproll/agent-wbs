@@ -13,30 +13,52 @@ import { atomicWrite } from '../state/files.ts';
  * - 보낸 요청과 멱등 키도 저장한다. 응답을 잃거나 Runner가 재시작해 같은 job을 다시 실행하면,
  *   같은 키·같은 본문으로 다시 보내 서버가 한 번만 처리하게 한다(contracts §1.2 멱등).
  *
- * 저장 위치: `AWBS_HOME/state/planning/<작업 키의 SHA-256 앞 32자>.json`. 쓰기는 임시 파일·fsync·이름 교체(atomicWrite)다.
+ * 저장 위치: `AWBS_HOME/state/planning/e<초기화 번호>-<작업 키의 SHA-256 앞 32자>.json`.
+ * 초기화 정리는 이 폴더를 통째로 지운다(원본 §4.2 ③ 「기록·결과를 남기지 않음」). 쓰기는 임시 파일·fsync·이름 교체(atomicWrite)다.
  * 결과(outputs)는 분석 회차(runNo)별로 둔다. 재분석은 회차가 바뀌므로 이전 회차 결과를 쓰지 않는다.
  */
 
 export interface SentRequest { key: string; request: unknown }
 interface Document {
   version: 1;
+  /** 초기화 번호(epoch). 다른 번호의 기록은 쓰지 않는다. */
+  epoch: number;
   /** 회차 → 단계 결과 이름 → 값 */
   outputs: Record<string, Record<string, unknown>>;
   /** `<Runner job ID>:<요청 이름>` → 보낸 요청 */
   sent: Record<string, SentRequest>;
 }
 
-const empty = (): Document => ({ version: 1, outputs: {}, sent: {} });
+const empty = (epoch: number): Document => ({ version: 1, epoch, outputs: {}, sent: {} });
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+/** 보고기(reporter.ts)가 만드는 멱등 키 형식 `<operation>:<runnerId>:<uuid>` */
+const KEY = /^[A-Za-z]+:[^:\s]+:[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/;
 
-function valid(value: unknown): value is Document {
-  if (typeof value !== 'object' || value === null) return false;
-  const doc = value as Partial<Document>;
-  return doc.version === 1 && typeof doc.outputs === 'object' && doc.outputs !== null && typeof doc.sent === 'object' && doc.sent !== null;
+function validSent(entry: unknown): entry is SentRequest {
+  if (!isRecord(entry) || typeof entry.key !== 'string' || !KEY.test(entry.key) || !isRecord(entry.request)) return false;
+  const { params, body } = entry.request;
+  return (params === undefined || isRecord(params)) && (body === undefined || isRecord(body));
+}
+
+/**
+ * 형식이 조금이라도 다르면 받지 않는다. 문법만 맞는 손상(예: `outputs: []`)도 거부한다.
+ * 왜: 손상된 기록을 빈 기록처럼 쓰면 이미 보낸 요청의 멱등 키를 잃고 새 키로 다시 보내, 초안·CP를 두 번 처리하게 된다(독립 리뷰 4).
+ */
+function validate(value: unknown, epoch: number): Document | string {
+  if (!isRecord(value) || value.version !== 1) return '버전이 다릅니다';
+  if (value.epoch !== epoch) return `초기화 번호가 다릅니다(기록 ${String(value.epoch)}, 현재 ${String(epoch)})`;
+  if (!isRecord(value.outputs) || !Object.values(value.outputs).every(isRecord)) return '단계 결과 형식이 다릅니다';
+  if (!isRecord(value.sent) || !Object.values(value.sent).every(validSent)) return '보낸 요청 형식이 다릅니다';
+  return value as unknown as Document;
 }
 
 export class PlanningCheckpointError extends Error { override name = 'PlanningCheckpointError'; }
 
+/** 단계 결과의 형식 검사. 저장된 값이 기대한 모양이 아니면 손상으로 본다. */
+export type Guard<T> = (value: unknown) => value is T;
+
 export class PlanningCheckpoint {
+  readonly epoch: number;
   private readonly directory: string;
   private readonly file: string;
   private doc: Document;
@@ -46,27 +68,37 @@ export class PlanningCheckpoint {
     this.file = file;
     this.doc = doc;
     this.runNo = runNo;
+    this.epoch = doc.epoch;
   }
 
-  static async load(directory: string, workKey: string, runNo: number): Promise<PlanningCheckpoint> {
-    const file = `${createHash('sha256').update(workKey).digest('hex').slice(0, 32)}.json`;
-    let doc = empty();
-    try {
-      const parsed: unknown = JSON.parse(await readFile(join(directory, file), 'utf8'));
-      // 깨진 기록을 고쳐 쓰지 않는다. 지우면 이미 보낸 요청의 멱등 키를 잃어 중복 처리될 수 있다.
-      if (!valid(parsed)) throw new PlanningCheckpointError(`Planning 진행 기록 ${file}의 형식이 올바르지 않습니다.`);
-      doc = parsed;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        if (error instanceof PlanningCheckpointError) throw error;
-        throw new PlanningCheckpointError(`Planning 진행 기록 ${file}을 읽지 못했습니다.`);
-      }
+  /** 파일 이름에 초기화 번호를 넣는다. 새 번호에서는 옛 번호의 파일을 아예 열지 않는다. */
+  static fileName(epoch: number, workKey: string): string {
+    return `e${String(epoch)}-${createHash('sha256').update(workKey).digest('hex').slice(0, 32)}.json`;
+  }
+
+  static async load(directory: string, epoch: number, workKey: string, runNo: number): Promise<PlanningCheckpoint> {
+    const file = PlanningCheckpoint.fileName(epoch, workKey);
+    let text: string;
+    try { text = await readFile(join(directory, file), 'utf8'); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return new PlanningCheckpoint(directory, file, empty(epoch), runNo);
+      throw new PlanningCheckpointError(`Planning 진행 기록 ${file}을 읽지 못했습니다.`);
     }
+    let parsed: unknown;
+    try { parsed = JSON.parse(text); }
+    catch { throw new PlanningCheckpointError(`Planning 진행 기록 ${file}의 JSON 문법이 깨졌습니다.`); }
+    // 깨진 기록을 고쳐 쓰지 않는다. 지우면 이미 보낸 요청의 멱등 키를 잃어 중복 처리될 수 있다.
+    const doc = validate(parsed, epoch);
+    if (typeof doc === 'string') throw new PlanningCheckpointError(`Planning 진행 기록 ${file}이 손상되었습니다: ${doc}.`);
     return new PlanningCheckpoint(directory, file, doc, runNo);
   }
 
-  output<T>(name: string): T | undefined {
-    return this.doc.outputs[String(this.runNo)]?.[name] as T | undefined;
+  /** 저장된 단계 결과. 없으면 undefined, 있는데 모양이 다르면 손상으로 보고 멈춘다. */
+  output<T>(name: string, guard: Guard<T>): T | undefined {
+    const value = this.doc.outputs[String(this.runNo)]?.[name];
+    if (value === undefined) return undefined;
+    if (!guard(value)) throw new PlanningCheckpointError(`Planning 진행 기록 ${this.file}의 「${name}」 결과가 손상되었습니다.`);
+    return value;
   }
 
   async saveOutput(name: string, value: unknown): Promise<void> {
@@ -89,18 +121,25 @@ export class PlanningCheckpoint {
   }
 }
 
+/** `AWBS_HOME/state/planning` — 초기화 정리(cleanup/reset.ts)가 통째로 지우는 폴더 */
+export function planningStateDirectory(home: string): string {
+  return join(home, 'state', 'planning');
+}
+
 export class PlanningCheckpoints {
   private readonly directory: string;
   private constructor(directory: string) { this.directory = directory; }
 
   /** `home`은 AWBS_HOME이다. 폴더는 Runner 사용자만 읽고 쓴다(0700). */
   static async open(home: string): Promise<PlanningCheckpoints> {
-    const directory = join(home, 'state', 'planning');
+    const directory = planningStateDirectory(home);
     await mkdir(directory, { recursive: true, mode: 0o700 });
     return new PlanningCheckpoints(directory);
   }
 
-  load(workKey: string, runNo: number): Promise<PlanningCheckpoint> {
-    return PlanningCheckpoint.load(this.directory, workKey, runNo);
+  async load(epoch: number, workKey: string, runNo: number): Promise<PlanningCheckpoint> {
+    // 초기화 정리가 폴더를 지운 뒤에도 같은 객체로 이어 쓸 수 있게 다시 만든다.
+    await mkdir(this.directory, { recursive: true, mode: 0o700 });
+    return PlanningCheckpoint.load(this.directory, epoch, workKey, runNo);
   }
 }
