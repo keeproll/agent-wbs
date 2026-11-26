@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { Value } from 'typebox/value';
-import { externalView, internalKpis, internalTerms, reportFigures, ReportSnapshotSchema as ReportSnapshot, type ReportSnapshotData } from '@awbs/shared';
+import { externalView, internalKpis, internalTerms, reportFigures, ReportSnapshotSchema as ReportSnapshot, scrubInternal, type ReportSnapshotData } from '@awbs/shared';
 
 /** 빈 스냅샷에 필요한 칸만 채운다. */
 type Patch = Partial<Omit<ReportSnapshotData, 'summary'>> & { summary?: Partial<ReportSnapshotData['summary']> };
@@ -76,5 +76,26 @@ describe('보고용은 내부 용어(Task ID·시도·모델/Effort·토큰·RP 
     expect(ext.risks).toEqual(['선행 작업 대기 1건 — 선행 완료 후 순차 진행']);
     expect(ext.highlights).toEqual([]);
     expect(ext.plan).toEqual([]);
+  });
+});
+
+describe('리뷰 3: 보고용에 들어가는 자유 입력(작업 제목·프로젝트 이름)에서도 내부 용어를 뺀다(G L396)', () => {
+  const bad = 'TASK-0007 RP-002 gpt-5 Effort 토큰 실행 시도 개선';
+  test('제목의 내부 용어만 빼고 나머지 말은 남긴다', () => {
+    expect(scrubInternal(bad)).toBe('개선');
+    expect(scrubInternal('로그인 화면 (claude-opus-5-5로 구현)')).toBe('로그인 화면 (로 구현)');
+    expect(scrubInternal('TASK-0001')).toBe('(제목 비공개)');
+    expect(scrubInternal('일반 제목')).toBe('일반 제목');
+  });
+  test('완료 항목·다음 계획에 내부 용어가 섞인 제목이 있어도 보고용 출력은 0건', () => {
+    const s = snap({
+      done: [doneTask('TASK-0001', bad)],
+      next: [{ taskKey: 'TASK-0003', wbsPath: '1.2', title: `${bad} 2단계`, assignee: 'Codex', verifier: 'Claude', status: 'ready', start: '2026-11-03', end: '2026-11-04', estHours: 4,
+        grade: null, blockers: [], conflictGroup: null }],
+    });
+    const ext = externalView(s, 'weekly');
+    expect(internalTerms(JSON.stringify(ext))).toEqual([]);
+    expect(ext.highlights).toEqual(['개선']);
+    expect(ext.plan).toEqual(['개선 2단계 (11-03 ~ 11-04)']);
   });
 });

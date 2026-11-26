@@ -22,7 +22,7 @@ export function registerReportRoutes(app: FastifyInstance, pool: Pool): void {
     }, PROJECT);
     route('createReport', async (request, reply) => {
       const { projectId } = request.params as { projectId: string };
-      return reply.code(201).send(await createCustomReport(clientOf(request), projectId, request.body as { from: string; to: string; view: 'int' | 'ext' }));
+      return reply.code(201).send(await createCustomReport(clientOf(request), projectId, request.body as { from: string; to: string; view: 'int' | 'ext' }, pool));
     }, PROJECT);
     route('getReport', async (request) => {
       const { reportId } = request.params as { reportId: string };

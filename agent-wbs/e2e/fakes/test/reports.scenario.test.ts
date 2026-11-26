@@ -16,7 +16,8 @@ import {
 import { createPool, recreateTestDatabase, runMigrations, seedDemo, type Pool } from '../../../packages/db/src/index.ts';
 import { buildApp } from '../../../apps/api/src/app.ts';
 import { issueLoginLink } from '../../../apps/api/src/platform/credentials.ts';
-import { generateDueReports } from '../../../apps/api/src/reports/service.ts';
+import { createCustomReport, generateDueReports } from '../../../apps/api/src/reports/service.ts';
+import { inEpoch } from '../../../apps/api/src/platform/transaction.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Body = any;
@@ -347,6 +348,66 @@ describe('누락 보충 상한(G L1047)', () => {
     const all = (await list('daily')).map((r) => r.from).sort();
     expect(all.at(-1)).toBe('2027-01-30');
     expect(new Set(all).size).toBe(all.length);
+  });
+});
+
+/**
+ * 리뷰 1 재현용: 보고서가 체크리스트를 읽은 직후, 다른 연결이 필수 항목 완료를 해제하고 저장한다.
+ * 보고서의 읽기는 한 시점이어야 하므로 체크리스트·Gate가 서로 다른 시점 값을 담으면 안 된다.
+ */
+function poolChangingChecklistMidway(base: Pool): Pool {
+  let fired = false;
+  return {
+    connect: async () => {
+      const client = await base.connect();
+      type Fn = (...args: unknown[]) => unknown;
+      const c = client as unknown as { query: Fn; release: Fn };
+      const query = c.query.bind(client);
+      const release = c.release.bind(client);
+      c.query = async (...args: unknown[]) => {
+        const result = await query(...args);
+        if (!fired && typeof args[0] === 'string' && /from checklist_items/.test(args[0])) {
+          fired = true;
+          await owner.query("update checklist_items set done=false where required and task=(select id from tasks where task_key='TASK-0007')");
+        }
+        return result;
+      };
+      c.release = (...a: unknown[]) => { c.query = query; return release(...a); };
+      return client;
+    },
+  } as unknown as Pool;
+}
+
+describe('리뷰 1·2: 한 시점 읽기, 자동 반영 보류 CP', () => {
+  const t7 = async (reportId: string) => {
+    const s = (await owner.query<{ snapshot: ReportSnapshotData }>('select snapshot from reports where id=$1', [reportId])).rows[0]?.snapshot;
+    return s?.active.find((x) => x.taskKey === 'TASK-0007');
+  };
+  test('기간 지정: 생성 도중 체크리스트가 바뀌어도 체크리스트와 Gate가 같은 시점 값이다', async () => {
+    await owner.query("update checklist_items set done=true where task=(select id from tasks where task_key='TASK-0007')");
+    const today = seoulDay(new Date());
+    const id = await projectId();
+    const r = await inEpoch(pool, 1, (c) => createCustomReport(c, id, { from: addDays(today, -1), to: today, view: 'int' }, poolChangingChecklistMidway(pool)));
+    const t = await t7(r.id);
+    expect(t?.checklist.requiredLeft).toBe(0);
+    expect(t?.gate.unmet).not.toContain('checklist');
+  });
+  test('정기 생성: 같은 상황에서도 같은 시점 값이다', async () => {
+    await owner.query("update checklist_items set done=true where task=(select id from tasks where task_key='TASK-0007')");
+    expect(await generateDueReports(poolChangingChecklistMidway(pool), 1, { now: kst('2027-02-02', '07:00') })).toBeGreaterThan(0);
+    const r = (await list('daily')).find((x) => x.from === '2027-02-01');
+    assert(r);
+    const t = await t7(r.id);
+    expect(t?.checklist.requiredLeft).toBe(0);
+    expect(t?.gate.unmet).not.toContain('checklist');
+  });
+  test('held 변경 제안은 「자동 반영 보류」, review는 「검토 대기」로 구분한다(P L3812)', async () => {
+    await owner.query("update change_proposals set status='held' where cp_key='CP-002'");
+    const today = seoulDay(new Date());
+    const r = await lead('POST', `/api/projects/${await projectId()}/reports`, { from: today, to: today, view: 'int' });
+    const issues = (await open(r.body.id as string)).snapshot.issues.map((i) => i.text);
+    await owner.query("update change_proposals set status='review' where cp_key='CP-002'");
+    expect(issues.find((x) => x.startsWith('CP-002'))).toMatch(/^CP-002 Change Proposal 자동 반영 보류 — /);
   });
 });
 

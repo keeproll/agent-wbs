@@ -2,8 +2,7 @@ import type { Pool, PoolClient } from '@awbs/db';
 import { customPeriodProblem, duePeriodic, reportKey, seoulDay, snapshotProblem, type ReportKind, type ReportSnapshotData } from '@awbs/shared';
 import { ApiError, invalid } from '../changes/http.ts';
 import { decodeCursor, encodeCursor, InputProblem } from '../changes/history.ts';
-import { deferChange } from '../changes/events.ts';
-import { inEpoch } from '../platform/transaction.ts';
+import { deferChange, dropChanges, flushChanges } from '../changes/events.ts';
 import { scheduleView } from '../planning/schedule.ts';
 import { buildSnapshot } from './snapshot.ts';
 
@@ -49,36 +48,92 @@ async function insertReport(client: PoolClient, projectId: string, row: { key: s
  * - startup: 서버 시작 직후 점검이면 모든 보충분에 「서버 시작 시 누락분 보충」을 적는다(G L377).
  */
 export async function generateDueReports(pool: Pool, epoch: number, options: { now?: string; startup?: boolean } = {}): Promise<number> {
-  return inEpoch(pool, epoch, async (client) => {
-    // 같은 순간의 두 점검을 차례로 세운다. 중복 자체는 고유 인덱스가 막고, 잠금은 헛 계산을 줄인다.
-    await client.query("select pg_advisory_xact_lock(hashtextextended('awbs:reports',0))");
-    const project = (await client.query<{ id: string; start: string }>("select id,to_char(start_date,'YYYY-MM-DD') start from projects where phase='active'")).rows[0];
-    if (!project) return 0;
-    const now = options.now ?? (await client.query<{ now: string }>(`select ${iso('clock_timestamp()')} now`)).rows[0]?.now ?? new Date().toISOString();
-    const last = (await client.query<{ kind: 'daily' | 'weekly'; to: string }>(
-      `select kind,to_char(max("to"),'YYYY-MM-DD') "to" from reports where project_id=$1 and kind in ('daily','weekly') group by kind`, [project.id])).rows;
-    const due = duePeriodic({ now, start: project.start, lastDaily: last.find((r) => r.kind === 'daily')?.to ?? null, lastWeekly: last.find((r) => r.kind === 'weekly')?.to ?? null });
-    let created = 0;
-    for (const d of due) {
-      const snapshot = await buildSnapshot(client, project.id, { kind: d.kind, from: d.from, to: d.to, at: now });
-      const reason = options.startup ? REASON.startup : Date.parse(now) - Date.parse(d.dueAt) > LATE_MS ? REASON.late : REASON.scheduled;
-      if (await insertReport(client, project.id, { key: reportKey(d.kind, d.from), kind: d.kind, from: d.from, to: d.to, view: 'int', snapshot, at: now, dueAt: d.dueAt, reason })) created++;
+  const client = await pool.connect();
+  try {
+    // 같은 순간의 두 점검을 차례로 세운다. 잠금은 한 시점 읽기를 시작하기 **전에** 잡는다.
+    // 왜: 반복 읽기는 첫 조회 때 시점이 정해진다. 잠금을 그 뒤에 잡으면 앞 점검이 만든 보고서를 못 본 채 같은 기간을 다시 계산한다.
+    // 중복 자체는 고유 인덱스가 막는다(architecture §2 worker).
+    await client.query("select pg_advisory_lock(hashtextextended('awbs:reports',0))");
+    try {
+      return await consistentWrite(client, epoch, async () => {
+        const project = (await client.query<{ id: string; start: string }>("select id,to_char(start_date,'YYYY-MM-DD') start from projects where phase='active'")).rows[0];
+        if (!project) return 0;
+        const now = options.now ?? (await client.query<{ now: string }>(`select ${iso('clock_timestamp()')} now`)).rows[0]?.now ?? new Date().toISOString();
+        const last = (await client.query<{ kind: 'daily' | 'weekly'; to: string }>(
+          `select kind,to_char(max("to"),'YYYY-MM-DD') "to" from reports where project_id=$1 and kind in ('daily','weekly') group by kind`, [project.id])).rows;
+        const due = duePeriodic({ now, start: project.start, lastDaily: last.find((r) => r.kind === 'daily')?.to ?? null, lastWeekly: last.find((r) => r.kind === 'weekly')?.to ?? null });
+        let created = 0;
+        for (const d of due) {
+          const snapshot = await buildSnapshot(client, project.id, { kind: d.kind, from: d.from, to: d.to, at: now });
+          const reason = options.startup ? REASON.startup : Date.parse(now) - Date.parse(d.dueAt) > LATE_MS ? REASON.late : REASON.scheduled;
+          if (await insertReport(client, project.id, { key: reportKey(d.kind, d.from), kind: d.kind, from: d.from, to: d.to, view: 'int', snapshot, at: now, dueAt: d.dueAt, reason })) created++;
+        }
+        return created;
+      });
+    } finally {
+      await client.query("select pg_advisory_unlock(hashtextextended('awbs:reports',0))");
     }
-    return created;
-  });
+  } finally { client.release(); }
 }
 
-/** 기간 지정 보고서(POST /api/projects/:projectId/reports). 공통 관문이 연 트랜잭션 안에서 실행한다. */
-export async function createCustomReport(client: PoolClient, projectId: string, input: { from: string; to: string; view: 'int' | 'ext' }) {
+/** 재시도할 DB 오류: 동시 수정과 충돌(40001)·교착(40P01). 세대 불일치(AW001)는 재시도하지 않는다. */
+const RETRYABLE = new Set(['40001', '40P01']);
+
+/**
+ * 한 시점(REPEATABLE READ)으로 읽고 쓰는 worker 트랜잭션. 세대 잠금(lock_epoch)이 첫 조회다.
+ * 왜 반복 읽기인가: 기본(READ COMMITTED)은 조회마다 그때의 최신 값을 읽는다. 체크리스트를 읽은 뒤 누가 바꾸면,
+ * 같은 Task의 체크리스트와 Gate가 서로 다른 시점 값으로 저장된다(리뷰 M6-01 1). 저장한 보고서는 고칠 수 없어 모순이 영원히 남는다.
+ */
+async function consistentWrite<T>(client: PoolClient, epoch: number, fn: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await client.query('begin isolation level repeatable read');
+      await client.query('select public.lock_epoch($1)', [epoch]);
+      const result = await fn();
+      await flushChanges(client);
+      await client.query('commit');
+      return result;
+    } catch (error) {
+      dropChanges(client);
+      await client.query('rollback');
+      if (!RETRYABLE.has((error as { code?: string }).code ?? '') || attempt >= 2) throw error;
+    }
+  }
+}
+
+/** 읽기 전용 한 시점 트랜잭션(기간 지정 보고서용). 쓰기는 공통 관문이 연 트랜잭션이 한다. */
+async function consistentRead<T>(pool: Pool, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query('begin isolation level repeatable read read only');
+    const result = await fn(client);
+    await client.query('commit');
+    return result;
+  } catch (error) {
+    await client.query('rollback').catch(() => undefined);
+    throw error;
+  } finally { client.release(); }
+}
+
+/**
+ * 기간 지정 보고서(POST /api/projects/:projectId/reports).
+ * - 스냅샷은 `reader`의 다른 연결에서 **한 시점(반복 읽기, 읽기 전용)**으로 만든다.
+ *   왜: 공통 관문의 트랜잭션은 기본(READ COMMITTED)이고 이미 조회를 시작해 격리 수준을 바꿀 수 없다.
+ * - 저장(번호 발급·보고서 행)은 공통 관문 트랜잭션(client)에서 한다. 그래서 멱등 키·세대 잠금 규칙은 다른 변경과 같다.
+ * - 생성 시각은 그 한 시점 트랜잭션의 첫 조회 시각이다.
+ */
+export async function createCustomReport(client: PoolClient, projectId: string, input: { from: string; to: string; view: 'int' | 'ext' }, reader: Pool) {
   const project = (await client.query<{ id: string }>('select id from projects where id=$1', [projectId])).rows[0];
   if (!project) throw new ApiError('PROJECT_NOT_FOUND', {}, [], '프로젝트를 찾을 수 없습니다.');
-  const now = (await client.query<{ now: string }>(`select ${iso('clock_timestamp()')} now`)).rows[0]?.now ?? new Date().toISOString();
-  const problem = customPeriodProblem(input.from, input.to, seoulDay(now));
-  if (problem) throw invalid([{ path: problem.path, rule: problem.rule, message: problem.message }], problem.message);
+  const { now, snapshot } = await consistentRead(reader, async (r) => {
+    const at = (await r.query<{ now: string }>(`select ${iso('clock_timestamp()')} now`)).rows[0]?.now ?? new Date().toISOString();
+    const problem = customPeriodProblem(input.from, input.to, seoulDay(at));
+    if (problem) throw invalid([{ path: problem.path, rule: problem.rule, message: problem.message }], problem.message);
+    return { now: at, snapshot: await buildSnapshot(r, projectId, { kind: 'custom', from: input.from, to: input.to, at }) };
+  });
   const seq = (await client.query<{ value: number }>(
     `insert into counters(project_id,kind,value) values($1,'report_custom',1)
      on conflict (project_id,kind) do update set value=counters.value+1 returning value::int value`, [projectId])).rows[0]?.value ?? 1;
-  const snapshot = await buildSnapshot(client, projectId, { kind: 'custom', from: input.from, to: input.to, at: now });
   const row = await insertReport(client, projectId, { key: reportKey('custom', input.from, seq), kind: 'custom', ...input, snapshot, at: now, dueAt: null, reason: REASON.custom });
   if (!row) throw new Error('기간 지정 보고서 번호가 겹쳤습니다.');
   return summaryOf(row);

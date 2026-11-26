@@ -83,4 +83,17 @@ test('390px: 가로 넘침 없이 보고서 목록과 문서를 본다', async (
     expect((box?.x ?? 0) + (box?.width ?? 0)).toBeLessThanOrEqual(390);
   }
   if (shots) await page.screenshot({ path: `${shots}/report-390.png`, fullPage: true });
+  // 리뷰 4: 핵심 지표 값끼리 겹치지 않는다(페이지 폭 검사만으로는 못 잡는다). 팀장용·보고용 모두.
+  for (const view of ['팀장용 (상세)', '보고용 (요약)']) {
+    await page.getByRole('group', { name: '보고서 보기' }).getByRole('button', { name: view }).click();
+    await expect(page.getByRole('article').getByRole('heading', { name: view.startsWith('팀장') ? '팀장 확인 필요' : '요약', exact: true })).toBeVisible();
+    const boxes = await page.locator('.rpt-kpi .rpt-kv, .rpt-kpi .rpt-ks, .rpt-kpi .rpt-kl').evaluateAll((els) => els.map((e) => {
+      const range = document.createRange(); range.selectNodeContents(e); const r = range.getBoundingClientRect();
+      return { x: r.left, y: r.top, r: r.right, b: r.bottom, t: e.textContent };
+    }));
+    const hits = boxes.flatMap((a, i) => boxes.slice(i + 1).filter((b) => a.x < b.r - 0.5 && b.x < a.r - 0.5 && a.y < b.b - 0.5 && b.y < a.b - 0.5).map((b) => `${String(a.t)} ↔ ${String(b.t)}`));
+    expect(hits, view).toEqual([]);
+    for (const k of boxes) expect(k.r, `${String(k.t)} 오른쪽 끝`).toBeLessThanOrEqual(390);
+    if (shots) await page.locator('.rpt-kpis').screenshot({ path: `${shots}/fix1-kpis-390-${view.startsWith('팀장') ? 'int' : 'ext'}.png` });
+  }
 });

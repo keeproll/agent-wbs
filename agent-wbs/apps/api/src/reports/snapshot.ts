@@ -90,7 +90,7 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
     q<{ key: string; target: Record<string, unknown> | null; at: string; resolved: string | null }>(
       `select key,target,${iso('created_at')} at,${iso('resolved_at')} resolved from alerts where project_id=$1 or project_id is null order by created_at,id`, [projectId]),
     q<{ key: string; title: string; status: string; at: string }>(
-      `select cp_key key,title,status,${iso('created_at')} at from change_proposals where project_id=$1 and deleted_at is null and status in ('review','changes') order by created_at,id`, [projectId]),
+      `select cp_key key,title,status,${iso('created_at')} at from change_proposals where project_id=$1 and deleted_at is null and status in ('review','changes','held') order by created_at,id`, [projectId]),
     q<{ task: string; required: boolean; done: boolean }>('select task,required,done from checklist_items where project_id=$1', [projectId]),
     q<{ task: string; name: string; delivered: boolean }>('select task,name,delivered from task_outputs where project_id=$1 order by name', [projectId]),
     q<{ task: string; model_id: string; effort: string }>("select task,model_id,effort from task_grades where project_id=$1 and role='dev'", [projectId]),
@@ -180,7 +180,10 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
     const taskKey = typeof target.taskKey === 'string' && /^TASK-\d{4,}$/.test(target.taskKey) ? target.taskKey : null;
     issues.push({ level: 'warn', text, taskKey });
   }
-  for (const p of proposals.filter((x) => upTo(x.at))) issues.push({ level: 'info', text: `${p.key} Change Proposal 검토 대기 — ${p.title}`, taskKey: null });
+  // held는 자동 반영이 막혀 보류된 제안이다(planning/routes.ts). 원본 문구로 검토 대기와 구분한다(P L3812).
+  for (const p of proposals.filter((x) => upTo(x.at))) {
+    issues.push({ level: 'info', text: `${p.key} Change Proposal ${p.status === 'held' ? '자동 반영 보류' : '검토 대기'} — ${p.title}`, taskKey: null });
+  }
   for (const m of messages.filter((x) => x.dir === 'out' && upTo(x.at) && (x.delivery === 'Failed' || x.delivery === 'Queued' || x.pending_next))) {
     const t = byId.get(m.task);
     if (!t) continue;
