@@ -56,18 +56,21 @@ beforeEach(async () => {
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   url = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`;
   state = await State.open(home);
-  outbox = new Outbox(state, api(), { now: () => now, random: () => 0 });
+  outbox = new Outbox(state, api(), { now: () => now, monotonic: () => now, random: () => 0 });
 });
 afterEach(async () => {
+  await state.close();
   server.closeAllConnections();
   await new Promise<void>((resolve) => server.close(() => resolve()));
   await rm(home, { recursive: true, force: true });
 });
 
+const reopen = async () => { await state.close(); state = await State.open(home); return state; };
+
 test('보고를 먼저 원자 저장하고 재시작해도 키·본문·Runner 식별자를 유지한다', async () => {
   const entry = await usage();
   expect(requests).toHaveLength(0);
-  const restored = await State.open(home);
+  const restored = await reopen();
   expect(restored.snapshot.runnerId).toBe(state.snapshot.runnerId);
   expect(restored.snapshot.outbox[0]).toMatchObject({ id: entry.id, request: { idempotencyKey: entry.request.idempotencyKey } });
   expect((await stat(join(home, 'state/runner.json'))).mode & 0o777).toBe(0o600);
@@ -105,11 +108,11 @@ test('네트워크 단절은 재시도하고 백오프는 1초부터 60초까지
 test('백오프의 jitter와 날짜 형식 Retry-After도 지킨다', async () => {
   handle = (_req, res) => { res.setHeader('retry-after', new Date(now + 10_000).toUTCString()); fail(res, 429); };
   await usage();
-  await new Outbox(state, api(), { now: () => now, random: () => 0.5 }).flush();
+  await new Outbox(state, api(), { now: () => now, monotonic: () => now, random: () => 0.5 }).flush();
   expect(state.snapshot.outbox[0]?.nextAt).toBe(now + 10_000);
   now += 10_000;
   handle = (_req, res) => fail(res, 503);
-  await new Outbox(state, api(), { now: () => now, random: () => 0.5 }).flush();
+  await new Outbox(state, api(), { now: () => now, monotonic: () => now, random: () => 0.5 }).flush();
   expect(state.snapshot.outbox[0]?.nextAt).toBe(now + 2200);
 });
 
@@ -117,7 +120,7 @@ test('로컬 요청 검증 오류는 네트워크 단절처럼 재시도하지 �
   await status('.');
   await outbox.flush();
   expect(requests).toHaveLength(0);
-  expect(state.snapshot.outbox[0]).toMatchObject({ state: 'rejected', code: 'INVALID_REQUEST' });
+  expect(outbox.rejected[0]).toMatchObject({ state: 'rejected', code: 'INVALID_REQUEST' });
 });
 
 test('같은 시도의 뒤 보고는 보류하고 다른 시도의 보고는 보낸다', async () => {
@@ -138,7 +141,7 @@ test.each([400, 404, 409, 422, 600])('%s는 rejected로 보존하고 같은 시�
   now += 1_000_000;
   await outbox.flush();
   expect(requests).toHaveLength(1);
-  expect(state.snapshot.outbox[0]).toMatchObject({ state: 'rejected', status: code });
+  expect(outbox.rejected[0]).toMatchObject({ state: 'rejected', status: code });
   expect(outbox.readinessWarnings).toHaveLength(1);
 });
 
@@ -156,7 +159,7 @@ test('multipart 증거 파일도 디스크에서 복구해 같은 바이트로 �
     file: new Blob([bytes], { type: 'application/octet-stream' }), kind: 'log', fence: 1, sha256: 'a'.repeat(64), size: bytes.length,
   } });
   handle = (_req, res) => json(res, { id: 'e', sha256: 'a'.repeat(64), size: bytes.length }, 201);
-  await new Outbox(await State.open(home), api()).flush();
+  await new Outbox(await reopen(), api()).flush();
   const req = requests[0];
   const form = await new Response(new Uint8Array(req?.raw ?? []), { headers: { 'content-type': req?.headers['content-type'] ?? '' } }).formData();
   expect(new Uint8Array(await (form.get('file') as File).arrayBuffer())).toEqual(bytes);
@@ -186,7 +189,7 @@ test('리뷰 H2: 거부된 세션 보고는 별도 보존하고 새 세션 보�
   await outbox.flush();
   expect(requests).toHaveLength(2);
   expect(state.snapshot.outbox).toEqual([]);
-  expect(outbox.rejected).toMatchObject([{ status: 409, code: 'INVALID_TRANSITION', request: { body: { event: 'stop' } } }]);
+  expect(outbox.rejected).toMatchObject([{ status: 409, code: 'INVALID_TRANSITION', reason: '시험 오류', fix: '확인', request: { body: { event: 'stop' } } }]);
   expect(await readdir(join(home, 'state/rejected'))).toHaveLength(1);
 });
 
@@ -222,6 +225,42 @@ test('리뷰 M2: LEASE_LOST를 실행 계층에 알리고 재시작 조회에도
   await outbox.flush();
   expect(rejected).toEqual(['LEASE_LOST']);
   expect(outbox.rejectedFor('a')).toMatchObject([{ code: 'LEASE_LOST', request: { params: { attemptId: 'a' }, body: { fence: 1 } } }]);
+  await reopen();
+  outbox = new Outbox(state, api());
+  expect(outbox.rejectedFor('a')).toMatchObject([{ code: 'LEASE_LOST' }]);
+  await status('a');
+  await outbox.flush();
+  expect(requests).toHaveLength(1);
+});
+
+test('리뷰 L1·L2: 잠금 뒤 남은 임시 파일을 지우고 기존 폴더 권한도 제한한다', async () => {
+  await state.close();
+  await writeFile(join(home, 'state/crash.tmp'), '민감한 임시 내용');
+  await chmod(join(home, 'state'), 0o755);
+  await chmod(join(home, 'state/evidence'), 0o755);
+  await writeFile(join(home, 'state/runner.json'), '{broken');
+  await expect(State.open(home)).rejects.toThrow(SyntaxError);
+  expect((await readdir(join(home, 'state'))).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+  expect((await stat(join(home, 'state'))).mode & 0o777).toBe(0o700);
+  expect((await stat(join(home, 'state/evidence'))).mode & 0o777).toBe(0o700);
+  expect(await readFile(join(home, 'state/runner.json'), 'utf8')).toBe('{broken');
+});
+
+test('이전 버전의 거부 기록과 인라인 증거도 재시작 때 별도 보관한다', async () => {
+  const entry = await usage();
+  await outbox.enqueue('uploadEvidence', { epoch: 0, params: { attemptId: 'a' }, body: {
+    file: new Blob(['증거']), kind: 'log', fence: 1, sha256: 'a'.repeat(64), size: 6,
+  } });
+  const legacy = state.snapshot;
+  legacy.outbox[0] = { ...entry, state: 'rejected', code: 'VALIDATION_FAILED', status: 400 };
+  await state.close();
+  await writeFile(join(home, 'state/runner.json'), JSON.stringify({ ...legacy, outbox: legacy.outbox.map((e) => e.file
+    ? { ...e, file: { base64: Buffer.from('증거').toString('base64'), type: '' } } : e) }));
+  await reopen();
+  expect(state.snapshot.outbox).toHaveLength(1);
+  expect(state.snapshot.outbox[0]?.file?.name).toBe(legacy.outbox[1]?.id);
+  expect(state.rejected).toMatchObject([{ code: 'VALIDATION_FAILED' }]);
+  expect(await readFile(join(home, 'state/runner.json'), 'utf8')).not.toContain('base64');
 });
 
 test('리뷰 M3: 변화 없는 polling은 상태 파일을 다시 쓰지 않는다', async () => {
@@ -283,6 +322,35 @@ test('리뷰 M4: 벽시계가 뒤로 가도 단조 시계로 재시도한다', a
   expect(requests).toHaveLength(2);
 });
 
+test('리뷰 M4: 재시작 때 먼 미래 대기도 60초 이내로 줄인다', async () => {
+  const entry = await usage();
+  await state.update((draft) => { if (draft.outbox[0]) draft.outbox[0].nextAt = now + 86400_000; });
+  await reopen();
+  let monotonic = 0;
+  outbox = new Outbox(state, api(), { now: () => now, monotonic: () => monotonic });
+  await outbox.flush();
+  expect(requests).toHaveLength(0);
+  expect(state.snapshot.outbox[0]?.nextAt).toBe(now + 60_000);
+  monotonic = 60_001;
+  await outbox.flush();
+  expect(requests).toHaveLength(1);
+  expect(requests[0]?.headers['idempotency-key']).toBe(entry.request.idempotencyKey);
+});
+
+test('다른 epoch의 거부 이력은 보존하되 새 시도를 차단하지 않는다', async () => {
+  await status('a');
+  handle = (_req, res) => fail(res, 409, 'LEASE_LOST');
+  await outbox.flush();
+  await state.observeEpoch(1);
+  await state.update((draft) => { draft.epoch = 1; draft.pendingEpoch = null; });
+  await outbox.enqueue('reportAttemptStatus', { epoch: 1, params: { attemptId: 'a' }, body: { fence: 2, status: 'running', at: new Date(now).toISOString(), model: 'fake', effort: 'low' } });
+  handle = (_req, res) => res.writeHead(204).end();
+  await outbox.flush();
+  expect(requests).toHaveLength(2);
+  expect(outbox.rejected).toHaveLength(1);
+  expect(outbox.rejectedFor('a')).toEqual([]);
+});
+
 test('리뷰 M5: 시도 키는 계약 형식을 쓰며 같은 이벤트를 중복해서 쌓지 않는다', async () => {
   await status('a');
   await status('a');
@@ -305,9 +373,10 @@ test('리뷰 L4: epoch 오류 본문에 번호가 없어도 전송을 멈추고 
 
 test('동시에 쌓은 보고를 잃지 않고 손상된 상태 파일은 덮어쓰지 않는다', async () => {
   await Promise.all(Array.from({ length: 20 }, () => usage()));
-  expect((await State.open(home)).snapshot.outbox).toHaveLength(20);
+  expect((await reopen()).snapshot.outbox).toHaveLength(20);
   await writeFile(join(home, 'state/runner.json'), '{broken');
-  await expect(State.open(home)).rejects.toThrow();
+  await state.close();
+  await expect(State.open(home)).rejects.toThrow(SyntaxError);
   expect(await readFile(join(home, 'state/runner.json'), 'utf8')).toBe('{broken');
 });
 
@@ -323,6 +392,7 @@ test('서버 처리 직후 kill -9하고 재시작해도 실제 처리는 한 �
     else res.writeHead(204, { 'idempotency-replayed': 'true' }).end();
   };
   const launch = (mode: string) => spawn(process.execPath, [join(import.meta.dirname, '../helpers/outbox-worker.ts'), home, url, mode], { stdio: ['ignore', 'pipe', 'pipe'] });
+  await state.close();
   const child = launch('enqueue');
   try {
     await arrived;
@@ -334,11 +404,11 @@ test('서버 처리 직후 kill -9하고 재시작해도 실제 처리는 한 �
     expect(effects).toBe(1);
     expect(requests).toHaveLength(2);
     expect(requests[0]?.headers['idempotency-key']).toBe(requests[1]?.headers['idempotency-key']);
-    expect((await State.open(home)).snapshot.outbox).toEqual([]);
+    expect((await reopen()).snapshot.outbox).toEqual([]);
   } finally { child.kill('SIGKILL'); }
 });
 
-const runner = (cleanup?: ConstructorParameters<typeof Runner>[0]['cleanup']) => new Runner({ state, api: api(), version: 'test', now: () => now, ...(cleanup && { cleanup }) });
+const runner = (cleanup?: ConstructorParameters<typeof Runner>[0]['cleanup']) => new Runner({ state, api: api(), version: 'test', now: () => now, monotonic: () => now, ...(cleanup && { cleanup }) });
 const commands = [{ id: 'reset-1', kind: 'reset-cleanup', epoch: 1, payload: {} }];
 test('epoch 불일치는 옛 보고를 버리고 정리 결과 수신 확인 뒤에만 새 번호를 저장한다', async () => {
   let clean = false;
@@ -349,7 +419,8 @@ test('epoch 불일치는 옛 보고를 버리고 정리 결과 수신 확인 뒤
       expect(req.headers['x-project-epoch']).toBe('1');
       expect(state.snapshot.epoch).toBe(0);
       if (!clean) fail(res, 503); else { result = true; res.writeHead(204).end(); }
-    } else fail(res, 409, 'EPOCH_MISMATCH', { currentEpoch: 2 });
+    } else if (result) idle(req, res);
+    else fail(res, 409, 'EPOCH_MISMATCH', { currentEpoch: 2 });
   };
   await usage();
   await outbox.flush();
@@ -505,6 +576,6 @@ test('polling은 명령 우선·ETag 정책·동일 시각 메시지의 영속 �
   expect(requests.filter((req) => req.path.endsWith('/ack'))).toHaveLength(1);
   expect(requests.filter((req) => req.path.endsWith('policy'))[1]?.headers['if-none-match']).toBe('"v1"');
   expect(requests.some((req) => req.path.includes('cursor=opaque%2Fcursor'))).toBe(true);
-  expect((await State.open(home)).snapshot.inbox.map((m) => m.id)).toEqual(['2']);
+  expect((await reopen()).snapshot.inbox.map((m) => m.id)).toEqual(['2']);
   expect(r.heartbeatSeconds).toBe(30);
 });

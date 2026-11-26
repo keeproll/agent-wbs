@@ -1,6 +1,6 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { ApiError, type ApiClient, type ApiRequest, type ApiResponse } from './client.ts';
-import { Outbox, authenticationFailed, retryable, retryDelay } from './outbox.ts';
+import { Outbox, authenticationFailed, retryable, retryDelay, type OutboxOptions } from './outbox.ts';
 import { State, validEpoch, type Message } from '../state/state.ts';
 
 type Command = ApiResponse<'getCommands'>['body']['commands'][number];
@@ -12,6 +12,8 @@ export interface RunnerOptions {
   /** M4-03이 실제 프로세스·파일 정리와 보유 해제 증거를 제공한다. */
   cleanup?: (command: Command) => Promise<CommandResult>;
   now?: () => number;
+  monotonic?: () => number;
+  onRejected?: OutboxOptions['onRejected'];
   warn?: (message: string) => void;
 }
 
@@ -33,14 +35,17 @@ export class Runner {
   private sessionEpoch: number | undefined;
   private synchronized = false;
 
-  constructor({ state, api, version, cleanup, now = Date.now, warn = () => undefined }: RunnerOptions) {
+  constructor({ state, api, version, cleanup, now = Date.now, monotonic, onRejected, warn = () => undefined }: RunnerOptions) {
     this.state = state;
     this.api = api;
     this.version = version;
     this.cleanup = cleanup;
     this.now = now;
     this.warn = warn;
-    this.outbox = new Outbox(state, api, { now });
+    this.outbox = new Outbox(state, api, { now, ...(monotonic && { monotonic }), onRejected: async (entry) => {
+      warn(`${entry.operation}: ${entry.code ?? '보고 거부'} — 거부 기록을 확인하세요.`);
+      await onRejected?.(entry);
+    } });
   }
 
   get messages(): Message[] { return this.state.snapshot.inbox; }
@@ -88,7 +93,7 @@ export class Runner {
   poll(): Promise<void> {
     this.polling ??= this.pollOnce().catch(async (error: unknown) => {
       if (error instanceof ApiError && error.error?.code === 'EPOCH_MISMATCH') {
-        await this.state.observeEpoch(error.error.details?.currentEpoch as number);
+        await this.state.resetAfterMismatch(error.error.details?.currentEpoch);
         return;
       }
       throw error;

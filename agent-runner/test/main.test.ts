@@ -1,12 +1,15 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
-import { expect, test } from 'vitest';
+import { tmpdir } from 'node:os';
+import { beforeAll, expect, test } from 'vitest';
+import { State } from '../src/state/state.ts';
 
 const main = join(import.meta.dirname, '../src/main.ts');
+beforeAll(async () => { await mkdir(process.env.AWBS_TEST_TMP ?? tmpdir(), { recursive: true }); });
 
 test('설정이 없으면 종료 코드 2', () => {
   const result = spawnSync(process.execPath, [main], { env: {}, encoding: 'utf8' });
@@ -16,7 +19,7 @@ test('설정이 없으면 종료 코드 2', () => {
 
 test('SIGTERM으로 정상 종료하고 토큰을 남기지 않는다', async () => {
   const token = 'y'.repeat(43);
-  const home = await mkdtemp('/home/keeproll/.orca/bots/agentwbs/archive/2026-11-26/M4-01/main-test-');
+  const home = await mkdtemp(join(process.env.AWBS_TEST_TMP ?? tmpdir(), 'main-test-'));
   const events: string[] = [];
   let started: (() => void) | undefined;
   const sessionStarted = new Promise<void>((resolve) => { started = resolve; });
@@ -57,4 +60,30 @@ test('SIGTERM으로 정상 종료하고 토큰을 남기지 않는다', async ()
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await rm(home, { recursive: true, force: true });
   }
+});
+
+test('상태 파일 손상과 중복 실행은 비밀값 없이 다른 오류 종류로 기록한다', async () => {
+  const home = await mkdtemp(join(process.env.AWBS_TEST_TMP ?? tmpdir(), 'main-error-'));
+  const token = 'secret-token-'.repeat(4);
+  let state: State | undefined;
+  const launch = async () => {
+    const child = spawn(process.execPath, [main], { env: { ...process.env, AWBS_RUNNER_TOKEN: token, AWBS_HOME: home } });
+    let output = '';
+    child.stdout.on('data', (chunk) => { output += String(chunk); });
+    child.stderr.on('data', (chunk) => { output += String(chunk); });
+    try { expect((await once(child, 'close'))[0]).toBe(1); return output; }
+    finally { child.kill('SIGKILL'); }
+  };
+  try {
+    await mkdir(join(home, 'state'));
+    await writeFile(join(home, 'state/runner.json'), '{broken');
+    const corrupt = await launch();
+    expect(corrupt).toContain('STATE_CORRUPT');
+    expect(corrupt).not.toContain(token);
+    await rm(join(home, 'state/runner.json'));
+    state = await State.open(home);
+    const locked = await launch();
+    expect(locked).toContain('STATE_LOCKED');
+    expect(locked).not.toContain(token);
+  } finally { await state?.close(); await rm(home, { recursive: true, force: true }); }
 });

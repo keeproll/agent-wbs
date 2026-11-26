@@ -1,8 +1,16 @@
 import { randomUUID } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
+import { isDeepStrictEqual } from 'node:util';
 import { ApiError, ApiTransportError, type ApiClient, type ApiRequest, type ApiResponse, type OperationId } from './client.ts';
 import { State, type Entry, type ReportId } from '../state/state.ts';
 
-interface Clock { now?: () => number; random?: () => number }
+export interface OutboxOptions {
+  now?: () => number;
+  random?: () => number;
+  monotonic?: () => number;
+  onRejected?: (entry: Entry) => void | Promise<void>;
+}
+export const MAX_EVIDENCE_BYTES = 50 * 1024 * 1024;
 
 export function authenticationFailed(error: unknown): error is ApiError {
   return error instanceof ApiError && (error.status === 401 || error.status === 403);
@@ -16,7 +24,7 @@ export function retryDelay(attempts: number, error: unknown, now: number, random
   const base = Math.min(60_000, 1000 * 2 ** Math.min(attempts, 6));
   const header = error instanceof ApiError ? error.retryAfter : null;
   const after = header === null ? 0 : /^\d+(\.\d+)?$/.test(header) ? Number(header) * 1000 : Date.parse(header) - now;
-  return Math.max(Math.min(60_000, base * (1 + random * 0.2)), Number.isFinite(after) ? after : 0);
+  return Math.min(60_000, Math.max(base * (1 + random * 0.2), Number.isFinite(after) ? after : 0));
 }
 
 export class Outbox {
@@ -24,37 +32,64 @@ export class Outbox {
   private readonly api: ApiClient;
   private readonly now: () => number;
   private readonly random: () => number;
+  private readonly monotonic: () => number;
+  private readonly onRejected: OutboxOptions['onRejected'];
+  private readonly deadlines = new Map<string, number>();
   private flushing: Promise<void> | undefined;
 
-  constructor(state: State, api: ApiClient, { now = Date.now, random = Math.random }: Clock = {}) {
+  constructor(state: State, api: ApiClient, { now = Date.now, random = Math.random, monotonic = () => performance.now(), onRejected }: OutboxOptions = {}) {
     this.state = state;
     this.api = api;
     this.now = now;
     this.random = random;
+    this.monotonic = monotonic;
+    this.onRejected = onRejected;
   }
 
   /** M4-02의 readiness 보고자가 기존 점검 항목과 함께 표시한다. */
   get readinessWarnings(): string[] {
-    return this.state.snapshot.outbox.filter((e) => e.state === 'rejected').map((e) => `${e.operation}: ${String(e.status ?? '')} ${e.code ?? '보고 거부'}`);
+    const entries = this.rejected;
+    return [...entries.slice(-20).map((e) => `${e.operation}: ${String(e.status ?? '')} ${e.code ?? '보고 거부'}`),
+      ...(entries.length > 20 ? [`보관된 거부 기록 ${String(entries.length)}건. rejected 조회로 원인을 확인하세요.`] : [])];
   }
 
-  async enqueue<K extends ReportId>(operation: K, request: Omit<ApiRequest<K>, 'idempotencyKey'>): Promise<Entry> {
+  get rejected(): Entry[] { return this.state.rejected; }
+  rejectedFor(attemptId: string): Entry[] { return this.rejected.filter((e) => e.request.epoch === this.state.snapshot.epoch && e.request.params?.attemptId === attemptId); }
+
+  async enqueue<K extends ReportId>(operation: K, request: Omit<ApiRequest<K>, 'idempotencyKey'> & { idempotencyKey?: string }): Promise<Entry> {
     const input: Omit<Entry['request'], 'idempotencyKey'> = request;
     const at = typeof input.body?.at === 'string' ? input.body.at : new Date(this.now()).toISOString();
     const attemptId = input.params?.attemptId;
     const id = randomUUID();
-    // 같은 밀리초에 여러 증거 파일이 생겨도 서로 다른 이벤트다.
-    const key = attemptId ? `att:${attemptId}:${operation}-${id}:${at}` : `${operation}:${this.state.snapshot.runnerId}:${id}`;
+    const event = operation === 'uploadEvidence' ? `${operation}-${encodeURIComponent(String(input.body?.kind))}-${String(input.body?.sha256)}`
+      : `${operation}${typeof input.body?.status === 'string' ? `-${input.body.status}` : ''}`;
+    const key = request.idempotencyKey ?? (attemptId ? `att:${attemptId}:${event}:${at}` : `${operation}:${this.state.snapshot.runnerId}:${id}`);
+    const parts = key.split(':');
+    const generalKey = parts.length === 3 && Boolean(parts[0]) && parts[1] === this.state.snapshot.runnerId && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(parts[2] ?? '');
+    if (attemptId ? !key.startsWith(`att:${attemptId}:`) || !/^[^:]+:\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/.test(key.slice(`att:${attemptId}:`.length))
+      : !/^night:\d{4}-\d\d-\d\d$/.test(key) && !generalKey) {
+      throw new TypeError('멱등 키가 계약 형식과 다릅니다.');
+    }
     const serialized = JSON.parse(JSON.stringify({ ...request, idempotencyKey: key })) as Entry['request'];
     const entry: Entry = { id, operation, request: serialized, stream: attemptId ? `attempt:${attemptId}` : operation,
       state: 'pending', attempts: 0, nextAt: 0 };
     if (operation === 'uploadEvidence') {
-      const file = (request as ApiRequest<'uploadEvidence'>).body.file;
-      entry.file = { base64: Buffer.from(await file.arrayBuffer()).toString('base64'), type: file.type };
+      const { file, size } = (request as ApiRequest<'uploadEvidence'>).body;
+      if (!(file instanceof Blob) || file.size > MAX_EVIDENCE_BYTES) throw new RangeError('증거 파일은 50 MiB 이하여야 합니다.');
+      if (size !== file.size) throw new RangeError('증거 파일의 실제 크기와 보고 크기가 다릅니다.');
+      await this.state.saveEvidence(id, file);
+      entry.file = { name: id, type: file.type };
       if (serialized.body) delete serialized.body.file;
     }
+    let saved = entry;
     await this.state.update((draft) => {
       if (operation !== 'reportCommandResult' && (draft.pendingEpoch !== null || input.epoch !== draft.epoch)) throw new Error('초기화 정리가 끝나기 전에는 보고를 추가할 수 없습니다.');
+      const existing = [...draft.outbox, ...this.rejected].find((e) => e.request.epoch === input.epoch && e.request.idempotencyKey === key);
+      if (existing) {
+        if (existing.operation !== operation || !isDeepStrictEqual(existing.request, serialized)) throw new Error('같은 멱등 키에 다른 요청을 쌓을 수 없습니다.');
+        saved = existing;
+        return;
+      }
       if (operation === 'ackMessage') {
         const messageId = input.params?.messageId;
         if (!draft.inbox.some((m) => m.id === messageId)) throw new Error('수신함에 없는 메시지입니다.');
@@ -62,7 +97,8 @@ export class Outbox {
       }
       draft.outbox.push(entry);
     });
-    return structuredClone(entry);
+    if (saved.id !== id) await this.state.removeEvidence(entry);
+    return structuredClone(saved);
   }
 
   flush(commandsOnly = false): Promise<void> {
@@ -72,7 +108,9 @@ export class Outbox {
   }
 
   private async send(commandsOnly: boolean): Promise<void> {
-    const blocked = new Set<string>();
+    const active = new Set(this.state.snapshot.outbox.map((e) => e.id));
+    for (const id of this.deadlines.keys()) if (!active.has(id)) this.deadlines.delete(id);
+    const blocked = new Set(this.rejected.filter((e) => e.request.epoch === this.state.snapshot.epoch && e.stream.startsWith('attempt:')).map((e) => e.stream));
     for (const entry of this.state.snapshot.outbox) {
       if (commandsOnly && entry.operation !== 'reportCommandResult') continue;
       const latest = this.state.snapshot;
@@ -80,32 +118,55 @@ export class Outbox {
       if (latest.pendingEpoch !== null && entry.operation !== 'reportCommandResult') return;
       if (blocked.has(entry.stream)) continue;
       blocked.add(entry.stream);
-      if (entry.state === 'rejected' || entry.nextAt > this.now()) continue;
+      if (entry.nextAt > 0 && !this.deadlines.has(entry.id)) {
+        const delay = Math.max(0, Math.min(60_000, entry.nextAt - this.now()));
+        this.deadlines.set(entry.id, this.monotonic() + delay);
+        if (entry.nextAt > this.now() + 60_000) await this.state.update((draft) => {
+          const stored = draft.outbox.find((e) => e.id === entry.id);
+          if (stored) stored.nextAt = this.now() + 60_000;
+        });
+      }
+      if ((this.deadlines.get(entry.id) ?? 0) > this.monotonic()) continue;
       try {
         const request = structuredClone(entry.request);
-        if (entry.file && request.body) request.body.file = new Blob([Buffer.from(entry.file.base64, 'base64')], { type: entry.file.type });
+        if (entry.file && request.body) request.body.file = new Blob([new Uint8Array(await this.state.evidence(entry))], { type: entry.file.type });
         const call = this.api as (id: OperationId, request: unknown) => Promise<ApiResponse<OperationId>>;
         await call(entry.operation, request);
       } catch (error) {
         if (error instanceof ApiError && error.error?.code === 'EPOCH_MISMATCH') {
-          await this.state.observeEpoch(error.error.details?.currentEpoch as number);
+          await this.state.resetAfterMismatch(error.error.details?.currentEpoch);
+          this.deadlines.clear();
           return;
         }
-        await this.state.update((draft) => {
-          const stored = draft.outbox.find((e) => e.id === entry.id);
-          if (!stored) return;
-          stored.attempts++;
-          if (retryable(error)) stored.nextAt = this.now() + retryDelay(entry.attempts, error, this.now(), this.random());
-          else {
-            stored.state = 'rejected';
-            if (error instanceof ApiError) { stored.status = error.status; stored.code = error.error?.code ?? 'INVALID_RESPONSE'; }
-            else stored.code = 'INVALID_REQUEST';
+        if (retryable(error) && !this.state.snapshot.outbox.some((e) => e.id === entry.id)) continue;
+        if (retryable(error)) {
+          const delay = retryDelay(entry.attempts, error, this.now(), this.random());
+          this.deadlines.set(entry.id, this.monotonic() + delay);
+          await this.state.update((draft) => {
+            const stored = draft.outbox.find((e) => e.id === entry.id);
+            if (stored) { stored.attempts++; stored.nextAt = this.now() + delay; }
+          });
+        } else {
+          const record = { ...entry, attempts: entry.attempts + 1, rejectedAt: this.now(),
+            code: error instanceof ApiError ? error.error?.code ?? 'INVALID_RESPONSE' : 'INVALID_REQUEST',
+            reason: error instanceof ApiError ? error.error?.message ?? `서버가 보고를 거부했습니다: HTTP ${String(error.status)}` : '로컬 요청 또는 증거 파일을 확인하세요.',
+            ...(error instanceof ApiError && error.error?.fix && { fix: error.error.fix }),
+            ...(error instanceof ApiError && { status: error.status }) };
+          await this.state.reject(record);
+          if (!entry.stream.startsWith('attempt:')) blocked.delete(entry.stream);
+          this.deadlines.delete(entry.id);
+          if (authenticationFailed(error)) {
+            try { await this.onRejected?.(structuredClone(record)); } catch { /* 인증 실패는 알림 오류와 관계없이 중지한다. */ }
+            throw error;
           }
-        });
+          await this.onRejected?.(structuredClone(record));
+        }
         if (authenticationFailed(error)) throw error;
         continue;
       }
       await this.state.update((draft) => { draft.outbox = draft.outbox.filter((e) => e.id !== entry.id); });
+      await this.state.removeEvidence(entry);
+      this.deadlines.delete(entry.id);
       blocked.delete(entry.stream);
     }
   }
