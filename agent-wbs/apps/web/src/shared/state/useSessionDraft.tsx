@@ -13,7 +13,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useLocation } from 'react-router';
 import { formatDateTime } from '../format.ts';
-import { browserStorage, browserTabId, discardStoredDraft, readStoredDraft, registerDraft, stripSecrets, type StoredDraft } from './sessionDrafts.ts';
+import { browserLogoutAt, browserStorage, browserTabId, discardStoredDraft, onDraftsCleared, readStoredDraft, registerDraft, stripSecrets, type StoredDraft } from './sessionDrafts.ts';
 
 export interface SessionDraftOptions<T> {
   id: string;
@@ -26,7 +26,7 @@ export interface SessionDraftOptions<T> {
 function readFor(id: string): StoredDraft | null {
   const storage = browserStorage();
   const tabId = browserTabId();
-  return storage && tabId ? readStoredDraft(storage, tabId, id) : null;
+  return storage && tabId ? readStoredDraft(storage, tabId, id, browserLogoutAt()) : null;
 }
 
 export function useSessionDraft<T>({ id, label, value, onRestore, secretFields = [] }: SessionDraftOptions<T>): { restoreOffer: ReactNode } {
@@ -48,6 +48,8 @@ export function useSessionDraft<T>({ id, label, value, onRestore, secretFields =
   const [offer, setOffer] = useState<{ id: string; draft: StoredDraft | null }>(() => ({ id, draft: readFor(id) }));
   if (offer.id !== id) setOffer({ id, draft: readFor(id) });
   const stored = offer.id === id ? offer.draft : null;
+  // 이 탭이나 다른 탭에서 로그아웃하면 제안을 바로 닫는다.
+  useEffect(() => onDraftsCleared(() => { setOffer((current) => ({ id: current.id, draft: null })); }), []);
 
   /** 제안에 연결된 id의 기록만 지운다. */
   const close = (draftId: string) => {

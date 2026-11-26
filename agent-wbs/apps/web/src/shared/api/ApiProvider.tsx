@@ -9,7 +9,7 @@
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createContext, use, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { readLoginToken } from '../auth/login-link.ts';
-import { browserStorage, browserTabId, clearAllDrafts, persistRegisteredDrafts } from '../state/sessionDrafts.ts';
+import { announceLogout, browserStorage, browserTabId, persistRegisteredDrafts } from '../state/sessionDrafts.ts';
 import { ApiError, createApiClient, type ApiClient } from './client.ts';
 import type { ResponseOf } from './contract.ts';
 
@@ -129,8 +129,8 @@ function SessionProvider({ children }: { children: ReactNode }) {
     refreshSession: () => sessionQuery.refetch(),
     clearSession: () => {
       // 사용자가 직접 로그아웃했다: 보관 초안을 바로 지운다. 다음 로그인(다음 사람일 수 있음)에 넘기지 않는다.
-      const storage = browserStorage();
-      if (storage) clearAllDrafts(storage);
+      // 다른 탭에도 알리고, 로그아웃 시각을 남겨 알림을 못 받은 탭도 그 이전 초안을 버리게 한다.
+      announceLogout();
       queryClient.setQueryData(['getSession', {}], null); queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== 'getSession' });
     },
   }), [client, linkLogin, sessionQuery, lastSuccessAt, queryClient]);

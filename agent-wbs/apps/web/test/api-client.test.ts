@@ -21,6 +21,7 @@ describe('API 호출 계층(api client)', () => {
     expect(url).toBe('/api/history?limit=20');
     expect(init?.method).toBe('GET');
     expect(new Headers(init?.headers).has('x-csrf-token')).toBe(false);
+    expect(init?.cache).toBe('no-store');
     await client.call('getTask', { params: { taskKey: 'TASK-0007' } });
     expect(fetch.mock.calls[1]?.[0]).toBe('/api/tasks/TASK-0007');
   });

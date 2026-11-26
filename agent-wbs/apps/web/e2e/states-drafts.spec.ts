@@ -118,3 +118,44 @@ test('대상 id가 바뀌면 새 대상의 초안만 제안하고, 복원·삭�
   await page.getByLabel('대상', { exact: true }).selectOption('A');
   await expect(page.getByRole('region', { name: '대상 A 메모 — 저장하지 못한 초안' })).toBeVisible();
 });
+
+// 재리뷰 a9d5acd: 다른 탭의 명시적 로그아웃
+test('한 탭에서 로그아웃하면 다른 탭의 보관 초안도 바로 지우고, 다음 로그인에서 제안하지 않는다', async ({ page, context }) => {
+  await expireWhileEditing(page, context);
+  await relogin(page);
+  await expect(page.getByRole('region', { name: 'TASK-0001 제목 편집 — 저장하지 못한 초안' })).toBeVisible();
+
+  const other = await context.newPage();
+  await other.goto('/dashboard');
+  await expect(other.getByRole('heading', { level: 1, name: '대시보드' })).toBeVisible();
+  await other.getByRole('button', { name: '로그아웃' }).click();
+  await expect(other).toHaveURL(/\/login/);
+
+  // 알림을 받은 탭: 복원 제안이 사라지고 저장소도 비었다.
+  await expect(page.getByRole('region', { name: /저장하지 못한 초안/ })).toHaveCount(0);
+  expect(await draftKeys(page)).toEqual([]);
+  await page.reload();
+  await relogin(page);
+  await page.goto('/_states');
+  await expect(page.getByRole('heading', { level: 1, name: '공통 컴포넌트 견본' })).toBeVisible();
+  await expect(page.getByRole('region', { name: /저장하지 못한 초안/ })).toHaveCount(0);
+});
+
+test('로그아웃 알림을 못 받은 탭도 로그아웃 시각 이전에 보관된 초안은 버린다', async ({ page }) => {
+  await fakeApi(page);
+  await page.goto('/_states');
+  await expect(page.getByRole('heading', { level: 1, name: '공통 컴포넌트 견본' })).toBeVisible();
+  await page.evaluate(() => {
+    const tabId = sessionStorage.getItem('awbs.tab') ?? '';
+    sessionStorage.setItem('awbs.draft:sandbox:target:A', JSON.stringify({ tabId, label: '대상 A 메모', path: '/_states', savedAt: 1_000, data: { text: '오래된 초안' } }));
+    sessionStorage.setItem('awbs.draft:sandbox:target:B', JSON.stringify({ tabId, label: '대상 B 메모', path: '/_states', savedAt: 3_000, data: { text: '새 초안' } }));
+    // 다른 탭이 로그아웃했지만 알림(BroadcastChannel)은 받지 못한 상황: 기록만 남아 있다.
+    localStorage.setItem('awbs.logoutAt', '2000');
+  });
+  await page.reload();
+  await expect(page.getByRole('heading', { level: 1, name: '공통 컴포넌트 견본' })).toBeVisible();
+  await expect(page.getByRole('region', { name: '대상 A 메모 — 저장하지 못한 초안' })).toHaveCount(0);
+  expect(await draftKeys(page)).not.toContain('awbs.draft:sandbox:target:A');
+  await page.getByLabel('대상', { exact: true }).selectOption('B');
+  await expect(page.getByRole('region', { name: '대상 B 메모 — 저장하지 못한 초안' })).toBeVisible();
+});

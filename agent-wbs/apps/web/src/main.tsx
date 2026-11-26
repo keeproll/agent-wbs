@@ -9,7 +9,7 @@ import { RouterProvider } from 'react-router';
 import { createRouter } from './app/router.tsx';
 import { ApiProvider } from './shared/api/ApiProvider.tsx';
 import { FeedbackProvider } from './shared/ui/feedback.tsx';
-import { browserTabId } from './shared/state/sessionDrafts.ts';
+import { browserTabId, listenForLogout } from './shared/state/sessionDrafts.ts';
 
 const theme = createTheme({
   fontFamily: 'var(--font)',
@@ -23,6 +23,8 @@ const root = document.getElementById('root');
 if (!root) throw new Error('#root가 없습니다.');
 // 탭 id를 먼저 정한다. 다른 탭에서 복사돼 온 세션 초안은 이때 지운다.
 browserTabId();
+// 다른 탭의 명시적 로그아웃 알림을 들어 이 탭의 보관 초안을 지운다.
+listenForLogout();
 const router = createRouter();
 
 createRoot(root).render(
