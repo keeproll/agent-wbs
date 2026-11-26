@@ -615,7 +615,6 @@ export const runnerOperations = [
     method: 'POST',
     path: '/api/runner/github/status',
     summary: 'GitHub 인증 방식·계정·권한 3상태·만료(비밀값 없음). 첫 쓰기 403이면 missing으로 다시 보고',
-    errors: ['VERSION_CONFLICT'],
     // ok는 인증되고 missing이 없을 때만 true, unverified가 있으면 warning 필수(입력 규칙)
     inputRules: ['githubStatusConsistent'],
     body: Body({
@@ -677,6 +676,7 @@ export const runnerOperations = [
         // 서버 후속 2: 일반 「지금 확인」 번호. 이력 재작성 복구 번호와 분리해 경고 해소 때 새 요청이 사라지지 않게 한다.
         inputCheckRequest: Opt(c.Count),
         readinessCheckRequest: Opt(c.Count),
+        githubMode: Opt(c.GithubMode),
         ci: Type.Object(m.CiSettings),
         // Runner가 보고할 Claude 모델(설정값, 초기값=Q-06 승인표). owner 2026-11-26 아이템 8
         claudeModels: List(Type.String(), { minItems: 1, uniqueItems: true }),

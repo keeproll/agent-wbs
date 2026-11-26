@@ -35,24 +35,24 @@ test('자동 상한은 저장된 수동 입력 대신 PC 사양을 쓰고 일정
   finally { client.release(); }
 });
 
-test('설정 6종은 조회·저장·충돌·이력·변경 이벤트를 제공한다', async () => {
+test('설정 6종은 응답 계약·기본값을 지키고 같은 값 저장은 변경을 만들지 않는다', async () => {
   for (const path of ['split', 'schedule', 'blackouts', 'concurrency', 'obs-budget', 'github']) {
     const read = await h.lead('GET', `/api/settings/${path}`);
     expect(read.status, JSON.stringify(read.body)).toBe(200);
     const body = path === 'github' ? { mode: 'gh', updatedAt: read.body.updatedAt } : read.body;
     const saved = await h.lead('PUT', `/api/settings/${path}`, body);
     expect(saved.status, JSON.stringify(saved.body)).toBe(200);
-    expect(saved.body.updatedAt).toEqual(expect.any(String));
+    expect(saved.body.updatedAt).toBe(read.body.updatedAt);
     const op = OPERATIONS.find(x => x.method === 'PUT' && x.path === `/api/settings/${path}`);
     contract(op?.id ?? '', 200, saved.body);
     expect((await h.lead('GET', `/api/settings/${path}`)).body).toEqual(saved.body);
-    expect((await h.lead('PUT', `/api/settings/${path}`, body)).status).toBe(409);
+    expect((await h.lead('PUT', `/api/settings/${path}`, body)).status).toBe(200);
   }
   const policy = (await h.lead('GET', '/api/settings/schedule')).body;
   expect(policy).toMatchObject({ assumeRate: 0.6, thresholdDays: 1 });
   expect((await h.lead('GET', '/api/settings/exec-policy')).body.lowPct).toBe(20);
   const changes = (await h.lead('GET', '/api/changes?after=0')).body.events;
-  expect(changes.filter((x: { topic: string }) => x.topic === 'settings').length).toBeGreaterThanOrEqual(6);
+  expect(changes.filter((x: { topic: string }) => x.topic === 'settings').length).toBe(0);
 });
 
 test('잘못된 분할 범위·불가일 중복과 달력 오류·알 수 없는 필드를 거부한다', async () => {

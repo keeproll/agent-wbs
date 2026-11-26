@@ -6,7 +6,7 @@ import { ProjectError } from './errors.ts';
 export async function githubSettings(db: Db) {
   const row = (await db.query<{ mode: 'gh' | 'token'; tokenSet: boolean; status: string; account: string | null;
     scopes: unknown; warning: string | null; expiresAt: string | null; checkedAt: string | null; updatedAt: string | null }>(
-    `select mode,secret_key is not null "tokenSet",status,account,scopes,warning,${iso('expires_at')} "expiresAt",${iso('checked_at')} "checkedAt",${iso('updated_at')} "updatedAt"
+    `select mode,secret_key is not null "tokenSet",status,account,scopes,warning,${iso('expires_at')} "expiresAt",${iso('checked_at')} "checkedAt",${iso('settings_version')} "updatedAt"
      from github_settings where singleton`)).rows[0];
   return row ?? { mode: 'gh', tokenSet: false, status: 'unchecked', account: null, scopes: null, warning: null, expiresAt: null, checkedAt: null, updatedAt: null };
 }
@@ -19,7 +19,12 @@ export async function reportGithubStatus(db: Db, body: GithubReport, principal: 
   if (body.jobId !== undefined && body.fence !== undefined) await leasedJob(db, { id: body.jobId }, ['github_check'], body.fence, principal);
   await db.query("select pg_advisory_xact_lock(hashtextextended('settings:github',0))");
   const current = await githubSettings(db);
-  if (current.updatedAt !== null && current.mode !== body.mode) throw new ProjectError('VERSION_CONFLICT');
+  if (current.mode !== body.mode) {
+    await db.query("insert into github_settings(singleton,mode,status,warning) values(true,$1,'unchecked',$2) on conflict(singleton) do update set warning=excluded.warning", [current.mode, `Runner가 ${body.mode} 방식으로 보고했습니다. 설정의 ${current.mode} 방식으로 다시 확인하세요.`]);
+    if (body.jobId !== undefined) await db.query("update runner_jobs set state='cancelled',lease_until=null where id=$1", [body.jobId]);
+    await changeEvent(db, null, { kind: 'github' }, 'settings');
+    return;
+  }
   await db.query(`insert into github_settings(singleton,mode,status,account,scopes,warning,expires_at,checked_at) values(true,$1,$2,$3,$4::jsonb,$5,$6,clock_timestamp())
     on conflict (singleton) do update set mode=excluded.mode,status=excluded.status,account=excluded.account,scopes=excluded.scopes,warning=excluded.warning,expires_at=excluded.expires_at,checked_at=excluded.checked_at`,
   [body.mode, body.ok ? 'ok' : 'failed', body.account, body.scopes === null ? null : JSON.stringify(body.scopes), body.warning ?? null, body.expiresAt]);

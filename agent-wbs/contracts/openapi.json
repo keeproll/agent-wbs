@@ -26773,7 +26773,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, LEASE_LOST, VERSION_CONFLICT"
+            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, LEASE_LOST"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited",
@@ -26802,8 +26802,7 @@
           "409": [
             "EPOCH_MISMATCH",
             "IDEMPOTENCY_CONFLICT",
-            "LEASE_LOST",
-            "VERSION_CONFLICT"
+            "LEASE_LOST"
           ],
           "429": [
             "RATE_LIMITED"
@@ -27181,6 +27180,9 @@
                       "type": "integer",
                       "minimum": 0,
                       "maximum": 9007199254740991
+                    },
+                    "githubMode": {
+                      "$ref": "#/components/schemas/GithubMode"
                     },
                     "ci": {
                       "type": "object",

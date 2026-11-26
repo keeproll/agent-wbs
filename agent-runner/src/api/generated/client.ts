@@ -1504,6 +1504,7 @@ export interface Operations {
         inputRecheck: number;
         inputCheckRequest?: number;
         readinessCheckRequest?: number;
+        githubMode?: GithubMode;
         ci: {
           nightAt: string;
           retry: number;

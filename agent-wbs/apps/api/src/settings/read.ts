@@ -41,10 +41,11 @@ export async function agentUsage(client: PoolClient) {
     from (select distinct on(def_key) * from subagent_defs order by def_key,version desc) d
     left join lateral(select a.started_at,a.attempt_key,t.task_key from attempt_subagents s join task_attempts a on a.id=s.attempt join tasks t on t.id=a.task
       where s.subagent in(select id from subagent_defs where def_key=d.def_key) and s.observed_used is true order by a.started_at desc,a.attempt_no desc limit 1) last on true
-    cross join lateral(select count(*)::int decisions,count(*) filter(where q.result='FAIL')::int failures from attempt_subagents s join task_attempts a on a.id=s.attempt
+    cross join lateral(select count(*)::int decisions,count(*) filter(where q.result='FAIL')::int failures from task_attempts a
       join lateral(select v.result from task_attempts qa left join verifications v on v.attempt=qa.id and not exists(select 1 from verification_invalidations i where i.verification=v.id)
         where qa.task=a.task and qa.attempt_no>a.attempt_no and qa.kind in ('qa','reverify') order by qa.attempt_no,v.created_at desc,v.id desc limit 1) q on true
-      where s.subagent in(select id from subagent_defs where def_key=d.def_key) and s.observed_used is true and a.kind in ('dev','rework') and q.result in ('PASS','FAIL')) stats
+      where exists(select 1 from attempt_subagents s join subagent_defs sd on sd.id=s.subagent where s.attempt=a.id and sd.def_key=d.def_key and s.observed_used is true)
+      and a.kind in ('dev','rework') and q.result in ('PASS','FAIL')) stats
     order by d.def_key,d.version`)).rows;
   return { lockedTasks, models, subagents };
 }

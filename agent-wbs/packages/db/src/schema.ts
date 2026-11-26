@@ -1096,6 +1096,8 @@ export const concurrencySettings = pgTable(
     caps: jsonb(),
     mem_reserve_gb: numeric(),
     subagent_budget: jsonb(),
+    concurrency_version: at('concurrency_version'),
+    budget_version: at('budget_version'),
     ...version(),
   },
   (t) => [
@@ -1139,6 +1141,7 @@ export const execPolicy = pgTable(
     live_inject: boolean().notNull().default(false),
     auto_retry_limit: integer().notNull(),
     auto_rework_limit: integer().notNull(),
+    settings_version: at('settings_version').notNull().defaultNow(),
     ...version(),
   },
   (t) => [
@@ -1176,6 +1179,7 @@ export const schedulePolicy = pgTable(
     assume_rate: numeric(),
     window_days: integer().notNull(),
     min_hours: numeric().notNull(),
+    settings_version: at('settings_version').notNull().defaultNow(),
   },
   (t) => [
     check('schedule_singleton', sql`${t.singleton}`),
@@ -1449,6 +1453,11 @@ export const appSettings = pgTable(
     ...row(),
     singleton: singleton(),
     readiness_check_request: integer().notNull().default(0),
+    split_version: at('split_version').notNull().defaultNow(),
+    blackouts_version: at('blackouts_version').notNull().defaultNow(),
+    workflow_version: at('workflow_version').notNull().defaultNow(),
+    models_version: at('models_version').notNull().defaultNow(),
+    subagents_version: at('subagents_version').notNull().defaultNow(),
     app_url: text(),
     heartbeat_seconds: integer().notNull(),
     heartbeat_misses: integer().notNull(),
@@ -1477,6 +1486,7 @@ export const githubSettings = pgTable(
     mode: text().notNull(),
     status: text().notNull(),
     checked_at: at('checked_at'),
+    settings_version: at('settings_version'),
     // 권한별 verified·unverified·missing(조정자 결정 2026-11-26). null = 확인 안 함
     scopes: jsonb(),
     // 미확인 권한 등 화면에 알릴 문구

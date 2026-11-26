@@ -47,11 +47,11 @@ test('빈 DB와 0014·0016(master)·0017·0018·0019·0020·0021 단계 DB가 �
   expect(journal.entries.slice(15).map((e) => e.tag)).toEqual([
     '0015_20261126_platform_epoch_lock', '0016_20261126_contract_sync', '0017_20261126_usage_reset_unknown',
     '0018_20261126_message_read_touch', '0019_20261126_schedule_defaults', '0020_20261126_execution_basis',
-    '0021_20261127_project_followup', '0022_20261127_evidence_reference', '0023_20261127_project_observation_version', '0024_20261127_settings_followup']);
+    '0021_20261127_project_followup', '0022_20261127_evidence_reference', '0023_20261127_project_observation_version', '0024_20261127_settings_followup', '0025_20261127_setting_versions']);
   const fresh = await database('fresh');
   await runMigrations(fresh);
   const expected = await schemaOf(fresh);
-  for (const stage of [14, 16, 17, 18, 19, 20, 21, 22, 23]) {
+  for (const stage of [14, 16, 17, 18, 19, 20, 21, 22, 23, 24]) {
     const pool = await database(String(stage));
     const folder = await mkdtemp(join(tmpdir(), `awbs-stage-${String(stage)}-`));
     try {
@@ -74,7 +74,12 @@ test('빈 DB와 0014·0016(master)·0017·0018·0019·0020·0021 단계 DB가 �
       attempts = (await pool.query('select id,status,summary from task_attempts order by id')).rows;
       await pool.query('update schedule_policy set assume_rate=0.8,threshold_days=3');
     }
+    const appVersion = stage === 24 ? (await pool.query('select updated_at from app_settings')).rows[0]?.updated_at : null;
     await runMigrations(pool);
+    if (stage === 24) {
+      const row = (await pool.query('select split_version,blackouts_version,workflow_version,models_version,subagents_version from app_settings')).rows[0];
+      expect(Object.values(row ?? {})).toEqual(Array.from({ length: 5 }, () => appVersion));
+    }
     if (stage === 20) expect((await pool.query("select description,to_char(start_date,'YYYY-MM-DD') start,input_checked_at from projects")).rows[0])
       .toEqual({ description: '', start: '2000-01-02', input_checked_at: null });
     if (stage === 23) {
