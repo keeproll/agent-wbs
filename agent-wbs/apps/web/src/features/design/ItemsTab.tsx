@@ -181,15 +181,15 @@ function Content({ content, open }: { content: NonNullable<IfaceDetail['content'
       return (
         <>
           <KV><span className="kv-l">인증</span><span className="kv-v">{content.auth || '—'}</span></KV>
-          <h4 className="ds-h4">요청</h4><pre className="code">{content.request || '(없음)'}</pre>
-          <h4 className="ds-h4">응답</h4><pre className="code">{content.response || '—'}</pre>
-          {content.validation.length > 0 && <><h4 className="ds-h4">검증 규칙</h4><ul className="ds-ul">{content.validation.map((v) => <li key={v}>{v}</li>)}</ul></>}
+          <h3 className="ds-h4">요청</h3><pre className="code">{content.request || '(없음)'}</pre>
+          <h3 className="ds-h4">응답</h3><pre className="code">{content.response || '—'}</pre>
+          {content.validation.length > 0 && <><h3 className="ds-h4">검증 규칙</h3><ul className="ds-ul">{content.validation.map((v) => <li key={v}>{v}</li>)}</ul></>}
           {content.errors.length > 0 && (
-            <><h4 className="ds-h4">오류 코드</h4><div className="gtb" style={{ margin: '0 0 10px' }}>{content.errors.map((e) => (
+            <><h3 className="ds-h4">오류 코드</h3><div className="gtb" style={{ margin: '0 0 10px' }}>{content.errors.map((e) => (
               <div key={`${e.http}${e.code}`} className="gtr" style={{ gridTemplateColumns: '70px minmax(160px,1fr) minmax(160px,1.4fr)', minWidth: 0 }}><span className="gc mono">{e.http}</span><span className="gc mono">{e.code}</span><span className="gc">{e.cond}</span></div>
             ))}</div></>
           )}
-          {tables.length > 0 && <><h4 className="ds-h4">읽고 쓰는 테이블</h4><div className="ds-chips">{tables.map((t) => <button key={t.key} type="button" className="btn ghost sm mono" onClick={() => { open('data', t.key); }}>{t.n}</button>)}</div></>}
+          {tables.length > 0 && <><h3 className="ds-h4">읽고 쓰는 테이블</h3><div className="ds-chips">{tables.map((t) => <button key={t.key} type="button" className="btn ghost sm mono" onClick={() => { open('data', t.key); }}>{t.n}</button>)}</div></>}
         </>
       );
     }
@@ -197,12 +197,12 @@ function Content({ content, open }: { content: NonNullable<IfaceDetail['content'
       return (
         <>
           <KV><span className="kv-l">인증</span><span className="kv-v">{content.auth || '—'}</span></KV>
-          <h4 className="ds-h4">메시지</h4>
+          <h3 className="ds-h4">메시지</h3>
           <div className="gtb" style={{ margin: '0 0 10px' }}>{content.messages.map((m) => (
             <div key={m.name} className="gtr" style={{ gridTemplateColumns: 'minmax(130px,.8fr) 148px minmax(200px,2fr)', minWidth: 0 }}><span className="gc mono"><b>{m.name}</b></span><span className="gc">{m.direction}</span><span className="gc mono" style={{ fontSize: 12 }}>{m.schema}</span></div>
           ))}</div>
           {content.topic && (
-            <><h4 className="ds-h4">토픽 규칙</h4><KV cols={130}>
+            <><h3 className="ds-h4">토픽 규칙</h3><KV cols={130}>
               <span className="kv-l">파티션 키</span><span className="kv-v">{content.topic.key}</span>
               <span className="kv-l">파티션 · 보관</span><span className="kv-v">{content.topic.partitions}개 · {content.topic.retention}</span>
               <span className="kv-l">전달 보장</span><span className="kv-v">{content.topic.delivery}</span>
@@ -211,13 +211,13 @@ function Content({ content, open }: { content: NonNullable<IfaceDetail['content'
               <span className="kv-l">소비 그룹</span><span className="kv-v mono">{content.topic.consumers.join(', ')}</span>
             </KV></>
           )}
-          {content.rules.length > 0 && <><h4 className="ds-h4">규칙</h4><ul className="ds-ul">{content.rules.map((v) => <li key={v}>{v}</li>)}</ul></>}
+          {content.rules.length > 0 && <><h3 className="ds-h4">규칙</h3><ul className="ds-ul">{content.rules.map((v) => <li key={v}>{v}</li>)}</ul></>}
         </>
       );
     case 'postgres':
       return (
         <>
-          <h4 className="ds-h4">컬럼</h4>
+          <h3 className="ds-h4">컬럼</h3>
           <div className="gtb" style={{ margin: '0 0 10px' }}>
             <div className="gtr h colrow"><span className="gc">이름</span><span className="gc">타입</span><span className="gc">제약</span><span className="gc">참조 · 기본값</span><span className="gc">설명</span></div>
             {content.columns.map((c) => (
@@ -226,9 +226,9 @@ function Content({ content, open }: { content: NonNullable<IfaceDetail['content'
                 <span className="gc mono">{c.fk ?? ''} {c.default ?? ''}</span><span className="gc">{c.desc}</span></div>
             ))}
           </div>
-          {content.constraints.length > 0 && <><h4 className="ds-h4">제약</h4><ul className="ds-ul mono">{content.constraints.map((v) => <li key={v}>{v}</li>)}</ul></>}
-          {content.indexes.length > 0 && <><h4 className="ds-h4">인덱스</h4><ul className="ds-ul mono">{content.indexes.map((x) => <li key={x.name}>{`${x.name} (${x.columns}) ${x.kind}`}</li>)}</ul></>}
-          <h4 className="ds-h4">사용하는 API</h4>
+          {content.constraints.length > 0 && <><h3 className="ds-h4">제약</h3><ul className="ds-ul mono">{content.constraints.map((v) => <li key={v}>{v}</li>)}</ul></>}
+          {content.indexes.length > 0 && <><h3 className="ds-h4">인덱스</h3><ul className="ds-ul mono">{content.indexes.map((x) => <li key={x.name}>{`${x.name} (${x.columns}) ${x.kind}`}</li>)}</ul></>}
+          <h3 className="ds-h4">사용하는 API</h3>
           {content.usedBy.length > 0
             ? <div className="ds-chips">{content.usedBy.map((n) => <button key={n} type="button" className="btn ghost sm mono" onClick={() => { open('iface', n); }}>{n}</button>)}</div>
             : <p className="muted" style={{ margin: 0 }}>이 테이블을 쓰는 API가 계약에 없습니다.</p>}
@@ -238,7 +238,7 @@ function Content({ content, open }: { content: NonNullable<IfaceDetail['content'
       return (
         <>
           <KV><span className="kv-l">속성</span><span className="kv-v mono">{content.props}</span><span className="kv-l">비고</span><span className="kv-v">{content.note}</span></KV>
-          <h4 className="ds-h4">제약</h4>
+          <h3 className="ds-h4">제약</h3>
           {content.constraints.length > 0 ? <ul className="ds-ul mono">{content.constraints.map((v) => <li key={v}>{v}</li>)}</ul> : <p className="muted" style={{ margin: 0 }}>없음</p>}
         </>
       );

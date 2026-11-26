@@ -24,13 +24,13 @@ export function DriftsTab({ ctx, versions }: { ctx: DesignCtx; versions: Overvie
   return (
     <>
       <section className="card">
-        <div className="dp-h"><h3>설계와 실제 코드의 불일치</h3></div>
+        <div className="dp-h"><h2>설계와 실제 코드의 불일치</h2></div>
         <p className="fhint" style={{ margin: '0 0 8px' }}>Runner가 Task 완료 · 병합 때 코드에서 실제 명세를 추출해 계약 파일과 대조합니다. 호환되는 차이는 계약 반영(기록), 호환을 깨는 차이는 기술 결정 · 설계 변경 승인 또는 코드 수정입니다.</p>
         {ctx.drifts.length === 0 && <p className="empty">불일치가 없습니다.</p>}
         {ctx.drifts.map((d) => <DriftRow key={d.id} d={d} ctx={ctx} />)}
       </section>
       <section className="card">
-        <div className="dp-h"><h3>설계 버전</h3></div>
+        <div className="dp-h"><h2>설계 버전</h2></div>
         {versions.length === 0 && <p className="empty">아직 설계 버전이 없습니다. 기술 결정을 확정하면 v1이 생깁니다.</p>}
         <div className="gtb" style={{ margin: 0 }} role="table" aria-label="설계 버전">
           {versions.map((v) => (

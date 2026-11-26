@@ -2,6 +2,7 @@
  * M6-07 설계 화면 6탭·Task 연결 — UAT-DESIGN-01~04, UAT-EMPTY-09, 가이드 §12 시나리오 28·29(설계 메뉴 부분).
  * 데이터는 원본 Mock과 같은 값의 가짜 설계 원장(support/design-data.ts)이고, M6-05 서버 규칙(409·202·결정 ID)을 흉내 낸다.
  */
+import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { fakeApi, json, type FakeApi } from './support/fake-api.ts';
 import { designData, emptyDesign, installDesign, type DesignData } from './support/design-data.ts';
@@ -349,4 +350,18 @@ test('불러오기 실패는 오류 카드와 다시 시도', async ({ page }) =
   api.on('GET /api/projects/p1/design/drifts', (route) => json(route, 503, { error: { code: 'UNAVAILABLE', message: '잠시 후', action: '조회', fix: '다시', errors: [], details: {}, requestId: 'r' } }));
   await page.goto('/design');
   await expect(page.getByRole('button', { name: '다시 시도' })).toBeVisible();
+});
+
+test('자동 접근성 검사: 탭마다·상세·창에서 axe 위반 0건', async ({ page }) => {
+  await open(page);
+  for (const path of ['/design', '/design?tab=dec', '/design?tab=iface', '/design?tab=iface&sel=PATCH+%2Fapi%2Ftasks%2F%3AtaskKey', '/design?tab=data&store=postgres&sel=postgres%3Atasks', '/design?tab=own', '/design?tab=chg']) {
+    await page.goto(path);
+    await expect(page.getByRole('tablist', { name: '설계 영역' })).toBeVisible();
+    await expect(page.locator('.skeleton, .area-loading')).toHaveCount(0);
+    expect((await new AxeBuilder({ page }).analyze()).violations, path).toEqual([]);
+  }
+  await page.goto('/design?tab=dec');
+  await decRow(page, 'TD-05').getByRole('button', { name: '변경 제안' }).click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
 });

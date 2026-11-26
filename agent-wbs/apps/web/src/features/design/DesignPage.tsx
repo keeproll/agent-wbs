@@ -199,7 +199,7 @@ function MapTab({ overview, decisions, drifts }: { overview: Overview; decisions
   return (
     <>
       <section className="card">
-        <div className="dp-h"><h3>시스템 구성</h3><span className="muted">확정 · 승인된 기술 결정과 main 계약 파일 기준</span></div>
+        <div className="dp-h"><h2>시스템 구성</h2><span className="muted">확정 · 승인된 기술 결정과 main 계약 파일 기준</span></div>
         {ls.length === 0 && <p className="empty">구성 요소가 아직 없습니다 — 확정된 기술 결정을 바탕으로 계약 설계 Task가 계약 파일을 만들면 구성도와 연결이 표시됩니다.</p>}
         {ls.map((ly) => (
           <div key={ly.l} className="ds-layer">
@@ -213,7 +213,7 @@ function MapTab({ overview, decisions, drifts }: { overview: Overview; decisions
         ))}
         {links.length > 0 && (
           <>
-            <h4 style={{ margin: '14px 0 6px' }}>연결</h4>
+            <h3 style={{ margin: '14px 0 6px', fontSize: '1em' }}>연결</h3>
             <div className="gtb" style={{ margin: 0 }} role="table" aria-label="연결">
               <div className="gtr h lkrow" role="row"><span className="gc" role="columnheader">보내는 쪽</span><span className="gc" role="columnheader">받는 쪽</span><span className="gc" role="columnheader">방식</span><span className="gc" role="columnheader">계약 파일</span></div>
               {links.map((k) => (
@@ -224,7 +224,7 @@ function MapTab({ overview, decisions, drifts }: { overview: Overview; decisions
         )}
       </section>
       <section className="card">
-        <div className="dp-h"><h3>계약 파일</h3></div>
+        <div className="dp-h"><h2>계약 파일</h2></div>
         <p className="fhint" style={{ margin: '0 0 8px' }}>기준(정본)은 저장소 main 브랜치의 이 파일들입니다. 진행 중 Task 브랜치의 차이는 「변경 제안」으로 보입니다. Runner가 병합 · Task 완료 때 읽어 실제 코드에서 추출한 명세와 대조합니다.</p>
         {files.length === 0 && <p className="empty">아직 계약 파일이 없습니다 — 계약 설계 Task가 만듭니다.</p>}
         <div className="gtb" style={{ margin: 0 }} role="table" aria-label="계약 파일">
@@ -244,7 +244,7 @@ function MapTab({ overview, decisions, drifts }: { overview: Overview; decisions
 function OwnershipTab({ items }: { items: { data: string; source: string; copy: string; sync: string; lag: string }[] }) {
   return (
     <section className="card">
-      <div className="dp-h"><h3>데이터 소유권 · 흐름</h3></div>
+      <div className="dp-h"><h2>데이터 소유권 · 흐름</h2></div>
       <p className="fhint" style={{ margin: '0 0 8px' }}>저장소가 둘 이상이면 데이터마다 원본 한 곳을 정합니다. Agent는 원본에만 쓰고, 복제본은 정해진 동기화 경로로만 갱신합니다.</p>
       {items.length === 0 && <p className="empty">아직 정의가 없습니다.</p>}
       <div className="gtb" style={{ margin: 0 }} role="table" aria-label="데이터 소유권 · 흐름">

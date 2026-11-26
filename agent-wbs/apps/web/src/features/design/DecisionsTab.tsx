@@ -29,7 +29,7 @@ export function DecisionsTab({ ctx }: { ctx: DesignCtx }) {
       {groups.length === 0 && <div className="card"><p className="empty" style={{ margin: 0 }}>아직 기술 결정이 없습니다. 초기 분석의 「기술 결정 확정」 단계에서 정한 결정이 여기에 나타납니다.</p></div>}
       {groups.map((g) => (
         <section key={g.k} className="card">
-          <div className="dp-h"><h3>{g.l}</h3></div>
+          <div className="dp-h"><h2>{g.l}</h2></div>
           {g.rows.map((x) => <DecisionRow key={x.id} x={x} ctx={ctx} onChange={() => { setChanging(x); }} />)}
         </section>
       ))}
