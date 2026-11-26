@@ -547,3 +547,81 @@ test('Agent 결과의 잘못된 Git tree 경로는 가져오는 단계에서 거
   await expect(lstat(join(root, 'runner/worktrees/project/escaped'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect(await repo.head()).toBe(baseline);
 });
+
+test('NG fetch한 최신 원격 main으로 독립 작업 폴더를 만든다', async () => {
+  repo = await clone();
+  await file(join(source, 'prototype/docs/guide.md'), '등록 뒤 새 입력');
+  await file(join(source, 'src/merged.ts'), '앞 Task의 병합 결과');
+  const latest = await commit();
+  git(source, 'push', 'origin', 'main');
+  expect(await repo.fetch()).toBe(latest);
+  const work = await repo.createWorktree('task-1', 'agent/TASK-1', latest);
+  expect(git(work, 'rev-parse', 'HEAD')).toBe(latest);
+  expect(await readFile(join(work, 'prototype/docs/guide.md'), 'utf8')).toBe('등록 뒤 새 입력');
+  expect(await readFile(join(work, 'src/merged.ts'), 'utf8')).toBe('앞 Task의 병합 결과');
+  expect(await repo.head()).toBe(baseline);
+});
+
+test('NC amend와 rebase한 결과를 다시 가져와도 원격 main은 움직이지 않는다', async () => {
+  repo = await clone();
+  const work = await repo.createWorktree('task-1', 'agent/TASK-1', baseline);
+  await file(join(work, 'src/task.ts'), '첫 결과');
+  git(work, 'add', '-A');
+  git(work, 'commit', '-m', '첫 결과');
+  const first = await repo.importWorktree('task-1', 'agent/TASK-1');
+  await file(join(work, 'src/task.ts'), '수정 결과');
+  git(work, 'commit', '-am', '수정 결과', '--amend');
+  const amended = await repo.importWorktree('task-1', 'agent/TASK-1');
+  expect(amended).not.toBe(first);
+  expect(git(repo.path, 'show', `${amended}:src/task.ts`)).toBe('수정 결과');
+  await file(join(source, 'src/main-only.ts'), '새 기준');
+  const newBase = await commit();
+  git(work, 'fetch', source, 'main');
+  git(work, 'rebase', newBase);
+  const rebased = await repo.importWorktree('task-1', 'agent/TASK-1');
+  expect(rebased).toBe(git(work, 'rev-parse', 'HEAD'));
+  expect(git(work, 'merge-base', amended, rebased)).not.toBe(amended);
+  expect(git(remote, 'rev-parse', 'main')).toBe(baseline);
+  expect(await repo.head()).toBe(baseline);
+});
+
+test('ND 같은 객체의 동시 작업 폴더 생성 기록을 모두 보존하고 정리한다', async () => {
+  repo = await clone();
+  const worktrees = await Promise.all([
+    repo.createWorktree('task-1', 'agent/TASK-1', baseline),
+    repo.createWorktree('task-2', 'agent/TASK-2', baseline),
+  ]);
+  const record = JSON.parse(await readFile(join(root, 'runner/state/git/project.json'), 'utf8')) as { worktrees: string[] };
+  expect(record.worktrees.sort()).toEqual(['task-1', 'task-2']);
+  await repo.reset({ baseCommit: baseline, branches: ['agent/TASK-1', 'agent/TASK-2'], worktrees: ['task-1', 'task-2'], inputs: [] });
+  for (const work of worktrees) await expect(lstat(work)).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test('NE 먼저 열린 여러 객체가 순서대로 생성·삭제해도 최신 기록을 보존한다', async () => {
+  repo = await clone();
+  const other = await GitRepository.open(join(root, 'runner'), 'project');
+  const work1 = await repo.createWorktree('task-1', 'agent/TASK-1', baseline);
+  const work2 = await other.createWorktree('task-2', 'agent/TASK-2', baseline);
+  const record = JSON.parse(await readFile(join(root, 'runner/state/git/project.json'), 'utf8')) as { worktrees: string[] };
+  expect(record.worktrees.sort()).toEqual(['task-1', 'task-2']);
+  await other.removeWorktree('task-1');
+  expect(await repo.importWorktree('task-2', 'agent/TASK-2')).toBe(baseline);
+  await repo.removeWorktree('task-2');
+  await expect(lstat(work1)).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(lstat(work2)).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test('NG clone 실패 뒤 폴더·기록·새 브랜치를 되돌려 같은 요청을 재시도한다', async () => {
+  repo = await clone();
+  const bin = join(root, 'bin');
+  await file(join(bin, 'git'), '#!/bin/sh\nfor arg in "$@"; do\n  if [ "$arg" = "--single-branch" ]; then exit 17; fi\ndone\nexec /usr/bin/git "$@"\n');
+  await chmod(join(bin, 'git'), 0o755);
+  vi.stubEnv('PATH', `${bin}:${process.env.PATH}`);
+  await expect(repo.createWorktree('task-1', 'agent/TASK-1', baseline)).rejects.toThrow();
+  await expect(lstat(join(root, 'runner/worktrees/project/task-1'))).rejects.toMatchObject({ code: 'ENOENT' });
+  const record = JSON.parse(await readFile(join(root, 'runner/state/git/project.json'), 'utf8')) as { worktrees: string[] };
+  expect(record.worktrees).toEqual([]);
+  expect(git(repo.path, 'branch', '--list', 'agent/TASK-1')).toBe('');
+  vi.unstubAllEnvs();
+  expect(git(await repo.createWorktree('task-1', 'agent/TASK-1', baseline), 'rev-parse', 'HEAD')).toBe(baseline);
+});
