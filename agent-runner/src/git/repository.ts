@@ -36,7 +36,7 @@ export interface RejectedPath {
 
 interface TreeEntry { mode: string; oid: string; path: string }
 interface WorktreeRecord { id: string; branch?: string; startCommit?: string }
-interface Registration { source: string; configHash: string; worktrees: WorktreeRecord[]; resetting?: boolean }
+interface Registration { source: string; configHash: string; worktrees: WorktreeRecord[]; resetting?: boolean; resetGeneration?: number }
 interface LockOwner { pid: number; bootId?: string; startTime?: string }
 const BOOT_ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 
@@ -267,8 +267,10 @@ export class GitRepository {
       throw new GitSafetyError('저장소 등록 기록이 올바르지 않습니다.');
     }
     const resetting = 'resetting' in record && record.resetting === true;
+    const generation = 'resetGeneration' in record && Number.isSafeInteger(record.resetGeneration) ? record.resetGeneration as number : 0;
     return { source: sourceUrl(record.source), configHash: record.configHash,
-      worktrees: record.worktrees.map((value: unknown) => worktreeRecord(value)), ...(resetting && { resetting }) };
+      worktrees: record.worktrees.map((value: unknown) => worktreeRecord(value)), ...(resetting && { resetting }),
+      ...(generation > 0 && { resetGeneration: generation }) };
   }
 
   private async git(args: string[], input?: Buffer | string, env?: NodeJS.ProcessEnv, allowed?: number[]) {
@@ -358,7 +360,8 @@ export class GitRepository {
   async beginReset(): Promise<void> {
     await this.worktreeUpdate(async () => {
       const record = await this.trusted();
-      if (!record.resetting) await this.saveRegistration({ ...record, resetting: true });
+      // 시작할 때마다 세대를 올린다. 이미 진행 중이던 입력 복사가 끝날 때 이 변화를 보고 자기 사본을 지운다.
+      await this.saveRegistration({ ...record, resetting: true, resetGeneration: (record.resetGeneration ?? 0) + 1 });
     });
   }
 
@@ -371,7 +374,8 @@ export class GitRepository {
       if (record.worktrees.length > 0 || folders.length > 0 || inputs.length > 0) {
         throw new GitSafetyError(`초기화 뒤에도 남은 항목이 있습니다: 기록 ${String(record.worktrees.length)}개, 작업 폴더 ${String(folders.length)}개, 입력 ${String(inputs.length)}개`);
       }
-      const next: Registration = { source: record.source, configHash: record.configHash, worktrees: record.worktrees };
+      const next: Registration = { source: record.source, configHash: record.configHash, worktrees: record.worktrees,
+        ...(record.resetGeneration !== undefined && { resetGeneration: record.resetGeneration }) };
       await this.saveRegistration(next);
     });
   }
@@ -495,7 +499,10 @@ export class GitRepository {
     const path = await safePath(join(this.inputs, id(inputId)));
     sha(commit);
     if (await stat(path)) throw new GitSafetyError('기존 입력 버전은 덮어쓰지 않습니다.');
-    if ((await this.trusted()).resetting) throw new GitSafetyError('초기화 정리 중에는 입력 사본을 만들 수 없습니다.');
+    const started = await this.trusted();
+    if (started.resetting) throw new GitSafetyError('초기화 정리 중에는 입력 사본을 만들 수 없습니다.');
+    // 복사를 시작할 때의 초기화 세대. 복사 도중 초기화가 시작·완료돼 resetting이 다시 false가 되어도 세대 번호는 남는다(재리뷰 N2).
+    const generation = started.resetGeneration ?? 0;
     const entries = (await this.tree(commit)).filter((entry) => entry.path === 'prototype' || entry.path.startsWith('prototype/'));
     if (entries.length === 0) throw new GitSafetyError('prototype 입력이 없습니다.');
     for (const entry of entries) {
@@ -531,8 +538,11 @@ export class GitRepository {
         await chmod(folder, 0o555);
       }
       await lock(path);
-      // 만드는 사이 초기화 정리가 시작됐으면 이 사본도 정리 대상이다. 남기지 않고 실패한다.
-      if ((await this.trusted()).resetting) throw new GitSafetyError('초기화 정리가 시작되어 입력 사본을 지웠습니다.');
+      // 만드는 사이 초기화가 시작됐거나(진행 중) 이미 한 번 지나갔으면(세대 변경) 이 사본은 정리 대상이다. 지우고 실패한다.
+      const finished = await this.trusted();
+      if (finished.resetting || (finished.resetGeneration ?? 0) !== generation) {
+        throw new GitSafetyError('입력 사본을 만드는 동안 초기화 정리가 있어 사본을 지웠습니다.');
+      }
       return path;
     } catch (error) {
       await removeReadonly(path);

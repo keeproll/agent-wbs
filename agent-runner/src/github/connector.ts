@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { ApiError, type ApiClient, type ApiRequest } from '../api/client.ts';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { retryDelay, retryable } from '../api/outbox.ts';
+import { authenticationFailed, retryDelay, retryable } from '../api/outbox.ts';
 import type { ConnectionStatus, GithubMode, PermissionDenied, Permissions } from './client.ts';
 import { generateRunnerKeyPair, type RunnerKeyPair } from './credential.ts';
 import { sealedTokenSource, type TokenSource } from './token.ts';
@@ -47,6 +47,12 @@ export interface GithubConnectorDeps {
   registerRetries?: number;
   /** 재전송 전 대기(기본: outbox와 같은 지수 백오프·Retry-After). */
   retryWait?: (attempt: number, error: unknown) => Promise<void>;
+  /**
+   * WBS가 키 등록·봉인 조회에 401/403을 줬을 때(Runner 토큰 폐기). 앱 전체 중지 경로로 넘긴다.
+   * 왜: 봉인 조회는 GitHub 클라이언트 안에서 불려 그 오류가 연결 확인의 `ok:false` 문자열로 바뀐다. 여기서 따로 알리지 않으면 앱이 계속 돈다(재리뷰 N4).
+   * GitHub 자체의 401(토큰 만료·교체)과는 다르다. 그것은 토큰 캐시만 비운다.
+   */
+  onAuthFailure?: (error: unknown) => void;
 }
 
 /**
@@ -64,6 +70,7 @@ export class GithubConnector {
   #keyId: string | undefined;
   #registering: Promise<string> | undefined;
   #last: Omit<ConnectionStatus, 'superseded'> | undefined;
+  #authFailure: { error: unknown } | undefined;
 
   constructor(deps: GithubConnectorDeps) {
     this.#d = deps;
@@ -100,8 +107,26 @@ export class GithubConnector {
     }
   }
 
-  /** 봉인 값을 받는다. 등록이 없거나 404면 새 요청으로 다시 등록한 뒤 한 번 더 조회한다. */
+  /** 마지막 WBS 인증 실패(키 등록·봉인 조회). 앱이 연결 확인 뒤 이것을 보고 멈춘다. */
+  get authFailure(): unknown {
+    return this.#authFailure?.error;
+  }
+
+  /** 봉인 값을 받는다. WBS 401/403은 기록하고 `onAuthFailure`로 알린 뒤 그대로 던진다. */
   async fetchSealed(): Promise<string> {
+    try {
+      return await this.#fetchSealed();
+    } catch (error) {
+      if (authenticationFailed(error)) {
+        this.#authFailure ??= { error };
+        this.#d.onAuthFailure?.(error);
+      }
+      throw error;
+    }
+  }
+
+  /** 등록이 없거나 404면 새 요청으로 다시 등록한 뒤 한 번 더 조회한다. */
+  async #fetchSealed(): Promise<string> {
     const keyId = this.#keyId ?? (await this.register());
     try {
       return (await this.#d.api('getGithubCredential', { epoch: this.#d.epoch(), query: { keyId } })).body.sealed;

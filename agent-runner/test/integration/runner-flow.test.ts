@@ -116,7 +116,7 @@ test('M4 결합: 연결부터 CLI 유휴 적용까지 한 시나리오', { timeo
   const recordedPr = model.openPull('agent/T1-h1').number;
 
   // ── fake WBS 서버 ──
-  let commandDone = false;
+  const resulted = new Set<string>();
   let credentialCalls = 0;
   let publicKeyPem = '';
   const keyIds = new Map<string, string>();
@@ -136,13 +136,23 @@ test('M4 결합: 연결부터 CLI 유휴 적용까지 한 시나리오', { timeo
         case 'POST /api/runner/heartbeat': res.writeHead(204, { 'x-current-epoch': '0' }).end(); return;
         case 'POST /api/runner/sessions': res.writeHead(204).end(); return;
         case 'GET /api/runner/commands':
-          // 실제 reset_project() 출력과 같은 공용 fixture(기준 있음)에서, 시험 환경 값만 바꾼다.
-          json(res, { currentEpoch: 0, commands: commandDone ? [] : [{ id: 'cmd-1', kind: 'reset-cleanup', epoch: 0, payload: {
-            ...fixture.withBase.payload, repoUrl: remote, baseCommit: baseline, branches: ['agent/T1-h1'], prs: [recordedPr],
-            holds: [{ ...fixture.withBase.payload.holds[0], job: 'job-1', host_id: hostId, boot_id: BOOT, pgid }],
-          } }] });
+          // 실제 reset_project() 출력과 같은 공용 fixture(기준 있음)에서, 시험 환경 값만 바꾼다. 명령 세 개:
+          // cmd-1: 이 PC의 로컬 저장소(등록 원격 = 로컬 bare 경로) 정리 — 원격 작업 없음.
+          // cmd-3: 다른 저장소의 명령 — 원격에 아무것도 쓰지 않고 failed여야 한다(이중 방어, 재리뷰 N1).
+          // cmd-2: 설정된 GitHub 저장소(o/r)의 PR·브랜치 정리 — 이 PC에 로컬 저장소가 없어 원격 main을 기준과 대조한다.
+          json(res, { currentEpoch: 0, commands: [
+            { id: 'cmd-1', kind: 'reset-cleanup', epoch: 0, payload: {
+              ...fixture.withBase.payload, repoUrl: remote, baseCommit: baseline, branches: [], prs: [],
+              holds: [{ ...fixture.withBase.payload.holds[0], job: 'job-1', host_id: hostId, boot_id: BOOT, pgid }],
+            } },
+            { id: 'cmd-3', kind: 'reset-cleanup', epoch: 0, payload: {
+              ...fixture.withBase.payload, repoUrl: 'https://github.com/foreign/previous', baseCommit: model.branches.get('main'), branches: ['agent/T1-h1'], prs: [recordedPr], holds: [],
+            } },
+            { id: 'cmd-2', kind: 'reset-cleanup', epoch: 0, payload: {
+              ...fixture.withBase.payload, repoUrl: 'https://github.com/o/r', baseCommit: model.branches.get('main'), branches: ['agent/T1-h1'], prs: [recordedPr], holds: [],
+            } },
+          ].filter((c) => !resulted.has(c.id)) });
           return;
-        case 'POST /api/runner/commands/cmd-1/result': commandDone = true; res.writeHead(204).end(); return;
         case 'GET /api/runner/policy':
           json(res, {
             caps: { ...caps, memReserveGB: 4 }, subagentBudget: { dev: 2, qa: 1 }, heartbeatSeconds: 60, inputCheckMinutes: 10,
@@ -174,7 +184,11 @@ test('M4 결합: 연결부터 CLI 유휴 적용까지 한 시나리오', { timeo
           json(res, { sealed: sealCredential(publicKeyPem, GITHUB_TOKEN) });
           return;
         case 'POST /api/runner/github/status': res.writeHead(204).end(); return;
-        default: json(res, { error: { code: 'NOT_FOUND', message: route } }, 404);
+        default: {
+          const done = /^POST \/api\/runner\/commands\/(cmd-\d)\/result$/.exec(route);
+          if (done?.[1]) { resulted.add(done[1]); res.writeHead(204).end(); return; }
+          json(res, { error: { code: 'NOT_FOUND', message: route } }, 404);
+        }
       }
     });
   });
@@ -266,6 +280,10 @@ test('M4 결합: 연결부터 CLI 유휴 적용까지 한 시나리오', { timeo
   expect(model.branches.has('agent/T1-h1')).toBe(false);
   const order = github.requests.filter((r) => r.method !== 'GET').map((r) => `${r.method} ${r.path}`);
   expect(order).toEqual([`PATCH /repos/o/r/pulls/${String(recordedPr)}`, 'DELETE /repos/o/r/git/refs/heads/agent/T1-h1']);
+  // 다른 저장소 명령은 원격 쓰기 없이 failed. 위 쓰기 두 개는 모두 cmd-2의 것이다.
+  const foreign = received.find((r) => r.path === '/api/runner/commands/cmd-3/result');
+  expect(foreign?.body).toMatchObject({ status: 'failed', items: expect.arrayContaining([expect.objectContaining({ name: 'github:repo', ok: false })]) as unknown });
+  expect(received.find((r) => r.path === '/api/runner/commands/cmd-2/result')?.body).toMatchObject({ status: 'done' });
   expect(app.runner.ready).toBe(false);
   // 같은 이름으로 다음 시도를 만들 수 있다(결과 SHA push 원칙 덕분에 로컬 브랜치가 지워졌다).
   await repo.createWorktree('att-2', 'agent/T1-h1', baseline);

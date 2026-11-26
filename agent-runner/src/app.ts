@@ -112,6 +112,8 @@ export class RunnerApp {
         epoch: () => d.state.snapshot.epoch,
         identity: () => ({ runnerId: runnerId(), ...this.identity }),
         enqueueStatus: async (body) => { await this.runner.outbox.enqueue('reportGithubStatus', { epoch: d.state.snapshot.epoch, body }); },
+        // 봉인 조회의 WBS 401/403은 Runner 토큰 폐기다. 실행 중이면 앱을 멈춘다(재리뷰 N4).
+        onAuthFailure: (error) => { this.#halt?.(error); },
       });
       const source: TokenSource = d.github.mode === 'token' ? connector.tokenSource() : ghTokenSource();
       this.#tokenSource = source;
@@ -132,20 +134,22 @@ export class RunnerApp {
       });
       this.github = { client, connector, mode };
     }
+    const resetCleanup = createResetCleanup({
+      home: d.home,
+      identity: () => this.identity,
+      // 원격 초기화는 GitHub 설정이 있을 때 실제 클라이언트로 연결한다(교차 리뷰 P1-2).
+      // 되돌림 push용 시스템 커밋 자격 증명은 Q-09 미결이라 공급원이 없다 → 되돌림이 필요한 초기화만 failed(조정자 결정 1-A).
+      ...(this.github && { remote: createGithubRemoteCleanup({ client: this.github.client }) }),
+      ...d.cleanup,
+    });
     this.runner = new Runner({
       state: d.state,
       api: d.api,
       version: d.version,
       warn: d.warn,
       ...(d.now && { now: d.now }),
-      cleanup: createResetCleanup({
-        home: d.home,
-        identity: () => this.identity,
-        // 원격 초기화는 GitHub 설정이 있을 때 실제 클라이언트로 연결한다(교차 리뷰 P1-2).
-        // 되돌림 push용 시스템 커밋 자격 증명은 Q-09 미결이라 공급원이 없다 → 되돌림이 필요한 초기화만 failed(조정자 결정 1-A).
-        ...(this.github && { remote: createGithubRemoteCleanup({ client: this.github.client }) }),
-        ...d.cleanup,
-      }),
+      cleanup: resetCleanup,
+      onCleanupQueued: (command) => resetCleanup.markReported(command),
     });
     this.updater = new CliUpdater({
       home: d.home,
@@ -242,6 +246,8 @@ export class RunnerApp {
     this.#tokenSource?.invalidate();
     if (this.github.mode === 'token') await this.github.connector.register();
     const status = await this.github.client.checkConnection(this.github.mode);
+    // 연결 확인은 토큰 취득 실패를 ok:false로 바꾼다. WBS 인증 실패였으면 상태를 보고하지 않고 그 오류를 그대로 던진다.
+    if (this.github.connector.authFailure !== undefined) throw this.github.connector.authFailure;
     await this.github.connector.reportConnection(status);
   }
 

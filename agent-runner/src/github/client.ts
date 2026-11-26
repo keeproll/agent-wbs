@@ -664,15 +664,22 @@ export function createGitHubClient(options: GitHubClientOptions) {
     },
 
     /**
-     * 이 시스템이 기록한 원격 Agent 브랜치를 지운다(초기화 2단계, contracts §6). `agent/…`만 받는다.
-     * 이미 없으면(404·422) 지운 것과 같다. Contents 쓰기 권한의 증거다.
+     * 이 시스템이 기록한 원격 Agent 브랜치를 지운다(초기화 2단계, contracts §6). `agent/…`만 받는다. Contents 쓰기 권한의 증거다.
+     *
+     * 성공은 204뿐이다(GitHub REST 「Delete a reference」).
+     * 422는 「검증 실패·기본 브랜치 삭제 시도·요청 남발」, 409는 「충돌」이라 **브랜치가 없다는 증거가 아니다.**
+     * 그래서 204가 아니면 `GET /git/ref/heads/<branch>`로 다시 확인한다. 404(참조 없음)일 때만 이미 지워진 것으로 본다.
+     * 왜: 거절을 성공으로 바꾸면 브랜치가 남았는데 정리 완료를 보고하게 된다(재리뷰 N3).
      */
     async deleteBranch(branch: string): Promise<void> {
       if (!BRANCH.test(branch)) throw invalid('Agent 브랜치(agent/<TASK>)만 지울 수 있습니다.');
+      const ref = `heads/${branch.split('/').map(encodeURIComponent).join('/')}`;
       await beforeWrite({ kind: 'branch_delete', branch });
-      const raw = await call('DELETE', `${repoPath}/git/refs/heads/${branch.split('/').map(encodeURIComponent).join('/')}`);
+      const raw = await call('DELETE', `${repoPath}/git/refs/${ref}`);
       observeWrite(raw, 'contents', 'branch_delete', 'DELETE ref');
-      if (raw.status === 204 || raw.status === 404 || raw.status === 422) return;
+      if (raw.status === 204) return;
+      const check = await call('GET', `${repoPath}/git/ref/${ref}`);
+      if (check.status === 404) return;
       throw failure(raw, 'DELETE ref');
     },
 

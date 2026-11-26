@@ -12,6 +12,11 @@ export interface RunnerOptions {
   version: string;
   /** M4-03이 실제 프로세스·파일 정리와 보유 해제 증거를 제공한다. */
   cleanup?: (command: Command) => Promise<CommandResult>;
+  /**
+   * 정리 결과가 영속 outbox에 기록된 **뒤** 부른다. 「이미 알림」 같은 기록은 여기서 남긴다.
+   * 왜: 결과를 저장하기 전에 남기면, 저장 전에 죽었을 때 보내지 않은 경고를 보낸 것으로 착각한다(재리뷰 N5).
+   */
+  onCleanupQueued?: (command: Command, result: CommandResult) => Promise<void>;
   now?: () => number;
   monotonic?: () => number;
   onRejected?: OutboxOptions['onRejected'];
@@ -26,6 +31,7 @@ export class Runner {
   private readonly api: ApiClient;
   private readonly version: string;
   private readonly cleanup: RunnerOptions['cleanup'];
+  private readonly onCleanupQueued: RunnerOptions['onCleanupQueued'];
   private readonly now: () => number;
   private readonly warn: (message: string) => void;
   private etag: string | undefined;
@@ -39,7 +45,8 @@ export class Runner {
   private readonly commandDeadlines = new Map<string, { revision: string; at: number }>();
   private readonly loggedAlerts = new Map<string, number>();
 
-  constructor({ state, api, version, cleanup, now = Date.now, monotonic, onRejected, warn = () => undefined }: RunnerOptions) {
+  constructor({ state, api, version, cleanup, onCleanupQueued, now = Date.now, monotonic, onRejected, warn = () => undefined }: RunnerOptions) {
+    this.onCleanupQueued = onCleanupQueued;
     this.state = state;
     this.api = api;
     this.version = version;
@@ -146,6 +153,7 @@ export class Runner {
         if (!this.cleanup) { this.warn('정리 구현이 연결되지 않아 새 작업을 보류합니다.'); return; }
         const result = await this.cleanup(command);
         await this.outbox.enqueue('reportCommandResult', { epoch: command.epoch, params: { id: command.id }, body: result });
+        await this.onCleanupQueued?.(command, result);
       }
       await this.outbox.flush(true);
       return;

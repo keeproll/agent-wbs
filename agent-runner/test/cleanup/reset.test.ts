@@ -42,11 +42,12 @@ async function repository() {
 }
 const withBase = (remote: string, base: string, extra: Record<string, unknown> = {}) =>
   noBase([], { repoUrl: remote, baseCommit: base, branches: [], prs: [], ...extra });
-const recorder = () => {
+const recorder = (repository = 'https://github.com/o/r') => {
   const calls: string[] = [];
   const remote: RemoteCleanup = {
-    closePullRequests: (prs) => { calls.push(`close:${prs.join(',')}`); return Promise.resolve(); },
-    deleteBranches: (b) => { calls.push(`delete:${b.join(',')}`); return Promise.resolve(); },
+    repository,
+    closePullRequests: (_t, prs) => { calls.push(`close:${prs.join(',')}`); return Promise.resolve(); },
+    deleteBranches: (_t, b) => { calls.push(`delete:${b.join(',')}`); return Promise.resolve(); },
     targetsMatch: () => { calls.push('targets'); return Promise.resolve(true); },
     pushReset: () => { calls.push('push'); return Promise.resolve(); },
   };
@@ -66,7 +67,7 @@ test('P1-1: 실제 reset_project payload(기준 없음)를 받아 정리한다',
 test('P1-1: 실제 reset_project payload(기준 있음)를 받아 PR 닫기·브랜치 삭제까지 한다', async () => {
   const { remote, base } = await repository();
   const payload = { ...structuredClone(fixture.withBase.payload), repoUrl: remote, baseCommit: base };
-  const r = recorder();
+  const r = recorder(remote);
   const result = await createResetCleanup({ home, identity: () => ({ hostId: 'host-a', bootId: 'other-boot' }), remote: r.remote })(command(payload));
   expect(result.status).toBe('done');
   expect(r.calls).toEqual(['close:7', 'delete:agent/T1-h1,agent/T2-h1']);
@@ -105,10 +106,18 @@ test('pgid 없는 보유는 launch 대조가 none일 때만 no_process', async (
 test('P1-2: 원격 정리는 PR 닫기 → 브랜치 삭제 → 되돌림 push 순서다', async () => {
   const { source, remote, base } = await repository();
   await writeFile(join(source, 'src/a'), 'changed'); git(source, 'add', '.'); git(source, 'commit', '-m', 'changed'); git(source, 'push', remote, 'main');
-  const r = recorder();
+  const r = recorder(remote);
   const result = await createResetCleanup({ home, identity, remote: r.remote })(command(withBase(remote, base, { branches: ['agent/T1'], prs: [3] })));
   expect(result.status).toBe('done');
   expect(r.calls).toEqual(['close:3', 'delete:agent/T1', 'push']);
+});
+
+test('이중 방어 1단계: 명령 저장소가 설정 저장소와 다르면 원격 호출 없이 failed', async () => {
+  const r = recorder('https://github.com/o/current');
+  const foreign = withBase('https://github.com/foreign/previous', 'a'.repeat(40), { branches: ['agent/T1'], prs: [1] });
+  const result = await createResetCleanup({ home, identity, remote: r.remote })(command(foreign));
+  expect(result).toMatchObject({ status: 'failed', items: expect.arrayContaining([expect.objectContaining({ name: 'github:repo', ok: false })]) as unknown });
+  expect(r.calls).toEqual([]);
 });
 
 test('P1-2: 원격 작업이 필요한데 GitHub 연결이 없으면 failed', async () => {
@@ -119,7 +128,7 @@ test('P1-2: 원격 작업이 필요한데 GitHub 연결이 없으면 failed', as
 
 test('로컬 저장소가 없으면 원격 main의 초기화 대상을 기준과 대조한다(같으면 done, 다르면 failed)', async () => {
   const payload = withBase('https://github.com/o/none', 'a'.repeat(40));
-  const r = recorder();
+  const r = recorder('https://github.com/O/none.git');
   expect((await createResetCleanup({ home, identity, remote: r.remote })(command(payload))).status).toBe('done');
   expect(r.calls).toEqual(['close:', 'delete:', 'targets']);
   const mismatch = { ...r.remote, targetsMatch: () => Promise.resolve(false) };
@@ -133,7 +142,7 @@ test('로컬 저장소의 등록 원격이 명령의 저장소와 다르면 중�
   const statePath = join(home, 'state/git', `${id}.json`);
   const record = JSON.parse(await readFile(statePath, 'utf8')) as { source: string };
   await writeFile(statePath, JSON.stringify({ ...record, source: `${remote}-other` }));
-  const r = recorder();
+  const r = recorder(remote);
   const result = await createResetCleanup({ home, identity, remote: r.remote })(command(withBase(remote, base)));
   expect(result).toMatchObject({ status: 'failed', items: expect.arrayContaining([expect.objectContaining({ name: 'git:open', ok: false })]) as unknown });
   expect(r.calls).toEqual([]);
@@ -175,9 +184,14 @@ test('unparsedPrs는 처음 한 번만 경고 플래그(ok:false)로 남기고, 
   const refs = [{ source: 'task_attempts', id: 'a', value: 'abc' }];
   const first = await cleanup(command(noBase([], { unparsedPrs: refs })));
   expect(first).toMatchObject({ status: 'done', items: expect.arrayContaining([expect.objectContaining({ name: 'warn:manual-reconcile', ok: false })]) as unknown });
+  // outbox 저장 전(markReported 전)의 재시도는 같은 경고를 다시 싣는다 — 유실 방지(재리뷰 N5).
+  const retried = await cleanup(command(noBase([], { unparsedPrs: refs })));
+  expect(retried.items.some((i) => i.name === 'warn:manual-reconcile' && !i.ok)).toBe(true);
+  await cleanup.markReported(command({}));
   const second = await cleanup(command(noBase([], { unparsedPrs: refs })));
   expect(second.status).toBe('done');
   expect(second.items.some((i) => !i.ok)).toBe(false);
+  await cleanup.markReported(command({}));
   const third = await cleanup(command(noBase([], { unparsedPrs: [...refs, { source: 'ci_runs', id: 'b', value: 'x' }] })));
   expect(third.items.find((i) => i.name === 'warn:manual-reconcile')?.detail).toContain('1건');
 });

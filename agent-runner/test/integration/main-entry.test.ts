@@ -85,7 +85,7 @@ test('main: 실제 DB 모양의 정리 명령 → 그룹 종료 증명 → 로�
   const pr = model.openPull('agent/T1-h1').number;
 
   const received: { method: string; path: string; body: Record<string, unknown> }[] = [];
-  let done = false;
+  const resulted = new Map<string, Record<string, unknown>>();
   let publicKeyPem = '';
   server = createServer((req, res) => {
     const chunks: Buffer[] = [];
@@ -99,12 +99,20 @@ test('main: 실제 DB 모양의 정리 명령 → 그룹 종료 증명 → 로�
       switch (`${req.method ?? ''} ${url.pathname}`) {
         case 'POST /api/runner/heartbeat': res.writeHead(204, { 'x-current-epoch': '0' }).end(); return;
         case 'GET /api/runner/commands':
-          json(res, { currentEpoch: 0, commands: done ? [] : [{ id: 'cmd-1', kind: 'reset-cleanup', epoch: 0, payload: {
-            ...fixture.withBase.payload, repoUrl: remote, baseCommit: base, branches: ['agent/T1-h1'], prs: [pr],
-            holds: [{ ...fixture.withBase.payload.holds[0], host_id: hostId, boot_id: bootId, pgid }],
-          } }] });
+          // cmd-1: 로컬 저장소 정리(원격 작업 없음), cmd-3: 다른 저장소(원격 쓰기 없이 failed), cmd-2: 설정 저장소 o/r의 PR·브랜치 정리.
+          json(res, { currentEpoch: 0, commands: [
+            { id: 'cmd-1', kind: 'reset-cleanup', epoch: 0, payload: {
+              ...fixture.withBase.payload, repoUrl: remote, baseCommit: base, branches: [], prs: [],
+              holds: [{ ...fixture.withBase.payload.holds[0], host_id: hostId, boot_id: bootId, pgid }],
+            } },
+            { id: 'cmd-3', kind: 'reset-cleanup', epoch: 0, payload: {
+              ...fixture.withBase.payload, repoUrl: 'https://github.com/foreign/previous', baseCommit: model.branches.get('main'), branches: ['agent/T1-h1'], prs: [pr], holds: [],
+            } },
+            { id: 'cmd-2', kind: 'reset-cleanup', epoch: 0, payload: {
+              ...fixture.withBase.payload, repoUrl: 'https://github.com/o/r', baseCommit: model.branches.get('main'), branches: ['agent/T1-h1'], prs: [pr], holds: [],
+            } },
+          ].filter((c) => !resulted.has(c.id)) });
           return;
-        case 'POST /api/runner/commands/cmd-1/result': done = body.status === 'done'; res.writeHead(204).end(); return;
         case 'GET /api/runner/policy':
           json(res, { caps: { ...caps, memReserveGB: 4 }, subagentBudget: { dev: 1, qa: 1 }, heartbeatSeconds: 60, inputCheckMinutes: 10,
             ci: { nightAt: '02:00', retry: 1, deployUrl: null }, claudeModels: ['claude-opus-5-5'], cliGrades: [] });
@@ -115,7 +123,11 @@ test('main: 실제 DB 모양의 정리 명령 → 그룹 종료 증명 → 로�
         case 'POST /api/runner/concurrency': json(res, { caps: { ...caps, memReserveGB: 4 } }); return;
         case 'POST /api/runner/github/key': publicKeyPem = String(body.publicKeyPem); json(res, { keyId: 'k1' }); return;
         case 'GET /api/runner/github/credential': json(res, { sealed: sealCredential(publicKeyPem, GITHUB_TOKEN) }); return;
-        default: res.writeHead(204).end();
+        default: {
+          const id = /^POST \/api\/runner\/commands\/(cmd-\d)\/result$/.exec(`${req.method ?? ''} ${url.pathname}`)?.[1];
+          if (id) resulted.set(id, body);
+          res.writeHead(204).end();
+        }
       }
     });
   });
@@ -129,6 +141,11 @@ test('main: 실제 DB 모양의 정리 명령 → 그룹 종료 증명 → 로�
     await expect(lstat(worktree)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(model.pulls.get(pr)?.state).toBe('closed');
     expect(model.branches.has('agent/T1-h1')).toBe(false);
+    expect(resulted.get('cmd-3')).toMatchObject({ status: 'failed', items: expect.arrayContaining([expect.objectContaining({ name: 'github:repo', ok: false })]) as unknown });
+    expect(resulted.get('cmd-2')).toMatchObject({ status: 'done' });
+    // GitHub 쓰기는 cmd-2의 PR 닫기·브랜치 삭제 두 개뿐이다(다른 저장소 명령은 아무것도 쓰지 않음).
+    expect(github.requests.filter((r) => r.method !== 'GET').map((r) => `${r.method} ${r.path}`))
+      .toEqual([`PATCH /repos/o/r/pulls/${String(pr)}`, 'DELETE /repos/o/r/git/refs/heads/agent/T1-h1']);
     expect(received.some((r) => r.path === '/api/runner/host' && r.body.hostId === hostId)).toBe(true);
     expect(await until(() => received.some((r) => r.path === '/api/runner/github/status'), 10_000)).toBe(true);
   } finally {

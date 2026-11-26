@@ -5,7 +5,7 @@ import type { ApiRequest, ApiResponse } from '../api/client.ts';
 import { normalizeRepoUrl, repositoryIdFor } from '../git/identity.ts';
 import { GitCleanupError, GitRepository } from '../git/repository.ts';
 import { atomicWrite } from '../state/files.ts';
-import { SystemCredentialMissing, type RemoteCleanup } from './remote.ts';
+import { RepositoryMismatch, SystemCredentialMissing, sameRepository, type RemoteCleanup } from './remote.ts';
 
 type Command = ApiResponse<'getCommands'>['body']['commands'][number];
 export type CommandResult = ApiRequest<'reportCommandResult'>['body'];
@@ -119,10 +119,22 @@ const refKey = (ref: unknown) => createHash('sha256').update(JSON.stringify(ref)
  * 3. 원격 정리: PR 닫기 → 기록된 원격 브랜치 삭제 → 되돌림 커밋 push(contracts §6 순서).
  * 4. 남은 작업 폴더·입력이 없음을 확인하고 생성 차단을 푼다(`endReset`). 남아 있으면 failed.
  */
-export function createResetCleanup(deps: ResetCleanupDeps): (command: Command) => Promise<CommandResult> {
+export interface ResetCleanup {
+  (command: Command): Promise<CommandResult>;
+  /**
+   * 결과가 영속 outbox에 들어간 뒤 호출한다. 그 결과에 실은 새 「수동 대조」 경고를 이미 알린 것으로 기록한다.
+   * 호출 전에 죽으면 기록이 없으므로 재시도 결과에 같은 경고가 다시 실린다(유실보다 중복을 택함, 재리뷰 N5).
+   */
+  markReported(command: Command): Promise<void>;
+}
+
+export function createResetCleanup(deps: ResetCleanupDeps): ResetCleanup {
   const groupEmpty = deps.groupEmpty ?? processGroupEmpty;
   const launchCheck = deps.launchCheck ?? (() => Promise.resolve('unknown' as const));
-  return async (command) => {
+  /** 명령별로 아직 기록하지 않은 새 경고 참조 해시 */
+  const pending = new Map<string, string[]>();
+  const cleanup = async (command: Command): Promise<CommandResult> => {
+    pending.delete(command.id);
     let payload: ResetPayload;
     try {
       payload = parseResetPayload(command.payload);
@@ -194,16 +206,20 @@ export function createResetCleanup(deps: ResetCleanupDeps): (command: Command) =
         const needsRevert = repo ? resetCommit !== null && resetCommit !== remoteMain : null;
         const remoteWork = prs.length > 0 || branches.length > 0 || needsRevert !== false;
         if (remoteWork && !deps.remote) return failed({ name: 'github', ok: false, detail: '원격 정리가 필요하지만 GitHub 연결 설정이 없음(AWBS_GITHUB_REPO)' });
-        if (deps.remote) {
-          await deps.remote.closePullRequests(prs);
+        if (remoteWork && deps.remote) {
+          // 이중 방어 1단계: 첫 원격 호출 전에 명령 저장소와 설정 저장소를 대조한다. 실행기 안에서도 같은 검사를 다시 한다(2단계).
+          if (!sameRepository(repoUrl, deps.remote.repository)) {
+            return failed({ name: 'github:repo', ok: false, detail: new RepositoryMismatch().message });
+          }
+          await deps.remote.closePullRequests(repoUrl, prs);
           if (prs.length > 0) items.push({ name: 'github:prs', ok: true, detail: `PR ${String(prs.length)}개 닫음(이미 닫힌 것 포함)` });
-          await deps.remote.deleteBranches(branches);
+          await deps.remote.deleteBranches(repoUrl, branches);
           if (branches.length > 0) items.push({ name: 'github:branches', ok: true, detail: `원격 브랜치 ${String(branches.length)}개 정리` });
           if (needsRevert === true && repo && resetCommit && remoteMain) {
-            await deps.remote.pushReset(repo, resetCommit, remoteMain);
+            await deps.remote.pushReset(repoUrl, repo, resetCommit, remoteMain);
             items.push({ name: 'git:push', ok: true, detail: '되돌림 커밋 전송' });
           } else if (needsRevert === null) {
-            if (!(await deps.remote.targetsMatch(baseCommit))) {
+            if (!(await deps.remote.targetsMatch(repoUrl, baseCommit))) {
               return failed({ name: 'git:push', ok: false, detail: '되돌림이 필요하지만 이 PC에 로컬 저장소가 없음(clone에 시스템 커밋 자격 증명 필요 — Q-09)' });
             }
             items.push({ name: 'git:push', ok: true, detail: '원격 main의 초기화 대상이 기준과 같음 — 되돌림 불필요' });
@@ -215,6 +231,7 @@ export function createResetCleanup(deps: ResetCleanupDeps): (command: Command) =
           return failed({ name: 'git:cleanup', ok: false, detail: error.failures.map((f) => `${f.name}: ${f.detail}`).join('; ').slice(0, 500) });
         }
         if (error instanceof SystemCredentialMissing) return failed({ name: 'git:push', ok: false, detail: error.message });
+        if (error instanceof RepositoryMismatch) return failed({ name: 'github:repo', ok: false, detail: error.message });
         return failed({ name: 'cleanup', ok: false, detail: (error instanceof Error ? error.message : '정리 실패').slice(0, 500) });
       }
     }
@@ -225,12 +242,22 @@ export function createResetCleanup(deps: ResetCleanupDeps): (command: Command) =
       const fresh = payload.unparsedPrs.filter((ref) => !warned.has(refKey(ref)));
       if (fresh.length > 0) {
         items.push({ name: 'warn:manual-reconcile', ok: false, detail: `수동 대조 필요: 해석하지 못한 PR 참조 ${String(fresh.length)}건 — ${JSON.stringify(fresh).slice(0, 400)}` });
-        await mkdir(join(deps.home, 'state'), { recursive: true, mode: 0o700 });
-        await atomicWrite(join(deps.home, 'state'), 'reset-warned.json', JSON.stringify([...warned, ...fresh.map(refKey)]));
+        // 여기서는 기록하지 않는다. 결과가 outbox에 저장된 뒤 markReported가 기록한다.
+        pending.set(command.id, fresh.map(refKey));
       } else {
         items.push({ name: 'manual-reconcile', ok: true, detail: `이미 알린 수동 대조 항목 ${String(payload.unparsedPrs.length)}건(새 경고 없음)` });
       }
     }
     return { status: 'done', items, holds: proofs };
   };
+  return Object.assign(cleanup, {
+    async markReported(command: Command): Promise<void> {
+      const keys = pending.get(command.id);
+      if (!keys) return;
+      const warned = await warnedRefs(deps.home);
+      await mkdir(join(deps.home, 'state'), { recursive: true, mode: 0o700 });
+      await atomicWrite(join(deps.home, 'state'), 'reset-warned.json', JSON.stringify([...new Set([...warned, ...keys])]));
+      pending.delete(command.id);
+    },
+  });
 }

@@ -330,6 +330,15 @@ export class GitHubModel {
       }),
     );
     github.on(
+      `GET ${repoPath}/git/ref/heads/agent/:name`,
+      guard((request) => {
+        const branch = `agent/${param(request, 'name')}`;
+        const sha = this.branches.get(branch);
+        if (!sha) return { status: 404, body: { message: 'Not Found' } };
+        return { body: { ref: `refs/heads/${branch}`, object: { type: 'commit', sha } } };
+      }),
+    );
+    github.on(
       `DELETE ${repoPath}/git/refs/heads/agent/:name`,
       guard((request) => {
         const branch = `agent/${param(request, 'name')}`;
