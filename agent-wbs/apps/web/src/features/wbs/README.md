@@ -65,6 +65,8 @@ WBS(Work Breakdown Structure, 일을 Phase → Work Package → Task로 나눈 �
 - 측정 기록(UAT-WBS-05): `~/.orca/bots/agentwbs/archive/2026-11-26/M3-02/perf/`
   - `wbs-perf.md` — 가짜 API, 200·1,000행. `W e2e -- wbs-perf`.
   - `wbs-perf-api.md` — 실제 API·전용 DB, 200·1,000행. `W --filter @awbs/web e2e:api-wbs`.
+  - 화면 쪽은 1,000행에서도 그리는 행이 19~20개라 빠르다(첫 행 약 0.3초, 가짜 API).
+  - 서버 쪽은 1,000행에서 `listTasks`·`getSchedule`이 각각 7~9초 걸린다(2026-11-27 측정). 화면은 둘을 함께 부르므로 10초 제한을 넘겨 「불러오기 실패」가 된다. 서버 결함으로 보고했다.
 
 ## 5. M3-03(Task 상세)과 연결하는 방법
 
