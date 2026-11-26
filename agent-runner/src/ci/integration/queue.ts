@@ -15,7 +15,7 @@ export interface IntegrationDeps extends Pick<TaskCheckOptions, 'repo' | 'heavy'
   github: Pick<GitHubClient, 'getPullRequest' | 'mainSha' | 'setCommitStatus' | 'mergePullRequest' | 'reconcileMerge'>;
   readVerification: (request: IntegrationRequest) => Promise<{ passed: boolean; headSha: string; specRevision: number }>;
   /** 서버가 (project,A)의 정의 관측을 따로 보관하도록 기존 outbox에 넣는다. */
-  observeMainPipeline: (basis: Pick<MainBasis, 'baseSha' | 'pipelineSha'>) => Promise<void>;
+  observeMainPipeline: (basis: MainBasis) => Promise<void>;
 }
 interface Evidence {
   pr: number; branch: string; baseSha: string; qaHeadSha: string; syncedHeadSha: string; testedTreeSha: string;
@@ -27,7 +27,7 @@ export type IntegrationResult =
   | ({ kind: 'verify_failed'; actualMergeSha: string; reason: string } & Evidence)
   | { kind: 'blocked' }
   | { kind: 'baseline_failed'; failScope: 'baseline'; task: TaskCheckResult }
-  | { kind: 'recheck'; reason: 'main_changed' | 'head_changed' | 'qa_changed' | 'merge_rejected' }
+  | { kind: 'recheck'; reason: 'main_changed' | 'head_changed' | 'qa_changed' | 'merge_rejected'; task?: TaskCheckResult; integration?: IntegrationCheck }
   | { kind: 'rework'; reason: 'conflict' | 'invalid_sync' | 'task_failed' | 'integration_failed'; failScope?: 'task'; task?: TaskCheckResult; integration?: IntegrationCheck };
 interface Journal { version: 1; evidence: Evidence; outcome?: MergeOutcome }
 const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
@@ -89,7 +89,7 @@ export class IntegrationQueue {
     await atomicWrite(this.deps.directory, 'merge.json', JSON.stringify(journal)); this.journal = journal;
   }
 
-  private async current(request: IntegrationRequest, baseSha: string, expectedHead: string): Promise<IntegrationResult | null> {
+  private async current(request: IntegrationRequest, baseSha: string, expectedHead: string): Promise<Extract<IntegrationResult, { kind: 'recheck' }> | null> {
     const { github, repo, readVerification } = this.deps;
     const qa = await readVerification(request);
     if (!qa.passed || qa.headSha !== request.qaHeadSha || qa.specRevision !== request.specRevision) return { kind: 'recheck', reason: 'qa_changed' };
@@ -111,7 +111,7 @@ export class IntegrationQueue {
       this.validateRequest(request);
       const { repo, github, signal } = this.deps; signal?.throwIfAborted();
       const basis = await repo.mainPipeline();
-      await this.deps.observeMainPipeline({ baseSha: basis.baseSha, pipelineSha: basis.pipelineSha });
+      await this.deps.observeMainPipeline(basis);
       const stale = await this.current(request, basis.baseSha, request.qaHeadSha); if (stale) return stale;
       const syncedHeadSha = await repo.prepareIntegration(basis.baseSha, request.qaHeadSha);
       if (!syncedHeadSha) return { kind: 'rework', reason: 'conflict' };
@@ -125,7 +125,7 @@ export class IntegrationQueue {
       await repo.createTaskCheckWorktree(id, syncedHeadSha);
       try { task = await runTaskCheck({ ...this.deps, basis, worktreeId: id, branch: `agent/${id}` }); }
       finally { await repo.removeWorktree(id); }
-      const taskChanged = await this.current(request, basis.baseSha, syncedHeadSha); if (taskChanged) return taskChanged;
+      const taskChanged = await this.current(request, basis.baseSha, syncedHeadSha); if (taskChanged) return { ...taskChanged, task };
       await github.setCommitStatus({ sha: syncedHeadSha, context: 'agentwbs/task',
         state: task.status === 'pass' ? 'success' : task.failScope === 'baseline' ? 'error' : 'failure' });
       if (task.status !== 'pass') {
@@ -134,10 +134,10 @@ export class IntegrationQueue {
           : { kind: 'rework', reason: 'task_failed', failScope: 'task', task };
       }
       const integration = await runIntegrationCheck(this.deps, basis, syncedHeadSha);
-      const changed = await this.current(request, basis.baseSha, syncedHeadSha); if (changed) return changed;
+      const changed = await this.current(request, basis.baseSha, syncedHeadSha); if (changed) return { ...changed, task, integration };
       await github.setCommitStatus({ sha: syncedHeadSha, context: 'agentwbs/int', state: integration.status === 'pass' ? 'success' : 'failure' });
       if (integration.status !== 'pass') return { kind: 'rework', reason: 'integration_failed', failScope: 'task', task, integration };
-      const finalCheck = await this.current(request, basis.baseSha, syncedHeadSha); if (finalCheck) return finalCheck;
+      const finalCheck = await this.current(request, basis.baseSha, syncedHeadSha); if (finalCheck) return { ...finalCheck, task, integration };
       signal?.throwIfAborted();
       const evidence: Evidence = { pr: request.pr, branch: request.branch, baseSha: basis.baseSha, qaHeadSha: request.qaHeadSha,
         syncedHeadSha, testedTreeSha: integration.treeSha, pipelineSha: basis.pipelineSha, ...(proof && { headSync: proof }), task, integration };
@@ -153,7 +153,7 @@ export class IntegrationQueue {
     if (outcome.kind === 'merged') return { ...e, kind: 'merged', actualMergeSha: outcome.mergeSha, actualTreeSha: outcome.treeSha, mergeParents: [e.baseSha, e.syncedHeadSha] };
     if (outcome.kind === 'unknown') return { ...e, kind: 'unknown', observed: outcome.observed };
     if (outcome.kind === 'verify_failed') return { ...e, kind: 'verify_failed', actualMergeSha: outcome.mergeSha, reason: outcome.reason };
-    return { kind: 'recheck', reason: outcome.kind === 'head_changed' ? 'head_changed' : 'merge_rejected' };
+    return { kind: 'recheck', reason: outcome.kind === 'head_changed' ? 'head_changed' : 'merge_rejected', task: e.task, integration: e.integration };
   }
 
   reconcile(): Promise<IntegrationResult | null> {

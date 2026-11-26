@@ -10,7 +10,7 @@ export interface BatchDiagnostic { kind: 'diagnostic'; baseSha: string; pipeline
 export async function diagnoseBatch(deps: IntegrationDeps, requests: readonly IntegrationRequest[]): Promise<BatchDiagnostic> {
   if (requests.length < 2 || new Set(requests.map(r => r.pr)).size !== requests.length) throw new Error('서로 다른 PR을 두 개 이상 지정하세요.');
   const basis = await deps.repo.mainPipeline();
-  await deps.observeMainPipeline({ baseSha: basis.baseSha, pipelineSha: basis.pipelineSha });
+  await deps.observeMainPipeline(basis);
   const result: BatchDiagnostic = { kind: 'diagnostic', baseSha: basis.baseSha, pipelineSha: basis.pipelineSha, runs: [], suspects: [] };
   for (const request of requests) {
     const qa = await deps.readVerification(request);

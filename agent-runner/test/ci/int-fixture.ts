@@ -78,9 +78,9 @@ export async function fixture() {
   const calls: { argv: readonly string[]; cwd: string; task: string | null }[] = [];
   let action: (argv: readonly string[], cwd: string) => Promise<number> = async () => 0;
   let qa = { passed: true, headSha: head, specRevision: 1 };
-  const observations: { baseSha: string; pipelineSha: string }[] = [];
+  const observations: { baseSha: string; pipelineSha: string; source: string }[] = [];
   const deps = { repo, github: client, directory: join(root, 'journal'), heavy: new HeavySemaphore(1),
-    observeMainPipeline: async (basis: { baseSha: string; pipelineSha: string }) => { observations.push(basis); },
+    observeMainPipeline: async (basis: { baseSha: string; pipelineSha: string; source: string }) => { observations.push(basis); },
     execute: async (argv: readonly string[], cwd: string) => {
       calls.push({ argv, cwd, task: await readFile(join(cwd, 'task'), 'utf8').catch(() => null) });
       return { code: await action(argv, cwd), stdout: '통과', stderr: '' };

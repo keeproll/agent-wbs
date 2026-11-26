@@ -15,10 +15,12 @@ Q-08·Q-09의 결정 전에는 기존 GitHub client에 fake(실제 서비스 대
    `readVerification`은 서버의 현재 QA(Quality Assurance, 수용 기준 검증) 결과를 조회한다.
    왜: 낡은 PASS나 바뀐 명세로 병합하지 않아야 한다.
 3. 원격 main A의 정의를 고정한다.
-   `observeMainPipeline`은 `{baseSha, pipelineSha}`를 별도 관측 보고로 영속 보관한다.
+   `observeMainPipeline`은 `{baseSha, pipelineSha, source}`를 별도 관측 보고로 영속 보관한다.
+   `source`는 고정한 main 정의의 원문이다.
+   M7-04 `882cbaf`의 `reportInputChanges.pipelineObservation.definition.raw`에 사용한다.
    이 함수가 실패하면 검사를 시작하지 않는다.
    왜: 서버가 ② 실행의 정의 SHA(내용을 식별하는 해시)를 main A의 관측과 대조해야 한다.
-   M7-04의 최종 관측 API 연결은 M7-06에서 기존 outbox(재전송할 보고를 저장하는 대기열)를 쓴다.
+   M7-04의 관측 API 연결은 M7-06에서 기존 outbox(재전송할 보고를 저장하는 대기열)를 쓴다.
 4. QA한 H에 main A만 자동 병합해 H′를 만든다.
    부모 순서는 정확히 H,A다.
    tree(커밋 시점의 파일 전체 내용)를 Git의 자동 병합 결과와 다시 비교한다.
