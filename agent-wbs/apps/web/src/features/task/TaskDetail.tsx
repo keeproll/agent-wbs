@@ -5,6 +5,7 @@
  * 이 컴포넌트가 하지 않는 것: 레일·목록 필터·주소 바꾸기. 이동은 모두 props 콜백으로 부모에게 맡긴다.
  */
 import { useMemo, useState, type ReactNode } from 'react';
+import { flushSync } from 'react-dom';
 import { codeLabel } from '../../shared/ui/errors.ts';
 import { BusyButton } from '../../shared/ui/BusyButton.tsx';
 import { AreaLoading } from '../../shared/ui/loading.tsx';
@@ -73,6 +74,8 @@ export function TaskDetail({ taskKey, projectId, tab, onTab, nav, onOpenTask }: 
   const [slot, setSlot] = useState<{ id: string; dirty: boolean } | null>(null);
   const [gateOpen, setGateOpen] = useState(false);
   const { guard } = useEditGuard(slot?.dirty ?? false);
+  /** 편집을 버린다. 바로 다음 주소 이동이 편집 보호에 다시 막히지 않게 화면을 먼저 갱신한다. */
+  const discard = () => { flushSync(() => { setSlot(null); }); };
   const edit: EditSlot = useMemo(() => ({
     current: slot?.id ?? null,
     dirty: slot?.dirty ?? false,
@@ -186,7 +189,7 @@ export function TaskDetail({ taskKey, projectId, tab, onTab, nav, onOpenTask }: 
           <ApprovalBar task={t} />
           <div className="tabs" role="tablist" aria-label="Task 상세 탭">
             {tabsDef.map(([key, label, c, alert]) => (
-              <button key={key} type="button" className={`tab${tab === key ? ' on' : ''}`} role="tab" aria-selected={tab === key} onClick={() => { if (tab !== key) void guard(() => { setSlot(null); onTab(key); }); }}>
+              <button key={key} type="button" className={`tab${tab === key ? ' on' : ''}`} role="tab" aria-selected={tab === key} onClick={() => { if (tab !== key) void guard(() => { discard(); onTab(key); }); }}>
                 {label}{c !== '' && <span className={`tab-c${alert ? ' alert' : ''}`}>{c}</span>}
               </button>
             ))}
