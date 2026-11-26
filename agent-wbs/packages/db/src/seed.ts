@@ -28,6 +28,7 @@ interface DemoTask {
   doneCond: string;
   spec?: { ac?: unknown[] };
   approved: boolean;
+  fixStart: string;
   updated: string;
   actStart: string;
   actEnd: string;
@@ -266,6 +267,7 @@ export async function seedDemo(pool: Pool, testDatabaseUrl: string): Promise<voi
               verifier_agent: t.verifier,
               status: t.status,
               verif_state: t.verif,
+              fix_start: t.fixStart || null,
               act_start: t.actStart ? demoTime(t.actStart) : null,
               act_end: t.actEnd ? demoTime(t.actEnd) : null,
               conflict_group: t.cg || null,

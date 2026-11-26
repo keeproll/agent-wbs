@@ -154,7 +154,7 @@ test('schema: previous migration upgrades with data preserved and repeated migra
     const journal = JSON.parse(await readFile(journalPath, 'utf8')) as {
       entries: { idx: number }[];
     };
-    journal.entries = journal.entries.filter((e) => e.idx < 3);
+    journal.entries = journal.entries.filter((e) => e.idx <= 3);
     await writeFile(journalPath, JSON.stringify(journal));
     await migrate(drizzle(previous), { migrationsFolder: temp });
     const c = await previous.connect();
@@ -165,8 +165,20 @@ test('schema: previous migration upgrades with data preserved and repeated migra
         "insert into task_specs(project_id,task,overview,spec,ac,revision) values($1,$2,'{}','{}','[]',1)",
         [p, t],
       );
+      const input = required((await c.query<{ id: string }>(
+        "insert into input_versions(project_id,v,commit_sha,files,md_list,changes,instruction,result) values($1,1,'legacy-sha','[]','[]','[]','legacy','{\"source\":\"legacy\"}') returning id",
+        [p],
+      )).rows[0]?.id);
+      const legacyJob = required((await c.query<{ id: string }>(
+        "insert into runner_jobs(project_id,kind,payload,state,epoch) values($1,'attempt','{}','queued',1) returning id", [p],
+      )).rows[0]?.id);
       await runMigrations(previous);
       await runMigrations(previous);
+      expect((await c.query('select input_version,result from input_version_results')).rows)
+        .toEqual([{ input_version: input, result: { source: 'legacy' } }]);
+      expect((await c.query('select dedup_key from runner_jobs where id=$1', [legacyJob])).rows[0]?.dedup_key)
+        .toBe(`legacy:${legacyJob}`);
+      expect((await c.query('select id,epoch from system_state')).rows).toEqual([{ id: 1, epoch: 1 }]);
       expect((await c.query('select task,revision from task_specs')).rows).toEqual([
         { task: t, revision: 1 },
       ]);
@@ -689,9 +701,20 @@ test('schema: demo loads exactly P twelve tasks, dependencies, checklists and te
     await readFile(new URL('../seed/demo.json', import.meta.url), 'utf8'),
   ) as {
     mock: {
-      tasks: Record<string, { title: string; status: string; spec?: { ac?: unknown[] } }>;
+      tasks: Record<string, {
+        title: string; status: string; spec?: { ac?: unknown[] };
+        approved: boolean; fixStart: string; actStart: string; actEnd: string; outputs: unknown[]; design: unknown[];
+      }>;
+      phases: { id: string; title: string; wps: { id: string; title: string }[] }[];
       deps: unknown[];
+      attempts: unknown[];
+      verifs: { defects: unknown[] }[];
+      msgs: unknown[];
+      plannings: unknown[];
+      proposals: unknown[];
+      hist: unknown[];
     };
+    sched: Record<string, { est: number; lo: number; hi: number; tok: number; conf: string; basis: string }>;
     sub: { defs: unknown[] };
   };
   const prototype = await source('prototype/uiux/Main.dc.html');
@@ -710,6 +733,27 @@ test('schema: demo loads exactly P twelve tasks, dependencies, checklists and te
     expect((await pool.query('select count(*)::int as n from task_dependencies')).rows[0]?.n).toBe(
       fixture.mock.deps.length,
     );
+    expect((await pool.query('select node_key,title from wbs_nodes order by node_key')).rows)
+      .toEqual(fixture.mock.phases.flatMap((p) => [p, ...p.wps])
+        .map((p) => ({ node_key: p.id, title: p.title }))
+        .sort((a, b) => a.node_key.localeCompare(b.node_key)));
+    expect((await pool.query("select task_key,planning_approved_at is not null approved,fix_start::text fixed,to_char(act_start at time zone 'Asia/Seoul','YYYY-MM-DD HH24:MI') started,to_char(act_end at time zone 'Asia/Seoul','YYYY-MM-DD HH24:MI') ended from tasks order by task_key")).rows)
+      .toEqual(Object.entries(fixture.mock.tasks).map(([task_key, t]) => ({ task_key,
+        approved: t.approved, fixed: t.fixStart || null, started: t.actStart || null, ended: t.actEnd || null,
+      })).sort((a, b) => a.task_key.localeCompare(b.task_key)));
+    expect((await pool.query('select task_key,est::float8,lo::float8,hi::float8,tokens_k::float8 tok,confidence conf,basis from task_estimates join tasks on tasks.id=task_estimates.task order by task_key')).rows)
+      .toEqual(Object.entries(fixture.sched).map(([task_key, e]) => ({ task_key,
+        est: e.est, lo: e.lo, hi: e.hi, tok: e.tok, conf: e.conf, basis: e.basis,
+      }))
+        .sort((a, b) => a.task_key.localeCompare(b.task_key)));
+    for (const [table, count] of Object.entries({
+      task_attempts: fixture.mock.attempts.length, verifications: fixture.mock.verifs.length,
+      messages: fixture.mock.msgs.length, plannings: fixture.mock.plannings.length,
+      change_proposals: fixture.mock.proposals.length, task_history: fixture.mock.hist.length,
+      defects: fixture.mock.verifs.reduce((n, v) => n + v.defects.length, 0),
+      task_outputs: Object.values(fixture.mock.tasks).reduce((n, t) => n + t.outputs.length, 0),
+      task_designs: Object.values(fixture.mock.tasks).reduce((n, t) => n + t.design.length, 0),
+    })) expect((await pool.query(`select count(*)::int n from ${table}`)).rows[0]?.n, table).toBe(count);
     const ac = (
       await pool.query(
         "select ac from task_specs join tasks on tasks.id=task_specs.task where task_key='TASK-0001'",
