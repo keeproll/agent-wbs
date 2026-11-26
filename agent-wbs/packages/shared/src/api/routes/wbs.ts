@@ -16,6 +16,8 @@ const patch = <T extends Parameters<typeof Type.Object>[0]>(fields: T) =>
   Type.Object({ ...V, ...fields }, { additionalProperties: false, minProperties: 2 });
 const Changed = { 200: m.TaskChanged };
 const jobCreated = { 202: Type.Object({ jobId: c.Id }) };
+/** 완료·취소 Task는 종료 상태라 내용·관계·체크리스트 변경과 삭제를 409로 거부한다(Q-05, data-model §4). */
+const terminal = ['INVALID_TRANSITION'] as const;
 
 const TaskCreate = Body({
   title: Type.String({ minLength: 1, maxLength: 200 }),
@@ -83,6 +85,7 @@ const task = [
       verifierAgent: Opt(c.Agent),
     }),
     responses: Changed,
+    errors: terminal,
   }),
   operation({
     ...byQuery,
@@ -92,7 +95,8 @@ const task = [
     summary: 'soft delete(후속이 있으면 409)',
     query: VersionQuery,
     responses: { 204: null },
-    errors: ['TASK_HAS_SUCCESSORS'],
+    // INVALID_TRANSITION: 종료 상태에 더해 시작했거나 실행 기록이 있는 Task 삭제도 거부
+    errors: ['TASK_HAS_SUCCESSORS', ...terminal],
   }),
   operation({
     ...byBody,
@@ -118,6 +122,7 @@ const task = [
     summary: '선행 삭제. updatedAt은 후속 Task',
     query: VersionQuery,
     responses: { 204: null },
+    errors: terminal,
   }),
   operation({
     ...byBody,
@@ -127,6 +132,7 @@ const task = [
     summary: '작업 명세 편집',
     body: patch(m.SpecInput),
     responses: Changed,
+    errors: terminal,
   }),
   operation({
     ...byBody,
@@ -137,6 +143,7 @@ const task = [
     params: Type.Object({ taskKey: c.TaskKey, kind: c.DesignKind }),
     body: Body({ ...V, content: c.Json }),
     responses: Changed,
+    errors: terminal,
   }),
   operation({
     ...byBody,
@@ -146,6 +153,7 @@ const task = [
     summary: '체크리스트 항목 추가',
     body: Body({ ...V, ...m.ChecklistInput }),
     responses: { 201: m.TaskChanged },
+    errors: terminal,
   }),
   operation({
     ...byBody,
@@ -155,6 +163,7 @@ const task = [
     summary: '체크리스트 항목 편집',
     body: patch(m.ChecklistPatch),
     responses: Changed,
+    errors: terminal,
   }),
   operation({
     ...byQuery,
@@ -164,6 +173,7 @@ const task = [
     summary: '체크리스트 항목 삭제',
     query: VersionQuery,
     responses: { 204: null },
+    errors: terminal,
   }),
   operation({
     ...byBody,
@@ -173,6 +183,7 @@ const task = [
     summary: '산출물 편집',
     body: Body({ ...V, outputs: List(m.OutputInput) }),
     responses: Changed,
+    errors: terminal,
   }),
   operation({
     ...byBody,

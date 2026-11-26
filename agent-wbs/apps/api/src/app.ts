@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { platformErrorBody } from './platform/errors.ts';
 import { installSecurity, type SecurityOptions } from './platform/security.ts';
 import { buildValidator, validateTransport } from './platform/validation.ts';
+import { registerTaskRoutes } from './tasks/routes.ts';
 
 export function buildApp(pool: Pool, logger: FastifyServerOptions['logger'] = false,
   security: SecurityOptions = { origin: 'http://127.0.0.1:3100', lan: false }): FastifyInstance {
@@ -23,6 +24,7 @@ export function buildApp(pool: Pool, logger: FastifyServerOptions['logger'] = fa
   });
   app.addHook('preHandler', validateTransport);
   installSecurity(app, pool, security);
+  registerTaskRoutes(app, pool);
 
   app.get('/health', (): HealthResponse => ({ status: 'ok' }));
 

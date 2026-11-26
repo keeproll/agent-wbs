@@ -750,7 +750,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "VERSION_CONFLICT"
+            "description": "INVALID_TRANSITION, VERSION_CONFLICT"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -775,6 +775,7 @@
             "TASK_NOT_FOUND"
           ],
           "409": [
+            "INVALID_TRANSITION",
             "VERSION_CONFLICT"
           ],
           "500": [
@@ -840,7 +841,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "TASK_HAS_SUCCESSORS, VERSION_CONFLICT"
+            "description": "INVALID_TRANSITION, TASK_HAS_SUCCESSORS, VERSION_CONFLICT"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -865,6 +866,7 @@
             "TASK_NOT_FOUND"
           ],
           "409": [
+            "INVALID_TRANSITION",
             "TASK_HAS_SUCCESSORS",
             "VERSION_CONFLICT"
           ],
@@ -1079,7 +1081,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "VERSION_CONFLICT"
+            "description": "INVALID_TRANSITION, VERSION_CONFLICT"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -1104,6 +1106,7 @@
             "DEPENDENCY_NOT_FOUND"
           ],
           "409": [
+            "INVALID_TRANSITION",
             "VERSION_CONFLICT"
           ],
           "500": [
@@ -1339,7 +1342,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "VERSION_CONFLICT"
+            "description": "INVALID_TRANSITION, VERSION_CONFLICT"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -1364,6 +1367,7 @@
             "TASK_NOT_FOUND"
           ],
           "409": [
+            "INVALID_TRANSITION",
             "VERSION_CONFLICT"
           ],
           "500": [
@@ -1464,7 +1468,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "VERSION_CONFLICT"
+            "description": "INVALID_TRANSITION, VERSION_CONFLICT"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -1489,6 +1493,7 @@
             "TASK_NOT_FOUND"
           ],
           "409": [
+            "INVALID_TRANSITION",
             "VERSION_CONFLICT"
           ],
           "500": [
@@ -1604,7 +1609,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "IDEMPOTENCY_CONFLICT, VERSION_CONFLICT"
+            "description": "IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, VERSION_CONFLICT"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -1630,6 +1635,7 @@
           ],
           "409": [
             "IDEMPOTENCY_CONFLICT",
+            "INVALID_TRANSITION",
             "VERSION_CONFLICT"
           ],
           "500": [
@@ -1765,7 +1771,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "VERSION_CONFLICT"
+            "description": "INVALID_TRANSITION, VERSION_CONFLICT"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -1791,6 +1797,7 @@
             "TASK_NOT_FOUND"
           ],
           "409": [
+            "INVALID_TRANSITION",
             "VERSION_CONFLICT"
           ],
           "500": [
@@ -1864,7 +1871,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "VERSION_CONFLICT"
+            "description": "INVALID_TRANSITION, VERSION_CONFLICT"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -1890,6 +1897,7 @@
             "TASK_NOT_FOUND"
           ],
           "409": [
+            "INVALID_TRANSITION",
             "VERSION_CONFLICT"
           ],
           "500": [
@@ -2011,7 +2019,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "VERSION_CONFLICT"
+            "description": "INVALID_TRANSITION, VERSION_CONFLICT"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -2036,6 +2044,7 @@
             "TASK_NOT_FOUND"
           ],
           "409": [
+            "INVALID_TRANSITION",
             "VERSION_CONFLICT"
           ],
           "500": [
