@@ -364,7 +364,10 @@
       "violation": 1
      }
     }
-   }
+   },
+   "description": "",
+   "startDate": "2026-11-25",
+   "inputCheckedAt": null
   }
  },
  {
@@ -477,7 +480,10 @@
     "decisions": [],
     "revision": null,
     "draft": null
-   }
+   },
+   "description": "",
+   "startDate": "2026-11-25",
+   "inputCheckedAt": null
   }
  },
  {
@@ -566,7 +572,10 @@
    },
    "updatedAt": "2026-11-25T01:02:03.123456Z",
    "approvedAt": "2026-11-25T01:02:03.123456Z",
-   "approvedTaskCount": 11
+   "approvedTaskCount": 11,
+   "description": "",
+   "startDate": "2026-11-25",
+   "inputCheckedAt": null
   }
  },
  {

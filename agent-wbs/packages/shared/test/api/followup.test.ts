@@ -17,6 +17,11 @@ test('열거값과 생성된 요청 ID는 리터럴 타입을 보존한다', () 
   expectTypeOf<Of<'putExecPolicy'>>().not.toBeNever();
   type Models = Static<Of<'getModelSettings'>['responses'][200]>;
   expectTypeOf<Models['models'][number]['allowed']>().toEqualTypeOf<boolean>();
+  expectTypeOf<Of<'getGithubSettings'>>().not.toBeNever();
+  type Github = Static<Of<'getGithubSettings'>['responses'][200]>;
+  expectTypeOf<Github['mode']>().toEqualTypeOf<'gh' | 'token'>();
+  expectTypeOf<Github['tokenSet']>().toEqualTypeOf<boolean>();
+  expectTypeOf<string extends Op['id'] ? true : false>().toEqualTypeOf<false>();
   expect(choice.enum).toEqual(['a', 'b']);
 });
 

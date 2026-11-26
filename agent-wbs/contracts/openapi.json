@@ -5369,7 +5369,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "IDEMPOTENCY_CONFLICT"
+            "description": "IDEMPOTENCY_CONFLICT, INVALID_TRANSITION"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -5394,7 +5394,8 @@
             "NOT_FOUND"
           ],
           "409": [
-            "IDEMPOTENCY_CONFLICT"
+            "IDEMPOTENCY_CONFLICT",
+            "INVALID_TRANSITION"
           ],
           "500": [
             "INTERNAL"
@@ -5689,7 +5690,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "IDEMPOTENCY_CONFLICT"
+            "description": "IDEMPOTENCY_CONFLICT, INVALID_TRANSITION"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -5711,7 +5712,516 @@
             "FORBIDDEN_PRINCIPAL"
           ],
           "409": [
-            "IDEMPOTENCY_CONFLICT"
+            "IDEMPOTENCY_CONFLICT",
+            "INVALID_TRANSITION"
+          ],
+          "500": [
+            "INTERNAL"
+          ],
+          "503": [
+            "UNAVAILABLE"
+          ]
+        }
+      }
+    },
+    "/api/proposals/{id}": {
+      "get": {
+        "operationId": "getProposal",
+        "summary": "변경 제안 단건 조회. id는 내부 ID 또는 표시 키(CP-001)",
+        "tags": [
+          "lead"
+        ],
+        "security": [
+          {
+            "leadSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "변경 제안 단건 조회. id는 내부 ID 또는 표시 키(CP-001)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Proposal"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "VALIDATION_FAILED"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "LEAD_UNAUTHORIZED"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "FORBIDDEN_PRINCIPAL"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "NOT_FOUND"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "INTERNAL"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error",
+            "description": "UNAVAILABLE"
+          }
+        },
+        "x-error-codes": {
+          "400": [
+            "VALIDATION_FAILED"
+          ],
+          "401": [
+            "LEAD_UNAUTHORIZED"
+          ],
+          "403": [
+            "FORBIDDEN_PRINCIPAL"
+          ],
+          "404": [
+            "NOT_FOUND"
+          ],
+          "500": [
+            "INTERNAL"
+          ],
+          "503": [
+            "UNAVAILABLE"
+          ]
+        }
+      },
+      "patch": {
+        "operationId": "updateProposal",
+        "summary": "팀장 초안 편집. 출처는 유지하고 이전 판단 기록은 폐기",
+        "tags": [
+          "lead"
+        ],
+        "security": [
+          {
+            "leadSession": []
+          }
+        ],
+        "x-version-rule": "body",
+        "x-input-rules": [
+          "uniqueDesignKind"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "updatedAt",
+                      "title",
+                      "reason",
+                      "source",
+                      "ops"
+                    ],
+                    "properties": {
+                      "updatedAt": {
+                        "$ref": "#/components/schemas/Timestamp"
+                      },
+                      "title": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      "source": {
+                        "type": "object",
+                        "required": [
+                          "kind"
+                        ],
+                        "properties": {
+                          "kind": {
+                            "enum": [
+                              "planning",
+                              "message",
+                              "manual",
+                              "input",
+                              "decision"
+                            ]
+                          },
+                          "id": {
+                            "$ref": "#/components/schemas/Id"
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "ops": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/components/schemas/LeadProposalOp"
+                        },
+                        "minItems": 1
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "updatedAt",
+                      "title",
+                      "reason",
+                      "source",
+                      "ops"
+                    ],
+                    "properties": {
+                      "updatedAt": {
+                        "$ref": "#/components/schemas/Timestamp"
+                      },
+                      "title": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      "source": {
+                        "type": "object",
+                        "required": [
+                          "kind",
+                          "id"
+                        ],
+                        "properties": {
+                          "kind": {
+                            "enum": [
+                              "split"
+                            ]
+                          },
+                          "id": {
+                            "$ref": "#/components/schemas/TaskKey"
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "ops": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/components/schemas/LeadSplitProposalOp"
+                        },
+                        "minItems": 1
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "팀장 초안 편집. 출처는 유지하고 이전 판단 기록은 폐기",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Proposal"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "VALIDATION_FAILED"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "LEAD_UNAUTHORIZED"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "FORBIDDEN_PRINCIPAL"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "NOT_FOUND"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "INVALID_TRANSITION, VERSION_CONFLICT"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "INTERNAL"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error",
+            "description": "UNAVAILABLE"
+          }
+        },
+        "x-error-codes": {
+          "400": [
+            "VALIDATION_FAILED"
+          ],
+          "401": [
+            "LEAD_UNAUTHORIZED"
+          ],
+          "403": [
+            "FORBIDDEN_PRINCIPAL"
+          ],
+          "404": [
+            "NOT_FOUND"
+          ],
+          "409": [
+            "INVALID_TRANSITION",
+            "VERSION_CONFLICT"
+          ],
+          "500": [
+            "INTERNAL"
+          ],
+          "503": [
+            "UNAVAILABLE"
+          ]
+        }
+      },
+      "delete": {
+        "operationId": "deleteProposal",
+        "summary": "미제출 초안을 목록에서 삭제. 제안과 변경 이력은 보존",
+        "tags": [
+          "lead"
+        ],
+        "security": [
+          {
+            "leadSession": []
+          }
+        ],
+        "x-version-rule": "query",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "updatedAt",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Timestamp"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "미제출 초안을 목록에서 삭제. 제안과 변경 이력은 보존"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "VALIDATION_FAILED"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "LEAD_UNAUTHORIZED"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "FORBIDDEN_PRINCIPAL"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "NOT_FOUND"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "INVALID_TRANSITION, VERSION_CONFLICT"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "INTERNAL"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error",
+            "description": "UNAVAILABLE"
+          }
+        },
+        "x-error-codes": {
+          "400": [
+            "VALIDATION_FAILED"
+          ],
+          "401": [
+            "LEAD_UNAUTHORIZED"
+          ],
+          "403": [
+            "FORBIDDEN_PRINCIPAL"
+          ],
+          "404": [
+            "NOT_FOUND"
+          ],
+          "409": [
+            "INVALID_TRANSITION",
+            "VERSION_CONFLICT"
+          ],
+          "500": [
+            "INTERNAL"
+          ],
+          "503": [
+            "UNAVAILABLE"
+          ]
+        }
+      }
+    },
+    "/api/proposals/{id}/exclude": {
+      "post": {
+        "operationId": "excludeProposalOp",
+        "summary": "수정 요청 중인 변경 제안의 항목 제외. 마지막 항목도 제외할 수 있으나 빈 제안은 재제출 불가",
+        "tags": [
+          "lead"
+        ],
+        "security": [
+          {
+            "leadSession": []
+          }
+        ],
+        "x-version-rule": "body",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/OptionalIdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "updatedAt",
+                  "index"
+                ],
+                "properties": {
+                  "updatedAt": {
+                    "$ref": "#/components/schemas/Timestamp"
+                  },
+                  "index": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2147483647
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "수정 요청 중인 변경 제안의 항목 제외. 마지막 항목도 제외할 수 있으나 빈 제안은 재제출 불가",
+            "headers": {
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Proposal"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "VALIDATION_FAILED"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "LEAD_UNAUTHORIZED"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "FORBIDDEN_PRINCIPAL"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "NOT_FOUND"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, VERSION_CONFLICT"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "INTERNAL"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error",
+            "description": "UNAVAILABLE"
+          }
+        },
+        "x-error-codes": {
+          "400": [
+            "VALIDATION_FAILED"
+          ],
+          "401": [
+            "LEAD_UNAUTHORIZED"
+          ],
+          "403": [
+            "FORBIDDEN_PRINCIPAL"
+          ],
+          "404": [
+            "NOT_FOUND"
+          ],
+          "409": [
+            "IDEMPOTENCY_CONFLICT",
+            "INVALID_TRANSITION",
+            "VERSION_CONFLICT"
           ],
           "500": [
             "INTERNAL"
@@ -5963,14 +6473,17 @@
               "schema": {
                 "type": "object",
                 "required": [
-                  "updatedAt"
+                  "updatedAt",
+                  "comment"
                 ],
                 "properties": {
                   "updatedAt": {
                     "$ref": "#/components/schemas/Timestamp"
                   },
                   "comment": {
-                    "type": "string"
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
                   }
                 },
                 "additionalProperties": false
@@ -6088,14 +6601,17 @@
               "schema": {
                 "type": "object",
                 "required": [
-                  "updatedAt"
+                  "updatedAt",
+                  "comment"
                 ],
                 "properties": {
                   "updatedAt": {
                     "$ref": "#/components/schemas/Timestamp"
                   },
                   "comment": {
-                    "type": "string"
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
                   }
                 },
                 "additionalProperties": false
@@ -7091,6 +7607,128 @@
           ],
           "403": [
             "FORBIDDEN_PRINCIPAL"
+          ],
+          "500": [
+            "INTERNAL"
+          ],
+          "503": [
+            "UNAVAILABLE"
+          ]
+        }
+      }
+    },
+    "/api/verifications/{id}/evidence": {
+      "post": {
+        "operationId": "addVerificationEvidence",
+        "summary": "기존 검증에 Evidence 경로·HTTP(S) 링크 추가. 빈 경로·같은 검증의 중복 경로 거부",
+        "tags": [
+          "lead"
+        ],
+        "security": [
+          {
+            "leadSession": []
+          }
+        ],
+        "x-version-rule": "none",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/OptionalIdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "path"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "기존 검증에 Evidence 경로·HTTP(S) 링크 추가. 빈 경로·같은 검증의 중복 경로 거부",
+            "headers": {
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Evidence"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "VALIDATION_FAILED"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "LEAD_UNAUTHORIZED"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "FORBIDDEN_PRINCIPAL"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "NOT_FOUND"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "IDEMPOTENCY_CONFLICT"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "INTERNAL"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error",
+            "description": "UNAVAILABLE"
+          }
+        },
+        "x-error-codes": {
+          "400": [
+            "VALIDATION_FAILED"
+          ],
+          "401": [
+            "LEAD_UNAUTHORIZED"
+          ],
+          "403": [
+            "FORBIDDEN_PRINCIPAL"
+          ],
+          "404": [
+            "NOT_FOUND"
+          ],
+          "409": [
+            "IDEMPOTENCY_CONFLICT"
           ],
           "500": [
             "INTERNAL"
@@ -8510,6 +9148,243 @@
           ],
           "403": [
             "FORBIDDEN_PRINCIPAL"
+          ],
+          "500": [
+            "INTERNAL"
+          ],
+          "503": [
+            "UNAVAILABLE"
+          ]
+        }
+      },
+      "patch": {
+        "operationId": "updateProject",
+        "summary": "프로젝트 정보 편집. 날짜 변경은 일정 재계산과 정책에 따른 기준 추가를 같은 트랜잭션에 기록",
+        "tags": [
+          "lead"
+        ],
+        "security": [
+          {
+            "leadSession": []
+          }
+        ],
+        "x-version-rule": "body",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "updatedAt",
+                  "name",
+                  "description",
+                  "startDate",
+                  "targetDate"
+                ],
+                "properties": {
+                  "updatedAt": {
+                    "$ref": "#/components/schemas/Timestamp"
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "startDate": {
+                    "$ref": "#/components/schemas/DateOnly"
+                  },
+                  "targetDate": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/DateOnly"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "프로젝트 정보 편집. 날짜 변경은 일정 재계산과 정책에 따른 기준 추가를 같은 트랜잭션에 기록",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectState"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "VALIDATION_FAILED"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "LEAD_UNAUTHORIZED"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "FORBIDDEN_PRINCIPAL"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "INVALID_TRANSITION, SCHEDULE_CYCLE, VERSION_CONFLICT"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "INTERNAL"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error",
+            "description": "UNAVAILABLE"
+          }
+        },
+        "x-error-codes": {
+          "400": [
+            "VALIDATION_FAILED"
+          ],
+          "401": [
+            "LEAD_UNAUTHORIZED"
+          ],
+          "403": [
+            "FORBIDDEN_PRINCIPAL"
+          ],
+          "409": [
+            "INVALID_TRANSITION",
+            "SCHEDULE_CYCLE",
+            "VERSION_CONFLICT"
+          ],
+          "500": [
+            "INTERNAL"
+          ],
+          "503": [
+            "UNAVAILABLE"
+          ]
+        }
+      }
+    },
+    "/api/project/inputs/check": {
+      "post": {
+        "operationId": "checkInputs",
+        "summary": "지금 입력 확인 요청. Runner 정책의 inputCheckRequest 증가. 확인 시각은 실제 관측 보고를 받았을 때 갱신",
+        "tags": [
+          "lead"
+        ],
+        "security": [
+          {
+            "leadSession": []
+          }
+        ],
+        "x-version-rule": "body",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/OptionalIdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "updatedAt"
+                ],
+                "properties": {
+                  "updatedAt": {
+                    "$ref": "#/components/schemas/Timestamp"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "지금 입력 확인 요청. Runner 정책의 inputCheckRequest 증가. 확인 시각은 실제 관측 보고를 받았을 때 갱신",
+            "headers": {
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "inputCheckRequest"
+                  ],
+                  "properties": {
+                    "inputCheckRequest": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "VALIDATION_FAILED"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "LEAD_UNAUTHORIZED"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error",
+            "description": "FORBIDDEN_PRINCIPAL"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, VERSION_CONFLICT"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "INTERNAL"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error",
+            "description": "UNAVAILABLE"
+          }
+        },
+        "x-error-codes": {
+          "400": [
+            "VALIDATION_FAILED"
+          ],
+          "401": [
+            "LEAD_UNAUTHORIZED"
+          ],
+          "403": [
+            "FORBIDDEN_PRINCIPAL"
+          ],
+          "409": [
+            "IDEMPOTENCY_CONFLICT",
+            "INVALID_TRANSITION",
+            "VERSION_CONFLICT"
           ],
           "500": [
             "INTERNAL"
@@ -25645,6 +26520,11 @@
                       "minimum": 0,
                       "maximum": 9007199254740991
                     },
+                    "inputCheckRequest": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
                     "ci": {
                       "type": "object",
                       "required": [
@@ -29470,9 +30350,12 @@
                           "pattern": "\\S"
                         },
                         "kind": {
-                          "type": "string",
-                          "minLength": 1,
-                          "pattern": "\\S"
+                          "enum": [
+                            "agree",
+                            "diff",
+                            "일치",
+                            "이견"
+                          ]
                         },
                         "codex": {
                           "type": "string"
@@ -30083,7 +30966,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, LEASE_LOST"
+            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited",
@@ -30112,6 +30995,7 @@
           "409": [
             "EPOCH_MISMATCH",
             "IDEMPOTENCY_CONFLICT",
+            "INVALID_TRANSITION",
             "LEASE_LOST"
           ],
           "429": [
@@ -33455,13 +34339,37 @@
           "kind": {
             "type": "string"
           },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "sha256": {
-            "$ref": "#/components/schemas/Sha256"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Sha256"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "size": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 9007199254740991
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "title": "Evidence"
@@ -36332,6 +37240,7 @@
         "type": "object",
         "required": [
           "id",
+          "planningKey",
           "title",
           "scope",
           "analyses",
@@ -36343,6 +37252,9 @@
         "properties": {
           "id": {
             "$ref": "#/components/schemas/Id"
+          },
+          "planningKey": {
+            "type": "string"
           },
           "title": {
             "type": "string"
@@ -36986,7 +37898,10 @@
             "type": "string"
           },
           "kind": {
-            "type": "string"
+            "enum": [
+              "agree",
+              "diff"
+            ]
           },
           "codex": {
             "type": "string"
@@ -37625,6 +38540,9 @@
               "cleanup",
               "id",
               "name",
+              "description",
+              "startDate",
+              "inputCheckedAt",
               "repo",
               "targetDate",
               "instruction",
@@ -37661,6 +38579,22 @@
               },
               "name": {
                 "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "startDate": {
+                "$ref": "#/components/schemas/DateOnly"
+              },
+              "inputCheckedAt": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Timestamp"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "repo": {
                 "type": "object",
@@ -38822,6 +39756,9 @@
               "cleanup",
               "id",
               "name",
+              "description",
+              "startDate",
+              "inputCheckedAt",
               "repo",
               "targetDate",
               "instruction",
@@ -38859,6 +39796,22 @@
               },
               "name": {
                 "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "startDate": {
+                "$ref": "#/components/schemas/DateOnly"
+              },
+              "inputCheckedAt": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Timestamp"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "repo": {
                 "type": "object",
