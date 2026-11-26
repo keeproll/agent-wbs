@@ -51,7 +51,7 @@ export function ActiveView({ project }: { project: Active }) {
       <div className="page-h"><div><h1>프로젝트</h1><p className="page-sub">프로젝트 정보 · 입력 자료 · 상태 · WBS 구조 · Agent 참여 현황 — 프로젝트는 하나만 등록되며, 처음부터 다시 시작하려면 「프로젝트 초기화」</p></div></div>
       <InputsCard project={project} />
       <section className="card" aria-labelledby="pj-info-h">
-        <div className="dp-h"><h3 id="pj-info-h">프로젝트 정보</h3></div>
+        <div className="dp-h"><h2 id="pj-info-h">프로젝트 정보</h2></div>
         <div className="kv" style={{ gridTemplateColumns: '110px minmax(0,1fr)' }}>
           <span className="kv-l">프로젝트 ID</span><span className="kv-v mono">{project.id}</span>
           <span className="kv-l">이름</span><span className="kv-v">{project.name}</span>
@@ -61,7 +61,7 @@ export function ActiveView({ project }: { project: Active }) {
         </div>
       </section>
       <section className="card danger-zone" aria-labelledby="pj-reset-h">
-        <div className="dp-h"><h3 id="pj-reset-h">프로젝트 초기화</h3><button type="button" className="btn danger" onClick={() => { setResetOpen(true); }}>프로젝트 초기화…</button></div>
+        <div className="dp-h"><h2 id="pj-reset-h">프로젝트 초기화</h2><button type="button" className="btn danger" onClick={() => { setResetOpen(true); }}>프로젝트 초기화…</button></div>
         <p className="fhint" style={{ margin: 0 }}>진행 중인 모든 작업을 중지하고, 지금까지의 기록 · 결과 · 산출물을 <b>모두 삭제</b>합니다. Agent WBS와 Runner는 프로젝트 등록 전 상태로 돌아가고, 작업 저장소는 등록 시점 기준 커밋으로 되돌아갑니다. 삭제된 내용은 복구할 수 없습니다. 입력 자료(prototype/ (uiux · docs))와 등록 이전부터 저장소에 있던 코드는 삭제하지 않습니다.</p>
       </section>
       {resetOpen && <ResetModal project={project} onClose={() => { setResetOpen(false); }} />}
@@ -160,7 +160,7 @@ function InputsCard({ project }: { project: Active }) {
   const cols = '50px 148px 84px minmax(200px,1.4fr) minmax(160px,1fr) minmax(150px,1fr) 84px';
   return (
     <section className="card" aria-labelledby="in-h">
-      <div className="dp-h"><h3 id="in-h">입력 자료 · 저장소 <span className="tag">GitHub</span></h3></div>
+      <div className="dp-h"><h2 id="in-h">입력 자료 · 저장소 <span className="tag">GitHub</span></h2></div>
       {ghBad && <div className="banner danger"><div className="banner-b">GitHub 인증 실패 — 입력 변경 확인이 멈춰 있습니다. 설정 → Runner · 실행 환경 → GitHub 연결을 확인하세요.</div></div>}
       {rewritten && (
         <div className="banner danger" data-testid="rewrite-alert">

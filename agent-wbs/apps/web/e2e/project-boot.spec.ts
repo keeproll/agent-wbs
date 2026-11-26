@@ -57,7 +57,7 @@ test('시나리오 29 · UAT-PROJECT-06 a: 기술 결정 확정 대기 — 미�
   const api = await openBoot(page, bootProject({ steps: steps('tech'), decisions: DECISIONS }));
   const panel = page.getByRole('region', { name: '기술 결정 확정' });
   await expect(panel.getByText('팀장 확인 대기')).toBeVisible();
-  await expect(step(page, 'tech')).toContainText('팀장 확인 대기');
+  await expect(step(page, 'tech')).toContainText('진행 중');
   // 팀장 지정(필수)은 고를 수 없고, 조건부 선호의 조건 판단과 Agent 제안은 근거·대안과 함께 고른다.
   await expect(panel.locator('[data-td="TD-01"]')).toContainText('확정');
   await expect(panel.locator('[data-td="TD-01"]').getByRole('button', { name: '승인' })).toHaveCount(0);

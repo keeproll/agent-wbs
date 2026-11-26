@@ -25,7 +25,7 @@ export function ResetHistory() {
   const items = [...(resets.data?.items ?? [])].sort((a, b) => b.epoch - a.epoch);
   return (
     <section className="card" style={{ margin: 0 }} aria-labelledby="rs-hist-h">
-      <div className="dp-h"><h3 id="rs-hist-h">초기화 기록</h3><span className="fhint">프로젝트 데이터와 별도 보관</span></div>
+      <div className="dp-h"><h2 id="rs-hist-h">초기화 기록</h2><span className="fhint">프로젝트 데이터와 별도 보관</span></div>
       {resets.isError && !resets.data && <p className="muted" style={{ margin: 0 }}>초기화 기록을 불러오지 못했습니다. <button type="button" className="reflink" onClick={() => { void resets.refetch(); }}>다시 시도</button></p>}
       {items.map((r) => (
         <div key={r.epoch} className="rpt-li" data-testid="reset-row">

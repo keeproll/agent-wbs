@@ -77,7 +77,7 @@ export function BootView({ project }: { project: BootProject }) {
       {b.fail && <BootFailure project={project} stepLabel={failed ? BOOT_STEPS[String(failed.key)]?.[0] ?? String(failed.key) : '초기 분석'} onCancel={() => { setResetOpen(true); }} />}
       <div className="cmp" style={{ gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.4fr)' }}>
         <section className="card" aria-labelledby="bs-h">
-          <div className="dp-h"><h3 id="bs-h">진행 단계</h3><span className="fhint">Runner 보고에 따라 진행됩니다</span></div>
+          <div className="dp-h"><h2 id="bs-h">진행 단계</h2><span className="fhint">Runner 보고에 따라 진행됩니다</span></div>
           <ol className="bsteps" style={{ listStyle: 'none', margin: 0, padding: 0 }} aria-label="초기 분석 단계">
             {b.steps.map((s, i) => {
               const [l, d] = BOOT_STEPS[String(s.key)] ?? [String(s.key), ''];
@@ -86,7 +86,7 @@ export function BootView({ project }: { project: BootProject }) {
               return (
                 <li key={String(s.key)} className={`bs bs-${st}`} data-step={s.key}>
                   <span className="bs-n">{i + 1}</span>
-                  <div><b>{l}</b> <span className={c}>{s.key === 'approve' && st === 'run' ? '팀장 확인 대기' : s.key === 'tech' && st === 'run' ? '팀장 확인 대기' : sl}</span>
+                  <div><b>{l}</b> <span className={c}>{s.key === 'approve' && st === 'run' ? '팀장 확인 대기' : sl}</span>
                     <div className="muted" style={{ fontSize: 12 }}>{d}</div>
                     {s.note && <div style={{ fontSize: 12 }}>{s.note}</div>}
                   </div>
@@ -94,8 +94,8 @@ export function BootView({ project }: { project: BootProject }) {
               );
             })}
           </ol>
-          <h4>팀장 지시</h4><p style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{project.instruction || '(지시 없음)'}</p>
-          <h4>Runner 보고</h4>
+          <h3 className="h4l">팀장 지시</h3><p style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{project.instruction || '(지시 없음)'}</p>
+          <h3 className="h4l">Runner 보고</h3>
           {b.logs.length === 0 && <p className="muted" style={{ margin: 0 }}>아직 Runner 보고가 없습니다. Runner가 단계를 시작하면 여기에 보입니다.</p>}
           {[...b.logs].reverse().slice(0, 8).map((l, i) => <div key={`${l.at}-${String(i)}`} className="rpt-li"><span className="mono muted">{formatDateTime(l.at)}</span><span>{l.text}</span></div>)}
         </section>
@@ -198,7 +198,7 @@ function TechPanel({ project, techStep }: { project: BootProject; techStep: Step
   const stL = waiting ? '팀장 확인 대기' : techStep === 'done' ? '확정됨' : '대기';
   return (
     <section className="card" aria-labelledby="tech-h">
-      <div className="dp-h"><h3 id="tech-h">기술 결정 확정</h3><span className={waiting ? 'sc sc-warn' : 'sc sc-ok'}>{stL}</span></div>
+      <div className="dp-h"><h2 id="tech-h">기술 결정 확정</h2><span className={waiting ? 'sc sc-warn' : 'sc sc-ok'}>{stL}</span></div>
       {restoreOffer}
       <p className="fhint" style={{ margin: '0 0 8px' }}>팀장 지정 제약은 그대로 확정되고, Agent 제안은 하나씩 승인 · 반려합니다. 확정해야 WBS 초안 작성이 시작됩니다 — 초기 WBS 승인과는 별도 단계입니다.</p>
       {decisions.map((x) => {
@@ -303,7 +303,7 @@ function DraftPanel({ project }: { project: BootProject }) {
   const splitC = sc ? (sc.violation ? 'sc sc-bad' : sc.suspect ? 'sc sc-warn' : 'sc sc-ok') : '';
   return (
     <section className="card" aria-labelledby="draft-h">
-      <div className="dp-h"><h3 id="draft-h">WBS 초안</h3>{draft && <span className="mono muted">r{b.revision}</span>}</div>
+      <div className="dp-h"><h2 id="draft-h">WBS 초안</h2>{draft && <span className="mono muted">r{b.revision}</span>}</div>
       {draft && tree && sc ? (
         <>
           {restoreOffer}

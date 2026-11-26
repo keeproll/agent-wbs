@@ -104,8 +104,8 @@ export function ResetModal({ project, onClose }: { project: RegisteredProject; o
       <div className="banner danger"><div className="banner-b"><b>초기화하면 진행 중인 모든 작업이 중지되고, 지금까지의 기록 · 결과 · 산출물이 모두 삭제됩니다.</b> Agent WBS와 Runner는 프로젝트 등록 전 상태로 돌아가며, 삭제된 내용은 복구할 수 없습니다. 아래 삭제 항목을 확인한 뒤 진행하세요.</div></div>
       {preview.data ? (
         <div className="cmp" style={{ marginTop: 12 }}>
-          <div><h4 style={{ marginTop: 0 }}>Agent WBS에서 삭제</h4><div className="rs-grid" data-testid="reset-counts">{resetCounts(preview.data).map(([l, n]) => <span key={l} style={{ display: 'contents' }}><span>{l}</span><b className="mono">{n}</b></span>)}</div></div>
-          <div><h4 style={{ marginTop: 0 }}>Runner · 작업 저장소에서 정리</h4><ul className="lst" style={{ margin: 0, paddingLeft: 18 }} data-testid="reset-runner">{runnerJobs(preview.data).map((t) => <li key={t}>{t}</li>)}</ul></div>
+          <div><h3 className="h4l" style={{ marginTop: 0 }}>Agent WBS에서 삭제</h3><div className="rs-grid" data-testid="reset-counts">{resetCounts(preview.data).map(([l, n]) => <span key={l} style={{ display: 'contents' }}><span>{l}</span><b className="mono">{n}</b></span>)}</div></div>
+          <div><h3 className="h4l" style={{ marginTop: 0 }}>Runner · 작업 저장소에서 정리</h3><ul className="lst" style={{ margin: 0, paddingLeft: 18 }} data-testid="reset-runner">{runnerJobs(preview.data).map((t) => <li key={t}>{t}</li>)}</ul></div>
         </div>
       ) : preview.isError
         ? <div className="banner danger" style={{ marginTop: 12 }}><div className="banner-b">삭제 항목을 불러오지 못했습니다. 삭제 건수를 확인하기 전에는 초기화할 수 없습니다. <button type="button" className="btn sm" onClick={() => { void preview.refetch(); }}>다시 시도</button></div></div>

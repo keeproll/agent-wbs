@@ -177,7 +177,7 @@ export function RegisterView({ project }: { project: ProjectState }) {
       {restoreOffer}
       <div className="cmp" style={{ gridTemplateColumns: 'minmax(0,1.5fr) minmax(0,1fr)' }}>
         <section className="card" aria-labelledby="reg-h">
-          <div className="dp-h"><h3 id="reg-h">등록 정보</h3><button type="button" className="reflink" onClick={sample}>예시 값 채우기</button></div>
+          <div className="dp-h"><h2 id="reg-h">등록 정보</h2><button type="button" className="reflink" onClick={sample}>예시 값 채우기</button></div>
           <div className="form">
             <div className="frow"><label className="flabel" htmlFor="reg-name">프로젝트 이름 <span className="req">*</span></label><div className="fctl"><input id="reg-name" className="inp" value={form.name} onChange={(e) => { patch({ name: e.target.value }); }} placeholder="예: Verum-SDN Agent WBS — Self Development" /></div></div>
             <div className="frow"><label className="flabel" htmlFor="reg-url">GitHub 저장소 <span className="req">*</span></label><div className="fctl">
@@ -224,7 +224,7 @@ export function RegisterView({ project }: { project: ProjectState }) {
         </section>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <section className="card" style={{ margin: 0 }}>
-            <div className="dp-h"><h3>등록 후 진행</h3></div>
+            <div className="dp-h"><h2>등록 후 진행</h2></div>
             <ol className="lst" style={{ margin: 0, paddingLeft: 18, lineHeight: 1.8 }}>
               <li>Runner가 GitHub 접근 확인 · main 커밋 고정 → prototype/ (uiux · docs) checkout(읽기 전용) → 작업 준비</li>
               <li>Codex · Claude 독립 분석 → 교차 검토 · 이견 조정</li>

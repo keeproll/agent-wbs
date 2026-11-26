@@ -60,3 +60,8 @@ a.nav-i.off { cursor: not-allowed; }
 
 /* 10. 제목 순서(h1 다음 h2) 때문에 원본의 h3 자리에 h2를 쓰는 곳. 원본 h3와 같은 크기·여백으로 보이게 한다(접근성 heading-order). */
 .load-err-t, .sb-h { font-size: 1.17em; margin: 0 0 1em; }
+
+/* 11. 카드 제목(.dp-h)과 카드 안 소제목. 원본은 h1 다음 바로 h3·h4를 써서 제목 순서(heading-order)를 어긴다.
+   제품은 한 단계씩 내려 h2·h3을 쓰고, 원본 .dp-h h3(P L618)·h4(P L250)와 같은 모양으로 보이게 한다(M3-04). */
+.dp-h h2 { margin: 0; font-size: 14px; display: flex; gap: 6px; align-items: center; }
+h3.h4l { margin: 0 0 6px; font-size: 13px; font-weight: 600; }
