@@ -1,0 +1,170 @@
+{
+  "$comment": "실제 하위 Agent v1 정의 목록(M5-06). 파일 내용을 바꾸면 hash가 달라진다. 이미 배포한 버전은 고치지 말고 새 버전 파일을 더한다.",
+  "defs": [
+    {
+      "key": "ui-builder",
+      "version": 1,
+      "agent": "Claude",
+      "role": "화면 구현",
+      "tools": [
+        "Read",
+        "Glob",
+        "Grep",
+        "Edit",
+        "Write",
+        "Bash"
+      ],
+      "sandbox": "worktree 쓰기",
+      "allowed": true,
+      "ref": "https://code.claude.com/docs/en/sub-agents",
+      "file": "claude/ui-builder.v1.md",
+      "hash": "bbf10fd4a061bb11b5e1f09d08b3048f569fe91786ed5d12bcf984337587584b"
+    },
+    {
+      "key": "service-builder",
+      "version": 1,
+      "agent": "Claude",
+      "role": "서버 기능 구현",
+      "tools": [
+        "Read",
+        "Glob",
+        "Grep",
+        "Edit",
+        "Write",
+        "Bash"
+      ],
+      "sandbox": "worktree 쓰기",
+      "allowed": true,
+      "ref": "https://code.claude.com/docs/en/sub-agents",
+      "file": "claude/service-builder.v1.md",
+      "hash": "bebddb297b2a3567f0399ea32838aac3169e97c1e836a315d367afc63ed97bfe"
+    },
+    {
+      "key": "schema-migrator",
+      "version": 1,
+      "agent": "Claude",
+      "role": "DB 구조 변경",
+      "tools": [
+        "Read",
+        "Glob",
+        "Grep",
+        "Edit",
+        "Write",
+        "Bash"
+      ],
+      "sandbox": "worktree 쓰기",
+      "allowed": true,
+      "ref": "https://code.claude.com/docs/en/sub-agents",
+      "file": "claude/schema-migrator.v1.md",
+      "hash": "28a0f102e176580d529eac3655a1a538add336c0d67f1fc79d82cd09180df2f6"
+    },
+    {
+      "key": "change-reviewer",
+      "version": 1,
+      "agent": "Claude",
+      "role": "변경 검토",
+      "tools": [
+        "Read",
+        "Glob",
+        "Grep"
+      ],
+      "sandbox": "읽기 전용",
+      "allowed": true,
+      "ref": "https://code.claude.com/docs/en/sub-agents",
+      "file": "claude/change-reviewer.v1.md",
+      "hash": "4b2a5c2d094379dab7ab8f29f15f3ffd45b902d8a8506279e3808a31b0ed5adf"
+    },
+    {
+      "key": "contract-checker",
+      "version": 1,
+      "agent": "Claude",
+      "role": "인터페이스 계약 대조",
+      "tools": [
+        "Read",
+        "Glob",
+        "Grep"
+      ],
+      "sandbox": "읽기 전용",
+      "allowed": true,
+      "ref": "https://code.claude.com/docs/en/sub-agents",
+      "file": "claude/contract-checker.v1.md",
+      "hash": "d64fb63a709ea059ccc43bc50d16ff577c74ceea3dbb9569f5e10af0865a895d"
+    },
+    {
+      "key": "doc-editor",
+      "version": 1,
+      "agent": "Claude",
+      "role": "문서 작성",
+      "tools": [
+        "Read",
+        "Glob",
+        "Grep",
+        "Edit",
+        "Write"
+      ],
+      "sandbox": "worktree 쓰기 (문서만)",
+      "allowed": true,
+      "ref": "https://code.claude.com/docs/en/sub-agents",
+      "file": "claude/doc-editor.v1.md",
+      "hash": "ac2a210a893583b08f205eaac37852062cbcf70d4615719d5a68e7ba90e0939e"
+    },
+    {
+      "key": "ac-verifier",
+      "version": 1,
+      "agent": "Codex",
+      "role": "인수 조건 검증",
+      "tools": [
+        "shell",
+        "apply_patch"
+      ],
+      "sandbox": "worktree 쓰기 (검증 실행용)",
+      "allowed": true,
+      "ref": "https://github.com/openai/codex/tree/main/codex-rs/agent-roles",
+      "file": "codex/ac-verifier.v1.toml",
+      "hash": "095739ddc86fa0338eecc85c9a855e94e080a66331a8074ebf0e054ec5453ecb"
+    },
+    {
+      "key": "test-author",
+      "version": 1,
+      "agent": "Codex",
+      "role": "테스트 작성",
+      "tools": [
+        "shell",
+        "apply_patch"
+      ],
+      "sandbox": "worktree 쓰기 (테스트만)",
+      "allowed": true,
+      "ref": "https://github.com/openai/codex/tree/main/codex-rs/agent-roles",
+      "file": "codex/test-author.v1.toml",
+      "hash": "9d44c885cea53ff8d9d0c22a24a77279dcb3ddd6faa2df39fbbd1caac1fc7c06"
+    },
+    {
+      "key": "security-checker",
+      "version": 1,
+      "agent": "Codex",
+      "role": "보안 점검",
+      "tools": [
+        "shell"
+      ],
+      "sandbox": "읽기 전용",
+      "allowed": true,
+      "ref": "https://github.com/openai/codex/tree/main/codex-rs/agent-roles",
+      "file": "codex/security-checker.v1.toml",
+      "hash": "5c95c520aebd8f75f3ee9c9b79f36da308faa10041716e136e61bed494fc6345"
+    },
+    {
+      "key": "failure-investigator",
+      "version": 1,
+      "agent": "Codex",
+      "role": "실패 원인 조사",
+      "tools": [
+        "shell"
+      ],
+      "sandbox": "읽기 전용",
+      "allowed": true,
+      "ref": "https://github.com/openai/codex/tree/main/codex-rs/agent-roles",
+      "file": "codex/failure-investigator.v1.toml",
+      "hash": "8812cd701e2d12fa442aa0db2d41f8048d27f704ce191d34912d20fdeff4f0b3"
+    }
+  ]
+}
