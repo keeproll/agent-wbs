@@ -41,12 +41,13 @@ export function Modal({ title, meta, children, footer, onCancel, size = 'sm', st
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') { event.preventDefault(); cancel.current(); return; }
       if (event.key !== 'Tab' || !box) return;
-      const items = [...box.querySelectorAll<HTMLElement>(FOCUSABLE)];
-      const first = items[0];
-      const last = items.at(-1);
-      if (!first || !last) { event.preventDefault(); return; }
-      if (event.shiftKey && (document.activeElement === first || !box.contains(document.activeElement))) { event.preventDefault(); last.focus(); }
-      else if (!event.shiftKey && (document.activeElement === last || !box.contains(document.activeElement))) { event.preventDefault(); first.focus(); }
+      // 모달 안 컨트롤 + 모달 위에 뜬 오류 막대의 버튼(다시 시도·닫기)을 한 바퀴로 돈다.
+      const items = [...box.querySelectorAll<HTMLElement>(FOCUSABLE), ...document.querySelectorAll<HTMLElement>(`.errbar[role="alert"] :is(${FOCUSABLE})`)];
+      event.preventDefault();
+      if (items.length === 0) return;
+      const at = items.indexOf(document.activeElement as HTMLElement);
+      const next = at === -1 ? (event.shiftKey ? items.length - 1 : 0) : (at + (event.shiftKey ? -1 : 1) + items.length) % items.length;
+      items[next]?.focus();
     };
     document.addEventListener('keydown', onKey);
     return () => {

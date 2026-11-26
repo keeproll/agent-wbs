@@ -37,11 +37,13 @@ export interface ConflictModalProps {
   onClose: () => void;
   /** 다시 적용 요청을 보내는 중 */
   busy?: boolean;
-  /** 다시 적용(최신 읽기 또는 저장)이 실패한 이유. 있으면 창 안에 보인다. */
+  /** 다시 적용(최신 읽기 또는 저장)이나 최신 불러오기가 실패한 이유. 있으면 창 안에 보인다. */
   failure?: ApiError | null;
+  /** 실패 안내 제목 앞부분. 기본 「다시 적용하지 못했습니다」 */
+  failureTitle?: string;
 }
 
-export function ConflictModal({ error, mine, at, onReload, onReapply, onClose, busy = false, failure = null }: ConflictModalProps) {
+export function ConflictModal({ error, mine, at, onReload, onReapply, onClose, busy = false, failure = null, failureTitle = '다시 적용하지 못했습니다' }: ConflictModalProps) {
   const changes = conflictChanges(error);
   return (
     <Modal
@@ -61,7 +63,7 @@ export function ConflictModal({ error, mine, at, onReload, onReapply, onClose, b
         <div className="banner danger" role="alert" style={{ marginTop: 0, marginBottom: 10 }}>
           <Icon d={ICON.warning} />
           <div className="banner-b">
-            <b>다시 적용하지 못했습니다 — {causeTitle(failure)}</b> <span className="mono">{codeLabel(failure)}</span>
+            <b>{failureTitle} — {causeTitle(failure)}</b> <span className="mono">{codeLabel(failure)}</span>
             <div>{causeMessage(failure)}</div>
           </div>
         </div>

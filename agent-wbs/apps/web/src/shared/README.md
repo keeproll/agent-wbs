@@ -71,7 +71,8 @@ const { save, busy, conflictModal } = useSave({
   onSuccess: (result, payload) => { /* 캐시 갱신 */ setDraft((d) => (d === payload.title ? null : d)); },
   successNotice: '제목을 저장했습니다.',
   onFieldErrors: setFieldErrors,            // 400의 고칠 항목
-  onConflictReload: () => { /* 편집 버리고 최신 다시 읽기 */ },
+  // 최신 다시 읽기를 await한다. 실패(ApiError)는 그대로 던지면 창이 열린 채 「최신 내용을 불러오지 못했습니다」를 보인다.
+  onConflictReload: async () => { await reload(); setDraft(null); },
   // 실패는 catch로 삼키지 말고 그대로 던진다. 창 안에 이유가 보이고, 끝까지 성공해야 창이 닫힌다.
   // reload는 client.call로 서버에서 새로 읽는다(queryClient.fetchQuery는 캐시를 돌려줄 수 있어 옛 버전으로 또 충돌한다).
   onConflictReapply: async () => { const latest = await reload(); await saveWith(latest.updatedAt, draft); },
@@ -92,7 +93,7 @@ const { save, busy, conflictModal } = useSave({
     - 오류 막대의 「닫기」는 **안내만 닫는다.** 이전 요청과 키는 잊지 않는다. 왜: 서버가 이미 처리하고 응답만 잃었을 수 있어, 새 키로 보내면 같은 것이 두 번 만들어진다.
     - 재시도가 성공해도 그 사이 사용자가 더 고친 초안은 지우지 않는다. 그래서 `onSuccess`는 `payload`와 현재 초안을 비교해서 닫는다(예시 ③).
   - 400: 오류 막대 + 고칠 항목. 「다시 시도」는 없다. 왜: 같은 잘못된 요청을 다시 보내도 또 실패한다.
-  - 409 `VERSION_CONFLICT`: 충돌 창. 「최신 불러오기(내 변경 버림)」와 「최신 위에 다시 적용」 중 고른다. Esc는 아무것도 하지 않고 창만 닫는다(입력 유지). 다시 적용이 실패하면 창 안에 이유를 보인다.
+  - 409 `VERSION_CONFLICT`: 충돌 창. 「최신 불러오기(내 변경 버림)」와 「최신 위에 다시 적용」 중 고른다. Esc는 아무것도 하지 않고 창만 닫는다(입력 유지). 최신 불러오기·다시 적용은 끝까지 성공해야 창이 닫히고, 실패하면 창 안에 이유를 보인다(`onConflictReload`·`onConflictReapply`가 Promise를 돌려주면 기다린다).
   - 그 밖의 409: 오류 막대(다시 시도 없음) + `onRejected`. 왜: 「지금 상태와 맞지 않음」이라 최신 상태를 다시 읽어야 한다(contracts §1.1).
 - POST 요청에는 `run`이 받은 `idempotencyKey`를 넘긴다(`client.call(id, { …, idempotencyKey })`).
 - 변경 요청에는 `X-CSRF-Token`이 자동으로 붙는다.
@@ -169,6 +170,11 @@ return <section>{restoreOffer}…</section>;
 | `<Modal title footer onCancel size style>` | 새 모달 | 포커스 가두기·Esc·포커스 복원·겹치지 않는 제목 ID를 해 준다. 폭은 원본 모달마다 다르니 `style`로 맞춘다 |
 | `<Icon d={ICON.warning} />` | 선 아이콘 | 원본 `.ico`와 같은 18×18. 아이콘 패키지는 쓰지 않는다 |
 | `formatDateTime(at)` | 시각 표시 | Asia/Seoul `YYYY-MM-DD HH:mm` |
+
+오류 막대와 모달:
+
+- 모달이 열려 있어도 오류 막대는 overlay 위(쌓임 순서 51, overlay 50과 안내 60 사이)에 뜬다. 원본은 순서를 정하지 않아 overlay 아래에 깔렸다.
+- 모달의 Tab 순환에 오류 막대의 「다시 시도」·「닫기」가 들어간다. 그래서 모달 안 저장이 실패해도 마우스·키보드로 다시 시도할 수 있다.
 
 ## 7. E2E에서 가짜 API 쓰기
 
