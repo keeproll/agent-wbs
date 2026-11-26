@@ -15,10 +15,11 @@ import { formatDateTime } from '../../shared/format.ts';
 import { useSave } from '../../shared/state/useSave.tsx';
 import { BusyButton } from '../../shared/ui/BusyButton.tsx';
 import { useNotice } from '../../shared/ui/feedback.tsx';
-import { PAGE_LIMIT } from '../change/find.ts';
+import { findInPages } from '../change/find.ts';
 import { cpStatus, diffRows, opText, type TaskInfo } from '../change/model.ts';
 import { DIFF_GRID } from '../change/ProposalDetail.tsx';
 import type { Proposal } from '../change/types.ts';
+import type { LinkedCp } from './PlanningPage.tsx';
 import { cpReason, isDiff, openCount, planOps, planStep, type Planning, type PlanningReview } from './model.ts';
 
 const CHOICES = [['codex', 'Codex 안 채택'], ['claude', 'Claude 안 채택'], ['hold', '변경 없음 (보류)']] as const;
@@ -30,9 +31,9 @@ function useRefreshPlanning() {
   return () => Promise.all(['listPlannings', 'listProposals'].map((id) => queryClient.invalidateQueries({ queryKey: [id] })));
 }
 
-export function SessionView({ planning, cp, tasks, memos, setMemo, openCp }: {
+export function SessionView({ planning, cpState, tasks, memos, setMemo, openCp }: {
   planning: Planning;
-  cp: Proposal | null;
+  cpState: LinkedCp;
   tasks: ReadonlyMap<string, TaskInfo> | null;
   memos: Readonly<Record<string, string>>;
   setMemo: (reviewId: string, memo: string | null) => void;
@@ -41,8 +42,11 @@ export function SessionView({ planning, cp, tasks, memos, setMemo, openCp }: {
   const { client } = useApi();
   const notify = useNotice();
   const refresh = useRefreshPlanning();
+  const cp: Proposal | null = cpState.kind === 'found' ? cpState.cp : null;
   const status = cp ? String(cp.status) : null;
-  const locked = cp !== null && status !== 'rejected';
+  // 연결 CP 상태를 모르면(읽는 중·실패·못 찾음) 잠근다. 반려된 CP만 다시 조정·작성할 수 있다.
+  const unknown = cpState.kind === 'loading' || cpState.kind === 'error' || cpState.kind === 'missing';
+  const locked = unknown || (cp !== null && status !== 'rejected');
   const step = planStep(planning.reviews, status);
   const openN = openCount(planning.reviews);
   const ops = locked && cp ? cp.ops : planOps(planning.reviews);
@@ -63,7 +67,10 @@ export function SessionView({ planning, cp, tasks, memos, setMemo, openCp }: {
     onRejected: () => { void refresh(); },
   });
   const cannotCp = locked || openN > 0 || ops.length === 0;
-  const cpNote = locked && cp
+  const cpNote = cpState.kind === 'loading' ? '연결된 변경 제안의 상태를 확인하는 중입니다. 확인될 때까지 조정 · 작성을 잠급니다.'
+    : cpState.kind === 'error' ? '연결된 변경 제안의 상태를 확인하지 못했습니다. 같은 변경을 두 번 만들지 않도록 조정 · 작성을 잠급니다. 「다시 확인」을 누르세요.'
+    : cpState.kind === 'missing' ? '연결된 변경 제안을 찾지 못했습니다. 같은 변경을 두 번 만들지 않도록 조정 · 작성을 잠급니다.'
+    : locked && cp
     ? `${cp.cpKey}로 제출됨 — 승인 · 반영 상태는 변경 제안 화면에서 확인합니다.`
     : openN ? `미조정 이견 ${String(openN)}건을 조정해야 Change Proposal을 작성할 수 있습니다.`
       : !ops.length ? '반영할 변경이 없습니다.'
@@ -120,7 +127,8 @@ export function SessionView({ planning, cp, tasks, memos, setMemo, openCp }: {
           ))}
         </div>
         <div className="form-acts">
-          <span className="muted" style={{ marginRight: 'auto' }}>{cpNote}</span>
+          <span className="muted" style={{ marginRight: 'auto' }} role={unknown ? 'status' : undefined}>{cpNote}</span>
+          {cpState.kind === 'error' && <button type="button" className="btn" onClick={cpState.retry}>다시 확인</button>}
           <BusyButton busy={makeCp.busy} busyLabel="작성 중…" disabled={cannotCp} onClick={() => { void makeCp.save(); }}>Change Proposal 작성</BusyButton>
         </div>
       </div>
@@ -141,7 +149,7 @@ function ReviewCard({ planning, review, locked, memo, setMemo }: {
   const label = review.topic;
 
   const send = (updatedAt: string, payload: { choice: string; memo: string }) => client.call('choosePlanningReview', {
-    params: { id: planning.id, rid: review.id }, body: { updatedAt, choice: payload.choice, ...(payload.memo.trim() ? { memo: payload.memo.trim() } : {}) },
+    params: { id: planning.id, rid: review.id }, body: { updatedAt, choice: payload.choice, memo: payload.memo.trim() },
   });
   /** 누른 선택을 request()가 읽게 둔다(저장 버튼을 누른 순간의 값). */
   const pending = useRef(choice ?? '');
@@ -152,16 +160,22 @@ function ReviewCard({ planning, review, locked, memo, setMemo }: {
     request: () => ({ updatedAt: review.updatedAt, choice: pending.current, memo: memoNow }),
     run: ({ payload, idempotencyKey }) => client.call('choosePlanningReview', {
       params: { id: planning.id, rid: review.id }, idempotencyKey,
-      body: { updatedAt: payload.updatedAt, choice: payload.choice, ...(payload.memo.trim() ? { memo: payload.memo.trim() } : {}) },
+      body: { updatedAt: payload.updatedAt, choice: payload.choice, memo: payload.memo.trim() },
     }),
     onSuccess: (_r, payload) => {
       // 그 사이 메모를 더 고쳤으면 초안을 남긴다.
       if (memo === undefined || memo === payload.memo) setMemo(null);
       void refresh();
     },
-    onConflictReload: () => { setMemo(null); void refresh(); },
-    onConflictReapply: async () => {
-      const fresh = (await client.call('listPlannings', { query: { limit: PAGE_LIMIT } })).items.find((p) => p.id === planning.id)?.reviews.find((r) => r.id === review.id);
+    // 최신을 서버에서 새로 읽은 뒤에만 메모 초안을 버린다. 창을 닫아 취소됐으면(signal) 화면을 바꾸지 않는다(M3-01 79c2cc1).
+    onConflictReload: async ({ signal }) => {
+      await findInPages((query) => client.call('listPlannings', { query, signal }), (p) => p.id === planning.id);
+      if (signal.aborted) return;
+      setMemo(null);
+      await refresh();
+    },
+    onConflictReapply: async ({ signal }) => {
+      const fresh = (await findInPages((query) => client.call('listPlannings', { query, signal }), (p) => p.id === planning.id))?.reviews.find((r) => r.id === review.id);
       if (!fresh) throw new Error('검토를 다시 찾지 못했습니다.');
       await send(fresh.updatedAt, { choice: pending.current, memo: memoNow });
       setMemo(null);

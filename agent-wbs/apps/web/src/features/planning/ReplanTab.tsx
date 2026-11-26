@@ -16,6 +16,7 @@ import { useRefreshError } from '../../shared/layout/MenuScreen.tsx';
 import { useSave } from '../../shared/state/useSave.tsx';
 import { BusyButton } from '../../shared/ui/BusyButton.tsx';
 import { AreaLoading } from '../../shared/ui/loading.tsx';
+import { causeMessage, codeLabel } from '../../shared/ui/errors.ts';
 import type { TaskInfo } from '../change/model.ts';
 import { PAGE_LIMIT } from '../change/find.ts';
 import { replanRows } from './model.ts';
@@ -48,7 +49,7 @@ export function ReplanTab({ tasks }: { tasks: ReadonlyMap<string, TaskInfo> | nu
   const auto = policy.data ? Boolean((policy.data as { autoReplan?: boolean }).autoReplan) : null;
   const summary = sp
     ? `현재 기준 v${String(sp.baselineVersion)} · 완료 예상 ${md(sp.end)} (범위 ${md(sp.lo)} ~ ${md(sp.hi)}) · 기준 대비 ${sp.slipDays > 0 ? '+' : ''}${String(sp.slipDays)}일 · 최초 기준 v1 ${md(sp.firstBaselineEnd)} · 재조정 ${String(rows.length)}회`
-    : '현재 일정 불러오는 중…';
+    : schedule.isError ? `현재 일정을 불러오지 못했습니다 (${codeLabel(schedule.error)}).` : '현재 일정 불러오는 중…';
 
   return (
     <>
@@ -56,14 +57,24 @@ export function ReplanTab({ tasks }: { tasks: ReadonlyMap<string, TaskInfo> | nu
         <div className="dp-h">
           <div>
             <h2 className="dp-t">일정 재조정 이력 {auto !== null && <span className="tag">{auto ? '자동 반영' : '자동 반영 꺼짐 — 실행해야 반영'}</span>}</h2>
-            <p className="fhint" style={{ margin: '4px 0 0' }}>{summary}</p>
+            <p className="fhint" style={{ margin: '4px 0 0' }}>{summary}{schedule.isError && !sp && <> <button type="button" className="btn ghost sm" onClick={() => { void schedule.refetch(); }}>다시 시도</button></>}</p>
           </div>
           <BusyButton small busy={run.busy} busyLabel="재조정 실행 중…" onClick={() => { void run.save(); }}>재조정 실행</BusyButton>
         </div>
         <p className="fhint" style={{ margin: 0 }}>Task 추가 · 삭제 · 재추정, Runner 중단, 사용량 한도, 작업 불가일 변경이 생기면 Planning Agent가 전체 일정을 다시 계산하고 새 기준 일정 버전으로 자동 반영합니다. 밀리거나 당겨진 Task는 각 Task 이력에도 남습니다.</p>
         {auto === false && <p className="fhint" style={{ margin: '4px 0 0' }}>지금은 자동 반영이 꺼져 있어 재조정은 「반영 대기」로만 기록되고 기준 일정은 바뀌지 않습니다. 「재조정 실행」을 누르면 다시 계산해 새 기준으로 확정합니다.</p>}
       </div>
-      {replans.data === undefined && <AreaLoading label="재조정 이력 불러오는 중" />}
+      {replans.data === undefined && replans.isError && (
+        // 첫 조회 실패: 로딩으로 남기지 않고 원인과 「다시 시도」를 보인다(독립 리뷰 ca3902d #5). 모양은 공통 오류 카드(.load-err).
+        <section className="card load-err rpc" aria-labelledby="rp-err-t">
+          <h2 id="rp-err-t" className="load-err-t">재조정 이력을 불러오지 못했습니다</h2>
+          <p>{causeMessage(replans.error, false)} ({codeLabel(replans.error)})</p>
+          <div className="form-acts" style={{ justifyContent: 'flex-start' }}>
+            <BusyButton busy={replans.isFetching} busyLabel="다시 불러오는 중…" onClick={() => { void replans.refetch(); }}>다시 시도</BusyButton>
+          </div>
+        </section>
+      )}
+      {replans.data === undefined && !replans.isError && <AreaLoading label="재조정 이력 불러오는 중" />}
       {replans.data !== undefined && rows.length === 0 && (
         <div className="card rpc"><p className="empty" style={{ margin: 0 }}>재조정 기록이 없습니다. 초기 WBS를 승인하면 기준 v1이 생기고, 일정이 바뀌면 여기에 기록됩니다.</p></div>
       )}

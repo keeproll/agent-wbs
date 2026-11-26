@@ -114,10 +114,20 @@ export function ProposalDetail({ cp, tasks, planningTitle, comment, setComment }
               <span className="gc">{r.field}</span>
               <span className="gc dbef">{r.before}</span>
               <span className="gc daft">{r.after}</span>
-              <span className="gc" />
+              <span className="gc">
+                {status === 'changes' && (
+                  // 원본의 「제외」 자리(P L1707). 계약에 CP 항목 제외 API가 없어 누를 수 없다(서버 후속 작업). 생기면 이 버튼에 연결한다.
+                  <button type="button" className="btn ghost sm" disabled aria-describedby={`cp-exclude-${cp.id}`} aria-label={`${r.target} ${r.field} 제외`}>제외</button>
+                )}
+              </span>
             </div>
           ))}
         </div>
+        {status === 'changes' && (
+          <p className="fhint" id={`cp-exclude-${cp.id}`} style={{ margin: '-8px 0 0' }}>
+            항목 제외는 서버 기능이 준비되면 사용할 수 있습니다. 지금은 변경 항목을 바꿀 수 없어, 그대로 재제출하거나 새 변경 제안을 작성해야 합니다.
+          </p>
+        )}
       </div>
       {!closed && preview.isPending && <AreaLoading label="영향 분석 불러오는 중" />}
       {issues.length > 0 && (
@@ -191,10 +201,10 @@ function Actions({ cp, preview, issues, holds, comment, setComment, err, setErr 
   const status = String(cp.status);
 
   /** 충돌 뒤 다시 적용: 서버에서 이 CP와 미리보기를 새로 읽는다(캐시를 쓰지 않는다). */
-  const latest = async () => {
-    const fresh = await findProposal((query) => client.call('listProposals', { query }), cp.id);
+  const latest = async (signal: AbortSignal) => {
+    const fresh = await findProposal((query) => client.call('listProposals', { query, signal }), cp.id);
     if (!fresh) throw new Error(`${cp.cpKey}를 다시 찾지 못했습니다.`);
-    const hash = ['applied', 'rejected'].includes(String(fresh.status)) ? '' : (await client.call('previewProposal', { params: { id: cp.id } })).previewHash;
+    const hash = ['applied', 'rejected'].includes(String(fresh.status)) ? '' : (await client.call('previewProposal', { params: { id: cp.id }, signal })).previewHash;
     return { updatedAt: fresh.updatedAt, previewHash: hash };
   };
   const call = (id: ActionId, payload: Payload, idempotencyKey: string) => {
@@ -217,9 +227,15 @@ function Actions({ cp, preview, issues, holds, comment, setComment, err, setErr 
       void refresh();
       notify(notice(result));
     },
-    onConflictReload: () => { setComment(''); void refresh(); },
-    onConflictReapply: async () => {
-      const fresh = await latest();
+    // 최신을 서버에서 새로 읽은 뒤에만 의견을 버린다. 창을 닫아 취소됐으면(signal) 화면을 바꾸지 않는다(M3-01 79c2cc1).
+    onConflictReload: async ({ signal }) => {
+      await latest(signal);
+      if (signal.aborted) return;
+      setComment('');
+      await refresh();
+    },
+    onConflictReapply: async ({ signal }) => {
+      const fresh = await latest(signal);
       const result = await call(id, { ...fresh, comment }, crypto.randomUUID());
       if (comment.trim()) setComment('');
       void refresh();
