@@ -66,6 +66,8 @@ export interface ClaimInput {
   cleanupPending: boolean;
   dependenciesMet: boolean;
   leaderRequested: boolean;
+  autoRetryLimit: number;
+  autoReworkLimit: number;
   taskCheckPassed: boolean;
   integrationFailed: boolean;
   evidenceInvalidated: boolean;
@@ -115,7 +117,7 @@ export function claimReasons(input: ClaimInput): string[] {
         previous.verificationDisposition !== 'stale' && (previous.kind === 'qa' || previous.kind === 'reverify') && previous.verificationResult === 'FAIL')) {
         reasons.push('QA 또는 통합 실패가 필요합니다.');
       }
-      if (counts.automaticReworks >= 3 && !input.leaderRequested) reasons.push('자동 재작업 한도 초과입니다.');
+      if (counts.automaticReworks >= input.autoReworkLimit && !input.leaderRequested) reasons.push('자동 재작업 한도 초과입니다.');
       break;
     case 'qa':
     case 'verifying':
@@ -144,7 +146,7 @@ export function claimReasons(input: ClaimInput): string[] {
     case 'failed':
       if (previous?.status !== 'failed' || previous.kind !== kind) reasons.push('실패한 종류로 재시도해야 합니다.');
       if (counts.consecutiveFailures[kind] < 1) reasons.push('시도 이력에 연속 실패가 없습니다.');
-      if (counts.consecutiveFailures[kind] > 2 && !input.leaderRequested) reasons.push('자동 재시도 한도 초과입니다.');
+      if (counts.consecutiveFailures[kind] > input.autoRetryLimit && !input.leaderRequested) reasons.push('자동 재시도 한도 초과입니다.');
       break;
     default:
       reasons.push('현재 상태에서 시도할 수 없습니다.');

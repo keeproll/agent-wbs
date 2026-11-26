@@ -374,6 +374,7 @@ export const Evidence = Type.Object(
 export const Verification = Type.Object(
   {
     id: c.Id,
+    verificationKey: Opt(Type.String()),
     taskKey: c.TaskKey,
     attemptId: c.Id,
     result: c.PassFail,
@@ -928,13 +929,13 @@ export const Dashboard = Type.Object(
       late: List(obj({ ...taskRef, baselineEnd: MaybeDate, end: c.DateOnly, slipDays: Nullable(N), paused: Type.Boolean() })),
       approvals: List(
         Type.Union([
-          obj({ kind: AnyOf('planning'), id: c.Id, title: Str, unresolved: c.Count }),
-          obj({ kind: AnyOf('proposal'), id: c.Id, title: Str, status: ProposalStatus }),
+          obj({ kind: AnyOf('planning'), id: c.Id, planningKey: Opt(Str), title: Str, unresolved: c.Count }),
+          obj({ kind: AnyOf('proposal'), id: c.Id, cpKey: Opt(Str), title: Str, status: ProposalStatus }),
         ]),
       ),
       executions: List(
         Type.Union([
-          obj({ kind: AnyOf('running'), ...taskRef, attemptId: c.Id, attemptKind: c.AttemptKind, agent: c.Agent }),
+          obj({ kind: AnyOf('running'), ...taskRef, attemptId: c.Id, attemptKey: Opt(Str), attemptKind: c.AttemptKind, agent: c.Agent }),
           obj({ kind: AnyOf('ready'), ...taskRef }),
         ]),
       ),
@@ -944,8 +945,8 @@ export const Dashboard = Type.Object(
     }),
     recent: List(
       Type.Union([
-        obj({ kind: AnyOf('attempt'), at: c.Timestamp, id: c.Id, taskKey: c.TaskKey, agent: c.Agent, text: Str, status: AttemptStatus }),
-        obj({ kind: AnyOf('verification'), at: c.Timestamp, id: c.Id, taskKey: c.TaskKey, agent: c.Agent, text: Str, result: c.PassFail }),
+        obj({ kind: AnyOf('attempt'), at: c.Timestamp, id: c.Id, attemptKey: Opt(Str), taskKey: c.TaskKey, agent: c.Agent, text: Str, status: AttemptStatus }),
+        obj({ kind: AnyOf('verification'), at: c.Timestamp, id: c.Id, verificationKey: Opt(Str), taskKey: c.TaskKey, agent: c.Agent, text: Str, result: c.PassFail }),
       ]),
     ),
     grades: List(

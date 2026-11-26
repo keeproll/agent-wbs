@@ -6,6 +6,8 @@ import { scheduleWarning } from '@awbs/shared/api';
 import { TaskError } from '../tasks/errors.ts';
 import { wbsPaths } from '../tasks/wbs.ts';
 import { deferChange } from '../changes/events.ts';
+import { RunnerRepository } from '../runner/repository.ts';
+import { caps as runnerCaps, wireCaps } from '../runner/service.ts';
 
 const MOVE_LABEL = { delayed: '지연', advanced: '앞당김', new: '신규 편입', excluded: '제외' } as const;
 
@@ -27,7 +29,7 @@ export async function policyOf(client: Pick<PoolClient, 'query'>): Promise<Polic
     thresholdDays: row?.threshold_days == null ? OWNER_THRESHOLD_DAYS : Number(row.threshold_days),
     assumeRate: row?.assume_rate == null ? OWNER_ASSUME_RATE : Number(row.assume_rate),
     windowDays: row?.window_days ?? 7,
-    minHours: row?.min_hours ?? 72,
+    minHours: Number(row?.min_hours ?? 72),
   };
 }
 
@@ -58,7 +60,7 @@ export async function scheduleInput(client: PoolClient, projectId: string, polic
     client.query<{ id: string; kind: 'phase' | 'work_package'; parent_id: string | null; sort_order: number }>('select id,kind,parent_id,sort_order from wbs_nodes where project_id=$1', [projectId]),
     client.query<{ from: string; to: string | null; last: string }>(`select ${isoAt('started_at')} as from,${isoAt('ended_at')} as to,${isoAt('last_heartbeat_at')} as last from runner_sessions`),
     client.query<{ date: string }>(`select to_char(date,${ymd}) as date from blackout_days order by date`),
-    client.query<{ caps: { total?: number; Claude?: number; Codex?: number } | null }>('select caps from concurrency_settings where singleton'),
+    client.query<{ mode: string; caps: { total?: number; Claude?: number; Codex?: number } | null }>('select mode,caps from concurrency_settings where singleton'),
     client.query<{ agent: Agent; remain: string; reset_at: string }>(`select distinct on (agent) agent,remain_pct::text as remain,${isoAt('reset_at')} as reset_at from agent_usage order by agent,created_at desc`),
     client.query<{ heartbeat_seconds: number; heartbeat_misses: number }>('select heartbeat_seconds,heartbeat_misses from app_settings where singleton'),
     // 상한 안에서 Runner가 조절해 보고한 현재 한도(G§6.2). 가장 최근 보고를 쓴다.
@@ -70,7 +72,8 @@ export async function scheduleInput(client: PoolClient, projectId: string, polic
     tasks.rows.map((task) => ({ id: task.id, wbsNodeId: task.wbs_node_id, sortOrder: task.sort_order, deleted: false })),
   );
   // shortcut: 동시 실행 상한이 아직 설정되지 않았으면(M2-08 설정 전) Agent별 1, 전체 2로 계산한다.
-  const cap = caps.rows[0]?.caps ?? {};
+  const runner = new RunnerRepository(client);
+  const cap = await runner.host() ? wireCaps((await runnerCaps(runner)).caps) : (caps.rows[0]?.mode === 'manual' ? caps.rows[0].caps : null) ?? {};
   const total = cap.total ?? 2;
   // Runner 보고가 없을 때만 상한을 현재 한도로, 관측이 없을 때만 하위 Agent 비율 0으로 본다(P의 0.5는 Mock 값).
   const current = Math.min(total, runnerLimit.rows[0]?.limit ?? total);

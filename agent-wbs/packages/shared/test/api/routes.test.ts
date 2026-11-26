@@ -215,9 +215,14 @@ test('원본·계획에 없는 경로를 만들지 않았다', () => {
   // 원본의 편집·확인·모달 취소·항목 제외를 서버에 연결한다. 이력 삭제는 허용하지 않는다.
   expect(read('docs/ui/acceptance.md')).toContain('UAT-PROJECT-10');
   expect(read('prototype/uiux/Main.dc.html')).toContain('cpRemoveOp(cpId, i)');
+  // 서버 후속 3: G§5.2-1·§7.4와 P의 분할 목록·사용 현황·알림 확인·준비 상태 재점검을 연결한다.
+  for (const text of ['기준을 벗어난 Task', '팀장 고정 Task', '지정 Task', 'cfg.rd.recheck', 'al.done']) {
+    expect(read('prototype/uiux/Main.dc.html')).toContain(text);
+  }
   const followup = ['PATCH /api/project', 'POST /api/project/inputs/check', 'GET /api/proposals/:id',
     'PATCH /api/proposals/:id', 'DELETE /api/proposals/:id', 'POST /api/proposals/:id/exclude',
-    'POST /api/verifications/:id/evidence'];
+    'POST /api/verifications/:id/evidence', 'GET /api/settings/split/violations', 'GET /api/settings/agent-usage',
+    'POST /api/alerts/:id/ack', 'POST /api/settings/readiness/check'];
   const known = new Set([
     'GET /health',
     'GET /health/db',

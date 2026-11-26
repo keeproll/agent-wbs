@@ -21,7 +21,7 @@ export interface Harness {
 }
 
 /** 이름마다 다른 테스트 DB(`awbs_test_..._<name>`)를 만들고 migrate·system seed를 적용한다. */
-export async function harness(name: string): Promise<Harness> {
+export async function harness(name: string, install?: (app: FastifyInstance, pool: Pool) => void): Promise<Harness> {
   const url = new URL(inject('testDatabaseUrl'));
   url.pathname += `_${name}`;
   const owner = createPool(url.href, { max: 4, onError: () => undefined });
@@ -33,6 +33,7 @@ export async function harness(name: string): Promise<Harness> {
   const pool = createPool(appUrl.href, { max: 8, onError: () => undefined });
   const app = buildApp(pool, false, { origin, lan: false });
   registerRunnerMessageRoutes(app);
+  install?.(app, pool);
   const bearer = await issueRunnerToken(pool, 'runner-1', 'fake-public-key');
   const token = await issueLoginLink(pool);
   const login = await app.inject({ method: 'POST', url: '/api/auth/session', headers: { origin }, payload: { method: 'link', token } });

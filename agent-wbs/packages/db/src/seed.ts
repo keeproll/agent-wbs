@@ -565,6 +565,7 @@ export async function seedDemo(pool: Pool, testDatabaseUrl: string): Promise<voi
         .onConflictDoNothing();
     }
     await tx.insert(s.counters).values({ project_id: p.id, kind: 'task', value: 12 });
+    await tx.insert(s.counters).values({ project_id: p.id, kind: 'message', value: Math.max(0, ...demo.mock.msgs.map(m => Number(m.id.slice(4)))) });
     await tx
       .update(s.schedulePolicy)
       .set({ auto_replan: true, cp_auto: true, threshold_days: '1', assume_rate: '0.6' })
