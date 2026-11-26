@@ -480,10 +480,19 @@
                       "additionalProperties": false
                     }
                   },
-                  "estHours": {
-                    "type": "number",
-                    "exclusiveMinimum": 0,
-                    "maximum": 400
+                  "estimate": {
+                    "type": "object",
+                    "required": [
+                      "estHours"
+                    ],
+                    "properties": {
+                      "estHours": {
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                        "maximum": 400
+                      }
+                    },
+                    "additionalProperties": false
                   },
                   "fixStart": {
                     "anyOf": [

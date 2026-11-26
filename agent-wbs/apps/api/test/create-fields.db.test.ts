@@ -1,8 +1,11 @@
 /**
- * srv-perf: Task 생성 계약의 예상 소요 시간(estHours)·고정 시작일(fixStart) (M3-02 보고 §4-4).
+ * srv-perf: Task 생성 계약(M3-02 보고 §4-4, 조정자 결정 2026-11-27).
  * 원본 Wizard(P createTask L6795~6811)와 같게 저장한다.
- * - 예상 시간 하나를 받아 범위를 ×0.7~×1.6(소수 첫째 자리 반올림), 토큰을 ×140K로 정하고 신뢰도 「하」, 근거는 팀장 임시값으로 남긴다.
+ * - 예상 시간은 updateTask와 같은 `estimate` 묶음의 `estHours` 하나로 받는다(원본 Wizard 입력은 숫자 하나).
+ *   서버가 범위를 ×0.7~×1.6(소수 첫째 자리 반올림), 토큰을 ×140K로 정하고 신뢰도 「하」, 근거는 팀장 임시값으로 남긴다.
  * - 고정 시작일은 tasks.fix_start에 저장해 일정 계산이 쓴다.
+ * - 설계 구역은 원본 newTask처럼 기술 영역에 맞는 빈 구역을 만든다(P recKinds, data-model §2.4-1과 같은 규칙).
+ * - 가이드 §6.4의 재조정 계기 「Task 추가」: 생성도 재조정을 기록한다(임계값·자동 재조정 정책 규칙 그대로, CP 반영과 같은 drift 규칙).
  */
 import { createPool, recreateTestDatabase, runMigrations, seedSystem } from '@awbs/db';
 import { OPERATIONS } from '@awbs/shared/api';
@@ -50,14 +53,23 @@ beforeAll(async () => {
 afterAll(async () => { await app.close(); await pool.end(); await ownerPool.end(); });
 
 describe('createTask 예상 시간·고정 시작일', () => {
-  test('계약(shared api)에 estHours·fixStart가 있다', () => {
-    const body = OPERATIONS.find((op) => op.id === 'createTask')?.body as { properties: Record<string, unknown>; required?: string[] } | undefined;
-    expect(Object.keys(body?.properties ?? {})).toEqual(expect.arrayContaining(['estHours', 'fixStart']));
-    expect(body?.required ?? []).not.toContain('estHours');
+  test('계약(shared api): createTask는 updateTask와 같은 estimate 묶음 이름을 쓰고, 생성 때는 estHours 하나만 받는다', () => {
+    interface Schema { properties: Record<string, Schema & { anyOf?: Schema[] }>; required?: string[] }
+    const body = (id: string) => OPERATIONS.find((op) => op.id === id)?.body as Schema | undefined;
+    const create = body('createTask'), update = body('updateTask');
+    expect(Object.keys(create?.properties ?? {})).toEqual(expect.arrayContaining(['estimate', 'fixStart']));
+    expect(Object.keys(create?.properties ?? {})).not.toContain('estHours');
+    expect(create?.required ?? []).not.toContain('estimate');
+    const createEstimate = create?.properties.estimate;
+    expect(Object.keys(createEstimate?.properties ?? {})).toEqual(['estHours']);
+    expect(createEstimate?.required).toEqual(['estHours']);
+    // 같은 이름의 필드는 같은 뜻·같은 범위다.
+    expect(createEstimate?.properties.estHours).toEqual(update?.properties.estimate?.properties.estHours);
+    expect(create?.properties.fixStart).toEqual(update?.properties.fixStart);
   });
 
   test('예상 시간과 고정 시작일을 원본 Wizard와 같은 규칙으로 저장하고 목록·일정에 반영한다', async () => {
-    const response = await create({ estHours: 6, fixStart: '2026-12-01' });
+    const response = await create({ estimate: { estHours: 6 }, fixStart: '2026-12-01' });
     expect(response.statusCode, response.body).toBe(201);
     const { taskKey } = response.json<{ taskKey: string }>();
     expect(await stored(taskKey)).toEqual([{
@@ -66,6 +78,9 @@ describe('createTask 예상 시간·고정 시작일', () => {
     }]);
     const list = (await app.inject({ url: `/api/projects/${projectId}/tasks`, headers: { cookie, origin } })).json<{ tasks: { taskKey: string; schedule: { estHours: number; loHours: number; hiHours: number } | null }[] }>();
     expect(list.tasks.find((t) => t.taskKey === taskKey)?.schedule).toMatchObject({ estHours: 6, loHours: 4.2, hiHours: 9.6 });
+    // 상세의 추정은 updateTask가 돌려주는 것과 같은 TaskEstimate 모양이다.
+    const detail = (await app.inject({ url: `/api/tasks/${taskKey}`, headers: { cookie, origin } })).json<{ estimate: unknown; fixStart: string | null }>();
+    expect(detail).toMatchObject({ fixStart: '2026-12-01', estimate: { estHours: 6, loHours: 4.2, hiHours: 9.6, tokensK: 840, confidence: '하', agreedBy: '팀장' } });
     const schedule = (await app.inject({ url: '/api/schedule', headers: { cookie, origin } })).json<{ tasks: { taskKey: string; start: string; estHours: number }[] }>();
     const item = schedule.tasks.find((t) => t.taskKey === taskKey);
     expect(item?.estHours).toBe(6);
@@ -74,7 +89,7 @@ describe('createTask 예상 시간·고정 시작일', () => {
   });
 
   test('소수 예상 시간은 원본처럼 범위를 소수 첫째 자리로 반올림한다', async () => {
-    const response = await create({ estHours: 2.5 });
+    const response = await create({ estimate: { estHours: 2.5 } });
     expect(response.statusCode, response.body).toBe(201);
     expect(await stored(response.json<{ taskKey: string }>().taskKey)).toMatchObject([{ fix_start: null, est: '2.5', lo: '1.8', hi: '4', tokens_k: '350' }]);
   });
@@ -89,7 +104,7 @@ describe('createTask 예상 시간·고정 시작일', () => {
 
   test('범위 밖 예상 시간(0·400 초과)과 달력에 없는 날짜는 400 VALIDATION_FAILED이고 Task를 만들지 않는다', async () => {
     const before = (await ownerPool.query('select count(*)::int n from tasks')).rows[0] as { n: number };
-    for (const [body, path] of [[{ estHours: 0 }, 'estHours'], [{ estHours: 400.5 }, 'estHours'], [{ estHours: '4' }, 'estHours'], [{ fixStart: '2026-02-30' }, 'fixStart'], [{ fixStart: '2026/12/01' }, 'fixStart']] as const) {
+    for (const [body, path] of [[{ estimate: { estHours: 0 } }, 'estimate.estHours'], [{ estimate: { estHours: 400.5 } }, 'estimate.estHours'], [{ estimate: { estHours: '4' } }, 'estimate.estHours'], [{ estimate: { estHours: 4, loHours: 2 } }, 'estimate.loHours'], [{ estimate: {} }, 'estimate.estHours'], [{ fixStart: '2026-02-30' }, 'fixStart'], [{ fixStart: '2026/12/01' }, 'fixStart']] as const) {
       const response = await create(body);
       expect(response.statusCode, `${JSON.stringify(body)} ${response.body}`).toBe(400);
       const error = response.json<{ error: { code: string; errors: { path: string }[] } }>().error;
@@ -99,3 +114,82 @@ describe('createTask 예상 시간·고정 시작일', () => {
     expect((await ownerPool.query('select count(*)::int n from tasks')).rows[0]).toEqual(before);
   });
 });
+
+describe('createTask 설계 구역 자동 구성', () => {
+  const kinds = async (taskKey: string) => (await ownerPool.query<{ kind: string; content: unknown }>(
+    'select d.kind::text kind,d.content from task_designs d join tasks t on t.id=d.task where t.task_key=$1 order by d.created_at,d.kind', [taskKey])).rows;
+
+  test('주 영역·관련 영역에 맞는 빈 구역을 원본 recKinds 순서로 만든다(BE·API는 API 하나, QA·Common은 구역 없음)', async () => {
+    const response = await create({ primaryDomain: 'BE', relatedDomains: ['DB', 'API', 'QA', 'FE'] });
+    expect(response.statusCode, response.body).toBe(201);
+    const rows = await kinds(response.json<{ taskKey: string }>().taskKey);
+    expect(rows.map((r) => r.kind).sort()).toEqual(['API', 'DB', 'FE']);
+    for (const row of rows) expect(row.content).toEqual({ ents: [], b: {} });
+  });
+
+  test('설계 구역이 없는 영역만 고르면 구역을 만들지 않는다', async () => {
+    const response = await create({ primaryDomain: 'QA', relatedDomains: ['Common', 'Architecture'] });
+    expect(response.statusCode, response.body).toBe(201);
+    expect(await kinds(response.json<{ taskKey: string }>().taskKey)).toEqual([]);
+  });
+
+  test('상세 응답의 designs에도 빈 구역이 보인다', async () => {
+    const response = await create({ primaryDomain: 'DevOps' });
+    const { taskKey } = response.json<{ taskKey: string }>();
+    const detail = (await app.inject({ url: `/api/tasks/${taskKey}`, headers: { cookie, origin } })).json<{ designs: { kind: string; content: unknown }[] }>();
+    expect(detail.designs).toEqual([{ kind: 'DevOps', content: { ents: [], b: {} } }]);
+  });
+});
+
+describe('createTask 재조정 기록(G§6.4 「Task 추가」)', () => {
+  const replans = async () => (await ownerPool.query<{ rp_key: string; trigger: string; actor: string; status: string; baseline_v: number | null }>(
+    'select rp_key,trigger,actor,status,baseline_v from replans where project_id=$1 order by created_at', [projectId])).rows;
+  const policy = (autoReplan: boolean | null, thresholdDays: number) =>
+    ownerPool.query('update schedule_policy set auto_replan=$1,threshold_days=$2 where singleton', [autoReplan, thresholdDays]);
+  /** 생성 하나가 새로 남긴 재조정 기록. 기록은 지울 수 없으므로(물리 삭제 금지) 생성 전후 개수로 가른다. */
+  const added = async (fn: () => Promise<void>) => {
+    const before = (await replans()).length;
+    await fn();
+    return (await replans()).slice(before);
+  };
+
+  test('자동 재조정이 꺼져 있으면 검토 대기(pending)로 기록하고 기준은 만들지 않는다', async () => {
+    await policy(null, 1);
+    // 아직 기준이 없다(앞 시험의 기록도 모두 검토 대기). 기준이 없으면 임계값과 관계없이 기록한다.
+    expect(await ownerPool.query('select 1 from schedule_baselines where project_id=$1', [projectId])).toMatchObject({ rowCount: 0 });
+    let taskKey = '';
+    const rows = await added(async () => {
+      const response = await create({ estimate: { estHours: 4 } });
+      expect(response.statusCode, response.body).toBe(201);
+      taskKey = response.json<{ taskKey: string }>().taskKey;
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ trigger: `${taskKey} 신규 Task 등록`, actor: '팀장', status: 'pending', baseline_v: null });
+    // Task 이력에도 재조정이 남는다(G§6.4).
+    const history = (await ownerPool.query<{ kind: string }>("select h.kind from task_history h join tasks t on t.id=h.task where t.task_key=$1 and h.kind='재조정'", [taskKey])).rows;
+    expect(history).toHaveLength(1);
+    // 생성 응답 뒤 Task 버전은 자기 이력보다 늦다(충돌 창에 자기 이력이 섞이지 않는다).
+    const order = (await ownerPool.query<{ ok: boolean }>("select t.updated_at>max(h.at) ok from tasks t join task_history h on h.task=t.id where t.task_key=$1 group by t.updated_at", [taskKey])).rows[0];
+    expect(order?.ok).toBe(true);
+  });
+
+  test('자동 재조정이 켜져 있으면 확정(applied)하고 기준 버전을 올린다', async () => {
+    await policy(true, 1);
+    const rows = await added(async () => {
+      const response = await create({ estimate: { estHours: 4 } });
+      expect(response.statusCode, response.body).toBe(201);
+    });
+    expect(rows).toMatchObject([{ status: 'applied', baseline_v: 1 }]);
+  });
+
+  test('기준이 있고 임계값보다 덜 어긋나면 기록하지 않는다', async () => {
+    await policy(true, 10_000);
+    const rows = await added(async () => {
+      const response = await create({ estimate: { estHours: 1 } });
+      expect(response.statusCode, response.body).toBe(201);
+    });
+    expect(rows).toEqual([]);
+    await policy(null, 1);
+  });
+});
+
