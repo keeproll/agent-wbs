@@ -13,7 +13,7 @@
  * 화면은 결과를 스스로 만들지 않는다. 다시 실행·배포 확인은 Runner가 실제로 실행해 새 기록을 보고한다(MM-07).
  */
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { useApi } from '../../shared/api/ApiProvider.tsx';
 import { useAllPages } from '../../shared/api/allPages.ts';
@@ -368,13 +368,15 @@ function QueueTab({ rows }: { rows: QueueRow[] }) {
         <TableScroll minWidth={700} label="병합 대기열 표">
           <div className="gtb" style={{ margin: 0 }} role="table" aria-label="병합 대기열">
             {rows.map((q) => (
-              <div key={q.id} className="gtr" role="row" style={{ gridTemplateColumns: '60px 100px minmax(180px,1fr) 170px 148px 84px', minWidth: 0 }}>
+              <div key={q.id} className="gtr" role="row" style={{ gridTemplateColumns: '60px 100px minmax(180px,1fr) 170px 148px', minWidth: 0 }}>
                 <span className="gc mono" role="cell"><b>{q.pr}</b></span>
                 <span className="gc" role="cell"><Link className="reflink mono" to={LINK.task(q.taskKey)}>{q.taskKey}</Link></span>
                 <span className="gc" role="cell">{q.title}</span>
                 <span className="gc" role="cell">{q.mismatch ? <span className="vf v-fail">병합 불일치 — 완료 보류</span> : <span className={q.c}>{q.st}</span>}</span>
-                <span className="gc mono" role="cell">{q.at}</span>
-                <span className="gc" role="cell">{q.ciRunId && <Link className="reflink mono" to={LINK.ci(q.ciRunId)}>{q.ciRunKey ?? '실행'}</Link>}</span>
+                {/* 시각은 연결된 통합 확인 실행의 시작 시각이다. 누르면 그 실행 상세(실패 원인·재작업 추적, UAT-CI-03). 원본 열 배치를 지키려고 칸을 늘리지 않았다. */}
+                <span className="gc mono" role="cell">{q.ciRunId
+                  ? <Link className="ci-at" to={LINK.ci(q.ciRunId)} title={`${q.ciRunKey ?? ''} 실행 상세`} aria-label={`${q.at} · ${q.ciRunKey ?? '실행'} 실행 상세`}>{q.at}</Link>
+                  : q.at}</span>
               </div>
             ))}
           </div>
@@ -496,15 +498,13 @@ function FlakyRow({ item: f, projectId }: { item: FlakyTest; projectId: string }
   const { client } = useApi();
   const queryClient = useQueryClient();
   const want = useRef(!f.quarantined);
-  const [, setTick] = useState(0);
   const key = apiKey('listFlakyTests', { params: { projectId } });
   const put = (next: FlakyTest) => {
     queryClient.setQueryData<{ items: FlakyTest[] }>(key, (old) => (old ? { items: old.items.map((x) => (x.id === next.id ? next : x)) } : old));
-    setTick((n) => n + 1);
   };
   const save = useSave<FlakyTest, { updatedAt: string; quarantined: boolean }>({
     target: `${f.testKey} ${f.quarantined ? '격리 해제' : '다시 격리'}`,
-    mine: want.current ? '다시 격리' : '격리 해제',
+    mine: f.quarantined ? '격리 해제' : '다시 격리',
     request: () => ({ updatedAt: f.updatedAt, quarantined: want.current }),
     run: ({ payload }) => client.call('updateFlakyTest', { params: { projectId, id: f.id }, body: payload }),
     onSuccess: (next) => { put(next); },

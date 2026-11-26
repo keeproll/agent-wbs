@@ -113,7 +113,9 @@ const P = '/api/projects/p1/ci';
 /** 가짜 API에 빌드·통합 경로를 붙인다. 실행 목록은 cursor로 2쪽에 나눠 준다(모든 쪽을 읽는지 확인). */
 export function installCi(api: FakeApi, data: CiData, options: { tasks?: boolean } = {}): void {
   // tasks=false: Task 화면 시험이 자기 Task 목록·시도(task-api.ts)를 쓸 때. 아래 시도 응답도 붙이지 않는다.
-  if (options.tasks !== false) api.on('GET /api/projects/p1/tasks', (route) => json(route, 200, { tasks: tasks(), nextCursor: null }));
+  // 대기열 제목은 원본 Mock Task 제목(P TASKS)과 같게 맞춘다(시각 비교).
+  const TITLE: Record<string, string> = { 'TASK-0002': 'PostgreSQL 연결', 'TASK-0003': 'Task 데이터 모델 설계' };
+  if (options.tasks !== false) api.on('GET /api/projects/p1/tasks', (route) => json(route, 200, { tasks: tasks().map((t) => ({ ...t, title: TITLE[t.taskKey] ?? t.title })), nextCursor: null }));
   api.on(`GET ${P}/runs`, (route, request) => {
     const url = new URL(request.url());
     const cursor = url.searchParams.get('cursor');

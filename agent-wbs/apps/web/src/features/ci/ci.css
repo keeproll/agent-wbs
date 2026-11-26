@@ -10,3 +10,7 @@
   .ci-detail .gtr { grid-template-columns: minmax(0, 1fr) 72px 64px !important; }
   .ci-detail .vf-nav { flex-wrap: wrap; }
 }
+
+/* 대기열 시각 칸의 실행 링크: 원본 글자 모양(검은 mono)을 그대로 두고, 가리키면 밑줄로 링크임을 알린다. */
+.ci-at { color: inherit; text-decoration: none; }
+.ci-at:hover, .ci-at:focus-visible { text-decoration: underline; }
