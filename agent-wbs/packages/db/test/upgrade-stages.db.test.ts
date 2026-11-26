@@ -47,7 +47,7 @@ test('빈 DB와 0014·0016(master)·0017·0018·0019·0020·0021 단계 DB가 �
   expect(journal.entries.slice(15).map((e) => e.tag)).toEqual([
     '0015_20261126_platform_epoch_lock', '0016_20261126_contract_sync', '0017_20261126_usage_reset_unknown',
     '0018_20261126_message_read_touch', '0019_20261126_schedule_defaults', '0020_20261126_execution_basis',
-    '0021_20261127_project_followup', '0022_20261127_evidence_reference', '0023_20261127_project_observation_version', '0024_20261127_settings_followup', '0025_20261127_setting_versions', '0040_20261127_ci_reports']);
+    '0021_20261127_project_followup', '0022_20261127_evidence_reference', '0023_20261127_project_observation_version', '0024_20261127_settings_followup', '0025_20261127_setting_versions', '0041_20261127_ci_reports']);
   const fresh = await database('fresh');
   await runMigrations(fresh);
   const expected = await schemaOf(fresh);
@@ -64,7 +64,10 @@ test('빈 DB와 0014·0016(master)·0017·0018·0019·0020·0021 단계 DB가 �
       values('기존 프로젝트','','','','','active','2000-01-01T20:00:00Z')`);
     let attempts: unknown[] = [];
     if (stage === 23) {
-      await seedDemo(pool, base.href);
+      // 최신 seed에 필요한 관측 칸만 잠시 빌린 뒤 0023 구조로 되돌려 실제 업그레이드를 검사한다.
+      await pool.query("alter table projects add column pipeline_observations jsonb not null default '{}'");
+      try { await seedDemo(pool, base.href); }
+      finally { await pool.query('alter table projects drop column pipeline_observations'); }
       await pool.query('alter table counters disable trigger counter_monotone');
       await pool.query("update counters set value=1 where kind='message'");
       await pool.query('alter table counters enable trigger counter_monotone');

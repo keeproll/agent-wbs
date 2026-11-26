@@ -265,6 +265,7 @@ export const projects = pgTable(
     target_date: date(),
     input_checked_at: at('input_checked_at'),
     input_check_request: integer().notNull().default(0),
+    pipeline_observations: jsonb().notNull().default({}),
     lead_instruction: text().notNull(),
     phase: projectPhase().notNull(),
   },
@@ -1651,6 +1652,7 @@ export const ciRuns = pgTable(
     ...row(),
     ...project(),
     run_key: text().notNull().unique(),
+    run_no: bigserial({ mode: 'number' }).notNull().unique(),
     stage: integer().notNull(),
     base_sha: text(),
     head_sha: text(),
@@ -1666,6 +1668,7 @@ export const ciRuns = pgTable(
     trigger: text().notNull(),
     status: ciStatus().notNull(),
     fail_step: text(),
+    fail_scope: text(),
     log_excerpt: text(),
     artifact_path: text(),
     url: text(),
@@ -1677,6 +1680,7 @@ export const ciRuns = pgTable(
   },
   (t) => [
     check('ci_stage', sql`${t.stage} between 1 and 4`),
+    check('ci_fail_scope', sql`${t.fail_scope} is null or ${t.fail_scope} in ('baseline','task')`),
     index('ci_runs_input_version_idx').on(t.input_version),
     // job 없는 실행은 야간 점검뿐이라는 규칙은 0014의 트리거 ci_job_owner가 검사한다.
     check('ci_job_fence', sql`(${t.job} is null)=(${t.fence} is null) and (${t.fence} is null or ${t.fence}>=0)`),
@@ -1706,6 +1710,7 @@ export const mergeQueue = pgTable(
     ...row(),
     ...project(),
     ...task(),
+    queue_no: bigserial({ mode: 'number' }).notNull().unique(),
     pr: integer().notNull(),
     position: integer().notNull(),
     status: queueStatus().notNull(),
@@ -1748,6 +1753,7 @@ export const ciSettings = pgTable(
     night_at: text(),
     retry: integer().notNull(),
     deploy_url: text(),
+    settings_version: at('settings_version'),
   },
   (t) => [check('ci_singleton', sql`${t.singleton}`)],
 );

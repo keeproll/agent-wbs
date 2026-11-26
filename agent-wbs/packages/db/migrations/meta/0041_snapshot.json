@@ -1548,6 +1548,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "run_no": {
+          "name": "run_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
+        },
         "stage": {
           "name": "stage",
           "type": "integer",
@@ -1635,6 +1641,12 @@
         },
         "fail_step": {
           "name": "fail_step",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "fail_scope": {
+          "name": "fail_scope",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -1775,6 +1787,13 @@
           "columns": [
             "run_key"
           ]
+        },
+        "ci_runs_run_no_unique": {
+          "name": "ci_runs_run_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "run_no"
+          ]
         }
       },
       "policies": {},
@@ -1782,6 +1801,10 @@
         "ci_stage": {
           "name": "ci_stage",
           "value": "\"ci_runs\".\"stage\" between 1 and 4"
+        },
+        "ci_fail_scope": {
+          "name": "ci_fail_scope",
+          "value": "\"ci_runs\".\"fail_scope\" is null or \"ci_runs\".\"fail_scope\" in ('baseline','task')"
         },
         "ci_job_fence": {
           "name": "ci_job_fence",
@@ -1841,6 +1864,12 @@
         "deploy_url": {
           "name": "deploy_url",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "settings_version": {
+          "name": "settings_version",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         }
@@ -5416,6 +5445,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "queue_no": {
+          "name": "queue_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
+        },
         "pr": {
           "name": "pr",
           "type": "integer",
@@ -5569,7 +5604,15 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "merge_queue_queue_no_unique": {
+          "name": "merge_queue_queue_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "queue_no"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -7002,6 +7045,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": 0
+        },
+        "pipeline_observations": {
+          "name": "pipeline_observations",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
         },
         "lead_instruction": {
           "name": "lead_instruction",
@@ -11715,6 +11765,6 @@
     "tables": {},
     "columns": {}
   },
-  "id": "5d2effad-3fc1-4eca-9c2c-2c9da07db575",
+  "id": "a4f24658-7320-40af-8741-ab304b38f0f7",
   "prevId": "107a10f8-96f2-432b-b1eb-38ce272f0227"
 }
