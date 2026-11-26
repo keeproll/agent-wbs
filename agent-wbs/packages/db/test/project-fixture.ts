@@ -106,6 +106,7 @@ export async function fillProjectTables(
         if (table === 'design_drifts' && col.name === 'compat') value = '호환';
         if (table === 'messages' && col.name === 'dir') value = 'out';
         if (table === 'runner_job_events' && col.name === 'kind') value = 'prepared';
+        if (table === 'attempt_observations' && col.name === 'state') value = 'ok';
         if (table === 'execution_holds') {
           if (col.name === 'slot_state') value = 'reserved';
           if (col.name === 'lock_state') value = 'held';

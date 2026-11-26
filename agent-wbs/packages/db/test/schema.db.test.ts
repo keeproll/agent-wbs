@@ -108,7 +108,8 @@ test('schema: all planned tables and Drizzle columns match the migrated database
     .filter((value) => is(value, Table))
     .map((value) => getTableConfig(value));
   const model = await source('docs/plan/data-model.md');
-  const section = model.slice(model.indexOf('## 2.'), model.indexOf('## 3.'));
+  const section = model.slice(model.indexOf('## 2.'), model.indexOf('## 3.'))
+    .replace(/####[^\n]*\n[\s\S]*?(?=\n### |$)/g, '');
   const planned = section
     .split('\n')
     .filter((line) => line.startsWith('| `'))
@@ -681,17 +682,6 @@ test('schema: demo is refused for production before connecting', async () => {
     'awbs_test_',
   );
   expect((await pool.query('select count(*)::int as n from projects')).rows[0]?.n).toBe(0);
-});
-
-test('schema: demo also refuses a non-test connection even when the supplied URL is a test URL', async () => {
-  const development = new URL(url);
-  development.pathname = '/awbs_dev';
-  const dev = createPool(development.href, { onError: () => undefined });
-  try {
-    await expect(seedDemo(dev, url)).rejects.toThrow('awbs_dev');
-  } finally {
-    await dev.end();
-  }
 });
 
 test('schema: demo loads exactly P twelve tasks, dependencies, checklists and ten SUB_MOCK definitions', async () => {

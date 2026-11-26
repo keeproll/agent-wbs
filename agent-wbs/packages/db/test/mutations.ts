@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertTestDatabaseUrl } from '../src/test-database.ts';
@@ -11,7 +10,9 @@ assertTestDatabaseUrl(url);
 const migrations = fileURLToPath(new URL('../migrations', import.meta.url));
 const seed = fileURLToPath(new URL('../src/seed.ts', import.meta.url));
 const original = await readFile(seed, 'utf8');
-const outDir = await mkdtemp(join(tmpdir(), 'awbs-m101-mutations-'));
+assert(process.argv[2], 'usage: node test/mutations.ts <report-directory>');
+const outDir = resolve(process.argv[2]);
+await mkdir(outDir, { recursive: true });
 const root = resolve(import.meta.dirname, '../../..');
 const variants = [
   { name: 'demo connection guard', pattern: 'MUTATION: actual connected demo guard', sql: '' },
