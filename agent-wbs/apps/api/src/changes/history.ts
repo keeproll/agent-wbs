@@ -1,4 +1,5 @@
 import type { PoolClient } from '@awbs/db';
+import { isDateOnly, isTimestamp } from '@awbs/shared/api';
 import { canonicalJson, iso, refText } from './events.ts';
 
 /** 「이 값은 입력이 잘못됐다」는 뜻의 오류. 라우트가 400 VALIDATION_FAILED로 바꾼다. */
@@ -16,9 +17,9 @@ const SEOUL_OFFSET_MS = 9 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function seoulMidnight(date: string, path: string): number {
-  const ms = Date.parse(`${date}T00:00:00.000Z`);
-  if (Number.isNaN(ms) || new Date(ms).toISOString().slice(0, 10) !== date) throw new InputProblem(path, 'format', '달력에 없는 날짜입니다.');
-  return ms - SEOUL_OFFSET_MS;
+  // 공통 DateOnly 스키마와 같은 범위(1970~9999년의 실재하는 날짜)만 받는다.
+  if (!isDateOnly(date)) throw new InputProblem(path, 'format', '달력에 없거나 허용 범위(1970~9999년) 밖의 날짜입니다.');
+  return Date.parse(`${date}T00:00:00.000Z`) - SEOUL_OFFSET_MS;
 }
 
 /**
@@ -45,13 +46,8 @@ export function decodeCursor(cursor: string, size: number): string[] | null {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-/** 달력에 실제로 있는 UTC 시각(µs까지)인지. 2026-02-30 같은 값은 거부한다. */
-export function realTimestamp(value: string): boolean {
-  const local = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.\d{1,6})?Z$/.exec(value)?.[1];
-  if (!local) return false;
-  const date = new Date(`${local}Z`);
-  return !Number.isNaN(date.getTime()) && date.toISOString().startsWith(local);
-}
+/** 공통 Timestamp 스키마와 같은 규칙(1970~9999년의 실재하는 UTC 시각, shared api `isTimestamp`). */
+export const realTimestamp = isTimestamp;
 
 /**
  * (시각, id) 커서. 안의 값까지 검사해 DB 변환 오류(500)가 나지 않게 한다(리뷰 지적 6).

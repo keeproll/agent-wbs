@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import type { Pool, PoolClient } from '@awbs/db';
 import { errorBody } from '@awbs/shared';
-import { ERROR_STATUS, OPERATIONS, inputErrors, type ErrorCode, type Operation } from '@awbs/shared/api';
+import { ERROR_STATUS, OPERATIONS, inputErrors, isTimestamp, type ErrorCode, type Operation } from '@awbs/shared/api';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { redact } from '../platform/redact.ts';
 import { InputProblem } from './history.ts';
@@ -130,11 +130,7 @@ export async function assertSameVersion(client: PoolClient, current: string | nu
     if (current === expected) return;
     throw new ApiError('VERSION_CONFLICT', { current: details.current ?? null }, [], '다른 곳에서 먼저 바뀌어 화면의 내용이 최신이 아닙니다.');
   }
-  const local = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.\d{1,6})?Z$/.exec(expected)?.[1];
-  const date = local ? new Date(`${local}Z`) : null;
-  if (!date || Number.isNaN(date.getTime()) || !date.toISOString().startsWith(local ?? '')) {
-    throw invalid([{ path: 'updatedAt', rule: 'format', message: '달력에 없는 날짜·시각입니다.' }]);
-  }
+  if (!isTimestamp(expected)) throw invalid([{ path: 'updatedAt', rule: 'format', message: '달력에 없거나 허용 범위(1970~9999년) 밖의 시각입니다.' }]);
   const same = (await client.query<{ same: boolean }>('select $1::timestamptz=$2::timestamptz as same', [current, expected])).rows[0]?.same;
   if (!same) throw new ApiError('VERSION_CONFLICT', { current: details.current ?? null, changes: details.changes ?? [] }, [], '다른 곳에서 먼저 바뀌어 화면의 내용이 최신이 아닙니다.');
 }
