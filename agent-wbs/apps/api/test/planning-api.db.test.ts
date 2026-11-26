@@ -247,9 +247,12 @@ describe('planning 세션·교차 검토와 팀장 Planning API', () => {
     expect(session.statusCode, session.body).toBe(201);
     const { id } = session.json<{ id: string }>();
     const jobId = await job();
-    const reviews = await runner(`/api/planning/sessions/${id}/reviews`, { jobId, fence: 1, reviews: [{ topic: 't', kind: '이견', codex: 'a', claude: 'b', codexOps: [], claudeOps: [] }] });
+    const target = await task();
+    const common = [{ op: 'modify', task: target, field: 'priority', after: 3 }];
+    const reviews = await runner(`/api/planning/sessions/${id}/reviews`, { jobId, fence: 1, reviews: [{ topic: 't', kind: '이견', codex: 'a', claude: 'b', ops: common, codexOps: [], claudeOps: [] }] });
     expect(reviews.statusCode, reviews.body).toBe(201);
     const cp = await call('POST', `/api/plannings/${id}/proposals`, { title: 't', reason: 'r' });
     expect(errorOf(cp).code).toBe('VALIDATION_FAILED');
+    expect(errorOf(cp).errors.map((e) => e.path)).toEqual(['reviews.0.choice']);
   });
 });
