@@ -7,14 +7,15 @@
  * - `returned`: 부른 쪽에 도구 결과가 돌아옴. 배경 실행이면 끝난 것이 아니다
  * - `done`: 작업이 끝났다고 보고됨. **프로세스 종료가 아니다**(G §6.7 해석 주의)
  * - `unknown`: 모르는 상태 값. 추정하지 않는다
+ * - `merged`: 이 ID는 따로 센 임시 ID였고 실제로는 `into` Agent의 재개다. 이 ID를 빼고 `into`로 센다
  */
-export type SubagentPhase = 'requested' | 'running' | 'returned' | 'done' | 'unknown';
+export type SubagentPhase = 'requested' | 'running' | 'returned' | 'done' | 'unknown' | 'merged';
 
 export type CliEvent =
   | { type: 'session'; sessionId: string; model?: string }
   /** 주 Agent의 글. 하위 Agent의 글은 섞지 않는다. */
   | { type: 'message'; text: string }
-  | { type: 'subagent'; id: string; phase: SubagentPhase; parentId?: string | null; status?: string; background?: boolean }
+  | { type: 'subagent'; id: string; phase: SubagentPhase; parentId?: string | null; status?: string; background?: boolean; into?: string }
   /** 하위 Agent가 생겼는데 ID를 알 수 없음 → 집계 근거 부족 */
   | { type: 'subagent_unlinked'; reason: string }
   /** 명령 실행·파일 변경 같은 활동. 살아 있음을 아는 데 쓴다. */

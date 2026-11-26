@@ -31,7 +31,13 @@ export class SubagentObserver {
   apply(e: CliEvent): void {
     switch (e.type) {
       case 'subagent':
-        if (e.background) this.#background.add(e.id);
+        if (e.phase === 'merged') {
+          this.#active.delete(e.id);
+          break;
+        }
+        // 배경 여부는 run마다 다르다. 시작 보고가 알려 주면 그 값으로 바꾼다(지난 run의 배경 표시를 이어받지 않음).
+        if (e.background === true) this.#background.add(e.id);
+        if (e.background === false && e.phase === 'running') this.#background.delete(e.id);
         if (e.phase === 'done' || (e.phase === 'returned' && !this.#background.has(e.id))) this.#active.delete(e.id);
         else if (e.phase !== 'returned') this.#active.add(e.id);
         if (e.phase === 'unknown') this.#unconfirmed = true;

@@ -12,6 +12,31 @@ const KNOWN_BLOCKS = new Set(['text', 'thinking', 'redacted_thinking', 'tool_use
  * Claude Code `-p --output-format stream-json --verbose` 해석기. 한 스트림에 하나를 쓴다(도구 호출 ID를 기억한다).
  * 형식 출처: 공식 Agent SDK 메시지 형식(SDKMessage). 실제 기록으로 검증한 형식이 아니다 — 관측 등급 「미검증」.
  */
+interface AgentTask {
+  kind: 'agent';
+  /** 관측 ID(처음 연결된 도구 호출 ID) */
+  id: string;
+  /** 현재 run. CLI가 run_id를 주지 않으면 undefined */
+  runId: string | undefined;
+  /** 이 task에서 본 run 전부. 지나간 run을 알아보는 데 쓴다. */
+  runs: Set<string>;
+}
+
+/**
+ * **한 규칙**: task_* 메시지는 현재 run 것만 적용한다(재리뷰 1).
+ * Claude는 같은 task를 재개하면 새 run_id를 주고, 이전 run의 메시지가 늦게 올 수 있다. 메시지 종류(시작·변경·알림)에 관계없이
+ * - `current`: 현재 run(또는 CLI가 run_id를 전혀 쓰지 않음) → 적용
+ * - `next`: 처음 보는 run의 **시작** → 재개로 보고 현재 run을 바꾼다
+ * - `stale`: 이미 지나간 run → 버린다. 현재 상태를 덮지 않는다
+ * - `unlinked`: 어느 run인지 알 수 없음(run을 쓰는 task인데 run_id 없음, 시작을 못 본 run의 변경·알림) → 적용하지 않고 미확인
+ */
+export function runGate(task: AgentTask, runId: string | undefined, isStart: boolean): 'current' | 'next' | 'stale' | 'unlinked' {
+  if (runId === undefined) return task.runs.size === 0 || isStart ? 'current' : 'unlinked';
+  if (runId === task.runId) return 'current';
+  if (task.runs.has(runId)) return 'stale';
+  return isStart ? 'next' : 'unlinked';
+}
+
 export function createClaudeParser(): (event: Json) => CliEvent[] {
   /** 하위 Agent 도구 호출 ID → 관측 ID. 재개 run이 다른 도구 호출로 이어져도 같은 하위 Agent로 센다. */
   const calls = new Map<string, string>();
@@ -19,7 +44,7 @@ export function createClaudeParser(): (event: Json) => CliEvent[] {
    * task_id별로 아는 것. `agent`만 하위 Agent다. `other`는 배경 명령 같은 다른 작업이라 무시한다.
    * `unlinked`는 하위 Agent일 수 있지만 연결 정보가 부족해 이미 미확인으로 알린 작업이다.
    */
-  const tasks = new Map<string, { kind: 'agent'; id: string; runId: string | undefined } | { kind: 'other' | 'unlinked' }>();
+  const tasks = new Map<string, AgentTask | { kind: 'other' | 'unlinked' }>();
   const unlinked = (out: CliEvent[], reason: string) => out.push({ type: 'subagent_unlinked', reason });
 
   const blocks = (e: Json, out: CliEvent[], kind: 'assistant' | 'user') => {
@@ -64,17 +89,28 @@ export function createClaudeParser(): (event: Json) => CliEvent[] {
     const known = tasks.get(taskId);
     const toolUseId = str(e.tool_use_id);
     const runId = str(e.run_id);
-    let id: string;
     if (known?.kind === 'agent') {
-      id = known.id;
-    } else if (toolUseId === undefined || toolUseId === '') {
+      const gate = runGate(known, runId, true);
+      if (gate === 'stale') return;
+      if (gate === 'next' && runId !== undefined) {
+        known.runId = runId;
+        known.runs.add(runId);
+      }
+      // 재개가 새 도구 호출(새 ID)로 왔으면, 그 ID로 따로 센 것을 기존 Agent로 합친다(재리뷰 2: 같은 Agent 중복 방지).
+      if (toolUseId && toolUseId !== known.id) {
+        if (calls.get(toolUseId) === toolUseId) out.push({ type: 'subagent', id: toolUseId, phase: 'merged', into: known.id });
+        calls.set(toolUseId, known.id);
+      }
+      out.push({ type: 'subagent', id: known.id, phase: 'running', background: e.is_backgrounded === true });
+      return;
+    }
+    if (toolUseId === undefined || toolUseId === '') {
       tasks.set(taskId, { kind: 'unlinked' });
       return void unlinked(out, 'task_started에 tool_use_id 없음');
-    } else {
-      id = calls.get(toolUseId) ?? toolUseId;
     }
-    if (toolUseId) calls.set(toolUseId, id);
-    tasks.set(taskId, { kind: 'agent', id, runId });
+    const id = calls.get(toolUseId) ?? toolUseId;
+    calls.set(toolUseId, id);
+    tasks.set(taskId, { kind: 'agent', id, runId, runs: new Set(runId === undefined ? [] : [runId]) });
     out.push({ type: 'subagent', id, phase: 'running', background: e.is_backgrounded === true });
   };
 
@@ -92,6 +128,9 @@ export function createClaudeParser(): (event: Json) => CliEvent[] {
       const task = tasks.get(str(e.task_id) ?? '');
       if (task === undefined) return unlinked(out, 'task_updated의 task_id를 모름');
       if (task.kind !== 'agent') return 0;
+      const gate = runGate(task, str(e.run_id), false);
+      if (gate === 'stale') return 0;
+      if (gate === 'unlinked') return unlinked(out, 'task_updated의 run을 연결할 수 없음');
       const patch = isObject(e.patch) ? e.patch : {};
       if (patch.is_backgrounded === true) out.push({ type: 'subagent', id: task.id, phase: 'running', background: true });
       const status = str(patch.status);
@@ -102,9 +141,10 @@ export function createClaudeParser(): (event: Json) => CliEvent[] {
       const task = tasks.get(str(e.task_id) ?? '');
       let id: string | undefined;
       if (task?.kind === 'agent') {
-        const runId = str(e.run_id);
         // 재개 run이 시작된 뒤 늦게 온 이전 run의 알림이면 지금 run을 지우지 않는다.
-        if (runId !== undefined && task.runId !== undefined && runId !== task.runId) return 0;
+        const gate = runGate(task, str(e.run_id), false);
+        if (gate === 'stale') return 0;
+        if (gate === 'unlinked') return unlinked(out, 'task_notification의 run을 연결할 수 없음');
         id = task.id;
       } else if (task === undefined) {
         id = calls.get(str(e.tool_use_id) ?? '');
