@@ -2,8 +2,8 @@
 
 ## 이 프로젝트는 무엇인가
 
-Agent WBS는 팀장이 일(Task)을 계획하고 승인하면, AI Agent(Claude·Codex)가 그 일을 개발·검증해 GitHub에 병합하기까지를 관리하는 시스템이다.
-팀장이 보는 웹 화면·서버·DB인 **Agent WBS**가 모든 판정을 하고, 개발 PC에서 Agent를 실제로 실행하는 **Agent Runner**는 시킨 일을 하고 결과를 보고한다.
+Agent WBS는 팀장이 일(Task)을 계획하고 승인하면, AI(인공지능) Agent(Claude·Codex)가 그 일을 개발·검증해 GitHub(git 저장소를 호스팅하는 서비스)에 병합하기까지를 관리하는 시스템이다.
+팀장이 보는 웹 화면·서버·DB인 **Agent WBS**가 모든 판정을 하고, 개발 PC(개인용 컴퓨터)에서 Agent를 실제로 실행하는 **Agent Runner**는 시킨 일을 하고 결과를 보고한다.
 `docs/plan/`의 문서들은 원본 설계(가이드와 프로토타입)를 바탕으로 「무엇을, 어떤 규칙으로, 어떤 순서로 만들지」 정한 구현 기준선이다.
 
 ![두 시스템의 구성](plan/diagrams/system-overview.svg)
@@ -50,7 +50,7 @@ Agent WBS는 팀장이 일(Task)을 계획하고 승인하면, AI Agent(Claude·
 - [Task 상태 흐름](plan/diagrams/task-states.svg) — open-questions.md §0.1의 승인된 Q-05 표
 - [시도 1회의 흐름](plan/diagrams/attempt-flow.svg) — contracts.md §4.1 (claim → 실행 → 검사 → QA → Gate → 병합)
 
-각 SVG 옆의 같은 이름 `.html` 파일이 그림의 원본이다. 그림을 고치려면 `.html`을 고친 뒤 SVG로 다시 내보낸다.
+각 SVG(선과 글자로 그린 벡터 그림 형식) 옆의 같은 이름 `.html` 파일이 그림의 원본이다. 그림을 고치려면 `.html`을 고친 뒤 SVG로 다시 내보낸다.
 
 ## 원본 자료의 위치
 

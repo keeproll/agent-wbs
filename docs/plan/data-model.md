@@ -12,7 +12,8 @@
 - 표기는 [architecture.md](architecture.md)와 같다. (G = 가이드, P = 프로토타입, `L` = 줄 번호, `§` = 가이드 절)
 - 논리 객체는 G§5.1, 물리 테이블 구분은 [결정]이다.
   - 논리 객체는 「Task」「시도」처럼 업무에서 쓰는 개념이고, 물리 테이블은 그것을 실제 DB에 어떻게 나눠 담을지다.
-- 컬럼은 주요 항목만 적었고 최종 타입은 M1 마이그레이션에서 고정한다.
+- 컬럼은 주요 항목만 적었고 최종 타입은 M1 마이그레이션(DB 구조를 바꾸는 SQL 파일)에서 고정한다.
+  - 용어 풀이: SQL = DB에 묻고 고치는 언어.
 
 ## 1. 공통 규칙
 
@@ -28,7 +29,7 @@
   - 시도 번호는 Task별.
   - 왜 재사용하지 않나: 지운 번호를 다시 쓰면 옛 이력과 새 Task가 같은 번호로 헷갈린다.
 - **시각과 날짜**
-  - 시각 `timestamptz`, 날짜만 의미 있는 값(목표일·작업 불가일)은 `date`.
+  - 시각 `timestamptz`(시간대 정보를 포함한 시각 타입), 날짜만 의미 있는 값(목표일·작업 불가일)은 `date`.
 - **수정 추적**
   - 변경 가능한 행: `created_at`, `updated_at`(단조 증가). 단조 증가는 「항상 커지기만 한다」는 뜻이다.
   - 수정 API는 `updatedAt` 비교(§0.3 L73).
@@ -42,11 +43,11 @@
   - Task는 `deleted_at` soft delete, CP 취소는 `cancelled`. soft delete는 행을 지우지 않고 「지움」 표시만 하는 방식이다.
   - 왜: 이력과 연결을 잃지 않기 위해서다.
 - **값 종류**
-  - 값이 고정된 종류는 PostgreSQL enum.
-  - 자주 늘어날 종류(알림 사유·이력 유형)는 text + CHECK.
+  - 값이 고정된 종류는 PostgreSQL(관계형 데이터베이스) enum.
+  - 자주 늘어날 종류(알림 사유·이력 유형)는 text + CHECK(값이 조건을 만족하는지 DB가 검사하는 제약).
   - 왜: enum은 값을 추가할 때 마이그레이션이 번거롭다. 자주 늘어나는 것은 text가 편하다.
 - **자유 구조 데이터**
-  - 구조가 자유로운 명세·스냅샷은 `jsonb` + 쓰기 시 TypeBox 검증 + `schema_version`.
+  - 구조가 자유로운 명세·스냅샷(어느 순간의 데이터를 그대로 찍어 둔 것)은 `jsonb` + 쓰기 시 TypeBox 검증 + `schema_version`.
 
 ## 2. 테이블
 
@@ -77,7 +78,7 @@
   - token_hash unique, runner_id, public_key, revoked_at
   - 근거: §8
 - `secrets`
-  - key PK, ciphertext, nonce, key_version, last4
+  - key PK, ciphertext(암호화된 값), nonce(암호화할 때 한 번만 쓰는 난수), key_version, last4
   - 근거: §8.7
 
 ### 2.2 프로젝트 · 입력
@@ -87,6 +88,8 @@
   - 근거: §4.2
 - `repo_checks`
   - url, status, result(jsonb: private·commit·구조), error — 등록 전 생성 가능(project_id null)
+    - 용어 풀이: private = 허가된 사람만 볼 수 있는.
+    - 용어 풀이: commit = 변경을 저장소 기록에 남기는 것.
   - 근거: §8.4
 - `input_versions`
   - unique(project, v), commit_sha unique(project), files, md_list, changes, instruction, result — 추가 전용
@@ -326,7 +329,7 @@ CP(변경 제안)로 새 Task를 추가할 때 넣을 수 있는 선택 필드�
   - 닫히기 전 삭제 금지(초기화는 §5).
   - 근거: §6.7 L795·804-806
 - `external_write_authority`
-  - 단일 행: host_id, generation, state(`granted/blocked`), credential_fingerprint, blocked_reason, reconciled_at — GitHub 등 공유 외부 쓰기 권한
+  - 단일 행: host_id, generation, state(`granted/blocked`), credential_fingerprint, blocked_reason, reconciled_at — GitHub(git 저장소를 호스팅하는 서비스) 등 공유 외부 쓰기 권한
   - 근거: contracts §3.4-5
 - `task_attempts`
   - attempt_key unique, job unique, task, base/head SHA, spec_revision, input_version, kind(`dev/qa/rework/reverify`), agent, status(§3.2), started/ended_at, model_id, effort, grade_adjust(kind·reason), summary, failure, tokens, resumed_from.
@@ -357,7 +360,7 @@ CP(변경 제안)로 새 Task를 추가할 때 넣을 수 있는 선택 필드�
 
 **보유(hold)란**: job 하나가 실행되는 동안 차지하는 것들의 기록이다. 두 가지를 따로 센다.
 
-- **물리 슬롯**: PC의 CPU·메모리 같은 실행 자리. 프로그램 실행에 쓸 PC 자리다. 실행 전 예약(`reserved`)과 종료 미확인 보유(`unconfirmed`)도 용량에 포함한다.
+- **물리 슬롯**: PC(개인용 컴퓨터)의 CPU(계산을 하는 처리 장치)·메모리 같은 실행 자리. 프로그램 실행에 쓸 PC 자리다. 실행 전 예약(`reserved`)과 종료 미확인 보유(`unconfirmed`)도 용량에 포함한다.
 - **논리 잠금**: 「이 Task(또는 충돌 묶음)는 지금 내가 맡고 있다」는 표시. 개발→검사→QA로 넘어가는 동안 계속 필요하다.
 
 job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며 **전체 상태는 저장하지 않고 계산**한다.
@@ -441,7 +444,7 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
   - on_usage, low_pct, on_rework, esc_notify, floors, live_inject, auto_retry_limit=2, auto_rework_limit=3
   - 근거: §7.3, owner Q-04
 - `subagent_defs`
-  - id, version, agent, role, tools, sandbox, text, hash, allowed, ref — 버전 불변
+  - id, version, agent, role, tools, sandbox(프로그램이 건드릴 수 있는 범위를 막아 둔 실행 환경), text, hash, allowed, ref — 버전 불변
   - 근거: §7.4
 - `cli_observation_grades`
   - cli+version+model+options unique, grade, verified_at, notes
@@ -543,7 +546,7 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
   - unique(principal, key), request_hash, response, epoch
   - 근거: §9.1-6
 - `change_events`
-  - seq bigserial, topic, ref, at — 화면 커서. 7일 보존 [결정]
+  - seq bigserial(자동으로 1씩 커지는 큰 정수 번호), topic, ref, at — 화면 커서. 7일 보존 [결정]
   - 근거: 아키텍처 2.1
 
 ## 3. 상태 전이
@@ -666,6 +669,7 @@ claim은 Runner가 「이 일을 제가 하겠습니다」 하고 job을 예약�
 
 - event: `open → resolved`.
 - outbox(메일·Telegram 공통): `queued → sending → accepted | retry_wait | failed | unknown`, `retry_wait → sending`.
+  - 용어 풀이: Telegram = 메신저. 알림을 봇으로 보낸다.
 - 화면에는 G의 4상태만 쓰고 unknown은 「실패 — 수락 여부 불명」으로 표시(§4.14 L558).
 - 정책은 contracts §4.4.
 - 규칙이 꺼진 동안에는 event/outbox를 만들지 않는다(§4.14 L524).
@@ -690,6 +694,8 @@ claim은 Runner가 「이 일을 제가 하겠습니다」 하고 job을 예약�
 **Service(트랜잭션)가 보장**
 
 - 순환(DFS + 프로젝트 advisory lock으로 동시 추가 직렬화)
+  - 용어 풀이: DFS = 관계를 끝까지 따라가 보는 깊이 우선 탐색; advisory lock = 앱이 정한 이름으로 거는 DB 잠금; 직렬화 = 동시에 오는 일을 한 번에 하나씩 차례로 처리.
+  - 풀어 쓰면: 선행 관계를 따라가 순환을 찾는다(DFS). 동시에 관계를 추가할 때는 프로젝트 잠금으로 한 건씩 차례로 검사한다.
 - 차단
 - Gate
 - CP 재시뮬레이션
@@ -715,7 +721,7 @@ epoch가 바뀌는 순간(초기화)과 다른 쓰기가 겹쳐도 옛 프로젝
 
 - **모든** 변경 트랜잭션(팀장·Runner·worker, 환경 행 포함)은 첫 문장으로 `system_state`를 `FOR SHARE`로 잠그고 epoch를 다시 확인한다.
   - 초기화만 `FOR UPDATE`.
-  - middleware 검사만으로 쓰지 않는다.
+  - middleware(모든 요청이 처리 전에 거치는 공통 코드) 검사만으로 쓰지 않는다.
   - 왜: middleware에서 확인한 뒤 실제로 쓰기 전 사이에 초기화가 끼어들 수 있다.
 - 잠금 순서: `system_state → projects → tasks(id순) → jobs/holds → 그 외`. 역순 금지.
   - 왜: 모두 같은 순서로 잠가야 서로 상대 잠금을 기다리는 교착(deadlock)이 생기지 않는다.
@@ -733,7 +739,7 @@ epoch가 바뀌는 순간(초기화)과 다른 쓰기가 겹쳐도 옛 프로젝
 
 마이그레이션은 DB 구조를 바꾸는 SQL 파일이고, seed는 빈 DB에 처음 넣는 기본 데이터다.
 
-- Drizzle schema가 개발 원본, `drizzle-kit generate` SQL을 검토 후 커밋.
+- Drizzle schema(데이터 모양(필드·타입·제약)의 정의)가 개발 원본, `drizzle-kit generate` SQL을 검토 후 커밋.
   - 트리거·권한·부분 인덱스는 custom SQL migration으로 둔다.
   - 적용된 파일은 수정 금지. (이미 적용된 DB와 파일 내용이 달라지기 때문이다.)
 - 이름은 시각 기반(§9.6-2-4 권장).

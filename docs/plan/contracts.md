@@ -21,7 +21,8 @@
 모든 API에 똑같이 적용하는 규칙이다.
 
 - **형식**
-  - JSON UTF-8, 시각은 UTC ISO 8601(µs 허용), 날짜 `YYYY-MM-DD`(Asia/Seoul)
+  - JSON(중괄호·대괄호로 데이터를 적는 텍스트 형식) UTF-8(한글 등 모든 문자를 담는 문자 인코딩), 시각은 UTC ISO 8601(µs 허용), 날짜 `YYYY-MM-DD`(Asia/Seoul)
+    - 용어 풀이: µs = 마이크로초, 100만분의 1초; ISO 8601 = 날짜·시각을 적는 국제 표준 형식.
 - **팀장 인증**
   - 세션 쿠키. 변경 요청은 `X-CSRF-Token`.
   - 없으면 401 `LEAD_UNAUTHORIZED`
@@ -70,7 +71,7 @@
   - reconcile `none/done/partial`, drift compat `compatible/breaking/unchecked`(화면 「대조 안 함」=unchecked), 입력 변경 `added/modified/deleted`, CI stage `task/int/night/deploy`.
   - DB 내부 값이 다르면 API 경계에서 변환
 - **속도**
-  - Runner 429 + `Retry-After` 허용
+  - Runner 429 + `Retry-After`(몇 초 뒤 다시 보내라는 응답 헤더) 허용
 
 ### 1.1 오류 본문
 
@@ -85,7 +86,7 @@
 - 비밀값·스택·로그 원문 금지.
   - 왜: 오류 메시지는 화면에 그대로 보이므로, 토큰이나 내부 구조가 새어 나가면 안 된다.
 
-아래 표는 HTTP 상태별 오류 코드와, 받은 쪽(화면/Runner)이 할 일이다. (이 표는 테스트가 그대로 읽으므로 모양을 바꾸지 않는다.)
+아래 표는 HTTP(웹 요청·응답 규약) 상태별 오류 코드와, 받은 쪽(화면/Runner)이 할 일이다. (이 표는 테스트가 그대로 읽으므로 모양을 바꾸지 않는다.)
 
 | HTTP | 코드 | 화면/Runner 처리 |
 |---|---|---|
@@ -114,7 +115,7 @@
 - **시도별 순서 보존**: 앞 보고가 막히면 뒤 보고를 보내지 않는다.
   - 왜: 「완료」 보고가 「시작」 보고보다 먼저 도착하면 서버가 상태를 잘못 판단한다.
 - 다른 4xx는 `rejected`로 보존하고 readiness 경고로 올린다.
-- 조회 timeout 10초, 업로드 120초 [결정].
+- 조회 timeout(정해진 시간 안에 응답이 없으면 포기) 10초, 업로드 120초 [결정].
 - 자동 처리 실패는 팀장 오류 막대가 아니라 반복 시 알림으로 올린다(§0.3 L71).
 
 ### 1.3 변경 명령별 비교 대상
@@ -156,7 +157,7 @@
 
 가이드가 정한 API:
 
-- GET `/api/projects/:projectId/tasks?status&q&includeDeleted`
+- GET(HTTP 요청 종류: 조회·생성·교체·일부 수정·삭제) `/api/projects/:projectId/tasks?status&q&includeDeleted`
   - 응답: → `{nodes[],tasks[TaskSummary]}` (`wbsPath`·차단·Gate 수·일정 요약 계산)
   - 오류: PROJECT_NOT_FOUND
 - GET `/api/tasks/:taskKey`
@@ -164,6 +165,7 @@
   - 오류: TASK_NOT_FOUND
 - POST `/api/projects/:projectId/tasks`
   - 요청 → 응답: P TASK-0005 + 명세·AC·체크리스트(Wizard 3단계) → 201 `{id,taskKey,wbsPath,lifecycleStatus}`
+    - 용어 풀이: Wizard = 여러 단계로 나눠 입력하는 화면.
   - 오류: VALIDATION_FAILED, WBS_NODE_NOT_FOUND
 - PATCH `/api/tasks/:taskKey`
   - 요청 → 응답: `{updatedAt, …}` → `{task,changes[]}`. **status 필드 없음**(§5.5)
@@ -214,7 +216,7 @@
 - GET/POST `/api/proposals`, GET `/:id/preview`, POST `/:id/{submit,approve,reject,request-changes,apply}`
   - 용도: 변경 제안(CP)의 조회·미리보기·제출·승인·반영. 규칙이 많아 아래에 따로 풀어 썼다.
 - GET `/api/verifications`, `/api/evidence`, `/api/evidence/:id/content`, `/api/gates`, `/api/history`
-  - 용도: §4.7, §4.9. 콘텐츠는 attachment + nosniff
+  - 용도: §4.7, §4.9. 콘텐츠는 attachment + nosniff(브라우저가 파일 종류를 추측하지 못하게 하는 설정)
   - 왜 attachment + nosniff인가: 업로드된 파일을 브라우저가 웹 페이지로 실행하지 않고 내려받게만 하기 위해서다.
 - GET/PUT `/api/settings/{workflow,exec-policy,models,split,schedule,blackouts,concurrency,obs-budget,subagents,ci}`
   - 용도: §4.9 탭.
@@ -231,7 +233,7 @@
 | API | 용도 |
 |---|---|
 | GET `/api/dashboard`, `/api/schedule`, `/api/replans`, POST `/api/replans/run` | §4.1, §6. 조회 응답의 필드 구조는 openapi.json이 정본. `schedule.warnings[]`의 `CLOCK_SKEW_CLAMPED`는 시계 오차로 자른 값의 이전·이후를 보존: Task `{code,taskKey,field:"actStart"\|"actEnd",before,after}` 또는 세션 `{code,sessionFrom,field:"lastHeartbeatAt"\|"to",before,after}`. 계산에만 자른 값을 쓰고 저장 기록은 바꾸지 않음(§9.1-3) |
-| GET `/api/runner-state` | 연결·준비·PC·동시 실행·관측·제한 요인 묶음 + 최근 중단 구간 `gaps[{from,to\|null,reason}]` 최대 6개·최신순(P L6684), reason `reboot/power_off/error/manual/unknown`, 진행 중이면 `to=null` |
+| GET `/api/runner-state` | 연결·준비·PC(개인용 컴퓨터)·동시 실행·관측·제한 요인 묶음 + 최근 중단 구간 `gaps[{from,to\|null,reason}]` 최대 6개·최신순(P L6684), reason `reboot/power_off/error/manual/unknown`, 진행 중이면 `to=null` |
 
 **변경 제안(proposals) API 상세**
 
@@ -282,8 +284,9 @@
 - POST `/api/project/inputs` `{commit,instr?}` · `/inputs/skip` · `/inputs/retry`★
   - 409 INPUT_UNCHANGED
 - POST `/api/project/reset` `{confirmName,keepSettings}` · GET `/reset-preview`★ · GET `/export`★
-  - 건수·정리 내용 / 내보내기 **zip**(데이터 JSON·보고서 PDF·Evidence, P L4702 안내문. 비밀값·수신자 제외).
-  - zip 내부 manifest는 M2-04에서 정함
+  - 건수·정리 내용 / 내보내기 **zip(여러 파일을 하나로 묶은 압축 파일)**(데이터 JSON·보고서 PDF·Evidence, P L4702 안내문. 비밀값·수신자 제외).
+    - 용어 풀이: PDF = 인쇄용 문서 파일 형식.
+  - zip 내부 manifest(묶음 안에 무엇이 들었는지 적은 목록 파일)는 M2-04에서 정함
 - GET `/api/system/resets`
   - 초기화 기록
 - GET·PUT `/api/settings/github`, POST `/check`★
@@ -302,14 +305,14 @@ G§8.5, §8.5-1, §8.6, §8.7의 표 전체를 그대로 구현한다(재기술�
 - `POST /api/projects/:projectId/design/decisions`는 **Runner 토큰**(Agent 제안, §8.6)이며 `{jobId,fence,authority:"agent"|"free",…}`.
   - agent는 승인 대기, free는 기록.
   - GET과 approve/reject/change는 팀장.
-- Telegram 오류: `token_invalid`(401) `chat_not_found`(400) `forbidden`(403) `rate_limited`(429) `network` `webhook_in_use` `chat_migrated`★(자동 교체 금지). 마스킹 문자열 토큰 400.
+- Telegram(메신저. 알림을 봇으로 보낸다) 오류: `token_invalid`(401) `chat_not_found`(400) `forbidden`(403) `rate_limited`(429) `network` `webhook_in_use` `chat_migrated`★(자동 교체 금지). 마스킹 문자열 토큰 400.
   - 마스킹 문자열 토큰: 화면에 `••••1234`처럼 가려 보여 준 값을 그대로 다시 저장하려는 경우다.
 
 ### 2.4 로그인 ★ (owner Q-01)
 
 - POST `/api/auth/session` `{method:"link",token}`
   - loopback 연결만, 토큰 1회 소비 → 204 + 세션 쿠키.
-  - 프록시 헤더를 믿지 않고 socket 주소로 판정한다.
+  - 프록시 헤더를 믿지 않고 socket 주소(실제로 연결해 온 상대의 네트워크 주소)로 판정한다.
     - 왜: 프록시 헤더(`X-Forwarded-For` 같은 것)는 요청을 보내는 쪽이 마음대로 꾸밀 수 있다.
   - 실패는 구분 없이 401 `LOGIN_FAILED`.
     - 왜 구분하지 않나: 「토큰이 틀림」과 「만료됨」을 구분해 알려 주면 공격자에게 힌트가 된다.
@@ -514,16 +517,16 @@ Planning Agent(계획을 세우는 Agent)가 결과를 보고하는 API다.
    - `currentBootId`는 host가 보고한 현재 값과 같고 원래 값과 달라야 한다.
    - 뜻:
      - `no_process`: 실행 명령을 시작한 적 없고 남은 래퍼도 없음을 3번 절차로 확인
-     - `group_empty`: Runner가 그룹·자손 empty 확인
+     - `group_empty`: Runner가 그룹·자손(프로세스가 띄운 자식·손자 프로세스) empty 확인
      - `boot_changed`: 같은 host의 boot ID 변경 — 이전 프로세스가 존재할 수 없음 (PC를 껐다 켜면 boot ID가 바뀐다)
    - 출력 단절·lease 만료·시간 경과는 증거가 아니다.
 3. **생성과 기록 사이의 정리.** 모든 CLI·① 명령·설치 명령은 같은 절차로 띄운다.
    - 왜 이렇게 복잡한가: 「프로세스를 띄웠다」와 「서버에 기록했다」 사이에 Runner가 죽으면, 아무도 모르는 프로세스가 남을 수 있다. 아래 절차는 그런 프로세스가 실제 명령을 실행하지 못하게 막는다.
    - 띄우는 순서:
-     - (가) 생성 전: 로컬에 launch 기록(`launchId`, job, hostId, bootId, 예정 cgroup 이름)을 fsync로 영속화.
-     - (나) **대기 래퍼**를 새 프로세스 그룹으로 생성(cgroup을 쓸 수 있으면 예정 cgroup 안에서). 래퍼 환경에 비밀값이 아닌 `launchId`를 둔다.
+     - (가) 생성 전: 로컬에 launch 기록(`launchId`, job, hostId, bootId, 예정 cgroup 이름)을 fsync(디스크에 실제로 저장됐는지 확인)로 영속화(프로그램이 꺼져도 남도록 디스크에 저장).
+     - (나) **대기 래퍼(실행 허가를 기다리는 작은 감싸기 프로그램)**를 새 프로세스 그룹으로 생성(cgroup을 쓸 수 있으면 예정 cgroup 안에서). 래퍼 환경에 비밀값이 아닌 `launchId`를 둔다.
      - (다) pgid를 로컬에 영속화하고 `/process`를 보낸다.
-     - (라) `/process`가 성공한 뒤에만 래퍼에 실행을 허가해 실제 명령을 exec한다.
+     - (라) `/process`가 성공한 뒤에만 래퍼에 실행을 허가해 실제 명령을 exec(대기 프로그램을 실제 명령으로 바꿔 실행)한다.
    - Runner가 (라) 전에 죽으면 허가 파이프가 닫혀 래퍼는 **실제 명령을 실행하지 않고 종료**한다.
      - `/process`가 거부되면(LEASE_LOST 등) 허가하지 않고 그룹을 종료한다.
      - 응답 유실은 같은 멱등 키로 재시도하고 확인 전에는 허가하지 않는다.
@@ -547,11 +550,11 @@ Planning Agent(계획을 세우는 Agent)가 결과를 보고하는 API다.
    - §6.6 L749-751이 새 PC에서 새 시도 재개를 확정했다.
    - 그래서 이전 host 보유는 슬롯 `unconfirmed`·잠금 `orphaned`로 남기되 새 host의 슬롯 계산과 재개 차단에서 제외한다.
    - host 식별자 변경 없는 단순 재시작에는 적용하지 않는다.
-   - **로컬 재개와 공유 외부 쓰기는 분리한다.** `renew`·fence는 GitHub가 알지 못하므로 외부 쓰기 격리 근거로 쓰지 않는다.
+   - **로컬 재개와 공유 외부 쓰기는 분리한다.** `renew`·fence는 GitHub(git 저장소를 호스팅하는 서비스)가 알지 못하므로 외부 쓰기 격리 근거로 쓰지 않는다.
      - 왜: 옛 PC가 아직 살아 있다면 GitHub에 늦게 push할 수 있다. GitHub는 우리 fence 번호를 모르니 그것을 막아 주지 않는다.
    - host가 바뀌면 서버가 `external_write_authority`를 generation+1, `blocked`로 바꾼다.
      - 새 host는 로컬 worktree의 dev·①·QA까지만 한다.
-     - push·PR·commit status·병합·design_apply·초기화 되돌림을 포함한 GitHub 쓰기는 409 `EXTERNAL_WRITE_BLOCKED`로 막는다.
+     - push·PR·commit status(GitHub 커밋에 붙이는 검사 결과 표시)·병합·design_apply·초기화 되돌림을 포함한 GitHub 쓰기는 409 `EXTERNAL_WRITE_BLOCKED`로 막는다.
      - 사유는 기존 실행 불가 사유·관리자 개입 알림에 표시한다.
      - 배포 확인은 host별 로컬 compose만 대상으로 하고, 공유 대상이면 같은 차단을 적용한다.
    - 해제 조건은 둘 중 하나다.
@@ -562,6 +565,7 @@ Planning Agent(계획을 세우는 Agent)가 결과를 보고하는 API다.
    - 새 host 브랜치는 `agent/<TASK>-h<generation>`, PR도 새로 만든다. 이전 generation 브랜치·PR은 대조 뒤 병합 대상에서 제외하고 정리한다.
    - 이전 host가 나중에 연결되면 정리·대조 명령만 받고 generation 없는 쓰기를 하지 않는다.
    - 권한은 job마다 generation을 저장하고 `integrate` 시작·병합 API 직전·완료 판정 때 대조한다. 이것은 협조적 검사이고, 늦은 옛 호출의 최종 차단은 자격 증명 폐기와 대조다.
+     - 풀어 쓰면: job마다 저장한 권한 세대 번호(generation)를 세 시점(integrate 시작·병합 API 직전·완료 판정)에 확인한다. 하지만 옛 PC가 이미 보낸 GitHub 요청은 이 확인으로 막을 수 없다(협조적 검사: 상대가 규칙을 지킬 때만 통하는 검사). 그래서 옛 자격 증명을 폐기하고 GitHub의 실제 결과를 조회해 대조하는 것이 최종 차단이다.
 6. **외부 효과 job**(`integrate`,`deploy_check`,`design_apply`,`merge_followup`, 초기 분석의 커밋 단계)
    - lease 상실 시 `reconcile`로 두고 재할당하지 않는다.
    - 이전 그룹 종료를 확인하고 GitHub main/PR/status 또는 compose 상태를 실제 조회해 「효과 없음 / 완료됨 / 부분 적용」을 보고한 뒤에만 완료 확정 또는 새 실행을 허용한다.
@@ -575,6 +579,7 @@ Planning Agent(계획을 세우는 Agent)가 결과를 보고하는 API다.
    - ① 명령도 그룹·cgroup을 등록하고 무거운 작업 슬롯을 쓴다.
    - 슬롯을 다시 못 잡으면 잠금을 유지한 채 대기하고 사유를 표시한다.
 9. QA가 사용량 등으로 오래 대기하면 같은 묶음도 대기한다(직렬화 우선, §6.6 L741).
+   - 용어 풀이: 직렬화 = 동시에 오는 일을 한 번에 하나씩 차례로 처리.
    - Task가 `paused`·`failed`·BLOCKED로 끝나면 그룹 empty 확인 후 논리 잠금을 해제하고 재개 때 다시 예약한다.
 
 ### 3.5 자동 진행 (owner Q-04)
@@ -608,7 +613,7 @@ Planning Agent(계획을 세우는 Agent)가 결과를 보고하는 API다.
 
 ### 4.1 시도 1회
 
-시도(attempt)는 Agent가 Task를 한 번 실행하는 단위다. 아래 그림은 개발 시도 1회가 예약(claim)부터 QA 넘김까지 흘러가는 순서다. 원본 Mermaid 그림은 그대로 두었고, 병합까지 이어지는 전체 흐름은 [시도 1회 흐름 그림](diagrams/attempt-flow.svg)으로도 그렸다.
+시도(attempt)는 Agent가 Task를 한 번 실행하는 단위다. 아래 그림은 개발 시도 1회가 예약(claim)부터 QA 넘김까지 흘러가는 순서다. 원본 Mermaid(글로 그림을 그리는 문법) 그림은 그대로 두었고, 병합까지 이어지는 전체 흐름은 [시도 1회 흐름 그림](diagrams/attempt-flow.svg)으로도 그렸다.
 
 ```mermaid
 sequenceDiagram
@@ -656,16 +661,17 @@ sequenceDiagram
 
 「검증한 코드」와 「병합되는 코드」가 정확히 같아야 한다. 아래 규칙은 그 사이에 코드가 몰래 바뀌는 틈을 막는다.
 
-1. 개발 종료 시 변경을 commit하고 ①·QA는 같은 `headSha`와 `specRevision`을 검사한다.
+1. 개발 종료 시 변경을 commit(변경을 저장소 기록에 남기는 것)하고 ①·QA는 같은 `headSha`와 `specRevision`을 검사한다.
    - QA는 읽기 전용 상태에서 시작하고 종료 시 SHA·worktree 청결을 다시 확인해 보고한다.
    - headSha는 브랜치 맨 끝 커밋의 고유 번호(SHA)다.
 2. 사람이 만든 변경·Agent 변경으로 head가 바뀌거나 명세·AC·명세가 참조하는 입력 버전이 바뀌면 이전 QA를 무효화하고 재검증한다.
    - 낡은 SHA의 PASS는 거부한다.
 3. **병합 경로는 하나다: strict up-to-date 보호 + 예상 head를 받는 PR 병합 API.**
-   - main 직접 fast-forward push로 일반 PR을 병합하지 않는다.
+   - main 직접 fast-forward(합치지 않고 main을 앞으로 옮기기만 하는 것) push로 일반 PR을 병합하지 않는다.
    - 기호 뜻: A = 병합 직전의 main 커밋, H = QA가 검사한 PR head, H' = H에 A를 합친 커밋(H가 이미 A를 포함하면 H와 같음).
    1. 병합 대기열 차례에 main A, QA한 head H를 고정한다.
       - H가 A를 포함하지 않으면 Runner가 A를 PR 브랜치에 충돌 없이 병합해 H'를 만든다(부모 정확히 H,A, 자동 병합 결과 tree와 일치, 추가 변경 없음).
+        - 용어 풀이: tree = 커밋 시점의 파일 전체 내용.
       - 포함하면 H'=H.
       - 충돌하면 `rework`.
    2. H→H'는 위 조건을 기계로 확인한 경우에만 QA H의 근거를 잇고(§4.13의 「검증 PASS 후 main+PR 병합본 통합 확인」), ①과 ②를 **H'에서** 다시 실행한다.
@@ -688,7 +694,7 @@ sequenceDiagram
    8. 실증은 M7-02 확정 전에 시험 저장소에서 한다(M4-06). 실패하면 M7-02를 닫지 않는다.
    - 근거: [병합 API](https://docs.github.com/en/rest/pulls/pulls?apiVersion=2022-11-28#merge-a-pull-request)의 `sha` 불일치 409, [보호 브랜치](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)의 strict, [필수 검사 문제 해결](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks)의 검사 대상 커밋(2026-11-25 확인).
    - 문서는 비동기 병합도 권장하지만 `PUT /merge`에 폐기 표시가 없고 결과를 한 번에 확정하므로 동기 API를 쓴다.
-   - stacked PR·GitHub merge queue는 쓰지 않는다.
+   - stacked PR(여러 PR을 줄줄이 쌓아 차례로 병합하는 방식)·GitHub merge queue는 쓰지 않는다.
 4. 묶음 확인(§4.13)은 **원인 탐색·예비 검사로만** 쓴다. 병합은 각 PR이 자기 H'에서 ②를 통과한 뒤 하나씩 위 경로로 한다.
 
 ### 4.2 전이 트랜잭션
@@ -715,7 +721,7 @@ sequenceDiagram
 - `sending`은 호출 전에 커밋하고, 명시적 수락 응답만 `accepted`다.
   - 연결 전 실패나 명시적 거부처럼 수락되지 않은 것이 확실하면 실패/재시도 규칙을 적용한다.
 - **메일**(G§9.6-6 「두 번 나가지 않게」)
-  - 전송 본문을 보낸 뒤 응답 유실·timeout·프로세스 crash는 `unknown`.
+  - 전송 본문을 보낸 뒤 응답 유실·timeout·프로세스 crash(프로세스가 갑자기 비정상 종료되는 것)는 `unknown`.
   - 15분 자동 재시도에서 제외하고 실패 알림에 포함, 팀장이 중복 가능 안내를 보고 다시 보낸다.
   - 왜: 가이드가 메일은 두 번 나가면 안 된다고 했으므로, 모를 때는 자동으로 다시 보내지 않는다.
 - **Telegram**
@@ -768,7 +774,7 @@ Agent(Claude/Codex)가 일을 마치고 Runner에게 돌려주는 결과의 모�
 - `openapi.json` 재생성 diff 0, Runner client 재생성 diff 0.
 - 같은 요청·응답 fixture를 WBS(inject)와 Runner(client)가 함께 통과.
 - Runner API 전체에 대해 무토큰·팀장 세션·낡은 epoch·멱등 재전송·키 충돌 5종 표 기반 테스트.
-- 초기화 경합: middleware 통과 뒤 정지한 host 보고, 생성 중 PDF, 발송 시작 직전/직후를 초기화와 교차.
+- 초기화 경합: middleware(모든 요청이 처리 전에 거치는 공통 코드) 통과 뒤 정지한 host 보고, 생성 중 PDF, 발송 시작 직전/직후를 초기화와 교차.
 - 보유: 네트워크 단절+자손 생존+재개 요청은 거부, 그룹 종료 확인 뒤 허용. ① 실패 직전 같은 묶음 Task claim 거부. 자기 예약 start 성공, 타 job 예약 침범 거부.
 - host 전환: `renew 성공→정지→host 전환→옛 호출 재개`에서 새 쓰기는 대조 전 차단되고 옛 결과가 대조에 나타남.
-- P에 있는 Endpoint와 G§8 표의 모든 경로가 라우트 목록에 있는지 자동 비교.
+- P에 있는 Endpoint(API 경로 하나)와 G§8 표의 모든 경로가 라우트 목록에 있는지 자동 비교.

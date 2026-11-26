@@ -12,6 +12,7 @@
 - 기준: `prototype/docs/Agent-WBS-설계의도-및-구현가이드.md`(이하 **G**, 1,210줄 전체) · `prototype/uiux/Main.dc.html`(이하 **P**).
   - G는 가이드(설계 의도와 구현 방법을 적은 원본 문서)다.
   - P는 프로토타입(실제로 클릭해 볼 수 있는 화면 시안 HTML)이다.
+    - 용어 풀이: HTML = 웹 페이지를 만드는 문서 형식.
 - 충돌하면 G가 우선한다(G L5).
   - 왜: P는 화면을 보여 주려고 만든 Mock(가짜 데이터로 움직이는 시안)이라, 실제 동작 규칙은 G가 더 정확하다.
 - 표기: `G§4.2` = 가이드 절, `L255` = 가이드 줄, `P L3063` = 프로토타입 줄.
@@ -26,7 +27,7 @@
 이 제품은 두 시스템으로 나뉜다.
 
 - **Agent WBS** (`agent-wbs/`): 팀장이 보는 웹 화면과 서버, 데이터베이스다. 모든 「판정」을 한다.
-- **Agent Runner** (`agent-runner/`): 개발 PC에서 AI Agent(Codex/Claude)를 실제로 실행하는 프로그램이다. 판정은 하지 않고 시킨 일을 하고 결과를 보고한다.
+- **Agent Runner** (`agent-runner/`): 개발 PC(개인용 컴퓨터)에서 AI(인공지능) Agent(Codex/Claude)를 실제로 실행하는 프로그램이다. 판정은 하지 않고 시킨 일을 하고 결과를 보고한다.
 
 왜 나누나: 「무엇이 맞는지 정하는 쪽」과 「실제로 일하는 쪽」을 분리하면, 일하는 쪽이 실수하거나 고장 나도 판정 기준이 흔들리지 않는다.
 
@@ -35,7 +36,7 @@
 아래는 항목별로 두 시스템이 맡는 일이다.
 
 - **역할** [G§2.1]
-  - Agent WBS: Web UI(팀장) · REST API · PostgreSQL
+  - Agent WBS: Web UI(팀장) · REST(HTTP의 GET·POST 같은 요청으로 데이터를 주고받는 방식) API · PostgreSQL(관계형 데이터베이스)
   - Agent Runner: 개발 PC(WSL)에서 Codex/Claude 세션 실행, Planning Agent 포함
 - **판정** [G§2.3, §9.1-2]
   - Agent WBS: **모든 판정**: 차단·순환·Gate·CP 시뮬레이션·일정·등급 정책·상태 전이
@@ -47,11 +48,11 @@
   - Agent WBS: 상한 계산(PC 사양 기반/직접 지정)
   - Agent Runner: 상한 이내 적응형 조절, 프로세스 그룹/cgroup 관측·회수
 - **저장** [G§4.13 L485]
-  - Agent WBS: DB 원본, Evidence 업로드 파일, 보고서 PDF
-  - Agent Runner: worktree, 입력 checkout, 실행 로그 원문·스크린샷(`~/.agentwbs/runs/<id>/`, 기본 30일)
+  - Agent WBS: DB 원본, Evidence 업로드 파일, 보고서 PDF(인쇄용 문서 파일 형식)
+  - Agent Runner: worktree, 입력 checkout(저장소의 특정 커밋 내용을 폴더에 꺼낸 것), 실행 로그 원문·스크린샷(`~/.agentwbs/runs/<id>/`, 기본 30일)
 - **외부 발송**
-  - Agent WBS: 메일(§4.11), Telegram(§4.14)
-  - Agent Runner: GitHub(§9.6-2-6)
+  - Agent WBS: 메일(§4.11), Telegram(메신저. 알림을 봇으로 보낸다, §4.14)
+  - Agent Runner: GitHub(git 저장소를 호스팅하는 서비스, §9.6-2-6)
 - **화면**
   - Agent WBS: 12개 메뉴(P `NAV` L3063)
   - Agent Runner: 없음 — CLI와 로그뿐 (§2.1 L143, §11)
@@ -73,7 +74,7 @@
 
 ## 2. 런타임 구성
 
-런타임 구성은 「프로그램이 실제로 돌 때 어떤 프로세스들이 떠 있고 서로 어떻게 연결되는가」다. 아래 그림은 원본 그대로 둔 Mermaid 그림이고, 같은 내용을 [SVG 그림](diagrams/system-overview.svg)으로도 그렸다.
+런타임 구성은 「프로그램이 실제로 돌 때 어떤 프로세스들이 떠 있고 서로 어떻게 연결되는가」다. 아래 그림은 원본 그대로 둔 Mermaid(글로 그림을 그리는 문법) 그림이고, 같은 내용을 [SVG 그림](diagrams/system-overview.svg)으로도 그렸다.
 
 ```mermaid
 flowchart LR
@@ -98,8 +99,9 @@ flowchart LR
   - 내용: REST, 세션, 정적 web 서빙(운영)
   - 근거: §2.1
 - `worker`
-  - 내용: 보고서 정기 생성·누락 보충, 메일 큐, 알림 outbox, heartbeat 감시, PDF, 파일 삭제 재시도, 무결성 점검.
-  - 일감은 PostgreSQL 작업 테이블을 `FOR UPDATE SKIP LOCKED`로 소비한다. (이미 다른 worker가 잡은 행은 건너뛰고 남은 행을 가져가는 SQL 방식이다.)
+  - 내용: 보고서 정기 생성·누락 보충, 메일 큐, 알림 outbox, heartbeat 감시, PDF, 파일 삭제 재시도, 무결성 점검(저장된 데이터끼리 모순이 없는지 검사).
+  - 일감은 PostgreSQL 작업 테이블을 `FOR UPDATE SKIP LOCKED`(다른 worker가 잡은 행은 건너뛰고 잠그는 SQL)로 소비한다. (이미 다른 worker가 잡은 행은 건너뛰고 남은 행을 가져가는 SQL 방식이다.)
+    - 용어 풀이: SQL = DB에 묻고 고치는 언어.
   - 근거: §4.11 §4.14 §8.5 §9.6-6. 별도 메시지 브로커는 두지 않는다(§2.2 주의)
   - outbox는 「보낼 것」을 먼저 DB에 적어 두고 나중에 보내는 대기함이다.
 - `postgres`
@@ -111,7 +113,7 @@ flowchart LR
 
 **`worker`를 API와 분리하는 이유** [결정]
 
-- Chromium PDF와 발송 지연이 API 응답을 막지 않게 한다.
+- Chromium(PDF를 만들 때 쓰는 브라우저 엔진) PDF와 발송 지연이 API 응답을 막지 않게 한다.
 - 워커 정지가 상태 저장을 실패시키지 않는다(§9.6-3-7).
 - 정기 작업의 유일성은 프로세스 수가 아니라 DB 고유키로 보장한다.
   - 예: 같은 날 보고서가 두 번 만들어지는 것은 「worker를 하나만 띄워서」가 아니라 DB의 unique 키로 막는다.
@@ -143,12 +145,12 @@ flowchart LR
 
 가이드가 이미 정한 기술이다. 바꾸지 않는다.
 
-- 화면: React + TypeScript + Vite + Mantine
-- 서버: Node.js + Fastify + TypeScript
-- DB: PostgreSQL + Drizzle ORM
+- 화면: React(화면을 부품 단위로 만드는 라이브러리) + TypeScript(타입을 붙인 JavaScript) + Vite(화면 코드 개발 서버·빌드 도구) + Mantine(React 화면 부품 라이브러리)
+- 서버: Node.js(서버에서 JavaScript를 실행하는 환경) + Fastify(Node.js 웹 서버 프레임워크) + TypeScript
+- DB: PostgreSQL + Drizzle ORM(TypeScript로 DB 테이블을 다루는 라이브러리)
 - 저장소 구성: pnpm workspace(`apps/web`, `apps/api`, `packages/shared`, `packages/db`)
 - 통신: REST
-- 그 외 확정: 보고서 PDF = Playwright Chromium(§4.11), 글꼴 = Pretendard GOV 1.3.9(§9.7), `tabular-nums`.
+- 그 외 확정: 보고서 PDF = Playwright(브라우저를 자동 조작하는 테스트 도구) Chromium(§4.11), 글꼴 = Pretendard GOV(제품에 쓰는 한글 글꼴) 1.3.9(§9.7), `tabular-nums`(숫자 폭을 같게 맞추는 글꼴 설정).
 
 ### 3.2 추천 1안 [결정]
 
@@ -156,13 +158,13 @@ flowchart LR
 
 - 정확한 패키지 버전은 M0에서 설치 시점의 안정판으로 고정하고 lockfile을 커밋한다.
 - 왜: 가이드에 없는 버전을 문서에 지어내지 않는다.
-- TypeScript는 6.0.3이다 — 최신 7.0.2는 typescript-eslint 8.74.0의 지원 범위(`<6.1.0`) 밖이다.
+- TypeScript는 6.0.3이다 — 최신 7.0.2는 typescript-eslint(TypeScript용 코드 규칙 검사 도구) 8.74.0의 지원 범위(`<6.1.0`) 밖이다.
 
 **항목별 선택과 이유**
 
 - Node
   - 선택: 26 계열(설치본 v26.13.0), `engines`와 `.nvmrc`로 고정
-  - 이유: 개발 PC 설치본. P TASK-0001의 「20 LTS」는 Mock
+  - 이유: 개발 PC 설치본. P TASK-0001의 「20 LTS(오래 지원하는 안정 버전)」는 Mock
 - 패키지 관리
   - 선택: pnpm(설치본 12.16.1), `packageManager` 고정
   - 이유: §2.2
@@ -173,32 +175,33 @@ flowchart LR
   - 선택: TypeBox → Fastify 검증 + OpenAPI 3.1 생성
   - 이유: 한 정의에서 검증·타입·문서
 - 서버 상태(FE)
-  - 선택: TanStack Query
+  - 선택: TanStack Query(서버 데이터를 불러오고 캐시하는 화면 라이브러리)
   - 이유: 이전 화면 유지·배경 갱신 규칙(§0.3)에 맞음
 - 라우팅
   - 선택: React Router
-  - 이유: `/wbs/TASK-0007`, `/settings/report` URL 요구(§4.3, §4.9)
-- 가상 스크롤
-  - 선택: `@tanstack/react-virtual`
+  - 이유: `/wbs/TASK-0007`, `/settings/report` URL(웹 주소) 요구(§4.3, §4.9)
+- 가상 스크롤(화면에 보이는 행만 그려 긴 목록을 빠르게 보여 주는 기법)
+  - 선택: `@tanstack/react-virtual`(화면에 보이는 행만 그리는 가상 스크롤 라이브러리)
   - 이유: §9.2-5. P MSG-002도 이 라이브러리를 언급
-- Gantt
-  - 선택: 자체 SVG
+- Gantt(막대로 일정을 보여 주는 차트)
+  - 선택: 자체 SVG(선과 글자로 그린 벡터 그림 형식)
   - 이유: 가로 스크롤 없는 전폭·범위선·빗금 요구가 특수함(§4.3)
 - 테스트
-  - 선택: Vitest, Fastify inject + 실제 PostgreSQL, Playwright
+  - 선택: Vitest(TypeScript 단위 테스트 도구), Fastify inject(실제 네트워크 없이 서버에 요청을 넣어 보는 테스트) + 실제 PostgreSQL, Playwright
   - 이유: P 정의(§4.13)와 동일 도구
 - 메일
-  - 선택: nodemailer
+  - 선택: nodemailer(Node.js 메일 발송 라이브러리)
   - 이유: G§10 L1119 예시
 - 로그
-  - 선택: pino + redact
+  - 선택: pino(Node.js 로그 라이브러리) + redact
   - 이유: 토큰 마스킹 필수(§9.6-3-1)
 - Runner
   - 선택: Node.js + TypeScript 단일 pnpm 패키지, 로컬 상태는 파일(JSON, 원자적 rename) + 보고 outbox
+    - 용어 풀이: JSON = 중괄호·대괄호로 데이터를 적는 텍스트 형식.
   - 이유: G가 미정. 같은 언어로 검토·운영 단순화. 추가 DB 없음
   - 원자적 rename: 새 파일을 다 쓴 뒤 이름만 바꿔 끼워, 쓰다 죽어도 반쯤 쓴 파일이 남지 않게 하는 방법이다.
 - 계약 해석
-  - 선택: YAML parser + OpenAPI parser, AsyncAPI parser, SQL은 **임시 DB에 적용 후 catalog 조회**
+  - 선택: YAML(들여쓰기로 구조를 적는 설정 파일 형식) parser(문서를 읽어 구조로 바꾸는 프로그램) + OpenAPI parser, AsyncAPI parser, SQL은 **임시 DB에 적용 후 catalog 조회(DB가 스스로 기록한 테이블·열 목록을 읽는 것)**
   - 이유: 직접 SQL 파서를 쓰지 않음(§4.12 L430 「자주 쓰는 형식만」)
 
 ### 3.3 디렉토리
@@ -223,10 +226,10 @@ agent-runner/
 
 - API는 Route(검증·DTO) / Service(규칙) / Repository(쿼리만)로 나눈다(P TASK-0005 `resp`).
   - 왜: 요청 모양 검사, 업무 규칙, DB 쿼리를 섞지 않아야 각각 따로 테스트하고 고칠 수 있다.
-- `packages/shared`의 판정 함수는 I/O와 현재 시각 접근이 없는 순수 함수다(시각은 인자).
+- `packages/shared`의 판정 함수는 I/O(파일·DB·네트워크를 읽고 쓰는 일)와 현재 시각 접근이 없는 순수 함수다(시각은 인자).
   - 순수 함수는 같은 입력이면 언제나 같은 결과를 내는 함수다.
   - 왜: 테스트가 쉽고, 서버와 화면이 같은 함수를 믿고 쓸 수 있다.
-- FE는 같은 함수를 미리보기에만 쓴다. 저장 결과는 서버 응답으로 교체한다(§2.3).
+- FE(화면 쪽 코드, 프론트엔드)는 같은 함수를 미리보기에만 쓴다. 저장 결과는 서버 응답으로 교체한다(§2.3).
   - 왜: 최종 판정은 언제나 서버가 한다(§1 책임 경계).
 
 ## 4. 인증 · 보안
@@ -239,10 +242,10 @@ agent-runner/
   - 이 PC(loopback)는 CLI가 발급한 짧은 수명의 1회용 링크로 로그인한다. loopback은 같은 PC 안에서 자기 자신에게 접속하는 연결이다.
   - LAN은 비밀번호(로그인 화면 1개)로 로그인한다.
   - 링크 토큰은 hash 저장·1회 소비, URL에서 즉시 제거한다.
-  - 비밀번호는 CLI로 설정하고 scrypt hash 저장, 시도 횟수 제한을 둔다.
+  - 비밀번호는 CLI로 설정하고 scrypt(비밀번호 해시 계산 방식) hash 저장, 시도 횟수 제한을 둔다.
   - 근거: owner Q-01, §8 L877
 - **Runner 토큰**
-  - 난수 32바이트 Bearer, DB에는 SHA-256만 저장한다.
+  - 난수 32바이트 Bearer(토큰을 가진 쪽을 인증하는 방식), DB에는 SHA-256(내용 지문을 만드는 해시 방식)만 저장한다.
   - `pnpm runner-token:create`로 1회 출력·폐기 가능.
   - 왜 hash만 저장하나: DB가 새어 나가도 원래 토큰을 알 수 없다.
   - 근거: §8
@@ -255,10 +258,11 @@ agent-runner/
   - 기본 `127.0.0.1`.
   - LAN은 명시 설정 + 비밀번호 설정 없으면 기동 거부.
   - 1회용 링크는 loopback 연결에서만 소비.
-  - 평문 HTTP LAN에서 비밀번호·세션이 노출될 수 있음을 운영 문서에 알림.
+  - 평문 HTTP(웹 요청·응답 규약) LAN에서 비밀번호·세션이 노출될 수 있음을 운영 문서에 알림.
   - 근거: §4.14 L543
 - **비밀값**
-  - `secrets` 테이블에 AES-256-GCM으로 암호화해 둔다. 키는 `AWBS_SECRET_KEY`(파일 권한 0600의 env).
+  - `secrets` 테이블에 AES-256-GCM(널리 쓰는 대칭 암호화 방식)으로 암호화해 둔다. 키는 `AWBS_SECRET_KEY`(파일 권한 0600의 env).
+    - 용어 풀이: env = 프로그램에 넘기는 설정 값.
   - API는 `tokenSet`/`last4`만 보여 준다(설정됐는지와 끝 4자리).
   - 근거: §8.7, §9.6-7, §9.5-4-1
 - **GitHub 토큰 전달** [결정]
@@ -267,18 +271,18 @@ agent-runner/
   - 왜: 평문을 API 응답에 싣지 않아 §9.5-4-1을 지킨다.
 - **Agent 환경 변수**
   - allowlist 방식 env로 시작. (허용 목록에 있는 변수만 넘긴다.)
-  - GitHub·Runner 토큰, SSH agent, `AWBS_*` 제거.
+  - GitHub·Runner 토큰, SSH(원격 PC에 안전하게 접속하는 방식) agent, `AWBS_*` 제거.
   - 근거: §9.5-4-1
 - **실행 격리**
   - 세션별 worktree, CLI sandbox/권한 모드.
   - Agent뿐 아니라 **CI 명령·계약 추출·임시 SQL**도 같은 자격 증명 경계에서 실행.
-  - OS 수준 격리는 **Q-08**, 확정 전에는 fake 실행만.
+  - OS(운영체제) 수준 격리는 **Q-08**, 확정 전에는 fake 실행만.
   - 근거: §6.7
 - **입력 자료**
-  - 실행 금지, submodule 미추적, 읽기 전용, realpath·symlink 검사, HTML 응답으로 서빙하지 않음.
+  - 실행 금지, submodule(저장소 안에 다른 저장소를 끼워 넣은 것) 미추적, 읽기 전용, realpath(링크를 모두 따라간 실제 경로)·symlink 검사, HTML 응답으로 서빙하지 않음.
   - 근거: §9.5-3
 - **명령 실행**
-  - shell 문자열 조합 금지(argv). (명령과 인자를 배열로 따로 넘겨, 입력값이 명령으로 해석되지 않게 한다.)
+  - shell(명령어를 해석해 실행하는 프로그램) 문자열 조합 금지(argv). (명령과 인자를 배열로 따로 넘겨, 입력값이 명령으로 해석되지 않게 한다.)
   - `pipeline.yaml`은 **main 커밋** 것만 실행.
   - 왜: Agent가 자기 브랜치에서 파이프라인 정의를 바꿔 검사를 피하지 못하게 한다.
   - 근거: §4.13
@@ -300,7 +304,7 @@ agent-runner/
 
 - 강제 push 금지.
 - 보호 경로(`prototype/`·`.agentwbs/`)와 빌드 결과물은 Task 검사 첫 단계에서 거부(§9.5-4).
-- 보호 경로 비교는 rename을 포함한 merge-base diff로 한다.
+- 보호 경로 비교는 rename을 포함한 merge-base(두 브랜치가 갈라진 공통 조상 커밋) diff로 한다.
   - 왜: 파일 이름만 바꿔서 보호 경로를 건드리는 경우도 잡기 위해서다.
 
 ## 5. Runner 내부
@@ -324,13 +328,13 @@ Runner 안의 모듈(코드 묶음)별 책임이다.
   - 왜: Agent가 띄운 자식 프로세스가 남아 있으면 실제로는 아직 PC 자원을 쓰고 파일을 고치고 있을 수 있다.
   - 근거: §6.7
 - `cli`
-  - 책임: Claude `stream-json` / Codex `exec --json` 어댑터. 모르는 이벤트는 보존하고 추정하지 않음. **hook 미사용**
+  - 책임: Claude `stream-json` / Codex `exec --json` 어댑터. 모르는 이벤트는 보존하고 추정하지 않음. **hook(이벤트가 날 때 자동으로 부르는 사용자 스크립트) 미사용**
   - 근거: §6.7
 - `planning`
   - 책임: 독립 분석 → 교차 검토 → 이견 조정 → 초안/CP. 출력은 JSON Schema 검증, 실패 시 실패 단계부터 재시도
   - 근거: §4.2 §4.5
 - `git`
-  - 책임: 로컬 저장소 — clone·worktree(ext4)·브랜치·초기화 되돌림
+  - 책임: 로컬 저장소 — clone(원격 저장소를 통째로 복사해 오는 것)·worktree(ext4)·브랜치·초기화 되돌림
   - 근거: §4.2 §6.6 §9.6-2
 - `github`
   - 책임: GitHub — PR·status·병합·봉인 자격 증명(M4-04, 실증 M4-06)
@@ -350,7 +354,8 @@ Runner 안의 모듈(코드 묶음)별 책임이다.
 
 **이 PC 관측(2026-11-25, 읽기만 함)**
 
-- WSL2, PID 1 = systemd, cgroup v2 마운트, 사용자 slice controller `cpu memory pids`.
+- WSL2, PID(프로세스 번호) 1 = systemd(리눅스에서 서비스를 띄우고 관리하는 프로그램), cgroup v2 마운트, 사용자 slice(systemd가 프로세스 묶음에 자원을 나눠 주는 단위) controller(cgroup에서 CPU·메모리 등 자원별로 재고 제한하는 기능) `cpu memory pids`.
+  - 용어 풀이: CPU = 계산을 하는 처리 장치.
 - 세션 scope 생성·측정은 아직 시험하지 않았다.
   - 그래서 **사용 가능 여부는 M5-03에서 확인**한다.
   - 안 되면 프로세스 그룹 + `/proc` 합산을 쓴다(§6.7-6).
@@ -392,7 +397,7 @@ owner는 Codex·Claude CLI를 항상 최신으로 쓰라고 정했다. 그런데
   - 구버전으로 자동 하향하지 않는다.
   - 중단된 설치 폴더는 다음 시작 때 지운다.
 - **버전 변경 뒤**
-  - 같은 버전·모델·옵션 조합의 등록된 검증이 없으면 「미검증」, 보수 계산(1+예산), 재검증 대기.
+  - 같은 버전·모델·옵션 조합의 등록된 검증이 없으면 「미검증」, 보수 계산(확인되지 않은 값을 넉넉하게 잡는 계산, 1+예산), 재검증 대기.
   - 실행은 계속한다(§6.7).
   - 유료 재검증은 Q-12-잔여 승인 전에는 실행하지 않는다.
 - **화면**
@@ -425,7 +430,7 @@ owner는 Codex·Claude CLI를 항상 최신으로 쓰라고 정했다. 그런데
 - 기존 `verum-*` 컨테이너(25432)는 이름·포트·볼륨·네트워크 모두 겹치지 않는다.
 - 명령은 반드시 `docker compose -p awbs -f agent-wbs/compose.yaml`로 한정한다.
 - `docker system/volume prune`을 쓰지 않는다.
-  - 왜: prune은 다른 프로젝트의 볼륨까지 지울 수 있다.
+  - 왜: prune(쓰지 않는 docker 자원을 한꺼번에 지우는 명령)은 다른 프로젝트의 볼륨까지 지울 수 있다.
 - 2026-11-25 확인 시 3000·3100·5173·8080·25442는 비어 있었다.
 
 ### 6.2 개발 DB
@@ -448,6 +453,7 @@ pnpm -C agent-runner start          # 토큰 발급 후
 **운영 배포**
 
 - Dockerfile(기반 이미지 digest 고정, Pretendard GOV + Chromium 포함) → compose `api`·`worker`·`postgres`.
+  - 용어 풀이: Dockerfile = 컨테이너 이미지를 만드는 설명서; docker compose = 여러 컨테이너를 설정 파일 하나로 띄우는 도구.
 - `GET /health`, `GET /health/db`(P TASK-0001/0002).
 - Runner는 호스트 CLI·worktree를 다루므로 **컨테이너가 아니라** 사용자 systemd 서비스로 실행한다 [결정].
 - 되돌리기는 커밋 해시로 다시 빌드한다(§4.13 L489).
@@ -455,8 +461,8 @@ pnpm -C agent-runner start          # 토큰 발급 후
 
 ### 6.4 시간
 
-- 저장 UTC `timestamptz`, 표시·하루 경계·스케줄은 `Asia/Seoul`(§9.2-2, §9.6-2).
-- 프로세스 TZ에 의존하지 않고 명시적 변환을 쓴다.
+- 저장 UTC `timestamptz`(시간대 정보를 포함한 시각 타입), 표시·하루 경계·스케줄은 `Asia/Seoul`(§9.2-2, §9.6-2).
+- 프로세스 TZ(시간대 설정)에 의존하지 않고 명시적 변환을 쓴다.
   - 왜: 서버를 띄운 환경의 시간대 설정이 바뀌어도 「하루」의 경계가 흔들리지 않게 한다.
 
 ## 7. 해석 결정 기록
@@ -473,7 +479,7 @@ pnpm -C agent-runner start          # 토큰 발급 후
   - 결정: **owner가 Agent WBS와 Agent Runner를 둘 다 구현하라고 직접 지시했다**(근거: 2026-11-25 coordinator Task `task_75bfa5470ead`의 확정 사항, 원 Task `task_cc20c579318b`의 구현 대상 2개). 시스템 경계(REST만)는 유지
 - **D-02**
   - 출처: §2.2 L155 ↔ P `DS_MOCK`
-  - 문제: WebSocket·SSE·Kafka·Redis 등
+  - 문제: WebSocket·SSE·Kafka(메시지를 중계·보관하는 메시지 브로커)·Redis 등
   - 결정: 제품 런타임에 도입하지 않음. 「설계」 메뉴의 표시 형식으로만 지원
 - **D-03**
   - 출처: §8.2 ↔ §2.1
@@ -491,7 +497,7 @@ pnpm -C agent-runner start          # 토큰 발급 후
     - 그 외 변경 API는 트랜잭션 잠금 안에서 epoch를 다시 확인해 409(data-model §5.1)
 - **D-05**
   - 출처: §0.3 L34·L65, §12-17·18·20·21 ↔ §4.2 L217, §3 L190
-  - 문제: 경로 변환·zip·해시 시나리오 잔재
+  - 문제: 경로 변환·zip(여러 파일을 하나로 묶은 압축 파일)·해시 시나리오 잔재
   - 결정: GitHub 방식 확정. 17·18은 30·31로 대체하고 경로 UI는 만들지 않음
 - **D-06**
   - 출처: §12-20 「8개」 ↔ P L6648 9개(+`techwait`)
@@ -554,7 +560,7 @@ pnpm -C agent-runner start          # 토큰 발급 후
   - 문제: 완료 Task 보존
   - 결정: CP `modify/remove`가 완료 Task면 보류하고 수정 Task 제안
 - **D-21**
-  - 출처: §8.2 heartbeat 60초 ↔ P Mock WS 10/30초
+  - 출처: §8.2 heartbeat 60초 ↔ P Mock WS(WebSocket의 줄임말) 10/30초
   - 문제: 주기
   - 결정: 60초, 3회 누락(설정값, §9.2-3)
 - **D-22**
@@ -644,10 +650,10 @@ pnpm -C agent-runner start          # 토큰 발급 후
   - 데이터 200 Task·1,000행 기준 목록 응답·렌더를 측정한다.
   - G§1.2-6은 200건 이상을 요구하고 P TASK-0007의 「1,000행 펼치기 100ms」는 Mock Task의 기준이므로 **[추정] 목표치**로만 쓴다.
 - **로딩·오류 규칙**(§0.3)
-  - 0.2초 이내 생략, 스켈레톤 최소 0.3초, 10초 후 실패 전환, 저장 실패 시 입력 유지.
+  - 0.2초 이내 생략, 스켈레톤(로딩 중에 보여 주는 회색 자리 표시) 최소 0.3초, 10초 후 실패 전환, 저장 실패 시 입력 유지.
   - 왜 0.2초 이내는 생략하나: 아주 짧은 로딩 표시는 깜빡임으로만 보여 오히려 거슬린다.
 - **접근성**
-  - 상태는 색+텍스트, 키보드 J/K·↑↓·Esc, `prefers-reduced-motion`.
+  - 상태는 색+텍스트, 키보드 J/K(키보드 단축키)·↑↓·Esc, `prefers-reduced-motion`(움직임을 줄여 달라는 사용자 설정).
   - 왜 색+텍스트인가: 색을 구분하기 어려운 사람도 상태를 읽을 수 있어야 한다.
 - **화면 폭**(D-28)
   - 1280·1920에서 전체 기능, 가로 스크롤 없음.

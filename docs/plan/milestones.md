@@ -21,13 +21,15 @@
 - **축약**
   - `W` = `pnpm -C agent-wbs`, `R` = `pnpm -C agent-runner`.
   - 모든 작업에 공통으로 `W check`(typecheck+lint+unit) 또는 `R check`.
+    - 용어 풀이: lint = 코드 규칙 위반을 자동으로 찾는 검사.
 - **병렬 표시**
   - `∥` 같은 마일스톤 안 동시 가능(디렉토리 비중첩), `—` 선행 대기.
   - 「M0-01 후」처럼 적힌 것은 그 작업이 끝나야 시작할 수 있다는 뜻이다.
   - **`packages/db/migrations`와 `packages/shared/src/api`는 한 번에 한 작업만 병합**한다.
-    - 왜: 두 작업이 동시에 DB 구조나 API 스키마를 바꾸면 서로 충돌하고, 순서가 꼬인 마이그레이션은 되돌리기 어렵다.
+    - 왜: 두 작업이 동시에 DB 구조나 API 스키마를 바꾸면 서로 충돌하고, 순서가 꼬인 마이그레이션(DB 구조를 바꾸는 SQL 파일)은 되돌리기 어렵다.
+      - 용어 풀이: SQL = DB에 묻고 고치는 언어.
 - **담당 기준**
-  - UI·일반 서버 구현은 Claude, 상태·동시성·보안·프로세스 제어의 구현/적대적 검증은 Codex를 우선한다 [결정, G§4.6의 「Claude 개발 → Codex QA」를 기본으로 함].
+  - UI(사용자가 보고 조작하는 화면)·일반 서버 구현은 Claude, 상태·동시성·보안·프로세스 제어의 구현/적대적 검증은 Codex를 우선한다 [결정, G§4.6의 「Claude 개발 → Codex QA」를 기본으로 함].
   - 적대적 검증: 일부러 깨뜨리려는 입장에서 시험하는 것.
 - **화면 작업의 세부 기준**
   - 화면 작업의 세부 기준은 별도 화면 전수 목록이 검토·병합된 뒤 그 버전을 따른다.
@@ -36,7 +38,7 @@
 - **compose 명령 축약**
   - `docker compose -p awbs`는 `docker compose -p awbs -f agent-wbs/compose.yaml`의 축약이고 저장소 루트에서 실행한다.
 - **가짜 먼저**
-  - 실제 Claude/Codex 호출 없이 검증하도록 fake CLI·fake GitHub를 먼저 둔다.
+  - 실제 Claude/Codex 호출 없이 검증하도록 fake CLI·fake GitHub(git 저장소를 호스팅하는 서비스)를 먼저 둔다.
   - 실호출은 M8에서 owner가 승인한 한도 안에서 한다.
   - 왜: 실제 호출은 돈이 들고 결과가 매번 달라 테스트로 쓰기 어렵다.
 
@@ -76,23 +78,23 @@ flowchart LR
 - **M0-01** — WBS workspace 4패키지, TS·lint·test, 버전 고정
   - 완료 조건(검증): `W install --frozen-lockfile && W check && W build`
   - 디렉토리: `agent-wbs/` · 병렬: ∥ · 담당 / 리뷰: Claude / Codex
-- **M0-02** — compose(`awbs`, 25442), env, `/health`·`/health/db`, 테스트 DB 안전장치
+- **M0-02** — compose(`awbs`, 25442), env(프로그램에 넘기는 설정 값), `/health`·`/health/db`, 테스트 DB 안전장치
   - 완료 조건(검증): `docker compose -p awbs -f agent-wbs/compose.yaml config` + `W test:db`(비-`awbs_test_` DB 거부 포함). 컨테이너 기동은 owner가 구현 단계를 시작할 때
   - 디렉토리: `agent-wbs/{compose.yaml,apps/api,packages/db}` · 병렬: M0-01 후 · 담당 / 리뷰: Codex / Claude
 - **M0-03** — Runner 패키지 골격, 설정·로그·redact, fake CLI/GitHub 틀
   - 완료 조건(검증): `R install --frozen-lockfile && R check`
   - 디렉토리: `agent-runner/` · 병렬: ∥ · 담당 / 리뷰: Codex / Claude
-- **M0-04** — Web shell: 180/56px 메뉴 12개, Header 64, 글꼴, 토큰, 라우팅, 접근성 기본
+- **M0-04** — Web shell(명령어를 해석해 실행하는 프로그램): 180/56px 메뉴 12개, Header 64, 글꼴, 토큰, 라우팅, 접근성 기본
   - 완료 조건(검증): `W --filter web test:e2e -- shell` (1280·1920 가로 스크롤 없음)
   - 디렉토리: `agent-wbs/apps/web` · 병렬: M0-01 후 · 담당 / 리뷰: Claude / Codex
 
 ### M1 — 데이터 · 계약 · 순수 판정
 
-- **M1-01** — 전체 schema·제약·추가 전용·초기화 함수·system/demo seed(owner 승인값 포함, SUB_MOCK과 미승인 값은 demo만)
+- **M1-01** — 전체 schema(데이터 모양(필드·타입·제약)의 정의)·제약·추가 전용·초기화 함수·system/demo seed(owner 승인값 포함, SUB_MOCK과 미승인 값은 demo만)
   - 완료 조건(검증): `W test:db -- schema`
     - 빈 DB up, 제약 위반, 앱 역할 UPDATE 거부
     - system seed에 Mock 정의·미승인 값 0건, owner 승인 Q-03·04·06 값 일치
-    - `judged_rules`·`split_judgements` 스키마, `task_judgements` 기본값·배열 CHECK
+    - `judged_rules`·`split_judgements` 스키마, `task_judgements` 기본값·배열 CHECK(값이 조건을 만족하는지 DB가 검사하는 제약)
   - 디렉토리: `packages/db` · 병렬: — · 담당 / 리뷰: Codex / Claude
 - **M1-02** — TypeBox API 스키마 → OpenAPI, 오류 코드, Runner client 생성
   - 완료 조건(검증): `W openapi:check && R client:check`
@@ -136,7 +138,7 @@ flowchart LR
     - 링크 재사용·비loopback 거부
     - LAN 비밀번호 미설정 기동 거부·횟수 제한
   - 디렉토리: `apps/api/src/platform` · 병렬: — · 담당 / 리뷰: Codex / Claude
-- **M2-02** — Task·의존성·명세·설계·체크리스트 CRUD, 동시 수정
+- **M2-02** — Task·의존성·명세·설계·체크리스트 CRUD(만들기·읽기·고치기·지우기), 동시 수정
   - 완료 조건(검증): `W --filter api test -- tasks`
     - 동시 순환 추가·이력
     - 삭제/의존성/**승인 요청**/승인 낡은 버전 409
@@ -150,13 +152,13 @@ flowchart LR
 - **M2-04** — 초기화·명령·정리 대기·내보내기·파일 삭제 큐
   - 완료 조건(검증): `W --filter api test -- reset`
     - 중간 실패 주입, 설정 유지/삭제 표
-    - middleware 통과 후 정지한 host 보고·worker와 초기화 경합
+    - middleware(모든 요청이 처리 전에 거치는 공통 코드) 통과 후 정지한 host 보고·worker와 초기화 경합
     - 명령 epoch 불일치
   - 디렉토리: `apps/api/src/reset` · 병렬: M2-03 후 · 담당 / 리뷰: Codex / Claude
-- **M2-05** — Runner 보고·jobs lease·시도 claim·heartbeat 감시·PC 변경·상한
+- **M2-05** — Runner 보고·jobs lease·시도 claim·heartbeat 감시·PC(개인용 컴퓨터) 변경·상한
   - 완료 조건(검증): `W --filter api test -- runner`
     - 동시 claim 100회, 중복 보고
-    - **네트워크 단절+자손 생존+재개 거부→해제 후 허용**
+    - **네트워크 단절+자손(프로세스가 띄운 자식·손자 프로세스) 생존+재개 거부→해제 후 허용**
     - 설치 실패 후 Task/예약/이력/재시도, 외부 효과 job reconcile
     - **renew 성공→정지→host 전환→옛 호출 재개 시 새 외부 쓰기 차단·대조**
     - ① 실패 직전 같은 묶음 claim 거부, 잠금 인계 원자성
@@ -175,7 +177,7 @@ flowchart LR
     - **팀장 CP 판단 job 생성·재요청, 판단 저장 위치 이전과 hash 재대조**
     - CP `splitBasis` 선택/필수와 반영 저장, CP add 선택 필드 저장·상속 재계산
   - 디렉토리: `apps/api/src/planning` · 병렬: ∥ · 담당 / 리뷰: Claude / Codex
-- **M2-08** — 정책·모델·하위 Agent·메시지·이력·변경 이벤트·무결성 점검
+- **M2-08** — 정책·모델·하위 Agent·메시지·이력·변경 이벤트·무결성 점검(저장된 데이터끼리 모순이 없는지 검사)
   - 완료 조건(검증): `W --filter api test -- policy messages changes` (**허용 해제→재판단→재개 이력(D-29)**)
   - 디렉토리: `apps/api/src/{policy,messages,changes}` · 병렬: ∥ · 담당 / 리뷰: Claude / Codex
 - **M2-09** — fake Runner 시나리오 드라이버
@@ -189,7 +191,7 @@ flowchart LR
 - **M3-01** — **로그인 화면 1개(Q-01)**, 로딩 5종·오류 막대·충돌 창·빈 상태·잠금·편집 보호 공통
   - 완료 조건(검증): `W e2e -- states` (§0.3 오류·로딩, **1280·1920 전체·1280 미만 표 컨테이너만 가로 스크롤**)
   - 디렉토리: `apps/web/src/shared` · 병렬: — · 담당 / 리뷰: Claude / Codex
-- **M3-02** — WBS 표·필터 9·레일·Gantt·Wizard·가상 스크롤
+- **M3-02** — WBS 표·필터 9·레일·Gantt(막대로 일정을 보여 주는 차트)·Wizard(여러 단계로 나눠 입력하는 화면)·가상 스크롤(화면에 보이는 행만 그려 긴 목록을 빠르게 보여 주는 기법)
   - 완료 조건(검증): `W e2e -- wbs`
     - 시나리오 1·27
     - 화면 1280·1920 가로 스크롤 없음(목록 영역 약 1,000px), 1280 미만 표 가로 스크롤
@@ -220,24 +222,26 @@ flowchart LR
 
 - **M4-01** — client·outbox·epoch 전환·polling·heartbeat/세션
   - 완료 조건(검증): `R test -- client outbox` (kill -9 후 중복 0)
+    - 용어 풀이: kill -9 = 프로세스를 즉시 강제 종료.
   - 디렉토리: `src/{api,state}` · 병렬: — · 담당 / 리뷰: Codex / Claude
 - **M4-02** — host·readiness·usage·models·concurrency 조절
   - 완료 조건(검증): `R test -- resources`
   - 디렉토리: `src/{resources,readiness}` · 병렬: ∥ · 담당 / 리뷰: Claude / Codex
-- **M4-03** — git 안전 계층: clone·worktree·입력 읽기 전용·보호 경로·초기화 정리
+- **M4-03** — git 안전 계층: clone(원격 저장소를 통째로 복사해 오는 것)·worktree·입력 읽기 전용·보호 경로·초기화 정리
   - 완료 조건(검증): `R test -- git` (로컬 bare 저장소, symlink·submodule·rename 공격)
+    - 용어 풀이: bare 저장소 = 작업 폴더 없이 git 기록만 가진 저장소; submodule = 저장소 안에 다른 저장소를 끼워 넣은 것.
   - 디렉토리: `src/git` · 병렬: ∥ · 담당 / 리뷰: Codex / Claude
 - **M4-04** — GitHub 어댑터(확인·PR·status·병합·봉인 자격 증명) + fake
   - 완료 조건(검증): `R test -- github`
   - 디렉토리: `src/github` · 병렬: ∥ · 담당 / 리뷰: Claude / Codex
 - **M4-05** — Codex·Claude 최신 확인·유휴 적용·실패 보존·미검증 전환(architecture §5.1)
   - 완료 조건(검증): `R test -- cli-update`
-    - fake registry: 세션/보유 있으면 보류, 확인↔claim 경합
-    - 다운로드·점검 실패·교체 중 crash, 전역 설치 불변, 하향 0
+    - fake registry(패키지를 내려받는 저장소 서버): 세션/보유 있으면 보류, 확인↔claim 경합
+    - 다운로드·점검 실패·교체 중 crash(프로세스가 갑자기 비정상 종료되는 것), 전역 설치 불변, 하향 0
     - **과거 host 보유 존재+현재 host 유휴면 적용**
   - 디렉토리: `src/cli-update` · 병렬: M4-01·02 후 · 담당 / 리뷰: Codex / Claude
 - **M4-06** — 시험 저장소에서 보호 규칙·병합 API·시스템 커밋·자격 증명 폐기 실증(Agent 호출 없음)
-  - 완료 조건(검증): 실환경 기록: head 변경 409, main 이동 거부, int 없는 병합 거부, Runner 우회 불가, CODEOWNERS, 병합 tree=H' tree, 폐기 토큰 401
+  - 완료 조건(검증): 실환경 기록: head 변경 409, main 이동 거부, int 없는 병합 거부, Runner 우회 불가, CODEOWNERS, 병합 tree(커밋 시점의 파일 전체 내용)=H' tree, 폐기 토큰 401
   - 디렉토리: `agent-runner/src/github` 검증 스크립트 · 병렬: M4-04·Q-09 후 · 담당 / 리뷰: Codex / Claude
 
 ### M5 — 실행 · Planning
@@ -248,12 +252,12 @@ flowchart LR
 - **M5-02** — 세션 실행·하위 Agent 설치·예산·resume·중단
   - 완료 조건(검증): `R test -- exec`
     - 자손 남김·강제 종료·스트림 단절·Runner 재시작 대조·설치 실패·정의 hash/버전 불일치
-    - **생성→로컬 기록→/process→exec 각 경계의 Runner kill: 실제 명령 미실행·잔여 0·재시작 정리, pgid 재사용 프로세스 미종료, launch 기록 유실→unconfirmed**
+    - **생성→로컬 기록→/process→exec(대기 프로그램을 실제 명령으로 바꿔 실행) 각 경계의 Runner kill: 실제 명령 미실행·잔여 0·재시작 정리, pgid 재사용 프로세스 미종료, launch 기록 유실→unconfirmed**
   - 디렉토리: `src/exec` · 병렬: — · 담당 / 리뷰: Codex / Claude
 - **M5-03** — 프로세스 그룹/cgroup 실증과 관측 등급 기록
   - 완료 조건(검증): `R test:host -- cgroup` 결과를 `docs/plan/` 검증 기록에 남김
   - 디렉토리: `src/exec` · 병렬: M5-02 후 · 담당 / 리뷰: Codex / Claude
-- **M5-04** — 초기 분석·차이 분석·추정·분할 orchestration
+- **M5-04** — 초기 분석·차이 분석·추정·분할 orchestration(여러 단계를 차례로 엮어 실행)
   - 완료 조건(검증): `R test -- planning` (단계 실패 후 재개, 초안 스키마, `judgedRules`·`splitJudgements` 두 Agent 합의 출력)
   - 디렉토리: `src/planning` · 병렬: ∥ · 담당 / 리뷰: Claude / Codex
 - **M5-05** — 시도 흐름 결합: claim→①(자리표시)→QA→재작업→Gate **대기까지**, 메시지
@@ -266,23 +270,25 @@ flowchart LR
 
 ### M6 — 보고서 · 알림 · 설계
 
-- **M6-01** — 스냅샷·스케줄·누락 보충·기간 지정·화면
+- **M6-01** — 스냅샷(어느 순간의 데이터를 그대로 찍어 둔 것)·스케줄·누락 보충·기간 지정·화면
   - 완료 조건(검증): `W test:scenario -- reports`
     - 16, 자정 KST 경계, 중복 0
     - **§4.0 보고서 fixture 12섹션 필드**
     - int/ext 숫자 동일, ext 내부 용어 0건
   - 디렉토리: `apps/api/src/reports`, `features/report` · 병렬: ∥ · 담당 / 리뷰: Claude / Codex
-- **M6-02** — Playwright PDF·폰트·캐시
+- **M6-02** — Playwright(브라우저를 자동 조작하는 테스트 도구) PDF(인쇄용 문서 파일 형식)·폰트·캐시
   - 완료 조건(검증): `W test:scenario -- pdf` (12섹션 필수 값 텍스트 추출, 부록 새 페이지, A4, 폰트 embed, 생성 중 초기화)
+    - 용어 풀이: A4 = 국제 표준 종이 크기; 폰트 embed = PDF 안에 글꼴을 함께 넣는 것.
   - 디렉토리: `apps/api/src/pdf` · 병렬: M6-01 후 · 담당 / 리뷰: Claude / Codex
-- **M6-03** — 메일 큐·HTML·SMTP 설정·화면
+- **M6-03** — 메일 큐·HTML(웹 페이지를 만드는 문서 형식)·SMTP 설정·화면
   - 완료 조건(검증): `W test:scenario -- mail`
     - 로컬 fake SMTP, 25
-    - 요약 본문·table/inline/640px·text/plain·보고용 용어 0건
+    - 요약 본문·table/inline/640px·text/plain(서식 없는 글자만 있는 메일 본문 형식)·보고용 용어 0건
     - **수락 직후 crash→unknown·자동 재발송 0**, 초기화 경합
   - 디렉토리: `apps/api/src/mail`, `features/settings/report` · 병렬: M6-01 후 · 담당 / 리뷰: Claude / Codex
-- **M6-04** — Telegram 설정·outbox·전이 알림·화면
+- **M6-04** — Telegram(메신저. 알림을 봇으로 보낸다) 설정·outbox·전이 알림·화면
   - 완료 조건(검증): `W test:scenario -- telegram` (fake Bot API, 33~36, 토큰 grep 0건, 수락 직후 crash의 중복 가능 이력, Task 상태 불변)
+    - 용어 풀이: grep = 파일에서 문자열을 찾는 명령.
   - 디렉토리: `apps/api/src/notify`, `features/settings/notify` · 병렬: ∥ · 담당 / 리뷰: Codex / Claude
 - **M6-05** — 설계 원장 서버(해석 결과 저장·호환 판정·결정·버전)
   - 완료 조건(검증): `W --filter api test -- design`
@@ -341,7 +347,7 @@ flowchart LR
 - **M8-05** — 실 GitHub 저장소로 등록→분석→Task 1건→병합→초기화
   - 완료 조건(검증): 실환경 증거. **보호 규칙 적용 확인**(미검증 직접 병합 거부, 우회 커밋 종류 제한, CODEOWNERS) — M4-06 결과 재확인
   - 디렉토리: 양쪽 · 병렬: Q-08·Q-09 gate 후(시험 저장소, owner Q-10) · 담당 / 리뷰: Claude / Codex
-- **M8-06** — 운영 이미지·systemd·백업/복원·실 SMTP/Telegram
+- **M8-06** — 운영 이미지·systemd(리눅스에서 서비스를 띄우고 관리하는 프로그램)·백업/복원·실 SMTP/Telegram
   - 완료 조건(검증): `docker compose … config`, 복원 리허설, 실환경 기록
   - 디렉토리: 양쪽 · 병렬: Q-13·Q-15·Q-16 gate 후 · 담당 / 리뷰: Claude / Codex
 
@@ -449,7 +455,7 @@ G§4.11 L381-392의 각 번호가 값과 빈 상태를 모두 가진다. (빈 �
 
 **보고용(외부용) 보고서**
 
-- 보고용은 G L396 구성만 포함하고 Task ID·시도·모델/Effort·토큰·RP를 제외하며, 숫자는 같은 스냅샷에서 온다.
+- 보고용은 G L396 구성만 포함하고 Task ID·시도·모델/Effort·토큰·RP(재조정 기록 ID)를 제외하며, 숫자는 같은 스냅샷에서 온다.
 - 왜 같은 스냅샷인가: 내부용과 보고용의 숫자가 다르면 어느 쪽을 믿어야 할지 모른다.
 
 ### 4.1 §10 Mock 교체
