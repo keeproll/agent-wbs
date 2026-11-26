@@ -44,14 +44,19 @@ export function ReworkEditor({ projectId, taskKey, agent, attemptId, updatedAt, 
   const trimmed = body.trim();
   const dirty = trimmed !== '';
   const { guard } = useEditGuard(dirty);
-  const { restoreOffer } = useSessionDraft({
-    id: `exec:${taskKey}:rework`, label: `${taskKey} 재작업 지시`, value: dirty ? { body } : null,
-    onRestore: (data) => { setBody(data.body); },
+  // 세션 만료에 대비해 지시와 함께 「이 지시로 이미 만든·보낸 메시지」도 보관한다(재리뷰 P2).
+  // 복원하면 그것도 되살려, 다시 눌렀을 때 같은 지시를 또 만들지 않고 남은 단계(전송·실행 요청)만 보낸다.
+  const { restoreOffer } = useSessionDraft<{ body: string; sent?: { body: string; message: CreatedMessage } | null }>({
+    id: `exec:${taskKey}:rework`, label: `${taskKey} 재작업 지시`, value: dirty ? { body, sent } : null,
+    onRestore: (data) => {
+      setBody(data.body);
+      if (data.sent) { sentRef.current = data.sent; setSent(data.sent); }
+    },
   });
   const sentFor = (text: string) => (sentRef.current?.body === text ? sentRef.current.message : null);
 
-  const latestVersion = async () => {
-    const list = await client.call('listTasks', { params: { projectId } });
+  const latestVersion = async (signal?: AbortSignal) => {
+    const list = await client.call('listTasks', { params: { projectId }, ...(signal ? { signal } : {}) });
     const task = list.tasks.find((t) => t.taskKey === taskKey);
     if (!task) throw new Error(`${taskKey}를 찾을 수 없습니다.`);
     return task.updatedAt;
@@ -79,10 +84,12 @@ export function ReworkEditor({ projectId, taskKey, agent, attemptId, updatedAt, 
     },
     successNotice: '재작업 지시를 보내고 재작업 실행을 요청했습니다.',
     onRejected: () => { void invalidateTopics(queryClient, EXEC_TOPICS); },
-    onConflictReload: async () => {
-      await latestVersion();
+    // 창을 닫으면(Esc) signal이 취소된다. 그 뒤 늦게 온 결과로 편집기를 닫지 않는다(M3-01 79c2cc1, 재리뷰 P1).
+    onConflictReload: async ({ signal }) => {
+      await latestVersion(signal);
+      if (signal.aborted) return;
       await invalidateTopics(queryClient, EXEC_TOPICS);
-      onClose();
+      if (!signal.aborted) onClose();
     },
     // 최신 버전으로 같은 내용을 만든다. 이미 보낸 지시는 created로 넘겨 다시 만들지 않는다.
     reapplyRequest: async () => ({ body: trimmed, updatedAt: await latestVersion(), created: sentFor(trimmed) }),

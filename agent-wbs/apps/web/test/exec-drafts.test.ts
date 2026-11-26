@@ -36,3 +36,35 @@ describe('Task별 메시지 초안(UAT-MSG-01, P draftOf L5399)', () => {
     expect(n).toBe(1);
   });
 });
+
+describe('이미 만든·보낸 메시지 기억(재리뷰 P2: 세션 만료 복원 뒤 중복 생성 방지)', () => {
+  const d = { type: '추가 지시', toAgent: 'Claude', body: '지시', attemptId: null } as const;
+  const msg = { id: 'm1', msgKey: 'MSG-001', sent: false };
+  it('같은 내용일 때만 만든 메시지를 돌려준다', () => {
+    const s = createDraftStore();
+    s.set('T', d);
+    s.setCreated('T', d, msg);
+    expect(s.createdFor('T', d)).toEqual(msg);
+    expect(s.createdFor('T', { ...d, body: '다른 지시' })).toBeNull();
+  });
+  it('세션 보관 내용(sessionData)에 만든 메시지를 함께 담고, 복원(restore)하면 되살린다', () => {
+    const s = createDraftStore();
+    s.set('T', d);
+    s.setCreated('T', d, msg);
+    const saved = JSON.parse(JSON.stringify(s.sessionData('T', 'Claude'))) as unknown;
+    const t = createDraftStore();
+    t.restore('T', saved);
+    expect(t.get('T', 'Claude')).toEqual(d);
+    expect(t.createdFor('T', d)).toEqual(msg);
+  });
+  it('보낸 뒤 본문을 비우거나 로그아웃하면 잊는다', () => {
+    const s = createDraftStore();
+    s.set('T', d);
+    s.setCreated('T', d, msg);
+    s.clearBody('T');
+    expect(s.createdFor('T', d)).toBeNull();
+    s.setCreated('T', d, msg);
+    s.clearAll();
+    expect(s.createdFor('T', d)).toBeNull();
+  });
+});

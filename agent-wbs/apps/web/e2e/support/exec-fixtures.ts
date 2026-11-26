@@ -158,6 +158,7 @@ export async function execApi(page: Page, state: ExecState = demoState()): Promi
   api.on('GET /api/projects/p1/tasks', (route) => json(route, 200, { nodes: [], tasks: state.tasks }));
   api.on('GET /api/runner-state', (route) => json(route, 200, state.runner));
   api.on('GET /api/alerts', (route) => json(route, 200, { items: state.alerts }));
+  api.on('GET /api/evidence', (route) => json(route, 200, { items: [], nextCursor: null }));
   api.on('GET /api/settings/workflow', (route) => json(route, 200, {
     devAgent: 'Claude', qaAgent: 'Codex', liveInject: state.liveInject, heartbeatSeconds: 30, missedHeartbeats: 3, updatedAt: null,
   }));

@@ -99,6 +99,11 @@ owner Q-04(contracts §3.5)에 따라 원본과 다르게 동작한다.
 - 이미 만든(보낸) 메시지는 기억해 두고 다시 만들지 않는다(`sendMessage.ts`의 `created`, 리뷰 #2).
   - 예: 지시는 보냈는데 재작업 실행 요청만 409 충돌이면, 「다시 적용」은 실행 요청만 최신 버전으로 다시 보낸다. 충돌 창에 「지시 MSG-…는 이미 보냈습니다」가 보인다.
   - 왜: 「다시 적용」은 새 멱등 키를 쓴다. 만들기부터 다시 하면 같은 지시가 Runner에 두 번 간다.
+- 세션 만료(401) 보관에도 「이 내용으로 이미 만든·보낸 메시지」를 함께 넣는다(재리뷰 P2).
+  - 재작업 지시는 useSessionDraft 값에 `sent`를, 메시지 작성은 Task별 저장소의 `created`를 함께 보관한다.
+  - 복원 뒤 다시 누르면 남은 단계(전송·실행 요청)만 보낸다. 예: 지시 전송 뒤 실행 요청만 401이었으면, 복원 뒤에는 실행 요청만 간다.
+  - 내용을 바꾸면 새 메시지로 본다(기억한 메시지는 같은 내용일 때만 쓴다).
+- 충돌 창 「최신 내용 불러오기」 중에 창을 닫으면(Esc) 받은 `signal`로 조회를 취소하고, 늦게 온 결과로 편집기를 닫거나 캐시를 바꾸지 않는다(M3-01 79c2cc1 규칙, 재리뷰 P1).
 
 ### 메시지 초안
 
@@ -115,7 +120,7 @@ owner Q-04(contracts §3.5)에 따라 원본과 다르게 동작한다.
 | 명령 | 내용 |
 |---|---|
 | `W test` | `test/exec-model.test.ts`(단계 · 6단계 · 카운터 · 사유 · 다음 작업 · 전달 상태), `test/exec-drafts.test.ts` |
-| `W e2e -- exec` | **M3-06 완료 조건.** `e2e/exec.spec.ts`(가짜 Runner 보고), `e2e/exec-review.spec.ts`(독립 리뷰 지적 재현), `e2e/exec-visual.spec.ts`(시각 비교). `api-exec`는 환경이 없으면 건너뛴다 |
+| `W e2e -- exec` | **M3-06 완료 조건.** `e2e/exec.spec.ts`(가짜 Runner 보고), `e2e/exec-review.spec.ts`(독립 리뷰 지적 재현), `e2e/exec-rereview.spec.ts`(재리뷰 P1·P2 재현), `e2e/exec-visual.spec.ts`(시각 비교). `api-exec`는 환경이 없으면 건너뛴다 |
 | `W --filter @awbs/web e2e:api-exec` | 실제 API · 전용 DB(demo seed)로 핵심 흐름(`e2e/api-exec.spec.ts`). 끝나면 컨테이너를 지운다 |
 
 - 가짜 Runner fixture는 `e2e/support/exec-fixtures.ts`다. 원본 Mock(TASK-0001·0004·0005·0006·0007·0008)과 같은 값이라 원본 스크린샷과 비교할 수 있다.

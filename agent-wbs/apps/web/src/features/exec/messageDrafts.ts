@@ -29,8 +29,20 @@ export interface MessageDraft {
 
 export const emptyDraft = (agent: Agent): MessageDraft => ({ type: '추가 지시', toAgent: agent, body: '', attemptId: null });
 
+/** 서버에 이미 만든(sent면 보낸) 메시지. sendMessage.ts의 CreatedMessage와 같은 모양. */
+export interface CreatedRef { id: string; msgKey: string; sent: boolean }
+/** 세션 만료 보관함에 넣는 내용: 초안 + 이 초안으로 이미 만든 메시지(재리뷰 P2) */
+export interface DraftSession extends MessageDraft { created?: { content: string; message: CreatedRef } | null }
+
+const contentOf = (d: MessageDraft) => JSON.stringify([d.type, d.toAgent, d.body.trim(), d.attemptId]);
+
 export function createDraftStore() {
   let drafts = new Map<string, MessageDraft>();
+  /**
+   * Task별 「이 내용으로 이미 만든 메시지」. 화면을 다시 열거나 세션 만료 뒤 복원해도 같은 메시지를 다시 만들지 않게 한다.
+   * 왜: 만들기·전송은 따로 끝난다. 만든 뒤 401로 끊기고 복원해 다시 누르면 새 키로 같은 메시지가 또 생긴다(재리뷰 P2).
+   */
+  let created = new Map<string, { content: string; message: CreatedRef }>();
   const listeners = new Set<() => void>();
   const emit = () => { for (const l of listeners) l(); };
   return {
@@ -39,9 +51,29 @@ export function createDraftStore() {
     set: (taskKey: string, draft: MessageDraft) => { drafts = new Map(drafts).set(taskKey, draft); emit(); },
     clearBody: (taskKey: string) => {
       const d = drafts.get(taskKey);
+      created = new Map(created);
+      created.delete(taskKey);
       if (d) { drafts = new Map(drafts).set(taskKey, { ...d, body: '' }); emit(); }
     },
-    clearAll: () => { drafts = new Map(); emit(); },
+    clearAll: () => { drafts = new Map(); created = new Map(); emit(); },
+    /** 이 내용으로 만든 메시지를 기억한다. */
+    setCreated: (taskKey: string, draft: MessageDraft, message: CreatedRef) => {
+      created = new Map(created).set(taskKey, { content: contentOf(draft), message });
+    },
+    /** 지금 내용과 같은 내용으로 만든 메시지. 내용이 다르면 null(새 메시지). */
+    createdFor: (taskKey: string, draft: MessageDraft): CreatedRef | null => {
+      const c = created.get(taskKey);
+      return c && c.content === contentOf(draft) ? c.message : null;
+    },
+    /** 세션 만료 때 보관할 내용 */
+    sessionData: (taskKey: string, agent: Agent): DraftSession => ({ ...(drafts.get(taskKey) ?? emptyDraft(agent)), created: created.get(taskKey) ?? null }),
+    /** 보관했던 내용을 되살린다(복원). */
+    restore: (taskKey: string, data: unknown) => {
+      const { created: c, ...draft } = data as DraftSession;
+      if (c) created = new Map(created).set(taskKey, c);
+      drafts = new Map(drafts).set(taskKey, draft);
+      emit();
+    },
     subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     snapshot: () => drafts,
   };
@@ -77,7 +109,7 @@ export function installDraftProtection(store = messageDrafts): void {
       live.add(taskKey);
       if (registered.has(taskKey)) continue;
       registered.set(taskKey, registerDraft(draftSessionId(taskKey), () => ({
-        label: `${taskKey} 메시지 작성`, path: `/exec/${encodeURIComponent(taskKey)}`, data: store.get(taskKey, 'Claude'),
+        label: `${taskKey} 메시지 작성`, path: `/exec/${encodeURIComponent(taskKey)}`, data: store.sessionData(taskKey, 'Claude'),
       })));
     }
     for (const [taskKey, off] of registered) if (!live.has(taskKey)) { off(); registered.delete(taskKey); }

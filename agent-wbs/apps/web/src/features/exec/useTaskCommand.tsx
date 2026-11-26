@@ -39,8 +39,10 @@ export function useTaskCommand(projectId: string, taskKey: string, updatedAt: st
   const label = queued?.command.label ?? '실행 요청';
 
   /** Task 버전을 서버에서 새로 읽는다(캐시 아님). 목록 캐시도 최신으로 바꾼다. */
-  const latestVersion = async () => {
-    const list = await client.call('listTasks', { params: { projectId } });
+  const latestVersion = async (signal?: AbortSignal) => {
+    const list = await client.call('listTasks', { params: { projectId }, ...(signal ? { signal } : {}) });
+    // 창을 닫아 취소된 조회는 캐시에 넣지 않는다.
+    signal?.throwIfAborted();
     queryClient.setQueryData(apiKey('listTasks', { params: { projectId } }), list);
     const task = list.tasks.find((t) => t.taskKey === taskKey);
     if (!task) throw new Error(`${taskKey}를 찾을 수 없습니다.`);
@@ -77,8 +79,9 @@ export function useTaskCommand(projectId: string, taskKey: string, updatedAt: st
     ...(queued ? { successNotice: NOTICE[queued.command.op] } : {}),
     onSuccess: () => { void invalidateTopics(queryClient, EXEC_TOPICS); },
     onRejected: () => { void invalidateTopics(queryClient, EXEC_TOPICS); },
-    onConflictReload: async () => {
-      await latestVersion();
+    // 창을 닫으면(Esc) signal이 취소된다. 취소된 조회 결과는 화면에 적용하지 않는다(M3-01 79c2cc1).
+    onConflictReload: async ({ signal }) => {
+      await latestVersion(signal);
       await invalidateTopics(queryClient, EXEC_TOPICS);
     },
     // 다시 적용(M3-04 공통 reapplyRequest): 같은 명령을 최신 Task·시도 버전으로 만든다. 보내기는 useSave가 run으로 한다.

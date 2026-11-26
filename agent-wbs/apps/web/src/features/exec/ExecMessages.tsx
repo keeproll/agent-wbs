@@ -9,7 +9,7 @@
  * - 작성 초안은 Task별로 보관한다(messageDrafts.ts). 다른 Task로 옮겨도 남는다.
  */
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { useApi } from '../../shared/api/ApiProvider.tsx';
 import { invalidateTopics } from '../../shared/api/queries.ts';
@@ -18,7 +18,7 @@ import { useSave } from '../../shared/state/useSave.tsx';
 import { useSessionDraft } from '../../shared/state/useSessionDraft.tsx';
 import { BusyButton } from '../../shared/ui/BusyButton.tsx';
 import { useConfirm } from '../../shared/ui/feedback.tsx';
-import { AGENTS, draftSessionId, MESSAGE_TYPES, messageDrafts, useMessageDraft, type Agent, type MessageDraft } from './messageDrafts.ts';
+import { AGENTS, draftSessionId, MESSAGE_TYPES, messageDrafts, useMessageDraft, type Agent, type DraftSession, type MessageDraft } from './messageDrafts.ts';
 import { deliveryView, type ExecAttempt, type ExecMessage } from './model.ts';
 import { AreaError } from './AreaError.tsx';
 import { latestMessage, sendMessage, type CreatedMessage } from './sendMessage.ts';
@@ -104,7 +104,7 @@ function MessageItem({ m, from, to, attemptKey }: { m: ExecMessage; from: string
     ...(action === 'read' ? {} : { successNotice: action === 'cancel' ? '전송을 취소했습니다. 전달 대상에서 빠졌습니다.' : '다시 전달 대기열에 넣었습니다.' }),
     onRejected: () => { void refresh(); },
     // 서버에서 실제로 읽은 뒤에 끝낸다(M3-04 공통: 실패를 성공 안내로 숨기지 않음).
-    onConflictReload: async () => { await latestMessage(client, m.taskKey, m.id); await refresh(); },
+    onConflictReload: async ({ signal }) => { await latestMessage(client, m.taskKey, m.id, signal); if (!signal.aborted) await refresh(); },
     // 다시 적용(공통 reapplyRequest): 같은 동작을 그 메시지의 최신 버전으로 만든다.
     reapplyRequest: async () => ({ updatedAt: (await latestMessage(client, m.taskKey, m.id)).updatedAt, action }),
   });
@@ -172,15 +172,15 @@ function Composer({ taskKey, defaultAgent, attempts, scopeAttempt, runningWarn, 
   }, []);
   // 새로고침 보호와 세션 만료 보관은 Task별 초안 저장소 전체를 기준으로 한다(messageDrafts.ts의 useDraftProtection, 리뷰 #6).
   // 여기서는 다시 로그인했을 때의 복원 제안만 받는다(value는 null — 등록은 저장소가 한다).
-  const { restoreOffer } = useSessionDraft<MessageDraft>({
+  // 복원하면 초안과 「이 초안으로 이미 만든 메시지」를 함께 되살린다. 그래서 복원 뒤 전송은 같은 메시지를 다시 만들지 않는다(재리뷰 P2).
+  const { restoreOffer } = useSessionDraft<DraftSession>({
     id: draftSessionId(taskKey), label: `${taskKey} 메시지 작성`, value: null,
-    onRestore: (data) => { messageDrafts.set(taskKey, data); },
+    onRestore: (data) => { messageDrafts.restore(taskKey, data); },
   });
-  /** 이 내용으로 이미 만든 메시지. 전송만 실패했으면 다시 만들지 않는다(리뷰 #2와 같은 이유). */
-  const created = useRef<{ draft: MessageDraft; message: CreatedMessage } | null>(null);
+  /** 이 내용으로 이미 만든 메시지(저장소에 Task별로 기억). 전송만 실패했으면 다시 만들지 않는다(리뷰 #2와 같은 이유). */
   const request = (): Payload => {
     const d = { ...draft, body: draft.body.trim() };
-    return { draft: d, created: created.current && JSON.stringify(created.current.draft) === JSON.stringify(d) ? created.current.message : null };
+    return { draft: d, created: messageDrafts.createdFor(taskKey, d) };
   };
   const { save, busy, conflictModal } = useSave<unknown, Payload>({
     target: `${taskKey} 메시지 전송`,
@@ -189,18 +189,20 @@ function Composer({ taskKey, defaultAgent, attempts, scopeAttempt, runningWarn, 
     request,
     run: ({ payload, idempotencyKey }) => sendMessage({
       client, taskKey, draft: payload.draft, idempotencyKey, created: payload.created,
-      onCreated: (message) => { created.current = { draft: payload.draft, message }; },
+      onCreated: (message) => { messageDrafts.setCreated(taskKey, payload.draft, message); },
     }),
     onSuccess: (_r, payload) => {
       void invalidateTopics(queryClient, ['message']);
-      created.current = null;
       // 다시 시도 사이에 더 고친 초안은 지우지 않는다.
       if (messageDrafts.get(taskKey, defaultAgent).body.trim() === payload.draft.body) messageDrafts.clearBody(taskKey);
     },
     successNotice: '메시지를 전달 대기열에 넣었습니다.',
     onRejected: () => { void invalidateTopics(queryClient, ['message']); },
-    onConflictReload: async () => {
-      if (created.current) await latestMessage(client, taskKey, created.current.message.id);
+    // 창을 닫으면(Esc) signal이 취소된다. 취소된 조회 결과는 화면에 적용하지 않는다(M3-01 79c2cc1).
+    onConflictReload: async ({ signal }) => {
+      const sent = messageDrafts.createdFor(taskKey, { ...draft, body: draft.body.trim() });
+      if (sent) await latestMessage(client, taskKey, sent.id, signal);
+      if (signal.aborted) return;
       await invalidateTopics(queryClient, ['message']);
     },
     // 다시 적용(공통 reapplyRequest): 같은 초안. 이미 만든 메시지는 전송만 이어 간다.

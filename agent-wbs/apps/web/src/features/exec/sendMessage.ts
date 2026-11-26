@@ -25,10 +25,10 @@ export interface SendInput {
 }
 
 /** 서버에서 그 메시지의 최신 상태를 읽는다(전송에 필요한 updatedAt). */
-export async function latestMessage(client: ApiClient, taskKey: string, id: string): Promise<ExecMessage> {
+export async function latestMessage(client: ApiClient, taskKey: string, id: string, signal?: AbortSignal): Promise<ExecMessage> {
   let cursor: string | undefined;
   for (;;) {
-    const page = await client.call('getTaskMessages', { params: { taskKey }, query: { limit: 200, ...(cursor ? { cursor } : {}) } });
+    const page = await client.call('getTaskMessages', { params: { taskKey }, query: { limit: 200, ...(cursor ? { cursor } : {}) }, ...(signal ? { signal } : {}) });
     const found = page.items.find((m) => m.id === id);
     if (found) return found;
     if (!page.nextCursor) throw new Error('보낸 메시지를 찾을 수 없습니다.');
