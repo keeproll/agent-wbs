@@ -506,6 +506,13 @@ export const ExecPolicy = {
   notifyAt: c.Count,
 };
 /** data-model ci_settings */
+/** 모델 순서 설정(owner 2026-11-26 아이템 8). 목록은 아래 등급부터, 같은 모델을 두 번 쓰지 않는다. */
+const ModelIds = (min = 0) => List(Type.String({ minLength: 1 }), { uniqueItems: true, minItems: min });
+export const ModelRankOrder = c.Body({ Claude: ModelIds(), Codex: ModelIds() });
+/** Codex 같은 세대 안 계열 순서(아래부터) */
+export const CodexFamilyOrder = ModelIds(1);
+/** Runner가 보고할 Claude 모델(초기값=Q-06 승인표) */
+export const ClaudeModels = ModelIds(1);
 export const CiSettings = { nightAt: c.ClockTime, retry: c.Count, deployUrl: Nullable(c.HttpUrl) };
 
 /* ---- 설계 ---- */
@@ -910,7 +917,7 @@ export const Dashboard = Type.Object(
 /** unknown은 heartbeat 누락 때 서버가 기록한다. */
 const EndReason = AnyOf('reboot', 'power_off', 'error', 'manual', 'unknown');
 /** P conc L4118, integrity L4373, G§6.6·§6.7 */
-const ObservationGrade = AnyOf('verified', 'partial', 'unverified');
+export const ObservationGrade = AnyOf('verified', 'partial', 'unverified');
 export const RunnerState = Type.Object(
   {
     connection: obj({

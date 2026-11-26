@@ -81,7 +81,6 @@
     {
      "id": "gpt-5.5",
      "label": "5.5",
-     "rank": 1,
      "efforts": [
       "low",
       "medium",
@@ -92,7 +91,6 @@
     {
      "id": "gpt-6-sol",
      "label": "6 sol",
-     "rank": 2,
      "efforts": [
       "low",
       "medium",
@@ -105,7 +103,6 @@
     {
      "id": "hidden",
      "label": "hidden",
-     "rank": 3,
      "efforts": null
     }
    ]
@@ -580,17 +577,35 @@
    "ok": true,
    "account": "lead",
    "scopes": {
-    "contents": true,
-    "pulls": true,
-    "statuses": true,
-    "metadata": true
+    "contents": "unverified",
+    "pulls": "unverified",
+    "statuses": "unverified",
+    "metadata": "verified"
    },
-   "expiresAt": "2026-11-25T01:02:03.123456Z"
+   "expiresAt": "2026-11-25T01:02:03.123456Z",
+   "warning": "쓰기 권한 미확인 — 첫 쓰기에서 확인한다(M4-06 실증 항목)"
   },
   "status": 204
  },
  {
+  "id": "registerGithubKey",
+  "body": {
+   "runnerId": "runner-1",
+   "hostId": "host-1",
+   "bootId": "boot-1",
+   "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VuAyEAB6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9/AsrhtHHw=\n-----END PUBLIC KEY-----\n",
+   "sealedVersion": 1
+  },
+  "status": 200,
+  "response": {
+   "keyId": "5f1c0d6b8e1a"
+  }
+ },
+ {
   "id": "getGithubCredential",
+  "query": {
+   "keyId": "5f1c0d6b8e1a"
+  },
   "status": 200,
   "response": {
    "sealed": "c2VhbGVk"
@@ -617,7 +632,22 @@
     "nightAt": "02:00",
     "retry": 1,
     "deployUrl": null
-   }
+   },
+   "claudeModels": [
+    "claude-haiku-5-5",
+    "claude-sonnet-5-5",
+    "claude-opus-5-5",
+    "claude-fable-5-2"
+   ],
+   "cliGrades": [
+    {
+     "agent": "Codex",
+     "version": "0.172.0",
+     "model": "gpt-6.1-sol",
+     "options": "exec --json",
+     "grade": "partial"
+    }
+   ]
   }
  },
  {

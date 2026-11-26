@@ -230,6 +230,8 @@ export type ErrorResponse = {
 
 export type GithubMode = "gh" | "token";
 
+export type GithubPermission = "verified" | "unverified" | "missing";
+
 export type Id = string;
 
 export type JudgedContent = {
@@ -829,7 +831,7 @@ export interface Operations {
       204: undefined;
     };
   };
-  /** 사용 가능 모델·Effort 보고(신규는 미허용) */
+  /** 사용 가능 모델·Effort 보고(신규는 미허용, 순서는 서버 설정) */
   reportModels: {
     request: {
       body: {
@@ -837,7 +839,6 @@ export interface Operations {
         models: ({
           id: string;
           label: string;
-          rank: number;
           efforts: (string)[] | null;
         })[];
       };
@@ -1393,7 +1394,7 @@ export interface Operations {
       204: undefined;
     };
   };
-  /** GitHub 인증 방식·계정·권한·만료(비밀값 없음) */
+  /** GitHub 인증 방식·계정·권한 3상태·만료(비밀값 없음). 첫 쓰기 403이면 missing으로 다시 보고 */
   reportGithubStatus: {
     request: {
       body: {
@@ -1401,12 +1402,13 @@ export interface Operations {
         ok: boolean;
         account: string | null;
         scopes: {
-          contents: boolean;
-          pulls: boolean;
-          statuses: boolean;
-          metadata: boolean;
+          contents: GithubPermission;
+          pulls: GithubPermission;
+          statuses: GithubPermission;
+          metadata: GithubPermission;
         } | null;
         expiresAt: Timestamp | null;
+        warning?: string;
         error?: string;
       };
       epoch: number;
@@ -1416,9 +1418,31 @@ export interface Operations {
       204: undefined;
     };
   };
-  /** 토큰 방식: Runner 공개키로 봉인한 값(평문 없음) */
+  /** 봉인용 Runner 공개키 등록(프로세스 시작마다). keyId는 서버가 공개키 SHA-256 지문으로 계산 */
+  registerGithubKey: {
+    request: {
+      body: {
+        runnerId: string;
+        hostId: string;
+        bootId: string;
+        publicKeyPem: string;
+        sealedVersion: 1;
+      };
+      epoch: number;
+      idempotencyKey: string;
+    };
+    responses: {
+      200: {
+        keyId: string;
+      };
+    };
+  };
+  /** 토큰 방식: 그 Runner에 등록된 keyId의 공개키로 봉인한 값(평문 없음, 봉인 형식 v1). 모르는 keyId는 404 */
   getGithubCredential: {
     request: {
+      query: {
+        keyId: string;
+      };
       epoch: number;
     };
     responses: {
@@ -1427,7 +1451,7 @@ export interface Operations {
       };
     };
   };
-  /** 상한·예산·주기·CI 설정 묶음 */
+  /** 상한·예산·주기·CI 설정·Claude 모델 목록·CLI 관측 등급 묶음 */
   getRunnerPolicy: {
     request: {
       epoch: number;
@@ -1453,6 +1477,14 @@ export interface Operations {
           retry: number;
           deployUrl: string | null;
         };
+        claudeModels: (string)[];
+        cliGrades: ({
+          agent: Agent;
+          version: string;
+          model: string;
+          options: string;
+          grade: "verified" | "partial" | "unverified";
+        })[];
       };
       304: undefined;
     };
@@ -2213,6 +2245,7 @@ export const OPERATIONS = {
   reportMergeQueue: { method: 'POST', path: '/api/runner/ci/queue', content: 'json', statuses: { 204: false } },
   reportDesignSnapshot: { method: 'POST', path: '/api/runner/design/snapshot', content: 'json', statuses: { 204: false } },
   reportGithubStatus: { method: 'POST', path: '/api/runner/github/status', content: 'json', statuses: { 204: false } },
+  registerGithubKey: { method: 'POST', path: '/api/runner/github/key', content: 'json', statuses: { 200: true } },
   getGithubCredential: { method: 'GET', path: '/api/runner/github/credential', content: 'none', statuses: { 200: true } },
   getRunnerPolicy: { method: 'GET', path: '/api/runner/policy', content: 'none', statuses: { 200: true, 304: false } },
   getCommands: { method: 'GET', path: '/api/runner/commands', content: 'none', statuses: { 200: true } },

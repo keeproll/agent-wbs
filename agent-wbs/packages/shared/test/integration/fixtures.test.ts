@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { Ajv } from 'ajv';
 import { describe, expect, test } from 'vitest';
 import {
-  AGENTS, canonicalPreview, completionGate, concurrency, DEFAULT_EXEC_POLICY, DEFAULT_SPLIT_SETTINGS, effectiveCaps, heldSubagents,
+  AGENTS, canonicalPreview, DEFAULT_MODEL_SETTINGS, modelRanks, placeModel, completionGate, concurrency, DEFAULT_EXEC_POLICY, DEFAULT_SPLIT_SETTINGS, effectiveCaps, heldSubagents,
   judgementOf, memoryPressure, parallelWidth, proposalJudgementHolds, recommendedCaps, replanDiff, resolveRunGrade, schedule, ScheduleError,
   simulateProposal, validateSplitProposal,
 } from '@awbs/shared';
@@ -144,10 +144,16 @@ describe('변경 제안', () => {
 describe('등급', () => {
   const { body } = fixture('runner', 'reportModels');
   // 보고가 없는 모델(efforts null)은 쓸 수 있는 값이 없다.
+  // rank는 보고값이 아니라 서버 설정 순서에서 계산한다(owner 2026-11-26 아이템 8). 설정에 없는 모델은 규칙대로 끼운다.
+  const reported = body.models as { id: string; efforts: string[] | null }[];
+  const order = reported.reduce<string[]>(
+    (acc, { id }) => placeModel(acc, id, 'Codex', DEFAULT_MODEL_SETTINGS.codexFamilyOrder),
+    [...DEFAULT_MODEL_SETTINGS.rankOrder.Codex],
+  );
+  const ranks = modelRanks(order);
   const catalog: Catalog = {
     agent: body.agent as Catalog['agent'],
-    models: (body.models as { id: string; rank: number; efforts: string[] | null }[]).map(({ id, rank, efforts }) =>
-      ({ modelId: id, rank, allowed: true, efforts: efforts ?? [] })),
+    models: reported.map(({ id, efforts }) => ({ modelId: id, rank: ranks.get(id) ?? 0, allowed: true, efforts: efforts ?? [] })),
   };
   const past = (patch: Partial<PastAttempt> = {}): PastAttempt =>
     ({ kind: 'dev', status: 'completed', modelId: 'gpt-5.5', effort: 'medium', ...patch });

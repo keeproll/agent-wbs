@@ -117,8 +117,15 @@
     {
       "idx": 16,
       "version": "7",
+      "when": 1795687645428,
+      "tag": "0016_20261126_contract_sync",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
       "when": 1795689908823,
-      "tag": "0016_20261126_usage_reset_unknown",
+      "tag": "0026_20261126_usage_reset_unknown",
       "breakpoints": true
     }
   ]

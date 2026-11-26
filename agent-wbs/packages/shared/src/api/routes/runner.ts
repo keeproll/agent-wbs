@@ -256,14 +256,14 @@ export const runnerOperations = [
     id: 'reportModels',
     method: 'POST',
     path: '/api/runner/models',
-    summary: '사용 가능 모델·Effort 보고(신규는 미허용)',
+    summary: '사용 가능 모델·Effort 보고(신규는 미허용, 순서는 서버 설정)',
     body: Body({
       agent: c.Agent,
       models: List(
         Body({
           id: Text,
           label: Text,
-          rank: Type.Integer(),
+          // rank는 보내지 않는다. 모델 순서는 서버 설정값이다(owner 2026-11-26 아이템 8, contracts §3.1).
           // 그 모델이 지원하는 CLI 값(낮은 순). 확인하지 못했으면 null. 공통 단계 매핑은 서버의 승인표가 정한다(Q-06).
           efforts: Nullable(List(Text, { minItems: 1, uniqueItems: true })),
         }),
@@ -608,23 +608,44 @@ export const runnerOperations = [
     id: 'reportGithubStatus',
     method: 'POST',
     path: '/api/runner/github/status',
-    summary: 'GitHub 인증 방식·계정·권한·만료(비밀값 없음)',
+    summary: 'GitHub 인증 방식·계정·권한 3상태·만료(비밀값 없음). 첫 쓰기 403이면 missing으로 다시 보고',
+    // ok는 인증되고 missing이 없을 때만 true, unverified가 있으면 warning 필수(입력 규칙)
+    inputRules: ['githubStatusConsistent'],
     body: Body({
       mode: c.GithubMode,
       ok: Type.Boolean(),
       account: Nullable(Text),
       scopes: Nullable(Body(c.GithubScopes.properties)),
       expiresAt: Nullable(c.Timestamp),
+      warning: Opt(Text),
       error: Opt(Text),
     }),
     responses: { 204: null },
   }),
   operation({
     ...runner,
+    id: 'registerGithubKey',
+    method: 'POST',
+    path: '/api/runner/github/key',
+    summary: '봉인용 Runner 공개키 등록(프로세스 시작마다). keyId는 서버가 공개키 SHA-256 지문으로 계산',
+    body: Body({
+      runnerId: Text,
+      hostId: Text,
+      bootId: Text,
+      // X25519 SubjectPublicKeyInfo PEM(contracts §6.1)
+      publicKeyPem: Text,
+      sealedVersion: Type.Literal(1),
+    }),
+    responses: { 200: Type.Object({ keyId: Type.String() }) },
+  }),
+  operation({
+    ...runner,
     id: 'getGithubCredential',
     method: 'GET',
     path: '/api/runner/github/credential',
-    summary: '토큰 방식: Runner 공개키로 봉인한 값(평문 없음)',
+    summary: '토큰 방식: 그 Runner에 등록된 keyId의 공개키로 봉인한 값(평문 없음, 봉인 형식 v1). 모르는 keyId는 404',
+    query: Type.Object({ keyId: Text }),
+    errors: ['NOT_FOUND'],
     responses: { 200: Type.Object({ sealed: Type.String() }) },
   }),
   operation({
@@ -632,7 +653,7 @@ export const runnerOperations = [
     id: 'getRunnerPolicy',
     method: 'GET',
     path: '/api/runner/policy',
-    summary: '상한·예산·주기·CI 설정 묶음',
+    summary: '상한·예산·주기·CI 설정·Claude 모델 목록·CLI 관측 등급 묶음',
     ifNoneMatch: true,
     responseHeaders: ['ETag'],
     responses: {
@@ -642,6 +663,12 @@ export const runnerOperations = [
         heartbeatSeconds: Type.Integer({ minimum: 1 }),
         inputCheckMinutes: Type.Integer({ minimum: 1 }),
         ci: Type.Object(m.CiSettings),
+        // Runner가 보고할 Claude 모델(설정값, 초기값=Q-06 승인표). owner 2026-11-26 아이템 8
+        claudeModels: List(Type.String(), { minItems: 1, uniqueItems: true }),
+        // 서버에 등록된 CLI 조합별 관측 등급(G§6.7-8). Runner 준비 점검 obs가 실행 조합과 대조한다.
+        cliGrades: List(
+          Type.Object({ agent: c.Agent, version: Type.String(), model: Type.String(), options: Type.String(), grade: m.ObservationGrade }),
+        ),
       }),
       304: null,
     },

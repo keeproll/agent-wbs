@@ -27,6 +27,12 @@ export class ApiError extends Error {
   }
 }
 
+/** 요청 검증 오류와 네트워크 단절을 구분하며 원문(토큰 포함 가능)은 보존하지 않는다. */
+export class ApiTransportError extends Error {
+  override name = 'ApiTransportError';
+  constructor(operation: OperationId) { super(`${operation}: 서버에 연결하거나 응답을 읽지 못했습니다.`); }
+}
+
 export interface ApiClientOptions {
   baseUrl: string;
   token: Secret;
@@ -69,7 +75,7 @@ function json(text: string): unknown {
   }
 }
 
-/** 요청 1회. 재시도와 outbox는 M4-01에서 이 위에 둔다. */
+/** 요청 1회. 재시도와 영속 저장은 Outbox가 맡는다. */
 export function createApiClient({ baseUrl, token, fetch: send = fetch }: ApiClientOptions) {
   return async <K extends OperationId>(id: K, request: ApiRequest<K>): Promise<ApiResponse<K>> => {
     const op = OPERATIONS[id];
@@ -93,15 +99,20 @@ export function createApiClient({ baseUrl, token, fetch: send = fetch }: ApiClie
       payload = JSON.stringify(body);
     }
 
-    const response = await send(url, {
-      method: op.method,
-      headers,
-      body: payload,
-      // 토큰을 다른 주소로 보내지 않는다.
-      redirect: 'manual',
-      signal: AbortSignal.timeout(op.content === 'multipart' ? UPLOAD_TIMEOUT_MS : TIMEOUT_MS),
-    });
-    const value = json(await response.text());
+    let response: Response;
+    let text: string;
+    try {
+      response = await send(url, {
+        method: op.method,
+        headers,
+        body: payload,
+        // 토큰을 다른 주소로 보내지 않는다.
+        redirect: 'manual',
+        signal: AbortSignal.timeout(op.content === 'multipart' ? UPLOAD_TIMEOUT_MS : TIMEOUT_MS),
+      });
+      text = await response.text();
+    } catch { throw new ApiTransportError(id); }
+    const value = json(text);
     // 선언한 상태라도 본문이 JSON이 아니면 서버 응답으로 믿지 않는다.
     const hasBody = (op.statuses as Readonly<Record<number, boolean>>)[response.status];
     if (hasBody === undefined || (hasBody && value === undefined)) {

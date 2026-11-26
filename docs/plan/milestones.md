@@ -233,6 +233,9 @@ flowchart LR
   - 디렉토리: `src/git` · 병렬: ∥ · 담당 / 리뷰: Codex / Claude
 - **M4-04** — GitHub 어댑터(확인·PR·status·병합·봉인 자격 증명) + fake
   - 완료 조건(검증): `R test -- github`
+    - fake 필수 사례: 409·405·422 거절, 타임아웃 뒤 늦은 병합, 조회 반영 지연, 엔드포인트별 권한, 기본·보조 속도 제한, 페이지 나눔(pagination)
+    - 봉인 형식 v1 공용 고정 벡터(`contracts/fixtures/sealed-v1-vector.json`) 통과
+    - 실제 strict 보호·CODEOWNERS·우회 금지 실증은 M4-06 몫이다.
   - 디렉토리: `src/github` · 병렬: ∥ · 담당 / 리뷰: Claude / Codex
 - **M4-05** — Codex·Claude 최신 확인·유휴 적용·실패 보존·미검증 전환(architecture §5.1)
   - 완료 조건(검증): `R test -- cli-update`
