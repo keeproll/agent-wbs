@@ -12,7 +12,8 @@ try {
     case 'login-link': {
       const token = await issueLoginLink(pool);
       // fragment는 HTTP 요청과 서버 접근 로그로 전송되지 않는다. M3 화면이 읽고 즉시 지운다.
-      process.stdout.write(`${config.origin}/#login-token=${token}\n`);
+      const origin = config.lan ? `http://127.0.0.1:${String(config.port)}` : config.origin;
+      process.stdout.write(`${origin}/#login-token=${token}\n`);
       break;
     }
     case 'set-password': {

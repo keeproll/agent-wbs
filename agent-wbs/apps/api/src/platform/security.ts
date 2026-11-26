@@ -6,7 +6,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { randomToken, tokenHash, verifyPassword } from './credentials.ts';
 import { installErrors, PlatformError } from './errors.ts';
 
-export interface SecurityOptions { origin: string; lan: boolean }
+export interface SecurityOptions { origin: string; lan: boolean; port?: number }
 interface Session { token_hash: string; expires_at: Date; csrf: string }
 interface StoredResponse { status: number; payload: string | null; headers: Record<string, string> }
 interface Context {
@@ -51,14 +51,24 @@ async function finish(request: FastifyRequest, commit: boolean): Promise<void> {
 export function installSecurity(app: FastifyInstance, pool: Pool, options: SecurityOptions): void {
   installErrors(app, pool);
   app.decorateRequest('platform', null);
-  // shortcut: 로그인 횟수는 재시작 때 초기화된다. 다중 서버 운영 시 DB 제한으로 옮긴다.
-  let passwordAttempts = 0;
-  let passwordWindow = 0;
+  const originUrl = new URL(options.origin);
+  const localPort = options.port ?? Number(originUrl.port || (originUrl.protocol === 'https:' ? 443 : 80));
+  const localOrigins = [`http://127.0.0.1:${String(localPort)}`, `http://[::1]:${String(localPort)}`].map((origin) => new URL(origin).origin);
+  // shortcut: 출처별 횟수는 재시작 때 초기화된다. 다중 서버 운영 시 DB 제한으로 옮긴다.
+  const passwordAttempts = new Map<string, { count: number; resetAt: number }>();
+  app.addHook('onRoute', (route) => {
+    const methods = Array.isArray(route.method) ? route.method : [route.method];
+    for (const method of methods) {
+      if (!OPERATIONS.some((op) => op.path === route.url && (op.method === method || method === 'HEAD' && op.method === 'GET'))) {
+        throw new Error(`경로에 권한 선언이 없습니다: ${method} ${route.url}`);
+      }
+    }
+  });
 
   app.addHook('preValidation', async (request) => {
     const operation = OPERATIONS.find((op) => op.path === request.routeOptions.url && (op.method === request.method || request.method === 'HEAD' && op.method === 'GET'));
-    // 아직 계약에 없는 /api 경로도 실수로 공개되지 않게 팀장 인증을 요구한다.
-    const principal = operation?.principal ?? (request.routeOptions.url?.startsWith('/api/') ? 'lead' : 'none');
+    // 미등록 요청은 404 처리기로 간다. 등록 경로는 onRoute에서 권한 선언을 확인한다.
+    const principal = operation?.principal ?? 'none';
     const context: Context = { operation, principal, currentEpoch: 0, epoch: 0 };
     request.platform = context;
     if (principal === 'none' && operation?.id !== 'login') return;
@@ -81,7 +91,9 @@ export function installSecurity(app: FastifyInstance, pool: Pool, options: Secur
     }
     if (write(request) && principal !== 'runner') {
       const csrf = request.headers['x-csrf-token'];
-      if (request.headers.origin !== options.origin || principal === 'lead' && (typeof csrf !== 'string' || !equal(csrf, context.session?.csrf ?? ''))) throw new PlatformError('FORBIDDEN_PRINCIPAL');
+      const origin = request.headers.origin;
+      const originAllowed = origin === options.origin || options.lan && loopback(request.raw.socket.remoteAddress) && typeof origin === 'string' && localOrigins.includes(origin);
+      if (!originAllowed || principal === 'lead' && (typeof csrf !== 'string' || !equal(csrf, context.session?.csrf ?? ''))) throw new PlatformError('FORBIDDEN_PRINCIPAL');
     }
     const state = (await pool.query<{ epoch: number }>('select epoch from system_state where id=1')).rows[0];
     assert(state, '시스템 초기값이 필요합니다.');
@@ -96,7 +108,7 @@ export function installSecurity(app: FastifyInstance, pool: Pool, options: Secur
     const operation = context.operation;
     if (operation?.principal === 'none' && operation.id !== 'login') return;
     if (!write(request) && operation?.principal !== 'runner') return;
-    if (!operation && !request.routeOptions.url?.startsWith('/api/')) return;
+    if (!operation) return;
     const key = request.headers['idempotency-key'];
     if (operation?.idempotency === 'required' && key === undefined) throw new PlatformError('IDEMPOTENCY_KEY_REQUIRED');
     if (key !== undefined && (typeof key !== 'string' || key.length === 0 || key.length > 255 || /[^\x21-\x7e]/.test(key))) throw new PlatformError('VALIDATION_FAILED');
@@ -163,7 +175,7 @@ export function installSecurity(app: FastifyInstance, pool: Pool, options: Secur
   app.addHook('onRequestAbort', async (request) => { await finish(request, false); });
   app.addHook('onTimeout', async (request) => { await finish(request, false); });
 
-  const cookie = (token: string, maxAge: number) => `awbs_session=${token}; Path=/; Max-Age=${String(maxAge)}; HttpOnly; SameSite=Strict${options.origin.startsWith('https:') ? '; Secure' : ''}`;
+  const cookie = (token: string, maxAge: number, origin: string | undefined) => `awbs_session=${token}; Path=/; Max-Age=${String(maxAge)}; HttpOnly; SameSite=Strict${origin?.startsWith('https:') ? '; Secure' : ''}`;
   const login = OPERATIONS.find((op) => op.id === 'login');
   assert(login?.body);
   app.post('/api/auth/session', { schema: { body: login.body } }, async (request, reply) => {
@@ -176,14 +188,19 @@ export function installSecurity(app: FastifyInstance, pool: Pool, options: Secur
       if (!result.rowCount) throw new PlatformError('LOGIN_FAILED');
     } else {
       if (!options.lan) throw new PlatformError('LOGIN_FAILED');
-      if (Date.now() - passwordWindow >= 60_000) { passwordAttempts = 0; passwordWindow = Date.now(); }
-      // 단일 팀장 서비스이므로 주소를 바꿔도 우회할 수 없는 서버 전체 제한을 쓴다.
-      if (passwordAttempts >= 5) {
-        reply.header('Retry-After', Math.max(1, Math.ceil((passwordWindow + 60_000 - Date.now()) / 1000)));
+      const now = Date.now();
+      for (const [address, attempt] of passwordAttempts) if (attempt.resetAt <= now) passwordAttempts.delete(address);
+      // 프록시 헤더는 위조할 수 있으므로 실제 소켓 주소로만 구분한다.
+      const address = (request.raw.socket.remoteAddress ?? 'unknown').replace(/^::ffff:/, '');
+      const attempt = passwordAttempts.get(address) ?? { count: 0, resetAt: now + 60_000 };
+      if (attempt.count >= 5) {
+        reply.header('Retry-After', Math.max(1, Math.ceil((attempt.resetAt - now) / 1000)));
         throw new PlatformError('RATE_LIMITED');
       }
-      passwordAttempts++;
-      const stored = (await client.query<{ password_hash: string }>('select password_hash from lead_credentials where singleton=true')).rows[0];
+      attempt.count++;
+      passwordAttempts.set(address, attempt);
+      // 확인부터 세션 발급까지 재설정과 겹치지 않게 자격 증명 행을 잠근다.
+      const stored = (await client.query<{ password_hash: string }>('select password_hash from lead_credentials where singleton=true for share')).rows[0];
       if (!stored || !await verifyPassword(input.password, stored.password_hash)) throw new PlatformError('LOGIN_FAILED');
     }
     const old = cookieToken(request);
@@ -192,7 +209,7 @@ export function installSecurity(app: FastifyInstance, pool: Pool, options: Secur
     // 기존 csrf 열에 방식을 접두어로 보관한다. 난수 부분은 여전히 32바이트다.
     const csrf = `${input.method}.${randomToken()}`;
     await client.query("insert into lead_sessions(token_hash,expires_at,csrf) values($1,now()+interval '12 hours',$2)", [tokenHash(token), csrf]);
-    return reply.header('Cache-Control', 'no-store').header('Set-Cookie', cookie(token, 43_200)).code(204).send();
+    return reply.header('Cache-Control', 'no-store').header('Set-Cookie', cookie(token, 43_200, request.headers.origin)).code(204).send();
   });
   app.get('/api/session', (request, reply) => {
     const session = request.platform?.session;
@@ -203,6 +220,6 @@ export function installSecurity(app: FastifyInstance, pool: Pool, options: Secur
     const context = request.platform;
     assert(context?.client && context.session);
     await context.client.query('delete from lead_sessions where token_hash=$1', [context.session.token_hash]);
-    return reply.header('Set-Cookie', cookie('', 0)).code(204).send();
+    return reply.header('Set-Cookie', cookie('', 0, request.headers.origin)).code(204).send();
   });
 }
