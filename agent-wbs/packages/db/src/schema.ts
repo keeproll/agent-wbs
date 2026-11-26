@@ -1110,7 +1110,7 @@ export const agentUsage = pgTable(
     ...row(),
     agent: agent().notNull(),
     remain_pct: numeric().notNull(),
-    reset_at: at('reset_at').notNull(),
+    reset_at: at('reset_at'),
     tokens_used: bigint({ mode: 'number' }),
   },
   (t) => [check('usage_percent', sql`${t.remain_pct} between 0 and 100`)],
