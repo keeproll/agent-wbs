@@ -291,7 +291,11 @@ bash agent-runner/scripts/isolation/check-agent-user.sh --protect /home/keeproll
   - sudo 정책: `sudo -l -U <Runner>`가 보여 주는 허용 목록을 **느슨하게 해석하지 않고 글자 그대로** 맞춰 본다(Codex 재리뷰 P2-A).
     - 규칙 줄은 두 가지만 허용한다.
       - `(awbs-agent) NOPASSWD: /usr/local/libexec/awbs-agent-exec` — 정확히 1번.
-      - `(ALL : ALL) ALL` — owner의 관리자 규칙(비밀번호 필요). 0~1번.
+      - owner의 관리자 규칙(비밀번호 필요). 흔한 표기 `(ALL : ALL) ALL`·`(ALL:ALL) ALL`·`(ALL) ALL`·`(root) ALL`·`(… ) PASSWD: ALL`을 인정한다. `%sudo` 그룹 경유와 직접 규칙이 겹쳐 여러 번 나와도 된다(Codex 3차 P3).
+    - 비밀번호 없는 관리자 규칙(`(ALL : ALL) NOPASSWD: ALL` 등)은 「관리자 규칙(비밀번호 없음)」으로 알아보고 WARN 한 줄을 낸다. 종료 코드에는 영향이 없다. PASS로 세지도 않는다.
+      - 문구: 「Runner 계정이 비밀번호 없이 root가 될 수 있어, Agent 격리가 뚫리면 피해가 커집니다. 원하면 NOPASSWD를 빼세요.」
+      - 왜 FAIL이 아닌가: Agent 계정이 Runner 계정으로 넘어오는 경계와는 별개인 owner 자신의 선택이기 때문이다. 다만 검사를 느슨하게 하지 않기 위해 PASS로는 만들지 않는다.
+    - Agent 래퍼 규칙은 그대로 글자 그대로 일치해야 한다(공백 하나만 달라도 FAIL).
     - 그 밖의 규칙 줄은 모두 FAIL이다. 예: `(root) NOPASSWD: /bin/bash`, 경로 와일드카드, `NOPASSWD: SETENV:`, `PASSWD:`가 섞인 줄, 별칭 이름, 비밀번호가 필요한 다른 규칙.
     - 기본값 줄은 알려진 항목(`env_reset`, `mail_badpass`, `use_pty`, Ubuntu 기본 `secure_path`)만 허용한다. 다른 항목(예: `!authenticate`, `env_keep`, `setenv`, 바뀐 `secure_path`)이 하나라도 있으면 FAIL.
     - 모르는 머리말(예: 명령별 기본값)이나 위치를 알 수 없는 줄도 FAIL(확인 못 함).
@@ -329,6 +333,13 @@ bash agent-runner/scripts/isolation/remove-agent-user.sh --purge-work     # 작�
      - 왜: 나중에 같은 숫자 UID가 다른 계정에 배정되면 남은 파일에 접근할 수 있다(Codex 리뷰 P2-9).
   6. 마지막에 UID 기록과 진행 기록을 지운다.
 - 기록이 하나도 없어도 생성 표식이 있는 우리 계정이면 그 계정의 UID로 정리한다. 표식이 없는 같은 이름 계정은 건드리지 않는다.
+- **UID는 단계마다 다시 확인한다**(Codex 3차 P2). 기록의 UID는 「설치가 쓰려던 번호」일 뿐이라, 그 사이 다른 계정에 배정됐을 수 있기 때문이다.
+  - 어디서 얻은 UID든(UID 기록·진행 기록·계정) 시스템 계정 범위(1~999)가 아니면 시작하지 않는다.
+  - 프로세스 종료·계정 삭제 직전: 그 UID가 지금도 `awbs-agent`이고 생성 표식이 같아야 한다.
+  - 숫자 권한 항목 삭제·소유권 정리 직전: 그 UID를 지금 아무 계정도 쓰지 않아야 한다.
+  - 계정이 이미 지워졌으면 UID로 프로세스를 끝내지 않는다. 남은 프로세스가 있는지만 읽어서 본다.
+  - 하나라도 맞지 않으면 그 단계는 건너뛰고, 다른 계정은 건드리지 않는다. 끝에 「남은 항목」 목록을 보여 주고 종료 코드 `3`으로 끝난다. 기록은 남겨 둔다.
+- 설치 중 되돌리기(진행 기록으로 계정 지우기)도 계정·그룹 삭제가 하나라도 실패하면 성공으로 표시하지 않는다. 남은 항목을 보여 주고 진행 기록을 남긴다(Codex 3차 P3).
 - 중간에 실패하면 Windows 차단은 걸린 그대로 남는다(Codex 리뷰 P2-4). 원인을 고친 뒤 같은 명령을 다시 실행하면 기록한 UID로 이어서 정리한다.
 - 같은 이름의 계정이 이 설치가 만든 계정이 아니면 아무것도 지우지 않는다.
 - 작업 영역 실제 경로가 고정 경로(`/srv/agentwbs`)와 다르거나(링크 등) Runner 홈과 겹치면 멈춘다.

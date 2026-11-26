@@ -204,6 +204,23 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
         expect(readFileSync(join(R, 'etc/agentwbs/agent-user.uid'), 'utf8').trim()).toBe('999');
       });
 
+      test('리뷰3 P3: 되돌리기의 계정·그룹 삭제가 실패하면 성공으로 표시하지 않고 진행 기록·남은 항목을 남긴다 → 고친 뒤 재실행 성공', () => {
+        rules([42, '', '-- install * */etc/agentwbs/agent-user.uid'], [8, '', '-- userdel *'], [8, '', '-- groupdel *'], okCheck);
+        let r = setup();
+        expect(r.code).toBe(42);
+        expect(r.out).not.toContain('되돌렸습니다');
+        expect(r.out).toContain('되돌리기가 끝나지 않았습니다. 남은 항목:');
+        expect(r.out).toContain('계정 awbs-agent(UID 999) 삭제 실패');
+        expect(r.out).toContain('그룹 awbs-agent(GID 999) 삭제 실패');
+        expect(existsSync(pending())).toBe(true);
+        expect(passwd()).toContain('awbs-agent');
+        rules(okCheck);
+        writeFileSync(join(R, 'sudo.log'), '');
+        r = setup();
+        expect(r.code, r.out).toBe(0);
+        expect(at(r.log, 'userdel --remove awbs-agent')).toBeLessThan(at(r.log, 'useradd'));
+      });
+
       test('계정 생성 명령 자체가 실패 → 지울 계정이 없으니 진행 기록만 지움', () => {
         rules([9, '', '-- useradd *'], okCheck);
         const r = setup();
@@ -342,6 +359,57 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
       expect(existsSync(join(R, 'home/runner'))).toBe(true);
     });
 
+    describe('리뷰3 P2: 기록의 UID를 지금 다른 계정이 쓰면 그 계정은 절대 건드리지 않는다', () => {
+      const OTHER = 'other-service:x:999:999:Other service:/var/lib/other:/usr/sbin/nologin';
+      const touched = (log: string[]) => log.filter((l) => /pkill|pgrep|setfacl -P -x|chown .*--from|userdel|groupdel/.test(l));
+
+      test('계정 없음 + 진행 기록 UID 999 + UID 999는 other-service → 종료·ACL·소유권 단계 모두 건너뛰고 종료 코드 3과 남은 항목', () => {
+        fresh({ account: OTHER });
+        mkdirSync(join(R, 'etc/agentwbs'), { recursive: true });
+        writeFileSync(join(R, 'etc/agentwbs/agent-user.pending'), 'awbs-agent 999 awbs-agent-setup-0123456789abcdef\n');
+        mkdirSync(join(R, 'srv/agentwbs'), { recursive: true });
+        writeFileSync(join(R, '.procs'), '4242\n');
+        const r = run('remove-agent-user.sh');
+        expect(r.code, r.out).toBe(3);
+        expect(touched(r.log)).toEqual([]);
+        expect(r.out).toContain('UID 999은 지금 다른 계정(other-service)이 씀');
+        expect(r.out).toContain('남은 항목:');
+        expect(readFileSync(join(R, '.procs'), 'utf8')).toBe('4242\n');
+        expect(readFileSync(join(R, 'etc/passwd'), 'utf8')).toContain('other-service');
+        expect(existsSync(join(R, 'etc/agentwbs/agent-user.pending'))).toBe(true);
+      });
+
+      test('계정 없음 + UID 기록 998 + 998을 다른 계정이 씀 → 같은 방식으로 건너뜀', () => {
+        fresh({ account: OTHER.replaceAll('999', '998'), uid: '998' });
+        mkdirSync(join(R, 'srv/agentwbs'), { recursive: true });
+        const r = run('remove-agent-user.sh');
+        expect(r.code, r.out).toBe(3);
+        expect(touched(r.log)).toEqual([]);
+        expect(existsSync(join(R, 'etc/agentwbs/agent-user.uid'))).toBe(true);
+      });
+
+      test('진행 기록의 UID가 0(root)이면 sudo 0회로 멈춘다', () => {
+        fresh();
+        mkdirSync(join(R, 'etc/agentwbs'), { recursive: true });
+        writeFileSync(join(R, 'etc/agentwbs/agent-user.pending'), 'awbs-agent 0 awbs-agent-setup-0123456789abcdef\n');
+        const r = run('remove-agent-user.sh');
+        expect(r.code).not.toBe(0);
+        expect(r.out).toContain('시스템 계정 범위(1~999)가 아닙니다: 0');
+        expect(r.log).toEqual([]);
+      });
+
+      test('계정이 이미 지워졌으면 UID로 종료하지 않는다: 아무도 안 쓰는 UID에 프로세스가 남아 있으면 확인만 하고 종료 코드 3, Windows 차단 유지', () => {
+        fresh({ uid: '998' });
+        writeFileSync(join(R, '.procs'), '4242\n');
+        const r = run('remove-agent-user.sh');
+        expect(r.code, r.out).toBe(3);
+        expect(r.log.some((l) => l.includes('pkill'))).toBe(false);
+        expect(r.log).toContain('-- pgrep -U 998');
+        expect(r.log.some((l) => l.includes('setfacl -P -x'))).toBe(false);
+        expect(r.out).toContain('UID 998 프로세스가 남아 있음');
+      });
+    });
+
     test('UID 기록 값이 이상하면(0) 멈춘다', () => {
       writeFileSync(join(R, 'etc/agentwbs/agent-user.uid'), '0\n');
       const r = run('remove-agent-user.sh');
@@ -389,7 +457,8 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
       ['root로 래퍼를 비밀번호 없이', `    (root) NOPASSWD: ${EXEC}\\n`],
       ['root 셸을 비밀번호 없이(리뷰2)', '    (root) NOPASSWD: /bin/bash\\n'],
       ['root로 경로 와일드카드(리뷰2)', '    (root) NOPASSWD: /usr/local/libexec/awbs-agent-*\\n'],
-      ['모든 계정으로 모든 명령을 비밀번호 없이', '    (ALL) NOPASSWD: ALL\\n'],
+      ['Agent 규칙 공백만 다름(엄격 일치 유지)', `    (awbs-agent) NOPASSWD:${EXEC}\\n`],
+      ['root로 비밀번호 없이 다른 명령', '    (root) NOPASSWD: /usr/bin/apt\\n'],
       ['Agent 계정으로 다른 명령도', '    (awbs-agent) NOPASSWD: /bin/bash\\n'],
       ['인증 태그가 섞인 Agent 규칙(리뷰2)', `    (awbs-agent) NOPASSWD: /bin/bash, PASSWD: ${EXEC}\\n`],
       ['SETENV 태그가 붙은 Agent 규칙(리뷰2)', `    (awbs-agent) NOPASSWD: SETENV: ${EXEC}\\n`],
@@ -400,7 +469,31 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
       const r = check();
       expect(r.code).toBe(1);
       expect(r.out).toContain(`FAIL  허용 목록에 없는 sudo 규칙: ${extra.trim().replaceAll('\\n', '')}`);
-      expect(r.out).not.toContain('PASS  sudo 허용 목록이 기대와 정확히 같음');
+      expect(r.out).not.toContain('PASS  sudo 허용 목록이 기대와 같음');
+    });
+
+    test.each([
+      ['(ALL) ALL'], ['(ALL:ALL) ALL'], ['(ALL : ALL) PASSWD: ALL'], ['(root) ALL'],
+    ])('리뷰3 P3: 비밀번호가 필요한 관리자 규칙 표기 %s는 PASS', (admin) => {
+      rules(...baseline(goodListing().replace('(ALL : ALL) ALL', admin)));
+      const r = check();
+      expect(r.code, r.out).toBe(0);
+      expect(r.out).toContain('owner 관리자 규칙(비밀번호 필요) 1줄');
+    });
+
+    test('리뷰3 P3: %sudo 그룹과 직접 규칙이 겹쳐 관리자 줄이 두 번 나와도 PASS', () => {
+      rules(...baseline(goodListing('    (ALL : ALL) ALL\\n')));
+      const r = check();
+      expect(r.code, r.out).toBe(0);
+      expect(r.out).toContain('owner 관리자 규칙(비밀번호 필요) 2줄');
+    });
+
+    test('리뷰3 P3: 비밀번호 없는 관리자 규칙은 PASS로 세지 않고 WARN 한 줄(종료 코드 영향 없음)', () => {
+      rules(...baseline(goodListing().replace('(ALL : ALL) ALL', '(ALL : ALL) NOPASSWD: ALL')));
+      const r = check();
+      expect(r.out).toContain('WARN  관리자 규칙(비밀번호 없음): Runner 계정이 비밀번호 없이 root가 될 수 있어, Agent 격리가 뚫리면 피해가 커집니다. 원하면 NOPASSWD를 빼세요.');
+      expect(r.out).not.toContain('owner 관리자 규칙(비밀번호 필요)');
+      expect(r.code, r.out).toBe(0);
     });
 
     test('리뷰2 P2-A: 기대 규칙이 정확한 모양이 아니면(SETENV만 있는 줄로 바뀜) 「1번 있어야 함」도 FAIL', () => {

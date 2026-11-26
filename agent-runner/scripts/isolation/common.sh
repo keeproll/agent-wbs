@@ -189,32 +189,58 @@ $1 ALL=($AGENT_USER) NOPASSWD: $REAL_EXEC_PATH
 EOF
 }
 
+# 이 UID가 「지금도」 우리 Agent 계정인가: getent로 찾은 이름이 awbs-agent이고, 시스템 계정 범위(1~999)이며, 설명 칸이 생성 표식.
+# 쓰기: uid_is_agent <UID> [정확한 표식]   표식을 주면 그 표식과 글자 그대로 같아야 한다.
+# 왜: 기록의 UID는 「설치가 쓰려던 번호」일 뿐이다. 그 사이 다른 계정에 배정됐을 수 있다(리뷰3 P2).
+uid_is_agent() {
+  local uid=$1 marker=${2-} entry name gecos
+  [[ $uid =~ ^[0-9]+$ ]] && ((uid > 0 && uid < 1000)) || return 1
+  entry=$(getent passwd "$uid") || return 1
+  IFS=: read -r name _ _ _ gecos _ <<< "$entry"
+  [[ $name == "$AGENT_USER" && $gecos =~ $MARKER_RE ]] || return 1
+  [[ -z $marker || $gecos == "Agent WBS agent $marker" ]]
+}
+
+# 이 UID를 지금 아무 계정도 쓰지 않는가(계정을 지운 뒤 숫자로 남은 권한 항목을 지워도 되는가).
+uid_is_unassigned() {
+  local uid=$1
+  [[ $uid =~ ^[0-9]+$ ]] && ((uid > 0 && uid < 1000)) || return 1
+  ! getent passwd "$uid" > /dev/null
+}
+
 # 진행 기록(계정 생성 직전에 남김)으로 「이번 설치가 만들다 만 계정」을 되돌린다.
-# 계정의 이름·UID·생성 표식이 기록과 모두 같을 때만 지운다. 하나라도 다르면 아무것도 지우지 않고 1을 돌려준다.
-# 쓰기: rollback_pending   (as_root를 쓴다. 기록이 없으면 할 일 없음)
+# 계정의 이름·UID·생성 표식이 기록과 모두 같을 때만 지운다. 하나라도 다르거나, 지우는 명령이 하나라도 실패하면
+# 진행 기록을 남긴 채 남은 항목을 알리고 1을 돌려준다(리뷰3 P3: 실패를 성공으로 표시하지 않기).
+# 주의: `if rollback_pending`처럼 조건 안에서 부르면 set -e가 듣지 않으므로, 명령마다 결과를 직접 확인한다.
 rollback_pending() {
   [[ -f $PENDING_RECORD ]] || return 0
-  local name uid marker cur_uid cur_gecos
+  local name uid marker cur_uid cur_gecos left=()
   read -r name uid marker < "$PENDING_RECORD" || true
-  if [[ $name != "$AGENT_USER" || ! $uid =~ ^[0-9]+$ || ! $marker =~ ^awbs-agent-setup-[0-9a-f]{16}$ ]]; then
+  if [[ $name != "$AGENT_USER" || ! $uid =~ ^[0-9]+$ || ! $marker =~ ^awbs-agent-setup-[0-9a-f]{16}$ ]] || ((uid <= 0 || uid >= 1000)); then
     printf '진행 기록 형식이 올바르지 않습니다: %s (손대지 않음)\n' "$PENDING_RECORD" >&2
     return 1
   fi
   cur_uid=$(agent_entry_field 3)
   cur_gecos=$(agent_entry_field 5)
   if [[ -n $cur_uid ]]; then
-    if [[ $cur_uid != "$uid" || $cur_gecos != "Agent WBS agent $marker" ]]; then
+    if [[ $cur_uid != "$uid" || $cur_gecos != "Agent WBS agent $marker" ]] || ! uid_is_agent "$uid" "$marker"; then
       printf '%s 계정이 진행 기록(UID %s·생성 표식)과 다릅니다. 다른 계정이라 손대지 않습니다.\n' "$AGENT_USER" "$uid" >&2
       return 1
     fi
-    as_root userdel --remove "$AGENT_USER"                               # 이번 설치가 방금 만든 계정만 되돌림
+    as_root userdel --remove "$AGENT_USER" || left+=("계정 $AGENT_USER(UID $uid) 삭제 실패")   # 이번 설치가 방금 만든 계정만 되돌림
   fi
   # 같은 번호의 전용 그룹이 남았으면 지운다(이름·번호가 모두 같을 때만).
   if [[ $(getent group "$AGENT_USER" | cut -d: -f3 || true) == "$uid" ]]; then
-    as_root groupdel "$AGENT_USER"
+    as_root groupdel "$AGENT_USER" || left+=("그룹 $AGENT_USER(GID $uid) 삭제 실패")
+  fi
+  if ((${#left[@]})); then
+    printf '되돌리기가 끝나지 않았습니다. 남은 항목:\n' >&2
+    printf '  - %s\n' "${left[@]}" >&2
+    printf '진행 기록(%s)은 남겨 둡니다. 원인을 고친 뒤 다시 실행하세요.\n' "$PENDING_RECORD" >&2
+    return 1
   fi
   if [[ -f $UID_RECORD && $(< "$UID_RECORD") == "$uid" ]]; then
-    as_root rm -f -- "$UID_RECORD"
+    as_root rm -f -- "$UID_RECORD" || { printf '남은 항목: UID 기록 %s 삭제 실패\n' "$UID_RECORD" >&2; return 1; }
   fi
-  as_root rm -f -- "$PENDING_RECORD"
+  as_root rm -f -- "$PENDING_RECORD" || { printf '남은 항목: 진행 기록 %s 삭제 실패\n' "$PENDING_RECORD" >&2; return 1; }
 }
