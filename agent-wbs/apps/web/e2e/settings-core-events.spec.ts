@@ -7,7 +7,18 @@
  */
 import { expect, test, type Page } from '@playwright/test';
 import { fakeApi, json } from './support/fake-api.ts';
-import { EXEC, settingsApi, V1, V2 } from './support/settings-fixtures.ts';
+import { EXEC, MODELS, settingsApi, V1, V2 } from './support/settings-fixtures.ts';
+
+/** 점·공백·슬래시가 든 모델 ID */
+const MODELS_DOT = {
+  ...MODELS,
+  rankOrder: { Claude: MODELS.rankOrder.Claude, Codex: ['gpt-6.2 sol/x', 'gpt-6.1-sol'] },
+  models: [
+    ...MODELS.models.filter((m) => m.agent === 'Claude'),
+    { agent: 'Codex', id: 'gpt-6.1-sol', label: 'GPT-6.1 sol', rank: 1, allowed: true, isNew: false, efforts: null },
+    { agent: 'Codex', id: 'gpt-6.2 sol/x', label: 'GPT-6.2 sol x', rank: 2, allowed: true, isNew: false, efforts: null },
+  ],
+};
 
 const V3 = '2026-11-05T03:00:00.000Z';
 type Exec = typeof EXEC;
@@ -132,4 +143,22 @@ test('되돌려 서버 값과 같아진 칸도 「편집됨」이라 이후 이�
   await t.save();
   await expect.poll(() => t.sent.length).toBe(1);
   expect(t.sent[0]).toMatchObject({ updatedAt: V1, lowPct: 20, notifyAt: 1 });
+});
+
+test('재리뷰 8fa1953: 점이 든 모델 ID(gpt-6.1-sol)의 허용 해제가 저장 요청에 반영된다', async ({ page }) => {
+  const api = await fakeApi(page);
+  const s = settingsApi(api);
+  const models = {
+    ...MODELS_DOT,
+  };
+  api.on('GET /api/settings/models', (route) => json(route, 200, models));
+  await page.goto('/settings/agent');
+  const codex = page.getByRole('region', { name: 'Codex 모델 표' });
+  await codex.locator('.gtr').filter({ hasText: 'gpt-6.1-sol' }).getByRole('button', { name: '허용 해제' }).click();
+  await expect(codex.locator('.gtr').filter({ hasText: 'gpt-6.1-sol' }).getByText('미허용')).toBeVisible();
+  await page.getByRole('region', { name: 'Agent 실행 정책 — 모델 · Effort' }).getByRole('button', { name: '저장', exact: true }).first().click();
+  await expect.poll(() => s.models.bodies.length).toBe(1);
+  const sent = s.models.bodies[0]?.models as { agent: string; id: string; allowed: boolean }[];
+  expect(sent.find((m) => m.id === 'gpt-6.1-sol')?.allowed).toBe(false);
+  expect(sent.find((m) => m.id === 'gpt-6.2 sol/x')?.allowed).toBe(true);
 });

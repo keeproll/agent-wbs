@@ -23,11 +23,35 @@ describe('mergeChanges', () => {
 
 describe('편집됨 칸 덮기(overlay·changedPaths)', () => {
   it('바뀐 칸의 경로를 객체 안쪽까지 찾는다', () => {
-    expect(changedPaths({ a: 1, f: { x: true, y: true }, l: [1] }, { a: 2, f: { x: true, y: false }, l: [1, 2] })).toEqual(['a', 'f.y', 'l']);
+    expect(changedPaths({ a: 1, f: { x: true, y: true }, l: [1] }, { a: 2, f: { x: true, y: false }, l: [1, 2] })).toEqual([['a'], ['f', 'y'], ['l']]);
   });
   it('서버 값 위에 편집된 칸만 내 값으로 덮는다(되돌린 값도 유지)', () => {
     const server = { lowPct: 30, notifyAt: 2, floors: { a: true, b: true } };
     const mine = { lowPct: 20, notifyAt: 3, floors: { a: true, b: false } };
-    expect(overlay(server, mine, ['lowPct', 'floors.b'])).toEqual({ lowPct: 20, notifyAt: 2, floors: { a: true, b: false } });
+    expect(overlay(server, mine, [['lowPct'], ['floors', 'b']])).toEqual({ lowPct: 20, notifyAt: 2, floors: { a: true, b: false } });
+  });
+});
+
+describe('키에 점·슬래시·공백이 있어도 한 칸으로 다룬다(재리뷰 8fa1953)', () => {
+  const KEYS = ['Codex:gpt-6.1-sol', 'a/b', 'with space', 'x.y/z w', ''];
+  it('바뀐 칸의 경로가 키를 쪼개지 않는다', () => {
+    for (const key of KEYS) {
+      const a = { allowed: { [key]: true, other: true } };
+      const b = { allowed: { [key]: false, other: true } };
+      expect(changedPaths(a, b)).toEqual([['allowed', key]]);
+    }
+  });
+  it('편집한 칸을 서버 값 위에 정확히 덮는다(다른 키는 서버 값)', () => {
+    for (const key of KEYS) {
+      const server = { allowed: { [key]: true, 'Codex:gpt-6.1': true } };
+      const mine = { allowed: { [key]: false, 'Codex:gpt-6.1': false } };
+      expect(overlay(server, mine, [['allowed', key]])).toEqual({ allowed: { [key]: false, 'Codex:gpt-6.1': true } });
+    }
+  });
+  it('점이 든 키가 다른 키의 「상위 칸」으로 오인되지 않는다', () => {
+    const base = { allowed: { 'Codex:gpt-6': true, 'Codex:gpt-6.1': true } };
+    const mine = { allowed: { 'Codex:gpt-6': true, 'Codex:gpt-6.1': false } };
+    const latest = { allowed: { 'Codex:gpt-6': false, 'Codex:gpt-6.1': true } };
+    expect(mergeChanges(base, mine, latest)).toEqual({ allowed: { 'Codex:gpt-6': false, 'Codex:gpt-6.1': false } });
   });
 });

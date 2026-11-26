@@ -77,42 +77,56 @@ interface SavePayload<D, F> { form: F; updatedAt: string | null; data: D; source
 /**
  * 초안. 규칙은 하나다: **내가 편집한 칸(edited)은 서버 이벤트·자동 갱신·저장 응답이 덮어쓰지 않는다.**
  * - values: 내가 고친 값을 담은 폼 전체. 화면은 서버 최신 값 위에 edited 칸만 values로 덮어 보인다.
- * - edited: 「편집됨」 칸의 경로(예: `lowPct`, `floors.dbHigh`). 값을 원래대로 되돌려도 편집됨으로 남는다.
+ * - edited: 「편집됨」 칸의 경로(키 배열, 예: `['lowPct']`, `['allowed', 'Codex:gpt-6.1-sol']`). 값을 원래대로 되돌려도 편집됨으로 남는다.
  * - baseData: 저장 때 보낼 기준(버전). 서버가 내가 편집한 칸을 건드리지 않고 바뀌면 기준만 새 값으로 옮긴다.
  *   서버가 편집한 칸을 바꿨으면(다른 탭) 기준을 옮기지 않아 저장 때 409 충돌 창으로 알린다.
  */
-interface Draft<D, F> { values: F; edited: string[]; baseData: D }
+/**
+ * 칸의 경로. 문자열을 점으로 잇지 않고 **키 배열**로 둔다.
+ * 왜: 모델 ID(`Codex:gpt-6.1-sol`)처럼 키 안에 점·슬래시·공백이 들어갈 수 있다. 점으로 나누면 한 칸이 여러 칸으로 쪼개져 편집이 반영되지 않는다(재리뷰 8fa1953).
+ * JSON으로 그대로 저장·복원되므로 세션 초안에도 안전하다.
+ */
+export type FieldPath = readonly string[];
+
+interface Draft<D, F> { values: F; edited: FieldPath[]; baseData: D }
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /** 두 값이 다른 칸의 경로. 객체는 칸마다 내려가고, 목록·글자·숫자는 한 칸으로 본다. */
-export function changedPaths(a: unknown, b: unknown, prefix = ''): string[] {
+export function changedPaths(a: unknown, b: unknown, prefix: FieldPath = []): FieldPath[] {
   if (isPlainObject(a) && isPlainObject(b)) {
     const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-    return [...keys].flatMap((key) => changedPaths(a[key], b[key], prefix ? `${prefix}.${key}` : key));
+    return [...keys].flatMap((key) => changedPaths(a[key], b[key], [...prefix, key]));
   }
   return same(a, b) ? [] : [prefix];
 }
 
-const getPath = (value: unknown, path: string): unknown =>
-  path === '' ? value : path.split('.').reduce<unknown>((v, key) => (isPlainObject(v) ? v[key] : undefined), value);
+const getPath = (value: unknown, path: FieldPath): unknown =>
+  path.reduce<unknown>((v, key) => (isPlainObject(v) && Object.hasOwn(v, key) ? v[key] : undefined), value);
 
-function setPath<T>(target: T, path: string, leaf: unknown): T {
-  if (path === '') return leaf as T;
-  const [head, ...rest] = path.split('.') as [string, ...string[]];
+function setPath<T>(target: T, path: FieldPath, leaf: unknown): T {
+  if (path.length === 0) return leaf as T;
+  const [head, ...rest] = path as [string, ...string[]];
   const obj: Record<string, unknown> = isPlainObject(target) ? target : {};
-  return { ...obj, [head]: setPath(obj[head], rest.join('.'), leaf) } as T;
+  return { ...obj, [head]: setPath(obj[head], rest, leaf) } as T;
 }
 
 /** 서버 값(server) 위에 편집된 칸만 내 값(values)으로 덮는다. */
-export function overlay<F>(server: F, values: F, edited: readonly string[]): F {
+export function overlay<F>(server: F, values: F, edited: readonly FieldPath[]): F {
   return edited.reduce((acc, path) => setPath(acc, path, getPath(values, path)), server);
 }
 
+/** 한 경로가 다른 경로의 앞부분(같은 칸이거나 상위 칸)인가. 키 단위로 비교한다. */
+const isPrefix = (a: FieldPath, b: FieldPath) => a.length <= b.length && a.every((key, i) => key === b[i]);
 /** 경로가 겹치는가(같거나 한쪽이 다른 쪽의 상위 칸) */
-const overlaps = (a: readonly string[], b: readonly string[]) =>
-  a.some((x) => b.some((y) => x === y || x.startsWith(`${y}.`) || y.startsWith(`${x}.`) || x === '' || y === ''));
+const overlaps = (a: readonly FieldPath[], b: readonly FieldPath[]) => a.some((x) => b.some((y) => isPrefix(x, y) || isPrefix(y, x)));
+/** 같은 경로를 한 번만 남긴다. */
+const uniquePaths = (paths: readonly FieldPath[]): FieldPath[] => {
+  const seen = new Map<string, FieldPath>();
+  for (const path of paths) seen.set(JSON.stringify(path), path);
+  return [...seen.values()];
+};
 
 /**
  * 「최신 위에 다시 적용」용 합치기. 편집 시작 값(base)과 비교해 **내가 바꾼 칸만** 최신 값(latest)에 얹는다.
@@ -233,7 +247,7 @@ export function useSettingForm<D extends { updatedAt: string | null }, F>(option
         const next = change(from);
         const touched = changedPaths(from, next);
         if (touched.length === 0) return current;
-        const edited = [...new Set([...(live?.edited ?? []), ...touched])];
+        const edited = uniquePaths([...(live?.edited ?? []), ...touched]);
         return { values: next, edited, baseData: live?.baseData ?? query.data };
       });
     },
