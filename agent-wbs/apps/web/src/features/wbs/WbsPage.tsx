@@ -140,7 +140,9 @@ function WbsBody({ projectId }: { projectId: string }) {
   const backTo = (location.state as { backTo?: string } | null)?.backTo ?? null;
 
   const open = (key: string, opts: { replace?: boolean; backTo?: string } = {}) => {
-    void navigate(`/wbs/${key}`, { replace: opts.replace ?? false, state: opts.backTo ? { backTo: opts.backTo } : null });
+    // M3 통합: 상세의 탭(`?tab=`)은 다른 Task로 옮겨도 유지한다(M3-03 TaskDetailPage와 같은 규칙).
+    const tab = new URLSearchParams(window.location.search).get('tab');
+    void navigate({ pathname: `/wbs/${key}`, search: tab ? `?tab=${tab}` : '' }, { replace: opts.replace ?? false, state: opts.backTo ? { backTo: opts.backTo } : null });
   };
   const close = () => {
     void navigate('/wbs');
@@ -252,11 +254,12 @@ function WbsBody({ projectId }: { projectId: string }) {
           <WbsTaskDetail
             key={selKey}
             taskKey={selKey}
+            projectId={projectId}
             nav={{
               pos: pos >= 0 ? `${String(pos + 1)} / ${String(railKeys.length)}` : '', prev, next, outside: pos < 0,
               back: backTo ? { taskKey: backTo, go: () => { void navigate(-1); } } : null,
             }}
-            onOpenTask={(k) => { open(k, { backTo: selKey }); }}
+            onOpenTask={(k, ref) => { open(k, ref ? { backTo: selKey } : {}); }}
           />
         )}
       </div>

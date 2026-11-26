@@ -29,7 +29,6 @@ export const routes: RouteObject[] = [
         // M3-02: WBS 표. 자식 `:taskKey`가 있으면 같은 화면이 레일 + 상세로 바뀐다(G§4.3). 화면 상태(필터·스크롤)를 유지하려고 한 화면이 두 주소를 받는다.
         ? { path: '/wbs', element: <WbsPage key="wbs" />, children: [{ path: ':taskKey', element: null }] }
         : { path: `/${item.key}`, element: <PendingPage key={item.key} menu={item.key} /> })),
-      { path: '/wbs/:taskKey', element: <PendingPage key="wbs" menu="wbs" /> },
       { path: '/settings/:tab', element: <PendingPage key="settings" menu="settings" /> },
       ...(StatesSandbox ? [{ path: '/_states', element: <Suspense><StatesSandbox /></Suspense> }] : []),
       { path: '*', element: <NotFoundPage /> },
