@@ -29,7 +29,7 @@
   - 시도 번호는 Task별.
   - 왜 재사용하지 않나: 지운 번호를 다시 쓰면 옛 이력과 새 Task가 같은 번호로 헷갈린다.
 - **시각과 날짜**
-  - 시각 `timestamptz`(시간대 정보를 포함한 시각 타입), 날짜만 의미 있는 값(목표일·작업 불가일)은 `date`.
+  - 시각 `timestamptz`(시간대를 반영해 UTC의 한 시점으로 저장하는 타입. 원래 시간대 정보는 보관하지 않는다), 날짜만 의미 있는 값(목표일·작업 불가일)은 `date`.
 - **수정 추적**
   - 변경 가능한 행: `created_at`, `updated_at`(단조 증가). 단조 증가는 「항상 커지기만 한다」는 뜻이다.
   - 수정 API는 `updatedAt` 비교(§0.3 L73).
@@ -89,7 +89,7 @@
 - `repo_checks`
   - url, status, result(jsonb: private·commit·구조), error — 등록 전 생성 가능(project_id null)
     - 용어 풀이: private = 허가된 사람만 볼 수 있는.
-    - 용어 풀이: commit = 변경을 저장소 기록에 남기는 것.
+    - 용어 풀이: commit = 확인한 커밋의 고유 번호(SHA).
   - 근거: §8.4
 - `input_versions`
   - unique(project, v), commit_sha unique(project), files, md_list, changes, instruction, result — 추가 전용
@@ -441,7 +441,7 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
   - `agent_efforts`: **CLI×모델별** 값→공통 1~5 명시 매핑(owner Q-06 승인표, ultra·미확인은 미매핑=사용 안 함)
   - 근거: §7.2
 - `exec_policy`
-  - on_usage, low_pct, on_rework, esc_notify, floors, live_inject, auto_retry_limit=2, auto_rework_limit=3
+  - on_usage, low_pct(사용량 부족 기준, 기본 20% — owner 2026-11-26), on_rework, esc_notify, floors, live_inject, auto_retry_limit=2, auto_rework_limit=3
   - 근거: §7.3, owner Q-04
 - `subagent_defs`
   - id, version, agent, role, tools, sandbox(프로그램이 건드릴 수 있는 범위를 막아 둔 실행 환경), text, hash, allowed, ref — 버전 불변
@@ -546,7 +546,7 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
   - unique(principal, key), request_hash, response, epoch
   - 근거: §9.1-6
 - `change_events`
-  - seq bigserial(자동으로 1씩 커지는 큰 정수 번호), topic, ref, at — 화면 커서. 7일 보존 [결정]
+  - seq bigserial(자동 번호를 발급하는 큰 정수 열. 실패·취소로 중간 번호가 비기도 한다), topic, ref, at — 화면 커서. 7일 보존 [결정]
   - 근거: 아키텍처 2.1
 
 ## 3. 상태 전이

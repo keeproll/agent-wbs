@@ -84,7 +84,7 @@ flowchart LR
 - **M0-03** — Runner 패키지 골격, 설정·로그·redact, fake CLI/GitHub 틀
   - 완료 조건(검증): `R install --frozen-lockfile && R check`
   - 디렉토리: `agent-runner/` · 병렬: ∥ · 담당 / 리뷰: Codex / Claude
-- **M0-04** — Web shell(명령어를 해석해 실행하는 프로그램): 180/56px 메뉴 12개, Header 64, 글꼴, 토큰, 라우팅, 접근성 기본
+- **M0-04** — Web shell(메뉴·헤더·본문 영역을 갖춘 웹 화면의 뼈대): 180/56px 메뉴 12개, Header 64, 글꼴, 토큰, 라우팅, 접근성 기본
   - 완료 조건(검증): `W --filter web test:e2e -- shell` (1280·1920 가로 스크롤 없음)
   - 디렉토리: `agent-wbs/apps/web` · 병렬: M0-01 후 · 담당 / 리뷰: Claude / Codex
 

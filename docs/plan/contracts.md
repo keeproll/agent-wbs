@@ -157,7 +157,7 @@
 
 가이드가 정한 API:
 
-- GET(HTTP 요청 종류: 조회·생성·교체·일부 수정·삭제) `/api/projects/:projectId/tasks?status&q&includeDeleted`
+- GET(조회 요청) `/api/projects/:projectId/tasks?status&q&includeDeleted`
   - 응답: → `{nodes[],tasks[TaskSummary]}` (`wbsPath`·차단·Gate 수·일정 요약 계산)
   - 오류: PROJECT_NOT_FOUND
 - GET `/api/tasks/:taskKey`

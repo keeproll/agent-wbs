@@ -31,7 +31,7 @@
 - **Avro / Protobuf** — 메시지(이벤트) 데이터의 모양을 정의하는 스키마 형식. Q-14 선택지 (C)에 나온다.
 - **bare 저장소** — 작업 폴더 없이 git 기록만 담은 저장소. 테스트에서 원격 저장소 대신 쓴다.
 - **Bearer** — `Authorization: Bearer <토큰>` 헤더로 토큰을 보내 인증하는 방식.
-- **bigserial** — PostgreSQL에서 행마다 자동으로 1씩 커지는 큰 정수 번호 타입.
+- **bigserial** — PostgreSQL에서 자동 번호를 발급하는 큰 정수 열. 실패·취소로 중간 번호가 비기도 한다. 다음 번호가 꼭 현재+1이라고 가정하면 안 된다.
 - **BLOCKED** — 검증 결과의 하나. 환경 문제 등으로 판정하지 못했다는 뜻이며 Task 상태는 그대로 두고 새 검증 시도를 한다. → data-model §3.1
 - **boot ID** — PC가 켜질 때마다 새로 바뀌는 식별자. 바뀌었으면 이전 프로세스가 살아 있을 수 없다는 증거가 된다. → contracts §3.4
 - **bootstrap (초기 분석)** — 저장소를 등록한 뒤 Planning이 처음 WBS 초안을 만드는 작업. → data-model §2.2
@@ -175,7 +175,7 @@
 - **realpath / symlink** — symlink는 다른 파일을 가리키는 바로가기 파일, realpath는 그런 링크를 모두 따라간 실제 경로. 저장소 밖으로 빠져나가는지 검사한다.
 - **reconcile (대조)** — 끊긴 외부 작업이 실제로 어디까지 됐는지 GitHub 등을 조회해 확인하는 것. → contracts §3.4
 - **redact / 마스킹** — 로그에서 토큰·비밀번호를 가리는 것. → architecture §4
-- **registry** — 패키지(CLI 등)를 올려 두고 내려받는 서버. 테스트에서는 fake registry를 쓴다.
+- **registry (패키지 registry)** — 패키지(CLI 등)를 올려 두고 내려받는 서버. 테스트에서는 fake registry를 쓴다(M4-05). 메시지 스키마용 레지스트리는 「스키마 레지스트리」 항목 참고.
 - **rename (원자적 rename)** — 새 파일을 다 쓴 뒤 이름만 바꿔 끼우는 방법. 중간에 죽어도 반쯤 쓴 파일이 남지 않는다.
 - **renew** — lease를 연장하는 요청. → contracts §3.2
 - **REST** — HTTP의 GET·POST·PUT·PATCH·DELETE 요청으로 자원(데이터)을 주고받는 API 방식.
@@ -216,7 +216,7 @@
 - **telemetry** — Runner의 상태 보고(heartbeat·host·readiness 등). fence 없이 보낸다. → contracts §3.2
 - **text/plain** — 서식 없이 글자만 있는 본문 형식. HTML 메일을 못 읽는 프로그램을 위해 함께 넣는다.
 - **timeout** — 정해진 시간 안에 응답이 없으면 실패로 보는 것.
-- **timestamptz** — PostgreSQL의 시간대 포함 시각 타입. UTC로 저장한다.
+- **timestamptz** — PostgreSQL에서 시간대를 반영해 UTC의 한 시점으로 저장하는 타입. 원래 시간대 정보는 보관하지 않는다. UTC로 저장하고 표시할 때 Asia/Seoul로 바꾼다.
 - **tree (git tree)** — 커밋 시점의 파일·폴더 전체 내용. tree가 같으면 파일 내용이 완전히 같다.
 - **TS / TypeScript** — 변수·함수에 타입을 붙여 실수를 미리 잡는 JavaScript. TS로 줄여 쓴다.
 - **TypeBox** — TypeScript로 스키마를 정의해 검증·타입·OpenAPI를 한 번에 만드는 도구. → architecture §3.2
@@ -230,6 +230,7 @@
 - **Vite** — 화면 코드를 개발 중에 바로 보여 주고 배포용으로 묶어 주는 도구.
 - **Vitest** — TypeScript 코드의 단위 테스트를 돌리는 도구.
 - **WBS (Work Breakdown Structure)** — 일을 단계·작업 묶음·Task로 쪼갠 구조. 이 제품의 이름이기도 하다.
+- **Web shell** — 메뉴·헤더·본문 영역을 갖춘 웹 화면의 뼈대(M0-04). 명령줄의 shell과는 다른 뜻이다.
 - **Wizard** — 여러 단계로 나눠 차례로 입력하는 화면. Task 생성 Wizard는 3단계다.
 - **worker** — 보고서·메일·알림·감시 같은 뒷일을 맡는 서버 프로세스. → architecture §2
 - **workspace (pnpm workspace)** — 한 저장소 안에 여러 패키지(`apps/web` 등)를 두고 함께 설치·빌드하는 pnpm 기능.
@@ -283,6 +284,7 @@
 - **순수 함수** — 같은 입력이면 언제나 같은 결과를 내고, 바깥(I/O·현재 시각)을 건드리지 않는 함수. → architecture §3.3
 - **스냅샷** — 어느 한 순간의 데이터를 그대로 고정해 저장한 것. 보고서는 스냅샷이라 나중에 바뀌지 않는다.
 - **스켈레톤** — 데이터를 불러오는 동안 내용 자리에 보여 주는 회색 윤곽.
+- **스키마 레지스트리** — 메시지 데이터 형식(스키마)과 그 버전을 등록·조회하는 서버. Q-14 선택지에 나온다. 패키지 registry와는 다르다.
 - **시도** — attempt 참고.
 
 ## ㅇ
