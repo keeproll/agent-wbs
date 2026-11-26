@@ -1,4 +1,4 @@
-import { parse, toSql, type CreateColumnDef, type CreateIndexStatement, type QName, type TableConstraint } from 'pgsql-ast-parser';
+import { astMapper, astVisitor, parse, toSql, type CreateColumnDef, type CreateIndexStatement, type Expr, type QName, type TableConstraint } from 'pgsql-ast-parser';
 import type { ContractFile } from './parse.ts';
 import { pointer, type DesignItem } from './shape.ts';
 
@@ -35,6 +35,33 @@ function constraintText(c: TableConstraint): string {
   return `${c.type.toUpperCase()} (${c.columns.map(k => k.name).join(', ')})`;
 }
 
+function foreignReferences(table: Table) {
+  return [...table.constraints.filter(c => c.type === 'foreign key'),
+    ...[...table.columns.values()].flatMap(c => c.definition.constraints?.filter(c => c.type === 'reference') ?? [])];
+}
+
+function usesColumn(expr: Expr, name: string): boolean {
+  let found = false;
+  astVisitor(() => ({ ref: r => { if (r.name === name) found = true; } })).expr(expr);
+  return found;
+}
+
+function renameColumnReferences(tables: Map<string, Table>, table: Table, before: string, after: string): void {
+  const mapper = astMapper(() => ({ ref: r => ({ ...r, name: r.name === before ? after : r.name }) }));
+  for (const index of table.indexes) for (const expression of index.expressions) expression.expression = mapper.expr(expression.expression) ?? expression.expression;
+  for (const index of table.indexes) if (index.where) index.where = mapper.expr(index.where) ?? index.where;
+  for (const constraint of table.constraints) {
+    if (constraint.type === 'check') constraint.expr = mapper.expr(constraint.expr) ?? constraint.expr;
+    else for (const key of constraint.type === 'foreign key' ? constraint.localColumns : constraint.columns) if (key.name === before) key.name = after;
+  }
+  for (const column of table.columns.values()) for (const constraint of column.definition.constraints ?? []) {
+    if (constraint.type === 'check') constraint.expr = mapper.expr(constraint.expr) ?? constraint.expr;
+  }
+  for (const owner of tables.values()) for (const reference of foreignReferences(owner)) {
+    if (tableName(reference.foreignTable) === table.name) for (const key of reference.foreignColumns) if (key.name === before) key.name = after;
+  }
+}
+
 /** SQL을 실행하지 않고 구문 트리만 읽는다. 지원하지 않는 변경은 전체 SQL 스키마를 읽기 실패로 보고한다. */
 export function sqlItems(files: readonly ContractFile[]): DesignItem[] {
   const tables = new Map<string, Table>();
@@ -66,6 +93,14 @@ export function sqlItems(files: readonly ContractFile[]): DesignItem[] {
         for (const change of statement.changes) {
           if (change.type === 'add column') addColumn(table, change.column, change.ifNotExists);
           else if (change.type === 'drop column') {
+            if (change.behaviour === 'cascade') throw new Error('CASCADE 삭제는 지원하지 않습니다.');
+            const target = change.column.name;
+            const index = table.indexes.some(i => i.expressions.some(e => usesColumn(e.expression, target)) || i.where && usesColumn(i.where, target));
+            const constraint = table.constraints.some(c => c.type === 'check' ? usesColumn(c.expr, target) : (c.type === 'foreign key' ? c.localColumns : c.columns).some(k => k.name === target));
+            const check = [...table.columns.values()].some(c => c.definition.constraints?.some(c => c.type === 'check' && usesColumn(c.expr, target)));
+            const foreign = [...tables.values()].some(t => foreignReferences(t).some(r => tableName(r.foreignTable) === table.name && r.foreignColumns.some(c => c.name === target)));
+            // shortcut: 의존 항목의 자동 삭제는 해석하지 않는다. SQL 의존성 삭제 지원 전에는 읽기 실패로 남긴다.
+            if (index || constraint || check || foreign) throw new Error('의존 항목이 있는 SQL 컬럼 삭제는 지원하지 않습니다.');
             if (!table.columns.delete(change.column.name) && !change.ifExists) throw new Error('삭제할 SQL 컬럼이 없습니다.');
           } else if (change.type === 'alter column') {
             const column = table.columns.get(change.column.name)?.definition;
@@ -83,13 +118,11 @@ export function sqlItems(files: readonly ContractFile[]): DesignItem[] {
             if (!column || table.columns.has(change.to.name)) throw new Error('SQL 컬럼 이름을 바꿀 수 없습니다.');
             column.definition.name = change.to;
             table.columns.delete(change.column.name); table.columns.set(change.to.name, column);
-            for (const constraint of table.constraints) {
-              const columns = constraint.type === 'foreign key' ? constraint.localColumns : constraint.type === 'check' ? [] : constraint.columns;
-              for (const key of columns) if (key.name === change.column.name) key.name = change.to.name;
-            }
+            renameColumnReferences(tables, table, change.column.name, change.to.name);
           } else if (change.type === 'rename') {
             const renamed = tableName({ ...statement.table, name: change.to.name });
             if (tables.has(renamed)) throw new Error('SQL 테이블 이름이 중복입니다.');
+            for (const owner of tables.values()) for (const reference of foreignReferences(owner)) if (tableName(reference.foreignTable) === table.name) reference.foreignTable.name = change.to.name;
             tables.delete(table.name); table.name = renamed; tables.set(renamed, table);
           } else if (change.type === 'add constraint') addConstraint(table, change.constraint);
           else throw new Error('지원하지 않는 SQL 테이블 변경입니다.');
@@ -99,6 +132,7 @@ export function sqlItems(files: readonly ContractFile[]): DesignItem[] {
         if (!table) throw new Error('인덱스의 SQL 테이블이 없습니다.');
         table.indexes.push(statement); table.path = file.path;
       } else if (statement.type === 'drop table') {
+        if (statement.cascade === 'cascade') throw new Error('CASCADE 삭제는 지원하지 않습니다.');
         for (const name of statement.names) if (!tables.delete(tableName(name)) && !statement.ifExists) throw new Error('삭제할 SQL 테이블이 없습니다.');
       } else if (statement.type === 'drop index') {
         for (const name of statement.names) for (const table of tables.values()) table.indexes = table.indexes.filter(i => i.indexName?.name !== name.name);
@@ -120,7 +154,7 @@ export function sqlItems(files: readonly ContractFile[]): DesignItem[] {
       const foreign = table.constraints.find(c => c.type === 'foreign key' && c.localColumns.some(k => k.name === name));
       const fk = reference ? `${tableName(reference.foreignTable)}.${reference.foreignColumns.map(k => k.name).join(',')}`
         : foreign?.type === 'foreign key' ? `${tableName(foreign.foreignTable)}.${foreign.foreignColumns[foreign.localColumns.findIndex(k => k.name === name)]?.name ?? ''}` : null;
-      const unique = Boolean(primary(table, c) || c.constraints?.some(c => c.type === 'unique') || table.constraints.some(c => c.type === 'unique' && c.columns.length === 1 && c.columns[0]?.name === name));
+      const unique = Boolean(c.constraints?.some(c => c.type === 'primary key' || c.type === 'unique') || table.constraints.some(c => (c.type === 'primary key' || c.type === 'unique') && c.columns.length === 1 && c.columns[0]?.name === name));
       const fallback = c.constraints?.find(c => c.type === 'default');
       return { name, type: toSql.dataType(c.dataType).trim(), nullable: !required(table, c), pk: Boolean(primary(table, c)), unique, fk, default: fallback?.type === 'default' ? toSql.expr(fallback.default) : null, desc };
     }), constraints: table.constraints.map(constraintText), usedBy: [],

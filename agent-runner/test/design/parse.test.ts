@@ -92,7 +92,7 @@ test('Avro·Neo4j·QuestDB·미지원 파일은 원문을 남기고 대조용 �
 test('Q-14 A: Kafka JSON Schema는 지역 참조를 해석하고 Avro·Protobuf는 대조 안 함이다', () => {
   const raw = JSON.stringify({ asyncapi: '3.0.0', servers: { k: { host: 'example.invalid', protocol: 'kafka' } },
     channels: { created: { address: 'users.created', messages: { event: { payload: {
-      schemaFormat: 'application/schema+json;version=draft-07', schema: { type: 'object', properties: { id: { type: 'string' } } },
+      schemaFormat: 'application/schema+json;version=draft-07', schema: { definitions: { Id: { type: 'string' } }, type: 'object', properties: { id: { $ref: '#/definitions/Id' } } },
     } } } } } });
   const parsed = parseContracts([file('contracts/events/asyncapi.json', raw)]);
   expect(parsed.items[0]).toMatchObject({ itemKey: 'users.created', kind: 'Kafka' });
@@ -196,4 +196,48 @@ test('SQL의 rollback과 search_path 변경을 무시해 잘못된 스키마를 
     expect(parsed.files[0]?.status).toBe('error');
     expect(parsed.items).toEqual([]);
   }
+});
+
+test('SQL 복합 기본키의 개별 컬럼을 unique로 오인하지 않고 이름 변경을 참조·인덱스에도 적용한다', () => {
+  const parsed = parseContracts([file('contracts/db/postgres/migrations/001.sql', `
+    CREATE TABLE users (id uuid, tenant uuid, PRIMARY KEY(id, tenant));
+    CREATE TABLE posts (user_id uuid, tenant uuid, FOREIGN KEY(user_id, tenant) REFERENCES users(id, tenant));
+    CREATE INDEX users_id ON users(id);
+    ALTER TABLE users RENAME COLUMN id TO user_id;
+    ALTER TABLE users RENAME TO people;
+  `)]);
+  expect(parsed.items.find(i => i.itemKey === 'postgres:people')?.content).toMatchObject({ columns: expect.arrayContaining([
+    { name: 'user_id', type: 'uuid', nullable: false, pk: true, unique: false, fk: null, default: null, desc: '' },
+  ]), indexes: [{ name: 'users_id', columns: 'user_id', kind: 'BTREE' }] });
+  expect(parsed.items.find(i => i.itemKey === 'postgres:posts')?.content).toMatchObject({ columns: expect.arrayContaining([
+    { name: 'user_id', type: 'uuid', nullable: true, pk: false, unique: false, fk: 'people.user_id', default: null, desc: '' },
+  ]) });
+});
+
+test('지원하지 않는 CASCADE 삭제는 낡은 외래키를 성공 결과에 남기지 않는다', () => {
+  for (const change of ['DROP TABLE users CASCADE;', 'ALTER TABLE users DROP COLUMN id CASCADE;']) {
+    const parsed = parseContracts([file('contracts/db/postgres/migrations/001.sql',
+      `CREATE TABLE users (id uuid PRIMARY KEY); CREATE TABLE posts (user_id uuid REFERENCES users(id)); ${change}`)]);
+    expect(parsed.files[0]?.status).toBe('error');
+    expect(parsed.items).toEqual([]);
+  }
+});
+
+test('의존하는 인덱스·제약·다른 테이블의 외래키가 있는 컬럼 삭제는 부분 해석하지 않는다', () => {
+  for (const dependency of [
+    'CREATE INDEX users_id ON users(id);',
+    'ALTER TABLE users ADD PRIMARY KEY(id);',
+    'CREATE TABLE posts (user_id uuid REFERENCES users(id));',
+  ]) {
+    const parsed = parseContracts([file('contracts/db/postgres/migrations/001.sql',
+      `CREATE TABLE users (id uuid); ${dependency} ALTER TABLE users DROP COLUMN id;`)]);
+    expect(parsed.files[0]?.status).toBe('error');
+    expect(parsed.items).toEqual([]);
+  }
+});
+
+test('YAML 별칭·객체 키·제어 문자 경로는 원문을 보존하거나 경계를 거부한다', () => {
+  const raw = 'openapi: 3.1.0\npaths: &paths {}\ncomponents: *paths';
+  expect(parseContracts([file('contracts/api/openapi.yaml', raw)]).files[0]).toMatchObject({ raw, status: 'error' });
+  expect(() => parseContracts([file('contracts/api/\u0000openapi.yaml', raw)])).toThrow();
 });

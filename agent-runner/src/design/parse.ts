@@ -104,14 +104,16 @@ function eventItems(root: Record<string, unknown>, path: string): DesignItem[] {
       return Object.entries(record(channel.messages ?? {})).flatMap(([name, source]) => {
         const message = dereference(source, root);
         let payload = message.payload;
+        let payloadRoot: unknown = root;
         if (payload !== undefined && typeof payload === 'object' && payload !== null && 'schemaFormat' in payload) {
           const multi = record(payload);
           if (typeof multi.schemaFormat !== 'string' || !/^(application\/schema\+json|application\/vnd\.aai\.asyncapi\+json)(;|$)/.test(multi.schemaFormat)) throw new Error('JSON Schema가 아닌 메시지는 대조 안 함입니다.');
           payload = multi.schema;
+          payloadRoot = multi.schema;
         }
         const at = `/messages/${pointer(name)}`;
         const fields: DesignShape['fields'] = [{ path: at, type: 'message', required: false }];
-        fields.push(...schemaFields(payload, root, `${at}/payload`, false));
+        fields.push(...schemaFields(payload, payloadRoot, `${at}/payload`, false));
         if (message.headers !== undefined) fields.push(...schemaFields(message.headers, root, `${at}/headers`, false));
         return fields;
       });
