@@ -130,6 +130,16 @@ function VerifyBody({ project }: { project: ProjectState }) {
           ctx={ctx} sel={sel} filter={filter}
           onFilter={(patch) => { setParam(patch); }}
           onSelect={(id) => { setParam({ sel: id }); }}
+          onStep={(ids, delta) => {
+            // 지금 주소의 선택에서 한 칸 옮긴다. 키를 빠르게 연달아 눌러도 직전 화면 값이 아니라 최신 주소를 기준으로 한다.
+            // React Router의 함수형 setParams도 그린 시점의 값을 주므로 window.location에서 읽는다.
+            const now = new URLSearchParams(window.location.search);
+            const cur = now.get('sel') ?? '';
+            const next = ids[ids.indexOf(cur) + delta];
+            if (!ids.includes(cur) || !next) return;
+            now.set('sel', next);
+            setParams(now);
+          }}
           onOpenTask={(path) => { void navigate(path); }}
         />
       )}
@@ -152,9 +162,10 @@ interface Ctx {
 const RESULT_OPTS = [['', '전체'], ['PASS', 'PASS'], ['FAIL', 'FAIL'], ['BLOCKED', 'BLOCKED']] as const;
 const AGENT_OPTS = [['', '전체'], ['Codex', 'Codex'], ['Claude', 'Claude']] as const;
 
-function ResultsTab({ ctx, sel, filter, onFilter, onSelect, onOpenTask }: {
+function ResultsTab({ ctx, sel, filter, onFilter, onSelect, onStep, onOpenTask }: {
   ctx: Ctx; sel: string; filter: { result: string; agent: string };
-  onFilter: (patch: Record<string, string>) => void; onSelect: (id: string) => void; onOpenTask: (path: string) => void;
+  onFilter: (patch: Record<string, string>) => void; onSelect: (id: string) => void;
+  onStep: (ids: string[], delta: 1 | -1) => void; onOpenTask: (path: string) => void;
 }) {
   const rows = resultRows(ctx.verifs, ctx.attempts, filter);
   const selected = sel ? ctx.verifs.find((v) => v.id === sel) ?? null : null;
@@ -162,18 +173,22 @@ function ResultsTab({ ctx, sel, filter, onFilter, onSelect, onOpenTask }: {
   const listRef = useRef<HTMLDivElement>(null);
 
   // 상세 키보드: ↑/K 이전, ↓/J 다음, Esc 펼치기(UAT-TASK-11)
+  // 목록 ↔ 상세를 오가도 이 탭은 그대로라 듣기(listener)를 한 번만 건다. 상세인지는 누른 순간의 주소로 판단한다.
+  // 왜: 상세를 연 직후 바로 J를 눌러도(화면이 다시 그려지기 전) 놓치지 않게 한다.
+  const ids = rows.map((r) => r.id).join(' ');
   useEffect(() => {
-    if (!selected) return;
+    const list = ids.split(' ');
     const onKey = (e: KeyboardEvent) => {
+      if (!new URLSearchParams(window.location.search).get('sel')) return;
       if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || typing(e.target) || modalOpen()) return;
       const k = e.key;
-      if ((k === 'ArrowUp' || k === 'k' || k === 'K') && pos.prev) { e.preventDefault(); onSelect(pos.prev); }
-      else if ((k === 'ArrowDown' || k === 'j' || k === 'J') && pos.next) { e.preventDefault(); onSelect(pos.next); }
+      if (k === 'ArrowUp' || k === 'k' || k === 'K') { e.preventDefault(); onStep(list, -1); }
+      else if (k === 'ArrowDown' || k === 'j' || k === 'J') { e.preventDefault(); onStep(list, 1); }
       else if (k === 'Escape') { e.preventDefault(); onSelect(''); }
     };
     addEventListener('keydown', onKey);
     return () => { removeEventListener('keydown', onKey); };
-  }, [selected, pos.prev, pos.next, onSelect]);
+  }, [ids, onStep, onSelect]);
 
   const agentOf = (v: VerificationItem) => ctx.attempts.get(v.attemptId)?.agent ?? (ctx.attemptsLoading ? '…' : '—');
   const attemptOf = (v: VerificationItem) => ctx.attempts.get(v.attemptId)?.attemptKey ?? (ctx.attemptsLoading ? '…' : '—');
