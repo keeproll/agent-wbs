@@ -20,13 +20,17 @@ const pct = (rate: number) => `${String(Math.round(rate * 100))}%`;
 
 export function PlanTab() {
   const queryClient = useQueryClient();
+  const { client } = useApi();
   const [recalc, setRecalc] = useState(0);
   useDim(recalc > 0 ? '일정 다시 계산 중 — 잠시 후 갱신됩니다' : null);
   /** 일정에 영향을 주는 저장 뒤: 일정을 서버에서 다시 읽는 동안 흐리게 한다. */
   const recalculate = async () => {
     setRecalc((n) => n + 1);
     try {
-      await queryClient.refetchQueries({ queryKey: apiKey('getSchedule', {}) });
+      // 이 탭에는 일정 query가 없을 수 있어 서버에서 직접 새로 읽고 캐시에 넣는다(대시보드·WBS·Runner 탭이 같은 값을 본다).
+      queryClient.setQueryData(apiKey('getSchedule', {}), await client.call('getSchedule', {}));
+    } catch {
+      // 일정 읽기 실패는 저장 실패가 아니다. 일정을 쓰는 화면이 다음 변경 이벤트 때 다시 읽고, 실패하면 그 화면이 알린다.
     } finally {
       setRecalc((n) => n - 1);
     }
