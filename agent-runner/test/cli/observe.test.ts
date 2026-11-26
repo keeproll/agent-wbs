@@ -9,11 +9,17 @@ const run = (events: CliEvent[], finish = true) => {
   return o;
 };
 const result: CliEvent = { type: 'result', ok: true, reason: 'completed' };
-const sub = (id: string, phase: 'requested' | 'running' | 'returned' | 'done' | 'unknown', extra: object = {}): CliEvent => ({ type: 'subagent', id, phase, ...extra });
+/** Codex 상태 보고 */
+const sub = (id: string, phase: 'running' | 'done' | 'unknown', extra: object = {}): CliEvent => ({ type: 'subagent', id, phase, ...extra });
+/** Claude 도구 호출·결과·task 시작·알림 */
+const call = (id: string): CliEvent => ({ type: 'agent_call', id, parentId: null });
+const toolResult = (id: string): CliEvent => ({ type: 'tool_result', toolUseId: id });
+const started = (id: string, background: boolean): CliEvent => ({ type: 'task', op: 'started', taskId: `t-${id}`, taskType: 'local_agent', toolUseId: id, background });
+const notified = (id: string): CliEvent => ({ type: 'task', op: 'notification', taskId: `t-${id}`, toolUseId: id, status: 'completed' });
 
 describe('SubagentObserver — 관측만, 추정·반환 근거 아님(G §6.7)', () => {
   test('같은 ID를 여러 번 봐도 한 번만 센다', () => {
-    expect(run([sub('a', 'requested'), sub('a', 'running'), sub('a', 'running'), result]).snapshot()).toMatchObject({ observed: 1, peak: 1 });
+    expect(run([call('a'), call('a'), sub('b', 'running'), sub('b', 'running'), result]).snapshot()).toMatchObject({ observed: 2, peak: 2 });
   });
 
   test('결과 없이 끝난 스트림(출력 없음·단절)은 실행 수 0이 아니라 미확인', () => {
@@ -40,15 +46,15 @@ describe('SubagentObserver — 관측만, 추정·반환 근거 아님(G §6.7)'
     expect(o.snapshot().state).toBe('ok');
   });
 
-  test('배경 하위 Agent는 도구 결과(returned)로 빼지 않는다', () => {
-    const o = run([sub('a', 'running', { background: true }), sub('a', 'returned'), result], false);
+  test('배경 하위 Agent는 도구 결과로 빼지 않는다', () => {
+    const o = run([call('a'), started('a', true), toolResult('a'), result], false);
     expect(o.snapshot().observed).toBe(1);
-    o.apply(sub('a', 'done'));
+    o.apply(notified('a'));
     expect(o.snapshot().observed).toBe(0);
   });
 
   test('전경 하위 Agent는 도구 결과로 끝난 것으로 본다', () => {
-    expect(run([sub('a', 'requested'), sub('a', 'returned'), result]).snapshot().observed).toBe(0);
+    expect(run([call('a'), toolResult('a'), result]).snapshot().observed).toBe(0);
   });
 
   test('ID 없는 생성은 미확인', () => {

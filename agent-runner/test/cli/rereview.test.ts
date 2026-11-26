@@ -16,7 +16,9 @@ test('a late task_updated from run 001 must not clear active run 002', () => {
   expect(observe([
     call('tool-A'), start('tool-A', '001'), start('tool-A', '002'),
     { type: 'system', subtype: 'task_updated', task_id: 'task-A', run_id: '001', patch: { status: 'completed' } }, ok,
-  ])).toMatchObject({ observed: 1, state: 'ok' });
+  // 재리뷰 2 결정 B로 state 기대만 'ok' → 'unconfirmed'로 바꿈: 같은 tool-A에 run 002가 또 오면 어느 run이 현재인지
+  // 증명할 수 없다(run_id 순서로 추측하지 않음). observed 1 유지 기대는 그대로다.
+  ])).toMatchObject({ observed: 1, state: 'unconfirmed' });
 });
 test('a resumed task with a new tool call must leave no phantom agent after completion', () => {
   expect(observe([
@@ -26,27 +28,27 @@ test('a resumed task with a new tool call must leave no phantom agent after comp
 });
 
 // 같은 부류: 지나간 run의 메시지가 현재 run을 덮는 경우, 재개 때 같은 Agent가 둘로 남는 경우.
-// 규칙 하나(claude.ts `runGate`)로 막는다: task_* 메시지는 현재 run 것만 적용하고, 지나간 run은 버리고,
-// run을 연결할 수 없으면 미확인. 재개가 새 도구 ID로 오면 그 임시 ID를 기존 Agent로 합친다(merged).
+// fix3부터는 reduce.ts의 순수 reducer가 막는다: 현재 run은 이 launch의 도구 호출 순서로만 정하고, 지나간 run은 버리고,
+// 연결을 증명할 수 없으면 미확인. 재개가 새 도구 ID로 오면 그 호출을 기존 Agent의 별칭으로 합친다.
 const updated = (run: string | undefined, patch: object) => ({ type: 'system', subtype: 'task_updated', task_id: 'task-A', ...(run ? { run_id: run } : {}), patch });
 const startFg = (tool: string, run: string) => ({ ...start(tool, run), is_backgrounded: false });
 const result = (tool: string) => ({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: tool, content: 'ok' }] } });
 
 test('늦게 다시 온 이전 run의 task_started가 끝난 Agent를 되살리지 않는다', () => {
   expect(observe([
-    call('tool-A'), start('tool-A', '001'), start('tool-A', '002'), done('tool-A', '002'), start('tool-A', '001'), ok,
+    call('tool-A'), start('tool-A', '001'), call('tool-B'), start('tool-B', '002'), done('tool-B', '002'), start('tool-A', '001'), ok,
   ])).toMatchObject({ observed: 0, state: 'ok' });
 });
 
 test('이전 run의 배경 전환 patch는 현재 run의 배경 여부를 바꾸지 않는다', () => {
   expect(observe([
-    call('tool-A'), startFg('tool-A', '001'), startFg('tool-A', '002'), updated('001', { is_backgrounded: true }), result('tool-A'), ok,
+    call('tool-A'), startFg('tool-A', '001'), call('tool-B'), startFg('tool-B', '002'), updated('001', { is_backgrounded: true }), result('tool-B'), ok,
   ])).toMatchObject({ observed: 0, state: 'ok' });
 });
 
 test('현재 run의 patch는 적용한다', () => {
   expect(observe([
-    call('tool-A'), startFg('tool-A', '001'), startFg('tool-A', '002'), updated('002', { is_backgrounded: true }), result('tool-A'), ok,
+    call('tool-A'), startFg('tool-A', '001'), call('tool-B'), startFg('tool-B', '002'), updated('002', { is_backgrounded: true }), result('tool-B'), ok,
   ])).toMatchObject({ observed: 1, state: 'ok' });
 });
 

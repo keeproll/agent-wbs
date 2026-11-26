@@ -1,5 +1,5 @@
 import { reservedSlots } from '../resources/concurrency.ts';
-import type { CliEvent } from './events.ts';
+import { activeIds, initialObservation, reduceObservation, type ObservationInput, type ObservationState } from './reduce.ts';
 
 export interface ObservationSnapshot {
   /** 지금 실행 중으로 관측된 하위 Agent 수 */
@@ -11,63 +11,43 @@ export interface ObservationSnapshot {
   state: 'ok' | 'unconfirmed';
   /** 결과 이벤트(정상·실패)를 받았는가 */
   ended: boolean;
+  /** 지나간 run의 것이라 버린 이벤트 수 */
+  dropped: number;
 }
 
 /**
  * 출력 스트림에서 하위 Agent 수를 **관측**한다. 슬롯 반환·종료 판단의 근거가 아니다(G §6.7: 확정 근거는 프로세스 그룹뿐).
- * 규칙:
- * - 같은 ID는 한 번만 센다. `done`이면 뺀다. 배경 실행은 도구 결과(`returned`)로 빼지 않는다.
- * - 모르는 상태, ID 없는 생성, 깨진 줄, 복구 불가능한 스트림 오류, 결과 없이 끝난 스트림은 `unconfirmed`. 한 번 그러면 되돌리지 않는다.
+ * 이 클래스는 순수 reducer(`reduce.ts`의 `reduceObservation`)를 감싼 얇은 껍데기다. 규칙은 모두 reducer에 있다.
+ * - 관측기 하나 = Runner가 시작한 CLI 프로세스(launch) 하나. 같은 관측을 이어 프로세스를 다시 시작하면 `launch()`를 부른다.
+ * - 모르는 상태, ID 없는 생성, 깨진 줄, 복구 불가능한 스트림 오류, 연결을 증명할 수 없는 이벤트, 결과 없이 끝난 스트림은 `unconfirmed`.
+ *   한 번 그러면 되돌리지 않는다.
  * - 스트림이 끝나도 남은 수를 0으로 만들지 않는다(출력 없음·단절 ≠ 실행 수 0).
- * - 모르는 이벤트는 보존만 하고 수·상태를 바꾸지 않는다(추정하지 않음).
  */
 export class SubagentObserver {
-  readonly #active = new Set<string>();
-  readonly #background = new Set<string>();
-  #peak = 0;
-  #unconfirmed = false;
-  #ended = false;
+  #state: ObservationState = initialObservation();
 
-  apply(e: CliEvent): void {
-    switch (e.type) {
-      case 'subagent':
-        if (e.phase === 'merged') {
-          this.#active.delete(e.id);
-          break;
-        }
-        // 배경 여부는 run마다 다르다. 시작 보고가 알려 주면 그 값으로 바꾼다(지난 run의 배경 표시를 이어받지 않음).
-        if (e.background === true) this.#background.add(e.id);
-        if (e.background === false && e.phase === 'running') this.#background.delete(e.id);
-        if (e.phase === 'done' || (e.phase === 'returned' && !this.#background.has(e.id))) this.#active.delete(e.id);
-        else if (e.phase !== 'returned') this.#active.add(e.id);
-        if (e.phase === 'unknown') this.#unconfirmed = true;
-        this.#peak = Math.max(this.#peak, this.#active.size);
-        break;
-      case 'subagent_unlinked':
-        this.#unconfirmed = true;
-        break;
-      case 'unparsed':
-        this.#unconfirmed = true;
-        break;
-      case 'error':
-        // 복구 불가능한 스트림 오류(예: 연결 단절) 뒤의 관측은 믿을 수 없다. 뒤에 실패 결과가 와도 되돌리지 않는다(리뷰 2).
-        if (e.fatal) this.#unconfirmed = true;
-        break;
-      case 'result':
-        this.#ended = true;
-        break;
-      default:
-        break;
-    }
+  apply(e: ObservationInput): void {
+    this.#state = reduceObservation(this.#state, e);
+  }
+
+  /** Runner가 이 관측을 이어 CLI 프로세스를 다시 시작했다(launch 기록). */
+  launch(): void {
+    this.apply({ type: 'launch' });
   }
 
   /** 출력이 끝났을 때(프로세스 종료·스트림 닫힘) 부른다. */
   finish(): void {
-    if (!this.#ended) this.#unconfirmed = true;
+    this.apply({ type: 'end' });
+  }
+
+  get state(): ObservationState {
+    return this.#state;
   }
 
   snapshot(): ObservationSnapshot {
-    return { observed: this.#active.size, peak: this.#peak, active: [...this.#active], state: this.#unconfirmed ? 'unconfirmed' : 'ok', ended: this.#ended };
+    const s = this.#state;
+    const active = activeIds(s);
+    return { observed: active.length, peak: s.peak, active, state: s.unconfirmed ? 'unconfirmed' : 'ok', ended: s.ended, dropped: s.dropped };
   }
 }
 

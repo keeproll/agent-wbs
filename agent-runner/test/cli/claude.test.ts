@@ -12,7 +12,7 @@ const observe = (name: string) => {
 describe('Claude stream-json 어댑터(fixture)', () => {
   test('성공: 세션·주 Agent 글·토큰·결과', () => {
     const { events } = parseFixture('Claude', 'success');
-    expect(events.filter((e) => e.type !== 'activity')).toEqual([
+    expect(events.filter((e) => e.type !== 'activity' && e.type !== 'tool_result')).toEqual([
       { type: 'session', sessionId: '0b6f3c2e-6a1d-4f7e-9a51-2d4b8e7c1a90', model: 'claude-opus-5-5' },
       { type: 'message', text: '작업을 시작합니다.' },
       { type: 'message', text: '완료했습니다.' },
@@ -23,14 +23,14 @@ describe('Claude stream-json 어댑터(fixture)', () => {
 
   test('하위 Agent: 복수·중첩 생성의 ID와 부모 연결, 끝난 것만 뺀다', () => {
     const { events, o } = observe('subagents');
-    const subs = events.filter((e) => e.type === 'subagent');
-    expect(subs.filter((e) => e.phase === 'requested')).toEqual([
-      { type: 'subagent', id: 'toolu_A', phase: 'requested', parentId: null },
-      { type: 'subagent', id: 'toolu_B', phase: 'requested', parentId: null },
-      { type: 'subagent', id: 'toolu_C', phase: 'requested', parentId: 'toolu_A' },
+    expect(events.filter((e) => e.type === 'agent_call')).toEqual([
+      { type: 'agent_call', id: 'toolu_A', parentId: null },
+      { type: 'agent_call', id: 'toolu_B', parentId: null },
+      { type: 'agent_call', id: 'toolu_C', parentId: 'toolu_A' },
     ]);
-    // local_bash(배경 명령)는 하위 Agent가 아니다
-    expect(subs.some((e) => e.id === 'toolu_bg')).toBe(false);
+    // local_bash(배경 명령)는 하위 Agent가 아니다: 해석기는 종류를 그대로 넘기고 reducer가 세지 않는다
+    expect(events).toContainEqual(expect.objectContaining({ type: 'task', op: 'started', taskId: 'task_bash', taskType: 'local_bash' }));
+    expect(o.snapshot().active).not.toContain('toolu_bg');
     expect(o.snapshot()).toMatchObject({ observed: 1, peak: 3, active: ['toolu_B'] });
   });
 
@@ -47,7 +47,7 @@ describe('Claude stream-json 어댑터(fixture)', () => {
       o.apply(e);
       counts.push(o.snapshot().observed);
     }
-    const launchedAt = events.findIndex((e) => e.type === 'subagent' && e.phase === 'returned');
+    const launchedAt = events.findIndex((e) => e.type === 'tool_result' && e.toolUseId === 'toolu_bgA');
     expect(launchedAt).toBeGreaterThan(0);
     expect(counts[launchedAt]).toBe(1);
     expect(o.snapshot().observed).toBe(0);
