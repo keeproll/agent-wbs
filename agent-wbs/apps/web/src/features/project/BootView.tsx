@@ -7,7 +7,7 @@
  * - 승인·재분석은 화면이 본 초안 revision을 보낸다. 그사이 새 초안이 왔으면 409 충돌이고, 본 적 없는 새 초안을 자동으로 승인하지 않는다(UAT-PROJECT-07).
  */
 import { useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useApi } from '../../shared/api/ApiProvider.tsx';
 import type { ResponseOf } from '../../shared/api/contract.ts';
@@ -21,6 +21,7 @@ import { BusyButton } from '../../shared/ui/BusyButton.tsx';
 import { useNotice } from '../../shared/ui/feedback.tsx';
 import { BOOT_STEPS, fmtH, STEP_CHIP, TECH_AUTH, TECH_LV, TECH_ST, TYPE_LABEL, shortSha, type BootProject, type Decision, type StepStatus } from './labels.ts';
 import { CleanupBanner } from './ResetHistory.tsx';
+import { useReapply } from './useReapply.ts';
 import { ResetModal } from './ResetModal.tsx';
 
 type Pick = 'approve' | 'reject';
@@ -52,6 +53,12 @@ export function draftTree(draft: Draft) {
   return { rows, sum };
 }
 
+/** 카드의 편집 여부를 화면(BootView)에 알린다. 카드가 사라지면 편집 없음으로 돌린다. */
+function useReportDirty(dirty: boolean, onDirty: (dirty: boolean) => void) {
+  useEffect(() => { onDirty(dirty); }, [dirty, onDirty]);
+  useEffect(() => () => { onDirty(false); }, [onDirty]);
+}
+
 export function BootView({ project }: { project: BootProject }) {
   useDocumentTitle('초기 분석');
   const b = project.bootstrap;
@@ -62,6 +69,14 @@ export function BootView({ project }: { project: BootProject }) {
   const waitRunner = online === false || project.cleanup !== 'none';
   const input = project.inputs.find((i) => i.v === 1) ?? project.inputs[0];
   const [resetOpen, setResetOpen] = useState(false);
+  /**
+   * 편집 보호는 화면에 하나만 둔다(리뷰 M3-04 P1). React Router의 useBlocker는 한 번에 보호기 하나만 지원해,
+   * 기술 결정 카드와 초안 카드가 각각 보호기를 두면 뒤의 dirty=false가 앞의 선택을 덮어 묻지 않고 이동했다.
+   * 그래서 두 카드는 편집 여부만 알리고, 여기서 합쳐 한 번만 등록한다.
+   */
+  const [techDirty, setTechDirty] = useState(false);
+  const [draftDirty, setDraftDirty] = useState(false);
+  useEditGuard(techDirty || draftDirty);
 
   return (
     <div className="page scroll">
@@ -100,8 +115,8 @@ export function BootView({ project }: { project: BootProject }) {
           {[...b.logs].reverse().slice(0, 8).map((l, i) => <div key={`${l.at}-${String(i)}`} className="rpt-li"><span className="mono muted">{formatDateTime(l.at)}</span><span>{l.text}</span></div>)}
         </section>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
-          {b.decisions.length > 0 && <TechPanel project={project} techStep={stepOf('tech')} />}
-          <DraftPanel project={project} />
+          {b.decisions.length > 0 && <TechPanel project={project} techStep={stepOf('tech')} onDirty={setTechDirty} />}
+          <DraftPanel project={project} onDirty={setDraftDirty} />
         </div>
       </div>
       {resetOpen && <ResetModal project={project} onClose={() => { setResetOpen(false); }} />}
@@ -142,7 +157,7 @@ function BootFailure({ project, stepLabel, onCancel }: { project: BootProject; s
 }
 
 /** UI-02C 기술 결정 확정 */
-function TechPanel({ project, techStep }: { project: BootProject; techStep: StepStatus | undefined }) {
+function TechPanel({ project, techStep, onDirty }: { project: BootProject; techStep: StepStatus | undefined; onDirty: (dirty: boolean) => void }) {
   const { client } = useApi();
   const queryClient = useQueryClient();
   const notify = useNotice();
@@ -155,7 +170,7 @@ function TechPanel({ project, techStep }: { project: BootProject; techStep: Step
   const chosen = Object.fromEntries(Object.entries(picks).filter(([id]) => pending.some((d) => d.id === id)));
   const left = pending.filter((d) => !chosen[d.id]).length;
   const dirty = Object.keys(chosen).length > 0;
-  useEditGuard(dirty);
+  useReportDirty(dirty, onDirty);
   const { restoreOffer } = useSessionDraft<Record<string, Pick>>({
     id: `project:boot:tech:${project.bootstrap.jobId}`, label: '기술 결정 승인 · 반려 선택', value: dirty ? chosen : null,
     onRestore: (data) => { setPicks(data); },
@@ -166,6 +181,8 @@ function TechPanel({ project, techStep }: { project: BootProject; techStep: Step
   const build = (list: readonly Decision[], from: Record<string, Pick>): Body => ({
     decisions: list.filter((d) => d.status === 'pending' && from[d.id]).map((d) => ({ id: d.id, choice: from[d.id] as Pick, updatedAt: d.updatedAt })),
   });
+  // 충돌 재적용 요청은 결과가 확인될 때까지 같은 본문·키로 다시 보낸다(useReapply).
+  const reapply = useReapply<Body>();
   const confirm = useSave<ResponseOf<'confirmTech'>, Body>({
     target: '기술 결정 확정',
     failTitle: '확정하지 못했습니다',
@@ -181,9 +198,11 @@ function TechPanel({ project, techStep }: { project: BootProject; techStep: Step
     onRejected: refresh,
     onConflictReload: () => { setPicks({}); refresh(); },
     onConflictReapply: async () => {
-      const latest = await client.call('getProject', {});
-      if (!('bootstrap' in latest)) throw new Error('초기 분석 단계가 아닙니다.');
-      await client.call('confirmTech', { params: { projectId: project.id }, body: build(latest.bootstrap.decisions, chosen) });
+      await reapply(async () => {
+        const latest = await client.call('getProject', {});
+        if (!('bootstrap' in latest)) throw new Error('초기 분석 단계가 아닙니다.');
+        return build(latest.bootstrap.decisions, chosen);
+      }, (body, key) => client.call('confirmTech', { params: { projectId: project.id }, body, idempotencyKey: key }));
       setPicks({});
       refresh();
       notify('최신 결정에 내 선택을 다시 적용해 확정했습니다.');
@@ -235,7 +254,7 @@ function TechPanel({ project, techStep }: { project: BootProject; techStep: Step
 }
 
 /** UI-02D WBS 초안·최초 승인 */
-function DraftPanel({ project }: { project: BootProject }) {
+function DraftPanel({ project, onDirty }: { project: BootProject; onDirty: (dirty: boolean) => void }) {
   const { client } = useApi();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -246,7 +265,7 @@ function DraftPanel({ project }: { project: BootProject }) {
   const [reInstr, setReInstr] = useState('');
   const [err, setErr] = useState('');
   const dirty = reInstr.trim() !== '';
-  useEditGuard(dirty);
+  useReportDirty(dirty, onDirty);
   const { restoreOffer } = useSessionDraft<{ reInstr: string }>({
     id: `project:boot:rerun:${b.jobId}`, label: '재분석 지시', value: dirty ? { reInstr } : null,
     onRestore: (data) => { setReInstr(data.reInstr); },

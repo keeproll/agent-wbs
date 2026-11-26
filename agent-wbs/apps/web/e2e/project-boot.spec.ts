@@ -174,3 +174,47 @@ test('승인 500 → 같은 멱등 키로 다시 시도', async ({ page }) => {
   const [a, b] = api.requests('POST /api/project/bootstrap/approve');
   expect(a?.headers()['idempotency-key']).toBe(b?.headers()['idempotency-key']);
 });
+
+test('리뷰 P1: 기술 결정을 고른 채 다른 메뉴로 가면 편집 보호가 묻고, 취소하면 선택이 남는다', async ({ page }) => {
+  await openBoot(page, bootProject({ steps: steps('tech'), decisions: DECISIONS }));
+  const td5 = page.locator('[data-td="TD-05"]');
+  await td5.getByRole('button', { name: '승인', exact: true }).click();
+  await page.getByRole('navigation').getByRole('link', { name: '설정', exact: true }).click();
+  const dialog = page.getByRole('alertdialog', { name: '편집 내용 버리기' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: '취소' }).click();
+  await expect(page).toHaveURL('/project');
+  await expect(td5.getByRole('button', { name: '승인', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  // 초안 재분석 지시만 쓴 경우에도 같은 보호기 하나가 지킨다(초안 단계).
+});
+
+test('리뷰 P2: 기술 결정 충돌 재적용의 응답을 잃으면 같은 키·같은 본문으로 다시 보낸다', async ({ page }) => {
+  const api = await openBoot(page, bootProject({ steps: steps('tech'), decisions: DECISIONS }));
+  const panel = page.getByRole('region', { name: '기술 결정 확정' });
+  await panel.locator('[data-td="TD-03"]').getByRole('button', { name: '승인' }).click();
+  await panel.locator('[data-td="TD-05"]').getByRole('button', { name: '반려' }).click();
+  const url = `POST /api/projects/${PROJECT_ID}/boot/tech/confirm`;
+  api.on(url, (route) => json(route, 409, errorBody('VERSION_CONFLICT', { details: { current: null, changes: [] } })));
+  await panel.getByRole('button', { name: '기술 결정 확정' }).click();
+  const modal = page.getByRole('alertdialog');
+  await expect(modal).toBeVisible();
+  let n = 0;
+  api.on(url, (route) => (++n === 1 ? route.abort('failed') : json(route, 200, { decisions: [] })));
+  await modal.getByRole('button', { name: '최신 내용에 내 변경 다시 적용' }).click();
+  await expect(modal).toContainText('NETWORK_ERROR');
+  await modal.getByRole('button', { name: '최신 내용에 내 변경 다시 적용' }).click();
+  await expect(modal).toHaveCount(0);
+  const [, a, b] = api.requests(url);
+  expect(a?.headers()['idempotency-key']).toBeTruthy();
+  expect(b?.headers()['idempotency-key']).toBe(a?.headers()['idempotency-key']);
+  expect(b?.postDataJSON()).toEqual(a?.postDataJSON());
+});
+
+test('리뷰 P1: 초안 단계의 재분석 지시도 같은 보호기 하나로 지킨다', async ({ page }) => {
+  await openBoot(page, bootProject({ steps: steps('approve'), decisions: DECISIONS.map((d) => ({ ...d, status: d.status === 'pending' ? 'approved' : d.status })), draft: true }));
+  await page.getByLabel('재분석 지시').fill('메시지 기능을 분리해줘');
+  await page.getByRole('navigation').getByRole('link', { name: '설정', exact: true }).click();
+  await expect(page.getByRole('alertdialog', { name: '편집 내용 버리기' })).toBeVisible();
+  await page.getByRole('button', { name: '저장하지 않고 이동' }).click();
+  await expect(page).toHaveURL(/\/settings/);
+});

@@ -24,6 +24,7 @@ import { useNotice } from '../../shared/ui/feedback.tsx';
 import { CHANGE_CHIP, INPUT_STEPS, STEP_CHIP, inputArea, shortSha, type ProjectState, type StepStatus } from './labels.ts';
 import { useGithubSettings } from './github.ts';
 import { RepoLayout } from './RegisterView.tsx';
+import { useReapply } from './useReapply.ts';
 import { ResetModal } from './ResetModal.tsx';
 
 type Active = Extract<ProjectState, { approvedAt: unknown }>;
@@ -51,7 +52,9 @@ export function ActiveView({ project }: { project: Active }) {
       <div className="page-h"><div><h1>프로젝트</h1><p className="page-sub">프로젝트 정보 · 입력 자료 · 상태 · WBS 구조 · Agent 참여 현황 — 프로젝트는 하나만 등록되며, 처음부터 다시 시작하려면 「프로젝트 초기화」</p></div></div>
       <InputsCard project={project} />
       <section className="card" aria-labelledby="pj-info-h">
-        <div className="dp-h"><h2 id="pj-info-h">프로젝트 정보</h2></div>
+        {/* 계약 대기(UAT-PROJECT-10): 프로젝트 정보 수정 API가 아직 계약에 없다. 서버 후속 작업이 계약을 정하면 편집 폼을 연결한다. */}
+        <div className="dp-h"><h2 id="pj-info-h">프로젝트 정보</h2><button type="button" className="btn sm" disabled aria-describedby="pj-edit-wait">편집</button></div>
+        <p id="pj-edit-wait" className="fhint" style={{ margin: '0 0 8px' }} data-testid="contract-wait-edit">이름 · 설명 · 시작일 · 목표일 편집은 서버 기능이 준비되면 사용할 수 있습니다.</p>
         <div className="kv" style={{ gridTemplateColumns: '110px minmax(0,1fr)' }}>
           <span className="kv-l">프로젝트 ID</span><span className="kv-v mono">{project.id}</span>
           <span className="kv-l">이름</span><span className="kv-v">{project.name}</span>
@@ -100,6 +103,11 @@ function InputsCard({ project }: { project: Active }) {
     return p;
   };
 
+  // 충돌 재적용 요청은 결과가 확인될 때까지 같은 본문·키로 다시 보낸다(useReapply).
+  const reapplyAnalyze = useReapply<AnalyzeBody>();
+  const reapplySkip = useReapply<{ updatedAt: string; commits: string[] }>();
+  const reapplyRetry = useReapply<{ updatedAt: string; version: number }>();
+  const reapplyRecheck = useReapply<{ updatedAt: string }>();
   interface AnalyzeBody { updatedAt: string; commit: string; commits: string[]; instr?: string }
   const analyzeBody = (p: Pick<Active, 'updatedAt' | 'inputHead' | 'changeCommits'>): AnalyzeBody => ({
     updatedAt: p.updatedAt, commit: p.inputHead, commits: p.changeCommits.filter((c) => c.state === 'pending').map((c) => c.sha),
@@ -115,7 +123,11 @@ function InputsCard({ project }: { project: Active }) {
     successNotice: `입력 자료 v${String((last?.v ?? 0) + 1)} (main @ ${shortSha(project.inputHead)})으로 고정했습니다. Planning이 v${String(last?.v ?? 0)}과의 차이를 분석합니다.`,
     onRejected: refresh,
     onConflictReload: refresh,
-    onConflictReapply: async () => { const p = await latest(); await client.call('analyzeInputs', { body: analyzeBody(p) }); setInstr(''); refresh(); },
+    onConflictReapply: async () => {
+      await reapplyAnalyze(async () => analyzeBody(await latest()), (body, key) => client.call('analyzeInputs', { body, idempotencyKey: key }));
+      setInstr('');
+      refresh();
+    },
   });
   interface SkipBody { updatedAt: string; commits: string[] }
   const skip = useSave<unknown, SkipBody>({
@@ -129,8 +141,10 @@ function InputsCard({ project }: { project: Active }) {
     onRejected: refresh,
     onConflictReload: refresh,
     onConflictReapply: async () => {
-      const p = await latest();
-      await client.call('skipInputs', { body: { updatedAt: p.updatedAt, commits: p.changeCommits.filter((c) => c.state === 'pending').map((c) => c.sha) } });
+      await reapplySkip(async () => {
+        const p = await latest();
+        return { updatedAt: p.updatedAt, commits: p.changeCommits.filter((c) => c.state === 'pending').map((c) => c.sha) };
+      }, (body, key) => client.call('skipInputs', { body, idempotencyKey: key }));
       refresh();
     },
   });
@@ -143,7 +157,11 @@ function InputsCard({ project }: { project: Active }) {
     successNotice: '차이 분석을 실패한 단계부터 다시 시도합니다.',
     onRejected: refresh,
     onConflictReload: refresh,
-    onConflictReapply: async () => { const p = await latest(); await client.call('retryInputs', { body: { updatedAt: p.updatedAt, version: p.inputJob?.version ?? 0 } }); refresh(); },
+    onConflictReapply: async () => {
+      await reapplyRetry(async () => { const p = await latest(); return { updatedAt: p.updatedAt, version: p.inputJob?.version ?? 0 }; },
+        (body, key) => client.call('retryInputs', { body, idempotencyKey: key }));
+      refresh();
+    },
   });
   const recheck = useSave<ResponseOf<'recheckInputs'>, { updatedAt: string }>({
     target: '입력 이력 복구 확인',
@@ -153,7 +171,11 @@ function InputsCard({ project }: { project: Active }) {
     onSuccess: (res) => { notify(`입력 확인을 다시 요청했습니다 (${String(res.inputRecheck)}번째). Runner가 main 이력을 다시 확인해 연결이 맞으면 경고가 풀립니다.`); refresh(); },
     onRejected: refresh,
     onConflictReload: refresh,
-    onConflictReapply: async () => { const p = await latest(); await client.call('recheckInputs', { body: { updatedAt: p.updatedAt } }); refresh(); },
+    onConflictReapply: async () => {
+      const res = await reapplyRecheck(async () => ({ updatedAt: (await latest()).updatedAt }), (body, key) => client.call('recheckInputs', { body, idempotencyKey: key }));
+      notify(`입력 확인을 다시 요청했습니다 (${String(res.inputRecheck)}번째). Runner가 main 이력을 다시 확인해 연결이 맞으면 경고가 풀립니다.`);
+      refresh();
+    },
   });
   const busyAny = analyze.busy || skip.busy;
 
@@ -161,6 +183,7 @@ function InputsCard({ project }: { project: Active }) {
   return (
     <section className="card" aria-labelledby="in-h">
       <div className="dp-h"><h2 id="in-h">입력 자료 · 저장소 <span className="tag">GitHub</span></h2></div>
+      {github.isError && !gh && <div className="banner warn" data-testid="gh-unknown"><div className="banner-b">GitHub 연결 상태를 확인하지 못했습니다 — 입력 변경 확인이 멈췄는지 알 수 없습니다. 설정 → Runner · 실행 환경 → GitHub 연결을 확인하세요.</div></div>}
       {ghBad && <div className="banner danger"><div className="banner-b">GitHub 인증 실패 — 입력 변경 확인이 멈춰 있습니다. 설정 → Runner · 실행 환경 → GitHub 연결을 확인하세요.</div></div>}
       {rewritten && (
         <div className="banner danger" data-testid="rewrite-alert">
@@ -182,7 +205,7 @@ function InputsCard({ project }: { project: Active }) {
       {pend.length > 0 ? (
         <div className="in-pend" data-testid="input-pending">
           {restoreOffer}
-          <div className="dec-h"><b>입력 자료 변경 감지</b><span className="sc sc-warn">팀장 확인 대기</span><span className="sp" /><span className="muted" style={{ fontSize: 12 }}>Runner가 main을 주기적으로 확인 (src/ 등 입력 외 경로 변경은 무시)</span></div>
+          <div className="dec-h"><b>입력 자료 변경 감지</b><span className="sc sc-warn">팀장 확인 대기</span><span className="sp" /><span className="muted" style={{ fontSize: 12 }}><DetectCheckedAt /> · Runner가 main을 주기적으로 확인 (src/ 등 입력 외 경로 변경은 무시)</span></div>
           <p className="dec-p">분석하지 않은 입력 변경 커밋 {pend.length}개 — 파일 {files.length}개 (프로토타입 {files.filter((f) => f.area === '프로토타입').length} · 설계 문서 {files.filter((f) => f.area === '설계 문서').length})</p>
           <div className="gtb" style={{ margin: '8px 0' }} role="table" aria-label="변경 커밋">{pend.map((c) => <div key={c.sha} className="gtr" role="row" style={{ gridTemplateColumns: '80px 148px minmax(200px,1fr) 150px', minWidth: 0 }}><span className="gc mono" role="cell"><b>{shortSha(c.sha)}</b></span><span className="gc mono" role="cell">{formatDateTime(c.at)}</span><span className="gc" role="cell">{c.message}</span><span className="gc muted" role="cell">{c.author} · 파일 {c.files.length}</span></div>)}</div>
           <div className="gtb" style={{ margin: '0 0 8px' }} role="table" aria-label="변경 파일">{files.map((f) => { const [c, l] = CHANGE_CHIP[f.change] ?? ['sc sc-none', f.change]; return <div key={f.path} className="gtr" role="row" style={{ gridTemplateColumns: '90px minmax(220px,1fr) 60px 90px', minWidth: 0 }}><span className="gc" role="cell">{f.area}</span><span className="gc mono" role="cell">{f.path}</span><span className="gc" role="cell"><span className={c}>{l}</span></span><span className="gc mono muted" role="cell">{lines(f.added, f.deleted)}</span></div>; })}</div>
@@ -193,7 +216,7 @@ function InputsCard({ project }: { project: Active }) {
           </div>
         </div>
       ) : (
-        <p className="fhint" style={{ margin: '0 0 10px' }} data-testid="input-none">새 입력 변경 없음 — Runner가 main을 주기적으로 확인합니다 (src/ 등 입력 외 경로 변경은 무시). prototype/uiux/ 또는 prototype/docs/ 를 바꿔 main에 push하면 여기에 나타나고, 팀장이 확인한 뒤 분석합니다.{skipped.length > 0 && ` 확인함 · 분석 안 함 ${String(skipped.length)}개 — 다음 분석 때 함께 비교.`}</p>
+        <p className="fhint" style={{ margin: '0 0 10px' }} data-testid="input-none">새 입력 변경 없음 — <DetectCheckedAt /> · Runner가 main을 주기적으로 확인합니다 (src/ 등 입력 외 경로 변경은 무시). prototype/uiux/ 또는 prototype/docs/ 를 바꿔 main에 push하면 여기에 나타나고, 팀장이 확인한 뒤 분석합니다.{skipped.length > 0 && ` 확인함 · 분석 안 함 ${String(skipped.length)}개 — 다음 분석 때 함께 비교.`}</p>
       )}
       <div className="gtb" style={{ margin: 0 }} role="table" aria-label="입력 자료 버전">
         <div className="gtr h" role="row" style={{ gridTemplateColumns: cols, minWidth: 0 }}><span className="gc" role="columnheader">버전</span><span className="gc" role="columnheader">고정</span><span className="gc" role="columnheader">커밋</span><span className="gc" role="columnheader">변경 파일</span><span className="gc" role="columnheader">팀장 지시</span><span className="gc" role="columnheader">분석 결과</span><span className="gc" role="columnheader">출처 Task</span></div>
@@ -218,4 +241,12 @@ function InputsCard({ project }: { project: Active }) {
       {analyze.conflictModal}{skip.conflictModal}{retry.conflictModal}
     </section>
   );
+}
+
+/**
+ * 감지 확인 시각 자리(계약 대기, UAT-PROJECT-09 b). 지금 계약의 프로젝트 응답에는 Runner가 마지막으로 main을 확인한 시각이 없다.
+ * 서버 후속 작업이 필드를 정하면 그 값을 formatDateTime으로 보인다. 그때까지 다른 시각으로 대신하지 않는다.
+ */
+function DetectCheckedAt() {
+  return <span data-testid="contract-wait-checked">Runner 확인 시각 — 서버 연결 대기</span>;
 }

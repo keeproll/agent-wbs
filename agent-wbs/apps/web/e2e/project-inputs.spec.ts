@@ -146,3 +146,64 @@ test('GitHub 권한 부족이면 입력 변경 확인이 멈춘 것을 알린다
   await page.reload();
   await expect(page.getByText('GitHub 인증 실패 — 입력 변경 확인이 멈춰 있습니다.', { exact: false })).toBeVisible();
 });
+
+const REWRITE = { id: 'al1', key: 'input_history_rewritten', severity: 'error', taskKey: null, target: null, text: '이력 재작성', at: T0 };
+test('리뷰 P2: recheck 충돌 재적용의 응답을 잃으면 최신을 다시 읽지 않고 같은 키·같은 본문으로 다시 보낸다', async ({ page }) => {
+  const api = await openProject(page, activeProject());
+  api.on('GET /api/alerts', (route) => json(route, 200, { items: [REWRITE] }));
+  await page.reload();
+  const url = 'POST /api/project/inputs/recheck';
+  api.on(url, (route) => json(route, 409, errorBody('VERSION_CONFLICT', { details: { current: null, changes: [] } })));
+  await page.getByRole('button', { name: '복구 확인 · 입력 확인 다시 시도' }).click();
+  const modal = page.getByRole('alertdialog');
+  await expect(modal).toBeVisible();
+  api.on('GET /api/project', (r) => json(r, 200, activeProject({ updatedAt: V2 })));
+  let n = 0;
+  api.on(url, (route) => (++n === 1 ? route.abort('failed') : json(route, 202, { inputRecheck: 2 })));
+  await modal.getByRole('button', { name: '최신 내용에 내 변경 다시 적용' }).click();
+  await expect(modal).toContainText('NETWORK_ERROR');
+  // 그사이 프로젝트 버전이 또 바뀌어도 결과를 모르는 요청을 먼저 그대로 끝낸다.
+  api.on('GET /api/project', (r) => json(r, 200, activeProject({ updatedAt: '2026-11-05T11:09:00.000000Z' })));
+  await modal.getByRole('button', { name: '최신 내용에 내 변경 다시 적용' }).click();
+  await expect(modal).toHaveCount(0);
+  const [, a, b] = api.requests(url);
+  expect(b?.headers()['idempotency-key']).toBe(a?.headers()['idempotency-key']);
+  expect(a?.postDataJSON()).toEqual({ updatedAt: V2 });
+  expect(b?.postDataJSON()).toEqual({ updatedAt: V2 });
+});
+
+for (const c of [
+  { name: '이 버전으로 분석', url: 'POST /api/project/inputs', ok: (route: Parameters<Parameters<FakeApi['on']>[1]>[0]) => json(route, 202, { jobId: 'j1' }) },
+  { name: '분석 안 함', url: 'POST /api/project/inputs/skip', ok: (route: Parameters<Parameters<FakeApi['on']>[1]>[0]) => json(route, 204, null) },
+]) {
+  test(`리뷰 P2: 「${c.name}」 충돌 재적용 재시도는 같은 키`, async ({ page }) => {
+    const api = await openProject(page);
+    api.on(c.url, (route) => json(route, 409, errorBody('VERSION_CONFLICT', { details: { current: null, changes: [] } })));
+    await page.getByRole('button', { name: c.name, exact: true }).click();
+    const modal = page.getByRole('alertdialog');
+    await expect(modal).toBeVisible();
+    let n = 0;
+    api.on(c.url, (route) => (++n === 1 ? route.abort('failed') : c.ok(route)));
+    await modal.getByRole('button', { name: '최신 내용에 내 변경 다시 적용' }).click();
+    await expect(modal).toContainText('NETWORK_ERROR');
+    await modal.getByRole('button', { name: '최신 내용에 내 변경 다시 적용' }).click();
+    await expect(modal).toHaveCount(0);
+    const [, a, b] = api.requests(c.url);
+    expect(b?.headers()['idempotency-key']).toBe(a?.headers()['idempotency-key']);
+    expect(b?.postDataJSON()).toEqual(a?.postDataJSON());
+  });
+}
+
+test('계약 대기 자리: 프로젝트 정보 편집·감지 확인 시각은 서버 준비 전까지 비활성 안내만 보인다', async ({ page }) => {
+  await openProject(page);
+  await expect(page.getByRole('region', { name: '프로젝트 정보' }).getByRole('button', { name: '편집' })).toBeDisabled();
+  await expect(page.getByTestId('contract-wait-edit')).toContainText('서버 기능이 준비되면');
+  await expect(page.getByTestId('contract-wait-checked')).toHaveText('Runner 확인 시각 — 서버 연결 대기');
+});
+
+test('GitHub 연결 상태를 읽지 못하면(서버 404) 상태를 모른다고 알린다', async ({ page }) => {
+  const api = await openProject(page, activeProject());
+  api.on('GET /api/settings/github', (route) => json(route, 404, errorBody('NOT_FOUND')));
+  await page.reload();
+  await expect(page.getByTestId('gh-unknown')).toContainText('GitHub 연결 상태를 확인하지 못했습니다');
+});
