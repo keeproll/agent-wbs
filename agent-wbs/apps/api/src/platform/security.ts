@@ -79,7 +79,12 @@ export function installSecurity(app: FastifyInstance, pool: Pool, options: Secur
       if (principal !== 'runner') throw new PlatformError('FORBIDDEN_PRINCIPAL');
       context.principal = `runner:${token.runner_id}`;
       const epoch = request.headers['x-project-epoch'];
-      if (typeof epoch !== 'string' || !/^(0|[1-9]\d*)$/.test(epoch) || Number(epoch) > 2_147_483_647) throw new PlatformError('VALIDATION_FAILED');
+      if (typeof epoch !== 'string' || !/^(0|[1-9]\d*)$/.test(epoch)) {
+        throw new PlatformError('VALIDATION_FAILED', {}, [{ path: 'x-project-epoch', rule: 'pattern', message: '세대 번호 헤더는 0 이상의 정수 형식이어야 합니다.' }]);
+      }
+      if (Number(epoch) > 2_147_483_647) {
+        throw new PlatformError('VALIDATION_FAILED', {}, [{ path: 'x-project-epoch', rule: 'maximum', message: '세대 번호는 2147483647 이하여야 합니다.' }]);
+      }
       context.epoch = Number(epoch);
       const body = request.body as { runnerId?: unknown } | undefined;
       if (body?.runnerId !== undefined && body.runnerId !== token.runner_id) throw new PlatformError('FORBIDDEN_PRINCIPAL');
@@ -120,7 +125,10 @@ export function installSecurity(app: FastifyInstance, pool: Pool, options: Secur
       assert(state);
       const current = state.epoch;
       const expected = (request.body as { epoch?: unknown } | undefined)?.epoch;
-      if (typeof expected !== 'number' || !Number.isInteger(expected) || expected < 0 || expected > 2_147_483_647) throw new PlatformError('VALIDATION_FAILED');
+      if (typeof expected !== 'number' || !Number.isInteger(expected) || expected < 0 || expected > 2_147_483_647) {
+        const rule = typeof expected !== 'number' || !Number.isInteger(expected) ? 'type' : expected < 0 ? 'minimum' : 'maximum';
+        throw new PlatformError('VALIDATION_FAILED', {}, [{ path: 'epoch', rule, message: '세대 번호는 0~2147483647의 정수여야 합니다.' }]);
+      }
       context.currentEpoch = current;
       context.epoch = expected;
     } else if (operation?.staleEpoch) {
