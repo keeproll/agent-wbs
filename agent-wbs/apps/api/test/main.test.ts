@@ -27,9 +27,10 @@ test.each([[['SIGTERM']], [['SIGINT']], [['SIGTERM', 'SIGINT']]] as const)(
   },
 );
 
+// 실제 기동·DB 재시도 3초·정리까지 기다린다. 종료 코드와 재시도 횟수 검사는 그대로다.
 test('신호 없이 DB에 끝내 연결하지 못하면 3회 재시도 후 종료 코드 1', async () => {
   const { child, state } = start({});
   expect(await once(child, 'close')).toEqual([1, null]);
   expect(state.output.match(/DB 연결 재시도/g)).toHaveLength(3);
   expect(state.output).toContain('기동 실패');
-});
+}, 15_000);

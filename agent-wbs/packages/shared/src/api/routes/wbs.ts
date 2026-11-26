@@ -90,6 +90,8 @@ const task = [
       priority: Opt(c.Priority),
       assigneeAgent: Opt(c.Agent),
       verifierAgent: Opt(c.Agent),
+      estimate: Opt(m.TaskEstimateInput),
+      fixStart: Opt(Nullable(c.DateOnly)),
     }),
     responses: Changed,
     errors: terminal,
@@ -273,9 +275,10 @@ const task = [
     id: 'lockTaskGrade',
     method: 'PUT',
     path: '/api/tasks/:taskKey/grade',
-    summary: '등급 고정 → 재추정·재조정',
+    summary: '등급 고정 → Planning 재추정·재조정(실행 중 시도에는 다음 실행부터 적용)',
     body: Body({ ...V, role: c.RunRole, modelId: Text, effort: Text }),
     responses: Changed,
+    errors: terminal,
   }),
   operation({
     ...byQuery,
@@ -285,6 +288,7 @@ const task = [
     summary: '등급 고정 해제',
     query: Type.Object({ ...V, role: c.RunRole }),
     responses: Changed,
+    errors: terminal,
   }),
   operation({
     ...byBody,

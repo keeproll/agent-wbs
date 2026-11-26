@@ -54,7 +54,8 @@ const EXTRA_BODY: Record<string, Record<string, unknown>> = {
   retryInputs: { version: 1 },
   createProject: { name: 'x', url: 'https://github.com/o/r', constraints: [], instruction: '', repoCheckId: UUID },
   addChecklistItem: { content: 'x', required: false },
-  updateTask: { title: 'x' },
+  updateTask: { title: 'x', updatedAt: '2026-11-27T00:00:00Z' },
+  lockTaskGrade: { role: 'dev', modelId: 'claude-sonnet-5-5', effort: 'high' },
   updateTaskSpec: { ac: [] },
   updateChecklistItem: { done: false },
   addDependency: { predTaskKey: 'TASK-0002', depType: 'FS' },
@@ -79,7 +80,7 @@ test('전 경로: 범위 밖 시각·날짜는 400(500 아님), 오류 위치는
       const url = urlOf(op);
       const isRunner = op.principal === 'runner';
       const res = where === 'query'
-        ? await (isRunner ? h.runner : h.lead)(op.method, `${url}?${field}=${encodeURIComponent(bad)}${op.id === 'getChanges' ? '&after=0' : ''}`)
+        ? await (isRunner ? h.runner : h.lead)(op.method, `${url}?${field}=${encodeURIComponent(bad)}${op.id === 'getChanges' ? '&after=0' : ''}${op.id === 'unlockTaskGrade' ? '&role=dev' : ''}`)
         : await (isRunner ? h.runner : h.lead)(op.method, url, { ...(await baseBody(op)), [field]: bad });
       const paths = ((res.body as Body)?.error?.errors ?? []).map((e: { path: string }) => e.path) as string[];
       if (res.status !== 400 || !paths.some((p) => p.endsWith(field))) failures.push(`${op.id} ${where}.${field}=${bad} → ${String(res.status)} ${JSON.stringify(paths)}`);

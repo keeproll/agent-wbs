@@ -1,3 +1,4 @@
+import type { Ac } from '@awbs/shared/judgement';
 import { readFile } from 'node:fs/promises';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { eq } from 'drizzle-orm';
@@ -27,6 +28,7 @@ interface DemoTask {
   precond: string;
   doneCond: string;
   spec?: { ac?: unknown[] };
+  split: { basis: string; exc: { rule: string; why: string; by: string; at: string }[] };
   approved: boolean;
   fixStart: string;
   updated: string;
@@ -178,6 +180,7 @@ function demoRef(ids: Map<string, string>, key: string): string {
 export async function seedDemo(pool: Pool, testDatabaseUrl: string): Promise<void> {
   assertTestDatabaseUrl(testDatabaseUrl);
   await assertConnectedToTestDatabase(pool);
+  const { subjectHash } = await import('@awbs/shared/judgement');
   const demo = JSON.parse(
     await readFile(new URL('../seed/demo.json', import.meta.url), 'utf8'),
   ) as Demo;
@@ -320,6 +323,20 @@ export async function seedDemo(pool: Pool, testDatabaseUrl: string): Promise<voi
             spec: t.spec ?? {},
             ac: t.spec?.ac ?? [],
             revision: 1,
+          });
+          // 데모에서만 쓰는 합의 예시다. 운영 Task는 Planning 보고로 실제 판단을 받아야 한다(D-33).
+          const hash = subjectHash({
+            title: t.title,
+            overview: { purpose: t.purpose, background: t.background, scope: t.scope, out: t.out, precond: t.precond, doneCond: t.doneCond },
+            spec: t.spec ?? {}, ac: (t.spec?.ac ?? []) as Ac[], outputs: t.outputs,
+            designs: t.design.map(d => ({ kind: d.kind, content: d })), conflictGroup: t.cg || null,
+          });
+          await tx.insert(s.taskSplits).values({
+            project_id: p.id, task: task.id, basis: t.split.basis, exceptions: t.split.exc,
+            judged_rules: { schemaVersion: 1, items: ['revert', 'contract', 'refactor'].map(rule => ({
+              rule, result: 'met', agreedBy: ['Claude', 'Codex'], basis: '데모 전용 합의 예시. 실제 Agent 판단이 아닙니다.',
+              subjectHash: hash, judgedAt: new Date(demoTime(demo.mock.project.boot.approvedAt)).toISOString(), sourceRef: `demo:${key}`,
+            })) },
           });
           for (const [index, c] of t.checklist.entries()) {
             await tx.insert(s.checklistItems).values({
