@@ -222,7 +222,9 @@ test('원본·계획에 없는 경로를 만들지 않았다', () => {
   const followup = ['PATCH /api/project', 'POST /api/project/inputs/check', 'GET /api/proposals/:id',
     'PATCH /api/proposals/:id', 'DELETE /api/proposals/:id', 'POST /api/proposals/:id/exclude',
     'POST /api/verifications/:id/evidence', 'GET /api/settings/split/violations', 'GET /api/settings/agent-usage',
-    'POST /api/alerts/:id/ack', 'POST /api/settings/readiness/check'];
+    'POST /api/alerts/:id/ack', 'POST /api/settings/readiness/check',
+    // 조정자 승인(2026-11-27, M5-02): contracts §3.4-3의 재시작 전 보유 대조에 필요하다.
+    'GET /api/runner/holds'];
   const known = new Set([
     'GET /health',
     'GET /health/db',

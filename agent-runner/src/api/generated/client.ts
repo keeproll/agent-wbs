@@ -242,6 +242,7 @@ export type ErrorResponse = {
 export type EstimatePolicy = {
   rejudge?: RejudgeRequest;
   gradeChange?: Uuid;
+  [key: string]: unknown;
 };
 
 export type ExecutionHold = {
@@ -1576,6 +1577,7 @@ export interface Operations {
           epoch: number;
           payload: {
             holds?: (ExecutionHold)[];
+            [key: string]: unknown;
           };
         })[];
       };
