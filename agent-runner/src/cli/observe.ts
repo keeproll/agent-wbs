@@ -17,7 +17,7 @@ export interface ObservationSnapshot {
  * 출력 스트림에서 하위 Agent 수를 **관측**한다. 슬롯 반환·종료 판단의 근거가 아니다(G §6.7: 확정 근거는 프로세스 그룹뿐).
  * 규칙:
  * - 같은 ID는 한 번만 센다. `done`이면 뺀다. 배경 실행은 도구 결과(`returned`)로 빼지 않는다.
- * - 모르는 상태, ID 없는 생성, 깨진 줄, 결과 없이 끝난 스트림은 `unconfirmed`. 한 번 그러면 되돌리지 않는다.
+ * - 모르는 상태, ID 없는 생성, 깨진 줄, 복구 불가능한 스트림 오류, 결과 없이 끝난 스트림은 `unconfirmed`. 한 번 그러면 되돌리지 않는다.
  * - 스트림이 끝나도 남은 수를 0으로 만들지 않는다(출력 없음·단절 ≠ 실행 수 0).
  * - 모르는 이벤트는 보존만 하고 수·상태를 바꾸지 않는다(추정하지 않음).
  */
@@ -42,6 +42,10 @@ export class SubagentObserver {
         break;
       case 'unparsed':
         this.#unconfirmed = true;
+        break;
+      case 'error':
+        // 복구 불가능한 스트림 오류(예: 연결 단절) 뒤의 관측은 믿을 수 없다. 뒤에 실패 결과가 와도 되돌리지 않는다(리뷰 2).
+        if (e.fatal) this.#unconfirmed = true;
         break;
       case 'result':
         this.#ended = true;

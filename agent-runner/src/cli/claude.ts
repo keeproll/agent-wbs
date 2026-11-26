@@ -4,6 +4,8 @@ import { isObject, num, str, type CliEvent, type Json } from './events.ts';
 const AGENT_TOOLS = new Set(['Agent', 'Task']);
 /** 알고 있지만 관측 이벤트로 옮길 것이 없는 system subtype */
 const QUIET_SYSTEM = new Set(['task_progress', 'compact_boundary', 'informational', 'api_retry', 'status']);
+/** 작업이 끝났다는 상태 값(task_notification·task_updated) */
+const TERMINAL = new Set(['completed', 'failed', 'stopped']);
 const KNOWN_BLOCKS = new Set(['text', 'thinking', 'redacted_thinking', 'tool_use', 'tool_result', 'image', 'server_tool_use', 'web_search_tool_result']);
 
 /**
@@ -11,8 +13,14 @@ const KNOWN_BLOCKS = new Set(['text', 'thinking', 'redacted_thinking', 'tool_use
  * 형식 출처: 공식 Agent SDK 메시지 형식(SDKMessage). 실제 기록으로 검증한 형식이 아니다 — 관측 등급 「미검증」.
  */
 export function createClaudeParser(): (event: Json) => CliEvent[] {
-  const agentCalls = new Set<string>();
-  const taskTool = new Map<string, string>();
+  /** 하위 Agent 도구 호출 ID → 관측 ID. 재개 run이 다른 도구 호출로 이어져도 같은 하위 Agent로 센다. */
+  const calls = new Map<string, string>();
+  /**
+   * task_id별로 아는 것. `agent`만 하위 Agent다. `other`는 배경 명령 같은 다른 작업이라 무시한다.
+   * `unlinked`는 하위 Agent일 수 있지만 연결 정보가 부족해 이미 미확인으로 알린 작업이다.
+   */
+  const tasks = new Map<string, { kind: 'agent'; id: string; runId: string | undefined } | { kind: 'other' | 'unlinked' }>();
+  const unlinked = (out: CliEvent[], reason: string) => out.push({ type: 'subagent_unlinked', reason });
 
   const blocks = (e: Json, out: CliEvent[], kind: 'assistant' | 'user') => {
     const message = isObject(e.message) ? e.message : {};
@@ -24,14 +32,50 @@ export function createClaudeParser(): (event: Json) => CliEvent[] {
         return;
       }
       if (b.type === 'text' && kind === 'assistant' && parent === null && typeof b.text === 'string') out.push({ type: 'message', text: b.text });
-      if (b.type === 'tool_use' && typeof b.id === 'string' && AGENT_TOOLS.has(str(b.name) ?? '')) {
-        agentCalls.add(b.id);
-        out.push({ type: 'subagent', id: b.id, phase: 'requested', parentId: parent });
+      if (b.type === 'tool_use' && AGENT_TOOLS.has(str(b.name) ?? '')) {
+        const id = str(b.id);
+        if (id === undefined || id === '') return void unlinked(out, 'Agent 도구 호출에 id 없음');
+        calls.set(id, id);
+        out.push({ type: 'subagent', id, phase: 'requested', parentId: parent });
       }
-      if (b.type === 'tool_result' && typeof b.tool_use_id === 'string' && agentCalls.has(b.tool_use_id)) {
-        out.push({ type: 'subagent', id: b.tool_use_id, phase: 'returned' });
-      }
+      const resultOf = b.type === 'tool_result' ? calls.get(str(b.tool_use_id) ?? '') : undefined;
+      if (resultOf !== undefined) out.push({ type: 'subagent', id: resultOf, phase: 'returned' });
     });
+  };
+
+  /**
+   * 작업 시작. 연결이 확실할 때만 하위 Agent로 센다. 값을 추측해 채우지 않는다(리뷰 3).
+   * - task_type이 없으면 하위 Agent인지 알 수 없다 → 미확인
+   * - tool_use_id가 없으면 앞서 본 도구 호출과 같은 것인지 알 수 없다 → 새 ID로 세지 않고 미확인
+   * - 같은 task_id가 다시 시작되면 재개 run이다. run_id를 바꿔 기억해 늦게 온 이전 run의 알림을 걸러낸다.
+   */
+  const taskStarted = (e: Json, out: CliEvent[]) => {
+    const taskId = str(e.task_id);
+    const type = str(e.task_type);
+    if (type !== undefined && type !== 'local_agent') {
+      if (taskId !== undefined) tasks.set(taskId, { kind: 'other' });
+      return;
+    }
+    if (taskId === undefined) return void unlinked(out, 'task_started에 task_id 없음');
+    if (type === undefined) {
+      tasks.set(taskId, { kind: 'unlinked' });
+      return void unlinked(out, 'task_started에 task_type 없음');
+    }
+    const known = tasks.get(taskId);
+    const toolUseId = str(e.tool_use_id);
+    const runId = str(e.run_id);
+    let id: string;
+    if (known?.kind === 'agent') {
+      id = known.id;
+    } else if (toolUseId === undefined || toolUseId === '') {
+      tasks.set(taskId, { kind: 'unlinked' });
+      return void unlinked(out, 'task_started에 tool_use_id 없음');
+    } else {
+      id = calls.get(toolUseId) ?? toolUseId;
+    }
+    if (toolUseId) calls.set(toolUseId, id);
+    tasks.set(taskId, { kind: 'agent', id, runId });
+    out.push({ type: 'subagent', id, phase: 'running', background: e.is_backgrounded === true });
   };
 
   const system = (e: Json, out: CliEvent[]) => {
@@ -42,22 +86,33 @@ export function createClaudeParser(): (event: Json) => CliEvent[] {
       const model = str(e.model);
       return out.push(model === undefined ? { type: 'session', sessionId } : { type: 'session', sessionId, model });
     }
-    if (subtype === 'task_started') {
-      if (e.task_type !== 'local_agent') return 0;
-      const taskId = str(e.task_id);
-      const id = str(e.tool_use_id) ?? (taskId ? `task:${taskId}` : undefined);
-      if (id === undefined) return out.push({ type: 'subagent_unlinked', reason: 'task_started에 task_id·tool_use_id 없음' });
-      if (taskId) taskTool.set(taskId, id);
-      agentCalls.add(id);
-      return out.push({ type: 'subagent', id, phase: 'running', background: e.is_backgrounded === true });
+    if (subtype === 'task_started') return taskStarted(e, out);
+    if (subtype === 'task_updated') {
+      // 전경 작업이 도중에 배경으로 바뀌는 신호(리뷰 1). 모르는 작업이면 연결할 수 없으므로 미확인.
+      const task = tasks.get(str(e.task_id) ?? '');
+      if (task === undefined) return unlinked(out, 'task_updated의 task_id를 모름');
+      if (task.kind !== 'agent') return 0;
+      const patch = isObject(e.patch) ? e.patch : {};
+      if (patch.is_backgrounded === true) out.push({ type: 'subagent', id: task.id, phase: 'running', background: true });
+      const status = str(patch.status);
+      if (status !== undefined && TERMINAL.has(status)) out.push({ type: 'subagent', id: task.id, phase: 'done', status });
+      return 0;
     }
     if (subtype === 'task_notification') {
-      const taskId = str(e.task_id);
-      const id = str(e.tool_use_id) ?? (taskId ? taskTool.get(taskId) : undefined);
-      // 하위 Agent가 아닌 배경 작업(명령 등)의 알림이면 무시한다.
-      if (id === undefined || !agentCalls.has(id)) return 0;
+      const task = tasks.get(str(e.task_id) ?? '');
+      let id: string | undefined;
+      if (task?.kind === 'agent') {
+        const runId = str(e.run_id);
+        // 재개 run이 시작된 뒤 늦게 온 이전 run의 알림이면 지금 run을 지우지 않는다.
+        if (runId !== undefined && task.runId !== undefined && runId !== task.runId) return 0;
+        id = task.id;
+      } else if (task === undefined) {
+        id = calls.get(str(e.tool_use_id) ?? '');
+      }
+      // 하위 Agent가 아닌 배경 작업(명령 등)이나 이미 미확인으로 알린 작업의 알림이면 무시한다.
+      if (id === undefined) return 0;
       const status = str(e.status) ?? '';
-      return out.push({ type: 'subagent', id, phase: ['completed', 'failed', 'stopped'].includes(status) ? 'done' : 'unknown', status });
+      return out.push({ type: 'subagent', id, phase: TERMINAL.has(status) ? 'done' : 'unknown', status });
     }
     if (QUIET_SYSTEM.has(subtype ?? '')) return 0;
     return out.push({ type: 'unknown', raw: e });

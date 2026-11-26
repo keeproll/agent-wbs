@@ -39,11 +39,16 @@
   - `wrap(launch)`: 완성된 실행 계획을 감싼다. 예: 전용 OS 사용자로 실행, 컨테이너 안에서 실행.
 - 기본값 `PENDING_ISOLATION`은 실행 계획을 만들지 않고 `IsolationUndecidedError`를 던진다.
   - 왜: architecture §4 「확정 전에는 fake 실행만」을 코드로 지킨다. 시험은 fake 격리 계층을 넘긴다.
-- `sessionOptions(agent, isolation)`은 관측 등급 조합의 「옵션」 문자열이다. readiness `cliProfiles`와 서버 `cliGrades`에 같은 값을 쓴다.
+- `sessionOptions(agent, isolation, kind)`은 관측 등급 조합의 「옵션」 문자열이다. readiness `cliProfiles`와 서버 `cliGrades`에 같은 값을 쓴다.
+  - `kind`는 `new`(새 실행) 또는 `resume`(재개)이다. 재개는 다른 조합으로 센다.
+    - 왜: 새 실행만 검증된 조합에 재개가 「검증됨」으로 붙으면 안 된다. G §6.7은 재개를 따로 검증할 항목으로 둔다.
+  - 예: Codex 새 실행 `exec --json --disable hooks …`, 재개 `exec resume --json --disable hooks …`. Claude 재개는 끝에 `--resume`이 붙는다.
+  - 세션 ID 값은 넣지 않는다.
 
 ## 출력 해석
 
 - `JsonlDecoder`는 한 줄에 JSON 하나인 출력을 읽는다. 파이프 조각이 줄이나 한글 글자 중간에서 잘려도 된다.
+- 미완성 줄 조각은 딱 맞는 크기로 복사해 둔다. 큰 조각이나 너무 긴 줄의 원래 메모리를 붙잡지 않기 위해서다(`retainedBytes`로 확인).
 - JSON이 아닌 줄도 버리지 않는다. `unparsed`로 원문과 줄 번호를 남긴다.
   - `invalid_json`(JSON 아님), `not_object`(객체 아님), `too_long`(너무 긴 줄 — 앞 4 KiB와 원래 크기), `truncated`(줄바꿈 없이 끊긴 마지막 조각).
 - 모르는 이벤트는 `unknown`으로 원문을 그대로 보존하고 아무것도 추정하지 않는다(architecture §5 `cli`).
@@ -57,8 +62,14 @@
 - 「끝났다」는 보고는 작업이 끝났다는 뜻이지 프로세스가 끝났다는 뜻이 아니다.
   - 예: Codex `spawn_agent` 완료는 생성 호출이 끝난 것뿐이다. 끝은 `agents_states`의 상태로만 본다.
 - 배경 하위 Agent는 「시작됨」 도구 결과로 빼지 않는다. `task_notification`이 와야 뺀다.
+  - 처음에 전경으로 시작했어도 `task_updated`의 `patch.is_backgrounded=true`가 오면 그때부터 배경으로 본다.
+- Claude 작업은 연결이 확실할 때만 하위 Agent로 센다. 빠진 값을 추측해 채우지 않는다.
+  - `task_type`이 없는 시작, `tool_use_id`가 없는 시작, id가 없는 Agent 도구 호출, 모르는 작업의 `task_updated`는 미확인이다.
+  - 같은 `task_id`가 다시 시작되면 재개 run이다. 늦게 온 이전 `run_id`의 완료 알림으로 지금 run을 지우지 않는다.
 - 아래 경우는 `unconfirmed`(미확인)로 두고, 한 번 그러면 되돌리지 않는다.
   - 모르는 상태 값, ID 없는 생성, 깨진 줄, 결과 이벤트 없이 끝난 스트림.
+  - 복구 불가능한 스트림 오류(Codex 최상위 `error`, 예: 연결 단절). 뒤에 실패 결과가 와도 미확인 그대로다.
+    - 오류 이벤트 없이 온 실패 결과(예: 작업 실패 `turn.failed`)는 작업이 실패한 것일 뿐이라 관측은 정상이다.
   - 왜: 관측이 불완전할 때 수를 줄이면 실제로 돌고 있는 하위 Agent의 슬롯을 놓칠 수 있다(G §6.7 규칙 3).
 - 스트림이 끝나도 남은 수를 0으로 만들지 않는다. 출력이 없거나 끊긴 것은 실행 수 0이 아니다.
 

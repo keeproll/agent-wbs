@@ -104,14 +104,14 @@ describe('격리 계층 경계(Q-08 결정 대기)', () => {
 
 describe('sessionOptions — 관측 등급 조합의 「옵션」(readiness cli[]·cliGrades와 같은 값)', () => {
   test('모델·Effort·지시문·세션 ID 없이 실행 옵션만, 격리 옵션 포함', () => {
-    expect(sessionOptions('Codex', TEST_ISOLATION)).toBe('exec --json --disable hooks -c sandbox_mode="workspace-write"');
-    expect(sessionOptions('Claude', TEST_ISOLATION)).toBe('-p --output-format stream-json --verbose --settings {"disableAllHooks":true} --permission-mode acceptEdits');
+    expect(sessionOptions('Codex', TEST_ISOLATION, 'new')).toBe('exec --json --disable hooks -c sandbox_mode="workspace-write"');
+    expect(sessionOptions('Claude', TEST_ISOLATION, 'new')).toBe('-p --output-format stream-json --verbose --settings {"disableAllHooks":true} --permission-mode acceptEdits');
   });
 
   test('buildLaunch 인자에 그대로 들어 있다(실행 조합과 보고 조합이 어긋나지 않음)', () => {
     for (const agent of ['Codex', 'Claude'] as const) {
       const l = buildLaunch(agent, '/bin/x', { ...spec, model: agent === 'Codex' ? 'gpt-6.2-sol' : 'claude-opus-5-5' }, opts);
-      expect(l.args.join(' ')).toContain(sessionOptions(agent, TEST_ISOLATION));
+      expect(l.args.join(' ')).toContain(sessionOptions(agent, TEST_ISOLATION, 'new'));
     }
   });
 });

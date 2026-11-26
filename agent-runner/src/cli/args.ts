@@ -97,11 +97,20 @@ export function buildLaunch(
   return isolation.wrap(launch, agent);
 }
 
+/** 실행 종류. 새 실행과 재개는 다른 관측 등급 조합이다(G §6.7은 재개를 따로 검증할 항목으로 둔다). */
+export type RunKind = 'new' | 'resume';
+
 /**
  * 관측 등급 조합(CLI·버전·모델·**옵션**)의 옵션 문자열. readiness `cliProfiles`와 서버 `cliGrades`에 이 값을 쓴다.
- * 모델·Effort·지시문·세션 ID처럼 실행마다 바뀌는 값은 넣지 않는다. 격리 옵션이 바뀌면 조합도 바뀐다(G §6.7 검증 조건).
+ * - 모델·Effort·지시문·세션 ID처럼 실행마다 바뀌는 값은 넣지 않는다.
+ * - 실행 종류(`kind`)는 넣는다. 새 실행만 검증된 조합에 재개가 검증됨으로 붙지 않게 하기 위해서다(리뷰 4).
+ *   예: Codex 새 실행 `exec --json …`, 재개 `exec resume --json …`. Claude 재개는 끝에 `--resume`.
+ * - 격리 옵션이 바뀌면 조합도 바뀐다(G §6.7 검증 조건).
  */
-export function sessionOptions(agent: Agent, isolation: IsolationLayer): string {
-  const fixed = agent === 'Claude' ? CLAUDE_FIXED : ['exec', ...CODEX_FIXED];
-  return [...fixed, ...isolation.flags(agent)].join(' ');
+export function sessionOptions(agent: Agent, isolation: IsolationLayer, kind: RunKind): string {
+  const iso = isolation.flags(agent);
+  const words = agent === 'Claude'
+    ? [...CLAUDE_FIXED, ...iso, ...(kind === 'resume' ? ['--resume'] : [])]
+    : ['exec', ...(kind === 'resume' ? ['resume'] : []), ...CODEX_FIXED, ...iso];
+  return words.join(' ');
 }

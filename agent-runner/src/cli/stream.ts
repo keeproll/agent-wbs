@@ -54,17 +54,37 @@ export class JsonlDecoder {
     return record ? [record] : [];
   }
 
+  /** 다음 줄을 위해 메모리에 붙잡고 있는 바이트. 큰 줄·큰 조각을 통째로 쥐고 있지 않은지 확인하는 데 쓴다. */
+  get retainedBytes(): number {
+    return this.#parts.reduce((sum, p) => sum + p.buffer.byteLength, 0);
+  }
+
+  /**
+   * 미완성 줄 조각을 모은다. 조각은 **복사**해 둔다.
+   * 왜: `subarray`는 원래 큰 Buffer 전체를 참조하므로, 큰 조각 끝의 짧은 미완성 줄이나 한도를 넘은 줄의 앞부분만 남겨도
+   * 원래 메모리가 다음 줄까지 풀리지 않는다(리뷰 5).
+   */
   #append(part: Buffer): void {
     if (part.length === 0) return;
     this.#size += part.length;
     // 이미 한도를 넘었으면 앞부분은 남겨 두었으니 크기만 센다.
     if (this.#overflow) return;
-    this.#parts.push(part);
-    if (this.#size > this.#max) {
-      // 한도를 넘으면 앞부분만 남기고 나머지는 세기만 한다.
-      this.#overflow = true;
-      this.#parts = [Buffer.concat(this.#parts).subarray(0, this.#keep)];
+    if (this.#size <= this.#max) {
+      // Buffer.from은 작은 값을 공용 메모리 풀에 올려 풀 전체를 붙잡으므로, 크기가 딱 맞는 새 Buffer에 복사한다.
+      const own = Buffer.alloc(part.length);
+      part.copy(own);
+      this.#parts.push(own);
+      return;
     }
+    // 한도를 넘는 순간: 앞부분 keepBytes만 새 Buffer로 복사해 남기고 나머지는 버린다(전체를 합치지 않는다).
+    this.#overflow = true;
+    const head = Buffer.alloc(Math.min(this.#keep, this.#size));
+    let at = 0;
+    for (const p of [...this.#parts, part]) {
+      if (at >= head.length) break;
+      at += p.copy(head, at, 0, Math.min(p.length, head.length - at));
+    }
+    this.#parts = [head];
   }
 
   #flush(atEnd: boolean): StreamRecord | null {
