@@ -51,7 +51,8 @@ app.post('/api/project/reset', async (request) => {
   const result = await request.platform.client.query<{ epoch: number }>('select public.reset_project($1,$2,true,\'lead\') as epoch', [input.epoch, input.confirmName]);
   return result.rows[0];
 });
-for (const url of ['/api/project', '/api/tasks/:taskKey/approve']) app.post(url, () => ({ ok: true }));
+// 착수 승인(/api/tasks/:taskKey/approve)은 M2-02의 실제 경로가 같은 관문을 거치므로 대역을 두지 않는다.
+app.post('/api/project', () => ({ ok: true }));
 app.get('/api/dashboard', () => { throw new Error('Bearer hunter2 /bot123:hunter2/send'); });
 
 beforeAll(async () => {
