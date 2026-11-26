@@ -16,7 +16,12 @@ const appUrl = new URL(dbUrl);
 appUrl.searchParams.set('options', '-c role=awbs_app');
 const pool = createPool(appUrl.href, { max: 8, onError: () => undefined });
 const app = buildApp(pool, false, { origin, lan: false });
-const runnerOps = OPERATIONS.filter((op) => op.principal === 'runner');
+// 대역은 아직 실제 업무 경로가 없는 Runner 계약 경로에만 둔다. 실제 경로(M2-07 Planning 등)와 겹치면 Fastify가 중복 선언으로 기동을 거부한다.
+// 실제 경로도 같은 공통 관문(installSecurity)을 거치며, 업무 검증은 각 작업의 테스트가 맡는다.
+const probe = buildApp(pool, false, { origin, lan: false });
+await probe.ready();
+const runnerOps = OPERATIONS.filter((op) => op.principal === 'runner' && !probe.hasRoute({ method: op.method, url: op.path }));
+await probe.close();
 let bearer = '';
 let cookie = '';
 let csrf = '';

@@ -256,3 +256,23 @@ describe('planning 세션·교차 검토와 팀장 Planning API', () => {
     expect(errorOf(cp).errors.map((e) => e.path)).toEqual(['reviews.0.choice']);
   });
 });
+
+describe('planning Runner 경로의 공통 관문(security.db.test 대역에서 빠진 실제 경로)', () => {
+  const planningOps = OPERATIONS.filter((op) => op.principal === 'runner' && op.path.startsWith('/api/planning/') && !op.path.includes('/bootstrap/'));
+  test('Planning 보고 8종: 무토큰·팀장 쿠키 401, 낡은 세대 409, 멱등 키 없음 400(IDEMPOTENCY_KEY_REQUIRED)', async () => {
+    expect(planningOps.map((op) => op.id).sort()).toEqual(['createPlanningSession', 'requestReplan', 'submitEstimates', 'submitPlanningAnalysis',
+      'submitPlanningProposal', 'submitPlanningReviews', 'submitProposalJudgements', 'submitTaskPlan']);
+    for (const op of planningOps) {
+      const url = op.path.replace(':taskKey', 'TASK-0001').replace(':id', randomUUID());
+      const base = { method: 'POST' as const, url, payload: {} };
+      expect((await app.inject(base)).statusCode, op.id).toBe(401);
+      expect((await app.inject({ ...base, headers: { cookie, origin, 'x-csrf-token': csrf } })).statusCode, op.id).toBe(401);
+      const stale = await app.inject({ ...base, headers: { authorization: `Bearer ${bearer}`, 'x-project-epoch': String(epoch + 1), 'idempotency-key': randomUUID() } });
+      expect(stale.statusCode, op.id).toBe(409);
+    }
+    // 형식 검사가 먼저이므로 올바른 본문으로 멱등 키 필수를 본다.
+    const noKey = await app.inject({ method: 'POST', url: '/api/planning/replans', headers: { authorization: `Bearer ${bearer}`, 'x-project-epoch': String(epoch) },
+      payload: { jobId: await job(), fence: 1, trigger: 't', capacity: { rate: 0.5, concurrency: 1, subRatio: 0 } } });
+    expect(errorOf(noKey).code).toBe('IDEMPOTENCY_KEY_REQUIRED');
+  });
+});
