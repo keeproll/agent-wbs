@@ -89,11 +89,13 @@ describe('runner 실제 PostgreSQL 검증', () => {
   test('holds 조회는 현재 principal·epoch의 미해제 보유만 읽으며 fence·lease를 보존한다', async () => {
     const { job } = await claimed();
     const before = await hold(job.id);
+    const beforeJob = (await owner.query('select state,fence,lease_until,updated_at from runner_jobs where id=$1', [job.id])).rows;
     const otherToken = await issueRunnerToken(pool, 'runner-other', 'fake');
     const response = await app.inject({ url: '/api/runner/holds', headers: headers() });
     expect(response.statusCode, response.body).toBe(200);
     expect(response.json().holds).toMatchObject([{ job: job.id, fence: job.fence, host_id: 'host-a', boot_id: 'boot-a', slot_state: 'reserved', lease_owner: expect.stringMatching(/^runner:/), lease_until: expect.any(String) }]);
     expect(await hold(job.id)).toEqual(before);
+    expect((await owner.query('select state,fence,lease_until,updated_at from runner_jobs where id=$1', [job.id])).rows).toEqual(beforeJob);
     const other = await app.inject({ url: '/api/runner/holds', headers: { ...headers(), authorization: `Bearer ${otherToken}` } });
     expect(other.statusCode, other.body).toBe(200);
     expect(other.json()).toEqual({ holds: [] });
