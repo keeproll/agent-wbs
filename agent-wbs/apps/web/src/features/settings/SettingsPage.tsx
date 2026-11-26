@@ -4,7 +4,7 @@
  * - 탭 6개는 주소가 있는 링크다. 새로고침·뒤로 가기·공유 때 같은 탭이 열린다(UAT-SHELL-01, MM-29).
  * - 등록 전에도 열린다(OPEN_BEFORE_ACTIVE). 실행 PC·정책은 등록 전에 정해 둘 수 있어야 하기 때문이다.
  * - 카드마다 초안이 있다(useSettingForm). 저장하지 않은 카드가 있으면 다른 탭·메뉴로 가기 전에 묻는다(편집 보호).
- * - 보고서·메일·알림 탭 본문은 M6-03·M6-04가 만든다. 여기서는 주소·선택 강조만 판정한다(UAT-SHELL-01 b).
+ * - 보고서·메일 탭 본문은 M6-03(report/ReportMailTab.tsx), 알림 탭은 M6-04가 만든다.
  */
 import { Link, Navigate, useParams } from 'react-router';
 import { MenuScreen } from '../../shared/layout/MenuScreen.tsx';
@@ -15,6 +15,7 @@ import { AgentTab } from './AgentTab.tsx';
 import { githubOk } from './githubOk.ts';
 import { isSettingsTab, SETTINGS_TABS, type SettingsTab } from './labels.ts';
 import { PlanTab } from './PlanTab.tsx';
+import { ReportMailTab } from './report/ReportMailTab.tsx';
 import { RunnerTab } from './RunnerTab.tsx';
 import { SystemTab } from './SystemTab.tsx';
 import { DirtyContext, useDirtyRegistry } from './useSettingForm.tsx';
@@ -28,7 +29,7 @@ export function SettingsPage() {
   if (tab !== undefined && !isSettingsTab(tab)) return <Navigate to="/settings/runner" replace />;
   return (
     <MenuScreen menu="settings">
-      {(project) => <SettingsBody tab={tab ?? 'runner'} preReg={preRegNotice(project.state)} repoUrl={repoUrlOf(project)} />}
+      {(project) => <SettingsBody tab={tab ?? 'runner'} preReg={preRegNotice(project.state)} repoUrl={repoUrlOf(project)} projectId={'id' in project ? project.id : null} />}
     </MenuScreen>
   );
 }
@@ -56,10 +57,13 @@ function useBadges(): Partial<Record<SettingsTab, { count: number; alert: boolea
   const count = readinessBad + githubBad;
   // 일정 · Task 탭: 분할 기준 위반·의심 Task 수(P L6660 bPlan, 서버 후속 3차 getSplitViolations). 원본처럼 경고색이 아닌 보통 배지다.
   const split = useApiQuery('getSplitViolations', {}, { topics: ['settings', 'task'] });
-  return { runner: { count, alert: count > 0 }, plan: { count: split.data?.count ?? 0, alert: false } };
+  // 보고서 · 메일 탭: 아직 해소되지 않은 발송 실패 수(G§4.9 「아직 성공하지 못한 발송 실패 수 (빨강)」, M6-03).
+  const mail = useApiQuery('listMailLog', { query: { status: 'failed', limit: 200 } }, { topics: ['mail'] });
+  const mailFailed = mail.data?.items.length ?? 0;
+  return { runner: { count, alert: count > 0 }, plan: { count: split.data?.count ?? 0, alert: false }, report: { count: mailFailed, alert: mailFailed > 0 } };
 }
 
-function SettingsBody({ tab, preReg, repoUrl }: { tab: SettingsTab; preReg: string | null; repoUrl: string | null }) {
+function SettingsBody({ tab, preReg, repoUrl, projectId }: { tab: SettingsTab; preReg: string | null; repoUrl: string | null; projectId: string | null }) {
   const { anyDirty, report } = useDirtyRegistry();
   useEditGuard(anyDirty);
   const badges = useBadges();
@@ -93,7 +97,8 @@ function SettingsBody({ tab, preReg, repoUrl }: { tab: SettingsTab; preReg: stri
         {tab === 'agent' && <AgentTab />}
         {tab === 'plan' && <PlanTab />}
         {tab === 'system' && <SystemTab />}
-        {(tab === 'report' || tab === 'notify') && (
+        {tab === 'report' && <ReportMailTab projectId={projectId} />}
+        {tab === 'notify' && (
           <section className="card" aria-label={current.label}>
             <p style={{ margin: 0 }}>이 탭은 아직 구현되지 않았습니다.</p>
           </section>

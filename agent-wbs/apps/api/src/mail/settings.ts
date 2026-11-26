@@ -81,8 +81,8 @@ export async function checkSmtpSettings(client: PoolClient, timeoutMs = DEFAULT_
 
 /* ---- 받는 사람 ---- */
 
-export interface Recipient { id: string; email: string; name: string; daily: boolean; weekly: boolean; view: 'int' | 'ext'; pdf: boolean; active: boolean; updatedAt: string }
-const RECIPIENT = `id,email,name,daily,weekly,view,pdf,active,${iso('updated_at')} "updatedAt"`;
+export interface Recipient { id: string; email: string; name: string; daily: boolean; weekly: boolean; view: 'int' | 'ext'; pdf: boolean; active: boolean; createdAt: string; updatedAt: string }
+const RECIPIENT = `id,email,name,daily,weekly,view,pdf,active,${iso('created_at')} "createdAt",${iso('updated_at')} "updatedAt"`;
 
 export async function listRecipients(client: PoolClient) {
   return { items: (await client.query<Recipient>(`select ${RECIPIENT} from mail_recipients order by created_at,id`)).rows };

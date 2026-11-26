@@ -37651,6 +37651,9 @@
         "required": [
           "id",
           "reportId",
+          "reportKey",
+          "pdf",
+          "pending",
           "recipientId",
           "to",
           "subject",
@@ -37667,6 +37670,15 @@
           },
           "reportId": {
             "$ref": "#/components/schemas/Id"
+          },
+          "reportKey": {
+            "type": "string"
+          },
+          "pdf": {
+            "type": "boolean"
+          },
+          "pending": {
+            "type": "boolean"
           },
           "recipientId": {
             "anyOf": [
@@ -42092,6 +42104,7 @@
           "view",
           "pdf",
           "active",
+          "createdAt",
           "updatedAt"
         ],
         "properties": {
@@ -42118,6 +42131,9 @@
           },
           "active": {
             "type": "boolean"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
           },
           "updatedAt": {
             "$ref": "#/components/schemas/Timestamp"

@@ -94,7 +94,7 @@ export async function sendReportMail(client: PoolClient, reportId: string, body:
 /** 테스트 발송: 최신 보고서를 그 사람에게(G§8.5). 보고서가 없으면 보낼 것이 없다. */
 export async function testRecipient(client: PoolClient, recipientId: string) {
   const [target] = await recipientsById(client, [recipientId]);
-  const latest = (await client.query<{ id: string }>('select id from reports order by generated_at desc,id desc limit 1')).rows[0];
+  const latest = (await client.query<{ id: string }>('select id from reports order by generated_at desc,"to" desc,id desc limit 1')).rows[0];
   if (!latest || !target) throw new ApiError('INVALID_TRANSITION', {}, [], '테스트로 보낼 보고서가 아직 없습니다.', '보고서가 생성된 뒤 다시 시도하세요.');
   return { ids: await enqueue(client, await loadReport(client, latest.id), [target], MAIL_REASON.test) };
 }

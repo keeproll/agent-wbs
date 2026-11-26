@@ -227,6 +227,8 @@ const Recipient = Type.Object(
     name: Type.String(),
     ...subscription,
     active: Type.Boolean(),
+    // M6-03: 등록 시각(P 받는 사람 표 「등록 2026-10-27 09:50」)
+    createdAt: c.Timestamp,
     updatedAt: c.Timestamp,
   },
   { title: 'Recipient' },
@@ -235,6 +237,10 @@ const MailLog = Type.Object(
   {
     id: c.Id,
     reportId: c.Id,
+    // M6-03: 보고서 표시 번호(RPT-…)·PDF 첨부 여부·아직 해소되지 않은 실패인지(같은 보고서·같은 사람의 마지막 발송이 실패)
+    reportKey: Type.String(),
+    pdf: Type.Boolean(),
+    pending: Type.Boolean(),
     recipientId: Nullable(c.Id),
     to: Type.String(),
     subject: Type.String(),
