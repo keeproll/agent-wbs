@@ -402,7 +402,7 @@ export class GitRepository {
       await removeReadonly(path);
       if (entry.branch && entry.startCommit) {
         const ref = `refs/heads/${entry.branch}`;
-        const current = (await this.git(['show-ref', '--verify', '--hash', ref], undefined, undefined, [0, 1])).toString().trim();
+        const current = (await this.git(['rev-parse', '--verify', '--quiet', ref], undefined, undefined, [0, 1])).toString().trim();
         if (current === entry.startCommit) await this.git(['update-ref', '-d', ref, entry.startCommit]);
       }
       await this.git(['update-ref', '-d', `refs/agent-results/${worktreeId}`]);

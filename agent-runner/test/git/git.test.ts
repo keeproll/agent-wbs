@@ -826,6 +826,17 @@ test('L2 구버전 이름 목록은 읽되 브랜치 소유권을 추측해 삭�
   expect(git(repo.path, 'rev-parse', 'refs/heads/agent/TASK-1')).toBe(baseline);
 });
 
+test('L2 정리 도중 시작 브랜치가 먼저 사라져도 재시도와 다음 시도를 완료한다', async () => {
+  repo = await clone();
+  const branch = 'agent/TASK-1';
+  const work = await repo.createWorktree('attempt-1', branch, baseline);
+  git(repo.path, 'update-ref', '-d', `refs/heads/${branch}`);
+  await repo.removeWorktree('attempt-1');
+  await expect(lstat(work)).rejects.toMatchObject({ code: 'ENOENT' });
+  const next = await repo.createWorktree('attempt-2', branch, baseline);
+  expect(git(next, 'rev-parse', 'HEAD')).toBe(baseline);
+});
+
 test('L1 실제 작업 폴더 생성 중 Runner를 SIGKILL해도 기록된 폴더와 브랜치를 복구한다', async () => {
   repo = await clone();
   const moduleUrl = new URL('../../src/git/repository.ts', import.meta.url).href;
