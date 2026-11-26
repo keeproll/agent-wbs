@@ -1,6 +1,7 @@
 import { createPool } from '@awbs/db';
 import { loadConfig } from '../config.ts';
 import { watchRunner } from './watch.ts';
+import { deleteFiles } from '../reset/files.ts';
 
 const config = loadConfig(process.env);
 const pool = createPool(config.databaseUrl, { onError: () => console.error('Runner 감시 DB 연결 오류') });
@@ -8,7 +9,10 @@ let pending: Promise<void> | undefined;
 async function tick() {
   try {
     const state = (await pool.query<{ epoch: number }>('select epoch from system_state where id=1')).rows[0];
-    if (state) await watchRunner(pool, state.epoch);
+    if (state) {
+      await watchRunner(pool, state.epoch);
+      await deleteFiles(pool, state.epoch);
+    }
   } catch (error) {
     if ((error as { code?: string }).code !== 'AW001') console.error('Runner 생존 감시 실패');
   }

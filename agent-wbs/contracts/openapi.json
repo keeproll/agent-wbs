@@ -9659,6 +9659,7 @@
                               "none",
                               "pending",
                               "running",
+                              "done",
                               "failed"
                             ]
                           },
