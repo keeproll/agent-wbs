@@ -184,9 +184,18 @@ export function createResetCleanup(deps: ResetCleanupDeps): ResetCleanup {
     // Planning 진행 기록(분석 결과·기술 결정 제안·초안·CP 요청 본문, M5-04)도 프로젝트 기록이다. 초기화는 남기지 않는다(G§4.2 ③).
     // 프로세스 종료를 증명한 뒤에 지운다. 지우지 못하면 정리 실패다(독립 리뷰 1).
     const planningDir = planningStateDirectory(deps.home);
-    if (await lstat(planningDir).then(() => true, () => false)) {
+    // 「없음」은 ENOENT일 때만이다. 권한 거부(EACCES) 같은 조회 오류를 없음으로 보면 기록이 남았는데 done이 된다(재리뷰 1).
+    const planningFailed = (error: unknown) => failed({ name: 'planning:local', ok: false,
+      detail: `Planning 진행 기록을 확인·삭제하지 못함 — ${(error instanceof Error ? error.message : '삭제 실패').slice(0, 300)}` });
+    let planningExists = true;
+    try { await lstat(planningDir); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return planningFailed(error);
+      planningExists = false;
+    }
+    if (planningExists) {
       try { await rm(planningDir, { recursive: true, force: true }); }
-      catch (error) { return failed({ name: 'planning:local', ok: false, detail: `Planning 진행 기록을 지우지 못함 — ${(error instanceof Error ? error.message : '삭제 실패').slice(0, 300)}` }); }
+      catch (error) { return planningFailed(error); }
       items.push({ name: 'planning:local', ok: true, detail: 'Planning 진행 기록 삭제' });
     }
 

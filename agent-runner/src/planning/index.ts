@@ -1,7 +1,7 @@
 import type { ClaimedJob } from '../api/generated/client.ts';
 import { createRedactor } from '../security/redact.ts';
 import { runBootstrap } from './bootstrap.ts';
-import { PlanningCheckpointError } from './checkpoint.ts';
+import { PlanningCheckpointError, PlanningOutputInvalid } from './checkpoint.ts';
 import { runInputDiff } from './input-diff.ts';
 import { PlanningReportFailed, PlanningStopped } from './reporter.ts';
 import { bootstrapPayload, inputDiffPayload, PlanningPayloadError } from './payload.ts';
@@ -49,7 +49,7 @@ async function run(job: PlanningJob, ctx: PlanningContext): Promise<PlanningOutc
   } catch (error) {
     if (error instanceof PlanningStopped) return { status: 'lost', code: error.code, message: error.message };
     if (error instanceof PlanningPayloadError) return { status: 'failed', error: { code: 'UNSUPPORTED_PAYLOAD', message: error.message } };
-    if (error instanceof PlanningAgentFailed) return { status: 'failed', error: { code: 'PLANNING_AGENT_FAILED', message: error.message } };
+    if (error instanceof PlanningAgentFailed || error instanceof PlanningOutputInvalid) return { status: 'failed', error: { code: 'PLANNING_AGENT_FAILED', message: error.message } };
     if (error instanceof PlanningReportFailed) return { status: 'failed', error: { code: error.code, message: error.message } };
     if (error instanceof PlanningCheckpointError) return { status: 'failed', error: { code: 'CHECKPOINT_UNREADABLE', message: error.message } };
     return { status: 'failed', error: { code: 'PLANNING_FAILED', message: error instanceof Error ? error.message : String(error) } };

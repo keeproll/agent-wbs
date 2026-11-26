@@ -4,6 +4,7 @@ import { isAnalysis, isAnalysisPair, isCross, isDisagreements, isEstimates } fro
 import { sessionOf } from './payload.ts';
 import { agreeEstimates, agreeJudgements, agreeSplitJudgements } from './consensus.ts';
 import { judgeAdds, sendProposal } from './input-diff.ts';
+import { PlanningCheckpointError } from './checkpoint.ts';
 import { JobRun, PlanningAgentFailed, type PlanningOutcome } from './run.ts';
 
 /*
@@ -57,7 +58,7 @@ async function judgeProposal(run: JobRun<Job<'planning'>>, proposal: NonNullable
     split = agreeSplitJudgements(CP_RULES, answers, { ...meta, subjectHash: () => hash });
   }
   const disagreements = [...judged.disagreements, ...(split?.disagreements ?? [])];
-  await run.checkpoint.saveOutput(`judgements:${run.job.id}`, { disagreements });
+  await run.checkpoint.saveOutput(`judgements:${run.job.id}`, { disagreements }, isDisagreements);
   await run.reporter.send('submitProposalJudgements', 'judgements', {
     params: { id: proposal.id },
     body: {
@@ -81,7 +82,7 @@ async function runSession(run: JobRun<Job<'planning'>>, session: { id: string; t
   let cross = run.checkpoint.output('session:cross', isCross);
   if (!cross) {
     cross = await run.ask('교차 검토', (a) => a.crossReview({ ...request, analyses }));
-    await run.checkpoint.saveOutput('session:cross', cross);
+    await run.checkpoint.saveOutput('session:cross', cross, isCross);
   }
   if (cross.reviews.length) {
     await run.reporter.send('submitPlanningReviews', 'reviews', { params: { id: session.id }, body: { jobId: run.job.id, fence: run.job.fence, reviews: cross.reviews } });
@@ -104,7 +105,7 @@ async function sessionAnalyses(run: JobRun<Job<'planning'>>, request: Parameters
     const restored = body && typeof body === 'object' ? { summary: (body as Analysis).summary, items: (body as Analysis).items } : undefined;
     pair[agent] = isAnalysis(restored) ? restored : await run.call(run.ctx.agents[agent], 'Planning 독립 분석', (a) => a.analyze(request));
   }
-  await run.checkpoint.saveOutput('session:analyses', pair);
+  await run.checkpoint.saveOutput('session:analyses', pair, isAnalysisPair);
   return pair;
 }
 
@@ -112,11 +113,16 @@ export async function runEstimate(run: JobRun<Job<'estimate'>>): Promise<Plannin
   const { tasks, policy } = run.job.payload;
   // 합의한 추정은 보내기 전에 저장한다. 재시작 때 다시 물어 보낸 값과 다른 값을 결과로 쓰지 않는다.
   let agreed = run.checkpoint.output('estimates:agreed', isEstimates);
+  // 저장된 합의가 이 작업의 Task와 하나씩 맞아야 한다. 다르면 다른 작업의 기록이거나 손상이다.
+  const keys = tasks.map((t) => t.taskKey).sort();
+  if (agreed && JSON.stringify(agreed.map((e) => e.ref).sort()) !== JSON.stringify(keys)) {
+    throw new PlanningCheckpointError('저장된 합의 추정의 Task가 이 작업의 Task와 다릅니다.');
+  }
   if (!agreed) {
     const answers = await run.both('작업량 추정', (a) => a.estimate({ jobId: run.job.id, tasks: tasks.map((t) => ({ ref: t.taskKey, content: t.content })), policy }));
     try { agreed = agreeEstimates(tasks.map((t) => t.taskKey), answers); }
     catch (error) { throw new PlanningAgentFailed('Runner', '추정 합의', error instanceof Error ? error.message : String(error)); }
-    await run.checkpoint.saveOutput('estimates:agreed', agreed);
+    await run.checkpoint.saveOutput('estimates:agreed', agreed, isEstimates);
   }
   // 등급 재판단(G§7.2, D-29): 대상 역할의 등급을 먼저 보고한다. 서버가 허용·최저선을 검사해 저장하고, 이어지는 재추정이 일정을 다시 계산한다.
   for (const target of policy.rejudge?.targets ?? []) {
@@ -151,7 +157,7 @@ export async function runSplit(run: JobRun<Job<'split'>>): Promise<PlanningOutco
     const splitTasks = [{ taskKey: task.taskKey, content: task.content }];
     const answers = await run.both('분할 판단', (a) => a.judgeSplit({ jobId: run.job.id, rules: CP_RULES, ops: content.ops, splitTasks }));
     const split = agreeSplitJudgements(CP_RULES, answers, { judgedAt: run.iso(), sourceRef: run.job.id });
-    await run.checkpoint.saveOutput(`split:${run.job.id}`, { disagreements: [...disagreements, ...split.disagreements] });
+    await run.checkpoint.saveOutput(`split:${run.job.id}`, { disagreements: [...disagreements, ...split.disagreements] }, isDisagreements);
     return {
       body: { jobId: run.job.id, fence: run.job.fence, title: content.title, reason: content.reason, source: { kind: 'split' as const, id: task.taskKey },
         ops: ops as never, splitJudgements: split.record },

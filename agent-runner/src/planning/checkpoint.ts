@@ -34,10 +34,29 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 /** 보고기(reporter.ts)가 만드는 멱등 키 형식 `<operation>:<runnerId>:<uuid>` */
 const KEY = /^[A-Za-z]+:[^:\s]+:[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/;
 
-function validSent(entry: unknown): entry is SentRequest {
-  if (!isRecord(entry) || typeof entry.key !== 'string' || !KEY.test(entry.key) || !isRecord(entry.request)) return false;
-  const { params, body } = entry.request;
-  return (params === undefined || isRecord(params)) && (body === undefined || isRecord(body));
+/** Planning이 보내는 보고와 그 경로 인자. 모두 본문(fence 포함)이 필요하다. */
+const PLANNING_REPORTS: Record<string, readonly string[]> = {
+  reportBootstrapProgress: ['jobId'], submitDraft: ['jobId'], submitTechProposals: ['jobId'],
+  submitPlanningAnalysis: ['id'], submitPlanningReviews: ['id'], submitProposalJudgements: ['id'],
+  submitTaskPlan: ['taskKey'], submitPlanningProposal: [], submitEstimates: [],
+};
+
+/**
+ * 보낸 요청 하나의 검사. 문제가 없으면 null, 있으면 이유.
+ * 기록할 때(recordSent)와 읽을 때(load) 이 함수 하나를 같이 쓴다(재리뷰 3).
+ * 왜: 본문이 빠진 요청을 그대로 다시 보내면 손상된 로컬 기록이 서버 오류처럼 보이고, 재시도해도 같은 요청만 반복한다.
+ */
+export function sentProblem(entry: unknown): string | null {
+  if (!isRecord(entry) || typeof entry.key !== 'string' || !KEY.test(entry.key)) return '멱등 키 형식이 다릅니다';
+  const operation = entry.key.split(':')[0] ?? '';
+  const params = PLANNING_REPORTS[operation];
+  if (!params) return `Planning이 보내지 않는 보고입니다: ${operation}`;
+  if (!isRecord(entry.request)) return '요청이 객체가 아닙니다';
+  const { params: given, body } = entry.request;
+  if (!isRecord(body) || typeof body.fence !== 'number') return '본문(fence 포함)이 없습니다';
+  if (params.length && !(isRecord(given) && params.every((name) => typeof given[name] === 'string' && given[name] !== ''))) return `경로 인자(${params.join(',')})가 없습니다`;
+  if (given !== undefined && !isRecord(given)) return '경로 인자가 객체가 아닙니다';
+  return null;
 }
 
 /**
@@ -48,14 +67,16 @@ function validate(value: unknown, epoch: number): Document | string {
   if (!isRecord(value) || value.version !== 1) return '버전이 다릅니다';
   if (value.epoch !== epoch) return `초기화 번호가 다릅니다(기록 ${String(value.epoch)}, 현재 ${String(epoch)})`;
   if (!isRecord(value.outputs) || !Object.values(value.outputs).every(isRecord)) return '단계 결과 형식이 다릅니다';
-  if (!isRecord(value.sent) || !Object.values(value.sent).every(validSent)) return '보낸 요청 형식이 다릅니다';
+  if (!isRecord(value.sent) || !Object.values(value.sent).every((e) => sentProblem(e) === null)) return '보낸 요청 형식이 다릅니다';
   return value as unknown as Document;
 }
 
 export class PlanningCheckpointError extends Error { override name = 'PlanningCheckpointError'; }
+/** 저장하려는 단계 결과의 형식이 틀렸다(Agent 출력 문제). 디스크에 쓰지 않는다. */
+export class PlanningOutputInvalid extends Error { override name = 'PlanningOutputInvalid'; }
 
-/** 단계 결과의 형식 검사. 저장된 값이 기대한 모양이 아니면 손상으로 본다. */
-export type Guard<T> = (value: unknown) => value is T;
+/** 단계 결과의 형식 검사. 저장할 때와 불러올 때 같은 함수를 쓴다. `problem`이 있으면 이유를 설명한다. */
+export type Guard<T> = ((value: unknown) => value is T) & { problem?: (value: unknown) => string | null };
 
 export class PlanningCheckpoint {
   readonly epoch: number;
@@ -101,7 +122,9 @@ export class PlanningCheckpoint {
     return value;
   }
 
-  async saveOutput(name: string, value: unknown): Promise<void> {
+  /** 불러올 때와 같은 guard로 먼저 검사한다. 틀린 값은 디스크에 쓰지 않는다. */
+  async saveOutput<T>(name: string, value: T, guard: Guard<T>): Promise<void> {
+    if (!guard(value)) throw new PlanningOutputInvalid(`「${name}」 결과의 형식이 틀려 저장하지 않습니다: ${guard.problem?.(value) ?? '모양이 다릅니다'}`);
     const run = String(this.runNo);
     await this.write({ ...this.doc, outputs: { ...this.doc.outputs, [run]: { ...this.doc.outputs[run], [name]: structuredClone(value) } } });
   }
@@ -111,6 +134,8 @@ export class PlanningCheckpoint {
   }
 
   async recordSent(jobId: string, name: string, entry: SentRequest): Promise<void> {
+    const problem = sentProblem(entry);
+    if (problem) throw new PlanningCheckpointError(`보낼 요청 「${name}」이 올바르지 않아 기록하지 않습니다: ${problem}`);
     await this.write({ ...this.doc, sent: { ...this.doc.sent, [`${jobId}:${name}`]: structuredClone(entry) } });
   }
 

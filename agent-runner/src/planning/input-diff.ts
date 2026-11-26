@@ -38,7 +38,7 @@ export async function runInputDiff(run: JobRun<DiffJob>, payload: InputDiffPaylo
   };
   const computeDiff = async () => {
     const changes = await ws.diff(previousCommit, commit);
-    await checkpoint.saveOutput('diff', changes);
+    await checkpoint.saveOutput('diff', changes, isDiff);
     return changes;
   };
   const impact = () => {
@@ -69,7 +69,7 @@ export async function runInputDiff(run: JobRun<DiffJob>, payload: InputDiffPaylo
       key: 'impact', label: LABELS.impact ?? '', kind: 'agent', saved: () => checkpoint.output('impact', isAnalysisPair) !== undefined,
       run: async () => {
         const analyses = await run.both(LABELS.impact ?? '', (a) => a.analyze({ kind: 'input_diff', jobId: job.id, instruction, inputPath, commit, previousCommit, diff: diff(), ...withWbs }));
-        await checkpoint.saveOutput('impact', analyses);
+        await checkpoint.saveOutput('impact', analyses, isAnalysisPair);
         return `Codex: ${analyses.Codex.summary} / Claude: ${analyses.Claude.summary}`;
       },
     },
@@ -81,7 +81,7 @@ export async function runInputDiff(run: JobRun<DiffJob>, payload: InputDiffPaylo
           const content = await run.ask(LABELS.cp ?? '', (a) => a.proposeChanges({ jobId: job.id, instruction, inputPath, diff: diff(), analyses: impact(), ...withWbs }));
           if (content.ops.length === 0) { empty = true; return null; }
           const { ops, disagreements } = await judgeAdds(run, content.ops);
-          await checkpoint.saveOutput(`cp:${job.id}`, { disagreements });
+          await checkpoint.saveOutput(`cp:${job.id}`, { disagreements }, isDisagreements);
           return { body: { jobId: job.id, fence: job.fence, title: content.title, reason: content.reason, source: { kind: 'input' as const }, ops: ops as PlanningProposalOp[] } };
         });
         if (empty || !response) return '변경 없음 — 영향받는 Task가 없어 변경 제안을 만들지 않았습니다.';

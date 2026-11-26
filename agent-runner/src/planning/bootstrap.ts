@@ -47,7 +47,7 @@ export async function runBootstrap(run: JobRun<BootJob>, payload: BootstrapPaylo
     run: async () => {
       // 독립 분석: 상대 Agent의 분석을 넘기지 않는다.
       const analysis = await run.call(ctx.agents[agent], LABELS[key] ?? key, (a) => a.analyze(base()));
-      await checkpoint.saveOutput(`analysis:${agent}`, analysis);
+      await checkpoint.saveOutput(`analysis:${agent}`, analysis, isAnalysis);
       return analysis.summary;
     },
   });
@@ -68,7 +68,7 @@ export async function runBootstrap(run: JobRun<BootJob>, payload: BootstrapPaylo
       key: 'cross', label: LABELS.cross ?? '', kind: 'agent', saved: () => checkpoint.output('cross', isCross) !== undefined,
       run: async () => {
         const cross = await run.ask(LABELS.cross ?? '', (a) => a.crossReview({ ...base(), analyses: analyses() }));
-        await checkpoint.saveOutput('cross', cross);
+        await checkpoint.saveOutput('cross', cross, isCross);
         return cross.summary;
       },
     },
@@ -78,7 +78,7 @@ export async function runBootstrap(run: JobRun<BootJob>, payload: BootstrapPaylo
         const response = await run.reporter.send('submitDraft', 'draft', async () => {
           // 확정 결정 스냅샷이 오면 함께 넘긴다. 교차 검토의 tech는 팀장이 정하기 전의 「제안」일 뿐이다(독립 리뷰 계약 3).
           const built = await buildDraft(run, { ...base(), cross: required(checkpoint.output('cross', isCross)), analyses: analyses(), ...(decisions !== undefined && { decisions }) });
-          await checkpoint.saveOutput(`draft:${job.id}`, { disagreements: built.disagreements });
+          await checkpoint.saveOutput(`draft:${job.id}`, { disagreements: built.disagreements }, isDisagreements);
           return { params: { jobId: job.id }, body: { fence: job.fence, ...built.body } };
         });
         const saved = checkpoint.output(`draft:${job.id}`, isDisagreements);

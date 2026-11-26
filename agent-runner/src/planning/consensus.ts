@@ -103,14 +103,8 @@ export function agreeEstimates(refs: readonly string[], verdicts: Record<AgentNa
       const [v] = found as [EstimateVerdict];
       // Agent 출력은 바깥 값이다. 형식이 틀린 값을 「낮은 신뢰도」 같은 정상 값으로 바꾸지 않고 오류로 멈춘다(독립 리뷰 5).
       // 실제 CLI 출력 파서(M5-01)가 같은 검사를 하더라도 합의 경계에서 다시 막는다.
-      const finite = (n: unknown) => typeof n === 'number' && Number.isFinite(n);
-      if (![v.estHours, v.loHours, v.hiHours].every(finite) || (v.tokensK !== undefined && !(finite(v.tokensK) && v.tokensK >= 0))) {
-        throw new Error(`${agent}의 ${ref} 추정 시간·토큰이 유한한 수가 아닙니다.`);
-      }
-      if (!CONFIDENCE.includes(v.confidence)) throw new Error(`${agent}의 ${ref} 추정 신뢰도가 하·중·상이 아닙니다: ${String(v.confidence)}`);
-      if (typeof v.basis !== 'string') throw new Error(`${agent}의 ${ref} 추정 근거가 문자열이 아닙니다.`);
-      if (!(v.loHours > 0 && v.loHours <= v.estHours && v.estHours <= v.hiHours)) throw new Error(`${agent}의 ${ref} 추정은 낙관 ≤ 예상 ≤ 비관이어야 합니다.`);
-      if (!v.basis.trim()) throw new Error(`${agent}의 ${ref} 추정 근거가 비었습니다.`);
+      const problem = estimateProblem(v);
+      if (problem) throw new Error(`${agent}의 ${ref} 추정: ${problem}`);
       return v;
     }) as [EstimateVerdict, EstimateVerdict];
     const [a, b] = pair;
@@ -124,5 +118,40 @@ export function agreeEstimates(refs: readonly string[], verdicts: Record<AgentNa
       basis: AGENTS.map((agent, i) => `${agent}: ${pair[i]?.basis.trim() ?? ''}`).join('\n'),
       agreedBy: [...AGENTS],
     };
+  }).map((agreed) => {
+    // 만든 합의도 저장·재사용과 같은 함수로 검사한다.
+    const problem = agreedEstimateProblem(agreed);
+    if (problem) throw new Error(`${agreed.ref} 합의 추정: ${problem}`);
+    return agreed;
   });
+}
+
+const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n);
+
+/**
+ * Agent 한 명의 추정 값 검사. 문제가 없으면 null, 있으면 이유.
+ * 새 Agent 출력(agreeEstimates)과 저장된 합의(agreedEstimateProblem)가 이 함수 하나를 같이 쓴다(재리뷰 2).
+ */
+export function estimateProblem(value: unknown): string | null {
+  if (typeof value !== 'object' || value === null) return '객체가 아닙니다';
+  const v = value as Partial<Record<keyof EstimateVerdict, unknown>>;
+  if (typeof v.ref !== 'string' || !v.ref) return 'Task 참조(ref)가 없습니다';
+  if (![v.estHours, v.loHours, v.hiHours].every(finite) || (v.tokensK !== undefined && !(finite(v.tokensK) && v.tokensK >= 0))) return '시간·토큰이 유한한 수가 아닙니다';
+  if (!CONFIDENCE.includes(v.confidence as Confidence)) return `신뢰도가 하·중·상이 아닙니다: ${String(v.confidence)}`;
+  if (typeof v.basis !== 'string') return '근거가 문자열이 아닙니다';
+  const [lo, est, hi] = [v.loHours, v.estHours, v.hiHours] as number[];
+  if (!((lo ?? 0) > 0 && (lo ?? 0) <= (est ?? 0) && (est ?? 0) <= (hi ?? 0))) return '낙관 ≤ 예상 ≤ 비관이어야 합니다';
+  if (!v.basis.trim()) return '근거가 비었습니다';
+  return null;
+}
+
+/** 합의한 추정 검사: Agent 추정 검사 + 합의 주체가 Claude·Codex 둘(중복 없이). 저장할 때와 다시 쓸 때 모두 이 함수로 검사한다. */
+export function agreedEstimateProblem(value: unknown): string | null {
+  const problem = estimateProblem(value);
+  if (problem) return problem;
+  const agreedBy = (value as { agreedBy?: unknown }).agreedBy;
+  if (!Array.isArray(agreedBy) || agreedBy.length !== AGENTS.length || !AGENTS.every((agent) => agreedBy.includes(agent))) {
+    return `합의 주체가 Claude·Codex 둘이 아닙니다: ${JSON.stringify(agreedBy)}`;
+  }
+  return null;
 }
