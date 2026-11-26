@@ -68,7 +68,7 @@ export function StructuredEditor({ title, sub, draft, check, busy, onChange, onC
               <>
                 <div className="gtb" style={{ marginBottom: 8 }} role="table" aria-label={bk.l}>
                   <div className="gtr h" style={{ gridTemplateColumns: grid }} role="row">
-                    {cols.map((c) => <span key={c.k} className="gc" role="columnheader">{c.l}{c.req && <span className="req">*</span>}</span>)}<span className="gc" />
+                    {cols.map((c) => <span key={c.k} className="gc" role="columnheader">{c.l}{c.req && <span className="req">*</span>}</span>)}<span role="columnheader" className="gc"><span className="sr">행 삭제</span></span>
                   </div>
                   {list.map((r, ri) => {
                     const bad = check.rowErr[bk.k]?.[ri];
@@ -80,7 +80,7 @@ export function StructuredEditor({ title, sub, draft, check, busy, onChange, onC
                           const cls = bad?.[c.k] ? 'bad' : '';
                           const v = r[c.k];
                           return (
-                            <span className="gc" key={c.k}>
+                            <span role="cell" className="gc" key={c.k}>
                               {c.t === 'check' && <input type="checkbox" className={`chk ${cls}`} checked={!!v} aria-label={aria} onChange={(e) => { setCell(c.k, e.target.checked); }} />}
                               {c.t === 'sel' && c.sel && (
                                 <select className="inp cellin" value={String(v ?? '')} aria-label={aria} onChange={(e) => { setCell(c.k, e.target.value); }}>
@@ -91,11 +91,11 @@ export function StructuredEditor({ title, sub, draft, check, busy, onChange, onC
                             </span>
                           );
                         })}
-                        <span className="gc"><button type="button" className="iconbtn sm" aria-label={`${String(ri + 1)}행 삭제`} title={`${String(ri + 1)}행 삭제`} onClick={() => { setBlock(bk.k, list.filter((_, i) => i !== ri)); }}><svg className="ico sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg></button></span>
+                        <span role="cell" className="gc"><button type="button" className="iconbtn sm" aria-label={`${String(ri + 1)}행 삭제`} title={`${String(ri + 1)}행 삭제`} onClick={() => { setBlock(bk.k, list.filter((_, i) => i !== ri)); }}><svg className="ico sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg></button></span>
                       </div>
                     );
                   })}
-                  {!list.length && <div className="gtr"><span className="gc muted">행이 없습니다.</span></div>}
+                  {!list.length && <div className="gtr" role="row"><span role="cell" className="gc muted">행이 없습니다.</span></div>}
                 </div>
                 <button type="button" className="btn sm" onClick={() => { setBlock(bk.k, [...list, blankRow(bk.cols ?? '')]); }}>+ {bk.addL ?? '행 추가'}</button>
               </>

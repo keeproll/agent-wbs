@@ -92,19 +92,19 @@ export function DepsTab({ task: t, tasks, byKey, blocked, onOpenTask }: {
       )}
       <h4>선행 Task ({t.predecessors.length})</h4>
       <div className="gtb" role="table" aria-label="선행 Task">
-        <div className="gtr h" style={{ gridTemplateColumns: DEP_GRID }} role="row"><span className="gc">Task ID</span><span className="gc">제목</span><span className="gc">의존성 유형</span><span className="gc">선행 상태</span><span className="gc">충족</span><span className="gc" /></div>
+        <div className="gtr h" style={{ gridTemplateColumns: DEP_GRID }} role="row"><span role="columnheader" className="gc">Task ID</span><span role="columnheader" className="gc">제목</span><span role="columnheader" className="gc">의존성 유형</span><span role="columnheader" className="gc">선행 상태</span><span role="columnheader" className="gc">충족</span><span role="columnheader" className="gc"><span className="sr">삭제</span></span></div>
         {t.predecessors.map((p) => {
           const pt = byKey.get(p.pred);
           const s = statusOf(String(pt?.lifecycleStatus ?? ''));
           const met = depMet(p.type, pt);
           return (
             <div className="gtr" key={p.id} style={{ gridTemplateColumns: DEP_GRID }} role="row">
-              <span className="gc"><button type="button" className="reflink" onClick={() => { onOpenTask(p.pred, true); }}>{p.pred}</button></span>
-              <span className="gc">{pt?.title ?? ''}</span>
-              <span className="gc">{DEP_LABEL[String(p.type)]}</span>
-              <span className="gc">{pt && <span className={`st ${s.c}`}><span className="st-d" aria-hidden="true" />{s.l}</span>}</span>
-              <span className="gc"><span className={met ? 'okt' : 'blk'}>{met ? '충족' : '미충족 — 차단'}</span></span>
-              <span className="gc"><button type="button" className="btn ghost sm" aria-label={`${p.pred} 선행 관계 삭제`} disabled={remove.busy} onClick={() => {
+              <span role="cell" className="gc"><button type="button" className="reflink" onClick={() => { onOpenTask(p.pred, true); }}>{p.pred}</button></span>
+              <span role="cell" className="gc">{pt?.title ?? ''}</span>
+              <span role="cell" className="gc">{DEP_LABEL[String(p.type)]}</span>
+              <span role="cell" className="gc">{pt && <span className={`st ${s.c}`}><span className="st-d" aria-hidden="true" />{s.l}</span>}</span>
+              <span role="cell" className="gc"><span className={met ? 'okt' : 'blk'}>{met ? '충족' : '미충족 — 차단'}</span></span>
+              <span role="cell" className="gc"><button type="button" className="btn ghost sm" aria-label={`${p.pred} 선행 관계 삭제`} disabled={remove.busy} onClick={() => {
                 removingRef.current = { id: p.id, pred: p.pred };
                 void confirm({ title: '선행 관계 삭제', body: `${p.pred} → ${t.taskKey} 선행 관계를 삭제합니다. 실행 차단 여부가 다시 계산되며 이력에 기록됩니다.`, ok: '삭제', danger: true })
                   .then((ok) => { if (ok) void remove.save(); });
@@ -112,26 +112,26 @@ export function DepsTab({ task: t, tasks, byKey, blocked, onOpenTask }: {
             </div>
           );
         })}
-        {!t.predecessors.length && <div className="gtr"><span className="gc muted">선행 Task가 없습니다.</span></div>}
+        {!t.predecessors.length && <div className="gtr" role="row"><span role="cell" className="gc muted">선행 Task가 없습니다.</span></div>}
       </div>
       <h4>후속 Task ({t.successors.length})</h4>
       <div className="gtb" role="table" aria-label="후속 Task">
-        <div className="gtr h" style={{ gridTemplateColumns: SUCC_GRID }} role="row"><span className="gc">Task ID</span><span className="gc">제목</span><span className="gc">의존성 유형</span><span className="gc">후속 상태</span><span className="gc">이 Task로 인한 차단</span></div>
+        <div className="gtr h" style={{ gridTemplateColumns: SUCC_GRID }} role="row"><span role="columnheader" className="gc">Task ID</span><span role="columnheader" className="gc">제목</span><span role="columnheader" className="gc">의존성 유형</span><span role="columnheader" className="gc">후속 상태</span><span role="columnheader" className="gc">이 Task로 인한 차단</span></div>
         {t.successors.map((p) => {
           const st = byKey.get(p.succ);
           const s = statusOf(String(st?.lifecycleStatus ?? ''));
           const met = depMet(p.type, byKey.get(t.taskKey) ?? ({ lifecycleStatus: t.lifecycleStatus } as TaskSummaryData));
           return (
             <div className="gtr" key={p.id} style={{ gridTemplateColumns: SUCC_GRID }} role="row">
-              <span className="gc"><button type="button" className="reflink" onClick={() => { onOpenTask(p.succ, true); }}>{p.succ}</button></span>
-              <span className="gc">{st?.title ?? ''}</span>
-              <span className="gc">{DEP_LABEL[String(p.type)]}</span>
-              <span className="gc">{st && <span className={`st ${s.c}`}><span className="st-d" aria-hidden="true" />{s.l}</span>}</span>
-              <span className="gc"><span className={met ? 'okt' : 'blk'}>{met ? '차단하지 않음' : '후속 Task 차단 중'}</span></span>
+              <span role="cell" className="gc"><button type="button" className="reflink" onClick={() => { onOpenTask(p.succ, true); }}>{p.succ}</button></span>
+              <span role="cell" className="gc">{st?.title ?? ''}</span>
+              <span role="cell" className="gc">{DEP_LABEL[String(p.type)]}</span>
+              <span role="cell" className="gc">{st && <span className={`st ${s.c}`}><span className="st-d" aria-hidden="true" />{s.l}</span>}</span>
+              <span role="cell" className="gc"><span className={met ? 'okt' : 'blk'}>{met ? '차단하지 않음' : '후속 Task 차단 중'}</span></span>
             </div>
           );
         })}
-        {!t.successors.length && <div className="gtr"><span className="gc muted">이 Task를 선행으로 둔 후속 Task가 없습니다.</span></div>}
+        {!t.successors.length && <div className="gtr" role="row"><span role="cell" className="gc muted">이 Task를 선행으로 둔 후속 Task가 없습니다.</span></div>}
       </div>
       {add.conflictModal}
       {remove.conflictModal}

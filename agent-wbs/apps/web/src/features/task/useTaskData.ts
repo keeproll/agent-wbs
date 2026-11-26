@@ -42,8 +42,18 @@ export interface TaskSaveOptions<T, P> {
   notice?: (payload: P) => string;
   /** 누른 순간의 요청 내용(입력 복사). 재시도는 이 값과 같은 키·버전으로 다시 보낸다(M3-01 useSave 규칙). */
   request?: () => P;
-  /** 요청을 보낸다. 화면 상태를 읽지 말고 payload·updatedAt만 쓴다. */
-  run: (ctx: { idempotencyKey: string; updatedAt: string; payload: P }) => Promise<T>;
+  /**
+   * 보낼 버전. 편집기는 **편집을 시작했을 때의 버전**을 돌려준다(리뷰 R1).
+   * 왜: 변경 polling이 캐시를 최신으로 바꾼 뒤 그 버전으로 보내면, 그 사이 다른 사람이 저장한 내용을 충돌 없이 덮어쓴다.
+   * 없으면 누른 순간 캐시의 버전(체크 토글·승인처럼 편집 시작이 없는 한 번짜리 동작).
+   */
+  version?: () => string;
+  /**
+   * 요청을 보낸다. 화면 상태를 읽지 말고 payload·updatedAt만 쓴다.
+   * current()는 지금 캐시의 최신 Task다. 묶음으로만 저장되는 값(개요·명세)은 「최신 값 + 내가 바꾼 칸」으로 만들어
+   * 내가 건드리지 않은 칸을 옛 값으로 되돌리지 않는다.
+   */
+  run: (ctx: { idempotencyKey: string; updatedAt: string; payload: P; current: () => ResponseOf<'getTask'> | undefined }) => Promise<T>;
   onSuccess?: (result: T, payload: P) => void;
   /** 충돌 창 「최신 내용 불러오기」를 고르면 편집을 닫는다. */
   onReload?: () => void;
@@ -62,7 +72,8 @@ export function useTaskSave<T, P = undefined>(taskKey: string, options: TaskSave
   const client = useApi().client;
   const notify = useNotice();
   const key = apiKey('getTask', { params: { taskKey } });
-  const latest = () => (queryClient.getQueryData<ResponseOf<'getTask'>>(key))?.updatedAt ?? '';
+  const current = () => queryClient.getQueryData<ResponseOf<'getTask'>>(key);
+  const latest = () => current()?.updatedAt ?? '';
   const refresh = useRefresh(taskKey);
   const last = useRef<{ updatedAt: string; data: P } | null>(null);
   const done = useStableCallback((result: T, payload: P) => {
@@ -80,11 +91,11 @@ export function useTaskSave<T, P = undefined>(taskKey: string, options: TaskSave
     ...(options.successNotice ? { successNotice: options.successNotice } : {}),
     ...(options.onFieldErrors ? { onFieldErrors: options.onFieldErrors } : {}),
     request: () => {
-      const payload = { updatedAt: latest(), data: (options.request ? options.request() : undefined) as P };
+      const payload = { updatedAt: options.version?.() ?? latest(), data: (options.request ? options.request() : undefined) as P };
       last.current = payload;
       return payload;
     },
-    run: ({ idempotencyKey, payload }) => options.run({ idempotencyKey, updatedAt: payload.updatedAt, payload: payload.data }),
+    run: ({ idempotencyKey, payload }) => options.run({ idempotencyKey, updatedAt: payload.updatedAt, payload: payload.data, current }),
     onSuccess: (result) => { done(result, last.current?.data as P); },
     onRejected: (error) => { void refresh(true); options.onRejected?.(error); },
     onConflictReload: () => { options.onReload?.(); void refresh(true); },
@@ -93,7 +104,7 @@ export function useTaskSave<T, P = undefined>(taskKey: string, options: TaskSave
       const fresh = await queryClient.fetchQuery({ queryKey: key, queryFn: ({ signal }) => client.call('getTask', { params: { taskKey }, signal }), staleTime: 0 });
       const data = last.current?.data as P;
       last.current = { updatedAt: fresh.updatedAt, data };
-      const result = await options.run({ idempotencyKey: crypto.randomUUID(), updatedAt: fresh.updatedAt, payload: data });
+      const result = await options.run({ idempotencyKey: crypto.randomUUID(), updatedAt: fresh.updatedAt, payload: data, current });
       done(result, data);
       if (options.successNotice) notify(options.successNotice);
     },

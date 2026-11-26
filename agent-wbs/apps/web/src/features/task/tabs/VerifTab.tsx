@@ -5,22 +5,24 @@ import type { ResponseOf } from '../../../shared/api/contract.ts';
 import { apiUrl } from '../../../shared/api/client.ts';
 import { formatDateTime } from '../../../shared/format.ts';
 import { AreaLoading } from '../../../shared/ui/loading.tsx';
+import { codeLabel } from '../../../shared/ui/errors.ts';
+import { ListError } from '../parts.tsx';
 import { agCls, agInit, RESULT_CLASS, type TaskDetailData } from '../labels.ts';
 
 type Verifications = UseQueryResult<ResponseOf<'getTaskVerifications'>, ApiError>;
-type Evidence = ResponseOf<'listEvidence'>['items'][number];
+type EvidenceQuery = UseQueryResult<ResponseOf<'listEvidence'>, ApiError>;
 
-export function VerifTab({ task: t, verifications, evidence }: { task: TaskDetailData; verifications: Verifications; evidence: Evidence[] }) {
+export function VerifTab({ task: t, verifications, evidence }: { task: TaskDetailData; verifications: Verifications; evidence: EvidenceQuery }) {
   const vers = verifications.data?.items ?? [];
   const ag = t.verifierAgent === null ? '' : String(t.verifierAgent);
   return (
     <div className="pane">
       <div className="pane-h"><div className="pane-hl"><h3>검증·Evidence</h3><span className="muted">Verification Result와 연결된 Evidence</span></div><span className="tag">QA 결과 등록은 [작업 실행] · Evidence 통합 관리는 Phase D</span></div>
-      {verifications.data === undefined && <AreaLoading label="검증 결과 불러오는 중" />}
+      {verifications.data === undefined && (verifications.isError ? <ListError label="검증 결과" error={verifications.error} retrying={verifications.isFetching} onRetry={() => { void verifications.refetch(); }} /> : <AreaLoading label="검증 결과 불러오는 중" />)}
       {verifications.data !== undefined && !vers.length && <p className="empty">검증 결과가 없습니다.</p>}
       {vers.map((v, i) => {
         const r = String(v.result);
-        const evs = evidence.filter((e) => e.verificationId === v.id);
+        const evs = (evidence.data?.items ?? []).filter((e) => e.verificationId === v.id);
         return (
           <div className="att" key={v.id} role="article" aria-label={`검증 ${String(i + 1)} ${r}`}>
             <div className="att-h">
@@ -35,7 +37,8 @@ export function VerifTab({ task: t, verifications, evidence }: { task: TaskDetai
               <span className="ev-l">예상 결과</span><span>{v.expected}</span>
               <span className="ev-l">실제 결과</span><span>{v.actual}</span>
               <span className="ev-l">Evidence</span>
-              {evs.length ? <ul className="lst mono-list" style={{ margin: 0 }}>{evs.map((e) => <li key={e.id}><a href={apiUrl('getEvidenceContent', { params: { id: e.id } })}>{e.kind} · {e.sha256.slice(0, 12)} · {String(e.size)}B</a></li>)}</ul> : <span className="muted">없음</span>}
+              {/* Evidence 읽기 실패를 「없음」과 구분한다(리뷰 R6) */}
+              {evidence.isError && evidence.data === undefined ? <span role="alert">Evidence를 불러오지 못했습니다 ({codeLabel(evidence.error)}) <button type="button" className="reflink" onClick={() => { void evidence.refetch(); }}>다시 시도</button></span> : evs.length ? <ul className="lst mono-list" style={{ margin: 0 }}>{evs.map((e) => <li key={e.id}><a href={apiUrl('getEvidenceContent', { params: { id: e.id } })}>{e.kind} · {e.sha256.slice(0, 12)} · {String(e.size)}B</a></li>)}</ul> : <span className="muted">없음</span>}
               {v.defects.length > 0 && <><span className="ev-l">결함·재작업 사유</span><ul className="lst" style={{ margin: 0, color: '#8A1C12' }}>{v.defects.map((d) => <li key={d.defKey}>{d.defKey} {d.text}{d.blocking ? ' (차단)' : ''}{d.resolved ? ' — 해결됨' : ''}</li>)}</ul></>}
             </div>
           </div>

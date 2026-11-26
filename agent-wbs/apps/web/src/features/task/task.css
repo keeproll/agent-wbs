@@ -10,6 +10,10 @@
 /* 2. 휴대폰(390px)에서 알림 링크로 상세를 읽을 때 요약·탭이 잘리지 않게 한다(UAT-RESP-02-TASK, D-28).
       원본 L643(1100px 이하 상세 전체 화면)을 그대로 쓰고, 그보다 좁을 때 요약을 한 줄 1칸으로 바꾼다. */
 @media (max-width: 560px) {
+  /* 리뷰 R2: 원본은 머리를 고정(.dt-head flex:none)하고 본문만 스크롤한다. 휴대폰에서는 머리가 화면을 다 차지해
+     본문이 수십 px만 남으므로, 상세 전체를 세로로 스크롤하게 한다. 머리는 위로 밀려 올라가고 본문을 끝까지 읽는다. */
+  .detail { overflow-y: auto; }
+  .detail .dt-body { flex: none; overflow: visible; }
   .detail .summary { grid-template-columns: minmax(0, 1fr); }
   .detail .dt-top { flex-wrap: wrap; }
   .detail .kv { grid-template-columns: minmax(0, 1fr); gap: 2px 0; }

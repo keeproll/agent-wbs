@@ -61,18 +61,25 @@ export function SpecTab({ task: t }: { task: TaskDetailData }) {
 function SpecLinesEditor({ task: t, sec, title }: { task: TaskDetailData; sec: SpecKey | '__out'; title: string }) {
   const slot = useEditSlot();
   const client = useApiClient();
-  const initial = (sec === '__out' ? t.spec.overview.out : t.spec.spec[sec]).join('\n');
-  const [text, setText] = useState(() => (typeof slot.restored === 'string' ? slot.restored : initial));
-  useEffect(() => { slot.report(text); }, [text, slot]);
+  const restored = slot.restored as { text: string; base: string; initial: string } | null;
+  // 편집 시작 값·버전 고정(리뷰 R1): 변경 polling으로 Task가 새로 와도 이 버전으로 보내 충돌을 서버가 알린다.
+  const [{ initial, base }] = useState(() => restored ?? { initial: (sec === '__out' ? t.spec.overview.out : t.spec.spec[sec]).join('\n'), base: t.updatedAt, text: '' });
+  const [text, setText] = useState(() => restored?.text ?? initial);
+  useEffect(() => { slot.report({ text, base, initial }); }, [text, slot, base, initial]);
   useEffect(() => { slot.setDirty(text !== initial); }, [text, initial, slot]);
   const save = useTaskSave(t.taskKey, {
     target: `${t.taskKey} 작업 명세 「${title}」 저장`,
     mine: `${title}: ${String(toLines(text).length)}항목`,
-    request: () => ({ lines: toLines(text), overview: t.spec.overview, spec: t.spec.spec }),
-    run: ({ updatedAt, payload: p }) => client.call('updateTaskSpec', {
-      params: { taskKey: t.taskKey },
-      body: sec === '__out' ? { updatedAt, overview: { ...p.overview, out: p.lines } } : { updatedAt, spec: { ...p.spec, [sec]: p.lines } },
-    }),
+    version: () => base,
+    request: () => ({ lines: toLines(text) }),
+    // 최신 명세 묶음 위에 이 섹션만 바꾼다(다른 섹션을 옛 값으로 되돌리지 않기).
+    run: ({ updatedAt, payload: p, current }) => {
+      const now = current() ?? t;
+      return client.call('updateTaskSpec', {
+        params: { taskKey: t.taskKey },
+        body: sec === '__out' ? { updatedAt, overview: { ...now.spec.overview, out: p.lines } } : { updatedAt, spec: { ...now.spec.spec, [sec]: p.lines } },
+      });
+    },
     onSuccess: (_r, p) => { if (same(p.lines, toLines(text))) slot.close(); },
     onReload: () => { slot.close(); },
     successNotice: `「${title}」을(를) 저장했습니다.`,
@@ -99,15 +106,18 @@ function SpecTableEditor({ task: t, which }: { task: TaskDetailData; which: 'ac'
   const client = useApiClient();
   const block = SPEC_TBL[which];
   const source = (which === 'ac' ? t.spec.ac : t.outputs) as unknown as Row[];
-  const [draft, setDraft] = useState<EditorDraft>(() => (slot.restored as EditorDraft | null) ?? { kind: 'spec', sec: '', idx: -1, key: which, f: {}, b: toDraft([block], { [which]: source }) });
-  const [touched, setTouched] = useState(slot.restored !== null);
-  useEffect(() => { slot.report(draft); }, [draft, slot]);
+  const restored = slot.restored as { draft: EditorDraft; base: string } | null;
+  const [base] = useState(() => restored?.base ?? t.updatedAt);
+  const [draft, setDraft] = useState<EditorDraft>(() => restored?.draft ?? { kind: 'spec', sec: '', idx: -1, key: which, f: {}, b: toDraft([block], { [which]: source }) });
+  const [touched, setTouched] = useState(restored !== null);
+  useEffect(() => { slot.report({ draft, base }); }, [draft, slot, base]);
   useEffect(() => { slot.setDirty(touched); }, [touched, slot]);
   const check = validateDraft(draft, { known: {}, ownApi: [] });
   const value = () => fromDraft(draftBlocks(draft), draft.b)[which] as Row[];
   const save = useTaskSave(t.taskKey, {
     target: `${t.taskKey} ${block.l} 저장`,
     mine: `${block.l}: ${String(value().length)}항목`,
+    version: () => base,
     request: () => value(),
     run: ({ updatedAt, payload: rows }) => (which === 'ac'
       ? client.call('updateTaskSpec', { params: { taskKey: t.taskKey }, body: { updatedAt, ac: rows.map((r) => ({ given: String(r.given ?? ''), when: String(r.when ?? ''), then: String(r.then ?? ''), method: String(r.method ?? '') })) } })

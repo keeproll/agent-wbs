@@ -29,7 +29,8 @@ import { ExecTab } from './tabs/ExecTab.tsx';
 import { VerifTab } from './tabs/VerifTab.tsx';
 import { HistoryTab } from './tabs/HistoryTab.tsx';
 import { MessagesTab } from './tabs/MessagesTab.tsx';
-import { useApiClient } from './useTaskData.ts';
+import { useApiClient, useRefresh } from './useTaskData.ts';
+import { TabBoundary } from './parts.tsx';
 import './task.css';
 
 export const TABS = ['overview', 'spec', 'deps', 'tech', 'checklist', 'exec', 'verif', 'hist', 'msg'] as const;
@@ -73,17 +74,20 @@ export function specFilled(t: TaskDetailData): { filled: number; total: number }
 
 export function TaskDetail({ taskKey, projectId, tab, onTab, nav, onOpenTask }: TaskDetailProps) {
   const data = useTaskData(taskKey, projectId);
+  const refresh = useRefresh(taskKey);
   // 이미 보인 상세가 자동 갱신에 실패하면 화면(편집 중 입력 포함)은 그대로 두고 오류 막대로 알린다(M3-01 useRefreshError).
   useRefreshError(data.task, `${taskKey} 최신 내용 불러오기`);
   const [slot, setSlot] = useState<{ id: string; dirty: boolean } | null>(null);
   const [draft, setDraft] = useState<unknown>(null);
   const [restored, setRestored] = useState<unknown>(null);
+  // 복원하면 지금 탭을 새로 그려 편집기가 복원한 초안으로 시작하게 한다.
+  const [gen, setGen] = useState(0);
   // 로그인이 끊겨도 편집 중이던 내용을 잃지 않게 한다(M3-01 useSessionDraft). Task마다 편집 자리 하나라 초안도 하나다.
   const { restoreOffer } = useSessionDraft<{ slot: string; tab: TabKey; data: unknown }>({
     id: `task:${taskKey}:edit`,
     label: `${taskKey} 편집 중이던 내용`,
     value: slot?.dirty && draft !== null ? { slot: slot.id, tab, data: draft } : null,
-    onRestore: (d) => { setRestored(d.data); setDraft(d.data); setSlot({ id: d.slot, dirty: true }); if (d.tab !== tab) onTab(d.tab); },
+    onRestore: (d) => { setGen((n) => n + 1); setRestored(d.data); setDraft(d.data); setSlot({ id: d.slot, dirty: true }); if (d.tab !== tab) onTab(d.tab); },
   });
   const [gateOpen, setGateOpen] = useState(false);
   const { guard } = useEditGuard(slot?.dirty ?? false);
@@ -203,24 +207,39 @@ export function TaskDetail({ taskKey, projectId, tab, onTab, nav, onOpenTask }: 
           )}
           <ApprovalBar task={t} />
           <div className="tabs" role="tablist" aria-label="Task 상세 탭">
-            {tabsDef.map(([key, label, c, alert]) => (
-              <button key={key} type="button" className={`tab${tab === key ? ' on' : ''}`} role="tab" aria-selected={tab === key} onClick={() => { if (tab !== key) void guard(() => { discard(); onTab(key); }); }}>
+            {tabsDef.map(([key, label, c, alert], i) => (
+              <button
+                key={key} type="button" className={`tab${tab === key ? ' on' : ''}`} role="tab" aria-selected={tab === key}
+                id={`task-tab-${key}`} aria-controls="task-tabpanel" tabIndex={tab === key ? 0 : -1}
+                onClick={() => { if (tab !== key) void guard(() => { discard(); onTab(key); }); }}
+                onKeyDown={(e) => {
+                  // 탭 목록 키보드(WAI-ARIA 탭 패턴): ←/→ 이웃 탭, Home/End 처음/끝. 고르면 바로 연다(리뷰 R7).
+                  const n = e.key === 'ArrowRight' ? i + 1 : e.key === 'ArrowLeft' ? i - 1 : e.key === 'Home' ? 0 : e.key === 'End' ? tabsDef.length - 1 : null;
+                  if (n === null) return;
+                  e.preventDefault();
+                  const next = tabsDef[(n + tabsDef.length) % tabsDef.length]?.[0];
+                  if (!next) return;
+                  void guard(() => { discard(); onTab(next); }).then(() => { document.getElementById(`task-tab-${next}`)?.focus(); });
+                }}
+              >
                 {label}{c !== '' && <span className={`tab-c${alert ? ' alert' : ''}`}>{c}</span>}
               </button>
             ))}
           </div>
         </div>
-        <div className="dt-body" role="tabpanel">
+        <div className="dt-body" role="tabpanel" id="task-tabpanel" aria-labelledby={`task-tab-${tab}`}>
           {restoreOffer}
+          <TabBoundary key={gen} resetKey={`${taskKey}:${tab}`} onRetry={() => { void refresh(true); }}>
           {tab === 'overview' && <OverviewTab task={t} byKey={byKey} nodes={data.list.data?.nodes ?? []} attempts={attempts} onOpenTask={onOpenTask} />}
           {tab === 'spec' && <SpecTab task={t} />}
           {tab === 'deps' && <DepsTab task={t} tasks={tasks} byKey={byKey} blocked={blocked} onOpenTask={onOpenTask} />}
           {tab === 'tech' && <DesignTab task={t} tasks={tasks} />}
           {tab === 'checklist' && <ChecklistTab task={t} />}
           {tab === 'exec' && <ExecTab task={t} attempts={data.attempts} />}
-          {tab === 'verif' && <VerifTab task={t} verifications={data.verifications} evidence={data.evidence.data?.items ?? []} />}
+          {tab === 'verif' && <VerifTab task={t} verifications={data.verifications} evidence={data.evidence} />}
           {tab === 'hist' && <HistoryTab history={data.history} />}
           {tab === 'msg' && <MessagesTab messages={data.messages} />}
+          </TabBoundary>
         </div>
       </section>
     </EditSlotContext.Provider>

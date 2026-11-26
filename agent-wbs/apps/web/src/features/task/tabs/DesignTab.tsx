@@ -13,7 +13,7 @@ import { apiKey } from '../../../shared/api/queries.ts';
 import { useConfirm } from '../../../shared/ui/feedback.tsx';
 import { useEditSlot } from '../edit-slot.tsx';
 import {
-  blankEntity, draftBlocks, fromDraft, isDesignPresent, knownTables, relationRows, toDraft, validateDraft,
+  blankEntity, draftBlocks, normalizeDesign, fromDraft, isDesignPresent, knownTables, relationRows, toDraft, validateDraft,
   type BlockValue, type DesignContent, type DesignEnt, type EditorDraft, type Known,
 } from '../editor-model.ts';
 import { COLSETS, DESIGN, DESIGN_KINDS, DOMAIN_TO_DESIGN, type Block, type DesignKind, type TaskDetailData, type TaskSummaryData } from '../labels.ts';
@@ -23,7 +23,12 @@ import { useApiClient, useTaskSave } from '../useTaskData.ts';
 
 /** 내용이 있는 설계 섹션(빈 `{}`는 제거된 섹션) */
 export const presentDesigns = (t: TaskDetailData) =>
-  t.designs.filter((d) => isDesignPresent(d.content)).map((d) => ({ kind: String(d.kind) as DesignKind, content: d.content as DesignContent }));
+  t.designs.filter((d) => isDesignPresent(d.content) && (DESIGN_KINDS as string[]).includes(String(d.kind))).map((d) => {
+    // 서버가 검사하지 않은 잘못된 모양이 와도 그릴 수 있게 바로잡는다(리뷰 R4). dropped: 표시하지 못한 항목 수
+    const kind = String(d.kind) as DesignKind;
+    const { content, dropped } = normalizeDesign(kind, d.content);
+    return { kind, content, dropped };
+  })
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const recKinds = (t: TaskDetailData): DesignKind[] => {
@@ -57,18 +62,20 @@ export function DesignTab({ task: t, tasks }: { task: TaskDetailData; tasks: Tas
   const client = useApiClient();
   const confirm = useConfirm();
   const secs = presentDesigns(t);
-  const [ed, setEd] = useState<{ draft: EditorDraft; title: string } | null>(() => (slot.current === 'design' ? (slot.restored as { draft: EditorDraft; title: string } | null) : null));
+  // base: 편집을 시작한 버전(리뷰 R1). 저장은 이 버전으로 보내 그 사이 다른 저장이 있으면 409 충돌 창이 열린다.
+  const [ed, setEd] = useState<{ draft: EditorDraft; title: string; base: string } | null>(() => (slot.current === 'design' ? (slot.restored as { draft: EditorDraft; title: string; base: string } | null) : null));
   useEffect(() => { if (ed) slot.report(ed); }, [ed, slot]);
   const editing = slot.current === 'design' && ed !== null;
   const hasDb = secs.some((s) => s.kind === 'DB');
   const known = useKnown(t, tasks, hasDb || (editing && ed.draft.sec === 'DB'), editing && ed.draft.kind === 'ent' ? { task: t.taskKey, idx: ed.draft.idx } : null);
   const have = secs.map((s) => s.kind);
   const rec = recKinds(t);
-  const [pending, setPending] = useState<{ kind: DesignKind; content: DesignContent; notice: string; mine: string; draft: EditorDraft | null } | null>(null);
+  const [pending, setPending] = useState<{ kind: DesignKind; content: DesignContent; notice: string; mine: string; draft: EditorDraft | null; base: string | null } | null>(null);
   const write = useTaskSave(t.taskKey, {
     target: `${t.taskKey} 기술 설계 저장`,
     mine: pending?.mine ?? '',
-    request: () => pendingRef.current ?? { kind: 'DB' as DesignKind, content: {}, notice: '', mine: '', draft: null },
+    version: () => pendingRef.current?.base ?? t.updatedAt,
+    request: () => pendingRef.current ?? { kind: 'DB' as DesignKind, content: {}, notice: '', mine: '', draft: null, base: null },
     run: ({ updatedAt, payload: p }) => client.call('updateTaskDesign', { params: { taskKey: t.taskKey, kind: p.kind }, body: { updatedAt, content: p.content as Record<string, unknown> } }),
     // 저장한 초안과 지금 초안이 같을 때만 편집기를 닫는다(M3-01 useSave).
     onSuccess: (_r, p) => { if (!ed || same(p.draft, ed.draft)) { setEd(null); slot.close(); } },
@@ -78,7 +85,7 @@ export function DesignTab({ task: t, tasks }: { task: TaskDetailData; tasks: Tas
   // 저장 요청은 누른 순간의 값을 보내야 해서 ref에도 둔다(상태는 다음 렌더에야 바뀐다).
   const pendingRef = useRef<typeof pending>(null);
   const commit = (kind: DesignKind, content: DesignContent, notice: string, mine: string) => {
-    pendingRef.current = { kind, content, notice, mine, draft: ed?.draft ?? null };
+    pendingRef.current = { kind, content, notice, mine, draft: ed?.draft ?? null, base: ed?.base ?? null };
     setPending(pendingRef.current);
     void write.save();
   };
@@ -124,11 +131,11 @@ export function DesignTab({ task: t, tasks }: { task: TaskDetailData; tasks: Tas
     const en = idx < 0 ? blankEntity(kind) : (contentOf(kind).ents ?? [])[idx] ?? blankEntity(kind);
     const nm = kind === 'DB' ? en.f.name ?? '' : `${en.f.method ?? ''} ${en.f.path ?? ''}`;
     slot.open('design');
-    setEd({ title: idx < 0 ? `${sc.label} 추가` : `${sc.label} 편집 — ${nm}`, draft: { kind: 'ent', sec: kind, idx, key: '', f: { ...en.f }, b: toDraft(sc.blocks, en.b) } });
+    setEd({ title: idx < 0 ? `${sc.label} 추가` : `${sc.label} 편집 — ${nm}`, draft: { kind: 'ent', sec: kind, idx, key: '', f: { ...en.f }, b: toDraft(sc.blocks, en.b) }, base: t.updatedAt });
   };
   const openBlk = (kind: DesignKind, bk: Block) => {
     slot.open('design');
-    setEd({ title: `${bk.l} 편집`, draft: { kind: 'blk', sec: kind, idx: -1, key: bk.k, f: {}, b: toDraft([bk], contentOf(kind).b) } });
+    setEd({ title: `${bk.l} 편집`, draft: { kind: 'blk', sec: kind, idx: -1, key: bk.k, f: {}, b: toDraft([bk], contentOf(kind).b) }, base: t.updatedAt });
   };
   const busyOrEditing = slot.current !== null || write.busy;
   const dsLinks = secs.flatMap(({ kind, content }) => (kind === 'API' ? (content.ents ?? []).map((e) => `${e.f.method ?? ''} ${e.f.path ?? ''}`) : kind === 'DB' ? (content.ents ?? []).map((e) => e.f.name ?? '') : [])).slice(0, 12);
@@ -157,7 +164,7 @@ export function DesignTab({ task: t, tasks }: { task: TaskDetailData; tasks: Tas
         </div>
       )}
       {!secs.length && <p className="empty">이 Task에는 아직 기술 설계 섹션이 없습니다.</p>}
-      {secs.map(({ kind, content }) => {
+      {secs.map(({ kind, content, dropped }) => {
         const sc = DESIGN[kind];
         const ents = content.ents ?? [];
         const rel = kind === 'DB' ? relationRows(t.taskKey, content, known) : [];
@@ -175,6 +182,7 @@ export function DesignTab({ task: t, tasks }: { task: TaskDetailData; tasks: Tas
               </span>
             </div>
             <div className="dsec-b">
+              {dropped > 0 && <div className="banner warn" role="note" style={{ margin: '0 0 10px' }}><div className="banner-b">저장된 설계 내용 중 읽을 수 없는 항목 {dropped}건을 표시하지 않았습니다 — 이 섹션을 저장하면 읽을 수 있는 내용만 남습니다.</div></div>}
               {sc.ent && !ents.length && <p className="empty" style={{ margin: '0 0 8px' }}>{sc.ent.label}가 없습니다. 「{sc.ent.addL}」로 정의하세요.</p>}
               {ents.map((en, i) => {
                 const nm = kind === 'DB' ? en.f.name ?? '' : en.f.path ?? '';
@@ -193,7 +201,7 @@ export function DesignTab({ task: t, tasks }: { task: TaskDetailData; tasks: Tas
                           .then((ok) => { if (ok) commit(kind, { ...content, ents: ents.filter((_, j) => j !== i) }, `${sc.ent?.label ?? ''} ${nm}을(를) 삭제했습니다.`, `${sc.ent?.label ?? ''} ${nm} 삭제`); });
                       }}>삭제</button>
                     </div>
-                    {sc.ent?.blocks.map((bk) => <ReadBlock key={bk.k} bk={bk} value={en.b[bk.k]} />)}
+                    {sc.ent?.blocks.map((bk) => <ReadBlock key={bk.k} bk={bk} value={en.b[bk.k]} region={`${nm} ${bk.l}`} />)}
                   </div>
                 );
               })}
@@ -212,13 +220,14 @@ export function DesignTab({ task: t, tasks }: { task: TaskDetailData; tasks: Tas
   );
 }
 
-function ReadBlock({ bk, value, onEdit }: { bk: Block; value: BlockValue | undefined; onEdit?: (() => void) | undefined }) {
+/** region: 영역 이름. 엔티티마다 같은 블록(컬럼 정의 등)이 반복되므로 엔티티 이름을 붙여 겹치지 않게 한다(리뷰 R7). */
+function ReadBlock({ bk, value, onEdit, region }: { bk: Block; value: BlockValue | undefined; onEdit?: (() => void) | undefined; region?: string }) {
   const has = filled(value, bk.t);
   return (
-    <div className="rblk" role="region" aria-label={bk.l}>
+    <div className="rblk" role="region" aria-label={region ?? bk.l}>
       <div className="tsec-h"><h4>{bk.l}</h4><span className="sp" />{onEdit && <button type="button" className="btn ghost sm" aria-label={`${bk.l} 편집`} onClick={onEdit}>편집</button>}</div>
       {!has && <p className="empty" style={{ margin: 0 }}>미작성</p>}
-      {has && bk.t === 'table' && <ReadTable label={bk.l} cols={COLSETS[bk.cols ?? ''] ?? []} rows={value as Record<string, unknown>[]} />}
+      {has && bk.t === 'table' && <ReadTable label={region ?? bk.l} cols={COLSETS[bk.cols ?? ''] ?? []} rows={value as Record<string, unknown>[]} />}
       {has && bk.t === 'lines' && <Lines items={value as string[]} />}
       {has && bk.t === 'code' && <pre className="code"><code>{value as string}</code></pre>}
     </div>

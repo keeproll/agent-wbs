@@ -9,6 +9,7 @@
 import { SPLIT_RULES } from '@awbs/shared';
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { ApiError } from '../../../shared/api/client.ts';
 import { apiKey } from '../../../shared/api/queries.ts';
 import { formatDateTime } from '../../../shared/format.ts';
 import { BusyButton } from '../../../shared/ui/BusyButton.tsx';
@@ -21,7 +22,7 @@ import { Lines, Segs, short } from '../parts.tsx';
 import { fmtH, slipState } from '../schedule.ts';
 import { useApiClient, useTaskSave } from '../useTaskData.ts';
 
-interface GradeEdit { role: 'dev' | 'qa'; model: string; effort: string }
+interface GradeEdit { role: 'dev' | 'qa'; model: string; effort: string; base: string }
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 type Node = ResponseOf<'listTasks'>['nodes'][number];
 type Attempt = ResponseOf<'getTaskAttempts'>['items'][number];
@@ -103,19 +104,39 @@ export function OverviewTab({ task: t, byKey, nodes, attempts, onOpenTask }: {
   );
 }
 
+const overviewValues = (t: TaskDetailData) => {
+  const ov = t.spec.overview;
+  return {
+    title: t.title, priority: String(t.priority), assignee: t.assigneeAgent === null ? '' : String(t.assigneeAgent), verifier: t.verifierAgent === null ? '' : String(t.verifierAgent),
+    purpose: ov.purpose, background: ov.background, scope: ov.scope.join('\n'), out: ov.out.join('\n'), precond: ov.precond, doneCond: ov.doneCond,
+  };
+};
+type OverviewValues = ReturnType<typeof overviewValues>;
+/** 세션 초안·편집 고정값: 편집 시작 값(initial)·버전(base)·지금 입력(d) */
+interface OverviewDraft { initial: OverviewValues; base: string; d: OverviewValues }
+/** 바뀐 개요 칸만 저장 모양으로 */
+function overviewPatch(d: OverviewValues, keys: readonly string[]) {
+  const out: Partial<TaskDetailData['spec']['overview']> = {};
+  for (const k of keys) {
+    if (k === 'scope' || k === 'out') out[k] = toLines(d[k]);
+    else if (k === 'purpose' || k === 'background' || k === 'precond' || k === 'doneCond') out[k] = d[k].trim();
+  }
+  return out;
+}
+
 /** 개요 편집(P L1111–1127). 실패해도 입력을 지우지 않는다(useSave). */
 function OverviewForm({ task: t }: { task: TaskDetailData }) {
   const slot = useEditSlot();
   const client = useApiClient();
-  const ov = t.spec.overview;
-  const initial = {
-    title: t.title, priority: String(t.priority), assignee: t.assigneeAgent === null ? '' : String(t.assigneeAgent), verifier: t.verifierAgent === null ? '' : String(t.verifierAgent),
-    purpose: ov.purpose, background: ov.background, scope: ov.scope.join('\n'), out: ov.out.join('\n'), precond: ov.precond, doneCond: ov.doneCond,
-  };
+  const restored = slot.restored as OverviewDraft | null;
+  // 편집을 시작한 순간의 값과 버전을 고정한다(리뷰 R1). 변경 polling이 Task를 새로 읽어도 비교 기준·보낼 버전은 바뀌지 않는다.
+  // 그래서 그 사이 다른 사람이 저장했으면 서버가 409로 알려 주고, 충돌 창에서 고른다.
+  const [{ initial, base }] = useState(() => restored ?? { initial: overviewValues(t), base: t.updatedAt, d: overviewValues(t) });
+  type Values = typeof initial;
   // 로그인이 끊겼다 돌아와 복원했으면 그 초안으로 시작한다(edit-slot report/restored).
-  const [d, setD] = useState(() => (slot.restored as typeof initial | null) ?? initial);
-  const [touched, setTouched] = useState(slot.restored !== null);
-  useEffect(() => { slot.report(d); }, [d, slot]);
+  const [d, setD] = useState<Values>(() => restored?.d ?? initial);
+  const [touched, setTouched] = useState(restored !== null);
+  useEffect(() => { slot.report({ initial, base, d } satisfies OverviewDraft); }, [d, slot, initial, base]);
   const L: Record<keyof typeof initial, string> = { title: '제목', priority: '우선순위', assignee: '담당 Agent', verifier: '검증 Agent', purpose: '작업 목적', background: '작업 배경', scope: '작업 범위', out: '제외 범위', precond: '선행 조건', doneCond: '완료 조건' };
   const diff = (Object.keys(L) as (keyof typeof initial)[]).filter((k) => d[k].trim() !== initial[k].trim());
   const errs = overviewErrors(d);
@@ -127,8 +148,9 @@ function OverviewForm({ task: t }: { task: TaskDetailData }) {
   const save = useTaskSave(t.taskKey, {
     target: `${t.taskKey} 개요 저장`,
     mine: `${t.taskKey} ${diff.map((k) => `${L[k]}: ${short(d[k])}`).join(' · ')}`,
+    version: () => base,
     request: () => ({ d, head, body }),
-    run: async ({ updatedAt, payload: { d, head, body } }) => {
+    run: async ({ updatedAt, payload: { d, head, body }, current }) => {
       let version = updatedAt;
       let last: ResponseOf<'updateTask'> | null = null;
       if (head.length) {
@@ -144,7 +166,8 @@ function OverviewForm({ task: t }: { task: TaskDetailData }) {
       if (body.length) {
         last = await client.call('updateTaskSpec', { params: { taskKey: t.taskKey }, body: {
           updatedAt: version,
-          overview: { purpose: d.purpose.trim(), background: d.background.trim(), scope: toLines(d.scope), out: toLines(d.out), precond: d.precond.trim(), doneCond: d.doneCond.trim() },
+          // 최신 개요 위에 내가 바꾼 칸만 얹는다(건드리지 않은 칸을 옛 값으로 되돌리지 않기, 리뷰 R1).
+          overview: { ...(current()?.spec.overview ?? t.spec.overview), ...overviewPatch(d, body) },
         } });
       }
       return last;
@@ -161,6 +184,8 @@ function OverviewForm({ task: t }: { task: TaskDetailData }) {
       <div className="frow"><label className="flabel" htmlFor="ov-pri">우선순위<span className="req">필수</span></label><div className="fctl"><select id="ov-pri" className="inp" value={d.priority} onChange={set('priority')}>{PRIORITY.map((p, i) => <option key={p.l} value={String(i)}>{p.l}</option>)}</select></div></div>
       <div className="frow"><label className="flabel" htmlFor="ov-asg">담당 Agent<span className="req">필수</span></label><div className="fctl"><select id="ov-asg" className="inp" value={d.assignee} onChange={set('assignee')}>{!d.assignee && <option value="">미지정</option>}<option value="Claude">Claude</option><option value="Codex">Codex</option></select><span className="fhint">담당 Agent 변경은 이력에 기록됩니다. 담당과 검증 Agent는 다르게 지정하는 것을 권장합니다.</span></div></div>
       <div className="frow"><label className="flabel" htmlFor="ov-vf">검증 Agent<span className="req">필수</span></label><div className="fctl"><select id="ov-vf" className="inp" value={d.verifier} onChange={set('verifier')}>{!d.verifier && <option value="">미지정</option>}<option value="Codex">Codex</option><option value="Claude">Claude</option></select>{errs.same && <span className="ferr">담당 Agent와 검증 Agent가 같습니다. 교차 검증 원칙에 맞지 않습니다.</span>}</div></div>
+      {/* 리뷰 R8: 작업량·토큰·고정 시작일 저장 필드가 계약에 없어 읽기 전용 자리와 안내만 둔다. 검사 규칙은 editor-model estimateErrors에 준비해 두었다. */}
+      <div className="frow"><span className="flabel">예상 실행 시간</span><div className="fctl"><span className="mono">{t.schedule ? `낙관 ${fmtH(t.schedule.loHours)} · 예상 ${fmtH(t.schedule.estHours)} · 비관 ${fmtH(t.schedule.hiHours)}` : '아직 추정 전'}</span><span className="fhint">작업량 · 예상 토큰 · 고정 시작일은 서버 계약이 확장되면 여기서 편집합니다. 지금은 Planning Agent 추정값을 보여 줍니다.</span></div></div>
       <div className="frow"><label className="flabel" htmlFor="ov-pur">작업 목적<span className="req">필수</span></label><div className="fctl"><textarea id="ov-pur" rows={3} className={`inp ${show('purpose') ? 'bad' : ''}`} value={d.purpose} onChange={set('purpose')} aria-invalid={show('purpose')} />{show('purpose') && <span className="ferr">작업 목적을 입력하세요.</span>}</div></div>
       <div className="frow"><label className="flabel" htmlFor="ov-bg">작업 배경<span className="opt">선택</span></label><div className="fctl"><textarea id="ov-bg" rows={3} className="inp" value={d.background} onChange={set('background')} /></div></div>
       <div className="frow"><label className="flabel" htmlFor="ov-sc">작업 범위<span className="opt">선택</span></label><div className="fctl"><textarea id="ov-sc" rows={4} className="inp" value={d.scope} onChange={set('scope')} /><span className="fhint">한 줄에 한 항목 · `백틱`으로 파일 경로·코드 표시</span></div></div>
@@ -204,11 +229,23 @@ function GradeSection({ task: t, attempts }: { task: TaskDetailData; attempts: A
   const agentOf = (role: 'dev' | 'qa') => (role === 'dev' ? t.assigneeAgent : t.verifierAgent);
   const modelLabel = (id: string) => models.data?.models.find((m) => m.id === id)?.label ?? id;
   const gradeL = (g: { modelId: string; effort: string }) => `${modelLabel(g.modelId)} · ${EFF[g.effort]?.l ?? g.effort}`;
+  /**
+   * 등급 고정·해제 API는 계약에는 있지만 서버 라우트가 아직 없다(리뷰 R3, 서버 후속 작업). 404 NOT_FOUND를 받으면
+   * 「서버 기능 대기」를 분명히 알린다. 오류 막대는 공통 규칙대로 함께 보인다. 서버가 생기면 이 안내는 저절로 나오지 않는다.
+   */
+  const [serverMissing, setServerMissing] = useState(false);
+  const waitServer = async <R,>(p: Promise<R>): Promise<R> => {
+    try { return await p; } catch (e) {
+      if (e instanceof ApiError && e.kind === 'notFound' && e.code === 'NOT_FOUND') setServerMissing(true);
+      throw e;
+    }
+  };
   const lock = useTaskSave(t.taskKey, {
     target: `${t.taskKey} 실행 등급 저장 · 고정`,
     mine: edit ? `${ROLE_LABEL[edit.role]} 등급 ${gradeL({ modelId: edit.model, effort: edit.effort })}` : '',
-    request: () => edit ?? { role: 'dev' as const, model: '', effort: '' },
-    run: ({ updatedAt, payload: e }) => client.call('lockTaskGrade', { params: { taskKey: t.taskKey }, body: { updatedAt, role: e.role, modelId: e.model, effort: e.effort } }),
+    version: () => edit?.base ?? t.updatedAt,
+    request: () => edit ?? { role: 'dev' as const, model: '', effort: '', base: '' },
+    run: ({ updatedAt, payload: e }) => waitServer(client.call('lockTaskGrade', { params: { taskKey: t.taskKey }, body: { updatedAt, role: e.role, modelId: e.model, effort: e.effort } })),
     onSuccess: (_r, p) => { if (same(p, edit)) { setEdit(null); slot.close(); } },
     onReload: () => { setEdit(null); slot.close(); },
     notice: (e) => `${t.taskKey} ${ROLE_LABEL[e.role]} 등급을 고정했습니다. 등급이 바뀌면 작업량을 재추정하고 일정을 자동 재조정합니다.`,
@@ -217,7 +254,7 @@ function GradeSection({ task: t, attempts }: { task: TaskDetailData; attempts: A
   const unlock = useTaskSave(t.taskKey, {
     target: `${t.taskKey} 실행 등급 고정 해제`,
     request: () => unlockRole,
-    run: ({ updatedAt, payload: role }) => client.call('unlockTaskGrade', { params: { taskKey: t.taskKey }, query: { updatedAt, role } }),
+    run: ({ updatedAt, payload: role }) => waitServer(client.call('unlockTaskGrade', { params: { taskKey: t.taskKey }, query: { updatedAt, role } })),
     notice: (role) => `${t.taskKey} ${ROLE_LABEL[role]} 등급 고정을 해제했습니다. Planning Agent 판단으로 돌아갑니다.`,
   });
   useEffect(() => { if (edit) slot.setDirty(true); }, [edit, slot]);
@@ -250,7 +287,7 @@ function GradeSection({ task: t, attempts }: { task: TaskDetailData; attempts: A
               <span className="agent"><span className="tag">{ROLE_LABEL[role]}</span>{ag && <span className={`ag-mk ${agCls(ag)}`} aria-hidden="true">{agInit(ag)}</span>}{ag || '미지정'} <b style={{ marginLeft: 4 }}>{g ? gradeL(g) : '등급 미정'}</b></span>
               <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 <span className={g?.locked ? 'tag lock' : 'tag'}>{g?.locked ? '팀장 고정' : 'Planning Agent 판단'}</span>
-                {!closed && !ed && <button type="button" className="btn ghost sm" disabled={slot.current !== null} onClick={() => { slot.open(`grade-${role}`); setEdit({ role, model: g?.modelId ?? mOpts[0]?.id ?? '', effort: g?.effort ?? 'high' }); }}>변경 · 고정</button>}
+                {!closed && !ed && <button type="button" className="btn ghost sm" disabled={slot.current !== null} onClick={() => { slot.open(`grade-${role}`); setEdit({ role, model: g?.modelId ?? mOpts[0]?.id ?? '', effort: g?.effort ?? 'high', base: t.updatedAt }); }}>변경 · 고정</button>}
                 {!closed && !ed && g?.locked && <BusyButton variant="ghost" small busy={unlock.busy && unlockRole === role} busyLabel="해제 중…" onClick={() => {
                   setUnlockRole(role);
                   void confirm({ title: '등급 고정 해제', body: `${t.taskKey} ${ROLE_LABEL[role]} 등급 고정을 해제합니다. Planning Agent가 등급을 다시 판단하고 작업량을 재추정합니다.`, ok: '고정 해제' }).then((ok) => { if (ok) void unlock.save(); });
@@ -262,6 +299,7 @@ function GradeSection({ task: t, attempts }: { task: TaskDetailData; attempts: A
               <div className="form" style={{ marginTop: 8 }}>
                 <div className="frow"><span className="flabel">모델</span><div className="fctl"><div className="seg" role="group" aria-label={`${ROLE_LABEL[role]} 모델`}>{mOpts.map((o) => <button type="button" key={o.id} aria-pressed={ed.model === o.id} onClick={() => { setEdit({ ...ed, model: o.id }); }}>{o.l}</button>)}</div></div></div>
                 <div className="frow"><span className="flabel">Effort</span><div className="fctl"><div className="seg" role="group" aria-label={`${ROLE_LABEL[role]} Effort`}>{eOpts.map((k) => <button type="button" key={k} aria-pressed={ed.effort === k} onClick={() => { setEdit({ ...ed, effort: k }); }}>{EFF[k]?.l ?? k}</button>)}</div></div></div>
+                {serverMissing && <div className="banner info" role="note"><div className="banner-b">등급 변경 · 고정은 서버 기능이 준비되면 사용할 수 있습니다(404 — 서버 후속 작업). 지금 등급은 바뀌지 않았습니다.</div></div>}
                 {why.length > 0 && <div className="banner warn" role="note"><div className="banner-b">최저선 미달 ({why.join(' · ')}) — 저장하면 팀장 예외로 고정되고 이력에 남습니다.</div></div>}
                 <div className="form-acts">
                   <span className="muted" style={{ marginRight: 'auto' }}>저장하면 팀장 고정 — Planning Agent가 바꾸지 않습니다. Effort가 바뀌면 작업량을 재추정합니다.</span>

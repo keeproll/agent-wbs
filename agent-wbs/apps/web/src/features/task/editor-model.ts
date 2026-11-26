@@ -33,13 +33,66 @@ export type Known = Record<string, KnownTable>;
 export const isDesignPresent = (content: unknown): content is DesignContent =>
   typeof content === 'object' && content !== null && Object.keys(content).length > 0;
 
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/**
+ * 저장된 설계 content를 화면이 그릴 수 있는 모양으로 바로잡는다(리뷰 R4).
+ * 서버가 설계 내용을 검사하지 않아(서버 후속 작업) 빈 엔티티·배열 아닌 블록 같은 값이 저장될 수 있다.
+ * 그런 값 때문에 화면 전체가 죽지 않도록, 읽을 수 없는 항목은 버리고 버린 수(dropped)를 돌려준다. 화면은 그 수를 안내한다.
+ * 정상 데이터는 그대로 돌려준다. 스키마에 없는 블록 키는 무시한다.
+ */
+export function normalizeDesign(kind: DesignKind, raw: unknown): { content: DesignContent; dropped: number } {
+  let dropped = 0;
+  const schema = DESIGN[kind];
+  const blocks = (src: unknown, defs: Block[]): Record<string, BlockValue> => {
+    const out: Record<string, BlockValue> = {};
+    if (src === undefined) return out;
+    if (!isObj(src)) { if (src !== null) dropped += 1; return out; }
+    for (const bk of defs) {
+      if (!(bk.k in src)) continue;
+      const v = src[bk.k];
+      if (bk.t === 'code') {
+        if (typeof v === 'string') out[bk.k] = v; else { dropped += 1; out[bk.k] = ''; }
+      } else if (!Array.isArray(v)) {
+        dropped += 1; out[bk.k] = [];
+      } else if (bk.t === 'lines') {
+        out[bk.k] = v.filter((x): x is string => { const ok = typeof x === 'string'; if (!ok) dropped += 1; return ok; });
+      } else {
+        out[bk.k] = v.flatMap((r): Row[] => {
+          if (!isObj(r)) { dropped += 1; return []; }
+          const row: Row = {};
+          for (const [k, x] of Object.entries(r)) {
+            if (typeof x === 'string' || typeof x === 'boolean') row[k] = x; else dropped += 1;
+          }
+          return [row];
+        });
+      }
+    }
+    return out;
+  };
+  if (!isObj(raw)) return { content: {}, dropped: 1 };
+  const content: DesignContent = {};
+  if ('ents' in raw || schema.ent) {
+    const src = raw.ents;
+    if (src !== undefined && !Array.isArray(src)) dropped += 1;
+    content.ents = (Array.isArray(src) ? src : []).flatMap((e): DesignEnt[] => {
+      if (!isObj(e) || !isObj(e.f)) { dropped += 1; return []; }
+      const f: Record<string, string> = {};
+      for (const [k, x] of Object.entries(e.f)) { if (typeof x === 'string') f[k] = x; else dropped += 1; }
+      return [{ f, b: blocks(e.b ?? {}, schema.ent?.blocks ?? []) }];
+    });
+  }
+  content.b = blocks(raw.b ?? {}, schema.blocks);
+  return { content, dropped };
+}
+
 /** 모든 Task의 DB 설계에 정의된 테이블(삭제 제외). skip은 지금 편집 중인 엔티티(P L5454). */
 export function knownTables(tasks: { taskKey: string; designs: { kind: string; content: unknown }[] }[], skip: { task: string; idx: number } | null): Known {
   const m: Known = {};
   for (const t of tasks) {
     for (const sec of t.designs) {
       if (sec.kind !== 'DB' || !isDesignPresent(sec.content)) continue;
-      (sec.content.ents ?? []).forEach((en, i) => {
+      (normalizeDesign('DB', sec.content).content.ents ?? []).forEach((en, i) => {
         if (skip && skip.task === t.taskKey && skip.idx === i) return;
         const name = en.f.name;
         if (name && en.f.change !== '삭제') m[name] = { cols: ((en.b.columns ?? []) as Row[]).map((c) => String(c.name)), task: t.taskKey, change: en.f.change ?? '' };
@@ -208,4 +261,25 @@ export function relationRows(taskKey: string, content: DesignContent, known: Kno
 /** 개요 편집 검사(P L1114–1124). same은 경고일 뿐 저장을 막지 않는다(UAT-TASK-02 「경고」). */
 export function overviewErrors(o: { title: string; purpose: string; doneCond: string; assignee: string; verifier: string }) {
   return { title: !o.title.trim(), purpose: !o.purpose.trim(), doneCond: !o.doneCond.trim(), same: !!o.assignee && o.assignee === o.verifier };
+}
+
+/**
+ * 작업량 편집 검사(UAT-TASK-02, 원본 P L1118–1119). 서버 계약에 저장 필드가 생기면 개요 편집이 이것을 쓴다(리뷰 R8).
+ * 지금은 저장 API가 없어 화면에 입력 칸을 두지 않고, 규칙만 미리 시험해 둔다.
+ * 문구는 「칸: 고칠 내용」 모양으로 돌려준다. range는 세 시간의 순서 오류다.
+ */
+export function estimateErrors(v: { lo: string; est: string; hi: string; tok: string; fixStart: string }): string[] {
+  const errs: string[] = [];
+  const num = (s: string) => (s.trim() === '' ? NaN : Number(s));
+  const hours = { lo: num(v.lo), est: num(v.est), hi: num(v.hi) };
+  for (const k of ['lo', 'est', 'hi'] as const) {
+    const h = hours[k];
+    if (!(Number.isFinite(h) && h > 0 && h <= 400)) errs.push(`${k}: 0보다 크고 400 이하인 숫자로 입력하세요.`);
+  }
+  const valid = (['lo', 'est', 'hi'] as const).every((k) => Number.isFinite(hours[k]) && hours[k] > 0 && hours[k] <= 400);
+  if (valid && !(hours.lo <= hours.est && hours.est <= hours.hi)) errs.push('range: 0보다 큰 숫자로, 낙관 ≤ 예상 ≤ 비관 순서가 되어야 합니다.');
+  if (!/^\d+$/.test(v.tok.trim())) errs.push('tok: 예상 토큰은 0 이상의 정수(K)로 입력하세요.');
+  const d = v.fixStart.trim();
+  if (d && !(/^\d{4}-\d{2}-\d{2}$/.test(d) && !Number.isNaN(Date.parse(`${d}T00:00:00Z`)) && new Date(`${d}T00:00:00Z`).toISOString().slice(0, 10) === d)) errs.push('fixStart: YYYY-MM-DD 형식으로 입력하세요.');
+  return errs;
 }

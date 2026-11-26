@@ -8,7 +8,7 @@ import type { ResponseOf } from '../../../shared/api/contract.ts';
 import { formatDateTime } from '../../../shared/format.ts';
 import { AreaLoading } from '../../../shared/ui/loading.tsx';
 import { DELIVERY, DELIVERY_CLASS } from '../labels.ts';
-import { Segs } from '../parts.tsx';
+import { ListError, Segs } from '../parts.tsx';
 
 type Message = ResponseOf<'getTaskMessages'>['items'][number];
 
@@ -34,7 +34,7 @@ export function MessagesTab({ messages }: { messages: UseQueryResult<ResponseOf<
     <div className="pane">
       <div className="pane-h"><div className="pane-hl"><h3>메시지</h3><span className="muted">팀장 ↔ Runner 작업 지시·응답 · 시간순</span></div></div>
       <div className="banner info" style={{ margin: '0 0 14px' }}><div className="banner-b">메시지는 공식 명세를 변경하지 않습니다. 범위·Acceptance Criteria·선행 관계·기술 설계 변경은 메시지의 「Change Proposal 작성」으로 승인 절차를 거칩니다. Runner의 <b>수신 확인</b>은 작업 완료를 의미하지 않습니다.</div></div>
-      {messages.data === undefined && <AreaLoading label="메시지 불러오는 중" />}
+      {messages.data === undefined && (messages.isError ? <ListError label="메시지" error={messages.error} retrying={messages.isFetching} onRetry={() => { void messages.refetch(); }} /> : <AreaLoading label="메시지 불러오는 중" />)}
       {messages.data !== undefined && !msgs.length && <p className="empty">이 Task의 메시지가 없습니다.</p>}
       {msgs.map((m: Message) => {
         const inb = m.dir === 'in';
