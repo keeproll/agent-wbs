@@ -81,6 +81,7 @@ python3 docs/ui/extract.py --check
 - [template-audit.json](evidence/template-audit.json): 모든 이벤트·조건·반복·필드·인라인 스타일·아이콘·로직 색인.
   - 각 이벤트에 상위 `sc-if`, 반복 별칭, disabled 속성, 바인딩 후보 줄을 보존했다.
 - [data-model.json](evidence/data-model.json): 실제 샘플 필드·열거값·로직 조사 결과. 실제 외부 시스템 연결은 없다.
+  - `probe.mjs`가 이 파일을 다시 쓴다. 원본의 날짜 계산이 실행 시각에 따라 달라지므로, probe는 기존 증거를 만든 시각 2026-11-25 21:21 Asia/Seoul로 시계와 시간대를 고정한다. 두 번 연속 실행해도 같은 파일이 나온다.
 - 자동 대조:
   - 정규식의 이벤트 개수와 HTMLParser 결과, 조건/반복 개수를 독립적으로 대조한다.
   - 모든 추출 ID가 본문에 있는지 assert(맞지 않으면 즉시 실패하는 검사)한다.

@@ -50,6 +50,7 @@
    - 원본 JavaScript를 VM(Node 가상 실행 환경)에서 평가했다.
    - 실제 모델 필드를 추출하고, 메뉴/Task/Gate/ChatID/GitHub주소를 assert했다.
    - DOM·네트워크는 없다. 타이머는 큐에만 넣는다.
+   - 재현성: VM의 `Date`를 2026-11-25 21:21 Asia/Seoul(기존 증거를 만든 시각)로 고정한다. 고정 전후 data-model.json은 바이트 단위로 같고, 두 번 연속 실행한 결과도 같다.
 2. `python3 docs/ui/extract.py`
    - Python HTMLParser와 별도 정규식의 이벤트 개수가 일치하는지 본다.
    - sc-if/sc-for 개수가 일치하는지 본다.

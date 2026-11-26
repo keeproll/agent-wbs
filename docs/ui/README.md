@@ -146,6 +146,7 @@ python3 -B docs/ui/audit-milestones.py --check
 ```
 
 - `--check`가 실패하면 누군가 생성 영역을 손으로 고쳤거나, 입력을 바꾸고 다시 생성하지 않은 것이다.
+- `node docs/ui/probe.mjs`는 [evidence/data-model.json](evidence/data-model.json)을 **다시 쓰는** 명령이다. 원본이 실제 시계를 쓰기 때문에, probe는 기존 증거를 만든 시각 **2026-11-25 21:21 Asia/Seoul**로 시계를 고정해 실행한다. 그래서 언제 실행해도 같은 JSON이 나온다. 기존 문서가 최신인지 확인만 할 때는 `extract.py --check`를 쓴다.
 
 ## 7. 용어집
 
@@ -210,12 +211,29 @@ python3 -B docs/ui/audit-milestones.py --check
 | VM 확인 | [probe.mjs](probe.mjs)로 원본 JavaScript를 Node 가상 환경(VM)에서 실행해 확인한 결과. 브라우저 확인과 다르다. |
 | 정적 추출 | 프로그램을 실행하지 않고 파일 내용만 읽어 뽑아낸 결과. |
 | 체크섬 (SHA-256) | 파일 내용으로 계산한 고유 값. 원본이 바뀌지 않았는지 확인할 때 쓴다. |
+| AC (Acceptance Criteria) | Task의 완료 인정 조건. "이것이 되면 이 Task는 끝"이라는 조건 목록. |
+| Given / When / Then | AC를 쓰는 형식. Given=전제(시작 상황), When=동작(사용자가 하는 일), Then=기대 결과. |
+| Diff | 바뀌기 전과 후를 나란히 비교해 보여 주는 것. CP에서는 WBS가 어떻게 바뀌는지 보여 준다. |
+| KPI | 핵심 지표(Key Performance Indicator). 대시보드 위쪽의 일정·진척 숫자들. |
 
 ### 기술 용어
 
 | 용어 | 뜻 |
 |---|---|
 | CLI | 명령줄 프로그램. 여기서는 Claude·Codex 실행 프로그램을 말한다. |
+| API | 화면(브라우저)과 서버가 데이터를 주고받는 약속된 창구. 예: `POST /api/replans/run`. |
+| Endpoint | API 하나하나의 "방식+주소" 한 쌍. 예: `POST /api/replans/run`. "중복 Endpoint"는 같은 방식·주소를 두 번 정의한 것이다. |
+| HTTP 메서드 | API 요청의 종류. GET(조회), POST(생성·실행), PUT/PATCH(수정), DELETE(삭제) 등. |
+| PK (기본키) | DB 표에서 각 행을 하나로 구분하는 열. 비어 있으면 안 된다. "nullable PK"는 기본키에 '값 없음(null)'을 허용한 잘못된 설정이다. |
+| FK (외래키) | 다른 표의 행을 가리키는 열. "없는 FK"는 존재하지 않는 표나 열을 가리키는 잘못된 설정이다. |
+| 인덱스 | DB에서 검색을 빠르게 하려고 특정 열에 만들어 두는 색인. "없는 인덱스 컬럼"은 표에 없는 열로 인덱스를 만든 경우다. |
+| nullable / null | null은 '값 없음'. nullable은 그 열에 '값 없음'을 허용한다는 뜻이다. |
+| ack | 상대가 "받았다"고 돌려주는 확인 신호. 받았다는 뜻일 뿐 일을 끝냈다는 뜻은 아니다. |
+| readiness (준비 상태) | Runner가 실행 전에 점검하는 항목(CLI 로그인, 버전 등)의 결과. ok/warn/fail로 나온다. |
+| 슬롯 / 보유 | 슬롯은 동시에 돌릴 수 있는 실행 자리 하나. 보유는 그 자리를 "아직 사용 중"으로 잡아 두는 것이다. 프로세스가 정말 끝난 것이 확인돼야 자리를 돌려준다(해제). |
+| 하위 Agent 예산 / 관측 수 | 예산은 지시문에 적는 "하위 Agent를 동시에 최대 몇 개까지". 관측 수는 CLI 출력에서 실제로 보인 하위 Agent 수. 관측을 믿을 수 없는(미검증) CLI는 둘 중 큰 값 `max(예산, 관측)`을 사용 중으로 센다. 예: 예산 2, 관측 3이면 3으로 센다. |
+| liveInject (즉시 전달) | 실행 중인 Agent에게 메시지를 바로 넣는 기능. 지원하지 않으면 메시지는 다음 실행 때 전달된다. |
+| head | 브랜치의 최신 커밋. "같은 head"는 검사한 커밋과 병합할 커밋이 같다는 뜻이다. |
 | CI | Continuous Integration. 코드를 자동으로 빌드·검사하는 파이프라인. |
 | PR | Pull Request. 변경을 main에 합쳐 달라는 요청. |
 | main | 저장소의 기본 브랜치. |
