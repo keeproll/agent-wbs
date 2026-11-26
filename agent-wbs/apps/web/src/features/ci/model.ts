@@ -68,7 +68,8 @@ export function detailSteps(run: CiRun): StepRow[] {
   return steps.map((s, i) => {
     const status = failAt >= 0 && i > failAt && (s.status === 'queued' || s.status === 'run') ? 'skip' : s.status;
     const { l, c } = statusLabel(status);
-    return { name: s.name, l, c, dur: status === 'pass' || status === 'fail' ? formatDuration(s.durationMs) : '—' };
+    // 단계 시간은 원본처럼 초 단위 하나로 쓴다(P L4770 「136초」). 전체 소요만 「분 초」로 쓴다.
+    return { name: s.name, l, c, dur: status === 'pass' || status === 'fail' ? `${String(Math.round(s.durationMs / 1000))}초` : '—' };
   });
 }
 
@@ -118,7 +119,7 @@ const QUEUE: Record<string, { l: string; c: string }> = {
 };
 const PENDING = new Set(['waiting_verify', 'queued', 'checking']);
 
-export interface QueueRow { id: string; pr: string; taskKey: string; title: string; st: string; c: string; at: string; ciRunId: string | null; mismatch: boolean; actualMergeSha: string | null }
+export interface QueueRow { id: string; pr: string; taskKey: string; title: string; st: string; c: string; at: string; ciRunId: string | null; ciRunKey: string | null; mismatch: boolean; actualMergeSha: string | null }
 
 /**
  * 병합 대기열 행.
@@ -126,13 +127,14 @@ export interface QueueRow { id: string; pr: string; taskKey: string; title: stri
  * - mismatch: 실제 병합 SHA가 기록됐는데 병합됨이 아니면, 서버가 MERGE_MISMATCH로 완료를 보류한 것이다(M7-04 조정자 결정 4).
  */
 export function queueRows(queue: readonly QueueItem[], titles: ReadonlyMap<string, string>, runs: readonly CiRun[]): QueueRow[] {
-  const started = new Map(runs.map((r) => [r.id, r.startedAt]));
+  const byId = new Map(runs.map((r) => [r.id, r]));
   return queue.map((q) => {
     const s = QUEUE[q.status] ?? { l: String(q.status), c: 'vf v-none' };
-    const at = q.ciRunId ? started.get(q.ciRunId) : undefined;
+    const linked = q.ciRunId ? byId.get(q.ciRunId) : undefined;
+    const at = linked?.startedAt;
     return {
       id: q.id, pr: prLabel(q.pr), taskKey: q.taskKey, title: titles.get(q.taskKey) ?? '', st: s.l, c: s.c, at: at ? formatDateTime(at) : '—',
-      ciRunId: q.ciRunId, mismatch: q.actualMergeSha !== null && q.status !== 'merged', actualMergeSha: q.actualMergeSha,
+      ciRunId: q.ciRunId, ciRunKey: linked?.runKey ?? null, mismatch: q.actualMergeSha !== null && q.status !== 'merged', actualMergeSha: q.actualMergeSha,
     };
   });
 }

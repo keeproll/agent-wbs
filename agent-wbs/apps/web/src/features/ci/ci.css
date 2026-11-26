@@ -1,0 +1,12 @@
+/*
+  빌드·통합(UI-08)에만 필요한 추가 CSS.
+  원본은 1100px 아래에서 .two를 한 줄로 쌓기만 한다(P L641). 휴대폰(760px 이하)에서는 알림 링크로 연 상세를 바로 읽도록
+  상세를 목록 위로 올린다(UAT-RESP-02, 변경 제안 화면 change.css와 같은 규칙).
+*/
+@media (max-width: 760px) {
+  .ci-two > .side { order: 2; }
+  .ci-two > .mainc { order: 1; }
+  /* 단계 표의 이름 칸 최소 폭(220px)이 휴대폰 폭을 넘지 않게 줄인다. 이름은 줄바꿈된다. */
+  .ci-detail .gtr { grid-template-columns: minmax(0, 1fr) 72px 64px !important; }
+  .ci-detail .vf-nav { flex-wrap: wrap; }
+}

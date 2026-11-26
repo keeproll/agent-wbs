@@ -49,12 +49,12 @@ describe('빌드·통합 화면 계산(UI-08, P ciVM L4765–4801)', () => {
     const r = run({
       id: 'a', stage: 'task', status: 'fail', failStep: 'lint',
       steps: [
-        { name: 'install', status: 'pass', durationMs: 1000 }, { name: 'lint', status: 'fail', durationMs: 2000 },
+        { name: 'install', status: 'pass', durationMs: 1000 }, { name: 'lint', status: 'fail', durationMs: 136_000 },
         { name: 'test', status: 'queued', durationMs: 0 }, { name: 'build', status: 'run', durationMs: 0 },
       ],
     });
     expect(detailSteps(r).map((s) => [s.name, s.l])).toEqual([['install', '통과'], ['lint', '실패'], ['test', '건너뜀'], ['build', '건너뜀']]);
-    expect(detailSteps(r).map((s) => s.dur)).toEqual(['1초', '2초', '—', '—']);
+    expect(detailSteps(r).map((s) => s.dur)).toEqual(['1초', '136초', '—', '—']);
   });
 
   it('실패 단계가 단계 목록에 보고되지 않았으면 맨 뒤에 실패로 더한다(어느 단계에서 멈췄는지 잃지 않기)', () => {
@@ -107,6 +107,8 @@ describe('빌드·통합 화면 계산(UI-08, P ciVM L4765–4801)', () => {
     expect(rows[0]?.at).toBe('2026-10-29 17:02');
     expect(rows[1]?.at).toBe('—');
     expect(rows[0]?.title).toBe('Drizzle Schema 설계');
+    expect(rows[0]?.ciRunKey).toBe('R2');
+    expect(rows[1]?.ciRunKey).toBeNull();
   });
 
   it('요약 한 줄과 탭 배지(실행=미해결 실패, 대기열=병합 전, 불안정=격리 수)', () => {
