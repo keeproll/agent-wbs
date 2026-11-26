@@ -177,7 +177,7 @@ test('ETag 조건부 조회: If-None-Match를 보내고 304를 성공으로 돌�
 
 test('명령 결과는 명령의 epoch를 헤더로 보낸다(현재 epoch로 덮지 않는다)', async () => {
   reply(204);
-  await api('reportCommandResult', { params: { id: 'c' }, epoch: 2, idempotencyKey: 'k', body: { status: 'done', items: [] } });
+  await api('reportCommandResult', { params: { id: 'c' }, epoch: 2, idempotencyKey: 'k', body: { status: 'done', items: [], holds: [] } });
   expect(requests[0]?.headers['x-project-epoch']).toBe('2');
 });
 
