@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { ApiError, type ApiClient, type ApiRequest } from '../api/client.ts';
-import { retryable } from '../api/outbox.ts';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { retryDelay, retryable } from '../api/outbox.ts';
 import type { ConnectionStatus, GithubMode, PermissionDenied, Permissions } from './client.ts';
 import { generateRunnerKeyPair, type RunnerKeyPair } from './credential.ts';
 import { sealedTokenSource, type TokenSource } from './token.ts';
@@ -44,6 +45,8 @@ export interface GithubConnectorDeps {
   keyPair?: RunnerKeyPair;
   /** 네트워크 실패 시 같은 등록 요청을 다시 보내는 최대 횟수 */
   registerRetries?: number;
+  /** 재전송 전 대기(기본: outbox와 같은 지수 백오프·Retry-After). */
+  retryWait?: (attempt: number, error: unknown) => Promise<void>;
 }
 
 /**
@@ -92,6 +95,7 @@ export class GithubConnector {
         return res.body.keyId;
       } catch (error) {
         if (attempt >= retries || !retryable(error)) throw error;
+        await (this.#d.retryWait ?? ((n, e) => sleep(retryDelay(n, e, Date.now(), Math.random()))))(attempt, error);
       }
     }
   }

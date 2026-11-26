@@ -172,6 +172,15 @@ export class RunnerApp {
     return report;
   }
 
+  /**
+   * 이 PC의 식별자(hostId·bootId)를 읽는다. 서버 통신 전에 한다.
+   * 왜: 동기화 전에 오는 정리 명령도 「이 PC·이 부팅의 보유인가」를 판단해야 한다.
+   */
+  async init(): Promise<void> {
+    const host = await collectHost(this.#d.hostSources, this.#d.home);
+    this.#identity = { hostId: host.hostId, bootId: host.bootId };
+  }
+
   /** host 사양 보고. 식별자(hostId·bootId)는 정리 증거·키 등록·CLI 업데이트 소유자 판정에 함께 쓴다. */
   async reportHost(): Promise<void> {
     const host = await collectHost(this.#d.hostSources, this.#d.home);
@@ -243,6 +252,7 @@ export class RunnerApp {
 
   /** Runner 반복(heartbeat·poll)과 함께, 동기화가 끝나면 시작 보고와 주기 작업을 돈다. */
   async run(signal: AbortSignal): Promise<void> {
+    await this.init();
     const after = (async () => {
       while (!signal.aborted && !this.#bootstrapped) {
         if (this.runner.ready) {
