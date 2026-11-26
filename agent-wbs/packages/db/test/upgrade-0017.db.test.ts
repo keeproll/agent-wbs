@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { drizzle } from 'drizzle-orm/node-postgres';
@@ -13,7 +14,7 @@ const pool = createPool(url.href, { onError: () => undefined });
 
 beforeAll(async () => {
   await recreateTestDatabase(url.href);
-  const folder = await mkdtemp('/home/keeproll/.orca/bots/agentwbs/archive/2026-11-26/M2-06/upgrade-');
+  const folder = await mkdtemp(join(tmpdir(), 'awbs-upgrade-'));
   try {
     await cp(fileURLToPath(new URL('../migrations/', import.meta.url)), folder, { recursive: true });
     const path = join(folder, 'meta/_journal.json');

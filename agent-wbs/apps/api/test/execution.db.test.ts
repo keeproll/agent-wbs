@@ -1,5 +1,7 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, expect, inject, test } from 'vitest';
 import { createPool, recreateTestDatabase, runMigrations, seedSystem } from '@awbs/db';
 import { buildApp } from '../src/app.ts';
@@ -14,7 +16,7 @@ const owner = createPool(db.href, { onError: () => undefined });
 const appUrl = new URL(db);
 appUrl.searchParams.set('options', '-c role=awbs_app');
 const pool = createPool(appUrl.href, { onError: () => undefined });
-const root = await mkdtemp('/home/keeproll/.orca/bots/agentwbs/archive/2026-11-26/M2-06/evidence-');
+const root = await mkdtemp(join(tmpdir(), 'awbs-evidence-'));
 const sha = 'a'.repeat(40), otherSha = 'b'.repeat(40), pipeline = 'c'.repeat(40);
 // 서버가 병합 기준 커밋에서 읽은 파이프라인을 대신한다. Runner 본문은 이 값을 정할 수 없다.
 const app = buildApp(pool, false, { origin: 'http://127.0.0.1:3100', lan: false }, { dataRoot: root, resolveBasePipelineSha: async () => pipeline });
