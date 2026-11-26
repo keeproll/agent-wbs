@@ -1,6 +1,7 @@
 import type { PoolClient } from '@awbs/db';
 import { completionGate, isBlocked, type Dependency as DomainDependency, type TaskStatus } from '@awbs/shared';
 import { specBody, type Ac, type Design, type Output, type Overview } from './hash.ts';
+import { taskSchedules } from '../planning/schedule.ts';
 import { wbsPaths } from './wbs.ts';
 
 /** timestamptz를 마이크로초까지 보존한 UTC ISO 문자열로 읽는다. JS Date는 밀리초에서 잘린다. */
@@ -43,7 +44,9 @@ async function loadGraph(client: PoolClient, projectId: string) {
 }
 type Graph = Awaited<ReturnType<typeof loadGraph>>;
 
-function summarize(graph: Graph) {
+type Schedules = Awaited<ReturnType<typeof taskSchedules>>;
+
+function summarize(graph: Graph, schedules: Schedules) {
   const keyOf = new Map(graph.tasks.map((task) => [task.id, task.task_key]));
   const live = graph.tasks.filter((task) => !task.deleted_at);
   const domainTasks = live.map((task) => ({ id: task.id, status: task.status }));
@@ -68,8 +71,8 @@ function summarize(graph: Graph) {
       preds: graph.deps.filter((dep) => dep.succ === task.id).map((dep) => keyOf.get(dep.pred) ?? '').sort(),
       checklist: { done: checklist.filter((item) => item.done).length, total: checklist.length },
       gate: { passed: gate.filter((condition) => condition.result === 'PASS').length, total: gate.length },
-      // 일정 요약은 일정 계산 작업(M2-07)이 채운다.
-      schedule: null,
+      // 일정 요약(M2-07 일정 계산). 계산할 수 없으면 null.
+      schedule: schedules.get(task.task_key) ?? null,
       updatedAt: task.updated_at, deletedAt: task.deleted_at,
     };
   };
@@ -80,7 +83,7 @@ export interface ListFilter { status?: string | undefined; q?: string | undefine
 
 export async function listTasks(client: PoolClient, projectId: string, filter: ListFilter) {
   const graph = await loadGraph(client, projectId);
-  const { paths, summary } = summarize(graph);
+  const { paths, summary } = summarize(graph, await taskSchedules(client, projectId));
   const q = filter.q?.trim().toLowerCase();
   const tasks = graph.tasks
     .filter((task) => (filter.includeDeleted || !task.deleted_at) && (!filter.status || task.status === filter.status) &&
@@ -108,7 +111,7 @@ export async function taskDetail(client: PoolClient, taskKey: string) {
   const found = (await client.query<{ project_id: string }>('select project_id from tasks where task_key=$1', [taskKey])).rows[0];
   if (!found) return null;
   const graph = await loadGraph(client, found.project_id);
-  const { keyOf, summary } = summarize(graph);
+  const { keyOf, summary } = summarize(graph, await taskSchedules(client, found.project_id));
   const task = graph.tasks.find((item) => item.task_key === taskKey);
   if (!task) return null;
   const [spec, outputs, designs, checklist, grades, subagents, split] = await Promise.all([

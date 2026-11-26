@@ -17,6 +17,8 @@ interface Context {
   session?: Session;
   client?: PoolClient;
   idempotency?: { key: string; hash: string; project: string | null };
+  /** 오류 응답이어도 트랜잭션을 커밋한다. 업무 처리기가 「보류 판정과 함께 남길 기록(판단 job)」만 쓴 뒤 켠다. 500은 언제나 롤백. */
+  commitOnError?: boolean;
 }
 declare module 'fastify' { interface FastifyRequest { platform: Context | null } }
 
@@ -168,10 +170,11 @@ export function installSecurity(app: FastifyInstance, pool: Pool, options: Secur
       const { project, key, hash } = context.idempotency;
       await context.client.query('insert into idempotency_keys(project_id,epoch,principal,key,request_hash,response) values($1,$2,$3,$4,$5,$6)', [project, context.epoch, context.principal, key, hash, saved]);
     }
-    await finish(request, reply.statusCode < 400);
+    await finish(request, reply.statusCode < 400 || (context?.commitOnError === true && reply.statusCode < 500));
     return payload;
   });
-  app.addHook('onError', async (request) => { await finish(request, false); });
+  // onError는 onSend보다 먼저 실행된다. 보류 기록을 커밋하기로 한 요청은 onSend에서 커밋 여부를 정한다.
+  app.addHook('onError', async (request) => { if (!request.platform?.commitOnError) await finish(request, false); });
   app.addHook('onRequestAbort', async (request) => { await finish(request, false); });
   app.addHook('onTimeout', async (request) => { await finish(request, false); });
 

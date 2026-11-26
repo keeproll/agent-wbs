@@ -12,7 +12,7 @@ import { stripJudgements } from './content.ts';
 import { evaluate, type Evaluation } from './evaluate.ts';
 import { assertJob, requestJudgement } from './jobs.ts';
 import { clientOf, CP_COLUMNS, event, idOf, inputOf, insertCp, loadCp, proposalView, type CpRow } from './proposals.ts';
-import { recordReplan } from './schedule.ts';
+import { recordReplan, scheduleView } from './schedule.ts';
 import { registerSessionRoutes } from './sessions.ts';
 import { registerSplitRoutes } from './split.ts';
 
@@ -109,9 +109,15 @@ export function registerPlanningRoutes(app: FastifyInstance, pool: Pool): void {
     };
     const epochOf = (request: FastifyRequest) => request.platform?.currentEpoch ?? 1;
 
-    /** 판단 job은 409 응답(트랜잭션 되돌림)에서도 남아야 한다. 계산한 평가로 별도 트랜잭션에서 만든다. */
-    const requestJudgementOutside = async (request: FastifyRequest, row: CpRow, ev: Evaluation) => {
-      if (ev.needsJudgement) await inEpoch(pool, epochOf(request), (client) => requestJudgement(client, row, ev, epochOf(request)));
+    /**
+     * 판단 job은 409 응답에서도 남아야 한다. 같은 연결(이미 CP·그래프 잠금을 잡은 트랜잭션)에서 job만 쓰고,
+     * 보류 응답이어도 이 트랜잭션을 커밋하라고 공통 관문에 알린다. 이 경로는 job 외에는 아무것도 쓰지 않았다.
+     * 같은 풀에서 연결을 하나 더 기다리면 동시 요청이 몰릴 때 연결이 바닥나 500이 된다(M2-07 리뷰 F3).
+     */
+    const holdWithJudgement = async (client: PoolClient, request: FastifyRequest, row: CpRow, ev: Evaluation): Promise<never> => {
+      await requestJudgement(client, row, ev, epochOf(request));
+      if (request.platform) request.platform.commitOnError = true;
+      throw holdError(ev);
     };
 
     /** 반영. 실제로 쓴 내용의 hash가 판단과 다르면 반영을 되돌리고 보류한다(data-model §2.3-1). */
@@ -124,12 +130,13 @@ export function registerPlanningRoutes(app: FastifyInstance, pool: Pool): void {
         await client.query('rollback to savepoint cp_apply');
         const holdReasons = error.taskKeys.map((taskKey) => ({ code: 'JUDGEMENT_MISSING' as const, taskKey, message: `${taskKey}: 반영한 내용이 판단한 내용과 달라 판단 기록이 없는 것으로 봅니다.` }));
         await requestJudgement(client, row, { ...ev, needsJudgement: true }, epochOf(request));
-        return transition(client, row, 'held', 'held', actor, '반영 내용 재대조 불일치', { holdReasons: { holdReasons, issues: ev.issues } });
+        // 응답 최상위의 보류 사유도 이 최종 판정이어야 한다(리뷰 F6).
+        return { row: await transition(client, row, 'held', 'held', actor, '반영 내용 재대조 불일치', { holdReasons: { holdReasons, issues: ev.issues } }), holdReasons };
       }
       await client.query('release savepoint cp_apply');
       // 재조정도 같은 트랜잭션에 기록한다(D-27: 취소 반영과 SS 제거·이력·재조정이 한 트랜잭션).
       await recordReplan(client, row.project_id, { trigger: `${row.cp_key} 반영`, actor, mode: 'drift' });
-      return transition(client, row, 'applied', 'applied', actor, '', { idMap: ev.simulation.idMap, previewHash: ev.previewHash, holdReasons: { holdReasons: [], issues: [] } });
+      return { row: await transition(client, row, 'applied', 'applied', actor, '', { idMap: ev.simulation.idMap, previewHash: ev.previewHash, holdReasons: { holdReasons: [], issues: [] } }), holdReasons: ev.holdReasons };
     };
 
     route('listProposals', '변경 제안 목록 조회', async (request) => {
@@ -192,10 +199,7 @@ export function registerPlanningRoutes(app: FastifyInstance, pool: Pool): void {
       assertFrom(row, 'approve');
       await lockGraph(client, row.project_id);
       const ev = await evaluate(client, inputOf(row));
-      if (ev.holdReasons.length) {
-        await requestJudgementOutside(request, row, ev);
-        throw holdError(ev);
-      }
+      if (ev.holdReasons.length) await holdWithJudgement(client, request, row, ev);
       if (ev.previewHash !== body.previewHash) throw new TaskError('VERSION_CONFLICT', { current: { previewHash: ev.previewHash, ...shown(ev) }, changes: [] }, [], '미리보기 뒤에 변경 결과가 달라졌습니다.');
       return proposalView(client, await transition(client, row, 'approved', 'approved', LEAD, body.comment ?? ''));
     }, ID);
@@ -209,16 +213,13 @@ export function registerPlanningRoutes(app: FastifyInstance, pool: Pool): void {
       await lockGraph(client, row.project_id);
       // 반영은 트랜잭션 안에서 다시 시뮬레이션한다(data-model §3.6). 승인 뒤 바뀐 상태로 보류 사유를 다시 판정한다.
       const ev = await evaluate(client, inputOf(row));
-      if (ev.holdReasons.length) {
-        await requestJudgementOutside(request, row, ev);
-        throw holdError(ev);
-      }
+      if (ev.holdReasons.length) await holdWithJudgement(client, request, row, ev);
       if (ev.previewHash !== body.previewHash) throw new TaskError('VERSION_CONFLICT', { current: { previewHash: ev.previewHash, ...shown(ev) }, changes: [] }, [], '미리보기 뒤에 변경 결과가 달라졌습니다.');
       // D-33~35 외의 반영 불가 사유만 있으면 200으로 held를 돌려준다(contracts §2.1).
       const result = ev.issues.length
-        ? await transition(client, row, 'held', 'held', LEAD, body.comment ?? '', { holdReasons: { holdReasons: [], issues: ev.issues } })
+        ? { row: await transition(client, row, 'held', 'held', LEAD, body.comment ?? '', { holdReasons: { holdReasons: [], issues: ev.issues } }), holdReasons: ev.holdReasons }
         : await applyNow(client, request, row, ev, LEAD);
-      return { proposal: await proposalView(client, result), ...shown(ev) };
+      return { proposal: await proposalView(client, result.row), ...shown(ev), holdReasons: result.holdReasons };
     }, ID);
 
     route('submitPlanningProposal', 'Planning 변경 제안 제출', async (request, reply) => {
@@ -261,7 +262,7 @@ export function registerPlanningRoutes(app: FastifyInstance, pool: Pool): void {
         if (ev.holdReasons.length || ev.issues.length) {
           await requestJudgement(client, row, ev, epochOf(request));
           result = await transition(client, row, 'held', 'held', PLANNING, '', { holdReasons: { holdReasons: ev.holdReasons, issues: ev.issues } });
-        } else result = await applyNow(client, request, row, ev, PLANNING);
+        } else result = (await applyNow(client, request, row, ev, PLANNING)).row;
       } else await requestJudgement(client, row, ev, epochOf(request));
       return reply.code(201).send({ id: result.id, cpKey: result.cp_key, status: result.status });
     });
@@ -339,6 +340,20 @@ export function registerPlanningRoutes(app: FastifyInstance, pool: Pool): void {
       const summary = await recordReplan(client, await projectOf(client), { trigger: '재조정 실행', actor: LEAD, mode: 'manual' });
       assert(summary);
       return reply.code(201).send(summary);
+    });
+
+    route('getSchedule', '일정 조회', async () => {
+      // 한 시점의 스냅샷으로 계산한다(읽기 전용 반복 읽기).
+      const client = await pool.connect();
+      try {
+        await client.query('begin isolation level repeatable read read only');
+        const view = await scheduleView(client, await projectOf(client));
+        await client.query('commit');
+        return view;
+      } catch (error) {
+        await client.query('rollback').catch(() => undefined);
+        throw error;
+      } finally { client.release(); }
     });
 
     route('listReplans', '재조정 기록 조회', async (request) => {

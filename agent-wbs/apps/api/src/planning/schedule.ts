@@ -1,9 +1,12 @@
 import type { PoolClient } from '@awbs/db';
 import {
-  displayKey, driftCheck, replan, ScheduleError, type Agent, type Baseline, type ReplanResult, type ScheduleInput, type TaskStatus,
+  displayKey, driftCheck, replan, schedule, ScheduleError, STAGE_PCT, type Agent, type Baseline, type ReplanResult, type ScheduleInput, type TaskStatus,
 } from '@awbs/shared';
+import { scheduleWarning } from '@awbs/shared/api';
 import { TaskError } from '../tasks/errors.ts';
 import { wbsPaths } from '../tasks/wbs.ts';
+
+const MOVE_LABEL = { delayed: '지연', advanced: '앞당김', new: '신규 편입', excluded: '제외' } as const;
 
 /**
  * 일정 재조정(G§6.4, D-10). 일정 계산은 판정이므로 서버가 다시 계산한다(contracts §3.3).
@@ -32,7 +35,7 @@ const isoAt = (column: string) => `to_char(${column} at time zone 'UTC','YYYY-MM
 
 /** 일정 계산 입력. 시각은 DB 시계 하나로 맞춘다. */
 export async function scheduleInput(client: PoolClient, projectId: string, policy: Policy): Promise<{ input: ScheduleInput; ids: Map<string, string> }> {
-  const [now, tasks, deps, nodes, sessions, blackouts, caps, usage, heartbeat] = await Promise.all([
+  const [now, tasks, deps, nodes, sessions, blackouts, caps, usage, heartbeat, runnerLimit, observed] = await Promise.all([
     client.query<{ now: string }>(`select ${isoAt('clock_timestamp()')} as now`),
     client.query<{ id: string; task_key: string; wbs_node_id: string; sort_order: number; status: TaskStatus; priority: number; assignee_agent: Agent | null;
       conflict_group: string | null; fix_start: string | null; act_start: string | null; act_end: string | null; updated_at: string; est: string | null; lo: string | null; hi: string | null }>(
@@ -48,6 +51,13 @@ export async function scheduleInput(client: PoolClient, projectId: string, polic
     client.query<{ caps: { total?: number; Claude?: number; Codex?: number } | null }>('select caps from concurrency_settings where singleton'),
     client.query<{ agent: Agent; remain: string; reset_at: string }>(`select distinct on (agent) agent,remain_pct::text as remain,${isoAt('reset_at')} as reset_at from agent_usage order by agent,created_at desc`),
     client.query<{ heartbeat_seconds: number; heartbeat_misses: number }>('select heartbeat_seconds,heartbeat_misses from app_settings where singleton'),
+    // 상한 안에서 Runner가 조절해 보고한 현재 한도(G§6.2). 가장 최근 보고를 쓴다.
+    client.query<{ limit: number }>('select "limit" from runner_concurrency_log order by created_at desc,id desc limit 1'),
+    // 관측 하위 Agent 비율 = 관측 창 동안 실행 세션당 하위 Agent 수의 평균(G§6.2 「한도 ÷ (1 + 관측 하위 Agent 비율)」).
+    // subagents는 보고의 하위 Agent 수(숫자) 또는 {observed}로 저장된다.
+    client.query<{ ratio: string | null }>(
+      `select sum(case jsonb_typeof(subagents) when 'number' then (subagents#>>'{}')::numeric else coalesce((subagents->>'observed')::numeric,0) end)/nullif(sum(running),0) as ratio
+         from runner_concurrency_log where running>0 and created_at>=clock_timestamp()-make_interval(days=>$1)`, [policy.windowDays]),
   ]);
   const paths = wbsPaths(
     nodes.rows.map((node) => ({ id: node.id, kind: node.kind, parentId: node.parent_id, sortOrder: node.sort_order })),
@@ -56,6 +66,9 @@ export async function scheduleInput(client: PoolClient, projectId: string, polic
   // shortcut: 동시 실행 상한이 아직 설정되지 않았으면(M2-08 설정 전) Agent별 1, 전체 2로 계산한다.
   const cap = caps.rows[0]?.caps ?? {};
   const total = cap.total ?? 2;
+  // Runner 보고가 없을 때만 상한을 현재 한도로, 관측이 없을 때만 하위 Agent 비율 0으로 본다(P의 0.5는 Mock 값).
+  const current = Math.min(total, runnerLimit.rows[0]?.limit ?? total);
+  const subRatio = Number(observed.rows[0]?.ratio ?? 0);
   const hb = heartbeat.rows[0];
   const input: ScheduleInput = {
     now: now.rows[0]?.now ?? new Date().toISOString(),
@@ -78,7 +91,7 @@ export async function scheduleInput(client: PoolClient, projectId: string, polic
     policy: { windowDays: policy.windowDays, minHours: policy.minHours },
     ...(hb ? { heartbeat: { intervalSec: hb.heartbeat_seconds, missLimit: hb.heartbeat_misses } } : {}),
     blackouts: blackouts.rows.map((row) => row.date),
-    concurrency: { total, current: total, subRatio: 0, Claude: cap.Claude ?? 1, Codex: cap.Codex ?? 1 },
+    concurrency: { total, current, subRatio, Claude: cap.Claude ?? 1, Codex: cap.Codex ?? 1 },
     usage: Object.fromEntries(usage.rows.map((row) => [row.agent, { remain: Number(row.remain), resetAt: row.reset_at }])),
   };
   return { input, ids: new Map(tasks.rows.map((task) => [task.task_key, task.id])) };
@@ -110,6 +123,9 @@ export interface ReplanSummary {
  * - `manual`: 팀장 「재조정 실행」. 항상 다시 계산해 확정한다.
  */
 export async function recordReplan(client: PoolClient, projectId: string, meta: { trigger: string; actor: string; mode: 'drift' | 'policy' | 'manual' }): Promise<ReplanSummary | null> {
+  // 기준 버전은 「마지막 버전 + 1」이다. 입력과 기존 기준을 읽기 전에 프로젝트별로 줄을 세워야 두 재조정이 같은 버전을 만들지 않는다(리뷰 F2).
+  // 그래프 잠금(CP 반영)을 잡은 호출도 있으므로 순서는 항상 그래프 → 재조정이다(이 잠금 뒤에 그래프 잠금을 잡지 않는다).
+  await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [`awbs:replan:${projectId}`]);
   const policy = await policyOf(client);
   const { input, ids } = await scheduleInput(client, projectId, policy);
   const history = await baselines(client, projectId);
@@ -148,10 +164,111 @@ export async function recordReplan(client: PoolClient, projectId: string, meta: 
     if (!task) continue;
     await client.query('insert into replan_moves(project_id,task,replan,kind,before,after) values($1,$2,$3,$4,$5::jsonb,$6::jsonb)',
       [projectId, task, replanRow?.id, move.kind, move.before ? JSON.stringify(move.before) : null, move.after ? JSON.stringify(move.after) : null]);
+    // G§6.4: 재조정 기록과 함께 각 Task 이력에도 남긴다(리뷰 F4). 확정(applied)과 검토 대기(pending)를 글로 구분한다.
+    // tasks/write.ts의 record와 같은 규칙(이력 시각 > Task 버전)이다. Task 조회(read.ts)가 이 모듈을 쓰므로 write.ts를 import하면 순환이 생겨 SQL을 직접 쓴다.
+    const state = result.status === 'applied' ? `기준 v${String(result.baseline?.v ?? '')} 확정` : '검토 대기(기준 미반영)';
+    const delta = move.delta === null ? '' : ` (${move.delta > 0 ? '+' : ''}${String(move.delta)}일)`;
+    await client.query(
+      `insert into task_history(project_id,at,actor,task,kind,text,before,after,ref)
+       values($1,greatest(clock_timestamp(),(select updated_at+interval '1 microsecond' from tasks where id=$3)),$2,$3,'재조정',$4,$5::jsonb,$6::jsonb,$7::jsonb)`,
+      [projectId, result.actor, task, `${rpKey} ${result.trigger} — ${MOVE_LABEL[move.kind]}: 종료 ${move.before?.end ?? '없음'} → ${move.after?.end ?? '없음'}${delta}, ${state}`,
+        move.before ? JSON.stringify(move.before) : null, move.after ? JSON.stringify(move.after) : null, JSON.stringify({ field: 'schedule', replanId: rpKey, status: result.status })]);
   }
   await client.query("insert into change_events(project_id,topic,ref) values($1,'schedule',$2::jsonb)", [projectId, JSON.stringify({ replanId: rpKey })]);
   return {
     replanId: rpKey, baselineVersion: result.baseline?.v ?? null, projectEnd: result.after, range: { lo: result.lo, hi: result.hi },
     moved: result.moves.map((move) => ({ taskKey: move.task, kind: move.kind, before: move.before?.end ?? null, after: move.after?.end ?? null, deltaDays: move.delta })),
   };
+}
+
+const dayNumber = (value: string) => Date.parse(`${value}T00:00:00Z`) / 86_400_000;
+const days = (from: string, to: string) => dayNumber(to) - dayNumber(from);
+const pct = (part: number, whole: number) => (whole ? Math.min(100, Math.max(0, (part / whole) * 100)) : 0);
+const SEOUL = 9 * 3_600_000;
+const ymdSeoul = (instant: string) => new Date(Date.parse(instant) + SEOUL).toISOString().slice(0, 10);
+const fractionOfDaySeoul = (instant: string) => ((Date.parse(instant) + SEOUL) % 86_400_000) / 86_400_000;
+
+/** 일정 계산 실패(순환 등)는 409 SCHEDULE_CYCLE, 저장 데이터의 불변식 위반은 500이다(shared SCHEDULE_ERROR). */
+function computeSchedule(input: ScheduleInput) {
+  try {
+    return schedule(input);
+  } catch (error) {
+    if (error instanceof ScheduleError && error.code === 'SCHEDULE_CYCLE') throw new TaskError('SCHEDULE_CYCLE', { path: error.taskIds });
+    throw error;
+  }
+}
+
+/**
+ * GET /api/schedule(G§6.2·§6.4, P scheduleVM L4255~4282, 리뷰 F5). 계산은 M1 `schedule()`이고, 기준 대비 값은 마지막 기준(v)과 최초 기준(v1)으로 붙인다.
+ * - 프로젝트 시작일은 프로젝트 등록일(Asia/Seoul)이다. 계획 진척(plannedPct)은 P와 같이 기준 구간의 경과 비율을 공수로 가중한다.
+ * - calcVersion은 프로젝트 변경 이벤트 수다. 무엇이든 바뀌면 커지므로 화면이 낡은 계산을 알아챌 수 있다.
+ */
+export async function scheduleView(client: PoolClient, projectId: string) {
+  const policy = await policyOf(client);
+  const { input } = await scheduleInput(client, projectId, policy);
+  const result = computeSchedule(input);
+  const history = await baselines(client, projectId);
+  const last = history.at(-1);
+  const first = history[0];
+  const [project, blackouts, version] = await Promise.all([
+    client.query<{ start: string; target: string | null }>(
+      `select to_char(created_at at time zone 'Asia/Seoul',${ymd}) as start,to_char(target_date,${ymd}) as target from projects where id=$1`, [projectId]),
+    client.query<{ date: string; note: string }>(`select to_char(date,${ymd}) as date,note from blackout_days order by date`),
+    client.query<{ n: number }>('select count(*)::int as n from change_events where project_id=$1', [projectId]),
+  ]);
+  const today = ymdSeoul(input.now);
+  const nowFrac = fractionOfDaySeoul(input.now);
+  const tasksIn = new Map(input.tasks.map((task) => [task.id, task]));
+  let planned = 0;
+  let doneHours = 0;
+  const tasks = Object.entries(result.by).map(([taskKey, item]) => {
+    const task = tasksIn.get(taskKey);
+    const base = last?.items[taskKey];
+    const ps = base?.start ?? item.start;
+    const pe = base?.end ?? item.end;
+    const est = task?.est ?? 0;
+    planned += est * Math.min(1, Math.max(0, (days(ps, today) + nowFrac) / (days(ps, pe) + 1)));
+    if (item.done) doneHours += est;
+    return {
+      taskKey, start: item.start, end: item.end, lo: item.lo, hi: item.hi, estHours: est, loHours: task?.lo ?? est, hiHours: task?.hi ?? est,
+      progressPct: item.pct, started: Boolean(task?.actStart), done: item.done, isNew: !base,
+      baselineStart: base?.start ?? null, baselineEnd: base?.end ?? null, slipDays: base ? days(base.end, item.end) : null,
+      mid: item.mid, optimistic: item.optimistic, pessimistic: item.pessimistic,
+    };
+  });
+  const p = result.project;
+  const start = project.rows[0]?.start ?? today;
+  const target = project.rows[0]?.target ?? null;
+  const c = result.capacity;
+  return {
+    calcVersion: version.rows[0]?.n ?? 0,
+    at: input.now,
+    tasks,
+    project: {
+      start, end: p.end, lo: p.lo, hi: p.hi, baselineVersion: last?.v ?? 0, baselineEnd: last?.end ?? null, firstBaselineEnd: first?.end ?? null,
+      target, slipDays: last ? days(last.end, p.end) : 0, slackDays: target ? days(p.end, target) : null,
+      elapsedDays: Math.max(0, days(start, today)), remainingDays: days(today, p.end),
+      totalHours: p.total, doneHours, remainHours: p.remain, progressPct: pct(p.progress, 100), plannedPct: pct(planned, p.total),
+      doneRatePct: pct(p.doneRate, 100), doneHoursRatePct: pct(p.doneEstRate, 100), doneCount: p.doneN, taskCount: p.n,
+    },
+    capacity: { days: c.days, measured: c.measured, enough: c.enough, loggedHours: c.logged, rate: c.rate, rateLo: c.rLo, rateHi: c.rHi, todayRate: Math.min(1, c.todayRate) },
+    blackouts: blackouts.rows,
+    warnings: result.warnings.map(scheduleWarning),
+  };
+}
+
+/** Task 목록·상세의 일정 요약(TaskSummary.schedule). 일정을 계산할 수 없으면 비어 있고(null 요약) Task 조회는 막지 않는다. */
+export async function taskSchedules(client: PoolClient, projectId: string): Promise<Map<string, { estHours: number; loHours: number; hiHours: number; progressPct: number; end: string | null; baselineEnd: string | null }>> {
+  try {
+    const { input } = await scheduleInput(client, projectId, await policyOf(client));
+    const result = schedule(input);
+    const last = (await baselines(client, projectId)).at(-1);
+    return new Map(input.tasks.map((task) => [task.id, {
+      estHours: task.est, loHours: task.lo, hiHours: task.hi, progressPct: STAGE_PCT[task.status],
+      end: result.by[task.id]?.end ?? null, baselineEnd: last?.items[task.id]?.end ?? null,
+    }]));
+  } catch (error) {
+    if (error instanceof ScheduleError) return new Map();
+    throw error;
+  }
 }
