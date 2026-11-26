@@ -347,6 +347,73 @@ describe('865c286 리뷰 회귀 (R12·R13)', () => {
   });
 });
 
+describe('ce62299 리뷰 (R14)', () => {
+  test('R14: 확인의 토큰 취득이 늦는 동안 옛 토큰으로 받은 쓰기 403은 새 토큰 snapshot에 이어지지 않는다', async () => {
+    const firstToken = Promise.withResolvers<{ code: number; stdout: string }>();
+    let calls = 0;
+    let selected = 'old-review-token';
+    const source = ghTokenSource(() => {
+      calls += 1;
+      if (calls === 1) return firstToken.promise;
+      return Promise.resolve({ code: 0, stdout: selected });
+    });
+    const client = createGitHubClient({
+      repo: { owner: 'o', repo: 'r' },
+      token: source.token,
+      fetch: (input, init) => {
+        const old = new Headers(init?.headers).get('authorization') === 'Bearer old-review-token';
+        if (new URL(String(input)).pathname === '/user') {
+          return Promise.resolve(Response.json({ login: old ? 'old-bot' : 'new-bot' }));
+        }
+        if ((init?.method ?? 'GET') === 'GET') {
+          return Promise.resolve(Response.json({ permissions: { admin: false, push: true, pull: true } }));
+        }
+        return Promise.resolve(Response.json({}, { status: old ? 403 : 201 }));
+      },
+    });
+    const checking = client.checkConnection('gh');
+    await expect(client.setCommitStatus({ sha: SHA, context: 'agentwbs/task', state: 'pending' })).rejects.toMatchObject({
+      status: 403,
+    });
+    expect(client.permissions().statuses).toBe('missing');
+    selected = 'new-review-token';
+    firstToken.resolve({ code: 0, stdout: selected });
+    const result = await checking;
+    expect(result).not.toHaveProperty('superseded');
+    expect(result).toMatchObject({ ok: true, account: 'new-bot' });
+    expect(client.permissions().statuses).toBe('unverified');
+  });
+
+  test('같은 상황에서 옛 토큰의 쓰기 성공(확인됨)도 새 토큰에 이어지지 않는다', async () => {
+    const firstToken = Promise.withResolvers<{ code: number; stdout: string }>();
+    let calls = 0;
+    let selected = 'old-review-token';
+    const source = ghTokenSource(() => {
+      calls += 1;
+      return calls === 1 ? firstToken.promise : Promise.resolve({ code: 0, stdout: selected });
+    });
+    const client = createGitHubClient({
+      repo: { owner: 'o', repo: 'r' },
+      token: source.token,
+      fetch: (input, init) =>
+        Promise.resolve(
+          new URL(String(input)).pathname === '/user'
+            ? Response.json({ login: 'bot' })
+            : (init?.method ?? 'GET') === 'GET'
+              ? Response.json({ permissions: { admin: false, push: true, pull: true } })
+              : Response.json({}, { status: 201 }),
+        ),
+    });
+    const checking = client.checkConnection('gh');
+    await client.setCommitStatus({ sha: SHA, context: 'agentwbs/task', state: 'pending' });
+    expect(client.permissions().statuses).toBe('verified');
+    selected = 'new-review-token';
+    firstToken.resolve({ code: 0, stdout: selected });
+    expect(await checking).toMatchObject({ ok: true });
+    expect(client.permissions().statuses).toBe('unverified');
+  });
+});
+
 describe('권한 상태를 바꾸는 경로 전수 고정', () => {
   test('client.ts에서 permissions를 바꾸는 곳은 직렬화된 갱신 함수 applyEvidence 하나뿐이다', () => {
     const source = readFileSync(new URL('../../src/github/client.ts', import.meta.url), 'utf8');

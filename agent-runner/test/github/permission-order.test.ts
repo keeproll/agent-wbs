@@ -7,7 +7,8 @@ import { Secret } from '../../src/security/secret.ts';
 /**
  * 무작위 사건 순서 속성 테스트.
  *
- * 연결 확인·status 쓰기·토큰 교체·토큰 취득 실패·응답 도착 순서를 무작위로 섞고,
+ * 연결 확인 시작, status 쓰기 시작, 토큰 교체, 토큰 취득 실패 모드, 토큰 취득 완료(늦게 끝나는 취득 포함), 응답 도착을
+ * 무작위 순서로 섞고,
  * 어떤 순서에서도 아래 규칙(README 「권한 상태 갱신 규칙」)이 지켜지는지 본다.
  *
  * 토큰 A: status 쓰기 201(→ 확인됨), 토큰 B: status 쓰기 403(→ 부족). 둘 다 push 가능한 fine-grained 계정이라
@@ -64,6 +65,8 @@ async function runScenario(seed: number) {
   let selected: Tok = 'A';
   let tokenFails = false;
   const pending: Pending[] = [];
+  // 토큰 취득도 바로 끝나지 않는다. 끝나는 순서를 무작위로 고르고, 값은 끝나는 순간의 토큰(gh가 그 순간 로그인된 계정을 주듯이)이다.
+  const pendingTokens: { op: number; resolve: (secret: Secret) => void; reject: (error: unknown) => void }[] = [];
   const ops: Op[] = [];
   const promises: Promise<unknown>[] = [];
   const notices: string[] = [];
@@ -73,14 +76,10 @@ async function runScenario(seed: number) {
 
   const client = createGitHubClient({
     repo: { owner: 'o', repo: 'r' },
-    token: () => {
-      const op = ops[als.getStore() ?? -1];
-      if (tokenFails) {
-        if (op) op.tokenFailed = true;
-        return Promise.reject(new CredentialError('gh 로그인 토큰을 읽지 못했습니다.'));
-      }
-      return Promise.resolve(new Secret(`token-${selected}-0123456789abcdef`));
-    },
+    token: () =>
+      new Promise<Secret>((resolve, reject) => {
+        pendingTokens.push({ op: als.getStore() ?? -1, resolve, reject });
+      }),
     onPermissionDenied: (event) => {
       notices.push(event.permission);
     },
@@ -122,6 +121,20 @@ async function runScenario(seed: number) {
     }
   };
 
+  /** 대기 중인 토큰 취득 하나를 끝낸다. 그 순간 실패 모드면 실패, 아니면 그 순간 선택된 토큰을 준다. */
+  const finishToken = (index: number): void => {
+    const [waiting] = pendingTokens.splice(index, 1);
+    if (!waiting) return;
+    clock += 1;
+    if (tokenFails) {
+      const op = ops[waiting.op];
+      if (op) op.tokenFailed = true;
+      waiting.reject(new CredentialError('gh 로그인 토큰을 읽지 못했습니다.'));
+    } else {
+      waiting.resolve(new Secret(`token-${selected}-0123456789abcdef`));
+    }
+  };
+
   const startOp = (kind: Op['kind']) => {
     const op: Op = { id: ops.length, kind, start: (clock += 1), sends: [], tokenFailed: false, done: false };
     ops.push(op);
@@ -147,18 +160,26 @@ async function runScenario(seed: number) {
     );
   };
 
-  const steps = 4 + Math.floor(random() * 10);
+  // 사건: 연결 확인 시작, 쓰기 시작, 토큰 교체, 토큰 취득 실패 모드 전환,
+  // 토큰 취득 완료(대기 중인 것 중 아무거나 — 늦게 끝나는 취득이 생긴다), 응답 도착(대기 중인 것 중 아무거나).
+  const steps = 6 + Math.floor(random() * 16);
   for (let i = 0; i < steps; i += 1) {
-    const action = pick(['check', 'write', 'write', 'switch', 'release', 'release', 'release', 'fail'] as const);
+    const action = pick(['check', 'write', 'write', 'switch', 'fail', 'token', 'token', 'respond', 'respond', 'respond'] as const);
     if (action === 'check' || action === 'write') startOp(action);
     else if (action === 'switch') selected = selected === 'A' ? 'B' : 'A';
     else if (action === 'fail') tokenFails = !tokenFails;
-    else if (pending.length > 0) respond(pending.splice(Math.floor(random() * pending.length), 1)[0] as Pending);
+    else if (action === 'token' && pendingTokens.length > 0) finishToken(Math.floor(random() * pendingTokens.length));
+    else if (action === 'respond' && pending.length > 0) {
+      respond(pending.splice(Math.floor(random() * pending.length), 1)[0] as Pending);
+    }
     await flush();
   }
   tokenFails = false;
   while (ops.some((op) => !op.done)) {
-    if (pending.length > 0) respond(pending.splice(Math.floor(random() * pending.length), 1)[0] as Pending);
+    const total = pendingTokens.length + pending.length;
+    const index = Math.floor(random() * total);
+    if (index < pendingTokens.length) finishToken(index);
+    else if (pending.length > 0) respond(pending.splice(index - pendingTokens.length, 1)[0] as Pending);
     await flush();
   }
   await Promise.all(promises);
@@ -194,7 +215,7 @@ function expectations(ops: Op[]) {
 }
 
 describe('권한 상태 — 무작위 사건 순서 속성 테스트', () => {
-  const SEEDS = Array.from({ length: 300 }, (_, i) => i + 1);
+  const SEEDS = Array.from({ length: 500 }, (_, i) => i + 1);
 
   test.each(SEEDS)('seed %i', async (seed) => {
     const { client, ops, notices, unhandled } = await runScenario(seed);

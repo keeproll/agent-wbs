@@ -270,7 +270,7 @@ const PERMISSION_NAMES: readonly PermissionName[] = ['metadata', 'contents', 'pu
 /** 권한 상태를 바꾸는 사건. `applyEvidence`만 이것을 반영한다. */
 type Evidence =
   | { kind: 'write'; generation: number; permission: PermissionName; state: 'verified' | 'missing' }
-  | { kind: 'snapshot'; generations: readonly number[]; seq: number; startOrder: number; next: Permissions };
+  | { kind: 'snapshot'; generations: readonly number[]; seq: number; next: Permissions };
 
 /** 반영된 권한 상태에 맞춰 연결 확인 결과의 ok·경고·이유를 다시 맞춘다(확인 도중 생긴 쓰기 결과 반영). */
 function reconcileStatus(status: ConnectionStatus, merged: Permissions): ConnectionStatus {
@@ -312,9 +312,9 @@ export function createGitHubClient(options: GitHubClientOptions) {
   const errorGeneration = new WeakMap<object, number>();
   // 연결 확인 순번. 겹치면 나중에 시작한 확인만 반영한다.
   let checkSeq = 0;
-  // 반영한 사건의 순서 번호와, 권한마다 마지막으로 실제 쓰기 결과가 반영된 순서 번호.
-  let order = 0;
-  const writtenAt: Record<PermissionName, number> = { metadata: -1, contents: -1, pulls: -1, statuses: -1 };
+  // 권한마다 마지막 실제 쓰기 증거가 「어느 세대에서 보낸 요청」의 결과인지 기억한다.
+  // 세대는 요청 시작 때(토큰을 받아 보내는 순간) 정해진다(Raw.generation). 어느 토큰·어느 확인 이후의 증거인지를 이것으로 가린다.
+  const writeGeneration: Record<PermissionName, number> = { metadata: -1, contents: -1, pulls: -1, statuses: -1 };
 
   /**
    * 권한 상태를 바꾸는 **유일한** 함수. 동기 함수라 사건은 하나씩 차례로(직렬화되어) 반영된다.
@@ -323,24 +323,23 @@ export function createGitHubClient(options: GitHubClientOptions) {
    * 1. 현재 세대가 아닌 요청에서 나온 사건은 버린다(옛 토큰·옛 연결 확인 이전에 보낸 요청).
    * 2. 연결 확인 snapshot은 가장 최근에 시작한 확인일 때만 반영한다.
    * 3. 우선순위: 실제 쓰기 결과 > 연결 확인 snapshot.
-   *    snapshot을 반영할 때, 그 확인이 시작된 **뒤에** 반영된 실제 쓰기 결과는 권한별로 그대로 둔다.
-   *    확인이 시작되기 **전의** 쓰기 결과는 새 판단(snapshot)으로 바뀐다(재확인 = 새 판단).
+   *    snapshot을 반영할 때, **지금 세대에서 보낸** 실제 쓰기 결과는 권한별로 그대로 둔다.
+   *    연결 확인을 시작하면 새 세대가 열리므로 「지금 세대」 = 「이 확인이 시작된 뒤 + 지금 토큰으로 보낸 요청」이다.
+   *    확인 시작 전의 쓰기 결과(재확인 = 새 판단), 그리고 그 사이 토큰이 바뀌어 다른 세대가 된 쓰기 결과(R14)는 snapshot으로 바뀐다.
    */
   const applyEvidence = (evidence: Evidence): { applied: boolean; permissions: Permissions } => {
     const result = (applied: boolean) => ({ applied, permissions: { ...permissions } });
     if (evidence.kind === 'write') {
       if (evidence.generation !== generation) return result(false);
-      order += 1;
       permissions[evidence.permission] = evidence.state;
-      writtenAt[evidence.permission] = order;
+      writeGeneration[evidence.permission] = evidence.generation;
       return result(true);
     }
     if (evidence.seq !== checkSeq || evidence.generations.some((sent) => sent !== generation)) return result(false);
     const merged = { ...evidence.next };
     for (const name of PERMISSION_NAMES) {
-      if (writtenAt[name] > evidence.startOrder) merged[name] = permissions[name];
+      if (writeGeneration[name] === generation) merged[name] = permissions[name];
     }
-    order += 1;
     permissions = merged;
     return result(true);
   };
@@ -580,10 +579,9 @@ export function createGitHubClient(options: GitHubClientOptions) {
       generation += 1;
       checkSeq += 1;
       const seq = checkSeq;
-      const startOrder = order;
       const generations: number[] = [];
       const { status, next } = await evaluateConnection(mode, generations);
-      const applied = applyEvidence({ kind: 'snapshot', generations, seq, startOrder, next });
+      const applied = applyEvidence({ kind: 'snapshot', generations, seq, next });
       if (applied.applied) return reconcileStatus(status, applied.permissions);
       const rest: ConnectionStatus = { ...status };
       delete rest.warning;
