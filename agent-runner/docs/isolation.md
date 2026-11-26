@@ -47,9 +47,17 @@ keeproll (Runner)                      awbs-agent (Agent 전용 계정)
 
 - 이름은 `awbs-agent`로 **고정**이다. 설치·제거·확인 스크립트에도, Runner 설정에도 바꾸는 옵션이 없다.
   - 왜: 옵션 오입력 하나로 root나 다른 계정을 잠그거나 지우면 안 된다(Codex 리뷰 P2-2).
-- 설치는 계정을 만든 뒤 그 숫자 번호(UID)를 `/etc/agentwbs/agent-user.uid`(root 소유)에 기록한다.
+- 설치는 계정을 만드는 순서를 이렇게 한다(Codex 재리뷰 P2-B).
+  1. 비어 있는 시스템 UID(999부터 아래로)를 고른다.
+  2. **계정을 만들기 직전에** 진행 기록 `/etc/agentwbs/agent-user.pending`(root 소유)에 「이름 UID 생성표식」을 먼저 적는다.
+  3. 그 UID로 계정을 만들고, 계정 설명 칸(GECOS)에 생성 표식 `Agent WBS agent awbs-agent-setup-<16자리 16진수>`를 넣는다.
+  4. UID를 `/etc/agentwbs/agent-user.uid`에 기록하고, 진행 기록을 지운다.
+  - 왜: 3과 4 사이에서 실패해도 정리 코드(trap)가 진행 기록으로 「이번 설치가 방금 만든 계정」만 되돌릴 수 있다. 이름·UID·생성 표식이 모두 기록과 같을 때만 지우고, 하나라도 다르면 기록을 남긴 채 손대지 않는다.
+  - 강제 종료로 정리 코드조차 못 돌았으면, 다음 설치가 진행 기록을 보고 같은 방법으로 되돌린 뒤 새로 만든다.
+  - 설명 칸은 root만 바꿀 수 있다. Agent 계정은 비밀번호가 잠겨 `chfn`(설명 바꾸기)을 못 한다.
 - 같은 이름의 계정이 이미 있으면 아래가 모두 맞을 때만 「이 설치가 만든 계정」으로 본다. 하나라도 다르면 설치·제거 모두 손대지 않고 멈춘다.
-  - UID가 기록과 같음, 시스템 계정 번호(1~999), 홈 `/home/awbs-agent`, 셸 `/usr/sbin/nologin`, 기본 그룹 `awbs-agent`, 다른 그룹 소속 없음.
+  - 시스템 계정 번호(1~999), 기본 그룹 `awbs-agent`(같은 번호), 홈 `/home/awbs-agent`, 셸 `/usr/sbin/nologin`, 다른 그룹 소속 없음, 설명 칸이 생성 표식 모양.
+  - 그리고 UID 기록과 같음. UID 기록이 없을 때는 진행 기록의 UID·표식과 같거나, 진행 기록도 없으면 생성 표식으로만 찾는다(제거 스크립트가 정리할 수 있게).
 - 시스템 계정(사람용이 아닌 계정)으로 만든다.
 - 로그인 셸은 `/usr/sbin/nologin`이다.
   - 왜: 누구도 이 계정으로 로그인해 셸을 열 수 없게 한다. owner의 1회 로그인 작업은 owner의 sudo로 명령을 직접 지정해서 한다(§10).
@@ -66,14 +74,15 @@ keeproll (Runner)                      awbs-agent (Agent 전용 계정)
 sudoers에 아래 한 줄만 넣는다(설치 스크립트가 만든다).
 
 ```text
-Cmnd_Alias AWBS_AGENT_EXEC = /usr/local/libexec/awbs-agent-exec
-Defaults!AWBS_AGENT_EXEC env_reset, !setenv
-keeproll ALL=(awbs-agent) NOPASSWD: AWBS_AGENT_EXEC
+keeproll ALL=(awbs-agent) NOPASSWD: /usr/local/libexec/awbs-agent-exec
 ```
+
+- 별칭(Cmnd_Alias)이나 추가 기본값(Defaults) 없이 이 한 줄만 둔다.
+  - 왜: 확인 스크립트가 `sudo -l` 출력을 이 한 줄과 글자 그대로 맞춰 보기 위해서다(Codex 재리뷰 P2-A).
 
 - `(awbs-agent)`: Agent 계정으로만 실행한다. root로 실행하는 권한은 주지 않는다.
 - `NOPASSWD`: 비밀번호 없이. Runner는 사람이 없을 때도 돌아야 하기 때문이다.
-- `env_reset, !setenv`: Runner의 환경 변수를 넘기지 못하게 한다. 토큰이 실수로 섞여도 sudo에서 한 번 지워진다.
+- 환경 변수: sudo 기본값(`env_reset` 켜짐, `setenv` 꺼짐)대로 Runner의 환경 변수는 넘어가지 않는다. 토큰이 실수로 섞여도 sudo에서 한 번 지워진다. 기본값이 바뀌면 확인 스크립트가 FAIL을 낸다.
 - 명령은 래퍼 하나뿐이다. 인자는 래퍼가 검사한다.
   - 왜 인자를 sudoers에 적지 않나: 모델 ID·세션 ID가 매번 달라 다 적을 수 없다. `*` 같은 와일드카드는 sudoers에서 예상보다 넓게 맞아 위험하다.
 
@@ -219,7 +228,7 @@ bash agent-runner/scripts/isolation/setup-agent-user.sh
   0. 관리자 권한 없이 먼저 검사한다. root가 다룰 고정 경로 중 하나라도 링크이거나 예상 밖 소유자이면 sudo를 한 번도 부르지 않고 멈춘다.
   1. 기존 sudoers 규칙을 먼저 지운다(닫고 시작).
   2. `acl` 패키지 설치(없을 때만).
-  3. `awbs-agent` 계정 만들기와 UID 기록, 비밀번호 잠금.
+  3. `awbs-agent` 계정 만들기(진행 기록 → 계정 → UID 기록, §4), 비밀번호 잠금.
      - Agent 홈 안(`chmod 0700`, `tmp/` 만들기, git 설정)은 **Agent 계정 권한으로** 한다.
      - 왜: Agent는 자기 홈 안에 링크를 심을 수 있다. root가 그 링크를 따라가면 시스템 폴더의 소유자·권한이 바뀐다(Codex 리뷰 P1-1).
   4. WSL이면 `/mnt`·`/Docker`·`/run/WSL`에 Agent 차단 ACL(`setfacl -P`: 링크는 따라가지 않음), 부팅 때 `/run/WSL`을 다시 막는 서비스 등록.
@@ -279,11 +288,15 @@ bash agent-runner/scripts/isolation/check-agent-user.sh --protect /home/keeproll
   - 그래서 Agent로 아무 명령이나 실행되는지(양성 대조)를 먼저 보고, 안 되면 거기서 멈춘다.
 - 확인 항목:
   - 계정: 설치 기록 UID·홈·셸(nologin)·전용 그룹과 일치, 다른 그룹(sudo·docker 등) 소속 없음.
-  - sudo 정책: `sudo -l -U <Runner>`가 보여 주는 허용 목록을 읽는다.
-    - `(awbs-agent) NOPASSWD: /usr/local/libexec/awbs-agent-exec`가 있어야 한다.
-    - Agent 계정 규칙에 래퍼 말고 다른 명령이 있으면 FAIL.
-    - 다른 계정(root·ALL 등)으로 래퍼나 `ALL`을 비밀번호 없이 허용하면 FAIL.
-    - 전체 기본값에 `!authenticate`가 있거나 해석할 수 없는 줄이 있으면 FAIL.
+  - sudo 정책: `sudo -l -U <Runner>`가 보여 주는 허용 목록을 **느슨하게 해석하지 않고 글자 그대로** 맞춰 본다(Codex 재리뷰 P2-A).
+    - 규칙 줄은 두 가지만 허용한다.
+      - `(awbs-agent) NOPASSWD: /usr/local/libexec/awbs-agent-exec` — 정확히 1번.
+      - `(ALL : ALL) ALL` — owner의 관리자 규칙(비밀번호 필요). 0~1번.
+    - 그 밖의 규칙 줄은 모두 FAIL이다. 예: `(root) NOPASSWD: /bin/bash`, 경로 와일드카드, `NOPASSWD: SETENV:`, `PASSWD:`가 섞인 줄, 별칭 이름, 비밀번호가 필요한 다른 규칙.
+    - 기본값 줄은 알려진 항목(`env_reset`, `mail_badpass`, `use_pty`, Ubuntu 기본 `secure_path`)만 허용한다. 다른 항목(예: `!authenticate`, `env_keep`, `setenv`, 바뀐 `secure_path`)이 하나라도 있으면 FAIL.
+    - 모르는 머리말(예: 명령별 기본값)이나 위치를 알 수 없는 줄도 FAIL(확인 못 함).
+    - owner PC에서 처음 FAIL이 나오면 그 줄을 그대로 보고한다. 이 PC의 실제 `sudo -l` 형식은 실행 금지 조건 때문에 아직 확인하지 않았다.
+  - 설치된 sudoers 파일(`/etc/sudoers.d/awbs-agent`)이 설치 원본과 글자 그대로 같은지도 본다(owner의 sudo로 읽음).
     - 왜 실행해 보지 않나: root로 실행이 허용돼도 래퍼가 「Agent 계정이 아님」으로 스스로 실패한다. 실행 결과로는 허용 여부를 알 수 없다(Codex 리뷰 P2-6).
   - 비밀번호 없이 래퍼가 실제로 돌고 래퍼 점검이 `ok`.
   - 못 읽는 곳: Runner 홈, `~/.agentwbs`, `~/.config/gh`, `~/.ssh`, `~/.orca`, `~/.claude`, `~/.codex`, `~/projects/verum-*`, `~/.config/verum-*`, 그리고 `--protect` 경로. 목록 읽기와 지나가기를 따로 본다.
@@ -314,7 +327,8 @@ bash agent-runner/scripts/isolation/remove-agent-user.sh --purge-work     # 작�
   4. **그 뒤에야** Windows 차단을 푼다. 숫자 UID로 지운다(계정 이름은 이미 없으므로).
   5. 작업 영역을 남기는 경우에도 Agent 흔적을 남김없이 지운다. ACL(이름·숫자·기본)을 모두 지우고, Agent가 소유했던 파일은 Runner 소유로 바꾼다.
      - 왜: 나중에 같은 숫자 UID가 다른 계정에 배정되면 남은 파일에 접근할 수 있다(Codex 리뷰 P2-9).
-  6. 마지막에 UID 기록을 지운다.
+  6. 마지막에 UID 기록과 진행 기록을 지운다.
+- 기록이 하나도 없어도 생성 표식이 있는 우리 계정이면 그 계정의 UID로 정리한다. 표식이 없는 같은 이름 계정은 건드리지 않는다.
 - 중간에 실패하면 Windows 차단은 걸린 그대로 남는다(Codex 리뷰 P2-4). 원인을 고친 뒤 같은 명령을 다시 실행하면 기록한 UID로 이어서 정리한다.
 - 같은 이름의 계정이 이 설치가 만든 계정이 아니면 아무것도 지우지 않는다.
 - 작업 영역 실제 경로가 고정 경로(`/srv/agentwbs`)와 다르거나(링크 등) Runner 홈과 겹치면 멈춘다.

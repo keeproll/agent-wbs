@@ -19,7 +19,10 @@ afterAll(() => {
   rmSync(base, { recursive: true, force: true });
 });
 const scripts = join(import.meta.dirname, '..', '..', 'scripts', 'isolation');
-const AGENT_LINE = 'awbs-agent:x:998:998:Agent WBS agent:/home/awbs-agent:/usr/sbin/nologin';
+/** 이 설치가 만든 계정 줄: 설명 칸에 생성 표식(awbs-agent-setup-16자리 16진수)이 있다. */
+const MARK = 'Agent WBS agent awbs-agent-setup-0123456789abcdef';
+const AGENT_LINE = `awbs-agent:x:998:998:${MARK}:/home/awbs-agent:/usr/sbin/nologin`;
+const UNMARKED_LINE = 'awbs-agent:x:998:998:Agent WBS agent:/home/awbs-agent:/usr/sbin/nologin';
 const EXEC = '/usr/local/libexec/awbs-agent-exec';
 
 let R = '';
@@ -64,6 +67,12 @@ function run(script: string, args: string[] = [], env: NodeJS.ProcessEnv = {}) {
   return { code: r.status, out: `${r.stdout}${r.stderr}`, log: readFileSync(join(R, 'sudo.log'), 'utf8').split('\n').filter(Boolean) };
 }
 
+/** 설치 스크립트가 쓰는 sudoers 원본(common.sh의 sudoers_content)을 그대로 얻는다. */
+function sudoersContent(): string {
+  const r = spawnSync('bash', ['-c', `source '${join(scripts, 'common.sh')}' && sudoers_content '${me}'`], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } });
+  return r.stdout.replace(/\n$/, '');
+}
+
 const setup = (args: string[] = []) => run('setup-agent-user.sh', ['--node', process.execPath, ...args]);
 const okCheck: [number, string, string] = [0, 'ok', '-u awbs-agent -H -- *awbs-agent-exec check'];
 /** 이 줄(부분 문자열)이 들어간 첫 sudo 호출의 순서. 없으면 -1. */
@@ -89,8 +98,14 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
       expect(sudoers).toBe(r.log.length - 1);
       // 시작하자마자 기존 규칙부터 지운다(닫고 시작)
       expect(r.log[0]).toBe(`-- rm -f -- ${R}/etc/sudoers.d/awbs-agent`);
-      expect(readFileSync(join(R, 'etc/agentwbs/agent-user.uid'), 'utf8').trim()).toBe('998');
-      expect(readFileSync(join(R, 'etc/sudoers.d/awbs-agent'), 'utf8')).toContain(`${me} ALL=(awbs-agent) NOPASSWD: AWBS_AGENT_EXEC`);
+      expect(readFileSync(join(R, 'etc/agentwbs/agent-user.uid'), 'utf8').trim()).toBe('999');
+      // 별칭·추가 기본값 없이 규칙 한 줄(확인 스크립트가 sudo -l과 정확히 맞춰 보는 줄)
+      const rule = readFileSync(join(R, 'etc/sudoers.d/awbs-agent'), 'utf8').split('\n').filter((l) => l && !l.startsWith('#'));
+      expect(rule).toEqual([`${me} ALL=(awbs-agent) NOPASSWD: ${EXEC}`]);
+      // 계정은 고른 UID·생성 표식으로 만들고, 진행 기록은 계정 생성 직전에 남겼다가 끝나면 지운다(리뷰2 P2-B)
+      expect(at(r.log, 'agent-user.pending')).toBeLessThan(at(r.log, 'useradd'));
+      expect(r.log.find((l) => l.includes('useradd'))).toMatch(/--uid 999 .*--comment Agent WBS agent awbs-agent-setup-[0-9a-f]{16} awbs-agent$/);
+      expect(existsSync(join(R, 'etc/agentwbs/agent-user.pending'))).toBe(false);
     });
 
     test('P1-1: Agent 홈 안(tmp 링크)은 root가 아니라 Agent 권한으로만 다룬다', () => {
@@ -126,7 +141,8 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
 
     test.each([
       ['셸이 열린 같은 이름 계정', 'awbs-agent:x:998:998::/home/awbs-agent:/bin/bash', '998'],
-      ['UID 기록 없음', AGENT_LINE, null],
+      ['생성 표식 없음·UID 기록 없음', UNMARKED_LINE, null],
+      ['생성 표식 없음(UID 기록은 같음)', UNMARKED_LINE, '998'],
       ['UID 기록과 다름', AGENT_LINE, '997'],
       ['홈이 다름', 'awbs-agent:x:998:998::/root:/usr/sbin/nologin', '998'],
     ])('P2-2: 이미 있는 계정이 우리 계정이 아니면(%s) 손대지 않는다', (_name, line, uid) => {
@@ -168,6 +184,79 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
       expect(r.log.some((l) => l.includes('setfacl -P -x'))).toBe(false);
     });
 
+    describe('리뷰2 P2-B: 계정 생성 뒤 실패해도 이번 설치가 만든 계정만 되돌리고 다시 실행하면 이어서 된다', () => {
+      const passwd = () => readFileSync(join(R, 'etc/passwd'), 'utf8');
+      const pending = () => join(R, 'etc/agentwbs/agent-user.pending');
+
+      test('UID 기록 설치 실패 → 진행 기록으로 방금 만든 계정을 되돌림 → 재실행 성공', () => {
+        rules([42, '', '-- install * */etc/agentwbs/agent-user.uid'], okCheck);
+        let r = setup();
+        expect(r.code).toBe(42);
+        expect(at(r.log, 'userdel --remove awbs-agent')).toBeGreaterThan(at(r.log, 'useradd'));
+        expect(passwd()).not.toContain('awbs-agent');
+        expect(existsSync(pending())).toBe(false);
+        expect(r.out).toContain('이번 설치가 만든 계정과 진행 기록을 되돌렸습니다');
+        expect(r.log.some((l) => l.includes('-m 0440'))).toBe(false);
+        rules(okCheck);
+        writeFileSync(join(R, 'sudo.log'), '');
+        r = setup();
+        expect(r.code, r.out).toBe(0);
+        expect(readFileSync(join(R, 'etc/agentwbs/agent-user.uid'), 'utf8').trim()).toBe('999');
+      });
+
+      test('계정 생성 명령 자체가 실패 → 지울 계정이 없으니 진행 기록만 지움', () => {
+        rules([9, '', '-- useradd *'], okCheck);
+        const r = setup();
+        expect(r.code).toBe(9);
+        expect(r.log.some((l) => l.includes('userdel'))).toBe(false);
+        expect(existsSync(pending())).toBe(false);
+      });
+
+      test('만들어진 계정이 진행 기록과 다르면(다른 표식) 지우지 않고 기록을 남긴다. 제거 스크립트도 그 계정을 건드리지 않는다', () => {
+        writeFileSync(join(R, '.useradd-line'), 'awbs-agent:x:999:999:Agent WBS agent awbs-agent-setup-ffffffffffffffff:/home/awbs-agent:/usr/sbin/nologin\n');
+        rules(okCheck);
+        let r = setup();
+        expect(r.code).not.toBe(0);
+        expect(r.out).toContain('만든 계정이 진행 기록과 다릅니다');
+        expect(r.out).toContain('다른 계정이라 손대지 않습니다');
+        expect(r.log.some((l) => l.includes('userdel'))).toBe(false);
+        expect(existsSync(pending()), r.out + r.log.join('\n')).toBe(true);
+        writeFileSync(join(R, 'sudo.log'), '');
+        r = run('remove-agent-user.sh');
+        expect(r.code).not.toBe(0);
+        expect(r.log).toEqual([]);
+        expect(passwd()).toContain('ffffffffffffffff');
+      });
+
+      test('강제 종료로 정리 코드도 못 돈 경우(진행 기록+표식 계정, UID 기록 없음) → 재실행이 그 계정을 되돌리고 새로 만든다', () => {
+        fresh({ account: AGENT_LINE });
+        mkdirSync(join(R, 'etc/agentwbs'), { recursive: true });
+        writeFileSync(pending(), 'awbs-agent 998 awbs-agent-setup-0123456789abcdef\n');
+        rules(okCheck);
+        const r = setup();
+        expect(r.code, r.out).toBe(0);
+        expect(at(r.log, 'userdel --remove awbs-agent'), r.out).toBeLessThan(at(r.log, 'useradd'));
+        expect(existsSync(pending())).toBe(false);
+      });
+
+      test('기록이 하나도 없어도 생성 표식이 있는 우리 계정은 제거 스크립트가 계정의 UID로 정리한다', () => {
+        fresh({ account: AGENT_LINE });
+        mkdirSync(join(R, 'srv/agentwbs'), { recursive: true });
+        const r = run('remove-agent-user.sh');
+        expect(r.code, r.out).toBe(0);
+        expect(r.out).toContain('생성 표식이 있는 우리 계정(UID 998)');
+        expect(r.log).toContain('-- userdel --remove awbs-agent');
+        expect(r.log).toContain(`-- setfacl -P -x u:998 ${R}/mnt`);
+      });
+
+      test('표식 없는 같은 이름 계정은 기록이 없으면 제거 스크립트가 건드리지 않는다', () => {
+        fresh({ account: UNMARKED_LINE });
+        const r = run('remove-agent-user.sh');
+        expect(r.code).not.toBe(0);
+        expect(r.log).toEqual([]);
+      });
+    });
+
     test('dry-run은 가짜 sudo도 부르지 않는다', () => {
       const r = setup(['--dry-run']);
       expect(r.code, r.out).toBe(0);
@@ -195,7 +284,8 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
       // P2-9: 남기는 작업 영역의 ACL(이름·숫자·기본)과 Agent 소유권을 남김없이 정리
       expect(r.log).toContain(`-- setfacl -R -P -b -- ${R}/srv/agentwbs`);
       expect(r.log).toContain(`-- chown -R --no-dereference --from=998 ${me} -- ${R}/srv/agentwbs`);
-      expect(at(r.log, 'agent-user.uid')).toBe(r.log.length - 2);
+      expect(at(r.log, 'agent-user.uid')).toBe(r.log.length - 3);
+      expect(at(r.log, 'agent-user.pending')).toBe(r.log.length - 2);
     });
 
     test('P2-4: 프로세스 종료 명령 오류 → Windows 차단을 풀지 않고 멈춘다', () => {
@@ -261,8 +351,9 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
   });
 
   describe('check(fail-closed)', () => {
-    const goodListing = (extra = '') =>
-      `Matching Defaults entries for ${me}:\\n    env_reset\\n\\nUser ${me} may run the following commands:\\n    (ALL : ALL) ALL\\n    (awbs-agent) NOPASSWD: ${EXEC}\\n${extra}`;
+    /** sudo 1.9 `sudo -l -U` 출력 모양. defaults는 기본값 줄, extra는 규칙 뒤에 더할 줄. */
+    const goodListing = (extra = '', defaults = 'env_reset, mail_badpass, secure_path=/usr/local/sbin\\\\:/usr/local/bin\\\\:/usr/sbin\\\\:/usr/bin\\\\:/sbin\\\\:/bin\\\\:/snap/bin, use_pty') =>
+      `Matching Defaults entries for ${me} on host:\\n    ${defaults}\\n\\nUser ${me} may run the following commands on host:\\n    (ALL : ALL) ALL\\n    (awbs-agent) NOPASSWD: ${EXEC}\\n${extra}`;
     const allow = (glob: string): [number, string, string] => [0, 'rc=0', glob];
     function baseline(listing = goodListing()): [number, string, string][] {
       return [
@@ -282,6 +373,8 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
       for (const d of ['srv/agentwbs/cli', 'srv/agentwbs/inputs', 'srv/agentwbs/worktrees', 'home/runner/.config/gh', 'mnt/c/Windows/System32']) mkdirSync(join(R, d), { recursive: true });
       exe(join(R, 'mnt/c/Windows/System32/whoami.exe'), '#!/bin/sh\nexit 0\n');
       writeFileSync(join(R, '.agent-deny'), '');
+      mkdirSync(join(R, 'etc/sudoers.d'), { recursive: true });
+      writeFileSync(join(R, 'etc/sudoers.d/awbs-agent'), `${sudoersContent()}\n`);
     });
     const check = () => run('check-agent-user.sh');
 
@@ -293,23 +386,63 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
     });
 
     test.each([
-      ['root로 래퍼를 비밀번호 없이', `    (root) NOPASSWD: ${EXEC}\\n`, '다른 계정(root)으로 비밀번호 없이 실행 허용'],
-      ['모든 계정으로 모든 명령을 비밀번호 없이', '    (ALL) NOPASSWD: ALL\\n', '다른 계정(ALL)으로 비밀번호 없이 실행 허용: ALL'],
-      ['Agent 계정으로 다른 명령도', '    (awbs-agent) NOPASSWD: /bin/bash\\n', '래퍼 말고 다른 명령이 있음: /bin/bash'],
-      ['해석할 수 없는 줄', '    알 수 없는 줄\\n', '해석할 수 없는 sudo 규칙 줄'],
-    ])('P2-6: sudo 정책이 %s 허용하면 FAIL(래퍼가 스스로 실패하는 것과 무관)', (_name, extra, message) => {
+      ['root로 래퍼를 비밀번호 없이', `    (root) NOPASSWD: ${EXEC}\\n`],
+      ['root 셸을 비밀번호 없이(리뷰2)', '    (root) NOPASSWD: /bin/bash\\n'],
+      ['root로 경로 와일드카드(리뷰2)', '    (root) NOPASSWD: /usr/local/libexec/awbs-agent-*\\n'],
+      ['모든 계정으로 모든 명령을 비밀번호 없이', '    (ALL) NOPASSWD: ALL\\n'],
+      ['Agent 계정으로 다른 명령도', '    (awbs-agent) NOPASSWD: /bin/bash\\n'],
+      ['인증 태그가 섞인 Agent 규칙(리뷰2)', `    (awbs-agent) NOPASSWD: /bin/bash, PASSWD: ${EXEC}\\n`],
+      ['SETENV 태그가 붙은 Agent 규칙(리뷰2)', `    (awbs-agent) NOPASSWD: SETENV: ${EXEC}\\n`],
+      ['비밀번호가 필요한 다른 규칙', '    (root) /usr/bin/apt\\n'],
+      ['해석할 수 없는 줄', '    알 수 없는 줄\\n'],
+    ])('P2-6·리뷰2 P2-A: sudo 허용 목록에 %s → FAIL(기대 줄과 글자 그대로 같은 줄만 통과)', (_name, extra) => {
       rules(...baseline(goodListing(extra)));
       const r = check();
       expect(r.code).toBe(1);
-      expect(r.out).toContain(message);
+      expect(r.out).toContain(`FAIL  허용 목록에 없는 sudo 규칙: ${extra.trim().replaceAll('\\n', '')}`);
+      expect(r.out).not.toContain('PASS  sudo 허용 목록이 기대와 정확히 같음');
     });
 
-    test('P2-6: Agent 래퍼 규칙이 없으면 FAIL, 전체 기본값 !authenticate도 FAIL', () => {
-      rules(...baseline(`Matching Defaults entries for ${me}:\\n    !authenticate\\n\\nUser ${me} may run the following commands:\\n    (ALL : ALL) ALL\\n`));
+    test('리뷰2 P2-A: 기대 규칙이 정확한 모양이 아니면(SETENV만 있는 줄로 바뀜) 「1번 있어야 함」도 FAIL', () => {
+      rules(...baseline(goodListing().replace(`(awbs-agent) NOPASSWD: ${EXEC}`, `(awbs-agent) NOPASSWD: SETENV: ${EXEC}`)));
       const r = check();
       expect(r.code).toBe(1);
-      expect(r.out).toContain(`규칙 (awbs-agent) NOPASSWD: ${EXEC} 없음`);
-      expect(r.out).toContain('!authenticate');
+      expect(r.out).toContain('정확히 1번 있어야 함(지금 0번)');
+    });
+
+    test.each([
+      ['!authenticate', 'env_reset, !authenticate'],
+      ['env_keep 추가', 'env_reset, env_keep+=LD_PRELOAD'],
+      ['setenv', 'env_reset, setenv'],
+      ['secure_path 변경', 'env_reset, secure_path=/tmp\\\\:/usr/bin'],
+    ])('리뷰2 P2-A: sudo 기본값 변화(%s) → FAIL', (name, defaults) => {
+      rules(...baseline(goodListing('', defaults)));
+      const r = check();
+      expect(r.code).toBe(1);
+      expect(r.out).toContain(`FAIL  허용 목록에 없는 sudo 기본값: ${(defaults.split(', ')[1] ?? '').replaceAll('\\\\', '\\')}`);
+      expect(name).toBeTruthy();
+    });
+
+    test('리뷰2 P2-A: 모르는 머리말(명령별 기본값 등)이 나오면 확인 못 함 FAIL', () => {
+      rules(...baseline(goodListing().replace('\\nUser ', `\\nRunas and Command-specific defaults for ${me}:\\n    Defaults!${EXEC} setenv\\n\\nUser `)));
+      const r = check();
+      expect(r.code).toBe(1);
+      expect(r.out).toContain('확인 못 함: 해석하지 않는 sudo 출력 줄');
+    });
+
+    test('리뷰2 P2-A: Agent 래퍼 규칙이 없으면 FAIL', () => {
+      rules(...baseline(`Matching Defaults entries for ${me} on host:\\n    env_reset\\n\\nUser ${me} may run the following commands on host:\\n    (ALL : ALL) ALL\\n`));
+      const r = check();
+      expect(r.code).toBe(1);
+      expect(r.out).toContain('정확히 1번 있어야 함(지금 0번)');
+    });
+
+    test('리뷰2 P2-A: 설치된 sudoers 파일에 별칭·기본값을 더하면 FAIL', () => {
+      writeFileSync(join(R, 'etc/sudoers.d/awbs-agent'), `${sudoersContent()}\nDefaults!${EXEC} setenv\n`);
+      rules(...baseline());
+      const r = check();
+      expect(r.code).toBe(1);
+      expect(r.out).toContain('awbs-agent가 설치 원본과 다름');
     });
 
     test('fail-closed: Agent로 실행 자체가 안 되면(sudo 실패) 「막힘」으로 치지 않고 FAIL, 요약까지 출력', () => {

@@ -95,47 +95,74 @@ esac
 step '2. sudo 정책(Runner → Agent, 래퍼 하나만, 비밀번호 없이). 여기서 owner의 sudo 비밀번호를 물을 수 있음'
 # 정책은 실행해 보는 대신 sudo가 보여 주는 허용 목록으로 본다.
 # 왜: root로 실행이 허용돼도 래퍼가 「Agent 계정이 아님」으로 스스로 실패하므로, 실행 결과로는 허용 여부를 알 수 없다(리뷰 P2-6).
+# 해석은 느슨하게 하지 않는다. 기대하는 줄과 「글자 그대로」 같은 줄만 통과하고, 그 밖의 줄은 모두 FAIL이다(리뷰2 P2-A).
+#   - 규칙: Agent 규칙 한 줄(정확히 1번)과 owner의 관리자 규칙 `(ALL : ALL) ALL`(비밀번호 필요, 0~1번)만 허용.
+#     예: `(root) NOPASSWD: /bin/bash`, 경로 와일드카드, `NOPASSWD: SETENV:`, `PASSWD:`가 섞인 줄, 별칭 이름은 모두 FAIL.
+#   - 기본값: 알려진 안전한 항목(아래 목록)만 허용. 하나라도 다른 항목(예: !authenticate, env_keep, setenv)이 보이면 FAIL.
+POLICY_RULE="($AGENT_USER) NOPASSWD: $REAL_EXEC_PATH"
+POLICY_ADMIN='(ALL : ALL) ALL'
+POLICY_DEFAULTS=(env_reset mail_badpass use_pty
+  'secure_path=/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin\:/snap/bin'
+  'secure_path=/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin')
+trim() { local v=$1; v=${v#"${v%%[![:space:]]*}"}; printf '%s' "${v%"${v##*[![:space:]]}"}"; }
 check_policy() {
-  local listing line runas rest cmds found=0 in_rules=0 c
+  local listing line t item section='' rules=0 admins=0 bad=0 known
   if ! listing=$(sudo -l -U "$RUNNER_USER" 2> /dev/null); then
     fail '확인 못 함: sudo 허용 목록을 읽지 못함'
     return
   fi
   while IFS= read -r line; do
-    if [[ $line == *'may run the following commands'* ]]; then in_rules=1; continue; fi
-    if ((!in_rules)); then
-      # 전체 기본값에서 인증을 끄면 모든 규칙이 비밀번호 없이 된다.
-      [[ $line == *'!authenticate'* ]] && fail "sudo 기본값이 인증을 끔(!authenticate): $line"
-      continue
-    fi
-    [[ -z ${line//[[:space:]]/} ]] && continue
-    if [[ ! $line =~ ^[[:space:]]+\(([^\)]*)\)[[:space:]]*(.*)$ ]]; then
-      fail "확인 못 함: 해석할 수 없는 sudo 규칙 줄: $line"
-      continue
-    fi
-    runas=${BASH_REMATCH[1]}
-    rest=${BASH_REMATCH[2]}
-    cmds=${rest##*: }
-    [[ $rest == *NOPASSWD:* ]] || continue   # 비밀번호가 필요한 규칙은 owner 본인의 관리 권한이다
-    IFS=, read -r -a list <<< "$cmds"
-    if [[ $runas == "$AGENT_USER" ]]; then
-      for c in "${list[@]}"; do
-        c=${c#"${c%%[![:space:]]*}"}
-        c=${c%"${c##*[![:space:]]}"}
-        if [[ $c == "$REAL_EXEC_PATH" ]]; then found=1; else fail "Agent 계정 규칙에 래퍼 말고 다른 명령이 있음: $c"; fi
+    t=$(trim "$line")
+    [[ -z $t ]] && continue
+    case $t in
+      "Matching Defaults entries for $RUNNER_USER on "*:) section=defaults; continue ;;
+      "User $RUNNER_USER may run the following commands on "*:) section=rules; continue ;;
+    esac
+    if [[ $section == defaults && $line == [[:space:]]* ]]; then
+      IFS=, read -r -a items <<< "$t"
+      for item in "${items[@]}"; do
+        item=$(trim "$item")
+        known=0
+        for k in "${POLICY_DEFAULTS[@]}"; do [[ $item == "$k" ]] && known=1; done
+        if ((!known)); then fail "허용 목록에 없는 sudo 기본값: $item"; bad=1; fi
       done
+    elif [[ $section == rules && $line == [[:space:]]* ]]; then
+      if [[ $t == "$POLICY_RULE" ]]; then
+        rules=$((rules + 1))
+      elif [[ $t == "$POLICY_ADMIN" ]]; then
+        admins=$((admins + 1))
+      else
+        fail "허용 목록에 없는 sudo 규칙: $t"; bad=1
+      fi
     else
-      for c in "${list[@]}"; do
-        c=${c#"${c%%[![:space:]]*}"}
-        c=${c%"${c##*[![:space:]]}"}
-        if [[ $c == ALL || $c == "$REAL_EXEC_PATH" ]]; then fail "다른 계정($runas)으로 비밀번호 없이 실행 허용: $c"; fi
-      done
+      # 다른 머리말(예: Runas and Command-specific defaults)이나 위치를 알 수 없는 줄
+      fail "확인 못 함: 해석하지 않는 sudo 출력 줄: $t"; bad=1
     fi
   done <<< "$listing"
-  ((in_rules)) || { fail '확인 못 함: sudo 허용 목록 형식을 알 수 없음'; return; }
-  if ((found)); then pass "규칙 ($AGENT_USER) NOPASSWD: $REAL_EXEC_PATH 있음"; else fail "규칙 ($AGENT_USER) NOPASSWD: $REAL_EXEC_PATH 없음"; fi
+  if [[ $section != rules ]]; then fail '확인 못 함: sudo 허용 목록 형식을 알 수 없음'; return; fi
+  ((rules == 1)) || { fail "규칙 「$POLICY_RULE」이 정확히 1번 있어야 함(지금 ${rules}번)"; bad=1; }
+  ((admins <= 1)) || { fail "관리자 규칙 「$POLICY_ADMIN」이 여러 번 있음"; bad=1; }
+  ((bad)) || pass "sudo 허용 목록이 기대와 정확히 같음: 「$POLICY_RULE」$( ((admins)) && printf ' + owner 관리자 규칙(비밀번호 필요)')"
+}
+# 설치한 sudoers 파일도 설치 원본과 글자 그대로 같은지 본다(별칭·기본값을 몰래 더한 파일을 잡는다).
+check_sudoers_file() {
+  local actual
+  if ! (safe_fixed_path "$SUDOERS_PATH") > /dev/null 2>&1; then
+    fail "확인 못 함: $SUDOERS_PATH 경로에 링크나 예상 밖 소유자가 있음"
+    return
+  fi
+  if ! actual=$(sudo cat -- "$SUDOERS_PATH" 2> /dev/null); then
+    fail "확인 못 함: $SUDOERS_PATH를 읽지 못함"
+    return
+  fi
+  if [[ $actual == "$(sudoers_content "$RUNNER_USER")" ]]; then
+    pass "$SUDOERS_PATH가 설치 원본과 같음"
+  else
+    fail "$SUDOERS_PATH가 설치 원본과 다름"
+  fi
 }
 check_policy
+check_sudoers_file
 # 실제로 비밀번호 없이 래퍼가 돌고, 래퍼 자신의 점검도 ok인지 본다.
 sudo -k
 if out=$(sudo -n -u "$AGENT_USER" -- "$REAL_EXEC_PATH" check 2>&1) && [[ $out == ok ]]; then

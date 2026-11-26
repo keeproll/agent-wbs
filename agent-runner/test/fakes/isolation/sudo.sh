@@ -30,8 +30,15 @@ case $cmd in
     "$cmd" "$@" ;;
   setfacl | chown | chgrp | chmod)
     for a in "$@"; do [[ $a == /* ]] && inside "$a"; done ;;
-  useradd) printf '%s\n' '__AGENT__' >> "$R/etc/passwd"; printf 'awbs-agent:x:998:\n' >> "$R/etc/group" ;;
-  userdel) sed -i '/^awbs-agent:/d' "$R/etc/passwd" ;;
+  useradd)
+    # --uid·--comment를 받아 가짜 계정 파일에 한 줄 더한다. .useradd-line이 있으면 그 줄을 대신 쓴다(다른 계정이 끼어든 상황).
+    uid=998 comment=''
+    while (($#)); do case $1 in --uid) uid=$2; shift 2 ;; --comment) comment=$2; shift 2 ;; *) shift ;; esac; done
+    if [[ -f $R/.useradd-line ]]; then cat "$R/.useradd-line" >> "$R/etc/passwd"
+    else printf 'awbs-agent:x:%s:%s:%s:/home/awbs-agent:/usr/sbin/nologin\n' "$uid" "$uid" "$comment" >> "$R/etc/passwd"; fi
+    printf 'awbs-agent:x:%s:\n' "$uid" >> "$R/etc/group" ;;
+  userdel) sed -i '/^awbs-agent:/d' "$R/etc/passwd"; sed -i '/^awbs-agent:/d' "$R/etc/group" ;;
+  cat) for a in "$@"; do [[ $a == /* ]] && inside "$a"; done; cat "$@" ;;
   groupdel) sed -i '/^awbs-agent:/d' "$R/etc/group" ;;
   pkill) [[ -s $R/.procs ]] || exit 1; [[ -f $R/.procs-stubborn ]] || : > "$R/.procs"; exit 0 ;;
   pgrep) [[ -s $R/.procs ]] && exit 0; exit 1 ;;

@@ -57,9 +57,16 @@ IS_WSL=0
 
 # 계정: 없으면 새로 만들고, 있으면 이 설치가 만든 계정인지 확인한다. 다른 계정이면 손대지 않는다.
 ACCOUNT=$(agent_account_state)
+# 진행 기록이 남아 있으면 지난 설치가 계정을 만드는 도중 끊긴 것이다(강제 종료 등으로 정리 코드도 못 돈 경우).
+# 계정이 없으면 기록만, 계정이 기록(이름·UID·표식)과 같으면 그 계정까지 아래 정리 단계에서 되돌린 뒤 새로 만든다.
+RESUME=''
+if [[ -f $PENDING_RECORD ]]; then
+  if [[ $ACCOUNT == ours ]]; then RESUME=finish; else RESUME=rollback; fi
+fi
 case $ACCOUNT in
   none) [[ ! -e $UID_RECORD ]] || die "계정은 없는데 설치 기록($UID_RECORD)이 남아 있습니다. remove-agent-user.sh로 먼저 정리하세요." ;;
   ours) ;;
+  marked) [[ $RESUME == rollback ]] || die "$AGENT_USER 계정에 생성 표식은 있지만 UID 기록이 없습니다. remove-agent-user.sh로 먼저 정리하세요." ;;
   *) die "$AGENT_USER 계정이 이미 있지만 이 설치가 만든 전용 계정이 아닙니다(UID 기록·홈·셸·그룹 불일치). 손대지 않고 멈춥니다." ;;
 esac
 
@@ -84,6 +91,7 @@ note "WSL 여부: $([[ $IS_WSL == 1 ]] && echo 예 || echo 아니오)"
 # 설치할 파일 내용은 먼저 Runner 계정의 임시 폴더(0700)에 만들고, 확인한 뒤 root 소유로 옮긴다.
 TMP=$(mktemp -d)
 FINISHED=0
+CREATING=0
 # shellcheck disable=SC2317  # trap으로 불린다.
 on_exit() {
   local rc=$?
@@ -91,6 +99,14 @@ on_exit() {
   if ((rc != 0 && !DRY_RUN && !FINISHED)); then
     # 실패하면 「닫힌」 쪽으로: 비밀번호 없는 실행 규칙을 지운다. Windows 차단 ACL은 지우지 않고 그대로 둔다.
     printf '\n설치가 중간에 멈췄습니다(종료 코드 %s). 비밀번호 없는 실행 규칙을 지우고 닫힌 상태로 둡니다.\n' "$rc" >&2
+    # 계정을 만들던 중이면 진행 기록으로 그 계정만 되돌린다(이름·UID·생성 표식이 모두 맞을 때만).
+    if ((CREATING)); then
+      if rollback_pending; then
+        printf '이번 설치가 만든 계정과 진행 기록을 되돌렸습니다. 원인을 고친 뒤 같은 명령을 다시 실행하세요.\n' >&2
+      else
+        printf '계정을 되돌리지 못했습니다. 진행 기록(%s)을 남겨 둡니다. 다시 실행하면 이어서 정리합니다.\n' "$PENDING_RECORD" >&2
+      fi
+    fi
     sudo -- rm -f -- "$SUDOERS_PATH" || printf '경고: %s를 지우지 못했습니다. 직접 지우세요.\n' "$SUDOERS_PATH" >&2
   fi
 }
@@ -105,13 +121,7 @@ AGENT_ROOT=$AGENT_ROOT
 NODE_DIR=$AGENT_ROOT/runtime/node/bin
 EOF
 
-cat > "$TMP/sudoers" << EOF
-# Agent WBS(Q-08): Runner 계정($RUNNER_USER)은 실행 래퍼 하나만 Agent 계정($AGENT_USER)으로 비밀번호 없이 실행한다.
-# root로 실행하는 권한은 주지 않는다. 래퍼가 실행할 CLI·작업 폴더를 검사한다.
-Cmnd_Alias AWBS_AGENT_EXEC = $REAL_EXEC_PATH
-Defaults!AWBS_AGENT_EXEC env_reset, !setenv
-$RUNNER_USER ALL=($AGENT_USER) NOPASSWD: AWBS_AGENT_EXEC
-EOF
+sudoers_content "$RUNNER_USER" > "$TMP/sudoers"
 
 cat > "$TMP/guard.service" << EOF
 # Agent WBS(Q-08): 부팅마다 Agent 계정이 WSL의 Windows 실행 통로(/run/WSL)에 들어가지 못하게 막는다.
@@ -161,18 +171,36 @@ fi
 # ---------------------------------------------------------------- 3. Agent 계정
 step "3. Agent 전용 계정 $AGENT_USER"
 ensure_root_dir "$CONF_DIR"                                              # 설치 기록·래퍼 설정 폴더(root만 씀)
+case $RESUME in
+  finish) as_root rm -f -- "$PENDING_RECORD"; note '지난 설치의 진행 기록을 마무리함(계정·UID 기록은 이미 완료)' ;;
+  rollback)
+    note '지난 설치가 계정을 만들다 끊겼습니다. 진행 기록과 맞는 계정만 되돌린 뒤 새로 만듭니다.'
+    if ((DRY_RUN)); then
+      note "(실제 설치에서는 여기서 $PENDING_RECORD 기록으로 되돌린다)"
+    else
+      rollback_pending || die '지난 설치의 계정을 되돌리지 못했습니다(기록과 다른 계정). 손대지 않고 멈춥니다.'
+    fi
+    ACCOUNT=none ;;
+esac
 if [[ $ACCOUNT == none ]]; then
-  # --system: 사람용이 아닌 시스템 계정. --shell nologin: 로그인 셸로 들어올 수 없음. --user-group: 같은 이름의 전용 그룹.
-  as_root useradd --system --user-group --create-home --home-dir "/home/$AGENT_USER" \
-    --shell /usr/sbin/nologin --comment 'Agent WBS agent' "$AGENT_USER"
-  if ((DRY_RUN)); then
-    note "(실제 설치에서는 여기서 새 계정의 UID를 $UID_RECORD에 기록한다)"
-  else
-    uid=$(getent passwd "$AGENT_USER" | cut -d: -f3)
-    if [[ ! $uid =~ ^[0-9]+$ ]] || ((uid <= 0 || uid >= 1000)); then die "새 계정의 UID가 시스템 계정 범위가 아닙니다: $uid"; fi
-    printf '%s\n' "$uid" > "$TMP/agent-user.uid"
-    as_root install -o root -g root -m 0644 "$TMP/agent-user.uid" "$UID_RECORD"   # 「이 설치가 만든 계정」 기록(재설치·제거 때 대조)
+  NEW_UID=$(pick_free_uid) || die '비어 있는 시스템 UID(900~999)가 없습니다.'
+  MARKER=awbs-agent-setup-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')
+  printf '%s %s %s\n' "$AGENT_USER" "$NEW_UID" "$MARKER" > "$TMP/agent-user.pending"
+  # 계정을 만들기 「직전」에 이름·UID·생성 표식을 먼저 기록한다. 이 뒤로 실패하면 정리 코드가 이 기록으로 되돌린다(리뷰2 P2-B).
+  as_root install -o root -g root -m 0644 "$TMP/agent-user.pending" "$PENDING_RECORD"
+  CREATING=1
+  # --system: 사람용이 아닌 시스템 계정. --uid: 방금 기록한 번호. --shell nologin: 로그인 셸로 들어올 수 없음.
+  # --user-group: 같은 이름·번호의 전용 그룹. --comment: 이 설치가 만든 계정이라는 생성 표식.
+  as_root useradd --system --uid "$NEW_UID" --user-group --create-home --home-dir "/home/$AGENT_USER" \
+    --shell /usr/sbin/nologin --comment "Agent WBS agent $MARKER" "$AGENT_USER"
+  if ((!DRY_RUN)); then
+    # 만들어진 계정이 기록과 같은지 확인한다(같은 이름을 누가 먼저 만들었으면 여기서 멈춘다).
+    [[ $(agent_entry_field 3) == "$NEW_UID" && $(agent_entry_field 5) == "Agent WBS agent $MARKER" ]] || die '만든 계정이 진행 기록과 다릅니다.'
   fi
+  printf '%s\n' "$NEW_UID" > "$TMP/agent-user.uid"
+  as_root install -o root -g root -m 0644 "$TMP/agent-user.uid" "$UID_RECORD"   # 「이 설치가 만든 계정」 기록(재설치·제거 때 대조)
+  as_root rm -f -- "$PENDING_RECORD"                                       # 계정·UID 기록이 끝나 진행 기록은 지움
+  CREATING=0
 else
   note '이미 있음(이 설치가 만든 계정임을 확인함). 새로 만들지 않음'
 fi

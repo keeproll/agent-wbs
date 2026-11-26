@@ -49,7 +49,19 @@ UID_NUM=''
 if [[ -n $UID_NUM ]] && ((UID_NUM <= 0 || UID_NUM >= 1000)); then die "설치 기록의 UID가 시스템 계정 범위가 아닙니다: $UID_NUM"; fi
 case $ACCOUNT in
   ours) ;;
-  none) note '계정은 이미 없음' ;;
+  marked)
+    # UID 기록 없이 생성 표식만 있는 우리 계정(설치가 계정을 만든 직후 끊긴 경우 등). 계정의 UID로 정리한다(리뷰2 P2-B).
+    [[ -z $UID_NUM ]] || die 'UID 기록과 계정이 맞지 않습니다.'
+    UID_NUM=$(agent_entry_field 3)
+    note "UID 기록은 없지만 생성 표식이 있는 우리 계정(UID $UID_NUM)" ;;
+  none)
+    note '계정은 이미 없음'
+    # 계정은 없고 진행 기록만 있으면 그 UID로 남은 권한 항목을 정리한다.
+    if [[ -z $UID_NUM && -f $PENDING_RECORD ]]; then
+      read -r p_name p_uid _ < "$PENDING_RECORD" || true
+      [[ $p_name == "$AGENT_USER" && $p_uid =~ ^[0-9]+$ ]] || die "진행 기록 형식이 올바르지 않습니다: $PENDING_RECORD"
+      UID_NUM=$p_uid
+    fi ;;
   *) die "$AGENT_USER 계정이 이 설치가 만든 전용 계정이 아닙니다(UID 기록·홈·셸·그룹 불일치). 손대지 않고 멈춥니다." ;;
 esac
 if [[ -z $UID_NUM ]]; then
@@ -113,7 +125,7 @@ if [[ -n $UID_NUM ]]; then
 fi
 
 step "3. Agent 계정 $AGENT_USER 삭제"
-if [[ $ACCOUNT == ours ]]; then
+if [[ $ACCOUNT == ours || $ACCOUNT == marked ]]; then
   as_root userdel --remove "$AGENT_USER"                                   # 계정과 홈(Claude·Codex 로그인 정보 포함) 삭제
   if ((!DRY_RUN)) && getent group "$AGENT_USER" > /dev/null; then
     as_root groupdel "$AGENT_USER"                                         # 전용 그룹이 남았으면 삭제
@@ -153,6 +165,7 @@ fi
 
 step '6. 설치 기록 삭제(모든 정리가 끝난 뒤)'
 as_root rm -f -- "$UID_RECORD"
+as_root rm -f -- "$PENDING_RECORD"
 [[ -d $CONF_DIR ]] && as_root rmdir --ignore-fail-on-non-empty -- "$CONF_DIR"
 FINISHED=1
 
