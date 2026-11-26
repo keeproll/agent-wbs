@@ -16,7 +16,7 @@ describe.skipIf(!process.env.RUNNER_TEST_DATABASE_URL)('runner 실제 PostgreSQL
   const url = process.env.RUNNER_TEST_DATABASE_URL ?? 'postgres://invalid';
   const owner = createPool(url, { onError: () => undefined });
   const appUrl = new URL(url);
-  appUrl.username = 'awbs_app';
+  appUrl.searchParams.set('options', '-c role=awbs_app');
   const pool = createPool(appUrl.href, { onError: () => undefined });
   const app = buildApp(pool);
   installRunner(app, pool);
@@ -60,7 +60,6 @@ describe.skipIf(!process.env.RUNNER_TEST_DATABASE_URL)('runner 실제 PostgreSQL
     await recreateTestDatabase(url);
     await runMigrations(owner);
     await seedSystem(owner);
-    await owner.query("alter role awbs_app login password 'm205_local_test'");
     bearer = await issueRunnerToken(pool, 'runner-test', 'fake');
     const token = await issueLoginLink(pool);
     const login = await app.inject({ method: 'POST', url: '/api/auth/session', headers: { origin }, payload: { method: 'link', token } });
