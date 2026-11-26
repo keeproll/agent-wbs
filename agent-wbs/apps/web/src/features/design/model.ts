@@ -172,9 +172,16 @@ export const storeCounts = (items: readonly DataItem[]) => STORES.map(([k, l]) =
 const KIND_L: Record<string, string> = { postgres: 'PostgreSQL', neo4j: 'Neo4j', questdb: 'QuestDB', redis: 'Redis 키' };
 
 export interface ListFilter { kind?: string; store?: string; q: string }
+const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+/**
+ * 목록 순서: 원본처럼 담당 Task 순(P Sel.dsRest·dsPg는 Task key 순), 같은 Task 안은 항목 key 순, 담당 Task 없음은 맨 뒤(조정자 결정 fix1-5).
+ * 왜: 서버는 item_key 순으로 주지만, 팀장은 Task 단위로 설계를 본다. 이전·다음 이동도 이 순서를 따른다.
+ */
+const byTask = (a: { taskKey: string | null; key: string }, b: { taskKey: string | null; key: string }) =>
+  (a.taskKey === null ? 1 : 0) - (b.taskKey === null ? 1 : 0) || cmp(a.taskKey ?? '', b.taskKey ?? '') || cmp(a.key, b.key);
 export function itemRows(items: readonly (IfaceItem | DataItem)[], f: ListFilter, tasks: ReadonlyMap<string, TaskInfo>, drifts: readonly DriftItem[]) {
   const q = f.q.trim().toLowerCase();
-  return items.filter((x) => ('kind' in x ? !f.kind || x.kind === f.kind : !f.store || x.store === f.store))
+  return [...items].sort(byTask).filter((x) => ('kind' in x ? !f.kind || x.kind === f.kind : !f.store || x.store === f.store))
     .filter((x) => !q || `${x.name} ${x.key}`.toLowerCase().includes(q))
     .map((x) => {
       const kind = 'kind' in x ? x.kind : x.store;

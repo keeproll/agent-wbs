@@ -157,7 +157,7 @@ test('UAT-DESIGN-03 / 시나리오 28: 방식 필터·행 선택 → 레일+상�
   await expect(patch).toContainText('구현 중 · 브랜치');
   await patch.click();
   const detail = page.getByRole('region', { name: 'PATCH /api/tasks/:taskKey 상세' });
-  await expect(detail).toContainText('8 / 23');
+  await expect(detail).toContainText('4 / 23');
   await expect(detail).toContainText('contracts/api/openapi.yaml');
   await expect(detail).toContainText('팀장 세션');
   await expect(detail.locator('pre.code').first()).toContainText('"updatedAt": string');
@@ -165,7 +165,7 @@ test('UAT-DESIGN-03 / 시나리오 28: 방식 필터·행 선택 → 레일+상�
   await expect(detail.locator('.banner.warn')).toContainText('미해결 코드 응답에 `updatedBy` 필드가 있으나');
   await expect(page.getByRole('complementary', { name: '인터페이스 목록' }).locator('.side-i.on')).toContainText('PATCH /api/tasks/:taskKey');
   await detail.getByRole('button', { name: '↓ 다음' }).click();
-  await expect(page.getByRole('region', { name: 'POST /api/planning/estimates 상세' })).toContainText('9 / 23');
+  await expect(page.getByRole('region', { name: 'POST /api/projects/:projectId/tasks 상세' })).toContainText('5 / 23');
   await page.getByRole('button', { name: '↑ 이전' }).click();
   // 읽고 쓰는 테이블 tasks → 데이터 탭 테이블 상세 → 사용하는 API
   await page.getByRole('region', { name: 'PATCH /api/tasks/:taskKey 상세' }).getByRole('button', { name: 'tasks', exact: true }).click();

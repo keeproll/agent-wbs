@@ -68,15 +68,15 @@ test('UI-04-03 인터페이스 목록(1920)', async ({ page }) => {
   const png = await shot(page);
   record('UI-04-03-bar', `${B}/UI-04-03.png`, at(280, 50), png, 0.03, '방식 필터 건수·검색. 같아야 함');
   record('UI-04-03-table', `${B}/UI-04-03.png`, at(330, 750), png, null,
-    '목록 순서는 서버 순서(항목 key 순, 원본은 Task 순). 설명 칸은 계약에 설명 필드가 없어 「—」(보고함). 상태는 담당 Task 상태로 같은 규칙');
+    '목록은 원본처럼 Task 순이나 같은 Task 안은 항목 key 순(원본은 Task 설계 순서). 설명 칸은 계약에 설명 필드가 없어 「—」(보고함). 상태는 담당 Task 상태로 같은 규칙');
 });
 
 test('UI-04-03A REST 상세(1920)', async ({ page }) => {
   await openAt(page, '/design?tab=iface&sel=GET%20%2Fapi%2Fprojects%2F%3AprojectId%2Ftasks', 'includeDeleted?: boolean');
   const png = await shot(page);
   record('UI-04-03A-detail', `${B}/UI-04-03A.png`, { x: 480, y: 285, width: 1416, height: 700 }, png, null,
-    '상세 모양(요청·응답 코드 상자, 검증 규칙, 오류 코드, 읽고 쓰는 테이블)은 같음. 설명 대신 항목 key가 없으면 빈 줄, 계약 파일 칸에 기준 커밋을 덧붙임, 위치 번호는 서버 순서 기준');
-  record('UI-04-03A-rail', `${B}/UI-04-03A.png`, { x: 204, y: 285, width: 262, height: 44 }, png, 0.03, '레일 머리(제목·건수·펼치기). 같아야 함. 첫 항목은 서버 순서라 아래 detail 비교에 포함하지 않음');
+    '상세 모양(요청·응답 코드 상자, 검증 규칙, 오류 코드, 읽고 쓰는 테이블)은 같음. 설명 대신 항목 key가 없으면 빈 줄, 계약 파일 칸에 기준 커밋을 덧붙임, 위치 번호는 Task 순 · 같은 Task 안 key 순 기준');
+  record('UI-04-03A-rail', `${B}/UI-04-03A.png`, { x: 204, y: 285, width: 262, height: 44 }, png, 0.03, '레일 머리(제목·건수·펼치기). 같아야 함. 레일 항목 순서는 같은 Task 안 key 순이라 첫 항목은 비교하지 않음');
 });
 
 test('UI-04-05 소유권 · 흐름(1920)', async ({ page }) => {

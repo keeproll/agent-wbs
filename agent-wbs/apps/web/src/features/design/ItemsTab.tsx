@@ -2,7 +2,7 @@
  * 인터페이스(UI-04-03·03A)·데이터(UI-04-04·04A) 탭 — 원본 P L1534–1582.
  * 목록 → 행을 누르면 왼쪽 레일 + 오른쪽 상세. 「펼치기」는 목록으로 돌아간다.
  *
- * - 목록 순서는 서버 순서(항목 key 순)를 그대로 쓴다.
+ * - 목록 순서는 원본처럼 담당 Task 순, 같은 Task 안은 항목 key 순이다(model.ts itemRows).
  * - 상세는 GET …/interfaces/:key · …/data/:key로 읽는다. 해석기가 없는 형식(content=null)은 계약 파일 원문을 그대로 보인다(G L430).
  * - REST 「읽고 쓰는 테이블」 ↔ PostgreSQL 「사용하는 API」는 서로의 상세로 이동한다(UAT-DESIGN-03 a).
  * - 담당 Task는 Task 상세 주소(LINK.task)로 연결한다(UAT-DESIGN-03 b).

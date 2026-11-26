@@ -152,6 +152,10 @@ describe('인터페이스·데이터 목록', () => {
     expect(rows.map((r) => [r.key, r.kindL, r.stL, r.task, r.mark?.[0]])).toEqual([['PATCH /api/tasks/:taskKey', 'REST', '구현 중 · 브랜치', 'TASK-0005', '불일치']]);
     expect(itemRows(ifs, { kind: '', q: '' }, tasks, []).find((r) => r.key === 'runner.attempt.events')?.task).toBe('—');
   });
+  it('목록 순서는 원본처럼 담당 Task 순, 같은 Task 안은 항목 key 순, 담당 Task 없음은 맨 뒤(조정자 결정 fix1-5)', () => {
+    const mixed = [iface('runner.events', 'Kafka', null), iface('POST /api/b', 'REST', 'TASK-0012'), iface('PATCH /api/a', 'REST', 'TASK-0005'), iface('DELETE /api/a', 'REST', 'TASK-0005'), iface('/ws', 'WebSocket', 'TASK-0010')];
+    expect(itemRows(mixed, { kind: '', q: '' }, tasks, []).map((r) => r.key)).toEqual(['DELETE /api/a', 'PATCH /api/a', '/ws', 'POST /api/b', 'runner.events']);
+  });
   it('저장소 건수·종류 문구', () => {
     const ds = [data('postgres:tasks', 'postgres'), data('neo4j:Task', 'neo4j'), data('redis:lock', 'redis')];
     expect(storeCounts(ds)).toEqual([['postgres', 'PostgreSQL', 1], ['neo4j', 'Neo4j', 1], ['questdb', 'QuestDB', 0], ['redis', 'Redis', 1]]);
