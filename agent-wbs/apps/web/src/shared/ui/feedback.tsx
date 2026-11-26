@@ -21,6 +21,7 @@ interface FeedbackValue {
   addTopBar: (delta: 1 | -1) => void;
   setDim: (id: symbol, label: string | null) => void;
   showError: (state: ErrorBarState | null) => void;
+  clearError: (owner?: symbol) => void;
   notify: (text: string) => void;
   confirm: (options: ConfirmOptions) => Promise<boolean>;
 }
@@ -52,6 +53,7 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
       });
     },
     showError: (error) => { setState((s) => ({ ...s, error })); },
+    clearError: (owner) => { setState((s) => (owner === undefined || s.error?.owner === owner ? { ...s, error: null } : s)); },
     notify: (text) => { setState((s) => ({ ...s, notice: { text, key: (s.notice?.key ?? 0) + 1 } })); },
     confirm: (options) => new Promise<boolean>((resolve) => { setState((s) => ({ ...s, confirm: { options, resolve } })); }),
   }), []);
@@ -89,14 +91,14 @@ const FeedbackStateContext = createContext<FeedbackState | null>(null);
 /** 본문(main) 위쪽에 진행 막대·흐림 칩·오류 막대를 그린다. Shell이 쓴다. */
 export function MainFeedback() {
   const state = use(FeedbackStateContext);
-  const { showError } = useFeedback();
+  const { clearError } = useFeedback();
   const bar = useDelayedFlag((state?.topBars ?? 0) > 0);
   const dim = state ? [...state.dims.values()][0] : undefined;
   return (
     <>
       {bar && <div className="topbar" role="progressbar" aria-label="불러오는 중"><span /></div>}
       {dim && <div className="dimchip" role="status"><span className="bspin" aria-hidden="true" />{dim}</div>}
-      {state?.error && <ErrorBar state={state.error} onClose={() => { showError(null); }} />}
+      {state?.error && <ErrorBar state={state.error} onClose={() => { state.error?.onClose?.(); clearError(); }} />}
     </>
   );
 }
@@ -126,12 +128,16 @@ export function useDim(label: string | null): void {
   }, [id, label, setDim]);
 }
 
-export function useErrorBar(): { show: (state: Omit<ErrorBarState, 'at'> & { at?: number }) => void; clear: () => void } {
-  const { showError } = useFeedback();
+/**
+ * 오류 막대를 띄우고 닫는다. owner를 주면 clear(owner)가 자기가 띄운 막대만 닫는다.
+ * 왜: 한 화면에서 저장 실패와 자동 갱신 실패가 겹칠 때 서로의 막대를 지우지 않게 한다.
+ */
+export function useErrorBar(): { show: (state: Omit<ErrorBarState, 'at'> & { at?: number }) => void; clear: (owner?: symbol) => void } {
+  const { showError, clearError } = useFeedback();
   return useMemo(() => ({
     show: (state) => { showError({ ...state, at: state.at ?? Date.now() }); },
-    clear: () => { showError(null); },
-  }), [showError]);
+    clear: (owner) => { clearError(owner); },
+  }), [showError, clearError]);
 }
 
 export function useNotice(): (text: string) => void {

@@ -25,6 +25,8 @@ interface ApiContextValue {
   /** 1회용 링크 로그인 결과. 실패하면 로그인 화면이 안내한다. */
   linkLogin: 'idle' | 'pending' | 'failed';
   refreshSession: () => Promise<unknown>;
+  /** 로그아웃 성공 뒤 화면의 세션을 비운다(로그인 화면으로 이동하게 된다). */
+  clearSession: () => void;
 }
 
 const ApiContext = createContext<ApiContextValue | null>(null);
@@ -116,7 +118,8 @@ function SessionProvider({ children }: { children: ReactNode }) {
     lastSuccessAt,
     linkLogin,
     refreshSession: () => sessionQuery.refetch(),
-  }), [client, linkLogin, sessionQuery, lastSuccessAt]);
+    clearSession: () => { queryClient.setQueryData(['getSession', {}], null); queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== 'getSession' }); },
+  }), [client, linkLogin, sessionQuery, lastSuccessAt, queryClient]);
 
   return <ApiContext value={value}>{children}</ApiContext>;
 }

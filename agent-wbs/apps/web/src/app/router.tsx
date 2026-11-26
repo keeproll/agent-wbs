@@ -1,7 +1,7 @@
 /**
  * 주소(라우팅) 표. 메뉴 12개의 주소는 `/<메뉴 key>`다(shared/layout/menu.ts).
  * 하위 주소: `/wbs/:taskKey`(G§4.3), `/settings/:tab`(G§4.9).
- * M3-02~08은 각 메뉴의 `element`를 자기 화면으로 바꾼다. 다른 메뉴 줄은 건드리지 않는다.
+ * M3-02~08은 feature 컴포넌트를 내보내고, 이 표에 연결하는 일은 병합 때 coordinator가 한다(shared/README §1).
  *
  * 편집 보호(useBlocker)를 쓰려면 data router(createBrowserRouter)가 필요하다.
  */

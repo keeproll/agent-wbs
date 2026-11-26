@@ -23,8 +23,8 @@ export function WbsPage() {
 }
 ```
 
-그리고 `src/app/router.tsx`에서 자기 메뉴 줄의 `element`만 바꾼다.
-메뉴를 옮길 때 화면을 새로 만들도록 `key`를 메뉴 이름으로 준다.
+라우터(`src/app/router.tsx`)는 메뉴 12개를 `MENU.map`으로 한꺼번에 만든다. 그래서 각 작업은 feature 컴포넌트를 내보내기만 하고, 라우터 연결은 병합 때 coordinator가 한다(충돌을 줄이기 위해).
+연결할 때는 메뉴를 옮기면 화면을 새로 만들도록 `key`를 메뉴 이름으로 준다.
 
 `MenuScreen`이 대신 해 주는 일:
 
@@ -49,6 +49,12 @@ const tasks = useApiQuery('listTasks', { params: { projectId }, query: { status 
 - 조건(필터·정렬)이 바뀌어도 새 응답이 올 때까지 이전 데이터를 그대로 보여 준다. 왜: 화면이 비지 않아 깜빡이지 않는다(G§0.3).
 - 실패를 자동으로 되풀이하지 않는다. 사용자가 「다시 시도」를 누른다.
 - 화면 안에서 query를 직접 쓰면 첫 로딩은 아래 §4의 부품을 쓴다.
+- **이미 보여 준 데이터의 갱신이 실패해도 화면을 오류 카드로 바꾸지 않는다.** 바꾸면 그 안의 편집 중 입력이 사라진다.
+  - `useRefreshError(query, '<무엇> 최신 내용 불러오기')`를 붙이면 오류 막대와 「다시 시도」로 알린다(MenuScreen은 이미 쓴다).
+  - 오류 화면(`LoadError`)은 처음부터 데이터가 없을 때만 쓴다.
+- 파일(PDF·ZIP·Evidence 원본)을 내려받는 요청(`getReportPdf`·`exportProject`·`getEvidenceContent`)은 `call`로 부를 수 없다(타입에서 빠짐).
+  - `<a href={apiUrl('getReportPdf', { params: { reportId } })} download>`처럼 주소만 만들어 브라우저가 내려받게 한다.
+- `call`은 응답 본문을 다 읽을 때까지 10초 제한을 지킨다. 본문이 깨지거나 끊겨도 `ApiError`(server·network·timeout)로 온다.
 
 ## 3. 저장하기 — `useSave` + `BusyButton`
 
@@ -56,12 +62,16 @@ const tasks = useApiQuery('listTasks', { params: { projectId }, query: { status 
 const { save, busy, conflictModal } = useSave({
   target: `${taskKey} 제목 저장`,          // 오류 막대의 「대상」
   mine: `제목: ${draft}`,                   // 충돌 창의 「내 변경」
-  run: ({ idempotencyKey }) => client.call('updateTask', { params: { taskKey }, body: { updatedAt, title: draft } }),
+  // ① 저장 버튼을 누른 순간의 요청 내용을 찍어 둔다.
+  request: () => ({ updatedAt, title: draft }),
+  // ② payload만 써서 보낸다. 화면 상태(draft 등)를 여기서 직접 읽지 않는다.
+  run: ({ payload, idempotencyKey }) => client.call('updateTask', { params: { taskKey }, body: payload }),
   onSuccess: (result) => { /* 캐시 갱신 후 편집 닫기 */ },
   successNotice: '제목을 저장했습니다.',
   onFieldErrors: setFieldErrors,            // 400의 고칠 항목
   onConflictReload: () => { /* 편집 버리고 최신 다시 읽기 */ },
-  onConflictReapply: async () => { /* 최신 updatedAt을 읽어 내 변경으로 다시 저장 */ },
+  // 실패는 catch로 삼키지 말고 그대로 던진다. 창 안에 이유가 보이고, 끝까지 성공해야 창이 닫힌다.
+  onConflictReapply: async () => { const latest = await reload(); await saveWith(latest.updatedAt, draft); },
 });
 …
 <BusyButton busy={busy} busyLabel="저장 중…" onClick={() => void save()}>저장</BusyButton>
@@ -73,12 +83,15 @@ const { save, busy, conflictModal } = useSave({
 - 처리 중에는 버튼에 스피너와 「…중」을 보이고 비활성으로 만든다. 연타해도 요청은 한 번만 간다.
 - 실패해도 입력은 지우지 않는다. 성공했을 때만 `onSuccess`에서 편집을 닫는다.
 - 오류 종류별 화면:
-  - 500·네트워크 끊김·10초 무응답·503: 오류 막대 + 「다시 시도」. 다시 시도는 같은 멱등 키로 보낸다.
+  - 500·네트워크 끊김·10초 무응답·503: 오류 막대 + 「다시 시도」.
+    - 다시 시도는 **처음 `request()`로 찍은 내용과 같은 멱등 키**로 보낸다. 왜: 서버가 첫 요청을 처리하고 응답만 잃었을 수 있고, 같은 키에 다른 내용을 보내면 서버가 `IDEMPOTENCY_CONFLICT`로 거부한다.
+    - 결과를 모르는 요청이 남아 있는데 입력을 바꿔 다시 「저장」하면 보내지 않고 안내한다. 「다시 시도」로 끝내거나 오류 막대 「닫기」로 포기한 뒤 새로 저장한다.
   - 400: 오류 막대 + 고칠 항목. 「다시 시도」는 없다. 왜: 같은 잘못된 요청을 다시 보내도 또 실패한다.
-  - 409 `VERSION_CONFLICT`: 충돌 창. 「최신 불러오기(내 변경 버림)」와 「최신 위에 다시 적용」 중 고른다. Esc는 아무것도 하지 않고 창만 닫는다(입력 유지).
+  - 409 `VERSION_CONFLICT`: 충돌 창. 「최신 불러오기(내 변경 버림)」와 「최신 위에 다시 적용」 중 고른다. Esc는 아무것도 하지 않고 창만 닫는다(입력 유지). 다시 적용이 실패하면 창 안에 이유를 보인다.
   - 그 밖의 409: 오류 막대(다시 시도 없음) + `onRejected`. 왜: 「지금 상태와 맞지 않음」이라 최신 상태를 다시 읽어야 한다(contracts §1.1).
-- POST 요청에 `run`이 받은 `idempotencyKey`를 넘긴다(`client.call(id, { …, idempotencyKey })`).
+- POST 요청에는 `run`이 받은 `idempotencyKey`를 넘긴다(`client.call(id, { …, idempotencyKey })`).
 - 변경 요청에는 `X-CSRF-Token`이 자동으로 붙는다.
+- `request`를 빼면 `payload`는 `undefined`이고, 다시 시도는 `run`이 읽는 그때의 화면 상태를 보낸다. POST·승인처럼 중복이 위험한 요청에는 꼭 `request`를 쓴다.
 
 ## 4. 로딩 5종
 
@@ -98,7 +111,7 @@ const { save, busy, conflictModal } = useSave({
 
 | 부품 | 언제 | 비고 |
 |---|---|---|
-| `useErrorBar().show({ error, target, retry? })` | `useSave`를 못 쓰는 특별한 실패 | 보통은 `useSave`가 대신 부른다 |
+| `useErrorBar().show({ error, target, retry?, owner? })` | `useSave`를 못 쓰는 특별한 실패 | 보통은 `useSave`가 대신 부른다. `owner`를 주면 `clear(owner)`가 자기 막대만 닫는다 |
 | `useNotice()('…했습니다.')` | 처리 결과 안내(SYS-03) | 3.6초 뒤 사라짐. 결과를 안내로만 대신하지 않는다 |
 | `useConfirm()({ title, body, ok, danger })` | 삭제·취소 같은 확인(MOD-08) | `Promise<boolean>`. 확인 전에는 아무것도 바꾸지 않는다 |
 | `useEditGuard(dirty)` | 편집 중 이동 막기 | 메뉴·주소 이동은 자동으로 묻는다. 탭 전환 같은 화면 안 이동은 `guard(() => …)`로 감싼다 |
