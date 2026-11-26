@@ -4,9 +4,9 @@ import { ERROR_CODES } from './errors.ts';
 
 /** 요청 본문. 정의하지 않은 필드는 거부한다(예: Task PATCH의 status). */
 export const Body = <T extends TProperties>(properties: T) => Type.Object(properties, { additionalProperties: false });
-export const AnyOf = <const T extends readonly string[]>(...values: T) => Type.Enum(values as unknown as [...T]);
+export const AnyOf = <const T extends readonly string[]>(...values: T) => Type.Enum<[...T]>(values);
 const Named = <const T extends readonly string[]>(title: string, ...values: T) =>
-  Type.Enum(values as unknown as [...T], { title });
+  Type.Enum<[...T]>(values, { title });
 export const Nullable = <T extends TSchema>(schema: T) => Type.Union([schema, Type.Null()]);
 export const Opt = Type.Optional;
 export const List = Type.Array;
@@ -60,9 +60,9 @@ export const ChatId = Type.String({ pattern: '^-?[0-9]{5,20}$' });
 export const BotToken = Type.String({ pattern: '^[0-9]{6,12}:[A-Za-z0-9_-]{20,}$', writeOnly: true });
 export const SecretInput = Type.String({ minLength: 1, writeOnly: true });
 
-export const Count = Type.Integer({ minimum: 0 });
-export const Fence = Type.Integer({ minimum: 0 });
-export const Epoch = Type.Integer({ minimum: 0 });
+export const Count = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
+export const Fence = Type.Integer({ minimum: 0, maximum: 2147483647 });
+export const Epoch = Type.Integer({ minimum: 0, maximum: 2147483647 });
 export const Hours = Type.Number({ minimum: 0 });
 export const Pct = Type.Number({ minimum: 0, maximum: 100 });
 
@@ -78,7 +78,7 @@ export const DepType = Named('DepType', ...v.DEPENDENCY_TYPES);
 export const DesignKind = Named('DesignKind', ...v.DESIGN_KINDS);
 export const Confidence = Named('Confidence', ...v.CONFIDENCES);
 export const ReadinessKey = AnyOf(
-  'claude', 'codex', 'git', 'node', 'pnpm', 'pg', 'repo', 'disk', 'subs', 'obs', 'gh', 'lfs',
+  'claude', 'codex', 'git', 'node', 'pnpm', 'pg', 'repo', 'disk', 'subs', 'obs', 'gh', 'lfs', 'reports',
 );
 export const ReadinessStatus = AnyOf('ok', 'warn', 'fail');
 export const ObservationState = AnyOf('ok', 'unconfirmed');

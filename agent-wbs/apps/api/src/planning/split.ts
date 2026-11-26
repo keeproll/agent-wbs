@@ -7,7 +7,7 @@ import { taskDetail, type TaskDetail } from '../tasks/read.ts';
 import { assertEditable, assertVersion, changed, LEAD, lockTask, record, touch, type LockedTask } from '../tasks/write.ts';
 import { ApiError } from '../changes/http.ts';
 import { applyRegrade } from '../policy/service.ts';
-import { assertJob } from './jobs.ts';
+import { assertGradeChange, assertJob } from './jobs.ts';
 import { clientOf } from './proposals.ts';
 import { loadSnapshot } from './snapshot.ts';
 
@@ -109,6 +109,7 @@ export function registerSplitRoutes(route: RouteFn, epochOf: (request: FastifyRe
     if (duplicates.length) throw new TaskError('VALIDATION_FAILED', {}, duplicates);
     const job = await assertJob(client, body.jobId, body.fence);
     const task = await lockTask(client, keyOf(request));
+    await assertGradeChange(client, job.payload, task.id);
     // 등급 재판단 작업(M2-08 requestRejudge가 만든 estimate job의 policy.rejudge)의 대상 역할이면 결과를 applyRegrade로 저장한다(G§7.2, D-29).
     const rejudgeRoles = ((job.payload as { policy?: { rejudge?: { targets?: { taskKey: string; roles: string[] }[] } } } | null)?.policy?.rejudge?.targets ?? [])
       .find((target) => target.taskKey === task.task_key)?.roles ?? [];
@@ -137,9 +138,9 @@ export function registerSplitRoutes(route: RouteFn, epochOf: (request: FastifyRe
     }
     for (const role of ['dev', 'qa'] as const) {
       const grade = body.grades[role];
-      const current = (await client.query<{ model_id: string; effort: string; locked: boolean }>('select model_id,effort,locked from task_grades where task=$1 and role=$2 for update', [task.id, role])).rows[0];
+      const current = (await client.query<{ model_id: string; effort: string; reason: string; locked: boolean }>('select model_id,effort,reason,locked from task_grades where task=$1 and role=$2 for update', [task.id, role])).rows[0];
       // 팀장이 고정한 등급은 Planning 판단으로 바꾸지 않는다(G§7.1).
-      if (current?.locked || (current?.model_id === grade.modelId && current.effort === grade.effort)) continue;
+      if (current?.locked || (current?.model_id === grade.modelId && current.effort === grade.effort && current.reason === grade.reason)) continue;
       if (rejudgeRoles.includes(role)) {
         // 허용·매핑·최저선을 검사하고 이전→이후 등급을 「실행 등급」 이력에 남긴다(M2-08). 오류는 이 범위의 TaskError로 바꿔 답한다.
         try {

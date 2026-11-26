@@ -4,6 +4,8 @@ import {
   type ProposalSimulation, type SplitJudgements, type TaskJudgement,
 } from '@awbs/shared';
 import { proposalReasons, simulationOp, type WireHoldReason, type WireProposalOp } from '@awbs/shared/api';
+import { validateDesign } from '../tasks/design.ts';
+import { TaskError } from '../tasks/errors.ts';
 import { judgedContent, subjectHash, type JudgedSource } from '../tasks/hash.ts';
 import { newTaskSource, previewHash, splitSubjectHash } from './content.ts';
 import { loadSnapshot, type Loaded } from './snapshot.ts';
@@ -77,6 +79,14 @@ export async function evaluate(client: PoolClient, input: ProposalInput): Promis
     const task = key ? next.get(key) : undefined;
     if (op.op === 'add' && key && task) after.set(key, newTaskSource(op.t, task.conflictGroup));
   }
+  const designErrors = input.ops.flatMap((op, i) => {
+    if (op.op !== 'add') return [];
+    const key = refs.get(op.ref);
+    const known = [...after].filter(([taskKey]) => taskKey !== key).flatMap(([, source]) => source.designs.filter(d => d.kind === 'DB').map(d => d.content));
+    return (op.t.design ?? []).flatMap((design, j) => validateDesign(design.kind, design.content, known)
+      .map(error => ({ ...error, path: `ops.${String(i)}.t.design.${String(j)}.${error.path}` })));
+  });
+  if (designErrors.length) throw new TaskError('VALIDATION_FAILED', {}, designErrors);
   const afterHash = new Map([...after].map(([key, source]) => [key, subjectHash(source)]));
   const hashes = { before: Object.fromEntries(before), after: Object.fromEntries(afterHash) };
 

@@ -213,6 +213,7 @@ const project = [
             deletedTaskCount: c.Count,
             keepSettings: Type.Boolean(),
             runnerCleanupStatus: AnyOf('none', 'pending', 'running', 'done', 'failed'),
+            cleanupWaitReason: Nullable(AnyOf('external_write_blocked', 'runner')),
             finishedAt: Nullable(c.Timestamp),
           }),
         ),

@@ -444,7 +444,7 @@ describe('planning CP splitBasis와 add 선택 필드', () => {
 
   test('add 선택 필드(scope·files·design)와 splitBasis를 반영 때 저장하고, 생략하면 빈 값·영역별 빈 설계 구역이다', async () => {
     const cp = await leadCp([
-      leadAdd('NEW-1', { scope: ['목록'], files: ['src/a.ts'], design: [{ kind: 'DB', content: { ents: [{ f: { name: 't' } }], b: {} } }], splitBasis: '근거 문장' }),
+      leadAdd('NEW-1', { scope: ['목록'], files: ['src/a.ts'], design: [{ kind: 'DB', content: { ents: [{ f: { name: 't', change: '신규' }, b: { columns: [{ name: 'id', type: 'uuid', pk: true }] } }], b: {} } }], splitBasis: '근거 문장' }),
       leadAdd('NEW-2', { rel: ['FE'] }),
     ]);
     await submit(cp.id);
@@ -458,7 +458,7 @@ describe('planning CP splitBasis와 add 선택 필드', () => {
     const one = await read(idMap['NEW-1'] ?? '');
     expect(one.spec.overview.scope).toEqual(['목록']);
     expect(one.spec.spec.files).toEqual(['src/a.ts']);
-    expect(one.designs).toEqual([{ kind: 'DB', content: { ents: [{ f: { name: 't' } }], b: {} } }]);
+    expect(one.designs).toEqual([{ kind: 'DB', content: { ents: [{ f: { name: 't', change: '신규' }, b: { columns: [{ name: 'id', type: 'uuid', pk: true }] } }], b: {} } }]);
     expect(one.split?.basis).toBe('근거 문장');
     expect(one.conflictGroup).toBeNull();
     const two = await read(idMap['NEW-2'] ?? '');
@@ -517,4 +517,12 @@ describe('planning CP splitBasis와 add 선택 필드', () => {
       await judgedRulesOn(false);
     }
   });
+});
+
+
+test('변경 제안으로 들어온 깨진 설계도 Task에 저장하기 전에 거부한다', async () => {
+  const cp = await leadCp([leadAdd('NEW-1', { design: [{ kind: 'DB', content: { ents: [{}], b: {} } }] })]);
+  const response = await call('POST', `/api/proposals/${cp.id}/submit`, { updatedAt: cp.updatedAt });
+  expect(response.statusCode, response.body).toBe(400);
+  expect(errorOf(response).errors).toEqual(expect.arrayContaining([expect.objectContaining({ path: 'ops.0.t.design.0.content.ents.0.f.name' })]));
 });

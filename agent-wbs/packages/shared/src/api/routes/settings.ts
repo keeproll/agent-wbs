@@ -12,29 +12,29 @@ const settingVersion = { updatedAt: Nullable(c.Timestamp) };
 const jobCreated = { 202: Type.Object({ jobId: c.Id }) };
 
 /** GET·PUT 쌍. 응답은 저장값 + updatedAt */
-const setting = <T extends TProperties>(
-  name: string,
+const setting = <const Name extends string, T extends TProperties, W extends TProperties = Record<never, never>, R extends TProperties = Record<never, never>>(
+  name: Name,
   path: string,
   summary: string,
   fields: T,
-  extra: { write?: TProperties; read?: TProperties } = {},
+  extra: { write?: W; read?: R } = {},
 ) => [
   operation({
     ...lead,
-    id: `get${name}`,
+    id: `get${name}` as const,
     method: 'GET',
     path,
     summary: `${summary} 조회`,
-    responses: { 200: Type.Object({ ...fields, ...extra.read, ...settingVersion }) },
+    responses: { 200: Type.Object({ ...fields, ...extra.read as R, ...settingVersion }) },
   }),
   operation({
     ...byBody,
-    id: `put${name}`,
+    id: `put${name}` as const,
     method: 'PUT',
     path,
     summary: `${summary} 저장`,
-    body: Body({ ...settingVersion, ...fields, ...extra.write }),
-    responses: { 200: Type.Object({ ...fields, ...extra.read, ...settingVersion }) },
+    body: Body({ ...settingVersion, ...fields, ...extra.write as W }),
+    responses: { 200: Type.Object({ ...fields, ...extra.read as R, ...settingVersion }) },
   }),
 ];
 

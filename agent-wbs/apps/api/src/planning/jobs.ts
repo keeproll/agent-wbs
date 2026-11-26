@@ -45,3 +45,13 @@ export async function assertJob(client: PoolClient, jobId: string, fence: number
   }
   return job;
 }
+
+
+/** 등급을 다시 바꾼 뒤 도착한 옛 추정은 받지 않는다. 내용 hash에는 등급이 포함되지 않기 때문이다(D-33). */
+export async function assertGradeChange(client: PoolClient, payload: unknown, taskId: string): Promise<void> {
+  const marker = (payload as { policy?: { gradeChange?: string } } | null)?.policy?.gradeChange;
+  if (!marker) return;
+  const latest = (await client.query<{ marker: string }>(
+    "select ref->>'gradeChange' marker from task_history where task=$1 and ref ? 'gradeChange' order by at desc,created_at desc limit 1", [taskId])).rows[0]?.marker;
+  if (latest !== marker) throw new TaskError('LEASE_LOST', {}, [], '등급이 다시 바뀌어 이전 등급의 판단·추정을 받을 수 없습니다.');
+}

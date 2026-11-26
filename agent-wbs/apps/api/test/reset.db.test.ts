@@ -82,13 +82,17 @@ test('reset-preview는 실제 삭제 건수와 기록된 브랜치만 보여 준
   const response = await lead('GET', '/api/project/reset-preview');
   expect(response.statusCode, response.body).toBe(200);
   shape('previewReset', response.json());
-  expect(response.json()).toMatchObject({ epoch: 1, projectName: '초기화 시험', counts: { tasks: 1, running: 0, attempts: 0, inputs: 0 }, runner: { branches: ['agent/TASK-1'], mergedTasks: 0 } });
+  expect(response.json()).toMatchObject({ epoch: 1, projectName: '초기화 시험', sending: { mail: 0, notify: 0 }, counts: { tasks: 1, running: 0, attempts: 0, inputs: 0 }, runner: { branches: ['agent/TASK-1'], mergedTasks: 0, worktreesEstimated: true } });
 });
 
 test('reset은 모든 프로젝트 관계를 삭제하고 명령·감사·파일 큐를 같은 트랜잭션으로 남긴다', async () => {
   const c = await owner.connect();
   let tables: string[];
   try { tables = await fillProjectTables(c, { p: project, task, wp, job }); } finally { c.release(); }
+  await owner.query("update mail_outbox set state='sending'");
+  await owner.query("update notify_outbox set state='sending'");
+  const preview = await lead('GET', '/api/project/reset-preview');
+  expect(preview.json()).toMatchObject({ sending: { mail: 1, notify: 1 } });
   const response = await reset({ keepSettings: true });
   expect(response.statusCode, response.body).toBe(200);
   expect(response.json()).toEqual({ epoch: 2 });
@@ -158,7 +162,9 @@ test('외부 쓰기가 blocked면 원격 정리 명령을 보내지 않고 원�
   const blocked = await runner('GET', 'commands');
   expect(blocked.json()).toEqual({ currentEpoch: 2, commands: [] });
   expect(await state()).toEqual([{ epoch: 2, cleanup_status: 'pending' }]);
+  expect((await lead('GET', '/api/system/resets')).json()).toMatchObject({ items: [{ cleanupWaitReason: 'external_write_blocked' }] });
   await owner.query("update external_write_authority set state='granted',generation=5,reconciled_at=clock_timestamp()");
+  expect((await lead('GET', '/api/system/resets')).json()).toMatchObject({ items: [{ cleanupWaitReason: 'runner' }] });
   expect((await runner('GET', 'commands')).json()).toMatchObject({ commands: [{ payload: { generation: 4, baseCommit: sha } }] });
 });
 
