@@ -1,5 +1,6 @@
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -663,4 +664,68 @@ test('ND 잠금 대기 시간이 지나도 다른 실행의 잠금을 지우지 
   await expect(lstat(join(root, 'runner/worktrees/project/task-1'))).rejects.toMatchObject({ code: 'ENOENT' });
   await rm(lockPath);
   await repo.createWorktree('task-1', 'agent/TASK-1', baseline);
+});
+
+async function ownerRecord() {
+  const processStat = await readFile(`/proc/${process.pid}/stat`, 'utf8');
+  return { pid: process.pid, bootId: (await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim(),
+    startTime: processStat.slice(processStat.lastIndexOf(')') + 2).trim().split(/\s+/)[19] as string };
+}
+
+async function withoutLongLockWait(action: () => Promise<unknown>) {
+  let now = 0;
+  const clock = vi.spyOn(Date, 'now').mockImplementation(() => { now += 30_000; return now; });
+  try { await action(); } finally { clock.mockRestore(); }
+}
+
+test('L1 SIGKILL로 종료된 잠금 주인을 확인해 새 작업과 초기화 정리를 자동 재개한다', async () => {
+  repo = await clone();
+  await repo.createWorktree('task-1', 'agent/TASK-1', baseline);
+  const lockPath = join(root, 'runner/state/git/project.json.lock');
+  const code = `import fs from 'node:fs'; const path = process.argv[1]; const stat = fs.readFileSync('/proc/' + process.pid + '/stat', 'utf8'); const owner = { pid: process.pid, bootId: fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(), startTime: stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\\s+/)[19] }; fs.writeFileSync(path + '.prepared', JSON.stringify(owner), { flag: 'wx' }); fs.linkSync(path + '.prepared', path); fs.unlinkSync(path + '.prepared'); process.stdout.write('ready'); setInterval(() => {}, 1000);`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', code, lockPath], { stdio: ['ignore', 'pipe', 'pipe'] });
+  try {
+    await once(child.stdout, 'data');
+    const exited = once(child, 'exit');
+    child.kill('SIGKILL');
+    await exited;
+    const restarted = await GitRepository.open(join(root, 'runner'), 'project');
+    await withoutLongLockWait(async () => {
+      await restarted.createWorktree('task-2', 'agent/TASK-2', baseline);
+      await restarted.reset({ baseCommit: baseline, branches: ['agent/TASK-1', 'agent/TASK-2'], worktrees: ['task-1', 'task-2'], inputs: [] });
+    });
+    await expect(lstat(lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = once(child, 'exit');
+      child.kill('SIGKILL');
+      await exited;
+    }
+  }
+});
+
+test.each(['boot', 'start'])('L1 %s 식별자가 다른 잠금은 살아 있는 pid여도 이전 주인으로 확인해 회수한다', async (changed) => {
+  repo = await clone();
+  const owner = await ownerRecord();
+  if (changed === 'boot') owner.bootId = '00000000-0000-0000-0000-000000000000';
+  else owner.startTime = (BigInt(owner.startTime) + 1n).toString();
+  await writeFile(join(root, 'runner/state/git/project.json.lock'), JSON.stringify(owner));
+  await withoutLongLockWait(() => repo.createWorktree('task-1', 'agent/TASK-1', baseline));
+});
+
+test('L2 정리한 같은 Task 브랜치로 이전 결과와 기준에서 다음 시도를 만든다', async () => {
+  repo = await clone();
+  const branch = 'agent/TASK-1-h2';
+  const work = await repo.createWorktree('attempt-1', branch, baseline);
+  await file(join(work, 'src/result.ts'), '첫 시도 결과');
+  git(work, 'add', '-A');
+  git(work, 'commit', '-m', '첫 시도');
+  const result = await repo.importWorktree('attempt-1', branch);
+  await repo.removeWorktree('attempt-1');
+  expect(git(repo.path, 'branch', '--list', branch)).toBe('');
+  const next = await repo.createWorktree('attempt-2', branch, result);
+  expect(git(next, 'rev-parse', 'HEAD')).toBe(result);
+  await repo.removeWorktree('attempt-2');
+  const fresh = await repo.createWorktree('attempt-3', branch, baseline);
+  expect(git(fresh, 'rev-parse', 'HEAD')).toBe(baseline);
 });
