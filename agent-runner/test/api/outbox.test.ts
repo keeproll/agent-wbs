@@ -213,6 +213,28 @@ test('리뷰 H1: 명령 결과가 409로 거부되면 최신 명령을 다시 �
   expect(new Set(keys).size).toBe(2);
 });
 
+test('N1 계속 거부되는 정리는 명령별 1분부터 최대 30분 대기하고 재시작에도 유지한다', async () => {
+  let cleanups = 0;
+  handle = (req, res) => req.path.endsWith('commands') ? json(res, { currentEpoch: 1, commands }) : fail(res, 409, 'INVALID_TRANSITION');
+  let r = runner(async () => { cleanups++; return { status: 'done', items: [], holds: [] }; });
+  for (let i = 0; i < 10; i++) await r.poll();
+  expect(cleanups).toBe(1);
+  for (const delay of [60_000, 120_000, 240_000, 480_000, 960_000, 1800_000]) {
+    now += delay - 1;
+    await r.poll();
+    const before = cleanups;
+    now++;
+    await r.poll();
+    expect(cleanups).toBe(before + 1);
+  }
+  expect(state.rejectionStatus.level).toBe('danger');
+  expect(state.rejected).toMatchObject([{ count: 7 }]);
+  await reopen();
+  r = runner(async () => { cleanups++; return { status: 'done', items: [], holds: [] }; });
+  await r.poll();
+  expect(cleanups).toBe(7);
+});
+
 test('리뷰 M1: 같은 폴더를 두 번째로 여는 Runner는 시작을 거부한다', async () => {
   await expect(State.open(home)).rejects.toMatchObject({ name: 'StateLockError' });
 });
