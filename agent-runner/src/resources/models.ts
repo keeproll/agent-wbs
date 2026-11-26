@@ -15,7 +15,7 @@ export type ModelEntry = ModelsReport['models'][number];
  * - CLI 목록의 표시 순서(priority)는 rank로 쓰지 않는다.
  * - Codex 초기값: 세대가 높을수록 위(5.6 < 6 < 6.1 < 6.2), 같은 세대는 luna < terra < astra < sol.
  * - Claude 초기값: Q-06 승인표의 모델, Haiku 5.5 < Sonnet 5.5 < Opus 5.5 < Fable 5.2.
- * 설정 `rankOrder`(앞이 위)를 주면 그 순서가 우선한다.
+ * 설정 `rankOrder`(앞이 위)에 적은 모델이 우선하고, 적지 않은 모델은 초기값 순서로 그 아래에 둔다.
  */
 
 /** Runner 모델 보고의 초기 설정값. 바꾸려면 설정으로 덮어쓴다(코드의 판단 규칙이 아니다). */
@@ -49,7 +49,7 @@ export function codexRankOrder(ids: readonly string[], familyOrder: readonly str
   return [...ids].sort(cmp);
 }
 
-/** rankOrder에 적힌 모델을 그 순서대로 앞에, 나머지는 원래 순서대로 뒤에 둔다. */
+/** rankOrder에 적힌 모델을 그 순서대로 앞에, 나머지는 들어온 순서대로 뒤에 둔다. 입력 배열은 바꾸지 않는다. */
 function orderBy<T extends { id: string }>(items: T[], rankOrder: readonly string[] | undefined): T[] {
   if (!rankOrder?.length) return items;
   const pos = new Map(rankOrder.map((id, i) => [id, i]));
@@ -83,8 +83,11 @@ export function parseCodexCatalog(
     const efforts = uniqueStrings((m.supported_reasoning_levels ?? []).map((l) => l.effort));
     return { id: m.slug, label: m.display_name || m.slug, efforts: efforts.length ? efforts : null };
   });
-  const order = rankOrder?.length ? rankOrder : codexRankOrder(entries.map((e) => e.id), familyOrder);
-  return withRanks(orderBy(entries, order));
+  // 항상 세대·계열 기본 순서로 먼저 줄 세운 뒤, 설정에 적힌 모델만 앞으로 올린다(안정 정렬이라 나머지는 기본 순서 유지).
+  // rankOrder에 일부만 적어도 나머지가 CLI 목록 배열 순서로 정해지지 않는다(재리뷰 10).
+  const base = codexRankOrder(entries.map((e) => e.id), familyOrder);
+  const byDefault = orderBy(entries, base);
+  return withRanks(orderBy(byDefault, rankOrder));
 }
 
 /** `claude --help`의 `--effort <level> … (low, medium, …)`. 설명이 다음 줄로 넘어가도 다음 옵션 전까지 읽는다. */

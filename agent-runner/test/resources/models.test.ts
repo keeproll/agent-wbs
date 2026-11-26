@@ -108,6 +108,44 @@ describe('owner 결정(2026-11-26 아이템 8) — rank 초기값은 설정, CLI
   });
 });
 
+describe('재리뷰 10 — 일부만 적은 rankOrder도 나머지는 세대·계열 기본 순서를 지킨다', () => {
+  const cat = (slugs: string[]) =>
+    JSON.stringify({ models: slugs.map((slug, i) => ({ slug, display_name: slug, visibility: 'list', priority: i + 1 })) });
+
+  test('설정에 없는 모델끼리는 CLI 배열 순서가 아니라 기본 순서(6 < 6.1)를 따른다', () => {
+    const ranked = parseCodexCatalog(cat(['gpt-6.2-sol', 'gpt-6-astra', 'gpt-6.1-sol']), { rankOrder: ['gpt-6.2-sol'] });
+    expect(ranked.map((m) => [m.id, m.rank])).toEqual([
+      ['gpt-6.2-sol', 3],
+      ['gpt-6.1-sol', 2],
+      ['gpt-6-astra', 1],
+    ]);
+  });
+
+  test('입력 배열·priority를 뒤집어도 결과가 같다', () => {
+    const a = parseCodexCatalog(cat(['gpt-6.2-sol', 'gpt-6-astra', 'gpt-6.1-sol']), { rankOrder: ['gpt-6.2-sol'] });
+    const b = parseCodexCatalog(cat(['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6.2-sol']), { rankOrder: ['gpt-6.2-sol'] });
+    expect(b).toEqual(a);
+  });
+
+  test('설정이 기본 순서와 반대여도 설정한 모델이 우선하고, 나머지는 기본 순서로 그 아래에 둔다', () => {
+    const ranked = parseCodexCatalog(cat(['gpt-6.2-sol', 'gpt-6-astra', 'gpt-6.1-sol', 'gpt-5.6-luna']), { rankOrder: ['gpt-5.6-luna', 'gpt-6-astra'] });
+    expect(ranked.map((m) => m.id)).toEqual(['gpt-5.6-luna', 'gpt-6-astra', 'gpt-6.2-sol', 'gpt-6.1-sol']);
+  });
+
+  test('입력 배열을 바꾸지 않는다(freeze한 배열로 확인)', () => {
+    const ids = Object.freeze(['gpt-6-astra', 'gpt-6.2-sol']);
+    expect(codexRankOrder(ids)).toEqual(['gpt-6.2-sol', 'gpt-6-astra']);
+    expect(ids).toEqual(['gpt-6-astra', 'gpt-6.2-sol']);
+    const order = Object.freeze(['gpt-6-astra']);
+    const family = Object.freeze(['luna', 'terra', 'astra', 'sol']);
+    expect(() => parseCodexCatalog(cat(['gpt-6.2-sol', 'gpt-6-astra']), { rankOrder: order, familyOrder: family })).not.toThrow();
+    expect(order).toEqual(['gpt-6-astra']);
+    const claude = Object.freeze(['b', 'a']);
+    expect(claudeModels(claude, null, Object.freeze(['a'])).map((m) => m.id)).toEqual(['a', 'b']);
+    expect(claude).toEqual(['b', 'a']);
+  });
+});
+
 describe('rank 순서를 설정으로 덮어쓸 수 있다', () => {
   test('rankOrder를 주면 그 순서(앞이 위)로 rank를 매기고, 목록에 없는 모델은 그 아래에 둔다', () => {
     const ranked = parseCodexCatalog(JSON.stringify(catalog), { rankOrder: ['gpt-5.5', 'gpt-6.2-sol'] });
