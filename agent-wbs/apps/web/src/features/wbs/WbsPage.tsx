@@ -14,7 +14,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useMatch, useNavigate } from 'react-router';
 import { useApiQuery, invalidateTopics } from '../../shared/api/queries.ts';
-import { MenuScreen, useRevisitFetching } from '../../shared/layout/MenuScreen.tsx';
+import { MenuScreen, useRefreshError, useRevisitFetching } from '../../shared/layout/MenuScreen.tsx';
 import { useDocumentTitle } from '../../shared/layout/Page.tsx';
 import { EmptyState } from '../../shared/ui/EmptyState.tsx';
 import { LoadError } from '../../shared/ui/LoadError.tsx';
@@ -81,6 +81,9 @@ function WbsBody({ projectId }: { projectId: string }) {
   const runnerQ = useApiQuery('getRunnerState', {}, { topics: ['runner'] });
   const detailQ = useApiQuery('getTask', { params: { taskKey: selKey ?? '' } }, { enabled: selKey !== null, topics: ['task', 'dependency', 'attempt', 'verification'], keepPrevious: false });
   useTopBar(useRevisitFetching(tasksQ));
+  // 이미 보여 준 목록의 갱신이 실패하면 화면은 그대로 두고 오류 막대로 알린다(M3-01 공통 규칙).
+  useRefreshError(tasksQ, 'WBS 최신 내용 불러오기');
+  useRefreshError(scheduleQ, '일정 최신 내용 불러오기');
   const skeleton = useDelayedFlag(tasksQ.isPending && tasksQ.fetchStatus === 'fetching');
 
   // 화면에서 거르는 조건은 바로 적용하되, 큰 목록에서도 입력이 끊기지 않게 낮은 우선순위로 다시 그린다.

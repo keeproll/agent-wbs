@@ -59,26 +59,30 @@ export function TaskWizard({ projectId, nodes, tasks, defaultWp, onClose, onCrea
   const { save, busy, conflictModal } = useSave({
     target: 'Task 생성',
     failTitle: 'Task를 생성하지 못했습니다',
-    run: async ({ idempotencyKey }) => {
-      const body = {
+    // 「Task 생성」을 누른 순간의 입력을 찍어 둔다. 「다시 시도」는 화면의 최신 입력이 아니라 이 요청을 같은 멱등 키로 다시 보낸다.
+    request: () => ({
+      body: {
         title: d.title.trim(), wbsNodeId: d.wbsNodeId, workType: d.type, primaryDomain: d.domain, relatedDomains: d.rel,
         priority: Number(d.priority), assigneeAgent: d.assignee, verifierAgent: d.verifier,
         overview: { purpose: d.purpose.trim(), background: d.background.trim(), scope: lines(d.scope), out: lines(d.out), precond: '', doneCond: d.doneCond.trim() },
-      } as BodyOf<'createTask'>;
-      const created = await client.call('createTask', { params: { projectId }, body, idempotencyKey }).catch((error: unknown) => {
+      } as BodyOf<'createTask'>,
+      preds: d.preds,
+    }),
+    run: async ({ payload, idempotencyKey }) => {
+      const created = await client.call('createTask', { params: { projectId }, body: payload.body, idempotencyKey }).catch((error: unknown) => {
         // 고른 Work Package가 그 사이 지워졌으면 목록을 다시 읽어 실제 WP만 남긴다(UAT-WIZ-02).
         if (error instanceof ApiError && error.code === 'WBS_NODE_NOT_FOUND') onRejected();
         throw error;
       });
       // 선행은 하나씩 FS로 추가한다. 다시 시도할 때는 이미 붙은 선행을 건너뛴다(같은 멱등 키로 생성은 한 번만 된다).
-      for (const pred of d.preds) {
+      for (const pred of payload.preds) {
         const now = await client.call('getTask', { params: { taskKey: created.taskKey } });
         if (now.preds.includes(pred)) continue;
         await client.call('addDependency', { params: { taskKey: created.taskKey }, body: { updatedAt: now.updatedAt, predTaskKey: pred, depType: 'FS' } as BodyOf<'addDependency'>, idempotencyKey: `${idempotencyKey}:${pred}` });
       }
-      return created;
+      return { ...created, title: payload.body.title };
     },
-    onSuccess: (created) => { onCreated(created.taskKey, d.title.trim()); },
+    onSuccess: (created) => { onCreated(created.taskKey, created.title); },
     onRejected: () => { onRejected(); },
   });
 
