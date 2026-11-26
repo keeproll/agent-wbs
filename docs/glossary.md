@@ -16,6 +16,7 @@
 - **A / H / H'** — 병합 절차에서 쓰는 커밋 기호. A는 병합 직전 main, H는 QA가 검사한 PR head, H'는 H에 A를 충돌 없이 합친 커밋(H가 A를 포함하면 H'=H). → contracts §4.1
 - **A4** — 국제 표준 종이 크기(210×297mm). 보고서 PDF 크기다.
 - **AC (Acceptance Criteria, 수용 기준)** — 「이렇게 되면 완료로 인정한다」는 조건. given/when/then/method로 적는다. → data-model §2.3
+- **Administration: read (GitHub 권한)** — 저장소 관리 정보를 읽기만 하는 fine-grained 토큰 권한. Runner는 deploy key 목록을 확인하려고 이 권한을 쓴다. 설정을 바꾸는 권한은 아니다. → open-questions Q-09, contracts §3.1
 - **advisory lock** — 행이 아니라 앱이 정한 번호(예: 프로젝트)에 거는 PostgreSQL 잠금. 동시에 의존성을 추가할 때 한 건씩 검사하게 한다.
 - **AES-256-GCM** — 비밀값을 암호화하는 표준 방식. 키 하나로 암호화·복호화하며 내용이 바뀌었는지도 함께 검사한다.
 - **AAD (Additional Authenticated Data)** — 암호화하지 않지만 위조 검사에 함께 넣는 데이터. 봉인 형식 v1은 버전 바이트와 임시 공개키를 AAD로 쓴다. → contracts §6.1
@@ -34,10 +35,12 @@
 - **bare 저장소** — 작업 폴더 없이 git 기록만 담은 저장소. 테스트에서 원격 저장소 대신 쓴다.
 - **Bearer** — `Authorization: Bearer <토큰>` 헤더로 토큰을 보내 인증하는 방식.
 - **bigserial** — PostgreSQL에서 자동 번호를 발급하는 큰 정수 열. 실패·취소로 중간 번호가 비기도 한다. 다음 번호가 꼭 현재+1이라고 가정하면 안 된다.
+- **blob (git blob)** — git이 파일 내용 하나를 저장하는 단위. 그 SHA로 「내용이 같은지」를 비교한다. 실행 권한만 바뀌면 blob은 그대로다. → contracts §3.1 입력 변경 보고
 - **BLOCKED** — 검증 결과의 하나. 환경 문제 등으로 판정하지 못했다는 뜻이며 Task 상태는 그대로 두고 새 검증 시도를 한다. → data-model §3.1
 - **boot ID** — PC가 켜질 때마다 새로 바뀌는 식별자. 바뀌었으면 이전 프로세스가 살아 있을 수 없다는 증거가 된다. → contracts §3.4
 - **bootstrap (초기 분석)** — 저장소를 등록한 뒤 Planning이 처음 WBS 초안을 만드는 작업. → data-model §2.2
 - **Bot API (Telegram)** — Telegram 봇으로 메시지를 보내는 HTTP API. 봇 토큰이 필요하다.
+- **calcVersion** — 일정 계산 결과에 붙는 번호. 프로젝트 변경 이벤트 수라서, 무엇이든 바뀌면 커진다. 화면이 낡은 계산을 알아채는 데 쓴다. → contracts §4.2
 - **catalog (DB 카탈로그)** — DB가 자기 테이블·열·제약 정보를 담아 두는 시스템 목록. SQL 계약을 임시 DB에 적용한 뒤 이것을 읽어 구조를 뽑는다.
 - **cgroup** — 리눅스가 프로세스 묶음의 CPU·메모리 사용을 재고 제한하는 기능. → architecture §5
 - **CHECK 제약** — 행을 쓸 때 값이 조건을 만족하는지 DB가 검사하는 제약. 예: `lo<=est<=hi`.
@@ -55,15 +58,18 @@
 - **controller (cgroup controller)** — cgroup에서 CPU·메모리·프로세스 수 같은 자원을 하나씩 재고 제한하는 기능.
 - **coordinator** — owner와 작업자 사이에서 일을 나누고 전달하는 조정자. → open-questions §0
 - **CP (Change Proposal, 변경 제안)** — Task를 추가·수정·취소·분할하자는 제안. 미리보기 후 승인·반영한다. → data-model §3.6
+- **cp_auto** — 일정 정책의 「Agent가 낸 변경 제안을 자동 처리할지」 설정. 켜져 있으면 보류 사유가 없는 제안은 바로 반영되고, 있으면 `held`가 된다. → contracts §2.1, data-model §2.7
 - **CPU** — 컴퓨터의 계산 장치. cores는 그 안의 코어 수.
 - **crash** — 프로그램이 예고 없이 비정상 종료되는 것.
 - **CRUD** — Create·Read·Update·Delete. 데이터를 만들고 읽고 고치고 지우는 기본 기능.
 - **CSP** — 브라우저가 실행할 수 있는 스크립트 출처를 제한하는 보안 헤더. → architecture §4
 - **CSRF** — 다른 사이트가 몰래 사용자 대신 요청을 보내는 공격. `X-CSRF-Token`으로 막는다. → architecture §4
+- **current_user_can_bypass** — GitHub ruleset 조회 응답의 필드. 지금 요청한 사용자가 그 규칙을 우회할 수 있는지를 `always`·`pull_requests_only`·`never`·`exempt`로 알려 준다. 연결 확인은 `never`만 허용한다. → contracts §3.1
 - **cursor (커서)** — 「어디까지 읽었는지」를 나타내는 값. 목록 페이지나 변경 이벤트에서 쓴다. → contracts §7
 - **D-xx (해석 결정)** — 가이드가 애매하거나 서로 부딪치는 곳을 이 문서가 정한 결정 번호. → architecture §7
 - **demo seed** — 테스트·화면 검증 전용 기본 데이터. 운영 DB에는 넣지 않는다. → data-model §6
 - **dedup_key** — 같은 원인으로 job이 두 번 만들어지지 않게 하는 unique 키. 서비스가 원인 시도와 회차로 만든다. → data-model §2.5
+- **deploy key** — GitHub 저장소 하나에 붙이는 SSH 인증 키. 이 프로젝트는 시스템 커밋(최초 생성·초기화 되돌림)에만 시스템 deploy key 하나를 쓰고, 다른 deploy key가 있으면 쓰기를 멈춘다. → contracts §3.1·§6, open-questions §0 아이템 10
 - **DFS** — 깊이 우선 탐색. 선행 관계를 한 길로 끝까지 따라가 보며 순환(같은 Task로 되돌아옴)을 찾는다.
 - **diff** — 두 내용의 차이. CP 미리보기의 `diff`는 바뀌는 필드 목록이다.
 - **digest** — 컨테이너 이미지의 고유 지문. 같은 digest면 정확히 같은 이미지다. → architecture §3.2
@@ -76,10 +82,12 @@
 - **Effort** — Agent가 얼마나 깊이 생각할지 정하는 단계. 공통 1~5로 맞춘다. → open-questions §0.2
 - **embed (폰트 embed)** — PDF 안에 글꼴 파일을 함께 넣어 어느 PC에서 열어도 같게 보이게 하는 것.
 - **Endpoint** — API의 경로 하나(예: `GET /api/tasks/:taskKey`).
+- **enforcement (ruleset)** — GitHub ruleset의 적용 상태. `active`여야 실제로 막는다. 연결 확인은 main 보호 ruleset이 모두 `active`인지 본다. → contracts §3.1
 - **enum** — 정해진 값 중 하나만 허용하는 DB 타입. → data-model §1
 - **env (환경 변수)** — 환경 변수. 프로그램이 시작할 때 받는 이름=값 설정. `.env` 파일에 모아 둔다.
 - **epoch** — 프로젝트 세대 번호. 초기화할 때마다 1 오르며, 옛 세대의 요청이 새 프로젝트를 건드리지 못하게 한다. → contracts §1, data-model §5.1
 - **Esc / J/K** — 키보드 단축키. J/K와 ↑↓는 목록 위아래 이동, Esc는 닫기.
+- **escape (JSON)** — 따옴표·줄바꿈 같은 특수 문자를 JSON 문자열 안에 적는 방식(예: 줄바꿈을 `\n`으로 적음). `subjectHash`는 JavaScript `JSON.stringify` 규칙을 따른다. → data-model §2.3-1
 - **ETag** — 응답 내용의 버전 표시. 같으면 다시 받을 필요가 없다.
 - **Evidence (검증 증거)** — 검증 결과를 뒷받침하는 파일(로그·스크린샷 등). → data-model §2.5
 - **exec** — 실행 중인 프로세스를 다른 명령으로 바꿔 실행하는 것. 대기 래퍼가 허가를 받은 뒤 실제 명령으로 바뀐다.
@@ -93,6 +101,7 @@
   - GitHub 응답만으로는 쓰기 권한을 알 수 없어, 연결 확인은 쓰기 권한을 「미확인」으로 보고하고 첫 실제 쓰기에서 확정한다. → contracts §3.1
 - **fixture** — 테스트에 쓰는 고정 데이터.
 - **FK / PK** — FK(외래 키)는 다른 테이블 행을 가리키는 열, PK(기본 키)는 행을 구분하는 고유 번호. → data-model §1
+- **flock** — Linux의 파일 잠금 명령. 강제 종료로 남은 잠금을 안전하게 회수할 때 쓴다. 없으면 준비 점검 `repo`가 warn이다. → architecture §5
 - **FOR UPDATE / FOR SHARE / SKIP LOCKED** — PostgreSQL 행 잠금. `FOR UPDATE`는 고치려고 독점 잠금, `FOR SHARE`는 읽는 동안 바뀌지 않게 공유 잠금, `SKIP LOCKED`는 이미 잠긴 행을 건너뜀.
 - **FS / SS** — 의존성 종류. FS(Finish-to-Start)는 「선행이 끝나야 후속 시작」, SS(Start-to-Start)는 「선행이 시작되면 후속 시작 가능」. → data-model §2.3, §3.1
 - **fsync** — 파일 내용을 디스크에 실제로 다 썼는지 확인하는 시스템 호출. 정전·종료에도 기록이 남게 한다.
@@ -119,6 +128,7 @@
 - **HttpOnly / SameSite=Strict** — 쿠키를 스크립트가 읽지 못하게 하고, 다른 사이트에서 온 요청에는 붙지 않게 하는 쿠키 설정. → architecture §4
 - **I/O** — 입출력(Input/Output). 파일·DB·네트워크를 읽고 쓰는 일.
 - **inject (Fastify inject)** — 실제 네트워크 없이 서버에 요청을 넣어 응답을 받아 보는 Fastify 테스트 기능.
+- **inputRecheck** — Runner 정책(`GET /runner/policy`)의 입력 확인 다시 시도 번호. 팀장이 이력 재작성 경고에서 복구 확인을 누를 때마다 1 오른다. → contracts §3.1
 - **ISO 8601** — 날짜·시각을 `2026-11-25T09:00:00Z`처럼 적는 국제 표준 형식.
 - **jitter** — 재시도 대기 시간을 조금씩 흩뜨려 요청이 한꺼번에 몰리지 않게 하는 것. → contracts §1.2
 - **job (작업)** — Runner에게 맡기는 일 한 건. 종류는 contracts §3.2의 표에 있다.
@@ -192,6 +202,7 @@
 - **registry (패키지 registry)** — 패키지(CLI 등)를 올려 두고 내려받는 서버. 테스트에서는 fake registry를 쓴다(M4-05). 메시지 스키마용 레지스트리는 「스키마 레지스트리」 항목 참고.
 - **rename (원자적 rename)** — 새 파일을 다 쓴 뒤 이름만 바꿔 끼우는 방법. 중간에 죽어도 반쯤 쓴 파일이 남지 않는다.
 - **renew** — lease를 연장하는 요청. → contracts §3.2
+- **repositoryIdFor** — 저장소 주소를 정규화해 SHA-256을 구하고, 그 앞 16자리 앞에 `r-`를 붙인 로컬 저장소 이름(예: `r-0ef6f111ef40232e`). Runner가 정리 명령의 `repoUrl`로 로컬 저장소를 찾을 때 쓴다. → contracts §3.2
 - **REST** — HTTP의 GET·POST·PUT·PATCH·DELETE 요청으로 자원(데이터)을 주고받는 API 방식.
 - **Retry-After** — 서버가 「몇 초 뒤 다시 보내라」고 알려 주는 응답 헤더. 429와 함께 온다.
 - **rework / reverify** — 재작업 시도와, 재작업 후의 재검증 시도. → data-model §3.1
@@ -236,10 +247,14 @@
 - **timeout** — 정해진 시간 안에 응답이 없으면 실패로 보는 것.
 - **timestamptz** — PostgreSQL에서 시간대를 반영해 UTC의 한 시점으로 저장하는 타입. 원래 시간대 정보는 보관하지 않는다. UTC로 저장하고 표시할 때 Asia/Seoul로 바꾼다.
 - **tree (git tree)** — 커밋 시점의 파일·폴더 전체 내용. tree가 같으면 파일 내용이 완전히 같다.
+- **treeHash** — 입력 변경 보고의 필드. head 커밋의 `prototype/` 폴더 전체(파일 모드 포함)를 나타내는 git 트리 SHA다. → contracts §3.1 입력 변경 보고
+- **trim** — 문자열 앞뒤의 공백을 지우는 처리. `subjectHash` 계산은 trim을 하지 않으므로 앞뒤 공백도 내용 차이다. → data-model §2.3-1
 - **TS / TypeScript** — 변수·함수에 타입을 붙여 실수를 미리 잡는 JavaScript. TS로 줄여 쓴다.
 - **TypeBox** — TypeScript로 스키마를 정의해 검증·타입·OpenAPI를 한 번에 만드는 도구. → architecture §3.2
 - **typescript-eslint** — TypeScript 코드에 lint 규칙을 적용하는 도구.
 - **TZ** — 프로세스의 시간대(time zone) 설정 환경 변수.
+- **Unicode 정규화 (NFC/NFD)** — 겉모양이 같은 글자의 서로 다른 문자 표현(예: 완성형 「한」과 자모를 조합한 「한」)을 하나로 맞추는 처리. `subjectHash` 계산은 이것을 하지 않는다. → data-model §2.3-1
+- **UTF-16 코드 단위 순서** — JavaScript가 문자열을 기본으로 비교하는 순서. `subjectHash` 계산에서 객체 키와 산출물 이름을 이 순서로 정렬한다. → data-model §2.3-1
 - **verified / unverified / missing (GitHub 권한 3상태)** — GitHub 권한 하나의 확인 상태. 확인됨·미확인(추정하지 않음)·부족. 조정자 결정(2026-11-26). → contracts §3.1
 - **UI** — 사용자 화면(User Interface).
 - **URL** — 웹 주소.
@@ -248,6 +263,7 @@
 - **uuid** — 겹치지 않게 만드는 128비트 고유 ID.
 - **Vite** — 화면 코드를 개발 중에 바로 보여 주고 배포용으로 묶어 주는 도구.
 - **Vitest** — TypeScript 코드의 단위 테스트를 돌리는 도구.
+- **warn:manual-reconcile (수동 대조 필요)** — 초기화 정리 결과에 남기는 경고 항목. 시스템이 해석하지 못한 PR 참조가 있어 사람이 직접 확인해야 한다는 뜻이다. 서버가 팀장 알림으로 바꾼다. → contracts §3.2
 - **WBS (Work Breakdown Structure)** — 일을 단계·작업 묶음·Task로 쪼갠 구조. 이 제품의 이름이기도 하다.
 - **Web shell** — 메뉴·헤더·본문 영역을 갖춘 웹 화면의 뼈대(M0-04). 명령줄의 shell과는 다른 뜻이다.
 - **Wizard** — 여러 단계로 나눠 차례로 입력하는 화면. Task 생성 Wizard는 3단계다.
@@ -272,6 +288,7 @@
 - **결함(defect)** — 검증에서 찾은 문제. 원 행은 바꾸지 않고 해소는 이벤트 행으로 남긴다. → data-model §2.5
 - **경계 변환** — DB에 저장한 값과 API 값의 철자가 다를 때, 서버가 DB↔API 사이에서 바꿔 주는 것. 예: CI 단계 DB `1` ↔ API `task`. → contracts §1 값 철자
 - **계열 (Codex 모델 계열)** — Codex 모델 이름 끝부분(luna·terra·astra·sol). 같은 세대 안의 등급 순서를 정한다. 초기 순서는 luna < terra < astra < sol. → data-model §6.2
+- **고정 벡터** — 입력과 정답(예: 지문·암호문)을 고정해 둔 시험 예시. 따로 만든 두 구현이 같은 결과를 내는지 확인한다. 수학의 벡터가 아니다. → data-model §2.3-1, contracts §6.1
 - **관측 등급** — CLI 버전·모델·옵션 조합별로 등록하는 관측 검증 결과(`cli_observation_grades`). 등록된 검증이 없으면 「미검증」으로 보고 보수 계산한다. → architecture §5.1, data-model §2.6
 - **교차 리뷰** — 담당이 아닌 쪽 Agent가 결과를 검토하는 것. → milestones §1
 - **교착(deadlock)** — 둘 이상이 서로 상대를 기다리느라 아무도 진행하지 못하는 상태. → architecture D-04, data-model §5.1
@@ -323,6 +340,8 @@
 - **이력 재작성(입력)** — 서버가 마지막으로 받은 입력 커밋이 새 main의 조상이 아니게 된 상태(강제 push 등). 서버는 입력 변경을 받지 않고 경고 `input_history_rewritten`을 연다. owner가 정상 merge·복원 커밋으로 연결을 되돌리고 팀장이 「복구 확인·입력 확인 다시 시도」를 누르면 Runner가 다시 관측하고, 서버가 유효 보고를 받으며 경고를 닫는다. → contracts §2.2 `inputs/recheck`
 - **인계(handover)** — 논리 잠금을 다음 job(예: dev→QA)에 끊김 없이 넘기는 것. → data-model §2.5-1
 - **인수** — owner가 받아들일 수 있는 상태인지 실제 환경에서 확인하는 단계(M8). → milestones §3 M8
+- **일시 장애** — 통신 실패·5xx·속도 제한처럼 잠시 뒤 다시 하면 나을 수 있는 실패. 시작 점검의 deploy key 조회는 최대 3번 다시 하고, 그래도 안 되면 경고만 남긴다. → contracts §3.1
+- **입력 원장** — 팀장 입력(`prototype/`)이 언제 어떻게 바뀌었는지 이어 붙여 기록하는 서버의 장부. 정답은 base와 head 사이의 트리 차이다. → contracts §3.1 입력 변경 보고
 
 ## ㅈ
 
@@ -338,6 +357,7 @@
 - **정리 증거(holds[])** — 정리 명령을 끝냈다고 보고할 때 보유마다 붙이는 증거(`no_process`·`group_empty`·`boot_changed`). DB `complete_cleanup()`이 기록된 보유와 대조한다. → contracts §3.2, data-model §5
 - **정본** — 여러 사본이 다르면 이것이 맞다고 정한 원본. → architecture §1
 - **정합성 / 무결성 점검** — 저장된 데이터끼리 서로 모순이 없는지(예: 열린 시도가 2개) 검사하는 것.
+- **종류 변경(T)** — 입력 차이의 상태 값. 같은 경로가 일반 파일에서 심볼릭 링크로(또는 반대로) 바뀐 것이다. 내용 변경으로 센다. → contracts §3.1 입력 변경 보고
 - **지수 백오프** — 실패할 때마다 기다리는 시간을 두 배씩 늘리는 재시도 방법(1s→60s).
 - **직렬화** — 동시에 들어온 일을 한 번에 하나씩 차례로 처리하게 만드는 것.
 
@@ -356,11 +376,13 @@
 
 ## ㅍ
 
+- **파일 모드(mode)** — git이 파일마다 적는 6자리 8진수 값. `100644`는 일반 파일, `100755`는 실행 파일, `120000`은 심볼릭 링크다. → contracts §3.1 입력 변경 보고
 - **판단 기록(judgedRules)** — 분할 규칙 5·7·9 등에 대해 Planning이 내린 결론·합의 주체·근거 기록. → data-model §2.3-1
 - **판정** — 규칙에 따라 옳고 그름·가능 여부를 정하는 것. 모든 판정은 Agent WBS가 한다. → architecture §1
 
 ## ㅎ
 
+- **하위 Agent 비율** — 실행 세션 하나가 평균 몇 개의 하위 Agent를 띄우는지. 일정 계산이 관측 창 동안의 실제 보고로 계산하고, 관측이 없으면 0으로 둔다. → data-model §2.6
 - **하위 Agent(subagent)** — Agent가 일을 나눠 맡기는 보조 Agent. 정의는 hash로 검증해 설치한다. → architecture D-24
 - **해석 결정** — D-xx 참고.
 - **협조적 검사** — 상대가 규칙을 지킬 때만 통하는 검사. 옛 PC가 이미 보낸 GitHub 요청은 막지 못하므로 자격 증명 폐기와 결과 대조가 최종 방어다.
