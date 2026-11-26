@@ -230,13 +230,17 @@ class Oracle {
       case 'call':
         this.calls.add(e.c);
         return;
-      case 'start':
+      case 'start': {
         if (e.c === undefined || !this.calls.has(e.c)) return;
-        if (!this.bound.has(e.c)) this.bound.set(e.c, e.t);
+        // 한 호출은 task 하나에만 묶인다. 다른 task가 이미 차지한 호출을 주장하는 시작은 이 task의 시작이 아니다.
+        const b = this.bound.get(e.c);
+        if (b !== undefined && b !== e.t) return;
+        this.bound.set(e.c, e.t);
         if (!this.owner.has(e.t)) this.owner.set(e.t, e.c);
         this.startedTasks.add(e.t);
         this.startedCalls.add(e.c);
         return;
+      }
       case 'codex':
         if (e.status === 'running' || e.status === 'pending_init') this.codexRunning.add(e.th);
         return;
@@ -274,11 +278,18 @@ function checkRun(events: Ev[]) {
 
 describe('property: 증명되지 않은 이벤트는 어떤 수도 줄이지 않는다(launch 경계·Codex 포함)', () => {
   test('사라진 ID마다 바로 그 대상의 이번 launch 시작 관측이 있다, ended는 이번 launch의 result만 본다', () => {
-    fc.assert(fc.property(fc.array(ev, { maxLength: 30 }), checkRun), { numRuns: 3000 });
+    fc.assert(fc.property(fc.array(ev, { maxLength: 30 }), checkRun), { numRuns: Number(process.env.AWBS_PROPERTY_RUNS ?? 3000) });
   });
 
   test('판정기 자체 확인: 재리뷰 4의 「무관한 Agent 삭제」 입력에서 원본은 c1·c2를 모두 유지한다', () => {
     checkRun([{ k: 'call', c: 'c1' }, { k: 'start', t: 't1', c: 'c1', bg: true }, { k: 'call', c: 'c2' }, { k: 'start', t: 't2', c: 'c2', bg: true }]);
+  });
+
+  test('판정기 자체 확인: 다른 task가 차지한 호출을 주장한 task는 그 호출의 대상이 아니다(seed -1731524055 반례)', () => {
+    checkRun([
+      { k: 'call', c: 'c2' }, { k: 'start', t: 't1', c: 'c2', bg: false }, { k: 'start', t: 't2', c: 'c2', bg: false },
+      { k: 'call', c: 'c1' }, { k: 'start', t: 't2', c: 'c1', bg: false }, { k: 'result', c: 'c1' },
+    ]);
   });
 
   test('launch는 수를 줄이지 않고, 이전 launch의 Agent가 남아 있으면 미확인이다', () => {
