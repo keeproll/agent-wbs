@@ -13,6 +13,7 @@ import {
   agentClass, agentInitial, ATTEMPT_STATUS, flowSteps, GATE_LABEL, KIND_LABEL, statusOf, VERDICT_CLASS,
   type ExecAttempt, type ExecVerification, type Flow, type NextStep,
 } from './model.ts';
+import { AreaError } from './AreaError.tsx';
 import { ReworkEditor } from './ReworkEditor.tsx';
 import type { ExecData } from './useExecData.ts';
 import { useTaskCommand } from './useTaskCommand.tsx';
@@ -26,8 +27,12 @@ export interface CenterProps {
   next: NextStep;
   attempt: ExecAttempt | null;
   verifications: readonly ExecVerification[];
-  evidence: ExecData['evidence']['data'];
+  evidence: ExecData['evidence'];
+  /** 주소의 시도 키가 이 Task에 없으면 그 키 */
+  missingAttempt: string | null;
   alerts: readonly { id: string; text: string; at: string }[];
+  /** 알림 조회(실패하면 한도 초과 여부를 모른다고 알린다) */
+  alertsQuery: ExecData['alerts'];
   reworkOpen: boolean;
   onRework: (open: boolean) => void;
   /** 화면 시계(ms). 실행 시간 계산용 */
@@ -37,7 +42,7 @@ export interface CenterProps {
 const hours = (ms: number) => `${(Math.max(0, ms) / 3_600_000).toFixed(1)}h`;
 const gradeText = (a: ExecAttempt) => (a.modelId ? `${a.modelId}${a.effort ? ` · ${a.effort}` : ''}` : '등급 미기록');
 
-export function ExecCenter({ projectId, task, flow, next, attempt, verifications, evidence, alerts, reworkOpen, onRework, now }: CenterProps) {
+export function ExecCenter({ projectId, task, flow, next, attempt, missingAttempt, verifications, evidence, alerts, alertsQuery, reworkOpen, onRework, now }: CenterProps) {
   const st = statusOf(task.lifecycleStatus);
   const command = useTaskCommand(projectId, task.taskKey, task.updatedAt);
   const confirm = useConfirm();
@@ -88,6 +93,9 @@ export function ExecCenter({ projectId, task, flow, next, attempt, verifications
         {task.checklist.total === 0 && (
           <p className="fhint" style={{ margin: '8px 0 0' }}>체크리스트가 없습니다 — Task 상세의 체크리스트 탭에서 항목을 추가합니다. Gate의 「필수 Checklist 완료」는 항목이 있어야 충족됩니다.</p>
         )}
+        {alertsQuery.data === undefined && alertsQuery.isError && (
+          <AreaError what="팀장 확인 알림을" error={alertsQuery.error} retrying={alertsQuery.isFetching} onRetry={() => { void alertsQuery.refetch(); }} />
+        )}
         {alerts.length > 0 && (
           <div className="banner warn" role="note">
             <div className="banner-b">
@@ -136,6 +144,9 @@ export function ExecCenter({ projectId, task, flow, next, attempt, verifications
         </div>
       )}
 
+      {missingAttempt && (
+        <div className="banner warn" role="note"><div className="banner-b"><b>{missingAttempt} 시도를 찾을 수 없습니다</b> — 이 Task에 그런 실행 시도가 없습니다. 아래는 {attempt ? `${attempt.attemptKey}(실행 중 또는 마지막 시도)` : '시도 없음'}입니다.</div></div>
+      )}
       {attempt ? <AttemptCard attempt={attempt} verification={verification} evidence={evidence} now={now} /> : (
         <>
           <p className="empty">이 Task에는 아직 실행 시도가 없습니다.</p>
@@ -151,7 +162,7 @@ function AttemptCard({ attempt: a, verification: v, evidence, now }: { attempt: 
   const agent = String(a.agent);
   const end = a.endedAt ? Date.parse(a.endedAt) : now;
   const adj = a.gradeAdjust;
-  const files = v ? (evidence?.items ?? []).filter((e) => e.verificationId === v.id) : [];
+  const files = v ? (evidence.data ?? []).filter((e) => e.verificationId === v.id) : [];
   return (
     <div className="card" aria-label={`${a.attemptKey} 실행 기록`}>
       <div className="att-h">
@@ -187,7 +198,10 @@ function AttemptCard({ attempt: a, verification: v, evidence, now }: { attempt: 
             <span className="ev-l">예상 결과</span><span>{v.expected || '—'}</span>
             <span className="ev-l">실제 결과</span><span>{v.actual || '—'}</span>
             <span className="ev-l">Evidence</span>
-            {files.length > 0
+            {evidence.data === undefined && evidence.isError
+              ? <AreaError what="Evidence를" error={evidence.error} retrying={evidence.isFetching} onRetry={() => { void evidence.refetch(); }} />
+              : evidence.data === undefined ? <span className="muted">불러오는 중…</span>
+              : files.length > 0
               ? <ul className="lst mono-list" style={{ margin: 0 }}>{files.map((e) => <li key={e.id}><a href={apiUrl('getEvidenceContent', { params: { id: e.id } })} download>{e.kind} · {e.sha256.slice(0, 12)}</a></li>)}</ul>
               : <span className="muted">연결된 Evidence 없음</span>}
             {v.defects.length > 0 && (

@@ -2,7 +2,7 @@
  * Task 실행 명령(실행 요청·중단·재개·완료 판정 요청)을 공통 저장 흐름(useSave)으로 보낸다.
  *
  * - 버튼을 누른 순간의 명령과 Task 버전(updatedAt)을 찍어 둔다. 「다시 시도」는 같은 내용·같은 멱등 키로 보낸다.
- * - 409 VERSION_CONFLICT면 충돌 창: 「최신 불러오기」는 Task를 서버에서 새로 읽고, 「다시 적용」은 최신 버전으로 같은 명령을 다시 보낸다.
+ * - 409 VERSION_CONFLICT면 충돌 창: 「최신 불러오기」는 Task를 서버에서 새로 읽고, 「다시 적용」은 최신 버전으로 같은 명령을 다시 보낸다(공통 reapplyRequest).
  * - 409 CLAIM_REJECTED 같은 「지금 상태와 맞지 않음」은 오류 막대에 서버 사유를 그대로 보이고 최신 상태를 다시 읽는다(UAT-EXEC-09 b).
  */
 import { useQueryClient } from '@tanstack/react-query';
@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useApi } from '../../shared/api/ApiProvider.tsx';
 import { apiKey, invalidateTopics } from '../../shared/api/queries.ts';
 import { useSave } from '../../shared/state/useSave.tsx';
+import { fetchAllAttempts } from './useExecData.ts';
 import type { ExecAttempt, RunKind } from './model.ts';
 
 export type Command =
@@ -38,16 +39,15 @@ export function useTaskCommand(projectId: string, taskKey: string, updatedAt: st
   const label = queued?.command.label ?? '실행 요청';
 
   /** Task 버전을 서버에서 새로 읽는다(캐시 아님). 목록 캐시도 최신으로 바꾼다. */
-  const latestVersion = async (signal?: AbortSignal) => {
-    const list = await client.call('listTasks', { params: { projectId }, ...(signal ? { signal } : {}) });
+  const latestVersion = async () => {
+    const list = await client.call('listTasks', { params: { projectId } });
     queryClient.setQueryData(apiKey('listTasks', { params: { projectId } }), list);
     const task = list.tasks.find((t) => t.taskKey === taskKey);
     if (!task) throw new Error(`${taskKey}를 찾을 수 없습니다.`);
     return task.updatedAt;
   };
-  const latestAttempt = async (id: string, signal?: AbortSignal) => {
-    const page = await client.call('getTaskAttempts', { params: { taskKey }, query: { limit: 200 }, ...(signal ? { signal } : {}) });
-    const found = page.items.find((a) => a.id === id);
+  const latestAttempt = async (id: string) => {
+    const found = (await fetchAllAttempts(client, taskKey)).find((a) => a.id === id);
     if (!found) throw new Error('시도를 찾을 수 없습니다.');
     return found;
   };
@@ -77,17 +77,17 @@ export function useTaskCommand(projectId: string, taskKey: string, updatedAt: st
     ...(queued ? { successNotice: NOTICE[queued.command.op] } : {}),
     onSuccess: () => { void invalidateTopics(queryClient, EXEC_TOPICS); },
     onRejected: () => { void invalidateTopics(queryClient, EXEC_TOPICS); },
-    onConflictReload: async ({ signal }) => {
-      await latestVersion(signal);
+    onConflictReload: async () => {
+      await latestVersion();
       await invalidateTopics(queryClient, EXEC_TOPICS);
     },
-    onConflictReapply: async ({ signal }) => {
+    // 다시 적용(M3-04 공통 reapplyRequest): 같은 명령을 최신 Task·시도 버전으로 만든다. 보내기는 useSave가 run으로 한다.
+    reapplyRequest: async () => {
       const command = chosen.current;
-      if (!command) return;
-      const version = await latestVersion(signal);
-      const fresh = command.op === 'stop' || command.op === 'resume' ? { ...command, attempt: await latestAttempt(command.attempt.id, signal) } : command;
-      await send({ command: fresh, updatedAt: version });
-      await invalidateTopics(queryClient, EXEC_TOPICS);
+      if (!command) throw new Error('명령이 없습니다.');
+      const version = await latestVersion();
+      const fresh = command.op === 'stop' || command.op === 'resume' ? { ...command, attempt: await latestAttempt(command.attempt.id) } : command;
+      return { command: fresh, updatedAt: version };
     },
   });
 

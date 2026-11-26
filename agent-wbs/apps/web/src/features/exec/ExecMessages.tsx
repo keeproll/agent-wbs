@@ -9,7 +9,7 @@
  * - 작성 초안은 Task별로 보관한다(messageDrafts.ts). 다른 Task로 옮겨도 남는다.
  */
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { useApi } from '../../shared/api/ApiProvider.tsx';
 import { invalidateTopics } from '../../shared/api/queries.ts';
@@ -18,9 +18,11 @@ import { useSave } from '../../shared/state/useSave.tsx';
 import { useSessionDraft } from '../../shared/state/useSessionDraft.tsx';
 import { BusyButton } from '../../shared/ui/BusyButton.tsx';
 import { useConfirm } from '../../shared/ui/feedback.tsx';
-import { AGENTS, MESSAGE_TYPES, messageDrafts, useMessageDraft, type Agent, type MessageDraft } from './messageDrafts.ts';
+import { AGENTS, draftSessionId, MESSAGE_TYPES, messageDrafts, useMessageDraft, type Agent, type MessageDraft } from './messageDrafts.ts';
 import { deliveryView, type ExecAttempt, type ExecMessage } from './model.ts';
-import { createAndSend } from './sendMessage.ts';
+import { AreaError } from './AreaError.tsx';
+import { latestMessage, sendMessage, type CreatedMessage } from './sendMessage.ts';
+import type { ExecData } from './useExecData.ts';
 
 export interface MessagesProps {
   taskKey: string;
@@ -29,7 +31,8 @@ export interface MessagesProps {
   attempts: readonly ExecAttempt[];
   /** 주소로 고른 시도. 있으면 그 시도에 연결된 메시지만 보인다. */
   scopeAttempt: ExecAttempt | null;
-  messages: readonly ExecMessage[];
+  /** 메시지 조회(모든 쪽). 실패를 「메시지 없음」으로 보이지 않기 위해 query 그대로 받는다. */
+  messages: ExecData['messages'];
   online: boolean;
   liveInject: boolean;
 }
@@ -39,10 +42,12 @@ const RUNNING_STATES = ['running', 'qa', 'verifying'];
 
 export function ExecMessages({ taskKey, taskStatus, defaultAgent, attempts, scopeAttempt, messages, online, liveInject }: MessagesProps) {
   const [composing, setComposing] = useState(false);
-  const shown = scopeAttempt ? messages.filter((m) => m.attemptId === scopeAttempt.id) : messages;
+  const list = messages.data ?? [];
+  const shown = scopeAttempt ? list.filter((m) => m.attemptId === scopeAttempt.id) : list;
   const attemptKeyOf = (id: string | null) => (id ? attempts.find((a) => a.id === id)?.attemptKey ?? '—' : '—');
-  // 받은 응답에는 보낸 Agent 필드가 없어(계약 Message) 연결 시도의 Agent로 보인다.
-  const fromOf = (m: ExecMessage) => (m.dir === 'in' ? (attempts.find((a) => a.id === m.attemptId)?.agent ?? 'Agent') : '팀장');
+  // 받은 응답에는 보낸 Agent 필드가 없다(계약 Message). 연결 시도의 Agent로 추측하지 않는다(M3-06 리뷰 #9).
+  // 시도의 Agent와 응답한 Agent는 다를 수 있다(예: QA 시도에 연결된 Claude의 재작업 계획 응답).
+  const fromOf = (m: ExecMessage) => (m.dir === 'in' ? 'Agent' : '팀장');
   const toOf = (m: ExecMessage) => (m.dir === 'in' ? '팀장' : String(m.toAgent ?? '—'));
   // 쓰던 초안이 있으면 작성 칸을 열어 둔다(Task를 옮겨 왔을 때).
   const [current] = useMessageDraft(taskKey, defaultAgent);
@@ -52,11 +57,15 @@ export function ExecMessages({ taskKey, taskStatus, defaultAgent, attempts, scop
   return (
     <aside className="side scrollc" aria-label="연결 메시지">
       <div className="side-h">
-        <h4 style={{ margin: 0 }}>{scopeAttempt ? `${scopeAttempt.attemptKey}에 연결된 메시지` : `${taskKey} 전체 메시지`}</h4>
+        <h2 className="ex-side-t">{scopeAttempt ? `${scopeAttempt.attemptKey}에 연결된 메시지` : `${taskKey} 전체 메시지`}</h2>
         <button type="button" className="btn sm" aria-expanded={open} onClick={() => { setComposing(true); }}>메시지 작성</button>
       </div>
       <p className="fhint" style={{ margin: '0 0 6px' }}>실행 이력과 분리된 지시 · 응답 기록입니다.</p>
-      {shown.length === 0 && (
+      {messages.data === undefined && messages.isError && (
+        <AreaError what="메시지를" error={messages.error} retrying={messages.isFetching} onRetry={() => { void messages.refetch(); }} />
+      )}
+      {messages.data === undefined && !messages.isError && <p className="muted">메시지 불러오는 중…</p>}
+      {messages.data !== undefined && shown.length === 0 && (
         <>
           <p className="empty">연결된 메시지가 없습니다.</p>
           <p className="fhint" style={{ margin: '0 0 6px' }}>「메시지 작성」으로 추가 지시 · 질문을 보낼 수 있습니다. Agent의 응답도 여기에 보입니다.</p>
@@ -94,15 +103,10 @@ function MessageItem({ m, from, to, attemptKey }: { m: ExecMessage; from: string
     onSuccess: () => { void refresh(); },
     ...(action === 'read' ? {} : { successNotice: action === 'cancel' ? '전송을 취소했습니다. 전달 대상에서 빠졌습니다.' : '다시 전달 대기열에 넣었습니다.' }),
     onRejected: () => { void refresh(); },
-    onConflictReload: async () => { await refresh(); },
-    onConflictReapply: async () => {
-      await refresh();
-      const page = await client.call('getTaskMessages', { params: { taskKey: m.taskKey }, query: { limit: 200 } });
-      const latest = page.items.find((x) => x.id === m.id);
-      if (!latest || action === 'read') return;
-      await client.call(action === 'cancel' ? 'cancelMessage' : 'resendMessage', { params: { messageId: m.id }, body: { updatedAt: latest.updatedAt } });
-      await refresh();
-    },
+    // 서버에서 실제로 읽은 뒤에 끝낸다(M3-04 공통: 실패를 성공 안내로 숨기지 않음).
+    onConflictReload: async () => { await latestMessage(client, m.taskKey, m.id); await refresh(); },
+    // 다시 적용(공통 reapplyRequest): 같은 동작을 그 메시지의 최신 버전으로 만든다.
+    reapplyRequest: async () => ({ updatedAt: (await latestMessage(client, m.taskKey, m.id)).updatedAt, action }),
   });
   // 누른 동작을 한 번 그린 뒤 보낸다(오류 막대 「대상」이 그 동작 이름이 되게).
   const [queued, setQueued] = useState(0);
@@ -143,6 +147,8 @@ function MessageItem({ m, from, to, attemptKey }: { m: ExecMessage; from: string
   );
 }
 
+interface Payload { draft: MessageDraft; created: CreatedMessage | null }
+
 interface ComposerProps {
   taskKey: string;
   defaultAgent: Agent;
@@ -164,38 +170,47 @@ function Composer({ taskKey, defaultAgent, attempts, scopeAttempt, runningWarn, 
     // 처음 한 번만
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  // 새로고침 · 창 닫기 때 Task별 초안이 사라지므로 브라우저가 묻게 한다(화면 안 Task 이동은 초안이 남아 묻지 않는다).
-  useEffect(() => {
-    if (empty) return;
-    const onUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); };
-    addEventListener('beforeunload', onUnload);
-    return () => { removeEventListener('beforeunload', onUnload); };
-  }, [empty]);
+  // 새로고침 보호와 세션 만료 보관은 Task별 초안 저장소 전체를 기준으로 한다(messageDrafts.ts의 useDraftProtection, 리뷰 #6).
+  // 여기서는 다시 로그인했을 때의 복원 제안만 받는다(value는 null — 등록은 저장소가 한다).
   const { restoreOffer } = useSessionDraft<MessageDraft>({
-    id: `exec:${taskKey}:message`, label: `${taskKey} 메시지 작성`, value: empty ? null : draft,
+    id: draftSessionId(taskKey), label: `${taskKey} 메시지 작성`, value: null,
     onRestore: (data) => { messageDrafts.set(taskKey, data); },
   });
-  const { save, busy, conflictModal } = useSave<ExecMessage, MessageDraft>({
+  /** 이 내용으로 이미 만든 메시지. 전송만 실패했으면 다시 만들지 않는다(리뷰 #2와 같은 이유). */
+  const created = useRef<{ draft: MessageDraft; message: CreatedMessage } | null>(null);
+  const request = (): Payload => {
+    const d = { ...draft, body: draft.body.trim() };
+    return { draft: d, created: created.current && JSON.stringify(created.current.draft) === JSON.stringify(d) ? created.current.message : null };
+  };
+  const { save, busy, conflictModal } = useSave<unknown, Payload>({
     target: `${taskKey} 메시지 전송`,
     failTitle: '보내지 못했습니다',
     mine: `메시지: ${draft.body.split('\n')[0] ?? ''}`,
-    request: () => ({ ...draft, body: draft.body.trim() }),
-    run: ({ payload, idempotencyKey }) => createAndSend(client, taskKey, payload, idempotencyKey),
+    request,
+    run: ({ payload, idempotencyKey }) => sendMessage({
+      client, taskKey, draft: payload.draft, idempotencyKey, created: payload.created,
+      onCreated: (message) => { created.current = { draft: payload.draft, message }; },
+    }),
     onSuccess: (_r, payload) => {
       void invalidateTopics(queryClient, ['message']);
+      created.current = null;
       // 다시 시도 사이에 더 고친 초안은 지우지 않는다.
-      if (messageDrafts.get(taskKey, defaultAgent).body.trim() === payload.body) messageDrafts.clearBody(taskKey);
+      if (messageDrafts.get(taskKey, defaultAgent).body.trim() === payload.draft.body) messageDrafts.clearBody(taskKey);
     },
     successNotice: '메시지를 전달 대기열에 넣었습니다.',
     onRejected: () => { void invalidateTopics(queryClient, ['message']); },
-    onConflictReload: async () => { await invalidateTopics(queryClient, ['message']); },
-    onConflictReapply: async () => { await createAndSend(client, taskKey, { ...draft, body: draft.body.trim() }, crypto.randomUUID()); await invalidateTopics(queryClient, ['message']); },
+    onConflictReload: async () => {
+      if (created.current) await latestMessage(client, taskKey, created.current.message.id);
+      await invalidateTopics(queryClient, ['message']);
+    },
+    // 다시 적용(공통 reapplyRequest): 같은 초안. 이미 만든 메시지는 전송만 이어 간다.
+    reapplyRequest: () => Promise.resolve(request()),
   });
 
   return (
     <div className="compose" style={{ marginTop: 10 }}>
       {restoreOffer}
-      <h4>메시지 작성</h4>
+      <h3 className="ex-cmp-t">메시지 작성</h3>
       <div className="cmp-row"><span className="flabel" style={{ padding: 0 }}>메시지 유형</span>
         <div className="seg" role="group" aria-label="메시지 유형">
           {MESSAGE_TYPES.map((t) => <button key={t} type="button" aria-pressed={draft.type === t} onClick={() => { patch({ type: t }); }}>{t}</button>)}

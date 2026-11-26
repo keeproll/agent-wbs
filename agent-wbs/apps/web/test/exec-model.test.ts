@@ -221,12 +221,12 @@ describe('선택 시도(안정 키)', () => {
   const a1 = at('ATT-1', 'dev', 'completed', '2026-11-01T00:00:00Z');
   const a2 = at('ATT-2', 'qa', 'running', '2026-11-01T01:00:00Z');
   it('주소의 attemptKey가 있으면 그 시도, 없으면 실행 중 또는 마지막', () => {
-    expect(pickAttempt([a1, a2], 'ATT-1')).toEqual({ attempt: a1, explicit: true });
-    expect(pickAttempt([a1, a2], null)).toEqual({ attempt: a2, explicit: false });
+    expect(pickAttempt([a1, a2], 'ATT-1')).toEqual({ attempt: a1, explicit: true, missing: null });
+    expect(pickAttempt([a1, a2], null)).toEqual({ attempt: a2, explicit: false, missing: null });
   });
   it('존재하지 않는 시도는 선택하지 않는다(UAT-EMPTY-03)', () => {
-    expect(pickAttempt([a1], 'ATT-9')).toEqual({ attempt: a1, explicit: false });
-    expect(pickAttempt([], 'ATT-9')).toEqual({ attempt: null, explicit: false });
+    expect(pickAttempt([a1], 'ATT-9')).toEqual({ attempt: a1, explicit: false, missing: 'ATT-9' });
+    expect(pickAttempt([], 'ATT-9')).toEqual({ attempt: null, explicit: false, missing: 'ATT-9' });
   });
 });
 
@@ -235,5 +235,17 @@ describe('메시지 전달 표시(P LBL.dlv L2931, G§4.10)', () => {
     expect(deliveryView({ dir: 'out', delivery: 'Acknowledged' })).toEqual({ label: 'Acknowledged · 수신 확인', cls: 'd-a' });
     expect(deliveryView({ dir: 'out', delivery: 'Failed' })).toEqual({ label: 'Failed · 전달 실패', cls: 'd-f' });
     expect(deliveryView({ dir: 'in', delivery: null })).toEqual({ label: 'Runner 응답', cls: 'd-r' });
+  });
+});
+
+describe('검증 순서(리뷰 #7: API는 id 순서라 시각으로 다시 정렬)', () => {
+  it('lastV는 가장 늦은 검증, firstFail은 가장 이른 검증 기준', () => {
+    const qa = at('A-2', 'qa', 'completed', '2026-11-01T01:00:00Z');
+    const rv = at('A-4', 'reverify', 'completed', '2026-11-04T00:00:00Z');
+    const late = { ...vf(rv, 'FAIL'), id: 'v-a', at: '2026-11-04T01:00:00Z' };
+    const early = { ...vf(qa, 'PASS'), id: 'v-z', at: '2026-11-01T02:00:00Z' };
+    const f = flowOf(T, [qa, rv], [late, early]);
+    expect(f.lastV?.id).toBe('v-a');
+    expect(f.firstFail).toBe(false);
   });
 });

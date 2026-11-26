@@ -27,8 +27,12 @@
 
 - 배열 위치(몇 번째)가 아니라 `taskKey`·`attemptKey`로 고른다.
   - 왜: 목록이 새로 고쳐져 순서가 바뀌어도 같은 대상을 가리킨다.
-- 없는 시도 키가 주소에 있으면 고르지 않고 실행 중 또는 마지막 시도를 보인다(UAT-EMPTY-03).
+- 없는 시도 키가 주소에 있으면 고르지 않는다. 「ATT-… 시도를 찾을 수 없습니다」라고 알리고, 실행 중 또는 마지막 시도를 보인다(UAT-EMPTY-03, 리뷰 #4).
+- 없는 Task 키면 다른 Task를 열지 않고 「TASK-…를 찾을 수 없습니다」를 보인다. 첫 Task는 키 없는 `/exec`에서만 고른다(리뷰 #4).
+  - 왜: 오래된 알림 링크가 엉뚱한 Task의 버튼(예: 실행 중단)으로 이어지면 안 된다.
 - 주소로 직접 연 Task는 실행 목록 상태(계획 중 등)가 아니어도 가운데에 보인다.
+- 가운데·오른쪽 영역의 React key는 `center:<taskKey>`, `messages:<taskKey>`로 서로 다르게 준다(리뷰 #1).
+  - 왜: 형제에 같은 key를 주면 Task를 바꿀 때 이전 패널이 지워지지 않고 쌓인다.
 - 라우터 연결: `src/app/router.tsx`에 `/exec`와 `/exec/:taskKey` 두 줄을 넣었다. E2E를 돌리려면 필요해서 이 작업에서 연결했다(병합 때 coordinator 확인 필요).
 
 ## 3. 자동 진행 규칙 — 팀장은 첫 시작만 누른다
@@ -65,11 +69,22 @@ owner Q-04(contracts §3.5)에 따라 원본과 다르게 동작한다.
   - 왜: 최종 판단은 서버가 한다. 서버가 거부하면(예: 409 `CLAIM_REJECTED`) 오류 막대에 서버 사유를 그대로 보인다(UAT-EXEC-09 b).
 - 선행 Task 차단과 계획 중 · 승인 대기 상태도 버튼을 막는다.
 
-## 4. 공통 부품을 이렇게 썼다
+## 4. 조회 실패·쪽 나눔(리뷰 #3·#7·#8)
+
+- 시도·검증·메시지·Evidence·알림·Runner 상태 조회가 실패하면 그 영역에 「…을 불러오지 못했습니다」와 「다시 시도」를 보인다(`AreaError.tsx`).
+  - 「기록 없음」으로 보이지 않는다. 왜: 실행 중인 Task를 「시도 없음」으로 보이면 새 개발 실행을 요청하게 된다.
+  - 시도나 검증을 아직 모르면(로딩·실패) 단계와 다음 작업(버튼)을 계산하지 않는다.
+  - Runner 상태를 모르면 「Runner 상태를 불러오지 못해 …」를 사유로 보인다. 요청은 서버가 판단한다.
+- 시도·검증·메시지·Evidence는 `nextCursor`가 없을 때까지 모든 쪽을 읽는다(`useExecData.ts`의 `readAll`).
+  - 왜: 서버 목록은 id(UUID) 순서라 최신 시도가 첫 쪽에 있다는 보장이 없다.
+- 검증은 시각(`at`) 순서로 다시 정렬한다(`sortVerifications`). 같은 시각이면 id 순서.
+  - 왜: id 순서를 시간 순서로 보면 옛 FAIL을 최신으로 보고, 재작업 지시를 옛 시도에 연결한다.
+
+## 5. 공통 부품을 이렇게 썼다
 
 | 하는 일 | 쓴 부품 | 비고 |
 |---|---|---|
-| 실행 요청 · 중단 · 재개 · 완료 판정 요청 | `useSave` + `BusyButton` (`useTaskCommand.tsx`) | 다시 시도는 같은 멱등 키. 409 `VERSION_CONFLICT`는 충돌 창 |
+| 실행 요청 · 중단 · 재개 · 완료 판정 요청 | `useSave` + `BusyButton` (`useTaskCommand.tsx`) | 다시 시도는 같은 멱등 키. 409 `VERSION_CONFLICT`는 충돌 창. 「다시 적용」은 공통 `reapplyRequest`(M3-04)로 최신 버전의 같은 명령을 만든다 |
 | 재작업 지시 | `useSave` · `useSessionDraft` · `useEditGuard` · 충돌 창 | 쓰던 지시가 있으면 다른 Task로 가기 전에 묻는다 |
 | 메시지 작성 | `useSave` · `useSessionDraft` · Task별 초안(`messageDrafts.ts`) · 충돌 창 | 아래 「메시지 초안」 |
 | 전송 취소 · 재전송 · 읽음 표시 | `useSave` · `useConfirm` | 취소는 확인 창 뒤에만 |
@@ -81,21 +96,26 @@ owner Q-04(contracts §3.5)에 따라 원본과 다르게 동작한다.
 - 멱등 키는 하나의 바탕 키에서 `<키>.create`, `<키>.send`로 나눠 쓴다.
   - 왜: 서버의 멱등 키는 프로젝트 안에서 하나다. 같은 키를 두 요청에 쓰면 `IDEMPOTENCY_CONFLICT`가 난다. 「다시 시도」는 같은 바탕 키라 이미 만든 초안을 서버가 그대로 돌려준다(중복 없음).
 - 재작업 지시는 여기에 `<키>.run`(재작업 실행 요청)이 하나 더 붙는다.
+- 이미 만든(보낸) 메시지는 기억해 두고 다시 만들지 않는다(`sendMessage.ts`의 `created`, 리뷰 #2).
+  - 예: 지시는 보냈는데 재작업 실행 요청만 409 충돌이면, 「다시 적용」은 실행 요청만 최신 버전으로 다시 보낸다. 충돌 창에 「지시 MSG-…는 이미 보냈습니다」가 보인다.
+  - 왜: 「다시 적용」은 새 멱등 키를 쓴다. 만들기부터 다시 하면 같은 지시가 Runner에 두 번 간다.
 
 ### 메시지 초안
 
 - 초안은 Task별로 메모리 저장소(`messageDrafts.ts`)에 둔다. 다른 Task · 메뉴로 갔다 와도 남는다(UAT-MSG-01).
 - 그래서 메시지 작성 칸에는 `useEditGuard`를 쓰지 않았다.
-  - 왜: `useEditGuard`는 주소가 바뀌면 「버릴까요?」를 묻는다. 메시지 초안은 버려지지 않으므로 물을 필요가 없다. 대신 새로고침 · 창 닫기만 브라우저 확인(beforeunload)을 띄운다.
-- 세션 만료(401)는 `useSessionDraft`(id `exec:<taskKey>:message`)가 보관 · 복원한다.
+  - 왜: `useEditGuard`는 주소가 바뀌면 「버릴까요?」를 묻는다. 메시지 초안은 버려지지 않으므로 물을 필요가 없다.
+- 보호는 열린 작성 칸이 아니라 저장소 전체를 기준으로 한다(`installDraftProtection`, 리뷰 #6).
+  - 새로고침 · 창 닫기: 어느 Task든 보관 중인 초안이 있으면 브라우저가 묻는다(beforeunload).
+  - 세션 만료(401): 초안이 있는 Task마다 공통 보관함에 `exec:<taskKey>:message`로 등록한다. 다시 로그인해 그 Task의 작성 칸을 열면 `useSessionDraft`가 복원을 제안한다.
 - 로그아웃하면 모든 Task의 초안을 지운다(`onDraftsCleared`).
 
-## 5. 시험
+## 6. 시험
 
 | 명령 | 내용 |
 |---|---|
 | `W test` | `test/exec-model.test.ts`(단계 · 6단계 · 카운터 · 사유 · 다음 작업 · 전달 상태), `test/exec-drafts.test.ts` |
-| `W e2e -- exec` | **M3-06 완료 조건.** `e2e/exec.spec.ts`(가짜 Runner 보고), `e2e/exec-visual.spec.ts`(시각 비교). `api-exec`는 환경이 없으면 건너뛴다 |
+| `W e2e -- exec` | **M3-06 완료 조건.** `e2e/exec.spec.ts`(가짜 Runner 보고), `e2e/exec-review.spec.ts`(독립 리뷰 지적 재현), `e2e/exec-visual.spec.ts`(시각 비교). `api-exec`는 환경이 없으면 건너뛴다 |
 | `W --filter @awbs/web e2e:api-exec` | 실제 API · 전용 DB(demo seed)로 핵심 흐름(`e2e/api-exec.spec.ts`). 끝나면 컨테이너를 지운다 |
 
 - 가짜 Runner fixture는 `e2e/support/exec-fixtures.ts`다. 원본 Mock(TASK-0001·0004·0005·0006·0007·0008)과 같은 값이라 원본 스크린샷과 비교할 수 있다.
@@ -106,19 +126,21 @@ owner Q-04(contracts §3.5)에 따라 원본과 다르게 동작한다.
 - 조건: 1920×1080(배치는 1280×800도), 기기 배율 1, ko-KR, Asia/Seoul, 시계 2026-11-05 20:00 KST, 애니메이션 끔, 마우스는 화면 구석. M3-01과 같다.
 - 차이 계산: pixelmatch `threshold 0.1`, 안티에일리어싱 픽셀 제외.
 - 결과: `~/.orca/bots/agentwbs/archive/2026-11-26/M3-06/visual/`(`[원본 | 구현 | 차이]` PNG와 `summary.md`).
-- 같아야 하는 영역(실패 기준 2~3%): 제목, 왼쪽 목록, 6단계 흐름 카드, 빈 메시지 영역 머리.
+- 같아야 하는 영역(실패 기준 2~3%): 제목, 왼쪽 목록, 6단계 흐름 카드, 메시지 영역 제목 줄.
 - 예외(기록만):
   - 다음 작업 줄: Mock 「결과 등록」 대신 「실행 중단」 · 자동 진행 문구(owner Q-04).
   - 시도 카드: 지정 · 실제 하위 Agent 태그가 없다. 계약 `Attempt`에 필드가 없다.
   - 검증 Evidence: 원본은 파일 경로, 계약 `Evidence`는 경로가 없어 「종류 · 해시 앞 12자」 내려받기 링크로 보인다.
-  - 메시지 영역: fixture 문구 · 시각 차이, 「읽음 표시」 버튼 추가.
+  - 메시지 영역: fixture 문구 · 시각 차이, 「읽음 표시」 버튼 추가, 받은 응답의 발신자는 「Agent」(아래 계약 공백).
+  - 안내 문장(`.fhint`): 원본 11.5px → 12px(MM-28 본문 12px 이상, 리뷰 #10). `exec.css`.
+  - 제목: 원본 h4 자리에 h2·h3(제목 순서, 리뷰 #12). 같은 13px · 600으로 보인다.
   - 페이지 설명 문구: 「Runner 실행과 보고는 Mock」 대신 자동 진행 안내.
   - 1280×800: 원본 규칙(P L640)대로 메시지 영역이 아래로 내려간다. 배치 확인용 기록.
 
-## 6. 알아 둘 계약 공백(보고함)
+## 7. 알아 둘 계약 공백(보고함)
 
 - 시도 응답에 지정 · 실제 하위 Agent, CI(Task 검사) 링크가 없다.
-- 받은 응답 메시지에 보낸 Agent 필드가 없다. 화면은 연결 시도의 Agent로 보인다.
+- 받은 응답 메시지에 보낸 Agent 필드가 없다(DB의 from_agent가 API에서 빠짐). 화면은 「Agent」로 보이고 특정 Agent로 추측하지 않는다(리뷰 #9).
 - 자동 재시도 · 재작업 카운터 필드가 없다. 화면이 시도 · 검증 기록으로 다시 센다(`attemptCounters`).
 - 전체 시도 목록 API가 없어 왼쪽 목록은 Task마다 `GET /api/tasks/:taskKey/attempts`를 부른다.
 

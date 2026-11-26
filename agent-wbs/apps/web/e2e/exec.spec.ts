@@ -370,7 +370,8 @@ test.describe('G§12 시나리오 7·8', () => {
     await expect(item).toContainText('작업 상태: Agent 응답 대기');
     await expect(item).not.toContainText('다음 실행 대기');
     const reply = pane.getByRole('article', { name: /MSG-041/ });
-    await expect(reply).toContainText('Claude→팀장');
+    // 받은 응답에는 발신 Agent 필드가 없어 「Agent」로 보인다(리뷰 #9, 계약 공백).
+    await expect(reply).toContainText('Agent→팀장');
     await expect(reply.locator('.newtag')).toBeVisible();
     // ack만으로 Task를 완료하지 않는다
     await expect(center(page).locator('.st').first()).toHaveText('실행 중');

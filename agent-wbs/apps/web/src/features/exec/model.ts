@@ -65,6 +65,13 @@ export const EXEC_STATUSES = ['ready', 'running', 'paused', 'qa', 'rework', 'ver
 export const sortAttempts = (attempts: readonly ExecAttempt[]): ExecAttempt[] =>
   [...attempts].sort((a, b) => a.startedAt.localeCompare(b.startedAt) || a.attemptKey.localeCompare(b.attemptKey, undefined, { numeric: true }));
 
+/**
+ * 검증을 시각(at) 순으로 정렬한다. 같은 시각이면 id 순.
+ * 왜: 서버 목록은 id(UUID) 순서라 시간 순서가 아니다(M3-06 리뷰 #7). 최신 FAIL을 잘못 고르면 지시가 옛 시도에 연결된다.
+ */
+export const sortVerifications = (verifications: readonly ExecVerification[]): ExecVerification[] =>
+  [...verifications].sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
+
 export interface Flow {
   stage: Stage;
   running: ExecAttempt | null;
@@ -76,11 +83,12 @@ export interface Flow {
 }
 
 const verdictOf = (verifications: readonly ExecVerification[], attempt: ExecAttempt) =>
-  verifications.filter((v) => v.attemptId === attempt.id).at(-1) ?? null;
+  sortVerifications(verifications.filter((v) => v.attemptId === attempt.id)).at(-1) ?? null;
 
 /** 현재 단계(P Sel.flow L4348). 시도는 시작 시각 순으로 본다. */
-export function flowOf(task: FlowTask, attemptsIn: readonly ExecAttempt[], verifications: readonly ExecVerification[]): Flow {
+export function flowOf(task: FlowTask, attemptsIn: readonly ExecAttempt[], verificationsIn: readonly ExecVerification[]): Flow {
   const attempts = sortAttempts(attemptsIn);
+  const verifications = sortVerifications(verificationsIn);
   const running = attempts.filter((a) => a.status === 'running').at(-1) ?? null;
   const last = attempts.at(-1) ?? null;
   const kind = (a: ExecAttempt) => String(a.kind) as RunKind;
@@ -261,11 +269,12 @@ export function nextStep({ task, flow, attempts, verifications, alerts, reason, 
 }
 
 /** 시도 선택: 주소의 attemptKey(안정 키)가 이 Task에 있으면 그것, 아니면 실행 중 또는 마지막 시도. */
-export function pickAttempt(attempts: readonly ExecAttempt[], key: string | null): { attempt: ExecAttempt | null; explicit: boolean } {
+export function pickAttempt(attempts: readonly ExecAttempt[], key: string | null): { attempt: ExecAttempt | null; explicit: boolean; missing: string | null } {
   const chosen = key ? attempts.find((a) => a.attemptKey === key) : undefined;
-  if (chosen) return { attempt: chosen, explicit: true };
+  if (chosen) return { attempt: chosen, explicit: true, missing: null };
   const sorted = sortAttempts(attempts);
-  return { attempt: sorted.filter((a) => a.status === 'running').at(-1) ?? sorted.at(-1) ?? null, explicit: false };
+  // 없는 시도 키는 고르지 않고, 그 사실을 화면이 알릴 수 있게 돌려준다(M3-06 리뷰 #4).
+  return { attempt: sorted.filter((a) => a.status === 'running').at(-1) ?? sorted.at(-1) ?? null, explicit: false, missing: key };
 }
 
 const DELIVERY: Record<string, [string, string]> = {
