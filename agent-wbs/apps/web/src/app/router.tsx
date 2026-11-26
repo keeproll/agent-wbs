@@ -12,6 +12,7 @@ import { RequireAuth } from '../shared/auth/RequireAuth.tsx';
 import { WbsPage } from '../features/wbs/WbsPage.tsx';
 import { MENU } from '../shared/layout/menu.ts';
 import { Shell } from '../shared/layout/Shell.tsx';
+import { ProjectPage } from '../features/project/ProjectPage.tsx';
 import { NotFoundPage, PendingPage } from './pages.tsx';
 
 /** 공통 컴포넌트 견본(/_states). 개발 서버와 E2E 빌드에만 들어가고 제품 빌드에는 없다. */
@@ -28,7 +29,8 @@ export const routes: RouteObject[] = [
       ...MENU.map((item): RouteObject => (item.key === 'wbs'
         // M3-02: WBS 표. 자식 `:taskKey`가 있으면 같은 화면이 레일 + 상세로 바뀐다(G§4.3). 화면 상태(필터·스크롤)를 유지하려고 한 화면이 두 주소를 받는다.
         ? { path: '/wbs', element: <WbsPage key="wbs" />, children: [{ path: ':taskKey', element: null }] }
-        : { path: `/${item.key}`, element: <PendingPage key={item.key} menu={item.key} /> })),
+        // M3-04: 프로젝트 메뉴는 features/project.
+        : { path: `/${item.key}`, element: item.key === 'project' ? <ProjectPage key="project" /> : <PendingPage key={item.key} menu={item.key} /> })),
       { path: '/settings/:tab', element: <PendingPage key="settings" menu="settings" /> },
       ...(StatesSandbox ? [{ path: '/_states', element: <Suspense><StatesSandbox /></Suspense> }] : []),
       { path: '*', element: <NotFoundPage /> },

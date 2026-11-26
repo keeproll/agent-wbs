@@ -76,7 +76,9 @@ const { save, busy, conflictModal } = useSave({
   onConflictReload: async ({ signal }) => { await reload(signal); setDraft(null); },
   // 실패는 catch로 삼키지 말고 그대로 던진다. 창 안에 이유가 보이고, 끝까지 성공해야 창이 닫힌다.
   // reload는 client.call로 서버에서 새로 읽는다(queryClient.fetchQuery는 캐시를 돌려줄 수 있어 옛 버전으로 또 충돌한다).
-  onConflictReapply: async () => { const latest = await reload(); await saveWith(latest.updatedAt, draft); },
+  // (권장) 다시 적용의 요청 내용만 최신 기준으로 만들어 돌려준다. 보내기는 useSave가 run으로 한다.
+  reapplyRequest: async ({ signal }) => { const latest = await reload(signal); return { updatedAt: latest.updatedAt, title: draft }; },
+  // (예전 방식, 계속 동작) onConflictReapply: async () => { … 직접 보내기 … },  — reapplyRequest가 있으면 쓰지 않는다.
 });
 …
 <BusyButton busy={busy} busyLabel="저장 중…" onClick={() => void save()}>저장</BusyButton>
@@ -97,6 +99,11 @@ const { save, busy, conflictModal } = useSave({
   - 409 `VERSION_CONFLICT`: 충돌 창. 「최신 불러오기(내 변경 버림)」와 「최신 위에 다시 적용」 중 고른다. Esc는 아무것도 하지 않고 창만 닫는다(입력 유지). 최신 불러오기·다시 적용은 끝까지 성공해야 창이 닫히고, 실패하면 창 안에 이유를 보인다(`onConflictReload`·`onConflictReapply`가 Promise를 돌려주면 기다린다).
     - 최신 불러오기 중에 창을 닫으면(Esc) 그 불러오기는 취소되고 결과를 화면에 적용하지 않는다. 그래서 콜백은 받은 `signal`을 요청에 넘기고, 취소됐으면 편집 닫기 같은 화면 변경을 하지 않는다. 왜: 닫은 뒤 새로 쓴 입력이 늦은 응답에 지워지지 않게 한다.
     - 다시 적용(저장) 중에는 창이 닫히지 않는다. 왜: 이미 보낸 저장은 서버에서 되돌릴 수 없다.
+    - **다시 적용은 `reapplyRequest`를 권장한다**(M3-04 재리뷰). 주면 다시 적용도 일반 저장과 같은 `run`·`onSuccess`·「결과 미확인 요청」 보관함을 쓴다.
+      - 다시 적용의 응답을 잃으면 그 내용과 키를 보관한다. 다음 다시 적용, 오류 막대 「다시 시도」, 일반 저장은 **같은 내용·같은 키로만** 다시 보낸다.
+      - 창을 Esc로 닫아도 보관은 남고 오류 막대로 알린다. 그 뒤 내용이 다른 저장은 보내지 않고 「이전 요청의 결과를 아직 모릅니다」를 안내한다.
+      - 왜: `onConflictReapply`에서 `client.call`을 직접 부르면 키가 useSave 밖에서 만들어져, 창을 닫은 뒤 일반 저장이 새 키로 같은 일을 또 처리할 수 있다.
+    - `onConflictReload`는 서버에서 **실제로 읽은 결과를 await**한다. `invalidateQueries`만 하고 끝내면 실패해도 성공 안내가 뜬다. 입력은 읽기가 성공한 뒤에 버린다.
   - 그 밖의 409: 오류 막대(다시 시도 없음) + `onRejected`. 왜: 「지금 상태와 맞지 않음」이라 최신 상태를 다시 읽어야 한다(contracts §1.1).
 - POST 요청에는 `run`이 받은 `idempotencyKey`를 넘긴다(`client.call(id, { …, idempotencyKey })`).
 - 변경 요청에는 `X-CSRF-Token`이 자동으로 붙는다.
