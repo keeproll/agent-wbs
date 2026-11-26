@@ -90,6 +90,24 @@ describe('GET /api/changes', () => {
     expect(() => { deferChange(h.owner as never, f.project, 'nope' as never, null); }).toThrow('알 수 없는 변경 이벤트 topic');
   });
 
+  test('GET /api/alerts: 열린 알림만 최신 먼저, target은 참조 문자열·text는 message(없으면 key)·taskKey는 target에 있을 때만', async () => {
+    await h.owner.query('delete from alerts');
+    await h.owner.query(`insert into alerts(project_id,key,severity,target,created_at) values
+      ($1,'unconfirmed:j1','warn','{"jobId":"j1","taskKey":"TASK-0001","message":"종료를 확인하지 못했습니다."}',now()-interval '2 minutes'),
+      (null,'reset:c1:manual-reconcile','warn','{"message":"PR 참조 대조 필요"}',now()-interval '1 minute'),
+      ($1,'plain','info','{}',now()),
+      ($1,'closed','warn','{"message":"처리함"}',now())`, [f.project]);
+    await h.owner.query("update alerts set resolved_at=now() where key='closed'");
+    const res = await h.lead('GET', '/api/alerts');
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.items.map((a: { key: string; severity: string; taskKey: string | null; target: string | null; text: string }) => [a.key, a.severity, a.taskKey, a.target, a.text])).toEqual([
+      ['plain', 'info', null, '{}', 'plain'],
+      ['reset:c1:manual-reconcile', 'warn', null, '{"message":"PR 참조 대조 필요"}', 'PR 참조 대조 필요'],
+      ['unconfirmed:j1', 'warn', 'TASK-0001', 'TASK-0001', '종료를 확인하지 못했습니다.'],
+    ]);
+    expect((await h.app.inject({ url: '/api/alerts' })).statusCode).toBe(401);
+  });
+
   test('입력 검증: after 누락·음수·limit 초과는 400, 로그인 없으면 401', async () => {
     expect((await h.lead('GET', '/api/changes')).status).toBe(400);
     expect((await h.lead('GET', '/api/changes?after=-1')).status).toBe(400);

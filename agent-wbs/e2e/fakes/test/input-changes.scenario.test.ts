@@ -68,7 +68,10 @@ test('입력 변경 보고: 트리 차이·모드, 재시작 뒤 409 재계산, 
   // 3) 재시작한 Runner(서버 head를 모름): 새 head로 물으면 409, 응답 head로 다시 계산해 보낸다.
   await chmod(join(source, 'prototype/run.sh'), 0o755);
   const modeOnly = push('실행 권한');
-  const restarted = new InputChangeReporter({ api: h.runner.api, epoch: () => 1, warn: (m) => warnings.push(m) });
+  // Runner 앱처럼 서버 정책의 inputRecheck를 읽는다(정책 조회는 Runner 반복이 5초마다 한다).
+  let inputRecheck = 0;
+  const refreshPolicy = async () => { inputRecheck = (await h.runner.api('getRunnerPolicy', { epoch: 1 })).body?.inputRecheck ?? -1; };
+  const restarted = new InputChangeReporter({ api: h.runner.api, epoch: () => 1, warn: (m) => warnings.push(m), recheck: () => inputRecheck });
   expect(await restarted.report(gitSource())).toEqual({ head: modeOnly, recorded: false, historyRewritten: false });
   const [mode] = await h.rows(`select files->'changes' as changes,state from input_change_commits where sha='${modeOnly}'`) as { changes: { status: string; oldMode: string; newMode: string }[]; state: string }[];
   // 실행 권한만 바뀐 보고: head·트리만 옮기고 팀장 확인 항목은 만들지 않는다(analyzed).
@@ -83,4 +86,35 @@ test('입력 변경 보고: 트리 차이·모드, 재시작 뒤 409 재계산, 
   expect(await restarted.report(gitSource())).toEqual({ skipped: 'history_rewritten' });
   expect(warnings.some((m) => m.includes('이력 재작성'))).toBe(true);
   expect(rewritten).not.toBe(modeOnly);
+
+  // 5) 현재 알림(GET /api/alerts)에 재작성 경고가 보인다.
+  const alerts = await h.lead('GET', '/api/alerts');
+  expect(alerts.status).toBe(200);
+  expect(alerts.body.items).toEqual([expect.objectContaining({ key: 'input_history_rewritten', severity: 'error', taskKey: null, text: expect.stringContaining('조상이 아닙니다') })]);
+  const projectVersion = async () => (await h.lead('GET', '/api/project')).body.updatedAt as string;
+  expect((await h.lead('POST', '/api/project/inputs/recheck', { updatedAt: '2020-01-01T00:00:00Z' })).body.error.code).toBe('VERSION_CONFLICT');
+
+  // 6) owner가 복구하기 전에 팀장이 「복구 확인」을 누르면: Runner가 다시 관측하지만 여전히 조상이 아니므로 다시 멈추고 경고도 그대로다.
+  const early = await h.lead('POST', '/api/project/inputs/recheck', { updatedAt: await projectVersion() });
+  expect(early).toEqual({ status: 202, body: { inputRecheck: 1 } });
+  await refreshPolicy();
+  expect(inputRecheck).toBe(1);
+  expect(await restarted.report(gitSource())).toEqual({ head: modeOnly, recorded: false, historyRewritten: true });
+  expect(await restarted.report(gitSource())).toEqual({ skipped: 'history_rewritten' });
+  expect((await h.lead('GET', '/api/alerts')).body.items).toHaveLength(1);
+
+  // 7) owner가 정상 merge 커밋으로 마지막 입력 커밋을 새 main의 조상으로 되돌린다(강제 push·옛 입력 버전 삭제 없음).
+  git(source, 'merge', '-q', '--no-edit', '-m', '복구 merge', modeOnly);
+  git(source, 'push', '-q', 'origin', 'main');
+  const restoredHead = git(source, 'rev-parse', 'HEAD');
+  // 팀장 「복구 확인」 → Runner 재관측 → 서버가 유효 보고를 받아들이는 트랜잭션에서 경고 해소.
+  expect((await h.lead('POST', '/api/project/inputs/recheck', { updatedAt: await projectVersion() })).body).toEqual({ inputRecheck: 2 });
+  await refreshPolicy();
+  expect(await restarted.report(gitSource())).toEqual({ head: restoredHead, recorded: true, historyRewritten: false });
+  expect(await h.rows("select resolved_at is not null as resolved,(target->>'recheck')::int as recheck from alerts where key='input_history_rewritten'")).toEqual([{ resolved: true, recheck: 2 }]);
+  expect((await h.lead('GET', '/api/alerts')).body.items).toEqual([]);
+  await refreshPolicy();
+  expect(inputRecheck).toBe(0);
+  // 열린 재작성 경고가 없으면 복구 확인은 409 INVALID_TRANSITION.
+  expect((await h.lead('POST', '/api/project/inputs/recheck', { updatedAt: await projectVersion() })).body.error.code).toBe('INVALID_TRANSITION');
 });

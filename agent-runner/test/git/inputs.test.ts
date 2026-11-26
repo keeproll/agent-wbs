@@ -51,6 +51,18 @@ beforeEach(async () => {
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
 describe('GitRepository.inputObservation', () => {
+  test('교차 리뷰 F3: merge-base가 0·1 밖의 종료 코드(128)면 재작성(false)으로 보고하지 않고 중단한다', async () => {
+    const fakebin = join(root, 'fakebin');
+    await mkdir(fakebin);
+    const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+    await writeFile(join(fakebin, 'git'), `#!/bin/sh\nfor arg in "$@"; do\n  if [ "$arg" = "merge-base" ]; then exit 128; fi\ndone\nexec ${realGit} "$@"\n`);
+    await chmod(join(fakebin, 'git'), 0o755);
+    const base = git(source, 'rev-parse', 'HEAD');
+    const old = process.env.PATH;
+    process.env.PATH = `${fakebin}:${old ?? ''}`;
+    try { await expect(repo.inputObservation(base, base)).rejects.toBeInstanceOf(GitSafetyError); } finally { process.env.PATH = old; }
+  });
+
   test('prototype/ 트리 차이를 계약 모양으로: 이름 변경 R·실행 권한만 바뀐 M·종류 변경 T·추가 A·삭제 D, 바이너리는 0줄', async () => {
     const base = git(source, 'rev-parse', 'HEAD');
     const before = { guide: blob('HEAD:prototype/docs/guide.md'), keep: blob('HEAD:prototype/docs/keep.md'), run: blob('HEAD:prototype/run.sh') };
@@ -118,6 +130,59 @@ describe('parseRawNumstat·parseCommits', () => {
 });
 
 describe('InputChangeReporter', () => {
+  test('교차 리뷰 F2: 이력 재작성으로 멈춘 뒤 epoch가 바뀌면(초기화) 이전 상태를 버리고 새 프로젝트 입력을 보고한다', async () => {
+    let epoch = 1, calls = 0;
+    const A = 'a'.repeat(40), B = 'b'.repeat(40);
+    const api = ((_op: string, request: { body: { base: string } }) => {
+      calls++;
+      if (epoch === 1 && request.body.base !== A) return Promise.reject(new ApiError('reportInputChanges', 409, { code: 'VERSION_CONFLICT', details: { current: { base: A } } } as never, null));
+      return Promise.resolve({ status: 200, headers: new Headers(), body: epoch === 1 ? { head: A, recorded: false, historyRewritten: true } : { head: B, recorded: true, historyRewritten: false } });
+    }) as unknown as ApiClient;
+    const source: InputSource = { fetch: () => Promise.resolve(B), inputObservation: () => Promise.resolve({ baseIsAncestor: epoch !== 1, treeHash: A, changes: [], commits: [] }) };
+    const reporter = new InputChangeReporter({ api, epoch: () => epoch, warn: () => undefined });
+    expect(await reporter.report(source)).toMatchObject({ historyRewritten: true });
+    expect(await reporter.report(source)).toEqual({ skipped: 'history_rewritten' });
+    epoch = 2;
+    expect(await reporter.report(source)).toEqual({ head: B, recorded: true, historyRewritten: false });
+    expect(calls).toBe(3);
+  });
+
+  test('재작성 복구: 같은 epoch에서 정책 inputRecheck가 바뀌면 서버 head를 base로 다시 관측해 보고하고, 그대로면 멈춰 있다', async () => {
+    const A = 'a'.repeat(40), C = 'c'.repeat(40);
+    let recheck = 0, restored = false;
+    const sent: { base: string; head: string }[] = [];
+    const api = ((_op: string, request: { body: { base: string; head: string; baseIsAncestor: boolean } }) => {
+      sent.push({ base: request.body.base, head: request.body.head });
+      if (request.body.base !== A) return Promise.reject(new ApiError('reportInputChanges', 409, { code: 'VERSION_CONFLICT', details: { current: { base: A } } } as never, null));
+      return Promise.resolve({ status: 200, headers: new Headers(), body: request.body.baseIsAncestor ? { head: request.body.head, recorded: true, historyRewritten: false } : { head: A, recorded: false, historyRewritten: true } });
+    }) as unknown as ApiClient;
+    const source: InputSource = { fetch: () => Promise.resolve(C), inputObservation: () => Promise.resolve({ baseIsAncestor: restored, treeHash: C, changes: [], commits: [] }) };
+    const reporter = new InputChangeReporter({ api, epoch: () => 1, warn: () => undefined, recheck: () => recheck });
+    expect(await reporter.report(source)).toMatchObject({ historyRewritten: true });
+    // owner가 복구하기 전·팀장이 확인하기 전: 보내지 않는다.
+    restored = true;
+    expect(await reporter.report(source)).toEqual({ skipped: 'history_rewritten' });
+    const before = sent.length;
+    // 팀장 「복구 확인」 → inputRecheck 증가 → 서버 head(A)를 base로 다시 관측해 보낸다.
+    recheck = 1;
+    expect(await reporter.report(source)).toEqual({ head: C, recorded: true, historyRewritten: false });
+    expect(sent.slice(before)).toEqual([{ base: A, head: C }]);
+    expect(reporter.stoppedAt).toBeUndefined();
+  });
+
+  test('재작성 복구 확인 뒤에도 연결이 안 됐으면 다시 멈추고, 다음 확인 번호에서만 다시 시도한다', async () => {
+    const A = 'a'.repeat(40), C = 'c'.repeat(40);
+    let recheck = 0, calls = 0;
+    const api = (() => { calls++; return Promise.resolve({ status: 200, headers: new Headers(), body: { head: A, recorded: false, historyRewritten: true } }); }) as unknown as ApiClient;
+    const source: InputSource = { fetch: () => Promise.resolve(C), inputObservation: () => Promise.resolve({ baseIsAncestor: false, treeHash: C, changes: [], commits: [] }) };
+    const reporter = new InputChangeReporter({ api, epoch: () => 1, warn: () => undefined, recheck: () => recheck });
+    await reporter.report(source); // head(C)로 물음 → 재작성 응답(서버 head A)
+    recheck = 1;
+    expect(await reporter.report(source)).toMatchObject({ historyRewritten: true });
+    expect(await reporter.report(source)).toEqual({ skipped: 'history_rewritten' });
+    expect(calls).toBe(2);
+  });
+
   const A = 'a'.repeat(40), B = 'b'.repeat(40), C = 'c'.repeat(40);
   const observation = (ancestor = true) => ({ baseIsAncestor: ancestor, treeHash: 'd'.repeat(40), changes: [], commits: [] });
   function fakes(head: string, server: { head: string; rewritten?: boolean }) {

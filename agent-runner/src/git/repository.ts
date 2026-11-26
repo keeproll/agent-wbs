@@ -164,6 +164,11 @@ async function safePath(path: string): Promise<string> {
 }
 
 async function run(cwd: string, args: string[], input?: Buffer | string, extraEnv: NodeJS.ProcessEnv = {}, allowed = [0]): Promise<Buffer> {
+  return (await runWithCode(cwd, args, input, extraEnv, allowed)).output;
+}
+
+/** 허용한 종료 코드면 출력과 코드를 돌려주고, 그 밖은 GitSafetyError. 종료 코드로 답을 구분하는 명령(merge-base --is-ancestor)에 쓴다. */
+async function runWithCode(cwd: string, args: string[], input?: Buffer | string, extraEnv: NodeJS.ProcessEnv = {}, allowed = [0]): Promise<{ code: number; output: Buffer }> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.excludesFile=/dev/null',
       '-c', 'core.fsmonitor=false', '-c', 'credential.helper=', '-c', 'core.sshCommand=false',
@@ -184,7 +189,7 @@ async function run(cwd: string, args: string[], input?: Buffer | string, extraEn
     child.stderr.resume();
     child.on('error', () => { reject(new GitSafetyError('git 명령을 실행할 수 없습니다.')); });
     child.on('close', (code) => {
-      if (code !== null && allowed.includes(code)) resolvePromise(Buffer.concat(output));
+      if (code !== null && allowed.includes(code)) resolvePromise({ code, output: Buffer.concat(output) });
       else reject(new GitSafetyError('git 작업이 실패했습니다. 저장소·커밋·도구 설치를 확인하세요.'));
     });
     child.stdin.on('error', () => undefined);
@@ -666,11 +671,11 @@ export class GitRepository {
    */
   async inputObservation(base: string, head: string): Promise<InputObservation> {
     sha(base); sha(head);
-    // 두 커밋이 모두 있어야 판정할 수 있다. 없으면(종료 코드 0·1 밖) 보고를 중단한다.
-    for (const commit of [base, head]) {
-      await this.git(['cat-file', '-e', `${commit}^{commit}`]).catch(() => { throw new GitSafetyError('base와 head의 조상 관계를 판정할 수 없습니다. 입력 변경 보고를 중단합니다.'); });
-    }
-    const baseIsAncestor = await this.git(['merge-base', '--is-ancestor', base, head]).then(() => true, () => false);
+    // 계약: 종료 코드 0=true, 1=false, 그 밖(커밋 없음·git 실패 등)은 판정 불가라 보고를 중단한다(교차 리뷰 F3).
+    // 예전에는 모든 실패를 false로 바꿔 잘못된 「이력 재작성」 경고를 만들 수 있었다.
+    await this.trusted();
+    const baseIsAncestor = await runWithCode(this.path, ['merge-base', '--is-ancestor', base, head], undefined, {}, [0, 1])
+      .then(({ code }) => code === 0, () => { throw new GitSafetyError('base와 head의 조상 관계를 판정할 수 없습니다. 입력 변경 보고를 중단합니다.'); });
     const treeHash = sha((await this.git(['rev-parse', '--verify', `${head}:prototype`])).toString().trim());
     const diff = (await this.git(['diff', '--no-ext-diff', '--no-textconv', '--raw', '--numstat', '-M', '-z', '--no-abbrev', base, head, '--', 'prototype/'])).toString('utf8');
     const log = (await this.git(['log', '--first-parent', '--reverse', '--format=%H%x1f%cI%x1f%an%x1f%s%x1e', `${base}..${head}`, '--', 'prototype/'])).toString('utf8');

@@ -19,7 +19,7 @@ function publicData(value: unknown): unknown {
 /**
  * 내보내기 전체 크기 상한(기본 1GiB, M2-04 리뷰 P3-2).
  * 왜: 지금 ZIP은 메모리에서 만들어 데이터의 약 2배를 쓰고, 그동안 DB 트랜잭션·세대 잠금을 잡는다.
- * 상한을 넘으면 파일을 읽기 전에 이유(details.reason='export_too_large')와 크기를 알려 준다. 큰 자료가 생기면 스트리밍 ZIP64로 바꾼다.
+ * 크기는 data.json·manifest.json과 파일을 모두 더한다. 상한을 넘으면 파일을 읽기 전에 이유(details.reason='export_too_large')와 크기를 알려 준다. 큰 자료가 생기면 스트리밍 ZIP64로 바꾼다.
  */
 export const EXPORT_MAX_BYTES = 1024 ** 3;
 const FAILURE_SAMPLE = 20;
@@ -40,11 +40,14 @@ export async function exportProject(pool: Pool, epoch: number, root: string, lim
       union all select path,'pdf',sha256,null from report_pdfs where project_id=$1 order by path`, [project.id])).rows;
     const files: { name: string; data: Buffer }[] = [], manifest: { path: string; kind: string; size: number; sha256: string }[] = [];
     // 크기를 아는 파일(Evidence)로 먼저 상한을 검사한다. 읽은 뒤 실제 크기로 한 번 더 본다(PDF는 크기 기록이 없음).
-    const known = paths.reduce((sum, path) => sum + (path.size === null ? 0 : Number(path.size)), 0);
+    // 표 데이터(data.json)도 상한에 넣는다(교차 리뷰 F4). 파일보다 먼저 만들어 크기를 안다.
+    const json = (value: unknown) => Buffer.from(JSON.stringify(value, null, 2));
+    const dataJson = json(publicData({ epoch, tables }));
+    const known = dataJson.length + paths.reduce((sum, path) => sum + (path.size === null ? 0 : Number(path.size)), 0);
     if (known > limit) throw new PlatformError('UNAVAILABLE', { reason: 'export_too_large', totalBytes: known, limitBytes: limit });
     // 읽지 못한 파일은 모두 모아 어떤 파일이 왜 실패했는지 알려 준다(경로는 서버가 만든 `<epoch>/…/<uuid>` 형식).
     const failures: { path: string; reason: 'missing' | 'integrity' | 'unreadable' }[] = [];
-    let total = 0;
+    let total = dataJson.length;
     for (const path of paths) {
       if (files.some((file) => file.name === path.path)) continue;
       let data: Buffer;
@@ -59,10 +62,11 @@ export async function exportProject(pool: Pool, epoch: number, root: string, lim
       files.push({ name: path.path, data }); manifest.push({ path: path.path, kind: path.kind, size: data.length, sha256 });
     }
     if (failures.length) throw new PlatformError('UNAVAILABLE', { reason: 'files_unreadable', failedCount: failures.length, failures: failures.slice(0, FAILURE_SAMPLE) });
+    const manifestJson = json({ schemaVersion: 1, epoch, files: manifest });
+    total += manifestJson.length;
+    if (total > limit) throw new PlatformError('UNAVAILABLE', { reason: 'export_too_large', totalBytes: total, limitBytes: limit });
     try {
-      const json = (value: unknown) => Buffer.from(JSON.stringify(value, null, 2));
-      const archive = zip([{ name: 'data.json', data: json(publicData({ epoch, tables })) },
-        { name: 'manifest.json', data: json({ schemaVersion: 1, epoch, files: manifest }) }, ...files]);
+      const archive = zip([{ name: 'data.json', data: dataJson }, { name: 'manifest.json', data: manifestJson }, ...files]);
       await db.query('commit');
       return archive;
     } catch { throw new PlatformError('UNAVAILABLE', { reason: 'zip_limit' }); }

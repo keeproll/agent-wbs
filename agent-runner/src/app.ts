@@ -107,7 +107,7 @@ export class RunnerApp {
     // M-1: 준비 점검의 codex·claude도 전용 설치 경로를 세션 실행과 같은 인자·환경으로 부른다.
     this.#run = cliAwareRun(base, cli, this.bins);
     this.heavy = new HeavySemaphore(0);
-    this.inputs = new InputChangeReporter({ api: d.api, epoch: () => d.state.snapshot.epoch, warn: d.warn });
+    this.inputs = new InputChangeReporter({ api: d.api, epoch: () => d.state.snapshot.epoch, warn: d.warn, recheck: () => this.runner.policy?.inputRecheck });
     const runnerId = () => d.state.snapshot.runnerId;
     // eslint-disable-next-line @typescript-eslint/no-this-alias -- 아래 getter가 생성 중에도 현재 식별자를 읽는다.
     const app = this;

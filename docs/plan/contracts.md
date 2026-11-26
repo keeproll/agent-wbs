@@ -238,6 +238,10 @@
     - 초기값과 새 모델의 자리는 [data-model §6.2](data-model.md#62-system-seed-모델-순서와-claude-모델-목록)에 있다.
 - GET `/api/alerts`, GET `/api/system/integrity`
   - 용도: 현재 알림 / 정합성 점검
+  - `/api/alerts`는 열린 알림(해결 안 된 것)만 최신 먼저 준다. 항목은 `{id,key,severity,taskKey,target,text,at}`이다.
+    - `target`은 화면이 다시 읽을 참조 문자열이다(변경 이벤트 ref와 같은 규칙: taskKey → id → key, 없으면 정렬 JSON).
+    - `text`는 알림 내용의 `message`, 없으면 `key`다. `taskKey`는 내용에 Task가 있을 때만 채운다.
+    - Telegram 외부 발송(M6-04)과는 별개다. 현재 상태를 보여 주는 조회다(M2, 조정자 결정 2026-11-26).
 - POST `/api/auth/session` · DELETE, GET `/api/session`
   - 용도: §2.4
 
@@ -309,6 +313,16 @@
   - 미결정이 있으면 409 DECISIONS_PENDING
 - POST `/api/project/inputs` `{commit,instr?}` · `/inputs/skip` · `/inputs/retry`★
   - 409 INPUT_UNCHANGED
+- POST `/api/project/inputs/recheck` `{updatedAt}`★ — 입력 이력 재작성 「복구 확인·입력 확인 다시 시도」(조정자 결정 2026-11-26)
+  - 언제: Runner가 「마지막 입력 커밋이 새 main의 조상이 아님」(이력 재작성)을 보고해 경고 `input_history_rewritten`이 열려 있을 때다.
+  - 복구 순서는 넷이다.
+    1. owner가 정상 merge·복원 커밋으로 마지막 입력 커밋을 새 main의 조상으로 되돌린다(강제 push 없음).
+    2. 팀장이 이 API(화면의 「복구 확인·입력 확인 다시 시도」, 버튼은 M3-04)를 부른다. 서버는 Runner 정책 `inputRecheck`를 1 올리고 202 `{inputRecheck}`를 준다.
+    3. Runner가 바뀐 `inputRecheck`를 보고 조상 관계를 다시 관측해 보고한다.
+    4. 서버가 유효한 보고를 받아들이는 같은 트랜잭션에서 경고를 해소한다. 아직 연결이 안 됐으면 경고는 그대로이고 Runner는 다시 멈춘다.
+  - 왜: 재작성된 이력을 자동으로 받거나 옛 입력 버전을 지우면 입력 원장이 깨진다. 사람이 연결을 되돌리고, 사실 확인은 Runner의 git 관측으로 한다.
+  - 열린 재작성 경고가 없으면 409 INVALID_TRANSITION. `updatedAt`은 프로젝트 버전(§1.3)이다.
+  - 새 main을 기존 원장과 잇지 않고 기준으로 삼으려면 전체 초기화·재등록이 필요하다(별도 owner 결정).
 - POST `/api/project/reset` `{confirmName,keepSettings}` · GET `/reset-preview`★ · GET `/export`★
   - 건수·정리 내용 / 내보내기 **zip(여러 파일을 하나로 묶은 압축 파일)**(데이터 JSON·보고서 PDF·Evidence, P L4702 안내문. 비밀값·수신자 제외).
     - 용어 풀이: PDF = 인쇄용 문서 파일 형식.
@@ -469,6 +483,8 @@ Runner만 부르는 API다. Runner 토큰과 epoch 헤더가 필요하다(§1).
   - 봉인이나 `keyId`가 있다고 해서 외부 쓰기가 허가된 것은 아니다. 쓰기 허가는 §3.4-5의 권한 세대가 정한다.
 - GET `/runner/policy`★
   - 상한·예산·주기·ci 설정·입력 확인 주기 묶음(`ETag`)
+  - `inputRecheck`: 입력 확인 다시 시도 번호다. 열린 이력 재작성 경고에서 팀장이 복구 확인을 누를 때마다 1 오르고, 열린 경고가 없으면 0이다.
+    - Runner는 이력 재작성으로 입력 보고를 멈춘 뒤 이 값이 바뀌었을 때만 다시 관측한다. epoch가 바뀌면(초기화) 이전 보고 상태를 모두 버린다.
   - `claudeModels`: Runner가 보고할 Claude 모델 목록(설정값, §2.1).
   - `cliGrades[{agent,version,model,options,grade}]`: 서버에 등록된 CLI 조합별 관측 등급이다. `grade`는 `verified`·`partial`·`unverified`다.
     - Runner 준비 점검 `obs`는 실행할 조합(CLI·버전·모델·옵션)이 여기에 `verified`로 있는지 대조한다(G§6.7-8).
