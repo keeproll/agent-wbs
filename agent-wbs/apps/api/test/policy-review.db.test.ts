@@ -7,6 +7,7 @@ import { failUndelivered } from '../src/messages/service.ts';
 import { emitChange } from '../src/changes/events.ts';
 import { encodeCursor } from '../src/changes/history.ts';
 import { jobPayloadErrors } from '@awbs/shared/api';
+import { subjectHash } from '../src/tasks/hash.ts';
 
 let h: Harness;
 let f: ProjectFixture;
@@ -143,6 +144,9 @@ test('지적 1: 재판단 작업은 estimate payload 계약을 따른다', async
   expect(job.payload.policy.rejudge).toEqual({ reason: 'model_disallowed', trigger: expect.stringContaining('claude-opus-5-5'),
     targets: [{ taskKey: 'TASK-0002', roles: ['dev'] }, { taskKey: 'TASK-0003', roles: ['dev'] }] });
   expect(job.payload.tasks.map((t: { taskKey: string }) => t.taskKey)).toEqual(['TASK-0002', 'TASK-0003']);
+  // M2 통합: payload hash는 Task 조회 내용으로 계산한 판단 hash(M2-02 tasks/hash.ts, Planning이 돌려보낼 값)와 같다.
+  const d=(await h.lead('GET','/api/tasks/TASK-0002')).body;
+  expect(job.payload.tasks[0].subjectHash).toBe(subjectHash({ title:d.title, overview:d.spec.overview, spec:d.spec.spec, ac:d.spec.ac, outputs:d.outputs, designs:d.designs, conflictGroup:d.conflictGroup }));
 });
 
 test('emitChange serializes commits from two independent transactions', async () => {

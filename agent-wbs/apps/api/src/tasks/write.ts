@@ -1,7 +1,9 @@
 import type { PoolClient } from '@awbs/db';
 import type { TaskStatus } from '@awbs/shared';
+import { isTimestamp } from '@awbs/shared/api';
 import { TaskError } from './errors.ts';
 import { iso, publicDetail, taskDetail } from './read.ts';
+import { deferChange } from '../changes/events.ts';
 
 /** 잠근 Task 행. updatedAt은 마이크로초까지 비교한다. */
 export interface LockedTask { id: string; project_id: string; task_key: string; status: TaskStatus; updated_at: string; deleted_at: string | null }
@@ -29,22 +31,13 @@ export async function lockGraph(client: PoolClient, projectId: string): Promise<
   await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [`awbs:task-graph:${projectId}`]);
 }
 
-/**
- * Timestamp 스키마는 모양(정규식)만 본다. `2026-02-30`처럼 달력에 없는 값이 DB 변환에서 500이 되지 않게
- * 날짜·시각이 실제로 있는지 왕복 변환으로 확인하고, DB가 받는 0001년 이상만 허용한다. 소수점 아래(µs)는 모양 검사로 충분하다.
- */
-export function realTimestamp(value: string): boolean {
-  const local = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.\d{1,6})?Z$/.exec(value)?.[1];
-  // JS Date는 0000년을 받지만 PostgreSQL timestamptz는 이 ISO 표현의 0000년을 거부한다(기원전 1년).
-  if (!local || local.startsWith('0000')) return false;
-  const date = new Date(`${local}Z`);
-  return !Number.isNaN(date.getTime()) && date.toISOString().startsWith(local);
-}
+export const TIMESTAMP_MESSAGE = '달력에 없거나 허용 범위(1970~9999년) 밖의 시각입니다.';
 
 /** 화면이 본 버전과 다르면 409. 그 뒤에 쌓인 이력을 충돌 창에 보여 준다(contracts §1, G§0.3). */
 export async function assertVersion(client: PoolClient, task: LockedTask, expected: string): Promise<void> {
-  if (!realTimestamp(expected)) {
-    throw new TaskError('VALIDATION_FAILED', {}, [{ path: 'updatedAt', rule: 'format', message: '달력에 없는 날짜·시각입니다.' }]);
+  // 공통 Timestamp 규칙(1970~9999년의 실재하는 UTC 시각, shared api `isTimestamp`)을 그대로 쓴다.
+  if (!isTimestamp(expected)) {
+    throw new TaskError('VALIDATION_FAILED', {}, [{ path: 'updatedAt', rule: 'format', message: TIMESTAMP_MESSAGE }]);
   }
   const same = (await client.query<{ same: boolean }>('select $1::timestamptz=$2::timestamptz as same', [task.updated_at, expected])).rows[0]?.same;
   if (same) return;
@@ -69,8 +62,10 @@ export function assertEditable(task: LockedTask): void {
   }
 }
 
-export async function changeEvent(client: PoolClient, projectId: string, topic: 'task' | 'dependency', ref: Record<string, unknown>): Promise<void> {
-  await client.query('insert into change_events(project_id,topic,ref) values($1,$2,$3::jsonb)', [projectId, topic, JSON.stringify(ref)]);
+/** 변경 이벤트는 공통 규칙(changes/events.ts)으로 커밋 직전에 쓴다. 그 자리에서 잠그면 뒤의 Task 잠금과 교착할 수 있다. */
+export function changeEvent(client: PoolClient, projectId: string, topic: 'task' | 'dependency', ref: Record<string, unknown>): Promise<void> {
+  deferChange(client, projectId, topic, ref);
+  return Promise.resolve();
 }
 
 /** 명세·설계·체크리스트·산출물·관계 변경도 Task 버전을 올린다(contracts §1.3). 갱신 트리거가 단조 증가를 보장한다. */

@@ -4,6 +4,7 @@ import { PlatformError } from '../platform/errors.ts';
 import { RunnerRepository, required } from '../runner/repository.ts';
 import { assertExternal } from '../runner/service.ts';
 import { record, SYSTEM } from '../tasks/history.ts';
+import { deferChange } from '../changes/events.ts';
 
 export async function gateInputs(client: PoolClient, taskIds: string[], headSync: HeadSync | null = null): Promise<Map<string, GateInput>> {
   const rows = (await client.query<{ id: string; planning_approved_at: Date | null; revision: number; input_v: number; head_sha: string; open_qa: boolean;
@@ -70,7 +71,7 @@ export async function completeMergedTask(client: PoolClient, taskKey: string, ba
   await assertExternal(repo,job);
   await client.query("update tasks set status='done',act_end=greatest(coalesce(act_start,clock_timestamp()),clock_timestamp()) where id=$1", [task.id]);
   await repo.historyEvent(task,'완료',{ mergeSha:queue?.actual_merge_sha });
-  await client.query("insert into change_events(project_id,topic,ref) values($1,'task',$2)", [task.project_id,{ taskKey }]);
+  deferChange(client,task.project_id,'task',{ taskKey });
   await client.query("insert into notify_events(project_id,dedup_key,kind,ref) select $1,$2,'done',$3 where exists(select 1 from notify_rules where key='done' and enabled) on conflict do nothing", [task.project_id,`done:${task.id}`,{ taskKey }]);
 }
 

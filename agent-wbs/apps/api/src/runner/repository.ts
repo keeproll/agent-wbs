@@ -131,8 +131,10 @@ export class RunnerRepository {
   async expired(at: Date) { return (await this.client.query<Job>(`select * from runner_jobs j where state in ('leased','started') and kind<>'repo_check' and
     (lease_until<=$1 or exists(select 1 from runner_sessions s join app_settings cfg on cfg.singleton
       where s.runner_id=substring(j.lease_owner from 8) and s.ended_at is null and s.last_heartbeat_at<= $1 - make_interval(secs=>cfg.heartbeat_seconds*cfg.heartbeat_misses))) for update`, [at])).rows; }
-  async closeSessions(at: Date) { await this.client.query(`update runner_sessions s set ended_at=last_heartbeat_at,end_reason='unknown' from app_settings cfg
-    where cfg.singleton and ended_at is null and last_heartbeat_at<=$1::timestamptz-make_interval(secs=>cfg.heartbeat_seconds*cfg.heartbeat_misses)`, [at]); }
+  /** 끊긴 세션을 닫고 닫은 수를 돌려준다. */
+  async closeSessions(at: Date) { return (await this.client.query(`update runner_sessions s set ended_at=last_heartbeat_at,end_reason='unknown' from app_settings cfg
+    where cfg.singleton and ended_at is null and last_heartbeat_at<=$1::timestamptz-make_interval(secs=>cfg.heartbeat_seconds*cfg.heartbeat_misses)`, [at])).rowCount ?? 0; }
+  async liveSession() { return Boolean((await this.client.query('select 1 from runner_sessions where ended_at is null limit 1')).rowCount); }
   async heartbeat(runner: string) { await this.client.query('update runner_sessions set last_heartbeat_at=clock_timestamp() where runner_id=$1 and ended_at is null', [runner]); }
   async sessions() { return (await this.client.query<PgRow<typeof schema.runnerSessions.$inferSelect>>('select * from runner_sessions order by started_at')).rows; }
   async session(runner: string, event: string, at: string, reason?: string) {

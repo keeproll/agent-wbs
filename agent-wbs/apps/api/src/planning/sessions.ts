@@ -1,9 +1,9 @@
 import type { Pool, PoolClient } from '@awbs/db';
-import type { WireProposalOp } from '@awbs/shared/api';
+import { isTimestamp, type WireProposalOp } from '@awbs/shared/api';
 import type { FastifyRequest } from 'fastify';
 import { TaskError } from '../tasks/errors.ts';
 import { iso } from '../tasks/read.ts';
-import { LEAD, realTimestamp } from '../tasks/write.ts';
+import { LEAD, TIMESTAMP_MESSAGE } from '../tasks/write.ts';
 import { assertJob } from './jobs.ts';
 import { clientOf, idOf, insertCp, proposalView } from './proposals.ts';
 import type { RouteFn } from './split.ts';
@@ -98,7 +98,7 @@ export function registerSessionRoutes(route: RouteFn, pool: Pool, epochOf: (requ
     const planning = await loadPlanning(client, idOf(request), true);
     const review = UUID.test(rid) ? (await client.query<{ updated_at: string }>(`select ${iso('updated_at')} as updated_at from planning_reviews where id=$1 and planning=$2 for update`, [rid, planning.id])).rows[0] : undefined;
     if (!review) throw new TaskError('NOT_FOUND', { resource: 'planning_review', id: rid });
-    if (!realTimestamp(body.updatedAt)) throw new TaskError('VALIDATION_FAILED', {}, [{ path: 'updatedAt', rule: 'format', message: '달력에 없는 날짜·시각입니다.' }]);
+    if (!isTimestamp(body.updatedAt)) throw new TaskError('VALIDATION_FAILED', {}, [{ path: 'updatedAt', rule: 'format', message: TIMESTAMP_MESSAGE }]);
     const same = (await client.query<{ same: boolean }>('select $1::timestamptz=$2::timestamptz as same', [review.updated_at, body.updatedAt])).rows[0]?.same;
     if (!same) throw new TaskError('VERSION_CONFLICT', { current: await planningView(client, planning), changes: [] });
     await client.query('update planning_reviews set choice=$2,memo=coalesce($3,memo) where id=$1', [rid, body.choice, body.memo ?? null]);

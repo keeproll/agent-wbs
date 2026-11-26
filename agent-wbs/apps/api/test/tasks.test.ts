@@ -4,7 +4,7 @@ import { describe, expect, test } from 'vitest';
 import { approvalErrors } from '../src/tasks/approval.ts';
 import { canonicalJson, judgedContent, subjectHash, type JudgedSource } from '../src/tasks/hash.ts';
 import { wbsPaths } from '../src/tasks/wbs.ts';
-import { realTimestamp } from '../src/tasks/write.ts';
+import { isTimestamp } from '@awbs/shared/api';
 
 
 const source: JudgedSource = {
@@ -114,11 +114,15 @@ describe('tasks subjectHash 계약 고정(독립 리뷰 §5)', () => {
 });
 
 describe('tasks 재리뷰 P2-A·P2-B', () => {
-  test('버전 시각은 PostgreSQL이 받는 0001년 이상만 실제 값으로 본다', () => {
-    expect(realTimestamp('0000-01-01T00:00:00Z')).toBe(false);
-    expect(realTimestamp('0000-12-31T23:59:59.999999Z')).toBe(false);
-    expect(realTimestamp('0001-01-01T00:00:00Z')).toBe(true);
-    expect(realTimestamp('2024-02-29T23:59:59.123456Z')).toBe(true);
+  // M2 통합: Task 버전 시각도 공통 isTimestamp(1970~9999년, 조정자 결정)를 쓴다.
+  test('버전 시각은 공통 Timestamp 규칙(1970~9999년의 실재하는 시각)만 실제 값으로 본다', () => {
+    expect(isTimestamp('0000-01-01T00:00:00Z')).toBe(false);
+    expect(isTimestamp('0000-12-31T23:59:59.999999Z')).toBe(false);
+    expect(isTimestamp('0001-01-01T00:00:00Z')).toBe(false);
+    expect(isTimestamp('1969-12-31T23:59:59.999999Z')).toBe(false);
+    expect(isTimestamp('1970-01-01T00:00:00Z')).toBe(true);
+    expect(isTimestamp('2024-02-29T23:59:59.123456Z')).toBe(true);
+    expect(isTimestamp('2023-02-29T00:00:00Z')).toBe(false);
   });
 
   test('완료·취소 보호로 거부하는 9개 API는 계약에 409 INVALID_TRANSITION을 선언한다', () => {

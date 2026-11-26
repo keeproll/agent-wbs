@@ -182,6 +182,39 @@ describe('runner 실제 PostgreSQL 검증', () => {
     expect(started.statusCode, started.body).toBe(200);
     const saved = (await owner.query('select grade_adjust from task_attempts where id=$1', [started.json().attemptId])).rows[0];
     expect(saved.grade_adjust).toMatchObject({ kind: 'regrade', from: { model: 'gpt-6.1-sol' }, to: { model: 'gpt-6.2-sol' } });
+    // M2 통합: 실제 재개(start)도 D-29 이력(M2-08 recordResumeRegrade와 같은 기록)을 남긴다.
+    const interrupted = ((await owner.query("select id from task_attempts where task=$1 and status='interrupted'", [t.id])).rows[0] as { id: string }).id;
+    const regrade = (await owner.query("select actor,before,after,ref from task_history where task=$1 and kind='실행 등급'", [t.id])).rows;
+    expect(regrade).toEqual([{ actor: '시스템', before: { modelId: 'gpt-6.1-sol', effort: 'high' }, after: { modelId: 'gpt-6.2-sol', effort: 'high' },
+      ref: { taskKey: t.key, adjust: 'regrade', reason: 'MODEL_NOT_ALLOWED', attemptId: interrupted } }]);
+    expect((await owner.query("select 1 from change_events where topic='task' and ref->>'taskKey'=$1", [t.key])).rowCount).toBeGreaterThan(0);
+  });
+
+  test('같은 등급으로 재개하면 재판단 이력을 남기지 않는다', async () => {
+    const { t, job } = await claimed();
+    await start(job);
+    await post('attempts/' + ((await owner.query('select id from task_attempts where job=$1', [job.id])).rows[0] as { id: string }).id + '/interrupt', { fence: job.fence, reason: 'error', at: now() });
+    await release(job, { kind: 'no_process', bootId: 'boot-a' });
+    expect((await request(t.key)).statusCode).toBe(202);
+    const started = await start((await claim()).json().job);
+    expect(started.statusCode, started.body).toBe(200);
+    expect((await owner.query("select 1 from task_history where task=$1 and kind='실행 등급'", [t.id])).rowCount).toBe(0);
+  });
+
+  test('연결 감시가 마지막 세션을 닫으면 전달 대기 메시지를 실패로 표시하고, 열린 세션이 남으면 그대로 둔다', async () => {
+    const t = await task();
+    const draft = await app.inject({ method: 'POST', url: '/api/messages', headers: lead(), payload: { taskKey: t.key, type: '질문', toAgent: 'Codex', body: '확인해 주세요.' } });
+    expect(draft.statusCode, draft.body).toBe(201);
+    const sent = await app.inject({ method: 'POST', url: `/api/messages/${String(draft.json().id)}/send`, headers: lead(), payload: { updatedAt: draft.json().updatedAt } });
+    expect(sent.statusCode, sent.body).toBe(200);
+    const delivery = async () => ((await owner.query('select delivery,fail_reason from messages where id=$1', [draft.json().id])).rows[0] as { delivery: string; fail_reason: string | null });
+    await owner.query("insert into runner_sessions(runner_id,started_at,last_heartbeat_at) values('runner-old',now()-interval '10 minutes',now()-interval '4 minutes'),('runner-live',now()-interval '10 minutes',now())");
+    await watchRunner(pool, 1);
+    expect(await delivery()).toMatchObject({ delivery: 'Queued' });
+    await owner.query("update runner_sessions set last_heartbeat_at=now()-interval '4 minutes' where runner_id='runner-live'");
+    await watchRunner(pool, 1);
+    expect(await delivery()).toEqual({ delivery: 'Failed', fail_reason: 'Runner 연결 불가 — heartbeat 응답 없음' });
+    expect((await owner.query("select 1 from change_events where topic='message'")).rowCount).toBeGreaterThan(0);
   });
 
   test('같은 종류 실행 실패는 자동 2회만 재시도하고 중복 보고가 한도를 소모하지 않는다', async () => {

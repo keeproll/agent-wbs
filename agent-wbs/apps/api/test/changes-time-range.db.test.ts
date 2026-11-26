@@ -37,8 +37,31 @@ async function baseBody(op: Operation): Promise<Record<string, unknown>> {
     const current = (await h.lead('GET', '/api/messages?taskKey=TASK-0001')).body.items.find((m: { id: string }) => m.id === draftId) as Body;
     return op.id === 'updateMessageDraft' ? { updatedAt: current.updatedAt, body: 'x' } : { updatedAt: current.updatedAt };
   }
-  return {};
+  // M2 통합: 다른 작업(M2-02·M2-03·M2-07)의 경로도 시각 칸 하나만 망가지도록 나머지 필수 칸을 채운다.
+  return EXTRA_BODY[op.id] ?? {};
 }
+
+const SHA = 'a'.repeat(40);
+const UUID = '00000000-0000-4000-8000-000000000000';
+const EXTRA_BODY: Record<string, Record<string, unknown>> = {
+  choosePlanningReview: { choice: 'x' },
+  approveProposal: { previewHash: 'a'.repeat(64) },
+  applyProposal: { previewHash: 'a'.repeat(64) },
+  analyzeInputs: { commit: SHA, commits: [] },
+  skipInputs: { commits: [] },
+  retryInputs: { version: 1 },
+  createProject: { name: 'x', url: 'https://github.com/o/r', constraints: [], instruction: '', repoCheckId: UUID },
+  addChecklistItem: { content: 'x', required: false },
+  updateTask: { title: 'x' },
+  updateTaskSpec: { ac: [] },
+  updateChecklistItem: { done: false },
+  addDependency: { predTaskKey: 'TASK-0002', depType: 'FS' },
+  addSplitException: { rule: 'one', why: 'x' },
+  updateTaskOutputs: { outputs: [] },
+  updateTaskDesign: { content: {} },
+};
+/** 경로 변수도 형식에 맞는 값을 넣는다. 형식이 틀리면 시각보다 경로 변수 오류가 먼저 나온다. */
+const urlOf = (op: Operation) => op.path.replace(':messageId', draftId).replace(':taskKey', 'TASK-0001').replace(':kind', 'DB').replace(/:\w+/g, UUID);
 
 test('등록된 경로의 시각·날짜 입력을 빠짐없이 찾는다', () => {
   const found = targets().map((t) => `${t.op.id}.${t.where}.${t.field}`);
@@ -51,7 +74,7 @@ test('전 경로: 범위 밖 시각·날짜는 400(500 아님), 오류 위치는
   const failures: string[] = [];
   for (const { op, where, field, kind } of targets()) {
     for (const bad of kind === 'DateOnly' ? BAD_DATES : BAD_TIMES) {
-      const url = op.path.replace(':messageId', draftId).replace(/:\w+/g, '00000000-0000-4000-8000-000000000000');
+      const url = urlOf(op);
       const isRunner = op.principal === 'runner';
       const res = where === 'query'
         ? await (isRunner ? h.runner : h.lead)(op.method, `${url}?${field}=${encodeURIComponent(bad)}${op.id === 'getChanges' ? '&after=0' : ''}`)

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from 'vitest';
+import { ApiTransportError } from '../../../../agent-runner/src/api/client.ts';
 import { scenario, type Scenario } from './scenario.ts';
 
 let h: Scenario;
@@ -37,7 +38,7 @@ test('시나리오 8: 연결 끊김 → 전달 실패 → 재연결 → 같은 �
   expect(draft.status).toBe(201);
   await h.lead('POST', `/api/messages/${String(draft.body.id)}/send`, { updatedAt: draft.body.updatedAt });
   h.runner.online = false;
-  await expect(h.runner.messages()).rejects.toThrow('연결 끊김');
+  await expect(h.runner.messages()).rejects.toThrow(ApiTransportError);
   await h.watchDisconnected();
   const failed = await h.message(String(draft.body.id));
   expect(failed).toMatchObject({ delivery: 'Failed' });
@@ -97,7 +98,7 @@ test('메시지 수신 확인: 연결 복구 후 중복 조회·중복 ack도 �
   expect(draft.status).toBe(201);
   expect((await h.lead('POST', `/api/messages/${String(draft.body.id)}/send`, { updatedAt: draft.body.updatedAt })).status).toBe(200);
   h.runner.online = false;
-  await expect(h.runner.messages()).rejects.toThrow('연결 끊김');
+  await expect(h.runner.messages()).rejects.toThrow(ApiTransportError);
   expect(await h.message(String(draft.body.id))).toMatchObject({ delivery: 'Queued' });
   h.runner.online = true;
   expect((await h.runner.messages()).map(m => m.id)).toEqual([draft.body.id]);

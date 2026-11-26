@@ -1,14 +1,17 @@
 import { execPolicyToApi, type ExecPolicyRow, type PoolClient } from '@awbs/db';
 import {
-  belowFloor, DEFAULT_EXEC_POLICY, effortLevel, floorOf, gradeError, resolveRunGrade, roleOf,
-  type Agent, type AttemptKind, type AttemptStatus, type ModelSettings, type ResolveResult, type TaskStatus,
+  belowFloor, DEFAULT_EXEC_POLICY, effortLevel, floorOf, gradeError,
+  type Agent, type AttemptKind, type ModelSettings, type ResolveResult, type TaskStatus,
 } from '@awbs/shared';
-import { ChangeBatch, emitChange, iso } from '../changes/events.ts';
+import { ChangeBatch, deferChange, iso } from '../changes/events.ts';
 import { jobPayloadErrors } from '@awbs/shared/api';
 import { ApiError, assertSameVersion, invalid, isUuid, json } from '../changes/http.ts';
 import { judgedTasks } from './judged.ts';
+import { writeResumeRegrade } from './resume.ts';
+import { resolveGrade } from '../runner/service.ts';
+import { RunnerRepository } from '../runner/repository.ts';
 import {
-  AGENTS, catalogOf, completeOrder, gradesToRejudge, modelKey, planModelChange, ranksOf, resumeRegradeEntry,
+  AGENTS, catalogOf, completeOrder, gradesToRejudge, modelKey, planModelChange, ranksOf,
   type GradeRow, type ModelPut, type ModelRow, type Rejudge,
 } from './rules.ts';
 
@@ -20,7 +23,6 @@ import {
 
 const LEAD = '팀장';
 const PLANNING = 'Planning Agent';
-const SYSTEM = '시스템';
 const TERMINAL: readonly TaskStatus[] = ['done', 'cancelled'];
 
 /** G§4.6 「Claude 개발 → Codex QA」를 기본 Workflow로 한다(milestones §1 담당 기준과 같다). */
@@ -325,58 +327,40 @@ export async function applyRegrade(client: PoolClient, input: RegradeInput): Pro
   await taskHistory(client, { projectId: task.project_id, taskId: task.id, actor: input.actor ?? PLANNING, ref: { taskKey: input.taskKey, role: input.role },
     text: `${input.role === 'dev' ? '개발' : '검증'} 등급 Planning Agent 재판단 — ${input.reason}`,
     before: old ? { modelId: old.model_id, effort: old.effort, locked: old.locked } : null, after: { ...grade, locked: false } });
-  const changes = new ChangeBatch();
-  await touchTask(client, changes, task.project_id, task.id, input.taskKey);
-  await changes.emit(client);
+  // 부르는 쪽(Planning 보고)이 뒤에서 다른 행을 더 잠글 수 있으므로 변경 이벤트는 커밋 직전에 쓴다(deferChange).
+  await client.query('update tasks set updated_at=clock_timestamp() where id=$1', [task.id]);
+  deferChange(client, task.project_id, 'task', { taskKey: input.taskKey });
 }
 
 /* ───────────── 재개 등급(D-29) ───────────── */
-
-interface AttemptRow { id: string; task: string; kind: AttemptKind; status: AttemptStatus; model_id: string; effort: string; attempt_no: number }
 
 /**
  * 중단된 시도를 재개할 때 쓸 등급(G§6.5·§7.3, D-29). 판정은 M1-06 `resolveRunGrade` 그대로다.
  * - 직전 시도 모델이 허용 중이면 같은 등급(`resume`).
  * - 허용 해제됐으면 재판단된 Task 등급(`regrade`). Task 등급도 아직 그 모델이면(재판단 전) MODEL_NOT_ALLOWED로 거절.
- * 실행 직전 등급 API(run-grade, M2-05)와 같은 판정이다. 통합 때 하나로 합친다.
+ * M2 통합: 실행 직전 등급 API(run-grade, M2-05)와 같은 판정 함수(`resolveGrade`)를 쓴다. 남은 사용량 보고가 없어도 거절하지 않는다.
  */
 export async function resumeGrade(client: PoolClient, attemptId: string): Promise<ResolveResult> {
   if (!isUuid(attemptId)) throw new ApiError('ATTEMPT_NOT_FOUND', { attemptId }, [], '실행 시도를 찾을 수 없습니다.');
-  const attempt = (await client.query<AttemptRow>('select id,task,kind,status,model_id,effort,attempt_no from task_attempts where id=$1', [attemptId])).rows[0];
+  const attempt = (await client.query<{ task: string; kind: AttemptKind; attempt_no: number }>('select task,kind,attempt_no from task_attempts where id=$1', [attemptId])).rows[0];
   if (!attempt) throw new ApiError('ATTEMPT_NOT_FOUND', { attemptId }, [], '실행 시도를 찾을 수 없습니다.');
-  const task = (await client.query<{ task_key: string; assignee_agent: Agent; verifier_agent: Agent; primary_domain: string; related_domains: string[] }>(
-    'select task_key,assignee_agent,verifier_agent,primary_domain,related_domains::text[] as related_domains from tasks where id=$1', [attempt.task])).rows[0];
+  const repo = new RunnerRepository(client);
+  const task = await repo.taskById(attempt.task);
   if (!task) throw new ApiError('TASK_NOT_FOUND', {}, [], 'Task를 찾을 수 없습니다.');
-  const role = roleOf(attempt.kind);
-  const agent = role === 'dev' ? task.assignee_agent : task.verifier_agent;
-  const grades = (await client.query<{ role: string; model_id: string; effort: string; locked: boolean }>('select role,model_id,effort,locked from task_grades where task=$1', [attempt.task])).rows;
-  const stored = grades.find((g) => g.role === role);
-  if (!stored) return { ok: false, code: 'MODEL_UNKNOWN' };
-  const dev = grades.find((g) => g.role === 'dev');
-  const history = (await client.query<AttemptRow>('select id,task,kind,status,model_id,effort,attempt_no from task_attempts where task=$1 and attempt_no<=$2 order by attempt_no,started_at', [attempt.task, attempt.attempt_no])).rows;
-  const { catalogs } = await gradeState(client);
-  const policy = execPolicyToApi(await execRow(client), DEFAULT_EXEC_POLICY);
-  const usage = (await client.query<{ remain_pct: string }>('select remain_pct from agent_usage where agent=$1 order by created_at desc limit 1', [agent])).rows[0];
-  return resolveRunGrade({
-    kind: attempt.kind,
-    taskGrade: { modelId: stored.model_id, effort: stored.effort, locked: stored.locked },
-    task: { primaryDomain: task.primary_domain, relatedDomains: task.related_domains, devLevel: dev ? effortLevel(task.assignee_agent, dev.model_id, dev.effort) : null },
-    history: history.map((a) => ({ kind: a.kind, status: a.status, modelId: a.model_id, effort: a.effort })),
-    catalog: catalogs[agent], policy, remainPct: usage ? Number(usage.remain_pct) : null,
-  });
+  const history = (await repo.history(task.id)).filter((a) => a.attempt_no <= attempt.attempt_no);
+  const resolved = await resolveGrade(repo, task, attempt.kind, { history });
+  return 'missing' in resolved ? { ok: false, code: 'MODEL_UNKNOWN' } : resolved.result;
 }
 
 /**
- * 재판단 등급으로 재개할 때의 이력(D-29 「이전→이후 등급·사유를 이력에 기록」). 재개 시도를 시작하는 쪽(M2-05 start)이 부른다.
+ * 재판단 등급으로 재개할 때의 이력(D-29 「이전→이후 등급·사유를 이력에 기록」).
+ * 실제 재개는 M2-05 시도 시작(runner/service.ts `start`)이 같은 `writeResumeRegrade`로 남긴다.
  * 재판단 재개가 아니면(같은 등급 재개·재판단 전·종료된 시도) 409 INVALID_TRANSITION.
  */
 export async function recordResumeRegrade(client: PoolClient, attemptId: string): Promise<void> {
   const result = await resumeGrade(client, attemptId);
   const task = (await client.query<{ id: string; project_id: string; task_key: string }>('select t.id,t.project_id,t.task_key from tasks t join task_attempts a on a.task=t.id where a.id=$1', [attemptId])).rows[0];
-  const entry = result.ok && task ? resumeRegradeEntry(task.task_key, result) : null;
-  if (!task || !entry) throw new ApiError('INVALID_TRANSITION', { attemptId }, [], '재판단한 등급으로 재개하는 시도가 아닙니다.');
-  await taskHistory(client, { projectId: task.project_id, taskId: task.id, actor: SYSTEM, text: entry.text, before: entry.before, after: entry.after, ref: { ...entry.ref, attemptId } });
-  await emitChange(client, task.project_id, 'task', { taskKey: task.task_key });
+  if (!task || !await writeResumeRegrade(client, task, attemptId, result)) throw new ApiError('INVALID_TRANSITION', { attemptId }, [], '재판단한 등급으로 재개하는 시도가 아닙니다.');
 }
 
 /* ───────────── 하위 Agent ───────────── */

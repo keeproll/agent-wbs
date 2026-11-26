@@ -1,4 +1,6 @@
 import { splitSettingsToDomain } from '@awbs/db';
+import type { PoolClient } from '@awbs/db';
+import { invalidateTaskGate } from '../execution/gate.ts';
 import type { Dependency } from '@awbs/shared';
 import { createBaseline, type BaselineTask } from './baseline.ts';
 import {
@@ -578,6 +580,11 @@ export async function analyzeInputs(db: Db, body: { updatedAt: string; commit: s
     [project.id, version, body.commit, JSON.stringify({ treeHash: plan.version.tree, paths: stats }), JSON.stringify(nextMdList(previous.md_list, changes)), JSON.stringify(changes), body.instr ?? '']);
   if (plan.version.v !== version) throw new Error('입력 버전 번호가 원장과 다릅니다.');
   await persistLedger(db, project.id, ledger, plan.ledger);
+  // M2-06 P3-1: 새 입력 버전은 Gate 근거(입력 버전)를 바꾼다. 같은 트랜잭션에서 Gate의 Task마다 무효화 판정을 부른다.
+  // 판정은 invalidateTaskGate가 한다(근거가 그대로인 Task — 고정된 원본 입력 버전을 쓰는 Task — 는 Gate에 남는다).
+  for (const gate of (await db.query<{ task_key: string }>("select task_key from tasks where project_id=$1 and status='gate' and deleted_at is null order by id", [project.id])).rows) {
+    await invalidateTaskGate(db as PoolClient, gate.task_key);
+  }
   const jobId = await createPlanningJob(db, { projectId: project.id, kind: 'input_diff', instruction: body.instr ?? '', stepKeys: INPUT_STEPS });
   await log(db, { id: jobId, project_id: project.id }, `입력 v${String(version)} 고정 — 차이 분석 대기`);
   await enqueueJob(db, { projectId: project.id, kind: 'input_diff', epoch, dedupKey: `input_diff:${jobId}:1`,

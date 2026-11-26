@@ -6,6 +6,7 @@ import type { FastifyRequest } from 'fastify';
 import { TaskError } from '../tasks/errors.ts';
 import { iso } from '../tasks/read.ts';
 import type { ProposalInput } from './evaluate.ts';
+import { deferChange } from '../changes/events.ts';
 
 /** 변경 제안(CP) 행을 읽고 쓰는 공용 함수. 팀장·Planning 경로가 함께 쓴다. */
 
@@ -49,7 +50,7 @@ export async function proposalView(client: PoolClient, row: CpRow) {
 export async function event(client: PoolClient, row: Pick<CpRow, 'id' | 'project_id'>, kind: string, actor: string, comment = '') {
   await client.query('insert into change_proposal_events(project_id,proposal,kind,actor,comment,created_at) values($1,$2,$3,$4,$5,clock_timestamp())',
     [row.project_id, row.id, kind, actor, comment]);
-  await client.query("insert into change_events(project_id,topic,ref) values($1,'proposal',$2::jsonb)", [row.project_id, JSON.stringify({ id: row.id })]);
+  deferChange(client, row.project_id, 'proposal', { id: row.id });
 }
 
 /** CP 행을 만든다. 표시 ID(CP-001)는 프로젝트 counters로 재사용하지 않는다. */

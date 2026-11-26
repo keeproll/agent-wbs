@@ -5,6 +5,7 @@ import { OPERATIONS, type Operation } from '@awbs/shared/api';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { randomToken, tokenHash, verifyPassword } from './credentials.ts';
 import { installErrors, PlatformError } from './errors.ts';
+import { dropChanges, flushChanges } from '../changes/events.ts';
 
 export interface SecurityOptions { origin: string; lan: boolean; port?: number }
 interface Session { token_hash: string; expires_at: Date; csrf: string }
@@ -45,8 +46,11 @@ async function finish(request: FastifyRequest, commit: boolean): Promise<void> {
   const client = context?.client;
   if (!client || !context) return;
   delete context.client;
-  try { await client.query(commit ? 'commit' : 'rollback'); }
-  catch (error) { client.release(true); throw error; }
+  try {
+    // 트랜잭션 중간에 모아 둔 변경 이벤트는 모든 업무 잠금 뒤, 커밋 직전에 쓴다(changes/events.ts deferChange).
+    if (commit) await flushChanges(client); else dropChanges(client);
+    await client.query(commit ? 'commit' : 'rollback');
+  } catch (error) { dropChanges(client); client.release(true); throw error; }
   client.release();
 }
 

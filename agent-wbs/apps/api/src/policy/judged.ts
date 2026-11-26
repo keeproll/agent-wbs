@@ -1,25 +1,17 @@
-import { createHash } from 'node:crypto';
 import type { PoolClient } from '@awbs/db';
-import { DESIGN_KINDS, type DesignKind } from '@awbs/shared';
+import type { DesignKind } from '@awbs/shared';
+import { canonicalJson, judgedContent, subjectHash, type Ac, type JudgedSource } from '../tasks/hash.ts';
 
 /**
  * 판단 대상 내용(JudgedContent, data-model §2.3-1)과 그 hash(subjectHash).
  * estimate job payload의 `tasks[{taskKey,subjectHash,content}]`를 채우는 데 쓴다(contracts §3.2, M2-08 리뷰 지적 1).
- * 규칙은 M2-02 `apps/api/src/tasks/hash.ts`와 같다 — Planning이 같은 hash를 돌려보내야 하므로 통합 때 하나로 합친다.
+ * M2 통합: 규칙은 M2-02 `tasks/hash.ts` 하나만 쓴다. Planning이 같은 hash를 돌려보내야 하므로 사본을 두지 않는다.
  */
-const SPEC_KEYS = ['req', 'work', 'steps', 'inputs', 'outputs', 'files', 'constraints', 'errors', 'docs', 'verify'] as const;
 const lines = (value: unknown): string[] => (Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []);
 const text = (value: unknown) => (typeof value === 'string' ? value : '');
 
-/** 키를 정렬한 JSON(undefined 값은 뺌). 배열 순서는 의미가 있으므로 그대로 둔다. */
-export function hashJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(hashJson).join(',')}]`;
-  if (value && typeof value === 'object') {
-    return `{${Object.entries(value).filter(([, item]) => item !== undefined).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-      .map(([key, item]) => `${JSON.stringify(key)}:${hashJson(item)}`).join(',')}}`;
-  }
-  return JSON.stringify(value) ?? 'null';
-}
+/** 키를 정렬한 JSON(undefined 값은 뺌). `tasks/hash.ts`의 canonicalJson과 같은 함수다. */
+export const hashJson = canonicalJson;
 
 export interface JudgedTask { taskKey: string; subjectHash: string; content: Record<string, unknown> }
 
@@ -34,20 +26,16 @@ export async function judgedTasks(client: PoolClient, taskIds: readonly string[]
     'select task,kind,content from task_designs where task=any($1::uuid[])', [taskIds])).rows;
   return tasks.map((t) => {
     const overview = t.overview ?? {};
-    const spec = t.spec ?? {};
-    const content = {
+    const source: JudgedSource = {
       title: t.title,
-      scope: lines(overview.scope),
-      out: lines(overview.out),
-      doneCond: text(overview.doneCond),
-      spec: Object.fromEntries(SPEC_KEYS.map((key) => [key, lines(spec[key])])),
-      ac: (t.ac ?? []).map((item) => { const a = (item ?? {}) as Record<string, unknown>; return { given: text(a.given), when: text(a.when), then: text(a.then), method: text(a.method) }; }),
-      outputs: outputs.filter((o) => o.task === t.id).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-        .map(({ name, kind, required, verify }) => ({ name, kind, required, verify })),
-      designs: designs.filter((d) => d.task === t.id).sort((a, b) => DESIGN_KINDS.indexOf(a.kind) - DESIGN_KINDS.indexOf(b.kind))
-        .map(({ kind, content: c }) => ({ kind, content: c })),
+      // 판단 대상이 아닌 칸(목적·배경·선행 조건)은 judgedContent가 쓰지 않는다.
+      overview: { purpose: '', background: '', precond: '', scope: lines(overview.scope), out: lines(overview.out), doneCond: text(overview.doneCond) },
+      spec: t.spec ?? {},
+      ac: (t.ac ?? []).map((item): Ac => { const a = (item ?? {}) as Record<string, unknown>; return { given: text(a.given), when: text(a.when), then: text(a.then), method: text(a.method) }; }),
+      outputs: outputs.filter((o) => o.task === t.id).map(({ name, kind, required, verify }) => ({ name, kind, required, verify, delivered: false })),
+      designs: designs.filter((d) => d.task === t.id).map(({ kind, content }) => ({ kind, content })),
       conflictGroup: t.conflict_group,
     };
-    return { taskKey: t.task_key, subjectHash: createHash('sha256').update(hashJson(content)).digest('hex'), content };
+    return { taskKey: t.task_key, subjectHash: subjectHash(source), content: judgedContent(source) };
   });
 }

@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import type { Pool, PoolClient } from '@awbs/db';
 import type { JudgedRules } from '@awbs/shared';
-import { HOLD_ERROR, inputErrors, OPERATIONS, type WireProposalOp } from '@awbs/shared/api';
+import { HOLD_ERROR, inputErrors, isTimestamp, OPERATIONS, type WireProposalOp } from '@awbs/shared/api';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { inEpoch } from '../platform/transaction.ts';
 import { installTaskErrors, TaskError } from '../tasks/errors.ts';
 import { iso } from '../tasks/read.ts';
-import { lockGraph, LEAD, realTimestamp } from '../tasks/write.ts';
+import { lockGraph, LEAD, TIMESTAMP_MESSAGE } from '../tasks/write.ts';
 import { applyEvaluation, JudgementDrift } from './apply.ts';
 import { stripJudgements } from './content.ts';
 import { evaluate, type Evaluation } from './evaluate.ts';
@@ -15,6 +15,7 @@ import { clientOf, CP_COLUMNS, event, idOf, inputOf, insertCp, loadCp, proposalV
 import { recordReplan, scheduleView } from './schedule.ts';
 import { registerSessionRoutes } from './sessions.ts';
 import { registerSplitRoutes } from './split.ts';
+import { deferChange } from '../changes/events.ts';
 
 /*
  * Planning·변경 제안(CP) API(contracts §2.1 proposals 상세, §3.3 Planning API).
@@ -37,7 +38,7 @@ async function transition(client: PoolClient, row: CpRow, status: string, kind: 
 }
 
 async function assertCpVersion(client: PoolClient, row: CpRow, expected: string) {
-  if (!realTimestamp(expected)) throw new TaskError('VALIDATION_FAILED', {}, [{ path: 'updatedAt', rule: 'format', message: '달력에 없는 날짜·시각입니다.' }]);
+  if (!isTimestamp(expected)) throw new TaskError('VALIDATION_FAILED', {}, [{ path: 'updatedAt', rule: 'format', message: TIMESTAMP_MESSAGE }]);
   const same = (await client.query<{ same: boolean }>('select $1::timestamptz=$2::timestamptz as same', [row.updated_at, expected])).rows[0]?.same;
   if (!same) throw new TaskError('VERSION_CONFLICT', { current: await proposalView(client, row), changes: [] });
 }
@@ -318,7 +319,7 @@ export function registerPlanningRoutes(app: FastifyInstance, pool: Pool): void {
         await client.query(`insert into task_history(project_id,at,actor,task,kind,text,after,ref)
           values($1,greatest(clock_timestamp(),(select updated_at+interval '1 microsecond' from tasks where id=$2)),$3,$2,'추정',$4,$5::jsonb,'{"field":"estimate"}'::jsonb)`,
         [projectId, task.id, PLANNING, `추정 ${String(item.estHours)}h (${String(item.loHours)}~${String(item.hiHours)}h, 신뢰도 ${item.confidence})`, JSON.stringify({ est: item.estHours, lo: item.loHours, hi: item.hiHours })]);
-        await client.query("insert into change_events(project_id,topic,ref) values($1,'task',$2::jsonb)", [projectId, JSON.stringify({ taskKey: item.taskKey })]);
+        deferChange(client, projectId, 'task', { taskKey: item.taskKey });
       }
       // 추정이 바뀌면 일정이 바뀐다. 임계값 이상 어긋나면 재조정을 같은 트랜잭션에 기록한다.
       const replan = await recordReplan(client, projectId, { trigger: '재추정', actor: PLANNING, mode: 'drift' });

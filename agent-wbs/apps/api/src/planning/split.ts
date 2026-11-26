@@ -5,6 +5,8 @@ import { TaskError } from '../tasks/errors.ts';
 import { judgedContent, subjectHash, type JudgedSource } from '../tasks/hash.ts';
 import { taskDetail, type TaskDetail } from '../tasks/read.ts';
 import { assertEditable, assertVersion, changed, LEAD, lockTask, record, touch, type LockedTask } from '../tasks/write.ts';
+import { ApiError } from '../changes/http.ts';
+import { applyRegrade } from '../policy/service.ts';
 import { assertJob } from './jobs.ts';
 import { clientOf } from './proposals.ts';
 import { loadSnapshot } from './snapshot.ts';
@@ -105,8 +107,11 @@ export function registerSplitRoutes(route: RouteFn, epochOf: (request: FastifyRe
     const rules = (body.judgedRules?.items ?? []).map((item) => item.rule);
     const duplicates = rules.flatMap((rule, index) => (rules.indexOf(rule) === index ? [] : [{ path: `judgedRules.items.${String(index)}.rule`, rule: 'uniqueRule', message: `규칙 ${rule} 판단이 두 번 있습니다.` }]));
     if (duplicates.length) throw new TaskError('VALIDATION_FAILED', {}, duplicates);
-    await assertJob(client, body.jobId, body.fence);
+    const job = await assertJob(client, body.jobId, body.fence);
     const task = await lockTask(client, keyOf(request));
+    // 등급 재판단 작업(M2-08 requestRejudge가 만든 estimate job의 policy.rejudge)의 대상 역할이면 결과를 applyRegrade로 저장한다(G§7.2, D-29).
+    const rejudgeRoles = ((job.payload as { policy?: { rejudge?: { targets?: { taskKey: string; roles: string[] }[] } } } | null)?.policy?.rejudge?.targets ?? [])
+      .find((target) => target.taskKey === task.task_key)?.roles ?? [];
     assertEditable(task);
     const before = await detailOf(client, task.task_key);
     const hash = subjectHash(sourceOf(before));
@@ -135,6 +140,16 @@ export function registerSplitRoutes(route: RouteFn, epochOf: (request: FastifyRe
       const current = (await client.query<{ model_id: string; effort: string; locked: boolean }>('select model_id,effort,locked from task_grades where task=$1 and role=$2 for update', [task.id, role])).rows[0];
       // 팀장이 고정한 등급은 Planning 판단으로 바꾸지 않는다(G§7.1).
       if (current?.locked || (current?.model_id === grade.modelId && current.effort === grade.effort)) continue;
+      if (rejudgeRoles.includes(role)) {
+        // 허용·매핑·최저선을 검사하고 이전→이후 등급을 「실행 등급」 이력에 남긴다(M2-08). 오류는 이 범위의 TaskError로 바꿔 답한다.
+        try {
+          await applyRegrade(client, { taskKey: task.task_key, role, modelId: grade.modelId, effort: grade.effort, reason: grade.reason });
+        } catch (error) {
+          if (error instanceof ApiError) throw new TaskError(error.code, error.details, error.errors, error.message);
+          throw error;
+        }
+        continue;
+      }
       await client.query(`insert into task_grades(project_id,task,role,model_id,effort,reason,locked,effective_from) values($1,$2,$3,$4,$5,$6,false,clock_timestamp())
         on conflict (task,role) do update set model_id=excluded.model_id,effort=excluded.effort,reason=excluded.reason,effective_from=excluded.effective_from`,
       [projectId, task.id, role, grade.modelId, grade.effort, grade.reason]);

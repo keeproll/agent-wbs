@@ -559,9 +559,14 @@ describe('project 입력 자료 변경·분석·분석 안 함(G§4.2 ②)', () 
     try {
       expect(errorOf(await lead('POST', '/api/project/inputs', { updatedAt: s.updatedAt, commit: SHA3, commits: [SHA3] })).code).toBe('CLEANUP_PENDING');
     } finally { await ownerPool.query("update system_state set cleanup_status='none' where id=1"); }
+    // M2 통합(M2-06 P3-1): Gate에 있는 Task는 새 입력 버전과 같은 트랜잭션에서 근거 무효화 판정을 받는다.
+    const gateTask = (await ownerPool.query<{ id: string }>("update tasks set status='gate' where id=(select id from tasks where deleted_at is null order by task_key limit 1) returning id")).rows[0]?.id;
     const response = await lead('POST', '/api/project/inputs', { updatedAt: s.updatedAt, commit: SHA3, commits: [SHA3], instr: '화면 변경 위주' });
     expect(response.statusCode, response.body).toBe(202);
     expectShape('analyzeInputs', 202, response.json());
+    expect((await ownerPool.query('select status from tasks where id=$1', [gateTask])).rows).toEqual([{ status: 'verifying' }]);
+    expect((await ownerPool.query<{ text: string }>("select text from task_history where task=$1 and kind='재검증'", [gateTask])).rows[0]?.text).toContain('입력 버전');
+    await ownerPool.query("update tasks set status='ready' where id=$1", [gateTask]);
     const after = await state();
     expect(after.inputs.map((i) => i.v)).toEqual([1, 2]);
     expect(after.inputs[1]).toMatchObject({ commit: SHA3, mdList: ['prototype/docs/guide.md', 'prototype/docs/new.md'],

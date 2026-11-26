@@ -201,6 +201,29 @@ describe('planning Task 판단 보고(/plan)', () => {
     expect(kinds).toEqual(expect.arrayContaining(['분할 판단', '충돌 묶음', '등급']));
   });
 
+  test('등급 재판단 작업(policy.rejudge)의 대상 역할은 M2-08 applyRegrade로 검사·저장한다(M2 통합)', async () => {
+    const key = await task({ assigneeAgent: 'Claude' });
+    await ownerPool.query(`insert into agent_models(agent,model_id,rank,allowed,report) values('Claude','claude-sonnet-5-5',1,true,$1)
+      on conflict (agent,model_id) do update set allowed=true,report=excluded.report`, [{ id: 'claude-sonnet-5-5', label: '시험', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] }]);
+    const rejudgeJob = async () => (await ownerPool.query<{ id: string }>(
+      "insert into runner_jobs(project_id,kind,payload,state,fence,epoch,dedup_key,lease_owner,lease_until) values($1,'estimate',$2,'leased',1,$3,$4,'r',now()+interval '1 minute') returning id",
+      [projectId, { tasks: [], policy: { rejudge: { reason: 'model_disallowed', trigger: '시험', targets: [{ taskKey: key, roles: ['dev'] }] } } }, epoch, `test:${randomUUID()}`])).rows[0]?.id ?? '';
+    const send = async (dev: Record<string, unknown>) => runner(`/api/planning/tasks/${key}/plan`, {
+      jobId: await rejudgeJob(), fence: 1, grades: { dev, qa: { modelId: 'gpt-5.5', effort: 'medium', reason: '검증' } }, subagents: { dev: [], qa: [], basis: '' }, conflictGroup: null,
+    });
+    // 허용 목록에 없는 모델은 재판단 결과로 저장하지 않는다(applyRegrade의 허용·매핑 검사).
+    const bad = await send({ modelId: 'claude-unknown-9', effort: 'high', reason: '시험' });
+    expect(bad.statusCode, bad.body).toBe(400);
+    expect(errorOf(bad).errors.map((e) => e.path)).toEqual(['modelId']);
+    const ok = await send({ modelId: 'claude-sonnet-5-5', effort: 'high', reason: '허용 모델 중 차상위' });
+    expect(ok.statusCode, ok.body).toBe(204);
+    expect((await detail(key)).grades.dev?.modelId).toBe('claude-sonnet-5-5');
+    const rows = (await ownerPool.query<{ kind: string; actor: string; ref: { role?: string; field?: string } }>('select kind,actor,ref from task_history where task=$1 order by at', [await idOf(key)])).rows;
+    expect(rows).toContainEqual(expect.objectContaining({ kind: '실행 등급', actor: 'Planning Agent', ref: expect.objectContaining({ role: 'dev' }) }));
+    // 재판단 대상이 아닌 역할(qa)은 원래 Planning 판단 경로(「등급」 이력)로 저장한다.
+    expect(rows).toContainEqual(expect.objectContaining({ kind: '등급', ref: expect.objectContaining({ field: 'grades.qa' }) }));
+  });
+
   test('고정된 등급은 Planning 판단으로 바꾸지 않는다', async () => {
     const key = await task();
     await ownerPool.query("insert into task_grades(project_id,task,role,model_id,effort,reason,locked,locked_by,effective_from) values($1,$2,'dev','claude-opus-5-5','high','고정',true,'팀장',now())", [projectId, await idOf(key)]);

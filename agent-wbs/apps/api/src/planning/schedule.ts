@@ -5,6 +5,7 @@ import {
 import { scheduleWarning } from '@awbs/shared/api';
 import { TaskError } from '../tasks/errors.ts';
 import { wbsPaths } from '../tasks/wbs.ts';
+import { deferChange } from '../changes/events.ts';
 
 const MOVE_LABEL = { delayed: '지연', advanced: '앞당김', new: '신규 편입', excluded: '제외' } as const;
 
@@ -174,7 +175,7 @@ export async function recordReplan(client: PoolClient, projectId: string, meta: 
       [projectId, result.actor, task, `${rpKey} ${result.trigger} — ${MOVE_LABEL[move.kind]}: 종료 ${move.before?.end ?? '없음'} → ${move.after?.end ?? '없음'}${delta}, ${state}`,
         move.before ? JSON.stringify(move.before) : null, move.after ? JSON.stringify(move.after) : null, JSON.stringify({ field: 'schedule', replanId: rpKey, status: result.status })]);
   }
-  await client.query("insert into change_events(project_id,topic,ref) values($1,'schedule',$2::jsonb)", [projectId, JSON.stringify({ replanId: rpKey })]);
+  deferChange(client, projectId, 'schedule', { replanId: rpKey });
   return {
     replanId: rpKey, baselineVersion: result.baseline?.v ?? null, projectEnd: result.after, range: { lo: result.lo, hi: result.hi },
     moved: result.moves.map((move) => ({ taskKey: move.task, kind: move.kind, before: move.before?.end ?? null, after: move.after?.end ?? null, deltaDays: move.delta })),

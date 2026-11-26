@@ -4,6 +4,7 @@ import { PlatformError } from '../platform/errors.ts';
 import { required, RunnerRepository } from '../runner/repository.ts';
 import { checkedJob, handover, retryFailedAttempt } from '../runner/service.ts';
 import { enqueueIntegration, gateInput } from './gate.ts';
+import { deferChange } from '../changes/events.ts';
 
 export interface ResultReport {
   fence: number; summary: string; changedFiles: string[]; evidence: string[]; failure?: string; tokens?: number;
@@ -96,5 +97,5 @@ export async function reportResult(client: PoolClient, attemptId: string, princi
     await repo.release(h,required(h.release_proof),true);
     await enqueueIntegration(client,task.id,job.epoch);
   }
-  for (const topic of ['task','attempt',...(qa ? ['verification'] : []),'schedule']) await client.query('insert into change_events(project_id,topic,ref) values($1,$2,$3)', [task.project_id,topic,{ taskKey:task.task_key,attemptId:a.id }]);
+  for (const topic of ['task','attempt',...(qa ? ['verification'] as const : []),'schedule'] as const) deferChange(client,task.project_id,topic,{ taskKey:task.task_key,attemptId:a.id });
 }

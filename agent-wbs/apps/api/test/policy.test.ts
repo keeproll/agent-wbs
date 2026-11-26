@@ -142,4 +142,8 @@ describe('재판단 작업의 판단 대상 hash 규칙(리뷰 지적 1, data-mo
     expect(hashJson({ a: [2, 1], b: 1 })).toBe(hashJson({ b: 1, a: [2, 1] }));
     expect(hashJson({ a: [1, 2] })).not.toBe(hashJson({ a: [2, 1] }));
   });
+  test('M2 통합: 재판단 작업의 hash 규칙은 Task 판단 hash(tasks/hash.ts)와 같은 함수다', async () => {
+    const { canonicalJson } = await import('../src/tasks/hash.ts');
+    expect(hashJson).toBe(canonicalJson);
+  });
 });

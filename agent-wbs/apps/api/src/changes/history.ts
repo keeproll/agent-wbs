@@ -46,8 +46,6 @@ export function decodeCursor(cursor: string, size: number): string[] | null {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-/** 공통 Timestamp 스키마와 같은 규칙(1970~9999년의 실재하는 UTC 시각, shared api `isTimestamp`). */
-export const realTimestamp = isTimestamp;
 
 /**
  * (시각, id) 커서. 안의 값까지 검사해 DB 변환 오류(500)가 나지 않게 한다(리뷰 지적 6).
@@ -56,7 +54,7 @@ export const realTimestamp = isTimestamp;
 export function decodeTimeIdCursor(cursor: string): [string, string] | null {
   const keys = decodeCursor(cursor, 2);
   const [at, id] = keys ?? [];
-  return at !== undefined && id !== undefined && realTimestamp(at) && UUID.test(id) ? [at, id] : null;
+  return at !== undefined && id !== undefined && isTimestamp(at) && UUID.test(id) ? [at, id] : null;
 }
 
 /** 이력의 변경 전/후는 jsonb다. API는 문자열|null이므로 문자열은 그대로, 그 밖의 값은 정렬 JSON으로 보인다. */

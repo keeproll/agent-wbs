@@ -2,6 +2,7 @@ import type { PoolClient } from '@awbs/db';
 import { RunnerRepository } from '../runner/repository.ts';
 import { checkedJob } from '../runner/service.ts';
 import { ProjectError } from './errors.ts';
+import { deferChange, type ChangeTopic } from '../changes/events.ts';
 
 export type Db = Pick<PoolClient, 'query'>;
 
@@ -42,8 +43,10 @@ export async function touchProject(db: Db, projectId: string): Promise<void> {
   await db.query('update projects set updated_at=clock_timestamp() where id=$1', [projectId]);
   await changeEvent(db, projectId, { kind: 'project' });
 }
-export async function changeEvent(db: Db, projectId: string | null, ref: Record<string, unknown>, topic = 'project'): Promise<void> {
-  await db.query('insert into change_events(project_id,topic,ref) values($1,$2,$3::jsonb)', [projectId, topic, JSON.stringify(ref)]);
+/** 변경 이벤트는 공통 규칙(changes/events.ts)으로 커밋 직전에 쓴다. */
+export function changeEvent(db: Db, projectId: string | null, ref: Record<string, unknown>, topic: ChangeTopic = 'project'): Promise<void> {
+  deferChange(db, projectId, topic, ref);
+  return Promise.resolve();
 }
 
 /** 재사용하지 않는 표시 번호(data-model §1). 기존 행의 최대 번호보다 항상 크게 시작한다. */

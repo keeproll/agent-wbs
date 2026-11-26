@@ -1,6 +1,6 @@
 // M2-08 변경 이벤트(contracts §7)·이력(G§4.9) — 실제 PostgreSQL.
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
-import { emitChange, pruneChanges } from '../src/changes/events.ts';
+import { deferChange, emitChange, pruneChanges } from '../src/changes/events.ts';
 import { inEpoch } from '../src/platform/transaction.ts';
 import { harness, projectWith, type Harness, type ProjectFixture } from './m208-fixture.ts';
 
@@ -72,6 +72,22 @@ describe('GET /api/changes', () => {
       const rows = (await h.owner.query<{ ref: string }>("select ref from change_events where ref in ('\"first\"','\"second\"') order by seq")).rows;
       expect(rows.map((r) => r.ref)).toEqual(['first', 'second']);
     } finally { a.release(); b.release(); }
+  });
+
+  test('트랜잭션 중간의 변경 이벤트(deferChange)는 커밋 직전에 잠금 아래서 쓰고, 되돌리면 버린다(M2 통합 emitChange 일원화)', async () => {
+    const count = async (ref: string) => (await h.owner.query("select 1 from change_events where ref=$1::jsonb", [JSON.stringify(ref)])).rowCount;
+    await inEpoch(h.pool, 1, async (client) => {
+      deferChange(client, f.project, 'task', 'deferred-commit');
+      deferChange(client, f.project, 'task', 'deferred-commit');
+      // 커밋 전에는 아직 쓰지 않는다(이벤트 잠금을 업무 잠금보다 먼저 잡지 않는다).
+      expect((await client.query("select 1 from change_events where ref='\"deferred-commit\"'")).rowCount).toBe(0);
+    });
+    expect(await count('deferred-commit')).toBe(1);
+    await expect(inEpoch(h.pool, 1, (client) => { deferChange(client, f.project, 'task', 'deferred-rollback'); throw new Error('되돌림'); })).rejects.toThrow('되돌림');
+    // 풀이 같은 연결을 다시 주어도 되돌린 트랜잭션의 이벤트가 섞이지 않는다.
+    await inEpoch(h.pool, 1, async () => undefined);
+    expect(await count('deferred-rollback')).toBe(0);
+    expect(() => { deferChange(h.owner as never, f.project, 'nope' as never, null); }).toThrow('알 수 없는 변경 이벤트 topic');
   });
 
   test('입력 검증: after 누락·음수·limit 초과는 400, 로그인 없으면 401', async () => {

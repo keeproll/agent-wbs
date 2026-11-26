@@ -46,6 +46,29 @@ export class ChangeBatch {
   }
 }
 
+/**
+ * 트랜잭션 중간에서 쓰는 변경 이벤트. 그 자리에서 이벤트 잠금을 잡으면 뒤이어 잡는 업무 행 잠금과 교착할 수 있어,
+ * 연결(트랜잭션)별로 모아 두었다가 커밋 직전 `flushChanges`가 한 번에 쓴다(잠금은 항상 마지막).
+ * 쓰기 트랜잭션을 여는 곳(공통 관문 `finish`, `inEpoch`)은 커밋 직전에 flushChanges, 되돌릴 때 dropChanges를 부른다.
+ * 연결은 풀에서 재사용되므로 되돌릴 때 반드시 비워야 다음 트랜잭션에 섞이지 않는다.
+ */
+const deferred = new WeakMap<object, ChangeBatch>();
+export function deferChange(client: Pick<PoolClient, 'query'>, projectId: string | null, topic: ChangeTopic, ref: ChangeRef): void {
+  if (!CHANGE_TOPICS.includes(topic)) throw new Error(`알 수 없는 변경 이벤트 topic: ${String(topic)}`);
+  let batch = deferred.get(client);
+  if (!batch) { batch = new ChangeBatch(); deferred.set(client, batch); }
+  batch.add(projectId, topic, ref);
+}
+/** 커밋 직전에 부른다. 모아 둔 이벤트를 이벤트 잠금 아래에서 쓴다. */
+export async function flushChanges(client: PoolClient): Promise<void> {
+  const batch = deferred.get(client);
+  if (!batch) return;
+  deferred.delete(client);
+  await batch.emit(client);
+}
+/** 되돌리는 트랜잭션의 모아 둔 이벤트를 버린다. */
+export function dropChanges(client: PoolClient): void { deferred.delete(client); }
+
 /** 키를 정렬한 JSON. 같은 내용이면 항상 같은 문자열이다. */
 export function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;

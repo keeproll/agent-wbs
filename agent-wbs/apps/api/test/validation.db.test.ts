@@ -25,7 +25,7 @@ app.post('/api/runner/usage', { schema: { body: {
   required: ['priority', 'enabled', 'rows'], additionalProperties: false,
 } } }, (request) => { reached++; return request.body; });
 app.get('/api/runner/messages', { schema: { querystring: query } }, (request) => request.query);
-app.get('/api/changes', { schema: { querystring: OPERATIONS.find((op) => op.id === 'getChanges')?.query } }, (request) => request.query);
+// /api/changes는 M2-08의 실제 경로가 같은 계약 쿼리로 등록된다(M2 통합). 대역을 두면 중복 선언으로 기동이 거부된다.
 app.post('/api/project/reset', { schema: { body: OPERATIONS.find((op) => op.id === 'resetProject')?.body } }, () => { reached++; return { epoch: 1 }; });
 beforeAll(async () => {
   await recreateTestDatabase(dbUrl.href);

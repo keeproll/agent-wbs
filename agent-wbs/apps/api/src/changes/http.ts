@@ -38,29 +38,11 @@ const validationErrors = (error: { validation?: { instancePath?: string; message
     message: item.message ?? '형식이 올바르지 않습니다.',
   }));
 
-/** 본문 스키마에 없는 필드(공통 검증이 조용히 지우는 값)를 찾는다. 공통 입력 검증이 고쳐지면 지운다(M2-01 담당). */
-function unknownFields(schema: unknown, value: unknown, path = ''): string[] {
-  const s = schema as { type?: string; properties?: Record<string, unknown>; additionalProperties?: unknown; items?: unknown; anyOf?: unknown[] };
-  if (s.anyOf) return s.anyOf.some((branch) => unknownFields(branch, value, path).length === 0) ? [] : unknownFields(s.anyOf[0], value, path);
-  if (Array.isArray(value) && s.items) return value.flatMap((item, index) => unknownFields(s.items, item, `${path}${path ? '.' : ''}${String(index)}`));
-  if (!value || typeof value !== 'object' || Array.isArray(value) || !s.properties) return [];
-  return Object.entries(value).flatMap(([key, item]) => {
-    const child = `${path}${path ? '.' : ''}${key}`;
-    if (!(key in (s.properties ?? {}))) return s.additionalProperties === false ? [child] : [];
-    return unknownFields(s.properties?.[key], item, child);
-  });
-}
-
 /** 한 묶음(scope)의 라우트를 계약(OPERATIONS) 정의대로 등록한다. 등록한 operation id를 돌려준다. */
 export function routes(app: FastifyInstance, name: string, register: (route: (id: string, handler: Handler, params?: object) => void) => void): void {
   void app.register((scope, _options, done) => {
     const actions = new Map<string, Operation>();
-    scope.addHook('preValidation', async (request) => {
-      const op = actions.get(`${request.method} ${request.routeOptions.url ?? ''}`);
-      if (!op?.body || request.body === undefined) return;
-      const unknown = unknownFields(op.body, request.body);
-      if (unknown.length) throw invalid(unknown.map((path) => ({ path, rule: 'additionalProperties', message: '정의하지 않은 필드입니다.' })));
-    });
+    // 정의하지 않은 필드는 공통 입력 검증(M2-01 buildValidator, removeAdditional:false)이 400으로 거부한다.
     scope.addHook('preHandler', async (request) => {
       const op = actions.get(`${request.method} ${request.routeOptions.url ?? ''}`);
       if (!op?.inputRules?.length) return;

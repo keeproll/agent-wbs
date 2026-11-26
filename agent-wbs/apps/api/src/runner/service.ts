@@ -7,6 +7,7 @@ import {
 } from '@awbs/shared';
 import { gradeAdjust } from '@awbs/shared/api';
 import { PlatformError } from '../platform/errors.ts';
+import { writeResumeRegrade } from '../policy/resume.ts';
 import { RunnerRepository, required, type Job, type Task, type Attempt } from './repository.ts';
 
 export const EXTERNAL_JOBS = ['integrate', 'deploy_check', 'ci_retry', 'design_apply', 'merge_followup', 'bootstrap', 'input_diff'];
@@ -30,23 +31,36 @@ export async function caps(repo: RunnerRepository) {
     budget: (settings?.subagent_budget ?? { dev: 0, qa: 0 }) as { dev: number; qa: number } };
 }
 
-export async function runGrade(repo: RunnerRepository, task: Task, kind: AttemptKind) {
+/**
+ * 실행 직전 등급(run-grade, M2-05)과 재개 등급(M2-08 `resumeGrade`)이 함께 쓰는 판정(M1-06 `resolveRunGrade`, D-29).
+ * - 저장된 Task 등급이 없으면 `missing: 'grade'`.
+ * - `requireUsage`이면 사용량 보고가 없을 때 `missing: 'usage'`. 아니면 남은 사용량을 모르는 채(null)로 판정한다.
+ * - `history`를 주면 그 시도 이력으로 판정한다(재개할 시도까지의 이력).
+ */
+export async function resolveGrade(repo: RunnerRepository, task: Task, kind: AttemptKind, options: { history?: Attempt[]; requireUsage?: boolean } = {}) {
   const role = roleOf(kind);
   const agent = role === 'dev' ? task.assignee_agent : task.verifier_agent;
   const grades = await repo.grades(task.id);
   const stored = grades.find(g => g.role === role);
-  if (!stored) rejection(['Planning의 실행 등급 판단이 필요합니다.']);
+  if (!stored) return { missing: 'grade' as const };
   const models = await repo.models(agent);
   const catalog: Catalog = { agent, models: models.map(m => ({ modelId: m.model_id, rank: m.rank ?? 0, allowed: m.allowed,
     efforts: ((m.report as { efforts?: string[] } | null)?.efforts ?? []) })) };
   const policy = execPolicyToApi(await repo.policy(), DEFAULT_EXEC_POLICY) as ExecPolicy & { autoRetryLimit: number; autoReworkLimit: number };
-  const history = await repo.history(task.id);
+  const history = options.history ?? await repo.history(task.id);
   const dev = grades.find(g => g.role === 'dev');
   const floorTask = { primaryDomain: task.primary_domain, relatedDomains: task.related_domains, devLevel: dev ? effortLevel(task.assignee_agent, dev.model_id, dev.effort) : null };
   const usage = await repo.usage(agent);
-  if (!usage) rejection(['사용량 보고가 필요합니다.']);
+  if (!usage && options.requireUsage) return { missing: 'usage' as const };
   const result = resolveRunGrade({ kind, taskGrade: { modelId: stored.model_id, effort: stored.effort, locked: stored.locked }, task: floorTask,
-    history: domainHistory(history), catalog, policy, remainPct: Number(usage.remain_pct) });
+    history: domainHistory(history), catalog, policy, remainPct: usage ? Number(usage.remain_pct) : null });
+  return { result, history, agent, stored, policy, catalog, floorTask, role };
+}
+
+export async function runGrade(repo: RunnerRepository, task: Task, kind: AttemptKind) {
+  const resolved = await resolveGrade(repo, task, kind, { requireUsage: true });
+  if ('missing' in resolved) rejection([resolved.missing === 'grade' ? 'Planning의 실행 등급 판단이 필요합니다.' : '사용량 보고가 필요합니다.']);
+  const { result, history, agent, stored, policy, catalog, floorTask, role } = resolved;
   if (!result.ok) rejection([result.code]);
   const adjust = gradeAdjust(result, stored.reason);
   const floor = floorOf(role, floorTask, policy.floors);
@@ -170,6 +184,8 @@ export async function start(repo: RunnerRepository, job: Job, body: { hostId: st
     prev?.status === 'interrupted' ? prev.id : null);
   await repo.saveInstalled(task, attemptId, body.installedSubagents);
   await repo.historyEvent(task, '시도 시작', { attemptId, adjust: check.grade.wire.adjust });
+  // D-29: 중단된 시도를 재판단한 등급으로 이어 가면 이전→이후 등급을 이력에 남긴다(M2-08 recordResumeRegrade와 같은 기록).
+  if (prev?.status === 'interrupted') await writeResumeRegrade(repo.client, task, prev.id, check.grade.result);
   return { attemptId };
 }
 
