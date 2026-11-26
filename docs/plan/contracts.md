@@ -34,7 +34,7 @@
   - 불일치 409 `EPOCH_MISMATCH` `{currentEpoch}`.
   - **예외(D-04)**: heartbeat, `GET /runner/commands`, 명령 결과 — 이전 epoch 허용.
     - heartbeat는 204 + `X-Current-Epoch` 헤더, commands는 본문 `currentEpoch`.
-    - 명령 결과는 헤더에 받은 `commands[].epoch`를 그대로 보내며 명령 ID의 epoch와 일치해야 한다(다르면 409 EPOCH_MISMATCH).
+    - 명령 결과 POST는 commands 조회 **응답 본문의** 해당 `commands[].epoch`를 **요청 헤더 `X-Project-Epoch`에** 넣는다. 값은 그 명령 ID의 epoch와 일치해야 한다(다르면 409 EPOCH_MISMATCH).
     - 왜 예외를 두나: 초기화된 Runner가 옛 epoch로도 정리 명령을 받을 수 있어야 교착이 생기지 않는다.
   - 그 외 요청은 트랜잭션 안에서 재확인(data-model §5.1)
   - 왜: 초기화 전에 출발한 요청이 초기화 뒤 새 프로젝트 데이터를 고치는 일을 막는다.

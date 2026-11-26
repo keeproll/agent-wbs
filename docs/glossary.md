@@ -48,7 +48,7 @@
 - **epoch** — 프로젝트 세대 번호. 초기화할 때마다 1 오르며, 옛 세대의 요청이 새 프로젝트를 건드리지 못하게 한다. → contracts §1, data-model §5.1
 - **Evidence (검증 증거)** — 검증 결과를 뒷받침하는 파일(로그·스크린샷 등). → data-model §2.5
 - **fake** — 실제 외부 서비스(Claude·Codex·GitHub·SMTP 등) 대신 쓰는 가짜 구현. 돈이 들지 않고 결과가 일정해 테스트에 쓴다. → milestones §1
-- **fence** — 낡은 Runner의 보고를 막는 번호표. job을 새로 임대할 때마다 바뀌고, 낡은 fence의 보고는 409 LEASE_LOST로 거절된다. → contracts §3.2
+- **fence** — 낡은 Runner의 보고를 막는 번호표. job을 새로 임대할 때마다 바뀌고, 일반 보고는 낡은 fence면 409 LEASE_LOST로 거절한다. 원래 job·host·boot·process group이 맞는 보유 해제 보고(`release`)는 예외다. → contracts §3.2
 - **FK / PK** — FK(외래 키)는 다른 테이블 행을 가리키는 열, PK(기본 키)는 행을 구분하는 고유 번호. → data-model §1
 - **fixture** — 테스트에 쓰는 고정 데이터.
 - **FS / SS** — 의존성 종류. FS(Finish-to-Start)는 「선행이 끝나야 후속 시작」, SS(Start-to-Start)는 「선행이 시작되면 후속 시작 가능」. → data-model §2.3, §3.1
@@ -101,7 +101,7 @@
 - **seed** — 빈 DB에 처음 넣는 기본 데이터. `system`과 `demo` 두 가지. → data-model §6
 - **semaphore** — 동시에 정해진 개수만 실행되게 막는 번호표 장치. → architecture §5
 - **SHA** — git 커밋의 고유 번호(hash).
-- **slot (물리 슬롯)** — PC의 CPU·메모리 같은 실행 자리. 프로그램이 실제로 돌 때만 잡는다. → data-model §2.5-1
+- **slot (물리 슬롯)** — PC의 CPU·메모리 같은 실행 자리. 프로그램 실행에 쓸 PC 자리다. 실행 전 예약(`reserved`)과 종료 미확인 보유(`unconfirmed`)도 용량에 포함한다. → data-model §2.5-1
 - **SMTP** — 메일을 보내는 표준 방식(메일 서버). → contracts §4.4
 - **soft delete** — 행을 지우지 않고 「지움」 표시(`deleted_at`)만 하는 방식. → data-model §1
 - **SSE / WebSocket** — 서버가 화면으로 바로 밀어 주는 실시간 통신 방식. 이 제품 런타임에는 쓰지 않는다(D-02). → architecture §2.1

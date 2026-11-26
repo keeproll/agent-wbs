@@ -214,7 +214,7 @@ agent-wbs/
   e2e/             # Playwright 시나리오(G§12)
 agent-runner/
   package.json
-  src/{api,state,jobs,exec,cli,git,ci,planning,readiness,resources,security}/
+  src/{api,state,jobs,exec,cli,git,github,cli-update,ci,design,planning,readiness,resources,security}/
   src/api/generated/       # openapi.json에서 생성(커밋)
   test/fakes/{claude,codex,github}/  # 실제 과금 없이 검증하는 가짜 실행기
 ```
@@ -330,8 +330,17 @@ Runner 안의 모듈(코드 묶음)별 책임이다.
   - 책임: 독립 분석 → 교차 검토 → 이견 조정 → 초안/CP. 출력은 JSON Schema 검증, 실패 시 실패 단계부터 재시도
   - 근거: §4.2 §4.5
 - `git`
-  - 책임: clone·worktree(ext4)·브랜치·PR·status·병합·초기화 되돌림
+  - 책임: 로컬 저장소 — clone·worktree(ext4)·브랜치·초기화 되돌림
   - 근거: §4.2 §6.6 §9.6-2
+- `github`
+  - 책임: GitHub — PR·status·병합·봉인 자격 증명(M4-04, 실증 M4-06)
+  - 근거: §4.2 §6.6 §9.6-2
+- `cli-update`
+  - 책임: Codex·Claude CLI 최신 유지(§5.1, M4-05)
+  - 근거: §6.7
+- `design`
+  - 책임: 관리 대상 저장소의 계약 해석·추출·대조(M6-06)
+  - 근거: §4.12
 - `ci`
   - 책임: 4단계 실행기(엔진이 아니라 순차 실행·기록)
   - 근거: §4.13
