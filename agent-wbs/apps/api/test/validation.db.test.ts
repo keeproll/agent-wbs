@@ -1,5 +1,6 @@
 import { createPool, recreateTestDatabase, runMigrations, seedSystem } from '@awbs/db';
 import { afterAll, beforeAll, describe, expect, inject, test } from 'vitest';
+import { OPERATIONS } from '@awbs/shared/api';
 import { buildApp } from '../src/app.ts';
 import { issueLoginLink, issueRunnerToken } from '../src/platform/credentials.ts';
 
@@ -12,21 +13,30 @@ const pool = createPool(appUrl.href, { onError: () => undefined });
 const app = buildApp(pool);
 const origin = 'http://127.0.0.1:3100';
 let bearer = '';
+let cookie = '';
+let csrf = '';
 let reached = 0;
 app.addSchema({ $id: 'ValidationRow', type: 'object', properties: { title: { type: 'string' } }, required: ['title'], additionalProperties: false });
 const query = { type: 'object', properties: {
-  includeDeleted: { type: 'boolean' }, limit: { type: 'integer', minimum: 1 }, tags: { type: 'array', items: { type: 'string' } },
+  includeDeleted: { type: 'boolean' }, limit: { type: 'integer', minimum: 1, maximum: 500 }, tags: { type: 'array', items: { type: 'string' } }, q: { type: 'string' }, values: { type: 'array', items: { type: 'number' } },
 }, additionalProperties: false };
 app.post('/api/runner/usage', { schema: { body: {
   type: 'object', properties: { priority: { type: 'integer' }, enabled: { type: 'boolean' }, rows: { type: 'array', items: { $ref: 'ValidationRow#' } } },
   required: ['priority', 'enabled', 'rows'], additionalProperties: false,
 } } }, (request) => { reached++; return request.body; });
 app.get('/api/runner/messages', { schema: { querystring: query } }, (request) => request.query);
+app.get('/api/changes', { schema: { querystring: OPERATIONS.find((op) => op.id === 'getChanges')?.query } }, (request) => request.query);
+app.post('/api/project/reset', { schema: { body: OPERATIONS.find((op) => op.id === 'resetProject')?.body } }, () => { reached++; return { epoch: 1 }; });
 beforeAll(async () => {
   await recreateTestDatabase(dbUrl.href);
   await runMigrations(owner);
   await seedSystem(owner);
   bearer = await issueRunnerToken(pool, 'validation-runner', 'fake');
+  const token = await issueLoginLink(pool);
+  const login = await app.inject({ method: 'POST', url: '/api/auth/session', headers: { origin }, payload: { method: 'link', token } });
+  expect(login.statusCode).toBe(204);
+  cookie = String(login.headers['set-cookie']).split(';')[0] ?? '';
+  csrf = (await app.inject({ url: '/api/session', headers: { cookie } })).json<{ csrfToken: string }>().csrfToken;
 });
 afterAll(async () => { await app.close(); await pool.end(); await owner.end(); });
 
@@ -86,6 +96,35 @@ describe('엄격한 본문 검증', () => {
 });
 
 describe('명시한 쿼리 변환 정책', () => {
+  test.each(['Infinity', '1e400'])('상한 없는 실제 계약의 after=%s도 거부한다', async (after) => {
+    const response = await app.inject({ url: `/api/changes?after=${after}&limit=2`, headers: { cookie } });
+    expect(response.statusCode).toBe(400);
+    expect(response.json<InputResponse>().error.errors).toContainEqual({ path: 'after', rule: 'finite', message: expect.any(String) });
+  });
+
+  test('숫자 필드가 아닌 검색 문자열 Infinity는 유지한다', async () => {
+    const response = await app.inject({ url: '/api/runner/messages?q=Infinity', headers: headers() });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ q: 'Infinity' });
+  });
+
+  test('숫자 배열 안의 무한대도 항목 경로를 알려 주며 거부한다', async () => {
+    const response = await app.inject({ url: '/api/runner/messages?values=2&values=Infinity', headers: headers() });
+    expect(response.statusCode).toBe(400);
+    expect(response.json<InputResponse>().error.errors).toContainEqual({ path: 'values.1', rule: 'finite', message: expect.any(String) });
+  });
+
+  test.each(['Infinity', '-Infinity', '1e400', '-1e400'])('쿼리 limit=%s는 유한한 정수가 아니므로 거부한다', async (limit) => {
+    const response = await app.inject({ url: `/api/runner/messages?limit=${limit}`, headers: headers() });
+    expect(response.statusCode).toBe(400);
+    expect(response.json<InputResponse>().error).toMatchObject({ code: 'VALIDATION_FAILED', errors: [{ path: 'limit', rule: expect.any(String), message: expect.any(String) }] });
+  });
+
+  test.each(['2', '2.0', '2e0', ' 2 '])('유효한 10진 쿼리 limit=%s는 숫자 2로 해석한다', async (limit) => {
+    const response = await app.inject({ url: `/api/runner/messages?limit=${encodeURIComponent(limit)}`, headers: headers() });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toEqual({ limit: 2 });
+  });
   test.each([true, false])('숫자와 불리언 스칼라(%s) 및 반복한 배열 쿼리는 허용한다', async (includeDeleted) => {
     const response = await app.inject({ url: `/api/runner/messages?includeDeleted=${String(includeDeleted)}&limit=2&tags=a&tags=b`, headers: headers() });
     expect(response.statusCode, response.body).toBe(200);
@@ -101,5 +140,27 @@ describe('명시한 쿼리 변환 정책', () => {
     expect(response.statusCode).toBe(400);
     expect(response.json<InputResponse>().error.errors).toContainEqual({ path, rule, message: expect.any(String) });
     expect(response.body).not.toContain('secret-value-do-not-echo');
+  });
+});
+
+describe('수동 세대 번호 검사의 입력 오류', () => {
+  test.each([2 ** 31, 2 ** 53])('본문 epoch=%s의 최댓값 오류도 errors[]에 남긴다', async (epoch) => {
+    const before = reached;
+    const response = await app.inject({ method: 'POST', url: '/api/project/reset', headers: { cookie, origin, 'x-csrf-token': csrf }, payload: { epoch, confirmName: '프로젝트', keepSettings: true } });
+    expect(response.statusCode).toBe(400);
+    expect(response.json<InputResponse>().error.errors).toContainEqual({ path: 'epoch', rule: 'maximum', message: expect.any(String) });
+    expect(reached).toBe(before);
+  });
+
+  test('Runner 세대 헤더의 최댓값 오류도 항목별로 안내한다', async () => {
+    const response = await app.inject({ url: '/api/runner/messages', headers: { ...headers(), 'x-project-epoch': String(2 ** 31) } });
+    expect(response.statusCode).toBe(400);
+    expect(response.json<InputResponse>().error.errors).toContainEqual({ path: 'x-project-epoch', rule: 'maximum', message: expect.any(String) });
+  });
+
+  test.each(['01', '-1', '1e3'])('Runner 세대 헤더 %s의 형식 오류도 항목별로 안내한다', async (epoch) => {
+    const response = await app.inject({ url: '/api/runner/messages', headers: { ...headers(), 'x-project-epoch': epoch } });
+    expect(response.statusCode).toBe(400);
+    expect(response.json<InputResponse>().error.errors).toContainEqual({ path: 'x-project-epoch', rule: 'pattern', message: expect.any(String) });
   });
 });
