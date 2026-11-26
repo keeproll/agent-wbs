@@ -96,7 +96,7 @@ export function registerTaskRoutes(app: FastifyInstance, pool: Pool): void {
     });
 
     route('getTask', TASK, 'Task 상세 조회', async (request) => {
-      const detail = await read(pool, (client) => taskDetail(client, keyOf(request)));
+      const detail = await read(pool, (client) => taskDetail(client, keyOf(request), true));
       if (!detail) throw new TaskError('TASK_NOT_FOUND', { taskKey: keyOf(request) });
       return publicDetail(detail);
     });
@@ -438,6 +438,6 @@ async function assertJudged(client: PoolClient, detail: TaskDetail): Promise<voi
  * 판정은 shared의 lifecycleTransition(invalidate)이 하고, 원본 검증 행은 그대로 두고 무효 기록만 추가한다.
  * Gate가 아닌 상태의 낡은 검증은 M2-06이 PASS 반영 때 revision을 대조해 거부한다.
  */
-async function invalidateGate(client: PoolClient, task: LockedTask): Promise<Change[]> {
+export async function invalidateGate(client: PoolClient, task: LockedTask): Promise<Change[]> {
   return await invalidateTaskGate(client,task.task_key) ? [{ field:'lifecycleStatus',before:'gate',after:'verifying' }] : [];
 }
