@@ -66,11 +66,11 @@ export interface RunnerAppDeps {
    * 아직 clone이 없으면(초기 분석 전) 보고하지 않는다. 시험은 가짜를 넣는다.
    */
   inputSource?: () => Promise<InputSource | undefined>;
-  /** 입력 확인 주기. 기본 5분 — 계획 미결 항목 P3-1(입력 확인 5분)의 잠정값이다. */
+  /** 입력 확인 주기(시험용 덮어쓰기). 없으면 서버 정책 inputCheckMinutes, 그것도 없으면 5분. */
   inputIntervalMs?: number;
 }
 
-/** 입력 확인 기본 주기(5분). P3-1이 정해지면 이 값만 바꾼다. */
+/** 서버 정책을 받기 전 입력 확인 기본 주기(5분, 서버 정책 inputCheckMinutes의 기본값과 같음). */
 export const INPUT_INTERVAL_MS = 5 * 60_000;
 
 /**
@@ -326,7 +326,10 @@ export class RunnerApp {
     }, { onError: onError('매일 점검') }));
     this.#timers.push(scheduleDaily(() => this.reportConcurrency(), { intervalMs: 60_000, onError: onError('동시 실행 보고') }));
     this.#timers.push(scheduleDaily(() => this.reporter.reportUsage(this.usage), { intervalMs: 60_000, onError: onError('사용량 보고') }));
-    this.#timers.push(scheduleDaily(async () => { await this.reportInputs(); }, { intervalMs: this.#d.inputIntervalMs ?? INPUT_INTERVAL_MS, onError: onError('입력 변경 보고') }));
+    // 주기는 서버 정책(inputCheckMinutes)을 따른다. 정책이 없으면 기본 5분(P3-1 임시값).
+    const policyMinutes = this.runner.policy?.inputCheckMinutes;
+    const inputInterval = this.#d.inputIntervalMs ?? (policyMinutes ? policyMinutes * 60_000 : INPUT_INTERVAL_MS);
+    this.#timers.push(scheduleDaily(async () => { await this.reportInputs(); }, { intervalMs: inputInterval, onError: onError('입력 변경 보고') }));
   }
 
   /**

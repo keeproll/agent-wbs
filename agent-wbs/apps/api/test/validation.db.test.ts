@@ -1,6 +1,5 @@
 import { createPool, recreateTestDatabase, runMigrations, seedSystem } from '@awbs/db';
 import { afterAll, beforeAll, describe, expect, inject, test } from 'vitest';
-import { OPERATIONS } from '@awbs/shared/api';
 import { buildApp } from '../src/app.ts';
 import { issueLoginLink, issueRunnerToken } from '../src/platform/credentials.ts';
 
@@ -26,7 +25,7 @@ app.post('/api/runner/usage', { schema: { body: {
 } } }, (request) => { reached++; return request.body; });
 app.get('/api/runner/messages', { schema: { querystring: query } }, (request) => request.query);
 // /api/changes는 M2-08의 실제 경로가 같은 계약 쿼리로 등록된다(M2 통합). 대역을 두면 중복 선언으로 기동이 거부된다.
-app.post('/api/project/reset', { schema: { body: OPERATIONS.find((op) => op.id === 'resetProject')?.body } }, () => { reached++; return { epoch: 1 }; });
+// /api/project/reset는 M2-04의 실제 경로가 같은 계약 본문으로 등록된다(M2 통합). 검증 실패면 초기화가 일어나지 않았는지 epoch로 확인한다.
 beforeAll(async () => {
   await recreateTestDatabase(dbUrl.href);
   await runMigrations(owner);
@@ -145,11 +144,12 @@ describe('명시한 쿼리 변환 정책', () => {
 
 describe('수동 세대 번호 검사의 입력 오류', () => {
   test.each([2 ** 31, 2 ** 53])('본문 epoch=%s의 최댓값 오류도 errors[]에 남긴다', async (epoch) => {
-    const before = reached;
+    const current = async () => (await owner.query<{ epoch: number }>('select epoch from system_state where id=1')).rows[0]?.epoch;
+    const before = await current();
     const response = await app.inject({ method: 'POST', url: '/api/project/reset', headers: { cookie, origin, 'x-csrf-token': csrf }, payload: { epoch, confirmName: '프로젝트', keepSettings: true } });
     expect(response.statusCode).toBe(400);
     expect(response.json<InputResponse>().error.errors).toContainEqual({ path: 'epoch', rule: 'maximum', message: expect.any(String) });
-    expect(reached).toBe(before);
+    expect(await current()).toBe(before);
   });
 
   test('Runner 세대 헤더의 최댓값 오류도 항목별로 안내한다', async () => {

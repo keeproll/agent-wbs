@@ -13,7 +13,8 @@ export function zip(files: { name: string; data: Buffer }[]): Buffer {
     header.writeUInt32LE(0x04034b50); header.writeUInt16LE(20, 4); header.writeUInt16LE(0x800, 6);
     header.writeUInt16LE(33, 12); header.writeUInt32LE(crc32(file.data), 14);
     header.writeUInt32LE(file.data.length, 18); header.writeUInt32LE(file.data.length, 22); header.writeUInt16LE(name.length, 26);
-    central.writeUInt32LE(0x02014b50); central.writeUInt16LE(20, 4); header.copy(central, 6, 4, 30);
+    // 「만든 OS」를 Unix(3)로 둔다(0x0314). MS-DOS(0)면 Info-ZIP unzip이 UTF-8 표시(0x800)를 무시하고 한글 이름을 CP437로 푼다(M2-04 리뷰 P3-5).
+    central.writeUInt32LE(0x02014b50); central.writeUInt16LE(0x0314, 4); header.copy(central, 6, 4, 30);
     central.writeUInt32LE(offset, 42);
     chunks.push(header, name, file.data); directory.push(central, name);
     offset += header.length + name.length + file.data.length;

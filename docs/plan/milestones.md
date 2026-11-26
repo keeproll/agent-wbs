@@ -22,6 +22,10 @@
   - `W` = `pnpm -C agent-wbs`, `R` = `pnpm -C agent-runner`.
   - 모든 작업에 공통으로 `W check`(typecheck+lint+unit) 또는 `R check`.
     - 용어 풀이: lint = 코드 규칙 위반을 자동으로 찾는 검사.
+  - `W --filter api test`는 실제 DB가 필요 없는 단위 시험만 돌린다(`*.db.test.ts`는 빠진다).
+    - 실제 PostgreSQL로 하는 시험은 `W test:db -- <이름>`으로 따로 돌린다. 시험 전용 DB 주소(`TEST_DATABASE_URL`, 이름이 `awbs_test_`로 시작)가 필요하다.
+    - 왜: 동시 요청·잠금·트랜잭션 되돌림 같은 핵심 검증은 DB 시험에만 있다. 단위 시험만 돌리면 그 검증을 건너뛰고도 종료 코드 0이 나온다(M2-04 리뷰 P3-1).
+    - 예: M2-05는 `W --filter api test -- runner`와 `W test:db -- runner`가 모두 종료 코드 0이어야 끝난다.
 - **병렬 표시**
   - `∥` 같은 마일스톤 안 동시 가능(디렉토리 비중첩), `—` 선행 대기.
   - 「M0-01 후」처럼 적힌 것은 그 작업이 끝나야 시작할 수 있다는 뜻이다.
@@ -133,13 +137,13 @@ flowchart LR
 ### M2 — 서버 핵심
 
 - **M2-01** — 인증 2종·CSRF·epoch·멱등·오류 형식·마스킹
-  - 완료 조건(검증): `W --filter api test -- security`
+  - 완료 조건(검증): `W --filter api test -- security` + `W test:db -- security`
     - contracts §8 5종 표
     - 링크 재사용·비loopback 거부
     - LAN 비밀번호 미설정 기동 거부·횟수 제한
   - 디렉토리: `apps/api/src/platform` · 병렬: — · 담당 / 리뷰: Codex / Claude
 - **M2-02** — Task·의존성·명세·설계·체크리스트 CRUD(만들기·읽기·고치기·지우기), 동시 수정
-  - 완료 조건(검증): `W --filter api test -- tasks`
+  - 완료 조건(검증): `W --filter api test -- tasks` + `W test:db -- tasks`
     - 동시 순환 추가·이력
     - 삭제/의존성/**승인 요청**/승인 낡은 버전 409
     - **승인 요청→승인/반려: 필수 항목 미충족 400·다른 상태 409·중복 요청**
@@ -147,16 +151,16 @@ flowchart LR
     - **착수 승인 판단 보류(D-33)**
   - 디렉토리: `apps/api/src/tasks` · 병렬: M2-01 후 ∥ · 담당 / 리뷰: Claude / Codex
 - **M2-03** — 프로젝트 등록·기술 결정·bootstrap·승인·입력 변경·분석 안 함
-  - 완료 조건(검증): `W --filter api test -- project` (초기 WBS 승인의 판단 보류(D-33))
+  - 완료 조건(검증): `W --filter api test -- project` + `W test:db -- project` (초기 WBS 승인의 판단 보류(D-33))
   - 디렉토리: `apps/api/src/project` · 병렬: ∥ · 담당 / 리뷰: Claude / Codex
 - **M2-04** — 초기화·명령·정리 대기·내보내기·파일 삭제 큐
-  - 완료 조건(검증): `W --filter api test -- reset`
+  - 완료 조건(검증): `W --filter api test -- reset` + `W test:db -- reset`
     - 중간 실패 주입, 설정 유지/삭제 표
     - middleware(모든 요청이 처리 전에 거치는 공통 코드) 통과 후 정지한 host 보고·worker와 초기화 경합
     - 명령 epoch 불일치
   - 디렉토리: `apps/api/src/reset` · 병렬: M2-03 후 · 담당 / 리뷰: Codex / Claude
 - **M2-05** — Runner 보고·jobs lease·시도 claim·heartbeat 감시·PC(개인용 컴퓨터) 변경·상한
-  - 완료 조건(검증): `W --filter api test -- runner`
+  - 완료 조건(검증): `W --filter api test -- runner` + `W test:db -- runner`
     - 동시 claim 100회, 중복 보고
     - **네트워크 단절+자손(프로세스가 띄운 자식·손자 프로세스) 생존+재개 거부→해제 후 허용**
     - 설치 실패 후 Task/예약/이력/재시도, 외부 효과 job reconcile
@@ -168,17 +172,17 @@ flowchart LR
     - **start 뒤 /process 전 끊김→unconfirmed 유지, pgid 있는 보유의 no_process 거부, job 종류별 headSha**
   - 디렉토리: `apps/api/src/runner` · 병렬: ∥ · 담당 / 리뷰: Codex / Claude
 - **M2-06** — 시도 결과·검증·결함·Evidence·Gate 판정·완료
-  - 완료 조건(검증): `W --filter api test -- execution` (QA 오류·BLOCKED 새 시도, 낡은 head/명세 PASS 거부)
+  - 완료 조건(검증): `W --filter api test -- execution` + `W test:db -- execution` (QA 오류·BLOCKED 새 시도, 낡은 head/명세 PASS 거부)
   - 디렉토리: `apps/api/src/execution` · 병렬: M2-05 후 · 담당 / 리뷰: Codex / Claude
 - **M2-07** — Planning·CP(미리보기=반영·자동/보류)·추정·재조정·분할
-  - 완료 조건(검증): `W --filter api test -- planning`
+  - 완료 조건(검증): `W --filter api test -- planning` + `W test:db -- planning`
     - **취소 반영과 SS 제거·이력·재조정이 한 트랜잭션, 미리보기 영향=반영 결과**
     - **D-33~35 보류: 자동·수동 승인·반영 동일, 재시뮬레이션 때 다시 판정**
     - **팀장 CP 판단 job 생성·재요청, 판단 저장 위치 이전과 hash 재대조**
     - CP `splitBasis` 선택/필수와 반영 저장, CP add 선택 필드 저장·상속 재계산
   - 디렉토리: `apps/api/src/planning` · 병렬: ∥ · 담당 / 리뷰: Claude / Codex
 - **M2-08** — 정책·모델·하위 Agent·메시지·이력·변경 이벤트·무결성 점검(저장된 데이터끼리 모순이 없는지 검사)
-  - 완료 조건(검증): `W --filter api test -- policy messages changes` (**허용 해제→재판단→재개 이력(D-29)**)
+  - 완료 조건(검증): `W --filter api test -- policy messages changes` + `W test:db -- policy messages changes` (**허용 해제→재판단→재개 이력(D-29)**)
   - 디렉토리: `apps/api/src/{policy,messages,changes}` · 병렬: ∥ · 담당 / 리뷰: Claude / Codex
 - **M2-09** — fake Runner 시나리오 드라이버
   - 완료 조건(검증): `W test:scenario -- runner-basic` (8·9·10, 6은 QA FAIL→재작업→재검증 PASS **까지만**)

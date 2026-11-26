@@ -24,9 +24,20 @@ export async function previewReset(db: PoolClient) {
     repo: { url: p.repo_url, owner: p.repo_owner, name: p.repo_name, branch: 'main', baseCommit: p.base_commit } };
 }
 
+/** 사람이 대조해야 하는 PR 참조 경고(전역). 초기화가 경고 표를 비워도 처리 전이면 남긴다. */
+const MANUAL_RECONCILE = 'reset:%:manual-reconcile';
+
 export async function resetProject(db: PoolClient, input: { epoch: number; confirmName: string; keepSettings: boolean }, actor: string) {
   try {
-    return (await db.query<{ epoch: number }>('select public.reset_project($1,$2,$3,$4) as epoch', [input.epoch, input.confirmName, input.keepSettings, actor])).rows[0];
+    // M2-04 리뷰 P3-7: Runner는 한 번 알린 PR 참조를 다시 알리지 않는다. 처리 전 경고가 초기화로 사라지면 대조할 근거를 잃으므로
+    // 같은 트랜잭션에서 미해결 경고를 읽어 두었다가 초기화 뒤 다시 넣는다(처리된 경고는 다른 경고처럼 지운다).
+    const keep = (await db.query<{ key: string; severity: string; target: unknown; created_at: Date }>(
+      'select key,severity,target,created_at from alerts where project_id is null and resolved_at is null and key like $1 order by created_at', [MANUAL_RECONCILE])).rows;
+    const result = (await db.query<{ epoch: number }>('select public.reset_project($1,$2,$3,$4) as epoch', [input.epoch, input.confirmName, input.keepSettings, actor])).rows[0];
+    for (const alert of keep) {
+      await db.query('insert into alerts(key,severity,target,created_at) values($1,$2,$3,$4) on conflict do nothing', [alert.key, alert.severity, alert.target, alert.created_at]);
+    }
+    return result;
   } catch (error) {
     const code = (error as { code?: string }).code;
     if (code === 'P0002') throw new ProjectError('PROJECT_NOT_FOUND');

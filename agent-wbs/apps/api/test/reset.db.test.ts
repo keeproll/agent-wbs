@@ -11,6 +11,7 @@ import { OPERATIONS } from '@awbs/shared/api';
 import { buildApp } from '../src/app.ts';
 import { issueLoginLink, issueRunnerToken } from '../src/platform/credentials.ts';
 import { inEpoch } from '../src/platform/transaction.ts';
+import { exportProject } from '../src/reset/export.ts';
 import { installRunner } from '../src/runner/routes.ts';
 import { fillProjectTables } from '../../../packages/db/test/project-fixture.ts';
 
@@ -260,6 +261,29 @@ test.each(['../outside', '2/evidence/other', '1/evidence/link'])('export는 세�
   const response = await lead('GET', '/api/project/export');
   expect(response.statusCode).toBe(503);
   expect(response.body).not.toContain('노출하면 안 되는 파일');
+});
+
+test('export 실패는 이유를 알려 준다: 없는 파일·무결성 불일치 목록, 전체 크기 상한(M2-04 리뷰 P3-2)', async () => {
+  await exportFiles();
+  await rm(join(filesRoot, '1/pdf/report.pdf'));
+  const missing = await lead('GET', '/api/project/export');
+  expect(missing.statusCode).toBe(503);
+  expect(missing.json()).toMatchObject({ error: { code: 'UNAVAILABLE', details: { reason: 'files_unreadable', failedCount: 1, failures: [{ path: '1/pdf/report.pdf', reason: 'missing' }] } } });
+  await writeFile(join(filesRoot, '1/pdf/report.pdf'), '%PDF-1.7 시험');
+  await writeFile(join(filesRoot, '1/evidence/proof.bin'), Buffer.from([9, 9, 9]));
+  expect((await lead('GET', '/api/project/export')).json()).toMatchObject({ error: { details: { reason: 'files_unreadable', failures: [{ path: '1/evidence/proof.bin', reason: 'integrity' }] } } });
+  await writeFile(join(filesRoot, '1/evidence/proof.bin'), Buffer.from([0, 1, 255]));
+  // 크기를 아는 Evidence(3바이트)만으로 상한(2바이트)을 넘으면 파일을 읽기 전에 거절한다.
+  await expect(exportProject(pool, 1, filesRoot, 2)).rejects.toMatchObject({ code: 'UNAVAILABLE', details: { reason: 'export_too_large', totalBytes: 3, limitBytes: 2 } });
+  expect((await lead('GET', '/api/project/export')).statusCode).toBe(200);
+});
+
+test('미해결 수동 대조 경고는 다음 초기화 뒤에도 남고, 처리한 경고는 지운다(M2-04 리뷰 P3-7)', async () => {
+  await owner.query(`insert into alerts(key,severity,target) values('reset:open:manual-reconcile','warn','{"message":"PR 참조 대조 필요"}'),
+    ('reset:done:manual-reconcile','warn','{"message":"처리함"}'),('other','warn','{}')`);
+  await owner.query("update alerts set resolved_at=now() where key='reset:done:manual-reconcile'");
+  expect((await reset()).statusCode).toBe(200);
+  expect((await owner.query('select key,target from alerts order by key')).rows).toEqual([{ key: 'reset:open:manual-reconcile', target: { message: 'PR 참조 대조 필요' } }]);
 });
 
 test('파일 삭제 큐는 실패를 보관하고 재시도하며 뒤늦게 생긴 옛 세대 파일도 다시 지운다', async () => {
