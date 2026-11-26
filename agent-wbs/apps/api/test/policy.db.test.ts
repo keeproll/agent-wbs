@@ -16,8 +16,11 @@ const grade = (task: string, role: string, modelId: string, effort: string, lock
 const gradeOf = async (task: string, role = 'dev') => (await h.owner.query<{ model_id: string; effort: string; locked: boolean; reason: string }>(
   'select model_id,effort,locked,reason from task_grades where task=$1 and role=$2', [f.tasks[task], role])).rows[0];
 // 재판단 작업: estimate 계약 모양이고 이유·대상은 policy.rejudge에 있다. 비교하기 쉽게 {reason, tasks}로 펼친다.
-const jobs = async () => (await h.owner.query<{ kind: string; rejudge: { reason: string; targets: { taskKey: string; roles: string[] }[] }; state: string }>(
-  "select kind,payload->'policy'->'rejudge' as rejudge,state from runner_jobs where payload->'policy' ? 'rejudge' order by created_at,dedup_key")).rows
+// 「새로 생긴 작업」은 시각 순서가 아니라 id로 가린다(WSL2 등에서 DB 시계가 뒤로 가면 created_at 순서가 뒤집힐 수 있다).
+const jobRows = async () => (await h.owner.query<{ id: string; kind: string; rejudge: { reason: string; targets: { taskKey: string; roles: string[] }[] }; state: string }>(
+  "select id,kind,payload->'policy'->'rejudge' as rejudge,state from runner_jobs where payload->'policy' ? 'rejudge'")).rows;
+const jobIds = async () => new Set((await jobRows()).map((j) => j.id));
+const jobsAfter = async (before: Set<string>) => (await jobRows()).filter((j) => !before.has(j.id))
   .map((j) => ({ kind: j.kind, state: j.state, payload: { reason: j.rejudge.reason, tasks: j.rejudge.targets } }));
 const taskVersion = async (task: string) => (await h.owner.query<{ v: string }>('select updated_at::text as v from tasks where task_key=$1', [task])).rows[0]?.v;
 
@@ -63,10 +66,10 @@ describe('실행 정책 /api/settings/exec-policy', () => {
   test('최저선을 켜면 그 아래가 된 진행 전 Task 등급을 Planning 재판단에 맡긴다', async () => {
     let current = (await h.lead('GET', '/api/settings/exec-policy')).body;
     current = (await h.lead('PUT', '/api/settings/exec-policy', { ...current, floors: { verifyGeDev: true, dbHigh: false } })).body;
-    const before = (await jobs()).length;
+    const before = await jobIds();
     const saved = await h.lead('PUT', '/api/settings/exec-policy', { ...current, floors: { verifyGeDev: true, dbHigh: true } });
     expect(saved.status, JSON.stringify(saved.body)).toBe(200);
-    const created = (await jobs()).slice(before);
+    const created = (await jobsAfter(before));
     expect(created).toEqual([{ kind: 'estimate', state: 'queued', payload: expect.objectContaining({ reason: 'floor_changed', tasks: [{ taskKey: 'TASK-0003', roles: ['dev'] }] }) }]);
     expect((await h.owner.query("select count(*)::int as n from task_history where text like '%최저선%' and task=$1", [f.tasks['TASK-0003']])).rows[0]?.n).toBe(1);
   });
@@ -117,6 +120,8 @@ describe('모델 /api/settings/models', () => {
     const saved = await h.lead('PUT', '/api/settings/models', { updatedAt: current.updatedAt, models: [], rankOrder: order });
     expect(saved.status, JSON.stringify(saved.body)).toBe(200);
     expect((await h.owner.query("select rank from agent_models where model_id='claude-sonnet-5-5'")).rows[0]).toEqual({ rank: 3 });
+    // 변경 이벤트는 트랜잭션 마지막에 모아서 쓴다(ChangeBatch) — 빠지면 화면이 바뀐 줄 모른다.
+    expect((await h.owner.query("select ref from change_events where topic='settings'")).rows).toContainEqual({ ref: { key: 'models' } });
     expect((await h.owner.query("select model_settings->'rankOrder'->'Claude' as o from app_settings")).rows[0]?.o).toEqual(order.Claude);
     // 낡은 화면(바꾸기 전 버전)으로 다시 저장하면 409
     expect((await h.lead('PUT', '/api/settings/models', { updatedAt: current.updatedAt, models: [] })).body.error.code).toBe('VERSION_CONFLICT');
@@ -139,14 +144,14 @@ describe('D-29: 허용 해제 → 재판단 → 재개 이력 (실제 DB)', () =
   test('1) 팀장이 허용 해제: 그 모델을 쓰는 진행 전·중 Task 등급은 고정 해제 + 이력 + Planning 재판단 작업, 완료 Task는 그대로', async () => {
     const version = await taskVersion('TASK-0001');
     const current = (await h.lead('GET', '/api/settings/models')).body;
-    const before = (await jobs()).length;
+    const before = await jobIds();
     const saved = await h.lead('PUT', '/api/settings/models', { updatedAt: current.updatedAt, models: [{ agent: 'Claude', id: 'claude-opus-5-5', allowed: false }] });
     expect(saved.status, JSON.stringify(saved.body)).toBe(200);
     expect(saved.body.models.find((m: { id: string }) => m.id === 'claude-opus-5-5').allowed).toBe(false);
     expect(await gradeOf('TASK-0001')).toMatchObject({ model_id: 'claude-opus-5-5', locked: false });
     expect(await gradeOf('TASK-0002')).toMatchObject({ model_id: 'claude-opus-5-5', locked: false });
     expect(await taskVersion('TASK-0001')).not.toBe(version);
-    const created = (await jobs()).slice(before);
+    const created = (await jobsAfter(before));
     expect(created).toEqual([{ kind: 'estimate', state: 'queued', payload: expect.objectContaining({ reason: 'model_disallowed', tasks: [{ taskKey: 'TASK-0001', roles: ['dev'] }] }) }]);
     const hist = (await h.owner.query<{ actor: string; text: string; before: unknown }>("select actor,text,before from task_history where task=$1 and kind='실행 등급' order by at", [f.tasks['TASK-0001']])).rows;
     expect(hist.at(-1)).toMatchObject({ actor: '팀장', before: { modelId: 'claude-opus-5-5', effort: 'high', locked: true } });
@@ -213,12 +218,12 @@ describe('하위 Agent /api/settings/subagents', () => {
 
   test('정의 허용 해제 → 그 정의를 지정한 진행 전·중 Task를 Planning이 다시 판단, 사용 끄기 저장', async () => {
     const current = (await h.lead('GET', '/api/settings/subagents')).body;
-    const before = (await jobs()).length;
+    const before = await jobIds();
     const saved = await h.lead('PUT', '/api/settings/subagents', { updatedAt: current.updatedAt, enabled: false, allowed: [{ id: a, allowed: false }] });
     expect(saved.status, JSON.stringify(saved.body)).toBe(200);
     expect(saved.body.enabled).toBe(false);
     expect(saved.body.defs.find((d: { id: string }) => d.id === a).allowed).toBe(false);
-    expect((await jobs()).slice(before)).toEqual([{ kind: 'estimate', state: 'queued', payload: expect.objectContaining({ reason: 'subagent_disallowed', tasks: [{ taskKey: 'TASK-0003', roles: ['dev'] }] }) }]);
+    expect((await jobsAfter(before))).toEqual([{ kind: 'estimate', state: 'queued', payload: expect.objectContaining({ reason: 'subagent_disallowed', tasks: [{ taskKey: 'TASK-0003', roles: ['dev'] }] }) }]);
     expect((await h.lead('PUT', '/api/settings/subagents', { updatedAt: saved.body.updatedAt, enabled: true, allowed: [{ id: crypto.randomUUID(), allowed: true }] })).body.error.errors)
       .toEqual([expect.objectContaining({ path: 'allowed.0.id', rule: 'exists' })]);
   });

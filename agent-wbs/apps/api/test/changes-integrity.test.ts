@@ -2,11 +2,17 @@
 import { describe, expect, test } from 'vitest';
 import { DEFAULT_EXEC_POLICY } from '@awbs/shared';
 import { integrityItems, type IntegritySnapshot } from '../src/changes/integrity.ts';
+import type { GateInput } from '@awbs/shared';
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const task = (key: string, over: Partial<IntegritySnapshot['tasks'][number]> = {}): IntegritySnapshot['tasks'][number] => ({
   id: key, key, status: 'ready', deleted: false, nodeKind: 'work_package', assignee: 'Claude', verifier: 'Codex',
   primaryDomain: 'BE', relatedDomains: [], approved: false, verifState: 'none', ...over,
+});
+const passGate = (): GateInput => ({
+  checklist: [{ required: true, done: true }], outputs: [{ name: 'API', required: true, delivered: true }],
+  basis: { headSha: 'h', specRevision: 2, inputVersion: 1 }, verification: { headSha: 'h', specRevision: 2, inputVersion: 1, result: 'PASS', invalidated: false },
+  taskCheck: { headSha: 'h', specRevision: 2, inputVersion: 1, result: 'PASS' }, unresolvedBlockingDefects: 0, planningApprovedAt: '2026-11-01T00:00:00Z', headSync: null,
 });
 const healthy = (): IntegritySnapshot => ({
   tasks: [task('TASK-0001', { status: 'done', approved: true, verifState: 'pass' }), task('TASK-0002', { status: 'running' }), task('TASK-0003')],
@@ -14,7 +20,10 @@ const healthy = (): IntegritySnapshot => ({
   grades: [
     { taskId: 'TASK-0002', role: 'dev', modelId: 'claude-opus-5-5', effort: 'high', locked: false },
     { taskId: 'TASK-0002', role: 'qa', modelId: 'gpt-6.2-sol', effort: 'high', locked: false },
+    { taskId: 'TASK-0003', role: 'dev', modelId: 'claude-opus-5-5', effort: 'high', locked: false },
+    { taskId: 'TASK-0003', role: 'qa', modelId: 'gpt-6.2-sol', effort: 'high', locked: false },
   ],
+  gates: [{ taskId: 'TASK-0001', input: passGate() }],
   models: [
     { agent: 'Claude', modelId: 'claude-opus-5-5', label: 'Opus', allowed: true, isNew: false, efforts: EFFORTS },
     { agent: 'Codex', modelId: 'gpt-6.2-sol', label: 'sol', allowed: true, isNew: false, efforts: EFFORTS },
@@ -30,7 +39,7 @@ describe('integrityItems', () => {
   test('모순 없는 데이터는 모든 항목 통과, 항목마다 이름·근거 문구가 있다', () => {
     const items = integrityItems(healthy());
     expect(items.map((i) => i.key)).toEqual([
-      'task_tree', 'dependency_refs', 'dependency_self', 'dependency_cycle', 'active_unblocked', 'done_approved',
+      'task_tree', 'dependency_refs', 'dependency_self', 'dependency_cycle', 'active_unblocked', 'done_gate',
       'message_attempt', 'message_delivery', 'allowed_per_agent', 'grade_allowed', 'grade_floor', 'subagent_agent',
     ]);
     expect(items.filter((i) => !i.ok)).toEqual([]);
@@ -60,10 +69,23 @@ describe('integrityItems', () => {
     expect(item(s, 'active_unblocked')).toMatchObject({ ok: false, detail: 'TASK-0002' });
   });
 
-  test('완료 Task는 착수 승인과 검증 PASS 기록이 있어야 한다', () => {
+  test('완료 Task는 저장된 근거로 Completion Gate 5조건을 모두 충족해야 한다(리뷰 지적 4)', () => {
+    const noVerification = healthy();
+    noVerification.gates = [{ taskId: 'TASK-0001', input: { ...passGate(), verification: null } }];
+    expect(item(noVerification, 'done_gate')).toMatchObject({ ok: false, detail: 'TASK-0001(검증 미실시)' });
+    const noApproval = healthy();
+    noApproval.gates = [{ taskId: 'TASK-0001', input: { ...passGate(), planningApprovedAt: null, checklist: [] } }];
+    expect(item(noApproval, 'done_gate')).toMatchObject({ ok: false, detail: 'TASK-0001(체크리스트 미등록·팀장 착수 승인 대기)' });
+    const missing = healthy();
+    missing.gates = [];
+    expect(item(missing, 'done_gate')).toMatchObject({ ok: false, detail: 'TASK-0001(근거 없음)' });
+  });
+
+  test('실행할 수 있거나 실행 중인 Task에 역할별 등급이 없으면 실패, 추정 전(planning·approval)은 제외(리뷰 지적 3)', () => {
     const s = healthy();
-    s.tasks[0] = task('TASK-0001', { status: 'done', approved: false, verifState: 'pass' });
-    expect(item(s, 'done_approved')).toMatchObject({ ok: false, detail: 'TASK-0001' });
+    s.grades = s.grades.filter((g) => !(g.taskId === 'TASK-0002' && g.role === 'qa') && g.taskId !== 'TASK-0003');
+    s.tasks.push(task('TASK-0004', { status: 'planning' }));
+    expect(item(s, 'grade_allowed')).toMatchObject({ ok: false, detail: 'TASK-0002 qa 없음, TASK-0003 dev 없음, TASK-0003 qa 없음' });
   });
 
   test('메시지의 시도는 같은 Task의 것, 보낸 메시지만 전달 상태를 가진다', () => {
@@ -81,7 +103,7 @@ describe('integrityItems', () => {
     s.grades.push({ taskId: 'TASK-0003', role: 'dev', modelId: 'claude-opus-5-5', effort: 'low', locked: true });
     s.subagents.push({ taskId: 'TASK-0003', role: 'qa', defKey: 'fe-implementer', defAgent: 'Claude' });
     expect(item(s, 'allowed_per_agent')).toMatchObject({ ok: false, detail: 'Codex' });
-    expect(item(s, 'grade_allowed')).toMatchObject({ ok: false, detail: 'TASK-0002 qa' });
+    expect(item(s, 'grade_allowed')).toMatchObject({ ok: false, detail: 'TASK-0002 qa, TASK-0003 qa' });
     expect(item(s, 'grade_floor')).toMatchObject({ ok: false, detail: 'TASK-0003 dev' });
     expect(item(s, 'subagent_agent')).toMatchObject({ ok: false, detail: 'TASK-0003 qa fe-implementer' });
   });
