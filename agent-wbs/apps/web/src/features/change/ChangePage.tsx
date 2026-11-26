@@ -13,8 +13,7 @@ import { useApi } from '../../shared/api/ApiProvider.tsx';
 import { useApiQuery } from '../../shared/api/queries.ts';
 import { MenuScreen, useRefreshError } from '../../shared/layout/MenuScreen.tsx';
 import { Page } from '../../shared/layout/Page.tsx';
-import { DISCARD_CONFIRM, useEditGuard } from '../../shared/state/useEditGuard.ts';
-import { useConfirm } from '../../shared/ui/feedback.tsx';
+import { useEditGuard } from '../../shared/state/useEditGuard.ts';
 import { AreaLoading } from '../../shared/ui/loading.tsx';
 import { LoadError } from '../../shared/ui/LoadError.tsx';
 import { findProposal, PAGE_LIMIT } from './find.ts';
@@ -50,7 +49,6 @@ function ChangeBody({ projectId }: { projectId: string }) {
   const [modalDirty, setModalDirty] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const { guard } = useEditGuard(comment.trim() !== '' || modalDirty);
-  const confirm = useConfirm();
   const refresh = useProposalRefresh();
   // 제출 뒤 새 CP로 이동: 창 입력(dirty)이 지워진 화면이 그려진 다음에 이동한다.
   // 같은 처리에서 바로 이동하면 편집 보호가 아직 옛 dirty로 「버리기」 확인을 띄운다.
@@ -135,12 +133,7 @@ function ChangeBody({ projectId }: { projectId: string }) {
         <ProposalModal
           tasks={tasks}
           onDirty={setModalDirty}
-          onClose={() => {
-            const close = () => { setModalOpen(false); setModalDirty(false); };
-            // 창 닫기는 주소 이동이 아니라 useEditGuard가 못 막는다. 창 안 입력만 보고 묻는다(승인 의견은 그대로 남는다).
-            if (!modalDirty) close();
-            else void confirm(DISCARD_CONFIRM).then((ok) => { if (ok) close(); });
-          }}
+          onClose={() => { setModalOpen(false); setModalDirty(false); }}
           onSubmitted={(cp) => { setModalOpen(false); setModalDirty(false); goTo.current = `/change/${cp.cpKey}`; void refresh(); }}
         />
       )}

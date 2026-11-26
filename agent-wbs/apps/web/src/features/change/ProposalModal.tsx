@@ -13,7 +13,8 @@ import { useApi } from '../../shared/api/ApiProvider.tsx';
 import { useSave } from '../../shared/state/useSave.tsx';
 import { useSessionDraft } from '../../shared/state/useSessionDraft.tsx';
 import { BusyButton } from '../../shared/ui/BusyButton.tsx';
-import { useNotice } from '../../shared/ui/feedback.tsx';
+import { DISCARD_CONFIRM } from '../../shared/state/useEditGuard.ts';
+import { useConfirm, useNotice } from '../../shared/ui/feedback.tsx';
 import { ICON, Icon } from '../../shared/ui/Icon.tsx';
 import { Modal } from '../../shared/ui/Modal.tsx';
 import { buildProposal, newRow, removeRow, ROW_TYPES, updateRow, type CreateBody, type FormState, type RowType } from './form.ts';
@@ -48,6 +49,12 @@ export function ProposalModal({ tasks, onDirty, onClose, onSubmitted }: {
   });
 
   const built = buildProposal(form, tasks);
+  const confirm = useConfirm();
+  /** 닫기·취소·Esc: 입력이 있으면 버릴지 묻는다(편집 보호와 같은 문구). 창 닫기는 주소 이동이 아니라 useEditGuard가 막지 못한다. */
+  const cancel = () => {
+    if (!dirty) { onClose(); return; }
+    void confirm(DISCARD_CONFIRM).then((ok) => { if (ok) onClose(); });
+  };
   const edit = (next: FormState) => { setForm(next); setBlocked(null); };
 
   const { save, busy, conflictModal } = useSave<Outcome, CreateBody>({
@@ -86,10 +93,10 @@ export function ProposalModal({ tasks, onDirty, onClose, onSubmitted }: {
       title="Change Proposal 작성"
       size="lg"
       role="dialog"
-      onCancel={onClose}
+      onCancel={cancel}
       initialFocus="#cpm-title"
       footer={<>
-        <button type="button" className="btn" onClick={onClose}>취소</button>
+        <button type="button" className="btn" onClick={cancel}>취소</button>
         <BusyButton busy={busy} busyLabel="제출 중…" onClick={submit}>제출 — 승인 요청</BusyButton>
       </>}
     >
