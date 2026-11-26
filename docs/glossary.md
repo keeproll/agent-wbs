@@ -60,6 +60,7 @@
 - **cursor (커서)** — 「어디까지 읽었는지」를 나타내는 값. 목록 페이지나 변경 이벤트에서 쓴다. → contracts §7
 - **D-xx (해석 결정)** — 가이드가 애매하거나 서로 부딪치는 곳을 이 문서가 정한 결정 번호. → architecture §7
 - **demo seed** — 테스트·화면 검증 전용 기본 데이터. 운영 DB에는 넣지 않는다. → data-model §6
+- **dedup_key** — 같은 원인으로 job이 두 번 만들어지지 않게 하는 unique 키. 서비스가 원인 시도와 회차로 만든다. → data-model §2.5
 - **DFS** — 깊이 우선 탐색. 선행 관계를 한 길로 끝까지 따라가 보며 순환(같은 Task로 되돌아옴)을 찾는다.
 - **diff** — 두 내용의 차이. CP 미리보기의 `diff`는 바뀌는 필드 목록이다.
 - **digest** — 컨테이너 이미지의 고유 지문. 같은 digest면 정확히 같은 이미지다. → architecture §3.2
@@ -139,8 +140,11 @@
 - **Neo4j** — 노드와 관계로 데이터를 저장하는 그래프 데이터베이스.
 - **Node.js / pnpm** — Node.js는 서버에서 JavaScript·TypeScript를 실행하는 환경, pnpm은 그 패키지 설치 도구.
 - **nodemailer** — Node.js에서 SMTP로 메일을 보내는 라이브러리.
+- **NOLOGIN** — 그 DB 역할로는 직접 로그인할 수 없다는 표시. 표 소유자 역할에 붙여 앱이 소유자 권한을 쓰지 못하게 한다. → data-model §6.1
 - **nonce** — 암호화할 때마다 새로 만드는 한 번용 난수. 같은 키로도 결과가 매번 달라진다.
 - **nosniff** — `X-Content-Type-Options: nosniff`. 브라우저가 파일 형식을 멋대로 추측해 실행하지 못하게 한다.
+- **NOT NULL / NULL** — NULL은 「값이 없음」이다. NOT NULL 열은 값을 반드시 넣어야 한다.
+- **NULLS NOT DISTINCT** — unique 검사에서 NULL끼리도 같은 값으로 보는 옵션. 보통은 NULL끼리 서로 다르다고 봐서 중복이 통과한다. → data-model §2.8 `idempotency_keys`
 - **OpenAPI** — REST API의 경로·요청·응답을 기계가 읽게 적는 표준 문서 형식. 두 시스템이 공유하는 유일한 것. → architecture §1
 - **orchestration** — 여러 Agent·단계를 정해진 순서로 엮어 실행하는 것.
 - **ORM** — Object-Relational Mapping. SQL 대신 코드 객체로 DB를 다루게 해 주는 도구.
@@ -189,6 +193,8 @@
 - **schema (스키마)** — 데이터의 모양(필드·타입·제약)을 정의한 것. DB schema, API schema, JSON Schema 등.
 - **scope (systemd scope)** — systemd가 프로세스 묶음을 하나로 관리하는 단위. cgroup을 만든다. → open-questions §3
 - **scrypt** — 비밀번호를 되돌릴 수 없게 바꾸는 계산 방식. 일부러 느려서 무차별 대입을 어렵게 한다.
+- **search_path (검색 경로)** — 이름만 쓴 표·함수를 어느 스키마에서 찾을지 정한 목록. 높은 권한 함수는 이것을 고정해 가짜 함수가 끼어들지 못하게 한다. → data-model §6.1
+- **SECURITY DEFINER** — 부르는 사람이 아니라 함수를 만든 역할의 권한으로 실행되는 DB 함수. 초기화·정리 완료처럼 앱이 직접 못 하는 일을 정해진 방법으로만 하게 한다. → data-model §6.1
 - **seed** — 빈 DB에 처음 넣는 기본 데이터. `system`과 `demo` 두 가지. → data-model §6
 - **semaphore** — 동시에 정해진 개수만 실행되게 막는 번호표 장치. → architecture §5
 - **SHA** — git 커밋의 고유 번호(hash).
@@ -200,6 +206,7 @@
 - **socket 주소** — 실제로 연결해 온 상대의 IP 주소. 요청 헤더와 달리 꾸밀 수 없다.
 - **soft delete** — 행을 지우지 않고 「지움」 표시(`deleted_at`)만 하는 방식. → data-model §1
 - **SQL** — 관계형 데이터베이스에 데이터를 묻고 고치는 언어.
+- **SQLSTATE (DB 오류 코드)** — DB가 오류마다 붙이는 다섯 글자 코드. 이 문서에 나오는 것: `23514` 제약 위반, `40P01` 교착으로 취소됨, `AW001` 낡은 epoch, `AW002` 정리 증거 불일치(`AW…`는 이 프로젝트가 정한 코드). → data-model §5·§5.1
 - **SSE / WebSocket** — 서버가 화면으로 바로 밀어 주는 실시간 통신 방식. 이 제품 런타임에는 쓰지 않는다(D-02). → architecture §2.1
 - **SSH / SSH agent** — 원격 PC에 암호화된 연결로 접속하는 방식. SSH agent는 그 키를 메모리에 들고 있는 프로그램.
 - **stacked PR / merge queue** — stacked PR은 PR 위에 PR을 쌓는 방식, GitHub merge queue는 GitHub가 병합 순서를 관리하는 기능. 이 계획은 둘 다 쓰지 않는다.
@@ -237,6 +244,7 @@
 - **worktree** — 같은 git 저장소를 작업마다 따로 꺼내 둔 작업 폴더. Agent는 이 안에서만 일한다. → architecture §1
 - **WS** — WebSocket의 줄임말. SSE / WebSocket 항목 참고.
 - **WSL** — Windows에서 리눅스를 돌리는 환경. 개발 PC가 WSL2다. → architecture §5
+- **x-input-rules (입력 규칙)** — JSON Schema로 쓸 수 없는 입력 검사(예: 설계 kind 중복 금지 `uniqueDesignKind`)를 OpenAPI에 표시하는 확장 항목. 서버가 형식 검증 뒤 실행하고, 어기면 400 VALIDATION_FAILED다. → contracts §2.1
 - **YAML** — 들여쓰기로 구조를 적는 사람이 읽기 쉬운 설정 파일 형식.
 - **zip** — 여러 파일을 하나로 묶은 압축 파일 형식.
 - **µs** — 마이크로초. 100만분의 1초.
@@ -247,6 +255,7 @@
 - **가상 스크롤** — 긴 목록에서 화면에 보이는 행만 그려 빠르게 만드는 기법.
 - **검증** — QA·재검증 시도가 Task 결과를 확인하는 것. 결과는 `verifications`에 추가 전용으로 남는다. → data-model §2.5
 - **결함(defect)** — 검증에서 찾은 문제. 원 행은 바꾸지 않고 해소는 이벤트 행으로 남긴다. → data-model §2.5
+- **경계 변환** — DB에 저장한 값과 API 값의 철자가 다를 때, 서버가 DB↔API 사이에서 바꿔 주는 것. 예: CI 단계 DB `1` ↔ API `task`. → contracts §1 값 철자
 - **관측 등급** — CLI 버전·모델·옵션 조합별로 등록하는 관측 검증 결과(`cli_observation_grades`). 등록된 검증이 없으면 「미검증」으로 보고 보수 계산한다. → architecture §5.1, data-model §2.6
 - **교차 리뷰** — 담당이 아닌 쪽 Agent가 결과를 검토하는 것. → milestones §1
 - **교착(deadlock)** — 둘 이상이 서로 상대를 기다리느라 아무도 진행하지 못하는 상태. → architecture D-04, data-model §5.1
@@ -281,6 +290,7 @@
 ## ㅅ
 
 - **상한** — 동시 실행 자원의 한계(전체·Agent별). 서버가 PC 사양 기반으로 계산하거나 직접 지정하고, Runner는 그 안에서 조절한다. → architecture §1, D-11
+- **선두 인덱스** — 어떤 열로 시작하는 인덱스. FK 열마다 두어, 가리키는 행을 지우거나 고칠 때 표 전체를 훑지 않게 한다. → data-model §6.1
 - **순수 함수** — 같은 입력이면 언제나 같은 결과를 내고, 바깥(I/O·현재 시각)을 건드리지 않는 함수. → architecture §3.3
 - **스냅샷** — 어느 한 순간의 데이터를 그대로 고정해 저장한 것. 보고서는 스냅샷이라 나중에 바뀌지 않는다.
 - **스켈레톤** — 데이터를 불러오는 동안 내용 자리에 보여 주는 회색 윤곽.
@@ -305,6 +315,7 @@
 - **적대적 검증** — 일부러 깨뜨리려는 입장에서 시험하는 것. → milestones §1
 - **정규화** — 같은 내용이면 항상 같은 글자열이 되도록 순서·공백 등을 맞추는 것. hash를 비교하기 전에 한다.
 - **정리 명령** — 초기화 뒤 Runner가 가장 먼저 해야 하는 청소 작업(`reset-cleanup`). → contracts §3.2
+- **정리 증거(holds[])** — 정리 명령을 끝냈다고 보고할 때 보유마다 붙이는 증거(`no_process`·`group_empty`·`boot_changed`). DB `complete_cleanup()`이 기록된 보유와 대조한다. → contracts §3.2, data-model §5
 - **정본** — 여러 사본이 다르면 이것이 맞다고 정한 원본. → architecture §1
 - **정합성 / 무결성 점검** — 저장된 데이터끼리 서로 모순이 없는지(예: 열린 시도가 2개) 검사하는 것.
 - **지수 백오프** — 실패할 때마다 기다리는 시간을 두 배씩 늘리는 재시도 방법(1s→60s).
@@ -321,6 +332,7 @@
 ## ㅌ
 
 - **트랜잭션** — 여러 DB 변경을 하나로 묶어, 전부 반영되거나 전부 취소되게 하는 단위.
+- **트리거** — 행을 쓸 때마다 DB가 자동으로 실행하는 검사 함수. CHECK와 달리 「바뀌기 전 값」을 볼 수 있다. → data-model §2.4 `change_proposals`
 
 ## ㅍ
 

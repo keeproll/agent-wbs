@@ -37,11 +37,20 @@
 - **project_id**
   - 프로젝트 데이터는 모두 `project_id`(단일 프로젝트지만 초기화 삭제 기준).
   - 설정·환경은 `project_id` 없음.
+  - 프로젝트를 등록하기 전에도 써야 하는 표는 `project_id`에 null을 허용한다.
+    - 대상: 멱등 키(`idempotency_keys`), 변경 이벤트(`change_events`), 이력, 알림(`notify_events`·`notify_outbox`·`alerts` 등).
+    - null은 「프로젝트 없는 범위(전역)」라는 뜻이다. unique 검사에서도 프로젝트 범위와 전역을 따로 센다(§2.7·§2.8).
+    - 왜: 등록 전 저장소 확인이나 시스템 알림도 기록해야 하는데, 그때는 가리킬 프로젝트가 아직 없다.
 - **삭제**
   - FK 기본 `ON DELETE RESTRICT`. (가리키는 행이 있으면 지우지 못하게 막는다.)
-  - 물리 삭제는 초기화 함수에서만.
+  - 이력·추가 전용·실행 기록은 초기화 함수에서만 물리 삭제한다.
+  - 계약에 삭제 API가 있는 비이력 관계·설정·토큰은 아래 표에서만 앱이 직접 삭제할 수 있다. 삭제하는 트랜잭션에서 이력을 함께 남긴다.
+    - 표: `task_dependencies`, `checklist_items`, `task_specs`, `task_designs`, `task_outputs`, `task_grades`, `task_subagents`, `task_design_items`, `task_source_links`, `mail_recipients`, `blackout_days`, `lead_sessions`, `lead_login_tokens`, `lead_credentials`, `runner_tokens`, `secrets`, `file_delete_queue`.
+    - 쓰이는 곳의 예: 의존성 삭제(`DELETE /api/dependencies/:id`), 체크리스트 삭제, 등급 해제, 수신자 삭제, 로그아웃·토큰 폐기, 파일 삭제 worker의 성공 처리.
+    - 예: 선행 관계 삭제는 허용하지만 Task 이력 삭제는 금지다.
+  - `change_events`는 7일 보존 정리 함수로만 지운다.
   - Task는 `deleted_at` soft delete, CP 취소는 `cancelled`. soft delete는 행을 지우지 않고 「지움」 표시만 하는 방식이다.
-  - 왜: 이력과 연결을 잃지 않기 위해서다.
+  - 왜: 이력과 연결을 잃지 않기 위해서다. 다만 의존성처럼 「지우는 것」 자체가 기능인 행까지 막으면 계약의 삭제 API를 만들 수 없다.
 - **값 종류**
   - 값이 고정된 종류는 PostgreSQL(관계형 데이터베이스) enum.
   - 자주 늘어날 종류(알림 사유·이력 유형)는 text + CHECK(값이 조건을 만족하는지 DB가 검사하는 제약).
@@ -58,13 +67,17 @@
 여기 테이블은 프로젝트를 초기화해도 지워지지 않는 시스템 기록과 로그인 정보다.
 
 - `system_state`
-  - 단일 행(`id=1` CHECK), `epoch int`, `cleanup_status(none/pending/running/failed)`
+  - 단일 행(`id=1` CHECK), `epoch int`, `cleanup_status(none/pending/running/failed)`, created_at/updated_at
   - 근거: §4.2 L261
 - `reset_log`
   - epoch, at, actor, deleted_task_count, keep_settings, runner_cleanup_status, finished_at — 프로젝트와 별도 보존
   - 근거: §4.2 L258
 - `runner_commands`
   - kind(`reset-cleanup`), epoch, payload(저장소·기준 커밋·브랜치·경로), status, attempts, result
+  - 앱은 이 표에 직접 INSERT·UPDATE하지 못한다.
+    - 명령은 초기화 함수(`reset_project()`)만 만들고, 결과는 `complete_cleanup()`만 기록한다.
+    - `complete_cleanup()`은 명령의 epoch와, 보유별 정리 증거가 기록된 보유와 맞는지를 확인한다(§5).
+    - 왜: 정리 명령은 「낡은 실행이 정말 끝났다」는 증거다. 앱 코드가 마음대로 고치면 증거를 믿을 수 없다.
   - 근거: §8.4
 - `file_delete_queue`
   - epoch, path, reason, attempts, last_error
@@ -78,7 +91,7 @@
   - token_hash unique, runner_id, public_key, revoked_at
   - 근거: §8
 - `secrets`
-  - key PK, ciphertext(암호화된 값), nonce(암호화할 때 한 번만 쓰는 난수), key_version, last4
+  - key PK, ciphertext(암호화된 값), nonce(암호화할 때 한 번만 쓰는 난수), key_version, last4, created_at/updated_at
   - 근거: §8.7
 
 ### 2.2 프로젝트 · 입력
@@ -92,7 +105,12 @@
     - 용어 풀이: commit = 확인한 커밋의 고유 번호(SHA).
   - 근거: §8.4
 - `input_versions`
-  - unique(project, v), commit_sha unique(project), files, md_list, changes, instruction, result — 추가 전용
+  - unique(project, v), commit_sha unique(project), files, md_list, changes, instruction — 추가 전용
+  - 분석 결과는 이 행에 두지 않고 `input_version_results`에 따로 추가한다.
+  - 근거: §4.2 L246
+- `input_version_results`
+  - input_version unique, result(jsonb), project_id, schema_version — 추가 전용
+  - 왜 따로 두나: 분석하기 전에 입력을 먼저 고정하고, 분석 결과는 나중에 덧붙이기 위해서다. 한 행에 두면 결과를 쓸 때 고정된 입력 행을 고쳐야 한다.
   - 근거: §4.2 L246
 - `input_change_commits`
   - unique(project, sha), files, state(`pending/skipped/analyzed`), analyzed_in_version
@@ -115,10 +133,15 @@
 
 - `wbs_nodes`
   - kind(`phase/work_package`), parent_id, title, sort_order. CHECK: phase는 parent 없음
+  - 부모 규칙: Phase → Work Package → Task 순서다.
+    - Work Package의 부모는 같은 프로젝트의 Phase여야 한다.
+    - Task의 부모(`tasks.wbs_node_id`)는 같은 프로젝트의 Work Package여야 한다.
+    - 노드의 kind와 project는 만든 뒤 바꾸지 않는다.
   - 근거: P TASK-0004
 - `tasks`
   - task_key unique, wbs_node_id, sort_order, title(1~200), work_type, primary_domain, related_domains[], priority(0~3), assignee/verifier_agent, **status**(§3.1), verif_state, planning_approved_at, fix_start, act_start/act_end, conflict_group, src_input_version, deleted_at.
   - CHECK `primary_domain <> ALL(related_domains)`.
+  - CHECK: `related_domains`에 NULL 원소 금지.
   - `wbs_path`는 저장하지 않고 계산(§9.1-1).
   - 근거: §5.2 §5.3
 - `task_specs`
@@ -126,7 +149,7 @@
   - AC(Acceptance Criteria)는 「이렇게 되면 완료로 인정한다」는 수용 기준이다.
   - 근거: §4.4, P `SPEC_GROUPS`
 - `task_outputs`
-  - name, kind, required, verify, delivered, delivered_attempt
+  - name, kind, required, verify, delivered, delivered_attempt, unique(task, name)
   - 근거: §5.5
 - `task_designs`
   - task, kind(`DB/API/FE/DevOps`), content(jsonb, P `DESIGN` 스키마)
@@ -147,11 +170,13 @@
   - 근거: §8.3
 - `task_grades`
   - role(`dev/qa`), model_id, effort, reason, locked, locked_by, effective_from
+  - 현재 등급은 unique(task, role): 같은 Task에 같은 역할의 등급을 두 개 저장하지 못한다.
   - 근거: §7.1
 - `task_subagents`
   - role, subagent_id, basis
   - 근거: §7.4
 - `task_splits`
+  - Task당 1행: unique(task).
   - basis(분할 근거 text). CP add의 `t.splitBasis`·초안 `splitBasis`에서 저장한다.
     - 일반 CP에서 생략하면 빈 문자열 = 미기록이다.
     - P L4056처럼 문구를 자동 합성하지 않음.
@@ -265,7 +290,17 @@ hash는 내용을 짧은 문자열로 줄인 지문이다. 내용이 조금이�
   - `planning_reviews`: 주제별 일치·이견·조정
   - 근거: §4.5
 - `change_proposals`
-  - cp_key, source(planning/message/manual/split/input/decision), status(§3.6), ops(jsonb §5.6), id_map, preview_hash
+  - cp_key, title(공백 금지), reason(공백 금지), source(planning/message/manual/split/input/decision), source_id(출처 ID, 없으면 null), status(§3.6), ops(jsonb §5.6), id_map, preview_hash
+  - **분할 CP(`source=split`)는 `source_id`에 원래 Task 키가 필수다**(제약 이름 `cp_split_source`).
+    - 왜: 충돌 묶음 상속(§2.4-1)과 분할 순서 판정(§2.3-2)이 모두 「원래 Task가 무엇인가」를 기준으로 한다.
+  - 이전 버전에서 저장된 행(마이그레이션 0013 전):
+    - title에는 cp_key, reason에는 「이전 버전에서 저장되어 사유가 없음」을 채운다.
+    - 원래 Task 키는 알 수 없으므로 지어내지 않는다. 그래서 `source_id`가 빈 분할 CP가 남을 수 있다.
+    - 분할 CP의 `source_id` 필수 규칙은 새 행과 규칙을 지키던 행에 적용한다.
+    - 이미 규칙을 어긴 이전 행은 출처를 그대로 둔 갱신(상태·보류 사유·제목 등)만 허용한다. 출처가 split이고 `source_id`가 빈 상태를 유지해야 한다.
+    - 원래 Task 키를 나중에 채울 수는 있지만, 채운 뒤 다시 비울 수는 없다.
+    - 이 규칙은 CHECK가 아니라 같은 이름의 트리거로 검사한다(0014). 어기면 오류 코드는 23514다.
+    - 왜 트리거인가: CHECK는 「바뀌기 전 값」을 볼 수 없어서, 이전 행을 반려하는 것 같은 무관한 갱신까지 막았다.
   - hold_reasons(jsonb `{holdReasons,issues}`, contracts §2.1)
   - split_judgements(jsonb null, §2.3-1; 분할 CP만)
   - **task_judgements(jsonb not null default `[]`**, §2.3-1)
@@ -319,6 +354,11 @@ CP(변경 제안)로 새 Task를 추가할 때 넣을 수 있는 선택 필드�
 - `runner_jobs`
   - kind, payload, state(`queued/leased/started/reconcile/done/failed/cancelled`), lease_owner, lease_until, fence int, epoch, attempts
   - fence는 낡은 Runner의 보고를 막는 번호표다. job을 새로 임대할 때마다 바뀐다.
+  - dedup_key: 필수 unique. 같은 원인으로 job이 두 번 만들어지는 것을 막는 키다.
+    - 새 키는 서비스가 원인 시도와 회차로 만든다.
+    - 이 열이 생기기 전 행은 `legacy:<id>`로 채웠다.
+  - 끝난 job(`done/failed/cancelled`)은 다시 열거나 고치지 않는다. fence는 줄어들지 않고, epoch와 dedup_key도 바꾸지 않는다.
+    - 왜: 끝난 job이 되살아나거나 fence가 내려가면, 이미 거절했어야 할 낡은 보고가 다시 통과한다.
   - 근거: D-03
 - `runner_job_events`
   - 추가 전용: prepared·prestart_failed·started·lease_lost·reconciled·finished, code, detail — **시작 전 실패 기록**
@@ -327,9 +367,13 @@ CP(변경 제안)로 새 Task를 추가할 때 넣을 수 있는 선택 필드�
   - job unique, attempt?, epoch, host_id?, boot_id?, fence?, pgid/cgroup, task?, conflict_group?, agent, slots, heavy, **slot_state**, **lock_state**, lock_from_job?, handed_to_job?, release_proof(`no_process/group_empty/boot_changed`), closed_at.
   - 별도 `state` 컬럼 없음 — 정의는 §2.5-1.
   - 닫히기 전 삭제 금지(초기화는 §5).
+  - 행을 새로 만들 때(INSERT)도 §2.5-1의 상태 규칙을 검사한다.
   - 근거: §6.7 L795·804-806
 - `external_write_authority`
   - 단일 행: host_id, generation, state(`granted/blocked`), credential_fingerprint, blocked_reason, reconciled_at — GitHub(git 저장소를 호스팅하는 서비스) 등 공유 외부 쓰기 권한
+  - generation(외부 쓰기 권한의 세대 번호)은 줄어들지 않는다. host가 바뀌면 반드시 올라간다.
+  - 이 행은 지우지 않는다. 초기화(§5)에서도 GitHub 연결과 함께 generation·차단 상태를 그대로 둔다.
+    - 왜: 초기화로 세대 번호가 처음으로 돌아가면, 옛 PC가 옛 번호로 외부에 쓰는 것을 다시 막을 수 없다.
   - 근거: contracts §3.4-5
 - `task_attempts`
   - attempt_key unique, job unique, task, base/head SHA, spec_revision, input_version, kind(`dev/qa/rework/reverify`), agent, status(§3.2), started/ended_at, model_id, effort, grade_adjust(kind·reason), summary, failure, tokens, resumed_from.
@@ -344,6 +388,7 @@ CP(변경 제안)로 새 Task를 추가할 때 넣을 수 있는 선택 필드�
   - 근거: §6.7-7
 - `attempt_observations`
   - cli, version, grade, observed, reserved, state(`ok/unconfirmed`), pgid/cgroup 상태, at
+  - grade(관측 등급)의 저장 값은 `ok/partial/unver`, API 값은 `verified/partial/unverified`이며 경계에서 바꾼다(`OBSERVATION_GRADE`).
   - 근거: §6.7
 - `verifications`
   - attempt unique, result(`PASS/FAIL/BLOCKED`), **head_sha, spec_revision**, cmd, expected, actual — 추가 전용.
@@ -388,7 +433,12 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
   - `reserved→none`
   - `reserved/active→unconfirmed→none`
   - `none`으로 가려면 release_proof 필요.
+    - pgid나 cgroup이 기록됐거나 `active`였던 슬롯은 `no_process` 증거로 풀 수 없다.
+  - `none→reserved`에는 host_id·boot_id·fence가 모두 있어야 한다.
   - CLI 재기동은 `none→reserved→active`를 다시 밟는다.
+- 프로세스 그룹(pgid·cgroup)은 `/process`의 `reserved→active`에서만 기록한다.
+  - 같은 그룹으로 `/process`를 다시 보내면(재전송) 받아들인다. 다른 그룹으로 바꾸려 하면 거부한다.
+  - 왜: 네트워크가 끊겨 같은 보고를 다시 보내는 것은 정상이지만, 그룹이 바뀌면 다른 프로세스의 보유로 바꿔치기될 수 있다.
 - 잠금 전이:
   - `none→held`(claim)
   - `held→handed_over/released/orphaned`
@@ -407,6 +457,8 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
 1. 인계는 한 트랜잭션이다.
    - 이전 행 `held→handed_over, handed_to_job=B` → B의 보유 행을 `lock_state=held, slot_state=none, lock_from_job=A, host/fence=null`로 생성.
    - 사이에 다른 claim이 끼지 못한다.
+   - DB는 트랜잭션이 끝날 때(커밋 직전) 두 행이 서로를 가리키는지 검사한다. epoch·프로젝트·Task·충돌 묶음도 같아야 한다.
+     - 왜 끝날 때 검사하나: 두 행을 차례로 쓰는 동안에는 잠깐 한쪽만 있는 순간이 생긴다.
 2. **자기 보유 = `hold.job = 요청 job`**이고 epoch가 같은 행.
    - claim은 자기 행의 `held` 잠금을 충돌에서 제외하고, 그 행에 host·fence를 기록하며 `slot_state none→reserved`로 바꾼다(새 행을 만들지 않음).
    - 인계 없는 최초 claim은 새 행을 만든다.
@@ -422,7 +474,10 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
   - started_at, ended_at, end_reason, last_heartbeat_at — 종료 1회 외 불변
   - 근거: §8.2
 - `runner_hosts`
-  - host_id, cpu, cores, mem/swap/disk, os, per_session_gb, samples, seen_at(이력)
+  - host_id, boot_id, cpu, cores, mem/swap/disk, os, per_session_gb, samples, seen_at(이력)
+  - boot_id: host 보고(`POST /runner/host`의 `bootId`)의 현재 부팅 ID. 공백 금지. 이 열이 생기기 전 행은 null이다.
+    - 왜: 보유를 풀 때 「PC가 다시 켜졌다」는 증거(`boot_changed`)를 현재 부팅 ID와 대조하려면 저장해 둬야 한다.
+  - API의 `diskFreeGB`는 `disk_gb`에 저장한다.
   - 근거: §6.6
 - `runner_concurrency_log`
   - limit, running, subagents(관측/보유), heavy, resources, adjust(from/to/reason)
@@ -431,7 +486,7 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
   - mode(auto/manual), caps, mem_reserve_gb, subagent_budget(dev/qa)
   - 근거: §6.6 §6.7
 - `runner_readiness`
-  - key, status, detail, fix, at
+  - key unique, status, detail, fix, at
   - 근거: §7.4
 - `agent_usage`
   - agent, remain_pct(0~100), reset_at, tokens_used
@@ -442,12 +497,16 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
   - 근거: §7.2
 - `exec_policy`
   - on_usage, low_pct(사용량 부족 기준, 기본 20% — owner 2026-11-26), on_rework, esc_notify, floors, live_inject, auto_retry_limit=2, auto_rework_limit=3
+  - API 이름과의 대응:
+    - `esc_notify`는 API의 `notifyAt`이다.
+    - `low_pct`가 null이면 API는 도메인 기본값 20을 보낸다(경계 변환 `execPolicyToApi`).
   - 근거: §7.3, owner Q-04
 - `subagent_defs`
   - id, version, agent, role, tools, sandbox(프로그램이 건드릴 수 있는 범위를 막아 둔 실행 환경), text, hash, allowed, ref — 버전 불변
   - 근거: §7.4
 - `cli_observation_grades`
   - cli+version+model+options unique, grade, verified_at, notes
+  - grade 저장 값과 API 값의 대응은 `attempt_observations`와 같다(`ok`↔`verified`, `partial`↔`partial`, `unver`↔`unverified`).
   - 근거: §6.7
 
 ### 2.7 일정 · 보고서 · 알림 · 설정
@@ -463,7 +522,10 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
   - `baseline_items`: Task별 시작·종료·lo·hi — 추가 전용
   - 근거: §6.4
 - `replans` / `replan_moves`
-  - `replans`: rp_key, trigger, actor, baseline_v?, status(`applied/pending`), before/after
+  - `replans`: rp_key, trigger, actor, baseline_v?, status(`applied/pending/discarded`), before/after
+    - `discarded`는 반영하지 않고 닫은 대기 재조정이다.
+    - `pending`에서 `applied` 또는 `discarded`로 **한 번만** 확정한다. 확정할 때 바꿀 수 있는 열은 status·baseline_v·after뿐이다.
+    - 왜: 재조정은 일정 이력이다. 확정한 뒤에 다시 고치면 「그때 무엇을 반영했나」를 알 수 없다.
   - `replan_moves`: Task별 이동·신규·제외
   - 근거: §6.4
 - `reports`
@@ -487,13 +549,15 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
   - 근거: §4.14
 - `notify_events`
   - dedup_key, resolved_at, dup_count. **열린 키 1개**(부분 unique where resolved_at is null)
+  - 열린 키 1개는 프로젝트 범위와 전역(project_id null)을 따로 센다.
   - 근거: §8.7
 - `notify_outbox` / `notify_log`
-  - `notify_outbox`: delivery_id, epoch, 대기·시도·next_at
+  - `notify_outbox`: delivery_id, epoch, 대기·시도·next_at, event unique(상태와 관계없이 이벤트 하나에 outbox 하나)
   - `notify_log`: 업무·테스트, 상태, 오류 요약
   - 근거: §8.7
 - `alerts`
   - 대시보드 현재 상태 알림: key unique(열림), severity, target
+  - 열린 알림의 unique는 프로젝트 알림과 전역 알림(project_id null)을 따로 센다.
   - 근거: §4.1 §4.14 L522
 - `app_settings`
   - app_url, heartbeat 주기·누락 횟수, 분할 기준, 작업 흐름 기본값, 시간대
@@ -521,9 +585,24 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
 - `design_drifts` / `design_versions`
   - item_key, kind, compat(호환/깨짐/`대조 안 함`), status, resolution
   - drift는 계약 문서와 실제 코드가 서로 어긋난 상태다.
+  - compat 저장 값은 화면 문구(호환/깨짐/대조 안 함)이고, API 값은 `compatible/breaking/unchecked`다. 경계에서 바꾼다(`DRIFT_COMPAT`).
   - 근거: §4.12 §9.6-1-4
 - `ci_runs` / `ci_steps`
-  - run_key, stage, **base_sha, head_sha, merge_sha, tree_sha, pipeline_sha**(단계별 해당 값), ref, pr, task?, attempt?, trigger, status, fail_step, log_excerpt, artifact_path, url
+  - run_key, stage, **base_sha, head_sha, merge_sha, tree_sha, pipeline_sha**(단계별 해당 값), ref, pr, task?, attempt?, trigger, status, fail_step, log_excerpt, artifact_path, url, job?, fence?, artifacts
+  - stage는 1~4 숫자로 저장하고 API 값과 task=1, int=2, night=3, deploy=4로 바꾼다(`CI_STAGE`).
+  - pipeline_sha·trigger는 NOT NULL이다. 그래서 API 시작 요청에서도 필수다(contracts §2.3).
+  - job·fence: 실행을 시작한 job과 그 fence.
+    - job이 없는 실행은 야간 점검(stage 3)뿐이다(제약 이름 `ci_job_owner`).
+    - job과 fence는 함께 있거나 함께 없다.
+    - 왜: Runner의 다음 보고(갱신)를 시작한 job·fence와 대조해야 낡은 보고를 거절할 수 있다(contracts §3.2-4).
+  - artifacts: 산출물 경로 목록(jsonb 배열).
+  - 시작 시각은 별도 열 없이 created_at을 쓴다.
+  - 이전 버전에서 저장된 행(마이그레이션 0013 전):
+    - 시작한 job은 알 수 없으므로 지어내지 않는다. 그래서 job이 빈 1·2·4단계 실행이 남을 수 있다.
+    - 「야간 점검만 job 없음」 규칙은 새 행과 규칙을 지키던 행에 적용한다.
+    - 이미 규칙을 어긴 이전 행은 단계를 바꾸지 않고 job도 비어 있는 갱신(결과·산출물·URL 저장 등)만 허용한다.
+    - job이 있던 1·2·4단계 실행에서 job을 지우는 것은 거부한다.
+    - 이 규칙도 CHECK가 아니라 같은 이름의 트리거로 검사한다(0014). 오류 코드는 23514다.
   - 근거: §4.13
 - `merge_queue`
   - pr, task unique(열림), position, status, qa_head_sha(H), synced_head_sha(H'), base_sha(A), verification, ci_run, tested_tree_sha, **actual_merge_sha·actual_tree_sha**
@@ -543,7 +622,9 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
   - 추가 전용: at, actor, task?, kind, text, before, after, ref
   - 근거: §4.9 §9.1-3
 - `idempotency_keys`
-  - unique(principal, key), request_hash, response, epoch
+  - unique(project_id, epoch, principal, key) NULLS NOT DISTINCT, request_hash, response, epoch
+  - NULLS NOT DISTINCT는 「project_id가 null인 행끼리도 같은 값으로 보고 중복을 막는다」는 뜻이다.
+    - 왜: 보통 unique는 null끼리를 서로 다르다고 봐서, 프로젝트 등록 전(null)의 같은 키가 두 번 저장될 수 있다.
   - 근거: §9.1-6
 - `change_events`
   - seq bigserial(자동 번호를 발급하는 큰 정수 열. 실패·취소로 중간 번호가 비기도 한다), topic, ref, at — 화면 커서. 7일 보존 [결정]
@@ -710,21 +791,40 @@ claim은 Runner가 「이 일을 제가 하겠습니다」 하고 job을 예약�
 
 1. `system_state` 행 `FOR UPDATE` → 프로젝트 행 잠금 + `confirmName` 일치(§5.1).
 2. 해당 epoch 디렉토리 전체를 `file_delete_queue`에 기록, 정리 명령 payload(저장소·기준 커밋·브랜치)를 `runner_commands`에 기록. 기준 커밋이 없으면 저장소 정리는 명령에서 제외(§9.5-2).
+   - 정리 명령 payload에는 외부 쓰기 권한의 generation과, 모든 기록 출처에 남은 Agent PR·브랜치도 담는다.
+   - 왜: 프로젝트 데이터를 지운 뒤에는 어떤 PR·브랜치를 시스템이 만들었는지 다시 알 수 없다.
 3. 프로젝트 데이터 삭제. `keepSettings=false`면 설정·환경·Runner 가동 기록·메일/Telegram 설정도 삭제. **GitHub 연결은 항상 유지**(§4.2 L258), 전송 이력은 항상 삭제.
+   - GitHub 연결과 함께 `external_write_authority`의 generation·차단 상태도 항상 유지한다(§2.5).
+   - `keepSettings=false`여도 빈 설정으로 두지 않는다. 사용자 설정을 지우고 승인된 `system` 기본값을 같은 트랜잭션에서 다시 넣는다(§6).
+     - `agent_efforts`와 검토를 마친 하위 Agent 정의는 보존하고, demo 하위 Agent 정의만 지운다.
+     - 다시 넣는 일정 정책은 `cp_auto=true`이고, `auto_replan`은 G에 확정 근거가 없어 null이다.
+     - 왜: 설정 표가 비면 서버가 기본값 없이 판단해야 한다. 승인된 기본값으로 돌아가는 것이 「처음 상태」다.
 4. epoch+1, `reset_log` 추가. 1~4는 한 트랜잭션(§9.5-1).
    - 왜 한 트랜잭션인가: 중간에 실패하면 반쯤 지워진 상태가 남지 않고 전부 원래대로 돌아간다.
 5. 커밋 후 worker가 파일 삭제, Runner가 정리 실행. 실패는 재시도. 보유 중인 실행 목록(pgid·cgroup·host·boot)은 정리 명령 payload로 옮겨, 그룹 종료가 확인되어야 정리 완료로 본다.
+
+**정리 완료 기록**
+
+- 앱이 감사 표를 직접 고치지 않는다. `complete_cleanup()` 함수가 명령(`runner_commands`)·`reset_log`·`system_state`를 한 번에 갱신한다.
+- Runner가 보내는 정리 결과의 `holds[]`가 `complete_cleanup()`의 증거다(contracts §3.2).
+  - 성공(done)이면 payload의 모든 보유에 대해, 기록된 job·host·boot와 맞는 증거가 있어야 한다.
+  - pgid나 cgroup이 기록된 보유(또는 `active`였던 보유)는 `no_process`로 완료하지 못한다.
+  - 증거가 맞지 않으면 DB가 오류 코드 AW002로 거부하고 정리는 완료되지 않는다.
+- 왜: 「정리했다」는 말만 믿고 완료하면, 아직 살아 있는 옛 Agent 프로세스가 새 프로젝트의 파일을 건드릴 수 있다.
 
 ### 5.1 epoch 원자성
 
 epoch가 바뀌는 순간(초기화)과 다른 쓰기가 겹쳐도 옛 프로젝트 데이터가 새 프로젝트에 섞이지 않게 하는 규칙이다.
 
 - **모든** 변경 트랜잭션(팀장·Runner·worker, 환경 행 포함)은 첫 문장으로 `system_state`를 `FOR SHARE`로 잠그고 epoch를 다시 확인한다.
-  - 초기화만 `FOR UPDATE`.
+  - 초기화는 이 규칙에서 빠진다. 초기화는 처음부터 `FOR UPDATE`를 잡는다.
+    - 왜: `FOR SHARE`를 잡았다가 `FOR UPDATE`로 올리면, 같은 일을 하는 두 트랜잭션이 서로를 기다리는 교착이 생길 수 있다.
+  - DB의 epoch 확인이 실패하면 오류 코드 AW001이 난다. 서비스는 이를 낡은 epoch 오류(409 `EPOCH_MISMATCH`)로 바꾼다.
   - middleware(모든 요청이 처리 전에 거치는 공통 코드) 검사만으로 쓰지 않는다.
   - 왜: middleware에서 확인한 뒤 실제로 쓰기 전 사이에 초기화가 끼어들 수 있다.
 - 잠금 순서: `system_state → projects → tasks(id순) → jobs/holds → 그 외`. 역순 금지.
   - 왜: 모두 같은 순서로 잠가야 서로 상대 잠금을 기다리는 교착(deadlock)이 생기지 않는다.
+  - 그래도 교착이 나면 DB가 오류 코드 40P01로 한쪽을 취소한다. 서비스는 횟수를 정해 두고 다시 시도한다.
 - worker 작업은 생성 시 epoch를 갖는다. 시작과 결과 반영 때마다 잠금 안에서 epoch를 재확인하고, 낡으면 결과를 버린다.
 - 파일은 `<epoch>/` 아래에 쓴다.
   - 삭제 작업은 그 epoch의 worker 임대가 끝나거나 만료된 뒤 실행한다.
@@ -753,3 +853,16 @@ epoch가 바뀌는 순간(초기화)과 다른 쓰기가 겹쳐도 옛 프로젝
   - `system`: G가 확정한 기본 정책·분할 기준, owner 확정 Q-03 값·Q-04(자동 재시도 2·재작업 3)·Q-06 매핑, 검토를 마친 하위 Agent v1 — M5-06
   - `demo`: P `MOCK` 12 Task·`SUB_MOCK`·Q 미승인 잠정값 — **테스트·화면 검증 전용**, 운영 DB에서 실행 거부
 - 추가 전용 보장 테스트: 앱 역할로 UPDATE/DELETE가 거부되는지 확인.
+- 마이그레이션 0013 전에 저장된 행의 처리는 §2.4 `change_proposals`와 §2.8 `ci_runs`에 있다. 이미 적용된 0000~0012는 고치지 않고 0013·0014를 추가했다.
+
+### 6.1 DB 권한과 보안 검사
+
+- 표의 소유자는 전용 NOLOGIN 역할(`awbs_data_owner`)이다. 앱이 쓰는 권한은 별도 역할(`awbs_app`)에 모은다.
+  - NOLOGIN은 그 역할로 직접 로그인할 수 없다는 뜻이다.
+  - 왜: 앱이 표 소유자나 관리자(superuser) 권한을 가지면 DB 제약과 트리거를 끄고 지나갈 수 있다.
+- 높은 권한으로 실행되는 함수(SECURITY DEFINER)는 모두 안전한 검색 경로(`search_path=pg_catalog,pg_temp`)를 고정하고, PUBLIC의 실행 권한을 회수한다.
+  - 검색 경로는 이름만 쓴 표·함수를 어느 스키마에서 찾을지 정한 목록이다. 고정하지 않으면 같은 이름의 가짜 함수가 대신 실행될 수 있다.
+- 임시 표를 만드는 권한(TEMP)도 PUBLIC과 앱 역할에서 회수한다.
+- 표를 새로 만들 때마다 모든 표의 권한과 보호 장치(트리거)를 빠짐없이 검사하는 테스트를 돌린다.
+- FK마다 그 열로 시작하는 인덱스(선두 인덱스)가 있는지도 검사한다.
+  - 왜: 인덱스가 없으면 가리키는 행을 지우거나 고칠 때 표 전체를 훑느라 느려지고 잠금이 길어진다.

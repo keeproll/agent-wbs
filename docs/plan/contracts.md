@@ -68,8 +68,13 @@
   - 작업을 만드는 팀장 요청은 202 `{jobId}`(저장소 확인은 `{id}`, Planning 시작은 `{id,jobId}`)
 - **값 철자**
   - openapi.json이 정본.
-  - reconcile `none/done/partial`, drift compat `compatible/breaking/unchecked`(화면 「대조 안 함」=unchecked), 입력 변경 `added/modified/deleted`, CI stage `task/int/night/deploy`.
+  - reconcile `none/done/partial`, drift compat `compatible/breaking/unchecked`(화면 「대조 안 함」=unchecked), 입력 변경 `added/modified/deleted`, CI stage `task/int/night/deploy`, 관측 등급 `verified/partial/unverified`.
   - DB 내부 값이 다르면 API 경계에서 변환
+  - 지금 변환하는 값(자세한 것은 data-model §2.6·§2.8):
+    - drift compat: DB는 화면 문구 호환/깨짐/대조 안 함으로 저장한다.
+    - CI stage: DB는 1~4 숫자로 저장한다(task=1, int=2, night=3, deploy=4).
+    - 관측 등급: DB는 `ok/partial/unver`로 저장한다(`verified`↔`ok`, `partial`↔`partial`, `unverified`↔`unver`).
+  - 왜 경계에서 바꾸나: DB에 이미 저장된 값을 고치지 않고도, 바깥에는 항상 같은 철자를 보여 줄 수 있다.
 - **속도**
   - Runner 429 + `Retry-After`(몇 초 뒤 다시 보내라는 응답 헤더) 허용
 
@@ -235,6 +240,8 @@
 | GET `/api/dashboard`, `/api/schedule`, `/api/replans`, POST `/api/replans/run` | §4.1, §6. 조회 응답의 필드 구조는 openapi.json이 정본. `schedule.warnings[]`의 `CLOCK_SKEW_CLAMPED`는 시계 오차로 자른 값의 이전·이후를 보존: Task `{code,taskKey,field:"actStart"\|"actEnd",before,after}` 또는 세션 `{code,sessionFrom,field:"lastHeartbeatAt"\|"to",before,after}`. 계산에만 자른 값을 쓰고 저장 기록은 바꾸지 않음(§9.1-3) |
 | GET `/api/runner-state` | 연결·준비·PC(개인용 컴퓨터)·동시 실행·관측·제한 요인 묶음 + 최근 중단 구간 `gaps[{from,to\|null,reason}]` 최대 6개·최신순(P L6684), reason `reboot/power_off/error/manual/unknown`, 진행 중이면 `to=null` |
 
+- `/api/replans` 목록의 status는 `applied/pending/discarded`다. `discarded`는 반영하지 않고 닫은 대기 재조정이다(data-model §2.7).
+
 **변경 제안(proposals) API 상세**
 
 - 미리보기와 반영은 같은 함수. apply는 재시뮬레이션.
@@ -254,6 +261,17 @@
   - add op의 `t.splitBasis`(분할 근거)는 **일반 CP는 선택, 분할 CP(`source.kind="split"`)의 추가 Task는 필수**이며 팀장·Planning 작성에 같이 적용.
     - 형식은 초안의 `splitBasis`와 같은 공백 아닌 문자열.
     - 분할 CP에서 빠지면 400 VALIDATION_FAILED, 저장된 CP의 시뮬레이션에서는 `issues`의 `SPLIT_BASIS_MISSING`.
+  - add op의 `t.design`에 같은 kind가 두 번 있으면 400 VALIDATION_FAILED다(`errors[].rule="uniqueDesignKind"`).
+    - 오류 예: `{path:"ops.1.t.design.2.kind", rule:"uniqueDesignKind", message:"…"}`
+- **분할 CP의 원래 Task**
+  - 분할 CP(`source.kind="split"`)는 `source.id`에 원래 Task 키가 **필수**다. 없으면 400 VALIDATION_FAILED.
+  - 팀장 작성(`POST /api/proposals`)과 Planning 작성(`POST /planning/proposals`)에 같이 적용한다.
+  - 왜: 충돌 묶음 상속과 분할 순서 판정이 원래 Task를 기준으로 한다(data-model §2.4-1·§2.3-2).
+- **입력 규칙(JSON Schema 밖의 검사)**
+  - 「kind 기준 중복 금지」처럼 JSON Schema(요청 본문의 모양을 적는 표준 형식)로 쓸 수 없는 규칙은 요청별 입력 규칙으로 둔다.
+  - 서버는 형식 검증 뒤 입력 규칙을 실행한다. 어기면 400 VALIDATION_FAILED의 `errors[]`로 돌려준다.
+  - OpenAPI에는 `x-input-rules`로 표시한다.
+  - 지금 규칙은 `uniqueDesignKind` 하나다. CP 작성 2개(팀장·Planning)와 Planning 검토 제출에 적용한다.
 - **판단 처리**
   - 팀장 작성 POST는 판단 필드를 받지 않음(400).
   - 판단이 필요한 CP가 `review`에 들어오면 서버가 `planning` 판단 job을 만든다.
@@ -300,6 +318,8 @@ G§8.5, §8.5-1, §8.6, §8.7의 표 전체를 그대로 구현한다(재기술�
 
 - 보고서: 기간 `from ≤ to ≤ 오늘`, 최대 93일 → 400. 수정·삭제 API 없음. PDF 실패 503 `PDF_FAILED`★.
 - 메일 큐 키 `reportId+recipientId+tryNo`, 실패 15분 후 1회 자동 재시도.
+- `POST /runner/ci/runs`(CI 실행 시작)는 `pipelineSha`·`trigger`가 필수다.
+  - 왜: DB에서 두 값이 NOT NULL이라 기본값 없이 저장해야 한다(data-model §2.8 `ci_runs`).
 - CI retry/deploy-check → 202 `{jobId}`. 메일 발송·재발송·테스트 → 202 `{ids}`(발송 기록 ID). `GET /ci/pipeline`★(정의 표시), GET·PATCH `/ci/settings`★.
 - 불일치 `resolve{how:"contract"}`는 Runner job을 만들고 **결과 커밋이 보고된 뒤** resolved. 호환 깨짐은 기술 결정 승인 필요(§4.12).
 - `POST /api/projects/:projectId/design/decisions`는 **Runner 토큰**(Agent 제안, §8.6)이며 `{jobId,fence,authority:"agent"|"free",…}`.
@@ -405,7 +425,7 @@ Runner가 일을 받아 처리하는 API다. 「명령」은 초기화 뒤 정�
 
 ```
 GET  /api/runner/commands                → {currentEpoch, commands:[{id,kind:"reset-cleanup",epoch,payload}]}
-POST /api/runner/commands/:id/result     → {status, items:[{name,ok,detail}]}
+POST /api/runner/commands/:id/result {status, items:[{name,ok,detail}], holds[]} → 204
 POST /api/runner/jobs/claim {kinds[],capacity} → 200 {job:{id,kind,payload,leaseUntil,fence}} | 204
 POST /api/runner/jobs/:id/renew {fence}  → {leaseUntil}         409 LEASE_LOST
 POST /api/runner/jobs/:id/start {fence,hostId,bootId,headSha?,installedSubagents[]} → {attemptId?}
@@ -416,6 +436,16 @@ POST /api/runner/jobs/:id/release {fence,hostId,proof,at}            → 잔여 
 POST /api/runner/jobs/:id/reconcile {fence,evidence}                  → 외부 상태 대조 결과
 POST /api/runner/jobs/:id/finish {fence,status,result?,error?}
 ```
+
+**명령 결과의 정리 증거(`holds[]`)**
+
+- `status=done`이면 `holds[]`가 필수이고, `status=failed`이면 선택이다.
+- 완료라면 명령 payload의 모든 보유에 대해 항목 하나씩을 보낸다: `{job, hostId, bootId, proof: no_process|group_empty|boot_changed, processGroup?, currentBootId?}`.
+  - `hostId`·`bootId`는 보유를 만든 원래 값이다. 예약 전 보유면 null이다.
+  - `group_empty`는 `processGroup`이 필요하다.
+  - `boot_changed`는 `currentBootId`가 필요하다. `processGroup`은 프로세스를 만들기 전 보유면 null이다.
+- 증거가 저장된 보유와 다르면 정리를 완료하지 않는다(data-model §5 정리 완료 기록).
+- 왜: 「정리했다」는 문장(`items[].detail`)만으로는 어느 프로세스가 끝났는지 확인할 수 없다.
 
 **job 종류**
 
