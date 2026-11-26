@@ -8,6 +8,8 @@ pnpm -C agent-runner check     # typecheck + lint + test. 실제 Claude/Codex/Gi
 pnpm -C agent-runner start     # .env의 AWBS_RUNNER_TOKEN 필요(.env.example 참고)
 ```
 
+실제 npm 설치는 `pnpm -C agent-runner test:cli-update:real`로 따로 검사한다. 네트워크 연결과 PATH에 있는 npm·Codex·Claude, 두 CLI의 기존 로그인이 필요하다. 공식 최신 버전을 전용 임시 prefix(패키지 설치 위치)에 설치하고, 버전·로그인 상태·도움말을 확인한 뒤 링크를 교체한다. 예를 들어 Claude의 설치 후 처리 스크립트가 막혀 실행 파일이 만들어지지 않으면 이 검사가 실패한다. 모델을 호출하지 않으며, 사용 중인 전역 실행 파일의 내용·수정 시각이 같은지도 검사한다. 임시 설치는 `~/.orca/bots/agentwbs/archive/2026-11-26/M4-05/` 아래에 만들고 끝나면 지운다.
+
 보고는 `Outbox.enqueue()`로 먼저 `AWBS_HOME/state/runner.json`에 저장한 뒤 전송한다. Outbox(보고 대기함)는 같은 요청을 여러 번 보내도 한 번만 처리하도록 멱등 키를 유지한다. 예를 들어 서버가 보고를 처리한 직후 Runner가 강제 종료돼도, 재시작하면 같은 키로 다시 보내 서버의 중복 처리를 막는다. 네트워크·408·429·5xx 오류는 간격을 늘려 재시도한다. 서버의 대기 지시까지 포함해 최대 60초이며, 실행 중에는 뒤로 가지 않는 단조 시계로 기다린다.
 
 전송 거부는 `state/rejected/<보고 ID>.json`에 요청·오류 코드·원인·조치 방법을 별도 보관한다. 같은 프로젝트 번호·보고 종류·오류 코드·대상이면 파일 하나에 횟수, 첫/마지막 시각, 마지막 요청의 해시를 기록한다. 이전 버전의 중복 파일도 묶음별 한 번만 원문을 써서 합친 뒤 사본을 지운다. 메모리에는 작은 색인만 두며 `outbox.rejected`는 이 목록을 돌려준다. 보관 중인 원문이 필요하면 `state.readRejection(id)`를 비동기로 호출한다. 거부된 세션·수신 확인 보고는 이후 보고를 막지 않는다. 같은 시도의 앞 보고가 거부되면 그 시도의 뒤 보고만 막는다. 실행 계층은 `onRejected(entry)`로 즉시 통지받고, 재시작 때 `rejectedFor(attemptId)`를 조회해 `LEASE_LOST`(다른 실행자가 작업을 가져간 상태)인 작업을 멈춰야 한다.

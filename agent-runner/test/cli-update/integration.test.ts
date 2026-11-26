@@ -40,7 +40,7 @@ import { join } from 'node:path';
 const args = process.argv.slice(2);
 if (process.env.AWBS_RUNNER_TOKEN || process.env.GITHUB_TOKEN) process.exit(74);
 appendFileSync(join(process.env.HOME, 'npm-calls.jsonl'), JSON.stringify(args) + '\\n');
-if (args[0] === 'view') console.log(JSON.stringify(args[1].startsWith('@openai/') ? '0.173.0' : '2.1.333'));
+if (args[0] === 'view') console.log(JSON.stringify([args[1].startsWith('@openai/') ? '0.173.0' : '2.1.333']));
 else if (args[0] === 'install') {
   const i = args.indexOf('--prefix');
   if (i < 0 || !args[i + 1].startsWith(join(process.env.HOME, 'cli'))) process.exit(75);

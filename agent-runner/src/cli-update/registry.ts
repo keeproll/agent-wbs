@@ -23,12 +23,13 @@ function checked(result: CommandResult): string {
 export function createCliRegistry({ home, env, run = createRunCommand({ env: cliEnvironment(env), timeoutMs: 120_000 }) }: {
   home: string; env: NodeJS.ProcessEnv; run?: RunCommand;
 }): CliRegistry {
-  const npmFlags = ['--global', '--registry=https://registry.npmjs.org', '--userconfig=/dev/null', '--globalconfig=/dev/null',
+  const npmFlags = ['--global', '--registry=https://registry.npmjs.org', '--userconfig=/dev/null', `--globalconfig=${join(home, 'cli', '.npm-empty-globalconfig')}`,
     `--cache=${join(home, 'cli', '.npm-cache')}`, '--no-update-notifier'];
   return {
     async latest(agent) {
       const output = checked(await run('npm', ['view', `${PACKAGES[agent]}@latest`, 'version', '--json', ...npmFlags]));
-      const version: unknown = JSON.parse(output);
+      const parsed: unknown = JSON.parse(output);
+      const version: unknown = Array.isArray(parsed) ? parsed.at(-1) : parsed;
       stableVersion(version);
       return version;
     },
@@ -38,7 +39,8 @@ export function createCliRegistry({ home, env, run = createRunCommand({ env: cli
       if (!isAbsolute(directory) || dirname(resolve(directory)) !== base || !/^\.install-[\w-]+$/.test(directory.slice(base.length + 1))) {
         throw new Error('설치는 이 Agent의 전용 임시 폴더에서만 가능합니다.');
       }
-      checked(await run('npm', ['install', '--prefix', directory, `${PACKAGES[agent]}@${version}`, ...npmFlags, '--no-audit', '--no-fund']));
+      const scripts = agent === 'Claude' ? ['--allow-scripts=@anthropic-ai/claude-code'] : [];
+      checked(await run('npm', ['install', '--prefix', directory, `${PACKAGES[agent]}@${version}`, ...npmFlags, '--no-audit', '--no-fund', ...scripts]));
     },
     async probe(agent, version, binary) {
       stableVersion(version);

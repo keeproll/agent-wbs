@@ -9,7 +9,7 @@ describe('cli-update — 공식 npm 채널·무과금 점검', () => {
   test.each([
     { agent: 'Codex' as const, pkg: '@openai/codex', version: '0.173.0' },
     { agent: 'Claude' as const, pkg: '@anthropic-ai/claude-code', version: '2.1.333' },
-  ])('$agent의 latest를 조회하고 전용 prefix에 정확한 버전만 설치한다', async ({ agent, pkg, version }) => {
+  ])('$agent 의 latest를 조회하고 전용 prefix에 정확한 버전만 설치한다', async ({ agent, pkg, version }) => {
     const calls: { cmd: string; args: readonly string[] }[] = [];
     const run: RunCommand = async (cmd, args) => {
       calls.push({ cmd, args });
@@ -22,7 +22,23 @@ describe('cli-update — 공식 npm 채널·무과금 점검', () => {
     expect(calls[0]?.cmd).toBe('npm');
     expect(calls[0]?.args).toEqual(expect.arrayContaining(['view', `${pkg}@latest`, 'version', '--json', '--registry=https://registry.npmjs.org', '--global']));
     expect(calls[1]?.args).toEqual(expect.arrayContaining(['install', '--global', '--prefix', `${home}/cli/${agent.toLowerCase()}/.install-123`, `${pkg}@${version}`]));
-    expect(calls[1]?.args).toEqual(expect.arrayContaining(['--userconfig=/dev/null', '--globalconfig=/dev/null', `--cache=${home}/cli/.npm-cache`]));
+    expect(calls[1]?.args).toEqual(expect.arrayContaining(['--userconfig=/dev/null', `--globalconfig=${home}/cli/.npm-empty-globalconfig`, `--cache=${home}/cli/.npm-cache`]));
+    const scripts = calls[1]?.args.filter((arg) => arg.startsWith('--allow-scripts='));
+    expect(scripts).toEqual(agent === 'Claude' ? ['--allow-scripts=@anthropic-ai/claude-code'] : []);
+  });
+
+  test.each([
+    { output: '["0.173.0"]', want: '0.173.0' },
+    { output: '["0.172.0","0.173.0"]', want: '0.173.0' },
+    { output: '"0.173.0"', want: '0.173.0' },
+  ])('npm view 출력 $output 에서 최신 버전 $want 를 읽는다', async ({ output, want }) => {
+    const registry = createCliRegistry({ home, env: {}, run: async () => ok(output) });
+    expect(await registry.latest('Codex')).toBe(want);
+  });
+
+  test.each(['[]', '["../escape"]', '["0.173.0",null]', '{}', '[{}]'])('잘못된 npm 배열 출력 %s는 거절한다', async (output) => {
+    const registry = createCliRegistry({ home, env: {}, run: async () => ok(output) });
+    await expect(registry.latest('Codex')).rejects.toThrow();
   });
 
   test.each(['../escape', '0.1.0-beta', '01.2.3', '', '1.2.3\n'])('잘못된 설치 버전 %j는 명령 실행 전에 거절', async (version) => {
@@ -53,7 +69,7 @@ describe('cli-update — 공식 npm 채널·무과금 점검', () => {
   test.each([
     { agent: 'Codex' as const, version: '0.173.0', versionText: 'codex-cli 0.173.0\n', auth: ['login', 'status'], authText: 'Logged in using ChatGPT', help: ['exec', '--help'], helpText: '--json --model --sandbox' },
     { agent: 'Claude' as const, version: '2.1.333', versionText: '2.1.333 (Claude Code)\n', auth: ['auth', 'status', '--json'], authText: '{"loggedIn":true}', help: ['--help'], helpText: '--print --output-format stream-json --verbose' },
-  ])('$agent는 실행·버전·로그인·필수 옵션을 모두 무과금 명령으로 확인', async ({ agent, version, versionText, auth, authText, help, helpText }) => {
+  ])('$agent 는 실행·버전·로그인·필수 옵션을 모두 무과금 명령으로 확인', async ({ agent, version, versionText, auth, authText, help, helpText }) => {
     const calls: (readonly string[])[] = [];
     const replies = [ok(versionText), ok(authText), ok(helpText)];
     const registry = createCliRegistry({ home, env: {}, run: async (_cmd, args) => { calls.push(args); return replies.shift() ?? ok(); } });
