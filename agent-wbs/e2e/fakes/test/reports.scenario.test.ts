@@ -312,6 +312,11 @@ describe('기간 지정 입력 · 불변', () => {
     expect(r.status).toBe(400);
     expect(r.body.error.code).toBe('VALIDATION_FAILED');
   });
+  test.each([['from', '2026-02-30'], ['to', '0000-01-01']])('달력에 없는 날짜 %s=%s → 400, 오류 위치는 그 칸', async (field, bad) => {
+    const r = await lead('POST', `/api/projects/${await projectId()}/reports`, { from: addDays(today, -1), to: today, view: 'int', [field]: bad });
+    expect(r.status).toBe(400);
+    expect((r.body.error.errors as { path: string }[]).map((e) => e.path)).toEqual([field]);
+  });
   test('93일은 허용', async () => {
     expect((await lead('POST', `/api/projects/${await projectId()}/reports`, { from: addDays(today, -92), to: today, view: 'int' })).status).toBe(201);
   });
