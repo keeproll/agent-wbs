@@ -215,6 +215,11 @@ export type Decision = {
   updatedAt: Timestamp;
   constraintId?: Id | null;
   conditionResult?: "met" | "not_met" | null;
+  change?: {
+    choice: string;
+    reason: string;
+    previousStatus: "fixed" | "approved";
+  };
 };
 
 export type DepType = "FS" | "SS";
@@ -1392,18 +1397,36 @@ export interface Operations {
         jobId: Id;
         fence: number;
         commit: Sha;
+        ref?: string;
         files: ({
           path: RepoPath;
           kind: string;
           format: string;
           status: "ok" | "draft" | "error";
           error?: string;
+          raw?: string;
         })[];
         items: ({
           itemKey: string;
           kind: string;
           path: RepoPath;
+          name?: string;
+          taskKey?: TaskKey;
           content: Record<string, unknown>;
+          contract?: {
+            fields: ({
+              path: string;
+              type: string;
+              required: boolean;
+            })[];
+          };
+          extracted?: {
+            fields: ({
+              path: string;
+              type: string;
+              required: boolean;
+            })[];
+          } | null;
         })[];
         drifts: ({
           itemKey: string;
@@ -1412,6 +1435,32 @@ export interface Operations {
           text: string;
           taskKey?: TaskKey;
           compat: "compatible" | "breaking" | "unchecked";
+        })[];
+        edges?: ({
+          from: string;
+          to: string;
+          kind: string;
+        })[];
+        ownership?: ({
+          data: string;
+          source: string;
+          copy: string;
+          sync: string;
+          lag: string;
+        })[];
+        components?: ({
+          id: Id;
+          layer: string;
+          name: string;
+          tech: string;
+          note: string;
+          decisionId: Id | null;
+        })[];
+        links?: ({
+          from: Id;
+          to: Id;
+          via: string;
+          contractPath: string | null;
         })[];
       };
       epoch: number;
