@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { platformErrorBody } from './platform/errors.ts';
 import { installSecurity, type SecurityOptions } from './platform/security.ts';
 import { registerChangeRoutes } from './changes/routes.ts';
+import { registerMessageRoutes } from './messages/routes.ts';
 
 export function buildApp(pool: Pool, logger: FastifyServerOptions['logger'] = false,
   security: SecurityOptions = { origin: 'http://127.0.0.1:3100', lan: false }): FastifyInstance {
@@ -22,6 +23,7 @@ export function buildApp(pool: Pool, logger: FastifyServerOptions['logger'] = fa
   });
   installSecurity(app, pool, security);
   registerChangeRoutes(app, pool);
+  registerMessageRoutes(app, pool);
 
   app.get('/health', (): HealthResponse => ({ status: 'ok' }));
 

@@ -4,6 +4,7 @@ import { createPool, recreateTestDatabase, runMigrations, seedSystem, type Pool 
 import { inject } from 'vitest';
 import type { FastifyInstance, InjectOptions, LightMyRequestResponse } from 'fastify';
 import { buildApp } from '../src/app.ts';
+import { registerRunnerMessageRoutes } from '../src/messages/routes.ts';
 import { issueLoginLink, issueRunnerToken } from '../src/platform/credentials.ts';
 
 export const origin = 'http://127.0.0.1:3100';
@@ -31,6 +32,7 @@ export async function harness(name: string): Promise<Harness> {
   appUrl.searchParams.set('options', '-c role=awbs_app');
   const pool = createPool(appUrl.href, { max: 8, onError: () => undefined });
   const app = buildApp(pool, false, { origin, lan: false });
+  registerRunnerMessageRoutes(app);
   const bearer = await issueRunnerToken(pool, 'runner-1', 'fake-public-key');
   const token = await issueLoginLink(pool);
   const login = await app.inject({ method: 'POST', url: '/api/auth/session', headers: { origin }, payload: { method: 'link', token } });
