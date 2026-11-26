@@ -106,8 +106,8 @@ function GithubCard({ repoUrl }: { repoUrl: string | null }) {
     },
     // 다시 적용도 공통 useSave 경로(reapplyRequest)로 보낸다. 최신 버전 위에 같은 토큰을 보내고,
     // 응답을 잃으면 같은 내용·같은 키로만 다시 보낸다(리뷰 624c334 지적 2, M3-04 0dcb8db).
-    reapplyRequest: async () => {
-      const latest = await load();
+    reapplyRequest: async ({ signal }) => {
+      const latest = await load(signal);
       return { token: token.trim(), updatedAt: latest.updatedAt };
     },
   });

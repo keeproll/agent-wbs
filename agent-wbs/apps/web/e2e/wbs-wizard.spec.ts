@@ -54,6 +54,8 @@ test('시나리오 1: 3단계 Wizard로 Task를 만들고, 선행(FS)을 붙이�
     title: 'Task 목록 조회 API 페이지네이션', wbsNodeId: 'WP-03', workType: 'Implementation', primaryDomain: 'BE', relatedDomains: ['API'],
     priority: 1, assigneeAgent: 'Claude', verifierAgent: 'Codex',
     overview: { purpose: 'Task 목록을 페이지 단위로 조회한다', background: '', scope: ['cursor 기반 페이지', '정렬 유지'], out: [], precond: '', doneCond: '200건 목록을 50건씩 조회할 수 있다' },
+    // M3 통합: 서버가 받게 된 예상 소요 시간(기본 4)·고정 시작일(빈칸 → null)
+    estimate: { estHours: 4 }, fixStart: null,
   });
   expect(create[0]?.headers()['idempotency-key']).toBeTruthy();
   const dep = api.requests('POST /api/tasks/TASK-0013/dependencies');

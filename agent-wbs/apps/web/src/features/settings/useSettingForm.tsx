@@ -198,8 +198,8 @@ export function useSettingForm<D extends { updatedAt: string | null }, F>(option
       setDraft(null);
     },
     // 다시 적용은 공통 useSave의 reapplyRequest로 보낸다(M3-04 0dcb8db). 최신 값 위에 「편집됨」 칸만 얹는다(지적 2).
-    reapplyRequest: async () => {
-      const latest = await load();
+    reapplyRequest: async ({ signal }) => {
+      const latest = await load(signal);
       const d = draft ?? { values: base as F, edited: [], baseData: latest };
       return { form: overlay(toForm(latest), d.values, d.edited), updatedAt: latest.updatedAt, data: latest, source: d };
     },

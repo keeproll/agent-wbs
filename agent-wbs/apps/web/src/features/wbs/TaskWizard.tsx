@@ -98,19 +98,15 @@ export function TaskWizard({ projectId, nodes, tasks, defaultWp, initial, onDraf
     request: () => ({ taskKey: createdRef.current?.taskKey ?? '', preds: d.preds }),
     run: async ({ payload, idempotencyKey }) => { await linkAll(payload.taskKey, payload.preds, idempotencyKey); },
     onSuccess: () => { finish(true); },
-    // 충돌: 「다시 적용」은 서버의 최신 버전을 다시 읽어 선행을 붙이고 마친다. 실패하면 던져서 창 안에 이유를 보인다.
-    onConflictReapply: async () => {
-      const c = createdRef.current;
-      if (!c) return;
-      await linkAll(c.taskKey, d.preds, crypto.randomUUID());
-      finish(true);
-    },
+    // 충돌 「다시 적용」: 공통 reapplyRequest(M3-04). 같은 선행 목록을 보낸다. run(linkAll)이 선행마다 서버의 최신 버전을 다시 읽어 붙이고, 성공하면 onSuccess로 마친다.
+    // 실패하면 던져서 창 안에 이유를 보인다. 응답을 잃으면 같은 내용·같은 키로만 다시 보낸다(공통 보관함).
+    reapplyRequest: () => Promise.resolve({ taskKey: createdRef.current?.taskKey ?? '', preds: d.preds }),
     // 「최신 불러오기」: 선행을 붙이지 않고, 만든 Task의 최신 상태와 목록만 다시 읽는다. 선행 선택은 그대로 두어 다시 고를 수 있다.
-    // 실패하면 던진다 → 충돌 창이 열린 채 이유를 보인다(재리뷰 F2).
-    onConflictReload: async () => {
+    // 실패하면 던진다 → 충돌 창이 열린 채 이유를 보인다(재리뷰 F2). 창을 닫으면 signal이 취소되어 결과를 적용하지 않는다(M3-01 79c2cc1).
+    onConflictReload: async ({ signal }) => {
       const c = createdRef.current;
-      if (c) await client.call('getTask', { params: { taskKey: c.taskKey } });
-      onRejected();
+      if (c) await client.call('getTask', { params: { taskKey: c.taskKey }, signal });
+      if (!signal.aborted) onRejected();
     },
   });
 
@@ -122,6 +118,9 @@ export function TaskWizard({ projectId, nodes, tasks, defaultWp, initial, onDraf
       title: d.title.trim(), wbsNodeId: d.wbsNodeId, workType: d.type, primaryDomain: d.domain, relatedDomains: d.rel,
       priority: Number(d.priority), assigneeAgent: d.assignee, verifierAgent: d.verifier,
       overview: { purpose: d.purpose.trim(), background: d.background.trim(), scope: lines(d.scope), out: lines(d.out), precond: '', doneCond: d.doneCond.trim() },
+      // M3 통합: 서버(main 8990189)가 createTask에서 예상 소요 시간·고정 시작일을 받는다. 서버가 범위(×0.7~×1.6)·신뢰도 「하」를 붙여 팀장 임시 추정으로 저장한다.
+      estimate: { estHours: Number(d.est.trim()) },
+      fixStart: d.fixStart.trim() || null,
     } as BodyOf<'createTask'>),
     run: async ({ payload, idempotencyKey }) => {
       const result = await client.call('createTask', { params: { projectId }, body: payload, idempotencyKey }).catch((error: unknown) => {
@@ -306,7 +305,6 @@ export function TaskWizard({ projectId, nodes, tasks, defaultWp, initial, onDraf
               <span className="kv-l">일정</span><span className="kv-v">예상 {estOk ? `Agent 실행 ${fmtH(Number(d.est))} (범위 ${fmtH(Number(d.est) * 0.7)} ~ ${fmtH(Number(d.est) * 1.6)} — Planning Agent가 재추정)` : '—'} · 시작 {d.fixStart.trim() || '자동 산정'}</span>
             </div>
             <p className="fhint">생성 후 [작업 명세] 탭이 열립니다. 체크리스트·기술 설계는 Task 상세에서 추가합니다.</p>
-            <p className="fhint">예상 소요 시간 · 고정 시작일은 아직 서버 생성 요청에 담을 수 없어 저장되지 않습니다. 생성 후 Planning Agent가 추정합니다.</p>
           </div>
         </div>
       )}

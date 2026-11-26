@@ -148,9 +148,6 @@ function ReviewCard({ planning, review, locked, memo, setMemo }: {
   const ops = !diff ? review.ops : choice === 'codex' ? review.codexOps : choice === 'claude' ? review.claudeOps : [];
   const label = review.topic;
 
-  const send = (updatedAt: string, payload: { choice: string; memo: string }) => client.call('choosePlanningReview', {
-    params: { id: planning.id, rid: review.id }, body: { updatedAt, choice: payload.choice, memo: payload.memo.trim() },
-  });
   /** 누른 선택을 request()가 읽게 둔다(저장 버튼을 누른 순간의 값). */
   const pending = useRef(choice ?? '');
   const choose = useSave<unknown, { updatedAt: string; choice: string; memo: string }>({
@@ -174,12 +171,11 @@ function ReviewCard({ planning, review, locked, memo, setMemo }: {
       setMemo(null);
       await refresh();
     },
-    onConflictReapply: async ({ signal }) => {
+    // 「다시 적용」: 공통 reapplyRequest(M3-04). 최신 검토 버전으로 같은 선택·메모를 만든다. 보내기·성공 처리는 위 run·onSuccess가 한다.
+    reapplyRequest: async ({ signal }) => {
       const fresh = (await findInPages((query) => client.call('listPlannings', { query, signal }), (p) => p.id === planning.id))?.reviews.find((r) => r.id === review.id);
       if (!fresh) throw new Error('검토를 다시 찾지 못했습니다.');
-      await send(fresh.updatedAt, { choice: pending.current, memo: memoNow });
-      setMemo(null);
-      await refresh();
+      return { updatedAt: fresh.updatedAt, choice: pending.current, memo: memoNow };
     },
     onRejected: () => { void refresh(); },
   });

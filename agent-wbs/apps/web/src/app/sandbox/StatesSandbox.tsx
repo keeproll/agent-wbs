@@ -57,13 +57,9 @@ function TitleEditor() {
     // 최신 불러오기가 끝날 때까지 기다린다. 실패하면 창이 열린 채 이유를 보인다(M3-02 7cddacd를 공통으로).
     // 창을 닫으면 signal이 취소돼 reload가 AbortError를 던지므로 아래 setDraft(null)까지 가지 않는다.
     onConflictReload: async ({ signal }) => { await reload(signal); setDraft(null); },
-    // 실패는 삼키지 않고 던진다. useSave가 충돌 창 안에 이유를 보인다.
-    onConflictReapply: async () => {
-      const latest = await reload();
-      const result = await saveWith(latest.updatedAt, draft ?? '');
-      queryClient.setQueryData(apiKey('getTask', { params: { taskKey: TASK } }), result.task);
-      setDraft(null);
-    },
+    // 「다시 적용」은 공통 reapplyRequest(M3-04 0dcb8db, 견본): 최신 버전을 읽어 같은 제목으로 요청 내용을 만든다.
+    // 보내기·성공 처리는 위 run·onSuccess가 한다. 실패는 삼키지 않고 던진다(창 안에 이유). 응답을 잃으면 같은 내용·같은 키로만 다시 보낸다.
+    reapplyRequest: async ({ signal }) => { const latest = await reload(signal); return { updatedAt: latest.updatedAt, title: draft ?? '' }; },
   });
   // 세션이 끊기면 이 초안을 탭 안에 남기고, 다시 로그인하면 복원을 제안한다.
   const { restoreOffer } = useSessionDraft({

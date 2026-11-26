@@ -106,7 +106,7 @@ function MessageItem({ m, from, to, attemptKey }: { m: ExecMessage; from: string
     // 서버에서 실제로 읽은 뒤에 끝낸다(M3-04 공통: 실패를 성공 안내로 숨기지 않음).
     onConflictReload: async ({ signal }) => { await latestMessage(client, m.taskKey, m.id, signal); if (!signal.aborted) await refresh(); },
     // 다시 적용(공통 reapplyRequest): 같은 동작을 그 메시지의 최신 버전으로 만든다.
-    reapplyRequest: async () => ({ updatedAt: (await latestMessage(client, m.taskKey, m.id)).updatedAt, action }),
+    reapplyRequest: async ({ signal }) => ({ updatedAt: (await latestMessage(client, m.taskKey, m.id, signal)).updatedAt, action }),
   });
   // 누른 동작을 한 번 그린 뒤 보낸다(오류 막대 「대상」이 그 동작 이름이 되게).
   const [queued, setQueued] = useState(0);

@@ -75,12 +75,12 @@ export function EvidenceLinks({ task, verificationId, evidence }: { task: TaskDe
       const latest = await reload(signal);
       if (latest) keep(null);
     },
-    onConflictReapply: async () => {
-      const change = pendingRef.current;
-      const latest = await reload();
-      if (!change || !latest) return;
-      applyTask((await send(change, latest.updatedAt)).task);
-      keep(null);
+    // 「다시 적용」: 공통 reapplyRequest(M3-04). 최신 Task를 읽어 남은 연결 변경을 새 버전으로 만든다.
+    // 보내기·성공 처리는 일반 저장과 같은 run·onSuccess가 한다(성공한 변경과 남은 변경이 같을 때만 지움).
+    reapplyRequest: async ({ signal }) => {
+      const latest = await client.call('getTask', { params: { taskKey: taskRef.current.taskKey }, signal });
+      queryClient.setQueryData(apiKey('getTask', { params: { taskKey: latest.taskKey } }), latest);
+      return { change: pendingRef.current as LinkChange, updatedAt: latest.updatedAt };
     },
   });
 

@@ -65,7 +65,7 @@ export interface TaskSaveOptions<T, P> {
  * Task 하나를 바꾸는 저장. shared useSave의 규칙(버튼 「…중」·오류 막대·400·409 충돌 창·같은 키 재시도)을 그대로 받는다.
  * - 버전(updatedAt)은 누른 순간 캐시의 최신 값을 요청 내용과 함께 찍는다. 재시도도 같은 버전으로 보낸다.
  * - 성공하면 Task 캐시를 응답으로 바꾸고 Gate·이력·목록을 다시 읽는다.
- * - 충돌 창 「다시 적용」은 최신 Task를 읽은 뒤 같은 요청 내용을 새 버전으로 다시 보낸다. 실패하면 오류를 던져 창 안에 보인다.
+ * - 충돌 창 「다시 적용」은 최신 Task를 읽은 뒤 같은 요청 내용을 새 버전으로 다시 보낸다(공통 reapplyRequest). 실패하면 오류를 던져 창 안에 보인다.
  */
 export function useTaskSave<T, P = undefined>(taskKey: string, options: TaskSaveOptions<T, P>) {
   const queryClient = useQueryClient();
@@ -100,15 +100,22 @@ export function useTaskSave<T, P = undefined>(taskKey: string, options: TaskSave
     // 성공한 요청의 내용(payload)으로 콜백을 부른다(M3-01 useSave 규칙). 화면은 그것과 지금 입력을 비교해 닫거나 비운다.
     onSuccess: (result, payload) => { done(result, payload.data); },
     onRejected: (error) => { void refresh(true); options.onRejected?.(error); },
-    onConflictReload: () => { options.onReload?.(); void refresh(true); },
-    onConflictReapply: async () => {
-      // 최신 버전을 직접 읽는다(실패하면 ApiError가 그대로 던져져 충돌 창이 이유를 보인다).
-      const fresh = await queryClient.fetchQuery({ queryKey: key, queryFn: ({ signal }) => client.call('getTask', { params: { taskKey }, signal }), staleTime: 0 });
-      const data = last.current?.data as P;
-      last.current = { updatedAt: fresh.updatedAt, data };
-      const result = await options.run({ idempotencyKey: crypto.randomUUID(), updatedAt: fresh.updatedAt, payload: data, current });
-      done(result, data);
-      if (options.successNotice) notify(options.successNotice);
+    // 「최신 불러오기」: Task를 서버에서 새로 읽고 성공한 뒤에만 편집을 닫는다. 실패는 던져 창 안에 보인다(M3-02 7cddacd 공통 규칙).
+    // 창을 닫으면(Esc) signal이 취소되어 결과를 적용하지 않는다(M3-01 79c2cc1).
+    onConflictReload: async ({ signal }) => {
+      const fresh = await client.call('getTask', { params: { taskKey }, signal });
+      if (signal.aborted) return;
+      queryClient.setQueryData(key, fresh);
+      options.onReload?.();
+      void refresh(false);
+    },
+    // 「다시 적용」: 공통 reapplyRequest(M3-04 0dcb8db). 최신 Task를 읽어 캐시에 두고, **실제로 보낸 요청 내용**을 새 버전으로 만든다.
+    // 보내기는 useSave가 위 run으로 한다. run은 current()로 방금 읽은 최신 Task를 보므로 설계 저장도 최신 섹션 위에 다시 만든다.
+    // 응답을 잃으면 같은 내용·같은 키로만 다시 보낸다(공통 보관함).
+    reapplyRequest: async ({ signal }) => {
+      const fresh = await client.call('getTask', { params: { taskKey }, signal });
+      queryClient.setQueryData(key, fresh);
+      return { updatedAt: fresh.updatedAt, data: last.current?.data as P };
     },
   });
 }

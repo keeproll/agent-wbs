@@ -8,27 +8,18 @@
  */
 import { useQueries, useQuery, type QueryFunctionContext } from '@tanstack/react-query';
 import { useApi } from '../../shared/api/ApiProvider.tsx';
+import { PAGE_LIMIT, pageQuery, readAllPages, type Page } from '../../shared/api/allPages.ts';
 import type { ApiClient, ApiError } from '../../shared/api/client.ts';
 import { useApiQuery } from '../../shared/api/queries.ts';
 import { EXEC_STATUSES, sortAttempts, sortVerifications, type ExecAttempt } from './model.ts';
 
-/** 한 번에 읽는 쪽 크기 */
-export const PAGE_LIMIT = 200;
+/** 한 번에 읽는 쪽 크기 — 공통 규칙(shared/api/allPages.ts)과 같은 값 */
+export { PAGE_LIMIT };
 
-interface Paged<T> { items: T[]; nextCursor: string | null }
-
-/** nextCursor가 없을 때까지 모든 쪽을 읽어 합친다. */
-export async function readAll<T>(fetchPage: (cursor: string | undefined) => Promise<Paged<T>>): Promise<T[]> {
-  const items: T[] = [];
-  let cursor: string | undefined;
-  for (;;) {
-    const page = await fetchPage(cursor);
-    items.push(...page.items);
-    if (!page.nextCursor) return items;
-    cursor = page.nextCursor;
-  }
+/** nextCursor가 없을 때까지 모든 쪽을 읽어 합친다. M3 통합: 반복 규칙은 공통 readAllPages가 한다. */
+export async function readAll<T>(fetchPage: (cursor: string | undefined) => Promise<Page<T>>): Promise<T[]> {
+  return (await readAllPages(fetchPage)).items;
 }
-const pageQuery = (cursor: string | undefined) => ({ limit: PAGE_LIMIT, ...(cursor ? { cursor } : {}) });
 const withSignal = (signal?: AbortSignal) => (signal ? { signal } : {});
 
 export const fetchAllAttempts = (client: ApiClient, taskKey: string, signal?: AbortSignal) =>

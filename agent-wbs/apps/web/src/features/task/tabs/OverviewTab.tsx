@@ -8,9 +8,8 @@
  */
 import { SPLIT_RULES } from '@awbs/shared';
 import { useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { ApiError } from '../../../shared/api/client.ts';
-import { apiKey } from '../../../shared/api/queries.ts';
+import { useApiQuery } from '../../../shared/api/queries.ts';
 import { formatDateTime } from '../../../shared/format.ts';
 import { BusyButton } from '../../../shared/ui/BusyButton.tsx';
 import { useConfirm } from '../../../shared/ui/feedback.tsx';
@@ -204,16 +203,12 @@ function OverviewForm({ task: t }: { task: TaskDetailData }) {
 
 /**
  * 설정의 허용 모델·실행 정책 최저선 — 등급 편집 선택지와 최저선 경고에 쓴다.
- * getModelSettings·getExecPolicy는 계약에서 `get${name}` 템플릿으로 만들어져 id 타입이 string으로 넓어진다(보고함).
- * 그래서 이 화면이 읽는 필드만 좁게 적었다. 필드 이름·뜻은 계약(routes/settings.ts ModelSettings·ExecPolicy) 그대로다.
+ * M3 통합: 계약 타입(getModelSettings·getExecPolicy)이 고쳐져(설정 화면 M3-08과 같은 방식) 공통 useApiQuery로 읽는다.
+ * 같은 query key를 쓰므로 설정 화면과 캐시·변경 이벤트 갱신을 함께 쓴다.
  */
-interface ModelSettingsView { models: { agent: string; id: string; label: string; allowed: boolean; efforts: { key: string; level: number | null }[] | null }[] }
-interface ExecPolicyView { floors: { verifyGeDev: boolean; dbHigh: boolean } }
 export function useGradeSettings() {
-  const client = useApiClient();
-  const call = client.call as unknown as (id: string, args: { signal?: AbortSignal }) => Promise<unknown>;
-  const models = useQuery({ queryKey: apiKey('getModelSettings' as 'getSession'), queryFn: ({ signal }) => call('getModelSettings', { signal }) as Promise<ModelSettingsView>, meta: { topics: ['settings'] } });
-  const policy = useQuery({ queryKey: apiKey('getExecPolicy' as 'getSession'), queryFn: ({ signal }) => call('getExecPolicy', { signal }) as Promise<ExecPolicyView>, meta: { topics: ['settings'] } });
+  const models = useApiQuery('getModelSettings', {}, { topics: ['settings'] });
+  const policy = useApiQuery('getExecPolicy', {}, { topics: ['settings'] });
   return { models, policy };
 }
 

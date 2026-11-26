@@ -48,8 +48,8 @@ export function useTaskCommand(projectId: string, taskKey: string, updatedAt: st
     if (!task) throw new Error(`${taskKey}를 찾을 수 없습니다.`);
     return task.updatedAt;
   };
-  const latestAttempt = async (id: string) => {
-    const found = (await fetchAllAttempts(client, taskKey)).find((a) => a.id === id);
+  const latestAttempt = async (id: string, signal?: AbortSignal) => {
+    const found = (await fetchAllAttempts(client, taskKey, signal)).find((a) => a.id === id);
     if (!found) throw new Error('시도를 찾을 수 없습니다.');
     return found;
   };
@@ -85,11 +85,11 @@ export function useTaskCommand(projectId: string, taskKey: string, updatedAt: st
       await invalidateTopics(queryClient, EXEC_TOPICS);
     },
     // 다시 적용(M3-04 공통 reapplyRequest): 같은 명령을 최신 Task·시도 버전으로 만든다. 보내기는 useSave가 run으로 한다.
-    reapplyRequest: async () => {
+    reapplyRequest: async ({ signal }) => {
       const command = chosen.current;
       if (!command) throw new Error('명령이 없습니다.');
-      const version = await latestVersion();
-      const fresh = command.op === 'stop' || command.op === 'resume' ? { ...command, attempt: await latestAttempt(command.attempt.id) } : command;
+      const version = await latestVersion(signal);
+      const fresh = command.op === 'stop' || command.op === 'resume' ? { ...command, attempt: await latestAttempt(command.attempt.id, signal) } : command;
       return { command: fresh, updatedAt: version };
     },
   });

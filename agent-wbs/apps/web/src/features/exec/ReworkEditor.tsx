@@ -92,7 +92,7 @@ export function ReworkEditor({ projectId, taskKey, agent, attemptId, updatedAt, 
       if (!signal.aborted) onClose();
     },
     // 최신 버전으로 같은 내용을 만든다. 이미 보낸 지시는 created로 넘겨 다시 만들지 않는다.
-    reapplyRequest: async () => ({ body: trimmed, updatedAt: await latestVersion(), created: sentFor(trimmed) }),
+    reapplyRequest: async ({ signal }) => ({ body: trimmed, updatedAt: await latestVersion(signal), created: sentFor(trimmed) }),
   });
 
   return (

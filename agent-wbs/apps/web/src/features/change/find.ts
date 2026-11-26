@@ -5,25 +5,21 @@
  * 그래서 status 필터 없는 목록을 cursor로 끝까지 넘기며 찾는다. 한 번에 최대치(200건)를 읽는다.
  * 왜: 오래된 알림의 CP는 첫 쪽에 없을 수 있다. 첫 쪽만 보고 「없다」고 하면 팀장이 열 수 있는 CP를 못 연다.
  */
+import { findInPages as findInCursorPages, PAGE_LIMIT, pageQuery } from '../../shared/api/allPages.ts';
 import type { Proposal } from './types.ts';
 
-export const PAGE_LIMIT = 200;
+/** 한 쪽 크기(계약 최대 200). 공통 규칙(shared/api/allPages.ts)과 같은 값이다. */
+export { PAGE_LIMIT };
 
 type Lister<T> = (query: { limit: number; cursor?: string }) => Promise<{ items: readonly T[]; nextCursor: string | null }>;
 
 /**
  * cursor 목록을 끝까지 넘기며 match에 맞는 항목을 찾는다. 끝까지 없으면 null.
  * CP(알림 링크)와 Planning 세션(출처 링크)이 같이 쓴다. 두 목록 모두 단건 조회 API가 없다.
+ * M3 통합: 반복 규칙(같은 cursor 반복 시 멈춤·최대 쪽 수)은 공통 findInPages(shared/api/allPages.ts)가 한다. 여기서는 질의 모양만 맞춘다.
  */
-export async function findInPages<T>(list: Lister<T>, match: (item: T) => boolean): Promise<T | null> {
-  let cursor: string | undefined;
-  for (;;) {
-    const page = await list(cursor === undefined ? { limit: PAGE_LIMIT } : { limit: PAGE_LIMIT, cursor });
-    const hit = page.items.find(match);
-    if (hit) return hit;
-    if (!page.nextCursor) return null;
-    cursor = page.nextCursor;
-  }
+export function findInPages<T>(list: Lister<T>, match: (item: T) => boolean): Promise<T | null> {
+  return findInCursorPages((cursor) => list(pageQuery(cursor)), match);
 }
 
 /** ref가 CP 키(CP-007)인지 id인지 상관없이 맞는 CP를 돌려준다. 끝까지 없으면 null. */

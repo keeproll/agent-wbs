@@ -236,13 +236,8 @@ function Actions({ cp, preview, issues, holds, comment, setComment, err, setErr 
       setComment('');
       await refresh();
     },
-    onConflictReapply: async ({ signal }) => {
-      const fresh = await latest(signal);
-      const result = await call(id, { ...fresh, comment }, crypto.randomUUID());
-      if (comment.trim()) setComment('');
-      void refresh();
-      notify(notice(result));
-    },
+    // 「다시 적용」: 공통 reapplyRequest(M3-04). 최신 버전·미리보기 해시로 같은 의견을 만든다. 보내기·성공 처리는 위 run·onSuccess가 한다.
+    reapplyRequest: async ({ signal }) => ({ ...(await latest(signal)), comment }),
     // 보류·상태 불일치: 최신 미리보기를 다시 읽어 사유를 화면에 보인다.
     onRejected: () => { void refresh(); },
   });

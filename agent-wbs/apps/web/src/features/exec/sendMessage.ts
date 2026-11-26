@@ -6,6 +6,7 @@
  * - 이미 만든 메시지(`created`)가 있으면 새로 만들지 않는다. 충돌 뒤 「다시 적용」은 새 키를 쓰므로,
  *   만들기를 다시 하면 같은 지시가 두 개 생긴다(M3-06 리뷰 #2). 그때는 서버의 최신 상태를 읽어 전송만 이어 간다.
  */
+import { findInPages, pageQuery } from '../../shared/api/allPages.ts';
 import type { ApiClient } from '../../shared/api/client.ts';
 import type { MessageDraft } from './messageDrafts.ts';
 import type { ExecMessage } from './model.ts';
@@ -26,14 +27,10 @@ export interface SendInput {
 
 /** 서버에서 그 메시지의 최신 상태를 읽는다(전송에 필요한 updatedAt). */
 export async function latestMessage(client: ApiClient, taskKey: string, id: string, signal?: AbortSignal): Promise<ExecMessage> {
-  let cursor: string | undefined;
-  for (;;) {
-    const page = await client.call('getTaskMessages', { params: { taskKey }, query: { limit: 200, ...(cursor ? { cursor } : {}) }, ...(signal ? { signal } : {}) });
-    const found = page.items.find((m) => m.id === id);
-    if (found) return found;
-    if (!page.nextCursor) throw new Error('보낸 메시지를 찾을 수 없습니다.');
-    cursor = page.nextCursor;
-  }
+  // 끝까지 넘기며 찾는 규칙은 공통 findInPages(shared/api/allPages.ts)를 쓴다(M3 통합).
+  const found = await findInPages((cursor) => client.call('getTaskMessages', { params: { taskKey }, query: pageQuery(cursor), ...(signal ? { signal } : {}) }), (m) => m.id === id);
+  if (!found) throw new Error('보낸 메시지를 찾을 수 없습니다.');
+  return found;
 }
 
 export async function sendMessage({ client, taskKey, draft, idempotencyKey, created, onCreated }: SendInput): Promise<ExecMessage | null> {
