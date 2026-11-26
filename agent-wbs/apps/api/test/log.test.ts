@@ -40,18 +40,31 @@ describe('요청 URL의 비밀값을 로그에 남기지 않는다', () => {
 
   test('해석할 수 없는 HTTP 요청', async () => {
     const address = new URL(await app.listen({ host: '127.0.0.1', port: 0 }));
+    let wire = '';
     await new Promise<void>((resolve, reject) => {
       const socket = createConnection(Number(address.port), '127.0.0.1', () =>
         socket.write('GET /x?token=hunter2 HTTP/1.1\r\nAuthorization: Bearer hunter2\r\nbad header\r\n\r\n'),
       );
-      socket.resume().on('error', reject).on('close', () => {
+      socket.on('data', (chunk) => { wire += String(chunk); }).on('error', reject).on('close', () => {
         resolve();
       });
     });
     expect(output).toContain('client error');
     expect(output).not.toContain('hunter2');
     expect(output).not.toContain(JSON.stringify([...Buffer.from('hunter2')]).slice(1, -1));
+    expect(wire).toContain('"code":"VALIDATION_FAILED"');
+    expect(wire).not.toContain('hunter2');
   });
+});
+
+test('구조화 로그·메시지·오류의 비밀값을 가린다', () => {
+  app.log.info({ authorization: 'Bearer hunter2', cookie: 'hunter2', password: 'hunter2', botToken: 'hunter2',
+    nested: { password: 'hunter2', tokenSet: true } }, 'Bearer hunter2 /bot123:hunter2/send');
+  app.log.error({ err: new Error('bare-secret-hunter2') }, '오류 확인');
+  app.log.info('Bearer hunter2');
+  expect(output).not.toContain('hunter2');
+  expect(output).toContain('"tokenSet":true');
+  expect(output).toContain('[REDACTED]');
 });
 
 test('찾을 수 있도록 method·route·상태는 남긴다', async () => {

@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "auth": "node --env-file-if-exists=../../.env --conditions=awbs-source src/platform/auth-cli.ts",
     "dev": "node --env-file-if-exists=../../.env --conditions=awbs-source --watch src/main.ts",
     "start": "node --env-file-if-exists=../../.env dist/main.js",
     "build": "tsc -p tsconfig.build.json",
