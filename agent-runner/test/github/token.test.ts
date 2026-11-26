@@ -29,6 +29,36 @@ describe('토큰 방식: 서버의 봉인 값', () => {
     expect((await source.token()).reveal()).toBe(`${TOKEN}-rotated`);
   });
 
+  test('리뷰 R5: 조회 중 invalidate되면 옛 응답을 캐시하지 않고 새 봉인 값을 받는다', async () => {
+    const keys = generateRunnerKeyPair();
+    const pending = Promise.withResolvers<string>();
+    let fetches = 0;
+    const source = sealedTokenSource(() => {
+      fetches += 1;
+      return fetches === 1 ? pending.promise : Promise.resolve(sealCredential(keys.publicKey, 'new-credential-value'));
+    }, keys.privateKey);
+    const old = source.token();
+    source.invalidate();
+    pending.resolve(sealCredential(keys.publicKey, 'old-credential-value'));
+    // 무효화 전에 시작한 호출도 옛 토큰이 아니라 현재 세대의 토큰을 받는다.
+    expect((await old).reveal()).toBe('new-credential-value');
+    expect((await source.token()).reveal()).toBe('new-credential-value');
+    expect(fetches).toBe(2);
+  });
+
+  test('동시에 부르면 서버 조회를 한 번만 한다', async () => {
+    const keys = generateRunnerKeyPair();
+    let fetches = 0;
+    const source = sealedTokenSource(() => {
+      fetches += 1;
+      return Promise.resolve(sealCredential(keys.publicKey, TOKEN));
+    }, keys.privateKey);
+    const [a, b] = await Promise.all([source.token(), source.token()]);
+    expect(a.reveal()).toBe(TOKEN);
+    expect(b.reveal()).toBe(TOKEN);
+    expect(fetches).toBe(1);
+  });
+
   test('열 수 없는 봉인 값은 CredentialError이고 캐시하지 않는다', async () => {
     const keys = generateRunnerKeyPair();
     const other = generateRunnerKeyPair();

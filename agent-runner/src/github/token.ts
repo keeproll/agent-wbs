@@ -15,14 +15,33 @@ export interface TokenSource {
 
 /** 토큰 방식: `GET /runner/github/credential`의 `sealed`를 Runner 개인키로 연다. */
 export function sealedTokenSource(fetchSealed: () => Promise<string>, privateKey: KeyObject): TokenSource {
-  let cached: Secret | undefined;
+  // invalidate() 때마다 세대를 올린다. 이전 세대에 시작한 조회의 결과는 캐시하지도, 돌려주지도 않는다.
+  let generation = 0;
+  let current: { generation: number; promise: Promise<Secret> } | undefined;
+  const load = (): Promise<Secret> => {
+    if (current?.generation !== generation) {
+      const mine = generation;
+      const promise = fetchSealed().then((sealed) => openSealedCredential(privateKey, sealed));
+      current = { generation: mine, promise };
+      // 실패한 조회는 캐시에 남기지 않는다.
+      promise.catch(() => {
+        if (current?.promise === promise) current = undefined;
+      });
+    }
+    return current.promise;
+  };
   return {
     async token() {
-      cached ??= openSealedCredential(privateKey, await fetchSealed());
-      return cached;
+      for (;;) {
+        const started = generation;
+        const secret = await load();
+        if (started === generation) return secret;
+        // 기다리는 동안 무효화됐다. 옛 토큰을 쓰지 않고 현재 세대로 다시 받는다.
+      }
     },
     invalidate() {
-      cached = undefined;
+      generation += 1;
+      current = undefined;
     },
   };
 }
