@@ -31,7 +31,7 @@ interface TaskRow {
 const designItems = (content: Record<string, unknown>): string[] =>
   Array.isArray(content.ents) ? content.ents.map((item) => JSON.stringify(item)) : [];
 
-export async function loadSnapshot(client: PoolClient, projectId: string): Promise<Loaded> {
+export async function loadSnapshot(client: Pick<PoolClient, 'query'>, projectId: string): Promise<Loaded> {
   const [tasks, deps, nodes, designs, outputs, checklist, counter, settings] = await Promise.all([
     client.query<TaskRow>(
       `select t.id,t.task_key,t.wbs_node_id,t.status,t.title,t.work_type,t.primary_domain,t.related_domains::text[] as related_domains,t.priority,

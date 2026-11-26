@@ -4,13 +4,14 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { TaskError } from '../tasks/errors.ts';
 import { subjectHash, type JudgedSource } from '../tasks/hash.ts';
 import { taskDetail, type TaskDetail } from '../tasks/read.ts';
-import { assertEditable, assertVersion, changed, LEAD, lockTask, record, touch, type LockedTask } from '../tasks/write.ts';
+import { assertEditable, assertVersion, changed, LEAD, lockGraph, lockTask, record, touch, type LockedTask } from '../tasks/write.ts';
 import { ApiError } from '../changes/http.ts';
 import { applyRegrade } from '../policy/service.ts';
 import { judgedTasks } from '../policy/judged.ts';
 import { assertGradeChange, assertJob } from './jobs.ts';
 import { clientOf } from './proposals.ts';
 import { loadSnapshot } from './snapshot.ts';
+import { snapshotHash, wbsSnapshot } from './job-snapshot.ts';
 
 /*
  * 분할 요청·예외 사유(G§5.2-1)와 Planning의 Task 판단 보고(contracts §3.3 /planning/tasks/:taskKey/plan).
@@ -44,6 +45,8 @@ export function registerSplitRoutes(route: RouteFn, epochOf: (request: FastifyRe
   route('splitTask', '분할 제안 요청', async (request, reply) => {
     const client = clientOf(request);
     const body = request.body as { updatedAt: string };
+    const found = (await client.query<{ project_id: string }>('select project_id from tasks where task_key=$1', [keyOf(request)])).rows[0];
+    if (found) await lockGraph(client, found.project_id);
     const task = await lockTask(client, keyOf(request));
     await assertVersion(client, task, body.updatedAt);
     assertEditable(task);
@@ -53,17 +56,18 @@ export function registerSplitRoutes(route: RouteFn, epochOf: (request: FastifyRe
     }
     const detail = await detailOf(client, task.task_key);
     const tasks = await judgedTasks(client, [task.id]);
+    const wbs = await wbsSnapshot(client, task.project_id);
     const hash = subjectHash(sourceOf(detail));
     // 내용이나 등급이 바뀌면 옛 판단을 받지 않으므로 새 분할 job이 필요하다.
     const marker = tasks[0]?.gradeChange;
-    const key = `split:${task.task_key}:${hash}${marker ? `:${marker}` : ''}`;
+    const key = `split:${task.task_key}:${hash}:${snapshotHash(wbs)}${marker ? `:${marker}` : ''}`;
     await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [key]);
     const existing = (await client.query<{ id: string | null; n: number }>(
       "select (array_agg(id order by created_at desc) filter (where state::text=any($2)))[1] as id,count(*)::int as n from runner_jobs where dedup_key like $1",
       [`${key}:%`, OPEN])).rows[0];
     if (existing?.id) return reply.code(202).send({ jobId: existing.id });
     const settings = (await client.query<{ split: unknown }>('select split from app_settings where singleton')).rows[0]?.split ?? null;
-    const payload = { tasks, policy: { split: settings }, proposal: null };
+    const payload = { tasks, policy: { split: settings }, wbs };
     const jobId = (await client.query<{ id: string }>(
       "insert into runner_jobs(project_id,kind,payload,state,epoch,dedup_key) values($1,'split',$2::jsonb,'queued',$3,$4) returning id",
       [task.project_id, JSON.stringify(payload), epochOf(request), `${key}:${String((existing?.n ?? 0) + 1)}`])).rows[0]?.id;

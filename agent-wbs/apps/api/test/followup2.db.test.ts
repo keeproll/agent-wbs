@@ -7,6 +7,7 @@ import { installRunner } from '../src/runner/routes.ts';
 import { installProjectRunner } from '../src/project/runner-routes.ts';
 import { OPERATIONS } from '@awbs/shared/api';
 import { createRequire } from 'node:module';
+import { wbsSnapshot } from '../src/planning/job-snapshot.ts';
 
 const shared = createRequire(new URL('../../../packages/shared/package.json', import.meta.url));
 const { Ajv } = shared('ajv') as { Ajv: new (options: object) => { validate: (schema: unknown, data: unknown) => boolean; errorsText: () => string } };
@@ -228,7 +229,7 @@ test('Planning 표시 키와 원본 agree/diff 계약은 미선택 이견의 CP 
 
 test('입력 차이 분석에서 제출한 CP는 해당 inputJob에만 연결한다', async () => {
   const planning = (await owner.query<{ id: string }>("insert into planning_jobs(project_id,kind,run_no,status,instruction) values($1,'input_diff',1,'running','') returning id", [projectId])).rows[0]?.id;
-  const jobId = (await owner.query<{ id: string }>("insert into runner_jobs(project_id,kind,payload,state,fence,epoch,dedup_key) values($1,'input_diff',$2::jsonb,'leased',1,1,$3) returning id", [projectId, JSON.stringify({ planningJobId: planning, version: 2 }), randomUUID()])).rows[0]?.id;
+  const jobId = (await owner.query<{ id: string }>("insert into runner_jobs(project_id,kind,payload,state,fence,epoch,dedup_key) values($1,'input_diff',$2::jsonb,'leased',1,1,$3) returning id", [projectId, JSON.stringify({ planningJobId: planning, version: 2, wbs: await wbsSnapshot(owner, projectId) }), `input_diff:${planning ?? ''}:1`])).rows[0]?.id;
   await owner.query('update schedule_policy set cp_auto=false');
   expect((await runner('/api/planning/proposals', { ...proposalBody(), source: { kind: 'input', id: '다른 작업' }, jobId, fence: 1 })).statusCode).toBe(400);
   const cp = await runner('/api/planning/proposals', { ...proposalBody(), source: { kind: 'input' }, jobId, fence: 1 });

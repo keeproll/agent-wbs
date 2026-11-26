@@ -35,3 +35,17 @@ test('OpenAPI의 estimate job policy에 RejudgeRequest가 보인다', () => {
   expect(doc).toContain('RejudgeRequest');
   expect(doc).toContain('model_disallowed');
 });
+
+test('Planning 세션과 CP 판단은 각각 필수 입력을 가지며 섞을 수 없다', () => {
+  const planning = { id: 'session', title: '분석', scope: '입력 범위' };
+  const session = { tasks: [], policy: {}, planning, proposal: null };
+  const proposal = {
+    id: 'cp', ops: [{ op: 'modify', task: 'TASK-0001', field: 'priority', after: 2 }],
+    targets: [{ target: 'TASK-0001', subjectHash: 'a'.repeat(64), before: content, after: content }], splitSubjectHash: null, splitTasks: null,
+  };
+  expect(jobPayloadErrors('planning', session)).toEqual([]);
+  expect(jobPayloadErrors('planning', { tasks: [], policy: {}, planning: null, proposal })).toEqual([]);
+  expect(jobPayloadErrors('planning', { ...session, planning: null }).length).toBeGreaterThan(0);
+  expect(jobPayloadErrors('planning', { ...session, proposal }).length).toBeGreaterThan(0);
+  expect(jobPayloadErrors('planning', { ...session, planning: null, tasks: valid.tasks })).toEqual([]);
+});

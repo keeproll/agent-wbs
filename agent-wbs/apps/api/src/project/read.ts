@@ -34,7 +34,7 @@ async function decisions(db: Db, projectId: string) {
 
 /** 저장 때 붙인 Task별 hash는 서버 내부 값이라 응답에서 뺀다(판단 기록 안의 subjectHash는 보인다). */
 function publicDraft(draft: StoredDraft) {
-  return { ...draft, tasks: draft.tasks.map((task) => {
+  return { phases: draft.phases, wps: draft.wps, deps: draft.deps, tasks: draft.tasks.map((task) => {
     const copy: Partial<typeof task> = { ...task };
     delete copy.subjectHash;
     return copy;
