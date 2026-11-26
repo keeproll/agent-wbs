@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { createGitHubClient, type Permissions } from '../../src/github/client.ts';
+import { ghTokenSource } from '../../src/github/token.ts';
 import { Secret } from '../../src/security/secret.ts';
 
 /**
@@ -242,8 +243,112 @@ describe('연결 확인의 늦은 응답 (최종 리뷰 R11)', () => {
   });
 });
 
+describe('865c286 리뷰 회귀 (R12·R13)', () => {
+  test('R12: 현재 확인의 토큰 취득 실패(gh 로그인 풀림)는 무효화가 아니라 현재 실패이고, 이전 확인됨을 지운다', async () => {
+    let loginFailed = false;
+    const source = ghTokenSource(() =>
+      Promise.resolve({ code: loginFailed ? 1 : 0, stdout: loginFailed ? '' : 'review-only-token' }),
+    );
+    const client = createGitHubClient({
+      repo: { owner: 'o', repo: 'r' },
+      token: source.token,
+      fetch: () => Promise.resolve(Response.json({}, { status: 201 })),
+    });
+    await client.setCommitStatus({ sha: SHA, context: 'agentwbs/task', state: 'pending' });
+    expect(client.permissions().statuses).toBe('verified');
+    loginFailed = true;
+    const status = await client.checkConnection('gh');
+    expect(status.ok).toBe(false);
+    expect(status).not.toHaveProperty('superseded');
+    expect(status.error).toContain('gh 로그인');
+    expect(client.permissions().statuses).toBe('unverified');
+  });
+
+  test('R13: 연결 확인 도중 받은 현재 세대의 실제 쓰기 403은 확인 완료 뒤에도 부족으로 남고, 결과도 ok가 아니다', async () => {
+    const arrived = Promise.withResolvers<undefined>();
+    const release = Promise.withResolvers<undefined>();
+    const notices: string[] = [];
+    const client = createGitHubClient({
+      repo: { owner: 'o', repo: 'r' },
+      token: () => Promise.resolve(new Secret(OLD)),
+      onPermissionDenied: (e) => {
+        notices.push(e.permission);
+      },
+      fetch: async (input, init) => {
+        if (new URL(String(input)).pathname === '/user') return Response.json({ login: 'bot' });
+        if ((init?.method ?? 'GET') === 'GET') {
+          arrived.resolve(undefined);
+          await release.promise;
+          return Response.json({ permissions: { admin: false, push: true, pull: true } });
+        }
+        return Response.json(
+          { message: 'Resource not accessible by personal access token' },
+          { status: 403, headers: { 'x-accepted-github-permissions': 'statuses=write' } },
+        );
+      },
+    });
+    const checking = client.checkConnection('token');
+    await arrived.promise;
+    await expect(client.setCommitStatus({ sha: SHA, context: 'agentwbs/task', state: 'pending' })).rejects.toMatchObject({
+      status: 403,
+    });
+    expect(client.permissions().statuses).toBe('missing');
+    release.resolve(undefined);
+    const result = await checking;
+    expect(client.permissions().statuses).toBe('missing');
+    expect(result).toMatchObject({ ok: false, permissions: { statuses: 'missing', contents: 'unverified' } });
+    expect(result).not.toHaveProperty('superseded');
+    expect(notices).toEqual(['statuses']);
+  });
+
+  test('연결 확인 도중 받은 현재 세대의 쓰기 성공도 확인 완료 뒤 확인됨으로 남는다', async () => {
+    const arrived = Promise.withResolvers<undefined>();
+    const release = Promise.withResolvers<undefined>();
+    const client = createGitHubClient({
+      repo: { owner: 'o', repo: 'r' },
+      token: () => Promise.resolve(new Secret(OLD)),
+      fetch: async (input, init) => {
+        if (new URL(String(input)).pathname === '/user') return Response.json({ login: 'bot' });
+        if ((init?.method ?? 'GET') === 'GET') {
+          arrived.resolve(undefined);
+          await release.promise;
+          return Response.json({ permissions: { admin: false, push: true, pull: true } });
+        }
+        return Response.json({}, { status: 201 });
+      },
+    });
+    const checking = client.checkConnection('token');
+    await arrived.promise;
+    await client.setCommitStatus({ sha: SHA, context: 'agentwbs/task', state: 'pending' });
+    release.resolve(undefined);
+    const result = await checking;
+    expect(client.permissions()).toEqual({ metadata: 'verified', contents: 'unverified', pulls: 'unverified', statuses: 'verified' });
+    expect(result).toMatchObject({ ok: true, permissions: client.permissions() });
+  });
+
+  test('연결 확인 시작 전의 쓰기 결과는 새 확인이 새로 판단한다(재확인 = 새 판단)', async () => {
+    let deny = true;
+    const client = createGitHubClient({
+      repo: { owner: 'o', repo: 'r' },
+      token: () => Promise.resolve(new Secret(OLD)),
+      fetch: (input, init) => {
+        if (new URL(String(input)).pathname === '/user') return Promise.resolve(Response.json({ login: 'bot' }));
+        if ((init?.method ?? 'GET') === 'GET') {
+          return Promise.resolve(Response.json({ permissions: { admin: false, push: true, pull: true } }));
+        }
+        return Promise.resolve(deny ? Response.json({ message: 'x' }, { status: 403 }) : Response.json({}, { status: 201 }));
+      },
+    });
+    await client.setCommitStatus({ sha: SHA, context: 'agentwbs/task', state: 'pending' }).catch(() => undefined);
+    expect(client.permissions().statuses).toBe('missing');
+    deny = false; // 팀장이 GitHub에서 토큰 권한을 고침
+    expect(await client.checkConnection('token')).toMatchObject({ ok: true });
+    expect(client.permissions().statuses).toBe('unverified');
+  });
+});
+
 describe('권한 상태를 바꾸는 경로 전수 고정', () => {
-  test('client.ts에서 permissions를 바꾸는 곳은 observeWrite(세대 대조 뒤)와 commitPermissions뿐이다', () => {
+  test('client.ts에서 permissions를 바꾸는 곳은 직렬화된 갱신 함수 applyEvidence 하나뿐이다', () => {
     const source = readFileSync(new URL('../../src/github/client.ts', import.meta.url), 'utf8');
     const lines = source.split('\n');
     // `permissions =`, `permissions[x] =`, `permissions.x =` 형태의 대입(비교 == 제외)
@@ -258,13 +363,9 @@ describe('권한 상태를 바꾸는 경로 전수 고정', () => {
       return 'top';
     };
     expect(writes.map(({ text, line }) => `${owner(line)}: ${text.trim()}`).sort()).toEqual([
-      'commitPermissions: permissions = next;',
-      "observeWrite: permissions[denied] = 'missing';",
-      "observeWrite: permissions[permission] = 'verified';",
+      'applyEvidence: permissions = merged;',
+      'applyEvidence: permissions[evidence.permission] = evidence.state;',
       'top: let permissions = unverifiedAll();',
     ]);
-    // observeWrite의 첫 줄은 세대 대조다.
-    const observe = source.slice(source.indexOf('const observeWrite = ('));
-    expect(observe.split('\n')[1]?.trim()).toBe('if (raw.generation !== generation) return;');
   });
 });

@@ -265,6 +265,28 @@ function acceptedPermission(header: string | null): PermissionName | undefined {
   return undefined;
 }
 
+const PERMISSION_NAMES: readonly PermissionName[] = ['metadata', 'contents', 'pulls', 'statuses'];
+
+/** 권한 상태를 바꾸는 사건. `applyEvidence`만 이것을 반영한다. */
+type Evidence =
+  | { kind: 'write'; generation: number; permission: PermissionName; state: 'verified' | 'missing' }
+  | { kind: 'snapshot'; generations: readonly number[]; seq: number; startOrder: number; next: Permissions };
+
+/** 반영된 권한 상태에 맞춰 연결 확인 결과의 ok·경고·이유를 다시 맞춘다(확인 도중 생긴 쓰기 결과 반영). */
+function reconcileStatus(status: ConnectionStatus, merged: Permissions): ConnectionStatus {
+  if (status.permissions === null) return status;
+  const next: ConnectionStatus = { ...status, permissions: merged };
+  const writes = ['contents', 'pulls', 'statuses'] as const;
+  const missing = writes.filter((name) => merged[name] === 'missing');
+  if (missing.length > 0 && status.ok) {
+    next.ok = false;
+    next.error = `쓰기 권한 부족(실제 쓰기 403): ${missing.join(', ')}`;
+  }
+  if (!writes.some((name) => merged[name] === 'unverified')) delete next.warning;
+  if (!next.ok) delete next.warning;
+  return next;
+}
+
 const unverifiedAll = (): Permissions => ({
   metadata: 'unverified',
   contents: 'unverified',
@@ -283,40 +305,61 @@ export function createGitHubClient(options: GitHubClientOptions) {
   const repoPath = `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.repo)}`;
   let redact = createRedactor();
   let permissions = unverifiedAll();
-  // 권한 세대: 연결 재확인 때, 그리고 요청에 쓰는 토큰이 바뀔 때 올린다.
-  // 이전 세대에 보낸 요청의 응답은 호출자에게는 그대로 돌려주지만 현재 권한 상태·알림은 바꾸지 못한다.
+  // 권한 세대: 연결 확인을 시작할 때, 그리고 요청에 쓰는 토큰이 바뀐 것을 관측할 때 올린다.
   let generation = 0;
   let lastTokenDigest: string | undefined;
-  // 통신 실패로 Raw가 없을 때도 그 요청의 세대를 알 수 있게 한다.
+  // 통신 실패로 Raw가 없을 때도 그 요청을 보낸 세대를 알 수 있게 한다.
   const errorGeneration = new WeakMap<object, number>();
   // 연결 확인 순번. 겹치면 나중에 시작한 확인만 반영한다.
   let checkSeq = 0;
+  // 반영한 사건의 순서 번호와, 권한마다 마지막으로 실제 쓰기 결과가 반영된 순서 번호.
+  let order = 0;
+  const writtenAt: Record<PermissionName, number> = { metadata: -1, contents: -1, pulls: -1, statuses: -1 };
 
   /**
-   * 연결 확인 결과를 권한 상태에 반영한다. 반영은 여기서만 한다.
-   * 이 확인이 가장 최근 것이고, 확인에 쓴 모든 요청이 현재 세대에서 보낸 것일 때만 반영한다.
+   * 권한 상태를 바꾸는 **유일한** 함수. 동기 함수라 사건은 하나씩 차례로(직렬화되어) 반영된다.
+   *
+   * 규칙
+   * 1. 현재 세대가 아닌 요청에서 나온 사건은 버린다(옛 토큰·옛 연결 확인 이전에 보낸 요청).
+   * 2. 연결 확인 snapshot은 가장 최근에 시작한 확인일 때만 반영한다.
+   * 3. 우선순위: 실제 쓰기 결과 > 연결 확인 snapshot.
+   *    snapshot을 반영할 때, 그 확인이 시작된 **뒤에** 반영된 실제 쓰기 결과는 권한별로 그대로 둔다.
+   *    확인이 시작되기 **전의** 쓰기 결과는 새 판단(snapshot)으로 바뀐다(재확인 = 새 판단).
    */
-  const commitPermissions = (next: Permissions, generations: readonly number[], seq: number): boolean => {
-    if (seq !== checkSeq || generations.some((sent) => sent !== generation)) return false;
-    permissions = next;
-    return true;
+  const applyEvidence = (evidence: Evidence): { applied: boolean; permissions: Permissions } => {
+    const result = (applied: boolean) => ({ applied, permissions: { ...permissions } });
+    if (evidence.kind === 'write') {
+      if (evidence.generation !== generation) return result(false);
+      order += 1;
+      permissions[evidence.permission] = evidence.state;
+      writtenAt[evidence.permission] = order;
+      return result(true);
+    }
+    if (evidence.seq !== checkSeq || evidence.generations.some((sent) => sent !== generation)) return result(false);
+    const merged = { ...evidence.next };
+    for (const name of PERMISSION_NAMES) {
+      if (writtenAt[name] > evidence.startOrder) merged[name] = permissions[name];
+    }
+    order += 1;
+    permissions = merged;
+    return result(true);
   };
 
   /**
-   * 실제 쓰기 결과로 권한 상태를 고친다. 2xx면 확인됨, 속도 제한이 아닌 403이면 부족으로 바꾸고 알린다.
-   * 409·405·422 같은 다른 거부는 권한에 대한 증거가 아니므로 그대로 둔다.
+   * 실제 쓰기 결과를 사건으로 만든다. 2xx면 확인됨, 속도 제한이 아닌 403이면 부족(+ 알림).
+   * 409·405·422 같은 다른 거부는 권한에 대한 증거가 아니므로 사건을 만들지 않는다.
    */
   const observeWrite = (raw: Raw, permission: PermissionName, operation: WriteOperation['kind'], what: string): void => {
-    if (raw.generation !== generation) return;
     if (raw.status >= 200 && raw.status < 300) {
-      permissions[permission] = 'verified';
+      applyEvidence({ kind: 'write', generation: raw.generation, permission, state: 'verified' });
       return;
     }
     if (raw.status !== 403 || rateLimit(raw).limited) return;
     const denied = acceptedPermission(raw.headers.get('x-accepted-github-permissions')) ?? permission;
-    permissions[denied] = 'missing';
+    const { applied } = applyEvidence({ kind: 'write', generation: raw.generation, permission: denied, state: 'missing' });
     const notify = options.onPermissionDenied;
-    if (!notify) return;
+    // 반영되지 않은(옛 세대) 403은 알리지 않는다.
+    if (!applied || !notify) return;
     // 알림 실패(동기 예외·비동기 거부 모두)가 원래 오류를 가리거나 Runner를 종료시키지 않게 한다.
     void Promise.resolve()
       .then(() => notify({ permission: denied, operation, message: failure(raw, what).message }))
@@ -458,7 +501,9 @@ export function createGitHubClient(options: GitHubClientOptions) {
         generations.push(raw.generation);
         return raw;
       } catch (error) {
-        generations.push(errorGeneration.get(error as object) ?? -1);
+        // 토큰 취득 실패는 요청을 보내지 못한 것이라 세대가 없다. 현재 확인의 실패로 다룬다(R12).
+        const sent = errorGeneration.get(error as object);
+        if (sent !== undefined) generations.push(sent);
         throw error;
       }
     };
@@ -535,9 +580,11 @@ export function createGitHubClient(options: GitHubClientOptions) {
       generation += 1;
       checkSeq += 1;
       const seq = checkSeq;
+      const startOrder = order;
       const generations: number[] = [];
       const { status, next } = await evaluateConnection(mode, generations);
-      if (commitPermissions(next, generations, seq)) return status;
+      const applied = applyEvidence({ kind: 'snapshot', generations, seq, startOrder, next });
+      if (applied.applied) return reconcileStatus(status, applied.permissions);
       const rest: ConnectionStatus = { ...status };
       delete rest.warning;
       return {
