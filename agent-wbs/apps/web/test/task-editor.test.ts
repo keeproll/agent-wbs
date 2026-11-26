@@ -76,3 +76,36 @@ describe('개요 편집 검사(P L1111–1127, UAT-TASK-02)', () => {
     expect(overviewErrors({ ...base, verifier: 'Claude' })).toEqual({ title: false, purpose: false, doneCond: false, same: true });
   });
 });
+
+describe('잘못된 설계 데이터 방어(리뷰 R4)', () => {
+  it('빈 엔티티·문자열 엔티티·배열 아닌 블록을 버리고 버린 수를 센다', async () => {
+    const { normalizeDesign } = await import('../src/features/task/editor-model.ts');
+    const r = normalizeDesign('DB', { ents: [{}, { f: { name: 'ok', change: '신규', bad: 3 }, b: { columns: 'x', indexes: [null, { name: 'ix', cols: 'id' }] } }, 'bad'], b: { migration: 'not-array', seed: ['a', 1] } });
+    expect(r.content.ents).toEqual([{ f: { name: 'ok', change: '신규' }, b: { columns: [], indexes: [{ name: 'ix', cols: 'id' }] } }]);
+    expect(r.content.b).toEqual({ migration: [], seed: ['a'] });
+    expect(r.dropped).toBe(7);
+  });
+  it('객체가 아닌 content·배열 아닌 ents도 죽지 않는다', async () => {
+    const { normalizeDesign, knownTables } = await import('../src/features/task/editor-model.ts');
+    expect(normalizeDesign('API', { ents: 'nope', b: null }).content).toEqual({ ents: [], b: {} });
+    expect(normalizeDesign('FE', null).dropped).toBe(1);
+    expect(knownTables([{ taskKey: 'T', designs: [{ kind: 'DB', content: { ents: [{}, 'x'] } }] }], null)).toEqual({});
+  });
+  it('정상 데이터는 그대로다', async () => {
+    const { normalizeDesign } = await import('../src/features/task/editor-model.ts');
+    const ok = { ents: [{ f: { name: 'tasks', change: '신규', desc: '' }, b: { columns: [{ name: 'id', pk: true, nullable: false }], indexes: [] } }], b: { migration: ['m'] } };
+    expect(normalizeDesign('DB', ok)).toEqual({ content: ok, dropped: 0 });
+  });
+});
+
+describe('작업량 편집 검사(UAT-TASK-02, 서버 계약 확장 대기 — 리뷰 R8)', () => {
+  it('0<시간≤400, 낙관≤예상≤비관, 토큰 정수, 날짜 형식', async () => {
+    const { estimateErrors } = await import('../src/features/task/editor-model.ts');
+    expect(estimateErrors({ lo: '3', est: '4', hi: '6', tok: '560', fixStart: '' })).toEqual([]);
+    expect(estimateErrors({ lo: '0', est: '4', hi: '401', tok: '1.5', fixStart: '2026-13-01' })).toEqual([
+      'lo: 0보다 크고 400 이하인 숫자로 입력하세요.', 'hi: 0보다 크고 400 이하인 숫자로 입력하세요.',
+      'tok: 예상 토큰은 0 이상의 정수(K)로 입력하세요.', 'fixStart: YYYY-MM-DD 형식으로 입력하세요.',
+    ]);
+    expect(estimateErrors({ lo: '5', est: '4', hi: '6', tok: '1', fixStart: '2026-11-30' })).toEqual(['range: 0보다 큰 숫자로, 낙관 ≤ 예상 ≤ 비관 순서가 되어야 합니다.']);
+  });
+});
