@@ -685,7 +685,7 @@ export class GitRepository {
   }
 
   async checkTask(base: string, head: string): Promise<RejectedPath[]> {
-    const mergeBase = sha((await this.git(['merge-base', sha(base), sha(head)])).toString().trim());
+    const mergeBase = await this.taskBase(base, head);
     // --no-renames면 이동도 삭제+추가가 되어 원래 경로와 새 경로를 모두 검사한다.
     const changed = (await this.git(['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', mergeBase, head, '--'])).toString().split('\0').filter(Boolean);
     const rejected: RejectedPath[] = changed.filter((path) => ['prototype', '.agentwbs'].some((prefix) => path === prefix || path.startsWith(`${prefix}/`)))
@@ -715,23 +715,39 @@ export class GitRepository {
 
   /** 등록한 원격 main을 가져와 한 커밋으로 고정한다. Agent 작업 폴더에서 정의를 읽지 않는다. */
   async mainPipeline(): Promise<{ baseSha: string; pipelineSha: string; source: string }> {
-    const baseSha = await this.fetch();
+    const { source } = await this.trusted();
+    await this.git(['fetch', '--no-tags', '--no-recurse-submodules', '--upload-pack=git-upload-pack', '--', source,
+      'refs/heads/main:refs/remotes/origin/main']);
+    const baseSha = await this.remoteMain();
     const entry = (await this.tree(baseSha)).find((value) => value.path === '.agentwbs/pipeline.yaml');
     if (!entry || !['100644', '100755'].includes(entry.mode)) throw new GitSafetyError('main의 pipeline.yaml은 일반 파일이어야 합니다.');
     return { baseSha, pipelineSha: sha(entry.oid), source: (await this.blob(entry)).toString('utf8') };
   }
 
-  /** 기존 파일 변경을 전부 남긴다. 독자적인 이름의 테스트도 QA 확인 목록에서 빠뜨리지 않기 위해서다. */
+  async taskBase(base: string, head: string): Promise<string> {
+    return sha((await this.git(['merge-base', sha(base), sha(head)])).toString().trim());
+  }
+
+  /** 새 설정으로 테스트를 제외할 수도 있으므로 추가 파일까지 전부 QA 근거로 남긴다. */
   async taskReviewChanges(base: string, head: string): Promise<TaskReviewChange[]> {
-    const mergeBase = sha((await this.git(['merge-base', sha(base), sha(head)])).toString().trim());
+    const mergeBase = await this.taskBase(base, head);
     const raw = (await this.git(['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--raw', '--numstat', '-z', '--no-abbrev', mergeBase, head, '--'])).toString('utf8');
-    const changes = parseRawNumstat(raw).filter((change) => change.oldBlob !== null);
+    const changes = parseRawNumstat(raw);
     const result: TaskReviewChange[] = [];
     for (const change of changes) {
-      const patch = (await this.git(['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--binary', mergeBase, head, '--', change.path])).toString('utf8');
+      const patch = (await this.git(['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--binary', mergeBase, head, '--', change.path])).toString('utf8');
       result.push({ ...change, patch });
     }
     return result;
+  }
+
+  /** 검사 폴더는 커밋만으로 새로 복사한다. Agent의 도구·무시 파일·Git 설정을 가져오지 않는다. */
+  async createTaskCheckWorktree(worktreeId: string, commit: string): Promise<string> {
+    const entries = await this.tree(commit);
+    if (entries.some((entry) => !['100644', '100755'].includes(entry.mode) || entry.path.split('/').includes('node_modules'))) {
+      throw new GitSafetyError('검사 커밋에는 node_modules, symlink, submodule을 넣을 수 없습니다.');
+    }
+    return this.createWorktree(worktreeId, `agent/${worktreeId}`, commit);
   }
 
   /** 고정한 커밋과 실제 작업 파일이 일치해야 다른 코드의 결과를 보고하지 않는다. */
