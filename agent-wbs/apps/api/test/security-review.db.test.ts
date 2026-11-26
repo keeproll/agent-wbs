@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import { createServer } from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
 import { createPool, recreateTestDatabase, runMigrations, seedSystem, type PoolClient } from '@awbs/db';
 import { afterAll, beforeAll, expect, inject, test, vi } from 'vitest';
@@ -144,24 +145,45 @@ test('L3: 서로 다른 Runner의 같은 멱등 키는 각각 처리하고 각�
   expect(replay.map((response) => response.headers['idempotency-replayed'])).toEqual(['true', 'true']);
 });
 
+/**
+ * 실행마다 비어 있는 포트를 OS에게 받는다. 고정 포트는 다른 worktree·동시 실행과 부딪쳐
+ * 자식 서버가 EADDRINUSE로 바로 끝나고, 테스트는 시작 로그만 기다리다 timeout으로 실패했다(재리뷰).
+ */
+async function freePort(): Promise<number> {
+  const server = createServer();
+  server.listen(0, '0.0.0.0');
+  await once(server, 'listening');
+  const address = server.address();
+  assert(address && typeof address === 'object');
+  server.close();
+  await once(server, 'close');
+  return address.port;
+}
+
 test.each([lanOrigin, lanOrigin.replace('http:', 'https:')])('M1·L4: LAN %s 기동의 경고와 실제 loopback 링크 로그인을 확인한다', async (origin) => {
   const main = new URL('../src/main.ts', import.meta.url).pathname;
+  const port = await freePort();
   const child = spawn(process.execPath, ['--conditions=awbs-source', main], {
-    env: { DATABASE_URL: appUrl.href, AWBS_HOST: '0.0.0.0', AWBS_ALLOW_LAN: 'true', AWBS_ORIGIN: origin, AWBS_PORT: '26474' },
+    env: { DATABASE_URL: appUrl.href, AWBS_HOST: '0.0.0.0', AWBS_ALLOW_LAN: 'true', AWBS_ORIGIN: origin, AWBS_PORT: String(port) },
   });
   let output = '';
-  const closed = once(child, 'close');
+  let exited = false;
+  const closed = once(child, 'close').then((result) => { exited = true; return result; });
   child.stdout.on('data', (chunk) => { output += String(chunk); });
   child.stderr.on('data', (chunk) => { output += String(chunk); });
   try {
-    while (!output.includes('Server listening')) await once(child.stdout, 'data');
+    // 자식이 시작 로그 전에 끝나면(포트 충돌 등) 기다리지 않고 그 출력과 함께 바로 실패한다.
+    while (!output.includes('Server listening')) {
+      await Promise.race([once(child.stdout, 'data'), closed]);
+      if (exited && !output.includes('Server listening')) throw new Error(`API 서버가 시작 전에 종료되었습니다(exit ${String(child.exitCode)}):\n${output}`);
+    }
     assert(child.pid);
     if (origin.startsWith('http:')) {
       expect(output).toContain('비밀번호와 세션');
       expect(output).toContain('같은 네트워크');
       expect(output).toContain('"level":40');
     } else expect(output).not.toContain('비밀번호와 세션');
-    const localOrigin = 'http://127.0.0.1:26474';
+    const localOrigin = `http://127.0.0.1:${String(port)}`;
     const login = await fetch(`${localOrigin}/api/auth/session`, { method: 'POST', headers: { origin: localOrigin, 'content-type': 'application/json' },
       body: JSON.stringify({ method: 'link', token: await issueLoginLink(pool) }) });
     expect(login.status).toBe(204);
