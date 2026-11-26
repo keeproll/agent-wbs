@@ -1,5 +1,6 @@
 import { createPool, recreateTestDatabase, runMigrations, seedSystem } from '@awbs/db';
 import { OPERATIONS } from '@awbs/shared/api';
+import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { afterAll, beforeAll, describe, expect, inject, test } from 'vitest';
 import { buildApp } from '../src/app.ts';
@@ -38,14 +39,40 @@ const SHA1 = 'a'.repeat(40);
 const SHA2 = 'b'.repeat(40);
 const SHA3 = 'c'.repeat(40);
 const SHA4 = 'd'.repeat(40);
+/** blob·트리 해시처럼 보이는 40자리 SHA(테스트용) */
+const fakeSha = (text: string) => createHash('sha1').update(text).digest('hex');
+/** 서버 head 시점의 prototype/ 파일별 blob과 트리 해시(테스트의 Runner가 기억하는 값). 새 프로젝트마다 비운다. */
+const runnerView = { blobs: new Map<string, string>(), tree: null as string | null };
+const forgetRunnerView = () => { runnerView.blobs.clear(); runnerView.tree = null; };
 /**
- * 입력 변경 보고(비교 후 추가). base를 주지 않으면 서버의 현재 inputHead를 쓴다(Runner가 지난 응답의 head를 쓰는 것과 같다).
- * head를 주지 않으면 목록의 마지막 커밋이 main 끝이다.
+ * 입력 변경 보고. 테스트 편의상 커밋별 파일 변경을 받아 base→head의 prototype/ 트리 차이(raw diff)로 합쳐 보낸다.
+ * base를 주지 않으면 서버의 현재 inputHead(Runner가 지난 응답의 head를 쓰는 것과 같다), head는 목록의 마지막 커밋이다.
  */
-async function chainReport(commits: object[], files: object[], options: { base?: string; head?: string; baseIsAncestor?: boolean } = {}) {
+async function chainReport(commits: object[], files: { commitSha: string; path: string; change: string; added: number; deleted: number }[],
+  options: { base?: string; head?: string; baseIsAncestor?: boolean; treeHash?: string; changes?: object[] } = {}) {
   const base = options.base ?? (await app.inject({ url: '/api/project', headers: { cookie } })).json<{ inputHead: string }>().inputHead;
   const head = options.head ?? (commits.at(-1) as { sha: string } | undefined)?.sha ?? base;
-  return runner('/api/runner/input-changes', { base, head, baseIsAncestor: options.baseIsAncestor ?? true, commits, files });
+  const order = commits.map((c) => (c as { sha: string }).sha);
+  const byPath = new Map<string, { first: string; last: string; added: number; deleted: number }>();
+  for (const f of [...files].sort((a, b) => order.indexOf(a.commitSha) - order.indexOf(b.commitSha))) {
+    const prev = byPath.get(f.path);
+    byPath.set(f.path, { first: prev?.first ?? f.change, last: f.change, added: (prev?.added ?? 0) + f.added, deleted: (prev?.deleted ?? 0) + f.deleted });
+  }
+  const changes = options.changes ?? [...byPath].flatMap(([path, c]) => {
+    const before = c.first !== 'added';
+    const after = c.last !== 'deleted';
+    if (!before && !after) return [];
+    const oldBlob = before ? runnerView.blobs.get(path) ?? fakeSha(`${path}@init`) : null;
+    const newBlob = after ? fakeSha(`${path}@${head}`) : null;
+    return [{ status: !before ? 'A' : !after ? 'D' : 'M', path, oldBlob, newBlob, added: c.added, deleted: c.deleted }];
+  });
+  const treeHash = options.treeHash ?? (changes.length ? fakeSha(`tree@${head}`) : runnerView.tree ?? fakeSha(`tree@${base}`));
+  const response = await runner('/api/runner/input-changes', { base, head, baseIsAncestor: options.baseIsAncestor ?? true, treeHash, changes, commits });
+  if (response.statusCode === 200 && !options.changes && response.json<{ historyRewritten: boolean }>().historyRewritten === false) {
+    for (const c of changes as { path: string; newBlob: string | null }[]) { if (c.newBlob) runnerView.blobs.set(c.path, c.newBlob); else runnerView.blobs.delete(c.path); }
+    runnerView.tree = treeHash;
+  }
+  return response;
 }
 const REPO = 'https://github.com/acme/web';
 const STRUCTURE = { uiux: true, uiuxFiles: 12, docs: ['prototype/docs/guide.md'], src: false, contracts: false, agentwbs: false };
@@ -489,19 +516,20 @@ describe('project 초기 WBS 초안과 승인(D-33)', () => {
 describe('project 입력 자료 변경·분석·분석 안 함(G§4.2 ②)', () => {
   const files = (sha: string, path: string, change = 'modified') => ({ commitSha: sha, path, change, added: 3, deleted: 1 });
   const pushed = (commits: string[]) => commits.map((sha, i) => ({ sha, at: `2026-11-2${String(6 + i)}T0${String(i)}:00:00Z`, author: '팀장', message: `입력 수정 ${String(i)}` }));
-  const report = (commits: string[], changed: object[]) => chainReport(pushed(commits), changed);
+  const report = (commits: string[], changed: ReturnType<typeof files>[]) => chainReport(pushed(commits), changed);
 
   test('Runner가 보고한 입력 커밋을 감지 목록에 올리고, 같은 보고를 다시 보내면 base가 낡아 409와 현재 head를 받는다', async () => {
     const changes = [files(SHA2, 'prototype/docs/guide.md'), files(SHA2, 'prototype/docs/new.md', 'added')];
     const first = await report([SHA2], changes);
     expect(first.statusCode, first.body).toBe(200);
     expectShape('reportInputChanges', 200, first.json());
-    expect(first.json()).toEqual({ head: SHA2, appended: 1, historyRewritten: false });
+    expect(first.json()).toEqual({ head: SHA2, recorded: true, historyRewritten: false });
     const again = await chainReport(pushed([SHA2]), changes, { base: SHA1 });
     expect(again.statusCode).toBe(409);
     expect(errorOf(again)).toMatchObject({ code: 'VERSION_CONFLICT', details: { current: { base: SHA2 } } });
-    const unknown = await report([SHA3], [files(SHA4, 'prototype/uiux/a.html')]);
-    expect(unknown.statusCode).toBe(400);
+    // 상태와 blob이 맞지 않는 차이(수정인데 전후 blob이 같음)는 계산이 잘못된 보고다.
+    const broken = await chainReport(pushed([SHA3]), [], { changes: [{ status: 'M', path: 'prototype/uiux/a.html', oldBlob: fakeSha('a'), newBlob: fakeSha('a'), added: 0, deleted: 0 }] });
+    expect(broken.statusCode).toBe(400);
     const s = await state();
     expect(s.changeCommits).toEqual([expect.objectContaining({ sha: SHA2, state: 'pending', author: '팀장', message: '입력 수정 0', files: [expect.objectContaining({ path: 'prototype/docs/guide.md' }), expect.objectContaining({ path: 'prototype/docs/new.md' })] })]);
   });
@@ -578,6 +606,7 @@ describe('project 리뷰 지적 회귀(M2-03-REVIEW 1~8)', () => {
   /** 초기화 뒤 새 프로젝트를 등록하고 초안 승인 대기까지 진행한다. */
   async function fresh(d = draft()) {
     await resetDb();
+    forgetRunnerView();
     const check = await checkedRepo();
     expect((await lead('POST', '/api/project', registration(check, { constraints: [] }))).statusCode).toBe(201);
     const first = await lease('bootstrap');
@@ -622,8 +651,8 @@ describe('project 리뷰 지적 회귀(M2-03-REVIEW 1~8)', () => {
     const { s } = await fresh();
     expect((await lead('POST', '/api/project/bootstrap/approve', { revision: s.bootstrap.revision })).statusCode).toBe(200);
     // 순서는 서버가 계산하지 않는다. 커밋 시각이 거꾸로여도 git 목록 순서(B → C)를 그대로 쓴다.
-    expect((await chainReport([commit(SHA2, '2026-11-26T03:00:00Z'), commit(SHA3, '2026-11-26T02:00:00Z')],
-      [file(SHA2, 'prototype/docs/older.md'), file(SHA3, 'prototype/docs/newer.md')])).statusCode).toBe(200);
+    expect((await chainReport([commit(SHA2, '2026-11-26T03:00:00Z')], [file(SHA2, 'prototype/docs/older.md')])).statusCode).toBe(200);
+    expect((await chainReport([commit(SHA3, '2026-11-26T02:00:00Z')], [file(SHA3, 'prototype/docs/newer.md')])).statusCode).toBe(200);
     const before = await state();
     expect(before.changeCommits.map((c) => c.sha)).toEqual([SHA2, SHA3]);
     expect(before.inputHead).toBe(SHA3);
@@ -661,14 +690,15 @@ describe('project 리뷰 지적 회귀(M2-03-REVIEW 1~8)', () => {
     }
   });
 
-  test('6. prototype/ 밖 파일은 입력 변경이 아니고, 입력 파일이 없는 커밋이 목록에 있으면 계산이 잘못된 보고라 400이다', async () => {
+  test('6. prototype/ 밖 경로가 있는 차이는 계산이 잘못된 보고라 400이고, prototype/ 차이만 받는다', async () => {
     await fresh();
-    // rev-list -- prototype/ 결과에는 prototype/을 바꾸지 않은 커밋이 나올 수 없다.
-    const bad = await chainReport([commit(SHA2, AT_NOW()), commit(SHA4, AT_NOW())], [file(SHA2, 'src/agent.ts'), file(SHA4, 'prototype/extra.md')]);
+    // 차이는 `git diff ... -- prototype/`로 계산하므로 src/ 경로가 나올 수 없다.
+    const bad = await chainReport([commit(SHA2, AT_NOW())], [file(SHA2, 'src/agent.ts'), file(SHA2, 'prototype/extra.md')]);
     expect(bad.statusCode).toBe(400);
+    expect(errorOf(bad).errors).toEqual([expect.objectContaining({ rule: 'prototype' })]);
     expect((await state()).changeCommits).toEqual([]);
-    const mixed = await chainReport([commit(SHA4, AT_NOW())], [file(SHA4, 'prototype/extra.md'), file(SHA4, 'src/b.ts')]);
-    expect(mixed.statusCode, mixed.body).toBe(200);
+    const ok = await chainReport([commit(SHA4, AT_NOW())], [file(SHA4, 'prototype/extra.md')]);
+    expect(ok.statusCode, ok.body).toBe(200);
     expect((await state()).changeCommits.map((c) => [c.sha, c.files.map((f) => f.path)])).toEqual([[SHA4, ['prototype/extra.md']]]);
   });
 
@@ -689,9 +719,9 @@ describe('project 리뷰 지적 회귀(M2-03-REVIEW 1~8)', () => {
     expect((await lead('POST', '/api/project/bootstrap/approve', { revision: s.bootstrap.revision })).statusCode).toBe(200);
     // Runner의 첫 보고: base = 등록 커밋(SHA1). 등록 이전 이력이나 등록 커밋의 깊이는 몰라도 된다(D1).
     const first = await chainReport([commit(SHA2, AT_NOW()), commit(SHA3, AT_NOW())], [file(SHA2, 'prototype/docs/b.md'), file(SHA3, 'prototype/docs/c.md')], { base: SHA1 });
-    expect(first.json()).toEqual({ head: SHA3, appended: 2, historyRewritten: false });
+    expect(first.json()).toEqual({ head: SHA3, recorded: true, historyRewritten: false });
     const before = await state();
-    expect((await lead('POST', '/api/project/inputs', { updatedAt: before.updatedAt, commit: SHA3, commits: [SHA2, SHA3] })).statusCode).toBe(202);
+    expect((await lead('POST', '/api/project/inputs', { updatedAt: before.updatedAt, commit: SHA3, commits: [SHA3] })).statusCode).toBe(202);
     // 같은 첫 보고(옛 base)가 늦게 다시 도착하거나, [B]만 담은 지연 보고가 와도 붙이지 않는다.
     for (const late of [
       await chainReport([commit(SHA2, AT_NOW()), commit(SHA3, AT_NOW())], [file(SHA2, 'prototype/docs/b.md'), file(SHA3, 'prototype/docs/c.md')], { base: SHA1 }),
@@ -701,7 +731,7 @@ describe('project 리뷰 지적 회귀(M2-03-REVIEW 1~8)', () => {
       expect(errorOf(late)).toMatchObject({ code: 'VERSION_CONFLICT', details: { current: { base: SHA3 } } });
     }
     const after = await state();
-    expect(after.changeCommits.map((c) => `${c.sha.slice(0, 1)}:${c.state}`)).toEqual(['b:analyzed', 'c:analyzed']);
+    expect(after.changeCommits.map((c) => `${c.sha.slice(0, 1)}:${c.state}`)).toEqual(['c:analyzed']);
     expect(after.inputs.map((i) => i.commit)).toEqual([SHA1, SHA3]);
     // 이미 v2에 들어간 B로는 버전을 되돌릴 수 없다.
     const back = await lead('POST', '/api/project/inputs', { updatedAt: after.updatedAt, commit: SHA2, commits: [SHA2] });
@@ -709,38 +739,44 @@ describe('project 리뷰 지적 회귀(M2-03-REVIEW 1~8)', () => {
     expect((await state()).inputs.map((i) => i.commit)).toEqual([SHA1, SHA3]);
   });
 
-  test('D2. feature에 main을 합친 뒤 main을 fast-forward해도 새 입력을 잃지 않고 main 끝(head)으로 고정한다', async () => {
+  test('N1. feature에 main을 -s ours로 합친 뒤 fast-forward해 커밋 목록이 비어도, 트리 차이의 삭제를 입력 변경으로 받는다', async () => {
     const { s } = await fresh();
     expect((await lead('POST', '/api/project/bootstrap/approve', { revision: s.bootstrap.revision })).statusCode).toBe(200);
-    // 옛 main = SHA1(등록). feature Q1(SHA2)·Q2(SHA3)를 옛 main보다 앞에서 갈라 만들고, merge F(SHA4)의 첫 부모는 Q2.
-    // rev-list --first-parent SHA1..F -- prototype/ = [Q1, Q2, F]. 첫 부모 깊이로는 F가 SHA1보다 얕을 수 있다.
-    const result = await chainReport([commit(SHA2, AT_NOW()), commit(SHA3, AT_NOW()), commit(SHA4, AT_NOW())],
-      [file(SHA2, 'prototype/docs/spine1.md'), file(SHA3, 'prototype/docs/spine2.md'), file(SHA4, 'prototype/docs/merge.md')], { base: SHA1, head: SHA4 });
-    expect(result.json()).toEqual({ head: SHA4, appended: 3, historyRewritten: false });
+    const doc = 'prototype/docs/deleted-by-merge.md';
+    // rev-list --first-parent 결과는 비어 있지만 git diff --raw는 삭제를 보여 준다.
+    const result = await chainReport([], [], { head: SHA4, changes: [{ status: 'D', path: doc, oldBlob: fakeSha('d'), newBlob: null, added: 0, deleted: 5 }], treeHash: fakeSha('tree-after-delete') });
+    expect(result.statusCode, result.body).toBe(200);
+    expect(result.json()).toEqual({ head: SHA4, recorded: true, historyRewritten: false });
     const before = await state();
-    expect(before.changeCommits.map((c) => c.state)).toEqual(['pending', 'pending', 'pending']);
-    const analyzed = await lead('POST', '/api/project/inputs', { updatedAt: before.updatedAt, commit: SHA4, commits: [SHA2, SHA3, SHA4] });
+    expect(before.changeCommits).toEqual([expect.objectContaining({ sha: SHA4, state: 'pending', files: [expect.objectContaining({ path: doc, change: 'deleted' })] })]);
+    const analyzed = await lead('POST', '/api/project/inputs', { updatedAt: before.updatedAt, commit: SHA4, commits: [SHA4] });
     expect(analyzed.statusCode, analyzed.body).toBe(202);
-    expect((await state()).inputs.at(-1)).toMatchObject({ commit: SHA4, mdList: expect.arrayContaining(['prototype/docs/spine1.md', 'prototype/docs/spine2.md']) });
+    expect((await state()).inputs.at(-1)).toMatchObject({ commit: SHA4, changes: [{ path: doc, change: 'deleted' }] });
   });
 
-  test('main 끝이 입력 파일을 바꾸지 않아도(목록 밖 head) 그 head로 입력 버전을 고정한다', async () => {
+  test('N2. 빈 차이 보고도 head를 옮겨 저장하고, 쌓인 변경을 그 최신 head로 고정한다', async () => {
     const { s } = await fresh();
     expect((await lead('POST', '/api/project/bootstrap/approve', { revision: s.bootstrap.revision })).statusCode).toBe(200);
+    expect((await chainReport([commit(SHA2, AT_NOW())], [file(SHA2, 'prototype/docs/b.md')])).statusCode).toBe(200);
     const tip = 'e'.repeat(40);
-    expect((await chainReport([commit(SHA2, AT_NOW())], [file(SHA2, 'prototype/docs/b.md')], { head: tip })).json()).toMatchObject({ head: tip });
+    // src만 바뀐 C: prototype/ 차이는 비고 트리 해시도 같다.
+    const empty = await chainReport([], [], { head: tip });
+    expect(empty.json()).toEqual({ head: tip, recorded: false, historyRewritten: false });
     const before = await state();
     expect(before.inputHead).toBe(tip);
+    expect(before.changeCommits.map((c) => c.sha)).toEqual([SHA2]);
     expect(errorOf(await lead('POST', '/api/project/inputs', { updatedAt: before.updatedAt, commit: SHA2, commits: [SHA2] })).errors).toEqual([expect.objectContaining({ rule: 'latest' })]);
     expect((await lead('POST', '/api/project/inputs', { updatedAt: before.updatedAt, commit: tip, commits: [SHA2] })).statusCode).toBe(202);
     expect((await state()).inputs.map((i) => i.commit)).toEqual([SHA1, tip]);
+    // 다음 빈 보고는 새 head에서 이어진다.
+    expect((await chainReport([], [], { head: 'f'.repeat(40) })).json()).toMatchObject({ head: 'f'.repeat(40), recorded: false });
   });
 
   test('이력 재작성(base가 main의 조상이 아님)은 붙이지 않고 팀장 경고를 남긴다', async () => {
     await fresh();
     const result = await chainReport([commit(SHA2, AT_NOW())], [file(SHA2, 'prototype/docs/b.md')], { baseIsAncestor: false });
     expect(result.statusCode, result.body).toBe(200);
-    expect(result.json()).toEqual({ head: SHA1, appended: 0, historyRewritten: true });
+    expect(result.json()).toEqual({ head: SHA1, recorded: false, historyRewritten: true });
     expect((await state()).changeCommits).toEqual([]);
     expect(await count("select count(*) n from alerts where key='input_history_rewritten' and resolved_at is null")).toBe(1);
     // 같은 경고는 열린 동안 하나만 남는다.
@@ -748,14 +784,18 @@ describe('project 리뷰 지적 회귀(M2-03-REVIEW 1~8)', () => {
     expect(await count("select count(*) n from alerts where key='input_history_rewritten' and resolved_at is null")).toBe(1);
   });
 
-  test('D3. 한 보고 안의 같은 SHA·이미 받은 SHA는 계산이 잘못된 보고라 400이고 아무것도 바꾸지 않는다', async () => {
+  test('D3. 모순된 관측(경로 중복·빈 차이인데 트리 변경·지난 보고와 다른 이전 blob)은 400이고 아무것도 바꾸지 않는다', async () => {
     await fresh();
-    const twice = await chainReport([commit(SHA2, AT_NOW()), commit(SHA2, AT_NOW())], [file(SHA2, 'prototype/docs/b.md')]);
-    expect(twice.statusCode).toBe(400);
-    expect((await chainReport([commit(SHA2, AT_NOW())], [file(SHA2, 'prototype/docs/b.md')])).statusCode).toBe(200);
-    const known = await chainReport([commit(SHA2, AT_NOW())], [file(SHA2, 'prototype/docs/b.md')], { base: SHA2, head: SHA2 });
-    expect(known.statusCode).toBe(400);
-    expect((await state()).changeCommits.map((c) => c.sha)).toEqual([SHA2]);
+    const doc = 'prototype/docs/b.md';
+    const twice = await chainReport([], [], { head: SHA2, changes: [{ status: 'A', path: doc, oldBlob: null, newBlob: fakeSha('1'), added: 1, deleted: 0 }, { status: 'M', path: doc, oldBlob: fakeSha('0'), newBlob: fakeSha('1'), added: 1, deleted: 1 }] });
+    expect(errorOf(twice).errors).toEqual([expect.objectContaining({ rule: 'unique' })]);
+    expect((await chainReport([commit(SHA2, AT_NOW())], [file(SHA2, doc)])).statusCode).toBe(200);
+    const tree = await chainReport([], [], { head: SHA3, treeHash: fakeSha('other-tree') });
+    expect(errorOf(tree).errors).toEqual([expect.objectContaining({ rule: 'tree' })]);
+    const blob = await chainReport([], [], { head: SHA3, changes: [{ status: 'M', path: doc, oldBlob: fakeSha('not-the-last'), newBlob: fakeSha('2'), added: 1, deleted: 1 }] });
+    expect(errorOf(blob).errors).toEqual([expect.objectContaining({ rule: 'blob' })]);
+    const s = await state();
+    expect([s.inputHead, s.changeCommits.map((c) => c.sha)]).toEqual([SHA2, [SHA2]]);
   });
 
   test('R2. M2-05 reconcile이 만든 새 job은 현재 실행이라 초안을 받는다(실제 claim·만료·release·reconcile 경로)', async () => {

@@ -6,7 +6,7 @@ import {
 } from './db.ts';
 import { draftErrors, draftHolds, draftSplitSummary, storeDraft, type DraftInput, type StoredDraft } from './draft.ts';
 import { ProjectError } from './errors.ts';
-import { mergeChanges, nextMdList, type Change, type PathChange } from './inputs.ts';
+import { nextMdList, type PathChange } from './inputs.ts';
 import {
   bootstrapJob, createPlanningJob, currentRunnerJob, followUpJob, lockPlanningJob, log, resetSteps, setStep, steps, type PlanningJob,
 } from './jobs.ts';
@@ -445,79 +445,72 @@ async function resume(db: Db, job: PlanningJob, epoch: number): Promise<string> 
 
 /* ---------------- ② 입력 자료 변경 ---------------- */
 
-interface PushedCommit { sha: string; depth: number; at: string; author: string; message: string }
-interface ChangedInput { commitSha: string; path: string; change: Change; added: number; deleted: number }
-
-/** Runner의 주기 확인 결과(G§8.4). 이미 받은 커밋·이미 입력 버전인 커밋은 다시 올리지 않는다. */
-interface ChainBody { base: string; head: string; baseIsAncestor: boolean; commits: PushedCommit[]; files: ChangedInput[] }
+interface PushedCommit { sha: string; at: string; author: string; message: string }
+interface InputDiff { status: 'A' | 'M' | 'D' | 'R'; path: string; from?: string; oldBlob: string | null; newBlob: string | null; added: number; deleted: number }
+interface InputBody { base: string; head: string; baseIsAncestor: boolean; treeHash: string; changes: InputDiff[]; commits: PushedCommit[] }
+/** 저장하는 보고 하나(input_change_commits.files jsonb, sha = 보고의 head) */
+interface StoredReport { seq: number; base: string; head: string; tree: string; changes: InputDiff[]; commits: PushedCommit[]; receivedAt: string }
 
 /**
- * Runner의 입력 변경 보고(비교 후 추가, 한 트랜잭션). 순서는 서버가 계산하지 않고 git이 정한 목록 순서를 그대로 쓴다.
- * - base가 지금 입력 head와 다르면 409 VERSION_CONFLICT와 현재 head. Runner는 그 head로 다시 계산한다.
- *   늦게·중복으로 다시 도착한 옛 보고도 여기서 걸러진다.
- * - base가 main의 조상이 아니면(금지된 이력 재작성) 붙이지 않고 팀장 경고를 남긴다.
+ * Runner의 입력 변경 보고(비교 후 갱신, 한 트랜잭션). 정답은 base와 head의 prototype/ 트리 차이다(ledger.ts).
+ * - base가 지금 입력 head와 다르면 409 VERSION_CONFLICT와 현재 head. 늦게·중복으로 다시 온 옛 보고도 여기서 걸러진다.
+ * - base가 main의 조상이 아니면(금지된 이력 재작성) 받지 않고 팀장 경고를 남긴다.
+ * - 그 밖에는 head를 언제나 옮기고(빈 차이 포함), 차이가 있을 때만 팀장 확인 항목이 생긴다.
  */
-export async function reportInputChanges(db: Db, body: ChainBody): Promise<{ head: string; appended: number; historyRewritten: boolean }> {
-  const shas = new Set(body.commits.map((c) => c.sha));
-  const errors = body.files.flatMap((file, i) => shas.has(file.commitSha) ? [] : [{ path: `files.${String(i)}.commitSha`, rule: 'reference', message: '보고한 커밋 목록에 없는 커밋입니다.' }]);
-  if (errors.length) throw new ProjectError('VALIDATION_FAILED', { errors });
+export async function reportInputChanges(db: Db, body: InputBody): Promise<{ head: string; recorded: boolean; historyRewritten: boolean }> {
+  // 차이는 `-- prototype/`으로 계산한 결과다. 그 밖의 경로가 있으면 계산이 잘못된 보고다.
+  const outside = body.changes.flatMap((c, i) => [c.path, ...(c.from ? [c.from] : [])].filter((p) => !isInput(p)).map(() => ({ path: `changes.${String(i)}.path`, rule: 'prototype', message: 'prototype/ 밖 경로는 입력 차이가 아닙니다.' })));
+  if (outside.length) throw new ProjectError('VALIDATION_FAILED', { errors: outside });
   const project = await requireProject(db);
-  // files의 prototype/ 밖 경로(src/ 등 Agent 작업)는 입력 변경이 아니다(G§4.2 ②).
-  const inputFiles = new Map(body.commits.map((c) => [c.sha,
-    body.files.filter((f) => f.commitSha === c.sha && isInput(f.path)).map(({ path, change, added, deleted }) => ({ path, change, added, deleted }))]));
   const before = await loadLedger(db, project.id);
-  const result = receive(before, { base: body.base, head: body.head, baseIsAncestor: body.baseIsAncestor,
-    commits: body.commits.map((c) => ({ sha: c.sha, hasInput: (inputFiles.get(c.sha)?.length ?? 0) > 0 })) });
+  const result = receive(before, { base: body.base, head: body.head, baseIsAncestor: body.baseIsAncestor, treeHash: body.treeHash, changes: body.changes });
   if (result.kind === 'stale') {
     throw new ProjectError('VERSION_CONFLICT', { message: 'base가 서버의 입력 head와 다릅니다. 응답의 head로 다시 계산해 보고하세요.', details: { current: { base: result.head }, changes: [] } });
   }
   if (result.kind === 'invalid') throw new ProjectError('VALIDATION_FAILED', { errors: [result.error] });
   if (result.kind === 'rewritten') {
-    // 이력 재작성은 금지된 상황이다(G§4.2 강제 push 금지). 자동 복구하지 않고 입력 고정을 멈춘 채 팀장에게 알린다.
+    // 이력 재작성은 금지된 상황이다(G§4.2 강제 push 금지). 자동 복구하지 않고 입력 변경을 받지 않은 채 팀장에게 알린다.
     await db.query("insert into alerts(project_id,key,severity,target) values($1,'input_history_rewritten','error',$2::jsonb) on conflict do nothing",
       [project.id, JSON.stringify({ base: body.base, head: body.head, message: `main 이력이 바뀌었습니다: 마지막 입력 커밋 ${body.base}가 새 main ${body.head}의 조상이 아닙니다. 입력 변경을 받지 않습니다.` })]);
     await changeEvent(db, project.id, { kind: 'alert', key: 'input_history_rewritten' }, 'alert');
-    return { head: result.head, appended: 0, historyRewritten: true };
+    return { head: result.head, recorded: false, historyRewritten: true };
   }
-  await persistLedger(db, project.id, before, result.ledger, new Map(body.commits.map((c) => [c.sha, { at: c.at, author: c.author, message: c.message, files: inputFiles.get(c.sha) ?? [] }])));
-  if (result.appended) await changeEvent(db, project.id, { kind: 'input_changes' });
-  return { head: result.head, appended: result.appended, historyRewritten: false };
+  if (result.report) {
+    const r = result.report;
+    const stored: StoredReport = { seq: r.seq, base: r.base, head: r.head, tree: r.tree, changes: body.changes, commits: body.commits, receivedAt: new Date().toISOString() };
+    await db.query('insert into input_change_commits(project_id,sha,files,state) values($1,$2,$3::jsonb,$4)', [project.id, r.head, JSON.stringify(stored), r.state]);
+    if (r.changes.length) await changeEvent(db, project.id, { kind: 'input_changes' });
+  }
+  return { head: result.head, recorded: Boolean(result.report?.changes.length), historyRewritten: false };
 }
 
-interface CommitMeta { at: string; author: string; message: string; files: unknown[] }
-/** DB의 입력 버전·입력 커밋을 원장으로 읽는다. pos·head는 보고 목록 순서와 보고의 main 끝을 그대로 저장한 값이다. */
-async function loadLedger(db: Db, projectId: string): Promise<Ledger> {
-  const rows = (await db.query<{ sha: string; pos: number; head: string; state: CommitState; v: number | null }>(
-    `select c.sha,(c.files->>'pos')::int pos,c.files->>'head' head,c.state,v.v from input_change_commits c left join input_versions v on v.id=c.analyzed_in_version
-     where c.project_id=$1 for update of c`, [projectId])).rows;
-  const versions = (await db.query<{ v: number; sha: string }>('select v,commit_sha sha from input_versions where project_id=$1 order by v', [projectId])).rows;
-  return { versions, commits: rows.map((r) => ({ sha: r.sha, pos: r.pos, head: r.head, state: r.state, version: r.v })) };
+/** DB의 입력 버전·입력 보고를 원장으로 읽는다. lock이면 보고 행을 잠근다. */
+async function loadLedger(db: Db, projectId: string, lock = true): Promise<Ledger> {
+  const rows = (await db.query<{ files: StoredReport; state: CommitState; v: number | null }>(
+    `select c.files,c.state,v.v from input_change_commits c left join input_versions v on v.id=c.analyzed_in_version
+     where c.project_id=$1 ${lock ? 'for update of c' : ''}`, [projectId])).rows;
+  const versions = (await db.query<{ v: number; sha: string; tree: string | null }>(
+    "select v,commit_sha sha,files->>'treeHash' tree from input_versions where project_id=$1 order by v", [projectId])).rows;
+  return {
+    versions,
+    reports: rows.map((r) => ({ seq: r.files.seq, base: r.files.base, head: r.files.head, tree: r.files.tree, changes: r.files.changes, state: r.state, version: r.v })),
+  };
 }
-/** 원장의 바뀐 부분만 DB에 쓴다. 새 커밋은 추가하고, 상태·포함 버전이 바뀐 커밋은 고친다. */
-async function persistLedger(db: Db, projectId: string, before: Ledger, after: Ledger, meta: ReadonlyMap<string, CommitMeta>): Promise<void> {
+/** 원장에서 상태·포함 버전이 바뀐 보고만 DB에 쓴다. */
+async function persistLedger(db: Db, projectId: string, before: Ledger, after: Ledger): Promise<void> {
   const versionIds = new Map((await db.query<{ v: number; id: string }>('select v,id from input_versions where project_id=$1', [projectId])).rows.map((r) => [r.v, r.id]));
-  for (const c of after.commits) {
-    const old = before.commits.find((b) => b.sha === c.sha);
-    const versionId = c.version === null ? null : versionIds.get(c.version) ?? null;
-    if (!old) {
-      // input_change_commits에는 커밋 정보 열이 없어 files jsonb에 {pos,head,at,author,message,files[]}를 함께 둔다.
-      await db.query('insert into input_change_commits(project_id,sha,files,state,analyzed_in_version) values($1,$2,$3::jsonb,$4,$5)',
-        [projectId, c.sha, JSON.stringify({ pos: c.pos, head: c.head, ...meta.get(c.sha) }), c.state, versionId]);
-    } else if (old.state !== c.state || old.version !== c.version) {
-      await db.query('update input_change_commits set state=$3,analyzed_in_version=$4 where project_id=$1 and sha=$2', [projectId, c.sha, c.state, versionId]);
+  for (const r of after.reports) {
+    const old = before.reports.find((b) => b.head === r.head);
+    if (old && (old.state !== r.state || old.version !== r.version)) {
+      await db.query('update input_change_commits set state=$3,analyzed_in_version=$4 where project_id=$1 and sha=$2',
+        [projectId, r.head, r.state, r.version === null ? null : versionIds.get(r.version) ?? null]);
     }
   }
 }
 
-/** 입력 사슬의 끝(조회용) */
+/** 입력 head(조회용) */
 export async function inputHead(db: Db, projectId: string): Promise<string> {
-  return chainHead(await loadLedgerReadOnly(db, projectId));
-}
-async function loadLedgerReadOnly(db: Db, projectId: string): Promise<Ledger> {
-  const rows = (await db.query<{ sha: string; pos: number; head: string; state: CommitState }>(
-    "select sha,(files->>'pos')::int pos,files->>'head' head,state from input_change_commits where project_id=$1", [projectId])).rows;
-  const versions = (await db.query<{ v: number; sha: string }>('select v,commit_sha sha from input_versions where project_id=$1 order by v', [projectId])).rows;
-  return { versions, commits: rows.map((r) => ({ ...r, version: null })) };
+  return chainHead(await loadLedger(db, projectId, false));
 }
 
 async function pendingShas(db: Db, projectId: string): Promise<string[]> {
@@ -563,21 +556,24 @@ export async function analyzeInputs(db: Db, body: { updatedAt: string; commit: s
   const previous = (await db.query<{ v: number; commit_sha: string; md_list: string[] }>(
     'select v,commit_sha,md_list from input_versions where project_id=$1 order by v desc limit 1', [project.id])).rows[0];
   if (!previous) throw new Error('입력 v1이 없습니다.');
-  // 분석 범위 = 아직 분석하지 않은 입력 커밋 전부(모두 head의 조상), 사슬 순.
-  const range = plan.range.map((c) => c.sha);
-  const commits = (await db.query<{ id: string; sha: string; files: { pos: number; files: (PathChange & { added: number; deleted: number })[] } }>(
-    "select id,sha,files from input_change_commits where project_id=$1 and sha=any($2::text[]) order by (files->>'pos')::int", [project.id, range])).rows;
-  const ordered = commits.flatMap((c) => c.files.files);
-  const changes = mergeChanges(ordered);
-  const stats = changes.map((c) => ({ ...c, added: ordered.filter((f) => f.path === c.path).reduce((s, f) => s + f.added, 0),
-    deleted: ordered.filter((f) => f.path === c.path).reduce((s, f) => s + f.deleted, 0) }));
+  // 순 변경 = 마지막 입력 버전 → head의 prototype/ 트리 차이(원장이 보고 차이를 blob 단위로 이어 붙인 값).
+  const changes: PathChange[] = [...plan.net].map(([path, change]) => ({ path, change }));
+  const lines = new Map<string, { added: number; deleted: number }>();
+  for (const report of plan.reports) {
+    const stored = (await db.query<{ files: StoredReport }>('select files from input_change_commits where project_id=$1 and sha=$2', [project.id, report.head])).rows[0]?.files;
+    for (const c of stored?.changes ?? []) {
+      const sum = lines.get(c.path) ?? { added: 0, deleted: 0 };
+      lines.set(c.path, { added: sum.added + c.added, deleted: sum.deleted + c.deleted });
+    }
+  }
+  const stats = changes.map((c) => ({ ...c, ...(lines.get(c.path) ?? { added: 0, deleted: 0 }) }));
   const version = previous.v + 1;
-  // 새 버전 행을 먼저 만든다. persistLedger가 버전 번호로 이 행을 찾아 범위 커밋을 묶는다.
+  // 새 버전 행을 먼저 만든다. persistLedger가 버전 번호로 이 행을 찾아 보고들을 묶는다.
   await db.query(
     'insert into input_versions(project_id,v,commit_sha,files,md_list,changes,instruction) values($1,$2,$3,$4::jsonb,$5::jsonb,$6::jsonb,$7)',
-    [project.id, version, body.commit, JSON.stringify(stats), JSON.stringify(nextMdList(previous.md_list, changes)), JSON.stringify(changes), body.instr ?? '']);
+    [project.id, version, body.commit, JSON.stringify({ treeHash: plan.version.tree, paths: stats }), JSON.stringify(nextMdList(previous.md_list, changes)), JSON.stringify(changes), body.instr ?? '']);
   if (plan.version.v !== version) throw new Error('입력 버전 번호가 원장과 다릅니다.');
-  await persistLedger(db, project.id, ledger, plan.ledger, new Map());
+  await persistLedger(db, project.id, ledger, plan.ledger);
   const jobId = await createPlanningJob(db, { projectId: project.id, kind: 'input_diff', instruction: body.instr ?? '', stepKeys: INPUT_STEPS });
   await log(db, { id: jobId, project_id: project.id }, `입력 v${String(version)} 고정 — 차이 분석 대기`);
   await enqueueJob(db, { projectId: project.id, kind: 'input_diff', epoch, dedupKey: `input_diff:${jobId}:1`,

@@ -55,10 +55,20 @@ export async function projectState(db: Db) {
     `select v.v,${iso('v.created_at')} at,v.commit_sha commit,v.md_list "mdList",v.changes,v.instruction,r.result->>'text' result,
        (select count(*)::int from tasks t where t.src_input_version=v.id and t.deleted_at is null) "taskCount"
      from input_versions v left join input_version_results r on r.input_version=v.id where v.project_id=$1 order by v.v`, [p.id])).rows;
-  // 커밋 순서는 Runner가 보낸 git 목록 순서(pos)다. 서버가 따로 계산하지 않는다.
-  const changeCommits = (await db.query<{ sha: string; state: 'pending' | 'skipped' | 'analyzed'; files: { at: string; author: string; message: string; files: unknown[] } }>(
-    "select sha,state,files from input_change_commits where project_id=$1 order by (files->>'pos')::int", [p.id])).rows
-    .map((c) => ({ sha: c.sha, at: c.files.at, author: c.files.author, message: c.files.message, state: c.state, files: c.files.files }));
+  // 입력 변경 항목 = 차이가 있는 Runner 보고(키는 그 보고의 head). 받은 순서(seq)대로 보인다.
+  // 커밋 정보는 참고용 목록의 마지막 커밋에서, 이름 변경은 화면 값(added·modified·deleted)에 맞춰 삭제 + 추가로 보인다.
+  interface Raw { status: 'A' | 'M' | 'D' | 'R'; path: string; from?: string; added: number; deleted: number }
+  const kind = { A: 'added', M: 'modified', D: 'deleted' } as const;
+  const changeCommits = (await db.query<{ sha: string; state: 'pending' | 'skipped' | 'analyzed';
+    files: { receivedAt: string; changes: Raw[]; commits: { at: string; author: string; message: string }[] } }>(
+    "select sha,state,files from input_change_commits where project_id=$1 and jsonb_array_length(files->'changes')>0 order by (files->>'seq')::int", [p.id])).rows
+    .map((c) => {
+      const last = c.files.commits.at(-1);
+      return { sha: c.sha, at: last?.at ?? c.files.receivedAt, author: last?.author ?? '', message: last?.message ?? '', state: c.state,
+        files: c.files.changes.flatMap((f) => f.status === 'R' && f.from
+          ? [{ path: f.from, change: 'deleted' as const, added: 0, deleted: f.deleted }, { path: f.path, change: 'added' as const, added: f.added, deleted: 0 }]
+          : [{ path: f.path, change: kind[f.status as 'A' | 'M' | 'D'], added: f.added, deleted: f.deleted }]) };
+    });
   const inputPlanning = (await db.query<PlanningJob & { version: string | null }>(
     `select j.id,j.project_id,j.kind,j.run_no,j.status,j.instruction,
        (select payload->>'version' from runner_jobs r where r.payload->>'planningJobId'=j.id::text order by r.created_at limit 1) version
