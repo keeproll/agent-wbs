@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json",
     "test": "node ../../scripts/vitest.ts --config ../../vitest.config.ts",
-    "test:e2e": "playwright test",
+    "test:e2e": "node scripts/playwright.ts",
     "e2e:install": "playwright install chromium"
   },
   "dependencies": {

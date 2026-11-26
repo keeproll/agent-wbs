@@ -70,7 +70,7 @@ const isErrorBody = (value: unknown): value is ErrorBody => {
   return typeof error?.code === 'string' && typeof error.message === 'string';
 };
 
-type Args<Id extends OperationId> = {
+export type CallArgs<Id extends OperationId> = {
   signal?: AbortSignal;
   /** POST 재시도 때 같은 키를 다시 쓰려면 넘긴다. 없으면 새로 만든다. */
   idempotencyKey?: string;
@@ -89,7 +89,7 @@ export interface ApiClientOptions {
 }
 
 export interface ApiClient {
-  call<Id extends OperationId>(id: Id, args: Args<Id>): Promise<ResponseOf<Id>>;
+  call<Id extends OperationId>(id: Id, args: CallArgs<Id>): Promise<ResponseOf<Id>>;
 }
 
 export function createApiClient(options: ApiClientOptions): ApiClient {

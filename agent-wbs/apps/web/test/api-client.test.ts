@@ -8,7 +8,7 @@ const errorBody = (code: string, extra: Record<string, unknown> = {}) => ({
 });
 
 function setup(response: () => Promise<Response> | Response) {
-  const fetch = vi.fn((_url: string, _init: RequestInit) => Promise.resolve(response()));
+  const fetch = vi.fn<(url: string, init: RequestInit) => Promise<Response>>(() => Promise.resolve(response()));
   const client = createApiClient({ fetch: fetch as unknown as typeof globalThis.fetch, csrfToken: () => 'csrf-1', newKey: () => 'key-1' });
   return { fetch, client };
 }
