@@ -504,6 +504,17 @@ describe('project 초기 WBS 초안과 승인(D-33)', () => {
     expect(split?.judged_rules.items.map((i) => i.subjectHash)).toEqual([draftHash, draftHash, draftHash]);
     const baseline = (await ownerPool.query<{ v: number; items: string }>('select b.v,(select count(*) from baseline_items i where i.baseline=b.id) items from schedule_baselines b')).rows;
     expect(baseline).toEqual([{ v: 1, items: '3' }]);
+    // M2 통합: 기준 일정 v1은 M2-07 일정과 같은 저장 모양이다(expected에 rLo·rHi, range에 lo·hi, 날짜는 서울 기준).
+    const stored = (await ownerPool.query<{ expected: Record<string, unknown>; range: Record<string, unknown> }>('select expected,range from schedule_baselines')).rows[0];
+    expect(Object.keys(stored?.expected ?? {}).sort()).toEqual(['actor', 'end', 'rHi', 'rLo', 'trigger']);
+    expect(Object.keys(stored?.range ?? {}).sort()).toEqual(['hi', 'lo']);
+    const days = (await ownerPool.query<{ key: string; end: string }>(
+      "select t.task_key key,to_char(i.\"end\" at time zone 'Asia/Seoul','YYYY-MM-DD') \"end\",to_char(i.\"end\" at time zone 'Asia/Seoul','HH24:MI') hm from baseline_items i join tasks t on t.id=i.task order by 1")).rows;
+    expect(days.every((d) => (d as unknown as { hm: string }).hm === '00:00')).toBe(true);
+    const schedule = await lead('GET', '/api/schedule');
+    expect(schedule.statusCode, schedule.body).toBe(200);
+    const viewed = schedule.json<{ tasks: { taskKey: string; baselineEnd: string | null }[] }>().tasks.map((t) => ({ key: t.taskKey, end: t.baselineEnd })).sort((a, b) => a.key.localeCompare(b.key));
+    expect(viewed).toEqual(days.map(({ key, end }) => ({ key, end })));
     expect(await count("select count(*) n from replans where status='applied' and baseline_v=1")).toBe(1);
     expect(await count("select count(*) n from task_history where kind='생성'")).toBe(3);
     const s = await state();

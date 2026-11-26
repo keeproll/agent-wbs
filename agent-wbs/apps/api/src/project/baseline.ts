@@ -66,12 +66,16 @@ export async function createBaseline(db: Db, projectId: string, tasks: readonly 
   if (!baseline) throw new Error('기준 일정이 만들어지지 않았습니다.');
   const id = (await db.query<{ id: string }>(
     'insert into schedule_baselines(project_id,v,expected,range,applied_rate) values($1,$2,$3::jsonb,$4::jsonb,$5) returning id',
-    [projectId, baseline.v, JSON.stringify({ end: baseline.end, at: baseline.at, trigger: baseline.trigger, actor: baseline.actor }),
-      JSON.stringify({ lo: baseline.lo, hi: baseline.hi, rLo: baseline.rLo, rHi: baseline.rHi }), baseline.rate])).rows[0]?.id;
+    // M2 통합: M2-07 일정(planning/schedule.ts)과 같은 저장 모양 — expected에 end·trigger·actor·rLo·rHi, range에 lo·hi.
+    // 기준 시각(at)은 행의 created_at으로 읽으므로 따로 두지 않는다.
+    [projectId, baseline.v, JSON.stringify({ end: baseline.end, trigger: baseline.trigger, actor: baseline.actor, rLo: baseline.rLo, rHi: baseline.rHi }),
+      JSON.stringify({ lo: baseline.lo, hi: baseline.hi }), baseline.rate])).rows[0]?.id;
   const uuidOf = new Map(tasks.map((task) => [task.id, task.uuid]));
+  // 날짜는 서울 기준 하루의 시작으로 저장한다(M2-07과 같음). DB 세션 시간대에 따라 날짜가 밀리지 않게 한다.
+  const day = (value: string) => `${value}T00:00:00+09:00`;
   for (const [key, item] of Object.entries(baseline.items)) {
     await db.query('insert into baseline_items(project_id,task,baseline,start,"end",lo,hi) values($1,$2,$3,$4,$5,$6,$7)',
-      [projectId, uuidOf.get(key), id, item.start, item.end, item.lo, item.hi]);
+      [projectId, uuidOf.get(key), id, day(item.start), day(item.end), day(item.lo), day(item.hi)]);
   }
   const rp = await nextNumber(db, projectId, 'replan', "select coalesce(max((substring(rp_key from 4))::bigint),0) from replans");
   const replanId = (await db.query<{ id: string }>(
