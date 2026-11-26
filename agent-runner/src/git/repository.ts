@@ -1,10 +1,22 @@
 import { spawn } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
-import { chmod, lstat, mkdir, readFile, readdir, rm, statfs, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, readFile, readdir, rename, rm, statfs, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
 
 export class GitSafetyError extends Error {
   override name = 'GitSafetyError';
+}
+
+export interface CleanupFailure { name: string; path: string; detail: string }
+
+export class GitCleanupError extends GitSafetyError {
+  override name = 'GitCleanupError';
+  readonly failures: CleanupFailure[];
+
+  constructor(failures: CleanupFailure[]) {
+    super(`정리하지 못한 경로에 수동 조치가 필요합니다: ${failures.map((failure) => failure.path).join(', ')}`);
+    this.failures = failures;
+  }
 }
 
 export interface ResetOptions {
@@ -21,6 +33,15 @@ export interface RejectedPath {
 }
 
 interface TreeEntry { mode: string; oid: string; path: string }
+interface Registration { source: string; configHash: string; worktrees: string[] }
+
+function sourceUrl(source: string): string {
+  const url = URL.parse(source);
+  if (!isAbsolute(source) && (!url || !['https:', 'file:'].includes(url.protocol) || url.username || url.password || url.search || url.hash)) {
+    throw new GitSafetyError('인증 정보가 없는 저장소 주소 또는 로컬 절대 경로가 필요합니다.');
+  }
+  return source;
+}
 
 function id(value: string): string {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/.test(value)) throw new GitSafetyError('관리 폴더 이름이 올바르지 않습니다.');
@@ -55,6 +76,7 @@ async function run(cwd: string, args: string[], input?: Buffer | string, extraEn
     const child = spawn('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.excludesFile=/dev/null',
       '-c', 'core.fsmonitor=false', '-c', 'credential.helper=', '-c', 'core.sshCommand=false',
       '-c', 'alias.lfs=',
+      '-c', 'transfer.fsckObjects=true', '-c', 'fetch.fsckObjects=true',
       '-c', 'commit.gpgSign=false', '-c', 'user.name=Agent WBS', '-c', 'user.email=agentwbs@localhost', ...args], {
       cwd,
       env: {
@@ -95,6 +117,8 @@ export class GitRepository {
   private readonly home: string;
   private readonly worktrees: string;
   private readonly inputs: string;
+  private readonly statePath: string;
+  private registration: Registration | undefined;
 
   private constructor(home: string, repositoryId: string) {
     this.home = home;
@@ -102,6 +126,7 @@ export class GitRepository {
     this.path = join(home, 'repos', repositoryId);
     this.worktrees = join(home, 'worktrees', repositoryId);
     this.inputs = join(home, 'inputs', repositoryId);
+    this.statePath = join(home, 'state/git', `${repositoryId}.json`);
   }
 
   private static async prepare(home: string, repositoryId: string): Promise<GitRepository> {
@@ -110,7 +135,7 @@ export class GitRepository {
     // WSL의 Windows 드라이브는 작업 폴더로 사용하지 않는다(가이드 §6.6).
     if (/^\/mnt\/[a-z](?:\/|$)/i.test(resolve(home))) throw new GitSafetyError('worktree는 Linux 파일 시스템에 만들어야 합니다.');
     const repo = new GitRepository(home, repositoryId);
-    for (const path of [dirname(repo.path), repo.worktrees, repo.inputs]) {
+    for (const path of [dirname(repo.path), repo.worktrees, repo.inputs, dirname(repo.statePath)]) {
       await safePath(path);
       await mkdir(path, { recursive: true, mode: 0o700 });
     }
@@ -121,15 +146,17 @@ export class GitRepository {
 
   static async clone(home: string, repositoryId: string, source: string): Promise<GitRepository> {
     const repo = await this.prepare(home, repositoryId);
-    const url = URL.parse(source);
-    if (!isAbsolute(source) && (!url || !['https:', 'file:'].includes(url.protocol) || url.username || url.password || url.search || url.hash)) {
-      throw new GitSafetyError('인증 정보가 없는 저장소 주소 또는 로컬 절대 경로가 필요합니다.');
-    }
+    sourceUrl(source);
     if (await stat(repo.path)) throw new GitSafetyError('이미 존재하는 저장소를 덮어쓰지 않습니다.');
+    if (await stat(await safePath(repo.statePath))) throw new GitSafetyError('기존 저장소 등록 기록을 덮어쓰지 않습니다.');
     await mkdir(repo.path, { mode: 0o700 });
     try {
       await run(home, ['-c', 'init.templateDir=', 'clone', '--bare', '--no-local', '--', source, repo.path]);
+      // Git LFS가 최초 fetch 때 쓰는 값도 등록 전에 고정한다.
+      await run(repo.path, ['config', 'lfs.repositoryformatversion', '0']);
+      repo.registration = { source, configHash: await repo.configHash(), worktrees: [] };
       await repo.head();
+      await repo.saveRegistration(repo.registration);
       return repo;
     } catch (error) {
       await rm(repo.path, { recursive: true, force: true });
@@ -139,15 +166,46 @@ export class GitRepository {
 
   static async open(home: string, repositoryId: string): Promise<GitRepository> {
     const repo = await this.prepare(home, repositoryId);
-    if ((await run(repo.path, ['rev-parse', '--is-bare-repository'])).toString().trim() !== 'true') {
+    let record: unknown;
+    try { record = JSON.parse(await readFile(await safePath(repo.statePath), 'utf8')); }
+    catch { throw new GitSafetyError('저장소 등록 기록이 없습니다. 등록된 주소로 안전하게 다시 복사해야 합니다.'); }
+    if (!record || typeof record !== 'object' || !('source' in record) || typeof record.source !== 'string' ||
+      !('configHash' in record) || typeof record.configHash !== 'string' || !/^[a-f0-9]{64}$/.test(record.configHash) ||
+      !('worktrees' in record) || !Array.isArray(record.worktrees) || !record.worktrees.every((value: unknown) => typeof value === 'string')) {
+      throw new GitSafetyError('저장소 등록 기록이 올바르지 않습니다.');
+    }
+    for (const value of record.worktrees as string[]) id(value);
+    repo.registration = { source: sourceUrl(record.source), configHash: record.configHash, worktrees: record.worktrees as string[] };
+    if ((await repo.git(['rev-parse', '--is-bare-repository'])).toString().trim() !== 'true') {
       throw new GitSafetyError('Runner의 bare 저장소가 아닙니다.');
     }
     return repo;
   }
 
   private async git(args: string[], input?: Buffer | string, env?: NodeJS.ProcessEnv, allowed?: number[]) {
-    await safePath(this.path);
+    await this.trusted();
     return run(this.path, args, input, env, allowed);
+  }
+
+  private async configHash(): Promise<string> {
+    return createHash('sha256').update(await readFile(await safePath(join(this.path, 'config')))).digest('hex');
+  }
+
+  private async trusted(): Promise<Registration> {
+    if (!this.registration || await this.configHash() !== this.registration.configHash) {
+      throw new GitSafetyError('Runner 저장소 설정이 등록 당시와 다릅니다. 자동 실행을 중지합니다.');
+    }
+    return this.registration;
+  }
+
+  private async saveRegistration(record: Registration): Promise<void> {
+    await safePath(this.statePath);
+    const temporary = `${this.statePath}.${randomUUID()}`;
+    try {
+      await writeFile(temporary, JSON.stringify(record), { flag: 'wx', mode: 0o600 });
+      await rename(temporary, this.statePath);
+      this.registration = record;
+    } finally { await rm(temporary, { force: true }); }
   }
 
   async head(): Promise<string> {
@@ -155,8 +213,9 @@ export class GitRepository {
   }
 
   async fetch(): Promise<string> {
+    const { source } = await this.trusted();
     // main은 로컬 초기화 커밋을 보존한다. 갱신 대상을 origin/*로 한정한다.
-    await this.git(['fetch', '--prune', '--no-recurse-submodules', 'origin', 'refs/heads/*:refs/remotes/origin/*']);
+    await this.git(['fetch', '--prune', '--no-recurse-submodules', '--upload-pack=git-upload-pack', '--', source, 'refs/heads/*:refs/remotes/origin/*']);
     return sha((await this.git(['rev-parse', '--verify', 'refs/remotes/origin/main^{commit}'])).toString().trim());
   }
 
@@ -170,19 +229,38 @@ export class GitRepository {
     await this.branch(branch);
     sha(commit);
     if (await stat(path)) throw new GitSafetyError('이미 존재하는 작업 폴더를 덮어쓰지 않습니다.');
-    // Agent가 로컬 Git 설정에 외부 필터를 심어도 다음 checkout에서 실행하지 않는다.
-    const configured = (await this.git(['config', '--name-only', '--get-regexp', '^filter\\.'], undefined, undefined, [0, 1])).toString().trim();
-    const filters = new Set(configured.split('\n').filter(Boolean).map((key) => key.slice(0, key.lastIndexOf('.'))));
-    const disable = [...filters].flatMap((filter) => ['-c', `${filter}.process=`, '-c', `${filter}.smudge=`, '-c', `${filter}.clean=`, '-c', `${filter}.required=false`]);
-    await this.git([...disable, 'worktree', 'add', '-b', branch, '--', path, commit]);
+    const record = await this.trusted();
+    if (record.worktrees.includes(worktreeId)) throw new GitSafetyError('이 작업 폴더는 정리 후 다시 만들어야 합니다.');
+    await mkdir(path, { mode: 0o700 });
+    await this.saveRegistration({ ...record, worktrees: [...record.worktrees, worktreeId] });
+    // 별도 객체·설정을 가진 clone만 Agent에 제공한다. 원본 경로를 가리키는 remote도 제거한다.
+    await run(this.home, ['-c', 'init.templateDir=', 'clone', '--no-local', '--no-hardlinks', '--no-checkout', '--', this.path, path]);
+    await run(path, ['remote', 'remove', 'origin']);
+    await run(path, ['checkout', '--no-guess', '-b', branch, commit]);
     return path;
   }
 
+  async importWorktree(worktreeId: string, branch: string): Promise<string> {
+    const path = await safePath(join(this.worktrees, id(worktreeId), '.git'));
+    if (!(await this.trusted()).worktrees.includes(worktreeId)) throw new GitSafetyError('기록하지 않은 작업 폴더입니다.');
+    await this.branch(branch);
+    const ref = `refs/agent-results/${worktreeId}`;
+    // Agent 설정을 읽어 checkout하지 않고, Git의 객체 검증을 거쳐 결과만 가져온다.
+    await this.git(['fetch', '--no-tags', '--no-recurse-submodules', '--upload-pack=git-upload-pack', '--', path, `refs/heads/${branch}:${ref}`]);
+    return sha((await this.git(['rev-parse', '--verify', `${ref}^{commit}`])).toString().trim());
+  }
+
   async removeWorktree(worktreeId: string): Promise<void> {
-    const path = await safePath(join(this.worktrees, id(worktreeId)));
-    const registered = (await this.git(['worktree', 'list', '--porcelain', '-z'])).toString().split('\0').includes(`worktree ${path}`);
-    if (registered) await this.git(['worktree', 'remove', '--force', '--', path]);
-    else if (await stat(path)) throw new GitSafetyError('git에 등록되지 않은 폴더는 삭제하지 않습니다.');
+    const path = join(this.worktrees, id(worktreeId));
+    await safePath(dirname(path));
+    const record = await this.trusted();
+    if (!record.worktrees.includes(worktreeId)) {
+      if (await stat(path)) throw new GitSafetyError('Runner가 생성 기록을 남기지 않은 폴더는 삭제하지 않습니다.');
+      return;
+    }
+    await removeReadonly(path);
+    await this.git(['update-ref', '-d', `refs/agent-results/${worktreeId}`]);
+    await this.saveRegistration({ ...record, worktrees: record.worktrees.filter((value) => value !== worktreeId) });
   }
 
   private async tree(commit: string): Promise<TreeEntry[]> {
@@ -191,7 +269,11 @@ export class GitRepository {
       const tab = record.indexOf('\t');
       const [mode, , oid] = record.slice(0, tab).split(' ');
       if (!mode || !oid) throw new GitSafetyError('git tree 형식이 올바르지 않습니다.');
-      return { mode, oid, path: record.slice(tab + 1) };
+      const path = record.slice(tab + 1);
+      if (isAbsolute(path) || path.split('/').some((part) => ['', '.', '..', '.git'].includes(part.toLowerCase()))) {
+        throw new GitSafetyError('Git 객체의 경로가 올바르지 않습니다.');
+      }
+      return { mode, oid, path };
     });
   }
 
@@ -221,7 +303,7 @@ export class GitRepository {
           const oid = pointer?.[1];
           if (!pointer || !oid) throw new GitSafetyError('Git LFS 포인터 형식이 올바르지 않습니다.');
           await this.git(['lfs', 'version']);
-          await this.git(['lfs', 'fetch', 'origin', commit]);
+          await this.git(['-c', `remote.origin.url=${(await this.trusted()).source}`, 'lfs', 'fetch', 'origin', commit]);
           content = await readFile(await safePath(join(this.path, 'lfs/objects', oid.slice(0, 2), oid.slice(2, 4), oid)));
           if (content.length !== Number(pointer[2]) || createHash('sha256').update(content).digest('hex') !== oid) {
             throw new GitSafetyError('Git LFS 파일의 크기·해시가 일치하지 않습니다.');
@@ -255,8 +337,8 @@ export class GitRepository {
     const changed = (await this.git(['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', mergeBase, head, '--'])).toString().split('\0').filter(Boolean);
     const rejected: RejectedPath[] = changed.filter((path) => ['prototype', '.agentwbs'].some((prefix) => path === prefix || path.startsWith(`${prefix}/`)))
       .map((path) => ({ path, reason: 'protected' }));
-    const entries = await this.tree(head);
-    const tracked = entries.map((entry) => entry.path);
+    const tracked = (await this.git(['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--diff-filter=AMT', '--name-only', '-z', mergeBase, head, '--'])).toString().split('\0').filter(Boolean);
+    if (tracked.length === 0) return rejected;
     // 작업 브랜치가 .gitignore를 지워 검사에서 빠져나가지 못하도록 기준 규칙도 적용한다.
     for (const commit of new Set([mergeBase, head])) {
       const scratch = await safePath(join(this.home, 'inputs', this.repositoryId, `ignore-${randomUUID()}`));
@@ -297,6 +379,8 @@ export class GitRepository {
       const records = entries.map((entry) => `${entry.mode} ${entry.oid}\t${entry.path}\0`).join('');
       await this.git(['update-index', '-z', '--index-info'], records, env);
       const tree = (await this.git(['write-tree'], undefined, env)).toString().trim();
+      const resetPaths = (await this.git(['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', current, tree])).toString().split('\0').filter(Boolean);
+      if (resetPaths.some((path) => !target(path))) throw new GitSafetyError('초기화가 보존 대상 파일을 변경하여 중지합니다.');
       const oldTree = (await this.git(['rev-parse', `${current}^{tree}`])).toString().trim();
       const localTree = (await this.git(['rev-parse', `${local}^{tree}`])).toString().trim();
       const ancestor = (await this.git(['merge-base', current, local])).toString().trim();
@@ -306,14 +390,21 @@ export class GitRepository {
         await this.git(['update-ref', 'refs/heads/main', result, local]);
       }
     } finally { await rm(index, { force: true }); }
-    for (const name of options.worktrees) await this.removeWorktree(name);
-    for (const name of options.inputs) await this.removeInput(name);
+    const failures: CleanupFailure[] = [];
+    const attempt = async (name: string, path: string, action: () => Promise<unknown>) => {
+      try { await action(); }
+      catch (error) { failures.push({ name, path, detail: error instanceof Error ? error.message : '수동 조치가 필요합니다.' }); }
+    };
+    for (const name of options.worktrees) await attempt(`worktree:${name}`, join(this.worktrees, name), () => this.removeWorktree(name));
+    for (const name of options.inputs) await attempt(`input:${name}`, join(this.inputs, name), () => this.removeInput(name));
     for (const branch of new Set(options.branches)) {
-      // 없는 브랜치는 재시도의 정상 결과다. 체크아웃된 브랜치는 git이 삭제를 거부한다.
-      const ref = `refs/heads/${branch}`;
-      const existing = (await this.git(['for-each-ref', '--format=%(refname)', ref])).toString().trim().split('\n');
-      if (existing.includes(ref)) await this.git(['branch', '-D', '--', branch]);
+      await attempt(`branch:${branch}`, this.path, async () => {
+        const ref = `refs/heads/${branch}`;
+        const existing = (await this.git(['for-each-ref', '--format=%(refname)', ref])).toString().trim().split('\n');
+        if (existing.includes(ref)) await this.git(['branch', '-D', '--', branch]);
+      });
     }
+    if (failures.length > 0) throw new GitCleanupError(failures);
     return { commit: result };
   }
 }

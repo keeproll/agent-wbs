@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { GitRepository } from '../../src/git/repository.ts';
+import { GitCleanupError, GitRepository } from '../../src/git/repository.ts';
 
 const archive = tmpdir();
 let root: string;
@@ -305,7 +305,8 @@ test('Git LFS 도구나 원본이 없으면 실패하며 반쪽 입력 사본을
   const bin = join(root, 'bin');
   await mkdir(bin);
   await symlink('/usr/bin/git', join(bin, 'git'));
-  git(repo.path, 'config', 'alias.lfs', `!/usr/bin/touch '${join(root, 'lfs-alias-executed')}'`);
+  const work = await repo.createWorktree('task-1', 'agent/TASK-1', head);
+  git(work, 'config', 'alias.lfs', `!/usr/bin/touch '${join(root, 'lfs-alias-executed')}'`);
   vi.stubEnv('PATH', bin);
   await expect(repo.checkoutInput('missing-lfs', head)).rejects.toThrow();
   await expect(lstat(join(root, 'runner/inputs/project/missing-lfs'))).rejects.toMatchObject({ code: 'ENOENT' });
@@ -316,9 +317,10 @@ test('작업 폴더를 만들 때 저장소에 설정된 외부 변환 명령을
   await file(join(source, '.gitattributes'), 'src/*.ts filter=attack\n');
   const head = await commit();
   repo = await clone();
-  git(repo.path, 'config', 'filter.attack.smudge', `touch '${join(root, 'filter-executed')}'`);
-  git(repo.path, 'config', 'filter.attack.required', 'true');
-  const work = await repo.createWorktree('task-1', 'agent/TASK-1', head);
+  const agent = await repo.createWorktree('task-1', 'agent/TASK-1', head);
+  git(agent, 'config', 'filter.attack.smudge', `touch '${join(root, 'filter-executed')}'`);
+  git(agent, 'config', 'filter.attack.required', 'true');
+  const work = await repo.createWorktree('task-2', 'agent/TASK-2', head);
   expect(await readFile(join(work, 'src/existing.ts'), 'utf8')).toBe('등록 전 코드');
   await expect(lstat(join(root, 'filter-executed'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
@@ -451,4 +453,97 @@ test('E6 기존 강제 추가 파일은 허용하고 Task가 수정한 제외 �
   git(source, 'push', 'origin', 'main');
   await repo.fetch();
   expect(await repo.checkTask(base, changed)).toContainEqual({ path: '.env.example', reason: 'ignored' });
+  await rm(join(source, '.env.example'));
+  const deleted = await commit();
+  git(source, 'push', 'origin', 'main');
+  await repo.fetch();
+  expect(await repo.checkTask(base, deleted)).toEqual([]);
+});
+
+test.each(['remote.origin.uploadpack', 'remote.origin.url', 'lfs.customtransfer.evil.path', 'core.bare'])(
+  'Runner 설정 %s가 직접 변조되면 실행·재시작을 중지한다', async (setting) => {
+    repo = await clone();
+    git(repo.path, 'config', setting, setting === 'core.bare' ? 'false' : '/변조된-값');
+    await expect(repo.fetch()).rejects.toThrow(/등록 당시와 다릅니다/);
+    await expect(GitRepository.open(join(root, 'runner'), 'project')).rejects.toThrow(/등록 당시와 다릅니다/);
+  },
+);
+
+test('Agent 저장소는 객체·설정을 공유하지 않고 결과만 검증하여 가져온다', async () => {
+  repo = await clone();
+  git(repo.path, 'branch', 'personal', baseline);
+  const work = await repo.createWorktree('task-1', 'agent/TASK-1', baseline);
+  expect(git(work, 'rev-parse', '--git-common-dir')).toBe('.git');
+  expect(() => git(work, 'remote', 'get-url', 'origin')).toThrow();
+  await expect(lstat(join(work, '.git/objects/info/alternates'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(() => git(work, 'branch', '-D', 'personal')).toThrow();
+  expect(git(repo.path, 'branch', '--list', 'personal')).toContain('personal');
+  await file(join(work, 'src/result.ts'), '작업 결과');
+  git(work, 'add', '-A');
+  git(work, 'commit', '-m', 'Agent 결과');
+  const marker = join(root, 'import-executed');
+  git(work, 'config', 'remote.origin.uploadpack', `touch '${marker}'; git-upload-pack`);
+  git(work, 'config', 'uploadpack.packObjectsHook', `touch '${marker}'; git pack-objects`);
+  const imported = await repo.importWorktree('task-1', 'agent/TASK-1');
+  expect(imported).toBe(git(work, 'rev-parse', 'HEAD'));
+  expect(await repo.checkTask(baseline, imported)).toEqual([]);
+  expect(await repo.head()).toBe(baseline);
+  await expect(lstat(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+  await file(join(work, 'prototype/docs/guide.md'), '보호 경로 변조');
+  git(work, 'commit', '-am', '보호 경로 변경');
+  expect(await repo.checkTask(baseline, await repo.importWorktree('task-1', 'agent/TASK-1')))
+    .toContainEqual({ path: 'prototype/docs/guide.md', reason: 'protected' });
+  await repo.removeWorktree('task-1');
+  expect(() => git(repo.path, 'rev-parse', '--verify', 'refs/agent-results/task-1')).toThrow();
+});
+
+test('기록한 작업 폴더의 Git 정보가 없어지거나 링크로 바뀌어도 외부 파일을 건드리지 않고 정리한다', async () => {
+  repo = await clone();
+  const work = await repo.createWorktree('task-1', 'agent/TASK-1', baseline);
+  await rm(join(work, '.git'), { recursive: true });
+  await (await GitRepository.open(join(root, 'runner'), 'project')).removeWorktree('task-1');
+  await expect(lstat(work)).rejects.toMatchObject({ code: 'ENOENT' });
+  const reopened = await GitRepository.open(join(root, 'runner'), 'project');
+  const replaced = await reopened.createWorktree('task-2', 'agent/TASK-2', baseline);
+  await rm(replaced, { recursive: true });
+  const outside = join(root, 'outside');
+  await file(join(outside, 'keep'), '보존');
+  await symlink(outside, replaced);
+  await reopened.removeWorktree('task-2');
+  await expect(lstat(replaced)).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(await readFile(join(outside, 'keep'), 'utf8')).toBe('보존');
+});
+
+test('정리 항목 하나가 실패해도 나머지는 끝내고 수동 조치 뒤 재시도할 수 있다', async () => {
+  repo = await clone();
+  const work = await repo.createWorktree('task-1', 'agent/TASK-1', baseline);
+  const input = await repo.checkoutInput('v1', baseline);
+  const unknown = join(root, 'runner/worktrees/project/unknown');
+  await file(join(unknown, 'keep'), '기록하지 않은 폴더');
+  git(repo.path, 'branch', 'agent/recorded', baseline);
+  const options = { baseCommit: baseline, branches: ['agent/recorded'], worktrees: ['unknown', 'task-1'], inputs: ['v1'] };
+  const error = await repo.reset(options).then(() => undefined, (error: unknown) => error);
+  expect(error).toBeInstanceOf(GitCleanupError);
+  expect((error as GitCleanupError).failures).toMatchObject([{ name: 'worktree:unknown', path: unknown }]);
+  expect((error as Error).message).toContain('수동 조치');
+  await expect(lstat(work)).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(lstat(input)).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(git(repo.path, 'branch', '--list', 'agent/recorded')).toBe('');
+  expect(await readFile(join(unknown, 'keep'), 'utf8')).toBe('기록하지 않은 폴더');
+  await rm(unknown, { recursive: true });
+  await repo.reset(options);
+});
+
+test('Agent 결과의 잘못된 Git tree 경로는 가져오는 단계에서 거부한다', async () => {
+  repo = await clone();
+  const work = await repo.createWorktree('task-1', 'agent/TASK-1', baseline);
+  const blob = git(work, 'rev-parse', `${baseline}:prototype/docs/guide.md`);
+  const tree = execFileSync('git', ['hash-object', '-w', '-t', 'tree', '--literally', '--stdin'], {
+    cwd: work, encoding: 'utf8', input: Buffer.concat([Buffer.from('100644 ../escaped\0'), Buffer.from(blob, 'hex')]),
+  }).trim();
+  const invalid = git(work, 'commit-tree', tree, '-p', baseline, '-m', '잘못된 경로');
+  git(work, 'update-ref', 'refs/heads/agent/TASK-1', invalid);
+  await expect(repo.importWorktree('task-1', 'agent/TASK-1')).rejects.toThrow();
+  await expect(lstat(join(root, 'runner/worktrees/project/escaped'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(await repo.head()).toBe(baseline);
 });
