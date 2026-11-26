@@ -95,7 +95,7 @@ export function registerTaskRoutes(app: FastifyInstance, pool: Pool): void {
     });
 
     route('getTask', TASK, 'Task 상세 조회', async (request) => {
-      const detail = await read(pool, (client) => taskDetail(client, keyOf(request)));
+      const detail = await read(pool, (client) => taskDetail(client, keyOf(request), true));
       if (!detail) throw new TaskError('TASK_NOT_FOUND', { taskKey: keyOf(request) });
       return publicDetail(detail);
     });

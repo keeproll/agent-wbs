@@ -107,11 +107,15 @@ const compareWbs = (a: string, b: string) => {
 };
 
 /** Task 상세. 없으면 null. 삭제된 Task도 이력 확인을 위해 돌려준다(deletedAt). */
-export async function taskDetail(client: PoolClient, taskKey: string) {
+/**
+ * `withSchedule`: 일정 요약을 계산한다. 일정은 프로젝트 전체를 계산해야 해서(Task 150여 개에 약 0.2초) 조회 응답(GET 상세)에서만 켠다.
+ * 쓰기 경로 안의 상세(변경 응답·충돌 창·승인 검사)는 일정 요약을 null로 둔다(계약상 nullable).
+ */
+export async function taskDetail(client: PoolClient, taskKey: string, withSchedule = false) {
   const found = (await client.query<{ project_id: string }>('select project_id from tasks where task_key=$1', [taskKey])).rows[0];
   if (!found) return null;
   const graph = await loadGraph(client, found.project_id);
-  const { keyOf, summary } = summarize(graph, await taskSchedules(client, found.project_id));
+  const { keyOf, summary } = summarize(graph, withSchedule ? await taskSchedules(client, found.project_id) : new Map());
   const task = graph.tasks.find((item) => item.task_key === taskKey);
   if (!task) return null;
   const [spec, outputs, designs, checklist, grades, subagents, split] = await Promise.all([
