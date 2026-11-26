@@ -24,7 +24,7 @@ import { useNotice } from '../../shared/ui/feedback.tsx';
 import { CHANGE_CHIP, INPUT_STEPS, STEP_CHIP, inputArea, shortSha, type ProjectState, type StepStatus } from './labels.ts';
 import { useGithubSettings } from './github.ts';
 import { RepoLayout } from './RegisterView.tsx';
-import { useReapply } from './useReapply.ts';
+import { useProjectReload } from './reload.ts';
 import { ResetModal } from './ResetModal.tsx';
 
 type Active = Extract<ProjectState, { approvedAt: unknown }>;
@@ -97,17 +97,15 @@ function InputsCard({ project }: { project: Active }) {
     onRestore: (data) => { setInstr(data.instr); },
   });
   const refresh = () => { void invalidateTopics(queryClient, ['project', 'alert']); };
+  const reloadProject = useProjectReload();
+  /** 최신 프로젝트를 서버에서 읽는다(실패는 그대로 던진다). 충돌 창 「다시 적용」의 요청 내용을 만들 때 쓴다. */
   const latest = async () => {
-    const p = await client.call('getProject', {});
+    const p = await reloadProject();
     if (!('changeCommits' in p)) throw new Error('등록된 프로젝트가 없습니다.');
     return p;
   };
-
-  // 충돌 재적용 요청은 결과가 확인될 때까지 같은 본문·키로 다시 보낸다(useReapply).
-  const reapplyAnalyze = useReapply<AnalyzeBody>();
-  const reapplySkip = useReapply<{ updatedAt: string; commits: string[] }>();
-  const reapplyRetry = useReapply<{ updatedAt: string; version: number }>();
-  const reapplyRecheck = useReapply<{ updatedAt: string }>();
+  /** 충돌 창 「최신 내용 불러오기」: 실제로 읽혀야 성공이다. */
+  const reload = async () => { await reloadProject(); };
   interface AnalyzeBody { updatedAt: string; commit: string; commits: string[]; instr?: string }
   const analyzeBody = (p: Pick<Active, 'updatedAt' | 'inputHead' | 'changeCommits'>): AnalyzeBody => ({
     updatedAt: p.updatedAt, commit: p.inputHead, commits: p.changeCommits.filter((c) => c.state === 'pending').map((c) => c.sha),
@@ -122,12 +120,9 @@ function InputsCard({ project }: { project: Active }) {
     onSuccess: (_, payload) => { setInstr((cur) => (cur.trim() === (payload.instr ?? '') ? '' : cur)); refresh(); },
     successNotice: `입력 자료 v${String((last?.v ?? 0) + 1)} (main @ ${shortSha(project.inputHead)})으로 고정했습니다. Planning이 v${String(last?.v ?? 0)}과의 차이를 분석합니다.`,
     onRejected: refresh,
-    onConflictReload: refresh,
-    onConflictReapply: async () => {
-      await reapplyAnalyze(async () => analyzeBody(await latest()), (body, key) => client.call('analyzeInputs', { body, idempotencyKey: key }));
-      setInstr('');
-      refresh();
-    },
+    onConflictReload: reload,
+    // 다시 적용도 공통 useSave가 같은 run·결과 미확인 보관함으로 보낸다(재리뷰 P2-1).
+    reapplyRequest: async () => analyzeBody(await latest()),
   });
   interface SkipBody { updatedAt: string; commits: string[] }
   const skip = useSave<unknown, SkipBody>({
@@ -139,13 +134,10 @@ function InputsCard({ project }: { project: Active }) {
     onSuccess: refresh,
     successNotice: '변경 커밋을 「확인함 · 분석 안 함」으로 남겼습니다. 다음 분석 때 이 변경도 함께 비교됩니다.',
     onRejected: refresh,
-    onConflictReload: refresh,
-    onConflictReapply: async () => {
-      await reapplySkip(async () => {
-        const p = await latest();
-        return { updatedAt: p.updatedAt, commits: p.changeCommits.filter((c) => c.state === 'pending').map((c) => c.sha) };
-      }, (body, key) => client.call('skipInputs', { body, idempotencyKey: key }));
-      refresh();
+    onConflictReload: reload,
+    reapplyRequest: async () => {
+      const p = await latest();
+      return { updatedAt: p.updatedAt, commits: p.changeCommits.filter((c) => c.state === 'pending').map((c) => c.sha) };
     },
   });
   const retry = useSave<unknown, { updatedAt: string; version: number }>({
@@ -156,12 +148,8 @@ function InputsCard({ project }: { project: Active }) {
     onSuccess: refresh,
     successNotice: '차이 분석을 실패한 단계부터 다시 시도합니다.',
     onRejected: refresh,
-    onConflictReload: refresh,
-    onConflictReapply: async () => {
-      await reapplyRetry(async () => { const p = await latest(); return { updatedAt: p.updatedAt, version: p.inputJob?.version ?? 0 }; },
-        (body, key) => client.call('retryInputs', { body, idempotencyKey: key }));
-      refresh();
-    },
+    onConflictReload: reload,
+    reapplyRequest: async () => { const p = await latest(); return { updatedAt: p.updatedAt, version: p.inputJob?.version ?? 0 }; },
   });
   const recheck = useSave<ResponseOf<'recheckInputs'>, { updatedAt: string }>({
     target: '입력 이력 복구 확인',
@@ -170,12 +158,8 @@ function InputsCard({ project }: { project: Active }) {
     run: ({ payload, idempotencyKey }) => client.call('recheckInputs', { body: payload, idempotencyKey }),
     onSuccess: (res) => { notify(`입력 확인을 다시 요청했습니다 (${String(res.inputRecheck)}번째). Runner가 main 이력을 다시 확인해 연결이 맞으면 경고가 풀립니다.`); refresh(); },
     onRejected: refresh,
-    onConflictReload: refresh,
-    onConflictReapply: async () => {
-      const res = await reapplyRecheck(async () => ({ updatedAt: (await latest()).updatedAt }), (body, key) => client.call('recheckInputs', { body, idempotencyKey: key }));
-      notify(`입력 확인을 다시 요청했습니다 (${String(res.inputRecheck)}번째). Runner가 main 이력을 다시 확인해 연결이 맞으면 경고가 풀립니다.`);
-      refresh();
-    },
+    onConflictReload: reload,
+    reapplyRequest: async () => ({ updatedAt: (await latest()).updatedAt }),
   });
   const busyAny = analyze.busy || skip.busy;
 

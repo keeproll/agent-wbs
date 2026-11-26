@@ -207,3 +207,53 @@ test('GitHub 연결 상태를 읽지 못하면(서버 404) 상태를 모른다�
   await page.reload();
   await expect(page.getByTestId('gh-unknown')).toContainText('GitHub 연결 상태를 확인하지 못했습니다');
 });
+
+test('재리뷰 P2-1: 재적용 응답 유실 뒤 Esc로 닫아도 결과 모르는 요청이 남고, 일반 버튼은 새 키로 보내지 않으며 같은 키·본문으로만 다시 보낸다', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-11-05T20:00:00+09:00') });
+  const api = await openProject(page, activeProject());
+  api.on('GET /api/alerts', (route) => json(route, 200, { items: [REWRITE] }));
+  await page.reload();
+  const url = 'POST /api/project/inputs/recheck';
+  api.on(url, (route) => json(route, 409, errorBody('VERSION_CONFLICT', { details: { current: null, changes: [] } })));
+  await page.getByRole('button', { name: '복구 확인 · 입력 확인 다시 시도' }).click();
+  const modal = page.getByRole('alertdialog');
+  api.on('GET /api/project', (r) => json(r, 200, activeProject({ updatedAt: V2 })));
+  api.on(url, (route) => route.abort('failed'));
+  await modal.getByRole('button', { name: '최신 내용에 내 변경 다시 적용' }).click();
+  await expect(modal).toContainText('NETWORK_ERROR');
+  await page.keyboard.press('Escape');
+  await expect(modal).toHaveCount(0);
+  // 창을 닫아도 결과 모르는 요청은 오류 막대에 남는다.
+  await expect(page.getByRole('alert')).toContainText('NETWORK_ERROR');
+  // 그사이 변경 이벤트로 프로젝트 버전이 바뀐다.
+  api.on('GET /api/project', (r) => json(r, 200, activeProject({ updatedAt: '2026-11-05T11:10:00.000000Z' })));
+  let once = true;
+  api.on('GET /api/changes', (r) => json(r, 200, { events: once ? [(once = false, { id: 1, topic: 'project', refs: [] })] : [], next: 1, reset: false }));
+  await page.clock.runFor(3_100);
+  await expect.poll(() => api.requests('GET /api/project').length).toBeGreaterThan(2);
+  let n = 0;
+  api.on(url, (route) => json(route, 202, { inputRecheck: ++n }));
+  await page.getByTestId('rewrite-alert').getByRole('button', { name: '복구 확인 · 입력 확인 다시 시도' }).click();
+  await expect(page.getByRole('alert')).toContainText('이전 요청의 결과를 아직 모릅니다.');
+  expect(n).toBe(0);
+  await page.getByRole('alert').getByRole('button', { name: '다시 시도' }).click();
+  await expect(page.getByText('입력 확인을 다시 요청했습니다 (1번째).', { exact: false })).toBeVisible();
+  const [, lost, again] = api.requests(url);
+  expect(again?.headers()['idempotency-key']).toBe(lost?.headers()['idempotency-key']);
+  expect(again?.postDataJSON()).toEqual({ updatedAt: V2 });
+  expect(api.requests(url)).toHaveLength(3);
+});
+
+test('재리뷰 P2-2: 입력 분석 충돌 창의 최신 불러오기가 실패하면 창을 열어 둔 채 이유를 보이고 지시를 지우지 않는다', async ({ page }) => {
+  const api = await openProject(page);
+  api.on('POST /api/project/inputs', (route) => json(route, 409, errorBody('VERSION_CONFLICT', { details: { current: null, changes: [] } })));
+  await page.getByLabel('팀장 지시').fill('유지할 지시');
+  await page.getByRole('button', { name: '이 버전으로 분석' }).click();
+  const modal = page.getByRole('alertdialog');
+  api.on('GET /api/project', (r) => json(r, 503, errorBody('UNAVAILABLE')));
+  await modal.getByRole('button', { name: '최신 내용 불러오기 (내 변경 버림)' }).click();
+  await expect(modal).toContainText('최신 내용을 불러오지 못했습니다');
+  await expect(modal).toContainText('503 UNAVAILABLE');
+  await expect(page.getByText('최신 내용을 불러왔습니다. 내 변경은 적용되지 않았습니다.')).toHaveCount(0);
+  await expect(page.getByLabel('팀장 지시')).toHaveValue('유지할 지시');
+});

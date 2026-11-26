@@ -218,3 +218,24 @@ test('리뷰 P1: 초안 단계의 재분석 지시도 같은 보호기 하나로
   await page.getByRole('button', { name: '저장하지 않고 이동' }).click();
   await expect(page).toHaveURL(/\/settings/);
 });
+
+test('재리뷰 P2-2: 기술 결정 충돌 창의 최신 불러오기가 실패하면 선택을 지우지 않고 성공 안내도 없다', async ({ page }) => {
+  const api = await openBoot(page, bootProject({ steps: steps('tech'), decisions: DECISIONS }));
+  const url = `POST /api/projects/${PROJECT_ID}/boot/tech/confirm`;
+  api.on(url, (route) => json(route, 409, errorBody('VERSION_CONFLICT', { details: { current: null, changes: [] } })));
+  for (const td of ['TD-03', 'TD-05']) await page.locator(`[data-td="${td}"]`).getByRole('button', { name: '승인', exact: true }).click();
+  await page.getByRole('button', { name: '기술 결정 확정', exact: true }).click();
+  const modal = page.getByRole('alertdialog');
+  await expect(modal).toBeVisible();
+  api.on('GET /api/project', (r) => json(r, 503, errorBody('UNAVAILABLE')));
+  await modal.getByRole('button', { name: '최신 내용 불러오기 (내 변경 버림)' }).click();
+  await expect(modal).toContainText('최신 내용을 불러오지 못했습니다');
+  await expect(page.getByText('최신 내용을 불러왔습니다. 내 변경은 적용되지 않았습니다.')).toHaveCount(0);
+  await expect(page.locator('[data-td="TD-05"]').getByRole('button', { name: '승인', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  // 조회가 되살아나면 그때 버리고 닫는다.
+  api.on('GET /api/project', (r) => json(r, 200, bootProject({ steps: steps('tech'), decisions: DECISIONS })));
+  await modal.getByRole('button', { name: '최신 내용 불러오기 (내 변경 버림)' }).click();
+  await expect(modal).toHaveCount(0);
+  await expect(page.getByText('최신 내용을 불러왔습니다. 내 변경은 적용되지 않았습니다.')).toBeVisible();
+  await expect(page.locator('[data-td="TD-05"]').getByRole('button', { name: '승인', exact: true })).toHaveAttribute('aria-pressed', 'false');
+});

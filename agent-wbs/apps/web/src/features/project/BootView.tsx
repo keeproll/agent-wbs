@@ -21,7 +21,7 @@ import { BusyButton } from '../../shared/ui/BusyButton.tsx';
 import { useNotice } from '../../shared/ui/feedback.tsx';
 import { BOOT_STEPS, fmtH, STEP_CHIP, TECH_AUTH, TECH_LV, TECH_ST, TYPE_LABEL, shortSha, type BootProject, type Decision, type StepStatus } from './labels.ts';
 import { CleanupBanner } from './ResetHistory.tsx';
-import { useReapply } from './useReapply.ts';
+import { useProjectReload } from './reload.ts';
 import { ResetModal } from './ResetModal.tsx';
 
 type Pick = 'approve' | 'reject';
@@ -130,6 +130,7 @@ function BootFailure({ project, stepLabel, onCancel }: { project: BootProject; s
   const queryClient = useQueryClient();
   const b = project.bootstrap;
   const refresh = () => { void invalidateTopics(queryClient, ['project']); };
+  const reloadProject = useProjectReload();
   type RetryBody = { revision: number } | { revision: null; runNo: number };
   const retry = useSave<unknown, RetryBody>({
     target: '초기 분석 다시 시도',
@@ -139,8 +140,9 @@ function BootFailure({ project, stepLabel, onCancel }: { project: BootProject; s
     onSuccess: refresh,
     successNotice: '실패한 단계부터 다시 시도합니다.',
     onRejected: refresh,
-    onConflictReload: refresh,
-    onConflictReapply: async () => { await queryClient.invalidateQueries({ queryKey: ['getProject'] }); },
+    onConflictReload: async () => { await reloadProject(); },
+    // 회차가 바뀌었으면 새 상태를 보고 팀장이 다시 누른다(자동 재시도하지 않음).
+    onConflictReapply: async () => { await reloadProject(); },
   });
   return (
     <div className="banner danger" data-testid="boot-fail">
@@ -160,7 +162,6 @@ function BootFailure({ project, stepLabel, onCancel }: { project: BootProject; s
 function TechPanel({ project, techStep, onDirty }: { project: BootProject; techStep: StepStatus | undefined; onDirty: (dirty: boolean) => void }) {
   const { client } = useApi();
   const queryClient = useQueryClient();
-  const notify = useNotice();
   const decisions = project.bootstrap.decisions;
   const waiting = techStep === 'run';
   /** 결정 id → 고른 값. 위치가 아니라 id로 기억한다. */
@@ -181,8 +182,7 @@ function TechPanel({ project, techStep, onDirty }: { project: BootProject; techS
   const build = (list: readonly Decision[], from: Record<string, Pick>): Body => ({
     decisions: list.filter((d) => d.status === 'pending' && from[d.id]).map((d) => ({ id: d.id, choice: from[d.id] as Pick, updatedAt: d.updatedAt })),
   });
-  // 충돌 재적용 요청은 결과가 확인될 때까지 같은 본문·키로 다시 보낸다(useReapply).
-  const reapply = useReapply<Body>();
+  const reloadProject = useProjectReload();
   const confirm = useSave<ResponseOf<'confirmTech'>, Body>({
     target: '기술 결정 확정',
     failTitle: '확정하지 못했습니다',
@@ -196,16 +196,13 @@ function TechPanel({ project, techStep, onDirty }: { project: BootProject; techS
     },
     successNotice: '기술 결정을 확정했습니다. 이 결정을 기준으로 WBS 초안을 작성합니다.',
     onRejected: refresh,
-    onConflictReload: () => { setPicks({}); refresh(); },
-    onConflictReapply: async () => {
-      await reapply(async () => {
-        const latest = await client.call('getProject', {});
-        if (!('bootstrap' in latest)) throw new Error('초기 분석 단계가 아닙니다.');
-        return build(latest.bootstrap.decisions, chosen);
-      }, (body, key) => client.call('confirmTech', { params: { projectId: project.id }, body, idempotencyKey: key }));
-      setPicks({});
-      refresh();
-      notify('최신 결정에 내 선택을 다시 적용해 확정했습니다.');
+    // 최신을 실제로 읽은 뒤에만 선택을 버린다. 읽기에 실패하면 공통 창이 이유를 보이고 선택은 남는다(재리뷰 P2-2).
+    onConflictReload: async () => { await reloadProject(); setPicks({}); },
+    // 다시 적용도 공통 useSave가 같은 run·결과 미확인 보관함으로 보낸다(재리뷰 P2-1).
+    reapplyRequest: async () => {
+      const latest = await reloadProject();
+      if (!('bootstrap' in latest)) throw new Error('초기 분석 단계가 아닙니다.');
+      return build(latest.bootstrap.decisions, chosen);
     },
   });
   const submit = () => {
@@ -272,10 +269,12 @@ function DraftPanel({ project, onDirty }: { project: BootProject; onDirty: (dirt
   });
   const refresh = () => { void invalidateTopics(queryClient, ['project']); };
   /** 충돌(그사이 새 초안 도착): 본 적 없는 초안을 자동으로 승인·재분석하지 않는다. 최신 초안을 다시 읽고 팀장이 다시 누른다. */
+  const reloadProject = useProjectReload();
   const reloadOnly = async () => {
-    await queryClient.invalidateQueries({ queryKey: ['getProject'] });
+    await reloadProject();
     notify('새 초안을 불러왔습니다. 새 초안을 확인한 뒤 다시 진행하세요.');
   };
+  const reload = async () => { await reloadProject(); };
 
   const approve = useSave<ResponseOf<'approveBootstrap'>, { revision: number }>({
     target: '초기 WBS 승인',
@@ -296,7 +295,7 @@ function DraftPanel({ project, onDirty }: { project: BootProject; onDirty: (dirt
       );
     },
     onRejected: refresh,
-    onConflictReload: refresh,
+    onConflictReload: reload,
     onConflictReapply: reloadOnly,
   });
   const rerun = useSave<ResponseOf<'rerunBootstrap'>, { revision: number; instruction: string }>({
@@ -308,7 +307,7 @@ function DraftPanel({ project, onDirty }: { project: BootProject; onDirty: (dirt
     onSuccess: (_, payload) => { setReInstr((cur) => (cur.trim() === payload.instruction ? '' : cur)); refresh(); },
     successNotice: '재분석을 요청했습니다. Codex 독립 분석부터 다시 진행합니다.',
     onRejected: refresh,
-    onConflictReload: refresh,
+    onConflictReload: reload,
     onConflictReapply: reloadOnly,
   });
   const askRerun = () => {
