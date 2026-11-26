@@ -12683,6 +12683,16 @@
             "schema": {
               "$ref": "#/components/schemas/Id"
             }
+          },
+          {
+            "name": "ref",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
           }
         ],
         "responses": {
@@ -13605,6 +13615,16 @@
             }
           },
           {
+            "name": "ref",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
+          },
+          {
             "name": "kind",
             "in": "query",
             "required": false,
@@ -13750,6 +13770,16 @@
             "required": true,
             "schema": {
               "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "ref",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
             }
           }
         ],
@@ -14041,6 +14071,16 @@
             }
           },
           {
+            "name": "ref",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
+          },
+          {
             "name": "store",
             "in": "query",
             "required": false,
@@ -14186,6 +14226,16 @@
             "required": true,
             "schema": {
               "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "ref",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
             }
           }
         ],
@@ -14558,6 +14608,16 @@
             "schema": {
               "$ref": "#/components/schemas/Id"
             }
+          },
+          {
+            "name": "ref",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
           }
         ],
         "responses": {
@@ -14672,6 +14732,16 @@
             "required": true,
             "schema": {
               "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "ref",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
             }
           }
         ],
@@ -14800,6 +14870,9 @@
                       "contract",
                       "code"
                     ]
+                  },
+                  "decisionId": {
+                    "$ref": "#/components/schemas/Id"
                   }
                 },
                 "additionalProperties": false
@@ -26434,6 +26507,11 @@
                   "commit": {
                     "$ref": "#/components/schemas/Sha"
                   },
+                  "ref": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
                   "files": {
                     "type": "array",
                     "items": {
@@ -26469,6 +26547,9 @@
                           "type": "string",
                           "minLength": 1,
                           "pattern": "\\S"
+                        },
+                        "raw": {
+                          "type": "string"
                         }
                       },
                       "additionalProperties": false
@@ -26498,11 +26579,98 @@
                         "path": {
                           "$ref": "#/components/schemas/RepoPath"
                         },
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "taskKey": {
+                          "$ref": "#/components/schemas/TaskKey"
+                        },
                         "content": {
                           "type": "object",
                           "patternProperties": {
                             "^.*$": {}
                           }
+                        },
+                        "contract": {
+                          "type": "object",
+                          "required": [
+                            "fields"
+                          ],
+                          "properties": {
+                            "fields": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "path",
+                                  "type",
+                                  "required"
+                                ],
+                                "properties": {
+                                  "path": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "pattern": "\\S"
+                                  },
+                                  "type": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "pattern": "\\S"
+                                  },
+                                  "required": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "additionalProperties": false
+                              }
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "extracted": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "required": [
+                                "fields"
+                              ],
+                              "properties": {
+                                "fields": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "required": [
+                                      "path",
+                                      "type",
+                                      "required"
+                                    ],
+                                    "properties": {
+                                      "path": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "pattern": "\\S"
+                                      },
+                                      "type": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "pattern": "\\S"
+                                      },
+                                      "required": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "additionalProperties": false
+                                  }
+                                }
+                              },
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "additionalProperties": false
@@ -26552,6 +26720,144 @@
                         }
                       },
                       "additionalProperties": false
+                    }
+                  },
+                  "edges": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "from",
+                        "to",
+                        "kind"
+                      ],
+                      "properties": {
+                        "from": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "to": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "kind": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "ownership": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "data",
+                        "source",
+                        "copy",
+                        "sync",
+                        "lag"
+                      ],
+                      "properties": {
+                        "data": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "source": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "copy": {
+                          "type": "string"
+                        },
+                        "sync": {
+                          "type": "string"
+                        },
+                        "lag": {
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "components": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "layer",
+                        "name",
+                        "tech",
+                        "note",
+                        "decisionId"
+                      ],
+                      "properties": {
+                        "id": {
+                          "$ref": "#/components/schemas/Id"
+                        },
+                        "layer": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "tech": {
+                          "type": "string"
+                        },
+                        "note": {
+                          "type": "string"
+                        },
+                        "decisionId": {
+                          "anyOf": [
+                            {
+                              "$ref": "#/components/schemas/Id"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "links": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "from",
+                        "to",
+                        "via",
+                        "contractPath"
+                      ],
+                      "properties": {
+                        "from": {
+                          "$ref": "#/components/schemas/Id"
+                        },
+                        "to": {
+                          "$ref": "#/components/schemas/Id"
+                        },
+                        "via": {
+                          "type": "string"
+                        },
+                        "contractPath": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      }
                     }
                   }
                 },
