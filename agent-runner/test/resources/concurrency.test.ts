@@ -10,6 +10,16 @@ function started(total: number, now = 0): AdaptiveLimiter {
   return l;
 }
 
+/** fromMin~toMin 매 분 자원을 관측하고, 생긴 조절 기록을 모은다(관측 주기 1분). */
+function feed(l: AdaptiveLimiter, fromMin: number, toMin: number, s = calm) {
+  const out = [];
+  for (let m = fromMin; m <= toMin; m += 1) {
+    const a = l.observe(m * MIN, s);
+    if (a) out.push({ at: m, ...a });
+  }
+  return out;
+}
+
 describe('AdaptiveLimiter — G §6.6 Runner 조절 규칙', () => {
   test('상한을 받기 전에는 한도가 없다(새 실행 불가)', () => {
     expect(new AdaptiveLimiter().limit).toBeNull();
@@ -24,12 +34,41 @@ describe('AdaptiveLimiter — G §6.6 Runner 조절 규칙', () => {
 
   test('자원 여유·오류 없음이 10분 유지되면 +2, 상한을 넘지 않는다', () => {
     const l = started(9);
-    expect(l.observe(10 * MIN - 1, calm)).toBeNull();
-    expect(l.observe(10 * MIN, calm)).toEqual({ from: 6, to: 8, reason: LIMIT_REASON.stable });
-    expect(l.observe(15 * MIN, calm)).toBeNull();
-    expect(l.observe(20 * MIN, calm)).toEqual({ from: 8, to: 9, reason: LIMIT_REASON.stable });
-    expect(l.observe(30 * MIN, calm)).toBeNull();
+    expect(feed(l, 0, 30)).toEqual([
+      { at: 10, from: 6, to: 8, reason: LIMIT_REASON.stable },
+      { at: 20, from: 8, to: 9, reason: LIMIT_REASON.stable },
+    ]);
     expect(l.limit).toBe(9);
+  });
+
+  test('관측이 없던 시간은 「여유 유지」로 세지 않는다 — 첫 관측부터 센다(리뷰 8)', () => {
+    const l = started(16);
+    expect(l.observe(60 * MIN, calm)).toBeNull();
+    expect(feed(l, 61, 69)).toEqual([]);
+    expect(feed(l, 70, 70)).toEqual([{ at: 70, from: 6, to: 8, reason: LIMIT_REASON.stable }]);
+  });
+
+  test('상한을 받은 시각이 아니라 첫 관측 시각부터 센다(리뷰 8)', () => {
+    const l = started(16);
+    expect(feed(l, 1, 10)).toEqual([]);
+    expect(feed(l, 11, 11)).toEqual([{ at: 11, from: 6, to: 8, reason: LIMIT_REASON.stable }]);
+  });
+
+  test('관측 간격이 허용 주기(2분)를 넘으면 처음부터 다시 센다(리뷰 8)', () => {
+    const l = started(16);
+    feed(l, 0, 5);
+    // 5분 → 8분: 3분 공백
+    expect(feed(l, 8, 17)).toEqual([]);
+    expect(feed(l, 18, 18)).toEqual([{ at: 18, from: 6, to: 8, reason: LIMIT_REASON.stable }]);
+  });
+
+  test('관측 실패를 알리면 처음부터 다시 센다(리뷰 8)', () => {
+    const l = started(16);
+    feed(l, 0, 8);
+    // 9분 관측이 실패했고 10분에 다시 관측 — 10분부터 센다.
+    l.sampleFailed(9 * MIN);
+    expect(feed(l, 10, 19)).toEqual([]);
+    expect(feed(l, 20, 20)).toHaveLength(1);
   });
 
   test('메모리 여유 < 예비면 25% 감소·새 실행 보류, 압박이 이어지는 동안 거듭 줄이지 않는다', () => {
@@ -49,11 +88,12 @@ describe('AdaptiveLimiter — G §6.6 Runner 조절 규칙', () => {
 
   test('압박이 풀리면 보류를 풀고, 그때부터 10분을 다시 센다', () => {
     const l = started(16);
+    feed(l, 0, 8);
     l.observe(9 * MIN, { ...calm, memFreeGB: 1 });
-    expect(l.observe(11 * MIN, calm)).toBeNull();
+    expect(l.observe(10 * MIN, calm)).toBeNull();
     expect(l.holdNew).toBe(false);
-    expect(l.observe(20 * MIN, calm)).toBeNull();
-    expect(l.observe(21 * MIN, calm)).toEqual({ from: 4, to: 6, reason: LIMIT_REASON.stable });
+    expect(feed(l, 11, 19)).toEqual([]);
+    expect(feed(l, 20, 20)).toEqual([{ at: 20, from: 4, to: 6, reason: LIMIT_REASON.stable }]);
   });
 
   test('감소해도 한도는 1 아래로 내려가지 않는다', () => {
@@ -73,13 +113,22 @@ describe('AdaptiveLimiter — G §6.6 Runner 조절 규칙', () => {
     expect(l.rateLimited(5 * MIN)).toEqual({ from: 3, to: 1, reason: LIMIT_REASON.rateLimit });
   });
 
+  test('429 사이에 다른 오류(429가 아닌 응답)가 끼면 연속이 끊긴다(리뷰 9)', () => {
+    const l = started(16);
+    expect(l.rateLimited(MIN)).toBeNull();
+    l.error(2 * MIN);
+    expect(l.rateLimited(3 * MIN)).toBeNull();
+    expect(l.limit).toBe(6);
+  });
+
   test('429·오류가 나면 10분 유지를 처음부터 다시 센다', () => {
     const l = started(16);
-    l.rateLimited(8 * MIN);
-    expect(l.observe(10 * MIN, calm)).toBeNull();
-    l.error(12 * MIN);
-    expect(l.observe(18 * MIN, calm)).toBeNull();
-    expect(l.observe(22 * MIN, calm)?.to).toBe(8);
+    feed(l, 0, 7);
+    l.rateLimited(7.5 * MIN);
+    expect(feed(l, 8, 17)).toEqual([]);
+    l.error(17.5 * MIN);
+    expect(feed(l, 18, 27)).toEqual([]);
+    expect(feed(l, 28, 28)).toHaveLength(1);
   });
 
   test('상한이 한도보다 낮아지면 상한까지 내리고, 올라가면 그대로 둔다', () => {
@@ -97,11 +146,11 @@ describe('AdaptiveLimiter — G §6.6 Runner 조절 규칙', () => {
 
   test('PC가 바뀌면 시작값부터 다시(조절 기록 남김)', () => {
     const l = started(16);
-    l.observe(10 * MIN, calm);
+    feed(l, 0, 10);
     expect(l.limit).toBe(8);
-    expect(l.applyCaps(49, { restart: true }, 11 * MIN)).toEqual({ from: 8, to: 6, reason: LIMIT_REASON.hostChanged });
-    expect(l.observe(20 * MIN, calm)).toBeNull();
-    expect(l.observe(21 * MIN, calm)?.to).toBe(8);
+    expect(l.applyCaps(49, { restart: true }, 10.5 * MIN)).toEqual({ from: 8, to: 6, reason: LIMIT_REASON.hostChanged });
+    expect(feed(l, 11, 20)).toEqual([]);
+    expect(feed(l, 21, 21)).toEqual([{ at: 21, from: 6, to: 8, reason: LIMIT_REASON.stable }]);
   });
 
   test('상한은 1 이상의 정수여야 한다', () => {

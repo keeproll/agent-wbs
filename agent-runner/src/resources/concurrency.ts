@@ -39,6 +39,11 @@ export interface LimiterSettings {
   rateLimitCut: number;
   /** 몇 번 연속 429면 줄이는가. G는 「연속」만 적었다 — 2회로 정함[결정, 보고서 참고]. */
   rateLimitStreak: number;
+  /**
+   * 자원 관측 사이 간격이 이보다 길면 그 사이를 「여유 유지」로 보지 않고 처음부터 다시 센다.
+   * 관측 주기(1분 가정)의 두 배로 정함[결정]. 관측 주기를 바꾸면 함께 바꾼다.
+   */
+  maxSampleGapMs: number;
 }
 
 export const DEFAULT_LIMITER_SETTINGS: LimiterSettings = {
@@ -48,6 +53,7 @@ export const DEFAULT_LIMITER_SETTINGS: LimiterSettings = {
   memoryCut: 0.25,
   rateLimitCut: 0.5,
   rateLimitStreak: 2,
+  maxSampleGapMs: 2 * 60_000,
 };
 
 /** 메모리 여유가 예비보다 작거나 swap을 쓰면 자원 압박 — shared `capacity/limits.ts`의 같은 이름 함수와 같은 식. */
@@ -58,6 +64,8 @@ export class AdaptiveLimiter {
   #limit: number | null = null;
   #cap = 0;
   #stableSince = 0;
+  /** 마지막 정상 관측 시각. 관측 전·관측 실패 뒤에는 null이라 안정 시간을 세지 않는다. */
+  #lastSample: number | null = null;
   #pressure = false;
   #streak = 0;
   readonly #s: LimiterSettings;
@@ -86,6 +94,7 @@ export class AdaptiveLimiter {
     const prev = this.#limit;
     if (restart || prev === null) {
       this.#stableSince = now;
+      this.#lastSample = null;
       this.#streak = 0;
       const to = Math.min(this.#s.start, total);
       this.#limit = to;
@@ -94,9 +103,15 @@ export class AdaptiveLimiter {
     return prev > total ? this.#set(total, LIMIT_REASON.cap) : null;
   }
 
-  /** 주기 관측. 압박에 들어서는 순간 한 번 줄이고, 압박이 없는 시간이 10분 이어질 때마다 늘린다. */
+  /**
+   * 주기 관측. 압박에 들어서는 순간 한 번 줄이고, 압박이 없는 **관측**이 10분 이어질 때마다 늘린다.
+   * 첫 관측 전이나 관측 공백(maxSampleGapMs 초과) 뒤에는 그 관측 시각부터 다시 센다 — 보지 못한 시간을 여유로 치지 않는다.
+   */
   observe(now: number, r: ResourceSample): LimitAdjust | null {
     if (this.#limit === null) return null;
+    const last = this.#lastSample;
+    this.#lastSample = now;
+    if (last === null || now - last > this.#s.maxSampleGapMs) this.#stableSince = now;
     if (memoryPressure(r.memFreeGB, r.swapUsedGB, r.memReserveGB)) {
       const entering = !this.#pressure;
       this.#pressure = true;
@@ -127,9 +142,16 @@ export class AdaptiveLimiter {
     this.#streak = 0;
   }
 
-  /** 그 밖의 실행 오류 — 「오류 없음 10분」을 다시 센다. */
+  /** 429가 아닌 오류 응답·실행 오류 — 「오류 없음 10분」을 다시 세고, 429 연속도 끊긴다. */
   error(now: number): void {
     this.#stableSince = now;
+    this.#streak = 0;
+  }
+
+  /** 자원 관측에 실패했다 — 다음 정상 관측부터 다시 센다. */
+  sampleFailed(now: number): void {
+    this.#stableSince = now;
+    this.#lastSample = null;
   }
 
   #cut(ratio: number, reason: string): LimitAdjust | null {
@@ -190,7 +212,7 @@ export interface AdmitInput {
 
 export type AdmitResult =
   | { ok: true }
-  | { ok: false; reason: 'no_caps' | 'memory_pressure' | 'unconfirmed_session' | 'limit' | 'agent_cap' };
+  | { ok: false; reason: 'readiness_failed' | 'no_caps' | 'memory_pressure' | 'unconfirmed_session' | 'limit' | 'agent_cap' };
 
 /** 새 세션을 지금 시작해도 되는가. Runner의 유일한 강제 수단이다(G §6.7-5 b). */
 export function admit(i: AdmitInput): AdmitResult {

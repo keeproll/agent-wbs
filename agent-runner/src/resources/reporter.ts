@@ -48,6 +48,8 @@ export class ResourceReporter {
   #memReserveGB = DEFAULT_MEM_RESERVE_GB;
   #started = false;
   #blocked: Agent[] = [];
+  /** 동시 실행 보고를 한 번에 하나씩 보내기 위한 꼬리 */
+  #concurrencyTail: Promise<unknown> = Promise.resolve();
 
   constructor(deps: ResourceReporterDeps) {
     this.#d = { idempotencyKey: randomUUID, now: Date.now, ...deps };
@@ -83,8 +85,15 @@ export class ResourceReporter {
   /**
    * 동시 실행 상태 보고. 쌓인 조절 기록은 하나씩 순서대로 싣는다(계약의 adjust는 1건).
    * 응답의 상한·메모리 예비를 반영하고, 한도가 상한을 넘었다는 400이면 정책을 다시 받아 한 번 더 보낸다.
+   * 호출이 겹쳐도 앞 호출이 끝난 뒤 차례로 보낸다 — 같은 조절 기록을 두 번 보내거나 남이 보낸 기록을 지우지 않게.
    */
-  async reportConcurrency(sessions: readonly SessionState[], heavyJobs: number, r: ResourceSnapshot, at?: Date): Promise<void> {
+  reportConcurrency(sessions: readonly SessionState[], heavyJobs: number, r: ResourceSnapshot, at?: Date): Promise<void> {
+    const run = this.#concurrencyTail.then(() => this.#sendConcurrency(sessions, heavyJobs, r, at));
+    this.#concurrencyTail = run.catch(() => undefined);
+    return run;
+  }
+
+  async #sendConcurrency(sessions: readonly SessionState[], heavyJobs: number, r: ResourceSnapshot, at?: Date): Promise<void> {
     if (this.#limiter.limit === null) throw new Error('host 보고로 상한을 받기 전에는 동시 실행을 보고할 수 없습니다.');
     let retried = false;
     for (;;) {
@@ -109,7 +118,11 @@ export class ResourceReporter {
         await this.#refreshPolicy();
         continue;
       }
-      if (adjust) this.#pending.shift();
+      // 보낸 그 기록만 지운다(그사이 대기열이 바뀌었을 수 있다).
+      if (adjust) {
+        const i = this.#pending.indexOf(adjust);
+        if (i >= 0) this.#pending.splice(i, 1);
+      }
       this.#applyCaps(res.body.caps, false);
       this.#memReserveGB = res.body.caps.memReserveGB;
       if (this.#pending.length === 0) return;
@@ -129,9 +142,15 @@ export class ResourceReporter {
   error(): void {
     this.#limiter.error(this.#d.now());
   }
+  /** 자원 관측 실패 — 안정 시간을 다시 센다. */
+  sampleFailed(): void {
+    this.#limiter.sampleFailed(this.#d.now());
+  }
 
   /** 새 세션을 시작해도 되는가. slots는 새 세션의 보유 계산(1 + 예산). */
   canStart(agent: Agent, slots: number, sessions: readonly SessionState[]): AdmitResult {
+    // 준비 점검 fail이면 서버 보고 성공 여부와 무관하게 그 Agent는 시작하지 않는다(G §7.4).
+    if (this.#blocked.includes(agent)) return { ok: false, reason: 'readiness_failed' };
     if (!this.#caps) return { ok: false, reason: 'no_caps' };
     const held = { total: 0, Claude: 0, Codex: 0 };
     for (const s of sessions) {

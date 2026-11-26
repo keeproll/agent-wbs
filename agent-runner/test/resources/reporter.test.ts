@@ -52,7 +52,15 @@ function setup(handlers: Parameters<typeof fakeApi>[0]) {
 }
 
 const session = (over: Partial<SessionState> = {}): SessionState => ({ attemptId: 'a1', agent: 'Claude', observed: 0, reserved: 3, state: 'ok', ...over });
+const flush = () => new Promise((r) => setImmediate(r));
 const res = { cpuPct: 10, memFreeGB: 12, swapUsedGB: 0 };
+/** 0분~toMin분 매 분 정상 자원을 관측한다(관측 주기 1분). */
+const warm = (r: ResourceReporter, at: (t: number) => void, toMin: number, fromMin = 0) => {
+  for (let m = fromMin; m <= toMin; m += 1) {
+    at(m * MIN);
+    r.observe(res);
+  }
+};
 
 describe('ResourceReporter.reportHost', () => {
   test('사양을 보내고 받은 상한으로 한도 시작값·무거운 작업 상한을 정한다', async () => {
@@ -73,8 +81,7 @@ describe('PC 변경', () => {
       reportConcurrency: concReply(49),
     });
     await r.reportHost(HOST);
-    at(10 * MIN);
-    r.observe(res);
+    warm(r, at, 10);
     expect(r.limit).toBe(8);
     changed = true;
     expect(await r.reportHost({ ...HOST, hostId: 'pc-2' })).toEqual({ hostChanged: true });
@@ -127,8 +134,7 @@ describe('ResourceReporter.reportConcurrency', () => {
   test('조절이 여러 번 쌓였으면 한 번에 하나씩 순서대로 보낸다', async () => {
     const { r, calls, at } = setup({ reportHost: hostReply(16), reportConcurrency: concReply(16) });
     await r.reportHost(HOST);
-    at(10 * MIN);
-    r.observe(res);
+    warm(r, at, 10);
     at(11 * MIN);
     r.observe({ ...res, memFreeGB: 1 });
     await r.reportConcurrency([], 0, res);
@@ -181,8 +187,7 @@ describe('ResourceReporter.reportConcurrency', () => {
       }),
     });
     await r.reportHost(HOST);
-    at(10 * MIN);
-    r.observe(res);
+    warm(r, at, 10);
     await r.reportConcurrency([], 0, res);
     expect(sent).toEqual([{ from: 8, to: 3, reason: LIMIT_REASON.cap }]);
   });
@@ -197,8 +202,7 @@ describe('ResourceReporter.reportConcurrency', () => {
       },
     });
     await r.reportHost(HOST);
-    at(10 * MIN);
-    r.observe(res);
+    warm(r, at, 10);
     await expect(r.reportConcurrency([], 0, res)).rejects.toThrow(ApiError);
     fail = false;
     await r.reportConcurrency([], 0, res);
@@ -273,5 +277,112 @@ describe('reportModels·reportUsage·reportReadiness', () => {
     const { r } = setup({ reportReadiness: () => { throw new ApiError('reportReadiness', 503, undefined, null); } });
     await expect(r.reportReadiness({ at: '2026-11-26T09:00:00.000Z', items: [{ key: 'git', status: 'fail', detail: '' }] })).rejects.toThrow();
     expect(r.blocked).toEqual(['Claude', 'Codex']);
+  });
+});
+
+describe('리뷰 1 — 준비 점검 실패 Agent는 새 실행을 시작하지 않는다', () => {
+  test('codex fail이면 Codex는 거절, Claude는 허용', async () => {
+    const { r } = setup({ reportHost: hostReply(16), reportReadiness: () => ({ status: 204, body: undefined }) });
+    await r.reportHost(HOST);
+    await r.reportReadiness({ at: '2026-11-26T09:00:00.000Z', items: [{ key: 'codex', status: 'fail', detail: '' }] });
+    expect(r.canStart('Codex', 1, [])).toEqual({ ok: false, reason: 'readiness_failed' });
+    expect(r.canStart('Claude', 1, [])).toEqual({ ok: true });
+  });
+
+  test('공통 항목 fail이면 둘 다 거절, 다음 점검이 정상이면 다시 허용', async () => {
+    const { r } = setup({ reportHost: hostReply(16), reportReadiness: () => ({ status: 204, body: undefined }) });
+    await r.reportHost(HOST);
+    await r.reportReadiness({ at: '2026-11-26T09:00:00.000Z', items: [{ key: 'git', status: 'fail', detail: '' }] });
+    expect(r.canStart('Claude', 1, [])).toEqual({ ok: false, reason: 'readiness_failed' });
+    expect(r.canStart('Codex', 1, [])).toEqual({ ok: false, reason: 'readiness_failed' });
+    await r.reportReadiness({ at: '2026-11-27T09:00:00.000Z', items: [{ key: 'git', status: 'ok', detail: '' }] });
+    expect(r.canStart('Claude', 1, [])).toEqual({ ok: true });
+  });
+});
+
+describe('리뷰 3 — 동시 실행 보고가 겹쳐도 조절 기록이 중복·유실되지 않는다', () => {
+  /** 응답을 시험이 직접 풀어 주는 가짜 서버 */
+  function gated() {
+    const sent: { adjust: unknown; settle: (ok: boolean) => void }[] = [];
+    const handler = (req: Call['request']) =>
+      new Promise((resolve, reject) => {
+        sent.push({
+          adjust: req.body?.adjust,
+          settle: (ok) => (ok ? resolve(concReply(16)()) : reject(new ApiError('reportConcurrency', 503, undefined, null))),
+        });
+      });
+    return { sent, handler };
+  }
+
+  test('두 호출이 겹쳐도 각 조절 기록은 한 번씩만 보낸다', async () => {
+    const g = gated();
+    const { r, at } = setup({ reportHost: hostReply(16), reportConcurrency: g.handler });
+    await r.reportHost(HOST);
+    warm(r, at, 10); // 6→8 대기
+    const a = r.reportConcurrency([], 0, res);
+    const b = r.reportConcurrency([], 0, res);
+    await flush();
+    at(11 * MIN);
+    r.observe({ ...res, memFreeGB: 1 }); // 8→6 대기
+    for (let i = 0; i < 10 && g.sent.some((s) => s.settle); i += 1) {
+      const next = g.sent.find((s) => s.settle);
+      if (!next) break;
+      const settle = next.settle;
+      next.settle = undefined as never;
+      settle(true);
+      await flush();
+    }
+    await Promise.all([a, b]);
+    const adjusts = g.sent.map((s) => s.adjust).filter(Boolean);
+    expect(adjusts).toEqual([
+      { from: 6, to: 8, reason: LIMIT_REASON.stable },
+      { from: 8, to: 6, reason: LIMIT_REASON.memory },
+    ]);
+  });
+
+  test('겹친 호출 중 실패한 조절 기록은 사라지지 않고 다음 보고로 간다', async () => {
+    const delivered: unknown[] = [];
+    let failedOnce = false;
+    const pending: (() => void)[] = [];
+    const { r, at } = setup({
+      reportHost: hostReply(16),
+      reportConcurrency: (req) =>
+        new Promise((resolve, reject) => {
+          pending.push(() => {
+            const adj = req.body?.adjust as { reason?: string } | undefined;
+            if (adj?.reason === LIMIT_REASON.memory && !failedOnce) {
+              failedOnce = true;
+              reject(new ApiError('reportConcurrency', 503, undefined, null));
+              return;
+            }
+            delivered.push(adj);
+            resolve(concReply(16)());
+          });
+        }),
+    });
+    const drain = async () => {
+      for (let i = 0; i < 20; i += 1) {
+        await flush();
+        const next = pending.shift();
+        if (!next) return;
+        next();
+      }
+    };
+    await r.reportHost(HOST);
+    warm(r, at, 10);
+    const a = r.reportConcurrency([], 0, res).catch(() => 'a-failed');
+    const b = r.reportConcurrency([], 0, res).catch(() => 'b-failed');
+    await flush();
+    at(11 * MIN);
+    r.observe({ ...res, memFreeGB: 1 });
+    await drain();
+    await Promise.all([a, b]);
+    const c = r.reportConcurrency([], 0, res);
+    await drain();
+    await c;
+    expect(delivered.filter(Boolean)).toEqual([
+      { from: 6, to: 8, reason: LIMIT_REASON.stable },
+      { from: 8, to: 6, reason: LIMIT_REASON.memory },
+    ]);
   });
 });
