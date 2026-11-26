@@ -458,7 +458,7 @@
         },
         "app_model_settings_shape": {
           "name": "app_model_settings_shape",
-          "value": "jsonb_typeof(\"app_settings\".\"model_settings\")='object' and \"app_settings\".\"model_settings\" ?& array['rankOrder','codexFamilyOrder','claudeModels'] and jsonb_typeof(\"app_settings\".\"model_settings\"->'rankOrder')='object' and (\"app_settings\".\"model_settings\"->'rankOrder') ?& array['Claude','Codex']"
+          "value": "(jsonb_typeof(\"app_settings\".\"model_settings\")='object' and \"app_settings\".\"model_settings\" ?& array['rankOrder','codexFamilyOrder','claudeModels'] and jsonb_typeof(\"app_settings\".\"model_settings\"->'rankOrder')='object' and (\"app_settings\".\"model_settings\"->'rankOrder') ?& array['Claude','Codex'] and public.awbs_valid_id_list(\"app_settings\".\"model_settings\"->'rankOrder'->'Claude',0) and public.awbs_valid_id_list(\"app_settings\".\"model_settings\"->'rankOrder'->'Codex',0) and public.awbs_valid_id_list(\"app_settings\".\"model_settings\"->'codexFamilyOrder',1) and public.awbs_valid_id_list(\"app_settings\".\"model_settings\"->'claudeModels',1)) is true"
         }
       },
       "isRLSEnabled": false
@@ -2452,7 +2452,7 @@
         },
         "drift_compat": {
           "name": "drift_compat",
-          "value": "\"design_drifts\".\"compat\" in ('호환','깨짐','대조 안 함')"
+          "value": "\"design_drifts\".\"compat\" in ('\ud638\ud658','\uae68\uc9d0','\ub300\uc870 \uc548 \ud568')"
         }
       },
       "isRLSEnabled": false
@@ -3159,7 +3159,7 @@
         },
         "design_versions_compat_value": {
           "name": "design_versions_compat_value",
-          "value": "\"design_versions\".\"compat\" in ('호환', '깨짐', '대조 안 함')"
+          "value": "\"design_versions\".\"compat\" in ('\ud638\ud658', '\uae68\uc9d0', '\ub300\uc870 \uc548 \ud568')"
         }
       },
       "isRLSEnabled": false
@@ -4145,7 +4145,7 @@
         },
         "github_scopes_shape": {
           "name": "github_scopes_shape",
-          "value": "\"github_settings\".\"scopes\" is null or (jsonb_typeof(\"github_settings\".\"scopes\")='object' and \"github_settings\".\"scopes\" ?& array['contents','pulls','statuses','metadata'] and (\"github_settings\".\"scopes\" - array['contents','pulls','statuses','metadata'])='{}'::jsonb and \"github_settings\".\"scopes\"->>'contents' in ('verified','unverified','missing') and \"github_settings\".\"scopes\"->>'pulls' in ('verified','unverified','missing') and \"github_settings\".\"scopes\"->>'statuses' in ('verified','unverified','missing') and \"github_settings\".\"scopes\"->>'metadata' in ('verified','unverified','missing'))"
+          "value": "\"github_settings\".\"scopes\" is null or (jsonb_typeof(\"github_settings\".\"scopes\")='object' and \"github_settings\".\"scopes\" ?& array['contents','pulls','statuses','metadata'] and (\"github_settings\".\"scopes\" - array['contents','pulls','statuses','metadata'])='{}'::jsonb and \"github_settings\".\"scopes\"->>'contents' in ('verified','unverified','missing') and \"github_settings\".\"scopes\"->>'pulls' in ('verified','unverified','missing') and \"github_settings\".\"scopes\"->>'statuses' in ('verified','unverified','missing') and \"github_settings\".\"scopes\"->>'metadata' in ('verified','unverified','missing')) is true"
         },
         "github_warning_text": {
           "name": "github_warning_text",
@@ -5580,7 +5580,7 @@
         },
         "messages_type_value": {
           "name": "messages_type_value",
-          "value": "\"messages\".\"type\" in ('추가 지시', '수정 요청', '질문', '일반 의견', '응답')"
+          "value": "\"messages\".\"type\" in ('\ucd94\uac00 \uc9c0\uc2dc', '\uc218\uc815 \uc694\uccad', '\uc9c8\ubb38', '\uc77c\ubc18 \uc758\uacac', '\uc751\ub2f5')"
         },
         "message_participants": {
           "name": "message_participants",
@@ -9399,7 +9399,7 @@
       "checkConstraints": {
         "task_estimates_confidence_value": {
           "name": "task_estimates_confidence_value",
-          "value": "\"task_estimates\".\"confidence\" in ('상', '중', '하')"
+          "value": "\"task_estimates\".\"confidence\" in ('\uc0c1', '\uc911', '\ud558')"
         },
         "estimate_bounds": {
           "name": "estimate_bounds",

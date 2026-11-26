@@ -62,6 +62,27 @@ test('model_settings는 세 항목을 모두 가진 객체다', () =>
     await rejects(c, `update app_settings set model_settings=model_settings-'claudeModels'`, [], 'app_model_settings_shape');
   }));
 
+test('model_settings의 네 목록은 겹치지 않는 문자열 배열이고, 계열·Claude 목록은 비울 수 없다(리뷰 지적 3)', () =>
+  transaction(async (c) => {
+    const set = 'update app_settings set model_settings=$1';
+    const base = plain(DEFAULT_MODEL_SETTINGS) as Record<string, unknown> & { rankOrder: Record<string, unknown> };
+    const bad = [
+      { rankOrder: { Claude: 42, Codex: false }, codexFamilyOrder: null, claudeModels: null },
+      { ...base, rankOrder: { ...base.rankOrder, Claude: 42 } },
+      { ...base, rankOrder: { ...base.rankOrder, Codex: ['gpt-6-sol', 7] } },
+      { ...base, rankOrder: { ...base.rankOrder, Codex: ['gpt-6-sol', 'gpt-6-sol'] } },
+      { ...base, rankOrder: { ...base.rankOrder, Claude: [''] } },
+      { ...base, codexFamilyOrder: [] },
+      { ...base, codexFamilyOrder: null },
+      { ...base, claudeModels: [] },
+      { ...base, claudeModels: [null] },
+      { ...base, claudeModels: 'claude-opus-5-5' },
+    ];
+    for (const value of bad) await rejects(c, set, [JSON.stringify(value)], 'app_model_settings_shape');
+    // 빈 rankOrder 목록은 계약상 허용된다.
+    await c.query(set, [JSON.stringify({ ...base, rankOrder: { Claude: [], Codex: [] } })]);
+  }));
+
 test('github_settings.scopes는 권한별 verified·unverified·missing 또는 null(확인 안 함)이다', () =>
   transaction(async (c) => {
     await c.query("insert into github_settings(mode,status) values('gh','failed')");
@@ -76,4 +97,7 @@ test('github_settings.scopes는 권한별 verified·unverified·missing 또는 n
     delete three.metadata;
     await rejects(c, update, [three, null], 'github_scopes_shape');
     await rejects(c, update, [scopes, '  '], 'github_warning_text');
+    // 리뷰 지적 2: 권한 하나가 JSON null이면 CHECK가 SQL null이 되어 통과하던 틈
+    await rejects(c, update, [{ ...scopes, contents: null }, null], 'github_scopes_shape');
+    await rejects(c, update, ['null', null], 'github_scopes_shape');
   }));

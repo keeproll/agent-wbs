@@ -4,7 +4,8 @@
 ALTER TABLE "github_settings" ALTER COLUMN "scopes" DROP NOT NULL;--> statement-breakpoint
 ALTER TABLE "github_settings" ALTER COLUMN "scopes" SET DATA TYPE jsonb USING NULL;--> statement-breakpoint
 ALTER TABLE "github_settings" ADD COLUMN "warning" text;--> statement-breakpoint
-ALTER TABLE "github_settings" ADD CONSTRAINT "github_scopes_shape" CHECK ("github_settings"."scopes" is null or (jsonb_typeof("github_settings"."scopes")='object' and "github_settings"."scopes" ?& array['contents','pulls','statuses','metadata'] and ("github_settings"."scopes" - array['contents','pulls','statuses','metadata'])='{}'::jsonb and "github_settings"."scopes"->>'contents' in ('verified','unverified','missing') and "github_settings"."scopes"->>'pulls' in ('verified','unverified','missing') and "github_settings"."scopes"->>'statuses' in ('verified','unverified','missing') and "github_settings"."scopes"->>'metadata' in ('verified','unverified','missing')));--> statement-breakpoint
+-- 권한 하나가 JSON null이면 비교가 SQL null이 되어 CHECK를 지나간다. 객체 검사 전체가 참일 때만 통과시킨다(is true).
+ALTER TABLE "github_settings" ADD CONSTRAINT "github_scopes_shape" CHECK ("github_settings"."scopes" is null or (jsonb_typeof("github_settings"."scopes")='object' and "github_settings"."scopes" ?& array['contents','pulls','statuses','metadata'] and ("github_settings"."scopes" - array['contents','pulls','statuses','metadata'])='{}'::jsonb and "github_settings"."scopes"->>'contents' in ('verified','unverified','missing') and "github_settings"."scopes"->>'pulls' in ('verified','unverified','missing') and "github_settings"."scopes"->>'statuses' in ('verified','unverified','missing') and "github_settings"."scopes"->>'metadata' in ('verified','unverified','missing')) is true);--> statement-breakpoint
 ALTER TABLE "github_settings" ADD CONSTRAINT "github_warning_text" CHECK ("github_settings"."warning" is null or length(btrim("github_settings"."warning"))>0);--> statement-breakpoint
 -- 2) 모델 순서·Claude 모델 목록(owner 2026-11-26 아이템 8). 목록은 모두 아래 등급부터 적는다.
 --    초기값의 단일 출처는 이 함수다. seed_system과 아래 채우기가 함께 쓴다. shared DEFAULT_MODEL_SETTINGS와 같아야 한다(테스트로 대조).
@@ -18,7 +19,20 @@ ALTER TABLE "app_settings" ADD COLUMN "model_settings" jsonb;--> statement-break
 -- 이미 seed된 DB의 행은 초기값으로 채운다.
 UPDATE "app_settings" SET "model_settings"=public.default_model_settings() WHERE "model_settings" IS NULL;--> statement-breakpoint
 ALTER TABLE "app_settings" ALTER COLUMN "model_settings" SET NOT NULL;--> statement-breakpoint
-ALTER TABLE "app_settings" ADD CONSTRAINT "app_model_settings_shape" CHECK (jsonb_typeof("app_settings"."model_settings")='object' and "app_settings"."model_settings" ?& array['rankOrder','codexFamilyOrder','claudeModels'] and jsonb_typeof("app_settings"."model_settings"->'rankOrder')='object' and ("app_settings"."model_settings"->'rankOrder') ?& array['Claude','Codex']);--> statement-breakpoint
+-- 모델 ID 목록 검사: 배열이고, 빈 문자열이 아닌 문자열만, 겹치지 않고, 최소 개수 이상. CHECK에서 쓰므로 IMMUTABLE이다.
+CREATE FUNCTION public.awbs_valid_id_list(v pg_catalog.jsonb, min_items pg_catalog.int4) RETURNS pg_catalog.bool
+LANGUAGE sql IMMUTABLE SET search_path=pg_catalog,pg_temp AS $$
+  SELECT CASE WHEN jsonb_typeof(v)='array' THEN
+    jsonb_array_length(v)>=min_items
+    AND NOT EXISTS(SELECT FROM jsonb_array_elements(v) e WHERE jsonb_typeof(e)<>'string' OR length(e#>>'{}')=0)
+    AND (SELECT count(DISTINCT e) FROM jsonb_array_elements(v) e)=jsonb_array_length(v)
+  ELSE false END
+$$;--> statement-breakpoint
+ALTER FUNCTION public.awbs_valid_id_list(pg_catalog.jsonb,pg_catalog.int4) OWNER TO awbs_data_owner;--> statement-breakpoint
+REVOKE ALL ON FUNCTION public.awbs_valid_id_list(pg_catalog.jsonb,pg_catalog.int4) FROM PUBLIC;--> statement-breakpoint
+GRANT EXECUTE ON FUNCTION public.awbs_valid_id_list(pg_catalog.jsonb,pg_catalog.int4) TO awbs_app;--> statement-breakpoint
+-- 네 목록은 계약(API)과 같은 조건: 겹치지 않는 문자열 배열, 계열·Claude 목록은 1개 이상.
+ALTER TABLE "app_settings" ADD CONSTRAINT "app_model_settings_shape" CHECK ((jsonb_typeof("app_settings"."model_settings")='object' and "app_settings"."model_settings" ?& array['rankOrder','codexFamilyOrder','claudeModels'] and jsonb_typeof("app_settings"."model_settings"->'rankOrder')='object' and ("app_settings"."model_settings"->'rankOrder') ?& array['Claude','Codex'] and public.awbs_valid_id_list("app_settings"."model_settings"->'rankOrder'->'Claude',0) and public.awbs_valid_id_list("app_settings"."model_settings"->'rankOrder'->'Codex',0) and public.awbs_valid_id_list("app_settings"."model_settings"->'codexFamilyOrder',1) and public.awbs_valid_id_list("app_settings"."model_settings"->'claudeModels',1)) is true);--> statement-breakpoint
 -- 3) system seed가 모델 설정 초기값을 넣는다. 나머지 내용은 0006과 같다.
 CREATE OR REPLACE FUNCTION public.seed_system() RETURNS pg_catalog.void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $$

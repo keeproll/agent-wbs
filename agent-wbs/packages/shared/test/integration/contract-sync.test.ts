@@ -183,3 +183,11 @@ test('OpenAPI에 새 경로와 규칙이 보인다', () => {
   expect(doc.paths['/api/runner/github/key']?.post).toBeDefined();
   expect(doc.paths['/api/runner/github/status']?.post?.['x-input-rules']).toEqual(['githubStatusConsistent']);
 });
+
+test('키 등록 복구는 새 Idempotency-Key로 보낸다고 계약에 적혀 있다(리뷰 지적 4)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const contracts = readFileSync(new URL('../../../../../docs/plan/contracts.md', import.meta.url), 'utf8');
+  const section = contracts.slice(contracts.indexOf('- POST `/runner/github/key`'), contracts.indexOf('- GET `/runner/github/credential'));
+  expect(section).toContain('404 뒤 다시 등록할 때는 새 `Idempotency-Key`를 만든 새 요청으로 보낸다.');
+  expect(section).toContain('같은 키를 유지한다');
+});

@@ -1452,7 +1452,7 @@ export const appSettings = pgTable(
     check('heartbeat_positive', sql`${t.heartbeat_seconds}>0 and ${t.heartbeat_misses}>0`),
     check(
       'app_model_settings_shape',
-      sql`jsonb_typeof(${t.model_settings})='object' and ${t.model_settings} ?& array['rankOrder','codexFamilyOrder','claudeModels'] and jsonb_typeof(${t.model_settings}->'rankOrder')='object' and (${t.model_settings}->'rankOrder') ?& array['Claude','Codex']`,
+      sql`(jsonb_typeof(${t.model_settings})='object' and ${t.model_settings} ?& array['rankOrder','codexFamilyOrder','claudeModels'] and jsonb_typeof(${t.model_settings}->'rankOrder')='object' and (${t.model_settings}->'rankOrder') ?& array['Claude','Codex'] and public.awbs_valid_id_list(${t.model_settings}->'rankOrder'->'Claude',0) and public.awbs_valid_id_list(${t.model_settings}->'rankOrder'->'Codex',0) and public.awbs_valid_id_list(${t.model_settings}->'codexFamilyOrder',1) and public.awbs_valid_id_list(${t.model_settings}->'claudeModels',1)) is true`,
     ),
   ],
 );
@@ -1476,7 +1476,7 @@ export const githubSettings = pgTable(
     check('github_singleton', sql`${t.singleton}`),
     check(
       'github_scopes_shape',
-      sql`${t.scopes} is null or (jsonb_typeof(${t.scopes})='object' and ${t.scopes} ?& array['contents','pulls','statuses','metadata'] and (${t.scopes} - array['contents','pulls','statuses','metadata'])='{}'::jsonb and ${t.scopes}->>'contents' in ('verified','unverified','missing') and ${t.scopes}->>'pulls' in ('verified','unverified','missing') and ${t.scopes}->>'statuses' in ('verified','unverified','missing') and ${t.scopes}->>'metadata' in ('verified','unverified','missing'))`,
+      sql`${t.scopes} is null or (jsonb_typeof(${t.scopes})='object' and ${t.scopes} ?& array['contents','pulls','statuses','metadata'] and (${t.scopes} - array['contents','pulls','statuses','metadata'])='{}'::jsonb and ${t.scopes}->>'contents' in ('verified','unverified','missing') and ${t.scopes}->>'pulls' in ('verified','unverified','missing') and ${t.scopes}->>'statuses' in ('verified','unverified','missing') and ${t.scopes}->>'metadata' in ('verified','unverified','missing')) is true`,
     ),
     check('github_warning_text', sql`${t.warning} is null or length(btrim(${t.warning}))>0`),
   ],
