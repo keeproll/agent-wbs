@@ -9,7 +9,7 @@
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createContext, use, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { readLoginToken } from '../auth/login-link.ts';
-import { browserStorage, persistRegisteredDrafts } from '../state/sessionDrafts.ts';
+import { announceLogout, browserStorage, browserTabId, markLoggedIn, mayPersistDrafts, persistRegisteredDrafts } from '../state/sessionDrafts.ts';
 import { ApiError, createApiClient, type ApiClient } from './client.ts';
 import type { ResponseOf } from './contract.ts';
 
@@ -75,9 +75,11 @@ function SessionProvider({ children }: { children: ReactNode }) {
       csrfToken: () => csrf.get(),
       onUnauthorized: () => {
         // 로그인된 상태에서 세션이 끊겼으면, 로그인 화면으로 가기 전에 편집 중 초안을 남긴다(조정자 결정).
-        if (queryClient.getQueryData(['getSession', {}])) {
+        // 로그아웃 뒤(이 탭·다른 탭)에는 새 로그인 전까지 보관하지 않는다.
+        if (queryClient.getQueryData(['getSession', {}]) && mayPersistDrafts()) {
           const storage = browserStorage();
-          if (storage) persistRegisteredDrafts(storage);
+          const tabId = browserTabId();
+          if (storage && tabId) persistRegisteredDrafts(storage, tabId);
         }
         queryClient.setQueryData(['getSession', {}], null);
       },
@@ -100,7 +102,8 @@ function SessionProvider({ children }: { children: ReactNode }) {
     started.current = true;
     history.replaceState(history.state, '', `${location.pathname}${location.search}${found.rest}`);
     client.call('login', { body: { method: 'link', token: found.token } }).then(
-      async () => { await queryClient.invalidateQueries({ queryKey: ['getSession'] }); setLinkLogin('idle'); },
+      async () => {
+        markLoggedIn(); await queryClient.invalidateQueries({ queryKey: ['getSession'] }); setLinkLogin('idle'); },
       () => { setLinkLogin('failed'); },
     );
   }, [client, queryClient]);
@@ -126,7 +129,12 @@ function SessionProvider({ children }: { children: ReactNode }) {
     lastSuccessAt,
     linkLogin,
     refreshSession: () => sessionQuery.refetch(),
-    clearSession: () => { queryClient.setQueryData(['getSession', {}], null); queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== 'getSession' }); },
+    clearSession: () => {
+      // 사용자가 직접 로그아웃했다: 보관 초안을 바로 지운다. 다음 로그인(다음 사람일 수 있음)에 넘기지 않는다.
+      // 다른 탭에도 알리고, 로그아웃 시각을 남겨 알림을 못 받은 탭도 그 이전 초안을 버리게 한다.
+      announceLogout();
+      queryClient.setQueryData(['getSession', {}], null); queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== 'getSession' });
+    },
   }), [client, linkLogin, sessionQuery, lastSuccessAt, queryClient]);
 
   return <ApiContext value={value}>{children}</ApiContext>;

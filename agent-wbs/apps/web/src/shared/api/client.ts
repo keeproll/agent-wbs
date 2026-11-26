@@ -158,6 +158,8 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
           method: op.method,
           headers,
           credentials: 'same-origin',
+          // API 응답은 브라우저 HTTP 캐시에서 꺼내 쓰지 않는다(항상 서버의 최신 값).
+          cache: 'no-store',
           signal: controller.signal,
           ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         });
