@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { DEFAULT_MODEL_SETTINGS, claudeModels, codexRankOrder, collectModels, parseClaudeEfforts, parseCodexCatalog } from '../../src/resources/models.ts';
+import { DEFAULT_MODEL_SETTINGS, claudeModels, collectModels, parseClaudeEfforts, parseCodexCatalog } from '../../src/resources/models.ts';
 import type { RunCommand } from '../../src/readiness/command.ts';
 
 const level = (effort: string) => ({ effort, description: `${effort} 설명` });
@@ -14,17 +14,17 @@ const catalog = {
 };
 
 describe('parseCodexCatalog — 모델별 CLI Effort 값(contracts §3.1, Q-06)', () => {
-  test('목록에 보이는 모델만 보내고, 기본 rank는 세대·계열 규칙을 따른다(이 예시는 priority와 순서가 같다)', () => {
+  test('목록에 보이는 모델만 보내고 rank는 싣지 않는다(계약 보완: 순서는 서버 설정값)', () => {
     expect(parseCodexCatalog(JSON.stringify(catalog))).toEqual([
-      { id: 'gpt-6.2-sol', label: 'GPT-6.2-Sol', rank: 3, efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
-      { id: 'gpt-6-luna', label: 'GPT-6-Luna', rank: 2, efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
-      { id: 'gpt-5.5', label: 'GPT-5.5', rank: 1, efforts: ['low', 'medium', 'high', 'xhigh'] },
+      { id: 'gpt-6-luna', label: 'GPT-6-Luna', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
+      { id: 'gpt-6.2-sol', label: 'GPT-6.2-Sol', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] },
+      { id: 'gpt-5.5', label: 'GPT-5.5', efforts: ['low', 'medium', 'high', 'xhigh'] },
     ]);
   });
 
   test('CLI 값은 받은 그대로 보낸다 — 공통 단계 매핑·ultra 제외는 서버 승인표가 한다', () => {
-    const [top] = parseCodexCatalog(JSON.stringify(catalog));
-    expect(top?.efforts).toContain('ultra');
+    const sol = parseCodexCatalog(JSON.stringify(catalog)).find((m) => m.id === 'gpt-6.2-sol');
+    expect(sol?.efforts).toContain('ultra');
   });
 
   test('Effort 목록이 없거나 비면 null(미확인)', () => {
@@ -52,121 +52,31 @@ describe('parseCodexCatalog — 모델별 CLI Effort 값(contracts §3.1, Q-06)'
   });
 });
 
-describe('owner 결정(2026-11-26 아이템 8) — rank 초기값은 설정, CLI 목록 순서는 쓰지 않는다', () => {
-  // 실제 0.172.0 동봉 목록의 priority: 6.1-terra 3, 6.1-sol 4, 6-astra 5, 6-luna 7, 5.6-sol 8
-  const real = {
-    models: [
-      { slug: 'gpt-6.1-terra', display_name: 'GPT-6.1 Terra', visibility: 'list', priority: 3 },
-      { slug: 'gpt-6.1-sol', display_name: 'GPT-6.1-Sol', visibility: 'list', priority: 4 },
-      { slug: 'gpt-6-astra', display_name: 'GPT-6-Astra', visibility: 'list', priority: 5 },
-      { slug: 'gpt-6-luna', display_name: 'GPT-6-Luna', visibility: 'list', priority: 7 },
-      { slug: 'gpt-5.6-sol', display_name: 'GPT-5.6-Sol', visibility: 'list', priority: 8 },
-    ],
-  };
-
-  test('Codex: 세대가 높을수록 위, 같은 세대는 luna < terra < astra < sol — priority와 다르다', () => {
-    const ranked = parseCodexCatalog(JSON.stringify(real));
-    expect(ranked.map((m) => [m.id, m.rank])).toEqual([
-      ['gpt-6.1-sol', 5],
-      ['gpt-6.1-terra', 4],
-      ['gpt-6-astra', 3],
-      ['gpt-6-luna', 2],
-      ['gpt-5.6-sol', 1],
-    ]);
+describe('계약 보완(2026-11-26 아이템 8) — Runner는 rank를 보내지 않고 Claude 목록은 서버 정책을 쓴다', () => {
+  test('어떤 보고에도 rank 필드가 없다', async () => {
+    const run: RunCommand = (cmd) => Promise.resolve({ code: 0, stdout: cmd === 'codex' ? JSON.stringify(catalog) : '--effort <l> (low)', stderr: '' });
+    for (const agent of ['Codex', 'Claude'] as const) {
+      const body = await collectModels(agent, { run, codex: 'codex', claude: 'claude' });
+      expect(body?.models.every((m) => !('rank' in m))).toBe(true);
+    }
   });
 
-  test('codexRankOrder: 계열이 없는 모델은 그 세대의 맨 아래, 세대를 읽을 수 없는 모델은 전체 맨 아래', () => {
-    expect(codexRankOrder(['gpt-5.5', 'gpt-5.6-luna', 'gpt-5.5-sol', 'mystery', 'gpt-6-sol'])).toEqual([
-      'gpt-6-sol',
-      'gpt-5.6-luna',
-      'gpt-5.5-sol',
-      'gpt-5.5',
-      'mystery',
-    ]);
-  });
-
-  test('계열 순서도 설정으로 바꿀 수 있다(팀장 설정)', () => {
-    expect(codexRankOrder(['gpt-6-sol', 'gpt-6-luna'], ['sol', 'luna'])).toEqual(['gpt-6-luna', 'gpt-6-sol']);
-  });
-
-  test('collectModels가 계열 순서 설정을 전달한다', async () => {
-    const run: RunCommand = () => Promise.resolve({ code: 0, stdout: JSON.stringify(real), stderr: '' });
-    const body = await collectModels('Codex', { run, codex: 'codex', claude: 'claude', codexFamilyOrder: ['sol', 'astra', 'terra', 'luna'] });
-    expect(body?.models[0]?.id).toBe('gpt-6.1-terra');
-  });
-
-  test('Claude: 모델 목록 설정이 없으면 Q-06 승인표의 모델을 초기값으로 쓴다(Haiku < Sonnet < Opus < Fable)', async () => {
+  test('Claude: 정책을 받기 전에는 Q-06 승인표의 모델을 대체값으로 쓴다', async () => {
     const run: RunCommand = () => Promise.resolve({ code: 0, stdout: '  --effort <level>  Effort (low, max)\n', stderr: '' });
     const body = await collectModels('Claude', { run, codex: 'codex', claude: 'claude' });
-    expect(body?.models.map((m) => [m.id, m.rank])).toEqual([
-      ['claude-fable-5-2', 4],
-      ['claude-opus-5-5', 3],
-      ['claude-sonnet-5-5', 2],
-      ['claude-haiku-5-5', 1],
-    ]);
+    expect(body?.models.map((m) => m.id)).toEqual(['claude-fable-5-2', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5']);
     expect(DEFAULT_MODEL_SETTINGS.claudeModelIds).toEqual(['claude-fable-5-2', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5']);
   });
-});
 
-describe('재리뷰 10 — 일부만 적은 rankOrder도 나머지는 세대·계열 기본 순서를 지킨다', () => {
-  const cat = (slugs: string[]) =>
-    JSON.stringify({ models: slugs.map((slug, i) => ({ slug, display_name: slug, visibility: 'list', priority: i + 1 })) });
-
-  test('설정에 없는 모델끼리는 CLI 배열 순서가 아니라 기본 순서(6 < 6.1)를 따른다', () => {
-    const ranked = parseCodexCatalog(cat(['gpt-6.2-sol', 'gpt-6-astra', 'gpt-6.1-sol']), { rankOrder: ['gpt-6.2-sol'] });
-    expect(ranked.map((m) => [m.id, m.rank])).toEqual([
-      ['gpt-6.2-sol', 3],
-      ['gpt-6.1-sol', 2],
-      ['gpt-6-astra', 1],
-    ]);
-  });
-
-  test('입력 배열·priority를 뒤집어도 결과가 같다', () => {
-    const a = parseCodexCatalog(cat(['gpt-6.2-sol', 'gpt-6-astra', 'gpt-6.1-sol']), { rankOrder: ['gpt-6.2-sol'] });
-    const b = parseCodexCatalog(cat(['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6.2-sol']), { rankOrder: ['gpt-6.2-sol'] });
-    expect(b).toEqual(a);
-  });
-
-  test('설정이 기본 순서와 반대여도 설정한 모델이 우선하고, 나머지는 기본 순서로 그 아래에 둔다', () => {
-    const ranked = parseCodexCatalog(cat(['gpt-6.2-sol', 'gpt-6-astra', 'gpt-6.1-sol', 'gpt-5.6-luna']), { rankOrder: ['gpt-5.6-luna', 'gpt-6-astra'] });
-    expect(ranked.map((m) => m.id)).toEqual(['gpt-5.6-luna', 'gpt-6-astra', 'gpt-6.2-sol', 'gpt-6.1-sol']);
+  test('Claude: 서버 정책의 claudeModels를 주면 그 목록만 보고한다', async () => {
+    const run: RunCommand = () => Promise.resolve({ code: 0, stdout: '--effort <l> (low)', stderr: '' });
+    const body = await collectModels('Claude', { run, codex: 'codex', claude: 'claude', claudeModelIds: ['claude-new-6'] });
+    expect(body).toEqual({ agent: 'Claude', models: [{ id: 'claude-new-6', label: 'claude-new-6', efforts: ['low'] }] });
   });
 
   test('입력 배열을 바꾸지 않는다(freeze한 배열로 확인)', () => {
-    const ids = Object.freeze(['gpt-6-astra', 'gpt-6.2-sol']);
-    expect(codexRankOrder(ids)).toEqual(['gpt-6.2-sol', 'gpt-6-astra']);
-    expect(ids).toEqual(['gpt-6-astra', 'gpt-6.2-sol']);
-    const order = Object.freeze(['gpt-6-astra']);
-    const family = Object.freeze(['luna', 'terra', 'astra', 'sol']);
-    expect(() => parseCodexCatalog(cat(['gpt-6.2-sol', 'gpt-6-astra']), { rankOrder: order, familyOrder: family })).not.toThrow();
-    expect(order).toEqual(['gpt-6-astra']);
     const claude = Object.freeze(['b', 'a']);
-    expect(claudeModels(claude, null, Object.freeze(['a'])).map((m) => m.id)).toEqual(['a', 'b']);
-    expect(claude).toEqual(['b', 'a']);
-  });
-});
-
-describe('rank 순서를 설정으로 덮어쓸 수 있다', () => {
-  test('rankOrder를 주면 그 순서(앞이 위)로 rank를 매기고, 목록에 없는 모델은 그 아래에 둔다', () => {
-    const ranked = parseCodexCatalog(JSON.stringify(catalog), { rankOrder: ['gpt-5.5', 'gpt-6.2-sol'] });
-    expect(ranked.map((m) => [m.id, m.rank])).toEqual([
-      ['gpt-5.5', 3],
-      ['gpt-6.2-sol', 2],
-      ['gpt-6-luna', 1],
-    ]);
-  });
-
-  test('collectModels가 Agent별 rankOrder 설정을 전달한다', async () => {
-    const run: RunCommand = () => Promise.resolve({ code: 0, stdout: JSON.stringify(catalog), stderr: '' });
-    const body = await collectModels('Codex', { run, codex: 'codex', claude: 'claude', claudeModelIds: [], rankOrder: { Codex: ['gpt-6-luna'] } });
-    expect(body?.models[0]).toMatchObject({ id: 'gpt-6-luna', rank: 3 });
-  });
-
-  test('Claude 모델 순서도 rankOrder로 바꿀 수 있다', () => {
-    expect(claudeModels(['a', 'b'], null, ['b']).map((m) => [m.id, m.rank])).toEqual([
-      ['b', 2],
-      ['a', 1],
-    ]);
+    expect(claudeModels(claude, null).map((m) => m.id)).toEqual(['b', 'a']);
   });
 });
 
@@ -175,7 +85,7 @@ describe('Claude Effort 출처를 설정으로 바꿀 수 있다', () => {
     const calls: string[] = [];
     const run: RunCommand = (cmd, args) => (calls.push([cmd, ...args].join(' ')), Promise.resolve({ code: 0, stdout: '--effort <l> (low)', stderr: '' }));
     const body = await collectModels('Claude', { run, codex: 'codex', claude: 'claude', claudeModelIds: ['m'], claudeEfforts: 'unknown' });
-    expect(body).toEqual({ agent: 'Claude', models: [{ id: 'm', label: 'm', rank: 1, efforts: null }] });
+    expect(body).toEqual({ agent: 'Claude', models: [{ id: 'm', label: 'm', efforts: null }] });
     expect(calls).toEqual([]);
   });
 });
@@ -201,14 +111,14 @@ describe('parseClaudeEfforts — `claude --help`의 --effort 줄', () => {
 });
 
 describe('claudeModels — CLI에 모델 목록 명령이 없어 설정의 모델 ID를 쓴다', () => {
-  test('앞에 적은 모델일수록 rank가 높고 Effort는 도움말 값', () => {
+  test('받은 순서 그대로, Effort는 도움말 값', () => {
     expect(claudeModels(['claude-opus-5-5', 'claude-sonnet-5-5'], ['low', 'max'])).toEqual([
-      { id: 'claude-opus-5-5', label: 'claude-opus-5-5', rank: 2, efforts: ['low', 'max'] },
-      { id: 'claude-sonnet-5-5', label: 'claude-sonnet-5-5', rank: 1, efforts: ['low', 'max'] },
+      { id: 'claude-opus-5-5', label: 'claude-opus-5-5', efforts: ['low', 'max'] },
+      { id: 'claude-sonnet-5-5', label: 'claude-sonnet-5-5', efforts: ['low', 'max'] },
     ]);
   });
   test('빈 ID·중복은 버린다', () => {
-    expect(claudeModels([' ', 'a', 'a'], null)).toEqual([{ id: 'a', label: 'a', rank: 1, efforts: null }]);
+    expect(claudeModels([' ', 'a', 'a'], null)).toEqual([{ id: 'a', label: 'a', efforts: null }]);
   });
 });
 
@@ -228,14 +138,14 @@ describe('collectModels — 무료 로컬 명령만 부른다', () => {
     const r = run({ 'codex debug models --bundled': { code: 0, stdout: JSON.stringify(catalog) } });
     const body = await collectModels('Codex', { run: r.fn, codex: 'codex', claude: 'claude', claudeModelIds: [] });
     expect(r.calls).toEqual(['codex debug models --bundled']);
-    expect(body).toMatchObject({ agent: 'Codex', models: [{ id: 'gpt-6.2-sol' }, { id: 'gpt-6-luna' }, { id: 'gpt-5.5' }] });
+    expect(body).toMatchObject({ agent: 'Codex', models: [{ id: 'gpt-6-luna' }, { id: 'gpt-6.2-sol' }, { id: 'gpt-5.5' }] });
   });
 
   test('Claude는 `claude --help`의 Effort를 설정 모델에 붙인다(Q-06: 단계는 CLI 도움말)', async () => {
     const r = run({ 'claude --help': { code: 0, stdout: '  --effort <level>  Effort (low, medium)\n' } });
     const body = await collectModels('Claude', { run: r.fn, codex: 'codex', claude: 'claude', claudeModelIds: ['claude-opus-5-5'] });
     expect(r.calls).toEqual(['claude --help']);
-    expect(body).toEqual({ agent: 'Claude', models: [{ id: 'claude-opus-5-5', label: 'claude-opus-5-5', rank: 1, efforts: ['low', 'medium'] }] });
+    expect(body).toEqual({ agent: 'Claude', models: [{ id: 'claude-opus-5-5', label: 'claude-opus-5-5', efforts: ['low', 'medium'] }] });
   });
 
   test('명령이 실패하면 보고하지 않는다(null) — 빈 목록을 보내 기존 모델을 지우지 않는다', async () => {

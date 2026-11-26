@@ -244,7 +244,7 @@ describe('Agent API 결과 반영', () => {
 describe('reportModels·reportUsage·reportReadiness', () => {
   test('모델 보고 응답의 신규 모델을 돌려준다', async () => {
     const { r, calls } = setup({ reportModels: () => ({ status: 200, body: { newModels: ['gpt-7'] } }) });
-    expect(await r.reportModels({ agent: 'Codex', models: [{ id: 'gpt-7', label: 'GPT-7', rank: 1, efforts: null }] })).toEqual(['gpt-7']);
+    expect(await r.reportModels({ agent: 'Codex', models: [{ id: 'gpt-7', label: 'GPT-7', efforts: null }] })).toEqual(['gpt-7']);
     expect(calls[0]?.request).toMatchObject({ epoch: 7, idempotencyKey: 'k1' });
   });
 
