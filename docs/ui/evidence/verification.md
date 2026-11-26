@@ -1,8 +1,15 @@
 # 조사 완료 증거
 
-브랜치: `keeproll/ui-inventory`. 커밋 해시는 worker 완료 보고에 제공한다(이 파일을 포함하는 자기 커밋 해시는 파일 안에 기입하지 않음).
+> 처음 읽는다면 [README.md](../README.md)의 용어집을 먼저 본다.
 
-원본: Main.dc.html 7,121줄, SHA-256 `7a477d537d3321696df0900bd276646cbce60cb1021115d25d517bc18bdf61d3`.
+## 기본 정보
+
+- 브랜치: `keeproll/ui-inventory`.
+- 커밋 해시는 worker 완료 보고에 제공한다. 이 파일을 포함하는 자기 커밋 해시는 파일 안에 기입하지 않는다(파일을 고치면 해시가 바뀌므로 스스로를 적을 수 없다).
+- 원본: Main.dc.html 7,121줄, SHA-256 `7a477d537d3321696df0900bd276646cbce60cb1021115d25d517bc18bdf61d3`.
+  - SHA-256은 파일 내용으로 계산한 체크섬이다. 값이 같으면 원본이 바뀌지 않았다는 뜻이다.
+
+## 집계
 
 | 항목 | 집계 |
 |---|---:|
@@ -27,25 +34,74 @@
 | 원본 샘플 모델 필드 경로 | 1,131 |
 | 불일치 항목 | 기존30 + 인쇄MM-31, 모두UAT연결 |
 
-집계는 데이터 행 개수가 아니라 템플릿 발생 수다. 반복 별칭이 같은 핸들러도 줄·상위조건·반복문맥을 보존했다. 바인딩 후보가 없는 이벤트는0이며, 이름검색 후보를 실제 실행완료나 compiler resolution으로 과장하지 않는다. 최초 Api fixture는 Task12/Phase3/의존성15/Attempt7/Verification2/Message3/Planning2/CP2다. Component 생성자는 실행일에 맞춰 보고서 누락분을 보충하므로 이번 VM의 Report33은 고정 요구 수가 아니다.
+집계를 읽을 때 주의할 점:
 
-최초조사와이번개정의검증을구분한다:
+- 집계는 데이터 행 개수가 아니라 템플릿 발생 수다. 예를 들어 Task 목록 한 줄의 버튼은 Task가 10개여도 템플릿에 한 번 나오면 1로 센다.
+- 반복 별칭이 같은 핸들러도 줄·상위조건·반복문맥을 보존했다.
+- 바인딩 후보가 없는 이벤트는0이다. 이름검색 후보를 실제 실행완료나 compiler resolution(컴파일러가 확인한 함수 연결)으로 과장하지 않는다.
+- 최초 Api fixture는 Task12/Phase3/의존성15/Attempt7/Verification2/Message3/Planning2/CP2다.
+- Component 생성자는 실행일에 맞춰 보고서 누락분을 보충한다. 그래서 이번 VM의 Report33은 고정 요구 수가 아니다.
 
-1. 최초조사의 `node docs/ui/probe.mjs`: 원본 JavaScript를 VM에서 평가, 실제 모델 필드 추출, 메뉴/Task/Gate/ChatID/GitHub주소 assert. DOM·네트워크 없음, 타이머는 큐에만 넣음.
-2. `python3 docs/ui/extract.py`: Python HTMLParser와 별도 정규식의 이벤트 개수 일치; sc-if/sc-for 개수 일치; 모든 발생의 화면 ID 분류 및 모든 문서 ID 대조; 149개인수체크박스·각1개필수마일스톤·고유ID·전제/사건/기대값·원본제품ID102개+로그인·MM31건연결·CD체크박스0 assert.
-3. `python3 docs/ui/extract.py --check`: 재생성 결과와 문서·JSON 일치 확인.
-4. 문서 링크·화면 ID·출처 범위·원본 변경 여부와 git 공백 검사. 제품 테스트는 제품 코드가 없고 문서만 수정하므로 수행 대상 없음.
+## 검증 방법
 
-VM으로 확인한 핵심 결과: SS 취소/실패도 충족 처리, 코드 수정 요청 전후 메시지3→3, 음수 토큰 exErrs 오류0, Telegram 저장500에서 저장값 유지·초안null, 초기승인 직후 WP-06 없음. 원본 `integrity` 점검은 의도한 샘플의 승인대기1/불일치2 때문에1항목 FAIL이며 숨기지 않았다. UI 검증 성공으로 취급하지 않는다.
+최초 조사와 이번 개정의 검증을 구분한다.
 
-최초Orca브리지는실패했으나이후독립리뷰가원본14화면/31탭/8모달등을브라우저확인했다. 제공454개화면배정PNG·5개별도증거와PDF를커밋하지않고 [대응표](../screenshots.md)만추가했다. net/e400·실OS인쇄창·스크린리더등미확인범위는 [시도 기록](browser.md)에있다. 제품149개UAT는모두실행전이다.
+1. 최초 조사의 `node docs/ui/probe.mjs`
+   - 원본 JavaScript를 VM(Node 가상 실행 환경)에서 평가했다.
+   - 실제 모델 필드를 추출하고, 메뉴/Task/Gate/ChatID/GitHub주소를 assert했다.
+   - DOM·네트워크는 없다. 타이머는 큐에만 넣는다.
+2. `python3 docs/ui/extract.py`
+   - Python HTMLParser와 별도 정규식의 이벤트 개수가 일치하는지 본다.
+   - sc-if/sc-for 개수가 일치하는지 본다.
+   - 모든 발생의 화면 ID 분류 및 모든 문서 ID를 대조한다.
+   - 아래를 assert한다: 149개 인수 체크박스, 각1개 필수 마일스톤, 고유 ID, 전제/사건/기대값, 원본 제품 ID102개+로그인, MM31건 연결, CD 체크박스0.
+3. `python3 docs/ui/extract.py --check`
+   - 재생성 결과와 문서·JSON이 일치하는지 확인한다.
+4. 문서 링크·화면 ID·출처 범위·원본 변경 여부와 git 공백 검사.
+   - 제품 코드가 없고 문서만 수정하므로 제품 테스트는 수행 대상이 없다.
 
-중요 인수 위험은 MM-01 완료 근거 누락, MM-02 Telegram의 미확인 완료/실패 확정문구, MM-03 저장실패 초안소실, MM-04 입력경로 정규식, MM-05 없는WP, MM-06 실제 요청없는 설계 처리버튼이다. 상세와 출처는 [mismatches.md](../mismatches.md).
+## VM으로 확인한 핵심 결과
+
+- SS 취소/실패도 충족으로 처리된다.
+- 코드 수정 요청 전후 메시지가3→3으로 그대로다.
+- 음수 토큰을 넣어도 exErrs 오류가0이다.
+- Telegram 저장500에서 저장값은 유지되고 초안은 null이 된다.
+- 초기승인 직후 WP-06이 없다.
+- 원본 `integrity` 점검은 의도한 샘플의 승인대기1/불일치2 때문에1항목 FAIL이며, 숨기지 않았다.
+- 이 결과들을 UI 검증 성공으로 취급하지 않는다.
+
+## 브라우저 확인
+
+- 최초 Orca 브리지는 실패했다.
+- 이후 독립 리뷰가 원본14화면/31탭/8모달 등을 브라우저로 확인했다.
+- 제공된454개 화면배정 PNG·5개 별도증거와 PDF는 커밋하지 않고 [대응표](../screenshots.md)만 추가했다.
+- net/e400·실OS 인쇄창·스크린리더 등 미확인 범위는 [시도 기록](browser.md)에 있다.
+- 제품149개 UAT는 모두 실행 전이다.
+
+## 중요한 인수 위험
+
+- MM-01 완료 근거 누락
+- MM-02 Telegram의 미확인 완료/실패 확정문구
+- MM-03 저장실패 초안소실
+- MM-04 입력경로 정규식
+- MM-05 없는WP
+- MM-06 실제 요청 없는 설계 처리버튼
+
+상세와 출처는 [mismatches.md](../mismatches.md)에 있다.
 
 ## 리뷰 반영 개정
 
-1차 처리는 [review-response.md](../review-response.md), 재확인 P1 3건/P2 4건·A1/A5/C1 잔여·유실16묶음 및 경미 항목 처리는 [review-2-response.md](../review-2-response.md)에 기록했다. 현재 기준은 keeproll/plan-baseline **a60216d**의 open-questions §0·D-27·D-28과 milestones다. 2건의 원본 오기 수정은 유지하며 SS/폭은 미결이 아니다.
+- 1차 처리는 [review-response.md](../review-response.md)에 기록했다.
+- 재확인 P1 3건/P2 4건·A1/A5/C1 잔여·유실16묶음 및 경미 항목 처리는 [review-2-response.md](../review-2-response.md)에 기록했다.
+- 현재 기준은 keeproll/plan-baseline **a60216d**의 open-questions §0·D-27·D-28과 milestones다.
+- 2건의 원본 오기 수정은 유지하며, SS/폭은 미결이 아니다.
 
-단일 필수 마일스톤 합계: M3 **78**, M4 **10**, M5 **14**, M6 **27**, M7 **16**, M8 **4** =149. M3는 화면/API만, M5-05는 실제 Runner/fake CLI의 Gate 대기까지, M7-06은 실제①/② 파이프라인·로컬git·fakeGitHub 결합이다. 전체 제품 UAT는 실행 전이며 기계 대조 통과를 제품 합격으로 표시하지 않는다.
+단일 필수 마일스톤 합계: M3 **78**, M4 **10**, M5 **14**, M6 **27**, M7 **16**, M8 **4** =149.
 
-최종 REVIEW-7028b0a의 P1-A·P2-A/B/C 처리와 전 UAT 화면/API 선행 대조는 [milestone-audit.md](../milestone-audit.md)를 따른다. 계획 a60216d와 UAT149개를 대조한 마일스톤 의존 순환은0건이다.
+- M3는 화면/API만 본다.
+- M5-05는 실제 Runner/fake CLI의 Gate 대기까지 본다.
+- M7-06은 실제①/② 파이프라인·로컬git·fakeGitHub 결합이다.
+- 전체 제품 UAT는 실행 전이며, 기계 대조 통과를 제품 합격으로 표시하지 않는다.
+
+최종 REVIEW-7028b0a의 P1-A·P2-A/B/C 처리와 전 UAT 화면/API 선행 대조는 [milestone-audit.md](../milestone-audit.md)를 따른다.
+계획 a60216d와 UAT149개를 대조한 마일스톤 의존 순환은0건이다.

@@ -1,20 +1,79 @@
 # 화면 데이터와 변경 동작
 
-현재 제품 판정/계약 기준은 `keeproll/plan-baseline` **a60216d**다. 아래 생성 영역은 원본 메모리 모델의 관측이며, 원본에 없는 owner 동작도 다음 계약 데이터가 필요하다.
+> 처음 읽는다면 [README.md](README.md)의 ID 읽는 법과 용어집을 먼저 본다.
 
-| 화면 / 판정 | 제품에서 추가로 조회·변경하는 데이터 | 근거 |
-|---|---|---|
-| UI-03E/명세·이력 / UAT-APPROVE-01 | 명세 완료 여부·approval 상태·승인/반려 요청 결과·주체/시각/사유 이력. 승인=ready, 반려=planning; 로그인/권한 실패는 상태 미변경 | open-questions §0 Q-02/Q-05 #2·#3; contracts §2.1 approve/reject |
-| UI-06·Runner / UAT-EXEC-09 | 중단 시도 interrupted·Task paused·보유/잠금 해제 증거·재개 거부 reasons[]·동일 단계/등급의 새 attempt. 같은 host의 그룹 해제와 PC 변경의 별도 격리 규칙은 구분 | contracts §3.4/§4.3; Q-05 #10 |
-| UI-03-03·UI-09A / UAT-TASK-06 | 실제 actStart·미충족 선행 목록·원자적으로 제거된 SS 관계; impact.removedDependencies[{pred,succ,type,reason}], unblockedSuccessors[{taskKey,remainingBlockers[]}]. 실제 해소와 남은 차단을 구분 | D-27; contracts §2.1 proposals |
-| UI-05-02 / UAT-PLAN-02 | 자동 정책·202 pending 기록·기준선 버전·수동 재조정 실행 결과·RP 전후/주체/계기. 자동 꺼짐 pending만으로 기준 변경 없음, 실행 확정은 POST /api/replans/run | D-10; contracts §2.1 replans |
-| UI-06 / UAT-EXEC-06 | 종류별 연속 프로세스 실패 횟수·성공 초기화·QA+통합 합산 재작업 횟수·1회 수동 실행 허용. 중단/BLOCKED와 시작 전 실패는 별도 조치 | contracts §3.5 |
+## 이 문서의 역할
 
-빈 목록은 데이터 존재 여부와 필터 결과 개수를 구분할 수 있어야 한다. 구체 화면·문구·발생 조건·판정 ID는 [acceptance-coverage.md](acceptance-coverage.md)에 있다. 원본 타이머·하드코딩을 실제 보고로 바꾸는 요구는 기존 Mock 교체 표와 각 UAT를 따른다.
+이 문서는 각 화면이 **어떤 데이터를 읽고, 무엇을 바꾸는지** 정리한다.
 
-조회는 원본 `Api.loadProject()`(3308–3387), 전시 데이터는 `MOCK`(3091–3306), 설계 샘플은 `DESIGNS`(2988–3062), 추가 모델은 3395–3662줄이다. 원본은 클라이언트 메모리뿐이며 reload하면 초기화된다. `Sel`은 판정/계산, `*VM`은 전시 변환, `mutate`(5017–5035)는 복제→변경→상태전이 알림→실행등급 정규화→추가 이력 저장을 수행한다. 실제 결정은 가이드 157–169,1004–1012에 따라 서버에서 수행해야 한다.
+- 현재 제품 판정/계약 기준은 `keeproll/plan-baseline` **a60216d**다.
+- 아래 생성 영역은 원본 메모리 모델(프로토타입이 브라우저 메모리에만 들고 있는 데이터)의 관측이다.
+- 원본에 없는 owner 동작도 계약 데이터가 필요하다. 그 목록이 바로 아래에 있다.
+
+## 원본에 없지만 제품에 필요한 데이터
+
+owner 결정으로 생긴 동작은 원본에 없으므로 생성 영역에 나오지 않는다. 그래서 여기에 따로 적는다.
+
+### UI-03E/명세·이력 / UAT-APPROVE-01
+
+- 조회·변경 데이터: 명세 완료 여부·approval 상태·승인/반려 요청 결과·주체/시각/사유 이력.
+- 승인=ready, 반려=planning.
+- 로그인/권한 실패는 상태 미변경.
+- 근거: open-questions §0 Q-02/Q-05 #2·#3; contracts §2.1 approve/reject.
+
+### UI-06·Runner / UAT-EXEC-09
+
+- 조회·변경 데이터: 중단 시도 interrupted·Task paused·보유/잠금 해제 증거·재개 거부 reasons[]·동일 단계/등급의 새 attempt.
+- 같은 host의 그룹 해제와 PC 변경의 별도 격리 규칙은 구분한다.
+- 근거: contracts §3.4/§4.3; Q-05 #10.
+
+### UI-03-03·UI-09A / UAT-TASK-06
+
+- 조회·변경 데이터: 실제 actStart·미충족 선행 목록·원자적으로 제거된 SS 관계.
+- impact.removedDependencies[{pred,succ,type,reason}], unblockedSuccessors[{taskKey,remainingBlockers[]}].
+- 실제 해소와 남은 차단을 구분한다.
+- 근거: D-27; contracts §2.1 proposals.
+
+### UI-05-02 / UAT-PLAN-02
+
+- 조회·변경 데이터: 자동 정책·202 pending 기록·기준선 버전·수동 재조정 실행 결과·RP 전후/주체/계기.
+- 자동 꺼짐 상태의 pending만으로는 기준이 변경되지 않는다. 실행 확정은 POST /api/replans/run이다.
+- 근거: D-10; contracts §2.1 replans.
+
+### UI-06 / UAT-EXEC-06
+
+- 조회·변경 데이터: 종류별 연속 프로세스 실패 횟수·성공 초기화·QA+통합 합산 재작업 횟수·1회 수동 실행 허용.
+- 중단/BLOCKED와 시작 전 실패는 별도 조치다.
+- 근거: contracts §3.5.
+
+## 빈 목록과 Mock 교체
+
+빈 목록은 데이터 존재 여부와 필터 결과 개수를 구분할 수 있어야 한다.
+
+- 왜: "데이터가 없음"과 "검색 조건에 맞는 것이 없음"을 사용자에게 다르게 안내해야 하기 때문이다.
+- 구체 화면·문구·발생 조건·판정 ID는 [acceptance-coverage.md](acceptance-coverage.md)에 있다.
+- 원본 타이머·하드코딩을 실제 보고로 바꾸는 요구는 기존 Mock 교체 표와 각 UAT를 따른다.
+
+## 원본 데이터가 어디에 있나
+
+- 조회는 원본 `Api.loadProject()`(3308–3387)다.
+- 전시 데이터는 `MOCK`(3091–3306)다.
+- 설계 샘플은 `DESIGNS`(2988–3062)다.
+- 추가 모델은 3395–3662줄이다.
+
+원본은 클라이언트 메모리뿐이며 reload(새로고침)하면 초기화된다.
+
+원본 코드의 역할 이름:
+
+- `Sel`: 판정/계산.
+- `*VM`: 화면에 보여 주기 위한 전시 변환.
+- `mutate`(5017–5035): 복제→변경→상태전이 알림→실행등급 정규화→추가 이력 저장을 수행한다.
+
+실제 결정은 가이드 157–169,1004–1012에 따라 서버에서 수행해야 한다. 브라우저에서 판정하면 조작될 수 있고 여러 사용자의 결과가 어긋날 수 있기 때문이다.
 
 ## 데이터 객체와 키
+
+표 읽는 법: 한 행이 원본의 데이터 객체 하나다. 가운데 열은 원본 필드 이름이고, 오른쪽 열은 원본 줄 번호다. 필드 이름은 코드 그대로이므로 번역하지 않았다.
 
 | 객체 | 필수로 보여주거나 사용하는 필드 | 원본 |
 |---|---|---|
@@ -49,9 +108,16 @@
 | CI | main/runs/queue/flaky/settings/deploy; run id/stage/task/att/ref/pr/at/dur/st/trig/failStep/log/note/url/merged; pipe stages/steps/gate/rules | 3523–3549,4726–4801 |
 | System reset / cleanup | sys.resets at/by/from/to/name/kept/runner/n; cleanup at/epoch/jobs | 4694–4725,6956–6967 |
 
-WBS 번호는 Phase/WP 내 위치로 계산하는 표시값이며 참조 키는 Task ID다. UUID 기반 DB 테이블 예시는 만들어지는 샘플 제품의 설계이며 이 조사에서 Agent WBS DB schema를 확정한 것이 아니다. 화면에서 사용하는 문자열 날짜는 원본 표현이고 실제 저장 시간대는 가이드 1014–1020에 따라 UTC 저장/Asia·Seoul 표시가 필요하다.
+표에 관한 주의:
+
+- WBS 번호는 Phase/WP 내 위치로 계산하는 표시값이다. 참조 키는 Task ID다.
+  - 왜: Task 순서가 바뀌면 WBS 번호도 바뀌므로, 다른 데이터가 가리킬 때는 바뀌지 않는 Task ID를 써야 한다.
+- UUID 기반 DB 테이블 예시는 만들어지는 샘플 제품의 설계다. 이 조사에서 Agent WBS DB schema를 확정한 것이 아니다.
+- 화면에서 사용하는 문자열 날짜는 원본 표현이다. 실제 저장 시간대는 가이드 1014–1020에 따라 UTC 저장/Asia·Seoul 표시가 필요하다.
 
 ## 열거값과 기본값
+
+열거값(enum)은 한 필드가 가질 수 있는 값의 전체 목록이다.
 
 | 항목 | 원본 값 |
 |---|---|
@@ -87,15 +153,54 @@ WBS 번호는 Phase/WP 내 위치로 계산하는 표시값이며 참조 키는 
 | split result | 통과,의심,위반,주의,판단,예외,꺼짐 |
 | FE design state / index / output kind | Loading,Empty,Error,Success,Disabled / BTREE,UNIQUE,GIN,HASH / 코드,문서,Migration,테스트,설정 |
 
-추정 신뢰도 상/중/하, 재작업정책 same/up1/top, 사용량정책 wait/down, 기본 lowPct20/escNotify2, 기본 분할 maxH4/minH0.5/maxFiles8, 예산 dev2/qa3, 기본 heartbeat60초, 일정 threshold1일/assumeRate0.6. 위 표는 **원본 열거값**이다. 제품은 owner Q-02 착수승인·자동done, Q-04 자동재시도2회/총3회·자동재작업3회, Q-05 BLOCKED 대표상태유지, Q-06 Effort표, Q-12 최신CLI/미검증재검증을 우선한다. 추가 owner 결정으로 시작전취소 SS 관계를 제거하고 CP영향에 풀리는후속을 표시한다. 값은 [data-model.json](evidence/data-model.json)의 constants 및 schema와 함께 확인한다. 고정 수치는 제품 요구와 Mock 가정을 구분해야 하며 가이드 1088–1125에 교체 목록이 있다.
+원본의 기본값과 정책값:
+
+- 추정 신뢰도 상/중/하
+- 재작업정책 same/up1/top
+- 사용량정책 wait/down
+- 기본 lowPct20/escNotify2
+- 기본 분할 maxH4/minH0.5/maxFiles8
+- 예산 dev2/qa3
+- 기본 heartbeat60초
+- 일정 threshold1일/assumeRate0.6
+
+위 표는 **원본 열거값**이다. 제품은 아래 owner 결정을 우선한다.
+
+- Q-02 착수승인·자동done
+- Q-04 자동재시도2회/총3회·자동재작업3회
+- Q-05 BLOCKED 대표상태유지
+- Q-06 Effort표
+- Q-12 최신CLI/미검증재검증
+- 추가 owner 결정: 시작전취소 SS 관계를 제거하고 CP영향에 풀리는후속을 표시한다.
+
+값은 [data-model.json](evidence/data-model.json)의 constants 및 schema와 함께 확인한다.
+고정 수치는 제품 요구와 Mock 가정을 구분해야 한다. 가이드 1088–1125에 교체 목록이 있다.
 
 ## UI 상태와 영속 변경의 구분
 
-검색·필터·정렬·접힘·선택 Task/탭·레일·상세 위치·읽기/편집 전환·모달·입력 초안은 원본 UI state다. 메시지 초안은 Task별 drafts에만 보관되고 reload 보존은 없다. owner Q-01의 UI-AUTH는 원본에 없으며 LAN password 입력/실패/429, loopback link token 일회소비/URL제거/로그인후복귀가 추가 데이터다. 비밀번호·링크토큰을 샘플 엔티티나 내보내기에 넣지 않는다. 실제 제품 URL 요구(`/wbs/:id`, `/settings/:tab`)는 가이드283,348줄이며 원본에는 라우팅이 없다.
+UI state는 화면에서만 쓰고 서버에 저장하지 않는 상태다. 아래는 원본 UI state다.
 
-저장되는 업무 변경은 Task/명세/설계/체크리스트/의존성/등급/정책/메시지/실행결과/검증/Evidence/CP/승인/일정기준/보고서/수신·연결설정/알림규칙/초기화다. 메시지 본문이 Task 명세를 직접 바꾸지 않으며 CP 승인/반영이 필요하다. 실제 서버에서는 트랜잭션·버전 충돌·멱등성을 함께 구현해야 한다. 원본의 낙관적 잠금 오류는 주입 UI일 뿐 실제 동시 저장을 재현하지 않는다.
+- 검색·필터·정렬·접힘·선택 Task/탭·레일·상세 위치·읽기/편집 전환·모달·입력 초안.
+- 메시지 초안은 Task별 drafts에만 보관되고 reload 보존은 없다.
+
+owner Q-01의 UI-AUTH는 원본에 없으며 아래가 추가 데이터다.
+
+- LAN password 입력/실패/429
+- loopback link token 일회소비/URL제거/로그인후복귀
+- 비밀번호·링크토큰을 샘플 엔티티나 내보내기에 넣지 않는다. 비밀값이 파일로 새어 나가면 안 되기 때문이다.
+
+실제 제품 URL 요구(`/wbs/:id`, `/settings/:tab`)는 가이드283,348줄이며 원본에는 라우팅이 없다.
+
+영속 변경은 서버에 저장되어 새로고침해도 남는 변경이다.
+
+- 저장되는 업무 변경: Task/명세/설계/체크리스트/의존성/등급/정책/메시지/실행결과/검증/Evidence/CP/승인/일정기준/보고서/수신·연결설정/알림규칙/초기화.
+- 메시지 본문이 Task 명세를 직접 바꾸지 않는다. CP 승인/반영이 필요하다.
+- 실제 서버에서는 트랜잭션·버전 충돌·멱등성(같은 요청을 여러 번 보내도 결과가 한 번과 같은 성질)을 함께 구현해야 한다.
+- 원본의 낙관적 잠금 오류는 주입 UI일 뿐, 실제 동시 저장을 재현하지 않는다.
 
 ## 실제 백엔드·Runner가 필요한 모사 동작
+
+모사 동작은 원본이 타이머나 고정값으로 "흉내만" 내는 동작이다. 제품에서는 오른쪽 열의 실제 공급자가 해야 한다.
 
 | 기능 | 원본 모사 | 실제 공급자 / 참고 계약 |
 |---|---|---|
@@ -117,17 +222,34 @@ WBS 번호는 Phase/WP 내 위치로 계산하는 표시값이며 참조 키는 
 | Telegram | API미호출; tgSim 결과; 429 실제2.5초 후 성공처리(표시는15초) | WBS outbox+Bot API, retry_after/백오프; 가이드 987–1000,1069–1076 |
 | 초기화·cleanup | 메모리 즉시삭제·epoch증가, 온라인이면 정리완료로 표시 | WBS 삭제트랜잭션+Runner commands/cleanup결과; GitHub 되돌림커밋·PR닫기·브랜치정리 |
 
-원본에 실제 API 호출이 없으므로 기능별 서버 엔드포인트는 가이드 §8에 명시된 것만 계약으로 사용한다. 여기서 새 경로를 설계하지 않았다. Runner 내부 UI·세션 실시간 관찰·별도 채팅 서버는 범위 밖이다. DS_MOCK의 Kafka/Redis/Neo4j/QuestDB는 화면 표현 예시이고 Agent WBS 자체의 인프라 도입 요구가 아니다.
+표에 관한 주의:
+
+- 원본에 실제 API 호출이 없으므로 기능별 서버 엔드포인트는 가이드 §8에 명시된 것만 계약으로 사용한다. 여기서 새 경로를 설계하지 않았다.
+- Runner 내부 UI·세션 실시간 관찰·별도 채팅 서버는 범위 밖이다.
+- DS_MOCK의 Kafka/Redis/Neo4j/QuestDB는 화면 표현 예시다. Agent WBS 자체의 인프라 도입 요구가 아니다.
 
 ## 실제 API 구현에서 빠뜨리면 안 되는 연결
 
-Task ID 기반 참조, 목록→선택→상세의 동일 버전 데이터, 서버 판정 차단/Gate/CP/일정, append-only Attempt/Verification/History/기준 버전, 입력커밋 고정, `X-Project-Epoch` 불일치409, 수정 updatedAt/version 충돌409, Runner 재전송 멱등성, 보고서 불변 snapshot, 메일/Telegram 비밀 쓰기전용과 로그/응답/내보내기 마스킹이 필요하다. 이들은 가이드 명시 요구이고 원본만으로 구현 완료를 증명할 수 없다.
+아래 항목이 모두 필요하다.
+
+- Task ID 기반 참조
+- 목록→선택→상세의 동일 버전 데이터
+- 서버 판정 차단/Gate/CP/일정
+- append-only(덧붙이기만 하고 고치지 않는) Attempt/Verification/History/기준 버전
+- 입력커밋 고정
+- `X-Project-Epoch` 불일치409
+- 수정 updatedAt/version 충돌409
+- Runner 재전송 멱등성
+- 보고서 불변 snapshot
+- 메일/Telegram 비밀 쓰기전용과 로그/응답/내보내기 마스킹
+
+이들은 가이드 명시 요구이고, 원본만으로 구현 완료를 증명할 수 없다.
 
 <!-- GENERATED: extract.py -->
 
 ## 화면 ID별 조회 데이터와 변경 결과
 
-아래 변경은 **원본 메모리 동작**이다. API 명세가 주어진 경우는 본문 계약 표를 따르고, 없는 경우 경로/HTTP 메서드를 새로 지어내지 않았다. UI만 바꾸는 탭·필터·초안과 영속 데이터 변경은 본문에서 구분한다.
+아래 변경은 **원본 메모리 동작**이다. API 명세가 주어진 경우는 본문 계약 표를 따른다. 명세가 없는 경우 경로/HTTP 메서드를 새로 지어내지 않았다. UI만 바꾸는 탭·필터·초안과 영속 데이터 변경은 본문에서 구분한다.
 
 | 화면 ID | 필요한 데이터/입력 | 원본 변경·이동 결과 | 출처 로직 |
 |---|---|---|---|
@@ -238,7 +360,13 @@ Task ID 기반 참조, 목록→선택→상세의 동일 버전 데이터, 서�
 
 ## 원본 샘플 모델의 전체 필드 경로
 
-추출 방법: `Api.loadProject()` 및 Component 생성자 결과의 모든 중첩 객체·배열을 순회했다. 배열은 `[]`, Task 사전의 키는 `TASK-*`로 정규화했다. null/빈 배열에만 있는 미래 필드는 추론하지 않는다. 예시는 읽기 편의를 위해 각 필드 최대 3개이고, 열거값 전체는 본문과 JSON `constants`가 기준이다. 런타임 날짜·예측값은 실행 시점에 따라 달라진다.
+추출 방법과 읽는 법:
+
+- `Api.loadProject()` 및 Component 생성자 결과의 모든 중첩 객체·배열을 순회했다.
+- 배열은 `[]`, Task 사전의 키는 `TASK-*`로 정규화했다.
+- null/빈 배열에만 있는 미래 필드는 추론하지 않는다.
+- 예시는 읽기 편의를 위해 각 필드 최대 3개다. 열거값 전체는 본문과 JSON `constants`가 기준이다.
+- 런타임 날짜·예측값은 실행 시점에 따라 달라진다.
 
 | 필드 경로 | 원본 JS 자료형 | 샘플 값(최대 3) |
 |---|---|---|

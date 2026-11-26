@@ -1,28 +1,63 @@
 # 화면 ID별 독립 리뷰 스크린샷 대응표
 
-자료 루트는 **/home/keeproll/.cache/agent-wbs-baseline/**이다. 표의 파일명은 이 루트 기준이며 파일을 복사하거나 커밋하지 않았다. 원본 자체를 비교하는 자료이고 제품 구현 통과 증거가 아니다. REVIEW.md·walk*.json·act*.json·resp.json 및 재현 mjs도 같은 폴더에 있다. 현재 로컬 파일 존재를 확인했고 cache가 지워지면 표만으로 이미지를 복원할 수 없으므로 coordinator가 원본 증거를 별도 보관해야 한다.
+> 처음 읽는다면 [README.md](README.md)의 화면 ID 읽는 법을 먼저 본다.
 
-- 주시각 기준: desktop-clock20261105/, **2026-11-05 20:00:00 Asia/Seoul**, 1920×1080. 메뉴·탭·상태비교는 이자료 우선.
-- 보충: desktop/, **2026-11-25 20:00:00 KST**, 모달·편집·오류·추가패널. 날짜가달라지는 실행시간/보고서수/예상일을주시각자료와같다고비교하지않는다.
-- 폭자료: w1400/, w1280/, w1100/, tablet/(1024), tablet-portrait/(768), mobile/(390), mobile-emulated/(기기390이지만 viewport meta부재로innerWidth980). 각폴더의같은ID파일을비교한다.
-- .png는viewport, .full.png는전체높이이며 UI-13은비정상nav주입으로만열었다. UI-AUTH는owner추가범위라원본스크린샷없음.
-- 리뷰환경: Playwright+Chromium headless159.0.8154.6, ko-KR/Asia·Seoul. 로컬정적서버18799는종료됨. 저자의최초Orca브리지실패와독립리뷰의성공을구분한다.
+## 이 문서의 역할
+
+이 문서는 독립 리뷰가 찍은 원본 프로토타입 스크린샷을 화면 ID별로 짝지어 둔 표다.
+
+- 원본 자체를 비교하는 자료이고, 제품 구현 통과 증거가 아니다.
+- 파일을 복사하거나 커밋하지 않았다. 표에는 파일 이름만 있다.
+
+## 자료 위치
+
+자료 루트는 **/home/keeproll/.cache/agent-wbs-baseline/**이다.
+
+- 표의 파일명은 이 루트 기준이다.
+- REVIEW.md·walk*.json·act*.json·resp.json 및 재현 mjs도 같은 폴더에 있다.
+- 현재 로컬 파일이 있는 것은 확인했다.
+- cache가 지워지면 표만으로 이미지를 복원할 수 없다. 그래서 coordinator가 원본 증거를 별도로 보관해야 한다.
+
+## 자료 폴더 읽는 법
+
+- **주시각 기준**: desktop-clock20261105/, **2026-11-05 20:00:00 Asia/Seoul**, 1920×1080.
+  - 메뉴·탭·상태 비교는 이 자료를 우선한다.
+- **보충**: desktop/, **2026-11-25 20:00:00 KST**, 모달·편집·오류·추가패널.
+  - 날짜가 달라지면 실행시간/보고서 수/예상일이 달라진다. 그래서 주시각 자료와 같다고 비교하지 않는다.
+- **폭 자료**: 각 폴더의 같은 ID 파일을 비교한다.
+  - w1400/, w1280/, w1100/
+  - tablet/(1024), tablet-portrait/(768), mobile/(390)
+  - mobile-emulated/(기기390이지만 viewport meta 부재로 innerWidth980)
+- 파일 이름 끝:
+  - .png는 viewport(보이는 화면 영역)만 찍은 것이다.
+  - .full.png는 전체 높이를 찍은 것이다.
+- UI-13은 비정상 nav 주입으로만 열었다.
+- UI-AUTH는 owner 추가 범위라 원본 스크린샷이 없다.
+- 리뷰 환경: Playwright+Chromium headless159.0.8154.6, ko-KR/Asia·Seoul.
+  - 로컬 정적 서버18799는 종료됐다.
+  - 저자의 최초 Orca 브리지 실패와 독립 리뷰의 성공을 구분한다.
 
 ## 고정시각 재현 순서
 
-실행환경은리뷰가이미설치한Playwright를사용했다. 아래는재현순서설명이며이작업에서새브라우저를실행한기록은아니다. 원본파일은수정하지않는다.
+왜 시계를 고정하나: 원본은 실제 시계로 보고서·예상일·경과시간을 계산한다. 시계를 고정해야 언제 찍어도 같은 화면이 나온다.
 
-1. prototype/uiux만정적서버로제공.
-2. 새context에viewport1920×1080, locale ko-KR, timezoneId Asia/Seoul 설정.
-3. 페이지로드전에 p.clock.install({time:new Date('2026-11-05T20:00:00+09:00')}) 실행.
-4. Main.dc.html 접속후 p.clock.runFor(3000), document.fonts.ready 대기후해당메뉴/탭/상태로진입.
-5. 각상호작용후시계를필요한만큼만진행시키고보고서/예상일/경과시간에사용한시각을사진과함께기록.
+실행 환경은 리뷰가 이미 설치한 Playwright를 사용했다.
+아래는 재현 순서 설명이며, 이 작업에서 새 브라우저를 실행한 기록은 아니다.
+원본 파일은 수정하지 않는다.
 
-자세한수행코드는자료루트lib.mjs/walk.mjs/act*.mjs/resp.mjs이며본문은이코드를제품에복사하라는요구가아니다.
+1. prototype/uiux만 정적 서버로 제공한다.
+2. 새 context에 viewport1920×1080, locale ko-KR, timezoneId Asia/Seoul을 설정한다.
+3. 페이지 로드 전에 p.clock.install({time:new Date('2026-11-05T20:00:00+09:00')})을 실행한다.
+4. Main.dc.html에 접속한 후 p.clock.runFor(3000)을 하고, document.fonts.ready를 기다린 후 해당 메뉴/탭/상태로 들어간다.
+5. 각 상호작용 후 시계를 필요한 만큼만 진행시킨다. 보고서/예상일/경과시간에 사용한 시각을 사진과 함께 기록한다.
+
+자세한 수행 코드는 자료 루트의 lib.mjs/walk.mjs/act*.mjs/resp.mjs다. 본문은 이 코드를 제품에 복사하라는 요구가 아니다.
 
 ## 대응표
 
-각파일은가장구체적인화면ID에만배정했다. 상위화면과같은사진을전항목에중복배정해커버리지를부풀리지않았다. 직접사진이없으면없음으로표시한다.
+- 각 파일은 가장 구체적인 화면 ID에만 배정했다.
+- 상위 화면과 같은 사진을 모든 항목에 중복 배정해 커버리지를 부풀리지 않았다.
+- 직접 사진이 없으면 "직접 파일 없음"으로 표시한다.
 
 | 화면 ID | 주시각 11-05 파일 | 보충 11-25 파일 | 다른 폭·추가 증거 |
 |---|---|---|---|
@@ -134,14 +169,31 @@
 
 ## 별도 결함·인쇄 자료
 
+화면 ID가 아니라 불일치(MM)나 인쇄 결함을 보여 주는 자료다.
+
 - desktop/MM-03-browser.png
 - desktop/MM-05-browser.png
 - desktop/MM-06-browser.png
 - desktop/MM-12-browser.png
 - desktop/theme-dark-pref.png
-- desktop/UI-11-print.pdf: Ctrl+P 전체문서인쇄 결함. desktop/UI-11-print.png와대응.
-- desktop/UI-11-print-iframe.pdf/html: PDF버튼iframe별도경로; about:blank때문에폰트검증은무효였음. 서버PDF 인수근거로쓰지않음.
+- desktop/UI-11-print.pdf: Ctrl+P 전체 문서 인쇄 결함. desktop/UI-11-print.png와 대응한다.
+- desktop/UI-11-print-iframe.pdf/html: PDF 버튼 iframe의 별도 경로다. about:blank 때문에 폰트 검증은 무효였다. 서버PDF 인수 근거로 쓰지 않는다.
 
 ## 확인 범위와 남은 확인
 
-독립리뷰는14화면·31탭·8모달·일반9상태·오류21종중19종을확인했다. net/e400은열지않았으며CP승인뒤상태·Planning이견채택결과·실OS인쇄대화상자·스크린리더는미확인이다. iframe PDF폰트확인도유효한증거가아니다. 이개정저자는제공JSON/원본을대조하고죽은슬롯crop·Ctrl+P사진·1024WBS사진을직접열어확인했다. 모든PNG를새로촬영하거나클릭전체를독립재실행했다고주장하지않는다.
+독립 리뷰가 확인한 것: 14화면·31탭·8모달·일반9상태·오류21종 중19종.
+
+아직 확인하지 않은 것:
+
+- net/e400(열지 않았다)
+- CP 승인 뒤 상태
+- Planning 이견 채택 결과
+- 실OS 인쇄 대화상자
+- 스크린리더
+- iframe PDF 폰트 확인도 유효한 증거가 아니다.
+
+이 개정 저자가 한 일:
+
+- 제공된 JSON/원본을 대조했다.
+- 죽은 슬롯 crop·Ctrl+P 사진·1024 WBS 사진을 직접 열어 확인했다.
+- 모든 PNG를 새로 촬영하거나 클릭 전체를 독립 재실행했다고 주장하지 않는다.

@@ -137,7 +137,11 @@ def main():
     counts = dict(sorted(Counter(r['milestone'] for r in rows).items()))
     report = (HERE/'milestone-audit.md').read_text().split('<!-- AUDIT-GENERATED -->')[0].rstrip()
     out = ['## 전 UAT 화면·API·Runner 대조', '',
-           f'계획 {BASE}, **{len(rows)}개 전수 대조**, 지정 시점보다 뒤 단계의 필수 기능0건, 선행 그래프 **순환0건**. 각 UI 셀은 화면ID=구현 마일스톤이다. API/Runner 셀은 해당 계획 작업 전체를 먼저 완료해야 한다. 빈 Runner 셀은 브라우저/API 또는 fake 보고 fixture의 판정이며 실제 CLI 성공을 뜻하지 않는다.', '',
+           f'계획 {BASE}, **{len(rows)}개 전수 대조**, 지정 시점보다 뒤 단계의 필수 기능0건, 선행 그래프 **순환0건**.', '',
+           '표 읽는 법:', '',
+           '- 각 UI 셀은 화면ID=구현 마일스톤이다.',
+           '- API/Runner 셀은 해당 계획 작업 전체를 먼저 완료해야 한다.',
+           '- 빈 Runner 셀(—)은 브라우저/API 또는 fake 보고 fixture의 판정이며 실제 CLI 성공을 뜻하지 않는다.', '',
            '| UAT | 필수 통과 | 실제 표시/이동 대상 UI=구현 작업 | 필요한 API 작업 | 실제 Runner 작업 |',
            '|---|---|---|---|---|']
     for r in rows:
