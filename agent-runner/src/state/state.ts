@@ -6,6 +6,8 @@ import { isDeepStrictEqual } from 'node:util';
 import type { ApiRequest, ApiResponse, OperationId } from '../api/client.ts';
 import { OPERATIONS } from '../api/generated/client.ts';
 
+export const MAX_EVIDENCE_BYTES = 50 * 1024 * 1024;
+
 export type ReportId = { [K in OperationId]: ApiRequest<K> extends { idempotencyKey: string } ? K : never }[OperationId];
 export type Message = ApiResponse<'pollMessages'>['body']['messages'][number];
 export interface Entry {
@@ -114,6 +116,12 @@ export class State {
       let existed = false;
       try { data = JSON.parse(await readFile(join(directory, 'runner.json'), 'utf8')) as Document; existed = true; }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+      // 이전 형식도 파일을 만들기 전에 경로·식별자부터 검증한다.
+      validate({ ...data, outbox: data.outbox.map((entry) => {
+        const checked = { ...entry };
+        if (typeof (checked.file as unknown as { base64?: unknown } | undefined)?.base64 === 'string') delete checked.file;
+        return checked;
+      }) });
       const state = new State(home, data, lock);
       for (const name of await readdir(join(directory, 'rejected'))) {
         if (!/^[a-f0-9-]{36}\.json$/.test(name)) continue;
@@ -127,6 +135,13 @@ export class State {
       for (const entry of data.outbox) {
         const legacy = entry.file as unknown as { base64?: string; type: string } | undefined;
         if (legacy?.base64 !== undefined) {
+          if (Buffer.byteLength(legacy.base64, 'base64') > MAX_EVIDENCE_BYTES) {
+            entry.state = 'rejected';
+            entry.code = 'EVIDENCE_TOO_LARGE';
+            entry.reason = '이전 증거가 50 MiB 상한을 초과했습니다. 나눈 파일로 다시 보고하세요.';
+            delete entry.file;
+            continue;
+          }
           await atomicWrite(join(directory, 'evidence'), entry.id, Buffer.from(legacy.base64, 'base64'));
           entry.file = { name: entry.id, type: legacy.type };
         }

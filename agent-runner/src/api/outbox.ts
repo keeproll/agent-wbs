@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { isDeepStrictEqual } from 'node:util';
 import { ApiError, ApiTransportError, type ApiClient, type ApiRequest, type ApiResponse, type OperationId } from './client.ts';
-import { State, type Entry, type ReportId } from '../state/state.ts';
+import { MAX_EVIDENCE_BYTES, State, type Entry, type ReportId } from '../state/state.ts';
 
 export interface OutboxOptions {
   now?: () => number;
@@ -10,7 +10,6 @@ export interface OutboxOptions {
   monotonic?: () => number;
   onRejected?: (entry: Entry) => void | Promise<void>;
 }
-export const MAX_EVIDENCE_BYTES = 50 * 1024 * 1024;
 
 export function authenticationFailed(error: unknown): error is ApiError {
   return error instanceof ApiError && (error.status === 401 || error.status === 403);

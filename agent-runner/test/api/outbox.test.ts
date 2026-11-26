@@ -228,9 +228,10 @@ test('리뷰 M2: LEASE_LOST를 실행 계층에 알리고 재시작 조회에도
   await reopen();
   outbox = new Outbox(state, api());
   expect(outbox.rejectedFor('a')).toMatchObject([{ code: 'LEASE_LOST' }]);
-  await status('a');
+  await outbox.enqueue('reportAttemptResult', { epoch: 0, params: { attemptId: 'a' }, body: { fence: 1, summary: '완료', changedFiles: [], evidence: [] } });
   await outbox.flush();
   expect(requests).toHaveLength(1);
+  expect(state.snapshot.outbox).toHaveLength(1);
 });
 
 test('리뷰 L1·L2: 잠금 뒤 남은 임시 파일을 지우고 기존 폴더 권한도 제한한다', async () => {
@@ -261,6 +262,32 @@ test('이전 버전의 거부 기록과 인라인 증거도 재시작 때 별도
   expect(state.snapshot.outbox[0]?.file?.name).toBe(legacy.outbox[1]?.id);
   expect(state.rejected).toMatchObject([{ code: 'VALIDATION_FAILED' }]);
   expect(await readFile(join(home, 'state/runner.json'), 'utf8')).not.toContain('base64');
+});
+
+test('이전 상태의 증거 경로도 검증을 마친 뒤에만 변환한다', async () => {
+  const entry = await usage();
+  const legacy = { ...state.snapshot, outbox: [{ ...entry, id: '../escaped', file: { base64: Buffer.from('민감한 내용').toString('base64'), type: '' } }] };
+  await state.close();
+  await writeFile(join(home, 'state/runner.json'), JSON.stringify(legacy));
+  await expect(State.open(home)).rejects.toThrow();
+  await expect(stat(join(home, 'state/escaped'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test('이전 버전의 상한 초과 증거도 바이트를 옮기지 않고 원인을 보관한다', async () => {
+  await outbox.enqueue('uploadEvidence', { epoch: 0, params: { attemptId: 'a' }, body: {
+    file: new Blob(), kind: 'log', fence: 1, sha256: 'a'.repeat(64), size: 0,
+  } });
+  const legacy = state.snapshot;
+  const base64 = 'A'.repeat(Math.ceil((50 * 1024 * 1024 + 1) / 3) * 4);
+  await state.close();
+  await writeFile(join(home, 'state/runner.json'), JSON.stringify({ ...legacy, outbox: legacy.outbox.map((entry) => ({
+    ...entry, file: { base64, type: '' },
+  })) }));
+  await reopen();
+  expect(state.snapshot.outbox).toEqual([]);
+  expect(state.rejected).toMatchObject([{ code: 'EVIDENCE_TOO_LARGE' }]);
+  expect(await readdir(join(home, 'state/evidence'))).toEqual([]);
+  expect((await stat(join(home, 'state/runner.json'))).size).toBeLessThan(1000);
 });
 
 test('리뷰 M3: 변화 없는 polling은 상태 파일을 다시 쓰지 않는다', async () => {
