@@ -18,6 +18,12 @@ export interface ErrorBarState {
   /** 같은 요청을 다시 보낸다. 없으면 「다시 시도」를 보이지 않는다. */
   retry?: () => void;
   retrying?: boolean;
+  /** 덧붙일 안내 한 줄(예: 이전 요청 결과를 모를 때) */
+  extra?: string;
+  /** 이 막대를 띄운 쪽. clear(owner)는 자기 막대만 닫는다. */
+  owner?: symbol;
+  /** 사용자가 「닫기」를 눌렀을 때 */
+  onClose?: () => void;
 }
 
 export function ErrorBar({ state, onClose }: { state: ErrorBarState; onClose: () => void }) {
@@ -35,6 +41,7 @@ export function ErrorBar({ state, onClose }: { state: ErrorBarState; onClose: ()
           </ul>
         )}
         {error.kind === 'rateLimited' && error.retryAfterSec !== null && <div>{error.retryAfterSec}초 뒤에 다시 시도할 수 있습니다.</div>}
+        {state.extra && <div><b>{state.extra}</b></div>}
         <div className="muted">대상: {target} · {formatDateTime(at)}</div>
       </div>
       <div className="errbar-a">

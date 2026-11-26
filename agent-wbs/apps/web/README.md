@@ -32,7 +32,7 @@ M3-02~08은 이 바탕 위에 각 메뉴의 본문을 얹는다.
 src/
   main.tsx                 시작점. Mantine → ApiProvider → FeedbackProvider → Router 순서로 감싼다
   app/
-    router.tsx             주소(라우팅) 표. 각 메뉴 담당은 자기 메뉴 줄만 바꾼다
+    router.tsx             주소(라우팅) 표. 메뉴 연결은 병합 때 coordinator가 한다(shared/README §1)
     pages.tsx              아직 안 만든 메뉴(PendingPage)·404 화면
     sandbox/               공통 부품 견본(/_states). 개발·E2E 빌드에만 들어간다
   features/

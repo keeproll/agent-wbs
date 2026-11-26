@@ -6,6 +6,8 @@
 import type { ApiError } from '../api/client.ts';
 import { formatDateTime } from '../format.ts';
 import { BusyButton } from './BusyButton.tsx';
+import { causeMessage, causeTitle, codeLabel } from './errors.ts';
+import { ICON, Icon } from './Icon.tsx';
 import { Modal } from './Modal.tsx';
 
 export interface ConflictChange { at: string; actor: string; field: string; before: unknown; after: unknown }
@@ -35,9 +37,11 @@ export interface ConflictModalProps {
   onClose: () => void;
   /** 다시 적용 요청을 보내는 중 */
   busy?: boolean;
+  /** 다시 적용(최신 읽기 또는 저장)이 실패한 이유. 있으면 창 안에 보인다. */
+  failure?: ApiError | null;
 }
 
-export function ConflictModal({ error, mine, at, onReload, onReapply, onClose, busy = false }: ConflictModalProps) {
+export function ConflictModal({ error, mine, at, onReload, onReapply, onClose, busy = false, failure = null }: ConflictModalProps) {
   const changes = conflictChanges(error);
   return (
     <Modal
@@ -53,6 +57,15 @@ export function ConflictModal({ error, mine, at, onReload, onReapply, onClose, b
         </>
       )}
     >
+      {failure && (
+        <div className="banner danger" role="alert" style={{ marginTop: 0, marginBottom: 10 }}>
+          <Icon d={ICON.warning} />
+          <div className="banner-b">
+            <b>다시 적용하지 못했습니다 — {causeTitle(failure)}</b> <span className="mono">{codeLabel(failure)}</span>
+            <div>{causeMessage(failure)}</div>
+          </div>
+        </div>
+      )}
       <p>내가 이 화면을 연 뒤 같은 대상이 먼저 변경되었습니다. 내 변경을 그대로 저장하면 먼저 저장된 내용을 덮어쓸 수 있어 저장을 멈췄습니다.</p>
       <div className="kv" style={{ gridTemplateColumns: '110px minmax(0,1fr)' }}>
         <span className="kv-l">먼저 저장된 변경</span>

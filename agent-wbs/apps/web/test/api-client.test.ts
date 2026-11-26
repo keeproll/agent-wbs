@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ApiError, createApiClient } from '../src/shared/api/client.ts';
+import { ApiError, apiUrl, createApiClient } from '../src/shared/api/client.ts';
 
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
   new Response(body === null ? null : JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
@@ -100,5 +100,56 @@ describe('API 호출 계층(api client)', () => {
     const client = createApiClient({ fetch: (() => Promise.resolve(json(401, errorBody('LEAD_UNAUTHORIZED')))) as unknown as typeof globalThis.fetch, csrfToken: () => null, onUnauthorized });
     await client.call('getProject', {}).catch(() => undefined);
     expect(onUnauthorized).toHaveBeenCalledOnce();
+  });
+
+  // 독립 리뷰 eebac50 #2: 헤더만 오고 본문이 멈춘 경우
+  it('본문이 멈춰도 10초 제한이 본문 읽기까지 적용된다', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetch = vi.fn((_u: string, init: RequestInit) => {
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"a":'));
+            init.signal?.addEventListener('abort', () => { controller.error(init.signal?.reason); });
+          },
+        });
+        return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'application/json' } }));
+      });
+      const client = createApiClient({ fetch: fetch as unknown as typeof globalThis.fetch, csrfToken: () => null });
+      const pending = client.call('getProject', {}).catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(pending).resolves.toMatchObject({ kind: 'timeout', code: 'TIMEOUT' });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('성공 응답 본문이 JSON이 아니면 ApiError(server)', async () => {
+    const { client } = setup(() => new Response('{bad', { status: 200 }));
+    const error = await client.call('getProject', {}).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ kind: 'server', status: 200, code: 'INTERNAL' });
+  });
+
+  it('본문을 읽다가 연결이 끊기면 ApiError(network)', async () => {
+    const body = new ReadableStream<Uint8Array>({ start(controller) { controller.error(new TypeError('network')); } });
+    const { client } = setup(() => new Response(body, { status: 200 }));
+    await expect(client.call('getProject', {})).rejects.toMatchObject({ kind: 'network', code: 'NETWORK_ERROR' });
+  });
+
+  it('이미 취소된 signal이면 요청을 보내지 않는다', async () => {
+    const { fetch, client } = setup(() => json(200, {}));
+    const controller = new AbortController();
+    controller.abort();
+    await expect(client.call('getProject', { signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  // 독립 리뷰 eebac50 #5: 파일 응답
+  it('파일(바이너리) 응답 요청은 call로 부를 수 없고 apiUrl로 내려받기 주소를 만든다', async () => {
+    const { fetch, client } = setup(() => new Response('%PDF-1.7', { status: 200 }));
+    // @ts-expect-error 파일 응답 요청은 OperationId에서 빠진다.
+    await expect(client.call('getReportPdf', { params: { reportId: 'r 1' } })).rejects.toThrow(/파일 응답/);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(apiUrl('getReportPdf', { params: { reportId: 'r 1' } })).toBe('/api/reports/r%201/pdf');
+    expect(apiUrl('exportProject', {})).toBe('/api/project/export');
   });
 });
