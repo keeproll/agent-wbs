@@ -197,8 +197,7 @@ export class RunnerRepository {
   async reportStatus(a: Attempt, model: string, effort: string, adjust: object | null) {
     await this.client.query('update task_attempts set model_id=$2,effort=$3,grade_adjust=$4 where id=$1', [a.id,model,effort,adjust]);
   }
-  async alert(project: string | null, key: string, message: string, target: object = {}, kind = 'admin') {
+  async alert(project: string | null, key: string, message: string, target: object = {}) {
     await this.client.query("insert into alerts(project_id,key,severity,target) values($1,$2,'warn',$3) on conflict do nothing", [project,key,{ ...target, message }]);
-    await this.client.query('insert into notify_events(project_id,dedup_key,kind,ref) values($1,$2,$3,$4) on conflict do nothing', [project,key,kind,{ ...target, message }]);
   }
 }

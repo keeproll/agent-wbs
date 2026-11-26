@@ -1,0 +1,49 @@
+export type TelegramError = 'token_invalid' | 'chat_not_found' | 'forbidden' | 'rate_limited' | 'network' | 'webhook_in_use' | 'chat_migrated';
+export interface Bot { id: number; username: string; name: string }
+export interface Chat { chatId: string; title: string; type: string; lastAt?: string }
+export interface BotResult { ok: boolean; error: TelegramError | null; retryAfter: number | null; result?: Record<string, unknown> | unknown[] }
+
+/** Q-16 결정 전에는 명시한 로컬 fake 서버에만 연결한다. */
+export async function callBot(token: string, method: 'getMe' | 'getUpdates' | 'sendMessage', body: object = {}): Promise<BotResult> {
+  const endpoint = process.env.AWBS_TELEGRAM_BOT_API_URL;
+  if (!endpoint) return { ok: false, error: 'network', retryAfter: null };
+  try {
+    const url = new URL(endpoint);
+    if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || url.username || url.password || url.search || url.hash) {
+      return { ok: false, error: 'network', retryAfter: null };
+    }
+    const response = await fetch(`${url.origin}/bot${token}/${method}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      signal: AbortSignal.timeout(5_000), redirect: 'error',
+    });
+    const data = await response.json() as { ok?: boolean; result?: Record<string, unknown> | unknown[]; error_code?: number; parameters?: { retry_after?: number; migrate_to_chat_id?: number } };
+    if (data.ok === true && response.ok) return { ok: true, error: null, retryAfter: null, ...(data.result === undefined ? {} : { result: data.result }) };
+    const error: TelegramError = data.parameters?.migrate_to_chat_id ? 'chat_migrated'
+      : data.error_code === 401 ? 'token_invalid' : data.error_code === 403 ? 'forbidden'
+        : data.error_code === 400 ? 'chat_not_found' : data.error_code === 429 ? 'rate_limited'
+          : data.error_code === 409 && method === 'getUpdates' ? 'webhook_in_use' : 'network';
+    const retry = data.parameters?.retry_after;
+    return { ok: false, error, retryAfter: error === 'rate_limited' && Number.isSafeInteger(retry) && Number(retry) > 0 ? Number(retry) : error === 'rate_limited' ? 1 : null };
+  } catch {
+    // URL·토큰·외부 오류 본문은 기록하지 않는다.
+    return { ok: false, error: 'network', retryAfter: null };
+  }
+}
+
+export function botOf(result: BotResult): Bot | null {
+  const data = result.result as Record<string, unknown> | undefined;
+  return result.ok && data && typeof data.id === 'number' && typeof data.username === 'string' && typeof data.first_name === 'string'
+    ? { id: data.id, username: data.username, name: data.first_name } : null;
+}
+
+export function chatsOf(result: BotResult): Chat[] {
+  if (!result.ok || !Array.isArray(result.result)) return [];
+  const chats = new Map<string, Chat>();
+  for (const entry of result.result as { message?: { chat?: { id?: number; title?: string; first_name?: string; type?: string }; date?: number; message_thread_id?: number } }[]) {
+    const message = entry.message, chat = message?.chat;
+    if (!chat || message?.message_thread_id !== undefined || !['private', 'group', 'supergroup'].includes(chat.type ?? '') || !Number.isSafeInteger(chat.id)) continue;
+    const chatId = String(chat.id);
+    chats.set(chatId, { chatId, title: chat.title ?? chat.first_name ?? chatId, type: chat.type ?? '', lastAt: new Date((message?.date ?? 0) * 1000).toISOString() });
+  }
+  return [...chats.values()];
+}

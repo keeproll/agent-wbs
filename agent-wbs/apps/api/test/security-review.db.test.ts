@@ -35,7 +35,6 @@ app.addHook('preHandler', async (request) => {
   } as PoolClient['query'];
 });
 app.post('/api/runner/usage', (request) => ({ count: ++effects, principal: request.platform?.principal }));
-app.get('/api/settings/app-url', () => ({ leadData: true }));
 beforeAll(async () => {
   await recreateTestDatabase(dbUrl.href);
   await runMigrations(owner);

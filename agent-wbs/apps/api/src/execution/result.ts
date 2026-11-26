@@ -90,7 +90,7 @@ export async function reportResult(client: PoolClient, attemptId: string, princi
   if (executionFailed) await retryFailedAttempt(client,a.id);
   else if (!qa) await handover(client,job.id,a.kind === 'dev' ? 'qa' : 'reverify',a.id);
   else if (disposition === 'current' && body.verification?.result === 'FAIL') {
-    await repo.alert(task.project_id,`qa-fail:${a.id}`,'QA 검증에 실패했습니다.',{ taskKey:task.task_key,attemptId:a.id },'fail');
+    await repo.alert(task.project_id,`qa-fail:${a.id}`,'QA 검증에 실패했습니다.',{ taskKey:task.task_key,attemptId:a.id });
     if (!await handover(client,job.id,'rework',a.id)) await repo.state(job.id,'done');
   } else {
     await repo.state(job.id,'done');
