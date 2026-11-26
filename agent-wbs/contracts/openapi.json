@@ -5264,7 +5264,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "IDEMPOTENCY_CONFLICT, VERSION_CONFLICT"
+            "description": "IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, VERSION_CONFLICT"
           },
           "500": {
             "$ref": "#/components/responses/Error",
@@ -5290,6 +5290,7 @@
           ],
           "409": [
             "IDEMPOTENCY_CONFLICT",
+            "INVALID_TRANSITION",
             "VERSION_CONFLICT"
           ],
           "500": [

@@ -9,7 +9,7 @@ import { inEpoch } from '../platform/transaction.ts';
 import { required, RunnerRepository } from '../runner/repository.ts';
 import { TaskError } from '../tasks/errors.ts';
 import { assertVersion, changed, lockTask } from '../tasks/write.ts';
-import { checkEvidence, evidenceContent, multipartBody, removeUploads, uploadEvidence } from './evidence.ts';
+import { addEvidenceReference, checkEvidence, evidenceContent, multipartBody, removeUploads, uploadEvidence } from './evidence.ts';
 import { completeMergedTask, enqueueIntegration, gateInputs, taskGate } from './gate.ts';
 import { attempts, evidenceList, verifications, type PageFilter } from './read.ts';
 import { reportResult, type ResultReport } from './result.ts';
@@ -74,8 +74,9 @@ export function installExecution(app: FastifyInstance, pool: Pool, options: Exec
   route('getTaskVerifications',async (client,r) => { await task(client,params(r).taskKey); return verifications(client,{ ...r.query as PageFilter,taskKey:params(r).taskKey }); });
   route('getTaskAttempts',async (client,r) => { await task(client,params(r).taskKey); return attempts(client,params(r).taskKey,r.query as PageFilter); });
   route('listEvidence',(client,r) => evidenceList(client,r.query as PageFilter));
+  route('addVerificationEvidence', (client, r) => addEvidenceReference(client, params(r).id, (r.body as { path: string }).path), 201);
   route('getEvidenceContent',async (client,r,reply) => {
-    const row = (await client.query<{ storage_path: string; sha256: string; size: string }>('select storage_path,sha256,size from evidence where id::text=$1',[params(r).id])).rows[0];
+    const row = (await client.query<{ storage_path: string; sha256: string; size: string }>('select storage_path,sha256,size from evidence where id::text=$1 and storage_path is not null',[params(r).id])).rows[0];
     if (!row) throw new PlatformError('NOT_FOUND');
     const bytes = await evidenceContent(root,row.storage_path);
     checkEvidence(bytes,row.sha256,Number(row.size));

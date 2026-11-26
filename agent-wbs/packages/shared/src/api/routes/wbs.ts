@@ -435,6 +435,7 @@ const planning = [
     summary: '이견 조정 선택',
     body: Body({ ...V, choice: Text, memo: Opt(Type.String()) }),
     responses: { 200: m.Planning },
+    errors: ['INVALID_TRANSITION'],
   }),
   operation({
     ...noVersion,

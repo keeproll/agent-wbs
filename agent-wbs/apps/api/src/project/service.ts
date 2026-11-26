@@ -482,6 +482,8 @@ export async function reportInputChanges(db: Db, body: InputBody): Promise<{ hea
     await changeEvent(db, project.id, { kind: 'alert', key: 'input_history_rewritten' }, 'alert');
     return { head: result.head, recorded: false, historyRewritten: true };
   }
+  // 유효한 관측 시각만 적는다. 0023이 편집 버전을 유지하며, 단순 관측은 변경 이벤트를 만들지 않는다.
+  await db.query('update projects set input_checked_at=clock_timestamp() where id=$1', [project.id]);
   // 유효한 보고를 받아들였다: 열린 이력 재작성 경고는 이 트랜잭션에서 해소한다(조정자 결정 2026-11-26, 복구 확인 뒤 Runner 재관측).
   const resolved = await db.query("update alerts set resolved_at=clock_timestamp(),updated_at=clock_timestamp() where project_id=$1 and key='input_history_rewritten' and resolved_at is null", [project.id]);
   if (resolved.rowCount) await changeEvent(db, project.id, { kind: 'alert', key: 'input_history_rewritten' }, 'alert');

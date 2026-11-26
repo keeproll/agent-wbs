@@ -5,7 +5,7 @@ import { TaskError } from '../tasks/errors.ts';
 import { iso } from '../tasks/read.ts';
 import { LEAD, TIMESTAMP_MESSAGE } from '../tasks/write.ts';
 import { assertJob } from './jobs.ts';
-import { clientOf, idOf, insertCp, proposalView } from './proposals.ts';
+import { assertPlanningUnlocked, clientOf, idOf, insertCp, proposalView } from './proposals.ts';
 import type { RouteFn } from './split.ts';
 
 /*
@@ -19,12 +19,12 @@ const ID = { type: 'object', properties: { id: { type: 'string', minLength: 1, m
 const REVIEW = { type: 'object', properties: { id: { type: 'string', minLength: 1, maxLength: 128 }, rid: { type: 'string', minLength: 1, maxLength: 128 } }, required: ['id', 'rid'] };
 
 interface Side { text: string; ops: WireProposalOp[]; common?: WireProposalOp[] }
-interface PlanningRow { id: string; project_id: string; title: string; scope: unknown; created_at: string; updated_at: string }
+interface PlanningRow { id: string; planning_key: string; project_id: string; title: string; scope: unknown; created_at: string; updated_at: string }
 interface ReviewRow { id: string; topic: string; kind: string; codex: Side; claude: Side; choice: string | null; memo: string | null; updated_at: string }
 
 async function loadPlanning(client: PoolClient | Pool, id: string, lock = false): Promise<PlanningRow> {
   const row = UUID.test(id) ? (await client.query<PlanningRow>(
-    `select id,project_id,title,scope,${iso('created_at')} as created_at,${iso('updated_at')} as updated_at from plannings where id=$1${lock ? ' for update' : ''}`, [id])).rows[0] : undefined;
+    `select id,planning_key,project_id,title,scope,${iso('created_at')} as created_at,${iso('updated_at')} as updated_at from plannings where id=$1${lock ? ' for update' : ''}`, [id])).rows[0] : undefined;
   if (!row) throw new TaskError('NOT_FOUND', { resource: 'planning', id });
   return row;
 }
@@ -39,13 +39,13 @@ async function planningView(client: PoolClient | Pool, row: PlanningRow) {
     client.query<{ agent: string; analysis: { summary?: string; items?: string[] }; at: string }>(
       `select agent,analysis,${iso('updated_at')} as at from planning_analyses where planning=$1 order by agent`, [row.id]),
     reviewsOf(client, row.id),
-    client.query<{ id: string }>("select id from change_proposals where source='planning' and source_id=$1 order by created_at desc limit 1", [row.id]),
+    client.query<{ id: string }>("select id from change_proposals where source='planning' and source_id=$1 and deleted_at is null order by created_at desc limit 1", [row.id]),
   ]);
   return {
-    id: row.id, title: row.title, scope: typeof row.scope === 'string' ? row.scope : JSON.stringify(row.scope),
+    id: row.id, planningKey: row.planning_key, title: row.title, scope: typeof row.scope === 'string' ? row.scope : JSON.stringify(row.scope),
     analyses: analyses.rows.map((item) => ({ agent: item.agent, summary: item.analysis.summary ?? '', items: item.analysis.items ?? [], at: item.at })),
     reviews: reviews.map((review) => ({
-      id: review.id, topic: review.topic, kind: review.kind, codex: review.codex.text, claude: review.claude.text, choice: review.choice, memo: review.memo ?? '',
+      id: review.id, topic: review.topic, kind: reviewKind(review.kind), codex: review.codex.text, claude: review.claude.text, choice: review.choice, memo: review.memo ?? '',
       ops: review.codex.common ?? [], codexOps: review.codex.ops, claudeOps: review.claude.ops, updatedAt: review.updated_at,
     })),
     proposalId: proposal.rows[0]?.id ?? null, createdAt: row.created_at, updatedAt: row.updated_at,
@@ -63,10 +63,16 @@ async function insertPlanning(client: PoolClient, title: string, scope: string):
 }
 
 /** 이견을 고른 쪽의 변경. 고르지 않은 이견은 CP로 만들 수 없다. */
+function reviewKind(kind: string): 'agree' | 'diff' {
+  if (kind === 'agree' || kind === '일치') return 'agree';
+  if (kind === 'diff' || kind === '이견') return 'diff';
+  throw new Error(`알 수 없는 Planning 검토 kind: ${kind}`);
+}
+
 function chosenOps(review: ReviewRow): WireProposalOp[] | null {
   if (review.choice === 'codex') return review.codex.ops;
   if (review.choice === 'claude') return review.claude.ops;
-  if (review.choice === null && review.kind === '이견') return null;
+  if (review.choice === null && reviewKind(review.kind) === 'diff') return null;
   return review.codex.common ?? [];
 }
 
@@ -77,7 +83,7 @@ export function registerSessionRoutes(route: RouteFn, pool: Pool, epochOf: (requ
     if (!Number.isSafeInteger(offset) || offset < 0) throw new TaskError('VALIDATION_FAILED', {}, [{ path: 'cursor', rule: 'format', message: '목록 위치를 알 수 없습니다.' }]);
     const limit = Math.min(query.limit ?? 50, 200);
     const rows = (await pool.query<PlanningRow>(
-      `select id,project_id,title,scope,${iso('created_at')} as created_at,${iso('updated_at')} as updated_at from plannings order by created_at desc,id desc offset $1 limit $2`, [offset, limit + 1])).rows;
+      `select id,planning_key,project_id,title,scope,${iso('created_at')} as created_at,${iso('updated_at')} as updated_at from plannings order by created_at desc,id desc offset $1 limit $2`, [offset, limit + 1])).rows;
     return { items: await Promise.all(rows.slice(0, limit).map((row) => planningView(pool, row))), nextCursor: rows.length > limit ? Buffer.from(String(offset + limit)).toString('base64url') : null };
   });
 
@@ -96,6 +102,7 @@ export function registerSessionRoutes(route: RouteFn, pool: Pool, epochOf: (requ
     const body = request.body as { updatedAt: string; choice: string; memo?: string };
     const { rid = '' } = request.params as { rid?: string };
     const planning = await loadPlanning(client, idOf(request), true);
+    await assertPlanningUnlocked(client, planning.project_id, planning.id);
     const review = UUID.test(rid) ? (await client.query<{ updated_at: string }>(`select ${iso('updated_at')} as updated_at from planning_reviews where id=$1 and planning=$2 for update`, [rid, planning.id])).rows[0] : undefined;
     if (!review) throw new TaskError('NOT_FOUND', { resource: 'planning_review', id: rid });
     if (!isTimestamp(body.updatedAt)) throw new TaskError('VALIDATION_FAILED', {}, [{ path: 'updatedAt', rule: 'format', message: TIMESTAMP_MESSAGE }]);
@@ -147,7 +154,7 @@ export function registerSessionRoutes(route: RouteFn, pool: Pool, epochOf: (requ
     const planning = await loadPlanning(client, idOf(request), true);
     for (const review of body.reviews) {
       await client.query('insert into planning_reviews(project_id,planning,topic,kind,codex,claude,choice,memo,created_at) values($1,$2,$3,$4,$5::jsonb,$6::jsonb,null,$7,clock_timestamp())',
-        [planning.project_id, planning.id, review.topic, review.kind, JSON.stringify({ text: review.codex, ops: review.codexOps ?? [], common: review.ops ?? [] }),
+        [planning.project_id, planning.id, review.topic, reviewKind(review.kind), JSON.stringify({ text: review.codex, ops: review.codexOps ?? [], common: review.ops ?? [] }),
           JSON.stringify({ text: review.claude, ops: review.claudeOps ?? [] }), review.memo ?? null]);
     }
     await client.query("update plannings set status='reviewed' where id=$1", [planning.id]);

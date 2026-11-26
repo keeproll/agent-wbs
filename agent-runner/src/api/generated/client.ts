@@ -1492,6 +1492,7 @@ export interface Operations {
         heartbeatSeconds: number;
         inputCheckMinutes: number;
         inputRecheck: number;
+        inputCheckRequest?: number;
         ci: {
           nightAt: string;
           retry: number;
@@ -2041,7 +2042,7 @@ export interface Operations {
         fence: number;
         reviews: ({
           topic: string;
-          kind: string;
+          kind: "agree" | "diff" | "일치" | "이견";
           codex: string;
           claude: string;
           ops?: (PlanningProposalOp)[];

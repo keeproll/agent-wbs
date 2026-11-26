@@ -6,6 +6,8 @@ import type { PoolClient } from '@awbs/db';
 import { PlatformError } from '../platform/errors.ts';
 import { RunnerRepository } from '../runner/repository.ts';
 import { checkedJob } from '../runner/service.ts';
+import { record } from '../tasks/history.ts';
+import { deferChange } from '../changes/events.ts';
 
 export async function multipartBody(contentType: string, buffer: Buffer): Promise<Record<string, unknown>> {
   try {
@@ -64,3 +66,25 @@ export async function evidenceContent(root: string, relative: string) {
 }
 
 export async function removeUploads(paths: readonly string[]) { await Promise.all(paths.map(path => rm(path,{ force:true }))); }
+
+/** P6246–6252: 기존 검증에 참조만 덧붙인다. 사용자가 준 경로로 서버 파일을 열거나 외부 주소에 접속하지 않는다. */
+export async function addEvidenceReference(client: PoolClient, verificationId: string, value: string) {
+  const path = value.trim();
+  const url = URL.parse(path);
+  const invalid = !path || [...path].some((char) => char.charCodeAt(0) < 32 || char === '\\') || (url
+    ? !/^https?:\/\//.test(path) || !url.hostname || !!url.username || !!url.password
+    : path.startsWith('/') || path.includes('//') || path.split('/').some((part) => part === '.' || part === '..'));
+  if (invalid) throw new PlatformError('VALIDATION_FAILED', { reasons: ['저장소 상대 경로나 HTTP(S) 링크를 입력하세요.'] });
+  const row = (await client.query<{ project_id: string; task: string; task_key: string; attempt: string }>(`select v.project_id,a.task,t.task_key,v.attempt from verifications v
+    join task_attempts a on a.id=v.attempt join tasks t on t.id=a.task where v.id::text=$1 and t.deleted_at is null for update of t`, [verificationId])).rows[0];
+  if (!row) throw new PlatformError('NOT_FOUND');
+  const id = (await client.query<{ id: string }>(`insert into evidence(project_id,task,attempt,verification,kind,reference_path)
+    values($1,$2,$3,$4,'reference',$5) on conflict(verification,reference_path) do nothing returning id`, [row.project_id, row.task, row.attempt, verificationId, path])).rows[0]?.id;
+  if (!id) throw new PlatformError('VALIDATION_FAILED', { reasons: ['이미 연결된 Evidence 경로입니다.'] });
+  await record(client, { projectId: row.project_id, taskId: row.task, kind: 'Evidence', text: '검증에 Evidence 경로를 추가했습니다.',
+    after: path, ref: { verificationId, evidenceId: id } });
+  await client.query('update tasks set updated_at=clock_timestamp() where id=$1', [row.task]);
+  deferChange(client, row.project_id, 'verification', { id: verificationId });
+  deferChange(client, row.project_id, 'task', { taskKey: row.task_key });
+  return { id, taskKey: row.task_key, attemptId: row.attempt, verificationId, checklistItemKey: null, kind: 'reference', path, sha256: null, size: null };
+}

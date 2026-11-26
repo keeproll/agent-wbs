@@ -31,7 +31,7 @@ export const inputOf = (row: CpRow): ProposalInput => ({
 });
 
 export async function loadCp(client: PoolClient, id: string, lock: boolean): Promise<CpRow> {
-  const row = UUID.test(id) ? (await client.query<CpRow>(`select ${CP_COLUMNS} from change_proposals where id=$1${lock ? ' for update' : ''}`, [id])).rows[0] : undefined;
+  const row = UUID.test(id) || /^CP-[0-9]+$/.test(id) ? (await client.query<CpRow>(`select ${CP_COLUMNS} from change_proposals where ${UUID.test(id) ? 'id' : 'cp_key'}=$1 and deleted_at is null${lock ? ' for update' : ''}`, [id])).rows[0] : undefined;
   if (!row) throw new TaskError('NOT_FOUND', { resource: 'change_proposal', id });
   return row;
 }
@@ -53,11 +53,22 @@ export async function event(client: PoolClient, row: Pick<CpRow, 'id' | 'project
   deferChange(client, row.project_id, 'proposal', { id: row.id });
 }
 
+/** P5954: 반려·삭제되지 않은 CP가 있으면 세션 조정과 새 작성을 함께 막는다. 같은 잠금으로 두 요청의 경합도 막는다. */
+export async function assertPlanningUnlocked(client: PoolClient, projectId: string, planningId: string): Promise<void> {
+  await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [`awbs:planning-proposal:${planningId}`]);
+  const existing = (await client.query<{ id: string }>(`select id from change_proposals where project_id=$1 and source='planning' and source_id=$2
+    and status<>'rejected' and deleted_at is null order by created_at desc,id desc limit 1`, [projectId, planningId])).rows[0];
+  if (existing) throw new TaskError('INVALID_TRANSITION', { proposalId: existing.id }, [], '이 Planning 세션에는 반려되지 않은 CP가 있어 조정하거나 새로 작성할 수 없습니다.');
+}
+
 /** CP 행을 만든다. 표시 ID(CP-001)는 프로젝트 counters로 재사용하지 않는다. */
 export async function insertCp(
   client: PoolClient, projectId: string, body: { title: string; reason: string; source: { kind: string; id?: string }; ops: WireProposalOp[] }, actor: string, status: string,
   judgements: { taskJudgements: TaskJudgement[]; splitJudgements: unknown } = { taskJudgements: [], splitJudgements: null },
 ): Promise<CpRow> {
+  if (body.source.kind === 'planning' && body.source.id) {
+    await assertPlanningUnlocked(client, projectId, body.source.id);
+  }
   const sequence = (await client.query<{ value: number }>(
     `insert into counters(project_id,kind,value) values($1,'cp',(select coalesce(max((substring(cp_key from 4))::bigint),0)+1 from change_proposals where project_id=$1 and cp_key ~ '^CP-[0-9]+$'))
      on conflict (project_id,kind) do update set value=counters.value+1 returning value::int as value`, [projectId])).rows[0]?.value ?? 1;

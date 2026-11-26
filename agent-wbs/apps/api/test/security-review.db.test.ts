@@ -35,7 +35,7 @@ app.addHook('preHandler', async (request) => {
   } as PoolClient['query'];
 });
 app.post('/api/runner/usage', (request) => ({ count: ++effects, principal: request.platform?.principal }));
-app.get('/api/dashboard', () => ({ leadData: true }));
+app.get('/api/settings/app-url', () => ({ leadData: true }));
 beforeAll(async () => {
   await recreateTestDatabase(dbUrl.href);
   await runMigrations(owner);
@@ -119,7 +119,7 @@ test('L1: 비밀번호 재설정은 비밀번호 세션만 무효화하고 링�
 
 test('L3: Runner 토큰으로 팀장 GET을 호출하면 403이다', async () => {
   const token = await issueRunnerToken(pool, 'runner-read', 'fake');
-  expect((await app.inject({ url: '/api/dashboard', headers: { authorization: `Bearer ${token}`, 'x-project-epoch': '1' } })).statusCode).toBe(403);
+  expect((await app.inject({ url: '/api/settings/app-url', headers: { authorization: `Bearer ${token}`, 'x-project-epoch': '1' } })).statusCode).toBe(403);
 });
 
 test('L3: 본문 Runner ID 위조는 업무 처리 전에 거부한다', async () => {

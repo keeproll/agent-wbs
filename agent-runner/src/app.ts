@@ -347,7 +347,17 @@ export class RunnerApp {
     // 주기는 서버 정책(inputCheckMinutes)을 따른다. 정책이 없으면 기본 5분(P3-1 임시값).
     const policyMinutes = this.runner.policy?.inputCheckMinutes;
     const inputInterval = this.#d.inputIntervalMs ?? (policyMinutes ? policyMinutes * 60_000 : INPUT_INTERVAL_MS);
-    this.#timers.push(scheduleDaily(async () => { await this.reportInputs(); }, { intervalMs: inputInterval, onError: onError('입력 변경 보고') }));
+    const now = this.#d.now ?? Date.now;
+    let nextInputAt = 0;
+    let inputTicket: string | undefined;
+    // 정책은 5초마다 받는다. 확인 번호가 바뀌면 정기 확인 시각 전에도 관측하되 같은 번호로 중복 실행하지 않는다.
+    this.#timers.push(scheduleDaily(async () => {
+      const ticket = JSON.stringify([this.#d.state.snapshot.epoch, this.runner.policy?.inputRecheck, this.runner.policy?.inputCheckRequest]);
+      if (now() < nextInputAt && ticket === inputTicket) return;
+      nextInputAt = now() + inputInterval;
+      inputTicket = ticket;
+      await this.reportInputs();
+    }, { intervalMs: Math.min(inputInterval, 5000), onError: onError('입력 변경 보고') }));
   }
 
   /**

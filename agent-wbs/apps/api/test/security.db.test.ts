@@ -52,7 +52,7 @@ for (const op of runnerOps) {
   } });
 }
 // 초기화(/api/project/reset)는 M2-04, 착수 승인(/api/tasks/:taskKey/approve)은 M2-02, 프로젝트 등록(/api/project)은 M2-03의 실제 경로가 같은 관문을 거치므로 대역을 두지 않는다.
-app.get('/api/dashboard', () => { throw new Error('Bearer hunter2 /bot123:hunter2/send'); });
+app.get('/api/settings/app-url', () => { throw new Error('Bearer hunter2 /bot123:hunter2/send'); });
 
 beforeAll(async () => {
   await recreateTestDatabase(dbUrl.href);
@@ -247,7 +247,7 @@ test('공통 오류는 입력 원문·스택·비밀값을 노출하지 않는�
   const token = await issueLoginLink(pool);
   const login = await app.inject({ method: 'POST', url: '/api/auth/session', headers: { origin }, payload: { method: 'link', token } });
   const headers = { cookie: String(login.headers['set-cookie']).split(';')[0] ?? '' };
-  for (const url of ['/api/dashboard', '/missing?token=hunter2', '/%zz?token=hunter2']) {
+  for (const url of ['/api/settings/app-url', '/missing?token=hunter2', '/%zz?token=hunter2']) {
     const response = await app.inject({ url, headers });
     expect(response.json()).toMatchObject({ error: { code: expect.any(String), message: expect.any(String), action: expect.any(String), fix: expect.any(String), errors: [], details: {}, requestId: expect.any(String) } });
     expect(response.body).not.toMatch(/hunter2|stack|Error:/);
