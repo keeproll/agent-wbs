@@ -87,6 +87,26 @@ describe('fake GitHub', () => {
     expect(github.requests).toEqual([]);
   });
 
+  test('경로 변수로 등록하면 값을 넘기고, 완전 일치가 먼저다', async () => {
+    github.on('GET /repos/:owner/:repo', (request) => ({ body: request.params }));
+    github.on('GET /repos/o/fixed', () => ({ body: 'exact' }));
+    expect(await (await get('/repos/o/r%2Fx')).json()).toEqual({ owner: 'o', repo: 'r/x' });
+    expect(await (await get('/repos/o/fixed')).json()).toBe('exact');
+    expect((await get('/repos/o')).status).toBe(501);
+  });
+
+  test('drop이면 처리한 뒤 응답 없이 연결을 끊는다', async () => {
+    let handled = false;
+    github.on('PUT /x', () => {
+      handled = true;
+      return { drop: true };
+    });
+    await expect(
+      fetch(`${github.url}/x`, { method: 'PUT', headers: { authorization: 'Bearer fake-token' } }),
+    ).rejects.toThrow();
+    expect(handled).toBe(true);
+  });
+
   test('등록하지 않은 호출은 501이고 검사에서 실패한다', async () => {
     expect((await get('/user')).status).toBe(501);
     expect(() => {
