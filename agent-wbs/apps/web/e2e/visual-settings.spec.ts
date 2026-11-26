@@ -52,7 +52,7 @@ test('UI-12 Runner 탭(첫 화면)', async ({ page }) => {
   record('UI-12-nav', 0.01, '같아야 함(설정 선택 강조)', compareRegion('UI-12-nav', base, NAV, png, NAV));
   record('UI-12-title', 0.01, '같아야 함(제목 「설정」 위치·크기)', compareRegion('UI-12-title', base, TITLE, png, TITLE));
   record('UI-12-sub', null, '제품 결정: 설명에서 「Prototype」·「(Mock)」·「구현 현황」 제거(UAT-POLICY-05)', compareRegion('UI-12-sub', base, SUB, png, SUB));
-  record('UI-12-tabs', null, '제품 결정: 탭 「점검 · Prototype」→「점검」, 일정 탭 분할 위반 배지 없음(서버 API 없음, 보고). 탭 높이·간격·선택 밑줄은 같음', compareRegion('UI-12-tabs', base, TABS, png, TABS));
+  record('UI-12-tabs', null, '제품 결정: 탭 「점검 · Prototype」→「점검」, 일정 탭 분할 위반 배지는 서버 값(M3 통합: getSplitViolations, 시험 자료는 0건). 탭 높이·간격·선택 밑줄은 같음', compareRegion('UI-12-tabs', base, TABS, png, TABS));
   record('UI-12-main', null, 'Mock 데이터와 값이 다르고 Mock 버튼(인증 만료·복구·다시 점검 등) 없음, 확인 시각 대신 상태만. 카드 순서·카드 머리·표 열 폭은 같음', compareRegion('UI-12-main', base, MAIN, png, MAIN));
 });
 
@@ -63,7 +63,7 @@ test('UI-12-02 Agent 탭(첫 화면)', async ({ page }) => {
   // Agent 역할 카드: 같은 값(Claude 개발·Codex 검증)이면 같은 모양이어야 한다.
   const card: Box = { x: 204, y: 230, width: 1692, height: 250 };
   record('UI-12-02-workflow-card', 0.01, '같아야 함: 같은 값(Claude 개발·Codex 검증)·같은 문구', compareRegion('UI-12-02-workflow-card', base, card, png, card));
-  record('UI-12-02-main', null, '모델 목록·하위 Agent 정의가 Mock과 다름. 모델 순서 버튼(▲▼) 추가, 팀장 고정 Task 행 없음(서버 API 없음)', compareRegion('UI-12-02-main', base, MAIN, png, MAIN));
+  record('UI-12-02-main', null, '모델 목록·하위 Agent 정의가 Mock과 다름. 모델 순서 버튼(▲▼) 추가, 팀장 고정 Task 행·사용 현황은 서버 값(M3 통합: getAgentUsage, 시험 자료는 비어 있음)', compareRegion('UI-12-02-main', base, MAIN, png, MAIN));
 });
 
 test('UI-12-03 일정 · Task 탭(첫 화면)', async ({ page }) => {
@@ -73,7 +73,7 @@ test('UI-12-03 일정 · Task 탭(첫 화면)', async ({ page }) => {
   // 분할 기준 카드의 폼·10규칙 표(원본 SPLIT_MOCK과 같은 값). 카드 머리 오른쪽 요약(sumL)은 서버 API가 없어 없다.
   const split: Box = { x: 204, y: 285, width: 1692, height: 615 };
   record('UI-12-03-split', 0.01, '같아야 함: 원본 SPLIT_MOCK과 같은 값·문구(규칙 표 「끄기」 버튼은 접근 이름만 다름)', compareRegion('UI-12-03-split', base, split, png, split));
-  record('UI-12-03-main', null, '「기준을 벗어난 Task」 목록 없음(서버 API 없음, 보고)', compareRegion('UI-12-03-main', base, MAIN, png, MAIN));
+  record('UI-12-03-main', null, '「기준을 벗어난 Task」는 서버 값(M3 통합: getSplitViolations). 시험 자료는 0건이라 「없습니다」 안내', compareRegion('UI-12-03-main', base, MAIN, png, MAIN));
 });
 
 test('UI-12-06 점검 탭', async ({ page }) => {

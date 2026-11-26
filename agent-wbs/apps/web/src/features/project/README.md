@@ -82,6 +82,9 @@
   - GitHub 인증이 없으면 버튼을 끄고 이유를 보인다(원본 inFetch 문구).
 - **GitHub 연결 상태:** `useApiQuery('getGithubSettings')`. 서버가 구현되어 미확인 `unchecked`, 보고 뒤 `ok`·`failed`가 온다.
 - **차이 분석의 CP 연결**(`inputJob.proposalId`): 서버가 실제 관계를 준다. 「Change Proposal 보기」는 `/change/<id>`로 간다(공통 주소 `LINK.change`).
+- **Agent 참여 · 계획 변경 · WBS 구조 카드(UAT-PROJECT-11, 교차 리뷰 지적 2):** 원본 P L2062–2082 그대로. M3-04·M3-07이 서로 상대 몫으로 남겨 빠졌던 카드를 M3 통합에서 넣었다.
+  - 숫자는 이미 있는 조회로 센다(`structure.ts`): 담당·검증은 Task 목록, 실행 중·시도는 대시보드, 계획 변경은 대시보드의 승인 대기 목록.
+  - WBS 구조 행의 이름을 누르면 그 Phase로 거른 WBS(`/wbs?phase=<Phase id>`)가 열린다. Work Package 행도 그 Phase로 간다(원본 P L6478).
 - **남은 공백**
   - 입력 버전 표의 「커밋 메시지」: 응답에 없어 그 자리에 팀장 지시를 보인다(임시 타협, 리뷰 지적 6).
   - 출처 Task 링크 `/wbs?srcV=<버전>`: WBS 목록 응답에 Task의 출처 입력 버전이 없어 WBS가 거르지 못한다(서버 공백으로 보고).

@@ -65,12 +65,12 @@ test('UI-01 대시보드(1920, 전체 페이지)', async ({ page }) => {
   const at = (y: number, h: number): Box => ({ x: MAIN_X, y, width: W, height: h });
   record('UI-01-head', F, at(65, 120), png, 0.02, '제목·설명·기준 시각·일정 설명 한 줄. 같아야 함');
   record('UI-01-sched', F, at(184, 125), png, 0.02, '일정 카드 4개. 같아야 함');
-  record('UI-01-alerts', F, at(326, 115), png, null, '제품 결정: 알림 버튼이 대상별 이름(「프로젝트 보기」 등)이고 「확인」 버튼 없음(닫기 API 없음)');
+  record('UI-01-alerts', F, at(326, 115), png, null, '제품 결정: 알림 버튼이 대상별 이름(「프로젝트 보기」 등). 「확인」 버튼은 있음(M3 통합: ackAlert)');
   record('UI-01-kpis', F, at(455, 140), png, 0.02, 'Task 현황 KPI 4개. 같아야 함');
-  record('UI-01-panels', F, at(605, 332), png, null, '서버 계약에 Planning·CP·시도·검증 표시 번호가 없어 왼쪽 칸이 「Planning」「CP」「TASK-…」(원본 PLN-001·CP-002·ATT-…), 재작업 꼬리표에 V-0007-1 없음');
+  record('UI-01-panels', F, at(605, 332), png, null, '서버 표시 번호가 있으면 원본과 같다(M3 통합). 이 시험 자료에는 번호가 없어 왼쪽 칸이 「Planning」「CP」「TASK-…」(원본 PLN-001·CP-002·ATT-…), 재작업 꼬리표에 V-0007-1 없음');
   record('UI-01-dist', F, at(948, 295), png, 0.02, '작업 유형·기술 영역 분포. 같아야 함');
   record('UI-01-grades', F, at(1255, 175), png, 0.03, '등급 표. 같아야 함(모델 이름은 서버 modelId 그대로)');
-  record('UI-01-recent', F, at(1455, 362), png, null, '서버 최근 결과에 시도·검증 표시 번호가 없어 3번째 칸이 Task, 4번째 칸이 Agent(원본: ID·Task)');
+  record('UI-01-recent', F, at(1455, 362), png, null, '서버 번호가 있으면 원본처럼 ID·Task(M3 통합). 이 시험 자료에는 번호가 없어 3번째 칸 Task, 4번째 칸 Agent');
 });
 
 test('UI-07 검증 결과 목록(1920)', async ({ page }) => {

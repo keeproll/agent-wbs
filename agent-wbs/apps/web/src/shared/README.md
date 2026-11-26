@@ -115,10 +115,23 @@ const { save, busy, conflictModal } = useSave({
       - 창을 Esc로 닫아도 보관은 남고 오류 막대로 알린다. 그 뒤 내용이 다른 저장은 보내지 않고 「이전 요청의 결과를 아직 모릅니다」를 안내한다.
       - 왜: `onConflictReapply`에서 `client.call`을 직접 부르면 키가 useSave 밖에서 만들어져, 창을 닫은 뒤 일반 저장이 새 키로 같은 일을 또 처리할 수 있다.
     - `onConflictReload`는 서버에서 **실제로 읽은 결과를 await**한다. `invalidateQueries`만 하고 끝내면 실패해도 성공 안내가 뜬다. 입력은 읽기가 성공한 뒤에 버린다.
+  - 다시 적용 대상이 이미 없을 때(다른 창이 먼저 지움 등)는 `staleTargetError(문구, 고치는 법, 대상)`(api/client.ts)를 던진다. 일반 `Error`를 던지면 충돌 창이 이유를 보이지 못한다(교차 리뷰 지적 4).
   - 그 밖의 409: 오류 막대(다시 시도 없음) + `onRejected`. 왜: 「지금 상태와 맞지 않음」이라 최신 상태를 다시 읽어야 한다(contracts §1.1).
 - POST 요청에는 `run`이 받은 `idempotencyKey`를 넘긴다(`client.call(id, { …, idempotencyKey })`).
 - 변경 요청에는 `X-CSRF-Token`이 자동으로 붙는다.
 - `request`를 빼면 `payload`는 `undefined`이고, 다시 시도는 `run`이 읽는 그때의 화면 상태를 보낸다. POST·승인처럼 중복이 위험한 요청에는 꼭 `request`를 쓴다.
+
+## 3-1. 편집 보호는 화면에 하나 — `useEditGuard`·`EditGuardHost`
+
+- React Router의 이동 막기(useBlocker)는 한 번에 하나만 동작한다. 화면 안 부품이 저마다 걸면 뒤에 건 것이 앞의 것을 가린다.
+  - 예(교차 리뷰 지적 1): WBS의 「Task 생성」 창 보호기와 Task 상세의 편집 보호기가 겹쳐 생성 창 입력이 뒤로 가기에 사라졌다.
+- 그래서 화면(부모)이 `useEditGuard(여러 입력의 dirty를 합친 값)`을 한 번만 건다.
+- 안쪽 부품은 `<EditGuardHost.Provider value={setDirty}>` 안에서 `useHostedEditGuard(dirty)`를 쓴다. 「입력 중」만 알리고, 화면 안 이동(탭 전환)을 감싸는 `guard`는 그대로 받는다.
+
+## 3-2. 알림 「확인」 — `AlertAck`
+
+- `<AlertAck id={alert.id} label={alert.text} />`: `POST /api/alerts/:id/ack`. 성공하면 「알림을 확인 처리했습니다.」(원본 문구)와 알림 목록 다시 읽기.
+- 확인은 「읽었다」는 표시다. 원인을 해소하지 않는다.
 
 ## 4. 로딩 5종
 

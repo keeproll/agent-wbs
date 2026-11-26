@@ -5,7 +5,7 @@
  *   pnpm --filter @awbs/web e2e:api:m3int
  *
  * 하는 일(끝나면 모두 지운다): 이 시험 전용 PostgreSQL 컨테이너(m3int-e2e-pg-…)를 빈 포트에 띄우고,
- * migration → demo seed → auth CLI 비밀번호 → API(LAN 모드, 127.0.0.2) → Playwright `api-m3int`. 방식은 scripts/e2e-api-m307.ts와 같다.
+ * migration → demo seed → 알림 1건(SQL) → auth CLI 비밀번호 → API(LAN 모드, 127.0.0.2) → Playwright `api-m3int`. 방식은 scripts/e2e-api-m307.ts와 같다.
  */
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -49,6 +49,11 @@ try {
   const node = (args: string[], input?: string) => execFileSync('node', ['--conditions=awbs-source', ...args], { cwd: ROOT, env, input, encoding: 'utf8' });
   node(['packages/db/src/migrate-cli.ts']);
   node(['packages/db/src/seed-cli.ts', 'demo']);
+  // demo seed에는 열린 알림이 없다. 「확인」(ackAlert)을 실제 화면으로 시험하려고 반복 재작업 알림 1건을 넣는다(대시보드가 그 Task와 연결).
+  execFileSync('docker', ['exec', '-i', name, 'psql', '-v', 'ON_ERROR_STOP=1', '-U', 'awbs_owner', '-d', 'awbs_test_m3int'], {
+    input: `insert into alerts(project_id,key,severity,target) select id,'rework-limit:TASK-0007','warn','{"taskKey":"TASK-0007","message":"자동 재작업 한도를 넘었습니다."}'::jsonb from projects;`,
+    stdio: ['pipe', 'ignore', 'inherit'],
+  });
   node(['apps/api/src/platform/auth-cli.ts', 'set-password'], `${leadPassword}\n`);
   api = spawn('node', ['--conditions=awbs-source', 'apps/api/src/main.ts'], { cwd: ROOT, env, stdio: ['ignore', 'inherit', 'inherit'] });
   for (let i = 0; i < 60; i++) {

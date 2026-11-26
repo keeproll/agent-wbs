@@ -37,7 +37,7 @@ const apiCall = (page: Page, path: string, method = 'GET', body?: unknown) => pa
   const csrf = (await (await fetch('/api/session')).json() as { csrfToken?: string }).csrfToken ?? '';
   const res = await fetch(`/api/${p}`, {
     method: m,
-    headers: { 'content-type': 'application/json', 'x-csrf-token': csrf, 'idempotency-key': crypto.randomUUID() },
+    headers: { ...(b === undefined ? {} : { 'content-type': 'application/json' }), 'x-csrf-token': csrf, 'idempotency-key': crypto.randomUUID() },
     ...(b === undefined ? {} : { body: JSON.stringify(b) }),
   });
   return { status: res.status, body: res.status === 204 ? null : await res.json() as Record<string, unknown> };
@@ -117,4 +117,81 @@ test('Planning 실제 서버: 세션 목록은 서버 표시 키(planningKey)를
   const first = list.items[0];
   await expect(page.getByRole('complementary', { name: 'Planning 목록' })).toContainText(`${first?.planningKey ?? ''}${first?.title ?? ''}`);
   console.log(`[Planning 키] ${list.items.map((p) => p.planningKey).join(', ')}`);
+});
+
+/* ---------- 서버 후속 3차(origin/main 4b1de9e) 연결 ---------- */
+
+test('설정 실제 서버: 분할·일정·불가일·동시 실행·예산 카드가 모두 열리고, 작업 불가일 저장은 다시 읽어도 남는다', async ({ page }) => {
+  await login(page, '/settings/plan');
+  await expect(page.locator('.set-err')).toHaveCount(0);
+  const day = '2027-01-15';
+  await page.locator('#bo-d').fill(day);
+  await page.locator('#bo-n').fill('통합 확인');
+  await page.getByRole('button', { name: '추가', exact: true }).click();
+  const card = page.locator('section.card').filter({ has: page.locator('#bo-d') });
+  const [put] = await Promise.all([
+    page.waitForResponse((r) => r.url().endsWith('/api/settings/blackouts') && r.request().method() === 'PUT'),
+    card.getByRole('button', { name: '저장', exact: true }).click(),
+  ]);
+  expect(put.status(), await put.text()).toBe(200);
+  const saved = (await apiCall(page, 'settings/blackouts')).body as { days: { date: string }[] };
+  expect(saved.days.map((d) => d.date)).toContain(day);
+  await page.goto('/settings/runner');
+  await expect(page.locator('.set-err')).toHaveCount(0);
+});
+
+test('설정 실제 서버: 분할 위반 배지·목록과 사용 현황은 API 값과 같다', async ({ page }) => {
+  await login(page, '/settings/plan');
+  const v = (await apiCall(page, 'settings/split/violations')).body as { count: number; items: { taskKey: string; violations: number; suspicions: number }[] };
+  const tab = page.getByRole('navigation', { name: '설정 영역' }).getByRole('link', { name: /일정 · Task/ });
+  if (v.count > 0) await expect(tab).toContainText(String(v.count));
+  await expect(page.locator('.rpt-li')).toHaveCount(v.items.filter((x) => x.violations > 0 || x.suspicions > 0).length);
+  console.log(`[분할 위반] count=${String(v.count)} ${v.items.map((x) => x.taskKey).join(',')}`);
+  await page.goto('/settings/agent');
+  const u = (await apiCall(page, 'settings/agent-usage')).body as { lockedTasks: { taskKey: string }[]; models: { taskKeys: string[] }[]; subagents: unknown[] };
+  const locked = page.locator('.frow').filter({ hasText: '팀장 고정 Task' });
+  await expect(locked.getByRole('link')).toHaveCount(new Set(u.lockedTasks.map((t) => t.taskKey)).size);
+  console.log(`[사용 현황] 고정 ${String(u.lockedTasks.length)} · 모델 ${String(u.models.length)} · 하위 Agent ${String(u.subagents.length)}`);
+});
+
+test('설정 실제 서버: 「다시 점검」은 202로 접수되고 점검 결과는 그대로다', async ({ page }) => {
+  await login(page, '/settings/runner');
+  const [resp] = await Promise.all([
+    page.waitForResponse((r) => r.url().endsWith('/api/settings/readiness/check')),
+    page.getByRole('button', { name: '다시 점검' }).click(),
+  ]);
+  expect(resp.status()).toBe(202);
+  await expect(page.getByText('다시 점검을 요청했습니다', { exact: false })).toBeVisible();
+});
+
+test('알림 실제 서버: 「확인」하면 목록에서 빠진다(없으면 API로 404 규칙만 확인)', async ({ page }) => {
+  await login(page, '/dashboard');
+  const alerts = (await apiCall(page, 'alerts')).body as { items: { id: string; text: string }[] };
+  console.log(`[알림] ${String(alerts.items.length)}건`);
+  if (alerts.items.length === 0) {
+    expect((await apiCall(page, 'alerts/00000000-0000-4000-8000-000000000000/ack', 'POST')).status).toBe(404);
+    return;
+  }
+  const first = alerts.items[0];
+  const banner = page.getByRole('region', { name: '팀장 확인 필요' });
+  await banner.getByRole('button', { name: `${first?.text ?? ''} 알림 확인` }).click();
+  await expect(page.getByText('알림을 확인 처리했습니다.')).toBeVisible();
+  const after = (await apiCall(page, 'alerts')).body as { items: { id: string }[] };
+  expect(after.items.map((a) => a.id)).not.toContain(first?.id);
+});
+
+test('Task 개요 실제 서버: 작업량·고정 시작일을 고치면 상세 API에 남는다', async ({ page }) => {
+  await login(page, '/wbs/TASK-0012');
+  await page.getByRole('button', { name: '개요 편집' }).click();
+  await page.getByLabel('낙관 실행 시간').fill('2');
+  await page.getByLabel('예상 실행 시간', { exact: true }).fill('3');
+  await page.getByLabel('비관 실행 시간').fill('6');
+  await page.getByLabel('예상 토큰 (K)').fill('420');
+  await page.locator('#ov-fix').fill('2027-01-04');
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+  await expect(page.locator('#ov-title')).toHaveCount(0);
+  const t = (await apiCall(page, 'tasks/TASK-0012')).body as { estimate: { estHours: number; loHours: number; hiHours: number; tokensK: number } | null; fixStart: string | null };
+  expect(t.estimate).toMatchObject({ estHours: 3, loHours: 2, hiHours: 6, tokensK: 420 });
+  expect(t.fixStart).toBe('2027-01-04');
+  await expect(page.getByRole('region', { name: 'Task 상세' })).toContainText('고정 시작일2027-01-04');
 });

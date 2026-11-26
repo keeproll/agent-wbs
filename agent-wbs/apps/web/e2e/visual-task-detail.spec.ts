@@ -103,6 +103,6 @@ const LIMITS: Record<string, number | null> = {
 const NOTES: Record<string, string> = {
   'UI-03E-head': SAME, 'UI-03E-gate': SAME, 'UI-03-02': SAME, 'UI-03-03': SAME, 'UI-03-04': SAME, 'UI-03-05': SAME,
   'UI-03-07': SAME, 'UI-03-08': SAME, 'UI-03-09': SAME,
-  'UI-03-01': '계약 차이: TaskDetail에 예상 토큰·추정 주체/신뢰도/근거·실제 실행·고정 시작일이 없어 작업량·일정 칸이 줄어 아래가 위로 당겨짐(보고함)',
+  'UI-03-01': 'M3 통합: 추정·실제·고정 시작일 칸을 넣었다(원본과 같은 줄 수). 남은 차이는 시험 자료 값·실제 실행 시간 계산',
   'UI-03-06': '계약 차이: Attempt에 CI 참조(M7-05)·지정/실제 하위 Agent 태그가 없음. 등급·시각 표기는 원본과 같음',
 };

@@ -105,17 +105,22 @@ const form = useSettingForm({
 | 저장 줄(변경 취소·저장)이 바뀌었을 때 나타남 | §3의 편집 규칙 |
 | 모델 순서 버튼(▲▼) | owner가 모델 순서를 설정값으로 정함 |
 
-## 6. 서버에 없어서 못 보인 것(보고함)
+## 6. 서버 후속 3차 연결(M3 통합)과 남은 공백
 
-아래는 화면 자리는 정했지만 서버 API가 없어 보이지 않는다. 서버가 생기면 붙인다.
+서버 후속 3차(origin/main 4b1de9e)가 API를 채워 M3 통합에서 연결했다. 화면은 서버가 준 값만 보인다.
 
-- `GET/PUT /api/settings/split`·`schedule`·`blackouts`·`concurrency`·`obs-budget`·`github`, `POST /api/settings/github/check`(13개): 계약에는 있으나 서버(apps/api)에 경로가 없어 404다(실제 API E2E로 확인). 서버 후속 3차가 맡는다.
-  - 그래서 실제 서버에서는 이 카드들이 「불러오지 못했습니다 · 다시 시도」를 보인다.
-- 「기준을 벗어난 Task」 목록과 일정 탭 배지: Task별 분할 점검 결과를 주는 API가 없다.
-- 팀장 고정 Task 목록: Task 목록 응답에 등급 고정 여부가 없다. Task 상세(`getTask`)의 `grades.*.locked`에는 있으므로, 상세를 모아 쓰거나 집계 계약을 더하는 문제다.
-- 모델별 「사용 중 Task n건」, 하위 Agent별 지정 Task·마지막 사용·재작업률, 참고 자료 목록: 응답에 없다.
-- 반복 재작업 알림의 「확인」(알림 닫기): 알림을 처리하는 API가 없다. 「실행 보기」만 둔다.
-- 준비 상태 「다시 점검」: Runner에 다시 점검을 요청하는 API가 없다.
+- `GET/PUT /api/settings/split`·`schedule`·`blackouts`·`concurrency`·`obs-budget`·`github`, `POST /api/settings/github/check`: 이제 실제 서버에서 열리고 저장된다(실제 API E2E로 확인).
+- 「기준을 벗어난 Task」 목록과 일정 · Task 탭 배지: `GET /api/settings/split/violations`(`getSplitViolations`). 위반·의심이 있는 Task만, 원본 P L2470 모양 그대로.
+  - 왜 서버 값을 쓰나: Task 상세의 분할 점검과 같은 판정(`checkSplit`)이라 화면마다 수가 달라지지 않는다.
+- 팀장 고정 Task, 모델별 「사용 중 Task n건」, 하위 Agent별 지정 Task·마지막 사용·재작업률: `GET /api/settings/agent-usage`(`getAgentUsage`).
+  - 실제 사용은 Runner가 관측한 기록만 센다(설치만으로는 사용이 아님). 재작업률은 개발·재작업 뒤 첫 QA의 PASS·FAIL만 센다.
+  - 사용 현황에 없는 정의는 「0건 · 사용 기록 없음 · 판정 전」이다.
+- 반복 재작업 알림의 「확인」: `POST /api/alerts/:id/ack`(공통 `shared/ui/AlertAck.tsx`). 「실행 보기」는 작업 실행 주소로 간다(원본 goExec).
+- 준비 상태 「다시 점검」: `POST /api/settings/readiness/check`(202). 결과와 점검 시각은 Runner가 다시 점검해 보고한 뒤에만 바뀐다.
+- GitHub 「마지막 확인」 시각: 설정 응답의 `checkedAt`(Runner의 실제 확인 보고 시각). 「연결 확인」 요청만으로는 바뀌지 않는다.
+- **남은 것**
+  - 실제 Runner가 `readinessCheckRequest`·`github_check`를 받아 실행하는 쪽은 Runner 작업이다(서버 보고 범위 밖).
+  - 참고 자료 목록(하위 Agent `ref` 외)은 응답에 없다.
 
 ## 7. 시험
 
