@@ -13,19 +13,25 @@
     "e2e:install": "playwright install chromium"
   },
   "dependencies": {
+    "@awbs/shared": "workspace:*",
     "@mantine/core": "9.8.2",
     "@mantine/hooks": "9.8.2",
+    "@tanstack/react-query": "5.108.4",
     "pretendard-gov": "1.3.9",
     "react": "19.3.1",
     "react-dom": "19.3.1",
-    "react-router": "8.5.2"
+    "react-router": "8.5.2",
+    "typebox": "1.4.7"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.14.0",
     "@playwright/test": "1.65.1",
+    "@types/pngjs": "6.0.5",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.3.0",
+    "pixelmatch": "8.0.0",
+    "pngjs": "7.0.0",
     "vite": "8.3.8"
   }
 }
