@@ -166,15 +166,21 @@ export async function recordReplan(client: PoolClient, projectId: string, meta: 
         [projectId, ids.get(taskKey), baselineId, day(item.start), day(item.end), day(item.lo), day(item.hi)]);
     }
   }
-  for (const move of result.moves) {
+  // 가이드 §9.2-1(이력 폭증 방지)·§6.4·D-10: Task별 이동 행과 「재조정」 이력은 새 기준 버전을 실제로 만들 때,
+  // 이전 기준과 비교해 날짜가 바뀐 Task(밀림·당겨짐·신규 편입·제외)에만 남긴다.
+  // - 검토 대기(pending, 자동 재조정 꺼짐): 기준을 만들지 않으므로 위의 재조정 기록 한 줄만 남긴다.
+  // - 첫 기준(이전 기준 없음): 모든 Task가 「신규 편입」이라 Task 수만큼 이력이 생긴다. 기준 항목(baseline_items)만 남기고 이력은 쓰지 않는다.
+  // 예: Task 1,000개에서 기준 없이 Task를 하나 만들면 이전에는 이력 1,000행이 생겼고, 지금은 재조정 기록 1행이다.
+  const perTask = result.baseline !== null && history.length > 0 ? result.moves : [];
+  for (const move of perTask) {
     const task = ids.get(move.task);
     // 기준에는 있었지만 지금은 지워진 Task의 제외 기록은 Task 행을 찾을 수 없어 요약(after)에만 남는다.
     if (!task) continue;
     await client.query('insert into replan_moves(project_id,task,replan,kind,before,after) values($1,$2,$3,$4,$5::jsonb,$6::jsonb)',
       [projectId, task, replanRow?.id, move.kind, move.before ? JSON.stringify(move.before) : null, move.after ? JSON.stringify(move.after) : null]);
-    // G§6.4: 재조정 기록과 함께 각 Task 이력에도 남긴다(리뷰 F4). 확정(applied)과 검토 대기(pending)를 글로 구분한다.
+    // G§6.4: 재조정 기록과 함께 날짜가 바뀐 Task의 이력에도 남긴다(리뷰 F4). 여기까지 오면 항상 새 기준 버전을 만든 확정(applied)이다.
     // tasks/write.ts의 record와 같은 규칙(이력 시각 > Task 버전)이다. Task 조회(read.ts)가 이 모듈을 쓰므로 write.ts를 import하면 순환이 생겨 SQL을 직접 쓴다.
-    const state = result.status === 'applied' ? `기준 v${String(result.baseline?.v ?? '')} 확정` : '검토 대기(기준 미반영)';
+    const state = `기준 v${String(result.baseline?.v ?? '')} 확정`;
     const delta = move.delta === null ? '' : ` (${move.delta > 0 ? '+' : ''}${String(move.delta)}일)`;
     await client.query(
       `insert into task_history(project_id,at,actor,task,kind,text,before,after,ref)

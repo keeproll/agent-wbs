@@ -12,6 +12,7 @@ import { OPERATIONS } from '@awbs/shared/api';
 import { afterAll, beforeAll, describe, expect, inject, test } from 'vitest';
 import { buildApp } from '../src/app.ts';
 import { issueLoginLink } from '../src/platform/credentials.ts';
+import { recordReplan } from '../src/planning/schedule.ts';
 
 const origin = 'http://127.0.0.1:3100';
 const dbUrl = new URL(inject('testDatabaseUrl'));
@@ -146,6 +147,8 @@ describe('createTask 재조정 기록(G§6.4 「Task 추가」)', () => {
     'select rp_key,trigger,actor,status,baseline_v from replans where project_id=$1 order by created_at', [projectId])).rows;
   const policy = (autoReplan: boolean | null, thresholdDays: number) =>
     ownerPool.query('update schedule_policy set auto_replan=$1,threshold_days=$2 where singleton', [autoReplan, thresholdDays]);
+  const replanHistoryCount = async () => Number((await ownerPool.query<{ n: string }>("select count(*) n from task_history where project_id=$1 and kind='재조정'", [projectId])).rows[0]?.n);
+  const movesOf = async (rpKey: string) => Number((await ownerPool.query<{ n: string }>('select count(*) n from replan_moves m join replans r on r.id=m.replan where r.rp_key=$1', [rpKey])).rows[0]?.n);
   /** 생성 하나가 새로 남긴 재조정 기록. 기록은 지울 수 없으므로(물리 삭제 금지) 생성 전후 개수로 가른다. */
   const added = async (fn: () => Promise<void>) => {
     const before = (await replans()).length;
@@ -155,6 +158,7 @@ describe('createTask 재조정 기록(G§6.4 「Task 추가」)', () => {
 
   test('자동 재조정이 꺼져 있으면 검토 대기(pending)로 기록하고 기준은 만들지 않는다', async () => {
     await policy(null, 1);
+    const historyBefore = await replanHistoryCount();
     // 아직 기준이 없다(앞 시험의 기록도 모두 검토 대기). 기준이 없으면 임계값과 관계없이 기록한다.
     expect(await ownerPool.query('select 1 from schedule_baselines where project_id=$1', [projectId])).toMatchObject({ rowCount: 0 });
     let taskKey = '';
@@ -165,21 +169,45 @@ describe('createTask 재조정 기록(G§6.4 「Task 추가」)', () => {
     });
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ trigger: `${taskKey} 신규 Task 등록`, actor: '팀장', status: 'pending', baseline_v: null });
-    // Task 이력에도 재조정이 남는다(G§6.4).
-    const history = (await ownerPool.query<{ kind: string }>("select h.kind from task_history h join tasks t on t.id=h.task where t.task_key=$1 and h.kind='재조정'", [taskKey])).rows;
-    expect(history).toHaveLength(1);
+    // 가이드 §9.2-1(이력 폭증 방지)·D-10: 검토 대기는 재조정 기록 한 줄만 남기고 Task별 이력·이동 행은 쓰지 않는다.
+    expect(await replanHistoryCount()).toBe(historyBefore);
+    expect(await movesOf(rows[0]?.rp_key ?? '')).toBe(0);
     // 생성 응답 뒤 Task 버전은 자기 이력보다 늦다(충돌 창에 자기 이력이 섞이지 않는다).
     const order = (await ownerPool.query<{ ok: boolean }>("select t.updated_at>max(h.at) ok from tasks t join task_history h on h.task=t.id where t.task_key=$1 group by t.updated_at", [taskKey])).rows[0];
     expect(order?.ok).toBe(true);
   });
 
-  test('자동 재조정이 켜져 있으면 확정(applied)하고 기준 버전을 올린다', async () => {
+  test('자동 재조정이 켜져 있으면 확정(applied)하고 기준 버전을 올린다. 첫 기준(v1)은 모든 Task가 신규라 Task별 이력을 쓰지 않는다', async () => {
     await policy(true, 1);
+    const historyBefore = await replanHistoryCount();
     const rows = await added(async () => {
       const response = await create({ estimate: { estHours: 4 } });
       expect(response.statusCode, response.body).toBe(201);
     });
     expect(rows).toMatchObject([{ status: 'applied', baseline_v: 1 }]);
+    expect(await replanHistoryCount()).toBe(historyBefore);
+    expect(await movesOf(rows[0]?.rp_key ?? '')).toBe(0);
+  });
+
+  test('기준이 있을 때 새 기준 버전을 만들면 날짜가 바뀐 Task(신규 편입 포함)에만 이력을 남긴다', async () => {
+    // 임계값 0: 어긋남이 없어도 새 기준을 만든다. 새 Task는 WP 끝에 붙어 다른 Task의 날짜는 바뀌지 않는다.
+    await policy(true, 0);
+    const live = Number((await ownerPool.query<{ n: string }>('select count(*) n from tasks where project_id=$1 and deleted_at is null', [projectId])).rows[0]?.n);
+    const historyBefore = await replanHistoryCount();
+    let taskKey = '';
+    const rows = await added(async () => {
+      const response = await create({ estimate: { estHours: 1 } });
+      expect(response.statusCode, response.body).toBe(201);
+      taskKey = response.json<{ taskKey: string }>().taskKey;
+    });
+    expect(rows).toMatchObject([{ status: 'applied', baseline_v: 2 }]);
+    const moves = (await ownerPool.query<{ task_key: string; kind: string }>(
+      'select t.task_key,m.kind from replan_moves m join replans r on r.id=m.replan join tasks t on t.id=m.task where r.rp_key=$1', [rows[0]?.rp_key])).rows;
+    expect(moves).toContainEqual({ task_key: taskKey, kind: 'new' });
+    expect(moves.length).toBeLessThan(live + 1);
+    // Task별 이력은 이동 행과 같은 수다(바뀌지 않은 Task에는 쓰지 않는다).
+    expect(await replanHistoryCount()).toBe(historyBefore + moves.length);
+    await policy(null, 1);
   });
 
   test('기준이 있고 임계값보다 덜 어긋나면 기록하지 않는다', async () => {
@@ -190,6 +218,27 @@ describe('createTask 재조정 기록(G§6.4 「Task 추가」)', () => {
     });
     expect(rows).toEqual([]);
     await policy(null, 1);
+  });
+});
+
+describe('재조정 목록 순서', () => {
+  test('같은 시각(같은 트랜잭션)에 생긴 재조정도 RP 순번이 큰 것부터 보인다(20회 반복)', async () => {
+    for (let round = 0; round < 20; round++) {
+      const client = await pool.connect();
+      try {
+        // 한 트랜잭션 안에서는 now()가 같아 created_at이 모두 같다. 정렬이 created_at이면 순서가 무작위가 된다.
+        await client.query('begin');
+        for (let i = 0; i < 3; i++) await recordReplan(client, projectId, { trigger: `순서 ${String(round)}-${String(i)}`, actor: '팀장', mode: 'policy' });
+        await client.query('commit');
+      } catch (error) {
+        await client.query('rollback');
+        throw error;
+      } finally { client.release(); }
+      const list = (await app.inject({ url: '/api/replans?limit=5', headers: { cookie, origin } })).json<{ items: { replanId: string }[] }>();
+      const numbers = list.items.map((item) => Number(item.replanId.slice(3)));
+      expect(numbers, `round ${String(round)}`).toEqual([...numbers].sort((a, b) => b - a));
+      expect(list.items.slice(0, 3).map((item) => item.replanId)).toEqual(list.items.slice(0, 3).map((item) => item.replanId).sort().reverse());
+    }
   });
 });
 
