@@ -13,7 +13,7 @@ import { apiKey } from '../../../shared/api/queries.ts';
 import { useConfirm } from '../../../shared/ui/feedback.tsx';
 import { useEditSlot } from '../edit-slot.tsx';
 import {
-  blankEntity, draftBlocks, normalizeDesign, fromDraft, isDesignPresent, knownTables, relationRows, toDraft, validateDraft,
+  applyDesignOp, blankEntity, draftBlocks, entKey, normalizeDesign, type DesignOp, fromDraft, isDesignPresent, knownTables, relationRows, toDraft, validateDraft,
   type BlockValue, type DesignContent, type DesignEnt, type EditorDraft, type Known,
 } from '../editor-model.ts';
 import { COLSETS, DESIGN, DESIGN_KINDS, DOMAIN_TO_DESIGN, type Block, type DesignKind, type TaskDetailData, type TaskSummaryData } from '../labels.ts';
@@ -70,13 +70,18 @@ export function DesignTab({ task: t, tasks }: { task: TaskDetailData; tasks: Tas
   const known = useKnown(t, tasks, hasDb || (editing && ed.draft.sec === 'DB'), editing && ed.draft.kind === 'ent' ? { task: t.taskKey, idx: ed.draft.idx } : null);
   const have = secs.map((s) => s.kind);
   const rec = recKinds(t);
-  const [pending, setPending] = useState<{ kind: DesignKind; content: DesignContent; notice: string; mine: string; draft: EditorDraft | null; base: string | null } | null>(null);
+  const [pending, setPending] = useState<{ kind: DesignKind; op: DesignOp; notice: string; mine: string; draft: EditorDraft | null; base: string | null } | null>(null);
   const write = useTaskSave(t.taskKey, {
     target: `${t.taskKey} 기술 설계 저장`,
     mine: pending?.mine ?? '',
     version: () => pendingRef.current?.base ?? t.updatedAt,
-    request: () => pendingRef.current ?? { kind: 'DB' as DesignKind, content: {}, notice: '', mine: '', draft: null, base: null },
-    run: ({ updatedAt, payload: p }) => client.call('updateTaskDesign', { params: { taskKey: t.taskKey, kind: p.kind }, body: { updatedAt, content: p.content as Record<string, unknown> } }),
+    request: () => pendingRef.current ?? { kind: 'DB' as DesignKind, op: { type: 'blocks', b: {} } as DesignOp, notice: '', mine: '', draft: null, base: null },
+    // 보낼 때마다 서버 최신 섹션 위에 이번에 바꾼 것만 얹는다(재리뷰 P1). 충돌 창의 「다시 적용」도 같은 run을 최신 Task로 다시 부른다.
+    run: ({ updatedAt, payload: p, current }) => {
+      const latest = (current() ?? t).designs.find((x) => String(x.kind) === p.kind)?.content;
+      const content = applyDesignOp(p.kind, latest, p.op);
+      return client.call('updateTaskDesign', { params: { taskKey: t.taskKey, kind: p.kind }, body: { updatedAt, content: content as Record<string, unknown> } });
+    },
     // 저장한 초안과 지금 초안이 같을 때만 편집기를 닫는다(M3-01 useSave).
     onSuccess: (_r, p) => { if (!ed || same(p.draft, ed.draft)) { setEd(null); slot.close(); } },
     onReload: () => { setEd(null); slot.close(); },
@@ -84,8 +89,8 @@ export function DesignTab({ task: t, tasks }: { task: TaskDetailData; tasks: Tas
   });
   // 저장 요청은 누른 순간의 값을 보내야 해서 ref에도 둔다(상태는 다음 렌더에야 바뀐다).
   const pendingRef = useRef<typeof pending>(null);
-  const commit = (kind: DesignKind, content: DesignContent, notice: string, mine: string) => {
-    pendingRef.current = { kind, content, notice, mine, draft: ed?.draft ?? null, base: ed?.base ?? null };
+  const commit = (kind: DesignKind, op: DesignOp, notice: string, mine: string) => {
+    pendingRef.current = { kind, op, notice, mine, draft: ed?.draft ?? null, base: ed?.base ?? null };
     setPending(pendingRef.current);
     void write.save();
   };
@@ -111,12 +116,12 @@ export function DesignTab({ task: t, tasks }: { task: TaskDetailData; tasks: Tas
               const f = Object.fromEntries(Object.entries(d.f).map(([k, v]) => [k, v.trim()]));
               const ent: DesignEnt = { f, b: val };
               const nm = kind === 'DB' ? f.name ?? '' : `${f.method ?? ''} ${f.path ?? ''}`;
-              const ents = [...(cur.ents ?? [])];
-              if (d.idx < 0) ents.push(ent); else ents[d.idx] = ent;
-              commit(kind, { ...cur, ents }, `${sc?.label ?? ''} ${nm}을(를) 저장했습니다.`, `${DESIGN[kind].label} · ${sc?.label ?? ''} ${nm}`);
+              // 편집 전 엔티티 이름으로 최신 섹션에서 찾아 바꾼다(새로 추가는 null → 뒤에 붙임)
+              const before = d.idx < 0 ? undefined : (cur.ents ?? [])[d.idx];
+              commit(kind, { type: 'entUpsert', key: before ? entKey(kind, before) : null, ent }, `${sc?.label ?? ''} ${nm}을(를) 저장했습니다.`, `${DESIGN[kind].label} · ${sc?.label ?? ''} ${nm}`);
             } else {
               const bk = draftBlocks(d)[0];
-              commit(kind, { ...cur, b: { ...(cur.b ?? {}), ...val } }, `「${bk?.l ?? ''}」을(를) 저장했습니다.`, `${DESIGN[kind].label} · ${bk?.l ?? ''}`);
+              commit(kind, { type: 'blocks', b: val }, `「${bk?.l ?? ''}」을(를) 저장했습니다.`, `${DESIGN[kind].label} · ${bk?.l ?? ''}`);
             }
           }}
         />
@@ -159,7 +164,7 @@ export function DesignTab({ task: t, tasks }: { task: TaskDetailData; tasks: Tas
         <div className="secadd"><span className="muted">섹션 추가</span>
           {DESIGN_KINDS.filter((k) => !have.includes(k)).map((k) => (
             <button type="button" key={k} className={rec.includes(k) ? 'btn sm rec' : 'btn ghost sm'} title={rec.includes(k) ? '기술 영역 기준 권장 섹션' : '필요한 경우에만 추가'} disabled={busyOrEditing}
-              onClick={() => { commit(k, { ents: [], b: {} }, `${DESIGN[k].label} 섹션을 추가했습니다.`, `${DESIGN[k].label} 섹션 추가`); }}>+ {DESIGN[k].label}</button>
+              onClick={() => { commit(k, { type: 'blocks', b: {} }, `${DESIGN[k].label} 섹션을 추가했습니다.`, `${DESIGN[k].label} 섹션 추가`); }}>+ {DESIGN[k].label}</button>
           ))}
         </div>
       )}
@@ -177,7 +182,7 @@ export function DesignTab({ task: t, tasks }: { task: TaskDetailData; tasks: Tas
                 {sc.ent && <button type="button" className="btn sm" disabled={busyOrEditing} onClick={() => { openEnt(kind, -1); }}>+ {sc.ent.addL}</button>}
                 <button type="button" className="btn ghost sm" disabled={busyOrEditing} onClick={() => {
                   void confirm({ title: '설계 섹션 제거', body: `${sc.label} 섹션을 제거합니다.${n ? ` 작성된 내용 ${String(n)}건이 함께 삭제됩니다.` : ''} 이력에 기록됩니다.`, ok: '섹션 제거', danger: true })
-                    .then((ok) => { if (ok) commit(kind, {}, `${sc.label} 섹션을 제거했습니다.`, `${sc.label} 섹션 제거`); });
+                    .then((ok) => { if (ok) commit(kind, { type: 'replace', content: {} }, `${sc.label} 섹션을 제거했습니다.`, `${sc.label} 섹션 제거`); });
                 }}>섹션 제거</button>
               </span>
             </div>
@@ -198,7 +203,7 @@ export function DesignTab({ task: t, tasks }: { task: TaskDetailData; tasks: Tas
                       <button type="button" className="btn ghost sm" disabled={busyOrEditing} onClick={() => { openEnt(kind, i); }}>편집</button>
                       <button type="button" className="btn ghost sm" disabled={busyOrEditing} onClick={() => {
                         void confirm({ title: `${sc.ent?.label ?? ''} 삭제`, body: `${kind === 'DB' ? nm : `${en.f.method ?? ''} ${nm}`}을(를) 기술 설계에서 삭제합니다. 이력에 기록됩니다.`, ok: '삭제', danger: true })
-                          .then((ok) => { if (ok) commit(kind, { ...content, ents: ents.filter((_, j) => j !== i) }, `${sc.ent?.label ?? ''} ${nm}을(를) 삭제했습니다.`, `${sc.ent?.label ?? ''} ${nm} 삭제`); });
+                          .then((ok) => { if (ok) commit(kind, { type: 'entDelete', key: entKey(kind, en) }, `${sc.ent?.label ?? ''} ${nm}을(를) 삭제했습니다.`, `${sc.ent?.label ?? ''} ${nm} 삭제`); });
                       }}>삭제</button>
                     </div>
                     {sc.ent?.blocks.map((bk) => <ReadBlock key={bk.k} bk={bk} value={en.b[bk.k]} region={`${nm} ${bk.l}`} />)}

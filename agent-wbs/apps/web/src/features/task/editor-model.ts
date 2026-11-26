@@ -283,3 +283,31 @@ export function estimateErrors(v: { lo: string; est: string; hi: string; tok: st
   if (d && !(/^\d{4}-\d{2}-\d{2}$/.test(d) && !Number.isNaN(Date.parse(`${d}T00:00:00Z`)) && new Date(`${d}T00:00:00Z`).toISOString().slice(0, 10) === d)) errs.push('fixStart: YYYY-MM-DD 형식으로 입력하세요.');
   return errs;
 }
+
+/**
+ * 설계 저장 한 번이 바꾸는 것(재리뷰 P1). 섹션 전체 복사본 대신 「무엇을 바꿨는지」를 보낸다.
+ * 보낼 때마다 서버 최신 섹션 위에 이것만 적용하므로, 충돌 창의 「다시 적용」도 다른 사람이 고친 엔티티·블록을 되돌리지 않는다.
+ * - blocks: 섹션 블록 몇 개를 바꾼다. 빈 b는 「섹션이 없으면 만든다」(섹션 추가)
+ * - entUpsert: 편집 전 이름(key)의 엔티티를 바꾼다. key가 null이거나 그새 없어졌으면 뒤에 붙인다
+ * - entDelete: 그 이름의 엔티티를 지운다(이미 없으면 그대로)
+ * - replace: 섹션 전체를 바꾼다. 섹션 제거(`{}`)처럼 전체 변경이 목적일 때만 쓴다
+ */
+export type DesignOp =
+  | { type: 'blocks'; b: Record<string, BlockValue> }
+  | { type: 'entUpsert'; key: string | null; ent: DesignEnt }
+  | { type: 'entDelete'; key: string }
+  | { type: 'replace'; content: DesignContent };
+
+/** 엔티티를 가리키는 이름: DB는 테이블명, API는 「방식 경로」 */
+export const entKey = (kind: DesignKind, en: DesignEnt): string => (kind === 'API' ? `${en.f.method ?? ''} ${en.f.path ?? ''}` : en.f.name ?? '');
+
+export function applyDesignOp(kind: DesignKind, latest: unknown, op: DesignOp): DesignContent {
+  if (op.type === 'replace') return op.content;
+  const base = isDesignPresent(latest) ? normalizeDesign(kind, latest).content : { ents: [], b: {} };
+  const ents = [...(base.ents ?? [])];
+  if (op.type === 'blocks') return { ...base, ents, b: { ...(base.b ?? {}), ...op.b } };
+  if (op.type === 'entDelete') return { ...base, ents: ents.filter((e) => entKey(kind, e) !== op.key) };
+  const at = op.key === null ? -1 : ents.findIndex((e) => entKey(kind, e) === op.key);
+  if (at < 0) ents.push(op.ent); else ents[at] = op.ent;
+  return { ...base, ents };
+}

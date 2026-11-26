@@ -90,13 +90,15 @@ export function useTaskSave<T, P = undefined>(taskKey: string, options: TaskSave
     ...(options.mine ? { mine: options.mine } : {}),
     ...(options.successNotice ? { successNotice: options.successNotice } : {}),
     ...(options.onFieldErrors ? { onFieldErrors: options.onFieldErrors } : {}),
-    request: () => {
-      const payload = { updatedAt: options.version?.() ?? latest(), data: (options.request ? options.request() : undefined) as P };
+    request: () => ({ updatedAt: options.version?.() ?? latest(), data: (options.request ? options.request() : undefined) as P }),
+    // 충돌 창 「다시 적용」이 쓸 내용은 **실제로 보낸 요청**에서 기록한다(재리뷰 P2).
+    // 왜: 결과를 모르는 요청이 있으면 useSave는 새 내용의 저장을 보내지 않는다. request()에서 기록하면 보내지 않은 초안이 남는다.
+    run: ({ idempotencyKey, payload }) => {
       last.current = payload;
-      return payload;
+      return options.run({ idempotencyKey, updatedAt: payload.updatedAt, payload: payload.data, current });
     },
-    run: ({ idempotencyKey, payload }) => options.run({ idempotencyKey, updatedAt: payload.updatedAt, payload: payload.data, current }),
-    onSuccess: (result) => { done(result, last.current?.data as P); },
+    // 성공한 요청의 내용(payload)으로 콜백을 부른다(M3-01 useSave 규칙). 화면은 그것과 지금 입력을 비교해 닫거나 비운다.
+    onSuccess: (result, payload) => { done(result, payload.data); },
     onRejected: (error) => { void refresh(true); options.onRejected?.(error); },
     onConflictReload: () => { options.onReload?.(); void refresh(true); },
     onConflictReapply: async () => {
