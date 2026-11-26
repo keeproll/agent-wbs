@@ -13,6 +13,12 @@ export interface CleanupFailure { name: string; path: string; detail: string }
 /** 개인키 대신 전용 ssh-agent 소켓과 공개 서버 키 목록만 받는다. */
 export interface SystemSsh { socket: string; knownHosts: string }
 
+/** 시험용 push도 운영 push와 같은 인증·서버 확인 경계를 사용한다. */
+export function systemSshCommand(knownHosts: string): string {
+  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  return `ssh -F /dev/null -o BatchMode=yes -o StrictHostKeyChecking=yes -o IdentityFile=none -o ForwardAgent=no -o GlobalKnownHostsFile=/dev/null -o UserKnownHostsFile=${quote(knownHosts)}`;
+}
+
 export class GitCleanupError extends GitSafetyError {
   override name = 'GitCleanupError';
   readonly failures: CleanupFailure[];
@@ -449,11 +455,9 @@ export class GitRepository {
     }
     if (!(await stat(await safePath(ssh.socket)))?.isSocket()) throw new GitSafetyError('시스템 SSH 소켓을 확인할 수 없습니다.');
     if (!(await stat(await safePath(ssh.knownHosts)))?.isFile()) throw new GitSafetyError('서버 키 목록 파일을 확인할 수 없습니다.');
-    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-    const command = `ssh -F /dev/null -o BatchMode=yes -o StrictHostKeyChecking=yes -o IdentityFile=none -o ForwardAgent=no -o UserKnownHostsFile=${quote(ssh.knownHosts)}`;
     const remote = `ssh://git@ssh.github.com:443${url.pathname.replace(/\/$/, '').replace(/\.git$/, '')}.git`;
     await this.git(['push', '--no-verify', '--', remote, `${commit}:refs/heads/main`], undefined, {
-      GIT_ALLOW_PROTOCOL: 'ssh', GIT_SSH_COMMAND: command, GIT_SSH_VARIANT: 'ssh', SSH_AUTH_SOCK: ssh.socket,
+      GIT_ALLOW_PROTOCOL: 'ssh', GIT_SSH_COMMAND: systemSshCommand(ssh.knownHosts), GIT_SSH_VARIANT: 'ssh', SSH_AUTH_SOCK: ssh.socket,
     });
   }
 

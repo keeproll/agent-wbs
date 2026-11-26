@@ -11,7 +11,7 @@ import { ghTokenSource } from '../src/github/token.ts';
 import { createGithubRemoteCleanup } from '../src/cleanup/remote.ts';
 import { createRedactor } from '../src/security/redact.ts';
 import { Secret } from '../src/security/secret.ts';
-import { GitRepository } from '../src/git/repository.ts';
+import { GitRepository, systemSshCommand } from '../src/git/repository.ts';
 
 const repo = { owner: 'keeproll', repo: 'agent-wbs-sandbox' };
 const path = `/repos/${repo.owner}/${repo.repo}`;
@@ -183,7 +183,7 @@ try {
   key.private = '';
   const meta = await api<{ ssh_keys: string[] }>('GET', '/meta');
   await writeFile(join(work, 'known_hosts'), meta.ssh_keys.map((entry) => `[ssh.github.com]:443 ${entry}`).join('\n') + '\n');
-  agent.GIT_SSH_COMMAND = `ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${join(work, 'known_hosts')}`;
+  agent.GIT_SSH_COMMAND = systemSshCommand(join(work, 'known_hosts'));
   keyId = (await api<{ id: number }>('POST', `${path}/keys`, { title: `M4-06 ephemeral ${Date.now()}`, key: key.public, read_only: false }, 201)).id;
   await record('deployKey', { id: keyId, privateKeyStorage: 'ssh-agent memory only' });
   await client.assertDeployKeys(keyId);

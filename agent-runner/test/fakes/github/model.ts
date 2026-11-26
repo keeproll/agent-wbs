@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { FakeGitHub, FakeRequest, FakeResponse } from './server.ts';
+import { protectedMainRules } from './rules.ts';
 
 /**
  * 가짜 GitHub 저장소 1개의 상태와 규칙.
@@ -303,6 +304,17 @@ export class GitHubModel {
           permissions: this.options.permissions ?? { admin: false, push: true, pull: true },
         },
       })),
+    );
+    github.on(
+      `GET ${repoPath}/rules/branches/main`,
+      guard(() => ({ body: protectedMainRules.map((rule) => rule.type === 'required_status_checks'
+        ? { ...rule, parameters: { strict_required_status_checks_policy: this.options.strict ?? true,
+          required_status_checks: (this.options.requiredContexts ?? ['agentwbs/int']).map((context) => ({ context })) } }
+        : rule) })),
+    );
+    github.on(
+      `GET ${repoPath}/rulesets/1`,
+      guard(() => ({ body: { enforcement: 'active', current_user_can_bypass: 'never' } })),
     );
     github.on(
       `GET ${repoPath}/keys`,

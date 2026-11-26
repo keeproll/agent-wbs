@@ -205,6 +205,16 @@ interface Raw {
   generation: number;
 }
 
+interface BranchRule {
+  type: string;
+  ruleset_id: number;
+  parameters?: {
+    require_code_owner_review?: boolean;
+    strict_required_status_checks_policy?: boolean;
+    required_status_checks?: { context: string }[];
+  };
+}
+
 interface PullJson {
   number: number;
   state: 'open' | 'closed';
@@ -487,6 +497,37 @@ export function createGitHubClient(options: GitHubClientOptions) {
     return verifyMerge(pull.mergeCommitSha, baseSha, headSha, true);
   };
 
+  /** 역할 이름 대신 main에 실제 적용된 보호와 현재 호출자의 우회 가능 여부를 확인한다. */
+  const assertProtectedMain = async (read: (path: string, query?: Record<string, string>) => Promise<Raw>): Promise<void> => {
+    const rules: BranchRule[] = [];
+    for (let page = 1; ; page += 1) {
+      if (page > 50) throw invalid('main 보호 규칙을 끝까지 읽지 못했습니다.');
+      const raw = await read(`${repoPath}/rules/branches/main`, { per_page: '100', page: String(page) });
+      if (raw.status !== 200) throw failure(raw, 'main 보호 규칙 조회');
+      if (!Array.isArray(raw.body)) throw invalid('main 보호 규칙 목록을 확인하지 못했습니다.');
+      for (const rule of raw.body as BranchRule[]) {
+        if (!rule || typeof rule.type !== 'string' || !Number.isSafeInteger(rule.ruleset_id) || rule.ruleset_id < 1) {
+          throw invalid('main 보호 규칙의 식별 정보를 확인하지 못했습니다.');
+        }
+        rules.push(rule);
+      }
+      if (!/rel="next"/.test(raw.headers.get('link') ?? '')) break;
+    }
+    const pull = rules.some((rule) => rule.type === 'pull_request' && rule.parameters?.require_code_owner_review === true);
+    const status = rules.some((rule) => rule.type === 'required_status_checks' && rule.parameters?.strict_required_status_checks_policy === true &&
+      Array.isArray(rule.parameters.required_status_checks) && rule.parameters.required_status_checks.some((check) => check?.context === 'agentwbs/int'));
+    if (!pull || !status || !rules.some((rule) => rule.type === 'non_fast_forward') || !rules.some((rule) => rule.type === 'deletion')) {
+      throw invalid('main 보호 규칙 부족: PR·CODEOWNERS·agentwbs/int·strict·강제 push 및 삭제 금지를 확인하세요.');
+    }
+    for (const id of new Set(rules.map((rule) => rule.ruleset_id))) {
+      const raw = await read(`${repoPath}/rulesets/${String(id)}`);
+      if (raw.status !== 200) throw failure(raw, 'main ruleset 우회 권한 조회');
+      const rule = raw.body as { enforcement?: string; current_user_can_bypass?: string } | undefined;
+      if (rule?.enforcement !== 'active') throw invalid('main 보호 ruleset이 active가 아니거나 활성 여부를 확인하지 못했습니다.');
+      if (rule.current_user_can_bypass !== 'never') throw invalid('main 보호 규칙을 우회할 수 있거나 우회 불가를 확인하지 못한 자격 증명입니다.');
+    }
+  };
+
   /**
    * 연결 확인의 실제 판단. 공유 권한 상태는 건드리지 않고, 반영할 값(next)과 보고할 결과만 만든다.
    * 보낸 요청마다 세대를 generations에 모은다(늦은 응답 판별용).
@@ -500,9 +541,9 @@ export function createGitHubClient(options: GitHubClientOptions) {
       status: { mode, ok: false, account: null, permissions: null, expiresAt: null, ...rest, error } satisfies ConnectionStatus,
       next,
     });
-    const get = async (path: string): Promise<Raw> => {
+    const get = async (path: string, query: Record<string, string> = {}): Promise<Raw> => {
       try {
-        const raw = await call('GET', path);
+        const raw = await call('GET', path, { query });
         generations.push(raw.generation);
         return raw;
       } catch (error) {
@@ -536,9 +577,8 @@ export function createGitHubClient(options: GitHubClientOptions) {
       return fail(`저장소에 접근할 수 없음(${String(repository.status)})`, { account, expiresAt });
     }
     const repoPermissions = (repository.body as { permissions?: { admin?: boolean; push?: boolean; pull?: boolean } }).permissions ?? {};
-    if (repoPermissions.admin === true) {
-      return fail('관리자 권한 자격 증명은 쓰지 않음(보호 규칙 우회 가능). 관리자가 아닌 별도 계정/앱 필요', { account, expiresAt });
-    }
+    try { await assertProtectedMain(get); }
+    catch (error) { return fail(error instanceof Error ? error.message : 'main 보호 규칙 확인 실패', { account, expiresAt }); }
     // 저장소를 읽었으므로 Metadata 읽기는 확인됐다.
     next.metadata = 'verified';
     const writes = ['contents', 'pulls', 'statuses'] as const;
@@ -581,7 +621,8 @@ export function createGitHubClient(options: GitHubClientOptions) {
       }
       let found = false;
       for (let page = 1; page <= 50; page += 1) {
-        const raw = await call('GET', `${repoPath}/keys`, { query: { per_page: '100', page: String(page) } }).catch(() => {
+        const raw = await call('GET', `${repoPath}/keys`, { query: { per_page: '100', page: String(page) } }).catch((error: unknown) => {
+          if (!(error instanceof GitHubError) || error.status !== 0) throw error;
           throw new DeployKeyError('deploy key 목록을 읽지 못했습니다. 인증 정보와 통신을 확인하세요.', 0, true);
         });
         if (raw.status !== 200) {

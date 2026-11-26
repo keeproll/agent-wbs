@@ -45,3 +45,16 @@ test.each([{ body: {} }, { body: [null] }, { body: [{ id: 7 }] }])('M4-06: 키 �
   github.on('GET /repos/o/r/keys', () => ({ body }));
   await expect(client().assertDeployKeys(7)).rejects.toBeInstanceOf(DeployKeyError);
 });
+
+test('M1·L2: 목록 통신 실패는 재시도 가능한 DeployKeyError로 전달한다', async () => {
+  const failing = createGitHubClient({ repo: { owner: 'o', repo: 'r' }, token: () => Promise.resolve(new Secret('fake')),
+    fetch: () => Promise.reject(new TypeError('fetch failed')) });
+  await expect(failing.assertDeployKeys(7)).rejects.toMatchObject({ name: 'DeployKeyError', status: 0, retryable: true });
+});
+
+test('M1: 자격 증명 공급원의 오류는 통신 오류로 바꾸거나 재시도하지 않는다', async () => {
+  const denied = new Error('자격 증명 조회 거부');
+  const failing = createGitHubClient({ repo: { owner: 'o', repo: 'r' }, token: () => Promise.reject(denied),
+    fetch: () => Promise.reject(new Error('요청을 보내면 안 됩니다.')) });
+  await expect(failing.assertDeployKeys(7)).rejects.toBe(denied);
+});

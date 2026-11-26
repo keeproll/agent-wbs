@@ -4,6 +4,9 @@ import json
 import sys
 import warnings
 
+if sys.stdout.isatty():
+    raise SystemExit("토큰을 화면에 표시하지 않습니다. 실증 스크립트와 파이프로 연결하세요.")
+
 warnings.filterwarnings("error", category=getpass.GetPassWarning)
 try:
     write_token = getpass.getpass("시험용 쓰기 토큰: ")

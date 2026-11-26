@@ -124,7 +124,7 @@ export class RunnerApp {
       const checkDeployKeys = async (): Promise<void> => {
         try { await client.assertDeployKeys(systemKey?.id ?? null); }
         catch (error) {
-          try { d.warn(message(error)); }
+          try { if (!(error instanceof DeployKeyError) || !error.retryable) d.warn(message(error)); }
           catch { /* 경고 출력 실패가 원래 거부 사유를 가리지 않게 한다. */ }
           throw error;
         }
@@ -250,7 +250,13 @@ export class RunnerApp {
     // 연결 재확인은 새로 판단한다. 자격 증명이 바뀌었을 수 있으므로 캐시한 토큰을 버린다(P1-5).
     this.#tokenSource?.invalidate();
     if (this.github.mode === 'token') await this.github.connector.register();
-    await this.github.checkDeployKeys();
+    for (let attempt = 0; ; attempt += 1) {
+      try { await this.github.checkDeployKeys(); break; }
+      catch (error) {
+        if (!(error instanceof DeployKeyError) || !error.retryable || attempt >= 2) throw error;
+        await sleep(Math.max(error.retryAfterSeconds ?? 0, 2 ** attempt) * 1000);
+      }
+    }
     const status = await this.github.client.checkConnection(this.github.mode);
     // 연결 확인은 토큰 취득 실패를 ok:false로 바꾼다. WBS 인증 실패였으면 상태를 보고하지 않고 그 오류를 그대로 던진다.
     if (this.github.connector.authFailure !== undefined) throw this.github.connector.authFailure;
@@ -269,7 +275,7 @@ export class RunnerApp {
     await this.reportModels();
     await this.checkGithub().catch((error: unknown) => {
       // 키 등록·봉인 조회의 WBS 인증 실패는 Runner 토큰 문제이므로 위로 올려 앱을 멈춘다(P1-3).
-      if (authenticationFailed(error) || error instanceof DeployKeyError) throw error;
+      if (authenticationFailed(error) || (error instanceof DeployKeyError && !error.retryable)) throw error;
       this.#d.warn(`GitHub 연결 확인 실패: ${message(error)}`);
     });
     await this.runner.outbox.flush();
@@ -328,7 +334,7 @@ export class RunnerApp {
             await this.bootstrap();
             if (!internal.signal.aborted) this.startSchedules();
           } catch (error) {
-            if (authenticationFailed(error)) { halt(error); return; }
+            if (authenticationFailed(error) || (error instanceof DeployKeyError && !error.retryable)) { halt(error); return; }
             this.#d.warn(`시작 보고 실패: ${message(error)}`);
           }
         }
