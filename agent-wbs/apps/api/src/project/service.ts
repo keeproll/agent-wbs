@@ -130,7 +130,8 @@ async function reportedJob(db: Db, jobId: string, fence: number, principal: stri
 export async function reportProgress(db: Db, jobId: string, body: { fence: number; stepKey: string; status: StepStatus; note?: string }, principal: string): Promise<void> {
   const job = await reportedJob(db, jobId, body.fence, principal, ['bootstrap', 'input_diff']);
   const allowed: readonly string[] = job.kind === 'bootstrap' ? BOOT_STEPS.filter((key) => !LEAD_STEPS.has(key)) : INPUT_STEPS;
-  if (!allowed.includes(body.stepKey)) {
+  // 초안 단계의 완료는 초안 등록(submitDraft)만 기록한다. 진행 보고로 끝내면 승인할 초안 없이 멈춘다.
+  if (!allowed.includes(body.stepKey) || job.kind === 'bootstrap' && body.stepKey === 'draft' && body.status === 'done') {
     throw new ProjectError('VALIDATION_FAILED', { errors: [{ path: 'stepKey', rule: 'step', message: `${job.kind === 'bootstrap' ? '초기 분석' : '차이 분석'}에서 Runner가 보고할 수 있는 단계가 아닙니다.` }] });
   }
   await setStep(db, job.id, body.stepKey, body.status, body.note);

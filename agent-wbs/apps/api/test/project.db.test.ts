@@ -226,7 +226,8 @@ describe('project 초기 분석 진행과 다시 시도', () => {
     expect(s.bootstrap.status).toBe('running');
     expect(step(s, 'unzip')).toBe('done');
     expect(s.bootstrap.logs.length).toBeGreaterThanOrEqual(4);
-    for (const stepKey of ['tech', 'approve', 'diff']) {
+    // 초안 단계의 완료는 초안 등록(draft API)만 기록한다. 진행 보고로 끝내면 승인할 초안 없이 멈춘다.
+    for (const stepKey of ['tech', 'approve', 'diff', 'draft']) {
       const response = await runner(`/api/runner/bootstrap/${job.id}/progress`, { fence: job.fence, stepKey, status: 'done', at: new Date().toISOString() });
       expect(response.statusCode, stepKey).toBe(400);
     }
