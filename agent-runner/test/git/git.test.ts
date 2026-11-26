@@ -593,8 +593,8 @@ test('ND 같은 객체의 동시 작업 폴더 생성 기록을 모두 보존하
     repo.createWorktree('task-1', 'agent/TASK-1', baseline),
     repo.createWorktree('task-2', 'agent/TASK-2', baseline),
   ]);
-  const record = JSON.parse(await readFile(join(root, 'runner/state/git/project.json'), 'utf8')) as { worktrees: string[] };
-  expect(record.worktrees.sort()).toEqual(['task-1', 'task-2']);
+  const record = JSON.parse(await readFile(join(root, 'runner/state/git/project.json'), 'utf8')) as { worktrees: { id: string }[] };
+  expect(record.worktrees.map((entry) => entry.id).sort()).toEqual(['task-1', 'task-2']);
   await repo.reset({ baseCommit: baseline, branches: ['agent/TASK-1', 'agent/TASK-2'], worktrees: ['task-1', 'task-2'], inputs: [] });
   for (const work of worktrees) await expect(lstat(work)).rejects.toMatchObject({ code: 'ENOENT' });
 });
@@ -604,8 +604,8 @@ test('NE 먼저 열린 여러 객체가 순서대로 생성·삭제해도 최신
   const other = await GitRepository.open(join(root, 'runner'), 'project');
   const work1 = await repo.createWorktree('task-1', 'agent/TASK-1', baseline);
   const work2 = await other.createWorktree('task-2', 'agent/TASK-2', baseline);
-  const record = JSON.parse(await readFile(join(root, 'runner/state/git/project.json'), 'utf8')) as { worktrees: string[] };
-  expect(record.worktrees.sort()).toEqual(['task-1', 'task-2']);
+  const record = JSON.parse(await readFile(join(root, 'runner/state/git/project.json'), 'utf8')) as { worktrees: { id: string }[] };
+  expect(record.worktrees.map((entry) => entry.id).sort()).toEqual(['task-1', 'task-2']);
   await other.removeWorktree('task-1');
   expect(await repo.importWorktree('task-2', 'agent/TASK-2')).toBe(baseline);
   await repo.removeWorktree('task-2');
@@ -621,7 +621,7 @@ test.each(['--single-branch', 'checkout'])('NG %s 실패 뒤 폴더·기록·새
   vi.stubEnv('PATH', `${bin}:${process.env.PATH}`);
   await expect(repo.createWorktree('task-1', 'agent/TASK-1', baseline)).rejects.toThrow();
   await expect(lstat(join(root, 'runner/worktrees/project/task-1'))).rejects.toMatchObject({ code: 'ENOENT' });
-  const record = JSON.parse(await readFile(join(root, 'runner/state/git/project.json'), 'utf8')) as { worktrees: string[] };
+  const record = JSON.parse(await readFile(join(root, 'runner/state/git/project.json'), 'utf8')) as { worktrees: { id: string }[] };
   expect(record.worktrees).toEqual([]);
   expect(git(repo.path, 'branch', '--list', 'agent/TASK-1')).toBe('');
   vi.unstubAllEnvs();
@@ -635,8 +635,8 @@ test('ND 서로 다른 프로세스가 동시에 만든 작업 폴더 기록도 
   await Promise.all(['task-1', 'task-2'].map((name) => promisify(execFile)(process.execPath, [
     '--input-type=module', '-e', code, join(root, 'runner'), name, baseline,
   ])));
-  const record = JSON.parse(await readFile(join(root, 'runner/state/git/project.json'), 'utf8')) as { worktrees: string[] };
-  expect(record.worktrees.sort()).toEqual(['task-1', 'task-2']);
+  const record = JSON.parse(await readFile(join(root, 'runner/state/git/project.json'), 'utf8')) as { worktrees: { id: string }[] };
+  expect(record.worktrees.map((entry) => entry.id).sort()).toEqual(['task-1', 'task-2']);
   await repo.reset({ baseCommit: baseline, branches: ['agent/task-1', 'agent/task-2'], worktrees: ['task-1', 'task-2'], inputs: [] });
   await expect(lstat(join(root, 'runner/state/git/project.json.lock'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
@@ -647,7 +647,7 @@ test('NG 이미 있는 Agent 브랜치는 덮어쓰거나 실패 복구에서 �
   await expect(repo.createWorktree('task-1', 'agent/occupied', baseline)).rejects.toThrow();
   expect(git(repo.path, 'rev-parse', 'refs/heads/agent/occupied')).toBe(baseline);
   await expect(lstat(join(root, 'runner/worktrees/project/task-1'))).rejects.toMatchObject({ code: 'ENOENT' });
-  const record = JSON.parse(await readFile(join(root, 'runner/state/git/project.json'), 'utf8')) as { worktrees: string[] };
+  const record = JSON.parse(await readFile(join(root, 'runner/state/git/project.json'), 'utf8')) as { worktrees: { id: string }[] };
   expect(record.worktrees).toEqual([]);
 });
 
@@ -666,9 +666,9 @@ test('ND 잠금 대기 시간이 지나도 다른 실행의 잠금을 지우지 
   await repo.createWorktree('task-1', 'agent/TASK-1', baseline);
 });
 
-async function ownerRecord() {
-  const processStat = await readFile(`/proc/${process.pid}/stat`, 'utf8');
-  return { pid: process.pid, bootId: (await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim(),
+async function ownerRecord(pid = process.pid) {
+  const processStat = await readFile(`/proc/${pid}/stat`, 'utf8');
+  return { pid, bootId: (await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim(),
     startTime: processStat.slice(processStat.lastIndexOf(')') + 2).trim().split(/\s+/)[19] as string };
 }
 
@@ -678,12 +678,12 @@ async function withoutLongLockWait(action: () => Promise<unknown>) {
   try { await action(); } finally { clock.mockRestore(); }
 }
 
-test('L1 SIGKILL로 종료된 잠금 주인을 확인해 새 작업과 초기화 정리를 자동 재개한다', async () => {
+test.each(['full', 'legacy'])('L1 SIGKILL로 종료된 %s 잠금 주인을 확인해 새 작업과 초기화 정리를 자동 재개한다', async (format) => {
   repo = await clone();
   await repo.createWorktree('task-1', 'agent/TASK-1', baseline);
   const lockPath = join(root, 'runner/state/git/project.json.lock');
-  const code = `import fs from 'node:fs'; const path = process.argv[1]; const stat = fs.readFileSync('/proc/' + process.pid + '/stat', 'utf8'); const owner = { pid: process.pid, bootId: fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(), startTime: stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\\s+/)[19] }; fs.writeFileSync(path + '.prepared', JSON.stringify(owner), { flag: 'wx' }); fs.linkSync(path + '.prepared', path); fs.unlinkSync(path + '.prepared'); process.stdout.write('ready'); setInterval(() => {}, 1000);`;
-  const child = spawn(process.execPath, ['--input-type=module', '-e', code, lockPath], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const code = `import fs from 'node:fs'; const path = process.argv[1]; const stat = fs.readFileSync('/proc/' + process.pid + '/stat', 'utf8'); const owner = { pid: process.pid, bootId: fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(), startTime: stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\\s+/)[19] }; fs.writeFileSync(path + '.prepared', process.argv[2] === 'legacy' ? process.pid + '\\n' : JSON.stringify(owner), { flag: 'wx' }); fs.linkSync(path + '.prepared', path); fs.unlinkSync(path + '.prepared'); process.stdout.write('ready'); setInterval(() => {}, 1000);`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', code, lockPath, format], { stdio: ['ignore', 'pipe', 'pipe'] });
   try {
     await once(child.stdout, 'data');
     const exited = once(child, 'exit');
@@ -728,4 +728,159 @@ test('L2 정리한 같은 Task 브랜치로 이전 결과와 기준에서 다음
   await repo.removeWorktree('attempt-2');
   const fresh = await repo.createWorktree('attempt-3', branch, baseline);
   expect(git(fresh, 'rev-parse', 'HEAD')).toBe(baseline);
+});
+
+test.each(['live', 'pid', 'boot', 'start'])('L1 살아 있거나 %s 형식이 잘못된 주인의 잠금을 보존한다', async (invalid) => {
+  repo = await clone();
+  const owner: Record<string, unknown> = await ownerRecord();
+  if (invalid === 'pid') owner.pid = -1;
+  if (invalid === 'boot') owner.bootId = '잘못된 부팅 식별자';
+  if (invalid === 'start') owner.startTime = '확인 불가';
+  const path = join(root, 'runner/state/git/project.json.lock');
+  const content = JSON.stringify(owner);
+  await writeFile(path, content);
+  await withoutLongLockWait(() => expect(repo.createWorktree('task-1', 'agent/TASK-1', baseline)).rejects.toThrow(/잠금 대기/));
+  expect(await readFile(path, 'utf8')).toBe(content);
+});
+
+test('L1 주인 확인 권한이 없으면 시작 시간이 달라도 잠금을 회수하지 않는다', async () => {
+  repo = await clone();
+  const owner = await ownerRecord();
+  owner.startTime = (BigInt(owner.startTime) + 1n).toString();
+  const path = join(root, 'runner/state/git/project.json.lock');
+  const content = JSON.stringify(owner);
+  await writeFile(path, content);
+  const kill = vi.spyOn(process, 'kill').mockImplementation(() => { throw Object.assign(new Error('권한 없음'), { code: 'EPERM' }); });
+  try {
+    await withoutLongLockWait(() => expect(repo.createWorktree('task-1', 'agent/TASK-1', baseline)).rejects.toThrow(/잠금 대기/));
+  } finally { kill.mockRestore(); }
+  expect(await readFile(path, 'utf8')).toBe(content);
+});
+
+test('L1 구버전 PID 잠금도 해당 PID가 살아 있으면 보존한다', async () => {
+  repo = await clone();
+  const path = join(root, 'runner/state/git/project.json.lock');
+  const content = `${process.pid}\n`;
+  await writeFile(path, content);
+  await withoutLongLockWait(() => expect(repo.createWorktree('task-1', 'agent/TASK-1', baseline)).rejects.toThrow(/잠금 대기/));
+  expect(await readFile(path, 'utf8')).toBe(content);
+});
+
+test('L1 여러 프로세스가 남은 잠금을 동시에 회수해도 새 잠금과 생성 기록을 보존한다', async () => {
+  repo = await clone();
+  const owner = { ...await ownerRecord(), bootId: '00000000-0000-0000-0000-000000000000' };
+  await writeFile(join(root, 'runner/state/git/project.json.lock'), JSON.stringify(owner));
+  const moduleUrl = new URL('../../src/git/repository.ts', import.meta.url).href;
+  const code = `import { GitRepository } from ${JSON.stringify(moduleUrl)}; const repo = await GitRepository.open(process.argv[1], 'project'); await repo.createWorktree(process.argv[2], 'agent/' + process.argv[2], process.argv[3]);`;
+  await Promise.all(['task-1', 'task-2', 'task-3'].map((name) => promisify(execFile)(process.execPath, [
+    '--input-type=module', '-e', code, join(root, 'runner'), name, baseline,
+  ])));
+  const record = JSON.parse(await readFile(join(root, 'runner/state/git/project.json'), 'utf8')) as { worktrees: { id: string }[] };
+  expect(record.worktrees.map((entry) => entry.id).sort()).toEqual(['task-1', 'task-2', 'task-3']);
+  await repo.reset({ baseCommit: baseline, branches: [], worktrees: ['task-1', 'task-2', 'task-3'], inputs: [] });
+});
+
+test('L1 회수용 커널 잠금의 주인도 SIGKILL 뒤 자동 해제된다', async () => {
+  repo = await clone();
+  const path = join(root, 'runner/state/git/project.json.lock');
+  const content = JSON.stringify({ ...await ownerRecord(), bootId: '00000000-0000-0000-0000-000000000000' });
+  await writeFile(path, content);
+  const code = `import fs from 'node:fs'; import { spawnSync } from 'node:child_process'; const fd = fs.openSync(process.argv[1], 'a'); const result = spawnSync('flock', ['-n', '3'], { stdio: ['ignore', 'ignore', 'ignore', fd] }); if (result.status !== 0) process.exit(1); process.stdout.write('ready'); setInterval(() => {}, 1000);`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', code, `${path}.recover`], { stdio: ['ignore', 'pipe', 'pipe'] });
+  try {
+    await once(child.stdout, 'data');
+    await withoutLongLockWait(() => expect(repo.createWorktree('task-1', 'agent/TASK-1', baseline)).rejects.toThrow(/잠금 대기/));
+    expect(await readFile(path, 'utf8')).toBe(content);
+  } finally {
+    const exited = once(child, 'exit');
+    child.kill('SIGKILL');
+    await exited;
+  }
+  await withoutLongLockWait(() => repo.createWorktree('task-1', 'agent/TASK-1', baseline));
+});
+
+test('L2 생성 뒤 이동한 브랜치는 정리 중 덮어쓰거나 삭제하지 않는다', async () => {
+  repo = await clone();
+  const branch = 'agent/TASK-1-h2';
+  const work = await repo.createWorktree('attempt-1', branch, baseline);
+  await file(join(work, 'src/new.ts'), '새 결과');
+  git(work, 'add', '-A');
+  git(work, 'commit', '-m', '새 결과');
+  const result = await repo.importWorktree('attempt-1', branch);
+  git(repo.path, 'update-ref', `refs/heads/${branch}`, result);
+  await repo.removeWorktree('attempt-1');
+  expect(git(repo.path, 'rev-parse', `refs/heads/${branch}`)).toBe(result);
+  await expect(repo.createWorktree('attempt-2', branch, baseline)).rejects.toThrow();
+  expect(git(repo.path, 'rev-parse', `refs/heads/${branch}`)).toBe(result);
+});
+
+test('L2 구버전 이름 목록은 읽되 브랜치 소유권을 추측해 삭제하지 않는다', async () => {
+  repo = await clone();
+  const work = await repo.createWorktree('attempt-1', 'agent/TASK-1', baseline);
+  const path = join(root, 'runner/state/git/project.json');
+  const record = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+  record.worktrees = ['attempt-1'];
+  await writeFile(path, JSON.stringify(record));
+  await (await GitRepository.open(join(root, 'runner'), 'project')).removeWorktree('attempt-1');
+  await expect(lstat(work)).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(git(repo.path, 'rev-parse', 'refs/heads/agent/TASK-1')).toBe(baseline);
+});
+
+test('L1 실제 작업 폴더 생성 중 Runner를 SIGKILL해도 기록된 폴더와 브랜치를 복구한다', async () => {
+  repo = await clone();
+  const moduleUrl = new URL('../../src/git/repository.ts', import.meta.url).href;
+  const marker = join(root, 'copy-started');
+  const bin = join(root, 'slow-bin');
+  await file(join(bin, 'git'), `#!${process.execPath}\nconst fs = require('node:fs'); const { spawnSync } = require('node:child_process'); if (process.argv.includes('--single-branch')) { fs.writeFileSync(${JSON.stringify(marker)}, 'ready'); setInterval(() => {}, 1000); } else { const result = spawnSync('/usr/bin/git', process.argv.slice(2), { stdio: 'inherit' }); process.exit(result.status ?? 1); }\n`);
+  await chmod(join(bin, 'git'), 0o755);
+  const code = `import { GitRepository } from ${JSON.stringify(moduleUrl)}; const repo = await GitRepository.open(process.argv[1], 'project'); await repo.createWorktree('crashed', 'agent/TASK-crashed', process.argv[2]);`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', code, join(root, 'runner'), baseline], {
+    detached: true, stdio: 'ignore', env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+  });
+  if (!child.pid) throw new Error('시험용 Runner 시작 실패');
+  try {
+    let ready = false;
+    for (let count = 0; count < 200; count++) {
+      try { await lstat(marker); ready = true; break; } catch { await new Promise((resolve) => setTimeout(resolve, 10)); }
+    }
+    expect(ready).toBe(true);
+    const owner = JSON.parse(await readFile(join(root, 'runner/state/git/project.json.lock'), 'utf8')) as Record<string, unknown>;
+    expect(owner).toEqual(await ownerRecord(child.pid));
+  } finally {
+    const exited = once(child, 'exit');
+    process.kill(-child.pid, 'SIGKILL');
+    await exited;
+  }
+  const restarted = await GitRepository.open(join(root, 'runner'), 'project');
+  await withoutLongLockWait(() => restarted.removeWorktree('crashed'));
+  const next = await restarted.createWorktree('next', 'agent/TASK-crashed', baseline);
+  expect(git(next, 'rev-parse', 'HEAD')).toBe(baseline);
+});
+
+test('L1 flock가 없으면 명확히 실패하고 남은 잠금을 보존한 뒤 설치 후 재시도할 수 있다', async () => {
+  repo = await clone();
+  const path = join(root, 'runner/state/git/project.json.lock');
+  const content = JSON.stringify({ ...await ownerRecord(), bootId: '00000000-0000-0000-0000-000000000000' });
+  await writeFile(path, content);
+  const bin = join(root, 'empty-bin');
+  await mkdir(bin);
+  vi.stubEnv('PATH', bin);
+  await expect(repo.createWorktree('task-1', 'agent/TASK-1', baseline)).rejects.toThrow(/flock/);
+  expect(await readFile(path, 'utf8')).toBe(content);
+  vi.unstubAllEnvs();
+  await repo.createWorktree('task-1', 'agent/TASK-1', baseline);
+});
+
+test('L1 회수 구간에 다른 실행이 얻은 새 잠금은 재확인하여 보존한다', async () => {
+  repo = await clone();
+  const path = join(root, 'runner/state/git/project.json.lock');
+  const live = JSON.stringify(await ownerRecord());
+  await writeFile(path, JSON.stringify({ ...await ownerRecord(), bootId: '00000000-0000-0000-0000-000000000000' }));
+  const bin = join(root, 'flock-bin');
+  await file(join(bin, 'flock'), `#!${process.execPath}\nconst fs = require('node:fs'); const { spawnSync } = require('node:child_process'); fs.unlinkSync(${JSON.stringify(path)}); fs.writeFileSync(${JSON.stringify(path)}, ${JSON.stringify(live)}, { flag: 'wx' }); const result = spawnSync('/usr/bin/flock', process.argv.slice(2), { stdio: ['ignore', 'ignore', 'ignore', 3] }); process.exit(result.status ?? 1);\n`);
+  await chmod(join(bin, 'flock'), 0o755);
+  vi.stubEnv('PATH', `${bin}:${process.env.PATH}`);
+  await withoutLongLockWait(() => expect(repo.createWorktree('task-1', 'agent/TASK-1', baseline)).rejects.toThrow(/잠금 대기/));
+  expect(await readFile(path, 'utf8')).toBe(live);
+  await expect(lstat(join(root, 'runner/worktrees/project/task-1'))).rejects.toMatchObject({ code: 'ENOENT' });
 });

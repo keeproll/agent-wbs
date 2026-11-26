@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
-import { chmod, lstat, mkdir, open, readFile, readdir, rename, rm, statfs, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { chmod, link, lstat, mkdir, open, readFile, readdir, rename, rm, statfs, writeFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
 
@@ -34,7 +35,88 @@ export interface RejectedPath {
 }
 
 interface TreeEntry { mode: string; oid: string; path: string }
-interface Registration { source: string; configHash: string; worktrees: string[] }
+interface WorktreeRecord { id: string; branch?: string; startCommit?: string }
+interface Registration { source: string; configHash: string; worktrees: WorktreeRecord[] }
+interface LockOwner { pid: number; bootId?: string; startTime?: string }
+const BOOT_ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
+
+function worktreeRecord(value: unknown): WorktreeRecord {
+  // 구버전 기록은 폴더만 정리한다. 브랜치 소유권을 추측하지 않는다.
+  if (typeof value === 'string') return { id: id(value) };
+  if (!value || typeof value !== 'object' || !('id' in value) || typeof value.id !== 'string') {
+    throw new GitSafetyError('작업 폴더 생성 기록이 올바르지 않습니다.');
+  }
+  const name = id(value.id);
+  if (!('branch' in value) && !('startCommit' in value)) return { id: name };
+  if (!('branch' in value) || typeof value.branch !== 'string' || !value.branch.startsWith('agent/') ||
+    !('startCommit' in value) || typeof value.startCommit !== 'string') {
+    throw new GitSafetyError('작업 폴더 브랜치 기록이 올바르지 않습니다.');
+  }
+  return { id: name, branch: value.branch, startCommit: sha(value.startCommit) };
+}
+
+async function startTime(pid: number): Promise<string> {
+  const value = await readFile(`/proc/${pid}/stat`, 'utf8');
+  const time = value.slice(value.lastIndexOf(')') + 2).trim().split(/\s+/)[19];
+  if (!time || !/^(0|[1-9]\d*)$/.test(time)) throw new GitSafetyError('프로세스 시작 시간을 확인할 수 없습니다.');
+  return time;
+}
+
+function lockOwner(value: string): LockOwner | undefined {
+  let record: unknown;
+  try { record = JSON.parse(value); } catch { return undefined; }
+  // 이전 버전의 PID 단독 잠금은 그 PID가 실제로 없을 때만 회수한다.
+  if (typeof record === 'number' && /^[1-9]\d*$/.test(value.trim()) && Number.isInteger(record) && record <= 2147483647) return { pid: record };
+  if (!record || typeof record !== 'object' || !('pid' in record) || typeof record.pid !== 'number' ||
+    !Number.isInteger(record.pid) || record.pid <= 0 || record.pid > 2147483647 ||
+    !('bootId' in record) || typeof record.bootId !== 'string' || !BOOT_ID.test(record.bootId) ||
+    !('startTime' in record) || typeof record.startTime !== 'string' || !/^(0|[1-9]\d*)$/.test(record.startTime)) return undefined;
+  return { pid: record.pid, bootId: record.bootId, startTime: record.startTime };
+}
+
+async function ownerGone(owner: LockOwner, bootId: string): Promise<boolean> {
+  if (owner.bootId !== undefined && owner.bootId !== bootId) return true;
+  try { process.kill(owner.pid, 0); }
+  catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; }
+  if (owner.startTime === undefined) return false;
+  try { return await startTime(owner.pid) !== owner.startTime; }
+  catch (error) { return (error as NodeJS.ErrnoException).code === 'ENOENT'; }
+}
+
+async function lockContent(path: string): Promise<string | undefined> {
+  try { return await readFile(await safePath(path), 'utf8'); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+}
+
+async function recoverLock(path: string, bootId: string): Promise<boolean> {
+  const expected = await lockContent(path);
+  if (expected === undefined) return true;
+  const owner = lockOwner(expected);
+  if (!owner || !await ownerGone(owner, bootId)) return false;
+  const guard = await open(await safePath(`${path}.recover`), constants.O_CREAT | constants.O_RDWR | constants.O_NOFOLLOW, 0o600);
+  try {
+    // flock는 부모와 공유한 열린 파일에 걸린다. 부모가 강제 종료돼도 커널이 잠금을 해제한다.
+    const held = await new Promise<boolean>((resolvePromise, reject) => {
+      const child = spawn('flock', ['-n', '-E', '75', '3'], {
+        stdio: ['ignore', 'ignore', 'ignore', guard.fd], env: { PATH: process.env.PATH },
+      });
+      child.on('error', () => { reject(new GitSafetyError('잠금 회수에 필요한 Linux flock를 실행할 수 없습니다.')); });
+      child.on('close', (code) => {
+        if (code === 0 || code === 75) resolvePromise(code === 0);
+        else reject(new GitSafetyError('잠금 회수용 배타 잠금을 얻지 못했습니다.'));
+      });
+    });
+    if (!held) return false;
+    // 다른 회수자가 새 잠금을 만든 뒤라면 절대 지우지 않고 처음부터 다시 확인한다.
+    if (await lockContent(path) !== expected) return true;
+    if (!await ownerGone(owner, bootId)) return false;
+    await rm(path);
+    return true;
+  } finally { await guard.close(); }
+}
 
 function sourceUrl(source: string): string {
   const url = URL.parse(source);
@@ -181,11 +263,11 @@ export class GitRepository {
     catch { throw new GitSafetyError('저장소 등록 기록이 없습니다. 등록된 주소로 안전하게 다시 복사해야 합니다.'); }
     if (!record || typeof record !== 'object' || !('source' in record) || typeof record.source !== 'string' ||
       !('configHash' in record) || typeof record.configHash !== 'string' || !/^[a-f0-9]{64}$/.test(record.configHash) ||
-      !('worktrees' in record) || !Array.isArray(record.worktrees) || !record.worktrees.every((value: unknown) => typeof value === 'string')) {
+      !('worktrees' in record) || !Array.isArray(record.worktrees)) {
       throw new GitSafetyError('저장소 등록 기록이 올바르지 않습니다.');
     }
-    for (const value of record.worktrees as string[]) id(value);
-    return { source: sourceUrl(record.source), configHash: record.configHash, worktrees: record.worktrees as string[] };
+    return { source: sourceUrl(record.source), configHash: record.configHash,
+      worktrees: record.worktrees.map((value: unknown) => worktreeRecord(value)) };
   }
 
   private async git(args: string[], input?: Buffer | string, env?: NodeJS.ProcessEnv, allowed?: number[]) {
@@ -219,23 +301,30 @@ export class GitRepository {
 
   private async worktreeUpdate<T>(action: () => Promise<T>): Promise<T> {
     const path = await safePath(`${this.statePath}.lock`);
+    const bootId = (await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim();
+    if (!BOOT_ID.test(bootId)) throw new GitSafetyError('부팅 식별자를 확인할 수 없습니다.');
+    const owner = JSON.stringify({ pid: process.pid, bootId, startTime: await startTime(process.pid) });
+    const prepared = `${path}.${randomUUID()}`;
     const deadline = Date.now() + 30_000;
-    let lock: Awaited<ReturnType<typeof open>> | undefined;
-    while (!lock) {
-      try { lock = await open(path, 'wx', 0o600); }
-      catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-        if (Date.now() >= deadline) throw new GitSafetyError(`저장소 잠금 대기 시간이 지났습니다. 실행 중인 Runner를 확인하세요: ${path}`);
-        await delay(25);
-      }
-    }
-    // shortcut: 비정상 종료의 잠금은 수동 복구한다. 자동 복구를 연결할 때 소유 프로세스 검증을 추가한다.
+    let acquired = false;
     try {
-      await lock.writeFile(`${process.pid}\n`);
+      // 내용을 완성한 뒤 원자적으로 연결하므로, 종료돼도 빈 잠금은 공개되지 않는다.
+      await writeFile(prepared, owner, { flag: 'wx', mode: 0o600 });
+      while (!acquired) {
+        try { await link(prepared, path); acquired = true; }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+          if (await recoverLock(path, bootId)) continue;
+          if (Date.now() >= deadline) throw new GitSafetyError(`저장소 잠금 대기 시간이 지났습니다. 주인 확인 불가 시 수동 조치가 필요합니다: ${path}`);
+          await delay(25);
+        }
+      }
+      await rm(prepared);
       await this.trusted();
       return await action();
     } finally {
-      try { await lock.close(); } finally { await rm(path, { force: true }); }
+      try { if (acquired && await lockContent(path) === owner) await rm(path); }
+      finally { await rm(prepared, { force: true }); }
     }
   }
 
@@ -262,13 +351,13 @@ export class GitRepository {
       sha(commit);
       if (await stat(path)) throw new GitSafetyError('이미 존재하는 작업 폴더를 덮어쓰지 않습니다.');
       const record = await this.trusted();
-      if (record.worktrees.includes(worktreeId)) throw new GitSafetyError('이 작업 폴더는 정리 후 다시 만들어야 합니다.');
+      if (record.worktrees.some((value) => value.id === worktreeId)) throw new GitSafetyError('이 작업 폴더는 정리 후 다시 만들어야 합니다.');
       const ref = `refs/heads/${branch}`;
       await this.git(['update-ref', ref, commit, '']);
       let created = false;
       try {
         // 생성 중 종료돼도 폴더가 기록 없이 남지 않도록 먼저 예약한다.
-        await this.saveRegistration({ ...record, worktrees: [...record.worktrees, worktreeId] });
+        await this.saveRegistration({ ...record, worktrees: [...record.worktrees, { id: worktreeId, branch, startCommit: commit }] });
         await mkdir(path, { mode: 0o700 });
         created = true;
         // 고정 커밋의 브랜치만 복사하여 최신 원격 객체도 받고 다른 Agent 결과는 제외한다.
@@ -280,7 +369,7 @@ export class GitRepository {
         try {
           if (created) await removeReadonly(path);
           const latest = await this.trusted();
-          await this.saveRegistration({ ...latest, worktrees: latest.worktrees.filter((value) => value !== worktreeId) });
+          await this.saveRegistration({ ...latest, worktrees: latest.worktrees.filter((value) => value.id !== worktreeId) });
         } finally { await this.git(['update-ref', '-d', ref, commit]); }
         throw error;
       }
@@ -289,7 +378,7 @@ export class GitRepository {
 
   async importWorktree(worktreeId: string, branch: string): Promise<string> {
     const path = await safePath(join(this.worktrees, id(worktreeId), '.git'));
-    if (!(await this.trusted()).worktrees.includes(worktreeId)) throw new GitSafetyError('기록하지 않은 작업 폴더입니다.');
+    if (!(await this.trusted()).worktrees.some((value) => value.id === worktreeId)) throw new GitSafetyError('기록하지 않은 작업 폴더입니다.');
     await this.branch(branch);
     const ref = `refs/agent-results/${worktreeId}`;
     // Agent 설정을 읽어 checkout하지 않고, Git의 객체 검증을 거쳐 결과만 가져온다.
@@ -302,13 +391,22 @@ export class GitRepository {
       const path = join(this.worktrees, id(worktreeId));
       await safePath(dirname(path));
       const record = await this.trusted();
-      if (!record.worktrees.includes(worktreeId)) {
+      const entry = record.worktrees.find((value) => value.id === worktreeId);
+      if (!entry) {
         if (await stat(path)) throw new GitSafetyError('Runner가 생성 기록을 남기지 않은 폴더는 삭제하지 않습니다.');
         return;
       }
+      if (entry.branch && entry.startCommit) {
+        await this.branch(entry.branch);
+      }
       await removeReadonly(path);
+      if (entry.branch && entry.startCommit) {
+        const ref = `refs/heads/${entry.branch}`;
+        const current = (await this.git(['show-ref', '--verify', '--hash', ref], undefined, undefined, [0, 1])).toString().trim();
+        if (current === entry.startCommit) await this.git(['update-ref', '-d', ref, entry.startCommit]);
+      }
       await this.git(['update-ref', '-d', `refs/agent-results/${worktreeId}`]);
-      await this.saveRegistration({ ...record, worktrees: record.worktrees.filter((value) => value !== worktreeId) });
+      await this.saveRegistration({ ...record, worktrees: record.worktrees.filter((value) => value.id !== worktreeId) });
     });
   }
 
