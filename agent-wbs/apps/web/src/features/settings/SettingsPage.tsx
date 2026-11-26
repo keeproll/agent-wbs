@@ -17,6 +17,7 @@ import { isSettingsTab, SETTINGS_TABS, type SettingsTab } from './labels.ts';
 import { PlanTab } from './PlanTab.tsx';
 import { RunnerTab } from './RunnerTab.tsx';
 import { SystemTab } from './SystemTab.tsx';
+import { NotifyTab } from './notify/NotifyTab.tsx';
 import { DirtyContext, useDirtyRegistry } from './useSettingForm.tsx';
 import './settings.css';
 
@@ -28,7 +29,7 @@ export function SettingsPage() {
   if (tab !== undefined && !isSettingsTab(tab)) return <Navigate to="/settings/runner" replace />;
   return (
     <MenuScreen menu="settings">
-      {(project) => <SettingsBody tab={tab ?? 'runner'} preReg={preRegNotice(project.state)} repoUrl={repoUrlOf(project)} />}
+      {(project) => <SettingsBody tab={tab ?? 'runner'} preReg={preRegNotice(project.state)} repoUrl={repoUrlOf(project)} projectId={project.state === 'none' ? null : project.id} projectName={project.state === 'none' ? '' : project.name} />}
     </MenuScreen>
   );
 }
@@ -56,10 +57,12 @@ function useBadges(): Partial<Record<SettingsTab, { count: number; alert: boolea
   const count = readinessBad + githubBad;
   // 일정 · Task 탭: 분할 기준 위반·의심 Task 수(P L6660 bPlan, 서버 후속 3차 getSplitViolations). 원본처럼 경고색이 아닌 보통 배지다.
   const split = useApiQuery('getSplitViolations', {}, { topics: ['settings', 'task'] });
-  return { runner: { count, alert: count > 0 }, plan: { count: split.data?.count ?? 0, alert: false } };
+  const alerts = useApiQuery('listAlerts', {}, { topics: ['alert', 'notify'] });
+  const notifyBad = alerts.data?.items.some(alert => alert.text.startsWith('Telegram ')) ? 1 : 0;
+  return { runner: { count, alert: count > 0 }, plan: { count: split.data?.count ?? 0, alert: false }, notify: { count: notifyBad, alert: true } };
 }
 
-function SettingsBody({ tab, preReg, repoUrl }: { tab: SettingsTab; preReg: string | null; repoUrl: string | null }) {
+function SettingsBody({ tab, preReg, repoUrl, projectId, projectName }: { tab: SettingsTab; preReg: string | null; repoUrl: string | null; projectId: string | null; projectName: string }) {
   const { anyDirty, report } = useDirtyRegistry();
   useEditGuard(anyDirty);
   const badges = useBadges();
@@ -93,7 +96,8 @@ function SettingsBody({ tab, preReg, repoUrl }: { tab: SettingsTab; preReg: stri
         {tab === 'agent' && <AgentTab />}
         {tab === 'plan' && <PlanTab />}
         {tab === 'system' && <SystemTab />}
-        {(tab === 'report' || tab === 'notify') && (
+        {tab === 'notify' && <NotifyTab projectId={projectId} projectName={projectName} />}
+        {tab === 'report' && (
           <section className="card" aria-label={current.label}>
             <p style={{ margin: 0 }}>이 탭은 아직 구현되지 않았습니다.</p>
           </section>
