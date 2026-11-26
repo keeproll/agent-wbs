@@ -7,7 +7,7 @@
  *   왜: 화면·메일·PDF의 숫자와 문장이 서로 어긋나지 않게 한다.
  */
 import {
-  addDays, customPeriodProblem, externalView, internalKpis, MAX_CUSTOM_DAYS, monthDay, mondayOf, reportFigures, TASK_STATUSES,
+  addDays, customPeriodProblem, externalView, scrubInternal, internalKpis, MAX_CUSTOM_DAYS, monthDay, mondayOf, reportFigures, TASK_STATUSES,
   type ExternalView, type Kpi, type ReportSnapshotData,
 } from '@awbs/shared';
 import type { ResponseOf } from '../../shared/api/contract.ts';
@@ -69,7 +69,9 @@ export function changedLabel(c: ReportDoc['changesSince']): string | null {
   return c.replans > 0 ? `생성 이후 일정 재조정 ${String(c.replans)}회 — 현재 완료 예상 ${c.currentEnd ?? '—'} (보고서 기준 ${c.reportEnd ?? '—'})` : null;
 }
 export const snapLabel = (generatedAt: string) => `이 보고서는 ${formatDateTime(generatedAt)} 시점의 스냅샷입니다. 이후 데이터가 바뀌어도 내용은 바뀌지 않습니다.`;
-export const docTitle = (projectName: string, kind: ReportKind, view: ReportView) => `${projectName} — ${KIND[kind].doc}${view === 'ext' ? ' (보고용)' : ''}`;
+/** 보고용 제목의 프로젝트 이름도 자유 입력이라 내부 용어를 뺀다(리뷰 M6-01 3). */
+export const docTitle = (projectName: string, kind: ReportKind, view: ReportView) =>
+  `${view === 'ext' ? scrubInternal(projectName) : projectName} — ${KIND[kind].doc}${view === 'ext' ? ' (보고용)' : ''}`;
 /** PDF 파일 이름(G L405 예: `RPT-W-261027_보고용.pdf`) */
 export const pdfName = (reportKey: string, view: ReportView) => `${reportKey}_${view === 'int' ? '팀장용' : '보고용'}.pdf`;
 

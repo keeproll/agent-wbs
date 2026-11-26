@@ -96,9 +96,9 @@ export function externalView(s: ReportSnapshotData, kind: 'daily' | 'weekly' | '
     summary,
     // 일간은 추이를 보이지 않는다(P isWeekly L6413).
     trend: kind === 'daily' ? [] : s.series.map((x) => ({ day: x.day, uptimePct: x.uptimePct, done: x.done, forecast: x.forecast })),
-    highlights: s.done.map((x) => x.title),
+    highlights: s.done.map((x) => scrubInternal(x.title)),
     risks,
-    plan: s.next.map((x) => `${x.title} (${monthDay(x.start)} ~ ${monthDay(x.end)})`),
+    plan: s.next.map((x) => `${scrubInternal(x.title)} (${monthDay(x.start)} ~ ${monthDay(x.end)})`),
   };
 }
 
@@ -111,6 +111,16 @@ const INTERNAL_TERMS: readonly RegExp[] = [
 ];
 export function internalTerms(text: string): string[] {
   return INTERNAL_TERMS.flatMap((re) => text.match(re) ?? []);
+}
+
+/**
+ * 보고용에 넣는 자유 입력(작업 제목·프로젝트 이름)에서 내부 용어를 뺀다(G L396, 리뷰 M6-01 3).
+ * 왜: 제목은 팀장이 자유롭게 쓰므로 「TASK-0007 수정」처럼 내부 용어가 섞일 수 있다. 숫자·문장은 그대로 두고 용어만 지운다.
+ * 예: 「TASK-0007 RP-002 개선」 → 「개선」. 모두 지워져 빈 글이 되면 「(제목 비공개)」.
+ */
+export function scrubInternal(text: string): string {
+  const cleaned = INTERNAL_TERMS.reduce((acc, re) => acc.replace(new RegExp(re.source, re.flags), ''), text).replace(/\s+/g, ' ').trim();
+  return cleaned || '(제목 비공개)';
 }
 
 /** 스냅샷이 계약(ReportSnapshot)에 맞는지. 맞지 않으면 첫 위반 위치를 돌려준다. */

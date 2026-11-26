@@ -7,3 +7,10 @@
 .rp-r2 { overflow-wrap: anywhere; }
 /* 넓은 표(실행 기록·예정·부록)는 좁은 화면에서 문서 안에서만 가로로 밀어 본다. */
 .rpt-doc .rpt-tbl, .rpt-doc .rpt-trend { overflow-x: auto; }
+/*
+ * 핵심 지표 4개는 원본처럼 한 줄 4칸이다(prototype.css L518). 좁은 화면(600px 이하)에서는 2칸으로 접는다(리뷰 M6-01 4).
+ * 왜: 390px에서 4칸이면 한 칸이 약 45px라 완료 예상일(2026-11-29)과 목표일 대비 값이 서로 겹쳐 읽을 수 없었다.
+ * 원본은 좁은 화면에서도 문서를 넓게 두고 가로로 밀어 보게 했다. 제품은 문서를 화면 폭에 맞추므로 지표 칸 수를 줄인다.
+ */
+@media (max-width: 600px) { .rpt-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.rpt-kpi .rpt-kv { overflow-wrap: anywhere; }

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { internalTerms, type ReportSnapshotData } from '@awbs/shared';
 import {
-  changedLabel, defaultView, externalDoc, formProblem, internalDoc, lateLabel, quickRange, rowView, type ReportRow,
+  changedLabel, defaultView, docTitle, externalDoc, formProblem, internalDoc, lateLabel, quickRange, rowView, type ReportRow,
 } from '../src/features/report/model.ts';
 
 const T = (kst: string) => new Date(`${kst}:00+09:00`).toISOString();
@@ -131,4 +131,9 @@ describe('빈 상태', () => {
     expect(e.highlights).toEqual(['Monorepo 구성']);
     expect(externalDoc(empty, 'weekly').plan).toEqual([]);
   });
+});
+
+test('리뷰 3: 보고용 문서 제목의 프로젝트 이름에서도 내부 용어를 뺀다', () => {
+  expect(docTitle('TASK-0001 이관 프로젝트', 'weekly', 'ext')).toBe('이관 프로젝트 — 주간 보고서 (보고용)');
+  expect(docTitle('TASK-0001 이관 프로젝트', 'weekly', 'int')).toBe('TASK-0001 이관 프로젝트 — 주간 보고서');
 });
