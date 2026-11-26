@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest';
 import { createGitHubClient, type Permissions } from '../../src/github/client.ts';
 import { ghTokenSource } from '../../src/github/token.ts';
 import { Secret } from '../../src/security/secret.ts';
+import { protectedMainResponse } from '../fakes/github/rules.ts';
 
 /**
  * 권한 상태(`permissions`)를 바꾸는 모든 경로가 「권한 세대」를 대조하는지 고정한다.
@@ -23,6 +24,8 @@ function harness(oldResponder: Responder, holdOld: (path: string, method: string
     repo: { owner: 'o', repo: 'r' },
     token: () => Promise.resolve(new Secret(selected)),
     fetch: async (input, init) => {
+      const protection = protectedMainResponse(new URL(String(input)).pathname);
+      if (protection) return Promise.resolve(protection);
       const path = new URL(String(input)).pathname;
       const method = init?.method ?? 'GET';
       const isOld = new Headers(init?.headers).get('authorization') === `Bearer ${OLD}`;
@@ -157,6 +160,8 @@ describe('연결 확인의 늦은 응답 (최종 리뷰 R11)', () => {
       repo: { owner: 'o', repo: 'r' },
       token: () => Promise.resolve(new Secret(OLD)),
       fetch: async (input, init) => {
+        const protection = protectedMainResponse(new URL(String(input)).pathname);
+        if (protection) return Promise.resolve(protection);
         const path = new URL(String(input)).pathname;
         if (path === '/user') return Response.json({ login: 'bot' });
         if ((init?.method ?? 'GET') === 'GET' && !held) {
@@ -194,9 +199,9 @@ describe('연결 확인의 늦은 응답 (최종 리뷰 R11)', () => {
       },
       fetch: (input) =>
         Promise.resolve(
-          new URL(String(input)).pathname === '/user'
+          protectedMainResponse(new URL(String(input)).pathname) ?? (new URL(String(input)).pathname === '/user'
             ? Response.json({ login: 'bot' })
-            : Response.json({ permissions: { admin: false, push, pull: true } }),
+            : Response.json({ permissions: { admin: false, push, pull: true } })),
         ),
     });
     const first = client.checkConnection('token');
@@ -216,6 +221,8 @@ describe('연결 확인의 늦은 응답 (최종 리뷰 R11)', () => {
       repo: { owner: 'o', repo: 'r' },
       token: () => Promise.resolve(new Secret(OLD)),
       fetch: (input, init) => {
+        const protection = protectedMainResponse(new URL(String(input)).pathname);
+        if (protection) return Promise.resolve(protection);
         if (fail) return Promise.reject(new TypeError('fetch failed'));
         const path = new URL(String(input)).pathname;
         if (path === '/user') return Promise.resolve(Response.json({ login: 'bot' }));
@@ -275,6 +282,8 @@ describe('865c286 리뷰 회귀 (R12·R13)', () => {
         notices.push(e.permission);
       },
       fetch: async (input, init) => {
+        const protection = protectedMainResponse(new URL(String(input)).pathname);
+        if (protection) return Promise.resolve(protection);
         if (new URL(String(input)).pathname === '/user') return Response.json({ login: 'bot' });
         if ((init?.method ?? 'GET') === 'GET') {
           arrived.resolve(undefined);
@@ -308,6 +317,8 @@ describe('865c286 리뷰 회귀 (R12·R13)', () => {
       repo: { owner: 'o', repo: 'r' },
       token: () => Promise.resolve(new Secret(OLD)),
       fetch: async (input, init) => {
+        const protection = protectedMainResponse(new URL(String(input)).pathname);
+        if (protection) return Promise.resolve(protection);
         if (new URL(String(input)).pathname === '/user') return Response.json({ login: 'bot' });
         if ((init?.method ?? 'GET') === 'GET') {
           arrived.resolve(undefined);
@@ -332,6 +343,8 @@ describe('865c286 리뷰 회귀 (R12·R13)', () => {
       repo: { owner: 'o', repo: 'r' },
       token: () => Promise.resolve(new Secret(OLD)),
       fetch: (input, init) => {
+        const protection = protectedMainResponse(new URL(String(input)).pathname);
+        if (protection) return Promise.resolve(protection);
         if (new URL(String(input)).pathname === '/user') return Promise.resolve(Response.json({ login: 'bot' }));
         if ((init?.method ?? 'GET') === 'GET') {
           return Promise.resolve(Response.json({ permissions: { admin: false, push: true, pull: true } }));
@@ -361,6 +374,8 @@ describe('ce62299 리뷰 (R14)', () => {
       repo: { owner: 'o', repo: 'r' },
       token: source.token,
       fetch: (input, init) => {
+        const protection = protectedMainResponse(new URL(String(input)).pathname);
+        if (protection) return Promise.resolve(protection);
         const old = new Headers(init?.headers).get('authorization') === 'Bearer old-review-token';
         if (new URL(String(input)).pathname === '/user') {
           return Promise.resolve(Response.json({ login: old ? 'old-bot' : 'new-bot' }));
@@ -397,11 +412,11 @@ describe('ce62299 리뷰 (R14)', () => {
       token: source.token,
       fetch: (input, init) =>
         Promise.resolve(
-          new URL(String(input)).pathname === '/user'
+          protectedMainResponse(new URL(String(input)).pathname) ?? (new URL(String(input)).pathname === '/user'
             ? Response.json({ login: 'bot' })
             : (init?.method ?? 'GET') === 'GET'
               ? Response.json({ permissions: { admin: false, push: true, pull: true } })
-              : Response.json({}, { status: 201 }),
+              : Response.json({}, { status: 201 })),
         ),
     });
     const checking = client.checkConnection('gh');

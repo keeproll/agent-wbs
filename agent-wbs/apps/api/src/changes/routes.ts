@@ -1,11 +1,12 @@
 import type { Pool } from '@awbs/db';
 import type { FastifyInstance } from 'fastify';
+import { listAlerts } from './alerts.ts';
 import { readChanges } from './events.ts';
 import { listHistory, type HistoryFilter } from './history.ts';
 import { checkIntegrity } from './integrity.ts';
 import { ApiError, read, routes, TASK_PARAMS } from './http.ts';
 
-/** 변경 이벤트(contracts §7)·이력(G§4.9) 조회와 무결성 점검(G§0.4). */
+/** 변경 이벤트(contracts §7)·이력(G§4.9) 조회, 현재 알림(contracts §2.2), 무결성 점검(G§0.4). */
 export function registerChangeRoutes(app: FastifyInstance, pool: Pool): void {
   routes(app, '변경 기록 조회', (route) => {
     route('getChanges', async (request) => {
@@ -29,5 +30,7 @@ export function registerChangeRoutes(app: FastifyInstance, pool: Pool): void {
     }, TASK_PARAMS);
 
     route('getIntegrity', async (request) => read(pool, request, checkIntegrity));
+
+    route('listAlerts', async (request) => read(pool, request, listAlerts));
   });
 }
