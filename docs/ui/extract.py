@@ -196,7 +196,7 @@ def main():
     for label, value in [('인벤토리 항목', len(records)), ('최상위 메뉴', 12), ('이벤트 속성 발생', len(p.events)), ('클릭 액션 발생', summary['clickActions']), ('고유 핸들러 표현식', summary['uniqueHandlerExpressions']), ('sc-if 조건 발생', len(p.conditions)), ('sc-for 반복 발생', len(p.loops)), ('입력 요소 발생', len(fields)), ('분류 누락', len(missing)), ('인수 항목', summary['acceptanceTotal'])]:
         inv.append(f'| {label} | {value} |')
     inv += ['', '종류별: ' + ', '.join(f'{k} {v}' for k,v in summary['kinds'].items()) + '.', '',
-            '같은 반복 행의 실제 데이터 건수는 세지 않고 템플릿 발생 위치를 센다. `open/pick` 같은 반복 별칭은 화면·줄 번호·상위 조건·반복 문맥으로 구분한다. 분류 누락 0은 정적 추출의 문서 연결 결과이며, 브라우저 동작 검증 성공을 뜻하지 않는다.', '', '## 화면·탭·패널·모달 인벤토리', '']
+            '집계를 읽을 때 주의할 점:', '', '- 같은 반복 행의 실제 데이터 건수는 세지 않고 템플릿 발생 위치를 센다.', '- `open/pick` 같은 반복 별칭은 화면·줄 번호·상위 조건·반복 문맥으로 구분한다.', '- 분류 누락 0은 정적 추출(실행 없이 파일만 읽은 결과)의 문서 연결 결과이며, 브라우저 동작 검증 성공을 뜻하지 않는다.', '', '## 화면·탭·패널·모달 인벤토리', '']
     for r in records:
         inv += [f'### {r["id"]} — {r["title"]} ({r["kind"]})', '',
                 f'- 출처: {ref(r["start"],r["end"])}; 로직 {r["logic"]}.',
@@ -221,15 +221,15 @@ def main():
                 hints = {k:v for k,v in a.items() if k in {'type','required','disabled','min','max','step','pattern','maxlength','placeholder','aria-label','rows'}}
                 inv.append(f'| {f["line"]} | {f["tag"]} | {cell(a.get("value",a.get("checked","")))} | {cell(json.dumps(hints,ensure_ascii=False))} |')
             inv.append('')
-    inv += ['## 모든 조건 분기 대조', '', 'true일 때 해당 `sc-if` 하위 콘텐츠가 표시되고 false일 때 빠진다. 상위 조건이 false이면 하위는 진입하지 않는다. 정확한 상위 조건과 반복 별칭은 JSON 증거에 보존했다.', '', '| 조건 ID | 화면 ID | 줄 | 원문 조건 |', '|---|---|---:|---|']
+    inv += ['## 모든 조건 분기 대조', '', '`sc-if`는 원본 템플릿의 조건 분기다. 조건이 true일 때 해당 `sc-if` 하위 콘텐츠가 표시되고 false일 때 빠진다. 상위 조건이 false이면 하위는 진입하지 않는다. 정확한 상위 조건과 반복 별칭은 JSON 증거에 보존했다.', '', '| 조건 ID | 화면 ID | 줄 | 원문 조건 |', '|---|---|---:|---|']
     inv += [f'| {x["id"]} | {", ".join(x["screens"])} | {x["line"]} | {cell(x["expression"])} |' for x in p.conditions]
     inv += ['', '## 모든 반복 바인딩 대조', '', '| 반복 ID | 화면 ID | 줄 | 목록 → 별칭 |', '|---|---|---:|---|']
     inv += [f'| {x["id"]} | {", ".join(x["screens"])} | {x["line"]} | {cell(str(x["expression"])+" → "+str(x["alias"]))} |' for x in p.loops]
-    inv += ['', '## 로직 전체 읽기 색인', '', '선언 시작~다음 선언 직전 구간이다. 중첩 함수는 소유 메서드 안에 포함된다. 로직 구간 전체를 읽고 UI 변경 흐름과 데이터 출처를 정리했으며 이 색인은 재검토 위치를 제공한다.', '', '| 선언/메서드 | 줄 범위 |', '|---|---|']
+    inv += ['', '## 로직 전체 읽기 색인', '', '각 행의 줄 범위는 선언 시작~다음 선언 직전 구간이다. 중첩 함수는 소유 메서드 안에 포함된다. 로직 구간 전체를 읽고 UI 변경 흐름과 데이터 출처를 정리했다. 이 색인은 다시 검토할 위치를 알려 준다.', '', '| 선언/메서드 | 줄 범위 |', '|---|---|']
     inv += [f'| {x["name"]} | {x["line"]}–{x["end"]} |' for x in markers]
     replace_generated(HERE/'inventory.md', '\n'.join(inv), opt.check)
 
-    ac = ['## 집계', '', f'실제 판정 항목 **{len(cases)}개**. 이전933개(원본 설명404 + 기계 조건529)에서 교체했다. 조건529개는 인수 총계에서 제외하고 inventory의 CD 추적 색인에만 남긴다.', '',
+    ac = ['## 집계', '', f'실제 판정 항목은 **{len(cases)}개**다. 이전933개(원본 설명404 + 기계 조건529)에서 교체했다. 조건529개는 인수 총계에서 제외하고, inventory의 CD 추적 색인에만 남긴다.', '',
           '검증 방법별: ' + ', '.join(f'{k} {v}개' for k,v in summary['acceptanceMethods'].items()) + '.', '',
           '## 필수 통과 마일스톤', '',
           '각 UAT는 아래 **하나의 마일스톤에서 전체 기대 결과를 통과**해야 한다. M3 화면/API 사례와 M4 이후 실행 결합 사례는 서로 다른 ID다. 앞 단계의 fixture 성공으로 뒤 단계 체크박스를 체크하지 않는다. 세부 기대 a/b/c 중 하나라도 실패하면 해당 UAT 전체는 미통과다.', '',
@@ -237,14 +237,14 @@ def main():
     for ms, count in summary['acceptanceMilestones'].items():
         ac.append(f'| {ms} | {count} | '+', '.join(c['id'] for c in cases if c['milestones']==ms)+' |')
     ac += ['', '단계 합계: ' + ', '.join(f'{ms} {n}개' for ms,n in summary['acceptanceStages'].items()) + '.', '',
-           'M3 필수 목록은 위 M3-01~08 행의 ID 전체다. M3는 M2 API와 fake Runner 보고 fixture로 화면·저장·전이·보류를 확인하고 Gate 대기까지 검사한다. M4 이후에는 각 항목에 적힌 실제 adapter/프로세스/프로토콜을 사용한다. M7-06도 유료 CLI·실 GitHub 인수가 아니라 fake CLI·로컬 git·fake GitHub를 거치는 실제 ①/② 파이프라인 결합이다. 유료 CLI/실 GitHub/실 SMTP·BotAPI는 계획 M8 gate를 별도로 충족한다.', '',
-           '빈 상태 문구·생성 조건과 오류별 판정 ID는 [acceptance-coverage.md](acceptance-coverage.md)를 따른다. 원본의 동일 빈 문구로 구분되지 않는 경우 G86의 기록 없음/조건 불일치 구분이 제품 기준이다.', '',
+           '단계별로 무엇을 쓰는지:', '', '- M3 필수 목록은 위 M3-01~08 행의 ID 전체다.', '- M3는 M2 API와 fake Runner 보고 fixture로 화면·저장·전이·보류를 확인하고 Gate 대기까지 검사한다.', '- M4 이후에는 각 항목에 적힌 실제 adapter/프로세스/프로토콜을 사용한다.', '- M7-06도 유료 CLI·실 GitHub 인수가 아니라 fake CLI·로컬 git·fake GitHub를 거치는 실제 ①/② 파이프라인 결합이다.', '- 유료 CLI/실 GitHub/실 SMTP·BotAPI는 계획 M8 gate를 별도로 충족한다.', '',
+           '빈 상태 문구·생성 조건과 오류별 판정 ID는 [acceptance-coverage.md](acceptance-coverage.md)를 따른다. 원본이 같은 빈 문구를 써서 구분되지 않는 경우에는 G86의 기록 없음/조건 불일치 구분이 제품 기준이다.', '',
            '## 화면 ID → 판정 항목', '', '| 화면 ID | 판정 ID |', '|---|---|']
     for sid in [r['id'] for r in records] + ['UI-AUTH']:
         ids = [c['id'] for c in cases if sid in c['screens']]
         reason = '정상 제품화면 제외; 모르는 URL404는 UAT-SHELL-05' if sid=='UI-13' else '주입 도구 제외; 실제 상태는 UAT-STATE 및 acceptance-coverage 오류 참조표로 검증'
         ac.append(f'| {sid} | {", ".join(ids) if ids else reason} |')
-    ac += ['', '## 판정 가능한 시나리오', '']
+    ac += ['', '## 판정 가능한 시나리오', '', '읽는 법: 각 시나리오는 전제(시작 상황) → 동작/사건 → 기대 결과 순서다. 기대 결과 a), b), c)는 모두 만족해야 통과다. 근거의 P는 원본 줄, G는 가이드 줄이다.', '']
     for c in cases:
         ac += [f'### {c["id"]} · {", ".join(c["screens"])}', '',
                f'- 전제: {c["given"]}.', f'- 동작/사건: {c["action"]}.',
@@ -275,9 +275,9 @@ def main():
     model_path = HERE/'evidence/data-model.json'
     if model_path.exists():
         model = json.loads(model_path.read_text())
-        needs = ['## 화면 ID별 조회 데이터와 변경 결과', '', '아래 변경은 **원본 메모리 동작**이다. API 명세가 주어진 경우는 본문 계약 표를 따르고, 없는 경우 경로/HTTP 메서드를 새로 지어내지 않았다. UI만 바꾸는 탭·필터·초안과 영속 데이터 변경은 본문에서 구분한다.', '', '| 화면 ID | 필요한 데이터/입력 | 원본 변경·이동 결과 | 출처 로직 |', '|---|---|---|---|']
+        needs = ['## 화면 ID별 조회 데이터와 변경 결과', '', '아래 변경은 **원본 메모리 동작**이다. API 명세가 주어진 경우는 본문 계약 표를 따른다. 명세가 없는 경우 경로/HTTP 메서드를 새로 지어내지 않았다. UI만 바꾸는 탭·필터·초안과 영속 데이터 변경은 본문에서 구분한다.', '', '| 화면 ID | 필요한 데이터/입력 | 원본 변경·이동 결과 | 출처 로직 |', '|---|---|---|---|']
         needs += [f'| {r["id"]} {r["title"]} | {cell(r["fields"])} | {cell(" / ".join(r["results"]))} | {r["logic"]} |' for r in records]
-        needs += ['', '## 원본 샘플 모델의 전체 필드 경로', '', '추출 방법: `Api.loadProject()` 및 Component 생성자 결과의 모든 중첩 객체·배열을 순회했다. 배열은 `[]`, Task 사전의 키는 `TASK-*`로 정규화했다. null/빈 배열에만 있는 미래 필드는 추론하지 않는다. 예시는 읽기 편의를 위해 각 필드 최대 3개이고, 열거값 전체는 본문과 JSON `constants`가 기준이다. 런타임 날짜·예측값은 실행 시점에 따라 달라진다.', '', '| 필드 경로 | 원본 JS 자료형 | 샘플 값(최대 3) |', '|---|---|---|']
+        needs += ['', '## 원본 샘플 모델의 전체 필드 경로', '', '추출 방법과 읽는 법:', '', '- `Api.loadProject()` 및 Component 생성자 결과의 모든 중첩 객체·배열을 순회했다.', '- 배열은 `[]`, Task 사전의 키는 `TASK-*`로 정규화했다.', '- null/빈 배열에만 있는 미래 필드는 추론하지 않는다.', '- 예시는 읽기 편의를 위해 각 필드 최대 3개다. 열거값 전체는 본문과 JSON `constants`가 기준이다.', '- 런타임 날짜·예측값은 실행 시점에 따라 달라진다.', '', '| 필드 경로 | 원본 JS 자료형 | 샘플 값(최대 3) |', '|---|---|---|']
         needs += [f'| {cell(row["path"])} | {cell(", ".join(row["types"]))} | {cell(json.dumps(row["examples"],ensure_ascii=False))} |' for row in model['schema']]
         replace_generated(HERE/'data-needs.md','\n'.join(needs),opt.check)
     # 생성 결과를 별도로 대조: 모든 발생 ID와 화면 ID가 실제 문서에 존재해야 한다.

@@ -1,10 +1,57 @@
 # 디자인 값과 반응형 규칙
 
-원본은 별도 디자인 토큰 시스템이 아니라 CSS 변수·클래스·인라인 스타일·동적 문자열을 함께 사용한다. 아래 값은 원본 그대로이며, 없는 다크 테마나 임의 spacing scale을 보충하지 않았다. 전체 CSS·인라인 값·SVG는 뒤의 기계 추출 부록이 정본이다. 저자의 최초 브라우저 실행은 막혔지만 독립 리뷰의 고정시각 스크린샷·실측을 받아 대조했다(screenshots.md). 원문 CSS 선언과 실제 인쇄·좁은 폭 결함을 구분한다.
+> 처음 읽는다면 [README.md](README.md)의 용어집을 먼저 본다. 디자인 용어는 아래 [용어 풀이](#디자인-용어-풀이)에 따로 모았다.
+
+## 이 문서의 역할
+
+이 문서는 원본 프로토타입의 색·글꼴·간격·반경·그림자·반응형 규칙 **값**을 모은 곳이다.
+값은 원본 그대로이며 하나도 바꾸지 않았다.
+
+- 원본은 별도 디자인 토큰 시스템이 아니다. CSS 변수·클래스·인라인 스타일·동적 문자열을 함께 사용한다.
+- 없는 다크 테마나 임의 spacing scale(간격 단계표)을 보충하지 않았다.
+  - 왜: 원본에 없는 규칙을 만들어 넣으면 "원본 값"과 "새로 정한 값"이 섞여 무엇이 기준인지 흐려진다.
+- 전체 CSS·인라인 값·SVG는 뒤의 기계 추출 부록이 정본이다.
+- 저자의 최초 브라우저 실행은 막혔지만, 독립 리뷰의 고정시각 스크린샷·실측을 받아 대조했다(screenshots.md).
+- 원문 CSS 선언과 실제 인쇄·좁은 폭 결함을 구분한다. 선언이 맞아도 실제 화면은 다를 수 있기 때문이다.
+
+## 디자인 용어 풀이
+
+아래 설명은 이 문서를 읽기 위한 일반 용어 풀이다. 값과 규칙은 각 절의 원본 값이 기준이다.
+
+| 용어 | 뜻 | 이 문서에서의 예 |
+|---|---|---|
+| 디자인 토큰 | 색·간격·크기 같은 디자인 값에 이름을 붙여 한곳에서 관리하는 방식. 보통 "원시 값(primitive) → 의미 이름(semantic) → 컴포넌트별 이름(component)" 세 층으로 나눈다. | 원본에는 이런 층 구조가 없고, `--ac`처럼 역할 이름이 붙은 CSS 변수 한 층만 있다. |
+| CSS 변수 | `--이름: 값`으로 정의하고 `var(--이름)`으로 꺼내 쓰는 CSS 값 보관함. | `--bg`, `--ink` |
+| hex 색 | `#` 뒤 16진수(보통 6자리)로 빨강·초록·파랑 양을 적은 색 표기. | `#2453CF` |
+| rgba | 빨강·초록·파랑 값에 투명도(alpha, 0~1)를 더한 색 표기. | `rgba(17,20,26,.45)`는 45% 불투명한 어두운 색 |
+| 표면 (surface) | 카드·패널처럼 배경 위에 올라오는 면의 색. | `--sf`, `--sf2` |
+| 경계 (border, line) | 영역을 나누는 테두리 선의 색. | `--ln`, `--ln2` |
+| 강조색 (accent) | 선택·링크·주요 버튼처럼 눈길을 끌어야 하는 곳의 색. | `--ac` |
+| 상태색 | 성공·경고·오류를 뜻하는 색. 글자색과 옅은 배경색을 짝으로 쓴다. | `--ok`/`--okbg`, `--wn`/`--wnbg`, `--dg`/`--dgbg` |
+| 간격 (spacing) | 요소 안쪽 여백(padding), 바깥 여백(margin), 요소 사이 간격(gap)을 통틀어 부르는 말. | `padding:20px 24px 0` |
+| padding 값 읽는 법 | 값이 4개면 위·오른쪽·아래·왼쪽, 3개면 위·좌우·아래, 2개면 위아래·좌우 순서다. | `0 20px 0 12px` = 위0, 오른쪽20px, 아래0, 왼쪽12px |
+| spacing scale | 간격을 4px·8px처럼 정해진 단계로만 쓰게 하는 규칙. 원본에는 없다. | — |
+| 반경 (border-radius) | 모서리를 둥글게 깎는 정도. 값이 클수록 둥글다. 정사각형 요소에 `50%`를 주면 원이 된다(가로·세로가 다르면 타원). `999px`는 모서리를 아주 크게 둥글려 알약 모양을 만든다. | `6px`, `50%` |
+| 그림자 (box-shadow) | 요소 아래에 그리는 그림자. `x y 흐림 색` 순서로 적는다. `inset`은 안쪽 그림자로, 원본에서는 선택 표시 막대처럼 쓴다. | `0 8px 24px rgba(0,0,0,.12)`, `inset 3px 0 0 var(--ac)` |
+| z-index | 겹친 요소 중 무엇을 위에 그릴지 정하는 숫자. 클수록 위에 놓인다. | overlay `z-index:50` |
+| overlay | 모달 뒤를 덮는 반투명 막. | `rgba(17,20,26,.45)` |
+| 글꼴 굵기 (font-weight) | 글자 두께. 숫자가 클수록 굵다. 가변 글꼴은 범위 안의 어떤 굵기든 쓸 수 있다. | `45 920`, `15px/700` |
+| `15px/700` 표기 | 이 문서에서 "글자 크기/굵기"를 짧게 적은 것. | 브랜드 `15px/700` |
+| line-height | 줄 높이. 글자 크기에 곱하는 배수. | `1.5` |
+| tabular-nums | 숫자 폭을 모두 같게 맞춰 표에서 자릿수가 세로로 줄 맞게 하는 설정. | body |
+| font-display:swap | 웹 글꼴을 받는 동안 기본 글꼴로 먼저 보여 주고, 다 받으면 바꾸는 설정. | 14줄 |
+| breakpoint (미디어 쿼리) | 화면 폭에 따라 다른 CSS를 적용하는 기준 폭. `max-width:1100px`는 "폭이 1100px 이하일 때". | 반응형 표 |
+| vh | 브라우저 보이는 높이(viewport)의 1%. `100vh`는 화면 높이 전체. | 앱 `height:100vh` |
+| `minmax(0,1fr)` | CSS grid에서 "남은 폭을 나눠 갖되 0보다 작아지지 않게"라는 뜻. `fr`은 남은 공간의 몫. | 2영역 레이아웃 |
+| cascade | 같은 요소에 여러 CSS 규칙이 겹칠 때 어느 것이 이기는지 정하는 순서. | `.detail` 규칙 |
+| prefers-reduced-motion | 운영체제에서 "움직임 줄이기"를 켠 사용자에게 적용하는 조건. | 반응형 표 |
+| prefers-color-scheme | 운영체제의 밝은/어두운 테마 선호에 맞추는 조건. 원본에는 없다. | — |
+| viewport meta | 휴대폰 브라우저가 화면 폭을 실제 기기 폭으로 계산하게 하는 HTML 설정. 없으면 휴대폰이 넓은 가상 폭(예: 980px)으로 그린다. | 본문 head에는 없음 |
 
 ## 색과 테마
 
 출처: Main.dc.html 16줄 `:root`.
+`:root`는 문서 전체에 적용되는 CSS 변수를 정의하는 곳이다.
 
 | 변수 | 원본 값 | 역할 |
 |---|---|---|
@@ -17,14 +64,29 @@
 | --wn / --wnbg | #8F4700 / #FFF2E2 | 경고 / 경고 배경 |
 | --ok / --okbg | #1B7339 / #E5F3E9 | 성공 / 성공 배경 |
 
-링크 기본 #2453CF, hover #1A3F9E(23줄). 상태·Agent·진척·표·다이어그램에는 별도의 리터럴 색도 있으므로 변수만 옮기면 누락된다. 예: Runner 정상 점 #1F8A46, offline 경계 #F1B8B2(38–40줄). 모든 개별 색은 CSS 부록에 포함했다. `prefers-color-scheme`, 테마 선택기, 다크 테마는 없다. 밝은 테마 한 벌이다.
+변수 이름은 짧은 약어다: bg=background(배경), sf=surface(표면), ln=line(경계), ink=글자색, ac=accent(강조), dg=danger(위험), wn=warning(경고), ok=성공. 뒤의 `bg`는 그 상태의 옅은 배경색이다.
+
+- 링크 기본 #2453CF, hover(마우스를 올렸을 때) #1A3F9E(23줄).
+- 상태·Agent·진척·표·다이어그램에는 별도의 리터럴 색(변수 없이 직접 적은 색)도 있다. 그래서 변수만 옮기면 누락된다.
+  - 예: Runner 정상 점 #1F8A46, offline 경계 #F1B8B2(38–40줄).
+- 모든 개별 색은 CSS 부록에 포함했다.
+- `prefers-color-scheme`, 테마 선택기, 다크 테마는 없다. 밝은 테마 한 벌이다.
 
 ## 글꼴과 숫자
 
-- 14줄: `Pretendard GOV Variable`, weight `45 920`, normal, `font-display:swap`. local → 번들 `assets/fdb4f16b4f38a76c99e473186cd3b353.woff2` → jsDelivr `pretendard-gov@1.3.9` 대체 소스.
-- `--font:'Pretendard GOV Variable','Pretendard GOV',-apple-system,BlinkMacSystemFont,system-ui,'Apple SD Gothic Neo','Malgun Gothic',sans-serif`; `--mono:var(--font)`(16줄). code/pre/kbd/samp/입력/placeholder까지 동일 계열(17–22줄).
-- body `13px`, `line-height:1.5`, `font-variant-numeric:tabular-nums`(18줄). 브랜드 `15px/700`, 로고 `11px/600`, 메타 설명 `11px`, Runner `12px/500` 등 실제 세부 크기는 CSS/인라인 부록에 원문 보존. 화면 전체가 12~14px 이상인 것은 아니다(10px·10.5px·11px도 있음).
-- 메일은 예외적으로 `'Pretendard GOV','Apple SD Gothic Neo','Malgun Gothic',sans-serif`; 640px 표 레이아웃, 인라인 CSS(4005–4044줄). 웹 폰트 삽입 없음. PDF는 원본 웹 CSS + A4/14mm(5000–5012줄).
+- 14줄: `Pretendard GOV Variable`, weight `45 920`, normal, `font-display:swap`.
+  - 글꼴을 찾는 순서: local(내 PC에 설치된 글꼴) → 번들 `assets/fdb4f16b4f38a76c99e473186cd3b353.woff2` → jsDelivr `pretendard-gov@1.3.9` 대체 소스.
+- `--font:'Pretendard GOV Variable','Pretendard GOV',-apple-system,BlinkMacSystemFont,system-ui,'Apple SD Gothic Neo','Malgun Gothic',sans-serif`; `--mono:var(--font)`(16줄).
+  - 앞의 글꼴이 없으면 다음 글꼴을 쓰는 대체 목록이다.
+  - code/pre/kbd/samp/입력/placeholder까지 동일 계열을 쓴다(17–22줄). 즉 고정폭 글꼴을 따로 쓰지 않는다.
+- body `13px`, `line-height:1.5`, `font-variant-numeric:tabular-nums`(18줄).
+- 브랜드 `15px/700`, 로고 `11px/600`, 메타 설명 `11px`, Runner `12px/500` 등 실제 세부 크기는 CSS/인라인 부록에 원문 그대로 보존했다.
+- 화면 전체가 12~14px 이상인 것은 아니다(10px·10.5px·11px도 있음).
+- 메일은 예외다.
+  - 글꼴: `'Pretendard GOV','Apple SD Gothic Neo','Malgun Gothic',sans-serif`.
+  - 640px 표 레이아웃, 인라인 CSS(4005–4044줄). 웹 폰트 삽입 없음.
+  - 왜 다른가: 메일 프로그램은 외부 CSS와 웹 글꼴을 잘 지원하지 않기 때문에 표와 인라인 스타일로 만든다.
+- PDF는 원본 웹 CSS + A4/14mm(5000–5012줄).
 
 ## 레이아웃·간격·반경·그림자
 
@@ -44,7 +106,18 @@
 | 기본 모달 / sm | width:min(1080px,100%) / min(480px,100%); max-height:calc(100vh - 48px); radius:10px | 346–347 |
 | overlay | padding:24px; rgba(17,20,26,.45); z-index:50 | 345 |
 
-CSS의 반경 원문 고유값은 `0`, `2px`, `3px`, `4px`, `6px`, `8px`, `10px`, `16px`, `999px`, `50%`, `0 0 8px 8px`, `2px 2px 0 0`, `8px 8px 0 0`, `10px 10px 10px 2px`다. 간격은 위치별 padding/gap/margin 원문을 따르며 공통 배수로 정규화하지 않는다. 인라인 스타일이 덮어쓰는 값까지 아래 부록에 보존했다. 가이드의 Modal 1024~1280px를 모든 모달에 일괄 적용하지 않는다.
+표 읽는 법: "출처" 숫자는 원본 줄 번호다. `min(1080px,100%)`는 "1080px와 부모 영역의 사용 가능한 폭 중 작은 값"이다. 여기서 100%는 화면 폭이 아니라 모달을 담는 부모(overlay)의 폭이고, overlay에는 `padding:24px`가 있으므로 좌우 여백 24px씩을 뺀 폭이다. 예: 화면 폭이 800px이면 모달 최대 폭은 800−48=752px이다(원본 CSS로 계산한 값이며 브라우저 실측은 아니다).
+
+반경:
+
+- CSS의 반경 원문 고유값은 `0`, `2px`, `3px`, `4px`, `6px`, `8px`, `10px`, `16px`, `999px`, `50%`, `0 0 8px 8px`, `2px 2px 0 0`, `8px 8px 0 0`, `10px 10px 10px 2px`다.
+- 값이 4개인 반경은 왼쪽 위부터 시계 방향(왼쪽 위·오른쪽 위·오른쪽 아래·왼쪽 아래)의 모서리별 값이다.
+
+간격:
+
+- 간격은 위치별 padding/gap/margin 원문을 따르며 공통 배수로 정규화하지 않는다.
+- 인라인 스타일이 덮어쓰는 값까지 아래 부록에 보존했다.
+- 가이드의 Modal 1024~1280px를 모든 모달에 일괄 적용하지 않는다. 원본은 모달마다 폭이 다르기 때문이다.
 
 CSS의 `box-shadow` 고유값 전체:
 
@@ -61,11 +134,20 @@ inset 3px 0 0 #2453CF
 inset 3px 0 0 var(--ac)
 ```
 
+읽는 법: `0 8px 24px rgba(0,0,0,.12)`는 "가로 0, 아래로 8px, 24px만큼 흐리게, 12% 검정"이다. `inset 3px 0 0 …`는 흐림 없이 왼쪽 안쪽에 3px 막대를 그린다.
+
 ## 아이콘
 
-SVG `.ico`는 18×18px, fill:none, stroke:currentColor, stroke-width:1.7, round cap/join; `.ico.sm` 14×14px(46–47줄). `viewBox="0 0 24 24"`와 path 원문을 보존한다. NAV는 3063–3076줄의 12개 path. 상태 점·캐럿·스피너·체크 및 문자 화살표도 원본 CSS/문구를 사용한다. 별도 아이콘 의존성은 없다.
+- SVG `.ico`는 18×18px, fill:none(채우기 없음), stroke:currentColor(선 색은 글자색을 따름), stroke-width:1.7, round cap/join(선 끝과 꺾임을 둥글게).
+- `.ico.sm`은 14×14px(46–47줄).
+- `viewBox="0 0 24 24"`와 path 원문을 보존한다.
+- NAV는 3063–3076줄의 12개 path다.
+- 상태 점·캐럿·스피너·체크 및 문자 화살표도 원본 CSS/문구를 사용한다.
+- 별도 아이콘 의존성(아이콘 패키지)은 없다.
 
 ## 반응형·인쇄·동작 줄이기
+
+반응형은 화면 폭에 따라 배치를 바꾸는 규칙이다. 아래 조건은 위에서부터 폭이 좁아지는 순서다.
 
 | 조건 | 원본 동작 | 줄 |
 |---|---|---|
@@ -79,13 +161,26 @@ SVG `.ico`는 18×18px, fill:none, stroke:currentColor, stroke-width:1.7, round 
 | prefers-reduced-motion:reduce | split 전환·skeleton 정지; topbar 고정; 버튼 스피너 2s로 감속(완전정지 아님) | 150,580,599 |
 | print 선언 | body visibility:hidden, rpt-doc/자식 visible, 문서 absolute left:0/top:0/width:100%/패딩0; 부록 새페이지. 실제 기준점 결함은 아래 참조 | 532–538,552 |
 
-`meta viewport`는 메일 HTML에는 있고 본문 head에는 없다(1–9줄 vs 4029줄). 모바일 브라우저 실측이 필요하다. 데스크톱 1920×1080은 script preview 속성일 뿐, 고정 런타임 viewport가 아니다(2903줄).
+- `meta viewport`는 메일 HTML에는 있고 본문 head에는 없다(1–9줄 vs 4029줄). 모바일 브라우저 실측이 필요하다.
+- 데스크톱 1920×1080은 script preview 속성일 뿐, 고정 런타임 viewport가 아니다(2903줄).
 
 ## 독립 리뷰에서 확인한 인쇄·좁은 폭 결함
 
-P532–538의 left/top:0 선언만으로 페이지 좌상단이라고 판정할 수 없다. P594의 .main position:relative 때문에 Ctrl+P 출력은 (180,64) 기준에서 시작하고 PDF 실측 폭614px로 줄어든다(독립 리뷰 B3, desktop/UI-11-print.pdf·png). P5000 iframe 인쇄는 별도 경로다. 제품은 서버 PDF와 브라우저 인쇄 모두 출력가능영역 좌상단·열잘림없음으로 검증한다(MM-31, UAT-REPORT-05/06).
+### 인쇄 기준점
 
-독립 리뷰의1024px WBS 표는 내용1048px/가시794px로 오른쪽 열이 잘리고, 768px 문서는814px, 390px 도구막대는475px까지 넘친다. viewport meta 부재로 실제 모바일 에뮬레이션은980px로 렌더된다. 이는 원본 결함이며 복제 목표가 아니다. owner 추가 결정으로1280이상 전체 지원, 그 아래 표 가로스크롤, 휴대폰 Task/CI/CP 상세 열람을 판정한다(UAT-RESP-01/02).
+- P532–538의 left/top:0 선언만으로 페이지 좌상단이라고 판정할 수 없다.
+- P594의 .main position:relative 때문에 Ctrl+P 출력은 (180,64) 기준에서 시작하고, PDF 실측 폭은614px로 줄어든다(독립 리뷰 B3, desktop/UI-11-print.pdf·png).
+  - 왜: `absolute`는 가장 가까운 `relative` 부모를 기준으로 위치를 잡기 때문이다.
+- P5000 iframe 인쇄는 별도 경로다.
+- 제품은 서버 PDF와 브라우저 인쇄 모두 출력가능영역 좌상단·열잘림없음으로 검증한다(MM-31, UAT-REPORT-05/06).
+
+### 좁은 폭
+
+- 독립 리뷰에서 1024px WBS 표는 내용1048px/가시794px로 오른쪽 열이 잘린다.
+- 768px 문서는814px, 390px 도구막대는475px까지 넘친다.
+- viewport meta 부재로 실제 모바일 에뮬레이션은980px로 렌더된다.
+- 이는 원본 결함이며 복제 목표가 아니다.
+- owner 추가 결정으로1280 이상 전체 지원, 그 아래 표 가로스크롤, 휴대폰 Task/CI/CP 상세 열람을 판정한다(UAT-RESP-01/02).
 
 <!-- GENERATED: extract.py -->
 

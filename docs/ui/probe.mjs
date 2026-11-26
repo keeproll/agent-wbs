@@ -5,6 +5,15 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// 재현 가능하도록 실행 시각을 고정한다. 기존 증거(eda7591 커밋 data-model.json)를 만든 시각인
+// 2026-11-25 21:21 Asia/Seoul 이다(증거 안 '메시지로 전달 2026-11-25 21:21' 문자열과 커밋 시각 21:28 KST로 확인).
+// 원본 nowStr()는 로컬 시각을 쓰므로 시간대도 Asia/Seoul로 고정한다.
+process.env.TZ = 'Asia/Seoul';
+const FIXED_NOW = Date.parse('2026-11-25T21:21:00+09:00');
+class FixedDate extends Date {
+  constructor(...args) { if (args.length === 0) super(FIXED_NOW); else super(...args); }
+  static now() { return FIXED_NOW; }
+}
 const here = path.dirname(fileURLToPath(import.meta.url));
 const source = fs.readFileSync(path.resolve(here, '../../prototype/uiux/Main.dc.html'), 'utf8');
 const code = source.match(/<script type="text\/x-dc"[^>]*>([\s\S]*?)<\/script>/)[1];
@@ -13,7 +22,7 @@ class DCLogic {
   constructor(props) { this.props = props; }
   setState(patch) { Object.assign(this.state, typeof patch === 'function' ? patch(this.state) : patch); }
 }
-const sandbox = { DCLogic, setTimeout: (fn, delay) => { timers.push({ fn, delay }); return timers.length; }, clearTimeout() {} };
+const sandbox = { DCLogic, Date: FixedDate, setTimeout: (fn, delay) => { timers.push({ fn, delay }); return timers.length; }, clearTimeout() {} };
 vm.createContext(sandbox);
 vm.runInContext(code + '\nthis.inspection = {Component, Api, Sel, LBL, COLS, COLSETS, DESIGN, SPEC_GROUPS, SPEC_TBL, NAV, STAGE_PCT, EFF, CPST, CP_OPS, TG_EV, TG_RULES0, TG_BLANK, TG_ERR, RUN_ROLE, GH_SCOPES, REPO_LAYOUT, SPLIT_RULES, SKELETON, IMPL, integrity};', sandbox);
 const x = sandbox.inspection;
