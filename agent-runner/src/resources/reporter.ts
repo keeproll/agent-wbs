@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { ApiError, type ApiClient } from '../api/client.ts';
 import type { Agent } from '../api/generated/client.ts';
-import { blockedAgents, type ReadinessReport } from '../readiness/checks.ts';
+import { blockedAgents, type ReadinessItem, type ReadinessKey, type ReadinessReport } from '../readiness/checks.ts';
 import { AdaptiveLimiter, admit, type AdmitResult, type Caps, type LimitAdjust } from './concurrency.ts';
 import type { HeavySemaphore } from './heavy.ts';
 import type { HostReport } from './host.ts';
@@ -48,6 +48,7 @@ export class ResourceReporter {
   #memReserveGB = DEFAULT_MEM_RESERVE_GB;
   #started = false;
   #blocked: Agent[] = [];
+  readonly #readiness = new Map<ReadinessKey, ReadinessItem>();
   /** 동시 실행 보고를 한 번에 하나씩 보내기 위한 꼬리 */
   #concurrencyTail: Promise<unknown> = Promise.resolve();
 
@@ -189,7 +190,8 @@ export class ResourceReporter {
 
   /** 준비 상태를 보낸다. 보고 성공 여부와 무관하게 fail 항목의 Agent는 로컬에서 바로 멈춘다. */
   async reportReadiness(body: ReadinessReport): Promise<Agent[]> {
-    this.#blocked = blockedAgents(body.items);
+    for (const item of body.items) this.#readiness.set(item.key, item);
+    this.#blocked = blockedAgents([...this.#readiness.values()]);
     await this.#d.api('reportReadiness', { body, ...this.#meta() });
     return this.#blocked;
   }
