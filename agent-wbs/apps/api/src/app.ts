@@ -11,6 +11,7 @@ import { installExecution, type ExecutionOptions } from './execution/routes.ts';
 import { registerChangeRoutes } from './changes/routes.ts';
 import { registerMessageRoutes } from './messages/routes.ts';
 import { registerPolicyRoutes } from './policy/routes.ts';
+import { registerProjectRoutes } from './project/routes.ts';
 
 export function buildApp(pool: Pool, logger: FastifyServerOptions['logger'] = false,
   security: SecurityOptions = { origin: 'http://127.0.0.1:3100', lan: false }, execution: ExecutionOptions = {}): FastifyInstance {
@@ -35,6 +36,7 @@ export function buildApp(pool: Pool, logger: FastifyServerOptions['logger'] = fa
   registerMessageRoutes(app, pool);
   registerPolicyRoutes(app, pool);
   registerPlanningRoutes(app, pool);
+  registerProjectRoutes(app, pool);
 
   app.get('/health', (): HealthResponse => ({ status: 'ok' }));
 

@@ -165,6 +165,7 @@
    "instruction": "",
    "constraints": [
     {
+     "id": "c0000000-0000-4000-8000-000000000001",
      "name": "PostgreSQL 16",
      "level": "must",
      "condition": ""
@@ -202,6 +203,7 @@
      ]
     }
    ],
+   "inputHead": "cccccccccccccccccccccccccccccccccccccccc",
    "inputJob": {
     "jobId": "j1",
     "runNo": 1,
@@ -385,6 +387,7 @@
    "instruction": "",
    "constraints": [
     {
+     "id": "c0000000-0000-4000-8000-000000000001",
      "name": "PostgreSQL 16",
      "level": "must",
      "condition": ""
@@ -422,6 +425,7 @@
      ]
     }
    ],
+   "inputHead": "cccccccccccccccccccccccccccccccccccccccc",
    "inputJob": {
     "jobId": "j1",
     "runNo": 1,
@@ -496,6 +500,7 @@
    "instruction": "",
    "constraints": [
     {
+     "id": "c0000000-0000-4000-8000-000000000001",
      "name": "PostgreSQL 16",
      "level": "must",
      "condition": ""
@@ -533,6 +538,7 @@
      ]
     }
    ],
+   "inputHead": "cccccccccccccccccccccccccccccccccccccccc",
    "inputJob": {
     "jobId": "j1",
     "runNo": 1,

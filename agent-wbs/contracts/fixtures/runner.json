@@ -389,6 +389,43 @@
  {
   "id": "reportInputChanges",
   "body": {
+   "base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "baseIsAncestor": true,
+   "treeHash": "cccccccccccccccccccccccccccccccccccccccc",
+   "changes": [
+    {
+     "status": "M",
+     "path": "prototype/docs/a.md",
+     "oldBlob": "dddddddddddddddddddddddddddddddddddddddd",
+     "newBlob": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+     "added": 42,
+     "deleted": 3,
+     "oldMode": "100644",
+     "newMode": "100644"
+    },
+    {
+     "status": "R",
+     "path": "prototype/uiux/new.html",
+     "from": "prototype/uiux/old.html",
+     "oldBlob": "ffffffffffffffffffffffffffffffffffffffff",
+     "newBlob": "1111111111111111111111111111111111111111",
+     "added": 0,
+     "deleted": 0,
+     "oldMode": "100644",
+     "newMode": "100644"
+    },
+    {
+     "status": "M",
+     "path": "prototype/uiux/run.sh",
+     "oldBlob": "2222222222222222222222222222222222222222",
+     "newBlob": "2222222222222222222222222222222222222222",
+     "oldMode": "100644",
+     "newMode": "100755",
+     "added": 0,
+     "deleted": 0
+    }
+   ],
    "commits": [
     {
      "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -396,18 +433,14 @@
      "author": "lead",
      "message": "문서 갱신"
     }
-   ],
-   "files": [
-    {
-     "commitSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-     "path": "prototype/docs/a.md",
-     "change": "modified",
-     "added": 42,
-     "deleted": 3
-    }
    ]
   },
-  "status": 204
+  "status": 200,
+  "response": {
+   "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "recorded": true,
+   "historyRewritten": false
+  }
  },
  {
   "id": "reportRepoCheck",
