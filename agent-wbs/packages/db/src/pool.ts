@@ -1,6 +1,7 @@
 import pg from 'pg';
 
 export type Pool = pg.Pool;
+export type PoolClient = pg.PoolClient;
 
 /** 잘못된 URL 오류에는 비밀번호가 포함되므로 원본 값을 노출하지 않는다. */
 export function parseDatabaseUrl(value: string | undefined, name = 'DATABASE_URL'): string {
