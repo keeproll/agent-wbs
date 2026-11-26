@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { Db } from '../project/db.ts';
 import { canonicalJson, judgedContent, subjectHash } from '../tasks/hash.ts';
 import { loadSnapshot } from './snapshot.ts';
+import type { WireProposalOp } from '@awbs/shared/api';
 
 /** 기술 결정의 ID·상태·버전을 함께 고정한다. 반려도 초안의 전제이므로 뺄 수 없다. */
 export async function techSnapshot(db: Db, projectId: string) {
@@ -28,4 +29,46 @@ export async function wbsSnapshot(db: Db, projectId: string) {
     return { taskKey: task.id, wp, status: task.status, subjectHash: subjectHash(source), content: judgedContent(source) };
   });
   return { phases: snapshot.phases, tasks, dependencies: snapshot.dependencies };
+}
+
+type Wbs = Awaited<ReturnType<typeof wbsSnapshot>>;
+
+/** 제안 대상과 한 번에 연결된 이웃만 비교한다. 무관한 실행 진행은 분석을 무효로 만들지 않는다. */
+export function proposalBasis(wbs: Wbs | undefined, ops: readonly WireProposalOp[], splitTask?: string) {
+  if (!wbs) return null;
+  const targets = new Set(splitTask ? [splitTask] : []);
+  const wps = new Set<string>();
+  for (const op of ops) {
+    if (op.op === 'add') {
+      wps.add(op.t.wp);
+      for (const pred of op.preds) targets.add(pred.pred);
+    } else if ('task' in op) targets.add(op.task);
+    else { targets.add(op.pred); targets.add(op.succ); }
+  }
+  const dependencies = wbs.dependencies.filter((dep) => targets.has(dep.pred) || targets.has(dep.succ));
+  const neighbors = new Set([...targets, ...dependencies.flatMap((dep) => [dep.pred, dep.succ])]);
+  const tasks = wbs.tasks.filter((task) => neighbors.has(task.taskKey)).map(({ taskKey, wp, status, subjectHash }) => {
+    wps.add(wp);
+    return { taskKey, wp, status, subjectHash };
+  });
+  const packages = wbs.phases.flatMap((phase) => phase.wps.filter((wp) => wps.has(wp.id)).map((wp) => ({ id: wp.id, phase: phase.id })));
+  return { tasks, dependencies, wps: packages };
+}
+
+/** 같은 job이 반영한 차이만 기준에 더한다. 무관한 외부 변경까지 새 기준으로 삼으면 낡은 제안이 통과한다. */
+export function advanceWbs(before: Wbs, after: Wbs, basis: Wbs): Wbs {
+  const old = new Map(before.tasks.map((task) => [task.taskKey, task]));
+  const next = new Map(after.tasks.map((task) => [task.taskKey, task]));
+  const changed = new Set([...old.keys(), ...next.keys()].filter((key) => snapshotHash(old.get(key)) !== snapshotHash(next.get(key))));
+  const tasks = [...basis.tasks.filter((task) => !changed.has(task.taskKey)), ...after.tasks.filter((task) => changed.has(task.taskKey))]
+    .sort((a, b) => a.taskKey.localeCompare(b.taskKey));
+  const key = (dep: Wbs['dependencies'][number]) => `${dep.pred}:${dep.succ}:${dep.type}`;
+  const previousEdges = new Set(before.dependencies.map(key));
+  const nextEdges = new Set(after.dependencies.map(key));
+  const dependencies = [...basis.dependencies.filter((dep) => !previousEdges.has(key(dep)) || nextEdges.has(key(dep))),
+    ...after.dependencies.filter((dep) => !previousEdges.has(key(dep)))]
+    .sort((a, b) => a.pred.localeCompare(b.pred) || a.succ.localeCompare(b.succ));
+  return { tasks, dependencies, phases: basis.phases.map((phase) => ({ ...phase,
+    wps: phase.wps.map((wp) => ({ ...wp, tasks: tasks.filter((task) => task.wp === wp.id).map((task) => task.taskKey) })),
+  })) };
 }

@@ -23,7 +23,7 @@ export async function reportHost(repo: RunnerRepository, body: HostBody) {
       }
       const job = await repo.job(hold.job);
       if (job && ['leased','started'].includes(job.state)) {
-        await repo.state(job.id, EXTERNAL_JOBS.includes(job.kind) ? 'reconcile' : 'cancelled');
+        await repo.state(job.id, EXTERNAL_JOBS.includes(job.kind) ? 'reconcile' : 'cancelled', { code: hostChanged ? 'HOST_CHANGED' : 'RUNNER_RESTARTED', message: hostChanged ? '실행 PC가 바뀌어 분석을 중단했습니다.' : '실행 PC가 재시작되어 분석을 중단했습니다.' });
         await repo.event(job, 'lease_lost', null, { hostChanged });
       }
     }

@@ -1,6 +1,6 @@
-import { enqueueJob, iso, type Db } from './db.ts';
+import { changeEvent, enqueueJob, iso, type Db } from './db.ts';
 import { ProjectError } from './errors.ts';
-import type { StepStatus } from './steps.ts';
+import { BOOT_STEPS, INPUT_STEPS, LEAD_STEPS, type StepStatus } from './steps.ts';
 
 /*
  * Planning 작업(planning_jobs)과 Runner job(runner_jobs)의 관계.
@@ -55,6 +55,39 @@ export async function log(db: Db, job: Pick<PlanningJob, 'id' | 'project_id'>, t
   await db.query('insert into planning_job_logs(project_id,job,at,text) values($1,$2,clock_timestamp(),$3)', [job.project_id, job.id, text]);
 }
 
+/** 진행 보고와 Runner 종료·만료가 같은 완료 판정을 쓴다. 이전 실행은 새 분석 상태를 바꾸지 못한다. */
+export async function syncPlanningJob(db: Db, runnerId: string, state: string, error?: { code: string; message: string }): Promise<void> {
+  if (!['done', 'failed', 'cancelled', 'reconcile', 'queued'].includes(state)) return;
+  const runner = (await db.query<{ kind: string; payload: { planningJobId?: string } }>('select kind,payload from runner_jobs where id=$1', [runnerId])).rows[0];
+  const id = runner?.payload.planningJobId;
+  if (!id || !['bootstrap', 'input_diff'].includes(runner.kind)) return;
+  const job = await lockPlanningJob(db, id);
+  if (await currentRunnerJob(db, id) !== runnerId || job.status === 'done') return;
+  if (state === 'queued') {
+    if (job.status === 'failed') {
+      await db.query("update planning_jobs set status='queued',fail=null where id=$1", [id]);
+      await changeEvent(db, job.project_id, { kind: 'planning_job', id }, 'planning');
+    }
+    return;
+  }
+  if (job.status === 'failed') return;
+  const progress = await steps(db, id);
+  // bootstrap은 Runner의 성공 종료 뒤에도 팀장의 기술 결정·초안 승인을 기다릴 수 있다.
+  if (state === 'done' && job.kind === 'bootstrap' && ['tech', 'approve'].some((key) => progress.get(key) === 'run')) return;
+  if (state === 'done' && job.kind === 'input_diff' && INPUT_STEPS.every((key) => progress.get(key) === 'done')) {
+    await db.query("update planning_jobs set status='done' where id=$1", [id]);
+  } else {
+    const reason = error?.message ?? (state === 'done' ? 'Runner가 필요한 분석 단계를 마치지 않고 종료했습니다.' : `Runner 작업이 ${state} 상태로 중단되었습니다.`);
+    const fail = { reason, code: error?.code ?? (state === 'done' ? 'INCOMPLETE_ANALYSIS' : state.toUpperCase()), fix: 'Runner의 종료·외부 상태를 확인한 뒤 「다시 시도」를 누르세요.' };
+    const keys: readonly string[] = job.kind === 'input_diff' ? INPUT_STEPS : BOOT_STEPS.filter((key) => !LEAD_STEPS.has(key));
+    const failed = keys.find((key) => progress.get(key) === 'fail') ?? keys.find((key) => progress.get(key) === 'run') ?? keys.find((key) => progress.get(key) !== 'done');
+    if (failed) await setStep(db, id, failed, 'fail', reason);
+    await db.query("update planning_jobs set status='failed',fail=$2::jsonb where id=$1", [id, JSON.stringify(fail)]);
+    await log(db, job, `분석 중단 — ${fail.code}: ${reason}`);
+  }
+  await changeEvent(db, job.project_id, { kind: 'planning_job', id }, 'planning');
+}
+
 /**
  * 같은 Planning 작업의 다음 Runner job을 만든다. 이전 job의 payload(커밋·이전 커밋·버전)를 이어받고
  * 재개 단계·회차·지시만 바꾼다.
@@ -67,7 +100,9 @@ export async function followUpJob(db: Db, job: PlanningJob, epoch: number, chang
      from runner_jobs where payload->>'planningJobId'=$1 order by created_at desc limit 1`, [job.id])).rows[0];
   const count = Number(previous?.n ?? 0);
   const payload = { ...previous?.payload, ...change.base, planningJobId: job.id, runNo: job.run_no, resumeStep: change.resumeStep, instruction: change.instruction ?? job.instruction };
-  return enqueueJob(db, { projectId: job.project_id, kind: job.kind, payload, epoch, dedupKey: `${job.kind}:${job.id}:${String(count + 1)}` });
+  const id = await enqueueJob(db, { projectId: job.project_id, kind: job.kind, payload, epoch, dedupKey: `${job.kind}:${job.id}:${String(count + 1)}` });
+  await syncPlanningJob(db, id, 'queued');
+  return id;
 }
 
 /**

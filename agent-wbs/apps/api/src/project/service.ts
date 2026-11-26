@@ -12,7 +12,7 @@ import { draftErrors, draftHolds, draftSplitSummary, storeDraft, type DraftInput
 import { ProjectError } from './errors.ts';
 import { nextMdList, type PathChange } from './inputs.ts';
 import {
-  bootstrapJob, createPlanningJob, currentRunnerJob, followUpJob, lockPlanningJob, log, resetSteps, setStep, steps, type PlanningJob,
+  bootstrapJob, createPlanningJob, currentRunnerJob, followUpJob, lockPlanningJob, log, resetSteps, setStep, steps, syncPlanningJob, type PlanningJob,
 } from './jobs.ts';
 import { analyzable, analyze, chainHead, receive, type CommitState, type Ledger } from './ledger.ts';
 import { parseRepoUrl } from './repo.ts';
@@ -165,9 +165,8 @@ export async function reportProgress(db: Db, jobId: string, body: { fence: numbe
   await setStep(db, job.id, body.stepKey, body.status, body.note);
   await log(db, job, `${STEP_LABEL[body.stepKey] ?? body.stepKey} ${STATUS_LABEL[body.status]}${body.note ? ` — ${body.note}` : ''}`);
   if (body.status === 'fail') {
-    const fail = { reason: body.note ?? `${STEP_LABEL[body.stepKey] ?? body.stepKey} 단계가 실패했습니다.`, fix: '원인을 해결한 뒤 「다시 시도」를 누르세요. 끝난 단계는 건너뜁니다.' };
-    await db.query("update planning_jobs set status='failed',fail=$2::jsonb where id=$1", [job.id, JSON.stringify(fail)]);
-  } else if (job.kind === 'input_diff' && completing) await db.query("update planning_jobs set status='done' where id=$1", [job.id]);
+    await syncPlanningJob(db, jobId, 'failed', { code: 'STEP_FAILED', message: body.note ?? `${STEP_LABEL[body.stepKey] ?? body.stepKey} 단계가 실패했습니다.` });
+  } else if (job.kind === 'input_diff' && completing) await syncPlanningJob(db, jobId, 'done');
   else if (job.status === 'queued') await db.query("update planning_jobs set status='running' where id=$1", [job.id]);
   await changeEvent(db, job.project_id, { kind: 'planning_job', id: job.id }, 'planning');
 }

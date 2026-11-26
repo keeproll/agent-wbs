@@ -1,6 +1,7 @@
 import type { PoolClient, schema, ExecPolicyRow } from '@awbs/db';
 import { attemptKey, placeModel, modelRanks, type ModelSettings, type Agent, type AttemptKind } from '@awbs/shared';
 import assert from 'node:assert/strict';
+import { syncPlanningJob } from '../project/jobs.ts';
 
 export function required<T>(value: T | null | undefined): T { assert(value !== null && value !== undefined); return value; }
 
@@ -76,8 +77,10 @@ export class RunnerRepository {
     await this.client.query("insert into task_history(project_id,task,kind,actor,text,ref) values($1,$2,$3,'runner',$3,$4)", [task.project_id, task.id, event, detail]);
   }
   async enqueue(project: string | null, epoch: number, kind: string, payload: object, dedup: string, generation: number | null = null) {
-    return (await this.client.query<{ id: string }>(`insert into runner_jobs(project_id,epoch,kind,payload,dedup_key,state,generation) values($1,$2,$3,$4,$5,'queued',$6)
+    const id = (await this.client.query<{ id: string }>(`insert into runner_jobs(project_id,epoch,kind,payload,dedup_key,state,generation) values($1,$2,$3,$4,$5,'queued',$6)
       on conflict(dedup_key) do nothing returning id`, [project, epoch, kind, payload, dedup, generation])).rows[0]?.id;
+    if (id && ['bootstrap', 'input_diff'].includes(kind)) await syncPlanningJob(this.client, id, 'queued');
+    return id;
   }
   async openJob(taskKey: string) { return (await this.client.query<Job>("select * from runner_jobs where kind='attempt' and payload->>'taskKey'=$1 and state in ('queued','leased','started','reconcile') limit 1", [taskKey])).rows[0]; }
   async lease(job: Job, owner: string, generation: number | null) {
@@ -85,7 +88,10 @@ export class RunnerRepository {
       payload=case when kind='attempt' then payload||jsonb_build_object('branch','agent/'||(payload->>'taskKey')||'-h'||$3::text) else payload end where id=$1 returning *`, [job.id, owner, generation])).rows[0]);
   }
   async renew(job: string) { return required((await this.client.query<{ lease_until: Date }>("update runner_jobs set lease_until=clock_timestamp()+interval '60 seconds' where id=$1 returning lease_until", [job])).rows[0]).lease_until; }
-  async state(job: string, state: string) { await this.client.query('update runner_jobs set state=$2 where id=$1', [job, state]); }
+  async state(job: string, state: string, error?: { code: string; message: string }) {
+    await this.client.query('update runner_jobs set state=$2 where id=$1', [job, state]);
+    await syncPlanningJob(this.client, job, state, error);
+  }
   async reserve(job: Job, host: string, boot: string, agent: string, slots: number, heavy: boolean, task?: Task) {
     const existing = await this.hold(job.id);
     if (existing) {
