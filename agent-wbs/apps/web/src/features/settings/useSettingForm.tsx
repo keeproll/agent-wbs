@@ -109,8 +109,19 @@ export function useSettingForm<D extends { updatedAt: string | null }, F>(option
   useEffect(() => () => { report(id, false); }, [report, id]);
 
   const apply = (data: D) => { queryClient.setQueryData(queryKey, data); };
-  /** 이번 저장이 끝나면 닫을 초안(source)과 같은 초안이면 닫는다. 그 사이 더 고쳤으면 둔다. */
-  const closeIfSame = (source: F) => { setDraft((current) => (current !== null && same(current.form, source) ? null : current)); };
+  /**
+   * 저장이 성공했을 때 초안 정리.
+   * - 지금 초안이 이번에 보낸 내용(source)과 같으면 닫는다.
+   * - 다르면(저장을 기다리는 동안 더 고쳤으면) 그 초안을 남기고, 기준을 **방금 성공한 결과**로 바꾼다.
+   *   예: 20→30 저장 중에 다시 20을 고르면, 서버는 30이 되고 20은 미저장 초안으로 남는다. 다음 저장은 새 버전으로 20을 보낸다.
+   *   왜: 기준을 옛 값(20)에 두면 「편집 시작 값과 같음 = 바뀐 것 없음」으로 보여 나중 입력이 화면에서 사라진다(재리뷰 c7f1bdb P2).
+   */
+  const settle = (source: F, result: D) => {
+    setDraft((current) => {
+      if (current === null || same(current.form, source)) return null;
+      return { form: current.form, baseData: result };
+    });
+  };
   const { save, busy, conflictModal } = useSave<D, SavePayload<D, F>>({
     target: `${label} 저장`,
     mine: options.describe && dirty ? options.describe(draft.form) : `${label} 변경`,
@@ -123,7 +134,7 @@ export function useSettingForm<D extends { updatedAt: string | null }, F>(option
     run: ({ payload }) => send(payload.form, payload.updatedAt, payload.data),
     onSuccess: (result, payload) => {
       apply(result);
-      closeIfSame(payload.source);
+      settle(payload.source, result);
       void options.afterSave?.();
     },
     successNotice: options.successNotice ?? '설정을 저장했습니다.',

@@ -174,3 +174,34 @@ test('지적 6: 설정 저장 뒤 일정 다시 읽기가 실패하면 오류 �
   await bar.getByRole('button', { name: '다시 시도' }).click();
   await expect(page.getByRole('alert').filter({ hasText: '최신 일정을 불러오지 못했습니다' })).toHaveCount(0);
 });
+
+test('재리뷰 c7f1bdb P2: 저장을 기다리는 동안 원래 값으로 되돌린 입력은 앞선 저장이 성공해도 남고, 성공 결과를 기준으로 다시 저장된다', async ({ page }) => {
+  const api = await fakeApi(page);
+  settingsApi(api);
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const sent: Record<string, unknown>[] = [];
+  api.on('PUT /api/settings/exec-policy', async (route) => {
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    sent.push(body);
+    if (sent.length === 1) await gate;
+    await json(route, 200, { ...EXEC, ...body, updatedAt: sent.length === 1 ? V2 : V3 });
+  });
+  await page.goto('/settings/agent');
+  const card = execCard(page);
+  const pct = card.getByRole('group', { name: '낮춤 기준' });
+  await pct.getByRole('button', { name: '30%' }).click();
+  await card.getByRole('button', { name: '저장', exact: true }).last().click();
+  await expect(card.getByRole('button', { name: '저장 중…' })).toBeVisible();
+  await pct.getByRole('button', { name: '20%' }).click();
+  await expect(pct.getByRole('button', { name: '20%' })).toHaveAttribute('aria-pressed', 'true');
+  release();
+  await expect(page.getByText('설정을 저장했습니다.')).toBeVisible();
+  // 서버는 이제 30%(V2)다. 나중에 고른 20%는 미저장 초안으로 남는다.
+  await expect(pct.getByRole('button', { name: '20%' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(card.getByText('저장하지 않은 변경이 있습니다.')).toBeVisible();
+  await card.getByRole('button', { name: '저장', exact: true }).last().click();
+  await expect.poll(() => sent.length).toBe(2);
+  expect(sent[1]).toMatchObject({ updatedAt: V2, lowPct: 20 });
+  await expect(card.getByText('저장하지 않은 변경이 있습니다.')).toHaveCount(0);
+});
