@@ -32,11 +32,12 @@ export async function lockGraph(client: PoolClient, projectId: string): Promise<
 
 /**
  * Timestamp 스키마는 모양(정규식)만 본다. `2026-02-30`처럼 달력에 없는 값이 DB 변환에서 500이 되지 않게
- * 날짜·시각이 실제로 있는지 왕복 변환으로 확인한다. 소수점 아래(µs)는 모양 검사로 충분하다.
+ * 날짜·시각이 실제로 있는지 왕복 변환으로 확인하고, DB가 받는 0001년 이상만 허용한다. 소수점 아래(µs)는 모양 검사로 충분하다.
  */
 export function realTimestamp(value: string): boolean {
   const local = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.\d{1,6})?Z$/.exec(value)?.[1];
-  if (!local) return false;
+  // JS Date는 0000년을 받지만 PostgreSQL timestamptz는 이 ISO 표현의 0000년을 거부한다(기원전 1년).
+  if (!local || local.startsWith('0000')) return false;
   const date = new Date(`${local}Z`);
   return !Number.isNaN(date.getTime()) && date.toISOString().startsWith(local);
 }
