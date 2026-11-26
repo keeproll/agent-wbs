@@ -9,7 +9,7 @@ import { EXEC, MODELS, settingsApi, V1, V2 } from './support/settings-fixtures.t
 const V3 = '2026-11-05T03:00:00.000Z';
 const execCard = (page: import('@playwright/test').Page) => page.getByRole('region', { name: 'Agent 실행 정책 — 모델 · Effort' });
 
-test('지적 1: 편집 중 다른 탭의 저장이 화면에 다시 읽혀도, 저장은 편집을 시작한 버전으로 보내 충돌 창을 띄운다', async ({ page }) => {
+test('지적 1: 편집 중인 칸을 다른 탭도 바꿔 다시 읽히면, 내 값을 지키고 편집을 시작한 버전으로 보내 충돌 창을 띄운다', async ({ page }) => {
   const api = await fakeApi(page);
   settingsApi(api);
   let current = { ...EXEC };
@@ -26,7 +26,8 @@ test('지적 1: 편집 중 다른 탭의 저장이 화면에 다시 읽혀도, �
   await page.goto('/settings/agent');
   await execCard(page).getByRole('group', { name: '낮춤 기준' }).getByRole('button', { name: '30%' }).click();
   const before = gets;
-  current = { ...EXEC, notifyAt: 3, updatedAt: V2 };
+  // 다른 탭이 같은 칸(낮춤 기준)을 10%로 저장했다.
+  current = { ...EXEC, lowPct: 10, notifyAt: 3, updatedAt: V2 };
   changed = true;
   await expect.poll(() => gets, { timeout: 10_000 }).toBeGreaterThan(before);
   // 내 초안(30%)은 그대로 보인다.

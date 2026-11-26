@@ -72,37 +72,76 @@ export interface SettingForm<F, D = unknown> {
 }
 
 /** 한 번의 저장 요청 내용. source는 이 저장이 끝나면 닫을 초안이다. */
-interface SavePayload<D, F> { form: F; updatedAt: string | null; data: D; source: F }
+interface SavePayload<D, F> { form: F; updatedAt: string | null; data: D; source: Draft<D, F> }
 
-/** 편집을 시작할 때의 서버 값(baseData)과 그 위에 고친 값(form). 저장은 baseData의 버전으로 보낸다. */
-interface Draft<D, F> { form: F; baseData: D }
+/**
+ * 초안. 규칙은 하나다: **내가 편집한 칸(edited)은 서버 이벤트·자동 갱신·저장 응답이 덮어쓰지 않는다.**
+ * - values: 내가 고친 값을 담은 폼 전체. 화면은 서버 최신 값 위에 edited 칸만 values로 덮어 보인다.
+ * - edited: 「편집됨」 칸의 경로(예: `lowPct`, `floors.dbHigh`). 값을 원래대로 되돌려도 편집됨으로 남는다.
+ * - baseData: 저장 때 보낼 기준(버전). 서버가 내가 편집한 칸을 건드리지 않고 바뀌면 기준만 새 값으로 옮긴다.
+ *   서버가 편집한 칸을 바꿨으면(다른 탭) 기준을 옮기지 않아 저장 때 409 충돌 창으로 알린다.
+ */
+interface Draft<D, F> { values: F; edited: string[]; baseData: D }
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+/** 두 값이 다른 칸의 경로. 객체는 칸마다 내려가고, 목록·글자·숫자는 한 칸으로 본다. */
+export function changedPaths(a: unknown, b: unknown, prefix = ''): string[] {
+  if (isPlainObject(a) && isPlainObject(b)) {
+    const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+    return [...keys].flatMap((key) => changedPaths(a[key], b[key], prefix ? `${prefix}.${key}` : key));
+  }
+  return same(a, b) ? [] : [prefix];
+}
+
+const getPath = (value: unknown, path: string): unknown =>
+  path === '' ? value : path.split('.').reduce<unknown>((v, key) => (isPlainObject(v) ? v[key] : undefined), value);
+
+function setPath<T>(target: T, path: string, leaf: unknown): T {
+  if (path === '') return leaf as T;
+  const [head, ...rest] = path.split('.') as [string, ...string[]];
+  const obj: Record<string, unknown> = isPlainObject(target) ? target : {};
+  return { ...obj, [head]: setPath(obj[head], rest.join('.'), leaf) } as T;
+}
+
+/** 서버 값(server) 위에 편집된 칸만 내 값(values)으로 덮는다. */
+export function overlay<F>(server: F, values: F, edited: readonly string[]): F {
+  return edited.reduce((acc, path) => setPath(acc, path, getPath(values, path)), server);
+}
+
+/** 경로가 겹치는가(같거나 한쪽이 다른 쪽의 상위 칸) */
+const overlaps = (a: readonly string[], b: readonly string[]) =>
+  a.some((x) => b.some((y) => x === y || x.startsWith(`${y}.`) || y.startsWith(`${x}.`) || x === '' || y === ''));
+
 /**
  * 「최신 위에 다시 적용」용 합치기. 편집 시작 값(base)과 비교해 **내가 바꾼 칸만** 최신 값(latest)에 얹는다.
- * 객체는 칸마다 따로 보고, 목록(배열)·글자·숫자는 한 덩어리로 본다.
- * 예: 내가 낮춤 기준만 20→30으로 바꿨고 그 사이 다른 탭이 알림 횟수를 2→3으로 저장했으면 결과는 낮춤 기준 30·알림 횟수 3이다.
- * 같은 칸을 둘 다 바꿨으면 내 값이 남는다(충돌 창 안내와 같다).
+ * 객체는 칸마다 따로 보고, 목록(배열)·글자·숫자는 한 덩어리로 본다. 같은 칸을 둘 다 바꿨으면 내 값이 남는다.
  */
 export function mergeChanges<T>(base: T, mine: T, latest: T): T {
-  if (isPlainObject(base) && isPlainObject(mine) && isPlainObject(latest)) {
-    const keys = new Set([...Object.keys(base), ...Object.keys(mine), ...Object.keys(latest)]);
-    return Object.fromEntries([...keys].map((key) => [key, mergeChanges(base[key], mine[key], latest[key])])) as T;
-  }
-  return same(base, mine) ? latest : mine;
+  return overlay(latest, mine, changedPaths(base, mine));
 }
 
 export function useSettingForm<D extends { updatedAt: string | null }, F>(options: SettingFormOptions<D, F>): SettingForm<F, D> {
   const { id, label, query, queryKey, load, toForm, send } = options;
   const queryClient = useQueryClient();
-  const [draft, setDraft] = useState<Draft<D, F> | null>(null);
+  const [stored, setDraft] = useState<Draft<D, F> | null>(null);
   const [checkError, setCheckError] = useState<string | null>(null);
   const base = query.data === undefined ? undefined : toForm(query.data);
-  // 편집 시작 값과 다를 때만 초안이다. 같아지면(직접 되돌림) 서버의 최신 값을 다시 보인다.
-  const dirty = draft !== null && !same(draft.form, toForm(draft.baseData));
-  const form = dirty ? draft.form : base;
+  const latestData = query.data;
+  /**
+   * 서버 값이 새로 읽혔을 때: 내가 편집한 칸을 건드리지 않은 변경이면 기준(버전)만 최신으로 옮긴다.
+   * 편집한 칸을 바꾼 변경이면(다른 탭) 옛 기준을 지켜 저장 때 409로 알린다. 매 렌더에 계산한다(따로 상태를 바꾸지 않음).
+   */
+  const rebase = (d: Draft<D, F>): Draft<D, F> => {
+    if (latestData === undefined || d.baseData.updatedAt === latestData.updatedAt) return d;
+    return overlaps(changedPaths(toForm(d.baseData), toForm(latestData)), d.edited) ? d : { ...d, baseData: latestData };
+  };
+  const draft = stored === null ? null : rebase(stored);
+  // 화면 값 = 서버 최신 값 위에 「편집됨」 칸만 내 값. 편집하지 않은 칸은 다른 탭·Runner 변경을 그대로 따라간다.
+  const form = draft !== null && base !== undefined ? overlay(base, draft.values, draft.edited) : base;
+  // 저장할 것이 있는가 = 화면 값이 기준 값과 다르다.
+  const dirty = draft !== null && form !== undefined && !same(form, toForm(draft.baseData));
 
   const report = useContext(DirtyContext);
   useEffect(() => { report(id, dirty); }, [report, id, dirty]);
@@ -111,25 +150,25 @@ export function useSettingForm<D extends { updatedAt: string | null }, F>(option
   const apply = (data: D) => { queryClient.setQueryData(queryKey, data); };
   /**
    * 저장이 성공했을 때 초안 정리.
-   * - 지금 초안이 이번에 보낸 내용(source)과 같으면 닫는다.
-   * - 다르면(저장을 기다리는 동안 더 고쳤으면) 그 초안을 남기고, 기준을 **방금 성공한 결과**로 바꾼다.
-   *   예: 20→30 저장 중에 다시 20을 고르면, 서버는 30이 되고 20은 미저장 초안으로 남는다. 다음 저장은 새 버전으로 20을 보낸다.
-   *   왜: 기준을 옛 값(20)에 두면 「편집 시작 값과 같음 = 바뀐 것 없음」으로 보여 나중 입력이 화면에서 사라진다(재리뷰 c7f1bdb P2).
+   * - 보낸 뒤 아무것도 더 고치지 않았으면 초안을 닫는다.
+   * - 저장을 기다리는 동안 더 고쳤으면(되돌림 포함) 그 「편집됨」 칸은 그대로 두고 기준만 성공 결과로 옮긴다.
+   *   예: 20→30 저장 중에 다시 20을 고르면, 서버는 30이 되고 20은 미저장 초안으로 남는다(재리뷰 c7f1bdb·48a7f7a).
    */
-  const settle = (source: F, result: D) => {
+  const settle = (source: Draft<D, F>, result: D) => {
     setDraft((current) => {
-      if (current === null || same(current.form, source)) return null;
-      return { form: current.form, baseData: result };
+      if (current === null) return null;
+      if (same(current.values, source.values) && same(current.edited, source.edited)) return null;
+      return { ...current, baseData: result };
     });
   };
   const { save, busy, conflictModal } = useSave<D, SavePayload<D, F>>({
     target: `${label} 저장`,
-    mine: options.describe && dirty ? options.describe(draft.form) : `${label} 변경`,
-    // 지적 1(리뷰 624c334): 버전은 지금 화면이 읽은 최신이 아니라 **편집을 시작한 값**의 것이다.
-    // 그 사이 다른 곳에서 저장했으면 서버가 409로 알려 충돌 창이 뜬다(조용히 덮어쓰지 않는다).
+    mine: options.describe && draft !== null && form !== undefined ? options.describe(form) : `${label} 변경`,
+    // 버전은 기준(baseData)의 것이다. 서버가 내가 편집한 칸을 바꿨으면 기준이 옛 버전이라 409 충돌 창이 뜬다(지적 1).
     request: () => {
-      const d = dirty ? draft : { form: base as F, baseData: query.data as D };
-      return { form: d.form, updatedAt: d.baseData.updatedAt, data: d.baseData, source: d.form };
+      const d = draft ?? { values: base as F, edited: [], baseData: query.data as D };
+      const sendForm = overlay(toForm(d.baseData), d.values, d.edited);
+      return { form: sendForm, updatedAt: d.baseData.updatedAt, data: d.baseData, source: d };
     },
     run: ({ payload }) => send(payload.form, payload.updatedAt, payload.data),
     onSuccess: (result, payload) => {
@@ -144,17 +183,15 @@ export function useSettingForm<D extends { updatedAt: string | null }, F>(option
       apply(latest);
       setDraft(null);
     },
-    // 지적 2: 다시 적용은 공통 useSave의 reapplyRequest로 보낸다(M3-04 0dcb8db).
-    // 최신을 읽어 내가 바꾼 칸만 얹은 요청을 만들고, 응답을 잃으면 같은 내용·같은 키로만 다시 보낸다.
+    // 다시 적용은 공통 useSave의 reapplyRequest로 보낸다(M3-04 0dcb8db). 최신 값 위에 「편집됨」 칸만 얹는다(지적 2).
     reapplyRequest: async () => {
       const latest = await load();
-      const d = dirty ? draft : { form: base as F, baseData: latest };
-      const merged = mergeChanges(toForm(d.baseData), d.form, toForm(latest));
-      return { form: merged, updatedAt: latest.updatedAt, data: latest, source: d.form };
+      const d = draft ?? { values: base as F, edited: [], baseData: latest };
+      return { form: overlay(toForm(latest), d.values, d.edited), updatedAt: latest.updatedAt, data: latest, source: d };
     },
   });
 
-  // 편집 시작 값도 함께 보관한다. 복원한 초안을 저장할 때도 그 버전으로 보내 충돌을 알아챈다.
+  // 기준 값·편집됨 칸도 함께 보관한다. 복원한 초안을 저장할 때도 그 기준으로 보내 충돌을 알아챈다.
   const { restoreOffer } = useSessionDraft<Draft<D, F>>({
     id: `settings:${id}`,
     label: `설정 — ${label}`,
@@ -190,10 +227,14 @@ export function useSettingForm<D extends { updatedAt: string | null }, F>(option
     edit: (change) => {
       setCheckError(null);
       setDraft((current) => {
-        const live = current !== null && !same(current.form, toForm(current.baseData));
-        if (live) return { ...current, form: change(current.form) };
         if (query.data === undefined || base === undefined) return current;
-        return { form: change(base), baseData: query.data };
+        const live = current === null ? null : rebase(current);
+        const from = live === null ? base : overlay(base, live.values, live.edited);
+        const next = change(from);
+        const touched = changedPaths(from, next);
+        if (touched.length === 0) return current;
+        const edited = [...new Set([...(live?.edited ?? []), ...touched])];
+        return { values: next, edited, baseData: live?.baseData ?? query.data };
       });
     },
     footer,
