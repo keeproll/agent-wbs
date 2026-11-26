@@ -1,5 +1,5 @@
 import type { PoolClient } from '@awbs/db';
-import { emitChange, iso } from '../changes/events.ts';
+import { ChangeBatch, emitChange, iso } from '../changes/events.ts';
 import { decodeTimeIdCursor, encodeCursor, InputProblem } from '../changes/history.ts';
 import { ApiError, assertSameVersion, invalid, isUuid } from '../changes/http.ts';
 import { messageView, nextDelivery, pendingNextAtSend, type Delivery, type MessageAction, type MessageRow } from './state.ts';
@@ -173,10 +173,13 @@ export async function pollMessages(client: PoolClient, cursor: string | null, li
     `select ${COLUMNS},m.project_id,m.task from messages m join tasks t on t.id=m.task
      where m.dir='out' and m.delivery in ('Queued','Sent') ${where} order by m.updated_at,m.id limit $1 for update of m`, values,
   )).rows;
+  // 변경 이벤트 잠금은 모든 행을 바꾼 뒤 마지막에 잡는다(리뷰 지적 2와 같은 잠금 순서).
+  const changes = new ChangeBatch();
   for (const row of rows.filter((item) => item.delivery === 'Queued')) {
     await client.query("update messages set delivery='Sent' where id=$1", [row.id]);
-    await emitChange(client, row.project_id, 'message', { id: row.id });
+    changes.add(row.project_id, 'message', { id: row.id });
   }
+  await changes.emit(client);
   const last = rows.at(-1);
   return {
     messages: rows.map((row) => ({
@@ -230,11 +233,13 @@ export async function failUndelivered(client: PoolClient, reason: string): Promi
     `select ${COLUMNS},m.project_id,m.task from messages m join tasks t on t.id=m.task
      where m.dir='out' and m.delivery in ('Queued','Sent') and not m.pending_next order by m.id for update of m`,
   )).rows;
+  const changes = new ChangeBatch();
   for (const row of rows) {
     await client.query("update messages set delivery='Failed',fail_reason=$2 where id=$1", [row.id, reason]);
     await record(client, row, '시스템', `${row.msg_key} 전달 실패 — ${reason}`, row.delivery, 'Failed');
-    await emitChange(client, row.project_id, 'message', { id: row.id });
+    changes.add(row.project_id, 'message', { id: row.id });
   }
+  await changes.emit(client);
   return rows.length;
 }
 

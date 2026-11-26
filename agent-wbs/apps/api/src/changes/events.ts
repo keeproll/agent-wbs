@@ -26,6 +26,26 @@ export async function emitChange(client: PoolClient, projectId: string | null, t
   await client.query('insert into change_events(project_id,topic,ref) values($1,$2,$3::jsonb)', [projectId, topic, JSON.stringify(ref)]);
 }
 
+/**
+ * 한 트랜잭션의 변경 이벤트를 모았다가 마지막에 한 번에 쓴다.
+ * 이벤트 잠금(CHANGE_LOCK)은 커밋까지 잡히므로, 업무 행(Task 등)을 잠그기 전에 잡으면
+ * 「Task를 먼저 잡고 나중에 이벤트를 쓰는」 다른 트랜잭션과 서로 기다리는 교착이 생긴다(리뷰 지적 2).
+ * 잠금 순서: epoch → 조정 잠금(설정 행, M2-05의 runner-dispatch와 같은 자리) → Task(id 순) → job → 변경 이벤트 잠금(항상 마지막).
+ */
+export class ChangeBatch {
+  private readonly items: { projectId: string | null; topic: ChangeTopic; ref: ChangeRef }[] = [];
+  add(projectId: string | null, topic: ChangeTopic, ref: ChangeRef): void {
+    if (!this.items.some((item) => item.projectId === projectId && item.topic === topic && JSON.stringify(item.ref) === JSON.stringify(ref))) {
+      this.items.push({ projectId, topic, ref });
+    }
+  }
+  /** 트랜잭션의 모든 업무 잠금·변경을 끝낸 뒤 부른다. */
+  async emit(client: PoolClient): Promise<void> {
+    for (const item of this.items) await emitChange(client, item.projectId, item.topic, item.ref);
+    this.items.length = 0;
+  }
+}
+
 /** 키를 정렬한 JSON. 같은 내용이면 항상 같은 문자열이다. */
 export function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;

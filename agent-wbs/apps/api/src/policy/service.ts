@@ -3,7 +3,7 @@ import {
   belowFloor, DEFAULT_EXEC_POLICY, effortLevel, floorOf, gradeError, resolveRunGrade, roleOf,
   type Agent, type AttemptKind, type AttemptStatus, type ModelSettings, type ResolveResult, type TaskStatus,
 } from '@awbs/shared';
-import { emitChange, iso } from '../changes/events.ts';
+import { ChangeBatch, emitChange, iso } from '../changes/events.ts';
 import { ApiError, assertSameVersion, invalid, isUuid, json } from '../changes/http.ts';
 import {
   AGENTS, catalogOf, completeOrder, gradesToRejudge, modelKey, planModelChange, ranksOf, resumeRegradeEntry,
@@ -27,11 +27,11 @@ const DEFAULT_WORKFLOW = { devAgent: 'Claude', qaAgent: 'Codex', subagentsEnable
 interface WorkflowJson { devAgent?: Agent; qaAgent?: Agent; subagentsEnabled?: boolean }
 
 /** 설정 변경 이력(Task와 무관한 전역 이력, task=null). 이력 화면의 「유형=설정」으로 보인다. */
-async function settingsHistory(client: PoolClient, text: string, before: unknown, after: unknown, key: string): Promise<void> {
+async function settingsHistory(client: PoolClient, changes: ChangeBatch, text: string, before: unknown, after: unknown, key: string): Promise<void> {
   const project = (await client.query<{ id: string }>('select id from projects')).rows[0]?.id ?? null;
   await client.query("insert into task_history(project_id,at,actor,task,kind,text,before,after,ref) values($1,clock_timestamp(),$2,null,'설정',$3,$4::jsonb,$5::jsonb,$6::jsonb)",
     [project, LEAD, text, json(before), json(after), JSON.stringify({ key })]);
-  await emitChange(client, project, 'settings', { key });
+  changes.add(project, 'settings', { key });
 }
 
 /** Task 이력(추가 전용). 시각은 그 Task의 현재 버전보다 늦게 둔다(M2-02 `record`와 같은 규칙). */
@@ -44,9 +44,9 @@ async function taskHistory(client: PoolClient, input: { projectId: string; taskI
 }
 
 /** 등급이 바뀌면 Task 버전을 올린다(contracts §1.3 「등급」은 tasks.updatedAt). 갱신 트리거가 단조 증가를 보장한다. */
-async function touchTask(client: PoolClient, projectId: string, taskId: string, taskKey: string): Promise<void> {
+async function touchTask(client: PoolClient, changes: ChangeBatch, projectId: string, taskId: string, taskKey: string): Promise<void> {
   await client.query('update tasks set updated_at=clock_timestamp() where id=$1', [taskId]);
-  await emitChange(client, projectId, 'task', { taskKey });
+  changes.add(projectId, 'task', { taskKey });
 }
 
 /* ───────────── 실행 정책 ───────────── */
@@ -71,6 +71,7 @@ export interface ExecPolicyPut {
 
 /** 실행 정책 저장(G§7.3). 최저선이 바뀌면 그 아래가 된 등급을 Planning 재판단에 맡긴다(P `normRuns` 「최저선 변경」). */
 export async function putExecPolicy(client: PoolClient, body: ExecPolicyPut) {
+  const changes = new ChangeBatch();
   const row = await execRow(client, true);
   await assertSameVersion(client, row.updated_at, body.updatedAt, { current: execView(row) });
   const before = execPolicyToApi(row, DEFAULT_EXEC_POLICY);
@@ -78,13 +79,14 @@ export async function putExecPolicy(client: PoolClient, body: ExecPolicyPut) {
     [body.onUsage, body.lowPct, body.onRework, body.notifyAt, JSON.stringify(body.floors), body.autoRetryLimit, body.autoReworkLimit]);
   const after = { onUsage: body.onUsage, lowPct: body.lowPct, onRework: body.onRework, notifyAt: body.notifyAt, floors: body.floors, autoRetryLimit: body.autoRetryLimit, autoReworkLimit: body.autoReworkLimit };
   const changed = (Object.keys(after) as (keyof typeof after)[]).filter((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key]));
-  if (changed.length) await settingsHistory(client, `실행 정책 변경 — ${changed.join('·')}`, before, after, 'exec-policy');
+  if (changed.length) await settingsHistory(client, changes, `실행 정책 변경 — ${changed.join('·')}`, before, after, 'exec-policy');
   if (changed.includes('floors')) {
     const floorText = `최저선 변경 — 검증≥개발 ${body.floors.verifyGeDev ? '적용' : '해제'}, DB·Migration 높음 이상 ${body.floors.dbHigh ? '적용' : '해제'}`;
     const { grades, catalogs } = await gradeState(client);
     const targets = gradesToRejudge(grades, catalogs, body.floors).filter((item) => item.reason === 'BELOW_FLOOR');
-    await requestRejudge(client, targets, 'floor_changed', floorText);
+    await requestRejudge(client, changes, targets, 'floor_changed', floorText);
   }
+  await changes.emit(client);
   return getExecPolicy(client);
 }
 
@@ -120,7 +122,9 @@ export async function putWorkflow(client: PoolClient, body: WorkflowPut) {
   const pick = (v: Omit<WorkflowPut, 'updatedAt'>) => ({ devAgent: v.devAgent, qaAgent: v.qaAgent, liveInject: v.liveInject, heartbeatSeconds: v.heartbeatSeconds, missedHeartbeats: v.missedHeartbeats });
   const was = pick(before);
   const now = pick(body);
-  if (JSON.stringify(was) !== JSON.stringify(now)) await settingsHistory(client, 'Agent 역할·기본 Workflow 변경', was, now, 'workflow');
+  const changes = new ChangeBatch();
+  if (JSON.stringify(was) !== JSON.stringify(now)) await settingsHistory(client, changes, 'Agent 역할·기본 Workflow 변경', was, now, 'workflow');
+  await changes.emit(client);
   return getWorkflow(client);
 }
 
@@ -165,6 +169,7 @@ export async function getModels(client: PoolClient) { return modelsView(await ap
  * 재판단 전에는 그 Task를 재개하지 않는다(D-29) — run-grade가 MODEL_NOT_ALLOWED로 거절한다.
  */
 export async function putModels(client: PoolClient, body: ModelPut & { updatedAt: string | null }) {
+  const changes = new ChangeBatch();
   const app = await appRow(client, true);
   const rows = await modelRows(client, true);
   await assertSameVersion(client, modelsVersion(app, rows), body.updatedAt, { current: modelsView(app, rows) });
@@ -184,7 +189,7 @@ export async function putModels(client: PoolClient, body: ModelPut & { updatedAt
       ...changedAllowed.map((r) => `${r.agent} ${r.modelId} ${r.allowed ? '허용' : '허용 해제'}`),
       ...(orderChanged ? ['모델 순서·목록 변경'] : []),
     ].join(', ');
-    await settingsHistory(client, `허용 모델 변경 — ${text}`, { allowed: rows.filter((r) => r.allowed).map((r) => modelKey(r.agent, r.model_id)), settings: app.model_settings },
+    await settingsHistory(client, changes, `허용 모델 변경 — ${text}`, { allowed: rows.filter((r) => r.allowed).map((r) => modelKey(r.agent, r.model_id)), settings: app.model_settings },
       { allowed: plan.rows.filter((r) => r.allowed).map((r) => modelKey(r.agent, r.modelId)), settings: plan.settings }, 'models');
   }
   if (plan.disallowed.length) {
@@ -193,8 +198,9 @@ export async function putModels(client: PoolClient, body: ModelPut & { updatedAt
     const floors = (await execRow(client)).floors;
     const targets = gradesToRejudge(grades, catalogs, floors).filter((item) => item.reason === 'MODEL_NOT_ALLOWED');
     const why = plan.disallowed.map((m) => `${m.agent} 허용 모델 변경 — ${m.modelId} 허용 해제`).join(', ');
-    await requestRejudge(client, targets, 'model_disallowed', why);
+    await requestRejudge(client, changes, targets, 'model_disallowed', why);
   }
+  await changes.emit(client);
   return getModels(client);
 }
 
@@ -234,7 +240,7 @@ export type RejudgeCode = 'model_disallowed' | 'floor_changed' | 'subagent_disal
  * 3) Task마다 「재판단 필요」 이력. 4) 재판단 작업(job kind=estimate) 1개에 대상 Task·역할을 싣는다.
  * 결과(새 등급)는 Planning 보고가 `applyRegrade`로 저장한다(submitTaskPlan 라우트는 M2-07/M5 몫).
  */
-async function requestRejudge(client: PoolClient, targets: readonly (Rejudge | { taskId: string; taskKey: string; role: 'dev' | 'qa'; grade?: undefined; locked?: undefined; reason: 'SUBAGENT_NOT_ALLOWED' })[], code: RejudgeCode, why: string) {
+async function requestRejudge(client: PoolClient, changes: ChangeBatch, targets: readonly (Rejudge | { taskId: string; taskKey: string; role: 'dev' | 'qa'; grade?: undefined; locked?: undefined; reason: 'SUBAGENT_NOT_ALLOWED' })[], code: RejudgeCode, why: string) {
   if (!targets.length) return;
   const taskIds = [...new Set(targets.map((t) => t.taskId))].sort();
   const locked = (await client.query<{ id: string; project_id: string; task_key: string }>('select id,project_id,task_key from tasks where id=any($1::uuid[]) order by id for update', [taskIds])).rows;
@@ -255,7 +261,7 @@ async function requestRejudge(client: PoolClient, targets: readonly (Rejudge | {
     }
   }
   for (const task of locked) {
-    if (targets.some((t) => t.taskId === task.id && t.locked)) await touchTask(client, task.project_id, task.id, task.task_key);
+    if (targets.some((t) => t.taskId === task.id && t.locked)) await touchTask(client, changes, task.project_id, task.id, task.task_key);
   }
   const byTask = new Map<string, { taskKey: string; roles: Set<string>; projectId: string }>();
   for (const target of targets) {
@@ -271,7 +277,7 @@ async function requestRejudge(client: PoolClient, targets: readonly (Rejudge | {
   const payload = { reason: code, trigger: why, tasks: groups.map((g) => ({ taskKey: g.taskKey, roles: [...g.roles].sort() })) };
   await client.query("insert into runner_jobs(project_id,kind,payload,state,epoch,dedup_key) values($1,'estimate',$2::jsonb,'queued',$3,$4)",
     [projectId, JSON.stringify(payload), epoch, `rejudge:${crypto.randomUUID()}`]);
-  await emitChange(client, projectId, 'planning', { key: 'rejudge' });
+  changes.add(projectId, 'planning', { key: 'rejudge' });
 }
 
 export interface RegradeInput { taskKey: string; role: 'dev' | 'qa'; modelId: string; effort: string; reason: string; actor?: string }
@@ -305,7 +311,9 @@ export async function applyRegrade(client: PoolClient, input: RegradeInput): Pro
   await taskHistory(client, { projectId: task.project_id, taskId: task.id, actor: input.actor ?? PLANNING, ref: { taskKey: input.taskKey, role: input.role },
     text: `${input.role === 'dev' ? '개발' : '검증'} 등급 Planning Agent 재판단 — ${input.reason}`,
     before: old ? { modelId: old.model_id, effort: old.effort, locked: old.locked } : null, after: { ...grade, locked: false } });
-  await touchTask(client, task.project_id, task.id, input.taskKey);
+  const changes = new ChangeBatch();
+  await touchTask(client, changes, task.project_id, task.id, input.taskKey);
+  await changes.emit(client);
 }
 
 /* ───────────── 재개 등급(D-29) ───────────── */
@@ -384,6 +392,7 @@ export async function getSubagents(client: PoolClient) { return subagentsView(aw
  * G는 「진행 전 Task」라고 하지만, 재작업·재개를 기다리는 Task도 다음 시도에서 설치가 거절되므로 완료·취소 전 Task 전부를 맡긴다(P L4587과 같음).
  */
 export async function putSubagents(client: PoolClient, body: { updatedAt: string | null; enabled: boolean; allowed: readonly { id: string; allowed: boolean }[] }) {
+  const batch = new ChangeBatch();
   const app = await appRow(client, true);
   const defs = await defRows(client, true);
   await assertSameVersion(client, subagentsVersion(app, defs), body.updatedAt, { current: subagentsView(app, defs) });
@@ -403,14 +412,15 @@ export async function putSubagents(client: PoolClient, body: { updatedAt: string
     await client.query('update app_settings set workflow=$1::jsonb where singleton', [JSON.stringify({ ...wf, subagentsEnabled: body.enabled })]);
     changes.push(`하위 Agent 사용 ${body.enabled ? '켜기' : '끄기'}`);
   }
-  if (changes.length) await settingsHistory(client, `하위 Agent 설정 변경 — ${changes.join(', ')}`, null, { enabled: body.enabled, allowed: body.allowed }, 'subagents');
+  if (changes.length) await settingsHistory(client, batch, `하위 Agent 설정 변경 — ${changes.join(', ')}`, null, { enabled: body.enabled, allowed: body.allowed }, 'subagents');
   if (turnedOff.length) {
     const rows = (await client.query<{ task: string; task_key: string; role: 'dev' | 'qa' }>(
       `select distinct s.task,t.task_key,s.role from task_subagents s join tasks t on t.id=s.task
        where s.subagent_id=any($1::uuid[]) and t.deleted_at is null and t.status not in ('done','cancelled') order by t.task_key,s.role`, [turnedOff.map((d) => d.id)])).rows;
     const why = `하위 Agent 허용 해제 — ${turnedOff.map((d) => `${d.def_key} v${String(d.version)}`).join(', ')}`;
-    await requestRejudge(client, rows.map((r) => ({ taskId: r.task, taskKey: r.task_key, role: r.role, reason: 'SUBAGENT_NOT_ALLOWED' as const })), 'subagent_disallowed', why);
+    await requestRejudge(client, batch, rows.map((r) => ({ taskId: r.task, taskKey: r.task_key, role: r.role, reason: 'SUBAGENT_NOT_ALLOWED' as const })), 'subagent_disallowed', why);
   }
+  await batch.emit(client);
   return getSubagents(client);
 }
 

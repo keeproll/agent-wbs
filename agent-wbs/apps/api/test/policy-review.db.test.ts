@@ -68,7 +68,7 @@ test('지적 4: 검증 기록 없이 done/pass 표시만 있으면 무결성 실
 });
 
 test('integrity detects an actual cross-Task message/attempt mismatch', async () => {
-  const attempt = await attemptFor(h.owner,f.project,f.tasks['TASK-0004'],{status:'completed'});
+  const attempt = await attemptFor(h.owner,f.project,f.tasks['TASK-0004'] ?? '',{status:'completed'});
   await h.owner.query("insert into messages(project_id,task,msg_key,attempt,dir,type,to_agent,body,delivery,pending_next,work_state,draft) values($1,$2,'MSG-900',$3,'out','질문','Claude','mismatch','Queued',false,'',false)",[f.project,f.tasks['TASK-0001'],attempt]);
   const item = (await get('/api/system/integrity')).items.find((i: {key: string})=>i.key==='message_attempt');
   obs('cross task integrity',item);
@@ -113,8 +113,8 @@ test('지적 6: 형식만 맞고 날짜·UUID가 틀린 커서는 400', async ()
 
 test('disallow affects active and paused grades; D-29 helper blocks before and records after regrade', async () => {
   for (const key of ['TASK-0002','TASK-0003','TASK-0004']) await h.owner.query("insert into task_grades(project_id,task,role,model_id,effort,reason,locked,locked_by,effective_from) values($1,$2,'dev','claude-opus-5-5','high','review',true,'팀장',now())",[f.project,f.tasks[key]]);
-  const active=await attemptFor(h.owner,f.project,f.tasks['TASK-0002'],{status:'running'});
-  const interrupted=await attemptFor(h.owner,f.project,f.tasks['TASK-0003'],{status:'interrupted'});
+  const active=await attemptFor(h.owner,f.project,f.tasks['TASK-0002'] ?? '',{status:'running'});
+  const interrupted=await attemptFor(h.owner,f.project,f.tasks['TASK-0003'] ?? '',{status:'interrupted'});
   const models=await get('/api/settings/models');
   const saved=await h.lead('PUT','/api/settings/models',{updatedAt:models.updatedAt,models:[{agent:'Claude',id:'claude-opus-5-5',allowed:false}]});
   expect(saved.status).toBe(200);
