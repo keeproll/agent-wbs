@@ -79,7 +79,7 @@ export async function completeMergedTask(client: PoolClient, taskKey: string, ba
   await client.query("update tasks set status='done',act_end=greatest(coalesce(act_start,clock_timestamp()),clock_timestamp()) where id=$1", [task.id]);
   await repo.historyEvent(task,'완료',{ mergeSha:queue?.actual_merge_sha });
   deferChange(client,task.project_id,'task',{ taskKey });
-  await client.query("insert into notify_events(project_id,dedup_key,kind,ref) select $1,$2,'done',$3 where exists(select 1 from notify_rules where key='done' and enabled) on conflict do nothing", [task.project_id,`done:${task.id}`,{ taskKey }]);
+  await client.query("insert into notify_events(project_id,dedup_key,kind,ref) select $1,$2,'done',$3 where exists(select 1 from notify_rules where key='done' and enabled) and exists(select 1 from notify_settings where singleton and enabled) on conflict do nothing", [task.project_id,`done:${task.id}`,{ taskKey }]);
 }
 
 /** 명세 편집뿐 아니라 입력 버전·브랜치 head 갱신도 이 함수를 같은 트랜잭션에서 호출한다. */

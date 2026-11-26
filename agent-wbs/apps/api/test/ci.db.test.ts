@@ -64,6 +64,7 @@ beforeAll(async () => {
   csrf = (await get('session')).json().csrfToken as string;
 });
 beforeEach(async () => {
+  await owner.query('update notify_settings set enabled=true where singleton');
   await owner.query('set session_replication_role=replica');
   await owner.query('truncate projects,runner_jobs,task_attempts,execution_holds,task_history,idempotency_keys,runner_hosts,runner_readiness,agent_usage,agent_models,external_write_authority cascade');
   await owner.query('set session_replication_role=origin');
@@ -167,6 +168,16 @@ test('① 실패와 꺼진 규칙은 Telegram 이벤트를 만들지 않는다',
   await patch(night.json().id as string,{ fence:null,status:'run' });
   await patch(night.json().id as string,{ fence:null,status:'fail' });
   expect((await owner.query('select count(*)::int n from notify_events')).rows).toEqual([{ n:0 }]);
+});
+
+test('알림 전체 끄기는 CI 이벤트를 남기지 않고 현재 상태 경고만 보여 준다', async () => {
+  await owner.query("update notify_rules set enabled=true where key='buildFail'");
+  await owner.query('update notify_settings set enabled=false where singleton');
+  const r = await post('ci/runs',{ stage:'night',ref:'main',trigger:'night',pipelineSha:pipeline,headSha:sha });
+  await patch(r.json().id as string,{ fence:null,status:'run' });
+  expect((await patch(r.json().id as string,{ fence:null,status:'fail' })).statusCode).toBe(204);
+  expect((await owner.query('select count(*)::int n from notify_events')).rows).toEqual([{ n:0 }]);
+  expect((await get('alerts')).json().items).toHaveLength(1);
 });
 
 test.each([false,true])('H→H′=%s의 실제 병합 보고는 기록된 ①·②·QA·base pipeline을 대조한 뒤 한 번만 완료한다', async synced => {
@@ -311,9 +322,11 @@ test('완료 버튼도 저장된 H→H′ 증거와 basePipelineSha를 사용한
   expect((await queue(a,'checking',{ syncedHeadSha:head,ciRunId:intRun.json().id,testedTreeSha:tree,
     headSync:{ qaHeadSha:sha,headSha:head,preserved:true,parents:[sha,otherSha],autoMergeTreeSha:tree,headTreeSha:tree,additionalChanges:false } })).statusCode).toBe(204);
   await owner.query("update merge_queue set status='merged',actual_merge_sha=$2,actual_tree_sha=$3,merge_parents=$4 where task=$1",[a.id,'9'.repeat(40),tree,JSON.stringify([otherSha,head])]);
+  await owner.query('update notify_settings set enabled=false where singleton');
   const task = (await get(`tasks/${a.key}`)).json() as { updatedAt: string };
   const r = await app.inject({ method:'POST',url:`/api/tasks/${a.key}/complete`,headers:lead(),payload:{ updatedAt:task.updatedAt } });
   expect(r.statusCode,r.body).toBe(200);
   expect(r.json()).toMatchObject({ task:{ lifecycleStatus:'done' } });
+  expect((await owner.query("select count(*)::int n from notify_events where kind='done'")).rows).toEqual([{ n:0 }]);
 });
 

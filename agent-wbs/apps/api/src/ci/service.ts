@@ -98,6 +98,7 @@ async function notifyResult(client: PoolClient, run: Run) {
   const kind = run.status === 'fail' ? 'buildFail' : run.stage !== 3 ? 'buildOk' : null;
   if (kind) await client.query(`insert into notify_events(project_id,dedup_key,kind,ref)
     select $1,$2,$3,$4 where exists(select 1 from notify_rules where key=$3 and enabled)
+      and exists(select 1 from notify_settings where singleton and enabled)
     on conflict((coalesce(project_id::text,'global')),dedup_key) where resolved_at is null do update set dup_count=notify_events.dup_count+1`,
   [run.project_id,kind === 'buildFail' ? key : `buildOk|${stage}|${run.id}`,kind,
     { id:run.id,stage,pr:run.pr,failStep:run.fail_step,path:`/ci/${run.id}` }]);
