@@ -435,7 +435,7 @@ async function assertJudged(client: PoolClient, detail: TaskDetail): Promise<voi
  * 판정은 shared의 lifecycleTransition(invalidate)이 하고, 원본 검증 행은 그대로 두고 무효 기록만 추가한다.
  * Gate가 아닌 상태의 낡은 검증은 M2-06이 PASS 반영 때 revision을 대조해 거부한다.
  */
-async function invalidateGate(client: PoolClient, task: LockedTask, revision: number): Promise<Change[]> {
+export async function invalidateGate(client: PoolClient, task: LockedTask, revision: number): Promise<Change[]> {
   if (task.status !== 'gate') return [];
   const latest = (await client.query<{ id: string; result: VerificationResult; head_sha: string; spec_revision: number }>(
     `select v.id,v.result,v.head_sha,v.spec_revision from verifications v join task_attempts a on a.id=v.attempt
