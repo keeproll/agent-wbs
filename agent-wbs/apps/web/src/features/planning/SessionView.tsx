@@ -82,7 +82,8 @@ export function SessionView({ planning, cpState, tasks, memos, setMemo, openCp }
       <div className="card">
         <div className="pane-h" style={{ margin: 0 }}>
           <div>
-            <span className="mono muted">{formatDateTime(planning.createdAt)}</span>
+            {/* 원본 P L1646 {{pl.s.id}}: 서버 후속 2차의 표시 키 planningKey(M3 통합) */}
+            <span className="mono muted">{planning.planningKey}</span>
             <h2 className="h2">{planning.title}</h2>
             <span className="muted">대상 범위: {planning.scope} · 요청 {formatDateTime(planning.createdAt)}</span>
           </div>

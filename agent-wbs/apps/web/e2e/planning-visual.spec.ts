@@ -47,7 +47,7 @@ test('UI-09 변경 제안(CP-002 승인 대기)', async ({ page }) => {
   await expect(page.getByRole('region', { name: '영향 분석' }).locator('.gtr')).toHaveCount(2);
   const png = await shot(page);
   record('UI-09-page-head', 0.02, '같아야 함(제목·설명·새 변경 제안 버튼)', 'desktop-clock20261105/UI-09.png', PAGE_HEAD, png);
-  record('UI-09-list', null, '목록 모양은 같음. 차이: CP-001 출처가 원본 「PLN-000」 대신 Planning 제목(계약 Planning에 표시 키 없음)', 'desktop-clock20261105/UI-09.png', { x: 204, y: 153, width: 260, height: 195 }, png);
+  record('UI-09-list', null, '목록 모양은 같음. 출처는 원본처럼 「Planning PLN-000」(M3 통합: 서버 표시 키 planningKey). 남은 차이는 기록만', 'desktop-clock20261105/UI-09.png', { x: 204, y: 153, width: 260, height: 195 }, png);
   record('UI-09-detail-top', null, '제목·배너·사유·Diff 위치 같음. 차이: 「작성 팀장」 줄은 같고, Diff 마지막 빈 열(제외 버튼 자리) 폭 동일, 승인 이력은 서버 이벤트 「제출」', 'desktop-clock20261105/UI-09.png', { x: 481, y: 154, width: 1414, height: 400 }, png);
   record('UI-09-detail-all', null, '전체 상세 카드. 영향 분석·승인 상자·승인 이력 배치 비교', 'desktop-clock20261105/UI-09.png', { x: 481, y: 154, width: 1414, height: 829 }, png);
 });
@@ -73,8 +73,8 @@ test('UI-05 Planning 세션(PLN-001 이견 조정 중)', async ({ page }) => {
   await expect(page.locator('.cmp > .card')).toHaveCount(2);
   const png = await shot(page);
   record('UI-05-page-head', 0.02, '같아야 함(제목·설명·탭 2개)', 'desktop-clock20261105/UI-05.png', { x: 181, y: 65, width: 1739, height: 128 }, png);
-  record('UI-05-list', null, '차이: 원본 첫 줄 세션 ID(PLN-001) 대신 요청 시각(계약 Planning에 표시 키 없음)', 'desktop-clock20261105/UI-05.png', { x: 204, y: 199, width: 260, height: 213 }, png);
-  record('UI-05-session-card', null, '단계 7개·현재 단계 강조 같음. 차이: 첫 줄 ID 대신 요청 시각', 'desktop-clock20261105/UI-05.png', { x: 481, y: 200, width: 1414, height: 150 }, png);
+  record('UI-05-list', null, '원본처럼 첫 줄 세션 ID(PLN-001)를 보인다(M3 통합: 서버 표시 키 planningKey)', 'desktop-clock20261105/UI-05.png', { x: 204, y: 199, width: 260, height: 213 }, png);
+  record('UI-05-session-card', null, '단계 7개·현재 단계 강조 같음. 첫 줄은 원본처럼 세션 ID(M3 통합: planningKey)', 'desktop-clock20261105/UI-05.png', { x: 481, y: 200, width: 1414, height: 150 }, png);
   record('UI-05-main', null, '독립 분석·교차 검토 배치 비교(글자는 같은 자료)', 'desktop-clock20261105/UI-05.png', { x: 465, y: 199, width: 1455, height: 881 }, png);
 });
 

@@ -131,7 +131,7 @@ test('UI-02E 입력 변경 감지', async ({ page }) => {
   const head = { x: 181, y: 65, width: 1100, height: 85 };
   record('UI-02E-header', 0.02, '같아야 함(제목·설명). 원본 오른쪽 Mock 버튼은 영역 밖', cmp('UI-02E-header', 'desktop-clock20261105/UI-02E.png', head, png));
   const kv = { x: 204, y: 153, width: 1692, height: 190 };
-  record('UI-02E-repo', null, '기록만: 「Mock: 새 커밋 push」·「지금 확인」(계약에 「지금 확인」 API 없음) 없음, Runner clone 경로는 응답에 없어 뺌', cmp('UI-02E-repo', 'desktop-clock20261105/UI-02E.png', kv, png));
+  record('UI-02E-repo', null, '기록만: 「Mock: 새 커밋 push」 없음, 「지금 확인」은 있음(M3 통합: checkInputs), Runner clone 경로는 응답에 없어 뺌', cmp('UI-02E-repo', 'desktop-clock20261105/UI-02E.png', kv, png));
   const whole = { x: 181, y: 65, width: 1739, height: 1015 };
   record('UI-02E-main', null, '기록만: 파일 영역은 prototype/docs/ 기준으로 바로잡음(원본은 설계 문서를 「프로토타입」으로 잘못 분류, MM-04), 확인 시각은 응답에 없어 문구만, 버전 표 「커밋 메시지」 열은 응답에 없어 「팀장 지시」',
     cmp('UI-02E-main', 'desktop-clock20261105/UI-02E.png', whole, png));
