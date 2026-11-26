@@ -246,6 +246,8 @@ const project = [
 
 const reportSummary = {
   id: c.Id,
+  // 표시 번호(P mkReport L3880: RPT-D-261027 · RPT-W-261026 · RPT-C-001). 화면 목록·PDF 파일 이름·메일 제목이 쓴다(M6-01 보강).
+  reportKey: Type.String({ pattern: '^RPT-(D-[0-9]{6}|W-[0-9]{6}|C-[0-9]{3,})$' }),
   kind: AnyOf('daily', 'weekly', 'custom'),
   from: c.DateOnly,
   to: c.DateOnly,

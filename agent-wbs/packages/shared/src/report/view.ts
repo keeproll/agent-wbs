@@ -6,6 +6,7 @@
  * - 화면(features/report)·메일(M6-03)·PDF(M6-02)가 이 함수를 함께 쓴다. 그래서 같은 문장이 세 곳에 나간다.
  */
 import type { Static } from 'typebox';
+import { Value } from 'typebox/value';
 import { ReportSnapshot } from '../api/models.ts';
 import { daysBetween } from './period.ts';
 
@@ -110,4 +111,11 @@ const INTERNAL_TERMS: readonly RegExp[] = [
 ];
 export function internalTerms(text: string): string[] {
   return INTERNAL_TERMS.flatMap((re) => text.match(re) ?? []);
+}
+
+/** 스냅샷이 계약(ReportSnapshot)에 맞는지. 맞지 않으면 첫 위반 위치를 돌려준다. */
+export function snapshotProblem(value: unknown): string | null {
+  if (Value.Check(ReportSnapshot, value)) return null;
+  const first = [...Value.Errors(ReportSnapshot, value)][0];
+  return `${first?.instancePath ?? ''} ${first?.message ?? ''}`.trim() || '형식 위반';
 }

@@ -3,7 +3,8 @@ import { Value } from 'typebox/value';
 import { externalView, internalKpis, internalTerms, reportFigures, ReportSnapshotSchema as ReportSnapshot, type ReportSnapshotData } from '@awbs/shared';
 
 /** 빈 스냅샷에 필요한 칸만 채운다. */
-function snap(patch: Partial<ReportSnapshotData> & { summary?: Partial<ReportSnapshotData['summary']> } = {}): ReportSnapshotData {
+type Patch = Partial<Omit<ReportSnapshotData, 'summary'>> & { summary?: Partial<ReportSnapshotData['summary']> };
+function snap(patch: Patch = {}): ReportSnapshotData {
   const summary: ReportSnapshotData['summary'] = {
     taskCount: 5, doneCount: 3, doneBefore: 1, workPct: 52.5, workPctBefore: 20, baselineVersion: 2, forecast: '2026-11-10', lo: '2026-11-08', hi: '2026-11-14',
     forecastBefore: '2026-11-07', target: '2026-11-12', uptimePct: 75, ratePct: 60, blocked: 1, statuses: [], started: [],
