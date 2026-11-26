@@ -17,17 +17,21 @@ export function createClaudeParser(): (event: Json) => CliEvent[] {
   const blocks = (e: Json, out: CliEvent[], kind: 'assistant' | 'user') => {
     const message = isObject(e.message) ? e.message : {};
     const content = Array.isArray(message.content) ? message.content : [];
-    const parent = str(e.parent_tool_use_id) ?? null;
+    // null = 주 Agent, 문자열 = 하위 Agent. 필드가 없으면 어느 쪽인지 모른다 — 주 Agent로 채우지 않는다(재리뷰 5).
+    const parent = e.parent_tool_use_id === null ? null : str(e.parent_tool_use_id);
     content.forEach((b: unknown, i) => {
       if (!isObject(b) || !KNOWN_BLOCKS.has(str(b.type) ?? '')) {
         out.push({ type: 'unknown', raw: isObject(b) ? b : { value: b }, path: `message.content[${String(i)}]` });
         return;
       }
-      if (b.type === 'text' && kind === 'assistant' && parent === null && typeof b.text === 'string') out.push({ type: 'message', text: b.text });
+      if (b.type === 'text' && kind === 'assistant' && typeof b.text === 'string') {
+        if (parent === null) out.push({ type: 'message', text: b.text });
+        else if (parent === undefined) out.push({ type: 'unknown', raw: b, path: `message.content[${String(i)}](parent_tool_use_id 없음)` });
+      }
       if (b.type === 'tool_use' && AGENT_TOOLS.has(str(b.name) ?? '')) {
         const id = str(b.id);
         if (id === undefined || id === '') unlinked(out, 'Agent 도구 호출에 id 없음');
-        else out.push({ type: 'agent_call', id, parentId: parent });
+        else out.push(parent === undefined ? { type: 'agent_call', id } : { type: 'agent_call', id, parentId: parent });
       }
       const toolUseId = b.type === 'tool_result' ? str(b.tool_use_id) : undefined;
       if (toolUseId) out.push({ type: 'tool_result', toolUseId });
@@ -41,7 +45,7 @@ export function createClaudeParser(): (event: Json) => CliEvent[] {
       const taskType = str(e.task_type);
       // 하위 Agent인지 알 수 없다. 추측하지 않는다(리뷰 3 A).
       if (taskType === undefined) return void unlinked(out, 'task_started에 task_type 없음');
-      out.push(taskEvent({ type: 'task', op, taskId, taskType, toolUseId: str(e.tool_use_id), runId: str(e.run_id), background: e.is_backgrounded === true }));
+      out.push(taskEvent({ type: 'task', op, taskId, taskType, toolUseId: str(e.tool_use_id), runId: str(e.run_id), background: typeof e.is_backgrounded === 'boolean' ? e.is_backgrounded : undefined }));
       return;
     }
     if (op === 'updated') {

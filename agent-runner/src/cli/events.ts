@@ -14,6 +14,11 @@ export type SubagentPhase = 'running' | 'done' | 'unknown';
 /** Claude task 메시지 종류(`system` 메시지의 task_started·task_updated·task_notification) */
 export type TaskOp = 'started' | 'updated' | 'notification';
 
+/*
+ * 해석기 공통 규칙(재리뷰 5): 빠진 필드·모르는 값은 절대 긍정 상태(실행 중·시작됨·끝남·전경·주 Agent)로 채우지 않는다.
+ * 원문에 없으면 이벤트에서도 빠지거나 `unknown`이 된다. 예: Codex 상태 없는 항목 → phase `unknown`,
+ * Claude `is_backgrounded` 없음 → `background` 없음(전경으로 채우지 않음), `parent_tool_use_id` 없음 → 주 Agent 글로 보지 않음.
+ */
 export type CliEvent =
   | { type: 'session'; sessionId: string; model?: string }
   /** 주 Agent의 글. 하위 Agent의 글은 섞지 않는다. */
@@ -21,7 +26,7 @@ export type CliEvent =
   /** Codex 하위 Agent 상태 보고(thread ID 단위) */
   | { type: 'subagent'; id: string; phase: SubagentPhase; parentId?: string | null; status?: string }
   /** Claude 하위 Agent 도구 호출(Agent·Task). 이 실행(launch)에서 모델이 낸 호출이라는 사실이다. */
-  | { type: 'agent_call'; id: string; parentId: string | null }
+  | { type: 'agent_call'; id: string; parentId?: string | null }
   /** Claude 도구 결과. 어느 도구 호출의 결과인지만 담는다. 하위 Agent 호출인지는 reducer가 본다. */
   | { type: 'tool_result'; toolUseId: string }
   /** Claude task 메시지. 값은 원문 그대로이며, 어느 run에 속하는지는 reducer가 판정한다. */

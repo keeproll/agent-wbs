@@ -50,11 +50,40 @@ test('launch 기록: Runner가 프로세스를 다시 시작하면 이전 launch
 test('launch 기록: 이전 launch의 도구 호출에는 새 launch의 시작을 묶지 않는다', () => {
   const p = createClaudeParser();
   const o = new SubagentObserver();
-  for (const e of p(call('tool-A'))) o.apply(e);
-  for (const e of p(returned('tool-A'))) o.apply(e);
+  for (const line of [call('tool-A'), startFg('tool-A', '001'), returned('tool-A')]) for (const e of p(line)) o.apply(e);
   o.launch();
-  expect(o.snapshot().state).toBe('ok');
+  expect(o.snapshot()).toMatchObject({ observed: 0, state: 'ok' });
   for (const line of [{ ...start('tool-A', '001'), task_id: 'task-B' }, ok]) for (const e of p(line)) o.apply(e);
   o.finish();
   expect(o.snapshot()).toMatchObject({ observed: 0, state: 'unconfirmed' });
+  expect(o.state.reasons.some((r) => r.includes('이 launch의 도구 호출에 연결할 수 없음'))).toBe(true);
+});
+
+// ── fix4 보강: 줄이는 전이는 「현재」 launch에서 시작이 증명된 대상에게만 — 다음 launch에서 증명된 시작은 정상으로 끝난다 ──
+test('다음 launch에서 시작이 증명된 Claude Agent는 그 launch 안에서 정상 완료된다', () => {
+  const p = createClaudeParser();
+  const o = new SubagentObserver();
+  for (const e of p(ok)) o.apply(e);
+  o.launch();
+  for (const line of [call('tool-A'), startFg('tool-A', '001'), returned('tool-A'), ok]) for (const e of p(line)) o.apply(e);
+  o.finish();
+  expect(o.snapshot()).toMatchObject({ observed: 0, state: 'ok', ended: true });
+});
+test('다음 launch에서 실행 중으로 보고된 Codex Agent는 그 launch 안에서 정상 완료된다', () => {
+  const o = new SubagentObserver();
+  o.launch();
+  o.apply({ type: 'subagent', id: 'th-a', phase: 'running', status: 'running' });
+  o.apply({ type: 'subagent', id: 'th-a', phase: 'done', status: 'completed' });
+  o.apply({ type: 'result', ok: true, reason: 'completed' });
+  o.finish();
+  expect(o.snapshot()).toMatchObject({ observed: 0, state: 'ok' });
+});
+test('이전 launch에서 실행 중이던 Codex Agent의 완료는 새 launch에서 줄이지 않는다', () => {
+  const o = new SubagentObserver();
+  o.apply({ type: 'subagent', id: 'th-a', phase: 'running', status: 'running' });
+  o.launch();
+  o.apply({ type: 'subagent', id: 'th-a', phase: 'done', status: 'completed' });
+  o.apply({ type: 'result', ok: true, reason: 'completed' });
+  o.finish();
+  expect(o.snapshot()).toMatchObject({ observed: 1, state: 'unconfirmed' });
 });
