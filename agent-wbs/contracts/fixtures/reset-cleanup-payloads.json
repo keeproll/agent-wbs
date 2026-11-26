@@ -54,7 +54,7 @@
           "conflict_group": null
         }
       ],
-      "epochPath": "1/",
+      "epochPath": "<epoch>/",
       "generation": null,
       "unparsedPrs": []
     }
@@ -122,7 +122,7 @@
         "agent/T1-h1",
         "agent/T2-h1"
       ],
-      "epochPath": "1/",
+      "epochPath": "<epoch>/",
       "baseCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "generation": null,
       "unparsedPrs": []

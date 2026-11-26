@@ -44,7 +44,10 @@ async function produce(base: string | null): Promise<unknown> {
     const epoch = (await c.query<{ epoch: number }>('select epoch from system_state where id=1')).rows[0]?.epoch;
     await c.query("select reset_project($1,'fixture',true,'lead')", [epoch]);
     const command = (await c.query<{ kind: string; payload: unknown }>('select kind,payload from runner_commands order by created_at desc limit 1')).rows[0];
-    const payload = normalize(command?.payload) as { holds: { slot_state: string }[] };
+    const payload = normalize(command?.payload) as { holds: { slot_state: string }[]; epochPath: string };
+    // 앞선 시험 파일이 초기화를 했으면 epoch가 1보다 크다. 값은 「초기화 직전 epoch + '/'」인지 따로 확인하고 자리표시자로 바꾼다.
+    expect(payload.epochPath).toBe(`${String(epoch)}/`);
+    payload.epochPath = '<epoch>/';
     // jsonb_agg는 순서를 보장하지 않으므로 비교 전에 보유 순서만 고정한다.
     payload.holds.sort((a, b) => a.slot_state.localeCompare(b.slot_state));
     return { kind: command?.kind, payload };
