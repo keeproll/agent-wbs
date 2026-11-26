@@ -119,3 +119,16 @@ test('P1-5: GitHub 401 응답은 토큰 캐시를 비워 다음 요청이 새 �
   await a.github?.client.setCommitStatus({ sha: 'a'.repeat(40), context: 'agentwbs/task', state: 'pending' });
   expect(credentialCalls).toBe(2);
 });
+
+test('M2 통합: 입력 변경 보고는 clone이 없으면 하지 않고, 공급원이 있으면 새 계약(base·head·트리 차이)으로 보낸다', async () => {
+  // 기본 공급원: GitHub 설정의 저장소 clone이 아직 없으면 보고하지 않는다(초기 분석 전).
+  expect(await app(vi.fn() as unknown as ApiClient, vi.fn() as unknown as typeof fetch).reportInputs()).toBeUndefined();
+  const sha = (c: string) => c.repeat(40);
+  const api = vi.fn((_op: string, request: { body: { base: string; head: string } }) =>
+    Promise.resolve({ status: 200, headers: new Headers(), body: { head: request.body.head, recorded: false, historyRewritten: false } }));
+  const a = new RunnerApp({ state, api: api as unknown as ApiClient, home, version: 't', env: {}, warn: () => undefined, hostSources,
+    cliRegistry: { latest: () => Promise.resolve('1.0.0'), install: () => Promise.resolve(), probe: () => Promise.resolve() },
+    inputSource: () => Promise.resolve({ fetch: () => Promise.resolve(sha('b')), inputObservation: () => Promise.resolve({ baseIsAncestor: true, treeHash: sha('d'), changes: [], commits: [] }) }) });
+  expect(await a.reportInputs()).toEqual({ head: sha('b'), recorded: false, historyRewritten: false });
+  expect(api).toHaveBeenCalledWith('reportInputChanges', expect.objectContaining({ epoch: state.snapshot.epoch, body: { base: sha('b'), head: sha('b'), baseIsAncestor: true, treeHash: sha('d'), changes: [], commits: [] } }));
+});

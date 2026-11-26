@@ -4,6 +4,7 @@ import { constants } from 'node:fs';
 import { chmod, link, lstat, mkdir, open, readFile, readdir, rename, rm, statfs, writeFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
+import { parseCommits, parseRawNumstat, type InputObservation } from './inputs.ts';
 
 export class GitSafetyError extends Error {
   override name = 'GitSafetyError';
@@ -431,10 +432,16 @@ export class GitRepository {
     return sha((await this.git(['rev-parse', '--verify', 'refs/heads/main^{commit}'])).toString().trim());
   }
 
-  async fetch(): Promise<string> {
+  /**
+   * 원격 main을 받아 SHA를 돌려준다.
+   * `allowRewrite`는 입력 변경 보고만 쓴다: 원격 이력이 재작성돼도 origin/* 추적 참조를 강제로 맞춰
+   * 「base가 head의 조상이 아님」을 서버에 보고할 수 있게 한다(M2-03 계약). 로컬 main·Agent 브랜치는 옮기지 않는다.
+   * 기본값(false)은 M4 동작 그대로다(재작성된 원격이면 fetch가 실패한다).
+   */
+  async fetch(options: { allowRewrite?: boolean } = {}): Promise<string> {
     const { source } = await this.trusted();
     // main은 로컬 초기화 커밋을 보존한다. 갱신 대상을 origin/*로 한정한다.
-    await this.git(['fetch', '--prune', '--no-recurse-submodules', '--upload-pack=git-upload-pack', '--', source, 'refs/heads/*:refs/remotes/origin/*']);
+    await this.git(['fetch', '--prune', '--no-recurse-submodules', '--upload-pack=git-upload-pack', '--', source, `${options.allowRewrite ? '+' : ''}refs/heads/*:refs/remotes/origin/*`]);
     return sha((await this.git(['rev-parse', '--verify', 'refs/remotes/origin/main^{commit}'])).toString().trim());
   }
 
@@ -614,6 +621,26 @@ export class GitRepository {
 
   async removeInput(inputId: string): Promise<void> {
     await removeReadonly(await safePath(join(this.inputs, id(inputId))));
+  }
+
+  /**
+   * 입력 변경 보고(M2-03 계약)에 필요한 base..head 관측. `prototype/` 트리 차이가 정답이다.
+   * - baseIsAncestor: `merge-base --is-ancestor`의 종료 코드(0=true, 1=false). 그 밖(base가 없음 등)은 실패 = 보고 중단.
+   * - treeHash: head의 `prototype` 트리 SHA(모드 포함).
+   * - changes: `diff --raw --numstat -M`(blob·모드 전후, 이름 변경, 종류 변경 T).
+   * - commits: 첫 부모 이력 중 prototype/을 바꾼 커밋(참고 정보, 판정에 쓰지 않음).
+   */
+  async inputObservation(base: string, head: string): Promise<InputObservation> {
+    sha(base); sha(head);
+    // 두 커밋이 모두 있어야 판정할 수 있다. 없으면(종료 코드 0·1 밖) 보고를 중단한다.
+    for (const commit of [base, head]) {
+      await this.git(['cat-file', '-e', `${commit}^{commit}`]).catch(() => { throw new GitSafetyError('base와 head의 조상 관계를 판정할 수 없습니다. 입력 변경 보고를 중단합니다.'); });
+    }
+    const baseIsAncestor = await this.git(['merge-base', '--is-ancestor', base, head]).then(() => true, () => false);
+    const treeHash = sha((await this.git(['rev-parse', '--verify', `${head}:prototype`])).toString().trim());
+    const diff = (await this.git(['diff', '--no-ext-diff', '--no-textconv', '--raw', '--numstat', '-M', '-z', '--no-abbrev', base, head, '--', 'prototype/'])).toString('utf8');
+    const log = (await this.git(['log', '--first-parent', '--reverse', '--format=%H%x1f%cI%x1f%an%x1f%s%x1e', `${base}..${head}`, '--', 'prototype/'])).toString('utf8');
+    return { baseIsAncestor, treeHash, changes: parseRawNumstat(diff), commits: parseCommits(log) };
   }
 
   async checkTask(base: string, head: string): Promise<RejectedPath[]> {

@@ -8,7 +8,12 @@ import { createGithubRemoteCleanup } from './cleanup/remote.ts';
 import { createResetCleanup, type ResetCleanupDeps } from './cleanup/reset.ts';
 import { CliUpdater, cliBinary, type CliRegistry } from './cli-update/manager.ts';
 import { cliAwareRun, cliEnvironment } from './cli-update/registry.ts';
+import { lstat } from 'node:fs/promises';
+import { join } from 'node:path';
+import { repositoryIdFor } from './git/identity.ts';
+import { InputChangeReporter, type InputReport, type InputSource } from './git/inputs.ts';
 import { checkGitHost } from './git/probe.ts';
+import { GitRepository } from './git/repository.ts';
 import { createGitHubClient, type GitHubClient, type GithubMode, type RepoRef } from './github/client.ts';
 import { GithubConnector } from './github/connector.ts';
 import { ghTokenSource, type TokenSource } from './github/token.ts';
@@ -56,7 +61,17 @@ export interface RunnerAppDeps {
   now?: () => number;
   /** false면 CLI 최신 확인을 돌리지 않는다(시험·오프라인). */
   cliUpdates?: boolean;
+  /**
+   * 입력 변경 보고(M2-03 reportInputChanges)의 git 관측 공급원. 없으면 GitHub 설정의 저장소를 Runner 로컬 clone에서 연다.
+   * 아직 clone이 없으면(초기 분석 전) 보고하지 않는다. 시험은 가짜를 넣는다.
+   */
+  inputSource?: () => Promise<InputSource | undefined>;
+  /** 입력 확인 주기. 기본 5분 — 계획 미결 항목 P3-1(입력 확인 5분)의 잠정값이다. */
+  inputIntervalMs?: number;
 }
+
+/** 입력 확인 기본 주기(5분). P3-1이 정해지면 이 값만 바꾼다. */
+export const INPUT_INTERVAL_MS = 5 * 60_000;
 
 /**
  * Runner 구성 요소를 하나로 잇는다(main.ts의 조립 근거).
@@ -76,6 +91,7 @@ export class RunnerApp {
   readonly sessions: ActiveSession[] = [];
   readonly github: { client: GitHubClient; connector: GithubConnector; mode: GithubMode } | undefined;
   readonly bins: { codex: string; claude: string };
+  readonly inputs: InputChangeReporter;
   #identity: { hostId: string; bootId: string } | undefined;
   readonly #d: RunnerAppDeps;
   readonly #run: RunCommand;
@@ -96,6 +112,7 @@ export class RunnerApp {
     // M-1: 준비 점검의 codex·claude도 전용 설치 경로를 세션 실행과 같은 인자·환경으로 부른다.
     this.#run = cliAwareRun(base, cli, this.bins);
     this.heavy = new HeavySemaphore(0);
+    this.inputs = new InputChangeReporter({ api: d.api, epoch: () => d.state.snapshot.epoch, warn: d.warn });
     const runnerId = () => d.state.snapshot.runnerId;
     // eslint-disable-next-line @typescript-eslint/no-this-alias -- 아래 getter가 생성 중에도 현재 식별자를 읽는다.
     const app = this;
@@ -252,6 +269,27 @@ export class RunnerApp {
   }
 
   /**
+   * 입력 변경 보고 한 번(M2-03 새 계약). 원격 main을 받아 서버 입력 head와의 `prototype/` 트리 차이를 보낸다.
+   * 409면 서버 head로 다시 계산하고, 이력 재작성이면 멈춘다(InputChangeReporter).
+   * 로컬 clone이 아직 없으면 아무것도 하지 않는다(undefined).
+   */
+  async reportInputs(): Promise<InputReport | undefined> {
+    const source = await (this.#d.inputSource ?? (() => this.#defaultInputSource()))();
+    if (!source) return undefined;
+    return this.inputs.report(source);
+  }
+
+  async #defaultInputSource(): Promise<InputSource | undefined> {
+    const repo = this.#d.github?.repo;
+    if (!repo) return undefined;
+    const repositoryId = repositoryIdFor(`https://github.com/${repo.owner}/${repo.repo}`);
+    const exists = await lstat(join(this.#d.home, 'repos', repositoryId)).then(() => true, () => false);
+    if (!exists) return undefined;
+    const git = await GitRepository.open(this.#d.home, repositoryId);
+    return { fetch: () => git.fetch({ allowRewrite: true }), inputObservation: (base, head) => git.inputObservation(base, head) };
+  }
+
+  /**
    * Runner가 서버와 동기화된 뒤(`runner.ready`) 한 번 실행하는 시작 보고.
    * host → 준비 점검 → 모델 → GitHub 순서다. host 보고로 식별자와 상한을 먼저 받아야 나머지가 맞는 값을 쓴다.
    */
@@ -288,6 +326,7 @@ export class RunnerApp {
     }, { onError: onError('매일 점검') }));
     this.#timers.push(scheduleDaily(() => this.reportConcurrency(), { intervalMs: 60_000, onError: onError('동시 실행 보고') }));
     this.#timers.push(scheduleDaily(() => this.reporter.reportUsage(this.usage), { intervalMs: 60_000, onError: onError('사용량 보고') }));
+    this.#timers.push(scheduleDaily(async () => { await this.reportInputs(); }, { intervalMs: this.#d.inputIntervalMs ?? INPUT_INTERVAL_MS, onError: onError('입력 변경 보고') }));
   }
 
   /**

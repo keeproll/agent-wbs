@@ -2,12 +2,11 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { inject } from 'vitest';
 import { createPool, recreateTestDatabase, runMigrations, seedSystem } from '../../../packages/db/src/index.ts';
-// shortcut: read→Gate→write의 초기화 순환을 준비 코드의 import 순서로 우회한다. 서버 순환 수정 뒤 제거한다.
-import '../../../apps/api/src/tasks/write.ts';
 import { buildApp } from '../../../apps/api/src/app.ts';
 import { issueLoginLink, issueRunnerToken } from '../../../apps/api/src/platform/credentials.ts';
 import { installRunner } from '../../../apps/api/src/runner/routes.ts';
 import { registerRunnerMessageRoutes } from '../../../apps/api/src/messages/routes.ts';
+import { installProjectRunner } from '../../../apps/api/src/project/runner-routes.ts';
 import { watchRunner } from '../../../apps/api/src/runner/watch.ts';
 import { FakeRunner } from '../runner.ts';
 
@@ -16,7 +15,8 @@ import { FakeRunner } from '../runner.ts';
 type Body = any;
 export const HEAD = 'a'.repeat(40);
 
-export async function scenario() {
+/** inputCommit: 입력 v1(등록 커밋). 실제 git 저장소로 입력 보고를 시험할 때 그 저장소의 커밋을 넣는다. */
+export async function scenario(options: { inputCommit?: string } = {}) {
   const db = new URL(inject('testDatabaseUrl'));
   db.pathname += '_runner_scenario';
   await recreateTestDatabase(db.href);
@@ -28,12 +28,14 @@ export async function scenario() {
   const app = buildApp(pool, false, { origin, lan: false });
   installRunner(app, pool);
   registerRunnerMessageRoutes(app);
+  // main.ts와 같은 Runner 경로 묶음(M2-03 프로젝트 보고 포함).
+  installProjectRunner(app, pool);
   try {
     await runMigrations(owner);
     await seedSystem(owner);
     const project = (await owner.query<{ id: string }>("insert into projects(name,repo_url,repo_owner,repo_name,lead_instruction,phase) values('시나리오','https://github.com/fake/runner','fake','runner','','active') returning id")).rows[0]?.id;
     assert(project);
-    const input = (await owner.query<{ id: string }>("insert into input_versions(project_id,v,commit_sha,files,md_list,changes,instruction) values($1,1,$2,'[]','[]','[]','') returning id", [project, HEAD])).rows[0]?.id;
+    const input = (await owner.query<{ id: string }>("insert into input_versions(project_id,v,commit_sha,files,md_list,changes,instruction) values($1,1,$2,'[]','[]','[]','') returning id", [project, options.inputCommit ?? HEAD])).rows[0]?.id;
     const phase = (await owner.query<{ id: string }>("insert into wbs_nodes(project_id,node_key,kind,title,sort_order) values($1,'PH','phase','단계',1) returning id", [project])).rows[0]?.id;
     const wp = (await owner.query<{ id: string }>("insert into wbs_nodes(project_id,node_key,kind,parent_id,title,sort_order) values($1,'WP','work_package',$2,'묶음',1) returning id", [project, phase])).rows[0]?.id;
     for (const [index, agent, model] of [[1, 'Claude', 'claude-sonnet-5-5'], [2, 'Codex', 'gpt-6.1-sol']] as const) {
