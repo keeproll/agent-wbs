@@ -3,7 +3,7 @@ import { completionGate, lifecycleTransition, type GateInput, type HeadSync, typ
 import { PlatformError } from '../platform/errors.ts';
 import { RunnerRepository, required } from '../runner/repository.ts';
 import { assertExternal } from '../runner/service.ts';
-import { record, SYSTEM } from '../tasks/write.ts';
+import { record, SYSTEM } from '../tasks/history.ts';
 
 export async function gateInputs(client: PoolClient, taskIds: string[], headSync: HeadSync | null = null): Promise<Map<string, GateInput>> {
   const rows = (await client.query<{ id: string; planning_approved_at: Date | null; revision: number; input_v: number; head_sha: string; open_qa: boolean;

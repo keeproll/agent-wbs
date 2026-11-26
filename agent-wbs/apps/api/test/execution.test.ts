@@ -1,6 +1,13 @@
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { expect, test } from 'vitest';
 import { checkEvidence, multipartBody } from '../src/execution/evidence.ts';
+
+test('execution: Task 조회를 먼저 가져와도 모듈 초기화가 순환하지 않는다', () => {
+  const module = new URL('../src/tasks/read.ts',import.meta.url).href;
+  const imported = spawnSync(process.execPath,['--conditions=awbs-source','--input-type=module','--eval',`await import(${JSON.stringify(module)})`],{ encoding:'utf8' });
+  expect(imported.status,imported.stderr).toBe(0);
+});
 
 test('execution: 실제 multipart 파일은 바이트·해시·크기를 보존하며 클라이언트 파일명을 쓰지 않는다', async () => {
   const file = Buffer.from('한글\u0000증거');
