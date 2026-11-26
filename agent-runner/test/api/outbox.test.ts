@@ -55,7 +55,7 @@ beforeEach(async () => {
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   url = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`;
-  state = await State.open(home);
+  state = await State.open(home, { now: () => now });
   outbox = new Outbox(state, api(), { now: () => now, monotonic: () => now, random: () => 0 });
 });
 afterEach(async () => {
@@ -65,7 +65,7 @@ afterEach(async () => {
   await rm(home, { recursive: true, force: true });
 });
 
-const reopen = async () => { await state.close(); state = await State.open(home); return state; };
+const reopen = async () => { await state.close(); state = await State.open(home, { now: () => now }); return state; };
 
 test('보고를 먼저 원자 저장하고 재시작해도 키·본문·Runner 식별자를 유지한다', async () => {
   const entry = await usage();
@@ -190,7 +190,7 @@ test('리뷰 H2: 거부된 세션 보고는 별도 보존하고 새 세션 보�
   expect(requests).toHaveLength(2);
   expect(state.snapshot.outbox).toEqual([]);
   expect(outbox.rejected).toMatchObject([{ status: 409, code: 'INVALID_TRANSITION', reason: '시험 오류', fix: '확인', request: { body: { event: 'stop' } } }]);
-  expect(await readdir(join(home, 'state/rejected'))).toHaveLength(1);
+  expect((await readdir(join(home, 'state/rejected'))).filter((n) => /^[a-f0-9-]{36}\.json$/.test(n))).toHaveLength(1);
 });
 
 test('리뷰 H1: 명령 결과가 409로 거부되면 최신 명령을 다시 처리해 초기화를 끝낸다', async () => {
@@ -203,6 +203,7 @@ test('리뷰 H1: 명령 결과가 409로 거부되면 최신 명령을 다시 �
   };
   const r = runner(async () => { cleanups++; return { status: 'done', items: [], holds: [] }; });
   await r.poll();
+  now += 60_000;
   await r.poll();
   await r.poll();
   expect(cleanups).toBe(2);
@@ -233,6 +234,16 @@ test('N1 계속 거부되는 정리는 명령별 1분부터 최대 30분 대기�
   r = runner(async () => { cleanups++; return { status: 'done', items: [], holds: [] }; });
   await r.poll();
   expect(cleanups).toBe(7);
+});
+
+test('N3 서버 조회가 실패해도 30일 지난 원문은 로컬에서 요약한다', async () => {
+  await usage();
+  handle = (_req, res) => fail(res, 400);
+  await outbox.flush();
+  now += 31 * 86400_000;
+  handle = (_req, res) => fail(res, 503);
+  await expect(runner().poll()).rejects.toMatchObject({ status: 503 });
+  expect(state.rejectionStatus).toMatchObject({ kept: 0, summarized: 1, total: 1 });
 });
 
 test('리뷰 M1: 같은 폴더를 두 번째로 여는 Runner는 시작을 거부한다', async () => {
@@ -346,7 +357,7 @@ test('리뷰 L2: 거부된 증거 원문은 지우고 메타데이터와 원인�
   expect(state.snapshot.outbox).toEqual([]);
   expect(outbox.rejected).toMatchObject([{ code: 'VALIDATION_FAILED', request: { body: { sha256: 'a'.repeat(64) } } }]);
   expect(await readdir(join(home, 'state/evidence'))).toEqual([]);
-  const files = await readdir(join(home, 'state/rejected'));
+  const files = (await readdir(join(home, 'state/rejected'))).filter((n) => /^[a-f0-9-]{36}\.json$/.test(n));
   const record = await readFile(join(home, 'state/rejected', files[0] ?? ''), 'utf8');
   expect(record).not.toContain(Buffer.from(text).toString('base64'));
 });

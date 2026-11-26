@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -81,6 +83,7 @@ test('N3 원문 1건은 64 KiB를 넘지 않고 큰 필드는 앞 4 KiB·해시�
   expect(raw?.request.body?.note).toMatchObject({ sha256: expect.stringMatching(/^[a-f0-9]{64}$/), length: expect.any(Number), preview: expect.any(String) });
   expect(Buffer.byteLength(String((raw?.request.body?.note as { preview: string }).preview))).toBeLessThanOrEqual(4096);
   expect(JSON.stringify(state.rejected)).not.toContain('민감한 긴 내용');
+  expect(state.rejectionAlerts).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'REJECTION_TRUNCATED' })]));
 });
 
 test('N3 조회·enqueue는 원문 전체 복사 없이 색인과 키 지도를 쓴다', async () => {
@@ -107,4 +110,67 @@ test('N3 고정 보관 시도는 우선 남기며 요약 뒤에도 차단 근거
   const outbox = new Outbox(state, createApiClient({ baseUrl: 'http://127.0.0.1:1', token: new Secret('x'.repeat(32)) }));
   expect(outbox.rejectedFor('a')).toMatchObject([{ code: 'LEASE_LOST', request: { body: { fence: 7 } } }]);
   expect(state.rejectionStatus.total).toBe(2);
+});
+
+test('N3 요약 저장 직후 강제 종료되어도 총 거부 건수는 줄지 않는다', async () => {
+  const records = [entry('old', {}, now - 2 * DAY), entry('new', {}, now - DAY)];
+  await state.close();
+  await Promise.all(records.map((r) => writeFile(join(home, 'state/rejected', `${r.id}.json`), JSON.stringify(r))));
+  const child = spawn(process.execPath, [join(import.meta.dirname, '../helpers/retention-worker.ts'), home], { stdio: ['pipe', 'pipe', 'pipe'] });
+  try {
+    const [output] = await once(child.stdout, 'data');
+    expect(String(output)).toContain('요약 저장 확인');
+    const closed = once(child, 'close');
+    child.kill('SIGKILL');
+    expect(await closed).toEqual([null, 'SIGKILL']);
+    await reopen({ maxRecords: 1 });
+    expect(state.rejectionStatus.total).toBeGreaterThanOrEqual(2);
+    expect(state.rejectionStatus.kept).toBe(1);
+  } finally { child.kill('SIGKILL'); }
+});
+
+test('N3 이전 epoch는 확정 7일 뒤 요약하고 종류별 요약 키도 상한을 지킨다', async () => {
+  await reopen({ maxSummaryKeys: 3, maxRecords: 1 });
+  await state.reject(entry('c0'));
+  await state.update((draft) => { draft.epoch = 1; });
+  now += 7 * DAY;
+  await state.maintainRejections();
+  expect(state.rejectionStatus).toMatchObject({ kept: 0, summarized: 1 });
+  for (let i = 0; i < 5; i++) await state.reject({ ...entry(`c${String(i + 1)}`), code: `CODE_${String(i)}`, request: { epoch: 1, idempotencyKey: `k${String(i)}` } });
+  const summary = JSON.parse(await readFile(join(home, 'state/rejected/summary.json'), 'utf8')) as { buckets: Record<string, number>; recent: unknown[] };
+  expect(Object.keys(summary.buckets).length).toBeLessThanOrEqual(3);
+  expect(summary.buckets.other).toBeGreaterThan(0);
+  expect(summary.recent.length).toBeLessThanOrEqual(10);
+});
+
+test('N3 고정 보관 기준 초과는 위험 내부 알림으로 남긴다', async () => {
+  await reopen({ pinnedWarning: 2 });
+  for (let i = 0; i < 3; i++) {
+    const r = entry(String(i), { fence: i });
+    await state.reject({ ...r, stream: `attempt:${String(i)}`, operation: 'reportAttemptStatus', code: 'LEASE_LOST', request: { ...r.request, params: { attemptId: String(i) } } });
+  }
+  expect(state.rejectionStatus.level).toBe('danger');
+  expect(state.rejectionAlerts).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'PINNED_REJECTION_OVERFLOW' })]));
+});
+
+test('N2 색인에 있던 기록이 깨져도 횟수와 시도 차단 근거는 요약에 보존한다', async () => {
+  const rejected = { ...entry('a', { fence: 7 }), operation: 'reportAttemptStatus' as const, stream: 'attempt:a', code: 'LEASE_LOST',
+    request: { epoch: 0, idempotencyKey: 'att:a:running:2026-11-26T00:00:00Z', params: { attemptId: 'a' }, body: { fence: 7 } } };
+  await state.reject(rejected);
+  await state.close();
+  await writeFile(join(home, 'state/rejected', `${rejected.id}.json`), '{broken');
+  await reopen();
+  expect(state.rejectionStatus).toMatchObject({ total: 1, summarized: 1, corrupt: 1, pinned: 1 });
+  expect(state.rejectedFor('a')).toMatchObject([{ code: 'LEASE_LOST' }]);
+});
+
+test('N3 격리 원문도 같은 크기 한도를 넘으면 읽지 못한 건수와 바이트를 남긴다', async () => {
+  await state.close();
+  await writeFile(join(home, 'state/rejected', `${randomUUID()}.json`), '깨진 내용'.repeat(1000));
+  await reopen({ maxBytes: 1500 });
+  expect(state.rejectionStatus).toMatchObject({ corrupt: 1, quarantined: 0 });
+  expect(state.rejectionStatus.bytes).toBeLessThanOrEqual(1500);
+  const summary = JSON.parse(await readFile(join(home, 'state/rejected/summary.json'), 'utf8')) as { corruptRemoved: number; corruptBytes: number };
+  expect(summary.corruptRemoved).toBe(1);
+  expect(summary.corruptBytes).toBeGreaterThan(1500);
 });

@@ -1,4 +1,5 @@
 import { setTimeout as sleep } from 'node:timers/promises';
+import { performance } from 'node:perf_hooks';
 import { ApiError, type ApiClient, type ApiRequest, type ApiResponse } from './client.ts';
 import { Outbox, authenticationFailed, retryable, retryDelay, type OutboxOptions } from './outbox.ts';
 import { State, validEpoch, type Message } from '../state/state.ts';
@@ -34,6 +35,9 @@ export class Runner {
   private started = false;
   private sessionEpoch: number | undefined;
   private synchronized = false;
+  private readonly monotonic: () => number;
+  private readonly commandDeadlines = new Map<string, { revision: string; at: number }>();
+  private readonly loggedAlerts = new Map<string, number>();
 
   constructor({ state, api, version, cleanup, now = Date.now, monotonic, onRejected, warn = () => undefined }: RunnerOptions) {
     this.state = state;
@@ -42,10 +46,21 @@ export class Runner {
     this.cleanup = cleanup;
     this.now = now;
     this.warn = warn;
+    this.monotonic = monotonic ?? (() => performance.now());
     this.outbox = new Outbox(state, api, { now, ...(monotonic && { monotonic }), onRejected: async (entry) => {
       warn(`${entry.operation}: ${entry.code ?? '보고 거부'} — 거부 기록을 확인하세요.`);
+      this.reportRejectionAlerts();
       await onRejected?.(entry);
     } });
+    this.reportRejectionAlerts();
+  }
+
+  private reportRejectionAlerts(): void {
+    for (const alert of this.state.rejectionAlerts) {
+      if (this.loggedAlerts.get(alert.code) === alert.revision) continue;
+      this.warn(`${alert.level}: ${alert.detail}`);
+      this.loggedAlerts.set(alert.code, alert.revision);
+    }
   }
 
   get messages(): Message[] { return this.state.snapshot.inbox; }
@@ -102,8 +117,14 @@ export class Runner {
   }
 
   private async pollOnce(): Promise<void> {
+    await this.state.maintainRejections();
+    this.reportRejectionAlerts();
     const response = await this.api('getCommands', { epoch: this.state.snapshot.epoch });
     await this.state.observeEpoch(response.body.currentEpoch);
+    const activeCommands = new Set(response.body.commands.map((c) => JSON.stringify([c.epoch, c.id])));
+    for (const key of this.commandDeadlines.keys()) if (!activeCommands.has(key)) this.commandDeadlines.delete(key);
+    await this.state.syncCommands(response.body.commands);
+    this.reportRejectionAlerts();
     if (response.body.commands.length > 0) {
       this.synchronized = false;
       for (const command of response.body.commands) {
@@ -114,6 +135,14 @@ export class Runner {
         }
         const queued = this.state.snapshot.outbox.find((e) => e.operation === 'reportCommandResult' && e.request.params?.id === command.id);
         if (queued) continue;
+        const retry = this.state.commandDelay(command.epoch, command.id, this.now());
+        const key = JSON.stringify([command.epoch, command.id]);
+        let deadline = this.commandDeadlines.get(key);
+        if (!deadline || deadline.revision !== retry.revision) {
+          deadline = { revision: retry.revision, at: this.monotonic() + retry.delay };
+          this.commandDeadlines.set(key, deadline);
+        }
+        if (deadline.at > this.monotonic()) continue;
         if (!this.cleanup) { this.warn('정리 구현이 연결되지 않아 새 작업을 보류합니다.'); return; }
         const result = await this.cleanup(command);
         await this.outbox.enqueue('reportCommandResult', { epoch: command.epoch, params: { id: command.id }, body: result });

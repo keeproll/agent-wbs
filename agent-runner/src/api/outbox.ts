@@ -3,6 +3,7 @@ import { performance } from 'node:perf_hooks';
 import { isDeepStrictEqual } from 'node:util';
 import { ApiError, ApiTransportError, type ApiClient, type ApiRequest, type ApiResponse, type OperationId } from './client.ts';
 import { MAX_EVIDENCE_BYTES, State, type Entry, type ReportId } from '../state/state.ts';
+import { requestHash } from '../state/rejections.ts';
 
 export interface OutboxOptions {
   now?: () => number;
@@ -47,13 +48,13 @@ export class Outbox {
 
   /** M4-02의 readiness 보고자가 기존 점검 항목과 함께 표시한다. */
   get readinessWarnings(): string[] {
-    const entries = this.rejected;
-    return [...entries.slice(-20).map((e) => `${e.operation}: ${String(e.status ?? '')} ${e.code ?? '보고 거부'}`),
-      ...(entries.length > 20 ? [`보관된 거부 기록 ${String(entries.length)}건. rejected 조회로 원인을 확인하세요.`] : [])];
+    const status = this.state.rejectionStatus;
+    return status.total || status.corrupt ? [`보고 거부 ${String(status.total)}건: 원문 ${String(status.kept)}건, 요약 ${String(status.summarized)}건, 고정 ${String(status.pinned)}건.`,
+      ...this.state.rejectionAlerts.map((a) => `${a.level}: ${a.detail}`)] : [];
   }
 
-  get rejected(): Entry[] { return this.state.rejected; }
-  rejectedFor(attemptId: string): Entry[] { return this.rejected.filter((e) => e.request.epoch === this.state.snapshot.epoch && e.request.params?.attemptId === attemptId); }
+  get rejected() { return this.state.rejected; }
+  rejectedFor(attemptId: string) { return this.state.rejectedFor(attemptId); }
 
   async enqueue<K extends ReportId>(operation: K, request: Omit<ApiRequest<K>, 'idempotencyKey'> & { idempotencyKey?: string }): Promise<Entry> {
     const input: Omit<Entry['request'], 'idempotencyKey'> = request;
@@ -83,9 +84,11 @@ export class Outbox {
     let saved = entry;
     await this.state.update((draft) => {
       if (operation !== 'reportCommandResult' && (draft.pendingEpoch !== null || input.epoch !== draft.epoch)) throw new Error('초기화 정리가 끝나기 전에는 보고를 추가할 수 없습니다.');
-      const existing = [...draft.outbox, ...this.rejected].find((e) => e.request.epoch === input.epoch && e.request.idempotencyKey === key);
+      const pending = draft.outbox.find((e) => e.request.epoch === input.epoch && e.request.idempotencyKey === key);
+      const archived = pending ? undefined : this.state.findRejection(input.epoch, key);
+      const existing = pending ?? archived;
       if (existing) {
-        if (existing.operation !== operation || !isDeepStrictEqual(existing.request, serialized)) throw new Error('같은 멱등 키에 다른 요청을 쌓을 수 없습니다.');
+        if (existing.operation !== operation || (archived ? archived.requestHash !== requestHash(operation, serialized) : !isDeepStrictEqual(existing.request, serialized))) throw new Error('같은 멱등 키에 다른 요청을 쌓을 수 없습니다.');
         saved = existing;
         return;
       }
@@ -109,7 +112,7 @@ export class Outbox {
   private async send(commandsOnly: boolean): Promise<void> {
     const active = new Set(this.state.snapshot.outbox.map((e) => e.id));
     for (const id of this.deadlines.keys()) if (!active.has(id)) this.deadlines.delete(id);
-    const blocked = new Set(this.rejected.filter((e) => e.request.epoch === this.state.snapshot.epoch && e.stream.startsWith('attempt:')).map((e) => e.stream));
+    const blocked = this.state.blockedAttempts();
     for (const entry of this.state.snapshot.outbox) {
       if (commandsOnly && entry.operation !== 'reportCommandResult') continue;
       const latest = this.state.snapshot;

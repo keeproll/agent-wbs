@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { chmod, mkdir, open, readFile, readdir, rename, rm, type FileHandle } from 'node:fs/promises';
+import { chmod, mkdir, open, readFile, readdir, rm, type FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
+import { atomicWrite } from './files.ts';
+import { Rejections, type RejectionOptions } from './rejections.ts';
 import type { ApiRequest, ApiResponse, OperationId } from '../api/client.ts';
 import { OPERATIONS } from '../api/generated/client.ts';
 
@@ -33,6 +35,7 @@ export interface Document {
   cursor: string | null;
   inbox: Message[];
   outbox: Entry[];
+  epochStartedAt?: number;
 }
 
 export function validEpoch(value: unknown): value is number {
@@ -42,7 +45,7 @@ export function validEpoch(value: unknown): value is number {
 function validate(value: Document): void {
   if (value?.version !== 1 || typeof value.runnerId !== 'string' || !value.runnerId || !validEpoch(value.epoch) ||
     (value.pendingEpoch !== null && !validEpoch(value.pendingEpoch)) || (value.cursor !== null && typeof value.cursor !== 'string') ||
-    !Array.isArray(value.inbox) || !Array.isArray(value.outbox)) throw new Error('Runner 상태 파일 형식이 올바르지 않습니다.');
+    !Array.isArray(value.inbox) || !Array.isArray(value.outbox) || (value.epochStartedAt !== undefined && !Number.isFinite(value.epochStartedAt))) throw new Error('Runner 상태 파일 형식이 올바르지 않습니다.');
   const ids = new Set<string>();
   for (const e of value.outbox) {
     if (!e || typeof e.id !== 'string' || !/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(e.id) || ids.has(e.id) || !Object.hasOwn(OPERATIONS, e.operation) ||
@@ -59,17 +62,6 @@ function validate(value: Document): void {
 
 export class StateLockError extends Error { override name = 'StateLockError'; }
 export class StateStorageError extends Error { override name = 'StateStorageError'; }
-
-async function atomicWrite(directory: string, name: string, content: string | Uint8Array): Promise<void> {
-  const temp = join(directory, `${randomUUID()}.tmp`);
-  try {
-    const file = await open(temp, 'wx', 0o600);
-    try { await file.writeFile(content); await file.sync(); } finally { await file.close(); }
-    await rename(temp, join(directory, name));
-    const folder = await open(directory, 'r');
-    try { await folder.sync(); } finally { await folder.close(); }
-  } finally { await rm(temp, { force: true }); }
-}
 
 async function acquireLock(directory: string): Promise<FileHandle> {
   const lock = await open(join(directory, 'lock'), 'a+', 0o600);
@@ -94,15 +86,18 @@ export class State {
   private readonly lock: FileHandle;
   private closed = false;
   private failed = false;
-  private archives: Entry[] = [];
+  private archives!: Rejections;
+  private readonly now: () => number;
 
-  private constructor(home: string, data: Document, lock: FileHandle) {
+  private constructor(home: string, data: Document, lock: FileHandle, now: () => number) {
     this.directory = join(home, 'state');
     this.data = data;
     this.lock = lock;
+    this.now = now;
   }
 
-  static async open(home: string): Promise<State> {
+  static async open(home: string, options: RejectionOptions = {}): Promise<State> {
+    const now = options.now ?? Date.now;
     const directory = join(home, 'state');
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const lock = await acquireLock(directory);
@@ -122,15 +117,11 @@ export class State {
         if (typeof (checked.file as unknown as { base64?: unknown } | undefined)?.base64 === 'string') delete checked.file;
         return checked;
       }) });
-      const state = new State(home, data, lock);
-      for (const name of await readdir(join(directory, 'rejected'))) {
-        if (!/^[a-f0-9-]{36}\.json$/.test(name)) continue;
-        const entry = JSON.parse(await readFile(join(directory, 'rejected', name), 'utf8')) as Entry;
-        validate({ ...data, outbox: [entry] });
-        if (`${entry.id}.json` !== name || entry.state !== 'rejected') throw new StateStorageError('거부 기록 형식이 올바르지 않습니다.');
-        state.archives.push(entry);
-      }
       const before = structuredClone(data);
+      data.epochStartedAt ??= now();
+      const state = new State(home, data, lock, now);
+      state.archives = await Rejections.open(join(directory, 'rejected'), () => ({ epoch: state.data.epoch, epochStartedAt: state.data.epochStartedAt ?? now() }),
+        (entry) => { validate({ ...state.data, outbox: [entry] }); }, options);
       // 이전 버전의 인라인 증거와 거부 기록도 잃지 않고 새 저장 방식으로 옮긴다.
       for (const entry of data.outbox) {
         const legacy = entry.file as unknown as { base64?: string; type: string } | undefined;
@@ -146,9 +137,9 @@ export class State {
           entry.file = { name: entry.id, type: legacy.type };
         }
       }
-      for (const entry of [...data.outbox]) if (entry.state === 'rejected' && !state.archives.some((e) => e.id === entry.id)) await state.reject(entry);
+      for (const entry of [...data.outbox]) if (entry.state === 'rejected' && !state.archives.hasSource(entry.id)) await state.reject(entry);
       data = state.data;
-      data.outbox = data.outbox.filter((e) => !state.archives.some((r) => r.id === e.id));
+      data.outbox = data.outbox.filter((e) => !state.archives.hasSource(e.id));
       validate(data);
       if (!existed || !isDeepStrictEqual(before, data)) await atomicWrite(directory, 'runner.json', JSON.stringify(data));
       if (existed) await chmod(join(directory, 'runner.json'), 0o600);
@@ -160,12 +151,22 @@ export class State {
   }
 
   get snapshot(): Document { return structuredClone(this.data); }
-  get rejected(): Entry[] { return structuredClone(this.archives); }
+  get rejected() { return this.archives.entries; }
+  get rejectionStatus() { return this.archives.status; }
+  get rejectionAlerts() { return this.archives.alerts; }
+  findRejection(epoch: number, key: string) { return this.archives.find(epoch, key); }
+  rejectedFor(attemptId: string) { return this.archives.forAttempt(this.data.epoch, attemptId); }
+  blockedAttempts() { return this.archives.blocked(this.data.epoch); }
+  readRejection(id: string) { return this.archives.read(id); }
+  maintainRejections() { return this.archives.maintain(); }
+  syncCommands(commands: { epoch: number; id: string }[]) { return this.archives.syncCommands(commands); }
+  commandDelay(epoch: number, id: string, at: number) { return this.archives.commandDelay(epoch, id, at); }
 
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
     await this.tail;
+    await this.archives.close();
     await this.lock.close();
   }
 
@@ -181,12 +182,7 @@ export class State {
     if (entry.file) await rm(join(this.directory, 'evidence', entry.file.name), { force: true });
   }
   async reject(entry: Entry): Promise<void> {
-    const record = structuredClone(entry);
-    delete record.file;
-    record.state = 'rejected';
-    record.reason ??= '이전 버전에서 거부된 보고입니다. 오류 코드를 확인하세요.';
-    await atomicWrite(join(this.directory, 'rejected'), `${record.id}.json`, JSON.stringify(record));
-    if (!this.archives.some((e) => e.id === record.id)) this.archives.push(record);
+    await this.archives.reject(entry);
     await this.update((draft) => { draft.outbox = draft.outbox.filter((e) => e.id !== entry.id); });
     await this.removeEvidence(entry);
   }
@@ -196,12 +192,15 @@ export class State {
     const operation = this.tail.then(async () => {
       const draft = structuredClone(this.data);
       change(draft);
+      const epochChanged = draft.epoch !== this.data.epoch;
+      if (epochChanged) draft.epochStartedAt = this.now();
       validate(draft);
       if (isDeepStrictEqual(draft, this.data)) return;
       try {
         await atomicWrite(this.directory, 'runner.json', JSON.stringify(draft));
         this.data = draft;
       } catch { this.failed = true; throw new StateStorageError('상태 파일 저장에 실패했습니다. 원본을 보존하고 다시 시작하세요.'); }
+      if (epochChanged) await this.archives.maintain();
     });
     this.tail = operation.catch(() => undefined);
     return operation;
