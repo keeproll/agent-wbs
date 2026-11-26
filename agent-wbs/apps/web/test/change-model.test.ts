@@ -4,6 +4,9 @@ import {
 } from '../src/features/change/model.ts';
 import type { Proposal, ProposalOp } from '../src/features/change/types.ts';
 
+/** 계약의 op 합집합 타입은 객체 리터럴로 바로 만들기 어려워 시험에서만 바꿔 쓴다. */
+const ops_ = (list: object[]) => list as unknown as ProposalOp[];
+
 const TASKS = new Map<string, TaskInfo>([
   ['TASK-0005', { title: 'Task CRUD API', status: 'planning' }],
   ['TASK-0006', { title: 'Dependency 검증', status: 'ready' }],
@@ -24,13 +27,13 @@ describe('CP 상태 표시(원본 CPST P L4455 + 계약의 held)', () => {
 
 describe('변경 전/후 비교 행(원본 diffRows P L5651)', () => {
   it('7가지 변경과 add를 원본 구분·항목 문구로 만든다', () => {
-    const ops: ProposalOp[] = [
+    const ops = ops_([
       { op: 'modify', task: 'TASK-0006', field: 'priority', before: 2, after: 0 },
       { op: 'modify', task: 'TASK-0006', field: 'scopeAdd', after: '경로 검사 추가' },
       { op: 'remove', task: 'TASK-0005' },
       { op: 'dep-add', pred: 'TASK-0005', succ: 'TASK-0006', type: 'SS' },
       { op: 'dep-remove', pred: 'TASK-0005', succ: 'TASK-0006' },
-    ];
+    ]);
     const rows = diffRows(ops, {}, TASKS, []);
     expect(rows.map((r) => [r.kindL, r.target, r.field, r.before, r.after])).toEqual([
       ['수정', 'TASK-0006', '우선순위', '보통', '긴급'],
@@ -43,7 +46,7 @@ describe('변경 전/후 비교 행(원본 diffRows P L5651)', () => {
     expect(rows[0]?.canOpen).toBe(true);
   });
   it('미리보기 diff의 변경 전 값이 있으면 그것을 쓴다(서버 계산)', () => {
-    const rows = diffRows([{ op: 'modify', task: 'TASK-0006', field: 'doneCond', after: '새 조건' }], {}, TASKS,
+    const rows = diffRows(ops_([{ op: 'modify', task: 'TASK-0006', field: 'doneCond', after: '새 조건' }]), {}, TASKS,
       [{ index: 0, op: 'modify', target: 'TASK-0006', field: 'doneCond', before: '옛 조건', after: '새 조건' }]);
     expect(rows[0]?.before).toBe('옛 조건');
   });
@@ -60,15 +63,15 @@ describe('변경 전/후 비교 행(원본 diffRows P L5651)', () => {
 
 describe('opText(원본 P L5642)', () => {
   it('Planning 검토의 「반영될 변경」 칩 문구', () => {
-    expect(opText({ op: 'modify', task: 'TASK-0006', field: 'priority', after: 1 }, null)).toBe('TASK-0006 우선순위: 높음');
-    expect(opText({ op: 'remove', task: 'TASK-0005' }, null)).toBe('TASK-0005 취소');
-    expect(opText({ op: 'dep-add', pred: 'TASK-0005', succ: 'TASK-0006', type: 'FS' }, null)).toBe('선행 추가 TASK-0005 → TASK-0006 (FS)');
+    expect(opText(ops_([{ op: 'modify', task: 'TASK-0006', field: 'priority', after: 1 }])[0] as ProposalOp, null)).toBe('TASK-0006 우선순위: 높음');
+    expect(opText(ops_([{ op: 'remove', task: 'TASK-0005' }])[0] as ProposalOp, null)).toBe('TASK-0005 취소');
+    expect(opText(ops_([{ op: 'dep-add', pred: 'TASK-0005', succ: 'TASK-0006', type: 'FS' }])[0] as ProposalOp, null)).toBe('선행 추가 TASK-0005 → TASK-0006 (FS)');
   });
 });
 
 describe('영향 분석(D-27: 취소 CP의 제거 관계·풀리는 후속·계속 차단)', () => {
   it('제거된 관계와, 남은 선행이 없어 실제로 풀리는 후속을 구분한다', () => {
-    const rows = impactRows([{ op: 'remove', task: 'TASK-0005' }], {}, TASKS, {
+    const rows = impactRows(ops_([{ op: 'remove', task: 'TASK-0005' }]), {}, TASKS, {
       removedDependencies: [
         { pred: 'TASK-0005', succ: 'TASK-0006', type: 'SS', reason: 'pred-cancelled' },
         { pred: 'TASK-0005', succ: 'TASK-0007', type: 'FS', reason: 'pred-cancelled' },
