@@ -9,6 +9,7 @@ export function buildApp(pool: Pool, logger: FastifyServerOptions['logger'] = fa
   security: SecurityOptions = { origin: 'http://127.0.0.1:3100', lan: false }): FastifyInstance {
   const app = Fastify({
     logger,
+    ajv: { customOptions: { removeAdditional: false } },
     clientErrorHandler: (error, socket) => {
       app.log.warn({ err: error }, 'client error');
       if (!socket.writable) return;
