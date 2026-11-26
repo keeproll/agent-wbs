@@ -123,6 +123,31 @@ test('QA FAIL 뒤 자동 재작업·재검증 PASS가 차단 결함을 해소하
   expect((await owner.query('select status from tasks where id=$1',[a.id])).rows).toEqual([{ status:'gate' }]);
 });
 
+test.each(['PASS','BLOCKED'])('%s에 모순된 결함을 함께 보고해도 새 결함을 저장하지 않고 검증 흐름을 유지한다', async outcome => {
+  const a = await running(); await check(a); expect((await report(a)).statusCode).toBe(201);
+  const qa = await next(a);
+  expect((await report(qa,'FAIL',{ verification:{ ...result(qa).verification,result:'FAIL',defects:[{ text:'기존 차단 결함',blocking:true }] } })).statusCode).toBe(201);
+  const rework = await next(qa); await check(rework); expect((await report(rework)).statusCode).toBe(201);
+  const reverify = await next(rework);
+  const r = await report(reverify,outcome,{ verification:{ ...result(reverify).verification,result:outcome,
+    defects:[{ text:'모순된 차단 결함',blocking:true },{ text:'모순된 비차단 결함',blocking:false }] } });
+  expect(r.statusCode,r.body).toBe(201);
+  expect((await owner.query('select content from defects order by def_key')).rows).toEqual([{ content:'기존 차단 결함' }]);
+  const current = (await get(`tasks/${a.key}/verifications`)).json().items.find((v: { attemptId: string }) => v.attemptId === reverify.attempt);
+  expect(current).toMatchObject({ result:outcome,defects:[] });
+  expect((await owner.query('select kind from defect_events')).rows).toEqual(outcome === 'PASS' ? [{ kind:'resolved' }] : []);
+  if (outcome === 'BLOCKED') {
+    expect((await owner.query('select status,verif_state from tasks where id=$1',[a.id])).rows).toEqual([{ status:'verifying',verif_state:'blocked' }]);
+    expect((await owner.query("select * from runner_jobs where kind='integrate'")).rowCount).toBe(0);
+    expect((await get(`tasks/${a.key}/gate`)).json()).toMatchObject({ passed:false,conditions:expect.arrayContaining([expect.objectContaining({ key:'defects',result:'FAIL' })]) });
+    const request = await app.inject({ method:'POST',url:`/api/tasks/${a.key}/runs`,headers:lead(),payload:{ updatedAt:await version(a.key),kind:'reverify' } });
+    expect(request.statusCode,request.body).toBe(202);
+    expect((await report(await next(reverify))).statusCode).toBe(201);
+  }
+  expect((await get(`tasks/${a.key}/gate`)).json()).toMatchObject({ passed:true });
+  expect((await owner.query("select kind from runner_jobs where kind='integrate'")).rows).toEqual([{ kind:'integrate' }]);
+});
+
 test('BLOCKED는 체크리스트와 상태를 보존하고 자동 반복하지 않으며 버튼으로 새 검증을 만든다', async () => {
   const a = await running('qa'); await check(a);
   const blocked = await report(a,'BLOCKED'); expect(blocked.statusCode,blocked.body).toBe(201);

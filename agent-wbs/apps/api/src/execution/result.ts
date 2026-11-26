@@ -52,11 +52,12 @@ export async function reportResult(client: PoolClient, attemptId: string, princi
         if (v.result !== 'BLOCKED') await client.query('update checklist_items set done=$2,evidence=$3::jsonb,note=$4 where id=$1',
           [item.id,updated.done,JSON.stringify(updated.evidence || null),reported.note ?? updated.note]);
       }
-      if (v.result === 'PASS' && !v.defects.some(d => d.blocking)) await client.query(`insert into defect_events(project_id,defect,kind,resolved_by_verification,detail)
+      if (v.result === 'PASS') await client.query(`insert into defect_events(project_id,defect,kind,resolved_by_verification,detail)
         select $1,d.id,'resolved',$2,'{}' from defects d join verifications old on old.id=d.verification join task_attempts old_a on old_a.id=old.attempt
         where old_a.task=$3 and not exists(select 1 from defect_events e where e.defect=d.id and e.kind='resolved')`, [task.project_id,verification.id,task.id]);
     }
-    for (const defect of v.defects) {
+    // 원본 registerQa처럼 PASS·BLOCKED에서 보고한 새 결함은 반영하지 않는다.
+    for (const defect of v.result === 'FAIL' ? v.defects : []) {
       const n = required((await client.query<{ value: string }>("insert into counters(project_id,kind,value) values($1,'defect',1) on conflict(project_id,kind) do update set value=counters.value+1 returning value", [task.project_id])).rows[0]).value;
       await client.query('insert into defects(project_id,def_key,verification,blocking,content) values($1,$2,$3,$4,$5)', [task.project_id,`DEF-${String(n).padStart(4,'0')}`,verification.id,defect.blocking,defect.text]);
     }
