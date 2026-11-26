@@ -11,15 +11,22 @@ const Pid = Type.Integer({ minimum: 1 });
 const PushedCommit = Body({ sha: c.Sha, at: c.Timestamp, author: Type.String(), message: Type.String() });
 /**
  * `git diff --raw -M --numstat <base> <head> -- prototype/` 한 줄.
- * status A(추가)·M(수정)·D(삭제)·R(이름 변경, from=이전 경로). blob은 전후 내용의 git blob SHA(없으면 null).
+ * status A(추가)·M(수정)·D(삭제)·R(이름 변경, from=이전 경로)·T(종류 변경: 일반 파일 ↔ 심볼릭 링크).
+ * blob은 전후 내용의 git blob SHA, mode는 전후 git 파일 모드(100644·100755·120000 등). 없는 쪽은 둘 다 null
+ * (raw diff의 000000·0000000은 null로 보낸다). M은 실행 권한만 바뀌어도 생기므로 oldBlob과 newBlob이 같을 수 있다.
  * added·deleted는 numstat 줄 수(바이너리는 0).
+ * 서버는 보고 수신과 head 이동을 이 전체 차이(모드 포함)로 판단하고, 분석용 순 변경은 경로별 존재·내용 blob·파일과 링크 구분으로 판단한다.
+ * 실행 권한만 바뀐 보고는 head·트리만 옮기고 팀장 확인 항목·입력 버전을 만들지 않는다.
  */
+const Mode = Type.String({ pattern: '^[0-7]{6}$' });
 const InputDiff = Body({
-  status: AnyOf('A', 'M', 'D', 'R'),
+  status: AnyOf('A', 'M', 'D', 'R', 'T'),
   path: c.RepoPath,
   from: Opt(c.RepoPath),
   oldBlob: Nullable(c.Sha),
   newBlob: Nullable(c.Sha),
+  oldMode: Nullable(Mode),
+  newMode: Nullable(Mode),
   added: c.Count,
   deleted: c.Count,
 });
@@ -474,7 +481,7 @@ export const runnerOperations = [
      * - baseIsAncestor: `git merge-base --is-ancestor <base> <head>`의 종료 코드(0=true, 1=false, 그 밖은 보고 중단).
      *   **신뢰 전제**: 서버는 git을 직접 보지 않으므로 이 값과 changes·treeHash는 Runner 관측을 믿는다.
      *   false면 이력 재작성으로 보고 아무것도 받지 않으며 팀장에게 경고한다.
-     * - treeHash: `git rev-parse <head>:prototype`(head의 prototype/ 트리 SHA). 차이가 비었는지와 트리가 바뀌었는지의 대조에 쓴다.
+     * - treeHash: `git rev-parse <head>:prototype`(모드를 포함한 head의 prototype/ 트리 SHA). 차이가 비었는지와 트리가 바뀌었는지의 대조에 쓴다.
      * - changes: `git diff --raw -M --numstat <base> <head> -- prototype/` 결과. 비어 있지 않을 때만 입력 변경 항목이 생긴다.
      * - commits: 참고 정보(화면 표시용). `git rev-list --first-parent --reverse <base>..<head> -- prototype/`. 판정에 쓰지 않는다.
      */

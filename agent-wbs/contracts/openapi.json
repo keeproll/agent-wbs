@@ -23296,6 +23296,8 @@
                         "path",
                         "oldBlob",
                         "newBlob",
+                        "oldMode",
+                        "newMode",
                         "added",
                         "deleted"
                       ],
@@ -23305,7 +23307,8 @@
                             "A",
                             "M",
                             "D",
-                            "R"
+                            "R",
+                            "T"
                           ]
                         },
                         "path": {
@@ -23328,6 +23331,28 @@
                           "anyOf": [
                             {
                               "$ref": "#/components/schemas/Sha"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "oldMode": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[0-7]{6}$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "newMode": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[0-7]{6}$"
                             },
                             {
                               "type": "null"

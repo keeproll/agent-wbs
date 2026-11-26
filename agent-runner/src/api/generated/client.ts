@@ -1187,11 +1187,13 @@ export interface Operations {
         baseIsAncestor: boolean;
         treeHash: Sha;
         changes: ({
-          status: "A" | "M" | "D" | "R";
+          status: "A" | "M" | "D" | "R" | "T";
           path: RepoPath;
           from?: RepoPath;
           oldBlob: Sha | null;
           newBlob: Sha | null;
+          oldMode: string | null;
+          newMode: string | null;
           added: number;
           deleted: number;
         })[];

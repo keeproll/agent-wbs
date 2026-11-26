@@ -403,7 +403,9 @@
      "oldBlob": "dddddddddddddddddddddddddddddddddddddddd",
      "newBlob": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
      "added": 42,
-     "deleted": 3
+     "deleted": 3,
+     "oldMode": "100644",
+     "newMode": "100644"
     },
     {
      "status": "R",
@@ -411,6 +413,18 @@
      "from": "prototype/uiux/old.html",
      "oldBlob": "ffffffffffffffffffffffffffffffffffffffff",
      "newBlob": "1111111111111111111111111111111111111111",
+     "added": 0,
+     "deleted": 0,
+     "oldMode": "100644",
+     "newMode": "100644"
+    },
+    {
+     "status": "M",
+     "path": "prototype/uiux/run.sh",
+     "oldBlob": "2222222222222222222222222222222222222222",
+     "newBlob": "2222222222222222222222222222222222222222",
+     "oldMode": "100644",
+     "newMode": "100755",
      "added": 0,
      "deleted": 0
     }
