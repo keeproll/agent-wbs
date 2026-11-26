@@ -30,8 +30,22 @@ export async function lockGraph(client: PoolClient, projectId: string): Promise<
   await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [`awbs:task-graph:${projectId}`]);
 }
 
+/**
+ * Timestamp 스키마는 모양(정규식)만 본다. `2026-02-30`처럼 달력에 없는 값이 DB 변환에서 500이 되지 않게
+ * 날짜·시각이 실제로 있는지 왕복 변환으로 확인한다. 소수점 아래(µs)는 모양 검사로 충분하다.
+ */
+export function realTimestamp(value: string): boolean {
+  const local = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.\d{1,6})?Z$/.exec(value)?.[1];
+  if (!local) return false;
+  const date = new Date(`${local}Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().startsWith(local);
+}
+
 /** 화면이 본 버전과 다르면 409. 그 뒤에 쌓인 이력을 충돌 창에 보여 준다(contracts §1, G§0.3). */
 export async function assertVersion(client: PoolClient, task: LockedTask, expected: string): Promise<void> {
+  if (!realTimestamp(expected)) {
+    throw new TaskError('VALIDATION_FAILED', {}, [{ path: 'updatedAt', rule: 'format', message: '달력에 없는 날짜·시각입니다.' }]);
+  }
   const same = (await client.query<{ same: boolean }>('select $1::timestamptz=$2::timestamptz as same', [task.updated_at, expected])).rows[0]?.same;
   if (same) return;
   const history = await client.query<{ at: string; actor: string; kind: string; before: unknown; after: unknown; ref: { field?: string } | null }>(
@@ -41,6 +55,15 @@ export async function assertVersion(client: PoolClient, task: LockedTask, expect
     current: current ? publicDetail(current) : null,
     changes: history.rows.map((row) => ({ at: row.at, actor: row.actor, field: row.ref?.field ?? row.kind, before: row.before, after: row.after })),
   });
+}
+
+/** 완료·취소는 종료 상태다(data-model §3.1). 완료 결과와 검증 당시 내용을 보존한다(data-model §4, G§5.2-1, D-20). */
+export const TERMINAL: readonly TaskStatus[] = ['done', 'cancelled'];
+export function assertEditable(task: LockedTask): void {
+  if (TERMINAL.includes(task.status)) {
+    throw new TaskError('INVALID_TRANSITION', { taskKey: task.task_key, status: task.status },
+      [], '완료·취소된 Task는 내용을 바꾸거나 지울 수 없습니다. 바꿀 내용은 새 Task나 변경 제안으로 처리하세요.');
+  }
 }
 
 export interface HistoryInput {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { splitSettingsToDomain, type Pool, type PoolClient } from '@awbs/db';
 import {
-  assertDependency, displayKey, DomainError, isBlocked, JUDGED_RULES, judgementOf, lifecycleTransition,
+  assertDependency, displayKey, DomainError, isBlocked, JUDGED_RULES, judgementOf, lifecycleTransition, type VerificationResult,
   type Agent, type ApprovalInput, type JudgedRules, type TaskStatus,
 } from '@awbs/shared';
 import { OPERATIONS, type Operation } from '@awbs/shared/api';
@@ -12,7 +12,7 @@ import { canonicalJson, specBody, subjectHash, type Ac, type Output, type Overvi
 import { acOf, listTasks, overviewOf, publicDetail, taskDetail, type TaskDetail } from './read.ts';
 import { unknownFields } from './strict.ts';
 import {
-  assertVersion, changed, changeEvent, lockGraph, lockTask, lockTasks, nextChecklistKey, record, SYSTEM, touch,
+  assertEditable, assertVersion, changed, changeEvent, lockGraph, lockTask, lockTasks, nextChecklistKey, record, SYSTEM, touch,
   type Change, type LockedTask,
 } from './write.ts';
 
@@ -66,6 +66,7 @@ export function registerTaskRoutes(app: FastifyInstance, pool: Pool): void {
     const actions = new Map<string, string>();
     installTaskErrors(scope, actions);
 
+    // TEMP-STRICT: 공통 validator 수정 뒤 이 훅과 strict.ts를 지운다.
     // Fastify 기본 검증은 모르는 필드를 지우므로, 원래 본문에서 먼저 찾아 거부한다(contracts §2.1 PATCH의 status).
     scope.addHook('preValidation', async (request) => {
       const op = operations.get(`${request.method} ${request.routeOptions.url ?? ''}`);
@@ -92,6 +93,7 @@ export function registerTaskRoutes(app: FastifyInstance, pool: Pool): void {
       const client = clientOf(request);
       const task = await lockTask(client, keyOf(request));
       await assertVersion(client, task, version);
+      assertEditable(task);
       const changes = await fn(client, task);
       if (changes.length) await touch(client, task);
       return changed(client, task, changes);
@@ -182,6 +184,16 @@ export function registerTaskRoutes(app: FastifyInstance, pool: Pool): void {
       await lockGraph(client, found.project_id);
       const task = await lockTask(client, keyOf(request));
       await assertVersion(client, task, updatedAt);
+      assertEditable(task);
+      // 시작한 Task는 지우지 않는다. 시작 전 상태라도 실행 기록·열린 보유가 있으면 시작된 것으로 본다(D-16, P cancelBeforeStart).
+      // 시작 후 삭제를 허용하려면 중단·보유 정리 절차부터 정해야 한다(독립 리뷰 P1-1).
+      const started = (await client.query<{ attempts: boolean; holds: boolean }>(
+        `select exists(select 1 from task_attempts where task=$1) as attempts,
+                exists(select 1 from execution_holds where task=$1 and closed_at is null) as holds`, [task.id])).rows[0];
+      if (!['planning', 'approval', 'ready'].includes(task.status) || started?.attempts || started?.holds) {
+        throw new TaskError('INVALID_TRANSITION', { taskKey: task.task_key, status: task.status, executionHistory: started?.attempts ?? false, openHold: started?.holds ?? false },
+          [], '이미 시작했거나 실행 기록이 있는 Task는 삭제할 수 없습니다.');
+      }
       const successors = (await client.query<{ task_key: string }>(
         'select s.task_key from task_dependencies d join tasks s on s.id=d.succ where d.pred=$1 and s.deleted_at is null order by s.task_key', [task.id])).rows;
       if (successors.length) throw new TaskError('TASK_HAS_SUCCESSORS', { successors: successors.map((row) => row.task_key) });
@@ -214,6 +226,7 @@ export function registerTaskRoutes(app: FastifyInstance, pool: Pool): void {
       const pred = locked.get(body.predTaskKey);
       if (!pred) throw new TaskError('TASK_NOT_FOUND', { taskKey: body.predTaskKey });
       await assertVersion(client, succ, body.updatedAt);
+      assertEditable(succ);
       const tasks = (await client.query<{ id: string; status: TaskStatus; task_key: string }>('select id,status,task_key from tasks where project_id=$1 and deleted_at is null', [succ.project_id])).rows;
       const deps = (await client.query<{ pred: string; succ: string; type: 'FS' | 'SS' }>('select pred,succ,dep_type as type from task_dependencies where project_id=$1', [succ.project_id])).rows;
       const candidate = { pred: pred.id, succ: succ.id, type: body.depType };
@@ -251,6 +264,7 @@ export function registerTaskRoutes(app: FastifyInstance, pool: Pool): void {
       if (!dep) throw notFound();
       const succ = await lockTask(client, dep.succ_key);
       await assertVersion(client, succ, updatedAt);
+      assertEditable(succ);
       await client.query('delete from task_dependencies where id=$1', [dependencyId]);
       await record(client, { projectId: succ.project_id, taskId: succ.id, kind: '선행 관계', text: `선행 Task ${dep.pred_key} 삭제`, before: `${dep.pred_key} (${dep.dep_type})`, ref: { field: 'predecessors', dependencyId } });
       await touch(client, succ);
@@ -270,14 +284,14 @@ export function registerTaskRoutes(app: FastifyInstance, pool: Pool): void {
           .map((field) => ({ field, before: before[field], after: after[field] }));
         if (!changes.length) return [];
         // 명세가 바뀌면 revision을 올린다. 이전 revision의 검증 근거는 무효가 된다(data-model §3.1 gate→verifying).
-        await client.query(
+        const revision = (await client.query<{ revision: number }>(
           `insert into task_specs(project_id,task,overview,spec,ac,revision) values($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,1)
-           on conflict (task) do update set overview=excluded.overview,spec=excluded.spec,ac=excluded.ac,revision=task_specs.revision+1`,
-          [task.project_id, task.id, JSON.stringify(after.overview), JSON.stringify(after.spec), JSON.stringify(after.ac)]);
+           on conflict (task) do update set overview=excluded.overview,spec=excluded.spec,ac=excluded.ac,revision=task_specs.revision+1 returning revision`,
+          [task.project_id, task.id, JSON.stringify(after.overview), JSON.stringify(after.spec), JSON.stringify(after.ac)])).rows[0]?.revision ?? 1;
         for (const change of changes) {
           await record(client, { projectId: task.project_id, taskId: task.id, kind: '명세 수정', text: `작업 명세 「${labels[change.field as keyof typeof labels]}」 수정`, before: change.before, after: change.after, ref: { field: change.field } });
         }
-        return changes;
+        return [...changes, ...await invalidateGate(client, task, revision)];
       });
     });
 
@@ -428,4 +442,27 @@ async function assertJudged(client: PoolClient, detail: TaskDetail): Promise<voi
     return state === 'met' ? [] : [{ rule, reason: state === 'missing' ? 'JUDGEMENT_MISSING' : 'JUDGEMENT_NOT_MET', message }];
   });
   if (items.length) throw new TaskError('SPLIT_JUDGEMENT_REQUIRED', { items, subjectHash: hash });
+}
+
+/**
+ * Q-05 14행·data-model §3.1: Gate 대기에서 검증한 명세가 바뀌면 검증 근거가 무효가 되어 `gate → verifying`이다.
+ * 판정은 shared의 lifecycleTransition(invalidate)이 하고, 원본 검증 행은 그대로 두고 무효 기록만 추가한다.
+ * Gate가 아닌 상태의 낡은 검증은 M2-06이 PASS 반영 때 revision을 대조해 거부한다.
+ */
+async function invalidateGate(client: PoolClient, task: LockedTask, revision: number): Promise<Change[]> {
+  if (task.status !== 'gate') return [];
+  const latest = (await client.query<{ id: string; result: VerificationResult; head_sha: string; spec_revision: number }>(
+    `select v.id,v.result,v.head_sha,v.spec_revision from verifications v join task_attempts a on a.id=v.attempt
+     where a.task=$1 order by v.created_at desc,v.id desc limit 1`, [task.id])).rows[0];
+  const next = latest ? lifecycleTransition('gate', {
+    type: 'invalidate',
+    basis: { headSha: latest.head_sha, specRevision: revision, inputVersion: 0 },
+    verification: { result: latest.result, headSha: latest.head_sha, specRevision: latest.spec_revision, inputVersion: 0, invalidated: false },
+  }) : 'verifying';
+  if (next === 'gate') return [];
+  const reason = latest ? `명세 revision ${String(latest.spec_revision)} → ${String(revision)}` : `명세 revision ${String(revision)}: 근거가 될 검증 없음`;
+  if (latest) await client.query('insert into verification_invalidations(project_id,verification,reason) values($1,$2,$3)', [task.project_id, latest.id, reason]);
+  await client.query('update tasks set status=$2 where id=$1', [task.id, next]);
+  await record(client, { projectId: task.project_id, taskId: task.id, actor: SYSTEM, kind: '재검증', text: `${reason} — 검증 근거 무효, 재검증 필요`, before: 'gate', after: next, ref: { field: 'lifecycleStatus', verification: latest?.id ?? null } });
+  return [{ field: 'lifecycleStatus', before: 'gate', after: next }];
 }

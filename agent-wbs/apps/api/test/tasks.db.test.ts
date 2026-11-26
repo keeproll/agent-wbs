@@ -506,6 +506,147 @@ describe('tasks 명세·설계·체크리스트·산출물', () => {
   });
 });
 
+/** 실행 기록 fixture(독립 리뷰 재현과 같은 행). 실제 Runner 경로는 M2-05·06이 만든다. */
+async function addAttempt(key: string, opts: { status: 'running' | 'completed'; kind?: string; revision?: number; result?: 'PASS' | 'FAIL' }) {
+  const job = (await ownerPool.query<{ id: string }>("insert into runner_jobs(project_id,kind,payload,epoch,state,dedup_key) values($1,'attempt','{}',1,$2,$3) returning id",
+    [projectId, opts.status === 'running' ? 'started' : 'done', crypto.randomUUID()])).rows[0]?.id;
+  const attempt = (await ownerPool.query<{ id: string }>(`insert into task_attempts(project_id,task,attempt_key,attempt_no,job,base_sha,head_sha,spec_revision,kind,agent,status,started_at,ended_at,model_id,effort)
+    select project_id,id,$2,coalesce((select max(attempt_no) from task_attempts where task=t.id),0)+1,$3,$4,$4,$5,$6::attempt_kind,'Claude',$7::attempt_status,now(),case when $7::text='running' then null else now() end,'m','high' from tasks t where task_key=$1 returning id`,
+  [key, crypto.randomUUID(), job, 'b'.repeat(40), opts.revision ?? 1, opts.kind ?? 'dev', opts.status])).rows[0]?.id;
+  if (opts.result) {
+    return (await ownerPool.query<{ id: string }>("insert into verifications(project_id,attempt,result,head_sha,spec_revision,cmd,expected,actual) values($1,$2,$3,$4,$5,'test','PASS','PASS') returning id",
+      [projectId, attempt, opts.result, 'b'.repeat(40), opts.revision ?? 1])).rows[0]?.id;
+  }
+  return attempt;
+}
+const specRevision = async (key: string) =>
+  (await ownerPool.query<{ revision: number }>('select s.revision from task_specs s join tasks t on t.id=s.task where t.task_key=$1', [key])).rows[0]?.revision ?? 0;
+const del = async (key: string) => call('DELETE', `/api/tasks/${key}?updatedAt=${encodeURIComponent(await version(key))}`);
+
+describe('tasks 독립 리뷰 P1·P2 회귀', () => {
+  test('P1-1: 시작한 Task·실행 기록이 있는 Task는 삭제할 수 없다(409 INVALID_TRANSITION)', async () => {
+    const running = await create();
+    await setStatus(running, 'running');
+    await addAttempt(running, { status: 'running' });
+    const removed = await del(running);
+    expect(removed.statusCode, removed.body).toBe(409);
+    expect(errorOf(removed).code).toBe('INVALID_TRANSITION');
+    expect((await detail(running)).deletedAt).toBeNull();
+    expect((await history(running)).some((h) => h.kind === '삭제')).toBe(false);
+    for (const status of ['running', 'qa', 'verifying', 'rework', 'paused', 'failed', 'gate']) {
+      const key = await create();
+      await setStatus(key, status);
+      expect(errorOf(await del(key)).code, status).toBe('INVALID_TRANSITION');
+    }
+    // 시작 전 상태라도 실행 기록이 있으면 시작된 Task다(D-16, P cancelBeforeStart).
+    const retried = await create();
+    await setStatus(retried, 'ready');
+    await addAttempt(retried, { status: 'completed' });
+    expect(errorOf(await del(retried)).code).toBe('INVALID_TRANSITION');
+    for (const status of ['planning', 'approval', 'ready']) {
+      const key = await create();
+      await setStatus(key, status);
+      expect((await del(key)).statusCode, status).toBe(204);
+    }
+  });
+
+  test('P1-2: 완료·취소 Task는 내용 수정·관계 변경·삭제를 409로 거부하고 아무것도 바꾸지 않는다', async () => {
+    for (const terminal of ['done', 'cancelled']) {
+      const pred = await create();
+      const key = await create({ title: '보존', checklist: [{ content: 'c', required: true }] });
+      const { dependency } = (await addDep(key, pred)).json<{ dependency: { id: string } }>();
+      await setStatus(pred, 'done');
+      await setStatus(key, terminal);
+      const before = await detail(key);
+      const v = before.updatedAt;
+      const item = before.checklistItems[0]?.itemKey ?? '';
+      const other = await create();
+      const attempts = [
+        await call('PATCH', `/api/tasks/${key}`, { updatedAt: v, title: '변경' }),
+        await call('PATCH', `/api/tasks/${key}/spec`, { updatedAt: v, overview: { ...before.spec.overview, doneCond: '완료 뒤 변경' } }),
+        await call('PATCH', `/api/tasks/${key}/design/API`, { updatedAt: v, content: { x: 1 } }),
+        await call('POST', `/api/tasks/${key}/checklist`, { updatedAt: v, content: 'n', required: false }),
+        await call('PATCH', `/api/tasks/${key}/checklist/${item}`, { updatedAt: v, done: true }),
+        await call('DELETE', `/api/tasks/${key}/checklist/${item}?updatedAt=${encodeURIComponent(v)}`),
+        await call('PATCH', `/api/tasks/${key}/outputs`, { updatedAt: v, outputs: [] }),
+        await call('POST', `/api/tasks/${key}/dependencies`, { updatedAt: v, predTaskKey: other, depType: 'FS' }),
+        await call('DELETE', `/api/dependencies/${dependency.id}?updatedAt=${encodeURIComponent(v)}`),
+        await call('DELETE', `/api/tasks/${key}?updatedAt=${encodeURIComponent(v)}`),
+      ];
+      expect(attempts.map((r) => r.statusCode), terminal).toEqual(attempts.map(() => 409));
+      expect(attempts.map((r) => errorOf(r).code)).toEqual(attempts.map(() => 'INVALID_TRANSITION'));
+      // 삭제도 「시작한 Task」가 아니라 종료 상태 보존을 이유로 거부한다.
+      expect(attempts.map((r) => r.json<{ error: { message: string } }>().error.message)).toEqual(attempts.map(() => expect.stringContaining('완료·취소된 Task')));
+      const after = await detail(key);
+      expect(after).toEqual(before);
+    }
+  });
+
+  test('P1-3: Gate 대기에서 명세를 바꾸면 검증 근거를 무효로 기록하고 verifying으로 바꾼다', async () => {
+    const key = await create();
+    await completeSpec(key);
+    await setStatus(key, 'gate');
+    const revision = await specRevision(key);
+    const verification = await addAttempt(key, { status: 'completed', kind: 'qa', revision, result: 'PASS' });
+    const d = await detail(key);
+    const response = await call('PATCH', `/api/tasks/${key}/spec`, { updatedAt: d.updatedAt, overview: { ...d.spec.overview, doneCond: '새 기준' } });
+    expect(response.statusCode, response.body).toBe(200);
+    const changed = response.json<{ task: Detail; changes: { field: string; before: unknown; after: unknown }[] }>();
+    expect(changed.task.lifecycleStatus).toBe('verifying');
+    expect(changed.changes).toContainEqual({ field: 'lifecycleStatus', before: 'gate', after: 'verifying' });
+    expect(await specRevision(key)).toBe(revision + 1);
+    const invalidations = (await ownerPool.query<{ verification: string; reason: string }>('select verification,reason from verification_invalidations where verification=$1', [verification])).rows;
+    expect(invalidations).toHaveLength(1);
+    expect(invalidations[0]?.reason).toContain(`${String(revision)} → ${String(revision + 1)}`);
+    expect((await history(key)).at(-1)).toMatchObject({ kind: '재검증', actor: '시스템', before: 'gate', after: 'verifying' });
+    // 원본 검증 행은 그대로 남는다(추가 전용).
+    expect((await ownerPool.query('select 1 from verifications where id=$1 and result=$2', [verification, 'PASS'])).rowCount).toBe(1);
+  });
+
+  test('P1-3: 명세가 실제로 바뀌지 않거나 Gate가 아닌 상태면 상태를 바꾸지 않는다', async () => {
+    const gate = await create();
+    await completeSpec(gate);
+    await setStatus(gate, 'gate');
+    await addAttempt(gate, { status: 'completed', kind: 'qa', revision: await specRevision(gate), result: 'PASS' });
+    const d = await detail(gate);
+    const same = await call('PATCH', `/api/tasks/${gate}/spec`, { updatedAt: d.updatedAt, overview: d.spec.overview });
+    expect(same.json<{ task: Detail }>().task.lifecycleStatus).toBe('gate');
+    // 설계는 명세 revision 범위가 아니다(현 계약). Gate 유지.
+    const design = await call('PATCH', `/api/tasks/${gate}/design/API`, { updatedAt: await version(gate), content: { ents: [] } });
+    expect(design.json<{ task: Detail }>().task.lifecycleStatus).toBe('gate');
+    const qa = await create();
+    await completeSpec(qa);
+    await setStatus(qa, 'qa');
+    const q = await detail(qa);
+    const changed = await call('PATCH', `/api/tasks/${qa}/spec`, { updatedAt: q.updatedAt, overview: { ...q.spec.overview, doneCond: '다른 기준' } });
+    expect(changed.json<{ task: Detail }>().task.lifecycleStatus).toBe('qa');
+  });
+
+  test('P2-1: Object.prototype 이름의 필드도 400으로 거부한다', async () => {
+    const key = await create({ title: '원래' });
+    const response = await app.inject({ method: 'PATCH', url: `/api/tasks/${key}`, headers: { cookie, origin, 'x-csrf-token': csrf, 'content-type': 'application/json' },
+      payload: JSON.stringify({ updatedAt: await version(key), title: '바꿈', toString: 'unknown property' }) });
+    expect(response.statusCode, response.body).toBe(400);
+    expect(errorOf(response).errors.map((e) => e.path)).toEqual(['toString']);
+    expect((await detail(key)).title).toBe('원래');
+  });
+
+  test('P2-2: 달력에 없는 버전 시각은 500이 아니라 400 updatedAt 오류다', async () => {
+    const key = await create({ title: '원래' });
+    for (const updatedAt of ['2026-99-99T99:99:99Z', '2026-02-30T00:00:00Z', '2025-02-29T12:00:00Z', '2026-01-01T24:00:00Z']) {
+      const patch = await call('PATCH', `/api/tasks/${key}`, { updatedAt, title: '바꿈' });
+      expect(patch.statusCode, `${updatedAt} ${patch.body}`).toBe(400);
+      expect(errorOf(patch).errors.map((e) => e.path)).toEqual(['updatedAt']);
+      const removed = await call('DELETE', `/api/tasks/${key}?updatedAt=${encodeURIComponent(updatedAt)}`);
+      expect(removed.statusCode, updatedAt).toBe(400);
+      expect(errorOf(removed).errors.map((e) => e.path)).toEqual(['updatedAt']);
+    }
+    expect((await detail(key)).title).toBe('원래');
+    // 윤년의 2월 29일과 마이크로초는 정상 값이다(버전이 달라 409).
+    expect(errorOf(await call('PATCH', `/api/tasks/${key}`, { updatedAt: '2024-02-29T23:59:59.123456Z', title: '바꿈' })).code).toBe('VERSION_CONFLICT');
+  });
+});
+
 describe('tasks 착수 승인 요청→승인/반려', () => {
   test('필수 항목이 모자라면 400 errors[], 채우면 approval로 바꾸고 이력을 남긴다', async () => {
     const key = await create();
