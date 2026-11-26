@@ -105,6 +105,7 @@ export class Rejections {
   static async open(directory: string, current: Rejections['current'], validate: Rejections['validate'], options: RejectionOptions): Promise<Rejections> {
     const archive = new Rejections(directory, current, validate, options);
     const known = new Map<string, RejectionMeta>();
+    const duplicates = new Map<string, string[]>();
     await mkdir(join(directory, 'corrupt'), { recursive: true, mode: 0o700 });
     await chmod(join(directory, 'corrupt'), 0o700);
     let changed = false;
@@ -158,13 +159,16 @@ export class Rejections {
         }
         const group = archive.groups.get(meta.group);
         if (group?.retained && archive.rows.has(group.id)) {
-          // 이전 파일이 같은 대상을 중복 보관했다면 먼저 합계를 기록한 뒤 사본을 지운다.
-          const first = await archive.read(group.id);
-          if (!first) throw new Error('기존 거부 기록 없음');
-          const latest = meta.lastAt >= group.lastAt ? { ...meta, ...record } : first;
-          const merged = archive.bound({ ...latest, id: group.id, count: group.count + meta.count, firstAt: Math.min(group.firstAt, meta.firstAt), lastAt: Math.max(group.lastAt, meta.lastAt) });
-          await archive.writeRecord(merged);
-          await rm(join(directory, name));
+          const latest = meta.lastAt >= group.lastAt ? meta : group;
+          const discarded = latest.id === group.id ? meta.id : group.id;
+          const copies = duplicates.get(meta.group) ?? [];
+          copies.push(discarded);
+          duplicates.set(meta.group, copies);
+          if (latest.id !== group.id) {
+            archive.rows.delete(group.id);
+            archive.keys.delete(JSON.stringify([group.request.epoch, group.request.idempotencyKey]));
+          }
+          archive.put({ ...latest, count: group.count + meta.count, firstAt: Math.min(group.firstAt, meta.firstAt), lastAt: Math.max(group.lastAt, meta.lastAt) });
           changed = true;
         } else {
           const bounded = archive.bound({ ...meta, ...record });
@@ -183,6 +187,22 @@ export class Rejections {
     archive.reindex();
     if (changed) await archive.saveSummary();
     await archive.maintain();
+    for (const [group, copies] of duplicates) {
+      const meta = archive.groups.get(group);
+      if (meta?.retained) {
+        const raw = JSON.parse(await readFile(join(directory, `${meta.id}.json`), 'utf8')) as Entry;
+        const merged = { ...raw, ...meta, request: raw.request, reason: raw.reason ?? meta.reason ?? '오류 코드를 확인하세요.', ...(raw.fix && { fix: raw.fix }) };
+        if (meta.operation === 'reportCommandResult' && meta.request.params?.id) {
+          const key = commandKey(meta.request.epoch, meta.request.params.id);
+          const failures = Math.max(archive.backoffs[key]?.failures ?? 0, meta.commandFailures ?? meta.count);
+          merged.commandFailures = failures;
+          archive.backoffs[key] = { failures, nextAt: meta.lastAt + commandWait(failures), lastId: meta.lastId };
+        }
+        // 사본마다 쓰지 않고 묶음별 한 번만 동기화한 뒤 사본을 지운다.
+        await archive.writeRecord(archive.bound(merged));
+      }
+      for (const id of copies) await rm(join(directory, `${id}.json`), { force: true });
+    }
     await archive.saveIndex();
     return archive;
   }
@@ -343,7 +363,10 @@ export class Rejections {
   }
   private pinned(entry: RejectionMeta): boolean { return entry.request.epoch === this.current().epoch && entry.stream.startsWith('attempt:'); }
   private pin(entry: RejectionMeta): void {
-    if (!this.summary.pins.some((e) => e.group === entry.group)) this.summary.pins.push({ ...entry, retained: false, bytes: 0 });
+    const index = this.summary.pins.findIndex((e) => e.group === entry.group);
+    const pin = { ...entry, retained: false, bytes: 0 };
+    if (index < 0) this.summary.pins.push(pin);
+    else this.summary.pins[index] = pin;
   }
   private bump(map: Record<string, number>, key: string, count: number): void {
     const target = Object.hasOwn(map, key) || Object.keys(map).length < this.limits.maxSummaryKeys - 1 ? key : 'other';
