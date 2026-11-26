@@ -148,7 +148,8 @@ function Detail({ ctx, iface, item, rows, tasks, go, open }: {
         <button type="button" className="btn ghost sm" disabled={!pos.next} onClick={() => { if (pos.next) go(pos.next); }}>↓ 다음</button>
       </div>
       <h2 className="mono" style={{ margin: '0 0 4px', fontSize: 18, wordBreak: 'break-all' }}>{item.name}</h2>
-      <p className="muted" style={{ margin: '0 0 10px' }}>{item.key !== item.name ? item.key : ''}</p>
+      {/* 원본 설명 줄 자리. 계약에 설명이 없어 이름과 다른 고정 키만 보이고, 없으면 빈 줄로 자리를 지킨다(아래 배치가 원본과 같게). */}
+      <p className="muted" style={{ margin: '0 0 10px' }}>{item.key !== item.name ? item.key : '\u00a0'}</p>
       <div className="kv" style={{ gridTemplateColumns: '110px minmax(0,1fr)', margin: '0 0 12px' }}>
         <span className="kv-l">계약 파일</span>
         <span className="kv-v mono">{detail ? `${detail.source.path}${detail.source.commit ? ` · ${detail.source.commit.slice(0, 7)}` : ''}` : '—'}{detail?.source.status === 'error' && <> <span className="sc sc-bad">읽기 실패 — 마지막 성공 버전</span></>}</span>
