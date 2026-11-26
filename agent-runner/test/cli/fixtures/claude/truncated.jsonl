@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","session_id":"s-cut","model":"claude-opus-5-5","uuid":"c-1"}
+{"type":"assistant","session_id":"s-cut","parent_tool_use_id":null,"uuid":"c-2","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_cut","name":"Agent","input":{"description":"끊김","prompt":"..."}}]}}
+{"type":"system","subtype":"task_started","session_id":"s-cut","task_id":"task_cut","tool_use_id":"toolu_cut","description":"끊김","task_type":"local_agent","is_backgrounded":false,"spawn_depth":1,"uuid":"c-3"}
+{"type":"assistant","session_id":"s-cut","parent_tool_use_id":null,"message":{"role":"assi

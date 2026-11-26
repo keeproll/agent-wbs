@@ -1,0 +1,9 @@
+{"type":"thread.started","thread_id":"th-parent"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"collab_tool_call","tool":"spawn_agent","sender_thread_id":"th-parent","receiver_thread_ids":[],"prompt":"화면","agents_states":{},"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_0","type":"collab_tool_call","tool":"spawn_agent","sender_thread_id":"th-parent","receiver_thread_ids":["th-a"],"prompt":"화면","agents_states":{"th-a":{"status":"pending_init","message":null}},"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_1","type":"collab_tool_call","tool":"spawn_agent","sender_thread_id":"th-parent","receiver_thread_ids":["th-b"],"prompt":"검사","agents_states":{"th-b":{"status":"running","message":null}},"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"collab_tool_call","tool":"spawn_agent","sender_thread_id":"th-a","receiver_thread_ids":["th-c"],"prompt":"중첩","agents_states":{"th-c":{"status":"running","message":null}},"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_3","type":"collab_tool_call","tool":"wait","sender_thread_id":"th-parent","receiver_thread_ids":["th-a","th-c"],"agents_states":{"th-a":{"status":"completed","message":"끝"},"th-c":{"status":"errored","message":"실패"}},"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_4","type":"agent_message","text":"하나는 아직 실행 중"}}
+{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":5}}

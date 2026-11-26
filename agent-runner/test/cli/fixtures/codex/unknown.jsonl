@@ -1,0 +1,8 @@
+{"type":"thread.started","thread_id":"th-unk"}
+{"type":"turn.started"}
+{"type":"thread.compacted","before_tokens":9000}
+{"type":"item.completed","item":{"id":"item_0","type":"image_generation","status":"completed"}}
+{"type":"item.completed","item":{"id":"item_1","type":"error","message":"startup warning: 설정 키를 모릅니다"}}
+{"type":"item.completed","item":{"id":"item_2","type":"collab_tool_call","tool":"future_collab","sender_thread_id":"th-unk","receiver_thread_ids":["th-x"],"agents_states":{"th-x":{"status":"hibernating"}},"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"끝"}}
+{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}
