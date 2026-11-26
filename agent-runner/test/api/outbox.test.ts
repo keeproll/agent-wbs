@@ -99,6 +99,24 @@ test('네트워크 단절은 재시도하고 백오프는 1초부터 60초까지
   expect(state.snapshot.outbox[0]?.attempts).toBe(8);
 });
 
+test('백오프의 jitter와 날짜 형식 Retry-After도 지킨다', async () => {
+  handle = (_req, res) => { res.setHeader('retry-after', new Date(now + 10_000).toUTCString()); fail(res, 429); };
+  await usage();
+  await new Outbox(state, api(), { now: () => now, random: () => 0.5 }).flush();
+  expect(state.snapshot.outbox[0]?.nextAt).toBe(now + 10_000);
+  now += 10_000;
+  handle = (_req, res) => fail(res, 503);
+  await new Outbox(state, api(), { now: () => now, random: () => 0.5 }).flush();
+  expect(state.snapshot.outbox[0]?.nextAt).toBe(now + 2200);
+});
+
+test('로컬 요청 검증 오류는 네트워크 단절처럼 재시도하지 않는다', async () => {
+  await status('.');
+  await outbox.flush();
+  expect(requests).toHaveLength(0);
+  expect(state.snapshot.outbox[0]).toMatchObject({ state: 'rejected', code: 'INVALID_REQUEST' });
+});
+
 test('같은 시도의 뒤 보고는 보류하고 다른 시도의 보고는 보낸다', async () => {
   handle = (req, res) => req.path.includes('/a/') ? fail(res, 503) : res.writeHead(204).end();
   await status('a');
@@ -109,7 +127,7 @@ test('같은 시도의 뒤 보고는 보류하고 다른 시도의 보고는 보
   expect(state.snapshot.outbox).toHaveLength(2);
 });
 
-test.each([400, 404, 409, 422])('%s는 rejected로 보존하고 같은 시도 뒤 보고를 막으며 준비 상태 경고를 남긴다', async (code) => {
+test.each([400, 404, 409, 422, 600])('%s는 rejected로 보존하고 같은 시도 뒤 보고를 막으며 준비 상태 경고를 남긴다', async (code) => {
   handle = (_req, res) => fail(res, code);
   await status('a');
   await outbox.enqueue('reportAttemptResult', { epoch: 0, params: { attemptId: 'a' }, body: { fence: 1, summary: '완료', changedFiles: [], evidence: [] } });
@@ -139,6 +157,13 @@ test('multipart 증거 파일도 디스크에서 복구해 같은 바이트로 �
   const req = requests[0];
   const form = await new Response(new Uint8Array(req?.raw ?? []), { headers: { 'content-type': req?.headers['content-type'] ?? '' } }).formData();
   expect(new Uint8Array(await (form.get('file') as File).arrayBuffer())).toEqual(bytes);
+});
+
+test('같은 시각·시도의 서로 다른 증거 파일은 멱등 키가 충돌하지 않는다', async () => {
+  await Promise.all(['첫째', '둘째'].map((text) => outbox.enqueue('uploadEvidence', {
+    epoch: 0, params: { attemptId: 'a' }, body: { file: new Blob([text]), kind: 'log', fence: 1, sha256: 'a'.repeat(64), size: 6 },
+  })));
+  expect(new Set(state.snapshot.outbox.map((entry) => entry.request.idempotencyKey)).size).toBe(2);
 });
 
 test('동시에 쌓은 보고를 잃지 않고 손상된 상태 파일은 덮어쓰지 않는다', async () => {
@@ -214,10 +239,98 @@ test('정리 구현이 없거나 실패하면 새 epoch와 메시지로 진행�
   expect(runner().readinessWarnings.length).toBeGreaterThan(0);
 });
 
+test('최초 명령 확인 전에는 준비 완료로 표시하지 않는다', () => {
+  expect(runner().ready).toBe(false);
+});
+
+test('정책 응답을 기다리는 동안 초기화되면 옛 epoch로 메시지를 조회하지 않는다', async () => {
+  let policyResponse: ServerResponse | undefined;
+  let waiting: (() => void) | undefined;
+  const policyRequested = new Promise<void>((resolve) => { waiting = resolve; });
+  handle = (req, res) => {
+    if (req.path.endsWith('commands')) json(res, { currentEpoch: 0, commands: [] });
+    else if (req.path.endsWith('policy')) { policyResponse = res; waiting?.(); }
+    else if (req.path.endsWith('heartbeat')) res.writeHead(204, { 'x-current-epoch': '1' }).end();
+    else json(res, { messages: [], nextCursor: null });
+  };
+  const r = runner();
+  const polling = r.poll();
+  await policyRequested;
+  await r.heartbeat();
+  if (!policyResponse) throw new Error('정책 요청이 없습니다.');
+  json(policyResponse, { heartbeatSeconds: 60 });
+  await polling;
+  expect(requests.some((req) => req.path.includes('/messages'))).toBe(false);
+  expect(state.snapshot).toMatchObject({ epoch: 0, pendingEpoch: 1 });
+});
+
+test('이전 명령 조회가 더 늦게 도착해도 새 초기화 번호를 되돌리지 않는다', async () => {
+  await state.observeEpoch(1);
+  handle = (req, res) => req.path.endsWith('commands') ? json(res, { currentEpoch: 0, commands: [] }) : res.writeHead(204).end();
+  await expect(runner().poll()).rejects.toThrow('뒤로');
+  expect(state.snapshot).toMatchObject({ epoch: 0, pendingEpoch: 1 });
+});
+
+test('정리 작업이 기다리는 동안에도 생존 신호를 별도로 계속 보낸다', async () => {
+  let release: (() => void) | undefined;
+  const cleanupWait = new Promise<void>((resolve) => { release = resolve; });
+  let beats = 0;
+  let enough: (() => void) | undefined;
+  const twoBeats = new Promise<void>((resolve) => { enough = resolve; });
+  handle = (req, res) => {
+    if (req.path.endsWith('commands')) json(res, { currentEpoch: 1, commands });
+    else if (req.path.endsWith('heartbeat')) {
+      beats++;
+      res.writeHead(204, { 'x-current-epoch': '1' }).end();
+      if (beats === 2) enough?.();
+    } else res.writeHead(204).end();
+  };
+  const r = runner(async () => { await cleanupWait; return { status: 'done', items: [], holds: [] }; });
+  r.heartbeatSeconds = 0.01;
+  const controller = new AbortController();
+  const running = r.run(controller.signal);
+  try {
+    await twoBeats;
+    expect(beats).toBeGreaterThanOrEqual(2);
+    expect(requests.some((req) => req.path.endsWith('/result'))).toBe(false);
+  } finally {
+    controller.abort();
+    release?.();
+    await running;
+  }
+});
+
+test('인증 실패는 생존 신호와 polling 반복을 함께 끝낸다', async () => {
+  handle = (_req, res) => fail(res, 401, 'RUNNER_UNAUTHORIZED');
+  await expect(runner().run(new AbortController().signal)).rejects.toMatchObject({ status: 401 });
+  expect(requests.length).toBeLessThanOrEqual(2);
+  expect(requests.every((req) => !req.path.endsWith('sessions'))).toBe(true);
+});
+
+test('같은 epoch 정리 명령도 먼저 처리하고 실패 결과를 성공으로 바꾸지 않는다', async () => {
+  let reported = false;
+  handle = (req, res) => {
+    if (req.path.endsWith('commands')) json(res, { currentEpoch: 0, commands: [{ ...commands[0], epoch: 0 }] });
+    else { reported = true; expect(req.body.status).toBe('failed'); res.writeHead(204).end(); }
+  };
+  const r = runner(async () => ({ status: 'failed', items: [{ name: '정리', ok: false, detail: '시험 실패' }] }));
+  await r.poll();
+  expect(reported).toBe(true);
+  expect(r.ready).toBe(false);
+  expect(state.snapshot).toMatchObject({ epoch: 0, pendingEpoch: 0 });
+});
+
 test('heartbeat는 멱등 키 없이 현재 번호를 확인하고 세션 시작·정상 종료를 영속 보고한다', async () => {
   const r = runner();
   await r.start();
-  handle = (req, res) => req.path.endsWith('heartbeat') ? res.writeHead(204, { 'x-current-epoch': '0' }).end() : res.writeHead(204).end();
+  handle = (req, res) => {
+    if (req.path.endsWith('heartbeat')) res.writeHead(204, { 'x-current-epoch': '0' }).end();
+    else if (req.path.endsWith('commands')) json(res, { currentEpoch: 0, commands: [] });
+    else if (req.path.endsWith('policy')) json(res, { heartbeatSeconds: 60 });
+    else if (req.path.endsWith('messages')) json(res, { messages: [], nextCursor: null });
+    else res.writeHead(204).end();
+  };
+  await r.poll();
   await r.heartbeat();
   await r.stop('manual');
   expect(requests.filter((req) => req.path.endsWith('sessions')).map((req) => req.body.event)).toEqual(['start', 'stop']);
@@ -228,13 +341,21 @@ test('heartbeat는 멱등 키 없이 현재 번호를 확인하고 세션 시작
   expect(state.snapshot).toMatchObject({ epoch: 0, pendingEpoch: 3 });
 });
 
+test('시작 직후 종료해도 명령 확인 전에 보고를 보내지 않고 세션을 디스크에 남긴다', async () => {
+  const r = runner();
+  await r.start();
+  await r.stop('manual');
+  expect(requests).toHaveLength(0);
+  expect(state.snapshot.outbox.map((entry) => entry.request.body?.event)).toEqual(['start', 'stop']);
+});
+
 test('polling은 명령 우선·ETag 정책·동일 시각 메시지의 영속 커서를 지키고 실제 전달 때만 ack한다', async () => {
   handle = (req, res) => {
     if (req.path.endsWith('commands')) json(res, { currentEpoch: 0, commands: [] });
     else if (req.path.endsWith('policy')) {
       if (req.headers['if-none-match'] === '"v1"') res.writeHead(304).end();
       else { res.setHeader('etag', '"v1"'); json(res, { heartbeatSeconds: 30 }); }
-    } else if (req.path.startsWith('/api/runner/messages?')) json(res, { messages: req.path.includes('cursor=') ? [] : [1, 2].map((id) => ({ id: String(id), taskKey: 'TASK-0001', attemptId: null, toAgent: 'Codex', type: '추가 지시', body: '내용', pendingNext: true, createdAt: '2026-11-26T00:00:00Z' })), nextCursor: 'opaque/cursor' });
+    } else if (req.path.startsWith('/api/runner/messages')) json(res, { messages: req.path.includes('cursor=') ? [] : [1, 2].map((id) => ({ id: String(id), taskKey: 'TASK-0001', attemptId: null, toAgent: 'Codex', type: '추가 지시', body: '내용', pendingNext: true, createdAt: '2026-11-26T00:00:00Z' })), nextCursor: 'opaque/cursor' });
     else res.writeHead(204).end();
   };
   const r = runner();
