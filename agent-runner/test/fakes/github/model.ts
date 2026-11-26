@@ -75,6 +75,8 @@ export class GitHubModel {
   readonly options: ModelOptions;
   /** 다음 병합 요청을 처리한 뒤 응답을 잃는다. */
   dropNextMerge = false;
+  /** M4-06 실측: head 갱신 뒤 병합 가능 여부 계산 중에는 sha 검사보다 먼저 405가 올 수 있다. */
+  mergeabilityPending = false;
   /** 병합 커밋을 일부러 잘못 만든다(부모·tree 검증 시험용). */
   corruptMerge: 'parents' | 'tree' | null = null;
   /** 병합 후 이만큼의 PR 조회는 병합 전 모습을 돌려준다(조회 반영 지연). */
@@ -221,6 +223,7 @@ export class GitHubModel {
     const pull = this.pulls.get(number);
     if (!pull) return { status: 404, body: { message: 'Not Found' } };
     if (pull.state !== 'open') return { status: 405, body: { message: 'Pull Request is not mergeable' } };
+    if (this.mergeabilityPending) return { status: 405, body: { message: 'Pull Request is not mergeable' } };
     const head = this.branches.get(pull.head) ?? '';
     const main = this.branches.get(pull.base) ?? '';
     if (body.sha !== undefined && body.sha !== head) {

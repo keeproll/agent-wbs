@@ -173,6 +173,110 @@ Runner가 GitHub(git 저장소를 올려 두고 PR·검사·병합을 하는 서
 pnpm -C agent-runner test -- github
 ```
 
+## 실제 시험 저장소 실증(M4-06)
+
+실제 GitHub에 쓰는 명령은 일반 `test`와 분리했다.
+대상은 `keeproll/agent-wbs-sandbox` 하나로 고정했다.
+다른 주소로 쓰려고 하면 실행 전에 거부한다.
+왜: 개발 저장소의 코드나 설정을 시험 때문에 바꾸면 안 된다.
+
+```sh
+pnpm -C agent-runner test:github:real -- /home/keeproll/.orca/bots/agentwbs/archive/2026-11-26/M4-06/새-실행-폴더
+```
+
+새 실행 폴더를 지정해야 한다.
+`api.ndjson`에는 요청별 HTTP 상태 번호와 응답을 남긴다.
+HTTP는 프로그램끼리 요청과 응답을 주고받는 통신 규칙이다.
+`results.json`에는 판정과 커밋 SHA(커밋을 가리키는 고유 번호)를 남긴다.
+토큰을 포함한 인증 헤더는 기록하지 않는다.
+
+이 명령은 `gh`의 현재 로그인으로 설정과 일반 API(프로그램 호출 창구)를 시험한다.
+관리자 계정의 연결 확인은 기존 계약대로 실패한다.
+실제 API 호출은 관리자도 우회하지 못하는 ruleset(브랜치 보호 규칙 묶음) 아래에서 별도로 시험한다.
+이 결과만으로 비관리자 계정의 Runner 준비 점검을 통과했다고 말하지 않는다.
+
+보호 규칙을 두 묶음으로 나눈다.
+
+- `agentwbs M4-06 main`: PR(pull request, 변경 병합 요청)과 `agentwbs/int` 검사 성공을 요구한다. 최신 main을 포함해야 한다. CODEOWNERS(경로별 검토 책임자 목록) 검토도 요구한다. 시스템용 deploy key(저장소 하나에 붙이는 SSH 인증 키)만 우회할 수 있다.
+- `agentwbs M4-06 main integrity`: 강제 push와 main 삭제를 막는다. 우회 대상은 없다.
+
+왜: 시스템 키가 PR 규칙을 우회하더라도 기록을 강제로 덮어쓰거나 main을 지우게 해서는 안 된다.
+`DeployKey` 우회는 특정 키 하나를 고르는 방식이 아니다.
+GitHub API의 `actor_id`는 `null`이다.
+따라서 다른 deploy key가 이미 있으면 이 스크립트는 중단한다.
+시스템 키는 `ssh-agent`라는 메모리 보관 프로세스에만 넣는다.
+실증이 끝나면 GitHub에서 키를 삭제한다.
+그 뒤 같은 키로 push가 거부되는지 확인하고 메모리 보관 프로세스도 종료한다.
+
+GitHub는 키가 보낸 커밋이 최초 생성인지 초기화인지 판별하지 않는다.
+최초 생성과 초기화 되돌림만 키를 사용하도록 Runner 호출 경로를 제한해야 한다.
+현재 운영용 `systemCommitAuthorization`은 HTTP 인증 헤더 공급원이다.
+이 시험의 SSH 키를 운영 Runner에 연결하는 작업까지 끝났다는 뜻은 아니다.
+
+CODEOWNERS의 책임자와 PR 작성자가 모두 owner인 시험도 기록한다.
+그 경우 병합 허용을 다른 작성자의 변경까지 허용한다는 증거로 쓰지 않는다.
+다른 작성자가 보호 경로를 바꾼 PR의 거부는 별도 계정이나 앱으로 확인해야 한다.
+왜: 본인이 책임자인 경로를 본인이 바꾸는 경우와 다른 사람이 바꾸는 경우는 GitHub의 판단이 다르다.
+
+### fine-grained 토큰과 폐기 확인
+
+fine-grained 토큰은 저장소와 권한을 좁게 정하는 인증 비밀값이다.
+owner가 이번 시험에만 쓰는 토큰 두 개를 발급해야 한다.
+대상 저장소는 시험 저장소 하나만 고른다.
+
+- 쓰기 토큰: Contents 읽기·쓰기, Pull requests 읽기·쓰기, Commit statuses 읽기·쓰기, Metadata 읽기.
+- 읽기 토큰: Contents 읽기, Pull requests 읽기, Commit statuses 읽기, Metadata 읽기.
+
+토큰을 채팅이나 명령 인자에 붙여 넣지 않는다.
+owner의 실제 터미널에서 다음 명령을 실행한다.
+입력 도우미는 입력을 화면에 표시하지 않는다.
+입력을 숨길 수 없는 환경에서는 값을 받지 않고 중단한다.
+토큰은 파이프(두 프로세스 사이의 메모리 통로)로만 넘긴다.
+
+```sh
+python3 agent-runner/scripts/github-token-input.py | node agent-runner/scripts/github.real.ts /home/keeproll/.orca/bots/agentwbs/archive/2026-11-26/M4-06/새-토큰-실행-폴더 --tokens
+```
+
+`토큰 검사 종료` 메시지가 나온 뒤 GitHub 설정에서 이번 토큰 두 개를 삭제한다.
+입력 도우미에 `폐기완료`를 입력한다.
+스크립트는 두 토큰으로 `GET /user`가 401(인증 거부)인지 확인한다.
+왜: 메모리에서 값을 지우는 것만으로는 이전 Runner가 가진 토큰을 막을 수 없다.
+이 PC의 기존 `gh` 로그인 토큰은 폐기하지 않는다.
+
+다른 작성자의 CODEOWNERS 실증이 남으면 종료 번호는 2다.
+토큰 없이 실행해도 종료 번호는 2다.
+실증이나 정리가 실패하면 종료 번호는 1이다.
+왜: 일부 항목만 통과한 실행을 M4-06 전체 완료로 보고하지 않기 위해서다.
+
+### 정리와 실패 복구
+
+정상 정리 순서는 기록한 PR 닫기, 기록한 Agent 브랜치 삭제, 되돌림 커밋 일반 push다.
+되돌림은 `src/`, `contracts/`, `.agentwbs/`만 최초 시험 커밋의 내용으로 맞춘다.
+`prototype/`과 CODEOWNERS는 현재 main의 내용을 보존한다.
+되돌림 전에 main이 예상 SHA와 같은지도 확인한다.
+왜: 시험 중 다른 사람이 올린 변경을 덮어쓰면 안 된다.
+
+실패해도 같은 정리를 시도한다.
+`cleanupFailure`나 `keyCleanupFailure`가 있으면 자동 정리가 끝난 것이 아니다.
+`results.json`의 PR 번호, 브랜치 이름, deploy key 번호를 확인한다.
+기록된 항목만 GitHub에서 닫거나 삭제한다.
+사용자 변경이 섞인 main은 자동으로 되돌리지 않는다.
+보호 ruleset은 실증 뒤에도 남긴다.
+시험 저장소 전체를 없애는 일은 이 명령의 범위가 아니다.
+
+### 용어 모음
+
+- fake: 실제 GitHub 대신 테스트 안에서 같은 응답을 만드는 가짜 서버.
+- head: PR 브랜치의 맨 끝 커밋.
+- strict up-to-date: PR head가 최신 main을 포함해야 병합을 허용하는 규칙.
+- status: 특정 커밋에 붙이는 검사 결과 표시.
+- tree: 커밋 시점의 파일 전체 내용.
+- 응답 유실: GitHub는 요청을 처리했지만 호출자가 응답을 받지 못한 상황. 이 시험은 성공 응답을 받은 통신 경계에서 응답만 버려 재현한다.
+- 405: 보호 규칙 미충족이나 병합 가능 여부 계산 중에 올 수 있는 병합 거절.
+- 409: 계산이 끝난 PR에서 요청한 head SHA가 현재 head와 다를 때 오는 거절.
+- 403: 이 시험에서는 권한 부족 때문에 요청이 거부된 상태. 속도 제한 403과 구분한다.
+- 폐기: GitHub에서 자격 증명을 무효로 만들어 더 이상 인증하지 못하게 하는 것.
+
 ## 초기화 원격 정리(M4 통합)
 
 `src/cleanup/remote.ts`가 contracts §6 순서를 지킨다.
