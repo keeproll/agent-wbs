@@ -19,6 +19,7 @@ import { ExecPage } from '../features/exec/ExecPage.tsx';
 import { HistoryPage } from '../features/history/HistoryPage.tsx';
 import { PlanningPage } from '../features/planning/PlanningPage.tsx';
 import { ProjectPage } from '../features/project/ProjectPage.tsx';
+import { SettingsPage } from '../features/settings/SettingsPage.tsx';
 import { VerifyPage } from '../features/verify/VerifyPage.tsx';
 import { WbsPage } from '../features/wbs/WbsPage.tsx';
 import { RequireAuth } from '../shared/auth/RequireAuth.tsx';
@@ -43,6 +44,7 @@ const SCREENS: Partial<Record<MenuKey, ComponentType>> = {
   verify: VerifyPage, // M3-07
   change: ChangePage, // M3-05
   history: HistoryPage, // M3-07
+  settings: SettingsPage, // M3-08(/settings는 기본 Runner 탭)
 };
 
 /**
