@@ -1339,10 +1339,21 @@ export const mailOutbox = pgTable(
     state: deliveryState().notNull(),
     next_at: at('next_at'),
     error: text(),
+    // M6-03(0049): 발송 당시의 보기·사유·제목·첨부, 자동 재시도 여부, SMTP 호출 시작 시각
+    view: reportView().notNull(),
+    reason: text().notNull(),
+    subject: text().notNull(),
+    pdf: boolean().notNull().default(false),
+    retried: boolean().notNull().default(false),
+    sent_at: at('sent_at'),
   },
   (t) => [
     unique().on(t.report, t.recipient, t.try_no),
     check('mail_try_positive', sql`${t.try_no}>0`),
+    check('mail_outbox_reason_text', sql`length(btrim(${t.reason}))>0`),
+    check('mail_outbox_subject_text', sql`length(btrim(${t.subject}))>0`),
+    check('mail_outbox_next_at', sql`(${t.state}='retry_wait')=(${t.next_at} is not null)`),
+    index('mail_outbox_due').on(t.state, t.next_at),
   ],
 );
 export const mailLog = pgTable('mail_log', {
@@ -1356,7 +1367,10 @@ export const mailLog = pgTable('mail_log', {
   state: deliveryState().notNull(),
   error: text(),
   at: at('at').notNull(),
-});
+  // M6-03(0049): 어느 큐 행의 몇 번째 발송 결과인지
+  outbox: uuid(),
+  try_no: integer(),
+}, (t) => [check('mail_log_try_positive', sql`${t.try_no} is null or ${t.try_no}>0`)]);
 export const notifySettings = pgTable(
   'notify_settings',
   {
