@@ -4,6 +4,8 @@
  * - 편집 중 로그인이 끊기면(401) 화면별 초안을 sessionStorage에 남긴다. 탭을 닫으면 사라진다.
  * - 초안은 그것을 남긴 탭에서만 읽는다(탭 id). window.open으로 연 새 탭은 저장소 사본을 받지만 복원하지 않고 사본을 지운다.
  * - 사용자가 직접 로그아웃하면 보관 초안을 바로 모두 지운다. 세션 만료 뒤 다시 로그인한 경우에만 복원을 제안한다.
+ *   여러 탭: 로그아웃 시각을 localStorage(`awbs.logoutAt`, 모든 탭이 함께 보는 저장소)에 남기고 BroadcastChannel로 다른 탭에 알린다.
+ *   알림을 받은 탭은 바로 지운다. 알림을 못 받은 탭(닫혀 있었거나 멈춰 있던 탭)도 복원 전에 「로그아웃 시각 이전에 보관된 초안은 무조건 버린다」.
  * - 이 제품의 로그인 주체는 팀장 한 명(principal lead)이라 사용자 계정을 구분하지 않는다. 저장소가 사용자 구분을 대신 보장하지 않는다.
  * - 재로그인 뒤 같은 화면을 열면 복원을 제안한다(useSessionDraft.tsx).
  * - 비밀값(비밀번호·토큰·키·secret 등)은 저장하지 않는다. 왜: 비밀값은 서버에만 암호화해 두고 화면에는 쓰기 전용으로 다룬다(G L554, UAT-GITHUB-02).
@@ -72,13 +74,18 @@ export function persistRegisteredDrafts(storage: Storage, tabId: string, now: nu
   }
 }
 
-/** 이 탭(tabId)이 남긴 초안만 돌려준다. */
-export function readStoredDraft(storage: Storage, tabId: string, id: string): StoredDraft | null {
+/** 이 탭(tabId)이 남긴 초안만 돌려준다. notBefore(마지막 로그아웃 시각) 이전·같은 시각에 보관된 초안은 지우고 null. */
+export function readStoredDraft(storage: Storage, tabId: string, id: string, notBefore = 0): StoredDraft | null {
   try {
     const raw = storage.getItem(PREFIX + id);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as StoredDraft;
-    return typeof parsed.savedAt === 'number' && typeof parsed.label === 'string' && parsed.tabId === tabId ? parsed : null;
+    if (typeof parsed.savedAt !== 'number' || typeof parsed.label !== 'string' || parsed.tabId !== tabId) return null;
+    if (parsed.savedAt <= notBefore) {
+      storage.removeItem(PREFIX + id);
+      return null;
+    }
+    return parsed;
   } catch {
     return null;
   }
@@ -98,6 +105,69 @@ export function clearAllDrafts(storage: Storage): void {
     }
     for (const key of keys) storage.removeItem(key);
   } catch { /* 무시 */ }
+}
+
+const LOGOUT_KEY = 'awbs.logoutAt';
+const CHANNEL = 'awbs.session';
+
+/** 명시적 로그아웃 시각을 남긴다(모든 탭이 보는 localStorage). */
+export function recordLogout(local: Storage, now: number = Date.now()): void {
+  try { local.setItem(LOGOUT_KEY, String(now)); } catch { /* 무시 */ }
+}
+
+/** 마지막 명시적 로그아웃 시각(ms). 없거나 읽을 수 없으면 0 */
+export function lastLogoutAt(local: Storage): number {
+  try {
+    const value = Number(local.getItem(LOGOUT_KEY));
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+const clearedListeners = new Set<() => void>();
+/** 보관 초안이 지워졌을 때(로그아웃) 알림을 받는다. useSessionDraft가 복원 제안을 닫는 데 쓴다. */
+export function onDraftsCleared(listener: () => void): () => void {
+  clearedListeners.add(listener);
+  return () => { clearedListeners.delete(listener); };
+}
+
+function dropAllHere(): void {
+  const storage = browserStorage();
+  if (storage) clearAllDrafts(storage);
+  for (const listener of clearedListeners) listener();
+}
+
+/** 이 탭에서 명시적으로 로그아웃했다: 시각을 남기고, 이 탭 초안을 지우고, 다른 탭에 알린다. */
+export function announceLogout(now: number = Date.now()): void {
+  const local = browserLocalStorage();
+  if (local) recordLogout(local, now);
+  dropAllHere();
+  try {
+    const channel = new BroadcastChannel(CHANNEL);
+    channel.postMessage({ type: 'logout', at: now });
+    channel.close();
+  } catch { /* BroadcastChannel이 없으면 로그아웃 시각 검사로만 지킨다 */ }
+}
+
+/** 다른 탭의 로그아웃 알림을 듣는다(앱 시작 때 한 번). */
+export function listenForLogout(): () => void {
+  let channel: BroadcastChannel | null = null;
+  try {
+    channel = new BroadcastChannel(CHANNEL);
+    channel.onmessage = (event: MessageEvent<{ type?: string }>) => { if (event.data.type === 'logout') dropAllHere(); };
+  } catch { /* 없음 */ }
+  return () => { channel?.close(); };
+}
+
+/** 이 탭에서 복원해도 되는 초안의 기준 시각(마지막 로그아웃 시각) */
+export function browserLogoutAt(): number {
+  const local = browserLocalStorage();
+  return local ? lastLogoutAt(local) : 0;
+}
+
+function browserLocalStorage(): Storage | null {
+  try { return window.localStorage; } catch { return null; }
 }
 
 let tabIdCache: string | null = null;

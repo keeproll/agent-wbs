@@ -6,7 +6,7 @@
  * - 닫히면 모달을 열었던 컨트롤로 포커스를 돌려준다.
  * - 제목 ID는 useId로 만들어 화면 안에서 겹치지 않는다(원본 cf-t 중복 결함).
  */
-import { useEffect, useId, useRef, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, type CSSProperties, type ReactNode } from 'react';
 
 const FOCUSABLE = 'button:not([disabled]),[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
@@ -32,7 +32,8 @@ export function Modal({ title, meta, children, footer, onCancel, size = 'sm', st
   const cancel = useRef(onCancel);
   useEffect(() => { cancel.current = onCancel; });
 
-  useEffect(() => {
+  // 화면에 그리기 전에(useLayoutEffect) 포커스와 Esc·Tab 처리를 붙인다. 창이 보이는 순간부터 Esc가 듣는다.
+  useLayoutEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const box = ref.current;
     const target = (initialFocus ? box?.querySelector<HTMLElement>(initialFocus) : null) ?? box?.querySelector<HTMLElement>(FOCUSABLE) ?? box;

@@ -140,6 +140,8 @@ test('편집 보호: 저장 안 한 입력이 있으면 메뉴 이동 전에 묻
   await menu.click();
   await expect(dialog).toBeVisible();
   await page.keyboard.press('Escape');
+  // 확인창이 닫힌 뒤 다음 동작을 한다(부하가 높을 때 닫히기 전에 누르는 경쟁 방지).
+  await expect(dialog).toHaveCount(0);
   await expect(page).toHaveURL('/_states');
 
   // 화면 안 동작(편집 취소)도 같은 확인을 거친다.

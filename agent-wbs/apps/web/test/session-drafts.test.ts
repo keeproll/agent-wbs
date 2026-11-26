@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  clearAllDrafts, discardStoredDraft, persistRegisteredDrafts, readStoredDraft, registerDraft, resolveTabId, stripSecrets,
+  clearAllDrafts, discardStoredDraft, lastLogoutAt, persistRegisteredDrafts, readStoredDraft, recordLogout, registerDraft, resolveTabId, stripSecrets,
 } from '../src/shared/state/sessionDrafts.ts';
 
 class MemoryStorage {
@@ -81,5 +81,33 @@ describe('세션 만료 초안 보관(조정자 결정)', () => {
     expect(() => { persistRegisteredDrafts(blocked, 't', 1); }).not.toThrow();
     expect(() => { clearAllDrafts(blocked); }).not.toThrow();
     expect(typeof resolveTabId(blocked, { name: '' })).toBe('string');
+  });
+
+  // 재리뷰 a9d5acd: 다른 탭의 명시적 로그아웃. 알림을 못 받은 탭도 로그아웃 시각 이전 초안은 버린다.
+  it('로그아웃 시각 이전(같은 시각 포함)에 보관된 초안은 읽지 않고 지운다', () => {
+    const local = new MemoryStorage();
+    const tab = resolveTabId(storage, win);
+    const off = registerDraft('x', () => ({ label: 'x', path: '/', data: { a: 1 } }));
+    persistRegisteredDrafts(storage, tab, 100);
+    off();
+    expect(lastLogoutAt(local)).toBe(0);
+    recordLogout(local, 100);
+    expect(lastLogoutAt(local)).toBe(100);
+    expect(readStoredDraft(storage, tab, 'x', lastLogoutAt(local))).toBeNull();
+    expect(storage.getItem('awbs.draft:x')).toBeNull();
+
+    const off2 = registerDraft('y', () => ({ label: 'y', path: '/', data: { b: 1 } }));
+    persistRegisteredDrafts(storage, tab, 101);
+    off2();
+    expect(readStoredDraft(storage, tab, 'y', lastLogoutAt(local))?.data).toEqual({ b: 1 });
+  });
+
+  it('로그아웃 시각 저장소가 깨졌거나 막혀도 0', () => {
+    const local = new MemoryStorage();
+    local.setItem('awbs.logoutAt', 'bad');
+    expect(lastLogoutAt(local)).toBe(0);
+    const blocked = { length: 0, key: () => null, getItem: () => { throw new Error('b'); }, setItem: () => { throw new Error('b'); }, removeItem: () => undefined };
+    expect(lastLogoutAt(blocked)).toBe(0);
+    expect(() => { recordLogout(blocked, 1); }).not.toThrow();
   });
 });

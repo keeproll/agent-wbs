@@ -73,6 +73,7 @@ const { save, busy, conflictModal } = useSave({
   onFieldErrors: setFieldErrors,            // 400의 고칠 항목
   onConflictReload: () => { /* 편집 버리고 최신 다시 읽기 */ },
   // 실패는 catch로 삼키지 말고 그대로 던진다. 창 안에 이유가 보이고, 끝까지 성공해야 창이 닫힌다.
+  // reload는 client.call로 서버에서 새로 읽는다(queryClient.fetchQuery는 캐시를 돌려줄 수 있어 옛 버전으로 또 충돌한다).
   onConflictReapply: async () => { const latest = await reload(); await saveWith(latest.updatedAt, draft); },
 });
 …
@@ -134,7 +135,10 @@ return <section>{restoreOffer}…</section>;
 
 초안을 넘기지 않는 경우(원칙: 세션 만료로 끊긴 그 탭·그 화면·그 대상에서만 복원):
 
-- **직접 로그아웃하면 보관 초안을 바로 모두 지운다.** 왜: 다음에 로그인하는 사람이 이전 작업자의 저장 안 된 내용을 보면 안 된다. 세션 만료 뒤 다시 로그인한 경우에만 복원을 제안한다.
+- **직접 로그아웃하면 보관 초안을 바로 모두 지운다. 다른 탭 것도 지운다.** 왜: 다음에 로그인하는 사람이 이전 작업자의 저장 안 된 내용을 보면 안 된다. 세션 만료 뒤 다시 로그인한 경우에만 복원을 제안한다.
+  - 규칙은 하나다: **마지막 로그아웃 시각보다 먼저(같은 시각 포함) 보관된 초안은 복원하지 않고 버린다.**
+  - 로그아웃 시각은 모든 탭이 함께 보는 localStorage(`awbs.logoutAt`)에 남긴다. 그래서 그때 닫혀 있었거나 알림을 못 받은 탭도 다음에 열릴 때 이 규칙으로 지킨다.
+  - 열려 있는 다른 탭에는 BroadcastChannel로 바로 알려, 그 탭의 보관 초안과 복원 안내를 즉시 지운다.
 - **다른 탭으로 복사되지 않는다.** `window.open`으로 연 새 탭은 브라우저가 sessionStorage 사본을 넘겨주지만, 탭마다 다른 탭 id(sessionStorage와 `window.name`에 함께 저장)로 구분해 복사본은 읽지 않고 지운다.
   - 화면에서 새 창을 열 때는 `rel="noopener"`(링크) 또는 `window.open(url, '_blank', 'noopener')`를 쓴다. 왜: 여는 탭의 저장소 사본과 `window.opener` 연결을 넘기지 않기 위해서다.
   - 브라우저 메뉴의 「탭 복제」는 `window.name`까지 복사할 수 있어 같은 탭으로 볼 수 있다. 이것은 막지 못한다.
