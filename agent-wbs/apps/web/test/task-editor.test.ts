@@ -5,7 +5,7 @@ import {
 
 const col = (name: string, extra: Row = {}): Row => ({ name, type: 'uuid', nullable: false, pk: false, fk: '', unique: false, def: '', desc: '', ...extra });
 const dbDraft = (f: Record<string, string>, columns: Row[], indexes: Row[] = []): EditorDraft => ({
-  kind: 'ent', sec: 'DB', idx: -1, key: '', f, b: { columns, indexes },
+  kind: 'ent', sec: 'DB', target: null, key: '', f, b: { columns, indexes },
 });
 const tasks = [
   { taskKey: 'TASK-0003', designs: [{ kind: 'DB', content: { ents: [{ f: { name: 'tasks', change: '신규' }, b: { columns: [col('id', { pk: true }), col('title')] } }] } }] },
@@ -38,7 +38,7 @@ describe('기술 설계 편집기 검사(P L5549–5591, UAT-TASK-08)', () => {
     expect(r2.errs).toContain('PK 컬럼이 없습니다 — 최소 1개 컬럼에 PK를 지정하세요.');
   });
   it('중복 Endpoint·잘못된 HTTP 상태·/ 없는 Path를 막는다', () => {
-    const draft: EditorDraft = { kind: 'ent', sec: 'API', idx: -1, key: '', f: { method: 'GET', path: '/api/tasks', desc: '', auth: '팀장 세션' }, b: { request: '', response: '', validation: '', errors: [{ code: 'X', http: '40', cond: '' }], tables: '' } };
+    const draft: EditorDraft = { kind: 'ent', sec: 'API', target: null, key: '', f: { method: 'GET', path: '/api/tasks', desc: '', auth: '팀장 세션' }, b: { request: '', response: '', validation: '', errors: [{ code: 'X', http: '40', cond: '' }], tables: '' } };
     const r = validateDraft(draft, { known: {}, ownApi: [{ method: 'GET', path: '/api/tasks' }] });
     expect(r.errs).toContain('GET /api/tasks Endpoint가 이미 있습니다.');
     expect(r.errs).toContain('Error Response 1행: HTTP 상태는 3자리 숫자');
@@ -46,11 +46,11 @@ describe('기술 설계 편집기 검사(P L5549–5591, UAT-TASK-08)', () => {
     expect(bad.errs).toContain('Path는 /로 시작해야 합니다.');
   });
   it('환경 변수 이름은 대문자·숫자·_만 허용한다', () => {
-    const draft: EditorDraft = { kind: 'blk', sec: 'DevOps', idx: -1, key: 'env', f: {}, b: { env: [{ name: 'db_url', example: 'x', secret: true, desc: '' }] } };
+    const draft: EditorDraft = { kind: 'blk', sec: 'DevOps', target: null, key: 'env', f: {}, b: { env: [{ name: 'db_url', example: 'x', secret: true, desc: '' }] } };
     expect(validateDraft(draft, { known: {}, ownApi: [] }).errs).toContain('환경 변수 1행: 변수명은 대문자 · 숫자 · _ 만 사용');
   });
   it('AC·산출물 표의 필수 칸이 비면 막는다', () => {
-    const draft: EditorDraft = { kind: 'spec', sec: '', idx: -1, key: 'ac', f: {}, b: { ac: [{ given: 'g', when: '', then: 't', method: '' }] } };
+    const draft: EditorDraft = { kind: 'spec', sec: '', target: null, key: 'ac', f: {}, b: { ac: [{ given: 'g', when: '', then: 't', method: '' }] } };
     expect(validateDraft(draft, { known: {}, ownApi: [] }).errs).toEqual(['Acceptance Criteria 1행: When (행동) 필수']);
   });
   it('새 테이블 초안은 id PK와 시각 컬럼을 갖는다(P L5507)', () => {
@@ -129,5 +129,12 @@ describe('설계 저장은 바꾼 블록·엔티티만 최신 위에 얹는다(�
     expect(applyDesignOp('DB', latest, { type: 'blocks', b: {} })).toEqual(latest);
     expect(applyDesignOp('DB', undefined, { type: 'blocks', b: {} })).toEqual({ ents: [], b: {} });
     expect(applyDesignOp('DB', latest, { type: 'replace', content: {} })).toEqual({});
+  });
+});
+
+describe('편집 대상은 배열 위치가 아니라 편집 시작 때 고정한 이름으로 정한다(재리뷰2 P1)', () => {
+  it('knownTables는 편집 중인 테이블을 이름으로 뺀다(순서가 바뀌어도 다른 테이블을 빼지 않음)', () => {
+    const reordered = [{ taskKey: 'T', designs: [{ kind: 'DB', content: { ents: [{ f: { name: 'tasks', change: '신규' }, b: { columns: [] } }, { f: { name: 'wbs_nodes', change: '신규' }, b: { columns: [] } }] } }] }];
+    expect(Object.keys(knownTables(reordered, { task: 'T', key: 'wbs_nodes' }))).toEqual(['tasks']);
   });
 });

@@ -15,13 +15,22 @@ test.beforeEach(({ page }) => {
 });
 test.afterAll(() => { if (serverErrors.length) console.log(`[실제 API 5xx] ${serverErrors.join(' | ')}`); });
 
+/**
+ * 서버는 비밀번호 로그인 시도 수를 제한한다(429 RATE_LIMITED). 시험마다 로그인하면 6번째부터 막히므로
+ * 첫 시험에서 한 번 로그인하고 그 세션(쿠키)을 다음 시험에 다시 쓴다.
+ */
+let sessionState: Awaited<ReturnType<import('@playwright/test').BrowserContext['storageState']>> | null = null;
 async function login(page: Page, path: string) {
+  if (sessionState) await page.context().addCookies(sessionState.cookies);
   await page.goto(path);
-  await expect(page).toHaveURL(/\/login/);
-  await page.getByLabel('비밀번호').fill(password);
-  await page.getByRole('button', { name: '로그인' }).click();
+  if (!sessionState) {
+    await expect(page).toHaveURL(/\/login/);
+    await page.getByLabel('비밀번호').fill(password);
+    await page.getByRole('button', { name: '로그인' }).click();
+  }
   await expect(page).toHaveURL(path);
   await expect(page.getByRole('heading', { level: 2 })).toBeVisible();
+  sessionState = await page.context().storageState();
 }
 const status = (page: Page) => page.locator('.summary .st');
 
@@ -139,4 +148,40 @@ test('재리뷰 P2 실제 서버: 첫 응답 유실 → 새 입력으로 추가 
   await expect(page.getByRole('button', { name: '추가 중…' })).toHaveCount(0);
   await expect(input).toHaveValue('아직 저장하지 않은 둘째 항목');
   expect(sent.map((x) => (x as { content: string }).content)).toEqual(['서버에 저장된 첫 항목', '서버에 저장된 첫 항목']);
+});
+
+test('재리뷰2 P1 실제 서버: 편집 중 서버의 테이블 순서가 바뀌어도 「다시 적용」은 편집을 시작한 그 테이블만 바꾸고 다른 테이블을 덮어쓰지 않는다', async ({ page }) => {
+  test.setTimeout(60_000);
+  await login(page, '/wbs/TASK-0004?tab=tech');
+  console.log('[재리뷰2] 열림');
+  const before = (await apiCall(page, 'tasks/TASK-0004')).body.designs.find((x: { kind: string }) => x.kind === 'DB').content;
+  const names = before.ents.map((e: { f: { name: string } }) => e.f.name) as string[];
+  expect(names.slice(0, 2)).toEqual(['wbs_nodes', 'tasks']);
+  console.log('[재리뷰2] 이름', names.join(','));
+  // 둘째 테이블 tasks의 이름을 바꾼다(자기 참조 FK가 없어 이름 변경이 편집기 검사를 통과한다)
+  await page.getByRole('group', { name: '테이블 tasks' }).getByRole('button', { name: '편집' }).click();
+  const renamed = `tasks_review_${String(Date.now() % 100000)}`;
+  await page.getByRole('form').getByLabel('테이블명', { exact: true }).fill(renamed);
+  // 다른 사용자가 앞 두 테이블 순서를 바꿔 저장 → 화면 polling이 그 최신 Task를 읽을 때까지 기다린다
+  const t = (await apiCall(page, 'tasks/TASK-0004')).body;
+  const reordered = structuredClone(t.designs.find((x: { kind: string }) => x.kind === 'DB').content);
+  reordered.ents = [reordered.ents[1], reordered.ents[0], ...reordered.ents.slice(2)];
+  const polled = page.waitForResponse(async (r) => r.url().endsWith('/api/tasks/TASK-0004') && r.request().method() === 'GET'
+    && ((await r.json()) as { designs: { kind: string; content: { ents: { f: { name: string } }[] } }[] }).designs.find((x) => x.kind === 'DB')?.content.ents[0]?.f.name === 'tasks', { timeout: 15_000 });
+  expect((await apiCall(page, 'tasks/TASK-0004/design/DB', 'PATCH', { updatedAt: t.updatedAt, content: reordered })).status).toBe(200);
+  await polled;
+  console.log('[재리뷰2] polling 반영');
+  // 편집기 검사도 위치가 아니라 편집 중인 테이블 이름으로 자기 자신을 빼야 한다(순서가 바뀌어도 「이미 정의됨」 오류가 나면 안 됨)
+  await expect(page.getByRole('form').getByRole('alert'), '순서 변경 뒤 편집기 검사 오류').toHaveCount(0, { timeout: 5_000 });
+  await expect(page.getByRole('button', { name: '저장', exact: true }).first()).toBeEnabled({ timeout: 5_000 });
+  await page.getByRole('button', { name: '저장', exact: true }).first().click();
+  const modal = page.getByRole('alertdialog');
+  await expect(modal).toContainText('409');
+  console.log('[재리뷰2] 409');
+  await modal.getByRole('button', { name: /다시 적용/ }).click();
+  await expect(page.getByRole('form')).toHaveCount(0);
+  const ents = (await apiCall(page, 'tasks/TASK-0004')).body.designs.find((x: { kind: string }) => x.kind === 'DB').content.ents as { f: { name: string; desc: string } }[];
+  // 편집을 시작한 tasks만 새 이름으로 바뀌고, 순서가 바뀌어 그 위치로 온 wbs_nodes 정의는 그대로 남는다
+  expect(ents.map((e) => e.f.name)).toEqual([renamed, 'wbs_nodes', ...names.slice(2)]);
+  expect(ents[1]?.f.desc).toBe(before.ents[0].f.desc);
 });
