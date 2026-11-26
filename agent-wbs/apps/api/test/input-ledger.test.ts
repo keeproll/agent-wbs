@@ -1,14 +1,18 @@
 import { describe, expect, test } from 'vitest';
-import { analyze, latestOpen, openCommits, receive, skip, type Ledger } from '../src/project/ledger.ts';
-import { runSeed, type InputModel } from './input-ledger-property.ts';
+import { analyzable, analyze, chainHead, openCommits, receive, skip, type Ledger } from '../src/project/ledger.ts';
+import { Graph, runSeed, type InputModel } from './input-ledger-property.ts';
 
 /** 서비스가 쓰는 원장 규칙을 그대로 감싼 검사 모델 */
-function ledgerModel(base: string): InputModel {
-  let ledger: Ledger = { versions: [{ v: 1, sha: base, depth: null }], commits: [] };
+function chainModel(registration: string): InputModel {
+  let ledger: Ledger = { versions: [{ v: 1, sha: registration }], commits: [] };
   return {
-    report(batch) { const result = receive(ledger, batch); if ('ledger' in result) ledger = result.ledger; },
+    report(report) {
+      const result = receive(ledger, report);
+      if (result.kind === 'ok') ledger = result.ledger;
+      return result.kind === 'invalid' ? { kind: 'invalid' } : result.kind === 'rewritten' ? { kind: 'rewritten' } : { kind: result.kind, head: result.head };
+    },
     skipAllPending() { ledger = skip(ledger, ledger.commits.map((c) => c.sha)); },
-    latest: () => latestOpen(ledger)?.sha,
+    latest: () => analyzable(ledger),
     analyze(sha) { const result = analyze(ledger, sha); if ('error' in result) return false; ledger = result.ledger; return true; },
     versions: () => ledger.versions.map((v) => v.sha),
     open: () => openCommits(ledger).map((c) => c.sha),
@@ -16,34 +20,43 @@ function ledgerModel(base: string): InputModel {
   };
 }
 
-describe('입력 커밋 원장 불변식(FIX2 리뷰 F1)', () => {
-  test('보고가 임의 순서·중복·지연으로 도착해도 500개 시드 모두 불변식을 지킨다', () => {
-    const failures = Array.from({ length: 500 }, (_, i) => runSeed(i + 1, ledgerModel)).filter((f) => f !== null);
+describe('입력 커밋 원장 — git이 정한 순서(FIX3 리뷰 D1~D3)', () => {
+  test('merge·fast-forward·이력 재작성·응답 유실·중복·지연 보고가 섞인 무작위 Git 이력 500 시드 모두 불변식을 지킨다', () => {
+    const failures = Array.from({ length: 500 }, (_, i) => runSeed(i + 1, chainModel)).filter((f) => f !== null);
     expect(failures.slice(0, 1)).toEqual([]);
   });
 
-  test('리뷰 재현: C 확정 뒤 B가 따로 들어오고 [B,C]가 다시 와도 B는 분석 대상이 아니며 버전은 거꾸로 가지 않는다', () => {
-    const m = ledgerModel('A');
-    m.report([{ sha: 'C', depth: 3, hasInput: true }]);
-    expect(m.analyze('C')).toBe(true);
-    m.report([{ sha: 'B', depth: 2, hasInput: true }]);
-    m.report([{ sha: 'B', depth: 2, hasInput: true }, { sha: 'C', depth: 3, hasInput: true }]);
-    expect(m.open()).toEqual([]);
-    expect(m.analyze('B')).toBe(false);
-    expect(m.versions()).toEqual(['A', 'C']);
+  test('D2 재현: feature에 main을 합친 뒤 main을 fast-forward해도 새 입력을 잃지 않는다', () => {
+    const g = new Graph();
+    const root = g.commit([], true);
+    const o = g.commit([g.commit([g.commit([root], true)], true)], true); // 옛 main O
+    const q2 = g.commit([g.commit([root], true)], true); // root에서 갈라진 feature Q1·Q2
+    const f = g.commit([q2, o], true); // 새 main F: 첫 부모 Q2, 옛 main O는 둘째 부모
+    expect(g.firstParentDepth(f)).toBeLessThanOrEqual(g.firstParentDepth(o)); // 첫 부모 깊이로는 F가 O보다 앞처럼 보인다
+    const m = chainModel(o);
+    const result = m.report({ base: o, head: f, baseIsAncestor: g.isAncestor(o, f), commits: g.revList(o, f).map((sha) => ({ sha, hasInput: true, depth: 0 })) });
+    expect(result).toMatchObject({ kind: 'ok', head: f });
+    expect(m.open()).toEqual(g.revList(o, f));
+    expect(m.analyze(f)).toBe(true);
   });
 
-  test('형식이 어긋난 보고는 거부하고 아무것도 바꾸지 않는다', () => {
-    const ledger: Ledger = { versions: [{ v: 1, sha: 'A', depth: null }], commits: [{ sha: 'B', depth: 2, state: 'pending', version: null }] };
-    expect(receive(ledger, [{ sha: 'C', depth: 3, hasInput: true }, { sha: 'D', depth: 1, hasInput: true }])).toMatchObject({ error: { rule: 'order' } });
-    expect(receive(ledger, [{ sha: 'B', depth: 5, hasInput: true }])).toMatchObject({ error: { rule: 'depth' } });
-    expect(receive(ledger, [{ sha: 'X', depth: 2, hasInput: true }])).toMatchObject({ error: { rule: 'depth' } });
+  test('base가 head와 다르면 붙이지 않고 지금 head를 돌려준다(늦은 중복 보고 포함)', () => {
+    const ledger: Ledger = { versions: [{ v: 1, sha: 'A' }], commits: [] };
+    const first = receive(ledger, { base: 'A', head: 'B', baseIsAncestor: true, commits: [{ sha: 'B', hasInput: true }] });
+    if (first.kind !== 'ok') throw new Error(first.kind);
+    expect(chainHead(first.ledger)).toBe('B');
+    expect(receive(first.ledger, { base: 'A', head: 'B', baseIsAncestor: true, commits: [{ sha: 'B', hasInput: true }] })).toEqual({ kind: 'stale', head: 'B' });
   });
 
-  test('등록 커밋의 깊이를 늦게 알게 되면 그보다 앞의 커밋은 v1에 포함된 것으로 넘긴다', () => {
-    const m = ledgerModel('A');
-    m.report([{ sha: 'P', depth: 4, hasInput: true }]);
-    m.report([{ sha: 'A', depth: 5, hasInput: false }, { sha: 'Q', depth: 6, hasInput: true }]);
-    expect(m.open()).toEqual(['Q']);
+  test('이력 재작성(base가 main의 조상이 아님)은 붙이지 않는다', () => {
+    const ledger: Ledger = { versions: [{ v: 1, sha: 'A' }], commits: [] };
+    expect(receive(ledger, { base: 'A', head: 'Z', baseIsAncestor: false, commits: [] })).toEqual({ kind: 'rewritten', head: 'A' });
+  });
+
+  test('D3: 한 보고 안의 같은 SHA, 이미 받은 SHA, 입력 파일 없는 커밋은 거부하고 아무것도 바꾸지 않는다', () => {
+    const ledger: Ledger = { versions: [{ v: 1, sha: 'A' }], commits: [{ sha: 'B', pos: 1, head: 'B', state: 'pending', version: null }] };
+    for (const commits of [[{ sha: 'C', hasInput: true }, { sha: 'C', hasInput: true }], [{ sha: 'A', hasInput: true }], [{ sha: 'D', hasInput: false }]]) {
+      expect(receive(ledger, { base: 'B', head: 'H', baseIsAncestor: true, commits })).toMatchObject({ kind: 'invalid' });
+    }
   });
 });

@@ -1,4 +1,5 @@
 import { iso, systemState, type Db } from './db.ts';
+import { inputHead } from './service.ts';
 import type { StoredDraft } from './draft.ts';
 import { jobView, type PlanningJob } from './jobs.ts';
 import { BOOT_STEPS, INPUT_STEPS } from './steps.ts';
@@ -54,9 +55,9 @@ export async function projectState(db: Db) {
     `select v.v,${iso('v.created_at')} at,v.commit_sha commit,v.md_list "mdList",v.changes,v.instruction,r.result->>'text' result,
        (select count(*)::int from tasks t where t.src_input_version=v.id and t.deleted_at is null) "taskCount"
      from input_versions v left join input_version_results r on r.input_version=v.id where v.project_id=$1 order by v.v`, [p.id])).rows;
-  // 커밋 순서는 depth(main 첫 부모 이력의 깊이)다. 입력 파일이 없는 행은 확정 커밋의 깊이만 기록한 것이라 목록에 넣지 않는다.
+  // 커밋 순서는 Runner가 보낸 git 목록 순서(pos)다. 서버가 따로 계산하지 않는다.
   const changeCommits = (await db.query<{ sha: string; state: 'pending' | 'skipped' | 'analyzed'; files: { at: string; author: string; message: string; files: unknown[] } }>(
-    "select sha,state,files from input_change_commits where project_id=$1 and jsonb_array_length(files->'files')>0 order by (files->>'depth')::int", [p.id])).rows
+    "select sha,state,files from input_change_commits where project_id=$1 order by (files->>'pos')::int", [p.id])).rows
     .map((c) => ({ sha: c.sha, at: c.files.at, author: c.files.author, message: c.files.message, state: c.state, files: c.files.files }));
   const inputPlanning = (await db.query<PlanningJob & { version: string | null }>(
     `select j.id,j.project_id,j.kind,j.run_no,j.status,j.instruction,
@@ -68,6 +69,7 @@ export async function projectState(db: Db) {
     targetDate: p.target_date, instruction: p.lead_instruction, constraints, registeredAt: p.created_at, inputs, changeCommits,
     // 차이 분석의 결과 CP 연결은 M2-07(Planning·CP)이 채운다.
     inputJob: inputPlanning ? { ...(await view(db, inputPlanning, INPUT_STEPS)), version: Number(inputPlanning.version), proposalId: null } : null,
+    inputHead: await inputHead(db, p.id),
     updatedAt: p.updated_at,
   };
 

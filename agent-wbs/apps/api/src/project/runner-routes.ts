@@ -18,7 +18,7 @@ export function installProjectRunner(app: FastifyInstance, pool: Pool): void {
   void app.register(async (scope) => {
     installProjectErrors(scope, actionOf);
     routeOf(scope, pool, 'reportRepoCheck', (ctx) => reportRepoCheck(ctx.client, param(ctx, 'id'), body(ctx), ctx.principal), 204);
-    routeOf(scope, pool, 'reportInputChanges', (ctx) => reportInputChanges(ctx.client, body(ctx)), 204);
+    routeOf(scope, pool, 'reportInputChanges', (ctx) => reportInputChanges(ctx.client, body(ctx)));
     routeOf(scope, pool, 'reportBootstrapProgress', (ctx) =>
       reportProgress(ctx.client, param(ctx, 'jobId'), body<{ fence: number; stepKey: string; status: StepStatus; note?: string }>(ctx), ctx.principal), 204);
     routeOf(scope, pool, 'submitDraft', (ctx) => submitDraft(ctx.client, param(ctx, 'jobId'), body<DraftInput & { fence: number }>(ctx), ctx.principal), 201);

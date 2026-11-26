@@ -38,8 +38,15 @@ const SHA1 = 'a'.repeat(40);
 const SHA2 = 'b'.repeat(40);
 const SHA3 = 'c'.repeat(40);
 const SHA4 = 'd'.repeat(40);
-/** 테스트 이력의 main 첫 부모 깊이: 등록 커밋 A(SHA1) 다음으로 B=2, C=3, D=4 */
-const depthOf = (sha: string) => ({ a: 1, b: 2, c: 3, d: 4 } as Record<string, number>)[sha.slice(0, 1)] ?? 1;
+/**
+ * 입력 변경 보고(비교 후 추가). base를 주지 않으면 서버의 현재 inputHead를 쓴다(Runner가 지난 응답의 head를 쓰는 것과 같다).
+ * head를 주지 않으면 목록의 마지막 커밋이 main 끝이다.
+ */
+async function chainReport(commits: object[], files: object[], options: { base?: string; head?: string; baseIsAncestor?: boolean } = {}) {
+  const base = options.base ?? (await app.inject({ url: '/api/project', headers: { cookie } })).json<{ inputHead: string }>().inputHead;
+  const head = options.head ?? (commits.at(-1) as { sha: string } | undefined)?.sha ?? base;
+  return runner('/api/runner/input-changes', { base, head, baseIsAncestor: options.baseIsAncestor ?? true, commits, files });
+}
 const REPO = 'https://github.com/acme/web';
 const STRUCTURE = { uiux: true, uiuxFiles: 12, docs: ['prototype/docs/guide.md'], src: false, contracts: false, agentwbs: false };
 let cookie = '';
@@ -73,7 +80,7 @@ async function state() {
   expect(response.statusCode, response.body).toBe(200);
   expectShape('getProject', 200, response.json());
   return response.json<{
-    state: string; id: string; updatedAt: string; epoch: number; constraints: { id: string; level: string }[];
+    state: string; id: string; updatedAt: string; epoch: number; inputHead: string; constraints: { id: string; level: string }[];
     bootstrap: { jobId: string; runNo: number; status: string; steps: { key: string; status: string; note: string }[]; logs: { text: string }[];
       fail: { reason: string } | null; revision: number | null; decisions: { id: string; tdKey: string; status: string; authority: string; level: string | null; updatedAt: string; title: string }[];
       draft: { tasks: { ref: string; judgedRules?: { items: { subjectHash: string }[] } }[]; splitCheck: { pass: number; suspect: number; violation: number } } | null };
@@ -481,13 +488,18 @@ describe('project 초기 WBS 초안과 승인(D-33)', () => {
 
 describe('project 입력 자료 변경·분석·분석 안 함(G§4.2 ②)', () => {
   const files = (sha: string, path: string, change = 'modified') => ({ commitSha: sha, path, change, added: 3, deleted: 1 });
-  const report = (commits: string[], changed: object[]) => runner('/api/runner/input-changes', {
-    commits: commits.map((sha, i) => ({ sha, depth: depthOf(sha), at: `2026-11-2${String(6 + i)}T0${String(i)}:00:00Z`, author: '팀장', message: `입력 수정 ${String(i)}` })), files: changed });
+  const pushed = (commits: string[]) => commits.map((sha, i) => ({ sha, at: `2026-11-2${String(6 + i)}T0${String(i)}:00:00Z`, author: '팀장', message: `입력 수정 ${String(i)}` }));
+  const report = (commits: string[], changed: object[]) => chainReport(pushed(commits), changed);
 
-  test('Runner가 보고한 입력 커밋을 감지 목록에 올리고, 같은 보고는 한 번만 남긴다', async () => {
+  test('Runner가 보고한 입력 커밋을 감지 목록에 올리고, 같은 보고를 다시 보내면 base가 낡아 409와 현재 head를 받는다', async () => {
     const changes = [files(SHA2, 'prototype/docs/guide.md'), files(SHA2, 'prototype/docs/new.md', 'added')];
-    expect((await report([SHA2], changes)).statusCode).toBe(204);
-    expect((await report([SHA2], changes)).statusCode).toBe(204);
+    const first = await report([SHA2], changes);
+    expect(first.statusCode, first.body).toBe(200);
+    expectShape('reportInputChanges', 200, first.json());
+    expect(first.json()).toEqual({ head: SHA2, appended: 1, historyRewritten: false });
+    const again = await chainReport(pushed([SHA2]), changes, { base: SHA1 });
+    expect(again.statusCode).toBe(409);
+    expect(errorOf(again)).toMatchObject({ code: 'VERSION_CONFLICT', details: { current: { base: SHA2 } } });
     const unknown = await report([SHA3], [files(SHA4, 'prototype/uiux/a.html')]);
     expect(unknown.statusCode).toBe(400);
     const s = await state();
@@ -508,7 +520,7 @@ describe('project 입력 자료 변경·분석·분석 안 함(G§4.2 ②)', () 
   });
 
   test('「이 버전으로 분석」은 건너뛴 변경까지 함께 비교하는 새 입력 버전과 차이 분석 job을 만든다', async () => {
-    expect((await report([SHA3], [files(SHA3, 'prototype/docs/new.md'), files(SHA3, 'prototype/uiux/a.html', 'deleted')])).statusCode).toBe(204);
+    expect((await report([SHA3], [files(SHA3, 'prototype/docs/new.md'), files(SHA3, 'prototype/uiux/a.html', 'deleted')])).statusCode).toBe(200);
     const s = await state();
     const same = await lead('POST', '/api/project/inputs', { updatedAt: s.updatedAt, commit: SHA1, commits: [SHA3] });
     expect(errorOf(same).code).toBe('INPUT_UNCHANGED');
@@ -578,7 +590,7 @@ describe('project 리뷰 지적 회귀(M2-03-REVIEW 1~8)', () => {
     expect((await runner(`/api/planning/bootstrap/${current.id}/draft`, { fence: current.fence, ...d })).statusCode).toBe(201);
     return { current, s: await state() };
   }
-  const commit = (sha: string, at: string) => ({ sha, depth: depthOf(sha), at, author: 'reviewer', message: sha.slice(0, 1) });
+  const commit = (sha: string, at: string) => ({ sha, at, author: 'reviewer', message: sha.slice(0, 1) });
   const file = (sha: string, path: string) => ({ commitSha: sha, path, change: 'added', added: 1, deleted: 0 });
   const progressOf = (job: { id: string; fence: number }, stepKey: string, status: string, note?: string) =>
     runner(`/api/runner/bootstrap/${job.id}/progress`, { fence: job.fence, stepKey, status, at: AT_NOW(), ...(note && { note }) });
@@ -606,14 +618,15 @@ describe('project 리뷰 지적 회귀(M2-03-REVIEW 1~8)', () => {
     expect((await progressOf(next, 'codex', 'run')).statusCode).toBe(204);
   });
 
-  test('2. 확인한 커밋 중 최신(보고 순서상 마지막)만 고정하고, 옛 커밋 선택은 400이며 아무것도 소비하지 않는다', async () => {
+  test('2. 입력 사슬 끝(head)만 고정하고, 목록 중간 커밋 선택은 400이며 아무것도 소비하지 않는다', async () => {
     const { s } = await fresh();
     expect((await lead('POST', '/api/project/bootstrap/approve', { revision: s.bootstrap.revision })).statusCode).toBe(200);
-    // 커밋 시각은 Git 순서가 아니다. 보고 순서(main 이력 순서)가 기준이다: SHA3이 시각은 이르지만 나중 커밋이다.
-    expect((await runner('/api/runner/input-changes', { commits: [commit(SHA2, '2026-11-26T03:00:00Z'), commit(SHA3, '2026-11-26T02:00:00Z')],
-      files: [file(SHA2, 'prototype/docs/older.md'), file(SHA3, 'prototype/docs/newer.md')] })).statusCode).toBe(204);
+    // 순서는 서버가 계산하지 않는다. 커밋 시각이 거꾸로여도 git 목록 순서(B → C)를 그대로 쓴다.
+    expect((await chainReport([commit(SHA2, '2026-11-26T03:00:00Z'), commit(SHA3, '2026-11-26T02:00:00Z')],
+      [file(SHA2, 'prototype/docs/older.md'), file(SHA3, 'prototype/docs/newer.md')])).statusCode).toBe(200);
     const before = await state();
     expect(before.changeCommits.map((c) => c.sha)).toEqual([SHA2, SHA3]);
+    expect(before.inputHead).toBe(SHA3);
     const old = await lead('POST', '/api/project/inputs', { updatedAt: before.updatedAt, commit: SHA2, commits: [SHA2, SHA3] });
     expect(old.statusCode).toBe(400);
     expect(errorOf(old).errors).toEqual([expect.objectContaining({ path: 'commit', rule: 'latest' })]);
@@ -648,13 +661,15 @@ describe('project 리뷰 지적 회귀(M2-03-REVIEW 1~8)', () => {
     }
   });
 
-  test('6. prototype/ 밖 파일은 입력 변경이 아니고, 입력 파일이 없는 커밋은 감지 목록에 올리지 않는다', async () => {
+  test('6. prototype/ 밖 파일은 입력 변경이 아니고, 입력 파일이 없는 커밋이 목록에 있으면 계산이 잘못된 보고라 400이다', async () => {
     await fresh();
-    const response = await runner('/api/runner/input-changes', { commits: [commit(SHA2, '2026-11-26T01:00:00Z'), commit(SHA3, '2026-11-26T02:00:00Z'), commit(SHA4, '2026-11-26T03:00:00Z')],
-      files: [file(SHA2, 'src/agent.ts'), file(SHA4, 'prototype/extra.md'), file(SHA4, 'src/b.ts')] });
-    expect(response.statusCode, response.body).toBe(204);
-    const s = await state();
-    expect(s.changeCommits.map((c) => [c.sha, c.files.map((f) => f.path)])).toEqual([[SHA4, ['prototype/extra.md']]]);
+    // rev-list -- prototype/ 결과에는 prototype/을 바꾸지 않은 커밋이 나올 수 없다.
+    const bad = await chainReport([commit(SHA2, AT_NOW()), commit(SHA4, AT_NOW())], [file(SHA2, 'src/agent.ts'), file(SHA4, 'prototype/extra.md')]);
+    expect(bad.statusCode).toBe(400);
+    expect((await state()).changeCommits).toEqual([]);
+    const mixed = await chainReport([commit(SHA4, AT_NOW())], [file(SHA4, 'prototype/extra.md'), file(SHA4, 'src/b.ts')]);
+    expect(mixed.statusCode, mixed.body).toBe(200);
+    expect((await state()).changeCommits.map((c) => [c.sha, c.files.map((f) => f.path)])).toEqual([[SHA4, ['prototype/extra.md']]]);
   });
 
   test('7. 같은 멱등 키의 등록 재전송은 성공 응답을 재생한다', async () => {
@@ -669,53 +684,78 @@ describe('project 리뷰 지적 회귀(M2-03-REVIEW 1~8)', () => {
     expect(again.json()).toEqual(first.json());
   });
 
-  test('R1. 겹쳐 도착한 입력 보고도 Git 순서를 지킨다: [C] 뒤 [B,C]면 B가 C보다 앞이다', async () => {
+  test('D1·R1·F1. 늦게·중복으로 도착한 옛 보고는 base가 낡아 409이고 원장을 바꾸지 않으며, 버전은 앞으로만 간다', async () => {
     const { s } = await fresh();
     expect((await lead('POST', '/api/project/bootstrap/approve', { revision: s.bootstrap.revision })).statusCode).toBe(200);
-    expect((await runner('/api/runner/input-changes', { commits: [commit(SHA3, '2026-11-26T01:00:00Z')], files: [file(SHA3, 'prototype/docs/newer.md')] })).statusCode).toBe(204);
-    // 늦게 도착한 따라잡기 보고. 배열은 오래된 것부터이고 이미 받은 C와 겹친다.
-    expect((await runner('/api/runner/input-changes', { commits: [commit(SHA2, '2026-11-26T01:00:00Z'), commit(SHA3, '2026-11-26T01:00:00Z')],
-      files: [file(SHA2, 'prototype/docs/older.md'), file(SHA3, 'prototype/docs/newer.md')] })).statusCode).toBe(204);
+    // Runner의 첫 보고: base = 등록 커밋(SHA1). 등록 이전 이력이나 등록 커밋의 깊이는 몰라도 된다(D1).
+    const first = await chainReport([commit(SHA2, AT_NOW()), commit(SHA3, AT_NOW())], [file(SHA2, 'prototype/docs/b.md'), file(SHA3, 'prototype/docs/c.md')], { base: SHA1 });
+    expect(first.json()).toEqual({ head: SHA3, appended: 2, historyRewritten: false });
     const before = await state();
-    expect(before.changeCommits.map((c) => c.sha)).toEqual([SHA2, SHA3]);
-    const old = await lead('POST', '/api/project/inputs', { updatedAt: before.updatedAt, commit: SHA2, commits: [SHA2, SHA3] });
-    expect(errorOf(old).errors).toEqual([expect.objectContaining({ path: 'commit', rule: 'latest' })]);
-    const ok = await lead('POST', '/api/project/inputs', { updatedAt: before.updatedAt, commit: SHA3, commits: [SHA2, SHA3] });
-    expect(ok.statusCode, ok.body).toBe(202);
-    // 이미 입력 버전으로 고정한 C보다 앞에 놓인 커밋은 그 버전의 차이에 포함되었으므로 다시 올리지 않는다.
-    expect((await runner('/api/runner/input-changes', { commits: [commit(SHA2, '2026-11-26T01:00:00Z'), commit(SHA3, '2026-11-26T01:00:00Z'), commit(SHA4, '2026-11-26T01:00:00Z')],
-      files: [file(SHA2, 'prototype/docs/older.md'), file(SHA4, 'prototype/docs/later.md')] })).statusCode).toBe(204);
-    expect((await state()).changeCommits.map((c) => `${c.sha.slice(0, 1)}:${c.state}`)).toEqual(['b:analyzed', 'c:analyzed', 'd:pending']);
-  });
-
-  test('F1. 확정한 C보다 앞의 B가 나중에 따로 들어와도 분석 대상이 아니고 입력 버전이 거꾸로 가지 않는다(리뷰 재현)', async () => {
-    const { s } = await fresh();
-    expect((await lead('POST', '/api/project/bootstrap/approve', { revision: s.bootstrap.revision })).statusCode).toBe(200);
-    expect((await runner('/api/runner/input-changes', { commits: [commit(SHA3, AT_NOW())], files: [file(SHA3, 'prototype/docs/newer.md')] })).statusCode).toBe(204);
-    const before = await state();
-    expect((await lead('POST', '/api/project/inputs', { updatedAt: before.updatedAt, commit: SHA3, commits: [SHA3] })).statusCode).toBe(202);
-    const diff = await lease('input_diff');
-    await progress(diff.id, diff.fence, 'check', 'fail', '차이 분석 실패');
-    await finishJob(diff.id);
-    expect((await runner('/api/runner/input-changes', { commits: [commit(SHA2, AT_NOW())], files: [file(SHA2, 'prototype/docs/older.md')] })).statusCode).toBe(204);
-    expect((await runner('/api/runner/input-changes', { commits: [commit(SHA2, AT_NOW()), commit(SHA3, AT_NOW())],
-      files: [file(SHA2, 'prototype/docs/older.md'), file(SHA3, 'prototype/docs/newer.md')] })).statusCode).toBe(204);
+    expect((await lead('POST', '/api/project/inputs', { updatedAt: before.updatedAt, commit: SHA3, commits: [SHA2, SHA3] })).statusCode).toBe(202);
+    // 같은 첫 보고(옛 base)가 늦게 다시 도착하거나, [B]만 담은 지연 보고가 와도 붙이지 않는다.
+    for (const late of [
+      await chainReport([commit(SHA2, AT_NOW()), commit(SHA3, AT_NOW())], [file(SHA2, 'prototype/docs/b.md'), file(SHA3, 'prototype/docs/c.md')], { base: SHA1 }),
+      await chainReport([commit(SHA2, AT_NOW())], [file(SHA2, 'prototype/docs/b.md')], { base: SHA1, head: SHA2 }),
+    ]) {
+      expect(late.statusCode).toBe(409);
+      expect(errorOf(late)).toMatchObject({ code: 'VERSION_CONFLICT', details: { current: { base: SHA3 } } });
+    }
     const after = await state();
     expect(after.changeCommits.map((c) => `${c.sha.slice(0, 1)}:${c.state}`)).toEqual(['b:analyzed', 'c:analyzed']);
+    expect(after.inputs.map((i) => i.commit)).toEqual([SHA1, SHA3]);
+    // 이미 v2에 들어간 B로는 버전을 되돌릴 수 없다.
     const back = await lead('POST', '/api/project/inputs', { updatedAt: after.updatedAt, commit: SHA2, commits: [SHA2] });
     expect(back.statusCode).toBe(409);
     expect((await state()).inputs.map((i) => i.commit)).toEqual([SHA1, SHA3]);
   });
 
-  test('R1. 이미 받은 순서와 어긋나는 보고는 400이고 아무것도 바꾸지 않는다', async () => {
+  test('D2. feature에 main을 합친 뒤 main을 fast-forward해도 새 입력을 잃지 않고 main 끝(head)으로 고정한다', async () => {
     const { s } = await fresh();
     expect((await lead('POST', '/api/project/bootstrap/approve', { revision: s.bootstrap.revision })).statusCode).toBe(200);
-    const both = [file(SHA2, 'prototype/docs/a.md'), file(SHA3, 'prototype/docs/b.md')];
-    expect((await runner('/api/runner/input-changes', { commits: [commit(SHA2, AT_NOW()), commit(SHA3, AT_NOW())], files: both })).statusCode).toBe(204);
-    const swapped = await runner('/api/runner/input-changes', { commits: [commit(SHA3, AT_NOW()), commit(SHA4, AT_NOW()), commit(SHA2, AT_NOW())], files: [...both, file(SHA4, 'prototype/docs/c.md')] });
-    expect(swapped.statusCode).toBe(400);
-    expect(errorOf(swapped).errors).toEqual([expect.objectContaining({ path: 'commits', rule: 'order' })]);
-    expect((await state()).changeCommits.map((c) => c.sha)).toEqual([SHA2, SHA3]);
+    // 옛 main = SHA1(등록). feature Q1(SHA2)·Q2(SHA3)를 옛 main보다 앞에서 갈라 만들고, merge F(SHA4)의 첫 부모는 Q2.
+    // rev-list --first-parent SHA1..F -- prototype/ = [Q1, Q2, F]. 첫 부모 깊이로는 F가 SHA1보다 얕을 수 있다.
+    const result = await chainReport([commit(SHA2, AT_NOW()), commit(SHA3, AT_NOW()), commit(SHA4, AT_NOW())],
+      [file(SHA2, 'prototype/docs/spine1.md'), file(SHA3, 'prototype/docs/spine2.md'), file(SHA4, 'prototype/docs/merge.md')], { base: SHA1, head: SHA4 });
+    expect(result.json()).toEqual({ head: SHA4, appended: 3, historyRewritten: false });
+    const before = await state();
+    expect(before.changeCommits.map((c) => c.state)).toEqual(['pending', 'pending', 'pending']);
+    const analyzed = await lead('POST', '/api/project/inputs', { updatedAt: before.updatedAt, commit: SHA4, commits: [SHA2, SHA3, SHA4] });
+    expect(analyzed.statusCode, analyzed.body).toBe(202);
+    expect((await state()).inputs.at(-1)).toMatchObject({ commit: SHA4, mdList: expect.arrayContaining(['prototype/docs/spine1.md', 'prototype/docs/spine2.md']) });
+  });
+
+  test('main 끝이 입력 파일을 바꾸지 않아도(목록 밖 head) 그 head로 입력 버전을 고정한다', async () => {
+    const { s } = await fresh();
+    expect((await lead('POST', '/api/project/bootstrap/approve', { revision: s.bootstrap.revision })).statusCode).toBe(200);
+    const tip = 'e'.repeat(40);
+    expect((await chainReport([commit(SHA2, AT_NOW())], [file(SHA2, 'prototype/docs/b.md')], { head: tip })).json()).toMatchObject({ head: tip });
+    const before = await state();
+    expect(before.inputHead).toBe(tip);
+    expect(errorOf(await lead('POST', '/api/project/inputs', { updatedAt: before.updatedAt, commit: SHA2, commits: [SHA2] })).errors).toEqual([expect.objectContaining({ rule: 'latest' })]);
+    expect((await lead('POST', '/api/project/inputs', { updatedAt: before.updatedAt, commit: tip, commits: [SHA2] })).statusCode).toBe(202);
+    expect((await state()).inputs.map((i) => i.commit)).toEqual([SHA1, tip]);
+  });
+
+  test('이력 재작성(base가 main의 조상이 아님)은 붙이지 않고 팀장 경고를 남긴다', async () => {
+    await fresh();
+    const result = await chainReport([commit(SHA2, AT_NOW())], [file(SHA2, 'prototype/docs/b.md')], { baseIsAncestor: false });
+    expect(result.statusCode, result.body).toBe(200);
+    expect(result.json()).toEqual({ head: SHA1, appended: 0, historyRewritten: true });
+    expect((await state()).changeCommits).toEqual([]);
+    expect(await count("select count(*) n from alerts where key='input_history_rewritten' and resolved_at is null")).toBe(1);
+    // 같은 경고는 열린 동안 하나만 남는다.
+    await chainReport([commit(SHA2, AT_NOW())], [file(SHA2, 'prototype/docs/b.md')], { baseIsAncestor: false });
+    expect(await count("select count(*) n from alerts where key='input_history_rewritten' and resolved_at is null")).toBe(1);
+  });
+
+  test('D3. 한 보고 안의 같은 SHA·이미 받은 SHA는 계산이 잘못된 보고라 400이고 아무것도 바꾸지 않는다', async () => {
+    await fresh();
+    const twice = await chainReport([commit(SHA2, AT_NOW()), commit(SHA2, AT_NOW())], [file(SHA2, 'prototype/docs/b.md')]);
+    expect(twice.statusCode).toBe(400);
+    expect((await chainReport([commit(SHA2, AT_NOW())], [file(SHA2, 'prototype/docs/b.md')])).statusCode).toBe(200);
+    const known = await chainReport([commit(SHA2, AT_NOW())], [file(SHA2, 'prototype/docs/b.md')], { base: SHA2, head: SHA2 });
+    expect(known.statusCode).toBe(400);
+    expect((await state()).changeCommits.map((c) => c.sha)).toEqual([SHA2]);
   });
 
   test('R2. M2-05 reconcile이 만든 새 job은 현재 실행이라 초안을 받는다(실제 claim·만료·release·reconcile 경로)', async () => {

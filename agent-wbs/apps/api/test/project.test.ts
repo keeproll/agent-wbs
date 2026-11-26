@@ -150,7 +150,7 @@ describe('project 계약의 오류 선언(리뷰 9)', () => {
     ['analyzeInputs', ['INVALID_TRANSITION', 'INPUT_UNCHANGED', 'CLEANUP_PENDING']],
     ['skipInputs', ['INVALID_TRANSITION', 'VERSION_CONFLICT']],
     ['retryInputs', ['INVALID_TRANSITION', 'CLEANUP_PENDING']],
-    ['reportInputChanges', ['INVALID_TRANSITION']],
+    ['reportInputChanges', ['INVALID_TRANSITION', 'VERSION_CONFLICT']],
     ['reportBootstrapProgress', ['INVALID_TRANSITION', 'EXTERNAL_WRITE_BLOCKED', 'LEASE_LOST', 'NOT_FOUND']],
     ['submitDraft', ['INVALID_TRANSITION', 'EXTERNAL_WRITE_BLOCKED', 'LEASE_LOST']],
     ['submitTechProposals', ['INVALID_TRANSITION', 'EXTERNAL_WRITE_BLOCKED', 'LEASE_LOST']],

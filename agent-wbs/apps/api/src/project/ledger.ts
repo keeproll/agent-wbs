@@ -1,86 +1,90 @@
 /*
  * 입력 커밋 원장(ledger) — 입력 변경 감지·「분석 안 함」·「이 버전으로 분석」의 순서 규칙을 한 곳에 둔다.
  *
- * 불변식(하나로 정함, M2-03 FIX2 리뷰 F1):
- *   입력 버전은 커밋 순서대로만 증가하고, 확정 커밋 이전의 커밋은 pending·skipped 상태와 관계없이
- *   확정 범위에서 제외된다(그 버전의 차이에 이미 들어 있다).
+ * 순서는 서버가 계산하지 않고 git이 정한다(M2-03 FIX3 리뷰 D1~D3).
+ * - 원장은 「입력 사슬(chain)」 하나다. 시작은 등록 커밋(v1)이고, 끝(head)은 마지막으로 받은 보고의 main 끝 커밋이다.
+ * - Runner는 head를 base로 삼아 `git rev-list --first-parent --reverse <base>..<main> -- prototype/`로 구한
+ *   새 입력 커밋 목록과 그때의 main 끝(head)을 보낸다. 서버는 base가 지금 head와 같을 때만 목록을 받은 순서대로
+ *   붙이고 head를 옮긴다(비교 후 추가). 다르면 붙이지 않고 지금 head를 알려 준다(stale). Runner는 그 head로 다시 계산한다.
+ * - 입력 버전으로 고정하는 커밋은 목록의 커밋이 아니라 head다. merge로 들어온 feature 커밋은 이전 버전의 자손이
+ *   아닐 수 있지만, head는 언제나 base의 자손(baseIsAncestor)이라 버전이 앞으로만 간다.
+ * - base가 main의 조상이 아니면(금지된 이력 재작성) 붙이지 않는다(rewritten → 팀장 경고).
  *
- * 커밋 순서는 도착 순서로 추측하지 않는다. Runner가 커밋마다 보내는 `depth`(main 첫 부모 이력의 깊이,
- * `git rev-list --count --first-parent <sha>`)로 정한다. 보고가 겹치거나·중복되거나·늦게·뒤섞여 도착해도
- * 깊이는 바뀌지 않으므로 순서를 다시 맞출 필요가 없다. 이전에는 도착 순서와 겹침으로 순서를 추측해
- * 같은 계열의 결함(리뷰 2 → R1 → F1)이 되풀이되었다.
+ * 그래서 불변식이 구조로 성립한다.
+ *   입력 버전은 사슬 순서대로만 증가하고(사슬의 뒤 커밋은 앞 커밋의 자손), 확정 커밋 이전의 커밋은
+ *   pending·skipped와 관계없이 확정 범위에 들어가 분석 대상에서 빠진다.
+ * 이전의 도착 순서 추측(seq)과 depth(첫 부모 깊이) 비교는 merge·얕은 clone·지연 보고에서 깨졌다.
  */
 
 export type CommitState = 'pending' | 'skipped' | 'analyzed';
-export interface LedgerCommit { sha: string; depth: number; state: CommitState; /** 이 커밋을 포함한 입력 버전 번호 */ version: number | null }
-/** depth가 null이면 아직 모른다(등록 커밋 v1은 Runner가 보고하기 전까지 깊이를 모른다 → 가장 앞으로 본다). */
-export interface LedgerVersion { v: number; sha: string; depth: number | null }
+export interface LedgerCommit {
+  sha: string;
+  /** 사슬 안 위치(1부터, 붙인 순서 = git first-parent 순서) */
+  pos: number;
+  /** 이 커밋을 실어 온 보고의 main 끝 커밋 */
+  head: string;
+  state: CommitState;
+  version: number | null;
+}
+export interface LedgerVersion { v: number; sha: string }
 export interface Ledger { versions: readonly LedgerVersion[]; commits: readonly LedgerCommit[] }
-export interface ReportedCommit { sha: string; depth: number; hasInput: boolean }
+export interface ChainReport { base: string; head: string; baseIsAncestor: boolean; commits: readonly { sha: string; hasInput: boolean }[] }
 export interface LedgerError { path: string; rule: string; message: string }
+export type ReceiveResult =
+  | { kind: 'ok'; ledger: Ledger; head: string; appended: number }
+  | { kind: 'stale'; head: string }
+  | { kind: 'rewritten'; head: string }
+  | { kind: 'invalid'; error: LedgerError };
 
-const depthOf = (v: LedgerVersion) => v.depth ?? 0;
-export const lastDepth = (ledger: Ledger) => Math.max(0, ...ledger.versions.map(depthOf));
-/** 깊이 d의 커밋을 포함하는 입력 버전: 깊이가 d 이상인 가장 이른 버전 */
-const coveringVersion = (ledger: Ledger, depth: number) => ledger.versions.find((v) => depthOf(v) >= depth)?.v ?? null;
-
-/** 불변식을 회복한다: 마지막 확정 커밋 이하 깊이의 pending·skipped 커밋은 그 깊이를 포함하는 버전으로 넘긴다. */
-export function settle(ledger: Ledger): Ledger {
-  const last = lastDepth(ledger);
-  return {
-    versions: ledger.versions,
-    commits: ledger.commits.map((c) => (c.state !== 'analyzed' && c.depth <= last ? { ...c, state: 'analyzed', version: coveringVersion(ledger, c.depth) } : c)),
-  };
+/** 사슬의 끝 = 마지막으로 붙인 보고의 main 끝 커밋. 아직 붙인 것이 없으면 등록 커밋(v1)이다. */
+export function chainHead(ledger: Ledger): string {
+  const last = [...ledger.commits].sort((a, b) => b.pos - a.pos)[0];
+  return last?.head ?? ledger.versions[0]?.sha ?? '';
 }
 
-/**
- * Runner 보고를 받는다. 형식 오류(배열 순서와 깊이가 어긋남, 같은 커밋의 다른 깊이, 다른 커밋의 같은 깊이)는
- * 어느 쪽을 믿을지 알 수 없으므로 거부하고 아무것도 바꾸지 않는다. 입력 파일이 없는 커밋은 올리지 않는다.
- */
-export function receive(ledger: Ledger, batch: readonly ReportedCommit[]): { ledger: Ledger } | { error: LedgerError } {
-  const error = (rule: string, message: string) => ({ error: { path: 'commits', rule, message } });
-  if (batch.some((c, i) => i > 0 && c.depth <= (batch[i - 1]?.depth ?? 0))) return error('order', '커밋 배열은 main 이력 순서(깊이가 커지는 순서)여야 합니다.');
-  const bySha = new Map(ledger.commits.map((c) => [c.sha, c]));
-  const byDepth = new Map(ledger.commits.map((c) => [c.depth, c.sha]));
-  let versions = ledger.versions;
-  for (const c of batch) {
-    const knownDepth = bySha.get(c.sha)?.depth ?? ledger.versions.find((v) => v.sha === c.sha)?.depth ?? null;
-    if (knownDepth !== null && knownDepth !== c.depth) return error('depth', `${c.sha}의 깊이가 이전 보고와 다릅니다.`);
-    const other = byDepth.get(c.depth) ?? ledger.versions.find((v) => v.depth === c.depth && v.sha !== c.sha)?.sha;
-    if (other !== undefined && other !== c.sha) return error('depth', `깊이 ${String(c.depth)}에 다른 커밋(${other})이 이미 있습니다.`);
-    // 등록 커밋(v1)처럼 깊이를 몰랐던 확정 커밋은 보고로 깊이를 알게 된다.
-    versions = versions.map((v) => (v.sha === c.sha && v.depth === null ? { ...v, depth: c.depth } : v));
+/** Runner 보고를 받는다. 비교(base = head) 뒤 추가만 하며, 순서는 보고 목록의 순서(git이 정한 순서) 그대로다. */
+export function receive(ledger: Ledger, report: ChainReport): ReceiveResult {
+  const head = chainHead(ledger);
+  if (report.base !== head) return { kind: 'stale', head };
+  if (!report.baseIsAncestor) return { kind: 'rewritten', head };
+  const invalid = (rule: string, message: string): ReceiveResult => ({ kind: 'invalid', error: { path: 'commits', rule, message } });
+  if (!report.commits.length) return { kind: 'ok', ledger, head, appended: 0 };
+  if (report.commits.at(-1)?.sha !== report.head && report.commits.some((c) => c.sha === report.head)) return { kind: 'invalid', error: { path: 'head', rule: 'chain', message: 'head는 목록의 마지막 커밋이거나 목록 밖의 main 끝이어야 합니다.' } };
+  const known = new Set([...ledger.commits.map((c) => c.sha), ...ledger.commits.map((c) => c.head), ...ledger.versions.map((v) => v.sha)]);
+  const seen = new Set<string>();
+  for (const c of report.commits) {
+    // base..main에는 base와 그 조상이 나올 수 없다. 이미 아는 커밋이나 중복은 계산이 잘못된 보고다.
+    if (known.has(c.sha) || seen.has(c.sha)) return invalid('chain', `${c.sha}는 이미 받은 커밋이거나 목록에 두 번 있습니다.`);
+    // 목록은 `-- prototype/`으로 거른 결과라 모든 커밋이 입력 파일을 바꾼다.
+    if (!c.hasInput) return invalid('input', `${c.sha}는 prototype/ 아래 파일을 바꾸지 않는 커밋입니다.`);
+    seen.add(c.sha);
   }
-  if (versions.some((v, i) => i > 0 && depthOf(v) <= depthOf(versions[i - 1] as LedgerVersion))) return error('depth', '확정된 입력 버전의 순서와 맞지 않는 깊이입니다.');
-  const added = batch.filter((c) => c.hasInput && !bySha.has(c.sha) && !versions.some((v) => v.sha === c.sha) && !ledger.commits.some((k) => k.sha === c.sha))
-    .filter((c, i, list) => list.findIndex((x) => x.sha === c.sha) === i)
-    .map((c): LedgerCommit => ({ sha: c.sha, depth: c.depth, state: 'pending', version: null }));
-  return { ledger: settle({ versions, commits: [...ledger.commits, ...added] }) };
+  const start = Math.max(0, ...ledger.commits.map((c) => c.pos));
+  const added = report.commits.map((c, i): LedgerCommit => ({ sha: c.sha, pos: start + i + 1, head: report.head, state: 'pending', version: null }));
+  return { kind: 'ok', ledger: { versions: ledger.versions, commits: [...ledger.commits, ...added] }, head: report.head, appended: added.length };
 }
 
 export function skip(ledger: Ledger, shas: readonly string[]): Ledger {
   return { versions: ledger.versions, commits: ledger.commits.map((c) => (c.state === 'pending' && shas.includes(c.sha) ? { ...c, state: 'skipped' } : c)) };
 }
 
-/** 분석 대상(아직 분석하지 않은 커밋), 깊이 순 */
-export const openCommits = (ledger: Ledger) => ledger.commits.filter((c) => c.state !== 'analyzed').sort((a, b) => a.depth - b.depth);
-export const latestOpen = (ledger: Ledger) => openCommits(ledger).at(-1);
+/** 분석 대상(아직 분석하지 않은 커밋), 사슬 순 */
+export const openCommits = (ledger: Ledger) => ledger.commits.filter((c) => c.state !== 'analyzed').sort((a, b) => a.pos - b.pos);
+/** 「이 버전으로 분석」에 쓸 커밋: 분석 대상이 있을 때의 사슬 끝(head) */
+export const analyzable = (ledger: Ledger) => (openCommits(ledger).length ? chainHead(ledger) : undefined);
 
 /**
- * 「이 버전으로 분석」. 가장 깊은 분석 대상 커밋만 고정할 수 있고, 범위는 모든 분석 대상이다.
- * settle 덕분에 분석 대상은 모두 마지막 확정 커밋보다 깊으므로 새 버전은 항상 커밋 순서대로 증가한다.
+ * 「이 버전으로 분석」. 지금 사슬 끝(head)만 고정할 수 있고, 범위는 분석 대상 전부다(모두 head의 조상).
+ * head는 이전 버전의 자손이므로 새 버전은 앞으로만 간다. 분석 대상이 없으면 바뀐 입력이 없다.
  */
 export function analyze(ledger: Ledger, sha: string): { ledger: Ledger; range: LedgerCommit[]; version: LedgerVersion } | { error: 'unchanged' | 'reference' | 'latest' } {
   if (ledger.versions.some((v) => v.sha === sha)) return { error: 'unchanged' };
-  const open = openCommits(ledger);
-  const target = open.find((c) => c.sha === sha);
-  if (!target) return { error: ledger.commits.some((c) => c.sha === sha) ? 'unchanged' : 'reference' };
-  if (latestOpen(ledger)?.sha !== sha || target.depth <= lastDepth(ledger)) return { error: 'latest' };
-  const version: LedgerVersion = { v: (ledger.versions.at(-1)?.v ?? 0) + 1, sha, depth: target.depth };
-  const range = open.filter((c) => c.depth <= target.depth);
-  const next: Ledger = {
-    versions: [...ledger.versions, version],
-    commits: ledger.commits.map((c) => (range.some((r) => r.sha === c.sha) ? { ...c, state: 'analyzed', version: version.v } : c)),
+  const range = openCommits(ledger);
+  if (!range.length) return { error: ledger.commits.some((c) => c.sha === sha || c.head === sha) ? 'unchanged' : 'reference' };
+  if (chainHead(ledger) !== sha) return { error: range.some((c) => c.sha === sha) || ledger.commits.some((c) => c.head === sha) ? 'latest' : 'reference' };
+  const version: LedgerVersion = { v: (ledger.versions.at(-1)?.v ?? 0) + 1, sha };
+  return {
+    ledger: { versions: [...ledger.versions, version], commits: ledger.commits.map((c) => (range.some((r) => r.sha === c.sha) ? { ...c, state: 'analyzed', version: version.v } : c)) },
+    range, version,
   };
-  return { ledger: settle(next), range, version };
 }
