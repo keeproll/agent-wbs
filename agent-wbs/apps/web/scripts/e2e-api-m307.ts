@@ -1,5 +1,6 @@
 /**
- * 실제 API·전용 DB로 M3-07 핵심 흐름(검증·Evidence 연결·Gate·이력·대시보드 경고)을 시험한다. scripts/e2e-api.ts(M3-01)와 같은 방식이다.
+ * 실제 API·전용 DB로 M3-07 핵심 흐름(검증·Evidence 연결·추가·고아 경고·Gate·이력·대시보드)을 시험한다.
+ * 대시보드·Evidence 추가 API는 서버 후속 2차(keeproll/srv-followup2)에 있다. 그 서버가 들어간 checkout에서 실행한다. scripts/e2e-api.ts(M3-01)와 같은 방식이다.
  *
  *   pnpm --filter @awbs/web e2e:api:m307
  *
