@@ -1,7 +1,7 @@
 // M5-02 리뷰 수정 대기 중인 실제 커널 재현. skip 없이 실행하며 첫 시험은 수정 전 실패해야 한다.
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Writable } from 'node:stream';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -9,9 +9,9 @@ import { afterAll, expect, test } from 'vitest';
 import { Launches, processInfo } from '../../src/exec/launches.ts';
 import { spawnWaiting } from '../../src/exec/process.ts';
 import { createResetCleanup, processGroupEmpty } from '../../src/cleanup/reset.ts';
+import { hostArchive } from './host-evidence.ts';
 
-const archive = '/home/keeproll/.orca/bots/agentwbs/archive/2026-11-27/M5-03';
-await mkdir(archive, { recursive: true });
+const archive = await hostArchive();
 const facts: Record<string, unknown> = { scope: 'M5-02 수정 대기 재현', simulatedPidReuse: true };
 afterAll(async () => { await writeFile(join(archive, 'm502-pending-facts.json'), JSON.stringify(facts, null, 2) + '\n'); });
 interface Row { pid: number; ppid: number; pgid: number; sid: number; role: string; marked: boolean; hup_ignored: boolean; start_time: string; cpu_seconds: number; rss_bytes: number }

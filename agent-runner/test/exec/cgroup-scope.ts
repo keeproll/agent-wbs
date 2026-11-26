@@ -68,9 +68,11 @@ async function probe() {
     await writeFile(join(session, 'cgroup.kill'), '1');
     await exited;
     const deadline = Date.now() + 2000;
-    while ((await sample()).populated !== 0 && Date.now() < deadline) await sleep(10);
-    const after = await sample();
+    let after = await sample();
+    // 생존 표시가 먼저 0이 되어도 종료 중인 태스크의 pids 계수가 나중에 줄어들 수 있다.
+    while ((after.populated !== 0 || after.pids !== 0) && Date.now() < deadline) { await sleep(10); after = await sample(); }
     assert.equal(after.populated, 0);
+    assert.equal(after.pids, 0);
     return { available: true, scope, controllers, before, after, processes, guarantee: 'setsid·nohup·이중 fork·환경 표식 제거에도 같은 cgroup 상속. cgroup 밖 이동 권한은 주지 않아야 함.', productionConnected: false, dedicatedAccountVerified: false };
   } finally {
     permit.destroy();
@@ -82,4 +84,4 @@ async function probe() {
     await rmdir(session);
   }
 }
-console.log(JSON.stringify(await probe()));
+await writeFile(join(home, 'kernel-facts.json'), JSON.stringify(await probe()) + '\n', { flag: 'wx', mode: 0o600 });

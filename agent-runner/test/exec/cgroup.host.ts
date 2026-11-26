@@ -7,8 +7,9 @@ import { promisify } from 'node:util';
 import { afterAll, expect, test } from 'vitest';
 import { Launches, processInfo } from '../../src/exec/launches.ts';
 import { runProcess } from '../../src/exec/process.ts';
+import { hostArchive } from './host-evidence.ts';
 
-const archive = '/home/keeproll/.orca/bots/agentwbs/archive/2026-11-27/M5-03';
+const archive = await hostArchive();
 const exec = promisify(execFile);
 const facts: Record<string, unknown> = { at: new Date().toISOString(), kernel: release(), uid: process.getuid?.(), paidCalls: 0, cliGrades: { Claude: 'unverified', Codex: 'unverified' } };
 interface Row { pid: number; ppid: number; pgid: number; sid: number; role: string; marked: boolean; hup_ignored: boolean; start_time: string; cpu_seconds: number; rss_bytes: number }
@@ -88,15 +89,16 @@ test('cgroup v2: 현재 경로 위임과 사용자 systemd scope의 측정·일�
   try { await exec('systemd-run', ['--user', '--scope', '--quiet', '--property=Delegate=yes', '/bin/true'], { timeout: 5000 }); }
   catch (error) {
     facts.userScope = { available: false, reason: (error as Error).message, alternative: '같은 사용자·launchId가 유지되는 자손만 프로세스 그룹 + /proc로 추적. 전용 계정은 Q-08 제어 계층 필요.' };
-    return;
+    throw error;
   }
   const home = await mkdtemp(join(archive, 'scope-'));
   const unit = `awbs-host-cgroup-${process.pid}`;
   try {
-    const result = await exec('systemd-run', ['--user', '--scope', '--quiet', '--property=Delegate=yes', '--unit', unit, process.execPath, join(import.meta.dirname, 'cgroup-scope.ts'), home], { timeout: 15000 });
-    const report = JSON.parse(result.stdout) as { available: boolean; code?: string; scope: string; before?: { populated: number; memory: number; cpuUsec: number; pids: number }; after?: { populated: number; cpuUsec: number; pids: number }; processes?: Row[] };
+    await exec('systemd-run', ['--user', '--scope', '--quiet', '--property=Delegate=yes', '--unit', unit, process.execPath, join(import.meta.dirname, 'cgroup-scope.ts'), home], { timeout: 15000 });
+    // 명령의 출력 재생만으로 통과하지 않도록, scope 안의 검사기가 이번 실행에 쓴 실측 파일을 요구한다.
+    const report = JSON.parse(await readFile(join(home, 'kernel-facts.json'), 'utf8')) as { available: boolean; code?: string; scope: string; before?: { populated: number; memory: number; cpuUsec: number; pids: number }; after?: { populated: number; cpuUsec: number; pids: number }; processes?: Row[] };
     facts.userScope = report;
-    if (!report.available) { expect(['EACCES', 'EPERM', 'EROFS', 'ENOENT']).toContain(report.code); return; }
+    expect(report.available, '사용자 scope의 실제 커널 측정이 필요합니다.').toBe(true);
     expect(report.processes).toHaveLength(6);
     expect(report.before?.populated).toBe(1);
     expect(report.before?.pids).toBeGreaterThanOrEqual(7);
@@ -107,6 +109,9 @@ test('cgroup v2: 현재 경로 위임과 사용자 systemd scope의 측정·일�
     expect(report.after?.cpuUsec).toBeGreaterThanOrEqual(report.before?.cpuUsec ?? 0);
     for (const row of report.processes ?? []) expect(await alive(row.pid)).toBe(false);
     await expect(readFile(join(report.scope, 'cgroup.events'))).rejects.toMatchObject({ code: 'ENOENT' });
+  } catch (error) {
+    facts.userScope ??= { available: false, reason: error instanceof Error ? error.message : '실측 실패' };
+    throw error;
   } finally {
     try { await stopScope(unit); }
     finally { await cleanup(join(home, 'pids.jsonl')); await rm(home, { recursive: true, force: true }); }
