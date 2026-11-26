@@ -104,10 +104,19 @@ const outcome = await runPlanningJob(job, {
 
 진행 기록(checkpoint, 다시 이어 하기 위한 저장점)은 `AWBS_HOME/state/planning/`에 둔다.
 
-- Planning 작업마다 파일 하나다.
+- Planning 작업마다, 초기화 번호(epoch)마다 파일 하나다: `e<epoch>-<작업 키 지문>.json`.
+  - 파일 안에도 epoch를 적고, 읽을 때 현재 번호와 다르면 손상으로 보고 멈춘다.
+  - 보고기도 진행 기록의 번호와 현재 번호가 다르면 보내지 않는다.
+  - 왜: 초기화 전 요청에 새 번호를 붙여 다시 보내면 옛 프로젝트의 내용이 새 프로젝트로 넘어갈 수 있다.
+- 초기화 정리(`cleanup/reset.ts`)는 프로세스 종료를 증명한 뒤 이 폴더를 통째로 지운다. 지우지 못하면 정리 실패다.
+  - 왜: 원본 G§4.2 ③은 초기화 때 모든 기록·결과를 남기지 않는다. 이 폴더에는 분석·기술 결정 제안·초안·CP 본문이 들어 있다.
+- Agent에게 받은 결과는 **보고하기 전에** 저장하고, 재시작하면 Agent에게 다시 묻지 않고 저장한 결과를 쓴다.
+  - 예: Planning 세션은 두 분석을 저장한 뒤 보고한다. 재시작해도 서버에 보고한 분석과 교차 검토가 본 분석이 같다.
+  - 이전 버전 기록처럼 분석 결과 없이 보낸 보고만 있으면, 보낸 본문에서 분석을 되살린다.
 - 분석 결과는 회차(`runNo`)별로 둔다. 재분석은 이전 회차 결과를 쓰지 않는다.
 - 쓰기는 임시 파일·fsync(디스크에 실제로 썼는지 확인)·이름 교체 순서다.
 - 깨진 기록은 고쳐 쓰지 않고 `CHECKPOINT_UNREADABLE`로 실패한다. 왜: 지우면 이미 보낸 요청의 멱등 키를 잃는다.
+  - JSON 문법만 맞는 손상도 거부한다. 예: `outputs`가 배열, 보낸 요청의 키 형식이 틀림, 불러온 분석의 모양이 다름(`guards.ts`).
 
 ## 두 Agent 합의 규칙(`consensus.ts`)
 
@@ -120,6 +129,7 @@ const outcome = await runPlanningJob(job, {
   - `missing`: 한쪽이 답하지 않음
   - `blank_basis`: 근거가 빔
   - `ambiguous`: 같은 규칙을 두 번 답함
+  - `invalid`: 결론이 `met`·`not_met`이 아니거나 근거가 문자열이 아님
 - 왜: 판단 기록은 합의 주체가 둘 다일 때만 유효하다(data-model §2.3-1). 기록이 없으면 서버가 `JUDGEMENT_MISSING`으로 승인을 보류하고 팀장 화면에 보인다. 한쪽 결론을 합의처럼 적으면, 합의하지 않은 분할이 승인을 통과한다.
 - 새 Task·초안·새 CP의 판단에는 `subjectHash`를 넣지 않는다. 서버가 저장할 때 계산한다.
 - 저장된 대상의 재판단에는 작업 payload의 hash를 그대로 돌려보낸다. 서버가 지금 내용과 대조해 바뀌었으면 `VERSION_CONFLICT`로 거부한다.
@@ -130,6 +140,8 @@ const outcome = await runPlanningJob(job, {
 - 예상은 두 값의 평균(0.1시간 단위)이다.
 - 신뢰도는 낮은 쪽, 토큰은 큰 쪽이다.
 - 한쪽 추정이 없거나 `낙관 ≤ 예상 ≤ 비관`이 아니면 합의할 수 없어 실패한다.
+- 신뢰도가 `하`·`중`·`상`이 아니거나, 시간·토큰이 유한한 수가 아니면 실패한다.
+  - 왜: 잘못된 값을 「신뢰도 하」 같은 정상 값으로 바꾸면 일정 계산에 정상 합의처럼 쓰인다. 실제 CLI 출력 파서(M5-01)가 같은 검사를 해도 이 경계에서 다시 막는다.
 - 예: Claude 2h(1~4h, 상), Codex 4h(2~6h, 하) → 3h(1~6h, 하), `agreedBy: ['Claude','Codex']`.
 
 ## 보고와 멱등
@@ -142,6 +154,21 @@ const outcome = await runPlanningJob(job, {
   - 왜: 서버는 처리했는데 응답을 잃은 경우, 새 키로 보내면 같은 일을 두 번 한다. 같은 키에 다른 본문을 보내면 거부된다.
 - 네트워크 오류·408·429·5xx는 Outbox와 같은 간격 규칙으로 최대 6번까지 보낸다.
 - 단계 실패 메모는 비밀값을 가리고(`security/redact.ts`) 300자로 줄인다.
+- `runPlanningJob()`이 돌려주는 모든 결과(실패 메시지 포함)를 한 경계에서 다시 가린다. 이 결과는 finish 본문과 서버 job 이력으로 나가기 때문이다.
+
+## 잠정 계약(`payload.ts`)
+
+서버 후속 4가 job payload 계약을 보완하는 중이다. 계약 밖 값을 읽는 코드는 `payload.ts` 한 파일에만 있다.
+
+- 받는 값:
+  - bootstrap·input_diff: `planningJobId`·`runNo` 필수, input_diff는 `version`도 필수
+  - bootstrap: `techConstraints[{id,name,level,condition}]`(분석·교차 검토로 넘김), 확정 결정 스냅샷 `decisions`(초안 작성으로 넘김)
+  - input_diff: 현재 WBS 스냅샷 `wbs`(영향 분석·CP 작성으로 넘김)
+  - planning 세션: `planning:{id,title,scope}`
+- 필수 값이 없으면 추측하지 않고 `UNSUPPORTED_PAYLOAD`로 실패한다. 예전의 「커밋으로 대신 만든 작업 키」는 없앴다.
+  - 왜: 같은 커밋으로 Planning 작업이 두 번 생기면 서로의 기록을 이어 쓰게 된다.
+- `decisions`·`wbs`의 모양은 서버 계약을 따르며 Runner는 해석하지 않고 그대로 넘긴다.
+- 계약이 생성 타입(`src/api/generated/client.ts`)에 들어오면 `payload.ts`의 잠정 타입과 `field()`만 지우면 된다.
 
 ## 결과 코드
 
@@ -150,7 +177,7 @@ const outcome = await runPlanningJob(job, {
 | failed | `PLANNING_STEP_FAILED` | 초기 분석·차이 분석의 한 단계가 실패했다. 실패 단계를 보고했다 |
 | failed | `INVALID_RESUME_STEP` | Runner가 이어 할 수 없는 재개 단계다(예: 팀장 단계) |
 | failed | `PLANNING_AGENT_FAILED` | Agent 호출이나 합의가 실패했다. 아무것도 보내지 않았다 |
-| failed | `UNSUPPORTED_PAYLOAD` | 처리할 내용이 없는 payload다 |
+| failed | `UNSUPPORTED_PAYLOAD` | 처리할 내용이 없거나 필수 값(planningJobId·runNo·version)이 없는 payload다 |
 | failed | `CHECKPOINT_UNREADABLE` | 진행 기록을 읽지 못했다 |
 | failed | 서버 오류 코드 | 서버가 보고를 거부했다(예: `VERSION_CONFLICT`) |
 | lost | `LEASE_LOST`·`EPOCH_MISMATCH`·`AUTHENTICATION_FAILED` | 더 보고하지 않는다 |
