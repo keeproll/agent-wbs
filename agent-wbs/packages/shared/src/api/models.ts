@@ -47,7 +47,7 @@ const proposedTask = {
   conf: Opt(c.Confidence),
   basis: Opt(Type.String()),
   ac: Opt(List(c.Body({ given: Text, when: Text, then: Text, method: Opt(Type.String()) }))),
-  srcV: Opt(c.Count),
+  srcV: Opt(c.Int4Count),
   splitBasis: Opt(splitBasis),
   // 선택 필드(data-model §2.4-1). design의 kind 중복은 시뮬레이션이 검사한다.
   scope: Opt(lines),
@@ -200,13 +200,13 @@ const output = {
 /**
  * 재판단 요청(M2-08, G§7.2·D-29). 허용 해제·최저선 변경·하위 Agent 해제로 Planning Agent가 등급·하위 Agent 지정을
  * 다시 판단해야 할 때 estimate job의 `policy.rejudge`에 싣는다. job payload 자체는 기존 estimate 모양 그대로다.
- * - reason: model_disallowed(허용 해제) / floor_changed(최저선 변경) / subagent_disallowed(하위 Agent 해제)
+ * - reason: model_disallowed(허용 해제) / floor_changed(최저선 변경) / subagent_disallowed(하위 Agent 해제) / grade_changed(팀장 고정·해제)
  * - trigger: 팀장 화면·이력에 보이는 사유 문구
  * - targets: 다시 판단할 Task와 역할(dev·qa). payload `tasks`에도 같은 Task가 현재 내용·hash와 함께 있다.
  */
 export const RejudgeRequest = Type.Object(
   {
-    reason: AnyOf('model_disallowed', 'floor_changed', 'subagent_disallowed'),
+    reason: AnyOf('model_disallowed', 'floor_changed', 'subagent_disallowed', 'grade_changed'),
     trigger: Type.String({ minLength: 1 }),
     targets: List(Type.Object({ taskKey: c.TaskKey, roles: List(c.RunRole, { minItems: 1, uniqueItems: true }) }, { additionalProperties: false }), { minItems: 1 }),
   },
@@ -214,7 +214,7 @@ export const RejudgeRequest = Type.Object(
 );
 /** estimate job의 정책 묶음. 재판단이면 rejudge가 있다. 그 밖의 정책 값은 자유 형식(기존 계약 c.Json과 호환). */
 export const EstimatePolicy = Type.Object(
-  { rejudge: Type.Optional(RejudgeRequest) },
+  { rejudge: Type.Optional(RejudgeRequest), gradeChange: Type.Optional(c.Uuid) },
   { title: 'EstimatePolicy', additionalProperties: true },
 );
 /** 규칙 5·7·9의 판단 대상이자 subjectHash 계산 대상(data-model §2.3-1). 범위를 늘리거나 줄이지 않는다. */
@@ -266,6 +266,15 @@ export const Grade = Type.Object(
   { modelId: Type.String(), effort: Type.String(), reason: Type.String(), locked: Type.Boolean() },
   { title: 'Grade' },
 );
+/** 개요 편집(UAT-TASK-02, P1111–1127). 토큰은 천 개(K) 단위다. */
+const EditHours = Type.Number({ exclusiveMinimum: 0, maximum: 400 });
+export const TaskEstimateInput = c.Body({
+  estHours: EditHours, loHours: EditHours, hiHours: EditHours, tokensK: c.Count,
+});
+export const TaskEstimate = Type.Object({
+  estHours: c.Hours, loHours: c.Hours, hiHours: c.Hours, tokensK: Nullable(Type.Number({ minimum: 0 })),
+  confidence: c.Confidence, basis: Type.String(), agreedBy: Type.String(), at: c.Timestamp,
+}, { title: 'TaskEstimate' });
 export const TaskDetail = Type.Object(
   {
     ...taskSummary,
@@ -280,8 +289,13 @@ export const TaskDetail = Type.Object(
     predecessors: List(Dependency),
     successors: List(Dependency),
     planningApprovedAt: Nullable(c.Timestamp),
+    estimate: Nullable(TaskEstimate),
+    fixStart: Nullable(c.DateOnly),
+    actStart: Nullable(c.Timestamp),
+    actEnd: Nullable(c.Timestamp),
+    actualHours: c.Hours,
     conflictGroup: Nullable(Type.String()),
-    srcInputVersion: Nullable(c.Count),
+    srcInputVersion: Nullable(c.Int4Count),
     grades: Type.Object({ dev: Nullable(Grade), qa: Nullable(Grade) }),
     subagents: Type.Object({ dev: List(c.Id), qa: List(c.Id) }),
     split: Nullable(
@@ -357,7 +371,7 @@ export const Verification = Type.Object(
     attemptId: c.Id,
     result: c.PassFail,
     headSha: c.Sha,
-    specRevision: c.Count,
+    specRevision: c.Int4Count,
     cmd: Type.String(),
     expected: Type.String(),
     actual: Type.String(),
@@ -499,7 +513,7 @@ export const MoveKind = AnyOf('delayed', 'advanced', 'new', 'excluded');
 export const ReplanSummary = Type.Object(
   {
     replanId: Type.String(),
-    baselineVersion: Nullable(Type.Integer({ minimum: 1 })),
+    baselineVersion: Nullable(c.PositiveInt4),
     projectEnd: c.DateOnly,
     range: Type.Object({ lo: c.DateOnly, hi: c.DateOnly }),
     moved: List(
@@ -517,13 +531,13 @@ export const ReplanSummary = Type.Object(
 );
 
 /* ---- 설정 값(조회·저장 공용) ---- */
-export const Caps = { total: c.Count, Claude: c.Count, Codex: c.Count, heavy: c.Count };
-export const SubagentBudget = c.Body({ dev: c.Count, qa: c.Count });
+export const Caps = { total: c.Int4Count, Claude: c.Int4Count, Codex: c.Int4Count, heavy: c.Int4Count };
+export const SubagentBudget = c.Body({ dev: c.Int4Count, qa: c.Int4Count });
 export const ExecPolicy = {
   onUsage: AnyOf('wait', 'down'),
   lowPct: c.Pct,
   onRework: AnyOf('same', 'up1', 'top'),
-  notifyAt: c.Count,
+  notifyAt: c.Int4Count,
 };
 /** data-model ci_settings */
 /** 모델 순서 설정(owner 2026-11-26 아이템 8). 목록은 아래 등급부터, 같은 모델을 두 번 쓰지 않는다. */
@@ -533,7 +547,7 @@ export const ModelRankOrder = c.Body({ Claude: ModelIds(), Codex: ModelIds() });
 export const CodexFamilyOrder = ModelIds(1);
 /** Runner가 보고할 Claude 모델(초기값=Q-06 승인표) */
 export const ClaudeModels = ModelIds(1);
-export const CiSettings = { nightAt: c.ClockTime, retry: c.Count, deployUrl: Nullable(c.HttpUrl) };
+export const CiSettings = { nightAt: c.ClockTime, retry: c.Int4Count, deployUrl: Nullable(c.HttpUrl) };
 
 /* ---- 설계 ---- */
 export const Decision = Type.Object(
@@ -605,7 +619,7 @@ export const CiRun = Type.Object(
     taskKey: Nullable(c.TaskKey),
     attemptId: Nullable(c.Id),
     ref: Type.String(),
-    pr: Nullable(Type.Integer({ minimum: 1 })),
+    pr: Nullable(c.PositiveInt4),
     trigger: Nullable(Type.String()),
     baseSha: Nullable(c.Sha),
     headSha: Nullable(c.Sha),
@@ -624,9 +638,9 @@ export const CiRun = Type.Object(
 export const MergeQueueItem = Type.Object(
   {
     id: c.Id,
-    pr: Type.Integer({ minimum: 1 }),
+    pr: c.PositiveInt4,
     taskKey: c.TaskKey,
-    position: c.Count,
+    position: c.Int4Count,
     status: c.QueueStatus,
     qaHeadSha: Nullable(c.Sha),
     syncedHeadSha: Nullable(c.Sha),
@@ -719,7 +733,7 @@ export const JobStepKey = AnyOf(
 );
 const jobView = <const T extends readonly string[]>(...keys: T) => ({
   jobId: c.Id,
-  runNo: Type.Integer({ minimum: 1 }),
+  runNo: c.PositiveInt4,
   status: AnyOf('queued', 'running', 'done', 'failed', 'cancelled'),
   steps: List(obj({ key: AnyOf(...keys), status: c.StepStatus, at: Nullable(c.Timestamp), note: Str })),
   logs: List(obj({ at: c.Timestamp, text: Str })),
@@ -740,7 +754,7 @@ const registered = {
   registeredAt: c.Timestamp,
   inputs: List(
     obj({
-      v: Type.Integer({ minimum: 1 }),
+      v: c.PositiveInt4,
       at: c.Timestamp,
       commit: c.Sha,
       mdList: List(c.RepoPath),
@@ -764,7 +778,7 @@ const registered = {
   ),
   /** 입력 사슬의 끝: Runner가 마지막으로 보고한 main 끝 커밋(처음에는 등록 커밋). 「이 버전으로 분석」은 이 커밋으로 고정한다. */
   inputHead: c.Sha,
-  inputJob: Nullable(obj({ ...jobView(...INPUT_STEPS), version: Type.Integer({ minimum: 1 }), proposalId: Nullable(c.Id) })),
+  inputJob: Nullable(obj({ ...jobView(...INPUT_STEPS), version: c.PositiveInt4, proposalId: Nullable(c.Id) })),
   updatedAt: c.Timestamp,
 };
 /** 등록 전 / 초기 분석 / 진행 중(data-model §3.4, P project·boot) */
@@ -777,7 +791,7 @@ export const ProjectState = Type.Union(
       bootstrap: obj({
         ...jobView(...BOOT_STEPS),
         decisions: List(Decision),
-        revision: Nullable(Type.Integer({ minimum: 1 })),
+        revision: Nullable(c.PositiveInt4),
         draft: Nullable(
           obj({ ...StoredDraft, splitCheck: obj({ pass: c.Count, suspect: c.Count, violation: c.Count }) }),
         ),
@@ -798,7 +812,8 @@ export const ResetPreview = Type.Object(
       evidence: c.Count, proposals: c.Count, messages: c.Count, history: c.Count, reports: c.Count,
       baselines: c.Count, inputs: c.Count,
     }),
-    runner: obj({ branches: List(Str), worktrees: c.Count, mergedTasks: c.Count }),
+    sending: obj({ mail: c.Count, notify: c.Count }, { description: '이미 외부로 보내기 시작한 건수다. 초기화해도 회수할 수 없다.' }),
+    runner: obj({ branches: List(Str), worktrees: c.Count, worktreesEstimated: Type.Literal(true, { description: '기록된 Agent 브랜치 수로 계산한 추정값이다. 실제 작업 폴더 수와 다를 수 있다.' }), mergedTasks: c.Count }),
     repo: registered.repo,
   },
   { title: 'ResetPreview' },
@@ -955,12 +970,12 @@ export const RunnerState = Type.Object(
     ),
     host: Nullable(
       obj({
-        hostId: Str, bootId: Str, cpu: Str, cores: c.Count, memGB: N, swapGB: N, diskFreeGB: N, os: Str,
-        perSessionGB: Nullable(N), samples: c.Count, seenAt: c.Timestamp,
+        hostId: Str, bootId: Str, cpu: Str, cores: c.Int4Count, memGB: N, swapGB: N, diskFreeGB: N, os: Str,
+        perSessionGB: Nullable(N), samples: c.Int4Count, seenAt: c.Timestamp,
         recommended: obj(Caps), warnings: List(Str),
       }),
     ),
-    hostHistory: List(obj({ hostId: Str, cpu: Str, cores: c.Count, memGB: N, seenAt: c.Timestamp })),
+    hostHistory: List(obj({ hostId: Str, cpu: Str, cores: c.Int4Count, memGB: N, seenAt: c.Timestamp })),
     concurrency: obj({
       mode: AnyOf('auto', 'manual'),
       caps: obj(Caps),
@@ -1118,7 +1133,7 @@ export const designOverview = {
   files: List(
     obj({ path: Str, kind: Str, format: Str, status: fileStatus, commit: Nullable(c.Sha), itemCount: c.Count, error: MaybeStr }),
   ),
-  versions: List(obj({ v: Type.Integer({ minimum: 1 }), at: c.Timestamp, by: Str, note: Str, breaking: Type.Boolean() })),
+  versions: List(obj({ v: c.PositiveInt4, at: c.Timestamp, by: Str, note: Str, breaking: Type.Boolean() })),
 };
 /** 해석기가 없는 형식은 raw만 있고 content가 null이다(G L430, Q-14). */
 export const DesignSource = Type.Object(

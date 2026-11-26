@@ -43,7 +43,7 @@ interface Detail {
   predecessors: { id: string; pred: string; succ: string; type: string }[]; successors: { id: string }[];
 }
 
-function call(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, payload?: unknown, headers: Record<string, string> = {}) {
+function call(method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', url: string, payload?: unknown, headers: Record<string, string> = {}) {
   return app.inject({ method, url, headers: { cookie, origin, 'x-csrf-token': csrf, ...headers }, ...(payload === undefined ? {} : { payload: payload as object }) });
 }
 async function create(body: Record<string, unknown> = {}): Promise<string> {
@@ -464,7 +464,7 @@ describe('tasks 명세·설계·체크리스트·산출물', () => {
 
   test('설계는 종류별로 저장·교체하고 Task 버전을 올린다', async () => {
     const key = await create();
-    let response = await call('PATCH', `/api/tasks/${key}/design/API`, { updatedAt: await version(key), content: { ents: [{ method: 'GET' }] } });
+    let response = await call('PATCH', `/api/tasks/${key}/design/API`, { updatedAt: await version(key), content: { ents: [{ f: { method: 'GET', path: '/items' }, b: {} }] } });
     expect(response.statusCode, response.body).toBe(200);
     expectShape('updateTaskDesign', 200, response.json());
     response = await call('PATCH', `/api/tasks/${key}/design/API`, { updatedAt: await version(key), content: { ents: [] } });
@@ -847,4 +847,122 @@ describe('tasks 착수 승인 요청→승인/반려', () => {
     const partial = errorOf(await call('POST', `/api/tasks/${key}/approve`, { updatedAt: await version(key) }));
     expect((partial.details.items as { rule: string }[]).map((i) => i.rule)).toEqual(['refactor']);
   });
+});
+
+
+describe('M3 서버 후속', () => {
+  test('작업량·고정 시작일은 이력과 최신 추정을 남기고 낡은 버전·잘못된 범위를 거부한다', async () => {
+    const key = await create();
+    const old = await version(key);
+    const estimate = { estHours: 2, loHours: 1, hiHours: 3, tokensK: 50 };
+    const saved = await call('PATCH', `/api/tasks/${key}`, { updatedAt: old, estimate, fixStart: '2027-01-04' });
+    expect(saved.statusCode, saved.body).toBe(200);
+    expectShape('updateTask', 200, saved.json());
+    expect(saved.json()).toMatchObject({ task: { estimate: { ...estimate, agreedBy: '팀장 조정', confidence: '하' }, fixStart: '2027-01-04' } });
+    expect((await detail(key))).toMatchObject({ estimate, fixStart: '2027-01-04' });
+    expect((await history(key)).some(h => (h.ref as { field?: string } | null)?.field === 'estimate')).toBe(true);
+    expect((await call('PATCH', `/api/tasks/${key}`, { updatedAt: old, estimate })).statusCode).toBe(409);
+    for (const patch of [
+      { estimate: { ...estimate, loHours: 4 } }, { estimate: { ...estimate, estHours: 0 } },
+      { estimate: { ...estimate, hiHours: 401 } }, { estimate: { ...estimate, tokensK: 1.5 } },
+      { fixStart: '2026-02-30' },
+    ]) expect((await call('PATCH', `/api/tasks/${key}`, { updatedAt: await version(key), ...patch })).statusCode).toBe(400);
+    const removed = await call('PATCH', `/api/tasks/${key}`, { updatedAt: await version(key), fixStart: null });
+    expect(removed.json()).toMatchObject({ task: { fixStart: null } });
+    expect((await ownerPool.query('select count(*)::int n from task_estimates where task=(select id from tasks where task_key=$1)', [key])).rows[0]?.n).toBe(1);
+  });
+
+  test('등급 고정·해제는 허용된 모델만 받고 재추정 작업과 버전·이력을 남긴다', async () => {
+    const key = await create();
+    await ownerPool.query(`insert into agent_models(agent,model_id,allowed,is_new,report) values('Claude','claude-sonnet-5-5',true,false,'{"efforts":["low","high"]}') on conflict(agent,model_id) do update set allowed=true,report=excluded.report`);
+    const old = await version(key);
+    const locked = await call('PUT', `/api/tasks/${key}/grade`, { updatedAt: old, role: 'dev', modelId: 'claude-sonnet-5-5', effort: 'low' });
+    expect(locked.statusCode, locked.body).toBe(200);
+    expectShape('lockTaskGrade', 200, locked.json());
+    expect(locked.json()).toMatchObject({ task: { grades: { dev: { locked: true, modelId: 'claude-sonnet-5-5', effort: 'low' } } } });
+    expect((await call('PUT', `/api/tasks/${key}/grade`, { updatedAt: old, role: 'dev', modelId: 'claude-sonnet-5-5', effort: 'high' })).statusCode).toBe(409);
+    const bad = await call('PUT', `/api/tasks/${key}/grade`, { updatedAt: await version(key), role: 'dev', modelId: 'unknown', effort: 'high' });
+    expect(bad.statusCode, bad.body).toBe(400);
+    const unlocked = await call('DELETE', `/api/tasks/${key}/grade?role=dev&updatedAt=${encodeURIComponent(await version(key))}`);
+    expect(unlocked.statusCode, unlocked.body).toBe(200);
+    expect(unlocked.json()).toMatchObject({ task: { grades: { dev: { locked: false } } } });
+    const jobs = (await ownerPool.query<{ id: string; payload: { policy: { rejudge: { targets: { taskKey: string }[] } } } }>("select id,payload from runner_jobs where kind='estimate' order by created_at,id")).rows;
+    expect(jobs.filter(j => j.payload.policy.rejudge.targets.some(t => t.taskKey === key))).toHaveLength(2);
+    const matching = jobs.filter(j => j.payload.policy.rejudge.targets.some(t => t.taskKey === key));
+    const stale = matching[0];
+    expect(stale).toBeDefined();
+    await ownerPool.query("update runner_jobs set state='leased',fence=1 where id=$1", [stale?.id]);
+    const bearer = await issueRunnerToken(pool, 'grade-estimate-runner', 'fake');
+    const rejected = await app.inject({ method: 'POST', url: '/api/planning/estimates',
+      headers: { authorization: `Bearer ${bearer}`, 'x-project-epoch': '1', 'idempotency-key': crypto.randomUUID() },
+      payload: { jobId: stale?.id, fence: 1, items: [{ taskKey: key, estHours: 99, loHours: 98, hiHours: 100, confidence: '하', basis: '옛 등급', agreedBy: ['Claude', 'Codex'] }] } });
+    expect(rejected.statusCode, rejected.body).toBe(409);
+    expect(errorOf(rejected).code).toBe('LEASE_LOST');
+    const currentJob = matching[1];
+    await ownerPool.query("update runner_jobs set state='leased',fence=1 where id=$1", [currentJob?.id]);
+    const plan = { fence: 1, grades: { dev: { modelId: 'claude-sonnet-5-5', effort: 'low', reason: 'Planning 재판단 근거' }, qa: { modelId: 'gpt-6.1-sol', effort: 'high', reason: '검증' } }, subagents: { dev: [], qa: [], basis: '' }, conflictGroup: null };
+    const latePlan = await app.inject({ method: 'POST', url: `/api/planning/tasks/${key}/plan`,
+      headers: { authorization: `Bearer ${bearer}`, 'x-project-epoch': '1', 'idempotency-key': crypto.randomUUID() }, payload: { ...plan, jobId: stale?.id } });
+    expect(errorOf(latePlan).code).toBe('LEASE_LOST');
+    const planned = await app.inject({ method: 'POST', url: `/api/planning/tasks/${key}/plan`,
+      headers: { authorization: `Bearer ${bearer}`, 'x-project-epoch': '1', 'idempotency-key': crypto.randomUUID() }, payload: { ...plan, jobId: currentJob?.id } });
+    expect(planned.statusCode, planned.body).toBe(204);
+    expect(await detail(key)).toMatchObject({ grades: { dev: { locked: false, reason: 'Planning 재판단 근거' } } });
+    const previous = await version(key);
+    const accepted = await app.inject({ method: 'POST', url: '/api/planning/estimates',
+      headers: { authorization: `Bearer ${bearer}`, 'x-project-epoch': '1', 'idempotency-key': crypto.randomUUID() },
+      payload: { jobId: currentJob?.id, fence: 1, items: [{ taskKey: key, estHours: 2, loHours: 1, hiHours: 3, confidence: '중', basis: '현재 등급', agreedBy: ['Claude', 'Codex'] }] } });
+    expect(accepted.statusCode, accepted.body).toBe(200);
+    expect(await version(key)).not.toBe(previous);
+    await setStatus(key, 'done');
+    expect((await call('PUT', `/api/tasks/${key}/grade`, { updatedAt: await version(key), role: 'dev', modelId: 'claude-sonnet-5-5', effort: 'high' })).statusCode).toBe(409);
+  });
+
+  test('설계 서버 검사는 행별 오류를 돌려주고 저장·버전·이력을 보존한다', async () => {
+    const key = await create();
+    const table = { f: { name: 'users', change: '신규' }, b: { columns: [{ name: 'id', type: 'uuid', pk: true, nullable: false }], indexes: [] } };
+    const old = await version(key);
+    const malformed = await call('PATCH', `/api/tasks/${key}/design/DB`, { updatedAt: old, content: { ents: [{}], b: {} } });
+    expect(malformed.statusCode, malformed.body).toBe(400);
+    const invalid = await call('PATCH', `/api/tasks/${key}/design/DB`, { updatedAt: old, content: { ents: [{ ...table, b: { columns: [{ name: 'id', type: 'uuid', pk: true, nullable: true, fk: 'missing.id' }], indexes: [{ name: 'idx', cols: 'missing' }] } }] } });
+    expect(invalid.statusCode, invalid.body).toBe(400);
+    expect(errorOf(invalid).errors.map(e => e.path)).toEqual(expect.arrayContaining(['content.ents.0.b.columns.0.nullable', 'content.ents.0.b.columns.0.fk', 'content.ents.0.b.indexes.0.cols']));
+    expect(await version(key)).toBe(old);
+    expect((await history(key))).toHaveLength(1);
+    expect((await call('PATCH', `/api/tasks/${key}/design/DB`, { updatedAt: old, content: { ents: [table] } })).statusCode).toBe(200);
+    const other = await create();
+    expect((await call('PATCH', `/api/tasks/${other}/design/DB`, { updatedAt: await version(other), content: { ents: [table] } })).statusCode).toBe(400);
+    const duplicate = { f: { method: 'GET', path: '/users' }, b: {} };
+    for (const content of [{ ents: [duplicate, duplicate] }, { ents: [{ f: duplicate.f }] }, { ents: [{ ...duplicate, b: { errors: [{ code: 'ERR', http: 'oops' }] } }] }]) {
+      expect((await call('PATCH', `/api/tasks/${key}/design/API`, { updatedAt: await version(key), content })).statusCode).toBe(400);
+    }
+    expect((await call('PATCH', `/api/tasks/${key}/design/DevOps`, { updatedAt: await version(key), content: { b: { env: [{ name: 'bad-name' }] } } })).statusCode).toBe(400);
+    expect((await call('PATCH', `/api/tasks/${key}/design/DB`, { updatedAt: await version(key), content: {} })).statusCode).toBe(200);
+  });
+});
+
+
+test('판단 대상 배열의 잘못된 타입은 버리거나 바꾸지 않고 저장 전에 거부한다', async () => {
+  const key = await create();
+  const before = await detail(key);
+  for (const value of [[42], [null], [{ name: 'bad' }]]) {
+    const response = await call('PATCH', `/api/tasks/${key}/spec`, { updatedAt: before.updatedAt, spec: { files: value } });
+    expect(response.statusCode, response.body).toBe(400);
+  }
+  expect(await version(key)).toBe(before.updatedAt);
+  expect((await detail(key)).spec).toEqual(before.spec);
+  expect((await history(key))).toHaveLength(1);
+});
+
+
+test('작업량 수정과 재조정을 동시에 보내도 서로 기다리다 실패하지 않는다', async () => {
+  const key = await create();
+  for (let n = 1; n <= 3; n++) {
+    const updatedAt = await version(key);
+    const results = await Promise.all([
+      call('PATCH', `/api/tasks/${key}`, { updatedAt, estimate: { estHours: n, loHours: n, hiHours: n, tokensK: n } }),
+      call('POST', '/api/replans/run'),
+    ]);
+    expect(results.map(r => r.statusCode)).toEqual([200, 201]);
+  }
 });

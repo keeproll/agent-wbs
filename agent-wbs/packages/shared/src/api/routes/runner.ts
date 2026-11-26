@@ -6,7 +6,7 @@ import { operation } from '../operation.ts';
 const { AnyOf, Body, Nullable, Opt, List, Text } = c;
 const runner = { principal: 'runner' } as const;
 const fence = c.Fence;
-const Pid = Type.Integer({ minimum: 1 });
+const Pid = c.PositiveInt4;
 
 const PushedCommit = Body({ sha: c.Sha, at: c.Timestamp, author: Type.String(), message: Type.String() });
 /**
@@ -30,8 +30,8 @@ const InputDiff = Body({
   added: c.Count,
   deleted: c.Count,
 });
-const Session = Body({ attemptId: c.Id, observed: c.Count, reserved: c.Count, state: c.ObservationState });
-const InstalledSubagent = Body({ id: c.Id, version: c.Count, hash: Text });
+const Session = Body({ attemptId: c.Id, observed: c.Int4Count, reserved: c.Int4Count, state: c.ObservationState });
+const InstalledSubagent = Body({ id: c.Id, version: c.Int4Count, hash: Text });
 /**
  * 해제 증거. bootId·processGroup은 보유를 만든 원래 값이고, 서버가 저장된 보유와 같을 때만 그 보유를 닫는다.
  * 낡은 fence의 release도 같은 조건이라 새 프로세스의 보유를 풀 수 없다(contracts §3.2-4·§3.4-2).
@@ -67,7 +67,7 @@ const ciStart = {
   taskKey: Opt(c.TaskKey),
   attemptId: Opt(c.Id),
   ref: Text,
-  pr: Opt(Type.Integer({ minimum: 1 })),
+  pr: Opt(c.PositiveInt4),
   trigger: Text,
   ...ciShas,
   pipelineSha: c.Sha,
@@ -76,7 +76,7 @@ const ciStart = {
 /** QA 결과(contracts §3.1). 검사한 커밋·명세 버전이 없으면 근거로 쓸 수 없다. */
 const VerificationReport = Body({
   headSha: c.Sha,
-  specRevision: c.Count,
+  specRevision: c.Int4Count,
   result: c.PassFail,
   cmd: Text,
   expected: Text,
@@ -112,7 +112,8 @@ const Job = <const K extends JobKind, P extends Record<string, Parameters<typeof
   Type.Object({ ...lease, kind: AnyOf(kind), payload: Type.Object(payload) });
 /** 현재 내용과 그 hash. hash는 재판단 보고에 그대로 돌려보낸다(data-model §2.3-1). */
 const JudgedTasks = List(
-  Type.Object({ taskKey: c.TaskKey, subjectHash: c.Sha256, content: m.JudgedContent }),
+  // 생략은 이전 서버 작업의 최초 등급(null)이다. 새 추정 작업은 Task마다 발행 시점 번호를 담는다.
+  Type.Object({ taskKey: c.TaskKey, subjectHash: c.Sha256, content: m.JudgedContent, gradeChange: Opt(Nullable(c.Uuid)) }),
 );
 /**
  * 판단할 CP의 snapshot. 내용과 hash는 같은 시점의 값이며 Runner는 이것만으로 판단한다.
@@ -161,15 +162,15 @@ export const ClaimedJob = Type.Union(
       agent: c.Agent,
       branch: Text,
       baseCommit: commit,
-      inputVersion: Type.Integer({ minimum: 1 }),
+      inputVersion: c.PositiveInt4,
       instructions: c.Json,
     }),
     Job('stop_attempt', { attemptId: c.Id, reason: Type.String() }),
-    Job('integrate', { pr: Type.Integer({ minimum: 1 }), commit }),
+    Job('integrate', { pr: c.PositiveInt4, commit }),
     Job('deploy_check', { commit }),
-    Job('ci_retry', { runId: c.Id, pr: Nullable(Type.Integer({ minimum: 1 })), commit }),
+    Job('ci_retry', { runId: c.Id, pr: Nullable(c.PositiveInt4), commit }),
     Job('design_apply', { itemKey: Text, driftId: c.Id }),
-    Job('merge_followup', { pr: Type.Integer({ minimum: 1 }) }),
+    Job('merge_followup', { pr: c.PositiveInt4 }),
   ],
   { title: 'ClaimedJob' },
 );
@@ -214,13 +215,13 @@ export const runnerOperations = [
       // 재부팅 판정의 기준값(보유 해제 증거와 대조)
       bootId: Text,
       cpu: Type.String(),
-      cores: Type.Integer({ minimum: 1 }),
+      cores: c.PositiveInt4,
       memGB: Type.Number({ exclusiveMinimum: 0 }),
       swapGB: Type.Number({ minimum: 0 }),
       diskFreeGB: Type.Number({ minimum: 0 }),
       os: Type.String(),
       perSessionGB: Opt(Type.Number({ exclusiveMinimum: 0 })),
-      samples: Opt(c.Count),
+      samples: Opt(c.Int4Count),
     }),
     responses: {
       200: Type.Object({
@@ -290,17 +291,17 @@ export const runnerOperations = [
     summary: '동시 실행 상태·한도 조절 보고',
     body: Body({
       at: c.Timestamp,
-      limit: c.Count,
-      running: Body({ Claude: c.Count, Codex: c.Count }),
+      limit: c.Int4Count,
+      running: Body({ Claude: c.Int4Count, Codex: c.Int4Count }),
       subagents: c.Count,
-      heavyJobs: c.Count,
+      heavyJobs: c.Int4Count,
       resources: Body({
         cpuPct: Type.Number({ minimum: 0 }),
         memFreeGB: Type.Number({ minimum: 0 }),
         swapGB: Type.Number({ minimum: 0 }),
       }),
       sessions: List(Session),
-      adjust: Opt(Body({ from: c.Count, to: c.Count, reason: Text })),
+      adjust: Opt(Body({ from: c.Int4Count, to: c.Int4Count, reason: Text })),
     }),
     responses: {
       200: Type.Object({ caps: Type.Object({ ...m.Caps, memReserveGB: Type.Number({ minimum: 0 }) }) }),
@@ -342,7 +343,7 @@ export const runnerOperations = [
           Type.Object({
             id: c.Id,
             agent: c.Agent,
-            version: c.Count,
+            version: c.Int4Count,
             hash: Type.String(),
             file: Type.String(),
             sandbox: Type.String(),
@@ -407,7 +408,7 @@ export const runnerOperations = [
       effort: Text,
       adjust: Opt(m.GradeAdjust),
       // 실제 사용 여부는 사후 확정(subagent-usage, D-12)
-      subagents: Opt(List(Body({ id: c.Id, version: c.Count, installed: Type.Boolean() }))),
+      subagents: Opt(List(Body({ id: c.Id, version: c.Int4Count, installed: Type.Boolean() }))),
     }),
     responses: { 204: null },
     errors: ['ATTEMPT_CLOSED'],
@@ -464,7 +465,7 @@ export const runnerOperations = [
     body: Body({
       fence,
       confirm: AnyOf('confirmed', 'partial'),
-      items: List(Body({ id: c.Id, version: Nullable(c.Count), hash: Nullable(Text) })),
+      items: List(Body({ id: c.Id, version: Nullable(c.Int4Count), hash: Nullable(Text) })),
     }),
     responses: { 204: null },
   }),
@@ -567,7 +568,7 @@ export const runnerOperations = [
     summary: '병합 상태(PR·병합 커밋) 보고 → 서버가 완료 판정',
     body: Body({
       ...c.JobContext,
-      pr: Type.Integer({ minimum: 1 }),
+      pr: c.PositiveInt4,
       taskKey: c.TaskKey,
       status: c.QueueStatus,
       qaHeadSha: Opt(c.Sha),
@@ -664,8 +665,8 @@ export const runnerOperations = [
       200: Type.Object({
         caps: Type.Object({ ...m.Caps, memReserveGB: Type.Number({ minimum: 0 }) }),
         subagentBudget: m.SubagentBudget,
-        heartbeatSeconds: Type.Integer({ minimum: 1 }),
-        inputCheckMinutes: Type.Integer({ minimum: 1 }),
+        heartbeatSeconds: c.PositiveInt4,
+        inputCheckMinutes: c.PositiveInt4,
         // 입력 확인 다시 시도 번호(열린 재작성 경고에서 팀장이 복구 확인을 누를 때마다 1 증가, 열린 경고가 없으면 0).
         // Runner는 이력 재작성으로 입력 보고를 멈춘 뒤 이 값이 바뀌면 다시 관측해 보고한다(POST /api/project/inputs/recheck).
         inputRecheck: c.Count,

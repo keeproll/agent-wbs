@@ -761,6 +761,12 @@ test('schema: demo loads exactly P twelve tasks, dependencies, checklists and te
       )
     ).rows[0]?.ac as unknown;
     expect(ac).toEqual(fixture.mock.tasks['TASK-0001']?.spec?.ac);
+    const splits = (await pool.query<{ judged_rules: { items: { rule: string; result: string; subjectHash: string }[] } }>('select judged_rules from task_splits')).rows;
+    expect(splits).toHaveLength(Object.keys(fixture.mock.tasks).length);
+    for (const row of splits) {
+      expect(row.judged_rules.items.map(i => i.rule)).toEqual(['revert', 'contract', 'refactor']);
+      expect(row.judged_rules.items.every(i => i.result === 'met' && /^[a-f0-9]{64}$/.test(i.subjectHash))).toBe(true);
+    }
     await expect(seedDemo(pool, url)).rejects.toThrow('empty project');
     await pool.query("select reset_project(1,$1,false,'test')", [
       (await pool.query('select name from projects')).rows[0]?.name,

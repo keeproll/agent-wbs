@@ -64,8 +64,12 @@ const properties = (schema: TSchema | undefined): TProperties => {
 /** 전용 404 코드가 있거나 자원이 아닌 경로 값 */
 const COVERED_PARAMS = new Set(['taskKey', 'projectId', 'attemptId', 'messageId', 'dependencyId', 'kind']);
 
+/** 여러 ID를 만드는 map에서도 각 ID로 Extract할 수 있게 한 요청씩 나눈다. */
+type Identified<T extends Input, Id extends string = T['id']> = Id extends unknown
+  ? T & { readonly id: Id } & Pick<Operation, 'errors' | 'idempotency'> : never;
+
 /** 라우트 정의. 공통 오류와 멱등 규칙을 채우고, 계약 위반이면 정의 시점에 실패한다. */
-export function operation<const T extends Input>(input: T): T & Pick<Operation, 'errors' | 'idempotency'> {
+export function operation<const T extends Input>(input: T): Identified<T> {
   const { method, path, principal } = input;
   const params = pathParams(path);
   const write = method !== 'GET';
@@ -119,5 +123,5 @@ export function operation<const T extends Input>(input: T): T & Pick<Operation, 
     ...input,
     idempotency,
     errors: [...errors].sort((a, b) => ERROR_STATUS[a] - ERROR_STATUS[b] || a.localeCompare(b)),
-  };
+  } as unknown as Identified<T>;
 }

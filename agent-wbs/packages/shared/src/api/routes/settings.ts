@@ -12,29 +12,29 @@ const settingVersion = { updatedAt: Nullable(c.Timestamp) };
 const jobCreated = { 202: Type.Object({ jobId: c.Id }) };
 
 /** GET·PUT 쌍. 응답은 저장값 + updatedAt */
-const setting = <T extends TProperties>(
-  name: string,
+const setting = <const Name extends string, T extends TProperties, W extends TProperties = Record<never, never>, R extends TProperties = Record<never, never>>(
+  name: Name,
   path: string,
   summary: string,
   fields: T,
-  extra: { write?: TProperties; read?: TProperties } = {},
+  extra: { write?: W; read?: R } = {},
 ) => [
   operation({
     ...lead,
-    id: `get${name}`,
+    id: `get${name}` as const,
     method: 'GET',
     path,
     summary: `${summary} 조회`,
-    responses: { 200: Type.Object({ ...fields, ...extra.read, ...settingVersion }) },
+    responses: { 200: Type.Object({ ...fields, ...extra.read as R, ...settingVersion }) },
   }),
   operation({
     ...byBody,
-    id: `put${name}`,
+    id: `put${name}` as const,
     method: 'PUT',
     path,
     summary: `${summary} 저장`,
-    body: Body({ ...settingVersion, ...fields, ...extra.write }),
-    responses: { 200: Type.Object({ ...fields, ...extra.read, ...settingVersion }) },
+    body: Body({ ...settingVersion, ...fields, ...extra.write as W }),
+    responses: { 200: Type.Object({ ...fields, ...extra.read as R, ...settingVersion }) },
   }),
 ];
 
@@ -45,14 +45,14 @@ const settings = [
     devAgent: c.Agent,
     qaAgent: c.Agent,
     liveInject: Type.Boolean(),
-    heartbeatSeconds: Type.Integer({ minimum: 1 }),
-    missedHeartbeats: Type.Integer({ minimum: 1 }),
+    heartbeatSeconds: c.PositiveInt4,
+    missedHeartbeats: c.PositiveInt4,
   }),
   ...setting('ExecPolicy', '/api/settings/exec-policy', '실행 정책', {
     ...m.ExecPolicy,
     floors: Body({ verifyGeDev: Type.Boolean(), dbHigh: Type.Boolean() }),
-    autoRetryLimit: c.Count,
-    autoReworkLimit: c.Count,
+    autoRetryLimit: c.Int4Count,
+    autoReworkLimit: c.Int4Count,
   }),
   // 모델 정보는 Runner 보고, 매핑은 owner 승인표다. 팀장은 허용과 순서·Claude 목록을 정한다(G§7.1, Q-06, owner 2026-11-26 아이템 8).
   // rank는 rankOrder(아래부터)에서 서버가 계산한 값이다. 순서·목록은 바꿀 때만 보낸다.
@@ -86,7 +86,7 @@ const settings = [
   ...setting('SplitSettings', '/api/settings/split', 'Task 분할 기준', {
     maxHours: Type.Number({ exclusiveMinimum: 0 }),
     minHours: Type.Number({ exclusiveMinimum: 0 }),
-    maxFiles: Type.Integer({ minimum: 1 }),
+    maxFiles: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
     testIn: Type.Boolean(),
     dir: AnyOf('layer'),
     on: Body(Object.fromEntries(SPLIT_RULES.map((rule) => [rule, Type.Boolean()]))),
@@ -96,7 +96,7 @@ const settings = [
     cpAuto: Type.Boolean(),
     thresholdDays: Type.Number({ minimum: 0 }),
     assumeRate: Type.Number({ exclusiveMinimum: 0, maximum: 1 }),
-    windowDays: Type.Integer({ minimum: 1 }),
+    windowDays: c.PositiveInt4,
     minHours: c.Hours,
   }),
   ...setting('Blackouts', '/api/settings/blackouts', '작업 불가일', {
@@ -119,7 +119,7 @@ const settings = [
         defs: List(
           Type.Object({
             id: c.Id,
-            version: c.Count,
+            version: c.Int4Count,
             agent: c.Agent,
             role: Type.String(),
             tools: Type.String(),
