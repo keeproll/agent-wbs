@@ -18,7 +18,7 @@ import { useEditSlot } from '../edit-slot.tsx';
 import { estimateErrors, overviewErrors } from '../editor-model.ts';
 import { agCls, agInit, ATTEMPT_KIND, PRIORITY, priorityOf, statusOf, TYPE_LABEL, toLines, type TaskDetailData, type TaskSummaryData } from '../labels.ts';
 import { Lines, Segs, short } from '../parts.tsx';
-import { fmtH, slipState } from '../schedule.ts';
+import { actualRunLabel, fmtH, slipState } from '../schedule.ts';
 import { useApiClient, useTaskSave } from '../useTaskData.ts';
 
 interface GradeEdit { role: 'dev' | 'qa'; model: string; effort: string; base: string }
@@ -67,7 +67,7 @@ export function OverviewTab({ task: t, byKey, nodes, attempts, onOpenTask }: {
                 <span className="kv-l">예상 토큰</span><span className="kv-v mono">{t.estimate?.tokensK === null || t.estimate?.tokensK === undefined ? '—' : `${String(t.estimate.tokensK)}K`}</span>
                 <span className="kv-l">추정 주체 · 신뢰도</span><span className="kv-v">{t.estimate ? <>{t.estimate.agreedBy} · <span className="tag">{String(t.estimate.confidence)}</span></> : '—'}</span>
                 <span className="kv-l">추정 근거</span><span className="kv-v">{t.estimate?.basis || '—'}</span>
-                <span className="kv-l">실제 실행</span><span className="kv-v mono">{`${fmtH(t.actualHours)} · 토큰 ${String(attempts.reduce((a, x) => a + (x.tokens ?? 0), 0))}K (실행 시도 ${String(attempts.length)}건)`}</span>
+                <span className="kv-l">실제 실행</span><span className="kv-v mono">{actualRunLabel(t.actualHours, attempts)}</span>
                 <span className="kv-l">추정 대비 실제</span><span className="kv-v">{actualRatio(t.actualHours, sch.estHours, String(t.lifecycleStatus) === 'done', sch.progressPct)}</span>
                 <span className="kv-l">충돌 묶음</span><span className="kv-v">{t.conflictGroup ?? '없음'}</span>
                 <span className="kv-l">기준 일정 (완료)</span><span className="kv-v mono">{sch.baselineEnd ?? '기준 미포함 — 다음 재조정 때 편입'}</span>

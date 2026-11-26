@@ -2,6 +2,7 @@
  * Task 일정 표시(요약·개요). 원본은 화면에서 일정을 직접 계산했지만(P L4250–4270),
  * 제품은 서버가 계산한 값(TaskSummary.schedule)만 보여 준다. 여기서는 「기준 대비」 문구만 원본 규칙대로 만든다.
  */
+import { tokensK } from '../../shared/format.ts';
 import type { TaskSummaryData } from './labels.ts';
 
 /** P L3415 */
@@ -26,4 +27,13 @@ export function slipState(t: Pick<TaskSummaryData, 'lifecycleStatus' | 'schedule
   if (slip < 0) return { l: `기준보다 ${String(-slip)}일 빠름`, c: 'sc-ok' };
   const started = !NOT_STARTED.has(status);
   return { l: started ? '진행 · 기준 일정' : '기준 일정', c: started ? 'sc-ok' : 'sc-none' };
+}
+
+/**
+ * 개요 「실제 실행」(원본 P L5322 actH: 「실행 시간 · 토큰 nK (실행 시도 n건)」).
+ * 실행 기록의 tokens는 토큰 개수라 1,000으로 나눠 K로 보인다(재리뷰 P2-1: 예전에는 개수에 K를 붙여 1,000배로 보였다).
+ */
+export function actualRunLabel(actualHours: number, attempts: readonly { tokens: number | null }[]): string {
+  const tokens = attempts.reduce((a, x) => a + (x.tokens ?? 0), 0);
+  return `${fmtH(actualHours)} · 토큰 ${tokensK(tokens)} (실행 시도 ${String(attempts.length)}건)`;
 }

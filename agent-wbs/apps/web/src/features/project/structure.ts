@@ -11,8 +11,8 @@ type Node = TaskList['nodes'][number];
 type Schedule = ResponseOf<'getSchedule'>;
 type Dashboard = ResponseOf<'getDashboard'>;
 
-/** 원본 prog(진행 중으로 세는 상태) — 실행~Gate 대기. WBS 필터 「진행 중」과 같다. */
-const PROGRESS = ['running', 'paused', 'qa', 'rework', 'verifying', 'gate'];
+/** 원본 pjVM prog(P L6464) 그대로 — 중단(paused)은 진행으로 세지 않는다. */
+const PROGRESS = ['running', 'qa', 'rework', 'verifying', 'gate'];
 
 export interface StructureRow {
   id: string; wbs: string; kind: 'Phase' | 'Work Package'; title: string;
@@ -34,17 +34,19 @@ export function structureRows(list: TaskList, schedule: Schedule | undefined): S
     const pct = est ? Math.round(sc.reduce((a, s) => a + s.estHours * s.progressPct, 0) / est) : 0;
     let win = '—';
     if (sc.length) {
+      // 원본 P L6469–6472: 그룹의 계획 시작(최소)·계획 완료(최대)·예상 완료(최대)를 구하고, 지연은 S.wdB(pe, fe) = fe − pe(일)다.
+      // Task별 지연의 최댓값이 아니다(재리뷰 P2-3: 한 Task가 늦어져도 그룹의 마지막 완료일이 그대로면 지연 0).
       const ps = Math.min(...sc.map((s) => dayNo(s.baselineStart ?? s.start)));
       const pe = Math.max(...sc.map((s) => dayNo(s.baselineEnd ?? s.end)));
-      // 지연은 서버가 작업일로 센 slipDays의 최댓값(원본 S.wdB(pe, fe)와 같은 뜻)
-      const slip = Math.max(0, ...sc.map((s) => s.slipDays ?? 0));
+      const fe = Math.max(...sc.map((s) => dayNo(s.end)));
       const iso = (n: number) => new Date(n * 864e5).toISOString().slice(0, 10);
-      win = `${md(iso(ps))} ~ ${md(iso(pe))}${slip > 0 ? ` (+${String(slip)})` : ''}`;
+      win = `${md(iso(ps))} ~ ${md(iso(pe))}${fe - pe > 0 ? ` (+${String(fe - pe)})` : ''}`;
     }
     return {
       n: tasks.length, done: tasks.filter((t) => String(t.lifecycleStatus) === 'done').length,
       act: tasks.filter((t) => PROGRESS.includes(String(t.lifecycleStatus))).length,
-      blk: tasks.filter((t) => t.blocked).length, est: fmtH(est), win, pct,
+      // 원본 Sel.isBlocked(P L3683): 완료 Task는 차단으로 세지 않는다.
+      blk: tasks.filter((t) => String(t.lifecycleStatus) !== 'done' && t.blocked).length, est: fmtH(est), win, pct,
     };
   };
   const rows: StructureRow[] = [];
@@ -57,22 +59,29 @@ export function structureRows(list: TaskList, schedule: Schedule | undefined): S
   return rows;
 }
 
-export interface AgentRow { name: 'Claude' | 'Codex'; dev: number; ver: number; run: number; att: number }
+type Attempt = ResponseOf<'getTaskAttempts'>['items'][number];
+export interface AgentRow { name: 'Claude' | 'Codex'; dev: number; ver: number; run: number | null; att: number | null }
 
 /**
- * Agent 참여 현황(P L6481): 담당·검증 Task 수는 Task 목록, 실행 중·시도 수는 대시보드(서버 집계).
- * 대시보드가 아직 없으면 실행 중·시도는 null(「—」).
+ * Agent 참여 현황(원본 pjVM agents, P L6481).
+ * - 담당·검증: 취소·삭제 Task를 뺀 Task 수.
+ * - 실행 중·시도: 개발·QA·재작업·재검증 모든 시도(재리뷰 P2-2). 대시보드 등급 통계는 개발·재작업만 세므로 쓰지 않는다.
+ *   attemptsByTask가 null이면(아직 다 읽지 못함) 실행 중·시도는 null(「—」).
  */
-export function agentRows(list: TaskList, dash: Dashboard | undefined): (Omit<AgentRow, 'run' | 'att'> & { run: number | null; att: number | null })[] {
-  const live = list.tasks.filter((t) => !t.deletedAt);
+export function agentRows(list: TaskList, attemptsByTask: ReadonlyMap<string, readonly Attempt[]> | null): AgentRow[] {
+  const live = list.tasks.filter((t) => !t.deletedAt && String(t.lifecycleStatus) !== 'cancelled');
+  const attempts = attemptsByTask ? [...attemptsByTask.values()].flat() : null;
   return (['Claude', 'Codex'] as const).map((name) => ({
     name,
     dev: live.filter((t) => String(t.assigneeAgent) === name).length,
     ver: live.filter((t) => String(t.verifierAgent) === name).length,
-    run: dash ? dash.panels.executions.filter((x) => x.kind === 'running' && String(x.agent) === name).length : null,
-    att: dash ? dash.grades.filter((g) => String(g.agent) === name).reduce((a, g) => a + g.attempts, 0) : null,
+    run: attempts ? attempts.filter((a) => String(a.agent) === name && String(a.status) === 'running').length : null,
+    att: attempts ? attempts.filter((a) => String(a.agent) === name).length : null,
   }));
 }
+
+/** 시도가 있을 수 있는 Task(계획·승인 대기는 아직 실행 전). 시도 목록은 이 Task들만 읽는다. */
+export const mayHaveAttempts = (t: Task) => !t.deletedAt && !['planning', 'approval'].includes(String(t.lifecycleStatus));
 
 /** 계획 변경 수(P L6492): 이견 조정이 남은 Planning, 승인 · 반영 대기 CP(review·changes·approved). */
 export function planChangeCounts(dash: Dashboard | undefined): { pl: number | null; cp: number | null } {

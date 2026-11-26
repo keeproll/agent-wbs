@@ -8,7 +8,7 @@
  * - 「분석 안 함」은 확인 기록(skipped)만 남기고, 다음 분석 때 그 변경도 함께 비교한다.
  * 입력 이력 재작성 경고(alerts key=input_history_rewritten)가 열려 있으면 「복구 확인 · 입력 확인 다시 시도」(POST /inputs/recheck, 조정자 결정 2026-11-26)를 보인다.
  */
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { useApi } from '../../shared/api/ApiProvider.tsx';
@@ -29,7 +29,8 @@ import { ResetModal } from './ResetModal.tsx';
 import { LINK } from '../../shared/links.ts';
 import { TableScroll } from '../../shared/ui/TableScroll.tsx';
 import { agentMark } from '../settings/labels.ts';
-import { agentRows, planChangeCounts, structureRows } from './structure.ts';
+import { agentRows, mayHaveAttempts, planChangeCounts, structureRows } from './structure.ts';
+import { attemptsKey, fetchAllAttempts } from '../exec/useExecData.ts';
 import { staleTargetError } from '../../shared/api/client.ts';
 
 type Active = Extract<ProjectState, { approvedAt: unknown }>;
@@ -353,7 +354,19 @@ function DetectCheckedAt({ at }: { at: string | null }) {
 function AgentPlanCard({ projectId }: { projectId: string }) {
   const list = useApiQuery('listTasks', { params: { projectId } }, { topics: ['task', 'dependency'] });
   const dash = useApiQuery('getDashboard', {}, { topics: ['task', 'attempt', 'verification', 'planning', 'proposal'] });
-  const agents = list.data ? agentRows(list.data, dash.data) : [];
+  // 실행 중·시도는 모든 종류의 시도를 센다(원본 P L6481). 전체 시도 목록 API가 없어 시도가 있을 수 있는 Task마다 읽는다.
+  // 작업 실행 화면과 같은 query key라 캐시를 함께 쓴다.
+  const { client } = useApi();
+  const started = (list.data?.tasks ?? []).filter(mayHaveAttempts);
+  const attemptQs = useQueries({
+    queries: started.map((t) => ({
+      queryKey: attemptsKey(t.taskKey),
+      queryFn: ({ signal }: { signal: AbortSignal }) => fetchAllAttempts(client, t.taskKey, signal),
+      meta: { topics: ['attempt'] },
+    })),
+  });
+  const attemptsByTask = attemptQs.every((q) => q.data !== undefined) ? new Map(started.map((t, i) => [t.taskKey, attemptQs[i]?.data ?? []])) : null;
+  const agents = list.data ? agentRows(list.data, attemptsByTask) : [];
   const counts = planChangeCounts(dash.data);
   const n = (v: number | null) => (v === null ? '—' : String(v));
   const grid = { gridTemplateColumns: 'minmax(120px,1fr) 70px 70px 70px 70px', minWidth: 0 };

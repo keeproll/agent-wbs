@@ -4,7 +4,7 @@
  * 모든 항목은 이동 주소(to)를 가진다(원본 page-sub 「모든 항목은 관련 Task 목록이나 화면으로 연결됩니다」).
  */
 import type { ResponseOf } from '../../shared/api/contract.ts';
-import { formatDateTime } from '../../shared/format.ts';
+import { formatDateTime, tokensK } from '../../shared/format.ts';
 import {
   ATTEMPT_KIND_LABEL, ATTEMPT_STATUS, CP_STATUS, DOMAIN_LABEL, EFFORT_LABEL, GATE_SHORT, LINK, monthDay, verdictClass, WORK_TYPE_LABEL,
 } from '../verify/labels.ts';
@@ -129,7 +129,8 @@ export const domainBars = (c: Dashboard['byDomain']) => bars(c, (k) => k, (k) =>
 
 export interface GradeRow { key: string; agent: string; grade: string; n: string; judged: string; fail: string; rateL: string; rateC: string; esc: string; tok: string }
 /** 토큰 수를 원본처럼 천 단위(K)로 보인다. 계약 tokens는 개수다. */
-export const tokensK = (n: number) => `${String(Math.round(n / 1000))}K`;
+/** 토큰 K 표시는 공통 함수(shared/format.ts)를 쓴다. */
+export { tokensK };
 export function gradeRows(g: Dashboard['grades']): GradeRow[] {
   return g.map((x) => {
     const rate = x.reworkRatePct;

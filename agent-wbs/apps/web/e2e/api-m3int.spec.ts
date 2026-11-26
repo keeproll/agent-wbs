@@ -195,3 +195,35 @@ test('Task 개요 실제 서버: 작업량·고정 시작일을 고치면 상세
   expect(t.fixStart).toBe('2027-01-04');
   await expect(page.getByRole('region', { name: 'Task 상세' })).toContainText('고정 시작일2027-01-04');
 });
+
+test('프로젝트 실제 서버: Agent 참여의 담당·검증·시도는 서버 Task·시도 목록과 같다(QA 시도 포함, 취소 Task 제외 — 재리뷰 P2-2)', async ({ page }) => {
+  await login(page, '/project');
+  const project = (await apiCall(page, 'project')).body as { id: string };
+  const tasks = ((await apiCall(page, `projects/${project.id}/tasks`)).body as { tasks: { taskKey: string; assigneeAgent: string | null; verifierAgent: string | null; lifecycleStatus: string; deletedAt: string | null }[] }).tasks;
+  const live = tasks.filter((t) => !t.deletedAt && t.lifecycleStatus !== 'cancelled');
+  const attempts: { agent: string; status: string; kind: string }[] = [];
+  for (const t of tasks.filter((x) => !x.deletedAt && !['planning', 'approval'].includes(x.lifecycleStatus))) {
+    let cursor: string | null = null;
+    do {
+      const page1 = (await apiCall(page, `tasks/${t.taskKey}/attempts?limit=200${cursor ? `&cursor=${cursor}` : ''}`)).body as { items: { agent: string; status: string; kind: string }[]; nextCursor: string | null };
+      attempts.push(...page1.items); cursor = page1.nextCursor;
+    } while (cursor);
+  }
+  const card = page.getByRole('region', { name: 'Agent 참여 현황' });
+  for (const name of ['Claude', 'Codex']) {
+    const want = [live.filter((t) => t.assigneeAgent === name).length, live.filter((t) => t.verifierAgent === name).length,
+      attempts.filter((a) => a.agent === name && a.status === 'running').length, attempts.filter((a) => a.agent === name).length].map(String);
+    await expect(card.getByRole('row', { name }).getByRole('cell')).toHaveText([(name === 'Claude' ? 'Cl' : 'Cx') + name, ...want]);
+    console.log(`[Agent 참여] ${name} 담당·검증·실행 중·시도 = ${want.join('·')} (QA·재검증 시도 ${String(attempts.filter((a) => a.agent === name && ['qa', 'reverify'].includes(a.kind)).length)})`);
+  }
+});
+
+test('Task 개요 실제 서버: 「실제 실행」 토큰은 실행 기록 tokens 합계를 1,000으로 나눈 K다(재리뷰 P2-1)', async ({ page }) => {
+  await login(page, '/wbs/TASK-0004');
+  const items = ((await apiCall(page, 'tasks/TASK-0004/attempts?limit=200')).body as { items: { tokens: number | null }[] }).items;
+  const sum = items.reduce((a, x) => a + (x.tokens ?? 0), 0);
+  const want = `토큰 ${String(Math.round(sum / 1000))}K (실행 시도 ${String(items.length)}건)`;
+  await expect(page.getByRole('region', { name: 'Task 상세' })).toContainText(want);
+  if (sum >= 1) await expect(page.getByRole('region', { name: 'Task 상세' })).not.toContainText(`토큰 ${String(sum)}K`);
+  console.log(`[실제 토큰] 합계 ${String(sum)}개 → ${want}`);
+});

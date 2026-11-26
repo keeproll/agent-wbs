@@ -52,7 +52,7 @@ test('지적 2 · UAT-PROJECT-11: 프로젝트의 Agent 참여·계획 변경·W
   await page.goto('/project');
   const agents = page.getByRole('region', { name: 'Agent 참여 현황' });
   await expect(agents.getByRole('row')).toHaveCount(3); // 머리 + Claude + Codex
-  const claudeDev = TASKS.filter((t) => t.assigneeAgent === 'Claude' && !t.deletedAt).length;
+  const claudeDev = TASKS.filter((t) => t.assigneeAgent === 'Claude' && !t.deletedAt && String(t.lifecycleStatus) !== 'cancelled').length;
   await expect(agents.getByRole('row', { name: /Claude/ })).toContainText(String(claudeDev));
   const plan = page.getByRole('region', { name: '계획 변경' });
   await expect(plan.getByRole('link', { name: /이견 조정이 필요한 Planning/ })).toHaveAttribute('href', '/planning');
