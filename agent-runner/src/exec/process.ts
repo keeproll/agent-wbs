@@ -20,7 +20,7 @@ export function spawnWaiting(record: LaunchRecord, launch: Launch): ChildProcess
   });
 }
 
-export async function runProcess(o: ProcessOptions): Promise<{ code: number | null; signal: NodeJS.Signals | null; proof: Proof }> {
+export async function runProcess(o: ProcessOptions): Promise<{ code: number | null; signal: NodeJS.Signals | null; proof: Proof; launchId: string }> {
   o.signal?.throwIfAborted();
   const record = await o.launches.create(o.job);
   const child = spawnWaiting(record, o.launch);
@@ -57,7 +57,7 @@ export async function runProcess(o: ProcessOptions): Promise<{ code: number | nu
     const proof = await clean();
     await output;
     if (!proof) throw new Error(`프로세스 그룹 종료를 증명하지 못했습니다. unconfirmed 보유를 유지합니다: ${o.launches.problem ?? '그룹이 남아 있습니다.'}`);
-    return { ...result, proof };
+    return { ...result, proof, launchId: record.launchId };
   } finally {
     permit.destroy();
     await clean();

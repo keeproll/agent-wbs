@@ -88,6 +88,7 @@ export interface ResetCleanupDeps {
   home: string;
   /** 현재 PC·부팅 식별자(host 보고와 같은 값) */
   identity: () => { hostId: string; bootId: string };
+  /** 기존 주입의 호환 필드다. 빈 pgid만으로 자손 종료를 증명하지 않으며 launchCheck가 반드시 확인한다. */
   groupEmpty?: (pgid: number) => boolean;
   /**
    * 같은 부팅의 보유에 대해 launch 기록을 대조하고 남은 그룹을 종료한다(contracts §3.4-3, M5-02 실행 계층이 제공).
@@ -129,7 +130,6 @@ export interface ResetCleanup {
 }
 
 export function createResetCleanup(deps: ResetCleanupDeps): ResetCleanup {
-  const groupEmpty = deps.groupEmpty ?? processGroupEmpty;
   const launchCheck = deps.launchCheck ?? (() => Promise.resolve('unknown' as const));
   /** 명령별로 아직 기록하지 않은 새 경고 참조 해시 */
   const pending = new Map<string, string[]>();
@@ -157,7 +157,7 @@ export function createResetCleanup(deps: ResetCleanupDeps): ResetCleanup {
         proofs.push({ ...original, proof: 'boot_changed', processGroup: hold.processGroup, currentBootId: bootId });
         items.push({ name, ok: true, detail: '부팅이 바뀜 — 이전 프로세스는 존재할 수 없음' });
       } else if (hold.processGroup !== null) {
-        if (groupEmpty(hold.processGroup) || (await launchCheck(hold)) === 'none' && groupEmpty(hold.processGroup)) {
+        if ((await launchCheck(hold)) === 'none') {
           proofs.push({ ...original, proof: 'group_empty', processGroup: hold.processGroup });
           items.push({ name, ok: true, detail: `프로세스 그룹 ${String(hold.processGroup)} 비었음` });
         } else {

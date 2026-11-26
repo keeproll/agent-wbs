@@ -10,6 +10,7 @@ import { afterEach, beforeEach, expect, test } from 'vitest';
 import { sealCredential } from '../../src/github/credential.ts';
 import { repositoryIdFor } from '../../src/git/identity.ts';
 import { GitRepository } from '../../src/git/repository.ts';
+import { Launches } from '../../src/exec/launches.ts';
 import { GitHubModel } from '../fakes/github/model.ts';
 import { startFakeGitHub, type FakeGitHub } from '../fakes/github/server.ts';
 
@@ -69,14 +70,18 @@ test('main: 실제 DB 모양의 정리 명령 → 그룹 종료 증명 → 로�
   git(source, 'clone', '--bare', source, remote);
   const repo = await GitRepository.clone(home, repositoryIdFor(remote), remote);
   const worktree = await repo.createWorktree('att-1', 'agent/T1-h1', base);
-  // 끝난 프로세스 그룹
-  const child = spawn(process.execPath, ['-e', ''], { detached: true, stdio: 'ignore' });
-  await once(child, 'exit');
+  // 종료한 그룹도 시작 시각이 기록된 실행이어야 초기화 증거가 된다.
+  const child = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { detached: true, stdio: 'ignore' });
+  await once(child, 'spawn');
   const pgid = child.pid ?? 0;
   // 이 PC의 실제 식별자(host 보고와 같은 계산)
   const machine = (await readFile('/etc/machine-id', 'utf8')).trim();
   const hostId = `${hostname()}-${createHash('sha256').update(machine).digest('hex').slice(0, 16)}`;
   const bootId = (await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim();
+  const launches = new Launches(home, { hostId, bootId });
+  const old = await launches.create({ id: String(fixture.withBase.payload.holds[0]?.job), fence: 1, epoch: 0 });
+  await launches.attach(old, pgid);
+  const exited = once(child, 'exit'); child.kill('SIGTERM'); await exited;
 
   github = await startFakeGitHub(GITHUB_TOKEN);
   const model = new GitHubModel();

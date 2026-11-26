@@ -87,11 +87,11 @@ test('초기화 정리는 pgid가 있는 살아 있는 그룹도 launch 대조 �
   expect(result.status).toBe('done');
 });
 
-test.each([false, true])('부모가 정상 종료해도 TERM을 무시하는 자손을 남기지 않는다(detached=%s)', async detached => {
+test.each(['same', 'detached', 'unmarked'])('부모가 정상 종료해도 TERM을 무시하는 자손을 남기지 않는다(mode=%s)', async mode => {
   const { home, launches } = await setup();
   let descendant = 0;
   try {
-    const result = await runProcess({ launches, job, launch: { file: process.execPath, args: [join(import.meta.dirname, 'tree.ts'), ...(detached ? ['--detach'] : [])], cwd: home, env: {}, stdin: '' }, register: () => Promise.resolve(), graceMs: 30, stdout: bytes => { descendant = Number(bytes.toString().trim()); } });
+    const result = await runProcess({ launches, job, launch: { file: process.execPath, args: [join(import.meta.dirname, 'tree.ts'), ...(mode === 'detached' ? ['--detach'] : mode === 'unmarked' ? ['--unmarked-group'] : [])], cwd: home, env: {}, stdin: '' }, register: () => Promise.resolve(), graceMs: 30, stdout: bytes => { descendant = Number(bytes.toString().trim()); } });
     expect(result.proof.kind).toBe('group_empty');
     expect(descendant).toBeGreaterThan(1);
     expect(() => process.kill(descendant, 0)).toThrow();

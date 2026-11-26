@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { createApiClient } from '../../src/api/client.ts';
 import { RunnerApp } from '../../src/app.ts';
+import { Launches } from '../../src/exec/launches.ts';
 import type { CliRegistry } from '../../src/cli-update/manager.ts';
 import { sealCredential } from '../../src/github/credential.ts';
 import { GitRepository } from '../../src/git/repository.ts';
@@ -97,8 +98,8 @@ test('M4 결합: 연결부터 CLI 유휴 적용까지 한 시나리오', { timeo
   expect(git(repo.path, 'rev-parse', 'refs/heads/agent/T1-h1')).toBe(baseline);
 
   // ── 끝난 프로세스 그룹(정리 명령의 보유) ──
-  const child = spawn(process.execPath, ['-e', ''], { detached: true, stdio: 'ignore' });
-  await once(child, 'exit');
+  const child = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { detached: true, stdio: 'ignore' });
+  await once(child, 'spawn');
   const pgid = child.pid ?? 0;
 
   // ── 전용 설치 CLI(현재 버전) ──
@@ -265,6 +266,10 @@ test('M4 결합: 연결부터 CLI 유휴 적용까지 한 시나리오', { timeo
   });
   await app.init();
   const hostId = app.identity.hostId;
+  const launches = new Launches(home, app.identity);
+  const old = await launches.create({ id: 'job-1', epoch: 0, fence: 1 });
+  await launches.attach(old, pgid);
+  const exited = once(child, 'exit'); child.kill('SIGTERM'); await exited;
 
   // 1. 연결·heartbeat
   await app.runner.start();
