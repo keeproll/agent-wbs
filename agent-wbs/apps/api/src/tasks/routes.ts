@@ -108,6 +108,7 @@ export function registerTaskRoutes(app: FastifyInstance, pool: Pool): void {
         title: string; wbsNodeId: string; workType: string; primaryDomain: string; relatedDomains?: string[]; priority?: number;
         assigneeAgent?: Agent; verifierAgent?: Agent; overview?: Overview; spec?: SpecBody; ac?: Ac[];
         checklist?: { content: string; required: boolean; verifyMethod?: string | null }[];
+        estHours?: number; fixStart?: string | null;
       };
       if (!(await client.query('select 1 from projects where id=$1 for share', [projectId])).rowCount) throw new TaskError('PROJECT_NOT_FOUND', { projectId });
       // Task의 부모는 같은 프로젝트의 Work Package다(data-model §2.3). 부모 노드가 그 사이 바뀌지 않게 잠근다.
@@ -126,13 +127,21 @@ export function registerTaskRoutes(app: FastifyInstance, pool: Pool): void {
          on conflict (project_id,kind) do update set value=counters.value+1 returning value::int as value`, [projectId])).rows[0]?.value ?? 0;
       const taskKey = displayKey('TASK', sequence);
       const inserted = (await client.query<{ id: string }>(
-        `insert into tasks(project_id,task_key,wbs_node_id,sort_order,title,work_type,primary_domain,related_domains,priority,assignee_agent,verifier_agent,status,verif_state)
-         values($1,$2,$3,(select coalesce(max(sort_order)+1,0) from tasks where wbs_node_id=$3),$4,$5,$6,$7::domain[],$8,$9,$10,'planning','none') returning id`,
+        `insert into tasks(project_id,task_key,wbs_node_id,sort_order,title,work_type,primary_domain,related_domains,priority,assignee_agent,verifier_agent,status,verif_state,fix_start)
+         values($1,$2,$3,(select coalesce(max(sort_order)+1,0) from tasks where wbs_node_id=$3),$4,$5,$6,$7::domain[],$8,$9,$10,'planning','none',$11::date) returning id`,
         [projectId, taskKey, body.wbsNodeId, body.title, body.workType, body.primaryDomain, related, body.priority ?? 2,
-          body.assigneeAgent ?? workflow?.devAgent ?? 'Claude', body.verifierAgent ?? workflow?.qaAgent ?? 'Codex'],
+          body.assigneeAgent ?? workflow?.devAgent ?? 'Claude', body.verifierAgent ?? workflow?.qaAgent ?? 'Codex', body.fixStart ?? null],
       )).rows[0];
       assert(inserted);
       const task = { id: inserted.id, project_id: projectId, task_key: taskKey };
+      if (body.estHours !== undefined) {
+        // 원본 Wizard(P createTask)와 같은 팀장 임시 추정: 범위 ×0.7~×1.6(소수 첫째 자리), 토큰 ×140K, 신뢰도 하. Planning이 나중에 다시 추정한다.
+        const est = body.estHours;
+        const tenth = (value: number) => Math.round(value * 10) / 10;
+        await client.query(`insert into task_estimates(project_id,task,est,lo,hi,tokens_k,confidence,basis,agreed_by) values($1,$2,$3,$4,$5,$6,'하',$7,'팀장')`,
+          [projectId, task.id, est, Math.min(est, tenth(est * 0.7)), Math.max(est, tenth(est * 1.6)), Math.round(est * 140),
+            '팀장 등록 — Planning Agent 재추정 전 임시값 (범위 ×0.7~×1.6)']);
+      }
       await client.query('insert into task_specs(project_id,task,overview,spec,ac,revision) values($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,1)',
         [projectId, task.id, JSON.stringify(overviewOf(body.overview)), JSON.stringify(specBody(body.spec ?? {})), JSON.stringify(acOf(body.ac))]);
       for (const [index, item] of (body.checklist ?? []).entries()) {
