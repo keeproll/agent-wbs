@@ -97,7 +97,8 @@ describe('리뷰 3 [P2] Claude 연결 정보 누락·재개 run', () => {
     const { s } = observe('Claude', [
       agentCall('tool-A'),
       started({ tool_use_id: 'tool-A', run_id: '001', is_backgrounded: true }),
-      started({ tool_use_id: 'tool-A', run_id: '002', is_backgrounded: true }),
+      // 재개는 새 도구 호출로 온다(같은 호출에 두 번째 run은 증명할 수 없어 미확인 — 재리뷰 2 결정 B, review2.test.ts)
+      agentCall('tool-B'), started({ tool_use_id: 'tool-B', run_id: '002', is_backgrounded: true }),
       { type: 'system', subtype: 'task_notification', task_id: 'task-A', tool_use_id: 'tool-A', run_id: '001', status: 'completed' },
       ok,
     ]);
@@ -108,8 +109,8 @@ describe('리뷰 3 [P2] Claude 연결 정보 누락·재개 run', () => {
     const { s } = observe('Claude', [
       agentCall('tool-A'),
       started({ tool_use_id: 'tool-A', run_id: '001', is_backgrounded: true }),
-      started({ tool_use_id: 'tool-A', run_id: '002', is_backgrounded: true }),
-      { type: 'system', subtype: 'task_notification', task_id: 'task-A', tool_use_id: 'tool-A', run_id: '002', status: 'completed' },
+      agentCall('tool-B'), started({ tool_use_id: 'tool-B', run_id: '002', is_backgrounded: true }),
+      { type: 'system', subtype: 'task_notification', task_id: 'task-A', tool_use_id: 'tool-B', run_id: '002', status: 'completed' },
       ok,
     ]);
     expect(s).toMatchObject({ observed: 0, state: 'ok' });
