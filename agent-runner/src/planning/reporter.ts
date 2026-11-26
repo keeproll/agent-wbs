@@ -3,7 +3,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { ApiError, type ApiClient, type ApiRequest, type ApiResponse } from '../api/client.ts';
 import { authenticationFailed, retryDelay, retryable } from '../api/outbox.ts';
 import type { ReportId } from '../state/state.ts';
-import type { PlanningCheckpoint } from './checkpoint.ts';
+import { PlanningCheckpointError, type PlanningCheckpoint } from './checkpoint.ts';
+import { wireProblem } from './wire.ts';
 
 /*
  * Planning 보고를 보내고 응답을 돌려받는다.
@@ -67,6 +68,9 @@ export class PlanningReporter {
       sent = { key: `${operation}:${runnerId}:${randomUUID()}`, request: typeof request === 'function' ? await request() : request };
       await checkpoint.recordSent(jobId, name, sent);
     }
+    // 전송 직전 관문: 첫 전송·재전송 모두 여기를 지난다. API를 부르는 곳은 아래 한 곳뿐이다(3차 리뷰).
+    const problem = wireProblem(operation, sent.request);
+    if (problem) throw new PlanningCheckpointError(`${operation} 「${name}」을 보내지 않습니다: ${problem}`);
     const full = { ...(sent.request as Request<K>), epoch, idempotencyKey: sent.key } as unknown as ApiRequest<K>;
     for (let attempt = 0; ; attempt++) {
       signal?.throwIfAborted();

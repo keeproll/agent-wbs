@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import type { ClaimedJob } from '../api/generated/client.ts';
 import { ANALYSIS_ORDER, CP_RULES, SPLIT_RULES, type AgentName, type Analysis, type SplitRule } from './agents.ts';
 import { isAnalysis, isAnalysisPair, isCross, isDisagreements, isEstimates } from './guards.ts';
@@ -124,6 +125,13 @@ export async function runEstimate(run: JobRun<Job<'estimate'>>): Promise<Plannin
     catch (error) { throw new PlanningAgentFailed('Runner', '추정 합의', error instanceof Error ? error.message : String(error)); }
     await run.checkpoint.saveOutput('estimates:agreed', agreed, isEstimates);
   }
+  // 어떤 보고도 보내기 전에 대조한다. 보내는 본문은 매번 검증된 합의(estimates:agreed)에서 만든다. 저장된 보낸 본문이 이것과 다르면 손상이다(3차 리뷰).
+  // 고친 값으로 같은 멱등 키에 덮어쓰지 않는다: 서버가 처리한 본문과 다른 본문이 같은 키로 가게 된다.
+  const body = { jobId: run.job.id, fence: run.job.fence, items: agreed.map(({ ref, ...values }) => ({ taskKey: ref, ...values })) };
+  const stored = run.checkpoint.sent(run.job.id, 'estimates');
+  if (stored && !isDeepStrictEqual((stored.request as { body?: unknown }).body, body)) {
+    throw new PlanningCheckpointError('보낸 추정 본문이 저장된 합의 추정과 다릅니다.');
+  }
   // 등급 재판단(G§7.2, D-29): 대상 역할의 등급을 먼저 보고한다. 서버가 허용·최저선을 검사해 저장하고, 이어지는 재추정이 일정을 다시 계산한다.
   for (const target of policy.rejudge?.targets ?? []) {
     const task = tasks.find((t) => t.taskKey === target.taskKey);
@@ -136,9 +144,7 @@ export async function runEstimate(run: JobRun<Job<'estimate'>>): Promise<Plannin
       return { params: { taskKey: task.taskKey }, body: { jobId: run.job.id, fence: run.job.fence, grades: plan.grades, subagents: plan.subagents, conflictGroup } };
     });
   }
-  await run.reporter.send('submitEstimates', 'estimates', {
-    body: { jobId: run.job.id, fence: run.job.fence, items: agreed.map(({ ref, ...values }) => ({ taskKey: ref, ...values })) },
-  });
+  await run.reporter.send('submitEstimates', 'estimates', { body });
   return { status: 'done', result: { tasks: agreed.length } };
 }
 

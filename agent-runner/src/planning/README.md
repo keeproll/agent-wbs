@@ -123,6 +123,12 @@ const outcome = await runPlanningJob(job, {
     - 합의 추정: 새 합의(`agreeEstimates`)와 저장된 합의 모두 `agreedEstimateProblem` 하나로 검사한다. 합의 주체가 Claude·Codex 둘이 아니거나 신뢰도·범위·근거가 틀리면 거부한다. 저장된 합의의 Task가 작업의 Task와 다르면 거부한다.
     - 보낸 요청: 기록(`recordSent`)과 읽기 모두 `sentProblem` 하나로 검사한다. Planning이 보내는 보고 종류인지, 본문(fence 포함)과 필요한 경로 인자가 있는지 본다.
     - 왜: 한쪽에만 검사가 있으면 재시작 경로가 새 출력에서 막은 오류를 그대로 보낸다(재리뷰 2·3).
+  - **전송 직전 관문(`wire.ts` `wireProblem`)**: 디스크의 어떤 값도 이 관문을 거치지 않고 서버로 가지 않는다(3차 리뷰).
+    - `PlanningReporter.send()`가 첫 전송·재전송 모두 API 호출 바로 앞에서 부른다. API를 부르는 곳은 그 한 곳뿐이다.
+    - 기록(`recordSent`)·읽기(`load`)의 `sentProblem`도 같은 함수를 쓴다.
+    - 검사: 보고별 필수 필드·경로 인자, 추정 값(`agreedEstimateProblem`), 판단 기록 형식, 본문 어디에 있든 합의 주체 Claude·Codex 둘과 신뢰도 하·중·상.
+    - 추정 본문은 매번 검증된 `estimates:agreed`에서 만들고, 저장된 보낸 본문이 이것과 다르면 아무것도 보내기 전에 멈춘다.
+    - 시험(`test/planning/wire-gate.test.ts`)은 7가지 job을 끝까지 돌린 진행 기록의 보낸 요청을 한 군데씩 변조해, 재실행이 아무것도 보내지 않는지 본다.
 
 ## 두 Agent 합의 규칙(`consensus.ts`)
 

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { atomicWrite } from '../state/files.ts';
+import { wireProblem } from './wire.ts';
 
 /*
  * Planning 작업의 로컬 진행 기록(checkpoint, 다시 이어 하기 위한 저장점).
@@ -34,29 +35,14 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 /** 보고기(reporter.ts)가 만드는 멱등 키 형식 `<operation>:<runnerId>:<uuid>` */
 const KEY = /^[A-Za-z]+:[^:\s]+:[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/;
 
-/** Planning이 보내는 보고와 그 경로 인자. 모두 본문(fence 포함)이 필요하다. */
-const PLANNING_REPORTS: Record<string, readonly string[]> = {
-  reportBootstrapProgress: ['jobId'], submitDraft: ['jobId'], submitTechProposals: ['jobId'],
-  submitPlanningAnalysis: ['id'], submitPlanningReviews: ['id'], submitProposalJudgements: ['id'],
-  submitTaskPlan: ['taskKey'], submitPlanningProposal: [], submitEstimates: [],
-};
-
 /**
  * 보낸 요청 하나의 검사. 문제가 없으면 null, 있으면 이유.
- * 기록할 때(recordSent)와 읽을 때(load) 이 함수 하나를 같이 쓴다(재리뷰 3).
- * 왜: 본문이 빠진 요청을 그대로 다시 보내면 손상된 로컬 기록이 서버 오류처럼 보이고, 재시도해도 같은 요청만 반복한다.
+ * 기록할 때(recordSent)와 읽을 때(load) 모두 쓰고, 본문 검사는 전송 직전 관문(wire.ts wireProblem)과 같은 함수다(재리뷰 3, 3차 리뷰).
+ * 왜: 본문이 빠지거나 합의 주체가 하나뿐인 요청을 그대로 다시 보내면, 손상된 로컬 기록이 서버로 나간다.
  */
 export function sentProblem(entry: unknown): string | null {
   if (!isRecord(entry) || typeof entry.key !== 'string' || !KEY.test(entry.key)) return '멱등 키 형식이 다릅니다';
-  const operation = entry.key.split(':')[0] ?? '';
-  const params = PLANNING_REPORTS[operation];
-  if (!params) return `Planning이 보내지 않는 보고입니다: ${operation}`;
-  if (!isRecord(entry.request)) return '요청이 객체가 아닙니다';
-  const { params: given, body } = entry.request;
-  if (!isRecord(body) || typeof body.fence !== 'number') return '본문(fence 포함)이 없습니다';
-  if (params.length && !(isRecord(given) && params.every((name) => typeof given[name] === 'string' && given[name] !== ''))) return `경로 인자(${params.join(',')})가 없습니다`;
-  if (given !== undefined && !isRecord(given)) return '경로 인자가 객체가 아닙니다';
-  return null;
+  return wireProblem(entry.key.split(':')[0] ?? '', entry.request);
 }
 
 /**
