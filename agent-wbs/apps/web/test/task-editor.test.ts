@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
-  blankEntity, knownTables, overviewErrors, relationRows, validateDraft, type EditorDraft,
+  type Row, blankEntity, knownTables, overviewErrors, relationRows, validateDraft, type EditorDraft,
 } from '../src/features/task/editor-model.ts';
 
-const col = (name: string, extra: Record<string, unknown> = {}) => ({ name, type: 'uuid', nullable: false, pk: false, fk: '', unique: false, def: '', desc: '', ...extra });
-const dbDraft = (f: Record<string, string>, columns: Record<string, unknown>[], indexes: Record<string, unknown>[] = []): EditorDraft => ({
+const col = (name: string, extra: Row = {}): Row => ({ name, type: 'uuid', nullable: false, pk: false, fk: '', unique: false, def: '', desc: '', ...extra });
+const dbDraft = (f: Record<string, string>, columns: Row[], indexes: Row[] = []): EditorDraft => ({
   kind: 'ent', sec: 'DB', idx: -1, key: '', f, b: { columns, indexes },
 });
 const tasks = [

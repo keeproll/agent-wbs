@@ -1,0 +1,20 @@
+/*
+ * Task 상세 전용 추가 규칙 — 원본(prototype.css)에 없는 것만 적는다. 원본 값은 바꾸지 않는다.
+ * 공통 product.css 대신 여기에 두는 이유: 다른 M3 화면과 함께 쓰는 파일을 건드리지 않기 위해서다.
+ */
+
+/* 1. 착수 승인 띠(원본에 없는 화면, UAT-APPROVE-01). 원본 .banner 안에 버튼을 오른쪽 정렬로 둔다. */
+.appr-bar { align-items: center; }
+.appr-acts { display: flex; gap: 6px; flex: none; }
+
+/* 2. 휴대폰(390px)에서 알림 링크로 상세를 읽을 때 요약·탭이 잘리지 않게 한다(UAT-RESP-02-TASK, D-28).
+      원본 L643(1100px 이하 상세 전체 화면)을 그대로 쓰고, 그보다 좁을 때 요약을 한 줄 1칸으로 바꾼다. */
+@media (max-width: 560px) {
+  .detail .summary { grid-template-columns: minmax(0, 1fr); }
+  .detail .dt-top { flex-wrap: wrap; }
+  .detail .kv { grid-template-columns: minmax(0, 1fr); gap: 2px 0; }
+  .detail .kv-l { padding-top: 6px; }
+  .detail .gate-r { grid-template-columns: 1fr auto; }
+  .detail .dt-body { padding: 14px 12px; }
+  .detail .dt-head { padding: 12px 12px 0; }
+}
