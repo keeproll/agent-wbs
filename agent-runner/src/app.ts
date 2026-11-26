@@ -245,18 +245,21 @@ export class RunnerApp {
   }
 
   /** GitHub 연결 확인 → 권한 3상태 보고(토큰 방식이면 키 등록·봉인 조회 포함). */
-  async checkGithub(): Promise<void> {
+  async checkGithub(signal?: AbortSignal): Promise<void> {
     if (!this.github) return;
+    signal?.throwIfAborted();
     // 연결 재확인은 새로 판단한다. 자격 증명이 바뀌었을 수 있으므로 캐시한 토큰을 버린다(P1-5).
     this.#tokenSource?.invalidate();
     if (this.github.mode === 'token') await this.github.connector.register();
     for (let attempt = 0; ; attempt += 1) {
+      signal?.throwIfAborted();
       try { await this.github.checkDeployKeys(); break; }
       catch (error) {
         if (!(error instanceof DeployKeyError) || !error.retryable || attempt >= 2) throw error;
-        await sleep(Math.max(error.retryAfterSeconds ?? 0, 2 ** attempt) * 1000);
+        await sleep(Math.max(error.retryAfterSeconds ?? 0, 2 ** attempt) * 1000, undefined, { signal });
       }
     }
+    signal?.throwIfAborted();
     const status = await this.github.client.checkConnection(this.github.mode);
     // 연결 확인은 토큰 취득 실패를 ok:false로 바꾼다. WBS 인증 실패였으면 상태를 보고하지 않고 그 오류를 그대로 던진다.
     if (this.github.connector.authFailure !== undefined) throw this.github.connector.authFailure;
@@ -267,17 +270,20 @@ export class RunnerApp {
    * Runner가 서버와 동기화된 뒤(`runner.ready`) 한 번 실행하는 시작 보고.
    * host → 준비 점검 → 모델 → GitHub 순서다. host 보고로 식별자와 상한을 먼저 받아야 나머지가 맞는 값을 쓴다.
    */
-  async bootstrap(): Promise<void> {
+  async bootstrap(signal?: AbortSignal): Promise<void> {
     if (this.#bootstrapped) return;
+    signal?.throwIfAborted();
     await this.reportHost();
     await this.updater.recover();
     await this.checkReadiness();
     await this.reportModels();
-    await this.checkGithub().catch((error: unknown) => {
+    await this.checkGithub(signal).catch((error: unknown) => {
+      if (signal?.aborted) throw error;
       // 키 등록·봉인 조회의 WBS 인증 실패는 Runner 토큰 문제이므로 위로 올려 앱을 멈춘다(P1-3).
       if (authenticationFailed(error) || (error instanceof DeployKeyError && !error.retryable)) throw error;
       this.#d.warn(`GitHub 연결 확인 실패: ${message(error)}`);
     });
+    signal?.throwIfAborted();
     await this.runner.outbox.flush();
     this.#bootstrapped = true;
   }
@@ -331,9 +337,10 @@ export class RunnerApp {
       while (!internal.signal.aborted && !this.#bootstrapped) {
         if (this.runner.ready) {
           try {
-            await this.bootstrap();
+            await this.bootstrap(internal.signal);
             if (!internal.signal.aborted) this.startSchedules();
           } catch (error) {
+            if (internal.signal.aborted) return;
             if (authenticationFailed(error) || (error instanceof DeployKeyError && !error.retryable)) { halt(error); return; }
             this.#d.warn(`시작 보고 실패: ${message(error)}`);
           }

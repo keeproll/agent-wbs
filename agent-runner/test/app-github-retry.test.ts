@@ -38,7 +38,7 @@ test('M1: 일시 장애는 재시도하고 회복되면 연결 확인을 계속�
     .mockRejectedValueOnce(new DeployKeyError('잠시 불가', 503, true, 7)).mockResolvedValue(undefined);
   await expect(app.bootstrap()).resolves.toBeUndefined();
   expect(keys).toHaveBeenCalledTimes(2);
-  expect(sleep).toHaveBeenCalledWith(7000);
+  expect(sleep).toHaveBeenCalledWith(7000, undefined, { signal: undefined });
   expect(github.client.checkConnection).toHaveBeenCalledOnce();
   expect(warnings).toEqual([]);
 });
@@ -47,8 +47,8 @@ test('M1: 세 번 실패하면 경고 후 시작을 계속하되 실제 쓰기�
   const keys = vi.spyOn(github.client, 'assertDeployKeys').mockRejectedValue(new DeployKeyError('목록 통신 실패', 0, true));
   await expect(app.bootstrap()).resolves.toBeUndefined();
   expect(keys).toHaveBeenCalledTimes(3);
-  expect(sleep).toHaveBeenNthCalledWith(1, 1000);
-  expect(sleep).toHaveBeenNthCalledWith(2, 2000);
+  expect(sleep).toHaveBeenNthCalledWith(1, 1000, undefined, { signal: undefined });
+  expect(sleep).toHaveBeenNthCalledWith(2, 2000, undefined, { signal: undefined });
   expect(warnings).toHaveLength(1);
   expect(warnings[0]).toContain('목록 통신 실패');
   expect(github.client.checkConnection).not.toHaveBeenCalled();
@@ -60,4 +60,43 @@ test('M1: 다른 키 발견은 재시도하거나 경고로 넘기지 않는다'
   await expect(app.bootstrap()).rejects.toBeInstanceOf(DeployKeyError);
   expect(keys).toHaveBeenCalledOnce(); expect(sleep).not.toHaveBeenCalled();
   expect(warnings).toEqual(['시스템 키 외']);
+});
+
+test.each(['external', 'communication'])('P2: 한 시간 재시도 대기도 종료 신호로 즉시 끝난다: %s', async (stop) => {
+  const entered = Promise.withResolvers<undefined>();
+  const wait = Promise.withResolvers<undefined>();
+  const communication = Promise.withResolvers<undefined>();
+  const controller = new AbortController();
+  vi.spyOn(app, 'init').mockResolvedValue();
+  vi.spyOn(app.runner, 'ready', 'get').mockReturnValue(true);
+  vi.spyOn(app.runner, 'run').mockImplementation((signal) => {
+    signal.addEventListener('abort', () => { communication.resolve(undefined); }, { once: true });
+    return communication.promise;
+  });
+  const keys = vi.spyOn(github.client, 'assertDeployKeys').mockRejectedValue(new DeployKeyError('속도 제한', 429, true, 3600));
+  const flush = vi.spyOn(app.runner.outbox, 'flush').mockResolvedValue();
+  const schedules = vi.spyOn(app, 'startSchedules');
+  vi.mocked(sleep).mockImplementationOnce((_delay, _value, options) => {
+    const signal = options?.signal;
+    if (signal) signal.addEventListener('abort', () => { wait.reject(signal.reason); }, { once: true });
+    entered.resolve(undefined);
+    return wait.promise;
+  });
+  let outcome = 'pending';
+  const running = app.run(controller.signal).then(() => { outcome = 'resolved'; }, () => { outcome = 'rejected'; });
+  try {
+    await entered.promise;
+    if (stop === 'external') controller.abort(); else communication.resolve(undefined);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(outcome).toBe('resolved');
+    expect(sleep).toHaveBeenCalledWith(3_600_000, undefined, { signal: expect.any(AbortSignal) });
+    expect(keys).toHaveBeenCalledOnce();
+    expect(github.client.checkConnection).not.toHaveBeenCalled();
+    expect(flush).not.toHaveBeenCalled();
+    expect(schedules).not.toHaveBeenCalled();
+    expect(warnings).toEqual([]);
+  } finally {
+    controller.abort(); wait.resolve(undefined);
+    await running;
+  }
 });
