@@ -198,6 +198,7 @@ test('응답에 비밀값 필드가 없고 입력 비밀값은 쓰기 전용이�
   ]);
   const env = JSON.stringify(op('getTaskSubagents').responses[200]);
   expect(env).not.toMatch(/"(model|effort)"/);
+  expect(env).toContain('"key"');
 });
 
 /** 프로토타입의 JSON 예시에서 최상위 필드와 선택 여부를 읽는다. */

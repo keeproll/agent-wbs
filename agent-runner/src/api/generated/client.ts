@@ -244,6 +244,34 @@ export type EstimatePolicy = {
   gradeChange?: Uuid;
 };
 
+export type ExecutionHold = {
+  id: Id;
+  project_id: Id | null;
+  job: Id;
+  attempt: Id | null;
+  epoch: number;
+  host_id: string | null;
+  boot_id: string | null;
+  fence: number | null;
+  pgid: number | null;
+  cgroup: string | null;
+  task: Id | null;
+  conflict_group: string | null;
+  agent: Agent;
+  slots: number;
+  heavy: boolean;
+  slot_state: "none" | "reserved" | "active" | "unconfirmed";
+  lock_state: "none" | "held" | "orphaned" | "handed_over" | "released";
+  lock_from_job: Id | null;
+  handed_to_job: Id | null;
+  release_proof: "no_process" | "group_empty" | "boot_changed" | null;
+  closed_at: Timestamp | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+  lease_owner?: string | null;
+  lease_until?: Timestamp | null;
+};
+
 export type GithubMode = "gh" | "token";
 
 export type GithubPermission = "verified" | "unverified" | "missing";
@@ -993,6 +1021,7 @@ export interface Operations {
         enabled: boolean;
         items: ({
           id: Id;
+          key: string;
           agent: Agent;
           version: number;
           hash: string;
@@ -1522,6 +1551,17 @@ export interface Operations {
       304: undefined;
     };
   };
+  /** 현재 Runner principal·epoch의 미해제 실행 보유. 읽기 전용 재시작 대조 */
+  getExecutionHolds: {
+    request: {
+      epoch: number;
+    };
+    responses: {
+      200: {
+        holds: (ExecutionHold)[];
+      };
+    };
+  };
   /** 정리 명령(다른 작업보다 먼저) */
   getCommands: {
     request: {
@@ -1534,7 +1574,9 @@ export interface Operations {
           id: Id;
           kind: "reset-cleanup";
           epoch: number;
-          payload: Record<string, unknown>;
+          payload: {
+            holds?: (ExecutionHold)[];
+          };
         })[];
       };
     };
@@ -2281,6 +2323,7 @@ export const OPERATIONS = {
   registerGithubKey: { method: 'POST', path: '/api/runner/github/key', content: 'json', statuses: { 200: true } },
   getGithubCredential: { method: 'GET', path: '/api/runner/github/credential', content: 'none', statuses: { 200: true } },
   getRunnerPolicy: { method: 'GET', path: '/api/runner/policy', content: 'none', statuses: { 200: true, 304: false } },
+  getExecutionHolds: { method: 'GET', path: '/api/runner/holds', content: 'none', statuses: { 200: true } },
   getCommands: { method: 'GET', path: '/api/runner/commands', content: 'none', statuses: { 200: true } },
   reportCommandResult: { method: 'POST', path: '/api/runner/commands/{id}/result', content: 'json', statuses: { 204: false } },
   claimJob: { method: 'POST', path: '/api/runner/jobs/claim', content: 'json', statuses: { 200: true, 204: false } },

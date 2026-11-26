@@ -216,6 +216,7 @@
    "items": [
     {
      "id": "qa-verifier",
+     "key": "qa-verifier",
      "agent": "Codex",
      "version": 4,
      "hash": "e81d5c",
@@ -650,6 +651,11 @@
     }
    ]
   }
+ },
+ {
+  "id": "getExecutionHolds",
+  "status": 200,
+  "response": { "holds": [] }
  },
  {
   "id": "getCommands",

@@ -4,6 +4,18 @@ import * as c from './common.ts';
 
 const { AnyOf, Nullable, Opt, List, Text } = c;
 
+/** reset-cleanup의 holds[]와 정상 재시작 조회가 같은 DB 필드 이름을 쓴다. lease 정보는 조회 때만 덧붙인다. */
+export const ExecutionHold = Type.Object({
+  id: c.Id, project_id: Nullable(c.Id), job: c.Id, attempt: Nullable(c.Id), epoch: c.Epoch,
+  host_id: Nullable(Text), boot_id: Nullable(Text), fence: Nullable(c.Fence), pgid: Nullable(c.PositiveInt4), cgroup: Nullable(Text),
+  task: Nullable(c.Id), conflict_group: Nullable(Text), agent: c.Agent, slots: c.Int4Count, heavy: Type.Boolean(),
+  slot_state: AnyOf('none', 'reserved', 'active', 'unconfirmed'),
+  lock_state: AnyOf('none', 'held', 'orphaned', 'handed_over', 'released'),
+  lock_from_job: Nullable(c.Id), handed_to_job: Nullable(c.Id), release_proof: Nullable(AnyOf('no_process', 'group_empty', 'boot_changed')),
+  closed_at: Nullable(c.Timestamp), created_at: c.Timestamp, updated_at: c.Timestamp,
+  lease_owner: Opt(Nullable(Text)), lease_until: Opt(Nullable(c.Timestamp)),
+}, { title: 'ExecutionHold' });
+
 /* ---- 판단 기록(data-model §2.3-1, D-33·D-34). 이름과 구조를 그대로 쓴다. ---- */
 const judgement = {
   result: AnyOf('met', 'not_met'),

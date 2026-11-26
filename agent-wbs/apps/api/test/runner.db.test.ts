@@ -86,6 +86,23 @@ describe('runner 실제 PostgreSQL 검증', () => {
   });
   afterAll(async () => { await app.close(); await pool.end(); await owner.end(); });
 
+  test('holds 조회는 현재 principal·epoch의 미해제 보유만 읽으며 fence·lease를 보존한다', async () => {
+    const { job } = await claimed();
+    const before = await hold(job.id);
+    const otherToken = await issueRunnerToken(pool, 'runner-other', 'fake');
+    const response = await app.inject({ url: '/api/runner/holds', headers: headers() });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json().holds).toMatchObject([{ job: job.id, fence: job.fence, host_id: 'host-a', boot_id: 'boot-a', slot_state: 'reserved', lease_owner: expect.stringMatching(/^runner:/), lease_until: expect.any(String) }]);
+    expect(await hold(job.id)).toEqual(before);
+    const other = await app.inject({ url: '/api/runner/holds', headers: { ...headers(), authorization: `Bearer ${otherToken}` } });
+    expect(other.statusCode, other.body).toBe(200);
+    expect(other.json()).toEqual({ holds: [] });
+    await owner.query('set session_replication_role=replica');
+    try { await owner.query('update execution_holds set epoch=0 where job=$1', [job.id]); }
+    finally { await owner.query('set session_replication_role=origin'); }
+    expect((await app.inject({ url: '/api/runner/holds', headers: headers() })).json()).toEqual({ holds: [] });
+  });
+
   test('시작 버튼 없이는 job이 없고, 동시 claim 100회 중 한 번만 예약하며 start를 중복해도 시도는 하나다', async () => {
     const t = await task();
     expect((await claim()).statusCode).toBe(204);
