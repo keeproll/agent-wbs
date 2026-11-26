@@ -49,7 +49,8 @@ export type ParamsOf<Id extends OperationId> = [PathParams<OperationOf<Id>['path
 export type FileParamsOf<Id extends FileOperationId> = [PathParams<Extract<FileOp, { id: Id }>['path']>] extends [never]
   ? never
   : Record<PathParams<Extract<FileOp, { id: Id }>['path']>, string>;
-export type FileQueryOf<Id extends FileOperationId> = Extract<FileOp, { id: Id }> extends { query: infer Q } ? Partial<SchemaStatic<Q>> : never;
+/** 파일 요청의 query. 계약의 필수 필드는 필수 그대로 둔다(예: getReportPdf의 view). */
+export type FileQueryOf<Id extends FileOperationId> = Extract<FileOp, { id: Id }> extends { query: infer Q } ? SchemaStatic<Q> : never;
 
 /** 오류 응답 본문(contracts §1.1) */
 export type ErrorBody = Static<typeof ErrorResponse>;

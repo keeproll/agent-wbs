@@ -12,6 +12,7 @@ import { MenuScreen } from '../../shared/layout/MenuScreen.tsx';
 import { Page } from '../../shared/layout/Page.tsx';
 import { useEditGuard } from '../../shared/state/useEditGuard.ts';
 import { useSave } from '../../shared/state/useSave.tsx';
+import { useSessionDraft } from '../../shared/state/useSessionDraft.tsx';
 import { BusyButton } from '../../shared/ui/BusyButton.tsx';
 import { EmptyState } from '../../shared/ui/EmptyState.tsx';
 import { useConfirm, useDim } from '../../shared/ui/feedback.tsx';
@@ -41,9 +42,10 @@ function TitleEditor() {
     // 저장 버튼을 누른 순간의 내용을 찍어 둔다. 재시도는 이 값을 그대로 보낸다.
     request: () => ({ updatedAt: task.data?.updatedAt ?? '', title: draft ?? '' }),
     run: ({ payload }) => saveWith(payload.updatedAt, payload.title),
-    onSuccess: (result) => {
+    onSuccess: (result, payload) => {
       queryClient.setQueryData(apiKey('getTask', { params: { taskKey: TASK } }), result.task);
-      setDraft(null);
+      // 성공한 요청과 지금 초안이 같을 때만 편집을 닫는다. 그 사이 더 고쳤으면 초안을 지키고 편집을 이어 간다.
+      setDraft((current) => (current === payload.title ? null : current));
     },
     successNotice: `${TASK} 제목을 저장했습니다.`,
     onFieldErrors: setFieldErrors,
@@ -56,11 +58,19 @@ function TitleEditor() {
       setDraft(null);
     },
   });
+  // 세션이 끊기면 이 초안을 탭 안에 남기고, 다시 로그인하면 복원을 제안한다.
+  const { restoreOffer } = useSessionDraft({
+    id: `task:${TASK}:title`,
+    label: `${TASK} 제목 편집`,
+    value: dirty ? { title: draft } : null,
+    onRestore: (data) => { setDraft(data.title); },
+  });
   const titleError = fieldErrors.find((e) => e.path === 'title' || e.path === '/title');
 
   return (
     <section className="card" aria-labelledby="sb-edit">
       <h2 id="sb-edit" className="sb-h">저장·오류 막대·충돌 창·편집 보호</h2>
+      {restoreOffer}
       {task.isPending && <AreaLoading label="Task 불러오는 중" />}
       {task.data && !editing && (
         <p>
@@ -90,17 +100,29 @@ function TitleEditor() {
 function MessageDemo() {
   const { client } = useApi();
   const [text, setText] = useState('');
+  const [botToken, setBotToken] = useState('');
   const { save, busy } = useSave({
     target: `${TASK} 메시지 초안 만들기`,
     request: () => ({ taskKey: TASK, type: 'instruction', toAgent: 'Claude', body: text }),
     run: ({ payload, idempotencyKey }) => client.call('createMessage', { body: payload as never, idempotencyKey }),
+    onSuccess: (_result, payload) => { setText((current) => (current === payload.body ? '' : current)); },
     successNotice: '메시지 초안을 만들었습니다.',
+  });
+  // botToken은 이름 규칙(token)으로 저장에서 빠진다.
+  const { restoreOffer } = useSessionDraft({
+    id: 'sandbox:message',
+    label: '메시지 초안',
+    value: text || botToken ? { body: text, botToken } : null,
+    onRestore: (data) => { setText(data.body); },
   });
   return (
     <section className="card" aria-labelledby="sb-msg">
       <h2 id="sb-msg" className="sb-h">POST 재시도(멱등 키)</h2>
+      {restoreOffer}
       <label className="fsel-l" htmlFor="sb-msg-in">메시지</label>
       <input id="sb-msg-in" className="inp" style={{ width: 360, display: 'block' }} value={text} onChange={(event) => { setText(event.target.value); }} />
+      <label className="fsel-l" htmlFor="sb-msg-token">봇 토큰(비밀값)</label>
+      <input id="sb-msg-token" className="inp" type="password" autoComplete="off" style={{ width: 360, display: 'block' }} value={botToken} onChange={(event) => { setBotToken(event.target.value); }} />
       <div className="form-acts" style={{ justifyContent: 'flex-start' }}>
         <BusyButton busy={busy} busyLabel="만드는 중…" onClick={() => { void save(); }}>메시지 초안 만들기</BusyButton>
       </div>

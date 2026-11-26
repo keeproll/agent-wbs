@@ -53,7 +53,8 @@ const tasks = useApiQuery('listTasks', { params: { projectId }, query: { status 
   - `useRefreshError(query, '<무엇> 최신 내용 불러오기')`를 붙이면 오류 막대와 「다시 시도」로 알린다(MenuScreen은 이미 쓴다).
   - 오류 화면(`LoadError`)은 처음부터 데이터가 없을 때만 쓴다.
 - 파일(PDF·ZIP·Evidence 원본)을 내려받는 요청(`getReportPdf`·`exportProject`·`getEvidenceContent`)은 `call`로 부를 수 없다(타입에서 빠짐).
-  - `<a href={apiUrl('getReportPdf', { params: { reportId } })} download>`처럼 주소만 만들어 브라우저가 내려받게 한다.
+  - `<a href={apiUrl('getReportPdf', { params: { reportId }, query: { view } })} download>`처럼 주소만 만들어 브라우저가 내려받게 한다.
+  - 계약의 필수 query는 필수 인수다. PDF는 `view`(`'int'` 내부용 / `'ext'` 외부용)를 화면이 고른 값으로 꼭 넘긴다. 빠지면 typecheck 오류이고 실행해도 예외가 난다.
 - `call`은 응답 본문을 다 읽을 때까지 10초 제한을 지킨다. 본문이 깨지거나 끊겨도 `ApiError`(server·network·timeout)로 온다.
 
 ## 3. 저장하기 — `useSave` + `BusyButton`
@@ -66,7 +67,8 @@ const { save, busy, conflictModal } = useSave({
   request: () => ({ updatedAt, title: draft }),
   // ② payload만 써서 보낸다. 화면 상태(draft 등)를 여기서 직접 읽지 않는다.
   run: ({ payload, idempotencyKey }) => client.call('updateTask', { params: { taskKey }, body: payload }),
-  onSuccess: (result) => { /* 캐시 갱신 후 편집 닫기 */ },
+  // ③ 성공한 요청 내용(payload)과 지금 초안이 같을 때만 편집을 닫는다.
+  onSuccess: (result, payload) => { /* 캐시 갱신 */ setDraft((d) => (d === payload.title ? null : d)); },
   successNotice: '제목을 저장했습니다.',
   onFieldErrors: setFieldErrors,            // 400의 고칠 항목
   onConflictReload: () => { /* 편집 버리고 최신 다시 읽기 */ },
@@ -85,7 +87,9 @@ const { save, busy, conflictModal } = useSave({
 - 오류 종류별 화면:
   - 500·네트워크 끊김·10초 무응답·503: 오류 막대 + 「다시 시도」.
     - 다시 시도는 **처음 `request()`로 찍은 내용과 같은 멱등 키**로 보낸다. 왜: 서버가 첫 요청을 처리하고 응답만 잃었을 수 있고, 같은 키에 다른 내용을 보내면 서버가 `IDEMPOTENCY_CONFLICT`로 거부한다.
-    - 결과를 모르는 요청이 남아 있는데 입력을 바꿔 다시 「저장」하면 보내지 않고 안내한다. 「다시 시도」로 끝내거나 오류 막대 「닫기」로 포기한 뒤 새로 저장한다.
+    - 결과를 모르는 요청이 남아 있는데 입력을 바꿔 다시 「저장」하면 보내지 않고 안내한다. 「다시 시도」(또는 같은 내용으로 다시 저장)로 먼저 끝낸 뒤 바꾼 내용을 저장한다.
+    - 오류 막대의 「닫기」는 **안내만 닫는다.** 이전 요청과 키는 잊지 않는다. 왜: 서버가 이미 처리하고 응답만 잃었을 수 있어, 새 키로 보내면 같은 것이 두 번 만들어진다.
+    - 재시도가 성공해도 그 사이 사용자가 더 고친 초안은 지우지 않는다. 그래서 `onSuccess`는 `payload`와 현재 초안을 비교해서 닫는다(예시 ③).
   - 400: 오류 막대 + 고칠 항목. 「다시 시도」는 없다. 왜: 같은 잘못된 요청을 다시 보내도 또 실패한다.
   - 409 `VERSION_CONFLICT`: 충돌 창. 「최신 불러오기(내 변경 버림)」와 「최신 위에 다시 적용」 중 고른다. Esc는 아무것도 하지 않고 창만 닫는다(입력 유지). 다시 적용이 실패하면 창 안에 이유를 보인다.
   - 그 밖의 409: 오류 막대(다시 시도 없음) + `onRejected`. 왜: 「지금 상태와 맞지 않음」이라 최신 상태를 다시 읽어야 한다(contracts §1.1).
@@ -107,7 +111,32 @@ const { save, busy, conflictModal } = useSave({
 - 화면 전체를 가리는 스피너는 쓰지 않는다.
 - 「움직임 줄이기」 설정이면 모든 애니메이션이 멈춘다(product.css).
 
-## 5. 그 밖의 공통 부품
+## 5. 세션 만료 때 초안 지키기 — `useSessionDraft`
+
+편집 중에 로그인이 끊기면(서버가 401을 주면) 화면은 로그인 화면으로 간다. 그때 작성 중이던 초안을 잃지 않게 하는 공통 기능이다(조정자 결정, 2026-11-27).
+
+```tsx
+const { restoreOffer } = useSessionDraft({
+  id: `task:${taskKey}:spec`,              // 화면·대상마다 다른 이름(같은 이름이면 서로 덮어쓴다)
+  label: `${taskKey} 명세 편집`,            // 복원 안내에 보일 이름
+  value: dirty ? { goal, scope } : null,    // 저장하지 않은 초안. 없으면 null
+  onRestore: (data) => { setDraft(data); }, // 복원을 누르면 편집 상태로 다시 연다
+  secretFields: ['smtpPass'],               // 이름 규칙으로 못 거르는 비밀값이 있으면 추가
+});
+return <section>{restoreOffer}…</section>;
+```
+
+동작:
+
+- 초안이 있는 동안(`value`가 null이 아님) 등록해 둔다. 401을 받는 순간 등록된 초안을 **이 브라우저 탭의 sessionStorage**에 화면별로 저장한다.
+  - 왜 sessionStorage인가: 탭을 닫으면 지워지고 다른 탭·다른 사람과 섞이지 않는다.
+- 다시 로그인하면 원래 주소로 돌아오고, 같은 `id`의 화면이 열리면 「복원 / 버리기」 안내(`restoreOffer`)를 보인다. 어느 쪽을 눌러도 저장된 초안은 지운다.
+- 비밀값은 저장하지 않는다. 필드 이름이 password·pass·secret·token·apiKey·privateKey·credential·otp 꼴이면 깊은 곳까지 뺀다. 그 밖의 비밀 필드는 `secretFields`에 적는다.
+  - 왜: 비밀값은 서버에만 암호화해 두고 화면에서는 쓰기 전용으로 다룬다(G L554, UAT-GITHUB-02).
+- 초안은 인증 수단이 아니다. 로그인한 뒤에만 보이고, 복원한 내용도 평소처럼 저장 버튼으로 서버 검사를 거친다.
+- 저장소가 막힌 브라우저(사생활 보호 모드 등)에서는 조용히 건너뛴다. 이때는 초안을 지킬 수 없다.
+
+## 6. 그 밖의 공통 부품
 
 | 부품 | 언제 | 비고 |
 |---|---|---|
@@ -122,7 +151,7 @@ const { save, busy, conflictModal } = useSave({
 | `<Icon d={ICON.warning} />` | 선 아이콘 | 원본 `.ico`와 같은 18×18. 아이콘 패키지는 쓰지 않는다 |
 | `formatDateTime(at)` | 시각 표시 | Asia/Seoul `YYYY-MM-DD HH:mm` |
 
-## 6. E2E에서 가짜 API 쓰기
+## 7. E2E에서 가짜 API 쓰기
 
 ```ts
 import { fakeApi, json, hold, delay, errorBody } from './support/fake-api.ts';
@@ -137,7 +166,7 @@ api.on('GET /api/project', slow.handler); …; slow.release();
 - 10초 무응답 같은 시간 시험은 `page.clock.install()` 뒤 `page.clock.fastForward(10_000)`으로 빨리 감는다.
 - 시험 파일 이름에 메뉴 이름을 넣는다(예: `wbs-filter.spec.ts`). 완료 명령 `W e2e -- wbs`가 파일 이름으로 고르기 때문이다.
 
-## 7. 알아 둘 함정
+## 8. 알아 둘 함정
 
 - 계약의 열거값(`AnyOf`)은 TypeScript에서 글자 그대로의 타입이 아니라 `string | number`로 나온다(@awbs/shared 결함, 보고함).
   - 그래서 `project.state === 'active'`로 타입이 좁혀지지 않는다. 필드 존재(`'name' in project`)로 구분하거나 값을 비교만 한다.

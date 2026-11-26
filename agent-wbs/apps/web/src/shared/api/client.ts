@@ -112,10 +112,15 @@ function buildUrl(id: string, params?: Record<string, string>, query?: Record<st
  */
 export function apiUrl<Id extends FileOperationId>(
   id: Id,
-  args: ([FileParamsOf<Id>] extends [never] ? { params?: never } : { params: FileParamsOf<Id> }) & ([FileQueryOf<Id>] extends [never] ? { query?: never } : { query?: FileQueryOf<Id> }),
+  args: ([FileParamsOf<Id>] extends [never] ? { params?: never } : { params: FileParamsOf<Id> }) & ([FileQueryOf<Id>] extends [never] ? { query?: never } : { query: FileQueryOf<Id> }),
 ): string {
   const { params, query } = args as { params?: Record<string, string>; query?: Record<string, unknown> };
-  return buildUrl(id, params, query).url;
+  const built = buildUrl(id, params, query);
+  // 계약의 필수 query가 빠진 주소는 서버가 400으로 거부한다. 만들기 전에 막는다.
+  const required = (built.op.query as { required?: string[] } | undefined)?.required ?? [];
+  const missing = required.filter((name) => query?.[name] === undefined || query[name] === null);
+  if (missing.length > 0) throw new Error(`${id}: 필수 query ${missing.join(', ')}가 없습니다.`);
+  return built.url;
 }
 
 export function createApiClient(options: ApiClientOptions): ApiClient {
