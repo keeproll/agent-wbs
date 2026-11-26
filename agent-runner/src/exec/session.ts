@@ -12,7 +12,7 @@ import { SubagentObserver, sessionSlots } from '../cli/observe.ts';
 import { JsonlDecoder } from '../cli/stream.ts';
 import type { IsolationLayer, Launch } from '../cli/isolation.ts';
 import { IsolationUndecidedError } from '../cli/isolation.ts';
-import type { SessionState } from '../resources/reporter.ts';
+import type { ResourceReporter, SessionState } from '../resources/reporter.ts';
 import type { HeavySemaphore } from '../resources/heavy.ts';
 import { atomicWrite } from '../state/files.ts';
 import type { ReportId } from '../state/state.ts';
@@ -36,6 +36,7 @@ export interface ExecutionOptions {
   budget: (role: 'dev' | 'qa') => number;
   sessions: ActiveSession[];
   heavy: HeavySemaphore;
+  canStart: ResourceReporter['canStart'];
   isolation?: IsolationLayer;
   verified?: (agent: Agent, model: string, options: string) => boolean;
   updater?: { tryClaim(): (() => void) | null; applyPending(): Promise<unknown> };
@@ -50,6 +51,7 @@ export class Execution {
   readonly #controllers = new Set<AbortController>();
   readonly #tasks = new Set<Promise<unknown>>();
   readonly #jobs = new Set<string>();
+  readonly #reservations = new Map<string, SessionState>();
   #recovered = false;
   constructor(options: ExecutionOptions) { this.#d = options; this.launches = new Launches(options.home, options.identity); }
 
@@ -73,10 +75,11 @@ export class Execution {
       const request = { epoch: hold.epoch, params: { id: hold.job }, body: { fence: hold.fence, hostId: hold.host_id, proof, at: new Date().toISOString() } };
       const queued = await this.#d.outbox.enqueue('releaseJob', request);
       await this.#call('releaseJob', { ...request, idempotencyKey: queued.request.idempotencyKey }, signal);
+      await this.#completeJob({ id: hold.job, epoch: hold.epoch, fence: hold.fence });
     }
     for (const r of await this.launches.list()) {
       signal?.throwIfAborted();
-      if (r.hostId === this.#d.identity.hostId && !await this.launches.reconcile({ job: r.job.id, hostId: r.hostId, bootId: r.bootId, processGroup: r.pgid })) return false;
+      if (r.hostId === this.#d.identity.hostId && !r.completedAt && !await this.launches.retire(r)) return false;
     }
     await this.#d.outbox.flush();
     this.#recovered = true;
@@ -85,11 +88,14 @@ export class Execution {
 
   async claim(capacity: number): Promise<ClaimedJob | null> {
     if (!this.#d.isolation || !this.#recovered || !this.#d.ready()) return null;
-    const blocked = this.#d.sessions.some(s => s.state === 'unconfirmed');
+    if (!Number.isSafeInteger(capacity) || capacity < 0) throw new RangeError('실행 용량이 올바르지 않습니다.');
+    const local = [...this.#d.sessions, ...this.#reservations.values()];
+    let available = capacity;
+    while (available > 0 && !(['Claude', 'Codex'] as const).some(agent => this.#d.canStart(agent, available, local).ok)) available--;
     const release = this.#d.updater?.tryClaim();
     if (this.#d.updater && !release) return null;
     try {
-      const result = await this.#call('claimJob', { epoch: this.#d.epoch(), idempotencyKey: randomUUID(), body: { kinds: blocked ? ['stop_attempt'] : ['attempt', 'stop_attempt'], capacity: blocked ? 0 : capacity } });
+      const result = await this.#call('claimJob', { epoch: this.#d.epoch(), idempotencyKey: randomUUID(), body: { kinds: available === 0 ? ['stop_attempt'] : ['attempt', 'stop_attempt'], capacity: available } });
       return result.status === 200 ? result.body.job : null;
     } finally { release?.(); }
   }
@@ -147,6 +153,7 @@ export class Execution {
       } });
       empty = true;
       await this.#report('releaseJobSlots', { epoch: job.epoch, params: { id: job.id }, body: { fence: job.fence, hostId: d.identity.hostId, proof: result.proof, at: new Date().toISOString() } });
+      await this.launches.complete(result.launchId, result.proof);
       return result;
     } finally {
       await stopLease();
@@ -173,9 +180,14 @@ export class Execution {
     this.#controllers.add(controller);
     let attemptId: string | undefined;
     let session: ActiveSession | undefined;
+    let preparation: Awaited<ReturnType<Launches['create']>> | undefined;
+    let physicalCleared = false;
+    const reservation: SessionState = { attemptId: `job:${job.id}`, agent: job.payload.agent, reserved: 1 + budget, observed: 0, state: 'ok' };
     let grade: ApiResponse<'getRunGrade'>['body'] | undefined;
     try {
-      await this.launches.create(jobRef);
+      this.#assertStart(job.payload.agent, 1 + budget);
+      this.#reservations.set(job.id, reservation);
+      preparation = await this.launches.create(jobRef);
       grade = (await this.#call('getRunGrade', { epoch, params: { taskKey: job.payload.taskKey }, query: { role } }, signal)).body;
       const work = await d.prepare(job);
       const resumeName = `${createHash('sha256').update(`${job.payload.taskKey}:${role}`).digest('hex')}.json`;
@@ -191,16 +203,19 @@ export class Execution {
       const launch = buildLaunch(job.payload.agent, d.binaries[job.payload.agent], { ...grade, cwd: work.cwd, prompt, ...(resume && { resume }) }, { env: d.env, ...(d.isolation && { isolation: d.isolation }) });
       const installedSubagents = await installSubagents(work.cwd, job.payload.agent, definitions, grade);
       signal.throwIfAborted();
+      this.#assertStart(job.payload.agent, 1 + budget, reservation);
       const start = await this.#report('startJob', { epoch, params: { id: job.id }, body: { fence: job.fence, ...d.identity, headSha: work.headSha, installedSubagents } }, signal);
       attemptId = start.body.attemptId;
       if (!attemptId) throw new Error('start 응답에 attemptId가 없습니다.');
       this.#running.set(attemptId, controller);
+      await this.#report('reportAttemptStatus', { epoch, params: { attemptId }, body: { fence: job.fence, status: 'running', model: grade.model, effort: grade.effort, at: new Date().toISOString(), ...(grade.adjust && { adjust: grade.adjust }) } }, signal);
       const observer = new SubagentObserver(), decoder = new JsonlDecoder(), parse = createParser(job.payload.agent);
       let reserved = 1 + budget, ok = false, sessionId: string | undefined;
       let resultEvent: Extract<CliEvent, { type: 'result' }> | undefined;
       const tokens = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
       session = { attemptId, agent: job.payload.agent, observed: 0, reserved, state: 'ok', children: 1 };
       d.sessions.push(session);
+      this.#reservations.delete(job.id);
       const active = session;
       const verified = d.isolation ? d.verified?.(job.payload.agent, grade.model, sessionOptions(job.payload.agent, d.isolation, resume ? 'resume' : 'new')) ?? false : false;
       const apply = (records: ReturnType<JsonlDecoder['end']>) => {
@@ -226,6 +241,7 @@ export class Execution {
       try {
         result = await runProcess({ launches: this.launches, job: jobRef, launch, signal, register: async record => {
           await this.#report('reportJobProcess', { epoch, params: { id: job.id }, body: { fence: job.fence, processGroup: record.pgid ?? 0, cgroup: record.cgroup } }, signal);
+          this.#assertStart(job.payload.agent, active.reserved, active);
         }, stdout: async bytes => {
           await transcript.write(bytes);
           apply(decoder.push(bytes));
@@ -233,11 +249,14 @@ export class Execution {
         await transcript.sync();
       } finally { await transcript.close(); }
       endStream();
+      physicalCleared = true;
       if (sessionId) {
         await mkdir(resumeDir, { recursive: true, mode: 0o700 });
         await atomicWrite(resumeDir, resumeName, JSON.stringify({ cwd: work.cwd, agent: job.payload.agent, model: grade.model, effort: grade.effort, sessionId }));
       }
       await this.#report('releaseJobSlots', { epoch, params: { id: job.id }, body: { fence: job.fence, hostId: d.identity.hostId, proof: result.proof, at: new Date().toISOString() } });
+      await this.launches.complete(result.launchId, result.proof);
+      await this.launches.complete(preparation.launchId, { kind: 'no_process', bootId: d.identity.bootId });
       // shortcut: CLI 기록 형식이 검증되기 전에는 실제 사용을 확정하지 않는다. M5-03 실증 뒤 기록 해석기를 연결한다.
       await d.outbox.enqueue('reportSubagentUsage', { epoch, params: { attemptId }, body: { fence: job.fence, confirm: 'partial', items: [] } });
       if (signal.aborted || !ok || result.code !== 0) {
@@ -250,21 +269,49 @@ export class Execution {
       if (error instanceof SubagentInstallError || (error instanceof ApiError && error.error?.code === 'SUBAGENT_INSTALL_FAILED')) {
         await this.#report('finishJob', { epoch, params: { id: job.id }, body: { fence: job.fence, status: 'failed', error: { code: 'SUBAGENT_INSTALL_FAILED', message: '하위 Agent 설치를 확인하지 못했습니다.' } } });
         const proof = await this.launches.reconcile({ job: job.id, ...d.identity, processGroup: null });
-        if (proof) await this.#report('releaseJob', { epoch, params: { id: job.id }, body: { fence: job.fence, hostId: d.identity.hostId, proof, at: new Date().toISOString() } });
-      } else if (attemptId && grade && !signal.aborted) {
-        await d.outbox.enqueue('reportAttemptStatus', { epoch, params: { attemptId }, body: { fence: job.fence, status: 'failed', model: grade.model, effort: grade.effort, at: new Date().toISOString() } });
+        if (proof) {
+          await this.#report('releaseJob', { epoch, params: { id: job.id }, body: { fence: job.fence, hostId: d.identity.hostId, proof, at: new Date().toISOString() } });
+          await this.#completeJob(jobRef);
+        }
+      } else if (attemptId) {
+        await this.#report('interruptAttempt', { epoch, params: { attemptId }, body: { fence: job.fence, reason: 'error', at: new Date().toISOString() } });
+        const holds = (await this.#call('getExecutionHolds', { epoch })).body.holds;
+        const hold = holds.find(h => h.job === job.id);
+        if (hold) {
+          const proof = await this.launches.reconcile({ job: job.id, ...d.identity, processGroup: hold.pgid });
+          if (proof) {
+            await this.#report('releaseJob', { epoch, params: { id: job.id }, body: { fence: job.fence, hostId: d.identity.hostId, proof, at: new Date().toISOString() } });
+            await this.#completeJob(jobRef);
+            physicalCleared = true;
+          }
+        }
       }
       throw error;
     } finally {
       await stopLease();
       this.#controllers.delete(controller);
+      this.#reservations.delete(job.id);
       if (attemptId) this.#running.delete(attemptId);
       if (session) {
-        const proof = await this.launches.list().then(records => this.launches.reconcile({ job: job.id, ...d.identity, processGroup: records.findLast(r => r.job.id === job.id)?.pgid ?? null }), () => null);
+        const proof = physicalCleared || await this.launches.list().then(records => this.launches.reconcile({ job: job.id, ...d.identity, processGroup: records.findLast(r => r.job.id === job.id)?.pgid ?? null }), () => null);
         if (proof) d.sessions.splice(d.sessions.indexOf(session), 1);
         else session.state = 'unconfirmed';
       }
       await d.updater?.applyPending();
+    }
+  }
+
+  #assertStart(agent: Agent, slots: number, own?: SessionState): void {
+    const local = [...this.#d.sessions, ...this.#reservations.values()].filter(s => s !== own);
+    const result = this.#d.canStart(agent, slots, local);
+    if (!result.ok) throw new Error(`새 실행을 보류합니다: ${result.reason}`);
+  }
+
+  /** job 전체 해제를 서버가 확인한 뒤 남은 준비·명령 기록을 완료한다. */
+  async #completeJob(job: LaunchJob): Promise<void> {
+    for (const record of await this.launches.list()) {
+      if (record.job.id !== job.id || record.job.fence !== job.fence || record.job.epoch !== job.epoch || record.completedAt) continue;
+      await this.launches.complete(record.launchId, record.pgid === null ? { kind: 'no_process', bootId: record.bootId } : { kind: 'group_empty', bootId: record.bootId, processGroup: record.pgid });
     }
   }
 
