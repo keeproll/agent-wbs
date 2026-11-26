@@ -23,20 +23,21 @@ export function createCodexParser(): (event: Json) => CliEvent[] {
   const collab = (item: Json, out: CliEvent[]) => {
     const tool = str(item.tool) ?? '';
     if (!COLLAB_TOOLS.has(tool)) return out.push({ type: 'unknown', raw: item, path: 'item' });
-    const sender = str(item.sender_thread_id) ?? null;
+    // 없으면 비워 둔다. 주 Agent를 뜻하는 null로 채우지 않는다(재리뷰 5).
+    const sender = str(item.sender_thread_id);
     const receivers = Array.isArray(item.receiver_thread_ids) ? item.receiver_thread_ids.filter((x): x is string => typeof x === 'string' && x !== '') : [];
     const states = isObject(item.agents_states) ? item.agents_states : {};
     if (tool === 'spawn_agent' && item.status === 'completed' && receivers.length === 0) {
       out.push({ type: 'subagent_unlinked', reason: 'spawn_agent 완료에 receiver_thread_ids 없음' });
     }
-    // 생성된 ID는 상태 보고가 없어도 실행 중으로 본다(생성 호출이 끝났으므로).
+    // 생성된 ID도 상태 보고가 없으면 실행 중으로 채우지 않는다(재리뷰 5). 빠진 필드·모르는 값은 언제나 unknown이다.
     const ids = new Set([...(tool === 'spawn_agent' && item.status === 'completed' ? receivers : []), ...Object.keys(states)]);
     for (const id of ids) {
       const state = states[id];
       const status = isObject(state) ? str(state.status) : undefined;
-      const phase: SubagentPhase = status === undefined ? 'running' : (PHASE[status] ?? 'unknown');
+      const phase: SubagentPhase = status === undefined ? 'unknown' : (PHASE[status] ?? 'unknown');
       const event: CliEvent = { type: 'subagent', id, phase, ...(status === undefined ? {} : { status }) };
-      if (tool === 'spawn_agent') event.parentId = sender;
+      if (tool === 'spawn_agent' && sender !== undefined) event.parentId = sender;
       out.push(event);
     }
     return 0;
@@ -72,8 +73,9 @@ export function createCodexParser(): (event: Json) => CliEvent[] {
       case 'item.updated':
       case 'item.completed': item(e, out); break;
       case 'turn.completed': {
-        const u = isObject(e.usage) ? e.usage : {};
-        out.push({ type: 'usage', inputTokens: num(u.input_tokens), cachedInputTokens: num(u.cached_input_tokens), outputTokens: num(u.output_tokens) });
+        // usage가 없으면 토큰 0을 지어내지 않는다(재리뷰 5).
+        const u = isObject(e.usage) ? e.usage : null;
+        if (u) out.push({ type: 'usage', inputTokens: num(u.input_tokens), cachedInputTokens: num(u.cached_input_tokens), outputTokens: num(u.output_tokens) });
         out.push({ type: 'result', ok: true, reason: 'completed' });
         break;
       }

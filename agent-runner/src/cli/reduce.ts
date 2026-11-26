@@ -59,7 +59,8 @@ interface AgentTaskRec {
 
 interface AgentRec {
   active: boolean;
-  background: boolean;
+  /** true 배경, false 전경, null 모름(보고가 없음). 도구 결과로 줄이는 것은 명시적 전경(false)일 때만이다. */
+  background: boolean | null;
   /**
    * 이 Agent의 시작이 증명된 launch 번호. 도구 호출만 보고 센 것(시작 보고 없음)이면 null.
    * 수를 줄이거나 끝내는 전이는 이 값이 현재 launch일 때만 적용한다(`settle`).
@@ -118,7 +119,7 @@ function unconfirm(s: ObservationState, reason: string): void {
  * - Codex: 이 launch 스트림에서 그 thread ID가 실행 중(`running`·`pending_init`)으로 보고됨.
  * 모르는 상태·추정·다른 ID의 증명에서 옮겨 오지 않는다. 이전 launch의 증명을 현재로 올리지도 않는다.
  */
-function startObserved(s: ObservationState, key: string, background: boolean, call: string): void {
+function startObserved(s: ObservationState, key: string, background: boolean | null, call: string): void {
   s.agents[key] = { active: true, background, call, proven: s.launch };
 }
 
@@ -158,7 +159,7 @@ function apply(s: ObservationState, e: ObservationInput): void {
       s.seq += 1;
       s.calls[e.id] = { seq: s.seq, launch: s.launch, agent: e.id };
       // 호출을 본 순간부터 센다(실행 여부를 모르므로 보수적으로).
-      s.agents[e.id] = { active: true, background: false, call: e.id, proven: null };
+      s.agents[e.id] = { active: true, background: null, call: e.id, proven: null };
       return;
     }
     case 'tool_result': {
@@ -173,7 +174,8 @@ function apply(s: ObservationState, e: ObservationInput): void {
       // 그런 호출의 Agent는 proven이 없으므로 아래 settle이 수를 두고 미확인으로 남긴다(한 원칙).
       const t = c.task === undefined ? undefined : s.tasks[c.task];
       if (t?.kind === 'agent' && t.ambiguous) return unconfirm(s, `task ${c.task ?? ''}의 도구 결과: 현재 run이 모호해 적용하지 않음`);
-      if (a.background) return;
+      if (a.background === true) return;
+      if (a.background === null) return unconfirm(s, `도구 결과 ${e.toolUseId}: 전경인지 모름(배경 보고 없음)`);
       return settle(s, c.agent, `도구 결과 ${e.toolUseId}`);
     }
     case 'task':
@@ -181,9 +183,9 @@ function apply(s: ObservationState, e: ObservationInput): void {
     case 'subagent': {
       // Codex: 같은 thread ID로 재개하고 한 스트림에 순서대로 온다. run 구분이 없다.
       if (e.phase === 'done') return settle(s, e.id, `하위 Agent ${e.id}의 완료 상태`);
-      if (e.phase === 'running') return startObserved(s, e.id, false, e.id);
+      if (e.phase === 'running') return startObserved(s, e.id, null, e.id);
       // 모르는 상태: 실행 중으로 세되(보수) 시작 증명은 만들지 않는다. 이전 증명은 그대로 둔다(현재 launch로 올리지 않음).
-      s.agents[e.id] = { active: true, background: false, call: e.id, proven: s.agents[e.id]?.proven ?? null };
+      s.agents[e.id] = { active: true, background: null, call: e.id, proven: s.agents[e.id]?.proven ?? null };
       return unconfirm(s, `하위 Agent ${e.id}의 모르는 상태 ${e.status ?? ''}`);
     }
     case 'subagent_unlinked':
@@ -228,7 +230,7 @@ function task(s: ObservationState, e: Extract<CliEvent, { type: 'task' }>): void
       c.task = e.taskId;
       c.run = run;
       s.tasks[e.taskId] = { kind: 'agent', agent: c.agent, usesRunIds, runs: { [run]: e.toolUseId }, current: run, ambiguous: false };
-      startObserved(s, c.agent, e.background === true, e.toolUseId);
+      startObserved(s, c.agent, e.background ?? null, e.toolUseId);
       return;
     }
     // 같은 task의 새 호출로 시작 = 재개. 그 호출을 task의 Agent로 합친다(별칭).
@@ -243,7 +245,7 @@ function task(s: ObservationState, e: Extract<CliEvent, { type: 'task' }>): void
     }
     if (c.seq > currentSeq) {
       known.current = run;
-      startObserved(s, known.agent, e.background === true, e.toolUseId);
+      startObserved(s, known.agent, e.background ?? null, e.toolUseId);
     } else {
       s.dropped += 1; // 더 앞선 호출의 시작이 늦게 옴 = 지나간 run
     }

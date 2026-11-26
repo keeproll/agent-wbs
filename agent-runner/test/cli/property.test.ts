@@ -134,11 +134,12 @@ describe('property: 지나간 run의 메시지는 현재 상태를 바꾸지 않
 // 합치기)을 증명하는지 본다. 무관한 대상이 줄면 실패한다(재리뷰 4).
 type Ev =
   | { k: 'call'; c: string }
-  | { k: 'start'; t: string; c?: string | undefined; r?: string | undefined; bg: boolean }
+  | { k: 'start'; t: string; c?: string | undefined; r?: string | undefined; bg?: boolean | undefined }
   | { k: 'update'; t: string; r?: string | undefined; bg?: boolean | undefined; status?: string | undefined }
-  | { k: 'notify'; t: string; c?: string | undefined; r?: string | undefined; status: string }
+  | { k: 'notify'; t: string; c?: string | undefined; r?: string | undefined; status?: string | undefined }
   | { k: 'result'; c: string }
-  | { k: 'codex'; th: string; tool: string; status: string }
+  /** status 없음(undefined)·상태가 객체가 아님(shape 'scalar')도 만든다(재리뷰 5: 필드 누락) */
+  | { k: 'codex'; th: string; tool: string; status?: string | undefined; shape: 'object' | 'scalar' }
   | { k: 'launch' }
   | { k: 'ok' };
 
@@ -149,11 +150,14 @@ const STATUS = fc.constantFrom('completed', 'failed', 'stopped', 'running', 'wei
 const CODEX_STATUS = fc.constantFrom('pending_init', 'running', 'completed', 'errored', 'shutdown', 'interrupted', 'not_found', 'hibernating');
 const ev: fc.Arbitrary<Ev> = fc.oneof(
   { arbitrary: C.map((c) => ({ k: 'call' as const, c })), weight: 3 },
-  { arbitrary: fc.record({ t: T, c: fc.option(C, { nil: undefined }), r: R, bg: fc.boolean() }, { requiredKeys: ['t', 'bg'] }).map((x) => ({ k: 'start' as const, ...x })), weight: 3 },
+  { arbitrary: fc.record({ t: T, c: fc.option(C, { nil: undefined }), r: R, bg: fc.option(fc.boolean(), { nil: undefined }) }, { requiredKeys: ['t'] }).map((x) => ({ k: 'start' as const, ...x })), weight: 3 },
   { arbitrary: fc.record({ t: T, r: R, bg: fc.option(fc.boolean(), { nil: undefined }), status: fc.option(STATUS, { nil: undefined }) }, { requiredKeys: ['t'] }).map((x) => ({ k: 'update' as const, ...x })), weight: 2 },
-  { arbitrary: fc.record({ t: T, c: fc.option(C, { nil: undefined }), r: R, status: STATUS }, { requiredKeys: ['t', 'status'] }).map((x) => ({ k: 'notify' as const, ...x })), weight: 2 },
+  { arbitrary: fc.record({ t: T, c: fc.option(C, { nil: undefined }), r: R, status: fc.option(STATUS, { nil: undefined }) }, { requiredKeys: ['t'] }).map((x) => ({ k: 'notify' as const, ...x })), weight: 2 },
   { arbitrary: C.map((c) => ({ k: 'result' as const, c })), weight: 3 },
-  { arbitrary: fc.record({ th: fc.constantFrom('th1', 'th2'), tool: fc.constantFrom('spawn_agent', 'wait'), status: CODEX_STATUS }).map((x) => ({ k: 'codex' as const, ...x })), weight: 3 },
+  {
+    arbitrary: fc.record({ th: fc.constantFrom('th1', 'th2'), tool: fc.constantFrom('spawn_agent', 'wait'), status: fc.option(CODEX_STATUS, { nil: undefined }), shape: fc.constantFrom('object' as const, 'object' as const, 'scalar' as const) }, { requiredKeys: ['th', 'tool', 'shape'] }).map((x) => ({ k: 'codex' as const, ...x })),
+    weight: 3,
+  },
   { arbitrary: fc.constant({ k: 'launch' as const }), weight: 1 },
   { arbitrary: fc.constant({ k: 'ok' as const }), weight: 1 },
 );
@@ -172,7 +176,10 @@ function toLine(e: Exclude<Ev, { k: 'launch' | 'codex' }>): Line {
 /** Codex 원문 협업 도구 항목(재리뷰 4 재현과 같은 모양) */
 const codexLine = (e: Extract<Ev, { k: 'codex' }>): Line => ({
   type: 'item.completed',
-  item: { id: `i-${e.th}-${e.status}`, type: 'collab_tool_call', tool: e.tool, sender_thread_id: 'parent', receiver_thread_ids: [e.th], agents_states: { [e.th]: { status: e.status, message: null } }, status: 'completed' },
+  item: {
+    id: `i-${e.th}-${e.status ?? 'none'}`, type: 'collab_tool_call', tool: e.tool, sender_thread_id: 'parent', receiver_thread_ids: [e.th],
+    agents_states: { [e.th]: e.shape === 'scalar' ? (e.status ?? null) : opt({ status: e.status, message: null }) }, status: 'completed',
+  },
 });
 
 function feed(o: SubagentObserver, parsers: { claude: ReturnType<typeof createClaudeParser>; codex: ReturnType<typeof createCodexParser> }, e: Ev) {
@@ -192,7 +199,8 @@ class Oracle {
   owner = new Map<string, string>(); // task → 대상 ID(첫 묶인 호출)
   startedTasks = new Set<string>(); // 이번 launch에서 시작이 관측된 task
   startedCalls = new Set<string>(); // 이번 launch에서 시작에 묶인 호출
-  codexRunning = new Set<string>(); // 이번 launch에서 실행 중으로 보고된 thread
+  codexRunning = new Set<string>(); // 이번 launch에서 「객체 안의 status」로 실행 중이 명시된 thread
+  foreground = new Set<string>(); // 이번 launch에서 전경(is_backgrounded:false)이 명시된 적 있는 task
   okSeen = false;
 
   /** 이 이벤트로 ID `lost`가 빠져도 되는가 */
@@ -206,7 +214,8 @@ class Oracle {
       }
       case 'result': {
         const t = this.bound.get(e.c);
-        return this.startedCalls.has(e.c) && t !== undefined && this.owner.get(t) === lost;
+        // 도구 결과로 끝나는 것은 전경이 명시된 대상뿐이다. 배경 보고가 빠진 시작을 전경으로 채우면 실패한다.
+        return this.startedCalls.has(e.c) && t !== undefined && this.owner.get(t) === lost && this.foreground.has(t);
       }
       case 'update':
       case 'notify':
@@ -225,6 +234,7 @@ class Oracle {
         this.startedTasks = new Set();
         this.startedCalls = new Set();
         this.codexRunning = new Set();
+        this.foreground = new Set();
         this.okSeen = false;
         return;
       case 'call':
@@ -239,10 +249,14 @@ class Oracle {
         if (!this.owner.has(e.t)) this.owner.set(e.t, e.c);
         this.startedTasks.add(e.t);
         this.startedCalls.add(e.c);
+        if (e.bg === false) this.foreground.add(e.t);
         return;
       }
+      case 'update':
+        if (e.bg === false && this.startedTasks.has(e.t)) this.foreground.add(e.t);
+        return;
       case 'codex':
-        if (e.status === 'running' || e.status === 'pending_init') this.codexRunning.add(e.th);
+        if (e.shape === 'object' && (e.status === 'running' || e.status === 'pending_init')) this.codexRunning.add(e.th);
         return;
       case 'ok':
         this.okSeen = true;
@@ -283,6 +297,10 @@ describe('property: 증명되지 않은 이벤트는 어떤 수도 줄이지 않
 
   test('판정기 자체 확인: 재리뷰 4의 「무관한 Agent 삭제」 입력에서 원본은 c1·c2를 모두 유지한다', () => {
     checkRun([{ k: 'call', c: 'c1' }, { k: 'start', t: 't1', c: 'c1', bg: true }, { k: 'call', c: 'c2' }, { k: 'start', t: 't2', c: 'c2', bg: true }]);
+  });
+
+  test('판정기 자체 확인: 재리뷰 5 — 상태 없는 wait 항목은 실행 중 보고가 아니다', () => {
+    checkRun([{ k: 'codex', th: 'th1', tool: 'spawn_agent', status: 'running', shape: 'object' }, { k: 'launch' }, { k: 'codex', th: 'th1', tool: 'wait', shape: 'object' }, { k: 'codex', th: 'th1', tool: 'wait', status: 'completed', shape: 'object' }]);
   });
 
   test('판정기 자체 확인: 다른 task가 차지한 호출을 주장한 task는 그 호출의 대상이 아니다(seed -1731524055 반례)', () => {
