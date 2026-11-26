@@ -31336,10 +31336,7 @@
                     }
                   },
                   "policy": {
-                    "type": "object",
-                    "patternProperties": {
-                      "^.*$": {}
-                    }
+                    "$ref": "#/components/schemas/EstimatePolicy"
                   }
                 }
               }
@@ -32798,6 +32795,16 @@
           }
         },
         "title": "ErrorResponse"
+      },
+      "EstimatePolicy": {
+        "type": "object",
+        "properties": {
+          "rejudge": {
+            "$ref": "#/components/schemas/RejudgeRequest"
+          }
+        },
+        "title": "EstimatePolicy",
+        "additionalProperties": true
       },
       "Evidence": {
         "type": "object",
@@ -39718,6 +39725,54 @@
           }
         },
         "title": "Recipient"
+      },
+      "RejudgeRequest": {
+        "type": "object",
+        "required": [
+          "reason",
+          "trigger",
+          "targets"
+        ],
+        "properties": {
+          "reason": {
+            "enum": [
+              "model_disallowed",
+              "floor_changed",
+              "subagent_disallowed"
+            ]
+          },
+          "trigger": {
+            "type": "string",
+            "minLength": 1
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "taskKey",
+                "roles"
+              ],
+              "properties": {
+                "taskKey": {
+                  "$ref": "#/components/schemas/TaskKey"
+                },
+                "roles": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RunRole"
+                  },
+                  "minItems": 1,
+                  "uniqueItems": true
+                }
+              },
+              "additionalProperties": false
+            },
+            "minItems": 1
+          }
+        },
+        "title": "RejudgeRequest",
+        "additionalProperties": false
       },
       "ReplanSummary": {
         "type": "object",

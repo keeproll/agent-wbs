@@ -134,3 +134,12 @@ describe('D-29: 허용 해제 → 재판단 → 재개 이력 (순수 판정으�
     expect(gradeText({ modelId: 'claude-opus-5-5', effort: 'high' })).toBe('claude-opus-5-5 · high');
   });
 });
+
+describe('재판단 작업의 판단 대상 hash 규칙(리뷰 지적 1, data-model §2.3-1)', async () => {
+  const { hashJson } = await import('../src/policy/judged.ts');
+  test('키 순서와 무관, 배열 순서는 의미가 있음, undefined 값은 뺌', () => {
+    expect(hashJson({ b: 1, a: [2, 1], c: undefined })).toBe('{"a":[2,1],"b":1}');
+    expect(hashJson({ a: [2, 1], b: 1 })).toBe(hashJson({ b: 1, a: [2, 1] }));
+    expect(hashJson({ a: [1, 2] })).not.toBe(hashJson({ a: [2, 1] }));
+  });
+});

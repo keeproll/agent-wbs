@@ -15,8 +15,10 @@ const grade = (task: string, role: string, modelId: string, effort: string, lock
     [f.project, f.tasks[task], role, modelId, effort, locked, locked ? '팀장' : null]);
 const gradeOf = async (task: string, role = 'dev') => (await h.owner.query<{ model_id: string; effort: string; locked: boolean; reason: string }>(
   'select model_id,effort,locked,reason from task_grades where task=$1 and role=$2', [f.tasks[task], role])).rows[0];
-const jobs = async () => (await h.owner.query<{ kind: string; payload: { reason: string; tasks: { taskKey: string; roles: string[] }[] }; state: string }>(
-  "select kind,payload,state from runner_jobs where payload ? 'reason' order by created_at,dedup_key")).rows;
+// 재판단 작업: estimate 계약 모양이고 이유·대상은 policy.rejudge에 있다. 비교하기 쉽게 {reason, tasks}로 펼친다.
+const jobs = async () => (await h.owner.query<{ kind: string; rejudge: { reason: string; targets: { taskKey: string; roles: string[] }[] }; state: string }>(
+  "select kind,payload->'policy'->'rejudge' as rejudge,state from runner_jobs where payload->'policy' ? 'rejudge' order by created_at,dedup_key")).rows
+  .map((j) => ({ kind: j.kind, state: j.state, payload: { reason: j.rejudge.reason, tasks: j.rejudge.targets } }));
 const taskVersion = async (task: string) => (await h.owner.query<{ v: string }>('select updated_at::text as v from tasks where task_key=$1', [task])).rows[0]?.v;
 
 beforeAll(async () => {

@@ -99,7 +99,7 @@ export type ClaimedJob = {
       subjectHash: Sha256;
       content: JudgedContent;
     })[];
-    policy: Record<string, unknown>;
+    policy: EstimatePolicy;
   };
 } | {
   id: Id;
@@ -224,6 +224,10 @@ export type ErrorResponse = {
     details: Record<string, unknown>;
     requestId: string;
   };
+};
+
+export type EstimatePolicy = {
+  rejudge?: RejudgeRequest;
 };
 
 export type GithubMode = "gh" | "token";
@@ -677,6 +681,15 @@ export type PlanningSplitProposalOp = {
 };
 
 export type QueueStatus = "waiting_verify" | "queued" | "checking" | "merged" | "failed" | "removed";
+
+export type RejudgeRequest = {
+  reason: "model_disallowed" | "floor_changed" | "subagent_disallowed";
+  trigger: string;
+  targets: ({
+    taskKey: TaskKey;
+    roles: (RunRole)[];
+  })[];
+};
 
 export type ReplanSummary = {
   replanId: string;

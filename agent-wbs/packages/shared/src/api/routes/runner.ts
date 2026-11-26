@@ -138,7 +138,8 @@ export const ClaimedJob = Type.Union(
       policy: c.Json,
       proposal: Nullable(JudgedProposal),
     }),
-    Job('estimate', { tasks: JudgedTasks, policy: c.Json }),
+    // 재판단(M2-08)도 같은 모양이고, 이유·대상 역할은 policy.rejudge에 싣는다.
+    Job('estimate', { tasks: JudgedTasks, policy: m.EstimatePolicy }),
     Job('split', { tasks: JudgedTasks, policy: c.Json }),
     Job('attempt', {
       taskKey: c.TaskKey,

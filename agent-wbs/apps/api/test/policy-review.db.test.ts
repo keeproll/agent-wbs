@@ -6,6 +6,7 @@ import { applyRegrade, getModels, putModels, resumeGrade, recordResumeRegrade } 
 import { failUndelivered } from '../src/messages/service.ts';
 import { emitChange } from '../src/changes/events.ts';
 import { encodeCursor } from '../src/changes/history.ts';
+import { jobPayloadErrors } from '@awbs/shared/api';
 
 let h: Harness;
 let f: ProjectFixture;
@@ -119,7 +120,7 @@ test('disallow affects active and paused grades; D-29 helper blocks before and r
   const saved=await h.lead('PUT','/api/settings/models',{updatedAt:models.updatedAt,models:[{agent:'Claude',id:'claude-opus-5-5',allowed:false}]});
   expect(saved.status).toBe(200);
   const grades=(await h.owner.query('select t.task_key,g.locked from task_grades g join tasks t on t.id=g.task order by t.task_key')).rows;
-  const jobs=(await h.owner.query("select kind,payload from runner_jobs where payload ? 'reason'")).rows;
+  const jobs=(await h.owner.query("select kind,payload from runner_jobs where payload->'policy' ? 'rejudge'")).rows;
   obs('disallow effects',{grades,jobs,activeAttempt:(await h.owner.query('select status,model_id from task_attempts where id=$1',[active])).rows});
   expect(grades).toEqual([{task_key:'TASK-0002',locked:false},{task_key:'TASK-0003',locked:false},{task_key:'TASK-0004',locked:true}]);
   expect(await inEpoch(h.pool,1,c=>resumeGrade(c,interrupted))).toEqual({ok:false,code:'MODEL_NOT_ALLOWED'});
@@ -131,11 +132,17 @@ test('disallow affects active and paused grades; D-29 helper blocks before and r
 });
 
 test('지적 1: 재판단 작업은 estimate payload 계약을 따른다', async () => {
-  const job=(await h.owner.query("select kind,payload from runner_jobs where payload ? 'reason' limit 1")).rows[0];
+  const job=(await h.owner.query("select kind,payload from runner_jobs where kind='estimate' and payload->'policy' ? 'rejudge' limit 1")).rows[0];
   obs('actual estimate payload',job);
+  expect(job.kind).toBe('estimate');
   expect(job.payload).toHaveProperty('policy');
   expect(job.payload.tasks[0]).toHaveProperty('content');
   expect(job.payload.tasks[0]).toHaveProperty('subjectHash');
+  // 공용 계약(claimJob 응답의 estimate payload) 전체와 맞는다
+  expect(jobPayloadErrors('estimate', job.payload)).toEqual([]);
+  expect(job.payload.policy.rejudge).toEqual({ reason: 'model_disallowed', trigger: expect.stringContaining('claude-opus-5-5'),
+    targets: [{ taskKey: 'TASK-0002', roles: ['dev'] }, { taskKey: 'TASK-0003', roles: ['dev'] }] });
+  expect(job.payload.tasks.map((t: { taskKey: string }) => t.taskKey)).toEqual(['TASK-0002', 'TASK-0003']);
 });
 
 test('emitChange serializes commits from two independent transactions', async () => {
