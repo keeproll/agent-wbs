@@ -53,7 +53,7 @@ async function id(c: pg.PoolClient, sql: string, values: unknown[] = []) {
 async function fixture(c: pg.PoolClient) {
   const p = await id(
     c,
-    "insert into projects(name,repo_url,repo_owner,repo_name,base_commit,lead_instruction,phase) values('review','','','','base','','active')",
+    "insert into projects(name,repo_url,repo_owner,repo_name,base_commit,lead_instruction,phase) values('review','https://github.com/o/current','o','current','base','','active')",
   );
   const phase = await id(
     c,
@@ -236,7 +236,7 @@ test('P1-5: cleanup collects CI and queued job refs as well as attempts', () =>
     await c.query("update merge_queue set pr=44");
     await c.query("update design_snapshots set ref='agent/design'");
     await c.query("update task_attempts set branch='agent/attempt'");
-    await c.query("insert into runner_commands(kind,epoch,payload,status) values('reset-cleanup',0,'{\"prs\":[45],\"branches\":[\"agent/previous\"]}','done')");
+    await c.query("insert into runner_commands(kind,epoch,payload,status) values('reset-cleanup',0,'{\"repoUrl\":\"https://github.com/o/current\",\"prs\":[45],\"branches\":[\"agent/previous\"]}','pending')");
     await c.query(
       "insert into ci_runs(project_id,run_key,stage,pipeline_sha,ref,pr,trigger,status) values($1,'CI-1',2,'sha','agent/T1',42,'manual','queued')",
       [f.p],
@@ -267,7 +267,7 @@ test.each(['runner_jobs', 'runner_commands'])(
       }
       await rejects(c, "update runner_jobs set payload='{}' where id=$1", [f.job]);
     } else {
-      const command = await id(c, "insert into runner_commands(kind,epoch,payload,status) values('reset-cleanup',0,$1,'done')", [{ prs: [...valid, ...invalid] }]);
+      const command = await id(c, "insert into runner_commands(kind,epoch,payload,status) values('reset-cleanup',0,$1,'pending')", [{ repoUrl: 'https://github.com/o/current', prs: [...valid, ...invalid] }]);
       expected.push(...invalid.map((value) => ({ source, id: command, value })));
     }
     await c.query('set local role awbs_app');
@@ -287,13 +287,73 @@ test.each(['runner_jobs', 'runner_commands'])(
 test('P2-N1: reset preserves prior command PR values even when prs is not an array', () =>
   transaction(async (c) => {
     await fixture(c);
-    const command = await id(c, "insert into runner_commands(kind,epoch,payload,status) values('reset-cleanup',0,'{\"prs\":{\"original\":\"bad-list\"}}','done')");
-    await c.query("insert into runner_commands(kind,epoch,payload,status) values('reset-cleanup',0,'{\"prs\":\"46\"}','done')");
+    const command = await id(c, "insert into runner_commands(kind,epoch,payload,status) values('reset-cleanup',0,'{\"repoUrl\":\"https://github.com/o/current\",\"prs\":{\"original\":\"bad-list\"}}','pending')");
+    await c.query("insert into runner_commands(kind,epoch,payload,status) values('reset-cleanup',0,'{\"repoUrl\":\"https://github.com/o/current\",\"prs\":\"46\"}','pending')");
     await c.query('set local role awbs_app');
     await c.query("select reset_project(1,'review',true,'lead')");
     const payload = (await c.query('select payload from runner_commands where epoch=1')).rows[0]?.payload;
     expect(payload.prs).toEqual([46]);
     expect(payload.unparsedPrs).toEqual([{ source: 'runner_commands', id: command, value: { original: 'bad-list' } }]);
+  }));
+
+test.each(['pending', 'running', 'failed', 'done'])(
+  'P2-N2: only unfinished commands from the normalized current repository are inherited (%s)',
+  (status) => transaction(async (c) => {
+    const f = await fixture(c);
+    await c.query("update runner_jobs set payload='{\"pr\":7,\"branch\":\"agent/current\"}' where id=$1", [f.job]);
+    const unknown = { source: 'runner_jobs', id: randomUUID(), value: 'unknown-pr' };
+    const payload = { repoUrl: ' HTTPS://GITHUB.COM/O/CURRENT.GIT/// ', baseCommit: 'old-base',
+      prs: [91], branches: ['agent/previous'], unparsedPrs: [unknown] };
+    const previous = await id(c, "insert into runner_commands(kind,epoch,payload,status) values('reset-cleanup',0,$1,$2)", [payload, status]);
+    await c.query('set local role awbs_app');
+    await c.query("select reset_project(1,'review',true,'lead')");
+    const current = (await c.query('select payload from runner_commands where epoch=1')).rows[0]?.payload;
+    expect(current.repoUrl).toBe('https://github.com/o/current');
+    expect(current.prs).toEqual(status === 'done' ? [7] : [7, 91]);
+    expect(current.branches).toEqual(status === 'done' ? ['agent/current'] : ['agent/current', 'agent/previous']);
+    expect(current.unparsedPrs).toEqual(status === 'done' ? [] : [unknown]);
+    expect((await c.query('select status,payload from runner_commands where id=$1', [previous])).rows)
+      .toEqual([{ status, payload }]);
+  }),
+);
+
+test.each(['https://github.com/o/other', 'https://github.com/other/current', 'https://github.com/o/currently', undefined])(
+  'P2-N2: unfinished cleanup for a different or unknown repository stays separately reportable (%s)',
+  (repoUrl) => transaction(async (c) => {
+    const f = await fixture(c);
+    await c.query("update runner_jobs set payload='{\"pr\":7,\"branch\":\"agent/current\"}' where id=$1", [f.job]);
+    const payload = { ...(repoUrl === undefined ? {} : { repoUrl }), baseCommit: 'foreign-base',
+      prs: [91], branches: ['agent/foreign'], unparsedPrs: [{ source: 'runner_jobs', id: randomUUID(), value: 'foreign-pr' }] };
+    const previous = await id(c, "insert into runner_commands(kind,epoch,payload,status) values('reset-cleanup',0,$1,'failed')", [payload]);
+    await c.query('set local role awbs_app');
+    await c.query("select reset_project(1,'review',false,'lead')");
+    const current = (await c.query('select payload from runner_commands where epoch=1')).rows[0]?.payload;
+    expect(current.prs).toEqual([7]);
+    expect(current.branches).toEqual(['agent/current']);
+    expect(current.unparsedPrs).toEqual([]);
+    expect((await c.query("select id,epoch,status,payload from runner_commands where status<>'done' and id=$1", [previous])).rows)
+      .toEqual([{ id: previous, epoch: 0, status: 'failed', payload }]);
+  }),
+);
+
+test('P2-N2: completed cleanup of repository A never carries into a later reset of repository B', () =>
+  transaction(async (c) => {
+    const first = await fixture(c);
+    await c.query("update runner_jobs set payload='{\"pr\":91,\"branch\":\"agent/old\"}' where id=$1", [first.job]);
+    await c.query('set local role awbs_app');
+    await c.query("select reset_project(1,'review',true,'lead')");
+    const previous = (await c.query('select id,payload from runner_commands where epoch=1')).rows[0];
+    await c.query('select complete_cleanup($1,1,true,$2)', [previous?.id, { holds: [] }]);
+    const second = await fixture(c);
+    await c.query("update projects set repo_url='https://github.com/o/new',repo_name='new'");
+    await c.query("update runner_jobs set payload='{\"pr\":7,\"branch\":\"agent/new\"}' where id=$1", [second.job]);
+    await c.query("select reset_project(2,'review',true,'lead')");
+    const current = (await c.query('select payload from runner_commands where epoch=2')).rows[0]?.payload;
+    expect(current.repoUrl).toBe('https://github.com/o/new');
+    expect(current.prs).toEqual([7]);
+    expect(current.branches).toEqual(['agent/new']);
+    expect((await c.query('select status,payload from runner_commands where id=$1', [previous?.id])).rows)
+      .toEqual([{ status: 'done', payload: previous?.payload }]);
   }));
 
 test('P2-1: start retains reserved until process registration; duplicate process is inert', () =>

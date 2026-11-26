@@ -76,6 +76,21 @@ const variants = [
     pattern: 'P2-N1',
     sql: `DO $$ BEGIN EXECUTE replace(pg_get_functiondef('public.reset_project(integer,text,boolean,text)'::regprocedure),'FILTER (WHERE pr IS NULL)','FILTER (WHERE false)'); END $$;`,
   },
+  {
+    name: 'inherit completed cleanup commands',
+    pattern: 'P2-N2',
+    sql: `DO $$ BEGIN EXECUTE replace(pg_get_functiondef('public.reset_project(integer,text,boolean,text)'::regprocedure),$old$c.status<>'done'$old$,'true'); END $$;`,
+  },
+  {
+    name: 'mix cleanup repositories',
+    pattern: 'P2-N2',
+    sql: `DO $$ BEGIN EXECUTE replace(pg_get_functiondef('public.reset_project(integer,text,boolean,text)'::regprocedure),'=repo_key',' IS NOT NULL'); END $$;`,
+  },
+  {
+    name: 'discard unfinished foreign cleanup',
+    pattern: 'different or unknown repository',
+    sql: `DO $$ BEGIN EXECUTE replace(pg_get_functiondef('public.reset_project(integer,text,boolean,text)'::regprocedure),$old$DELETE FROM public.projects;$old$,$new$DELETE FROM public.projects; DELETE FROM public.runner_commands WHERE epoch=0 AND status<>'done';$new$); END $$;`,
+  },
 ];
 function run(pattern: string, folder?: string, index = 0) {
   const database = new URL(url as string);

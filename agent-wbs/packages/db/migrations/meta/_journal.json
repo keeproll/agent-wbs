@@ -85,6 +85,13 @@
       "when": 1795681327034,
       "tag": "0011_20261126_reset_pr_refs",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1795682003669,
+      "tag": "0012_20261126_cleanup_repo_scope",
+      "breakpoints": true
     }
   ]
 }
