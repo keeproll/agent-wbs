@@ -5,6 +5,9 @@ import { installProjectErrors } from './errors.ts';
 import { actionOf, routeOf, type Ctx } from './routes.ts';
 import { reportInputChanges, reportProgress, reportRepoCheck, submitDraft, submitTechProposals } from './service.ts';
 import type { StepStatus } from './steps.ts';
+import { inputErrors, OPERATIONS } from '@awbs/shared/api';
+import { ProjectError } from './errors.ts';
+import { reportGithubStatus, type GithubReport } from './github.ts';
 
 const body = <T>(ctx: Ctx) => ctx.request.body as T;
 const param = (ctx: Ctx, name: string) => (ctx.request.params as Record<string, string>)[name] ?? '';
@@ -17,6 +20,12 @@ const param = (ctx: Ctx, name: string) => (ctx.request.params as Record<string, 
 export function installProjectRunner(app: FastifyInstance, pool: Pool): void {
   void app.register(async (scope) => {
     installProjectErrors(scope, actionOf);
+    routeOf(scope, pool, 'reportGithubStatus', async (ctx) => {
+      const op = OPERATIONS.find((item) => item.id === 'reportGithubStatus');
+      const errors = op ? inputErrors(op, ctx.request.body) : [];
+      if (errors.length) throw new ProjectError('VALIDATION_FAILED', { errors });
+      await reportGithubStatus(ctx.client, body<GithubReport>(ctx));
+    }, 204);
     routeOf(scope, pool, 'reportRepoCheck', (ctx) => reportRepoCheck(ctx.client, param(ctx, 'id'), body(ctx), ctx.principal), 204);
     routeOf(scope, pool, 'reportInputChanges', (ctx) => reportInputChanges(ctx.client, body(ctx)));
     routeOf(scope, pool, 'reportBootstrapProgress', (ctx) =>

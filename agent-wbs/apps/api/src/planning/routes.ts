@@ -147,7 +147,7 @@ export function registerPlanningRoutes(app: FastifyInstance, pool: Pool): void {
       const client = await pool.connect();
       try {
         await client.query('begin isolation level repeatable read read only');
-        const rows = (await client.query<CpRow>(`select ${CP_COLUMNS} from change_proposals where ($1::text is null or status::text=$1) order by created_at desc,id desc offset $2 limit $3`,
+        const rows = (await client.query<CpRow>(`select ${CP_COLUMNS} from change_proposals where deleted_at is null and ($1::text is null or status::text=$1) order by created_at desc,id desc offset $2 limit $3`,
           [query.status ?? null, offset, limit + 1])).rows;
         const items = await Promise.all(rows.slice(0, limit).map((row) => proposalView(client, row)));
         await client.query('commit');
@@ -157,6 +157,54 @@ export function registerPlanningRoutes(app: FastifyInstance, pool: Pool): void {
         throw error;
       } finally { client.release(); }
     });
+
+    route('getProposal', '변경 제안 조회', async (request) => {
+      const client = await pool.connect();
+      try {
+        await client.query('begin isolation level repeatable read read only');
+        const result = await proposalView(client, await loadCp(client, idOf(request), false));
+        await client.query('commit');
+        return result;
+      } catch (error) { await client.query('rollback'); throw error; } finally { client.release(); }
+    }, ID);
+
+    route('updateProposal', '변경 제안 초안 편집', async (request) => {
+      const client = clientOf(request);
+      const body = request.body as { updatedAt: string; title: string; reason: string; source: { kind: string; id?: string }; ops: WireProposalOp[] };
+      const row = await loadCp(client, idOf(request), true);
+      await assertCpVersion(client, row, body.updatedAt);
+      if (row.status !== 'draft') throw new TaskError('INVALID_TRANSITION', { status: row.status });
+      if (body.source.kind !== row.source || (body.source.id ?? null) !== row.source_id) {
+        throw new TaskError('VALIDATION_FAILED', {}, [{ path: 'source', rule: 'immutable', message: '변경 제안의 출처는 바꿀 수 없습니다.' }]);
+      }
+      await client.query(`update change_proposals set title=$2,reason=$3,ops=$4::jsonb,task_judgements='[]',split_judgements=null,hold_reasons=null,id_map=null,preview_hash=null where id=$1`,
+        [row.id, body.title, body.reason, JSON.stringify(body.ops)]);
+      await event(client, row, 'edited', LEAD, JSON.stringify({ before: { title: row.title, reason: row.reason, ops: row.ops }, after: { title: body.title, reason: body.reason, ops: body.ops } }));
+      return proposalView(client, await loadCp(client, row.id, false));
+    }, ID);
+
+    route('deleteProposal', '변경 제안 초안 삭제', async (request, reply) => {
+      const client = clientOf(request);
+      const row = await loadCp(client, idOf(request), true);
+      await assertCpVersion(client, row, (request.query as { updatedAt: string }).updatedAt);
+      if (row.status !== 'draft') throw new TaskError('INVALID_TRANSITION', { status: row.status });
+      await client.query('update change_proposals set deleted_at=clock_timestamp() where id=$1', [row.id]);
+      await event(client, row, 'deleted', LEAD);
+      return reply.code(204).send();
+    }, ID);
+
+    route('excludeProposalOp', '변경 제안 항목 제외', async (request) => {
+      const client = clientOf(request);
+      const body = request.body as { updatedAt: string; index: number };
+      const row = await loadCp(client, idOf(request), true);
+      await assertCpVersion(client, row, body.updatedAt);
+      if (row.status !== 'changes') throw new TaskError('INVALID_TRANSITION', { status: row.status });
+      if (body.index >= row.ops.length) throw new TaskError('VALIDATION_FAILED', {}, [{ path: 'index', rule: 'range', message: '제외할 항목이 없습니다.' }]);
+      const ops = row.ops.filter((_, index) => index !== body.index);
+      await client.query(`update change_proposals set ops=$2::jsonb,task_judgements='[]',split_judgements=null,hold_reasons=null,id_map=null,preview_hash=null where id=$1`, [row.id, JSON.stringify(ops)]);
+      await event(client, row, 'excluded', LEAD, JSON.stringify({ index: body.index, op: row.ops[body.index] }));
+      return proposalView(client, await loadCp(client, row.id, false));
+    }, ID);
 
     route('createProposal', '변경 제안 작성', async (request, reply) => {
       const client = clientOf(request);
@@ -185,6 +233,7 @@ export function registerPlanningRoutes(app: FastifyInstance, pool: Pool): void {
         await assertCpVersion(client, row, body.updatedAt);
         assertFrom(row, action);
         if (action !== 'submit') return proposalView(client, await transition(client, row, action === 'reject' ? 'rejected' : 'changes', action === 'reject' ? 'rejected' : 'changes', LEAD, body.comment ?? ''));
+        if (!row.ops.length) throw new TaskError('VALIDATION_FAILED', {}, [{ path: 'ops', rule: 'minItems', message: '제출할 변경 항목이 없습니다.' }]);
         // review에 들어온 CP에 판단이 필요하면 Planning 판단 job을 만든다.
         const ev = await evaluate(client, inputOf(row));
         await requestJudgement(client, row, ev, epochOf(request));
@@ -238,8 +287,14 @@ export function registerPlanningRoutes(app: FastifyInstance, pool: Pool): void {
         ...(body.splitJudgements && body.source.kind !== 'split' ? [{ path: 'splitJudgements', rule: 'splitOnly', message: '분할 판단은 분할 CP에만 씁니다.' }] : []),
       ];
       if (errors.length) throw new TaskError('VALIDATION_FAILED', {}, errors);
-      await assertJob(client, body.jobId, body.fence);
+      const job = await assertJob(client, body.jobId, body.fence);
       const projectId = await projectOf(client);
+      // 입력 차이 분석은 서버가 발급한 Planning 작업 ID로 연결한다. Agent가 다른 입력 버전을 가리키게 두지 않는다.
+      const source = job.kind === 'input_diff' ? { kind: 'input', id: (job.payload as { planningJobId: string }).planningJobId } : body.source;
+      if (job.kind === 'input_diff' && !source.id) throw new TaskError('INVALID_TRANSITION', {}, [], '입력 차이 분석 작업의 출처가 없습니다.');
+      if (job.kind === 'input_diff' && (body.source.kind !== 'input' || (body.source.id !== undefined && body.source.id !== source.id))) {
+        throw new TaskError('VALIDATION_FAILED', {}, [{ path: 'source', rule: 'inputJob', message: '출처가 이 입력 차이 분석 작업과 다릅니다.' }]);
+      }
       await lockGraph(client, projectId);
       // 판단의 subjectHash는 서버가 「변경 적용 후 내용」으로 계산해 붙인다(contracts §3.3). 판단을 뺀 상태로 먼저 평가한다.
       const plain = await evaluate(client, { projectId, source: body.source.kind, sourceId: body.source.id ?? null, ops: stripJudgements(body.ops), taskJudgements: [], splitJudgements: null });
@@ -251,7 +306,7 @@ export function registerPlanningRoutes(app: FastifyInstance, pool: Pool): void {
         const key = plain.refs.get(op.ref);
         return { ...op, t: { ...op.t, judgedRules: stamp(judged, (key && plain.afterHash.get(key)) ?? missing) } } as WireProposalOp;
       });
-      const row = await insertCp(client, projectId, { ...body, ops }, PLANNING, 'review', {
+      const row = await insertCp(client, projectId, { ...body, source, ops }, PLANNING, 'review', {
         taskJudgements: (body.taskJudgements ?? []).map((entry) => ({ taskKey: entry.taskKey, judgedRules: stamp(entry.judgedRules, plain.afterHash.get(entry.taskKey) ?? missing) })),
         splitJudgements: body.splitJudgements ? stamp(body.splitJudgements, plain.splitHash ?? missing) : null,
       });
