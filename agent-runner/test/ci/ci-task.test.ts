@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
@@ -44,7 +44,8 @@ function commit(cwd: string) {
   return git(cwd, 'rev-parse', 'HEAD');
 }
 const execute = vi.fn<(argv: readonly string[], cwd: string, signal?: AbortSignal) => Promise<CommandResult>>();
-const run = () => runTaskCheck({ repo, worktreeId: 'task-1', branch: 'agent/TASK-1-h1', heavy, execute });
+const collectTests = vi.fn<(argv: readonly string[], cwd: string, signal?: AbortSignal) => Promise<readonly string[]>>();
+const run = () => runTaskCheck({ repo, worktreeId: 'task-1', branch: 'agent/TASK-1-h1', heavy, execute, collectTests });
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'ci-task-'));
@@ -53,7 +54,7 @@ beforeEach(async () => {
   await mkdir(source);
   git(source, 'init', '-b', 'main');
   await file(join(source, '.agentwbs/pipeline.yaml'), JSON.stringify(definition));
-  await file(join(source, '.gitignore'), 'dist/\n');
+  await file(join(source, '.gitignore'), 'dist/\nnode_modules/\n');
   await file(join(source, 'prototype/guide.md'), '원본');
   await file(join(source, 'src/main.ts'), 'export const value = 1;');
   await file(join(source, 'test/value.test.ts'), 'test("value", () => { expect(value).toBe(1); });');
@@ -64,6 +65,7 @@ beforeEach(async () => {
   repo = await GitRepository.clone(join(root, 'runner'), 'project', remote);
   work = await repo.createWorktree('task-1', 'agent/TASK-1-h1', baseline);
   execute.mockReset().mockResolvedValue({ code: 0, stdout: '통과', stderr: '' });
+  collectTests.mockReset().mockResolvedValue(['test/value.test.ts::value']);
 });
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
@@ -99,9 +101,13 @@ test('main 정의의 blob SHA와 같은 head에서 6개 명령을 순서대로 �
   const result = await run();
   expect(result).toMatchObject({ status: 'pass', baseSha: baseline, headSha: head,
     pipelineSha: git(source, 'rev-parse', 'main:.agentwbs/pipeline.yaml'),
-    testReview: { required: false, changes: [] }, failStep: null });
-  expect(execute.mock.calls.map(([argv, cwd]) => [argv, cwd])).toEqual(definition.stages.task.map((step) => [step.argv, work]));
-  expect(result.steps.map((s) => [s.name, s.status])).toEqual([['protected-paths', 'pass'], ...names.map((name) => [name, 'pass'])]);
+    testReview: { required: true, changes: [expect.objectContaining({ path: 'src/new.ts', status: 'A' })] }, failStep: null });
+  expect(execute.mock.calls.map(([argv]) => argv)).toEqual([definition.stages.task[0]?.argv, ...definition.stages.task.map((step) => step.argv)]);
+  expect(execute.mock.calls.every(([, cwd]) => cwd !== work)).toBe(true);
+  expect(result.steps.map((s) => [s.name, s.status])).toEqual([
+    ...['worktree', 'protected-paths', 'baseline-install', 'test-collection-before', 'install', 'test-collection-after'].map((name) => [name, 'pass']),
+    ...names.slice(1).map((name) => [name, 'pass']),
+  ]);
   expect(heavy.snapshot().running).toBe(0);
 });
 
@@ -137,7 +143,7 @@ test('로컬 main이 아니라 마지막 fetch의 main 정의를 고정한다', 
   const result = await run();
   expect(result.baseSha).toBe(newMain);
   expect(result.pipelineSha).toBe(git(source, 'rev-parse', 'main:.agentwbs/pipeline.yaml'));
-  expect(execute.mock.calls[1]?.[0]).toEqual(latest.stages.task[1]?.argv);
+  expect(execute.mock.calls[2]?.[0]).toEqual(latest.stages.task[1]?.argv);
 });
 
 test.each(['delete', 'skip', 'assertion', 'rename'])('기존 테스트 %s는 자동 실패 대신 SHA에 묶인 QA 확인 목록에 남는다', async (kind) => {
@@ -148,9 +154,9 @@ test.each(['delete', 'skip', 'assertion', 'rename'])('기존 테스트 %s는 자
   const head = commit(work);
   const result = await run();
   expect(result.status).toBe('pass');
-  expect(result.testReview).toMatchObject({ required: true, headSha: head, baseSha: baseline,
-    changes: [expect.objectContaining({ path, status: ['delete', 'rename'].includes(kind) ? 'D' : 'M', oldBlob: expect.any(String) })] });
-  expect(result.testReview.changes[0]?.patch).toContain('expect(value).toBe(1)');
+  expect(result.testReview).toMatchObject({ required: true, headSha: head, baseSha: baseline });
+  expect(result.testReview.changes).toContainEqual(expect.objectContaining({ path, status: ['delete', 'rename'].includes(kind) ? 'D' : 'M', oldBlob: expect.any(String) }));
+  expect(result.testReview.changes.find((change) => change.path === path)?.patch).toContain('expect(value).toBe(1)');
 });
 
 test('단위 테스트는 1회만 재시도하고 재시도 통과는 불안정 후보로 남긴다', async () => {
@@ -167,7 +173,7 @@ test('계속 실패한 테스트에서 중단하고 로그와 실행 코드를 �
   execute.mockImplementation(async (argv) => ({ code: argv[1] === 'unit' ? 1 : 0, stdout: 'Bearer abcdefghijklmnop', stderr: '실제 테스트 실패' }));
   const result = await run();
   expect(result).toMatchObject({ status: 'fail', failStep: 'unit', flakyCandidates: [] });
-  expect(execute.mock.calls.map(([argv]) => argv[1])).toEqual(['install', 'typecheck', 'lint', 'unit', 'unit']);
+  expect(execute.mock.calls.map(([argv]) => argv[1])).toEqual(['install', 'install', 'typecheck', 'lint', 'unit', 'unit']);
   expect(result.steps.find((s) => s.name === 'build')?.status).toBe('skip');
   expect(JSON.stringify(result)).not.toContain('abcdefghijklmnop');
   expect(JSON.stringify(result)).toContain('실제 테스트 실패');
@@ -178,8 +184,8 @@ test('계속 실패한 테스트에서 중단하고 로그와 실행 코드를 �
 test('실행 어댑터 오류도 실패 기록으로 바꾸고 번호표를 돌려준다', async () => {
   execute.mockRejectedValueOnce(new Error('TOKEN=super-secret-value'));
   const result = await run();
-  expect(result).toMatchObject({ status: 'fail', failStep: 'install' });
-  expect(result.steps[1]?.attempts[0]).toMatchObject({ code: null });
+  expect(result).toMatchObject({ status: 'fail', failStep: 'baseline-install' });
+  expect(result.steps.find((step) => step.name === 'baseline-install')?.attempts[0]).toMatchObject({ code: null });
   expect(JSON.stringify(result)).not.toContain('super-secret-value');
   expect(heavy.snapshot().running).toBe(0);
 });
@@ -190,7 +196,7 @@ test('계약 테스트도 1회 재시도하고 타입 오류는 재시도하지 
   expect(execute.mock.calls.filter(([argv]) => argv[1] === 'contract')).toHaveLength(2);
   execute.mockClear().mockImplementation(async (argv) => ({ code: argv[1] === 'typecheck' ? 1 : 0, stdout: '', stderr: '타입 오류' }));
   expect(await run()).toMatchObject({ status: 'fail', failStep: 'typecheck' });
-  expect(execute.mock.calls.map(([argv]) => argv[1])).toEqual(['install', 'typecheck']);
+  expect(execute.mock.calls.map(([argv]) => argv[1])).toEqual(['install', 'install', 'typecheck']);
 });
 
 test('검사 중 main 정의가 바뀌어도 시작 때 고정한 명령과 SHA를 유지한다', async () => {
@@ -205,7 +211,7 @@ test('검사 중 main 정의가 바뀌어도 시작 때 고정한 명령과 SHA�
     return { code: 0, stdout: '', stderr: '' };
   });
   expect(await run()).toMatchObject({ status: 'pass', baseSha: baseline, pipelineSha: oldPipeline });
-  expect(execute.mock.calls[1]?.[0]).toEqual(['pnpm', 'typecheck']);
+  expect(execute.mock.calls[2]?.[0]).toEqual(['pnpm', 'typecheck']);
 });
 
 test('이름 규칙이 없는 테스트 파일과 바이너리 삭제도 QA 근거에서 빠뜨리지 않는다', async () => {
@@ -236,9 +242,9 @@ test('삭제한 테스트를 가진 검사 결과는 원본 assertion의 diff를
   expect(result.testReview.changes[1]?.patch).toContain('-test("value", () => { expect(value).toBe(1); });');
 });
 
-test('실행 전 미커밋 변경과 명령 중 head 변경은 통과시키지 않는다', async () => {
+test('미커밋 변경은 실패하고 실행 중 Agent head 이동은 고정한 검사 커밋에 영향을 주지 않는다', async () => {
   await file(join(work, 'src/main.ts'), '미커밋 변경');
-  await expect(run()).rejects.toThrow();
+  expect(await run()).toMatchObject({ status: 'fail', failStep: 'worktree' });
   expect(execute).not.toHaveBeenCalled();
   git(work, 'checkout', '--', 'src/main.ts');
   execute.mockImplementationOnce(async () => {
@@ -247,8 +253,8 @@ test('실행 전 미커밋 변경과 명령 중 head 변경은 통과시키지 �
     return { code: 0, stdout: '', stderr: '' };
   });
   const result = await run();
-  expect(result).toMatchObject({ status: 'fail', failStep: 'install' });
-  expect(execute).toHaveBeenCalledTimes(1);
+  expect(result).toMatchObject({ status: 'pass', headSha: baseline });
+  expect(execute).toHaveBeenCalledTimes(7);
 });
 
 test('pipeline symlink는 git 객체에서 일반 파일이 아닌 것으로 거부한다', async () => {
@@ -264,7 +270,7 @@ test('pipeline symlink는 git 객체에서 일반 파일이 아닌 것으로 거
 test('Agent index의 assume-unchanged로 미커밋 테스트 약화를 숨길 수 없다', async () => {
   git(work, 'update-index', '--assume-unchanged', 'test/value.test.ts');
   await file(join(work, 'test/value.test.ts'), 'test.skip("value", () => {});');
-  await expect(run()).rejects.toThrow();
+  expect(await run()).toMatchObject({ status: 'fail', failStep: 'worktree' });
   expect(execute).not.toHaveBeenCalled();
 });
 
@@ -284,7 +290,135 @@ test('마지막 명령 도중 중단되면 성공 결과를 반환하지 않는�
     if (argv[1] === 'contract') abort.abort(new Error('검사 중단'));
     return { code: 0, stdout: '', stderr: '' };
   });
-  const result = await runTaskCheck({ repo, worktreeId: 'task-1', branch: 'agent/TASK-1-h1', heavy, execute, signal: abort.signal });
+  const result = await runTaskCheck({ repo, worktreeId: 'task-1', branch: 'agent/TASK-1-h1', heavy, execute, collectTests, signal: abort.signal });
   expect(result).toMatchObject({ status: 'fail', failStep: 'contract' });
   expect(heavy.snapshot().running).toBe(0);
+});
+
+test('P1: 무시 파일과 가짜 node_modules를 복사하지 않고 SHA 전용 checkout에 설치한다', async () => {
+  await file(join(work, 'node_modules/.bin/vitest'), '가짜 도구');
+  await file(join(work, 'dist/compiled.js'), '가짜 빌드');
+  await file(join(work, 'test/.gitignore'), '*\n');
+  await file(join(work, 'test/hidden.ts'), '숨긴 테스트 조작');
+  const initial: string[] = [];
+  execute.mockImplementation(async (argv, cwd) => {
+    if (argv[1] === 'install') {
+      initial.push(cwd);
+      await expect(lstat(join(cwd, 'node_modules'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(lstat(join(cwd, 'dist'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(lstat(join(cwd, 'test/.gitignore'))).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(argv).toEqual(['pnpm', 'install', '--frozen-lockfile']);
+      await file(join(cwd, 'node_modules/.bin/vitest'), '정상 도구');
+    }
+    const tool = await readFile(join(cwd, 'node_modules/.bin/vitest'), 'utf8');
+    return { code: tool === '정상 도구' ? 0 : 1, stdout: tool, stderr: '' };
+  });
+  expect(await run()).toMatchObject({ status: 'pass' });
+  expect(initial).toHaveLength(2);
+  expect(new Set(initial).size).toBe(2);
+  expect(initial).not.toContain(work);
+  expect(await readFile(join(work, 'node_modules/.bin/vitest'), 'utf8')).toBe('가짜 도구');
+  for (const cwd of initial) await expect(lstat(cwd)).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(await repo.recordedWorktrees()).toEqual(['task-1']);
+});
+
+test('P2: 새 설정으로 제외한 테스트는 수집 결과의 전후 차이와 추가 파일을 QA에 남긴다', async () => {
+  await file(join(work, 'vitest.config.ts'), 'export default { test: { include: ["nothing/**"], passWithNoTests: true } };');
+  const head = commit(work);
+  collectTests.mockImplementation(async (argv, cwd) => {
+    expect(['unit', 'contract']).toContain(argv[1]);
+    const config = await readFile(join(cwd, 'vitest.config.ts'), 'utf8').catch(() => '');
+    return config.includes('nothing/**') ? [] : ['test/value.test.ts::value'];
+  });
+  const result = await run();
+  expect(result.status).toBe('pass');
+  expect(result.headSha).toBe(head);
+  expect(result.testReview.required).toBe(true);
+  expect(result.testReview.changes.map((change) => [change.path, change.status])).toEqual([['vitest.config.ts', 'A']]);
+  expect(result.testReview.collection.before).toEqual(['unit:test/value.test.ts::value', 'contract:test/value.test.ts::value']);
+  expect(result.testReview.collection.after).toEqual([]);
+  expect(result.testReview.collection.removed).toEqual(['unit:test/value.test.ts::value', 'contract:test/value.test.ts::value']);
+  expect(result.testReview.collection.added).toEqual([]);
+  expect(collectTests).toHaveBeenCalledTimes(4);
+  expect(collectTests.mock.calls.every(([, cwd]) => cwd !== work)).toBe(true);
+});
+
+test('P2: 테스트 수집 실패나 잘못된 식별자는 QA 근거를 비운 채 통과시키지 않는다', async () => {
+  collectTests.mockRejectedValueOnce(new Error('수집 실패'));
+  const failed = await run();
+  expect(failed).toMatchObject({ status: 'fail', failStep: 'test-collection-before' });
+  collectTests.mockResolvedValueOnce(['']);
+  expect(await run()).toMatchObject({ status: 'fail', failStep: 'test-collection-before' });
+  expect(heavy.snapshot().running).toBe(0);
+  expect(await repo.recordedWorktrees()).toEqual(['task-1']);
+});
+
+test('P2: 변경 후 수집 실패도 두 사본을 정리하고 실패 결과를 남긴다', async () => {
+  collectTests.mockResolvedValueOnce(['test/value.test.ts::value'])
+    .mockResolvedValueOnce(['test/value.test.ts::value']).mockRejectedValueOnce(new Error('변경 후 수집 실패'));
+  expect(await run()).toMatchObject({ status: 'fail', failStep: 'test-collection-after' });
+  expect(heavy.snapshot().running).toBe(0);
+  expect(await repo.recordedWorktrees()).toEqual(['task-1']);
+  for (const [, cwd] of execute.mock.calls) await expect(lstat(cwd)).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test.each(['node_modules/tool.js', 'src/link'])('P1: 커밋의 도구 폴더·링크 %s는 검사 사본에 넣지 않는다', async (path) => {
+  if (path.endsWith('link')) await symlink('main.ts', join(work, path));
+  else await file(join(work, path), '커밋한 가짜 도구');
+  git(work, 'add', '-f', path);
+  git(work, 'commit', '-m', '커밋한 우회');
+  const head = await repo.importWorktree('task-1', 'agent/TASK-1-h1');
+  await expect(repo.createTaskCheckWorktree('ci-invalid', head)).rejects.toThrow();
+  expect(await repo.recordedWorktrees()).toEqual(['task-1']);
+});
+
+test('P2: 관계없는 브랜치의 force push는 ①의 main fetch를 막지 않는다', async () => {
+  git(source, 'checkout', '-b', 'feature');
+  await file(join(source, 'feature.txt'), '이전');
+  commit(source);
+  git(source, 'push', 'origin', 'feature');
+  await repo.fetch();
+  git(source, 'reset', '--hard', baseline);
+  await file(join(source, 'feature.txt'), '다시 쓴 이력');
+  commit(source);
+  git(source, 'push', '--force', 'origin', 'feature');
+  git(source, 'checkout', 'main');
+  expect(await run()).toMatchObject({ status: 'pass', baseSha: baseline });
+});
+
+test('P3: 미커밋 변경은 예외 대신 Agent에게 전달할 실패 결과로 남는다', async () => {
+  await file(join(work, 'src/main.ts'), '미커밋 변경');
+  const result = await run();
+  expect(result).toMatchObject({ status: 'fail', failStep: 'worktree' });
+  expect(result.steps.find((step) => step.name === 'worktree')?.attempts[0]?.stderr).toContain('커밋하지 않은 변경');
+  expect(execute).not.toHaveBeenCalled();
+});
+
+test('P3: checkout 대조 실패 때도 명령 stdout과 stderr를 보존한다', async () => {
+  execute.mockImplementationOnce(async (argv, cwd) => {
+    expect(argv).toEqual(['pnpm', 'install', '--frozen-lockfile']);
+    await file(join(cwd, 'src/main.ts'), '설치가 소스를 바꿈');
+    return { code: 0, stdout: '실제 stdout', stderr: '실제 stderr' };
+  });
+  const result = await run();
+  expect(result.status).toBe('fail');
+  const failed = result.steps.find((step) => step.status === 'fail');
+  expect(failed?.attempts[0]).toMatchObject({ code: null, stdout: '실제 stdout', stderr: expect.stringContaining('실제 stderr') });
+});
+
+test('P3: 대괄호 파일 이름의 QA diff에 다른 파일을 섞지 않는다', async () => {
+  await file(join(source, 'test/[id].test.ts'), '대괄호 원본');
+  await file(join(source, 'test/i.test.ts'), '다른 원본');
+  const start = commit(source);
+  git(source, 'push', 'origin', 'main');
+  await repo.fetch();
+  await repo.removeWorktree('task-1');
+  work = await repo.createWorktree('task-1', 'agent/TASK-1-h1', start);
+  await file(join(work, 'test/[id].test.ts'), '대괄호 수정');
+  await file(join(work, 'test/i.test.ts'), '섞이면 안 되는 수정');
+  commit(work);
+  const result = await run();
+  const bracket = result.testReview.changes.find((change) => change.path === 'test/[id].test.ts');
+  expect(bracket?.patch).toContain('대괄호 수정');
+  expect(bracket?.patch).not.toContain('섞이면 안 되는 수정');
 });
