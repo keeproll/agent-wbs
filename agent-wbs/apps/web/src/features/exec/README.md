@@ -1,0 +1,138 @@
+# features/exec — 작업 실행 화면(M3-06)
+
+팀장이 Task 실행 상황을 보고, 첫 실행을 시작하고, Agent에게 메시지를 보내는 화면이다.
+원본은 `prototype/uiux/Main.dc.html`의 UI-06(P L1747–1856)이다.
+낯선 말은 맨 아래 [용어집](#용어집)에 모았다.
+
+## 1. 화면 구성 — 3분할
+
+| 영역 | 내용 | 파일 |
+|---|---|---|
+| 왼쪽 | Task 목록과 Task마다의 실행 시도 목록 | `ExecRail.tsx` |
+| 가운데 | 6단계 흐름, 다음 작업, 실행할 수 없는 이유, 팀장 확인 필요 알림, Completion Gate, 재작업 지시, 고른 시도의 기록 | `ExecCenter.tsx`, `ReworkEditor.tsx` |
+| 오른쪽 | 연결 메시지와 메시지 작성 | `ExecMessages.tsx` |
+
+- 실행 기록과 메시지는 섞지 않는다.
+  - 왜: 시도(Attempt)는 실행 한 번의 기록이고, 메시지는 지시 · 응답 기록이다(G§4.6).
+- 계산(단계 · 다음 작업 · 사유 · 카운터)은 모두 `model.ts`에 있다. 화면 파일은 그리기만 한다.
+  - 왜: 계산을 단위 시험(`test/exec-model.test.ts`)으로 빠르게 확인할 수 있다.
+
+## 2. 주소 — 안정 키로 고른다
+
+| 주소 | 여는 것 |
+|---|---|
+| `/exec` | 목록의 첫 Task |
+| `/exec/TASK-0007` | 그 Task. Task 상세 「실행」 탭과 알림 링크가 이 주소를 연다(UAT-TASK-10 b) |
+| `/exec/TASK-0007?att=ATT-0007-2` | 그 Task의 그 시도 |
+
+- 배열 위치(몇 번째)가 아니라 `taskKey`·`attemptKey`로 고른다.
+  - 왜: 목록이 새로 고쳐져 순서가 바뀌어도 같은 대상을 가리킨다.
+- 없는 시도 키가 주소에 있으면 고르지 않고 실행 중 또는 마지막 시도를 보인다(UAT-EMPTY-03).
+- 주소로 직접 연 Task는 실행 목록 상태(계획 중 등)가 아니어도 가운데에 보인다.
+- 라우터 연결: `src/app/router.tsx`에 `/exec`와 `/exec/:taskKey` 두 줄을 넣었다. E2E를 돌리려면 필요해서 이 작업에서 연결했다(병합 때 coordinator 확인 필요).
+
+## 3. 자동 진행 규칙 — 팀장은 첫 시작만 누른다
+
+owner Q-04(contracts §3.5)에 따라 원본과 다르게 동작한다.
+
+- 첫 개발 실행만 팀장이 「개발 실행 요청」을 누른다(`POST /api/tasks/:taskKey/runs` `{kind:"dev"}`).
+  - 화면을 여는 것만으로는 아무 요청도 보내지 않는다.
+- 그 뒤 QA → 재작업 → 재검증은 서버가 자동으로 만든다. 그래서 그 단계에는 버튼이 없고 「서버가 자동으로 …」 문구와 카운터를 보인다.
+  - 예: `V-0007-1 FAIL — 서버가 … 자동 실행합니다 (자동 재작업 1/3회).`
+- 팀장 버튼이 다시 나오는 경우는 다섯 가지뿐이다.
+  - 실행 중: 「실행 중단」(확인 창 뒤 `POST /api/attempts/:id/stop`)
+  - 중단(paused): 「… 재개 요청」(`POST /api/attempts/:id/resume`). 서버가 같은 단계 · 같은 등급의 새 시도를 만든다.
+  - 자동 재시도 한도 초과(Task `failed` 또는 알림 `retry:<시도 id>`): 「… 재실행 요청」 1회
+  - BLOCKED 검증: 「… QA 요청」. BLOCKED는 자동으로 반복하지 않기 때문이다.
+  - 자동 재작업 한도 초과(알림 `rework-limit:…`): 「재작업 지시 작성」. 지시를 「수정 요청」 메시지로 보내고 재작업 실행을 요청한다.
+- Gate 단계는 서버가 통합 확인 · 병합 뒤 자동으로 완료한다. 「완료 판정 다시 요청」은 같은 판정을 다시 할 뿐 우회하지 않는다.
+- 원본의 「결과 등록 (Mock Runner 보고)」 폼(UI-06A·06B)은 만들지 않았다.
+  - 왜: 결과는 Runner가 보고한다. 실제로 하지 않는 동작을 된 것처럼 보이지 않는다(G§9.7-3).
+
+### 실행할 수 없는 이유
+
+`runnerReason()`이 Runner 보고(`GET /api/runner-state`)만 보고 첫 사유 하나를 고른다(P capReason L6097 순서).
+
+1. Runner 연결 끊김 → 버튼을 막는다.
+2. Agent 실행 준비 실패
+3. 사용량 0%
+4. 이 Task의 보유 미확인(프로세스 종료 미확인)
+5. 하위 Agent 관측 미확인 세션
+6. 동시 실행 한도
+7. 충돌 묶음 대기
+
+- 2~7은 사유만 보이고 버튼은 막지 않는다.
+  - 왜: 최종 판단은 서버가 한다. 서버가 거부하면(예: 409 `CLAIM_REJECTED`) 오류 막대에 서버 사유를 그대로 보인다(UAT-EXEC-09 b).
+- 선행 Task 차단과 계획 중 · 승인 대기 상태도 버튼을 막는다.
+
+## 4. 공통 부품을 이렇게 썼다
+
+| 하는 일 | 쓴 부품 | 비고 |
+|---|---|---|
+| 실행 요청 · 중단 · 재개 · 완료 판정 요청 | `useSave` + `BusyButton` (`useTaskCommand.tsx`) | 다시 시도는 같은 멱등 키. 409 `VERSION_CONFLICT`는 충돌 창 |
+| 재작업 지시 | `useSave` · `useSessionDraft` · `useEditGuard` · 충돌 창 | 쓰던 지시가 있으면 다른 Task로 가기 전에 묻는다 |
+| 메시지 작성 | `useSave` · `useSessionDraft` · Task별 초안(`messageDrafts.ts`) · 충돌 창 | 아래 「메시지 초안」 |
+| 전송 취소 · 재전송 · 읽음 표시 | `useSave` · `useConfirm` | 취소는 확인 창 뒤에만 |
+| 오래된 데이터 갱신 실패 | `useRefreshError` | 화면을 오류 카드로 바꾸지 않는다 |
+
+### 메시지 보내기는 두 요청
+
+- 초안 만들기(`POST /api/messages`) → 전송(`POST /api/messages/:id/send`) 순서다(`sendMessage.ts`).
+- 멱등 키는 하나의 바탕 키에서 `<키>.create`, `<키>.send`로 나눠 쓴다.
+  - 왜: 서버의 멱등 키는 프로젝트 안에서 하나다. 같은 키를 두 요청에 쓰면 `IDEMPOTENCY_CONFLICT`가 난다. 「다시 시도」는 같은 바탕 키라 이미 만든 초안을 서버가 그대로 돌려준다(중복 없음).
+- 재작업 지시는 여기에 `<키>.run`(재작업 실행 요청)이 하나 더 붙는다.
+
+### 메시지 초안
+
+- 초안은 Task별로 메모리 저장소(`messageDrafts.ts`)에 둔다. 다른 Task · 메뉴로 갔다 와도 남는다(UAT-MSG-01).
+- 그래서 메시지 작성 칸에는 `useEditGuard`를 쓰지 않았다.
+  - 왜: `useEditGuard`는 주소가 바뀌면 「버릴까요?」를 묻는다. 메시지 초안은 버려지지 않으므로 물을 필요가 없다. 대신 새로고침 · 창 닫기만 브라우저 확인(beforeunload)을 띄운다.
+- 세션 만료(401)는 `useSessionDraft`(id `exec:<taskKey>:message`)가 보관 · 복원한다.
+- 로그아웃하면 모든 Task의 초안을 지운다(`onDraftsCleared`).
+
+## 5. 시험
+
+| 명령 | 내용 |
+|---|---|
+| `W test` | `test/exec-model.test.ts`(단계 · 6단계 · 카운터 · 사유 · 다음 작업 · 전달 상태), `test/exec-drafts.test.ts` |
+| `W e2e -- exec` | **M3-06 완료 조건.** `e2e/exec.spec.ts`(가짜 Runner 보고), `e2e/exec-visual.spec.ts`(시각 비교). `api-exec`는 환경이 없으면 건너뛴다 |
+| `W --filter @awbs/web e2e:api-exec` | 실제 API · 전용 DB(demo seed)로 핵심 흐름(`e2e/api-exec.spec.ts`). 끝나면 컨테이너를 지운다 |
+
+- 가짜 Runner fixture는 `e2e/support/exec-fixtures.ts`다. 원본 Mock(TASK-0001·0004·0005·0006·0007·0008)과 같은 값이라 원본 스크린샷과 비교할 수 있다.
+- 다른 작업과 같은 PC에서 돌리면 E2E 포트(5183)가 겹칠 수 있다. `AWBS_E2E_PORT=5306`처럼 다른 포트를 준다.
+
+### 시각 비교
+
+- 조건: 1920×1080(배치는 1280×800도), 기기 배율 1, ko-KR, Asia/Seoul, 시계 2026-11-05 20:00 KST, 애니메이션 끔, 마우스는 화면 구석. M3-01과 같다.
+- 차이 계산: pixelmatch `threshold 0.1`, 안티에일리어싱 픽셀 제외.
+- 결과: `~/.orca/bots/agentwbs/archive/2026-11-26/M3-06/visual/`(`[원본 | 구현 | 차이]` PNG와 `summary.md`).
+- 같아야 하는 영역(실패 기준 2~3%): 제목, 왼쪽 목록, 6단계 흐름 카드, 빈 메시지 영역 머리.
+- 예외(기록만):
+  - 다음 작업 줄: Mock 「결과 등록」 대신 「실행 중단」 · 자동 진행 문구(owner Q-04).
+  - 시도 카드: 지정 · 실제 하위 Agent 태그가 없다. 계약 `Attempt`에 필드가 없다.
+  - 검증 Evidence: 원본은 파일 경로, 계약 `Evidence`는 경로가 없어 「종류 · 해시 앞 12자」 내려받기 링크로 보인다.
+  - 메시지 영역: fixture 문구 · 시각 차이, 「읽음 표시」 버튼 추가.
+  - 페이지 설명 문구: 「Runner 실행과 보고는 Mock」 대신 자동 진행 안내.
+  - 1280×800: 원본 규칙(P L640)대로 메시지 영역이 아래로 내려간다. 배치 확인용 기록.
+
+## 6. 알아 둘 계약 공백(보고함)
+
+- 시도 응답에 지정 · 실제 하위 Agent, CI(Task 검사) 링크가 없다.
+- 받은 응답 메시지에 보낸 Agent 필드가 없다. 화면은 연결 시도의 Agent로 보인다.
+- 자동 재시도 · 재작업 카운터 필드가 없다. 화면이 시도 · 검증 기록으로 다시 센다(`attemptCounters`).
+- 전체 시도 목록 API가 없어 왼쪽 목록은 Task마다 `GET /api/tasks/:taskKey/attempts`를 부른다.
+
+## 용어집
+
+| 용어 | 뜻 |
+|---|---|
+| 시도(Attempt) | Agent가 Task를 한 번 실행한 기록. 중단 · 실패해도 지우지 않는다 |
+| 6단계 | 개발 → QA → 재작업 → 재검증 → Completion Gate → 완료 |
+| Completion Gate | 완료 전에 확인하는 5개 조건(체크리스트 · 산출물 · 검증 · 결함 · 승인) |
+| BLOCKED | 검증을 할 수 없었던 결과(환경 문제 등). PASS도 FAIL도 아니다 |
+| 보유 | 실행이 차지한 PC 자리와 Task 잠금. 프로세스 종료가 확인돼야 풀린다(contracts §3.4) |
+| 다음 실행 대기(pendingNext) | Runner가 실행 중 세션에 메시지를 넣지 못해 다음 실행 시작 때 전달하려고 보관한 상태 |
+| ack(수신 확인) | Runner가 메시지를 받았다는 확인. 작업 완료가 아니다 |
+| 멱등 키 | 같은 요청을 두 번 보내도 한 번만 처리되게 붙이는 번호(Idempotency-Key) |
+| 안정 키 | 목록 순서가 바뀌어도 변하지 않는 이름(`TASK-0007`, `ATT-0007-2`) |
+| fixture | 시험용으로 미리 준비한 데이터 · 상황 |
