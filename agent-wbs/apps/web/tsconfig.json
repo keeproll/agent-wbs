@@ -9,5 +9,5 @@
     "types": ["node", "vite/client"],
     "customConditions": ["awbs-source"]
   },
-  "include": ["src", "e2e", "*.config.ts"]
+  "include": ["src", "e2e", "test", "scripts", "*.config.ts"]
 }

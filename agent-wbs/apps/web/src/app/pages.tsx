@@ -1,30 +1,30 @@
-import { useEffect, type ReactNode } from 'react';
+import { MenuScreen } from '../shared/layout/MenuScreen.tsx';
+import { Page } from '../shared/layout/Page.tsx';
+import { menuLabel, type MenuKey } from '../shared/layout/menu.ts';
 
-function Page({ title, children }: { title: string; children: ReactNode }) {
-  useEffect(() => {
-    document.title = `${title} — Agent WBS`;
-  }, [title]);
+/**
+ * 아직 만들지 않은 메뉴 화면(G§9.7-3). M3-02~08이 각 메뉴의 본문으로 바꾼다.
+ * 바깥 틀(MenuScreen)은 그대로 써서 로딩·실패·잠금 처리를 공통으로 받는다.
+ */
+export function PendingPage({ menu }: { menu: MenuKey }) {
   return (
-    <div className="page">
-      <h1>{title}</h1>
-      <div className="card">{children}</div>
-    </div>
+    <MenuScreen menu={menu}>
+      {() => (
+        <Page title={menuLabel(menu)}>
+          <div className="card"><p style={{ margin: 0 }}>이 화면은 아직 구현되지 않았습니다.</p></div>
+        </Page>
+      )}
+    </MenuScreen>
   );
 }
 
-/** 아직 만들지 않은 화면임을 그대로 알린다(G§9.7-3). */
-export function PendingPage({ title }: { title: string }) {
-  return (
-    <Page title={title}>
-      <p>이 화면은 아직 구현되지 않았습니다.</p>
-    </Page>
-  );
-}
-
+/** 알 수 없는 주소(UAT-SHELL-05, MM-26). 원본의 「제작 예정」 대체 화면(UI-13)은 만들지 않는다. */
 export function NotFoundPage() {
   return (
     <Page title="페이지를 찾을 수 없습니다">
-      <p>주소를 확인하거나 왼쪽 메뉴에서 화면을 선택하세요.</p>
+      <div className="card">
+        <p style={{ margin: 0 }}>주소를 확인하거나 왼쪽 메뉴에서 화면을 선택하세요. (404)</p>
+      </div>
     </Page>
   );
 }

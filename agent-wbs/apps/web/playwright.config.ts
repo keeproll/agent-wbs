@@ -7,9 +7,10 @@ export default defineConfig({
   testDir: 'e2e',
   forbidOnly: true,
   reporter: 'list',
-  use: { ...devices['Desktop Chrome'], baseURL },
+  use: { ...devices['Desktop Chrome'], baseURL, locale: 'ko-KR', timezoneId: 'Asia/Seoul' },
   webServer: {
-    command: `pnpm run build && pnpm run preview --port ${String(port)}`,
+    // e2e 모드 빌드에는 공통 컴포넌트 견본(/_states)이 들어간다(src/app/router.tsx).
+    command: `pnpm run build --mode e2e && pnpm run preview --port ${String(port)}`,
     url: baseURL,
     reuseExistingServer: false,
     gracefulShutdown: { signal: 'SIGTERM', timeout: 5_000 },

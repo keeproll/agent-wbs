@@ -1,10 +1,8 @@
-export interface MenuItem {
-  key: string;
-  label: string;
-  icon: string;
-}
-
-export const MENU: readonly MenuItem[] = [
+/**
+ * 왼쪽 메뉴 12개 — 원본 NAV(P L3063–3076)의 순서·이름·아이콘 그대로.
+ * 주소(path)는 제품이 정했다(G§4.3 `/wbs/TASK-0007`, §4.9 `/settings/report`).
+ */
+export const MENU = [
   { key: 'dashboard', label: '대시보드', icon: 'M4 4h7v7H4zM13 4h7v4h-7zM13 10h7v10h-7zM4 13h7v7H4z' },
   { key: 'project', label: '프로젝트', icon: 'M3 7h6l2 2h10v10H3z' },
   { key: 'wbs', label: 'WBS', icon: 'M4 5h5M4 5v14M4 12h5M4 19h5M12 5h8M12 12h8M12 19h8' },
@@ -21,4 +19,13 @@ export const MENU: readonly MenuItem[] = [
     label: '설정',
     icon: 'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2',
   },
-];
+] as const;
+
+export type MenuKey = (typeof MENU)[number]['key'];
+export const menuLabel = (key: MenuKey): string => MENU.find((m) => m.key === key)?.label ?? key;
+
+/**
+ * 등록·초기 WBS 승인 전에도 열리는 메뉴(G§0.3 「메뉴 잠금」, P L6874–6879, MM-22).
+ * 왜 설정도 여나: 실행 PC·동시 실행·정책은 등록 전에 미리 정해 둘 수 있어야 한다.
+ */
+export const OPEN_BEFORE_ACTIVE: readonly MenuKey[] = ['project', 'settings'];
