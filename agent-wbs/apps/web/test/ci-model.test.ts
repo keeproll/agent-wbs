@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  detailSteps, formatDuration, githubLabel, lastDeploy, mainStatus, openFailures, position, queueRows, resultLabel, runDurationMs,
+  attemptCiRef, detailSteps, formatDuration, githubLabel, lastDeploy, mainStatus, openFailures, position, queueRows, resultLabel, runDurationMs,
   runRows, stageCounts, summaryLine, tabBadges,
   type CiRun, type QueueItem,
 } from '../src/features/ci/model.ts';
@@ -117,5 +117,18 @@ describe('빌드·통합 화면 계산(UI-08, P ciVM L4765–4801)', () => {
     expect(summaryLine([], [])).toBe('실행 0 · 실패 미해결 0 · 병합 대기 0 · 마지막 배포 확인 없음');
     expect(tabBadges(runs, queue, [{ quarantined: true }, { quarantined: false }] as never)).toEqual({ runs: 1, queue: 1, flaky: 1 });
     expect(lastDeploy(runs)?.id).toBe('r3');
+  });
+
+  it('시도의 CI 참조(UAT-TASK-10-CI): 그 시도의 가장 최근 Task 검사. 다른 단계·다른 시도는 참조가 아니다', () => {
+    const list = [
+      run({ id: 'n', stage: 'int', status: 'fail', attemptId: 'a1', runKey: 'CI-9' }),
+      run({ id: 'p', stage: 'task', status: 'pass', attemptId: 'a1', runKey: 'CI-8' }),
+      run({ id: 'f', stage: 'task', status: 'fail', attemptId: 'a1', runKey: 'CI-7' }),
+      run({ id: 'b', stage: 'task', status: 'fail', attemptId: 'a2', runKey: 'CI-6', failScope: 'baseline' }),
+    ];
+    expect(attemptCiRef(list, 'a1')).toEqual({ id: 'p', l: 'Task 검사 통과 · CI-8', c: 'sc sc-ok' });
+    expect(attemptCiRef(list.slice(2), 'a1')).toEqual({ id: 'f', l: 'Task 검사 실패 · CI-7', c: 'sc sc-bad' });
+    expect(attemptCiRef(list, 'a2')).toEqual({ id: 'b', l: 'Task 검사 기준선 실패 · CI-6', c: 'sc sc-warn' });
+    expect(attemptCiRef(list, 'a3')).toBeNull();
   });
 });

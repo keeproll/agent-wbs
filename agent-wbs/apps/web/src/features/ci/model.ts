@@ -150,3 +150,15 @@ export function summaryLine(runs: readonly CiRun[], queue: readonly QueueItem[])
 export function tabBadges(runs: readonly CiRun[], queue: readonly QueueItem[], flaky: readonly FlakyTest[]) {
   return { runs: openFailures(runs), queue: queue.filter((q) => PENDING.has(q.status)).length, flaky: flaky.filter((f) => f.quarantined).length };
 }
+
+/**
+ * Task 실행 탭의 CI 참조(원본 P L1310·5309 ciL·ciC, UAT-TASK-10-CI): 그 시도의 가장 최근 ① Task 검사.
+ * runs는 서버 순서(최근 먼저)다. 없으면 null(표시 없음).
+ */
+export function attemptCiRef(runs: readonly CiRun[], attemptId: string): { id: string; l: string; c: string } | null {
+  const r = runs.find((x) => x.stage === 'task' && x.attemptId === attemptId);
+  if (!r) return null;
+  const res = resultLabel(r);
+  const c = r.status === 'fail' ? (r.failScope === 'baseline' ? 'sc sc-warn' : 'sc sc-bad') : 'sc sc-ok';
+  return { id: r.id, l: `Task 검사 ${res.l} · ${r.runKey}`, c };
+}

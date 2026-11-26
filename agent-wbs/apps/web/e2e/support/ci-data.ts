@@ -111,8 +111,9 @@ export const ciData = (): CiData => ({ runs: runs(), queue: queue(), flaky: flak
 
 const P = '/api/projects/p1/ci';
 /** 가짜 API에 빌드·통합 경로를 붙인다. 실행 목록은 cursor로 2쪽에 나눠 준다(모든 쪽을 읽는지 확인). */
-export function installCi(api: FakeApi, data: CiData): void {
-  api.on('GET /api/projects/p1/tasks', (route) => json(route, 200, { tasks: tasks(), nextCursor: null }));
+export function installCi(api: FakeApi, data: CiData, options: { tasks?: boolean } = {}): void {
+  // tasks=false: Task 화면 시험이 자기 Task 목록·시도(task-api.ts)를 쓸 때. 아래 시도 응답도 붙이지 않는다.
+  if (options.tasks !== false) api.on('GET /api/projects/p1/tasks', (route) => json(route, 200, { tasks: tasks(), nextCursor: null }));
   api.on(`GET ${P}/runs`, (route, request) => {
     const url = new URL(request.url());
     const cursor = url.searchParams.get('cursor');
@@ -129,7 +130,7 @@ export function installCi(api: FakeApi, data: CiData): void {
     if (!list.some((a) => a.id === r.attemptId)) list.push({ id: r.attemptId, attemptKey: r.attemptId.toUpperCase() });
     atts.set(r.taskKey, list);
   }
-  for (const [taskKey, items] of atts) api.on(`GET /api/tasks/${taskKey}/attempts`, (route) => json(route, 200, { items, nextCursor: null }));
+  if (options.tasks !== false) for (const [taskKey, items] of atts) api.on(`GET /api/tasks/${taskKey}/attempts`, (route) => json(route, 200, { items, nextCursor: null }));
   api.on(`GET ${P}/queue`, (route) => json(route, 200, { items: data.queue }));
   api.on(`GET ${P}/flaky`, (route) => json(route, 200, { items: data.flaky }));
   api.on(`GET ${P}/pipeline`, (route) => json(route, 200, data.pipeline));
