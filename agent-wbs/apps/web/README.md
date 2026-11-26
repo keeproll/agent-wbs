@@ -24,6 +24,8 @@ M3-02~08은 이 바탕 위에 각 메뉴의 본문을 얹는다.
 | `W --filter @awbs/web e2e:api` | 실제 API·전용 DB로 로그인 E2E(§4) |
 | `W e2e -- task-detail` | **M3-03 완료 조건.** Task 상세 9탭(사용법은 [features/task/README.md](src/features/task/README.md)) |
 | `W --filter @awbs/web e2e:api:task` | 실제 API·전용 DB(demo seed)로 Task 상세 E2E |
+| `W e2e -- exec` | **M3-06 완료 조건.** 작업 실행 화면 E2E·시각 비교([features/exec/README.md](src/features/exec/README.md)) |
+| `W --filter @awbs/web e2e:api-exec` | 실제 API·전용 DB(demo seed)로 작업 실행 핵심 흐름 E2E |
 | `node apps/web/scripts/prototype-css.ts` | 원본 CSS를 다시 옮긴다(`--check`는 최신인지 확인만) |
 
 - `-- <이름>`은 시험 파일 이름 필터다. 예: `W e2e -- states`는 `states*.spec.ts`만 실행한다.

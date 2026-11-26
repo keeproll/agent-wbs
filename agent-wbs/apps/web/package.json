@@ -13,6 +13,7 @@
     "e2e:api": "node scripts/e2e-api.ts",
     "e2e:api-wbs": "node scripts/e2e-api-wbs.ts",
     "e2e:api:task": "node scripts/e2e-api-task.ts",
+    "e2e:api-exec": "node scripts/e2e-exec-api.ts",
     "e2e:install": "playwright install chromium"
   },
   "dependencies": {

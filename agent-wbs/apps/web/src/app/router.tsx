@@ -3,6 +3,7 @@
  *
  * 하위 주소(알림·보고서 링크가 여는 상세)
  * - `/wbs/:taskKey` — WBS 레일 + Task 상세(G§4.3). `?tab=`으로 탭을 고른다.
+ * - `/exec/:taskKey` — 작업 실행에서 그 Task(M3-06). `?att=`로 시도를 고른다.
  * - `/change/:cpRef` — 변경 제안 상세(CP 키 또는 id, M3-05).
  * - `/settings/:tab` — 설정 탭(G§4.9).
  * 모든 하위 주소의 해석 규칙(알림 링크 → 주소)은 shared/auth/login-link.ts 한 곳에 있다.
@@ -13,6 +14,7 @@ import { lazy, Suspense, type ComponentType } from 'react';
 import { createBrowserRouter, Navigate, type RouteObject } from 'react-router';
 import { LoginPage } from '../features/auth/LoginPage.tsx';
 import { ChangePage } from '../features/change/ChangePage.tsx';
+import { ExecPage } from '../features/exec/ExecPage.tsx';
 import { PlanningPage } from '../features/planning/PlanningPage.tsx';
 import { ProjectPage } from '../features/project/ProjectPage.tsx';
 import { WbsPage } from '../features/wbs/WbsPage.tsx';
@@ -33,6 +35,7 @@ const SCREENS: Partial<Record<MenuKey, ComponentType>> = {
   project: ProjectPage, // M3-04
   wbs: WbsPage, // M3-02(+ M3-03 상세)
   planning: PlanningPage, // M3-05
+  exec: ExecPage, // M3-06
   change: ChangePage, // M3-05
 };
 
@@ -52,6 +55,7 @@ function screen(key: MenuKey) {
  * - 나머지는 형제 줄이다. 각 화면이 useParams로 주소를 읽는다(M3-05·06·08 승인 방식 그대로).
  */
 const DETAIL: Partial<Record<MenuKey, string>> = {
+  exec: '/exec/:taskKey', // M3-06 작업 실행에서 그 Task(`?att=`로 시도)
   change: '/change/:cpRef', // M3-05 알림 링크로 여는 CP 상세(CP 키 또는 id)
   settings: '/settings/:tab', // G§4.9 설정 탭
 };
