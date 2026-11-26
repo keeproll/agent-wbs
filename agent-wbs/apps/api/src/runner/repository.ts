@@ -152,8 +152,7 @@ export class RunnerRepository {
     return added;
   }
   async saveUsage(b: { agent: string; remainPct: number; resetAt?: string; tokensUsed?: number }) {
-    // shortcut: resetAt 미보고는 필수 DB 열 때문에 수신 시각으로 저장한다. 열이 null을 허용하면 원형을 보존한다.
-    await this.client.query('insert into agent_usage(agent,remain_pct,reset_at,tokens_used) values($1,$2,coalesce($3,clock_timestamp()),$4)', [b.agent,b.remainPct,b.resetAt ?? null,b.tokensUsed ?? null]);
+    await this.client.query('insert into agent_usage(agent,remain_pct,reset_at,tokens_used) values($1,$2,$3,$4)', [b.agent,b.remainPct,b.resetAt ?? null,b.tokensUsed ?? null]);
   }
   async saveConcurrency(host: string, b: { limit: number; running: { Claude: number; Codex: number }; subagents: number; heavyJobs: number; resources: object; adjust?: object }) {
     await this.client.query('insert into runner_concurrency_log(host_id,"limit",running,subagents,heavy,resources,adjust) values($1,$2,$3,$4,$5,$6,$7)', [host,b.limit,b.running.Claude+b.running.Codex,JSON.stringify({ observed: b.subagents }),b.heavyJobs,b.resources,b.adjust ?? null]);

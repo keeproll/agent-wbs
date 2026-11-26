@@ -1,0 +1,1 @@
+ALTER TABLE "agent_usage" ALTER COLUMN "reset_at" DROP NOT NULL;
