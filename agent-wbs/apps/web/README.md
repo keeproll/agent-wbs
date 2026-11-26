@@ -16,19 +16,23 @@ M3-02~08은 이 바탕 위에 각 메뉴의 본문을 얹는다.
 | `W dev` | 개발 서버. 화면 `127.0.0.1:5173`, API `127.0.0.1:3100` |
 | `W check` | typecheck + lint + 단위 시험 |
 | `W build` | 전체 빌드 |
-| `W e2e -- states` | **M3-01 완료 조건.** 로그인·로딩·오류·충돌·잠금·편집 보호·화면 폭 E2E |
-| `W e2e` | 모든 E2E(앱 틀 `shell`, 시각 비교 `visual` 포함) |
-| `W e2e -- visual` | 원본 스크린샷과 나란히 비교(§5) |
-| `W e2e -- project` | **M3-04 완료 조건.** 프로젝트 메뉴 E2E·폭·시각 비교(features/project/README.md) |
-| `W e2e -- planning` | **M3-05 완료 조건.** Planning·변경 제안 화면 E2E와 시각 비교(features/planning/README.md) |
-| `W --filter @awbs/web e2e:api` | 실제 API·전용 DB로 로그인 E2E(§4) |
-| `W e2e -- task-detail` | **M3-03 완료 조건.** Task 상세 9탭(사용법은 [features/task/README.md](src/features/task/README.md)) |
-| `W --filter @awbs/web e2e:api:task` | 실제 API·전용 DB(demo seed)로 Task 상세 E2E |
-| `W e2e -- exec` | **M3-06 완료 조건.** 작업 실행 화면 E2E·시각 비교([features/exec/README.md](src/features/exec/README.md)) |
-| `W --filter @awbs/web e2e:api-exec` | 실제 API·전용 DB(demo seed)로 작업 실행 핵심 흐름 E2E |
-| `W e2e -- verify history dashboard` | **M3-07 완료 조건.** 대시보드·검증·이력([features/verify/README.md](src/features/verify/README.md)) |
-| `W --filter @awbs/web e2e:api:m307` | 실제 API·전용 DB로 M3-07 핵심 흐름 |
+| `W e2e` | 모든 E2E(가짜 API). 실제 API 시험(`api-*.spec.ts`)은 아래 `e2e:api*` 명령으로만 돈다 |
+| `W e2e -- nav-integration` | **M3 통합.** 화면 사이 이동·알림 링크 주소·390px 상세 열람·메뉴 12개 폭(§2-1) |
+| `W e2e -- visual` | 원본 스크린샷과 나란히 비교(§5). 화면별 비교는 각 기능 README |
 | `node apps/web/scripts/prototype-css.ts` | 원본 CSS를 다시 옮긴다(`--check`는 최신인지 확인만) |
+
+마일스톤별 완료 조건 시험이다. 자세한 내용은 각 기능 README에 있다.
+
+| 마일스톤 | 가짜 API E2E | 실제 API·전용 DB E2E |
+|---|---|---|
+| M3-01 앱 틀·공통 상태 | `W e2e -- states` | `W --filter @awbs/web e2e:api` |
+| M3-02 WBS | `W e2e -- wbs-` ([features/wbs/README.md](src/features/wbs/README.md) §7) | `W --filter @awbs/web e2e:api-wbs` |
+| M3-03 Task 상세 | `W e2e -- task-detail` ([features/task/README.md](src/features/task/README.md)) | `W --filter @awbs/web e2e:api:task` |
+| M3-04 프로젝트 | `W e2e -- project` ([features/project/README.md](src/features/project/README.md)) | — |
+| M3-05 Planning·변경 제안 | `W e2e -- planning` ([features/planning/README.md](src/features/planning/README.md)) | — |
+| M3-06 작업 실행 | `W e2e -- exec` ([features/exec/README.md](src/features/exec/README.md)) | `W --filter @awbs/web e2e:api-exec` |
+| M3-07 대시보드·검증·이력 | `W e2e -- verify history dashboard` ([features/verify/README.md](src/features/verify/README.md)) | `W --filter @awbs/web e2e:api:m307` |
+| M3-08 설정 | `W e2e -- settings-core` ([features/settings/README.md](src/features/settings/README.md)) | `W --filter @awbs/web e2e:api-settings` |
 
 - `-- <이름>`은 시험 파일 이름 필터다. 예: `W e2e -- states`는 `states*.spec.ts`만 실행한다.
 - 왜 `scripts/playwright.ts`를 거치나: pnpm이 `--`를 그대로 넘기면 Playwright가 필터를 무시하고 전부 실행하기 때문이다.
@@ -40,15 +44,19 @@ M3-02~08은 이 바탕 위에 각 메뉴의 본문을 얹는다.
 src/
   main.tsx                 시작점. Mantine → ApiProvider → FeedbackProvider → Router 순서로 감싼다
   app/
-    router.tsx             주소(라우팅) 표. 메뉴 연결은 병합 때 coordinator가 한다(shared/README §1)
+    router.tsx             주소(라우팅) 표. 메뉴 화면 표(SCREENS)와 하위 주소 표(DETAIL)가 있다(§2-1)
     pages.tsx              아직 안 만든 메뉴(PendingPage)·404 화면
     sandbox/               공통 부품 견본(/_states). 개발·E2E 빌드에만 들어간다
   features/
-    auth/                  로그인 화면(UI-AUTH)
-    task/                  Task 상세 9탭(M3-03). 다른 화면은 <TaskDetail>을 가져다 쓴다
-    project/               M3-04 프로젝트 메뉴(등록·초기 분석·입력 변경·초기화). 사용법은 features/project/README.md
-    <menu>/                M3-02~08이 만들 메뉴별 화면(예: features/wbs)
-    planning/, change/     M3-05 Planning·변경 제안. 사용법·원본과 다른 점은 features/planning/README.md
+    auth/                  로그인 화면(UI-AUTH, M3-01)
+    dashboard/             대시보드(M3-07)
+    project/               프로젝트 — 등록·초기 분석·입력 변경·정보 편집·초기화(M3-04)
+    wbs/                   WBS 표·Gantt·레일·Task 생성 Wizard(M3-02). 상세 자리는 task/의 <TaskDetail>
+    task/                  Task 상세 9탭(M3-03). WBS 화면이 레일 옆에 놓는다
+    planning/, change/     Planning·변경 제안(M3-05)
+    exec/                  작업 실행(M3-06)
+    verify/, history/      검증·이력(M3-07)
+    settings/              설정 6탭(M3-08)
   shared/                  ★ 모든 화면이 함께 쓰는 것. 사용법은 shared/README.md
     api/                   API 호출 계층·계약 타입·세션·변경 이벤트 polling
     auth/                  로그인 필요 화면 감싸기, 1회용 링크 해석
@@ -57,10 +65,30 @@ src/
     styles/                prototype.css(원본 그대로)·product.css(제품 추가분)·fonts.css
     tokens/                디자인 토큰(TypeScript용)
     ui/                    로딩 5종·오류 막대·충돌 창·확인창·빈 상태·표 스크롤 등
+    links.ts               ★ 화면 사이 주소를 만드는 단 한 곳(§2-1)
 e2e/                       Playwright 시험. support/fake-api.ts가 가짜 API
 test/                      단위 시험(Vitest)
 scripts/                   원본 CSS 옮기기·Playwright 실행·실제 API E2E 준비
 ```
+
+### 2-1. 주소와 화면 사이 이동(M3 통합)
+
+메뉴 12개의 주소는 `/<메뉴 key>`다(예: `/wbs`, `/settings`). 알림·보고서·다른 화면이 여는 상세 주소는 아래 네 가지다.
+
+| 주소 | 여는 화면 | 예 |
+|---|---|---|
+| `/wbs/:taskKey` | WBS 레일 + Task 상세. `?tab=`으로 탭을 고른다 | `/wbs/TASK-0007?tab=verif` |
+| `/exec/:taskKey` | 작업 실행에서 그 Task. `?att=`로 시도를 고른다(시도 키 또는 id) | `/exec/TASK-0007?att=ATT-0007-2` |
+| `/change/:cpRef` | 변경 제안 상세. CP 키 또는 id | `/change/CP-002` |
+| `/settings/:tab` | 설정의 그 탭 | `/settings/runner` |
+
+- 목록 화면의 조건도 주소에 싣는다. 예: `/wbs?status=done`(완료만), `/wbs?blocked=y`(선행 차단만), `/wbs?view=gantt`, `/planning?session=<id>`, `/verify?sel=<검증 id>`.
+- **주소는 `src/shared/links.ts`의 `LINK`로만 만든다.**
+  - 왜: 화면마다 주소를 손으로 쓰면 받는 화면과 어긋난다. 통합 전에는 대시보드가 `/exec?task=…`로 보냈는데 작업 실행 화면은 `/exec/:taskKey`만 읽어 엉뚱한 Task가 열렸다.
+  - 예: `LINK.exec('TASK-0007', attempt.id)` → `/exec/TASK-0007?att=<id>`.
+- 받는 규칙은 `src/app/router.tsx` 한 곳에 있다. 상세 주소는 메뉴 주소와 **같은 화면·같은 key**로 그린다.
+  - 왜: 목록에서 상세로 옮겨도 화면을 새로 만들지 않아 필터·스크롤·편집 상태가 남는다.
+- 화면 사이 이동은 `e2e/nav-integration.spec.ts`가 확인한다(원본 inventory 「정상 메뉴 이동의 연결」).
 
 ## 3. 디자인 기준 — 원본과 같게
 
@@ -116,3 +144,6 @@ scripts/                   원본 CSS 옮기기·Playwright 실행·실제 API E
 | LAN | 같은 사무실 네트워크 |
 | pixelmatch | 두 그림의 픽셀을 비교해 다른 픽셀 수를 세는 도구 |
 | 디자인 토큰 | 색·간격·크기 같은 디자인 값에 이름을 붙여 한곳에서 관리하는 방식 |
+| 하위 주소(상세 주소) | 메뉴 주소 아래에 붙는 주소. 예: `/wbs/TASK-0007`. 알림 링크가 이 주소로 상세를 연다 |
+| key(React) | 화면 조각의 이름표. 같은 이름표면 화면을 새로 만들지 않고 상태를 유지한다 |
+| 어댑터 | 모양이 다른 두 부품을 이어 주는 작은 변환 코드(예: WBS 상세 자리 `detail-slot.tsx`) |

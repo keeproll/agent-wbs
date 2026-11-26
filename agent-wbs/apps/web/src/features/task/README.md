@@ -53,16 +53,15 @@ props 계약:
 | `nav` | 위쪽 위치·이전/다음·돌아가기. 부모가 레일 순서로 계산한다(G§4.3) |
 | `onOpenTask` | 다른 Task로 이동. 편집 중이면 공통 편집 보호가 먼저 묻는다 |
 
-- 지금 주소 `/wbs/:taskKey`는 `TaskDetailPage.tsx`가 임시로 맡는다(필터 없는 최소 레일).
-  - coordinator 합의: M3-02가 병합하면 WbsPage가 자기 레일과 `<TaskDetail>`을 조합하고, 라우터 줄은 병합 때 coordinator가 정한다.
-- `TaskDetailPage`의 키보드: ↑/K 이전, ↓/J 다음, Esc 펼치기(G§4.3). 입력 칸 안에서는 동작하지 않는다.
+- 주소 `/wbs/:taskKey`는 WBS 화면(M3-02 `WbsPage`)이 맡는다. 자기 레일 옆에 `<TaskDetail>`을 놓는다(M3 통합).
+  - 연결은 `features/wbs/detail-slot.tsx` 한 파일이 한다(props 이름 바꿔 끼우기). M3-03의 임시 화면 `TaskDetailPage.tsx`는 지웠다.
+- 키보드: ↑/K 이전, ↓/J 다음, Esc 펼치기(G§4.3)는 WBS 화면이 한다. 입력 칸 안에서는 동작하지 않는다.
 
 ## 3. 폴더 지도
 
 ```
 features/task/
   TaskDetail.tsx        상세 틀: 머리(위치·제목·요약 10칸·Gate·차단 띠·승인 띠)와 9탭
-  TaskDetailPage.tsx    주소 /wbs/:taskKey 임시 조립(최소 레일 + 상세)
   ApprovalBar.tsx       착수 승인 요청·승인·반려(원본에 없는 화면 → 원본 띠·버튼만 조합)
   StructuredEditor.tsx  구조화 편집기(UI-03F): AC·산출물 표, DB 테이블·API Endpoint, 설계 블록
   editor-model.ts       편집기 데이터 모양과 저장 전 검사(순수 함수, 단위 시험 있음)
@@ -107,6 +106,8 @@ features/task/
   - 성공 콜백은 **실제로 성공한 요청 내용**으로 불린다. 보내지 못하고 막힌 새 초안은 「다시 적용」·성공 처리에 쓰지 않는다(재리뷰 P2).
   - 성공해도 **저장한 내용과 지금 입력이 같을 때만** 편집을 닫는다. 재시도 사이에 더 고친 입력을 지키기 위해서다.
   - 409 충돌 창의 「다시 적용」은 최신 Task를 읽고 같은 내용을 새 버전으로 다시 보낸다.
+    - M3 통합: 공통 `useSave`의 `reapplyRequest`로 옮겼다. 응답을 잃으면 같은 내용·같은 키로만 다시 보낸다(shared/README §3).
+  - 409 충돌 창의 「최신 불러오기」는 서버에서 Task를 실제로 읽은 뒤에만 편집을 닫는다. 읽기가 실패하면 창 안에 이유를 보인다(M3-02 7cddacd 공통 규칙).
   - 응답에 Task가 없으면(의존성 추가·삭제, 분할 요청) Task를 다시 읽는다.
 - 체크리스트 새 항목 입력도 편집 자리에 올린다. 이동은 확인을 묻고, 추가가 성공해도 그 사이 더 입력한 내용은 지우지 않는다(R5).
 - 로그인이 끊기면(401) 편집 중이던 초안을 탭 안에 보관하고, 다시 로그인하면 「복원 / 버리기」를 묻는다(공통 `useSessionDraft`).

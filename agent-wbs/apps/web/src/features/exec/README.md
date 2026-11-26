@@ -25,7 +25,7 @@
 | `/exec/TASK-0007` | 그 Task. Task 상세 「실행」 탭과 알림 링크가 이 주소를 연다(UAT-TASK-10 b) |
 | `/exec/TASK-0007?att=ATT-0007-2` | 그 Task의 그 시도 |
 
-- 배열 위치(몇 번째)가 아니라 `taskKey`·`attemptKey`로 고른다.
+- 배열 위치(몇 번째)가 아니라 `taskKey`·`attemptKey`로 고른다. M3 통합: `?att=`에 시도 id를 줘도 찾는다(대시보드·검증 화면은 id로 링크한다).
   - 왜: 목록이 새로 고쳐져 순서가 바뀌어도 같은 대상을 가리킨다.
 - 없는 시도 키가 주소에 있으면 고르지 않는다. 「ATT-… 시도를 찾을 수 없습니다」라고 알리고, 실행 중 또는 마지막 시도를 보인다(UAT-EMPTY-03, 리뷰 #4).
 - 없는 Task 키면 다른 Task를 열지 않고 「TASK-…를 찾을 수 없습니다」를 보인다. 첫 Task는 키 없는 `/exec`에서만 고른다(리뷰 #4).
@@ -75,7 +75,7 @@ owner Q-04(contracts §3.5)에 따라 원본과 다르게 동작한다.
   - 「기록 없음」으로 보이지 않는다. 왜: 실행 중인 Task를 「시도 없음」으로 보이면 새 개발 실행을 요청하게 된다.
   - 시도나 검증을 아직 모르면(로딩·실패) 단계와 다음 작업(버튼)을 계산하지 않는다.
   - Runner 상태를 모르면 「Runner 상태를 불러오지 못해 …」를 사유로 보인다. 요청은 서버가 판단한다.
-- 시도·검증·메시지·Evidence는 `nextCursor`가 없을 때까지 모든 쪽을 읽는다(`useExecData.ts`의 `readAll`).
+- 시도·검증·메시지·Evidence는 `nextCursor`가 없을 때까지 모든 쪽을 읽는다(`useExecData.ts`의 `readAll` → 공통 `shared/api/allPages.ts`의 `readAllPages`, M3 통합).
   - 왜: 서버 목록은 id(UUID) 순서라 최신 시도가 첫 쪽에 있다는 보장이 없다.
 - 검증은 시각(`at`) 순서로 다시 정렬한다(`sortVerifications`). 같은 시각이면 id 순서.
   - 왜: id 순서를 시간 순서로 보면 옛 FAIL을 최신으로 보고, 재작업 지시를 옛 시도에 연결한다.

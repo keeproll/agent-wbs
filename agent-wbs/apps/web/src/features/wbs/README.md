@@ -29,8 +29,7 @@ WBS(Work Breakdown Structure, 일을 Phase → Work Package → Task로 나눈 �
 | `WbsTable.tsx` | Tree Table + 가상 스크롤 |
 | `WbsGantt.tsx` | Gantt + 가상 스크롤 |
 | `TaskRail.tsx` | 260px 레일 |
-| `detail-slot.tsx` | 상세 자리(slot). M3-03 연결 지점(§5) |
-| `TaskDetailPane.tsx` | M3-02의 임시 상세(머리·요약만). M3-03 연결 뒤에는 쓰지 않는다 |
+| `detail-slot.tsx` | 상세 자리(slot). M3-03 `<TaskDetail>`을 그리는 어댑터(§5) |
 | `TaskWizard.tsx` | Task 생성 3단계 Wizard |
 | `cells.tsx` | 상태 표시·아이콘 같은 작은 조각 |
 | `wbs.css` | WBS 화면에만 필요한 추가 CSS(이유를 규칙마다 적음) |
@@ -68,24 +67,23 @@ WBS(Work Breakdown Structure, 일을 Phase → Work Package → Task로 나눈 �
   - 화면 쪽은 1,000행에서도 그리는 행이 19~20개라 빠르다(첫 행 약 0.3초, 가짜 API).
   - 서버 쪽은 1,000행에서 `listTasks`·`getSchedule`이 각각 7~9초 걸린다(2026-11-27 측정). 화면은 둘을 함께 부르므로 10초 제한을 넘겨 「불러오기 실패」가 된다. 서버 결함으로 보고했다.
 
-## 5. M3-03(Task 상세)과 연결하는 방법
+## 5. M3-03(Task 상세)과의 연결 — M3 통합에서 끝냄
 
-상세 영역은 `detail-slot.tsx` 한 파일로만 연결된다.
+상세 영역은 `detail-slot.tsx` 한 파일로만 연결된다. M3 통합에서 M3-02의 임시 상세(`TaskDetailPane.tsx`)를 지우고 M3-03의 `<TaskDetail>`을 놓았다.
 
-1. M3-03의 `features/task/TaskDetail.tsx`가 아래 props를 받는다.
-   - `taskKey`: 열 Task ID.
-   - `nav.pos`: 레일 순서 안의 위치(예: `7 / 12`).
-   - `nav.prev`·`nav.next`: 이전·다음 Task로 가는 함수. 끝이면 `null`(버튼 비활성).
-   - `nav.back`: 다른 Task 링크로 왔으면 `{ taskKey, go }`(「← TASK-xxxx로 돌아가기」), 아니면 `null`.
-   - `nav.outside`: 열린 Task가 지금 필터에 맞지 않으면 `true`(「목록 밖 (필터에 맞지 않음)」).
-   - `onOpenTask(taskKey)`: 상세 안의 Task 링크를 열 때 부른다. WBS 화면이 주소를 바꾸고 「돌아가기」 기록을 남긴다.
-2. 병합 때 `detail-slot.tsx`의 마지막 줄을 아래로 바꾼다.
-   ```ts
-   export { TaskDetail as WbsTaskDetail } from '../task/TaskDetail.tsx';
-   ```
-3. 라우터: WBS 메뉴 줄이 `/wbs`와 자식 `:taskKey`를 모두 `WbsPage`로 받는다(`src/app/router.tsx`).
-   - 따로 있는 `{ path: '/wbs/:taskKey', element: <PendingPage …/> }` 줄은 M3-02가 건드리지 않았다(coordinator 지시).
-   - WBS 메뉴 줄의 자식 경로가 먼저 맞으므로 그 줄은 쓰이지 않는다. 병합 때 지우거나 `WbsPage`로 바꾼다.
+- 두 화면의 props 모양이 조금 달라서 `detail-slot.tsx`가 바꿔 끼운다(어댑터).
+  - WBS 쪽 이름: `nav.pos`·`nav.prev`·`nav.next`·`nav.back`·`nav.outside`.
+  - Task 상세 쪽 이름: `nav.posLabel`·`nav.onPrev`·`nav.onNext`·`nav.backTo`·`nav.onBack`.
+  - 왜 어댑터인가: 두 기능의 승인된 props를 그대로 두고, 연결 규칙을 한 파일에 모으기 위해서다.
+- `nav.outside`가 `true`면 위치 자리에 「목록 밖 (필터에 맞지 않음)」을 보인다(원본 P L5100).
+- 상세 탭은 주소 `?tab=`에 둔다(M3-03 규칙). 레일·이전/다음으로 다른 Task로 옮겨도 탭은 그대로다.
+- `onOpenTask(taskKey, ref)`: 상세 안의 Task 링크를 열 때 부른다.
+  - `ref=true`(선행·후속 같은 참조 링크)면 「← TASK-xxxx로 돌아가기」 기록을 남긴다.
+  - `ref=false`면 남기지 않는다.
+- 라우터: WBS 메뉴 줄이 `/wbs`와 자식 `:taskKey`를 모두 `WbsPage`로 받는다(`src/app/router.tsx`). M3-03의 임시 주소 화면(`TaskDetailPage.tsx`)도 지웠다.
+- 다른 화면이 실은 필터·보기도 처음 그릴 때 읽는다. 예: 대시보드 「완료」 → `/wbs?status=done`, 「선행 차단」 → `/wbs?blocked=y`, 일정 카드 → `/wbs?view=gantt`.
+  - 이름은 `model.ts`의 `Filters` 필드 이름과 같다. 모르는 이름은 무시한다.
+  - 프로젝트 화면의 `?srcV=`(입력 버전별 출처 Task)는 아직 거르지 못한다. 목록 응답에 출처 입력 버전이 없어서다(서버 공백, M3 통합 보고).
 - 상세 데이터는 `useApiQuery('getTask', { params: { taskKey } })`로 읽는다. WBS 화면도 같은 query key로 읽으므로 요청은 한 번이다.
 
 ## 6. Task 생성 Wizard
@@ -104,15 +102,16 @@ WBS(Work Breakdown Structure, 일을 Phase → Work Package → Task로 나눈 �
   - 왜 나누나: 선행 연결이 실패했을 때 「Task 생성」을 다시 누르면 새 키로 Task가 또 만들어졌다(독립 리뷰 #1, 실제 DB에서 중복 확인).
   - 선행 연결이 실패하면 창에 「TASK-xxxx을(를) 이미 만들었습니다」를 보이고, 버튼이 「선행 연결」·「선행 없이 마치기」로 바뀐다. 「이전」은 막는다.
   - 지워진 선행 때문에 실패하면(404) 목록을 다시 읽는다. 고른 선행이 목록에서 빠져도 「목록에 없음」 줄로 남아 해제할 수 있다. 해제한 뒤 남은 선행을 다시 연결한다(재리뷰 F1).
-  - 충돌(409 `VERSION_CONFLICT`)은 공통 충돌 창으로 묻는다. 「다시 적용」은 서버의 최신 버전을 다시 읽어 선행을 붙이고 마친다. 「최신 불러오기」는 붙이지 않고 최신 상태만 다시 읽으며, 선택은 그대로 둔다. 다시 읽기가 실패하면 창을 닫지 않고 이유를 보인다(재리뷰 F2).
+  - 충돌(409 `VERSION_CONFLICT`)은 공통 충돌 창으로 묻는다. 「다시 적용」은 공통 `reapplyRequest`로 같은 선행 목록을 보낸다. 선행마다 서버의 최신 버전을 다시 읽어 붙이고 마친다. 「최신 불러오기」는 붙이지 않고 최신 상태만 다시 읽으며, 선택은 그대로 둔다. 다시 읽기가 실패하면 창을 닫지 않고 이유를 보인다(재리뷰 F2).
   - 만든 뒤에 창을 닫으면(×·Esc) 버릴 초안이 없으므로 묻지 않고 「선행 없이 마치기」와 같이 그 Task로 간다.
 - 편집 보호: 제목이나 목적을 쓴 동안 뒤로 가기·메뉴 이동은 공통 확인창(「편집 내용 버리기」), 새로고침·창 닫기는 브라우저 확인을 띄운다(`useEditGuard`). Task를 만든 뒤에는 풀린다.
 - 세션이 끊기면(401) 초안을 이 탭에 보관하고 다시 로그인하면 복원을 제안한다(`useSessionDraft`).
 - 선행 선택지는 표의 검색·상태 필터와 상관없이 프로젝트의 모든 Task다(필터가 없을 때와 같은 query).
 - 생성이 끝나면 `/wbs/<새 ID>?tab=spec`으로 이동하고 「…을(를) 생성했습니다. 작업 명세를 작성하세요.」를 안내한다.
-- **아직 서버에 보내지 못하는 값**: 예상 소요 시간·고정 시작일.
-  - 계약의 `createTask` 본문에 그 필드가 없다(보고함). 그래서 화면은 검사만 하고, 3단계에 「저장되지 않습니다」를 밝힌다.
-  - 왜 밝히나: 「실제로 구현하지 않은 동작은 완료된 기능처럼 표현하지 않는다」(G§9.7-3).
+- **예상 소요 시간·고정 시작일도 보낸다**(M3 통합).
+  - 서버(main 8990189)가 `createTask` 본문에서 `estimate: { estHours }`와 `fixStart`를 받게 됐다.
+  - 서버는 범위(×0.7~×1.6)·신뢰도 「하」를 붙여 팀장 임시 추정으로 저장한다. Planning이 나중에 다시 추정한다.
+  - 고정 시작일을 비우면 `fixStart: null`로 보낸다(자동 산정).
 
 ## 7. 시험
 

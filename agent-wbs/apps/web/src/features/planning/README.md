@@ -75,7 +75,8 @@ features/planning/
 
 ### 3.5 주소로 여는 CP·세션 찾기
 
-- 계약에 CP·Planning 세션 한 건을 읽는 API가 없다. 그래서 최근 목록(200건)에 없으면 cursor를 끝까지 넘겨 찾는다(`find.ts`의 `findInPages`).
+- CP 한 건은 단건 조회 `GET /api/proposals/:id`(`getProposal`, CP 키 또는 id)로 읽는다(M3 통합, `find.ts`의 `getProposalOrNull`). 없으면(404) null.
+- Planning 세션 한 건을 읽는 API는 아직 없다. 그래서 최근 목록(200건)에 없으면 cursor를 끝까지 넘겨 찾는다(`find.ts`의 `findInPages` → 공통 `shared/api/allPages.ts`).
   - `/change/<키>`(알림 링크), `/planning?session=<id>`(CP의 「출처」 링크), 세션에 연결된 CP(`proposalId`) 세 곳이 같은 방식이다.
 - 끝까지 봐도 없을 때만 「찾지 못했습니다」를 보인다. 다른 세션·CP로 바꿔 보이지 않는다.
   - 왜: 오래된 항목은 첫 쪽에 없을 수 있다(milestones M3-05). 다른 세션을 열면 팀장이 잘못된 근거로 조정·승인한다(독립 리뷰 ca3902d #1).
@@ -104,9 +105,9 @@ features/planning/
 | CP 상태 | 6가지 | `held`(보류) 추가, 주황(수정 요청과 같은 색) | 계약 ProposalStatus |
 | CP 초안 | 없음 | `draft`면 「제출 — 승인 요청」 | 팀장·Planning CP는 draft로 만들고 따로 submit(contracts §2.1) |
 | 문제(issues) 배너 | 「승인할 수 없습니다」, 승인 버튼 막음 | 「반영할 수 없는 문제가 있습니다」, 승인은 허용 | 계약: issues만 있으면 승인 허용, 반영 때 다시 판정해 held |
-| 「제외」 버튼(수정 요청 중) | 있음 | 자리만 둔다(비활성) + 「서버 기능이 준비되면 사용」 안내 | 계약에 CP 항목 제외 API가 없다. 서버 후속 작업이 경로를 만들면 이 버튼에 연결한다 |
+| 「제외」 버튼(수정 요청 중) | 있음 | 있음. `POST /api/proposals/:id/exclude`(M3 통합) | 충돌 「다시 적용」은 같은 내용의 항목을 최신 CP에서 다시 찾아 그 순번으로 보낸다 |
 | 작성 모달 미리보기 | 화면이 시뮬레이션 | 형식 검사는 화면, 완료 Task·순환 등은 서버 미리보기 | 판정은 서버. 문제가 있으면 제출하지 않고 초안만 남는다 |
-| 세션·CP의 표시 ID(PLN-001) | 세션 ID | 요청 시각 | 계약 Planning에 표시 키가 없다(보고) |
+| 세션·CP의 표시 ID(PLN-001) | 세션 ID | 서버 표시 키 `planningKey`(M3 통합) | 세션 목록·CP 출처 「Planning PLN-001」·CP 사유에 쓴다 |
 | 재조정 실행 버튼 | 「Planning Agent 재조정 실행 (Mock)」 | 「재조정 실행」 | 실제 `POST /api/replans/run` |
 | 세션이 없을 때 | 탭도 숨김 | 탭은 그대로, 세션 탭에 안내 | 재조정 이력은 세션과 무관하게 볼 수 있어야 한다(UAT-EMPTY-02) |
 | 판단 결과·D-27 영향 | 없음 | 판단 결과 표, 「선행 관계 제거」「차단 해제」「계속 차단 — 남은 선행」 | D-27·D-33~35 |

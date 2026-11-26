@@ -131,13 +131,14 @@
 
 ## 6. 이동 주소 규칙(`LINK`)
 
-다른 화면 작업과 맞춘 주소다. 받는 화면이 아직 이 주소를 읽지 않으면 그 작업에 알린다.
+주소는 공통 주소 표 `src/shared/links.ts`의 `LINK`로 만든다(M3 통합). `labels.ts`의 `LINK`는 그것을 그대로 내보낸다.
+M3 통합에서 받는 화면과 어긋난 주소를 고쳤다(작업 실행·Planning).
 
 - Task 상세: `/wbs/TASK-0007?tab=verif`(탭 이름은 M3-03: overview·checklist·verif·hist·msg)
 - WBS 필터: `/wbs?status=done`, `?status=active`, `?blocked=y`, `?type=Implementation`, `?domain=FE`, 보기 `?view=gantt`
-  - 이름은 M3-02 `Filters`의 필드 이름과 같다. M3-02 화면은 지금 필터를 주소에서 읽지 않는다(보고함).
-- 작업 실행: `/exec?task=TASK-0007&attempt=<시도 id>`(M3-06)
-- 변경 제안: `/change/<CP 키 또는 id>`, Planning: `/planning?id=<id>`(M3-05)
+  - 이름은 M3-02 `Filters`의 필드 이름과 같다. WBS 화면이 처음 그릴 때 주소에서 읽는다(M3 통합).
+- 작업 실행: `/exec/TASK-0007?att=<시도 id>`(M3-06 주소). 작업 실행 화면은 시도 키와 시도 id를 모두 받는다.
+- 변경 제안: `/change/<CP 키 또는 id>`, Planning: `/planning?session=<id>`(M3-05 주소)
 - 설정 탭: `/settings/runner`, `/settings/report`, `/settings/notify`
 
 ## 7. 시험

@@ -23,8 +23,10 @@ export function WbsPage() {
 }
 ```
 
-라우터(`src/app/router.tsx`)는 메뉴 12개를 `MENU.map`으로 한꺼번에 만든다. 그래서 각 작업은 feature 컴포넌트를 내보내기만 하고, 라우터 연결은 병합 때 coordinator가 한다(충돌을 줄이기 위해).
-연결할 때는 메뉴를 옮기면 화면을 새로 만들도록 `key`를 메뉴 이름으로 준다.
+라우터(`src/app/router.tsx`)는 메뉴 12개를 `MENU`로 한꺼번에 만든다. 메뉴 화면을 연결할 때는 메뉴 화면 표 `SCREENS`에 한 줄을 더한다(M3 통합).
+- 상세 주소(`/exec/:taskKey` 등)가 있으면 하위 주소 표 `DETAIL`에도 한 줄을 더한다. 같은 화면·같은 `key`로 그려진다.
+- 메뉴를 옮기면 화면을 새로 만들도록 `key`는 메뉴 이름이다. 왜: 같은 컴포넌트를 재사용하면 「재방문 갱신」(상단 진행 막대)이 일어나지 않는다.
+- 다른 화면으로 가는 링크 주소는 `shared/links.ts`의 `LINK`로 만든다. 주소를 손으로 쓰지 않는다(apps/web README §2-1).
 
 `MenuScreen`이 대신 해 주는 일:
 
@@ -55,6 +57,10 @@ const tasks = useApiQuery('listTasks', { params: { projectId }, query: { status 
 - 쪽으로 나뉜 목록(`{ items, nextCursor }`)을 모두 읽어야 하면 `useAllPages`(`api/allPages.ts`, M3-07이 더함)를 쓴다.
   - 예: `useAllPages('listVerifications', {}, { topics: ['verification'] })` → `data.items`가 모든 쪽을 이은 목록.
   - 왜: 건수·필터를 첫 쪽만 보고 정하면 서버와 어긋난다. 한 번에 200건씩, 같은 cursor가 다시 오면 멈춘다.
+- query 밖에서 쪽을 넘겨야 하면(충돌 창의 최신 읽기 등) 같은 파일의 `readAllPages`(모두 읽기)·`findInPages`(찾을 때까지 읽기)를 쓴다.
+  - 셋 다 반복 규칙 `eachPage` 하나를 쓴다. 쪽 크기는 `PAGE_LIMIT`(200), 질의는 `pageQuery(cursor)`.
+  - 왜 한 곳에: 통합 전에는 화면마다 반복 코드가 4벌 있었고 무한 반복 방지가 서로 달랐다(M3 통합에서 합침).
+  - 예: `findInPages((cursor) => client.call('getTaskMessages', { params: { taskKey }, query: pageQuery(cursor), signal }), (m) => m.id === id)`.
 - 파일(PDF·ZIP·Evidence 원본)을 내려받는 요청(`getReportPdf`·`exportProject`·`getEvidenceContent`)은 `call`로 부를 수 없다(타입에서 빠짐).
   - `<a href={apiUrl('getReportPdf', { params: { reportId }, query: { view } })} download>`처럼 주소만 만들어 브라우저가 내려받게 한다.
   - 계약의 필수 query는 필수 인수다. PDF는 `view`(`'int'` 내부용 / `'ext'` 외부용)를 화면이 고른 값으로 꼭 넘긴다. 빠지면 typecheck 오류이고 실행해도 예외가 난다.
@@ -102,7 +108,9 @@ const { save, busy, conflictModal } = useSave({
   - 409 `VERSION_CONFLICT`: 충돌 창. 「최신 불러오기(내 변경 버림)」와 「최신 위에 다시 적용」 중 고른다. Esc는 아무것도 하지 않고 창만 닫는다(입력 유지). 최신 불러오기·다시 적용은 끝까지 성공해야 창이 닫히고, 실패하면 창 안에 이유를 보인다(`onConflictReload`·`onConflictReapply`가 Promise를 돌려주면 기다린다).
     - 최신 불러오기 중에 창을 닫으면(Esc) 그 불러오기는 취소되고 결과를 화면에 적용하지 않는다. 그래서 콜백은 받은 `signal`을 요청에 넘기고, 취소됐으면 편집 닫기 같은 화면 변경을 하지 않는다. 왜: 닫은 뒤 새로 쓴 입력이 늦은 응답에 지워지지 않게 한다.
     - 다시 적용(저장) 중에는 창이 닫히지 않는다. 왜: 이미 보낸 저장은 서버에서 되돌릴 수 없다.
-    - **다시 적용은 `reapplyRequest`를 권장한다**(M3-04 재리뷰). 주면 다시 적용도 일반 저장과 같은 `run`·`onSuccess`·「결과 미확인 요청」 보관함을 쓴다.
+    - **다시 적용은 `reapplyRequest`로 만든다**(M3-04 재리뷰). 주면 다시 적용도 일반 저장과 같은 `run`·`onSuccess`·「결과 미확인 요청」 보관함을 쓴다.
+      - M3 통합에서 모든 화면의 다시 적용을 이 규칙으로 맞췄다. 예외는 프로젝트 초기 분석(`features/project/BootView.tsx`)이다. 회차가 바뀌면 자동으로 다시 보내지 않고 새 상태를 보여 팀장이 다시 누르게 한다(M3-04 승인 동작).
+      - `reapplyRequest`가 받은 `{ signal }`은 최신 읽기 요청에 넘긴다(M3-04 f542502). 다른 콜백과 같은 규칙이다.
       - 다시 적용의 응답을 잃으면 그 내용과 키를 보관한다. 다음 다시 적용, 오류 막대 「다시 시도」, 일반 저장은 **같은 내용·같은 키로만** 다시 보낸다.
       - 창을 Esc로 닫아도 보관은 남고 오류 막대로 알린다. 그 뒤 내용이 다른 저장은 보내지 않고 「이전 요청의 결과를 아직 모릅니다」를 안내한다.
       - 왜: `onConflictReapply`에서 `client.call`을 직접 부르면 키가 useSave 밖에서 만들어져, 창을 닫은 뒤 일반 저장이 새 키로 같은 일을 또 처리할 수 있다.
