@@ -227,26 +227,33 @@ export function blockedAgents(items: readonly Pick<ReadinessItem, 'key' | 'statu
   return (['Claude', 'Codex'] as const).filter((a) => out.has(a));
 }
 
-/** 바로 한 번, 이후 끝난 시점부터 intervalMs마다. 겹쳐 돌리지 않는다. */
+/**
+ * 바로 한 번, 이후 끝난 시점부터 intervalMs마다. 겹쳐 돌리지 않는다.
+ * `stop()`은 다음 실행을 취소하고, 이미 실행 중인 작업이 끝날 때까지 기다린다(M4 통합 교차 리뷰 P1-4).
+ * 왜: 종료 뒤에도 이전 실행의 보고·CLI 설치가 계속되면 같은 홈의 새 Runner와 겹칠 수 있다.
+ */
 export function scheduleDaily(
   task: () => Promise<void>,
   { intervalMs = 24 * 3600_000, onError = () => undefined }: { intervalMs?: number; onError?: (e: unknown) => void } = {},
-): { stop(): void } {
+): { stop(): Promise<void> } {
   let timer: NodeJS.Timeout | undefined;
   let stopped = false;
+  let running: Promise<void> | undefined;
   const loop = async () => {
+    if (stopped) return;
     try {
       await task();
     } catch (e) {
       onError(e);
     }
-    if (!stopped) timer = setTimeout(() => void loop(), intervalMs);
+    if (!stopped) timer = setTimeout(() => { running = loop(); }, intervalMs);
   };
-  timer = setTimeout(() => void loop(), 0);
+  timer = setTimeout(() => { running = loop(); }, 0);
   return {
-    stop() {
+    async stop() {
       stopped = true;
       clearTimeout(timer);
+      await running;
     },
   };
 }

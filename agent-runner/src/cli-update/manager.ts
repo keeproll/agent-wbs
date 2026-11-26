@@ -64,7 +64,7 @@ export class CliUpdater {
   }
 
   /** 시작·매일 준비 점검. 세션 보유 해제 직후에는 실행 계층이 applyPending도 호출한다. */
-  async start(onError: (error: unknown) => void): Promise<{ stop(): void }> {
+  async start(onError: (error: unknown) => void): Promise<{ stop(): Promise<void> }> {
     await this.recover();
     return scheduleDaily(async () => { await this.check(); await this.applyPending(); }, { onError });
   }

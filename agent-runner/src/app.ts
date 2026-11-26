@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import { setTimeout as sleep } from 'node:timers/promises';
 import type { ApiClient } from './api/client.ts';
 import type { Agent } from './api/generated/client.ts';
 import { Runner } from './api/runner.ts';
+import { authenticationFailed } from './api/outbox.ts';
 import { createResetCleanup, type ResetCleanupDeps } from './cleanup/reset.ts';
 import { CliUpdater, cliBinary, type CliRegistry } from './cli-update/manager.ts';
 import { cliAwareRun, cliEnvironment } from './cli-update/registry.ts';
@@ -77,8 +79,13 @@ export class RunnerApp {
   readonly #d: RunnerAppDeps;
   readonly #run: RunCommand;
   readonly #cpu = new CpuMeter();
-  #timers: { stop(): void }[] = [];
+  #timers: { stop(): Promise<void> }[] = [];
   #bootstrapped = false;
+  /** 종료가 시작되면 새 예약 작업을 등록하지 않는다(P1-4). */
+  #stopping = false;
+  /** 치명적 오류(인증 실패 등) 발생 시 앱 전체를 멈추는 내부 신호(P1-3). */
+  #halt: ((error: unknown) => void) | undefined;
+  #tokenSource: TokenSource | undefined;
 
   constructor(d: RunnerAppDeps) {
     this.#d = d;
@@ -125,12 +132,20 @@ export class RunnerApp {
         enqueueStatus: async (body) => { await this.runner.outbox.enqueue('reportGithubStatus', { epoch: d.state.snapshot.epoch, body }); },
       });
       const source: TokenSource = d.github.mode === 'token' ? connector.tokenSource() : ghTokenSource();
+      this.#tokenSource = source;
       const mode = d.github.mode;
+      const send = d.githubFetch ?? fetch;
+      // GitHub가 401(토큰 만료·폐기·교체)을 주면 캐시한 토큰을 버려 다음 요청이 새 봉인 값을 받게 한다(P1-5).
+      const githubFetch: typeof fetch = async (input, init) => {
+        const response = await send(input, init);
+        if (response.status === 401) source.invalidate();
+        return response;
+      };
       const client = createGitHubClient({
         repo: d.github.repo,
-        token: source.token,
+        token: () => source.token(),
         ...(d.github.baseUrl && { baseUrl: d.github.baseUrl }),
-        ...(d.githubFetch && { fetch: d.githubFetch }),
+        fetch: githubFetch,
         onPermissionDenied: async (event) => { await connector.reportPermissionDenied(event, client.permissions(), mode); },
       });
       this.github = { client, connector, mode };
@@ -215,6 +230,8 @@ export class RunnerApp {
   /** GitHub 연결 확인 → 권한 3상태 보고(토큰 방식이면 키 등록·봉인 조회 포함). */
   async checkGithub(): Promise<void> {
     if (!this.github) return;
+    // 연결 재확인은 새로 판단한다. 자격 증명이 바뀌었을 수 있으므로 캐시한 토큰을 버린다(P1-5).
+    this.#tokenSource?.invalidate();
     if (this.github.mode === 'token') await this.github.connector.register();
     const status = await this.github.client.checkConnection(this.github.mode);
     await this.github.connector.reportConnection(status);
@@ -230,14 +247,23 @@ export class RunnerApp {
     await this.updater.recover();
     await this.checkReadiness();
     await this.reportModels();
-    await this.checkGithub().catch((error: unknown) => { this.#d.warn(`GitHub 연결 확인 실패: ${message(error)}`); });
+    await this.checkGithub().catch((error: unknown) => {
+      // 키 등록·봉인 조회의 WBS 인증 실패는 Runner 토큰 문제이므로 위로 올려 앱을 멈춘다(P1-3).
+      if (authenticationFailed(error)) throw error;
+      this.#d.warn(`GitHub 연결 확인 실패: ${message(error)}`);
+    });
     await this.runner.outbox.flush();
     this.#bootstrapped = true;
   }
 
-  /** 매일 점검(준비 점검 → CLI 최신 확인·유휴 적용 → 모델)과 주기 보고를 건다. */
+  /** 매일 점검(준비 점검 → CLI 최신 확인·유휴 적용 → 모델)과 주기 보고를 건다. 종료가 시작된 뒤에는 등록하지 않는다. */
   startSchedules(): void {
-    const onError = (what: string) => (error: unknown) => { this.#d.warn(`${what}: ${message(error)}`); };
+    if (this.#stopping) return;
+    const onError = (what: string) => (error: unknown) => {
+      // WBS 인증 실패(401/403)는 일반 실패가 아니다. Runner 토큰이 폐기된 것이므로 앱 전체를 멈춘다(contracts §1.1 표).
+      if (authenticationFailed(error)) { this.#halt?.(error); return; }
+      this.#d.warn(`${what}: ${message(error)}`);
+    };
     this.#timers.push(scheduleDaily(async () => {
       await this.checkReadiness();
       if (this.#d.cliUpdates !== false) {
@@ -250,24 +276,58 @@ export class RunnerApp {
     this.#timers.push(scheduleDaily(() => this.reporter.reportUsage(this.usage), { intervalMs: 60_000, onError: onError('사용량 보고') }));
   }
 
-  /** Runner 반복(heartbeat·poll)과 함께, 동기화가 끝나면 시작 보고와 주기 작업을 돈다. */
+  /**
+   * Runner 반복(heartbeat·poll)과 함께, 동기화가 끝나면 시작 보고와 주기 작업을 돈다.
+   *
+   * 끝나는 조건은 셋이다: 외부 종료 신호, 통신 반복의 종료·치명적 오류, 시작 보고·예약 작업의 WBS 인증 실패.
+   * 어느 경우든 같은 순서로 정리한다.
+   * 1. 종료 표시 → 새 예약 등록 금지.
+   * 2. 통신 반복과 시작 보고 반복이 끝나기를 기다린다.
+   * 3. 예약 작업을 멈추고, 이미 실행 중인 작업이 끝나기를 기다린다.
+   * 4. 치명적 오류가 있었으면 그 오류를 던진다(main이 종료 코드 1로 끝낸다).
+   * 왜: 이 순서를 지켜야 main이 `runner.stop()`·`State.close()`(홈 잠금 해제)를 한 뒤에는 이전 실행의 작업이 남지 않는다.
+   */
   async run(signal: AbortSignal): Promise<void> {
     await this.init();
-    const after = (async () => {
-      while (!signal.aborted && !this.#bootstrapped) {
+    const internal = new AbortController();
+    let fatal: { error: unknown } | undefined;
+    const halt = (error?: unknown) => {
+      if (error !== undefined && !fatal) fatal = { error };
+      this.#stopping = true;
+      internal.abort();
+    };
+    this.#halt = halt;
+    const onAbort = () => halt();
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (signal.aborted) halt();
+    const communication = this.runner.run(internal.signal).then(() => halt(), (error: unknown) => halt(error ?? new Error('Runner 통신 반복 오류')));
+    const startup = (async () => {
+      while (!internal.signal.aborted && !this.#bootstrapped) {
         if (this.runner.ready) {
-          try { await this.bootstrap(); this.startSchedules(); }
-          catch (error) { this.#d.warn(`시작 보고 실패: ${message(error)}`); }
+          try {
+            await this.bootstrap();
+            if (!internal.signal.aborted) this.startSchedules();
+          } catch (error) {
+            if (authenticationFailed(error)) { halt(error); return; }
+            this.#d.warn(`시작 보고 실패: ${message(error)}`);
+          }
         }
-        if (!this.#bootstrapped) await new Promise((resolve) => setTimeout(resolve, 1000));
+        if (this.#bootstrapped || internal.signal.aborted) break;
+        await sleep(1000, undefined, { signal: internal.signal }).catch(() => undefined);
       }
     })();
-    try { await this.runner.run(signal); }
-    finally {
-      for (const timer of this.#timers) timer.stop();
+    try {
+      await Promise.all([communication, startup]);
+    } finally {
+      this.#stopping = true;
+      internal.abort();
+      const timers = this.#timers;
       this.#timers = [];
-      await after.catch(() => undefined);
+      await Promise.allSettled(timers.map((timer) => timer.stop()));
+      signal.removeEventListener('abort', onAbort);
+      this.#halt = undefined;
     }
+    if (fatal) throw fatal.error;
   }
 }
 

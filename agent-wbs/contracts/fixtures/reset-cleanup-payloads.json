@@ -1,0 +1,131 @@
+{
+  "noBase": {
+    "kind": "reset-cleanup",
+    "payload": {
+      "holds": [
+        {
+          "id": "<uuid:id>",
+          "job": "<uuid:job>",
+          "pgid": 4242,
+          "task": null,
+          "agent": "Codex",
+          "epoch": 1,
+          "fence": 1,
+          "heavy": false,
+          "slots": 1,
+          "cgroup": null,
+          "attempt": null,
+          "boot_id": "boot-a",
+          "host_id": "host-a",
+          "closed_at": null,
+          "created_at": "<timestamp>",
+          "lock_state": "held",
+          "project_id": "<uuid:project_id>",
+          "slot_state": "active",
+          "updated_at": "<timestamp>",
+          "handed_to_job": null,
+          "lock_from_job": null,
+          "release_proof": null,
+          "conflict_group": "g1"
+        },
+        {
+          "id": "<uuid:id>",
+          "job": "<uuid:job>",
+          "pgid": null,
+          "task": null,
+          "agent": "Codex",
+          "epoch": 1,
+          "fence": 1,
+          "heavy": false,
+          "slots": 1,
+          "cgroup": null,
+          "attempt": null,
+          "boot_id": "boot-a",
+          "host_id": "host-a",
+          "closed_at": null,
+          "created_at": "<timestamp>",
+          "lock_state": "none",
+          "project_id": "<uuid:project_id>",
+          "slot_state": "reserved",
+          "updated_at": "<timestamp>",
+          "handed_to_job": null,
+          "lock_from_job": null,
+          "release_proof": null,
+          "conflict_group": null
+        }
+      ],
+      "epochPath": "1/",
+      "generation": null,
+      "unparsedPrs": []
+    }
+  },
+  "withBase": {
+    "kind": "reset-cleanup",
+    "payload": {
+      "prs": [
+        7
+      ],
+      "holds": [
+        {
+          "id": "<uuid:id>",
+          "job": "<uuid:job>",
+          "pgid": 4242,
+          "task": null,
+          "agent": "Codex",
+          "epoch": 1,
+          "fence": 1,
+          "heavy": false,
+          "slots": 1,
+          "cgroup": null,
+          "attempt": null,
+          "boot_id": "boot-a",
+          "host_id": "host-a",
+          "closed_at": null,
+          "created_at": "<timestamp>",
+          "lock_state": "held",
+          "project_id": "<uuid:project_id>",
+          "slot_state": "active",
+          "updated_at": "<timestamp>",
+          "handed_to_job": null,
+          "lock_from_job": null,
+          "release_proof": null,
+          "conflict_group": "g1"
+        },
+        {
+          "id": "<uuid:id>",
+          "job": "<uuid:job>",
+          "pgid": null,
+          "task": null,
+          "agent": "Codex",
+          "epoch": 1,
+          "fence": 1,
+          "heavy": false,
+          "slots": 1,
+          "cgroup": null,
+          "attempt": null,
+          "boot_id": "boot-a",
+          "host_id": "host-a",
+          "closed_at": null,
+          "created_at": "<timestamp>",
+          "lock_state": "none",
+          "project_id": "<uuid:project_id>",
+          "slot_state": "reserved",
+          "updated_at": "<timestamp>",
+          "handed_to_job": null,
+          "lock_from_job": null,
+          "release_proof": null,
+          "conflict_group": null
+        }
+      ],
+      "repoUrl": "https://github.com/o/r",
+      "branches": [
+        "agent/T1-h1",
+        "agent/T2-h1"
+      ],
+      "epochPath": "1/",
+      "baseCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "generation": null,
+      "unparsedPrs": []
+    }
+  }
+}
