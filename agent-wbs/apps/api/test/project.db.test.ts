@@ -8,6 +8,7 @@ import { issueLoginLink, issueRunnerToken } from '../src/platform/credentials.ts
 import { installProjectRunner } from '../src/project/runner-routes.ts';
 import { installRunner } from '../src/runner/routes.ts';
 import { watchRunner } from '../src/runner/watch.ts';
+import { GitRepo } from './git-observe.ts';
 import { draft, met, task } from './project-fixture.ts';
 
 /*
@@ -64,7 +65,7 @@ async function chainReport(commits: object[], files: { commitSha: string; path: 
     if (!before && !after) return [];
     const oldBlob = before ? runnerView.blobs.get(path) ?? fakeSha(`${path}@init`) : null;
     const newBlob = after ? fakeSha(`${path}@${head}`) : null;
-    return [{ status: !before ? 'A' : !after ? 'D' : 'M', path, oldBlob, newBlob, added: c.added, deleted: c.deleted }];
+    return [{ status: !before ? 'A' : !after ? 'D' : 'M', path, oldBlob, newBlob, oldMode: before ? '100644' : null, newMode: after ? '100644' : null, added: c.added, deleted: c.deleted }];
   });
   const treeHash = options.treeHash ?? (changes.length ? fakeSha(`tree@${head}`) : runnerView.tree ?? fakeSha(`tree@${base}`));
   const response = await runner('/api/runner/input-changes', { base, head, baseIsAncestor: options.baseIsAncestor ?? true, treeHash, changes, commits });
@@ -120,13 +121,13 @@ async function state() {
 async function count(sql: string) { return Number((await ownerPool.query<{ n: string }>(sql)).rows[0]?.n ?? 0); }
 const step = (s: Awaited<ReturnType<typeof state>>, key: string) => s.bootstrap.steps.find((item) => item.key === key)?.status;
 
-async function checkedRepo(structure: object = STRUCTURE, url = REPO): Promise<string> {
+async function checkedRepo(structure: object = STRUCTURE, url = REPO, commit = SHA1): Promise<string> {
   const created = await lead('POST', '/api/project/repo-checks', { url });
   expect(created.statusCode, created.body).toBe(202);
   const { id } = created.json<{ id: string }>();
   const job = await lease('repo_check');
   expect(job.payload).toMatchObject({ url, repoCheckId: id });
-  const reported = await runner(`/api/runner/repo-checks/${id}/result`, { fence: job.fence, access: true, private: true, commit: SHA1, structure });
+  const reported = await runner(`/api/runner/repo-checks/${id}/result`, { fence: job.fence, access: true, private: true, commit, structure });
   expect(reported.statusCode, reported.body).toBe(204);
   await finishJob(job.id);
   return id;
@@ -528,7 +529,7 @@ describe('project 입력 자료 변경·분석·분석 안 함(G§4.2 ②)', () 
     expect(again.statusCode).toBe(409);
     expect(errorOf(again)).toMatchObject({ code: 'VERSION_CONFLICT', details: { current: { base: SHA2 } } });
     // 상태와 blob이 맞지 않는 차이(수정인데 전후 blob이 같음)는 계산이 잘못된 보고다.
-    const broken = await chainReport(pushed([SHA3]), [], { changes: [{ status: 'M', path: 'prototype/uiux/a.html', oldBlob: fakeSha('a'), newBlob: fakeSha('a'), added: 0, deleted: 0 }] });
+    const broken = await chainReport(pushed([SHA3]), [], { changes: [{ status: 'M', path: 'prototype/uiux/a.html', oldBlob: fakeSha('a'), newBlob: fakeSha('a'), oldMode: '100644', newMode: '100644', added: 0, deleted: 0 }] });
     expect(broken.statusCode).toBe(400);
     const s = await state();
     expect(s.changeCommits).toEqual([expect.objectContaining({ sha: SHA2, state: 'pending', author: '팀장', message: '입력 수정 0', files: [expect.objectContaining({ path: 'prototype/docs/guide.md' }), expect.objectContaining({ path: 'prototype/docs/new.md' })] })]);
@@ -604,10 +605,10 @@ function AT_NOW() { return new Date().toISOString(); }
 
 describe('project 리뷰 지적 회귀(M2-03-REVIEW 1~8)', () => {
   /** 초기화 뒤 새 프로젝트를 등록하고 초안 승인 대기까지 진행한다. */
-  async function fresh(d = draft()) {
+  async function fresh(d = draft(), registrationCommit = SHA1) {
     await resetDb();
     forgetRunnerView();
-    const check = await checkedRepo();
+    const check = await checkedRepo(STRUCTURE, REPO, registrationCommit);
     expect((await lead('POST', '/api/project', registration(check, { constraints: [] }))).statusCode).toBe(201);
     const first = await lease('bootstrap');
     for (const key of ['check', 'unzip', 'repo', 'codex', 'claude', 'cross']) await progress(first.id, first.fence, key);
@@ -744,7 +745,7 @@ describe('project 리뷰 지적 회귀(M2-03-REVIEW 1~8)', () => {
     expect((await lead('POST', '/api/project/bootstrap/approve', { revision: s.bootstrap.revision })).statusCode).toBe(200);
     const doc = 'prototype/docs/deleted-by-merge.md';
     // rev-list --first-parent 결과는 비어 있지만 git diff --raw는 삭제를 보여 준다.
-    const result = await chainReport([], [], { head: SHA4, changes: [{ status: 'D', path: doc, oldBlob: fakeSha('d'), newBlob: null, added: 0, deleted: 5 }], treeHash: fakeSha('tree-after-delete') });
+    const result = await chainReport([], [], { head: SHA4, changes: [{ status: 'D', path: doc, oldBlob: fakeSha('d'), newBlob: null, oldMode: '100644', newMode: null, added: 0, deleted: 5 }], treeHash: fakeSha('tree-after-delete') });
     expect(result.statusCode, result.body).toBe(200);
     expect(result.json()).toEqual({ head: SHA4, recorded: true, historyRewritten: false });
     const before = await state();
@@ -787,12 +788,12 @@ describe('project 리뷰 지적 회귀(M2-03-REVIEW 1~8)', () => {
   test('D3. 모순된 관측(경로 중복·빈 차이인데 트리 변경·지난 보고와 다른 이전 blob)은 400이고 아무것도 바꾸지 않는다', async () => {
     await fresh();
     const doc = 'prototype/docs/b.md';
-    const twice = await chainReport([], [], { head: SHA2, changes: [{ status: 'A', path: doc, oldBlob: null, newBlob: fakeSha('1'), added: 1, deleted: 0 }, { status: 'M', path: doc, oldBlob: fakeSha('0'), newBlob: fakeSha('1'), added: 1, deleted: 1 }] });
+    const twice = await chainReport([], [], { head: SHA2, changes: [{ status: 'A', path: doc, oldBlob: null, newBlob: fakeSha('1'), oldMode: null, newMode: '100644', added: 1, deleted: 0 }, { status: 'M', path: doc, oldBlob: fakeSha('0'), newBlob: fakeSha('1'), oldMode: '100644', newMode: '100644', added: 1, deleted: 1 }] });
     expect(errorOf(twice).errors).toEqual([expect.objectContaining({ rule: 'unique' })]);
     expect((await chainReport([commit(SHA2, AT_NOW())], [file(SHA2, doc)])).statusCode).toBe(200);
     const tree = await chainReport([], [], { head: SHA3, treeHash: fakeSha('other-tree') });
     expect(errorOf(tree).errors).toEqual([expect.objectContaining({ rule: 'tree' })]);
-    const blob = await chainReport([], [], { head: SHA3, changes: [{ status: 'M', path: doc, oldBlob: fakeSha('not-the-last'), newBlob: fakeSha('2'), added: 1, deleted: 1 }] });
+    const blob = await chainReport([], [], { head: SHA3, changes: [{ status: 'M', path: doc, oldBlob: fakeSha('not-the-last'), newBlob: fakeSha('2'), oldMode: '100644', newMode: '100644', added: 1, deleted: 1 }] });
     expect(errorOf(blob).errors).toEqual([expect.objectContaining({ rule: 'blob' })]);
     const s = await state();
     expect([s.inputHead, s.changeCommits.map((c) => c.sha)]).toEqual([SHA2, [SHA2]]);
@@ -823,6 +824,47 @@ describe('project 리뷰 지적 회귀(M2-03-REVIEW 1~8)', () => {
     expect(result.statusCode, result.body).toBe(201);
     // 대체된 옛 job은 더 이상 현재 실행이 아니다.
     expect(errorOf(await progressOf(current, 'draft', 'fail')).code).not.toBe(undefined);
+  });
+
+  test('N3. 실제 git: 실행 권한만 바뀐 M(blob 같음)을 받아 head를 옮기고, 이어지는 문서·심볼릭 링크·빈 파일·종류 변경을 분석한다', async () => {
+    const repo = new GitRepo();
+    try {
+      repo.sh('mkdir -p prototype/docs prototype/uiux && echo guide > prototype/docs/guide.md && echo "run()" > prototype/uiux/mode.js && echo "<p>" > prototype/uiux/index.html && chmod 644 prototype/uiux/mode.js');
+      const a = repo.commit('A: 등록 커밋');
+      const { s } = await fresh(draft(), a);
+      expect((await lead('POST', '/api/project/bootstrap/approve', { revision: s.bootstrap.revision })).statusCode).toBe(200);
+
+      // B: 실행 권한만 바꿈(100644 → 100755). git은 같은 blob의 M을 낸다.
+      repo.sh('chmod 755 prototype/uiux/mode.js');
+      const b = repo.commit('B: chmod +x');
+      const modeOnly = repo.observe(a, b);
+      expect(modeOnly.changes).toEqual([expect.objectContaining({ status: 'M', path: 'prototype/uiux/mode.js', oldMode: '100644', newMode: '100755' })]);
+      expect(modeOnly.changes[0]?.oldBlob).toBe(modeOnly.changes[0]?.newBlob);
+      const first = await runner('/api/runner/input-changes', modeOnly);
+      expect(first.statusCode, first.body).toBe(200);
+      expect(first.json()).toEqual({ head: b, recorded: false, historyRewritten: false });
+      const afterMode = await state();
+      expect([afterMode.inputHead, afterMode.changeCommits]).toEqual([b, []]);
+      expect(errorOf(await lead('POST', '/api/project/inputs', { updatedAt: afterMode.updatedAt, commit: b, commits: [b] })).code).not.toBe(undefined);
+
+      // C: 새 문서, 빈 파일, 심볼릭 링크, index.html을 링크로 바꿈(T).
+      repo.sh('echo next > prototype/docs/next.md && : > prototype/docs/empty.md && ln -s ../docs/guide.md prototype/uiux/guide-link && rm prototype/uiux/index.html && ln -s ../docs/next.md prototype/uiux/index.html');
+      const c = repo.commit('C: 문서·빈 파일·링크·종류 변경');
+      const next = repo.observe(b, c);
+      expect(next.changes.map((x) => `${x.status}:${x.path}`).sort()).toEqual(
+        ['A:prototype/docs/empty.md', 'A:prototype/docs/next.md', 'A:prototype/uiux/guide-link', 'T:prototype/uiux/index.html']);
+      const second = await runner('/api/runner/input-changes', next);
+      expect(second.statusCode, second.body).toBe(200);
+      expect(second.json()).toEqual({ head: c, recorded: true, historyRewritten: false });
+      const before = await state();
+      expect(before.changeCommits.map((x) => x.sha)).toEqual([c]);
+      const analyzed = await lead('POST', '/api/project/inputs', { updatedAt: before.updatedAt, commit: c, commits: [c] });
+      expect(analyzed.statusCode, analyzed.body).toBe(202);
+      // 실행 권한 변경(mode.js)은 내용 변경이 아니라 순 변경에 없다.
+      expect((await state()).inputs.at(-1)).toMatchObject({ commit: c, changes: [
+        { path: 'prototype/docs/empty.md', change: 'added' }, { path: 'prototype/docs/next.md', change: 'added' },
+        { path: 'prototype/uiux/guide-link', change: 'added' }, { path: 'prototype/uiux/index.html', change: 'modified' }] });
+    } finally { repo.dispose(); }
   });
 
   test('8. 선언하지 않은 필드 오류는 그 필드 경로를 알려 준다', async () => {

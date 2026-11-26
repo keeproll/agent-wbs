@@ -446,7 +446,10 @@ async function resume(db: Db, job: PlanningJob, epoch: number): Promise<string> 
 /* ---------------- ② 입력 자료 변경 ---------------- */
 
 interface PushedCommit { sha: string; at: string; author: string; message: string }
-interface InputDiff { status: 'A' | 'M' | 'D' | 'R'; path: string; from?: string; oldBlob: string | null; newBlob: string | null; added: number; deleted: number }
+interface InputDiff {
+  status: 'A' | 'M' | 'D' | 'R' | 'T'; path: string; from?: string;
+  oldBlob: string | null; newBlob: string | null; oldMode: string | null; newMode: string | null; added: number; deleted: number;
+}
 interface InputBody { base: string; head: string; baseIsAncestor: boolean; treeHash: string; changes: InputDiff[]; commits: PushedCommit[] }
 /** 저장하는 보고 하나(input_change_commits.files jsonb, sha = 보고의 head) */
 interface StoredReport { seq: number; base: string; head: string; tree: string; changes: InputDiff[]; commits: PushedCommit[]; receivedAt: string }
@@ -479,9 +482,10 @@ export async function reportInputChanges(db: Db, body: InputBody): Promise<{ hea
     const r = result.report;
     const stored: StoredReport = { seq: r.seq, base: r.base, head: r.head, tree: r.tree, changes: body.changes, commits: body.commits, receivedAt: new Date().toISOString() };
     await db.query('insert into input_change_commits(project_id,sha,files,state) values($1,$2,$3::jsonb,$4)', [project.id, r.head, JSON.stringify(stored), r.state]);
-    if (r.changes.length) await changeEvent(db, project.id, { kind: 'input_changes' });
+    if (r.state === 'pending') await changeEvent(db, project.id, { kind: 'input_changes' });
   }
-  return { head: result.head, recorded: Boolean(result.report?.changes.length), historyRewritten: false };
+  // 팀장 확인 항목은 분석이 볼 내용이 바뀐 보고에만 생긴다(실행 권한만 바뀐 보고는 head·트리만 옮김).
+  return { head: result.head, recorded: result.report?.state === 'pending', historyRewritten: false };
 }
 
 /** DB의 입력 버전·입력 보고를 원장으로 읽는다. lock이면 보고 행을 잠근다. */

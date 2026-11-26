@@ -19,7 +19,14 @@
 
 export type CommitState = 'pending' | 'skipped' | 'analyzed';
 export type Kind = 'added' | 'modified' | 'deleted';
-export interface RawChange { status: 'A' | 'M' | 'D' | 'R'; path: string; from?: string | undefined; oldBlob: string | null; newBlob: string | null }
+/**
+ * Git raw diff 한 줄. M은 내용이 그대로여도 파일 모드(실행 권한)만 바뀌면 생기므로 oldBlob과 newBlob이 같을 수 있다(FIX5 리뷰 N3).
+ * T는 파일 종류 변경(일반 파일 ↔ 심볼릭 링크). mode는 git 파일 모드(100644·100755·120000 등), 없으면 null.
+ */
+export interface RawChange {
+  status: 'A' | 'M' | 'D' | 'R' | 'T'; path: string; from?: string | undefined;
+  oldBlob: string | null; newBlob: string | null; oldMode: string | null; newMode: string | null;
+}
 /** 받은 보고 하나. changes가 비면 head만 옮긴 보고다(팀장 확인 항목 아님). */
 export interface LedgerReport { seq: number; base: string; head: string; tree: string; changes: readonly RawChange[]; state: CommitState; version: number | null }
 export interface LedgerVersion { v: number; sha: string; tree: string | null }
@@ -39,27 +46,39 @@ export const chainHead = (ledger: Ledger): string => lastReport(ledger)?.head ??
 export const headTree = (ledger: Ledger): string | null => lastReport(ledger)?.tree ?? ledger.versions.at(-1)?.tree ?? null;
 const unversioned = (ledger: Ledger) => ledger.reports.filter((r) => r.version === null).sort((a, b) => a.seq - b.seq);
 
-/** 보고 차이들을 이어 붙인 경로별 blob 변화(버전 시점 blob → 지금 blob). null은 「없음」. */
-function compose(reports: readonly LedgerReport[]): Map<string, { from: string | null; to: string | null }> {
-  const state = new Map<string, { from: string | null; to: string | null }>();
-  const touch = (path: string, oldBlob: string | null, newBlob: string | null) => {
+/** 경로 하나의 git 항목(모드 + blob). null은 「없음」. */
+interface Entry { mode: string; blob: string }
+const entryOf = (mode: string | null, blob: string | null): Entry | null => (mode === null || blob === null ? null : { mode, blob });
+const sameEntry = (a: Entry | null, b: Entry | null) => a?.mode === b?.mode && a?.blob === b?.blob;
+const isLink = (e: Entry) => e.mode === '120000';
+/** 분석이 보는 「내용」: 존재·blob·파일과 링크의 구분. 실행 권한(100644↔100755)만의 차이는 내용이 아니다. */
+const sameSubstance = (a: Entry | null, b: Entry | null) => (a === null || b === null ? a === b : a.blob === b.blob && isLink(a) === isLink(b));
+
+/** 보고 차이들을 이어 붙인 경로별 항목 변화(버전 시점 → 지금). */
+function compose(reports: readonly LedgerReport[]): Map<string, { from: Entry | null; to: Entry | null }> {
+  const state = new Map<string, { from: Entry | null; to: Entry | null }>();
+  const touch = (path: string, before: Entry | null, after: Entry | null) => {
     const prev = state.get(path);
-    state.set(path, { from: prev ? prev.from : oldBlob, to: newBlob });
+    state.set(path, { from: prev ? prev.from : before, to: after });
   };
   for (const report of reports) {
     for (const c of report.changes) {
-      if (c.status === 'R' && c.from) { touch(c.from, c.oldBlob, null); touch(c.path, null, c.newBlob); }
-      else touch(c.path, c.oldBlob, c.newBlob);
+      const before = entryOf(c.oldMode, c.oldBlob);
+      const after = entryOf(c.newMode, c.newBlob);
+      if (c.status === 'R' && c.from) { touch(c.from, before, null); touch(c.path, null, after); }
+      else touch(c.path, before, after);
     }
   }
   return state;
 }
+/** 이 차이 줄이 분석이 볼 내용을 바꾸는가(실행 권한만 바꾼 M은 아니다) */
+export const substantive = (c: RawChange) => c.status === 'R' || !sameSubstance(entryOf(c.oldMode, c.oldBlob), entryOf(c.newMode, c.newBlob));
 
 /** 순 변경(마지막 입력 버전 → 지금 head). 되돌아간 경로는 빠진다. */
 export function netChanges(ledger: Ledger): Map<string, Kind> {
   const out = new Map<string, Kind>();
   for (const [path, { from, to }] of compose(unversioned(ledger))) {
-    if (from === to) continue;
+    if (sameSubstance(from, to)) continue;
     out.set(path, from === null ? 'added' : to === null ? 'deleted' : 'modified');
   }
   return new Map([...out].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
@@ -74,19 +93,26 @@ function checkChanges(ledger: Ledger, o: Observation): LedgerError | null {
       if (seen.has(p)) return err('unique', `${p}가 차이에 두 번 나옵니다.`);
       seen.add(p);
     }
-    const ok = c.status === 'A' ? c.oldBlob === null && c.newBlob !== null
-      : c.status === 'D' ? c.oldBlob !== null && c.newBlob === null
-        : c.status === 'M' ? c.oldBlob !== null && c.newBlob !== null && c.oldBlob !== c.newBlob
-          : c.oldBlob !== null && c.newBlob !== null && Boolean(c.from) && c.from !== c.path;
-    if (!ok) return err('status', `${c.path}의 상태(${c.status})와 blob이 맞지 않습니다.`);
+    const before = entryOf(c.oldMode, c.oldBlob);
+    const after = entryOf(c.newMode, c.newBlob);
+    // blob과 mode는 함께 있거나 함께 없어야 한다.
+    const paired = (c.oldBlob === null) === (c.oldMode === null) && (c.newBlob === null) === (c.newMode === null);
+    const ok = paired && (c.status === 'A' ? before === null && after !== null
+      : c.status === 'D' ? before !== null && after === null
+        // M: 같은 종류(파일/링크)이고 내용 또는 모드가 바뀜. 실행 권한만 바뀌면 blob이 같다.
+        : c.status === 'M' ? before !== null && after !== null && isLink(before) === isLink(after) && !sameEntry(before, after)
+          : c.status === 'T' ? before !== null && after !== null && isLink(before) !== isLink(after)
+            : before !== null && after !== null && Boolean(c.from) && c.from !== c.path);
+    if (!ok) return err('status', `${c.path}의 상태(${c.status})와 blob·모드가 맞지 않습니다.`);
   }
   // 이번 차이의 「이전 blob」은 지금까지 이어 붙인 head 시점 blob과 같아야 한다(모르는 경로는 검사하지 않음).
   const now = compose(unversioned(ledger));
   for (const c of o.changes) {
-    const pairs: [string, string | null][] = c.status === 'R' && c.from ? [[c.from, c.oldBlob], [c.path, null]] : [[c.path, c.oldBlob]];
-    for (const [path, blob] of pairs) {
+    const before = entryOf(c.oldMode, c.oldBlob);
+    const pairs: [string, Entry | null][] = c.status === 'R' && c.from ? [[c.from, before], [c.path, null]] : [[c.path, before]];
+    for (const [path, entry] of pairs) {
       const known = now.get(path);
-      if (known && known.to !== blob) return err('blob', `${path}의 이전 내용이 지난 보고와 다릅니다.`);
+      if (known && !sameEntry(known.to, entry)) return err('blob', `${path}의 이전 내용·모드가 지난 보고와 다릅니다.`);
     }
   }
   return null;
@@ -111,7 +137,8 @@ export function receive(ledger: Ledger, o: Observation): ReceiveResult {
   }
   const report: LedgerReport = {
     seq: (lastReport(ledger)?.seq ?? 0) + 1, base: o.base, head: o.head, tree: o.treeHash, changes: o.changes,
-    state: o.changes.length ? 'pending' : 'analyzed', version: null,
+    // 팀장 확인 항목은 분석이 볼 내용이 바뀐 보고만 만든다. 실행 권한만 바뀐 보고는 head·트리만 옮긴다.
+    state: o.changes.some(substantive) ? 'pending' : 'analyzed', version: null,
   };
   return { kind: 'ok', ledger: { versions: ledger.versions, reports: [...ledger.reports, report] }, head: o.head, report };
 }
@@ -120,8 +147,8 @@ export function skip(ledger: Ledger, heads: readonly string[]): Ledger {
   return { versions: ledger.versions, reports: ledger.reports.map((r) => (r.state === 'pending' && heads.includes(r.head) ? { ...r, state: 'skipped' } : r)) };
 }
 
-/** 팀장이 확인할 입력 변경 항목(차이가 있는 보고 중 아직 버전에 들어가지 않은 것) */
-export const openReports = (ledger: Ledger) => unversioned(ledger).filter((r) => r.changes.length > 0);
+/** 팀장이 확인할 입력 변경 항목(내용이 바뀐 보고 중 아직 버전에 들어가지 않은 것) */
+export const openReports = (ledger: Ledger) => unversioned(ledger).filter((r) => r.changes.some(substantive));
 /** 「이 버전으로 분석」에 쓸 커밋: 순 변경이 있을 때의 head */
 export const analyzable = (ledger: Ledger) => (netChanges(ledger).size ? chainHead(ledger) : undefined);
 

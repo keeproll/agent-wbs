@@ -14,10 +14,21 @@
  * Runner는 응답을 잃거나(다음 보고가 낡은 base) 옛 요청이 늦게·중복으로 다시 도착한다.
  */
 
+/** 경로 → `모드\0내용`. 모드는 git 파일 모드(100644 일반, 100755 실행, 120000 심볼릭 링크, 내용 = 링크 대상). */
 export type Tree = ReadonlyMap<string, string>;
+export const entry = (mode: string, content: string) => `${mode}\u0000${content}`;
+export const modeOf = (value: string) => value.split('\u0000')[0] ?? '';
+export const contentOf = (value: string) => value.slice(value.indexOf('\u0000') + 1);
+const isLink = (value: string) => modeOf(value) === '120000';
+/** 분석이 보는 「내용」: 존재·blob·파일과 링크의 구분. 실행 권한(100644↔100755)만의 차이는 내용이 아니다. */
+const substance = (value: string | undefined) => (value === undefined ? undefined : `${isLink(value) ? 'link' : 'file'}:${contentOf(value)}`);
 export type Kind = 'added' | 'modified' | 'deleted';
 /** `git diff --raw -M base head -- prototype/` 한 줄. blob은 내용 해시다. */
-export interface RawChange { status: 'A' | 'M' | 'D' | 'R'; path: string; from?: string; oldBlob: string | null; newBlob: string | null }
+/** `git diff --raw -M base head -- prototype/` 한 줄. blob은 내용, mode는 파일 모드(없으면 null). T는 파일↔링크 종류 변경. */
+export interface RawChange {
+  status: 'A' | 'M' | 'D' | 'R' | 'T'; path: string; from?: string;
+  oldBlob: string | null; newBlob: string | null; oldMode: string | null; newMode: string | null;
+}
 export interface Observation {
   base: string; head: string; baseIsAncestor: boolean; treeHash: string; changes: readonly RawChange[];
   /** 참고: first-parent 커밋별 변경(수정 전 계약 비교용) */
@@ -53,8 +64,8 @@ export const treeHash = (tree: Tree) => `t:${[...tree].sort(([a], [b]) => (a < b
 export function treeDiff(from: Tree, to: Tree): Map<string, Kind> {
   const out = new Map<string, Kind>();
   for (const path of new Set([...from.keys(), ...to.keys()])) {
-    const a = from.get(path);
-    const b = to.get(path);
+    const a = substance(from.get(path));
+    const b = substance(to.get(path));
     if (a === b) continue;
     out.set(path, a === undefined ? 'added' : b === undefined ? 'deleted' : 'modified');
   }
@@ -108,19 +119,25 @@ export function observe(g: Graph, base: string, head: string, r: ReturnType<type
   const from = g.tree(base);
   const to = g.tree(head);
   const changes: RawChange[] = [];
-  const diff = treeDiff(from, to);
-  const added = [...diff].filter(([, k]) => k === 'added').map(([p]) => p);
+  const raw = (path: string) => ({ a: from.get(path), b: to.get(path) });
+  const paths = [...new Set([...from.keys(), ...to.keys()])].filter((p) => from.get(p) !== to.get(p));
+  const added = paths.filter((p) => !from.has(p));
   const usedAdd = new Set<string>();
-  for (const [path, kind] of diff) {
-    if (kind === 'modified') changes.push({ status: 'M', path, oldBlob: from.get(path) ?? null, newBlob: to.get(path) ?? null });
-    else if (kind === 'deleted') {
-      // git diff -M처럼 같은 내용의 추가가 있으면 이름 변경으로 보고하기도 한다.
-      const twin = added.find((p) => !usedAdd.has(p) && to.get(p) === from.get(path));
-      if (twin && r.next() < 0.7) { usedAdd.add(twin); changes.push({ status: 'R', path: twin, from: path, oldBlob: from.get(path) ?? null, newBlob: to.get(twin) ?? null }); }
-      else changes.push({ status: 'D', path, oldBlob: from.get(path) ?? null, newBlob: null });
+  const blob = (v: string | undefined) => (v === undefined ? null : contentOf(v));
+  const mode = (v: string | undefined) => (v === undefined ? null : modeOf(v));
+  for (const path of paths) {
+    const { a, b } = raw(path);
+    if (a !== undefined && b !== undefined) {
+      // 같은 경로가 양쪽에 있으면 M(내용 또는 실행 권한), 파일↔링크면 T
+      changes.push({ status: isLink(a) === isLink(b) ? 'M' : 'T', path, oldBlob: blob(a), newBlob: blob(b), oldMode: mode(a), newMode: mode(b) });
+    } else if (a !== undefined) {
+      // git diff -M처럼 같은 내용·모드의 추가가 있으면 이름 변경으로 보고하기도 한다.
+      const twin = added.find((p) => !usedAdd.has(p) && to.get(p) === a);
+      if (twin && r.next() < 0.7) { usedAdd.add(twin); changes.push({ status: 'R', path: twin, from: path, oldBlob: blob(a), newBlob: blob(to.get(twin)), oldMode: mode(a), newMode: mode(to.get(twin)) }); }
+      else changes.push({ status: 'D', path, oldBlob: blob(a), newBlob: null, oldMode: mode(a), newMode: null });
     }
   }
-  for (const path of added) if (!usedAdd.has(path)) changes.push({ status: 'A', path, oldBlob: null, newBlob: to.get(path) ?? null });
+  for (const path of added) if (!usedAdd.has(path)) changes.push({ status: 'A', path, oldBlob: null, newBlob: blob(to.get(path)), oldMode: null, newMode: mode(to.get(path)) });
   return { base, head, baseIsAncestor, treeHash: treeHash(to), changes: baseIsAncestor ? changes : [], commits: baseIsAncestor ? g.revList(base, head) : [] };
 }
 
@@ -132,16 +149,29 @@ export function runSeed(seed: number, make: (registration: string) => InputModel
   const r = random(seed);
   const g = new Graph();
   let counter = 0;
-  const content = () => `c${String(++counter)}`;
+  const content = () => entry('100644', `c${String(++counter)}`);
   const mutate = (tree: Tree): Tree => {
     const next = new Map(tree);
     const paths = [...next.keys()];
-    const op = r.int(6);
+    const op = r.int(9);
     if (op === 0 || !paths.length) next.set(`prototype/docs/f${String(++counter)}.md`, content());
-    else if (op === 1) next.set(r.pick(paths), content());
+    else if (op === 1) { const p = r.pick(paths); next.set(p, entry(modeOf(next.get(p) as string) === '120000' ? '100644' : modeOf(next.get(p) as string), `c${String(++counter)}`)); }
     else if (op === 2) next.delete(r.pick(paths));
     else if (op === 3) { const p = r.pick(paths); const c = next.get(p) as string; next.delete(p); next.set(`prototype/uiux/m${String(++counter)}.html`, c); }
-    // op 4·5: src만 바꾼 커밋(prototype/ 트리 그대로)
+    else if (op === 4) {
+      // 실행 권한만 바꿈(내용 그대로): git은 M을 내보내고 blob은 같다(FIX5 리뷰 N3).
+      const p = r.pick(paths); const v = next.get(p) as string;
+      if (modeOf(v) !== '120000') next.set(p, entry(modeOf(v) === '100755' ? '100644' : '100755', contentOf(v)));
+    } else if (op === 5) {
+      // 심볼릭 링크: 새 링크를 만들거나, 기존 파일을 같은 경로의 링크로 바꿈(git T)
+      if (r.next() < 0.5) next.set(`prototype/uiux/l${String(++counter)}`, entry('120000', 'docs/guide.md'));
+      else { const p = r.pick(paths); next.set(p, entry('120000', contentOf(next.get(p) as string))); }
+    } else if (op === 6) {
+      // 빈 파일: 새로 만들거나 기존 파일 내용을 비움
+      if (r.next() < 0.5) next.set(`prototype/docs/e${String(++counter)}.md`, entry('100644', ''));
+      else { const p = r.pick(paths); next.set(p, entry(modeOf(next.get(p) as string) === '120000' ? '100644' : modeOf(next.get(p) as string), '')); }
+    }
+    // op 7·8: src만 바꾼 커밋(prototype/ 트리 그대로)
     return next;
   };
   const mergeTrees = (a: Tree, b: Tree): Tree => {

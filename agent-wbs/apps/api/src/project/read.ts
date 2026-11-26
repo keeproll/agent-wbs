@@ -1,4 +1,5 @@
 import { iso, systemState, type Db } from './db.ts';
+import { substantive } from './ledger.ts';
 import { inputHead } from './service.ts';
 import type { StoredDraft } from './draft.ts';
 import { jobView, type PlanningJob } from './jobs.ts';
@@ -57,17 +58,19 @@ export async function projectState(db: Db) {
      from input_versions v left join input_version_results r on r.input_version=v.id where v.project_id=$1 order by v.v`, [p.id])).rows;
   // 입력 변경 항목 = 차이가 있는 Runner 보고(키는 그 보고의 head). 받은 순서(seq)대로 보인다.
   // 커밋 정보는 참고용 목록의 마지막 커밋에서, 이름 변경은 화면 값(added·modified·deleted)에 맞춰 삭제 + 추가로 보인다.
-  interface Raw { status: 'A' | 'M' | 'D' | 'R'; path: string; from?: string; added: number; deleted: number }
-  const kind = { A: 'added', M: 'modified', D: 'deleted' } as const;
+  interface Raw { status: 'A' | 'M' | 'D' | 'R' | 'T'; path: string; from?: string; oldBlob: string | null; newBlob: string | null; oldMode: string | null; newMode: string | null; added: number; deleted: number }
+  const kind = { A: 'added', M: 'modified', D: 'deleted', T: 'modified' } as const;
   const changeCommits = (await db.query<{ sha: string; state: 'pending' | 'skipped' | 'analyzed';
     files: { receivedAt: string; changes: Raw[]; commits: { at: string; author: string; message: string }[] } }>(
     "select sha,state,files from input_change_commits where project_id=$1 and jsonb_array_length(files->'changes')>0 order by (files->>'seq')::int", [p.id])).rows
+    // 실행 권한만 바뀐 보고는 팀장 확인 항목이 아니다.
+    .filter((c) => c.files.changes.some((f) => substantive(f)))
     .map((c) => {
       const last = c.files.commits.at(-1);
       return { sha: c.sha, at: last?.at ?? c.files.receivedAt, author: last?.author ?? '', message: last?.message ?? '', state: c.state,
         files: c.files.changes.flatMap((f) => f.status === 'R' && f.from
           ? [{ path: f.from, change: 'deleted' as const, added: 0, deleted: f.deleted }, { path: f.path, change: 'added' as const, added: f.added, deleted: 0 }]
-          : [{ path: f.path, change: kind[f.status as 'A' | 'M' | 'D'], added: f.added, deleted: f.deleted }]) };
+          : [{ path: f.path, change: kind[f.status as 'A' | 'M' | 'D' | 'T'], added: f.added, deleted: f.deleted }]) };
     });
   const inputPlanning = (await db.query<PlanningJob & { version: string | null }>(
     `select j.id,j.project_id,j.kind,j.run_no,j.status,j.instruction,
