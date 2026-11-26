@@ -34,6 +34,7 @@ async function concurrency(db: Db, windowDays: number): Promise<ScheduleInput['c
 
 export async function scheduleInput(db: Db, tasks: readonly BaselineTask[], deps: readonly Dependency[]): Promise<ScheduleInput> {
   const policy = await policyOf(db);
+  const start = (await db.query<{ start: string }>("select to_char(start_date,'YYYY-MM-DD') start from projects")).rows[0]?.start;
   const heartbeat = (await db.query<{ heartbeat_seconds: number; heartbeat_misses: number }>('select heartbeat_seconds,heartbeat_misses from app_settings where singleton')).rows[0];
   const sessions = (await db.query<{ from: string; to: string | null; last: string }>(
     'select started_at::text as "from",ended_at::text as "to",last_heartbeat_at::text as last from runner_sessions order by started_at')).rows;
@@ -43,7 +44,8 @@ export async function scheduleInput(db: Db, tasks: readonly BaselineTask[], deps
   const iso = (value: string) => new Date(value).toISOString();
   return {
     now: new Date().toISOString(),
-    tasks: tasks.map((task) => ({ id: task.id, wbs: task.wbs, status: task.status, priority: task.priority, assignee: task.assignee, est: task.est, lo: task.lo, hi: task.hi, ...(task.cg && { cg: task.cg }) })),
+    tasks: tasks.map((task) => ({ id: task.id, wbs: task.wbs, status: task.status, priority: task.priority, assignee: task.assignee, est: task.est, lo: task.lo, hi: task.hi,
+      ...(task.cg && { cg: task.cg }), ...(start && { fixStart: task.fixStart && task.fixStart > start ? task.fixStart : start }) })),
     deps,
     sessions: sessions.map((s) => ({ from: iso(s.from), ...(s.to && { to: iso(s.to) }), lastHeartbeatAt: iso(s.last) })),
     assumeRate: policy.assumeRate,

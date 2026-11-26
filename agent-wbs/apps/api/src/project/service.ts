@@ -473,6 +473,8 @@ export async function reportInputChanges(db: Db, body: InputBody): Promise<{ hea
     throw new ProjectError('VERSION_CONFLICT', { message: 'base가 서버의 입력 head와 다릅니다. 응답의 head로 다시 계산해 보고하세요.', details: { current: { base: result.head }, changes: [] } });
   }
   if (result.kind === 'invalid') throw new ProjectError('VALIDATION_FAILED', { errors: [result.error] });
+  await db.query('update projects set input_checked_at=clock_timestamp() where id=$1', [project.id]);
+  await changeEvent(db, project.id, { kind: 'input_check' });
   if (result.kind === 'rewritten') {
     // 이력 재작성은 금지된 상황이다(G§4.2 강제 push 금지). 자동 복구하지 않고 입력 변경을 받지 않은 채 팀장에게 알린다.
     // 열린 경고가 있으면 새 관측(head·문구)으로 갱신하고 복구 확인 번호(recheck)는 유지한다. 없으면 새로 연다.

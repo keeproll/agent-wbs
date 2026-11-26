@@ -48,9 +48,9 @@ export async function scheduleInput(client: PoolClient, projectId: string, polic
     client.query<{ now: string }>(`select ${isoAt('clock_timestamp()')} as now`),
     client.query<{ id: string; task_key: string; wbs_node_id: string; sort_order: number; status: TaskStatus; priority: number; assignee_agent: Agent | null;
       conflict_group: string | null; fix_start: string | null; act_start: string | null; act_end: string | null; updated_at: string; est: string | null; lo: string | null; hi: string | null }>(
-      `select t.id,t.task_key,t.wbs_node_id,t.sort_order,t.status,t.priority,t.assignee_agent,t.conflict_group,to_char(t.fix_start,${ymd}) as fix_start,
+      `select t.id,t.task_key,t.wbs_node_id,t.sort_order,t.status,t.priority,t.assignee_agent,t.conflict_group,to_char(greatest(t.fix_start,p.start_date),${ymd}) as fix_start,
               ${isoAt('t.act_start')} as act_start,${isoAt('t.act_end')} as act_end,${isoAt('t.updated_at')} as updated_at,e.est::text as est,e.lo::text as lo,e.hi::text as hi
-         from tasks t left join lateral (select est,lo,hi from task_estimates where task=t.id order by created_at desc,id desc limit 1) e on true
+         from tasks t join projects p on p.id=t.project_id left join lateral (select est,lo,hi from task_estimates where task=t.id order by created_at desc,id desc limit 1) e on true
         where t.project_id=$1 and t.deleted_at is null`, [projectId]),
     client.query<{ pred: string; succ: string; type: 'FS' | 'SS' }>(
       'select p.task_key as pred,s.task_key as succ,d.dep_type as type from task_dependencies d join tasks p on p.id=d.pred join tasks s on s.id=d.succ where d.project_id=$1 and p.deleted_at is null and s.deleted_at is null', [projectId]),
@@ -207,7 +207,7 @@ function computeSchedule(input: ScheduleInput) {
 
 /**
  * GET /api/schedule(G§6.2·§6.4, P scheduleVM L4255~4282, 리뷰 F5). 계산은 M1 `schedule()`이고, 기준 대비 값은 마지막 기준(v)과 최초 기준(v1)으로 붙인다.
- * - 프로젝트 시작일은 프로젝트 등록일(Asia/Seoul)이다. 계획 진척(plannedPct)은 P와 같이 기준 구간의 경과 비율을 공수로 가중한다.
+ * - 프로젝트 시작일은 팀장이 저장한 날짜다(기존 행은 서울 등록일). 계획 진척은 기준 구간의 경과 비율을 공수로 가중한다.
  * - calcVersion은 프로젝트 변경 이벤트 수다. 무엇이든 바뀌면 커지므로 화면이 낡은 계산을 알아챌 수 있다.
  */
 export async function scheduleView(client: PoolClient, projectId: string) {
@@ -219,7 +219,7 @@ export async function scheduleView(client: PoolClient, projectId: string) {
   const first = history[0];
   const [project, blackouts, version] = await Promise.all([
     client.query<{ start: string; target: string | null }>(
-      `select to_char(created_at at time zone 'Asia/Seoul',${ymd}) as start,to_char(target_date,${ymd}) as target from projects where id=$1`, [projectId]),
+      `select to_char(start_date,${ymd}) as start,to_char(target_date,${ymd}) as target from projects where id=$1`, [projectId]),
     client.query<{ date: string; note: string }>(`select to_char(date,${ymd}) as date,note from blackout_days order by date`),
     client.query<{ n: number }>('select count(*)::int as n from change_events where project_id=$1', [projectId]),
   ]);

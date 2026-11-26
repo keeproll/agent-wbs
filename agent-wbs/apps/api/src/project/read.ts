@@ -45,8 +45,10 @@ export async function projectState(db: Db) {
   const system = await systemState(db);
   const base = { epoch: system.epoch, cleanup: system.cleanup };
   const p = (await db.query<{ id: string; name: string; repo_url: string; repo_owner: string; repo_name: string; base_commit: string | null; target_date: string | null;
+    description: string; start_date: string; input_checked_at: string | null;
     lead_instruction: string; phase: 'boot' | 'active'; created_at: string; updated_at: string }>(
     `select id,name,repo_url,repo_owner,repo_name,base_commit,to_char(target_date,'YYYY-MM-DD') target_date,lead_instruction,phase,
+       description,to_char(start_date,'YYYY-MM-DD') start_date,${iso('input_checked_at')} input_checked_at,
        ${iso('created_at')} created_at,${iso('updated_at')} updated_at from projects`)).rows[0];
   if (!p) return { state: 'none' as const, ...base };
 
@@ -72,16 +74,16 @@ export async function projectState(db: Db) {
           ? [{ path: f.from, change: 'deleted' as const, added: 0, deleted: f.deleted }, { path: f.path, change: 'added' as const, added: f.added, deleted: 0 }]
           : [{ path: f.path, change: kind[f.status as 'A' | 'M' | 'D' | 'T'], added: f.added, deleted: f.deleted }]) };
     });
-  const inputPlanning = (await db.query<PlanningJob & { version: string | null }>(
+  const inputPlanning = (await db.query<PlanningJob & { version: string | null; proposal_id: string | null }>(
     `select j.id,j.project_id,j.kind,j.run_no,j.status,j.instruction,
-       (select payload->>'version' from runner_jobs r where r.payload->>'planningJobId'=j.id::text order by r.created_at limit 1) version
+       (select payload->>'version' from runner_jobs r where r.payload->>'planningJobId'=j.id::text order by r.created_at limit 1) version,
+       (select c.id from change_proposals c where c.project_id=j.project_id and c.source='input' and c.source_id=j.id::text and c.deleted_at is null order by c.created_at desc,c.id desc limit 1) proposal_id
      from planning_jobs j where j.project_id=$1 and j.kind='input_diff' order by j.created_at desc limit 1`, [p.id])).rows[0];
   const registered = {
-    ...base, id: p.id, name: p.name,
+    ...base, id: p.id, name: p.name, description: p.description, startDate: p.start_date, inputCheckedAt: p.input_checked_at,
     repo: { url: p.repo_url, owner: p.repo_owner, name: p.repo_name, branch: 'main' as const, baseCommit: p.base_commit },
     targetDate: p.target_date, instruction: p.lead_instruction, constraints, registeredAt: p.created_at, inputs, changeCommits,
-    // 차이 분석의 결과 CP 연결은 M2-07(Planning·CP)이 채운다.
-    inputJob: inputPlanning ? { ...(await view(db, inputPlanning, INPUT_STEPS)), version: Number(inputPlanning.version), proposalId: null } : null,
+    inputJob: inputPlanning ? { ...(await view(db, inputPlanning, INPUT_STEPS)), version: Number(inputPlanning.version), proposalId: inputPlanning.proposal_id } : null,
     inputHead: await inputHead(db, p.id),
     updatedAt: p.updated_at,
   };

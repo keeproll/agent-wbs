@@ -359,8 +359,10 @@ export const Evidence = Type.Object(
     verificationId: Nullable(c.Id),
     checklistItemKey: Nullable(c.Id),
     kind: Type.String(),
-    sha256: c.Sha256,
-    size: c.Count,
+    /** 경로 입력은 파일 업로드가 아니다. 원본을 읽지 않았으므로 지문·크기는 null이다(UAT-VERIFY-02). */
+    path: Opt(Nullable(Type.String())),
+    sha256: Nullable(c.Sha256),
+    size: Nullable(c.Count),
   },
   { title: 'Evidence' },
 );
@@ -478,7 +480,7 @@ export const PlanningReview = Type.Object(
   {
     id: c.Id,
     topic: Type.String(),
-    kind: Type.String(),
+    kind: AnyOf('agree', 'diff'),
     codex: Type.String(),
     claude: Type.String(),
     choice: Nullable(Type.String()),
@@ -497,6 +499,7 @@ export const PlanningAnalysis = Type.Object(
 export const Planning = Type.Object(
   {
     id: c.Id,
+    planningKey: Type.String(),
     title: Type.String(),
     scope: Type.String(),
     analyses: List(PlanningAnalysis),
@@ -747,6 +750,10 @@ const registered = {
   ...projectBase,
   id: c.Id,
   name: Str,
+  description: Str,
+  startDate: c.DateOnly,
+  /** Runner가 마지막으로 유효한 main 관측을 보고한 시각. 요청 접수·브라우저 조회 시각이 아니다. */
+  inputCheckedAt: Nullable(c.Timestamp),
   repo: obj({ url: c.RepoUrl, owner: Str, name: Str, branch: AnyOf('main'), baseCommit: Nullable(c.Sha) }),
   targetDate: MaybeDate,
   instruction: Str,

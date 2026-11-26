@@ -94,13 +94,16 @@ test('팀장 수정은 §1.3 표대로 expected version을 요구한다', () => 
   // 생성·확인·테스트 발송·job 생성, 수동 발송·재발송, 로그아웃, 읽음 표시
   expect(none).toEqual(
     [
-      'addRecipient', 'checkGithub', 'checkSmtp', 'checkTelegramBot', 'createMessage',
+      'addRecipient', 'addVerificationEvidence', 'checkGithub', 'checkSmtp', 'checkTelegramBot', 'createMessage',
       'createPlanning', 'createPlanningProposal', 'createProject', 'createProposal', 'createRepoCheck',
       'createReport', 'createTask', 'findTelegramChats', 'logout', 'readMessage', 'requestDeployCheck',
       'resendFailedMail', 'resendMail', 'retryCiRun', 'runReplan', 'sendReportMail', 'testRecipient', 'testTelegram',
     ].sort(),
   );
-  const required = (schema: TSchema | undefined) => (schema as { required?: string[] } | undefined)?.required ?? [];
+  const required = (schema: TSchema | undefined): string[] => {
+    const object = schema as { required?: string[]; anyOf?: TSchema[] } | undefined;
+    return object?.required ?? object?.anyOf?.map(required).reduce((common, branch) => common.filter((field) => branch.includes(field))) ?? [];
+  };
   for (const item of lead) {
     if (item.version === 'body') expect(required(item.body), item.id).toContain('updatedAt');
     if (item.version === 'query') expect(required(item.query), item.id).toContain('updatedAt');

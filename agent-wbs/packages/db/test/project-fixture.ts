@@ -73,7 +73,8 @@ export async function fillProjectTables(
           col.has_default ||
           (!col.required &&
             col.name !== 'project_id' &&
-            !(table === 'messages' && ['to_agent', 'delivery'].includes(col.name)))
+            !(table === 'messages' && ['to_agent', 'delivery'].includes(col.name)) &&
+            !(table === 'evidence' && ['storage_path', 'sha256', 'size'].includes(col.name)))
         )
           continue;
         let value: unknown;

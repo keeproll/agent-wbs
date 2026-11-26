@@ -41,16 +41,17 @@ async function schemaOf(pool: Pool): Promise<string> {
   ].join('\n--\n');
 }
 
-test('빈 DB와 0014·0016(master)·0017·0018·0019 단계 DB가 최신으로 올린 뒤 같은 구조가 된다', async () => {
+test('빈 DB와 0014·0016(master)·0017·0018·0019·0020·0021 단계 DB가 최신으로 올린 뒤 같은 구조가 된다', async () => {
   const journalPath = fileURLToPath(new URL('../migrations/meta/_journal.json', import.meta.url));
   const journal = JSON.parse(await readFile(journalPath, 'utf8')) as { entries: { idx: number; tag: string }[] };
   expect(journal.entries.slice(15).map((e) => e.tag)).toEqual([
     '0015_20261126_platform_epoch_lock', '0016_20261126_contract_sync', '0017_20261126_usage_reset_unknown',
-    '0018_20261126_message_read_touch', '0019_20261126_schedule_defaults', '0020_20261126_execution_basis']);
+    '0018_20261126_message_read_touch', '0019_20261126_schedule_defaults', '0020_20261126_execution_basis',
+    '0021_20261127_project_followup', '0022_20261127_evidence_reference']);
   const fresh = await database('fresh');
   await runMigrations(fresh);
   const expected = await schemaOf(fresh);
-  for (const stage of [14, 16, 17, 18, 19]) {
+  for (const stage of [14, 16, 17, 18, 19, 20, 21]) {
     const pool = await database(String(stage));
     const folder = await mkdtemp(join(tmpdir(), `awbs-stage-${String(stage)}-`));
     try {
@@ -59,7 +60,11 @@ test('빈 DB와 0014·0016(master)·0017·0018·0019 단계 DB가 최신으로 �
       await migrate(drizzle(pool), { migrationsFolder: folder });
     } finally { await rm(folder, { recursive: true, force: true }); }
     await pool.query('select seed_system()');
+    if (stage === 20) await pool.query(`insert into projects(name,repo_url,repo_owner,repo_name,lead_instruction,phase,created_at)
+      values('기존 프로젝트','','','','','active','2000-01-01T20:00:00Z')`);
     await runMigrations(pool);
+    if (stage === 20) expect((await pool.query("select description,to_char(start_date,'YYYY-MM-DD') start,input_checked_at from projects")).rows[0])
+      .toEqual({ description: '', start: '2000-01-02', input_checked_at: null });
     expect(await schemaOf(pool), `단계 ${String(stage)}`).toBe(expected);
     expect((await pool.query<{ n: number }>('select count(*)::int n from drizzle.__drizzle_migrations')).rows[0]?.n, `단계 ${String(stage)}`).toBe(journal.entries.length);
   }

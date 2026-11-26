@@ -13,9 +13,10 @@ export async function verifications(client: PoolClient, query: PageFilter) {
 }
 
 export async function evidenceList(client: PoolClient, query: PageFilter) {
-  const rows = (await client.query(`select e.id,t.task_key "taskKey",e.attempt "attemptId",coalesce(e.verification,v.id) "verificationId",cl.item_key "checklistItemKey",e.kind,e.sha256,e.size::float8 size
+  const rows = (await client.query(`select e.id,t.task_key "taskKey",e.attempt "attemptId",coalesce(e.verification,v.id) "verificationId",cl.item_key "checklistItemKey",e.kind,e.sha256,e.size::float8 size,
+    case when e.reference_path is not null then e.reference_path end path
     from evidence e join tasks t on t.id=e.task left join verifications v on v.attempt=e.attempt
-    left join lateral(select item_key from checklist_items where task=e.task and (id=e.checklist or evidence=to_jsonb(e.id::text)) order by item_key limit 1) cl on true
+    left join lateral(select item_key from checklist_items where task=e.task and (id=e.checklist or evidence=to_jsonb(e.id::text) or evidence=to_jsonb(e.reference_path)) order by item_key limit 1) cl on true
     where ($1::text is null or t.task_key=$1) and ($2::text is null or e.id::text>$2) order by e.id limit $3`, [query.taskKey ?? null,query.cursor ?? null,(query.limit ?? 50)+1])).rows;
   return page(rows,query.limit ?? 50);
 }

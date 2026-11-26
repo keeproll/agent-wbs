@@ -4,6 +4,9 @@ import { OPERATIONS } from '@awbs/shared/api';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { installProjectErrors } from './errors.ts';
 import { projectState } from './read.ts';
+import { checkInputs, updateProject, type ProjectEdit } from './edit.ts';
+import { githubSettings } from './github.ts';
+import { dashboard } from './dashboard.ts';
 import {
   analyzeInputs, approveBootstrap, confirmTech, createProject, createRepoCheck, getRepoCheck, rerunBootstrap, retryBootstrap, retryInputs, recheckInputs, skipInputs,
   type Registration,
@@ -12,6 +15,7 @@ import {
 /** 오류 본문의 `action`(무엇을 하려다 실패했나, G§0.3) */
 export const ACTIONS: Record<string, string> = {
   createRepoCheck: '저장소 접근 확인', getRepoCheck: '저장소 확인 결과 조회', createProject: '프로젝트 등록', getProject: '프로젝트 조회',
+  updateProject: '프로젝트 정보 편집', checkInputs: '지금 입력 확인',
   approveBootstrap: '초기 WBS 승인', rerunBootstrap: '재분석 요청', retryBootstrap: '초기 분석 다시 시도', confirmTech: '기술 결정 확정',
   analyzeInputs: '이 버전으로 분석', skipInputs: '분석 안 함', retryInputs: '차이 분석 다시 시도', recheckInputs: '입력 이력 복구 확인',
   reportRepoCheck: '저장소 확인 결과 보고', reportInputChanges: '입력 변경 보고', reportBootstrapProgress: '분석 진행 보고',
@@ -63,6 +67,10 @@ export function registerProjectRoutes(app: FastifyInstance, pool: Pool): void {
     routeOf(scope, pool, 'getRepoCheck', (ctx) => getRepoCheck(ctx.client, param(ctx, 'id')));
     routeOf(scope, pool, 'createProject', (ctx) => createProject(ctx.client, body<Registration>(ctx), ctx.epoch), 201);
     routeOf(scope, pool, 'getProject', (ctx) => projectState(ctx.client));
+    routeOf(scope, pool, 'getGithubSettings', (ctx) => githubSettings(ctx.client));
+    routeOf(scope, pool, 'getDashboard', (ctx) => dashboard(ctx.client));
+    routeOf(scope, pool, 'updateProject', (ctx) => updateProject(ctx.client, body<ProjectEdit>(ctx)));
+    routeOf(scope, pool, 'checkInputs', (ctx) => checkInputs(ctx.client, body<{ updatedAt: string }>(ctx)), 202);
     routeOf(scope, pool, 'approveBootstrap', (ctx) => approveBootstrap(ctx.client, body<{ revision: number }>(ctx).revision));
     routeOf(scope, pool, 'rerunBootstrap', (ctx) => rerunBootstrap(ctx.client, body<{ revision: number; instruction: string }>(ctx), ctx.epoch), 202);
     routeOf(scope, pool, 'retryBootstrap', (ctx) => retryBootstrap(ctx.client, body<{ revision: number } | { revision: null; runNo: number }>(ctx), ctx.epoch), 202);

@@ -263,3 +263,11 @@ export async function listMessages(client: PoolClient, input: { taskId?: string 
   const last = page.at(-1);
   return { items: page.map(messageView), nextCursor: rows.length > limit && last ? encodeCursor([last.created_at, last.id]) : null };
 }
+
+/** 대시보드는 최근 목록의 일부가 아니라 확인이 필요한 메시지 전체를 보여 준다(P dashVM). */
+export async function attentionMessages(client: PoolClient) {
+  const rows = (await client.query<MessageRow>(`select ${COLUMNS} from messages m join tasks t on t.id=m.task
+    where t.deleted_at is null and ((m.dir='out' and m.delivery in ('Failed','Queued')) or (m.dir='in' and m.read_at is null))
+    order by m.created_at desc,m.id desc`)).rows;
+  return rows.map(messageView);
+}

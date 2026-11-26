@@ -45,6 +45,10 @@ const SHA = 'a'.repeat(40);
 const UUID = '00000000-0000-4000-8000-000000000000';
 const EXTRA_BODY: Record<string, Record<string, unknown>> = {
   choosePlanningReview: { choice: 'x' },
+  rejectProposal: { comment: '반려 사유' },
+  requestChangesProposal: { comment: '수정 사유' },
+  updateProject: { name: 'x', description: '', startDate: '2026-11-27', targetDate: null, updatedAt: '2026-11-27T00:00:00Z' },
+  excludeProposalOp: { index: 0 },
   approveProposal: { previewHash: 'a'.repeat(64) },
   applyProposal: { previewHash: 'a'.repeat(64) },
   analyzeInputs: { commit: SHA, commits: [] },

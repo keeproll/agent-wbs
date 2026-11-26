@@ -670,6 +670,8 @@ export const runnerOperations = [
         // 입력 확인 다시 시도 번호(열린 재작성 경고에서 팀장이 복구 확인을 누를 때마다 1 증가, 열린 경고가 없으면 0).
         // Runner는 이력 재작성으로 입력 보고를 멈춘 뒤 이 값이 바뀌면 다시 관측해 보고한다(POST /api/project/inputs/recheck).
         inputRecheck: c.Count,
+        // 서버 후속 2: 일반 「지금 확인」 번호. 이력 재작성 복구 번호와 분리해 경고 해소 때 새 요청이 사라지지 않게 한다.
+        inputCheckRequest: Opt(c.Count),
         ci: Type.Object(m.CiSettings),
         // Runner가 보고할 Claude 모델(설정값, 초기값=Q-06 승인표). owner 2026-11-26 아이템 8
         claudeModels: List(Type.String(), { minItems: 1, uniqueItems: true }),

@@ -36,7 +36,7 @@ export async function exportProject(pool: Pool, epoch: number, root: string, lim
     const names = (await db.query<{ table_name: string }>("select table_name from information_schema.columns where table_schema='public' and column_name='project_id' order by table_name")).rows;
     tables.projects = (await db.query('select * from projects')).rows;
     for (const { table_name: name } of names) if (!PRIVATE_TABLES.has(name)) tables[name] = (await db.query(`select * from ${db.escapeIdentifier(name)} where project_id=$1`, [project.id])).rows;
-    const paths = (await db.query<{ path: string; kind: string; sha256: string; size: string | null }>(`select storage_path path,'evidence' kind,sha256,size::text from evidence where project_id=$1
+    const paths = (await db.query<{ path: string; kind: string; sha256: string; size: string | null }>(`select storage_path path,'evidence' kind,sha256,size::text from evidence where project_id=$1 and storage_path is not null
       union all select path,'pdf',sha256,null from report_pdfs where project_id=$1 order by path`, [project.id])).rows;
     const files: { name: string; data: Buffer }[] = [], manifest: { path: string; kind: string; size: number; sha256: string }[] = [];
     // 크기를 아는 파일(Evidence)로 먼저 상한을 검사한다. 읽은 뒤 실제 크기로 한 번 더 본다(PDF는 크기 기록이 없음).

@@ -16,6 +16,31 @@ let state: State;
 beforeEach(async () => { home = await mkdtemp(join(process.env.AWBS_TEST_TMP ?? tmpdir(), 'app-life-')); state = await State.open(home); });
 afterEach(async () => { vi.restoreAllMocks(); await state.close(); await rm(home, { recursive: true, force: true }); });
 
+test('지금 확인 요청 번호가 바뀌면 5분 주기를 기다리지 않고 새 입력 관측을 한다', async () => {
+  const a = app();
+  vi.spyOn(a, 'checkReadiness').mockResolvedValue({ at: new Date().toISOString(), items: [] });
+  vi.spyOn(a.updater, 'check').mockResolvedValue();
+  vi.spyOn(a.updater, 'applyPending').mockResolvedValue();
+  vi.spyOn(a, 'reportModels').mockResolvedValue();
+  vi.spyOn(a, 'reportConcurrency').mockResolvedValue();
+  vi.spyOn(a.reporter, 'reportUsage').mockResolvedValue();
+  const report = vi.spyOn(a, 'reportInputs').mockResolvedValue(undefined);
+  a.runner.policy = { inputCheckMinutes: 5, inputRecheck: 0, inputCheckRequest: 0 } as typeof a.runner.policy;
+  vi.useFakeTimers();
+  try {
+    a.startSchedules();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(report).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(report).toHaveBeenCalledTimes(1);
+    if (a.runner.policy) a.runner.policy.inputCheckRequest = 1;
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(report).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(report).toHaveBeenCalledTimes(2);
+  } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+});
+
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 function deferred() { let resolve: () => void = () => undefined; const promise = new Promise<void>((r) => { resolve = r; }); return { promise, resolve }; }
 const hostSources: HostSources = {

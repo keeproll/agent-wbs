@@ -211,12 +211,20 @@ test('계획의 보강 경로가 모두 있고 원문에 근거가 있다', () =
 });
 
 test('원본·계획에 없는 경로를 만들지 않았다', () => {
+  // 서버 후속 2: UAT-PROJECT-10·09b, UAT-CP-01·02와 계획 §2.1의 「초안은 팀장이 다듬은 뒤 제출」.
+  // 원본의 편집·확인·모달 취소·항목 제외를 서버에 연결한다. 이력 삭제는 허용하지 않는다.
+  expect(read('docs/ui/acceptance.md')).toContain('UAT-PROJECT-10');
+  expect(read('prototype/uiux/Main.dc.html')).toContain('cpRemoveOp(cpId, i)');
+  const followup = ['PATCH /api/project', 'POST /api/project/inputs/check', 'GET /api/proposals/:id',
+    'PATCH /api/proposals/:id', 'DELETE /api/proposals/:id', 'POST /api/proposals/:id/exclude',
+    'POST /api/verifications/:id/evidence'];
   const known = new Set([
     'GET /health',
     'GET /health/db',
     ...guideRoutes().map(({ route }) => route),
     ...prototypeRoutes(),
     ...SUPPLEMENTS.map((line) => key(line.split(' ')[0] ?? '', line.split(' ')[1] ?? '')),
+    ...followup.map((line) => key(line.split(' ')[0] ?? '', line.split(' ')[1] ?? '')),
   ]);
   expect([...routes.keys()].filter((route) => !known.has(route))).toEqual([]);
   expect(routes.size).toBe(OPERATIONS.length);
