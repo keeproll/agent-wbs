@@ -45,20 +45,21 @@ function app(api:ApiClient=vi.fn() as unknown as ApiClient,githubFetch?:typeof f
 }
 
 test('N: input copy started before reset must not survive a completed reset',async()=>{
+  // 2차 재리뷰(N2) 뒤 입력 복사는 프로젝트 잠금 안에서 한다. 원래 재현처럼 「복사를 멈춘 채 초기화 완료를 기다리면」
+  // 초기화가 잠금을 기다리므로 끝나지 않는다(의도된 직렬화). 그래서 초기화를 시작해 둔 뒤 복사를 풀고 결과를 확인한다.
   const {repo,url,base}=await repository();
-  // Pause after checkoutInput reads resetting=false, before the first input directory exists.
   const entered=defer(); const release=defer();
   const target=repo as unknown as {tree(commit:string):Promise<unknown>}; const original=target.tree.bind(repo);
   vi.spyOn(target,'tree').mockImplementation(async(commit)=>{entered.resolve(undefined); await release.promise; return original(commit);});
   const copy=repo.checkoutInput('late',base); const copyResult=copy.then(v=>({path:v}),e=>({error:String(e)}));
   await entered.promise;
-  const result=await createResetCleanup({home,identity:()=>({hostId:'h',bootId:'b'})})(command(payload({repoUrl:url,baseCommit:base,branches:[],prs:[]})));
-  release.resolve(undefined); const copied=await copyResult;
-  try {
-    expect(result.status).toBe('done');
-    await expect(lstat(join(home,'inputs',repositoryIdFor(url),'late'))).rejects.toMatchObject({code:'ENOENT'});
-    expect(copied).toHaveProperty('error');
-  } finally { await repo.removeInput('late'); }
+  const resetting=createResetCleanup({home,identity:()=>({hostId:'h',bootId:'b'})})(command(payload({repoUrl:url,baseCommit:base,branches:[],prs:[]})));
+  await pause(100);
+  release.resolve(undefined);
+  const result=await resetting; const copied=await copyResult;
+  expect(result.status).toBe('done');
+  await expect(lstat(join(home,'inputs',repositoryIdFor(url),'late'))).rejects.toMatchObject({code:'ENOENT'});
+  expect(copied).toHaveProperty('error');
 });
 
 test('N: cleanup must not close PRs or delete branches in a different configured repository',async()=>{

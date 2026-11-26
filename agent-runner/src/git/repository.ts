@@ -193,6 +193,15 @@ async function removeReadonly(path: string): Promise<void> {
   await rm(path, { recursive: true, force: true });
 }
 
+/** 입력 복사의 임시 폴더 접두사. 점으로 시작하므로 `inputIds()`(입력 이름)에 섞이지 않는다. */
+const INPUT_TEMP = '.copy-';
+
+/**
+ * 이 프로세스에서 진행 중인 입력 복사(저장소 경로별). 초기화가 시작되면 먼저 이것들을 취소하고 잠금을 기다린다.
+ * 다른 프로세스의 복사는 취소 신호를 받을 수 없으므로 잠금이 풀리기(또는 죽은 주인의 잠금이 회수되기)를 기다린다.
+ */
+const activeCopies = new Map<string, Set<AbortController>>();
+
 /** 네트워크 쓰기는 GitHub 어댑터의 권한 확인 뒤 별도로 수행한다. 이 계층의 push는 `pushCommit`(일반 push) 하나뿐이다. */
 export class GitRepository {
   readonly path: string;
@@ -254,7 +263,27 @@ export class GitRepository {
     if ((await repo.git(['rev-parse', '--is-bare-repository'])).toString().trim() !== 'true') {
       throw new GitSafetyError('Runner의 bare 저장소가 아닙니다.');
     }
+    await repo.recoverInputCopies();
     return repo;
+  }
+
+  /**
+   * 시작 회수(재리뷰 N2). 강제 종료로 남은 입력 복사 임시 폴더를 지운다.
+   * 프로젝트 잠금 아래에서 하므로, 죽은 주인의 잠금은 기존 자동 회수(boot ID·PID·시작 시각·flock)로 회수된다.
+   * 임시 폴더는 공개(이름 바꾸기) 전 사본이라 어느 세대의 것이든 쓸모가 없다. 이 프로세스에서 진행 중인 복사가 있으면 그 복사의 것이므로 건드리지 않는다.
+   */
+  private async recoverInputCopies(): Promise<void> {
+    const names = await readdir(await safePath(this.inputs)).catch(() => [] as string[]);
+    if (!names.some((name) => name.startsWith(INPUT_TEMP))) return;
+    if ((activeCopies.get(this.path)?.size ?? 0) > 0) return;
+    await this.worktreeUpdate(() => this.removeInputTemps());
+  }
+
+  /** 잠금 안에서만 부른다. 입력 복사 임시 폴더를 모두 지운다. */
+  private async removeInputTemps(): Promise<void> {
+    for (const name of await readdir(await safePath(this.inputs)).catch(() => [] as string[])) {
+      if (name.startsWith(INPUT_TEMP)) await removeReadonly(join(this.inputs, name));
+    }
   }
 
   private async readRegistration(): Promise<Registration> {
@@ -358,10 +387,14 @@ export class GitRepository {
    * 기록이 디스크에 있으므로 다른 프로세스와 강제 종료 뒤 재시작에도 유지된다. 정리 명령 재시도가 다시 지운다.
    */
   async beginReset(): Promise<void> {
+    // 진행 중인 입력 복사를 먼저 취소한다. 복사는 잠금을 쥐고 있으므로, 취소를 보고 끝날 때까지 아래 잠금 획득이 기다린다(재리뷰 N2).
+    for (const controller of activeCopies.get(this.path) ?? []) controller.abort();
     await this.worktreeUpdate(async () => {
       const record = await this.trusted();
-      // 시작할 때마다 세대를 올린다. 이미 진행 중이던 입력 복사가 끝날 때 이 변화를 보고 자기 사본을 지운다.
+      // 시작할 때마다 세대를 올린다. 복사는 공개 직전에 잠금 안에서 이 세대를 다시 확인한다.
       await this.saveRegistration({ ...record, resetting: true, resetGeneration: (record.resetGeneration ?? 0) + 1 });
+      // 공개되지 못한 임시 사본(강제 종료로 남은 것 포함)은 이 초기화가 지운다.
+      await this.removeInputTemps();
     });
   }
 
@@ -495,58 +528,87 @@ export class GitRepository {
     return this.git(['cat-file', 'blob', entry.oid]);
   }
 
+  /**
+   * 고정 커밋의 `prototype/`을 읽기 전용 입력 사본으로 만든다.
+   *
+   * 초기화와의 직렬화(재리뷰 N2):
+   * - 복사 전체를 프로젝트 잠금(작업 폴더 생성·삭제·초기화 시작/끝과 같은 잠금) 안에서 한다.
+   * - 임시 폴더(`.copy-…`)에 쓰고, 잠금 안에서 초기화 세대가 시작 때와 같은지 확인한 뒤 **이름 바꾸기 한 번으로만** 공개한다.
+   * - 실패하면 자기 임시 폴더만 지운다. 공개 경로는 절대 지우지 않는다. 왜: 같은 이름의 새 정상 입력을 지우면 안 된다.
+   * - 초기화가 시작되면 취소 신호를 받고 멈춘다. 초기화는 잠금이 풀린 뒤에야 진행한다.
+   * - 복사 중 강제 종료되면 공개되지 않은 임시 폴더만 남고, 다음 초기화나 저장소 다시 열기가 지운다.
+   */
   async checkoutInput(inputId: string, commit: string): Promise<string> {
     const path = await safePath(join(this.inputs, id(inputId)));
     sha(commit);
-    if (await stat(path)) throw new GitSafetyError('기존 입력 버전은 덮어쓰지 않습니다.');
-    const started = await this.trusted();
-    if (started.resetting) throw new GitSafetyError('초기화 정리 중에는 입력 사본을 만들 수 없습니다.');
-    // 복사를 시작할 때의 초기화 세대. 복사 도중 초기화가 시작·완료돼 resetting이 다시 false가 되어도 세대 번호는 남는다(재리뷰 N2).
-    const generation = started.resetGeneration ?? 0;
-    const entries = (await this.tree(commit)).filter((entry) => entry.path === 'prototype' || entry.path.startsWith('prototype/'));
-    if (entries.length === 0) throw new GitSafetyError('prototype 입력이 없습니다.');
-    for (const entry of entries) {
-      if (entry.mode === '120000') throw new GitSafetyError('입력의 symlink는 허용하지 않습니다.');
-      if (entry.mode === '160000') throw new GitSafetyError('입력의 submodule은 따라가지 않습니다.');
-      if (!['100644', '100755'].includes(entry.mode) || entry.path.split('/').some((p) => ['.', '..', '.git'].includes(p))) {
-        throw new GitSafetyError('입력 경로·파일 형식이 올바르지 않습니다.');
-      }
-    }
-    await mkdir(path, { mode: 0o700 });
+    const controller = new AbortController();
+    const active = activeCopies.get(this.path) ?? new Set<AbortController>();
+    active.add(controller);
+    activeCopies.set(this.path, active);
+    const cancelled = () => { if (controller.signal.aborted) throw new GitSafetyError('초기화가 시작되어 입력 복사를 취소했습니다.'); };
     try {
-      for (const entry of entries) {
-        let content = await this.blob(entry);
-        if (content.toString().startsWith('version https://git-lfs.github.com/spec/v1\n')) {
-          const pointer = /^version https:\/\/git-lfs.github.com\/spec\/v1\noid sha256:([a-f0-9]{64})\nsize (\d+)\n$/.exec(content.toString());
-          const oid = pointer?.[1];
-          if (!pointer || !oid) throw new GitSafetyError('Git LFS 포인터 형식이 올바르지 않습니다.');
-          await this.git(['lfs', 'version']);
-          await this.git(['-c', `remote.origin.url=${(await this.trusted()).source}`, 'lfs', 'fetch', 'origin', commit]);
-          content = await readFile(await safePath(join(this.path, 'lfs/objects', oid.slice(0, 2), oid.slice(2, 4), oid)));
-          if (content.length !== Number(pointer[2]) || createHash('sha256').update(content).digest('hex') !== oid) {
-            throw new GitSafetyError('Git LFS 파일의 크기·해시가 일치하지 않습니다.');
+      return await this.worktreeUpdate(async () => {
+        cancelled();
+        const started = await this.trusted();
+        if (started.resetting) throw new GitSafetyError('초기화 정리 중에는 입력 사본을 만들 수 없습니다.');
+        if (await stat(path)) throw new GitSafetyError('기존 입력 버전은 덮어쓰지 않습니다.');
+        const generation = started.resetGeneration ?? 0;
+        const entries = (await this.tree(commit)).filter((entry) => entry.path === 'prototype' || entry.path.startsWith('prototype/'));
+        if (entries.length === 0) throw new GitSafetyError('prototype 입력이 없습니다.');
+        for (const entry of entries) {
+          if (entry.mode === '120000') throw new GitSafetyError('입력의 symlink는 허용하지 않습니다.');
+          if (entry.mode === '160000') throw new GitSafetyError('입력의 submodule은 따라가지 않습니다.');
+          if (!['100644', '100755'].includes(entry.mode) || entry.path.split('/').some((p) => ['.', '..', '.git'].includes(p))) {
+            throw new GitSafetyError('입력 경로·파일 형식이 올바르지 않습니다.');
           }
         }
-        const target = join(path, entry.path);
-        await mkdir(dirname(target), { recursive: true, mode: 0o700 });
-        await writeFile(target, content, { flag: 'wx', mode: 0o444 });
-      }
-      async function lock(folder: string): Promise<void> {
-        for (const name of await readdir(folder, { withFileTypes: true })) {
-          if (name.isDirectory()) await lock(join(folder, name.name));
+        const temp = await safePath(join(this.inputs, `${INPUT_TEMP}${inputId}-${String(generation)}-${randomUUID()}`));
+        await mkdir(temp, { mode: 0o700 });
+        try {
+          for (const entry of entries) {
+            cancelled();
+            let content = await this.blob(entry);
+            if (content.toString().startsWith('version https://git-lfs.github.com/spec/v1\n')) {
+              const pointer = /^version https:\/\/git-lfs.github.com\/spec\/v1\noid sha256:([a-f0-9]{64})\nsize (\d+)\n$/.exec(content.toString());
+              const oid = pointer?.[1];
+              if (!pointer || !oid) throw new GitSafetyError('Git LFS 포인터 형식이 올바르지 않습니다.');
+              await this.git(['lfs', 'version']);
+              await this.git(['-c', `remote.origin.url=${(await this.trusted()).source}`, 'lfs', 'fetch', 'origin', commit]);
+              content = await readFile(await safePath(join(this.path, 'lfs/objects', oid.slice(0, 2), oid.slice(2, 4), oid)));
+              if (content.length !== Number(pointer[2]) || createHash('sha256').update(content).digest('hex') !== oid) {
+                throw new GitSafetyError('Git LFS 파일의 크기·해시가 일치하지 않습니다.');
+              }
+            }
+            const target = join(temp, entry.path);
+            await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+            await writeFile(target, content, { flag: 'wx', mode: 0o444 });
+          }
+          async function lock(folder: string): Promise<void> {
+            for (const name of await readdir(folder, { withFileTypes: true })) {
+              if (name.isDirectory()) await lock(join(folder, name.name));
+            }
+            await chmod(folder, 0o555);
+          }
+          for (const name of await readdir(temp, { withFileTypes: true })) if (name.isDirectory()) await lock(join(temp, name.name));
+          cancelled();
+          // 공개 직전 확인(잠금 안). 초기화 세대가 바뀌었거나 같은 이름이 생겼으면 공개하지 않는다.
+          const finished = await this.trusted();
+          if (finished.resetting || (finished.resetGeneration ?? 0) !== generation) {
+            throw new GitSafetyError('입력 사본을 만드는 동안 초기화가 있어 공개하지 않았습니다.');
+          }
+          if (await stat(path)) throw new GitSafetyError('기존 입력 버전은 덮어쓰지 않습니다.');
+          cancelled();
+          await rename(temp, path);
+          await chmod(path, 0o555);
+          return path;
+        } catch (error) {
+          // 자기 임시 폴더만 지운다(공개 경로는 건드리지 않음).
+          await removeReadonly(temp).catch(() => undefined);
+          throw error;
         }
-        await chmod(folder, 0o555);
-      }
-      await lock(path);
-      // 만드는 사이 초기화가 시작됐거나(진행 중) 이미 한 번 지나갔으면(세대 변경) 이 사본은 정리 대상이다. 지우고 실패한다.
-      const finished = await this.trusted();
-      if (finished.resetting || (finished.resetGeneration ?? 0) !== generation) {
-        throw new GitSafetyError('입력 사본을 만드는 동안 초기화 정리가 있어 사본을 지웠습니다.');
-      }
-      return path;
-    } catch (error) {
-      await removeReadonly(path);
-      throw error;
+      });
+    } finally {
+      active.delete(controller);
     }
   }
 
