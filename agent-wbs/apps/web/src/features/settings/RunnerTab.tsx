@@ -188,6 +188,8 @@ function GithubCard({ repoUrl }: { repoUrl: string | null }) {
           {saveToken.conflictModal}
           <div className="msg-acts">
             <BusyButton small variant="default" busy={check.busy} busyLabel="확인 중…" onClick={() => { void check.save(); }}>연결 확인</BusyButton>
+            {/* 서버 후속 3차 checkedAt: 요청 접수가 아니라 Runner의 실제 확인 보고를 받은 시각(M3 통합) */}
+            <span className="muted" data-testid="gh-checked-at">{data.checkedAt ? `마지막 확인 ${at(data.checkedAt)}` : '아직 Runner 확인 보고 없음'}</span>
           </div>
         </>
       )}
@@ -247,6 +249,16 @@ function ConnectionCard({ runner }: { runner: RunnerState | undefined }) {
 /* ---------------- Runner 준비 상태(UI-12-01B, P L2280–2288) ---------------- */
 
 function ReadinessCard({ runner }: { runner: ReturnType<typeof useApiQuery<'getRunnerState'>> }) {
+  const { client } = useApi();
+  const notify = useNotice();
+  // 「다시 점검」(원본 P L2282): 서버 후속 3차 POST /api/settings/readiness/check(checkReadiness, 202)에 연결(M3 통합).
+  // 서버는 요청 번호만 올려 Runner에 전한다. 결과·점검 시각은 Runner가 다시 점검해 보고한 뒤에만 바뀐다(거짓 성공 금지).
+  const recheck = useSave<ResponseOf<'checkReadiness'>>({
+    target: 'Runner 준비 상태 다시 점검',
+    failTitle: '다시 점검을 요청하지 못했습니다',
+    run: ({ idempotencyKey }) => client.call('checkReadiness', { idempotencyKey }),
+    onSuccess: () => { notify('다시 점검을 요청했습니다 — Runner가 점검해 보고하면 결과와 점검 시각이 바뀝니다.'); },
+  });
   const readiness = runner.data?.readiness ?? null;
   const items = readiness?.items ?? [];
   const bad = items.filter((x) => x.status === 'fail').length;
@@ -256,11 +268,10 @@ function ReadinessCard({ runner }: { runner: ReturnType<typeof useApiQuery<'getR
   return (
     <section className="card" aria-labelledby="set-ready">
       <CardHead id="set-ready" title="Runner 준비 상태">
-        {readiness && (
-          <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <span className={sum.c}>{sum.l}</span><span className="muted">점검 {at(readiness.at)}</span>
-          </span>
-        )}
+        <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {readiness && <><span className={sum.c}>{sum.l}</span><span className="muted">점검 {at(readiness.at)}</span></>}
+          <BusyButton small variant="default" busy={recheck.busy} busyLabel="요청 중…" onClick={() => { void recheck.save(); }}>다시 점검</BusyButton>
+        </span>
       </CardHead>
       <p className="fhint" style={{ margin: '0 0 8px' }}>Runner가 시작할 때와 매일 한 번 실행 환경을 스스로 점검해 보고합니다. 문제가 있는 Agent는 실행을 멈추고 대시보드에 알림을 띄웁니다 — 직접 설치 · 점검 목록을 관리할 필요가 없습니다.</p>
       <QueryGate query={runner} label="Runner 상태" />

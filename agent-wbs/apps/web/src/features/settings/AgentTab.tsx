@@ -16,6 +16,15 @@ import { TableScroll } from '../../shared/ui/TableScroll.tsx';
 import { agentMark, EFFORT_LABEL, OPTIONS, withValue } from './labels.ts';
 import { CardHead, QueryGate, Row, Seg, useSettingQuery } from './ui.tsx';
 import { useSettingForm } from './useSettingForm.tsx';
+import { LINK } from '../../shared/links.ts';
+import { AlertAck } from '../../shared/ui/AlertAck.tsx';
+
+/**
+ * 팀장 고정 Task·모델별 사용 Task·하위 Agent 사용 현황(서버 후속 3차 GET /api/settings/agent-usage, M3 통합).
+ * 원본 P L6761–6776(ex)·L6710–6716(sa) 계산을 서버가 한다. 화면은 받은 값만 보인다.
+ * - 실제 사용은 Runner가 관측한 기록만 센다(설치만으로는 사용이 아님). 재작업률은 첫 QA의 PASS·FAIL만 센다.
+ */
+const useAgentUsage = () => useSettingQuery('getAgentUsage', '모델 · 하위 Agent 사용 현황', ['settings', 'task', 'attempt', 'verification']);
 
 const AGENTS = ['Claude', 'Codex'] as const;
 type AgentName = (typeof AGENTS)[number];
@@ -114,6 +123,7 @@ function orderedModels(d: ModelData, form: ModelForm, agent: AgentName) {
 function ExecPolicyCard() {
   const { client } = useApi();
   const mq = useSettingQuery('getModelSettings', '허용 모델');
+  const usage = useAgentUsage();
   const models = useSettingForm({
     id: 'models',
     label: '허용 모델 · 모델 순서',
@@ -176,9 +186,9 @@ function ExecPolicyCard() {
                   <span className="agent"><span className={`ag-mk ${mark.cls}`} aria-hidden="true">{mark.init}</span><b>{agent}</b></span>
                   <span className="muted" style={{ fontSize: 12 }}>Effort {efforts ? efforts.map((e) => `${EFFORT_LABEL[e.key] ?? e.key} (${e.key})`).join(' · ') : '미확인'}</span>
                 </div>
-                <TableScroll minWidth={520} label={`${agent} 모델 표`}>
+                <TableScroll minWidth={640} label={`${agent} 모델 표`}>
                   <div className="gtb" style={{ margin: 0 }}>
-                    <div className="gtr h" style={{ gridTemplateColumns: 'minmax(110px,1fr) 96px 148px 84px', minWidth: 0 }}><span className="gc">모델</span><span className="gc">순위</span><span className="gc">상태</span><span className="gc" /></div>
+                    <div className="gtr h" style={{ gridTemplateColumns: 'minmax(110px,1fr) 96px 148px 124px 84px', minWidth: 0 }}><span className="gc">모델</span><span className="gc">순위</span><span className="gc">상태</span><span className="gc">사용</span><span className="gc" /></div>
                     {rows.length === 0 && <div className="gtr"><span className="gc muted">설정된 모델 순서도, Runner가 보고한 모델도 없습니다. Runner가 연결되면 사용 가능한 모델을 보고합니다.</span></div>}
                     {rows.map((m) => {
                       const key = modelKey(agent, m.id);
@@ -198,7 +208,7 @@ function ExecPolicyCard() {
                         });
                       };
                       return (
-                        <div key={key} className="gtr" style={{ gridTemplateColumns: 'minmax(110px,1fr) 96px 148px 84px', minWidth: 0 }}>
+                        <div key={key} className="gtr" style={{ gridTemplateColumns: 'minmax(110px,1fr) 96px 148px 124px 84px', minWidth: 0 }}>
                           <span className="gc"><b>{m.label}</b> <span className="mono muted" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{m.id}</span></span>
                           <span className="gc mono">
                             {m.listed ? `순위 ${String(m.rank)}` : '순서 없음'}
@@ -210,6 +220,8 @@ function ExecPolicyCard() {
                             )}
                           </span>
                           <span className="gc"><span className={st.c}>{st.l}</span></span>
+                          {/* 원본 m.used(P L6764): 허용 모델만 「사용 중 Task n건」(완료·취소 제외, 서버 집계) */}
+                          <span className="gc muted">{allowed && usage.query.data ? `사용 중 Task ${String(usage.query.data.models.find((u) => String(u.agent) === agent && u.modelId === m.id)?.taskKeys.length ?? 0)}건` : '—'}</span>
                           <span className="gc">
                             {m.reported && <button type="button" className="btn ghost sm" onClick={() => { models.edit((f) => ({ ...f, allowed: { ...f.allowed, [key]: !allowed } })); }}>{allowed ? '허용 해제' : '허용'}</button>}
                           </span>
@@ -254,6 +266,15 @@ function ExecPolicyCard() {
                   <span className="fhint">{desc}</span>
                 </Row>
               ))}
+              {/* 원본 P L2430: 팀장 고정 Task. 개발·검증이 모두 고정이면 서버는 두 행을 주므로 Task로 묶는다. */}
+              <Row label="팀장 고정 Task">
+                {usage.query.data === undefined ? <QueryGate query={usage.query} label="팀장 고정 Task" /> : (() => {
+                  const locked = [...new Map(usage.query.data.lockedTasks.map((t) => [t.taskKey, t])).values()];
+                  return locked.length === 0
+                    ? <span className="muted">없음 — 모든 Task가 Planning Agent 판단을 따릅니다.</span>
+                    : <span style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{locked.map((t) => <Link key={t.taskKey} className="reflink" to={LINK.task(t.taskKey, 'overview')}>{t.taskKey} {t.title}</Link>)}</span>;
+                })()}
+              </Row>
               {escalations.length > 0 && (
                 <div className="banner warn" role="note">
                   <div className="banner-b">
@@ -262,7 +283,9 @@ function ExecPolicyCard() {
                       <div key={a.id} className="al-row">
                         <span className="mono muted">{formatDateTime(a.at)}</span>
                         <span className="al-t">{a.taskKey ? `${a.taskKey} — ` : ''}{a.text}</span>
-                        {a.taskKey && <Link className="btn ghost sm" to={`/wbs/${a.taskKey}`}>실행 보기</Link>}
+                        {/* 원본 al.open = goExec(작업 실행). 통합 전에는 WBS 상세로 갔다(공통 주소 LINK.exec로 바로잡음) */}
+                        {a.taskKey && <Link className="btn ghost sm" to={LINK.exec(a.taskKey)}>실행 보기</Link>}
+                        <AlertAck id={a.id} label={a.text} />
                       </div>
                     ))}
                   </div>
@@ -296,7 +319,9 @@ function SubagentCard() {
   const [open, setOpen] = useState<string | null>(null);
   const d = q.query.data;
   const f = sa.form;
-  const cols = 'minmax(170px,1.1fr) 90px 100px minmax(150px,1fr) 120px 150px';
+  // 원본 P L2442 열 그대로: 지정 Task·마지막 사용·재작업률은 서버 사용 현황(getAgentUsage)
+  const cols = 'minmax(170px,1.1fr) 90px 100px minmax(150px,1fr) 100px 80px 120px 110px 150px';
+  const usage = useAgentUsage();
   return (
     <section className="card" aria-labelledby="set-sa">
       <CardHead id="set-sa" title="하위 Agent">
@@ -313,9 +338,9 @@ function SubagentCard() {
             </Row>
           </div>
           {!f.enabled && <div className="banner warn" role="note"><div className="banner-b">하위 Agent를 쓰지 않습니다 — Task에 지정된 하위 Agent 기록은 그대로 두고, 새 실행은 기본 Agent만으로 합니다. 지정된 하위 Agent는 쓰이지 않습니다.</div></div>}
-          <TableScroll minWidth={900} label="하위 Agent 정의 표">
+          <TableScroll minWidth={1100} label="하위 Agent 정의 표">
             <div className="gtb" style={{ margin: 0 }}>
-              <div className="gtr h" style={{ gridTemplateColumns: cols, minWidth: 0 }}><span className="gc">하위 Agent</span><span className="gc">역할</span><span className="gc">Agent</span><span className="gc">도구 · 권한</span><span className="gc">버전</span><span className="gc">상태</span></div>
+              <div className="gtr h" style={{ gridTemplateColumns: cols, minWidth: 0 }}><span className="gc">하위 Agent</span><span className="gc">역할</span><span className="gc">Agent</span><span className="gc">도구 · 권한</span><span className="gc">버전</span><span className="gc">지정 Task</span><span className="gc">마지막 사용</span><span className="gc">재작업률</span><span className="gc">상태</span></div>
               {d.defs.length === 0 && <div className="gtr"><span className="gc muted">등록된 하위 Agent 정의가 없습니다. 검토를 마친 정의가 system seed로 들어오면 여기에 보입니다.</span></div>}
               {d.defs.map((x) => {
                 const allowed = f.allowed[x.id] ?? x.allowed;
@@ -329,6 +354,19 @@ function SubagentCard() {
                       <span className="gc"><span className="agent"><span className={`ag-mk ${mark.cls}`} aria-hidden="true">{mark.init}</span>{x.agent}</span></span>
                       <span className="gc">{x.tools}<br /><span className="muted">{x.sandbox}</span></span>
                       <span className="gc mono">{`v${String(x.version)}`}<br /><span className="muted">{x.hash.slice(0, 12)}</span></span>
+                      {(() => {
+                        if (!usage.query.data) return <><span className="gc mono muted">—</span><span className="gc mono muted">—</span><span className="gc muted">—</span></>;
+                        // 사용 현황에 없는 정의는 지정·사용 기록이 없는 것이다(원본: 0건 · 사용 기록 없음 · 판정 전).
+                        const u = usage.query.data.subagents.find((y) => y.id === x.id) ?? { taskKeys: [], lastAttemptKey: null, lastUsedAt: null, decisions: 0, failures: 0 };
+                        const rate = u.decisions ? u.failures / u.decisions : null;
+                        return (
+                          <>
+                            <span className="gc mono">{`${String(u.taskKeys.length)}건`}</span>
+                            <span className="gc mono"><span className="tcell"><span>{u.lastAttemptKey ?? '사용 기록 없음'}</span>{u.lastUsedAt && <span className="tid">{formatDateTime(u.lastUsedAt).slice(5)}</span>}</span></span>
+                            <span className="gc"><span className={rate === null ? 'muted' : rate >= 0.3 ? 'sc sc-bad' : 'sc sc-ok'}>{rate === null ? '판정 전' : `${String(Math.round(rate * 100))}% (${String(u.failures)}/${String(u.decisions)})`}</span></span>
+                          </>
+                        );
+                      })()}
                       <span className="gc"><span className={allowed ? 'sc sc-ok' : 'sc sc-none'}>{allowed ? '허용' : '미허용'}</span> <button type="button" className="btn ghost sm" onClick={() => { sa.edit((y) => ({ ...y, allowed: { ...y.allowed, [x.id]: !allowed } })); }}>{allowed ? '허용 해제' : '허용'}</button></span>
                     </div>
                     {isOpen && <div className="subtext"><pre>{x.text}</pre>{x.ref && <span className="muted">참고: {x.ref}</span>}</div>}

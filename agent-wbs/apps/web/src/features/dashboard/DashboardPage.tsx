@@ -8,7 +8,7 @@
  *
  * 원본과 다른 점:
  * - 모든 항목은 주소가 있는 링크다(새로고침·뒤로 가기, MM-29). WBS 필터는 `/wbs?status=done` 같은 주소로 넘긴다.
- * - 알림의 「확인」(닫기) 버튼은 없다. 팀장이 알림을 닫는 API가 계약에 없어 가짜 버튼을 두지 않는다(보고함).
+ * - 알림의 「확인」 버튼은 서버 후속 3차 ackAlert에 연결했다(M3 통합, shared/ui/AlertAck.tsx). 예전 설명: 닫는 API가 없어 두지 않았다(보고함).
  */
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
@@ -22,6 +22,7 @@ import { TableScroll } from '../../shared/ui/TableScroll.tsx';
 import { useTopBar } from '../../shared/ui/feedback.tsx';
 import { agentClass, agentInitial } from '../verify/labels.ts';
 import '../verify/screens.css';
+import { AlertAck } from '../../shared/ui/AlertAck.tsx';
 import {
   alertLink, domainBars, gradeRows, panels, recentRows, schedCards, schedNote, taskKpis, typeBars, type AlertItem, type Dashboard,
 } from './model.ts';
@@ -76,6 +77,7 @@ function AlertsBanner({ alerts, failed, onRetry }: { alerts: AlertItem[] | undef
               <span className="mono muted">{formatDateTime(al.at)}</span>
               <span className="al-t">{al.text}</span>
               <Link className="btn ghost sm" to={link.to}>{link.label}</Link>
+              <AlertAck id={al.id} label={al.text} />
             </div>
           );
         })}
@@ -184,8 +186,8 @@ function DashboardView({ d, banner, note }: { d: Dashboard; banner: ReactNode; n
           <TableScroll minWidth={640} label="최근 실행 · 검증 결과 목록">
             {recent.map((r) => (
               <Link key={r.key} className="dl-i rec" to={r.to}>
-                <span className="mono muted">{r.at}</span><span className="tag">{r.kind}</span><span className="mono">{r.taskKey}</span>
-                <span className="muted">{r.agent}</span><span className="dl-t">{r.t}</span><span className={r.tagC}>{r.tag}</span>
+                <span className="mono muted">{r.at}</span><span className="tag">{r.kind}</span><span className="mono">{r.id}</span>
+                <span className="mono muted">{r.sub}</span><span className="dl-t">{r.t}</span><span className={r.tagC}>{r.tag}</span>
               </Link>
             ))}
           </TableScroll>

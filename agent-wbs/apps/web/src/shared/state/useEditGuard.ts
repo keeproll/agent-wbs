@@ -8,6 +8,7 @@
  * 문구는 원본 guard(P L5054) 그대로.
  */
 import { createContext, useContext, useEffect } from 'react';
+import { flushSync } from 'react-dom';
 import { useBlocker } from 'react-router';
 import { useConfirm, useStableCallback } from '../ui/feedback.tsx';
 
@@ -60,7 +61,10 @@ export function useHostedEditGuard(dirty: boolean): { guard: (action: () => void
   // 부품이 사라지면(다른 Task로 옮김 등) 부모에게 「입력 없음」을 알린다.
   useEffect(() => () => { report?.(false); }, [report]);
   const guard = useStableCallback(async (action: () => void) => {
-    if (!dirty || await confirm(DISCARD_CONFIRM)) action();
+    if (dirty && !await confirm(DISCARD_CONFIRM)) return;
+    // 버리기로 했으면 부모 보호기를 먼저(동기로) 풀어, 이어지는 주소 변경(탭 ?tab= 등)이 다시 막히지 않게 한다.
+    if (dirty) flushSync(() => { report?.(false); });
+    action();
   });
   return { guard };
 }

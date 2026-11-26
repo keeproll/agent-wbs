@@ -83,10 +83,10 @@ export function panels(p: Dashboard['panels']): Panel[] {
     to: LINK.task(x.taskKey, 'overview'),
   }));
   const approvals = p.approvals.map((x): PanelItem => (x.kind === 'planning'
-    ? { key: `pl-${x.id}`, id: 'Planning', t: x.title, tag: `이견 ${String(x.unresolved)}건 미조정`, tagC: 'kb k-diff', to: LINK.planning(x.id) }
-    : { key: `cp-${x.id}`, id: 'CP', t: x.title, tag: CP_STATUS[String(x.status)]?.l ?? String(x.status), tagC: `cps ${CP_STATUS[String(x.status)]?.c ?? ''}`, to: LINK.change(x.id) }));
+    ? { key: `pl-${x.id}`, id: x.planningKey ?? 'Planning', t: x.title, tag: `이견 ${String(x.unresolved)}건 미조정`, tagC: 'kb k-diff', to: LINK.planning(x.id) }
+    : { key: `cp-${x.id}`, id: x.cpKey ?? 'CP', t: x.title, tag: CP_STATUS[String(x.status)]?.l ?? String(x.status), tagC: `cps ${CP_STATUS[String(x.status)]?.c ?? ''}`, to: LINK.change(x.id) }));
   const executions = p.executions.map((x): PanelItem => (x.kind === 'running'
-    ? { key: `run-${x.attemptId}`, id: x.taskKey, t: x.title, tag: `${ATTEMPT_KIND_LABEL[String(x.attemptKind)] ?? String(x.attemptKind)} · ${String(x.agent)}`, tagC: 'st s-run', to: LINK.exec(x.taskKey, x.attemptId) }
+    ? { key: `run-${x.attemptId}`, id: x.attemptKey ?? x.taskKey, t: x.title, tag: `${ATTEMPT_KIND_LABEL[String(x.attemptKind)] ?? String(x.attemptKind)} · ${String(x.agent)}`, tagC: 'st s-run', to: LINK.exec(x.taskKey, x.attemptId) }
     : { key: `ready-${x.taskKey}`, id: x.taskKey, t: x.title, tag: '실행 대기', tagC: 'st s-ready', to: LINK.exec(x.taskKey) }));
   const rework = p.rework.map((x): PanelItem => ({
     key: x.taskKey, id: x.taskKey, t: x.title,
@@ -142,15 +142,20 @@ export function gradeRows(g: Dashboard['grades']): GradeRow[] {
   });
 }
 
-export interface RecentRow { key: string; at: string; kind: string; taskKey: string; agent: string; t: string; tag: string; tagC: string; to: string }
+/**
+ * 최근 결과 한 줄(원본 P L1897: 시각·종류·ID·Task·내용·결과).
+ * M3 통합: 서버 후속 3차가 시도 번호(attemptKey)·검증 번호(verificationKey)를 준다. 있으면 원본처럼 3번째 칸이 번호, 4번째가 Task다.
+ * 번호가 없는 옛 응답이면 3번째 Task, 4번째 Agent로 보인다(이전 동작).
+ */
+export interface RecentRow { key: string; at: string; kind: string; id: string; sub: string; t: string; tag: string; tagC: string; to: string }
 export function recentRows(r: Dashboard['recent']): RecentRow[] {
   return [...r].sort((a, b) => b.at.localeCompare(a.at)).slice(0, 8).map((x) => (x.kind === 'attempt'
     ? {
-      key: `a-${x.id}`, at: formatDateTime(x.at), kind: '실행', taskKey: x.taskKey, agent: String(x.agent), t: x.text,
+      key: `a-${x.id}`, at: formatDateTime(x.at), kind: '실행', id: x.attemptKey ?? x.taskKey, sub: x.attemptKey ? x.taskKey : String(x.agent), t: x.text,
       tag: ATTEMPT_STATUS[String(x.status)]?.l ?? String(x.status), tagC: `st ${ATTEMPT_STATUS[String(x.status)]?.c ?? 's-plan'}`, to: LINK.exec(x.taskKey, x.id),
     }
     : {
-      key: `v-${x.id}`, at: formatDateTime(x.at), kind: '검증', taskKey: x.taskKey, agent: String(x.agent), t: x.text,
+      key: `v-${x.id}`, at: formatDateTime(x.at), kind: '검증', id: x.verificationKey ?? x.taskKey, sub: x.verificationKey ? x.taskKey : String(x.agent), t: x.text,
       tag: String(x.result), tagC: verdictClass(String(x.result)), to: LINK.verification(x.id),
     }));
 }

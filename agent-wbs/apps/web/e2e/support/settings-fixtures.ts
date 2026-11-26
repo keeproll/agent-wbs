@@ -145,6 +145,9 @@ export function settingsApi(api: FakeApi, runner: ResponseOf<'getRunnerState'> =
   api.on('GET /api/schedule', (route) => json(route, 200, SCHEDULE));
   api.on('GET /api/alerts', (route) => json(route, 200, { items: [] }));
   api.on('GET /api/system/integrity', (route) => json(route, 200, INTEGRITY));
+  // 서버 후속 3차(M3 통합): 분할 위반 목록·사용 현황. 기본은 비어 있다. 시험마다 api.on으로 바꾼다.
+  api.on('GET /api/settings/split/violations', (route) => json(route, 200, { count: 0, items: [] }));
+  api.on('GET /api/settings/agent-usage', (route) => json(route, 200, { lockedTasks: [], models: [], subagents: [] }));
   return {
     workflow: echoPut(api, '/api/settings/workflow', WORKFLOW),
     exec: echoPut(api, '/api/settings/exec-policy', EXEC),

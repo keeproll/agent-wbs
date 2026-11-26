@@ -54,7 +54,9 @@ function useBadges(): Partial<Record<SettingsTab, { count: number; alert: boolea
   const readinessBad = runner.data?.readiness?.items.filter((item) => item.status !== 'ok').length ?? 0;
   const githubBad = github.data && !githubOk(github.data.scopes) ? 1 : 0;
   const count = readinessBad + githubBad;
-  return { runner: { count, alert: count > 0 } };
+  // 일정 · Task 탭: 분할 기준 위반·의심 Task 수(P L6660 bPlan, 서버 후속 3차 getSplitViolations). 원본처럼 경고색이 아닌 보통 배지다.
+  const split = useApiQuery('getSplitViolations', {}, { topics: ['settings', 'task'] });
+  return { runner: { count, alert: count > 0 }, plan: { count: split.data?.count ?? 0, alert: false } };
 }
 
 function SettingsBody({ tab, preReg, repoUrl }: { tab: SettingsTab; preReg: string | null; repoUrl: string | null }) {

@@ -11,6 +11,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { MenuScreen, useRefreshError, useRevisitFetching } from '../../shared/layout/MenuScreen.tsx';
 import { useDocumentTitle } from '../../shared/layout/Page.tsx';
+import { useApiQuery } from '../../shared/api/queries.ts';
 import { LoadError } from '../../shared/ui/LoadError.tsx';
 import { AreaLoading, PageSkeleton, useDelayedFlag } from '../../shared/ui/loading.tsx';
 import { AreaError } from './AreaError.tsx';
@@ -24,8 +25,19 @@ import { flowOf, nextStep, pickAttempt, runnerReason, sortAttempts, type RunnerS
 import { useExecData } from './useExecData.ts';
 import { LINK } from '../../shared/links.ts';
 
-/** contracts §3.5: 같은 종류 연속 실패는 최초 포함 총 3회, 자동 재작업은 Task당 3회 */
+/** contracts §3.5: 같은 종류 연속 실패는 최초 포함 총 3회, 자동 재작업은 Task당 3회. 설정을 아직 읽지 못했을 때의 기본값이다. */
 export const AUTO_LIMITS = { retry: 3, rework: 3 } as const;
+
+/**
+ * 자동 진행 한도(M3 통합). 서버 후속 3차는 저장된 설정(autoRetryLimit·autoReworkLimit)으로 자동 재시도·재작업을 판정한다.
+ * 화면 안내도 같은 값을 써야 서버와 어긋나지 않는다.
+ * - autoRetryLimit은 첫 실패 뒤 다시 시도하는 횟수다. 화면은 「최초 포함 총 n회」로 보이므로 +1 한다(기본 2 → 총 3회).
+ * - autoReworkLimit은 그대로 자동 재작업 횟수다(기본 3).
+ */
+function useAutoLimits() {
+  const policy = useApiQuery('getExecPolicy', {}, { topics: ['settings'] });
+  return policy.data ? { retry: policy.data.autoRetryLimit + 1, rework: policy.data.autoReworkLimit } : AUTO_LIMITS;
+}
 const TITLE = '작업 실행';
 const SUB = '개발 → QA → 재작업 → 재검증 → Completion Gate → 완료 · 첫 개발만 팀장이 시작하고, 이후 단계는 서버가 Runner 보고에 따라 자동으로 이어 갑니다';
 
@@ -44,6 +56,7 @@ function useNow(): number {
 }
 
 function ExecBody({ projectId }: { projectId: string }) {
+  const limits = useAutoLimits();
   useDocumentTitle(TITLE);
   const now = useNow();
   const { taskKey } = useParams();
@@ -106,7 +119,7 @@ function ExecBody({ projectId }: { projectId: string }) {
     const agent = String((isDevSide ? task.assigneeAgent : task.verifierAgent) ?? 'Claude');
     const reason = runner ? runnerReason(runner, agent, task.taskKey)
       : data.runner.isError ? 'Runner 상태를 불러오지 못해 실행할 수 있는지 확인하지 못했습니다 — 요청하면 서버가 판단합니다.' : '';
-    const next = nextStep({ task, flow, attempts, verifications, alerts: taskAlerts, reason, limits: AUTO_LIMITS });
+    const next = nextStep({ task, flow, attempts, verifications, alerts: taskAlerts, reason, limits });
     return (
       <ExecCenter
         key={`center:${task.taskKey}`} projectId={projectId} task={task} flow={flow} next={next} attempt={attempt} missingAttempt={missing}

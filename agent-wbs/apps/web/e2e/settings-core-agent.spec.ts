@@ -64,7 +64,8 @@ test('UAT-POLICY-01: 실행 정책 기본값(낮춤 기준 20%)과 변경 저장
   const alert = card.getByRole('note').filter({ hasText: '팀장 확인 필요' });
   await expect(alert.getByText('TASK-0007 — 자동 재작업 한도를 넘었습니다.')).toBeVisible();
   await expect(alert.getByText('다른 알림')).toHaveCount(0);
-  await expect(alert.getByRole('link', { name: '실행 보기' })).toHaveAttribute('href', '/wbs/TASK-0007');
+  // 원본 al.open = goExec(작업 실행). M3 통합에서 WBS 상세 대신 작업 실행 주소로 바로잡았다(공통 LINK.exec).
+  await expect(alert.getByRole('link', { name: '실행 보기' })).toHaveAttribute('href', '/exec/TASK-0007');
   await card.getByRole('group', { name: '재작업 시' }).getByRole('button', { name: '같은 등급 유지' }).click();
   await expect(card.getByText(/같은 등급 유지 — 재작업이 반복되어도 등급이 오르지 않습니다/)).toBeVisible();
   await card.getByRole('group', { name: '사용량 부족 시' }).getByRole('button', { name: '리셋까지 대기' }).click();

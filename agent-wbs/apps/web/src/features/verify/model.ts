@@ -28,7 +28,8 @@ export function verificationKeys(verifs: readonly VerificationItem[]): Map<strin
   for (const x of [...verifs].sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id))) {
     const n = (seen.get(x.taskKey) ?? 0) + 1;
     seen.set(x.taskKey, n);
-    keys.set(x.id, `V-${x.taskKey.replace(/^TASK-/, '')}-${String(n)}`);
+    // M3 통합: 서버 후속 3차가 검증 번호(verificationKey)를 준다. 있으면 그 값을 쓴다(대시보드와 같은 번호, 필터·쪽과 무관).
+    keys.set(x.id, x.verificationKey ?? `V-${x.taskKey.replace(/^TASK-/, '')}-${String(n)}`);
   }
   return keys;
 }

@@ -80,8 +80,12 @@ test('UAT-DASH-01 b: 경고는 GET /api/alerts에서 읽고, 정책 임계 알�
   await expect(banner.getByRole('link', { name: 'TASK-0007 실행 보기' })).toHaveAttribute('href', '/exec/TASK-0007');
   await expect(banner.getByRole('link', { name: '프로젝트 보기' })).toHaveAttribute('href', '/project');
   await expect(banner.getByRole('link', { name: '설계 보기' })).toHaveAttribute('href', '/design');
-  // 닫기(확인) API가 계약에 없어 가짜 버튼을 두지 않는다.
-  await expect(banner.getByRole('button', { name: '확인' })).toHaveCount(0);
+  // M3 통합: 서버 후속 3차 ackAlert로 알림마다 「확인」 버튼이 있다(원본 P L1865). 누르면 확인 처리하고 목록을 다시 읽는다.
+  await expect(banner.getByRole('button', { name: /알림 확인$/ })).toHaveCount(3);
+  api.on('POST /api/alerts/al0/ack', (route) => route.fulfill({ status: 204 }));
+  await banner.getByRole('button', { name: '자동 재작업 한도를 넘었습니다. 알림 확인' }).click();
+  await expect(page.getByText('알림을 확인 처리했습니다.')).toBeVisible();
+  expect(api.requests('POST /api/alerts/al0/ack')[0]?.headers()['idempotency-key']).toBeTruthy();
 });
 
 test('UAT-DASH-01: 알림이 없으면 경고 막대가 없고, 알림 불러오기 실패는 다시 시도로 알린다', async ({ page }) => {

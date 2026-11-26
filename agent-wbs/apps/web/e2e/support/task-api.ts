@@ -131,8 +131,13 @@ export function detail(s: TaskStore, key: string): Detail {
     predecessors: s.deps.filter((d) => d.succ === key).map(dep),
     successors: s.deps.filter((d) => d.pred === key).map(dep),
     planningApprovedAt: t.approved ? iso('2026-10-27 10:20') : null,
-    // M3 통합: main(srv-perf)에서 getTask에 추가된 칸. M3-03 화면은 아직 읽지 않으므로 빈 값으로 둔다.
-    estimate: null, fixStart: null, actStart: null, actEnd: null, actualHours: 0,
+    // M3 통합: main(srv-perf)에서 getTask에 추가된 칸. 원본 Mock의 추정·실제 값(P SCHED_MOCK)을 계약 모양으로 옮긴다.
+    estimate: t.est ? { estHours: t.est, loHours: t.lo, hiHours: t.hi, tokensK: t.tok ?? null, confidence: t.conf ?? '하', basis: t.basis ?? '', agreedBy: t.estBy ?? 'Planning Agent', at: iso('2026-10-27 10:20') } : null,
+    fixStart: t.fixStart || null, actStart: t.actStart ? iso(t.actStart) : null, actEnd: t.actEnd ? iso(t.actEnd) : null,
+    actualHours: Math.round(s.attempts.filter((a) => a.task === key && a.end).reduce((h, a) => {
+      const start = Date.parse(iso(a.start)); const end = Date.parse(iso(`${(a.start as string).slice(0, 10)} ${a.end as string}`));
+      return h + Math.max(0, end - start) / 3_600_000;
+    }, 0) * 10) / 10,
     conflictGroup: t.cg ?? null,
     srcInputVersion: t.srcV ?? null,
     grades: { dev: grade(t.run), qa: grade(t.vrun) },
@@ -226,7 +231,7 @@ export function mountOne(api: FakeApi, s: TaskStore, key: string): void {
   api.on(`GET ${base}/verifications`, (route) => json(route, 200, page(verifications(s, key).vs)));
   api.on(`GET ${base}/messages`, (route) => json(route, 200, page(messages(s, key))));
   api.on(`PATCH ${base}`, async (route, req) => {
-    const b = req.postDataJSON() as { updatedAt: string; title?: string; priority?: number; assigneeAgent?: string; verifierAgent?: string };
+    const b = req.postDataJSON() as { updatedAt: string; title?: string; priority?: number; assigneeAgent?: string; verifierAgent?: string; estimate?: { estHours: number; loHours: number; hiHours: number; tokensK: number }; fixStart?: string | null };
     if (!(await fresh(route, b.updatedAt))) return;
     const x = t();
     const e: { kind: string; text: string; before?: string; after?: string }[] = [];
@@ -234,6 +239,9 @@ export function mountOne(api: FakeApi, s: TaskStore, key: string): void {
     if (b.priority !== undefined) { x.priority = b.priority; e.push({ kind: '개요 수정', text: '우선순위 변경' }); }
     if (b.assigneeAgent !== undefined) { e.push({ kind: 'Agent 변경', text: '담당 Agent 변경', before: x.assignee, after: b.assigneeAgent }); x.assignee = b.assigneeAgent; }
     if (b.verifierAgent !== undefined) { e.push({ kind: 'Agent 변경', text: '검증 Agent 변경', before: x.verifier, after: b.verifierAgent }); x.verifier = b.verifierAgent; }
+    // M3 통합: 작업량·고정 시작일(서버 updateTask estimate·fixStart). 팀장 수정이면 추정 주체가 팀장이 된다.
+    if (b.estimate) { Object.assign(x, { est: b.estimate.estHours, lo: b.estimate.loHours, hi: b.estimate.hiHours, tok: b.estimate.tokensK, estBy: '팀장', conf: x.conf ?? '하' }); e.push({ kind: '작업량 수정', text: '예상 실행 시간 변경' }); }
+    if (b.fixStart !== undefined) { x.fixStart = b.fixStart ?? ''; e.push({ kind: '일정 조건 변경', text: '고정 시작일 변경' }); }
     bump(s, key, e);
     await changed(route);
   });

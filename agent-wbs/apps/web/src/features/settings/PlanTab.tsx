@@ -6,6 +6,8 @@
  * - 원본 「Agent별 동시 실행 슬롯(최대 5)」 문구는 폐기된 규칙이라 바꿨다(MM-24, UAT-POLICY-04).
  */
 import { useContext, useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router';
+import { LINK } from '../../shared/links.ts';
 import { useQueryClient } from '@tanstack/react-query';
 import { isDateOnly } from '@awbs/shared/api';
 import { useApi } from '../../shared/api/ApiProvider.tsx';
@@ -125,6 +127,7 @@ function SplitCard() {
           </div>
         </div>
       )}
+      <SplitViolations />
       {sp.footer}
     </section>
   );
@@ -267,5 +270,31 @@ function ProgressCard() {
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * 「기준을 벗어난 Task」(원본 P L2470–2472, 계산 L6703). 서버 후속 3차 GET /api/settings/split/violations(getSplitViolations)를 그대로 보인다(M3 통합).
+ * - 위반·의심이 있는 Task만 보인다. 예외로 처리한 위반은 서버가 이미 뺀다.
+ * - 왜 서버 값을 쓰나: Task 상세의 분할 점검과 같은 판정(checkSplit)이라 화면마다 수가 달라지지 않는다.
+ */
+function SplitViolations() {
+  const q = useSettingQuery('getSplitViolations', '기준을 벗어난 Task', ['settings', 'task']);
+  const flagged = (q.query.data?.items ?? []).filter((x) => x.violations > 0 || x.suspicions > 0);
+  return (
+    <>
+      <h3 className="h4" style={{ margin: '12px 0 6px' }}>기준을 벗어난 Task</h3>
+      <QueryGate query={q.query} label="기준을 벗어난 Task" />
+      {q.query.data && !flagged.length && <p className="muted" style={{ margin: 0 }}>없습니다 — 모든 Task가 분할 기준을 지킵니다 (예외 기록 포함).</p>}
+      {flagged.map((f) => (
+        <div key={f.taskKey} className="rpt-li">
+          <span className={f.violations ? 'sc sc-bad' : 'sc sc-warn'}>{f.violations ? `위반 ${String(f.violations)}` : `의심 ${String(f.suspicions)}`}</span>
+          <Link className="reflink" to={LINK.task(f.taskKey, 'overview')}>{f.taskKey}</Link>
+          <span className="mono muted">{f.wbs}</span>
+          <span>{f.title}</span>
+          <span className="muted">{f.items.filter((i) => i.status === '위반' || i.status === '의심').map((i) => `${i.status} · ${i.label}`).join(', ')}</span>
+        </div>
+      ))}
+    </>
   );
 }

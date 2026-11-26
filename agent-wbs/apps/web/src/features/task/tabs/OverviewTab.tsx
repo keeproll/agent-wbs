@@ -2,8 +2,8 @@
  * 개요 탭(UI-03-01) + 실행 등급·하위 Agent(UI-03-01A) + 분할 근거·점검(UI-03-01B) — 원본 P L1028–1127.
  *
  * 제품과 원본이 다른 곳(README §4에 정리):
- * - 예상 토큰·추정 주체/신뢰도/근거·실제 실행·고정 시작일은 계약(TaskDetail)에 없어 보이지 않는다. 값을 지어내지 않는다(UAT-EMPTY-01).
- * - 개요 편집의 실행 시간·토큰·고정 시작일 입력도 저장할 API가 없어 두지 않는다(보고함).
+ * - (M3 통합) 예상 토큰·추정 주체/신뢰도/근거·실제 실행·고정 시작일은 이제 계약(TaskDetail)에 있어 보인다. 예전: 계약에 없어 보이지 않았다. 값을 지어내지 않는다(UAT-EMPTY-01).
+ * - (M3 통합) 개요 편집의 실행 시간·토큰·고정 시작일은 updateTask의 estimate·fixStart로 저장한다.
  * - 저장은 두 요청이다: 제목·우선순위·Agent는 PATCH /api/tasks/:taskKey, 목적·범위 등은 PATCH …/spec.
  */
 import { SPLIT_RULES } from '@awbs/shared';
@@ -15,7 +15,7 @@ import { BusyButton } from '../../../shared/ui/BusyButton.tsx';
 import { useConfirm } from '../../../shared/ui/feedback.tsx';
 import type { ResponseOf } from '../../../shared/api/contract.ts';
 import { useEditSlot } from '../edit-slot.tsx';
-import { overviewErrors } from '../editor-model.ts';
+import { estimateErrors, overviewErrors } from '../editor-model.ts';
 import { agCls, agInit, ATTEMPT_KIND, PRIORITY, priorityOf, statusOf, TYPE_LABEL, toLines, type TaskDetailData, type TaskSummaryData } from '../labels.ts';
 import { Lines, Segs, short } from '../parts.tsx';
 import { fmtH, slipState } from '../schedule.ts';
@@ -63,11 +63,20 @@ export function OverviewTab({ task: t, byKey, nodes, attempts, onOpenTask }: {
             {sch ? (
               <div className="kv">
                 <span className="kv-l">예상 실행 시간</span><span className="kv-v"><span className="mono">{fmtH(sch.estHours)}</span><span className="muted">낙관 {fmtH(sch.loHours)} · 비관 {fmtH(sch.hiHours)}</span></span>
+                {/* M3 통합: 원본 P L1048–1059의 추정·실제 칸. 서버(srv-perf)가 TaskDetail에 estimate·actStart·actEnd·actualHours·fixStart를 준다. */}
+                <span className="kv-l">예상 토큰</span><span className="kv-v mono">{t.estimate?.tokensK === null || t.estimate?.tokensK === undefined ? '—' : `${String(t.estimate.tokensK)}K`}</span>
+                <span className="kv-l">추정 주체 · 신뢰도</span><span className="kv-v">{t.estimate ? <>{t.estimate.agreedBy} · <span className="tag">{String(t.estimate.confidence)}</span></> : '—'}</span>
+                <span className="kv-l">추정 근거</span><span className="kv-v">{t.estimate?.basis || '—'}</span>
+                <span className="kv-l">실제 실행</span><span className="kv-v mono">{`${fmtH(t.actualHours)} · 토큰 ${String(attempts.reduce((a, x) => a + (x.tokens ?? 0), 0))}K (실행 시도 ${String(attempts.length)}건)`}</span>
+                <span className="kv-l">추정 대비 실제</span><span className="kv-v">{actualRatio(t.actualHours, sch.estHours, String(t.lifecycleStatus) === 'done', sch.progressPct)}</span>
                 <span className="kv-l">충돌 묶음</span><span className="kv-v">{t.conflictGroup ?? '없음'}</span>
                 <span className="kv-l">기준 일정 (완료)</span><span className="kv-v mono">{sch.baselineEnd ?? '기준 미포함 — 다음 재조정 때 편입'}</span>
                 <span className="kv-l">{String(t.lifecycleStatus) === 'done' ? '실제 완료' : '완료 예상'}</span><span className="kv-v mono">{sch.end ?? '—'}</span>
+                <span className="kv-l">실제 시작</span><span className="kv-v mono">{t.actStart ? formatDateTime(t.actStart) : '미착수'}</span>
+                <span className="kv-l">실제 완료</span><span className="kv-v mono">{t.actEnd ? formatDateTime(t.actEnd) : t.actStart ? '진행 중' : '—'}</span>
                 <span className="kv-l">기준 대비</span><span className="kv-v">{slip ? <span className={`sc ${slip.c}`}>{slip.l}</span> : '—'}</span>
                 <span className="kv-l">진행률</span><span className="kv-v mono">{sch.progressPct}%</span>
+                <span className="kv-l">고정 시작일</span><span className="kv-v">{t.fixStart ?? '자동 — 선행 관계 · 동시 실행 가용 시점 기준'}</span>
               </div>
             ) : <p className="empty" style={{ margin: '0 0 8px' }}>아직 일정이 계산되지 않았습니다 — Planning Agent 추정 뒤 표시됩니다.</p>}
             <p className="fhint" style={{ margin: 0 }}>예상 실행 시간은 Agent 세션이 실제로 작업하는 시간입니다. 날짜는 관측 가동률 · 동시 실행 슬롯 · 사용량 리셋 · 작업 불가일로 계속 다시 계산되고, 범위(낙관~비관)로 표시합니다. Task 추가 · 삭제 · 재추정 · 중단이 생기면 Planning Agent가 기준 일정을 자동 재조정합니다.</p>
@@ -103,13 +112,24 @@ export function OverviewTab({ task: t, byKey, nodes, attempts, onOpenTask }: {
   );
 }
 
+/** 추정 대비 실제(원본 P L5322 ratio 문구 그대로) */
+function actualRatio(actual: number, est: number, done: boolean, pct: number): string {
+  if (!(actual > 0) || !(est > 0)) return '실행 기록 없음';
+  return done ? `실제 ÷ 예상 = ${String(Math.round((actual / est) * 100) / 100)}배` : `진행 중 — 사용 ${String(Math.round((actual / est) * 100))}% (진행률 ${String(pct)}%)`;
+}
+
 const overviewValues = (t: TaskDetailData) => {
   const ov = t.spec.overview;
   return {
     title: t.title, priority: String(t.priority), assignee: t.assigneeAgent === null ? '' : String(t.assigneeAgent), verifier: t.verifierAgent === null ? '' : String(t.verifierAgent),
     purpose: ov.purpose, background: ov.background, scope: ov.scope.join('\n'), out: ov.out.join('\n'), precond: ov.precond, doneCond: ov.doneCond,
+    // 작업량·고정 시작일(원본 P L1117–1118). M3 통합: updateTask의 estimate·fixStart로 저장한다. 팀장 추정이 없으면 일정의 추정값에서 시작한다.
+    lo: num(t.estimate?.loHours ?? t.schedule?.loHours), est: num(t.estimate?.estHours ?? t.schedule?.estHours), hi: num(t.estimate?.hiHours ?? t.schedule?.hiHours),
+    tok: num(t.estimate?.tokensK), fixStart: t.fixStart ?? '',
   };
 };
+const num = (v: number | null | undefined) => (v === null || v === undefined ? '' : String(v));
+const ESTIMATE_KEYS = ['lo', 'est', 'hi', 'tok'] as const;
 type OverviewValues = ReturnType<typeof overviewValues>;
 /** 세션 초안·편집 고정값: 편집 시작 값(initial)·버전(base)·지금 입력(d) */
 interface OverviewDraft { initial: OverviewValues; base: string; d: OverviewValues }
@@ -136,13 +156,17 @@ function OverviewForm({ task: t }: { task: TaskDetailData }) {
   const [d, setD] = useState<Values>(() => restored?.d ?? initial);
   const [touched, setTouched] = useState(restored !== null);
   useEffect(() => { slot.report({ initial, base, d } satisfies OverviewDraft); }, [d, slot, initial, base]);
-  const L: Record<keyof typeof initial, string> = { title: '제목', priority: '우선순위', assignee: '담당 Agent', verifier: '검증 Agent', purpose: '작업 목적', background: '작업 배경', scope: '작업 범위', out: '제외 범위', precond: '선행 조건', doneCond: '완료 조건' };
+  const L: Record<keyof typeof initial, string> = { title: '제목', priority: '우선순위', assignee: '담당 Agent', verifier: '검증 Agent', purpose: '작업 목적', background: '작업 배경', scope: '작업 범위', out: '제외 범위', precond: '선행 조건', doneCond: '완료 조건' , lo: '낙관 실행 시간', est: '예상 실행 시간', hi: '비관 실행 시간', tok: '예상 토큰', fixStart: '고정 시작일' };
   const diff = (Object.keys(L) as (keyof typeof initial)[]).filter((k) => d[k].trim() !== initial[k].trim());
   const errs = overviewErrors(d);
-  const invalid = errs.title || errs.purpose || errs.doneCond;
+  // 작업량·고정 시작일은 바꿨을 때만 검사한다(원본 검사 규칙, editor-model estimateErrors).
+  const estChanged = ESTIMATE_KEYS.some((k) => diff.includes(k));
+  const estErrs = estChanged || diff.includes('fixStart') ? estimateErrors(d).filter((e) => estChanged || e.startsWith('fixStart')) : [];
+  const bad = (k: string) => estErrs.some((e) => e.startsWith(`${k}:`) || (k !== 'tok' && k !== 'fixStart' && e.startsWith('range:')));
+  const invalid = errs.title || errs.purpose || errs.doneCond || estErrs.length > 0;
   useEffect(() => { slot.setDirty(diff.length > 0); }, [diff.length, slot]);
   const set = (k: keyof typeof initial) => (e: { target: { value: string } }) => { setTouched(true); setD((x) => ({ ...x, [k]: e.target.value })); };
-  const head = diff.filter((k) => ['title', 'priority', 'assignee', 'verifier'].includes(k));
+  const head = diff.filter((k) => ['title', 'priority', 'assignee', 'verifier', 'fixStart', ...ESTIMATE_KEYS].includes(k));
   const body = diff.filter((k) => !head.includes(k));
   const save = useTaskSave(t.taskKey, {
     target: `${t.taskKey} 개요 저장`,
@@ -159,6 +183,9 @@ function OverviewForm({ task: t }: { task: TaskDetailData }) {
           ...(head.includes('priority') ? { priority: Number(d.priority) } : {}),
           ...(head.includes('assignee') && d.assignee ? { assigneeAgent: d.assignee as 'Claude' } : {}),
           ...(head.includes('verifier') && d.verifier ? { verifierAgent: d.verifier as 'Claude' } : {}),
+          // 작업량은 네 값을 한 묶음으로 보낸다(계약 TaskEstimateInput). 서버가 일정을 다시 계산한다.
+          ...(ESTIMATE_KEYS.some((k) => head.includes(k)) ? { estimate: { estHours: Number(d.est), loHours: Number(d.lo), hiHours: Number(d.hi), tokensK: Number(d.tok) } } : {}),
+          ...(head.includes('fixStart') ? { fixStart: d.fixStart.trim() || null } : {}),
         } });
         version = last.task.updatedAt;
       }
@@ -183,8 +210,22 @@ function OverviewForm({ task: t }: { task: TaskDetailData }) {
       <div className="frow"><label className="flabel" htmlFor="ov-pri">우선순위<span className="req">필수</span></label><div className="fctl"><select id="ov-pri" className="inp" value={d.priority} onChange={set('priority')}>{PRIORITY.map((p, i) => <option key={p.l} value={String(i)}>{p.l}</option>)}</select></div></div>
       <div className="frow"><label className="flabel" htmlFor="ov-asg">담당 Agent<span className="req">필수</span></label><div className="fctl"><select id="ov-asg" className="inp" value={d.assignee} onChange={set('assignee')}>{!d.assignee && <option value="">미지정</option>}<option value="Claude">Claude</option><option value="Codex">Codex</option></select><span className="fhint">담당 Agent 변경은 이력에 기록됩니다. 담당과 검증 Agent는 다르게 지정하는 것을 권장합니다.</span></div></div>
       <div className="frow"><label className="flabel" htmlFor="ov-vf">검증 Agent<span className="req">필수</span></label><div className="fctl"><select id="ov-vf" className="inp" value={d.verifier} onChange={set('verifier')}>{!d.verifier && <option value="">미지정</option>}<option value="Codex">Codex</option><option value="Claude">Claude</option></select>{errs.same && <span className="ferr">담당 Agent와 검증 Agent가 같습니다. 교차 검증 원칙에 맞지 않습니다.</span>}</div></div>
-      {/* 리뷰 R8: 작업량·토큰·고정 시작일 저장 필드가 계약에 없어 읽기 전용 자리와 안내만 둔다. 검사 규칙은 editor-model estimateErrors에 준비해 두었다. */}
-      <div className="frow"><span className="flabel">예상 실행 시간</span><div className="fctl"><span className="mono">{t.schedule ? `낙관 ${fmtH(t.schedule.loHours)} · 예상 ${fmtH(t.schedule.estHours)} · 비관 ${fmtH(t.schedule.hiHours)}` : '아직 추정 전'}</span><span className="fhint">작업량 · 예상 토큰 · 고정 시작일은 서버 계약이 확장되면 여기서 편집합니다. 지금은 Planning Agent 추정값을 보여 줍니다.</span></div></div>
+      {/* 원본 P L1117–1118. M3 통합: updateTask의 estimate·fixStart에 저장(리뷰 R8에서 준비한 검사 규칙 estimateErrors 사용) */}
+      <div className="frow"><span className="flabel">예상 실행 시간<span className="req">필수</span></span><div className="fctl">
+        <span style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span className="muted">낙관</span><input className={`inp mono-in ${bad('lo') ? 'bad' : ''}`} style={{ maxWidth: 80 }} aria-label="낙관 실행 시간" value={d.lo} onChange={set('lo')} />
+          <span className="muted">예상</span><input className={`inp mono-in ${bad('est') ? 'bad' : ''}`} style={{ maxWidth: 80 }} aria-label="예상 실행 시간" value={d.est} onChange={set('est')} />
+          <span className="muted">비관</span><input className={`inp mono-in ${bad('hi') ? 'bad' : ''}`} style={{ maxWidth: 80 }} aria-label="비관 실행 시간" value={d.hi} onChange={set('hi')} />
+          <span className="muted">시간 · 예상 토큰</span><input className={`inp mono-in ${bad('tok') ? 'bad' : ''}`} style={{ maxWidth: 90 }} aria-label="예상 토큰 (K)" value={d.tok} onChange={set('tok')} /><span className="muted">K</span>
+        </span>
+        {estErrs.some((e) => !e.startsWith('fixStart')) && <span className="ferr" role="alert">{estErrs.some((e) => e.startsWith('tok:')) && !estErrs.some((e) => !e.startsWith('tok:') && !e.startsWith('fixStart')) ? '예상 토큰은 0 이상의 정수(K)로 입력하세요.' : '0보다 큰 숫자로, 낙관 ≤ 예상 ≤ 비관 순서가 되어야 합니다.'}</span>}
+        <span className="fhint">Agent 세션이 실제로 작업하는 시간(개발 · QA · 재작업 포함)입니다. 달력 날짜는 가동률 · 동시 실행 슬롯 · 작업 불가일로 자동 환산됩니다. 수정하면 Planning Agent가 전체 일정을 자동 재조정합니다.</span>
+      </div></div>
+      <div className="frow"><label className="flabel" htmlFor="ov-fix">고정 시작일<span className="opt">선택</span></label><div className="fctl">
+        <input id="ov-fix" className={`inp mono-in ${bad('fixStart') ? 'bad' : ''}`} style={{ maxWidth: 160 }} placeholder="YYYY-MM-DD" value={d.fixStart} onChange={set('fixStart')} />
+        {bad('fixStart') && <span className="ferr">YYYY-MM-DD 형식으로 입력하세요.</span>}
+        <span className="fhint">비우면 선행 관계와 Agent 슬롯 가용 시점으로 자동 배치합니다. 지정하면 그날 이전에는 시작하지 않습니다.</span>
+      </div></div>
       <div className="frow"><label className="flabel" htmlFor="ov-pur">작업 목적<span className="req">필수</span></label><div className="fctl"><textarea id="ov-pur" rows={3} className={`inp ${show('purpose') ? 'bad' : ''}`} value={d.purpose} onChange={set('purpose')} aria-invalid={show('purpose')} />{show('purpose') && <span className="ferr">작업 목적을 입력하세요.</span>}</div></div>
       <div className="frow"><label className="flabel" htmlFor="ov-bg">작업 배경<span className="opt">선택</span></label><div className="fctl"><textarea id="ov-bg" rows={3} className="inp" value={d.background} onChange={set('background')} /></div></div>
       <div className="frow"><label className="flabel" htmlFor="ov-sc">작업 범위<span className="opt">선택</span></label><div className="fctl"><textarea id="ov-sc" rows={4} className="inp" value={d.scope} onChange={set('scope')} /><span className="fhint">한 줄에 한 항목 · `백틱`으로 파일 경로·코드 표시</span></div></div>

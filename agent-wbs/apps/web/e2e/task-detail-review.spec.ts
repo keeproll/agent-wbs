@@ -185,10 +185,24 @@ test('R3 등급 고정 API가 서버에 아직 없으면(404) 「서버 기능 �
   await expect(dev.locator('.tag').nth(1)).toHaveText('Planning Agent 판단');
 });
 
-test('R8 개요 편집: 작업량·토큰·고정 시작일은 서버 계약 확장 전까지 읽기 전용 자리와 안내를 둔다', async ({ page }) => {
-  await open(page, '/wbs/TASK-0004');
+test('R8 개요 편집(M3 통합): 작업량·토큰·고정 시작일을 원본 검사 규칙으로 고치고 updateTask의 estimate·fixStart로 저장한다', async ({ page }) => {
+  const { api } = await open(page, '/wbs/TASK-0004');
+  const detail = page.getByRole('region', { name: 'Task 상세' });
+  await expect(detail).toContainText('추정 주체 · 신뢰도');
+  await expect(detail).toContainText('560K');
   await page.getByRole('button', { name: '개요 편집' }).click();
-  const row = page.locator('.frow').filter({ hasText: '예상 실행 시간' });
-  await expect(row).toContainText('4h');
-  await expect(row).toContainText('서버 계약이 확장되면 여기서 편집합니다');
+  await expect(page.getByLabel('예상 실행 시간', { exact: true })).toHaveValue('4');
+  await page.getByLabel('비관 실행 시간').fill('2');
+  await expect(page.getByText('0보다 큰 숫자로, 낙관 ≤ 예상 ≤ 비관 순서가 되어야 합니다.')).toBeVisible();
+  await expect(page.getByRole('button', { name: '저장', exact: true })).toBeDisabled();
+  await page.getByLabel('비관 실행 시간').fill('7');
+  await page.locator('#ov-fix').fill('2026/12/01');
+  await expect(page.getByText('YYYY-MM-DD 형식으로 입력하세요.')).toBeVisible();
+  await page.locator('#ov-fix').fill('2026-12-01');
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+  await expect(page.locator('#ov-title')).toHaveCount(0);
+  const body = api.requests('PATCH /api/tasks/TASK-0004')[0]?.postDataJSON() as Record<string, unknown>;
+  expect(body.estimate).toEqual({ estHours: 4, loHours: 3, hiHours: 7, tokensK: 560 });
+  expect(body.fixStart).toBe('2026-12-01');
+  await expect(detail).toContainText('고정 시작일2026-12-01');
 });
