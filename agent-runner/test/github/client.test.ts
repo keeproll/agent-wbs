@@ -136,7 +136,9 @@ describe('연결 확인', () => {
 
   test('PR 생성 403은 pulls를 부족으로 바꾼다', async () => {
     const denied: { permission: string }[] = [];
-    const client = await setup({ tokenPermissions: { pulls: 'read' } }, { onPermissionDenied: (e) => denied.push(e) });
+    const client = await setup({ tokenPermissions: { pulls: 'read' } }, { onPermissionDenied: (e) => {
+        denied.push(e);
+      } });
     model.push('agent/TASK-0001');
     await expect(client.ensurePullRequest({ branch: 'agent/TASK-0001', title: 't', body: '' })).rejects.toMatchObject({ status: 403 });
     expect(client.permissions()?.pulls).toBe('missing');
@@ -172,7 +174,9 @@ describe('연결 확인', () => {
 
   test('속도 제한 403은 권한 부족이 아니다', async () => {
     const denied: unknown[] = [];
-    const client = await setup({}, { onPermissionDenied: (e) => denied.push(e) });
+    const client = await setup({}, { onPermissionDenied: (e) => {
+        denied.push(e);
+      } });
     const sha = model.push('agent/TASK-0001');
     model.limitNext(1, 'secondary');
     await expect(client.setCommitStatus({ sha, context: 'agentwbs/task', state: 'pending' })).rejects.toMatchObject({
@@ -189,6 +193,140 @@ describe('연결 확인', () => {
     expect(client.permissions()?.statuses).toBe('missing');
     await client.checkConnection('token');
     expect(client.permissions()).toEqual(UNVERIFIED);
+  });
+
+  test('재리뷰 R8: 비동기 알림이 실패해도 처리되지 않은 거부가 생기지 않는다(Runner 종료 방지)', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const client = await setup(
+        { tokenPermissions: { statuses: 'none' } },
+        {
+          onPermissionDenied: async () => {
+            await Promise.resolve();
+            throw new Error('notification transport unavailable');
+          },
+        },
+      );
+      const sha = model.push('agent/TASK-0001');
+      await expect(client.setCommitStatus({ sha, context: 'agentwbs/task', state: 'pending' })).rejects.toMatchObject({
+        status: 403,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(unhandled).toEqual([]);
+      expect(client.permissions().statuses).toBe('missing');
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
+  test('재리뷰 R9: 교체 전 토큰의 늦은 403이 새 토큰으로 확인한 권한을 덮지 않는다', async () => {
+    let selected = TOKEN;
+    const NEW_TOKEN = 'ghp_NEWnewNEWnewNEWnewNEWnew0123456789';
+    const notices: string[] = [];
+    await setup();
+    // fake 서버는 한 토큰만 받으므로, 옛 요청은 직접 보류했다가 403으로 답한다.
+    const arrived = Promise.withResolvers<undefined>();
+    const release = Promise.withResolvers<undefined>();
+    const sha = model.push('agent/TASK-0001');
+    const realFetch = fetch;
+    const client2 = createGitHubClient({
+      baseUrl: github.url,
+      repo: { owner: model.owner, repo: model.repo },
+      token: () => Promise.resolve(new Secret(selected)),
+      onPermissionDenied: (e) => {
+        notices.push(e.permission);
+      },
+      fetch: async (input, init) => {
+        const auth = new Headers(init?.headers).get('authorization');
+        if (init?.method === 'POST' && auth === `Bearer ${TOKEN}`) {
+          arrived.resolve(undefined);
+          await release.promise;
+          return Response.json(
+            { message: 'Resource not accessible by personal access token' },
+            { status: 403, headers: { 'x-accepted-github-permissions': 'statuses=write' } },
+          );
+        }
+        // 새 토큰 요청은 fake가 아는 토큰으로 바꿔 보낸다(인증 성공 흉내).
+        const headers = new Headers(init?.headers);
+        headers.set('authorization', `Bearer ${TOKEN}`);
+        return realFetch(input, { ...init, headers });
+      },
+    });
+    const old = client2.setCommitStatus({ sha, context: 'agentwbs/task', state: 'pending' }).catch((e: unknown) => e);
+    await arrived.promise;
+    selected = NEW_TOKEN;
+    await client2.checkConnection('token');
+    await client2.setCommitStatus({ sha, context: 'agentwbs/task', state: 'pending' });
+    expect(client2.permissions().statuses).toBe('verified');
+    release.resolve(undefined);
+    // 옛 요청의 결과(403)는 호출자에게 그대로 돌아간다.
+    expect(await old).toMatchObject({ status: 403 });
+    expect(client2.permissions().statuses).toBe('verified');
+    expect(notices).toEqual([]);
+  });
+
+  test('같은 토큰이라도 연결 재확인 전에 보낸 요청의 늦은 403은 재확인 뒤 상태를 바꾸지 않는다(GitHub에서 토큰 권한만 고친 경우)', async () => {
+    const arrived = Promise.withResolvers<undefined>();
+    const release = Promise.withResolvers<undefined>();
+    await setup();
+    const sha = model.push('agent/TASK-0001');
+    const realFetch = fetch;
+    let held = false;
+    const client = createGitHubClient({
+      baseUrl: github.url,
+      repo: { owner: model.owner, repo: model.repo },
+      token: () => Promise.resolve(new Secret(TOKEN)),
+      fetch: async (input, init) => {
+        if (init?.method === 'POST' && !held) {
+          held = true;
+          arrived.resolve(undefined);
+          await release.promise;
+          return Response.json({ message: 'Resource not accessible by personal access token' }, { status: 403 });
+        }
+        return realFetch(input, init);
+      },
+    });
+    const old = client.setCommitStatus({ sha, context: 'agentwbs/task', state: 'pending' }).catch((e: unknown) => e);
+    await arrived.promise;
+    await client.checkConnection('token');
+    await client.setCommitStatus({ sha, context: 'agentwbs/task', state: 'pending' });
+    release.resolve(undefined);
+    expect(await old).toMatchObject({ status: 403 });
+    expect(client.permissions().statuses).toBe('verified');
+  });
+
+  test('토큰만 바뀌고 연결 확인을 다시 하지 않아도, 옛 토큰의 늦은 응답은 권한 상태를 바꾸지 않는다', async () => {
+    let selected = TOKEN;
+    const arrived = Promise.withResolvers<undefined>();
+    const release = Promise.withResolvers<undefined>();
+    await setup();
+    const sha = model.push('agent/TASK-0001');
+    const realFetch = fetch;
+    const client = createGitHubClient({
+      baseUrl: github.url,
+      repo: { owner: model.owner, repo: model.repo },
+      token: () => Promise.resolve(new Secret(selected)),
+      fetch: async (input, init) => {
+        const auth = new Headers(init?.headers).get('authorization');
+        if (auth === `Bearer ${TOKEN}`) {
+          arrived.resolve(undefined);
+          await release.promise;
+          return Response.json({ message: 'Resource not accessible by personal access token' }, { status: 403 });
+        }
+        const headers = new Headers(init?.headers);
+        headers.set('authorization', `Bearer ${TOKEN}`);
+        return realFetch(input, { ...init, headers });
+      },
+    });
+    const old = client.setCommitStatus({ sha, context: 'agentwbs/task', state: 'pending' }).catch((e: unknown) => e);
+    await arrived.promise;
+    selected = 'ghp_NEWnewNEWnewNEWnewNEWnew0123456789';
+    await client.setCommitStatus({ sha, context: 'agentwbs/task', state: 'pending' });
+    release.resolve(undefined);
+    await old;
+    expect(client.permissions().statuses).toBe('verified');
   });
 
   test('알림 콜백이 실패해도 원래 403 오류를 던진다', async () => {
@@ -545,7 +683,25 @@ describe('오류와 비밀값', () => {
       status: 403,
       body: { message: 'You have exceeded a secondary rate limit.' },
     }));
-    await expect(client.getPullRequest(1)).rejects.toMatchObject({ status: 403, retryable: true, retryAfterSeconds: null });
+    await expect(client.getPullRequest(1)).rejects.toMatchObject({ status: 403, retryable: true, retryAfterSeconds: 60 });
+  });
+
+  test('재리뷰 R10: Retry-After 없는 보조 제한은 기본 제한의 reset이 아니라 최소 60초를 안내한다', async () => {
+    const client = await setup();
+    github.on('GET /repos/:owner/:repo/pulls/:number', () => ({
+      status: 403,
+      headers: { 'x-ratelimit-remaining': '4000', 'x-ratelimit-reset': String(Math.floor(Date.now() / 1000) + 5) },
+      body: { message: 'You have exceeded a secondary rate limit.' },
+    }));
+    const error = (await client.getPullRequest(1).catch((e: unknown) => e)) as GitHubError;
+    expect(error).toMatchObject({ status: 403, retryable: true });
+    expect(error.retryAfterSeconds).toBeGreaterThanOrEqual(60);
+  });
+
+  test('Retry-After 없는 429도 최소 60초다', async () => {
+    const client = await setup();
+    github.on('GET /repos/:owner/:repo/pulls/:number', () => ({ status: 429, body: { message: 'x' } }));
+    await expect(client.getPullRequest(1)).rejects.toMatchObject({ retryable: true, retryAfterSeconds: 60 });
   });
 
   test('기본 속도 제한 403은 x-ratelimit-reset까지 남은 초를 넘긴다', async () => {

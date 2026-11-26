@@ -75,7 +75,8 @@ Runner가 GitHub(git 저장소를 올려 두고 PR·검사·병합을 하는 서
   - 속도 제한 403이란: `Retry-After`가 있거나(보조 제한), `x-ratelimit-remaining: 0`이거나(기본 제한), 본문이 rate limit을 말하는 403이다.
     그 밖의 403(권한 부족)은 기다려도 낫지 않으므로 재시도하지 않는다.
     근거: [Exceeding the rate limit](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#exceeding-the-rate-limit) — 보조 제한도 403 또는 429이며 `Retry-After`를 따르라고 한다.
-  - `retryAfterSeconds`: `Retry-After` 초, 없으면 `x-ratelimit-reset`(UTC 초)까지 남은 초.
+  - `retryAfterSeconds`: `Retry-After`가 있으면 그 초. 없고 잔량이 0(기본 제한)이면 `x-ratelimit-reset`(UTC 초)까지 남은 초. 둘 다 아니면(보조 제한) 최소 60초.
+    `x-ratelimit-reset`은 기본 제한이 풀리는 시각이라 보조 제한에 쓰면 너무 일찍 다시 부르게 된다. 반복될 때 대기를 늘리는 것은 outbox 몫이다.
   - 저장소 확인 중 속도 제한이면 「접근 불가」로 답하지 않고 재시도 오류를 던진다. 연결 확인은 던지지 않고 「속도 제한」 이유로 실패를 보고한다.
 
 ### status 목록과 페이지
@@ -120,7 +121,9 @@ Runner가 GitHub(git 저장소를 올려 두고 PR·검사·병합을 하는 서
 - 속도 제한이 아닌 403이면 **부족**으로 바꾸고 `onPermissionDenied({permission, operation, message})`를 부른다. 호출자는 이것으로 팀장에게 알린다.
   응답에 `X-Accepted-GitHub-Permissions`가 있으면 그 헤더가 가리키는 권한을 부족으로 표시한다.
 - 409·405·422·속도 제한 같은 다른 거부는 권한 증거가 아니므로 상태를 바꾸지 않는다.
-- 알림 콜백이 실패해도 원래 403 오류는 그대로 던진다.
+- 알림 콜백은 기다리지 않는다. 동기 예외든 비동기(Promise) 실패든 삼키고, 원래 403 오류는 그대로 던진다. 알림 서버의 잠깐 장애로 Runner가 종료되지 않게 하기 위해서다.
+- **늦은 응답은 상태를 바꾸지 못한다.** 연결을 다시 확인하거나 요청에 쓰는 토큰이 바뀌면 「권한 세대」를 올린다. 그 전에 보낸 요청의 응답은 호출자에게는 그대로 돌아가지만, 현재 권한 상태와 알림은 바꾸지 않는다.
+  예: 옛 토큰으로 보낸 status 요청이 지연되는 동안 토큰을 바꾸고 새 토큰으로 쓰기에 성공했다면, 나중에 도착한 옛 403이 「부족」으로 덮지 않는다.
 - 연결 확인을 다시 하면 쓰기에서 얻은 결과를 지우고 새로 판단한다. 예: 팀장이 토큰 권한을 고친 뒤 「연결 확인」을 누르면 부족 표시가 풀린다.
 
 **M4-06 실증 항목**(실제 GitHub에서만 확인할 수 있어 여기서는 확인하지 못한 것):

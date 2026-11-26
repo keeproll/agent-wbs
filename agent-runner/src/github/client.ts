@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { createRedactor } from '../security/redact.ts';
 import type { Secret } from '../security/secret.ts';
 
@@ -54,8 +55,11 @@ export interface GitHubClientOptions {
   /** 거부(throw)하면 GitHub를 호출하지 않는다. 예: 409 EXTERNAL_WRITE_BLOCKED. */
   beforeWrite?: (operation: WriteOperation) => Promise<void>;
   timeoutMs?: number;
-  /** 첫 실제 쓰기에서 권한 부족이 드러나면 부른다. 여기서 던져도 원래 오류는 그대로 던진다. */
-  onPermissionDenied?: (event: PermissionDenied) => void;
+  /**
+   * 첫 실제 쓰기에서 권한 부족이 드러나면 부른다. 기다리지 않는다.
+   * 동기 예외든 돌려준 Promise의 실패든 삼키고, 원래 GitHub 오류는 그대로 던진다(알림 장애로 Runner가 죽지 않게).
+   */
+  onPermissionDenied?: (event: PermissionDenied) => void | Promise<void>;
 }
 
 /** `reportGithubStatus` 본문과 같은 모양(비밀값 없음). */
@@ -186,6 +190,8 @@ interface Raw {
   status: number;
   body: unknown;
   headers: Headers;
+  /** 요청을 보낼 때의 권한 세대. 연결 재확인·토큰 교체 뒤의 늦은 응답을 가려낸다. */
+  generation: number;
 }
 
 interface PullJson {
@@ -227,12 +233,15 @@ function rateLimit(raw: Raw): { limited: boolean; retryAfterSeconds: number | nu
     raw.status === 429 ||
     (raw.status === 403 &&
       (hasRetryAfter || raw.headers.get('x-ratelimit-remaining') === '0' || /rate limit/i.test(message)));
+  if (!limited) return { limited, retryAfterSeconds: hasRetryAfter ? retryAfter : null };
   if (hasRetryAfter) return { limited, retryAfterSeconds: retryAfter };
+  // x-ratelimit-reset은 기본 제한(잔량 0)이 풀리는 시각이다. 보조 제한에는 쓰지 않는다.
   const reset = Number(raw.headers.get('x-ratelimit-reset') ?? NaN);
-  if (limited && Number.isFinite(reset)) {
+  if (raw.headers.get('x-ratelimit-remaining') === '0' && Number.isFinite(reset)) {
     return { limited, retryAfterSeconds: Math.max(1, Math.ceil(reset - Date.now() / 1000)) };
   }
-  return { limited, retryAfterSeconds: null };
+  // Retry-After도 없고 잔량 0도 아니면 최소 1분 기다린다(공식 문서). 반복 시 늘리는 것은 outbox 몫이다.
+  return { limited, retryAfterSeconds: SECONDARY_LIMIT_WAIT_SECONDS };
 }
 
 const ACCEPTED_NAMES: Readonly<Record<string, PermissionName>> = {
@@ -258,6 +267,8 @@ const unverifiedAll = (): Permissions => ({
   statuses: 'unverified',
 });
 
+const SECONDARY_LIMIT_WAIT_SECONDS = 60;
+
 /** status 목록을 읽을 최대 페이지. 100개×50 = 5000개(한 SHA·context 상한 1000개 × context 4종을 넘는다). */
 const MAX_STATUS_PAGES = 50;
 
@@ -267,12 +278,17 @@ export function createGitHubClient(options: GitHubClientOptions) {
   const repoPath = `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.repo)}`;
   let redact = createRedactor();
   let permissions = unverifiedAll();
+  // 권한 세대: 연결 재확인 때, 그리고 요청에 쓰는 토큰이 바뀔 때 올린다.
+  // 이전 세대에 보낸 요청의 응답은 호출자에게는 그대로 돌려주지만 현재 권한 상태·알림은 바꾸지 못한다.
+  let generation = 0;
+  let lastTokenDigest: string | undefined;
 
   /**
    * 실제 쓰기 결과로 권한 상태를 고친다. 2xx면 확인됨, 속도 제한이 아닌 403이면 부족으로 바꾸고 알린다.
    * 409·405·422 같은 다른 거부는 권한에 대한 증거가 아니므로 그대로 둔다.
    */
   const observeWrite = (raw: Raw, permission: PermissionName, operation: WriteOperation['kind'], what: string): void => {
+    if (raw.generation !== generation) return;
     if (raw.status >= 200 && raw.status < 300) {
       permissions[permission] = 'verified';
       return;
@@ -280,11 +296,12 @@ export function createGitHubClient(options: GitHubClientOptions) {
     if (raw.status !== 403 || rateLimit(raw).limited) return;
     const denied = acceptedPermission(raw.headers.get('x-accepted-github-permissions')) ?? permission;
     permissions[denied] = 'missing';
-    try {
-      options.onPermissionDenied?.({ permission: denied, operation, message: failure(raw, what).message });
-    } catch {
-      // 알림 실패가 원래 오류를 가리지 않게 한다.
-    }
+    const notify = options.onPermissionDenied;
+    if (!notify) return;
+    // 알림 실패(동기 예외·비동기 거부 모두)가 원래 오류를 가리거나 Runner를 종료시키지 않게 한다.
+    void Promise.resolve()
+      .then(() => notify({ permission: denied, operation, message: failure(raw, what).message }))
+      .catch(() => undefined);
   };
 
   const failure = (raw: Raw, what: string): GitHubError => {
@@ -298,6 +315,10 @@ export function createGitHubClient(options: GitHubClientOptions) {
   const call = async (method: string, path: string, init: { query?: Record<string, string>; body?: unknown } = {}): Promise<Raw> => {
     const secret = await token();
     redact = createRedactor([secret.reveal()]);
+    const digest = createHash('sha256').update(secret.reveal()).digest('hex');
+    if (lastTokenDigest !== undefined && digest !== lastTokenDigest) generation += 1;
+    lastTokenDigest = digest;
+    const sentAt = generation;
     const url = new URL(baseUrl.replace(/\/+$/, '') + path);
     for (const [name, value] of Object.entries(init.query ?? {})) url.searchParams.set(name, value);
     const headers = new Headers({
@@ -323,7 +344,7 @@ export function createGitHubClient(options: GitHubClientOptions) {
       } catch {
         body = undefined;
       }
-      return { status: response.status, body, headers: response.headers };
+      return { status: response.status, body, headers: response.headers, generation: sentAt };
     } catch (error) {
       const reason = error instanceof Error ? error.name : 'Error';
       throw new GitHubError(`${method} ${path}: 통신 실패(${reason})`, 0, true);
@@ -409,6 +430,7 @@ export function createGitHubClient(options: GitHubClientOptions) {
     async checkConnection(mode: GithubMode): Promise<ConnectionStatus> {
       // 새 연결 확인은 새로 판단한다(토큰을 고친 뒤 다시 확인하는 경우). 이전 쓰기에서 얻은 결과는 지운다.
       permissions = unverifiedAll();
+      generation += 1;
       const fail = (error: string, rest: Partial<ConnectionStatus> = {}): ConnectionStatus => ({
         mode,
         ok: false,
