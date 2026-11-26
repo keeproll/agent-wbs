@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { afterEach, beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { GitRepository } from '../../src/git/repository.ts';
 
 const archive = '/home/keeproll/.orca/bots/agentwbs/archive/2026-11-26/M4-03';
@@ -54,6 +55,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   // 읽기 전용 입력 사본도 정리하며, 링크를 따라가지는 않는다.
   async function unlock(path: string) {
     const stat = await lstat(path);
@@ -221,10 +223,145 @@ test('초기화는 새 커밋으로 대상 경로만 복원하고 기록한 Agen
   expect(await repo.reset({ baseCommit: baseline, branches: ['agent/recorded'], worktrees: ['task-1'], inputs: ['v1'] })).toMatchObject({ commit: restored.commit });
 });
 
-test('基準 커밋이 없으면 저장소를 건드리지 않으며 main 삭제와 잘못된 SHA를 거부한다', async () => {
+test('기준 커밋이 없으면 저장소를 건드리지 않으며 main 삭제와 잘못된 SHA를 거부한다', async () => {
   repo = await clone();
   expect(await repo.reset({ baseCommit: null, branches: ['agent/missing'], worktrees: [], inputs: [] })).toEqual({ commit: null });
   await expect(repo.reset({ baseCommit: baseline, branches: ['main'], worktrees: [], inputs: [] })).rejects.toThrow();
   await expect(repo.checkoutInput('v1', '--help')).rejects.toThrow();
   expect(await repo.head()).toBe(baseline);
+});
+
+test('기준에 대상 폴더가 없으면 새 산출물을 모두 없애고 다른 파일은 보존한다', async () => {
+  git(source, 'rm', '-r', 'src', 'contracts', '.agentwbs');
+  const emptyBaseline = await commit();
+  await file(join(source, 'src/new.ts'), '새 코드');
+  await file(join(source, '.agentwbs/config'), '새 정책');
+  await file(join(source, 'contracts/new.json'), '{}');
+  await file(join(source, 'README'), '보존');
+  await commit();
+  repo = await clone();
+  const reset = await repo.reset({ baseCommit: emptyBaseline, branches: [], worktrees: [], inputs: [] });
+  expect(reset.commit).toBe(await repo.head());
+  for (const path of ['src', 'contracts', '.agentwbs']) expect(() => git(repo.path, 'show', `main:${path}`)).toThrow();
+  expect(git(repo.path, 'show', 'main:README')).toBe('보존');
+});
+
+test('초기화는 symlink로 바뀐 대상 폴더를 따라가지 않고 Git 객체로 복원한다', async () => {
+  await rm(join(source, 'src'), { recursive: true });
+  await symlink('../prototype/docs', join(source, 'src'));
+  await commit();
+  repo = await clone();
+  await repo.reset({ baseCommit: baseline, branches: [], worktrees: [], inputs: [] });
+  expect(git(repo.path, 'show', 'main:src/existing.ts')).toBe('등록 전 코드');
+  expect(git(repo.path, 'show', 'main:prototype/docs/guide.md')).toBe('원본 입력');
+});
+
+test('전역 설정·환경 변수·템플릿의 Git hook을 물려받지 않는다', async () => {
+  const hooks = join(root, 'hooks');
+  await mkdir(hooks);
+  await file(join(hooks, 'post-checkout'), `#!/bin/sh\ntouch '${join(root, 'hook-executed')}'\n`);
+  await chmod(join(hooks, 'post-checkout'), 0o755);
+  const config = join(root, 'config');
+  await file(config, `[core]\n hooksPath = ${hooks}\n`);
+  vi.stubEnv('GIT_CONFIG_GLOBAL', config);
+  vi.stubEnv('GIT_DIR', join(root, 'missing'));
+  vi.stubEnv('GIT_TEMPLATE_DIR', hooks);
+  // clone 준비용 fixture 명령은 오염시키지 않는다.
+  delete process.env.GIT_DIR;
+  git(source, 'push', 'origin', 'main');
+  vi.stubEnv('GIT_DIR', join(root, 'missing'));
+  repo = await GitRepository.clone(join(root, 'runner'), 'project', remote);
+  await repo.createWorktree('task-1', 'agent/TASK-1', baseline);
+  await expect(lstat(join(root, 'hook-executed'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test('인증 정보·옵션·원격 명령 형태의 저장소 입력은 실행하지 않고 비밀값도 노출하지 않는다', async () => {
+  for (const source of ['https://user:hunter2@example.invalid/repo', '--upload-pack=hunter2', 'ext::hunter2', 'git@example.invalid:hunter2']) {
+    await expect(GitRepository.clone(join(root, 'runner'), 'invalid', source)).rejects.toThrow(/저장소 주소/);
+    try { await GitRepository.clone(join(root, 'runner'), 'invalid', source); }
+    catch (error) { expect((error as Error).message).not.toContain('hunter2'); }
+  }
+  await expect(GitRepository.clone('/mnt/c/runner', 'project', remote)).rejects.toThrow(/Linux/);
+});
+
+test('로컬 bare 저장소의 Git LFS 원본을 읽고 포인터 그대로 성공 처리하지 않는다', async () => {
+  const content = Buffer.from('로컬 대용량 원본\n');
+  const oid = createHash('sha256').update(content).digest('hex');
+  await file(join(source, 'prototype/docs/large.bin'), `version https://git-lfs.github.com/spec/v1\noid sha256:${oid}\nsize ${content.length}\n`);
+  const head = await commit();
+  await file(join(remote, 'lfs/objects', oid.slice(0, 2), oid.slice(2, 4), oid), content.toString());
+  repo = await clone();
+  const input = await repo.checkoutInput('v1', head);
+  expect(await readFile(join(input, 'prototype/docs/large.bin'))).toEqual(content);
+});
+
+test('Git LFS 도구나 원본이 없으면 실패하며 반쪽 입력 사본을 지운다', async () => {
+  await file(join(source, 'prototype/docs/large.bin'), `version https://git-lfs.github.com/spec/v1\noid sha256:${'a'.repeat(64)}\nsize 123\n`);
+  const head = await commit();
+  repo = await clone();
+  await expect(repo.checkoutInput('missing-object', head)).rejects.toThrow();
+  await expect(lstat(join(root, 'runner/inputs/project/missing-object'))).rejects.toMatchObject({ code: 'ENOENT' });
+  const bin = join(root, 'bin');
+  await mkdir(bin);
+  await symlink('/usr/bin/git', join(bin, 'git'));
+  git(repo.path, 'config', 'alias.lfs', `!/usr/bin/touch '${join(root, 'lfs-alias-executed')}'`);
+  vi.stubEnv('PATH', bin);
+  await expect(repo.checkoutInput('missing-lfs', head)).rejects.toThrow();
+  await expect(lstat(join(root, 'runner/inputs/project/missing-lfs'))).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(lstat(join(root, 'lfs-alias-executed'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test('작업 폴더를 만들 때 저장소에 설정된 외부 변환 명령을 실행하지 않는다', async () => {
+  await file(join(source, '.gitattributes'), 'src/*.ts filter=attack\n');
+  const head = await commit();
+  repo = await clone();
+  git(repo.path, 'config', 'filter.attack.smudge', `touch '${join(root, 'filter-executed')}'`);
+  git(repo.path, 'config', 'filter.attack.required', 'true');
+  const work = await repo.createWorktree('task-1', 'agent/TASK-1', head);
+  expect(await readFile(join(work, 'src/existing.ts'), 'utf8')).toBe('등록 전 코드');
+  await expect(lstat(join(root, 'filter-executed'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test('clone 뒤 main에 올라온 입력을 보존하며 강제 push 없이 초기화 커밋을 전달할 수 있다', async () => {
+  await file(join(source, 'src/existing.ts'), 'Agent 코드');
+  await commit();
+  repo = await clone();
+  await file(join(source, 'prototype/docs/guide.md'), 'clone 이후 최신 입력');
+  const latest = await commit();
+  git(source, 'push', 'origin', 'main');
+  const result = await repo.reset({ baseCommit: baseline, branches: [], worktrees: [], inputs: [] });
+  expect(git(repo.path, 'rev-parse', `${result.commit}^`)).toBe(latest);
+  expect(git(repo.path, 'show', 'main:prototype/docs/guide.md')).toBe('clone 이후 최신 입력');
+  // GitHub 어댑터가 수행할 일반 push를 로컬 bare 저장소에만 검증한다.
+  git(repo.path, 'push', 'origin', 'refs/heads/main:refs/heads/main');
+  expect(git(remote, 'rev-parse', 'main')).toBe(result.commit);
+  expect(await repo.reset({ baseCommit: baseline, branches: [], worktrees: [], inputs: [] })).toEqual(result);
+});
+
+test('관리 경로의 상위 폴더를 symlink로 바꿔도 외부에 입력을 만들지 않는다', async () => {
+  repo = await clone();
+  const outside = join(root, 'outside');
+  await mkdir(outside);
+  await rm(join(root, 'runner/inputs/project'), { recursive: true });
+  await symlink(outside, join(root, 'runner/inputs/project'));
+  await expect(repo.checkoutInput('v1', baseline)).rejects.toThrow(/symlink/);
+  await expect(lstat(join(outside, 'v1'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test('전송 대기 중인 초기화가 있어도 새 main 입력을 보존하고 옛 입력 버전을 유지한다', async () => {
+  await file(join(source, 'src/existing.ts'), 'Agent 변경');
+  await commit();
+  repo = await clone();
+  const inputV1 = await repo.checkoutInput('v1', baseline);
+  const first = await repo.reset({ baseCommit: baseline, branches: [], worktrees: [], inputs: [] });
+  await file(join(source, 'prototype/docs/guide.md'), '새 입력 v2');
+  const latest = await commit();
+  git(source, 'push', 'origin', 'main');
+  const second = await repo.reset({ baseCommit: baseline, branches: [], worktrees: [], inputs: [] });
+  expect(second.commit).not.toBe(first.commit);
+  expect(git(repo.path, 'rev-parse', `${second.commit}^`)).toBe(latest);
+  expect(git(repo.path, 'show', 'main:prototype/docs/guide.md')).toBe('새 입력 v2');
+  const inputV2 = await repo.checkoutInput('v2', latest);
+  expect(await readFile(join(inputV1, 'prototype/docs/guide.md'), 'utf8')).toBe('원본 입력');
+  expect(await readFile(join(inputV2, 'prototype/docs/guide.md'), 'utf8')).toBe('새 입력 v2');
 });
