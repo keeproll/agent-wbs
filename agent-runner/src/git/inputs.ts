@@ -102,6 +102,7 @@ export type InputReport = ApiResponse<'reportInputChanges'>['body'] | { skipped:
  * - historyRewritten: 서버가 이력 재작성으로 보고 아무것도 받지 않았다. 같은 base로는 다시 보내지 않고 멈춘다(재작성 시 중단).
  *   다시 보내는 때는 둘뿐이다(조정자 결정 2026-11-26).
  *   1) 팀장이 「복구 확인·입력 확인 다시 시도」를 눌러 정책 inputRecheck가 바뀌었을 때: 서버 head를 base로 다시 관측한다.
+ *      관측 결과는 관측을 시작할 때 읽은 번호로만 기록한다. 그 사이 들어온 새 번호는 다음 관측이 쓴다.
  *      owner가 정상 merge·복원 커밋으로 연결을 되돌렸다면 조상 관계가 성립해 서버가 받아들이고 경고를 해소한다. 아니면 다시 멈춘다.
  *   2) epoch가 바뀌었을 때(프로젝트 초기화): 이전 base·중단 상태를 모두 버린다(교차 리뷰 F2, G§4.2 ③ 「등록 전 상태」).
  */
@@ -120,8 +121,11 @@ export class InputChangeReporter {
 
   async report(source: InputSource): Promise<InputReport> {
     const epoch = this.#o.epoch();
+    // 이 관측이 응답하는 복구 확인 번호는 시작 때 고정한다(재리뷰 N1). 관측 중에 팀장이 다음 확인을 누르면
+    // 늦게 온 결과가 그 번호를 소비하지 않고, 다음 주기에 새 번호로 다시 관측한다.
+    const recheck = this.#o.recheck?.();
     if (this.#epoch !== epoch) { this.#epoch = epoch; this.#base = undefined; this.#stopped = undefined; }
-    if (this.#stopped && this.#stopped.recheck === this.#o.recheck?.()) return { skipped: 'history_rewritten' };
+    if (this.#stopped && this.#stopped.recheck === recheck) return { skipped: 'history_rewritten' };
     const head = await source.fetch();
     // 복구 확인으로 다시 시도할 때는 서버 head(멈춘 base)를 base로 쓴다.
     let base = this.#stopped?.base ?? this.#base ?? head;
@@ -132,7 +136,7 @@ export class InputChangeReporter {
         const response = await this.#o.api('reportInputChanges', { epoch, idempotencyKey: `inputs:${randomUUID()}`, body: { base, head, ...observation } });
         this.#base = response.body.head;
         if (response.body.historyRewritten) {
-          this.#stopped = { base, recheck: this.#o.recheck?.() };
+          this.#stopped = { base, recheck };
           this.#o.warn(`입력 이력 재작성: 마지막 입력 커밋 ${base}가 main ${head}의 조상이 아닙니다. 팀장의 복구 확인 전까지 입력 변경 보고를 멈춥니다.`);
         } else this.#stopped = undefined;
         return response.body;

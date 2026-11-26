@@ -170,6 +170,30 @@ describe('InputChangeReporter', () => {
     expect(reporter.stoppedAt).toBeUndefined();
   });
 
+  test('재리뷰 N1: 관측 중에 들어온 다음 복구 확인은 늦게 온 결과가 소비하지 않고 다음 관측으로 남는다', async () => {
+    const A = 'a'.repeat(40), C = 'c'.repeat(40);
+    let recheck = 0, restored = false;
+    const sent: { base: string; ancestor: boolean }[] = [];
+    const api = ((_op: string, request: { body: { base: string; head: string; baseIsAncestor: boolean } }) => {
+      sent.push({ base: request.body.base, ancestor: request.body.baseIsAncestor });
+      return Promise.resolve({ status: 200, headers: new Headers(), body: request.body.baseIsAncestor ? { head: request.body.head, recorded: true, historyRewritten: false } : { head: A, recorded: false, historyRewritten: true } });
+    }) as unknown as ApiClient;
+    const plain: InputSource = { fetch: () => Promise.resolve(C), inputObservation: () => Promise.resolve({ baseIsAncestor: restored, treeHash: C, changes: [], commits: [] }) };
+    const reporter = new InputChangeReporter({ api, epoch: () => 1, warn: () => undefined, recheck: () => recheck });
+    await reporter.report(plain); // 재작성으로 멈춤(번호 0)
+    recheck = 1;
+    // 1번 확인의 관측(옛 main)이 끝나기 전에 owner 복구와 2번 확인이 들어온다.
+    const racing: InputSource = { fetch: () => Promise.resolve(C), inputObservation: () => {
+      const observed = { baseIsAncestor: restored, treeHash: C, changes: [], commits: [] };
+      restored = true; recheck = 2;
+      return Promise.resolve(observed);
+    } };
+    expect(await reporter.report(racing)).toMatchObject({ historyRewritten: true });
+    // 늦은 결과는 1번으로 기록되므로 2번은 남아 있다 → 다음 주기에 복구된 main을 관측해 받아들여진다.
+    expect(await reporter.report(plain)).toEqual({ head: C, recorded: true, historyRewritten: false });
+    expect(sent.map((s) => s.ancestor)).toEqual([false, false, true]);
+  });
+
   test('재작성 복구 확인 뒤에도 연결이 안 됐으면 다시 멈추고, 다음 확인 번호에서만 다시 시도한다', async () => {
     const A = 'a'.repeat(40), C = 'c'.repeat(40);
     let recheck = 0, calls = 0;

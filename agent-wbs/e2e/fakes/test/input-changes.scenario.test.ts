@@ -118,3 +118,39 @@ test('입력 변경 보고: 트리 차이·모드, 재시작 뒤 409 재계산, 
   // 열린 재작성 경고가 없으면 복구 확인은 409 INVALID_TRANSITION.
   expect((await h.lead('POST', '/api/project/inputs/recheck', { updatedAt: await projectVersion() })).body.error.code).toBe('INVALID_TRANSITION');
 });
+
+// 재리뷰 N1: 관측이 쓰는 복구 확인 번호는 관측 시작 때 고정한다. 관측 중에 들어온 다음 확인은 다음 관측으로 남아야 한다.
+test('재관측 중 새 복구 확인 번호가 오면 다음 관측을 생략하면 안 된다(재리뷰 N1, 실제 Git·HTTP 경합)',async()=>{
+ let ticket=0;
+ const refresh=async()=>{ticket=(await h.runner.api('getRunnerPolicy',{epoch:1})).body?.inputRecheck ?? -1;};
+ const version=async()=>(await h.lead('GET','/api/project')).body.updatedAt;
+ const recheck=async()=>{const result=await h.lead('POST','/api/project/inputs/recheck',{updatedAt:await version()});expect(result.status).toBe(202);await refresh();};
+ const reporter=new InputChangeReporter({api:h.runner.api,epoch:()=>1,recheck:()=>ticket,warn:()=>undefined});
+ const registered=await repo.fetch();
+ expect(ticket).toBe(0);
+ await reporter.report(gitSource());
+ await put('prototype/docs/accepted.md','받아들인 입력\n');
+ const accepted=push('이전 입력');await reporter.report(gitSource());
+ git(source,'reset','-q','--hard',registered);
+ await put('prototype/docs/rewritten.md','다른 이력\n');push('재작성');
+ expect(await reporter.report(gitSource())).toMatchObject({historyRewritten:true});
+ await recheck();expect(ticket).toBe(1);
+ let entered:()=>void=()=>undefined,resume:()=>void=()=>undefined;
+ const atObservation=new Promise<void>(r=>{entered=r;});
+ const release=new Promise<void>(r=>{resume=r;});
+ const pending=reporter.report({fetch:()=>repo.fetch({allowRewrite:true}),inputObservation:async(base,head)=>{
+   const observation=await repo.inputObservation(base,head);entered();await release;return observation;
+ }});
+ await atObservation;
+ // 첫 재확인이 옛 main을 관측한 사이 owner가 정상 merge로 연결을 복구하고 팀장이 두 번째 확인을 요청한다.
+ git(source,'merge','-q','--no-edit','-m','정상 복구',accepted);
+ git(source,'push','-q','origin','main');
+ const restored=git(source,'rev-parse','HEAD');
+ await recheck();expect(ticket).toBe(2);
+ resume();const oldResponse=await pending;
+ expect(oldResponse).toMatchObject({historyRewritten:true});
+ const next=await reporter.report(gitSource());
+ const alerts=(await h.lead('GET','/api/alerts')).body.items;
+ expect(next).toEqual({head:restored,recorded:true,historyRewritten:false});
+ expect(alerts).toHaveLength(0);
+});
