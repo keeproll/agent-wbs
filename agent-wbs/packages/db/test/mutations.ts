@@ -41,6 +41,26 @@ const variants = [
     pattern: 'P2-1: holds reject invalid',
     sql: `DO $$ BEGIN EXECUTE replace(pg_get_functiondef('public.awbs_hold_transition()'::regprocedure),$old$(OLD.slot_state='none' AND NEW.slot_state='reserved') OR$old$,$new$(OLD.slot_state='none' AND NEW.slot_state IN ('reserved','active')) OR$new$); END $$;`,
   },
+  {
+    name: 'null cleanup proof',
+    pattern: 'cleanup cannot accept a null proof',
+    sql: `DO $$ BEGIN EXECUTE replace(pg_get_functiondef('public.complete_cleanup(uuid,integer,boolean,jsonb)'::regprocedure),$old$jsonb_typeof(proof->'proof') IS DISTINCT FROM 'string' OR $old$,''); END $$;`,
+  },
+  {
+    name: 'mutable cleanup payload',
+    pattern: 'cleanup payload is protected',
+    sql: 'GRANT UPDATE ON public.runner_commands TO awbs_app;',
+  },
+  {
+    name: 'cgroup no_process bypass',
+    pattern: 'cleanup payload is protected',
+    sql: `DO $$ BEGIN EXECUTE replace(pg_get_functiondef('public.complete_cleanup(uuid,integer,boolean,jsonb)'::regprocedure),$old$ OR h->>'cgroup' IS NOT NULL$old$,''); END $$;`,
+  },
+  {
+    name: 'null hold reason code',
+    pattern: 'hold reasons reject null codes',
+    sql: `DO $$ BEGIN EXECUTE replace(pg_get_functiondef('public.awbs_valid_hold_reasons(jsonb)'::regprocedure),$old$jsonb_typeof(item->'code') IS DISTINCT FROM 'string' OR $old$,''); END $$;`,
+  },
 ];
 function run(pattern: string, folder?: string, index = 0) {
   const database = new URL(url as string);
@@ -57,7 +77,7 @@ function run(pattern: string, folder?: string, index = 0) {
 }
 const results: { name: string; code: number | null; killed: boolean }[] = [];
 try {
-  const baseline = run('MUTATION|P2-1: holds reject invalid|P2-6: every FK');
+  const baseline = run('.');
   await writeFile(join(outDir, 'baseline.log'), baseline.output);
   assert.equal(baseline.code, 0, baseline.output);
   for (const [index, variant] of variants.entries()) {

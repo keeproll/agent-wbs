@@ -191,6 +191,10 @@ test('P1-2: pre-project writes and scoped uniqueness work without losing reset d
       "insert into notify_events(dedup_key,kind,ref) values('admin|runner','admin','{}')",
     );
     await c.query("insert into alerts(key,severity,target) values('runner','error','{}')");
+    const f = await fixture(c);
+    await c.query("insert into idempotency_keys(project_id,principal,key,request_hash,response,epoch) values($1,'runner','registration','hash','{}',1)", [f.p]);
+    await c.query("insert into idempotency_keys(principal,key,request_hash,response,epoch) values('runner','registration','hash','{}',2)");
+    await c.query("insert into notify_events(project_id,dedup_key,kind,ref) values($1,'admin|runner','admin','{}')", [f.p]);
   }));
 
 test('P1-3/P2-10: reset restores system defaults from the same source, preserving mappings and definitions', () =>
@@ -228,6 +232,11 @@ test('P1-4: reset preserves blocked authority and generation cannot fall or be d
 test('P1-5: cleanup collects CI and queued job refs as well as attempts', () =>
   transaction(async (c) => {
     const f = await fixture(c);
+    await fillProjectTables(c, f);
+    await c.query("update merge_queue set pr=44");
+    await c.query("update design_snapshots set ref='agent/design'");
+    await c.query("update task_attempts set branch='agent/attempt'");
+    await c.query("insert into runner_commands(kind,epoch,payload,status) values('reset-cleanup',0,'{\"prs\":[45],\"branches\":[\"agent/previous\"]}','done')");
     await c.query(
       "insert into ci_runs(project_id,run_key,stage,pipeline_sha,ref,pr,trigger,status) values($1,'CI-1',2,'sha','agent/T1',42,'manual','queued')",
       [f.p],
@@ -237,9 +246,68 @@ test('P1-5: cleanup collects CI and queued job refs as well as attempts', () =>
       [f.job],
     );
     await c.query("select reset_project(1,'review',true,'lead')");
-    const payload = (await c.query('select payload from runner_commands')).rows[0]?.payload;
-    expect(payload.branches).toEqual(expect.arrayContaining(['agent/T1', 'agent/prestart']));
-    expect(payload.prs).toEqual(expect.arrayContaining([42, 43]));
+    const payload = (await c.query('select payload from runner_commands where epoch=1')).rows[0]?.payload;
+    expect(payload.branches).toEqual(['agent/T1', 'agent/attempt', 'agent/design', 'agent/prestart', 'agent/previous']);
+    expect(payload.prs).toEqual([42, 43, 44, 45]);
+  }));
+
+test('P2-1: start retains reserved until process registration; duplicate process is inert', () =>
+  transaction(async (c) => {
+    const f = await fixture(c);
+    const h = await newHold(c, f);
+    const attempt = await id(c,
+      "insert into task_attempts(project_id,task,attempt_key,attempt_no,job,base_sha,head_sha,spec_revision,kind,agent,status,started_at,model_id,effort) values($1,$2,'ATT-start',1,$3,'base','head',1,'dev','Claude','running',now(),'model','high')",
+      [f.p, f.task, f.job]);
+    await c.query('update execution_holds set attempt=$2 where id=$1', [h, attempt]);
+    await c.query("update runner_jobs set state='started' where id=$1", [f.job]);
+    expect((await c.query('select slot_state,pgid from execution_holds where id=$1', [h])).rows[0])
+      .toEqual({ slot_state: 'reserved', pgid: null });
+    await c.query("update execution_holds set slot_state='active',pgid=123,cgroup='launch' where id=$1", [h]);
+    await c.query("update execution_holds set slot_state='active',pgid=123,cgroup='launch' where id=$1", [h]);
+    await rejects(c, 'update execution_holds set pgid=456 where id=$1', [h]);
+    await c.query("update execution_holds set slot_state='unconfirmed' where id=$1", [h]);
+    await rejects(c, "update execution_holds set slot_state='none',release_proof='no_process' where id=$1", [h]);
+    await c.query("update execution_holds set slot_state='none',release_proof='group_empty' where id=$1", [h]);
+  }));
+
+test('P2-5: cleanup cannot accept a null proof for a recorded hold', () =>
+  transaction(async (c) => {
+    const f = await fixture(c);
+    await newHold(c, f);
+    await c.query("select reset_project(1,'review',true,'lead')");
+    const command = (await c.query('select id from runner_commands')).rows[0]?.id;
+    await c.query('set local role awbs_app');
+    const proof = { job: f.job, hostId: 'host', bootId: 'boot', proof: null };
+    await rejects(c, 'select complete_cleanup($1,1,true,$2)', [command, { holds: [proof] }], 'AW002');
+    await c.query('select complete_cleanup($1,1,true,$2)', [command, { holds: [{ ...proof, proof: 'no_process' }] }]);
+    expect((await c.query('select cleanup_status from system_state')).rows[0]?.cleanup_status).toBe('none');
+  }));
+
+test('P2-5: cleanup payload is protected and a recorded cgroup rules out no_process', () =>
+  transaction(async (c) => {
+    const f = await fixture(c);
+    const hold = await newHold(c, f);
+    await c.query("update execution_holds set slot_state='active',cgroup='recorded-group' where id=$1", [hold]);
+    await c.query("update execution_holds set slot_state='unconfirmed' where id=$1", [hold]);
+    await c.query("select reset_project(1,'review',true,'lead')");
+    const command = (await c.query('select id from runner_commands')).rows[0]?.id;
+    await c.query('set local role awbs_app');
+    await rejects(c, "update runner_commands set payload='{\"holds\":[]}'", [], '42501');
+    await rejects(c, 'select complete_cleanup($1,1,true,$2)', [command, {
+      holds: [{ job: f.job, hostId: 'host', bootId: 'boot', proof: 'no_process' }],
+    }], 'AW002');
+  }));
+
+test('D-34: hold reasons reject null codes and preserve nullable issue indexes', () =>
+  transaction(async (c) => {
+    const f = await fixture(c);
+    await c.query("insert into change_proposals(project_id,cp_key,source,status,ops) values($1,'CP-shape','manual','held','[]')", [f.p]);
+    await rejects(c, 'update change_proposals set hold_reasons=$1', [{
+      holdReasons: [{ code: null, message: 'reason' }], issues: [],
+    }]);
+    await c.query('update change_proposals set hold_reasons=$1', [{
+      holdReasons: [], issues: [{ index: null, code: 'CYCLE', message: 'proposal issue' }],
+    }]);
   }));
 
 test('P2-1: holds reject invalid insertion, identity changes, stale proof, host/fence rollback and instant activation', () =>
@@ -645,6 +713,9 @@ test('D-33/D-34: judgements retain the approved names and reject malformed or du
       { schemaVersion: 1, items: [item, item] },
       { schemaVersion: 1, items: [{ ...item, agreedBy: ['Claude'] }] },
       { schemaVersion: 1, items: [{ ...item, basis: ' ' }] },
+      { schemaVersion: 1, items: [{ ...item, basis: '\u00a0\u3000' }] },
+      { schemaVersion: 1, items: [{ ...item, result: null }] },
+      { schemaVersion: 1, items: [{ ...item, judgedAt: '2026-02-30T00:00:00Z' }] },
       { schemaVersion: 1, items: [{ ...item, subjectHash: 'bad' }] },
     ])
       await rejects(c, 'update task_splits set judged_rules=$2 where task=$1', [f.task, bad]);
@@ -659,4 +730,7 @@ test('D-33/D-34: judgements retain the approved names and reject malformed or du
     await rejects(c, 'update change_proposals set split_judgements=$1', [good]);
     await rejects(c, "update change_proposals set hold_reasons='[]'");
     await rejects(c, "update change_proposals set task_judgements='{}'");
+    await rejects(c, 'update change_proposals set task_judgements=null', [], '23502');
+    expect((await c.query('select task_judgements from change_proposals')).rows[0]?.task_judgements).toEqual([]);
+    expect((await c.query("select column_name from information_schema.columns where table_schema='public' and table_name='tasks' and column_name='judged_rules'")).rows).toEqual([]);
   }));
