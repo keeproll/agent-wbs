@@ -27,7 +27,17 @@ export type OperationId = ScreenOp['id'];
 /** 파일을 내려받는 요청(PDF·ZIP·Evidence 원본). `apiUrl`로 주소만 만들고 브라우저가 내려받는다. */
 type FileOp = Extract<AnyOp, { binary: string }>;
 export type FileOperationId = FileOp['id'];
-export type OperationOf<Id extends OperationId> = Extract<ScreenOp, { id: Id }>;
+/**
+ * 요청 이름으로 요청 정의를 고른다.
+ * 계약에는 `.map`으로 만든 요청(예: submit·reject·request-changes, approve·apply)이 있어 한 정의의 id가 여러 이름의 합집합이다.
+ * `Extract<ScreenOp, { id: Id }>`는 이런 정의를 버려 never가 된다(M3-05에서 발견). 그래서 「id 합집합에 Id가 들어 있는 정의」를 고른다.
+ *
+ */
+// 정확히 같은 이름의 정의가 있으면 그것을 쓴다(이전 동작). 없을 때만 「id 합집합에 Id가 들어 있는 정의」를 찾는다.
+// 순서가 중요하다: `get${string}`처럼 문자열 조립 id를 가진 정의가 다른 이름에 걸리지 않게 하려고.
+type ExactOp<Id extends OperationId> = Extract<ScreenOp, { id: Id }>;
+type UnionOp<Id extends OperationId> = ScreenOp extends infer O ? (O extends { id: infer I } ? (string extends I ? never : Id extends I ? O : never) : never) : never;
+export type OperationOf<Id extends OperationId> = [ExactOp<Id>] extends [never] ? UnionOp<Id> : ExactOp<Id>;
 
 type SchemaStatic<S> = S extends TSchema ? Static<S> : undefined;
 type Responses<Id extends OperationId> = OperationOf<Id>['responses'];

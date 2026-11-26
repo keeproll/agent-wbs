@@ -205,5 +205,7 @@ api.on('GET /api/project', slow.handler); …; slow.release();
 
 - 계약의 열거값(`AnyOf`)은 TypeScript에서 글자 그대로의 타입이 아니라 `string | number`로 나온다(@awbs/shared 결함, 보고함).
   - 그래서 `project.state === 'active'`로 타입이 좁혀지지 않는다. 필드 존재(`'name' in project`)로 구분하거나 값을 비교만 한다.
+- 계약에서 `.map`으로 만든 요청(CP의 submit·reject·request-changes·approve·apply)은 한 정의의 이름이 여러 개다.
+  - 예전 `OperationOf`는 이런 요청을 never로 만들어 `client.call('approveProposal', …)`이 typecheck에서 막혔다. M3-05에서 고쳤고 `test/contract-types.test.ts`가 지킨다.
 - 화면은 `@awbs/api`·`@awbs/db`를 import할 수 없다(lint가 막는다). 필요한 것은 `@awbs/shared`에 있어야 한다.
 - 원본 CSS 파일(`styles/prototype.css`)은 직접 고치지 않는다. 다시 만들면 덮어써진다.
