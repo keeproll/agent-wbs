@@ -1,11 +1,12 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { tmpdir } from 'node:os';
 import { chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { GitRepository } from '../../src/git/repository.ts';
 
-const archive = '/home/keeproll/.orca/bots/agentwbs/archive/2026-11-26/M4-03';
+const archive = tmpdir();
 let root: string;
 let source: string;
 let remote: string;
@@ -364,4 +365,90 @@ test('전송 대기 중인 초기화가 있어도 새 main 입력을 보존하�
   const inputV2 = await repo.checkoutInput('v2', latest);
   expect(await readFile(join(inputV1, 'prototype/docs/guide.md'), 'utf8')).toBe('원본 입력');
   expect(await readFile(join(inputV2, 'prototype/docs/guide.md'), 'utf8')).toBe('새 입력 v2');
+});
+
+test('E1 Agent의 uploadpack 설정이 Runner 초기화에서 실행되지 않는다', async () => {
+  repo = await clone();
+  const work = await repo.createWorktree('task-1', 'agent/TASK-1', baseline);
+  const marker = join(root, 'uploadpack-executed');
+  git(work, 'config', 'remote.origin.uploadpack', `touch '${marker}'; git-upload-pack`);
+  await repo.reset({ baseCommit: baseline, branches: ['agent/TASK-1'], worktrees: ['task-1'], inputs: [] });
+  await expect(lstat(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test('E2 Agent가 origin을 바꿔도 등록 원격의 입력만 사용한다', async () => {
+  repo = await clone();
+  const work = await repo.createWorktree('task-1', 'agent/TASK-1', baseline);
+  const evil = join(root, 'evil');
+  git(root, 'clone', remote, evil);
+  await file(join(evil, 'prototype/docs/guide.md'), '공격자가 바꾼 입력');
+  git(evil, 'commit', '-am', '입력 오염');
+  git(work, 'config', 'remote.origin.url', evil);
+  const reset = await repo.reset({ baseCommit: baseline, branches: [], worktrees: [], inputs: [] });
+  expect(git(repo.path, 'show', `${reset.commit}:prototype/docs/guide.md`)).toBe('원본 입력');
+  expect(await repo.fetch()).toBe(baseline);
+});
+
+test('E3 Agent의 LFS 전송 명령이 Runner 입력 복사에서 실행되지 않는다', async () => {
+  const content = Buffer.from('안전한 LFS 원본\n');
+  const oid = createHash('sha256').update(content).digest('hex');
+  await file(join(source, 'prototype/docs/big.bin'), `version https://git-lfs.github.com/spec/v1\noid sha256:${oid}\nsize ${content.length}\n`);
+  const head = await commit();
+  await file(join(remote, 'lfs/objects', oid.slice(0, 2), oid.slice(2, 4), oid), content.toString());
+  repo = await clone();
+  const work = await repo.createWorktree('task-1', 'agent/TASK-1', head);
+  const marker = join(root, 'lfs-transfer-executed');
+  git(work, 'config', 'lfs.standalonetransferagent', 'evil');
+  git(work, 'config', 'lfs.customtransfer.evil.path', '/bin/sh');
+  git(work, 'config', 'lfs.customtransfer.evil.args', `-c "touch '${marker}'; exit 1"`);
+  const result = await repo.checkoutInput('v1', head).then((path) => path, () => undefined);
+  await expect(lstat(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(result).toBeDefined();
+  expect(await readFile(join(result as string, 'prototype/docs/big.bin'))).toEqual(content);
+});
+
+test('E12 Agent의 core.bare 변경이 Runner 재시작을 막지 않는다', async () => {
+  repo = await clone();
+  const work = await repo.createWorktree('task-1', 'agent/TASK-1', baseline);
+  git(work, 'config', 'core.bare', 'false');
+  const reopened = await GitRepository.open(join(root, 'runner'), 'project');
+  expect(await reopened.head()).toBe(baseline);
+});
+
+test('E5 권한 000 폴더를 복구하여 정리하고 재시도도 완료한다', async () => {
+  repo = await clone();
+  const work = await repo.createWorktree('task-1', 'agent/TASK-1', baseline);
+  await file(join(work, 'locked/inner/data'), '삭제할 파일');
+  await chmod(join(work, 'locked'), 0);
+  const options = { baseCommit: baseline, branches: ['agent/TASK-1'], worktrees: ['task-1'], inputs: [] };
+  await repo.reset(options);
+  await expect(lstat(work)).rejects.toMatchObject({ code: 'ENOENT' });
+  await repo.reset(options);
+});
+
+test('E5 Git 등록 정보가 먼저 사라져도 기록한 폴더는 재시도에서 지운다', async () => {
+  repo = await clone();
+  const work = await repo.createWorktree('task-1', 'agent/TASK-1', baseline);
+  await file(join(work, 'locked/inner/data'), '삭제할 파일');
+  await chmod(join(work, 'locked'), 0);
+  try { git(repo.path, 'worktree', 'remove', '--force', work); } catch { /* 삭제 중단 사고를 재현한다. */ }
+  await chmod(join(work, 'locked'), 0o700);
+  await repo.reset({ baseCommit: baseline, branches: ['agent/TASK-1'], worktrees: ['task-1'], inputs: [] });
+  await expect(lstat(work)).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test('E6 기존 강제 추가 파일은 허용하고 Task가 수정한 제외 파일만 거부한다', async () => {
+  await file(join(source, '.gitignore'), '.env*\ndist/\n');
+  await file(join(source, '.env.example'), 'A=1');
+  git(source, 'add', '-f', '.env.example');
+  const base = await commit();
+  await file(join(source, 'src/feature.ts'), '새 기능');
+  const head = await commit();
+  repo = await clone();
+  expect(await repo.checkTask(base, head)).toEqual([]);
+  await file(join(source, '.env.example'), 'A=2');
+  const changed = await commit();
+  git(source, 'push', 'origin', 'main');
+  await repo.fetch();
+  expect(await repo.checkTask(base, changed)).toContainEqual({ path: '.env.example', reason: 'ignored' });
 });
