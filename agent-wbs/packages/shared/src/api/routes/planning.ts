@@ -18,7 +18,8 @@ export const planningOperations = [
     summary: 'Task별 추정 등록·재추정(완료 Task 거부)',
     body: Body({ ...Job, items: List(Body({ taskKey: c.TaskKey, ...m.Estimate }), { minItems: 1 }) }),
     responses: { 200: Type.Object({ replan: Opt(m.ReplanSummary) }) },
-    errors: ['TASK_NOT_FOUND'],
+    // 완료 Task의 추정은 409 INVALID_TRANSITION이고 묶음 전체를 저장하지 않는다(M2-07 리뷰 F7, contracts §1.1 상태 오류).
+    errors: ['TASK_NOT_FOUND', 'INVALID_TRANSITION'],
   }),
   operation({
     ...planning,
