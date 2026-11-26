@@ -8994,7 +8994,7 @@
     "/api/project/inputs": {
       "post": {
         "operationId": "analyzeInputs",
-        "summary": "「이 버전으로 분석」. commits는 팀장이 확인한 목록, commit은 그중 최신(보고 순서상 마지막) 커밋",
+        "summary": "「이 버전으로 분석」. commits는 팀장이 확인한 대기 커밋 목록, commit은 조회의 inputHead(입력 사슬 끝)",
         "tags": [
           "lead"
         ],
@@ -9049,7 +9049,7 @@
         },
         "responses": {
           "202": {
-            "description": "「이 버전으로 분석」. commits는 팀장이 확인한 목록, commit은 그중 최신(보고 순서상 마지막) 커밋",
+            "description": "「이 버전으로 분석」. commits는 팀장이 확인한 대기 커밋 목록, commit은 조회의 inputHead(입력 사슬 끝)",
             "headers": {
               "Idempotency-Replayed": {
                 "schema": {
@@ -23243,7 +23243,7 @@
     "/api/runner/input-changes": {
       "post": {
         "operationId": "reportInputChanges",
-        "summary": "입력 경로를 바꾼 main 커밋 보고",
+        "summary": "입력 경로를 바꾼 main 커밋 보고(비교 후 추가). base가 서버의 입력 head와 다르면 409와 현재 head",
         "tags": [
           "runner"
         ],
@@ -23267,17 +23267,28 @@
               "schema": {
                 "type": "object",
                 "required": [
+                  "base",
+                  "head",
+                  "baseIsAncestor",
                   "commits",
                   "files"
                 ],
                 "properties": {
+                  "base": {
+                    "$ref": "#/components/schemas/Sha"
+                  },
+                  "head": {
+                    "$ref": "#/components/schemas/Sha"
+                  },
+                  "baseIsAncestor": {
+                    "type": "boolean"
+                  },
                   "commits": {
                     "type": "array",
                     "items": {
                       "type": "object",
                       "required": [
                         "sha",
-                        "depth",
                         "at",
                         "author",
                         "message"
@@ -23285,10 +23296,6 @@
                       "properties": {
                         "sha": {
                           "$ref": "#/components/schemas/Sha"
-                        },
-                        "depth": {
-                          "type": "integer",
-                          "minimum": 1
                         },
                         "at": {
                           "$ref": "#/components/schemas/Timestamp"
@@ -23301,8 +23308,7 @@
                         }
                       },
                       "additionalProperties": false
-                    },
-                    "minItems": 1
+                    }
                   },
                   "files": {
                     "type": "array",
@@ -23339,8 +23345,7 @@
                         }
                       },
                       "additionalProperties": false
-                    },
-                    "minItems": 1
+                    }
                   }
                 },
                 "additionalProperties": false
@@ -23349,12 +23354,36 @@
           }
         },
         "responses": {
-          "204": {
-            "description": "입력 경로를 바꾼 main 커밋 보고",
+          "200": {
+            "description": "입력 경로를 바꾼 main 커밋 보고(비교 후 추가). base가 서버의 입력 head와 다르면 409와 현재 head",
             "headers": {
               "Idempotency-Replayed": {
                 "schema": {
                   "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "head",
+                    "appended",
+                    "historyRewritten"
+                  ],
+                  "properties": {
+                    "head": {
+                      "$ref": "#/components/schemas/Sha"
+                    },
+                    "appended": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "historyRewritten": {
+                      "type": "boolean"
+                    }
+                  }
                 }
               }
             }
@@ -23369,7 +23398,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION"
+            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, VERSION_CONFLICT"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited",
@@ -23395,7 +23424,8 @@
           "409": [
             "EPOCH_MISMATCH",
             "IDEMPOTENCY_CONFLICT",
-            "INVALID_TRANSITION"
+            "INVALID_TRANSITION",
+            "VERSION_CONFLICT"
           ],
           "429": [
             "RATE_LIMITED"
@@ -36699,6 +36729,7 @@
               "registeredAt",
               "inputs",
               "changeCommits",
+              "inputHead",
               "inputJob",
               "updatedAt",
               "bootstrap"
@@ -36948,6 +36979,9 @@
                     }
                   }
                 }
+              },
+              "inputHead": {
+                "$ref": "#/components/schemas/Sha"
               },
               "inputJob": {
                 "anyOf": [
@@ -37880,6 +37914,7 @@
               "registeredAt",
               "inputs",
               "changeCommits",
+              "inputHead",
               "inputJob",
               "updatedAt",
               "approvedAt",
@@ -38130,6 +38165,9 @@
                     }
                   }
                 }
+              },
+              "inputHead": {
+                "$ref": "#/components/schemas/Sha"
               },
               "inputJob": {
                 "anyOf": [

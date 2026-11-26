@@ -1178,13 +1178,15 @@ export interface Operations {
       204: undefined;
     };
   };
-  /** 입력 경로를 바꾼 main 커밋 보고 */
+  /** 입력 경로를 바꾼 main 커밋 보고(비교 후 추가). base가 서버의 입력 head와 다르면 409와 현재 head */
   reportInputChanges: {
     request: {
       body: {
+        base: Sha;
+        head: Sha;
+        baseIsAncestor: boolean;
         commits: ({
           sha: Sha;
-          depth: number;
           at: Timestamp;
           author: string;
           message: string;
@@ -1201,7 +1203,11 @@ export interface Operations {
       idempotencyKey: string;
     };
     responses: {
-      204: undefined;
+      200: {
+        head: Sha;
+        appended: number;
+        historyRewritten: boolean;
+      };
     };
   };
   /** 저장소 접근·private·main 커밋·필수 구조 */
@@ -2194,7 +2200,7 @@ export const OPERATIONS = {
   reportAttemptResult: { method: 'POST', path: '/api/runner/attempts/{attemptId}/result', content: 'json', statuses: { 201: false } },
   uploadEvidence: { method: 'POST', path: '/api/runner/attempts/{attemptId}/evidence', content: 'multipart', statuses: { 201: true } },
   reportSubagentUsage: { method: 'POST', path: '/api/runner/attempts/{attemptId}/subagent-usage', content: 'json', statuses: { 204: false } },
-  reportInputChanges: { method: 'POST', path: '/api/runner/input-changes', content: 'json', statuses: { 204: false } },
+  reportInputChanges: { method: 'POST', path: '/api/runner/input-changes', content: 'json', statuses: { 200: true } },
   reportRepoCheck: { method: 'POST', path: '/api/runner/repo-checks/{id}/result', content: 'json', statuses: { 204: false } },
   reportBootstrapProgress: { method: 'POST', path: '/api/runner/bootstrap/{jobId}/progress', content: 'json', statuses: { 204: false } },
   startCiRun: { method: 'POST', path: '/api/runner/ci/runs', content: 'json', statuses: { 201: true } },

@@ -735,6 +735,8 @@ const registered = {
       ),
     }),
   ),
+  /** 입력 사슬의 끝: Runner가 마지막으로 보고한 main 끝 커밋(처음에는 등록 커밋). 「이 버전으로 분석」은 이 커밋으로 고정한다. */
+  inputHead: c.Sha,
   inputJob: Nullable(obj({ ...jobView(...INPUT_STEPS), version: Type.Integer({ minimum: 1 }), proposalId: Nullable(c.Id) })),
   updatedAt: c.Timestamp,
 };

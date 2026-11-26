@@ -8,11 +8,7 @@ const runner = { principal: 'runner' } as const;
 const fence = c.Fence;
 const Pid = Type.Integer({ minimum: 1 });
 
-/**
- * depth = main 첫 부모 이력에서의 깊이(`git rev-list --count --first-parent <sha>`). 서버는 이 값으로만 커밋 순서를 정한다.
- * 보고가 겹치거나·중복되거나·늦게 도착해도 순서가 흔들리지 않게 하기 위해서다(M2-03 입력 원장).
- */
-const PushedCommit = Body({ sha: c.Sha, depth: Type.Integer({ minimum: 1 }), at: c.Timestamp, author: Type.String(), message: Type.String() });
+const PushedCommit = Body({ sha: c.Sha, at: c.Timestamp, author: Type.String(), message: Type.String() });
 const ChangedInput = Body({
   commitSha: c.Sha,
   path: c.RepoPath,
@@ -462,11 +458,24 @@ export const runnerOperations = [
     id: 'reportInputChanges',
     method: 'POST',
     path: '/api/runner/input-changes',
-    summary: '입력 경로를 바꾼 main 커밋 보고',
-    // commits는 depth가 커지는 순서다. prototype/ 밖 파일은 무시하고, 입력 파일이 없는 커밋은 올리지 않는다.
-    body: Body({ commits: List(PushedCommit, { minItems: 1 }), files: List(ChangedInput, { minItems: 1 }) }),
-    responses: { 204: null },
-    errors: ['INVALID_TRANSITION'],
+    summary: '입력 경로를 바꾼 main 커밋 보고(비교 후 추가). base가 서버의 입력 head와 다르면 409와 현재 head',
+    /*
+     * 순서는 서버가 계산하지 않고 git이 정한다(M2-03 입력 원장).
+     * - base: 서버가 마지막으로 받은 입력 head(처음에는 등록 커밋). 200·409 응답의 head로 갱신한다.
+     * - head: 이번에 계산한 main 끝 커밋. 입력 버전은 이 커밋으로 고정한다.
+     * - baseIsAncestor: `git merge-base --is-ancestor <base> <head>` 결과. false면 이력 재작성으로 보고 붙이지 않고 팀장에게 경고한다.
+     * - commits: `git rev-list --first-parent --reverse <base>..<head> -- prototype/` 결과 그대로(오래된 것 먼저).
+     *   얕은 clone이면 이력을 다 받은 뒤 계산한다. files의 prototype/ 밖 경로는 무시한다.
+     */
+    body: Body({
+      base: c.Sha,
+      head: c.Sha,
+      baseIsAncestor: Type.Boolean(),
+      commits: List(PushedCommit),
+      files: List(ChangedInput),
+    }),
+    responses: { 200: Type.Object({ head: c.Sha, appended: c.Count, historyRewritten: Type.Boolean() }) },
+    errors: ['INVALID_TRANSITION', 'VERSION_CONFLICT'],
   }),
   operation({
     ...runner,

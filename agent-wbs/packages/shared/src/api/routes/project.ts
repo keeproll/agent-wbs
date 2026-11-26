@@ -121,7 +121,7 @@ const project = [
     id: 'analyzeInputs',
     method: 'POST',
     path: '/api/project/inputs',
-    summary: '「이 버전으로 분석」. commits는 팀장이 확인한 목록, commit은 그중 최신(보고 순서상 마지막) 커밋',
+    summary: '「이 버전으로 분석」. commits는 팀장이 확인한 대기 커밋 목록, commit은 조회의 inputHead(입력 사슬 끝)',
     body: Body({
       ...V,
       commit: c.Sha,
