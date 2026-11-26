@@ -157,7 +157,7 @@ function groupAgg(tasks: TaskSummary[]): Pick<GroupRow, 'agg' | 'pct' | 'win'> {
  * 표의 행 목록(P buildRows L5104). 필터가 있으면 매칭 Task가 있는 그룹만, 없으면 빈 그룹도 보인다.
  * 정렬은 Work Package 안에서만 적용한다. 접힌 그룹의 Task도 결과 수에는 센다.
  */
-export function buildRows(nodes: readonly WbsNode[], tasks: readonly TaskSummary[], v: ViewState, _schedule?: ScheduleData): { rows: Row[]; taskCount: number; active: boolean } {
+export function buildRows(nodes: readonly WbsNode[], tasks: readonly TaskSummary[], v: ViewState): { rows: Row[]; taskCount: number; active: boolean } {
   const tr = tree(nodes, tasks);
   const active = isFilterActive(v);
   const match = matcher(nodes, v.filters);

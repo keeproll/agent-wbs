@@ -9,6 +9,7 @@ import { lazy, Suspense } from 'react';
 import { createBrowserRouter, Navigate, type RouteObject } from 'react-router';
 import { LoginPage } from '../features/auth/LoginPage.tsx';
 import { RequireAuth } from '../shared/auth/RequireAuth.tsx';
+import { WbsPage } from '../features/wbs/WbsPage.tsx';
 import { MENU } from '../shared/layout/menu.ts';
 import { Shell } from '../shared/layout/Shell.tsx';
 import { NotFoundPage, PendingPage } from './pages.tsx';
@@ -24,7 +25,10 @@ export const routes: RouteObject[] = [
     children: [
       { index: true, element: <Navigate to="/dashboard" replace /> },
       // key: 메뉴를 옮기면 화면을 새로 만든다. 같은 컴포넌트를 재사용하면 「재방문 갱신」(상단 진행 막대)이 일어나지 않는다.
-      ...MENU.map((item) => ({ path: `/${item.key}`, element: <PendingPage key={item.key} menu={item.key} /> })),
+      ...MENU.map((item): RouteObject => (item.key === 'wbs'
+        // M3-02: WBS 표. 자식 `:taskKey`가 있으면 같은 화면이 레일 + 상세로 바뀐다(G§4.3). 화면 상태(필터·스크롤)를 유지하려고 한 화면이 두 주소를 받는다.
+        ? { path: '/wbs', element: <WbsPage key="wbs" />, children: [{ path: ':taskKey', element: null }] }
+        : { path: `/${item.key}`, element: <PendingPage key={item.key} menu={item.key} /> })),
       { path: '/wbs/:taskKey', element: <PendingPage key="wbs" menu="wbs" /> },
       { path: '/settings/:tab', element: <PendingPage key="settings" menu="settings" /> },
       ...(StatesSandbox ? [{ path: '/_states', element: <Suspense><StatesSandbox /></Suspense> }] : []),

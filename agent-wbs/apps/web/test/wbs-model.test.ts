@@ -74,7 +74,7 @@ describe('WBS 표 행 만들기(UI-03B, UAT-WBS-01·02)', () => {
   });
 
   it('그룹 집계: 완료 수·예상 시간·진행률·완료 예상(기준 대비)', () => {
-    const { rows } = buildRows(NODES, TASKS, view(), SCHEDULE);
+    const { rows } = buildRows(NODES, TASKS, view());
     const ph1 = rows[0];
     if (ph1?.kind !== 'group') throw new Error('Phase 행 없음');
     expect(ph1.agg).toBe('완료 3/4 · 예상 9.5h · 진행률 85%');
