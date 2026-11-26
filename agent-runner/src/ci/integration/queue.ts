@@ -26,10 +26,23 @@ export type IntegrationResult =
   | ({ kind: 'unknown'; observed: string } & Evidence)
   | ({ kind: 'verify_failed'; actualMergeSha: string; reason: string } & Evidence)
   | { kind: 'blocked' }
+  | { kind: 'baseline_failed'; failScope: 'baseline'; task: TaskCheckResult }
   | { kind: 'recheck'; reason: 'main_changed' | 'head_changed' | 'qa_changed' | 'merge_rejected' }
-  | { kind: 'rework'; reason: 'conflict' | 'invalid_sync' | 'task_failed' | 'integration_failed'; task?: TaskCheckResult; integration?: IntegrationCheck };
+  | { kind: 'rework'; reason: 'conflict' | 'invalid_sync' | 'task_failed' | 'integration_failed'; failScope?: 'task'; task?: TaskCheckResult; integration?: IntegrationCheck };
 interface Journal { version: 1; evidence: Evidence; outcome?: MergeOutcome }
 const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
+
+function validOutcome(outcome: MergeOutcome): boolean {
+  if (!outcome || typeof outcome !== 'object') return false;
+  switch (outcome.kind) {
+    case 'merged': return SHA.test(outcome.mergeSha) && SHA.test(outcome.treeSha);
+    case 'verify_failed': return SHA.test(outcome.mergeSha) && typeof outcome.reason === 'string';
+    case 'unknown': return ['open', 'closed', 'read_failed'].includes(outcome.observed);
+    case 'rejected': return outcome.status === 405 && typeof outcome.message === 'string';
+    case 'head_changed': return outcome.status === 409 && typeof outcome.message === 'string';
+    default: return false;
+  }
+}
 
 /** 서버 대기열 순서로 호출한다. 파일 잠금은 다른 Runner의 중복 병합을 막는다. */
 export class IntegrationQueue {
@@ -56,7 +69,9 @@ export class IntegrationQueue {
           const e = journal.evidence;
           if (journal.version !== 1 || !e || !Number.isSafeInteger(e.pr) || e.pr < 1 || !/^agent\/[\w.-]+$/.test(e.branch) ||
             ![e.baseSha, e.qaHeadSha, e.syncedHeadSha, e.testedTreeSha, e.pipelineSha].every(s => typeof s === 'string' && SHA.test(s)) ||
-            !e.task || !e.integration || journal.outcome && !['merged', 'unknown', 'verify_failed', 'rejected', 'head_changed'].includes(journal.outcome.kind)) {
+            !e.task || e.task.status !== 'pass' || e.task.baseSha !== e.baseSha || e.task.headSha !== e.syncedHeadSha || e.task.pipelineSha !== e.pipelineSha ||
+            !e.integration || e.integration.status !== 'pass' || e.integration.baseSha !== e.baseSha || e.integration.headSha !== e.syncedHeadSha ||
+            e.integration.treeSha !== e.testedTreeSha || e.integration.pipelineSha !== e.pipelineSha || journal.outcome && !validOutcome(journal.outcome)) {
             throw new Error('병합 기록이 손상되었습니다. 원본을 보존하고 확인하세요.');
           }
         }
@@ -85,11 +100,15 @@ export class IntegrationQueue {
     return null;
   }
 
+  private validateRequest(request: IntegrationRequest): void {
+    if (!Number.isSafeInteger(request.pr) || request.pr < 1 || !/^agent\/[\w.-]+$/.test(request.branch) ||
+      !SHA.test(request.qaHeadSha) || !Number.isSafeInteger(request.specRevision) || request.specRevision < 0) throw new Error('통합 대상이 올바르지 않습니다.');
+  }
+
   run(request: IntegrationRequest): Promise<IntegrationResult> {
     return this.serial(async () => {
       if (this.journal) return { kind: 'blocked' };
-      if (!Number.isSafeInteger(request.pr) || request.pr < 1 || !/^agent\/[\w.-]+$/.test(request.branch) ||
-        !SHA.test(request.qaHeadSha) || !Number.isSafeInteger(request.specRevision) || request.specRevision < 0) throw new Error('통합 대상이 올바르지 않습니다.');
+      this.validateRequest(request);
       const { repo, github, signal } = this.deps; signal?.throwIfAborted();
       const basis = await repo.mainPipeline();
       await this.deps.observeMainPipeline({ baseSha: basis.baseSha, pipelineSha: basis.pipelineSha });
@@ -101,16 +120,23 @@ export class IntegrationQueue {
       const moved = await this.current(request, basis.baseSha, request.qaHeadSha); if (moved) return moved;
       if (syncedHeadSha !== request.qaHeadSha) await repo.pushCommit(syncedHeadSha, request.branch);
       await github.setCommitStatus({ sha: syncedHeadSha, context: 'agentwbs/int', state: 'pending' });
-      const id = `ci-sync-${randomUUID()}`;
+      const id = `ci-${randomUUID()}`;
       let task: TaskCheckResult;
       await repo.createTaskCheckWorktree(id, syncedHeadSha);
       try { task = await runTaskCheck({ ...this.deps, basis, worktreeId: id, branch: `agent/${id}` }); }
       finally { await repo.removeWorktree(id); }
-      if (task.status !== 'pass') return { kind: 'rework', reason: 'task_failed', task };
+      const taskChanged = await this.current(request, basis.baseSha, syncedHeadSha); if (taskChanged) return taskChanged;
+      await github.setCommitStatus({ sha: syncedHeadSha, context: 'agentwbs/task',
+        state: task.status === 'pass' ? 'success' : task.failScope === 'baseline' ? 'error' : 'failure' });
+      if (task.status !== 'pass') {
+        await github.setCommitStatus({ sha: syncedHeadSha, context: 'agentwbs/int', state: task.failScope === 'baseline' ? 'error' : 'failure' });
+        return task.failScope === 'baseline' ? { kind: 'baseline_failed', failScope: 'baseline', task }
+          : { kind: 'rework', reason: 'task_failed', failScope: 'task', task };
+      }
       const integration = await runIntegrationCheck(this.deps, basis, syncedHeadSha);
       const changed = await this.current(request, basis.baseSha, syncedHeadSha); if (changed) return changed;
       await github.setCommitStatus({ sha: syncedHeadSha, context: 'agentwbs/int', state: integration.status === 'pass' ? 'success' : 'failure' });
-      if (integration.status !== 'pass') return { kind: 'rework', reason: 'integration_failed', task, integration };
+      if (integration.status !== 'pass') return { kind: 'rework', reason: 'integration_failed', failScope: 'task', task, integration };
       const finalCheck = await this.current(request, basis.baseSha, syncedHeadSha); if (finalCheck) return finalCheck;
       signal?.throwIfAborted();
       const evidence: Evidence = { pr: request.pr, branch: request.branch, baseSha: basis.baseSha, qaHeadSha: request.qaHeadSha,
@@ -134,13 +160,18 @@ export class IntegrationQueue {
     return this.serial(async () => {
       if (!this.journal) return null;
       const { evidence: e } = this.journal;
+      if (this.journal.outcome && this.journal.outcome.kind !== 'unknown') return this.result(e, this.journal.outcome);
       const outcome = await this.deps.github.reconcileMerge({ pr: e.pr, baseSha: e.baseSha, headSha: e.syncedHeadSha });
       await this.save({ version: 1, evidence: e, outcome }); return this.result(e, outcome);
     });
   }
 
   checkBatch(requests: readonly IntegrationRequest[]): Promise<BatchDiagnostic | { kind: 'blocked' }> {
-    return this.serial(async () => this.journal ? { kind: 'blocked' } : diagnoseBatch(this.deps, requests));
+    return this.serial(async () => {
+      if (this.journal) return { kind: 'blocked' };
+      for (const request of requests) this.validateRequest(request);
+      return diagnoseBatch(this.deps, requests);
+    });
   }
 
   /** 서버 보고를 outbox에 영속 보관한 뒤 부른다. 미확정·대조 실패는 자동으로 넘기지 않는다. */

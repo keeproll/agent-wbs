@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { IntegrationQueue } from '../../src/ci/integration/queue.ts';
@@ -85,6 +85,15 @@ test('QA 명세 버전이 검사 중 바뀌면 재검증한다', async () => {
   expect(puts()).toEqual([]);
 });
 
+test('① 실패 중 QA가 바뀌어도 낡은 결과를 Task 재작업으로 보고하지 않는다', async () => {
+  f.action(async argv => {
+    if (argv[1] !== 'typecheck') return 0;
+    f.qa({ passed: true, headSha: f.head, specRevision: 2 }); return 1;
+  });
+  expect(await (await open()).run(f.request)).toMatchObject({ kind: 'recheck', reason: 'qa_changed' });
+  expect(puts()).toEqual([]);
+});
+
 test.each(['main', 'head'] as const)('병합 호출 직전 %s 이동도 strict·예상 SHA로 거부하고 다시 검사한다', async target => {
   f.beforeWrite(async op => {
     if (op.kind !== 'merge') return;
@@ -137,6 +146,48 @@ test('다른 대기열 인스턴스의 동시 실행을 파일 잠금으로 막�
   await open(); await expect(open()).rejects.toThrow();
 });
 
+test('① 기준 설치 실패는 Task 재작업으로 돌리지 않고 baseline 근거로 보류한다', async () => {
+  f.action(async argv => argv[1] === 'install' ? 1 : 0);
+  expect(await (await open()).run(f.request)).toMatchObject({ kind: 'baseline_failed', failScope: 'baseline',
+    task: { failScope: 'baseline', failStep: 'baseline-install' } });
+  expect(f.statuses.get(`${f.ref('agent/task')}:agentwbs/int`)).toBe('error');
+  expect(puts()).toEqual([]);
+});
+
+test('① Task 코드 실패는 Task 재작업이며 H′의 status에도 실패를 남긴다', async () => {
+  f.action(async argv => argv[1] === 'typecheck' ? 1 : 0);
+  expect(await (await open()).run(f.request)).toMatchObject({ kind: 'rework', failScope: 'task', reason: 'task_failed' });
+  expect(f.statuses.get(`${f.ref('agent/task')}:agentwbs/task`)).toBe('failure');
+  expect(f.statuses.get(`${f.ref('agent/task')}:agentwbs/int`)).toBe('failure');
+  expect(f.calls.some(c => c.argv[1] === 'int-build')).toBe(false); expect(puts()).toEqual([]);
+});
+
+test('② 중단은 테스트 재시도를 하지 않고 출력과 정리를 보존한다', async () => {
+  const controller = new AbortController();
+  const queue = await IntegrationQueue.open({ ...f.deps, signal: controller.signal }); queues.push(queue);
+  f.action(async argv => { if (argv[1] === 'int-test') controller.abort(new Error('중단')); return 0; });
+  expect(await queue.run(f.request)).toMatchObject({ kind: 'rework', integration: { status: 'fail', failStep: 'test' } });
+  expect(f.calls.filter(c => c.argv[1] === 'int-test')).toHaveLength(1);
+  expect(f.deps.heavy.snapshot().running).toBe(0); expect(await f.repo.recordedWorktrees()).toEqual([]);
+  expect(puts()).toEqual([]);
+});
+
+test('손상된 병합 기록은 지우거나 새 작업으로 넘기지 않는다', async () => {
+  const queue = await open(); await queue.close();
+  await writeFile(join(f.root, 'journal', 'merge.json'), '{broken');
+  await expect(open()).rejects.toThrow();
+  expect(await readFile(join(f.root, 'journal', 'merge.json'), 'utf8')).toBe('{broken');
+  expect(puts()).toEqual([]);
+});
+
+test('복구 기록의 실제 병합 SHA가 빠졌으면 성공으로 재생하지 않는다', async () => {
+  const queue = await open(); expect((await queue.run(f.request)).kind).toBe('merged'); await queue.close();
+  const path = join(f.root, 'journal', 'merge.json');
+  const journal = JSON.parse(await readFile(path, 'utf8')) as { outcome: unknown };
+  journal.outcome = { kind: 'merged' }; await writeFile(path, JSON.stringify(journal));
+  await expect(open()).rejects.toThrow();
+});
+
 test('병합 응답 유실·조회 지연은 unknown을 유지하고 재병합하지 않는다', async () => {
   f.github.on('PUT /repos/o/r/pulls/:n/merge', () => ({ drop: true }));
   const queue = await open(); expect(await queue.run(f.request)).toMatchObject({ kind: 'unknown' });
@@ -144,6 +195,15 @@ test('병합 응답 유실·조회 지연은 unknown을 유지하고 재병합�
   expect(await queue.reconcile()).toMatchObject({ kind: 'unknown' });
   expect(await queue.run(f.request)).toMatchObject({ kind: 'blocked' });
   expect(puts()).toHaveLength(1);
+});
+
+test('확정된 405 거부는 재시작해도 미확정으로 되돌리지 않는다', async () => {
+  f.github.on('PUT /repos/o/r/pulls/:n/merge', () => ({ status: 405 }));
+  const queue = await open(); expect(await queue.run(f.request)).toMatchObject({ kind: 'recheck', reason: 'merge_rejected' });
+  await queue.close();
+  const restarted = await open();
+  expect(await restarted.reconcile()).toMatchObject({ kind: 'recheck', reason: 'merge_rejected' });
+  await restarted.acknowledge(); expect(puts()).toHaveLength(1);
 });
 
 test('실제 병합 tree가 다르면 SHA·경고를 남기고 대기열을 보류한다', async () => {

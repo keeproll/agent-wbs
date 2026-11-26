@@ -37,5 +37,7 @@ test('묶음 실패는 반으로 나눠 원인 PR을 찾으며 각 묶음은 같
 test('잘못된 묶음과 중복 PR은 실행 전에 거부한다', async () => {
   await expect(queue?.checkBatch([])).rejects.toThrow();
   await expect(queue?.checkBatch([f.request, f.request])).rejects.toThrow();
+  await expect(queue?.checkBatch([f.request, { ...second, qaHeadSha: 'bad' }])).rejects.toThrow();
   expect(f.calls).toEqual([]);
+  expect(f.github.requests).toEqual([]);
 });

@@ -23,7 +23,7 @@ export async function runIntegrationCheck(deps: CheckDeps, basis: MainBasis, hea
     steps: commands.map(c => ({ name: c.name, status: 'skip', durationMs: 0, attempts: [] })),
     failStep: null, flakyCandidates: [] };
   const release = await heavy.acquire(`ci-int:${headSha}`, signal);
-  const id = `ci-int-${randomUUID()}`;
+  const id = `ci-${randomUUID()}`;
   let created = false;
   let current = result.steps[0];
   try {
@@ -32,6 +32,7 @@ export async function runIntegrationCheck(deps: CheckDeps, basis: MainBasis, hea
       current = result.steps[index];
       if (!current) throw new Error('검사 단계가 없습니다.');
       const started = performance.now();
+      // shortcut: 테스트는 이 이름들로 구분한다, 다른 이름이 필요하면 정의에 단계 종류를 추가한다.
       const retries = ['test', 'tests', 'unit', 'integration', 'e2e', 'contract'].includes(command.name) ? 2 : 1;
       for (let attempt = 0; attempt < retries; attempt++) {
         let output = { code: null as number | null, stdout: '', stderr: '' };
