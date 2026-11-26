@@ -41,7 +41,7 @@ a.nav-i.off { cursor: not-allowed; }
 .errbar-fields { margin: 4px 0 2px; padding-left: 18px; }
 
 /* 7. 충돌 창의 먼저 저장된 변경 목록. 원본은 한 줄(MM-20). */
-.cf-list { margin: 0; padding-left: 16px; }
+.cf-list { margin: 0; padding: 0; list-style: none; }
 
 /* 8. 화면 제목 오른쪽 버튼 묶음 */
 .page-acts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
