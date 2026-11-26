@@ -288,6 +288,24 @@ export class GitRepository {
     return repo;
   }
 
+  /** Runner 홈 잠금을 가진 시작 경로에서만 호출한다. 일반 open은 실행 중인 검사 사본을 건드리지 않는다. */
+  static async recoverTaskChecks(home: string): Promise<void> {
+    const directory = await safePath(join(home, 'state/git'));
+    const files = await readdir(directory).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    });
+    for (const file of files) {
+      if (!file.endsWith('.json')) continue;
+      const repo = await this.open(home, file.slice(0, -5));
+      const record = await repo.trusted();
+      for (const entry of record.worktrees) {
+        if (/^ci-[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(entry.id) &&
+          entry.branch === `agent/${entry.id}` && entry.startCommit) await repo.removeWorktree(entry.id);
+      }
+    }
+  }
+
   /**
    * 시작 회수(재리뷰 N2). 강제 종료로 남은 입력 복사 임시 폴더를 지운다.
    * 프로젝트 잠금 아래에서 하므로, 죽은 주인의 잠금은 기존 자동 회수(boot ID·PID·시작 시각·flock)로 회수된다.
