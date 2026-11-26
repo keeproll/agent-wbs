@@ -1,9 +1,11 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { createApiClient } from '../../src/api/client.ts';
 import { Outbox } from '../../src/api/outbox.ts';
@@ -11,7 +13,7 @@ import { Runner } from '../../src/api/runner.ts';
 import { State } from '../../src/state/state.ts';
 import { Secret } from '../../src/security/secret.ts';
 
-const archive = '/home/keeproll/.orca/bots/agentwbs/archive/2026-11-26/M4-01';
+const archive = process.env.AWBS_TEST_TMP ?? tmpdir();
 const token = 'fake-runner-token-0123456789abcdef';
 interface Request { path: string; headers: IncomingMessage['headers']; body: Record<string, unknown>; raw: Buffer }
 let home: string;
@@ -33,6 +35,7 @@ const status = (attemptId: string) => outbox.enqueue('reportAttemptStatus', {
 });
 
 beforeEach(async () => {
+  await mkdir(archive, { recursive: true });
   home = await mkdtemp(join(archive, 'state-test-'));
   requests = [];
   now = 1_000_000;
@@ -161,9 +164,143 @@ test('multipart 증거 파일도 디스크에서 복구해 같은 바이트로 �
 
 test('같은 시각·시도의 서로 다른 증거 파일은 멱등 키가 충돌하지 않는다', async () => {
   await Promise.all(['첫째', '둘째'].map((text) => outbox.enqueue('uploadEvidence', {
-    epoch: 0, params: { attemptId: 'a' }, body: { file: new Blob([text]), kind: 'log', fence: 1, sha256: 'a'.repeat(64), size: 6 },
+    epoch: 0, params: { attemptId: 'a' }, body: { file: new Blob([text]), kind: 'log', fence: 1, sha256: createHash('sha256').update(text).digest('hex'), size: 6 },
   })));
   expect(new Set(state.snapshot.outbox.map((entry) => entry.request.idempotencyKey)).size).toBe(2);
+});
+
+const idle = (req: Request, res: ServerResponse) => {
+  if (req.path.endsWith('commands')) json(res, { currentEpoch: 0, commands: [] });
+  else if (req.path.endsWith('policy')) json(res, { heartbeatSeconds: 60 });
+  else if (req.path.endsWith('messages')) json(res, { messages: [], nextCursor: null });
+  else res.writeHead(204).end();
+};
+
+test('리뷰 H2: 거부된 세션 보고는 별도 보존하고 새 세션 보고를 보내며 원인을 조회한다', async () => {
+  const session = { epoch: 0, body: { runnerId: 'r', event: 'stop' as const, at: new Date(now).toISOString() } };
+  await outbox.enqueue('reportSession', session);
+  handle = (_req, res) => fail(res, 409, 'INVALID_TRANSITION');
+  await outbox.flush();
+  await outbox.enqueue('reportSession', { ...session, body: { ...session.body, event: 'start' } });
+  handle = (_req, res) => res.writeHead(204).end();
+  await outbox.flush();
+  expect(requests).toHaveLength(2);
+  expect(state.snapshot.outbox).toEqual([]);
+  expect(outbox.rejected).toMatchObject([{ status: 409, code: 'INVALID_TRANSITION', request: { body: { event: 'stop' } } }]);
+  expect(await readdir(join(home, 'state/rejected'))).toHaveLength(1);
+});
+
+test('리뷰 H1: 명령 결과가 409로 거부되면 최신 명령을 다시 처리해 초기화를 끝낸다', async () => {
+  let attempts = 0;
+  let cleanups = 0;
+  handle = (req, res) => {
+    if (req.path.endsWith('commands')) json(res, { currentEpoch: 1, commands: attempts >= 2 ? [] : commands });
+    else if (req.path.endsWith('/result')) { attempts++; if (attempts === 1) fail(res, 409, 'INVALID_TRANSITION'); else res.writeHead(204).end(); }
+    else idle(req, res);
+  };
+  const r = runner(async () => { cleanups++; return { status: 'done', items: [], holds: [] }; });
+  await r.poll();
+  await r.poll();
+  await r.poll();
+  expect(cleanups).toBe(2);
+  expect(r.ready).toBe(true);
+  expect(state.snapshot.epoch).toBe(1);
+  expect(r.outbox.rejected).toMatchObject([{ status: 409 }]);
+  const keys = requests.filter((req) => req.path.endsWith('/result')).map((req) => req.headers['idempotency-key']);
+  expect(new Set(keys).size).toBe(2);
+});
+
+test('리뷰 M1: 같은 폴더를 두 번째로 여는 Runner는 시작을 거부한다', async () => {
+  await expect(State.open(home)).rejects.toMatchObject({ name: 'StateLockError' });
+});
+
+test('리뷰 M2: LEASE_LOST를 실행 계층에 알리고 재시작 조회에도 남긴다', async () => {
+  const rejected: string[] = [];
+  outbox = new Outbox(state, api(), { onRejected: (entry) => { rejected.push(entry.code ?? ''); } });
+  await status('a');
+  handle = (_req, res) => fail(res, 409, 'LEASE_LOST');
+  await outbox.flush();
+  expect(rejected).toEqual(['LEASE_LOST']);
+  expect(outbox.rejectedFor('a')).toMatchObject([{ code: 'LEASE_LOST', request: { params: { attemptId: 'a' }, body: { fence: 1 } } }]);
+});
+
+test('리뷰 M3: 변화 없는 polling은 상태 파일을 다시 쓰지 않는다', async () => {
+  handle = idle;
+  const r = runner();
+  await r.poll();
+  const before = await stat(join(home, 'state/runner.json'));
+  await r.poll();
+  const after = await stat(join(home, 'state/runner.json'));
+  expect(after.ino).toBe(before.ino);
+  expect(after.mtimeMs).toBe(before.mtimeMs);
+});
+
+test('리뷰 M3: 증거 크기는 읽기 전에 제한하고 본문은 상태 JSON과 분리한다', async () => {
+  const tooLarge = new Blob();
+  Object.defineProperty(tooLarge, 'size', { value: 50 * 1024 * 1024 + 1 });
+  await expect(outbox.enqueue('uploadEvidence', { epoch: 0, params: { attemptId: 'a' }, body: {
+    file: tooLarge, kind: 'log', fence: 1, sha256: 'a'.repeat(64), size: tooLarge.size,
+  } })).rejects.toThrow('50');
+  await outbox.enqueue('uploadEvidence', { epoch: 0, params: { attemptId: 'a' }, body: {
+    file: new Blob(['증거']), kind: 'log', fence: 1, sha256: 'a'.repeat(64), size: 6,
+  } });
+  expect(await readFile(join(home, 'state/runner.json'), 'utf8')).not.toContain(Buffer.from('증거').toString('base64'));
+  expect(await readdir(join(home, 'state/evidence'))).toHaveLength(1);
+});
+
+test('리뷰 L2: 거부된 증거 원문은 지우고 메타데이터와 원인은 보존한다', async () => {
+  const text = '민감한 증거 내용';
+  await outbox.enqueue('uploadEvidence', { epoch: 0, params: { attemptId: 'a' }, body: {
+    file: new Blob([text]), kind: 'log', fence: 1, sha256: 'a'.repeat(64), size: Buffer.byteLength(text),
+  } });
+  handle = (_req, res) => fail(res, 400);
+  await outbox.flush();
+  expect(state.snapshot.outbox).toEqual([]);
+  expect(outbox.rejected).toMatchObject([{ code: 'VALIDATION_FAILED', request: { body: { sha256: 'a'.repeat(64) } } }]);
+  expect(await readdir(join(home, 'state/evidence'))).toEqual([]);
+  const files = await readdir(join(home, 'state/rejected'));
+  const record = await readFile(join(home, 'state/rejected', files[0] ?? ''), 'utf8');
+  expect(record).not.toContain(Buffer.from(text).toString('base64'));
+});
+
+test('리뷰 M4: 큰 Retry-After도 계약의 최대 60초까지만 기다린다', async () => {
+  handle = (_req, res) => { res.setHeader('retry-after', '86400'); fail(res, 503); };
+  await usage();
+  await outbox.flush();
+  expect(state.snapshot.outbox[0]?.nextAt).toBe(now + 60_000);
+});
+
+test('리뷰 M4: 벽시계가 뒤로 가도 단조 시계로 재시도한다', async () => {
+  let monotonic = 0;
+  outbox = new Outbox(state, api(), { now: () => now, monotonic: () => monotonic, random: () => 0 });
+  await usage();
+  handle = (_req, res) => fail(res, 503);
+  await outbox.flush();
+  now -= 3_600_000;
+  monotonic += 1001;
+  handle = (_req, res) => res.writeHead(204).end();
+  await outbox.flush();
+  expect(requests).toHaveLength(2);
+});
+
+test('리뷰 M5: 시도 키는 계약 형식을 쓰며 같은 이벤트를 중복해서 쌓지 않는다', async () => {
+  await status('a');
+  await status('a');
+  expect(state.snapshot.outbox).toHaveLength(1);
+  expect(state.snapshot.outbox[0]?.request.idempotencyKey).toBe(`att:a:reportAttemptStatus-running:${new Date(now).toISOString()}`);
+  await outbox.enqueue('reportUsage', { epoch: 0, idempotencyKey: 'night:2026-11-26', body: { agent: 'Codex', remainPct: 60 } });
+  expect(state.snapshot.outbox[1]?.request.idempotencyKey).toBe('night:2026-11-26');
+  await expect(outbox.enqueue('reportUsage', { epoch: 0, idempotencyKey: 'night:2026-11-26', body: { agent: 'Codex', remainPct: 50 } })).rejects.toThrow('다른');
+});
+
+test('리뷰 L4: epoch 오류 본문에 번호가 없어도 전송을 멈추고 명령 조회로 복구한다', async () => {
+  await usage();
+  handle = (_req, res) => fail(res, 409, 'EPOCH_MISMATCH');
+  await expect(outbox.flush()).resolves.toBeUndefined();
+  expect(state.snapshot.pendingEpoch).not.toBeNull();
+  handle = (req, res) => req.path.endsWith('commands') ? json(res, { currentEpoch: 1, commands: [] }) : idle(req, res);
+  await runner().poll();
+  expect(state.snapshot).toMatchObject({ epoch: 1, pendingEpoch: null, outbox: [] });
 });
 
 test('동시에 쌓은 보고를 잃지 않고 손상된 상태 파일은 덮어쓰지 않는다', async () => {
