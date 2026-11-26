@@ -8,6 +8,7 @@
  * 2. migration → system seed → demo seed(원본 Mock과 같은 Task 12건, 승인된 프로젝트) → LAN 비밀번호 설정 → API 기동(LAN 모드).
  *    demo seed는 시험용 DB 이름(awbs_test_…)에만 들어간다(packages/db test-database.ts의 안전장치).
  * 3. Playwright `api-wbs` 시험을 실행한다. 측정 결과는 AWBS_PERF_OUT 폴더에 남는다.
+ *    1,000행은 API로 만든 Task 한 행을 복사해 이 전용 DB에 직접 넣는다(읽기 응답 측정용). 200행까지는 모두 API로 만든다.
  */
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -65,6 +66,8 @@ try {
       AWBS_E2E_PORT: String(webPort),
       AWBS_E2E_API: `http://127.0.0.2:${String(apiPort)}`,
       AWBS_E2E_PASSWORD: leadPassword,
+      // 1,000행 측정 준비: 이 전용 컨테이너에 직접 행을 넣는다(API로 800건을 만들면 20분이 넘는다).
+      AWBS_E2E_PG_CONTAINER: name,
     },
   });
   exitCode = result.status ?? 1;

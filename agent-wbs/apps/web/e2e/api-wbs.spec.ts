@@ -9,6 +9,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { expect, test, type Page } from '@playwright/test';
 
 const password = process.env.AWBS_E2E_PASSWORD ?? '';
@@ -17,6 +18,7 @@ test.skip(!password || !api, '실제 API 환경이 없다. pnpm --filter @awbs/w
 test.describe.configure({ mode: 'serial' });
 test.use({ viewport: { width: 1920, height: 1080 } });
 
+const PG = process.env.AWBS_E2E_PG_CONTAINER ?? '';
 const OUT = process.env.AWBS_PERF_OUT ?? join(homedir(), '.orca/bots/agentwbs/archive/2026-11-26/M3-02/perf');
 const serverErrors: string[] = [];
 
@@ -121,10 +123,11 @@ test('UAT-WBS-05 실제 서버 200·1,000행: 응답 시간과 첫 행 표시 �
       `# WBS 대량 목록 — 실제 API 측정 (${at})`, '',
       '- 환경: 실제 API(LAN 모드, 같은 PC) + 전용 PostgreSQL 16 컨테이너(demo seed 12건에 Task를 더 만들어 200·1,000건), vite preview 프록시, Chromium headless 1920×1080.',
       '- 응답 시간은 브라우저 fetch 기준 3회(화면의 10초 제한 없이 끝까지 기다림). 화면은 /wbs 이동부터 첫 행·「전체 n건」 표시까지(화면 요청은 10초 제한).',
-      '- Task 생성은 동시 8개로 보냈다(준비 시간 단축). 생성 시간은 참고값이다.', '',
-      '| 행 수 | Task 생성 중앙값(ms) | listTasks 3회(ms) | listTasks 응답 크기(byte) | getSchedule 3회(ms) | 화면 결과 | 화면 첫 행(ms) | 그린 DOM 행 |',
-      '|---:|---:|---|---:|---|---|---:|---:|',
-      ...rows.map((r) => `| ${String(r.rows)} | ${String(r.createTaskMedianMs)} | ${(r.listTasksMs as number[]).join(' · ')} | ${String(r.listBytes)} | ${(r.scheduleMs as number[]).join(' · ')} | ${String(r.screen)} | ${String(r.screenFirstRowMs)} | ${String(r.domRows)} |`),
+      '- Task 생성은 동시 8개로 보냈다(준비 시간 단축). 생성 시간은 참고값이다. 1,000행은 API로 만든 행을 복사해 전용 DB에 직접 넣었다(800건을 API로 만들면 20분 넘게 걸려 측정 대상에서 뺌).',
+      '- 「동시 생성 500」: 같은 Work Package에 동시에 만들 때 서버가 500 INTERNAL을 준 수(서버 결함, 보고). 그 요청은 끝난 뒤 하나씩 다시 보내 채웠다.', '',
+      '| 행 수 | 동시 생성 500 | Task 생성 중앙값(ms) | listTasks 3회(ms) | listTasks 응답 크기(byte) | getSchedule 3회(ms) | 화면 결과 | 화면 첫 행(ms) | 그린 DOM 행 |',
+      '|---:|---:|---:|---|---:|---|---|---:|---:|',
+      ...rows.map((r) => `| ${String(r.rows)} | ${String(r.concurrentCreate500)} | ${String(r.createTaskMedianMs)} | ${(r.listTasksMs as number[]).join(' · ')} | ${String(r.listBytes)} | ${(r.scheduleMs as number[]).join(' · ')} | ${String(r.screen)} | ${String(r.screenFirstRowMs)} | ${String(r.domRows)} |`),
       '',
     ].join('\n'));
   };
@@ -133,26 +136,47 @@ test('UAT-WBS-05 실제 서버 200·1,000행: 응답 시간과 첫 행 표시 �
   let count = list.tasks.length;
   const median = (xs: number[]) => { const s = [...xs].sort((a, b) => a - b); return Math.round(s[Math.floor(s.length / 2)] ?? 0); };
   for (const target of [200, 1000]) {
+    // 1,000행: API로 만든 Task 한 행을 복사해 전용 DB에 직접 넣는다(읽기 측정용, 생성 측정 아님).
+    if (target > 200 && PG) {
+      const sql = `insert into tasks(project_id,task_key,wbs_node_id,sort_order,title,work_type,primary_domain,related_domains,priority,assignee_agent,verifier_agent,status,verif_state)
+        select t.project_id,'TASK-'||lpad(g::text,4,'0'),t.wbs_node_id,100000+g,'대량 Task '||g,t.work_type,t.primary_domain,t.related_domains,t.priority,t.assignee_agent,t.verifier_agent,t.status,t.verif_state
+        from (select * from tasks where title='대량 Task 200' limit 1) t, generate_series(${String(count + 1)},${String(target)}) g;
+        insert into task_specs(project_id,task,overview,spec,ac,revision) select s.project_id,t.id,s.overview,s.spec,s.ac,1 from tasks t
+          cross join (select project_id,overview,spec,ac from task_specs where task=(select id from tasks where title='대량 Task 200' limit 1)) s
+          where t.sort_order>100000;`;
+      execFileSync('docker', ['exec', PG, 'psql', '-v', 'ON_ERROR_STOP=1', '-U', 'awbs_owner', '-d', 'awbs_test_m302', '-c', sql], { stdio: 'pipe' });
+    }
     // 서버에 Task를 채운다(Work Package에 고르게, 동시 8개).
-    const made = await page.evaluate(async ({ projectId, wps, from, to }) => {
+    const made = target > 200 && PG ? { errors: [] as string[], times: [] as number[], concurrent500: [] as string[] } : await page.evaluate(async ({ projectId, wps, from, to }) => {
       const session = await (await fetch('/api/session')).json() as { csrfToken: string };
       const times: number[] = [];
       const errors: string[] = [];
+      /** 동시 생성에서 서버가 500을 준 요청(서버 결함 보고용). 끝난 뒤 하나씩 다시 보낸다. */
+      const concurrent500: string[] = [];
+      const retry: number[] = [];
+      const create = async (i: number) => {
+        const t0 = performance.now();
+        const r = await fetch(`/api/projects/${projectId}/tasks`, {
+          method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf-token': session.csrfToken, 'idempotency-key': crypto.randomUUID() },
+          body: JSON.stringify({ title: `대량 Task ${String(i + 1)}`, wbsNodeId: wps[i % wps.length], workType: 'Implementation', primaryDomain: i % 2 ? 'FE' : 'BE', overview: { purpose: 'p', background: '', scope: [], out: [], precond: '', doneCond: 'd' } }),
+        });
+        times.push(performance.now() - t0);
+        return r;
+      };
       let next = from;
       const worker = async () => {
         while (next < to) {
           const i = next++;
-          const t0 = performance.now();
-          const r = await fetch(`/api/projects/${projectId}/tasks`, {
-            method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf-token': session.csrfToken, 'idempotency-key': crypto.randomUUID() },
-            body: JSON.stringify({ title: `대량 Task ${String(i + 1)}`, wbsNodeId: wps[i % wps.length], workType: 'Implementation', primaryDomain: i % 2 ? 'FE' : 'BE', overview: { purpose: 'p', background: '', scope: [], out: [], precond: '', doneCond: 'd' } }),
-          });
-          if (r.status !== 201) errors.push(`${String(r.status)} ${await r.text()}`);
-          times.push(performance.now() - t0);
+          const r = await create(i);
+          if (r.status !== 201) { concurrent500.push(`${String(r.status)} ${(JSON.parse(await r.text()) as { error: { code: string; requestId: string } }).error.code}`); retry.push(i); }
         }
       };
       await Promise.all(Array.from({ length: 8 }, worker));
-      return { errors, times };
+      for (const i of retry) {
+        const r = await create(i);
+        if (r.status !== 201) errors.push(`${String(r.status)} ${await r.text()}`);
+      }
+      return { errors, times, concurrent500 };
     }, { projectId, wps, from: count, to: target });
     expect(made.errors).toEqual([]);
     count = target;
@@ -186,7 +210,7 @@ test('UAT-WBS-05 실제 서버 200·1,000행: 응답 시간과 첫 행 표시 �
       await page.evaluate(() => { const el = document.querySelector('.wbs .tbl'); if (el) el.scrollTop = el.scrollHeight; });
       await expect(page.locator('.wbs .tbl .trow.task').last()).toBeInViewport();
     }
-    rows.push({ rows: target, createTaskMedianMs: median(made.times), listTasksMs: listMs, listTasksMedianMs: median(listMs), listBytes: bytes, scheduleMs: schedMs, scheduleMedianMs: median(schedMs), screen, screenFirstRowMs: screenMs, domRows });
+    rows.push({ rows: target, concurrentCreate500: made.concurrent500.length, createTaskMedianMs: median(made.times), listTasksMs: listMs, listTasksMedianMs: median(listMs), listBytes: bytes, scheduleMs: schedMs, scheduleMedianMs: median(schedMs), screen, screenFirstRowMs: screenMs, domRows });
     save();
   }
   // 200행은 화면에 표시되어야 한다. 1,000행 결과는 기록만 한다(서버 응답 시간 문제는 보고 대상).
