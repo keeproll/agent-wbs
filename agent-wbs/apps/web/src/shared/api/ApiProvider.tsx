@@ -9,7 +9,7 @@
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createContext, use, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { readLoginToken } from '../auth/login-link.ts';
-import { browserStorage, persistRegisteredDrafts } from '../state/sessionDrafts.ts';
+import { browserStorage, browserTabId, clearAllDrafts, persistRegisteredDrafts } from '../state/sessionDrafts.ts';
 import { ApiError, createApiClient, type ApiClient } from './client.ts';
 import type { ResponseOf } from './contract.ts';
 
@@ -77,7 +77,8 @@ function SessionProvider({ children }: { children: ReactNode }) {
         // 로그인된 상태에서 세션이 끊겼으면, 로그인 화면으로 가기 전에 편집 중 초안을 남긴다(조정자 결정).
         if (queryClient.getQueryData(['getSession', {}])) {
           const storage = browserStorage();
-          if (storage) persistRegisteredDrafts(storage);
+          const tabId = browserTabId();
+          if (storage && tabId) persistRegisteredDrafts(storage, tabId);
         }
         queryClient.setQueryData(['getSession', {}], null);
       },
@@ -126,7 +127,12 @@ function SessionProvider({ children }: { children: ReactNode }) {
     lastSuccessAt,
     linkLogin,
     refreshSession: () => sessionQuery.refetch(),
-    clearSession: () => { queryClient.setQueryData(['getSession', {}], null); queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== 'getSession' }); },
+    clearSession: () => {
+      // 사용자가 직접 로그아웃했다: 보관 초안을 바로 지운다. 다음 로그인(다음 사람일 수 있음)에 넘기지 않는다.
+      const storage = browserStorage();
+      if (storage) clearAllDrafts(storage);
+      queryClient.setQueryData(['getSession', {}], null); queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== 'getSession' });
+    },
   }), [client, linkLogin, sessionQuery, lastSuccessAt, queryClient]);
 
   return <ApiContext value={value}>{children}</ApiContext>;

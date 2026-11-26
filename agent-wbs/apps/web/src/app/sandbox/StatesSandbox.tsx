@@ -130,6 +130,31 @@ function MessageDemo() {
   );
 }
 
+/** 대상이 바뀌는 화면(예: Task 전환)의 초안 보관. id가 바뀌면 그 대상의 초안만 제안한다. */
+function TargetDemo() {
+  const [target, setTarget] = useState<'A' | 'B'>('A');
+  const [text, setText] = useState('');
+  const { restoreOffer } = useSessionDraft({
+    id: `sandbox:target:${target}`,
+    label: `대상 ${target} 메모`,
+    value: text ? { text } : null,
+    onRestore: (data) => { setText(data.text); },
+  });
+  return (
+    <section className="card" aria-labelledby="sb-target">
+      <h2 id="sb-target" className="sb-h">대상 전환과 초안</h2>
+      {restoreOffer}
+      <label className="fsel-l" htmlFor="sb-target-sel">대상</label>
+      <select id="sb-target-sel" className="inp" value={target} onChange={(event) => { setTarget(event.target.value as 'A' | 'B'); setText(''); }}>
+        <option value="A">A</option>
+        <option value="B">B</option>
+      </select>
+      <label className="fsel-l" htmlFor="sb-target-in">대상 메모</label>
+      <input id="sb-target-in" className="inp" style={{ width: 360, display: 'block' }} value={text} onChange={(event) => { setText(event.target.value); }} />
+    </section>
+  );
+}
+
 function RecalcDemo() {
   const { client } = useApi();
   const [running, setRunning] = useState(false);
@@ -180,6 +205,7 @@ export default function StatesSandbox() {
         <Page title="공통 컴포넌트 견본" sub="개발·시험용 화면입니다. 제품 빌드에는 들어가지 않습니다.">
           <TitleEditor />
           <MessageDemo />
+          <TargetDemo />
           <RecalcDemo />
           <ListDemo />
         </Page>
