@@ -10,8 +10,6 @@ export async function reportHost(repo: RunnerRepository, body: HostBody) {
   const authority = await repo.authority();
   const previous = await repo.host();
   const hostChanged = Boolean(authority && authority.host_id !== body.hostId);
-  // 이전 PC는 재연결해도 현재 PC를 다시 바꾸지 않는다. 정리·대조만 허용한다.
-  if (hostChanged && (await repo.hostBoot(body.hostId))) throw new PlatformError('EXTERNAL_WRITE_BLOCKED');
   await repo.saveHost(body);
   await repo.setAuthority(body.hostId, hostChanged);
   if (hostChanged) await repo.alert(null, 'external-write-blocked', 'PC가 바뀌어 외부 쓰기를 차단했습니다. 이전 쓰기 중지 확인과 외부 상태 대조가 필요합니다.');

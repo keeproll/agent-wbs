@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, inject, test } from 'vitest';
 import { createPool, recreateTestDatabase, runMigrations, seedSystem } from '@awbs/db';
 import { buildApp } from '../src/app.ts';
 import { issueLoginLink, issueRunnerToken } from '../src/platform/credentials.ts';
@@ -9,11 +9,13 @@ import { inEpoch } from '../src/platform/transaction.ts';
 import { watchRunner } from '../src/runner/watch.ts';
 import { grantExternalAfterReconcile, handover, retryFailedAttempt } from '../src/runner/service.ts';
 import { installRunner } from '../src/runner/routes.ts';
-import { required } from '../src/runner/repository.ts';
+import { required, RunnerRepository } from '../src/runner/repository.ts';
 
-// 전용 컨테이너 주소를 명시해야 실행한다. 기존 개발 DB는 읽지도 않는다.
-describe.skipIf(!process.env.RUNNER_TEST_DATABASE_URL)('runner 실제 PostgreSQL 검증', () => {
-  const url = process.env.RUNNER_TEST_DATABASE_URL ?? 'postgres://invalid';
+// test:db가 안전성을 확인한 주소에서 이 파일 전용 DB를 만든다. 주소가 없으면 준비 단계에서 실패한다.
+describe('runner 실제 PostgreSQL 검증', () => {
+  const dbUrl = new URL(inject('testDatabaseUrl'));
+  dbUrl.pathname += '_runner';
+  const url = dbUrl.href;
   const owner = createPool(url, { onError: () => undefined });
   const appUrl = new URL(url);
   appUrl.searchParams.set('options', '-c role=awbs_app');
@@ -133,6 +135,9 @@ describe.skipIf(!process.env.RUNNER_TEST_DATABASE_URL)('runner 실제 PostgreSQL
     expect((await owner.query('select * from task_attempts')).rowCount).toBe(0);
     expect((await owner.query('select status from tasks where id=$1', [t.id])).rows[0]).toEqual({ status: 'ready' });
     expect((await owner.query("select * from runner_job_events where kind='prestart_failed'")).rowCount).toBe(1);
+    expect((await owner.query("select ref from task_history where task=$1 and kind='시작 전 실패'", [t.id])).rows).toEqual([
+      { ref: { jobId:job.id,error:{ code:'SUBAGENT_INSTALL_FAILED',message:'가짜 설치 실패' } } },
+    ]);
     expect((await claim()).statusCode).toBe(204);
     expect((await release(job, { kind: 'no_process', bootId: 'boot-a' })).statusCode).toBe(204);
     expect((await request(t.key)).statusCode).toBe(202);
@@ -419,5 +424,137 @@ describe.skipIf(!process.env.RUNNER_TEST_DATABASE_URL)('runner 실제 PostgreSQL
       worker.kill('SIGTERM');
       expect((await ended)[0]).toBe(0);
     } finally { if(worker.exitCode===null) worker.kill('SIGKILL'); }
+  });
+
+  test('resetAt 미보고는 DB와 상태 API에서 null로 남고 보고한 시각은 보존한다', async () => {
+    expect((await post('usage',{ agent:'Codex',remainPct:0 })).statusCode).toBe(204);
+    expect((await owner.query("select reset_at from agent_usage where agent='Codex' order by created_at desc limit 1")).rows).toEqual([{ reset_at:null }]);
+    const state=await app.inject({ url:'/api/runner-state',headers:{ cookie } });
+    expect(state.statusCode,state.body).toBe(200);
+    expect(state.json().usage).toContainEqual(expect.objectContaining({ agent:'Codex',remainPct:0,resetAt:null }));
+    const resetAt='2026-12-01T01:02:03.000Z';
+    expect((await post('usage',{ agent:'Codex',remainPct:50,resetAt })).statusCode).toBe(204);
+    expect((await owner.query("select reset_at from agent_usage where agent='Codex' order by created_at desc limit 1")).rows).toEqual([{ reset_at:new Date(resetAt) }]);
+  });
+
+  test('원래 PC 복귀 A→B→A도 매번 새 세대로 차단하고 대조 뒤 해제한다', async () => {
+    const proof={ oldHostStopped:true,oldOutboxDrained:true,oldCallsChecked:true,credentialRevoked:false,oldCredentialStatus:null,newCredentialRegistered:false,
+      mainChecked:true,prsChecked:true,branchesChecked:true,statusesChecked:true };
+    for(const [hostId,bootId,generation] of [['host-b','boot-b',2],['host-a','boot-a2',3]] as const) {
+      const changed=await post('host',{ hostId,bootId,cpu:'fake',cores:20,memGB:32,swapGB:0,diskFreeGB:100,os:'fake' });
+      expect(changed.statusCode,changed.body).toBe(200);
+      expect(changed.json()).toMatchObject({ hostChanged:true });
+      expect((await owner.query('select host_id,generation,state from external_write_authority')).rows).toEqual([{ host_id:hostId,generation,state:'blocked' }]);
+      const job=(await owner.query("insert into runner_jobs(project_id,kind,payload,state,epoch,dedup_key) values($1,'integrate',$2,'queued',1,$3) returning id",[project,{ pr:generation,commit:sha },`복귀-${generation}`])).rows[0] as { id:string };
+      expect((await claim(['integrate'])).statusCode).toBe(204);
+      await expect(inEpoch(pool,1,c=>grantExternalAfterReconcile(c,generation,{ ...proof,statusesChecked:false }))).rejects.toMatchObject({ code:'EXTERNAL_WRITE_BLOCKED' });
+      await expect(inEpoch(pool,1,c=>grantExternalAfterReconcile(c,generation-1,proof))).rejects.toMatchObject({ code:'EXTERNAL_WRITE_BLOCKED' });
+      await inEpoch(pool,1,c=>grantExternalAfterReconcile(c,generation,proof));
+      const claimedJob=await claim(['integrate']);
+      expect(claimedJob.statusCode,claimedJob.body).toBe(200);
+      expect(claimedJob.json().job.id).toBe(job.id);
+      expect((await post(`jobs/${job.id}/start`,{ fence:claimedJob.json().job.fence,hostId,bootId,headSha:sha,installedSubagents:[] })).statusCode).toBe(200);
+      expect((await post(`jobs/${job.id}/finish`,{ fence:claimedJob.json().job.fence,status:'done' })).statusCode).toBe(204);
+      expect((await post(`jobs/${job.id}/release`,{ fence:claimedJob.json().job.fence,hostId,proof:{ kind:'no_process',bootId },at:now() })).statusCode).toBe(204);
+    }
+  });
+
+  async function queued(t: { key:string }, dedup: string) {
+    return (await owner.query("insert into runner_jobs(project_id,kind,payload,state,epoch,dedup_key) values($1,'attempt',$2,'queued',1,$3) returning id",[project,
+      { taskKey:t.key,kind:'dev',agent:'Codex',branch:'agent/test',baseCommit:sha,inputVersion:1,instructions:{},leaderRequested:true },dedup])).rows[0] as { id:string };
+  }
+  async function limit(value: number) {
+    expect((await post('concurrency',{ at:now(),limit:value,running:{ Claude:0,Codex:0 },subagents:0,heavyJobs:0,resources:{ cpuPct:1,memFreeGB:20,swapGB:0 },sessions:[] })).statusCode).toBe(200);
+  }
+  async function waitForDatabaseLock(blocker: number, event: string) {
+    for(let i=0;i<100;i++) {
+      const blocked=await owner.query("select 1 from pg_stat_activity where datname=current_database() and $1=any(pg_blocking_pids(pid)) and wait_event_type='Lock' and wait_event=$2",[blocker,event]);
+      if(blocked.rowCount) return;
+      await new Promise(resolve=>setTimeout(resolve,10));
+    }
+    throw new Error(`기대한 DB 잠금 대기가 없습니다: ${event}`);
+  }
+
+  test('상한 1에서 자기 예약은 한 번만 세고 설치 중 타 job이 잡은 용량은 start에서 재검사한다', async () => {
+    await limit(1);
+    const first=await claimed('설치 경합');
+    expect((await start(first.job)).statusCode).toBe(200);
+    const other=await task('설치 경합');
+    const blocked=await queued(other,'타 묶음 잠금');
+    await limit(6);
+    expect((await claim()).statusCode).toBe(204);
+    expect((await owner.query("select detail from runner_job_events where job=$1 and code='CLAIM_REJECTED'",[blocked.id])).rows).toContainEqual({ detail:{ reasons:expect.arrayContaining(['다른 job 또는 낡은 epoch/host의 보유가 남아 있습니다.']) } });
+    const installing=await claimed();
+    await limit(2);
+    const foreign=(await owner.query("insert into runner_jobs(project_id,kind,payload,state,epoch,dedup_key) values($1,'planning','{}','leased',1,'설치 사이 새 예약') returning id",[project])).rows[0] as { id:string };
+    await pool.query("insert into execution_holds(project_id,job,epoch,host_id,boot_id,fence,agent,slots,heavy,slot_state,lock_state) values($1,$2,1,'host-a','boot-a',1,'Codex',1,false,'reserved','none')",[project,foreign.id]);
+    const denied=await start(installing.job);
+    expect(denied.statusCode,denied.body).toBe(409);
+    expect(denied.json()).toMatchObject({ error:{ code:'CLAIM_REJECTED',details:{ reasons:expect.arrayContaining(['전체 실행 상한 또는 Runner 한도를 넘습니다.']) } } });
+    expect((await owner.query('select id from task_attempts where job=$1',[installing.job.id])).rows).toEqual([]);
+    expect(await hold(installing.job.id)).toMatchObject({ slot_state:'reserved',lock_state:'held' });
+  });
+
+  test('인계 트랜잭션 동안 claim은 조정 잠금에서 기다리고 커밋 뒤 QA만 받는다', async () => {
+    const { t,job }=await claimed('인계 경합');
+    const started=await start(job);
+    await release(job,{ kind:'no_process',bootId:'boot-a' },true);
+    const other=await task('인계 경합');
+    await queued(other,'인계 사이 끼어드는 작업');
+    const tx=await pool.connect();
+    let pending: ReturnType<typeof claim> | undefined;
+    let next: string | null;
+    try {
+      await tx.query('begin');
+      await tx.query('select public.lock_epoch(1)');
+      await new RunnerRepository(tx).lock();
+      const pid=(await tx.query<{ pid:number }>('select pg_backend_pid() as pid')).rows[0];
+      await tx.query("update task_attempts set status='completed',ended_at=now() where job=$1",[job.id]);
+      await tx.query("update tasks set status='qa' where id=$1",[t.id]);
+      await tx.query("insert into ci_runs(project_id,run_key,stage,pipeline_sha,head_sha,ref,task,attempt,trigger,status,job,fence) values($1,'CI-원자성',1,$2,$2,'agent/test',$3,$4,'task','pass',$5,$6)",[project,sha,t.id,started.json().attemptId,job.id,job.fence]);
+      next=await handover(tx,job.id,'qa',started.json().attemptId);
+      pending=claim();
+      await waitForDatabaseLock(required(pid).pid,'advisory');
+      expect((await owner.query("select job,lock_state from execution_holds where task=$1",[t.id])).rows).toEqual([{ job:job.id,lock_state:'held' }]);
+      await tx.query('commit');
+    } finally {
+      await tx.query('rollback');
+      tx.release();
+      if(pending) await pending;
+    }
+    const result=await required(pending);
+    expect(result.statusCode,result.body).toBe(200);
+    expect(result.json().job.id).toBe(next);
+    expect(await hold(job.id)).toMatchObject({ lock_state:'handed_over',handed_to_job:next });
+    expect(await hold(required(next))).toMatchObject({ lock_state:'held',lock_from_job:job.id });
+    expect((await start(result.json().job)).statusCode).toBe(200);
+    expect((await claim()).statusCode).toBe(204);
+  });
+
+  test.each(['task','conflict_group'] as const)('앱 역할의 두 연결이 %s 부분 unique에서 실제로 경합한다', async axis => {
+    const group=axis==='task' ? null : '부분 고유키 경합';
+    const first=await task(group),second=axis==='task' ? first : await task(group);
+    const job1=await queued(first,'고유키-1'),job2=await queued(second,'고유키-2');
+    const a=await pool.connect(),b=await pool.connect();
+    const insert=(client: typeof a,jobId: string,taskId: string)=>client.query("insert into execution_holds(project_id,job,epoch,host_id,boot_id,fence,task,conflict_group,agent,slots,heavy,slot_state,lock_state) values($1,$2,1,'host-a','boot-a',1,$3,$4,'Codex',1,false,'reserved','held')",[project,jobId,taskId,group]);
+    let pending: Promise<unknown> | undefined;
+    try {
+      await a.query('begin');
+      await b.query('begin');
+      const roles=await Promise.all([a.query('select current_user as role'),b.query('select current_user as role')]);
+      expect(roles.map(r=>r.rows[0].role)).toEqual(['awbs_app','awbs_app']);
+      await insert(a,job1.id,first.id);
+      const pid=required((await a.query<{ pid:number }>('select pg_backend_pid() as pid')).rows[0]).pid;
+      pending=insert(b,job2.id,second.id).then(()=>({ succeeded:true }),error=>({ code:(error as { code:string }).code,constraint:(error as { constraint:string }).constraint }));
+      await waitForDatabaseLock(pid,'transactionid');
+      await a.query('commit');
+      expect(await pending).toEqual({ code:'23505',constraint:axis==='task' ? 'one_task_lock' : 'one_conflict_lock' });
+    } finally {
+      await a.query('rollback');
+      if(pending) await pending;
+      await b.query('rollback');
+      a.release();b.release();
+    }
+    expect((await owner.query("select count(*)::int as count from execution_holds where lock_state='held'")).rows).toEqual([{ count:1 }]);
   });
 });

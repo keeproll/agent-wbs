@@ -125,7 +125,13 @@ export function installRunner(app: FastifyInstance, pool: Pool) {
     const job = await checkedJob(repo, params(r).id, b.fence, principal(r));
     const h = await repo.hold(job.id);
     if (h?.attempt && job.kind === 'attempt') throw new PlatformError('INVALID_TRANSITION');
-    await repo.event(job, b.status === 'failed' && job.state === 'leased' ? 'prestart_failed' : 'finished', b.error?.code ?? null, { result: b.result, error: b.error });
+    const prestartFailed = b.status === 'failed' && job.state === 'leased';
+    await repo.event(job, prestartFailed ? 'prestart_failed' : 'finished', b.error?.code ?? null, { result: b.result, error: b.error });
+    if (prestartFailed && job.kind === 'attempt') {
+      const task = await repo.task(job.payload.taskKey as string);
+      if (!task) throw new PlatformError('TASK_NOT_FOUND');
+      await repo.historyEvent(task, '시작 전 실패', { jobId:job.id,error:b.error ?? null });
+    }
     await repo.state(job.id, b.status);
   }, 204);
   route('reconcileJob', async (repo, r) => {
