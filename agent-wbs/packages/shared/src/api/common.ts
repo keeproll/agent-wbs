@@ -61,8 +61,11 @@ export const BotToken = Type.String({ pattern: '^[0-9]{6,12}:[A-Za-z0-9_-]{20,}$
 export const SecretInput = Type.String({ minLength: 1, writeOnly: true });
 
 export const Count = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
-export const Fence = Type.Integer({ minimum: 0, maximum: 2147483647 });
-export const Epoch = Type.Integer({ minimum: 0, maximum: 2147483647 });
+/** PostgreSQL integer 열과 그 열에 쓰는 번호·개수는 저장 전에 같은 범위를 검사한다. */
+export const Int4Count = Type.Integer({ minimum: 0, maximum: 2147483647 });
+export const PositiveInt4 = Type.Integer({ minimum: 1, maximum: 2147483647 });
+export const Fence = Int4Count;
+export const Epoch = Int4Count;
 export const Hours = Type.Number({ minimum: 0 });
 export const Pct = Type.Number({ minimum: 0, maximum: 100 });
 
@@ -125,6 +128,6 @@ export const ErrorResponse = Type.Object(
 export const Page = <T extends TSchema>(item: T) =>
   Type.Object({ items: List(item), nextCursor: Nullable(Type.String()) });
 export const PageQuery = {
-  limit: Opt(Type.Integer({ minimum: 1 })),
+  limit: Opt(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
   cursor: Opt(Type.String({ minLength: 1 })),
 };

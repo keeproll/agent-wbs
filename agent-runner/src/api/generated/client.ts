@@ -49,6 +49,7 @@ export type ClaimedJob = {
       taskKey: TaskKey;
       subjectHash: Sha256;
       content: JudgedContent;
+      gradeChange?: Uuid | null;
     })[];
     policy: Record<string, unknown>;
     proposal: {
@@ -98,6 +99,7 @@ export type ClaimedJob = {
       taskKey: TaskKey;
       subjectHash: Sha256;
       content: JudgedContent;
+      gradeChange?: Uuid | null;
     })[];
     policy: EstimatePolicy;
   };
@@ -111,6 +113,7 @@ export type ClaimedJob = {
       taskKey: TaskKey;
       subjectHash: Sha256;
       content: JudgedContent;
+      gradeChange?: Uuid | null;
     })[];
     policy: Record<string, unknown>;
   };

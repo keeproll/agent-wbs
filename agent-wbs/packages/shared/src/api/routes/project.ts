@@ -9,7 +9,7 @@ const byBody = { ...lead, version: 'body' } as const;
 const noVersion = { ...lead, version: 'none' } as const;
 const V = c.Version;
 const jobCreated = { 202: Type.Object({ jobId: c.Id }) };
-const Revision = Type.Integer({ minimum: 1 });
+const Revision = c.PositiveInt4;
 
 const project = [
   operation({

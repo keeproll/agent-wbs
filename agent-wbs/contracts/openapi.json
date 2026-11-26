@@ -2704,7 +2704,8 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "minimum": 1
+              "minimum": 1,
+              "maximum": 9007199254740991
             }
           },
           {
@@ -2824,7 +2825,8 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "minimum": 1
+              "minimum": 1,
+              "maximum": 9007199254740991
             }
           },
           {
@@ -2944,7 +2946,8 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "minimum": 1
+              "minimum": 1,
+              "maximum": 9007199254740991
             }
           },
           {
@@ -3064,7 +3067,8 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "minimum": 1
+              "minimum": 1,
+              "maximum": 9007199254740991
             }
           },
           {
@@ -4084,7 +4088,8 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "minimum": 1
+              "minimum": 1,
+              "maximum": 9007199254740991
             }
           },
           {
@@ -4924,7 +4929,8 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "minimum": 1
+              "minimum": 1,
+              "maximum": 9007199254740991
             }
           },
           {
@@ -5418,7 +5424,8 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "minimum": 1
+              "minimum": 1,
+              "maximum": 9007199254740991
             }
           },
           {
@@ -6569,7 +6576,8 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "minimum": 1
+              "minimum": 1,
+              "maximum": 9007199254740991
             }
           },
           {
@@ -6618,7 +6626,8 @@
                             "anyOf": [
                               {
                                 "type": "integer",
-                                "minimum": 1
+                                "minimum": 1,
+                                "maximum": 2147483647
                               },
                               {
                                 "type": "null"
@@ -6875,7 +6884,8 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "minimum": 1
+              "minimum": 1,
+              "maximum": 9007199254740991
             }
           },
           {
@@ -6996,7 +7006,8 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "minimum": 1
+              "minimum": 1,
+              "maximum": 9007199254740991
             }
           },
           {
@@ -7268,7 +7279,8 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "minimum": 1
+              "minimum": 1,
+              "maximum": 9007199254740991
             }
           },
           {
@@ -8541,7 +8553,8 @@
                 "properties": {
                   "revision": {
                     "type": "integer",
-                    "minimum": 1
+                    "minimum": 1,
+                    "maximum": 2147483647
                   }
                 },
                 "additionalProperties": false
@@ -8666,7 +8679,8 @@
                 "properties": {
                   "revision": {
                     "type": "integer",
-                    "minimum": 1
+                    "minimum": 1,
+                    "maximum": 2147483647
                   },
                   "instruction": {
                     "type": "string",
@@ -8789,7 +8803,8 @@
                     "properties": {
                       "revision": {
                         "type": "integer",
-                        "minimum": 1
+                        "minimum": 1,
+                        "maximum": 2147483647
                       }
                     },
                     "additionalProperties": false
@@ -8806,7 +8821,8 @@
                       },
                       "runNo": {
                         "type": "integer",
-                        "minimum": 1
+                        "minimum": 1,
+                        "maximum": 2147483647
                       }
                     },
                     "additionalProperties": false
@@ -9328,7 +9344,8 @@
                   },
                   "version": {
                     "type": "integer",
-                    "minimum": 1
+                    "minimum": 1,
+                    "maximum": 2147483647
                   }
                 },
                 "additionalProperties": false
@@ -9934,7 +9951,8 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "minimum": 1
+              "minimum": 1,
+              "maximum": 9007199254740991
             }
           },
           {
@@ -10570,7 +10588,8 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "minimum": 1
+              "minimum": 1,
+              "maximum": 9007199254740991
             }
           },
           {
@@ -11495,7 +11514,7 @@
                     "retry": {
                       "type": "integer",
                       "minimum": 0,
-                      "maximum": 9007199254740991
+                      "maximum": 2147483647
                     },
                     "deployUrl": {
                       "anyOf": [
@@ -11621,7 +11640,7 @@
                   "retry": {
                     "type": "integer",
                     "minimum": 0,
-                    "maximum": 9007199254740991
+                    "maximum": 2147483647
                   },
                   "deployUrl": {
                     "anyOf": [
@@ -11662,7 +11681,7 @@
                     "retry": {
                       "type": "integer",
                       "minimum": 0,
-                      "maximum": 9007199254740991
+                      "maximum": 2147483647
                     },
                     "deployUrl": {
                       "anyOf": [
@@ -11957,7 +11976,8 @@
                         "properties": {
                           "v": {
                             "type": "integer",
-                            "minimum": 1
+                            "minimum": 1,
+                            "maximum": 2147483647
                           },
                           "at": {
                             "$ref": "#/components/schemas/Timestamp"
@@ -14027,11 +14047,13 @@
                     },
                     "heartbeatSeconds": {
                       "type": "integer",
-                      "minimum": 1
+                      "minimum": 1,
+                      "maximum": 2147483647
                     },
                     "missedHeartbeats": {
                       "type": "integer",
-                      "minimum": 1
+                      "minimum": 1,
+                      "maximum": 2147483647
                     },
                     "updatedAt": {
                       "anyOf": [
@@ -14133,11 +14155,13 @@
                   },
                   "heartbeatSeconds": {
                     "type": "integer",
-                    "minimum": 1
+                    "minimum": 1,
+                    "maximum": 2147483647
                   },
                   "missedHeartbeats": {
                     "type": "integer",
-                    "minimum": 1
+                    "minimum": 1,
+                    "maximum": 2147483647
                   }
                 },
                 "additionalProperties": false
@@ -14172,11 +14196,13 @@
                     },
                     "heartbeatSeconds": {
                       "type": "integer",
-                      "minimum": 1
+                      "minimum": 1,
+                      "maximum": 2147483647
                     },
                     "missedHeartbeats": {
                       "type": "integer",
-                      "minimum": 1
+                      "minimum": 1,
+                      "maximum": 2147483647
                     },
                     "updatedAt": {
                       "anyOf": [
@@ -14291,7 +14317,7 @@
                     "notifyAt": {
                       "type": "integer",
                       "minimum": 0,
-                      "maximum": 9007199254740991
+                      "maximum": 2147483647
                     },
                     "floors": {
                       "type": "object",
@@ -14312,12 +14338,12 @@
                     "autoRetryLimit": {
                       "type": "integer",
                       "minimum": 0,
-                      "maximum": 9007199254740991
+                      "maximum": 2147483647
                     },
                     "autoReworkLimit": {
                       "type": "integer",
                       "minimum": 0,
-                      "maximum": 9007199254740991
+                      "maximum": 2147483647
                     },
                     "updatedAt": {
                       "anyOf": [
@@ -14431,7 +14457,7 @@
                   "notifyAt": {
                     "type": "integer",
                     "minimum": 0,
-                    "maximum": 9007199254740991
+                    "maximum": 2147483647
                   },
                   "floors": {
                     "type": "object",
@@ -14452,12 +14478,12 @@
                   "autoRetryLimit": {
                     "type": "integer",
                     "minimum": 0,
-                    "maximum": 9007199254740991
+                    "maximum": 2147483647
                   },
                   "autoReworkLimit": {
                     "type": "integer",
                     "minimum": 0,
-                    "maximum": 9007199254740991
+                    "maximum": 2147483647
                   }
                 },
                 "additionalProperties": false
@@ -14504,7 +14530,7 @@
                     "notifyAt": {
                       "type": "integer",
                       "minimum": 0,
-                      "maximum": 9007199254740991
+                      "maximum": 2147483647
                     },
                     "floors": {
                       "type": "object",
@@ -14525,12 +14551,12 @@
                     "autoRetryLimit": {
                       "type": "integer",
                       "minimum": 0,
-                      "maximum": 9007199254740991
+                      "maximum": 2147483647
                     },
                     "autoReworkLimit": {
                       "type": "integer",
                       "minimum": 0,
-                      "maximum": 9007199254740991
+                      "maximum": 2147483647
                     },
                     "updatedAt": {
                       "anyOf": [
@@ -15129,7 +15155,8 @@
                     },
                     "maxFiles": {
                       "type": "integer",
-                      "minimum": 1
+                      "minimum": 1,
+                      "maximum": 9007199254740991
                     },
                     "testIn": {
                       "type": "boolean"
@@ -15287,7 +15314,8 @@
                   },
                   "maxFiles": {
                     "type": "integer",
-                    "minimum": 1
+                    "minimum": 1,
+                    "maximum": 9007199254740991
                   },
                   "testIn": {
                     "type": "boolean"
@@ -15378,7 +15406,8 @@
                     },
                     "maxFiles": {
                       "type": "integer",
-                      "minimum": 1
+                      "minimum": 1,
+                      "maximum": 9007199254740991
                     },
                     "testIn": {
                       "type": "boolean"
@@ -15544,7 +15573,8 @@
                     },
                     "windowDays": {
                       "type": "integer",
-                      "minimum": 1
+                      "minimum": 1,
+                      "maximum": 2147483647
                     },
                     "minHours": {
                       "type": "number",
@@ -15657,7 +15687,8 @@
                   },
                   "windowDays": {
                     "type": "integer",
-                    "minimum": 1
+                    "minimum": 1,
+                    "maximum": 2147483647
                   },
                   "minHours": {
                     "type": "number",
@@ -15703,7 +15734,8 @@
                     },
                     "windowDays": {
                       "type": "integer",
-                      "minimum": 1
+                      "minimum": 1,
+                      "maximum": 2147483647
                     },
                     "minHours": {
                       "type": "number",
@@ -16061,22 +16093,22 @@
                         "total": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "Claude": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "Codex": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "heavy": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         }
                       },
                       "additionalProperties": false
@@ -16190,22 +16222,22 @@
                       "total": {
                         "type": "integer",
                         "minimum": 0,
-                        "maximum": 9007199254740991
+                        "maximum": 2147483647
                       },
                       "Claude": {
                         "type": "integer",
                         "minimum": 0,
-                        "maximum": 9007199254740991
+                        "maximum": 2147483647
                       },
                       "Codex": {
                         "type": "integer",
                         "minimum": 0,
-                        "maximum": 9007199254740991
+                        "maximum": 2147483647
                       },
                       "heavy": {
                         "type": "integer",
                         "minimum": 0,
-                        "maximum": 9007199254740991
+                        "maximum": 2147483647
                       }
                     },
                     "additionalProperties": false
@@ -16252,22 +16284,22 @@
                         "total": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "Claude": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "Codex": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "heavy": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         }
                       },
                       "additionalProperties": false
@@ -16372,12 +16404,12 @@
                         "dev": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "qa": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         }
                       },
                       "additionalProperties": false
@@ -16477,12 +16509,12 @@
                       "dev": {
                         "type": "integer",
                         "minimum": 0,
-                        "maximum": 9007199254740991
+                        "maximum": 2147483647
                       },
                       "qa": {
                         "type": "integer",
                         "minimum": 0,
-                        "maximum": 9007199254740991
+                        "maximum": 2147483647
                       }
                     },
                     "additionalProperties": false
@@ -16515,12 +16547,12 @@
                         "dev": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "qa": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         }
                       },
                       "additionalProperties": false
@@ -16638,7 +16670,7 @@
                           "version": {
                             "type": "integer",
                             "minimum": 0,
-                            "maximum": 9007199254740991
+                            "maximum": 2147483647
                           },
                           "agent": {
                             "$ref": "#/components/schemas/Agent"
@@ -16827,7 +16859,7 @@
                           "version": {
                             "type": "integer",
                             "minimum": 0,
-                            "maximum": 9007199254740991
+                            "maximum": 2147483647
                           },
                           "agent": {
                             "$ref": "#/components/schemas/Agent"
@@ -16958,7 +16990,7 @@
                     "retry": {
                       "type": "integer",
                       "minimum": 0,
-                      "maximum": 9007199254740991
+                      "maximum": 2147483647
                     },
                     "deployUrl": {
                       "anyOf": [
@@ -17065,7 +17097,7 @@
                   "retry": {
                     "type": "integer",
                     "minimum": 0,
-                    "maximum": 9007199254740991
+                    "maximum": 2147483647
                   },
                   "deployUrl": {
                     "anyOf": [
@@ -17105,7 +17137,7 @@
                     "retry": {
                       "type": "integer",
                       "minimum": 0,
-                      "maximum": 9007199254740991
+                      "maximum": 2147483647
                     },
                     "deployUrl": {
                       "anyOf": [
@@ -19023,7 +19055,8 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "minimum": 1
+              "minimum": 1,
+              "maximum": 9007199254740991
             }
           },
           {
@@ -20317,7 +20350,8 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "minimum": 1
+              "minimum": 1,
+              "maximum": 9007199254740991
             }
           },
           {
@@ -21044,7 +21078,8 @@
                   },
                   "cores": {
                     "type": "integer",
-                    "minimum": 1
+                    "minimum": 1,
+                    "maximum": 2147483647
                   },
                   "memGB": {
                     "type": "number",
@@ -21068,7 +21103,7 @@
                   "samples": {
                     "type": "integer",
                     "minimum": 0,
-                    "maximum": 9007199254740991
+                    "maximum": 2147483647
                   }
                 },
                 "additionalProperties": false
@@ -21115,22 +21150,22 @@
                         "total": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "Claude": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "Codex": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "heavy": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         }
                       }
                     },
@@ -21146,22 +21181,22 @@
                         "total": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "Claude": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "Codex": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "heavy": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         }
                       }
                     },
@@ -21714,7 +21749,7 @@
                   "limit": {
                     "type": "integer",
                     "minimum": 0,
-                    "maximum": 9007199254740991
+                    "maximum": 2147483647
                   },
                   "running": {
                     "type": "object",
@@ -21726,12 +21761,12 @@
                       "Claude": {
                         "type": "integer",
                         "minimum": 0,
-                        "maximum": 9007199254740991
+                        "maximum": 2147483647
                       },
                       "Codex": {
                         "type": "integer",
                         "minimum": 0,
-                        "maximum": 9007199254740991
+                        "maximum": 2147483647
                       }
                     },
                     "additionalProperties": false
@@ -21744,7 +21779,7 @@
                   "heavyJobs": {
                     "type": "integer",
                     "minimum": 0,
-                    "maximum": 9007199254740991
+                    "maximum": 2147483647
                   },
                   "resources": {
                     "type": "object",
@@ -21786,12 +21821,12 @@
                         "observed": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "reserved": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "state": {
                           "enum": [
@@ -21814,12 +21849,12 @@
                       "from": {
                         "type": "integer",
                         "minimum": 0,
-                        "maximum": 9007199254740991
+                        "maximum": 2147483647
                       },
                       "to": {
                         "type": "integer",
                         "minimum": 0,
-                        "maximum": 9007199254740991
+                        "maximum": 2147483647
                       },
                       "reason": {
                         "type": "string",
@@ -21866,22 +21901,22 @@
                         "total": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "Claude": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "Codex": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "heavy": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "memReserveGB": {
                           "type": "number",
@@ -22114,7 +22149,7 @@
                         "notifyAt": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         }
                       }
                     }
@@ -22248,7 +22283,7 @@
                           "version": {
                             "type": "integer",
                             "minimum": 0,
-                            "maximum": 9007199254740991
+                            "maximum": 2147483647
                           },
                           "hash": {
                             "type": "string"
@@ -22849,7 +22884,7 @@
                         "version": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "installed": {
                           "type": "boolean"
@@ -23220,7 +23255,7 @@
                           "specRevision": {
                             "type": "integer",
                             "minimum": 0,
-                            "maximum": 9007199254740991
+                            "maximum": 2147483647
                           },
                           "result": {
                             "$ref": "#/components/schemas/PassFail"
@@ -23589,7 +23624,7 @@
                             {
                               "type": "integer",
                               "minimum": 0,
-                              "maximum": 9007199254740991
+                              "maximum": 2147483647
                             },
                             {
                               "type": "null"
@@ -24338,7 +24373,8 @@
                       },
                       "pr": {
                         "type": "integer",
-                        "minimum": 1
+                        "minimum": 1,
+                        "maximum": 2147483647
                       },
                       "trigger": {
                         "type": "string",
@@ -24390,7 +24426,8 @@
                       },
                       "pr": {
                         "type": "integer",
-                        "minimum": 1
+                        "minimum": 1,
+                        "maximum": 2147483647
                       },
                       "trigger": {
                         "type": "string",
@@ -24734,7 +24771,8 @@
                   },
                   "pr": {
                     "type": "integer",
-                    "minimum": 1
+                    "minimum": 1,
+                    "maximum": 2147483647
                   },
                   "taskKey": {
                     "$ref": "#/components/schemas/TaskKey"
@@ -25549,22 +25587,22 @@
                         "total": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "Claude": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "Codex": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "heavy": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "memReserveGB": {
                           "type": "number",
@@ -25582,23 +25620,25 @@
                         "dev": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "qa": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         }
                       },
                       "additionalProperties": false
                     },
                     "heartbeatSeconds": {
                       "type": "integer",
-                      "minimum": 1
+                      "minimum": 1,
+                      "maximum": 2147483647
                     },
                     "inputCheckMinutes": {
                       "type": "integer",
-                      "minimum": 1
+                      "minimum": 1,
+                      "maximum": 2147483647
                     },
                     "inputRecheck": {
                       "type": "integer",
@@ -25620,7 +25660,7 @@
                         "retry": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "deployUrl": {
                           "anyOf": [
@@ -26001,7 +26041,8 @@
                                 },
                                 "processGroup": {
                                   "type": "integer",
-                                  "minimum": 1
+                                  "minimum": 1,
+                                  "maximum": 2147483647
                                 }
                               },
                               "additionalProperties": false
@@ -26052,7 +26093,8 @@
                                   "anyOf": [
                                     {
                                       "type": "integer",
-                                      "minimum": 1
+                                      "minimum": 1,
+                                      "maximum": 2147483647
                                     },
                                     {
                                       "type": "null"
@@ -26202,7 +26244,8 @@
                                 },
                                 "processGroup": {
                                   "type": "integer",
-                                  "minimum": 1
+                                  "minimum": 1,
+                                  "maximum": 2147483647
                                 }
                               },
                               "additionalProperties": false
@@ -26253,7 +26296,8 @@
                                   "anyOf": [
                                     {
                                       "type": "integer",
-                                      "minimum": 1
+                                      "minimum": 1,
+                                      "maximum": 2147483647
                                     },
                                     {
                                       "type": "null"
@@ -26704,7 +26748,7 @@
                         "version": {
                           "type": "integer",
                           "minimum": 0,
-                          "maximum": 9007199254740991
+                          "maximum": 2147483647
                         },
                         "hash": {
                           "type": "string",
@@ -26851,7 +26895,8 @@
                   },
                   "processGroup": {
                     "type": "integer",
-                    "minimum": 1
+                    "minimum": 1,
+                    "maximum": 2147483647
                   },
                   "cgroup": {
                     "anyOf": [
@@ -27033,7 +27078,8 @@
                           },
                           "processGroup": {
                             "type": "integer",
-                            "minimum": 1
+                            "minimum": 1,
+                            "maximum": 2147483647
                           }
                         },
                         "additionalProperties": false
@@ -27061,7 +27107,8 @@
                             "anyOf": [
                               {
                                 "type": "integer",
-                                "minimum": 1
+                                "minimum": 1,
+                                "maximum": 2147483647
                               },
                               {
                                 "type": "null"
@@ -27373,7 +27420,8 @@
                           },
                           "processGroup": {
                             "type": "integer",
-                            "minimum": 1
+                            "minimum": 1,
+                            "maximum": 2147483647
                           }
                         },
                         "additionalProperties": false
@@ -27401,7 +27449,8 @@
                             "anyOf": [
                               {
                                 "type": "integer",
-                                "minimum": 1
+                                "minimum": 1,
+                                "maximum": 2147483647
                               },
                               {
                                 "type": "null"
@@ -31174,7 +31223,8 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1
+                "minimum": 1,
+                "maximum": 2147483647
               },
               {
                 "type": "null"
@@ -31538,6 +31588,16 @@
                         },
                         "content": {
                           "$ref": "#/components/schemas/JudgedContent"
+                        },
+                        "gradeChange": {
+                          "anyOf": [
+                            {
+                              "$ref": "#/components/schemas/Uuid"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       }
                     }
@@ -31794,6 +31854,16 @@
                         },
                         "content": {
                           "$ref": "#/components/schemas/JudgedContent"
+                        },
+                        "gradeChange": {
+                          "anyOf": [
+                            {
+                              "$ref": "#/components/schemas/Uuid"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       }
                     }
@@ -31856,6 +31926,16 @@
                         },
                         "content": {
                           "$ref": "#/components/schemas/JudgedContent"
+                        },
+                        "gradeChange": {
+                          "anyOf": [
+                            {
+                              "$ref": "#/components/schemas/Uuid"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       }
                     }
@@ -31927,7 +32007,8 @@
                   },
                   "inputVersion": {
                     "type": "integer",
-                    "minimum": 1
+                    "minimum": 1,
+                    "maximum": 2147483647
                   },
                   "instructions": {
                     "type": "object",
@@ -32017,7 +32098,8 @@
                 "properties": {
                   "pr": {
                     "type": "integer",
-                    "minimum": 1
+                    "minimum": 1,
+                    "maximum": 2147483647
                   },
                   "commit": {
                     "$ref": "#/components/schemas/Sha"
@@ -32106,7 +32188,8 @@
                     "anyOf": [
                       {
                         "type": "integer",
-                        "minimum": 1
+                        "minimum": 1,
+                        "maximum": 2147483647
                       },
                       {
                         "type": "null"
@@ -32199,7 +32282,8 @@
                 "properties": {
                   "pr": {
                     "type": "integer",
-                    "minimum": 1
+                    "minimum": 1,
+                    "maximum": 2147483647
                   }
                 }
               }
@@ -34051,7 +34135,7 @@
                   "srcV": {
                     "type": "integer",
                     "minimum": 0,
-                    "maximum": 9007199254740991
+                    "maximum": 2147483647
                   },
                   "splitBasis": {
                     "type": "string",
@@ -34541,7 +34625,7 @@
                   "srcV": {
                     "type": "integer",
                     "minimum": 0,
-                    "maximum": 9007199254740991
+                    "maximum": 2147483647
                   },
                   "splitBasis": {
                     "type": "string",
@@ -35030,7 +35114,7 @@
                   "srcV": {
                     "type": "integer",
                     "minimum": 0,
-                    "maximum": 9007199254740991
+                    "maximum": 2147483647
                   },
                   "splitBasis": {
                     "type": "string",
@@ -35508,7 +35592,7 @@
                   "srcV": {
                     "type": "integer",
                     "minimum": 0,
-                    "maximum": 9007199254740991
+                    "maximum": 2147483647
                   },
                   "splitBasis": {
                     "type": "string",
@@ -35951,7 +36035,8 @@
           },
           "pr": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 1,
+            "maximum": 2147483647
           },
           "taskKey": {
             "$ref": "#/components/schemas/TaskKey"
@@ -35959,7 +36044,7 @@
           "position": {
             "type": "integer",
             "minimum": 0,
-            "maximum": 9007199254740991
+            "maximum": 2147483647
           },
           "status": {
             "$ref": "#/components/schemas/QueueStatus"
@@ -36451,7 +36536,7 @@
                   "srcV": {
                     "type": "integer",
                     "minimum": 0,
-                    "maximum": 9007199254740991
+                    "maximum": 2147483647
                   },
                   "splitBasis": {
                     "type": "string",
@@ -37075,7 +37160,7 @@
                   "srcV": {
                     "type": "integer",
                     "minimum": 0,
-                    "maximum": 9007199254740991
+                    "maximum": 2147483647
                   },
                   "splitBasis": {
                     "type": "string",
@@ -37676,7 +37761,8 @@
                   "properties": {
                     "v": {
                       "type": "integer",
-                      "minimum": 1
+                      "minimum": 1,
+                      "maximum": 2147483647
                     },
                     "at": {
                       "$ref": "#/components/schemas/Timestamp"
@@ -37825,7 +37911,8 @@
                       },
                       "runNo": {
                         "type": "integer",
-                        "minimum": 1
+                        "minimum": 1,
+                        "maximum": 2147483647
                       },
                       "status": {
                         "enum": [
@@ -37917,7 +38004,8 @@
                       },
                       "version": {
                         "type": "integer",
-                        "minimum": 1
+                        "minimum": 1,
+                        "maximum": 2147483647
                       },
                       "proposalId": {
                         "anyOf": [
@@ -37958,7 +38046,8 @@
                   },
                   "runNo": {
                     "type": "integer",
-                    "minimum": 1
+                    "minimum": 1,
+                    "maximum": 2147483647
                   },
                   "status": {
                     "enum": [
@@ -38062,7 +38151,8 @@
                     "anyOf": [
                       {
                         "type": "integer",
-                        "minimum": 1
+                        "minimum": 1,
+                        "maximum": 2147483647
                       },
                       {
                         "type": "null"
@@ -38869,7 +38959,8 @@
                   "properties": {
                     "v": {
                       "type": "integer",
-                      "minimum": 1
+                      "minimum": 1,
+                      "maximum": 2147483647
                     },
                     "at": {
                       "$ref": "#/components/schemas/Timestamp"
@@ -39018,7 +39109,8 @@
                       },
                       "runNo": {
                         "type": "integer",
-                        "minimum": 1
+                        "minimum": 1,
+                        "maximum": 2147483647
                       },
                       "status": {
                         "enum": [
@@ -39110,7 +39202,8 @@
                       },
                       "version": {
                         "type": "integer",
-                        "minimum": 1
+                        "minimum": 1,
+                        "maximum": 2147483647
                       },
                       "proposalId": {
                         "anyOf": [
@@ -39696,7 +39789,7 @@
                   "srcV": {
                     "type": "integer",
                     "minimum": 0,
-                    "maximum": 9007199254740991
+                    "maximum": 2147483647
                   },
                   "splitBasis": {
                     "type": "string",
@@ -40348,7 +40441,8 @@
             "anyOf": [
               {
                 "type": "integer",
-                "minimum": 1
+                "minimum": 1,
+                "maximum": 2147483647
               },
               {
                 "type": "null"
@@ -42308,7 +42402,7 @@
                   "cores": {
                     "type": "integer",
                     "minimum": 0,
-                    "maximum": 9007199254740991
+                    "maximum": 2147483647
                   },
                   "memGB": {
                     "type": "number"
@@ -42335,7 +42429,7 @@
                   "samples": {
                     "type": "integer",
                     "minimum": 0,
-                    "maximum": 9007199254740991
+                    "maximum": 2147483647
                   },
                   "seenAt": {
                     "$ref": "#/components/schemas/Timestamp"
@@ -42352,22 +42446,22 @@
                       "total": {
                         "type": "integer",
                         "minimum": 0,
-                        "maximum": 9007199254740991
+                        "maximum": 2147483647
                       },
                       "Claude": {
                         "type": "integer",
                         "minimum": 0,
-                        "maximum": 9007199254740991
+                        "maximum": 2147483647
                       },
                       "Codex": {
                         "type": "integer",
                         "minimum": 0,
-                        "maximum": 9007199254740991
+                        "maximum": 2147483647
                       },
                       "heavy": {
                         "type": "integer",
                         "minimum": 0,
-                        "maximum": 9007199254740991
+                        "maximum": 2147483647
                       }
                     }
                   },
@@ -42405,7 +42499,7 @@
                 "cores": {
                   "type": "integer",
                   "minimum": 0,
-                  "maximum": 9007199254740991
+                  "maximum": 2147483647
                 },
                 "memGB": {
                   "type": "number"
@@ -42455,22 +42549,22 @@
                   "total": {
                     "type": "integer",
                     "minimum": 0,
-                    "maximum": 9007199254740991
+                    "maximum": 2147483647
                   },
                   "Claude": {
                     "type": "integer",
                     "minimum": 0,
-                    "maximum": 9007199254740991
+                    "maximum": 2147483647
                   },
                   "Codex": {
                     "type": "integer",
                     "minimum": 0,
-                    "maximum": 9007199254740991
+                    "maximum": 2147483647
                   },
                   "heavy": {
                     "type": "integer",
                     "minimum": 0,
-                    "maximum": 9007199254740991
+                    "maximum": 2147483647
                   }
                 }
               },
@@ -42748,12 +42842,12 @@
                   "dev": {
                     "type": "integer",
                     "minimum": 0,
-                    "maximum": 9007199254740991
+                    "maximum": 2147483647
                   },
                   "qa": {
                     "type": "integer",
                     "minimum": 0,
-                    "maximum": 9007199254740991
+                    "maximum": 2147483647
                   }
                 },
                 "additionalProperties": false
@@ -43970,7 +44064,7 @@
               {
                 "type": "integer",
                 "minimum": 0,
-                "maximum": 9007199254740991
+                "maximum": 2147483647
               },
               {
                 "type": "null"
@@ -44626,7 +44720,7 @@
           "specRevision": {
             "type": "integer",
             "minimum": 0,
-            "maximum": 9007199254740991
+            "maximum": 2147483647
           },
           "cmd": {
             "type": "string"
