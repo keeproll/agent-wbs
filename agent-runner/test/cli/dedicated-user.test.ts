@@ -39,6 +39,12 @@ describe('agentIsolationConfig — AWBS_AGENT_* 읽기', () => {
     [{ AWBS_AGENT_USER: 'root' }],
     [{ AWBS_AGENT_USER: 'Awbs' }],
     [{ AWBS_AGENT_USER: 'a b' }],
+    // 고정값이 아닌 다른 계정 이름은 형식이 맞아도 거부(리뷰 P2-2)
+    [{ AWBS_AGENT_USER: 'keeproll' }],
+    [{ AWBS_AGENT_USER: 'nobody' }],
+    [{ AWBS_AGENT_USER: 'awbs-agent', AWBS_AGENT_ROOT: '/srv//agentwbs' }],
+    [{ AWBS_AGENT_USER: 'awbs-agent', AWBS_AGENT_ROOT: '/opt/agentwbs' }],
+    [{ AWBS_AGENT_USER: 'awbs-agent', AWBS_AGENT_EXEC: '/tmp/awbs-agent-exec' }],
     [{ AWBS_AGENT_USER: 'awbs-agent', AWBS_AGENT_ROOT: 'srv/agentwbs' }],
     [{ AWBS_AGENT_USER: 'awbs-agent', AWBS_AGENT_ROOT: '/srv/../home/keeproll' }],
     [{ AWBS_AGENT_USER: 'awbs-agent', AWBS_AGENT_ROOT: '/srv/agentwbs/' }],
@@ -105,6 +111,23 @@ describe('dedicatedUserIsolation — sudo로 래퍼만 Agent 계정으로 실행
   ] as const)('CLI가 %s이면 거부', (_name, agent, binary) => {
     expect(() => buildLaunch(agent, binary, { ...spec, model: agent === 'Claude' ? 'claude-opus-5-5' : spec.model }, { env: hostEnv, isolation: iso }))
       .toThrow(expect.objectContaining({ code: 'binary_outside_agent_root' }));
+  });
+
+  test('기준 폴더도 실제 경로로 바꿔 비교한다: 작업 영역이 링크면 링크를 따라간 곳 기준(리뷰 P2-3)', () => {
+    const moved: Record<string, string> = { ...links, '/srv/agentwbs/worktrees': '/data/agentwbs/worktrees', '/srv/agentwbs/worktrees/p1/attempt-1': '/data/agentwbs/worktrees/p1/attempt-1' };
+    const viaLink = dedicatedUserIsolation(cfg, { realpath: (p) => moved[p] ?? p });
+    const l = buildLaunch('Codex', '/srv/agentwbs/cli/codex/current/bin/codex', spec, { env: hostEnv, isolation: viaLink });
+    expect(l.args).toContain('/data/agentwbs/worktrees/p1/attempt-1');
+    // 작업 폴더 문자열은 고정 경로처럼 보여도 실제 경로가 기준 밖이면 거부
+    const escaped = dedicatedUserIsolation(cfg, { realpath: (p) => (p === spec.cwd ? '/home/keeproll/x' : moved[p] ?? p) });
+    expect(() => buildLaunch('Codex', '/srv/agentwbs/cli/codex/current/bin/codex', spec, { env: hostEnv, isolation: escaped }))
+      .toThrow(expect.objectContaining({ code: 'cwd_outside_agent_root' }));
+  });
+
+  test('실제 경로를 못 구하면(없는 폴더 등) 거부', () => {
+    const missing = dedicatedUserIsolation(cfg, { realpath: () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); } });
+    expect(() => buildLaunch('Codex', '/srv/agentwbs/cli/codex/current/bin/codex', spec, { env: hostEnv, isolation: missing }))
+      .toThrow(expect.objectContaining({ code: 'cwd_outside_agent_root' }));
   });
 
   test('관측 등급 조합의 옵션에 전용 계정 권한 모드가 들어간다(격리가 바뀌면 조합도 바뀜)', () => {

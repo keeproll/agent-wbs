@@ -30,7 +30,9 @@ while IFS='=' read -r key value; do
   [[ -z $key || $key == \#* ]] && continue
   case $key in
     AGENT_USER | RUNNER_USER) [[ $value =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "설정 값이 올바르지 않습니다: $key" ;;
-    RUNNER_HOME | AGENT_ROOT | NODE_DIR) [[ $value =~ ^/[A-Za-z0-9._/-]*$ && $value != *..* ]] || die "설정 값이 올바르지 않습니다: $key" ;;
+    # 정규화된 절대 경로만: `..`·`//`·끝 `/`가 있으면 같은 곳의 다른 표기라 비교가 어긋난다.
+    RUNNER_HOME | AGENT_ROOT | NODE_DIR)
+      [[ $value =~ ^/[A-Za-z0-9._/-]+$ && $value != *..* && $value != *//* && $value != */ ]] || die "설정 값이 올바르지 않습니다: $key" ;;
     *) die "모르는 설정 이름입니다: $key" ;;
   esac
   printf -v "$key" '%s' "$value"
@@ -42,8 +44,10 @@ done
 # 이 래퍼는 Agent 계정으로만 돈다. Runner 계정이나 root로 직접 부르면 격리된 것처럼 보이기만 하므로 거부한다.
 [[ $(id -un) == "$AGENT_USER" ]] || die "Agent 계정($AGENT_USER)으로만 실행합니다. 현재: $(id -un)" 3
 
-WORKTREES=$AGENT_ROOT/worktrees
-CLI_DIR=$AGENT_ROOT/cli
+# 기준 폴더도 실제 경로로 바꿔 둔다. 비교하는 양쪽을 같은 방법으로 정규화해야 한다.
+WORKTREES=$(realpath -e -- "$AGENT_ROOT/worktrees" 2> /dev/null) || die "작업 폴더 모음이 없습니다."
+CLI_DIR=$(realpath -e -- "$AGENT_ROOT/cli" 2> /dev/null) || die "CLI 폴더가 없습니다."
+INPUTS_DIR=$(realpath -e -- "$AGENT_ROOT/inputs" 2> /dev/null) || die "입력 자료 폴더가 없습니다."
 AGENT_HOME=$(getent passwd "$AGENT_USER" | cut -d: -f6)
 [[ -n $AGENT_HOME && -d $AGENT_HOME ]] || die "Agent 계정의 홈 폴더가 없습니다."
 
@@ -110,27 +114,48 @@ cmd_kill_all() {
 cmd_fix_perms() {
   local real
   real=$(inside "${1-}" "$WORKTREES") || die "경로는 $WORKTREES 안이어야 합니다."
-  # 링크는 따라가지 않는다(-P). Agent가 소유한 파일만 고친다. Runner 계정에 읽기·쓰기·들어가기 권한을 되돌려 준다.
-  find -P "$real" -user "$AGENT_USER" ! -type l -exec chmod u+rwX,g+rwX {} + \
-    -exec setfacl -m "u:$RUNNER_USER:rwX,m::rwX" {} +
+  # Runner는 이 명령 전에 그 세션의 Agent 프로세스를 모두 끝내야 한다(끝나지 않으면 권한을 다시 지울 수 있다).
+  # 링크는 따라가지 않는다(-P). Agent가 소유한 것만 고친다.
+  # 폴더는 「들어가기 전에」 하나씩 바로 고친다(-exec ... \;). 모아서 나중에 고치면(+) 권한 000인 폴더 안을 못 읽는다.
+  # 마지막에 Runner 계정에 읽기·쓰기·들어가기 ACL을 준다(m::rwX = 이름 있는 항목의 상한도 함께 연다).
+  # 고치지 못한 항목은 -print로 이름이 나온다. 하나라도 나오거나 find가 어떤 폴더를 못 읽으면 실패다.
+  local missed
+  if ! missed=$(find -P "$real" ! -type l -user "$AGENT_USER" \( \
+    \( -type d -exec chmod u+rwx,g+rwx {} \; -exec setfacl -m "u:$RUNNER_USER:rwx,m::rwx" {} \; \) -o \
+    \( ! -type d -exec chmod u+rw,g+rw {} \; -exec setfacl -m "u:$RUNNER_USER:rwX,m::rwX" {} \; \) -o \
+    -print \)) || [[ -n $missed ]]; then
+    die "권한을 모두 되돌리지 못했습니다. 작업 폴더를 지우지 마세요." 4
+  fi
   echo fixed
 }
 
+# 그 폴더 아래(자신 포함)에 Agent가 쓸 수 있는 것이 하나라도 있으면 성공(0). 다 읽지 못하면 2(=확인 못 함).
+writable_below() {
+  local found
+  found=$(find -P "$1" -writable -print -quit 2> /dev/null) || return 2
+  [[ -n $found ]]
+}
+
 cmd_check() {
-  local failed=0
+  local failed=0 rc
   fail() { printf 'fail %s\n' "$1"; failed=1; }
-  # Runner의 홈(~/.agentwbs, ~/.config/gh, 다른 프로젝트가 있는 곳)에 들어갈 수 없어야 한다.
-  [[ -x $RUNNER_HOME || -r $RUNNER_HOME ]] && fail runner_home_accessible
-  # WSL: Windows 드라이브(/mnt)와 Windows 프로그램 실행 통로(/run/WSL)에 들어갈 수 없어야 한다.
-  [[ -x /mnt ]] && fail mnt_accessible
-  [[ -e /run/WSL && -x /run/WSL ]] && fail wsl_interop_accessible
-  [[ -r /var/run/docker.sock || -w /var/run/docker.sock ]] && fail docker_socket_accessible
-  # Runner가 설치한 CLI는 읽고 실행만, 고치지는 못해야 한다.
-  [[ -r $CLI_DIR && -x $CLI_DIR ]] || fail cli_unreadable
-  [[ -w $CLI_DIR ]] && fail cli_writable
-  [[ -w $AGENT_ROOT/inputs ]] && fail inputs_writable
-  [[ -x $NODE_DIR/node ]] || fail node_missing
-  ((failed == 0)) && echo ok
+  # Runner의 홈(~/.agentwbs, ~/.config/gh, 다른 프로젝트가 있는 곳)에 들어가거나 목록을 볼 수 없어야 한다.
+  if [[ -x $RUNNER_HOME || -r $RUNNER_HOME ]]; then fail runner_home_accessible; fi
+  # WSL: Windows 드라이브(/mnt), Docker Desktop이 붙인 Windows 폴더(/Docker), Windows 프로그램 실행 통로(/run/WSL).
+  # 목록 읽기(-r)와 지나가기(-x)를 따로 본다. 목록이 막혀도 이름을 알면 지나갈 수 있기 때문이다.
+  if [[ -x /mnt || -r /mnt ]]; then fail mnt_accessible; fi
+  if [[ -e /Docker ]] && [[ -x /Docker || -r /Docker ]]; then fail docker_mount_accessible; fi
+  if [[ -e /run/WSL ]] && [[ -x /run/WSL || -r /run/WSL ]]; then fail wsl_interop_accessible; fi
+  if [[ -r /var/run/docker.sock || -w /var/run/docker.sock ]]; then fail docker_socket_accessible; fi
+  # Runner가 설치한 CLI는 읽고 실행만. 맨 위 폴더만이 아니라 버전 폴더·실행 파일까지 하나도 쓸 수 없어야 한다.
+  if [[ ! -r $CLI_DIR || ! -x $CLI_DIR ]]; then fail cli_unreadable; fi
+  rc=0; writable_below "$CLI_DIR" || rc=$?
+  case $rc in 0) fail cli_writable ;; 2) fail cli_unverified ;; esac
+  # 입력 자료 사본도 안쪽 파일까지 하나도 쓸 수 없어야 한다.
+  rc=0; writable_below "$INPUTS_DIR" || rc=$?
+  case $rc in 0) fail inputs_writable ;; 2) fail inputs_unverified ;; esac
+  if [[ ! -x $NODE_DIR/node ]]; then fail node_missing; fi
+  if ((failed == 0)); then echo ok; fi
   return "$failed"
 }
 

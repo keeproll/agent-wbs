@@ -42,7 +42,8 @@
   - 왜: 전용 계정이 설치되지 않은 PC(시험·CI)에서는 실제 실행을 만들면 안 된다.
 - 전용 계정 계층 `dedicatedUserIsolation`(`dedicated-user.ts`):
   - `sudo -n -u <Agent 계정> -- <래퍼> run --agent … --cwd … -- <CLI 실제 경로> <인자>`로 감싼다.
-  - 작업 폴더는 `AWBS_AGENT_ROOT/worktrees/` 안, CLI는 `AWBS_AGENT_ROOT/cli/<agent>/` 안이어야 한다(링크를 따라간 실제 경로로 확인). 밖이면 `cwd_outside_agent_root`·`binary_outside_agent_root`.
+  - 계정 이름 `awbs-agent`, 작업 영역 `/srv/agentwbs`, 래퍼 `/usr/local/libexec/awbs-agent-exec`는 고정값이다(`AGENT_USER`·`AGENT_ROOT`·`AGENT_EXEC`). `AWBS_AGENT_USER`에 다른 값을 넣으면 `agent_config_invalid`.
+  - 작업 폴더는 `/srv/agentwbs/worktrees/` 안, CLI는 `/srv/agentwbs/cli/<agent>/` 안이어야 한다. 대상과 기준 폴더를 둘 다 실제 경로로 바꾼 뒤 비교한다. 밖이거나 실제 경로를 못 구하면 `cwd_outside_agent_root`·`binary_outside_agent_root`.
   - 환경 변수는 `LANG`·`LC_ALL`만 래퍼 인자로 넘긴다. HOME·PATH·TMPDIR는 래퍼가 Agent 계정 값으로 새로 만든다.
   - 권한 모드(`DEDICATED_FLAGS`): Claude `--permission-mode bypassPermissions`, Codex `-c approval_policy="never" -c sandbox_mode="workspace-write"`.
 - `selectIsolation(env, run)`: `AWBS_AGENT_USER`가 없으면 거부 유지. 있으면 래퍼 `check`를 Agent 계정으로 돌려 `ok`일 때만 전용 계정 계층을 쓴다.
@@ -101,7 +102,7 @@
 pnpm -C agent-runner test -- cli
 ```
 
-- `dedicated-user.test.ts`는 「계정이 있다고 가정한」 명령 구성을, `agent-exec.test.ts`는 실행 래퍼를 실제 bash와 fake sudo로 돌린다. 실제 계정·sudo는 쓰지 않는다.
+- `dedicated-user.test.ts`는 「계정이 있다고 가정한」 명령 구성을, `agent-exec.test.ts`는 실행 래퍼를 실제 bash와 fake sudo로, `isolation-scripts.test.ts`는 설치·되돌리기·확인 스크립트를 가짜 루트 폴더와 가짜 sudo로 돌린다. 실제 계정·sudo는 쓰지 않는다.
 
 - fixture는 `test/cli/fixtures/`에 있다. 공식 형식을 보고 만든 잠정본이고, 실제 CLI 기록은 아니다(그 폴더의 README 참고).
 - `fake-run.test.ts`는 fake CLI(`test/fakes/cli.ts`)를 실제로 띄운다. 인자·stdin·환경 변수가 CLI까지 그대로 가는지 확인한다.

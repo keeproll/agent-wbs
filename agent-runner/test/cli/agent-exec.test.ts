@@ -54,8 +54,8 @@ function writeConf(file: string, over: Record<string, string>): void {
   writeFileSync(file, `# 시험 설정\n${Object.entries(values).map(([k, v]) => `${k}=${v}`).join('\n')}\n`);
 }
 
-function wrapper(args: string[], input = '', file = exec) {
-  const r = spawnSync(file, args, { input, encoding: 'utf8', env: { PATH: '/usr/bin:/bin', AWBS_RUNNER_TOKEN: 'runner-secret', HOME: runnerHome } });
+function wrapper(args: string[], input = '', file = exec, path = '/usr/bin:/bin') {
+  const r = spawnSync(file, args, { input, encoding: 'utf8', env: { PATH: path, AWBS_RUNNER_TOKEN: 'runner-secret', HOME: runnerHome } });
   return { code: r.status, stdout: r.stdout, stderr: r.stderr };
 }
 
@@ -183,5 +183,118 @@ describe.skipIf(!usable)('awbs-agent-exec 실행 래퍼(bash, 실제 실행)', (
     const r = spawnSync(c.file, c.args, { env: c.env, encoding: 'utf8' });
     expect(r.status).toBe(0);
     expect(r.stdout.trim()).toBe('none');
+  });
+
+  /** 폴더 트리를 읽기 전용으로 바꿔 시험하고 끝나면 되돌린다(정리를 위해). */
+  function readonlyTree(dir: string, body: () => void): void {
+    const set = (mode: string) => spawnSync('chmod', ['-R', mode, dir]);
+    set('a-w');
+    try {
+      body();
+    } finally {
+      set('u+w');
+    }
+  }
+
+  test('check: CLI·입력 자료는 맨 위가 아니라 안쪽 파일까지 쓸 수 없어야 한다(리뷰 P2-7)', () => {
+    const cliFile = join(area, 'cli', 'codex', '1.0.0', 'bin', 'codex');
+    const input = join(area, 'inputs', 'p1', 'v1', 'spec.md');
+    mkdirSync(join(area, 'inputs', 'p1', 'v1'), { recursive: true });
+    writeFileSync(input, '입력');
+    readonlyTree(join(area, 'cli'), () => readonlyTree(join(area, 'inputs'), () => {
+      let r = wrapper(['check']);
+      expect(r.stdout).not.toContain('fail cli_writable');
+      expect(r.stdout).not.toContain('fail inputs_writable');
+      // 맨 위 폴더는 그대로 읽기 전용이고, 안쪽 파일 하나만 쓸 수 있게 한다.
+      chmodSync(cliFile, 0o755);
+      chmodSync(input, 0o644);
+      r = wrapper(['check']);
+      expect(r.code).toBe(1);
+      expect(r.stdout).toContain('fail cli_writable');
+      expect(r.stdout).toContain('fail inputs_writable');
+      chmodSync(cliFile, 0o555);
+      chmodSync(input, 0o444);
+    }));
+  });
+
+  test('check: 안쪽 폴더를 읽지 못해 다 확인하지 못하면 fail(확인 못 함)', () => {
+    const hidden = join(area, 'cli', 'claude', 'hidden');
+    mkdirSync(hidden, { recursive: true });
+    // 쓸 수 있는 곳이 먼저 보이면 그 결과(cli_writable)가 나오므로, 나머지는 읽기 전용으로 두고 숨은 폴더만 못 읽게 한다.
+    readonlyTree(join(area, 'cli'), () => {
+      chmodSync(hidden, 0o000);
+      try {
+        const r = wrapper(['check']);
+        expect(r.code).toBe(1);
+        expect(r.stdout).toContain('fail cli_unverified');
+        expect(r.stdout).not.toContain('fail cli_writable');
+      } finally {
+        chmodSync(hidden, 0o555);
+      }
+    });
+    rmSync(hidden, { recursive: true });
+  });
+
+  test('check: Windows 경로는 목록 읽기와 지나가기를 따로 보고, /Docker도 본다', () => {
+    const r = wrapper(['check']);
+    // 이 시험 계정은 /mnt에 들어갈 수 있다(격리 안 된 계정). 그래서 반드시 fail이 나와야 한다.
+    if (existsSync('/mnt')) expect(r.stdout).toContain('fail mnt_accessible');
+    if (existsSync('/Docker')) expect(r.stdout).toContain('fail docker_mount_accessible');
+  });
+
+  test('설정 값이 같은 곳의 다른 표기(//, 끝 /)면 거부(리뷰 P2-3)', () => {
+    for (const [name, value] of [['dslash', `${area.replace('/srv', '//srv')}`], ['trail', `${area}/`]] as const) {
+      const bad = join(root, `${name}.conf`);
+      writeConf(bad, { AGENT_ROOT: value });
+      const file = join(root, `exec-${name}`);
+      writeExec(file, readFileSync(exec, 'utf8').replace(`\nCONF=${conf}\n`, `\nCONF=${bad}\n`));
+      const r = wrapper(['check'], '', file);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain('AGENT_ROOT');
+    }
+  });
+
+  describe('fix-perms: 권한 000인 중첩 폴더도 한 번에 되돌린다(리뷰 P2-8)', () => {
+    const fakeBin = join(root, 'fake-acl-bin');
+    const locked = join(worktree, 'nested-locked');
+    beforeAll(() => {
+      mkdirSync(fakeBin, { recursive: true });
+      // setfacl 자리: 받은 인자를 적기만 한다(이 PC에 acl 패키지가 없어도 시험). 실패 주입은 FAIL_SETFACL 파일로.
+      writeExec(join(fakeBin, 'setfacl'), `#!/bin/bash\n[[ -e '${join(root, 'FAIL_SETFACL')}' ]] && exit 1\nprintf '%s\\n' "$*" >> '${join(root, 'setfacl.log')}'\n`);
+    });
+    const lockUp = () => {
+      mkdirSync(join(locked, 'inner'), { recursive: true });
+      writeFileSync(join(locked, 'inner', 'file'), 'x');
+      chmodSync(join(locked, 'inner', 'file'), 0o000);
+      chmodSync(join(locked, 'inner'), 0o000);
+      chmodSync(locked, 0o000);
+    };
+    const unlock = () => spawnSync('chmod', ['-R', 'u+rwx', locked]);
+
+    test('바깥·안쪽 폴더와 파일 모두 복구, Runner ACL도 각 항목에', () => {
+      lockUp();
+      try {
+        const r = wrapper(['fix-perms', locked], '', exec, `${fakeBin}:/usr/bin:/bin`);
+        expect(r).toMatchObject({ code: 0, stdout: 'fixed\n' });
+        expect(readFileSync(join(locked, 'inner', 'file'), 'utf8')).toBe('x');
+        const log = readFileSync(join(root, 'setfacl.log'), 'utf8');
+        for (const p of [locked, join(locked, 'inner'), join(locked, 'inner', 'file')]) expect(log).toContain(p);
+      } finally {
+        unlock();
+      }
+    });
+
+    test('하나라도 못 고치면 종료 코드 4(작업 폴더를 지우지 말라는 뜻)', () => {
+      lockUp();
+      writeFileSync(join(root, 'FAIL_SETFACL'), '');
+      try {
+        const r = wrapper(['fix-perms', locked], '', exec, `${fakeBin}:/usr/bin:/bin`);
+        expect(r.code).toBe(4);
+        expect(r.stdout).not.toContain('fixed');
+      } finally {
+        rmSync(join(root, 'FAIL_SETFACL'));
+        unlock();
+      }
+    });
   });
 });

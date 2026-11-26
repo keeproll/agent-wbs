@@ -41,7 +41,14 @@ export const DEDICATED_FLAGS: Readonly<Record<Agent, readonly string[]>> = {
   Codex: ['-c', 'approval_policy="never"', '-c', 'sandbox_mode="workspace-write"'],
 };
 
-const USER = /^[a-z_][a-z0-9_-]{0,31}$/;
+/**
+ * 계정 이름·경로는 고정값이다. 설치 스크립트(scripts/isolation/common.sh)와 같은 값이어야 한다.
+ * 왜: 설정 오입력으로 root나 다른 계정·다른 폴더를 쓰지 않게 한다(리뷰 P2-2).
+ */
+export const AGENT_USER = 'awbs-agent';
+export const AGENT_ROOT = '/srv/agentwbs';
+export const AGENT_EXEC = '/usr/local/libexec/awbs-agent-exec';
+
 const PATH = /^\/[A-Za-z0-9._/-]+$/;
 /** 래퍼가 받는 언어 설정 값. 래퍼도 같은 규칙으로 다시 검사한다. */
 const LOCALE = /^[A-Za-z0-9_.@-]{1,64}$/;
@@ -59,13 +66,11 @@ function validPath(value: string): boolean {
 export function agentIsolationConfig(env: NodeJS.ProcessEnv): DedicatedUserConfig | null {
   const user = env.AWBS_AGENT_USER;
   if (!user) return null;
-  // .env에 빈 줄(AWBS_AGENT_ROOT=)로 남겨도 기본값을 쓴다.
-  const root = env.AWBS_AGENT_ROOT || '/srv/agentwbs';
-  const exec = env.AWBS_AGENT_EXEC || '/usr/local/libexec/awbs-agent-exec';
-  if (!USER.test(user) || user === 'root') throw new DedicatedUserError('agent_config_invalid', 'AWBS_AGENT_USER는 root가 아닌 리눅스 계정 이름이어야 합니다.');
-  if (!validPath(root) || root === '/') throw new DedicatedUserError('agent_config_invalid', 'AWBS_AGENT_ROOT는 정규화된 절대 경로여야 합니다.');
-  if (!validPath(exec)) throw new DedicatedUserError('agent_config_invalid', 'AWBS_AGENT_EXEC는 정규화된 절대 경로여야 합니다.');
-  return { user, root, exec };
+  if (user !== AGENT_USER) throw new DedicatedUserError('agent_config_invalid', `AWBS_AGENT_USER는 고정값 ${AGENT_USER}만 쓸 수 있습니다.`);
+  // 경로는 고정이다. 예전 .env처럼 값을 적었다면 고정값과 같을 때만 받아들인다. 빈 줄(AWBS_AGENT_ROOT=)은 고정값.
+  if (env.AWBS_AGENT_ROOT && env.AWBS_AGENT_ROOT !== AGENT_ROOT) throw new DedicatedUserError('agent_config_invalid', `AWBS_AGENT_ROOT는 고정값 ${AGENT_ROOT}만 쓸 수 있습니다.`);
+  if (env.AWBS_AGENT_EXEC && env.AWBS_AGENT_EXEC !== AGENT_EXEC) throw new DedicatedUserError('agent_config_invalid', `AWBS_AGENT_EXEC는 고정값 ${AGENT_EXEC}만 쓸 수 있습니다.`);
+  return { user: AGENT_USER, root: AGENT_ROOT, exec: AGENT_EXEC };
 }
 
 /** 링크를 모두 따라간 실제 경로가 `base` 폴더 「안」인가(base 자체는 아님). */
@@ -89,17 +94,27 @@ export interface DedicatedUserDeps {
  */
 export function dedicatedUserIsolation(cfg: DedicatedUserConfig, deps: DedicatedUserDeps = {}): IsolationLayer {
   const realpath = deps.realpath ?? ((p: string) => realpathSync.native(p));
-  const worktrees = join(cfg.root, 'worktrees');
+  /** 실제 경로. 없거나 읽지 못하면 그 코드로 거부한다. 비교하는 양쪽(대상·기준 폴더)을 모두 이 함수로 정규화한다(리뷰 P2-3). */
+  const real = (p: string, code: DedicatedUserCode, message: string): string => {
+    try {
+      return realpath(p);
+    } catch {
+      throw new DedicatedUserError(code, message);
+    }
+  };
   const sudo = cfg.sudo ?? '/usr/bin/sudo';
   return {
     name: 'dedicated-user',
     flags: (agent) => DEDICATED_FLAGS[agent],
     wrap(launch: Launch, agent: Agent): Launch {
-      const cwd = realpath(launch.cwd);
+      const outside = '작업 폴더가 Agent 작업 영역(worktrees) 밖입니다.';
+      const cwd = real(launch.cwd, 'cwd_outside_agent_root', outside);
+      const worktrees = real(join(cfg.root, 'worktrees'), 'cwd_outside_agent_root', outside);
       if (!inside(cwd, worktrees)) throw new DedicatedUserError('cwd_outside_agent_root', '작업 폴더가 Agent 작업 영역(worktrees) 밖입니다.');
       const name = agent.toLowerCase();
-      const binary = realpath(launch.file);
-      if (!inside(binary, join(cfg.root, 'cli', name))) {
+      const notCli = 'CLI가 Agent 작업 영역의 Runner 설치본(cli) 밖입니다.';
+      const binary = real(launch.file, 'binary_outside_agent_root', notCli);
+      if (!inside(binary, real(join(cfg.root, 'cli', name), 'binary_outside_agent_root', notCli))) {
         throw new DedicatedUserError('binary_outside_agent_root', 'CLI가 Agent 작업 영역의 Runner 설치본(cli) 밖입니다.');
       }
       const env = (['LANG', 'LC_ALL'] as const).flatMap((key) => {
