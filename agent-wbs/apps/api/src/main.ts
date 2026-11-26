@@ -2,6 +2,7 @@ import { createPool, waitForDatabase } from '@awbs/db';
 import { buildApp } from './app.ts';
 import { loadConfig } from './config.ts';
 import { loggerOptions } from './log.ts';
+import { assertLanPassword } from './platform/security.ts';
 
 const config = loadConfig(process.env);
 const pool = createPool(config.databaseUrl, {
@@ -10,7 +11,7 @@ const pool = createPool(config.databaseUrl, {
     app.log.error({ err: error }, 'DB 유휴 연결 오류');
   },
 });
-const app = buildApp(pool, loggerOptions(config.logLevel));
+const app = buildApp(pool, loggerOptions(config.logLevel), config);
 
 // 신호와 기동 실패가 겹쳐도 한 번만 종료한다(pool.end는 두 번 부를 수 없다).
 let stopping: Promise<void> | undefined;
@@ -33,6 +34,10 @@ try {
       app.log.warn({ attempt, err: error }, 'DB 연결 재시도');
     },
   });
+  if (!isStopping() && config.lan) await assertLanPassword(pool);
+  if (!isStopping() && config.lan && config.origin.startsWith('http:')) {
+    app.log.warn('LAN 평문 HTTP에서는 같은 네트워크의 사용자가 비밀번호와 세션을 볼 수 있습니다. HTTPS를 사용하세요.');
+  }
   // 연결을 기다리는 동안 종료 신호를 받았으면 열지 않는다.
   if (!isStopping()) await app.listen({ host: config.host, port: config.port });
 } catch (error) {
