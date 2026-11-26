@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, readFile, type FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { HeadSyncProof } from '../../git/repository.ts';
+import type { HeadSyncChainProof } from '../../git/repository.ts';
 import type { GitHubClient, MergeOutcome } from '../../github/client.ts';
 import { atomicWrite } from '../../state/files.ts';
 import { acquireLock } from '../../state/state.ts';
@@ -17,18 +17,20 @@ export interface IntegrationDeps extends Pick<TaskCheckOptions, 'repo' | 'heavy'
   /** 서버가 (project,A)의 정의 관측을 따로 보관하도록 기존 outbox에 넣는다. */
   observeMainPipeline: (basis: MainBasis) => Promise<void>;
 }
-interface Evidence {
-  pr: number; branch: string; baseSha: string; qaHeadSha: string; syncedHeadSha: string; testedTreeSha: string;
-  pipelineSha: string; headSync?: HeadSyncProof; task: TaskCheckResult; integration: IntegrationCheck;
+interface SyncEvidence {
+  baseSha: string; qaHeadSha: string; syncedHeadSha: string; pipelineSha: string; headSync?: HeadSyncChainProof;
+}
+interface Evidence extends SyncEvidence {
+  pr: number; branch: string; testedTreeSha: string; task: TaskCheckResult; integration: IntegrationCheck;
 }
 export type IntegrationResult =
   | ({ kind: 'merged'; actualMergeSha: string; actualTreeSha: string; mergeParents: [string, string] } & Evidence)
   | ({ kind: 'unknown'; observed: string } & Evidence)
   | ({ kind: 'verify_failed'; actualMergeSha: string; reason: string } & Evidence)
   | { kind: 'blocked' }
-  | { kind: 'baseline_failed'; failScope: 'baseline'; task: TaskCheckResult }
-  | { kind: 'recheck'; reason: 'main_changed' | 'head_changed' | 'qa_changed' | 'merge_rejected'; task?: TaskCheckResult; integration?: IntegrationCheck }
-  | { kind: 'rework'; reason: 'conflict' | 'invalid_sync' | 'task_failed' | 'integration_failed'; failScope?: 'task'; task?: TaskCheckResult; integration?: IntegrationCheck };
+  | ({ kind: 'baseline_failed'; failScope: 'baseline'; task: TaskCheckResult } & SyncEvidence)
+  | ({ kind: 'recheck'; reason: 'main_changed' | 'head_changed' | 'qa_changed' | 'merge_rejected'; task?: TaskCheckResult; integration?: IntegrationCheck } & Partial<SyncEvidence>)
+  | ({ kind: 'rework'; reason: 'conflict' | 'invalid_sync' | 'task_failed' | 'integration_failed'; failScope?: 'task'; task?: TaskCheckResult; integration?: IntegrationCheck } & Partial<SyncEvidence>);
 interface Journal { version: 1; evidence: Evidence; outcome?: MergeOutcome }
 const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 
@@ -112,35 +114,51 @@ export class IntegrationQueue {
       const { repo, github, signal } = this.deps; signal?.throwIfAborted();
       const basis = await repo.mainPipeline();
       await this.deps.observeMainPipeline(basis);
-      const stale = await this.current(request, basis.baseSha, request.qaHeadSha); if (stale) return stale;
-      const syncedHeadSha = await repo.prepareIntegration(basis.baseSha, request.qaHeadSha);
-      if (!syncedHeadSha) return { kind: 'rework', reason: 'conflict' };
-      const proof = await repo.integrationProof(basis.baseSha, request.qaHeadSha, syncedHeadSha);
-      if (syncedHeadSha !== request.qaHeadSha && !proof) return { kind: 'rework', reason: 'invalid_sync' };
-      const moved = await this.current(request, basis.baseSha, request.qaHeadSha); if (moved) return moved;
-      if (syncedHeadSha !== request.qaHeadSha) await repo.pushCommit(syncedHeadSha, request.branch);
+      const head = await repo.fetchBranch(request.branch);
+      const previousProof = await repo.integrationChainProof(basis.baseSha, request.qaHeadSha, head);
+      if (head !== request.qaHeadSha && !previousProof) return { kind: 'recheck', reason: 'head_changed' };
+      const previous: SyncEvidence = { baseSha: basis.baseSha, qaHeadSha: request.qaHeadSha, syncedHeadSha: head,
+        pipelineSha: basis.pipelineSha, ...(previousProof && { headSync: previousProof }) };
+      const stale = await this.current(request, basis.baseSha, head); if (stale) return { ...stale, ...previous };
+      const syncedHeadSha = await repo.prepareIntegration(basis.baseSha, head);
+      if (!syncedHeadSha) return { kind: 'rework', reason: 'conflict', ...previous };
+      const proof = await repo.integrationChainProof(basis.baseSha, request.qaHeadSha, syncedHeadSha);
+      if (syncedHeadSha !== request.qaHeadSha && !proof) return { kind: 'rework', reason: 'invalid_sync', ...previous };
+      const moved = await this.current(request, basis.baseSha, head); if (moved) return { ...moved, ...previous };
+      if (syncedHeadSha !== head) {
+        try { await repo.pushCommit(syncedHeadSha, request.branch); }
+        catch (error) {
+          const changed = await this.current(request, basis.baseSha, head);
+          if (changed) return { ...changed, ...previous };
+          throw error;
+        }
+      }
+      const sync: SyncEvidence = { ...previous, syncedHeadSha, ...(proof && { headSync: proof }) };
       await github.setCommitStatus({ sha: syncedHeadSha, context: 'agentwbs/int', state: 'pending' });
       const id = `ci-${randomUUID()}`;
       let task: TaskCheckResult;
       await repo.createTaskCheckWorktree(id, syncedHeadSha);
       try { task = await runTaskCheck({ ...this.deps, basis, worktreeId: id, branch: `agent/${id}` }); }
       finally { await repo.removeWorktree(id); }
-      const taskChanged = await this.current(request, basis.baseSha, syncedHeadSha); if (taskChanged) return { ...taskChanged, task };
+      const taskChanged = await this.current(request, basis.baseSha, syncedHeadSha); if (taskChanged) return { ...taskChanged, ...sync, task };
       await github.setCommitStatus({ sha: syncedHeadSha, context: 'agentwbs/task',
         state: task.status === 'pass' ? 'success' : task.failScope === 'baseline' ? 'error' : 'failure' });
       if (task.status !== 'pass') {
         await github.setCommitStatus({ sha: syncedHeadSha, context: 'agentwbs/int', state: task.failScope === 'baseline' ? 'error' : 'failure' });
-        return task.failScope === 'baseline' ? { kind: 'baseline_failed', failScope: 'baseline', task }
-          : { kind: 'rework', reason: 'task_failed', failScope: 'task', task };
+        return task.failScope === 'baseline' ? { kind: 'baseline_failed', failScope: 'baseline', ...sync, task }
+          : { kind: 'rework', reason: 'task_failed', failScope: 'task', ...sync, task };
       }
       const integration = await runIntegrationCheck(this.deps, basis, syncedHeadSha);
-      const changed = await this.current(request, basis.baseSha, syncedHeadSha); if (changed) return { ...changed, task, integration };
+      const changed = await this.current(request, basis.baseSha, syncedHeadSha); if (changed) return { ...changed, ...sync, task, integration };
       await github.setCommitStatus({ sha: syncedHeadSha, context: 'agentwbs/int', state: integration.status === 'pass' ? 'success' : 'failure' });
-      if (integration.status !== 'pass') return { kind: 'rework', reason: 'integration_failed', failScope: 'task', task, integration };
-      const finalCheck = await this.current(request, basis.baseSha, syncedHeadSha); if (finalCheck) return { ...finalCheck, task, integration };
+      if (integration.status !== 'pass') return { kind: 'rework', reason: 'integration_failed', failScope: 'task', ...sync, task, integration };
+      const finalCheck = await this.current(request, basis.baseSha, syncedHeadSha);
+      if (finalCheck) {
+        await github.setCommitStatus({ sha: syncedHeadSha, context: 'agentwbs/int', state: 'pending' });
+        return { ...finalCheck, ...sync, task, integration };
+      }
       signal?.throwIfAborted();
-      const evidence: Evidence = { pr: request.pr, branch: request.branch, baseSha: basis.baseSha, qaHeadSha: request.qaHeadSha,
-        syncedHeadSha, testedTreeSha: integration.treeSha, pipelineSha: basis.pipelineSha, ...(proof && { headSync: proof }), task, integration };
+      const evidence: Evidence = { pr: request.pr, branch: request.branch, ...sync, testedTreeSha: integration.treeSha, task, integration };
       // 먼저 저장한다. 전송 직후 종료돼도 미전송으로 단정하지 않고 읽기만 해서 대조한다.
       await this.save({ version: 1, evidence });
       const outcome = await github.mergePullRequest({ pr: request.pr, baseSha: basis.baseSha, headSha: syncedHeadSha });
@@ -153,7 +171,7 @@ export class IntegrationQueue {
     if (outcome.kind === 'merged') return { ...e, kind: 'merged', actualMergeSha: outcome.mergeSha, actualTreeSha: outcome.treeSha, mergeParents: [e.baseSha, e.syncedHeadSha] };
     if (outcome.kind === 'unknown') return { ...e, kind: 'unknown', observed: outcome.observed };
     if (outcome.kind === 'verify_failed') return { ...e, kind: 'verify_failed', actualMergeSha: outcome.mergeSha, reason: outcome.reason };
-    return { kind: 'recheck', reason: outcome.kind === 'head_changed' ? 'head_changed' : 'merge_rejected', task: e.task, integration: e.integration };
+    return { ...e, kind: 'recheck', reason: outcome.kind === 'head_changed' ? 'head_changed' : 'merge_rejected' };
   }
 
   reconcile(): Promise<IntegrationResult | null> {

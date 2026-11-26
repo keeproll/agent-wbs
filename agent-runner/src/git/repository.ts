@@ -49,6 +49,7 @@ export interface HeadSyncProof {
   qaHeadSha: string; headSha: string; preserved: boolean; parents: string[];
   autoMergeTreeSha: string; headTreeSha: string; additionalChanges: boolean;
 }
+export interface HeadSyncChainProof extends HeadSyncProof { chain?: HeadSyncProof[] }
 
 interface TreeEntry { mode: string; oid: string; path: string }
 interface WorktreeRecord { id: string; branch?: string; startCommit?: string }
@@ -788,6 +789,25 @@ export class GitRepository {
     const headTreeSha = await this.commitTree(synced);
     if (!autoMergeTreeSha || autoMergeTreeSha !== headTreeSha) return null;
     return { qaHeadSha: head, headSha: synced, preserved: true, parents, autoMergeTreeSha, headTreeSha, additionalChanges: false };
+  }
+
+  /** 각 단계가 main만 합친 자동 동기화인지 QA의 H까지 거슬러 확인한다. */
+  async integrationChainProof(base: string, qaHead: string, head: string): Promise<HeadSyncChainProof | null> {
+    const chain: HeadSyncProof[] = [];
+    let cursor = head;
+    try {
+      while (cursor !== qaHead) {
+        const parents = (await this.git(['show', '-s', '--format=%P', sha(cursor)])).toString().trim().split(' ');
+        const [previous, main] = parents;
+        if (parents.length !== 2 || !previous || !main || await this.taskBase(base, main) !== main) return null;
+        const proof = await this.integrationProof(main, previous, cursor);
+        if (!proof) return null;
+        chain.push(proof); cursor = previous;
+      }
+    } catch (error) { if (error instanceof GitSafetyError) return null; throw error; }
+    const last = chain[0];
+    if (!last) return null;
+    return { ...last, qaHeadSha: qaHead, ...(chain.length > 1 && { chain: chain.reverse() }) };
   }
 
   /** 새 설정으로 테스트를 제외할 수도 있으므로 추가 파일까지 전부 QA 근거로 남긴다. */

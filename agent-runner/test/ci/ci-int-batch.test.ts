@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { stat } from 'node:fs/promises';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { IntegrationQueue } from '../../src/ci/integration/queue.ts';
 import { commit, file, fixture, git } from './int-fixture.ts';
@@ -40,4 +41,23 @@ test('잘못된 묶음과 중복 PR은 실행 전에 거부한다', async () => 
   await expect(queue?.checkBatch([f.request, { ...second, qaHeadSha: 'bad' }])).rejects.toThrow();
   expect(f.calls).toEqual([]);
   expect(f.github.requests).toEqual([]);
+});
+
+test('각 PR은 통과하고 조합에서만 실패하면 상호작용 후보를 남긴다', async () => {
+  f.action(async (argv, cwd) => argv[1] === 'int-test' &&
+    await stat(join(cwd, 'task')).then(() => true, () => false) &&
+    await stat(join(cwd, 'second')).then(() => true, () => false) ? 1 : 0);
+  expect(await queue?.checkBatch([f.request, second])).toMatchObject({ kind: 'diagnostic', suspects: [], interactions: [[1, 2]],
+    runs: [{ prs: [1, 2], status: 'fail' }, { prs: [1], status: 'pass' }, { prs: [2], status: 'pass' }] });
+  expect(f.github.requests.every(r => r.method === 'GET')).toBe(true);
+});
+
+test('묶음 확인도 증명된 H′를 원래 QA H로 검사한다', async () => {
+  f.action(async () => 1);
+  expect((await queue?.run(f.request))?.kind).toBe('baseline_failed');
+  const head = f.ref('agent/task'); const requests = f.github.requests.length;
+  f.action(async () => 0);
+  expect(await queue?.checkBatch([f.request, second])).toMatchObject({ kind: 'diagnostic', runs: [{ prs: [1, 2], status: 'pass' }] });
+  expect(f.ref('agent/task')).toBe(head);
+  expect(f.github.requests.slice(requests).every(r => r.method === 'GET')).toBe(true);
 });

@@ -1,8 +1,10 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { afterEach, beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { IntegrationQueue } from '../../src/ci/integration/queue.ts';
 import { commit, file, fixture, git } from './int-fixture.ts';
+
+vi.setConfig({ testTimeout: 30_000 });
 
 let f: Awaited<ReturnType<typeof fixture>>;
 let queues: IntegrationQueue[];
@@ -11,7 +13,7 @@ afterEach(async () => { for (const queue of queues) await queue.close(); await f
 const open = async () => { const queue = await IntegrationQueue.open(f.deps); queues.push(queue); return queue; };
 const puts = () => f.github.requests.filter(r => r.method === 'PUT');
 
-test('H,A 자동 병합 뒤 같은 H′에서 ①·②를 검사하고 head status·부모·tree를 보고한다', { timeout: 30_000 }, async () => {
+test('H,A 자동 병합 뒤 같은 H′에서 ①·②를 검사하고 head status·부모·tree를 보고한다', async () => {
   const queue = await open(); const result = await queue.run(f.request);
   expect(result.kind).toBe('merged');
   if (result.kind !== 'merged') throw new Error('병합 실패');
@@ -55,17 +57,16 @@ test('main 정의 관측 보고를 보관하지 못하면 검사와 병합을 �
   expect(f.calls).toEqual([]); expect(puts()).toEqual([]);
 });
 
-test('검사 후 main A→B이면 병합하지 않고 새 A로 재검사한다', { timeout: 30_000 }, async () => {
+test('검사 후 main A→B이면 병합하지 않고 새 A로 재검사한다', async () => {
   let moved = false;
   f.action(async argv => { if (argv[1] === 'int-e2e' && !moved) { moved = true; await f.advance(); } return 0; });
   const queue = await open();
   expect(await queue.run(f.request)).toMatchObject({ kind: 'recheck', reason: 'main_changed',
     integration: { status: 'pass', baseSha: f.base } });
   expect(puts()).toEqual([]); expect(f.merged.size).toBe(0);
-  const latestBase = f.ref('main'); const latestHead = f.ref('agent/task');
-  f.qa({ passed: true, headSha: latestHead, specRevision: 1 });
-  const result = await queue.run({ ...f.request, qaHeadSha: latestHead });
-  expect(result).toMatchObject({ kind: 'merged', baseSha: latestBase });
+  const latestBase = f.ref('main');
+  const result = await queue.run(f.request);
+  expect(result).toMatchObject({ kind: 'merged', baseSha: latestBase, qaHeadSha: f.head });
   expect(f.calls.filter(c => c.argv[1] === 'int-e2e')).toHaveLength(2);
 });
 
@@ -130,7 +131,7 @@ test('검사 파일 변조·중단은 성공으로 보고하지 않고 사본과
   expect(await f.repo.recordedWorktrees()).toEqual([]);
 });
 
-test('병합 직후 crash는 재시작 후 쓰기 없는 대조로 확정하며 다음 PR을 막는다', { timeout: 30_000 }, async () => {
+test('병합 직후 crash는 재시작 후 쓰기 없는 대조로 확정하며 다음 PR을 막는다', async () => {
   git(f.remote, 'update-ref', 'refs/heads/agent/task2', f.head);
   const real = f.client.mergePullRequest;
   f.client.mergePullRequest = async input => { await real(input); throw new Error('crash'); };

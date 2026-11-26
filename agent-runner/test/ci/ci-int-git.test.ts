@@ -77,3 +77,31 @@ test('원격 결과 브랜치를 가져오고 main과 임의 ref는 받지 않�
   await expect(repo.fetchBranch('main')).rejects.toThrow();
   await expect(repo.fetchBranch('agent/../main')).rejects.toThrow();
 });
+
+test('사슬 전체의 부모·자동 병합 tree와 각 main의 조상을 대조한다', async () => {
+  const first = await repo.prepareIntegration(base, head);
+  if (!first) throw new Error('첫 병합 실패');
+  const nextBase = await commit('next-main', '새 main');
+  git(source, 'push', join(root, 'remote.git'), 'main'); await repo.fetch();
+  const second = await repo.prepareIntegration(nextBase, first);
+  if (!second) throw new Error('두 번째 병합 실패');
+  expect(await repo.integrationChainProof(nextBase, head, second)).toMatchObject({ qaHeadSha: head, headSha: second,
+    parents: [first, nextBase], chain: [
+      { qaHeadSha: head, headSha: first, parents: [head, base] },
+      { qaHeadSha: first, headSha: second, parents: [first, nextBase] },
+    ] });
+  expect(await repo.integrationChainProof(base, head, second)).toBeNull();
+  expect(await repo.integrationChainProof(nextBase, 'f'.repeat(40), second)).toBeNull();
+  expect(await repo.integrationChainProof(nextBase, head, 'f'.repeat(40))).toBeNull();
+});
+
+test('마지막 병합만 정상이더라도 중간 tree가 변조된 사슬은 거부한다', async () => {
+  const tree = await repo.commitTree(base);
+  const forged = git(source, '--git-dir', repo.path, 'commit-tree', tree, '-p', head, '-p', base, '-m', '중간 변조');
+  const nextBase = await commit('next-main', '새 main');
+  git(source, 'push', join(root, 'remote.git'), 'main'); await repo.fetch();
+  const second = await repo.prepareIntegration(nextBase, forged);
+  if (!second) throw new Error('마지막 병합 실패');
+  expect(await repo.integrationProof(nextBase, forged, second)).not.toBeNull();
+  expect(await repo.integrationChainProof(nextBase, head, second)).toBeNull();
+});
