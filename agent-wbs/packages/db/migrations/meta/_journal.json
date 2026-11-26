@@ -1,1 +1,97 @@
-{ "version": "7", "dialect": "postgresql", "entries": [] }
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1795611232108,
+      "tag": "0000_20261125_schema",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1795611232491,
+      "tag": "0001_20261125_guards",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795611610323,
+      "tag": "0002_20261125_relative_paths",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1795611747195,
+      "tag": "0003_20261125_task_spec_key",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1795613396772,
+      "tag": "0004_20261125_review_hardening",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1795614239511,
+      "tag": "0005_20261125_review_schema",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1795614239967,
+      "tag": "0006_20261125_review_invariants",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1795614776105,
+      "tag": "0007_20261125_demo_messages",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1795615299754,
+      "tag": "0008_20261125_value_checks",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1795615577215,
+      "tag": "0009_20261125_job_identity",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1795679547992,
+      "tag": "0010_20261126_cleanup_proofs",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1795681327034,
+      "tag": "0011_20261126_reset_pr_refs",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1795682003669,
+      "tag": "0012_20261126_cleanup_repo_scope",
+      "breakpoints": true
+    }
+  ]
+}

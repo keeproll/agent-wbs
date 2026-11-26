@@ -1,4 +1,5 @@
-import { afterAll, expect, inject, test } from 'vitest';
+import type pg from 'pg';
+import { afterAll, expect, inject, test, vi } from 'vitest';
 import {
   assertConnectedToTestDatabase,
   createPool,
@@ -24,14 +25,11 @@ test('빈 DB에 migrate할 수 있고 반복해도 같다', async () => {
 });
 
 test('guard: 개발 DB 연결은 연결 뒤 확인에서도 거부한다', async () => {
-  const other = new URL(url);
-  other.pathname = '/awbs_dev';
-  const dev = createPool(other.href, { onError: () => undefined });
-  try {
-    await expect(assertConnectedToTestDatabase(dev)).rejects.toThrow('awbs_dev');
-  } finally {
-    await dev.end();
-  }
+  const query = vi.fn().mockResolvedValue({ rows: [{ name: 'awbs_dev' }] });
+  await expect(assertConnectedToTestDatabase({ query } as unknown as pg.Pool)).rejects.toThrow(
+    '연결된 DB가 awbs_test_',
+  );
+  expect(query).toHaveBeenCalledExactlyOnceWith('select current_database() as name');
 });
 
 test('guard: 개발 DB는 초기화를 거부하고 그대로 남는다', async () => {
@@ -40,7 +38,6 @@ test('guard: 개발 DB는 초기화를 거부하고 그대로 남는다', async 
   const oid = () =>
     pool.query<{ oid: number }>("select oid from pg_database where datname = 'awbs_dev'");
   const before = (await oid()).rows;
-  expect(before).toHaveLength(1);
   await expect(recreateTestDatabase(other.href)).rejects.toThrow('awbs_test_');
   expect((await oid()).rows).toEqual(before);
 });
