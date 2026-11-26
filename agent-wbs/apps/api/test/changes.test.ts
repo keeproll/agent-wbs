@@ -1,7 +1,7 @@
 // M2-08 변경 이벤트·이력의 순수 판정(DB 없이). DB를 쓰는 검증은 changes.db.test.ts에 있다.
 import { describe, expect, test } from 'vitest';
 import { CHANGE_TOPICS, changesPage, refText } from '../src/changes/events.ts';
-import { decodeCursor, encodeCursor, seoulDayRange } from '../src/changes/history.ts';
+import { decodeCursor, decodeTimeIdCursor, encodeCursor, seoulDayRange } from '../src/changes/history.ts';
 
 const row = (seq: number, topic = 'task', ref: unknown = { taskKey: 'TASK-0001' }) => ({ seq, topic, ref, at: '2026-11-26T00:00:00.000000Z' });
 
@@ -61,5 +61,12 @@ describe('이력 조회 도우미', () => {
     expect(decodeCursor('not-base64!', 2)).toBeNull();
     expect(decodeCursor(encodeCursor(['only-one']), 2)).toBeNull();
     expect(decodeCursor(Buffer.from('{"a":1}').toString('base64url'), 2)).toBeNull();
+  });
+  test('시각·id 커서는 안의 값까지 검사한다(형식만 맞는 위조 값은 null → 400, 리뷰 지적 6)', () => {
+    const good = ['2026-11-26T00:00:00.000001Z', '0b7f3a2e-0000-4000-8000-000000000001'];
+    expect(decodeTimeIdCursor(encodeCursor(good))).toEqual(good);
+    expect(decodeTimeIdCursor(encodeCursor(['not-a-date', 'not-a-uuid']))).toBeNull();
+    expect(decodeTimeIdCursor(encodeCursor(['2026-02-30T00:00:00Z', good[1] ?? '']))).toBeNull();
+    expect(decodeTimeIdCursor(encodeCursor([good[0] ?? '', 'not-a-uuid']))).toBeNull();
   });
 });

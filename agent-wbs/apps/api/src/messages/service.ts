@@ -1,6 +1,6 @@
 import type { PoolClient } from '@awbs/db';
 import { emitChange, iso } from '../changes/events.ts';
-import { decodeCursor, encodeCursor, InputProblem } from '../changes/history.ts';
+import { decodeTimeIdCursor, encodeCursor, InputProblem } from '../changes/history.ts';
 import { ApiError, assertSameVersion, invalid, isUuid } from '../changes/http.ts';
 import { messageView, nextDelivery, pendingNextAtSend, type Delivery, type MessageAction, type MessageRow } from './state.ts';
 
@@ -119,19 +119,24 @@ export async function leadAction(client: PoolClient, id: string, action: 'send' 
   await assertMessageVersion(client, row, expected);
   const next = row.dir === 'out' ? nextDelivery(row.delivery as Delivery, action) : null;
   if (!next) throw badState(row, ACTION_LABEL[action]);
-  if (action === 'send') {
-    if (!row.body.trim()) throw invalid([{ path: 'body', rule: 'minLength', message: '보낼 내용을 입력하세요.' }]);
+  /** 지금 조건(Task 실행 중·실행 중 전달)으로 다음 실행 대기를 정한다. 전송과 재전송이 같은 판정을 쓴다(리뷰 지적 5). */
+  const pendingNow = async () => {
     const running = (await client.query<{ running: boolean }>("select status='running' as running from tasks where id=$1", [row.task])).rows[0]?.running ?? false;
     const live = (await client.query<{ live: boolean }>('select live_inject as live from exec_policy where singleton')).rows[0]?.live ?? false;
-    const pending = pendingNextAtSend({ taskRunning: running, liveInject: live });
+    return pendingNextAtSend({ taskRunning: running, liveInject: live });
+  };
+  if (action === 'send') {
+    if (!row.body.trim()) throw invalid([{ path: 'body', rule: 'minLength', message: '보낼 내용을 입력하세요.' }]);
+    const pending = await pendingNow();
     await client.query("update messages set delivery='Queued',draft=false,pending_next=$2 where id=$1", [id, pending]);
     await record(client, row, LEAD, `${row.msg_key} ${row.type} 전송 요청 → ${String(row.to_agent)}${pending ? ' (다음 실행 대기)' : ''}`, row.delivery, next);
   } else if (action === 'cancel') {
     await client.query("update messages set delivery='Cancelled',pending_next=false where id=$1", [id]);
     await record(client, row, LEAD, `${row.msg_key} 전송 취소`, row.delivery, next);
   } else {
-    await client.query("update messages set delivery='Queued',fail_reason=null where id=$1", [id]);
-    await record(client, row, LEAD, `${row.msg_key} 재전송`, row.delivery, next);
+    const pending = await pendingNow();
+    await client.query("update messages set delivery='Queued',fail_reason=null,pending_next=$2 where id=$1", [id, pending]);
+    await record(client, row, LEAD, `${row.msg_key} 재전송${pending ? ' (다음 실행 대기)' : ''}`, row.delivery, next);
   }
   await emitChange(client, row.project_id, 'message', { id });
   return view(client, id);
@@ -158,7 +163,7 @@ export const POLL_LIMIT = 100;
  */
 export async function pollMessages(client: PoolClient, cursor: string | null, limit = POLL_LIMIT, since?: string) {
   await lockDelivery(client);
-  const after = cursor === null ? null : decodeCursor(cursor, 2);
+  const after = cursor === null ? null : decodeTimeIdCursor(cursor);
   if (cursor !== null && !after) throw new InputProblem('cursor', 'format', '메시지 커서가 올바르지 않습니다.');
   const values: unknown[] = [limit];
   let where = '';
@@ -238,7 +243,7 @@ export const MESSAGE_PAGE = 50;
 /** 목록(최신 먼저). taskId가 있으면 그 Task만. */
 export async function listMessages(client: PoolClient, input: { taskId?: string | undefined; limit?: number | undefined; cursor?: string | undefined }) {
   const limit = Math.min(input.limit ?? MESSAGE_PAGE, 200);
-  const after = input.cursor === undefined ? null : decodeCursor(input.cursor, 2);
+  const after = input.cursor === undefined ? null : decodeTimeIdCursor(input.cursor);
   if (input.cursor !== undefined && !after) throw new InputProblem('cursor', 'format', '메시지 커서가 올바르지 않습니다.');
   const where: string[] = [];
   const values: unknown[] = [];

@@ -43,6 +43,26 @@ export function decodeCursor(cursor: string, size: number): string[] | null {
   } catch { return null; }
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** 달력에 실제로 있는 UTC 시각(µs까지)인지. 2026-02-30 같은 값은 거부한다. */
+export function realTimestamp(value: string): boolean {
+  const local = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.\d{1,6})?Z$/.exec(value)?.[1];
+  if (!local) return false;
+  const date = new Date(`${local}Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().startsWith(local);
+}
+
+/**
+ * (시각, id) 커서. 안의 값까지 검사해 DB 변환 오류(500)가 나지 않게 한다(리뷰 지적 6).
+ * 문제가 있으면 null — 호출자가 400 VALIDATION_FAILED로 바꾼다.
+ */
+export function decodeTimeIdCursor(cursor: string): [string, string] | null {
+  const keys = decodeCursor(cursor, 2);
+  const [at, id] = keys ?? [];
+  return at !== undefined && id !== undefined && realTimestamp(at) && UUID.test(id) ? [at, id] : null;
+}
+
 /** 이력의 변경 전/후는 jsonb다. API는 문자열|null이므로 문자열은 그대로, 그 밖의 값은 정렬 JSON으로 보인다. */
 export const valueText = (value: unknown): string | null =>
   value === null || value === undefined ? null : typeof value === 'string' ? value : canonicalJson(value);
@@ -61,7 +81,7 @@ export interface HistoryFilter { from?: string | undefined; to?: string | undefi
 export async function listHistory(client: PoolClient, filter: HistoryFilter) {
   const range = seoulDayRange(filter.from, filter.to);
   const limit = Math.min(filter.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
-  const after = filter.cursor === undefined ? null : decodeCursor(filter.cursor, 2);
+  const after = filter.cursor === undefined ? null : decodeTimeIdCursor(filter.cursor);
   if (filter.cursor !== undefined && !after) throw new InputProblem('cursor', 'format', '이력 커서가 올바르지 않습니다.');
   const where: string[] = [];
   const values: unknown[] = [];
