@@ -23,13 +23,17 @@ const DOMAIN_TO_DESIGN: Record<string, string> = { DB: 'DB 설계', BE: 'BE / AP
 const AGENTS = ['Claude', 'Codex'] as const;
 type Agent = (typeof AGENTS)[number];
 
-interface Draft {
+export interface Draft {
   title: string; wbsNodeId: string; type: string; domain: string; rel: string[]; priority: string; assignee: Agent; verifier: Agent;
   est: string; fixStart: string; purpose: string; background: string; scope: string; out: string; doneCond: string; preds: string[];
 }
 
-export function TaskWizard({ projectId, nodes, tasks, defaultWp, onClose, onCreated, onRejected }: {
+export function TaskWizard({ projectId, nodes, tasks, defaultWp, initial, onDraft, onClose, onCreated, onRejected }: {
   projectId: string;
+  /** 세션 만료 뒤 복원한 초안(useSessionDraft). 없으면 빈 초안 */
+  initial?: Draft | null;
+  /** 입력이 바뀔 때마다 알린다. WBS 화면이 세션 만료 대비 초안으로 등록한다. */
+  onDraft: (draft: Draft) => void;
   nodes: readonly WbsNode[];
   tasks: readonly TaskSummary[];
   defaultWp: string;
@@ -43,11 +47,11 @@ export function TaskWizard({ projectId, nodes, tasks, defaultWp, onClose, onCrea
   const wps = nodes.filter((n) => n.kind === 'work_package');
   const [step, setStep] = useState(1);
   const [tried, setTried] = useState(false);
-  const [d, setD] = useState<Draft>({
+  const [d, setD] = useState<Draft>(() => initial ?? {
     title: '', wbsNodeId: wps.some((w) => w.id === defaultWp) ? defaultWp : (wps[0]?.id ?? ''), type: '', domain: '', rel: [], priority: '2',
     assignee: 'Claude', verifier: 'Codex', est: '4', fixStart: '', purpose: '', background: '', scope: '', out: '', doneCond: '', preds: [],
   });
-  const set = (patch: Partial<Draft>) => { setD((x) => ({ ...x, ...patch })); };
+  const set = (patch: Partial<Draft>) => { setD((x) => { const n = { ...x, ...patch }; onDraft(n); return n; }); };
   const e = wizardErrors(d);
   const show = tried;
   const missing = show ? wizardMissing(step, e) : [];

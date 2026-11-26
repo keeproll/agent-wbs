@@ -27,7 +27,8 @@ import {
 } from './model.ts';
 import { WbsTaskDetail } from './detail-slot.tsx';
 import { TaskRail } from './TaskRail.tsx';
-import { TaskWizard } from './TaskWizard.tsx';
+import { TaskWizard, type Draft as WizardDraft } from './TaskWizard.tsx';
+import { useSessionDraft } from '../../shared/state/useSessionDraft.tsx';
 import { WbsGantt } from './WbsGantt.tsx';
 import { WbsTable } from './WbsTable.tsx';
 import { WbsToolbar } from './WbsToolbar.tsx';
@@ -69,6 +70,15 @@ function WbsBody({ projectId }: { projectId: string }) {
   const [cols, setCols] = useState<ReadonlySet<ColKey>>(DEFAULT_COLS);
   const [view, setView] = useState<'table' | 'gantt'>('table');
   const [wizard, setWizard] = useState(false);
+  /** Wizard에 입력한 초안. 로그인이 끊기면(401) 이 탭에 보관했다가 다시 로그인하면 복원을 제안한다(M3-01 useSessionDraft). */
+  const [wizDraft, setWizDraft] = useState<WizardDraft | null>(null);
+  const [restored, setRestored] = useState<WizardDraft | null>(null);
+  const { restoreOffer } = useSessionDraft<WizardDraft>({
+    id: 'wbs:task-create',
+    label: `Task 생성${wizDraft?.title ? ` 「${wizDraft.title}」` : ''}`,
+    value: wizard && wizDraft && (wizDraft.title.trim() || wizDraft.purpose.trim()) ? wizDraft : null,
+    onRestore: (data) => { setRestored(data); setWizDraft(data); setWizard(true); },
+  });
   const [exp, setExp] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const listScroll = useRef<HTMLDivElement>(null);
@@ -185,6 +195,7 @@ function WbsBody({ projectId }: { projectId: string }) {
           </div>
         </div>
       )}
+      {restoreOffer}
       <div className="page-h">
         <div>
           <h1>WBS</h1>
@@ -234,10 +245,13 @@ function WbsBody({ projectId }: { projectId: string }) {
       {wizard && (
         <TaskWizard
           projectId={projectId} nodes={nodes} tasks={tasks} defaultWp={defaultWp}
-          onClose={() => { setWizard(false); }}
+          initial={restored} onDraft={setWizDraft}
+          onClose={() => { setWizard(false); setWizDraft(null); setRestored(null); }}
           onRejected={() => { void invalidateTopics(queryClient, ['task']); }}
           onCreated={(key, title) => {
             setWizard(false);
+            setWizDraft(null);
+            setRestored(null);
             // 새 Task가 속한 Phase·WP는 펼친다(P createTask L6811).
             setCollapsed(new Set());
             void invalidateTopics(queryClient, ['task', 'dependency', 'schedule']);

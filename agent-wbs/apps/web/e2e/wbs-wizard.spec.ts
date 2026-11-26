@@ -3,7 +3,7 @@
  * (시나리오 1의 「상세 명세 작성 → 읽기/편집 전환」은 Task 상세(M3-03)의 작업 명세 탭이다. 여기서는 생성 뒤 그 탭 주소로 여는 것까지 확인한다.)
  */
 import { expect, test, type Page } from '@playwright/test';
-import { errorBody, json } from './support/fake-api.ts';
+import { errorBody, json, SESSION } from './support/fake-api.ts';
 import { wbsApi } from './support/wbs-api.ts';
 import { PROJECT_ID } from './support/wbs-fixture.ts';
 
@@ -169,4 +169,34 @@ test('UAT-WIZ-04 입력 뒤 닫기: 확인창의 취소는 입력 유지, 「생
   // 다시 열면 빈 초안
   await page.locator('.page-h').getByRole('button', { name: 'Task 생성' }).click();
   await expect(w.getByLabel('Task 제목')).toHaveValue('');
+});
+
+test('세션이 끊기면 Wizard 초안을 이 탭에 보관하고, 다시 로그인하면 WBS 화면에서 복원을 제안한다(M3-01 useSessionDraft)', async ({ page }) => {
+  const api = await wbsApi(page);
+  let signedIn = true;
+  api.on('GET /api/session', (route) => (signedIn ? json(route, 200, SESSION) : json(route, 401, errorBody('LEAD_UNAUTHORIZED'))));
+  api.on('POST /api/auth/session', (route) => { signedIn = true; return route.fulfill({ status: 204 }); });
+  api.on(`POST /api/projects/${PROJECT_ID}/tasks`, (route) => { signedIn = false; return json(route, 401, errorBody('LEAD_UNAUTHORIZED')); });
+  await open(page);
+  const w = wiz(page);
+  await w.getByLabel('Task 제목').fill('만료 전에 쓴 Task');
+  await w.getByRole('group', { name: '작업 유형' }).getByRole('button', { name: /분석/ }).click();
+  await w.getByRole('group', { name: '주 기술 영역' }).getByRole('button', { name: /^DB/ }).click();
+  await w.getByRole('button', { name: '다음' }).click();
+  await w.getByLabel('작업 목적').fill('보관할 목적');
+  await w.getByLabel('완료 조건').fill('보관할 완료 조건');
+  await w.getByRole('button', { name: '다음' }).click();
+  await w.getByRole('button', { name: 'Task 생성', exact: true }).click();
+  await expect(page).toHaveURL('/login?next=%2Fwbs');
+  expect(await page.evaluate(() => Object.keys(sessionStorage).filter((k) => k.startsWith('awbs.draft:')))).toEqual(['awbs.draft:wbs:task-create']);
+
+  await page.getByLabel('비밀번호').fill('pw');
+  await page.getByRole('button', { name: '로그인' }).click();
+  await expect(page).toHaveURL('/wbs');
+  const offer = page.getByRole('region', { name: 'Task 생성 「만료 전에 쓴 Task」 — 저장하지 못한 초안' });
+  await offer.getByRole('button', { name: '복원' }).click();
+  await expect(w).toBeVisible();
+  await expect(w.getByLabel('Task 제목')).toHaveValue('만료 전에 쓴 Task');
+  await w.getByRole('button', { name: '다음' }).click();
+  await expect(w.getByLabel('작업 목적')).toHaveValue('보관할 목적');
 });
