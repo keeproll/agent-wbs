@@ -19,6 +19,7 @@ export interface TaskCheckResult {
   pipelineSha: string;
   steps: TaskCheckStep[];
   failStep: string | null;
+  failScope?: 'baseline' | 'task';
   rejectedPaths: RejectedPath[];
   flakyCandidates: string[];
   testReview: {
@@ -68,6 +69,7 @@ export async function runTaskCheck({ repo, worktreeId, branch, heavy, execute, c
     failed.status = 'fail';
     failed.attempts.push(redact({ code: null, stdout: '', stderr: message(error) }));
     result.failStep = name;
+    result.failScope = ['baseline-install', 'test-collection-before'].includes(name) ? 'baseline' : 'task';
     return redact(result);
   };
   try { await repo.taskCheckPath(worktreeId, headSha); step('worktree').status = 'pass'; }
@@ -76,7 +78,7 @@ export async function runTaskCheck({ repo, worktreeId, branch, heavy, execute, c
   result.rejectedPaths = await repo.checkTask(baseSha, headSha);
   step('protected-paths').durationMs = Math.max(0, Math.round(performance.now() - guardStarted));
   step('protected-paths').status = result.rejectedPaths.length ? 'fail' : 'pass';
-  if (result.rejectedPaths.length) { result.failStep = 'protected-paths'; return redact(result); }
+  if (result.rejectedPaths.length) { result.failStep = 'protected-paths'; result.failScope = 'task'; return redact(result); }
 
   const release = await heavy.acquire(`ci-task:${worktreeId}`, signal);
   const checkouts: string[] = [];
@@ -110,7 +112,10 @@ export async function runTaskCheck({ repo, worktreeId, branch, heavy, execute, c
       if (output.code === null) break;
     }
     current.durationMs = Math.max(0, Math.round(performance.now() - started));
-    if (current.status === 'fail') result.failStep = name;
+    if (current.status === 'fail') {
+      result.failStep = name;
+      result.failScope = name === 'baseline-install' ? 'baseline' : 'task';
+    }
     return current.status === 'pass';
   };
   const collect = async (phase: 'before' | 'after', snapshot: Snapshot): Promise<boolean> => {
@@ -142,8 +147,9 @@ export async function runTaskCheck({ repo, worktreeId, branch, heavy, execute, c
     const baseline = await checkout(baselineSha);
     if (!await command('baseline-install', install.argv, baseline) || !await collect('before', baseline)) return redact(result);
     preparing = 'install';
-    const target = await checkout(headSha);
-    if (!await command('install', install.argv, target) || !await collect('after', target)) return redact(result);
+    const target = baselineSha === headSha ? baseline : await checkout(headSha);
+    if (baselineSha !== headSha && !await command('install', install.argv, target)) return redact(result);
+    if (!await collect('after', target)) return redact(result);
     const collection = result.testReview.collection;
     const before = new Set(collection.before);
     const after = new Set(collection.after);
