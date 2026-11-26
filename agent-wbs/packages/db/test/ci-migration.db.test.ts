@@ -27,12 +27,20 @@ test('리뷰 R skip: 0040 적용 뒤 더 작은 when의 마이그레이션을 �
       alter table merge_queue add column head_sync jsonb;
       alter table merge_queue add column merge_parents jsonb;`;
     await pool.query(oldCi);
+    const project = ((await pool.query("insert into projects(name,repo_url,repo_owner,repo_name,lead_instruction,phase) values('이전 CI','','','','','active') returning id")).rows[0] as { id: string }).id;
+    await pool.query(`insert into ci_runs(project_id,run_key,stage,pipeline_sha,ref,trigger,status,created_at)
+      values($1,'a-old',3,$2,'main','night','pass','2026-01-01'),($1,'z-new',3,$2,'main','night','fail','2026-02-01')`,[project,'a'.repeat(40)]);
+    // 물리 저장 순서가 달라도 마이그레이션 전의 시간 순서를 보존해야 한다.
+    await pool.query('create index review_ci_physical on ci_runs(run_key desc)');
+    await pool.query('cluster ci_runs using review_ci_physical');
+    await pool.query('drop index review_ci_physical');
     await pool.query('insert into drizzle.__drizzle_migrations(hash,created_at) values($1,$2)',[createHash('sha256').update(oldCi).digest('hex'),1795740000040]);
     journal.entries.push({ ...ci,tag:'0026_20261127_late_worker',when:1795740000005 });
     journal.entries.push({ ...ci,idx:ci.idx+1 });
     await writeFile(join(folder,'0026_20261127_late_worker.sql'),'CREATE TABLE public.review_late_worker(id integer);');
     await writeFile(path,JSON.stringify(journal));
     await expect(runMigrations(pool,folder)).rejects.toThrow('적용되지 않은 마이그레이션');
+    expect((await pool.query('select run_key from ci_runs order by run_no')).rows).toEqual([{ run_key:'a-old' },{ run_key:'z-new' }]);
     expect((await pool.query("select to_regclass('public.review_late_worker') name")).rows).toEqual([{ name:null }]);
     await runMigrations(fresh,folder);
     expect((await fresh.query("select to_regclass('public.review_late_worker') name")).rows).toEqual([{ name:'review_late_worker' }]);

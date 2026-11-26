@@ -13,9 +13,20 @@ ALTER TABLE public.merge_queue ADD COLUMN IF NOT EXISTS merge_parents jsonb;
 -- 번호는 벽시계가 뒤로 가도 새 ① 검사와 대기열을 구분한다.
 ALTER TABLE public.ci_runs ADD COLUMN run_no bigserial NOT NULL;
 --> statement-breakpoint
+-- 과거 행은 기존 선택 순서를 보존하고, 새 행부터 증가 번호를 사용한다.
+WITH ordered AS (SELECT id,row_number() OVER (ORDER BY created_at,id) n FROM public.ci_runs)
+UPDATE public.ci_runs c SET run_no=o.n FROM ordered o WHERE o.id=c.id;
+--> statement-breakpoint
+SELECT setval('public.ci_runs_run_no_seq',coalesce((SELECT max(run_no) FROM public.ci_runs),1),EXISTS(SELECT 1 FROM public.ci_runs));
+--> statement-breakpoint
 ALTER TABLE public.ci_runs ADD CONSTRAINT ci_runs_run_no_unique UNIQUE(run_no);
 --> statement-breakpoint
 ALTER TABLE public.merge_queue ADD COLUMN queue_no bigserial NOT NULL;
+--> statement-breakpoint
+WITH ordered AS (SELECT id,row_number() OVER (ORDER BY created_at,id) n FROM public.merge_queue)
+UPDATE public.merge_queue q SET queue_no=o.n FROM ordered o WHERE o.id=q.id;
+--> statement-breakpoint
+SELECT setval('public.merge_queue_queue_no_seq',coalesce((SELECT max(queue_no) FROM public.merge_queue),1),EXISTS(SELECT 1 FROM public.merge_queue));
 --> statement-breakpoint
 ALTER TABLE public.merge_queue ADD CONSTRAINT merge_queue_queue_no_unique UNIQUE(queue_no);
 --> statement-breakpoint
