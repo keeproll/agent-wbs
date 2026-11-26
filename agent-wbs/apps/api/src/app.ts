@@ -4,11 +4,14 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyServerOpt
 import { randomUUID } from 'node:crypto';
 import { platformErrorBody } from './platform/errors.ts';
 import { installSecurity, type SecurityOptions } from './platform/security.ts';
+import { registerProjectRoutes } from './project/routes.ts';
 
 export function buildApp(pool: Pool, logger: FastifyServerOptions['logger'] = false,
   security: SecurityOptions = { origin: 'http://127.0.0.1:3100', lan: false }): FastifyInstance {
   const app = Fastify({
     logger,
+    // 계약에 없는 필드는 지우지 않고 400으로 거부한다(M2-05와 같은 설정).
+    ajv: { customOptions: { removeAdditional: false } },
     clientErrorHandler: (error, socket) => {
       app.log.warn({ err: error }, 'client error');
       if (!socket.writable) return;
@@ -20,6 +23,7 @@ export function buildApp(pool: Pool, logger: FastifyServerOptions['logger'] = fa
     },
   });
   installSecurity(app, pool, security);
+  registerProjectRoutes(app, pool);
 
   app.get('/health', (): HealthResponse => ({ status: 'ok' }));
 
