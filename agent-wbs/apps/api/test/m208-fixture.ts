@@ -88,8 +88,8 @@ export async function attemptFor(owner: Pool, project: string, task: string, inp
   const no = input.no ?? 1;
   return (await owner.query<{ id: string }>(
     `insert into task_attempts(project_id,task,attempt_key,attempt_no,job,base_sha,head_sha,spec_revision,kind,agent,status,started_at,ended_at,model_id,effort)
-     values($1,$2,$3,$4,$5,'base','head',1,$6,$7,$8,now(),$9,$10,$11) returning id`,
+     values($1,$2,$3,$4,$5,'base','head',1,$6,$7,$8,now(),case when $9 then null else now() end,$10,$11) returning id`,
     [project, task, `ATT-${String(no)}-${crypto.randomUUID().slice(0, 4)}`, no, job, input.kind ?? 'dev', input.agent ?? 'Claude', status,
-      status === 'running' ? null : new Date().toISOString(), input.modelId ?? 'claude-opus-5-5', input.effort ?? 'high'],
+      status === 'running', input.modelId ?? 'claude-opus-5-5', input.effort ?? 'high'],
   )).rows[0]?.id as string;
 }
