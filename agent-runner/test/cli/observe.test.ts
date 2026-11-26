@@ -53,8 +53,12 @@ describe('SubagentObserver — 관측만, 추정·반환 근거 아님(G §6.7)'
     expect(o.snapshot().observed).toBe(0);
   });
 
-  test('전경 하위 Agent는 도구 결과로 끝난 것으로 본다', () => {
-    expect(run([call('a'), toolResult('a'), result]).snapshot().observed).toBe(0);
+  test('시작이 증명된 전경 하위 Agent는 도구 결과로 끝난 것으로 본다', () => {
+    expect(run([call('a'), started('a', false), toolResult('a'), result]).snapshot()).toMatchObject({ observed: 0, state: 'ok' });
+  });
+
+  test('시작 보고 없는 호출의 도구 결과는 전경인지 모르므로 수를 두고 미확인(재리뷰 3)', () => {
+    expect(run([call('a'), toolResult('a'), result]).snapshot()).toMatchObject({ observed: 1, state: 'unconfirmed' });
   });
 
   test('ID 없는 생성은 미확인', () => {

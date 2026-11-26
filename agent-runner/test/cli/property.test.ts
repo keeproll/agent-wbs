@@ -33,11 +33,14 @@ function build(s: Scenario): { base: Line[]; currentStartAt: number; n: number }
   const base: Line[] = [];
   s.past.forEach((r, i) => {
     const k = i + 1;
-    base.push(call(k), start(k, r.bg), !r.bg && r.byResult ? result(k) : done(k));
+    // 배경 실행은 시작 직후 「시작됨」 도구 결과가 온다(완료가 아님, fixtures/claude/background.jsonl). 끝은 완료 알림뿐이다.
+    if (r.bg) base.push(call(k), start(k, true), result(k), done(k));
+    else base.push(call(k), start(k, false), r.byResult ? result(k) : done(k));
   });
   const n = s.past.length + 1;
   base.push(call(n));
   const currentStartAt = base.push(start(n, s.current.bg)) - 1;
+  if (s.current.bg) base.push(result(n)); // 배경 「시작됨」 결과
   if (s.current.end === 'done') base.push(done(n));
   if (s.current.end === 'result' && !s.current.bg) base.push(result(n));
   base.push(OK);
@@ -120,6 +123,106 @@ describe('property: 지나간 run의 메시지는 현재 상태를 바꾸지 않
       mixed.push(...calls.slice(c), OK);
       const got = run(mixed);
       if (got.state === 'ok') expect(got.observed).toBeGreaterThanOrEqual(truth);
+    }), { numRuns: 1000 });
+  });
+});
+
+// ── 재리뷰 3: launch 경계·배경 도구 결과·이전 launch 완료까지 넣은 무작위 입력 ──
+// 기대값을 구현에서 구하지 않는다. 입력열만 보고 「줄여도 되는 근거」를 따로 계산하는 판정기(oracle)와 비교한다.
+type Ev =
+  | { k: 'call'; c: string }
+  | { k: 'start'; t: string; c?: string | undefined; r?: string | undefined; bg: boolean }
+  | { k: 'update'; t: string; r?: string | undefined; bg?: boolean | undefined; status?: string | undefined }
+  | { k: 'notify'; t: string; c?: string | undefined; r?: string | undefined; status: string }
+  | { k: 'result'; c: string }
+  | { k: 'launch' }
+  | { k: 'ok' };
+
+const C = fc.constantFrom('c1', 'c2', 'c3');
+const T = fc.constantFrom('t1', 't2');
+const R = fc.option(fc.constantFrom('r1', 'r2'), { nil: undefined });
+const STATUS = fc.constantFrom('completed', 'failed', 'stopped', 'running', 'weird');
+const ev: fc.Arbitrary<Ev> = fc.oneof(
+  { arbitrary: C.map((c) => ({ k: 'call' as const, c })), weight: 3 },
+  { arbitrary: fc.record({ t: T, c: fc.option(C, { nil: undefined }), r: R, bg: fc.boolean() }, { requiredKeys: ['t', 'bg'] }).map((x) => ({ k: 'start' as const, ...x })), weight: 3 },
+  { arbitrary: fc.record({ t: T, r: R, bg: fc.option(fc.boolean(), { nil: undefined }), status: fc.option(STATUS, { nil: undefined }) }, { requiredKeys: ['t'] }).map((x) => ({ k: 'update' as const, ...x })), weight: 2 },
+  { arbitrary: fc.record({ t: T, c: fc.option(C, { nil: undefined }), r: R, status: STATUS }, { requiredKeys: ['t', 'status'] }).map((x) => ({ k: 'notify' as const, ...x })), weight: 2 },
+  { arbitrary: C.map((c) => ({ k: 'result' as const, c })), weight: 3 },
+  { arbitrary: fc.constant({ k: 'launch' as const }), weight: 1 },
+  { arbitrary: fc.constant({ k: 'ok' as const }), weight: 1 },
+);
+
+const opt = (o: Record<string, unknown>) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined));
+function toLine(e: Exclude<Ev, { k: 'launch' }>): Line {
+  switch (e.k) {
+    case 'call': return { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Agent', id: e.c, input: {} }] } };
+    case 'start': return opt({ type: 'system', subtype: 'task_started', task_id: e.t, task_type: 'local_agent', tool_use_id: e.c, run_id: e.r, is_backgrounded: e.bg });
+    case 'update': return opt({ type: 'system', subtype: 'task_updated', task_id: e.t, run_id: e.r, patch: opt({ is_backgrounded: e.bg, status: e.status }) });
+    case 'notify': return opt({ type: 'system', subtype: 'task_notification', task_id: e.t, tool_use_id: e.c, run_id: e.r, status: e.status });
+    case 'result': return { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: e.c, content: 'ok' }] } };
+    case 'ok': return OK;
+  }
+}
+
+describe('property: 증명되지 않은 이벤트는 어떤 수도 줄이지 않는다(launch 경계 포함)', () => {
+  test('수가 줄거나 Agent가 빠지는 단계에는 현재 launch 안의 시작 증명이 있다, ended는 이번 launch의 result만 본다', () => {
+    fc.assert(fc.property(fc.array(ev, { maxLength: 30 }), (events) => {
+      const p = createClaudeParser();
+      const o = new SubagentObserver();
+      // 판정기 상태: 이번 launch에서 본 호출, 그 호출에 묶인 시작이 있었던 task·호출
+      let calls = new Set<string>();
+      let provenTasks = new Set<string>();
+      let provenCalls = new Set<string>();
+      let okSeen = false;
+      for (const e of events) {
+        const before = o.snapshot();
+        if (e.k === 'launch') o.launch();
+        else for (const x of p(toLine(e))) o.apply(x);
+        const after = o.snapshot();
+        const lost = before.active.filter((id) => !after.active.includes(id));
+        if (after.observed < before.observed || lost.length > 0) {
+          const justified =
+            (e.k === 'start' && e.c !== undefined && calls.has(e.c)) ||
+            (e.k === 'result' && provenCalls.has(e.c)) ||
+            ((e.k === 'update' || e.k === 'notify') && provenTasks.has(e.t));
+          expect(justified, `근거 없이 줄어듦: ${JSON.stringify(e)} ${JSON.stringify(before)} → ${JSON.stringify(after)}`).toBe(true);
+        }
+        if (e.k === 'launch') {
+          calls = new Set();
+          provenTasks = new Set();
+          provenCalls = new Set();
+          okSeen = false;
+        }
+        if (e.k === 'call') calls.add(e.c);
+        if (e.k === 'start' && e.c !== undefined && calls.has(e.c)) {
+          provenTasks.add(e.t);
+          provenCalls.add(e.c);
+        }
+        if (e.k === 'ok') okSeen = true;
+        expect(after.ended).toBe(okSeen);
+      }
+      const before = o.snapshot();
+      o.finish();
+      const end = o.snapshot();
+      expect(end.observed).toBe(before.observed);
+      if (!okSeen) expect(end.state).toBe('unconfirmed');
+    }), { numRuns: 3000 });
+  });
+
+  test('launch는 수를 줄이지 않고, 이전 launch의 Agent가 남아 있으면 미확인이다', () => {
+    fc.assert(fc.property(fc.array(ev, { maxLength: 20 }), (events) => {
+      const p = createClaudeParser();
+      const o = new SubagentObserver();
+      for (const e of events) {
+        if (e.k === 'launch') continue;
+        for (const x of p(toLine(e))) o.apply(x);
+      }
+      const before = o.snapshot();
+      o.launch();
+      const after = o.snapshot();
+      expect(after.active).toEqual(before.active);
+      if (before.observed > 0) expect(after.state).toBe('unconfirmed');
+      expect(after.ended).toBe(false);
     }), { numRuns: 1000 });
   });
 });
