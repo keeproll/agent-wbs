@@ -66,11 +66,10 @@ function SpecLinesEditor({ task: t, sec, title }: { task: TaskDetailData; sec: S
   const save = useTaskSave(t.taskKey, {
     target: `${t.taskKey} 작업 명세 「${title}」 저장`,
     mine: `${title}: ${String(toLines(text).length)}항목`,
-    run: ({ updatedAt }) => client.call('updateTaskSpec', {
+    request: () => ({ lines: toLines(text), overview: t.spec.overview, spec: t.spec.spec }),
+    run: ({ updatedAt, payload: p }) => client.call('updateTaskSpec', {
       params: { taskKey: t.taskKey },
-      body: sec === '__out'
-        ? { updatedAt, overview: { ...t.spec.overview, out: toLines(text) } }
-        : { updatedAt, spec: { ...t.spec.spec, [sec]: toLines(text) } },
+      body: sec === '__out' ? { updatedAt, overview: { ...p.overview, out: p.lines } } : { updatedAt, spec: { ...p.spec, [sec]: p.lines } },
     }),
     onSuccess: () => { slot.close(); },
     onReload: () => { slot.close(); },
@@ -106,9 +105,10 @@ function SpecTableEditor({ task: t, which }: { task: TaskDetailData; which: 'ac'
   const save = useTaskSave(t.taskKey, {
     target: `${t.taskKey} ${block.l} 저장`,
     mine: `${block.l}: ${String(value().length)}항목`,
-    run: ({ updatedAt }) => (which === 'ac'
-      ? client.call('updateTaskSpec', { params: { taskKey: t.taskKey }, body: { updatedAt, ac: value().map((r) => ({ given: String(r.given ?? ''), when: String(r.when ?? ''), then: String(r.then ?? ''), method: String(r.method ?? '') })) } })
-      : client.call('updateTaskOutputs', { params: { taskKey: t.taskKey }, body: { updatedAt, outputs: value().map((r) => ({ name: String(r.name ?? ''), kind: String(r.kind ?? ''), required: r.required === true, verify: String(r.verify ?? ''), delivered: r.delivered === true })) } })),
+    request: () => value(),
+    run: ({ updatedAt, payload: rows }) => (which === 'ac'
+      ? client.call('updateTaskSpec', { params: { taskKey: t.taskKey }, body: { updatedAt, ac: rows.map((r) => ({ given: String(r.given ?? ''), when: String(r.when ?? ''), then: String(r.then ?? ''), method: String(r.method ?? '') })) } })
+      : client.call('updateTaskOutputs', { params: { taskKey: t.taskKey }, body: { updatedAt, outputs: rows.map((r) => ({ name: String(r.name ?? ''), kind: String(r.kind ?? ''), required: r.required === true, verify: String(r.verify ?? ''), delivered: r.delivered === true })) } })),
     onSuccess: () => { slot.close(); },
     onReload: () => { slot.close(); },
     successNotice: `「${block.l}」을(를) 저장했습니다.${which === 'outputs' ? ' Completion Gate가 다시 계산되었습니다.' : ''}`,

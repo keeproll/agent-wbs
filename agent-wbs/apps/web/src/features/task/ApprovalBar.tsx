@@ -38,7 +38,8 @@ export function ApprovalBar({ task }: { task: TaskDetailData }) {
   });
   const reject = useTaskSave(task.taskKey, {
     target: `${task.taskKey} 착수 반려`, failTitle: '착수 반려하지 못했습니다',
-    run: ({ idempotencyKey, updatedAt }) => client.call(REJECT, { params, body: { updatedAt, ...(reason.trim() ? { comment: reason.trim() } : {}) }, idempotencyKey }),
+    request: () => reason.trim(),
+    run: ({ idempotencyKey, updatedAt, payload }) => client.call(REJECT, { params, body: { updatedAt, ...(payload ? { comment: payload } : {}) }, idempotencyKey }),
     onSuccess: () => { setRejecting(false); setReason(''); },
     successNotice: `${task.taskKey} 착수를 반려했습니다. 계획 중 상태로 돌아갔습니다.`,
   });

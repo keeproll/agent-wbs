@@ -42,18 +42,20 @@ export function DepsTab({ task: t, tasks, byKey, blocked, onOpenTask }: {
     target: `${t.taskKey} 선행 Task 추가`,
     failTitle: '선행 관계를 저장하지 못했습니다',
     mine: `선행 ${pick} (${type})`,
-    run: ({ idempotencyKey, updatedAt }) => client.call('addDependency', { params: { taskKey: t.taskKey }, body: { updatedAt, predTaskKey: pickRef.current, depType: type }, idempotencyKey }),
+    request: () => ({ pred: pickRef.current, type }),
+    run: ({ idempotencyKey, updatedAt, payload }) => client.call('addDependency', { params: { taskKey: t.taskKey }, body: { updatedAt, predTaskKey: payload.pred, depType: payload.type }, idempotencyKey }),
     onSuccess: () => { setBlockErr(null); setQ(''); slot.close(); },
     onRejected: (error: ApiError) => {
       const path = (error.body?.error.details as { path?: string[] } | undefined)?.path;
       setBlockErr({ t: error.body?.error.message ?? error.code, path: path?.length ? path.join(' → ') : '' });
     },
-    notice: () => `선행 관계 ${pickRef.current} → ${t.taskKey}를 추가했습니다.`,
+    notice: (p) => `선행 관계 ${p.pred} → ${t.taskKey}를 추가했습니다.`,
   });
   const remove = useTaskSave(t.taskKey, {
     target: `${t.taskKey} 선행 관계 삭제`,
-    run: ({ updatedAt }) => client.call('deleteDependency', { params: { dependencyId: removingRef.current?.id ?? '' }, query: { updatedAt } }),
-    notice: () => `선행 관계 ${removingRef.current?.pred ?? ''} → ${t.taskKey}를 삭제했습니다.`,
+    request: () => removingRef.current ?? { id: '', pred: '' },
+    run: ({ updatedAt, payload }) => client.call('deleteDependency', { params: { dependencyId: payload.id }, query: { updatedAt } }),
+    notice: (p) => `선행 관계 ${p.pred} → ${t.taskKey}를 삭제했습니다.`,
   });
   const isDone = String(t.lifecycleStatus) === 'done';
   return (

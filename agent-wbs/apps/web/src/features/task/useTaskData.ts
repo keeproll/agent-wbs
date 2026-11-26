@@ -6,7 +6,7 @@
  *   왜: 같은 화면에서 저장을 연달아 하면 앞 저장이 버전을 올리므로, 화면을 그릴 때의 값이 아니라 지금 값이 필요하다.
  */
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
 import { useApi } from '../../shared/api/ApiProvider.tsx';
 import { apiKey, useApiQuery, type ChangeTopic } from '../../shared/api/queries.ts';
 import type { ResponseOf } from '../../shared/api/contract.ts';
@@ -32,40 +32,71 @@ export function useTaskData(taskKey: string, projectId: string) {
 
 export type TaskChanged = ResponseOf<'updateTask'>;
 
-/**
- * Task 하나를 바꾸는 저장. useSave의 규칙(버튼 「…중」·오류 막대·400·409 충돌 창)을 그대로 받는다.
- * - run에는 최신 updatedAt이 들어온다.
- * - 성공하면 Task 캐시를 응답으로 바꾸고 Gate·이력·목록을 다시 읽는다.
- * - 충돌 창 「최신 불러오기」는 편집을 닫고(onReload) 최신을 읽는다. 「다시 적용」은 최신을 읽은 뒤 같은 저장을 다시 한다.
- */
-export function useTaskSave<T>(taskKey: string, options: Omit<SaveOptions<T>, 'run' | 'onConflictReload' | 'onConflictReapply'> & {
-  run: (ctx: { idempotencyKey: string; updatedAt: string }) => Promise<T>;
+export interface TaskSaveOptions<T, P> {
+  target: string;
+  failTitle?: string;
+  /** 충돌 창의 「내 변경」 설명 */
+  mine?: string;
+  successNotice?: string;
+  /** 성공 안내를 요청 내용으로 만든다(누른 순간의 값이 문구에 들어갈 때). */
+  notice?: (payload: P) => string;
+  /** 누른 순간의 요청 내용(입력 복사). 재시도는 이 값과 같은 키·버전으로 다시 보낸다(M3-01 useSave 규칙). */
+  request?: () => P;
+  /** 요청을 보낸다. 화면 상태를 읽지 말고 payload·updatedAt만 쓴다. */
+  run: (ctx: { idempotencyKey: string; updatedAt: string; payload: P }) => Promise<T>;
+  onSuccess?: (result: T, payload: P) => void;
+  /** 충돌 창 「최신 내용 불러오기」를 고르면 편집을 닫는다. */
   onReload?: () => void;
-  /** 성공 안내 문구를 성공한 순간에 만든다. 누른 순간의 값(ref)으로 문구를 만들어야 할 때 쓴다. */
-  notice?: () => string;
-}) {
-  const notify = useNotice();
+  onRejected?: SaveOptions<T, P>['onRejected'];
+  onFieldErrors?: SaveOptions<T, P>['onFieldErrors'];
+}
+
+/**
+ * Task 하나를 바꾸는 저장. shared useSave의 규칙(버튼 「…중」·오류 막대·400·409 충돌 창·같은 키 재시도)을 그대로 받는다.
+ * - 버전(updatedAt)은 누른 순간 캐시의 최신 값을 요청 내용과 함께 찍는다. 재시도도 같은 버전으로 보낸다.
+ * - 성공하면 Task 캐시를 응답으로 바꾸고 Gate·이력·목록을 다시 읽는다.
+ * - 충돌 창 「다시 적용」은 최신 Task를 읽은 뒤 같은 요청 내용을 새 버전으로 다시 보낸다. 실패하면 오류를 던져 창 안에 보인다.
+ */
+export function useTaskSave<T, P = undefined>(taskKey: string, options: TaskSaveOptions<T, P>) {
   const queryClient = useQueryClient();
+  const client = useApi().client;
+  const notify = useNotice();
   const key = apiKey('getTask', { params: { taskKey } });
   const latest = () => (queryClient.getQueryData<ResponseOf<'getTask'>>(key))?.updatedAt ?? '';
   const refresh = useRefresh(taskKey);
-  const saveRef = useRef<() => Promise<boolean>>(async () => false);
-  const handle = useSave<T>({
-    ...options,
-    run: ({ idempotencyKey }) => options.run({ idempotencyKey, updatedAt: latest() }),
-    onSuccess: (result) => {
-      const changed = result as { task?: ResponseOf<'getTask'> } | undefined;
-      if (changed?.task) queryClient.setQueryData(key, changed.task);
-      void refresh(false);
-      options.onSuccess?.(result);
-      if (options.notice) notify(options.notice());
+  const last = useRef<{ updatedAt: string; data: P } | null>(null);
+  const done = useStableCallback((result: T, payload: P) => {
+    const changed = result as { task?: ResponseOf<'getTask'> } | undefined;
+    if (changed?.task) queryClient.setQueryData(key, changed.task);
+    void refresh(false);
+    options.onSuccess?.(result, payload);
+    if (options.notice) notify(options.notice(payload));
+  });
+  return useSave<T, { updatedAt: string; data: P }>({
+    target: options.target,
+    ...(options.failTitle ? { failTitle: options.failTitle } : {}),
+    ...(options.mine ? { mine: options.mine } : {}),
+    ...(options.successNotice ? { successNotice: options.successNotice } : {}),
+    ...(options.onFieldErrors ? { onFieldErrors: options.onFieldErrors } : {}),
+    request: () => {
+      const payload = { updatedAt: latest(), data: (options.request ? options.request() : undefined) as P };
+      last.current = payload;
+      return payload;
     },
+    run: ({ idempotencyKey, payload }) => options.run({ idempotencyKey, updatedAt: payload.updatedAt, payload: payload.data }),
+    onSuccess: (result) => { done(result, last.current?.data as P); },
     onRejected: (error) => { void refresh(true); options.onRejected?.(error); },
     onConflictReload: () => { options.onReload?.(); void refresh(true); },
-    onConflictReapply: async () => { await refresh(true); await saveRef.current(); },
+    onConflictReapply: async () => {
+      // 최신 버전을 직접 읽는다(실패하면 ApiError가 그대로 던져져 충돌 창이 이유를 보인다).
+      const fresh = await queryClient.fetchQuery({ queryKey: key, queryFn: ({ signal }) => client.call('getTask', { params: { taskKey }, signal }), staleTime: 0 });
+      const data = last.current?.data as P;
+      last.current = { updatedAt: fresh.updatedAt, data };
+      const result = await options.run({ idempotencyKey: crypto.randomUUID(), updatedAt: fresh.updatedAt, payload: data });
+      done(result, data);
+      if (options.successNotice) notify(options.successNotice);
+    },
   });
-  useEffect(() => { saveRef.current = handle.save; });
-  return handle;
 }
 
 /** 이 Task와 관련된 데이터를 다시 읽는다. withTask=false면 Task 본문은 응답으로 이미 바꿨으니 건너뛴다. */

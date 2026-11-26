@@ -122,8 +122,9 @@ function OverviewForm({ task: t }: { task: TaskDetailData }) {
   const body = diff.filter((k) => !head.includes(k));
   const save = useTaskSave(t.taskKey, {
     target: `${t.taskKey} 개요 저장`,
-    mine: diff.map((k) => `${L[k]}: ${short(d[k])}`).join(' · '),
-    run: async ({ updatedAt }) => {
+    mine: `${t.taskKey} ${diff.map((k) => `${L[k]}: ${short(d[k])}`).join(' · ')}`,
+    request: () => ({ d, head, body }),
+    run: async ({ updatedAt, payload: { d, head, body } }) => {
       let version = updatedAt;
       let last: ResponseOf<'updateTask'> | null = null;
       if (head.length) {
@@ -200,16 +201,18 @@ function GradeSection({ task: t, attempts }: { task: TaskDetailData; attempts: A
   const lock = useTaskSave(t.taskKey, {
     target: `${t.taskKey} 실행 등급 저장 · 고정`,
     mine: edit ? `${ROLE_LABEL[edit.role]} 등급 ${gradeL({ modelId: edit.model, effort: edit.effort })}` : '',
-    run: ({ updatedAt }) => client.call('lockTaskGrade', { params: { taskKey: t.taskKey }, body: { updatedAt, role: edit?.role ?? 'dev', modelId: edit?.model ?? '', effort: edit?.effort ?? '' } }),
+    request: () => edit ?? { role: 'dev' as const, model: '', effort: '' },
+    run: ({ updatedAt, payload: e }) => client.call('lockTaskGrade', { params: { taskKey: t.taskKey }, body: { updatedAt, role: e.role, modelId: e.model, effort: e.effort } }),
     onSuccess: () => { setEdit(null); slot.close(); },
     onReload: () => { setEdit(null); slot.close(); },
-    successNotice: `${t.taskKey} ${edit ? ROLE_LABEL[edit.role] : ''} 등급을 고정했습니다. 등급이 바뀌면 작업량을 재추정하고 일정을 자동 재조정합니다.`,
+    notice: (e) => `${t.taskKey} ${ROLE_LABEL[e.role]} 등급을 고정했습니다. 등급이 바뀌면 작업량을 재추정하고 일정을 자동 재조정합니다.`,
   });
   const [unlockRole, setUnlockRole] = useState<'dev' | 'qa'>('dev');
   const unlock = useTaskSave(t.taskKey, {
     target: `${t.taskKey} 실행 등급 고정 해제`,
-    run: ({ updatedAt }) => client.call('unlockTaskGrade', { params: { taskKey: t.taskKey }, query: { updatedAt, role: unlockRole } }),
-    successNotice: `${t.taskKey} ${ROLE_LABEL[unlockRole]} 등급 고정을 해제했습니다. Planning Agent 판단으로 돌아갑니다.`,
+    request: () => unlockRole,
+    run: ({ updatedAt, payload: role }) => client.call('unlockTaskGrade', { params: { taskKey: t.taskKey }, query: { updatedAt, role } }),
+    notice: (role) => `${t.taskKey} ${ROLE_LABEL[role]} 등급 고정을 해제했습니다. Planning Agent 판단으로 돌아갑니다.`,
   });
   useEffect(() => { if (edit) slot.setDirty(true); }, [edit, slot]);
   const floors = policy.data?.floors;
@@ -304,7 +307,8 @@ function SplitSection({ task: t }: { task: TaskDetailData }) {
   });
   const record = useTaskSave(t.taskKey, {
     target: `${t.taskKey} 분할 예외 사유 기록`,
-    run: ({ idempotencyKey, updatedAt }) => client.call('addSplitException', { params: { taskKey: t.taskKey }, body: { updatedAt, rule: (exc?.rule ?? 'one') as 'one', why: exc?.why.trim() ?? '' }, idempotencyKey }),
+    request: () => ({ rule: exc?.rule ?? 'one', why: exc?.why.trim() ?? '' }),
+    run: ({ idempotencyKey, updatedAt, payload }) => client.call('addSplitException', { params: { taskKey: t.taskKey }, body: { updatedAt, rule: payload.rule as 'one', why: payload.why }, idempotencyKey }),
     onSuccess: () => { setExc(null); },
     successNotice: '분할 기준 예외 사유를 기록했습니다.',
   });

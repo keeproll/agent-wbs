@@ -25,14 +25,16 @@ export function ChecklistTab({ task: t }: { task: TaskDetailData }) {
   const toggle = useTaskSave(t.taskKey, {
     target: `${t.taskKey} 체크리스트 완료 표시`,
     mine,
-    run: ({ updatedAt }) => client.call('updateChecklistItem', { params: { taskKey: t.taskKey, itemKey: toggling.current?.key ?? '' }, body: { updatedAt, done: toggling.current?.done ?? false } }),
+    request: () => toggling.current ?? { key: '', done: false },
+    run: ({ updatedAt, payload: x }) => client.call('updateChecklistItem', { params: { taskKey: t.taskKey, itemKey: x.key }, body: { updatedAt, done: x.done } }),
     onSuccess: () => { setBusyKey(null); },
     onRejected: () => { setBusyKey(null); },
   });
   const add = useTaskSave(t.taskKey, {
     target: `${t.taskKey} 체크리스트 항목 추가`,
     mine: `항목 추가: ${text.trim()}`,
-    run: ({ idempotencyKey, updatedAt }) => client.call('addChecklistItem', { params: { taskKey: t.taskKey }, body: { updatedAt, content: text.trim(), required: req, ...(method.trim() ? { verifyMethod: method.trim() } : {}) }, idempotencyKey }),
+    request: () => ({ content: text.trim(), required: req, method: method.trim() }),
+    run: ({ idempotencyKey, updatedAt, payload: x }) => client.call('addChecklistItem', { params: { taskKey: t.taskKey }, body: { updatedAt, content: x.content, required: x.required, ...(x.method ? { verifyMethod: x.method } : {}) }, idempotencyKey }),
     onSuccess: () => { setText(''); setMethod(''); },
     successNotice: '체크리스트 항목을 추가했습니다.',
   });

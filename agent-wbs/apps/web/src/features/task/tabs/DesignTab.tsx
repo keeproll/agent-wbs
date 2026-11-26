@@ -65,10 +65,11 @@ export function DesignTab({ task: t, tasks }: { task: TaskDetailData; tasks: Tas
   const write = useTaskSave(t.taskKey, {
     target: `${t.taskKey} 기술 설계 저장`,
     mine: pending?.mine ?? '',
-    run: ({ updatedAt }) => client.call('updateTaskDesign', { params: { taskKey: t.taskKey, kind: pendingRef.current?.kind ?? 'DB' }, body: { updatedAt, content: (pendingRef.current?.content ?? {}) as Record<string, unknown> } }),
+    request: () => pendingRef.current ?? { kind: 'DB' as DesignKind, content: {}, notice: '', mine: '' },
+    run: ({ updatedAt, payload: p }) => client.call('updateTaskDesign', { params: { taskKey: t.taskKey, kind: p.kind }, body: { updatedAt, content: p.content as Record<string, unknown> } }),
     onSuccess: () => { setEd(null); slot.close(); },
     onReload: () => { setEd(null); slot.close(); },
-    notice: () => pendingRef.current?.notice ?? '기술 설계를 저장했습니다.',
+    notice: (p) => p.notice,
   });
   // 저장 요청은 누른 순간의 값을 보내야 해서 ref에도 둔다(상태는 다음 렌더에야 바뀐다).
   const pendingRef = useRef<typeof pending>(null);

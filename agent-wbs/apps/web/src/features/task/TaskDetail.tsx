@@ -11,6 +11,7 @@ import { BusyButton } from '../../shared/ui/BusyButton.tsx';
 import { AreaLoading } from '../../shared/ui/loading.tsx';
 import { useConfirm } from '../../shared/ui/feedback.tsx';
 import { useEditGuard } from '../../shared/state/useEditGuard.ts';
+import { useRefreshError } from '../../shared/layout/MenuScreen.tsx';
 import { EditSlotContext, type EditSlot } from './edit-slot.tsx';
 import {
   agCls, agInit, GATE_LABEL, GATE_ORDER, priorityOf, SPEC_GROUPS, statusOf, TYPE_LABEL, VERIF, type TaskDetailData, type TaskSummaryData,
@@ -71,6 +72,8 @@ export function specFilled(t: TaskDetailData): { filled: number; total: number }
 
 export function TaskDetail({ taskKey, projectId, tab, onTab, nav, onOpenTask }: TaskDetailProps) {
   const data = useTaskData(taskKey, projectId);
+  // 이미 보인 상세가 자동 갱신에 실패하면 화면(편집 중 입력 포함)은 그대로 두고 오류 막대로 알린다(M3-01 useRefreshError).
+  useRefreshError(data.task, `${taskKey} 최신 내용 불러오기`);
   const [slot, setSlot] = useState<{ id: string; dirty: boolean } | null>(null);
   const [gateOpen, setGateOpen] = useState(false);
   const { guard } = useEditGuard(slot?.dirty ?? false);

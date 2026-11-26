@@ -93,9 +93,8 @@ test('UAT-STATE-08 같은 Task 두 세션: 낡은 버전 저장은 409, 이 Task
   await page.getByRole('button', { name: '저장', exact: true }).click();
   const modal = page.getByRole('alertdialog');
   await expect(modal).toContainText('409 VERSION_CONFLICT');
-  await expect(modal).toContainText('TASK-0004');
   await expect(modal).toContainText('다른 세션 제목');
-  await expect(modal).toContainText('제목: 내 제목');
+  await expect(modal).toContainText('TASK-0004 제목: 내 제목');
   await expect(modal).not.toContainText('TASK-0007');
 
   // 최신 위에 다시 적용 → 최신 버전으로 내 변경 저장
