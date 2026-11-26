@@ -4,7 +4,7 @@ import { constants } from 'node:fs';
 import { chmod, link, lstat, mkdir, open, readFile, readdir, rename, rm, statfs, writeFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
-import { parseCommits, parseRawNumstat, type InputObservation } from './inputs.ts';
+import { parseCommits, parseRawNumstat, type InputDiff, type InputObservation } from './inputs.ts';
 
 export class GitSafetyError extends Error {
   override name = 'GitSafetyError';
@@ -42,6 +42,8 @@ export interface RejectedPath {
   path: string;
   reason: 'protected' | 'ignored';
 }
+
+export interface TaskReviewChange extends InputDiff { patch: string }
 
 interface TreeEntry { mode: string; oid: string; path: string }
 interface WorktreeRecord { id: string; branch?: string; startCommit?: string }
@@ -709,6 +711,50 @@ export class GitRepository {
       } finally { await rm(scratch, { recursive: true, force: true }); }
     }
     return rejected;
+  }
+
+  /** 등록한 원격 main을 가져와 한 커밋으로 고정한다. Agent 작업 폴더에서 정의를 읽지 않는다. */
+  async mainPipeline(): Promise<{ baseSha: string; pipelineSha: string; source: string }> {
+    const baseSha = await this.fetch();
+    const entry = (await this.tree(baseSha)).find((value) => value.path === '.agentwbs/pipeline.yaml');
+    if (!entry || !['100644', '100755'].includes(entry.mode)) throw new GitSafetyError('main의 pipeline.yaml은 일반 파일이어야 합니다.');
+    return { baseSha, pipelineSha: sha(entry.oid), source: (await this.blob(entry)).toString('utf8') };
+  }
+
+  /** 기존 파일 변경을 전부 남긴다. 독자적인 이름의 테스트도 QA 확인 목록에서 빠뜨리지 않기 위해서다. */
+  async taskReviewChanges(base: string, head: string): Promise<TaskReviewChange[]> {
+    const mergeBase = sha((await this.git(['merge-base', sha(base), sha(head)])).toString().trim());
+    const raw = (await this.git(['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--raw', '--numstat', '-z', '--no-abbrev', mergeBase, head, '--'])).toString('utf8');
+    const changes = parseRawNumstat(raw).filter((change) => change.oldBlob !== null);
+    const result: TaskReviewChange[] = [];
+    for (const change of changes) {
+      const patch = (await this.git(['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--binary', mergeBase, head, '--', change.path])).toString('utf8');
+      result.push({ ...change, patch });
+    }
+    return result;
+  }
+
+  /** 고정한 커밋과 실제 작업 파일이 일치해야 다른 코드의 결과를 보고하지 않는다. */
+  async taskCheckPath(worktreeId: string, head: string): Promise<string> {
+    const record = await this.trusted();
+    if (record.resetting || !record.worktrees.some((value) => value.id === worktreeId)) throw new GitSafetyError('검사할 수 있는 작업 폴더가 아닙니다.');
+    const path = await safePath(join(this.worktrees, id(worktreeId)));
+    await safePath(join(path, '.git'));
+    const current = (await run(path, [`--git-dir=${join(path, '.git')}`, 'rev-parse', '--verify', 'HEAD^{commit}'])).toString().trim();
+    if (current !== sha(head)) throw new GitSafetyError('검사 대상 head와 작업 폴더가 다릅니다.');
+    // Agent index의 assume-unchanged·skip-worktree와 filter 설정을 신뢰하지 않는다.
+    const index = join(dirname(this.statePath), `ci-index-${randomUUID()}`);
+    const env = { GIT_INDEX_FILE: index };
+    try {
+      await this.git(['read-tree', head], undefined, env);
+      const dirty = await this.git([`--work-tree=${path}`, 'diff', '--no-ext-diff', '--no-textconv', '--name-only', '-z', head, '--'], undefined, env);
+      const untracked = await this.git([`--work-tree=${path}`, 'ls-files', '--others', '--exclude-standard', '-z'], undefined, env);
+      if (dirty.length || untracked.length) throw new GitSafetyError('작업 폴더에 커밋하지 않은 변경이 있습니다.');
+    } finally {
+      await rm(index, { force: true });
+      await rm(`${index}.lock`, { force: true });
+    }
+    return path;
   }
 
   async reset(options: ResetOptions): Promise<{ commit: string | null }> {
