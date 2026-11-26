@@ -1,18 +1,25 @@
 import { pingDatabase, type Pool } from '@awbs/db';
 import { errorBody, type DbHealthResponse, type ErrorBody, type HealthResponse } from '@awbs/shared';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyServerOptions } from 'fastify';
+import { randomUUID } from 'node:crypto';
+import { platformErrorBody } from './platform/errors.ts';
+import { installSecurity, type SecurityOptions } from './platform/security.ts';
 
-export function buildApp(pool: Pool, logger: FastifyServerOptions['logger'] = false): FastifyInstance {
+export function buildApp(pool: Pool, logger: FastifyServerOptions['logger'] = false,
+  security: SecurityOptions = { origin: 'http://127.0.0.1:3100', lan: false }): FastifyInstance {
   const app = Fastify({
     logger,
-    // 기본 처리기는 원문 URL을 로그와 응답에 넣는다. 오류 형식 전체는 M2-01에서 정한다.
-    frameworkErrors: (_error, _request, reply: FastifyReply) => {
-      void reply.code(400).send({ statusCode: 400, error: 'Bad Request' });
+    clientErrorHandler: (error, socket) => {
+      app.log.warn({ err: error }, 'client error');
+      if (!socket.writable) return;
+      const body = JSON.stringify(platformErrorBody('VALIDATION_FAILED', randomUUID()));
+      socket.end(`HTTP/1.1 400 Bad Request\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: ${String(Buffer.byteLength(body))}\r\nConnection: close\r\n\r\n${body}`);
+    },
+    frameworkErrors: (_error, request, reply: FastifyReply) => {
+      void reply.code(400).send(platformErrorBody('VALIDATION_FAILED', request.id));
     },
   });
-  app.setNotFoundHandler((_request, reply) => {
-    void reply.code(404).send({ statusCode: 404, error: 'Not Found' });
-  });
+  installSecurity(app, pool, security);
 
   app.get('/health', (): HealthResponse => ({ status: 'ok' }));
 

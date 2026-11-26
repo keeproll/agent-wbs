@@ -6,6 +6,8 @@ export interface Config {
   databaseUrl: string;
   poolMax: number;
   logLevel: string;
+  lan: boolean;
+  origin: string;
 }
 
 function integer(name: string, value: string | undefined, fallback: number, max: number): number {
@@ -21,17 +23,23 @@ const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
   const host = env.AWBS_HOST ?? '127.0.0.1';
-  // LAN 공개는 비밀번호 로그인이 있어야 한다(architecture §4). 로그인은 M2-01에서 만든다.
-  if (host !== '127.0.0.1' && host !== '::1') {
-    throw new Error('AWBS_HOST는 127.0.0.1 또는 ::1이어야 합니다. LAN 공개는 비밀번호 로그인 구현 뒤에 지원합니다.');
+  const lan = host !== '127.0.0.1' && host !== '::1';
+  if (lan && env.AWBS_ALLOW_LAN !== 'true') throw new Error('LAN 공개는 AWBS_ALLOW_LAN=true를 명시해야 합니다.');
+  const port = integer('AWBS_PORT', env.AWBS_PORT, 3100, 65_535);
+  const origin = env.AWBS_ORIGIN ?? (lan ? '' : `http://${host === '::1' ? '[::1]' : host}:${String(port)}`);
+  const parsedOrigin = URL.parse(origin);
+  if (!parsedOrigin || !['http:', 'https:'].includes(parsedOrigin.protocol) || parsedOrigin.origin !== origin) {
+    throw new Error('AWBS_ORIGIN은 접속 주소의 Origin이어야 합니다. 예: http://192.168.1.2:3100');
   }
   const logLevel = env.LOG_LEVEL ?? 'info';
   if (!LOG_LEVELS.includes(logLevel)) throw new Error(`LOG_LEVEL은 ${LOG_LEVELS.join(', ')} 중 하나여야 합니다.`);
   return {
     host,
-    port: integer('AWBS_PORT', env.AWBS_PORT, 3100, 65_535),
+    port,
     databaseUrl: parseDatabaseUrl(env.DATABASE_URL),
     poolMax: integer('DB_POOL_MAX', env.DB_POOL_MAX, 10, 100),
     logLevel,
+    lan,
+    origin,
   };
 }

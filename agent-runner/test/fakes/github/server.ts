@@ -6,12 +6,16 @@ export interface FakeRequest {
   path: string;
   query: Record<string, string>;
   body: unknown;
+  /** `:name` 경로 변수 값. 완전 일치 경로면 비어 있다. */
+  params?: Record<string, string>;
 }
 
 export interface FakeResponse {
   status?: number;
   body?: unknown;
   headers?: Record<string, string>;
+  /** 처리는 끝났지만 응답을 보내지 않고 연결을 끊는다(응답 유실 흉내). */
+  drop?: boolean;
 }
 
 export type Handler = (request: FakeRequest) => FakeResponse | Promise<FakeResponse>;
@@ -19,21 +23,46 @@ export type Handler = (request: FakeRequest) => FakeResponse | Promise<FakeRespo
 export interface FakeGitHub {
   url: string;
   requests: FakeRequest[];
-  /** `METHOD /path` 완전 일치. 같은 키를 다시 등록하면 바꾼다. */
+  /** `METHOD /path` 완전 일치, 또는 `:name` 경로 변수(한 마디). 같은 키를 다시 등록하면 바꾼다. 완전 일치가 먼저다. */
   on(route: string, handler: Handler): void;
   /** 등록하지 않은 호출이 있었으면 실패한다. */
   assertNoUnexpected(): void;
   close(): Promise<void>;
 }
 
-/** 127.0.0.1에만 뜨는 가짜 GitHub REST API. 엔드포인트 동작은 M4-04에서 추가한다. */
+function match(routes: Map<string, Handler>, method: string, path: string) {
+  const exact = routes.get(`${method} ${path}`);
+  if (exact) return { handler: exact, params: {} };
+  const parts = path.split('/');
+  for (const [key, handler] of routes) {
+    const [routeMethod, routePath = ''] = key.split(' ');
+    const pattern = routePath.split('/');
+    if (routeMethod !== method || pattern.length !== parts.length) continue;
+    const params: Record<string, string> = {};
+    const ok = pattern.every((segment, i) => {
+      const actual = parts[i] ?? '';
+      if (!segment.startsWith(':')) return segment === actual;
+      if (actual === '') return false;
+      params[segment.slice(1)] = decodeURIComponent(actual);
+      return true;
+    });
+    if (ok) return { handler, params };
+  }
+  return undefined;
+}
+
+/** 127.0.0.1에만 뜨는 가짜 GitHub REST API. 저장소 동작은 `model.ts`가 이 위에 올린다. */
 export async function startFakeGitHub(token: string): Promise<FakeGitHub> {
   const routes = new Map<string, Handler>();
   const requests: FakeRequest[] = [];
   const unexpected: string[] = [];
 
   const server = createServer((req, res) => {
-    const respond = ({ status = 200, body, headers }: FakeResponse) => {
+    const respond = ({ status = 200, body, headers, drop }: FakeResponse) => {
+      if (drop) {
+        req.socket.destroy();
+        return;
+      }
       res.writeHead(status, { 'content-type': 'application/json', ...headers });
       res.end(body === undefined ? undefined : JSON.stringify(body));
     };
@@ -54,13 +83,14 @@ export async function startFakeGitHub(token: string): Promise<FakeGitHub> {
       };
       requests.push(request);
       const key = `${request.method} ${request.path}`;
-      const handler = routes.get(key);
-      if (!handler) {
+      const matched = match(routes, request.method, request.path);
+      if (!matched) {
         unexpected.push(key);
         respond({ status: 501, body: { message: `fake에 없는 호출: ${key}` } });
         return;
       }
-      respond(await handler(request));
+      if (Object.keys(matched.params).length > 0) request.params = matched.params;
+      respond(await matched.handler(request));
     };
     handle().catch((error: unknown) => {
       respond({ status: 500, body: { message: String(error) } });

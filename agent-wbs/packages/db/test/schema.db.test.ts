@@ -599,7 +599,7 @@ test.each([true, false])(
         "insert into secrets(key,ciphertext,nonce,key_version,last4) values('github','encrypted','nonce',1,'1234'),('smtp','encrypted','nonce',1,'5678')",
       );
       await c.query(
-        "insert into github_settings(mode,status,scopes,secret_key) values('token','ok','{}','github')",
+        "insert into github_settings(mode,status,scopes,secret_key) values('token','ok',null,'github')",
       );
       await c.query(
         "insert into lead_sessions(token_hash,expires_at,csrf) values('hash',now()+interval '1 hour','csrf')",

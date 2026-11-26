@@ -18,6 +18,7 @@
 - **AC (Acceptance Criteria, 수용 기준)** — 「이렇게 되면 완료로 인정한다」는 조건. given/when/then/method로 적는다. → data-model §2.3
 - **advisory lock** — 행이 아니라 앱이 정한 번호(예: 프로젝트)에 거는 PostgreSQL 잠금. 동시에 의존성을 추가할 때 한 건씩 검사하게 한다.
 - **AES-256-GCM** — 비밀값을 암호화하는 표준 방식. 키 하나로 암호화·복호화하며 내용이 바뀌었는지도 함께 검사한다.
+- **AAD (Additional Authenticated Data)** — 암호화하지 않지만 위조 검사에 함께 넣는 데이터. 봉인 형식 v1은 버전 바이트와 임시 공개키를 AAD로 쓴다. → contracts §6.1
 - **Agent** — 일을 하는 AI 프로그램. 이 프로젝트에서는 Claude와 Codex다.
 - **Agent Runner (Runner)** — 개발 PC에서 Agent 세션을 실행하고 결과를 보고하는 프로그램(`agent-runner/`). 판정은 하지 않는다. → architecture §1
 - **Agent WBS (WBS)** — 팀장용 웹 화면·REST API·PostgreSQL로 된 시스템(`agent-wbs/`). 모든 판정을 한다. → architecture §1
@@ -29,6 +30,7 @@
 - **AsyncAPI** — 메시지(이벤트) 기반 API를 적는 표준 형식. → open-questions Q-14
 - **attempt (시도)** — Agent가 Task를 한 번 실행하는 단위. 종류는 dev·qa·rework·reverify. → data-model §3.2
 - **Avro / Protobuf** — 메시지(이벤트) 데이터의 모양을 정의하는 스키마 형식. Q-14 선택지 (C)에 나온다.
+- **base64url** — 바이트를 URL에 안전한 글자(A–Z, a–z, 0–9, `-`, `_`)로 바꿔 적는 방식. 봉인 값은 끝의 `=`(padding) 없이 쓴다. → contracts §6.1
 - **bare 저장소** — 작업 폴더 없이 git 기록만 담은 저장소. 테스트에서 원격 저장소 대신 쓴다.
 - **Bearer** — `Authorization: Bearer <토큰>` 헤더로 토큰을 보내 인증하는 방식.
 - **bigserial** — PostgreSQL에서 자동 번호를 발급하는 큰 정수 열. 실패·취소로 중간 번호가 비기도 한다. 다음 번호가 꼭 현재+1이라고 가정하면 안 된다.
@@ -44,6 +46,7 @@
 - **CI** — 빌드·테스트를 자동으로 돌리는 과정. 이 프로젝트에서는 ①~④ 4단계. → architecture §5
 - **ciphertext** — 암호화된 값(암호문). 키 없이는 원래 값을 알 수 없다.
 - **claim** — Runner가 job을 「제가 하겠습니다」 하고 예약하는 요청. 예약만 하고 시도는 만들지 않는다. → contracts §3.2
+- **classic 토큰** — 권한 범위(scope)를 큰 단위로 고르는 예전 방식의 GitHub 개인 토큰. 응답의 `x-oauth-scopes` 헤더로 권한을 알 수 있다. → contracts §3.1
 - **CLI** — 명령줄에서 쓰는 프로그램. 여기서는 주로 Codex CLI·Claude Code CLI.
 - **clone** — 원격 git 저장소를 내 PC로 통째로 복사해 오는 것.
 - **CODEOWNERS** — GitHub에서 특정 경로를 바꿀 때 지정된 사람의 검토를 요구하는 설정. → contracts §4.1
@@ -87,6 +90,7 @@
 - **FE** — 프론트엔드(Front End). 브라우저에서 도는 화면 쪽 코드.
 - **fence** — 낡은 Runner의 보고를 막는 번호표. job을 새로 임대할 때마다 바뀌고, 일반 보고는 낡은 fence면 409 LEASE_LOST로 거절한다. 원래 job·host·boot·process group이 맞는 보유 해제 보고(`release`)는 예외다. → contracts §3.2
 - **fine-grained 토큰** — 접근할 저장소와 권한을 좁게 정할 수 있는 GitHub 개인 토큰.
+  - GitHub 응답만으로는 쓰기 권한을 알 수 없어, 연결 확인은 쓰기 권한을 「미확인」으로 보고하고 첫 실제 쓰기에서 확정한다. → contracts §3.1
 - **fixture** — 테스트에 쓰는 고정 데이터.
 - **FK / PK** — FK(외래 키)는 다른 테이블 행을 가리키는 열, PK(기본 키)는 행을 구분하는 고유 번호. → data-model §1
 - **FOR UPDATE / FOR SHARE / SKIP LOCKED** — PostgreSQL 행 잠금. `FOR UPDATE`는 고치려고 독점 잠금, `FOR SHARE`는 읽는 동안 바뀌지 않게 공유 잠금, `SKIP LOCKED`는 이미 잠긴 행을 건너뜀.
@@ -104,6 +108,7 @@
 - **git-lfs** — 큰 파일을 git 밖에 저장하는 git 확장.
 - **grep** — 파일에서 문자열을 찾는 명령. 예: 토큰이 로그에 남았는지 찾기.
 - **hash** — 내용을 짧은 문자열로 줄인 지문. 내용이 조금만 바뀌어도 달라진다. → data-model §2.3-1
+- **HKDF-SHA256** — 공유 비밀에서 실제 암호 키를 뽑아내는 표준 계산 방식. 봉인 형식 v1이 쓴다. → contracts §6.1
 - **headSha** — 브랜치 맨 끝 커밋의 고유 번호(SHA). 검증한 코드를 고정하는 데 쓴다. → contracts §4.1
 - **heartbeat** — Runner가 「아직 살아 있다」고 60초마다 보내는 신호. 3회 누락이면 끊긴 것으로 본다. → contracts §3.1
 - **hold (보유)** — job이 차지한 물리 슬롯과 논리 잠금의 기록. → data-model §2.5-1
@@ -119,11 +124,13 @@
 - **job (작업)** — Runner에게 맡기는 일 한 건. 종류는 contracts §3.2의 표에 있다.
 - **JSON / jsonb** — JSON은 `{"key": 값}` 모양의 텍스트 데이터 형식, jsonb는 PostgreSQL이 JSON을 저장하는 열 타입.
 - **JSON Schema** — JSON 데이터의 모양을 정의하고 검사하는 형식. → contracts §5
+- **keyId** — Runner가 등록한 봉인용 공개키의 이름표. 서버가 공개키의 SHA-256 지문으로 계산한다. credential 조회 때 이 값으로 키를 고른다. → contracts §3.1
 - **Kafka / Redis** — Kafka는 메시지 브로커(프로그램 사이 메시지를 중계·보관하는 서버), Redis는 메모리 기반 저장소. 이 제품 런타임에는 쓰지 않는다(D-02).
 - **kill -9** — 프로세스를 정리할 틈 없이 즉시 강제 종료하는 명령. 장애 시험에 쓴다.
 - **KST** — 한국 표준시(Asia/Seoul).
 - **LAN** — 같은 사무실·집 안의 네트워크. LAN 접속은 비밀번호로 로그인한다. → architecture §4
 - **lease (임대)** — 「이 job은 정해진 시간 동안 이 Runner가 맡는다」는 표시. 60초, 20초마다 renew. 만료돼도 자원 해제는 아니다. → contracts §3.2
+- **Link 헤더 / pagination(페이지 나눔)** — 목록이 길면 GitHub가 여러 쪽으로 나눠 주고, `Link` 응답 헤더에 다음 쪽 주소를 적는다. 이 계획은 그 주소를 따라가지 않고 같은 경로의 `page` 번호를 올려 읽는다. → contracts §6
 - **lint / typecheck** — lint는 코드 규칙 위반을 자동으로 찾는 검사, typecheck는 TypeScript 타입 오류 검사.
 - **lockfile** — 설치한 패키지의 정확한 버전을 고정해 두는 파일. → architecture §3.2
 - **loopback** — 같은 PC 안에서 자기 자신에게 접속하는 연결(`127.0.0.1`). 1회용 링크 로그인은 loopback에서만 된다. → architecture §4
@@ -160,6 +167,7 @@
 - **pgid (process group ID)** — 프로세스 그룹 번호. Agent가 띄운 자식 프로세스까지 한꺼번에 관리·종료하는 데 쓴다. → contracts §3.4
 - **PID** — 프로세스 번호(Process ID). PID 1은 시스템이 처음 띄운 프로세스.
 - **pino** — Node.js 로그 라이브러리. redact로 비밀값을 가린다.
+- **placeModel / modelRanks** — 설정 순서에 없는 새 모델의 자리를 정하는 함수와, 순서를 rank 숫자로 바꾸는 함수(shared). → data-model §6.2
 - **Planning (Planning Agent)** — 계획(WBS 초안·추정·분할·판단)을 세우는 Agent 작업. Claude·Codex가 각자 분석하고 교차 검토한다. → architecture §5
 - **Playwright** — 브라우저를 코드로 조작해 화면 테스트·PDF 생성을 하는 도구.
 - **polling** — 일정 간격으로 「바뀐 것 있나요?」 하고 묻는 방식. Runner→WBS, 화면→서버 모두 polling이다. → architecture §1, §2.1
@@ -174,6 +182,8 @@
 - **Q-xx** — owner에게 묻는 질문 번호. 답이 나온 것은 open-questions §0, 남은 것은 §2. → open-questions
 - **QA** — 개발 결과를 다른 Agent가 검증하는 단계. 결과는 PASS·FAIL·BLOCKED. → data-model §3.1
 - **R1~R6, P1~P3** — 리뷰 지적 번호와 심각도(P1이 가장 무겁다). → milestones §6
+- **rank (모델 순서)** — 모델의 등급 순서 숫자. 클수록 위 등급이다. 서버 설정값(`rankOrder`)에서 계산하며 Runner 보고에는 싣지 않는다. → contracts §2.1, data-model §6.2
+- **rankOrder** — Agent별 모델 ID 목록으로 된 모델 순서 설정. 아래 등급부터 적고, 팀장이 바꿀 수 있다(owner 2026-11-26 아이템 8). → contracts §2.1
 - **React / React Router** — React는 화면을 부품(컴포넌트) 단위로 만드는 라이브러리, React Router는 URL에 맞는 화면을 보여 주는 라이브러리.
 - **readiness (준비 상태)** — Runner가 일할 준비가 됐는지(CLI·git·디스크 등) 점검한 결과. → architecture §5
 - **realpath / symlink** — symlink는 다른 파일을 가리키는 바로가기 파일, realpath는 그런 링크를 모두 따라간 실제 경로. 저장소 밖으로 빠져나가는지 검사한다.
@@ -195,6 +205,7 @@
 - **scrypt** — 비밀번호를 되돌릴 수 없게 바꾸는 계산 방식. 일부러 느려서 무차별 대입을 어렵게 한다.
 - **search_path (검색 경로)** — 이름만 쓴 표·함수를 어느 스키마에서 찾을지 정한 목록. 높은 권한 함수는 이것을 고정해 가짜 함수가 끼어들지 못하게 한다. → data-model §6.1
 - **SECURITY DEFINER** — 부르는 사람이 아니라 함수를 만든 역할의 권한으로 실행되는 DB 함수. 초기화·정리 완료처럼 앱이 직접 못 하는 일을 정해진 방법으로만 하게 한다. → data-model §6.1
+- **sealed (봉인 값)** — GitHub 토큰을 Runner 공개키로 잠근 값. 그 Runner의 개인키로만 열 수 있다. 형식은 「봉인 형식 v1」이다. → contracts §6.1
 - **seed** — 빈 DB에 처음 넣는 기본 데이터. `system`과 `demo` 두 가지. → data-model §6
 - **semaphore** — 동시에 정해진 개수만 실행되게 막는 번호표 장치. → architecture §5
 - **SHA** — git 커밋의 고유 번호(hash).
@@ -229,6 +240,7 @@
 - **TypeBox** — TypeScript로 스키마를 정의해 검증·타입·OpenAPI를 한 번에 만드는 도구. → architecture §3.2
 - **typescript-eslint** — TypeScript 코드에 lint 규칙을 적용하는 도구.
 - **TZ** — 프로세스의 시간대(time zone) 설정 환경 변수.
+- **verified / unverified / missing (GitHub 권한 3상태)** — GitHub 권한 하나의 확인 상태. 확인됨·미확인(추정하지 않음)·부족. 조정자 결정(2026-11-26). → contracts §3.1
 - **UI** — 사용자 화면(User Interface).
 - **URL** — 웹 주소.
 - **UTC** — 세계 표준시. 시각은 UTC로 저장하고 한국 시간으로 보여 준다. → architecture §6.4
@@ -244,7 +256,9 @@
 - **worktree** — 같은 git 저장소를 작업마다 따로 꺼내 둔 작업 폴더. Agent는 이 안에서만 일한다. → architecture §1
 - **WS** — WebSocket의 줄임말. SSE / WebSocket 항목 참고.
 - **WSL** — Windows에서 리눅스를 돌리는 환경. 개발 PC가 WSL2다. → architecture §5
+- **X25519** — 두 쪽이 각자 키 쌍을 갖고 상대 공개키와 자기 개인키로 같은 비밀을 만들어 내는 키 교환 방식. 봉인 형식 v1이 쓴다. → contracts §6.1
 - **x-input-rules (입력 규칙)** — JSON Schema로 쓸 수 없는 입력 검사(예: 설계 kind 중복 금지 `uniqueDesignKind`)를 OpenAPI에 표시하는 확장 항목. 서버가 형식 검증 뒤 실행하고, 어기면 400 VALIDATION_FAILED다. → contracts §2.1
+- **x-oauth-scopes** — classic 토큰·`gh` 로그인으로 GitHub를 부를 때 응답에 오는, 그 토큰의 권한 범위 목록 헤더. fine-grained 토큰에는 없다. → contracts §3.1
 - **YAML** — 들여쓰기로 구조를 적는 사람이 읽기 쉬운 설정 파일 형식.
 - **zip** — 여러 파일을 하나로 묶은 압축 파일 형식.
 - **µs** — 마이크로초. 100만분의 1초.
@@ -254,8 +268,10 @@
 - **가동률** — 실제로 일할 수 있는 시간의 비율. 일정 계산(낙관·중간·비관)에 쓴다. → architecture D-32
 - **가상 스크롤** — 긴 목록에서 화면에 보이는 행만 그려 빠르게 만드는 기법.
 - **검증** — QA·재검증 시도가 Task 결과를 확인하는 것. 결과는 `verifications`에 추가 전용으로 남는다. → data-model §2.5
+- **결과 미확정 (병합)** — 병합 요청의 응답을 잃었는데 조회에서 병합이 보이지 않는 상태. 「병합 안 됨」으로 확정하지 않고, 같은 요청을 다시 보내지 않으며, 쓰기 없는 재조회로만 해소한다. → contracts §3.4-6·§4.1
 - **결함(defect)** — 검증에서 찾은 문제. 원 행은 바꾸지 않고 해소는 이벤트 행으로 남긴다. → data-model §2.5
 - **경계 변환** — DB에 저장한 값과 API 값의 철자가 다를 때, 서버가 DB↔API 사이에서 바꿔 주는 것. 예: CI 단계 DB `1` ↔ API `task`. → contracts §1 값 철자
+- **계열 (Codex 모델 계열)** — Codex 모델 이름 끝부분(luna·terra·astra·sol). 같은 세대 안의 등급 순서를 정한다. 초기 순서는 luna < terra < astra < sol. → data-model §6.2
 - **관측 등급** — CLI 버전·모델·옵션 조합별로 등록하는 관측 검증 결과(`cli_observation_grades`). 등록된 검증이 없으면 「미검증」으로 보고 보수 계산한다. → architecture §5.1, data-model §2.6
 - **교차 리뷰** — 담당이 아닌 쪽 Agent가 결과를 검토하는 것. → milestones §1
 - **교착(deadlock)** — 둘 이상이 서로 상대를 기다리느라 아무도 진행하지 못하는 상태. → architecture D-04, data-model §5.1
@@ -283,7 +299,9 @@
 ## ㅂ
 
 - **보수 계산** — 관측이 검증되지 않았을 때 자원 사용을 넉넉하게(1+예산) 잡는 계산.
+- **보조 속도 제한 (secondary rate limit)** — 짧은 시간에 요청이 몰리면 GitHub가 따로 거는 제한. 429나 「속도 제한 403」으로 온다. → contracts §6
 - **보호 경로** — Agent가 바꾸면 안 되는 경로(`prototype/`·`.agentwbs/`). → architecture §4
+- **봉인 형식 v1** — sealed의 바이트 배치와 계산식(X25519 → HKDF-SHA256 → AES-256-GCM)을 정한 이 프로젝트 전용 형식. 서버와 Runner가 공용 고정 벡터로 확인한다. → contracts §6.1
 - **부분 unique** — 조건을 만족하는 행들 사이에서만 겹치지 않게 하는 DB 제약. → data-model §2.5-1
 - **분할** — Task 하나를 여러 Task로 나누는 것. 분할 기준 10규칙과 순서 보장 판정이 있다. → data-model §2.3-2
 
@@ -291,6 +309,7 @@
 
 - **상한** — 동시 실행 자원의 한계(전체·Agent별). 서버가 PC 사양 기반으로 계산하거나 직접 지정하고, Runner는 그 안에서 조절한다. → architecture §1, D-11
 - **선두 인덱스** — 어떤 열로 시작하는 인덱스. FK 열마다 두어, 가리키는 행을 지우거나 고칠 때 표 전체를 훑지 않게 한다. → data-model §6.1
+- **세대 (Codex 모델 세대)** — Codex 모델 이름의 숫자 부분(5.6·6·6.1·6.2). 숫자로 비교하며 높을수록 위 등급이다. → data-model §6.2
 - **순수 함수** — 같은 입력이면 언제나 같은 결과를 내고, 바깥(I/O·현재 시각)을 건드리지 않는 함수. → architecture §3.3
 - **스냅샷** — 어느 한 순간의 데이터를 그대로 고정해 저장한 것. 보고서는 스냅샷이라 나중에 바뀌지 않는다.
 - **스켈레톤** — 데이터를 불러오는 동안 내용 자리에 보여 주는 회색 윤곽.
