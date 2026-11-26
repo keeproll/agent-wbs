@@ -1,0 +1,204 @@
+import type { Agent } from '../api/generated/client.ts';
+import type { ApiRequest } from '../api/client.ts';
+import type { CommandResult, RunCommand } from './command.ts';
+
+/** POST /runner/readiness 본문 */
+export type ReadinessReport = ApiRequest<'reportReadiness'>['body'];
+export type ReadinessItem = ReadinessReport['items'][number];
+export type ReadinessKey = ReadinessItem['key'];
+type Check = Omit<ReadinessItem, 'key'>;
+
+/**
+ * Runner 준비 점검(G §7.4, architecture §5 `readiness`). 시작할 때와 매일 한 번 돈다.
+ * 실제 CLI에는 **무료 명령**(버전·로그인 상태·도움말)만 부른다 — 모델 호출, 모델 목록 갱신, GitHub 네트워크 확인은 하지 않는다.
+ * 관측 등급(검증됨/일부 관측/미검증)은 CLI×버전×모델×옵션으로 서버가 판정하므로 Runner는 `cli[]`만 보낸다.
+ */
+export interface ReadinessDeps {
+  run: RunCommand;
+  bins: { claude: string; codex: string; git: string; node: string; pnpm: string; gh: string; pgIsReady: string };
+  /** worktree를 만드는 위치(디스크 여유를 잴 곳) */
+  worktreeRoot: string;
+  diskFree(path: string): Promise<number>;
+  readFile(path: string): Promise<string>;
+  /** 점검할 PostgreSQL 주소. 설정이 없으면 null. */
+  pg: { host: string; port: number } | null;
+  /** 다른 모듈이 맡는 점검: 작업 저장소 접근(M4-03), 하위 Agent 정의 동기화(M5-02). 없으면 「확인 안 함」 warn. */
+  probes: Partial<Record<'repo' | 'subs', () => Promise<Check>>>;
+  /** 세션을 실행할 때 쓸 모델·옵션. 관측 등급 판정용 `cli[]`에 버전과 함께 싣는다. */
+  cliProfiles?: { agent: Agent; model: string; options: string }[];
+}
+
+const KEYS: ReadinessKey[] = ['claude', 'codex', 'git', 'node', 'pnpm', 'pg', 'repo', 'disk', 'subs', 'obs', 'gh', 'lfs'];
+/** P `recCap`의 DISK_LOW 기준 */
+const DISK_WARN_GB = 50;
+/** 이보다 적으면 clone·설치가 실패할 가능성이 커서 멈춘다 [결정] */
+const DISK_FAIL_GB = 5;
+/** package.json engines와 같다 */
+const NODE_RANGE = { min: [26, 13, 0], belowMajor: 27 } as const;
+
+const firstVersion = (text: string): string | null => /(\d+\.\d+\.\d+[\w.+-]*)/.exec(text)?.[1] ?? null;
+const reason = (r: CommandResult): string => (r.stderr.trim() || r.stdout.trim() || `종료 코드 ${String(r.code)}`).slice(0, 200);
+const runs = (r: CommandResult): boolean => r.code === 0;
+
+async function cliVersion(d: ReadinessDeps, bin: string, name: string, install: string): Promise<{ version: string } | Check> {
+  const r = await d.run(bin, ['--version']);
+  const version = runs(r) ? firstVersion(r.stdout) : null;
+  if (!version) return { status: 'fail', detail: `${name} 실행 불가: ${reason(r)}`, fix: install };
+  return { version };
+}
+
+async function claude(d: ReadinessDeps, versions: Map<Agent, string>): Promise<Check> {
+  const v = await cliVersion(d, d.bins.claude, 'Claude Code CLI', 'Claude Code CLI를 설치하세요(`claude install`).');
+  if (!('version' in v)) return v;
+  versions.set('Claude', v.version);
+  const r = await d.run(d.bins.claude, ['auth', 'status', '--json']);
+  let loggedIn: unknown;
+  try {
+    loggedIn = (JSON.parse(r.stdout) as { loggedIn?: unknown }).loggedIn;
+  } catch {
+    loggedIn = undefined;
+  }
+  // 이메일·조직 등 계정 정보는 싣지 않는다.
+  if (loggedIn === true) return { status: 'ok', detail: `버전 ${v.version} · 로그인됨` };
+  if (loggedIn === false) return { status: 'fail', detail: `버전 ${v.version} · 로그인 안 됨`, fix: '`claude auth login`을 실행하세요.' };
+  return { status: 'warn', detail: `버전 ${v.version} · 로그인 상태를 읽지 못함: ${reason(r)}`, fix: '`claude auth status`로 확인하세요.' };
+}
+
+async function codex(d: ReadinessDeps, versions: Map<Agent, string>): Promise<Check> {
+  const v = await cliVersion(d, d.bins.codex, 'Codex CLI', 'Codex CLI를 설치하세요.');
+  if (!('version' in v)) return v;
+  versions.set('Codex', v.version);
+  const r = await d.run(d.bins.codex, ['login', 'status']);
+  if (runs(r)) return { status: 'ok', detail: `버전 ${v.version} · 로그인됨` };
+  if (r.code === null) return { status: 'warn', detail: `버전 ${v.version} · 로그인 상태 확인 실패: ${reason(r)}`, fix: '`codex login status`로 확인하세요.' };
+  return { status: 'fail', detail: `버전 ${v.version} · 로그인 안 됨`, fix: '`codex login`을 실행하세요.' };
+}
+
+async function tool(d: ReadinessDeps, bin: string, args: string[], name: string, missing: 'fail' | 'warn', fix: string): Promise<Check & { version?: string }> {
+  const r = await d.run(bin, args);
+  const version = runs(r) ? firstVersion(r.stdout) : null;
+  if (!version) return { status: missing, detail: `${name} 없음: ${reason(r)}`, fix };
+  return { status: 'ok', detail: `${name} ${version}`, version };
+}
+
+async function node(d: ReadinessDeps): Promise<Check> {
+  const c = await tool(d, d.bins.node, ['--version'], 'Node.js', 'fail', 'Node.js를 설치하세요(.nvmrc 참고).');
+  if (!c.version) return c;
+  const [major = 0, minor = 0, patch = 0] = c.version.split('.').map((n) => Number.parseInt(n, 10));
+  const [a, b, p] = NODE_RANGE.min;
+  const tooOld = major < a || (major === a && (minor < b || (minor === b && patch < p)));
+  if (tooOld || major >= NODE_RANGE.belowMajor) {
+    return { status: 'warn', detail: `Node.js ${c.version} — 요구 범위 >=${NODE_RANGE.min.join('.')} <${String(NODE_RANGE.belowMajor)}`, fix: '`nvm install`(.nvmrc)으로 맞추세요.' };
+  }
+  return { status: 'ok', detail: c.detail };
+}
+
+async function pg(d: ReadinessDeps): Promise<Check> {
+  if (!d.pg) return { status: 'warn', detail: '점검할 PostgreSQL 주소가 설정되지 않음', fix: '작업 저장소가 쓰는 DB 주소를 설정하세요.' };
+  const target = `${d.pg.host}:${String(d.pg.port)}`;
+  const r = await d.run(d.bins.pgIsReady, ['-h', d.pg.host, '-p', String(d.pg.port)]);
+  if (runs(r)) return { status: 'ok', detail: `${target} 연결 가능` };
+  if (r.code === null) return { status: 'warn', detail: `pg_isready를 실행하지 못함: ${reason(r)}`, fix: 'postgresql-client를 설치하세요.' };
+  return { status: 'fail', detail: `${target} 연결 불가: ${reason(r)}`, fix: 'DB 컨테이너가 떠 있는지 확인하세요.' };
+}
+
+async function disk(d: ReadinessDeps): Promise<Check> {
+  const free = (await d.diskFree(d.worktreeRoot)) / 1024 ** 3;
+  const shown = `${d.worktreeRoot} 여유 ${free.toFixed(1)}GB`;
+  if (free < DISK_FAIL_GB) return { status: 'fail', detail: shown, fix: '디스크 공간을 확보하세요.' };
+  if (d.worktreeRoot.startsWith('/mnt/')) {
+    return { status: 'warn', detail: `${shown} — Windows 드라이브(/mnt/…)는 느리고 pnpm 하드링크가 안 됩니다`, fix: 'AWBS_HOME을 WSL ext4(~ 아래)로 옮기세요.' };
+  }
+  if (free < DISK_WARN_GB) return { status: 'warn', detail: shown, fix: `${String(DISK_WARN_GB)}GB 이상 확보를 권장합니다.` };
+  return { status: 'ok', detail: shown };
+}
+
+async function obs(d: ReadinessDeps): Promise<Check> {
+  const text = await d.readFile('/sys/fs/cgroup/cgroup.controllers').catch(() => '');
+  const have = new Set(text.trim().split(/\s+/));
+  const lacking = ['cpu', 'memory', 'pids'].filter((c) => !have.has(c));
+  if (lacking.length === 0) return { status: 'ok', detail: 'cgroup v2 cpu·memory·pids 사용 가능(세션 scope 실증은 M5-03)' };
+  return {
+    status: 'warn',
+    detail: `cgroup v2 ${lacking.join('·')} 없음 — 프로세스 그룹 + /proc 합산으로 대신 관측`,
+    fix: 'WSL에서 systemd를 켜면(/etc/wsl.conf) cgroup 측정을 쓸 수 있습니다.',
+  };
+}
+
+const notChecked = (what: string): Check => ({ status: 'warn', detail: `${what} 점검이 아직 연결되지 않음(확인 안 함)` });
+
+export async function checkReadiness(d: ReadinessDeps, now: Date): Promise<ReadinessReport> {
+  const versions = new Map<Agent, string>();
+  const strip = async (c: Promise<Check & { version?: string }>): Promise<Check> => {
+    const rest = { ...(await c) };
+    delete rest.version;
+    return rest;
+  };
+  const checks: Record<ReadinessKey, () => Promise<Check>> = {
+    claude: () => claude(d, versions),
+    codex: () => codex(d, versions),
+    git: () => strip(tool(d, d.bins.git, ['--version'], 'git', 'fail', 'git을 설치하세요.')),
+    node: () => node(d),
+    pnpm: () => strip(tool(d, d.bins.pnpm, ['--version'], 'pnpm', 'fail', '`corepack enable` 후 pnpm을 설치하세요.')),
+    pg: () => pg(d),
+    repo: () => (d.probes.repo ?? (() => Promise.resolve(notChecked('작업 저장소'))))(),
+    disk: () => disk(d),
+    subs: () => (d.probes.subs ?? (() => Promise.resolve(notChecked('하위 Agent 정의 동기화'))))(),
+    obs: () => obs(d),
+    gh: () => strip(tool(d, d.bins.gh, ['--version'], 'GitHub CLI(gh)', 'warn', 'gh 로그인 방식을 쓰려면 gh를 설치하세요.')),
+    lfs: () => strip(tool(d, d.bins.git, ['lfs', 'version'], 'git-lfs', 'warn', 'LFS 파일이 있는 저장소를 쓰려면 git-lfs를 설치하세요.')),
+  };
+  const items = await Promise.all(
+    KEYS.map(async (key): Promise<ReadinessItem> => {
+      try {
+        return { key, ...(await checks[key]()) };
+      } catch (e) {
+        return { key, status: 'fail', detail: `점검 중 오류: ${e instanceof Error ? e.message : String(e)}`.slice(0, 300) };
+      }
+    }),
+  );
+  const cli = (d.cliProfiles ?? []).flatMap((p) => {
+    const version = versions.get(p.agent);
+    return version ? [{ agent: p.agent, version, model: p.model, options: p.options }] : [];
+  });
+  return { at: now.toISOString(), items, ...(cli.length > 0 && { cli }) };
+}
+
+/** fail 항목 때문에 실행을 멈출 Agent. CLI 항목은 그 Agent만, 공통 항목은 둘 다. */
+export function blockedAgents(items: readonly Pick<ReadinessItem, 'key' | 'status'>[]): Agent[] {
+  const out = new Set<Agent>();
+  for (const i of items) {
+    if (i.status !== 'fail') continue;
+    if (i.key === 'claude') out.add('Claude');
+    else if (i.key === 'codex') out.add('Codex');
+    else {
+      out.add('Claude');
+      out.add('Codex');
+    }
+  }
+  return (['Claude', 'Codex'] as const).filter((a) => out.has(a));
+}
+
+/** 바로 한 번, 이후 끝난 시점부터 intervalMs마다. 겹쳐 돌리지 않는다. */
+export function scheduleDaily(
+  task: () => Promise<void>,
+  { intervalMs = 24 * 3600_000, onError = () => undefined }: { intervalMs?: number; onError?: (e: unknown) => void } = {},
+): { stop(): void } {
+  let timer: NodeJS.Timeout | undefined;
+  let stopped = false;
+  const loop = async () => {
+    try {
+      await task();
+    } catch (e) {
+      onError(e);
+    }
+    if (!stopped) timer = setTimeout(() => void loop(), intervalMs);
+  };
+  timer = setTimeout(() => void loop(), 0);
+  return {
+    stop() {
+      stopped = true;
+      clearTimeout(timer);
+    },
+  };
+}
