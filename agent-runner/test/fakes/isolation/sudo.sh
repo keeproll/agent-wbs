@@ -27,6 +27,12 @@ case $cmd in
     else dst=${paths[-1]}; inside "$dst"; mkdir -p "$(dirname "$dst")"; cp "${paths[0]}" "$dst"; fi ;;
   rm | rmdir)
     for a in "$@"; do [[ $a == /* ]] && inside "$a"; done
+    # .root-can-enter에 적힌 폴더는 「Runner는 못 들어가지만 root는 들어가는」 폴더를 흉내 낸다(root 명령일 때만 잠시 연다).
+    if [[ -f $R/.root-can-enter ]]; then
+      while read -r d; do
+        for a in "$@"; do [[ -n $d && $a == "$d"/* ]] && chmod 0700 "$d"; done
+      done < "$R/.root-can-enter"
+    fi
     "$cmd" "$@" ;;
   setfacl | chown | chgrp | chmod)
     for a in "$@"; do [[ $a == /* ]] && inside "$a"; done ;;

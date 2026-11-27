@@ -18,6 +18,9 @@
 # bash 전용이다. sh(dash)로 부르면 pipefail에서 알 수 없는 오류가 나므로 여기서 먼저 멈춘다.
 if [ -z "${BASH_VERSION:-}" ]; then echo "bash로 실행하세요. 예: bash $0" >&2; exit 2; fi
 set -euo pipefail
+# 새 파일·폴더에 그룹 쓰기를 주지 않는다(리뷰5 P3-5). 이 폴더의 그룹은 Agent 계정이라, 그룹 쓰기가 생기면 Agent가 CLI를 고칠 수 있다.
+# 실행한 셸의 umask(예: 0002)를 따르지 않고 여기서 직접 정한다. 지금 런북 환경(umask 0022)에서는 결과가 같다.
+umask 0022
 
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source-path=SCRIPTDIR source=common.sh

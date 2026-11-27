@@ -157,10 +157,10 @@ fi
 
 step '2-1. Agent 계정의 예약 작업(cron·at) 지우기'
 # userdel --remove는 예약 작업 파일을 지우지 않는다. 남기면 같은 번호로 다시 만든 계정에서 옛 작업이 다시 돌 수 있다(리뷰4 P3-3).
-if [[ -e $CRON_SPOOL || -L $CRON_SPOOL ]]; then
-  safe_fixed_path "$(dirname "$CRON_SPOOL")"
-  as_root rm -f -- "$CRON_SPOOL"                                         # 이 계정의 crontab 파일(이름 기준, 고정 경로)
-fi
+# 그 폴더(crontabs)는 root·crontab 그룹만 볼 수 있어 Runner 권한으로는 파일이 있는지 알 수 없다(리뷰5 P3-6).
+# 그래서 있는지 묻지 않고 root로 바로 지운다(rm -f는 없어도 성공). 고정 경로이고 상위 폴더의 링크·소유자는 먼저 검사한다.
+safe_fixed_path "$(dirname "$CRON_SPOOL")"
+as_root rm -f -- "$CRON_SPOOL"                                           # 이 계정의 crontab 파일(이름 기준, 고정 경로)
 if [[ -n $UID_NUM && -d $AT_SPOOL ]]; then
   # at 작업 파일은 그 계정 번호 소유다. 번호가 지금도 우리 계정이거나 아무도 안 쓸 때만 지운다.
   if ((DRY_RUN)) || uid_is_agent "$UID_NUM" "$MARKER" || uid_is_unassigned "$UID_NUM"; then

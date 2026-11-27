@@ -454,6 +454,24 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
       expect(at(r.log, '/etc/at.deny')).toBeGreaterThan(at(r.log, 'userdel'));
     });
 
+    test('리뷰5 P3-6: crontabs 폴더에 Runner가 못 들어가도 있는지 묻지 않고 root로 지운다', () => {
+      const dir = join(R, 'var/spool/cron/crontabs');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'awbs-agent'), '* * * * * x\n');
+      // 실제 PC: drwx-wx--T root:crontab → Runner(다른 계정)는 그 안을 볼 수 없다. 시험 계정에서는 0000으로 흉내 내고, 가짜 sudo(root)만 연다.
+      chmodSync(dir, 0o000);
+      writeFileSync(join(R, '.root-can-enter'), `${dir}\n`);
+      try {
+        const r = run('remove-agent-user.sh');
+        expect(r.code, r.out).toBe(0);
+        expect(r.log).toContain(`-- rm -f -- ${dir}/awbs-agent`);
+        expect(at(r.log, 'crontabs/awbs-agent')).toBeLessThan(at(r.log, 'userdel'));
+      } finally {
+        chmodSync(dir, 0o755);
+      }
+      expect(existsSync(join(dir, 'awbs-agent'))).toBe(false);
+    });
+
     test('UID 기록 값이 이상하면(0) 멈춘다', () => {
       writeFileSync(join(R, 'etc/agentwbs/agent-user.uid'), '0\n');
       const r = run('remove-agent-user.sh');
@@ -717,6 +735,18 @@ esac
       r = install();
       expect(r.code, r.out).toBe(0);
       expect(readlinkSync(cli('codex', 'current'))).toBe('0.181.0');
+    });
+
+    test('리뷰5 P3-5: 실행한 셸의 umask가 0002여도 설치본에 그룹 쓰기가 생기지 않는다', async () => {
+      fakeNpm();
+      const r = spawnSync('bash', ['-c', 'umask 0002; exec bash "$0"', join(scripts, 'install-agent-cli.sh')], {
+        encoding: 'utf8', env: { PATH: `${R}/bin:/usr/bin:/bin`, HOME: join(R, 'home/runner'), AWBS_ISOLATION_TEST_ROOT: R, LANG: 'C.UTF-8' },
+      });
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      const { statSync } = await import('node:fs');
+      for (const p of [cli('codex', '0.180.0', 'bin', 'codex'), cli('codex', '0.180.0', 'bin'), cli('codex', '0.180.0')]) {
+        expect(statSync(p).mode & 0o002 | statSync(p).mode & 0o020).toBe(0);
+      }
     });
 
     test('설치한 CLI가 다른 버전을 말하면 링크를 바꾸지 않고 종료 코드 1', async () => {
