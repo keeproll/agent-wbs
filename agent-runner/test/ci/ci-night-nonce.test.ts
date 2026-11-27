@@ -1,4 +1,5 @@
 // Codex 재리뷰(review2-codex.md) 지적 3: 보고서는 시도마다 새 경로와 일회용 값(nonce)을 쓰고, 옛 파일은 읽지 않는다.
+import { existsSync } from 'node:fs';
 import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
@@ -28,7 +29,8 @@ test('중단 뒤 같은 실행 ID로 재개해도 예전 보고서를 이번 측
     const out = await runNightCheck(night(f, report), '2026-11-27');
     expect(out).toMatchObject({ status: 'fail', failStep: 'perf' });
     expect(f.final().logExcerpt).toContain('기준이 있는 응답 시간 측정이 없습니다: x');
-    expect((await readdir(stepDir)).filter(n => n.endsWith('.report.json'))).toEqual([]);
+    // 옛 파일은 지우지 않는다(근거 보존). 이번 시도는 새 경로와 nonce만 읽으므로 옛 파일을 읽지 않는다.
+    expect((await readdir(stepDir)).filter(n => n.endsWith('.report.json'))).toContain('perf-1.report.json');
   } finally { await f.close(); }
 });
 
@@ -75,5 +77,19 @@ test('같은 실행 ID로 재개해도 같은 단계·시도의 보고서 경로
     const paths = f.calls.filter(c => c.name === 'perf').map(c => c.env.AWBS_REPORT);
     expect(paths).toHaveLength(2);
     expect(paths[0]).not.toBe(paths[1]);
+  } finally { await f.close(); }
+});
+
+test('보고서 정리는 이름 앞부분이 겹치는 다른 단계(a-1과 a)의 보고서를 지우지 않는다', async () => {
+  const f = await ciFixture({ night: ['a-1', 'a'] });
+  try {
+    f.script(async ({ name }) => name === 'install' ? { code: 0 } : { code: 0, report: { tests: [{ key: name, status: 'pass' }] } });
+    const out = await runNightCheck(night(f), '2026-11-27');
+    expect(out.status).toBe('pass');
+    const first = f.calls.find(c => c.name === 'a-1')?.env.AWBS_REPORT ?? '';
+    const stepDir = join(f.home, 'runs', out.runId, 'step');
+    expect(await readdir(stepDir)).toContain(first.split('/').at(-1));
+    // 보고한 근거 목록의 파일은 실제로 남아 있어야 한다.
+    for (const artifact of f.final().artifacts ?? []) expect(existsSync(join(f.home, artifact)), artifact).toBe(true);
   } finally { await f.close(); }
 });

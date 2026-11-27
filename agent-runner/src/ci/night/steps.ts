@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { lstat, mkdir, open, readdir, realpath, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, realpath, unlink } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
 import type { CommandResult } from '../../readiness/command.ts';
 import type { Redact } from '../../security/redact.ts';
@@ -128,13 +128,11 @@ export class Evidence {
   }
 
   async run(execute: CiExecute, argv: readonly string[], cwd: string, label: string, env: Record<string, string>, signal?: AbortSignal): Promise<StepAttempt> {
-    // 시작 전에 같은 단계·시도의 옛 보고서를 지운다(unlink는 링크를 따라가지 않고 링크 자체를 지운다).
-    // 그리고 이번 시도만의 새 경로와 nonce를 준다. 왜: 중단 뒤 같은 실행 ID로 재개하면 예전 보고서가 남아 있을 수 있다.
-    for (const name of await readdir(this.stepDir)) {
-      if (name.startsWith(`${label}.`) || name.startsWith(`${label}-`)) if (name.endsWith('.report.json')) await unlink(join(this.stepDir, name)).catch(() => undefined);
-    }
+    // 이번 시도만의 새 경로와 nonce를 준다. 옛 보고서는 지우지 않고(다른 단계의 근거일 수 있다) 읽지도 않는다(재리뷰 원칙 3).
+    // 정리는 이번 시도의 정확한 경로만 한다. 새 무작위 경로라 보통 없지만, 있으면 링크든 파일이든 그 이름 자체만 지운다.
     const nonce = randomUUID();
     const reportPath = join(this.stepDir, `${label}-${nonce}.report.json`);
+    await unlink(reportPath).catch(() => undefined);
     let result: CommandResult;
     try {
       result = await execute(argv, cwd, signal, { ...env, AWBS_REPORT: reportPath, AWBS_REPORT_NONCE: nonce, AWBS_EVIDENCE_DIR: this.stepDir });
