@@ -192,7 +192,7 @@ pnpm -C agent-runner start
 
 ---
 
-## 래퍼·CLI를 바꾼 뒤(fix1: ci-run·진입점 규칙·pnpm / fix2: git-inspect·git-bundle·cli-version·ci-run --home)
+## 래퍼·CLI를 바꾼 뒤(fix1: ci-run·진입점 규칙·pnpm / fix2: git-inspect·git-bundle·cli-version·agent-file·ci-run --home)
 
 래퍼(`awbs-agent-exec`)를 고치면 설치본(`/usr/local/libexec/awbs-agent-exec`)은 저절로 바뀌지 않습니다. 아래를 순서대로 실행합니다.
 sudoers 규칙 한 줄은 바뀌지 않습니다(래퍼 하나만 허용).

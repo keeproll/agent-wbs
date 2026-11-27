@@ -267,6 +267,22 @@ describe.skipIf(!usable)('awbs-agent-exec 실행 래퍼(bash, 실제 실행)', (
     expect(wrapper(['git-inspect', '--cwd', runnerHome]).code).toBe(2);
   });
 
+  test('agent-file: 하위 Agent 정의만 Agent 계정으로 읽기·쓰기·지우기(fix2 추가)', () => {
+    const file = (args: string[], input?: string) => spawnSync(exec, ['agent-file', ...args], { input, encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } });
+    const rel = '.codex/agents/code-reviewer.toml';
+    expect(file(['read', '--cwd', worktree, '--path', rel]).status).toBe(3);
+    expect(file(['write', '--cwd', worktree, '--path', rel], 'name = "x"\n').status).toBe(0);
+    expect(readFileSync(join(worktree, rel), 'utf8')).toBe('name = "x"\n');
+    expect(file(['read', '--cwd', worktree, '--path', rel]).stdout).toBe('name = "x"\n');
+    expect(file(['remove', '--cwd', worktree, '--path', rel]).status).toBe(0);
+    expect(existsSync(join(worktree, rel))).toBe(false);
+    for (const bad of [['read', '--cwd', worktree, '--path', '../x/.codex/agents/a.toml'], ['write', '--cwd', worktree, '--path', '.codex/agents/../../a.toml'],
+      ['write', '--cwd', worktree, '--path', '.git/config'], ['read', '--cwd', join(area, 'inputs'), '--path', rel], ['chmod', '--cwd', worktree, '--path', rel]]) {
+      expect(file(bad, 'x').status, bad.join(' ')).toBe(2);
+    }
+    expect(file(['write', '--cwd', worktree, '--path', rel], 'x'.repeat(1024 * 1024 + 1)).status).toBe(2);
+  });
+
   test('cli-version: 진입점 규칙으로 Agent 계정에서 --version만', () => {
     rmSync(out, { force: true });
     const r = wrapper(['cli-version', '--tool', 'codex', '--', codex]);

@@ -16,7 +16,8 @@ import type { ResourceReporter, SessionState } from '../resources/reporter.ts';
 import type { HeavySemaphore } from '../resources/heavy.ts';
 import { atomicWrite } from '../state/files.ts';
 import type { ReportId } from '../state/state.ts';
-import { installSubagents, SubagentInstallError } from './install.ts';
+import { installSubagents, localAgentFiles, SubagentInstallError } from './install.ts';
+import type { AgentFiles } from '../git/agent-git.ts';
 import { Launches, type LaunchJob, type Proof } from './launches.ts';
 import { runProcess } from './process.ts';
 
@@ -44,6 +45,11 @@ export interface ExecutionOptions {
    * 왜: 준비 점검 뒤에도 상태가 바뀔 수 있다. 예: 재부팅 뒤 /run/WSL 보호가 아직 안 돌았거나 사용자 systemd가 멈췄다(isolation.md §11).
    */
   recheckIsolation?: () => Promise<IsolationLayer | undefined>;
+  /**
+   * 작업 폴더 안 하위 Agent 정의 파일 접근(fix2 추가). 전용 계정 배치는 래퍼 `agent-file`(Agent 계정)을 넣는다.
+   * 없으면 같은 계정 배치의 직접 접근(`localAgentFiles`). 왜: Runner 계정은 Agent가 쓸 수 있는 폴더에 쓰지 않는다.
+   */
+  agentFiles?: AgentFiles;
   verified?: (agent: Agent, model: string, options: string) => boolean;
   updater?: { tryClaim(): (() => void) | null; applyPending(): Promise<unknown> };
   /**
@@ -90,6 +96,8 @@ export class Execution {
   #isolation: IsolationLayer | undefined;
   constructor(options: ExecutionOptions) { this.#d = options; this.#isolation = options.isolation; this.launches = new Launches(options.home, options.identity); }
   get heavy(): HeavySemaphore { return this.#d.heavy; }
+  /** 하위 Agent 정의 파일을 다루는 방법(전용 계정이면 Agent 계정). */
+  get agentFiles(): AgentFiles { return this.#d.agentFiles ?? localAgentFiles; }
   /** 지금 쓰는 격리 계층. 없으면 실제 실행을 거부한다(Q-08). */
   get isolation(): IsolationLayer | undefined { return this.#isolation; }
   /** 준비 점검이 고른 격리 계층으로 바꾼다. undefined면 새 claim·실행을 거부한다. 이미 실행 중인 세션은 시작 때 계층을 그대로 쓴다. */
@@ -304,7 +312,7 @@ export class Execution {
       const prompt = `${JSON.stringify(job.payload.instructions)}\n\n동시 하위 Agent 예산: ${budget}\n지정 하위 Agent: ${definitions.enabled ? definitions.items.map(i => i.key).join(', ') : '없음'}\n모델: ${grade.model}, Effort: ${grade.effort}\n입력 버전: ${job.payload.inputVersion}\n${options.prompt ?? ''}`;
       const isolation = await this.#currentIsolation();
       const launch = buildLaunch(job.payload.agent, d.binaries[job.payload.agent], { ...grade, cwd: work.cwd, prompt, ...(resume && { resume }) }, { env: d.env, isolation });
-      const installedSubagents = await installSubagents(work.cwd, job.payload.agent, definitions, grade);
+      const installedSubagents = await installSubagents(work.cwd, job.payload.agent, definitions, grade, this.agentFiles);
       signal.throwIfAborted();
       this.#assertStart(job.payload.agent, slots, reservation);
       const start = await this.#report('startJob', { epoch, params: { id: job.id }, body: { fence: job.fence, ...d.identity, headSha: work.headSha, installedSubagents } }, signal);
@@ -366,7 +374,7 @@ export class Execution {
       d.sessions.splice(d.sessions.indexOf(session), 1);
       session = undefined;
       if (definitions.enabled) {
-        try { await installSubagents(work.cwd, job.payload.agent, { enabled: false, items: [] }, grade); }
+        try { await installSubagents(work.cwd, job.payload.agent, { enabled: false, items: [] }, grade, this.agentFiles); }
         catch (error) { throw new Error('실행을 마친 하위 Agent 정의의 소유 hash를 확인할 수 없습니다.', { cause: error }); }
       }
       // shortcut: CLI 기록 형식이 검증되기 전에는 실제 사용을 확정하지 않는다. M5-03 실증 뒤 기록 해석기를 연결한다.

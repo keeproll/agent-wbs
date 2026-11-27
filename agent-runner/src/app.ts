@@ -35,6 +35,7 @@ import { CiJobs, type CiJobsOptions } from './ci/jobs.ts';
 import { AttemptFlow, type AttemptFlowOptions } from './jobs/attempt-flow.ts';
 import { bindTaskCheck, type TaskCheckSources } from './jobs/task-check.ts';
 import { createTestCollector } from './ci/collect-tests.ts';
+import { wrapperAgentFiles } from './git/agent-git.ts';
 import { ciLaunch } from './ci/launch.ts';
 
 /** 세션 실행 계층(M5)이 시도 하나를 실행하는 동안 등록하는 보유. 지금(M4)은 비어 있다. */
@@ -254,6 +255,8 @@ export class RunnerApp {
       prepare: () => Promise.reject(new Error('작업 폴더 준비 공급원이 연결되지 않았습니다.')),
       // 전용 계정 격리(Q-08)면 실행 직전마다 래퍼 check와 사용자 scope를 다시 확인한다. 시험이 격리 계층을 직접 주면 그대로 쓴다.
       ...(d.agentRoot && !d.execution?.isolation && { recheckIsolation: () => this.refreshIsolation() }),
+      // 전용 계정 배치: 하위 Agent 정의 파일은 Agent 계정(래퍼 agent-file)으로만 쓴다(fix2 추가).
+      ...(d.agentRoot && { agentFiles: wrapperAgentFiles() }),
       ...d.execution,
     });
     if (d.ci && d.agentRoot) throw new Error('전용 계정 격리에서는 CI 실행기를 주입할 수 없습니다. 실제 실행기(ciAuto)는 Agent 계정으로만 돈다.');

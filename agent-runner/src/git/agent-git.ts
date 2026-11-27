@@ -35,30 +35,38 @@ export function parseInspect(stdout: string): { head: string; dirty: boolean } {
 
 interface Spawned { file: string; args: string[]; env: NodeJS.ProcessEnv; cwd: string }
 
-/** 명령 하나를 돌려 표준 출력을 모으거나(상한) 파일로 쓴다. 종료 코드가 0이 아니면 실패. */
+interface CaptureOptions { out?: { path: string; limit: number }; input?: string; allow?: readonly number[] }
+
+/** 명령 하나를 돌려 표준 출력을 모으거나(상한) 파일로 쓴다. 허용하지 않은 종료 코드면 실패. */
 async function capture(command: Spawned, out?: { path: string; limit: number }): Promise<string> {
+  return (await captureCode(command, { ...(out && { out }) })).stdout;
+}
+
+async function captureCode(command: Spawned, options: CaptureOptions): Promise<{ code: number; stdout: string }> {
+  const out = options.out;
   const file = out ? await open(out.path, 'wx', 0o600) : undefined;
   try {
-    return await new Promise<string>((resolve, reject) => {
-      const child = spawn(command.file, command.args, { cwd: command.cwd, env: command.env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    return await new Promise<{ code: number; stdout: string }>((resolve, reject) => {
+      const child = spawn(command.file, command.args, { cwd: command.cwd, env: command.env, stdio: [options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], detached: true });
+      if (options.input !== undefined) { child.stdin?.on('error', () => undefined); child.stdin?.end(options.input); }
       const chunks: Buffer[] = [];
       let size = 0, failed: Error | undefined, writing = Promise.resolve();
       const stop = (error: Error) => { failed ??= error; try { process.kill(-(child.pid ?? 0), 'SIGKILL'); } catch { /* 이미 끝남 */ } };
       const timer = setTimeout(() => stop(new AgentGitError('Agent git 명령이 시간 안에 끝나지 않았습니다.')), TIMEOUT_MS);
-      child.stdout.on('data', (bytes: Buffer) => {
+      child.stdout?.on('data', (bytes: Buffer) => {
         size += bytes.length;
         if (size > (out?.limit ?? 1024 * 1024)) { stop(new AgentGitError('Agent git 출력이 상한을 넘었습니다.')); return; }
         if (file) { const f = file; writing = writing.then(async () => { await f.write(bytes); }); }
         else chunks.push(bytes);
       });
-      child.stderr.resume();
+      child.stderr?.resume();
       child.once('error', reject);
       child.once('close', (code) => {
         clearTimeout(timer);
         void writing.then(() => {
           if (failed) reject(failed);
-          else if (code !== 0) reject(new AgentGitError(`Agent git 명령이 종료 코드 ${String(code)}로 끝났습니다.`));
-          else resolve(Buffer.concat(chunks).toString('utf8'));
+          else if (code === null || !(options.allow ?? [0]).includes(code)) reject(new AgentGitError(`Agent 계정 명령이 종료 코드 ${String(code)}로 끝났습니다.`));
+          else resolve({ code, stdout: Buffer.concat(chunks).toString('utf8') });
         }, reject);
       });
     });
@@ -69,16 +77,21 @@ async function capture(command: Spawned, out?: { path: string; limit: number }):
  * 실제 래퍼로 Agent 계정 git을 돌린다: `systemd-run --user --scope -- sudo -n -u awbs-agent -- 래퍼 git-…`.
  * Agent 설정이 무엇을 띄우든 그 프로세스는 scope 안이다. 끝나면 scope를 비우고 비었음을 확인한다(못 하면 실패).
  */
-export function wrapperAgentGit(cfg: { user: string; exec: string; sudo?: string } = { user: AGENT_USER, exec: AGENT_EXEC }): AgentGit {
-  const call = async (args: string[], out?: { path: string; limit: number }): Promise<string> => {
-    const launch = inUserScope({ file: cfg.sudo ?? '/usr/bin/sudo', args: ['-n', '-u', cfg.user, '--', cfg.exec, ...args], env: { PATH: '/usr/bin:/bin' }, cwd: '/', stdin: '' });
-    // 결과를 쓰기 전에 scope를 비운다. Agent 설정이 띄운 프로세스가 남으면 결과도 믿지 않는다.
-    let result: string | undefined, failure: unknown;
-    try { result = await capture(launch, out); } catch (error) { failure = error; }
-    if (launch.scope && !await clearScope(launch.scope)) throw new AgentGitError('Agent git 명령의 scope를 비우지 못했습니다.');
-    if (failure !== undefined || result === undefined) throw failure instanceof Error ? failure : new AgentGitError('Agent git 명령이 실패했습니다.');
-    return result;
-  };
+export interface WrapperConfig { user: string; exec: string; sudo?: string }
+
+/** 래퍼 하위 명령 하나를 사용자 scope 안에서 Agent 계정으로 돌리고, 끝나면 scope를 비운 것을 확인한다. */
+async function wrapperCall(cfg: WrapperConfig, args: string[], options: CaptureOptions = {}): Promise<{ code: number; stdout: string }> {
+  const launch = inUserScope({ file: cfg.sudo ?? '/usr/bin/sudo', args: ['-n', '-u', cfg.user, '--', cfg.exec, ...args], env: { PATH: '/usr/bin:/bin' }, cwd: '/', stdin: '' });
+  // 결과를 쓰기 전에 scope를 비운다. Agent 설정이 띄운 프로세스가 남으면 결과도 믿지 않는다.
+  let result: { code: number; stdout: string } | undefined, failure: unknown;
+  try { result = await captureCode(launch, options); } catch (error) { failure = error; }
+  if (launch.scope && !await clearScope(launch.scope)) throw new AgentGitError('Agent 계정 명령의 scope를 비우지 못했습니다.');
+  if (failure !== undefined || result === undefined) throw failure instanceof Error ? failure : new AgentGitError('Agent 계정 명령이 실패했습니다.');
+  return result;
+}
+
+export function wrapperAgentGit(cfg: WrapperConfig = { user: AGENT_USER, exec: AGENT_EXEC }): AgentGit {
+  const call = async (args: string[], out?: { path: string; limit: number }): Promise<string> => (await wrapperCall(cfg, args, { ...(out && { out }) })).stdout;
   return {
     async inspect(path) { return parseInspect(await call(['git-inspect', '--cwd', path])); },
     async bundle(path, branch, out) { await call(['git-bundle', '--cwd', path, '--branch', branch], { path: out, limit: BUNDLE_LIMIT }); },
@@ -100,5 +113,44 @@ export function localAgentGit(): AgentGit {
       return parseInspect(`head ${head}\ndirty ${status || flags ? '1' : '0'}\n`);
     },
     async bundle(path, branch, out) { await git(path, ['bundle', 'create', '--quiet', '-', `refs/heads/${branch}`], { path: out, limit: BUNDLE_LIMIT }); },
+  };
+}
+
+/**
+ * Agent 작업 폴더 안 하위 Agent 정의 파일의 읽기·쓰기·지우기(fix2 추가, 조정자 지시).
+ * 전용 계정 배치에서는 래퍼 `agent-file`(Agent 계정)로만 한다. Runner 계정은 Agent가 쓸 수 있는 폴더에 쓰지 않는다.
+ * 왜: Runner가 lstat로 폴더를 확인한 뒤 쓰면, 그 사이 다른 Agent 세션이 폴더를 Runner 폴더 링크로 바꿔 Runner 파일을 덮어쓸 수 있다.
+ *   Agent 계정이 쓰면 링크를 따라가도 Agent 권한이다.
+ * `rel`은 작업 폴더 기준 `.claude/agents/<이름>`·`.codex/agents/<이름>`이다(래퍼가 모양을 다시 검사한다).
+ */
+export interface AgentFiles {
+  readonly kind: 'agent-account' | 'same-account';
+  /** 없으면 undefined. */
+  read(cwd: string, rel: string): Promise<string | undefined>;
+  /** 폴더를 만들고 같은 폴더의 임시 파일을 거쳐 한 번에 바꾼다. */
+  write(cwd: string, rel: string, text: string): Promise<void>;
+  /** 없으면 아무것도 하지 않는다. */
+  remove(cwd: string, rel: string): Promise<void>;
+}
+
+export const AGENT_FILE_REL = /^\.(claude|codex)\/agents\/(\.awbs-installed\.json|[a-z][a-z0-9-]{0,63}\.(md|toml))$/;
+
+export function wrapperAgentFiles(cfg: WrapperConfig = { user: AGENT_USER, exec: AGENT_EXEC }): AgentFiles {
+  const check = (rel: string) => { if (!AGENT_FILE_REL.test(rel)) throw new AgentGitError('하위 Agent 정의 경로 모양이 아닙니다.'); };
+  return {
+    kind: 'agent-account',
+    async read(cwd, rel) {
+      check(rel);
+      const result = await wrapperCall(cfg, ['agent-file', 'read', '--cwd', cwd, '--path', rel], { allow: [0, 3] });
+      if (result.code === 3) return undefined;
+      if (Buffer.byteLength(result.stdout) > 1024 * 1024) throw new AgentGitError('하위 Agent 정의 파일이 너무 큽니다.');
+      return result.stdout;
+    },
+    async write(cwd, rel, text) {
+      check(rel);
+      if (Buffer.byteLength(text) > 1024 * 1024) throw new AgentGitError('하위 Agent 정의 파일이 너무 큽니다.');
+      await wrapperCall(cfg, ['agent-file', 'write', '--cwd', cwd, '--path', rel], { input: text });
+    },
+    async remove(cwd, rel) { check(rel); await wrapperCall(cfg, ['agent-file', 'remove', '--cwd', cwd, '--path', rel]); },
   };
 }

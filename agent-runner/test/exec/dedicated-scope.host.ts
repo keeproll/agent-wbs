@@ -13,7 +13,9 @@ import { basename, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { afterAll, expect, test } from 'vitest';
 import { AGENT_EXEC, AGENT_ROOT, AGENT_USER, agentControl, dedicatedUserIsolation, selectIsolation } from '../../src/cli/dedicated-user.ts';
-import { wrapperAgentGit } from '../../src/git/agent-git.ts';
+import { wrapperAgentFiles, wrapperAgentGit } from '../../src/git/agent-git.ts';
+import { installSubagents } from '../../src/exec/install.ts';
+import { createHash } from 'node:crypto';
 import type { IsolationLayer, Launch } from '../../src/cli/isolation.ts';
 import { Launches, processInfo } from '../../src/exec/launches.ts';
 import { GitRepository } from '../../src/git/repository.ts';
@@ -365,7 +367,16 @@ test.runIf(systemdRun)('새 래퍼 사본 + 실제 scope: 결과는 bundle로만
     await writeFile(join(poc, '.git', 'refs', 'heads', 'agent', 'ci-poc'), '1'.repeat(40) + '\n');
     await expect(repo.taskCheckPath('ci-poc', head)).rejects.toThrow();
     expect(existsSync(marker)).toBe(false);
-    facts.agentGitCopy = { importedHead: agentHead, untrackedRejected: true, pocMarker: existsSync(marker) };
+    // 4) 하위 Agent 정의(fix2 추가): 래퍼 agent-file로만 쓰고 걷어 낸다. 실제 사용자 scope 안에서 돈다.
+    const files = wrapperAgentFiles({ user: me, exec, sudo });
+    const text = '코드를 검토합니다.\n';
+    const def = { id: '00000000-0000-4000-8000-000000000001', key: 'code-reviewer', agent: 'Codex' as const, version: 1, file: text, sandbox: 'read-only',
+      hash: createHash('sha256').update(text).digest('hex') };
+    await installSubagents(work, 'Codex', { enabled: true, items: [def] }, { model: 'gpt-6.2-sol', effort: 'high' }, files);
+    expect(readFileSync(join(work, '.codex/agents/code-reviewer.toml'), 'utf8')).toContain('name = "code-reviewer"');
+    await installSubagents(work, 'Codex', { enabled: false, items: [] }, { model: 'gpt-6.2-sol', effort: 'high' }, files);
+    expect(existsSync(join(work, '.codex/agents/code-reviewer.toml'))).toBe(false);
+    facts.agentGitCopy = { importedHead: agentHead, untrackedRejected: true, pocMarker: existsSync(marker), subagentFilesViaWrapper: true };
   } finally {
     await rm(root, { recursive: true, force: true });
   }

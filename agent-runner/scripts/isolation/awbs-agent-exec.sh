@@ -17,6 +17,9 @@
 #   git-inspect --cwd <작업 폴더>       작업 폴더의 HEAD와 「커밋하지 않은 변경이 있는가」를 Agent 계정 git으로 본다(조정자 결정 6)
 #   git-bundle --cwd <작업 폴더> --branch <이름>   그 브랜치의 git bundle(데이터 파일)을 표준 출력으로 낸다(조정자 결정 6)
 #   cli-version --tool claude|codex|pnpm -- <진입점>   새로 설치한 CLI의 --version을 Agent 계정으로 실행한다(조정자 결정 8)
+#   agent-file read|write|remove --cwd <작업 폴더> --path <.claude|.codex>/agents/<이름>
+#                       하위 Agent 정의 파일을 Agent 계정이 읽고(표준 출력)·쓰고(표준 입력)·지운다(fix2 추가, 조정자 지시).
+#                       없는 파일 읽기는 종료 코드 3. Runner는 Agent가 쓸 수 있는 폴더에 직접 쓰지 않는다.
 #
 # 주의: 이 래퍼는 Runner를 막는 보안 경계가 아니다. Runner 계정을 Agent 계정으로 바꾸는 「문」이다.
 #   ci-run은 고정 PATH의 아무 명령이나 받는다. 결정 4(「run은 진입점만」)는 run 하위 명령 안의 규칙일 뿐이다.
@@ -260,6 +263,35 @@ cmd_cli_version() {
     DISABLE_AUTOUPDATER=1 DISABLE_UPDATES=1 "$bin" --version
 }
 
+# 하위 Agent 정의 파일(fix2 추가). Runner 계정이 Agent 작업 폴더에 쓰면 lstat 확인과 쓰기 사이에
+# 다른 Agent 세션이 폴더를 Runner 폴더 링크로 바꿔 Runner 파일을 덮어쓸 수 있다. 그래서 읽기·쓰기·지우기를 Agent 계정이 한다.
+# 링크를 따라가도 Agent 권한이라 넓어지지 않는다. 경로는 정해진 모양만, 크기는 1 MiB까지.
+cmd_agent_file() {
+  (($# == 5)) && [[ $2 == --cwd && $4 == --path ]] || die "agent-file read|write|remove --cwd <작업 폴더> --path <경로>만 받습니다."
+  local op=$1 rel=$5 real_cwd
+  [[ $op == read || $op == write || $op == remove ]] || die "agent-file 동작은 read·write·remove입니다."
+  [[ $rel =~ ^\.(claude|codex)/agents/(\.awbs-installed\.json|[a-z][a-z0-9-]{0,63}\.(md|toml))$ ]] || die "하위 Agent 정의 경로 모양이 아닙니다."
+  real_cwd=$(inside "$3" "$WORKTREES") || die "작업 폴더는 $WORKTREES 안이어야 합니다."
+  [[ -d $real_cwd ]] || die "작업 폴더가 폴더가 아닙니다."
+  cd -- "$real_cwd"
+  case $op in
+    read)
+      [[ -e $rel || -L $rel ]] || exit 3
+      [[ -f $rel && ! -L $rel ]] || die "일반 파일이 아닙니다."
+      head -c 1048577 -- "$rel" ;;
+    write)
+      local dir tmp
+      dir=${rel%/*}
+      mkdir -p -- "$dir"
+      tmp=$(mktemp -- "$dir/.awbs-XXXXXX")
+      head -c 1048577 > "$tmp"
+      (($(stat -c %s -- "$tmp") <= 1048576)) || { rm -f -- "$tmp"; die "파일이 너무 큽니다."; }
+      chmod 0660 -- "$tmp"
+      mv -fT -- "$tmp" "$rel" ;;
+    remove) rm -f -- "$rel" ;;
+  esac
+}
+
 cmd_kill_group() {
   [[ ${1-} =~ ^[1-9][0-9]{0,9}$ ]] || die "pgid는 양의 정수입니다."
   # Agent 계정으로 보내므로 Agent 계정의 프로세스에만 닿는다. 다른 계정(Runner·root)의 프로세스는 죽일 수 없다.
@@ -336,10 +368,11 @@ case $sub in
   git-inspect) cmd_git_inspect "$@" ;;
   git-bundle) cmd_git_bundle "$@" ;;
   cli-version) cmd_cli_version "$@" ;;
+  agent-file) cmd_agent_file "$@" ;;
   kill-group) cmd_kill_group "$@" ;;
   kill-all) cmd_kill_all ;;
   fix-perms) cmd_fix_perms "$@" ;;
   check) cmd_check ;;
   login-status) cmd_login_status "$@" ;;
-  *) die "하위 명령은 run · ci-run · git-inspect · git-bundle · cli-version · kill-group · kill-all · fix-perms · check · login-status 중 하나입니다." ;;
+  *) die "하위 명령은 run · ci-run · git-inspect · git-bundle · cli-version · agent-file · kill-group · kill-all · fix-perms · check · login-status 중 하나입니다." ;;
 esac

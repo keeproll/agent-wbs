@@ -30,7 +30,7 @@ const REPOSITORY_METHODS: Record<string, string> = {
 const OTHER_SITES: Record<string, string> = {
   'ci/collect-tests.ts': 'package.json 읽기(O_NOFOLLOW·O_NONBLOCK·일반 파일·1 MiB)',
   'cli/dedicated-user.ts': 'ci-run --home 경로 문자열만(파일 접근 없음, 래퍼가 Agent 계정으로 확인)',
-  'exec/install.ts': '[남은 위험] 하위 Agent 정의 쓰기(lstat 확인 뒤 쓰기). 시도 흐름(jobs)이 꺼져 있어 지금은 쓰이지 않음 — fix2 보고 「새 발견」',
+  'exec/install.ts': '같은 계정 배치(localAgentFiles)만 직접 fs. 전용 계정 배치는 래퍼 agent-file(Agent 계정)로만(fix2 추가)',
 };
 
 test('repository.ts: Agent 작업 폴더 모음을 쓰는 메서드는 목록의 것뿐이다', () => {
@@ -58,4 +58,17 @@ test('Runner git이 Agent .git을 저장소로 쓰는 모양(--git-dir=·Agent �
   // 그 갈래는 모두 「this.agentGit이 없을 때」(같은 계정 배치) 뒤에 있다.
   const shared = text.slice(text.indexOf('async taskCheckPath'), text.indexOf('async reset('));
   expect(shared.indexOf('if (this.agentGit)')).toBeLessThan(shared.indexOf('--git-dir='));
+});
+
+test('exec/install.ts: 직접 파일 접근은 같은 계정 배치용(localAgentFiles·directory)에만 있고, 설치 본문은 AgentFiles만 쓴다', () => {
+  const text = readFileSync(join(src, 'exec', 'install.ts'), 'utf8');
+  const body = text.slice(text.indexOf('export async function installSubagents'));
+  for (const call of ['readFile(', 'atomicWrite(', 'rm(', 'mkdir(', 'lstat(', 'writeFile(', 'open(']) expect(body, call).not.toContain(call);
+  const local = text.slice(text.indexOf('export const localAgentFiles'), text.indexOf('export async function installSubagents'));
+  expect(local).toContain("kind: 'same-account'");
+});
+
+test('Execution은 전용 계정 배치에서 Agent 계정 파일 접근을 받는다(app.ts 연결)', () => {
+  const text = readFileSync(join(src, 'app.ts'), 'utf8');
+  expect(text).toContain('...(d.agentRoot && { agentFiles: wrapperAgentFiles() }),');
 });

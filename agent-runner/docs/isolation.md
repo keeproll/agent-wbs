@@ -104,6 +104,7 @@ keeproll ALL=(awbs-agent) NOPASSWD: /usr/local/libexec/awbs-agent-exec
   - 다른 Agent의 CLI도 거부한다.
 - `git-inspect --cwd <작업 폴더>`·`git-bundle --cwd <작업 폴더> --branch <이름>`(fix2, 조정자 결정 6): Agent 작업 폴더의 git을 Agent 계정이 돌린다. 시스템·전역 설정 없음, `GIT_ALLOW_PROTOCOL=none`, `GIT_NO_LAZY_FETCH=1`, hook·fsmonitor 끔. Runner는 사용자 scope 안에서 부르고 끝나면 scope를 비운다.
 - `cli-version --tool claude|codex|pnpm -- <진입점>`(fix2, 조정자 결정 8): 새로 설치한 CLI의 `--version`을 Agent 계정으로 실행한다(`install-agent-cli.sh`가 쓴다).
+- `agent-file read|write|remove --cwd <작업 폴더> --path <.claude|.codex>/agents/<이름>`(fix2 추가): 하위 Agent 정의 파일을 Agent 계정이 다룬다. 경로는 정해진 모양만(`.awbs-installed.json` 또는 `<키>.md|toml`), 1 MiB까지, 없는 파일 읽기는 종료 코드 3.
 - `ci-run`(①·CI 검사 명령, 조정자 결정 1, fix1): Agent 코드의 시험·빌드를 Agent 계정으로 실행한다.
   - `--home <작업 폴더>/.awbs-home`이 필수다(fix2, 조정자 결정 8). 실행마다 새 HOME·TMPDIR(pnpm 저장소 포함)라 다른 Task와 공유하지 않는다.
   - 작업 폴더는 `run`과 같은 규칙(worktrees 안)이다.
@@ -450,7 +451,7 @@ bash agent-runner/scripts/isolation/remove-agent-user.sh --purge-work     # 작�
   - 작업 폴더 준비는 Runner 전용 준비 폴더(0700)에서 끝낸 뒤 넘기고, HEAD·상태는 래퍼 `git-inspect`, 결과는 래퍼 `git-bundle`(Agent 계정)로만 받는다. 자세한 것은 `src/git/README.md` 「전용 계정 배치의 경계」.
   - 남은 것: 같은 Agent 계정의 다른 세션은 여전히 검사 사본·작업 폴더를 바꿀 수 있다(목록은 못 보게 막음, 0710). 결과의 무결성(시험이 정말 그 코드로 돌았나)은 같은 계정 안에서는 보장하지 못한다.
 - **래퍼는 Runner를 막는 경계가 아니다.** Runner 계정을 Agent 계정으로 바꾸는 「문」이다. `ci-run`은 고정 PATH의 아무 명령이나 받는다. 결정 4(「`run`은 진입점만」)는 `run` 안의 규칙일 뿐이다.
-- **하위 Agent 정의 설치(`exec/install.ts`)는 Runner 계정이 작업 폴더에 쓴다**(lstat 확인 뒤 쓰기, 링크 바꿔치기 틈). 시도 흐름이 꺼져 있어 지금은 쓰이지 않는다. 시도 흐름을 켜기 전에 Agent 계정 쓰기로 옮겨야 한다(fix2 보고 「새 발견」).
+- **하위 Agent 정의 설치(`exec/install.ts`)**: 전용 계정 배치에서는 래퍼 `agent-file`(Agent 계정)로만 읽고·쓰고·지운다(fix2 추가). Runner 계정은 Agent가 쓸 수 있는 폴더에 쓰지 않는다. 같은 계정 배치(개발·시험)만 직접 쓴다.
 
 ## 12. 후속 연결 작업
 

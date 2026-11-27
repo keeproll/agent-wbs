@@ -111,3 +111,9 @@ test('실제 CI 실행기(ciAuto)는 격리 계층이 없으면 CI job을 받지
     expect(calls).not.toContain('claimJob');
   } finally { vi.clearAllTimers(); vi.useRealTimers(); }
 });
+
+test('fix2 추가: 전용 계정 배치의 Execution은 하위 Agent 정의를 Agent 계정(래퍼 agent-file)으로만 다룬다', () => {
+  const run = vi.fn<RunCommand>(async () => ({ code: 0, stdout: '', stderr: '' }));
+  expect(app(run, '/srv/agentwbs').execution.agentFiles.kind).toBe('agent-account');
+  expect(app(run, null).execution.agentFiles.kind).toBe('same-account');
+});
