@@ -42217,6 +42217,7 @@
       "ReportSnapshot": {
         "type": "object",
         "required": [
+          "projectName",
           "summary",
           "issues",
           "series",
@@ -42231,6 +42232,9 @@
           "all"
         ],
         "properties": {
+          "projectName": {
+            "type": "string"
+          },
           "summary": {
             "type": "object",
             "required": [

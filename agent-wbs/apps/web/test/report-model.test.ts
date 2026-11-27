@@ -11,7 +11,7 @@ const empty: ReportSnapshotData = {
     target: null, uptimePct: 0, ratePct: 0, blocked: 0, statuses: [], started: [],
     attempts: { total: 0, dev: 0, qa: 0, pass: 0, fail: 0, escalated: 0, interrupted: 0, tokens: 0 },
   },
-  issues: [], series: [], done: [], active: [], failures: [], attempts: [], replans: [], gaps: [], messages: [], next: [], all: [],
+  projectName: '시험 프로젝트', issues: [], series: [], done: [], active: [], failures: [], attempts: [], replans: [], gaps: [], messages: [], next: [], all: [],
 };
 const full: ReportSnapshotData = {
   ...empty,

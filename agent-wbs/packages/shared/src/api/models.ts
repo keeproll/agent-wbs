@@ -1049,6 +1049,8 @@ const moved = List(
 );
 export const ReportSnapshot = Type.Object(
   {
+    // 생성 시점의 프로젝트 이름(M6-02). 보고서·PDF 제목은 이 값을 쓴다. 왜: 보고서는 생성 시점 기록이라 나중에 이름을 바꿔도 그대로여야 한다.
+    projectName: Str,
     summary: obj({
       taskCount: c.Count, doneCount: c.Count, doneBefore: c.Count, workPct: c.Pct, workPctBefore: c.Pct,
       baselineVersion: c.Count, forecast: MaybeDate, lo: MaybeDate, hi: MaybeDate, forecastBefore: MaybeDate,

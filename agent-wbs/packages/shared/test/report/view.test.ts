@@ -11,7 +11,7 @@ function snap(patch: Patch = {}): ReportSnapshotData {
     attempts: { total: 4, dev: 2, qa: 2, pass: 1, fail: 1, escalated: 1, interrupted: 0, tokens: 125_000 },
     ...patch.summary,
   };
-  return { issues: [], series: [], done: [], active: [], failures: [], attempts: [], replans: [], gaps: [], messages: [], next: [], all: [], ...patch, summary };
+  return { projectName: '시험 프로젝트', issues: [], series: [], done: [], active: [], failures: [], attempts: [], replans: [], gaps: [], messages: [], next: [], all: [], ...patch, summary };
 }
 const doneTask = (taskKey: string, title: string) => ({
   taskKey, wbsPath: '1.1.1', title, assignee: 'Claude' as const, verifier: 'Codex' as const, workType: 'Implementation' as const, domain: 'BE' as const,

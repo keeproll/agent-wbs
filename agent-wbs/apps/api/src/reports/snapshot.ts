@@ -59,7 +59,7 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
     return next;
   };
   const [project, tasks, nodes, deps, attempts, verifs, defects, evidence, messages, replans, moves, sessions, alerts, proposals, checklist, outputs, grades] = await Promise.all([
-    q<{ target: string | null }>("select to_char(target_date,'YYYY-MM-DD') target from projects where id=$1", [projectId]),
+    q<{ target: string | null; name: string }>("select to_char(target_date,'YYYY-MM-DD') target,name from projects where id=$1", [projectId]),
     q<{ id: string; key: string; title: string; status: TaskStatus; work_type: string; domain: string; assignee: 'Claude' | 'Codex'; verifier: 'Claude' | 'Codex';
       verif_state: string; act_start: string | null; act_end: string | null; cg: string | null; done_cond: string | null; wbs_node_id: string; sort_order: number; est: string | null }>(
       `select t.id,t.task_key key,t.title,t.status,t.work_type,t.primary_domain domain,t.assignee_agent assignee,t.verifier_agent verifier,t.verif_state,
@@ -302,6 +302,7 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
   });
 
   return {
+    projectName: project[0]?.name ?? '',
     summary: {
       taskCount: tasks.length, doneCount: doneTo.length, doneBefore: doneFrom.length, workPct: workPct(doneTo), workPctBefore: workPct(doneFrom),
       baselineVersion: last?.baseline_v ?? schedule?.project.baselineVersion ?? 0,

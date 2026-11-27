@@ -1078,6 +1078,7 @@
    "dueAt": null,
    "reason": null,
    "snapshot": {
+    "projectName": "Agent WBS",
     "summary": {
      "taskCount": 10,
      "doneCount": 2,
