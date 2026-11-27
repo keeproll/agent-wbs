@@ -164,7 +164,7 @@ describe('runner 실제 PostgreSQL 검증', () => {
     const firstTask = await task(), secondTask = await task();
     const home = await mkdtemp(join(process.env.AWBS_TEST_TMP ?? tmpdir(), 'fix1-review-budget-'));
     const state = await State.open(home); await state.update(d => { d.epoch = 1; });
-    const fake = installFakeCli(join(home, 'fake'), 'codex', { hang: true, lines: [{ type: 'thread.started', thread_id: 'thread' }, { type: 'item.completed', item: { type: 'collab_tool_call', tool: 'spawn_agent', status: 'completed', receiver_thread_ids: ['a','b','c','d','e','f'] } }] });
+    const fake = installFakeCli(join(home, 'fake'), 'codex', { hang: true, lines: [{ type: 'thread.started', thread_id: 'thread' }, { type: 'item.completed', item: { type: 'collab_tool_call', tool: 'spawn_agent', status: 'completed', receiver_thread_ids: ['a','b','c','d','e','f'], agents_states: Object.fromEntries(['a','b','c','d','e','f'].map(id => [id, { status: 'running' }])) } }] });
     const api = createApiClient({ baseUrl: 'http://fake.invalid', token: new Secret(bearer), fetch: async (input, init) => {
       const u = new URL(String(input));
       const r = await app.inject({ method: init?.method as 'GET' | 'POST', url: u.pathname + u.search, headers: Object.fromEntries(new Headers(init?.headers)), ...(init?.body && { payload: String(init.body) }) });
