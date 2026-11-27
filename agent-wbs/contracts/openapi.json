@@ -42235,6 +42235,20 @@
           "projectName": {
             "type": "string"
           },
+          "projectNameFilled": {
+            "type": "object",
+            "required": [
+              "source"
+            ],
+            "properties": {
+              "source": {
+                "enum": [
+                  "history",
+                  "current"
+                ]
+              }
+            }
+          },
           "summary": {
             "type": "object",
             "required": [

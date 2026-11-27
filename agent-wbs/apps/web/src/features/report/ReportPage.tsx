@@ -9,7 +9,7 @@
  */
 import { useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
-import { seoulDay } from '@awbs/shared';
+import { reportProjectName, seoulDay } from '@awbs/shared';
 import { useApi } from '../../shared/api/ApiProvider.tsx';
 import { useAllPages } from '../../shared/api/allPages.ts';
 import { useApiQuery } from '../../shared/api/queries.ts';
@@ -182,7 +182,7 @@ function ReportDocument({ row, view, onView }: { row: ReportRow; view: ReportVie
       <article className="rpt-doc" aria-label={`${row.reportKey} 보고서`}>
         <header className="rpt-h">
           <div className="rpt-kind">{KIND[row.kind].doc}</div>
-          <h2>{docTitle(d.snapshot.projectName, row.kind, view)}</h2>
+          <h2>{docTitle(reportProjectName(d.snapshot), row.kind, view)}</h2>
           <div className="rpt-meta">
             <span>기간 <b className="mono">{periodLabel(row)}</b></span>
             <span>생성 <span className="mono">{formatDateTime(row.generatedAt)}</span> · {rowView(row).byL}</span>

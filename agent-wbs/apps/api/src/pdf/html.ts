@@ -9,7 +9,7 @@
  *
  * 모든 값은 HTML 특수 문자를 바꿔 넣는다(`esc`). 왜: 제목·메시지에 `<script>` 같은 글자가 있어도 글자로만 보이게 한다.
  */
-import type { ReportSnapshotData } from '@awbs/shared';
+import { reportProjectName, type ReportSnapshotData } from '@awbs/shared';
 import {
   byLabel, docTitle, externalDoc, formatDateTime, internalDoc, KIND, lateLabel, periodLabel, snapLabel, type ReportHead, type ReportView,
 } from './model.ts';
@@ -154,7 +154,7 @@ export function reportHtml(r: ReportHtmlInput): string {
   const article = el('article', `class="rpt-doc" aria-label="${esc(`${r.reportKey} 보고서`)}"`,
     el('header', 'class="rpt-h"',
       el('div', 'class="rpt-kind"', esc(KIND[r.kind].doc)),
-      el('h2', '', esc(docTitle(r.snapshot.projectName, r.kind, r.view))),
+      el('h2', '', esc(docTitle(reportProjectName(r.snapshot), r.kind, r.view))),
       el('div', 'class="rpt-meta"',
         el('span', '', esc('기간 '), el('b', 'class="mono"', esc(periodLabel(r)))),
         el('span', '', esc('생성 '), span('mono', formatDateTime(r.generatedAt)), esc(` · ${byLabel(r.kind)}`)),
