@@ -101,39 +101,69 @@ async function signalOwnedGroup(pgid: number, snapshot: Proc[], signal: NodeJS.S
 
 /**
  * 이 Runner가 직접 띄운 detached 자식(자기 프로세스 그룹의 leader)의 그룹 하나를 끝낸다.
- * M5-02·M5-03의 그룹 정리 방식(`signalOwnedGroup`·`processGroupEmpty`)을 그대로 쓴다: TERM → graceMs 대기 → 남으면 KILL → 1초 대기.
- * 그룹이 비었음을 확인하면 true, 확인하지 못하면 false다(그때 호출자는 결과를 「모름」으로 다룬다).
- * 신호는 leader 시작 이후에 생긴 같은 사용자 프로세스가 지금도 그 그룹에 있을 때만 보낸다(번호 재사용 방지).
+ * M5-02·M5-03의 그룹 정리 방식(`processInfo`·`signalOwnedGroup`·`processGroupEmpty`)과 같은 정체성 규칙(pid + 시작 시각)을 쓴다.
+ * 순서: TERM → graceMs 대기 → 남으면 KILL → 1초 대기. 그룹이 비었음을 확인하면 true, 확인하지 못하면 false(「모름」)다.
+ *
+ * 신호를 보내기 **직전마다** leader(`/proc/<pgid>/stat`)의 시작 시각이 기록과 정확히 같은지 확인한다.
+ * - 같다: 그 그룹은 우리 그룹이다. 그룹 전체에 신호를 보낸다.
+ * - 다르다: 그 번호를 다른 프로세스가 쓰고 있다. 아무것도 죽이지 않고 「이미 끝남」(true)으로 본다.
+ *   왜: 리눅스는 프로세스 그룹이 남아 있는 동안 그 번호를 새 프로세스에 주지 않는다. 번호가 다시 쓰였다면 우리 그룹은 그 전에 이미 비었다.
+ * - leader가 없다(정상: git은 끝나고 전송 하위 프로세스만 남음): 그룹 전체가 아니라, leader가 맞을 때 본 구성원 중
+ *   지금도 pid·시작 시각·그룹이 같은 프로세스에만 하나씩 신호를 보낸다. 처음 보는 구성원은 건드리지 않는다(그러면 비지 않아 「모름」).
  * 예: git push를 끊으면 git이 띄운 git-remote-https·git send-pack까지 같은 그룹이라 함께 끝난다.
  */
 export async function terminateGroup(pgid: number, leaderStartTime: string, graceMs = 2_000): Promise<boolean> {
   if (!validPid(pgid) || pgid === process.pid || !/^\d+$/.test(leaderStartTime)) return false;
-  const members = async (): Promise<Proc[]> => {
-    const found: Proc[] = [];
+  /** leader가 맞을 때 본 구성원(pid → 시작 시각). leader가 사라진 뒤에는 이들에게만 신호를 보낸다. */
+  const known = new Map<number, string>();
+  const leaderRecord: Proc = { pid: pgid, ppid: 0, pgid, sessionId: pgid, startTime: leaderStartTime, launchId: undefined };
+  const leader = async (): Promise<'ours' | 'reused' | 'gone'> => {
+    try { return (await processInfo(pgid)).startTime === leaderStartTime ? 'ours' : 'reused'; }
+    catch (e) { if (gone(e)) return 'gone'; throw e; }
+  };
+  const remember = async () => {
     for (const name of await readdir('/proc')) {
       if (!/^[1-9]\d*$/.test(name)) continue;
       try {
         if ((await stat(`/proc/${name}`)).uid !== process.getuid?.()) continue;
         const info = await processInfo(Number(name));
-        if (info.pgid === pgid && BigInt(info.startTime) >= BigInt(leaderStartTime) && !['Z', 'X'].includes(info.state)) found.push({ pid: Number(name), ...info, launchId: undefined });
+        if (info.pgid === pgid && !['Z', 'X'].includes(info.state)) known.set(Number(name), info.startTime);
       } catch (e) { if (!gone(e)) throw e; }
     }
-    return found;
+  };
+  /** 'reused'면 아무것도 보내지 않고 끝난 것으로 본다. */
+  const signal = async (sig: NodeJS.Signals): Promise<'reused' | 'sent'> => {
+    if (await leader() === 'ours') await remember();
+    const state = await leader();
+    if (state === 'reused') return 'reused';
+    // leader가 맞으면 M5-02의 signalOwnedGroup이 leader 정체성을 다시 확인한 바로 뒤에 그룹 전체에 보낸다.
+    if (state === 'ours') { await signalOwnedGroup(pgid, [leaderRecord], sig); return 'sent'; }
+    for (const [pid, startTime] of known) {
+      if (pid === pgid) continue;
+      try {
+        const current = await processInfo(pid);
+        if (current.startTime === startTime && current.pgid === pgid) process.kill(pid, sig);
+      } catch (e) { if (!gone(e)) throw e; }
+    }
+    return 'sent';
+  };
+  const settled = async (deadlineMs: number): Promise<'empty' | 'reused' | 'left'> => {
+    const deadline = performance.now() + deadlineMs;
+    for (;;) {
+      if (processGroupEmpty(pgid)) return 'empty';
+      if (await leader() === 'reused') return 'reused';
+      if (performance.now() >= deadline) return 'left';
+      await sleep(10);
+    }
   };
   try {
     if (processGroupEmpty(pgid)) return true;
-    const first = await members();
-    // 그룹은 남았는데 우리 구성원이 하나도 보이지 않으면 남의 그룹일 수 있다. 신호를 보내지 않고 「모름」이다.
-    if (first.length === 0) return false;
-    await signalOwnedGroup(pgid, first, 'SIGTERM');
-    let deadline = performance.now() + graceMs;
-    while (!processGroupEmpty(pgid) && performance.now() < deadline) await sleep(10);
-    if (!processGroupEmpty(pgid)) {
-      await signalOwnedGroup(pgid, await members(), 'SIGKILL');
-      deadline = performance.now() + 1_000;
-      while (!processGroupEmpty(pgid) && performance.now() < deadline) await sleep(10);
-    }
-    return processGroupEmpty(pgid);
+    if (await leader() === 'gone') return false; // 처음부터 leader가 없으면 우리 구성원을 가릴 기준이 없다.
+    if (await signal('SIGTERM') === 'reused') return true;
+    const afterTerm = await settled(graceMs);
+    if (afterTerm !== 'left') return true;
+    if (await signal('SIGKILL') === 'reused') return true;
+    return await settled(1_000) !== 'left';
   } catch { return false; }
 }
 

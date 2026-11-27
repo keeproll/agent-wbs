@@ -139,12 +139,30 @@ test('그룹 정리: TERM을 무시하는 구성원은 KILL로 끝낸다', async
   expect(await terminateGroup(pid, start, 200)).toBe(true);
 });
 
-test('그룹 정리: 시작 시각이 맞지 않으면(번호 재사용 의심) 신호를 보내지 않고 「모름」이다', async () => {
-  const child = spawn('/bin/sh', ['-c', 'sleep 30'], { detached: true, stdio: 'ignore' });
+// Codex 재리뷰 4 P2: 기록한 시작 시각과 leader가 다르면(번호 재사용) 어떤 신호도 보내지 않는다. 두 방향 모두.
+// 리눅스는 그룹이 남아 있는 동안 그 번호를 새 프로세스에 주지 않으므로, 다른 leader가 보이면 우리 그룹은 이미 끝난 것이다(true).
+test.each([['기록이 현재보다 늦음(미래 값)', '999999999999999'], ['기록이 현재보다 이름(옛 실행의 값, 리뷰어 재현)', 'older']])('그룹 정리: %s이면 아무것도 죽이지 않고 이미 끝난 것으로 본다', async (_name, recorded) => {
+  const child = spawn('/bin/sh', ['-c', 'sleep 30 & wait'], { detached: true, stdio: 'ignore' });
   await new Promise((resolve) => child.once('spawn', resolve));
   const pid = child.pid ?? 0;
   try {
-    expect(await terminateGroup(pid, '999999999999999', 100)).toBe(false);
+    await sleep(100);
+    const current = (await processInfo(pid)).startTime;
+    const stale = recorded === 'older' ? String(BigInt(current) - 100n) : recorded;
+    expect(await terminateGroup(pid, stale, 100)).toBe(true);
+    // 신호를 보내지 않았으므로 그룹(sh와 sleep)이 그대로 살아 있다.
     expect(() => process.kill(-pid, 0)).not.toThrow();
+    expect((await processInfo(pid)).startTime).toBe(current);
   } finally { process.kill(-pid, 'SIGKILL'); }
+});
+
+test('그룹 정리: leader가 먼저 끝나도 leader가 맞을 때 본 구성원(pid·시작 시각 일치)에게만 신호를 보내 끝낸다', async () => {
+  // leader(sh)는 TERM에 끝나고, 자식은 TERM을 무시한다 → KILL은 leader 없이 기억한 구성원에게 하나씩 간다.
+  const child = spawn('/bin/sh', ['-c', "sh -c \"trap '' TERM; sleep 30\" & wait"], { detached: true, stdio: 'ignore' });
+  await new Promise((resolve) => child.once('spawn', resolve));
+  const pid = child.pid ?? 0;
+  const start = (await processInfo(pid)).startTime;
+  await sleep(150);
+  expect(await terminateGroup(pid, start, 300)).toBe(true);
+  expect(() => process.kill(-pid, 0)).toThrow();
 });

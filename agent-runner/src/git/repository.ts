@@ -3,7 +3,8 @@ import { randomUUID, createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { chmod, link, lstat, mkdir, open, readFile, readdir, rename, rm, statfs, writeFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
-import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
+import { atomicWrite } from '../state/files.ts';
 import { parseCommits, parseRawNumstat, type InputDiff, type InputObservation } from './inputs.ts';
 
 export class GitSafetyError extends Error {
@@ -561,28 +562,57 @@ export class GitRepository {
     return join(this.home, 'state/git', `${this.repositoryId}.push-interrupted`);
   }
 
+  /**
+   * 중단 기록을 읽는다. 파일이 없으면 빈 기록이다. 읽거나 해석하지 못하면(손상) `unreadable`이다.
+   * 손상은 「기록 없음」으로 보지 않는다. 어떤 브랜치가 중단됐는지 모르므로 모든 브랜치를 재대조 대상으로 본다.
+   */
+  private async readInterruptedPushes(): Promise<{ record: Record<string, { commit: string; outcome: string }>; unreadable: boolean }> {
+    let text: string;
+    try { text = await readFile(await safePath(this.interruptedPushPath), 'utf8'); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { record: {}, unreadable: false }; return { record: {}, unreadable: true }; }
+    try {
+      const value = JSON.parse(text) as unknown;
+      if (!value || typeof value !== 'object' || Array.isArray(value) ||
+        Object.values(value).some((entry) => !entry || typeof (entry as { commit?: unknown }).commit !== 'string')) return { record: {}, unreadable: true };
+      return { record: value as Record<string, { commit: string; outcome: string }>, unreadable: false };
+    } catch { return { record: {}, unreadable: true }; }
+  }
+
+  /**
+   * 중단 기록의 읽기·수정·쓰기는 모두 여기서, 저장소 잠금(`worktreeUpdate`) 아래에서 직렬로 한다. 쓰기는 원자적이다(`atomicWrite`).
+   * 왜: 같은 저장소의 두 작업이 동시에 중단되면 서로의 기록을 덮어 한 브랜치의 재대조가 빠졌다(Codex 재리뷰 4 P3).
+   * 손상된 기록은 고쳐 쓰지 않고 그대로 둔다(사람이 확인하기 전까지 모든 브랜치를 재대조한다).
+   */
+  private async updateInterruptedPushes(change: (record: Record<string, { commit: string; outcome: string }>) => void): Promise<void> {
+    await this.worktreeUpdate(async () => {
+      const { record, unreadable } = await this.readInterruptedPushes();
+      if (unreadable) return;
+      change(record);
+      await atomicWrite(dirname(this.interruptedPushPath), basename(this.interruptedPushPath), JSON.stringify(record));
+    });
+  }
+
   private async markInterruptedPush(branch: string, commit: string, outcome: string): Promise<void> {
-    const path = await safePath(this.interruptedPushPath);
-    let record: Record<string, { commit: string; outcome: string }> = {};
-    try { record = JSON.parse(await readFile(path, 'utf8')) as typeof record; } catch { /* 처음 */ }
-    record[branch] = { commit, outcome };
-    await writeFile(path, JSON.stringify(record), { mode: 0o600 });
+    await this.updateInterruptedPushes((record) => { record[branch] = { commit, outcome }; });
   }
 
   /**
    * 중단한 push가 남긴 기록이 있으면 원격 브랜치 head를 읽기만 해서 대조한다.
    * - 원격 head가 보내던 커밋이면 그 push는 이미 반영됐다: 다시 쓰지 않는다('already').
    * - 아니면 기록을 지우고 평소처럼 push한다(일반 push라 원격이 다른 커밋으로 움직였으면 git이 거부한다).
+   * - 기록이 손상됐으면 이 브랜치도 대조한다(기록은 지우지 않는다).
+   * 원격 읽기는 잠금 밖에서 한다. 지울 때는 잠금 아래에서, 그 사이 같은 브랜치가 다시 기록됐으면 지우지 않는다.
    * 왜: 중단·모름은 「반영 안 됨」의 증거가 아니다. 원격 상태를 확인한 뒤에 다음 쓰기를 한다.
    */
   private async reconcileInterruptedPush(source: string, branch: string, commit: string, env: NodeJS.ProcessEnv): Promise<'already' | 'push'> {
-    const path = await safePath(this.interruptedPushPath);
-    let record: Record<string, { commit: string; outcome: string }>;
-    try { record = JSON.parse(await readFile(path, 'utf8')) as typeof record; } catch { return 'push'; }
-    if (!record[branch]) return 'push';
+    const { record, unreadable } = await this.worktreeUpdate(() => this.readInterruptedPushes());
+    const marked = record[branch];
+    if (!marked && !unreadable) return 'push';
     const line = (await this.git(['ls-remote', '--heads', '--', source, `refs/heads/${branch}`], undefined, env)).toString().trim();
     const remoteHead = line ? line.split(/\s/)[0] : null;
-    await writeFile(path, JSON.stringify(Object.fromEntries(Object.entries(record).filter(([name]) => name !== branch))), { mode: 0o600 });
+    if (marked) await this.updateInterruptedPushes((current) => {
+      if (current[branch]?.commit === marked.commit) Reflect.deleteProperty(current, branch);
+    });
     return remoteHead === commit ? 'already' : 'push';
   }
 
