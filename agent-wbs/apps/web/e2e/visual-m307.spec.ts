@@ -38,6 +38,8 @@ async function shot(page: Page) {
  * 페이지 전체 캡처(fullPage)는 문서가 아니라 본문 상자가 스크롤되는 구조라 아래가 잘린다.
  */
 async function fullShot(page: Page) {
+  // 높이를 재기 전에 글꼴을 기다린다. 글꼴이 늦게 오면 줄 높이가 바뀌어 잰 높이가 실제보다 작아진다.
+  await page.evaluate(() => document.fonts.ready);
   const extra = await page.evaluate(() => Math.max(0, ...[...document.querySelectorAll('.main,.main *')]
     .filter((e) => /auto|scroll/.test(getComputedStyle(e).overflowY)).map((e) => e.scrollHeight - e.clientHeight)));
   const size = page.viewportSize() ?? { width: 1920, height: 1080 };
@@ -60,6 +62,8 @@ const W = 1739;
 
 test('UI-01 대시보드(1920, 전체 페이지)', async ({ page }) => {
   await openAt(page, '/dashboard', '다음 행동을 결정하는');
+  // 맨 아래 영역까지 그려진 뒤에 높이를 잰다. 부하가 높으면 머리글만 보인 상태에서 재서 사진이 비교 영역보다 짧아졌다(M5·M7 통합 검증 4회차).
+  await expect(page.getByRole('region', { name: '최근 실행 · 검증 결과', exact: true })).toBeVisible();
   const png = await fullShot(page);
   const F = 'desktop-clock20261105/UI-01.full.png';
   const at = (y: number, h: number): Box => ({ x: MAIN_X, y, width: W, height: h });
