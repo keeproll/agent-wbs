@@ -636,7 +636,10 @@ describe('서버 후속 4: Runner 계약과 분석 완료', () => {
     expectShape('claimJob', 200, response.json());
     return response.json<{ job: { id: string; fence: number; kind: string; leaseUntil: string; payload: Record<string, unknown> } }>().job;
   }
-  async function confirmed(subagentDefs: Record<string, unknown>[] = []) {
+  // M5·M7 통합: M5-06부터 system seed가 검토된 하위 Agent v1을 허용 상태로 넣는다. 기대값은 지금 허용된 정의 전체다(def_key 순).
+  const allowedSubagentDefs = async () => (await ownerPool.query(`select distinct on (def_key) id,def_key as "defKey",version,agent,role
+    from subagent_defs where allowed order by def_key,version desc`)).rows as Record<string, unknown>[];
+  async function confirmed() {
     await resetDb();
     forgetRunnerView();
     const check = await checkedRepo();
@@ -647,7 +650,7 @@ describe('서버 후속 4: Runner 계약과 분석 완료', () => {
     const constraints = (await ownerPool.query('select id,name,level,condition from tech_constraints order by created_at,id')).rows;
     expect(first.payload).toEqual({
       planningJobId: (await state()).bootstrap.jobId, runNo: 1, version: 1, commit: SHA1, previousCommit: null,
-      instruction: '계약 먼저', resumeStep: null, techConstraints: constraints, subagentDefs,
+      instruction: '계약 먼저', resumeStep: null, techConstraints: constraints, subagentDefs: await allowedSubagentDefs(),
       techDecisions: [], techDecisionVersion: snapshotHash([]),
     });
     expect(constraints).toEqual([{ id: expect.any(String), name: 'QuestDB', level: 'cond', condition: '시계열 데이터가 있으면' }]);
@@ -874,8 +877,8 @@ describe('서버 후속 4: Runner 계약과 분석 완료', () => {
     const id = (await ownerPool.query<{ id: string }>(`insert into subagent_defs(def_key,version,agent,role,tools,sandbox,text,hash,allowed)
       values('srv4-dev',1,'Claude','dev','{}','workspace-write','개발 역할',$1,true) returning id`, ['a'.repeat(64)])).rows[0]?.id;
     try {
-      const { job } = await confirmed([{ id, defKey: 'srv4-dev', version: 1, agent: 'Claude', role: 'dev' }]);
-      expect(job.payload.subagentDefs).toEqual([{ id, defKey: 'srv4-dev', version: 1, agent: 'Claude', role: 'dev' }]);
+      const { job } = await confirmed();
+      expect(job.payload.subagentDefs).toContainEqual({ id, defKey: 'srv4-dev', version: 1, agent: 'Claude', role: 'dev' });
     } finally { await ownerPool.query('update subagent_defs set allowed=false where id=$1', [id]); }
   });
 
