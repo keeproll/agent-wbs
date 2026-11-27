@@ -148,16 +148,27 @@ export const EMAIL_OMITTED = '(주소 생략)';
 /**
  * **마지막 규칙**(Q-13 fix5 · 후속). 정규화한 글을 공백으로 나눈 토큰 가운데 아래에 해당하면 통째로 「(주소 생략)」이다.
  * (a) `@`가 있다(이메일 · 따옴표 이메일).
- * (b) 점(`.`)이 두 글자 사이에 있고, 그 바로 앞이나 바로 뒤가 **글자**(숫자 아닌 문자, 어느 문자 체계든)다(`wbs.corp.example`, `내부.xn--…`, `file.txt`).
+ * (b) 점(`.`)이 두 글자 사이에 있고, 그 바로 앞이나 바로 뒤가 **글자**(숫자 · 공백 · 문장부호 · 기호가 아닌 것 — \p{L} 글자와 \p{M} 결합 문자 포함)다(`wbs.corp.example`, `내부.xn--…`, `कंपनी.example`, `file.txt`).
  * (c) 숫자만 점으로 4덩이 이상 이어진다(IPv4 모양, `10.0.0.1`).
  * 숫자 사이 점(`2.5일`, `1.2.3`, `12.34%`)은 유지한다. 왜: 기간 · 수치 · 버전은 보고 내용 자체다.
  * 내부 호스트는 이름이 글자로 끝나므로(최상위 이름은 숫자만일 수 없다) 점 옆에 늘 글자가 있어 (b)에 걸린다. 숫자뿐인 호스트는 (c)가 잡는다.
  * 문장 끝 점(「완료했습니다.」, 「전.)」)은 두 글자 · 숫자 사이가 아니라 해당하지 않는다.
  * 정보 손실(조정자 판단으로 수용): 점으로 이은 단어(「프로젝트.완료」, `e.g.`) · 파일 이름(`file.txt`) · 제품 이름(`Node.js`)은 생략된다.
  */
-function isAddressToken(token: string): boolean {
+/**
+ * 점 옆 글자 분류(Q-13 fix5 후속 2, Codex 재리뷰 6).
+ * - WORD: 공백도 문장부호(\p{P})도 기호(\p{S})도 아닌 글자. 점은 두 WORD 사이에 있을 때만 본다(문장 끝 점 · 「전.)」 제외).
+ * - LETTERISH: WORD 가운데 십진 숫자(\p{Nd})가 아닌 것. 글자(\p{L})와 결합 문자(\p{M})를 모두 포함한다.
+ *   왜 결합 문자까지: 「कंपनी」의 모음 기호(U+0940)나 「a̸」의 덧붙는 획(U+0338)처럼, 한 글자로 보이는 이름의 끝이 결합 문자일 수 있다.
+ *   글자 · 결합 문자만 나열하지 않고 「숫자 · 공백 · 문장부호 · 기호가 아닌 것」으로 정의해 같은 부류의 빠짐을 막는다(시험이 무작위 유니코드로 교차 확인).
+ */
+const WORD = String.raw`[^\s\p{P}\p{S}]`;
+const LETTERISH = String.raw`[^\s\p{P}\p{S}\p{Nd}]`;
+const LETTER_DOT = new RegExp(`${LETTERISH}\\.${WORD}|${WORD}\\.${LETTERISH}`, 'u');
+/** 주소 토큰인지(변환 · 검사기 · 시험이 같은 함수를 쓴다). */
+export function isAddressToken(token: string): boolean {
   if (token.includes('@')) return true;
-  if (/\p{L}\.[\p{L}\p{N}]|[\p{L}\p{N}]\.\p{L}/u.test(token)) return true;
+  if (LETTER_DOT.test(token)) return true;
   return /(?<![\d.])\d+(?:\.\d+){3,}/.test(token);
 }
 /** 토큰 규칙을 적용한다. 공백은 그대로 두고 해당 토큰만 바꾼다. */

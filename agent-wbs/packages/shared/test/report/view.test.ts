@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { Value } from 'typebox/value';
-import { externalLeaks, externalText, externalView, normalizeExternal, parseSender, internalKpis, internalTerms, reportFigures, ReportSnapshotSchema as ReportSnapshot, scrubInternal, type ReportSnapshotData } from '@awbs/shared';
+import { externalLeaks, externalText, externalView, isAddressToken, normalizeExternal, parseSender, internalKpis, internalTerms, reportFigures, ReportSnapshotSchema as ReportSnapshot, scrubInternal, type ReportSnapshotData } from '@awbs/shared';
 /** 외부 글에서 주소를 지운 자리(Q-13 fix5부터 점 · @ 토큰은 「(주소 생략)」, 스킴 · 포트 · 경로는 「(링크 생략)」) */
 const OMITTED = /^앞 \((링크|주소) 생략\)( \.)? 뒤$/;
 
@@ -371,5 +371,56 @@ describe('Q-13 fix5 후속: 숫자 사이 점은 유지, 내부 호스트는 계
     expect(externalText(`앞 ${input} 뒤`)).toBe('앞 (주소 생략) 뒤');
     expect(externalLeaks(input).length).toBeGreaterThan(0);
     expect(externalLeaks(externalText(`앞 ${input} 뒤`))).toEqual([]);
+  });
+});
+
+/**
+ * Q-13 fix5 후속 2(Codex 재리뷰 6): 점 앞이 결합 문자로 끝나는 호스트. 「글자」 = 숫자 · 공백 · 문장부호 · 기호가 아닌 것(\p{L} · \p{M} 포함).
+ */
+describe('Q-13 fix5 후속 2: 결합 문자로 끝나는 호스트 · 무작위 유니코드 교차 확인', () => {
+  test.each([
+    ['कंपनी.example', 'xn--i1b1b4ch5i.example', '데바나가리 모음 기호 U+0940(재리뷰 6 재현)'],
+    ['कंपनी.भारत', 'xn--i1b1b4ch5i.xn--h2brj9c', '데바나가리 두 이름(재리뷰 6 재현)'],
+    ['a̸.local', 'xn--a-2eb.local', '덧붙는 획 U+0338(재리뷰 6 재현)'],
+    ['café.example', 'xn--caf-dma.example', '결합 악센트 U+0301'],
+  ])('%s (URL 호스트 %s, %s) → 「(주소 생략)」', (input, host) => {
+    expect(new URL(`http://${input}`).hostname).toBe(host);
+    expect(externalText(`앞 ${input} 뒤`)).toBe('앞 (주소 생략) 뒤');
+    expect(externalLeaks(input).length).toBeGreaterThan(0);
+    expect(externalLeaks(externalText(`앞 ${input} 뒤`))).toEqual([]);
+  });
+
+  /** 시험용 의사 난수(씨앗 고정). 실패하면 같은 씨앗으로 다시 재현할 수 있다. */
+  const random = (seed: number) => () => { seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t ^= t + Math.imul(t ^ (t >>> 7), 61 | t); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  /** 여러 범주의 글자: 글자(라틴 · 한글 · 데바나가리 · 아랍) · 결합 문자 · 십진 숫자(ASCII · 아랍-인도) · 다른 숫자(², Ⅻ) · 문장부호 · 기호 · 공백 · 점 · @ */
+  const POOL = [...'abzAZ한국내부कपनभअبيت', '́', '̸', 'ी', '़', 'ं', ...'0159', '٠', '٥', '²', 'Ⅻ', ...'.,)(-_!?「」\'"', ...'%+$₩=', ' ', ' ', '\t', ...'....', '@'];
+  /** 정의 그대로의 판정(정규식과 따로 씀): 토큰 안의 점 양옆이 모두 있고, 둘 다 공백 · 문장부호 · 기호가 아니며, 둘 중 하나가 십진 숫자가 아니면 주소. */
+  const is = (ch: string, re: RegExp) => re.test(ch);
+  const oracle = (token: string): boolean => {
+    if (token.includes('@')) return true;
+    const cps = Array.from(token);
+    for (let i = 1; i < cps.length - 1; i++) {
+      if (cps[i] !== '.') continue;
+      const [a, b] = [cps[i - 1] ?? '', cps[i + 1] ?? ''];
+      const word = (c: string) => !is(c, /^\s$/u) && !is(c, /^\p{P}$/u) && !is(c, /^\p{S}$/u);
+      const digit = (c: string) => is(c, /^\p{Nd}$/u);
+      if (word(a) && word(b) && (!digit(a) || !digit(b))) return true;
+    }
+    return /(?<![\d.])\d+(?:\.\d+){3,}/.test(token);
+  };
+  test.each([1, 2, 3, 4, 5])('무작위 유니코드 토큰(씨앗 %i): 규칙(isAddressToken)과 정의 그대로의 판정이 같다', (seed) => {
+    const next = random(seed);
+    for (let n = 0; n < 4000; n++) {
+      const token = Array.from({ length: 2 + Math.floor(next() * 7) }, () => POOL[Math.floor(next() * POOL.length)] ?? '.').join('').replace(/\s+/gu, '');
+      if (!token) continue;
+      expect(isAddressToken(token), JSON.stringify(token)).toBe(oracle(token));
+    }
+  });
+  test.each([11, 12, 13])('무작위 유니코드 문장(씨앗 %i): 외부 변환 뒤에는 검사기가 0건이다', (seed) => {
+    const next = random(seed);
+    for (let n = 0; n < 1500; n++) {
+      const text = Array.from({ length: 4 + Math.floor(next() * 20) }, () => POOL[Math.floor(next() * POOL.length)] ?? ' ').join('');
+      expect(externalLeaks(externalText(text)), JSON.stringify(text)).toEqual([]);
+    }
   });
 });

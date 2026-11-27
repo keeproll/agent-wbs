@@ -1093,9 +1093,9 @@ describe('Q-13 결정 A: 외부 수신자(링크 없이 보고용 + PDF)', () =>
    */
   test('[fix4 · fix5] 외부: 이메일 · IDN · punycode · 혼합 IDN · 따옴표 이메일 · 소문자 번호가 메일 · PDF에서 지워진다 / 내부 보고용: 내부 용어만 빠지고 나머지는 그대로', async () => {
     // fix5(재리뷰 5): 혼합 IDN · 따옴표 이메일도 함께 넣는다.
-    const TITLE = 'task-0007 Rp-002 문의 help@intranet.corp.example 내부.한국 intranet.xn--3e0b707e 내부.xn--3e0b707e "help"@intranet.corp.example help@내부.xn--3e0b707e 10.0.0.1 file.txt Node.js 2.5일 1.2.3 개선';
-    const INSIDE = '문의 help@intranet.corp.example 내부.한국 intranet.xn--3e0b707e 내부.xn--3e0b707e "help"@intranet.corp.example help@내부.xn--3e0b707e 10.0.0.1 file.txt Node.js 2.5일 1.2.3 개선'; // 내부 용어만 뺀 것(scrubInternal)
-    const FRAGMENTS = ['help@', 'intranet', 'corp.example', '내부.한국', 'xn--', 'file.txt', 'Node.js', 'task-0007', 'Rp-002'];
+    const TITLE = 'task-0007 Rp-002 문의 help@intranet.corp.example 내부.한국 intranet.xn--3e0b707e 내부.xn--3e0b707e "help"@intranet.corp.example help@내부.xn--3e0b707e 10.0.0.1 कंपनी.example a\u0338.local file.txt Node.js 2.5일 1.2.3 개선';
+    const INSIDE = '문의 help@intranet.corp.example 내부.한국 intranet.xn--3e0b707e 내부.xn--3e0b707e "help"@intranet.corp.example help@내부.xn--3e0b707e 10.0.0.1 कंपनी.example a\u0338.local file.txt Node.js 2.5일 1.2.3 개선'; // 내부 용어만 뺀 것(scrubInternal)
+    const FRAGMENTS = ['help@', 'intranet', 'corp.example', '내부.한국', 'xn--', 'file.txt', 'Node.js', 'task-0007', 'Rp-002', 'कंपनी', 'a\u0338.', 'a\u0338'];
     const root = await mkdtemp(join(tmpdir(), 'awbs-mail-fix4-'));
     const renderer = chromiumRenderer();
     try {
@@ -1137,7 +1137,9 @@ describe('Q-13 결정 A: 외부 수신자(링크 없이 보고용 + PDF)', () =>
       // 내부 수신자(보고용): 내부 용어만 빠지고 나머지는 그대로(외부 변환 없음)
       const inside = mimePart(received('boss@example.com')[bc]?.raw ?? '', 'text/plain') ?? '';
       expect(inside).toContain(`• ${INSIDE}`);
-      expect((await text(pdfs.in)).replace(/\s+/g, '')).toContain(INSIDE.replace(/\s+/g, ''));
+      // PDF 글자 추출은 데바나가리 · 결합 문자를 같은 글자로 되돌리지 못한다(재리뷰 6도 같음). 그 둘을 뺀 낱말마다 PDF에 그대로 있는지 본다.
+      const inPdf = (await text(pdfs.in)).replace(/\s+/g, '');
+      for (const word of INSIDE.split(' ').filter((w) => ![...w].some((ch) => { const c = ch.codePointAt(0) ?? 0; return (c >= 0x0900 && c <= 0x097f) || (c >= 0x0300 && c <= 0x036f); }))) expect(inPdf, word).toContain(word);
       // 내부 보고용 PDF는 팀장 다운로드와 같은 파일이다
       expect(pdfs.in?.equals((await reportPdf(pool, root, renderer, epoch, made.id, 'ext')).file)).toBe(true);
     } finally {
