@@ -9,6 +9,7 @@ import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { getTableConfig } from 'drizzle-orm/pg-core';
 import { afterAll, beforeAll, expect, inject, test } from 'vitest';
 import { prototypeFixture } from './prototype-fixture.ts';
+import { loadSubagentSet } from '../src/subagents.ts';
 import {
   createPool,
   recreateTestDatabase,
@@ -266,8 +267,10 @@ test('schema: system seed is repeatable, owner Q-03/Q-04 values match, no Mock o
     ).rows[0],
   // 가정 가동률 60%·재조정 임계값 1일은 owner 결정(2026-11-26 아이템 7)으로 승인된 값이다(0019).
   ).toEqual({ assume_rate: '0.6', threshold_days: '1', window_days: 7, min_hours: '72' });
+  // 하위 Agent는 검토를 마친 실제 v1만 있다(M5-06). Mock(demo) 정의는 없다.
+  expect((await pool.query('select def_key,version,is_demo from subagent_defs order by def_key')).rows)
+    .toEqual((await loadSubagentSet()).defs.map((d) => ({ def_key: d.key, version: d.version, is_demo: false })).sort((a, b) => a.def_key.localeCompare(b.def_key)));
   for (const t of [
-    'subagent_defs',
     'agent_models',
     'cli_observation_grades',
     'runner_hosts',
@@ -728,7 +731,7 @@ test('schema: demo loads exactly P twelve tasks, dependencies, checklists and te
         .map(([key, t]) => ({ task_key: key, title: t.title, status: t.status }))
         .sort((a, b) => a.task_key.localeCompare(b.task_key)),
     );
-    expect((await pool.query('select count(*)::int as n from subagent_defs')).rows[0]?.n).toBe(
+    expect((await pool.query('select count(*)::int as n from subagent_defs where is_demo')).rows[0]?.n).toBe(
       fixture.sub.defs.length,
     );
     expect((await pool.query('select count(*)::int as n from task_dependencies')).rows[0]?.n).toBe(
@@ -771,6 +774,8 @@ test('schema: demo loads exactly P twelve tasks, dependencies, checklists and te
     await pool.query("select reset_project(1,$1,false,'test')", [
       (await pool.query('select name from projects')).rows[0]?.name,
     ]);
-    expect((await pool.query('select count(*)::int as n from subagent_defs')).rows[0]?.n).toBe(0);
+    // demo 정의만 지우고 검토를 마친 실제 정의는 남긴다(data-model §5-3).
+    expect((await pool.query('select count(*)::int as n from subagent_defs where is_demo')).rows[0]?.n).toBe(0);
+    expect((await pool.query('select count(*)::int as n from subagent_defs where not is_demo')).rows[0]?.n).toBe((await loadSubagentSet()).defs.length);
   }
 });
