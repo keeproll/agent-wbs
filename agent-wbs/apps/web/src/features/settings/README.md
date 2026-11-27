@@ -11,7 +11,7 @@
 | `/settings`, `/settings/runner` | Runner · 실행 환경(기본) | `RunnerTab.tsx` |
 | `/settings/agent` | Agent | `AgentTab.tsx` |
 | `/settings/plan` | 일정 · Task | `PlanTab.tsx` |
-| `/settings/report` | 보고서 · 메일 | M6-03이 만든다(지금은 안내 한 줄) |
+| `/settings/report` | 보고서 · 메일 | `report/ReportMailTab.tsx`(M6-03, [report/README.md](report/README.md)) |
 | `/settings/notify` | 알림 | M6-04가 만든다(지금은 안내 한 줄) |
 | `/settings/system` | 점검 | `SystemTab.tsx` |
 

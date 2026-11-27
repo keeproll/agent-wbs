@@ -19672,7 +19672,8 @@
                     "from",
                     "user",
                     "pwSet",
-                    "updatedAt"
+                    "updatedAt",
+                    "check"
                   ],
                   "properties": {
                     "host": {
@@ -19701,6 +19702,39 @@
                       "anyOf": [
                         {
                           "$ref": "#/components/schemas/Timestamp"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "check": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": [
+                            "ok",
+                            "checkedAt",
+                            "error"
+                          ],
+                          "properties": {
+                            "ok": {
+                              "type": "boolean"
+                            },
+                            "checkedAt": {
+                              "$ref": "#/components/schemas/Timestamp"
+                            },
+                            "error": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          }
                         },
                         {
                           "type": "null"
@@ -19834,7 +19868,8 @@
                     "from",
                     "user",
                     "pwSet",
-                    "updatedAt"
+                    "updatedAt",
+                    "check"
                   ],
                   "properties": {
                     "host": {
@@ -19867,6 +19902,39 @@
                       "anyOf": [
                         {
                           "$ref": "#/components/schemas/Timestamp"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "check": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": [
+                            "ok",
+                            "checkedAt",
+                            "error"
+                          ],
+                          "properties": {
+                            "ok": {
+                              "type": "boolean"
+                            },
+                            "checkedAt": {
+                              "$ref": "#/components/schemas/Timestamp"
+                            },
+                            "error": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          }
                         },
                         {
                           "type": "null"
@@ -39896,7 +39964,11 @@
         "type": "object",
         "required": [
           "id",
+          "logKey",
           "reportId",
+          "reportKey",
+          "pdf",
+          "pending",
           "recipientId",
           "to",
           "subject",
@@ -39911,8 +39983,20 @@
           "id": {
             "$ref": "#/components/schemas/Id"
           },
+          "logKey": {
+            "type": "string"
+          },
           "reportId": {
             "$ref": "#/components/schemas/Id"
+          },
+          "reportKey": {
+            "type": "string"
+          },
+          "pdf": {
+            "type": "boolean"
+          },
+          "pending": {
+            "type": "boolean"
           },
           "recipientId": {
             "anyOf": [
@@ -44338,6 +44422,7 @@
           "view",
           "pdf",
           "active",
+          "createdAt",
           "updatedAt"
         ],
         "properties": {
@@ -44364,6 +44449,9 @@
           },
           "active": {
             "type": "boolean"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
           },
           "updatedAt": {
             "$ref": "#/components/schemas/Timestamp"

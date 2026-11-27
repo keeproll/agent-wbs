@@ -14,6 +14,8 @@ test('0021·0022 snapshot이 단계별 구조와 연결을 보존하고 다음 g
   const settings = snapshot('0024');
   const versions = snapshot('0025');
   const design = snapshot('0053');
+  // M6-03 0049: 메일 큐 열(마이그레이션 번호는 0049~0050 범위를 배정받았다)
+  const mail = snapshot('0049');
   expect(project.prevId).toBe(before.id);
   expect(evidence.prevId).toBe(project.id);
   expect(observation.prevId).toBe(evidence.id);
@@ -35,4 +37,8 @@ test('0021·0022 snapshot이 단계별 구조와 연결을 보존하고 다음 g
     'ALTER TABLE "design_snapshots" ADD COLUMN "content" jsonb DEFAULT \'{}\'::jsonb NOT NULL;',
   ]);
   expect(await generateMigration(design, generateDrizzleJson(schema, design.id))).toEqual([]);
+  expect(mail.prevId).toBe(versions.id);
+  expect(mail.tables['public.mail_outbox']?.columns).toHaveProperty('retried');
+  expect(mail.tables['public.mail_settings']?.columns).toHaveProperty('settings_version');
+  expect(await generateMigration(mail, generateDrizzleJson(schema, mail.id))).toEqual([]);
 });
