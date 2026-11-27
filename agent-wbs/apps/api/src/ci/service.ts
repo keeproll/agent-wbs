@@ -6,6 +6,7 @@ import { PlatformError } from '../platform/errors.ts';
 import { RunnerRepository, required } from '../runner/repository.ts';
 import { checkedJob, handover } from '../runner/service.ts';
 import { completeMergedTask, gateInput, invalidateTaskGate } from '../execution/gate.ts';
+import { resolveBaselineFailure } from './decisions.ts';
 import { observedBases } from './pipeline.ts';
 import { assertCiTransition, preservedHead, type HeadProof } from './proof.ts';
 
@@ -20,6 +21,7 @@ export interface Update extends Shas {
   fence: number | null; status?: string; steps?: { name: string; status: string; durationMs: number }[];
   artifacts?: string[]; url?: string; logExcerpt?: string;
   failScope?: 'baseline' | 'task';
+  causeCandidates?: { commit:string }[];
   note?: string; finishedAt?: string; e2e?: { passed:number;total:number };
   githubStatus?: { headSha:string;context:string;state:'pending'|'success'|'failure'|'error';reportedAt:string;url?:string };
   flakyTests?: { testKey:string;rate:number;lastFailedAt:string }[];
@@ -87,8 +89,8 @@ export async function updateRun(client: PoolClient, id: string, principal: strin
   const failStep = (await client.query<{ step_key: string }>("select step_key from ci_steps where run=$1 and status='fail' order by record_no limit 1",[id])).rows[0]?.step_key ?? null;
   if (status === 'pass' && (await client.query("select 1 from ci_steps where run=$1 and status not in ('pass','skip') limit 1",[id])).rowCount) throw new PlatformError('INVALID_TRANSITION');
   await client.query(`update ci_runs set status=$2,log_excerpt=coalesce($3,log_excerpt),artifacts=coalesce($4::jsonb,artifacts),url=coalesce($5,url),
-    base_sha=coalesce(base_sha,$6),head_sha=coalesce(head_sha,$7),merge_sha=coalesce(merge_sha,$8),tree_sha=coalesce(tree_sha,$9),fail_step=$10,fail_scope=coalesce($11,fail_scope),note=coalesce($12,note),e2e=coalesce($13::jsonb,e2e),finished_at=coalesce(finished_at,$14::timestamptz),github_status=coalesce($15::jsonb,github_status) where id=$1`,
-  [id,status,body.logExcerpt,body.artifacts === undefined ? null : JSON.stringify(body.artifacts),body.url,body.baseSha,body.headSha,body.mergeSha,body.treeSha,failStep,body.failScope,body.note,body.e2e ? JSON.stringify(body.e2e) : null,body.finishedAt,body.githubStatus ? JSON.stringify(body.githubStatus) : null]);
+    base_sha=coalesce(base_sha,$6),head_sha=coalesce(head_sha,$7),merge_sha=coalesce(merge_sha,$8),tree_sha=coalesce(tree_sha,$9),fail_step=$10,fail_scope=coalesce($11,fail_scope),note=coalesce($12,note),e2e=coalesce($13::jsonb,e2e),finished_at=coalesce(finished_at,$14::timestamptz),github_status=coalesce($15::jsonb,github_status),cause_candidates=coalesce($16::jsonb,cause_candidates) where id=$1`,
+  [id,status,body.logExcerpt,body.artifacts === undefined ? null : JSON.stringify(body.artifacts),body.url,body.baseSha,body.headSha,body.mergeSha,body.treeSha,failStep,body.failScope,body.note,body.e2e ? JSON.stringify(body.e2e) : null,body.finishedAt,body.githubStatus ? JSON.stringify(body.githubStatus) : null,body.causeCandidates===undefined ? null : JSON.stringify(body.causeCandidates)]);
   for (const flaky of body.flakyTests ?? []) await client.query(`insert into flaky_tests(project_id,test_key,rate,quarantined,task,last_failed_at) values($1,$2,$3,false,$4,$5)
     on conflict(test_key) do update set rate=excluded.rate,task=coalesce(excluded.task,flaky_tests.task),last_failed_at=excluded.last_failed_at
     where flaky_tests.project_id=excluded.project_id and (flaky_tests.last_failed_at is null or flaky_tests.last_failed_at<=excluded.last_failed_at)`,[run.project_id,flaky.testKey,flaky.rate,run.task,flaky.lastFailedAt]);
@@ -97,12 +99,7 @@ export async function updateRun(client: PoolClient, id: string, principal: strin
 }
 
 async function notifyResult(client: PoolClient, run: Run) {
-  if (run.stage === 1 && run.status === 'pass' && run.base_sha && await resolveBasePipelineSha(client,run.base_sha,run.project_id) === run.pipeline_sha) {
-    const alerts = await client.query("update alerts set resolved_at=clock_timestamp() where project_id=$1 and key=$2 and resolved_at is null and not exists(select 1 from ci_runs where project_id=$1 and base_sha=$3 and stage=1 and run_no>$4 and fail_scope='baseline')",[run.project_id,`ci:baseline|${run.base_sha}`,run.base_sha,run.run_no]);
-    const notifications = await client.query("update notify_events set resolved_at=clock_timestamp() where project_id=$1 and ref->>'failScope'='baseline' and ref->>'baseSha'=$2 and resolved_at is null and not exists(select 1 from ci_runs where project_id=$1 and base_sha=$2 and stage=1 and run_no>$3 and fail_scope='baseline')",[run.project_id,run.base_sha,run.run_no]);
-    if (alerts.rowCount) deferChange(client,run.project_id,'alert',{ id:run.id });
-    if (notifications.rowCount) deferChange(client,run.project_id,'notify',{ id:run.id });
-  }
+  const baselineClosed = run.stage===1 && run.base_sha ? await resolveBaselineFailure(client,run.project_id,run.base_sha) : false;
   if (run.stage === 1 && run.fail_scope !== 'baseline' || !['pass','fail'].includes(run.status)) return;
   const stage = Object.keys(CI_STAGE).find(k => CI_STAGE[k as keyof typeof CI_STAGE] === run.stage);
   const key = run.fail_scope === 'baseline' ? `baseline|${run.base_sha}` : `buildFail|${stage}|${run.pr ? `#${run.pr}` : 'main'}`;
@@ -112,7 +109,7 @@ async function notifyResult(client: PoolClient, run: Run) {
       await client.query('update notify_events set resolved_at=clock_timestamp() where project_id=$1 and dedup_key=$2 and resolved_at is null',[run.project_id,key]);
       await client.query('update alerts set resolved_at=clock_timestamp() where project_id=$1 and key=$2 and resolved_at is null',[run.project_id,`ci:${key}`]);
     }
-  } else {
+  } else if (!baselineClosed) {
     await client.query(`insert into alerts(project_id,key,severity,target) values($1,$2,'error',$3) on conflict do nothing`,
     [run.project_id,`ci:${key}`,{ id:run.id,path:`/ci/${run.id}`,message:`${run.fail_scope === 'baseline' ? '기준선 검사' : stage} 실패 — 실패 단계: ${run.fail_step ?? '미보고'}` }]);
   }
@@ -123,6 +120,7 @@ async function notifyResult(client: PoolClient, run: Run) {
     on conflict((coalesce(project_id::text,'global')),dedup_key) where resolved_at is null do update set dup_count=notify_events.dup_count+1`,
   [run.project_id,kind === 'buildFail' ? run.fail_scope === 'baseline' ? `${key}|${run.id}` : key : `buildOk|${stage}|${run.id}`,kind,
     { id:run.id,stage,pr:run.pr,failStep:run.fail_step,failScope:run.fail_scope,baseSha:run.base_sha,path:`/ci/${run.id}` }]);
+  if (run.fail_scope==='baseline' && baselineClosed && run.base_sha) await resolveBaselineFailure(client,run.project_id,run.base_sha);
   deferChange(client,run.project_id,'alert',{ id:run.id });
   deferChange(client,run.project_id,'notify',{ id:run.id });
 }

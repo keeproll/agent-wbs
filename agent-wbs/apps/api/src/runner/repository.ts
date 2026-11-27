@@ -191,6 +191,7 @@ export class RunnerRepository {
   async allTasks() { return (await this.client.query<Task>('select * from tasks where deleted_at is null')).rows; }
   async hostHistory() { return (await this.client.query<PgRow<typeof schema.runnerHosts.$inferSelect>>('select * from runner_hosts order by record_no desc limit 20')).rows; }
   async allUsage() { return (await this.client.query<PgRow<typeof schema.agentUsage.$inferSelect>>("select distinct on(agent) * from agent_usage order by agent,record_no desc")).rows; }
+  async quarantinedTests() { return (await this.client.query<{ test_key:string }>('select test_key from flaky_tests where quarantined and project_id=(select id from projects) order by test_key')).rows.map(r => r.test_key); }
   async ciSettings() { return required((await this.client.query<typeof schema.ciSettings.$inferSelect>('select * from ci_settings where singleton')).rows[0]); }
   async githubSettings() { return (await this.client.query<typeof schema.githubSettings.$inferSelect>('select * from github_settings where singleton')).rows[0]; }
   async grantAuthority(generation: number) { return (await this.client.query("update external_write_authority set state='granted',blocked_reason=null,reconciled_at=clock_timestamp() where singleton and generation=$1 returning generation", [generation])).rowCount; }

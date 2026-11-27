@@ -116,10 +116,14 @@ async function checkAttempt(repo: RunnerRepository, job: Job, task: Task, advert
   return { cfg, grade, input, slots };
 }
 
+export function externalWriteAllowed(authority: {state:string;host_id:string;generation:number}|undefined, host: string|null|undefined, generation:number|null|undefined) {
+  return Boolean(authority && authority.state==='granted' && authority.host_id===host && generation===authority.generation);
+}
+
 export async function assertExternal(repo: RunnerRepository, job: Job) {
   const authority = await repo.authority();
   const host = await repo.host();
-  if (!authority || authority.state !== 'granted' || authority.host_id !== host?.host_id || job.generation !== authority.generation) throw new PlatformError('EXTERNAL_WRITE_BLOCKED', { generation: authority?.generation });
+  if (!externalWriteAllowed(authority,host?.host_id,job.generation)) throw new PlatformError('EXTERNAL_WRITE_BLOCKED', { generation: authority?.generation });
 }
 
 export async function checkedJob(repo: RunnerRepository, id: string, fence: number, principal: string, reconcile = false) {

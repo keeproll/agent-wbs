@@ -159,7 +159,7 @@ describe('ResourceReporter.reportConcurrency', () => {
       },
       getRunnerPolicy: () => ({
         status: 200,
-        body: { caps: { ...caps(3), memReserveGB: 4 }, subagentBudget: { dev: 2, qa: 1 }, heartbeatSeconds: 60, inputCheckMinutes: 5, ci: { nightAt: '02:00', retry: 1, deployUrl: null } },
+        body: { caps: { ...caps(3), memReserveGB: 4 }, subagentBudget: { dev: 2, qa: 1 }, heartbeatSeconds: 60, inputCheckMinutes: 5, ci: { nightAt: '02:00', retry: 1, deployUrl: null, quarantined: [] } },
         headers: new Headers(),
       }),
     });
@@ -182,7 +182,7 @@ describe('ResourceReporter.reportConcurrency', () => {
       },
       getRunnerPolicy: () => ({
         status: 200,
-        body: { caps: { ...caps(3), memReserveGB: 4 }, subagentBudget: { dev: 2, qa: 1 }, heartbeatSeconds: 60, inputCheckMinutes: 5, ci: { nightAt: '02:00', retry: 1, deployUrl: null } },
+        body: { caps: { ...caps(3), memReserveGB: 4 }, subagentBudget: { dev: 2, qa: 1 }, heartbeatSeconds: 60, inputCheckMinutes: 5, ci: { nightAt: '02:00', retry: 1, deployUrl: null, quarantined: [] } },
         headers: new Headers(),
       }),
     });

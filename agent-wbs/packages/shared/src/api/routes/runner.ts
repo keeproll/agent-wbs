@@ -560,6 +560,7 @@ export const runnerOperations = [
         steps: Opt(List(m.CiStep)),
         status: Opt(c.CiStatus),
         failScope: Opt(AnyOf('baseline', 'task')),
+        causeCandidates:Opt(List(Body({ commit:c.Sha }),{ uniqueItems:true })),
         note:Opt(Type.String()),
         finishedAt:Opt(c.Timestamp),
         e2e:Opt(m.CiE2e),
@@ -697,7 +698,7 @@ export const runnerOperations = [
         inputCheckRequest: Opt(c.Count),
         readinessCheckRequest: Opt(c.Count),
         githubMode: Opt(c.GithubMode),
-        ci: Type.Object(m.CiSettings),
+        ci: Type.Object({ ...m.CiSettings,quarantined:List(Text,{ uniqueItems:true }) }),
         // Runner가 보고할 Claude 모델(설정값, 초기값=Q-06 승인표). owner 2026-11-26 아이템 8
         claudeModels: List(Type.String(), { minItems: 1, uniqueItems: true }),
         // 서버에 등록된 CLI 조합별 관측 등급(G§6.7-8). Runner 준비 점검 obs가 실행 조합과 대조한다.
