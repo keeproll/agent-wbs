@@ -4,7 +4,7 @@
  */
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
-import { fakeApi, hold, json, type FakeApi } from './support/fake-api.ts';
+import { delay, fakeApi, hold, json, type FakeApi } from './support/fake-api.ts';
 import { designData, emptyDesign, installDesign, type DesignData } from './support/design-data.ts';
 import { mountTasks } from './support/task-api.ts';
 
@@ -571,9 +571,31 @@ test('리뷰 7: 가짜 API도 서버처럼 닫힌 불일치·항목이 다른 �
   await open(page, '/design?tab=dec');
   const post = (driftId: string, itemKey: string) => page.evaluate(async ([id, dr, ik]) => {
     const r = await fetch(`/api/design/decisions/${id}/change`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ updatedAt: '2026-10-27T01:05:00.000Z', choice: 'a', reason: 'b', itemKey: ik, driftId: dr }) });
-    return r.status;
+    const body = (await r.json()) as { error?: { code: string; errors: { path: string }[] } };
+    return r.status === 200 ? { status: 200 } : { status: r.status, code: body.error?.code, path: body.error?.errors[0]?.path };
   }, [TD(5), driftId, itemKey] as const);
-  expect(await post('r0000000-0000-4000-8000-000000000003', 'runner.attempt.events')).toBe(409);
-  expect(await post(D1, 'postgres:tasks')).toBe(409);
-  expect(await post(D1, 'PATCH /api/tasks/:taskKey')).toBe(200);
+  // 실제 서버는 400 VALIDATION_FAILED + driftId 필드 오류다(apps/api/src/design/service.ts invalid, r2 리뷰 P3).
+  expect(await post('r0000000-0000-4000-8000-000000000003', 'runner.attempt.events')).toEqual({ status: 400, code: 'VALIDATION_FAILED', path: 'driftId' });
+  expect(await post(D1, 'postgres:tasks')).toEqual({ status: 400, code: 'VALIDATION_FAILED', path: 'driftId' });
+  expect((await post(D1, 'PATCH /api/tasks/:taskKey')).status).toBe(200);
+});
+
+test('리뷰 r2-P3: 제안 뒤 연결한 불일치가 닫히면 승인은 400 VALIDATION_FAILED(driftId)로 거부되고 입력 오류로 보인다', async ({ page }) => {
+  const { data } = await open(page, '/design?tab=dec', (d) => {
+    const td5 = d.decisions.find((y) => y.tdKey === 'TD-05');
+    if (td5) { td5.status = 'change'; td5.change = { choice: 'X', reason: 'Y', previousStatus: 'approved', itemKey: 'PATCH /api/tasks/:taskKey', driftId: D1 }; }
+  });
+  const x = data.drifts[0]; if (x) x.status = 'done';
+  await decRow(page, 'TD-05').getByRole('button', { name: '승인' }).click();
+  await expect(page.locator('.errbar')).toContainText('VALIDATION_FAILED');
+  await expect(decRow(page, 'TD-05').locator('.vf')).toHaveText('변경 제안 — 승인 대기');
+});
+
+test('리뷰 r2-P2: 다시 읽기 간격(4초)보다 느린 응답도 취소하지 않고 기다려 실패를 보인다', async ({ page }) => {
+  const { api, data } = await open(page, '/design?tab=chg', (d) => { const x = d.drifts[0]; if (x) x.resolution = { how: 'contract', jobId: 'job-7', jobStatus: 'queued' }; });
+  const r1 = driftRow(page, 'PATCH /api/tasks/:taskKey');
+  await expect(r1.locator('.vf')).toHaveText('계약 반영 대기');
+  const x = data.drifts[0]; if (x) x.resolution = { how: 'contract', jobId: 'job-7', jobStatus: 'failed' };
+  api.on('GET /api/projects/p1/design/drifts', delay(5_000, (route) => json(route, 200, { items: data.drifts })));
+  await expect(r1.locator('.vf')).toHaveText('계약 반영 실패', { timeout: 20_000 });
 });

@@ -87,7 +87,8 @@ function DesignBody({ project }: { project: ProjectState }) {
   const { refetch: refetchOverview } = overview;
   useEffect(() => {
     if (!running) return;
-    const timer = setInterval(() => { void refetchDrifts(); void refetchOverview(); }, JOB_POLL_MS);
+    // cancelRefetch: false — 4초보다 느린 응답을 다음 다시 읽기가 취소하지 않고 기다린다(r2 리뷰 P2. TanStack Query refetch 기본값은 진행 중 요청 취소).
+    const timer = setInterval(() => { void refetchDrifts({ cancelRefetch: false }); void refetchOverview({ cancelRefetch: false }); }, JOB_POLL_MS);
     return () => { clearInterval(timer); };
   }, [running, refetchDrifts, refetchOverview]);
 
