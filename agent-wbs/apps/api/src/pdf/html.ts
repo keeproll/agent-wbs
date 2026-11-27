@@ -9,7 +9,7 @@
  *
  * 모든 값은 HTML 특수 문자를 바꿔 넣는다(`esc`). 왜: 제목·메시지에 `<script>` 같은 글자가 있어도 글자로만 보이게 한다.
  */
-import { externalLeaks, reportProjectName, type ReportSnapshotData } from '@awbs/shared';
+import { externalHtmlLeaks, reportProjectName, type ReportSnapshotData } from '@awbs/shared';
 import {
   appendixTitle, byLabel, docTitle, externalDoc, formatDateTime, internalDoc, KIND, lateLabel, periodLabel, settingsNote, snapLabel, uncertainNote, type ReportHead, type ReportView,
 } from './model.ts';
@@ -178,8 +178,7 @@ export function reportHtml(r: ReportHtmlInput): string {
  * 남은 내부 용어 · 앱 링크 · 앱 경로를 돌려준다. 빈 목록이면 통과. 메일 첨부와 팀장 다운로드가 같은 검사를 지난다.
  */
 export function externalPdfLeaks(html: string, appUrl: string | null): string[] {
-  const body = html.replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<script[\s\S]*?<\/script>/gi, ' ');
-  const links = body.match(/<a\b[^>]*href\s*=/gi) ?? [];
-  const text = body.replace(/<[^>]+>/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
-  return [...links, ...externalLeaks(text, appUrl)];
+  void appUrl;
+  // 메일 본문과 같은 HTML 검사기(보이는 글 + 링크 태그). 같은 기준 하나로 「주소 모양 0건」을 본다(Q-13 fix2).
+  return externalHtmlLeaks(html);
 }

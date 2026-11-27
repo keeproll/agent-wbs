@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { internalTerms, type ReportSnapshotData } from '@awbs/shared';
 import { FakeSmtp, mimePart } from '../../../e2e/fakes/smtp.ts';
 import { checkSmtp, describeError, sendSmtp, type SmtpTarget } from '../src/mail/smtp.ts';
-import { externalMailLeaks, mailSubject, renderMail, type MailReport } from '../src/mail/render.ts';
+import { externalMailLeaks, mailSubject, renderMail, senderName, senderNameLeaks, type MailReport } from '../src/mail/render.ts';
 
 const smtp = new FakeSmtp();
 let target: SmtpTarget;
@@ -197,5 +197,20 @@ describe('Q-13 fix1: 외부 메일은 모든 글이 변환 함수를 지나고 �
   });
   test('검사기는 남은 링크 · 내부 용어를 찾는다(발송 직전 차단의 근거)', () => {
     expect(externalMailLeaks({ subject: 'TASK-0001 보고', html: '<a href="http://127.0.0.1:5173/report/1">x</a>', text: '설정 → 알림', attachments: [{ filename: 'RP-001.pdf' }] }, APP).length).toBeGreaterThanOrEqual(5);
+  });
+});
+
+describe('Q-13 fix2: 보내는 사람 표시 이름도 헤더 검사에 들어간다(Codex 재리뷰 2)', () => {
+  test('표시 이름만 꺼내 검사하고, 메일 주소 자체는 검사 대상이 아니다', () => {
+    expect(senderName('Agent WBS <agent-wbs@example.com>')).toBe('Agent WBS');
+    expect(senderName('"팀장 보고" <lead@example.com>')).toBe('팀장 보고');
+    expect(senderName('agent-wbs@example.com')).toBe('');
+    expect(senderNameLeaks('Agent WBS <agent-wbs@example.com>')).toEqual([]);
+    expect(senderNameLeaks('"TASK-0007 owner http://127.0.0.1:5173/settings/report" <agent-wbs@example.com>').length).toBeGreaterThanOrEqual(2);
+  });
+  test('externalMailLeaks는 From 표시 이름까지 본다', () => {
+    const base = { subject: '주간 보고(요약)', html: '<p>본문</p>', text: '본문' };
+    expect(externalMailLeaks({ ...base, from: 'Agent WBS <a@example.com>' }, null)).toEqual([]);
+    expect(externalMailLeaks({ ...base, from: '"TASK-0007 http://127.1:5173/x" <a@example.com>' }, null).length).toBeGreaterThan(0);
   });
 });

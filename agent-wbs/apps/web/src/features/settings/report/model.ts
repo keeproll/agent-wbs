@@ -2,6 +2,7 @@
  * 설정 → 보고서 · 메일 탭의 화면 없는 계산(P mailVM L6496-6531, addRecip L4934, saveSmtp L4951).
  * 화면 부품(ReportMailTab.tsx)은 여기 값만 그린다. 그래서 규칙을 브라우저 없이 시험할 수 있다(test/settings-mail-model.test.ts).
  */
+import { externalLeaks } from '@awbs/shared';
 import type { ResponseOf } from '../../../shared/api/contract.ts';
 
 export type Recipient = ResponseOf<'listRecipients'>['items'][number];
@@ -61,6 +62,17 @@ export function recipientError(form: RecipientForm, existing: readonly Recipient
   return '';
 }
 
+/** 서버 SENDER_NAME_RULE과 같은 문구(Q-13 fix2) */
+export const SENDER_NAME_RULE = '보내는 사람 이름에는 주소(http · www · IP · 호스트:포트 · /경로)나 내부 용어(Task ID 등)를 넣을 수 없습니다 — 외부 수신자 메일에 그대로 보입니다.';
+/**
+ * 보내는 사람 표시 이름(`이름 <주소>`의 이름)이 외부 글 검사기(shared externalLeaks)를 통과하는지. 문제가 있으면 true.
+ * 이미 저장된 옛 설정도 메일 서버 카드에서 「설정 오류」로 보인다. 왜: 외부 수신자 메일은 이 이름 때문에 보내지지 않는다.
+ */
+export function senderNameProblem(from: string): boolean {
+  const name = (/^\s*(.*?)\s*<[^<>]*>\s*$/.exec(from)?.[1] ?? '').replace(/^"(.*)"$/, '$1');
+  return externalLeaks(name).length > 0;
+}
+
 export interface SmtpForm { host: string; port: string; sec: string; from: string; user: string; pw: string }
 /** SMTP 저장 전 검사(P saveSmtp L4952 문구 그대로). 통과하면 빈 문자열 */
 export function smtpError(form: SmtpForm, pwSet: boolean): string {
@@ -69,6 +81,7 @@ export function smtpError(form: SmtpForm, pwSet: boolean): string {
   const port = Number(form.port);
   if (!(Number.isInteger(port) && port > 0 && port < 65536)) return '포트는 1 ~ 65535 사이 숫자입니다.';
   if (!mailOk(from)) return '보내는 주소 형식이 올바르지 않습니다 — 예: Agent WBS <agent-wbs@example.com>';
+  if (senderNameProblem(form.from)) return SENDER_NAME_RULE;
   if (!form.pw && !pwSet && form.user.trim()) return '계정을 입력했다면 비밀번호(앱 비밀번호)도 입력하세요.';
   return '';
 }

@@ -14,6 +14,10 @@ import { ApiError, assertSameVersion, invalid } from '../changes/http.ts';
 import { deferChange, iso } from '../changes/events.ts';
 import { readSmtpPassword, SMTP_SECRET, storeSmtpPassword } from './secret.ts';
 import { externalizePending, syncMailAlert } from './queue.ts';
+import { senderNameLeaks } from './render.ts';
+
+/** 보내는 사람 이름 규칙 안내(화면 검사와 같은 문구) */
+export const SENDER_NAME_RULE = '보내는 사람 이름에는 주소(http · www · IP · 호스트:포트 · /경로)나 내부 용어(Task ID 등)를 넣을 수 없습니다 — 외부 수신자 메일에 그대로 보입니다.';
 import { checkSmtp, DEFAULT_TIMEOUT_MS, SMTP_SECURITY, type SmtpSecurity, type SmtpTarget } from './smtp.ts';
 
 export interface SmtpView {
@@ -50,6 +54,8 @@ export async function putSmtp(client: PoolClient, body: SmtpInput): Promise<Smtp
   if (!isSecurity(body.sec)) errors.push({ path: 'sec', rule: 'enum', message: `보안 방식은 ${SMTP_SECURITY.join(' · ')} 중 하나입니다.` });
   if (!body.host.trim()) errors.push({ path: 'host', rule: 'required', message: 'SMTP 서버를 입력하세요.' });
   if (!body.from.trim()) errors.push({ path: 'from', rule: 'required', message: '보내는 주소를 입력하세요.' });
+  // 보내는 사람 표시 이름은 외부 수신자 메일 헤더에 그대로 나간다. 주소 모양 · 내부 용어가 있으면 저장하지 않는다(Q-13 fix2).
+  else if (senderNameLeaks(body.from).length) errors.push({ path: 'from', rule: 'external', message: SENDER_NAME_RULE });
   if (errors.length) throw invalid(errors);
   const unchanged = body.password === undefined && before.updatedAt !== null
     && before.host === body.host.trim() && before.port === body.port && before.sec === body.sec && before.from === body.from.trim() && before.user === body.user.trim();

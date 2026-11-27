@@ -118,30 +118,54 @@ describe('기간 말 재구성: 그 시점 상태를 되살릴 수 없으면 「
   });
 });
 
-describe('Q-13 fix1: 외부로 나가는 글의 변환 함수 하나(externalText)와 검사기(externalLeaks)', () => {
-  const APP = 'https://wbs.corp.example/';
-  test('앱 주소 · 로컬/사설 주소 · 앱 경로 · 메뉴 안내 · 내부 용어를 뺀다', () => {
-    expect(externalText('TASK-0007 개선 http://127.0.0.1:5173/settings/report')).toBe('개선');
-    expect(externalText('배포 https://wbs.corp.example/report/1 확인', APP)).toBe('배포 확인');
-    expect(externalText('wbs.corp.example/wbs/TASK-0001 정리', APP)).toBe('정리');
-    expect(externalText('192.168.0.10:3100/ci/9 빌드 · localhost:5173 확인')).toBe('빌드 · 확인');
-    expect(externalText('/report/abc 와 (/settings/mail) 안내')).toBe('와 () 안내');
+describe('Q-13 fix2: 외부 글은 주소 모양을 모두 「(링크 생략)」으로(변환 함수 하나 · 검사기 같은 기준)', () => {
+  test('주소처럼 보이는 것은 어느 서버든 통째로 바꾼다', () => {
+    expect(externalText('TASK-0007 개선 http://127.0.0.1:5173/settings/report')).toBe('개선 (링크 생략)');
+    for (const a of ['https://wbs.corp.example/report/1', 'https://example.org/spec', 'ftp://files.example.org/a', '//cdn.example.org/x', 'www.example.org', 'www.example.org/x',
+      '[::1]:5173/report', '127.0.0.1', '10.0.0.5/x', 'localhost:5173', 'wbs.corp.example:443', '127.1:5173/x', 'wbs.corp.example/report/1', 'example.org/spec', '/report/abc', '/settings']) {
+      expect(externalText(`앞 ${a} 뒤`), a).toBe('앞 (링크 생략) 뒤');
+    }
     expect(externalText('설정 → 보고서 · 메일 안내 개선')).toBe('안내 개선');
-    expect(externalText('http://127.0.0.1:5173/')).toBe('(제목 비공개)');
+    expect(externalText('http://127.0.0.1:5173/')).toBe('(링크 생략)');
   });
-  test('일반 업무 문장과 외부 참고 주소는 그대로 둔다', () => {
-    for (const t of ['참고 https://example.org/spec 반영', '누적 0 / 0', 'A/B 시험', '보고서 개선', '설정 화면 정리', 'API 문서 갱신']) expect(externalText(t, APP)).toBe(t);
+  test('주소가 아닌 업무 문장 · 시각 · 날짜 · 메일 주소는 그대로 둔다', () => {
+    for (const t of ['누적 0 / 0', 'A/B 시험', '보고서/결과 정리', '생성 2026-11-04 07:00 · RPT-W-261026', '10.5% 진척', '기간 2026-10-26 ~ 2026-11-01', '수신: partner@outside.example', 'API 문서 갱신', '<b>굵게</b>']) {
+      expect(externalText(t), t).toBe(t);
+    }
   });
-  test('scrubInternal은 같은 함수다(앱 주소를 모를 때)', () => {
+  test('scrubInternal은 같은 함수다', () => {
     expect(scrubInternal('TASK-0007 개선 http://localhost:5173/report/1')).toBe(externalText('TASK-0007 개선 http://localhost:5173/report/1'));
   });
   test('검사기는 변환 전에는 찾고, 변환 뒤에는 0건이다', () => {
-    const dirty = 'TASK-0007 RP-002 Effort 토큰 개선 https://wbs.corp.example/report/1 /settings/report 설정 → 알림 <a href="x">';
-    expect(externalLeaks(dirty, APP)).toEqual(expect.arrayContaining(['TASK-0007', 'RP-002', 'Effort', '토큰', 'https://wbs.corp.example/report/1', '/settings/report', '설정 → 알림', 'href=']));
-    expect(externalLeaks(externalText(dirty, APP), APP)).toEqual([]);
+    const dirty = 'TASK-0007 RP-002 Effort 토큰 개선 https://example.org/spec /settings/report 설정 → 알림 <a href="x"> 127.1:5173';
+    expect(externalLeaks(dirty)).toEqual(expect.arrayContaining(['TASK-0007', 'RP-002', 'Effort', '토큰', 'https://example.org/spec', '/settings/report', '설정 → 알림', 'href=', '127.1:5173']));
+    expect(externalLeaks(externalText(dirty))).toEqual([]);
   });
-  test('보고용 보기(화면 · PDF)는 앱 주소를 받아 제목에서 뺀다', () => {
+  test('보고용 보기(화면 · PDF)의 작업 제목도 같은 함수를 지난다', () => {
     const s = snap({ done: [doneTask('TASK-0001', '개선 https://wbs.corp.example/report/1')] });
-    expect(externalView(s, 'weekly', APP).highlights).toEqual(['개선']);
+    expect(externalView(s, 'weekly').highlights).toEqual(['개선 (링크 생략)']);
   });
+
+  /**
+   * Codex 재리뷰 지적 1 재현: 같은 앱 주소의 다른 표기. 표준 URL 해석기로 보면 앱 주소와 같은 곳이다.
+   * 기준을 검사기의 정규식에만 두지 않으려고, 먼저 URL 해석으로 「정말 앱 주소」인지 확인한 뒤 변환 · 검사 결과를 본다.
+   */
+  test.each([
+    ['http://127.1:5173/report/abc', 'http://127.0.0.1:5173/'],
+    ['http://2130706433:5173/report/abc', 'http://127.0.0.1:5173/'],
+    ['http://[0:0:0:0:0:0:0:1]:5173/report/abc', 'http://[::1]:5173/'],
+    ['https://%77bs.corp.example/report/abc', 'https://wbs.corp.example/'],
+  ])('재리뷰 재현: %s', (address, app) => {
+    expect(new URL(address).origin).toBe(new URL(app).origin);
+    const out = externalText(`TASK-0007 개선 ${address}`, app);
+    expect(out).toBe('개선 (링크 생략)');
+    expect(externalLeaks(out, app)).toEqual([]);
+    expect(externalLeaks(address, app).length).toBeGreaterThan(0);
+  });
+  test.each(['https://notwbs.corp.example.org/spec', 'https://localhost.example.org/spec', 'https://other.example.org/spec?source=wbs.corp.example'])(
+    '재리뷰 재현(외부 주소를 자르지 않음): %s → 조각이 남지 않고 통째로 바뀐다', (address) => {
+      expect(externalText(`참고 ${address} 반영`, 'https://wbs.corp.example/')).toBe('참고 (링크 생략) 반영');
+    });
 });
+
+

@@ -24,7 +24,7 @@ import { TableScroll } from '../../../shared/ui/TableScroll.tsx';
 import { CardHead, QueryGate, Row, Seg } from '../ui.tsx';
 import { DirtyContext } from '../useSettingForm.tsx';
 import {
-  BLANK_RECIPIENT, EXTERNAL_HINT, LOG_LIMIT, SECURITY, VIEW_LABEL, lastSend, recipientError, recipientSummary, smtpError, stateLabel, withExternal,
+  BLANK_RECIPIENT, EXTERNAL_HINT, SENDER_NAME_RULE, senderNameProblem, LOG_LIMIT, SECURITY, VIEW_LABEL, lastSend, recipientError, recipientSummary, smtpError, stateLabel, withExternal,
   type MailLog, type Recipient, type RecipientForm, type Smtp, type SmtpForm,
 } from './model.ts';
 
@@ -267,6 +267,7 @@ function SmtpCard({ smtp, refresh }: { smtp: ReturnType<typeof useApiQuery<'getS
             <span className="kv-l">비밀번호</span><span className="kv-v">{data.pwSet ? '●●●●●●●● (저장됨 · 서버에 암호화 보관)' : '없음'}</span>
           </div>
           {c && !c.ok && c.error && <div className="banner danger" role="note"><div className="banner-b">{c.error}</div></div>}
+          {senderNameProblem(data.from) && <div className="banner danger" role="alert"><div className="banner-b"><b>설정 오류</b> — {SENDER_NAME_RULE} 고치기 전에는 외부 수신자에게 메일을 보내지 않습니다.</div></div>}
           <div className="msg-acts">
             <BusyButton small variant="default" busy={check.busy} busyLabel="확인 중…" onClick={() => { void check.save(); }}>연결 확인</BusyButton>
             <button type="button" className="btn ghost sm" onClick={open}>수정</button>

@@ -1,6 +1,6 @@
 /** 설정 → 보고서 · 메일 탭 계산(M6-03). 원본 P addRecip·saveSmtp·mailVM 규칙 */
 import { describe, expect, test } from 'vitest';
-import { BLANK_RECIPIENT, EXTERNAL_DAILY_ERROR, withExternal, lastSend, recipientError, recipientSummary, smtpError, stateLabel, type MailLog, type Recipient } from '../src/features/settings/report/model.ts';
+import { BLANK_RECIPIENT, EXTERNAL_DAILY_ERROR, SENDER_NAME_RULE, senderNameProblem, withExternal, lastSend, recipientError, recipientSummary, smtpError, stateLabel, type MailLog, type Recipient } from '../src/features/settings/report/model.ts';
 
 const rc = (email: string, over: Partial<Recipient> = {}): Recipient => ({ id: email, email, name: '', daily: true, weekly: false, view: 'int', pdf: false, external: false, active: true, createdAt: '2026-11-04T00:00:00.000000Z', updatedAt: '2026-11-04T00:00:00.000000Z', ...over });
 const lg = (over: Partial<MailLog>): MailLog => ({
@@ -56,5 +56,14 @@ describe('외부 수신자(Q-13 결정 A)', () => {
   test('외부인데 일간을 고르면 서버에 보내기 전에 알린다', () => {
     expect(recipientError({ ...BLANK_RECIPIENT, email: 'o@partner.example', external: true, daily: true }, [])).toBe(EXTERNAL_DAILY_ERROR);
     expect(recipientError(withExternal({ ...BLANK_RECIPIENT, email: 'o@partner.example' }, true), [])).toBe('');
+  });
+});
+
+describe('보내는 사람 표시 이름(Q-13 fix2)', () => {
+  test('주소 · 내부 용어가 든 표시 이름은 저장 전에 알리고 메일 서버 카드에 설정 오류로 보인다', () => {
+    expect(senderNameProblem('Agent WBS <agent-wbs@example.com>')).toBe(false);
+    expect(senderNameProblem('agent-wbs@example.com')).toBe(false);
+    expect(senderNameProblem('"TASK-0007 owner http://127.0.0.1:5173/settings/report" <agent-wbs@example.com>')).toBe(true);
+    expect(smtpError({ host: 'h', port: '25', sec: '없음', from: 'www.example.org <a@example.com>', user: '', pw: '' }, false)).toBe(SENDER_NAME_RULE);
   });
 });

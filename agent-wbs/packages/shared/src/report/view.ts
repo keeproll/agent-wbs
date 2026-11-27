@@ -128,60 +128,85 @@ export function internalTerms(text: string): string[] {
 }
 
 /**
- * 앱 화면의 첫 경로(apps/web 메뉴 · 로그인 · API). 「/report/…」처럼 글에 적힌 앱 안 경로를 찾을 때 쓴다.
- * 메뉴를 늘리면 여기에도 더한다(shared 시험이 web 메뉴와 같은지 확인한다).
+ * 앱 화면의 첫 경로(apps/web 메뉴 · 로그인 · API). 경로 모양 규칙이 이 경로들을 모두 잡는지 시험이 확인한다.
+ * 메뉴를 늘리면 여기에도 더한다(web 시험이 메뉴와 같은지 확인한다).
  */
 export const APP_PATHS = ['dashboard', 'project', 'wbs', 'design', 'planning', 'exec', 'verify', 'ci', 'change', 'history', 'report', 'settings', 'api', 'login'] as const;
-/** 같은 PC · 같은 네트워크에서만 열리는 주소(로컬 · 사설 IP · .local). 외부 사람에게는 열리지 않는 앱 주소로 본다. */
-const LOCAL_HOST = String.raw`(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|\[::1\]|[\w-]+\.local)`;
-const escapeRe = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const hostOf = (appUrl: string | null | undefined) => { try { return appUrl ? new URL(appUrl.trim()).host : null; } catch { return null; } };
 
+/** 외부 글에서 주소를 지운 자리에 넣는 말(Q-13 fix2) */
+export const LINK_OMITTED = '(링크 생략)';
+/** 주소 조각이 끝나는 글자(공백 · 따옴표 · 괄호 · 꺾쇠) */
+const TAIL = String.raw`[^\s<>"'()[\]{}「」『』]*`;
 /**
- * 앱 링크 · 앱 안 경로 · 앱 메뉴 안내를 찾는 정규식(Q-13 결정 A, Codex 리뷰 fix1 2).
- * - 앱 접속 주소(설정 → 알림의 `app_url`)의 호스트가 들어간 주소(`http://` 생략 포함)
- * - 로컬 · 사설 주소(위 LOCAL_HOST)
- * - 공백 · 괄호 뒤에 오는 앱 경로(`/report/…`, `/settings/report` 등 APP_PATHS)
- * - 「설정 → 보고서 · 메일」 같은 앱 메뉴 안내
- * 일반 외부 참고 주소(예: `https://example.org/spec`)는 지우지 않는다. 왜: 업무 문장의 참고 자료까지 없애면 보고 내용이 상한다.
+ * **주소처럼 보이는 것**의 모양(Q-13 fix2). 어느 서버를 가리키는지 따지지 않고 모양만 본다.
+ * 왜: 결정 A는 「외부 수신자에게는 링크 없이」다. 같은 주소를 여러 글자로 적을 수 있어(`127.1`, `2130706433`, `%77bs…`)
+ *   「우리 앱 주소인가」를 가려내려 하면 빠짐이 생긴다. 그래서 일반 외부 주소도 예외 없이 지운다.
+ * - 스킴이 있는 주소: `http://…`, `https://…`, `ftp://…`, `//…`
+ * - `www.`로 시작하는 주소
+ * - 대괄호 IPv6: `[::1]`, `[0:0:…:1]:5173`
+ * - 숫자 IP(점 셋 이상): `127.0.0.1`, `10.0.0.5/x`
+ * - 호스트:포트: `localhost:5173`, `127.1:5173`, `wbs.corp.example:443`, `2130706433:5173`
+ * - 호스트/경로: `wbs.corp.example/report/1`, `example.org/spec`
+ * - 경로형: 공백 · 괄호 뒤의 `/report/abc`, `/settings`(「A/B」, 「0 / 0」은 아니다)
+ * 메일 주소(`name@example.com`)는 주소 모양에 넣지 않는다. 왜: 받는 사람 자신의 주소를 바닥글에 보이고, 링크가 아니다.
  */
-function linkPatterns(appUrl?: string | null): RegExp[] {
-  const host = hostOf(appUrl);
-  return [
-    ...(host ? [new RegExp(String.raw`(?:https?:\/\/)?${escapeRe(host)}[^\s<>"'()[\]」』]*`, 'gi')] : []),
-    new RegExp(String.raw`(?:https?:\/\/)?${LOCAL_HOST}(?::\d+)?(?:\/[^\s<>"'()[\]」』]*)?`, 'gi'),
-    new RegExp(String.raw`(?<![\w.:/-])\/(?:${APP_PATHS.join('|')})(?:\/[^\s<>"'()[\]」』]*)?(?![\w-])`, 'g'),
-    /설정\s*→\s*[^\s,.)」』]+(?:\s*·\s*[^\s,.)」』]+)?/g,
-    // 링크 속성 글자. 제목에 「<a href=…>」가 적혀 와도 메일 HTML에서 링크처럼 보이지 않게 지운다.
-    /href\s*=/gi,
-  ];
-}
+const ADDRESS: readonly RegExp[] = [
+  new RegExp(String.raw`\b[a-z][a-z0-9+.-]*:\/\/${TAIL}`, 'gi'),
+  new RegExp(String.raw`(?<![\w:/])\/\/[^\s/]${TAIL}`, 'gi'),
+  new RegExp(String.raw`\bwww\.${TAIL}`, 'gi'),
+  new RegExp(String.raw`\[[0-9a-f.%]*:[0-9a-f:.%]*\](?::\d{1,5})?${TAIL}`, 'gi'),
+  new RegExp(String.raw`(?<![\w.])\d{1,3}(?:\.\d{1,3}){2,}(?::\d{1,5})?(?:\/${TAIL})?`, 'g'),
+  new RegExp(String.raw`(?<![\w.-])(?:[a-z][\w-]*(?:\.[\w-]+)*|\d[\w-]*(?:\.[\w-]+)+|\d{3,}):\d{1,5}(?![\d:])(?:\/${TAIL})?`, 'gi'),
+  new RegExp(String.raw`(?<![\w.@-])[\w-]+(?:\.[\w-]+)+\/${TAIL}`, 'gi'),
+  // `<` 뒤는 경로가 아니라 닫는 태그 모양(`</b>`)이다. 글자로 바뀌어 보일 뿐 링크가 되지 않는다.
+  new RegExp(String.raw`(?<![\w.:/~<-])\/[a-z0-9_.~%-]+(?:\/${TAIL})?`, 'gi'),
+];
+/** 주소는 아니지만 외부 글에 남기지 않는 것: 앱 메뉴 안내(「설정 → 알림」)와 링크 속성 글자(`href=`) */
+const APP_HINTS: readonly RegExp[] = [
+  /설정\s*→\s*[^\s,.)」』]+(?:\s*·\s*[^\s,.)」』]+)?/g,
+  /href\s*=/gi,
+];
 
 /**
- * 외부로 나가는 글을 보고용으로 바꾸는 **하나뿐인** 변환 함수(G L396 · L1052, Q-13 결정 A).
- * 메일 제목 · 본문(HTML · text/plain) · 보고용 화면 · 보고용 PDF가 모두 이 함수를 지난다.
- * - 내부 용어(Task ID · RP · 시도 · 모델 · Effort · 토큰)를 뺀다.
- * - 앱 링크 · 앱 안 경로 · 앱 메뉴 안내를 뺀다(linkPatterns).
- * 왜: 제목 · 이름은 팀장이 자유롭게 쓰므로 「TASK-0007 개선 http://127.0.0.1:5173/settings/report」처럼 섞일 수 있다.
- *   HTML의 `<a>`가 없어도 메일 앱은 글로 적힌 주소를 링크로 바꿔 준다.
- * 예: 「TASK-0007 RP-002 개선」 → 「개선」. 모두 지워져 빈 글이 되면 「(제목 비공개)」.
+ * 외부로 나가는 글을 보고용으로 바꾸는 **하나뿐인** 변환 함수(G L396 · L1052, Q-13 결정 A · fix1 · fix2).
+ * 메일 헤더(제목 등) · 본문(HTML · text/plain) · 보고용 화면 · 보고용 PDF가 모두 이 함수를 지난다.
+ * 1. 주소처럼 보이는 것(ADDRESS)을 통째로 「(링크 생략)」으로 바꾼다. 일반 외부 주소도 예외가 없다.
+ * 2. 내부 용어(Task ID · RP · 시도 · 모델 · Effort · 토큰)와 앱 메뉴 안내 · `href=`를 뺀다.
+ * 왜: 제목 · 이름은 자유 입력이다. 메일 앱은 글로 적힌 주소도 링크로 바꿔 준다.
+ * 예: 「TASK-0007 개선 http://127.1:5173/report/abc」 → 「개선 (링크 생략)」. 모두 지워져 빈 글이 되면 「(제목 비공개)」.
+ * appUrl은 더 이상 판별에 쓰지 않는다(모든 주소 모양을 지운다). 호출하는 쪽과의 호환을 위해 받기만 한다.
  */
 export function externalText(text: string, appUrl?: string | null): string {
-  const patterns = [...linkPatterns(appUrl), ...INTERNAL_TERMS];
-  const cleaned = patterns.reduce((acc, re) => acc.replace(new RegExp(re.source, re.flags), ''), text).replace(/\s+/g, ' ').trim();
+  void appUrl;
+  const linked = ADDRESS.reduce((acc, re) => acc.replace(new RegExp(re.source, re.flags), ` ${LINK_OMITTED} `), text);
+  const cleaned = [...APP_HINTS, ...INTERNAL_TERMS].reduce((acc, re) => acc.replace(new RegExp(re.source, re.flags), ''), linked)
+    .replace(/\s+/g, ' ').replace(/(\(링크 생략\)\s*)+/g, `${LINK_OMITTED} `).trim();
   return cleaned || '(제목 비공개)';
+}
+/**
+ * 외부로 나가는 글 검사기(Q-13 결정 A · fix2). 변환 함수와 **같은 기준**으로 남은 주소 모양 · 내부 용어 · 메뉴 안내 · `href=`를 모두 돌려준다.
+ * 빈 목록이면 통과(「주소 모양 0건」). 시험과 발송 직전(메일 worker · 보고용 PDF 생성 · SMTP 설정 저장) 모두 이 함수를 쓴다.
+ * 글자(text/plain · 제목 · 헤더)에 쓴다. HTML은 externalHtmlLeaks로 보이는 글과 링크 태그를 함께 본다.
+ */
+export function externalLeaks(text: string, appUrl?: string | null): string[] {
+  void appUrl;
+  return [...ADDRESS, ...APP_HINTS, ...INTERNAL_TERMS].flatMap((re) => text.match(new RegExp(re.source, re.flags)) ?? []);
+}
+/** HTML에서 보이는 글만(스타일 · 스크립트 · 태그를 빼고 글자 기호를 푼다). 메일 본문 · PDF 문서 검사가 함께 쓴다. */
+export function htmlVisibleText(html: string): string {
+  return html.replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<title[\s\S]*?<\/title>/gi, ' ').replace(/<[^>]+>/g, ' ')
+    .replace(/&#(\d+);/g, (_m, n: string) => String.fromCharCode(Number(n))).replace(/&#x([0-9a-f]+);/gi, (_m, n: string) => String.fromCharCode(parseInt(n, 16)))
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&');
+}
+/** HTML 검사: 링크가 되는 태그 · 속성(`<a`, `href=`, `src=http…`)과 보이는 글의 externalLeaks. 빈 목록이면 통과 */
+export function externalHtmlLeaks(html: string): string[] {
+  const tags = html.match(/<a\b|<area\b|<base\b|\bhref\s*=|\bsrc\s*=\s*["']?(?:https?:|\/\/)/gi) ?? [];
+  const title = /<title>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? '';
+  return [...tags, ...externalLeaks(htmlVisibleText(title)), ...externalLeaks(htmlVisibleText(html))];
 }
 /** 옛 이름. externalText와 같은 함수다(앱 접속 주소를 모를 때). */
 export const scrubInternal = (text: string): string => externalText(text);
 
-/**
- * 외부로 나가는 글 검사기(Q-13 결정 A). 남은 내부 용어 · 앱 링크 · 앱 경로 · 메뉴 안내를 모두 돌려준다. 빈 목록이면 통과.
- * 시험과 발송 직전(메일 worker · 보고용 PDF 생성) 둘 다 이 함수를 쓴다.
- * HTML이면 `href=`도 찾는다(linkPatterns). 왜: 보이는 글자에 주소가 없어도 링크 태그가 남으면 누를 수 있다.
- */
-export function externalLeaks(text: string, appUrl?: string | null): string[] {
-  return [...linkPatterns(appUrl), ...INTERNAL_TERMS].flatMap((re) => text.match(new RegExp(re.source, re.flags)) ?? []);
-}
 
 /** 스냅샷이 계약(ReportSnapshot)에 맞는지. 맞지 않으면 첫 위반 위치를 돌려준다. */
 export function snapshotProblem(value: unknown): string | null {

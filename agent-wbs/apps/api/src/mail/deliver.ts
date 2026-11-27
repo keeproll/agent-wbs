@@ -27,7 +27,7 @@ import type { Pool, PoolClient } from '@awbs/db';
 import { inEpoch } from '../platform/transaction.ts';
 import { deferChange, iso } from '../changes/events.ts';
 import { appendLog, EXTERNAL_DAILY_SKIP, loadReport, syncMailAlert } from './queue.ts';
-import { externalMailLeaks, mailSubject, pdfName, renderMail } from './render.ts';
+import { externalMailLeaks, mailSubject, pdfName, renderMail, senderNameLeaks } from './render.ts';
 import { smtpTarget } from './settings.ts';
 import { mailTransition, type Incoming, type MailState } from './transition.ts';
 import { DEFAULT_TIMEOUT_MS, sendSmtp, type OutgoingMail, type SendOutcome, type SmtpTarget } from './smtp.ts';
@@ -209,6 +209,7 @@ export async function deliverMail(pool: Pool, epoch: number, options: DeliverOpt
 }
 
 /** 외부 수신자 메일에 PDF가 없을 때(Q-13 결정 A) */
+export const SENDER_NAME_BAD = '설정 오류: 보내는 사람 이름에 주소 · 내부 용어가 있어 외부 수신자에게 보내지 않음 — 설정 → 보고서 · 메일 → 메일 서버(SMTP)의 보내는 주소를 고치세요.';
 const EXTERNAL_LEAK = '외부 수신자 메일 검사 실패 — 링크 · 앱 경로 · 내부 용어가 남아 보내지 않음';
 const EXTERNAL_NO_PDF = 'PDF 첨부를 만들지 못해 외부 수신자에게 보내지 않음 — 외부 수신자는 링크 없이 PDF로만 전체 내용을 봅니다.';
 
@@ -227,6 +228,8 @@ async function send(target: SmtpTarget & { from: string }, mail: OutgoingMail, c
   // 발송 직전 검사(Q-13 fix1): 외부로 나가는 제목 · 본문 · 첨부 이름 전체에 링크 · 앱 경로 · 내부 용어가 하나라도 남았으면 보내지 않는다.
   // 변환 함수(externalText)가 이미 걸렀어야 한다. 그래도 남았다면 코드 결함이므로, 보내기 전 실패로 남겨 팀장이 보게 한다.
   if (c.external) {
+    // 보내는 사람 표시 이름은 설정 값을 그대로 쓴다. 검사를 통과하지 못하면 고칠 곳(설정)을 알려 주고 보내지 않는다(Q-13 fix2).
+    if (senderNameLeaks(mail.from).length) return { state: 'rejected', error: SENDER_NAME_BAD };
     const leaks = externalMailLeaks(mail, c.appUrl ?? null);
     if (leaks.length) return { state: 'rejected', error: `${EXTERNAL_LEAK} (${String(leaks.length)}건)` };
   }

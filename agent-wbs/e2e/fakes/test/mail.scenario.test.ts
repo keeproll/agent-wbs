@@ -992,6 +992,81 @@ describe('Q-13 결정 A: 외부 수신자(링크 없이 보고용 + PDF)', () =>
     }
   }, 120_000);
 
+  /**
+   * Codex 재리뷰(fix2) 지적 1 재현: 같은 앱 주소의 다른 표기 · 일반 외부 주소를 작업 제목에 넣고 실제 경로(큐 → worker → 가짜 SMTP, 실제 Chromium PDF)로 보낸다.
+   * 기준은 검사기 정규식만이 아니다: 원래 주소 글자 조각(호스트 · 포트 · 경로)이 메일 · PDF 어디에도 없는지 따로 본다.
+   */
+  test('[fix2 1] 앱 주소의 다른 표기(127.1 · 10진수 · IPv6 · %77)와 일반 외부 주소도 외부 메일 · 실제 PDF에서 「(링크 생략)」만 남는다', async () => {
+    const VARIANTS = ['http://127.1:5173/report/abc', 'http://2130706433:5173/report/abc', 'http://[0:0:0:0:0:0:0:1]:5173/report/abc', 'https://%77bs.corp.example/report/abc', 'https://notwbs.corp.example.org/spec'];
+    const TITLE = `TASK-0007 개선 ${VARIANTS.join(' ')}`;
+    const FRAGMENTS = ['5173', '127.1', '2130706433', '0:0:0', '%77', 'corp.example', '/report/abc', '/spec', 'http', 'TASK-0007'];
+    const root = await mkdtemp(join(tmpdir(), 'awbs-mail-fix2-'));
+    const renderer = chromiumRenderer();
+    try {
+      const base = (await reports('weekly'))[0];
+      assert(base);
+      const snap = structuredClone((await lead('GET', `/api/reports/${base.id}`)).body.snapshot as ReportSnapshotData);
+      snap.done = [{ taskKey: 'TASK-0001', wbsPath: '1.1', title: TITLE, assignee: 'Claude', verifier: 'Codex', workType: 'Implementation', domain: 'FE', actStart: null, actEnd: '2026-10-27T01:00:00.000Z',
+        estHours: 1, actualHours: 1, attempts: 1, slipDays: null, verification: null, checklist: { done: 1, total: 1, requiredLeft: 0 }, outputs: { delivered: 1, names: ['a.ts'] }, doneCond: '시험 통과' }] as unknown as ReportSnapshotData['done'];
+      expect(snapshotProblem(snap)).toBeNull();
+      const made = (await owner.query<{ id: string; reportKey: string }>(
+        `insert into reports(project_id,report_key,kind,"from","to",view,snapshot,generated_at,reason)
+         select project_id,'RPT-C-FIX2','custom',"from","to",'ext',$2::jsonb,generated_at,'Q-13 fix2 재현' from reports where id=$1 returning id,report_key "reportKey"`,
+        [base.id, JSON.stringify(snap)])).rows[0];
+      assert(made);
+      const partner = await recipient(PARTNER);
+      const q = await lead('POST', `/api/reports/${made.id}/mail`, { recipientIds: [partner.id] });
+      const count = received(PARTNER).length;
+      const got: { pdf?: Buffer } = {};
+      await deliverMail(pool, epoch, { now: plus(at, 125), timeoutMs: 60_000, pdf: async (reportId, view) => { got.pdf = (await reportPdf(pool, root, renderer, epoch, reportId, view)).file; return got.pdf; } });
+      expect((await rowOf(q.body.ids[0] as string))?.state).toBe('accepted');
+      const raw = received(PARTNER)[count]?.raw ?? '';
+      const mail = { from: mimeHeader(raw, 'From') ?? '', subject: mimeHeader(raw, 'Subject') ?? '', html: mimePart(raw, 'text/html') ?? '', text: mimePart(raw, 'text/plain') ?? '', to: PARTNER };
+      expect(externalMailLeaks(mail, null)).toEqual([]);
+      assert(got.pdf);
+      const pdfText = (await readPdf(new Uint8Array(got.pdf))).pages.flatMap((page) => page.lines).join('\n');
+      expect(externalLeaks(pdfText)).toEqual([]);
+      for (const body of [mail.text, textOf(mail.html), pdfText]) {
+        for (const f of FRAGMENTS) expect(body, f).not.toContain(f);
+      }
+      expect(mail.text).toContain('개선 (링크 생략)');
+      expect(pdfText.replace(/\s+/g, '')).toContain('개선(링크생략)');
+    } finally {
+      await renderer.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  /** Codex 재리뷰(fix2) 지적 2 재현: 보내는 사람 표시 이름. 저장은 400, 이미 저장된 옛 값이면 외부 메일을 보내지 않고 설정 오류로 남긴다. */
+  test('[fix2 2] 보내는 사람 표시 이름에 내부 용어 · 주소가 있으면 저장 400, 옛 설정이면 외부 메일을 보내지 않음(설정 오류)', async () => {
+    const BAD = '"TASK-0007 owner http://127.0.0.1:5173/settings/report" <agent-wbs@example.com>';
+    const current = (await lead('GET', '/api/settings/mail/smtp')).body;
+    const put = await lead('PUT', '/api/settings/mail/smtp', { updatedAt: current.updatedAt, host: current.host, port: current.port, sec: current.sec, user: current.user, from: BAD });
+    expect(put.status).toBe(400);
+    expect(put.body.error.errors[0]).toMatchObject({ path: 'from', rule: 'external' });
+    // 이 규칙 전에 저장된 값이라고 가정한다(API를 거치지 않고 넣음).
+    const before = current.from as string;
+    await owner.query('update mail_settings set "from"=$1', [BAD]);
+    try {
+      const partner = await recipient(PARTNER);
+      const t = await lead('POST', `/api/settings/mail/recipients/${partner.id}/test`);
+      const id = t.body.ids[0] as string;
+      const count = received(PARTNER).length;
+      await deliverMail(pool, epoch, { now: plus(at, 130), timeoutMs: TIMEOUT, pdf: FAKE_PDF });
+      expect(received(PARTNER)).toHaveLength(count);
+      expect(await rowOf(id)).toMatchObject({ state: 'retry_wait' });
+      expect((await rowOf(id))?.error).toContain('설정 오류: 보내는 사람 이름');
+      // 설정을 고치면 15분 뒤 자동 재시도로 나가고, From 헤더는 검사를 통과한다.
+      await owner.query('update mail_settings set "from"=$1', [before]);
+      await deliverMail(pool, epoch, { now: plus(at, 146), timeoutMs: TIMEOUT, pdf: FAKE_PDF });
+      expect((await rowOf(id))?.state).toBe('accepted');
+      const raw = received(PARTNER).at(-1)?.raw ?? '';
+      expect(externalMailLeaks({ from: mimeHeader(raw, 'From') ?? '', subject: mimeHeader(raw, 'Subject') ?? '', html: mimePart(raw, 'text/html') ?? '', text: mimePart(raw, 'text/plain') ?? '', to: PARTNER }, null)).toEqual([]);
+    } finally {
+      await owner.query('update mail_settings set "from"=$1', [before]);
+    }
+  });
+
   test('[fix1 3] 실패가 남은 받는 사람을 외부로 바꾸면 실패 목록과 대시보드 알림이 함께 다시 계산된다', async () => {
     const r = await lead('POST', '/api/settings/mail/recipients', { email: 'alert@example.com', name: '알림 재현', daily: true, weekly: true, view: 'int', pdf: false });
     const d = (await reports('daily'))[0];
