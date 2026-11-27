@@ -230,8 +230,12 @@ async function attemptPayload(repo: RunnerRepository, task: Task, kind: AttemptK
   if (!spec) rejection(['Task 명세가 필요합니다.']);
   const prev = previous(await repo.history(task.id));
   const agent = roleOf(kind) === 'dev' ? task.assignee_agent : task.verifier_agent;
+  // 검증 시도(qa·reverify)에는 체크리스트 항목 키를 함께 준다. Runner가 QA 판정의 항목(acId)을 이 키로만 보고한다(contracts §5).
+  // 왜: 결과 보고의 checklist.itemKey는 서버가 만든 키여야 한다. Runner가 키를 추측하면 다른 항목을 체크할 수 있다.
+  const checklist = roleOf(kind) === 'qa' ? (await repo.client.query<{ itemKey: string; content: string }>(
+    'select item_key "itemKey",content from checklist_items where task=$1 order by sort_order,item_key', [task.id])).rows : undefined;
   return { taskKey: task.task_key, kind, agent, branch: taskBranch(task.task_key, authority?.generation ?? 1),
-    baseCommit: input?.commit_sha ?? prev?.head_sha, inputVersion: input?.v ?? 1, instructions: { ...spec },
+    baseCommit: input?.commit_sha ?? prev?.head_sha, inputVersion: input?.v ?? 1, instructions: { ...spec, ...(checklist && { checklist }) },
     evidenceInvalidated:task.status === 'verifying' && prev?.verification_disposition === 'stale',...extra };
 }
 

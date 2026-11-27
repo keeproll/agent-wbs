@@ -32,8 +32,11 @@ export interface ExecutionOptions {
   ready: () => boolean;
   env: NodeJS.ProcessEnv;
   binaries: Record<Agent, string>;
-  /** M4 git 계층이 만든 작업 폴더와 그 HEAD. */
-  prepare: (job: AttemptJob) => Promise<{ cwd: string; headSha: string }>;
+  /**
+   * M4 git 계층이 만든 작업 폴더와 그 HEAD. `notes`는 지시문 끝에 붙일 Runner 안내(입력 사본 위치·종료 메시지 형식)다.
+   * 구현: `jobs/workspace.ts`의 `AttemptWorkspace.prepare`.
+   */
+  prepare: (job: AttemptJob) => Promise<{ cwd: string; headSha: string; notes?: string }>;
   budget: (role: 'dev' | 'qa') => number;
   sessions: ActiveSession[];
   heavy: HeavySemaphore;
@@ -64,7 +67,11 @@ export interface ExecutionOptions {
 interface Resume { cwd: string; agent: Agent; model: string; effort: string; sessionId: string }
 class ResourceUnavailableError extends Error {}
 export type AttemptOutput = Awaited<ReturnType<typeof runProcess>> & {
-  attemptId: string; cwd: string; headSha: string; ok: boolean; text: string;
+  attemptId: string; cwd: string; headSha: string; notes?: string; ok: boolean; text: string;
+  /** 이 실행의 CLI 세션 ID(Claude session_id, Codex thread_id). 형식 수정 요청(`followUp`)이 같은 세션을 잇는다. */
+  sessionId?: string;
+  /** 서버가 정한 이번 실행의 모델·Effort. 수정 요청도 같은 값으로 돈다. */
+  grade: { model: string; effort: string };
   observation: ReturnType<SubagentObserver['snapshot']>; reserved: number;
   resultEvent: Extract<CliEvent, { type: 'result' }> | undefined;
   tokens: { inputTokens: number; cachedInputTokens: number; outputTokens: number };
@@ -193,13 +200,47 @@ export class Execution {
 
   /** ① 명령은 같은 무거운 작업 번호표를 쓰고 물리 슬롯만 반납한다. 논리 잠금은 후속 단계가 쓴다. */
   command(job: LaunchJob, agent: Agent, launch: Launch, signal?: AbortSignal, options: { heavyHeld?: boolean } = {}) {
-    const task = this.#command(job, agent, launch, signal, options.heavyHeld ?? false);
+    const task = this.#command(job, agent, launch, signal, options.heavyHeld ?? false, false);
     this.#tasks.add(task);
     void task.finally(() => this.#tasks.delete(task)).catch(() => undefined);
     return task;
   }
 
-  async #command(job: LaunchJob, agent: Agent, launch: Launch, signal?: AbortSignal, heavyHeld = false) {
+  /**
+   * 형식 수정 요청(contracts §5): 끝난 시도의 같은 CLI 세션을 같은 작업 폴더에서 한 번 더 실행한다.
+   * - 같은 job·fence·임대다. 물리 슬롯을 다시 받고(`acquireJobSlots`) 프로세스를 등록한 뒤, 끝나면 종료 증거로 반환한다.
+   *   왜: 슬롯을 반환한 뒤 서버 보유 없이 프로세스를 띄우면 PC 자리 계산과 정리 대조가 어긋난다(contracts §4.1 ① 실패 수정과 같은 길).
+   * - 무거운 작업 번호표는 받지 않는다. CLI 세션은 원래도 받지 않는다.
+   * - 세션 ID가 없으면(첫 실행이 세션을 알리지 않음) 수정 요청을 보낼 수 없다. 추측해서 새 세션을 열지 않는다.
+   * - 횟수(시도마다 1회)는 호출자(`jobs/collect.ts`)가 지킨다.
+   */
+  followUp(job: AttemptJob, epoch: number, output: AttemptOutput, prompt: string, signal?: AbortSignal): Promise<{ ok: boolean; code: number | null; text: string }> {
+    const task = this.#followUp(job, epoch, output, prompt, signal);
+    this.#tasks.add(task);
+    void task.finally(() => this.#tasks.delete(task)).catch(() => undefined);
+    return task;
+  }
+
+  async #followUp(job: AttemptJob, epoch: number, output: AttemptOutput, prompt: string, signal?: AbortSignal) {
+    if (!output.sessionId) throw new Error('이어 갈 CLI 세션 ID가 없어 형식 수정 요청을 보낼 수 없습니다.');
+    const agent = job.payload.agent;
+    const isolation = await this.#currentIsolation();
+    const launch = buildLaunch(agent, this.#d.binaries[agent], { ...output.grade, cwd: output.cwd, prompt, resume: output.sessionId }, { env: this.#d.env, isolation });
+    const result = await this.#command({ id: job.id, fence: job.fence, epoch }, agent, launch, signal, true, true);
+    const decoder = new JsonlDecoder(), parse = createParser(agent);
+    let ok = false, text = '', resultText: string | undefined;
+    for (const record of [...decoder.push(Buffer.from(result.stdout)), ...decoder.end()]) for (const event of parse(record)) {
+      if (event.type === 'result') { ok = event.ok; resultText = event.text; }
+      if (event.type === 'message') text = event.text;
+    }
+    // 원문 기록에도 남긴다(첫 실행과 같은 파일). 왜: 수정 요청 뒤 결과가 어디서 왔는지 사람이 대조할 수 있어야 한다.
+    await mkdir(join(this.#d.home, 'transcripts'), { recursive: true, mode: 0o700 });
+    const transcript = await open(join(this.#d.home, 'transcripts', `${createHash('sha256').update(output.attemptId).digest('hex')}.jsonl`), 'a', 0o600);
+    try { await transcript.write(result.stdout); await transcript.sync(); } finally { await transcript.close(); }
+    return { ok: ok && result.code === 0, code: result.code, text: resultText ?? text };
+  }
+
+  async #command(job: LaunchJob, agent: Agent, launch: Launch, signal?: AbortSignal, heavyHeld = false, prewrapped = false) {
     const d = this.#d;
     if (!this.#isolation) throw new IsolationUndecidedError();
     if (!this.#recovered || !d.ready()) throw new Error('Runner 정리가 끝나기 전에는 명령을 실행하지 않습니다.');
@@ -222,7 +263,8 @@ export class Execution {
       this.#assertStart(agent, 1, reservation);
       // ①·CI 명령은 격리 계층의 command(전용 계정이면 래퍼 ci-run)로 감싼다. fake 계층(시험)만 wrap으로 대신한다.
       const layer = await this.#currentIsolation();
-      const wrapped = layer.command ? layer.command(launch) : layer.wrap(launch, agent);
+      // 형식 수정 요청(followUp)은 buildLaunch가 이미 CLI 실행으로 감쌌다(래퍼 run). 다시 감싸지 않는다.
+      const wrapped = prewrapped ? launch : layer.command ? layer.command(launch) : layer.wrap(launch, agent);
       // CI job(integrate·ci_retry)은 claim 때 이미 물리 슬롯을 예약한다(reserved). 그때는 다시 받지 않고 그 예약으로 /process를 보낸다.
       // 왜: 서버는 슬롯이 없는(none) 보유에만 acquire를 허락한다. 시도 job은 세션이 끝나 슬롯을 돌려준 뒤라 none이다.
       const current = (await this.#call('getExecutionHolds', { epoch: job.epoch }, stopped)).body.holds
@@ -331,7 +373,7 @@ export class Execution {
       }
       const resume = previous && previous.cwd === work.cwd && previous.agent === job.payload.agent && previous.model === grade.model && previous.effort === grade.effort ? previous.sessionId : undefined;
       const definitions = (await this.#call('getTaskSubagents', { epoch, params: { taskKey: job.payload.taskKey }, query: { role } }, signal)).body;
-      const prompt = `${JSON.stringify(job.payload.instructions)}\n\n동시 하위 Agent 예산: ${budget}\n지정 하위 Agent: ${definitions.enabled ? definitions.items.map(i => i.key).join(', ') : '없음'}\n모델: ${grade.model}, Effort: ${grade.effort}\n입력 버전: ${job.payload.inputVersion}\n${options.prompt ?? ''}`;
+      const prompt = `${JSON.stringify(job.payload.instructions)}\n\n동시 하위 Agent 예산: ${budget}\n지정 하위 Agent: ${definitions.enabled ? definitions.items.map(i => i.key).join(', ') : '없음'}\n모델: ${grade.model}, Effort: ${grade.effort}\n입력 버전: ${job.payload.inputVersion}\n${options.prompt ?? ''}${work.notes ? `\n${work.notes}` : ''}`;
       const isolation = await this.#currentIsolation();
       const launch = buildLaunch(job.payload.agent, d.binaries[job.payload.agent], { ...grade, cwd: work.cwd, prompt, ...(resume && { resume }) }, { env: d.env, isolation });
       const installedSubagents = await installSubagents(work.cwd, job.payload.agent, definitions, grade, this.agentFiles);
@@ -406,7 +448,8 @@ export class Execution {
         else await this.#report('reportAttemptStatus', { epoch, params: { attemptId }, body: { fence: job.fence, status: 'failed', model: grade.model, effort: grade.effort, at: new Date().toISOString() } });
         await this.#report('releaseJob', { epoch, params: { id: job.id }, body: { fence: job.fence, hostId: d.identity.hostId, proof: result.proof, at: new Date().toISOString() } });
       }
-      const output = { ...result, attemptId, ...work, ok: ok && result.code === 0 && !signal.aborted, text: resultEvent?.text ?? text, observation: observer.snapshot(), reserved, resultEvent, tokens };
+      const output = { ...result, attemptId, ...work, ok: ok && result.code === 0 && !signal.aborted, text: resultEvent?.text ?? text, observation: observer.snapshot(), reserved, resultEvent, tokens,
+        ...(sessionId && { sessionId }), grade: { model: grade.model, effort: grade.effort } };
       if (output.ok) await options.complete?.(output, signal);
       return output;
     } catch (error) {

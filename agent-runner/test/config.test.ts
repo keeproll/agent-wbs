@@ -52,3 +52,13 @@ test('조정자 결정 7: CI 실행기(AWBS_CI_AUTO)는 기본 꺼짐, 1일 때�
   expect(loadConfig({ ...base, AWBS_CI_AUTO: '1' }).ciAuto).toBe(true);
   expect(() => loadConfig({ ...base, AWBS_CI_AUTO: 'yes' })).toThrow('AWBS_CI_AUTO');
 });
+
+test('시도 흐름(AWBS_ATTEMPT_AUTO)은 기본 꺼짐, 1일 때만 켜짐(GitHub 저장소 설정 필요), 다른 값은 설정 오류', () => {
+  const base = { AWBS_WBS_URL: 'http://127.0.0.1:3100', AWBS_RUNNER_TOKEN: 'awbs_rt_' + 'a'.repeat(40) };
+  const github = { ...base, AWBS_GITHUB_REPO: 'https://github.com/o/r' };
+  expect(loadConfig(github).attemptAuto).toBe(false);
+  expect(loadConfig({ ...github, AWBS_ATTEMPT_AUTO: '0' }).attemptAuto).toBe(false);
+  expect(loadConfig({ ...github, AWBS_ATTEMPT_AUTO: '1' }).attemptAuto).toBe(true);
+  expect(() => loadConfig({ ...github, AWBS_ATTEMPT_AUTO: 'on' })).toThrow('AWBS_ATTEMPT_AUTO');
+  expect(() => loadConfig({ ...base, AWBS_ATTEMPT_AUTO: '1' })).toThrow('AWBS_GITHUB_REPO');
+});

@@ -39,6 +39,16 @@ const rejected = await repo.checkTask(latestMain, taskHead);
   - 검사 사본(`createTaskCheckWorktree`)은 실행마다 새 HOME `.awbs-home`(pnpm 저장소 포함)도 이때 만든다. `.git/info/exclude`에 적어 상태 검사에서 뺀다.
 - **결과 가져오기(`importWorktree`)**: Agent 계정 git이 만든 git bundle(데이터 파일)만 받는다(`AgentGit.bundle`, 래퍼 `git-bundle`). Runner bare 저장소에서 `git bundle verify` 뒤 그 파일에서 fetch한다(객체 fsck 검사 켬). Agent 폴더의 `.git`은 읽지 않는다.
 - **검사 사본 확인(`taskCheckPath`)**: HEAD SHA와 「커밋하지 않은 변경 있음」은 Agent 계정 git이 본다(`AgentGit.inspect`, 래퍼 `git-inspect`). 추적 안 된 파일, assume-unchanged·skip-worktree 표시도 변경으로 센다.
+- **시도 흐름이 쓰는 조회(collect-prepare)**:
+  - `worktreeState(id)`: 생성 기록과 폴더가 있는지만 본다(lstat). 폴더 내용은 읽지 않는다.
+  - `worktreeHead(id)`: 작업 폴더의 HEAD. 전용 계정 배치는 Agent 계정 git(`git-inspect`)으로만 본다.
+  - `resultHead(id)`: `importWorktree`가 Runner bare 저장소에 가져온 결과 커밋(`refs/agent-results/<id>`). Agent 폴더를 보지 않는다.
+  - `changedPaths(base, head)`: 공통 조상부터 head까지 바뀐 파일. Runner bare 저장소에서만 계산한다.
+  - `hasCommit(sha)`·`inputPath(id)`: 커밋이 이미 있는지, 입력 사본이 이미 있는지.
+- **소유자가 다른 저장소(dubious ownership)**: 작업 폴더는 Runner 계정 소유라, Agent 계정 git은 기본으로 거부한다.
+  - 래퍼는 그 폴더 하나만 명령줄 설정 `-c safe.directory=<폴더>`로 허용한다(fix3). `ci-run`은 같은 값을 `GIT_CONFIG_*` 환경 변수로 준다.
+  - 왜 명령줄인가: git은 저장소 설정의 `safe.directory`를 읽지 않는다. Agent가 저장소 설정으로 넓힐 수 없다.
+  - 설치된 래퍼가 fix3 전이면 `git-inspect`·`git-bundle`이 실패한다. owner가 설치 스크립트를 다시 실행해야 한다(`docs/OWNER-RUNBOOK.md`).
 - **실행 가드(`assertRunnerGit`)**: Runner git의 cwd·`--git-dir=`·`--work-tree=`·경로 인자가 Agent 작업 폴더 모음 안이면 거부한다. 예외는 준비 폴더(`.prep-<uuid>`)뿐이다. 새 코드가 Agent 폴더에서 git을 돌리면 여기서 멈춘다.
 - **지우기(`removeTree`)**: GNU `chmod -R`·`rm -rf --one-file-system`을 쓴다. 둘 다 링크를 따라가지 않는 순회라, 지우는 도중 Agent가 폴더를 Runner 폴더 링크로 바꿔도 Runner 파일을 지우지 않는다. 막히면 래퍼 `fix-perms` 뒤 한 번 더 지운다.
 - **작업 폴더 모음은 0710**: Agent는 지나가기만 하고 목록을 못 본다. 검사 사본 이름(무작위 UUID)을 다른 Task의 Agent가 찾기 어렵게 한다.

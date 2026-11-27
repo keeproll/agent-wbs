@@ -34,6 +34,7 @@ import { Launches } from './exec/launches.ts';
 import { CiJobs, type CiJobsOptions } from './ci/jobs.ts';
 import { AttemptFlow, type AttemptFlowOptions } from './jobs/attempt-flow.ts';
 import { bindTaskCheck, type TaskCheckSources } from './jobs/task-check.ts';
+import { bindCollect, type CollectSources } from './jobs/collect.ts';
 import { createTestCollector } from './ci/collect-tests.ts';
 import { wrapperAgentFiles } from './git/agent-git.ts';
 import { ciLaunch } from './ci/launch.ts';
@@ -96,7 +97,11 @@ export interface RunnerAppDeps {
    * `taskCheck`는 실제 ① 공급원(`TaskCheckSources`)을 넘긴다. 앱이 자기 GitHub 클라이언트·Execution·Runner로 `bindTaskCheck`를 부른다.
    * 함수를 직접 넘기는 모양은 시험용이다(실제 ①과 PR 생성을 거치지 않는다).
    */
-  jobs?: Pick<AttemptFlowOptions, 'collect'> & { taskCheck: AttemptFlowOptions['taskCheck'] | TaskCheckSources };
+  jobs?: Pick<AttemptFlowOptions, 'settle'> & {
+    /** 결과 수집기. 실제는 공급원(`CollectSources`)을 넘기고, 앱이 자기 Execution·Runner·API로 `bindCollect`를 부른다. 함수는 시험용이다. */
+    collect: AttemptFlowOptions['collect'] | CollectSources;
+    taskCheck: AttemptFlowOptions['taskCheck'] | TaskCheckSources;
+  };
 }
 
 /** 서버 정책을 받기 전 입력 확인 기본 주기(5분, 서버 정책 inputCheckMinutes의 기본값과 같음). */
@@ -262,8 +267,10 @@ export class RunnerApp {
     if (d.ci && d.agentRoot) throw new Error('전용 계정 격리에서는 CI 실행기를 주입할 수 없습니다. 실제 실행기(ciAuto)는 Agent 계정으로만 돈다.');
     if (d.ci && this.github) this.#ci = this.#ciJobs(d.ci);
     const taskCheck = d.jobs?.taskCheck;
-    if (d.jobs && taskCheck) this.jobs = new AttemptFlow({
+    const collect = d.jobs?.collect;
+    if (d.jobs && taskCheck && collect) this.jobs = new AttemptFlow({
       ...d.jobs, execution: this.execution, runner: this.runner, api: d.api,
+      collect: typeof collect === 'function' ? collect : bindCollect({ ...collect, api: d.api, runner: this.runner, execution: this.execution }),
       // 실제 ①은 앱의 GitHub 클라이언트로 PR을 연다. GitHub 설정이 없으면 null(PR 없이 보고, 서버가 통합을 보류).
       taskCheck: typeof taskCheck === 'function' ? taskCheck
         : bindTaskCheck({ ...taskCheck, api: d.api, runner: this.runner, execution: this.execution, github: this.github?.client ?? null }),

@@ -103,6 +103,7 @@ keeproll ALL=(awbs-agent) NOPASSWD: /usr/local/libexec/awbs-agent-exec
     - CLI가 세션 안에서 스스로 부르는 `rg` 등은 같은 계정·같은 scope의 자식이라 따로 허용할 필요가 없다.
   - 다른 Agent의 CLI도 거부한다.
 - `git-inspect --cwd <작업 폴더>`·`git-bundle --cwd <작업 폴더> --branch <이름>`(fix2, 조정자 결정 6): Agent 작업 폴더의 git을 Agent 계정이 돌린다. 시스템·전역 설정 없음, `GIT_ALLOW_PROTOCOL=none`, `GIT_NO_LAZY_FETCH=1`, hook·fsmonitor 끔. Runner는 사용자 scope 안에서 부르고 끝나면 scope를 비운다.
+  - fix3: 그 작업 폴더 하나만 `-c safe.directory=<폴더>`(명령줄 보호 설정)로 허용한다. 작업 폴더 소유자가 Runner 계정이라 git이 「dubious ownership」으로 거부하기 때문이다. `ci-run`도 같은 이유로 `GIT_CONFIG_*` 환경 변수로 그 사본 하나만 허용한다(실행마다 새 HOME이라 Agent 계정의 전역 설정이 없다). Claude·Codex 세션(`run`)은 Agent 계정 전역 설정(`safe.directory '*'`, 설치 스크립트가 넣음)을 그대로 쓴다.
 - `cli-version --tool claude|codex|pnpm -- <진입점>`(fix2, 조정자 결정 8): 새로 설치한 CLI의 `--version`을 Agent 계정으로 실행한다(`install-agent-cli.sh`가 쓴다).
 - `agent-file read|write|remove --cwd <작업 폴더> --path <.claude|.codex>/agents/<이름>`(fix2 추가): 하위 Agent 정의 파일을 Agent 계정이 다룬다. 경로는 정해진 모양만(`.awbs-installed.json` 또는 `<키>.md|toml`), 1 MiB까지, 없는 파일 읽기는 종료 코드 3.
 - `ci-run`(①·CI 검사 명령, 조정자 결정 1, fix1): Agent 코드의 시험·빌드를 Agent 계정으로 실행한다.

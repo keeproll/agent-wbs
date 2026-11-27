@@ -24,6 +24,8 @@ const REPOSITORY_METHODS: Record<string, string> = {
   endReset: 'readdir(이름만, 남은 항목 세기)',
   reset: '기록된 작업 폴더마다 removeWorktree',
   taskCheckPath: '전용 계정: safePath(lstat) + Agent git inspect / 같은 계정 배치만 Runner git rev-parse·diff',
+  // worktreeHead는 이 경로를 받아 전용 계정이면 Agent git inspect(HEAD만), 같은 계정 배치만 Runner git rev-parse를 한다.
+  worktreeState: 'safePath(lstat) + 폴더가 있는지 lstat만(내용을 읽지 않음)',
 };
 
 /** repository.ts 밖에서 Agent 작업 폴더 안 경로를 만드는(join(cwd, …)) 곳. */
@@ -51,13 +53,16 @@ test('repository.ts 밖에서 작업 폴더 안 경로를 만드는 곳은 목�
 
 test('Runner git이 Agent .git을 저장소로 쓰는 모양(--git-dir=·Agent 경로 fetch)은 같은 계정 배치 갈래에만 남는다', () => {
   const text = readFileSync(join(src, 'git', 'repository.ts'), 'utf8');
-  // taskCheckPath의 같은 계정 갈래(rev-parse, --work-tree diff·ls-files)와 importWorktree의 같은 계정 fetch.
-  expect(text.match(/--git-dir=\$\{join\(path, '\.git'\)\}/g)).toHaveLength(1);
+  // taskCheckPath·worktreeHead의 같은 계정 갈래(rev-parse, --work-tree diff·ls-files)와 importWorktree의 같은 계정 fetch.
+  expect(text.match(/--git-dir=\$\{join\(path, '\.git'\)\}/g)).toHaveLength(2);
   expect(text.match(/--work-tree=\$\{path\}/g)).toHaveLength(2);
   expect(text.match(/'--upload-pack=git-upload-pack', '--', join\(path, '\.git'\)/g)).toHaveLength(1);
   // 그 갈래는 모두 「this.agentGit이 없을 때」(같은 계정 배치) 뒤에 있다.
-  const shared = text.slice(text.indexOf('async taskCheckPath'), text.indexOf('async reset('));
-  expect(shared.indexOf('if (this.agentGit)')).toBeLessThan(shared.indexOf('--git-dir='));
+  for (const [from, to] of [['async taskCheckPath', 'async worktreeState'], ['async worktreeHead', 'async hasCommit']] as const) {
+    const branch = text.slice(text.indexOf(from), text.indexOf(to));
+    expect(branch.indexOf('if (this.agentGit)')).toBeGreaterThan(-1);
+    expect(branch.indexOf('if (this.agentGit)')).toBeLessThan(branch.indexOf('--git-dir='));
+  }
 });
 
 test('exec/install.ts: 직접 파일 접근은 같은 계정 배치용(localAgentFiles·directory)에만 있고, 설치 본문은 AgentFiles만 쓴다', () => {

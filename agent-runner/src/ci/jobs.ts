@@ -8,7 +8,7 @@ import type { ClaimedJob } from '../api/generated/client.ts';
 import { InputChangeReporter } from '../git/inputs.ts';
 import { atomicWrite } from '../state/files.ts';
 import type { Entry, ReportId } from '../state/state.ts';
-import { parsePipeline } from './pipeline.ts';
+import { observeMainPipeline } from './observe.ts';
 import { runTaskCheck, type TaskCheckResult } from './task.ts';
 import { runIntegrationCheck, type IntegrationCheck, type MainBasis } from './integration/check.ts';
 import { IntegrationQueue, type IntegrationDeps, type IntegrationResult } from './integration/queue.ts';
@@ -114,13 +114,7 @@ export class CiJobs {
   }
 
   async #observe(basis:MainBasis) {
-    const pipeline = parsePipeline(basis.source);
-    const result = await this.#inputs.report({ fetch:async () => basis.baseSha,inputObservation:async (base,head) => ({
-      ...await this.#d.repo.inputObservation(base,head),pipelineObservation:{ baseSha:basis.baseSha,pipelineSha:basis.pipelineSha,
-        definition:{ path:'.agentwbs/pipeline.yaml',commit:basis.baseSha,status:'ok',error:null,raw:basis.source,
-          stages:Object.entries(pipeline.stages).map(([stage,steps]) => ({ stage:stage as 'task'|'int'|'night'|'deploy',when:stage,gate:'검사 통과',steps:steps.map(s => s.name) })) } },
-    }) });
-    if (!('head' in result) || result.head !== basis.baseSha || result.historyRewritten) throw new Error('main 파이프라인 관측을 서버가 수용하지 않았습니다.');
+    await observeMainPipeline(this.#inputs,this.#d.repo,basis);
   }
 
   async #check(saved:Saved,check:TaskCheckResult|IntegrationCheck):Promise<string> {

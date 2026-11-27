@@ -1202,6 +1202,62 @@ export class GitRepository {
     return path;
   }
 
+  /**
+   * 생성 기록이 있고 폴더도 실제로 있는 작업 폴더의 경로. 기록이 없으면 null이다.
+   * 기록은 있는데 폴더가 없으면 `missing`이다(강제 종료·수동 삭제). 호출자가 정리 뒤 다시 만든다.
+   */
+  async worktreeState(worktreeId: string): Promise<{ kind: 'none' } | { kind: 'missing' } | { kind: 'ready'; path: string }> {
+    const record = await this.trusted();
+    const path = await safePath(join(this.worktrees, id(worktreeId)));
+    if (!record.worktrees.some((value) => value.id === worktreeId)) return { kind: 'none' };
+    const found = await stat(path);
+    if (!found) return { kind: 'missing' };
+    if (!found.isDirectory()) throw new GitSafetyError('작업 폴더가 폴더가 아닙니다.');
+    return { kind: 'ready', path };
+  }
+
+  /**
+   * 작업 폴더의 지금 HEAD(전체 SHA). 커밋하지 않은 변경은 따지지 않는다(재사용하는 개발 폴더는 중단된 작업을 이어 간다).
+   * 전용 계정 배치는 Agent 계정 git(`git-inspect`)으로만 본다(조정자 결정 6). Runner git은 Agent `.git`을 읽지 않는다.
+   */
+  async worktreeHead(worktreeId: string): Promise<string> {
+    const state = await this.worktreeState(worktreeId);
+    if (state.kind !== 'ready') throw new GitSafetyError('준비된 작업 폴더가 아닙니다.');
+    const path = state.path;
+    if (this.agentGit) return sha((await this.agentGit.inspect(path)).head);
+    // 같은 계정 배치(전용 계정 없음)만: Agent도 Runner 계정이라 넘는 경계가 없다(taskCheckPath의 같은 갈래와 같음).
+    return sha((await run(path, [`--git-dir=${join(path, '.git')}`, 'rev-parse', '--verify', 'HEAD^{commit}'])).toString().trim());
+  }
+
+  /** 이 커밋이 Runner bare 저장소에 있는가. 없으면 호출자가 `fetch()`로 받는다. */
+  async hasCommit(commit: string): Promise<boolean> {
+    return (await this.git(['rev-parse', '--verify', '--quiet', `${sha(commit)}^{commit}`], undefined, undefined, [0, 1])).toString().trim() !== '';
+  }
+
+  /** `importWorktree`가 Runner bare 저장소에 가져온 마지막 결과 커밋. 가져온 적이 없으면 null이다. */
+  async resultHead(worktreeId: string): Promise<string | null> {
+    const ref = `refs/agent-results/${id(worktreeId)}`;
+    const found = (await this.git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], undefined, undefined, [0, 1])).toString().trim();
+    return found ? sha(found) : null;
+  }
+
+  /**
+   * base와 head의 공통 조상부터 head까지 바뀐 파일(저장소 상대 경로). Runner bare 저장소에서만 계산한다.
+   * 이름 변경은 옛 경로와 새 경로를 모두 넣는다(`--no-renames`). 왜: 산출물·보호 경로 판정이 둘 다 보아야 한다.
+   */
+  async changedPaths(base: string, head: string): Promise<string[]> {
+    const mergeBase = await this.taskBase(base, head);
+    const out = (await this.git(['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', mergeBase, sha(head), '--'])).toString('utf8');
+    return [...new Set(out.split('\0').filter(Boolean))].sort();
+  }
+
+  /** 이 입력 사본(`inputs/<저장소>/<입력>`)의 경로. 아직 만들지 않았으면 null이다. */
+  async inputPath(inputId: string): Promise<string | null> {
+    await this.trusted();
+    const path = await safePath(join(this.inputs, id(inputId)));
+    return (await stat(path))?.isDirectory() ? path : null;
+  }
+
   async reset(options: ResetOptions): Promise<{ commit: string | null }> {
     for (const name of options.worktrees) id(name);
     for (const name of options.inputs) id(name);

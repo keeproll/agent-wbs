@@ -196,11 +196,14 @@ cmd_ci_run() {
     [[ $program == /* ]] || die "고정 PATH의 실행 파일이 아닙니다: $1"
   fi
   shift
+  # GIT_CONFIG_*: 검사 명령 안의 git(예: 시험 도구의 변경 파일 조회)이 이 사본(Runner 계정 소유)을 「dubious ownership」으로
+  #   거부하지 않게 이 폴더만 허용한다. 실행마다 새 HOME이라 Agent 계정의 전역 설정(safe.directory '*')이 없다.
   exec env -i \
     HOME="$real_home" USER="$AGENT_USER" LOGNAME="$AGENT_USER" \
     PATH="$AGENT_PATH" \
     TMPDIR="$real_home/tmp" \
     DISABLE_AUTOUPDATER=1 DISABLE_UPDATES=1 \
+    GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="$real_cwd" \
     "${extra[@]}" \
     "$program" "$@"
 }
@@ -209,12 +212,15 @@ cmd_ci_run() {
 # 왜: git은 저장소 설정(.git/config)의 많은 키로 명령을 실행한다(filter·partialClone uploadpack 등). 옵션으로 하나씩 끌 수 없다.
 #   그래서 Agent 작업 폴더의 git은 Agent 계정이 돌린다. 설정이 무엇을 실행하든 Agent 권한이다.
 # 안전 기본값: 시스템·전역 설정 없음, 원격 전송 금지(GIT_ALLOW_PROTOCOL=none), 늦은 가져오기 금지, hook·fsmonitor 끔.
+# safe.directory: 작업 폴더는 Runner 계정이 만든 것이라(.prep-<uuid>에서 준비 뒤 넘김) 소유자가 Agent 계정과 다르다.
+#   git은 소유자가 다른 저장소를 「dubious ownership」으로 거부하므로, 이 한 폴더만 명령줄 설정(보호 설정)으로 허용한다.
+#   왜 명령줄인가: 저장소 설정(.git/config)의 safe.directory는 git이 읽지 않는다. Agent가 저장소 설정으로 넓힐 수 없다.
 agent_git() {
   local dir=$1; shift
   env -i HOME="$AGENT_HOME" USER="$AGENT_USER" LOGNAME="$AGENT_USER" PATH=/usr/bin:/bin \
     GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ALLOW_PROTOCOL=none GIT_NO_LAZY_FETCH=1 \
     GIT_TERMINAL_PROMPT=0 GIT_OPTIONAL_LOCKS=0 LANG=C.UTF-8 \
-    git -C "$dir" -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.excludesFile=/dev/null "$@"
+    git -C "$dir" -c safe.directory="$dir" -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.excludesFile=/dev/null "$@"
 }
 
 git_cwd() {
