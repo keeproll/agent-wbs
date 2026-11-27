@@ -20,6 +20,47 @@ test('Runner CI 실행기가 claim부터 실제 병합 보고까지 수행해 �
   expect(await doneEvents()).toEqual([{ kind:'done' }]);
 },60_000);
 
+test('checking 보고 뒤 병합 전 중단에서도 재시작이 대기열을 제거하고 한 번만 병합한다', async () => {
+  expect((await h.run('TASK-0001')).status).toBe(202);
+  const dev = await h.develop(); await h.verify(dev.head,'PASS');
+  h.allowCompletion();
+  let stop = true;
+  h.f.beforeWrite(async op => {
+    if (stop && op.kind === 'status' && op.context === 'agentwbs/int') {
+      const rows = await h.rows('select status from merge_queue order by queue_no desc limit 1');
+      if (rows[0]?.status === 'checking') { stop = false; throw new Error('병합 전 상태 보고 중단'); }
+    }
+  });
+  await expect(h.integrate(dev.head)).rejects.toThrow('병합 전 상태 보고 중단');
+  expect(await h.rows('select status from merge_queue order by queue_no')).toEqual([{ status:'checking' }]);
+  expect(h.f.github.requests.filter(r => r.method === 'PUT')).toHaveLength(0);
+  await h.restartOutbox();
+  expect((await h.recoverCi())?.result?.kind).toBe('merged');
+  expect((await task()).lifecycleStatus).toBe('done');
+  expect(await h.rows('select status from merge_queue order by queue_no')).toEqual([{ status:'removed' },{ status:'merged' }]);
+  expect(h.f.github.requests.filter(r => r.method === 'PUT')).toHaveLength(1);
+  expect(await doneEvents()).toEqual([{ kind:'done' }]);
+  expect(h.outbox.rejected).toEqual([]);
+},90_000);
+
+test('실제 Runner가 Gate 보류 응답을 수용하고 서버 재평가 뒤 완료한다', async () => {
+  expect((await h.run('TASK-0001')).status).toBe(202);
+  const dev = await h.develop(); await h.verify(dev.head,'PASS');
+  h.allowCompletion();
+  h.f.beforeWrite(async op => { if (op.kind === 'merge') await h.rows('update checklist_items set done=false'); });
+  expect((await h.integrate(dev.head)).result.kind).toBe('merged');
+  expect((await task()).lifecycleStatus).toBe('gate');
+  expect(h.state.snapshot.outbox).toEqual([]);
+  expect(h.outbox.rejected).toEqual([]);
+  expect(await h.rows("select kind from notify_events where dedup_key='ci:gateUnmetAfterMerge|#1'")).toEqual([{ kind:'admin' }]);
+  expect(await h.rows("select count(*)::int n from notify_events where dedup_key like 'ci:mergeMismatch|%'")).toEqual([{ n:0 }]);
+  await h.rows('update checklist_items set done=true');
+  await h.recheckCompletion();
+  expect((await task()).lifecycleStatus).toBe('done');
+  expect(await doneEvents()).toEqual([{ kind:'done' }]);
+  expect(await h.rows("select count(*)::int n from alerts where key='ci:gateUnmetAfterMerge|#1' and resolved_at is null")).toEqual([{ n:0 }]);
+},60_000);
+
 test('병합 직후 Runner 재시작과 만료된 임대에서도 읽기 대조만으로 완료한다', async () => {
   expect((await h.run('TASK-0001')).status).toBe(202);
   const dev = await h.develop(); await h.verify(dev.head,'PASS');

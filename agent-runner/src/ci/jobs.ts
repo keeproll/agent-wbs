@@ -180,6 +180,12 @@ export class CiJobs {
     if (!result) {
       if (!context.runnable) throw new Error('임대가 끝난 CI는 새 명령을 실행하지 않습니다. 병합 기록을 대조하세요.');
       await this.#start(saved,qa.headSha);
+      if (saved.events[`${saved.round}:queue:queued`]) {
+        // 병합 journal 전 중단은 같은 키로 이전 보고를 대조한 뒤 대기열을 제거하고 다시 검사한다.
+        await this.#queueReport(saved,'queued');
+        if (saved.events[`${saved.round}:queue:checking`]) await this.#queueReport(saved,'checking');
+        await this.#queueReport(saved,'removed');
+      }
       do {
         signal.throwIfAborted(); saved.round++; await this.#save();
         await this.#queueReport(saved,'queued');
