@@ -999,10 +999,12 @@ describe('Q-13 결정 A: 외부 수신자(링크 없이 보고용 + PDF)', () =>
   test('[fix2 1 · fix3 2] 앱 주소의 다른 표기(127.1 · 10진수 · IPv6 · %77 · 유니코드 점 · 인코딩 점)와 일반 외부 주소도 외부 메일 · 실제 PDF에서 「(링크 생략)」만 남는다', async () => {
     const VARIANTS = ['http://127.1:5173/report/abc', 'http://2130706433:5173/report/abc', 'http://[0:0:0:0:0:0:0:1]:5173/report/abc', 'https://%77bs.corp.example/report/abc', 'https://notwbs.corp.example.org/spec',
       // fix3(재리뷰 3-2): 점을 다른 글자로 적은 주소. 앞의 것이 리뷰어가 실제 발송으로 재현한 입력이다.
-      '192。168。0。10:5173/report/abc', 'wbs．corp．example/report/abc', 'wbs｡corp｡example/report/abc', 'wbs%2Ecorp%2Eexample/report/abc', 'wbs&#46;corp&#46;example/report/abc'];
+      '192。168。0。10:5173/report/abc', 'wbs．corp．example/report/abc', 'wbs｡corp｡example/report/abc', 'wbs%2Ecorp%2Eexample/report/abc', 'wbs&#46;corp&#46;example/report/abc',
+      // fix3 후속: 스킴 · 포트 · 경로 없는 맨 호스트(내부 호스트 이름)
+      'wbs.corp.example', 'intranet.corp。example'];
     const TITLE = `TASK-0007 개선 ${VARIANTS.join(' ')}`;
     const FRAGMENTS = ['5173', '127.1', '2130706433', '0:0:0', '%77', 'corp.example', '/report/abc', '/spec', 'http', 'TASK-0007',
-      '192.168', '192。168', '。', '．', '｡', '%2E', '&#46;', 'wbs.corp', 'corp'];
+      '192.168', '192。168', '。', '．', '｡', '%2E', '&#46;', 'wbs.corp', 'corp', 'intranet'];
     const root = await mkdtemp(join(tmpdir(), 'awbs-mail-fix2-'));
     const renderer = chromiumRenderer();
     try {

@@ -238,3 +238,24 @@ describe('Q-13 fix3: 보내는 사람은 허용 목록으로만 읽는다', () =
     ['Agent <not-an-address>', '주소 형식 아님'],
   ])('거부: %s (%s)', (from) => { expect(parseSender(from)).toBeNull(); });
 });
+
+/** Q-13 fix3 후속: 스킴 · 포트 · 경로가 없는 맨 호스트도 주소 모양이다(내부 호스트 이름 유출 방지). */
+describe('Q-13 fix3 후속: 맨 호스트(이름.이름…, 마지막 이름 글자 2자 이상)', () => {
+  test.each([
+    ['wbs.corp.example', '재리뷰 §4 한계 사례'],
+    ['wbs。corp。example', '정규화 뒤 같은 호스트'],
+    ['intranet.local', '로컬 호스트'],
+    ['a-b.example.org', '하이픈 이름'],
+    ['WBS.Corp.Example', '대문자'],
+    ['www.\nexample.org', '줄바꿈으로 끊긴 www(재리뷰 §4)'],
+    ['file.txt', '파일 이름 — 정보 손실 수용(조정자 판단)'],
+    ['Node.js', '점 있는 제품 이름 — 정보 손실 수용'],
+  ])('%s → 「(링크 생략)」, 검사기가 찾고 변환 뒤 0건 (%s)', (host) => {
+    expect(externalLeaks(host).length).toBeGreaterThan(0);
+    const out = externalText(`앞 ${host} 뒤`);
+    expect(out).toBe('앞 (링크 생략) 뒤');
+    expect(externalLeaks(out)).toEqual([]);
+  });
+  test.each(['first.last@example.com', 'partner@outside.example', '10.5% 진척', 'v1.2.3 배포', 'e.g. 예시', 'RPT-W-261026_보고용.pdf', '프로젝트.완료', 'Verum-SDN Agent WBS'])(
+    '주소가 아닌 것은 그대로: %s', (t) => { expect(externalText(t)).toBe(t); expect(externalLeaks(t)).toEqual([]); });
+});

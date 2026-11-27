@@ -148,6 +148,7 @@ const TAIL = String.raw`[^\s<>"'()[\]{}「」『』]*`;
  * - 호스트:포트: `localhost:5173`, `127.1:5173`, `wbs.corp.example:443`, `2130706433:5173`
  * - 호스트/경로: `wbs.corp.example/report/1`, `example.org/spec`
  * - 경로형: 공백 · 괄호 뒤의 `/report/abc`, `/settings`(「A/B」, 「0 / 0」은 아니다)
+ * - 맨 호스트: `wbs.corp.example`, `intranet.local`, `file.txt`(파일 이름도 지워진다 — 정보 손실 수용)
  * 메일 주소(`name@example.com`)는 주소 모양에 넣지 않는다. 왜: 받는 사람 자신의 주소를 바닥글에 보이고, 링크가 아니다.
  */
 const ADDRESS: readonly RegExp[] = [
@@ -159,7 +160,10 @@ const ADDRESS: readonly RegExp[] = [
   new RegExp(String.raw`(?<![\w.-])(?:[a-z][\w-]*(?:\.[\w-]+)*|\d[\w-]*(?:\.[\w-]+)+|\d{3,}):\d{1,5}(?![\d:])(?:\/${TAIL})?`, 'gi'),
   new RegExp(String.raw`(?<![\w.@-])[\w-]+(?:\.[\w-]+)+\/${TAIL}`, 'gi'),
   // `<` 뒤는 경로가 아니라 닫는 태그 모양(`</b>`)이다. 글자로 바뀌어 보일 뿐 링크가 되지 않는다.
-  new RegExp(String.raw`(?<![\w.:/~<-])\/[a-z0-9_.~%-]+(?:\/${TAIL})?`, 'gi'),
+  new RegExp(String.raw`(?<![\w.:/~<-])\/[a-z0-9_.~%-]+(?:\/${TAIL})?`, 'gi'),  // 맨 호스트(Q-13 fix3 후속): 영숫자 · 하이픈 이름이 점으로 2개 이상 이어지고 마지막 이름이 글자 2자 이상(`wbs.corp.example`, `intranet.local`).
+  // 왜: 스킴 · 포트 · 경로가 없어도 내부 호스트 이름이 밖으로 나간다. `file.txt` 같은 파일 이름도 지워지는 정보 손실은 받아들인다(조정자 판단).
+  // 메일 주소(`first.last@example.com`)의 앞 · 뒤 부분은 `@` 옆이라 건너뛴다.
+  new RegExp(String.raw`(?<![\w.@-])[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}(?![\w.@-])`, 'gi'),
 ];
 /** 주소는 아니지만 외부 글에 남기지 않는 것: 앱 메뉴 안내(「설정 → 알림」)와 링크 속성 글자(`href=`) */
 const APP_HINTS: readonly RegExp[] = [
