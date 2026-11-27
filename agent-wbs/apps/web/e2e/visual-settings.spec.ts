@@ -54,6 +54,13 @@ test('UI-12 Runner 탭(첫 화면)', async ({ page }) => {
   record('UI-12-sub', null, '제품 결정: 설명에서 「Prototype」·「(Mock)」·「구현 현황」 제거(UAT-POLICY-05)', compareRegion('UI-12-sub', base, SUB, png, SUB));
   record('UI-12-tabs', null, '제품 결정: 탭 「점검 · Prototype」→「점검」, 일정 탭 분할 위반 배지는 서버 값(M3 통합: getSplitViolations, 시험 자료는 0건). 탭 높이·간격·선택 밑줄은 같음', compareRegion('UI-12-tabs', base, TABS, png, TABS));
   record('UI-12-main', null, 'Mock 데이터와 값이 다르고 Mock 버튼(인증 만료·복구·다시 점검 등) 없음, 확인 시각 대신 상태만. 카드 순서·카드 머리·표 열 폭은 같음', compareRegion('UI-12-main', base, MAIN, png, MAIN));
+  const row = page.getByRole('region', { name: 'Runner 연결' }).locator('.frow').filter({ hasText: '실행 중 세션 전달' });
+  const box = await row.boundingBox();
+  expect(box).not.toBeNull();
+  if (box) {
+    const actual = { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height) };
+    record('Q-07-live-inject', null, 'Q-07(owner 2026-11-27 아이템 18): 같은 Runner 연결 카드의 같은 행·버튼 묶음. 두 버튼 비활성·준비 중 표시·다음 실행 안내만 변경', compareRegion('Q-07-live-inject', base, { x: 221, y: 808, width: 1658, height: 61 }, png, actual));
+  }
 });
 
 test('UI-12-02 Agent 탭(첫 화면)', async ({ page }) => {

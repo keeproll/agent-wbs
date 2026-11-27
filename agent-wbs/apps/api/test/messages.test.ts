@@ -26,12 +26,11 @@ describe('nextDelivery — 모든 상태×동작 쌍', () => {
 });
 
 describe('pendingNextAtSend — 실행 중 전달(G§4.10)', () => {
-  test('실행 중이고 실행 중 전달을 지원하지 않으면 다음 실행 대기', () => {
-    expect(pendingNextAtSend({ taskRunning: true, liveInject: false })).toBe(true);
+  test('Q-07: 실행 중이면 항상 다음 실행 대기', () => {
+    expect(pendingNextAtSend({ taskRunning: true })).toBe(true);
   });
-  test('실행 중 전달을 지원하거나 실행 중이 아니면 바로 전달 대기열', () => {
-    expect(pendingNextAtSend({ taskRunning: true, liveInject: true })).toBe(false);
-    expect(pendingNextAtSend({ taskRunning: false, liveInject: false })).toBe(false);
+  test('실행 중이 아니면 바로 전달 대기열', () => {
+    expect(pendingNextAtSend({ taskRunning: false })).toBe(false);
   });
 });
 

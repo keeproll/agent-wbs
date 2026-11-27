@@ -200,25 +200,11 @@ function GithubCard({ repoUrl }: { repoUrl: string | null }) {
 /* ---------------- Runner 연결(UI-12-01B 위, P L2273–2279) ---------------- */
 
 function ConnectionCard({ runner }: { runner: RunnerState | undefined }) {
-  const { client } = useApi();
-  const { query, queryKey, load } = useSettingQuery('getWorkflowSettings', 'Runner 연결 설정');
-  const wf = useSettingForm({
-    id: 'workflow-live',
-    label: '실행 중 세션 전달',
-    query, queryKey, load,
-    toForm: (d) => ({ liveInject: d.liveInject }),
-    send: (form, updatedAt, latest) => {
-      return client.call('putWorkflowSettings', {
-        body: { updatedAt, devAgent: latest.devAgent, qaAgent: latest.qaAgent, liveInject: form.liveInject, heartbeatSeconds: latest.heartbeatSeconds, missedHeartbeats: latest.missedHeartbeats },
-      });
-    },
-    describe: (form) => `실행 중 세션 전달: ${form.liveInject ? '지원' : '미지원'}`,
-  });
+  const { query } = useSettingQuery('getWorkflowSettings', 'Runner 연결 설정');
   const online = runner?.connection.online;
   return (
     <section className="card" aria-labelledby="set-conn">
       <CardHead id="set-conn" title="Runner 연결" />
-      {wf.restoreOffer}
       <div className="form">
         <Row label="연결 상태">
           <span style={{ paddingTop: 7 }}>
@@ -228,12 +214,12 @@ function ConnectionCard({ runner }: { runner: RunnerState | undefined }) {
           <span className="fhint">헤더의 Runner 표시와 같은 값입니다. 끊기면 새 메시지는 전달 실패로 기록되고 실행 요청이 막힙니다.</span>
         </Row>
         <QueryGate query={query} label="Runner 연결 설정" />
-        {wf.form && query.data && (
+        {query.data && (
           <>
             <Row label="실행 중 세션 전달">
-              <Seg label="실행 중 세션 전달" value={wf.form.liveInject} onPick={(value) => { wf.edit(() => ({ liveInject: value })); }}
-                options={[{ value: false, label: '미지원 — 다음 실행에 전달' }, { value: true, label: '지원 — 실행 중 세션에 즉시 전달' }]} />
-              <span className="fhint">실제 Runner 기능에 따라 달라지는 값입니다. 미지원이면 실행 중 Task에 보낸 메시지는 「다음 실행 대기」로 보관됩니다.</span>
+              <Seg<boolean> label="실행 중 세션 전달" value={false} disabled onPick={() => undefined}
+                options={[{ value: false, label: '미지원 — 다음 실행에 전달' }, { value: true, label: '지원 — 실행 중 세션에 즉시 전달 (준비 중)' }]} />
+              <span className="fhint" id="live-inject-hint">실행 중 전달은 CLI(명령줄 도구) 실측 뒤 재판단하며, 지금은 메시지를 「다음 실행 대기」로 보관합니다.</span>
             </Row>
             <Row label="Heartbeat 주기">
               <span style={{ paddingTop: 7 }} className="mono">{query.data.heartbeatSeconds}초 — {query.data.missedHeartbeats}회 미수신 시 오프라인 처리</span>
@@ -241,7 +227,6 @@ function ConnectionCard({ runner }: { runner: RunnerState | undefined }) {
           </>
         )}
       </div>
-      {wf.footer}
     </section>
   );
 }

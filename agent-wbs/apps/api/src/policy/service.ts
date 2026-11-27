@@ -110,15 +110,16 @@ const workflowOf = (row: AppRow) => ({ ...DEFAULT_WORKFLOW, ...(row.workflow ?? 
 
 export async function getWorkflow(client: PoolClient) {
   const app = await appRow(client);
-  const exec = await execRow(client);
   const wf = workflowOf(app);
-  return { devAgent: wf.devAgent, qaAgent: wf.qaAgent, liveInject: exec.live_inject, heartbeatSeconds: app.heartbeat_seconds, missedHeartbeats: app.heartbeat_misses, updatedAt: app.workflow_version };
+  // Q-07: CLI 실측 전에는 예전에 저장된 true도 사용하지 않는다(owner 2026-11-27 아이템 18).
+  return { devAgent: wf.devAgent, qaAgent: wf.qaAgent, liveInject: false as const, heartbeatSeconds: app.heartbeat_seconds, missedHeartbeats: app.heartbeat_misses, updatedAt: app.workflow_version };
 }
 
 export interface WorkflowPut { updatedAt: string | null; devAgent: Agent; qaAgent: Agent; liveInject: boolean; heartbeatSeconds: number; missedHeartbeats: number }
 
 /** 기본 담당 Agent·실행 중 전달·heartbeat 주기 저장. 기본 담당은 새 Task에 쓰고 기존 Task는 바꾸지 않는다. */
 export async function putWorkflow(client: PoolClient, body: WorkflowPut) {
+  if (body.liveInject) throw invalid([{ path: 'liveInject', rule: 'const', message: '실행 중 전달은 준비 중입니다. 메시지는 다음 실행 때 전달됩니다.' }]);
   const app = await appRow(client, true);
   const before = await getWorkflow(client);
   await assertSameVersion(client, app.workflow_version, body.updatedAt, { current: before });

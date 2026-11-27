@@ -142,6 +142,7 @@
 - **lease (임대)** — 「이 job은 정해진 시간 동안 이 Runner가 맡는다」는 표시. 60초, 20초마다 renew. 만료돼도 자원 해제는 아니다. → contracts §3.2
 - **Link 헤더 / pagination(페이지 나눔)** — 목록이 길면 GitHub가 여러 쪽으로 나눠 주고, `Link` 응답 헤더에 다음 쪽 주소를 적는다. 이 계획은 그 주소를 따라가지 않고 같은 경로의 `page` 번호를 올려 읽는다. → contracts §6
 - **lint / typecheck** — lint는 코드 규칙 위반을 자동으로 찾는 검사, typecheck는 TypeScript 타입 오류 검사.
+- **liveInject / live_inject** — 실행 중인 작업에 메시지를 즉시 넣을지 나타내는 설정 필드. Q-07(owner 2026-11-27 아이템 18)에 따라 현재는 켤 수 없다. 기존 `true`도 `false`로 취급한다.
 - **lockfile** — 설치한 패키지의 정확한 버전을 고정해 두는 파일. → architecture §3.2
 - **loopback** — 같은 PC 안에서 자기 자신에게 접속하는 연결(`127.0.0.1`). 1회용 링크 로그인은 loopback에서만 된다. → architecture §4
 - **LTS** — Long Term Support. 오래 보안 수정을 받는 안정 버전.
@@ -177,6 +178,7 @@
 - **PDF** — 인쇄·배포용 문서 파일 형식.
 - **pdfjs-dist** — PDF 파일을 열어 글자·위치를 꺼내는 라이브러리. 시험이 보고서 PDF의 글자·쪽 크기·글꼴을 확인할 때 쓴다(제품 코드에는 없음). → apps/api/src/pdf/README.md
 - **pgid (process group ID)** — 프로세스 그룹 번호. Agent가 띄운 자식 프로세스까지 한꺼번에 관리·종료하는 데 쓴다. → contracts §3.4
+- **pendingNext** — 메시지를 다음 실행 시작 때 전달하려고 보관했는지 나타내는 필드. 화면의 「다음 실행 대기」가 이 뜻이다.
 - **PID** — 프로세스 번호(Process ID). PID 1은 시스템이 처음 띄운 프로세스.
 - **pino** — Node.js 로그 라이브러리. redact로 비밀값을 가린다.
 - **placeModel / modelRanks** — 설정 순서에 없는 새 모델의 자리를 정하는 함수와, 순서를 rank 숫자로 바꾸는 함수(shared). → data-model §6.2
