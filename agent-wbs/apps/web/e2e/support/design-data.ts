@@ -85,7 +85,7 @@ const versions: Overview['versions'] = [
 ];
 
 /* ---- 인터페이스·데이터: REST·PostgreSQL은 Task 기술 설계(원본 Sel.dsRest·dsPg), 나머지는 DS_MOCK ---- */
-export interface Item { key: string; name: string; taskKey: string | null; kind?: string; store?: string; path: string; content: any }
+export interface Item { key: string; name: string; description?: string | null; taskKey: string | null; kind?: string; store?: string; path: string; content: any }
 function fromTasks(): Item[] {
   const out: Item[] = [];
   const rest: { name: string; tables: string[] }[] = [];
@@ -96,7 +96,7 @@ function fromTasks(): Item[] {
       if (s.kind === 'API') {
         const name = `${String(e.f.method)} ${String(e.f.path)}`;
         rest.push({ name, tables: e.b.tables ?? [] });
-        out.push({ key: name, name, kind: 'REST', taskKey: k, path: 'contracts/api/openapi.yaml', content: { type: 'REST', auth: e.f.auth ?? '', request: e.b.request ?? '', response: e.b.response ?? '', validation: e.b.validation ?? [], errors: e.b.errors ?? [], tables: (e.b.tables ?? []).map((n: string) => `postgres:${n}`) } });
+        out.push({ key: name, name, description: e.f.desc || null, kind: 'REST', taskKey: k, path: 'contracts/api/openapi.yaml', content: { type: 'REST', auth: e.f.auth ?? '', request: e.b.request ?? '', response: e.b.response ?? '', validation: e.b.validation ?? [], errors: e.b.errors ?? [], tables: (e.b.tables ?? []).map((n: string) => `postgres:${n}`) } });
       }
     }
   }
@@ -106,11 +106,12 @@ function fromTasks(): Item[] {
     for (const s of t.design ?? []) for (const e of s.ents ?? []) {
       if (s.kind === 'DB') {
         const n = String(e.f.name);
-        out.push({ key: `postgres:${n}`, name: n, store: 'postgres', taskKey: k, path: 'contracts/db/postgres/migrations/*.sql', content: {
+        const usedBy = rest.filter((r) => r.tables.includes(n)).map((r) => r.name);
+        out.push({ key: `postgres:${n}`, name: n, description: `${String(e.f.desc ?? '')}${usedBy.length ? ` · API ${String(usedBy.length)}개 사용` : ''}`, store: 'postgres', taskKey: k, path: 'contracts/db/postgres/migrations/*.sql', content: {
           type: 'postgres', constraints: [],
           columns: (e.b.columns ?? []).map((c: any) => ({ name: c.name, type: c.type, nullable: !!c.nullable, pk: !!c.pk, unique: !!c.unique, fk: c.fk || null, default: c.def || null, desc: c.desc ?? '' })),
           indexes: (e.b.indexes ?? []).map((x: any) => ({ name: x.name, columns: x.cols, kind: x.kind })),
-          usedBy: rest.filter((r) => r.tables.includes(n)).map((r) => r.name),
+          usedBy,
         } });
       }
     }
@@ -119,31 +120,31 @@ function fromTasks(): Item[] {
 }
 const msg = (name: string, direction: string, schema: string) => ({ name, direction, schema });
 const IFACES: Item[] = [
-  { key: 'WS /runner/ws', name: '/runner/ws', kind: 'WebSocket', taskKey: 'TASK-0012', path: 'contracts/events/asyncapi.yaml', content: { type: 'message', auth: 'Runner 토큰 (등록 시 발급)', topic: null,
+  { key: 'WS /runner/ws', name: '/runner/ws', description: 'Runner ↔ 서버 제어 채널', kind: 'WebSocket', taskKey: 'TASK-0012', path: 'contracts/events/asyncapi.yaml', content: { type: 'message', auth: 'Runner 토큰 (등록 시 발급)', topic: null, decisionKeys: ['TD-07'],
     messages: [msg('hello', 'Runner → 서버', '{ runnerId, version, host: { cores, memGB }, cli: { claude, codex } }'), msg('attempt.start', '서버 → Runner', '{ attemptId, taskKey, agent, model, effort, worktree, instructions, subBudget }'),
       msg('instruction.deliver', '서버 → Runner', '{ attemptId, messageId, text }'), msg('attempt.stop', '서버 → Runner', '{ attemptId, reason }'), msg('heartbeat', 'Runner → 서버', '{ at, sessions, cap }  // 10초')],
     rules: ['연결 끊김 30초 → Runner 오프라인 처리', '메시지마다 msgId — 재전송 시 중복 무시'] } },
-  { key: 'SSE GET /api/events', name: 'GET /api/events', kind: 'SSE', taskKey: 'TASK-0012', path: 'contracts/events/asyncapi.yaml', content: { type: 'message', auth: '팀장 세션', topic: null,
+  { key: 'SSE GET /api/events', name: 'GET /api/events', description: '화면 실시간 갱신', kind: 'SSE', taskKey: 'TASK-0012', path: 'contracts/events/asyncapi.yaml', content: { type: 'message', auth: '팀장 세션', topic: null, decisionKeys: ['TD-08'],
     messages: [msg('task.updated', '서버 → 화면', '{ taskKey, status, verif, updatedAt }'), msg('attempt.updated', '서버 → 화면', '{ attemptId, status, progress }'), msg('alert.created', '서버 → 화면', '{ kind, text, taskKey? }')],
     rules: ['Last-Event-ID로 재연결 시 놓친 이벤트 재전송 (최근 5분)'] } },
-  { key: 'runner.attempt.events', name: 'runner.attempt.events', kind: 'Kafka', taskKey: 'TASK-0012', path: 'contracts/events/asyncapi.yaml', content: { type: 'message', auth: '—', rules: [],
+  { key: 'runner.attempt.events', name: 'runner.attempt.events', description: 'Runner 실행 이벤트 (시작 · 진행 · 종료 · 산출물)', kind: 'Kafka', taskKey: 'TASK-0012', path: 'contracts/events/asyncapi.yaml', content: { type: 'message', auth: '—', rules: [], decisionKeys: ['TD-06'],
     messages: [msg('AttemptStarted', 'Runner → 토픽', '{ attemptId, taskKey, agent, at }'), msg('AttemptProgress', 'Runner → 토픽', '{ attemptId, step, subObserved, at }'), msg('AttemptFinished', 'Runner → 토픽', '{ attemptId, result, tokens, durationMs, at }')],
     topic: { key: 'taskKey (같은 Task 이벤트 순서 보장)', partitions: '3', retention: '7일', delivery: '최소 1회 — 소비자는 eventId로 중복 제거', dlq: 'runner.attempt.events.dlq', compat: '하위 호환만 허용 (필드 추가 OK · 삭제 · 타입 변경 금지)', consumers: ['schedule-replanner', 'report-builder', 'graph-sync'] } } },
-  { key: 'design.item.changed', name: 'design.item.changed', kind: 'Kafka', taskKey: 'TASK-0010', path: 'contracts/events/asyncapi.yaml', content: { type: 'message', auth: '—', rules: [],
+  { key: 'design.item.changed', name: 'design.item.changed', description: '설계 항목 변경 → Neo4j 영향 그래프 반영', kind: 'Kafka', taskKey: 'TASK-0010', path: 'contracts/events/asyncapi.yaml', content: { type: 'message', auth: '—', rules: [], decisionKeys: ['TD-06'],
     messages: [msg('DesignItemChanged', 'API 서버 → 토픽', '{ itemKey, kind, change, taskKey, version, at }')],
     topic: { key: 'itemKey', partitions: '1', retention: '30일', delivery: '최소 1회', dlq: '—', compat: '하위 호환만 허용', consumers: ['graph-sync'] } } },
 ];
 const NEO = 'contracts/db/neo4j/model.cypher + migrations/';
-const neoL = (n: string, props: string, note: string, cons: string): Item => ({ key: `neo4j:${n}`, name: `:${n}`, store: 'neo4j', taskKey: 'TASK-0010', path: NEO, content: { type: 'neo4j-label', props, note, constraints: cons ? [cons] : [] } });
-const neoR = (n: string, from: string, to: string, props: string): Item => ({ key: `neo4j:${n}`, name: `(:${from})-[:${n}]->(:${to})`, store: 'neo4j', taskKey: 'TASK-0010', path: NEO, content: { type: 'neo4j-relation', from, to, props } });
-const redis = (p: string, use: string, value: string, ttl: string, invalidation: string): Item => ({ key: `redis:${p}`, name: p, store: 'redis', taskKey: 'TASK-0012', path: 'contracts/cache/redis-keys.yaml', content: { type: 'redis', use, value, ttl, invalidation, persistence: '불필요' } });
+const neoL = (n: string, props: string, note: string, cons: string): Item => ({ key: `neo4j:${n}`, name: `:${n}`, description: props, store: 'neo4j', taskKey: 'TASK-0010', path: NEO, content: { type: 'neo4j-label', props, note, constraints: cons ? [cons] : [] } });
+const neoR = (n: string, from: string, to: string, props: string): Item => ({ key: `neo4j:${n}`, name: `(:${from})-[:${n}]->(:${to})`, description: props || '속성 없음', store: 'neo4j', taskKey: 'TASK-0010', path: NEO, content: { type: 'neo4j-relation', from, to, props } });
+const redis = (p: string, use: string, value: string, ttl: string, invalidation: string): Item => ({ key: `redis:${p}`, name: p, description: `${use} · TTL ${ttl}`, store: 'redis', taskKey: 'TASK-0012', path: 'contracts/cache/redis-keys.yaml', content: { type: 'redis', use, value, ttl, invalidation, persistence: '불필요' } });
 const DATA: Item[] = [
   neoL('Task', 'taskKey (UNIQUE) · title · status', 'PostgreSQL tasks 복제', 'CREATE CONSTRAINT task_key FOR (t:Task) REQUIRE t.taskKey IS UNIQUE'),
   neoL('DesignItem', 'itemKey (UNIQUE) · kind · name', 'API · 테이블 · 채널 · 토픽', 'CREATE CONSTRAINT item_key FOR (d:DesignItem) REQUIRE d.itemKey IS UNIQUE'),
   neoL('Screen', 'screenId (UNIQUE) · name', '프로토타입 화면', ''),
   neoR('DEPENDS_ON', 'Task', 'Task', 'type (FS | SS)'), neoR('TOUCHES', 'Task', 'DesignItem', 'role (만듦 | 바꿈 | 사용 | 검증)'),
   neoR('READS_WRITES', 'DesignItem', 'DesignItem', 'mode (R | W) — API → 테이블'), neoR('SHOWS', 'Screen', 'DesignItem', '없음'),
-  { key: 'questdb:runner_samples', name: 'runner_samples', store: 'questdb', taskKey: null, path: 'contracts/db/questdb/tables.sql', content: {
+  { key: 'questdb:runner_samples', name: 'runner_samples', description: '파티션 DAY · 보관 14일 (TTL)', store: 'questdb', taskKey: null, path: 'contracts/db/questdb/tables.sql', content: {
     type: 'questdb', timestamp: 'ts (기준 타임스탬프)', partition: 'DAY', retention: '14일 (TTL)', dedup: 'ts, runner_id, session_id', symbols: 'runner_id, session_id, agent',
     columns: 'cpu_pct DOUBLE · mem_mb DOUBLE · subs INT', ingest: 'ILP (Runner → QuestDB 9009)', aggregation: '1분 · 1시간 평균은 QuestDB SAMPLE BY 조회 — PostgreSQL로 보내지 않음' } },
   redis('runner:{runnerId}:hb', '하트비트', 'JSON { at, sessions }', '30초', '만료 = 오프라인'), redis('lock:task:{taskKey}', '실행 잠금 (같은 Task 동시 실행 방지)', 'attemptId', '15분 (갱신)', '실행 종료 시 삭제'),
@@ -159,7 +160,7 @@ const own: Ownership[] = [
 ];
 
 const R = (n: number, itemKey: string, kind: string, where: string, text: string, taskKey: string | null, compat: Drift['compat'], status: Drift['status'], resolution: Record<string, unknown> = {}): Drift =>
-  ({ id: id('r', n), itemKey, kind, where, text, taskKey, compat, status, updatedAt: kst('2026-11-05 18:00'), resolution });
+  ({ id: id('r', n), displayKey: `DR-${String(n).padStart(2, '0')}`, itemKey, kind, where, text, taskKey, compat, status, updatedAt: kst('2026-11-05 18:00'), resolution });
 export const drifts = (): Drift[] => [
   R(1, 'PATCH /api/tasks/:taskKey', 'REST', 'feature/TASK-0005 브랜치', '코드 응답에 `updatedBy` 필드가 있으나 계약(openapi.yaml)에는 없음', 'TASK-0005', 'compatible', 'open'),
   R(2, 'postgres:tasks', 'PostgreSQL', 'feature/TASK-0004 브랜치 마이그레이션', '`tasks.deleted_at` 부분 인덱스가 마이그레이션에만 있고 schema.ts에 없음', 'TASK-0004', 'compatible', 'open'),
@@ -176,6 +177,8 @@ export interface DesignData {
   ownership: Ownership[];
   drifts: Drift[];
   seq: number;
+  /** 브랜치 조회(?ref=agent/TASK-…)에 줄 초안. 서버는 ref별 캐시를 따로 둔다(M6-05). 없는 ref는 빈 원장이다. */
+  branch?: { ref: string; items: Item[]; drifts: Drift[]; files: Overview['files'] };
 }
 export const designData = (): DesignData => ({
   decisions: decisions(), components: structuredClone(comps), links: structuredClone(links), files: files(), versions: structuredClone(versions),
@@ -188,7 +191,7 @@ const NOW = () => kst('2026-11-05 20:00');
 const isIface = (x: Item) => x.kind !== undefined;
 /** 서버는 목록을 item_key 순으로 준다(apps/api/src/design/read.ts snapshotItems). */
 const byKey = (a: Item, b: Item) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
-const view = (x: Item) => ({ key: x.key, name: x.name, taskKey: x.taskKey, status: 'ok', ...(isIface(x) ? { kind: x.kind } : { store: x.store }) });
+const view = (x: Item) => ({ key: x.key, name: x.name, description: x.description ?? null, taskKey: x.taskKey, status: 'ok', ...(isIface(x) ? { kind: x.kind } : { store: x.store }) });
 const body = (req: Request) => (req.postDataJSON() ?? {}) as Record<string, unknown>;
 
 export function overview(d: DesignData): Overview {
@@ -206,21 +209,27 @@ function bump(d: DesignData, by: string, note: string, breaking = false) {
 export function installDesign(api: FakeApi, d: DesignData): { writes: { path: string; body: Record<string, unknown>; key: string | null }[] } {
   const writes: { path: string; body: Record<string, unknown>; key: string | null }[] = [];
   const base = '/api/projects/p1/design';
-  api.on(`GET ${base}`, (route) => json(route, 200, overview(d)));
+  /** 요청의 ref에 맞는 원장 부분. main(생략)은 d 그대로, 브랜치는 d.branch, 모르는 브랜치는 빈 것. */
+  const at = (req: Request): Pick<DesignData, 'items' | 'drifts' | 'files'> => {
+    const ref = new URL(req.url()).searchParams.get('ref');
+    if (!ref || ref === 'main') return d;
+    return d.branch?.ref === ref ? d.branch : { items: [], drifts: [], files: [] };
+  };
+  api.on(`GET ${base}`, (route, req) => { const v = at(req); return json(route, 200, { ...overview(d), files: v.files, drifts: v.drifts.filter((x) => x.status === 'open').length }); });
   api.on(`GET ${base}/decisions`, (route) => json(route, 200, { items: d.decisions }));
   api.on(`GET ${base}/interfaces`, (route, req) => {
     const kind = new URL(req.url()).searchParams.get('kind');
-    return json(route, 200, { items: d.items.filter((x) => isIface(x) && (!kind || x.kind === kind)).sort(byKey).map(view) });
+    return json(route, 200, { items: at(req).items.filter((x) => isIface(x) && (!kind || x.kind === kind)).sort(byKey).map(view) });
   });
   api.on(`GET ${base}/data`, (route, req) => {
     const store = new URL(req.url()).searchParams.get('store');
-    return json(route, 200, { items: d.items.filter((x) => !isIface(x) && (!store || x.store === store)).sort(byKey).map(view) });
+    return json(route, 200, { items: at(req).items.filter((x) => !isIface(x) && (!store || x.store === store)).sort(byKey).map(view) });
   });
   api.on(`GET ${base}/ownership`, (route) => json(route, 200, { items: d.ownership }));
-  api.on(`GET ${base}/drifts`, (route) => json(route, 200, { items: d.drifts }));
+  api.on(`GET ${base}/drifts`, (route, req) => json(route, 200, { items: at(req).drifts }));
   const detail = (iface: boolean) => (route: Route, req: Request) => {
     const key = decodeURIComponent(new URL(req.url()).pathname.split('/').pop() ?? '');
-    const x = d.items.find((i) => i.key === key && isIface(i) === iface);
+    const x = at(req).items.find((i) => i.key === key && isIface(i) === iface);
     if (!x) return json(route, 404, errorBody('NOT_FOUND'));
     const file = d.files.find((f) => f.path === x.path);
     const out = { ...view(x), source: { path: x.path, format: file?.format ?? '', commit: file?.sourceCommit ?? null, status: file?.status ?? 'ok', raw: x.content ? null : 'raw text' }, content: x.content };
@@ -236,13 +245,14 @@ export function installDesign(api: FakeApi, d: DesignData): { writes: { path: st
     if (b.updatedAt !== x.updatedAt) return json(route, 409, errorBody('VERSION_CONFLICT', { message: '다른 곳에서 먼저 바뀌었습니다.', details: { current: { updatedAt: x.updatedAt } } }));
     if (action === 'change') {
       if (!['approved', 'fixed'].includes(x.status) || x.authority === 'free' || (x.authority === 'lead' && x.level !== 'cond')) return json(route, 409, errorBody('INVALID_TRANSITION'));
-      x.change = { choice: String(b.choice), reason: String(b.reason), previousStatus: x.status as 'approved' | 'fixed' };
+      x.change = { choice: String(b.choice), reason: String(b.reason), previousStatus: x.status as 'approved' | 'fixed', ...(typeof b.itemKey === 'string' && typeof b.driftId === 'string' ? { itemKey: b.itemKey, driftId: b.driftId } : {}) };
       x.status = 'change';
     } else {
       if (!['pending', 'change'].includes(x.status)) return json(route, 409, errorBody('INVALID_TRANSITION', { message: '승인 또는 변경 대기 중인 결정이 아닙니다.' }));
       const wasChange = x.status === 'change';
       const prev = x.change;
-      if (wasChange && prev) { if (action === 'approve') { x.choice = prev.choice; x.status = 'approved'; } else x.status = prev.previousStatus; delete x.change; }
+      // 변경 제안의 불일치 연결은 승인할 때 결정에 붙는다(M6-05 fix1).
+      if (wasChange && prev) { if (action === 'approve') { x.choice = prev.choice; x.status = 'approved'; if (prev.itemKey && prev.driftId) { x.itemKey = prev.itemKey; x.driftId = prev.driftId; } } else x.status = prev.previousStatus; delete x.change; }
       else x.status = action === 'approve' ? 'approved' : 'rejected';
       bump(d, `팀장 ${action === 'approve' ? '승인' : '반려'} (${x.tdKey})`, `${x.title} — ${action === 'approve' ? `${x.choice}${wasChange ? ' 로 변경' : ' 확정'}` : wasChange ? '변경 반려 — 기존 결정 유지' : '반려'}`, wasChange && action === 'approve');
     }
@@ -259,14 +269,15 @@ export function installDesign(api: FakeApi, d: DesignData): { writes: { path: st
     if (!x) return json(route, 404, errorBody('NOT_FOUND'));
     if (b.updatedAt !== x.updatedAt) return json(route, 409, errorBody('VERSION_CONFLICT', { message: '다른 곳에서 먼저 바뀌었습니다.' }));
     const res = (x.resolution ?? {}) as Record<string, unknown>;
-    if (x.status !== 'open' || (res.jobId && !res.jobFailed)) return json(route, 409, errorBody('INVALID_TRANSITION', { message: '이미 처리했거나 계약 반영을 기다리는 불일치입니다.' }));
+    if (x.status !== 'open' || (res.jobId && !['done', 'failed'].includes(String(res.jobStatus)))) return json(route, 409, errorBody('INVALID_TRANSITION', { message: '이미 처리했거나 계약 반영을 기다리는 불일치입니다.' }));
     d.seq += 1;
     x.updatedAt = new Date(Date.parse(NOW()) + d.seq * 1000).toISOString();
     if (b.how === 'contract') {
       if (x.compat === 'unchecked') return json(route, 409, errorBody('INVALID_TRANSITION', { message: '코드에서 명세를 추출해 대조한 뒤 계약에 반영하세요.' }));
-      if (x.compat === 'breaking' && !d.decisions.some((y) => y.id === b.decisionId && y.status === 'approved')) return json(route, 409, errorBody('INVALID_TRANSITION', { message: '호환을 깨는 변경은 승인된 기술 결정이 필요합니다.' }));
+      // 같은 itemKey·같은 driftId를 가리키는 승인 결정만(coord-decisions 2)
+      if (x.compat === 'breaking' && !d.decisions.some((y) => y.id === b.decisionId && y.status === 'approved' && y.itemKey === x.itemKey && y.driftId === x.id)) return json(route, 409, errorBody('INVALID_TRANSITION', { message: '호환을 깨는 변경은 승인된 기술 결정이 필요합니다.' }));
       const jobId = `job-${String(d.seq)}`;
-      x.resolution = { ...res, how: 'contract', jobId, decisionId: b.decisionId ?? null };
+      x.resolution = { ...res, how: 'contract', jobId, jobStatus: 'queued', decisionId: b.decisionId ?? null };
       return json(route, 202, { jobId });
     }
     x.status = 'done';
@@ -274,7 +285,7 @@ export function installDesign(api: FakeApi, d: DesignData): { writes: { path: st
     return json(route, 200, x);
   };
   // fake-api는 「METHOD 전체 경로」로 찾으므로 실제 id·key마다 등록한다.
-  for (const x of d.items) api.on(`GET ${base}/${isIface(x) ? 'interfaces' : 'data'}/${encodeURIComponent(x.key)}`, detail(isIface(x)));
+  for (const x of [...d.items, ...(d.branch?.items ?? [])]) api.on(`GET ${base}/${isIface(x) ? 'interfaces' : 'data'}/${encodeURIComponent(x.key)}`, detail(isIface(x)));
   for (const x of d.decisions) for (const a of ['approve', 'reject', 'change'] as const) api.on(`POST /api/design/decisions/${x.id}/${a}`, onDecision(a));
   for (const x of d.drifts) api.on(`POST ${base}/drifts/${x.id}/resolve`, onResolve);
   return { writes };

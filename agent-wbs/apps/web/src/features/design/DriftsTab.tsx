@@ -18,7 +18,7 @@ import { BusyButton } from '../../shared/ui/BusyButton.tsx';
 import { useNotice } from '../../shared/ui/feedback.tsx';
 import { Modal } from '../../shared/ui/Modal.tsx';
 import type { DesignCtx } from './DesignPage.tsx';
-import { approvedDecisions, driftView, type DriftItem, type Overview } from './model.ts';
+import { driftView, linkedDecisions, pendingLinked, type DriftItem, type Overview } from './model.ts';
 
 export function DriftsTab({ ctx, versions }: { ctx: DesignCtx; versions: Overview['versions'] }) {
   return (
@@ -81,16 +81,17 @@ function DriftRow({ d, ctx }: { d: DriftItem; ctx: DesignCtx }) {
   return (
     <div className="dec-row" data-drift={d.itemKey}>
       <div className="dec-h">
-        <span className="tag">{d.kind}</span><b className="mono">{d.itemKey}</b><span className="sp" />
+        <span className="mono muted">{d.displayKey}</span><span className="tag">{d.kind}</span><b className="mono">{d.itemKey}</b><span className="sp" />
         {d.taskKey && <Link className="reflink mono" to={LINK.task(d.taskKey)}>{d.taskKey}</Link>}
         <span className={v.compatC}>{v.compatL}</span><span className={v.stC}>{v.stL}</span>
       </div>
       <p className="dec-p">{d.text} <span className="tid">({d.where})</span></p>
       {v.note && <p className="dec-p" style={{ color: 'var(--wn)' }}>{v.note}</p>}
       {v.resL && <p className="dec-p muted">처리: {v.resL}</p>}
-      {(v.canContract || v.canCode || v.canRetry) && (
+      {ctx.branch && v.open && <p className="dec-p muted">브랜치 초안의 불일치입니다 — 처리는 main 대조 결과에서 합니다.</p>}
+      {!ctx.branch && (v.canContract || v.canCode || v.canRetry) && (
         <div className="dec-f"><span className="sp" />
-          {v.canRetry && <BusyButton busy={contract.busy} busyLabel="요청 중…" variant="ghost" small title="반영 작업이 실패·취소됐을 때만 다시 요청됩니다. 아직 진행 중이면 서버가 거부합니다." onClick={() => { void contract.save(); }}>계약 반영 다시 요청</BusyButton>}
+          {v.canRetry && <BusyButton busy={contract.busy} busyLabel="요청 중…" variant="ghost" small title="반영 작업이 끝났는데 해결되지 않았을 때(실패 · 결과 불일치) 다시 요청합니다." onClick={() => { void contract.save(); }}>계약 반영 다시 요청</BusyButton>}
           {v.canCode && <BusyButton busy={code.busy} busyLabel="요청 중…" variant="default" small disabled={busy} onClick={() => { void code.save(); }}>코드 수정 요청</BusyButton>}
           {v.canContract && <BusyButton busy={contract.busy && !asking} busyLabel="요청 중…" small disabled={busy} onClick={toContract}>계약에 반영</BusyButton>}
         </div>
@@ -108,11 +109,15 @@ function DriftRow({ d, ctx }: { d: DriftItem; ctx: DesignCtx }) {
   );
 }
 
-/** 호환을 깨는 차이의 계약 반영: 승인된 기술 결정을 골라야 보낸다(M6-05 resolveDrift decisionId). */
+/**
+ * 호환을 깨는 차이의 계약 반영: 이 불일치를 가리키는 승인 결정을 골라야 보낸다(M6-05 resolveDrift decisionId).
+ * 고를 수 있는 것은 같은 itemKey·같은 driftId의 승인 결정뿐이다(coord-decisions 2). 없으면 연결된 승인 대기 결정과 만드는 길을 안내한다.
+ */
 function BreakingModal({ ctx, d, busy, pick, onPick, onCancel, onSubmit }: {
   ctx: DesignCtx; d: DriftItem; busy: boolean; pick: string; onPick: (id: string) => void; onCancel: () => void; onSubmit: () => void;
 }) {
-  const options = approvedDecisions(ctx.decisions);
+  const options = linkedDecisions(ctx.decisions, d);
+  const waiting = pendingLinked(ctx.decisions, d);
   return (
     <Modal
       title="호환을 깨는 변경 — 계약에 반영"
@@ -123,18 +128,22 @@ function BreakingModal({ ctx, d, busy, pick, onPick, onCancel, onSubmit }: {
         <BusyButton busy={busy} busyLabel="요청 중…" disabled={!pick} onClick={onSubmit}>반영 요청</BusyButton>
       </>}
     >
-      <p style={{ margin: '0 0 8px' }}><b className="mono">{d.itemKey}</b> — {d.text}</p>
-      <p className="fhint" style={{ margin: '0 0 10px' }}>호환을 깨는 변경(필드 삭제 · 타입 변경 · 필수화)은 승인된 기술 결정이 필요합니다. 설계 변경을 승인한 결정을 고르면 그 결정 ID와 함께 반영을 요청합니다. 다른 방법은 「코드 수정 요청」입니다.</p>
+      <p style={{ margin: '0 0 8px' }}><span className="mono muted">{d.displayKey}</span> <b className="mono">{d.itemKey}</b> — {d.text}</p>
+      <p className="fhint" style={{ margin: '0 0 10px' }}>호환을 깨는 변경(필드 삭제 · 타입 변경 · 필수화)은 이 불일치에 연결해 승인한 기술 결정이 필요합니다. 다른 항목이나 이전 불일치에 대한 승인은 쓸 수 없습니다. 다른 방법은 「코드 수정 요청」입니다.</p>
       {options.length === 0 ? (
         <div className="banner warn"><div className="banner-b" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span style={{ marginRight: 'auto' }}>승인된 기술 결정이 없습니다 — 기술 결정 탭에서 설계 변경을 승인한 뒤 반영하세요.</span>
+          <span style={{ marginRight: 'auto' }}>
+            이 불일치({d.displayKey})에 연결된 승인 결정이 없습니다 — {waiting.length > 0
+              ? <>승인 대기 중인 연결 결정 {waiting.map((x) => x.tdKey).join(', ')}을(를) 기술 결정 탭에서 승인한 뒤 반영하세요.</>
+              : <>Agent가 이 불일치에 연결한 결정을 제안하거나, 기술 결정 탭의 「변경 제안」에서 이 불일치를 연결해 올린 뒤 승인하세요.</>}
+          </span>
           <button type="button" className="btn sm" onClick={() => { onCancel(); ctx.goTab('dec'); }}>기술 결정 보기</button>
         </div></div>
       ) : (
         <div className="form" style={{ maxWidth: 'none' }}>
           <div className="frow"><label className="flabel" htmlFor={`bd-${d.id}`}>승인된 기술 결정<span className="req">필수</span></label>
             <div className="fctl">
-              <select id={`bd-${d.id}`} className="inp" value={pick} onChange={(e) => { onPick(e.target.value); }}>
+              <select id={`bd-${d.id}`} className="inp" aria-label="승인된 기술 결정" value={pick} onChange={(e) => { onPick(e.target.value); }}>
                 <option value="">결정을 고르세요</option>
                 {options.map((x) => <option key={x.id} value={x.id}>{`${x.tdKey} ${x.title} — ${x.choice}`}</option>)}
               </select>

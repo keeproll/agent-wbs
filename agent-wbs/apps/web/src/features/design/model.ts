@@ -6,6 +6,7 @@
  * - 불일치에는 호환 판정 compat(compatible·breaking·unchecked)이 있다. unchecked는 「대조 안 함」이며 호환으로 보이지 않는다(G L1058).
  * - 계약 반영은 Runner job(design_apply)의 결과 커밋 보고 뒤에만 해결된다(contracts §2.3). 그 사이는 「계약 반영 대기」다.
  */
+import { DESIGN_REF_PATTERN } from '@awbs/shared';
 import type { ResponseOf } from '../../shared/api/contract.ts';
 
 export type DecisionItem = ResponseOf<'listDecisions'>['items'][number];
@@ -44,7 +45,8 @@ export const DECISION_STATUS: Record<string, Label> = {
 };
 const COND_RESULT: Record<string, string> = { met: '충족', not_met: '미충족' };
 
-export function decisionView(x: DecisionItem) {
+/** drifts: 결정이 가리키는 불일치의 표시 번호(DR-01)를 찾는 데 쓴다(M6-05 fix1 결정-항목 연결). */
+export function decisionView(x: DecisionItem, drifts: readonly DriftItem[] = []) {
   const [authL, authC] = AUTH[x.authority] ?? ['—', 'sc sc-none'];
   const [stL, stC] = DECISION_STATUS[x.status] ?? ['—', 'vf v-none'];
   const result = x.conditionResult ? COND_RESULT[x.conditionResult] : undefined;
@@ -57,6 +59,7 @@ export function decisionView(x: DecisionItem) {
     canChg: x.authority !== 'free' && ['approved', 'fixed'].includes(x.status) && !(x.authority === 'lead' && x.level !== 'cond'),
     rowC: x.status === 'rejected' ? 'dec-row off' : 'dec-row',
     condL: x.condition ? `${x.condition}${result ? ` (조건 충족 판단: ${result})` : ''}` : '',
+    linkL: linkLabel(x.itemKey ?? x.change?.itemKey, x.driftId ?? x.change?.driftId, drifts),
   };
 }
 
@@ -66,12 +69,35 @@ export function decisionGroups(decs: readonly DecisionItem[]) {
 }
 /** 호환을 깨는 계약 반영에 붙일 수 있는 결정: 팀장이 승인한(approved) 결정(서버 resolve 검사와 같다) */
 export const approvedDecisions = (decs: readonly DecisionItem[]) => decs.filter((x) => x.status === 'approved');
+
+function linkLabel(itemKey: string | undefined, driftId: string | undefined, drifts: readonly DriftItem[]) {
+  if (!itemKey) return '';
+  const dr = driftId ? drifts.find((d) => d.id === driftId) : undefined;
+  return `${itemKey}${dr ? ` · ${dr.displayKey}` : ''}`;
+}
+/**
+ * 호환 깨짐 반영에 고를 수 있는 결정(coord-decisions 2, M6-05 fix1): 승인됨이고 **같은 itemKey와 같은 driftId**를 가리키는 것만.
+ * 왜: 다른 항목이나 같은 항목의 옛 불일치에 대한 승인을 재사용하면 승인하지 않은 변경이 반영된다. 서버도 거부한다.
+ */
+export const linkedDecisions = (decs: readonly DecisionItem[], d: DriftItem) =>
+  decs.filter((x) => x.status === 'approved' && x.itemKey === d.itemKey && x.driftId === d.id);
+/** 같은 불일치를 가리키는 승인 대기 결정(새 제안 또는 연결을 단 변경 제안). 승인하면 위 목록에 들어온다. */
+export const pendingLinked = (decs: readonly DecisionItem[], d: DriftItem) =>
+  decs.filter((x) => (x.status === 'pending' && x.itemKey === d.itemKey && x.driftId === d.id)
+    || (x.status === 'change' && x.change?.itemKey === d.itemKey && x.change.driftId === d.id));
+
+/** 주소의 ref(브랜치 조회). main 또는 Runner Task 브랜치(agent/TASK-0000, -hN)만 받는다. 다른 값은 main으로 보고 잘못된 값을 알린다. */
+export function parseRef(raw: string | null): { ref: string; invalid: string | null } {
+  if (raw === null || raw === '' || raw === 'main') return { ref: 'main', invalid: null };
+  return new RegExp(DESIGN_REF_PATTERN).test(raw) ? { ref: raw, invalid: null } : { ref: 'main', invalid: raw };
+}
 export const pendingDecisions = (decs: readonly DecisionItem[]) => decs.filter((x) => x.status === 'pending' || x.status === 'change');
 
 /* ---- 불일치 ---- */
 const COMPAT: Record<string, Label> = { compatible: ['호환', 'sc sc-ok'], breaking: ['호환 깨짐', 'sc sc-bad'], unchecked: ['대조 안 함', 'sc sc-warn'] };
 export const compatLabel = (compat: string): Label => COMPAT[compat] ?? ['—', 'sc sc-none'];
 
+const JOB: Record<string, Label> = { queued: ['계약 반영 대기', 'vf v-run'], running: ['계약 반영 중', 'vf v-run'], done: ['결과 대조 대기', 'vf v-run'], failed: ['계약 반영 실패', 'vf v-fail'] };
 const short = (sha: unknown) => (typeof sha === 'string' ? sha.slice(0, 7) : '');
 const resolution = (d: DriftItem): Record<string, unknown> => (d.resolution && typeof d.resolution === 'object' ? d.resolution as Record<string, unknown> : {});
 
@@ -79,24 +105,28 @@ export function driftView(d: DriftItem) {
   const r = resolution(d);
   const open = d.status === 'open';
   const waiting = open && typeof r.jobId === 'string' && r.jobId !== '';
+  // job 상태(M6-05 fix1 resolution.jobStatus). 끝난(done·failed) job만 다시 요청·코드 수정 요청을 열어 둔다. 상태가 없으면 서버가 판단한다.
+  const jobEnded = r.jobStatus === 'done' || r.jobStatus === 'failed';
   const unchecked = d.compat === 'unchecked';
   const [compatL, compatC] = compatLabel(d.compat);
   let stL: string; let stC: string;
   if (!open) [stL, stC] = ['해결됨', 'vf v-pass'];
-  else if (waiting) [stL, stC] = ['계약 반영 대기', 'vf v-run'];
+  else if (waiting) [stL, stC] = JOB[String(r.jobStatus)] ?? ['계약 반영 대기', 'vf v-run'];
   else if (unchecked) [stL, stC] = ['대조 안 함', 'vf v-run'];
   else [stL, stC] = ['미해결', 'vf v-fail'];
   let resL = '';
-  if (waiting) resL = `계약 반영 요청됨 — Runner가 결과 커밋을 보고하고 대조가 일치해야 해결됩니다 (job ${short(r.jobId)})`;
+  if (waiting && r.jobStatus === 'failed') resL = `계약 반영 작업이 실패했습니다 — 다시 요청하거나 코드 수정을 요청하세요 (job ${short(r.jobId)})`;
+  else if (waiting && r.jobStatus === 'done') resL = `계약 반영 작업은 끝났고 결과 커밋의 대조를 기다립니다 — 대조가 일치해야 해결됩니다 (job ${short(r.jobId)})`;
+  else if (waiting) resL = `계약 반영 요청됨 — Runner가 결과 커밋을 보고하고 대조가 일치해야 해결됩니다 (job ${short(r.jobId)})`;
   else if (!open && r.how === 'contract') resL = `계약에 반영 — 결과 커밋 ${short(r.resultCommit) || '—'}`;
   else if (!open && r.how === 'code') resL = `코드 수정 요청 → ${d.taskKey ?? '담당 Task'} 메시지로 전달`;
   else if (!open && r.resolvedBy === 'comparison') resL = `다음 대조에서 일치 확인 — 커밋 ${short(r.commit) || '—'}`;
   return {
     open, waiting, stL, stC, compatL, compatC, resL,
     canContract: open && !waiting && !unchecked,
-    canCode: open && !waiting && d.taskKey !== null,
+    canCode: open && (!waiting || jobEnded) && d.taskKey !== null,
     // 결과를 모르는 job(실패·취소 포함)은 같은 요청을 다시 보낼 수 있다. 아직 진행 중이면 서버가 409로 거부한다.
-    canRetry: waiting,
+    canRetry: waiting && (jobEnded || r.jobStatus === undefined),
     needsDecision: d.compat === 'breaking',
     note: unchecked ? '코드에서 실제 명세를 추출하지 못해 대조하지 않았습니다 — 불일치 0건이 아닙니다. 추출 방법이 생기면 다음 병합 때 대조합니다.' : '',
   };
@@ -182,11 +212,11 @@ const byTask = (a: { taskKey: string | null; key: string }, b: { taskKey: string
 export function itemRows(items: readonly (IfaceItem | DataItem)[], f: ListFilter, tasks: ReadonlyMap<string, TaskInfo>, drifts: readonly DriftItem[]) {
   const q = f.q.trim().toLowerCase();
   return [...items].sort(byTask).filter((x) => ('kind' in x ? !f.kind || x.kind === f.kind : !f.store || x.store === f.store))
-    .filter((x) => !q || `${x.name} ${x.key}`.toLowerCase().includes(q))
+    .filter((x) => !q || `${x.name} ${x.key} ${x.description ?? ''}`.toLowerCase().includes(q))
     .map((x) => {
       const kind = 'kind' in x ? x.kind : x.store;
       const [stL, stC] = taskStat(x.taskKey ? tasks.get(x.taskKey) : undefined);
-      return { key: x.key, name: x.name, kind, kindL: KIND_L[kind] ?? kind, stL, stC, task: x.taskKey ?? '—', taskKey: x.taskKey, fileError: x.status === 'error', mark: driftMark(drifts, x.key) };
+      return { key: x.key, name: x.name, desc: x.description ?? '—', kind, kindL: KIND_L[kind] ?? kind, stL, stC, task: x.taskKey ?? '—', taskKey: x.taskKey, fileError: x.status === 'error', mark: driftMark(drifts, x.key) };
     });
 }
 export type ItemRow = ReturnType<typeof itemRows>[number];

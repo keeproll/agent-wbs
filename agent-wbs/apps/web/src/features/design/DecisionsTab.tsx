@@ -45,7 +45,7 @@ export function DecisionsTab({ ctx }: { ctx: DesignCtx }) {
 }
 
 function DecisionRow({ x, ctx, onChange }: { x: DecisionItem; ctx: DesignCtx; onChange: () => void }) {
-  const v = decisionView(x);
+  const v = decisionView(x, ctx.drifts);
   const { client } = useApi();
   const notify = useNotice();
   const decide = (action: 'approve' | 'reject') => ({
@@ -76,6 +76,7 @@ function DecisionRow({ x, ctx, onChange }: { x: DecisionItem; ctx: DesignCtx; on
       <p className="dec-p"><span className="muted">근거</span> {x.reason}</p>
       {x.alternatives && <p className="dec-p"><span className="muted">대안</span> {x.alternatives}</p>}
       {v.isChg && <p className="dec-p" style={{ color: 'var(--wn)' }}><span className="muted">변경 제안</span> {v.chgL}</p>}
+      {v.linkL && <p className="dec-p"><span className="muted">연결</span> <span className="mono">{v.linkL}</span> <span className="tid">— 이 불일치의 호환 깨짐 반영에만 쓸 수 있습니다</span></p>}
       <div className="dec-f">
         <span className="tid">{x.by} · {formatDateTime(x.at)}</span><span className="sp" />
         {v.pending && (
@@ -92,7 +93,8 @@ function DecisionRow({ x, ctx, onChange }: { x: DecisionItem; ctx: DesignCtx; on
   );
 }
 
-interface ChangeForm { choice: string; reason: string }
+/** link: 연결할 불일치 id(빈 문자열은 연결 없음). 승인하면 결정이 그 불일치의 itemKey·driftId를 가리킨다(M6-05 fix1). */
+interface ChangeForm { choice: string; reason: string; link?: string }
 
 /** 기술 결정 변경 제안 입력 창. 입력은 세션이 끊겨도 보관했다가 복원을 제안하고, 창 밖 이동은 화면의 편집 보호가 막는다. */
 function ChangeModal({ x, ctx, onClose }: { x: DecisionItem; ctx: DesignCtx; onClose: () => void }) {
@@ -101,7 +103,9 @@ function ChangeModal({ x, ctx, onClose }: { x: DecisionItem; ctx: DesignCtx; onC
   const confirm = useConfirm();
   const [form, setForm] = useState<ChangeForm>({ choice: '', reason: '' });
   const [tried, setTried] = useState(false);
-  const dirty = form.choice.trim() !== '' || form.reason.trim() !== '';
+  const dirty = form.choice.trim() !== '' || form.reason.trim() !== '' || Boolean(form.link);
+  /** 연결할 수 있는 불일치: main의 열린 호환 깨짐(브랜치 불일치는 처리 대상이 아니다). */
+  const breaking = ctx.branch ? [] : ctx.drifts.filter((d) => d.status === 'open' && d.compat === 'breaking');
   const { setDirty } = ctx;
   useEffect(() => { setDirty(dirty); }, [dirty, setDirty]);
   const { restoreOffer } = useSessionDraft({
@@ -114,7 +118,10 @@ function ChangeModal({ x, ctx, onClose }: { x: DecisionItem; ctx: DesignCtx; onC
     target: `${x.tdKey} 변경 제안`,
     failTitle: '변경 제안을 올리지 못했습니다',
     mine: `${x.choice} → ${form.choice.trim()}`,
-    request: () => ({ updatedAt: x.updatedAt, choice: form.choice.trim(), reason: form.reason.trim() }),
+    request: () => {
+      const dr = form.link ? breaking.find((d) => d.id === form.link) : undefined;
+      return { updatedAt: x.updatedAt, choice: form.choice.trim(), reason: form.reason.trim(), ...(dr ? { itemKey: dr.itemKey, driftId: dr.id } : {}) };
+    },
     run: ({ payload, idempotencyKey }) => client.call('changeDecision', { params: { id: x.id }, body: payload, idempotencyKey }),
     onSuccess: (_result, payload) => {
       notify(`${x.tdKey} 변경 제안을 올렸습니다 — 팀장 승인 전까지 기존 결정을 유지합니다.`);
@@ -150,6 +157,15 @@ function ChangeModal({ x, ctx, onClose }: { x: DecisionItem; ctx: DesignCtx; onC
       <p className="fhint" style={{ margin: '0 0 10px' }}>현재 결정: <b>{x.title} — {x.choice}</b>. 승인 전까지 기존 결정을 유지합니다. 영향(계약 파일 · 관련 Task 재작업 · 데이터 이전 여부)을 이유에 적습니다.</p>
       <div className="form" style={{ maxWidth: 'none' }}>
         <div className="frow"><label className="flabel" htmlFor="dc-choice">새 선택<span className="req">필수</span></label><div className="fctl"><input id="dc-choice" className="inp" value={form.choice} aria-invalid={tried && !form.choice.trim()} onChange={(e) => { setForm({ ...form, choice: e.target.value }); }} /></div></div>
+        {breaking.length > 0 && (
+          <div className="frow"><label className="flabel" htmlFor="dc-link">연결할 불일치</label><div className="fctl">
+            <select id="dc-link" className="inp" value={form.link ?? ''} onChange={(e) => { setForm({ ...form, link: e.target.value }); }}>
+              <option value="">연결 안 함</option>
+              {breaking.map((d) => <option key={d.id} value={d.id}>{`${d.displayKey} ${d.itemKey}`}</option>)}
+            </select>
+            <p className="fhint" style={{ margin: '4px 0 0' }}>호환을 깨는 불일치를 계약에 반영하려면 그 불일치에 연결해 승인한 결정이 필요합니다.</p>
+          </div></div>
+        )}
         <div className="frow"><label className="flabel" htmlFor="dc-reason">변경 이유<span className="req">필수</span></label><div className="fctl"><textarea id="dc-reason" rows={3} className="inp" value={form.reason} aria-invalid={tried && !form.reason.trim()} onChange={(e) => { setForm({ ...form, reason: e.target.value }); }} /></div></div>
       </div>
       {errs.length > 0 && <div className="banner danger" role="alert"><div className="banner-b">{errs.join(' ')}</div></div>}

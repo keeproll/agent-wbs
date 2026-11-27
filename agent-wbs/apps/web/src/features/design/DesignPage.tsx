@@ -26,7 +26,7 @@ import { DecisionsTab } from './DecisionsTab.tsx';
 import { DriftsTab } from './DriftsTab.tsx';
 import { ItemsTab } from './ItemsTab.tsx';
 import {
-  fileRows, isTab, layers, parseErrors, pendingDecisions, summaryLine, tabBadges, TABS, visibleLinks,
+  fileRows, isTab, layers, parseErrors, parseRef, pendingDecisions, summaryLine, tabBadges, TABS, visibleLinks,
   type DecisionItem, type DriftItem, type Overview, type Tab, type TaskInfo,
 } from './model.ts';
 
@@ -46,6 +46,10 @@ export interface DesignCtx {
   reload: (signal?: AbortSignal) => Promise<void>;
   goTab: (tab: Tab) => void;
   setDirty: (dirty: boolean) => void;
+  /** 브랜치 조회 중이면 그 ref(agent/TASK-…), main이면 null. 브랜치 불일치는 처리하지 않는다(서버도 막는다). */
+  branch: string | null;
+  /** 설계 조회 요청에 붙일 query. main이면 비어 있다(서버 기본값). */
+  refQuery: { ref?: string };
 }
 
 function DesignBody({ project }: { project: ProjectState }) {
@@ -57,7 +61,10 @@ function DesignBody({ project }: { project: ProjectState }) {
   const tab: Tab = isTab(tabParam) ? tabParam : 'map';
   const projectId = 'id' in project ? String(project.id) : '';
   const on = projectId !== '';
-  const p = { params: { projectId }, query: {} };
+  // 브랜치 조회(M6-05 ref 규칙): main 또는 agent/TASK-0000(-hN)만. 그 밖의 값은 main을 보이고 알린다.
+  const { ref, invalid } = parseRef(params.get('ref'));
+  const refQuery = ref === 'main' ? {} : { ref };
+  const p = { params: { projectId }, query: refQuery };
 
   const overview = useApiQuery('getDesign', p, { topics: ['design'], enabled: on });
   const decisions = useApiQuery('listDecisions', { params: { projectId } }, { topics: ['design'], enabled: on });
@@ -103,9 +110,17 @@ function DesignBody({ project }: { project: ProjectState }) {
   };
   /** 탭 이동: 선택·검색은 그 탭의 것이라 지운다(원본 dsSet({tab, sel:'', q:''})). 입력 중이면 먼저 묻는다. */
   const goTab = (next: Tab) => {
-    void guard(() => { setParams(next === 'map' ? {} : { tab: next }); });
+    void guard(() => { setParams({ ...(next === 'map' ? {} : { tab: next }), ...refQuery }); });
   };
-  const ctx: DesignCtx = { projectId, decisions: decisions.data.items, drifts: drifts.data.items, reload, goTab, setDirty };
+  /** 기준(main ↔ 브랜치) 바꾸기. 탭은 그대로, 선택·검색은 지운다(항목 목록이 다르다). */
+  const goRef = (next: string) => {
+    void guard(() => { setParams({ ...(tab === 'map' ? {} : { tab }), ...(next === 'main' ? {} : { ref: next }) }); });
+  };
+  const branch = ref === 'main' ? null : ref;
+  const ctx: DesignCtx = { projectId, decisions: decisions.data.items, drifts: drifts.data.items, reload, goTab, setDirty, branch, refQuery };
+  // 고를 수 있는 브랜치: 진행 중 Task의 기본 브랜치 이름(agent/<Task>). 세대 접미사(-hN) 브랜치는 주소로 직접 연다(브랜치 목록 API 없음).
+  const refOptions = ['main', ...tasks.data.tasks.filter((t) => ['running', 'paused', 'qa', 'rework', 'verifying', 'gate'].includes(String(t.lifecycleStatus))).map((t) => `agent/${t.taskKey}`).sort()];
+  if (!refOptions.includes(ref)) refOptions.push(ref);
   const decs = decisions.data.items;
   const allDrifts = drifts.data.items;
   const ifaceCount = ifaces.data.items.length;
@@ -125,6 +140,15 @@ function DesignBody({ project }: { project: ProjectState }) {
           <p className="page-sub mono" style={{ marginTop: 2 }}>{summaryLine(overview.data.version, decs, ifaceCount, dataCount, allDrifts)}</p>
         </div>
       </div>
+      {invalid !== null && (
+        <div className="banner warn" role="alert"><div className="banner-b">주소의 브랜치 이름 <span className="mono">{invalid}</span>은(는) 설계 조회 형식(main 또는 agent/TASK-0000)이 아니라 main을 보입니다.</div></div>
+      )}
+      {branch && (
+        <div className="banner info" role="note"><div className="banner-b" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ marginRight: 'auto' }}>브랜치 <b className="mono">{branch}</b> 초안을 보고 있습니다 — 확정 설계(main)가 아닙니다. 이 브랜치의 불일치는 처리하지 않고, main 병합 뒤 대조 결과에서 처리합니다.</span>
+          <button type="button" className="btn sm" onClick={() => { goRef('main'); }}>main 보기</button>
+        </div></div>
+      )}
       {empty ? (
         <div className="card">
           <p className="empty" style={{ margin: '0 0 6px' }}>아직 확정된 기술 결정이 없습니다.</p>
@@ -149,7 +173,7 @@ function DesignBody({ project }: { project: ProjectState }) {
               );
             })}
           </div>
-          {tab === 'map' && <MapTab overview={overview.data} decisions={decs} drifts={allDrifts} />}
+          {tab === 'map' && <MapTab overview={overview.data} decisions={decs} drifts={allDrifts} refNow={ref} refOptions={refOptions} onRef={goRef} />}
           {tab === 'dec' && <DecisionsTab ctx={ctx} />}
           {(tab === 'iface' || tab === 'data') && (
             <ItemsTab key={tab} ctx={ctx} which={tab} items={tab === 'iface' ? ifaces.data.items : data.data.items} tasks={taskMap} params={params} setParams={setParams} />
@@ -192,7 +216,9 @@ function ParseErrorBanner({ errs, reload, files }: { errs: string[]; reload: (si
   );
 }
 
-function MapTab({ overview, decisions, drifts }: { overview: Overview; decisions: DecisionItem[]; drifts: DriftItem[] }) {
+function MapTab({ overview, decisions, drifts, refNow, refOptions, onRef }: {
+  overview: Overview; decisions: DecisionItem[]; drifts: DriftItem[]; refNow: string; refOptions: string[]; onRef: (ref: string) => void;
+}) {
   const ls = layers(overview.components, decisions);
   const links = visibleLinks(overview.components, overview.links, decisions);
   const files = fileRows(overview.files, drifts);
@@ -224,7 +250,14 @@ function MapTab({ overview, decisions, drifts }: { overview: Overview; decisions
         )}
       </section>
       <section className="card">
-        <div className="dp-h"><h2>계약 파일</h2></div>
+        <div className="dp-h"><h2>계약 파일</h2>
+          {/* 원본의 「Mock: 읽기 실패」 버튼 자리. 진행 중 Task 브랜치의 초안(「변경 제안」 차이)을 고른다. */}
+          <label className="fhint" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>기준
+            <select className="inp" style={{ width: 'auto', height: 28, padding: '0 8px' }} value={refNow} onChange={(e) => { onRef(e.target.value); }}>
+              {refOptions.map((r) => <option key={r} value={r}>{r === 'main' ? 'main (확정 설계)' : `${r} (브랜치 초안)`}</option>)}
+            </select>
+          </label>
+        </div>
         <p className="fhint" style={{ margin: '0 0 8px' }}>기준(정본)은 저장소 main 브랜치의 이 파일들입니다. 진행 중 Task 브랜치의 차이는 「변경 제안」으로 보입니다. Runner가 병합 · Task 완료 때 읽어 실제 코드에서 추출한 명세와 대조합니다.</p>
         {files.length === 0 && <p className="empty">아직 계약 파일이 없습니다 — 계약 설계 Task가 만듭니다.</p>}
         <div className="gtb" style={{ margin: 0 }} role="table" aria-label="계약 파일">

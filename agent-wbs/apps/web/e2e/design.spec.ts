@@ -262,40 +262,147 @@ test('UAT-DESIGN-04 a: 계약에 반영은 job만 만들고 결과 커밋 전에
   await expect(driftRow(page, 'runner.attempt.events')).toContainText('처리: 계약에 반영 — 결과 커밋 a41f0c2');
 });
 
-test('UAT-DESIGN-04 a: 호환을 깨는 차이는 승인된 결정 ID를 골라야 반영 요청이 간다', async ({ page }) => {
-  const { writes } = await open(page, '/design?tab=chg', (d) => { const x = d.drifts[0]; if (x) x.compat = 'breaking'; });
+const D1 = 'r0000000-0000-4000-8000-000000000001';
+const TD = (n: number) => `d0000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+
+test('UAT-DESIGN-04 a / coord 2: 호환 깨짐은 같은 itemKey·같은 driftId의 승인 결정만 고를 수 있고 그 ID로 반영 요청', async ({ page }) => {
+  const { writes } = await open(page, '/design?tab=chg', (d) => {
+    const x = d.drifts[0]; if (x) x.compat = 'breaking';
+    const td7 = d.decisions.find((y) => y.tdKey === 'TD-07'); if (td7) { td7.itemKey = 'PATCH /api/tasks/:taskKey'; td7.driftId = D1; }
+    // 같은 항목이지만 옛 불일치, 다른 항목의 같은 불일치 — 고를 수 없어야 한다
+    const td8 = d.decisions.find((y) => y.tdKey === 'TD-08'); if (td8) { td8.itemKey = 'PATCH /api/tasks/:taskKey'; td8.driftId = 'r0000000-0000-4000-8000-000000000099'; }
+    const td9 = d.decisions.find((y) => y.tdKey === 'TD-09'); if (td9) { td9.itemKey = 'GET /api/tasks/:taskKey'; td9.driftId = D1; }
+  });
   const r1 = driftRow(page, 'PATCH /api/tasks/:taskKey');
   await expect(r1.locator('.sc')).toHaveText('호환 깨짐');
   await r1.getByRole('button', { name: '계약에 반영' }).click();
   const dlg = page.getByRole('dialog', { name: '호환을 깨는 변경 — 계약에 반영' });
-  await expect(dlg).toContainText('승인된 기술 결정이 필요합니다');
+  await expect(dlg).toContainText('DR-01');
+  await expect(dlg).toContainText('이 불일치에 연결해 승인한 기술 결정이 필요합니다');
+  const select = dlg.getByLabel('승인된 기술 결정');
+  await expect(select.locator('option')).toHaveText(['결정을 고르세요', 'TD-07 Runner ↔ 서버 제어 채널 — WebSocket']);
   const submit = dlg.getByRole('button', { name: '반영 요청' });
   await expect(submit).toBeDisabled();
-  await dlg.getByLabel('승인된 기술 결정').selectOption({ label: 'TD-07 Runner ↔ 서버 제어 채널 — WebSocket' });
+  await select.selectOption({ label: 'TD-07 Runner ↔ 서버 제어 채널 — WebSocket' });
   await submit.click();
   await expect(dlg).toHaveCount(0);
   await expect(r1.locator('.vf')).toHaveText('계약 반영 대기');
-  expect(writes[0]?.body).toMatchObject({ how: 'contract', decisionId: 'd0000000-0000-4000-8000-000000000007' });
+  expect(writes[0]?.body).toMatchObject({ how: 'contract', decisionId: TD(7) });
 });
 
-test('UAT-DESIGN-04 a: 승인된 결정이 없으면 반영 요청을 막고 기술 결정 탭으로 안내', async ({ page }) => {
-  const { writes } = await open(page, '/design?tab=chg', (d) => {
-    const x = d.drifts[0]; if (x) x.compat = 'breaking';
-    for (const y of d.decisions) if (y.status === 'approved') y.status = 'fixed';
-  });
+test('UAT-DESIGN-04 a: 연결된 승인 결정이 없으면 반영을 막고(다른 항목의 승인은 안 됨) 기술 결정 탭으로 안내', async ({ page }) => {
+  const { writes } = await open(page, '/design?tab=chg', (d) => { const x = d.drifts[0]; if (x) x.compat = 'breaking'; });
   await driftRow(page, 'PATCH /api/tasks/:taskKey').getByRole('button', { name: '계약에 반영' }).click();
   const dlg = page.getByRole('dialog', { name: '호환을 깨는 변경 — 계약에 반영' });
-  await expect(dlg).toContainText('승인된 기술 결정이 없습니다');
+  await expect(dlg).toContainText('이 불일치(DR-01)에 연결된 승인 결정이 없습니다');
+  await expect(dlg.getByLabel('승인된 기술 결정')).toHaveCount(0);
   await expect(dlg.getByRole('button', { name: '반영 요청' })).toBeDisabled();
   await dlg.getByRole('button', { name: '기술 결정 보기' }).click();
   await expect(page).toHaveURL('/design?tab=dec');
   expect(writes).toEqual([]);
 });
 
+test('coord 2 흐름: 팀장이 변경 제안에 불일치를 연결 → 승인 → 그 결정으로 호환 깨짐 반영', async ({ page }) => {
+  const { writes } = await open(page, '/design?tab=dec', (d) => { const x = d.drifts[0]; if (x) x.compat = 'breaking'; });
+  const row = decRow(page, 'TD-05');
+  await row.getByRole('button', { name: '변경 제안' }).click();
+  const dlg = page.getByRole('dialog', { name: 'TD-05 기술 결정 변경 제안' });
+  await dlg.getByLabel('새 선택').fill('Neo4j 5 + 응답 필드 변경');
+  await dlg.getByLabel('변경 이유').fill('PATCH 응답 계약을 바꾼다');
+  await dlg.getByLabel('연결할 불일치').selectOption({ label: 'DR-01 PATCH /api/tasks/:taskKey' });
+  await dlg.getByRole('button', { name: '변경 제안 올리기' }).click();
+  await expect(row).toContainText('연결 PATCH /api/tasks/:taskKey · DR-01');
+  // 연결된 승인 대기 결정이 있으면 반영 창이 그 결정을 승인하라고 안내한다
+  await tab(page, /변경 · 불일치/).click();
+  await driftRow(page, 'PATCH /api/tasks/:taskKey').getByRole('button', { name: '계약에 반영' }).click();
+  await expect(page.getByRole('dialog', { name: '호환을 깨는 변경 — 계약에 반영' })).toContainText('승인 대기 중인 연결 결정 TD-05');
+  await page.getByRole('dialog').getByRole('button', { name: '기술 결정 보기' }).click();
+  await decRow(page, 'TD-05').getByRole('button', { name: '승인' }).click();
+  await expect(decRow(page, 'TD-05').locator('.vf')).toHaveText('승인됨');
+  await tab(page, /변경 · 불일치/).click();
+  await driftRow(page, 'PATCH /api/tasks/:taskKey').getByRole('button', { name: '계약에 반영' }).click();
+  const br = page.getByRole('dialog', { name: '호환을 깨는 변경 — 계약에 반영' });
+  await br.getByLabel('승인된 기술 결정').selectOption({ index: 1 });
+  await br.getByRole('button', { name: '반영 요청' }).click();
+  await expect(driftRow(page, 'PATCH /api/tasks/:taskKey').locator('.vf')).toHaveText('계약 반영 대기');
+  expect(writes.map((w) => w.path.split(' ')[0])).toEqual(['change', 'approve', 'resolve']);
+  expect(writes[0]?.body).toMatchObject({ itemKey: 'PATCH /api/tasks/:taskKey', driftId: D1 });
+  expect(writes[2]?.body).toMatchObject({ how: 'contract', decisionId: TD(5) });
+});
+
+test('반영 job 진행(resolution.jobStatus): 대기·진행 중에는 다시 요청 없음, 실패면 실패 표시와 다시 요청·코드 수정 요청', async ({ page }) => {
+  const { data } = await open(page, '/design?tab=chg', (d) => {
+    const x = d.drifts[0]; if (x) x.resolution = { how: 'contract', jobId: 'job-7', jobStatus: 'running' };
+  });
+  const r1 = driftRow(page, 'PATCH /api/tasks/:taskKey');
+  await expect(r1.locator('.vf')).toHaveText('계약 반영 중');
+  await expect(r1.getByRole('button', { name: '코드 수정 요청' })).toHaveCount(0);
+  await expect(r1.getByRole('button', { name: '계약 반영 다시 요청' })).toHaveCount(0);
+  const x = data.drifts[0]; if (x) x.resolution = { how: 'contract', jobId: 'job-7', jobStatus: 'failed' };
+  await page.reload();
+  await expect(r1.locator('.vf')).toHaveText('계약 반영 실패');
+  await expect(r1).toContainText('계약 반영 작업이 실패했습니다');
+  await expect(r1.getByRole('button', { name: '계약 반영 다시 요청' })).toBeVisible();
+  await expect(r1.getByRole('button', { name: '코드 수정 요청' })).toBeVisible();
+  await r1.getByRole('button', { name: '계약 반영 다시 요청' }).click();
+  await expect(r1.locator('.vf')).toHaveText('계약 반영 대기');
+});
+
+test('M6-05 fix1 표시: 항목 설명, 불일치 표시 번호(DR-01), 메시지 인터페이스의 기술 결정(TD-07)', async ({ page }) => {
+  await open(page, '/design?tab=iface&kind=REST');
+  const patch = listRows(page).filter({ hasText: 'PATCH /api/tasks/:taskKey' });
+  await expect(patch).toContainText('부분 수정 + 변경 이력 기록');
+  await page.getByRole('searchbox', { name: '검색' }).fill('변경 이력');
+  await expect(listRows(page)).toHaveCount(1);
+  await page.goto('/design?tab=iface&kind=WebSocket&sel=WS%20%2Frunner%2Fws');
+  const ws = page.getByRole('region', { name: '/runner/ws 상세' });
+  await expect(ws).toContainText('Runner ↔ 서버 제어 채널');
+  await ws.getByRole('link', { name: 'TD-07' }).click();
+  await expect(page).toHaveURL('/design?tab=dec');
+  await page.goto('/design?tab=chg');
+  await expect(driftRow(page, 'PATCH /api/tasks/:taskKey')).toContainText('DR-01');
+  await expect(driftRow(page, 'runner.attempt.events')).toContainText('DR-03');
+});
+
+test('브랜치 조회(ref 규칙): agent/TASK-0005 초안은 ref를 붙여 읽고 처리 버튼이 없다, 형식이 틀린 ref는 main으로', async ({ page }) => {
+  const { api } = await open(page, '/design', (d) => {
+    d.branch = {
+      ref: 'agent/TASK-0005', files: d.files.slice(0, 1).map((f) => ({ ...f, status: 'draft' as const })),
+      items: d.items.filter((x) => x.taskKey === 'TASK-0005'),
+      drifts: [{ ...d.drifts[0], id: 'r0000000-0000-4000-8000-000000000050', displayKey: 'DR-50', where: 'agent/TASK-0005', resolution: { ref: 'agent/TASK-0005' } } as DesignData['drifts'][number]],
+    };
+  });
+  const files = page.getByRole('table', { name: '계약 파일' }).locator('[data-file]');
+  await expect(files).toHaveCount(6);
+  await page.getByRole('combobox').selectOption('agent/TASK-0005');
+  await expect(page).toHaveURL('/design?ref=agent%2FTASK-0005');
+  await expect(page.locator('.banner.info')).toContainText('브랜치 agent/TASK-0005 초안을 보고 있습니다');
+  await expect(files).toHaveCount(1);
+  await expect(files.nth(0).locator('.vf')).toHaveText('브랜치 초안');
+  await tab(page, /인터페이스/).click();
+  await expect(page).toHaveURL('/design?tab=iface&ref=agent%2FTASK-0005');
+  await expect(listRows(page)).toHaveCount(5);
+  await listRows(page).first().click();
+  await expect(page.getByRole('region', { name: /상세$/ })).toBeVisible();
+  expect(api.calls().filter((c) => c.includes('/design/interfaces/')).every((c) => c.includes('ref=agent%2FTASK-0005'))).toBe(true);
+  await tab(page, /변경 · 불일치/).click();
+  const r = driftRow(page, 'PATCH /api/tasks/:taskKey');
+  await expect(r).toContainText('DR-50');
+  await expect(r).toContainText('브랜치 초안의 불일치입니다');
+  await expect(r.getByRole('button', { name: '계약에 반영' })).toHaveCount(0);
+  await page.locator('.banner.info').getByRole('button', { name: 'main 보기' }).click();
+  await expect(page).toHaveURL('/design?tab=chg');
+  await expect(driftRow(page, 'PATCH /api/tasks/:taskKey').getByRole('button', { name: '계약에 반영' })).toBeVisible();
+  await page.goto('/design?ref=refs%2Fheads%2Fmain');
+  await expect(page.locator('.banner.warn').first()).toContainText('refs/heads/main');
+  await expect(files).toHaveCount(6);
+  expect(api.calls().some((c) => c.includes('ref=refs'))).toBe(false);
+});
+
 test('대조 안 함(unchecked)은 「대조 안 함」으로 보이고 불일치 0건이나 호환으로 보이지 않는다', async ({ page }) => {
   await open(page, '/design?tab=chg', (d) => {
     d.drifts = d.drifts.filter((x) => x.status === 'done');
-    d.drifts.push({ id: 'r0000000-0000-4000-8000-000000000009', itemKey: 'file:contracts/cache/redis-keys.yaml', kind: 'Redis', where: 'main', text: '키 카탈로그에서 명세를 추출하지 못함', taskKey: null, compat: 'unchecked', status: 'open', updatedAt: '2026-11-05T09:00:00.000Z', resolution: {} });
+    d.drifts.push({ id: 'r0000000-0000-4000-8000-000000000009', displayKey: 'DR-09', itemKey: 'file:contracts/cache/redis-keys.yaml', kind: 'Redis', where: 'main', text: '키 카탈로그에서 명세를 추출하지 못함', taskKey: null, compat: 'unchecked', status: 'open', updatedAt: '2026-11-05T09:00:00.000Z', resolution: {} });
   });
   await expect(page.locator('.page-sub.mono')).toHaveText('설계 v3 · 기술 결정 11 (승인 대기 1) · 인터페이스 27 · 데이터 항목 16 · 대조 안 함 1');
   await expect(tab(page, /변경 · 불일치/)).toHaveText('변경 · 불일치1');

@@ -68,7 +68,7 @@ export function ItemsTab({ ctx, which, items, tasks, params, setParams }: {
         </aside>
         <div className="mainc">
           <Detail ctx={ctx} iface={iface} item={selected} rows={rows} tasks={tasks} go={(key) => { set({ sel: key }); }}
-            open={(tab, key) => { setParams(tab === 'data' ? { tab, store: key.slice(0, key.indexOf(':')), sel: key } : { tab, sel: key }); }} />
+            open={(tab, key) => { setParams({ ...(tab === 'data' ? { tab, store: key.slice(0, key.indexOf(':')), sel: key } : { tab, sel: key }), ...ctx.refQuery }); }} />
         </div>
       </div>
     );
@@ -112,7 +112,7 @@ function Row({ r, onPick }: { r: ItemRow; onPick: () => void }) {
     <div className="gtr dsrow" role="button" tabIndex={0} data-row={r.key} onClick={onPick} onKeyDown={onKey}>
       <span className="gc"><span className="tag">{r.kindL}</span></span>
       <span className="gc mono ds-name">{r.name}{r.mark && <> <span className={r.mark[1]}>{r.mark[0]}</span></>}</span>
-      <span className="gc muted">—</span>
+      <span className={r.desc === '—' ? 'gc muted' : 'gc'}>{r.desc}</span>
       <span className="gc"><span className={r.stC}>{r.stL}</span>{r.fileError && <> <span className="sc sc-bad" title="계약 파일 읽기 실패 — 마지막 성공 버전">읽기 실패</span></>}</span>
       <span className="gc mono">{r.task}</span>
     </div>
@@ -127,7 +127,7 @@ function Detail({ ctx, iface, item, rows, tasks, go, open }: {
   ctx: DesignCtx; iface: boolean; item: IfaceItem | DataItem; rows: readonly ItemRow[]; tasks: ReadonlyMap<string, TaskInfo>;
   go: (key: string) => void; open: (tab: 'iface' | 'data', key: string) => void;
 }) {
-  const args = { params: { projectId: ctx.projectId, key: item.key }, query: {} };
+  const args = { params: { projectId: ctx.projectId, key: item.key }, query: ctx.refQuery };
   const ifaceQ = useApiQuery('getInterface', args, { topics: ['design'], enabled: iface, keepPrevious: false });
   const dataQ = useApiQuery('getDataItem', args, { topics: ['design'], enabled: !iface, keepPrevious: false });
   const query = iface ? ifaceQ : dataQ;
@@ -148,8 +148,8 @@ function Detail({ ctx, iface, item, rows, tasks, go, open }: {
         <button type="button" className="btn ghost sm" disabled={!pos.next} onClick={() => { if (pos.next) go(pos.next); }}>↓ 다음</button>
       </div>
       <h2 className="mono" style={{ margin: '0 0 4px', fontSize: 18, wordBreak: 'break-all' }}>{item.name}</h2>
-      {/* 원본 설명 줄 자리. 계약에 설명이 없어 이름과 다른 고정 키만 보이고, 없으면 빈 줄로 자리를 지킨다(아래 배치가 원본과 같게). */}
-      <p className="muted" style={{ margin: '0 0 10px' }}>{item.key !== item.name ? item.key : '\u00a0'}</p>
+      {/* 원본 설명 줄(P L1557). 서버 description(M6-05 fix1)을 보이고, 없으면 빈 줄로 자리를 지킨다(아래 배치가 원본과 같게). */}
+      <p className="muted" style={{ margin: '0 0 10px' }}>{item.description ?? '\u00a0'}</p>
       <div className="kv" style={{ gridTemplateColumns: '110px minmax(0,1fr)', margin: '0 0 12px' }}>
         <span className="kv-l">계약 파일</span>
         <span className="kv-v mono">{detail ? `${detail.source.path}${detail.source.commit ? ` · ${detail.source.commit.slice(0, 7)}` : ''}` : '—'}{detail?.source.status === 'error' && <> <span className="sc sc-bad">읽기 실패 — 마지막 성공 버전</span></>}</span>
@@ -196,7 +196,9 @@ function Content({ content, open }: { content: NonNullable<IfaceDetail['content'
     case 'message':
       return (
         <>
-          <KV><span className="kv-l">인증</span><span className="kv-v">{content.auth || '—'}</span></KV>
+          {/* 원본 메시지 상세의 「기술 결정」 칸(P L1563). 서버 decisionKeys(M6-05 fix1)를 기술 결정 탭으로 잇는다. */}
+          <KV><span className="kv-l">인증</span><span className="kv-v">{content.auth || '—'}</span>
+            <span className="kv-l">기술 결정</span><span className="kv-v mono">{content.decisionKeys?.length ? content.decisionKeys.map((k, i) => <span key={k}>{i > 0 && ', '}<Link to={LINK.design('dec')} className="reflink">{k}</Link></span>) : '—'}</span></KV>
           <h3 className="ds-h4">메시지</h3>
           <div className="gtb" style={{ margin: '0 0 10px' }}>{content.messages.map((m) => (
             <div key={m.name} className="gtr" style={{ gridTemplateColumns: 'minmax(130px,.8fr) 148px minmax(200px,2fr)', minWidth: 0 }}><span className="gc mono"><b>{m.name}</b></span><span className="gc">{m.direction}</span><span className="gc mono" style={{ fontSize: 12 }}>{m.schema}</span></div>

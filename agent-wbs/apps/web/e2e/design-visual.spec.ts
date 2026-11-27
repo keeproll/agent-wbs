@@ -68,7 +68,7 @@ test('UI-04-03 인터페이스 목록(1920)', async ({ page }) => {
   const png = await shot(page);
   record('UI-04-03-bar', `${B}/UI-04-03.png`, at(280, 50), png, 0.03, '방식 필터 건수·검색. 같아야 함');
   record('UI-04-03-table', `${B}/UI-04-03.png`, at(330, 750), png, null,
-    '목록은 원본처럼 Task 순이나 같은 Task 안은 항목 key 순(원본은 Task 설계 순서). 설명 칸은 계약에 설명 필드가 없어 「—」(보고함). 상태는 담당 Task 상태로 같은 규칙');
+    '목록은 원본처럼 Task 순이나 같은 Task 안은 항목 key 순(원본은 Task 설계 순서), 메시지 인터페이스도 Task 순으로 섞임(조정자 결정). 설명은 서버 description, 상태는 담당 Task 상태로 같은 규칙. 행 모양은 같음');
 });
 
 test('UI-04-03A REST 상세(1920)', async ({ page }) => {

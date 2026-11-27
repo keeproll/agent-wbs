@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  approvedDecisions, compatLabel, decisionGroups, decisionView, driftMark, driftView, fileRows, itemRows, kindCounts, layers, parseErrors,
+  approvedDecisions, compatLabel, linkedDecisions, parseRef, pendingLinked, decisionGroups, decisionView, driftMark, driftView, fileRows, itemRows, kindCounts, layers, parseErrors,
   storeCounts, summaryLine, tabBadges, tableTarget, taskStat, visibleLinks,
   type DecisionItem, type DriftItem, type FileItem, type IfaceItem, type DataItem, type TaskInfo,
 } from '../src/features/design/model.ts';
@@ -10,7 +10,7 @@ const dec = (p: Partial<DecisionItem>): DecisionItem => ({
   reason: '등록 제약', alternatives: '', by: '팀장', at: '2026-10-27T00:40:00.000Z', updatedAt: '2026-10-27T00:40:00.000Z', ...p,
 } as DecisionItem);
 const drift = (p: Partial<DriftItem>): DriftItem => ({
-  id: 'r1', itemKey: 'PATCH /api/tasks/:taskKey', kind: 'REST', where: 'main', text: '응답에 updatedBy', taskKey: 'TASK-0005', compat: 'compatible',
+  id: 'r1', displayKey: 'DR-01', itemKey: 'PATCH /api/tasks/:taskKey', kind: 'REST', where: 'main', text: '응답에 updatedBy', taskKey: 'TASK-0005', compat: 'compatible',
   status: 'open', updatedAt: '2026-11-05T00:00:00.000Z', ...p,
 } as DriftItem);
 const iface = (key: string, kind: string, taskKey: string | null = 'TASK-0005'): IfaceItem => ({ key, name: key, kind, taskKey, status: 'ok' } as IfaceItem);
@@ -163,5 +163,48 @@ describe('인터페이스·데이터 목록', () => {
   });
   it('REST의 「읽고 쓰는 테이블」 → PostgreSQL 항목 key(이름만 와도 postgres: 를 붙인다), 중복 제거', () => {
     expect(tableTarget(['tasks', 'postgres:tasks', 'postgres:wbs_nodes'])).toEqual([{ n: 'tasks', key: 'postgres:tasks' }, { n: 'wbs_nodes', key: 'postgres:wbs_nodes' }]);
+  });
+});
+
+describe('M6-05 fix1 계약 보강 표시(M6-07 fix2)', () => {
+  it('목록 설명은 서버 description, 없으면 「—」, 검색은 설명도 찾는다', () => {
+    const a = { ...iface('GET /api/a', 'REST'), description: 'WBS 트리용 Task 목록' } as IfaceItem;
+    const b = { ...iface('GET /api/b', 'REST'), description: null } as IfaceItem;
+    expect(itemRows([a, b], { kind: '', q: '' }, tasks, []).map((r) => r.desc)).toEqual(['WBS 트리용 Task 목록', '—']);
+    expect(itemRows([a, b], { kind: '', q: '트리용' }, tasks, []).map((r) => r.key)).toEqual(['GET /api/a']);
+  });
+  it('반영 job 상태: queued·running은 대기·진행(다시 요청 없음), done이지만 열림은 결과 대조 대기, failed는 실패(다시 요청)', () => {
+    const j = (jobStatus?: string) => driftView(drift({ resolution: { how: 'contract', jobId: 'job-1', ...(jobStatus ? { jobStatus } : {}) } as NonNullable<DriftItem['resolution']> }));
+    expect(j('queued')).toMatchObject({ stL: '계약 반영 대기', stC: 'vf v-run', canRetry: false, waiting: true });
+    expect(j('running')).toMatchObject({ stL: '계약 반영 중', stC: 'vf v-run', canRetry: false });
+    expect(j('done')).toMatchObject({ stL: '결과 대조 대기', stC: 'vf v-run', canRetry: true });
+    expect(j('failed')).toMatchObject({ stL: '계약 반영 실패', stC: 'vf v-fail', canRetry: true, canCode: true });
+    expect(j('failed').resL).toContain('실패');
+    expect(j()).toMatchObject({ stL: '계약 반영 대기', canRetry: true });
+  });
+  it('호환 깨짐 반영에 고를 수 있는 결정: 같은 itemKey·같은 driftId를 가리키는 승인 결정만', () => {
+    const d = drift({ id: 'r1', itemKey: 'PATCH /api/x', compat: 'breaking' });
+    const decs = [
+      dec({ id: 'ok', status: 'approved', itemKey: 'PATCH /api/x', driftId: 'r1' }),
+      dec({ id: 'other-item', status: 'approved', itemKey: 'PATCH /api/y', driftId: 'r1' }),
+      dec({ id: 'old-drift', status: 'approved', itemKey: 'PATCH /api/x', driftId: 'r0' }),
+      dec({ id: 'unlinked', status: 'approved' }),
+      dec({ id: 'pending', status: 'pending', itemKey: 'PATCH /api/x', driftId: 'r1' }),
+      dec({ id: 'chg', status: 'change', change: { choice: 'a', reason: 'b', previousStatus: 'approved', itemKey: 'PATCH /api/x', driftId: 'r1' } }),
+    ];
+    expect(linkedDecisions(decs, d).map((x) => x.id)).toEqual(['ok']);
+    expect(pendingLinked(decs, d).map((x) => x.id)).toEqual(['pending', 'chg']);
+  });
+  it('결정 행의 연결 표시: 항목 key와 불일치 표시 번호', () => {
+    const v = decisionView(dec({ authority: 'agent', level: null, status: 'pending', itemKey: 'PATCH /api/x', driftId: 'r1' }), [drift({ id: 'r1', displayKey: 'DR-07' })]);
+    expect(v.linkL).toBe('PATCH /api/x · DR-07');
+    expect(decisionView(dec({}), []).linkL).toBe('');
+  });
+  it('브랜치 조회 ref: main 또는 agent/TASK-0000(-hN)만, 나머지는 main으로', () => {
+    expect(parseRef(null)).toEqual({ ref: 'main', invalid: null });
+    expect(parseRef('agent/TASK-0005')).toEqual({ ref: 'agent/TASK-0005', invalid: null });
+    expect(parseRef('agent/TASK-0005-h2')).toEqual({ ref: 'agent/TASK-0005-h2', invalid: null });
+    expect(parseRef('refs/heads/main')).toEqual({ ref: 'main', invalid: 'refs/heads/main' });
+    expect(parseRef('Agent/TASK-0005')).toEqual({ ref: 'main', invalid: 'Agent/TASK-0005' });
   });
 });
