@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { CI_STAGE, type PoolClient, type schema } from '@awbs/db';
 import { completionGate, lifecycleTransition, DomainError } from '@awbs/shared';
 import { deferChange } from '../changes/events.ts';
+import { emitNotify } from '../notify/events.ts';
 import { checkPullRequest } from './pull-request.ts';
 import { PlatformError } from '../platform/errors.ts';
 import { RunnerRepository, required } from '../runner/repository.ts';
@@ -13,6 +14,9 @@ export { resolveBasePipelineSha } from './pipeline.ts';
 import { assertCiTransition, preservedHead, type HeadProof } from './proof.ts';
 
 type Run = typeof schema.ciRuns.$inferSelect;
+/** Telegram 메시지의 단계 이름(M6-04 대응표). */
+const CI_LABEL: Record<number, string> = { 1:'① Task 검사', 2:'② 통합 확인', 3:'③ 야간 점검', 4:'④ 배포 확인' };
+const CI_PASS: Record<number, string> = { 1:'Task 검사 통과', 2:'통합 확인 통과', 4:'배포 확인 통과' };
 type Queue = typeof schema.mergeQueue.$inferSelect;
 interface Shas { baseSha?: string; headSha?: string; mergeSha?: string; treeSha?: string; pipelineSha?: string }
 export interface Start extends Shas {
@@ -128,12 +132,17 @@ async function notifyResult(client: PoolClient, run: Run) {
     [run.project_id,`ci:${key}`,{ id:run.id,path:`/ci/${run.id}`,message:`${run.fail_scope === 'baseline' ? '기준선 검사' : stage} 실패 — 실패 단계: ${run.fail_step ?? '미보고'}` }]);
   }
   const kind = run.status === 'fail' ? 'buildFail' : run.stage !== 3 ? 'buildOk' : null;
-  if (kind) await client.query(`insert into notify_events(project_id,dedup_key,kind,ref)
-    select $1,$2,$3,$4 where exists(select 1 from notify_rules where key=$3 and enabled)
-      and exists(select 1 from notify_settings where singleton and enabled)
-    on conflict((coalesce(project_id::text,'global')),dedup_key) where resolved_at is null do update set dup_count=notify_events.dup_count+1`,
-  [run.project_id,kind === 'buildFail' ? run.fail_scope === 'baseline' ? `${key}|${run.id}` : key : `buildOk|${stage}|${run.id}`,kind,
-    { id:run.id,stage,pr:run.pr,failStep:run.fail_step,failScope:run.fail_scope,baseSha:run.base_sha,path:`/ci/${run.id}` }]);
+  if (kind) {
+    // M6·M7 통합: 메시지 모양은 M6-04 대응표(notify/README.md)를 따른다. 통과 단계는 보고 순번(record_no) 순서다.
+    const baseline = run.fail_scope === 'baseline';
+    const passed = kind === 'buildOk' ? (await client.query<{ steps: string | null }>("select string_agg(step_key,', ' order by record_no) steps from ci_steps where run=$1 and status='pass'",[run.id])).rows[0]?.steps : null;
+    await emitNotify(client,{ project:run.project_id,kind,
+      key:kind === 'buildFail' ? baseline ? `${key}|${run.id}` : key : `buildOk|${stage}|${run.id}`,
+      target:baseline ? `${CI_LABEL[run.stage] ?? ''}(기준선) — ${String(run.base_sha).slice(0,7)}` : `${CI_LABEL[run.stage] ?? ''} — ${run.pr ? `PR #${String(run.pr)}` : run.ref}`,
+      path:`/ci/${run.id}`,
+      state:kind === 'buildFail' ? `${baseline ? '기준선 검사 실패' : '실패'} — 실패 단계: ${run.fail_step ?? '보고 없음'}` : `${CI_PASS[run.stage] ?? '통과'} — 통과 단계: ${passed ?? '개별 단계 보고 없음'}`,
+      ref:{ id:run.id,stage,pr:run.pr,failStep:run.fail_step,failScope:run.fail_scope,baseSha:run.base_sha } });
+  }
   if (run.fail_scope==='baseline' && baselineClosed && run.base_sha) await resolveBaselineFailure(client,run.project_id,run.base_sha);
   deferChange(client,run.project_id,'alert',{ id:run.id });
   deferChange(client,run.project_id,'notify',{ id:run.id });
@@ -154,9 +163,7 @@ async function serviceAvailability(client: PoolClient, run: Run, restore: Update
     const ref = { id:run.id,path:`/ci/${run.id}`,restore:restore.status,restoreCommit:restore.commit,
       message:`서비스 없음 — 배포 확인 실패 뒤 ${restore.status === 'none' ? '복구할 직전 통과 배포가 없음' : `마지막 정상 커밋 ${String(restore.commit).slice(0,7)} 복구 실패`}` };
     await client.query("insert into alerts(project_id,key,severity,target) values($1,'ci:serviceDown','critical',$2) on conflict do nothing",[run.project_id,ref]);
-    await client.query(`insert into notify_events(project_id,dedup_key,kind,ref) select $1,'serviceDown','serviceDown',$2
-      where exists(select 1 from notify_settings where singleton and enabled)
-      on conflict((coalesce(project_id::text,'global')),dedup_key) where resolved_at is null do update set dup_count=notify_events.dup_count+1`,[run.project_id,ref]);
+    await emitNotify(client,{ project:run.project_id,kind:'serviceDown',key:'serviceDown',target:`${CI_LABEL[4]} — ${run.ref}`,path:`/ci/${run.id}`,state:ref.message,ref,anyRule:true });
   } else if (run.status === 'pass') {
     await client.query("update alerts set resolved_at=clock_timestamp() where project_id=$1 and key='ci:serviceDown' and resolved_at is null",[run.project_id]);
     await client.query("update notify_events set resolved_at=clock_timestamp() where project_id=$1 and dedup_key='serviceDown' and resolved_at is null",[run.project_id]);
@@ -248,8 +255,7 @@ export async function reportQueue(client: PoolClient, principal: string, body: Q
         const ref = { taskKey:task.task_key,actualMergeSha:body.actualMergeSha,message:'병합됨 · Gate 조건 미충족으로 완료를 기다립니다.' };
         const inserted = await client.query("insert into alerts(project_id,key,severity,target) values($1,$2,'warn',$3) on conflict do nothing",[task.project_id,key,ref]);
         if (inserted.rowCount) await repo.historyEvent(task,'GATE_UNMET_AFTER_MERGE',ref);
-        await client.query(`insert into notify_events(project_id,dedup_key,kind,ref) select $1,$2,'admin',$3
-          where exists(select 1 from notify_settings where singleton and enabled) and exists(select 1 from notify_rules where key='admin' and enabled) on conflict do nothing`,[task.project_id,key,ref]);
+        await emitNotify(client,{ project:task.project_id,kind:'admin',key,target:`${task.task_key} — PR #${String(body.pr)}`,path:`/wbs/${task.task_key}`,state:ref.message,ref });
         for (const topic of ['alert','notify','ci'] as const) deferChange(client,task.project_id,topic,{ taskKey:task.task_key });
         throw new PlatformError('GATE_NOT_PASSED',{ ...error.details,event:'GATE_UNMET_AFTER_MERGE' });
       }
@@ -277,8 +283,7 @@ export async function reportQueue(client: PoolClient, principal: string, body: Q
     const key = `ci:mergeMismatch|#${body.pr}`;
     const ref = { taskKey:task.task_key,id:latest.id,actualMergeSha:body.actualMergeSha,message:'실제 병합이 검증 근거와 다릅니다. 완료를 보류합니다.' };
     await client.query("insert into alerts(project_id,key,severity,target) values($1,$2,'error',$3) on conflict do nothing",[task.project_id,key,ref]);
-    await client.query(`insert into notify_events(project_id,dedup_key,kind,ref) select $1,$2,'buildFail',$3
-      where exists(select 1 from notify_settings where singleton and enabled) and exists(select 1 from notify_rules where key='buildFail' and enabled) on conflict do nothing`,[task.project_id,key,ref]);
+    await emitNotify(client,{ project:task.project_id,kind:'buildFail',key,target:`${task.task_key} — PR #${String(body.pr)}`,path:`/wbs/${task.task_key}`,state:ref.message,ref });
     for (const topic of ['alert','notify','ci'] as const) deferChange(client,task.project_id,topic,{ taskKey:task.task_key });
     throw new PlatformError('MERGE_MISMATCH');
   }

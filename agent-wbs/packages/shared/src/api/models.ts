@@ -590,6 +590,8 @@ export const Decision = Type.Object(
     // 조건부 선호에서 만든 결정: 원래 제약과 Planning의 조건 충족 판단(근거는 reason)
     constraintId: Opt(Nullable(c.Id)),
     conditionResult: Opt(Nullable(AnyOf('met', 'not_met'))),
+    itemKey: Opt(Text), driftId: Opt(c.Id),
+    change: Opt(c.Body({ choice: Text, reason: Text, previousStatus: AnyOf('fixed', 'approved'), itemKey: Opt(Text), driftId: Opt(c.Id) })),
   },
   { title: 'Decision' },
 );
@@ -607,6 +609,7 @@ export const IfaceKind = AnyOf('REST', 'WebSocket', 'SSE', 'Kafka');
 export const Drift = Type.Object(
   {
     id: c.Id,
+    displayKey: Type.String({ pattern: '^DR-[0-9]{2,}$' }),
     itemKey: Type.String(),
     kind: Type.String(),
     where: Type.String(),
@@ -615,6 +618,7 @@ export const Drift = Type.Object(
     compat: AnyOf('compatible', 'breaking', 'unchecked'),
     status: AnyOf('open', 'done'),
     updatedAt: c.Timestamp,
+    resolution: Opt(Type.Intersect([c.Json, Type.Object({ jobStatus: Opt(AnyOf('queued', 'running', 'done', 'failed')) })])),
   },
   { title: 'Drift' },
 );
@@ -1082,6 +1086,15 @@ const moved = List(
 );
 export const ReportSnapshot = Type.Object(
   {
+    // 생성 시점의 프로젝트 이름(M6-02). 보고서·PDF 제목은 이 값을 쓴다. 왜: 보고서는 생성 시점 기록이라 나중에 이름을 바꿔도 그대로여야 한다.
+    // 이름을 알 수 없는 옛 보고서(projectNameStatus = unknown)만 null이다.
+    projectName: Nullable(Str),
+    // 이름의 출처(Codex 리뷰 4차 P2-2).
+    // snapshot = 생성할 때 기록(새 보고서는 늘 이것이고 이름이 반드시 있다).
+    // filled = 옛 보고서에 마이그레이션 0030(옛 0047)이 채움(이름을 바꾼 적 없는 프로젝트라 지금 이름이 그때 이름).
+    // unknown = 옛 보고서인데 이름을 바꾼 적이 있어 그때 이름을 알 수 없음(projectName = null, 화면·PDF는 「이름 미상(기존 보고서)」).
+    // 출처와 이름이 맞는지(snapshot·filled는 이름 있음, unknown은 null)는 snapshotProblem()이 검사한다.
+    projectNameStatus: AnyOf('snapshot', 'filled', 'unknown'),
     summary: obj({
       taskCount: c.Count, doneCount: c.Count, doneBefore: c.Count, workPct: c.Pct, workPctBefore: c.Pct,
       baselineVersion: c.Count, forecast: MaybeDate, lo: MaybeDate, hi: MaybeDate, forecastBefore: MaybeDate,
@@ -1154,6 +1167,21 @@ export const ReportSnapshot = Type.Object(
         end: MaybeDate, slipDays: Nullable(N), blocked: Type.Boolean(),
       }),
     ),
+    /**
+     * 어느 시점 기준인가(owner 2026-11-27 아이템 13: 기간 말 시점 재구성).
+     * - asOf: 이 시각 직전까지의 기록과 그 시점 상태로 만들었다(기간 끝과 생성 시각 중 이른 쪽).
+     * - stateFrom: 상태를 되살릴 수 있는 가장 이른 시각(상태 기록 시작). null이면 처음부터 기록이 있다.
+     * - missing: 'state'면 그 시점 상태를 되살릴 수 없어 상태 칸(분포·진행 중·예정·전체 표 등)을 비웠다. 화면은 「기록 없음」으로 보인다.
+     * 이 필드가 생기기 전에 만든 보고서에는 없다(생성 시각 기준).
+     * - currentSettings: 그 시점 값을 알 수 없어 **지금 값**으로 계산한 설정 묶음(일정 정책·작업 불가일·heartbeat·동시 실행 한도).
+     *   비어 있으면 모든 설정을 그 시점 값으로 썼다. 화면은 「설정은 현재 값」으로 표시한다.
+     */
+    basis: c.Opt(obj({
+      asOf: c.Timestamp, stateFrom: Nullable(c.Timestamp), missing: List(AnyOf('state')),
+      currentSettings: c.Opt(List(AnyOf('schedule', 'blackouts', 'heartbeat', 'concurrency'))),
+      // 경계 불확실 건수: 실제 커밋 시각을 몰라 T 전에 확정됐는지 알 수 없어 넣지 않은 이력 행 수(재리뷰 4). 0이면 없다.
+      uncertain: c.Opt(c.Count),
+    })),
   },
   { title: 'ReportSnapshot' },
 );
@@ -1178,7 +1206,7 @@ export const designOverview = {
   components: List(obj({ id: c.Id, layer: Str, name: Str, tech: Str, note: Str, decisionId: Nullable(c.Id) })),
   links: List(obj({ from: c.Id, to: c.Id, via: Str, contractPath: MaybeStr })),
   files: List(
-    obj({ path: Str, kind: Str, format: Str, status: fileStatus, commit: Nullable(c.Sha), itemCount: c.Count, error: MaybeStr }),
+    obj({ path: Str, kind: Str, format: Str, status: fileStatus, commit: Nullable(c.Sha), itemCount: c.Count, error: MaybeStr, raw: Opt(MaybeStr), sourceCommit: Opt(Nullable(c.Sha)) }),
   ),
   versions: List(obj({ v: c.PositiveInt4, at: c.Timestamp, by: Str, note: Str, breaking: Type.Boolean() })),
 };
@@ -1195,6 +1223,7 @@ export const IfaceContent = Nullable(
     }),
     obj({
       type: AnyOf('message'), auth: Str, messages: List(obj({ name: Str, direction: Str, schema: Str })), rules: List(Str),
+      decisionKeys: Opt(List(Type.String({ pattern: '^TD-[0-9]{2,}$' }), { maxItems: 256 })),
       topic: Nullable(
         obj({ key: Str, partitions: Str, retention: Str, delivery: Str, dlq: Str, compat: Str, consumers: List(Str) }),
       ),

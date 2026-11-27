@@ -12,9 +12,9 @@ const settingVersion = { updatedAt: Nullable(c.Timestamp) };
 const jobCreated = { 202: Type.Object({ jobId: c.Id }) };
 
 /** GET·PUT 쌍. 응답은 저장값 + updatedAt */
-const setting = <const Name extends string, T extends TProperties, W extends TProperties = Record<never, never>, R extends TProperties = Record<never, never>>(
+const setting = <const Name extends string, const Path extends string, T extends TProperties, W extends TProperties = Record<never, never>, R extends TProperties = Record<never, never>>(
   name: Name,
-  path: string,
+  path: Path,
   summary: string,
   fields: T,
   extra: { write?: W; read?: R } = {},
@@ -227,6 +227,8 @@ const Recipient = Type.Object(
     name: Type.String(),
     ...subscription,
     active: Type.Boolean(),
+    // M6-03: 등록 시각(P 받는 사람 표 「등록 2026-10-27 09:50」)
+    createdAt: c.Timestamp,
     updatedAt: c.Timestamp,
   },
   { title: 'Recipient' },
@@ -234,7 +236,13 @@ const Recipient = Type.Object(
 const MailLog = Type.Object(
   {
     id: c.Id,
+    // M6-03: 발송 표시 번호(P ML-0001). 「다시 보내기 (ML-0001)」 사유가 가리킨다.
+    logKey: Type.String(),
     reportId: c.Id,
+    // M6-03: 보고서 표시 번호(RPT-…)·PDF 첨부 여부·아직 해소되지 않은 실패인지(같은 보고서·같은 사람의 마지막 발송이 실패)
+    reportKey: Type.String(),
+    pdf: Type.Boolean(),
+    pending: Type.Boolean(),
     recipientId: Nullable(c.Id),
     to: Type.String(),
     subject: Type.String(),
@@ -257,7 +265,11 @@ const mail = [
     path: '/api/settings/mail/smtp',
     summary: 'SMTP 설정(비밀번호는 pwSet만)',
     responses: {
-      200: Type.Object({ ...smtp, host: Type.String(), from: Type.String(), pwSet: Type.Boolean(), ...settingVersion }),
+      200: Type.Object({
+        ...smtp, host: Type.String(), from: Type.String(), pwSet: Type.Boolean(), ...settingVersion,
+        // M6-03: 마지막 연결 확인 결과(화면의 정상/실패 표시·실패 배너). 확인 전이거나 설정을 바꾼 뒤면 null
+        check: Nullable(Type.Object({ ok: Type.Boolean(), checkedAt: c.Timestamp, error: Nullable(Type.String()) })),
+      }),
     },
   }),
   operation({
@@ -267,7 +279,7 @@ const mail = [
     path: '/api/settings/mail/smtp',
     summary: 'SMTP 저장. password는 교체할 때만',
     body: Body({ ...settingVersion, ...smtp, password: Opt(c.SecretInput) }),
-    responses: { 200: Type.Object({ ...smtp, pwSet: Type.Boolean(), ...settingVersion }) },
+    responses: { 200: Type.Object({ ...smtp, pwSet: Type.Boolean(), ...settingVersion, check: Nullable(Type.Object({ ok: Type.Boolean(), checkedAt: c.Timestamp, error: Nullable(Type.String()) })) }) },
   }),
   operation({
     ...noVersion,
@@ -418,12 +430,18 @@ const NotifyRules = {
   buildOk: Type.Boolean(),
   buildFail: Type.Boolean(),
 };
+// 전송 이력의 이벤트: 규칙 6종 + serviceDown(M7-03 결정 11, 규칙과 무관하게 보내는 「서비스 없음」). M6·M7 통합.
+const NotifyLogEvent = AnyOf('done', 'fail', 'admin', 'approve', 'buildOk', 'buildFail', 'serviceDown');
 const notifyLog = {
   id: c.Id,
   at: c.Timestamp,
   kind: AnyOf('biz', 'test'),
-  event: Nullable(NotifyEvent),
+  event: Nullable(NotifyLogEvent),
   target: Type.String(),
+  projectName: Opt(Type.String()),
+  targetName: Opt(Type.String()),
+  chatId: Opt(c.ChatId),
+  path: Opt(Type.String({ pattern: '^/' })),
   // unknown은 화면에서 「실패 — 수락 여부 불명」(data-model §3.7)
   state: AnyOf('queued', 'sending', 'accepted', 'retry_wait', 'failed', 'unknown'),
   attempts: c.Count,
@@ -438,6 +456,7 @@ const notify = [
     method: 'GET',
     path: '/api/notify/telegram',
     summary: '연결 설정(토큰은 끝 4자리만)',
+    query: Type.Object({ testId: Opt(c.Uuid) }),
     responses: { 200: TelegramSettings },
   }),
   operation({
@@ -485,7 +504,7 @@ const notify = [
     path: '/api/notify/telegram/test',
     summary: '테스트 알림(저장 전 값으로 발송)',
     body: Body({ ...TOKEN_OPTIONAL, chatId: c.ChatId, targetName: Type.String() }),
-    responses: { 200: Type.Object(telegramResult) },
+    responses: { 200: Type.Object({ ...telegramResult, testId: Opt(c.Id) }) },
   }),
   ...setting('NotifyRules', '/api/projects/:projectId/notify/rules', '알림 규칙 6종', NotifyRules),
   operation({

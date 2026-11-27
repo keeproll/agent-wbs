@@ -87,7 +87,7 @@ export async function completeMergedTask(client: PoolClient, taskKey: string, ba
   await client.query("update tasks set status='done',act_end=greatest(coalesce(act_start,clock_timestamp()),clock_timestamp()) where id=$1", [task.id]);
   await repo.historyEvent(task,'완료',{ mergeSha:queue?.actual_merge_sha });
   deferChange(client,task.project_id,'task',{ taskKey });
-  await client.query("insert into notify_events(project_id,dedup_key,kind,ref) select $1,$2,'done',$3 where exists(select 1 from notify_rules where key='done' and enabled) and exists(select 1 from notify_settings where singleton and enabled) on conflict do nothing", [task.project_id,`done:${task.id}`,{ taskKey }]);
+  // 완료 알림(done)은 tasks 상태 전이 트리거(M6-04 awbs_notify_transition)가 같은 트랜잭션에서 만든다. 여기서 또 넣으면 두 번 쌓인다(M6 통합).
   for (const table of ['alerts','notify_events']) await client.query(`update ${table} set resolved_at=clock_timestamp() where project_id=$1 and ${table === 'alerts' ? 'key' : 'dedup_key'} like 'ci:gateUnmetAfterMerge|%' and ${table === 'alerts' ? 'target' : 'ref'}->>'taskKey'=$2 and resolved_at is null`,[task.project_id,taskKey]);
   deferChange(client,task.project_id,'notify',{ taskKey });
   deferChange(client,task.project_id,'alert',{ taskKey });

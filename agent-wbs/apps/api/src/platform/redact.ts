@@ -5,6 +5,7 @@ export function redactText(value: string): string {
   return value
     .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, `$1 ${MASK}`)
     .replace(/\/bot[^/\s"']+/g, `/bot${MASK}`)
+    .replace(/\b[0-9]{6,12}:[A-Za-z0-9_-]{20,}/g, MASK)
     .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, `$1${MASK}@`)
     .replace(/([?&#](?:[\w-]*(?:token|password|secret)|api_?key)=)[^&\s"']+/gi, `$1${MASK}`)
     .replace(/("[\w-]*(?:authorization|cookie|password|passwd|secret|token|api[-_]?key|private[-_]?key)"\s*:\s*)"(?:[^"\\]|\\.)*"/gi, `$1"${MASK}"`)

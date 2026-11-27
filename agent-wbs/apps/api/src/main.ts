@@ -7,6 +7,7 @@ import { installRunner } from './runner/routes.ts';
 import { startChangePruner } from './changes/events.ts';
 import { registerRunnerMessageRoutes } from './messages/routes.ts';
 import { installProjectRunner } from './project/runner-routes.ts';
+import { startNotifyWorker } from './notify/worker.ts';
 import { installCiRunner } from './ci/routes.ts';
 import { startCompletionRecheck } from './execution/recheck.ts';
 
@@ -22,6 +23,7 @@ installRunner(app, pool);
 registerRunnerMessageRoutes(app);
 const stopPruner = startChangePruner(pool, (error) => { app.log.error({ err: error }, '변경 이벤트 보존 정리 실패'); });
 installProjectRunner(app, pool);
+const stopNotify = startNotifyWorker(pool, error => { app.log.error({ err: error }, 'Telegram 대기열 처리 실패'); });
 installCiRunner(app);
 const stopCompletionRecheck = startCompletionRecheck(pool,error => { app.log.error({ err:error },'병합 뒤 Gate 재평가 실패'); });
 
@@ -30,6 +32,7 @@ let stopping: Promise<void> | undefined;
 const shutdown = (): Promise<void> =>
   (stopping ??= (async () => {
     stopPruner();
+    await stopNotify();
     await stopCompletionRecheck();
     await app.close();
     await pool.end();

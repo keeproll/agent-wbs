@@ -2,7 +2,7 @@ import type { PoolClient } from '@awbs/db';
 import { execPolicyToApi } from '@awbs/db';
 import {
   claimReasons, startAttempt, resolveRunGrade, roleOf, effortLevel, floorOf, recommendedCaps, effectiveCaps,
-  sumHolds, heldSlots, memoryPressure, attemptPolicyCounts, DEFAULT_EXEC_POLICY, DEFAULT_MEM_RESERVE_GB,
+  sumHolds, heldSlots, memoryPressure, attemptPolicyCounts, taskBranch, DEFAULT_EXEC_POLICY, DEFAULT_MEM_RESERVE_GB,
   type AttemptKind, type Agent, type Caps, type ClaimInput, type Catalog, type ExecPolicy,
 } from '@awbs/shared';
 import { gradeAdjust } from '@awbs/shared/api';
@@ -122,10 +122,14 @@ export function externalWriteAllowed(authority: {state:string;host_id:string;gen
   return Boolean(authority && authority.state==='granted' && authority.host_id===host && generation===authority.generation);
 }
 
-export async function assertExternal(repo: RunnerRepository, job: Job) {
+/**
+ * job이 없으면(설계 계약 반영처럼 job을 만들기 전의 사전 확인, M6-05) 세대 대조 없이 권한·host만 본다.
+ * 왜: 아직 만들지 않은 job은 세대가 없다. 만들 job은 지금 세대로 들어가므로 지금 세대와 같다고 본다(M6 통합 병합).
+ */
+export async function assertExternal(repo: RunnerRepository, job?: Pick<Job, 'generation'>) {
   const authority = await repo.authority();
   const host = await repo.host();
-  if (!externalWriteAllowed(authority,host?.host_id,job.generation)) throw new PlatformError('EXTERNAL_WRITE_BLOCKED', { generation: authority?.generation });
+  if (!externalWriteAllowed(authority,host?.host_id,job ? job.generation : authority?.generation)) throw new PlatformError('EXTERNAL_WRITE_BLOCKED', { generation: authority?.generation });
 }
 
 export async function checkedJob(repo: RunnerRepository, id: string, fence: number, principal: string, reconcile = false) {
@@ -219,7 +223,7 @@ async function attemptPayload(repo: RunnerRepository, task: Task, kind: AttemptK
   if (!spec) rejection(['Task 명세가 필요합니다.']);
   const prev = previous(await repo.history(task.id));
   const agent = roleOf(kind) === 'dev' ? task.assignee_agent : task.verifier_agent;
-  return { taskKey: task.task_key, kind, agent, branch: `agent/${task.task_key}-h${authority?.generation ?? 1}`,
+  return { taskKey: task.task_key, kind, agent, branch: taskBranch(task.task_key, authority?.generation ?? 1),
     baseCommit: input?.commit_sha ?? prev?.head_sha, inputVersion: input?.v ?? 1, instructions: { ...spec },
     evidenceInvalidated:task.status === 'verifying' && prev?.verification_disposition === 'stale',...extra };
 }
@@ -278,7 +282,7 @@ export async function retryFailedAttempt(client: PoolClient, attemptId: string) 
   if (count <= (await repo.policy()).auto_retry_limit) return handover(client, a.job, a.kind, a.id, { automaticCause: job?.payload.automaticCause });
   if (job && !['done','failed','cancelled'].includes(job.state)) await repo.state(job.id, 'failed');
   if (hold?.slot_state === 'none' && !hold.closed_at) await repo.release(hold, required(hold.release_proof), true);
-  await repo.alert(task.project_id, `retry:${a.id}`, '실행 실패의 자동 재시도 한도를 넘었습니다.', { taskKey: task.task_key, attemptId }, 'fail');
+  await repo.alert(task.project_id, `retry:${a.id}`, '실행 실패의 자동 재시도 한도를 넘었습니다.', { taskKey: task.task_key, attemptId });
   return null;
 }
 

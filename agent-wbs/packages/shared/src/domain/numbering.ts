@@ -19,7 +19,18 @@ export function wbsNumbers(phases: readonly Phase[]) {
   return { task, wp, phase };
 }
 
-const KEY_WIDTHS = { TASK: 4, CP: 3, RP: 3, CI: 4, TD: 2 } as const;
+const KEY_WIDTHS = { TASK: 4, CP: 3, RP: 3, CI: 4, TD: 2, DR: 2 } as const;
+export const TASK_KEY_PATTERN = '^TASK-[0-9]{4,}$';
+export const TASK_BRANCH_PATTERN = `^agent/${TASK_KEY_PATTERN.slice(1, -1)}(?:-h[0-9]+)?$`;
+export const DESIGN_REF_PATTERN = `^(?:main|${TASK_BRANCH_PATTERN.slice(1, -1)})$`;
+
+/** 생성과 검증이 같은 이름 규칙을 쓴다. -hN은 외부 쓰기 권한 세대 번호다. */
+export function taskBranch(taskKey: string, generation?: number): string {
+  if (!new RegExp(TASK_KEY_PATTERN).test(taskKey) || generation !== undefined && (!Number.isSafeInteger(generation) || generation < 0)) {
+    throw new DomainError('VALIDATION_FAILED', 'Task 브랜치 이름을 만들 수 없습니다.');
+  }
+  return `agent/${taskKey}${generation === undefined ? '' : `-h${String(generation)}`}`;
+}
 
 // Sequence allocation and non-reuse belong to the database transaction, not array length.
 export function displayKey(kind: keyof typeof KEY_WIDTHS, sequence: number): string {
@@ -30,7 +41,7 @@ export function displayKey(kind: keyof typeof KEY_WIDTHS, sequence: number): str
 }
 
 export function attemptKey(taskKey: string, sequence: number): string {
-  if (!/^TASK-\d{4,}$/.test(taskKey)) {
+  if (!new RegExp(TASK_KEY_PATTERN).test(taskKey)) {
     throw new DomainError('VALIDATION_FAILED', 'Task 표시 ID 형식이 올바르지 않습니다.');
   }
   displayKey('TASK', sequence);

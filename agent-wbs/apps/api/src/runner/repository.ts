@@ -1,5 +1,7 @@
+import { repeatFailure } from '../notify/events.ts';
+import { deferChange } from '../changes/events.ts';
 import type { PoolClient, schema, ExecPolicyRow } from '@awbs/db';
-import { attemptKey, placeModel, modelRanks, type ModelSettings, type Agent, type AttemptKind } from '@awbs/shared';
+import { attemptKey, placeModel, modelRanks, taskBranch, type ModelSettings, type Agent, type AttemptKind } from '@awbs/shared';
 import assert from 'node:assert/strict';
 import { syncPlanningJob } from '../project/jobs.ts';
 
@@ -84,13 +86,24 @@ export class RunnerRepository {
   }
   async openJob(taskKey: string) { return (await this.client.query<Job>("select * from runner_jobs where kind='attempt' and payload->>'taskKey'=$1 and state in ('queued','leased','started','reconcile') limit 1", [taskKey])).rows[0]; }
   async lease(job: Job, owner: string, generation: number | null) {
-    return required((await this.client.query<Job>(`update runner_jobs set state='leased',lease_owner=$2,lease_until=clock_timestamp()+interval '60 seconds',fence=fence+1,attempts=attempts+1,generation=$3::int,
-      payload=case when kind='attempt' then payload||jsonb_build_object('branch','agent/'||(payload->>'taskKey')||'-h'||$3::text) else payload end where id=$1 returning *`, [job.id, owner, generation])).rows[0]);
+    const leased = required((await this.client.query<Job>(`update runner_jobs set state='leased',lease_owner=$2,lease_until=clock_timestamp()+interval '60 seconds',fence=fence+1,attempts=attempts+1,generation=$3::int,
+      payload=case when kind='attempt' then payload||jsonb_build_object('branch',$4::text) else payload end where id=$1 returning *`, [job.id, owner, generation, job.kind === 'attempt' ? taskBranch(String(job.payload.taskKey), generation ?? 1) : null])).rows[0]);
+    this.designJobChanged(leased);
+    return leased;
   }
   async renew(job: string) { return required((await this.client.query<{ lease_until: Date }>("update runner_jobs set lease_until=clock_timestamp()+interval '60 seconds' where id=$1 returning lease_until", [job])).rows[0]).lease_until; }
   async state(job: string, state: string, error?: { code: string; message: string }) {
-    await this.client.query('update runner_jobs set state=$2 where id=$1', [job, state]);
+    const row = (await this.client.query<Pick<Job, 'id' | 'project_id' | 'kind'>>('update runner_jobs set state=$2 where id=$1 returning id,project_id,kind', [job, state])).rows[0];
     await syncPlanningJob(this.client, job, state, error);
+    if (row) this.designJobChanged(row);
+  }
+  /**
+   * 계약 반영 job(design_apply)의 상태가 바뀌면 설계 화면에 알린다(M6 통합, M6-07 남은 연결).
+   * 왜: 화면의 반영 job 상태(queued·running·done·failed)는 불일치 응답의 jobStatus로 보인다. 이벤트가 없으면 화면이 4초 다시 읽기에만 기대게 된다.
+   * 이벤트는 그 트랜잭션이 커밋될 때 함께 나간다(deferChange). 되돌리면 버려진다.
+   */
+  private designJobChanged(job: Pick<Job, 'id' | 'project_id' | 'kind'>) {
+    if (job.kind === 'design_apply' && job.project_id) deferChange(this.client, job.project_id, 'design', { id: job.id });
   }
   async reserve(job: Job, host: string, boot: string, agent: string, slots: number, heavy: boolean, task?: Task) {
     const existing = await this.hold(job.id);
@@ -159,7 +172,11 @@ export class RunnerRepository {
     else await this.client.query("insert into external_write_authority(singleton,host_id,generation,state) values(true,$1,1,'granted') on conflict do nothing", [host]);
   }
   async saveReadiness(at: string, items: { key: string; status: string; detail: string; fix?: string }[]) {
-    for (const item of items) await this.client.query('insert into runner_readiness(key,status,detail,fix,at) values($1,$2,$3,$4,$5) on conflict(key) do update set status=excluded.status,detail=excluded.detail,fix=excluded.fix,at=excluded.at where runner_readiness.at<=excluded.at', [item.key,item.status,item.detail,item.fix ?? '',at]);
+    for (const item of items) {
+      const previous = (await this.client.query<{ status: string }>('select status from runner_readiness where key=$1', [item.key])).rows[0];
+      const written = await this.client.query('insert into runner_readiness(key,status,detail,fix,at) values($1,$2,$3,$4,$5) on conflict(key) do update set status=excluded.status,detail=excluded.detail,fix=excluded.fix,at=excluded.at where runner_readiness.at<=excluded.at', [item.key,item.status,item.detail,item.fix ?? '',at]);
+      if (written.rowCount && previous?.status === 'fail' && item.status === 'fail') await repeatFailure(this.client, `admin|ready|${item.key}`);
+    }
   }
   async saveModels(agent: Agent, models: { id: string; label: string; efforts: string[] | null }[]) {
     const added: string[] = [];
@@ -204,8 +221,8 @@ export class RunnerRepository {
   async reportStatus(a: Attempt, model: string, effort: string, adjust: object | null) {
     await this.client.query('update task_attempts set model_id=$2,effort=$3,grade_adjust=$4 where id=$1', [a.id,model,effort,adjust]);
   }
-  async alert(project: string | null, key: string, message: string, target: object = {}, kind = 'admin') {
-    await this.client.query("insert into alerts(project_id,key,severity,target) values($1,$2,'warn',$3) on conflict do nothing", [project,key,{ ...target, message }]);
-    await this.client.query('insert into notify_events(project_id,dedup_key,kind,ref) values($1,$2,$3,$4) on conflict do nothing', [project,key,kind,{ ...target, message }]);
+  async alert(project: string | null, key: string, message: string, target: object = {}) {
+    const written = await this.client.query("insert into alerts(project_id,key,severity,target) values($1,$2,'warn',$3) on conflict do nothing", [project,key,{ ...target, message }]);
+    if (!written.rowCount && key.startsWith('retry:')) await repeatFailure(this.client, `fail|retry|${key.slice(6)}`);
   }
 }

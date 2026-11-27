@@ -17,9 +17,11 @@ import { LoginPage } from '../features/auth/LoginPage.tsx';
 import { CiPage } from '../features/ci/CiPage.tsx';
 import { ChangePage } from '../features/change/ChangePage.tsx';
 import { DashboardPage } from '../features/dashboard/DashboardPage.tsx';
+import { DesignPage } from '../features/design/DesignPage.tsx';
 import { ExecPage } from '../features/exec/ExecPage.tsx';
 import { HistoryPage } from '../features/history/HistoryPage.tsx';
 import { PlanningPage } from '../features/planning/PlanningPage.tsx';
+import { ReportPage } from '../features/report/ReportPage.tsx';
 import { ProjectPage } from '../features/project/ProjectPage.tsx';
 import { SettingsPage } from '../features/settings/SettingsPage.tsx';
 import { VerifyPage } from '../features/verify/VerifyPage.tsx';
@@ -41,11 +43,13 @@ const SCREENS: Partial<Record<MenuKey, ComponentType>> = {
   dashboard: DashboardPage, // M3-07
   project: ProjectPage, // M3-04
   wbs: WbsPage, // M3-02(+ M3-03 상세)
+  design: DesignPage, // M6-07(탭·항목은 ?tab=&sel=)
   planning: PlanningPage, // M3-05
   exec: ExecPage, // M3-06
   verify: VerifyPage, // M3-07
   change: ChangePage, // M3-05
   history: HistoryPage, // M3-07
+  report: ReportPage, // M6-01
   ci: CiPage, // M7-05(/ci/:runId는 실행 상세)
   settings: SettingsPage, // M3-08(/settings는 기본 Runner 탭)
 };
@@ -70,6 +74,7 @@ const DETAIL: Partial<Record<MenuKey, string>> = {
   change: '/change/:cpRef', // M3-05 알림 링크로 여는 CP 상세(CP 키 또는 id)
   ci: '/ci/:runId', // M7-05 알림 링크로 여는 CI 실행 상세(서버 path `/ci/<id>`)
   settings: '/settings/:tab', // G§4.9 설정 탭
+  report: '/report/:reportId', // M6-01 보고서 하나(메일 발송 기록의 보고서 링크)
 };
 
 function menuRoutes(key: MenuKey): RouteObject[] {

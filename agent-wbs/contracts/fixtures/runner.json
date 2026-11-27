@@ -552,6 +552,7 @@
    "jobId": "job-1",
    "fence": 3,
    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "ref": "main",
    "files": [
     {
      "path": "contracts/api/openapi.yaml",

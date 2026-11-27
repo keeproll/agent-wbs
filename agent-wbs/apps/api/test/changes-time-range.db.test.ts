@@ -31,6 +31,8 @@ async function baseBody(op: Operation): Promise<Record<string, unknown>> {
   if (op.method === 'PUT' && get) {
     const current = (await h.lead('GET', op.path)).body as Record<string, unknown>;
     const base = Object.fromEntries(Object.entries(current).filter(([k]) => k in props(op.body)));
+    if (op.id === 'putTelegram') return { ...base, chatId: '512345678', targetName: '시각 검증' };
+    if (op.id === 'putNotifyRules') return { done: false, fail: true, admin: true, approve: true, buildOk: false, buildFail: true };
     return op.id === 'putSubagentSettings' ? { ...base, allowed: [] } : base;
   }
   if (op.path.startsWith('/api/messages/:messageId')) {
@@ -66,6 +68,12 @@ const EXTRA_BODY: Record<string, Record<string, unknown>> = {
   addSplitException: { rule: 'one', why: 'x' },
   updateTaskOutputs: { outputs: [] },
   updateTaskDesign: { content: {} },
+  // M6-01: 기간 지정 보고서. 한 칸만 틀리게 바꾸고 나머지는 맞는 값이어야 오류 위치를 검사할 수 있다.
+  createReport: { from: '2026-11-01', to: '2026-11-02', view: 'int' },
+  // M6-03: 받는 사람 변경은 계약상 updatedAt 말고 바꿀 칸이 하나 이상 있어야 한다(minProperties 2).
+  updateRecipient: { daily: true },
+  // M6 통합: M6-05 resolveDrift는 how가 필수다(M6-01·M6-03과 같은 방식으로 기본 본문을 준다).
+  resolveDrift: { how: 'contract' },
   updateFlakyTest: { quarantined: false },
   updateCiSettings: { retry: 1 },
 };

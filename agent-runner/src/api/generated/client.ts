@@ -331,6 +331,15 @@ export type Decision = {
   updatedAt: Timestamp;
   constraintId?: Id | null;
   conditionResult?: "met" | "not_met" | null;
+  itemKey?: string;
+  driftId?: Id;
+  change?: {
+    choice: string;
+    reason: string;
+    previousStatus: "fixed" | "approved";
+    itemKey?: string;
+    driftId?: Id;
+  };
 };
 
 export type DepType = "FS" | "SS";
@@ -926,6 +935,17 @@ export interface Operations {
         choice: string;
         reason: string;
         alternatives: string;
+      } | {
+        jobId: Id;
+        fence: number;
+        authority: "agent" | "free";
+        area: string;
+        title: string;
+        choice: string;
+        reason: string;
+        alternatives: string;
+        itemKey: string;
+        driftId: Id;
       };
       epoch: number;
       idempotencyKey: string;
@@ -1656,18 +1676,313 @@ export interface Operations {
         jobId: Id;
         fence: number;
         commit: Sha;
+        ref: string;
         files: ({
-          path: RepoPath;
+          path: RepoPath & string;
           kind: string;
           format: string;
-          status: "ok" | "draft" | "error";
+          raw?: string;
+          status: "ok" | "draft";
           error?: string;
+        } | {
+          path: RepoPath & string;
+          kind: string;
+          format: string;
+          raw?: string;
+          status: "error";
+          error: string;
         })[];
         items: ({
           itemKey: string;
-          kind: string;
-          path: RepoPath;
-          content: Record<string, unknown>;
+          kind: "REST";
+          path: RepoPath & string;
+          name?: string;
+          taskKey?: TaskKey;
+          description?: string | null;
+          content: Record<string, unknown> | {
+            type: "REST";
+            auth: string;
+            request: string;
+            response: string;
+            validation: (string)[];
+            errors: ({
+              code: string;
+              http: string;
+              cond: string;
+            })[];
+            tables: (string)[];
+          };
+          contract?: {
+            fields: ({
+              path: string;
+              type: string;
+              required: boolean;
+            })[];
+          };
+          extracted?: {
+            fields: ({
+              path: string;
+              type: string;
+              required: boolean;
+            })[];
+          } | null;
+        } | {
+          itemKey: string;
+          kind: "WebSocket";
+          path: RepoPath & string;
+          name?: string;
+          taskKey?: TaskKey;
+          description?: string | null;
+          content: Record<string, unknown> | {
+            type: "message";
+            auth: string;
+            messages: ({
+              name: string;
+              direction: string;
+              schema: string;
+            })[];
+            rules: (string)[];
+            decisionKeys?: (string)[];
+            topic: {
+              key: string;
+              partitions: string;
+              retention: string;
+              delivery: string;
+              dlq: string;
+              compat: string;
+              consumers: (string)[];
+            } | null;
+          };
+          contract?: {
+            fields: ({
+              path: string;
+              type: string;
+              required: boolean;
+            })[];
+          };
+          extracted?: {
+            fields: ({
+              path: string;
+              type: string;
+              required: boolean;
+            })[];
+          } | null;
+        } | {
+          itemKey: string;
+          kind: "SSE";
+          path: RepoPath & string;
+          name?: string;
+          taskKey?: TaskKey;
+          description?: string | null;
+          content: Record<string, unknown> | {
+            type: "message";
+            auth: string;
+            messages: ({
+              name: string;
+              direction: string;
+              schema: string;
+            })[];
+            rules: (string)[];
+            decisionKeys?: (string)[];
+            topic: {
+              key: string;
+              partitions: string;
+              retention: string;
+              delivery: string;
+              dlq: string;
+              compat: string;
+              consumers: (string)[];
+            } | null;
+          };
+          contract?: {
+            fields: ({
+              path: string;
+              type: string;
+              required: boolean;
+            })[];
+          };
+          extracted?: {
+            fields: ({
+              path: string;
+              type: string;
+              required: boolean;
+            })[];
+          } | null;
+        } | {
+          itemKey: string;
+          kind: "Kafka";
+          path: RepoPath & string;
+          name?: string;
+          taskKey?: TaskKey;
+          description?: string | null;
+          content: Record<string, unknown> | {
+            type: "message";
+            auth: string;
+            messages: ({
+              name: string;
+              direction: string;
+              schema: string;
+            })[];
+            rules: (string)[];
+            decisionKeys?: (string)[];
+            topic: {
+              key: string;
+              partitions: string;
+              retention: string;
+              delivery: string;
+              dlq: string;
+              compat: string;
+              consumers: (string)[];
+            } | null;
+          };
+          contract?: {
+            fields: ({
+              path: string;
+              type: string;
+              required: boolean;
+            })[];
+          };
+          extracted?: {
+            fields: ({
+              path: string;
+              type: string;
+              required: boolean;
+            })[];
+          } | null;
+        } | {
+          itemKey: string;
+          kind: "postgres";
+          path: RepoPath & string;
+          name?: string;
+          taskKey?: TaskKey;
+          description?: string | null;
+          content: Record<string, unknown> | {
+            type: "postgres";
+            columns: ({
+              name: string;
+              type: string;
+              nullable: boolean;
+              pk: boolean;
+              unique: boolean;
+              fk: string | null;
+              default: string | null;
+              desc: string;
+            })[];
+            constraints: (string)[];
+            indexes: ({
+              name: string;
+              columns: string;
+              kind: string;
+            })[];
+            usedBy: (string)[];
+          };
+          contract?: {
+            fields: ({
+              path: string;
+              type: string;
+              required: boolean;
+            })[];
+          };
+          extracted?: {
+            fields: ({
+              path: string;
+              type: string;
+              required: boolean;
+            })[];
+          } | null;
+        } | {
+          itemKey: string;
+          kind: "neo4j";
+          path: RepoPath & string;
+          name?: string;
+          taskKey?: TaskKey;
+          description?: string | null;
+          content: Record<string, unknown> | {
+            type: "neo4j-label";
+            props: string;
+            note: string;
+            constraints: (string)[];
+          } | {
+            type: "neo4j-relation";
+            from: string;
+            to: string;
+            props: string;
+          };
+          contract?: {
+            fields: ({
+              path: string;
+              type: string;
+              required: boolean;
+            })[];
+          };
+          extracted?: {
+            fields: ({
+              path: string;
+              type: string;
+              required: boolean;
+            })[];
+          } | null;
+        } | {
+          itemKey: string;
+          kind: "questdb";
+          path: RepoPath & string;
+          name?: string;
+          taskKey?: TaskKey;
+          description?: string | null;
+          content: Record<string, unknown> | {
+            type: "questdb";
+            timestamp: string;
+            partition: string;
+            retention: string;
+            dedup: string;
+            symbols: string;
+            columns: string;
+            ingest: string;
+            aggregation: string;
+          };
+          contract?: {
+            fields: ({
+              path: string;
+              type: string;
+              required: boolean;
+            })[];
+          };
+          extracted?: {
+            fields: ({
+              path: string;
+              type: string;
+              required: boolean;
+            })[];
+          } | null;
+        } | {
+          itemKey: string;
+          kind: "redis";
+          path: RepoPath & string;
+          name?: string;
+          taskKey?: TaskKey;
+          description?: string | null;
+          content: Record<string, unknown> | {
+            type: "redis";
+            use: string;
+            value: string;
+            ttl: string;
+            invalidation: string;
+            persistence: string;
+          };
+          contract?: {
+            fields: ({
+              path: string;
+              type: string;
+              required: boolean;
+            })[];
+          };
+          extracted?: {
+            fields: ({
+              path: string;
+              type: string;
+              required: boolean;
+            })[];
+          } | null;
         })[];
         drifts: ({
           itemKey: string;
@@ -1676,6 +1991,32 @@ export interface Operations {
           text: string;
           taskKey?: TaskKey;
           compat: "compatible" | "breaking" | "unchecked";
+        })[];
+        edges?: ({
+          from: string;
+          to: string;
+          kind: string;
+        })[];
+        ownership?: ({
+          data: string;
+          source: string;
+          copy: string;
+          sync: string;
+          lag: string;
+        })[];
+        components?: ({
+          id: Id;
+          layer: string;
+          name: string;
+          tech: string;
+          note: string;
+          decisionId: Id | null;
+        })[];
+        links?: ({
+          from: Id;
+          to: Id;
+          via: string;
+          contractPath: string | null;
         })[];
       };
       epoch: number;
@@ -2584,3 +2925,2162 @@ export const OPERATIONS = {
   submitProposalJudgements: { method: 'POST', path: '/api/planning/proposals/{id}/judgements', content: 'json', statuses: { 204: false } },
   submitTaskPlan: { method: 'POST', path: '/api/planning/tasks/{taskKey}/plan', content: 'json', statuses: { 204: false } },
 } as const satisfies Record<keyof Operations, unknown>;
+
+export const DESIGN_SNAPSHOT_SCHEMA = {
+  "type": "object",
+  "required": [
+    "jobId",
+    "fence",
+    "commit",
+    "ref",
+    "files",
+    "items",
+    "drifts"
+  ],
+  "properties": {
+    "jobId": {
+      "$ref": "#/components/schemas/Id"
+    },
+    "fence": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2147483647
+    },
+    "commit": {
+      "$ref": "#/components/schemas/Sha"
+    },
+    "ref": {
+      "type": "string",
+      "pattern": "^(?:main|agent/TASK-[0-9]{4,}(?:-h[0-9]+)?)$",
+      "maxLength": 1024
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "type": "object",
+            "required": [
+              "path",
+              "kind",
+              "format",
+              "status"
+            ],
+            "properties": {
+              "path": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/RepoPath"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^contracts/",
+                    "maxLength": 1024
+                  }
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S",
+                "maxLength": 128
+              },
+              "format": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S",
+                "maxLength": 128
+              },
+              "raw": {
+                "type": "string",
+                "maxLength": 262144
+              },
+              "status": {
+                "enum": [
+                  "ok",
+                  "draft"
+                ]
+              },
+              "error": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S",
+                "maxLength": 4096
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "path",
+              "kind",
+              "format",
+              "status",
+              "error"
+            ],
+            "properties": {
+              "path": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/RepoPath"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^contracts/",
+                    "maxLength": 1024
+                  }
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S",
+                "maxLength": 128
+              },
+              "format": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S",
+                "maxLength": 128
+              },
+              "raw": {
+                "type": "string",
+                "maxLength": 262144
+              },
+              "status": {
+                "enum": [
+                  "error"
+                ]
+              },
+              "error": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S",
+                "maxLength": 4096
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "maxItems": 256
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "type": "object",
+            "required": [
+              "itemKey",
+              "kind",
+              "path",
+              "content"
+            ],
+            "properties": {
+              "itemKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "pattern": "^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) /\\S*$"
+              },
+              "kind": {
+                "enum": [
+                  "REST"
+                ]
+              },
+              "path": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/RepoPath"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^contracts/",
+                    "maxLength": 1024
+                  }
+                ]
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S",
+                "maxLength": 512
+              },
+              "taskKey": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "description": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 8192
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "content": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type",
+                      "auth",
+                      "request",
+                      "response",
+                      "validation",
+                      "errors",
+                      "tables"
+                    ],
+                    "properties": {
+                      "type": {
+                        "enum": [
+                          "REST"
+                        ]
+                      },
+                      "auth": {
+                        "type": "string"
+                      },
+                      "request": {
+                        "type": "string"
+                      },
+                      "response": {
+                        "type": "string"
+                      },
+                      "validation": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "errors": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "code",
+                            "http",
+                            "cond"
+                          ],
+                          "properties": {
+                            "code": {
+                              "type": "string"
+                            },
+                            "http": {
+                              "type": "string"
+                            },
+                            "cond": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      },
+                      "tables": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                ]
+              },
+              "contract": {
+                "type": "object",
+                "required": [
+                  "fields"
+                ],
+                "properties": {
+                  "fields": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "path",
+                        "type",
+                        "required"
+                      ],
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "pattern": "^/",
+                          "maxLength": 4096
+                        },
+                        "type": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S",
+                          "maxLength": 4096
+                        },
+                        "required": {
+                          "type": "boolean"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "maxItems": 5000
+                  }
+                },
+                "additionalProperties": false
+              },
+              "extracted": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "fields"
+                    ],
+                    "properties": {
+                      "fields": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "path",
+                            "type",
+                            "required"
+                          ],
+                          "properties": {
+                            "path": {
+                              "type": "string",
+                              "pattern": "^/",
+                              "maxLength": 4096
+                            },
+                            "type": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S",
+                              "maxLength": 4096
+                            },
+                            "required": {
+                              "type": "boolean"
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "maxItems": 5000
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "itemKey",
+              "kind",
+              "path",
+              "content"
+            ],
+            "properties": {
+              "itemKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "pattern": "\\S"
+              },
+              "kind": {
+                "enum": [
+                  "WebSocket"
+                ]
+              },
+              "path": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/RepoPath"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^contracts/",
+                    "maxLength": 1024
+                  }
+                ]
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S",
+                "maxLength": 512
+              },
+              "taskKey": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "description": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 8192
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "content": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type",
+                      "auth",
+                      "messages",
+                      "rules",
+                      "topic"
+                    ],
+                    "properties": {
+                      "type": {
+                        "enum": [
+                          "message"
+                        ]
+                      },
+                      "auth": {
+                        "type": "string"
+                      },
+                      "messages": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "name",
+                            "direction",
+                            "schema"
+                          ],
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "direction": {
+                              "type": "string"
+                            },
+                            "schema": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      },
+                      "rules": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "decisionKeys": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^TD-[0-9]{2,}$"
+                        },
+                        "maxItems": 256
+                      },
+                      "topic": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "required": [
+                              "key",
+                              "partitions",
+                              "retention",
+                              "delivery",
+                              "dlq",
+                              "compat",
+                              "consumers"
+                            ],
+                            "properties": {
+                              "key": {
+                                "type": "string"
+                              },
+                              "partitions": {
+                                "type": "string"
+                              },
+                              "retention": {
+                                "type": "string"
+                              },
+                              "delivery": {
+                                "type": "string"
+                              },
+                              "dlq": {
+                                "type": "string"
+                              },
+                              "compat": {
+                                "type": "string"
+                              },
+                              "consumers": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                ]
+              },
+              "contract": {
+                "type": "object",
+                "required": [
+                  "fields"
+                ],
+                "properties": {
+                  "fields": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "path",
+                        "type",
+                        "required"
+                      ],
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "pattern": "^/",
+                          "maxLength": 4096
+                        },
+                        "type": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S",
+                          "maxLength": 4096
+                        },
+                        "required": {
+                          "type": "boolean"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "maxItems": 5000
+                  }
+                },
+                "additionalProperties": false
+              },
+              "extracted": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "fields"
+                    ],
+                    "properties": {
+                      "fields": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "path",
+                            "type",
+                            "required"
+                          ],
+                          "properties": {
+                            "path": {
+                              "type": "string",
+                              "pattern": "^/",
+                              "maxLength": 4096
+                            },
+                            "type": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S",
+                              "maxLength": 4096
+                            },
+                            "required": {
+                              "type": "boolean"
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "maxItems": 5000
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "itemKey",
+              "kind",
+              "path",
+              "content"
+            ],
+            "properties": {
+              "itemKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "pattern": "\\S"
+              },
+              "kind": {
+                "enum": [
+                  "SSE"
+                ]
+              },
+              "path": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/RepoPath"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^contracts/",
+                    "maxLength": 1024
+                  }
+                ]
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S",
+                "maxLength": 512
+              },
+              "taskKey": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "description": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 8192
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "content": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type",
+                      "auth",
+                      "messages",
+                      "rules",
+                      "topic"
+                    ],
+                    "properties": {
+                      "type": {
+                        "enum": [
+                          "message"
+                        ]
+                      },
+                      "auth": {
+                        "type": "string"
+                      },
+                      "messages": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "name",
+                            "direction",
+                            "schema"
+                          ],
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "direction": {
+                              "type": "string"
+                            },
+                            "schema": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      },
+                      "rules": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "decisionKeys": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^TD-[0-9]{2,}$"
+                        },
+                        "maxItems": 256
+                      },
+                      "topic": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "required": [
+                              "key",
+                              "partitions",
+                              "retention",
+                              "delivery",
+                              "dlq",
+                              "compat",
+                              "consumers"
+                            ],
+                            "properties": {
+                              "key": {
+                                "type": "string"
+                              },
+                              "partitions": {
+                                "type": "string"
+                              },
+                              "retention": {
+                                "type": "string"
+                              },
+                              "delivery": {
+                                "type": "string"
+                              },
+                              "dlq": {
+                                "type": "string"
+                              },
+                              "compat": {
+                                "type": "string"
+                              },
+                              "consumers": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                ]
+              },
+              "contract": {
+                "type": "object",
+                "required": [
+                  "fields"
+                ],
+                "properties": {
+                  "fields": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "path",
+                        "type",
+                        "required"
+                      ],
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "pattern": "^/",
+                          "maxLength": 4096
+                        },
+                        "type": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S",
+                          "maxLength": 4096
+                        },
+                        "required": {
+                          "type": "boolean"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "maxItems": 5000
+                  }
+                },
+                "additionalProperties": false
+              },
+              "extracted": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "fields"
+                    ],
+                    "properties": {
+                      "fields": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "path",
+                            "type",
+                            "required"
+                          ],
+                          "properties": {
+                            "path": {
+                              "type": "string",
+                              "pattern": "^/",
+                              "maxLength": 4096
+                            },
+                            "type": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S",
+                              "maxLength": 4096
+                            },
+                            "required": {
+                              "type": "boolean"
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "maxItems": 5000
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "itemKey",
+              "kind",
+              "path",
+              "content"
+            ],
+            "properties": {
+              "itemKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "pattern": "\\S"
+              },
+              "kind": {
+                "enum": [
+                  "Kafka"
+                ]
+              },
+              "path": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/RepoPath"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^contracts/",
+                    "maxLength": 1024
+                  }
+                ]
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S",
+                "maxLength": 512
+              },
+              "taskKey": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "description": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 8192
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "content": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type",
+                      "auth",
+                      "messages",
+                      "rules",
+                      "topic"
+                    ],
+                    "properties": {
+                      "type": {
+                        "enum": [
+                          "message"
+                        ]
+                      },
+                      "auth": {
+                        "type": "string"
+                      },
+                      "messages": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "name",
+                            "direction",
+                            "schema"
+                          ],
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "direction": {
+                              "type": "string"
+                            },
+                            "schema": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      },
+                      "rules": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "decisionKeys": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^TD-[0-9]{2,}$"
+                        },
+                        "maxItems": 256
+                      },
+                      "topic": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "required": [
+                              "key",
+                              "partitions",
+                              "retention",
+                              "delivery",
+                              "dlq",
+                              "compat",
+                              "consumers"
+                            ],
+                            "properties": {
+                              "key": {
+                                "type": "string"
+                              },
+                              "partitions": {
+                                "type": "string"
+                              },
+                              "retention": {
+                                "type": "string"
+                              },
+                              "delivery": {
+                                "type": "string"
+                              },
+                              "dlq": {
+                                "type": "string"
+                              },
+                              "compat": {
+                                "type": "string"
+                              },
+                              "consumers": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                ]
+              },
+              "contract": {
+                "type": "object",
+                "required": [
+                  "fields"
+                ],
+                "properties": {
+                  "fields": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "path",
+                        "type",
+                        "required"
+                      ],
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "pattern": "^/",
+                          "maxLength": 4096
+                        },
+                        "type": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S",
+                          "maxLength": 4096
+                        },
+                        "required": {
+                          "type": "boolean"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "maxItems": 5000
+                  }
+                },
+                "additionalProperties": false
+              },
+              "extracted": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "fields"
+                    ],
+                    "properties": {
+                      "fields": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "path",
+                            "type",
+                            "required"
+                          ],
+                          "properties": {
+                            "path": {
+                              "type": "string",
+                              "pattern": "^/",
+                              "maxLength": 4096
+                            },
+                            "type": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S",
+                              "maxLength": 4096
+                            },
+                            "required": {
+                              "type": "boolean"
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "maxItems": 5000
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "itemKey",
+              "kind",
+              "path",
+              "content"
+            ],
+            "properties": {
+              "itemKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "pattern": "^postgres:\\S.*$"
+              },
+              "kind": {
+                "enum": [
+                  "postgres"
+                ]
+              },
+              "path": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/RepoPath"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^contracts/",
+                    "maxLength": 1024
+                  }
+                ]
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S",
+                "maxLength": 512
+              },
+              "taskKey": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "description": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 8192
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "content": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type",
+                      "columns",
+                      "constraints",
+                      "indexes",
+                      "usedBy"
+                    ],
+                    "properties": {
+                      "type": {
+                        "enum": [
+                          "postgres"
+                        ]
+                      },
+                      "columns": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "name",
+                            "type",
+                            "nullable",
+                            "pk",
+                            "unique",
+                            "fk",
+                            "default",
+                            "desc"
+                          ],
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "type": {
+                              "type": "string"
+                            },
+                            "nullable": {
+                              "type": "boolean"
+                            },
+                            "pk": {
+                              "type": "boolean"
+                            },
+                            "unique": {
+                              "type": "boolean"
+                            },
+                            "fk": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "default": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "desc": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      },
+                      "constraints": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "indexes": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "name",
+                            "columns",
+                            "kind"
+                          ],
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "columns": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      },
+                      "usedBy": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                ]
+              },
+              "contract": {
+                "type": "object",
+                "required": [
+                  "fields"
+                ],
+                "properties": {
+                  "fields": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "path",
+                        "type",
+                        "required"
+                      ],
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "pattern": "^/",
+                          "maxLength": 4096
+                        },
+                        "type": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S",
+                          "maxLength": 4096
+                        },
+                        "required": {
+                          "type": "boolean"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "maxItems": 5000
+                  }
+                },
+                "additionalProperties": false
+              },
+              "extracted": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "fields"
+                    ],
+                    "properties": {
+                      "fields": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "path",
+                            "type",
+                            "required"
+                          ],
+                          "properties": {
+                            "path": {
+                              "type": "string",
+                              "pattern": "^/",
+                              "maxLength": 4096
+                            },
+                            "type": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S",
+                              "maxLength": 4096
+                            },
+                            "required": {
+                              "type": "boolean"
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "maxItems": 5000
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "itemKey",
+              "kind",
+              "path",
+              "content"
+            ],
+            "properties": {
+              "itemKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "pattern": "^neo4j:\\S.*$"
+              },
+              "kind": {
+                "enum": [
+                  "neo4j"
+                ]
+              },
+              "path": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/RepoPath"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^contracts/",
+                    "maxLength": 1024
+                  }
+                ]
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S",
+                "maxLength": 512
+              },
+              "taskKey": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "description": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 8192
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "content": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type",
+                      "props",
+                      "note",
+                      "constraints"
+                    ],
+                    "properties": {
+                      "type": {
+                        "enum": [
+                          "neo4j-label"
+                        ]
+                      },
+                      "props": {
+                        "type": "string"
+                      },
+                      "note": {
+                        "type": "string"
+                      },
+                      "constraints": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type",
+                      "from",
+                      "to",
+                      "props"
+                    ],
+                    "properties": {
+                      "type": {
+                        "enum": [
+                          "neo4j-relation"
+                        ]
+                      },
+                      "from": {
+                        "type": "string"
+                      },
+                      "to": {
+                        "type": "string"
+                      },
+                      "props": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                ]
+              },
+              "contract": {
+                "type": "object",
+                "required": [
+                  "fields"
+                ],
+                "properties": {
+                  "fields": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "path",
+                        "type",
+                        "required"
+                      ],
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "pattern": "^/",
+                          "maxLength": 4096
+                        },
+                        "type": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S",
+                          "maxLength": 4096
+                        },
+                        "required": {
+                          "type": "boolean"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "maxItems": 5000
+                  }
+                },
+                "additionalProperties": false
+              },
+              "extracted": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "fields"
+                    ],
+                    "properties": {
+                      "fields": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "path",
+                            "type",
+                            "required"
+                          ],
+                          "properties": {
+                            "path": {
+                              "type": "string",
+                              "pattern": "^/",
+                              "maxLength": 4096
+                            },
+                            "type": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S",
+                              "maxLength": 4096
+                            },
+                            "required": {
+                              "type": "boolean"
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "maxItems": 5000
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "itemKey",
+              "kind",
+              "path",
+              "content"
+            ],
+            "properties": {
+              "itemKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "pattern": "^questdb:\\S.*$"
+              },
+              "kind": {
+                "enum": [
+                  "questdb"
+                ]
+              },
+              "path": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/RepoPath"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^contracts/",
+                    "maxLength": 1024
+                  }
+                ]
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S",
+                "maxLength": 512
+              },
+              "taskKey": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "description": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 8192
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "content": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type",
+                      "timestamp",
+                      "partition",
+                      "retention",
+                      "dedup",
+                      "symbols",
+                      "columns",
+                      "ingest",
+                      "aggregation"
+                    ],
+                    "properties": {
+                      "type": {
+                        "enum": [
+                          "questdb"
+                        ]
+                      },
+                      "timestamp": {
+                        "type": "string"
+                      },
+                      "partition": {
+                        "type": "string"
+                      },
+                      "retention": {
+                        "type": "string"
+                      },
+                      "dedup": {
+                        "type": "string"
+                      },
+                      "symbols": {
+                        "type": "string"
+                      },
+                      "columns": {
+                        "type": "string"
+                      },
+                      "ingest": {
+                        "type": "string"
+                      },
+                      "aggregation": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                ]
+              },
+              "contract": {
+                "type": "object",
+                "required": [
+                  "fields"
+                ],
+                "properties": {
+                  "fields": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "path",
+                        "type",
+                        "required"
+                      ],
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "pattern": "^/",
+                          "maxLength": 4096
+                        },
+                        "type": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S",
+                          "maxLength": 4096
+                        },
+                        "required": {
+                          "type": "boolean"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "maxItems": 5000
+                  }
+                },
+                "additionalProperties": false
+              },
+              "extracted": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "fields"
+                    ],
+                    "properties": {
+                      "fields": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "path",
+                            "type",
+                            "required"
+                          ],
+                          "properties": {
+                            "path": {
+                              "type": "string",
+                              "pattern": "^/",
+                              "maxLength": 4096
+                            },
+                            "type": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S",
+                              "maxLength": 4096
+                            },
+                            "required": {
+                              "type": "boolean"
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "maxItems": 5000
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "itemKey",
+              "kind",
+              "path",
+              "content"
+            ],
+            "properties": {
+              "itemKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "pattern": "^redis:\\S.*$"
+              },
+              "kind": {
+                "enum": [
+                  "redis"
+                ]
+              },
+              "path": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/RepoPath"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^contracts/",
+                    "maxLength": 1024
+                  }
+                ]
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S",
+                "maxLength": 512
+              },
+              "taskKey": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "description": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 8192
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "content": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "type",
+                      "use",
+                      "value",
+                      "ttl",
+                      "invalidation",
+                      "persistence"
+                    ],
+                    "properties": {
+                      "type": {
+                        "enum": [
+                          "redis"
+                        ]
+                      },
+                      "use": {
+                        "type": "string"
+                      },
+                      "value": {
+                        "type": "string"
+                      },
+                      "ttl": {
+                        "type": "string"
+                      },
+                      "invalidation": {
+                        "type": "string"
+                      },
+                      "persistence": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                ]
+              },
+              "contract": {
+                "type": "object",
+                "required": [
+                  "fields"
+                ],
+                "properties": {
+                  "fields": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "path",
+                        "type",
+                        "required"
+                      ],
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "pattern": "^/",
+                          "maxLength": 4096
+                        },
+                        "type": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S",
+                          "maxLength": 4096
+                        },
+                        "required": {
+                          "type": "boolean"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "maxItems": 5000
+                  }
+                },
+                "additionalProperties": false
+              },
+              "extracted": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "fields"
+                    ],
+                    "properties": {
+                      "fields": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "path",
+                            "type",
+                            "required"
+                          ],
+                          "properties": {
+                            "path": {
+                              "type": "string",
+                              "pattern": "^/",
+                              "maxLength": 4096
+                            },
+                            "type": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S",
+                              "maxLength": 4096
+                            },
+                            "required": {
+                              "type": "boolean"
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "maxItems": 5000
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "maxItems": 1000
+    },
+    "drifts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "itemKey",
+          "kind",
+          "where",
+          "text",
+          "compat"
+        ],
+        "properties": {
+          "itemKey": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 512
+          },
+          "kind": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 128
+          },
+          "where": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 4096
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 4096
+          },
+          "taskKey": {
+            "$ref": "#/components/schemas/TaskKey"
+          },
+          "compat": {
+            "enum": [
+              "compatible",
+              "breaking",
+              "unchecked"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxItems": 1000
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "from",
+          "to",
+          "kind"
+        ],
+        "properties": {
+          "from": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 512
+          },
+          "to": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 512
+          },
+          "kind": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 128
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxItems": 5000
+    },
+    "ownership": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "data",
+          "source",
+          "copy",
+          "sync",
+          "lag"
+        ],
+        "properties": {
+          "data": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 512
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "maxLength": 512
+          },
+          "copy": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "sync": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "lag": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        },
+        "additionalProperties": false
+      },
+      "maxItems": 1000
+    },
+    "components": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "layer",
+          "name",
+          "tech",
+          "note",
+          "decisionId"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "layer": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "tech": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "decisionId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "maxItems": 256
+    },
+    "links": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "from",
+          "to",
+          "via",
+          "contractPath"
+        ],
+        "properties": {
+          "from": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "to": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "via": {
+            "type": "string"
+          },
+          "contractPath": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "maxItems": 5000
+    }
+  },
+  "additionalProperties": false,
+  "description": "전체 본문은 UTF-8 JSON 1048576바이트 이하이다. ref는 필수다. main은 design_apply·merge_followup만 보고한다. attempt는 payload.branch와 같은 ref만 보고한다. 같은 commit은 unchecked→checked만 허용한다. VERSION_CONFLICT의 details.conflicts는 충돌 항목만 [{itemKey,serverState:\"checked\"|\"unchecked\",serverContentHash,commit,ref}]로 보낸다. serverContentHash는 {itemKey,kind,path,name,description,taskKey,content,contract,extracted}를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256, 소문자 64자리다. 없는 name·description·taskKey·contract·extracted는 null이다. DB sourceCommit은 제외한다. 정규화는 충돌 비교와 해시에 공통 적용한다. 의미 없는 배열은 키로 먼저 정렬한다: fields(path), files(path), items(itemKey), edges(from,to,kind), ownership(data,source,copy,sync,lag), components(id), links(from,to,via,contractPath). 키 튜플은 UTF-16 순서로 비교하고 동률이면 원소의 JCS 문자열로 비교한다. content.decisionKeys·content.tables·content.usedBy는 문자열을 UTF-16 순서로 정렬한다. 나머지 배열의 순서는 보존한다. 보고의 drifts 참고값은 충돌 비교에서 제외한다. 서버에 항목이 없으면 null의 JCS를 해시하고 unchecked로 표시한다. 고정 벡터는 contracts/fixtures/design-snapshot.json에 있다.",
+  "components": {
+    "schemas": {
+      "Id": {
+        "type": "string",
+        "title": "Id",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "Sha": {
+        "type": "string",
+        "title": "Sha",
+        "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+      },
+      "RepoPath": {
+        "type": "string",
+        "title": "RepoPath",
+        "minLength": 1,
+        "pattern": "^(?!/)(?![A-Za-z]:)(?!(?:.*/)?\\.\\.?(?:/|$))(?!.*//)[^\\\\\\u0000-\\u001f]+$"
+      },
+      "TaskKey": {
+        "type": "string",
+        "title": "TaskKey",
+        "pattern": "^TASK-[0-9]{4,}$"
+      }
+    }
+  }
+} as const;

@@ -5,6 +5,7 @@ interface Schema {
   enum?: unknown[];
   const?: unknown;
   anyOf?: Schema[];
+  allOf?: Schema[];
   items?: Schema;
   properties?: Record<string, Schema>;
   required?: string[];
@@ -36,7 +37,7 @@ export interface OpenApiDocument {
 }
 
 const KNOWN = new Set([
-  '$ref', 'type', 'enum', 'const', 'anyOf', 'items', 'properties', 'required', 'patternProperties', 'contentMediaType',
+  '$ref', 'type', 'enum', 'const', 'anyOf', 'allOf', 'items', 'properties', 'required', 'patternProperties', 'contentMediaType', 'description',
   // 타입에 영향이 없는 검증 규칙
   'title', 'description', 'pattern', 'minLength', 'maxLength', 'minimum', 'maximum', 'exclusiveMinimum', 'minItems', 'uniqueItems',
   'maxItems', 'minProperties', 'additionalProperties',
@@ -66,6 +67,7 @@ export function generateClient(doc: OpenApiDocument): string {
     if (schema.enum) return schema.enum.map((value) => JSON.stringify(value)).join(' | ');
     if ('const' in schema) return JSON.stringify(schema.const);
     if (schema.anyOf) return schema.anyOf.map((item) => type(item, indent)).join(' | ');
+    if (schema.allOf) return schema.allOf.map((item) => type(item, indent)).join(' & ');
     if (schema.contentMediaType) return 'Blob';
     switch (schema.type) {
       case 'string':
@@ -121,6 +123,7 @@ export function generateClient(doc: OpenApiDocument): string {
 
   const meta: string[] = [];
   const types: string[] = [];
+  let designSchema: Schema | undefined;
   for (const [path, item] of Object.entries(doc.paths)) {
     for (const [method, op] of Object.entries(item)) {
       if (!op.tags.some((tag) => tag === 'runner' || tag === 'planning')) continue;
@@ -153,6 +156,7 @@ export function generateClient(doc: OpenApiDocument): string {
       let content = 'none';
       if (op.requestBody) {
         const [mime, schema] = single(op.requestBody.content, id);
+        if (id === 'reportDesignSnapshot') designSchema = schema;
         if (mime !== 'application/json' && mime !== 'multipart/form-data') throw new Error(`지원하지 않는 본문: ${mime}`);
         content = mime === 'application/json' ? 'json' : 'multipart';
         request.push(`      body: ${type(schema, '      ')};\n`);
@@ -177,11 +181,24 @@ export function generateClient(doc: OpenApiDocument): string {
   for (let name = queue.shift(); name; name = queue.shift()) {
     components.push(`export type ${name} = ${type(doc.components.schemas[name] as Schema, '')};\n`);
   }
+  const validationSchemas: Record<string, Schema> = {};
+  const collect = (value: unknown): void => {
+    if (Array.isArray(value)) { value.forEach(collect); return; }
+    if (!value || typeof value !== 'object') return;
+    const node = value as Schema;
+    if (node.$ref) {
+      const name = ref(node.$ref, 'schemas');
+      if (!validationSchemas[name]) { validationSchemas[name] = doc.components.schemas[name] as Schema; collect(validationSchemas[name]); }
+    }
+    Object.values(value).forEach(collect);
+  };
+  if (designSchema) collect(designSchema);
 
   return [
     '// 생성 파일. 직접 고치지 말고 `pnpm client:generate`를 실행한다.\n/* eslint-disable */\n',
     components.sort().join('\n'),
     `export interface Operations {\n${types.join('')}}\n`,
     `export const OPERATIONS = {\n${meta.join('')}} as const satisfies Record<keyof Operations, unknown>;\n`,
+    ...(designSchema ? [`export const DESIGN_SNAPSHOT_SCHEMA = ${JSON.stringify({ ...designSchema, components: { schemas: validationSchemas } }, null, 2)} as const;\n`] : []),
   ].join('\n');
 }

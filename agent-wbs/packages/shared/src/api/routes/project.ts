@@ -246,6 +246,8 @@ const project = [
 
 const reportSummary = {
   id: c.Id,
+  // 표시 번호(P mkReport L3880: RPT-D-261027 · RPT-W-261026 · RPT-C-001). 화면 목록·PDF 파일 이름·메일 제목이 쓴다(M6-01 보강).
+  reportKey: Type.String({ pattern: '^RPT-(D-[0-9]{6}|W-[0-9]{6}|C-[0-9]{3,})$' }),
   kind: AnyOf('daily', 'weekly', 'custom'),
   from: c.DateOnly,
   to: c.DateOnly,
@@ -416,7 +418,8 @@ const ci = [
 ];
 
 const designPath = '/api/projects/:projectId/design';
-const designItem = { key: Type.String(), name: Type.String(), taskKey: Nullable(c.TaskKey), status: Type.String() };
+const designQuery = { ref: Opt(Text) };
+const designItem = { key: Type.String(), name: Type.String(), description: Opt(Nullable(Type.String())), taskKey: Nullable(c.TaskKey), status: Type.String() };
 const design = [
   operation({
     ...lead,
@@ -424,12 +427,14 @@ const design = [
     method: 'GET',
     path: designPath,
     summary: '설계 버전·결정 수·승인 대기·불일치',
+    query: Type.Object(designQuery),
     responses: {
       200: Type.Object({
         version: Nullable(c.Count),
         decisions: c.Count,
         pending: c.Count,
         drifts: c.Count,
+        driftItems: Opt(List(m.Drift)),
         ...m.designOverview,
       }),
     },
@@ -448,8 +453,12 @@ const design = [
     method: 'POST',
     path: `${designPath}/decisions`,
     summary: '기술 결정 추가. agent는 팀장 승인 대기, free는 재량 기록',
-    body: Body({ ...c.JobContext, authority: AnyOf('agent', 'free'), ...m.TechProposal }),
+    body: Type.Union([
+      Body({ ...c.JobContext, authority: AnyOf('agent', 'free'), ...m.TechProposal }),
+      Body({ ...c.JobContext, authority: AnyOf('agent', 'free'), ...m.TechProposal, itemKey: Text, driftId: c.Id }),
+    ]),
     responses: { 201: m.Decision },
+    errors: ['EXTERNAL_WRITE_BLOCKED'],
   }),
   ...(['approve', 'reject'] as const).map((action) =>
     operation({
@@ -469,7 +478,10 @@ const design = [
     method: 'POST',
     path: '/api/design/decisions/:id/change',
     summary: '기술 결정 변경 제안',
-    body: Body({ ...V, choice: Text, reason: Text }),
+    body: Type.Union([
+      Body({ ...V, choice: Text, reason: Text }),
+      Body({ ...V, choice: Text, reason: Text, itemKey: Text, driftId: c.Id }),
+    ]),
     responses: { 200: m.Decision },
     errors: ['INVALID_TRANSITION'],
   }),
@@ -479,7 +491,7 @@ const design = [
     method: 'GET',
     path: `${designPath}/interfaces`,
     summary: '인터페이스 목록',
-    query: Type.Object({ kind: Opt(m.IfaceKind) }),
+    query: Type.Object({ ...designQuery, kind: Opt(m.IfaceKind) }),
     responses: { 200: Type.Object({ items: List(Type.Object({ ...designItem, kind: m.IfaceKind })) }) },
   }),
   operation({
@@ -488,6 +500,7 @@ const design = [
     method: 'GET',
     path: `${designPath}/interfaces/:key`,
     summary: '인터페이스 상세',
+    query: Type.Object(designQuery),
     responses: { 200: Type.Object({ ...designItem, kind: m.IfaceKind, source: m.DesignSource, content: m.IfaceContent }) },
   }),
   operation({
@@ -496,7 +509,7 @@ const design = [
     method: 'GET',
     path: `${designPath}/data`,
     summary: '데이터 항목 목록',
-    query: Type.Object({ store: Opt(m.DesignStore) }),
+    query: Type.Object({ ...designQuery, store: Opt(m.DesignStore) }),
     responses: { 200: Type.Object({ items: List(Type.Object({ ...designItem, store: m.DesignStore })) }) },
   }),
   operation({
@@ -505,6 +518,7 @@ const design = [
     method: 'GET',
     path: `${designPath}/data/:key`,
     summary: '데이터 항목 상세',
+    query: Type.Object(designQuery),
     responses: { 200: Type.Object({ ...designItem, store: m.DesignStore, source: m.DesignSource, content: m.DataContent }) },
   }),
   operation({
@@ -513,6 +527,7 @@ const design = [
     method: 'GET',
     path: `${designPath}/ownership`,
     summary: '소유권·흐름',
+    query: Type.Object(designQuery),
     responses: {
       200: Type.Object({
         items: List(
@@ -529,10 +544,19 @@ const design = [
   }),
   operation({
     ...lead,
+    id: 'listDesignRefs',
+    method: 'GET',
+    path: `${designPath}/refs`,
+    summary: '설계 기준 목록(M6 통합). 설계 캐시가 있는 main·브랜치와 그 최신 커밋. 세대 접미사(-hN)가 붙은 브랜치도 고를 수 있게 한다',
+    responses: { 200: Type.Object({ items: List(Type.Object({ ref: Type.String(), commit: Type.String(), at: c.Timestamp })) }) },
+  }),
+  operation({
+    ...lead,
     id: 'listDrifts',
     method: 'GET',
     path: `${designPath}/drifts`,
     summary: '불일치',
+    query: Type.Object(designQuery),
     responses: { 200: Type.Object({ items: List(m.Drift) }) },
   }),
   operation({
@@ -541,7 +565,7 @@ const design = [
     method: 'POST',
     path: `${designPath}/drifts/:id/resolve`,
     summary: '불일치 처리. contract는 Runner job의 결과 커밋 뒤 resolved',
-    body: Body({ ...V, how: AnyOf('contract', 'code') }),
+    body: Body({ ...V, how: AnyOf('contract', 'code'), decisionId: Opt(c.Id) }),
     responses: { 200: m.Drift, 202: Type.Object({ jobId: c.Id }) },
     errors: ['EXTERNAL_WRITE_BLOCKED', 'INVALID_TRANSITION'],
   }),

@@ -13,6 +13,7 @@ import { State } from '../../../agent-runner/src/state/state.ts';
 import { installFakeCli, runCli } from '../../../agent-runner/test/fakes/cli.ts';
 import { commit, file, fixture, git } from '../../../agent-runner/test/ci/int-fixture.ts';
 import { scenario } from './test/scenario.ts';
+import { connectTelegram, fakeBotApi } from './telegram.ts';
 import type { Running } from './runner.ts';
 
 const write = () => ({ epoch:1,idempotencyKey:randomUUID() });
@@ -27,7 +28,10 @@ export async function completeScenario() {
   // 입력 관측도 실제 git 트리를 읽게 한다. 이 파일은 시험용 저장소에만 있다.
   await file(join(f.source,'prototype/docs/guide.md'),'고정 시험 입력\n');
   commit(f.source); git(f.source,'push',f.remote,'main');
+  // M6·M7 통합(UAT-TG-05): 실제 Telegram 연결을 fake BotAPI로 만든다. 알림은 연결이 켜져 있을 때만 대기열에 들어간다.
+  const bot = await fakeBotApi();
   const h = await scenario({ inputCommit:f.ref('main') });
+  await connectTelegram(h);
   let state = await State.open(join(f.root,'outbox'));
   await state.update(d => { d.epoch = 1; });
   let outbox:Outbox;
@@ -45,7 +49,6 @@ export async function completeScenario() {
     identity:{ hostId:h.runner.hostId,bootId:h.runner.bootId },execute:(_job,argv,cwd) => execute(argv,cwd),warn:()=>undefined });
   let flow:CiJobs;
   let inputHead = f.ref('main');
-  await h.rows("update notify_settings set enabled=true where singleton");
   await h.rows("insert into notify_rules(key,enabled) values('done',true),('fail',true),('buildFail',true),('buildOk',true),('admin',true) on conflict(key) do update set enabled=true");
   const observe = async (basis: Awaited<ReturnType<typeof f.repo.mainPipeline>>) => {
     const pipeline = parsePipeline(basis.source);
@@ -149,7 +152,15 @@ export async function completeScenario() {
     recoverCi: async () => { deferCompletion = false; return flow.runNext(20); },
     allowCompletion: () => { deferCompletion = false; },
     fail: (step?: string) => { failStep = step; },
-    close: async () => { await flow.shutdown(); await state.close(); await h.close(); await f.close(); } };
+    bot,
+    /** 쌓인 Telegram 대기열을 실제 worker 함수로 모두 fake BotAPI에 보낸다. 대화별 최소 간격은 앞선 시각으로 넘긴다. */
+    sendNotifications: async () => {
+      const { processNotify } = await import('../../apps/api/src/notify/worker.ts');
+      let at = Date.now();
+      for (let i = 0; i < 50 && await processNotify(h.pool,1,new Date(at += 5_000)); i++);
+      return bot.requests.filter(r => r.method === 'sendMessage').map(r => String(r.body.text));
+    },
+    close: async () => { await flow.shutdown(); await state.close(); await h.close(); await f.close(); await bot.close(); } };
 }
 
 export type CompleteScenario = Awaited<ReturnType<typeof completeScenario>>;

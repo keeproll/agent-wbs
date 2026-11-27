@@ -329,12 +329,16 @@ test('M4 결합: 연결부터 CLI 유휴 적용까지 한 시나리오', { timeo
   // 5. GitHub 첫 쓰기 403 → missing 재보고
   const head = model.branches.get('main') ?? '';
   await expect(app.github?.client.setCommitStatus({ sha: head, context: 'agentwbs/task', state: 'pending' })).rejects.toThrow();
+  // 통합(M6): main flaky-fix(c60b293)의 「outbox에 들어갈 때까지 조건 대기」와 M6-06의 「flush를 되풀이하며 보고 확인」을 함께 쓴다.
   await vi.waitFor(() => {
     expect(state?.snapshot.outbox.some((entry) => entry.operation === 'reportGithubStatus')).toBe(true);
   }, { timeout: 10_000 });
-  await app.runner.outbox.flush();
-  const status2 = posted('/api/runner/github/status')[1];
-  expect(status2).toMatchObject({ ok: false, scopes: { statuses: 'missing' } });
+  const status2 = await vi.waitFor(async () => {
+    await app.runner.outbox.flush();
+    const report = posted('/api/runner/github/status')[1];
+    expect(report).toMatchObject({ ok: false, scopes: { statuses: 'missing' } });
+    return report;
+  }, { timeout: 10_000 });
   expect(typeof status2?.error).toBe('string');
 
   // 6. 동시 실행 보고

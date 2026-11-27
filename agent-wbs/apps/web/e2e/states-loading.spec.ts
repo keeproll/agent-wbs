@@ -4,6 +4,13 @@ import { ACTIVE_PROJECT, delay, errorBody, fakeApi, hold, json } from './support
 
 const TASK = { taskKey: 'TASK-0001', title: '원래 제목', updatedAt: '2026-11-26T01:00:00.000000Z' };
 
+/**
+ * M6 통합: 보고서 메뉴는 M6-01에서 실제 화면이 됐다(「아직 구현되지 않았습니다」 자리 표시가 없다).
+ * 로딩 규칙은 프로젝트 조회에 대한 것이므로 같은 메뉴로 시험하고, 보고서 목록은 빈 목록으로 답해 본문 「아직 보고서가 없습니다.」를 기다린다.
+ */
+const REPORT_BODY = '아직 보고서가 없습니다.';
+const emptyReports = (api: Awaited<ReturnType<typeof fakeApi>>) => { api.on('GET /api/projects/p1/reports', (route) => json(route, 200, { items: [], nextCursor: null })); };
+
 /** 화면에 한 번이라도 나타난 요소 기록 */
 async function watchAppear(page: Page, selector: string) {
   await page.addInitScript((sel) => {
@@ -19,6 +26,7 @@ test('UAT-STATE-04 응답 없음 10초 → 메뉴 제목·원인·마지막 성�
   const api = await fakeApi(page);
   const silent = hold((route) => json(route, 200, ACTIVE_PROJECT));
   api.on('GET /api/project', silent.handler);
+  emptyReports(api);
   await page.goto('/report');
   await expect(page.getByRole('status', { name: '보고서 불러오는 중' })).toBeVisible();
   await page.clock.fastForward(9_000);
@@ -31,7 +39,7 @@ test('UAT-STATE-04 응답 없음 10초 → 메뉴 제목·원인·마지막 성�
 
   api.on('GET /api/project', (route) => json(route, 200, ACTIVE_PROJECT));
   await card.getByRole('button', { name: '다시 시도' }).click();
-  await expect(page.getByText('이 화면은 아직 구현되지 않았습니다.')).toBeVisible();
+  await expect(page.getByText(REPORT_BODY)).toBeVisible();
   await expect(card).toHaveCount(0);
 });
 
@@ -65,13 +73,14 @@ test('0.2초 안에 온 응답은 skeleton을 보이지 않는다', async ({ pag
   const api = await fakeApi(page);
   const gate = hold((route) => json(route, 200, ACTIVE_PROJECT));
   api.on('GET /api/project', gate.handler);
+  emptyReports(api);
   await page.goto('/report');
   await expect.poll(() => api.requests('GET /api/project').length).toBeGreaterThan(0);
   await page.clock.runFor(50);
   gate.release();
   // 화면 갱신이 앱 타이머(0ms·rAF 16ms)를 기다릴 수 있어 16ms씩 감는다. 앱 시계 0.2초 전(최대 50+8×16=178ms)에 본문이 보여야 한다.
   // 실제 시간이 아니라 앱 시계로 재므로 시험 PC 부하와 무관하다. 감기 사이에는 브라우저가 응답을 처리할 실제 시간을 준다.
-  const body = page.getByText('이 화면은 아직 구현되지 않았습니다.');
+  const body = page.getByText(REPORT_BODY);
   let shown = false;
   for (let step = 0; step < 8 && !shown; step++) {
     shown = await body.waitFor({ timeout: 1_000 }).then(() => true, () => false);
@@ -87,6 +96,7 @@ test('늦은 첫 응답: 0.2초 뒤 메뉴 배치 모양 skeleton → 응답 →
   const api = await fakeApi(page);
   const gate = hold((route) => json(route, 200, ACTIVE_PROJECT));
   api.on('GET /api/project', gate.handler);
+  emptyReports(api);
   await page.goto('/report');
   await expect.poll(() => api.requests('GET /api/project').length).toBeGreaterThan(0);
   const skeleton = page.getByRole('status', { name: '보고서 불러오는 중' });
@@ -96,17 +106,31 @@ test('늦은 첫 응답: 0.2초 뒤 메뉴 배치 모양 skeleton → 응답 →
   await expect(skeleton).toBeVisible();
   // 보고서 배치: 위쪽 큰 카드 1 + 오른쪽 문서 카드 1(왼쪽 목록은 카드 아님)
   await expect(skeleton.locator('.sk-c.card')).toHaveCount(2);
+  // fix2(Codex 리뷰 3차 P3): 요청 개수는 응답을 풀기 전부터 1이라 「응답 처리 완료」의 근거가 아니다.
+  // 실제 응답 도착을 기다린 뒤, 앱 시계를 최소 유지 시간(0.3초)보다 넉넉히 감고, 비동기 처리가 예약한 앱 타이머를 16ms씩 제한된 횟수만 더 감는다.
+  const projectAnswered = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/project');
   gate.release();
-  await expect.poll(() => api.requests('GET /api/project').length).toBe(1);
+  await projectAnswered;
+  expect(api.requests('GET /api/project')).toHaveLength(1);
   await page.clock.runFor(400);
-  await expect(page.getByText('이 화면은 아직 구현되지 않았습니다.')).toBeVisible();
+  const body = page.getByText(REPORT_BODY);
+  let shown = false;
+  for (let step = 0; step < 16 && !shown; step++) {
+    shown = await body.waitFor({ timeout: 500 }).then(() => true, () => false);
+    if (!shown) await page.clock.runFor(16);
+  }
+  expect(shown).toBe(true);
   await expect(skeleton).toHaveCount(0);
 });
 
 test('이미 본 화면으로 다시 오면 이전 화면을 유지하고 상단 진행 막대를 보인다', async ({ page }) => {
   const api = await fakeApi(page);
-  await page.goto('/design'); // 아직 「준비 중」인 메뉴(빌드·통합은 M7-05에서 구현됨)
-  await expect(page.getByText('이 화면은 아직 구현되지 않았습니다.')).toBeVisible();
+  // M6 통합 재병합: M6-07(설계)·M7-05(빌드 · 통합)까지 들어와 자리 표시 메뉴가 하나도 없다. 실제 화면에서 시작한다.
+  // 시험하는 것은 「프로젝트 조회를 이미 한 번 마친 뒤 다른 메뉴로 옮길 때」의 로딩 모양이다. 시작 화면의 본문 내용은 상관없다.
+  emptyReports(api);
+  await page.goto('/ci');
+  await expect(page.getByRole('heading', { level: 1, name: '빌드 · 통합' })).toBeVisible();
+  await expect.poll(() => api.requests('GET /api/project').length).toBeGreaterThan(0);
   const slow = hold((route) => json(route, 200, ACTIVE_PROJECT));
   api.on('GET /api/project', slow.handler);
   await page.getByRole('navigation', { name: '주 메뉴' }).getByRole('link', { name: '보고서', exact: true }).click();

@@ -2,6 +2,7 @@ import { splitSettingsToDomain } from '@awbs/db';
 import type { PoolClient } from '@awbs/db';
 import { observePipeline, type PipelineObservation } from '../ci/pipeline.ts';
 import { invalidateTaskGate } from '../execution/gate.ts';
+import { recordDesignVersion } from '../design/version.ts';
 import { snapshotHash, techSnapshot, wbsSnapshot } from '../planning/job-snapshot.ts';
 import { lockGraph } from '../tasks/write.ts';
 import type { Dependency } from '@awbs/shared';
@@ -272,6 +273,7 @@ export async function confirmTech(db: Db, projectId: string, body: { decisions: 
       [project.id, item.id, LEAD, item.choice, JSON.stringify({ step: 'boot' })]);
   }
   await setStep(db, job.id, 'tech', 'done', `확정 ${String(rows.length)}건`);
+  await recordDesignVersion(db, project.id, { key: 'tech:confirm', kind: 'decision', compat: 'compatible', by: LEAD, note: '초기 기술 결정 확정' });
   await log(db, job, `기술 결정 확정 (팀장) — 승인 ${String(body.decisions.filter((d) => d.choice === 'approve').length)} · 반려 ${String(body.decisions.filter((d) => d.choice === 'reject').length)}`);
   // 확정된 결정 위에서 WBS 초안을 작성한다(G§4.2). Runner에게 초안 단계부터 이어 하라는 새 job을 준다.
   await followUpJob(db, job, epoch, { resumeStep: 'draft', base: await techSnapshot(db, project.id) });

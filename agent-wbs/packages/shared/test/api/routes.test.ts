@@ -226,7 +226,9 @@ test('원본·계획에 없는 경로를 만들지 않았다', () => {
     // 조정자 승인(2026-11-27, M5-02): contracts §3.4-3의 재시작 전 보유 대조에 필요하다.
     'GET /api/runner/holds',
     // M7-06 조정자 결정 2: 실제 CI 작업의 소유권·QA·재실행 근거를 Runner가 읽는다.
-    'GET /api/runner/ci/jobs/:id'];
+    'GET /api/runner/ci/jobs/:id',
+    // M6 통합: M6-07 남은 연결 「브랜치 목록 API 없음」(coordinator 지시). 계획 문서(contracts §2.3 설계)에 아직 없어 보고서에 반영 문구를 적었다.
+    'GET /api/projects/:projectId/design/refs'];
   const known = new Set([
     'GET /health',
     'GET /health/db',

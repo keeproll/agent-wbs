@@ -1,5 +1,6 @@
 import Type, { type TProperties, type TSchema } from 'typebox';
 import * as v from '../vocabulary.ts';
+import { TASK_KEY_PATTERN } from '../domain/numbering.ts';
 import { ERROR_CODES } from './errors.ts';
 
 /** 요청 본문. 정의하지 않은 필드는 거부한다(예: Task PATCH의 status). */
@@ -15,7 +16,7 @@ export const Json = Type.Record(Type.String(), Type.Unknown());
 export const Text = Type.String({ minLength: 1, pattern: '\\S' });
 export const Id = Type.String({ title: 'Id', minLength: 1, maxLength: 128 });
 export const Uuid = Type.String({ title: 'Uuid', pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' });
-export const TaskKey = Type.String({ title: 'TaskKey', pattern: '^TASK-[0-9]{4,}$' });
+export const TaskKey = Type.String({ title: 'TaskKey', pattern: TASK_KEY_PATTERN });
 /*
  * 시각·날짜의 허용 범위(M2-08 재리뷰 R2). 모양만 보는 정규식은 연도 0000·10000·2026-02-30 같은 값을 통과시켜
  * DB(timestamptz·date) 변환에서 500이 났다. 여기 한 곳에서 1970~9999년의 실재하는 날짜·시각만 받는다.

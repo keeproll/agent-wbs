@@ -10,6 +10,7 @@ import { useQueries } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { apiKey } from '../../../shared/api/queries.ts';
+import { LINK } from '../../../shared/links.ts';
 import { useConfirm } from '../../../shared/ui/feedback.tsx';
 import { useEditSlot } from '../edit-slot.tsx';
 import {
@@ -142,7 +143,10 @@ export function DesignTab({ task: t, tasks }: { task: TaskDetailData; tasks: Tas
     setEd({ title: `${bk.l} 편집`, draft: { kind: 'blk', sec: kind, target: null, key: bk.k, f: {}, b: toDraft([bk], contentOf(kind).b) }, base: t.updatedAt });
   };
   const busyOrEditing = slot.current !== null || write.busy;
-  const dsLinks = secs.flatMap(({ kind, content }) => (kind === 'API' ? (content.ents ?? []).map((e) => `${e.f.method ?? ''} ${e.f.path ?? ''}`) : kind === 'DB' ? (content.ents ?? []).map((e) => e.f.name ?? '') : [])).slice(0, 12);
+  // 설계 항목 고정 키(G L1056): REST `METHOD path`, 테이블 `postgres:이름`. 설계 화면(M6-07)이 그 항목 상세를 연다.
+  const dsLinks = secs.flatMap(({ kind, content }) => (kind === 'API'
+    ? (content.ents ?? []).map((e) => { const l = `${e.f.method ?? ''} ${e.f.path ?? ''}`; return { l, to: LINK.design('iface', l) }; })
+    : kind === 'DB' ? (content.ents ?? []).map((e) => ({ l: e.f.name ?? '', to: LINK.design('data', `postgres:${e.f.name ?? ''}`) })) : [])).slice(0, 12);
 
   return (
     <div className="pane">
@@ -153,9 +157,9 @@ export function DesignTab({ task: t, tasks }: { task: TaskDetailData; tasks: Tas
           : `기술 영역(${String(t.primaryDomain)})에는 기본 설계 섹션이 없습니다. 필요한 경우에만 추가하세요.`}
       </p>
       {dsLinks.length > 0 && (
-        // 제품 전체 설계에서 보기(P L1217). 설계 메뉴(M6)가 아직 없어 메뉴로만 이동한다.
+        // 제품 전체 설계에서 보기(P L1217). 설계 화면의 그 항목 상세로 간다(M6-07).
         <div className="ds-link"><span className="muted">제품 전체 설계에서 보기</span>
-          {dsLinks.map((l) => <Link key={l} className="btn ghost sm mono" to="/design">{l}</Link>)}
+          {dsLinks.map((k) => <Link key={k.to} className="btn ghost sm mono" to={k.to}>{k.l}</Link>)}
           <span className="tid">기준은 저장소 계약 파일 — 이 Task의 변경은 브랜치 차이로 표시됩니다.</span>
         </div>
       )}

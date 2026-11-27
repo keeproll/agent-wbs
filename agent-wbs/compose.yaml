@@ -4,9 +4,11 @@ name: awbs
 services:
   postgres:
     container_name: awbs-postgres
-    # 16(Debian). alpine은 C.UTF-8 정렬 결과가 Debian과 달라 시험 DB와 정렬이 어긋난다(M5·M7 통합 결정).
+    # 16(Debian). alpine은 C.UTF-8 정렬 결과가 Debian과 달라 시험 DB와 정렬이 어긋난다(M5·M7 통합 결정과 같은 이미지).
     # 기존 alpine 볼륨(awbs-pgdata)을 그대로 쓰면 문자열 색인의 정렬 규칙이 바뀐다. 볼륨을 새로 만들거나 `REINDEX DATABASE awbs_dev`를 실행한다.
     image: postgres:16@sha256:07abc3f43c9395b0bdbbab36bc25ddb0e8d83cd4fcafb5fb7d6abe14ff156dd8
+    # 보고서 상태 이력(M6-01)이 트랜잭션의 실제 커밋 시각을 쓴다(pg_xact_commit_timestamp). 서버 시작 때만 바꿀 수 있는 설정이다.
+    command: ['postgres', '-c', 'track_commit_timestamp=on']
     environment:
       LANG: C.UTF-8
       POSTGRES_USER: awbs_owner

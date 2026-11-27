@@ -13,6 +13,7 @@ import { createServer } from 'node:net';
 import { resolve } from 'node:path';
 
 const ROOT = resolve(import.meta.dirname, '../../..');
+// M6 통합: compose.yaml과 같은 Debian postgres:16(정렬 규칙을 맞춘다, M5·M7 통합 결정)과 track_commit_timestamp=on(M6-01 보고서 상태 이력 필수).
 const IMAGE = 'postgres:16@sha256:07abc3f43c9395b0bdbbab36bc25ddb0e8d83cd4fcafb5fb7d6abe14ff156dd8';
 const name = `m3int-e2e-pg-${randomBytes(3).toString('hex')}`;
 const dbPassword = randomBytes(18).toString('base64url');
@@ -30,8 +31,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let api: ChildProcess | undefined;
 let exitCode = 1;
 try {
-  execFileSync('docker', ['run', '-d', '--rm', '--name', name, '-e', 'LANG=C.UTF-8', '-e', 'POSTGRES_USER=awbs_owner', '-e', `POSTGRES_PASSWORD=${dbPassword}`,
-    '-e', 'POSTGRES_DB=awbs_test_m3int', '-p', '127.0.0.1::5432', IMAGE], { stdio: ['ignore', 'ignore', 'inherit'] });
+  execFileSync('docker', ['run', '-d', '--rm', '--name', name, '-e', 'POSTGRES_USER=awbs_owner', '-e', `POSTGRES_PASSWORD=${dbPassword}`,
+    '-e', 'POSTGRES_DB=awbs_test_m3int', '-e', 'LANG=C.UTF-8', '-p', '127.0.0.1::5432', IMAGE, '-c', 'track_commit_timestamp=on'], { stdio: ['ignore', 'ignore', 'inherit'] });
   const dbPort = execFileSync('docker', ['port', name, '5432/tcp'], { encoding: 'utf8' }).trim().split(':').at(-1);
   for (let i = 0; i < 60; i++) {
     if (spawnSync('docker', ['exec', name, 'pg_isready', '-h', '127.0.0.1', '-U', 'awbs_owner', '-d', 'awbs_test_m3int']).status === 0) break;
@@ -72,6 +73,6 @@ try {
   exitCode = result.status ?? 1;
 } finally {
   api?.kill('SIGTERM');
-  spawnSync('docker', ['rm', '-f', '-v', name], { stdio: 'ignore' });
+  spawnSync('docker', ['rm', '-f', '-v', name], { stdio: 'ignore' }); // -v: 익명 볼륨까지 지운다(M6 통합, docker 규칙)
   process.exitCode = exitCode;
 }

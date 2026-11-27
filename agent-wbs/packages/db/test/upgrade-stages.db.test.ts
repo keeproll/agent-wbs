@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { afterAll, expect, inject, test } from 'vitest';
-import { createPool, recreateTestDatabase, runMigrations, seedDemo, type Pool } from '../src/index.ts';
+import { checkMigrationsApplied, createPool, MigrationGapError, recreateTestDatabase, runMigrations, seedDemo, type Pool } from '../src/index.ts';
 
 /*
  * M2 통합: 마이그레이션 배정 번호(0015 platform, 0016 contract_sync, 0017 usage_reset_unknown, 0018~0019 M2-08, 0020 M2-06)를
@@ -41,24 +41,72 @@ async function schemaOf(pool: Pool): Promise<string> {
   ].join('\n--\n');
 }
 
-test('빈 DB와 0014·0016(master)·0017·0018·0019·0020·0021 단계 DB가 최신으로 올린 뒤 같은 구조가 된다', async () => {
+/*
+ * M6 통합 재번호(새 main 위 0028~0035). 옛 번호 DB: M6 마이그레이션을 옛 이름·옛 시각(when)으로 적용한 DB.
+ * - m6int·m6int_29: M6 통합 브랜치(8ff0cee, main 반영 전)의 번호 0036~0043. 0026·0027(M5·M7)은 아직 없다.
+ * - m6_03~m6_05: 각 M6 작업 브랜치의 번호(0049·0051·0052·0053·0054).
+ * - 옛 이름 파일은 같은 내용으로 만든다(hash가 같다). 그래서 runMigrations가 기록 시각을 맞추고, 빠진 앞 번호(0026·0027 등)를 보충한다.
+ * - m6_02: 옛 0047은 내용이 바뀌었다(이력 판단 추가, 옛 내용 fixtures). 모르는 hash의 기록이 있으면 보충하지 않고
+ *   누락 검사(MigrationGapError)로 멈춘다(M5·M7 통합 원칙: 내용이 다른 옛 판을 적용한 DB는 새로 만든다).
+ */
+const M6_TAGS = ['0028_20261127_report_state_log', '0029_20261127_report_state_log_settings', '0030_20261127_report_project_name',
+  '0031_20261127_mail_queue', '0032_20261127_telegram_transitions', '0033_20261127_telegram_review',
+  '0034_20261127_design_ledger', '0035_20261127_design_display_keys'];
+const m6int = (count: number) => M6_TAGS.slice(0, count).map((from) => ({ tag: String(Number(from.slice(0, 4)) + 8).padStart(4, '0') + from.slice(4), from }));
+const OLD: Record<string, { tag: string; from?: string; fixture?: string }[]> = {
+  m6int_29: m6int(2),
+  m6int: m6int(8),
+  m6_02: [{ tag: '0047_20261127_report_project_name', fixture: 'fixtures/0047_20261127_report_project_name.sql' }],
+  m6_03: [{ tag: '0049_20261127_mail_queue', from: '0031_20261127_mail_queue' }],
+  m6_04: [{ tag: '0051_20261127_telegram_transitions', from: '0032_20261127_telegram_transitions' }, { tag: '0052_20261127_telegram_review', from: '0033_20261127_telegram_review' }],
+  m6_05: [{ tag: '0053_20261127_design_ledger', from: '0034_20261127_design_ledger' }, { tag: '0054_20261127_design_display_keys', from: '0035_20261127_design_display_keys' }],
+};
+
+test('빈 DB와 0014·0016(master)·0017~0027·M6 중간(0029~0034) 단계 DB, M6 옛 번호 DB가 최신으로 올린 뒤 같은 구조가 된다', async () => {
   const journalPath = fileURLToPath(new URL('../migrations/meta/_journal.json', import.meta.url));
-  const journal = JSON.parse(await readFile(journalPath, 'utf8')) as { entries: { idx: number; tag: string }[] };
+  interface Entry { idx: number; tag: string; when: number; version: string; breakpoints: boolean }
+  const journal = JSON.parse(await readFile(journalPath, 'utf8')) as { entries: Entry[] };
   expect(journal.entries.slice(15).map((e) => e.tag)).toEqual([
     '0015_20261126_platform_epoch_lock', '0016_20261126_contract_sync', '0017_20261126_usage_reset_unknown',
     '0018_20261126_message_read_touch', '0019_20261126_schedule_defaults', '0020_20261126_execution_basis',
-    '0021_20261127_project_followup', '0022_20261127_evidence_reference', '0023_20261127_project_observation_version', '0024_20261127_settings_followup', '0025_20261127_setting_versions', '0026_20261127_ci_reports', '0027_20261127_planning_event_order']);
+    '0021_20261127_project_followup', '0022_20261127_evidence_reference', '0023_20261127_project_observation_version', '0024_20261127_settings_followup', '0025_20261127_setting_versions',
+    // M5·M7 통합(main): CI 0026, Planning 수신 순번 0027
+    '0026_20261127_ci_reports', '0027_20261127_planning_event_order',
+    // M6 통합 재번호(새 main 위): M6-01 상태 이력 0028·0029, M6-02 이름 채움 0030, M6-03 메일 큐 0031,
+    // M6-04 Telegram 0032·0033, M6-05 설계 원장 0034·0035
+    ...M6_TAGS,
+    // M6·M7 통합: CI 알림도 Telegram 대기열로(0036 awbs_notify_emit)
+    '0036_20261127_notify_ci',
+    // M6 통합 fix2: 이력 순번 채우기·M6 표 저장 순번(0037)
+    '0037_20261127_record_order']);
+  // journal 시각 = 1795740000000 + 번호(0021 이후 규칙)
+  for (const e of journal.entries.slice(26)) expect(e.when, e.tag).toBe(1795740000000 + Number(e.tag.slice(0, 4)));
   const fresh = await database('fresh');
   await runMigrations(fresh);
   const expected = await schemaOf(fresh);
-  for (const stage of [14, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26]) {
+  const stages: (number | string)[] = [14, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 29, 30, 31, 33, 34, 35, 36, ...Object.keys(OLD)];
+  for (const stage of stages) {
     const pool = await database(String(stage));
     const folder = await mkdtemp(join(tmpdir(), `awbs-stage-${String(stage)}-`));
     try {
       await cp(fileURLToPath(new URL('../migrations/', import.meta.url)), folder, { recursive: true });
-      await writeFile(join(folder, 'meta/_journal.json'), JSON.stringify({ ...journal, entries: journal.entries.filter((e) => e.idx <= stage) }));
+      let entries: Entry[];
+      if (typeof stage === 'number') entries = journal.entries.filter((e) => e.idx <= stage);
+      else {
+        entries = journal.entries.filter((e) => e.idx <= 25);
+        for (const old of OLD[stage] ?? []) {
+          const source = old.fixture ? new URL(old.fixture, import.meta.url) : join(folder, `${old.from ?? ''}.sql`);
+          await writeFile(join(folder, `${old.tag}.sql`), await readFile(source, 'utf8'));
+          entries.push({ idx: entries.length, version: '7', when: 1795740000000 + Number(old.tag.slice(0, 4)), tag: old.tag, breakpoints: true });
+        }
+      }
+      await writeFile(join(folder, 'meta/_journal.json'), JSON.stringify({ ...journal, entries }));
       await migrate(drizzle(pool), { migrationsFolder: folder });
     } finally { await rm(folder, { recursive: true, force: true }); }
+    if (stage === 'm6_02') {
+      await expect(runMigrations(pool), '단계 m6_02').rejects.toBeInstanceOf(MigrationGapError);
+      continue;
+    }
     await pool.query('select seed_system()');
     if (stage === 20) await pool.query(`insert into projects(name,repo_url,repo_owner,repo_name,lead_instruction,phase,created_at)
       values('기존 프로젝트','','','','','active','2000-01-01T20:00:00Z')`);
@@ -108,9 +156,11 @@ test('빈 DB와 0014·0016(master)·0017·0018·0019·0020·0021 단계 DB가 �
       expect(same, `단계 ${String(stage)} ${table}`).toBe(true);
     }
     expect(await schemaOf(pool), `단계 ${String(stage)}`).toBe(expected);
+    // 모든 단계는 기록 개수가 journal과 같고(같은 내용을 두 번 적용하지 않음), 누락이 없어야 한다.
     expect((await pool.query<{ n: number }>('select count(*)::int n from drizzle.__drizzle_migrations')).rows[0]?.n, `단계 ${String(stage)}`).toBe(journal.entries.length);
+    await checkMigrationsApplied(pool);
   }
-}, 120_000);
+}, 600_000);
 
 /*
  * M5·M7 통합: CI 마이그레이션은 M7-04 브랜치에서 배정 번호 0041(when 1795740000041)로 만들었고,
