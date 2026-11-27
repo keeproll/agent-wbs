@@ -14,6 +14,7 @@
  * | `/change/CP-007` | 변경 제안 상세(CP 키 또는 id) | ChangePage(useParams) |
  * | `/planning?session=<id>` | Planning 세션 | PlanningPage |
  * | `/settings/runner` | 설정 탭 | SettingsPage(useParams) |
+ * | `/ci/<실행 id>` | 빌드·통합 실행 상세(서버 알림 path와 같은 모양) | CiPage(useParams) |
  */
 const enc = encodeURIComponent;
 
@@ -34,5 +35,7 @@ export const LINK = {
   change: (ref: string) => `/change/${enc(ref)}`,
   /** Planning 세션 */
   planning: (sessionId: string) => `/planning?session=${enc(sessionId)}`,
+  /** 빌드·통합 실행 상세(M7-05). 서버 알림·통지 ref의 `path: /ci/<id>`와 같다. */
+  ci: (runId: string) => `/ci/${enc(runId)}`,
   settings: (tab?: string) => (tab ? `/settings/${enc(tab)}` : '/settings'),
 };
