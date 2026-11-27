@@ -37,6 +37,19 @@ beforeEach(async () => {
 });
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
+test('병합 커밋 목록은 중간 Task 커밋과 부모를 담고 main의 조상은 제외한다', async () => {
+  git(source,'checkout','agent/task');
+  const next = await commit('next','중간 커밋 다음');
+  git(source,'push',join(root,'remote.git'),'agent/task');
+  await repo.fetchBranch('agent/task');
+  const synced = await repo.prepareIntegration(base,next);
+  expect(synced).not.toBeNull();
+  if (!synced) throw new Error('자동 병합 실패');
+  const commits = await repo.mergeCommits(base,synced);
+  expect(commits).toEqual([{ commit:synced,parents:[next,base] },{ commit:next,parents:[head] },{ commit:head,parents:[git(source,'rev-parse',`${head}^`)] }]);
+  expect(commits.some(c=>c.commit===base)).toBe(false);
+});
+
 test('H→H′는 부모 H,A와 자동 병합 tree가 일치할 때만 QA 근거를 잇는다', async () => {
   const synced = await repo.prepareIntegration(base, head);
   expect(synced).not.toBeNull();

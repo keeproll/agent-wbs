@@ -563,6 +563,13 @@ Runner만 부르는 API다. Runner 토큰과 epoch 헤더가 필요하다(§1).
   - §8.5-1. M7에서 정한 필드와 규칙은 §3.6
 - POST `/runner/ci/queue`★
   - 병합 상태(PR·병합 커밋) 보고 → 서버가 완료 판정. 규칙은 §3.6-5·6
+  - 병합 완료 보고는 `mergeCommits: [{commit, parents}]`도 보낼 수 있다. main의 조상을 제외한 Task 커밋을 자식부터 부모 순서로 보낸다.
+  - 서버는 실제 병합의 두 번째 부모에서 이어지는 사슬만 저장한다. 형식 검증을 통과한 목록에 main 부모, 중복, 순환, 끊긴 커밋이 있거나 목록이 비어 있으면 목록만 버린다. `ci:mergeCommitsInvalid|#<pr>` 경고를 남기고 실제 병합 사실은 보존한다.
+  - 왜: 보조 목록의 오류로 실제 일어난 병합을 잃으면 완료 판정과 이후 대조가 막힌다. SHA 형식 등 요청 자체의 형식 검증은 유지한다.
+  - 실제 병합 부모 자체가 기존 검사 근거와 다르면 기존 `MERGE_MISMATCH`를 우선한다. 이때의 사슬은 Task 연결 근거로 저장하지 않는다.
+  - 왜: 실제 병합 불일치 경보와 첫 병합 사실을 새 목록 검사 때문에 잃으면 안 된다.
+  - `causeCandidates`에는 커밋만 보낸다. 서버가 확정된 병합 기록에서 Task를 찾는다. Task가 없거나 둘 이상이면 `taskKey`는 `null`이다.
+  - 왜: 중간 커밋도 원인 Task에 연결하되 Runner가 Task를 직접 지목하지 않게 한다. 이전 기록에 없는 커밋은 추측하지 않는다.
 - GET `/runner/ci/jobs/:id?fence=`★ (M7-06 조정자 결정 2)
   - 예약한 CI job의 검증 근거와 재실행 원본을 읽는다. 응답 `{runnable, taskKey, branch, hold, verification, source}`.
   - 왜: Runner가 실제 `integrate`·`ci_retry`를 처리하려면 그 job의 QA 근거(검사한 head·명세 버전)와 다시 돌릴 원래 실행을 알아야 한다.
@@ -657,6 +664,7 @@ GET  /api/runner/commands                → {currentEpoch, commands:[{id,kind:"
 POST /api/runner/commands/:id/result {status, items:[{name,ok,detail}], holds[]} → 204
 POST /api/runner/jobs/claim {kinds[],capacity} → 200 {job:{id,kind,payload,leaseUntil,fence}} | 204
 POST /api/runner/jobs/:id/renew {fence}  → {leaseUntil}         409 LEASE_LOST
+POST /api/runner/jobs/:id/return {fence,hostId,bootId,reason:'resources'} → 204
 POST /api/runner/jobs/:id/start {fence,hostId,bootId,headSha?,installedSubagents[]} → {attemptId?}
 POST /api/runner/jobs/:id/process {fence,processGroup,cgroup}      → 프로세스 생성 직후 기록: slot_state reserved→active
 POST /api/runner/jobs/:id/slots/release {fence,hostId,proof,at}      → 물리 슬롯만 반환, 논리 잠금 유지
@@ -879,6 +887,20 @@ Planning Agent(계획을 세우는 Agent)가 결과를 보고하는 API다.
    - 물리 슬롯은 CLI·① 각각 실행할 때만 잡는다.
    - ① 명령도 그룹·cgroup을 등록하고 무거운 작업 슬롯을 쓴다.
    - 슬롯을 다시 못 잡으면 잠금을 유지한 채 대기하고 사유를 표시한다.
+   - claim 직후 로컬 자원이 부족하면 짧게 기다린다. 계속 부족하면 `POST /api/runner/jobs/:id/return`으로 같은 job을 서버 대기열에 돌려준다.
+   - 반환은 `start` 전이고 프로세스를 만들지 않은 `attempt` job(dev·qa·rework·reverify)의 예약에만 허용한다. `fence`, `hostId`, `bootId`, `reason: 'resources'`를 보낸다.
+   - 서버는 시도를 만들지 않는다. 임대 횟수(`attempts`)는 claim 전 값으로 되돌린다. 자동 재시도와 자동 재작업 횟수에도 세지 않는다.
+   - 물리 슬롯은 `no_process`로 반환한다. Task·충돌 묶음의 논리 잠금과 현재 fence(낡은 Runner의 보고를 막는 번호표)는 유지한다.
+   - 임대 소유자와 만료 시각은 비운다. 다음 claim은 같은 job에 새 fence를 발급한다. 이전 fence로 보낸 시작·반환은 거부한다.
+   - 왜: 자원 경합 때문에 자동 QA·재작업이 팀장 버튼을 기다리지 않게 한다. 새 fence는 반환한 Runner가 뒤늦게 실행하는 일을 막는다.
+   - 같은 job의 연속 반환 뒤에는 차례로 1·2·4초를 기다린다. 4번째부터 `runner:resources:<jobId>` 경보를 열고 5분 뒤에 다시 받을 수 있게 한다. 그동안 서버는 다른 실행 가능한 job을 찾는다.
+   - 실제 시작에 성공하면 연속 반환 횟수를 0으로 돌리고 경보를 해소한다. 이 횟수와 대기 시각은 서버에 저장하므로 Runner나 PC가 바뀌어도 유지한다.
+   - job이 `done`·`failed`·`cancelled`로 끝나도 자원 부족 경보는 해소한다. 왜: 이미 끝난 job을 계속 보류 중인 것처럼 표시하면 안 된다.
+   - 왜: 한 Agent의 로컬 자원 문제로 같은 예약만 끝없이 되풀이하거나 뒤의 다른 일이 굶지 않게 한다. 같은 충돌 묶음의 잠금 규칙은 계속 지킨다.
+   - 대기 중 PC가 바뀌어 보유가 닫히면 닫힌 행을 다시 열지 않는다. 다음 claim은 새 보유를 만든다. 인계 관계도 해당 보유를 기준으로 확인한다.
+   - 왜: 닫힌 보유는 과거 실행의 증거다. 이를 덮어쓰지 않아야 낡은 보고가 새 실행을 건드리지 못한다.
+   - 대기 중 담당·검증 Agent가 바뀌면 다음 claim에서 옛 보유를 닫고 새 Agent의 보유를 만든다. 같은 트랜잭션에서 `payload.agent`도 새 Agent로 맞춘다.
+   - 왜: 과거 Agent의 보유는 불변으로 남기면서 새 등급과 실제 실행 Agent가 일치해야 한다. 이 교체 동안 Task·충돌 묶음의 잠금에는 빈틈이 생기지 않는다.
 9. QA가 사용량 등으로 오래 대기하면 같은 묶음도 대기한다(직렬화 우선, §6.6 L741).
    - 용어 풀이: 직렬화 = 동시에 오는 일을 한 번에 하나씩 차례로 처리.
    - Task가 `paused`·`failed`·BLOCKED로 끝나면 그룹 empty 확인 후 논리 잠금을 해제하고 재개 때 다시 예약한다.
@@ -888,8 +910,8 @@ Planning Agent(계획을 세우는 Agent)가 결과를 보고하는 API다.
     - 왜: 이 PC처럼 벽시계가 뒤로 갈 수 있다. 여유 없이 끝까지 쓰면, 서버는 이미 임대를 끝냈는데 Runner는 아직 남았다고 보고 일을 시작할 수 있다.
 11. **claim 직후 자원 경합** (M5·M7 통합)
     - claim 뒤 PC 자원 확인이 실패하면 같은 임대로 **최대 20초** 기다린다(남은 임대보다 길게 기다리지 않는다).
-    - 그래도 안 되면 시작 전 실패다. 시작 전 실패는 §3.5대로 항상 「다시 시도」 버튼이다.
-    - 서버가 이 job을 다시 대기열로 돌리는 전이(`leased → queued`)는 아직 없다. 계약 변경이 필요해 다음 작업으로 남겼다(M5·M7 통합 조정자 결정 2).
+    - 그래도 자원이 부족하면 8번의 `POST /api/runner/jobs/:id/return`으로 같은 job을 서버 대기열에 돌려준다.
+    - 왜: M5·M7 통합 조정자 결정 2의 후속 계약이 구현되었다. 실행 전 자원 부족 때문에 실패 횟수와 팀장 조치를 늘리지 않는다.
 12. **보유 목록의 형식**
     - 정리 명령 payload의 `holds[]`와 `GET /runner/holds`의 항목은 같은 `ExecutionHold` 형식이다. DB 필드 이름(`host_id`·`slot_state`…)을 그대로 쓴다.
     - 시각은 UTC `Z` 형식이다(끝이 `Z`인 ISO 8601, §1 「형식」).
@@ -905,7 +927,9 @@ Planning Agent(계획을 세우는 Agent)가 결과를 보고하는 API다.
   - **같은 종류(dev/qa/rework/reverify)의 연속 실패에 자동 재시도 2회, 최초 포함 총 3회**.
   - 그 종류가 완료되면 연속 횟수를 0으로 되돌린다.
   - 중단은 실패로 세지 않고 횟수를 바꾸지 않는다.
-  - 시작 전 실패는 항상 「다시 시도」 버튼(G L864, P). claim 직후 자원 경합의 20초 대기 뒤 실패도 여기에 든다(§3.4-11).
+  - 시작 전 실패는 항상 「다시 시도」 버튼(G L864, P).
+  - 자원 부족으로 서버 대기열에 반환한 예약은 시작 전 실패가 아니다. 같은 job을 자동으로 다시 claim할 수 있다.
+    - 왜: 실행을 시작하지 않았으므로 실패 횟수와 팀장 조치를 늘리지 않는다.
   - 예: dev가 2번 연달아 실패하고 3번째에 성공하면 dev 횟수는 0으로 돌아간다. 그 뒤 qa가 실패하면 qa는 새로 1회째부터 센다.
 - **①과 결과 수집 실패의 분류** (M5-05 조정자 결정 3)
   - ① 검사가 실제로 돌아 실패한 것(Task 코드 문제)은 시도 실패다. 재작업으로 가고 재작업 횟수에 센다.

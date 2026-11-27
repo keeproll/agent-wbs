@@ -160,6 +160,7 @@ GET /api/runner/policy
 POST /api/runner/commands/:id/result
 POST /api/runner/jobs/claim
 POST /api/runner/jobs/:id/renew
+POST /api/runner/jobs/:id/return
 POST /api/runner/jobs/:id/start
 POST /api/runner/jobs/:id/process
 POST /api/runner/jobs/:id/slots/release

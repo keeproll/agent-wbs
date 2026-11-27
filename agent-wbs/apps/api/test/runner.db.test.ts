@@ -106,6 +106,162 @@ describe('runner 실제 PostgreSQL 검증', () => {
     expect((await app.inject({ url: '/api/runner/holds', headers: headers() })).json()).toEqual({ holds: [] });
   });
 
+  test('시작 전 자원 반환은 같은 job·잠금·fence를 유지하고 임대 횟수를 되돌린다', async () => {
+    const { job,t } = await claimed('same-group');
+    const payload = { fence:job.fence,hostId:'host-a',bootId:'boot-a',reason:'resources' };
+    expect((await post(`jobs/${job.id}/return`,{ ...payload,fence:job.fence+1 })).statusCode).toBe(409);
+    expect((await post(`jobs/${job.id}/return`,{ ...payload,bootId:'old-boot' })).statusCode).toBe(409);
+    const h = headers();
+    const send = () => app.inject({ method:'POST',url:`/api/runner/jobs/${job.id}/return`,headers:h,payload });
+    expect((await send()).statusCode).toBe(204);
+    expect((await send()).headers['idempotency-replayed']).toBe('true');
+    expect((await owner.query('select state,fence,attempts,lease_owner,lease_until from runner_jobs where id=$1',[job.id])).rows).toEqual([
+      { state:'queued',fence:job.fence,attempts:0,lease_owner:null,lease_until:null },
+    ]);
+    expect(await hold(job.id)).toMatchObject({ slot_state:'none',lock_state:'held',fence:job.fence,closed_at:null,release_proof:'no_process' });
+    expect((await owner.query('select count(*)::int n from task_attempts')).rows).toEqual([{ n:0 }]);
+    expect((await start(job)).statusCode).toBe(409);
+    expect((await claim()).statusCode).toBe(204);
+    await owner.query("update runner_jobs set resource_retry_at=clock_timestamp()-interval '1 second' where id=$1",[job.id]);
+    const next = (await claim()).json().job as typeof job;
+    expect(next).toMatchObject({ id:job.id,fence:job.fence+1 });
+    expect((await send()).headers['idempotency-replayed']).toBe('true');
+    expect(await hold(job.id)).toMatchObject({ slot_state:'reserved',fence:next.fence,lock_state:'held',closed_at:null });
+    expect((await post(`jobs/${job.id}/return`,payload)).statusCode).toBe(409);
+    expect((await start(next)).statusCode).toBe(200);
+    expect((await post(`jobs/${job.id}/return`,{ ...payload,fence:next.fence })).statusCode).toBe(409);
+    expect((await owner.query('select status from tasks where id=$1',[t.id])).rows).toEqual([{ status:'running' }]);
+  });
+
+  test('프로세스를 등록한 예약과 다른 Runner는 자원 반환을 할 수 없다', async () => {
+    const { job } = await claimed();
+    const payload = { fence:job.fence,hostId:'host-a',bootId:'boot-a',reason:'resources' };
+    const other = await issueRunnerToken(pool,'other-return','fake');
+    expect((await app.inject({ method:'POST',url:`/api/runner/jobs/${job.id}/return`,headers:{ ...headers(),authorization:`Bearer ${other}` },payload })).statusCode).toBe(409);
+    expect((await post(`jobs/${job.id}/process`,{ fence:job.fence,processGroup:123,cgroup:null })).statusCode).toBe(204);
+    expect((await post(`jobs/${job.id}/return`,payload)).statusCode).toBe(409);
+    expect(await hold(job.id)).toMatchObject({ slot_state:'active',pgid:123 });
+  });
+
+  test('시도 job이 아닌 외부 작업에는 자원 반환을 적용하지 않는다', async () => {
+    await owner.query("insert into runner_jobs(project_id,epoch,kind,payload,dedup_key,state) values($1,1,'ci_retry',$2,'return-ci','queued')",[project,{ runId:randomUUID(),pr:1,commit:sha }]);
+    const job=(await claim(['ci_retry'])).json().job as { id:string;fence:number };
+    expect((await post(`jobs/${job.id}/return`,{ fence:job.fence,hostId:'host-a',bootId:'boot-a',reason:'resources' })).statusCode).toBe(409);
+    expect(await hold(job.id)).toMatchObject({ closed_at:null,slot_state:'reserved',lock_state:'none' });
+  });
+
+  test.each(['host','boot'])('반환 대기 뒤 %s 변경·재시작에도 옛 보유를 보존하고 새 Runner가 claim·인계한다', async change => {
+    const { job,t }=await claimed();
+    expect((await post(`jobs/${job.id}/return`,{ fence:job.fence,hostId:'host-a',bootId:'boot-a',reason:'resources' })).statusCode).toBe(204);
+    const previous=await hold(job.id);
+    const hostId=change==='host' ? 'host-new' : 'host-a';
+    for (const bootId of ['boot-new','boot-restarted']) expect((await post('host',{ hostId,bootId,cpu:'fake',cores:20,memGB:32,swapGB:0,diskFreeGB:100,os:'fake' })).statusCode).toBe(200);
+    const archived=(await owner.query('select * from execution_holds where id=$1',[previous?.id])).rows[0];
+    if (change==='host') expect(archived).toMatchObject({ lock_state:'orphaned',closed_at:expect.any(Date) });
+    const token=await issueRunnerToken(pool,'restarted-return','fake');
+    const nextPost=(path:string,payload:object)=>app.inject({ method:'POST',url:`/api/runner/${path}`,headers:{ ...headers(),authorization:`Bearer ${token}` },payload });
+    await owner.query("update runner_jobs set resource_retry_at=clock_timestamp()-interval '1 second' where id=$1",[job.id]);
+    const response=await nextPost('jobs/claim',{ kinds:['attempt'],capacity:20 });
+    expect(response.statusCode,response.body).toBe(200);
+    const next=response.json().job as typeof job;
+    expect(next).toMatchObject({ id:job.id,fence:job.fence+1 });
+    const current=await inEpoch(pool,1,c=>new RunnerRepository(c).hold(job.id));
+    expect(current).toMatchObject({ host_id:hostId,boot_id:'boot-restarted',slot_state:'reserved',closed_at:null });
+    if (change==='host') {
+      expect(current?.id).not.toBe(previous?.id);
+      expect((await owner.query('select * from execution_holds where id=$1',[previous?.id])).rows[0]).toEqual(archived);
+      await expect(owner.query('update execution_holds set slots=0 where id=$1',[previous?.id])).rejects.toThrow('closed hold is immutable');
+    }
+    expect((await start(job)).statusCode).toBe(409);
+    expect((await post(`jobs/${job.id}/return`,{ fence:job.fence,hostId:'host-a',bootId:'boot-a',reason:'resources' })).statusCode).toBe(409);
+    const started=await nextPost(`jobs/${next.id}/start`,{ fence:next.fence,hostId,bootId:'boot-restarted',headSha:sha,installedSubagents:[] });
+    expect(started.statusCode,started.body).toBe(200);
+    expect((await nextPost(`jobs/${job.id}/slots/release`,{ fence:next.fence,hostId,proof:{ kind:'no_process',bootId:'boot-restarted' },at:now() })).statusCode).toBe(204);
+    const qa=await inEpoch(pool,1,async c=>{
+      await c.query("update task_attempts set status='completed',ended_at=now() where id=$1",[started.json().attemptId]);
+      await c.query("update tasks set status='qa' where id=$1",[t.id]);
+      await c.query("insert into ci_runs(project_id,run_key,stage,pipeline_sha,head_sha,ref,task,attempt,trigger,status,job,fence) values($1,'CI-return',1,$2,$2,'agent/test',$3,$4,'task','pass',$5,$6)",[project,sha,t.id,started.json().attemptId,job.id,next.fence]);
+      return handover(c,job.id,'qa',started.json().attemptId);
+    });
+    const claimedQa=await nextPost('jobs/claim',{ kinds:['attempt'],capacity:20 });
+    expect(claimedQa.statusCode,claimedQa.body).toBe(200);
+    expect(claimedQa.json().job.id).toBe(qa);
+  });
+
+  test('연속 반환은 지수 대기와 3회 상한 뒤 경보·5분 보류를 남기고 시작하면 해소한다', async () => {
+    let { job }=await claimed();
+    for (let n=1;n<=5;n++) {
+      expect((await post(`jobs/${job.id}/return`,{ fence:job.fence,hostId:'host-a',bootId:'boot-a',reason:'resources' })).statusCode).toBe(204);
+      expect((await claim()).statusCode).toBe(204);
+      const expected=n>3 ? 300 : 2**(n-1);
+      const row=(await owner.query('select resource_returns,attempts,extract(epoch from resource_retry_at-clock_timestamp())::float8 seconds from runner_jobs where id=$1',[job.id])).rows[0];
+      expect(row).toMatchObject({ resource_returns:Math.min(n,4),attempts:0 });
+      expect(row?.seconds).toBeGreaterThan(expected-1);
+      expect(row?.seconds).toBeLessThanOrEqual(expected);
+      await owner.query("update runner_jobs set resource_retry_at=clock_timestamp()-interval '1 second' where id=$1",[job.id]);
+      job=(await claim()).json().job as typeof job;
+    }
+    expect((await owner.query('select count(*)::int n from alerts where key=$1 and resolved_at is null',[`runner:resources:${job.id}`])).rows).toEqual([{ n:1 }]);
+    expect((await start(job)).statusCode).toBe(200);
+    expect((await owner.query('select resource_returns,resource_retry_at from runner_jobs where id=$1',[job.id])).rows).toEqual([{ resource_returns:0,resource_retry_at:null }]);
+    expect((await owner.query('select count(*)::int n from alerts where key=$1 and resolved_at is null',[`runner:resources:${job.id}`])).rows).toEqual([{ n:0 }]);
+  });
+
+  test('정리가 덜 된 queued 보유는 claim 전에 거부하고 뒤의 후보를 계속 찾는다', async () => {
+    const { job }=await claimed();
+    await owner.query("update runner_jobs set state='queued' where id=$1",[job.id]);
+    const other=await task(); expect((await request(other.key)).statusCode).toBe(202);
+    const response=await claim();
+    expect(response.statusCode,response.body).toBe(200);
+    expect(response.json().job.payload.taskKey).toBe(other.key);
+    expect((await owner.query('select state,fence,attempts from runner_jobs where id=$1',[job.id])).rows).toEqual([{ state:'queued',fence:job.fence,attempts:1 }]);
+  });
+
+  test.each(['return','qa'])('%s 대기 중 팀장이 Agent를 바꾸면 옛 보유를 닫고 새 Agent로 예약·시작한다', async waiting => {
+    const { t,job }=await claimed('Agent 변경');
+    let waitingId=job.id;
+    if (waiting==='return') {
+      expect((await post(`jobs/${job.id}/return`,{ fence:job.fence,hostId:'host-a',bootId:'boot-a',reason:'resources' })).statusCode).toBe(204);
+    } else {
+      const started=await start(job); expect(started.statusCode,started.body).toBe(200);
+      await release(job,{ kind:'no_process',bootId:'boot-a' },true);
+      waitingId=required(await inEpoch(pool,1,async c=>{
+        await c.query("update task_attempts set status='completed',ended_at=now() where id=$1",[started.json().attemptId]);
+        await c.query("update tasks set status='qa' where id=$1",[t.id]);
+        await c.query("insert into ci_runs(project_id,run_key,stage,pipeline_sha,head_sha,ref,task,attempt,trigger,status,job,fence) values($1,'CI-agent-change',1,$2,$2,'agent/test',$3,$4,'task','pass',$5,$6)",[project,sha,t.id,started.json().attemptId,job.id,job.fence]);
+        return handover(c,job.id,'qa',started.json().attemptId);
+      }));
+    }
+    const previous=await hold(waitingId);
+    await post('models',{ agent:'Claude',models:[{ id:'claude-opus-5-5',label:'시험',efforts:['high'] }] });
+    await owner.query("update agent_models set allowed=true where agent='Claude'");
+    await post('readiness',{ at:now(),items:['claude','codex','git','node','pnpm','pg','repo','disk','subs'].map(key=>({ key,status:'ok',detail:'' })) });
+    await post('usage',{ agent:'Claude',remainPct:100,resetAt:now() });
+    await owner.query("update task_grades set model_id='claude-opus-5-5' where task=$1 and role=$2",[t.id,waiting==='return' ? 'dev' : 'qa']);
+    const current=(await app.inject({ url:`/api/tasks/${t.key}`,headers:lead() })).json();
+    const patched=await app.inject({ method:'PATCH',url:`/api/tasks/${t.key}`,headers:lead(),payload:{ updatedAt:current.updatedAt,...(waiting==='return' ? { assigneeAgent:'Claude' } : { verifierAgent:'Claude' }) } });
+    expect(patched.statusCode,patched.body).toBe(200);
+    await owner.query("update runner_jobs set resource_retry_at=clock_timestamp()-interval '1 day' where id=$1",[waitingId]);
+    const response=await claim(); expect(response.statusCode,response.body).toBe(200);
+    const next=response.json().job as typeof job;
+    expect(next).toMatchObject({ id:waitingId,payload:{ agent:'Claude' } });
+    const replaced=await inEpoch(pool,1,c=>new RunnerRepository(c).hold(waitingId));
+    expect(replaced).toMatchObject({ agent:'Claude',lock_state:'held',slot_state:'reserved',closed_at:null });
+    expect(replaced?.id).not.toBe(previous?.id);
+    expect((await owner.query('select agent,lock_state,closed_at from execution_holds where id=$1',[previous?.id])).rows[0]).toMatchObject({ agent:'Codex',lock_state:'released',closed_at:expect.any(Date) });
+    const started=await start(next); expect(started.statusCode,started.body).toBe(200);
+    expect((await owner.query('select agent,model_id from task_attempts where id=$1',[started.json().attemptId])).rows).toEqual([{ agent:'Claude',model_id:'claude-opus-5-5' }]);
+  });
+
+  test.each(['cancelled','failed','done'])('자원 보류 job이 %s로 끝나면 같은 경보를 해소한다', async state => {
+    const { job }=await claimed();
+    await owner.query('update runner_jobs set resource_returns=3 where id=$1',[job.id]);
+    expect((await post(`jobs/${job.id}/return`,{ fence:job.fence,hostId:'host-a',bootId:'boot-a',reason:'resources' })).statusCode).toBe(204);
+    expect((await owner.query('select count(*)::int n from alerts where key=$1 and resolved_at is null',[`runner:resources:${job.id}`])).rows).toEqual([{ n:1 }]);
+    await inEpoch(pool,1,c=>new RunnerRepository(c).state(job.id,state));
+    expect((await owner.query('select count(*)::int n from alerts where key=$1 and resolved_at is null',[`runner:resources:${job.id}`])).rows).toEqual([{ n:0 }]);
+  });
+
   test('review: 준비 중 서버 등급이 바뀌면 이전 등급 CLI 실행을 거부해야 한다', async () => {
     const { mkdtemp, rm } = await import('node:fs/promises');
     const { join } = await import('node:path');
