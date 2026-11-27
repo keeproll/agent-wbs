@@ -32,6 +32,23 @@ export interface RendererOptions {
   timeoutMs?: number;
   /** 시간 초과 뒤 정리를 기다리는 시간(기본 5초). 넘으면 브라우저를 다시 띄운다. */
   cleanupMs?: number;
+  /** 브라우저 띄우기(기본: Chromium 서버 방식). 시험이 시각을 정확히 맞추려고 바꿔 넣는다. */
+  launcher?: () => Promise<Launched>;
+}
+
+/** 띄운 브라우저 하나: 연결, 프로세스 번호, 프로세스 죽이기 */
+export interface Launched { browser: Browser; pid: number | null; kill(): Promise<void> }
+
+/** 기본 브라우저 띄우기. 프로세스를 직접 죽일 수 있도록 서버 방식(launchServer)으로 띄우고 연결한다. */
+async function launchChromium(): Promise<Launched> {
+  const server: BrowserServer = await chromium.launchServer();
+  try {
+    const browser = await chromium.connect(server.wsEndpoint());
+    return { browser, pid: server.process().pid ?? null, kill: () => server.kill() };
+  } catch (error) {
+    await server.kill().catch(() => undefined);
+    throw error;
+  }
 }
 
 const ORIGIN = 'https://report.awbs.invalid';
@@ -41,8 +58,18 @@ const MARGIN = '14mm';
 const MAX_PARALLEL = 2;
 const sleep = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); });
 
-/** 한 번의 변환. 시간 초과가 나면 aborted가 켜지고, 그 뒤에 만들어지는 작업 공간은 바로 닫는다. */
-interface Job { context?: BrowserContext; aborted: boolean }
+/**
+ * 띄운 브라우저 인스턴스. gen은 띄운 순서(세대) 번호다.
+ * 왜 세대를 두나: 브라우저를 다시 띄운 뒤에 옛 브라우저에서 시작한 변환의 정리가 늦게 끝나면, 그 정리가 새 브라우저를 죽이면 안 된다.
+ * 정리는 자기가 쓴 인스턴스만 죽이고, 공용 `running`은 아직 그 인스턴스를 가리킬 때만 비운다.
+ */
+interface Instance extends Launched { gen: number }
+
+/**
+ * 한 번의 변환. 시간 초과가 나면 aborted가 켜지고, 그 뒤에 만들어지는 작업 공간은 바로 닫는다.
+ * launching: 이 변환이 쓰는 브라우저(띄우는 중일 수도 있다). 정리가 이 브라우저만 다시 띄우게 한다.
+ */
+interface Job { context?: BrowserContext; aborted: boolean; launching?: Promise<Instance> }
 
 class Timeout extends Error {
   constructor() { super('PDF 변환 시간 초과'); }
@@ -51,33 +78,33 @@ class Timeout extends Error {
 export function chromiumRenderer(options: RendererOptions = {}): PdfRenderer {
   const timeoutMs = options.timeoutMs ?? 30_000;
   const cleanupMs = options.cleanupMs ?? 5_000;
-  let running: Promise<{ server: BrowserServer; browser: Browser }> | undefined;
+  const launcher = options.launcher ?? launchChromium;
+  let running: Promise<Instance> | undefined;
+  let generation = 0;
   let active = 0;
   const waiting: (() => void)[] = [];
 
-  /** 브라우저를 띄운다(이미 있으면 그것). 연결이 끊기면 다음 변환이 새로 띄운다. */
-  const launch = () => (running ??= (async () => {
-    const server = await chromium.launchServer();
-    try {
-      const browser = await chromium.connect(server.wsEndpoint());
-      const current = running;
-      browser.on('disconnected', () => {
-        if (running === current) running = undefined;
-        void server.kill().catch(() => undefined);
-      });
-      return { server, browser };
-    } catch (error) {
-      await server.kill().catch(() => undefined);
-      throw error;
-    }
+  /** 브라우저를 띄운다(이미 있으면 그것). 연결이 끊기면 그 인스턴스를 잊고 다음 변환이 새로 띄운다. */
+  const launch = (): Promise<Instance> => (running ??= (async () => {
+    const instance: Instance = { ...(await launcher()), gen: ++generation };
+    const mine = running;
+    instance.browser.on('disconnected', () => {
+      if (running === mine) running = undefined;
+      void instance.kill().catch(() => undefined);
+    });
+    return instance;
   })().catch((error: unknown) => { running = undefined; throw error; }));
 
-  /** 브라우저 프로세스를 죽이고 잊는다. 다음 변환이 새로 띄운다. */
-  async function restart() {
-    const current = running;
-    running = undefined;
-    const started = await current?.catch(() => undefined);
-    await started?.server.kill().catch(() => undefined);
+  /**
+   * 한 인스턴스를 죽이고 잊는다. 공용 running은 아직 그 인스턴스일 때만 비운다(새로 띄운 브라우저는 건드리지 않는다).
+   * 띄우는 중이면 다 뜬 뒤에 죽인다. 다음 변환은 새 인스턴스를 띄운다.
+   */
+  async function retire(target: Promise<Instance> | undefined) {
+    if (!target) return;
+    if (running === target) running = undefined;
+    const instance = await Promise.race([target.catch(() => undefined), sleep(cleanupMs).then(() => 'pending' as const)]);
+    if (instance === 'pending') { void target.then((i) => i.kill(), () => undefined); return; }
+    await instance?.kill().catch(() => undefined);
   }
 
   async function slot<T>(fn: () => Promise<T>): Promise<T> {
@@ -88,7 +115,8 @@ export function chromiumRenderer(options: RendererOptions = {}): PdfRenderer {
 
   async function convert(html: string, job: Job): Promise<Buffer> {
     const files = pdfAssets().fonts;
-    const { browser } = await launch();
+    job.launching = launch();
+    const { browser } = await job.launching;
     const context = await browser.newContext({ viewport: { width: Math.floor(PRINTABLE_PX), height: 1123 } });
     job.context = context;
     try {
@@ -139,7 +167,7 @@ export function chromiumRenderer(options: RendererOptions = {}): PdfRenderer {
           void job.context?.close().catch(() => undefined);
           // 변환이 정리까지 끝나기를 기다린다. 정해진 시간 안에 끝나지 않으면 브라우저가 비정상이므로 다시 띄운다.
           const settled = await Promise.race([work.then(() => true, () => true), sleep(cleanupMs).then(() => false)]);
-          if (!settled) await restart();
+          if (!settled) await retire(job.launching);
           throw new Timeout();
         }
         throw error;
@@ -148,13 +176,13 @@ export function chromiumRenderer(options: RendererOptions = {}): PdfRenderer {
       }
     }),
     async close() {
-      await restart();
+      await retire(running);
     },
     async inspect() {
       const started = await running?.catch(() => undefined);
       if (!started) return { pid: null, contexts: 0, pages: 0 };
       const contexts = started.browser.contexts();
-      return { pid: started.server.process().pid ?? null, contexts: contexts.length, pages: contexts.reduce((n, c) => n + c.pages().length, 0) };
+      return { pid: started.pid, contexts: contexts.length, pages: contexts.reduce((n, c) => n + c.pages().length, 0) };
     },
   };
 }

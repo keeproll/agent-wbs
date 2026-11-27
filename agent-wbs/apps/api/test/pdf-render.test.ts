@@ -128,3 +128,75 @@ describe('PDF 변환기 자원 정리', () => {
     expect(await renderer.inspect()).toEqual({ pid: null, contexts: 0, pages: 0 });
   }, 30_000);
 });
+
+/**
+ * 늦은 정리와 브라우저 교체가 겹치는 경합(Codex 재리뷰 M6-02 P2-1).
+ * 시각을 정확히 맞추려고 브라우저를 흉내 낸 가짜(launcher)를 쓴다. 변환기 코드는 실제와 같다.
+ *
+ * 순서(리뷰어 재현과 같다):
+ * 1. A(0ms)와 B(150ms)가 브라우저 1에서 시작한다. 브라우저 1은 멈춰 있다(탭 작업·작업 공간 닫기가 끝나지 않는다).
+ * 2. A의 시간 한도(400ms)와 정리 한도(100ms)가 지나 A가 브라우저 1을 죽인다(500ms).
+ * 3. A가 돌려준 자리에서 C가 브라우저 2를 띄워 정상 변환을 한다(300ms 걸림, 500~800ms).
+ * 4. C가 일하는 도중 B의 정리 한도가 뒤늦게 지난다(650ms). B는 자기 브라우저(1)만 죽여야 한다. 브라우저 2와 C는 건드리지 않는다.
+ */
+describe('늦은 정리와 브라우저 교체가 겹칠 때', () => {
+  interface Fake { id: number; killed: boolean; hang: boolean; contexts: number }
+  const sleep = (ms: number) => new Promise<void>((r) => { setTimeout(r, ms); });
+  const never = () => new Promise<never>(() => undefined);
+
+  function fakeBrowser(b: Fake, workMs: number) {
+    const gate = () => (b.hang ? never() : sleep(workMs));
+    return {
+      on: () => undefined,
+      contexts: () => Array.from({ length: b.contexts }, () => ({ pages: () => [] })),
+      newContext: async () => {
+        if (b.killed) throw new Error('Browser closed');
+        b.contexts++;
+        const page = {
+          emulateMedia: async () => undefined,
+          goto: async () => { await gate(); if (b.killed) throw new Error('Browser closed'); },
+          evaluate: async () => { if (b.killed) throw new Error('Browser closed'); return true; },
+          pdf: async () => { if (b.killed) throw new Error('Browser closed'); return Buffer.from('%PDF-fake'); },
+        };
+        return {
+          setDefaultTimeout: () => undefined,
+          route: async () => undefined,
+          newPage: async () => page,
+          // 멈춘 브라우저는 작업 공간 닫기도 끝나지 않는다(리뷰어가 늦춘 정리와 같다).
+          close: async () => { if (b.hang) await never(); b.contexts--; },
+        };
+      },
+    };
+  }
+
+  test('B의 늦은 정리는 자기 브라우저(1)만 닫고, 새 브라우저(2)의 C는 정상으로 끝난다', async () => {
+    const browsers: Fake[] = [];
+    const killed: number[] = [];
+    const renderer = chromiumRenderer({
+      timeoutMs: 400, cleanupMs: 100,
+      launcher: async () => {
+        const b: Fake = { id: browsers.length + 1, killed: false, hang: browsers.length === 0, contexts: 0 };
+        browsers.push(b);
+        return {
+          browser: fakeBrowser(b, 300) as never,
+          pid: 1000 + b.id,
+          kill: async () => { b.killed = true; killed.push(b.id); },
+        };
+      },
+    });
+    const a = renderer.render('A').catch((e: unknown) => (e as Error).message);
+    await sleep(150);
+    const b = renderer.render('B').catch((e: unknown) => (e as Error).message);
+    await sleep(5);
+    const c = renderer.render('C').then((pdf) => pdf.toString(), (e: unknown) => (e as Error).message);
+    expect(await a).toBe('PDF 변환 시간 초과');
+    expect(await b).toBe('PDF 변환 시간 초과');
+    expect(await c).toBe('%PDF-fake');
+    // A와 B는 각자 쓴 브라우저 1만 닫았다(두 번 닫아도 같은 브라우저다). 브라우저 2는 닫히지 않았다.
+    expect([...new Set(killed)]).toEqual([1]);
+    expect(browsers.map((x) => x.id)).toEqual([1, 2]);
+    expect((await renderer.inspect()).pid).toBe(1002);
+    await renderer.close();
+    expect(killed.at(-1)).toBe(2);
+  }, 10_000);
+});
