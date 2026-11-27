@@ -1405,6 +1405,15 @@ export interface Operations {
           autoMergeTreeSha: Sha;
           headTreeSha: Sha;
           additionalChanges: boolean;
+          chain?: ({
+            qaHeadSha: Sha;
+            headSha: Sha;
+            preserved: boolean;
+            parents: (Sha)[];
+            autoMergeTreeSha: Sha;
+            headTreeSha: Sha;
+            additionalChanges: boolean;
+          })[];
         };
         mergeParents?: (Sha)[];
       };

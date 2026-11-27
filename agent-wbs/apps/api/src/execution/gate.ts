@@ -5,6 +5,8 @@ import { RunnerRepository, required } from '../runner/repository.ts';
 import { assertExternal } from '../runner/service.ts';
 import { record, SYSTEM } from '../tasks/history.ts';
 import { deferChange } from '../changes/events.ts';
+import { inputHead } from '../project/service.ts';
+import { observedBases } from '../ci/pipeline.ts';
 import { preservedHead, type HeadProof } from '../ci/proof.ts';
 
 export async function gateInputs(client: PoolClient, taskIds: string[], headSync: HeadSync | null = null): Promise<Map<string, GateInput>> {
@@ -66,8 +68,10 @@ export async function completeMergedTask(client: PoolClient, taskKey: string, ba
   if (queue && (queue.ci_task !== task.id || queue.tested_tree_sha !== queue.tree_sha)) throw new PlatformError('GATE_NOT_PASSED');
   const latestVerification = (await client.query<{ id: string }>('select v.id from verifications v join task_attempts a on a.id=v.attempt where a.task=$1 order by a.attempt_no desc limit 1',[task.id])).rows[0];
   if (queue && queue.verification !== latestVerification?.id) throw new PlatformError('GATE_NOT_PASSED');
-  const sync = queue ? preservedHead(queue.qa_head_sha,queue.synced_head_sha,queue.base_sha,queue.tree_sha,queue.head_sync) : headSync;
+  const sync = queue ? preservedHead(queue.qa_head_sha,queue.synced_head_sha,queue.base_sha,queue.tree_sha,queue.head_sync,await observedBases(client,task.project_id)) : headSync;
   if (queue && (!queue.merge_parents || queue.merge_parents.length !== 2 || queue.merge_parents[0] !== queue.base_sha || queue.merge_parents[1] !== queue.synced_head_sha)) throw new PlatformError('GATE_NOT_PASSED');
+  const check = (await client.query<{ pipeline_sha: string }>('select pipeline_sha from ci_runs where task=$1 and stage=1 and head_sha=$2 order by run_no desc limit 1',[task.id,queue?.synced_head_sha])).rows[0];
+  if (queue && check?.pipeline_sha !== basePipelineSha) throw new PlatformError('GATE_NOT_PASSED');
   const evidence: CompletionInput = { ...await gateInput(client,task.id,sync),basePipelineSha,
     integration:queue?.pipeline_sha ? { result:queue.result === 'pass' ? 'PASS' : 'FAIL',qaHeadSha:queue.qa_head_sha,
       headSha:queue.ci_head,baseSha:queue.ci_base,pipelineSha:queue.pipeline_sha,treeSha:queue.tree_sha } : null,
@@ -104,13 +108,29 @@ export async function invalidateTaskGate(client: PoolClient, taskKey: string, he
   return true;
 }
 
-export async function enqueueIntegration(client: PoolClient, taskId: string, epoch: number) {
-  const repo = new RunnerRepository(client);
+export async function enqueueIntegration(client: PoolClient, taskId: string, epoch: number, options: { retry?: boolean; baseSha?: string } = {}) {
+  const repo = new RunnerRepository(client); await repo.lock();
   const task = await repo.taskById(taskId);
-  if (!task || task.status !== 'gate' || !(await taskGate(client,task.id,task.task_key)).passed) return;
+  if (!task || task.status !== 'gate') return;
+  const input = await gateInput(client,task.id);
+  const baseline = (await client.query("select fail_scope='baseline' and status='fail' baseline from ci_runs where task=$1 and stage=1 and head_sha=$2 order by run_no desc limit 1",[task.id,input.basis.headSha])).rows[0]?.baseline;
+  // 기준 실패만 ① 재실행을 허용한다. 명세·입력·QA와 나머지 완료 조건은 그대로 확인한다.
+  if (baseline && input.taskCheck) input.taskCheck = { ...input.taskCheck,result:'PASS' };
+  if (!completionGate(input).every(c => c.result === 'PASS')) return;
   const verification = required((await client.query<{ id: string; head_sha: string }>('select v.id,v.head_sha from verifications v join task_attempts a on a.id=v.attempt where a.task=$1 order by a.attempt_no desc limit 1', [task.id])).rows[0]);
+  const base = options.baseSha ?? await inputHead(client,task.project_id);
+  const prefix = `integrate:${verification.id}:`;
+  const jobs = (await client.query<{ id: string; state: string; base_sha: string }>(`select j.id,j.state,coalesce(j.payload->>'baseSha',
+    (select c.base_sha from ci_runs c where c.job=j.id and c.base_sha is not null order by c.run_no desc limit 1),$3) base_sha
+    from runner_jobs j where starts_with(j.dedup_key,$1) or j.dedup_key=$2 order by j.record_no desc`,[prefix,`integrate:${verification.id}`,base])).rows;
+  const open = jobs.find(j => ['queued','leased','started','reconcile'].includes(j.state));
+  if (open) return open.id;
+  const rounds = jobs.filter(j => j.base_sha === base);
+  if (rounds.length && !options.retry) return;
   const a = (await repo.history(task.id)).at(-1);
   const pr = a?.pr ?? (await client.query<{ pr: number }>('select pr from ci_runs where task=$1 and head_sha=$2 and pr is not null order by run_no desc limit 1',[task.id,verification.head_sha])).rows[0]?.pr;
   if (!pr) return;
-  await repo.enqueue(task.project_id,epoch,'integrate',{ taskKey:task.task_key,qaHeadSha:verification.head_sha,branch:a?.branch,pr,commit:verification.head_sha },`integrate:${verification.id}`,(await repo.authority())?.generation ?? null);
+  const id = await repo.enqueue(task.project_id,epoch,'integrate',{ taskKey:task.task_key,qaHeadSha:verification.head_sha,branch:a?.branch,pr,commit:verification.head_sha,baseSha:base },`${prefix}${base}:${rounds.length+1}`,(await repo.authority())?.generation ?? null);
+  if (id) deferChange(client,task.project_id,'ci',{ taskKey:task.task_key });
+  return id;
 }

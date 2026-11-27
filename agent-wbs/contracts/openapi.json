@@ -26381,6 +26381,51 @@
                       },
                       "additionalChanges": {
                         "type": "boolean"
+                      },
+                      "chain": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "qaHeadSha",
+                            "headSha",
+                            "preserved",
+                            "parents",
+                            "autoMergeTreeSha",
+                            "headTreeSha",
+                            "additionalChanges"
+                          ],
+                          "properties": {
+                            "qaHeadSha": {
+                              "$ref": "#/components/schemas/Sha"
+                            },
+                            "headSha": {
+                              "$ref": "#/components/schemas/Sha"
+                            },
+                            "preserved": {
+                              "type": "boolean"
+                            },
+                            "parents": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/components/schemas/Sha"
+                              },
+                              "minItems": 2,
+                              "maxItems": 2
+                            },
+                            "autoMergeTreeSha": {
+                              "$ref": "#/components/schemas/Sha"
+                            },
+                            "headTreeSha": {
+                              "$ref": "#/components/schemas/Sha"
+                            },
+                            "additionalChanges": {
+                              "type": "boolean"
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "minItems": 2
                       }
                     },
                     "additionalProperties": false

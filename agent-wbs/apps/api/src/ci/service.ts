@@ -5,7 +5,8 @@ import { deferChange } from '../changes/events.ts';
 import { PlatformError } from '../platform/errors.ts';
 import { RunnerRepository, required } from '../runner/repository.ts';
 import { checkedJob, handover } from '../runner/service.ts';
-import { completeMergedTask, gateInput } from '../execution/gate.ts';
+import { completeMergedTask, gateInput, invalidateTaskGate } from '../execution/gate.ts';
+import { observedBases } from './pipeline.ts';
 import { assertCiTransition, preservedHead, type HeadProof } from './proof.ts';
 
 type Run = typeof schema.ciRuns.$inferSelect;
@@ -78,7 +79,7 @@ export async function updateRun(client: PoolClient, id: string, principal: strin
     await client.query(`insert into ci_steps(project_id,run,step_key,status,command,duration_ms) values($1,$2,$3,$4,'',$5)
       on conflict(run,step_key) do update set status=excluded.status,duration_ms=excluded.duration_ms`,[run.project_id,id,step.name,step.status,step.durationMs]);
   }
-  const failStep = (await client.query<{ step_key: string }>("select step_key from ci_steps where run=$1 and status='fail' order by created_at,id limit 1",[id])).rows[0]?.step_key ?? null;
+  const failStep = (await client.query<{ step_key: string }>("select step_key from ci_steps where run=$1 and status='fail' order by record_no limit 1",[id])).rows[0]?.step_key ?? null;
   if (status === 'pass' && (await client.query("select 1 from ci_steps where run=$1 and status not in ('pass','skip') limit 1",[id])).rowCount) throw new PlatformError('INVALID_TRANSITION');
   await client.query(`update ci_runs set status=$2,log_excerpt=coalesce($3,log_excerpt),artifacts=coalesce($4::jsonb,artifacts),url=coalesce($5,url),
     base_sha=coalesce(base_sha,$6),head_sha=coalesce(head_sha,$7),merge_sha=coalesce(merge_sha,$8),tree_sha=coalesce(tree_sha,$9),fail_step=$10,fail_scope=coalesce($11,fail_scope) where id=$1`,
@@ -88,6 +89,10 @@ export async function updateRun(client: PoolClient, id: string, principal: strin
 }
 
 async function notifyResult(client: PoolClient, run: Run) {
+  if (run.stage === 1 && run.status === 'pass' && run.base_sha) {
+    await client.query("update alerts set resolved_at=clock_timestamp() where project_id=$1 and key=$2 and resolved_at is null and not exists(select 1 from ci_runs where project_id=$1 and base_sha=$3 and stage=1 and run_no>$4 and fail_scope='baseline')",[run.project_id,`ci:baseline|${run.base_sha}`,run.base_sha,run.run_no]);
+    await client.query("update notify_events set resolved_at=clock_timestamp() where project_id=$1 and ref->>'failScope'='baseline' and ref->>'baseSha'=$2 and resolved_at is null and not exists(select 1 from ci_runs where project_id=$1 and base_sha=$2 and stage=1 and run_no>$3 and fail_scope='baseline')",[run.project_id,run.base_sha,run.run_no]);
+  }
   if (run.stage === 1 && run.fail_scope !== 'baseline' || !['pass','fail'].includes(run.status)) return;
   const stage = Object.keys(CI_STAGE).find(k => CI_STAGE[k as keyof typeof CI_STAGE] === run.stage);
   const key = run.fail_scope === 'baseline' ? `baseline|${run.base_sha}` : `buildFail|${stage}|${run.pr ? `#${run.pr}` : 'main'}`;
@@ -106,8 +111,8 @@ async function notifyResult(client: PoolClient, run: Run) {
     select $1,$2,$3,$4 where exists(select 1 from notify_rules where key=$3 and enabled)
       and exists(select 1 from notify_settings where singleton and enabled)
     on conflict((coalesce(project_id::text,'global')),dedup_key) where resolved_at is null do update set dup_count=notify_events.dup_count+1`,
-  [run.project_id,kind === 'buildFail' ? key : `buildOk|${stage}|${run.id}`,kind,
-    { id:run.id,stage,pr:run.pr,failStep:run.fail_step,failScope:run.fail_scope,path:`/ci/${run.id}` }]);
+  [run.project_id,kind === 'buildFail' ? run.fail_scope === 'baseline' ? `${key}|${run.id}` : key : `buildOk|${stage}|${run.id}`,kind,
+    { id:run.id,stage,pr:run.pr,failStep:run.fail_step,failScope:run.fail_scope,baseSha:run.base_sha,path:`/ci/${run.id}` }]);
   deferChange(client,run.project_id,'alert',{ id:run.id });
   deferChange(client,run.project_id,'notify',{ id:run.id });
 }
@@ -135,6 +140,11 @@ export async function reportQueue(client: PoolClient, principal: string, body: Q
   }
   const latest = (await client.query<Queue>(`select * from merge_queue where task=$1 order by queue_no desc limit 1 for update`,[task.id])).rows[0];
   try {
+    if (body.actualMergeSha) {
+      await client.query('insert into ci_merge_facts(project_id,merge_sha,tree_sha,parents) values($1,$2,$3,$4::jsonb) on conflict do nothing',[task.project_id,body.actualMergeSha,body.actualTreeSha,JSON.stringify(body.mergeParents ?? null)]);
+      const first = required((await client.query<{ tree_sha: string | null; parents: string[] | null }>('select tree_sha,parents from ci_merge_facts where project_id=$1 and merge_sha=$2',[task.project_id,body.actualMergeSha])).rows[0]);
+      if (first.tree_sha !== (body.actualTreeSha ?? null) || JSON.stringify(first.parents) !== JSON.stringify(body.mergeParents ?? null)) bad();
+    }
     if (task.status !== 'gate') throw new PlatformError('INVALID_TRANSITION');
     const v = (await client.query<{ id: string; head_sha: string }>(`select v.id,v.head_sha from verifications v join task_attempts a on a.id=v.attempt
       where a.task=$1 and a.kind in ('qa','reverify') order by a.attempt_no desc limit 1`,[task.id])).rows[0];
@@ -152,14 +162,23 @@ export async function reportQueue(client: PoolClient, principal: string, body: Q
     const proof = body.headSync ?? previous?.head_sync as HeadProof | null;
     if (previous && (previous.base_sha && base !== previous.base_sha || previous.status === 'checking' && previous.synced_head_sha && head !== previous.synced_head_sha || previous.qa_head_sha !== v?.head_sha)) bad();
     let sync = null;
+    if (proof?.chain && head && base) {
+      try { preservedHead(required(v).head_sha,head,base,tree ?? proof.headTreeSha,proof,await observedBases(client,task.project_id)); }
+      catch (error) {
+        if (!(error instanceof PlatformError)) throw error;
+        await invalidateTaskGate(client,task.task_key,head);
+        throw new PlatformError('GATE_NOT_PASSED',{ reverify:true });
+      }
+    }
     if (body.status === 'checking' || body.status === 'merged') {
       if (!base || !head || !tree || !ciId) bad();
-      sync = preservedHead(required(v).head_sha,required(head),required(base),required(tree),proof);
+      sync = preservedHead(required(v).head_sha,required(head),required(base),required(tree),proof,await observedBases(client,task.project_id));
       const ci = (await client.query<Run>('select * from ci_runs where id::text=$1',[ciId])).rows[0];
       if (!ci || ci.project_id !== task.project_id || ci.task !== task.id || ci.job !== job.id || ci.fence !== job.fence || ci.stage !== 2 ||
         ci.head_sha !== head || ci.base_sha !== base || ci.tree_sha !== tree || body.status === 'merged' && ci.status !== 'pass') bad();
       const pipeline = await resolveBasePipelineSha(client,required(base),task.project_id);
-      if (!pipeline || pipeline !== ci?.pipeline_sha || !completionGate(await gateInput(client,task.id,sync)).every(c => c.result === 'PASS')) bad();
+      const check = (await client.query<{ pipeline_sha: string }>('select pipeline_sha from ci_runs where task=$1 and stage=1 and head_sha=$2 order by run_no desc limit 1',[task.id,head])).rows[0];
+      if (!pipeline || check?.pipeline_sha !== pipeline || pipeline !== ci?.pipeline_sha || !completionGate(await gateInput(client,task.id,sync)).every(c => c.result === 'PASS')) bad();
     }
     const parents = body.mergeParents ?? previous?.merge_parents as string[] | null;
     if (body.status === 'merged' && !body.actualMergeSha) bad();
@@ -192,8 +211,8 @@ export async function reportQueue(client: PoolClient, principal: string, body: Q
   } catch (error) {
     if (body.status !== 'merged' || !body.actualMergeSha || !latest ||
       !(error instanceof PlatformError || error instanceof DomainError) || !['GATE_NOT_PASSED','INVALID_TRANSITION'].includes(error.code)) throw error;
-    await client.query('update merge_queue set status=$5,actual_merge_sha=$2,actual_tree_sha=coalesce($3,actual_tree_sha),merge_parents=coalesce($4::jsonb,merge_parents) where id=$1',
-      [latest.id,body.actualMergeSha,body.actualTreeSha,body.mergeParents ? JSON.stringify(body.mergeParents) : null,latest.status]);
+    await client.query(`update merge_queue q set status=$4,actual_merge_sha=f.merge_sha,actual_tree_sha=f.tree_sha,merge_parents=f.parents
+      from ci_merge_facts f where q.id=$1 and f.project_id=$2 and f.merge_sha=$3`,[latest.id,task.project_id,body.actualMergeSha,latest.status]);
     const key = `ci:mergeMismatch|#${body.pr}`;
     const ref = { taskKey:task.task_key,id:latest.id,actualMergeSha:body.actualMergeSha,message:'실제 병합이 검증 근거와 다릅니다. 완료를 보류합니다.' };
     await client.query("insert into alerts(project_id,key,severity,target) values($1,$2,'error',$3) on conflict do nothing",[task.project_id,key,ref]);

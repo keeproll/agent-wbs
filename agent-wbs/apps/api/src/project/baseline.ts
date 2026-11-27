@@ -16,7 +16,7 @@ export interface BaselineTask extends Omit<ScheduleTask, 'cg'> { cg?: string; uu
 
 async function concurrency(db: Db, windowDays: number): Promise<ScheduleInput['concurrency']> {
   const host = (await db.query<{ cores: number; mem_gb: string; disk_gb: string; per_session_gb: string | null }>(
-    'select cores,mem_gb,disk_gb,per_session_gb from runner_hosts order by seen_at desc,created_at desc limit 1')).rows[0];
+    'select cores,mem_gb,disk_gb,per_session_gb from runner_hosts order by record_no desc limit 1')).rows[0];
   if (!host) {
     throw new ProjectError('INVALID_TRANSITION', { message: '실행 PC 사양 보고가 없어 기준 일정 v1의 동시 실행 수를 계산할 수 없습니다.',
       fix: 'Runner를 연결해 PC 사양을 보고한 뒤 다시 승인하세요.' });
@@ -28,7 +28,7 @@ async function concurrency(db: Db, windowDays: number): Promise<ScheduleInput['c
     Number(settings?.mem_reserve_gb ?? DEFAULT_MEM_RESERVE_GB)).caps;
   const manual = settings?.caps;
   const caps = effectiveCaps(settings?.mode ?? 'auto', manual ? { total: manual.total, perAgent: { Claude: manual.Claude, Codex: manual.Codex }, heavy: manual.heavy } : recommended, recommended).caps;
-  const current = (await db.query<{ limit: number }>('select "limit" from runner_concurrency_log order by created_at desc limit 1')).rows[0]?.limit ?? caps.total;
+  const current = (await db.query<{ limit: number }>('select "limit" from runner_concurrency_log order by record_no desc limit 1')).rows[0]?.limit ?? caps.total;
   return { total: caps.total, current, subRatio: await observedSubRatio(db, windowDays), Claude: caps.perAgent.Claude, Codex: caps.perAgent.Codex };
 }
 
@@ -40,7 +40,7 @@ export async function scheduleInput(db: Db, tasks: readonly BaselineTask[], deps
     'select started_at::text as "from",ended_at::text as "to",last_heartbeat_at::text as last from runner_sessions order by started_at')).rows;
   const blackouts = (await db.query<{ d: string }>("select to_char(date,'YYYY-MM-DD') d from blackout_days order by date")).rows.map((row) => row.d);
   const usageRows = (await db.query<{ agent: Agent; remain: string; reset_at: string }>(
-    'select distinct on (agent) agent,remain_pct as remain,reset_at::text from agent_usage order by agent,created_at desc')).rows;
+    'select distinct on (agent) agent,remain_pct as remain,reset_at::text from agent_usage order by agent,record_no desc')).rows;
   const iso = (value: string) => new Date(value).toISOString();
   return {
     now: new Date().toISOString(),

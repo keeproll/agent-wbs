@@ -7,6 +7,9 @@ import { installRunner } from '../src/runner/routes.ts';
 import { installCiRunner } from '../src/ci/routes.ts';
 import { resolveBasePipelineSha } from '../src/ci/service.ts';
 import { installProjectRunner } from '../src/project/runner-routes.ts';
+import { policyOf, scheduleInput } from '../src/planning/schedule.ts';
+import { loadSnapshot } from '../src/planning/snapshot.ts';
+import { RunnerRepository } from '../src/runner/repository.ts';
 import { inputHead } from '../src/project/service.ts';
 
 const db = new URL(inject('testDatabaseUrl'));
@@ -211,8 +214,8 @@ test.each([false,true])('H→H′=%s의 실제 병합 보고는 기록된 ①·�
     expect((await queue(a,'checking',{ ...extra,headSync:{ ...proof,...changed } })).statusCode).toBe(409);
   }
   expect((await queue(a,'checking',extra)).statusCode).toBe(204);
-  expect((await queue(a,'merged',{ ...extra,actualMergeSha:'9'.repeat(40),actualTreeSha:tree,mergeParents:[head,otherSha] })).statusCode).toBe(409);
-  expect((await queue(a,'merged',{ ...extra,actualMergeSha:'9'.repeat(40),actualTreeSha:sha,mergeParents:[otherSha,head] })).statusCode).toBe(409);
+  expect((await queue(a,'merged',{ ...extra,actualMergeSha:'8'.repeat(40),actualTreeSha:tree,mergeParents:[head,otherSha] })).statusCode).toBe(409);
+  expect((await queue(a,'merged',{ ...extra,actualMergeSha:'7'.repeat(40),actualTreeSha:sha,mergeParents:[otherSha,head] })).statusCode).toBe(409);
   const h = headers(), merged = { ...extra,actualMergeSha:'9'.repeat(40),actualTreeSha:tree,mergeParents:[otherSha,head] };
   const completed = await queue(a,'merged',merged,h); expect(completed.statusCode,completed.body).toBe(204);
   expect((await queue(a,'merged',merged,h)).headers['idempotency-replayed']).toBe('true');
@@ -351,8 +354,9 @@ test('리뷰 R2: 실제 병합 불일치는 SHA·경고를 커밋하고 Task는 
   expect((await owner.query('select status from tasks where id=$1',[a.id])).rows).toEqual([{ status:'gate' }]);
   expect((await get('alerts')).json().items).toMatchObject([{ key:'ci:mergeMismatch|#1' }]);
   expect((await owner.query("select kind from notify_events where dedup_key='ci:mergeMismatch|#1'")).rows).toEqual([{ kind:'buildFail' }]);
-  expect((await queue(a,'merged',{ ...extra,actualMergeSha:'9'.repeat(40),actualTreeSha:tree,mergeParents:[otherSha,sha] })).statusCode).toBe(204);
-  expect((await get('alerts')).json().items).toHaveLength(0);
+  expect((await queue(a,'merged',{ ...extra,actualMergeSha:'9'.repeat(40),actualTreeSha:tree,mergeParents:[otherSha,sha] })).statusCode).toBe(409);
+  expect((await owner.query('select merge_parents from merge_queue where task=$1',[a.id])).rows).toEqual([{ merge_parents:[sha,otherSha] }]);
+  expect((await get('alerts')).json().items).toHaveLength(1);
 });
 
 test('병합 뒤 명세 변경을 발견해도 실제 병합 사실과 경보는 잃지 않는다', async () => {
@@ -471,3 +475,99 @@ test('완료 버튼도 저장된 H→H′ 증거와 basePipelineSha를 사용한
   expect((await owner.query("select count(*)::int n from notify_events where kind='done'")).rows).toEqual([{ n:0 }]);
 });
 
+
+async function baselineFailed() {
+  const a = await gateTask(); await queue(a,'queued');
+  const run = await start(a,'task',{ attemptId:undefined }); const id = run.json().id as string;
+  await patch(id,{ fence:1,status:'run' }); await patch(id,{ fence:1,status:'fail',failScope:'baseline' });
+  expect((await queue(a,'failed',{ ciRunId:id })).statusCode).toBe(204);
+  return { a,id };
+}
+
+test('결정 11: 기준 실패 뒤 팀장 다시 시도는 같은 main에서도 새 통합 차수를 만든다', async () => {
+  const { a,id } = await baselineFailed();
+  const r = await app.inject({ method:'POST',url:`/api/projects/${project}/ci/runs/${id}/retry`,headers:lead(),payload:{} });
+  expect(r.statusCode,r.body).toBe(202);
+  expect((await owner.query('select kind,dedup_key from runner_jobs where id=$1',[r.json().jobId])).rows).toEqual([{ kind:'integrate',dedup_key:expect.stringMatching(new RegExp(`^integrate:[^:]+:${otherSha}:2$`)) }]);
+  expect((await owner.query('select status from tasks where id=$1',[a.id])).rows).toEqual([{ status:'gate' }]);
+  const claimed = await post('jobs/claim',{ kinds:['integrate'],capacity:20 });
+  expect(claimed.statusCode,claimed.body).toBe(200);
+  expect(claimed.json()).toMatchObject({ job:{ id:r.json().jobId,kind:'integrate' } });
+  expect((await owner.query('select task from execution_holds where job=$1',[r.json().jobId])).rows).toEqual([{ task:a.id }]);
+});
+
+test('결정 11: 기준 실패 뒤 main 이동은 자동 재통합하며 이전 기준 경보를 해소한다', async () => {
+  const { a } = await baselineFailed(); const base = 'd'.repeat(40);
+  await observe(base);
+  await observe(base);
+  expect((await owner.query("select kind,dedup_key from runner_jobs where state='queued'")).rows).toEqual([{ kind:'integrate',dedup_key:expect.stringContaining(`:${base}:1`) }]);
+  expect((await get('alerts')).json().items).toHaveLength(0);
+  expect((await owner.query('select status from tasks where id=$1',[a.id])).rows).toEqual([{ status:'gate' }]);
+});
+
+test('결정 13: 최신 H′ ①만 다른 pipeline이어도 올바른 ②로 완료하지 못한다', async () => {
+  const a = await gateTask(), head = 'e'.repeat(40), tree = 'f'.repeat(40);
+  await queue(a,'queued');
+  const one = await start(a,'task',{ attemptId:undefined,headSha:head,pipelineSha:'d'.repeat(40) });
+  const two = await start(a,'int',{ attemptId:undefined,headSha:head,treeSha:tree });
+  for (const r of [one,two]) { await patch(r.json().id as string,{ fence:1,status:'run' }); await patch(r.json().id as string,{ fence:1,status:'pass' }); }
+  const r = await queue(a,'checking',{ syncedHeadSha:head,ciRunId:two.json().id,testedTreeSha:tree,headSync:{ qaHeadSha:sha,headSha:head,preserved:true,parents:[sha,otherSha],autoMergeTreeSha:tree,headTreeSha:tree,additionalChanges:false } });
+  expect(r.statusCode,r.body).toBe(409);
+});
+
+test.each(['error','missing'])('결정 14: %s 관측 뒤 성공한 같은 main 정의를 다시 받는다', async status => {
+  const r = await post('input-changes',{ base:sha,head:otherSha,baseIsAncestor:true,treeHash:sha,changes:[],commits:[],pipelineObservation:{ baseSha:otherSha,pipelineSha:null,definition:{ path:'.agentwbs/pipeline.yaml',commit:otherSha,status,error:'다시 확인',raw:null,stages:null } } });
+  expect(r.statusCode,r.body).toBe(200);
+  expect((await owner.query('select pipeline_observations from projects where id=$1',[project])).rows).toEqual([{ pipeline_observations:{} }]);
+  await observe();
+  expect((await get(`projects/${project}/ci/pipeline`)).json()).toMatchObject({ status:'ok',raw:'version: 1' });
+});
+
+test('결정 15: 같은 병합 사실에서 늦은 ② PASS만 보충되면 보류를 풀 수 있다', async () => {
+  const { a,id,tree,extra } = await integration();
+  await owner.query("update ci_runs set status='run' where id=$1",[id]);
+  expect((await queue(a,'checking',extra)).statusCode).toBe(204);
+  const merged = { ...extra,actualMergeSha:'9'.repeat(40),actualTreeSha:tree,mergeParents:[otherSha,sha] };
+  expect((await queue(a,'merged',merged)).statusCode).toBe(409);
+  expect((await patch(id,{ fence:1,status:'pass' })).statusCode).toBe(204);
+  expect((await queue(a,'merged',merged)).statusCode).toBe(204);
+});
+
+
+test('결정 12: 미래 시각인 옛 추정과 사용량이 새 기록을 가리지 않는다', async () => {
+  const a = await running();
+  await owner.query(`insert into task_estimates(project_id,task,est,lo,hi,tokens_k,confidence,basis,agreed_by,created_at)
+    values($1,$2,1,1,1,null,'중','이전','Codex',now()+interval '1 hour'),($1,$2,2,2,2,33,'중','최신','Codex',now()-interval '1 hour')`,[project,a.id]);
+  expect((await get(`tasks/${a.key}`)).json()).toMatchObject({ estimate:{ tokensK:33,estHours:2 } });
+  const client = await pool.connect();
+  try {
+    expect((await loadSnapshot(client,project)).snapshot.tasks.find(t => t.id===a.key)?.estimate).toMatchObject({ est:2 });
+    await owner.query("insert into agent_usage(agent,remain_pct,reset_at,created_at) values('Codex',10,now(),now()+interval '1 hour'),('Codex',77,now(),now()-interval '1 hour')");
+    const repo = new RunnerRepository(client);
+    expect((await scheduleInput(client,project,await policyOf(client))).input.tasks.find(t => t.id===a.key)).toMatchObject({ est:2 });
+    expect(Number((await repo.usage('Codex'))?.remain_pct)).toBe(77);
+    expect((await repo.allUsage()).map(u => Number(u.remain_pct))).toEqual([77]);
+  } finally { client.release(); }
+});
+
+
+test.each([false,true])('결정 16: 두 단계 main 사슬은 원래 QA를 유지하고 변조=%s이면 재QA 상태로 보낸다', async tampered => {
+  const a = await gateTask(), head1 = 'e'.repeat(40), head2 = 'f'.repeat(40), base2 = 'd'.repeat(40), tree1 = '1'.repeat(40), tree2 = '2'.repeat(40);
+  await observe(base2);
+  const first = { qaHeadSha:sha,headSha:head1,preserved:true,parents:[sha,otherSha],autoMergeTreeSha:tree1,headTreeSha:tree1,additionalChanges:false };
+  const last = { qaHeadSha:head1,headSha:head2,preserved:true,parents:[head1,base2],autoMergeTreeSha:tree2,headTreeSha:tree2,additionalChanges:false };
+  const proof = { ...last,qaHeadSha:sha,chain:[{ ...first,...(tampered ? { headTreeSha:sha } : {}) },last] };
+  expect((await queue(a,'queued',{ baseSha:base2,syncedHeadSha:head2,headSync:proof })).statusCode).toBe(tampered ? 409 : 204);
+  if (tampered) {
+    expect((await owner.query('select status from tasks where id=$1',[a.id])).rows).toEqual([{ status:'verifying' }]);
+    expect((await owner.query('select count(*)::int n from verification_invalidations')).rows).toEqual([{ n:1 }]);
+    return;
+  }
+  const one = await start(a,'task',{ attemptId:undefined,baseSha:base2,headSha:head2 });
+  const two = await start(a,'int',{ attemptId:undefined,baseSha:base2,headSha:head2,treeSha:tree2 });
+  for (const r of [one,two]) { expect(r.statusCode,r.body).toBe(201); await patch(r.json().id as string,{ fence:1,status:'run' }); await patch(r.json().id as string,{ fence:1,status:'pass' }); }
+  const extra = { baseSha:base2,syncedHeadSha:head2,headSync:proof,testedTreeSha:tree2,ciRunId:two.json().id };
+  expect((await queue(a,'checking',extra)).statusCode).toBe(204);
+  expect((await queue(a,'merged',{ ...extra,actualMergeSha:'9'.repeat(40),actualTreeSha:tree2,mergeParents:[base2,head2] })).statusCode).toBe(204);
+  expect((await owner.query('select head_sha from verifications')).rows).toEqual([{ head_sha:sha }]);
+});

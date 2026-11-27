@@ -10,6 +10,7 @@ import { PlatformError } from '../platform/errors.ts';
 import { RunnerRepository, required } from '../runner/repository.ts';
 import { assertExternal } from '../runner/service.ts';
 import { inputHead } from '../project/service.ts';
+import { enqueueIntegration } from '../execution/gate.ts';
 import { pipelineDefinition } from './pipeline.ts';
 import { reportQueue, startRun, updateRun, type Start, type Update, type QueueReport } from './service.ts';
 
@@ -20,7 +21,7 @@ async function project(client: PoolClient, id: string) {
 const runSelect = `select c.id,c.run_no::text "runNo",c.run_key "runKey",case c.stage when 1 then 'task' when 2 then 'int' when 3 then 'night' when 4 then 'deploy' end stage,
   c.status,t.task_key "taskKey",c.attempt "attemptId",c.ref,c.pr,c.trigger,c.base_sha "baseSha",c.head_sha "headSha",c.merge_sha "mergeSha",c.tree_sha "treeSha",c.pipeline_sha "pipelineSha",
   c.fail_step "failStep",c.fail_scope "failScope",c.log_excerpt "logExcerpt",c.artifacts,c.url,${iso('c.created_at')} "startedAt",
-  coalesce((select jsonb_agg(jsonb_build_object('name',s.step_key,'status',s.status,'durationMs',s.duration_ms) order by s.created_at,s.id) from ci_steps s where s.run=c.id),'[]') steps
+  coalesce((select jsonb_agg(jsonb_build_object('name',s.step_key,'status',s.status,'durationMs',s.duration_ms) order by s.record_no) from ci_steps s where s.run=c.id),'[]') steps
   from ci_runs c left join tasks t on t.id=c.task`;
 
 /** 보안 시험이 Runner 경로에 가짜 처리기를 붙일 수 있게 실행 보고 경로는 main에서 따로 설치한다. */
@@ -31,7 +32,7 @@ export function installCiRunner(app: FastifyInstance) {
     route('reportMergeQueue',async (r,reply) => {
       try { await reportQueue(clientOf(r),r.platform?.principal ?? '',r.body as QueueReport); }
       catch (e) {
-        if (e instanceof PlatformError && e.code === 'MERGE_MISMATCH' && r.platform) r.platform.commitOnError = true;
+        if (e instanceof PlatformError && (e.code === 'MERGE_MISMATCH' || e.details.reverify === true) && r.platform) r.platform.commitOnError = true;
         if (e instanceof DomainError) throw new PlatformError(e.code,e.details); throw e;
       }
       return reply.code(204).send();
@@ -63,14 +64,20 @@ export function registerCiRoutes(app: FastifyInstance, pool: Pool) {
     route('getMergeQueue',r => read(pool,r,async client => {
       await project(client,params(r).projectId);
       return { items:(await client.query(`select q.id,q.pr,t.task_key "taskKey",q.position,q.status,q.qa_head_sha "qaHeadSha",q.synced_head_sha "syncedHeadSha",
-        q.base_sha "baseSha",q.ci_run "ciRunId",q.actual_merge_sha "actualMergeSha" from merge_queue q join tasks t on t.id=q.task where q.project_id::text=$1 order by q.position,q.created_at,q.id`,[params(r).projectId])).rows };
+        q.base_sha "baseSha",q.ci_run "ciRunId",q.actual_merge_sha "actualMergeSha" from merge_queue q join tasks t on t.id=q.task where q.project_id::text=$1 order by q.position,q.queue_no`,[params(r).projectId])).rows };
     }));
     for (const [id,kind] of [['retryCiRun','ci_retry'],['requestDeployCheck','deploy_check']] as const) route(id,async (r,reply) => {
       const client = clientOf(r); const repo = new RunnerRepository(client); await repo.lock();
       await project(client,params(r).projectId);
-      const source = id === 'retryCiRun' ? (await client.query<{ id: string; pr: number | null; head_sha: string; status: string }>('select id,pr,head_sha,status from ci_runs where id::text=$1 and project_id::text=$2',[params(r).id,params(r).projectId])).rows[0] : null;
+      const source = id === 'retryCiRun' ? (await client.query<{ id: string; pr: number | null; head_sha: string; status: string; task: string | null; fail_scope: string | null }>('select id,pr,head_sha,status,task,fail_scope from ci_runs where id::text=$1 and project_id::text=$2',[params(r).id,params(r).projectId])).rows[0] : null;
       if (id === 'retryCiRun' && !source) throw new PlatformError('NOT_FOUND');
       if (source && source.status !== 'fail') throw new PlatformError('INVALID_TRANSITION');
+      if (source?.fail_scope === 'baseline' && source.task) {
+        const jobId = await enqueueIntegration(client,source.task,r.platform?.epoch ?? 0,{ retry:true });
+        if (!jobId) throw new PlatformError('INVALID_TRANSITION');
+        await assertExternal(repo,required(await repo.job(jobId)));
+        return reply.code(202).send({ jobId });
+      }
       const commit = id === 'retryCiRun' ? source?.head_sha : await inputHead(client,params(r).projectId);
       if (!commit) throw new PlatformError('INVALID_TRANSITION');
       const authority = await repo.authority();

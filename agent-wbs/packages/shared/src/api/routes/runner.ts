@@ -54,6 +54,11 @@ const CleanupProof = Type.Union([
 ]);
 const CommandItems = List(Body({ name: Text, ok: Type.Boolean(), detail: Type.String() }));
 /** contracts §4.1 근거 고정: 단계별로 해당하는 값만 보낸다. */
+const headProof = {
+  qaHeadSha:c.Sha,headSha:c.Sha,preserved:Type.Boolean(),
+  parents:List(c.Sha,{ minItems:2,maxItems:2 }),
+  autoMergeTreeSha:c.Sha,headTreeSha:c.Sha,additionalChanges:Type.Boolean(),
+};
 const ciShas = {
   baseSha: Opt(c.Sha),
   headSha: Opt(c.Sha),
@@ -584,9 +589,8 @@ export const runnerOperations = [
       actualTreeSha: Opt(c.Sha),
       // H→H′의 자동 병합 보존과 실제 PR 병합 부모를 서버의 저장 근거와 대조한다.
       headSync: Opt(Body({
-        qaHeadSha: c.Sha, headSha: c.Sha, preserved: Type.Boolean(),
-        parents: List(c.Sha, { minItems: 2, maxItems: 2 }),
-        autoMergeTreeSha: c.Sha, headTreeSha: c.Sha, additionalChanges: Type.Boolean(),
+        ...headProof,
+        chain:Opt(List(Body(headProof),{ minItems:2 })),
       })),
       mergeParents: Opt(List(c.Sha, { minItems: 2, maxItems: 2 })),
     }),

@@ -145,6 +145,10 @@ export async function claim(repo: RunnerRepository, kinds: string[], capacity: n
         const check = await checkAttempt(repo, candidate, task, capacity);
         agent = check.grade.agent; slots = check.slots;
       } else if (candidate.kind !== 'stop_attempt') {
+        if (candidate.kind === 'integrate') {
+          task = await repo.task(candidate.payload.taskKey as string);
+          if (!task || task.status !== 'gate') continue;
+        }
         const reasons = await capacityReasons(repo, candidate, agent, slots, true, capacity);
         if (capacity === 0 || reasons.length) continue;
       }

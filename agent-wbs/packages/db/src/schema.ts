@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import { textChecks } from './schema-values.ts';
 import {
   pgTable,
+  primaryKey,
   pgEnum,
   uuid,
   text,
@@ -350,6 +351,7 @@ export const planningJobs = pgTable(
   'planning_jobs',
   {
     ...row(),
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
     ...project(),
     kind: text().notNull(),
     run_no: integer().notNull(),
@@ -538,6 +540,7 @@ export const taskEstimates = pgTable(
   'task_estimates',
   {
     ...row(),
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
     ...project(),
     ...task(),
     est: numeric().notNull(),
@@ -708,6 +711,7 @@ export const changeProposals = pgTable(
   'change_proposals',
   {
     ...row(),
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
     ...project(),
     cp_key: text().notNull().unique(),
     // API Proposal의 title·reason·source.id(M1 통합). 분할 CP의 source_id는 원래 Task 키다.
@@ -758,6 +762,7 @@ export const changeProposalEvents = pgTable(
 );
 export const runnerJobs = pgTable('runner_jobs', {
   ...row(),
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
   project_id: uuid().references(() => projects.id, { onDelete: 'restrict' }),
   kind: jobKind().notNull(),
   payload: jsonb().notNull(),
@@ -795,6 +800,7 @@ export const taskAttempts = pgTable(
   'task_attempts',
   {
     ...row(),
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
     ...project(),
     ...task(),
     attempt_key: text().notNull().unique(),
@@ -953,6 +959,7 @@ export const attemptObservations = pgTable(
   'attempt_observations',
   {
     ...row(),
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
     ...project(),
     attempt: uuid()
       .notNull()
@@ -1056,6 +1063,7 @@ export const evidence = pgTable(
 );
 export const runnerSessions = pgTable('runner_sessions', {
   ...row(),
+  record_no: bigserial({ mode: 'number' }).notNull().unique(),
   runner_id: text().notNull(),
   started_at: at('started_at').notNull(),
   ended_at: at('ended_at'),
@@ -1064,6 +1072,7 @@ export const runnerSessions = pgTable('runner_sessions', {
 }, t=>textChecks('runner_sessions',t));
 export const runnerHosts = pgTable('runner_hosts', {
   ...row(),
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
   host_id: text().notNull(),
   // host 보고의 현재 bootId(M1 통합). 이 열이 생기기 전 행은 null이다.
   boot_id: text(),
@@ -1079,6 +1088,7 @@ export const runnerHosts = pgTable('runner_hosts', {
 }, (t) => [check('runner_host_boot_text', sql`${t.boot_id} is null or length(btrim(${t.boot_id}))>0`)]);
 export const runnerConcurrencyLog = pgTable('runner_concurrency_log', {
   ...row(),
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
   host_id: text().notNull(),
   limit: integer().notNull(),
   running: integer().notNull(),
@@ -1122,6 +1132,7 @@ export const agentUsage = pgTable(
   'agent_usage',
   {
     ...row(),
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
     agent: agent().notNull(),
     remain_pct: numeric().notNull(),
     reset_at: at('reset_at'),
@@ -1691,6 +1702,7 @@ export const ciSteps = pgTable(
   'ci_steps',
   {
     ...row(),
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
     ...project(),
     run: uuid()
       .notNull()
@@ -1704,6 +1716,12 @@ export const ciSteps = pgTable(
   },
   (t) => [unique().on(t.run, t.step_key), check('ci_step_duration', sql`${t.duration_ms} >= 0 and ${t.duration_ms} <= 9007199254740991`)],
 );
+export const ciMergeFacts = pgTable('ci_merge_facts', {
+  project_id: uuid().notNull().references(() => projects.id,{ onDelete:'cascade' }),
+  merge_sha: text().notNull(),
+  tree_sha: text(),
+  parents: jsonb(),
+}, (t) => [primaryKey({ columns:[t.project_id,t.merge_sha] })]);
 export const mergeQueue = pgTable(
   'merge_queue',
   {
@@ -1789,6 +1807,7 @@ export const taskHistory = pgTable(
   'task_history',
   {
     ...row(),
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
     ...globalProject(),
     at: at('at').notNull().defaultNow(),
     actor: text().notNull(),

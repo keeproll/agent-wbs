@@ -223,12 +223,26 @@
           "type": "bigint",
           "primaryKey": false,
           "notNull": false
+        },
+        "record_no": {
+          "name": "record_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
         }
       },
       "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "agent_usage_record_no_unique": {
+          "name": "agent_usage_record_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "record_no"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
         "usage_percent": {
@@ -686,6 +700,12 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
+        },
+        "record_no": {
+          "name": "record_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
         }
       },
       "indexes": {},
@@ -718,7 +738,15 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "attempt_observations_record_no_unique": {
+          "name": "attempt_observations_record_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "record_no"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
         "attempt_observations_grade_value": {
@@ -1320,6 +1348,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": 1
+        },
+        "record_no": {
+          "name": "record_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
         }
       },
       "indexes": {},
@@ -1345,6 +1379,13 @@
           "nullsNotDistinct": false,
           "columns": [
             "cp_key"
+          ]
+        },
+        "change_proposals_record_no_unique": {
+          "name": "change_proposals_record_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "record_no"
           ]
         }
       },
@@ -1969,6 +2010,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "record_no": {
+          "name": "record_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
         }
       },
       "indexes": {},
@@ -2008,6 +2055,13 @@
           "columns": [
             "run",
             "step_key"
+          ]
+        },
+        "ci_steps_record_no_unique": {
+          "name": "ci_steps_record_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "record_no"
           ]
         }
       },
@@ -6675,6 +6729,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "record_no": {
+          "name": "record_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
         }
       },
       "indexes": {
@@ -6711,7 +6771,15 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "planning_jobs_record_no_unique": {
+          "name": "planning_jobs_record_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "record_no"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
         "planning_kind": {
@@ -7937,12 +8005,26 @@
           "primaryKey": false,
           "notNull": true,
           "default": 1
+        },
+        "record_no": {
+          "name": "record_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
         }
       },
       "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "runner_concurrency_log_record_no_unique": {
+          "name": "runner_concurrency_log_record_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "record_no"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -8037,12 +8119,26 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
+        },
+        "record_no": {
+          "name": "record_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
         }
       },
       "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "runner_hosts_record_no_unique": {
+          "name": "runner_hosts_record_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "record_no"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
         "runner_host_boot_text": {
@@ -8256,6 +8352,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "record_no": {
+          "name": "record_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
         }
       },
       "indexes": {},
@@ -8281,6 +8383,13 @@
           "nullsNotDistinct": false,
           "columns": [
             "dedup_key"
+          ]
+        },
+        "runner_jobs_record_no_unique": {
+          "name": "runner_jobs_record_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "record_no"
           ]
         }
       },
@@ -8423,12 +8532,26 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
+        },
+        "record_no": {
+          "name": "record_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
         }
       },
       "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "runner_sessions_record_no_unique": {
+          "name": "runner_sessions_record_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "record_no"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
         "runner_sessions_end_reason_value": {
@@ -9102,6 +9225,12 @@
           "type": "uuid",
           "primaryKey": false,
           "notNull": false
+        },
+        "record_no": {
+          "name": "record_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
         }
       },
       "indexes": {
@@ -9211,6 +9340,13 @@
           "columns": [
             "task",
             "attempt_no"
+          ]
+        },
+        "task_attempts_record_no_unique": {
+          "name": "task_attempts_record_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "record_no"
           ]
         }
       },
@@ -9619,6 +9755,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "record_no": {
+          "name": "record_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
         }
       },
       "indexes": {},
@@ -9651,7 +9793,15 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "task_estimates_record_no_unique": {
+          "name": "task_estimates_record_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "record_no"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
         "task_estimates_confidence_value": {
@@ -9869,6 +10019,12 @@
           "type": "jsonb",
           "primaryKey": false,
           "notNull": false
+        },
+        "record_no": {
+          "name": "record_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
         }
       },
       "indexes": {},
@@ -9901,7 +10057,15 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "task_history_record_no_unique": {
+          "name": "task_history_record_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "record_no"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
         "task_history_kind_value": {
@@ -11426,6 +11590,65 @@
           "value": "\"wbs_nodes\".\"parent_id\"<>\"wbs_nodes\".\"id\""
         }
       },
+      "isRLSEnabled": false
+    },
+    "public.ci_merge_facts": {
+      "name": "ci_merge_facts",
+      "schema": "",
+      "columns": {
+        "project_id": {
+          "name": "project_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "merge_sha": {
+          "name": "merge_sha",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tree_sha": {
+          "name": "tree_sha",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "parents": {
+          "name": "parents",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "ci_merge_facts_project_id_projects_id_fk": {
+          "name": "ci_merge_facts_project_id_projects_id_fk",
+          "tableFrom": "ci_merge_facts",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "ci_merge_facts_project_id_merge_sha_pk": {
+          "name": "ci_merge_facts_project_id_merge_sha_pk",
+          "columns": [
+            "project_id",
+            "merge_sha"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
       "isRLSEnabled": false
     }
   },
