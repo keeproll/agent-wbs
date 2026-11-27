@@ -27,6 +27,7 @@ async function fake() {
   const requests: { method: string; body: Record<string, unknown> }[] = [];
   let error = 0;
   let migrated = false;
+  let invalidResponse = false;
   let empty = false;
   let responseDelay = 0;
   let responseAt = 0;
@@ -36,6 +37,7 @@ async function fake() {
     for await (const chunk of req) text += String(chunk);
     const method = req.url?.split('/').at(-1) ?? '';
     requests.push({ method, body: JSON.parse(text || '{}') as Record<string, unknown> });
+    if (method === 'sendMessage' && invalidResponse) { res.statusCode = 503; res.end('응답 유실'); return; }
     if (responseDelay) await new Promise(resolve => setTimeout(resolve, responseDelay));
     responseAt = Date.now();
     res.setHeader('content-type', 'application/json');
@@ -54,7 +56,7 @@ async function fake() {
   if (!address || typeof address === 'string') throw new Error('fake 주소 없음');
   process.env.AWBS_TELEGRAM_BOT_API_URL = `http://127.0.0.1:${String(address.port)}`;
   process.env.AWBS_SECRET_KEY = 'a'.repeat(64);
-  return { requests, fail: (code: number, migrate = false) => { error = code; migrated = migrate; }, empty: () => { empty = true; }, onAccept: (fn?: () => void) => { onAccept = fn; }, delay: (ms: number) => { responseDelay = ms; }, responseAt: () => responseAt };
+  return { requests, invalidResponse: () => { invalidResponse = true; }, fail: (code: number, migrate = false) => { error = code; migrated = migrate; }, empty: () => { empty = true; }, onAccept: (fn?: () => void) => { onAccept = fn; }, delay: (ms: number) => { responseDelay = ms; }, responseAt: () => responseAt };
 }
 
 async function connect(options: Parameters<typeof scenario>[0] = {}) {
@@ -73,6 +75,123 @@ async function connect(options: Parameters<typeof scenario>[0] = {}) {
   expect(saved.body).toMatchObject({ enabled: true, tokenSet: true, tokenLast4: 'abcd', test: { ok: true } });
   return { ...f, project, saved: saved.body };
 }
+
+test('telegram fix1 R1·R5: 제목 수정과 경보 확인은 새 실패 보고가 아니다', async () => {
+  await connect();
+  await active().rows("update tasks set verif_state='fail' where task_key='TASK-0001'");
+  await active().rows("update tasks set title='제목 수정 1' where task_key='TASK-0001'");
+  await active().rows("update tasks set title='제목 수정 2' where task_key='TASK-0001'");
+  await active().rows(`insert into alerts(project_id,key,severity,target)
+    select id,'retry:TASK-0001','error','{"taskKey":"TASK-0001"}'::jsonb from projects`);
+  await active().rows("update alerts set acknowledged_at=now() where key='retry:TASK-0001'");
+  expect(await active().rows("select dup_count from notify_events where kind='fail' order by dedup_key")).toEqual([{ dup_count: 0 }, { dup_count: 0 }]);
+});
+
+test.each(['unset', 'http://127.0.0.1:1', 'refused', 'https://api.telegram.org'])('telegram fix1 R2: 수락 전 실패 %s는 failed, 중복 경고 없음', async endpoint => {
+  const f = await connect();
+  if (endpoint === 'unset') delete process.env.AWBS_TELEGRAM_BOT_API_URL;
+  else if (endpoint === 'refused') { await new Promise<void>(resolve => bot?.close(() => resolve())); bot = undefined; }
+  else process.env.AWBS_TELEGRAM_BOT_API_URL = endpoint;
+  await active().lead('POST', '/api/notify/telegram/test', { chatId: '-4123456789', targetName: '팀장' });
+  const { processNotify } = await import('../../../apps/api/src/notify/worker.ts');
+  for (let n = 1; n <= 5; n++) await processNotify(active().pool, 1, new Date(Date.now() + n * 70_000));
+  const log = (await active().lead('GET', `/api/projects/${f.project}/notify/log?kind=test`)).body.items[0];
+  expect(log).toMatchObject({ state: 'failed', attempts: 5 });
+  expect(log.error).not.toMatch(/중복 도착 가능|^network:/);
+});
+
+test.each(['disabled', 'chat', 'token'].flatMap(change => [false, true].map(retrying => [change, retrying] as const)))('telegram fix1 R3: %s 변경 뒤 쌓인 업무 알림은 보내지 않는다 (재시도 %s)', async (change, retrying) => {
+  const f = await connect();
+  await active().rows("insert into runner_readiness(key,status,detail,fix,at) values('cancel','fail','실패','확인',now())");
+  const { processNotify } = await import('../../../apps/api/src/notify/worker.ts');
+  if (retrying) {
+    f.fail(429);
+    await new Promise(resolve => setTimeout(resolve, 3100));
+    await processNotify(active().pool, 1);
+    expect((await active().rows("select state from notify_outbox where kind='biz'"))[0]?.state).toBe('retry_wait');
+    f.fail(0);
+  }
+  const chatId = change === 'chat' ? '512345678' : '-4123456789';
+  const botToken = change === 'token' ? token.replace('abcd', 'zzzz') : undefined;
+  if (change !== 'disabled') await active().lead('POST', '/api/notify/telegram/test', { botToken, chatId, targetName: '새 대상' });
+  const saved = await active().lead('PUT', '/api/notify/telegram', { botToken, enabled: change !== 'disabled', chatId, targetName: '새 대상', updatedAt: f.saved.updatedAt });
+  expect(saved.status).toBe(200);
+  const sends = f.requests.filter(r => r.method === 'sendMessage').length;
+  await processNotify(active().pool, 1, new Date(Date.now() + 60_000));
+  expect(f.requests.filter(r => r.method === 'sendMessage')).toHaveLength(sends);
+  expect(await active().rows("select state,attempts from notify_outbox where kind='biz'")).toEqual([{ state: 'failed', attempts: retrying ? 1 : 0 }]);
+});
+
+test('telegram fix1 R4: 초안 토큰 실패는 저장된 연결의 경보를 열거나 해소하지 않는다', async () => {
+  const f = await connect();
+  const draft = token.replace('abcd', 'zzzz');
+  f.fail(401);
+  await active().lead('POST', '/api/notify/telegram/check-bot', { botToken: draft });
+  await active().lead('POST', '/api/notify/telegram/test', { botToken: draft, chatId: '-4123456789', targetName: '초안' });
+  await active().lead('POST', '/api/notify/telegram/test', { chatId: '512345678', targetName: '다른 대화 초안' });
+  expect(await active().rows("select id from alerts where key='telegram-connection' and resolved_at is null")).toHaveLength(0);
+  expect((await active().lead('GET', '/api/notify/telegram')).body).toMatchObject({ enabled: true, test: { ok: true } });
+  await active().lead('POST', '/api/notify/telegram/test', { chatId: '-4123456789', targetName: '저장된 연결' });
+  expect(await active().rows("select id from alerts where key='telegram-connection' and resolved_at is null")).toHaveLength(1);
+  f.fail(0);
+  await active().lead('POST', '/api/notify/telegram/test', { botToken: draft, chatId: '512345678', targetName: '초안' });
+  expect(await active().rows("select id from alerts where key='telegram-connection' and resolved_at is null")).toHaveLength(1);
+});
+
+test('telegram fix1: 같은 Runner의 새 실패 보고는 같은 시각이어도 중복 생략으로 센다', async () => {
+  await connect();
+  const at = new Date(Date.now() + 1000).toISOString();
+  const report = (idempotencyKey = randomUUID()) => active().runner.api('reportReadiness', { epoch: 1, idempotencyKey, body: { at, items: [{ key: 'codex', status: 'fail', detail: '로그인 필요' }] } });
+  expect((await report()).status).toBe(204);
+  const reportId = randomUUID();
+  expect((await report(reportId)).status).toBe(204);
+  expect((await report(reportId)).status).toBe(204);
+  // 낡은 보고는 현재 상태에 적용하지 않으므로 새 보고로 세지 않는다.
+  await active().runner.api('reportReadiness', { epoch: 1, idempotencyKey: randomUUID(), body: { at: '2000-01-01T00:00:00Z', items: [{ key: 'codex', status: 'fail', detail: '낡은 보고' }] } });
+  await active().rows("update runner_readiness set detail='화면 문구 수정' where key='codex'");
+  expect(await active().rows("select dup_count from notify_events where dedup_key='admin|ready|codex'")).toEqual([{ dup_count: 1 }]);
+});
+
+test('telegram fix1: GitHub·재시도 한도의 새 실패 보고는 세고 알림 권한 오류도 보고를 막지 않는다', async () => {
+  const f = await connect();
+  const github = () => active().runner.api('reportGithubStatus', { epoch: 1, idempotencyKey: randomUUID(), body: { mode: 'gh', ok: false, account: null, scopes: null, expiresAt: null } });
+  expect((await github()).status).toBe(204);
+  expect((await github()).status).toBe(204);
+  const { RunnerRepository } = await import('../../../apps/api/src/runner/repository.ts');
+  const { inEpoch } = await import('../../../apps/api/src/platform/transaction.ts');
+  for (let n = 0; n < 2; n++) await inEpoch(active().pool, 1, async db => {
+    const repo = new RunnerRepository(db); await repo.lock();
+    await repo.alert(f.project, 'retry:TASK-0001', '한도 초과', { taskKey: 'TASK-0001' });
+  });
+  expect(await active().rows("select dup_count from notify_events where dedup_key in ('admin|github','fail|retry|TASK-0001') order by dedup_key")).toEqual([{ dup_count: 1 }, { dup_count: 1 }]);
+  await active().rows('revoke update on notify_events from awbs_app');
+  try {
+    expect((await github()).status).toBe(204);
+    expect((await active().rows('select status from github_settings'))[0]?.status).toBe('failed');
+  } finally { await active().rows('grant update on notify_events to awbs_app'); }
+});
+
+test('telegram fix1: 보낸 뒤 응답 유실은 unknown과 중복 가능 이력을 유지한다', async () => {
+  const f = await connect(); f.invalidResponse();
+  await active().lead('POST', '/api/notify/telegram/test', { chatId: '-4123456789', targetName: '팀장' });
+  const { processNotify } = await import('../../../apps/api/src/notify/worker.ts');
+  for (let n = 1; n <= 5; n++) await processNotify(active().pool, 1, new Date(Date.now() + n * 70_000));
+  const log = (await active().lead('GET', `/api/projects/${f.project}/notify/log?kind=test`)).body.items[0];
+  expect(log).toMatchObject({ state: 'unknown', attempts: 5 });
+  expect(log.error).toContain('중복 도착 가능');
+  expect(log.error).not.toMatch(/^network:/);
+});
+
+test('telegram fix1: 응답 시간 초과 뒤 연결 전 실패가 이어져도 수락 불명 이력을 유지한다', async () => {
+  const f = await connect(); f.delay(5200);
+  await active().lead('POST', '/api/notify/telegram/test', { chatId: '-4123456789', targetName: '팀장' });
+  delete process.env.AWBS_TELEGRAM_BOT_API_URL;
+  const { processNotify } = await import('../../../apps/api/src/notify/worker.ts');
+  for (let n = 1; n <= 5; n++) await processNotify(active().pool, 1, new Date(Date.now() + n * 70_000));
+  const log = (await active().lead('GET', `/api/projects/${f.project}/notify/log?kind=test`)).body.items[0];
+  expect(log).toMatchObject({ state: 'unknown', attempts: 5 });
+  expect(log.error).toContain('중복 도착 가능');
+});
 
 test('telegram: 테스트 전 켜기 거부, 쓰기 전용 토큰, 음수 대화와 저장 버전', async () => {
   process.env.AWBS_SECRET_KEY = 'a'.repeat(64);
@@ -160,7 +279,7 @@ test.each([[401, 'token_invalid'], [400, 'chat_not_found'], [403, 'forbidden'], 
     const f = await fake(); s = await scenario(); f.fail(code);
     if (code === 401) {
       expect((await s.lead('POST', '/api/notify/telegram/check-bot', { botToken: token })).body.error).toBe('token_invalid');
-      expect((await s.lead('GET', '/api/alerts')).body.items.some((a: { text: string }) => a.text.includes('Telegram'))).toBe(true);
+      expect((await s.lead('GET', '/api/alerts')).body.items.some((a: { text: string }) => a.text.includes('Telegram'))).toBe(false);
     }
     const tasks = await s.rows('select task_key,status,verif_state from tasks order by task_key');
     const project = (await s.rows('select id from projects'))[0]?.id as string;
@@ -168,16 +287,18 @@ test.each([[401, 'token_invalid'], [400, 'chat_not_found'], [403, 'forbidden'], 
     expect(response.body).toMatchObject({ ok: false, error, retryAfter: code === 429 ? 15 : null });
     const log = (await s.lead('GET', `/api/projects/${project}/notify/log`)).body.items[0];
     expect(log).toMatchObject({ state: code === 429 ? 'retry_wait' : 'failed', attempts: 1 });
-    expect((await s.lead('GET', '/api/alerts')).body.items.some((a: { text: string }) => a.text.includes('Telegram'))).toBe(true);
+    expect((await s.lead('GET', '/api/alerts')).body.items.some((a: { text: string }) => a.text.includes('Telegram'))).toBe(false);
     expect(await s.rows('select task_key,status,verif_state from tasks order by task_key')).toEqual(tasks);
     expect(JSON.stringify(log)).not.toContain(token);
   });
 
 test('telegram: 429는 retry_after 전 보내지 않고 나중에 성공하면 테스트와 연결 알림도 복구', async () => {
   const { fail, requests, project, delay, responseAt } = await connect();
+  // 대화별 3초 제한은 별도 시험에서 확인한다. 여기서는 실제 429 응답부터 재시도 간격을 잰다.
+  await new Promise(resolve => setTimeout(resolve, 3100));
   fail(429);
   delay(100);
-  await active().lead('POST', '/api/notify/telegram/test', { chatId: '-4123456789', targetName: '팀장' });
+  expect((await active().lead('POST', '/api/notify/telegram/test', { chatId: '-4123456789', targetName: '팀장' })).body).toMatchObject({ error: 'rate_limited', retryAfter: 15 });
   const retryAt = (await active().rows('select next_at from notify_outbox order by created_at desc limit 1'))[0]?.next_at as Date;
   expect(retryAt.getTime()).toBeGreaterThanOrEqual(responseAt() + 15_000);
   expect((await active().lead('GET', '/api/notify/telegram')).body.test).toMatchObject({ ok: false, error: 'rate_limited' });
@@ -201,11 +322,11 @@ test('telegram: 상태 전이와 outbox는 함께 커밋, 같은 원인만 중�
   await active().rows("update runner_readiness set detail='계속 실패' where key='codex-login'");
   let events = await active().rows("select kind,dup_count,resolved_at from notify_events where kind='admin'");
   expect(events).toHaveLength(1);
-  expect(events[0]?.dup_count).toBe(1);
+  expect(events[0]?.dup_count).toBe(0);
   await processNotify(active().pool, 1, new Date(Date.now() + 5000));
   const log = (await active().lead('GET', `/api/projects/${project}/notify/log?kind=biz`)).body.items;
   expect(log).toHaveLength(1);
-  expect(log[0]).toMatchObject({ duplicates: 1, state: 'accepted', event: 'admin' });
+  expect(log[0]).toMatchObject({ duplicates: 0, state: 'accepted', event: 'admin' });
   await active().rows("update runner_readiness set status='ok' where key='codex-login'");
   await active().rows("update runner_readiness set status='fail' where key='codex-login'");
   events = await active().rows("select kind,dup_count,resolved_at from notify_events where kind='admin'");
@@ -257,7 +378,7 @@ test('telegram: PR-A의 성공이 PR-B의 실패 키를 해소하지 않는다',
   expect(passed[0]?.message).not.toContain('명령 원문');
   await active().rows("update ci_runs set fail_step='test' where pr=10");
   const b = await active().rows("select dup_count,resolved_at from notify_events where dedup_key='buildFail|2|10'");
-  expect(b).toEqual([{ dup_count: 2, resolved_at: null }]);
+  expect(b).toEqual([{ dup_count: 1, resolved_at: null }]);
   await active().rows("update ci_runs set status='pass' where pr=10");
   await active().rows("update ci_runs set status='fail' where pr=10");
   expect(await active().rows("select id from notify_events where dedup_key='buildFail|2|10'")).toHaveLength(2);
@@ -304,10 +425,11 @@ test('telegram: 수락 직후 실제 worker 프로세스 종료 후 같은 대�
   expect(logs).toHaveLength(1);
   expect(logs[0]).toMatchObject({ state: 'accepted', attempts: 2 });
   expect(logs[0].error).toContain('중복 도착 가능');
+  expect(logs[0].error).not.toMatch(/^network:|^\s*—/);
   expect(f.requests.filter(r => r.method === 'sendMessage')).toHaveLength(3);
 });
 
-test('telegram: 통신 실패는 횟수 제한 뒤 unknown, 수신 대상 이동은 자동 변경하지 않는다', async () => {
+test('telegram: 수락 전 실패는 횟수 제한 뒤 failed, 수신 대상 이동은 자동 변경하지 않는다', async () => {
   const f = await connect();
   f.fail(400, true);
   const migrated = await active().lead('POST', '/api/notify/telegram/test', { chatId: '-4123456789', targetName: '팀장' });
@@ -319,8 +441,8 @@ test('telegram: 통신 실패는 횟수 제한 뒤 unknown, 수신 대상 이동
   const { processNotify } = await import('../../../apps/api/src/notify/worker.ts');
   for (let attempt = 1; attempt <= 5; attempt++) await processNotify(active().pool, 1, new Date(Date.now() + attempt * 70_000));
   const logs = (await active().lead('GET', `/api/projects/${f.project}/notify/log?kind=test`)).body.items;
-  expect(logs[0]).toMatchObject({ state: 'unknown', attempts: 5 });
-  expect(logs[0].error).toContain('중복 도착 가능');
+  expect(logs[0]).toMatchObject({ state: 'failed', attempts: 5 });
+  expect(logs[0].error).not.toContain('중복 도착 가능');
 });
 
 test('telegram: 외부 수락 뒤 DB 교착 오류는 외부 호출을 숨겨서 다시 실행하지 않는다', async () => {

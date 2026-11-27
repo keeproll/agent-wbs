@@ -113,6 +113,7 @@ export async function notifyLog(db: Db, projectId: string, query: { kind?: 'biz'
      from notify_outbox o left join notify_events e on e.id=o.event where o.project_id=$1 and ($2::text is null or o.kind=$2)
        and ($3::uuid is null or o.id=$3) and ($4::timestamptz is null or (o.created_at,o.id)<($4::timestamptz,$5::uuid))
      order by o.created_at desc,o.id desc limit $6`, [projectId, query.kind ?? null, id ?? null, cursor?.[0] ?? null, cursor?.[1] ?? null, limit + 1])).rows;
+  for (const row of rows) row.error = row.error?.replace(/^[a-z_]+:\s*/, '').replace(/^\s*—\s*/, '') ?? null;
   if (id) { if (!rows[0]) throw new ApiError('NOT_FOUND'); return rows[0]; }
   const page = rows.slice(0, limit), last = page.at(-1);
   return { items: page, nextCursor: rows.length > limit && last ? encodeCursor([last.at, last.id]) : null };

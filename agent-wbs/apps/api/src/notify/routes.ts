@@ -14,7 +14,7 @@ export function registerNotifyRoutes(app: FastifyInstance, pool: Pool) {
     route('checkTelegramBot', async r => {
       const db = clientOf(r), key = await tokenKey(db, (r.body as { botToken?: string }).botToken);
       const result = await callBot(await readToken(db, key), 'getMe');
-      if (!result.ok) await statusAlert(db, (await currentProject(db))?.id ?? null, result);
+      if (!result.ok) await statusAlert(db, (await currentProject(db))?.id ?? null, result, { secretKey: key });
       return { ok: result.ok, error: result.error, retryAfter: result.retryAfter, bot: botOf(result) };
     });
     route('findTelegramChats', async r => {

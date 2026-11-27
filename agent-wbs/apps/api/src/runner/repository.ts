@@ -1,3 +1,4 @@
+import { repeatFailure } from '../notify/events.ts';
 import type { PoolClient, schema, ExecPolicyRow } from '@awbs/db';
 import { attemptKey, placeModel, modelRanks, type ModelSettings, type Agent, type AttemptKind } from '@awbs/shared';
 import assert from 'node:assert/strict';
@@ -153,7 +154,11 @@ export class RunnerRepository {
     else await this.client.query("insert into external_write_authority(singleton,host_id,generation,state) values(true,$1,1,'granted') on conflict do nothing", [host]);
   }
   async saveReadiness(at: string, items: { key: string; status: string; detail: string; fix?: string }[]) {
-    for (const item of items) await this.client.query('insert into runner_readiness(key,status,detail,fix,at) values($1,$2,$3,$4,$5) on conflict(key) do update set status=excluded.status,detail=excluded.detail,fix=excluded.fix,at=excluded.at where runner_readiness.at<=excluded.at', [item.key,item.status,item.detail,item.fix ?? '',at]);
+    for (const item of items) {
+      const previous = (await this.client.query<{ status: string }>('select status from runner_readiness where key=$1', [item.key])).rows[0];
+      const written = await this.client.query('insert into runner_readiness(key,status,detail,fix,at) values($1,$2,$3,$4,$5) on conflict(key) do update set status=excluded.status,detail=excluded.detail,fix=excluded.fix,at=excluded.at where runner_readiness.at<=excluded.at', [item.key,item.status,item.detail,item.fix ?? '',at]);
+      if (written.rowCount && previous?.status === 'fail' && item.status === 'fail') await repeatFailure(this.client, `admin|ready|${item.key}`);
+    }
   }
   async saveModels(agent: Agent, models: { id: string; label: string; efforts: string[] | null }[]) {
     const added: string[] = [];
@@ -198,6 +203,7 @@ export class RunnerRepository {
     await this.client.query('update task_attempts set model_id=$2,effort=$3,grade_adjust=$4 where id=$1', [a.id,model,effort,adjust]);
   }
   async alert(project: string | null, key: string, message: string, target: object = {}) {
-    await this.client.query("insert into alerts(project_id,key,severity,target) values($1,$2,'warn',$3) on conflict do nothing", [project,key,{ ...target, message }]);
+    const written = await this.client.query("insert into alerts(project_id,key,severity,target) values($1,$2,'warn',$3) on conflict do nothing", [project,key,{ ...target, message }]);
+    if (!written.rowCount && key.startsWith('retry:')) await repeatFailure(this.client, `fail|retry|${key.slice(6)}`);
   }
 }

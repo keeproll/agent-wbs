@@ -18,7 +18,9 @@ export const ERROR_TEXT = {
   chat_migrated: '수신 대상 변경 필요 — 새 Chat ID를 입력하고 테스트 후 저장하세요.',
 };
 
-export async function statusAlert(db: PoolClient, projectId: string | null, result: BotResult) {
+export async function statusAlert(db: PoolClient, projectId: string | null, result: BotResult, connection: { secretKey: string; chatId?: string }) {
+  // 입력 중인 초안은 저장된 연결의 상태를 바꾸지 않는다.
+  if (!(await db.query('select 1 from notify_settings where secret_key=$1 and ($2::text is null or chat_id=$2) for share', [connection.secretKey, connection.chatId ?? null])).rowCount) return;
   if (result.ok) {
     await db.query("update alerts set resolved_at=clock_timestamp() where key='telegram-connection' and resolved_at is null");
   } else {
@@ -27,6 +29,20 @@ export async function statusAlert(db: PoolClient, projectId: string | null, resu
     [projectId, JSON.stringify({ key: 'notify', message: `Telegram ${ERROR_TEXT[result.error ?? 'network']}`, path: '/settings/notify' })]);
   }
   deferChange(db, projectId, 'alert', { key: 'telegram-connection' });
+}
+
+async function cancellation(db: PoolClient, row: Delivery) {
+  if (row.kind === 'test') return null;
+  const config = (await db.query<{ enabled: boolean; secret_key: string; chat_id: string }>('select enabled,secret_key,chat_id from notify_settings where singleton for share')).rows[0];
+  if (!config?.enabled) return '알림 꺼짐 — 발송 취소';
+  if (config.secret_key !== row.payload.secretKey || config.chat_id !== row.payload.chatId) return '연결 설정 변경 — 발송 취소';
+  return null;
+}
+
+async function cancel(db: PoolClient, row: Delivery, reason: string, now: Date) {
+  await db.query("update notify_outbox set state='failed',error=$2,next_at=null where id=$1", [row.id, reason]);
+  await db.query("insert into notify_log(project_id,delivery_id,kind,state,error,at) values($1,$2,$3,'failed',$4,$5)", [row.project_id, row.delivery_id, row.kind, reason, now]);
+  deferChange(db, row.project_id, 'notify', { id: row.id });
 }
 
 /** 한 번에 한 건을 보낸다. sending은 외부 호출 전에 별도 커밋한다(contracts §4.4). */
@@ -41,6 +57,8 @@ export async function processNotify(pool: Pool, epoch: number, now = new Date(),
           and ((state in ('queued','retry_wait') and (next_at is null or next_at<=$2)) or (state='sending' and updated_at<$2::timestamptz-interval '30 seconds'))
           order by created_at,id for update skip locked limit 1`, [epoch, now, onlyId ?? null])).rows[0];
         if (!found) return null;
+        const reason = await cancellation(db, found);
+        if (reason) { await cancel(db, found, reason, now); return null; }
         const gap = found.payload.chatId.startsWith('-') ? 3000 : 1000;
         const last = (await db.query<{ at: Date | null }>(`select max(l.at) at from notify_log l join notify_outbox o on o.delivery_id=l.delivery_id
           where o.payload->>'chatId'=$1 and l.state='sending'`, [found.payload.chatId])).rows[0]?.at;
@@ -50,7 +68,7 @@ export async function processNotify(pool: Pool, epoch: number, now = new Date(),
         if (found.attempts >= 5) {
           await db.query("update notify_outbox set state='unknown',error='network:수락 여부 불명 — 중복 도착 가능' where id=$1", [found.id]);
           await db.query("insert into notify_log(project_id,delivery_id,kind,state,error,at) values($1,$2,$3,'unknown','수락 여부 불명 — 중복 도착 가능',$4)", [found.project_id, found.delivery_id, found.kind, now]);
-          await statusAlert(db, found.project_id, { ok: false, error: 'network', retryAfter: null });
+          await statusAlert(db, found.project_id, { ok: false, error: 'network', retryAfter: null }, found.payload);
           deferChange(db, found.project_id, 'notify', { id: found.id });
           return null;
         }
@@ -66,20 +84,23 @@ export async function processNotify(pool: Pool, epoch: number, now = new Date(),
         const db = lock;
         await db.query('select public.lock_epoch($1)', [epoch]);
         if (!(await db.query("select 1 from notify_outbox where id=$1 and epoch=$2 and state='sending' for update", [row.id, epoch])).rowCount) { await db.query('commit'); return null; }
+        const reason = await cancellation(db, row);
+        if (reason) { await cancel(db, row, reason, now); await flushChanges(db); await db.query('commit'); return null; }
         let result: BotResult;
         try { result = await callBot(await readToken(db, row.payload.secretKey), 'sendMessage', { chat_id: row.payload.chatId, text: row.payload.message }); }
         catch { result = { ok: false, error: 'network', retryAfter: null }; }
         const retry = !result.ok && (result.error === 'network' || result.error === 'rate_limited');
-        const state = result.ok ? 'accepted' : retry && row.attempts < 5 ? 'retry_wait' : result.error === 'network' ? 'unknown' : 'failed';
-        const ambiguous = row.error || result.error === 'network' ? ' — 중복 도착 가능' : '';
-        const error = result.ok ? ambiguous || null : `${result.error}:${ERROR_TEXT[result.error ?? 'network']}${ambiguous}`;
+        const uncertain = Boolean(row.error || result.uncertain);
+        const state = result.ok ? 'accepted' : retry && row.attempts < 5 ? 'retry_wait' : uncertain ? 'unknown' : 'failed';
+        const ambiguous = uncertain ? ' — 중복 도착 가능' : '';
+        const error = result.ok ? uncertain ? '중복 도착 가능' : null : `${result.error}:${ERROR_TEXT[result.error ?? 'network']}${ambiguous}`;
         const next = state === 'retry_wait' ? new Date(Math.max(now.getTime(), Date.now()) + (result.retryAfter ?? Math.min(60, 2 ** row.attempts)) * 1000) : null;
         await db.query('update notify_outbox set state=$2,error=$3,next_at=$4 where id=$1', [row.id, state, error, next]);
         if (row.kind === 'test') {
           await db.query('update notify_settings set test_fingerprint=$1 where secret_key=$2 and chat_id=$3', [result.ok ? row.payload.fingerprint : null, row.payload.secretKey, row.payload.chatId]);
         }
         await db.query('insert into notify_log(project_id,delivery_id,kind,state,error,at) values($1,$2,$3,$4,$5,$6)', [row.project_id, row.delivery_id, row.kind, state, error, now]);
-        if (!result.ok || row.kind === 'test') await statusAlert(db, row.project_id, result);
+        if (!result.ok || row.kind === 'test') await statusAlert(db, row.project_id, result, row.payload);
         deferChange(db, row.project_id, 'notify', { id: row.id });
         await flushChanges(db);
         await db.query('commit');

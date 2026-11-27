@@ -5,6 +5,7 @@ import { required, RunnerRepository } from '../runner/repository.ts';
 import { checkedJob, handover, retryFailedAttempt } from '../runner/service.ts';
 import { enqueueIntegration, gateInput } from './gate.ts';
 import { deferChange } from '../changes/events.ts';
+import { repeatFailure } from '../notify/events.ts';
 
 export interface ResultReport {
   fence: number; summary: string; changedFiles: string[]; evidence: string[]; failure?: string; tokens?: number;
@@ -85,6 +86,7 @@ export async function reportResult(client: PoolClient, attemptId: string, princi
   await client.query('update task_attempts set status=$5,ended_at=greatest(started_at,clock_timestamp()),summary=$2,failure=$3,tokens=$4 where id=$1', [a.id,body.summary,body.failure === undefined ? null : { reason:body.failure },body.tokens ?? null,executionFailed ? 'failed' : 'completed']);
   const verifState = !qa ? 'none' : disposition === 'stale' ? 'none' : required(body.verification).result.toLowerCase();
   await client.query('update tasks set status=$2,verif_state=$3 where id=$1', [task.id,status,verifState]);
+  if (verifState === 'fail' && task.verif_state === 'fail') await repeatFailure(client, `fail|task|${task.id}`);
   await repo.historyEvent(task,'시도 결과',{ attemptId:a.id,result:body.verification?.result ?? 'completed',disposition,before:task.status,after:status });
   await repo.event(job,'finished',null,{ attemptId:a.id,disposition,...(taskCheckPlaceholder && { taskCheckPlaceholder:true }) });
   if (executionFailed) await retryFailedAttempt(client,a.id);

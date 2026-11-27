@@ -1,17 +1,19 @@
 export type TelegramError = 'token_invalid' | 'chat_not_found' | 'forbidden' | 'rate_limited' | 'network' | 'webhook_in_use' | 'chat_migrated';
 export interface Bot { id: number; username: string; name: string }
 export interface Chat { chatId: string; title: string; type: string; lastAt?: string }
-export interface BotResult { ok: boolean; error: TelegramError | null; retryAfter: number | null; result?: Record<string, unknown> | unknown[] }
+export interface BotResult { ok: boolean; error: TelegramError | null; retryAfter: number | null; uncertain?: boolean; result?: Record<string, unknown> | unknown[] }
 
 /** Q-16 결정 전에는 명시한 로컬 fake 서버에만 연결한다. */
 export async function callBot(token: string, method: 'getMe' | 'getUpdates' | 'sendMessage', body: object = {}): Promise<BotResult> {
   const endpoint = process.env.AWBS_TELEGRAM_BOT_API_URL;
   if (!endpoint) return { ok: false, error: 'network', retryAfter: null };
+  let attempted = false;
   try {
     const url = new URL(endpoint);
     if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || url.username || url.password || url.search || url.hash) {
       return { ok: false, error: 'network', retryAfter: null };
     }
+    attempted = true;
     const response = await fetch(`${url.origin}/bot${token}/${method}`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
       signal: AbortSignal.timeout(5_000), redirect: 'error',
@@ -23,10 +25,12 @@ export async function callBot(token: string, method: 'getMe' | 'getUpdates' | 's
         : data.error_code === 400 ? 'chat_not_found' : data.error_code === 429 ? 'rate_limited'
           : data.error_code === 409 && method === 'getUpdates' ? 'webhook_in_use' : 'network';
     const retry = data.parameters?.retry_after;
-    return { ok: false, error, retryAfter: error === 'rate_limited' && Number.isSafeInteger(retry) && Number(retry) > 0 ? Number(retry) : error === 'rate_limited' ? 1 : null };
-  } catch {
+    return { ok: false, error, uncertain: response.status >= 500 || error === 'network', retryAfter: error === 'rate_limited' && Number.isSafeInteger(retry) && Number(retry) > 0 ? Number(retry) : error === 'rate_limited' ? 1 : null };
+  } catch (error) {
     // URL·토큰·외부 오류 본문은 기록하지 않는다.
-    return { ok: false, error: 'network', retryAfter: null };
+    const cause = error instanceof Error ? error.cause as { code?: string; message?: string } | undefined : undefined;
+    const beforeSend = ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ENETUNREACH', 'EHOSTUNREACH', 'UND_ERR_CONNECT_TIMEOUT'].includes(cause?.code ?? '') || cause?.message === 'bad port';
+    return { ok: false, error: 'network', retryAfter: null, uncertain: attempted && !beforeSend };
   }
 }
 
