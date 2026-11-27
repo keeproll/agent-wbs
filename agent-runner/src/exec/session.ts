@@ -113,7 +113,7 @@ export class Execution {
       if (hold.boot_id === null || hold.fence === null) return false;
       const proof = hold.slot_state === 'none' && hold.pgid === null
         ? { kind: 'no_process' as const, bootId: hold.boot_id }
-        : await this.launches.reconcile({ job: hold.job, hostId: hold.host_id, bootId: hold.boot_id, processGroup: hold.pgid });
+        : await this.launches.reconcile({ job: hold.job, hostId: hold.host_id, bootId: hold.boot_id, processGroup: hold.pgid, cgroup: hold.cgroup });
       if (!proof) return false;
       if (hold.attempt !== null) {
         try { await this.#report('interruptAttempt', { epoch: hold.epoch, params: { attemptId: hold.attempt }, body: { fence: hold.fence, reason: 'reboot', at: new Date().toISOString() } }, signal); }
@@ -392,7 +392,7 @@ export class Execution {
         const holds = (await this.#call('getExecutionHolds', { epoch })).body.holds;
         const hold = holds.find(h => h.job === job.id);
         if (hold) {
-          const proof = await this.launches.reconcile({ job: job.id, ...d.identity, processGroup: hold.pgid });
+          const proof = await this.launches.reconcile({ job: job.id, ...d.identity, processGroup: hold.pgid, cgroup: hold.cgroup });
           if (proof) {
             await this.#report('releaseJob', { epoch, params: { id: job.id }, body: { fence: job.fence, hostId: d.identity.hostId, proof, at: new Date().toISOString() } });
             await this.#completeJob(jobRef);
@@ -420,8 +420,9 @@ export class Execution {
     const d = this.#d;
     const holds = (await this.#call('getExecutionHolds', { epoch: job.epoch }, AbortSignal.timeout(10000))).body.holds;
     const hold = holds.find(h => h.job === job.id && h.epoch === job.epoch && h.fence === job.fence && h.host_id === d.identity.hostId && h.boot_id === d.identity.bootId);
-    if (!hold || hold.cgroup !== null) throw new Error('현재 서버 보유의 종료 증명을 확인할 수 없습니다.');
-    const serverProof = await this.launches.reconcile({ job: job.id, hostId: d.identity.hostId, bootId: d.identity.bootId, processGroup: hold.pgid });
+    if (!hold) throw new Error('현재 서버 보유의 종료 증명을 확인할 수 없습니다.');
+    // 서버가 기록한 cgroup이 있으면 cgroup_empty, 없으면 group_empty를 낸다(조정자 결정 3). 기록과 다르면 증거를 내지 않는다.
+    const serverProof = await this.launches.reconcile({ job: job.id, hostId: d.identity.hostId, bootId: d.identity.bootId, processGroup: hold.pgid, cgroup: hold.cgroup });
     if (!serverProof) throw new Error('서버가 기록한 프로세스의 종료를 확인할 수 없습니다.');
     return serverProof;
   }
@@ -460,7 +461,9 @@ export class Execution {
   async #completeJob(job: LaunchJob): Promise<void> {
     for (const record of await this.launches.list()) {
       if (record.job.id !== job.id || record.job.fence !== job.fence || record.job.epoch !== job.epoch || record.completedAt) continue;
-      await this.launches.complete(record.launchId, record.pgid === null ? { kind: 'no_process', bootId: record.bootId } : { kind: 'group_empty', bootId: record.bootId, processGroup: record.pgid });
+      await this.launches.complete(record.launchId, record.pgid === null ? { kind: 'no_process', bootId: record.bootId }
+        : record.cgroup !== null ? { kind: 'cgroup_empty', bootId: record.bootId, processGroup: record.pgid, cgroup: record.cgroup }
+          : { kind: 'group_empty', bootId: record.bootId, processGroup: record.pgid });
     }
   }
 

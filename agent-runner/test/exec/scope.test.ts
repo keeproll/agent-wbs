@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, expect, test } from 'vitest';
 import { Launches } from '../../src/exec/launches.ts';
 import { runProcess } from '../../src/exec/process.ts';
-import { clearScope, inUserScope, newScopeUnit, scopeCgroup, scopeEmpty, validScopeUnit, withUserScope } from '../../src/exec/scope.ts';
+import { clearScope, inUserScope, newScopeUnit, scopeCgroup, scopeCgroupPath, scopeEmpty, validScopeUnit, withUserScope } from '../../src/exec/scope.ts';
 import { PENDING_ISOLATION } from '../../src/cli/isolation.ts';
 
 const roots: string[] = [];
@@ -47,14 +47,32 @@ test('launch 기록은 프로세스를 띄우기 전에 scope 이름을 남기�
   await expect(launches.list()).rejects.toThrow('scope');
 });
 
-test('runProcess는 launch.scope를 기록하고, scope가 이미 비었으면 지금처럼 그룹 증거로 끝낸다', async () => {
+test('runProcess는 launch.scope·cgroup을 기록하고, scope가 비었으면 cgroup_empty 증거로 끝낸다(조정자 결정 3)', async () => {
   const dir = await home();
   const launches = new Launches(dir, { hostId: 'host', bootId: 'boot' });
   const unit = newScopeUnit();
   // 실제 systemd-run 없이: scope 이름만 붙인 실행 계획. scope 폴더가 없으므로 「이미 비었음」이다.
   const result = await runProcess({ launches, job: { id: 'job', fence: 1, epoch: 0 }, launch: { file: '/bin/sh', args: ['-c', 'exit 0'], env: {}, cwd: dir, stdin: '', scope: unit }, register: async () => undefined, graceMs: 100 });
   expect(result.code).toBe(0);
-  expect(result.proof.kind).toBe('group_empty');
+  expect(result.proof).toMatchObject({ kind: 'cgroup_empty', cgroup: scopeCgroupPath(unit) });
   const [name] = await readdir(launches.directory);
-  expect((JSON.parse(await readFile(join(launches.directory, name ?? ''), 'utf8')) as { scope?: string }).scope).toBe(unit);
+  const saved = JSON.parse(await readFile(join(launches.directory, name ?? ''), 'utf8')) as { scope?: string; cgroup?: string };
+  expect(saved).toMatchObject({ scope: unit, cgroup: scopeCgroupPath(unit) });
+  expect(saved.cgroup).toBe(`/user.slice/user-${uid}.slice/user@${uid}.service/app.slice/${unit}.scope`);
+});
+
+test('서버 보유의 cgroup과 launch 기록을 대조해 증거를 고른다: 같으면 cgroup_empty, 다르면 증거 없음, scope 없는 기록은 group_empty', async () => {
+  const dir = await home();
+  const launches = new Launches(dir, { hostId: 'host', bootId: 'boot' });
+  const unit = newScopeUnit();
+  const scoped = await runProcess({ launches, job: { id: 'scoped', fence: 1, epoch: 0 }, launch: { file: '/bin/sh', args: ['-c', 'exit 0'], env: {}, cwd: dir, stdin: '', scope: unit }, register: async () => undefined, graceMs: 100 });
+  const pgid = scoped.proof.kind === 'cgroup_empty' ? scoped.proof.processGroup : 0;
+  const hold = { job: 'scoped', hostId: 'host', bootId: 'boot', processGroup: pgid };
+  expect(await launches.reconcile({ ...hold, cgroup: scopeCgroupPath(unit) }, 100)).toMatchObject({ kind: 'cgroup_empty', processGroup: pgid, cgroup: scopeCgroupPath(unit) });
+  expect(await launches.reconcile({ ...hold, cgroup: null }, 100)).toBeNull();
+  expect(await launches.reconcile({ ...hold, cgroup: scopeCgroupPath(newScopeUnit()) }, 100)).toBeNull();
+  const plain = await runProcess({ launches, job: { id: 'plain', fence: 1, epoch: 0 }, launch: { file: '/bin/sh', args: ['-c', 'exit 0'], env: {}, cwd: dir, stdin: '' }, register: async () => undefined, graceMs: 100 });
+  expect(plain.proof.kind).toBe('group_empty');
+  const plainPgid = plain.proof.kind === 'group_empty' ? plain.proof.processGroup : 0;
+  expect(await launches.reconcile({ job: 'plain', hostId: 'host', bootId: 'boot', processGroup: plainPgid, cgroup: '/x.scope' }, 100)).toBeNull();
 });

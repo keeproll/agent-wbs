@@ -204,11 +204,13 @@ export async function start(repo: RunnerRepository, job: Job, body: { hostId: st
   return { attemptId };
 }
 
-export interface Proof { kind: 'no_process' | 'group_empty' | 'boot_changed'; bootId: string; processGroup?: number | null; currentBootId?: string }
+export interface Proof { kind: 'no_process' | 'group_empty' | 'cgroup_empty' | 'boot_changed'; bootId: string; processGroup?: number | null; currentBootId?: string; cgroup?: string }
 export async function release(repo: RunnerRepository, job: Job, host: string, proof: Proof, slotsOnly: boolean) {
   const hold = await repo.hold(job.id);
   if (!hold || hold.host_id !== host || hold.boot_id !== proof.bootId || hold.fence !== job.fence) throw new PlatformError('INVALID_TRANSITION');
-  if (proof.kind === 'no_process' && (hold.pgid !== null || hold.cgroup !== null) || proof.kind === 'group_empty' && hold.pgid !== proof.processGroup ||
+  // cgroup이 기록된 보유는 cgroup_empty(같은 경로·그룹)로만, cgroup이 없는 보유는 group_empty로만 닫는다(조정자 결정 3, 0041).
+  if (proof.kind === 'no_process' && (hold.pgid !== null || hold.cgroup !== null) || proof.kind === 'group_empty' && (hold.pgid !== proof.processGroup || hold.cgroup !== null) ||
+    proof.kind === 'cgroup_empty' && (hold.cgroup === null || hold.cgroup !== proof.cgroup || hold.pgid !== proof.processGroup) ||
     proof.kind === 'boot_changed' && (hold.pgid !== proof.processGroup || proof.currentBootId === proof.bootId || proof.currentBootId !== await repo.hostBoot(host))) throw new PlatformError('INVALID_TRANSITION');
   if (hold.closed_at) return;
   const task = hold.task ? await repo.taskById(hold.task) : undefined;

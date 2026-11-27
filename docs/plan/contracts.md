@@ -625,9 +625,10 @@ POST /api/runner/jobs/:id/finish {fence,status,result?,error?}
 **명령 결과의 정리 증거(`holds[]`)**
 
 - `status=done`이면 `holds[]`가 필수이고, `status=failed`이면 선택이다.
-- 완료라면 명령 payload의 모든 보유에 대해 항목 하나씩을 보낸다: `{job, hostId, bootId, proof: no_process|group_empty|boot_changed, processGroup?, currentBootId?}`.
+- 완료라면 명령 payload의 모든 보유에 대해 항목 하나씩을 보낸다: `{job, hostId, bootId, proof: no_process|group_empty|cgroup_empty|boot_changed, processGroup?, currentBootId?, cgroup?}`.
   - `hostId`·`bootId`는 보유를 만든 원래 값이다. 예약 전 보유면 null이다.
-  - `group_empty`는 `processGroup`이 필요하다.
+  - `group_empty`는 `processGroup`이 필요하다. 보유에 cgroup이 기록돼 있으면 쓸 수 없다.
+  - `cgroup_empty`는 `processGroup`과 `cgroup`이 필요하고, 둘 다 보유에 기록된 값과 같아야 한다(M8 전 연결, 조정자 결정 3).
   - `boot_changed`는 `currentBootId`가 필요하다. `processGroup`은 프로세스를 만들기 전 보유면 null이다.
 - 증거가 저장된 보유와 다르면 정리를 완료하지 않는다(data-model §5 정리 완료 기록).
 - 왜: 「정리했다」는 문장(`items[].detail`)만으로는 어느 프로세스가 끝났는지 확인할 수 없다.
@@ -729,12 +730,14 @@ Planning Agent(계획을 세우는 Agent)가 결과를 보고하는 API다.
    - 슬롯·충돌 묶음·Task 재개를 계속 막고 사유를 화면에 보인다(§6.7 L804-806).
    - 왜: 연락이 끊긴 것뿐이고 Agent 프로세스는 계속 파일을 고치고 있을 수 있다. 이때 같은 Task를 다시 시작하면 두 Agent가 부딪친다.
 2. **해제 증거 `proof`**
-   - 형식: `{kind:"no_process",bootId}` · `{kind:"group_empty",bootId,processGroup}` · `{kind:"boot_changed",bootId,processGroup|null,currentBootId}`.
+   - 형식: `{kind:"no_process",bootId}` · `{kind:"group_empty",bootId,processGroup}` · `{kind:"cgroup_empty",bootId,processGroup,cgroup}` · `{kind:"boot_changed",bootId,processGroup|null,currentBootId}`.
    - `bootId`·`processGroup`은 **보유를 만든 원래 값**이고 저장값과 같아야 한다.
    - `currentBootId`는 host가 보고한 현재 값과 같고 원래 값과 달라야 한다.
    - 뜻:
      - `no_process`: 실행 명령을 시작한 적 없고 남은 래퍼도 없음을 3번 절차로 확인
-     - `group_empty`: Runner가 그룹·자손(프로세스가 띄운 자식·손자 프로세스) empty 확인
+     - `group_empty`: Runner가 그룹·자손(프로세스가 띄운 자식·손자 프로세스) empty 확인. **cgroup이 기록되지 않은 보유에만** 쓴다.
+     - `cgroup_empty`: Runner가 `/process`로 보고한 cgroup의 `cgroup.events`에서 `populated 0`(또는 그 cgroup이 사라짐)을 확인. **cgroup이 기록된 보유는 이것(또는 `boot_changed`)으로만** 닫는다(M8 전 연결, 조정자 결정 3, 마이그레이션 0041).
+       - 왜: 프로세스 그룹은 setsid·이중 fork로 빠져나간 자손을 증명하지 못한다. Runner 소유 cgroup은 다른 계정(Agent)의 자손도 빠져나가지 못한다.
      - `boot_changed`: 같은 host의 boot ID 변경 — 이전 프로세스가 존재할 수 없음 (PC를 껐다 켜면 boot ID가 바뀐다)
    - 출력 단절·lease 만료·시간 경과는 증거가 아니다.
 3. **생성과 기록 사이의 정리.** 모든 CLI·① 명령·설치 명령은 같은 절차로 띄운다.
@@ -749,7 +752,7 @@ Planning Agent(계획을 세우는 Agent)가 결과를 보고하는 API다.
      - 응답 유실은 같은 멱등 키로 재시도하고 확인 전에는 허가하지 않는다.
    - 프로세스가 기록 전에 스스로 죽으면:
      - 그룹·cgroup·`launchId` 프로세스가 없음을 확인한다.
-     - 서버에 pgid가 없으면 `no_process`, 이미 기록됐으면 `group_empty`로 슬롯 해제.
+     - 서버에 pgid가 없으면 `no_process`, 이미 기록됐으면 `group_empty`(cgroup이 기록됐으면 `cgroup_empty`)로 슬롯 해제.
      - 시도가 시작됐으면 `failed`로 보고하고 잠금은 §3.4-9를 따른다.
    - Runner 재시작 시 claim 전에 launch 기록과 서버 보유를 대조한다.
      - 예정 cgroup의 프로세스, 기록된 pgid, `/proc`의 같은 사용자·같은 `launchId` 프로세스를 찾아 그룹 단위로 종료하고 **비었음을 다시 확인**한다.

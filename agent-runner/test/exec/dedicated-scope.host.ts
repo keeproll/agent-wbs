@@ -7,17 +7,17 @@
 // 설치가 안 된 PC(래퍼·계정 없음)에서는 건너뛴다. 설치된 PC에서 sudo·scope가 실패하면 시험이 실패한다.
 import { spawnSync } from 'node:child_process';
 import { copyFile, chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { afterAll, expect, test } from 'vitest';
-import { AGENT_EXEC, AGENT_ROOT, AGENT_USER, agentControl, selectIsolation } from '../../src/cli/dedicated-user.ts';
+import { AGENT_EXEC, AGENT_ROOT, AGENT_USER, agentControl, dedicatedUserIsolation, selectIsolation } from '../../src/cli/dedicated-user.ts';
 import type { IsolationLayer, Launch } from '../../src/cli/isolation.ts';
 import { Launches, processInfo } from '../../src/exec/launches.ts';
 import { GitRepository } from '../../src/git/repository.ts';
 import { runProcess } from '../../src/exec/process.ts';
-import { scopeCgroup } from '../../src/exec/scope.ts';
+import { inUserScope, scopeCgroup, withUserScope } from '../../src/exec/scope.ts';
 import { createRunCommand, probeEnv } from '../../src/readiness/command.ts';
 import { hostArchive } from './host-evidence.ts';
 
@@ -26,8 +26,16 @@ const agentUid = (() => {
   return result.status === 0 ? Number(result.stdout.trim()) : null;
 })();
 const installed = agentUid !== null && existsSync(AGENT_EXEC);
+const WRAPPER_SOURCE = join(import.meta.dirname, '..', '..', 'scripts', 'isolation', 'awbs-agent-exec.sh');
+/**
+ * 설치된 래퍼가 저장소의 지금 래퍼와 같은가. 래퍼를 바꾸면 owner가 설치 스크립트를 다시 실행해야 적용된다.
+ * - 같으면: fake 세션을 ci-run(python3)으로 띄운다(조정자 결정 1). bwrap은 진입점이 아니라 거부돼야 한다(결정 4).
+ * - 다르면(옛 래퍼): 옛 래퍼가 받는 bwrap(CLI 묶음 안 실행 파일)으로 띄우고 그 사실을 증거에 적는다.
+ */
+const wrapperCurrent = installed && readFileSync(AGENT_EXEC, 'utf8') === readFileSync(WRAPPER_SOURCE, 'utf8');
+const systemdRun = spawnSync('systemd-run', ['--user', '--scope', '--quiet', '--collect', '/bin/true'], { env: { PATH: '/usr/bin:/bin', XDG_RUNTIME_DIR: `/run/user/${String(process.getuid?.())}` } }).status === 0;
 const archive = await hostArchive();
-const facts: Record<string, unknown> = { at: new Date().toISOString(), installed, agentUser: AGENT_USER, agentUid, paidCalls: 0 };
+const facts: Record<string, unknown> = { at: new Date().toISOString(), installed, wrapperCurrent, agentUser: AGENT_USER, agentUid, paidCalls: 0 };
 afterAll(async () => { await writeFile(join(archive, 'dedicated-scope-facts.json'), JSON.stringify(facts, null, 2) + '\n'); });
 
 const CODEX_VENDOR = 'lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl';
@@ -86,13 +94,20 @@ async function isolation(): Promise<IsolationLayer> {
   expect(choice.reason).toBeNull();
   return choice.isolation;
 }
+/** Agent 계정으로 임의 명령 하나. 새 래퍼면 ci-run, 옛 래퍼면 bwrap(run). */
+function agentCommand(layer: IsolationLayer, dir: string, argv: [string, ...string[]], current = wrapperCurrent): Launch {
+  if (current) {
+    if (!layer.command) throw new Error('격리 계층에 command가 없습니다.');
+    return layer.command({ file: argv[0], args: argv.slice(1), env: { LANG: 'C.UTF-8', CI: '1' }, cwd: dir, stdin: '' });
+  }
+  // 옛 래퍼: Runner는 이제 진입점이 아닌 실행 파일을 넘기지 않는다(결정 4). 그래서 시험이 옛 Runner와 같은 실행 계획을 직접 만든다.
+  // 사용자 scope(inUserScope)와 sudo·래퍼 run은 실제 그대로다. owner가 설치 스크립트를 다시 실행하면 이 갈래는 쓰이지 않는다.
+  const bwrap = join(realpathSync(join(AGENT_ROOT, 'cli', 'codex', 'current')), CODEX_VENDOR, 'codex-resources', 'bwrap');
+  return inUserScope({ file: '/usr/bin/sudo', args: ['-n', '-u', AGENT_USER, '--', AGENT_EXEC, 'run', '--agent', 'codex', '--cwd', realpathSync(dir), '--', bwrap,
+    '--bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--', ...argv], env: { PATH: '/usr/bin:/bin' }, cwd: dir, stdin: '' });
+}
 function fakeSession(layer: IsolationLayer, dir: string, hold: boolean): Launch {
-  const bwrap = join(AGENT_ROOT, 'cli', 'codex', 'current', CODEX_VENDOR, 'codex-resources', 'bwrap');
-  return layer.wrap({
-    file: bwrap,
-    args: ['--bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--', '/usr/bin/python3', join(dir, 'kernel-tree.py'), 'all', join(dir, 'pids.jsonl'), ...(hold ? ['--hold'] : [])],
-    env: { LANG: 'C.UTF-8' }, cwd: dir, stdin: '',
-  }, 'Codex');
+  return agentCommand(layer, dir, ['python3', join(dir, 'kernel-tree.py'), 'all', join(dir, 'pids.jsonl'), ...(hold ? ['--hold'] : [])]);
 }
 
 test.runIf(installed)('전용 계정 fake 세션: 모든 프로세스가 awbs-agent·사용자 scope 안에 있고, 중단 정리 뒤 0개다', async () => {
@@ -134,7 +149,7 @@ test.runIf(installed)('전용 계정 fake 세션: 모든 프로세스가 awbs-ag
     facts.hold = { unit, cgroup: relative, processes: owners, agentCount: agent.length, groups: groups.size, sessions: sessions.size, killFromRunner: denied };
     controller.abort();
     const result = await running;
-    expect(result.proof).toMatchObject({ kind: 'group_empty' });
+    expect(result.proof).toMatchObject({ kind: 'cgroup_empty' });
     for (const o of owners) expect(await alive(o.pid)).toBe(false);
     expect(await scopeGone(unit)).toBe(true);
     const after = (await agentProcesses()).filter(pid => !before.includes(pid));
@@ -164,7 +179,7 @@ test.runIf(installed)('전용 계정 fake 세션: 본체가 정상 종료해도 
     watching = false;
     await watcher;
     expect(result.code).toBe(0);
-    expect(result.proof).toMatchObject({ kind: 'group_empty' });
+    expect(result.proof).toMatchObject({ kind: 'cgroup_empty' });
     expect(seen.size).toBeGreaterThanOrEqual(7);
     for (const pid of seen) expect(await alive(pid)).toBe(false);
     expect(await scopeGone(unit)).toBe(true);
@@ -190,7 +205,7 @@ test.runIf(installed)('실제 CLI는 무료 명령(--version)만: 전용 계정 
       const out: Buffer[] = [];
       const result = await runProcess({ launches, job: { id: `version-${name}`, fence: 1, epoch: 0 }, launch, register: async () => undefined, graceMs: 200, stdout: bytes => { out.push(bytes); } });
       expect(result.code).toBe(0);
-      expect(result.proof).toMatchObject({ kind: 'group_empty' });
+      expect(result.proof).toMatchObject({ kind: 'cgroup_empty' });
       expect(await scopeGone(launch.scope ?? '')).toBe(true);
       versions[agent] = Buffer.concat(out).toString('utf8').trim();
       // 래퍼에 넘긴 실행 파일은 실행 시점의 버전 폴더(current 링크를 따라간 곳)다.
@@ -224,9 +239,7 @@ test.runIf(installed)('작업 폴더 삭제: Agent가 권한을 지운 폴더(ch
     git(source, 'push', remote, 'main');
     const repo = await GitRepository.clone(join(root, 'runner'), repositoryId, remote, { agentRoot: AGENT_ROOT });
     const work = await repo.createWorktree('task-1', 'agent/TASK-1', base);
-    const bwrap = join(AGENT_ROOT, 'cli', 'codex', 'current', CODEX_VENDOR, 'codex-resources', 'bwrap');
-    const launch = layer.wrap({ file: bwrap, args: ['--bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--', '/bin/sh', '-c',
-      'mkdir -p locked/inner && echo x > locked/inner/f && chmod 000 locked/inner locked && echo done'], env: {}, cwd: work, stdin: '' }, 'Codex');
+    const launch = agentCommand(layer, work, ['sh', '-c', 'mkdir -p locked/inner && echo x > locked/inner/f && chmod 000 locked/inner locked && echo done']);
     const out: Buffer[] = [];
     const result = await runProcess({ launches, job: { id: 'perms', fence: 1, epoch: 0 }, launch, register: async () => undefined, graceMs: 200, stdout: bytes => { out.push(bytes); } });
     expect(Buffer.concat(out).toString('utf8').trim()).toBe('done');
@@ -243,6 +256,65 @@ test.runIf(installed)('작업 폴더 삭제: Agent가 권한을 지운 폴더(ch
       await run(control.file, control.args);
       await rm(area, { recursive: true, force: true });
     }
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test.runIf(installed && wrapperCurrent)('조정자 결정 4: 설치된 래퍼는 CLI 묶음 안의 bwrap을 진입점으로 받지 않는다', async () => {
+  const bwrap = join(await realpath(join(AGENT_ROOT, 'cli', 'codex', 'current')), CODEX_VENDOR, 'codex-resources', 'bwrap');
+  const r = await run('/usr/bin/sudo', ['-n', '-u', AGENT_USER, '--', AGENT_EXEC, 'run', '--agent', 'codex', '--cwd', join(AGENT_ROOT, 'worktrees'), '--', bwrap, '--version']);
+  expect(r.code).toBe(2);
+  facts.bwrapRejected = { code: r.code };
+});
+
+/**
+ * 새 래퍼(저장소 사본)를 실제 사용자 scope 안에서 돌린다. 계정 전환만 fake sudo(Runner 계정 그대로)로 대신한다.
+ * 왜: owner가 설치 스크립트를 다시 실행하기 전에도 ci-run·진입점 규칙·scope 정리를 실커널에서 확인한다.
+ */
+test.runIf(systemdRun)('새 래퍼 사본 + 실제 사용자 scope: ci-run fake 세션의 자손이 모두 scope 안이고, 중단 뒤 0개·cgroup_empty다', async () => {
+  const root = await mkdtemp(join(process.env.AWBS_TEST_TMP ?? tmpdir(), 'wrapper-scope-'));
+  const me = spawnSync('id', ['-un'], { encoding: 'utf8' }).stdout.trim();
+  const area = join(root, 'srv');
+  const work = join(area, 'worktrees', 'p1', 'ci-1');
+  const controller = new AbortController();
+  try {
+    for (const d of [work, join(area, 'inputs'), join(area, 'cli', 'codex', '1.0.0', 'bin'), join(area, 'cli', 'codex', '1.0.0', 'vendor'), join(root, 'node')]) await mkdir(d, { recursive: true });
+    await copyFile(join(import.meta.dirname, 'kernel-tree.py'), join(work, 'kernel-tree.py'));
+    for (const f of [join(area, 'cli', 'codex', '1.0.0', 'bin', 'codex'), join(area, 'cli', 'codex', '1.0.0', 'vendor', 'bwrap')]) { await writeFile(f, '#!/bin/sh\necho cli\n'); await chmod(f, 0o755); }
+    const conf = join(root, 'agent-exec.conf');
+    await writeFile(conf, `AGENT_USER=${me}\nRUNNER_USER=${me}\nRUNNER_HOME=${join(root, 'runner-home')}\nAGENT_ROOT=${area}\nNODE_DIR=${join(root, 'node')}\n`);
+    const exec = join(root, 'awbs-agent-exec');
+    await writeFile(exec, readFileSync(WRAPPER_SOURCE, 'utf8').replace('\nCONF=/etc/agentwbs/agent-exec.conf\n', `\nCONF=${conf}\n`)); await chmod(exec, 0o755);
+    const sudo = join(root, 'fake-sudo');
+    await writeFile(sudo, '#!/bin/bash\n[[ $1 == -n && $2 == -u && $4 == -- ]] || exit 9\nshift 4\nexec env -i "$@"\n'); await chmod(sudo, 0o755);
+    const layer = withUserScope(dedicatedUserIsolation({ user: me, root: area, exec, sudo }));
+    // 진입점이 아닌 실행 파일은 Runner 쪽에서 먼저 거부한다.
+    expect(() => layer.wrap({ file: join(area, 'cli', 'codex', '1.0.0', 'vendor', 'bwrap'), args: [], env: {}, cwd: work, stdin: '' }, 'Codex')).toThrow(expect.objectContaining({ code: 'binary_outside_agent_root' }));
+    // 래퍼 자신도 거부한다.
+    expect(spawnSync(exec, ['run', '--agent', 'codex', '--cwd', work, '--', join(area, 'cli', 'codex', '1.0.0', 'vendor', 'bwrap')], { env: { PATH: '/usr/bin:/bin' } }).status).toBe(2);
+    const launch = agentCommand(layer, work, ['python3', join(work, 'kernel-tree.py'), 'all', join(work, 'pids.jsonl'), '--hold'], true);
+    const unit = launch.scope ?? '';
+    expect(launch.args).toContain('ci-run');
+    const launches = new Launches(root, { hostId: 'host', bootId: 'boot' });
+    let ready = false;
+    const running = runProcess({ launches, job: { id: 'wrapper-copy', fence: 1, epoch: 0 }, launch, signal: controller.signal, register: async () => undefined, graceMs: 200,
+      stdout: bytes => { if (bytes.toString('utf8').includes('ready')) ready = true; } });
+    void running.catch(() => undefined);
+    await expect.poll(() => ready, { timeout: 15_000 }).toBe(true);
+    const procs = await scopeProcs(unit);
+    const relative = scopeCgroup(unit).slice('/sys/fs/cgroup'.length);
+    for (const pid of procs) expect((await readFile(`/proc/${String(pid)}/cgroup`, 'utf8')).trim()).toBe(`0::${relative}`);
+    const rows = (await readFile(join(work, 'pids.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line) as { pid: number; role: string; marked: boolean });
+    expect(rows).toHaveLength(6);
+    for (const row of rows) expect(procs).toContain(row.pid);
+    controller.abort();
+    const result = await running;
+    expect(result.proof).toMatchObject({ kind: 'cgroup_empty', cgroup: relative });
+    for (const row of rows) expect(await alive(row.pid)).toBe(false);
+    expect(await scopeGone(unit)).toBe(true);
+    facts.wrapperCopy = { unit, cgroup: relative, inScope: procs.length, descendants: rows.map(r => r.role), proof: result.proof };
+  } finally {
+    controller.abort();
     await rm(root, { recursive: true, force: true });
   }
 });

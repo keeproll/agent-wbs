@@ -390,7 +390,7 @@ export type ExecutionHold = {
   lock_state: "none" | "held" | "orphaned" | "handed_over" | "released";
   lock_from_job: Id | null;
   handed_to_job: Id | null;
-  release_proof: "no_process" | "group_empty" | "boot_changed" | null;
+  release_proof: "no_process" | "group_empty" | "boot_changed" | "cgroup_empty" | null;
   closed_at: Timestamp | null;
   created_at: Timestamp;
   updated_at: Timestamp;
@@ -2187,6 +2187,13 @@ export interface Operations {
           job: Id;
           hostId: string | null;
           bootId: string | null;
+          proof: "cgroup_empty";
+          processGroup: number;
+          cgroup: string;
+        } | {
+          job: Id;
+          hostId: string | null;
+          bootId: string | null;
           proof: "boot_changed";
           processGroup?: number | null;
           currentBootId: string;
@@ -2209,6 +2216,13 @@ export interface Operations {
           bootId: string | null;
           proof: "group_empty";
           processGroup: number;
+        } | {
+          job: Id;
+          hostId: string | null;
+          bootId: string | null;
+          proof: "cgroup_empty";
+          processGroup: number;
+          cgroup: string;
         } | {
           job: Id;
           hostId: string | null;
@@ -2321,6 +2335,11 @@ export interface Operations {
           bootId: string;
           processGroup: number;
         } | {
+          kind: "cgroup_empty";
+          bootId: string;
+          processGroup: number;
+          cgroup: string;
+        } | {
           kind: "boot_changed";
           bootId: string;
           processGroup: number | null;
@@ -2368,6 +2387,11 @@ export interface Operations {
           kind: "group_empty";
           bootId: string;
           processGroup: number;
+        } | {
+          kind: "cgroup_empty";
+          bootId: string;
+          processGroup: number;
+          cgroup: string;
         } | {
           kind: "boot_changed";
           bootId: string;

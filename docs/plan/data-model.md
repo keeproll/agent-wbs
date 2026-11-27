@@ -397,7 +397,7 @@ CP(변경 제안)로 새 Task를 추가할 때 넣을 수 있는 선택 필드�
   - 추가 전용: prepared·prestart_failed·started·lease_lost·reconciled·finished, code, detail — **시작 전 실패 기록**
   - 근거: §1.2-4 §7.4-4
 - `execution_holds`
-  - job unique, attempt?, epoch, host_id?, boot_id?, fence?, pgid/cgroup, task?, conflict_group?, agent, slots, heavy, **slot_state**, **lock_state**, lock_from_job?, handed_to_job?, release_proof(`no_process/group_empty/boot_changed`), closed_at.
+  - job unique, attempt?, epoch, host_id?, boot_id?, fence?, pgid/cgroup, task?, conflict_group?, agent, slots, heavy, **slot_state**, **lock_state**, lock_from_job?, handed_to_job?, release_proof(`no_process/group_empty/boot_changed/cgroup_empty`, cgroup_empty는 마이그레이션 0041 — cgroup이 기록된 보유만, cgroup 없는 보유는 group_empty만), closed_at.
   - 별도 `state` 컬럼 없음 — 정의는 §2.5-1.
   - 닫히기 전 삭제 금지(초기화는 §5).
   - 행을 새로 만들 때(INSERT)도 §2.5-1의 상태 규칙을 검사한다.

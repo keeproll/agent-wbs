@@ -96,8 +96,19 @@ keeproll ALL=(awbs-agent) NOPASSWD: /usr/local/libexec/awbs-agent-exec
   - 왜: Runner가 실수로 래퍼를 직접 부르면 격리된 것처럼 보이기만 한다.
 - 작업 폴더의 실제 경로(링크를 모두 따라간 경로)가 `/srv/agentwbs/worktrees/` **안**인지 본다.
   - 예: 작업 폴더 안의 링크가 `/home/keeproll`을 가리키면 거부한다.
-- CLI 실행 파일의 실제 경로가 `/srv/agentwbs/cli/<claude|codex>/` 안인지 본다. 다른 Agent의 CLI도 거부한다.
-- 넘겨받는 환경 변수는 `LANG`·`LC_ALL`뿐이다. 다른 이름(예: `GH_TOKEN`)은 거부한다.
+- CLI는 **진입점 하나만** 받는다: `/srv/agentwbs/cli/<claude|codex>/<버전>/bin/<claude|codex>`(조정자 결정 4, fix1).
+  - `<버전>`은 숫자.숫자.숫자이고 링크가 아닌 실제 폴더여야 한다. `current` 링크는 Runner가 실행 시점의 버전으로 바꿔 넘긴다.
+  - 진입점은 보통 패키지 안 파일을 가리키는 링크다. 링크를 따라간 실제 파일도 그 버전 폴더 안이어야 한다.
+  - 왜: CLI 묶음 안에는 `rg`·`bwrap` 같은 다른 실행 파일도 있다. `bwrap`은 임의 명령을 띄울 수 있으므로 진입점만 받는다.
+    - CLI가 세션 안에서 스스로 부르는 `rg` 등은 같은 계정·같은 scope의 자식이라 따로 허용할 필요가 없다.
+  - 다른 Agent의 CLI도 거부한다.
+- `ci-run`(①·CI 검사 명령, 조정자 결정 1, fix1): Agent 코드의 시험·빌드를 Agent 계정으로 실행한다.
+  - 작업 폴더는 `run`과 같은 규칙(worktrees 안)이다.
+  - 명령은 이름(예: `pnpm`)이면 고정 PATH(`<Agent node>:/srv/agentwbs/cli/pnpm/current/bin:/usr/local/bin:/usr/bin:/bin`)에서 찾고, 경로면 작업 폴더 안의 실행 파일만 받는다.
+  - 환경 변수는 `LANG`·`LC_ALL`·`TZ`·`CI`·`NODE_ENV`·`FORCE_COLOR`·`NO_COLOR`·`AWBS_REPORT`·`AWBS_REPORT_NONCE`·`AWBS_EVIDENCE_DIR`만, 값은 경로·짧은 낱말 모양만 받는다.
+  - 래퍼는 명령이 main의 pipeline.yaml에서 왔는지 알 수 없다. 그 출처는 Runner가 지킨다. 래퍼는 실행 범위(계정·폴더·환경)를 막는다.
+  - pnpm은 `install-agent-cli.sh`가 `/srv/agentwbs/cli/pnpm/<버전>`에 설치한다(Agent용 node에는 corepack이 없다).
+- `run`이 넘겨받는 환경 변수는 `LANG`·`LC_ALL`뿐이다. 다른 이름(예: `GH_TOKEN`)은 거부한다.
 - 설정 파일(`/etc/agentwbs/agent-exec.conf`)은 실행하지 않고, 정해진 이름만 한 줄씩 읽는다.
   - 왜: 설정 파일에 명령을 숨겨 두어도 실행되지 않게 한다.
 - 래퍼와 설정 파일은 root 소유다. Runner도 Agent도 고칠 수 없다.
@@ -454,9 +465,8 @@ bash agent-runner/scripts/isolation/remove-agent-user.sh --purge-work     # 작�
 
 ### 12.3 아직 남음
 
-5. **CI·계약 추출·임시 SQL**도 같은 계정 경계에서 실행한다(architecture §4 「실행 격리」). 래퍼에 하위 명령을 더하거나 같은 방식의 실행 계획을 쓴다.
-   - 지금 래퍼는 「CLI 설치본 안」 실행 파일만 받는다. 그래서 전용 계정 계층에서 ① 명령(`pnpm` 등)은 `binary_outside_agent_root`로 거부된다(닫힌 쪽).
-   - 참고(발견): 「CLI 설치본 안」에는 CLI가 함께 설치한 다른 실행 파일(예: Codex 묶음의 `rg`·`bwrap`)도 있다. 래퍼는 이것들도 받는다. `bwrap`은 임의 명령을 띄울 수 있다. 그 명령도 Agent 계정 권한이라 Agent 세션이 원래 할 수 있는 일보다 넓지는 않다. host 시험은 이 점을 써서 fake 세션을 띄운다.
+5. **CI**: fix1에서 연결함. ①·②·재실행 명령은 래퍼 `ci-run`으로 Agent 계정·사용자 scope에서 돈다(§5.1, 조정자 결정 1). 래퍼 `run`은 claude·codex 진입점만 받는다(결정 4).
+   - **계약 추출·임시 SQL**은 아직 이 경계를 쓰지 않는다(그 실행기가 앱에 연결되지 않았다). 연결할 때 `ci-run`과 같은 `Execution.command`를 쓴다.
 6. **`importWorktree`의 계정 간 안전성**(§11) 재검토.
 
 ## 13. 시험

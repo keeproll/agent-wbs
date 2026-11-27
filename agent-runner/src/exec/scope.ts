@@ -51,6 +51,14 @@ export function scopeCgroup(unit: string): string {
   return `/sys/fs/cgroup/user.slice/user-${id}.slice/user@${id}.service/app.slice/${unit}.scope`;
 }
 
+/**
+ * 서버에 보고하는 cgroup 경로(`/proc/<pid>/cgroup`의 `0::` 뒤 모양). `/sys/fs/cgroup`을 뺀 값이다.
+ * 서버는 이 값이 기록된 보유를 cgroup_empty 증거로만 닫는다(조정자 결정 3).
+ */
+export function scopeCgroupPath(unit: string): string {
+  return scopeCgroup(unit).slice('/sys/fs/cgroup'.length);
+}
+
 /** 사용자 systemd에 닿는 데 필요한 환경. sudo가 어차피 지우므로 Agent에게는 넘어가지 않는다. */
 export function scopeEnv(): NodeJS.ProcessEnv {
   return { PATH: '/usr/bin:/bin', XDG_RUNTIME_DIR: `/run/user/${String(uid())}` };

@@ -133,9 +133,13 @@ CLI·버전·모델·옵션 조합의 등급은 실제 기록 검증 전까지 `
 
 ### 서버 보고(`/process`의 cgroup)
 
-- `reportJobProcess.cgroup`은 지금도 `null`로 보낸다. scope는 이 PC 안에서만 쓴다.
-  - 왜: 서버는 보유에 cgroup이 있으면 `group_empty`·`no_process` 증거로 해제하지 않는다(`#serverProof`·`#finishUnstarted`).
-  - cgroup 증거 종류를 서버 계약에 더하는 일은 남은 작업이다(아래 「남은 것」).
+- scope로 띄운 launch는 `reportJobProcess.cgroup`에 그 scope의 cgroup 경로를 보낸다(조정자 결정 3, fix1).
+  - 모양: `/user.slice/user-<UID>.slice/user@<UID>.service/app.slice/awbs-<uuid>.scope`(`/proc/<pid>/cgroup`의 `0::` 뒤와 같은 모양, `scopeCgroupPath`).
+  - 이 경로는 launch 기록(`LaunchRecord.cgroup`)에도 실행 전에 저장한다.
+- 해제 증거는 `cgroup_empty`(`{kind, bootId, processGroup, cgroup}`)다. 서버는 cgroup이 기록된 보유를 이것(또는 `boot_changed`)으로만 닫는다.
+  - `Launches.reconcile`은 scope를 비운 것을 확인한 뒤에만 이 증거를 낸다. 서버 보유의 cgroup을 받으면 launch 기록과 같아야 한다. 다르면 증거를 내지 않는다(「모름」).
+  - scope 없는 launch(시험용 fake 계층)는 지금처럼 `group_empty`다.
+  - 초기화 정리(`cleanup/reset.ts`)도 cgroup이 기록된 보유에는 `cgroup_empty`를 보낸다.
 
 ### 격리 다시 확인
 
@@ -144,17 +148,22 @@ CLI·버전·모델·옵션 조합의 등급은 실제 기록 검증 전까지 `
   - 하나라도 실패하면 그 실행을 거부하고(`isolation_undecided`), 새 claim도 받지 않는다. 이유가 바뀔 때만 경고한다.
 - 왜 실행 직전마다 보나: 재부팅 뒤 `/run/WSL` 보호가 아직 안 돌았거나, linger(로그아웃·재시작 뒤에도 사용자 systemd를 띄워 두는 설정)가 꺼져 사용자 systemd가 없을 수 있다. 래퍼 `check`는 약 40ms다.
 
+### ①·CI 명령(`Execution.command`)
+
+- 격리 계층의 `command`로 감싼다. 전용 계정이면 `systemd-run --user --scope … -- sudo -n -u awbs-agent -- 래퍼 ci-run --cwd … [--env …] -- <명령> <인자>`다(조정자 결정 1).
+  - 명령은 pipeline.yaml argv 그대로다. 이름(`pnpm`)이면 래퍼가 고정 PATH에서, 경로면 작업 폴더 안에서만 찾는다.
+  - 환경 변수는 허용 목록(`CI_ENV_NAMES`: LANG·LC_ALL·TZ·CI·NODE_ENV·FORCE_COLOR·NO_COLOR·AWBS_REPORT·AWBS_REPORT_NONCE·AWBS_EVIDENCE_DIR)만 넘긴다.
+  - 시험용 fake 계층(`command` 없음)만 `wrap`으로 대신한다.
+- CI job(`integrate`·`ci_retry`)은 claim 때 물리 슬롯이 이미 `reserved`다. 그때는 `acquireJobSlots` 없이 그 예약으로 `/process`를 보낸다. 슬롯이 `none`이면(시도 job의 ①) 지금처럼 acquire한다.
+
 ### 남은 것
 
-- ①·CI·계약 추출 명령(`pnpm` 등)은 래퍼가 「CLI 설치본 안」 실행 파일만 받으므로 전용 계정 계층에서 `binary_outside_agent_root`로 거부된다(fail-closed). 래퍼 하위 명령 추가가 필요하다(isolation.md §12.2).
-- scope의 `cpu.stat`·`memory.current`로 세션 자원을 재는 일은 아직 연결하지 않았다.
-- 서버 계약의 cgroup 증거 종류.
+- scope의 `cpu.stat`·`memory.current`로 세션 자원을 재는 일은 M8-04(CLI 실측) 범위다(조정자 결정 5).
 
 ## Q-08 운영 연결 경계 — 전용 계정 격리 작업(아이템 16)
 
-> M8 전 연결에서 1·3·4·5번을 위 절처럼 연결했다.
-> 2번의 「`/process`에 실제 cgroup 경로를 보낸다」는 서버 계약 때문에 하지 않았다(위 「서버 보고」).
-> 4번의 CPU·메모리 읽기는 남았다.
+> M8 전 연결에서 1~5번을 위 절처럼 연결했다. 2번의 「`/process`에 실제 cgroup 경로」는 fix1에서 서버 계약(`cgroup_empty`, 마이그레이션 0041)과 함께 연결했다.
+> 4번의 CPU·메모리 읽기는 M8-04 범위다.
 
 조정자가 cgroup 운영 연결을 Q-08 전용 계정 격리 작업(아이템 16)에 배정했다.
 전용 계정 CLI는 Runner 사용자가 소유한 systemd 사용자 scope 안에서 실행한다.

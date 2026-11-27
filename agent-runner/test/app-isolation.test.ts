@@ -80,3 +80,32 @@ test('GitHub 설정이 없으면 ①은 PR 없이(github=null) 묶인다', async
     jobs: { collect: async () => ({ report: { summary: '', changedFiles: [], evidence: [] } }), taskCheck: sources } });
   expect((bound[0] as Record<string, unknown>).github).toBeNull();
 });
+
+test('조정자 결정 1: 전용 계정 격리에서는 CI 실행기 주입(Runner 계정 직접 실행)을 거부한다', () => {
+  const run = vi.fn<RunCommand>(async () => ({ code: 0, stdout: '', stderr: '' }));
+  expect(() => new RunnerApp({ state, api, home, version: 't', env: {}, warn: () => undefined, hostSources, cliRegistry: registry, run, cliRun: run, cliUpdates: false,
+    agentRoot: '/srv/agentwbs', github: { repo: { owner: 'o', repo: 'r' }, mode: 'gh' },
+    ci: { repo: {} as never, execute: async () => ({ code: 0, stdout: '', stderr: '' }), collectTests: async () => [] } })).toThrow('CI 실행기를 주입할 수 없습니다');
+});
+
+test('실제 CI 실행기(ciAuto)는 격리 계층이 없으면 CI job을 받지 않는다(claim도 보내지 않음)', async () => {
+  const run = vi.fn<RunCommand>(async () => ({ code: 0, stdout: '', stderr: '' }));
+  const calls: string[] = [];
+  const recording = (async (operation: string) => { calls.push(operation); return { status: 204, body: undefined, headers: new Headers() }; }) as unknown as ApiClient;
+  const a = new RunnerApp({ state, api: recording, home, version: 't', env: {}, warn: () => undefined, hostSources, cliRegistry: registry, run, cliRun: run, cliUpdates: false,
+    github: { repo: { owner: 'o', repo: 'r' }, mode: 'gh' }, githubFetch: vi.fn() as unknown as typeof fetch, ciAuto: true });
+  vi.spyOn(a, 'checkReadiness').mockResolvedValue({ at: new Date().toISOString(), items: [] });
+  vi.spyOn(a, 'reportModels').mockResolvedValue();
+  vi.spyOn(a, 'reportConcurrency').mockResolvedValue();
+  vi.spyOn(a, 'reportInputs').mockResolvedValue(undefined);
+  vi.spyOn(a.reporter, 'reportUsage').mockResolvedValue();
+  vi.spyOn(a.reporter, 'caps', 'get').mockReturnValue({ total: 1, Claude: 1, Codex: 1, heavy: 1 });
+  vi.useFakeTimers();
+  try {
+    a.startSchedules();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(a.execution.isolation).toBeUndefined();
+    expect(a.ci).toBeUndefined();
+    expect(calls).not.toContain('claimJob');
+  } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+});
