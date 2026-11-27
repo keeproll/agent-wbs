@@ -58,18 +58,38 @@ export async function retryDecision(client: PoolClient, run: Run): Promise<Retry
 
 /** 화면은 기록된 실행 SHA로 완료나 복구를 추측하지 않고 이 결과를 표시한다. */
 export async function ciRunDecisions(client: PoolClient, id: string) {
-  const run=(await client.query<Run>('select * from ci_runs where id=$1',[id])).rows[0];
-  if (!run) throw new Error('CI 실행을 찾을 수 없습니다.');
-  const baseline=run.stage===1 && run.status==='fail' && run.fail_scope==='baseline';
-  const auto=baseline && run.task ? await integrationDecision(client,run.task,{baselineOnly:true,sourceRunId:id}) : null;
-  const retry=await retryDecision(client,run);
-  const task=run.task ? (await client.query<{status:string}>('select status from tasks where id=$1',[run.task])).rows[0] : null;
-  const merge=(await client.query<{status:string;actual_merge_sha:string|null}>('select status,actual_merge_sha from merge_queue where ci_run=$1 order by queue_no desc limit 1',[id])).rows[0];
-  return {
-    baselineResolved:baseline && run.base_sha ? await baselineResolved(client,run.project_id,run.base_sha) : null,
-    autoReintegrate:auto?.state ?? 'none',autoReintegrateReason:auto?.reason ?? null,
-    retryAllowed:retry.allowed,retryBlockedReason:retry.reason,
-    taskStatus:task?.status ?? null,mergeStatus:merge?.status ?? null,actualMergeSha:merge?.actual_merge_sha ?? null,
-    mergeCompleted:merge?.status==='merged' && task?.status==='done',
-  };
+  const found = (await ciRunDecisionsMany(client,[id])).get(id);
+  if (!found) throw new Error('CI 실행을 찾을 수 없습니다.');
+  return found;
+}
+
+/**
+ * 여러 실행의 판정을 한 번에 만든다. 실행·Task 상태·병합 기록은 묶어서 읽고, 실패한 실행만 추가 판정을 한다.
+ * 왜: 실행 목록(최대 200건)이 항목마다 판정을 따로 부르면 쿼리가 항목 수에 비례해 늘어난다(M7-04 P3 N+1).
+ * 판정 규칙은 한 건씩 부를 때와 같다.
+ */
+export async function ciRunDecisionsMany(client: PoolClient, ids: readonly string[]) {
+  const runs=(await client.query<Run>('select * from ci_runs where id=any($1::uuid[])',[ids])).rows;
+  const taskIds=[...new Set(runs.flatMap(run => run.task ? [run.task] : []))];
+  const tasks=new Map((await client.query<{id:string;status:string}>('select id,status from tasks where id=any($1::uuid[])',[taskIds])).rows.map(row => [row.id,row.status]));
+  const merges=new Map((await client.query<{ci_run:string;status:string;actual_merge_sha:string|null}>(
+    'select distinct on(ci_run) ci_run,status,actual_merge_sha from merge_queue where ci_run=any($1::uuid[]) order by ci_run,queue_no desc',[ids])).rows.map(row => [row.ci_run,row]));
+  const result=new Map<string,Awaited<ReturnType<typeof decide>>>();
+  async function decide(run: Run) {
+    const baseline=run.stage===1 && run.status==='fail' && run.fail_scope==='baseline';
+    const auto=baseline && run.task ? await integrationDecision(client,run.task,{baselineOnly:true,sourceRunId:run.id}) : null;
+    // 실패하지 않은 실행은 쿼리 없이 '다시 시도 불가'로 끝난다(retryDecision 첫 줄).
+    const retry=await retryDecision(client,run);
+    const taskStatus=run.task ? tasks.get(run.task) ?? null : null;
+    const merge=merges.get(run.id);
+    return {
+      baselineResolved:baseline && run.base_sha ? await baselineResolved(client,run.project_id,run.base_sha) : null,
+      autoReintegrate:auto?.state ?? 'none',autoReintegrateReason:auto?.reason ?? null,
+      retryAllowed:retry.allowed,retryBlockedReason:retry.reason,
+      taskStatus,mergeStatus:merge?.status ?? null,actualMergeSha:merge?.actual_merge_sha ?? null,
+      mergeCompleted:merge?.status==='merged' && taskStatus==='done',
+    };
+  }
+  for (const run of runs) result.set(run.id,await decide(run));
+  return result;
 }

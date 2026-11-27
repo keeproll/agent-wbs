@@ -11,7 +11,7 @@ import { RunnerRepository, required } from '../runner/repository.ts';
 import { assertExternal, checkedJob } from '../runner/service.ts';
 import { inputHead } from '../project/service.ts';
 import { enqueueIntegration, gateInput, integrationDecision } from '../execution/gate.ts';
-import { ciRunDecisions, retryDecision } from './decisions.ts';
+import { ciRunDecisions, ciRunDecisionsMany, retryDecision } from './decisions.ts';
 import { pipelineDefinition } from './pipeline.ts';
 import { reportQueue, startRun, updateRun, type Start, type Update, type QueueReport } from './service.ts';
 
@@ -80,7 +80,8 @@ export function registerCiRoutes(app: FastifyInstance, pool: Pool) {
       [params(r).projectId,query.stage ? CI_STAGE[query.stage] : null,query.taskKey,cursor?.[0],cursor?.[1],limit+1])).rows;
       const items = rows.slice(0,limit), last = items.at(-1);
       const nextCursor = rows.length > limit && last ? encodeCursor([last.startedAt as string,last.runNo as string]) : null;
-      for (const item of items) { Object.assign(item,await ciRunDecisions(client,item.id as string)); delete item.runNo; }
+      const decisions = await ciRunDecisionsMany(client,items.map(item => item.id as string));
+      for (const item of items) { Object.assign(item,decisions.get(item.id as string)); delete item.runNo; }
       return { items,nextCursor };
     }));
     route('getCiRun',r => read(pool,r,async client => {

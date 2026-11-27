@@ -443,6 +443,8 @@ describe('실제 하위 Agent v1 정의(M5-06)', () => {
       ['literal', (d) => { d.text = d.text.replace(/^description = "(.*)"$/m, "description = '$1 # 표시'"); }],
       ['ml-basic', (d) => { d.text = d.text.replace('맡은 일', '맡은 일 # 표시'); }],
       ['escaped', (d) => { d.text = d.text.replace('맡은 일', '맡은 일 \\u0023 표시'); }],
+      // M5·M7 통합(M5-06 P3): 해석 결과에만 검사용 글자(U+F0000)가 있는 정상 문자열도 주석으로 오인하지 않는다.
+      ['escaped-probe', (d) => { d.text = d.text.replace(/^description = "/m, 'description = "단계 #1 \\U000F0000 표시 '); }],
     ];
     for (const [name, change] of cases) expect(checkSubagentSet(mutate(codex().key, change), mock), name).toEqual([]);
   });

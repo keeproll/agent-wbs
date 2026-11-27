@@ -191,17 +191,21 @@ function parseClaude(text: string): Parsed | string {
 
 /**
  * TOML 주석이 있는지 표준 분석기만으로 판단한다(손으로 만든 문자열 경계 해석을 쓰지 않는다).
- * 방법: 원문의 모든 `#`을 파일에 없는 글자로 바꿔 다시 분석한다.
+ * 방법: 원문의 모든 `#`을 원문과 해석 결과 어디에도 없는 글자(검사용 글자)로 바꿔 다시 분석한다.
  *   - `#`가 모두 문자열 안에 있으면 분석이 성공하고, 그 글자를 `#`로 되돌린 결과가 원래 결과와 같다.
  *   - 하나라도 주석을 여는 `#`이면 분석이 실패하거나(값 뒤에 맨 글자) 결과가 달라진다(`#model = …` → 새 키).
+ * 검사용 글자는 해석 결과에도 없어야 한다. 왜: `\U000F0000`처럼 이스케이프로 적은 글자는 원문에는 없지만 해석 결과에는 있어,
+ * 되돌릴 때 함께 `#`로 바뀌면 정상 문자열을 주석으로 오인한다(M5-06 P3).
  */
-const COMMENT_PROBE = '\u{F0000}';
+const COMMENT_PROBES = Array.from({ length: 256 }, (_, i) => String.fromCodePoint(0xF0000 + i));
 function tomlHasComment(text: string, table: Record<string, unknown>): boolean {
   if (!text.includes('#')) return false;
-  if (text.includes(COMMENT_PROBE)) return true; // 확인할 수 없으면 주석이 있는 것으로 본다(fail-closed).
+  const parsed = JSON.stringify(table);
+  const probe = COMMENT_PROBES.find((c) => !text.includes(c) && !parsed.includes(c));
+  if (!probe) return true; // 확인할 수 없으면 주석이 있는 것으로 본다(fail-closed).
   try {
-    const probed = JSON.stringify(parseToml(text.replaceAll('#', COMMENT_PROBE))).replaceAll(COMMENT_PROBE, '#');
-    return probed !== JSON.stringify(table);
+    const probed = JSON.stringify(parseToml(text.replaceAll('#', probe))).replaceAll(probe, '#');
+    return probed !== parsed;
   } catch {
     return true;
   }
