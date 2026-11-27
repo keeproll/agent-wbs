@@ -12,6 +12,7 @@ import { policyOf, scheduleInput } from '../src/planning/schedule.ts';
 import { loadSnapshot } from '../src/planning/snapshot.ts';
 import { RunnerRepository } from '../src/runner/repository.ts';
 import { inputHead } from '../src/project/service.ts';
+import { invalidateTaskGate } from '../src/execution/gate.ts';
 
 const db = new URL(inject('testDatabaseUrl'));
 db.pathname += '_ci';
@@ -117,6 +118,14 @@ const queue = (a: Running, status: string, extra: object = {}, h = headers()) =>
   jobId:a.job,fence:a.fence,pr:1,taskKey:a.key,status,qaHeadSha:sha,syncedHeadSha:sha,baseSha:otherSha,...extra,
 },h);
 
+test('Runner CI 문맥은 자기 job의 QA·브랜치·실행 가능 여부만 조회한다', async () => {
+  const a = await gateTask();
+  const response = await app.inject({ url:`/api/runner/ci/jobs/${a.job}?fence=1`,headers:headers() });
+  expect(response.statusCode,response.body).toBe(200);
+  expect(response.json()).toMatchObject({ runnable:true,taskKey:a.key,branch:`agent/${a.key}-h1`,verification:{ passed:true,headSha:sha,specRevision:1 },source:null });
+  expect((await app.inject({ url:`/api/runner/ci/jobs/${a.job}?fence=2`,headers:headers() })).statusCode).toBe(409);
+});
+
 test('CI API는 시작·진행·결과·상세를 저장하고 멱등 재요청을 한 번만 반영한다', async () => {
   const a = await running();
   const h = headers(), body = { jobId:a.job,fence:1,stage:'task',taskKey:a.key,attemptId:a.attempt,ref:'agent/test',trigger:'task',pipelineSha:pipeline,headSha:sha,baseSha:otherSha };
@@ -218,6 +227,9 @@ test.each([false,true])('H→H′=%s의 실제 병합 보고는 기록된 ①·�
   expect((await queue(a,'merged',{ ...extra,actualMergeSha:'8'.repeat(40),actualTreeSha:tree,mergeParents:[head,otherSha] })).statusCode).toBe(409);
   expect((await queue(a,'merged',{ ...extra,actualMergeSha:'7'.repeat(40),actualTreeSha:sha,mergeParents:[otherSha,head] })).statusCode).toBe(409);
   const h = headers(), merged = { ...extra,actualMergeSha:'9'.repeat(40),actualTreeSha:tree,mergeParents:[otherSha,head] };
+  expect((await queue(a,'merged',merged)).json()).toMatchObject({ error:{ code:'MERGE_MISMATCH' } });
+  // 실제 불일치 보류는 사람이 대조한 뒤 해제한 경우에만 다음 완료를 허용한다.
+  await owner.query("update alerts set resolved_at=clock_timestamp() where project_id=$1 and key='ci:mergeMismatch|#1'",[project]);
   const completed = await queue(a,'merged',merged,h); expect(completed.statusCode,completed.body).toBe(204);
   expect((await queue(a,'merged',merged,h)).headers['idempotency-replayed']).toBe('true');
   expect((await get(`tasks/${a.key}`)).json()).toMatchObject({ lifecycleStatus:'done' });
@@ -365,10 +377,14 @@ test('리뷰 R2: 실제 병합 불일치는 SHA·경고를 커밋하고 Task는 
 test('병합 뒤 명세 변경을 발견해도 실제 병합 사실과 경보는 잃지 않는다', async () => {
   const { a,tree,extra } = await integration(); await queue(a,'checking',extra);
   await owner.query('update task_specs set revision=2 where task=$1',[a.id]);
+  const client = await owner.connect();
+  try { await invalidateTaskGate(client,a.key); } finally { client.release(); }
   const r = await queue(a,'merged',{ ...extra,actualMergeSha:'9'.repeat(40),actualTreeSha:tree,mergeParents:[otherSha,sha] });
   expect(r.statusCode,r.body).toBe(409);
-  expect(r.json()).toMatchObject({ error:{ code:'MERGE_MISMATCH' } });
+  expect(r.json()).toMatchObject({ error:{ code:'GATE_NOT_PASSED',details:{ event:'GATE_UNMET_AFTER_MERGE' } } });
   expect((await owner.query('select actual_merge_sha from merge_queue where task=$1',[a.id])).rows).toEqual([{ actual_merge_sha:'9'.repeat(40) }]);
+  expect((await owner.query('select status from merge_queue where task=$1',[a.id])).rows).toEqual([{ status:'merged' }]);
+  expect((await owner.query('select status from tasks where id=$1',[a.id])).rows).toEqual([{ status:'gate' }]);
 });
 
 test('리뷰 R5: 늦은 이전 실행의 PASS는 최신 실패 경고를 해소하지 않는다', async () => {
@@ -384,7 +400,7 @@ test('리뷰 R6: 완료한 병합을 새 멱등 키로 재전송해도 같은 �
   const { a,tree,extra } = await integration(); await queue(a,'checking',extra);
   const merged = { ...extra,actualMergeSha:'9'.repeat(40),actualTreeSha:tree,mergeParents:[otherSha,sha] };
   expect((await queue(a,'merged',merged)).statusCode).toBe(204);
-  await owner.query("update runner_jobs set state='done',lease_until=now()-interval '1 second' where id=$1",[a.job]);
+  expect((await owner.query('select state from runner_jobs where id=$1',[a.job])).rows).toEqual([{ state:'done' }]);
   expect((await queue(a,'merged',merged)).statusCode).toBe(204);
   expect((await queue(a,'merged',{ ...merged,actualMergeSha:'8'.repeat(40) })).statusCode).toBe(409);
 });
@@ -531,8 +547,9 @@ test('결정 15: 같은 병합 사실에서 늦은 ② PASS만 보충되면 보�
   await owner.query("update ci_runs set status='run' where id=$1",[id]);
   expect((await queue(a,'checking',extra)).statusCode).toBe(204);
   const merged = { ...extra,actualMergeSha:'9'.repeat(40),actualTreeSha:tree,mergeParents:[otherSha,sha] };
-  expect((await queue(a,'merged',merged)).statusCode).toBe(409);
+  expect((await queue(a,'merged',merged)).json()).toMatchObject({ error:{ code:'GATE_NOT_PASSED',details:{ event:'GATE_UNMET_AFTER_MERGE' } } });
   expect((await patch(id,{ fence:1,status:'pass' })).statusCode).toBe(204);
+  expect((await get(`tasks/${a.key}`)).json()).toMatchObject({ lifecycleStatus:'done' });
   expect((await queue(a,'merged',merged)).statusCode).toBe(204);
 });
 

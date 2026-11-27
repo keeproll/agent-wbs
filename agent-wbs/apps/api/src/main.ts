@@ -8,6 +8,7 @@ import { startChangePruner } from './changes/events.ts';
 import { registerRunnerMessageRoutes } from './messages/routes.ts';
 import { installProjectRunner } from './project/runner-routes.ts';
 import { installCiRunner } from './ci/routes.ts';
+import { startCompletionRecheck } from './execution/recheck.ts';
 
 const config = loadConfig(process.env);
 const pool = createPool(config.databaseUrl, {
@@ -22,12 +23,14 @@ registerRunnerMessageRoutes(app);
 const stopPruner = startChangePruner(pool, (error) => { app.log.error({ err: error }, '변경 이벤트 보존 정리 실패'); });
 installProjectRunner(app, pool);
 installCiRunner(app);
+const stopCompletionRecheck = startCompletionRecheck(pool,error => { app.log.error({ err:error },'병합 뒤 Gate 재평가 실패'); });
 
 // 신호와 기동 실패가 겹쳐도 한 번만 종료한다(pool.end는 두 번 부를 수 없다).
 let stopping: Promise<void> | undefined;
 const shutdown = (): Promise<void> =>
   (stopping ??= (async () => {
     stopPruner();
+    await stopCompletionRecheck();
     await app.close();
     await pool.end();
   })());

@@ -1317,6 +1317,44 @@ export interface Operations {
       204: undefined;
     };
   };
+  /** 예약한 CI job의 검증 근거와 재실행 원본 조회 */
+  getCiJob: {
+    request: {
+      params: {
+        id: Id;
+      };
+      query: {
+        fence: number;
+      };
+      epoch: number;
+    };
+    responses: {
+      200: {
+        runnable: boolean;
+        taskKey: TaskKey | null;
+        branch: string | null;
+        hold: {
+          hostId: string;
+          bootId: string | null;
+          processGroup: number | null;
+          slotState: "none" | "reserved" | "active" | "unconfirmed";
+        } | null;
+        verification: {
+          passed: boolean;
+          headSha: Sha;
+          specRevision: number;
+        } | null;
+        source: {
+          stage: CiStage;
+          ref: string;
+          pr: number | null;
+          baseSha: Sha | null;
+          headSha: Sha;
+          pipelineSha: Sha;
+        } | null;
+      };
+    };
+  };
   /** 빌드·통합 실행 시작 */
   startCiRun: {
     request: {
@@ -2342,6 +2380,7 @@ export const OPERATIONS = {
   reportInputChanges: { method: 'POST', path: '/api/runner/input-changes', content: 'json', statuses: { 200: true } },
   reportRepoCheck: { method: 'POST', path: '/api/runner/repo-checks/{id}/result', content: 'json', statuses: { 204: false } },
   reportBootstrapProgress: { method: 'POST', path: '/api/runner/bootstrap/{jobId}/progress', content: 'json', statuses: { 204: false } },
+  getCiJob: { method: 'GET', path: '/api/runner/ci/jobs/{id}', content: 'none', statuses: { 200: true } },
   startCiRun: { method: 'POST', path: '/api/runner/ci/runs', content: 'json', statuses: { 201: true } },
   updateCiRun: { method: 'PATCH', path: '/api/runner/ci/runs/{id}', content: 'json', statuses: { 204: false } },
   reportMergeQueue: { method: 'POST', path: '/api/runner/ci/queue', content: 'json', statuses: { 204: false } },

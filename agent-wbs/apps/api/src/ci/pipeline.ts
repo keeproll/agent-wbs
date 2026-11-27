@@ -9,6 +9,14 @@ export interface PipelineDefinition {
 }
 export interface PipelineObservation { baseSha: string; pipelineSha: string | null; definition: PipelineDefinition }
 
+/** CI 보고와 별도로 저장한 main A의 첫 정의를 찾는다. */
+export async function resolveBasePipelineSha(client: PoolClient, baseSha: string, projectId: string): Promise<string | null> {
+  return (await client.query<{ pipeline_sha: string }>(`select p.pipeline_observations->$1->>'pipelineSha' pipeline_sha from projects p where p.id=$2
+    and p.pipeline_observations->$1->'definition'->>'status'='ok' and exists(select 1 from ci_runs c
+      where c.project_id=p.id and c.base_sha=$1 and c.job is not null and c.status in ('run','pass')
+      and c.pipeline_sha=p.pipeline_observations->$1->>'pipelineSha')`,[baseSha,projectId])).rows[0]?.pipeline_sha ?? null;
+}
+
 /** 같은 Runner의 별도 main 관측을 믿되, CI 실행 보고가 첫 관측을 덮어쓰지 못하게 한다. */
 export async function observePipeline(client: Pick<PoolClient,'query'>, project: string, head: string, observation: PipelineObservation) {
   if (observation.baseSha !== head || observation.definition.commit !== head || observation.definition.status === 'ok' && (!observation.pipelineSha || observation.definition.raw === null || observation.definition.stages === null)) throw new PlatformError('VALIDATION_FAILED');

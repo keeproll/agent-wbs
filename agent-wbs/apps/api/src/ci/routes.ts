@@ -1,16 +1,16 @@
 import type { Pool, PoolClient } from '@awbs/db';
 import { CI_STAGE, type schema } from '@awbs/db';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { DomainError } from '@awbs/shared';
+import { DomainError, completionGate } from '@awbs/shared';
 import { isTimestamp } from '@awbs/shared/api';
 import { encodeCursor, decodeCursor } from '../changes/history.ts';
 import { clientOf, read, routes, assertSameVersion } from '../changes/http.ts';
 import { iso, deferChange } from '../changes/events.ts';
 import { PlatformError } from '../platform/errors.ts';
 import { RunnerRepository, required } from '../runner/repository.ts';
-import { assertExternal } from '../runner/service.ts';
+import { assertExternal, checkedJob } from '../runner/service.ts';
 import { inputHead } from '../project/service.ts';
-import { enqueueIntegration } from '../execution/gate.ts';
+import { enqueueIntegration, gateInput, integrationDecision } from '../execution/gate.ts';
 import { ciRunDecisions, retryDecision } from './decisions.ts';
 import { pipelineDefinition } from './pipeline.ts';
 import { reportQueue, startRun, updateRun, type Start, type Update, type QueueReport } from './service.ts';
@@ -33,12 +33,34 @@ const runSelect = `select c.id,c.run_no::text "runNo",c.run_key "runKey",case c.
 /** 보안 시험이 Runner 경로에 가짜 처리기를 붙일 수 있게 실행 보고 경로는 main에서 따로 설치한다. */
 export function installCiRunner(app: FastifyInstance) {
   routes(app,'빌드·통합 보고',route => {
+    route('getCiJob',async r => {
+      const client = clientOf(r), repo = new RunnerRepository(client); await repo.lock();
+      const job = await checkedJob(repo,params(r).id,(r.query as { fence:number }).fence,r.platform?.principal ?? '',true);
+      if (!['integrate','ci_retry'].includes(job.kind)) throw new PlatformError('INVALID_TRANSITION');
+      await assertExternal(repo,job);
+      const source = job.kind === 'ci_retry' ? (await client.query<{ id:string;task_key:string|null;stage:number;ref:string;pr:number|null;base_sha:string|null;head_sha:string;pipeline_sha:string }>(
+        'select c.*,t.task_key from ci_runs c left join tasks t on t.id=c.task where c.id::text=$1 and c.project_id=$2',[job.payload.runId,job.project_id])).rows[0] : null;
+      if (job.kind === 'ci_retry' && !source) throw new PlatformError('INVALID_TRANSITION');
+      const taskKey = job.kind === 'integrate' ? job.payload.taskKey as string : source?.task_key ?? null;
+      const task = taskKey ? await repo.task(taskKey) : null;
+      const verification = task ? (await client.query<{ head_sha:string;spec_revision:number;result:string }>(`select v.* from verifications v join task_attempts a on a.id=v.attempt
+        where a.task=$1 order by a.attempt_no desc limit 1`,[task.id])).rows[0] : null;
+      const branch = task ? (await repo.history(task.id)).at(-1)?.branch ?? null : null;
+      const hold = await repo.hold(job.id);
+      const allowed = source ? (await ciRunDecisions(client,source.id)).retryAllowed : task ? (await integrationDecision(client,task.id,{ retry:true })).allowed : false;
+      return { runnable:allowed && ['leased','started'].includes(job.state) && Boolean(job.lease_until && job.lease_until > await repo.now()),taskKey,branch,
+        hold:hold && !hold.closed_at ? { hostId:hold.host_id,bootId:hold.boot_id,processGroup:hold.pgid,slotState:hold.slot_state } : null,
+        verification:verification ? { headSha:verification.head_sha,specRevision:verification.spec_revision,
+          passed:task?.status === 'gate' && verification.result === 'PASS' && completionGate(await gateInput(client,required(task).id)).every(c => c.result === 'PASS') } : null,
+        source:source ? { stage:Object.keys(CI_STAGE).find(k => CI_STAGE[k as keyof typeof CI_STAGE] === source.stage),ref:source.ref,pr:source.pr,
+          baseSha:source.base_sha,headSha:source.head_sha,pipelineSha:source.pipeline_sha } : null };
+    });
     route('startCiRun',async (r,reply) => reply.code(201).send(await startRun(clientOf(r),r.platform?.principal ?? '',r.body as Start)));
     route('updateCiRun',async (r,reply) => { await updateRun(clientOf(r),params(r).id,r.platform?.principal ?? '',r.body as Update); return reply.code(204).send(); });
     route('reportMergeQueue',async (r,reply) => {
       try { await reportQueue(clientOf(r),r.platform?.principal ?? '',r.body as QueueReport); }
       catch (e) {
-        if (e instanceof PlatformError && (e.code === 'MERGE_MISMATCH' || e.details.reverify === true) && r.platform) r.platform.commitOnError = true;
+        if (e instanceof PlatformError && (e.code === 'MERGE_MISMATCH' || e.details.reverify === true || e.details.event === 'GATE_UNMET_AFTER_MERGE') && r.platform) r.platform.commitOnError = true;
         if (e instanceof DomainError) throw new PlatformError(e.code,e.details); throw e;
       }
       return reply.code(204).send();

@@ -1,12 +1,12 @@
 import type { PoolClient } from '@awbs/db';
-import { completionGate, lifecycleTransition, type GateInput, type HeadSync, type VerificationResult, type CompletionInput } from '@awbs/shared';
+import { completionGate, lifecycleTransition, DomainError, type GateInput, type HeadSync, type VerificationResult, type CompletionInput } from '@awbs/shared';
 import { PlatformError } from '../platform/errors.ts';
 import { RunnerRepository, type Task } from '../runner/repository.ts';
 import { assertExternal } from '../runner/service.ts';
 import { record, SYSTEM } from '../tasks/history.ts';
 import { deferChange } from '../changes/events.ts';
 import { inputHead } from '../project/service.ts';
-import { observedBases } from '../ci/pipeline.ts';
+import { observedBases, resolveBasePipelineSha } from '../ci/pipeline.ts';
 import { preservedHead, type HeadProof } from '../ci/proof.ts';
 
 export async function gateInputs(client: PoolClient, taskIds: string[], headSync: HeadSync | null = null): Promise<Map<string, GateInput>> {
@@ -59,6 +59,7 @@ export async function completeMergedTask(client: PoolClient, taskKey: string, ba
   const task = await repo.task(taskKey);
   if (!task) throw new PlatformError('TASK_NOT_FOUND');
   if (task.status !== 'gate') throw new PlatformError('INVALID_TRANSITION');
+  if ((await client.query("select 1 from alerts where project_id=$1 and key like 'ci:mergeMismatch|%' and target->>'taskKey'=$2 and resolved_at is null",[task.project_id,taskKey])).rowCount) throw new PlatformError('MERGE_MISMATCH');
   const queue = (await client.query<{ qa_head_sha: string; synced_head_sha: string; base_sha: string; actual_merge_sha: string; actual_tree_sha: string;
     status: string; pipeline_sha: string; ci_head: string; ci_base: string; tree_sha: string; job: string; result: string;
     tested_tree_sha: string; head_sync: HeadProof | null; verification: string; ci_task: string; ci_fence: number; merge_parents: string[] | null }>(`
@@ -80,10 +81,16 @@ export async function completeMergedTask(client: PoolClient, taskKey: string, ba
   const job = queue?.job ? await repo.job(queue.job) : undefined;
   if (!job || job.kind !== 'integrate' || job.payload.taskKey !== taskKey || job.fence !== queue?.ci_fence) throw new PlatformError('GATE_NOT_PASSED');
   await assertExternal(repo,job);
+  const hold = await repo.hold(job.id);
+  if (hold?.slot_state === 'none' && !hold.closed_at && hold.release_proof) await repo.release(hold,hold.release_proof,true);
+  if (job.state !== 'done') await repo.state(job.id,'done');
   await client.query("update tasks set status='done',act_end=greatest(coalesce(act_start,clock_timestamp()),clock_timestamp()) where id=$1", [task.id]);
   await repo.historyEvent(task,'완료',{ mergeSha:queue?.actual_merge_sha });
   deferChange(client,task.project_id,'task',{ taskKey });
   await client.query("insert into notify_events(project_id,dedup_key,kind,ref) select $1,$2,'done',$3 where exists(select 1 from notify_rules where key='done' and enabled) and exists(select 1 from notify_settings where singleton and enabled) on conflict do nothing", [task.project_id,`done:${task.id}`,{ taskKey }]);
+  for (const table of ['alerts','notify_events']) await client.query(`update ${table} set resolved_at=clock_timestamp() where project_id=$1 and ${table === 'alerts' ? 'key' : 'dedup_key'} like 'ci:gateUnmetAfterMerge|%' and ${table === 'alerts' ? 'target' : 'ref'}->>'taskKey'=$2 and resolved_at is null`,[task.project_id,taskKey]);
+  deferChange(client,task.project_id,'notify',{ taskKey });
+  deferChange(client,task.project_id,'alert',{ taskKey });
 }
 
 /** 명세 편집뿐 아니라 입력 버전·브랜치 head 갱신도 이 함수를 같은 트랜잭션에서 호출한다. */
@@ -120,9 +127,11 @@ export async function integrationDecision(client: PoolClient, taskId: string, op
   const deny = (state:'none'|'pending'|'blocked',reason:string):IntegrationDecision => ({ allowed:false,state,reason });
   const task = (await client.query<Task>('select * from tasks where id=$1 and deleted_at is null',[taskId])).rows[0];
   if (!task || task.status !== 'gate') return deny('none','현재 Task가 Gate 상태가 아닙니다.');
-  const held = (await client.query<{ held: boolean }>(`select exists(select 1 from merge_queue where task=$1 and actual_merge_sha is not null)
-    or exists(select 1 from alerts where project_id=$2 and key like 'ci:mergeMismatch|%' and target->>'taskKey'=$3 and resolved_at is null) held`,[task.id,task.project_id,task.task_key])).rows[0]?.held;
-  if (held) return deny('blocked','실제 병합 결과를 먼저 확인해야 합니다.');
+
+  const held = (await client.query<{ merged:boolean;mismatch:boolean }>(`select exists(select 1 from merge_queue where task=$1 and actual_merge_sha is not null) merged,
+    exists(select 1 from alerts where project_id=$2 and key like 'ci:mergeMismatch|%' and target->>'taskKey'=$3 and resolved_at is null) mismatch`,[task.id,task.project_id,task.task_key])).rows[0];
+  if (held?.mismatch) return deny('blocked','실제 병합 결과를 먼저 확인해야 합니다.');
+  if (held?.merged) return deny('blocked','이미 병합됐습니다. Gate 조건 회복 뒤 서버가 완료를 다시 판정합니다.');
   const input = await gateInput(client,task.id);
   const baseline = (await client.query("select fail_scope='baseline' and status='fail' baseline from ci_runs where task=$1 and stage=1 and head_sha=$2 order by run_no desc limit 1",[task.id,input.basis.headSha])).rows[0]?.baseline;
   if (baseline && input.taskCheck) input.taskCheck = { ...input.taskCheck,result:'PASS' };
@@ -157,7 +166,14 @@ export async function integrationDecision(client: PoolClient, taskId: string, op
 }
 
 export async function enqueueIntegration(client: PoolClient, taskId: string, epoch: number, options: IntegrationOptions = {}) {
-  const repo = new RunnerRepository(client); await repo.lock(); await repo.taskById(taskId);
+  const repo = new RunnerRepository(client); await repo.lock();
+  const task = await repo.taskById(taskId);
+  const merged = task?.status === 'gate' && (await client.query<{ base_sha:string }>("select base_sha from merge_queue where task=$1 and status='merged' order by queue_no desc limit 1",[taskId])).rows[0];
+  if (merged && task) {
+    try { await completeMergedTask(client,task.task_key,await resolveBasePipelineSha(client,merged.base_sha,task.project_id)); }
+    catch (error) { if (!(error instanceof PlatformError || error instanceof DomainError) || !['GATE_NOT_PASSED','MERGE_MISMATCH'].includes(error.code)) throw error; }
+    return;
+  }
   const decision = await integrationDecision(client,taskId,options);
   if (!decision.allowed) return;
   if ('existingJobId' in decision) return decision.existingJobId;

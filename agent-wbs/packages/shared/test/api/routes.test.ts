@@ -222,7 +222,9 @@ test('원본·계획에 없는 경로를 만들지 않았다', () => {
   const followup = ['PATCH /api/project', 'POST /api/project/inputs/check', 'GET /api/proposals/:id',
     'PATCH /api/proposals/:id', 'DELETE /api/proposals/:id', 'POST /api/proposals/:id/exclude',
     'POST /api/verifications/:id/evidence', 'GET /api/settings/split/violations', 'GET /api/settings/agent-usage',
-    'POST /api/alerts/:id/ack', 'POST /api/settings/readiness/check'];
+    'POST /api/alerts/:id/ack', 'POST /api/settings/readiness/check',
+    // M7-06 조정자 결정 2: 실제 CI 작업의 소유권·QA·재실행 근거를 Runner가 읽는다.
+    'GET /api/runner/ci/jobs/:id'];
   const known = new Set([
     'GET /health',
     'GET /health/db',
