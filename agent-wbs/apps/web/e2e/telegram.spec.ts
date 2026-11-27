@@ -65,7 +65,7 @@ test('telegram UAT-TG-01/02/03: 테스트 후 활성화, 저장 실패 초안 �
   await card.getByLabel('Chat ID', { exact: true }).fill('-4123456789');
   await expect(card.getByText('시험 봇 · @test_bot')).toBeVisible();
   await card.getByRole('button', { name: '테스트 알림 보내기', exact: true }).click();
-  await expect(card.getByText(/전송 요청 수락/)).toBeVisible();
+  await expect(card.locator('.vf', { hasText: '전송 요청 수락' }) /* M6 통합: 연결 안내 문구(fhint)에도 같은 말이 있어 결과 배지로 좁힌다 */).toBeVisible();
   await card.getByRole('button', { name: '켜기', exact: true }).click();
   await card.getByRole('button', { name: '저장', exact: true }).click();
   await expect(page.getByRole('alert').filter({ hasText: '저장하지 못했습니다' })).toBeVisible();
@@ -222,7 +222,7 @@ test('telegram UAT-TG-08: 서버 자동 재시도 성공이 저장된 테스트 
     const first = new URL(request.url()).searchParams.get('after') === '0';
     return json(route, 200, { events: first ? [{ seq: 1, topic: 'notify', ref: 'telegram', at: '2026-11-27T01:00:20Z' }] : [], next: 1, reset: false });
   });
-  await expect(card.getByText(/전송 요청 수락/)).toBeVisible();
+  await expect(card.locator('.vf', { hasText: '전송 요청 수락' }) /* M6 통합: 연결 안내 문구(fhint)에도 같은 말이 있어 결과 배지로 좁힌다 */).toBeVisible();
   await expect(card.getByText(/요청 제한\(429\)/)).toHaveCount(0);
 });
 
@@ -244,6 +244,6 @@ test('telegram UAT-TG-08: 저장 전 새 토큰의 429 테스트도 재시도 �
   api.on('GET /api/changes', (route, request) => json(route, 200, {
     events: new URL(request.url()).searchParams.get('after') === '0' ? [{ seq: 1, topic: 'notify', ref: testId, at: '2026-11-27T01:00:20Z' }] : [], next: 1, reset: false,
   }));
-  await expect(card.getByText(/전송 요청 수락/)).toBeVisible();
+  await expect(card.locator('.vf', { hasText: '전송 요청 수락' }) /* M6 통합: 연결 안내 문구(fhint)에도 같은 말이 있어 결과 배지로 좁힌다 */).toBeVisible();
   await expect(card.getByRole('button', { name: '켜기', exact: true })).toBeEnabled();
 });
