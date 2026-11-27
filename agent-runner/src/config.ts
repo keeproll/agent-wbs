@@ -1,4 +1,5 @@
 import { homedir } from 'node:os';
+import { agentIsolationConfig } from './cli/dedicated-user.ts';
 import { isAbsolute, join } from 'node:path';
 import { parseRepoUrl, type GithubMode, type RepoRef } from './github/client.ts';
 import { Secret } from './security/secret.ts';
@@ -20,6 +21,11 @@ export interface Config {
   github: GithubSettings | null;
   /** false면 CLI 최신 확인·유휴 적용(M4-05)을 끈다. 기본 true. */
   cliUpdates: boolean;
+  /**
+   * Agent 전용 OS 계정 격리(Q-08)를 쓰면 Agent 작업 영역(고정 `/srv/agentwbs`), 아니면 null.
+   * 이때 CLI 설치(`cli/`)·작업 폴더(`worktrees/`)·입력 사본(`inputs/`)은 Runner 홈이 아니라 이 영역에 둔다(isolation.md §12).
+   */
+  agentRoot: string | null;
 }
 
 export class ConfigError extends Error {
@@ -80,7 +86,13 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     } else if (github) github.systemKey = { id: Number(keyId), socket, knownHosts };
   }
   const cliUpdates = env.AWBS_CLI_UPDATE !== '0';
+  let agentRoot: string | null = null;
+  try {
+    agentRoot = agentIsolationConfig(env)?.root ?? null;
+  } catch (error) {
+    problems.push((error as Error).message);
+  }
 
   if (!url || problems.length > 0) throw new ConfigError(problems.join('\n'));
-  return { wbsUrl: url.href.replace(/\/+$/, ''), token: new Secret(token), home, logLevel, github, cliUpdates };
+  return { wbsUrl: url.href.replace(/\/+$/, ''), token: new Secret(token), home, logLevel, github, cliUpdates, agentRoot };
 }

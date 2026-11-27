@@ -12,7 +12,7 @@ export interface Launch {
 }
 
 /**
- * 실행 격리 계층(Q-08). owner 결정 전이라 갈아끼울 수 있는 경계로만 둔다.
+ * 실행 격리 계층(Q-08). owner 결정(2026-11-27): (B) 전용 OS 계정 → `dedicated-user.ts`의 `dedicatedUserIsolation`.
  * - `flags`: CLI 자체 sandbox·권한 모드 옵션(예: Codex `sandbox_mode`, Claude `--permission-mode`).
  *   관측 등급 조합의 「옵션」에 들어간다(`sessionOptions`).
  * - `wrap`: 완성된 실행 계획을 감싼다(예: 전용 OS 사용자로 실행, 세션별 컨테이너 안에서 실행).
@@ -27,11 +27,14 @@ export interface IsolationLayer {
 export class IsolationUndecidedError extends Error {
   readonly code = 'isolation_undecided';
   constructor() {
-    super('실행 격리 수준(Q-08)이 정해지지 않아 실제 실행 계획을 만들지 않습니다. 시험은 fake 격리 계층을 넘기세요.');
+    super('전용 Agent 계정 격리(Q-08)가 설치·확인되지 않아 실제 실행 계획을 만들지 않습니다. 시험은 fake 격리 계층을 넘기세요.');
   }
 }
 
-/** 기본값. Q-08 결정 전에는 실제 실행을 만들지 않는다(architecture §4 「실행 격리」: 확정 전에는 fake 실행만). */
+/**
+ * 기본값. 전용 계정이 설치·확인되지 않은 PC(시험·CI·미설치)에서는 실제 실행을 만들지 않는다
+ * (architecture §4 「실행 격리」). 전용 계정을 쓸지는 `selectIsolation`이 래퍼 점검 결과로 정한다.
+ */
 export const PENDING_ISOLATION: IsolationLayer = {
   name: 'pending-q08',
   flags: () => [],

@@ -32,18 +32,28 @@
 - 그래서 Runner·GitHub 토큰, SSH agent, `AWBS_*`, API 키, `NODE_OPTIONS` 같은 주입 변수는 넘어가지 않는다.
 - 다른 CLI의 설정 폴더도 넘기지 않는다. 예: Codex 세션에는 `CLAUDE_CONFIG_DIR`이 없다.
 
-## 격리 계층 (`IsolationLayer`, Q-08 대기)
+## 격리 계층 (`IsolationLayer`, Q-08 = 전용 OS 계정)
 
-- 실행 격리 수준(Q-08)은 owner 결정 전이다. 그래서 갈아끼울 수 있는 경계로만 둔다.
-  - `flags(agent)`: CLI 자체 sandbox·권한 모드 옵션. 예: Codex `-c sandbox_mode="workspace-write"`.
-  - `wrap(launch)`: 완성된 실행 계획을 감싼다. 예: 전용 OS 사용자로 실행, 컨테이너 안에서 실행.
-- 기본값 `PENDING_ISOLATION`은 실행 계획을 만들지 않고 `IsolationUndecidedError`를 던진다.
-  - 왜: architecture §4 「확정 전에는 fake 실행만」을 코드로 지킨다. 시험은 fake 격리 계층을 넘긴다.
+- owner가 Q-08을 **(B) 전용 OS 사용자**로 정했다(2026-11-27). 설계·설치 절차는 [docs/isolation.md](../../docs/isolation.md).
+- 경계는 둘이다.
+  - `flags(agent)`: CLI 자체 sandbox·권한 모드 옵션.
+  - `wrap(launch)`: 완성된 실행 계획을 감싼다.
+- 기본값 `PENDING_ISOLATION`은 그대로다. 실행 계획을 만들지 않고 `IsolationUndecidedError`를 던진다.
+  - 왜: 전용 계정이 설치되지 않은 PC(시험·CI)에서는 실제 실행을 만들면 안 된다.
+- 전용 계정 계층 `dedicatedUserIsolation`(`dedicated-user.ts`):
+  - `sudo -n -u <Agent 계정> -- <래퍼> run --agent … --cwd … -- <CLI 실제 경로> <인자>`로 감싼다.
+  - 계정 이름 `awbs-agent`, 작업 영역 `/srv/agentwbs`, 래퍼 `/usr/local/libexec/awbs-agent-exec`는 고정값이다(`AGENT_USER`·`AGENT_ROOT`·`AGENT_EXEC`). `AWBS_AGENT_USER`에 다른 값을 넣으면 `agent_config_invalid`.
+  - 작업 폴더는 `/srv/agentwbs/worktrees/` 안, CLI는 `/srv/agentwbs/cli/<agent>/` 안이어야 한다. 대상과 기준 폴더를 둘 다 실제 경로로 바꾼 뒤 비교한다. 밖이거나 실제 경로를 못 구하면 `cwd_outside_agent_root`·`binary_outside_agent_root`.
+  - 환경 변수는 `LANG`·`LC_ALL`만 래퍼 인자로 넘긴다. HOME·PATH·TMPDIR는 래퍼가 Agent 계정 값으로 새로 만든다.
+  - 권한 모드(`DEDICATED_FLAGS`): Claude `--permission-mode bypassPermissions`, Codex `-c approval_policy="never" -c sandbox_mode="workspace-write"`.
+- `selectIsolation(env, run)`: `AWBS_AGENT_USER`가 없으면 거부 유지. 있으면 래퍼 `check`를 Agent 계정으로 돌려 `ok`일 때만 전용 계정 계층을 쓴다.
+- `agentControl`: Agent 계정으로 도는 정리 명령(`kill-group`·`kill-all`·`fix-perms`·`check`). Runner 계정은 다른 계정 프로세스에 신호를 보낼 수 없기 때문이다.
 - `sessionOptions(agent, isolation, kind)`은 관측 등급 조합의 「옵션」 문자열이다. readiness `cliProfiles`와 서버 `cliGrades`에 같은 값을 쓴다.
   - `kind`는 `new`(새 실행) 또는 `resume`(재개)이다. 재개는 다른 조합으로 센다.
     - 왜: 새 실행만 검증된 조합에 재개가 「검증됨」으로 붙으면 안 된다. G §6.7은 재개를 따로 검증할 항목으로 둔다.
   - 예: Codex 새 실행 `exec --json --disable hooks …`, 재개 `exec resume --json --disable hooks …`. Claude 재개는 끝에 `--resume`이 붙는다.
   - 세션 ID 값은 넣지 않는다.
+  - 격리 옵션도 들어가므로 전용 계정 권한 모드로 바꾸면 조합도 바뀐다.
 
 ## 출력 해석
 
@@ -166,6 +176,8 @@
 ```sh
 pnpm -C agent-runner test -- cli
 ```
+
+- `dedicated-user.test.ts`는 「계정이 있다고 가정한」 명령 구성을, `agent-exec.test.ts`는 실행 래퍼를 실제 bash와 fake sudo로, `isolation-scripts.test.ts`는 설치·되돌리기·확인 스크립트를 가짜 루트 폴더와 가짜 sudo로 돌린다. 실제 계정·sudo는 쓰지 않는다.
 
 - fixture는 `test/cli/fixtures/`에 있다. 공식 형식을 보고 만든 잠정본이고, 실제 CLI 기록은 아니다(그 폴더의 README 참고).
 - `fake-run.test.ts`는 fake CLI(`test/fakes/cli.ts`)를 실제로 띄운다. 인자·stdin·환경 변수가 CLI까지 그대로 가는지 확인한다.

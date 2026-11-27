@@ -891,3 +891,34 @@ test('L1 회수 구간에 다른 실행이 얻은 새 잠금은 재확인하여 
   expect(await readFile(path, 'utf8')).toBe(live);
   await expect(lstat(join(root, 'runner/worktrees/project/task-1'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
+
+test('전용 계정 격리(agentRoot): 작업 폴더·입력 사본은 Agent 작업 영역 아래, 작업 폴더는 0770·파일은 그룹 쓰기 가능(isolation.md §6·§12)', async () => {
+  git(source, 'push', 'origin', 'main');
+  const agentRoot = join(root, 'srv', 'agentwbs');
+  await mkdir(join(agentRoot, 'worktrees'), { recursive: true });
+  await mkdir(join(agentRoot, 'inputs'), { recursive: true });
+  const shared = await GitRepository.clone(join(root, 'runner'), 'project', remote, { agentRoot });
+  const work = await shared.createWorktree('task-1', 'agent/TASK-1-h2', baseline);
+  expect(work).toBe(join(agentRoot, 'worktrees', 'project', 'task-1'));
+  expect((await lstat(work)).mode & 0o777).toBe(0o770);
+  expect((await lstat(join(agentRoot, 'worktrees', 'project'))).mode & 0o777).toBe(0o750);
+  // Runner가 checkout한 파일도 그룹 쓰기 가능(ACL 상한이 열려 Agent가 고칠 수 있음)
+  expect((await lstat(join(work, 'src/existing.ts'))).mode & 0o060).toBe(0o060);
+  expect((await lstat(join(work, '.git'))).mode & 0o070).toBe(0o070);
+  const input = await shared.checkoutInput('v1', baseline);
+  expect(input).toBe(join(agentRoot, 'inputs', 'project', 'v1'));
+  expect((await lstat(join(input, 'prototype/docs/guide.md'))).mode & 0o777).toBe(0o444);
+  // Runner 홈에는 작업 폴더·입력 사본을 만들지 않는다(bare 저장소·상태만)
+  await expect(lstat(join(root, 'runner', 'worktrees', 'project', 'task-1'))).rejects.toThrow();
+  // 재시작 뒤 같은 배치로 다시 열고 결과를 가져온다
+  const reopened = await GitRepository.open(join(root, 'runner'), 'project', { agentRoot });
+  expect(await reopened.recordedWorktrees()).toEqual(['task-1']);
+  expect(await reopened.checkTask(baseline, baseline)).toEqual([]);
+});
+
+test('agentRoot 없이(기존 배치) 작업 폴더는 그대로 0700', async () => {
+  repo = await clone();
+  const work = await repo.createWorktree('task-1', 'agent/TASK-1-h2', baseline);
+  expect((await lstat(work)).mode & 0o777).toBe(0o700);
+  expect(work).toBe(join(root, 'runner', 'worktrees', 'project', 'task-1'));
+});
