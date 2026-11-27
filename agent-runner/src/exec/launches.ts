@@ -10,21 +10,21 @@ export interface Hold { job: string; hostId: string; bootId: string; processGrou
 export interface LaunchJob { id: string; fence: number; epoch: number }
 export interface LaunchRecord { launchId: string; job: LaunchJob; hostId: string; bootId: string; pgid: number | null; startTime: string | null; sessionId?: number; completedAt?: string; createdAfter: string; cgroup: null }
 
-interface Proc { pid: number; pgid: number; sessionId: number; startTime: string; launchId: string | undefined }
+interface Proc { pid: number; ppid: number; pgid: number; sessionId: number; startTime: string; launchId: string | undefined }
 const gone = (e: unknown) => ['ENOENT', 'ESRCH'].includes((e as NodeJS.ErrnoException).code ?? '');
 const validPid = (n: number) => Number.isInteger(n) && n > 1 && n <= 2147483647;
 
 /** PID 뒤 괄호 안의 이름에는 공백과 괄호가 들어갈 수 있다. 필드는 마지막 괄호 뒤부터 센다. */
-export async function processInfo(pid: number): Promise<{ pgid: number; sessionId: number; startTime: string; state: string }> {
+export async function processInfo(pid: number): Promise<{ ppid: number; pgid: number; sessionId: number; startTime: string; state: string }> {
   const text = await readFile(`/proc/${pid}/stat`, 'utf8');
   const parts = text.slice(text.lastIndexOf(')') + 2).trim().split(/\s+/);
-  const pgid = Number(parts[2]), sessionId = Number(parts[3]), startTime = parts[19];
-  if (!validPid(pgid) || !validPid(sessionId) || !startTime || !/^\d+$/.test(startTime)) throw new Error('프로세스 식별 정보가 없습니다.');
-  return { pgid, sessionId, startTime, state: parts[0] ?? '' };
+  const ppid = Number(parts[1]), pgid = Number(parts[2]), sessionId = Number(parts[3]), startTime = parts[19];
+  if (!Number.isSafeInteger(ppid) || ppid < 0 || !validPid(pgid) || !validPid(sessionId) || !startTime || !/^\d+$/.test(startTime)) throw new Error('프로세스 식별 정보가 없습니다.');
+  return { ppid, pgid, sessionId, startTime, state: parts[0] ?? '' };
 }
 
-// shortcut: 같은 사용자의 원래 세션 또는 launchId 보존 자손만 추적한다. 둘 다 벗어나는 실행은 운영 cgroup 연결 때 확장한다.
-async function processes(createdAfter: bigint): Promise<Proc[]> {
+// shortcut: 같은 사용자의 세션·부모 연결·읽을 수 있는 launchId로 추적한다. 모두 잃은 자손은 운영 cgroup 연결 때 확장한다.
+async function processes(createdAfter: bigint, records: LaunchRecord[], known: Map<number, string>): Promise<Proc[]> {
   const found: Proc[] = [];
   for (const name of await readdir('/proc')) {
     if (!/^[1-9]\d*$/.test(name)) continue;
@@ -32,30 +32,54 @@ async function processes(createdAfter: bigint): Promise<Proc[]> {
     try {
       if ((await stat(`/proc/${name}`)).uid !== process.getuid?.()) continue;
       const info = await processInfo(pid);
-      // Runner보다 먼저 시작한 프로세스는 그 Runner가 만든 자손일 수 없다.
-      if (BigInt(info.startTime) < createdAfter) continue;
-      if (info.state === 'Z' || info.state === 'X') continue;
-      let env: string | undefined;
-      for (let attempt = 0; ; attempt++) {
-        try { env = await readFile(`/proc/${name}/environ`, 'utf8'); break; }
-        catch (e) {
-          if ((e as NodeJS.ErrnoException).code !== 'EACCES' || attempt >= 3) throw e;
-          await sleep(10);
-          const current = await processInfo(pid);
-          if (['Z', 'X'].includes(current.state)) break;
-        }
-      }
-      if (env === undefined) continue;
-      const launchId = env.split('\0').find(v => v.startsWith('AWBS_LAUNCH_ID='))?.slice('AWBS_LAUNCH_ID='.length);
-      found.push({ pid, ...info, launchId });
+      if (BigInt(info.startTime) < createdAfter || ['Z', 'X'].includes(info.state)) continue;
+      found.push({ pid, ...info, launchId: undefined });
+    } catch (e) { if (!gone(e)) throw e; }
+  }
+  const byPid = new Map(found.map(p => [p.pid, p]));
+  const related = (process: Proc): boolean => {
+    const seen = new Set<number>();
+    let current: Proc | undefined = process;
+    while (current && !seen.has(current.pid)) {
+      const p = current;
+      if (known.get(p.pid) === p.startTime || records.some(r => p.launchId === r.launchId ||
+        (!r.completedAt && r.pgid !== null && p.sessionId === (r.sessionId ?? r.pgid) && BigInt(p.startTime) >= BigInt(r.startTime ?? '0') &&
+          !(byPid.has(r.pgid) && byPid.get(r.pgid)?.startTime !== r.startTime)))) return true;
+      seen.add(p.pid);
+      current = byPid.get(p.ppid);
+      if (current && BigInt(current.startTime) > BigInt(p.startTime)) return false;
+    }
+    return false;
+  };
+  // 환경 접근 전에 공개 stat의 세션·부모 연결로 소속을 가린다.
+  for (const p of found) if (related(p)) known.set(p.pid, p.startTime);
+  const denied = new Map<Proc, unknown>();
+  for (const p of found) {
+    try {
+      // 다른 세션으로 분리된 자손은 읽을 수 있는 launchId 표식으로도 찾는다.
+      const env = await readFile(`/proc/${p.pid}/environ`, 'utf8');
+      p.launchId = env.split('\0').find(v => v.startsWith('AWBS_LAUNCH_ID='))?.slice('AWBS_LAUNCH_ID='.length);
     } catch (e) {
-      if (gone(e)) continue;
-      // 종료 순간에는 stat을 읽은 뒤 environ이 EACCES가 될 수 있다. 살아 있는 미확인 프로세스는 건너뛰지 않는다.
-      if ((e as NodeJS.ErrnoException).code === 'EACCES') {
-        try { if (['Z', 'X'].includes((await processInfo(pid)).state)) continue; }
-        catch (later) { if (gone(later)) continue; throw later; }
+      if ((e as NodeJS.ErrnoException).code === 'EACCES') denied.set(p, e);
+      else if (!gone(e)) throw e;
+    }
+  }
+  for (const p of found) if (related(p)) known.set(p.pid, p.startTime);
+  for (const [p, error] of denied) {
+    if (!related(p)) continue;
+    // 소속 프로세스의 종료 순간 EACCES만 재확인한다. 무관한 프로세스는 정리를 막지 않는다.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const current = await processInfo(p.pid);
+        if (current.startTime !== p.startTime || ['Z', 'X'].includes(current.state)) break;
+        if (attempt >= 3) throw error;
+        await sleep(10);
+        await readFile(`/proc/${p.pid}/environ`, 'utf8');
+        break;
+      } catch (e) {
+        if (gone(e)) break;
+        if ((e as NodeJS.ErrnoException).code !== 'EACCES' || attempt >= 3) throw e;
       }
-      throw e;
     }
   }
   return found;
@@ -146,10 +170,10 @@ export class Launches {
       if (!records.length) return null;
       const createdAfter = records.reduce((min, r) => BigInt(r.createdAfter) < min ? BigInt(r.createdAfter) : min, BigInt(records[0]?.createdAfter ?? '0'));
       const groups = new Set<number>();
-      const snapshot = await processes(createdAfter);
-      const owned = (p: Proc, current: Proc[]) => records.some(r => p.launchId === r.launchId ||
-        (!r.completedAt && r.pgid !== null && p.sessionId === (r.sessionId ?? r.pgid) && BigInt(p.startTime) >= BigInt(r.startTime ?? '0') &&
-          !current.some(leader => leader.pid === r.pgid && leader.startTime !== r.startTime)));
+      const known = new Map<number, string>();
+      const snapshot = await processes(createdAfter, records, known);
+      const owned = (p: Proc) => known.get(p.pid) === p.startTime;
+      for (const p of snapshot) if (owned(p)) groups.add(p.pgid);
       for (const r of records) {
         for (const p of snapshot) if (p.launchId === r.launchId) groups.add(p.pgid);
         if (r.pgid !== null && !r.completedAt) {
@@ -165,19 +189,19 @@ export class Launches {
         }
       }
       if (!orphan && hold.processGroup !== null && !records.some(r => r.pgid === hold.processGroup)) return null;
-      for (const g of groups) await signalOwnedGroup(g, snapshot.filter(p => owned(p, snapshot)), 'SIGTERM');
+      for (const g of groups) await signalOwnedGroup(g, snapshot.filter(p => owned(p)), 'SIGTERM');
       const empty = async () => {
-        const current = await processes(createdAfter);
-        return [...groups].every(processGroupEmpty) && !current.some(p => owned(p, current));
+        const current = await processes(createdAfter, records, known);
+        return [...groups].every(processGroupEmpty) && !current.some(p => owned(p));
       };
       let deadline = Date.now() + graceMs;
       while (!(await empty()) && Date.now() < deadline) await sleep(10);
       if (!(await empty())) {
         // 다시 대조한다. 대기 중 번호가 재사용됐으면 새 프로세스를 죽이지 않는다.
-        const current = await processes(createdAfter);
+        const current = await processes(createdAfter, records, known);
         // TERM 처리 중 새 그룹으로 분리된 자손도 다시 묶는다(M5-03 실커널 재현).
-        for (const p of current) if (owned(p, current)) groups.add(p.pgid);
-        for (const g of groups) await signalOwnedGroup(g, current.filter(p => owned(p, current)), 'SIGKILL');
+        for (const p of current) if (owned(p)) groups.add(p.pgid);
+        for (const g of groups) await signalOwnedGroup(g, current.filter(p => owned(p)), 'SIGKILL');
         deadline = Date.now() + 1000;
         while (!(await empty()) && Date.now() < deadline) await sleep(10);
       }
