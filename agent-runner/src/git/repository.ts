@@ -207,6 +207,25 @@ async function removeReadonly(path: string): Promise<void> {
   await rm(path, { recursive: true, force: true });
 }
 
+/**
+ * 작업 폴더 안의 모든 파일·폴더에 그룹 쓰기 권한을 준다(전용 계정 격리용). 링크는 따라가지 않는다.
+ * 왜: Runner가 만든 파일은 기본 ACL이 붙어도 권한 숫자의 그룹 칸(0644 → r--)이 ACL 상한(mask)이 되어, Agent가 고칠 수 없다.
+ *   그룹 칸을 열면 상한도 함께 열려 Agent 항목(rwx)이 효과를 가진다(isolation.md §6).
+ */
+async function groupWritable(path: string): Promise<void> {
+  const info = await lstat(path);
+  if (info.isSymbolicLink()) return;
+  const dir = info.isDirectory();
+  await chmod(path, (info.mode & 0o7777) | 0o060 | (dir || info.mode & 0o100 ? 0o010 : 0));
+  if (dir) for (const name of await readdir(path)) await groupWritable(join(path, name));
+}
+
+/** Agent 작업 영역 설정. 주면 작업 폴더·입력 사본을 Runner 홈이 아니라 그 아래에 둔다(Q-08 전용 계정). */
+export interface GitLayout {
+  /** 예: /srv/agentwbs. 그 아래 `worktrees/<저장소>`·`inputs/<저장소>`를 쓴다. */
+  agentRoot?: string | null;
+}
+
 /** 입력 복사의 임시 폴더 접두사. 점으로 시작하므로 `inputIds()`(입력 이름)에 섞이지 않는다. */
 const INPUT_TEMP = '.copy-';
 
@@ -224,34 +243,46 @@ export class GitRepository {
   private readonly worktrees: string;
   private readonly inputs: string;
   private readonly statePath: string;
+  /** 전용 계정 격리 사용 여부. 쓰면 Agent가 들어갈 폴더를 그룹에도 연다(작업 폴더 0o770, 모음 폴더 0o750). */
+  private readonly shared: boolean;
   private registration: Registration | undefined;
 
-  private constructor(home: string, repositoryId: string) {
+  private constructor(home: string, repositoryId: string, layout: GitLayout = {}) {
     this.home = home;
     this.repositoryId = repositoryId;
+    const area = layout.agentRoot ?? home;
+    this.shared = Boolean(layout.agentRoot);
     this.path = join(home, 'repos', repositoryId);
-    this.worktrees = join(home, 'worktrees', repositoryId);
-    this.inputs = join(home, 'inputs', repositoryId);
+    this.worktrees = join(area, 'worktrees', repositoryId);
+    this.inputs = join(area, 'inputs', repositoryId);
     this.statePath = join(home, 'state/git', `${repositoryId}.json`);
   }
 
-  private static async prepare(home: string, repositoryId: string): Promise<GitRepository> {
+  private static async prepare(home: string, repositoryId: string, layout: GitLayout = {}): Promise<GitRepository> {
     id(repositoryId);
     await safePath(home);
+    if (layout.agentRoot) await safePath(layout.agentRoot);
     // WSL의 Windows 드라이브는 작업 폴더로 사용하지 않는다(가이드 §6.6).
-    if (/^\/mnt\/[a-z](?:\/|$)/i.test(resolve(home))) throw new GitSafetyError('worktree는 Linux 파일 시스템에 만들어야 합니다.');
-    const repo = new GitRepository(home, repositoryId);
-    for (const path of [dirname(repo.path), repo.worktrees, repo.inputs, dirname(repo.statePath)]) {
+    for (const base of [home, layout.agentRoot ?? home]) {
+      if (/^\/mnt\/[a-z](?:\/|$)/i.test(resolve(base))) throw new GitSafetyError('worktree는 Linux 파일 시스템에 만들어야 합니다.');
+    }
+    const repo = new GitRepository(home, repositoryId, layout);
+    for (const path of [dirname(repo.path), dirname(repo.statePath)]) {
       await safePath(path);
       await mkdir(path, { recursive: true, mode: 0o700 });
+    }
+    // 작업 폴더·입력 사본 모음: 전용 계정이면 Agent 그룹이 들어가기만 하게 0o750(맨 위는 Agent가 못 바꿈).
+    for (const path of [repo.worktrees, repo.inputs]) {
+      await safePath(path);
+      await mkdir(path, { recursive: true, mode: repo.shared ? 0o750 : 0o700 });
     }
     if ((await statfs(repo.worktrees)).type !== 0xef53) throw new GitSafetyError('worktree는 ext4 파일 시스템에 만들어야 합니다.');
     await safePath(repo.path);
     return repo;
   }
 
-  static async clone(home: string, repositoryId: string, source: string): Promise<GitRepository> {
-    const repo = await this.prepare(home, repositoryId);
+  static async clone(home: string, repositoryId: string, source: string, layout: GitLayout = {}): Promise<GitRepository> {
+    const repo = await this.prepare(home, repositoryId, layout);
     sourceUrl(source);
     if (await stat(repo.path)) throw new GitSafetyError('이미 존재하는 저장소를 덮어쓰지 않습니다.');
     if (await stat(await safePath(repo.statePath))) throw new GitSafetyError('기존 저장소 등록 기록을 덮어쓰지 않습니다.');
@@ -271,8 +302,8 @@ export class GitRepository {
     }
   }
 
-  static async open(home: string, repositoryId: string): Promise<GitRepository> {
-    const repo = await this.prepare(home, repositoryId);
+  static async open(home: string, repositoryId: string, layout: GitLayout = {}): Promise<GitRepository> {
+    const repo = await this.prepare(home, repositoryId, layout);
     repo.registration = await repo.readRegistration();
     if ((await repo.git(['rev-parse', '--is-bare-repository'])).toString().trim() !== 'true') {
       throw new GitSafetyError('Runner의 bare 저장소가 아닙니다.');
@@ -504,12 +535,14 @@ export class GitRepository {
       try {
         // 생성 중 종료돼도 폴더가 기록 없이 남지 않도록 먼저 예약한다.
         await this.saveRegistration({ ...record, worktrees: [...record.worktrees, { id: worktreeId, branch, startCommit: commit }] });
-        await mkdir(path, { mode: 0o700 });
+        // 전용 계정이면 0o770: 0o700으로 만들면 ACL 상한이 ---가 되어 Agent가 들어가지 못한다(isolation.md §6, Codex 리뷰 P2-5).
+        await mkdir(path, { mode: this.shared ? 0o770 : 0o700 });
         created = true;
         // 고정 커밋의 브랜치만 복사하여 최신 원격 객체도 받고 다른 Agent 결과는 제외한다.
         await run(this.home, ['-c', 'init.templateDir=', 'clone', '--no-local', '--no-hardlinks', '--single-branch', '--branch', branch, '--no-checkout', '--', this.path, path]);
         await run(path, ['remote', 'remove', 'origin']);
         await run(path, ['checkout', '--no-guess', branch]);
+        if (this.shared) await groupWritable(path);
         return path;
       } catch (error) {
         try {
@@ -692,7 +725,8 @@ export class GitRepository {
     if (tracked.length === 0) return rejected;
     // 작업 브랜치가 .gitignore를 지워 검사에서 빠져나가지 못하도록 기준 규칙도 적용한다.
     for (const commit of new Set([mergeBase, head])) {
-      const scratch = await safePath(join(this.home, 'inputs', this.repositoryId, `ignore-${randomUUID()}`));
+      // Runner 내부 임시 폴더라 Agent 영역이 아니라 Runner 상태 폴더 아래에 둔다.
+      const scratch = await safePath(join(dirname(this.statePath), `ignore-${this.repositoryId}-${randomUUID()}`));
       await mkdir(scratch, { mode: 0o700 });
       try {
         for (const entry of await this.tree(commit)) {

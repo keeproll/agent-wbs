@@ -8,6 +8,7 @@ import { createGithubRemoteCleanup } from './cleanup/remote.ts';
 import { createResetCleanup, type ResetCleanupDeps } from './cleanup/reset.ts';
 import { CliUpdater, cliBinary, type CliRegistry } from './cli-update/manager.ts';
 import { cliAwareRun, cliEnvironment } from './cli-update/registry.ts';
+import { AGENT_USER, agentIsolationConfig, agentLoginRun } from './cli/dedicated-user.ts';
 import { lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { repositoryIdFor } from './git/identity.ts';
@@ -63,6 +64,11 @@ export interface RunnerAppDeps {
   inputSource?: () => Promise<InputSource | undefined>;
   /** 입력 확인 주기(시험용 덮어쓰기). 없으면 서버 정책 inputCheckMinutes, 그것도 없으면 5분. */
   inputIntervalMs?: number;
+  /**
+   * Agent 전용 OS 계정 격리(Q-08)의 작업 영역(고정 `/srv/agentwbs`). 주면 CLI 설치·작업 폴더·입력 사본을 이 아래에 두고,
+   * CLI 로그인 상태는 Agent 계정으로 확인한다(isolation.md §12). 없으면 지금처럼 Runner 홈.
+   */
+  agentRoot?: string | null;
 }
 
 /** 서버 정책을 받기 전 입력 확인 기본 주기(5분, 서버 정책 inputCheckMinutes의 기본값과 같음). */
@@ -101,9 +107,13 @@ export class RunnerApp {
 
   constructor(d: RunnerAppDeps) {
     this.#d = d;
-    this.bins = { codex: cliBinary(d.home, 'Codex'), claude: cliBinary(d.home, 'Claude') };
+    const cliHome = d.agentRoot ?? d.home;
+    this.bins = { codex: cliBinary(cliHome, 'Codex'), claude: cliBinary(cliHome, 'Claude') };
     const base = d.run ?? createRunCommand({ env: probeEnv(d.env) });
-    const cli = d.cliRun ?? createRunCommand({ env: cliEnvironment(d.env) });
+    const plainCli = d.cliRun ?? createRunCommand({ env: cliEnvironment(d.env) });
+    // 전용 계정이면 로그인 상태 질의만 Agent 계정(래퍼 login-status)으로 보낸다. 나머지는 그대로.
+    const isolation = d.agentRoot ? agentIsolationConfig({ AWBS_AGENT_USER: AGENT_USER }) : null;
+    const cli = isolation ? agentLoginRun(isolation, plainCli) : plainCli;
     // M-1: 준비 점검의 codex·claude도 전용 설치 경로를 세션 실행과 같은 인자·환경으로 부른다.
     this.#run = cliAwareRun(base, cli, this.bins);
     this.heavy = new HeavySemaphore(0);
@@ -158,6 +168,7 @@ export class RunnerApp {
     }
     const resetCleanup = createResetCleanup({
       home: d.home,
+      agentRoot: d.agentRoot ?? null,
       identity: () => this.identity,
       // 원격 초기화는 GitHub 설정이 있을 때 실제 클라이언트로 연결한다(교차 리뷰 P1-2).
       ...(this.github && { remote: createGithubRemoteCleanup({ client: this.github.client, warn: d.warn,
@@ -174,7 +185,9 @@ export class RunnerApp {
       onCleanupQueued: (command) => resetCleanup.markReported(command),
     });
     this.updater = new CliUpdater({
-      home: d.home,
+      home: cliHome,
+      // 전용 계정이면 Agent 그룹이 읽고 실행만 하게 0o750(isolation.md §6).
+      ...(d.agentRoot && { dirMode: 0o750 }),
       // CliUpdater는 생성 때 식별자를 검사하므로 host 식별자를 읽은 뒤(bootstrap) 실제 값으로 바뀐다.
       owner: { get hostId() { return app.identity.hostId; }, get bootId() { return app.identity.bootId; }, get runnerId() { return runnerId(); } },
       registry: d.cliRegistry,
@@ -300,7 +313,7 @@ export class RunnerApp {
     const repositoryId = repositoryIdFor(`https://github.com/${repo.owner}/${repo.repo}`);
     const exists = await lstat(join(this.#d.home, 'repos', repositoryId)).then(() => true, () => false);
     if (!exists) return undefined;
-    const git = await GitRepository.open(this.#d.home, repositoryId);
+    const git = await GitRepository.open(this.#d.home, repositoryId, { agentRoot: this.#d.agentRoot ?? null });
     return { fetch: () => git.fetch({ allowRewrite: true }), inputObservation: (base, head) => git.inputObservation(base, head) };
   }
 

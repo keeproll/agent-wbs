@@ -155,6 +155,21 @@ else
   if ((PROCS_GONE)); then note 'Agent 프로세스 0개 확인'; elif ((${#LEFT[@]} == 0)); then die 'Agent 프로세스가 아직 남아 있습니다. Windows 차단을 유지한 채 멈춥니다.'; fi
 fi
 
+step '2-1. Agent 계정의 예약 작업(cron·at) 지우기'
+# userdel --remove는 예약 작업 파일을 지우지 않는다. 남기면 같은 번호로 다시 만든 계정에서 옛 작업이 다시 돌 수 있다(리뷰4 P3-3).
+if [[ -e $CRON_SPOOL || -L $CRON_SPOOL ]]; then
+  safe_fixed_path "$(dirname "$CRON_SPOOL")"
+  as_root rm -f -- "$CRON_SPOOL"                                         # 이 계정의 crontab 파일(이름 기준, 고정 경로)
+fi
+if [[ -n $UID_NUM && -d $AT_SPOOL ]]; then
+  # at 작업 파일은 그 계정 번호 소유다. 번호가 지금도 우리 계정이거나 아무도 안 쓸 때만 지운다.
+  if ((DRY_RUN)) || uid_is_agent "$UID_NUM" "$MARKER" || uid_is_unassigned "$UID_NUM"; then
+    as_root find -P "$AT_SPOOL" -maxdepth 1 -type f -uid "$UID_NUM" -delete
+  else
+    left "UID $UID_NUM을 지금 다른 계정($(uid_owner "$UID_NUM"))이 씀: at 작업 정리 건너뜀"
+  fi
+fi
+
 step "3. Agent 계정 $AGENT_USER 삭제"
 ACCOUNT_GONE=0
 if [[ $ACCOUNT == none ]]; then
@@ -195,7 +210,11 @@ else
 fi
 
 step '5. 작업 영역'
-if [[ -d $AGENT_ROOT ]]; then
+if ((${#LEFT[@]})); then
+  # UID 확인이 하나라도 실패했으면 작업 영역 정리(ACL·그룹·--purge-work 삭제)도 하지 않는다(리뷰4 P3-2).
+  # 왜: 숫자로 남은 옛 Agent 파일이 지금은 다른 계정의 파일일 수 있다.
+  left '작업 영역 정리(ACL·그룹·삭제) 건너뜀: 앞 단계의 UID 확인이 끝나지 않음'
+elif [[ -d $AGENT_ROOT ]]; then
   if ((PURGE)); then
     as_root rm -rf --one-file-system -- "$AGENT_ROOT"                      # 작업 영역 전체 삭제(--purge-work). rm은 링크 안을 따라가지 않는다
   else
@@ -212,6 +231,21 @@ if [[ -d $AGENT_ROOT ]]; then
     as_root chgrp -R --no-dereference "$(id -gn)" -- "$AGENT_ROOT"         # 그룹을 Runner 그룹으로(Agent 그룹은 없어짐)
     note "작업 영역은 남겼습니다. 다 지우려면 --purge-work로 다시 실행하세요."
   fi
+fi
+
+step '5-1. 예약 실행 막기 해제(계정이 없어진 뒤)'
+if ((ACCOUNT_GONE && ${#LEFT[@]} == 0)); then
+  for deny in "$CRON_DENY" "$AT_DENY"; do
+    rc=0; deny_has_agent "$deny" || rc=$?
+    ((rc == 1)) && continue
+    if ((rc == 2 && DRY_RUN)); then note "$deny: 관리자 권한 없이는 못 읽음(실제 실행에서는 sudo로 읽고 $AGENT_USER 줄만 뺌)"; continue; fi
+    ((rc != 2)) || { left "$deny를 읽지 못해 Agent 줄을 지우지 못함"; continue; }
+    safe_fixed_path "$deny"
+    tmp=$(mktemp)
+    if [[ -r $deny ]]; then grep -vx -- "$AGENT_USER" "$deny" > "$tmp" || true; else sudo cat -- "$deny" | grep -vx -- "$AGENT_USER" > "$tmp" || true; fi
+    as_root install -o root -g root -m 0644 "$tmp" "$deny"               # Agent 계정 줄만 뺀 파일로 바꿈(다른 줄은 그대로)
+    rm -f -- "$tmp"
+  done
 fi
 
 step '6. 설치 기록 삭제(모든 정리가 끝난 뒤)'

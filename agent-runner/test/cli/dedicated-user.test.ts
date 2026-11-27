@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 import { buildLaunch, sessionOptions, type RunSpec } from '../../src/cli/args.ts';
 import {
-  agentControl, agentIsolationConfig, DEDICATED_FLAGS, dedicatedUserIsolation, DedicatedUserError, selectIsolation, type DedicatedUserConfig,
+  agentControl, agentIsolationConfig, agentLoginRun, DEDICATED_FLAGS, dedicatedUserIsolation, DedicatedUserError, selectIsolation, type DedicatedUserConfig,
 } from '../../src/cli/dedicated-user.ts';
 import { IsolationUndecidedError, PENDING_ISOLATION } from '../../src/cli/isolation.ts';
 import type { RunCommand } from '../../src/readiness/command.ts';
@@ -197,5 +197,30 @@ describe('selectIsolation — 준비 점검에서 격리 계층 고르기', () =
     const choice = await selectIsolation(env, runner(stdout, code));
     expect(choice.isolation).toBe(PENDING_ISOLATION);
     expect(choice.reason).toContain('점검 실패');
+  });
+});
+
+describe('agentLoginRun — 로그인 상태만 Agent 계정(래퍼 login-status)으로', () => {
+  const calls: [string, readonly string[]][] = [];
+  const base: RunCommand = async (cmd, args) => { calls.push([cmd, args]); return { code: 0, stdout: '', stderr: '' }; };
+  const run = agentLoginRun(cfg, base, { realpath });
+  test('Claude auth status --json, Codex (-c …) login status → sudo 래퍼 login-status(실제 경로)', async () => {
+    calls.length = 0;
+    await run('/srv/agentwbs/cli/claude/current/bin/claude', ['auth', 'status', '--json']);
+    await run('/srv/agentwbs/cli/codex/current/bin/codex', ['-c', 'check_for_update_on_startup=false', 'login', 'status']);
+    const head = ['-n', '-u', 'awbs-agent', '--', '/usr/local/libexec/awbs-agent-exec', 'login-status', '--agent'];
+    expect(calls).toEqual([
+      ['/usr/bin/sudo', [...head, 'claude', '--', CLAUDE_REAL]],
+      ['/usr/bin/sudo', [...head, 'codex', '--', CODEX_REAL]],
+    ]);
+  });
+  test('그 밖의 명령(--version, 설치본 밖 CLI의 로그인 질의)은 그대로 Runner 계정에서', async () => {
+    calls.length = 0;
+    await run('/srv/agentwbs/cli/codex/current/bin/codex', ['--version']);
+    await run('/usr/local/bin/claude', ['auth', 'status', '--json']);
+    expect(calls).toEqual([
+      ['/srv/agentwbs/cli/codex/current/bin/codex', ['--version']],
+      ['/usr/local/bin/claude', ['auth', 'status', '--json']],
+    ]);
   });
 });

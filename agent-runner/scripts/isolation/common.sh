@@ -48,6 +48,14 @@ WSL_INTEROP=$ROOT_PREFIX/proc/sys/fs/binfmt_misc/WSLInterop
 REAL_EXEC_PATH=/usr/local/libexec/awbs-agent-exec
 DRY_RUN=0
 
+# 예약 실행(cron·at) 막기 파일. Agent가 세션 중에 예약 작업을 심으면 세션·Runner가 끝난 뒤에도 Agent 계정으로 명령이 돈다(리뷰4 P3-3).
+CRON_DENY=$ROOT_PREFIX/etc/cron.deny
+CRON_ALLOW=$ROOT_PREFIX/etc/cron.allow
+AT_DENY=$ROOT_PREFIX/etc/at.deny
+AT_ALLOW=$ROOT_PREFIX/etc/at.allow
+CRON_SPOOL=$ROOT_PREFIX/var/spool/cron/crontabs/$AGENT_USER
+AT_SPOOL=$ROOT_PREFIX/var/spool/cron/atjobs
+
 # ------------------------------------------------------------------ 출력
 step() { printf '\n== %s\n' "$1"; }
 note() { printf '   %s\n' "$1"; }
@@ -206,6 +214,21 @@ uid_is_unassigned() {
   local uid=$1
   [[ $uid =~ ^[0-9]+$ ]] && ((uid > 0 && uid < 1000)) || return 1
   ! getent passwd "$uid" > /dev/null
+}
+
+# 막기 파일(deny)에 Agent 계정 이름이 한 줄로 있는가. 파일은 root 전용일 수 있어 owner의 sudo로 읽는다.
+# 결과: 0 = 있음, 1 = 없음, 2 = 읽지 못함.
+deny_has_agent() {
+  local file=$1 content
+  [[ -e $file ]] || return 1
+  if [[ -r $file ]]; then
+    content=$(< "$file")
+  elif ((DRY_RUN)); then
+    return 2   # dry-run은 sudo를 쓰지 않는다
+  else
+    content=$(sudo cat -- "$file" 2> /dev/null) || return 2
+  fi
+  grep -qx -- "$AGENT_USER" <<< "$content"
 }
 
 # 진행 기록(계정 생성 직전에 남김)으로 「이번 설치가 만들다 만 계정」을 되돌린다.

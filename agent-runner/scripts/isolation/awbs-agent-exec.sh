@@ -13,6 +13,8 @@
 #   kill-all            awbs-agent 계정의 프로세스를 모두 강제 종료(세션이 0일 때 남은 것 청소)
 #   fix-perms <경로>     작업 폴더 안 Agent 파일에 Runner 계정의 읽기·쓰기 권한을 되돌려 줌
 #   check               격리 상태 점검(Runner 준비 점검이 부른다). 통과하면 「ok」 출력
+#   login-status --agent claude|codex -- <CLI 실행 파일>
+#                       Agent 계정의 로그인 상태를 본다(정해진 인자만, 돈이 들지 않음). CLI의 출력을 그대로 돌려준다
 # bash 전용이다. sh(dash)로 부르면 pipefail에서 알 수 없는 오류가 나므로 여기서 먼저 멈춘다.
 if [ -z "${BASH_VERSION:-}" ]; then echo "bash로 실행하세요. 예: bash $0" >&2; exit 2; fi
 set -euo pipefail
@@ -94,6 +96,24 @@ cmd_run() {
     "$real_bin" "$@"
 }
 
+# Agent 계정의 Claude·Codex 로그인 상태(무과금). 인자는 래퍼가 정한다: Runner가 다른 명령을 끼워 넣지 못하게.
+cmd_login_status() {
+  local agent=''
+  [[ ${1-} == --agent ]] && { agent=${2-}; shift 2; }
+  [[ ${1-} == -- ]] && shift
+  [[ $agent == claude || $agent == codex ]] || die "--agent는 claude 또는 codex입니다."
+  (($# == 1)) || die "CLI 실행 파일 하나만 받습니다."
+  local real_bin
+  real_bin=$(inside "$1" "$CLI_DIR/$agent") || die "CLI는 $CLI_DIR/$agent 안의 Runner 설치본이어야 합니다."
+  [[ -f $real_bin && -x $real_bin ]] || die "CLI 실행 파일이 아닙니다."
+  local args=(auth status --json)
+  [[ $agent == codex ]] && args=(-c check_for_update_on_startup=false login status)
+  cd -- "$AGENT_HOME"
+  exec env -i HOME="$AGENT_HOME" USER="$AGENT_USER" LOGNAME="$AGENT_USER" \
+    PATH="$NODE_DIR:/usr/local/bin:/usr/bin:/bin" TMPDIR="$AGENT_HOME/tmp" \
+    DISABLE_AUTOUPDATER=1 DISABLE_UPDATES=1 "$real_bin" "${args[@]}"
+}
+
 cmd_kill_group() {
   [[ ${1-} =~ ^[1-9][0-9]{0,9}$ ]] || die "pgid는 양의 정수입니다."
   # Agent 계정으로 보내므로 Agent 계정의 프로세스에만 닿는다. 다른 계정(Runner·root)의 프로세스는 죽일 수 없다.
@@ -167,5 +187,6 @@ case $sub in
   kill-all) cmd_kill_all ;;
   fix-perms) cmd_fix_perms "$@" ;;
   check) cmd_check ;;
-  *) die "하위 명령은 run · kill-group · kill-all · fix-perms · check 중 하나입니다." ;;
+  login-status) cmd_login_status "$@" ;;
+  *) die "하위 명령은 run · kill-group · kill-all · fix-perms · check · login-status 중 하나입니다." ;;
 esac

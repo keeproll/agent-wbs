@@ -65,6 +65,10 @@ keeproll (Runner)                      awbs-agent (Agent 전용 계정)
 - sudo·adm·docker 그룹에 넣지 않는다. Runner 그룹(keeproll)에도 넣지 않는다.
   - 왜 docker도 빼나: docker 그룹은 사실상 root와 같다. 컨테이너로 PC 전체를 열 수 있다.
   - 왜 Runner 그룹도 빼나: Runner 홈은 `0750`(그룹은 읽기 가능)이다. 그룹에 들면 Runner 홈에 들어간다.
+- 예약 실행(cron·at)을 쓰지 못하게 `/etc/cron.deny`·`/etc/at.deny`에 이름을 넣는다(리뷰4 P3-3).
+  - 왜: cron은 로그인 셸(nologin)·비밀번호 잠금과 상관없이 작업을 돌린다. Agent가 세션 중에 작업을 심으면 세션·Runner가 끝난 뒤에도 계속 돈다.
+  - `cron.allow`(또는 `at.allow`)가 있으면 deny 파일은 쓰이지 않는다. 이때는 allow 목록에 Agent가 없어야 하며, 있으면 설치가 멈춘다.
+  - 제거할 때는 Agent의 crontab 파일과 at 작업을 계정 삭제 전에 지우고, 계정이 없어진 뒤 deny 파일에서 그 줄만 뺀다.
 - 홈 폴더 `/home/awbs-agent`는 `0700`이다. Claude·Codex 로그인 정보는 이 계정만 읽는다.
 
 ## 5. Runner가 Agent 계정으로 실행하는 방법
@@ -207,7 +211,11 @@ Agent 계정이 못 읽는 곳(확인 스크립트가 하나씩 시험한다):
 
 ## 10. owner가 실행할 절차
 
-모든 명령은 Runner 계정(keeproll)으로, 저장소 맨 위 폴더에서 실행한다. `sudo bash ...`로 부르지 않는다. 스크립트가 필요한 줄만 sudo로 실행한다.
+- **실행 순서는 [OWNER-RUNBOOK.md](OWNER-RUNBOOK.md) 한 곳에만 적는다.** 이 절은 각 단계가 무엇을 하는지 설명한다(리뷰4 P3-4: 문서마다 순서가 달랐던 문제).
+- 순서 요약: ① 미리 보기 → ② 설치 → ③ CLI 설치 → ④ Agent 계정 로그인 → ⑤ `.env` → ⑥ 확인 → ⑦ Runner 시작.
+  - 왜 CLI 설치가 로그인보다 먼저인가: 로그인할 프로그램(`/srv/agentwbs/cli/.../current/bin/...`)이 있어야 한다.
+  - 왜 로그인이 Runner 시작보다 먼저인가: Runner의 CLI 업데이트는 새 버전을 쓰기 전에 Agent 계정의 로그인 상태를 본다. 로그인이 없으면 업데이트를 적용하지 않는다.
+- 모든 명령은 Runner 계정(keeproll)으로, 저장소 맨 위 폴더에서 bash로 실행한다. `sudo bash ...`로 부르지 않는다. 스크립트가 필요한 줄만 sudo로 실행한다.
 
 ### 10.1 미리 보기(아무것도 바꾸지 않음)
 
@@ -250,28 +258,26 @@ AWBS_AGENT_USER=awbs-agent
 
 - 값은 `awbs-agent`만 받는다. 다른 이름이면 설정 오류로 실제 실행을 만들지 않는다.
 - 작업 영역(`/srv/agentwbs`)·래퍼(`/usr/local/libexec/awbs-agent-exec`) 경로는 고정이다. 예전처럼 `AWBS_AGENT_ROOT`·`AWBS_AGENT_EXEC`를 적었다면 고정값과 같을 때만 받아들인다.
+- 이 줄을 넣으면 Runner가 다음을 바꾼다(isolation.md §12에서 연결함).
+  - CLI 설치·갱신 위치: `~/.agentwbs/cli` → `/srv/agentwbs/cli`(폴더 권한 0750: Agent는 읽기·실행만).
+  - 작업 폴더·입력 사본 위치: `~/.agentwbs/worktrees`·`inputs` → `/srv/agentwbs/worktrees`·`inputs`. bare 저장소·상태·비밀값은 그대로 Runner 홈에 있다.
+  - CLI 로그인 상태 확인: Runner 계정이 아니라 Agent 계정으로(래퍼 `login-status`).
+  - 주의: 이미 `~/.agentwbs/worktrees`에 작업 폴더가 있으면 옮겨지지 않는다. 실제 작업을 시작하기 전에 바꾼다(지금은 작업 폴더가 없다).
 - `AWBS_AGENT_USER`가 비어 있으면 Runner는 지금처럼 실제 실행 계획을 만들지 않는다(`isolation_undecided`).
 - 넣어도 래퍼 `check`가 `ok`를 내야만 전용 계정을 쓴다(`selectIsolation`).
   - 왜: 설정만 믿으면 sudoers·래퍼·WSL 보호가 빠진 PC에서 격리된 줄 알고 실행하게 된다.
 - 작업 폴더·CLI 경로 비교는 대상과 기준 폴더를 **둘 다** 실제 경로(realpath)로 바꾼 뒤에 한다(Codex 리뷰 P2-3).
 
-### 10.4 Agent 계정 로그인(한 번)
+### 10.4 CLI 설치와 Agent 계정 로그인(한 번)
 
-Runner가 `/srv/agentwbs/cli`에 CLI를 설치한 뒤에 한다(§12의 후속 연결이 끝나야 그 위치에 설치된다).
-
-```bash
-# Claude: 화면에 나오는 주소를 Windows 브라우저에 붙여 넣고, 받은 코드를 다시 붙여 넣는다.
-sudo -u awbs-agent -H -- env -C /home/awbs-agent PATH=/srv/agentwbs/runtime/node/bin:/usr/bin:/bin \
-  /srv/agentwbs/cli/claude/current/bin/claude auth login
-
-# Codex: 기기 코드 방식. 화면의 주소와 코드를 Windows 브라우저에서 입력한다.
-sudo -u awbs-agent -H -- env -C /home/awbs-agent PATH=/srv/agentwbs/runtime/node/bin:/usr/bin:/bin \
-  /srv/agentwbs/cli/codex/current/bin/codex login --device-auth
-```
-
-- 브라우저가 자동으로 열리지 않는다. Agent 계정은 Windows 프로그램을 실행할 수 없기 때문이다(§6). 주소를 직접 복사한다.
+- CLI 설치: `bash agent-runner/scripts/isolation/install-agent-cli.sh`
+  - npm 공식 저장소의 latest 버전을 `/srv/agentwbs/cli/<claude|codex>/<버전>/`에 설치하고 `current` 링크를 건다(owner Q-12 「항상 최신」).
+  - Runner 계정으로 돈다(sudo 없음). 이 폴더의 주인이 Runner 계정이기 때문이다.
+  - 설치한 프로그램이 그 버전을 말하는지(`--version`)만 확인한다. 돈이 드는 호출은 없다.
+  - 그 뒤 갱신은 Runner가 한다: 시작할 때와 매일 최신 버전을 확인하고, 실행 중인 세션이 없을 때 바꾼다(architecture §5.1). Runner를 오래 꺼 두었으면 Runner를 멈춘 채 이 스크립트를 다시 돌려도 된다.
+- 로그인 명령과 화면에서 할 일은 [OWNER-RUNBOOK.md](OWNER-RUNBOOK.md) 4단계에 있다.
 - 로그인 정보는 `/home/awbs-agent/.claude`·`.codex`에 저장된다. Runner 계정의 로그인과 따로다.
-- 두 명령 이름은 이 PC의 설치본(Claude 2.1.332 `claude auth --help`, Codex 0.172.0 `codex login --help`)에서 확인했다. 버전이 바뀌어 없으면 `--help`로 다시 본다.
+- 브라우저가 자동으로 열리지 않는다. Agent 계정은 Windows 프로그램을 실행할 수 없기 때문이다(§6). 주소를 직접 복사한다.
 - 로그인은 돈이 들지 않는다. 모델 호출은 하지 않는다.
 
 ### 10.5 설치 후 확인
@@ -338,7 +344,9 @@ bash agent-runner/scripts/isolation/remove-agent-user.sh --purge-work     # 작�
   - 프로세스 종료·계정 삭제 직전: 그 UID가 지금도 `awbs-agent`이고 생성 표식이 같아야 한다.
   - 숫자 권한 항목 삭제·소유권 정리 직전: 그 UID를 지금 아무 계정도 쓰지 않아야 한다.
   - 계정이 이미 지워졌으면 UID로 프로세스를 끝내지 않는다. 남은 프로세스가 있는지만 읽어서 본다.
-  - 하나라도 맞지 않으면 그 단계는 건너뛰고, 다른 계정은 건드리지 않는다. 끝에 「남은 항목」 목록을 보여 주고 종료 코드 `3`으로 끝난다. 기록은 남겨 둔다.
+  - 하나라도 맞지 않으면 그 단계는 건너뛰고, 다른 계정은 건드리지 않는다.
+  - 이때는 작업 영역 정리(ACL 지우기·그룹 바꾸기·`--purge-work` 삭제)도 하지 않는다(리뷰4 P3-2). 숫자로 남은 옛 Agent 파일이 지금은 다른 계정의 파일일 수 있기 때문이다.
+  - 끝에 「남은 항목」 목록을 보여 주고 종료 코드 `3`으로 끝난다. 기록은 남겨 둔다.
 - 설치 중 되돌리기(진행 기록으로 계정 지우기)도 계정·그룹 삭제가 하나라도 실패하면 성공으로 표시하지 않는다. 남은 항목을 보여 주고 진행 기록을 남긴다(Codex 3차 P3).
 - 중간에 실패하면 Windows 차단은 걸린 그대로 남는다(Codex 리뷰 P2-4). 원인을 고친 뒤 같은 명령을 다시 실행하면 기록한 UID로 이어서 정리한다.
 - 같은 이름의 계정이 이 설치가 만든 계정이 아니면 아무것도 지우지 않는다.
@@ -358,21 +366,31 @@ bash agent-runner/scripts/isolation/remove-agent-user.sh --purge-work     # 작�
 - **추상 유닉스 소켓**(파일 없이 이름만 있는 프로세스 사이 통신 통로)은 계정 권한으로 막히지 않는다. 다른 프로그램이 이런 통로를 인증 없이 열어 두면 Agent도 닿는다.
 - **WSL 보호는 부팅 순서에 기댄다.** `/run/WSL`은 부팅마다 새로 만들어진다. 보호 서비스가 돌기 전에는 열려 있다.
   - 그래서 Runner는 실행 전에 래퍼 `check`로 다시 확인한다. 열려 있으면 `fail wsl_interop_accessible`로 실행을 거부한다.
+- **확인 직후 상태가 바뀌는 짧은 틈(경합)이 남는다**(리뷰4 P3-1).
+  - 제거 스크립트는 프로세스를 끝내기 직전마다 「그 UID가 지금도 `awbs-agent`인가」를 본다. 그 확인과 실제 종료 명령(`pkill -U <UID>`) 사이는 아주 짧지만 비어 있다.
+  - 이 틈을 쓰려면 root가 그 순간에 `awbs-agent`를 지우고 같은 번호로 다른 계정을 만들어야 한다. 계정이 있는 동안 같은 번호의 새 계정은 만들 수 없고, Agent 계정은 계정 정보를 바꿀 권한이 없다.
+  - 계정 삭제(`userdel`)도 같은 구조다. 그래서 위험은 낮다고 보고 고치지 않고 남긴다.
+  - 줄이는 방법(제안): 숫자 대신 계정 이름으로 신호 보내기(`sudo -u awbs-agent -- kill -KILL -1`). 이름을 번호로 바꾸는 일과 신호가 한 명령 안에서 일어난다.
+- **`/tmp`·`/var/tmp`·`/dev/shm`에 Agent가 만든 파일은 제거 뒤 숫자 UID로 남는다.** 제거 스크립트는 이 공용 폴더를 지우지 않는다(다른 계정 파일과 섞여 있기 때문). 재부팅하면 `/tmp`·`/dev/shm`은 비워진다.
 - **Agent가 작업 폴더의 git 설정을 바꿀 수 있다.** Runner가 그 폴더에서 git을 실행하면 바뀐 설정이 Runner 권한으로 돌 수 있다.
   - 지금 `importWorktree`는 bare 저장소에서 `fetch`만 하고 `--upload-pack`을 고정한다. 이 경로가 계정이 다른 폴더에서도 안전한지 M5-02 연결 때 다시 검토한다.
 
-## 12. 후속 연결 작업(이번 변경에 없음)
+## 12. 후속 연결 작업
 
-이번 변경은 격리 계층·설치 스크립트·확인 스크립트까지다. 실제로 쓰려면 아래 연결이 더 필요하다.
+### 12.1 이번에 연결함(fix4)
 
-1. **작업 폴더·입력 사본 위치**: git 계층(`GitRepository`)이 `worktrees/`·`inputs/`를 `AWBS_HOME`(`~/.agentwbs`) 대신 `/srv/agentwbs` 아래에 만들게 한다.
-   - 지금 위치는 Runner 홈 안이라 Agent가 들어갈 수 없다. 래퍼는 이 경우 `작업 폴더는 … 안이어야 합니다`로 거부한다.
-   - 작업 폴더를 만드는 권한 숫자도 `0700`(지금 `repository.ts`의 `mkdir`)에서 `0770`으로 바꾼다. 그대로면 ACL 상한 때문에 Agent가 들어가지 못한다(§6, Codex 리뷰 P2-5).
-2. **CLI 설치 위치**: CLI 업데이트(`cli-update`)가 `~/.agentwbs/cli` 대신 `/srv/agentwbs/cli`에 설치하게 한다.
-   - 설치한 파일·폴더에 Agent가 쓸 수 있는 것이 하나라도 있으면 래퍼 `check`가 `fail cli_writable`로 실행을 막는다.
-3. **준비 점검의 로그인 확인**: 지금은 Runner 계정으로 `auth status`를 본다. 전용 계정을 쓰면 Agent 계정으로 확인해야 한다.
-4. **exec 계층(M5-02)**: 준비 점검에서 `selectIsolation`을 부르고, 정리에 `agentControl`(`kill-group`·`kill-all`·`fix-perms`)을 쓴다.
+1. **작업 폴더·입력 사본 위치**: `AWBS_AGENT_USER=awbs-agent`이면 `GitRepository`가 `worktrees/`·`inputs/`를 `/srv/agentwbs` 아래에 만든다(`GitLayout.agentRoot`).
+   - 작업 폴더 모음(`worktrees/<저장소>`)·입력 모음은 0750: Agent 그룹은 들어가기만, 맨 위는 못 바꾼다.
+   - 작업 폴더는 0770으로 만들고, checkout한 파일·폴더에 그룹 쓰기를 준다. 그래야 기본 ACL의 Agent 항목이 효과를 가진다(§6).
+   - bare 저장소(`repos/`)·상태(`state/`)는 그대로 Runner 홈(0700)에 있다.
+2. **CLI 설치 위치**: 같은 조건에서 CLI 업데이트(`cli-update`)가 `/srv/agentwbs/cli`에 0750 폴더로 설치·갱신한다. 처음 설치는 `install-agent-cli.sh`(§10.4).
+3. **준비 점검·CLI 업데이트의 로그인 확인**: Runner 설치본 CLI의 로그인 상태 질의만 래퍼 `login-status`로 Agent 계정에서 돈다(`agentLoginRun`). 다른 명령(`--version` 등)은 그대로 Runner 계정에서 돈다.
+
+### 12.2 아직 남음
+
+4. **exec 계층(M5-02)**: 세션 실행에서 `selectIsolation`을 부르고, 정리에 `agentControl`(`kill-group`·`kill-all`·`fix-perms`)을 쓴다. 이것이 연결되기 전까지 Runner는 실제 Agent 세션을 띄우지 않는다.
 5. **CI·계약 추출·임시 SQL**도 같은 계정 경계에서 실행한다(architecture §4 「실행 격리」). 래퍼에 하위 명령을 더하거나 같은 방식의 실행 계획을 쓴다.
+6. **`importWorktree`의 계정 간 안전성**(§11) 재검토.
 
 ## 13. 시험
 
@@ -389,6 +407,9 @@ pnpm -C agent-runner test -- cli
   - 시험 모드는 `AWBS_ISOLATION_TEST_ROOT`가 있고, 그 아래 `bin/sudo`(가짜)가 PATH 맨 앞일 때만 켜진다. 아니면 스크립트가 바로 멈춘다.
   - 가짜 sudo는 받은 인자를 기록하고, 정한 규칙대로 출력·종료 코드를 돌려준다. root 명령의 경로가 가짜 루트 밖이면 99로 끝나 시험이 실패한다.
   - Codex 리뷰 재현: Agent 홈의 링크, root 대상 경로의 링크·예상 밖 소유자, 다른 계정·root 옵션, 중간 실패 시 닫힘, 종료 실패 시 Windows 차단 유지, 숫자 UID 정리, sudo 정책의 root 허용, 확인 못 한 검사, Windows 시험 복사본 권한, `/tmp` 검색 오류.
+  - 리뷰4 재현: 예약 실행(cron·at) 막기·검사·정리, UID 확인 실패 시 작업 영역 정리 건너뜀, `install-agent-cli.sh`(가짜 npm: 최신 설치·갱신·점검 실패·잘못된 버전).
+- `test/git/git.test.ts`: `agentRoot`를 주면 작업 폴더·입력 사본이 Agent 작업 영역 아래에 생기고, 작업 폴더는 0770·파일은 그룹 쓰기 가능.
+- `test/cli-update/manager.test.ts`·`test/config.test.ts`: CLI 폴더 0750, `AWBS_AGENT_USER` → `agentRoot`.
 - 스크립트 검사: `bash -n`(문법)과 shellcheck(셸 스크립트 검사 도구) 0.10.0.
 
 ## 용어집

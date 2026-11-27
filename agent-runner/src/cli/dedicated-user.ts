@@ -136,7 +136,8 @@ export type AgentControl =
   | { kind: 'kill-group'; pgid: number }
   | { kind: 'kill-all' }
   | { kind: 'fix-perms'; path: string }
-  | { kind: 'check' };
+  | { kind: 'check' }
+  | { kind: 'login-status'; agent: Agent; binary: string };
 
 /**
  * Agent 계정 프로세스·파일을 다루는 래퍼 명령. Runner 계정은 다른 계정의 프로세스에 신호를 보낼 수 없어(EPERM)
@@ -156,6 +157,11 @@ export function agentControl(cfg: DedicatedUserConfig, op: AgentControl): { file
       throw new DedicatedUserError('cwd_outside_agent_root', '권한을 고칠 경로가 Agent 작업 영역(worktrees) 밖입니다.');
     }
     tail = ['fix-perms', op.path];
+  } else if (op.kind === 'login-status') {
+    if (!validPath(op.binary) || !inside(op.binary, join(cfg.root, 'cli', op.agent.toLowerCase()))) {
+      throw new DedicatedUserError('binary_outside_agent_root', 'CLI가 Agent 작업 영역의 Runner 설치본(cli) 밖입니다.');
+    }
+    tail = ['login-status', '--agent', op.agent.toLowerCase(), '--', op.binary];
   } else {
     tail = [op.kind];
   }
@@ -191,4 +197,34 @@ export async function selectIsolation(env: NodeJS.ProcessEnv, run: RunCommand, d
     return { isolation: PENDING_ISOLATION, reason: `전용 Agent 계정 점검 실패${items.length ? `: ${items.join(', ')}` : '(sudoers·래퍼 확인 필요)'}` };
   }
   return { isolation: dedicatedUserIsolation(cfg, deps), reason: null };
+}
+
+/** 로그인 상태를 묻는 고정 인자(준비 점검·CLI 업데이트 무과금 점검이 쓰는 모양). */
+const LOGIN_TAIL: Readonly<Record<Agent, readonly string[]>> = { Claude: ['auth', 'status', '--json'], Codex: ['login', 'status'] };
+
+/**
+ * 전용 계정을 쓰면 「로그인 상태」는 Runner 계정이 아니라 Agent 계정의 로그인이어야 한다.
+ * 이 함수는 Runner의 명령 실행기를 감싸, Runner 설치본 CLI의 로그인 상태 질의만 래퍼 `login-status`(Agent 계정)로 보낸다.
+ * 다른 명령(`--version`, `--help`, git 등)은 그대로 Runner 계정에서 돈다.
+ * 왜: Runner 계정의 로그인으로 「로그인됨」이 나오면, 실제로 세션을 돌릴 Agent 계정이 로그인 안 된 것을 놓친다.
+ */
+export function agentLoginRun(cfg: DedicatedUserConfig, base: RunCommand, deps: DedicatedUserDeps = {}): RunCommand {
+  const realpath = deps.realpath ?? ((p: string) => realpathSync.native(p));
+  return async (cmd, args) => {
+    for (const agent of ['Claude', 'Codex'] as const) {
+      const tail = LOGIN_TAIL[agent];
+      const isLogin = args.length >= tail.length && tail.every((word, i) => args[args.length - tail.length + i] === word);
+      if (!isLogin) continue;
+      let binary: string;
+      try {
+        binary = realpath(cmd);
+      } catch {
+        return base(cmd, args);
+      }
+      if (!inside(binary, join(cfg.root, 'cli', agent.toLowerCase()))) continue;
+      const control = agentControl(cfg, { kind: 'login-status', agent, binary });
+      return base(control.file, control.args);
+    }
+    return base(cmd, args);
+  };
 }

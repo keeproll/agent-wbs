@@ -150,6 +150,29 @@ describe.skipIf(!usable)('awbs-agent-exec 실행 래퍼(bash, 실제 실행)', (
     expect(r.stdout).not.toMatch(/^ok$/m);
   });
 
+  test('login-status: 정해진 인자로 Agent 계정 환경에서 CLI를 부르고, 설치본 밖·다른 Agent CLI는 거부', () => {
+    rmSync(out, { force: true });
+    let r = wrapper(['login-status', '--agent', 'codex', '--', codex]);
+    expect(r.code, r.stderr).toBe(0);
+    let got = recorded();
+    expect(got.args).toEqual(['-c', 'check_for_update_on_startup=false', 'login', 'status']);
+    expect(got.env.HOME).toBe(home);
+    expect(got.env.AWBS_RUNNER_TOKEN).toBeUndefined();
+    rmSync(out, { force: true });
+    r = wrapper(['login-status', '--agent', 'claude', '--', codex]);
+    expect(r.code).toBe(2);
+    r = wrapper(['login-status', '--agent', 'codex', '--', join(root, 'outside-cli')]);
+    expect(r.code).toBe(2);
+    r = wrapper(['login-status', '--agent', 'codex', '--', codex, 'extra']);
+    expect(r.code).toBe(2);
+    expect(existsSync(out)).toBe(false);
+    symlinkSync('2.0.0', join(area, 'cli', 'claude', 'current'));
+    r = wrapper(['login-status', '--agent', 'claude', '--', join(area, 'cli', 'claude', 'current', 'bin', 'claude')]);
+    expect(r.code).toBe(0);
+    got = recorded();
+    expect(got.args).toEqual(['auth', 'status', '--json']);
+  });
+
   test('모르는 하위 명령은 거부', () => {
     expect(wrapper(['sh', '-c', 'id']).code).toBe(2);
   });

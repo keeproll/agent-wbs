@@ -255,6 +255,33 @@ else
   fail "Runner가 $AGENT_ROOT/worktrees 안에 폴더를 못 만듦"
 fi
 
+step '6-1. 예약 실행(cron·at) 막힘'
+# cron.allow(또는 at.allow)가 있으면 그 목록에 없는 계정은 막힌다. 없으면 deny 파일에 Agent가 있어야 한다.
+for pair in "cron:$CRON_ALLOW:$CRON_DENY" "at:$AT_ALLOW:$AT_DENY"; do
+  IFS=: read -r kind allow deny <<< "$pair"
+  if [[ -e $allow ]]; then
+    rc=0; deny_has_agent "$allow" || rc=$?
+    case $rc in
+      0) fail "$kind: $allow에 $AGENT_USER가 있어 예약 실행이 허용됨" ;;
+      1) pass "$kind: $allow가 있고 $AGENT_USER는 없음(막힘)" ;;
+      *) fail "확인 못 함: $allow를 읽지 못함" ;;
+    esac
+  else
+    rc=0; deny_has_agent "$deny" || rc=$?
+    case $rc in
+      0) pass "$kind: $deny에 $AGENT_USER가 있음(막힘)" ;;
+      1) fail "$kind: $deny에 $AGENT_USER가 없어 예약 실행이 허용됨(setup-agent-user.sh를 다시 실행)" ;;
+      *) fail "확인 못 함: $deny를 읽지 못함" ;;
+    esac
+  fi
+done
+# 이미 심어 둔 crontab이 없는지도 본다(파일 이름은 계정 이름 고정).
+if [[ -e $CRON_SPOOL ]] || sudo test -e "$CRON_SPOOL" 2> /dev/null; then
+  fail "Agent 계정의 crontab 파일이 있음: $CRON_SPOOL"
+else
+  pass 'Agent 계정의 crontab 파일 없음'
+fi
+
 step '7. 로그인 상태(돈이 들지 않는 상태 확인만, 경고만)'
 for agent in claude codex; do
   bin=$AGENT_ROOT/cli/$agent/current/bin/$agent

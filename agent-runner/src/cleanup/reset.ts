@@ -86,6 +86,8 @@ export function processGroupEmpty(pgid: number): boolean {
 
 export interface ResetCleanupDeps {
   home: string;
+  /** 전용 계정 격리의 Agent 작업 영역(작업 폴더·입력 사본 위치). 없으면 Runner 홈. */
+  agentRoot?: string | null;
   /** 현재 PC·부팅 식별자(host 보고와 같은 값) */
   identity: () => { hostId: string; bootId: string };
   groupEmpty?: (pgid: number) => boolean;
@@ -189,7 +191,7 @@ export function createResetCleanup(deps: ResetCleanupDeps): ResetCleanup {
       let remoteMain: string | null = null;
       try {
         if (exists) {
-          repo = await GitRepository.open(deps.home, repositoryId);
+          repo = await GitRepository.open(deps.home, repositoryId, { agentRoot: deps.agentRoot ?? null });
           if (normalizeRepoUrl(await repo.source()) !== normalizeRepoUrl(repoUrl)) {
             return failed({ name: 'git:open', ok: false, detail: '로컬 저장소의 등록 원격이 명령의 저장소와 다름 — 정리를 중지합니다.' });
           }

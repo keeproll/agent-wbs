@@ -108,6 +108,24 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
       expect(existsSync(join(R, 'etc/agentwbs/agent-user.pending'))).toBe(false);
     });
 
+    test('리뷰4 P3-3: 설치는 cron.deny·at.deny에 Agent 한 줄을 더하고 기존 줄은 그대로 둔다(실행 규칙보다 먼저)', () => {
+      writeFileSync(join(R, 'etc/at.deny'), 'daemon\nnobody\n');
+      rules(okCheck);
+      const r = setup();
+      expect(r.code, r.out).toBe(0);
+      expect(readFileSync(join(R, 'etc/cron.deny'), 'utf8')).toBe('awbs-agent\n');
+      expect(readFileSync(join(R, 'etc/at.deny'), 'utf8')).toBe('daemon\nnobody\nawbs-agent\n');
+      expect(at(r.log, '/etc/cron.deny')).toBeLessThan(at(r.log, '-m 0440'));
+    });
+
+    test('리뷰4 P3-3: cron.allow에 Agent가 있으면 설치를 시작하지 않는다', () => {
+      writeFileSync(join(R, 'etc/cron.allow'), 'awbs-agent\n');
+      const r = setup();
+      expect(r.code).not.toBe(0);
+      expect(r.out).toContain('예약 실행을 막을 수 없습니다');
+      expect(r.log).toEqual([]);
+    });
+
     test('P1-1: Agent 홈 안(tmp 링크)은 root가 아니라 Agent 권한으로만 다룬다', () => {
       symlinkSync(join(R, 'etc'), join(R, 'home/awbs-agent/tmp'));
       rules(okCheck);
@@ -398,6 +416,18 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
         expect(r.log).toEqual([]);
       });
 
+      test('리뷰4 P3-2: UID 확인이 실패하면 작업 영역 정리(ACL -b·chgrp)와 --purge-work 삭제도 건너뛴다', () => {
+        for (const purge of [false, true]) {
+          fresh({ account: OTHER.replaceAll('999', '998'), uid: '998' });
+          mkdirSync(join(R, 'srv/agentwbs/worktrees/p1'), { recursive: true });
+          const r = run('remove-agent-user.sh', purge ? ['--purge-work'] : []);
+          expect(r.code, r.out).toBe(3);
+          expect(r.log.filter((l) => /setfacl -R|chgrp|rm -rf/.test(l))).toEqual([]);
+          expect(existsSync(join(R, 'srv/agentwbs/worktrees/p1'))).toBe(true);
+          expect(r.out).toContain('작업 영역 정리(ACL·그룹·삭제) 건너뜀');
+        }
+      });
+
       test('계정이 이미 지워졌으면 UID로 종료하지 않는다: 아무도 안 쓰는 UID에 프로세스가 남아 있으면 확인만 하고 종료 코드 3, Windows 차단 유지', () => {
         fresh({ uid: '998' });
         writeFileSync(join(R, '.procs'), '4242\n');
@@ -408,6 +438,20 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
         expect(r.log.some((l) => l.includes('setfacl -P -x'))).toBe(false);
         expect(r.out).toContain('UID 998 프로세스가 남아 있음');
       });
+    });
+
+    test('리뷰4 P3-3: 제거는 Agent crontab 파일을 지우고, 계정이 없어진 뒤 cron.deny·at.deny에서 Agent 줄만 뺀다', () => {
+      mkdirSync(join(R, 'var/spool/cron/crontabs'), { recursive: true });
+      writeFileSync(join(R, 'var/spool/cron/crontabs/awbs-agent'), '* * * * * x\n');
+      writeFileSync(join(R, 'etc/cron.deny'), 'awbs-agent\n');
+      writeFileSync(join(R, 'etc/at.deny'), 'daemon\nawbs-agent\n');
+      const r = run('remove-agent-user.sh');
+      expect(r.code, r.out).toBe(0);
+      expect(existsSync(join(R, 'var/spool/cron/crontabs/awbs-agent'))).toBe(false);
+      expect(at(r.log, 'crontabs/awbs-agent')).toBeLessThan(at(r.log, 'userdel'));
+      expect(readFileSync(join(R, 'etc/at.deny'), 'utf8')).toBe('daemon\n');
+      expect(readFileSync(join(R, 'etc/cron.deny'), 'utf8')).toBe('');
+      expect(at(r.log, '/etc/at.deny')).toBeGreaterThan(at(r.log, 'userdel'));
     });
 
     test('UID 기록 값이 이상하면(0) 멈춘다', () => {
@@ -443,6 +487,8 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
       writeFileSync(join(R, '.agent-deny'), '');
       mkdirSync(join(R, 'etc/sudoers.d'), { recursive: true });
       writeFileSync(join(R, 'etc/sudoers.d/awbs-agent'), `${sudoersContent()}\n`);
+      writeFileSync(join(R, 'etc/cron.deny'), 'awbs-agent\n');
+      writeFileSync(join(R, 'etc/at.deny'), 'daemon\nawbs-agent\n');
     });
     const check = () => run('check-agent-user.sh');
 
@@ -588,6 +634,28 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
       expect(r.out).toContain(`PASS  Agent가 못 함: 목록 읽기 ${R}/Docker`);
     });
 
+    test.each([
+      ['cron.deny에 없음', () => writeFileSync(join(R, 'etc/cron.deny'), ''), 'cron: '],
+      ['at.deny 없음', () => rmSync(join(R, 'etc/at.deny')), 'at: '],
+      ['cron.allow에 Agent가 있음', () => writeFileSync(join(R, 'etc/cron.allow'), 'awbs-agent\n'), 'cron.allow에 awbs-agent가 있어'],
+      ['crontab 파일이 이미 있음', () => { mkdirSync(join(R, 'var/spool/cron/crontabs'), { recursive: true }); writeFileSync(join(R, 'var/spool/cron/crontabs/awbs-agent'), '* * * * * x\n'); }, 'crontab 파일이 있음'],
+    ])('리뷰4 P3-3: 예약 실행이 열려 있으면 FAIL(%s)', (_name, plant, message) => {
+      plant();
+      rules(...baseline());
+      const r = check();
+      expect(r.code).toBe(1);
+      expect(r.out).toContain(message);
+    });
+
+    test('리뷰4 P3-3: cron.allow가 있고 Agent가 없으면 deny 없이도 PASS', () => {
+      writeFileSync(join(R, 'etc/cron.allow'), 'root\n');
+      writeFileSync(join(R, 'etc/cron.deny'), '');
+      rules(...baseline());
+      const r = check();
+      expect(r.out).toContain('cron.allow가 있고 awbs-agent는 없음');
+      expect(r.code, r.out).toBe(0);
+    });
+
     test('P3-10: /tmp 검색이 다른 계정 폴더 때문에 오류를 내도 끝까지 가서 요약한다', () => {
       mkdirSync(join(R, 'tmp/private'));
       chmodSync(join(R, 'tmp/private'), 0o000);
@@ -604,6 +672,79 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
       const r = check();
       expect(r.code).toBe(1);
       expect(r.out).toContain('설치 기록과 다릅니다');
+    });
+  });
+
+  describe('install-agent-cli.sh: Agent 작업 영역에 최신 CLI 설치(가짜 npm)', () => {
+    /** 가짜 npm: view는 .npm-latest-<pkg> 값을, install은 bin/<이름> 스크립트(버전을 말함)를 만든다. */
+    function fakeNpm(): void {
+      exe(join(R, 'bin/npm'), `#!/bin/bash
+R='${R}'
+cmd=$1; shift
+pkg=$1
+case $cmd in
+  view) name=\${pkg%@latest}; f="$R/.npm-latest-\${name//[@\\/]/_}"; [[ -f $f ]] || exit 1; if [[ $name == @openai/codex ]]; then printf '[\\n  "%s"\\n]\\n' "$(cat "$f")"; else printf '"%s"\\n' "$(cat "$f")"; fi ;;
+  install)
+    prefix='' spec=''
+    while (($#)); do case $1 in --prefix) prefix=$2; shift 2 ;; @*) spec=$1; shift ;; *) shift ;; esac; done
+    ver=\${spec##*@}; name=claude; [[ $spec == @openai/codex@* ]] && name=codex
+    say=$ver; [[ -f "$R/.npm-bad-version" ]] && say=0.0.0
+    mkdir -p "$prefix/bin"; printf '#!/bin/sh\\necho "%s (fake)"\\n' "$say" > "$prefix/bin/$name"; chmod 755 "$prefix/bin/$name"
+    printf '%s\\n' "$*" >> "$R/npm.log" ;;
+esac
+`);
+      writeFileSync(join(R, '.npm-latest-_anthropic-ai_claude-code'), '2.1.400');
+      writeFileSync(join(R, '.npm-latest-_openai_codex'), '0.180.0');
+      mkdirSync(join(R, 'srv/agentwbs/cli'), { recursive: true });
+    }
+    const install = (args: string[] = []) => run('install-agent-cli.sh', args);
+    const cli = (...p: string[]) => join(R, 'srv/agentwbs/cli', ...p);
+
+    test('처음: 최신 버전 폴더(0750)에 설치하고 current 링크를 건다. 다시 실행하면 「이미 최신」', async () => {
+      fakeNpm();
+      let r = install();
+      expect(r.code, r.out).toBe(0);
+      const { readlinkSync, statSync } = await import('node:fs');
+      expect(readlinkSync(cli('claude', 'current'))).toBe('2.1.400');
+      expect(readlinkSync(cli('codex', 'current'))).toBe('0.180.0');
+      expect(statSync(cli('codex', '0.180.0')).mode & 0o777).toBe(0o750);
+      expect(r.log).toEqual([]);  // sudo는 쓰지 않는다
+      r = install();
+      expect(r.code).toBe(0);
+      expect(r.out.match(/이미 최신입니다/g)?.length).toBe(2);
+      // 새 버전이 나오면 그 버전으로 바꾼다(항상 최신, owner Q-12)
+      writeFileSync(join(R, '.npm-latest-_openai_codex'), '0.181.0');
+      r = install();
+      expect(r.code, r.out).toBe(0);
+      expect(readlinkSync(cli('codex', 'current'))).toBe('0.181.0');
+    });
+
+    test('설치한 CLI가 다른 버전을 말하면 링크를 바꾸지 않고 종료 코드 1', async () => {
+      fakeNpm();
+      writeFileSync(join(R, '.npm-bad-version'), '');
+      const r = install();
+      expect(r.code).toBe(1);
+      expect(r.out).toContain('설치한 CLI 점검 실패');
+      expect(existsSync(cli('claude', 'current'))).toBe(false);
+      const { readdirSync } = await import('node:fs');
+      expect(readdirSync(cli('claude')).filter((n) => n.startsWith('.install-'))).toEqual([]);
+    });
+
+    test('최신 버전 번호가 안정판 형식이 아니면 설치하지 않는다', () => {
+      fakeNpm();
+      writeFileSync(join(R, '.npm-latest-_openai_codex'), '1.0.0-beta.1');
+      const r = install();
+      expect(r.code).toBe(1);
+      expect(r.out).toContain('최신 버전 형식이 아닙니다');
+      expect(existsSync(cli('codex', 'current'))).toBe(false);
+    });
+
+    test('dry-run은 설치·링크를 바꾸지 않는다', () => {
+      fakeNpm();
+      const r = install(['--dry-run']);
+      expect(r.code, r.out).toBe(0);
+      expect(existsSync(cli('claude', 'current'))).toBe(false);
+      expect(existsSync(join(R, 'npm.log'))).toBe(false);
     });
   });
 });

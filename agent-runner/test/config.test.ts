@@ -38,3 +38,9 @@ test.each([
   expect(error?.name).toBe('ConfigError');
   expect(error?.message).not.toContain('hunter2');
 });
+
+test('전용 계정 격리: AWBS_AGENT_USER=awbs-agent면 agentRoot는 고정 /srv/agentwbs, 없으면 null, 다른 값은 설정 오류', () => {
+  expect(loadConfig({ AWBS_RUNNER_TOKEN }).agentRoot).toBeNull();
+  expect(loadConfig({ AWBS_RUNNER_TOKEN, AWBS_AGENT_USER: 'awbs-agent' }).agentRoot).toBe('/srv/agentwbs');
+  expect(() => loadConfig({ AWBS_RUNNER_TOKEN, AWBS_AGENT_USER: 'root' })).toThrow('AWBS_AGENT_USER');
+});

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readlink, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readlink, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
@@ -58,6 +58,14 @@ async function fixture(extra: Partial<UpdateDeps> = {}) {
 }
 
 describe('cli-update — 유휴 적용·원본 보존(architecture §5.1)', () => {
+  test('전용 계정 격리(dirMode 0o750): 새 버전 폴더도 그룹이 읽고 들어갈 수 있게 만든다(쓰기는 없음)', async () => {
+    const f = await fixture({ dirMode: 0o750 });
+    await f.updater.check();
+    await f.updater.applyPending();
+    expect(await f.current()).toBe('0.173.0');
+    expect((await lstat(join(f.home, 'cli', 'codex', '0.173.0'))).mode & 0o777).toBe(0o750);
+  });
+
   test('최신 확인은 대기만 저장하고, 유휴 적용 뒤 링크·보고의 버전이 함께 바뀐다', async () => {
     const f = await fixture();
     await f.updater.check();

@@ -80,6 +80,19 @@ done
 for p in "${WSL_BLOCK_DIRS[@]}"; do
   [[ -e $p || -L $p ]] && safe_fixed_path "$p"
 done
+for p in "$CRON_DENY" "$AT_DENY"; do
+  safe_fixed_path "$p"
+done
+# cron.allow·at.allow가 있으면 deny 파일은 쓰이지 않는다(allow에 없는 계정만 막힘). 그 경우 allow에 Agent가 없어야 한다.
+for p in "$CRON_ALLOW" "$AT_ALLOW"; do
+  if [[ -e $p ]]; then
+    safe_fixed_path "$p"
+    rc=0; deny_has_agent "$p" || rc=$?
+    ((rc != 0)) || die "$p에 $AGENT_USER가 있어 예약 실행을 막을 수 없습니다. 그 줄을 지운 뒤 다시 실행하세요."
+    if ((rc == 2 && DRY_RUN)); then note "$p: 관리자 권한 없이는 못 읽음(실제 설치 때 sudo로 확인)"; continue; fi
+    ((rc != 2)) || die "$p를 읽지 못했습니다."
+  fi
+done
 
 note "Runner 계정: $RUNNER_USER (홈 $RUNNER_HOME)"
 note "Agent 계정: $AGENT_USER (홈 $AGENT_HOME, 상태: $ACCOUNT)"
@@ -211,6 +224,30 @@ as_agent mkdir -p -m 0700 "$AGENT_HOME/tmp"                              # Agent
 # git 2.43은 경로 접두어(/*)를 지원하지 않아 '*'를 쓴다. 작업 폴더는 Runner가 만들어 소유자가 다르기 때문이다.
 as_agent git -C / config --global --replace-all safe.directory '*'
 
+# ---------------------------------------------------------------- 3-1. 예약 실행 막기
+step '3-1. Agent 계정의 예약 실행(cron·at) 막기'
+note '왜: Agent가 세션 중에 예약 작업을 심으면 세션·Runner가 끝난 뒤에도 Agent 계정으로 명령이 계속 돈다.'
+for deny in "$CRON_DENY" "$AT_DENY"; do
+  rc=0; deny_has_agent "$deny" || rc=$?
+  if ((rc == 0)); then note "$deny: 이미 있음"; continue; fi
+  if ((rc == 2 && DRY_RUN)); then
+    note "$deny: 관리자 권한 없이는 못 읽음. 실제 설치에서는 sudo로 읽고 $AGENT_USER 한 줄을 더한다"
+    as_root install -o root -g root -m 0644 "$TMP/deny" "$deny"
+    continue
+  fi
+  ((rc != 2)) || die "$deny를 읽지 못했습니다."
+  # 기존 줄은 그대로 두고 Agent 계정 이름 한 줄만 더한 새 파일을 만들어 바꾼다(링크·소유자는 위에서 검사함).
+  if [[ -e $deny ]]; then
+    # 읽기만 root로 하고, 쓰는 곳은 Runner 계정의 임시 파일이다(의도한 동작).
+    # shellcheck disable=SC2024
+    if [[ -r $deny ]]; then cat -- "$deny" > "$TMP/deny"; else sudo cat -- "$deny" > "$TMP/deny"; fi
+  else
+    : > "$TMP/deny"
+  fi
+  printf '%s\n' "$AGENT_USER" >> "$TMP/deny"
+  as_root install -o root -g root -m 0644 "$TMP/deny" "$deny"            # 이 계정은 crontab·at을 쓸 수 없음
+done
+
 # ---------------------------------------------------------------- 4. WSL 보호(실행 규칙보다 먼저)
 step '4. WSL 보호(Windows 드라이브·Windows 프로그램 실행 통로 막기)'
 if ((IS_WSL)); then
@@ -268,10 +305,11 @@ FINISHED=1
 # ---------------------------------------------------------------- 끝
 step '끝. 다음에 owner가 할 일'
 cat << EOF
-   1) Agent 계정으로 Claude·Codex에 한 번 로그인합니다(문서 isolation.md 「로그인」 절).
-   2) Runner 환경 파일(agent-runner/.env)에 아래 줄을 넣습니다.
-        AWBS_AGENT_USER=$AGENT_USER
-   3) 확인 스크립트를 돌립니다: bash $HERE/check-agent-user.sh
+   순서는 agent-runner/docs/OWNER-RUNBOOK.md를 따릅니다(3단계부터).
+   3) CLI 설치: bash $HERE/install-agent-cli.sh
+   4) Agent 계정으로 Claude·Codex에 한 번 로그인
+   5) Runner 환경 파일(agent-runner/.env)에 AWBS_AGENT_USER=$AGENT_USER 한 줄
+   6) 확인: bash $HERE/check-agent-user.sh
 EOF
 ((DRY_RUN)) && printf '\n(dry-run이라 아무것도 바꾸지 않았습니다.)\n'
 exit 0
