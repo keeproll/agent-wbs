@@ -30,9 +30,9 @@ import { AreaLoading, PageSkeleton, useDelayedFlag } from '../../shared/ui/loadi
 import { TableScroll } from '../../shared/ui/TableScroll.tsx';
 import { useTopBar } from '../../shared/ui/feedback.tsx';
 import {
-  detailSteps, formatDuration, mergeLine, retryHeld, githubLabel, lastDeploy, mainStatus, position, prLabel, queueRows, resultLabel, runDurationMs, runRows, short,
+  autoReintegrateNote, causeRows, detailSteps, formatDuration, mergeLine, retryState, githubLabel, lastDeploy, mainStatus, position, prLabel, queueRows, resultLabel, runDurationMs, runRows, short,
   stageCounts, stageLabel, STAGE_LABEL, STAGES, summaryLine, tabBadges,
-  type CiRun, type FlakyTest, type QueueItem, type QueueRow, type Stage,
+  type CiRun, type FlakyTest, type QueueRow, type Stage,
 } from './model.ts';
 import './ci.css';
 
@@ -99,15 +99,10 @@ function CiBody({ project }: { project: ProjectState }) {
   if (loading || !runs.data || !queue.data || !flaky.data) return <div className="page scroll">{skeleton && <PageSkeleton menu="ci" />}</div>;
 
   const allRuns = runs.data.items;
-  const main = mainStatus(allRuns, queue.data.items);
+  const main = mainStatus(allRuns);
   const badges = tabBadges(allRuns, queue.data.items, flaky.data.items);
   const titles = new Map((tasks.data?.tasks ?? []).map((t) => [t.taskKey, t.title]));
-  const taskStatus = new Map((tasks.data?.tasks ?? []).map((t) => [t.taskKey, String(t.lifecycleStatus)]));
-  const qRows = queueRows(queue.data.items, titles, allRuns, taskStatus).reverse();
-  /** 서버가 자동 재통합할 실행(대기열의 최신 기준선 실패 차수). 상세 안내에 쓴다. */
-  const autoRuns = new Set(qRows.filter((q) => q.autoReintegrate && q.ciRunId).map((q) => q.ciRunId as string));
-  /** 병합 불일치로 완료가 보류된 Task. 서버는 이 Task의 기준선 실패 재통합(다시 실행)을 409로 거부한다(M7-04 fix3 보류 조건). */
-  const holds = new Set(qRows.filter((q) => q.mismatch).map((q) => q.taskKey));
+  const qRows = queueRows(queue.data.items, titles, allRuns).reverse();
   const badge: Partial<Record<Tab, [number, string]>> = { runs: [badges.runs, 'tab-c alert'], queue: [badges.queue, 'tab-c'], flaky: [badges.flaky, 'tab-c'] };
 
   return (
@@ -148,9 +143,6 @@ function CiBody({ project }: { project: ProjectState }) {
             if (ids.includes(cur) && next) void navigate(listPath({ run: next }));
           }}
           projectId={projectId}
-          holds={holds}
-          queue={queue.data.items}
-          autoRuns={autoRuns}
         />
       )}
       {tab === 'queue' && <QueueTab rows={qRows} />}
@@ -163,8 +155,8 @@ function CiBody({ project }: { project: ProjectState }) {
 
 /* ---------------- 실행 기록 + 상세 ---------------- */
 
-function RunsTab({ runs, stage, runId, onStage, onSelect, onClose, onStep, projectId, holds, autoRuns, queue }: {
-  runs: CiRun[]; stage: string; runId: string; projectId: string; holds: ReadonlySet<string>; autoRuns: ReadonlySet<string>; queue: readonly QueueItem[];
+function RunsTab({ runs, stage, runId, onStage, onSelect, onClose, onStep, projectId }: {
+  runs: CiRun[]; stage: string; runId: string; projectId: string;
   onStage: (s: string) => void; onSelect: (id: string) => void; onClose: () => void; onStep: (ids: string[], delta: 1 | -1) => void;
 }) {
   const rows = runRows(runs, stage);
@@ -270,7 +262,7 @@ function RunsTab({ runs, stage, runId, onStage, onSelect, onClose, onStep, proje
         {detail.data === undefined && (detail.isError
           ? <DetailError error={detail.error} retrying={detail.isFetching} onRetry={() => { void detail.refetch(); }} onClose={onClose} />
           : <div className="card"><AreaLoading label="실행 상세 불러오는 중" /></div>)}
-        {detail.data && <RunDetail run={detail.data} pos={pos} onSelect={onSelect} projectId={projectId} held={retryHeld(detail.data, holds)} autoReintegrate={autoRuns.has(detail.data.id)} merge={mergeLine(detail.data, queue)} />}
+        {detail.data && <RunDetail run={detail.data} pos={pos} onSelect={onSelect} projectId={projectId} />}
       </div>
     </div>
   );
@@ -291,9 +283,12 @@ function DetailError({ error, retrying, onRetry, onClose }: { error: ApiError | 
   );
 }
 
-function RunDetail({ run, pos, onSelect, projectId, held, autoReintegrate, merge }: {
-  run: CiRun; pos: ReturnType<typeof position>; onSelect: (id: string) => void; projectId: string; held: boolean; autoReintegrate: boolean; merge: string | null;
-}) {
+function RunDetail({ run, pos, onSelect, projectId }: { run: CiRun; pos: ReturnType<typeof position>; onSelect: (id: string) => void; projectId: string }) {
+  // 아래 병합·기준선·자동 재통합·다시 실행 표시는 모두 서버 판정값 그대로다(M7-04 fix4). 화면은 다시 계산하지 않는다.
+  const merge = mergeLine(run);
+  const retryOk = retryState(run);
+  const auto = autoReintegrateNote(run);
+  const causes = causeRows(run);
   const { client } = useApi();
   const queryClient = useQueryClient();
   const res = resultLabel(run);
@@ -332,11 +327,20 @@ function RunDetail({ run, pos, onSelect, projectId, held, autoReintegrate, merge
         <span className="kv-l">GitHub</span>
         <span className="kv-v mono" style={{ fontSize: 12.5 }}>{run.githubStatus?.url ? <a href={run.githubStatus.url} target="_blank" rel="noreferrer">{githubLabel(run)}</a> : githubLabel(run)}</span>
         {merge && <><span className="kv-l">병합</span><span className="kv-v mono">{merge}</span></>}
+        {causes.length > 0 && <>
+          <span className="kv-l">원인 후보</span>
+          <span className="kv-v">{causes.map((c, i) => (
+            <span key={`${String(i)}-${c.commit}`} className="ci-cause">
+              <span className="mono">{c.commit}</span>{' '}
+              {c.taskKey ? <Link className="reflink mono" to={LINK.task(c.taskKey)}>{c.taskKey}</Link> : <span className="muted">연결된 Task 없음</span>}
+            </span>
+          ))}</span>
+        </>}
         {run.url && <><span className="kv-l">접속 URL</span><span className="kv-v mono">{run.url}</span></>}
       </div>
       {run.note && <p className="fhint" style={{ margin: '0 0 10px' }}>{run.note}</p>}
       {run.failScope === 'baseline' && run.status === 'fail' && (
-        <p className="fhint" style={{ margin: '0 0 10px' }}>기준선 실패 — main 기준 커밋에서도 실패했습니다({short(run.baseSha)}). 이 Task의 변경 탓이 아니므로 Task 실패로 세지 않습니다.{autoReintegrate && ' main이 바뀌면 서버가 자동으로 다시 통합 확인합니다.'}</p>
+        <p className="fhint" style={{ margin: '0 0 10px' }}>기준선 실패 — main 기준 커밋에서도 실패했습니다({short(run.baseSha)}). 이 Task의 변경 탓이 아니므로 Task 실패로 세지 않습니다.{run.baselineResolved === true && ' 서버가 이 기준선 실패를 해소로 판정했습니다(main 이동 또는 이후 올바른 ① 통과).'}{auto && ` ${auto}`}</p>
       )}
       <h3 className="ds-h4">단계</h3>
       {steps.length === 0 ? <p className="empty">보고된 단계가 없습니다.</p> : (
@@ -352,12 +356,12 @@ function RunDetail({ run, pos, onSelect, projectId, held, autoReintegrate, merge
       )}
       {run.logExcerpt && <><h3 className="ds-h4">실패 로그 (요약)</h3><pre className="code" style={{ whiteSpace: 'pre-wrap' }}>{run.logExcerpt}</pre></>}
       {run.artifacts.length > 0 && <><h3 className="ds-h4">{shotsTitle}</h3><div className="ds-chips">{run.artifacts.map((z) => <span key={z} className="tag mono">{z}</span>)}</div></>}
-      {run.status === 'fail' && (
+      {retryOk.show && (
         <div className="form-acts" style={{ marginTop: 10 }}>
-          <span className="muted" style={{ marginRight: 'auto' }}>{held
-            ? `${run.taskKey ?? ''}의 실제 병합이 검증 근거와 달라 완료를 보류 중입니다. 병합 결과를 확인하기 전에는 기준선 실패를 다시 통합할 수 없습니다.`
+          <span className="muted" style={{ marginRight: 'auto' }}>{retryOk.reason
+            ? `다시 실행할 수 없습니다 — ${retryOk.reason}`
             : '원인을 고친 뒤 다시 실행합니다. Task 검사 실패는 Runner가 Agent에게 로그를 전달해 같은 시도 안에서 고치게 합니다.'}</span>
-          <BusyButton busy={retry.busy} busyLabel="요청 중…" small disabled={held} onClick={() => { void retry.save(); }}>다시 실행</BusyButton>
+          <BusyButton busy={retry.busy} busyLabel="요청 중…" small disabled={!retryOk.allowed} onClick={() => { void retry.save(); }}>다시 실행</BusyButton>
         </div>
       )}
       {retry.conflictModal}

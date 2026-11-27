@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  attemptCiRef, baselineActive, detailSteps, mergeLine, retryHeld, formatDuration, githubLabel, lastDeploy, mainStatus, openFailures, position, queueRows, resultLabel, runDurationMs,
+  attemptCiRef, causeRows, detailSteps, mergeLine, retryState, autoReintegrateNote, formatDuration, githubLabel, lastDeploy, mainStatus, openFailures, position, queueRows, resultLabel, runDurationMs,
   runRows, stageCounts, summaryLine, tabBadges,
   type CiRun, type QueueItem,
 } from '../src/features/ci/model.ts';
@@ -8,6 +8,8 @@ import {
 const run = (o: Partial<CiRun> & Pick<CiRun, 'id' | 'stage' | 'status'>): CiRun => ({
   runKey: o.id.toUpperCase(), taskKey: null, attemptId: null, ref: 'main', pr: null, trigger: null, baseSha: null, headSha: null,
   mergeSha: null, treeSha: null, pipelineSha: null, steps: [], failStep: null, failScope: null, logExcerpt: null, artifacts: [], url: null,
+  baselineResolved: null, autoReintegrate: 'none', autoReintegrateReason: null, retryAllowed: false, retryBlockedReason: null,
+  taskStatus: null, mergeStatus: null, mergeCompleted: false, actualMergeSha: null,
   startedAt: '2026-11-03T00:00:00.000Z', ...o,
 } as CiRun);
 const sha = (c: string) => c.repeat(40);
@@ -83,7 +85,7 @@ describe('빌드·통합 화면 계산(UI-08, P ciVM L4765–4801)', () => {
     // Runner가 E2E 수와 끝난 시각을 보고하면 원본처럼 「E2E 12 / 12 · 끝난 시각」
     const withE2e = [run({ id: 'n', stage: 'night', status: 'pass', headSha: sha('c'), e2e: { passed: 12, total: 12 }, startedAt: '2026-11-02T17:00:00.000Z', finishedAt: '2026-11-02T17:14:00.000Z' })];
     expect(mainStatus(withE2e).l).toBe(`main 정상 · ${'c'.repeat(7)} · E2E 12 / 12 · 2026-11-03 02:14`);
-    const broken = [run({ id: 'b', stage: 'task', status: 'fail', failScope: 'baseline', baseSha: sha('d'), startedAt: '2026-11-04T00:00:00.000Z' }), ...runs];
+    const broken = [run({ id: 'b', stage: 'task', status: 'fail', failScope: 'baseline', baselineResolved: false, baseSha: sha('d'), startedAt: '2026-11-04T00:00:00.000Z' }), ...runs];
     expect(mainStatus(broken)).toEqual({ l: `main 깨짐 · 기준선 검사 실패 · ${'d'.repeat(7)} · 2026-11-04 09:00`, c: 'vf v-fail' });
     expect(mainStatus([])).toEqual({ l: 'main 빌드 기록 없음', c: 'vf v-none' });
     // 통합 확인 실패는 병합되지 않았으므로 main을 깨지 않는다
@@ -149,63 +151,60 @@ describe('빌드·통합 화면 계산(UI-08, P ciVM L4765–4801)', () => {
     expect(attemptCiRef(list, 'a3')).toBeNull();
   });
 
-  describe('리뷰 fix1(Codex P2)', () => {
-    const qi = (o: Partial<QueueItem> & Pick<QueueItem, 'id' | 'status'>): QueueItem => ({
-      pr: 11, taskKey: 'TASK-0006', position: 1, qaHeadSha: null, syncedHeadSha: null, baseSha: null, ciRunId: null, actualMergeSha: null, ...o,
-    } as QueueItem);
-
-    it('P2-1: ② PASS의 mergeSha만으로 main 정상이라 하지 않는다. 연결 대기열이 병합됨일 때만, 병합 불일치면 확인 필요', () => {
-      const intPass = run({ id: 'i', stage: 'int', status: 'pass', pr: 11, mergeSha: sha('e'), startedAt: '2026-11-04T00:00:00.000Z' });
-      expect(mainStatus([intPass], [qi({ id: 'q', status: 'merged', ciRunId: 'i', actualMergeSha: sha('e') })]).l).toBe(`main 정상 · ${'e'.repeat(7)} · 2026-11-04 09:00`);
-      expect(mainStatus([intPass], [qi({ id: 'q', status: 'checking', ciRunId: 'i', actualMergeSha: sha('f') })]))
-        .toEqual({ l: `main 확인 필요 · 병합 불일치 · ${'f'.repeat(7)} · 2026-11-04 09:00`, c: 'vf v-fail' });
-      // 대기열에서 병합을 확인하지 못한 ② PASS는 근거가 아니다(다음 근거로 넘어간다)
-      expect(mainStatus([intPass, ...runs], []).l).toBe(`main 정상 · ${'c'.repeat(7)} · 2026-11-03 02:00`);
-    });
-
-    it('P2-2: 같은 기준·같은 정의의 더 나중 ① PASS가 있으면 기준선 실패는 해소(서버 경보 해소 규칙)', () => {
+  describe('서버 판정값만 표시(M7-04 fix4) — 화면은 판정하지 않는다', () => {
+    it('기준선 실패의 유효 여부는 baselineResolved 그대로(같은 기준·정의의 PASS가 있어도 서버가 false면 깨짐)', () => {
       const fail = run({ id: 'b', stage: 'task', status: 'fail', failScope: 'baseline', baseSha: sha('d'), pipelineSha: sha('9'), startedAt: '2026-11-04T00:00:00.000Z' });
-      const pass = (o: Partial<CiRun>) => run({ id: 'p', stage: 'task', status: 'pass', baseSha: sha('d'), pipelineSha: sha('9'), startedAt: '2026-11-04T01:00:00.000Z', ...o });
-      expect(baselineActive([pass({}), fail], fail)).toBe(false);
-      expect(mainStatus([pass({}), fail, ...runs]).l).toBe(`main 정상 · ${'c'.repeat(7)} · 2026-11-03 02:00`);
-      // 다른 정의로 실행한 PASS, 다른 기준의 PASS, 더 먼저 시작한(늦게 끝난) PASS는 해소하지 않는다
-      expect(baselineActive([pass({ pipelineSha: sha('8') }), fail], fail)).toBe(true);
-      expect(baselineActive([pass({ baseSha: sha('a') }), fail], fail)).toBe(true);
-      expect(baselineActive([fail, pass({ startedAt: '2026-11-03T23:00:00.000Z', finishedAt: '2026-11-04T02:00:00.000Z' })], fail)).toBe(true);
+      const samePass = run({ id: 'p', stage: 'task', status: 'pass', baseSha: sha('d'), pipelineSha: sha('9'), startedAt: '2026-11-04T01:00:00.000Z' });
+      // 재리뷰 재현 A: 잘못된 정의의 같은 PASS — 서버는 해소하지 않는다(false)
+      expect(mainStatus([samePass, { ...fail, baselineResolved: false }, ...runs]).l).toBe(`main 깨짐 · 기준선 검사 실패 · ${'d'.repeat(7)} · 2026-11-04 09:00`);
+      // 재리뷰 재현 B: main 이동 등으로 서버가 해소(true) — 같은 base의 PASS가 없어도 깨짐을 남기지 않는다
+      expect(mainStatus([{ ...fail, baselineResolved: true }, ...runs]).l).toBe(`main 정상 · ${'c'.repeat(7)} · 2026-11-03 02:00`);
     });
 
-    it('P2-3: 「자동 재통합」 안내는 그 Task의 최신 차수·Task가 gate·보류 없음일 때만', () => {
-      const b = run({ id: 'rb', stage: 'task', status: 'fail', failScope: 'baseline', runKey: 'RB' });
-      const all = [b];
-      const gate = new Map([['TASK-0006', 'gate']]);
-      const one = queueRows([qi({ id: 'q1', status: 'failed', ciRunId: 'rb', position: 1 })], new Map(), all, gate);
-      expect([one[0]?.st, one[0]?.autoReintegrate]).toEqual(['기준선 실패 — main 수정 뒤 자동 재통합', true]);
-      // 새 차수가 생겼으면 옛 차수는 과거 결과일 뿐
-      const two = queueRows([qi({ id: 'q1', status: 'failed', ciRunId: 'rb', position: 1 }), qi({ id: 'q2', status: 'checking', position: 2 })], new Map(), all, gate);
-      expect([two[0]?.st, two[0]?.autoReintegrate]).toEqual(['기준선 실패', false]);
-      // 병합 불일치 보류가 걸린 Task, 이미 끝난 Task도 자동 재통합 대상이 아니다
-      const held = queueRows([qi({ id: 'q1', status: 'failed', ciRunId: 'rb', position: 1 }), qi({ id: 'q0', status: 'checking', position: 0, actualMergeSha: sha('f') })], new Map(), all, gate);
-      expect(held.find((r) => r.id === 'q1')?.st).toBe('기준선 실패');
-      expect(queueRows([qi({ id: 'q1', status: 'failed', ciRunId: 'rb' })], new Map(), all, new Map([['TASK-0006', 'done']]))[0]?.st).toBe('기준선 실패');
-      expect(queueRows([qi({ id: 'q1', status: 'failed', ciRunId: 'rb' })], new Map(), all, gate)[0]?.c).toBe('sc sc-warn');
+    it('main 배지의 통합 확인 근거는 서버 mergeStatus·actualMergeSha 그대로', () => {
+      const intPass = run({ id: 'i', stage: 'int', status: 'pass', pr: 11, mergeSha: sha('e'), startedAt: '2026-11-04T00:00:00.000Z' });
+      expect(mainStatus([{ ...intPass, mergeStatus: 'merged', actualMergeSha: sha('e'), mergeCompleted: true }]).l).toBe(`main 정상 · ${'e'.repeat(7)} · 2026-11-04 09:00`);
+      expect(mainStatus([{ ...intPass, mergeStatus: 'checking', actualMergeSha: sha('f') }]))
+        .toEqual({ l: `main 확인 필요 · 병합 불일치 · ${'f'.repeat(7)} · 2026-11-04 09:00`, c: 'vf v-fail' });
+      // 병합 여부를 서버가 확인하지 않은 ② PASS는 근거가 아니다
+      expect(mainStatus([intPass, ...runs]).l).toBe(`main 정상 · ${'c'.repeat(7)} · 2026-11-03 02:00`);
     });
 
-    it('P2-4: 보류로 다시 실행을 막는 것은 기준선 실패 실행뿐(서버가 보류를 검사하는 재통합 경로)', () => {
-      const holds = new Set(['TASK-0006']);
-      expect(retryHeld(run({ id: 'a', stage: 'task', status: 'fail', failScope: 'baseline', taskKey: 'TASK-0006' }), holds)).toBe(true);
-      expect(retryHeld(run({ id: 'a', stage: 'task', status: 'fail', failScope: 'task', taskKey: 'TASK-0006' }), holds)).toBe(false);
-      expect(retryHeld(run({ id: 'a', stage: 'task', status: 'fail', failScope: 'baseline', taskKey: 'TASK-0001' }), holds)).toBe(false);
+    it('상세의 병합 줄은 mergeStatus·actualMergeSha·mergeCompleted 그대로', () => {
+      const r = run({ id: 'i', stage: 'int', status: 'pass', pr: 7, mergeSha: sha('c') });
+      expect(mergeLine({ ...r, mergeStatus: 'merged', actualMergeSha: sha('c'), mergeCompleted: true })).toBe(`병합됨 → main @ ${'c'.repeat(7)} · 완료`);
+      expect(mergeLine({ ...r, mergeStatus: 'merged', actualMergeSha: sha('c'), mergeCompleted: false })).toBe(`병합됨 → main @ ${'c'.repeat(7)} · Task 완료 처리 전`);
+      expect(mergeLine({ ...r, mergeStatus: 'checking', actualMergeSha: sha('d') })).toBe(`병합 불일치 — 실제 병합 ${'d'.repeat(7)} · 완료 보류 (검사한 병합본 ${'c'.repeat(7)})`);
+      expect(mergeLine({ ...r, mergeStatus: 'checking' })).toBe(`통합 확인 중 — 병합 전 (검사한 병합본 ${'c'.repeat(7)})`);
+      expect(mergeLine(r)).toBe(`대기열 기록 없음 — 병합 여부 미확인 (검사한 병합본 ${'c'.repeat(7)})`);
+      expect(mergeLine(run({ id: 'y', stage: 'task', status: 'pass', mergeSha: sha('c') }))).toBeNull();
     });
-  });
 
-  it('재리뷰 P2-1: 상세의 병합 줄은 연결 대기열의 서버 상태 그대로(병합됨일 때만 「병합됨」)', () => {
-    const r = run({ id: 'i', stage: 'int', status: 'pass', pr: 7, mergeSha: sha('c') });
-    const qi = (o: Partial<QueueItem>): QueueItem => ({ id: 'q', pr: 7, taskKey: 'TASK-0003', position: 1, status: 'merged', qaHeadSha: null, syncedHeadSha: null, baseSha: null, ciRunId: 'i', actualMergeSha: sha('c'), ...o } as QueueItem);
-    expect(mergeLine(r, [qi({})])).toBe(`병합됨 → main @ ${'c'.repeat(7)}`);
-    expect(mergeLine(r, [qi({ status: 'checking', actualMergeSha: sha('d') })])).toBe(`병합 불일치 — 실제 병합 ${'d'.repeat(7)} · 완료 보류 (검사한 병합본 ${'c'.repeat(7)})`);
-    expect(mergeLine(r, [qi({ status: 'checking', actualMergeSha: null })])).toBe(`통합 확인 중 — 병합 전 (검사한 병합본 ${'c'.repeat(7)})`);
-    expect(mergeLine(r, [])).toBe(`대기열 기록 없음 — 병합 여부 미확인 (검사한 병합본 ${'c'.repeat(7)})`);
-    expect(mergeLine(run({ id: 'x', stage: 'int', status: 'fail' }), [])).toBeNull();
-    expect(mergeLine(run({ id: 'y', stage: 'task', status: 'pass', mergeSha: sha('c') }), [])).toBeNull();
+    it('자동 재통합 안내는 autoReintegrate·사유 그대로(대기열 행 이름도 같은 값)', () => {
+      const b = (o: Partial<CiRun>) => run({ id: 'rb', stage: 'task', status: 'fail', failScope: 'baseline', runKey: 'RB', ...o });
+      expect(autoReintegrateNote(b({ autoReintegrate: 'pending' }))).toBe('main이 바뀌면 서버가 자동으로 다시 통합 확인합니다.');
+      expect(autoReintegrateNote(b({ autoReintegrate: 'pending', autoReintegrateReason: '새 main 관측 대기' }))).toBe('main이 바뀌면 서버가 자동으로 다시 통합 확인합니다. (새 main 관측 대기)');
+      expect(autoReintegrateNote(b({ autoReintegrate: 'blocked', autoReintegrateReason: '대조 대기(reconcile)' }))).toBe('자동 재통합 보류 — 대조 대기(reconcile)');
+      expect(autoReintegrateNote(b({ autoReintegrate: 'blocked' }))).toBe('자동 재통합 보류 — 사유 미보고');
+      expect(autoReintegrateNote(b({}))).toBeNull();
+      const q = { id: 'q', pr: 11, taskKey: 'TASK-0006', position: 1, status: 'failed', qaHeadSha: null, syncedHeadSha: null, baseSha: null, ciRunId: 'rb', actualMergeSha: null } as QueueItem;
+      expect(queueRows([q], new Map(), [b({ autoReintegrate: 'pending' })])[0]?.st).toBe('기준선 실패 — main 수정 뒤 자동 재통합');
+      expect(queueRows([q], new Map(), [b({ autoReintegrate: 'blocked' })])[0]?.st).toBe('기준선 실패 — 자동 재통합 보류');
+      expect(queueRows([q], new Map(), [b({})])[0]?.st).toBe('기준선 실패');
+    });
+
+    it('다시 실행은 retryAllowed·retryBlockedReason 그대로(Gate 밖 기준선 실패도 서버가 허용하면 허용)', () => {
+      const f = run({ id: 'f', stage: 'task', status: 'fail', failScope: 'baseline', taskKey: 'TASK-0006', taskStatus: 'verifying' });
+      expect(retryState({ ...f, retryAllowed: true })).toEqual({ show: true, allowed: true, reason: null });
+      expect(retryState({ ...f, retryAllowed: false, retryBlockedReason: '병합 불일치 보류' })).toEqual({ show: true, allowed: false, reason: '병합 불일치 보류' });
+      expect(retryState({ ...f, retryAllowed: false })).toEqual({ show: true, allowed: false, reason: '서버가 지금 다시 실행을 허용하지 않습니다.' });
+      expect(retryState(run({ id: 'p', stage: 'task', status: 'pass' })).show).toBe(false);
+    });
+
+    it('원인 후보: 커밋과 서버가 연결한 Task(없으면 null)', () => {
+      const r = run({ id: 'n', stage: 'night', status: 'fail', causeCandidates: [{ commit: sha('a'), taskKey: 'TASK-0003' }, { commit: sha('b'), taskKey: null }] });
+      expect(causeRows(r)).toEqual([{ commit: 'aaaaaaa', taskKey: 'TASK-0003' }, { commit: 'bbbbbbb', taskKey: null }]);
+      expect(causeRows(run({ id: 'x', stage: 'night', status: 'fail' }))).toEqual([]);
+    });
   });
 });

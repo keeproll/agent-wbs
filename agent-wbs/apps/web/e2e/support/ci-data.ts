@@ -52,6 +52,13 @@ const run = (s: Src): Run => ({
   failScope: s.st === 'fail' ? (s.baseline ? 'baseline' : 'task') : null, logExcerpt: s.log ?? null, artifacts: s.shots ?? [], url: s.url ?? null, startedAt: kst(s.at),
   finishedAt: s.st === 'run' || s.st === 'queued' ? null : finished(s), note: s.note ?? null, e2e: s.e2e ? { passed: s.e2e[0], total: s.e2e[1] } : null,
   githubStatus: githubStatus(s, s.stage === 'task' ? sha(s.ref.split('@ ')[1] ?? 'a') : MAIN),
+  // 서버 판정값(M7-04 fix4). 시험 자료는 아래 대기열과 맞춘 기본값이고, 시험마다 바꿔 서버의 다른 판정을 흉내 낸다.
+  baselineResolved: s.st === 'fail' && s.baseline ? false : null,
+  autoReintegrate: 'none', autoReintegrateReason: null,
+  retryAllowed: s.st === 'fail', retryBlockedReason: null,
+  taskStatus: null,
+  mergeStatus: s.merged ? 'merged' : null, actualMergeSha: s.merged ? sha(s.merged) : null, mergeCompleted: Boolean(s.merged),
+  causeCandidates: [],
 });
 
 /** 원본 CI_MOCK.runs(P L3533–3544)를 원본 화면 순서(추가한 순서의 역순)로. 서버 순서는 serverOrder()가 만든다. */

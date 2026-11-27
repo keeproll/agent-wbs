@@ -20,3 +20,6 @@
 /* 제목 순서(재리뷰 P3): 상세의 소제목은 h2(실행 이름) 다음이라 h3다. 원본 h4(P L250)와 같은 굵기로 보이게 한다.
    탭 카드 제목 h2는 공통 product.css의 .dp-h h2가 원본 .dp-h h3 모양으로 맞춘다. */
 h3.ds-h4 { font-weight: 600; }
+
+/* 원인 후보(M7-04 fix4 causeCandidates): 커밋과 Task 링크를 한 줄씩. */
+.ci-cause { display: block; }
