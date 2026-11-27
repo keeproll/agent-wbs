@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { internalTerms, type ReportSnapshotData } from '@awbs/shared';
 import {
-  appendixTitle, changedLabel, defaultView, docTitle, externalDoc, settingsNote, snapLabel, formProblem, internalDoc, lateLabel, quickRange, rowView, type ReportRow,
+  appendixTitle, changedLabel, defaultView, docTitle, externalDoc, settingsNote, snapLabel, uncertainNote, formProblem, internalDoc, lateLabel, quickRange, rowView, type ReportRow,
 } from '../src/features/report/model.ts';
 
 const T = (kst: string) => new Date(`${kst}:00+09:00`).toISOString();
@@ -162,4 +162,11 @@ describe('재리뷰 2 문제 7: 생성 시각과 상태 기준 시각을 따로 
     expect(snapLabel(T('2026-11-27 09:10'), empty)).toBe('이 보고서는 2026-11-27 09:10 시점의 스냅샷입니다. 이후 데이터가 바뀌어도 내용은 바뀌지 않습니다.');
     expect(appendixTitle(empty)).toBe('부록. 전체 Task 현황 (보고서 생성 시점)');
   });
+});
+
+test('재리뷰 4: 경계 불확실 건수가 있으면 넣지 않았다고 알린다', () => {
+  const s = { ...empty, basis: { asOf: '2026-11-01T15:00:00.000000Z', stateFrom: null, missing: [], currentSettings: [], uncertain: 2 } };
+  expect(uncertainNote(s)).toBe('경계 불확실 2건 — 실제 커밋 시각을 알 수 없어 이 시점 상태에 넣지 않았습니다. 커밋 시계 값으로는 기준 전이지만 실제로 확정됐는지 확인되지 않은 변경입니다.');
+  expect(uncertainNote({ ...s, basis: { ...s.basis, uncertain: 0 } })).toBeNull();
+  expect(uncertainNote(empty)).toBeNull();
 });

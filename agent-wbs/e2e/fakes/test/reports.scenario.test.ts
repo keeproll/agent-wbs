@@ -84,7 +84,7 @@ beforeAll(async () => {
     await seedDemo(past, db.href);
     await fixture(past);
     // 실제 커밋 시각(track_commit_timestamp)은 시험 시계로 옮길 수 없다. 준비 자료는 「그때 커밋했다」로 커밋 시계 값을 실제 커밋 시각으로 옮겨 적는다(관리자만 할 수 있는 시험 준비).
-    await past.query('insert into commit_real(xid,stamp,committed_at) select xid,committed_at,committed_at from commit_log on conflict do nothing');
+    await past.query('insert into commit_real(xid,stamp,committed_at,observed_at) select xid,committed_at,committed_at,committed_at from commit_log on conflict do nothing');
   } finally {
     await past.end();
     await owner.query(`alter database "${name}" reset awbs.test_clock_offset`);
@@ -565,7 +565,7 @@ describe('기간 말 재구성(owner 2026-11-27 아이템 13): 그때 바로 찍
     try {
       await w.query('begin');
       await w.query('insert into commit_log(xid,committed_at) values(pg_current_xact_id(),$1)', [kst('2026-11-10', '00:00')]);
-      await w.query('insert into commit_real(xid,stamp,committed_at) values(pg_current_xact_id(),$1,$1)', [kst('2026-11-10', '00:00')]);
+      await w.query('insert into commit_real(xid,stamp,committed_at,observed_at) values(pg_current_xact_id(),$1,$1,$1)', [kst('2026-11-10', '00:00')]);
       await w.query("insert into global_log(tbl,row_id,op,data) values('log_start','00000000-0000-0000-0000-000000000000','seed',null)");
       await w.query('commit');
     } finally { w.release(); }
@@ -583,7 +583,7 @@ describe('기간 말 재구성(owner 2026-11-27 아이템 13): 그때 바로 찍
     try {
       await w.query('begin');
       await w.query('insert into commit_log(xid,committed_at) values(pg_current_xact_id(),$1)', [kst('2026-11-10', '00:00')]);
-      await w.query('insert into commit_real(xid,stamp,committed_at) values(pg_current_xact_id(),$1,$1)', [kst('2026-11-10', '00:00')]);
+      await w.query('insert into commit_real(xid,stamp,committed_at,observed_at) values(pg_current_xact_id(),$1,$1,$1)', [kst('2026-11-10', '00:00')]);
       await w.query("insert into state_log(project_id,tbl,row_id,op,data) values($1,'projects',$1,'seed',null)", [id]);
       await w.query('commit');
     } finally { w.release(); }
@@ -593,7 +593,7 @@ describe('기간 말 재구성(owner 2026-11-27 아이템 13): 그때 바로 찍
       const old = await buildSnapshot(c, id, { kind: 'weekly', from: '2026-10-26', to: '2026-11-01', at: kst('2026-11-02', '07:00') });
       const recent = await buildSnapshot(c, id, { kind: 'custom', from: '2026-11-10', to: seoulDay(new Date()), at: new Date().toISOString() });
       await c.query('commit');
-      expect(old.basis).toEqual({ asOf: expect.any(String), stateFrom: kst('2026-11-10', '00:00'), missing: ['state'], currentSettings: expect.any(Array) });
+      expect(old.basis).toEqual({ asOf: expect.any(String), stateFrom: kst('2026-11-10', '00:00'), missing: ['state'], currentSettings: expect.any(Array), uncertain: 0 });
       expect([old.summary.statuses, old.active, old.all, old.next, old.done]).toEqual([[], [], [], [], []]);
       // 추가 전용 기록(재조정·중단)은 시각으로 알 수 있어 그대로 남는다.
       expect(old.replans.map((r) => r.replanId)).toEqual(['RP-002']);

@@ -290,6 +290,55 @@ describe('재리뷰 3 문제 2: 동시 기간 지정 생성', () => {
   });
 });
 
+describe('재리뷰 4: 실제 커밋 시각을 모르면 지어내지 않는다', () => {
+  test('A. 앱 역할이 커밋 전 자기 트랜잭션 안에서 정리를 불러도 그 변경은 확정 시각을 받지 않는다', async () => {
+    const own = await pool.connect();
+    let t: string;
+    try {
+      await own.query('begin');
+      await own.query('set constraints all immediate');
+      await own.query("update tasks set title='self-settled-before-commit' where task_key='TASK-0012'");
+      await own.query('select awbs_settle_commits()');
+      expect((await own.query("select count(*)::int n from state_log l join commit_real c on c.xid=l.xid where l.data->>'title'='self-settled-before-commit'")).rows[0]?.n).toBe(0);
+      await new Promise((r) => setTimeout(r, 20));
+      t = (await owner.query<{ at: string }>(`select to_char(clock_timestamp() at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') at`)).rows[0]?.at ?? '';
+      await new Promise((r) => setTimeout(r, 20));
+      await own.query('commit');
+    } finally { await own.query('rollback').catch(() => undefined); own.release(); }
+    expect(titleOf((await capture(t)).log, 'TASK-0012')).not.toBe('self-settled-before-commit');
+    expect(titleOf((await capture()).log, 'TASK-0012')).toBe('self-settled-before-commit');
+  });
+
+  test('B. 실제 커밋 시각이 없는 커밋(기록이 꺼져 있던 때)은 관측 전 경계에서 「불확실」로 빼고 건수를 보고서에 적는다', async () => {
+    // xid 2(동결 표시 트랜잭션)은 「커밋됨」이지만 실제 커밋 시각이 없다. 기록을 끈 동안의 커밋과 같은 상태를 만든다(관리자 전용 시험 준비).
+    const w = await owner.connect();
+    let stamp: string;
+    try {
+      await w.query('begin');
+      // 커밋 시계 값은 실제로 시계를 한 칸 올려 받는다(이력의 다른 값과 순서가 맞게).
+      stamp = (await w.query<{ at: string }>(`select to_char(awbs_report_anchor() at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') at`)).rows[0]?.at ?? '';
+      await w.query("insert into commit_log(xid,committed_at) values('2'::xid8,$1)", [stamp]);
+      await w.query(`insert into state_log(xid,project_id,tbl,row_id,op,data)
+        select '2'::xid8,t.project_id,'tasks',t.id,'update',to_jsonb(t)||'{"title":"committed-while-tracking-off"}' from tasks t where task_key='TASK-0012'`);
+      await w.query('commit');
+    } finally { w.release(); }
+    await new Promise((r) => setTimeout(r, 30));
+    await owner.query('select awbs_settle_commits()');
+    const row = (await owner.query<{ committed_at: string | null; observed: string }>(
+      `select committed_at,to_char(observed_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') observed from commit_real where xid='2'::xid8`)).rows[0];
+    expect(row?.committed_at).toBeNull();
+    const observed = row?.observed ?? '';
+    // 커밋 시계 값 뒤·관측 전 경계: 그 사이 언제 커밋됐는지 모른다 → 넣지 않고 「불확실 1건」
+    const between = await capture(micro(stamp, 1));
+    expect(titleOf(between.log, 'TASK-0012')).not.toBe('committed-while-tracking-off');
+    expect(between.log.basis?.uncertain).toBe(1);
+    // 관측 뒤 경계: 그 전에 커밋된 것이 확실하다 → 넣는다
+    const after = await capture(micro(observed, 1));
+    expect(titleOf(after.log, 'TASK-0012')).toBe('committed-while-tracking-off');
+    expect(after.log.basis?.uncertain ?? 0).toBe(0);
+  });
+});
+
 describe('자정 경계(마지막: 커밋 시계를 앞으로 옮긴다)', () => {
   test('자정 직전에 커밋한 변경은 그날, 자정 전에 시작해 자정 뒤에 커밋한 변경은 다음 날. 다시 만들어도 같다', async () => {
     // 2027-05-01 23:59:58(서울)로 커밋 시계를 옮겨 커밋한다(관리자 전용 시험 시계). 커밋 시계는 줄지 않는다.

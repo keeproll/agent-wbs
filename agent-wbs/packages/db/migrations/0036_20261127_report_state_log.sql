@@ -32,10 +32,13 @@ CREATE TABLE public.commit_log (
 -- 실제 커밋보다 먼저 매겨질 수 있다. 그래서 트랜잭션이 **실제로 커밋된 시각**(track_commit_timestamp)을 정리 단계(0037 awbs_settle_commits)가
 -- 커밋 뒤에 옮겨 적는다. 보고서는 「커밋 시계 < T 이고 실제 커밋 시각 < T」인 변경만 T 전으로 본다.
 -- 옮겨 적는 이유: 실제 커밋 시각은 오래되면 vacuum freeze 때 지워진다.
+-- committed_at이 비어 있으면 실제 커밋 시각을 모른다(기록을 끈 동안의 커밋 등). 커밋 시계 값으로 채우지 않는다(지어내지 않는다).
+-- 그때 아는 것: 커밋은 stamp(커밋 직전·이전에 매김) 뒤, observed_at(정리가 「커밋됨」을 처음 본 시각) 전에 일어났다.
 CREATE TABLE public.commit_real (
   xid xid8 PRIMARY KEY,
   stamp timestamp with time zone NOT NULL,
-  committed_at timestamp with time zone NOT NULL
+  committed_at timestamp with time zone,
+  observed_at timestamp with time zone NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE public.state_log (

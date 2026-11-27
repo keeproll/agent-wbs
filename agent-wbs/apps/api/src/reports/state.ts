@@ -14,6 +14,9 @@ import { FALLBACK_CURRENT, GLOBAL_TABLES, MIXED_TABLES, PROJECT_TABLES, type Tra
  * - 「T 전」은 **커밋 기준**이다. 이력 행을 쓴 트랜잭션의 커밋 시계 값과 실제 커밋 시각(commit_real, track_commit_timestamp)이
  *   모두 T보다 작은 것만 쓴다. 커밋 시계 값만 보면, 제약 트리거를 일찍 실행해(SET CONSTRAINTS ALL IMMEDIATE) 값을 먼저 받고
  *   늦게 커밋한 변경이 T 전으로 잘못 들어간다(재리뷰 3 문제 1).
+ * - 실제 커밋 시각을 모르면(기록이 꺼져 있던 때) 지어내지 않는다. 그 커밋은 「커밋 시계 값 뒤, 정리가 처음 본 시각(observed_at) 전」에
+ *   일어났다는 것만 안다. 그래서 관측 시각이 T 전이면 넣고, 커밋 시계 값이 T 뒤면 빼고, 그 사이면 **넣지 않고 「경계 불확실」로 센다**
+ *   (스냅샷 basis.uncertain, 재리뷰 4 — 근거: reports/README.md).
  *   - 커밋 시계는 커밋 순서대로 단조 증가한다(PC 시계가 뒤로 가도 줄지 않는다).
  *   - 같은 행의 여러 기록 중에서는 순번(seq)이 가장 큰 것을 고른다. 같은 행의 변경은 행 잠금으로 차례가 정해지므로 순번 순서 = 커밋 순서다.
  * - 그 행을 jsonb_populate_record로 원래 표 모양으로 되돌린다(`rel`). 보고서 SQL은 표 이름 대신 이 관계식을 읽는다.
@@ -64,7 +67,7 @@ export function asOf(projectId: string, before: string, source: StateSource): As
   if (!MICRO.test(before)) throw new Error(`기준 시각은 마이크로초 6자리 UTC여야 합니다: ${before}`);
   const t = `'${before}'::timestamptz`;
   const latest = (log: 'state_log' | 'global_log', table: string) => `(select distinct on (l.row_id) l.op,l.data from public.${log} l
-      join public.commit_real c on c.xid=l.xid where ${log === 'state_log' ? `l.project_id='${projectId}' and ` : ''}l.tbl='${table}' and c.stamp<${t} and c.committed_at<${t}
+      join public.commit_real c on c.xid=l.xid where ${log === 'state_log' ? `l.project_id='${projectId}' and ` : ''}l.tbl='${table}' and c.stamp<${t} and coalesce(c.committed_at,c.observed_at)<${t}
       order by l.row_id,l.seq desc)`;
   const populate = (inner: string, table: string) => `(select r.* from ${inner} l cross join lateral jsonb_populate_record(null::public.${table},l.data) r where l.op<>'delete')`;
   return {
@@ -215,4 +218,16 @@ export async function scheduleAt(client: PoolClient, projectId: string, a: AsOf,
         slipDays: base === undefined ? null : day(item.end) - day(base) };
     }),
   };
+}
+
+/**
+ * 경계 불확실 건수: 실제 커밋 시각을 모르는 커밋 중, 커밋 시계 값은 T 전인데 관측 시각은 T 뒤라 T 전에 확정됐는지 알 수 없는 이력 행 수.
+ * 이 행들은 T 시점 상태에 넣지 않았다(보수적). 그 프로젝트의 이력과 전역 이력을 함께 센다.
+ */
+export async function uncertainAt(client: PoolClient, projectId: string, a: AsOf): Promise<number> {
+  if (a.source === 'live') return 0;
+  const row = (await client.query<{ n: number }>(
+    `select count(*)::int n from (select xid from state_log where project_id=$1 union all select xid from global_log) l join commit_real c on c.xid=l.xid
+     where c.committed_at is null and c.stamp<${a.t} and c.observed_at>=${a.t}`, [projectId])).rows[0];
+  return row?.n ?? 0;
 }

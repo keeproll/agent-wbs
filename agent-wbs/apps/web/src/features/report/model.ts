@@ -89,6 +89,14 @@ export function snapLabel(generatedAt: string, s: ReportSnapshotData): string {
   const end = toMicro(asOf) < toMicro(generatedAt) ? '(기간 끝)' : '(생성 시각)';
   return `이 보고서는 ${formatDateTime(generatedAt)}에 만들었습니다. 상태 값은 ${formatDateTime(asOf)} 직전${end} 기준입니다. 이후 데이터가 바뀌어도 내용은 바뀌지 않습니다.`;
 }
+/**
+ * 「경계 불확실 n건」 안내(재리뷰 4). 실제 커밋 시각을 몰라 이 시점 상태에 넣지 않은 변경이 있으면 문구, 없으면 null.
+ * 왜 넣지 않나: 확정됐는지 모르는 변경을 넣으면 그때 없던 상태를 지어낼 수 있다. 대신 건수를 숨기지 않고 알린다(apps/api/src/reports/README.md).
+ */
+export function uncertainNote(s: ReportSnapshotData): string | null {
+  const n = s.basis?.uncertain ?? 0;
+  return n > 0 ? `경계 불확실 ${String(n)}건 — 실제 커밋 시각을 알 수 없어 이 시점 상태에 넣지 않았습니다. 커밋 시계 값으로는 기준 전이지만 실제로 확정됐는지 확인되지 않은 변경입니다.` : null;
+}
 export const appendixTitle = (s: ReportSnapshotData) => `부록. 전체 Task 현황 (${s.basis ? '기간 끝 시점' : '보고서 생성 시점'})`;
 /** 보고용 제목의 프로젝트 이름도 자유 입력이라 내부 용어를 뺀다(리뷰 M6-01 3). */
 export const docTitle = (projectName: string, kind: ReportKind, view: ReportView) =>

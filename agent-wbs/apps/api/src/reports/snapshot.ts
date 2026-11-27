@@ -4,7 +4,7 @@ import {
   type GateInput, type ReportKind, type ReportSnapshotData, type TaskStatus, type VerificationResult,
 } from '@awbs/shared';
 import { wbsPaths } from '../tasks/wbs.ts';
-import { asOf, scheduleAt, settingsAt, stateFrom, type StateSource } from './state.ts';
+import { asOf, scheduleAt, settingsAt, stateFrom, uncertainAt, type StateSource } from './state.ts';
 
 /**
  * 보고서 스냅샷 만들기(G§4.11 L371-396, P report L3800-3868, milestones §4.0).
@@ -336,7 +336,7 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
       },
     },
     issues, series, done, active, failures, attempts: attemptRows, replans: replanRows, gaps: up.gaps, messages: messageRows, next, all,
-    basis: { asOf: at, stateFrom: coverage0, missing: missing ? ['state'] : [], currentSettings: settings.current },
+    basis: { asOf: at, stateFrom: coverage0, missing: missing ? ['state'] : [], currentSettings: settings.current, uncertain: await uncertainAt(client, projectId, src) },
   };
 }
 

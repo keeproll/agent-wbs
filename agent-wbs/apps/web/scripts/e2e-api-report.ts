@@ -58,7 +58,7 @@ try {
   execFileSync('docker', ['exec', '-i', name, 'psql', '-v', 'ON_ERROR_STOP=1', '-U', 'awbs_owner', '-d', 'awbs_test_report'], {
     input: "update projects set start_date='2026-10-27', target_date='2026-11-12'; alter database awbs_test_report reset awbs.test_clock_offset;"
       // 실제 커밋 시각은 시험 시계로 옮길 수 없다. 준비 자료는 커밋 시계 값을 실제 커밋 시각으로 옮겨 적는다(관리자 전용 준비).
-      + ' insert into commit_real(xid,stamp,committed_at) select xid,committed_at,committed_at from commit_log on conflict do nothing;',
+      + ' insert into commit_real(xid,stamp,committed_at,observed_at) select xid,committed_at,committed_at,committed_at from commit_log on conflict do nothing;',
     stdio: ['pipe', 'ignore', 'inherit'],
   });
   node(['apps/api/src/platform/auth-cli.ts', 'set-password'], `${leadPassword}\n`);

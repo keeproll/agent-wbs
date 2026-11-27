@@ -1133,6 +1133,8 @@ export const ReportSnapshot = Type.Object(
     basis: c.Opt(obj({
       asOf: c.Timestamp, stateFrom: Nullable(c.Timestamp), missing: List(AnyOf('state')),
       currentSettings: c.Opt(List(AnyOf('schedule', 'blackouts', 'heartbeat', 'concurrency'))),
+      // 경계 불확실 건수: 실제 커밋 시각을 몰라 T 전에 확정됐는지 알 수 없어 넣지 않은 이력 행 수(재리뷰 4). 0이면 없다.
+      uncertain: c.Opt(c.Count),
     })),
   },
   { title: 'ReportSnapshot' },
