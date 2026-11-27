@@ -199,7 +199,9 @@ test('다른 탭 로그아웃 알림을 받은 편집 중인 탭은 이후 401�
 });
 
 test('알림을 못 받았어도 이 탭의 로그인 뒤에 로그아웃 시각이 기록돼 있으면 401에서 보관하지 않는다', async ({ page, context }) => {
+  await page.clock.setFixedTime(new Date('2026-11-26T10:00:00+09:00'));
   await editingTab(page, context);
+  await page.clock.setFixedTime(new Date('2026-11-26T10:00:01+09:00'));
   // 다른 탭의 로그아웃 기록만 남은 상황(알림 없음)
   await page.evaluate(() => { localStorage.setItem('awbs.logoutAt', String(Date.now())); });
   await page.getByRole('button', { name: '저장', exact: true }).click();
@@ -208,10 +210,13 @@ test('알림을 못 받았어도 이 탭의 로그인 뒤에 로그아웃 시각
 });
 
 test('로그아웃 뒤 이 탭에서 다시 로그인에 성공하면 다시 만료 초안을 보관한다', async ({ page, context }) => {
+  await page.clock.setFixedTime(new Date('2026-11-26T10:00:00+09:00'));
   const tab = await editingTab(page, context);
+  await page.clock.setFixedTime(new Date('2026-11-26T10:00:01+09:00'));
   await page.evaluate(() => { localStorage.setItem('awbs.logoutAt', String(Date.now())); });
   tab.setSignedIn(false);
   await page.reload();
+  await page.clock.setFixedTime(new Date('2026-11-26T10:00:02+09:00'));
   await relogin(page);
   await expect(page).toHaveURL('/_states');
   await page.getByRole('button', { name: '편집' }).click();

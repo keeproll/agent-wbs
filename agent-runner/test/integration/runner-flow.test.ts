@@ -5,7 +5,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { createApiClient } from '../../src/api/client.ts';
 import { RunnerApp } from '../../src/app.ts';
 import type { CliRegistry } from '../../src/cli-update/manager.ts';
@@ -323,7 +323,9 @@ test('M4 결합: 연결부터 CLI 유휴 적용까지 한 시나리오', { timeo
   // 5. GitHub 첫 쓰기 403 → missing 재보고
   const head = model.branches.get('main') ?? '';
   await expect(app.github?.client.setCommitStatus({ sha: head, context: 'agentwbs/task', state: 'pending' })).rejects.toThrow();
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await vi.waitFor(() => {
+    expect(state?.snapshot.outbox.some((entry) => entry.operation === 'reportGithubStatus')).toBe(true);
+  }, { timeout: 10_000 });
   await app.runner.outbox.flush();
   const status2 = posted('/api/runner/github/status')[1];
   expect(status2).toMatchObject({ ok: false, scopes: { statuses: 'missing' } });

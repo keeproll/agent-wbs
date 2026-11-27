@@ -26,7 +26,6 @@ async function prepare(page: Page) {
 async function shot(page: Page) {
   await page.evaluate(() => document.fonts.ready);
   await page.mouse.move(1910, 1075);
-  await page.waitForTimeout(100);
   return page.screenshot({ animations: 'disabled', caret: 'hide' });
 }
 function record(name: string, limit: number | null, note: string, base: string, box: Box, png: Buffer, actualBox: Box = box) {
@@ -74,7 +73,6 @@ test('UI-03D 레일 + 상세 머리(1920)', async ({ page }) => {
   await page.goto('/wbs');
   await page.getByRole('table', { name: 'WBS Task 목록' }).getByRole('button', { name: 'Drizzle Schema 설계' }).click();
   await expect(page.getByRole('region', { name: 'Task 상세' }).getByRole('heading', { level: 2 })).toHaveText('Drizzle Schema 설계');
-  await page.waitForTimeout(400);
   const png = await shot(page);
   const base = 'desktop-clock20261105/UI-03-01.png';
   record('UI-03D-rail', 0.03, '같아야 함(260px 레일: 펼치기·검색·WP 구분선·상태·선택 강조)', base, { x: 204, y: 174, width: 260, height: 890 }, png);

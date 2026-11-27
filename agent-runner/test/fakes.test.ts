@@ -45,14 +45,15 @@ describe('fake CLI', () => {
     let aliveAfterTerm = false;
     const result = await runCli(stubborn.path, [], {
       onFirstOutput: (child) => {
-        child.kill('SIGTERM');
-        setTimeout(() => {
+        child.stdout?.once('data', () => {
           aliveAfterTerm = child.exitCode === null && child.signalCode === null;
           child.kill('SIGKILL');
-        }, 300);
+        });
+        child.kill('SIGTERM');
       },
     });
     expect(aliveAfterTerm).toBe(true);
+    expect(result.stdout).toBe('ready\nSIGTERM ignored\n');
     expect(result.signal).toBe('SIGKILL');
   });
 

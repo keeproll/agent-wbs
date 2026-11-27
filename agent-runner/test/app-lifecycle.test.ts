@@ -2,6 +2,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setImmediate } from 'node:timers/promises';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { ApiError, type ApiClient } from '../src/api/client.ts';
 import { RunnerApp } from '../src/app.ts';
@@ -41,7 +42,6 @@ test('지금 확인 요청 번호가 바뀌면 5분 주기를 기다리지 않�
   } finally { vi.clearAllTimers(); vi.useRealTimers(); }
 });
 
-const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 function deferred() { let resolve: () => void = () => undefined; const promise = new Promise<void>((r) => { resolve = r; }); return { promise, resolve }; }
 const hostSources: HostSources = {
   readFile: (path) => Promise.resolve(({ '/etc/machine-id': 'm', '/proc/sys/kernel/random/boot_id': 'b', '/proc/meminfo': 'MemTotal: 1 kB\nSwapTotal: 0 kB\n' } as Record<string, string>)[path] ?? ''),
@@ -84,15 +84,14 @@ test('M4-06: 시작 점검에서 키 정책을 확인할 수 없으면 계속 �
   await expect(a.bootstrap()).rejects.toBeInstanceOf(DeployKeyError);
 });
 
-test('M1: 다른 키가 확인된 시작 실패는 Runner 반복도 종료한다', async () => {
+test('M1: 다른 키가 확인된 시작 실패는 Runner 반복도 종료한다', { timeout: 15_000 }, async () => {
   const a = app(); const controller = new AbortController();
   vi.spyOn(a.runner, 'ready', 'get').mockReturnValue(true);
   vi.spyOn(a.runner, 'run').mockImplementation((signal) => new Promise((resolve) => { signal.addEventListener('abort', () => resolve()); }));
   vi.spyOn(a, 'bootstrap').mockRejectedValue(new DeployKeyError('시스템 키 외 deploy key', -1, false));
   const running = a.run(controller.signal); const result = settle(running);
   try {
-    await pause(50);
-    expect(result.value).toBe('rejected');
+    await vi.waitFor(() => { expect(result.value).toBe('rejected'); }, { timeout: 10_000 });
   } finally { controller.abort(); await running.catch(() => undefined); }
 });
 
@@ -119,39 +118,39 @@ test('H1: owner의 한정 토큰으로 키 목록을 읽고 우회 불가 연결
   expect(paths).toContain('/repos/o/r/rulesets/1');
 });
 
-test('P1-3: 통신 반복의 치명적 오류는 외부 신호 없이도 run()을 끝내고 오류를 전한다', async () => {
+test('P1-3: 통신 반복의 치명적 오류는 외부 신호 없이도 run()을 끝내고 오류를 전한다', { timeout: 15_000 }, async () => {
   const a = app(); const controller = new AbortController();
   vi.spyOn(a.runner, 'run').mockRejectedValue(new ApiError('heartbeat', 401, undefined, null));
   const running = a.run(controller.signal); const r = settle(running);
-  await pause(50);
-  expect(r.value).toBe('rejected');
-  controller.abort(); await running.catch(() => undefined);
+  try { await vi.waitFor(() => { expect(r.value).toBe('rejected'); }, { timeout: 10_000 }); }
+  finally { controller.abort(); await running.catch(() => undefined); }
 });
 
-test('P1-3: 시작 보고의 WBS 401/403은 재시도하지 않고 앱을 멈춘다', async () => {
+test('P1-3: 시작 보고의 WBS 401/403은 재시도하지 않고 앱을 멈춘다', { timeout: 15_000 }, async () => {
   const a = app(); const controller = new AbortController();
   vi.spyOn(a.runner, 'ready', 'get').mockReturnValue(true);
   vi.spyOn(a.runner, 'run').mockImplementation((signal) => new Promise((resolve) => { signal.addEventListener('abort', () => resolve()); }));
   const host = vi.spyOn(a, 'reportHost').mockRejectedValue(new ApiError('reportHost', 403, undefined, null));
   const running = a.run(controller.signal); const r = settle(running);
-  await pause(50);
-  expect(r.value).toBe('rejected');
-  expect(host).toHaveBeenCalledTimes(1);
-  controller.abort(); await running.catch(() => undefined);
+  try {
+    await vi.waitFor(() => { expect(r.value).toBe('rejected'); }, { timeout: 10_000 });
+    expect(host).toHaveBeenCalledTimes(1);
+  } finally { controller.abort(); await running.catch(() => undefined); }
 });
 
-test('P1-4: 시작 보고 중 종료하면 새 예약 작업을 등록하지 않는다', async () => {
+test('P1-4: 시작 보고 중 종료하면 새 예약 작업을 등록하지 않는다', { timeout: 15_000 }, async () => {
   const a = app(); const controller = new AbortController(); const boot = deferred();
   vi.spyOn(a.runner, 'ready', 'get').mockReturnValue(true);
-  vi.spyOn(a, 'bootstrap').mockImplementation(() => boot.promise);
+  const bootstrap = vi.spyOn(a, 'bootstrap').mockImplementation(() => boot.promise);
   vi.spyOn(a.runner, 'run').mockImplementation((signal) => new Promise((resolve) => { signal.addEventListener('abort', () => resolve()); }));
   const schedules = vi.spyOn(a, 'startSchedules');
   const running = a.run(controller.signal);
-  await pause(30); controller.abort(); await pause(20); boot.resolve(); await running;
+  try { await vi.waitFor(() => { expect(bootstrap).toHaveBeenCalled(); }, { timeout: 10_000 }); }
+  finally { controller.abort(); boot.resolve(); await running; }
   expect(schedules).not.toHaveBeenCalled();
 });
 
-test('P1-4: 종료는 이미 실행 중인 예약 보고가 끝날 때까지 기다린다', async () => {
+test('P1-4: 종료는 이미 실행 중인 예약 보고가 끝날 때까지 기다린다', { timeout: 15_000 }, async () => {
   const a = app(); const controller = new AbortController(); const report = deferred();
   let complete = false;
   vi.spyOn(a.runner, 'ready', 'get').mockReturnValue(true);
@@ -163,11 +162,13 @@ test('P1-4: 종료는 이미 실행 중인 예약 보고가 끝날 때까지 기
   vi.spyOn(a.reporter, 'reportUsage').mockResolvedValue();
   const concurrency = vi.spyOn(a, 'reportConcurrency').mockImplementation(async () => { await report.promise; complete = true; });
   const running = a.run(controller.signal); const r = settle(running);
-  await pause(50);
-  expect(concurrency).toHaveBeenCalled();
-  controller.abort(); await pause(30);
-  expect(r.value).toBe('pending');
-  report.resolve(); await running;
+  try {
+    await vi.waitFor(() => { expect(concurrency).toHaveBeenCalled(); }, { timeout: 10_000 });
+    controller.abort();
+    // 이미 들어온 종료 신호의 Promise 처리를 한 차례 마친 뒤에도 보고를 기다려야 한다.
+    await setImmediate();
+    expect(r.value).toBe('pending');
+  } finally { controller.abort(); report.resolve(); await running; }
   expect(complete).toBe(true);
 });
 

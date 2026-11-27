@@ -92,7 +92,7 @@ test('펼치기로 돌아오면 표의 스크롤 위치를 유지한다', async 
     const r = el.getBoundingClientRect();
     return document.elementFromPoint(r.left + 400, r.top + r.height / 2)?.closest('.trow.task')?.querySelector('.td.tcell > .tid')?.textContent ?? '';
   });
-  await page.waitForTimeout(300);
+  await expect.poll(centerKey).toMatch(/^TASK-/);
   const key = await centerKey();
   expect(key).toMatch(/^TASK-/);
   await box.locator('.trow.task').filter({ has: page.locator('.td.tcell > .tid', { hasText: key }) }).click();

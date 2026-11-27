@@ -1,6 +1,6 @@
 // M4 통합 재리뷰(7021018) N1~N5 재현. 검토자 시험(m4-integration-fix-rereview/review-new.test.ts)의 new: 사례를 그대로 옮겼다.
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, writeFile, rm, lstat } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, lstat, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, afterEach, expect, test, vi } from 'vitest';
@@ -23,7 +23,6 @@ let state: State;
 beforeEach(async () => { home=await mkdtemp(join(process.env.AWBS_TEST_TMP??tmpdir(),'rereview-')); state=await State.open(home); });
 afterEach(async () => { vi.restoreAllMocks(); await state.close(); await rm(home,{recursive:true,force:true}); });
 const defer=()=>Promise.withResolvers<undefined>();
-const pause=(ms:number)=>new Promise(r=>setTimeout(r,ms));
 const payload=(extra:Record<string,unknown>={})=>({epochPath:'0/',holds:[],generation:null,unparsedPrs:[],...extra});
 const command=(p:Record<string,unknown>)=>({id:'c',kind:'reset-cleanup' as const,epoch:0,payload:p});
 function git(cwd:string,...args:string[]) {
@@ -44,7 +43,7 @@ function app(api:ApiClient=vi.fn() as unknown as ApiClient,githubFetch?:typeof f
   });
 }
 
-test('N: input copy started before reset must not survive a completed reset',async()=>{
+test('N: input copy started before reset must not survive a completed reset',{timeout:15_000},async()=>{
   // 2차 재리뷰(N2) 뒤 입력 복사는 프로젝트 잠금 안에서 한다. 원래 재현처럼 「복사를 멈춘 채 초기화 완료를 기다리면」
   // 초기화가 잠금을 기다리므로 끝나지 않는다(의도된 직렬화). 그래서 초기화를 시작해 둔 뒤 복사를 풀고 결과를 확인한다.
   const {repo,url,base}=await repository();
@@ -54,8 +53,11 @@ test('N: input copy started before reset must not survive a completed reset',asy
   const copy=repo.checkoutInput('late',base); const copyResult=copy.then(v=>({path:v}),e=>({error:String(e)}));
   await entered.promise;
   const resetting=createResetCleanup({home,identity:()=>({hostId:'h',bootId:'b'})})(command(payload({repoUrl:url,baseCommit:base,branches:[],prs:[]})));
-  await pause(100);
-  release.resolve(undefined);
+  try {
+    await vi.waitFor(async () => {
+      expect((await readdir(join(home,'state/git'))).some(name=>name.startsWith(`${repositoryIdFor(url)}.json.lock.`))).toBe(true);
+    }, { timeout: 10_000 });
+  } finally { release.resolve(undefined); }
   const result=await resetting; const copied=await copyResult;
   expect(result.status).toBe('done');
   await expect(lstat(join(home,'inputs',repositoryIdFor(url),'late'))).rejects.toMatchObject({code:'ENOENT'});
@@ -94,7 +96,7 @@ test('N: a rejected DELETE 422 must not allow cleanup done with the branch still
   finally {expect(model.branches.has('agent/protected')).toBe(true); await github.close();}
 });
 
-test('N: WBS credential authorization failures must stop the running app',async()=>{
+test('N: WBS credential authorization failures must stop the running app',{timeout:15_000},async()=>{
   const api=(async(operation:string)=>{
     if(operation==='registerGithubKey')return{status:200,body:{keyId:'key'},headers:new Headers()};
     if(operation==='getGithubCredential')throw new ApiError('getGithubCredential',403,undefined,null);
@@ -108,7 +110,7 @@ test('N: WBS credential authorization failures must stop the running app',async(
   vi.spyOn(a,'startSchedules').mockImplementation(()=>undefined);
   let outcome='pending';
   const running=a.run(controller.signal).then(()=>{outcome='resolved';},()=>{outcome='rejected';});
-  try {await pause(50);expect(outcome).toBe('rejected');}
+  try {await vi.waitFor(()=>{expect(outcome).toBe('rejected');}, {timeout:10_000});}
   finally {controller.abort();await running;}
 });
 

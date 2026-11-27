@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { afterAll, beforeAll, beforeEach, describe, expect, inject, test } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, inject, test, vi } from 'vitest';
 import { createPool, recreateTestDatabase, runMigrations, seedSystem } from '@awbs/db';
 import { buildApp } from '../src/app.ts';
 import { issueLoginLink, issueRunnerToken } from '../src/platform/credentials.ts';
@@ -444,18 +444,20 @@ describe('runner 실제 PostgreSQL 검증', () => {
     expect(state.json()).toMatchObject({ externalWrite:{ state:'blocked' } });
   });
 
-  test('독립 감시 worker 진입점이 만료된 실행을 중단하고 종료 신호에 DB 연결을 닫는다', async () => {
+  test('독립 감시 worker 진입점이 만료된 실행을 중단하고 종료 신호에 DB 연결을 닫는다', { timeout: 45_000 }, async () => {
     const { job }=await claimed();
     await start(job);
     await owner.query("update runner_jobs set lease_until=now()-interval '1 second' where id=$1",[job.id]);
     const worker=spawn(process.execPath,['--conditions=awbs-source',new URL('../src/runner/worker.ts',import.meta.url).pathname],{ env:{ ...process.env,DATABASE_URL:appUrl.href },stdio:'pipe' });
-    let found=false;
+    let output='';
+    worker.stdout.on('data',chunk=>{output+=String(chunk);});
+    worker.stderr.on('data',chunk=>{output+=String(chunk);});
     try {
-      for(let i=0;i<100;i++) {
-        if((await hold(job.id)).slot_state==='unconfirmed') { found=true;break; }
-        await new Promise(resolve=>setTimeout(resolve,20));
-      }
-      expect(found).toBe(true);
+      // 기동뿐 아니라 첫 점검 실패 뒤의 기존 20초 재점검 주기도 기다릴 수 있게 한다.
+      await vi.waitFor(async()=>{
+        expect(worker.exitCode,output).toBeNull();
+        expect((await hold(job.id)).slot_state,output).toBe('unconfirmed');
+      },{timeout:30_000});
       const ended=once(worker,'exit');
       worker.kill('SIGTERM');
       expect((await ended)[0]).toBe(0);
@@ -503,12 +505,10 @@ describe('runner 실제 PostgreSQL 검증', () => {
     expect((await post('concurrency',{ at:now(),limit:value,running:{ Claude:0,Codex:0 },subagents:0,heavyJobs:0,resources:{ cpuPct:1,memFreeGB:20,swapGB:0 },sessions:[] })).statusCode).toBe(200);
   }
   async function waitForDatabaseLock(blocker: number, event: string) {
-    for(let i=0;i<100;i++) {
+    await vi.waitFor(async()=>{
       const blocked=await owner.query("select 1 from pg_stat_activity where datname=current_database() and $1=any(pg_blocking_pids(pid)) and wait_event_type='Lock' and wait_event=$2",[blocker,event]);
-      if(blocked.rowCount) return;
-      await new Promise(resolve=>setTimeout(resolve,10));
-    }
-    throw new Error(`기대한 DB 잠금 대기가 없습니다: ${event}`);
+      expect(blocked.rowCount,`기대한 DB 잠금 대기가 없습니다: ${event}`).toBeGreaterThan(0);
+    },{timeout:10_000});
   }
 
   test('상한 1에서 자기 예약은 한 번만 세고 설치 중 타 job이 잡은 용량은 start에서 재검사한다', async () => {

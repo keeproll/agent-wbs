@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { setImmediate } from 'node:timers/promises';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { createGitHubClient, GitHubError, parseRepoUrl, type GitHubClient, type WriteOperation } from '../../src/github/client.ts';
 import { Secret } from '../../src/security/secret.ts';
 import { GitHubModel, type ModelOptions } from '../fakes/github/model.ts';
@@ -201,20 +202,21 @@ describe('연결 확인', () => {
     const onUnhandled = (reason: unknown) => unhandled.push(reason);
     process.on('unhandledRejection', onUnhandled);
     try {
+      const onPermissionDenied = vi.fn(async () => {
+        await Promise.resolve();
+        throw new Error('notification transport unavailable');
+      });
       const client = await setup(
         { tokenPermissions: { statuses: 'none' } },
-        {
-          onPermissionDenied: async () => {
-            await Promise.resolve();
-            throw new Error('notification transport unavailable');
-          },
-        },
+        { onPermissionDenied },
       );
       const sha = model.push('agent/TASK-0001');
       await expect(client.setCommitStatus({ sha, context: 'agentwbs/task', state: 'pending' })).rejects.toMatchObject({
         status: 403,
       });
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await vi.waitFor(() => { expect(onPermissionDenied).toHaveBeenCalledOnce(); });
+      // 알림의 거부가 처리되고 unhandledRejection이 발생할 수 있는 차례까지 보낸다.
+      await setImmediate();
       expect(unhandled).toEqual([]);
       expect(client.permissions().statuses).toBe('missing');
     } finally {

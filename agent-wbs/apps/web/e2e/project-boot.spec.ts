@@ -254,12 +254,14 @@ test('M3-08 재리뷰 P2: 최신 불러오기 중 Esc로 닫으면 늦은 응답
   api.on('GET /api/project', slow.handler);
   await modal.getByRole('button', { name: '최신 내용 불러오기 (내 변경 버림)' }).click();
   await expect.poll(() => api.requests('GET /api/project').length).toBeGreaterThan(1);
+  const loading = await slow.started;
+  const cancelled = page.waitForEvent('requestfailed', { predicate: request => request === loading });
   await page.keyboard.press('Escape');
   await expect(modal).toHaveCount(0);
   const changed = page.locator('[data-td="TD-05"]').getByRole('button', { name: '반려', exact: true });
   await changed.click();
   slow.release();
-  await page.waitForTimeout(300);
+  await cancelled;
   await expect(changed).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('[data-td="TD-03"]').getByRole('button', { name: '승인', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByText('최신 내용을 불러왔습니다. 내 변경은 적용되지 않았습니다.')).toHaveCount(0);

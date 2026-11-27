@@ -1,5 +1,5 @@
 // M2-08 변경 이벤트(contracts §7)·이력(G§4.9) — 실제 PostgreSQL.
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import { deferChange, emitChange, pruneChanges } from '../src/changes/events.ts';
 import { inEpoch } from '../src/platform/transaction.ts';
 import { harness, projectWith, type Harness, type ProjectFixture } from './m208-fixture.ts';
@@ -62,16 +62,20 @@ describe('GET /api/changes', () => {
       await a.query('begin');
       await emitChange(a, f.project, 'task', 'first');
       await b.query('begin');
+      const pid = (await b.query<{ pid: number }>('select pg_backend_pid() as pid')).rows[0]?.pid;
       let bDone = false;
       const pending = emitChange(b, f.project, 'task', 'second').then(() => { bDone = true; });
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      await vi.waitFor(async () => {
+        const waiting = await h.owner.query("select 1 from pg_stat_activity where pid=$1 and wait_event_type='Lock'", [pid]);
+        expect(waiting.rowCount).toBe(1);
+      }, { timeout: 10_000 });
       expect(bDone).toBe(false);
       await a.query('commit');
       await pending;
       await b.query('commit');
       const rows = (await h.owner.query<{ ref: string }>("select ref from change_events where ref in ('\"first\"','\"second\"') order by seq")).rows;
       expect(rows.map((r) => r.ref)).toEqual(['first', 'second']);
-    } finally { a.release(); b.release(); }
+    } finally { await a.query('rollback'); await b.query('rollback'); a.release(); b.release(); }
   });
 
   test('트랜잭션 중간의 변경 이벤트(deferChange)는 커밋 직전에 잠금 아래서 쓰고, 되돌리면 버린다(M2 통합 emitChange 일원화)', async () => {

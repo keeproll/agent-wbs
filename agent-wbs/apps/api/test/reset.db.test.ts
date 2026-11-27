@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterAll, beforeAll, beforeEach, expect, inject, test } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, inject, test, vi } from 'vitest';
 import { createPool, recreateTestDatabase, runMigrations, seedSystem } from '@awbs/db';
 import { OPERATIONS } from '@awbs/shared/api';
 import { buildApp } from '../src/app.ts';
@@ -328,13 +328,10 @@ test('초기화 잠금을 기다리던 export는 스냅샷 충돌도 세대 불�
   await c.query('begin'); await c.query('select public.lock_epoch_exclusive()');
   const pending = lead('GET', '/api/project/export');
   try {
-    const until = Date.now() + 3_000;
-    for (;;) {
+    await vi.waitFor(async () => {
       const waiting = (await owner.query<{ n: number }>("select count(*)::int n from pg_stat_activity where datname=current_database() and wait_event_type='Lock' and query='select public.lock_epoch($1)'")).rows[0]?.n;
-      if (waiting) break;
-      if (Date.now() > until) throw new Error('export가 세대 잠금을 기다리지 않았습니다.');
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+      expect(waiting).toBeGreaterThan(0);
+    }, { timeout: 10_000 });
     await c.query("select reset_project(1,'초기화 시험',false,'lead')");
     await c.query('commit');
   } finally { await c.query('rollback'); c.release(); }

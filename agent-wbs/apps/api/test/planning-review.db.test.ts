@@ -2,7 +2,7 @@ import { createPool, recreateTestDatabase, runMigrations, seedSystem } from '@aw
 import { OPERATIONS } from '@awbs/shared/api';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { afterAll, beforeAll, expect, inject, test } from 'vitest';
+import { afterAll, beforeAll, expect, inject, test, vi } from 'vitest';
 import { buildApp } from '../src/app.ts';
 import { issueLoginLink, issueRunnerToken } from '../src/platform/credentials.ts';
 import { scheduleInput } from '../src/planning/schedule.ts';
@@ -174,11 +174,10 @@ test('concurrent manual replans must assign different baseline versions',async()
   const promises=pending.map(p=>Promise.resolve(p));
   let waiters=0;
   try {
-    for(let i=0;i<100;i++) {
+    await vi.waitFor(async()=>{
       waiters=Number((await ownerPool.query("select count(*) n from pg_stat_activity where datname=current_database() and wait_event_type='Lock' and query like '%pg_advisory_xact_lock%'")).rows[0].n);
-      if(waiters>=2)break;
-      await new Promise(r=>setTimeout(r,10));
-    }
+      expect(waiters).toBe(2);
+    },{timeout:10_000});
   }finally{await blocker.query('commit');blocker.release();}
   const responses=await Promise.all(promises);
   findings.concurrentReplans={waiters,statuses:responses.map(r=>r.statusCode),bodies:responses.map(r=>r.json())};
@@ -195,11 +194,10 @@ test('12 concurrent refused approvals must not exhaust their own pool',async()=>
     await blocker.query('begin'); await blocker.query('select pg_advisory_xact_lock(hashtextextended($1,0))',[`awbs:task-graph:${projectId}`]);
     const promises=Array.from({length:12},()=>Promise.resolve(call('POST',`/api/proposals/${cp.id}/approve`,{updatedAt:v,previewHash:p.previewHash})));
     let locks=0;
-    for(let i=0;i<150;i++){
+    await vi.waitFor(async()=>{
       locks=Number((await ownerPool.query("select count(*) n from pg_stat_activity where datname=current_database() and wait_event_type='Lock' and (query like '%change_proposals%for update%' or query like '%pg_advisory_xact_lock%')")).rows[0].n);
-      if(locks>=12)break;
-      await new Promise(r=>setTimeout(r,10));
-    }
+      expect(locks).toBe(12);
+    },{timeout:10_000});
     await blocker.query('commit');
     const responses=await Promise.all(promises);
     findings.poolStarvation={locks,statuses:responses.map(r=>r.statusCode)};

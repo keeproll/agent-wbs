@@ -43,11 +43,13 @@ test('P1 재작업 지시: 최신 불러오기 중 Esc로 닫고 새로 쓴 지�
   const slow = hold((route) => json(route, 200, { nodes: [], tasks: api.state.tasks }));
   api.on('GET /api/projects/p1/tasks', slow.handler);
   await dialog.getByRole('button', { name: /최신 내용 불러오기/ }).click();
+  const loading = await slow.started;
+  const cancelled = page.waitForEvent('requestfailed', { predicate: request => request === loading });
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);
   await page.getByLabel('재작업 지시 내용').fill('B 새로 쓴 지시');
   slow.release();
-  await page.waitForTimeout(500);
+  await cancelled;
   await expect(page.getByLabel('재작업 지시 내용')).toHaveValue('B 새로 쓴 지시');
   await expect(page.getByText('최신 내용을 불러왔습니다.', { exact: false })).toHaveCount(0);
 });

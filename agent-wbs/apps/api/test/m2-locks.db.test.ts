@@ -2,7 +2,7 @@
 // F1: analyzeInputs(프로젝트 잠금 → Gate Task 잠금)와 Task 수정(Task 잠금 → 이력 INSERT의 프로젝트 외래 키 KEY SHARE)이 교착하지 않아야 한다.
 import assert from 'node:assert/strict';
 import { createPool, recreateTestDatabase, runMigrations, seedSystem, type PoolClient } from '@awbs/db';
-import { beforeAll, afterAll, expect, inject, test } from 'vitest';
+import { beforeAll, afterAll, expect, inject, test, vi } from 'vitest';
 import { buildApp } from '../src/app.ts';
 import { issueLoginLink } from '../src/platform/credentials.ts';
 import { projectWith, attemptFor } from './m208-fixture.ts';
@@ -64,14 +64,13 @@ test('실제 PATCH 체크리스트와 POST 입력 분석이 교착 없이 200/20
  const patch=lead('PATCH','/api/tasks/TASK-0001/checklist/CL-1',{updatedAt:beforeTask.updatedAt,note:'교차 리뷰 변경'}).then(r=>r);
  await entered;
  const analysis=lead('POST','/api/project/inputs',{updatedAt:beforeProject.updatedAt,commit:'b'.repeat(40),commits:['b'.repeat(40)]}).then(r=>r);
- let waiting=false;
- for(let i=0;i<500;i++){
+ try {
+  await vi.waitFor(async()=>{
   const wait=(await owner.query("select query from pg_stat_activity where datname=current_database() and wait_event_type='Lock' and query like '%from tasks where task_key=$1%for update%'")).rowCount;
-  if(wait){waiting=true;break;}await new Promise(r=>setTimeout(r,10));
- }
- releasePatch();
+   expect(wait).toBeGreaterThan(0);
+  },{timeout:10_000});
+ } finally { releasePatch(); }
  const result=await Promise.all([patch,analysis]);
- expect(waiting).toBe(true);
  expect(result.map(r=>r.statusCode)).toEqual([200,202]);
 },30000);
 
