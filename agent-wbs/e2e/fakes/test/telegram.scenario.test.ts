@@ -7,11 +7,12 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { loggerOptions } from '../../../apps/api/src/log.ts';
 import { scenario, type Scenario } from './scenario.ts';
+import { BOT_TOKEN, connectTelegram, fakeBotApi } from '../telegram.ts';
 
 // 각 시험은 빈 DB에 전체 마이그레이션을 적용한다. 다른 worker의 DB 검증과 겹쳐도 준비가 끝나기를 기다린다.
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
 
-const token = `123456789:${'fake_only_'.repeat(4)}abcd`;
+const token = BOT_TOKEN;
 const dbEnvKey = process.env.AWBS_SECRET_KEY;
 let s: Scenario | undefined;
 const active = () => { if (!s) throw new Error('시나리오가 없습니다.'); return s; };
@@ -25,56 +26,17 @@ afterEach(async () => {
 });
 
 async function fake() {
-  const requests: { method: string; body: Record<string, unknown> }[] = [];
-  let error = 0;
-  let migrated = false;
-  let invalidResponse = false;
-  let empty = false;
-  let responseDelay = 0;
-  let responseAt = 0;
-  let onAccept: (() => void) | undefined;
-  bot = createServer(async (req, res) => {
-    let text = '';
-    for await (const chunk of req) text += String(chunk);
-    const method = req.url?.split('/').at(-1) ?? '';
-    requests.push({ method, body: JSON.parse(text || '{}') as Record<string, unknown> });
-    if (method === 'sendMessage' && invalidResponse) { res.statusCode = 503; res.end('응답 유실'); return; }
-    if (responseDelay) await new Promise(resolve => setTimeout(resolve, responseDelay));
-    responseAt = Date.now();
-    res.setHeader('content-type', 'application/json');
-    if (method === 'sendMessage' && !error) res.once('finish', () => { onAccept?.(); });
-    res.end(JSON.stringify(error ? { ok: false, error_code: error, description: '원문에 비밀이 있어도 전달하지 않는다',
-      parameters: { ...(error === 429 ? { retry_after: 15 } : {}), ...(migrated ? { migrate_to_chat_id: -1004123456789 } : {}) } }
-      : { ok: true, result: method === 'getMe' ? { id: 123456789, is_bot: true, username: 'fake_bot', first_name: '시험 봇' }
-        : method === 'getUpdates' ? empty ? [] : [
-          { update_id: 1, message: { date: 1795740000, chat: { id: 512345678, type: 'private', first_name: '팀장' } } },
-          { update_id: 2, message: { date: 1795740001, chat: { id: -4123456789, type: 'group', title: '개발 그룹' } } },
-          { update_id: 3, channel_post: { date: 1795740002, chat: { id: -100123456789, type: 'channel', title: '제외할 채널' } } },
-        ] : { message_id: 1, chat: { id: -4123456789, type: 'group', title: '개발 그룹' } } }));
-  });
-  await new Promise<void>(resolve => bot?.listen(0, '127.0.0.1', resolve));
-  const address = bot.address();
-  if (!address || typeof address === 'string') throw new Error('fake 주소 없음');
-  process.env.AWBS_TELEGRAM_BOT_API_URL = `http://127.0.0.1:${String(address.port)}`;
-  process.env.AWBS_SECRET_KEY = 'a'.repeat(64);
-  return { requests, invalidResponse: () => { invalidResponse = true; }, fail: (code: number, migrate = false) => { error = code; migrated = migrate; }, empty: () => { empty = true; }, onAccept: (fn?: () => void) => { onAccept = fn; }, delay: (ms: number) => { responseDelay = ms; }, responseAt: () => responseAt };
+  const f = await fakeBotApi();
+  bot = f.server;
+  return f;
 }
 
 async function connect(options: Parameters<typeof scenario>[0] = {}) {
   const f = await fake();
   s = await scenario(options);
   const project = (await s.rows('select id from projects'))[0]?.id as string;
-  const current = (await s.lead('GET', '/api/notify/telegram')).body;
-  const body = { botToken: token, chatId: '-4123456789', targetName: '팀장' };
-  expect((await s.lead('POST', '/api/notify/telegram/check-bot', { botToken: token })).body).toMatchObject({ ok: true, bot: { username: 'fake_bot' } });
-  const tested = await s.lead('POST', '/api/notify/telegram/test', body);
-  expect(tested.body).toMatchObject({ ok: true, error: null });
-  const tracked = await s.lead('GET', `/api/notify/telegram?testId=${String(tested.body.testId)}`);
-  expect(tracked.body).toMatchObject({ tokenSet: false, test: { ok: true } });
-  const saved = await s.lead('PUT', '/api/notify/telegram', { ...body, enabled: true, updatedAt: current.updatedAt });
-  expect(saved.status).toBe(200);
-  expect(saved.body).toMatchObject({ enabled: true, tokenSet: true, tokenLast4: 'abcd', test: { ok: true } });
-  return { ...f, project, saved: saved.body };
+  const saved = await connectTelegram(s);
+  return { ...f, project, saved };
 }
 
 test('telegram fix1 R1·R5: 제목 수정과 경보 확인은 새 실패 보고가 아니다', async () => {
@@ -370,31 +332,8 @@ test('telegram: 꺼진 전이는 밀어 보내지 않고 긴 비밀 문자열도
   expect(text).toContain('(미확정)');
 });
 
-test('telegram: PR-A의 성공이 PR-B의 실패 키를 해소하지 않는다', async () => {
-  const { project } = await connect();
-  const rules = (await active().lead('GET', `/api/projects/${project}/notify/rules`)).body;
-  await active().lead('PUT', `/api/projects/${project}/notify/rules`, { ...rules, buildOk: true });
-  for (const pr of [9, 10]) {
-    await active().rows(`insert into runner_jobs(project_id,kind,payload,state,epoch,dedup_key) values('${project}','integrate','{}','queued',1,'telegram-pr-${String(pr)}')`);
-    await active().rows(`insert into ci_runs(project_id,run_key,stage,pipeline_sha,ref,pr,trigger,status,fail_step,job,fence)
-      select '${project}','CI-${String(pr)}',2,'${'a'.repeat(40)}','refs/pull/${String(pr)}',${String(pr)},'manual','fail','E2E',id,0 from runner_jobs where dedup_key='telegram-pr-${String(pr)}'`);
-  }
-  expect(await active().rows("select id from notify_events where kind='buildFail'")).toHaveLength(2);
-  await active().rows("update ci_runs set status='run' where pr=10");
-  await active().rows("update ci_runs set status='fail' where pr=10");
-  await active().rows("insert into ci_steps(project_id,run,step_key,status,command) select project_id,id,'build','pass','비밀이 있을 수 있는 명령 원문' from ci_runs where pr=9");
-  await active().rows("update ci_runs set status='pass' where pr=9");
-  const passed = await active().rows("select payload->>'message' message from notify_outbox where payload->>'event'='buildOk'");
-  expect(passed[0]?.message).toContain('통과 단계: build');
-  expect(passed[0]?.message).not.toContain('테스트 통과');
-  expect(passed[0]?.message).not.toContain('명령 원문');
-  await active().rows("update ci_runs set fail_step='test' where pr=10");
-  const b = await active().rows("select dup_count,resolved_at from notify_events where dedup_key='buildFail|2|10'");
-  expect(b).toEqual([{ dup_count: 1, resolved_at: null }]);
-  await active().rows("update ci_runs set status='pass' where pr=10");
-  await active().rows("update ci_runs set status='fail' where pr=10");
-  expect(await active().rows("select id from notify_events where dedup_key='buildFail|2|10'")).toHaveLength(2);
-});
+// M6·M7 통합: 「PR-A의 성공이 PR-B의 실패 키를 해소하지 않는다」는 실제 CI 보고 API로 옮겼다(apps/api/test/ci.db.test.ts 「M6·M7 통합(telegram)」).
+// 왜: CI 빌드 알림은 이제 ci_runs 트리거가 아니라 M7 CI 코드(notifyResult)가 공통 함수(0036 awbs_notify_emit)로 만든다.
 
 test('telegram: 실제 실행 실패는 자동 재시도 소진 후에만, QA FAIL은 확정 즉시 알린다', async () => {
   await connect();
@@ -523,15 +462,7 @@ test('telegram: 변경 제안/기술 결정/입력 변경은 해당 화면을 �
   }
 });
 
-test('telegram: 서로 다른 CI 행의 같은 원인 동시 실패도 대기열 1개와 중복 수를 보존한다', async () => {
-  const { project } = await connect();
-  await active().rows(`insert into runner_jobs(project_id,kind,payload,state,epoch,dedup_key) values('${project}','integrate','{}','queued',1,'telegram-concurrent')`);
-  const insert = (key: string) => active().pool.query(`insert into ci_runs(project_id,run_key,stage,pipeline_sha,ref,pr,trigger,status,fail_step,job,fence)
-    select $1,$2,2,$3,'refs/pull/11',11,'manual','fail','E2E',id,0 from runner_jobs where dedup_key='telegram-concurrent'`, [project, key, 'a'.repeat(40)]);
-  await Promise.all([insert('CI-111'), insert('CI-112')]);
-  expect(await active().rows("select dup_count from notify_events where dedup_key='buildFail|2|11'")).toEqual([{ dup_count: 1 }]);
-  expect(await active().rows("select id from notify_outbox where payload->>'event'='buildFail'")).toHaveLength(1);
-});
+// M6·M7 통합: 「서로 다른 CI 행의 같은 원인 동시 실패」도 ci.db.test.ts로 옮겼다(위와 같은 이유).
 
 test('telegram: 업무 전송 성공은 연결 오류 배지를 지우지 않고 테스트 성공을 기다린다', async () => {
   const f = await connect();

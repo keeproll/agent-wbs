@@ -72,7 +72,9 @@ beforeAll(async () => {
   csrf = (await get('session')).json().csrfToken as string;
 });
 beforeEach(async () => {
-  await owner.query('update notify_settings set enabled=true where singleton');
+  // M6·M7 통합: 알림은 Telegram 연결(비밀 키·대화)이 켜져 있을 때만 기록·발송 대기열에 들어간다(0036 awbs_notify_emit, M6-04 규칙).
+  await owner.query("insert into secrets(key,ciphertext,nonce,key_version,last4) values('telegram-ci-test','encrypted','nonce',1,'abcd') on conflict do nothing");
+  await owner.query("update notify_settings set enabled=true,secret_key='telegram-ci-test',chat_id='-4123456789',target_name='팀장' where singleton");
   await owner.query("insert into notify_rules(key,enabled) values('buildFail',true),('buildOk',false),('done',false) on conflict(key) do update set enabled=excluded.enabled");
   await owner.query('set session_replication_role=replica');
   await owner.query('truncate projects,runner_jobs,task_attempts,execution_holds,task_history,idempotency_keys,runner_hosts,runner_readiness,agent_usage,agent_models,external_write_authority cascade');
@@ -102,7 +104,7 @@ async function gateTask() {
     values($1,$2,$3,1,$4,$5,$5,1,$6,'dev','Codex','completed',now(),now(),'gpt-6.1-sol','high','agent/test',1)`,[project,a.id,`${a.key}-dev`,dev,sha,input]);
   await observe();
   expect((await report(a)).statusCode).toBe(201);
-  const job = ((await owner.query("select id from runner_jobs where kind='integrate'")).rows[0] as { id: string }).id;
+  const job = ((await owner.query("select id from runner_jobs where kind='integrate' and payload->>'taskKey'=$1",[a.key])).rows[0] as { id: string }).id;
   await owner.query("update runner_jobs set state='started',lease_owner='runner:ci',lease_until=now()+interval '5 minutes',fence=1,generation=1 where id=$1",[job]);
   await owner.query(`insert into execution_holds(project_id,job,epoch,host_id,boot_id,fence,task,agent,slots,heavy,slot_state,lock_state)
     values($1,$2,1,'host-a','boot-a',1,$3,'Codex',1,true,'reserved','held')`,[project,job,a.id]);
@@ -209,6 +211,11 @@ test('②·③·④ 실패는 단계·CI 상세 참조와 함께 중복 억제�
   expect((await owner.query('select count(*)::int n from notify_events where resolved_at is null')).rows).toEqual([{ n:0 }]);
   await make('fail');
   expect((await owner.query("select count(*)::int n from notify_events where kind='buildFail'")).rows).toEqual([{ n:2 }]);
+  // M6·M7 통합: 기록마다 Telegram 발송 대기열이 한 건씩(중복 실패는 대기열을 늘리지 않음). 문구는 M6-04 대응표 모양.
+  const outbox = (await owner.query("select payload->>'event' event,payload->>'message' message from notify_outbox order by created_at,id")).rows as { event: string; message: string }[];
+  expect(outbox.map(o => o.event)).toEqual(['buildFail','buildFail']); // ③ 야간 통과는 buildOk를 보내지 않는다(대응표)
+  expect(outbox[0]?.message).toContain('대상: ③ 야간 점검 — main');
+  expect(outbox[0]?.message).toContain('상태: 실패 — 실패 단계: E2E');
 });
 
 test('① 실패와 꺼진 규칙은 Telegram 이벤트를 만들지 않는다', async () => {
@@ -997,6 +1004,13 @@ test('결정 11: 배포 실패 뒤 복구도 실패하거나 복구할 배포가
   expect((await patch(none,{ fence:1,status:'fail',deployRestore:{ commit:null,status:'none' } })).statusCode).toBe(204);
   expect((await serviceDown()).alerts).toHaveLength(1);
   expect((await owner.query("select dup_count from notify_events where kind='serviceDown' and resolved_at is null")).rows).toEqual([{ dup_count:1 }]);
+  // M6·M7 통합: serviceDown도 Telegram 발송 대기열에 한 건만 들어간다(중복은 dup_count). 알림 규칙과 무관하다.
+  const outbox = (await owner.query("select payload->>'message' message,payload->>'path' path from notify_outbox where payload->>'event'='serviceDown'")).rows as { message: string; path: string }[];
+  expect(outbox).toHaveLength(1);
+  expect(outbox[0]?.path).toBe(`/ci/${failed}`);
+  expect(outbox[0]?.message).toContain('[Agent WBS] 서비스 없음');
+  expect(outbox[0]?.message).toContain('④ 배포 확인 — main');
+  expect(outbox[0]?.message).toContain('마지막 정상 커밋');
   const passed = await deployJob();
   expect((await patch(passed,{ fence:1,status:'pass' })).statusCode).toBe(204);
   expect(await serviceDown()).toEqual({ alerts:[],events:[] });
@@ -1053,4 +1067,58 @@ test('재리뷰 원칙 1: 더 새 배포가 아직 진행 중이어도 옛 실�
   await deployJob();
   expect((await patch(older,{ fence:1,status:'fail',deployRestore:{ commit:null,status:'none' } })).statusCode).toBe(204);
   expect(await serviceDown()).toEqual({ alerts:[],events:[] });
+});
+
+/*
+ * M6·M7 통합: Telegram 전이 알림(M6-04)의 CI 시험 2건을 실제 CI 보고 API로 옮겼다.
+ * 전에는 ci_runs 행을 직접 바꿔 트리거를 시험했다. 이제 CI 빌드 알림은 M7 CI 코드(notifyResult)가 공통 함수(0036 awbs_notify_emit)로 만든다.
+ */
+async function intRun(pr: number) {
+  const a = await gateTask(), tree = 'f'.repeat(40);
+  // 통합 job의 PR 번호를 시험 PR로 맞춘다(서버는 job·대기열·실행의 PR이 같아야 받는다).
+  await owner.query("update runner_jobs set payload=payload||jsonb_build_object('pr',$2::int) where id=$1",[a.job,pr]);
+  const q = await queue(a,'queued',{ pr }); expect(q.statusCode,q.body).toBe(204);
+  const again = async () => {
+    const r = await start(a,'int',{ attemptId:undefined,treeSha:tree,pr }); expect(r.statusCode,r.body).toBe(201);
+    const id = r.json().id as string;
+    expect((await patch(id,{ fence:1,status:'run' })).statusCode).toBe(204);
+    return id;
+  };
+  return { a,again };
+}
+
+test('M6·M7 통합(telegram): PR-A의 성공이 PR-B의 실패 키를 해소하지 않고, 통과 메시지는 통과 단계만 적는다', async () => {
+  await owner.query("insert into notify_rules(key,enabled) values('buildFail',true),('buildOk',true) on conflict(key) do update set enabled=true");
+  const prA = await intRun(9), prB = await intRun(10);
+  const a1 = await prA.again(), b1 = await prB.again();
+  for (const id of [a1,b1]) expect((await patch(id,{ fence:1,status:'fail',steps:[{ name:'E2E',status:'fail',durationMs:1 }] })).statusCode).toBe(204);
+  expect((await owner.query("select dedup_key from notify_events where kind='buildFail' order by dedup_key")).rows).toEqual([{ dedup_key:'buildFail|int|#10' },{ dedup_key:'buildFail|int|#9' }]);
+  // PR-B를 다시 실행해도 실패하면 새 발송 없이 중복 수만 센다.
+  const b2 = await prB.again();
+  expect((await patch(b2,{ fence:1,status:'fail',steps:[{ name:'test',status:'fail',durationMs:1 }] })).statusCode).toBe(204);
+  expect((await owner.query("select dup_count,resolved_at from notify_events where dedup_key='buildFail|int|#10'")).rows).toEqual([{ dup_count:1,resolved_at:null }]);
+  // PR-A 통과: PR-A 키만 해소, 메시지는 통과 단계(보고 순번 순서)만 적고 명령 원문은 넣지 않는다.
+  const a2 = await prA.again();
+  expect((await patch(a2,{ fence:1,status:'pass',steps:[{ name:'build',status:'pass',durationMs:1 }] })).statusCode).toBe(204);
+  expect((await owner.query("select dedup_key from notify_events where kind='buildFail' and resolved_at is null")).rows).toEqual([{ dedup_key:'buildFail|int|#10' }]);
+  const passed = (await owner.query("select payload->>'message' message from notify_outbox where payload->>'event'='buildOk'")).rows as { message: string }[];
+  expect(passed).toHaveLength(1);
+  expect(passed[0]?.message).toContain('통합 확인 통과 — 통과 단계: build');
+  expect(passed[0]?.message).not.toContain('테스트 통과');
+  expect(passed[0]?.message).toContain('대상: ② 통합 확인 — PR #9');
+  // PR-B 통과 뒤 다시 실패하면 새 사건이다(같은 키의 두 번째 기록).
+  const b3 = await prB.again();
+  expect((await patch(b3,{ fence:1,status:'pass' })).statusCode).toBe(204);
+  const b4 = await prB.again();
+  expect((await patch(b4,{ fence:1,status:'fail' })).statusCode).toBe(204);
+  expect((await owner.query("select count(*)::int n from notify_events where dedup_key='buildFail|int|#10'")).rows).toEqual([{ n:2 }]);
+});
+
+test('M6·M7 통합(telegram): 같은 PR의 서로 다른 CI 실행이 동시에 실패해도 대기열 1개와 중복 수를 보존한다', async () => {
+  const pr = await intRun(11);
+  const [x,y] = [await pr.again(),await pr.again()];
+  const results = await Promise.all([x,y].map(id => patch(id,{ fence:1,status:'fail',steps:[{ name:'E2E',status:'fail',durationMs:1 }] })));
+  expect(results.map(r => r.statusCode)).toEqual([204,204]);
+  expect((await owner.query("select dup_count from notify_events where dedup_key='buildFail|int|#11'")).rows).toEqual([{ dup_count:1 }]);
+  expect((await owner.query("select id from notify_outbox where payload->>'event'='buildFail'")).rows).toHaveLength(1);
 });

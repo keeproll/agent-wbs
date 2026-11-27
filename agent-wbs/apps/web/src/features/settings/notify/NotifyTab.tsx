@@ -21,6 +21,8 @@ const EVENTS = {
 } as const;
 type Event = keyof typeof EVENTS;
 const keys = Object.keys(EVENTS) as Event[];
+/** 전송 이력의 이벤트 이름. serviceDown은 규칙이 없고(늘 보냄) 이력에만 보인다(M7-03 결정 11, M6·M7 통합). */
+const LOG_EVENTS: Record<Event | 'serviceDown', string> = { ...Object.fromEntries(keys.map(key => [key, EVENTS[key][0]])) as Record<Event, string>, serviceDown: '서비스 없음' };
 const STATES = { queued: '대기', sending: '대기', accepted: '전송 요청 수락', retry_wait: '재시도 대기', failed: '실패', unknown: '실패 — 수락 여부 불명' };
 
 export function NotifyTab({ projectId, projectName }: { projectId: string | null; projectName: string }) {
@@ -86,7 +88,7 @@ function History({ projectId }: { projectId: string }) {
   useRefreshError(query, '전송 이력'); useRefreshError(detail, '전송 이력 상세');
   const row = (log: ResponseOf<'listNotifyLog'>['items'][number]) => <tr key={log.id}>
     <td className="mono">{formatDateTime(log.at)}</td><td>{log.projectName}</td><td><button type="button" className="btn ghost sm" onClick={() => { setSelected(log.id); }}>{log.target}</button></td>
-    <td>{log.event ? EVENTS[log.event][0] : '테스트'}</td><td>{log.targetName} ({log.chatId})</td>
+    <td>{log.event ? LOG_EVENTS[log.event] : '테스트'}</td><td>{log.targetName} ({log.chatId})</td>
     <td><span className={log.state === 'accepted' ? 'vf v-pass' : ['failed', 'unknown'].includes(log.state) ? 'vf v-fail' : 'vf v-blk'}>{STATES[log.state]}</span>{log.duplicates > 0 && <div className="tid">중복 생략 {log.duplicates}회</div>}</td><td>{log.attempts}</td><td>{log.error ?? '—'}</td><td>{log.kind === 'biz' ? '업무' : '테스트'}</td>
   </tr>;
   return <section className="card" aria-labelledby="tg-history"><CardHead id="tg-history" title="전송 이력"><div className="seg" role="group" aria-label="이력 구분">{([undefined, 'biz', 'test'] as const).map((value, index) => <button key={index} type="button" aria-pressed={kind === value} onClick={() => { setKind(value); setCursor(undefined); setSelected(null); }}>{['전체', '업무', '테스트'][index]}</button>)}</div></CardHead>

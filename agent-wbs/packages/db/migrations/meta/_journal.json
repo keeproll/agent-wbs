@@ -253,6 +253,13 @@
       "when": 1795740000035,
       "tag": "0035_20261127_design_display_keys",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1795740000036,
+      "tag": "0036_20261127_notify_ci",
+      "breakpoints": true
     }
   ]
 }

@@ -22629,7 +22629,8 @@
                                   "admin",
                                   "approve",
                                   "buildOk",
-                                  "buildFail"
+                                  "buildFail",
+                                  "serviceDown"
                                 ]
                               },
                               {
@@ -22820,7 +22821,8 @@
                             "admin",
                             "approve",
                             "buildOk",
-                            "buildFail"
+                            "buildFail",
+                            "serviceDown"
                           ]
                         },
                         {

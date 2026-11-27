@@ -430,11 +430,13 @@ const NotifyRules = {
   buildOk: Type.Boolean(),
   buildFail: Type.Boolean(),
 };
+// 전송 이력의 이벤트: 규칙 6종 + serviceDown(M7-03 결정 11, 규칙과 무관하게 보내는 「서비스 없음」). M6·M7 통합.
+const NotifyLogEvent = AnyOf('done', 'fail', 'admin', 'approve', 'buildOk', 'buildFail', 'serviceDown');
 const notifyLog = {
   id: c.Id,
   at: c.Timestamp,
   kind: AnyOf('biz', 'test'),
-  event: Nullable(NotifyEvent),
+  event: Nullable(NotifyLogEvent),
   target: Type.String(),
   projectName: Opt(Type.String()),
   targetName: Opt(Type.String()),

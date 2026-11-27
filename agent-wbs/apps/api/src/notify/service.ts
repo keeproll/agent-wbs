@@ -107,7 +107,7 @@ export async function notifyLog(db: Db, projectId: string, query: { kind?: 'biz'
   const limit = Math.min(query.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
   const cursor = query.cursor ? decodeTimeIdCursor(query.cursor) : null;
   if (query.cursor && !cursor) throw invalid([{ path: 'cursor', rule: 'format', message: '다음 페이지 정보가 올바르지 않습니다.' }]);
-  const rows = (await db.query<{ id: string; at: string; kind: 'biz' | 'test'; event: NotifyEvent | null; target: string; state: string; attempts: number; duplicates: number; error: string | null; message: string }>(
+  const rows = (await db.query<{ id: string; at: string; kind: 'biz' | 'test'; event: NotifyEvent | 'serviceDown' | null; target: string; state: string; attempts: number; duplicates: number; error: string | null; message: string }>(
     `select o.id,${iso('o.created_at')} at,o.kind,o.payload->>'event' event,coalesce(o.payload->>'target','') target,o.state,o.attempts,coalesce(e.dup_count,0) duplicates,o.error${id ? ",coalesce(o.payload->>'message','') message" : ''},
        o.payload->>'path' path,o.payload->>'targetName' "targetName",o.payload->>'chatId' "chatId",(select name from projects where id=o.project_id) "projectName"
      from notify_outbox o left join notify_events e on e.id=o.event where o.project_id=$1 and ($2::text is null or o.kind=$2)

@@ -18,6 +18,14 @@ test('Runner CI 실행기가 claim부터 실제 병합 보고까지 수행해 �
   expect(h.state.snapshot.outbox).toEqual([]);
   expect(h.outbox.rejected).toEqual([]);
   expect(await doneEvents()).toEqual([{ kind:'done' }]);
+  // UAT-TG-05(M6·M7 통합): M7-06 완료 흐름의 알림이 실제 worker로 fake BotAPI에 발송된다.
+  const sent = await h.sendNotifications();
+  const done = sent.filter(text => text.startsWith('[Agent WBS] Task 완료'));
+  expect(done).toHaveLength(1);
+  expect(done[0]).toContain('대상: TASK-0001');
+  expect(done[0]).toContain('상태: WBS 최종 완료');
+  expect(sent.some(text => text.startsWith('[Agent WBS] 빌드 성공') && text.includes('② 통합 확인 — PR #'))).toBe(true);
+  expect(await h.rows("select count(*)::int n from notify_outbox where state<>'accepted'")).toEqual([{ n:0 }]);
 },60_000);
 
 test('checking 보고 뒤 병합 전 중단에서도 재시작이 대기열을 제거하고 한 번만 병합한다', async () => {
@@ -54,6 +62,8 @@ test('실제 Runner가 Gate 보류 응답을 수용하고 서버 재평가 뒤 �
   expect(h.outbox.rejected).toEqual([]);
   expect(await h.rows("select kind from notify_events where dedup_key='ci:gateUnmetAfterMerge|#1'")).toEqual([{ kind:'admin' }]);
   expect(await h.rows("select count(*)::int n from notify_events where dedup_key like 'ci:mergeMismatch|%'")).toEqual([{ n:0 }]);
+  // UAT-TG-05(M6·M7 통합): Gate 미충족 병합은 「관리자 개입 필요」로 fake BotAPI에 발송된다.
+  expect((await h.sendNotifications()).some(text => text.startsWith('[Agent WBS] 관리자 개입 필요') && text.includes('병합됨 · Gate 조건 미충족'))).toBe(true);
   await h.rows('update checklist_items set done=true');
   await h.recheckCompletion();
   expect((await task()).lifecycleStatus).toBe('done');
