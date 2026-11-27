@@ -34,6 +34,16 @@
   - 변경 가능한 행: `created_at`, `updated_at`(단조 증가). 단조 증가는 「항상 커지기만 한다」는 뜻이다.
   - 수정 API는 `updatedAt` 비교(§0.3 L73).
   - 왜: 두 사람이 같은 행을 동시에 고칠 때, 낡은 화면에서 보낸 수정을 알아채 막기 위해서다.
+- **저장 순번(「최신 하나」를 고르는 기준)** (M7-04 조정자 결정 7·12, M5·M7·M6 통합)
+  - 「가장 최근 것 하나」를 고르는 곳은 `created_at`(벽시계)이 아니라 **뒤로 가지 않는 저장 순번**으로 정렬한다.
+  - 순번 열은 `bigserial`(자동 번호)이고 unique다. 기존 행은 순번을 처음 매길 때 그때까지의 시각 정렬 순서대로 번호를 받았다.
+  - 순번이 있는 표
+    - `record_no`(마이그레이션 0026): `planning_jobs`, `task_estimates`, `change_proposals`, `runner_jobs`, `task_attempts`, `attempt_observations`, `runner_hosts`, `runner_concurrency_log`, `agent_usage`, `task_history`, `ci_steps`, `runner_sessions`.
+    - `record_no`(0027): `change_proposal_events`, `planning_job_logs`, `planning_reviews`.
+    - `record_no`(0037): `notify_outbox`, `reports`, `design_drifts`.
+    - `run_no`(0026): `ci_runs`. `queue_no`(0026): `merge_queue`.
+  - 왜: 이 PC(WSL)의 시계는 실제로 몇 초씩 뒤로 간다. 그러면 `created_at` 순서가 저장 순서와 달라져, Gate가 옛 ① 기록을 「최신」으로 고르는 간헐 실패가 생겼다.
+  - 화면 목록의 `created_at desc` 페이지 정렬은 아직 그대로다. 시계가 뒤로 가면 순서만 바뀔 수 있다.
 - **project_id**
   - 프로젝트 데이터는 모두 `project_id`(단일 프로젝트지만 초기화 삭제 기준).
   - 설정·환경은 `project_id` 없음.
@@ -537,12 +547,18 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
   - 근거: §7.2
 - `exec_policy`
   - on_usage, low_pct(사용량 부족 기준, 기본 20% — owner 2026-11-26), on_rework, esc_notify, floors, live_inject, auto_retry_limit=2, auto_rework_limit=3
+  - `live_inject`(실행 중 전달): owner Q-07(2026-11-27 아이템 18)로 이번 범위에서는 켤 수 없다. 화면은 「준비 중」, 서버는 켜는 저장을 거부한다.
+  - 기존 `true`는 `false`로 취급한다. 다음 Workflow(기본 실행 흐름) 설정 저장 때 `false`로 정리한다. 왜: 이번 범위는 메시지를 다음 실행 때 전달하는 동작만 제공하기 때문이다.
   - API 이름과의 대응:
     - `esc_notify`는 API의 `notifyAt`이다.
     - `low_pct`가 null이면 API는 도메인 기본값 20을 보낸다(경계 변환 `execPolicyToApi`).
   - 근거: §7.3, owner Q-04
 - `subagent_defs`
   - id, version, agent, role, tools, sandbox(프로그램이 건드릴 수 있는 범위를 막아 둔 실행 환경), text, hash, allowed, ref — 버전 불변
+  - sandbox 칸은 **표시용 설명**이다. 실제 권한을 보장하지 않는다(M5-06 리뷰).
+    - Codex 하위 Agent는 역할 파일에 적은 `sandbox_mode`를 무시하고 부모 세션의 sandbox·승인 정책을 그대로 물려받는다(최신 codex 소스 기준). 그래서 v1 Codex 정의는 `sandbox_mode`를 적지 않고, 검사기가 적힌 것을 거부한다.
+    - Codex 정의의 권한 표시는 「부모 세션 권한 상속」으로 시작한다. 「수정 금지」 같은 제한은 지시문 제한이며 「(지시문)」을 붙인다.
+    - 읽기 전용을 기술로 보장하려면 Runner가 그 세션을 읽기 전용으로 시작해야 한다. 이것은 정의가 아니라 Runner 실행 정책의 일이다(M8 확인 목록, `packages/db/seed/subagents/REVIEW.md`).
   - 근거: §7.4
 - `cli_observation_grades`
   - cli+version+model+options unique, grade, verified_at, notes
@@ -584,20 +600,37 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
 - `report_pdfs`
   - report, view, path, sha256 (캐시)
   - 근거: §8.5
+- **보고서 상태 이력** (`state_log`·`global_log`·`log_clock`·`commit_log`·`commit_real`, M6-01, 마이그레이션 0028·0029)
+  - 기간 지정·정기 보고서가 「기간 끝 시점(T)의 상태」를 되살리려고 남기는 이력이다(owner 2026-11-27 아이템 13, G L375).
+  - 보고서가 읽는 모든 표의 행이 바뀔 때마다 행 전체를 남긴다. 프로젝트 행은 `state_log`, 프로젝트가 없는 행(설정·실행 PC·전역 알림)은 `global_log`다.
+  - 「T 전」은 문장 실행 시각이 아니라 **커밋**으로 정한다. 한 변경은 아래 둘이 모두 참일 때만 T 시점 상태에 들어간다(`apps/api/src/reports/README.md` §2).
+    1. 커밋 시계 값(stamp) < T. 쓰기 트랜잭션은 커밋 직전에 커밋 시계(`log_clock`)를 한 칸 올리고 그 값을 `commit_log`에 남긴다. 시계 값은 「직전 값 + 1µs」와 「지금 시각」 중 큰 값이라 PC 시계가 뒤로 가도 줄지 않는다.
+    2. 실제 커밋 시각 < T. 실제 커밋 시각은 PostgreSQL이 `track_commit_timestamp=on`일 때 기록하는 값이고, 정리 단계(`awbs_settle_commits`)가 `commit_real`에 옮겨 적는다. 모르면 「정리가 커밋됨을 처음 본 시각(observed_at)」 < T로 판단한다. 커밋 시계 값으로 채우지 않는다.
+    - 왜 둘 다인가: 커밋 시계 값은 제약 트리거를 일찍 실행하면 실제 커밋보다 먼저 매겨질 수 있다. 실제 커밋 시각만 보면 PC 시계가 뒤로 갈 때 결과가 흔들린다. 순서와 결정성은 커밋 시계가, 「정말 T 전에 커밋됐나」는 실제 커밋 시각이 맡는다.
+    - 보고서는 먼저 시계를 올린 기준점을 잡고 그 뒤에 읽는다. 그래서 「그때 만든 보고서」와 「나중에 다시 만든 같은 보고서」가 같다.
+    - 그래서 `track_commit_timestamp=on`이 꼭 필요하다(§6). 꺼져 있으면 정리 함수가 `55000`으로 거부하고 보고서 생성도 실패한다.
+  - 기록은 SECURITY DEFINER 함수만 쓴다. 앱 역할(`awbs_app`)은 읽기만 한다.
+  - 이 표들은 Drizzle 스냅샷 밖의 SQL 전용 표다.
+  - 되살린 행에도 저장 순번(`record_no`·`run_no`)이 들어 있어 「최신 한 행」을 화면과 같은 기준으로 고른다(§1 「저장 순번」, 0037이 옛 이력의 빈 순번을 채움).
+  - 보고서 스냅샷의 프로젝트 이름(`projectName`)과 출처(`projectNameStatus`: `snapshot`·`filled`·`unknown`)는 0030이 옛 보고서에도 채웠다. 확실하지 않으면 `unknown`으로 두고 추측하지 않는다.
+  - 근거: §4.11, G L375
 - `mail_settings`/`mail_recipients`
   - `mail_settings`: SMTP(비밀값은 secrets)
   - `mail_recipients`: email lower unique, daily/weekly 하나 이상 또는 inactive.
+    - 외부 수신자 구분: owner Q-13 A(2026-11-27 아이템 19)로 필요해졌다. 외부 수신자에게는 링크 없이 PDF만 보낸다.
   - `mail_recipients.external`(Q-13 결정 A, 0039): 외부 수신자. 참이면 view='ext' · pdf=true · daily=false여야 한다(검사 `recipient_external`).
     - 왜: 외부 수신자에게는 링크 없이 보고용 + PDF만 보낸다. 일간 보고서는 팀장용만 있다.
   - 근거: §4.11
 - `mail_outbox` / `mail_log`
   - `mail_outbox`: delivery_id(논리 발송), epoch, unique(report, recipient, try_no), state(§3.7)
+    - 발송마다 보기·사유·제목·첨부 여부도 함께 저장한다(0031). 수신자 설정이 나중에 바뀌어도 「그때 어떤 보기로, 왜 보냈는지」가 남아야 하기 때문이다(G L407).
+    - 15분 뒤 자동 재시도는 한 번뿐이고, 했는지를 기록한다.
   - `mail_outbox.external`(Q-13 결정 A, 0039): 외부 수신자에게 간 발송인지(발송 당시 값). 참이면 view='ext' · pdf=true(검사 `mail_outbox_external`)
   - `mail_log`: 수신자 삭제 후에도 주소 보존
   - 근거: §9.6-6
 - `notify_settings`/`notify_rules`
   - `notify_settings`: enabled, chat_id, target_name, bot, 테스트 입력 지문
-  - `notify_rules`: 이벤트 6종
+  - `notify_rules`: 이벤트 6종. `serviceDown`은 규칙이 없는 알림이다(§3.7).
   - 근거: §4.14
 - `notify_events`
   - dedup_key, resolved_at, dup_count. **열린 키 1개**(부분 unique where resolved_at is null)
@@ -644,11 +677,19 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
   - 근거: §4.12
 - `design_drifts` / `design_versions`
   - item_key, kind, compat(호환/깨짐/`대조 안 함`), status, resolution
+  - `design_drifts`에는 `record_no`가 있다(0037). 같은 항목의 「최신 불일치」를 이 순번으로 고른다.
   - drift는 계약 문서와 실제 코드가 서로 어긋난 상태다.
   - compat 저장 값은 화면 문구(호환/깨짐/대조 안 함)이고, API 값은 `compatible/breaking/unchecked`다. 경계에서 바꾼다(`DRIFT_COMPAT`).
   - 근거: §4.12 §9.6-1-4
 - `ci_runs` / `ci_steps`
   - run_key, stage, **base_sha, head_sha, merge_sha, tree_sha, pipeline_sha**(단계별 해당 값), ref, pr, task?, attempt?, trigger, status, fail_step, log_excerpt, artifact_path, url, job?, fence?, artifacts
+  - M7에서 더한 열(마이그레이션 0026, contracts §3.6):
+    - `run_no`: 실행 저장 순번. 「Task의 최신 ① 결과」와 목록 커서가 이 값을 쓴다(§1 「저장 순번」).
+    - `reporter`: 실행을 시작한 Runner. job이 없는 야간 점검도 시작한 Runner만 갱신하게 하려는 것이다.
+    - `fail_scope`: 실패한 ①의 원인 쪽(`baseline`·`task`, CHECK `ci_fail_scope`). 기준 실패는 Task 실패로 세지 않는다.
+    - `cause_candidates`: 야간 점검 실패의 원인 후보 커밋 목록(jsonb 배열, 기본 `[]`).
+    - `note`, `e2e`, `github_status`, `finished_at`: 보고 메모, 전체 E2E 집계, GitHub 상태 게시 결과, 끝난 시각.
+  - `ci_steps.duration_ms`: 단계별 소요 시간(ms, 0 이상). `ci_steps`에도 `record_no`가 있다.
   - stage는 1~4 숫자로 저장하고 API 값과 task=1, int=2, night=3, deploy=4로 바꾼다(`CI_STAGE`).
   - pipeline_sha·trigger는 NOT NULL이다. 그래서 API 시작 요청에서도 필수다(contracts §2.3).
   - job·fence: 실행을 시작한 job과 그 fence.
@@ -666,13 +707,25 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
   - 근거: §4.13
 - `merge_queue`
   - pr, task unique(열림), position, status, qa_head_sha(H), synced_head_sha(H'), base_sha(A), verification, ci_run, tested_tree_sha, **actual_merge_sha·actual_tree_sha**
+  - M7에서 더한 열(0026):
+    - `head_sync`(jsonb): H→H′ 보존 증거(사슬 포함). 자동 완료와 팀장 완료 버튼이 같은 근거를 쓰게 한다(contracts §4.1 코드 근거 고정 3-2).
+    - `merge_parents`(jsonb): 실제 PR 병합 커밋의 부모 2개.
+    - `queue_no`: 대기열 저장 순번. `merged_at`: 병합 시각.
+- `ci_merge_facts`
+  - (project, merge_sha) 기본 키, tree_sha, parents — 병합 SHA마다 **첫 기록**을 남긴다(0026).
+  - 같은 병합 SHA의 tree·부모는 바꿀 수 없다. 다른 부모로 다시 보고하면 409 `MERGE_MISMATCH`다(contracts §3.6-5).
+  - 왜: 첫 기록을 고칠 수 있으면, 대조에 실패한 병합을 나중 보고로 「맞는 것」처럼 덮을 수 있다.
+- `projects.pipeline_observations`(jsonb, 기본 `{}`)
+  - main 커밋(A)별 pipeline 정의의 첫 관측이다(M7-04 결정 5). ② 실행의 `pipeline_sha`와 대조한다. 성공한 관측만 남긴다.
   - A·H·H'의 뜻은 [contracts §4.1](contracts.md#41-시도-1회) 「코드 근거 고정」 3번에 있다.
   - 근거: §4.13
 - `flaky_tests`
-  - test_key, rate, quarantined, task
+  - test_key, rate, quarantined, task, last_failed_at(0026)
+  - `quarantined`가 참인 테스트 목록이 Runner 정책 `ci.quarantined[]`로 나간다(contracts §3.1).
   - 근거: §4.13
 - `ci_settings`
-  - night_at, retry=1, deploy_url
+  - night_at, retry=1, deploy_url, settings_version(0026)
+  - `deploy_url`은 이 PC(loopback) 주소만 대상이 된다(owner Q-15 A, M7-03 결정 6).
   - 근거: §4.13
 - `messages`
   - msg_key, task, attempt?, dir, type, to_agent, body, **delivery**, **pending_next**, **work_state**, fail_reason, read_at, draft — 세 상태 별도(§9.4-1)
@@ -766,6 +819,9 @@ claim은 Runner가 「이 일을 제가 하겠습니다」 하고 job을 예약�
 
 - 시도 상태: `running → completed | failed | interrupted` (화면: 실행 중/완료/실패/중단).
 - 종료 상태는 불변.
+- ① 실패의 분류(M5-05 조정자 결정 3, contracts §3.5):
+  - Task 코드 때문에 ①이 실패하면 `failed`이고 재작업으로 간다.
+  - 기준(main) 실패(`failScope=baseline`)나 Runner·환경 문제로 결과를 모으지 못하면 `interrupted`이고 같은 시도를 다시 한다. 재작업 횟수에 세지 않는다.
 - **claim은 job 예약만 하고 시도를 만들지 않는다.**
 - 하위 Agent 설치까지 성공한 뒤 `jobs/:id/start`가 시도를 만들고 Task를 전이한다.
   - 왜: 설치에 실패했을 때 「시도했다가 실패한 것」으로 기록되면 재시도 횟수와 이력이 부풀려진다.
@@ -785,6 +841,12 @@ claim은 Runner가 「이 일을 제가 하겠습니다」 하고 job을 예약�
 - `Queued/Sent → Failed → Queued(재전송)`
 - `pending_next`는 별도 플래그.
 - `Acknowledged`는 작업 완료가 아니다. (Agent가 메시지를 받았다는 뜻일 뿐이다.)
+- **실패한 시도에서 받은 지시** (M5-05 조정자 결정 4)
+  - 실패한 시도에서 ack된 팀장 메시지는 다음 시도에도 전달한다. 지시는 시도가 아니라 Task에 대한 것이기 때문이다.
+  - 다음 시도의 첫 입력에 「이전 시도에서 받은 지시」로 묶어 넣고, 그 시도에서 다시 ack한다.
+  - 성공한 시도에서 ack된 메시지만 끝난 것으로 본다.
+  - 다시 전달한 지시에는 업무 응답을 다시 보내지 않는다. 한 지시에 응답은 하나다(M5·M7 통합).
+  - 응답 기록과 「응답함」 표시 사이에 Runner가 죽으면 응답이 한 번 더 갈 수 있다. 응답을 잃는 것보다 낫다고 보고 이 순서로 둔다.
 
 ### 3.4 프로젝트/초기화
 
@@ -796,6 +858,8 @@ claim은 Runner가 「이 일을 제가 하겠습니다」 하고 job을 예약�
 
 - CI: `queued → run → pass | fail | skip`.
 - 대기열: `waiting_verify → queued → checking → merged | failed | removed`.
+- `removed` 뒤 다시 대기열에 넣을 때는 열린 행을 닫고 새로 여는 일을 한 트랜잭션에서 한다(M7-04 결정 2). 열린 행이 겹쳐 500이 나던 문제를 막는다.
+- 병합 대조 실패는 `merged`가 아니라 보류다. 실제 병합 SHA와 경고는 먼저 저장한다(contracts §3.6-6).
 
 ### 3.6 Change Proposal
 
@@ -814,6 +878,17 @@ claim은 Runner가 「이 일을 제가 하겠습니다」 하고 job을 예약�
 - 화면에는 G의 4상태만 쓰고 unknown은 「실패 — 수락 여부 불명」으로 표시(§4.14 L558).
 - 정책은 contracts §4.4.
 - 규칙이 꺼진 동안에는 event/outbox를 만들지 않는다(§4.14 L524).
+- **알림 한 건 만들기는 한 곳에서** (M6 통합, 마이그레이션 0036)
+  - 모든 Telegram 알림은 공통 함수 `awbs_notify_emit()` 하나로 알림 기록(`notify_events`)과 발송 대기열(`notify_outbox`)을 같은 트랜잭션에서 만든다.
+  - 하는 일: 열린 같은 키가 있으면 중복 수만 센다 → 연결이나 규칙이 꺼져 있으면 아무것도 안 한다 → 기록과 대기열을 함께 넣는다.
+  - 그 함수 안에서 오류가 나도 그 일만 되돌린다. 업무 저장(CI 보고·Task 상태)은 계속된다(G L1076).
+  - Task·설정·승인 상태 변화는 DB 트리거가 이 함수를 부른다. CI 결과 알림은 M7 CI 코드(`emitNotify()`)가 부른다.
+    - 왜 CI는 코드인가: CI의 「최신 결과」 판단과 기준 실패 묶음은 CI 코드만 안다. 트리거로 옮기면 같은 규칙을 두 곳에서 지켜야 한다.
+- **`serviceDown`(서비스 없음)** (M7-03 결정 11·14)
+  - ④ 배포 확인과 자동 복구까지 실패해 서비스가 없을 때 보내는 높은 우선순위 알림이다. G의 6종에는 없다.
+  - 알림 규칙과 무관하게, 전체 알림이 켜져 있으면 보낸다. 메시지 첫 줄은 「[Agent WBS] 서비스 없음」이다.
+  - 다음 배포 확인이 통과하면 열린 경보와 알림 키를 닫는다.
+- **재시도 한도 알림의 중복 키**: `fail|retry|<시도 묶음 id>`다(0036). 같은 경보의 반복은 중복으로 세고, 팀장이 다시 실행한 뒤 다시 한도를 넘으면 새 알림이다.
 
 ## 4. DB가 보장하는 것 / Service가 보장하는 것
 
@@ -922,6 +997,31 @@ epoch가 바뀌는 순간(초기화)과 다른 쓰기가 겹쳐도 옛 프로젝
     - 0015는 표 구조를 바꾸지 않는 SQL 전용 파일이라 snapshot(이전 스냅샷 ID로 이어지는 구조 기록)이 없다. 그래서 0016 snapshot은 0014 snapshot에 이어진다.
   - 0016의 CHECK는 계약과 같은 조건을 검사한다. 권한 하나가 JSON null인 값, 목록 자리에 숫자·boolean·null이 든 값은 거부한다(검사 전체가 참일 때만 통과, `awbs_valid_id_list()`).
 - 0019(M2-08, 2026-11-26)는 일정 정책 기본값(가정 가동률 0.6, 재조정 임계값 1일, owner 아이템 7)을 `seed_system()`에 넣고, 기존 DB의 빈 칸만 채운다(§2.7).
+- **0020~0037**(M2·M3 후속, M5·M7 통합, M6 통합, 2026-11-26~27)
+  - 0020~0025: 실행 근거, 프로젝트·설정 후속, Evidence 참조, 설정 버전 열.
+  - 0026 CI 보고(§2.8 `ci_runs`·`merge_queue`·`ci_merge_facts`, §1 저장 순번), 0027 Planning 이벤트 저장 순번(M5·M7 통합).
+  - 0028~0035 M6(보고서 상태 이력, 보고서 이름, 메일 대기열, Telegram 전이 알림, 설계 원장). M6 통합에서 main 다음 순번으로 다시 매겼다.
+  - 0036 알림 공통 함수(§3.7), 0037 저장 순번 보충(M6 자체 표 3개와 옛 이력의 빈 순번, §1).
+- **병렬 브랜치의 마이그레이션 번호** (M7-04 조정자 결정 3, M6-05 결정 4)
+  - 작업 브랜치는 배정받은 번호로 만들고, **병합 직전에 마지막 순번으로 다시 매긴다**. 파일 이름(tag)·snapshot 파일 이름·`prevId` 연결도 함께 맞춘다.
+  - journal의 `when`은 번호 규칙 `1795740000000 + 번호`를 따른다. 예: `0037`이면 `1795740000037`. 그래서 journal의 모든 값보다 크다.
+  - 왜: Drizzle(마이그레이션 도구)은 DB에 마지막으로 기록된 시각보다 `when`이 큰 것만 적용한다. 더 작은 `when`이 나중에 들어오면 오류 없이 건너뛴다.
+- **`runMigrations`(`db:migrate`)의 순서** (M5·M7·M6 통합)
+  1. 이미 적용한 마이그레이션(같은 hash)의 DB 기록 시각을 지금 journal의 `when`으로 맞춘다. 재번호는 내용이 같으므로 다시 실행하지 않는다.
+  2. Drizzle이 건너뛸 낮은 `when`의 마이그레이션을 먼저 적용한다(보충). 단, DB에 지금 폴더에 없는 hash의 기록이 하나라도 있으면 보충하지 않는다.
+  3. Drizzle로 나머지를 적용한다.
+  4. **적용 누락 검사**: journal의 모든 hash가 DB 기록에 있는지 대조한다. 빠지면 `MigrationGapError`로 멈춘다.
+  - 내용이 다른 옛 판(예: 작업 브랜치의 옛 0041)을 적용한 DB는 보충하지 않고 멈춘다. 그 DB는 새로 만든다. 운영 데이터를 지우기 전에 적용 순서부터 바로잡는다.
+  - 왜 멈추나: 모르는 기록은 내용이 다른 옛 판이거나 늦게 병합된 것이다. 순서를 바꿔 적용하면 새로 만든 DB와 구조가 달라질 수 있다.
+- **새 마이그레이션 작성 권고**: 제약을 지울 때 동적 `DROP CONSTRAINT`(이름을 실행 중에 찾는 문장) 대신 고정한 제약 이름을 쓴다.
+  - 왜: Runner의 SQL 설계 추출기는 영향 범위를 모르는 동적 SQL을 만나면 모든 표를 「대조 안 함」으로 둔다(contracts §2.3 「설계」). 이 저장소는 `0006`의 한 문장 때문에 모든 표가 대조 안 함이다.
+  - 작성 규칙으로 정할지는 검토 중이다.
+- **DB 서버 요구사항** (M5·M7·M6 통합, 자세한 것은 `agent-wbs/packages/db/TESTING.md`)
+  - 이미지는 Debian 기반 `postgres:16`이다(`postgres:16-alpine`이 아니다). compose와 시험 컨테이너가 같다.
+    - 왜: alpine의 C.UTF-8 정렬 결과가 Debian과 달라 정렬을 확인하는 시험이 실패했다. 기존 alpine 볼륨은 새로 만들거나 `REINDEX DATABASE awbs_dev`가 필요하다.
+  - `track_commit_timestamp=on`이 꼭 필요하다(compose·시험 DB·운영). 서버를 시작할 때만 바꿀 수 있으므로 띄우는 명령에 넣는다. 꺼져 있으면 시험 준비가 바로 멈춘다.
+  - 시험 DB는 `template0`에서 `LC_COLLATE`·`LC_CTYPE`를 C.UTF-8로 만든다(M7-04 결정 9). 컨테이너 기본 언어가 달라도 정렬·한글 정규식 결과가 같아야 하기 때문이다.
+  - 시험 컨테이너에만 `fsync=off`·`synchronous_commit=off`·`full_page_writes=off`를 써도 된다. 개발·운영 DB에는 쓰지 않는다.
 
 ### 6.1 DB 권한과 보안 검사
 

@@ -32,11 +32,11 @@ export function nextDelivery(current: Delivery, action: MessageAction): Delivery
 
 /**
  * 전송 시 「다음 실행 대기」로 둘지(P `deliver` L5418-5421).
- * Task가 실행 중인데 Runner가 실행 중 세션에 넣을 수 없으면(설정 「실행 중 전달」 꺼짐) 다음 실행 시작 때 전달한다.
+ * Q-07(owner 2026-11-27 아이템 18): 실행 중인 Task의 메시지는 항상 다음 실행 시작 때 전달한다.
  * 실시간 세션 제어를 지원하는 것처럼 표현하지 않기 위해서다(G§4.10).
  */
-export function pendingNextAtSend(input: { taskRunning: boolean; liveInject: boolean }): boolean {
-  return input.taskRunning && !input.liveInject;
+export function pendingNextAtSend(input: { taskRunning: boolean }): boolean {
+  return input.taskRunning;
 }
 
 export interface MessageRow {

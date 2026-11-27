@@ -83,15 +83,29 @@ describe('실행 정책 /api/settings/exec-policy', () => {
 });
 
 describe('Agent 역할·기본 Workflow /api/settings/workflow', () => {
-  test('기본값은 Claude 개발 → Codex 검증, 실행 중 전달은 exec_policy.live_inject에 저장', async () => {
+  test('기본값은 Claude 개발 → Codex 검증, 실행 중 전달은 false만 저장', async () => {
     const current = (await h.lead('GET', '/api/settings/workflow')).body;
     expect(current).toMatchObject({ devAgent: 'Claude', qaAgent: 'Codex', liveInject: false, heartbeatSeconds: 60, missedHeartbeats: 3 });
-    const saved = await h.lead('PUT', '/api/settings/workflow', { ...current, devAgent: 'Codex', liveInject: true, heartbeatSeconds: 30 });
+    const rejected = await h.lead('PUT', '/api/settings/workflow', { ...current, devAgent: 'Codex', liveInject: true, heartbeatSeconds: 30 });
+    expect(rejected.status).toBe(400);
+    expect(rejected.body.error.code).toBe('VALIDATION_FAILED');
+    expect((await h.lead('GET', '/api/settings/workflow')).body).toEqual(current);
+    const saved = await h.lead('PUT', '/api/settings/workflow', { ...current, devAgent: 'Codex', liveInject: false, heartbeatSeconds: 30 });
     expect(saved.status, JSON.stringify(saved.body)).toBe(200);
-    expect(saved.body).toMatchObject({ devAgent: 'Codex', qaAgent: 'Codex', liveInject: true, heartbeatSeconds: 30 });
-    expect((await h.owner.query('select live_inject from exec_policy')).rows[0]).toEqual({ live_inject: true });
+    expect(saved.body).toMatchObject({ devAgent: 'Codex', qaAgent: 'Codex', liveInject: false, heartbeatSeconds: 30 });
+    expect((await h.owner.query('select live_inject from exec_policy')).rows[0]).toEqual({ live_inject: false });
     expect((await h.owner.query('select heartbeat_seconds from app_settings')).rows[0]).toEqual({ heartbeat_seconds: 30 });
     expect((await h.lead('PUT', '/api/settings/workflow', { ...current, devAgent: 'Claude' })).body.error.code).toBe('VERSION_CONFLICT');
+  });
+
+  test('Q-07: 기존 true는 조회 시 false로 취급하고 다음 저장에서 false로 정리한다', async () => {
+    await h.owner.query('update exec_policy set live_inject=true');
+    const current = (await h.lead('GET', '/api/settings/workflow')).body;
+    expect(current.liveInject).toBe(false);
+    const saved = await h.lead('PUT', '/api/settings/workflow', current);
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    expect(saved.body.liveInject).toBe(false);
+    expect((await h.owner.query('select live_inject from exec_policy')).rows[0]).toEqual({ live_inject: false });
   });
 });
 

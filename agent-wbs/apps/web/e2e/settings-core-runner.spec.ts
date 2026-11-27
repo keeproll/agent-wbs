@@ -6,6 +6,20 @@ import { expect, test } from '@playwright/test';
 import { fakeApi, json } from './support/fake-api.ts';
 import { CONCURRENCY, GITHUB, RUNNER_EMPTY, RUNNER_FULL, settingsApi } from './support/settings-fixtures.ts';
 
+test('Q-07: 실행 중 전달은 원래 자리에서 준비 중으로 보이고 켤 수 없다', async ({ page }) => {
+  const s = settingsApi(await fakeApi(page));
+  await page.goto('/settings/runner');
+  const card = page.getByRole('region', { name: 'Runner 연결' });
+  const group = card.getByRole('group', { name: '실행 중 세션 전달' });
+  await expect(group.locator('button')).toHaveCount(2);
+  await expect(group.getByRole('button', { name: '미지원 — 다음 실행에 전달' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(group.getByRole('button', { name: /준비 중/ })).toBeDisabled();
+  await expect(group.getByRole('button').first()).toBeDisabled();
+  await expect(card.locator('#live-inject-hint')).toContainText('지금은 메시지를 「다음 실행 대기」로 보관합니다');
+  await expect(card.getByRole('button', { name: '저장', exact: true })).toHaveCount(0);
+  expect(s.workflow.bodies).toEqual([]);
+});
+
 test('UAT-RUNNER-UI a: 헤더·설정 연결 상태와 준비 상태 결과·조치·탭 배지가 일치한다', async ({ page }) => {
   settingsApi(await fakeApi(page));
   await page.goto('/settings');

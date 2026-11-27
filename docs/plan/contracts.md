@@ -98,13 +98,14 @@
 | 400 | `VALIDATION_FAILED` `DEPENDENCY_SELF` `LIMIT_EXCEEDS_CAP` | 수정 안내, 재시도 없음 |
 | 401/403 | 위 표 | Runner는 중지·경보 |
 | 404 | `TASK_NOT_FOUND` `PROJECT_NOT_FOUND` `WBS_NODE_NOT_FOUND` `DEPENDENCY_NOT_FOUND` `ATTEMPT_NOT_FOUND` `MESSAGE_NOT_FOUND`, 전용 코드가 없는 자원은 `NOT_FOUND`★ `details{resource,id}` | 안내 |
-| 409 | `VERSION_CONFLICT` `EPOCH_MISMATCH` `DEPENDENCY_DUPLICATE` `RECIPIENT_DUPLICATE`★(G§8.5 수신자 중복) `DEPENDENCY_CYCLE` `TASK_HAS_SUCCESSORS` `EXTERNAL_WRITE_BLOCKED`★ `PROJECT_EXISTS` `INPUT_UNCHANGED` `ATTEMPT_CLOSED` `SCHEDULE_CYCLE` `INVALID_TRANSITION`★ `SPLIT_JUDGEMENT_REQUIRED`★ `ACTIVE_TASK_BLOCKED`★ `ORDER_NOT_PRESERVED`★ `GATE_NOT_PASSED`★ `CLAIM_REJECTED`★ `LEASE_LOST`★ `CLEANUP_PENDING`★ `IDEMPOTENCY_CONFLICT`★ `DECISIONS_PENDING`★ | 재시도하지 않고 최신 조회 |
+| 409 | `VERSION_CONFLICT` `EPOCH_MISMATCH` `DEPENDENCY_DUPLICATE` `RECIPIENT_DUPLICATE`★(G§8.5 수신자 중복) `DEPENDENCY_CYCLE` `TASK_HAS_SUCCESSORS` `EXTERNAL_WRITE_BLOCKED`★ `PROJECT_EXISTS` `INPUT_UNCHANGED` `ATTEMPT_CLOSED` `SCHEDULE_CYCLE` `INVALID_TRANSITION`★ `SPLIT_JUDGEMENT_REQUIRED`★ `ACTIVE_TASK_BLOCKED`★ `ORDER_NOT_PRESERVED`★ `GATE_NOT_PASSED`★ `MERGE_MISMATCH`★ `CLAIM_REJECTED`★ `LEASE_LOST`★ `CLEANUP_PENDING`★ `IDEMPOTENCY_CONFLICT`★ `DECISIONS_PENDING`★ | 재시도하지 않고 최신 조회 |
 | 412 | — 사용 안 함(409로 통일) | |
 | 422 | `SUBAGENT_INSTALL_FAILED`(job 결과 코드) | 시도 시작 안 함 |
 | 429 | `RATE_LIMITED`★ | `Retry-After` |
 | 500/503 | `INTERNAL` `UNAVAILABLE`★ | 다시 시도 / Runner 재시도 |
 
 - 표의 「위 표」는 §1 목록의 팀장 인증·Runner 인증 항목을 가리킨다.
+- `MERGE_MISMATCH`(M7-04 조정자 결정 4, 2026-11-27)는 병합 보고의 실제 부모·tree가 저장된 근거와 다를 때 쓴다(§3.6-6). 받은 쪽은 재시도하지 않고 사람 처리를 기다린다.
 - 409를 받으면 재시도하지 않는 이유: 409는 「지금 상태와 맞지 않는다」는 뜻이라, 같은 요청을 다시 보내도 또 실패한다. 최신 상태를 다시 읽어야 한다.
 
 **헷갈리기 쉬운 409 코드 구분**
@@ -120,9 +121,11 @@
 - **시도별 순서 보존**: 앞 보고가 막히면 뒤 보고를 보내지 않는다.
   - 왜: 「완료」 보고가 「시작」 보고보다 먼저 도착하면 서버가 상태를 잘못 판단한다.
 - 다른 4xx는 `rejected`로 보존하고 readiness 경고로 올린다.
-  - [미정] 이 경고에 쓸 readiness key는 아직 없다. 지금 key는 12개(§3.1)이고, 그중 거부 기록용 key가 없다.
-  - 지금(2026-11-27, main 862e66a)은 계약을 바꾸지 않았다. Runner는 거부 기록을 내부 상태와 로그에만 둔다(`withRejectionWarnings()`는 아직 아무것도 덧붙이지 않는다).
-  - 왜 미뤘나: 새 key를 만들면 서버 저장(readiness 표·DB CHECK)까지 함께 바뀐다. 그래서 M2 통합 뒤 계약 작업에서 정한다(조정자 결정 A, 2026-11-26).
+  - 이 경고는 readiness key **`reports`**로 보낸다(M3 서버 후속에서 계약에 추가, main 023ac8f 확인).
+    - 거부 기록이 있으면 `warn`이고 `detail`에 기록을 적는다. 없으면 `ok`(「보고 거부 기록 없음」)다.
+    - Runner의 `withRejectionWarnings()`가 다른 준비 항목을 덮지 않고 이 항목만 덧붙인다.
+  - 지금 readiness key는 15개다(§3.1).
+  - 예전 기록: 2026-11-26에는 key가 없어 계약 작업으로 미뤘다(조정자 결정 A).
 - 조회 timeout(정해진 시간 안에 응답이 없으면 포기) 10초, 업로드 120초 [결정].
 - 자동 처리 실패는 팀장 오류 막대가 아니라 반복 시 알림으로 올린다(§0.3 L71).
 
@@ -232,6 +235,12 @@
   - 용도: §4.9 탭.
   - `settings/ci`와 §2.3의 `ci/settings`는 **같은 설정 한 벌**(같은 행·버전).
   - 저장 전 `updatedAt`은 null.
+  - Q-07(owner 2026-11-27 아이템 18): `workflow.liveInject`는 `false`만 허용한다.
+    - `true` 저장 요청은 HTTP(웹 요청 방식) 400과 `VALIDATION_FAILED`로 거부한다.
+    - DB(데이터베이스)의 `exec_policy.live_inject`에 이미 `true`가 있어도 조회와 메시지 처리는 `false`로 취급한다.
+    - 실행 중인 Task(작업)의 메시지는 `running`·`qa`·`verifying` 모두 `pendingNext=true`로 보관한다.
+    - 설정 화면은 같은 자리에 「준비 중」을 표시하고 켤 수 없게 한다.
+    - 왜: 이번 범위는 다음 실행 때 전달하는 동작만 제공한다. 실행 중 전달은 CLI(명령줄 도구) 실측 뒤 다시 판단한다.
   - `models` PUT은 모델마다 `{agent,id,allowed}`만 받는다. 이름·rank·efforts는 읽기 전용이다(§7.1, Q-06).
   - **모델 순서는 설정값이다** (owner 2026-11-26 아이템 8).
     - 같은 `models` PUT에 `rankOrder`·`codexFamilyOrder`·`claudeModels`를 실어 바꾼다. 바꿀 때만 보내고, 빠진 항목은 그대로 둔다.
@@ -362,12 +371,62 @@ G§8.5, §8.5-1, §8.6, §8.7의 표 전체를 그대로 구현한다(재기술�
 - `POST /runner/ci/runs`(CI 실행 시작)는 `pipelineSha`·`trigger`가 필수다.
   - 왜: DB에서 두 값이 NOT NULL이라 기본값 없이 저장해야 한다(data-model §2.8 `ci_runs`).
 - CI retry/deploy-check → 202 `{jobId}`. 메일 발송·재발송·테스트 → 202 `{ids}`(발송 기록 ID). `GET /ci/pipeline`★(정의 표시), GET·PATCH `/ci/settings`★.
+  - `GET /ci/pipeline`이 보여 주는 정의는 Runner가 main 커밋에서 따로 관측해 보고한 것이다(§3.1 입력 변경 보고의 `pipelineObservation`, M7-04 결정 6). 서버는 git을 읽지 않는다.
 - 불일치 `resolve{how:"contract"}`는 Runner job을 만들고 **결과 커밋이 보고된 뒤** resolved. 호환 깨짐은 기술 결정 승인 필요(§4.12).
 - `POST /api/projects/:projectId/design/decisions`는 **Runner 토큰**(Agent 제안, §8.6)이며 `{jobId,fence,authority:"agent"|"free",…}`.
   - agent는 승인 대기, free는 기록.
   - GET과 approve/reject/change는 팀장.
+- **보고서** (M6-01·M6-02·M6-03 구현)
+  - 기간 지정 보고서는 상태 이력으로 **기간 끝 시점(T)의 상태**를 되살려 만든다(owner 2026-11-27 아이템 13, G L375). 이력은 data-model §2.7 「보고서 상태 이력」이다.
+    - 왜: 지금 상태로 만들면 지난 기간의 보고서가 그 뒤에 바뀐 값으로 채워진다.
+  - 첫 주간 보고서는 프로젝트 시작일이 든 주의 월요일부터 일요일까지다(달력 주, owner 2026-11-27 아이템 13).
+  - 「다음 예정」 범위는 일간 1일, 주간·기간 지정 7일이다(M6-01 조정자 결정).
+  - 메일 제목의 프로젝트 이름은 보고서 스냅샷의 값이다. 보고용(외부용) 본문에는 내부 용어를 넣지 않는다.
+  - 받는 사람의 PDF 첨부는 팀장이 내려받는 것과 같은 PDF다. 변환 실패는 보내기 전 실패이고 15분 뒤 1회 다시 시도한다.
+  - 외부 수신자에게는 링크 없이 PDF만 보낸다(owner Q-13 A). 수신자의 「외부」 구분은 구현 중이다(open-questions §2.1 Q-13). 지금은 접속 주소가 있으면 모든 수신자에게 링크를 넣는다.
+- **설계** (M6-05·M6-06 구현, 조정자 결정 2026-11-27)
+  - `GET /api/projects/:projectId/design/refs`★(`listDesignRefs`, M6 통합에서 추가)
+    - 설계 캐시가 있는 main·브랜치 목록과 각 최신 커밋이다. 응답 `{ items: [{ ref, commit, at }] }`.
+    - 순서는 main 먼저, 나머지는 이름 순이다.
+    - 왜: 설계 화면이 「어느 브랜치의 설계를 볼지」 고르려면 목록이 필요하다.
+  - **설계 보고의 `ref`** (M6-05 결정 1)
+    - 모든 `reportDesignSnapshot`에서 `ref`는 필수이고 형식을 검사한다. 생략하면 main으로 채우던 기본값은 없앴다.
+    - 받는 형식은 `main` 또는 Runner 브랜치 형식(`agent/<task-key>`, 권한 세대 접미사 `-hN` 포함)뿐이다. `refs/heads/`나 대소문자 변형은 거부한다.
+    - `ref=main` 보고는 main을 직접 읽는 job 종류(설계 동기화·`design_apply` 결과 커밋)만 할 수 있다. `attempt` job은 자기 `agent/` 브랜치만, 그것도 `payload.branch`와 정확히 같아야 한다.
+    - 왜: 시도 job이 main 설계를 덮어쓰면, 병합 전 코드가 main의 설계 원장에 들어간다.
+  - **결정과 항목의 연결** (M6-05 결정 2)
+    - 호환이 깨지는 반영에 쓰는 기술 결정은 같은 `itemKey`와 같은 `driftId`(또는 대상 계약 버전)를 가리키고 승인 상태여야 한다.
+    - 다른 항목·다른 불일치의 승인 결정은 통과시키지 않는다.
+  - **계약 반영 요청의 외부 쓰기 확인** (M6-05 결정 3)
+    - 외부 쓰기가 막혀 있으면 불일치 「계약에 반영」 요청을 요청 시점에 409 `EXTERNAL_WRITE_BLOCKED`로 거부한다. job을 만들지 않는다.
+    - 왜: 막힌 동안 job이 대기열에 쌓이면, 풀리는 순간 한꺼번에 GitHub에 쓰게 된다.
+  - **`design_apply` 결과 보고** (M6 통합)
+    - 최신이 아닌 커밋의 `design_apply` 결과는, 최신 main 캐시의 그 항목이 목표 명세와 같을 때만 완료한다. 다르면 409 `INVALID_TRANSITION`이고 Runner는 최신 커밋 기준으로 다시 보고한다.
+    - 같은 커밋을 다시 보고할 때, 파일 전체가 `unchecked`(`file:<path>`)였던 파일에서 새로 대조된 항목은 올려 받는다.
+  - **호환 판정 규칙** (M6-06 결정 Q-a~Q-c)
+    - enum·const·format 변화는 필드 타입 지문에 넣어 모두 「타입 변경」으로 본다. 보수적으로 사람이 확인하게 하려는 것이다. 해석하지 못하는 키워드가 있으면 그 필드는 `unchecked`다.
+    - 같은 커밋 다시 대조: 서버는 같은 커밋의 결과를 `unchecked` → 대조됨으로 올리는 것만 허용한다. 이미 대조된 결과를 다른 결과로 바꾸면 409 `VERSION_CONFLICT`다. 추출기가 잠깐 실패한 뒤 다시 대조할 수 있게 하려는 것이다.
+    - 판정 방향은 요청 쪽과 응답 쪽을 나눈다.
+      - 요청: 필드 삭제는 호환, 새 필수 필드는 깨짐, 타입 변경은 깨짐.
+      - 응답: 필드 삭제는 깨짐, 필수→선택은 깨짐, 새 필드는 호환, 타입 변경은 깨짐.
+      - 메시지(AsyncAPI·Kafka)는 생산자→소비자 기준으로 응답 규칙을 쓴다.
+      - 예: 요청 본문에서 선택 필드를 지우면 옛 클라이언트가 보내도 서버는 무시하면 되므로 호환이다. 응답에서 지우면 그 필드를 읽던 화면이 깨진다.
+    - 공통 원칙: 해석기가 모르는 것은 절대 「any」나 「일치」로 바꾸지 않는다. 모르면 `unchecked`다.
+  - **해석 범위** (owner Q-14 A, M6-06)
+    - OpenAPI는 직접 쓴 계약과 추출본을 대조한다. Neo4j는 원문 표시만 한다. Kafka는 JSON Schema만 해석하고 레지스트리는 쓰지 않는다.
+    - Avro·Protobuf·Neo4j·QuestDB·Redis 같은 미지원 형식은 원문을 보존하고 대조하지 않는다.
+    - JSON Schema의 외부·순환 참조, 64단계보다 깊은 스키마, 조합·동적 규칙은 `unchecked`다.
+    - SQL에서 해석기가 모르는 문장(함수·동적 SQL·상속 등)은 영향 범위에 따라 다르게 다룬다(`agent-runner/src/design/sql.ts`).
+      - 어느 표의 문장인지 알면 **그 표만** `unchecked`다. 다른 표는 계속 대조한다. 예: `ALTER TABLE t INHERIT u`는 `t`만 대조 안 함이다.
+      - 어느 표에 미치는지 모르면 그때까지의 모든 표와 그 뒤에 만들어지는 표를 `unchecked`로 둔다.
+      - 왜: 모르는 문장이 바꾼 구조를 「일치」로 볼 수 없다. 하지만 영향이 없는 표까지 대조를 멈출 필요는 없다.
+    - SQL 파일을 읽거나 해석하다 **실제 오류**가 나면 SQL 묶음 전체의 부분 결과를 보고하지 않는다.
+      - 왜: 낡은 일부 구조를 최종 구조로 착각해 대조하는 일을 막는다.
+    - 예: 이 저장소의 마이그레이션은 `0006`의 동적 `DROP CONSTRAINT` 한 문장(영향 범위를 모름) 때문에 모든 표의 계약 대조가 `unchecked`다. 파일 읽기 실패는 아니다. 이미 적용한 파일이라 고치지 않는다. 새 마이그레이션에서는 동적 `DROP CONSTRAINT` 대신 고정한 제약 이름을 쓰기를 권한다(작성 규칙으로 넣을지는 검토 중, data-model §6).
 - Telegram(메신저. 알림을 봇으로 보낸다) 오류: `token_invalid`(401) `chat_not_found`(400) `forbidden`(403) `rate_limited`(429) `network` `webhook_in_use` `chat_migrated`★(자동 교체 금지). 마스킹 문자열 토큰 400.
   - 마스킹 문자열 토큰: 화면에 `••••1234`처럼 가려 보여 준 값을 그대로 다시 저장하려는 경우다.
+- Telegram 전송 이력(`listNotifyLog`)의 `event`에는 G의 6종 외에 **`serviceDown`**(서비스 없음)이 있다(M7-03 결정 11·14, M6 통합). 알림 규칙 칸은 늘리지 않았다. 자세한 것은 data-model §3.7.
+- 발송 시점은 즉시 발송이다(owner Q-16 A).
 
 ### 2.4 로그인 ★ (owner Q-01)
 
@@ -417,7 +476,10 @@ Runner만 부르는 API다. Runner 토큰과 epoch 헤더가 필요하다(§1).
 - POST `/runner/sessions`
   - stop은 열린 세션만. `reason=unknown`은 서버만
 - POST `/runner/host` `/readiness` `/models` `/usage` `/concurrency`
-  - readiness key에 `obs`★ `gh`★ `lfs`★ 추가.
+  - readiness key에 `obs`★ `gh`★ `lfs`★ `reports`★ `font`★ `render`★ 추가. 지금 key는 15개다: `claude` `codex` `git` `node` `pnpm` `pg` `repo` `disk` `subs` `obs` `gh` `lfs` `reports` `font` `render`.
+    - `reports`: Runner 보고가 4xx로 거부된 기록(§1.2).
+    - `font`: 야간 화면 비교의 고정 글꼴 설치 여부. 없으면 warn이고 화면 비교는 「비교 불가」다(M7-03 결정 12).
+    - `render`: 화면 비교 기준 렌더러의 네트워크 차단 방식. 네임스페이스면 ok, 실행 인자 차단만이면 warn이다. 실행은 허용한다(M7-03 결정 16).
   - concurrency는 세션별 `{attemptId,observed,reserved,state}`★ 포함.
   - host에 `bootId`★(해제 증거 대조).
   - readiness에 `cli[{agent,version,model,options}]`★ — 관측 등급은 서버가 조합으로 판정.
@@ -444,7 +506,7 @@ Runner만 부르는 API다. Runner 토큰과 epoch 헤더가 필요하다(§1).
 - POST `/runner/attempts/:id/interrupt`
   - 200 `{taskStatus:"paused"}`, 종료된 시도 409
 - POST `/runner/attempts/:id/result`
-  - dev·rework: summary·changedFiles·evidence·failure·tokens.
+  - dev·rework: summary·changedFiles·evidence·failure·tokens, 그리고 push한 PR의 `pr`·`prHead`(§3.6-1).
   - qa·reverify: **`verification{headSha,specRevision,result,cmd,expected,actual,defects[],checklist[]}`**★ 필수
 - POST `/runner/attempts/:id/evidence`★
   - multipart 1파일, sha256·크기 검증. 결과 보고 전 업로드하고 id로 참조
@@ -494,10 +556,19 @@ Runner만 부르는 API다. Runner 토큰과 epoch 헤더가 필요하다(§1).
     - epoch가 바뀌면(초기화) 이전 base와 멈춤 상태를 모두 버린다.
   - 보고 주기는 정책 `inputCheckMinutes`다(지금 임시값 5분, open-questions §3). Runner에 GitHub 설정 저장소의 로컬 clone이 없으면 보고하지 않는다(clone은 M5 실행 계층이 만든다).
   - 하위 모듈(gitlink `160000`)은 G가 「따라가지 않음」이라 별도 정책이 없다. 모드 형식으로는 받고 파일로 다룬다.
+- **입력 변경 보고의 `pipelineObservation`**(선택, M7-04 결정 5)
+  - 입력 head와 같은 main 커밋에서 따로 읽은 `.agentwbs/pipeline.yaml` 정의 `{baseSha, pipelineSha, definition}`이다.
+  - 서버는 git을 읽지 않으므로, 이 관측을 ② 실행의 `pipelineSha`와 대조하는 기준으로 쓴다(§3.6-4).
 - POST `/runner/ci/runs`, PATCH `/:id`
-  - §8.5-1
+  - §8.5-1. M7에서 정한 필드와 규칙은 §3.6
 - POST `/runner/ci/queue`★
-  - 병합 상태(PR·병합 커밋) 보고 → 서버가 완료 판정
+  - 병합 상태(PR·병합 커밋) 보고 → 서버가 완료 판정. 규칙은 §3.6-5·6
+- GET `/runner/ci/jobs/:id?fence=`★ (M7-06 조정자 결정 2)
+  - 예약한 CI job의 검증 근거와 재실행 원본을 읽는다. 응답 `{runnable, taskKey, branch, hold, verification, source}`.
+  - 왜: Runner가 실제 `integrate`·`ci_retry`를 처리하려면 그 job의 QA 근거(검사한 head·명세 버전)와 다시 돌릴 원래 실행을 알아야 한다.
+- GET `/runner/holds`★ (M5-02 조정자 승인)
+  - 현재 Runner·epoch의 아직 풀지 않은 실행 보유 목록 `{holds[]}`이다. 읽기만 한다.
+  - 재시작 뒤 로컬 launch 기록과 대조할 때 쓴다(§3.4-3). 각 항목은 정리 명령의 `holds`와 같은 `ExecutionHold` 형식이다(§3.4-12).
 - POST `/runner/design/snapshot`
   - §8.6
 - POST `/runner/github/status`★
@@ -568,6 +639,7 @@ Runner만 부르는 API다. Runner 토큰과 epoch 헤더가 필요하다(§1).
   - 봉인이나 `keyId`가 있다고 해서 외부 쓰기가 허가된 것은 아니다. 쓰기 허가는 §3.4-5의 권한 세대가 정한다.
 - GET `/runner/policy`★
   - 상한·예산·주기·ci 설정·입력 확인 주기 묶음(`ETag`)
+  - `ci`: `{nightAt, retry, deployUrl, quarantined[]}`. `quarantined`는 격리한 테스트 ID 목록이고 Runner가 야간 점검 판정(UAT-CI-06)에 쓴다(M7-03 결정 1).
   - `inputRecheck`: 입력 확인 다시 시도 번호다. 열린 이력 재작성 경고에서 팀장이 복구 확인을 누를 때마다 1 오르고, 열린 경고가 없으면 0이다.
     - Runner는 이력 재작성으로 입력 보고를 멈춘 뒤 이 값이 바뀌었을 때만 다시 관측한다. epoch가 바뀌면(초기화) 이전 보고 상태를 모두 버린다.
   - `claudeModels`: Runner가 보고할 Claude 모델 목록(설정값, §2.1).
@@ -642,7 +714,7 @@ POST /api/runner/jobs/:id/finish {fence,status,result?,error?}
 | `attempt` | taskKey, kind, agent, 브랜치, 기준 커밋, 입력 버전, 작업 지시 묶음 | status → result/interrupt |
 | `stop_attempt` | attemptId, 사유 | interrupt |
 | `integrate` / `deploy_check` / `ci_retry` | PR·커밋 | ci runs, queue |
-| `design_apply` / `merge_followup` | 항목·PR | design snapshot |
+| `design_apply` / `merge_followup` | 항목·PR(`design_apply`는 `{itemKey, driftId}`) | design snapshot |
 
 **판단 payload** (Planning에게 판단을 맡길 때 보내는 내용)
 
@@ -810,6 +882,17 @@ Planning Agent(계획을 세우는 Agent)가 결과를 보고하는 API다.
 9. QA가 사용량 등으로 오래 대기하면 같은 묶음도 대기한다(직렬화 우선, §6.6 L741).
    - 용어 풀이: 직렬화 = 동시에 오는 일을 한 번에 하나씩 차례로 처리.
    - Task가 `paused`·`failed`·BLOCKED로 끝나면 그룹 empty 확인 후 논리 잠금을 해제하고 재개 때 다시 예약한다.
+10. **Runner의 임대 마감 여유** (M5·M7 통합)
+    - Runner는 서버 임대 끝(`leaseUntil`) **5초 전**을 자기 마감으로 본다(`LEASE_SAFETY_MS`).
+    - 임대가 5초 안에 끝나는 job은 시작하지 않는다.
+    - 왜: 이 PC처럼 벽시계가 뒤로 갈 수 있다. 여유 없이 끝까지 쓰면, 서버는 이미 임대를 끝냈는데 Runner는 아직 남았다고 보고 일을 시작할 수 있다.
+11. **claim 직후 자원 경합** (M5·M7 통합)
+    - claim 뒤 PC 자원 확인이 실패하면 같은 임대로 **최대 20초** 기다린다(남은 임대보다 길게 기다리지 않는다).
+    - 그래도 안 되면 시작 전 실패다. 시작 전 실패는 §3.5대로 항상 「다시 시도」 버튼이다.
+    - 서버가 이 job을 다시 대기열로 돌리는 전이(`leased → queued`)는 아직 없다. 계약 변경이 필요해 다음 작업으로 남겼다(M5·M7 통합 조정자 결정 2).
+12. **보유 목록의 형식**
+    - 정리 명령 payload의 `holds[]`와 `GET /runner/holds`의 항목은 같은 `ExecutionHold` 형식이다. DB 필드 이름(`host_id`·`slot_state`…)을 그대로 쓴다.
+    - 시각은 UTC `Z` 형식이다(끝이 `Z`인 ISO 8601, §1 「형식」).
 
 ### 3.5 자동 진행 (owner Q-04)
 
@@ -822,8 +905,15 @@ Planning Agent(계획을 세우는 Agent)가 결과를 보고하는 API다.
   - **같은 종류(dev/qa/rework/reverify)의 연속 실패에 자동 재시도 2회, 최초 포함 총 3회**.
   - 그 종류가 완료되면 연속 횟수를 0으로 되돌린다.
   - 중단은 실패로 세지 않고 횟수를 바꾸지 않는다.
-  - 시작 전 실패는 항상 「다시 시도」 버튼(G L864, P).
+  - 시작 전 실패는 항상 「다시 시도」 버튼(G L864, P). claim 직후 자원 경합의 20초 대기 뒤 실패도 여기에 든다(§3.4-11).
   - 예: dev가 2번 연달아 실패하고 3번째에 성공하면 dev 횟수는 0으로 돌아간다. 그 뒤 qa가 실패하면 qa는 새로 1회째부터 센다.
+- **①과 결과 수집 실패의 분류** (M5-05 조정자 결정 3)
+  - ① 검사가 실제로 돌아 실패한 것(Task 코드 문제)은 시도 실패다. 재작업으로 가고 재작업 횟수에 센다.
+  - 기준(main) 쪽 실패(`failScope=baseline`)는 Task 잘못이 아니다. 시도는 `interrupted`이고 같은 시도를 다시 한다. 재작업 횟수에 세지 않는다.
+  - Runner·환경 문제로 결과를 모으지 못한 것(결과 수집 실패)도 `interrupted`이고 재작업 횟수에 세지 않는다.
+  - 분류는 ① 결과의 `failScope`와 단계 정보로만 한다. 추측하지 않는다.
+  - 왜: Agent가 고칠 수 없는 실패로 재작업 한도를 깎으면, 정작 고칠 수 있는 실패를 처리할 기회가 줄어든다.
+  - 재작업 중의 ① Task 실패는 재작업 원인 횟수와 자동 재시도(같은 종류 연속 실패) 횟수에 **모두** 센다(M5·M7 통합, owner Q-04 보충).
 - **재작업**
   - QA FAIL과 통합 실패를 합쳐 Task당 **자동 재작업 최대 3회**.
   - 재작업 안의 실행 실패는 재작업 횟수로 세지 않는다.
@@ -837,6 +927,61 @@ Planning Agent(계획을 세우는 Agent)가 결과를 보고하는 API다.
   - 자동 재시도 중 실패는 보내지 않는다.
 - **중복 방지**
   - 서버 재시작·중복 보고에도 원인 시도와 회차로 job 고유키를 둔다.
+- **기준(main) 실패 뒤 재통합** (M7-04 결정 11)
+  - ②의 기준 실패는 Task 잘못이 아니므로 Task는 gate에 머물되 막히지 않는다.
+  - 통합 job의 고유키에 기준 SHA와 회차를 넣는다: `integrate:<verificationId>:<baseSha>:<n>`.
+  - main이 새 커밋으로 움직이면 서버가 자동으로 재통합한다. 팀장의 「다시 시도」로도 재통합한다.
+  - 횟수 상한은 두지 않는다. 대신 기준 실패마다 알린다.
+  - 왜: main이 고쳐지기만 하면 같은 Task가 다시 통합될 수 있다. Task 잘못이 아닌 실패로 한도를 소진시키지 않는다.
+
+### 3.6 CI 보고 계약 (M7) ★
+
+①②③④ 실행과 병합을 서버에 보고하는 규칙이다. 경로는 §3.1과 G§8.5-1이다. Runner 쪽 자세한 동작은 `agent-runner/src/ci/README.md`, `night/README.md`, `deploy/README.md`에 있다.
+
+1. **PR 번호 공급** (M5·M7 통합 조정자 결정 1)
+   - Runner가 PR을 연다. 개발 단계가 끝나 agent 브랜치를 push할 때, 같은 head 브랜치의 열린 PR이 있으면 그것을 쓰고 없으면 새로 연다.
+   - 멱등이다: 브랜치로 먼저 조회한 뒤 만든다.
+   - 생성 응답을 잃으면 바로 다시 만들지 않고 먼저 다시 조회한다. 있으면 그 PR을 쓰고, 없으면 쓰기 관문을 다시 지나 한 번 더 만든다. 조회도 실패하거나 두 번째 생성의 응답도 잃으면 「결과 모름」으로 멈춘다(`agent-runner/src/jobs/task-check.ts`).
+   - PR 번호 `pr`과 그 PR의 head 브랜치 이름 `prHead`를 시도 결과(`reportAttemptResult`)와 ① 보고(`startCiRun`)에 함께 보낸다.
+   - 서버는 `prHead`가 그 시도의 브랜치와 같을 때만 받는다. 한쪽만 오거나 다르면 400 `VALIDATION_FAILED`다.
+     - 왜: 서버는 GitHub를 읽지 않는다. 다른 Task의 PR 번호로 통합 job이 만들어지면 엉뚱한 PR을 병합한다.
+   - GitHub 권한이 없으면 「외부 쓰기 막힘」으로 보류한다(M4 권한 3상태, §3.1 `github/status`).
+2. **실행 갱신 `PATCH /runner/ci/runs/:id`의 M7 필드**
+   - `failScope`(선택, `baseline`·`task`): 실패한 ①의 원인 쪽이다. `baseline`이면 `baseSha`가 있어야 한다(없으면 400 `VALIDATION_FAILED`). 성공 결과에는 넣지 않는다.
+   - Runner가 붙인 단계 이름은 `runner:`로 시작한다. 정의(`pipeline.yaml`)의 단계 이름은 영소문자·숫자·`-`만 쓰므로 섞이지 않는다.
+   - `causeCandidates[{commit}]`(선택, M7-03 결정 5): 야간 점검 실패의 원인 후보 커밋이다. 서버가 병합 기록으로 commit → Task를 잇는다.
+     - 아직 PR 안의 중간 커밋은 잇지 못한다. Runner가 PR 커밋 목록을 보고하는 새 계약이 필요하다(다음 작업).
+   - `deployRestore{commit, status}`(선택, M7-03 결정 7·11): ④ 실패 뒤 마지막 정상 커밋으로 되돌린 결과다. `status`는 `pass`·`fail`·`none`이고, `none`(되돌릴 직전 통과 배포 없음)일 때만 `commit`이 null이다.
+     - `fail`·`none`이면 서버가 높은 우선순위 경보와 `serviceDown` 알림을 만든다.
+   - 그 밖: `note`, `finishedAt`, `e2e`, `githubStatus`, `flakyTests[{testKey, rate, lastFailedAt}]`. 단계(`steps[]`)마다 `durationMs`가 있고 이름이 겹치면 안 된다.
+3. **단계 결과 보고서와 기준** (M7-03 결정 3·4)
+   - ③④ 단계 명령은 결과를 JSON 파일(`AWBS_REPORT`)로 남길 수 있다. 환경 변수는 `AWBS_REPORT`·`AWBS_REPORT_NONCE`·`AWBS_EVIDENCE_DIR`이고 ③에는 `AWBS_SCREEN_WIDTH`·`AWBS_SCREEN_HEIGHT`가 더 있다.
+   - 보고서의 `nonce`가 이번 시도의 값과 다르면 형식 오류이고 그 단계는 실패다.
+     - 왜: 중단된 야간 점검은 같은 실행 ID로 재개한다. 예전 보고서를 읽으면 이번에 재지 않았는데도 통과할 수 있다.
+   - 응답 시간 기준은 보고서가 아니라 main에 고정된 `pipeline.yaml`의 `night` 단계 선택 필드 `budgetsMs`(API 이름 → p95 기준 ms)에서 읽는다.
+     - 왜: Agent 코드가 만든 출력으로 기준을 바꾸지 못하게 한다.
+4. **pipeline 출처** (M7-04 결정 5·13·14)
+   - 서버는 git을 읽지 않는다는 원칙을 지킨다.
+   - Runner가 main A의 pipeline SHA를 입력 변경 보고의 `pipelineObservation`으로 따로 보고한다. 서버는 (project, A)별 **첫 관측**을 저장하고 ② 실행의 `pipelineSha`와 대조한다. H′에서 다시 돈 ①도 같은 관측과 대조한다.
+   - 관측이 error면 기록하지 않는다(성공한 관측만 기준). error는 다시 시도한다.
+   - 대조 조회는 같은 프로젝트, job이 있는 실행, `status`가 `run`·`pass`인 실행으로 좁힌다.
+   - 한계: 관측도 같은 Runner가 한다. 그래서 Runner 자체가 거짓으로 보고하는 경우까지 막지는 못한다.
+5. **병합 보고 `POST /runner/ci/queue`** (M7-04 결정 15, M7-02 결정)
+   - `status=merged`(또는 `actualMergeSha`가 있음)이면 `actualMergeSha`·`actualTreeSha`와 **`mergeParents`(정확히 2개)가 모두 필수**다. 빠지면 400 `VALIDATION_FAILED`다.
+   - 같은 병합 SHA의 첫 기록(tree·부모)은 바꿀 수 없다(`ci_merge_facts`). 다른 부모로 다시 보내면 409 `MERGE_MISMATCH`이고 보류가 풀리지 않는다.
+   - H→H′ 동기화 근거는 `headSync`로 보낸다. 여러 번 동기화했으면 `headSync.chain`(2개 이상)으로 보낸다. 규칙은 §4.1 코드 근거 고정 3-2.
+6. **병합 대조 실패와 병합 뒤 Gate 미충족** (M7-04 결정 4, M7-06 결정 1)
+   - 실제 병합의 부모·tree가 근거와 다르면 서버는 실제 병합 SHA와 경고 이벤트(알림 포함)를 **먼저 커밋해 남기고** 409 `MERGE_MISMATCH`로 답한다. Task는 `done`으로 가지 않고 사람이 처리할 때까지 보류된다.
+     - 왜: 오류로 트랜잭션을 되돌리면 「실제로 병합됐다」는 사실까지 사라진다.
+   - 병합은 맞는데 그 순간 Gate 조건이 깨졌으면 다른 사건이다. 서버는 `GATE_UNMET_AFTER_MERGE` 이력과 「Gate 조건 미충족」 알림을 남기고 409 `GATE_NOT_PASSED`(`details.event=GATE_UNMET_AFTER_MERGE`)로 답한다.
+     - Task는 gate에 머문다. 조건이 다시 충족되면 서버가 Gate를 다시 평가해 자동 완료한다. 팀장의 수동 완료도 Gate 재평가가 통과하면 허용한다.
+     - Runner는 이 응답을 받으면 병합을 다시 시도하지 않고 서버의 재평가를 기다린다.
+7. **통합 실패의 전이** (M7-04 결정 1)
+   - ② 실패·병합 충돌은 도메인 전이표대로 gate → rework다. 재작업 job에 `integrationFailed`를 기록한다.
+   - 기준(main) 실패는 예외다. §3.5 「기준(main) 실패 뒤 재통합」을 따른다.
+8. **목록 정렬** (M7-04 결정 7·8)
+   - CI 실행 목록은 시간 + 단조 순번(`run_no`)으로 정렬하고 커서도 그 기준이다. 「Task의 최신 ① 결과」도 `run_no`로 고른다.
+   - 왜: 벽시계(`created_at`)는 뒤로 갈 수 있다. 실제로 Gate가 간헐적으로 옛 ① 기록을 고르던 원인이었다.
 
 ## 4. 대표 흐름
 
@@ -877,11 +1022,15 @@ sequenceDiagram
 4. 설치에 성공하면 `jobs/start`로 시도를 만들고 Task 상태를 바꾼다.
 5. CLI(Agent)를 실행하고, 끝나면 프로세스 그룹이 비었는지 확인해 PC 자리(슬롯)만 돌려준다. Task 잠금은 유지한다.
 6. ①(Task 검사)을 실행한다. 실패하면 슬롯을 다시 잡고 같은 시도 안에서 Agent가 고친 뒤 ①을 반복한다.
+   - ① 전에 Runner는 개발 결과 커밋을 agent 브랜치에 push하고 PR을 열거나 기존 PR을 쓴다. ①은 PR에 올린 바로 그 커밋을 검사한다(M5·M7 통합 조정자 결정 1, §3.6-1). 그림에는 이 단계가 빠져 있다.
 7. Evidence(검증 증거 파일)와 결과를 보고하면, 서버가 한 트랜잭션에서 Task를 `qa`로 바꾸고 QA job을 만들고 잠금을 QA job에 넘긴다.
 
 **QA 이후 병합까지**
 
 - QA PASS → `gate` → `integrate` → ② 통과 → PR 병합 → `ci/queue merged` → 서버 Gate 재판정 → `done`.
+- PR은 개발 결과를 push할 때 Runner가 이미 열어 두었다(§3.6-1). `integrate` job은 그 PR 번호를 쓴다.
+- ② 실패·병합 충돌은 gate → rework, 기준(main) 실패는 gate에 머물며 재통합을 기다린다(§3.5, §3.6-7).
+- 병합 뒤 Gate가 깨졌으면 gate에 머물고 재평가로 완료한다(§3.6-6).
 - 별도 완료 승인 없이 서버가 `integrate` job을 만들고 병합 확인 뒤 자동 완료한다(owner Q-02).
 - 사전 조건은 ②를 제외한 Gate 5조건(승인=착수 승인)이다.
 - 「완료 처리」 버튼(P L5389)은 같은 판정을 다시 요청할 뿐 우회하지 않는다.
@@ -906,6 +1055,13 @@ sequenceDiagram
    2. H→H'는 위 조건을 기계로 확인한 경우에만 QA H의 근거를 잇고(§4.13의 「검증 PASS 후 main+PR 병합본 통합 확인」), ①과 ②를 **H'에서** 다시 실행한다.
       - `pipelineSha`는 A의 정의다.
       - 조건이 깨지면 QA 무효.
+      - **동기화 뒤 QA 이어받기** (M7-02 조정자 결정)
+        - H′ push 뒤 병합이 main 이동·405·기준 실패로 끝나도, 결과에는 항상 `headSync`(H→H′ 증거)를 넣는다.
+        - 다음 시도는 지금 PR head가 H′이고 `headSync`가 「H′ = QA한 H + main 커밋의 충돌 없는 병합」(추가 변경 없음, tree 일치)을 증명하면 QA H 결과를 이어받는다. QA를 다시 하지 않는다. ①·②는 새 main 기준으로 다시 돈다.
+        - 여러 번 동기화되면 H→H′→H″ 사슬 전체를 `headSync.chain`으로 증명한다. 서버는 단계마다 잇는다: 첫 `qaHeadSha`는 QA한 H, 각 단계의 `headSha`는 다음 단계의 `qaHeadSha`, 각 단계의 `parents[1]`은 그 시점에 관측된 main, `preserved`·`autoMergeTreeSha` 일치, `additionalChanges=false`(M7-04 결정 16).
+        - 증거가 끊기거나(중간에 다른 커밋, 충돌 해결 커밋, tree 불일치) 확인할 수 없으면 QA를 다시 한다.
+        - Runner는 사슬을 거슬러 걷다가 main에 이미 있는 커밋에 닿으면 멈추고 재QA로 본다. 사슬 단계 상한은 50이다(M5·M7 통합).
+        - 왜: 순수한 동기화 병합 때문에 QA를 다시 하게 하면 main이 바쁠 때 Task가 끝나지 않는다. 대신 Agent가 몰래 바꾼 내용은 증거 사슬로 막는다.
    3. H'는 A를 포함하므로 검사 tree가 병합 결과 tree다.
       - 대기열이 H'를 갱신한 이후 다른 push를 막을 수 없으므로 head가 바뀌면 결과를 버린다.
    4. ② 통과 후 `agentwbs/int`를 **PR head H'**에 게시한다.
@@ -915,7 +1071,7 @@ sequenceDiagram
       - 거부되면 main/head를 다시 조회하고 1부터 재시작하며, 같은 실패 반복은 알린다.
    6. 응답 유실이면 PR 상태를 대조한다.
       - 성공이면 병합 커밋의 부모가 A와 H', tree가 H'의 tree인지 확인하고 actual SHA를 기록한다.
-      - 다르면 `done`으로 만들지 않고 알린다.
+      - 다르면 `done`으로 만들지 않고 알린다. 서버는 409 `MERGE_MISMATCH`로 답하고 보류한다(§3.6-6).
       - main을 자동으로 되돌리지 않는다(§9.6-2-3).
       - 대조에서 병합이 보이지 않으면 「결과 미확정」이다. 「병합 안 됨」으로 확정하지 않는다.
         - 왜: 타임아웃은 GitHub 처리를 취소하지 않는다.

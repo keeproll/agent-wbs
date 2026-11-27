@@ -22,6 +22,14 @@ const schemas = (item: Operation) =>
 const T = '2026-11-25T01:02:03.123456Z';
 const SHA = 'a'.repeat(40);
 
+test('Q-07: Workflow의 liveInject는 요청·응답 모두 false만 허용한다', () => {
+  const value = { updatedAt: T, devAgent: 'Claude', qaAgent: 'Codex', liveInject: false, heartbeatSeconds: 60, missedHeartbeats: 3 };
+  expect(accepts('putWorkflowSettings', value)).toBe(true);
+  expect(accepts('putWorkflowSettings', { ...value, liveInject: true })).toBe(false);
+  expect(ajv.validate(op('getWorkflowSettings').responses[200] ?? false, value)).toBe(true);
+  expect(ajv.validate(op('getWorkflowSettings').responses[200] ?? false, { ...value, liveInject: true })).toBe(false);
+});
+
 interface Fixture {
   id: string;
   query?: unknown;

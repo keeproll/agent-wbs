@@ -85,7 +85,7 @@ const settings = [
   ...setting('WorkflowSettings', '/api/settings/workflow', 'Agent 역할·기본 Workflow', {
     devAgent: c.Agent,
     qaAgent: c.Agent,
-    liveInject: Type.Boolean(),
+    liveInject: Type.Literal(false, { description: 'Q-07(owner 2026-11-27 아이템 18): 준비 중. false만 허용하며 기존 true도 false로 취급한다. 메시지는 다음 실행 때 전달한다.' }),
     heartbeatSeconds: c.PositiveInt4,
     missedHeartbeats: c.PositiveInt4,
   }),
