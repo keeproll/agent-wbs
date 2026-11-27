@@ -54,7 +54,7 @@ const run = (s: Src): Run => ({
   githubStatus: githubStatus(s, s.stage === 'task' ? sha(s.ref.split('@ ')[1] ?? 'a') : MAIN),
 });
 
-/** 원본 CI_MOCK.runs(P L3533–3544)를 서버 순서(최근 기록 먼저)로. */
+/** 원본 CI_MOCK.runs(P L3533–3544)를 원본 화면 순서(추가한 순서의 역순)로. 서버 순서는 serverOrder()가 만든다. */
 export const runs = (): Run[] => [
   run({ id: 'CI-0101', stage: 'task', task: 'TASK-0001', att: 'ATT-0001-1', ref: 'agent/TASK-0001 @ 3b7d2e1', pr: 3, at: '2026-10-28 15:11', dur: '3분 02초', st: 'pass', trig: 'Agent 작업 종료' }),
   run({ id: 'CI-0102', stage: 'int', task: 'TASK-0001', ref: 'main + #3', pr: 3, at: '2026-10-28 16:24', dur: '7분 40초', st: 'pass', trig: '검증 PASS → 병합 대기열', merged: '4c1a0f7' }),
@@ -112,8 +112,18 @@ export const pipeline = (): Pipeline => ({
 
 export const settings = (): Settings => ({ nightAt: '02:00', retry: 1, deployUrl: 'http://localhost:8080', serviceConfig: serviceConfig(), updatedAt: kst('2026-10-27 09:00') });
 
-export interface CiData { runs: Run[]; queue: Queue[]; flaky: Flaky[]; pipeline: Pipeline; settings: Settings }
-export const ciData = (): CiData => ({ runs: runs(), queue: queue(), flaky: flaky(), pipeline: pipeline(), settings: settings() });
+/**
+ * 서버 순서(apps/api/src/ci/routes.ts listCiRuns): 시작 시각 내림차순, 같은 시각이면 순번(run_no) 내림차순.
+ * 시험 자료의 순번은 실행 키 숫자(CI-0126 → 126)로 본다.
+ * 왜 따로 두나: 원본 화면은 추가한 순서의 역순이라 CI-0126(11-03 02:00)이 CI-0125(11-03 17:47)보다 위다. 서버는 그렇게 주지 않는다(리뷰 fix1 P3-6).
+ */
+export const serverOrder = (list: Run[]): Run[] => [...list].sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt) || Number(b.runKey.slice(3)) - Number(a.runKey.slice(3)));
+
+export interface CiData { runs: Run[]; queue: Queue[]; flaky: Flaky[]; pipeline: Pipeline; settings: Settings; taskStatus: Record<string, string> }
+/** prototypeOrder: 원본 스크린샷과 같은 행 순서(시각 비교 전용). 기능 시험은 서버 순서를 쓴다. */
+export const ciData = (options: { prototypeOrder?: boolean } = {}): CiData => ({
+  runs: options.prototypeOrder ? runs() : serverOrder(runs()), queue: queue(), flaky: flaky(), pipeline: pipeline(), settings: settings(), taskStatus: {},
+});
 
 const P = '/api/projects/p1/ci';
 /** 가짜 API에 빌드·통합 경로를 붙인다. 실행 목록은 cursor로 2쪽에 나눠 준다(모든 쪽을 읽는지 확인). */
@@ -121,7 +131,7 @@ export function installCi(api: FakeApi, data: CiData, options: { tasks?: boolean
   // tasks=false: Task 화면 시험이 자기 Task 목록·시도(task-api.ts)를 쓸 때. 아래 시도 응답도 붙이지 않는다.
   // 대기열 제목은 원본 Mock Task 제목(P TASKS)과 같게 맞춘다(시각 비교).
   const TITLE: Record<string, string> = { 'TASK-0002': 'PostgreSQL 연결', 'TASK-0003': 'Task 데이터 모델 설계' };
-  if (options.tasks !== false) api.on('GET /api/projects/p1/tasks', (route) => json(route, 200, { tasks: tasks().map((t) => ({ ...t, title: TITLE[t.taskKey] ?? t.title })), nextCursor: null }));
+  if (options.tasks !== false) api.on('GET /api/projects/p1/tasks', (route) => json(route, 200, { tasks: tasks().map((t) => ({ ...t, title: TITLE[t.taskKey] ?? t.title, lifecycleStatus: data.taskStatus[t.taskKey] ?? t.lifecycleStatus })), nextCursor: null }));
   api.on(`GET ${P}/runs`, (route, request) => {
     const url = new URL(request.url());
     const cursor = url.searchParams.get('cursor');

@@ -23,7 +23,7 @@ const failures: string[] = [];
 async function openAt(page: Page, path: string, ready: string) {
   await page.clock.install({ time: new Date('2026-11-05T20:00:00+09:00') });
   const api = await fakeApi(page);
-  installCi(api, ciData());
+  installCi(api, ciData({ prototypeOrder: true }));
   await page.goto(path);
   await expect(page.getByText(ready, { exact: false }).first()).toBeVisible();
 }

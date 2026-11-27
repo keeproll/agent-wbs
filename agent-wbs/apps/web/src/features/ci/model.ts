@@ -92,23 +92,51 @@ export function openFailures(runs: readonly CiRun[]): number {
 }
 
 /**
+ * 기준선 실패가 아직 유효한가. 서버는 같은 main(기준 커밋)에서 올바른 정의로 실행한 더 나중의 ① PASS가 오면 기준 경보를 해소한다(M7-04 결정 11).
+ * 화면은 같은 기준 커밋(baseSha)·같은 정의(pipelineSha)로 **더 나중에 시작한** ① PASS가 있으면 해소로 본다.
+ * - 다른 정의의 PASS, 다른 기준의 PASS, 더 먼저 시작해 늦게 끝난 옛 PASS는 해소하지 않는다.
+ * - 한계: 「올바른 정의」를 서버는 관측한 main 정의로 판정한다. 화면은 실패한 실행과 같은 정의인지로만 본다(보고 참고).
+ * runs는 서버 순서(최근 시작 먼저)다.
+ */
+export function baselineActive(runs: readonly CiRun[], fail: CiRun): boolean {
+  const i = runs.indexOf(fail);
+  return !runs.some((r, j) => r.stage === 'task' && r.status === 'pass' && r.baseSha === fail.baseSha && r.pipelineSha === fail.pipelineSha
+    && (i < 0 ? Date.parse(r.startedAt) > Date.parse(fail.startedAt) : j < i && Date.parse(r.startedAt) >= Date.parse(fail.startedAt)));
+}
+
+/**
  * main 상태 배지. 원본은 Mock 값(main.st·commit·e2e·at)을 그대로 썼다. 제품은 실행 기록에서 정한다.
- * - 가장 최근의 「main을 보는 실행」을 쓴다: 야간 점검(통과·실패), 병합된 통합 확인(통과 + 병합 SHA), 기준선 실패(Task 검사가 본 main 기준 커밋 자체가 실패).
+ * - 가장 최근의 「main을 보는 실행」을 쓴다.
+ *   - 야간 점검(통과·실패)
+ *   - 병합된 통합 확인: ② PASS이고 **연결된 대기열 행이 병합됨**이어야 한다. 병합 불일치로 보류된 행이면 「main 확인 필요」다(리뷰 fix1 P2-1).
+ *     왜: 실행의 mergeSha만으로는 실제 병합이 검증 근거와 같은지 모른다. 서버는 불일치면 병합됨으로 바꾸지 않는다.
+ *   - 아직 유효한 기준선 실패(baselineActive)
  * - 통합 확인 실패는 병합되지 않았으므로 main을 깨지 않는다(G L475).
  * - E2E 수는 Runner가 구조화해 보고한 값(e2e)이 있을 때만 보인다. 시각은 끝난 시각, 없으면 시작 시각이다(M7-04 fix2 계약 1).
  */
-export function mainStatus(runs: readonly CiRun[]): { l: string; c: string } {
+export function mainStatus(runs: readonly CiRun[], queue: readonly QueueItem[] = []): { l: string; c: string } {
+  const linked = (r: CiRun) => queue.find((q) => q.ciRunId === r.id);
+  const mismatched = (q: QueueItem | undefined) => q !== undefined && q.actualMergeSha !== null && q.status !== 'merged';
   const r = runs.find((x) => (x.stage === 'night' && (x.status === 'pass' || x.status === 'fail'))
-    || (x.stage === 'int' && x.status === 'pass' && x.mergeSha !== null)
-    || (x.status === 'fail' && x.failScope === 'baseline'));
+    || (x.stage === 'int' && x.status === 'pass' && x.mergeSha !== null && (linked(x)?.status === 'merged' || mismatched(linked(x))))
+    || (x.status === 'fail' && x.failScope === 'baseline' && baselineActive(runs, x)));
   if (!r) return { l: 'main 빌드 기록 없음', c: 'vf v-none' };
   const at = formatDateTime(r.finishedAt ?? r.startedAt);
   if (r.failScope === 'baseline') return { l: `main 깨짐 · 기준선 검사 실패 · ${short(r.baseSha)} · ${at}`, c: 'vf v-fail' };
+  const q = r.stage === 'int' ? linked(r) : undefined;
+  if (q && mismatched(q)) return { l: `main 확인 필요 · 병합 불일치 · ${short(q.actualMergeSha)} · ${at}`, c: 'vf v-fail' };
   const commit = short(r.stage === 'int' ? r.mergeSha : r.headSha ?? r.baseSha);
   const e2e = r.e2e ? ` · E2E ${String(r.e2e.passed)} / ${String(r.e2e.total)}` : '';
   if (r.status === 'fail') return { l: `main 깨짐 · ${commit}${e2e} · ${at}`, c: 'vf v-fail' };
   return { l: `main 정상 · ${commit}${e2e} · ${at}`, c: 'vf v-pass' };
 }
+
+/**
+ * 보류 때문에 「다시 실행」을 막는가(리뷰 fix1 P2-4).
+ * 서버가 보류 조건(실제 병합 SHA·불일치 경보·대조 대기)을 검사하는 것은 기준선 실패의 재통합 경로뿐이다. 일반 실패의 CI 재시도는 막지 않는다.
+ */
+export const retryHeld = (run: CiRun, holds: ReadonlySet<string>) =>
+  run.status === 'fail' && run.failScope === 'baseline' && run.taskKey !== null && holds.has(run.taskKey);
 
 /**
  * GitHub 칸(P ghL L4776). Runner가 GitHub에 실제로 보고하고 응답을 확인한 상태(githubStatus)만 「보고」로 보인다.
@@ -127,29 +155,39 @@ const QUEUE: Record<string, { l: string; c: string }> = {
   waiting_verify: { l: '검증 대기', c: 'vf v-none' }, queued: { l: '대기', c: 'vf v-none' }, checking: { l: '통합 확인 중', c: 'vf v-run' },
   merged: { l: '병합됨', c: 'vf v-pass' }, failed: { l: '통합 실패 — 병합 보류', c: 'vf v-fail' }, removed: { l: '대기열에서 빠짐', c: 'vf v-none' },
 };
-const BASELINE_FAILED = { l: '기준선 실패 — main 수정 뒤 자동 재통합', c: 'sc sc-warn' };
+const BASELINE_AUTO = { l: '기준선 실패 — main 수정 뒤 자동 재통합', c: 'sc sc-warn' };
+const BASELINE_PAST = { l: '기준선 실패', c: 'sc sc-warn' };
 const PENDING = new Set(['waiting_verify', 'queued', 'checking']);
 
-export interface QueueRow { id: string; pr: string; taskKey: string; title: string; st: string; c: string; at: string; ciRunId: string | null; ciRunKey: string | null; mismatch: boolean; actualMergeSha: string | null }
+export interface QueueRow { id: string; pr: string; taskKey: string; title: string; st: string; c: string; at: string; ciRunId: string | null; ciRunKey: string | null; autoReintegrate: boolean; mismatch: boolean; actualMergeSha: string | null }
 
 /**
  * 병합 대기열 행.
  * - 시각: 병합됨은 실제 병합 시각(mergedAt), 그 밖은 대기열에 들어온 시각(queuedAt). 원본도 같은 칸에 두 시각을 썼다(P L3545).
  *   병합됐는데 실제 병합 시각을 아직 확인하지 못했으면 「병합 시각 미확인」이다(서버 수신 시각으로 대신하지 않는다, M7-04 fix2 계약 3).
- * - 기준선 실패: 연결된 실행이 failScope=baseline으로 실패했으면 Task 탓이 아니다. main이 바뀌면 서버가 자동으로 다시 통합한다(M7-04 fix3).
+ * - 기준선 실패: 연결된 실행이 failScope=baseline으로 실패했으면 Task 탓이 아니다(노란색).
+ *   「main 수정 뒤 자동 재통합」은 서버가 실제로 자동 재통합하는 경우에만 붙인다(M7-04 fix3, 리뷰 fix1 P2-3):
+ *   그 Task의 최신 차수(가장 큰 position)이고, Task가 gate에 있고, 같은 Task에 병합 불일치 보류가 없을 때.
+ *   그 밖(새 차수가 생김·Task 완료·보류 중)은 지난 결과일 뿐이라 「기준선 실패」만 보인다.
  * - mismatch: 실제 병합 SHA가 기록됐는데 병합됨이 아니면, 서버가 MERGE_MISMATCH로 완료를 보류한 것이다(M7-04 조정자 결정 4).
+ * taskStatus: Task 키 → 상태(listTasks의 lifecycleStatus). 모르면 자동 재통합 안내를 붙이지 않는다.
  */
-export function queueRows(queue: readonly QueueItem[], titles: ReadonlyMap<string, string>, runs: readonly CiRun[]): QueueRow[] {
+export function queueRows(queue: readonly QueueItem[], titles: ReadonlyMap<string, string>, runs: readonly CiRun[], taskStatus: ReadonlyMap<string, string> = new Map()): QueueRow[] {
   const byId = new Map(runs.map((r) => [r.id, r]));
+  const isMismatch = (q: QueueItem) => q.actualMergeSha !== null && q.status !== 'merged';
+  const held = new Set(queue.filter(isMismatch).map((q) => q.taskKey));
+  const latest = new Map<string, QueueItem>();
+  for (const q of queue) { const cur = latest.get(q.taskKey); if (!cur || q.position >= cur.position) latest.set(q.taskKey, q); }
   return queue.map((q) => {
     const linked = q.ciRunId ? byId.get(q.ciRunId) : undefined;
     const baseline = q.status === 'failed' && linked?.status === 'fail' && linked.failScope === 'baseline';
-    const s = baseline ? BASELINE_FAILED : QUEUE[q.status] ?? { l: String(q.status), c: 'vf v-none' };
+    const auto = baseline && latest.get(q.taskKey) === q && taskStatus.get(q.taskKey) === 'gate' && !held.has(q.taskKey);
+    const s = baseline ? (auto ? BASELINE_AUTO : BASELINE_PAST) : QUEUE[q.status] ?? { l: String(q.status), c: 'vf v-none' };
     const time = q.status === 'merged' ? q.mergedAt : q.queuedAt;
     const at = time ? formatDateTime(time) : q.status === 'merged' ? '병합 시각 미확인' : '—';
     return {
       id: q.id, pr: prLabel(q.pr), taskKey: q.taskKey, title: titles.get(q.taskKey) ?? '', st: s.l, c: s.c, at,
-      ciRunId: q.ciRunId, ciRunKey: linked?.runKey ?? null, mismatch: q.actualMergeSha !== null && q.status !== 'merged', actualMergeSha: q.actualMergeSha,
+      ciRunId: q.ciRunId, ciRunKey: linked?.runKey ?? null, autoReintegrate: auto, mismatch: isMismatch(q), actualMergeSha: q.actualMergeSha,
     };
   });
 }

@@ -298,8 +298,10 @@ test.describe('UAT-EMPTY-05 빈 상태 · 조건 불일치', () => {
 });
 
 test.describe('fix1: 기준선 실패 재통합 · 병합 불일치 보류 · 관측 전 값', () => {
-  test('기준선 실패로 끝난 통합은 Task 탓이 아니라 「main 수정 뒤 자동 재통합」으로 보인다', async ({ page }) => {
-    await open(page, '/ci?tab=queue', (d) => { d.runs.unshift(baselineRun()); d.queue.push(baselineQueueItem()); });
+  test('기준선 실패로 끝난 통합(최신 차수·Task gate·보류 없음)은 Task 탓이 아니라 「main 수정 뒤 자동 재통합」', async ({ page }) => {
+    await open(page, '/ci?tab=queue', (d) => { d.runs.unshift(baselineRun()); d.queue.push(baselineQueueItem()); d.taskStatus['TASK-0006'] = 'gate'; });
+    // 대기열 안내도 기준선 실패를 재작업 대상에서 뺀다(리뷰 fix1 P3-5)
+    await expect(page.getByText('기준선 실패는 예외입니다', { exact: false })).toBeVisible();
     const row = page.getByRole('table', { name: '병합 대기열' }).getByRole('row').nth(0);
     await expect(row).toContainText('기준선 실패 — main 수정 뒤 자동 재통합');
     await expect(row.locator('.vf.v-fail')).toHaveCount(0);
@@ -310,10 +312,45 @@ test.describe('fix1: 기준선 실패 재통합 · 병합 불일치 보류 · �
     await expect(detail(page).getByRole('button', { name: '다시 실행' })).toBeEnabled();
   });
 
-  test('병합 불일치로 보류 중인 Task의 실행은 다시 실행을 막고 이유를 보인다(서버도 409)', async ({ page }) => {
+  test('리뷰 P2-3: 새 차수가 생긴 뒤의 옛 기준선 실패는 자동 재통합을 약속하지 않는다', async ({ page }) => {
+    await open(page, '/ci?tab=queue', (d) => {
+      d.runs.unshift(baselineRun()); d.taskStatus['TASK-0006'] = 'gate';
+      d.queue.push(baselineQueueItem(), { ...baselineQueueItem(), id: 'q13', position: 6, status: 'checking', ciRunId: null });
+    });
+    const t = page.getByRole('table', { name: '병합 대기열' });
+    await expect(t.getByRole('row').nth(1)).toContainText('기준선 실패');
+    await expect(t.getByText('자동 재통합')).toHaveCount(0);
+    await page.goto('/ci/ci-0128');
+    await expect(detail(page)).toContainText('기준선 실패 — main 기준 커밋에서도 실패했습니다');
+    await expect(detail(page)).not.toContainText('자동으로 다시 통합');
+  });
+
+  test('리뷰 P2-1: ② PASS라도 연결 대기열이 병합 불일치면 main 정상이라 하지 않는다', async ({ page }) => {
+    await open(page, '/ci', (d) => {
+      const intRun = { ...baselineRun(), id: 'ci-0129', runKey: 'CI-0129', stage: 'int' as const, status: 'pass' as const, failScope: null, failStep: null, logExcerpt: null, mergeSha: 'beef000'.padEnd(40, '0'), startedAt: '2026-11-05T11:00:00.000Z', finishedAt: '2026-11-05T11:08:00.000Z' };
+      d.runs.unshift(intRun);
+      d.queue.push({ ...mismatchItem(), ciRunId: 'ci-0129' });
+    });
+    await expect(page.getByText(/^main 확인 필요 · 병합 불일치 · dead000 · 2026-11-05 20:08$/)).toBeVisible();
+    await expect(page.getByText(/^main 정상/)).toHaveCount(0);
+  });
+
+  test('리뷰 P2-4: 보류 중인 Task라도 일반 실패(Task 탓)의 CI 재시도는 막지 않는다', async ({ page }) => {
+    const { api } = await open(page, '/ci/ci-0130', (d) => {
+      d.runs.unshift({ ...baselineRun(), id: 'ci-0130', runKey: 'CI-0130', failScope: 'task' });
+      d.queue.push(mismatchItem());
+    });
+    api.on('POST /api/projects/p1/ci/runs/ci-0130/retry', (route) => json(route, 202, { jobId: 'job-3' }));
+    await expect(detail(page).getByRole('button', { name: '다시 실행' })).toBeEnabled();
+    await detail(page).getByRole('button', { name: '다시 실행' }).click();
+    await expect(page.getByText('다시 실행을 요청했습니다')).toBeVisible();
+  });
+
+  test('병합 불일치로 보류 중인 Task의 기준선 실패는 다시 실행(재통합)을 막고 이유를 보인다(서버도 409)', async ({ page }) => {
     const { api } = await open(page, '/ci/ci-0128', (d) => { d.runs.unshift(baselineRun()); d.queue.push(mismatchItem()); });
     await expect(detail(page).getByRole('button', { name: '다시 실행' })).toBeDisabled();
     await expect(detail(page)).toContainText('TASK-0006의 실제 병합이 검증 근거와 달라 완료를 보류 중입니다');
+    await expect(detail(page)).not.toContainText('자동으로 다시 통합');
     expect(api.requests('POST /api/projects/p1/ci/runs/ci-0128/retry')).toHaveLength(0);
   });
 
