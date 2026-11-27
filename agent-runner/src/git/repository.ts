@@ -412,7 +412,7 @@ export class GitRepository {
     if (!BOOT_ID.test(bootId)) throw new GitSafetyError('부팅 식별자를 확인할 수 없습니다.');
     const owner = JSON.stringify({ pid: process.pid, bootId, startTime: await startTime(process.pid) });
     const prepared = `${path}.${randomUUID()}`;
-    const deadline = performance.now() + 30_000;
+    const deadline = Date.now() + 30_000;
     let acquired = false;
     try {
       // 내용을 완성한 뒤 원자적으로 연결하므로, 종료돼도 빈 잠금은 공개되지 않는다.
@@ -422,7 +422,7 @@ export class GitRepository {
         catch (error) {
           if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
           if (await recoverLock(path, bootId)) continue;
-          if (performance.now() >= deadline) throw new GitSafetyError(`저장소 잠금 대기 시간이 지났습니다. 주인 확인 불가 시 수동 조치가 필요합니다: ${path}`);
+          if (Date.now() >= deadline) throw new GitSafetyError(`저장소 잠금 대기 시간이 지났습니다. 주인 확인 불가 시 수동 조치가 필요합니다: ${path}`);
           await delay(25);
         }
       }
