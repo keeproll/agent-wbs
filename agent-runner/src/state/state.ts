@@ -34,6 +34,8 @@ export interface Document {
   pendingEpoch: number | null;
   cursor: string | null;
   inbox: Message[];
+  /** 실패·중단된 시도에 전달한 Task 지시를 성공 보고까지 보존한다. */
+  instructions?: { message: Message; attemptId: string }[];
   outbox: Entry[];
   epochStartedAt?: number;
 }
@@ -58,6 +60,8 @@ function validate(value: Document): void {
     ids.add(e.id);
   }
   if (value.inbox.some((m) => !m || typeof m.id !== 'string')) throw new Error('수신함 형식이 올바르지 않습니다.');
+  if (value.instructions !== undefined && (!Array.isArray(value.instructions) || value.instructions.some(i => !i || typeof i.attemptId !== 'string' || !i.attemptId ||
+    !i.message || typeof i.message.id !== 'string' || typeof i.message.taskKey !== 'string' || !['Codex', 'Claude'].includes(i.message.toAgent) || typeof i.message.body !== 'string'))) throw new Error('보관한 Task 지시 형식이 올바르지 않습니다.');
 }
 
 export class StateLockError extends Error { override name = 'StateLockError'; }
@@ -217,6 +221,7 @@ export class State {
       discarded = draft.outbox;
       draft.outbox = [];
       draft.inbox = [];
+      draft.instructions = [];
       draft.cursor = null;
     });
     for (const entry of discarded) await this.removeEvidence(entry);
@@ -229,6 +234,7 @@ export class State {
       discarded = draft.outbox;
       draft.outbox = [];
       draft.inbox = [];
+      draft.instructions = [];
       draft.cursor = null;
     });
     for (const entry of discarded) await this.removeEvidence(entry);

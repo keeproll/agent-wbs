@@ -71,6 +71,7 @@ export class Runner {
   }
 
   get messages(): Message[] { return this.state.snapshot.inbox; }
+  get retainedMessages(): Message[] { return this.state.snapshot.instructions?.map(i => i.message) ?? []; }
   get ready(): boolean { return this.synchronized && this.state.snapshot.pendingEpoch === null; }
   get readinessWarnings(): string[] {
     return [...this.outbox.readinessWarnings, ...(this.ready ? [] : ['초기화 정리가 끝나기를 기다립니다.'])];
@@ -166,6 +167,7 @@ export class Runner {
       draft.pendingEpoch = null;
       draft.cursor = null;
       draft.inbox = [];
+      draft.instructions = [];
     });
     if (this.state.snapshot.pendingEpoch !== null) return;
     this.synchronized = true;
@@ -195,10 +197,19 @@ export class Runner {
   }
 
   /** 실행 계층이 실제로 지시문을 전달한 뒤 호출한다. 수신만으로는 ack하지 않는다. */
-  async ackMessage(messageId: string): Promise<void> {
-    const { inbox, epoch } = this.state.snapshot;
-    if (!inbox.some((m) => m.id === messageId)) throw new Error('수신함에 없는 메시지입니다.');
+  async ackMessage(messageId: string, attemptId?: string): Promise<void> {
+    const { inbox, instructions = [], epoch } = this.state.snapshot;
+    const message = inbox.find(m => m.id === messageId) ?? instructions.find(i => i.message.id === messageId)?.message;
+    if (!message) throw new Error('수신함에 없는 메시지입니다.');
+    if (attemptId) await this.state.update(draft => {
+      if (draft.epoch !== epoch || draft.pendingEpoch !== null) throw new Error('초기화된 프로젝트의 지시는 보관하지 않습니다.');
+      draft.instructions = [...(draft.instructions ?? []).filter(i => i.message.id !== messageId), { message, attemptId }];
+    });
     await this.outbox.enqueue('ackMessage', { epoch, params: { messageId } });
+  }
+
+  async completeMessages(attemptId: string): Promise<void> {
+    await this.state.update(draft => { draft.instructions = (draft.instructions ?? []).filter(i => i.attemptId !== attemptId); });
   }
 
   /** heartbeat는 보고 재전송·정리·메시지 조회에 가로막히지 않는 별도 반복으로 보낸다. */
