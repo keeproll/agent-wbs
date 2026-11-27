@@ -54,6 +54,24 @@ export async function fixture(taskBranch = 'agent/task') {
       merge_commit_sha: merged.get(n) ?? null, head: { ref: branch(n), sha: ref(branch(n)) },
       base: { ref: 'main', sha: ref('main') }, html_url: `https://example.invalid/pr/${String(n)}` } };
   });
+  // PR 열기(조정자 결정 1). 1번은 Task 브랜치의 PR이다. 처음에는 열린 PR이 없고, POST로 연다.
+  const opened = new Set<number>();
+  const pullCreates: string[] = [];
+  const pullJson = (n: number) => ({ number: n, state: merged.has(n) ? 'closed' : 'open', merged: merged.has(n),
+    merge_commit_sha: merged.get(n) ?? null, head: { ref: branch(n), sha: ref(branch(n)) },
+    base: { ref: 'main', sha: ref('main') }, html_url: `https://example.invalid/pr/${String(n)}` });
+  github.on('GET /repos/o/r/pulls', req => {
+    const head = req.query.head?.split(':').at(-1);
+    return { body: [...opened].filter(n => !merged.has(n) && (!head || branch(n) === head)).map(pullJson) };
+  });
+  github.on('POST /repos/o/r/pulls', req => {
+    const body = req.body as { head: string; base: string };
+    pullCreates.push(body.head);
+    const n = body.head === taskBranch ? 1 : Number(/^agent\/task(\d+)$/.exec(body.head)?.[1] ?? NaN);
+    if (body.base !== 'main' || !Number.isSafeInteger(n)) return { status: 422, body: { message: 'Validation Failed' } };
+    if (opened.has(n)) return { status: 422, body: { message: 'A pull request already exists' } };
+    opened.add(n); return { status: 201, body: pullJson(n) };
+  });
   github.on('GET /repos/o/r/git/commits/:sha', req => {
     const sha = req.params?.sha ?? '';
     return { body: { sha, tree: { sha: git(remote, 'rev-parse', `${sha}^{tree}`) },
@@ -88,7 +106,7 @@ export async function fixture(taskBranch = 'agent/task') {
     collectTests: async () => ['test/value::value'], readVerification: async () => qa,
   };
   const request = { pr: 1, branch: taskBranch, qaHeadSha: head, specRevision: 1 };
-  return { root, repo, source, remote, client, github, deps, request, head, base, merged, statuses, calls, observations, ref,
+  return { root, repo, source, remote, client, github, deps, request, head, base, merged, statuses, calls, observations, ref, opened, pullCreates,
     action: (next: typeof action) => { action = next; }, qa: (next: typeof qa) => { qa = next; },
     beforeWrite: (next: typeof beforeWrite) => { beforeWrite = next; },
     advance: async (name = 'later', value = 'later') => {

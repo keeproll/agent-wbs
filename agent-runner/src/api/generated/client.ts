@@ -1298,6 +1298,8 @@ export interface Operations {
         evidence: (Id)[];
         failure?: string;
         tokens?: number;
+        pr?: number;
+        prHead?: string;
       } | {
         fence: number;
         summary: string;
@@ -1305,6 +1307,8 @@ export interface Operations {
         evidence: (Id)[];
         failure?: string;
         tokens?: number;
+        pr?: number;
+        prHead?: string;
         verification: {
           headSha: Sha;
           specRevision: number;
@@ -1514,6 +1518,7 @@ export interface Operations {
         attemptId?: Id;
         ref: string;
         pr?: number;
+        prHead?: string;
         trigger: string;
         baseSha?: Sha;
         headSha?: Sha;
@@ -1526,6 +1531,7 @@ export interface Operations {
         attemptId?: Id;
         ref: string;
         pr?: number;
+        prHead?: string;
         trigger: string;
         baseSha?: Sha;
         headSha?: Sha;

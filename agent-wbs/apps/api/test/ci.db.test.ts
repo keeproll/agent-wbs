@@ -91,7 +91,7 @@ afterAll(async () => { await app.close(); await pool.end(); await owner.end(); }
 
 const patch = (id: string, payload: object, h = headers()) => app.inject({ method:'PATCH',url:`/api/runner/ci/runs/${id}`,headers:h,payload });
 async function start(a: Running, stage = 'task', extra: object = {}) {
-  return post('ci/runs',{ jobId:a.job,fence:a.fence,stage,taskKey:a.key,attemptId:a.attempt,ref:'agent/test',pr:1,trigger:'task',pipelineSha:pipeline,headSha:sha,baseSha:otherSha,...extra });
+  return post('ci/runs',{ jobId:a.job,fence:a.fence,stage,taskKey:a.key,attemptId:a.attempt,ref:'agent/test',pr:1,prHead:`agent/${a.key}-h1`,trigger:'task',pipelineSha:pipeline,headSha:sha,baseSha:otherSha,...extra });
 }
 async function gateTask() {
   const a = await running('qa'); await check(a);
@@ -138,6 +138,30 @@ test('CI API는 시작·진행·결과·상세를 저장하고 멱등 재요청�
   expect((await get(`projects/${project}/ci/runs/${id}`)).json()).toMatchObject({ id,stage:'task',status:'pass',pipelineSha:pipeline,steps:[{ name:'단위 테스트',status:'pass',durationMs:55 }],artifacts:['runs/log.txt'] });
   expect((await get(`projects/${project}/ci/runs?stage=task&taskKey=${a.key}&limit=1`)).json()).toMatchObject({ items:[{ id }],nextCursor:null });
   expect((await patch(id,{ fence:1,status:'fail' })).statusCode).toBe(409);
+});
+
+// M5·M7 통합 조정자 결정 1: ① 보고의 PR 번호는 그 시도의 agent 브랜치 PR이어야 한다(head 이름 대조). 맞으면 시도 기록에도 남긴다.
+test('① 보고의 PR은 head 브랜치가 시도 브랜치와 같을 때만 받고 시도 기록에 남긴다', async () => {
+  const a = await running(), b = await running();
+  const bad = await start(a,'task',{ pr:5,prHead:`agent/${b.key}-h1` });
+  expect(bad.statusCode,bad.body).toBe(400);
+  expect(bad.json()).toMatchObject({ error:{ code:'VALIDATION_FAILED',errors:[{ path:'prHead' }] } });
+  expect((await start(a,'task',{ pr:5,prHead:undefined })).statusCode).toBe(400);
+  const ok = await start(a,'task',{ pr:5,prHead:`agent/${a.key}-h1` }); expect(ok.statusCode,ok.body).toBe(201);
+  expect((await owner.query('select pr from task_attempts where id=$1',[a.attempt])).rows).toEqual([{ pr:5 }]);
+  expect((await owner.query('select pr from ci_runs where id=$1',[ok.json().id])).rows).toEqual([{ pr:5 }]);
+});
+
+// 시도 결과 보고도 같은 규칙이다. QA 시도는 PR을 보고하지 않는다.
+test('시도 결과의 PR도 시도 브랜치와 대조하고, QA 결과의 PR은 거부한다', async () => {
+  const a = await running('dev','none');
+  expect((await post(`attempts/${a.attempt}/result`,{ fence:a.fence,summary:'개발',changedFiles:[],evidence:[],pr:3,prHead:'agent/other' })).statusCode).toBe(400);
+  const q = await running('qa','none');
+  expect((await post(`attempts/${q.attempt}/result`,{ ...result(q),pr:3,prHead:`agent/${q.key}-h1` })).statusCode).toBe(400);
+  await check(a);
+  const ok = await post(`attempts/${a.attempt}/result`,{ fence:a.fence,summary:'개발',changedFiles:[],evidence:[],pr:3,prHead:`agent/${a.key}-h1` });
+  expect(ok.statusCode,ok.body).toBe(201);
+  expect((await owner.query('select pr from task_attempts where id=$1',[a.attempt])).rows).toEqual([{ pr:3 }]);
 });
 
 test('다른 job·Task·시도·낡은 fence·만료 lease·다른 Runner는 CI 기록을 오염시키지 못한다', async () => {

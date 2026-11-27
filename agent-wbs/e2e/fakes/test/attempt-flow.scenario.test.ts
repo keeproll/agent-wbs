@@ -86,8 +86,8 @@ beforeEach(async () => {
   let inputHead = f.ref('main');
   const taskCheck = bindTaskCheck({ get execution() { return execution; }, get runner() { return runner; }, api: h.runner.api, repo: f.repo, worktree: () => ({ id: 'task', branch: 'agent/m505-work' }),
     collectTests: f.deps.collectTests,
-    // 시험 저장소의 PR 번호(가짜 GitHub). 제품에는 아직 PR을 여는 구현이 없다.
-    pr: () => f.request.pr,
+    // 실제 M4 GitHub 계층(가짜 GitHub 서버). Runner가 push 뒤 PR을 열고 번호를 ①·시도 결과로 보낸다(조정자 결정 1).
+    github: f.deps.github,
     launch: (argv, cwd) => {
       const failed = argv[1] === failCheckStep;
       const command = installFakeCli(join(home, 'checks'), 'codex', { lines: [failed ? '검사 실패' : '검사 통과'], exitCode: failed ? 1 : 0 });
@@ -538,14 +538,17 @@ test('재작업 안의 프로세스 실패 재시도는 같은 재작업 회차�
 // M5·M7 통합(M5-05 리뷰 P3-5): M5-05 시도 흐름과 M7-06 CI 실행기를 한 줄로 잇는다.
 // 왜: 두 브랜치는 각각 자기 쪽을 실제로, 다른 쪽은 준비 코드로 시험했다. 통합 뒤에는 실제 dev·①·QA가 실제 ②·병합으로 이어져야 한다.
 // 두 실행기는 claim하는 job 종류가 다르다(attempt·stop_attempt / integrate·ci_retry). 같은 무거운 작업 상한(HeavySemaphore)을 쓴다.
-test('M5·M7 통합: 실제 시도 흐름(dev·①·QA PASS) 뒤 실제 CI 실행기가 ②·병합을 하고 Task가 자동 완료된다', async () => {
+test('M5·M7 통합: 실제 시도 흐름(dev → push → PR 열기 → ① → QA PASS) 뒤 실제 CI 실행기가 ②·병합을 하고 Task가 자동 완료된다', async () => {
   expect((await h.run('TASK-0001')).status).toBe(202);
   expect((await flow.runNext(20))?.payload).toMatchObject({ kind: 'dev', agent: 'Claude' });
   expect((await flow.runNext(20))?.payload).toMatchObject({ kind: 'qa', agent: 'Codex' });
   expect((await h.lead('GET', '/api/tasks/TASK-0001')).body).toMatchObject({ lifecycleStatus: 'gate' });
   expect(checks).toEqual(['dev']);
-  // ① 통과 뒤 시도 흐름이 검사한 커밋을 PR 브랜치에 올렸는지 원격에서 확인한다.
+  // 시도 흐름이 검사한 커밋을 PR 브랜치에 올리고, 그 브랜치의 PR을 한 번만 열어 번호를 시도 기록과 ① 보고에 남겼는지 확인한다.
   expect(f.ref(f.request.branch)).toBe(head);
+  expect(f.pullCreates).toEqual([f.request.branch]);
+  expect(await h.rows("select kind,pr from task_attempts order by attempt_no")).toEqual([{ kind: 'dev', pr: 1 }, { kind: 'qa', pr: null }]);
+  expect(await h.rows('select pr from ci_runs where stage=1')).toEqual([{ pr: 1 }]);
   const ci = new CiJobs({ ...f.deps, heavy: executionOptions.heavy, directory: join(home, 'ci-jobs'), api: h.runner.api, outbox: runner.outbox,
     runnerId: state.snapshot.runnerId, epoch: () => 1, ready: () => runner.ready, identity: executionOptions.identity,
     execute: (_job, argv, cwd) => f.deps.execute(argv, cwd), warn: () => undefined });
@@ -559,6 +562,18 @@ test('M5·M7 통합: 실제 시도 흐름(dev·①·QA PASS) 뒤 실제 CI 실�
     expect(await h.rows("select count(*)::int n from execution_holds where closed_at is null")).toEqual([{ n: 0 }]);
   } finally { await ci.shutdown(); }
 }, 60_000);
+
+// 조정자 결정 1: GitHub 쓰기 권한이 없으면 PR을 열지 못한다. 시도는 Task 실패가 아니라 외부 쓰기 막힘 보류(중단)다.
+test('PR 쓰기 권한이 없으면 ①·QA로 넘어가지 않고 외부 쓰기 막힘으로 보류한다', async () => {
+  f.github.on('POST /repos/o/r/pulls', () => ({ status: 403, body: { message: 'Resource not accessible by integration' }, headers: { 'x-accepted-github-permissions': 'pull_requests=write' } }));
+  expect((await h.run('TASK-0001')).status).toBe(202);
+  await expect(flow.runNext(20)).rejects.toThrow('외부 쓰기 막힘');
+  expect((await h.lead('GET', '/api/tasks/TASK-0001')).body.lifecycleStatus).toBe('paused');
+  expect(f.client.permissions().pulls).toBe('missing');
+  expect(await h.rows('select count(*)::int n from ci_runs where stage=1')).toEqual([{ n: 0 }]);
+  expect(await h.rows("select count(*)::int n from runner_jobs where payload->>'kind'='qa'")).toEqual([{ n: 0 }]);
+  expect(await h.rows('select count(*)::int n from execution_holds where closed_at is null')).toEqual([{ n: 0 }]);
+});
 
 test('시나리오 6: 실제 세션 결합으로 개발→QA FAIL→상향 재작업→재검증 PASS→Gate 대기', async () => {
   expect(await flow.runNext(20)).toBeNull();

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { CI_STAGE, type PoolClient, type schema } from '@awbs/db';
 import { completionGate, lifecycleTransition, DomainError } from '@awbs/shared';
 import { deferChange } from '../changes/events.ts';
+import { checkPullRequest } from './pull-request.ts';
 import { PlatformError } from '../platform/errors.ts';
 import { RunnerRepository, required } from '../runner/repository.ts';
 import { assertExternal, checkedJob, handover } from '../runner/service.ts';
@@ -16,7 +17,7 @@ type Queue = typeof schema.mergeQueue.$inferSelect;
 interface Shas { baseSha?: string; headSha?: string; mergeSha?: string; treeSha?: string; pipelineSha?: string }
 export interface Start extends Shas {
   stage: keyof typeof CI_STAGE; jobId?: string; fence?: number; taskKey?: string; attemptId?: string;
-  ref: string; pr?: number; trigger: string; pipelineSha: string;
+  ref: string; pr?: number; prHead?: string; trigger: string; pipelineSha: string;
 }
 export interface Update extends Shas {
   fence: number | null; status?: string; steps?: { name: string; status: string; durationMs: number }[];
@@ -54,7 +55,11 @@ export async function startRun(client: PoolClient, principal: string, body: Star
   if (body.attemptId) {
     const attempt = await repo.attempt(body.attemptId);
     if (!attempt || attempt.task !== task?.id || attempt.job !== job?.id || attempt.status !== 'running') throw new PlatformError('INVALID_TRANSITION');
+    // ① 보고의 PR은 시도 브랜치의 PR이어야 한다(head 이름 대조). 시도 기록에도 남긴다(Gate가 통합 job의 PR로 쓴다).
+    if (checkPullRequest(body,attempt.branch) !== undefined)
+      await client.query('update task_attempts set pr=$2 where id=$1',[attempt.id,body.pr]);
   }
+  // 통합·재시도 job의 PR은 job payload(검증된 시도 기록에서 만든 값)와 대조한다(위 integrate 검사).
   const runKey = `CI-${randomUUID()}`;
   const row = required((await client.query<{ id: string }>(`insert into ci_runs(project_id,run_key,stage,base_sha,head_sha,merge_sha,tree_sha,pipeline_sha,ref,pr,task,attempt,trigger,status,job,fence,reporter)
     values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'queued',$14,$15,$16) returning id`,

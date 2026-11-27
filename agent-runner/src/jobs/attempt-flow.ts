@@ -31,7 +31,7 @@ export interface AttemptFlowOptions {
     responses?: { messageId: string; text: string; workState: string }[];
   }>;
   /** 실제 ①의 종료 결과다. 기준·환경 실패와 Task 코드 실패를 구분한다. */
-  taskCheck: (context: AttemptContext) => Promise<TaskCheckResult>;
+  taskCheck: (context: AttemptContext) => Promise<TaskCheckResult & { pullRequest?: { number: number; head: string } }>;
   onError?: (error: unknown) => void;
 }
 
@@ -119,14 +119,17 @@ export class AttemptFlow {
       },
       complete: async (output, stopped) => {
         const context = { job, output, epoch, signal: stopped, messages };
+        // ① 앞에서 연 PR(조정자 결정 1). 시도 결과에도 함께 보내 시도 기록에 남긴다.
+        let pullRequest: { pr: number; prHead: string } | undefined;
         if (job.payload.kind === 'dev' || job.payload.kind === 'rework') {
           const check = await d.taskCheck(context);
+          if (check.pullRequest) pullRequest = { pr: check.pullRequest.number, prHead: check.pullRequest.head };
           stopped.throwIfAborted();
           if (check.status !== 'pass') {
             const step = check.steps.find(step => step.name === check.failStep);
             if (check.failScope !== 'task' || !(check.rejectedPaths.length || step?.attempts.some(a => a.code !== null && a.code !== 0))) throw new Error('①의 기준 또는 실행 환경을 확인해야 합니다.');
             await reportEvent(d, 'reportAttemptResult', { epoch, params: { attemptId: output.attemptId }, body: {
-              fence: job.fence, summary: '① Task 검사 실패', failure: `① 실패: ${check.failStep ?? '미보고'}`, changedFiles: [], evidence: [],
+              fence: job.fence, summary: '① Task 검사 실패', failure: `① 실패: ${check.failStep ?? '미보고'}`, changedFiles: [], evidence: [], ...pullRequest,
             } }, stopped);
             return;
           }
@@ -141,7 +144,7 @@ export class AttemptFlow {
           await reportEvent(d, 'respondMessage', { epoch, params: { messageId }, body: { text, workState } }, stopped);
           await d.runner.markResponded(messageId);
         }
-        await reportEvent(d, 'reportAttemptResult', { epoch, params: { attemptId: output.attemptId }, body: { ...report, fence: job.fence } }, stopped);
+        await reportEvent(d, 'reportAttemptResult', { epoch, params: { attemptId: output.attemptId }, body: { ...report, ...pullRequest, fence: job.fence } }, stopped);
         if (resultSucceeded({ ...report, fence: job.fence })) await d.runner.completeMessages(output.attemptId);
       },
     });

@@ -73,6 +73,8 @@ const ciStart = {
   attemptId: Opt(c.Id),
   ref: Text,
   pr: Opt(c.PositiveInt4),
+  /** pr의 head 브랜치 이름. ① 보고에서는 ref(시도 브랜치)와 같아야 한다(조정자 결정 1). pr과 함께 보낸다. */
+  prHead: Opt(Text),
   trigger: Text,
   ...ciShas,
   pipelineSha: c.Sha,
@@ -97,6 +99,12 @@ const resultCommon = {
   evidence: List(c.Id),
   failure: Opt(Type.String()),
   tokens: Opt(c.Count),
+  /**
+   * 개발·재작업 시도가 push한 agent 브랜치의 PR 번호와 그 PR의 head 브랜치 이름(M5·M7 통합 조정자 결정 1).
+   * 서버는 prHead가 이 시도의 브랜치와 같을 때만 받는다. 둘은 함께 보낸다.
+   */
+  pr: Opt(c.PositiveInt4),
+  prHead: Opt(Text),
 };
 /** 시도 종류와 본문 형식의 일치는 서버가 저장된 kind로 판정한다. */
 export const AttemptResult = Type.Union([

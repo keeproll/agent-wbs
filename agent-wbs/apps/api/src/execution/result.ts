@@ -5,9 +5,10 @@ import { required, RunnerRepository } from '../runner/repository.ts';
 import { checkedJob, handover, retryFailedAttempt } from '../runner/service.ts';
 import { enqueueIntegration, gateInput } from './gate.ts';
 import { deferChange } from '../changes/events.ts';
+import { checkPullRequest } from '../ci/pull-request.ts';
 
 export interface ResultReport {
-  fence: number; summary: string; changedFiles: string[]; evidence: string[]; failure?: string; tokens?: number;
+  fence: number; summary: string; changedFiles: string[]; evidence: string[]; failure?: string; tokens?: number; pr?: number; prHead?: string;
   verification?: { headSha: string; specRevision: number; result: VerificationResult; cmd: string; expected: string; actual: string;
     defects: { text: string; blocking: boolean }[]; checklist: { itemKey: string; done: boolean; evidence?: string; note?: string }[] };
 }
@@ -26,6 +27,9 @@ export async function reportResult(client: PoolClient, attemptId: string, princi
   if (!h || h.slot_state !== 'none' || h.lock_state !== 'held' || !h.release_proof) throw new PlatformError('INVALID_TRANSITION', { reasons:['프로세스 종료 증거와 슬롯 반환이 필요합니다.'] });
   const qa = a.kind === 'qa' || a.kind === 'reverify';
   if (qa !== Boolean(body.verification) || qa && (body.changedFiles.length || body.failure)) throw new PlatformError('VALIDATION_FAILED');
+  // 개발·재작업 시도가 연 PR(조정자 결정 1). QA 시도는 PR을 보고하지 않는다.
+  if ((body.pr !== undefined || body.prHead !== undefined) && qa) throw new PlatformError('VALIDATION_FAILED');
+  if (checkPullRequest(body,a.branch) !== undefined) await client.query('update task_attempts set pr=$2 where id=$1',[a.id,body.pr]);
   const executionFailed = !qa && Boolean(body.failure);
   const taskCheck = !qa ? (await client.query<{ head_sha: string; status: string; spec_revision: number; input_version: string; fail_scope: string | null }>(`select c.head_sha,c.status,c.spec_revision,c.input_version,c.fail_scope from ci_runs c
     where c.attempt=$1 and c.stage=1 order by c.run_no desc limit 1`, [a.id])).rows[0] : undefined;
