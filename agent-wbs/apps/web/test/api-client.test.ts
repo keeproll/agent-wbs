@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ApiError, apiUrl, createApiClient } from '../src/shared/api/client.ts';
+import { ApiError, apiUrl, createApiClient, downloadFile } from '../src/shared/api/client.ts';
 
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
   new Response(body === null ? null : JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
@@ -156,5 +156,47 @@ describe('API 호출 계층(api client)', () => {
     expect(apiUrl('getReportPdf', { params: { reportId: 'r 1' }, query: { view: 'int' } })).toBe('/api/reports/r%201/pdf?view=int');
     expect(() => apiUrl('getReportPdf', { params: { reportId: 'r1' } } as never)).toThrow(/view/);
     expect(apiUrl('exportProject', {})).toBe('/api/project/export');
+  });
+});
+
+describe('파일 내려받기(downloadFile, M6-02 보고서 PDF)', () => {
+  const pdfFetch = (response: () => Response | Promise<Response>) =>
+    vi.fn<(url: string, init: RequestInit) => Promise<Response>>(() => Promise.resolve(response()));
+
+  it('성공하면 내용과 Content-Disposition의 한글 파일 이름(filename*)을 돌려준다', async () => {
+    const fetch = pdfFetch(() => new Response('%PDF-1.7', {
+      status: 200,
+      headers: { 'content-type': 'application/pdf', 'content-disposition': `attachment; filename="RPT-W-261026.pdf"; filename*=UTF-8''${encodeURIComponent('RPT-W-261026_팀장용.pdf')}` },
+    }));
+    const file = await downloadFile('getReportPdf', { params: { reportId: 'r-1' }, query: { view: 'int' } }, { fetch: fetch as unknown as typeof globalThis.fetch });
+    expect(fetch.mock.calls[0]?.[0]).toBe('/api/reports/r-1/pdf?view=int');
+    expect(file.fileName).toBe('RPT-W-261026_팀장용.pdf');
+    expect(await file.blob.text()).toBe('%PDF-1.7');
+  });
+
+  it('503 PDF_FAILED는 서버 본문(안내 포함)을 담은 ApiError다', async () => {
+    const fetch = pdfFetch(() => json(503, errorBody('PDF_FAILED', { fix: '기간을 나눠 생성하세요.' })));
+    const error = await downloadFile('getReportPdf', { params: { reportId: 'r-1' }, query: { view: 'int' } }, { fetch: fetch as unknown as typeof globalThis.fetch }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).code).toBe('PDF_FAILED');
+    expect((error as ApiError).kind).toBe('unavailable');
+    expect((error as ApiError).body?.error.fix).toBe('기간을 나눠 생성하세요.');
+  });
+
+  it('PDF는 만드는 데 시간이 걸리므로 일반 요청(10초)보다 길게 기다린다', async () => {
+    vi.useFakeTimers();
+    try {
+      let signal: AbortSignal | undefined;
+      // 실제 fetch처럼 취소 신호를 받으면 실패한다.
+      const fetch = vi.fn((_url: string, init: RequestInit) => {
+        signal = init.signal ?? undefined;
+        return new Promise<Response>((_, reject) => { signal?.addEventListener('abort', () => { reject(signal?.reason as Error); }); });
+      });
+      const pending = downloadFile('getReportPdf', { params: { reportId: 'r-1' }, query: { view: 'int' } }, { fetch: fetch as unknown as typeof globalThis.fetch }).catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(((await pending) as ApiError).code).toBe('TIMEOUT');
+    } finally { vi.useRealTimers(); }
   });
 });

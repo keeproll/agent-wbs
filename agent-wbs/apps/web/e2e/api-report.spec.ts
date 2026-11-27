@@ -72,6 +72,49 @@ test('보고서 없음 → 기간 지정 오류 → 생성 → 팀장용 12섹�
   await expect(page.getByText('해당 종류의 보고서가 없습니다.')).toBeVisible();
 });
 
+test('PDF 다운로드: 서버 PDF를 받고, 생성 실패면 본문은 그대로 두고 다시 시도·기간 분리 안내를 보인다(M6-02, UAT-REPORT-05)', async ({ page }) => {
+  await login(page, '/report');
+  await page.getByRole('button', { name: /RPT-C-001/ }).click();
+  const doc = page.getByRole('article', { name: /RPT-C-001 보고서/ });
+  await expect(doc).toBeVisible();
+
+  // 성공: 실제 서버가 만든 PDF를 G L410 이름으로 저장한다.
+  const ok = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'PDF 다운로드' }).click();
+  const file = await ok;
+  expect(file.suggestedFilename()).toBe('RPT-C-001_팀장용.pdf');
+  const head = await (await file.createReadStream()).take(1).toArray() as Buffer[];
+  expect(Buffer.concat(head).subarray(0, 5).toString()).toBe('%PDF-');
+
+  // 실패: 서버가 503 PDF_FAILED(계약 모양)를 준다. 이 응답은 시험이 만든 것이라 5xx 목록에서 뺀다.
+  const before = serverErrors.length;
+  await page.route('**/api/reports/*/pdf?*', (route) => route.fulfill({
+    status: 503, contentType: 'application/json',
+    body: JSON.stringify({ error: { code: 'PDF_FAILED', message: 'PDF를 만들지 못했습니다. 화면의 보고서는 계속 볼 수 있습니다.', action: '보고서 PDF 다운로드',
+      fix: '잠시 후 다시 시도하세요. 계속 실패하면 기간을 나눠 보고서를 생성하세요.', errors: [], details: {}, requestId: 'e2e' } }),
+  }));
+  let downloads = 0;
+  page.on('download', () => { downloads++; });
+  await page.getByRole('button', { name: 'PDF 다운로드' }).click();
+  const bar = page.locator('.errbar');
+  await expect(bar).toContainText('PDF를 만들지 못했습니다');
+  await expect(bar).toContainText('503 PDF_FAILED');
+  await expect(bar).toContainText('기간을 나눠 보고서를 생성하세요');
+  await expect(bar).toContainText('대상: PDF 생성 (RPT-C-001_팀장용.pdf)');
+  // 본문은 그대로이고, 오류 본문을 파일로 저장하지 않는다.
+  await expect(doc).toBeVisible();
+  expect(downloads).toBe(0);
+  if (shots) await page.screenshot({ path: `${shots}/report-pdf-fail-1440.png` });
+  serverErrors.splice(before);
+
+  // 다시 시도: 서버가 정상이면 받는다.
+  await page.unroute('**/api/reports/*/pdf?*');
+  const retried = page.waitForEvent('download');
+  await bar.getByRole('button', { name: '다시 시도' }).click();
+  expect((await retried).suggestedFilename()).toBe('RPT-C-001_팀장용.pdf');
+  await expect(bar).toHaveCount(0);
+});
+
 test('390px: 가로 넘침 없이 보고서 목록과 문서를 본다', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await login(page, '/report');
