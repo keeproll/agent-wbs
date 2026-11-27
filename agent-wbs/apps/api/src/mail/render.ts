@@ -33,6 +33,12 @@ export interface MailInput {
   to: string | null;
   /** Agent WBS 접속 주소(설정 → 알림). 비어 있으면 「전체 보고서 보기」 링크를 넣지 않는다(G L543). */
   appUrl: string | null;
+  /**
+   * Q-13 결정 A: 외부 수신자에게 가는 메일인지. true면 앱 링크와 내부 경로(「설정 → 보고서 · 메일」)를 넣지 않는다.
+   * 왜: 링크는 같은 PC · 같은 네트워크에서만 열린다(G L1052). 외부 수신자는 PDF 첨부로 전체 내용을 본다.
+   * 없으면 false(내부 수신자 · 지금까지와 같음).
+   */
+  external?: boolean;
 }
 export interface RenderedMail { subject: string; html: string; text: string }
 
@@ -120,8 +126,11 @@ function sections(r: MailReport, view: 'int' | 'ext'): { kpis: Kpi[]; sections: 
 }
 
 const FOOTER = '보고서는 생성 시점의 스냅샷이며 이후 변경은 반영되지 않습니다. 수신 설정은 Agent WBS → 설정 → 보고서 · 메일에서 바꿀 수 있습니다.';
+/** 외부 수신자용 바닥글(Q-13 결정 A). 앱 안의 경로를 말하지 않고, 전체 내용은 첨부 PDF에 있다고 알린다. */
+const FOOTER_EXTERNAL = '보고서는 생성 시점의 스냅샷이며 이후 변경은 반영되지 않습니다. 전체 내용은 첨부한 PDF에 있습니다. 수신 설정을 바꾸려면 이 메일을 보낸 담당자에게 알려 주세요.';
 const footerLead = (to: string | null) => `이 메일은 Agent WBS가 보고서 생성 직후 자동으로 보냈습니다${to ? ` (수신: ${to})` : ''}.`;
 const reportLink = (input: MailInput) => {
+  if (input.external) return null;
   const base = (input.appUrl ?? '').trim().replace(/\/+$/, '');
   return base ? `${base}/report/${input.report.id}` : null;
 };
@@ -131,6 +140,9 @@ export function renderMail(input: MailInput): RenderedMail {
   const view = mailView(r.kind, input.view);
   const subject = mailSubject(r, view);
   const { kpis, sections: list } = sections(r, view);
+  // 외부 수신자는 보고용만 받는다(일간은 팀장용만 있어 외부로 보내지 않는다 — queue.ts가 막는다).
+  if (input.external && view !== 'ext') throw new Error('외부 수신자 메일은 보고용 보기만 만들 수 있습니다.');
+  const footer = input.external ? FOOTER_EXTERNAL : FOOTER;
   const label = `${KIND[r.kind]} 보고서 · ${view === 'ext' ? '보고용' : '팀장용'}`;
   const meta = `기간 ${period(r)} · 생성 ${seoulTime(r.generatedAt)} · ${r.reportKey}`;
   const link = reportLink(input);
@@ -150,7 +162,7 @@ export function renderMail(input: MailInput): RenderedMail {
     + `<tr><td style="padding:14px 0 0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse"><tr>${kpis.map(cell).join('')}</tr></table></td></tr>`
     + list.map(sec).join('')
     + (link ? `<tr><td style="padding:22px 0 0"><a href="${esc(link)}" style="display:inline-block;padding:10px 16px;background:#2453CF;color:#FFFFFF;text-decoration:none;border-radius:6px;${FONT}font-size:14px;font-weight:600">Agent WBS에서 전체 보고서 보기</a></td></tr>` : '')
-    + `<tr><td style="padding:18px 0 0;${FONT}font-size:11.5px;color:#8A939E;line-height:1.6">${esc(`${footerLead(input.to)} ${FOOTER}`)}</td></tr>`
+    + `<tr><td style="padding:18px 0 0;${FONT}font-size:11.5px;color:#8A939E;line-height:1.6">${esc(`${footerLead(input.to)} ${footer}`)}</td></tr>`
     + '</table></td></tr></table></td></tr></table></body></html>';
 
   const text = [
@@ -158,7 +170,7 @@ export function renderMail(input: MailInput): RenderedMail {
     ...kpis.map((k) => `${k.label}: ${k.value} (${k.sub})`),
     ...list.flatMap((x) => ['', `■ ${x.title}`, ...(x.items.length ? x.items.map((t) => `• ${t}`) : ['없음'])]),
     ...(link ? ['', `Agent WBS에서 전체 보고서 보기: ${link}`] : []),
-    '', footerLead(input.to), FOOTER, '',
+    '', footerLead(input.to), footer, '',
   ].join('\n');
   return { subject, html, text };
 }

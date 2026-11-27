@@ -20502,7 +20502,7 @@
       },
       "post": {
         "operationId": "addRecipient",
-        "summary": "받는 사람 추가(중복 409, 구독 하나 이상)",
+        "summary": "받는 사람 추가(중복 409, 구독 하나 이상, 외부 수신자는 주간만)",
         "tags": [
           "lead"
         ],
@@ -20554,6 +20554,9 @@
                   },
                   "pdf": {
                     "type": "boolean"
+                  },
+                  "external": {
+                    "type": "boolean"
                   }
                 },
                 "additionalProperties": false
@@ -20563,7 +20566,7 @@
         },
         "responses": {
           "201": {
-            "description": "받는 사람 추가(중복 409, 구독 하나 이상)",
+            "description": "받는 사람 추가(중복 409, 구독 하나 이상, 외부 수신자는 주간만)",
             "headers": {
               "Idempotency-Replayed": {
                 "schema": {
@@ -20630,7 +20633,7 @@
     "/api/settings/mail/recipients/{id}": {
       "patch": {
         "operationId": "updateRecipient",
-        "summary": "구독·보기·PDF·받는 중 변경",
+        "summary": "구독·보기·PDF·외부·받는 중 변경",
         "tags": [
           "lead"
         ],
@@ -20678,6 +20681,9 @@
                   "pdf": {
                     "type": "boolean"
                   },
+                  "external": {
+                    "type": "boolean"
+                  },
                   "active": {
                     "type": "boolean"
                   }
@@ -20690,7 +20696,7 @@
         },
         "responses": {
           "200": {
-            "description": "구독·보기·PDF·받는 중 변경",
+            "description": "구독·보기·PDF·외부·받는 중 변경",
             "content": {
               "application/json": {
                 "schema": {
@@ -21144,7 +21150,8 @@
                     "from",
                     "to",
                     "html",
-                    "attachment"
+                    "attachment",
+                    "external"
                   ],
                   "properties": {
                     "subject": {
@@ -21168,6 +21175,9 @@
                           "type": "null"
                         }
                       ]
+                    },
+                    "external": {
+                      "type": "boolean"
                     }
                   }
                 }
@@ -42071,6 +42081,7 @@
           "to",
           "subject",
           "view",
+          "external",
           "tryNo",
           "state",
           "error",
@@ -42114,6 +42125,9 @@
           },
           "view": {
             "$ref": "#/components/schemas/ReportView"
+          },
+          "external": {
+            "type": "boolean"
           },
           "tryNo": {
             "type": "integer",
@@ -46578,6 +46592,7 @@
           "weekly",
           "view",
           "pdf",
+          "external",
           "active",
           "createdAt",
           "updatedAt"
@@ -46602,6 +46617,9 @@
             "$ref": "#/components/schemas/ReportView"
           },
           "pdf": {
+            "type": "boolean"
+          },
+          "external": {
             "type": "boolean"
           },
           "active": {

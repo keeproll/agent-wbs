@@ -4,6 +4,7 @@
  *
  * 흐름: 빈 상태(SMTP 미설정 · 받는 사람 없음) → SMTP 설정 · 연결 확인 → 받는 사람 추가 오류(형식 · 구독 없음 · 중복) → qa@example.com 일간 추가
  * → 「테스트」 → 발송 기록 → 「미리보기」(HTML 메일) → SMTP 인증 실패 → 실패 배너 · 탭 배지 · 대시보드 알림 → 정상 복구 → 「실패 건 모두 다시 보내기」 → 알림 해제.
+ * 끝으로 Q-13 결정 A: 외부 수신자를 추가해 「외부」 표시 · 고정 칸 · 링크 0건 · PDF 첨부 · 미리보기 안내를 확인한다.
  * 원본의 「Mock: SMTP 인증 실패 / 정상 복구」 버튼 대신 가짜 SMTP 서버의 응답 방식을 바꾼다(UAT-POLICY-05).
  */
 import { expect, test, type Page } from '@playwright/test';
@@ -222,4 +223,54 @@ test('[리뷰 지적 4] SMTP 수정 폼을 연 뒤 다른 탭이 먼저 저장�
   await smtpA.getByRole('button', { name: '저장' }).click();
   await expect(smtpA.getByText(new RegExp(`127\\.0\\.0\\.1:${String(fake?.smtpPort)}`))).toBeVisible();
   await other.close();
+});
+
+test('Q-13 결정 A: 외부 수신자 — 「외부」 표시 · 일간/보기/PDF 고정 · 메일 링크 0건 + PDF 첨부 · 미리보기 안내', async ({ page }) => {
+  await login(page, '/settings/report');
+  const rc = page.getByRole('region', { name: '보고서 메일 — 받는 사람' });
+  await rc.getByLabel('이메일 주소').fill('partner@outside.example');
+  await rc.getByRole('checkbox', { name: '외부 수신자' }).check();
+  // 외부를 고르면 일간은 끄고 막으며, 보고용 · PDF로 고정한다.
+  await expect(rc.getByRole('button', { name: '일간 (매일 07:00)' })).toBeDisabled();
+  await expect(rc.getByRole('button', { name: '일간 (매일 07:00)' })).toHaveAttribute('aria-pressed', 'false');
+  await rc.getByRole('button', { name: '받는 사람 추가' }).click();
+  const row = rc.getByTestId('recipient-partner@outside.example');
+  await expect(row).toBeVisible();
+  await expect(row.getByRole('button', { name: '외부 수신자' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(row.getByRole('button', { name: '일간 보고 받기' })).toBeDisabled();
+  await expect(row.getByRole('checkbox', { name: 'PDF 첨부' })).toBeChecked();
+  await expect(row.getByRole('checkbox', { name: 'PDF 첨부' })).toBeDisabled();
+  if (shots) await rc.screenshot({ path: `${shots}/mail-external-row.png` });
+
+  const before = await received();
+  await row.getByRole('button', { name: '테스트' }).click();
+  const log = page.getByRole('region', { name: '발송 기록' });
+  const first = log.locator('.gtr.lrow:not(.h)').first();
+  await expect(first).toContainText('partner@outside.example');
+  await expect(first).toContainText('발송됨', { timeout: 15_000 });
+  await expect(first).toContainText('보고용 (요약) + PDF');
+  await expect(first.locator('.tag', { hasText: '외부' })).toBeVisible();
+  const messages = (await (await fetch(`http://127.0.0.1:${String(fake?.controlPort)}/messages`)).json()) as { count: number; items: { to: string[]; links: number; pdf: boolean }[] };
+  expect(messages.count).toBe(before + 1);
+  expect(messages.items.at(-1)).toEqual({ to: ['partner@outside.example'], links: 0, pdf: true });
+  // 같은 환경의 내부 수신자 메일에는 링크가 있다(접속 주소가 설정돼 있음).
+  expect(messages.items.some((m) => m.to[0] === 'qa@example.com' && m.links > 0)).toBe(true);
+
+  await row.getByRole('button', { name: '미리보기' }).click();
+  const dialog = page.getByRole('dialog', { name: '메일 미리보기' });
+  await expect(dialog.getByText('외부 수신자', { exact: true })).toBeVisible();
+  await expect(dialog.getByText(/_보고용\.pdf/)).toBeVisible();
+  const frame = dialog.frameLocator('iframe[title="메일 본문 미리보기"]');
+  await expect(frame.getByText(/보고서 · 보고용/)).toBeVisible();
+  await expect(frame.getByText('전체 보고서 보기')).toHaveCount(0);
+  await expect(frame.locator('a')).toHaveCount(0);
+  if (shots) await page.screenshot({ path: `${shots}/mail-external-1440.png` });
+  await dialog.getByRole('button', { name: '닫기' }).first().click();
+
+  // 「외부」를 끄면 내부 수신자로 돌아간다(다른 칸은 그대로).
+  await row.getByRole('button', { name: '외부 수신자' }).click();
+  await expect(row.getByRole('button', { name: '외부 수신자' })).toHaveAttribute('aria-pressed', 'false');
+  await expect(row.getByRole('button', { name: '일간 보고 받기' })).toBeEnabled();
+  await row.getByRole('button', { name: '삭제' }).click();
+  await expect(row).toBeHidden();
 });

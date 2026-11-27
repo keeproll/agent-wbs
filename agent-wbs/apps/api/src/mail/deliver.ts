@@ -27,7 +27,7 @@ import type { Pool, PoolClient } from '@awbs/db';
 import { inEpoch } from '../platform/transaction.ts';
 import { deferChange, iso } from '../changes/events.ts';
 import { loadReport, syncMailAlert } from './queue.ts';
-import { pdfName, renderMail } from './render.ts';
+import { mailSubject, pdfName, renderMail } from './render.ts';
 import { smtpTarget } from './settings.ts';
 import { mailTransition, type Incoming, type MailState } from './transition.ts';
 import { DEFAULT_TIMEOUT_MS, sendSmtp, type OutgoingMail, type SendOutcome, type SmtpTarget } from './smtp.ts';
@@ -51,7 +51,7 @@ export interface DeliverOptions {
 export interface DeliverResult { accepted: number; retry: number; failed: number; unknown: number; discarded: number }
 
 /** 찜한 한 통. attempt는 이번 찜하기에서 새로 매긴 시도 ID다(결과가 이 시도의 것인지 판정). */
-interface Claimed { id: string; report: string; reportKey: string; email: string; view: 'int' | 'ext'; pdf: boolean; retried: boolean; projectId: string; sentAt: string; attempt: string }
+interface Claimed { id: string; report: string; reportKey: string; email: string; view: 'int' | 'ext'; pdf: boolean; external: boolean; retried: boolean; projectId: string; sentAt: string; attempt: string }
 
 const SMTP_MISSING = 'SMTP 서버 미설정 — 설정 → 보고서 · 메일에서 메일 서버를 등록하세요.';
 
@@ -68,6 +68,8 @@ async function appendLog(client: PoolClient, outbox: string, state: string, erro
 const staleSeconds = (timeoutMs: number) => Math.ceil((timeoutMs * 10) / 1000) + 120;
 const RESULT_LOST = '발송 결과를 저장하지 못함 — 수락 여부 불명(받는 쪽에 도착했을 수 있음). 확인 후 다시 보내세요.';
 const RECIPIENT_GONE = '받는 사람이 삭제되어 보내지 않음';
+/** 큐에 넣은 뒤 받는 사람이 외부 수신자로 바뀌었는데 일간 보고서일 때(Q-13 결정 A) */
+const EXTERNAL_DAILY_SKIP = '받는 사람이 외부 수신자로 바뀌어 보내지 않음 — 일간 보고서는 팀장용만 있어 외부로 보내지 않습니다.';
 
 /**
  * 도착한 결과를 적는다. 상태를 어떻게 바꿀지는 전이표(transition.ts) 하나로 정한다.
@@ -148,32 +150,40 @@ async function sweepStale(client: PoolClient, now: string | null, timeoutMs: num
  */
 async function claimOne(client: PoolClient, now: string | null): Promise<{ c: Claimed; mail: OutgoingMail | null; target: (SmtpTarget & { from: string }) | null } | 'skipped' | null> {
   const row = (await client.query<Omit<Claimed, 'sentAt' | 'reportKey' | 'attempt'> & { recipient: string }>(
-    `select id,report,recipient,email,view,pdf,retried,project_id "projectId" from mail_outbox
+    `select id,report,recipient,email,view,pdf,external,retried,project_id "projectId" from mail_outbox
      where state='queued' or (state='retry_wait' and next_at<=coalesce($1::timestamptz,clock_timestamp()))
      order by coalesce(next_at,created_at),created_at,id limit 1 for update skip locked`, [now])).rows[0];
   if (!row) return null;
   // 발송 직전에 지금의 받는 사람 목록으로 다시 확인한다. 삭제와 겹치면 삭제가 끝날 때까지 기다린다(for share).
-  const alive = (await client.query('select 1 from mail_recipients where id=$1 for share', [row.recipient])).rowCount;
+  const alive = (await client.query<{ external: boolean }>('select external from mail_recipients where id=$1 for share', [row.recipient])).rows[0];
   const at = (await client.query<{ at: string }>(`select ${iso('coalesce($1::timestamptz,clock_timestamp())')} at`, [now])).rows[0]?.at ?? new Date().toISOString();
-  if (!alive) {
-    await client.query("update mail_outbox set state='failed',error=$2,next_at=null where id=$1", [row.id, RECIPIENT_GONE]);
-    await appendLog(client, row.id, 'failed', RECIPIENT_GONE, at);
+  const report = await loadReport(client, row.report);
+  // Q-13 결정 A: 큐에 넣은 뒤 받는 사람이 외부 수신자로 바뀌었으면, 보내기 직전에 이 줄을 외부 규칙(보고용 · PDF · 링크 없음)으로 바꾼다.
+  // 일간 보고서는 외부용이 없으므로 보내지 않는다. 왜: 큐에 넣은 순간의 설정만 믿으면 링크와 내부 용어가 든 메일이 밖으로 나간다.
+  const skip = !alive ? RECIPIENT_GONE : alive.external && !row.external && report.kind === 'daily' ? EXTERNAL_DAILY_SKIP : null;
+  if (skip) {
+    await client.query("update mail_outbox set state='failed',error=$2,next_at=null where id=$1", [row.id, skip]);
+    await appendLog(client, row.id, 'failed', skip, at);
     await syncMailAlert(client, row.projectId);
     deferChange(client, row.projectId, 'mail', { key: 'log' });
     return 'skipped';
   }
+  if (alive?.external && !row.external) {
+    await client.query("update mail_outbox set external=true,view='ext',pdf=true,subject=$2 where id=$1", [row.id, mailSubject(report, 'ext')]);
+    Object.assign(row, { external: true, view: 'ext', pdf: true });
+  }
   // 찜할 때마다 새 시도 ID를 매긴다. 결과는 이 ID가 아직 현재일 때만 상태를 바꾼다(transition.ts 원칙 1).
   const attempt = (await client.query<{ attempt: string }>("update mail_outbox set state='sending',next_at=null,sent_at=$2,attempt=gen_random_uuid() where id=$1 returning attempt::text attempt", [row.id, at])).rows[0]?.attempt ?? '';
   await appendLog(client, row.id, 'sending', null, at);
-  const report = await loadReport(client, row.report);
-  const c: Claimed = { id: row.id, report: row.report, email: row.email, view: row.view, pdf: row.pdf, retried: row.retried, projectId: row.projectId, reportKey: report.reportKey, sentAt: at, attempt };
+  const c: Claimed = { id: row.id, report: row.report, email: row.email, view: row.view, pdf: row.pdf, external: row.external, retried: row.retried, projectId: row.projectId, reportKey: report.reportKey, sentAt: at, attempt };
   const target = await smtpTarget(client);
   if (!target) return { c, mail: null, target: null };
   // M6 통합: 제목의 프로젝트 이름은 스냅샷 값이다(M6-02 조정자 7, 화면·PDF와 같은 reportProjectName). 지금 이름을 읽지 않는다.
   const project = reportProjectName(report.snapshot);
   const appUrl = (await client.query<{ app_url: string | null }>('select app_url from app_settings where singleton')).rows[0]?.app_url ?? null;
   // 미리보기와 같은 함수로 만든다. 스냅샷이라 다시 보내도 같은 내용이다(G L407).
-  const rendered = renderMail({ projectName: project, report, view: row.view, to: row.email, appUrl });
+  // 외부 수신자면 링크 · 내부 경로 없이 만든다(Q-13 결정 A).
+  const rendered = renderMail({ projectName: project, report, view: row.view, to: row.email, appUrl, external: row.external });
   return { c, mail: { from: target.from, to: row.email, ...rendered }, target };
 }
 
@@ -203,6 +213,9 @@ export async function deliverMail(pool: Pool, epoch: number, options: DeliverOpt
   return result;
 }
 
+/** 외부 수신자 메일에 PDF가 없을 때(Q-13 결정 A) */
+const EXTERNAL_NO_PDF = 'PDF 첨부를 만들지 못해 외부 수신자에게 보내지 않음 — 외부 수신자는 링크 없이 PDF로만 전체 내용을 봅니다.';
+
 async function send(target: SmtpTarget & { from: string }, mail: OutgoingMail, c: Claimed, options: DeliverOptions, timeoutMs: number): Promise<SendOutcome> {
   if (c.pdf && options.pdf) {
     try {
@@ -213,6 +226,8 @@ async function send(target: SmtpTarget & { from: string }, mail: OutgoingMail, c
       return { state: 'rejected', error: 'PDF 첨부를 만들지 못함 — 보고서 PDF 상태를 확인하세요.' };
     }
   }
+  // 외부 수신자는 링크가 없으므로 PDF가 유일한 전체 보고서다. PDF 없이 요약만 보내지 않는다(보내기 전 실패 → 15분 재시도 규칙).
+  if (c.external && !mail.attachments?.length) return { state: 'rejected', error: EXTERNAL_NO_PDF };
   return sendSmtp(target, mail, timeoutMs);
 }
 

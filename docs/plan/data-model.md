@@ -586,10 +586,13 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
   - 근거: §8.5
 - `mail_settings`/`mail_recipients`
   - `mail_settings`: SMTP(비밀값은 secrets)
-  - `mail_recipients`: email lower unique, daily/weekly 하나 이상 또는 inactive. 외부 수신자·링크 제외 필드는 Q-13에서 필요할 때 추가
+  - `mail_recipients`: email lower unique, daily/weekly 하나 이상 또는 inactive.
+  - `mail_recipients.external`(Q-13 결정 A, 0039): 외부 수신자. 참이면 view='ext' · pdf=true · daily=false여야 한다(검사 `recipient_external`).
+    - 왜: 외부 수신자에게는 링크 없이 보고용 + PDF만 보낸다. 일간 보고서는 팀장용만 있다.
   - 근거: §4.11
 - `mail_outbox` / `mail_log`
   - `mail_outbox`: delivery_id(논리 발송), epoch, unique(report, recipient, try_no), state(§3.7)
+  - `mail_outbox.external`(Q-13 결정 A, 0039): 외부 수신자에게 간 발송인지(발송 당시 값). 참이면 view='ext' · pdf=true(검사 `mail_outbox_external`)
   - `mail_log`: 수신자 삭제 후에도 주소 보존
   - 근거: §9.6-6
 - `notify_settings`/`notify_rules`

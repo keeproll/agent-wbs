@@ -6,8 +6,8 @@ import { reportProjectName } from '@awbs/shared';
  */
 import type { Pool, PoolClient } from '@awbs/db';
 import type { FastifyInstance } from 'fastify';
-import { ApiError, clientOf, isUuid, params, read, routes } from '../changes/http.ts';
-import { listMailLog, loadReport, resendFailed, resendMail, sendReportMail, testRecipient } from './queue.ts';
+import { ApiError, clientOf, invalid, isUuid, params, read, routes } from '../changes/http.ts';
+import { EXTERNAL_DAILY, listMailLog, loadReport, resendFailed, resendMail, sendReportMail, testRecipient } from './queue.ts';
 import { mailView, pdfName, renderMail } from './render.ts';
 import { addRecipient, checkSmtpSettings, deleteRecipient, getSmtp, listRecipients, putSmtp, updateRecipient, type SmtpInput } from './settings.ts';
 
@@ -22,25 +22,29 @@ const CHECK_TIMEOUT_MS = 15_000;
 async function preview(client: PoolClient, reportId: string, query: { view?: 'int' | 'ext'; to?: string }) {
   if (!isUuid(reportId)) throw new ApiError('NOT_FOUND', { resource: 'report', id: reportId }, [], '보고서를 찾을 수 없습니다.');
   const report = await loadReport(client, reportId);
-  let to: { email: string; view: 'int' | 'ext'; pdf: boolean } | null = null;
+  let to: { email: string; view: 'int' | 'ext'; pdf: boolean; external: boolean } | null = null;
   if (query.to !== undefined) {
     if (!isUuid(query.to)) throw new ApiError('NOT_FOUND', { resource: 'recipient', id: query.to }, [], '받는 사람을 찾을 수 없습니다.');
-    to = (await client.query<{ email: string; view: 'int' | 'ext'; pdf: boolean }>('select email,view,pdf from mail_recipients where id=$1', [query.to])).rows[0] ?? null;
+    to = (await client.query<{ email: string; view: 'int' | 'ext'; pdf: boolean; external: boolean }>('select email,view,pdf,external from mail_recipients where id=$1', [query.to])).rows[0] ?? null;
     if (!to) throw new ApiError('NOT_FOUND', { resource: 'recipient', id: query.to }, [], '받는 사람을 찾을 수 없습니다.');
   }
-  // 보기를 고르지 않았으면 받는 사람 기본값, 그것도 없으면 팀장용. 일간은 항상 팀장용(G L402).
-  const view = mailView(report.kind, query.view ?? to?.view ?? 'int');
+  // 외부 수신자에게는 일간 보고서를 보내지 않는다(Q-13 결정 A). 보낼 수 없는 메일을 미리보기로 보이지 않는다.
+  const external = to?.external ?? false;
+  if (external && report.kind === 'daily') throw invalid([{ path: 'to', rule: 'external', message: EXTERNAL_DAILY }], EXTERNAL_DAILY);
+  // 보기를 고르지 않았으면 받는 사람 기본값, 그것도 없으면 팀장용. 일간은 항상 팀장용(G L402). 외부 수신자는 언제나 보고용이다.
+  const view = external ? 'ext' : mailView(report.kind, query.view ?? to?.view ?? 'int');
   // M6 통합: 제목의 프로젝트 이름은 스냅샷 값이다(M6-02 조정자 7, 화면·PDF와 같은 reportProjectName). 지금 이름을 읽지 않는다.
   const project = reportProjectName(report.snapshot);
   const appUrl = (await client.query<{ app_url: string | null }>('select app_url from app_settings where singleton')).rows[0]?.app_url ?? null;
-  const rendered = renderMail({ projectName: project, report, view, to: to?.email ?? null, appUrl });
+  const rendered = renderMail({ projectName: project, report, view, to: to?.email ?? null, appUrl, external });
   const smtp = await getSmtp(client);
   return {
     subject: rendered.subject,
     from: smtp.from || '(SMTP 미설정)',
     to: to?.email ?? '(받는 사람)',
     html: rendered.html,
-    attachment: to?.pdf && report.kind !== 'daily' ? pdfName(report.reportKey, view) : null,
+    attachment: (external || to?.pdf) && report.kind !== 'daily' ? pdfName(report.reportKey, view) : null,
+    external,
   };
 }
 

@@ -119,6 +119,26 @@ describe('메일 본문(G L403-404, L1049)', () => {
     expect(int.html).toContain('RP-001 시험 (최초 → 11-01)');
     expect(int.html).toContain('href="http://x/report/00000000-0000-4000-8000-000000000001"');
   });
+
+  /**
+   * Q-13 결정 A: 외부 수신자 메일에는 앱 링크 · 내부 경로가 0건이다(G L1052).
+   * 왜 접속 주소(appUrl)를 넣고 시험하나: 주소가 설정돼 있어도 외부 메일에는 링크가 빠져야 하기 때문이다.
+   */
+  test('외부 수신자 메일은 접속 주소가 있어도 링크 · 내부 경로가 0건이다', () => {
+    const m = renderMail({ projectName: 'P', report: report('weekly'), view: 'ext', to: 'outside@partner.example', appUrl: 'http://192.168.0.10:3000/', external: true });
+    for (const body of [m.html, m.text]) {
+      expect(body.match(/href=|https?:\/\/|192\.168\.|\/report\/|\/settings\/|설정 →|전체 보고서 보기/g) ?? []).toEqual([]);
+      expect(body).toContain('전체 내용은 첨부한 PDF에 있습니다.');
+    }
+    // 같은 보고서 · 같은 주소라도 내부 수신자면 지금처럼 링크가 있다.
+    const inside = renderMail({ projectName: 'P', report: report('weekly'), view: 'ext', to: 'boss@example.com', appUrl: 'http://192.168.0.10:3000/' });
+    expect(inside.html).toContain('href="http://192.168.0.10:3000/report/');
+    expect(inside.text).toContain('설정 → 보고서 · 메일');
+  });
+
+  test('외부 수신자 메일은 팀장용으로 만들 수 없다(내부 용어가 밖으로 나가지 않게)', () => {
+    expect(() => renderMail({ projectName: 'P', report: report('weekly'), view: 'int', to: 'o@partner.example', appUrl: null, external: true })).toThrow('보고용');
+  });
 });
 
 describe('메일 지표 이름 · 요약 문장은 원본 메일 문구(P mailHtml L4006-4014), 숫자는 화면과 같은 계산', () => {
