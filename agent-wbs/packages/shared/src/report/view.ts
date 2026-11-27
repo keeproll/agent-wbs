@@ -77,7 +77,14 @@ export interface ExternalView {
 }
 
 /** 보고용(요약) 보기(P summ·risksExt·kpisExt·plan L6400-6412·L6420·L6430). 일간은 보고용이 없지만 같은 함수로 만들 수 있다. */
-export function externalView(s: ReportSnapshotData, kind: 'daily' | 'weekly' | 'custom', appUrl?: string | null): ExternalView {
+/**
+ * audience: 누가 읽는가(Q-13 fix4).
+ * - 'internal'(기본): 팀장 화면 · 내부 수신자. 작업 제목에서 내부 용어만 뺀다(scrubInternal, M6-01 규칙 그대로).
+ * - 'external': 외부 수신자. 주소 · 이메일까지 지우는 외부 변환(externalText)을 쓴다.
+ * 왜 나누나: 외부 변환의 정보 손실(파일 이름 · 제품 이름 · 버전 번호 생략)은 외부 수신자 보호를 위한 것이다. 내부 사람에게는 필요 없다.
+ */
+export function externalView(s: ReportSnapshotData, kind: 'daily' | 'weekly' | 'custom', audience: 'internal' | 'external' = 'internal'): ExternalView {
+  const title = audience === 'external' ? (t: string) => externalText(t) : scrubInternal;
   const f = reportFigures(s);
   const delta = forecastDeltaLabel(f.forecastDeltaDays);
   const slack = f.slackDays;
@@ -110,9 +117,9 @@ export function externalView(s: ReportSnapshotData, kind: 'daily' | 'weekly' | '
     summary,
     // 일간은 추이를 보이지 않는다(P isWeekly L6413).
     trend: kind === 'daily' ? [] : s.series.map((x) => ({ day: x.day, uptimePct: x.uptimePct, done: x.done, forecast: x.forecast })),
-    highlights: s.done.map((x) => externalText(x.title, appUrl)),
+    highlights: s.done.map((x) => title(x.title)),
     risks,
-    plan: s.next.map((x) => `${externalText(x.title, appUrl)} (${monthDay(x.start)} ~ ${monthDay(x.end)})`),
+    plan: s.next.map((x) => `${title(x.title)} (${monthDay(x.start)} ~ ${monthDay(x.end)})`),
   };
 }
 
@@ -121,7 +128,8 @@ export function externalView(s: ReportSnapshotData, kind: 'daily' | 'weekly' | '
  * 보고용 문장·메일 본문 검사(M6-01·M6-03)가 함께 쓴다.
  */
 const INTERNAL_TERMS: readonly RegExp[] = [
-  /TASK-\d{4,}/g, /RP-\d{3,}/g, /ATT-\d{4,}-\d+/g, /\bclaude-[a-z0-9.-]+/gi, /\bgpt-[a-z0-9.-]+/gi, /Effort/gi, /토큰/g, /\btokens?\b/gi, /실행 시도/g,
+  // 번호 셋은 대소문자를 가리지 않는다(Q-13 fix4). 왜: `task-0007`처럼 적어도 같은 작업 번호라는 정보가 전달된다.
+  /TASK-\d{4,}/gi, /RP-\d{3,}/gi, /ATT-\d{4,}-\d+/gi, /\bclaude-[a-z0-9.-]+/gi, /\bgpt-[a-z0-9.-]+/gi, /Effort/gi, /토큰/g, /\btokens?\b/gi, /실행 시도/g,
 ];
 export function internalTerms(text: string): string[] {
   return INTERNAL_TERMS.flatMap((re) => text.match(re) ?? []);
@@ -135,6 +143,33 @@ export const APP_PATHS = ['dashboard', 'project', 'wbs', 'design', 'planning', '
 
 /** 외부 글에서 주소를 지운 자리에 넣는 말(Q-13 fix2) */
 export const LINK_OMITTED = '(링크 생략)';
+/** 외부 글에서 이메일 주소를 지운 자리에 넣는 말(Q-13 fix4) */
+export const EMAIL_OMITTED = '(주소 생략)';
+/**
+ * 이메일 주소 모양(Q-13 fix4). 외부 글에서는 예외 없이 지운다.
+ * 왜: 「문의 help@intranet.corp.example」처럼 이메일 뒤에도 내부 호스트 이름이 보인다.
+ * 실제 배달 주소(To)와 보내는 사람(From)은 설정 · 받는 사람 값으로 따로 만들므로 이 규칙과 상관없다.
+ */
+const EMAIL = /(?<![\p{L}\p{N}._%+-])[\p{L}\p{N}._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+/giu;
+/**
+ * 국제화 도메인(IDN) 후보: 점으로 이어진 이름에 영문 밖 글자가 있고, 마지막 이름이 글자만 2자 이상인 토큰(예: 「내부.한국」).
+ * 마지막 이름에 숫자가 있으면(「2.5일」) 후보가 아니다. 왜: 소수 · 단위 표기까지 주소로 보지 않게 한다.
+ * 앞뒤 경계는 맨 호스트 규칙과 같다(바꾼 토큰은 늘 생략된다. punycode가 출력에 남지 않는다).
+ */
+const IDN_CANDIDATE = /(?<![\p{L}\p{N}.-])[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,}(?![\p{L}\p{N}@-]|\.[\p{L}\p{N}-])/gu;
+/**
+ * 정규화한 글에서 국제화 도메인을 ASCII(punycode, `xn--…`)로 바꾼다(Q-13 fix4).
+ * 표준 URL 해석기가 읽는 호스트 그대로다. 그 뒤 맨 호스트 규칙(마지막 이름 `xn--…` 포함)이 같은 기준으로 판정한다.
+ * 예: 「내부.한국」 → `xn--220bs6v.xn--3e0b707e` → 「(링크 생략)」. 「프로젝트.완료」처럼 점으로 이은 한글 단어도 같은 모양이라 생략된다(정보 손실, 조정자 판단).
+ */
+function asciiHosts(text: string): string {
+  return text.replace(IDN_CANDIDATE, (token) => {
+    if (![...token].some((ch) => (ch.codePointAt(0) ?? 0) > 0x7f)) return token;
+    try { return new URL(`http://${token}`).hostname || token; } catch { return token; }
+  });
+}
+/** 외부 글 판정 전 준비: 정규화 → 국제화 도메인을 ASCII로. 변환 함수와 검사기가 같은 결과를 쓴다. */
+const prepareExternal = (text: string) => asciiHosts(normalizeExternal(text));
 /** 주소 조각이 끝나는 글자(공백 · 따옴표 · 괄호 · 꺾쇠) */
 const TAIL = String.raw`[^\s<>"'()[\]{}「」『』]*`;
 /**
@@ -163,7 +198,7 @@ const ADDRESS: readonly RegExp[] = [
   new RegExp(String.raw`(?<![\w.:/~<-])\/[a-z0-9_.~%-]+(?:\/${TAIL})?`, 'gi'),  // 맨 호스트(Q-13 fix3 후속): 영숫자 · 하이픈 이름이 점으로 2개 이상 이어지고 마지막 이름이 글자 2자 이상(`wbs.corp.example`, `intranet.local`).
   // 왜: 스킴 · 포트 · 경로가 없어도 내부 호스트 이름이 밖으로 나간다. `file.txt` 같은 파일 이름도 지워지는 정보 손실은 받아들인다(조정자 판단).
   // 메일 주소(`first.last@example.com`)의 앞 · 뒤 부분은 `@` 옆이라 건너뛴다.
-  new RegExp(String.raw`(?<![\w.@-])[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}(?![\w.@-])`, 'gi'),
+  new RegExp(String.raw`(?<![a-z0-9.@-])[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:[a-z]{2,}|xn--[a-z0-9-]+)(?![a-z0-9@-]|\.[a-z0-9-])`, 'gi'),
 ];
 /** 주소는 아니지만 외부 글에 남기지 않는 것: 앱 메뉴 안내(「설정 → 알림」)와 링크 속성 글자(`href=`) */
 const APP_HINTS: readonly RegExp[] = [
@@ -222,9 +257,10 @@ export function normalizeExternal(text: string): string {
  */
 export function externalText(text: string, appUrl?: string | null): string {
   void appUrl;
-  const linked = ADDRESS.reduce((acc, re) => acc.replace(new RegExp(re.source, re.flags), ` ${LINK_OMITTED} `), normalizeExternal(text));
+  const mailed = prepareExternal(text).replace(new RegExp(EMAIL.source, EMAIL.flags), ` ${EMAIL_OMITTED} `);
+  const linked = ADDRESS.reduce((acc, re) => acc.replace(new RegExp(re.source, re.flags), ` ${LINK_OMITTED} `), mailed);
   const cleaned = [...APP_HINTS, ...INTERNAL_TERMS].reduce((acc, re) => acc.replace(new RegExp(re.source, re.flags), ''), linked)
-    .replace(/\s+/g, ' ').replace(/(\(링크 생략\)\s*)+/g, `${LINK_OMITTED} `).trim();
+    .replace(/\s+/g, ' ').replace(/(\(링크 생략\)\s*)+/g, `${LINK_OMITTED} `).replace(/(\(주소 생략\)\s*)+/g, `${EMAIL_OMITTED} `).trim();
   return cleaned || '(제목 비공개)';
 }
 /**
@@ -235,8 +271,8 @@ export function externalText(text: string, appUrl?: string | null): string {
  */
 export function externalLeaks(text: string, appUrl?: string | null): string[] {
   void appUrl;
-  const normal = normalizeExternal(text);
-  return [...ADDRESS, ...APP_HINTS, ...INTERNAL_TERMS].flatMap((re) => normal.match(new RegExp(re.source, re.flags)) ?? []);
+  const normal = prepareExternal(text);
+  return [EMAIL, ...ADDRESS, ...APP_HINTS, ...INTERNAL_TERMS].flatMap((re) => normal.match(new RegExp(re.source, re.flags)) ?? []);
 }
 /** HTML에서 보이는 글만(스타일 · 스크립트 · 제목 태그 · 태그를 뺀다). 글자 기호 풀기는 검사기의 정규화가 맡는다. */
 export function htmlVisibleText(html: string): string {
@@ -269,8 +305,15 @@ export function parseSender(from: string): { name: string; address: string } | n
   if (name && !(new RegExp(`^[가-힣ㄱ-ㅎㅏ-ㅣA-Za-z0-9 -]{1,${String(SENDER_NAME_MAX)}}$`).test(name) && externalLeaks(name).length === 0)) return null;
   return { name, address };
 }
-/** 옛 이름. externalText와 같은 함수다(앱 접속 주소를 모를 때). */
-export const scrubInternal = (text: string): string => externalText(text);
+/**
+ * 내부 사람이 읽는 보고용(팀장 화면 · 내부 수신자 메일 · 내부 보고용 PDF)에서 자유 입력의 내부 용어만 뺀다(G L396, 리뷰 M6-01 3).
+ * 외부 변환(externalText)과 달리 주소 · 파일 이름은 그대로 둔다(Q-13 fix4: 외부 변환은 외부 수신자에게만).
+ * 예: 「TASK-0007 RP-002 개선」 → 「개선」. 모두 지워져 빈 글이 되면 「(제목 비공개)」.
+ */
+export function scrubInternal(text: string): string {
+  const cleaned = INTERNAL_TERMS.reduce((acc, re) => acc.replace(new RegExp(re.source, re.flags), ''), text).replace(/\s+/g, ' ').trim();
+  return cleaned || '(제목 비공개)';
+}
 
 
 /** 스냅샷이 계약(ReportSnapshot)에 맞는지. 맞지 않으면 첫 위반 위치를 돌려준다. */

@@ -14,7 +14,7 @@
  * 숫자는 화면 보고서와 같은 계산(shared `reportFigures` — `internalKpis`·`externalView`가 쓰는 것)에서 온다.
  * 그래서 화면·메일·PDF가 같은 스냅샷에서 같은 숫자를 보인다(milestones §4.0).
  */
-import { externalHtmlLeaks, externalLeaks, externalText, monthDay, parseSender, reportFigures, type Kpi, type ReportKind, type ReportSnapshotData } from '@awbs/shared';
+import { externalHtmlLeaks, externalLeaks, externalText, monthDay, parseSender, scrubInternal, reportFigures, type Kpi, type ReportKind, type ReportSnapshotData } from '@awbs/shared';
 
 export interface MailReport {
   id: string;
@@ -76,7 +76,9 @@ const day = (d: string | null) => d ?? '—';
  * 본문 지표와 섹션 목록(G L403: 팀장용 6개 / 보고용 4개). 문구는 P mailHtml L4006-4020 그대로다.
  * 원본 변수와 스냅샷의 대응: D.failN = QA 실패 목록 수(failures), D.blocked = 선행 대기(summary.blocked), D.gaps = 중단 구간(gaps).
  */
-function sections(r: MailReport, view: 'int' | 'ext', appUrl: string | null): { kpis: Kpi[]; sections: Section[] } {
+function sections(r: MailReport, view: 'int' | 'ext', external: boolean): { kpis: Kpi[]; sections: Section[] } {
+  // 작업 제목: 외부 수신자면 외부 변환, 내부 수신자 보고용이면 내부 용어만 뺀다(Q-13 fix4: 외부 변환은 외부 수신자에게만).
+  const title = external ? (t: string) => externalText(t) : scrubInternal;
   const s = r.snapshot;
   const f = reportFigures(s);
   const failN = s.failures.length;
@@ -102,9 +104,9 @@ function sections(r: MailReport, view: 'int' | 'ext', appUrl: string | null): { 
           failN ? `품질 검증 ${String(failN)}건 보완 진행.` : '품질 검증 이상 없음.',
         ] },
         // 작업 제목은 자유 입력이라 내부 용어 · 앱 주소가 섞일 수 있다. 보고용은 변환 함수 하나를 지난다(Q-13 fix1 1·2).
-        { title: '주요 완료 항목', items: s.done.map((t) => externalText(t.title, appUrl)) },
+        { title: '주요 완료 항목', items: s.done.map((t) => title(t.title)) },
         { title: '위험 · 이슈', items: risks },
-        { title: '다음 계획', items: s.next.map((t) => `${externalText(t.title, appUrl)} (${monthDay(t.start)} ~ ${monthDay(t.end)})`) },
+        { title: '다음 계획', items: s.next.map((t) => `${title(t.title)} (${monthDay(t.start)} ~ ${monthDay(t.end)})`) },
       ],
     };
   }
@@ -141,12 +143,11 @@ export function renderMail(input: MailInput): RenderedMail {
   const view = mailView(r.kind, input.view);
   // 외부 수신자는 보고용만 받는다(일간은 팀장용만 있어 외부로 보내지 않는다 — queue.ts가 막는다).
   if (input.external && view !== 'ext') throw new Error('외부 수신자 메일은 보고용 보기만 만들 수 있습니다.');
-  const appUrl = input.appUrl;
   // 외부 수신자 메일은 제목 · 본문의 **모든 글**이 보고용 변환 함수(externalText)를 지난다(Q-13 fix1 원칙).
   // 받는 사람 주소(바닥글 「수신: …」)만 그대로 둔다. 왜: 받는 사람 자신의 주소이고, 바꾸면 누구에게 보냈는지 알 수 없다.
-  const out = input.external ? (t: string) => externalText(t, appUrl) : (t: string) => t;
+  const out = input.external ? (t: string) => externalText(t) : (t: string) => t;
   const subject = out(mailSubject(r, view));
-  const raw = sections(r, view, appUrl);
+  const raw = sections(r, view, input.external ?? false);
   const kpis = raw.kpis.map((k) => ({ ...k, label: out(k.label), value: out(k.value), sub: out(k.sub) }));
   const list = raw.sections.map((x) => ({ title: out(x.title), items: x.items.map(out) }));
   const footer = out(input.external ? FOOTER_EXTERNAL : FOOTER);
@@ -154,7 +155,7 @@ export function renderMail(input: MailInput): RenderedMail {
   const meta = out(`기간 ${period(r)} · 생성 ${seoulTime(r.generatedAt)} · ${r.reportKey}`);
   const link = reportLink(input);
   // M6 통합: 보고용 제목의 프로젝트 이름은 내부 용어 · 앱 주소를 뺀다(화면·PDF docTitle과 같은 변환 함수, 리뷰 M6-01 3).
-  const projectName = view === 'ext' ? externalText(input.projectName, appUrl) : input.projectName;
+  const projectName = view !== 'ext' ? input.projectName : input.external ? externalText(input.projectName) : scrubInternal(input.projectName);
 
   const cell = (k: Kpi) => `<td style="padding:10px 12px;border:1px solid #E1E5EA;width:25%;vertical-align:top;${FONT}"><div style="font-size:12px;color:#6B7480">${esc(k.label)}</div><div style="font-size:20px;font-weight:700;color:#1F2933;margin:2px 0">${esc(k.value)}</div><div style="font-size:12px;color:#6B7480">${esc(k.sub)}</div></td>`;
   const sec = (x: Section) => `<tr><td style="padding:18px 0 6px;${FONT}font-size:15px;font-weight:700;color:#1F2933;border-bottom:1px solid #E1E5EA">${esc(x.title)}</td></tr>`
@@ -194,7 +195,9 @@ export function externalMailLeaks(mail: { from?: string | Sender; subject: strin
   // 보내는 사람이 글이면 허용 목록(parseSender)으로 읽는다. 읽을 수 없으면 그 자체가 검사 실패다(빈 이름으로 통과시키지 않는다).
   const sender = typeof mail.from === 'string' ? parseSender(mail.from) : (mail.from ?? { name: '', address: '' });
   const senderProblem = sender ? externalLeaks(sender.name) : ['보내는 사람 형식'];
-  const headers = [mail.subject, ...(mail.attachments ?? []).map((a) => a.filename)];
-  return [...senderProblem, ...headers.flatMap((t) => externalLeaks(t)), ...externalHtmlLeaks(own(mail.html)), ...externalLeaks(own(mail.text))];
+  // 첨부 이름은 시스템이 만든 `RPT-…_보고용.pdf` 한 가지 형식만 허용한다(사용자 글이 들어가지 않는다). 다른 이름이면 그 자체가 실패다.
+  const attachments = (mail.attachments ?? []).filter((a) => !/^RPT-[A-Z]+-[0-9A-Za-z-]+_보고용\.pdf$/.test(a.filename)).map((a) => `첨부 이름: ${a.filename}`);
+  const headers = [mail.subject];
+  return [...senderProblem, ...attachments, ...headers.flatMap((t) => externalLeaks(t)), ...externalHtmlLeaks(own(mail.html)), ...externalLeaks(own(mail.text))];
 }
 export interface Sender { name: string; address: string }

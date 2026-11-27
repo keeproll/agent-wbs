@@ -7,7 +7,7 @@ import { internalTerms, type ReportSnapshotData } from '@awbs/shared';
 import { FakeSmtp, mimePart } from '../../../e2e/fakes/smtp.ts';
 import { checkSmtp, describeError, sendSmtp, type SmtpTarget } from '../src/mail/smtp.ts';
 import { externalMailLeaks, mailSubject, renderMail, type MailReport } from '../src/mail/render.ts';
-import { parseSender } from '@awbs/shared';
+import { parseSender, scrubInternal } from '@awbs/shared';
 
 const smtp = new FakeSmtp();
 let target: SmtpTarget;
@@ -219,5 +219,33 @@ describe('Q-13 fix2 · fix3: 보내는 사람은 허용 목록으로만 읽고, 
       const decoded = header.replace(/=\?utf-8\?([bq])\?([^?]*)\?=/gi, (_m, e: string, t: string) => (e.toLowerCase() === 'b' ? Buffer.from(t, 'base64').toString('utf8') : t)).replace(/"/g, '');
       expect(decoded).toBe(sender?.name ? `${sender.name} <${sender.address}>` : (sender?.address ?? ''));
     }
+  });
+});
+
+describe('Q-13 fix4: 외부 변환은 외부 수신자에게만 — 내부 수신자의 팀장용 · 보고용은 바뀌지 않는다', () => {
+  const TITLE = 'TASK-0007 개선 file.txt Node.js help@intranet.corp.example http://127.0.0.1:5173/report/1 내부.한국 1.2.3';
+  const withTitle = () => {
+    const s = emptySnapshot();
+    s.done.push({ taskKey: 'TASK-0001', wbsPath: '1.1', title: TITLE, assignee: 'Claude', verifier: 'Codex', workType: 'Implementation', domain: 'FE', actStart: null, actEnd: '2026-10-27T01:00:00.000Z',
+      estHours: 1, actualHours: 1, attempts: 1, slipDays: null, verification: null, checklist: { done: 1, total: 1 }, outputs: { delivered: 1, names: [] }, doneCond: '' } as unknown as ReportSnapshotData['done'][number]);
+    return s;
+  };
+  const APP = 'http://127.0.0.1:5173/';
+  test('내부 수신자 보고용: 작업 제목은 내부 용어만 빠지고(scrubInternal) 파일 이름 · 제품 이름 · 주소 · 버전은 그대로', () => {
+    const m = renderMail({ projectName: 'P', report: report('weekly', withTitle()), view: 'ext', to: 'boss@example.com', appUrl: APP });
+    expect(m.text).toContain(`• ${scrubInternal(TITLE)}`);
+    expect(m.text).toContain('file.txt Node.js help@intranet.corp.example http://127.0.0.1:5173/report/1 내부.한국 1.2.3');
+    expect(m.text).not.toContain('(링크 생략)');
+    expect(m.text).not.toContain('(주소 생략)');
+  });
+  test('내부 수신자 팀장용: 작업 번호 · 제목이 원문 그대로', () => {
+    const m = renderMail({ projectName: 'P', report: report('weekly', withTitle()), view: 'int', to: 'lead@example.com', appUrl: APP });
+    expect(m.text).toContain(`TASK-0001 ${TITLE}`);
+    expect(m.text).toContain('Agent WBS에서 전체 보고서 보기: http://127.0.0.1:5173/report/');
+  });
+  test('외부 수신자: 같은 제목이 외부 변환을 지나 검사기 0건', () => {
+    const m = renderMail({ projectName: 'P', report: report('weekly', withTitle()), view: 'ext', to: 'outside@partner.example', appUrl: APP, external: true });
+    expect(m.text).toContain('• 개선 (링크 생략) (주소 생략) (링크 생략)');
+    expect(externalMailLeaks({ ...m, to: 'outside@partner.example' }, null)).toEqual([]);
   });
 });

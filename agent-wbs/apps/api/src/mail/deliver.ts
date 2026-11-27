@@ -47,7 +47,8 @@ export interface DeliverOptions {
    * PDF 첨부 만들기(M6-02가 제공). 없거나 null을 돌려주면 HTML만 보낸다.
    * 왜 주입인가: PDF 렌더러는 M6-02의 일이고, 메일 큐는 그것 없이도 동작해야 한다.
    */
-  pdf?: (reportId: string, view: 'int' | 'ext') => Promise<Buffer | null>;
+  /** external: 외부 수신자에게 붙일 PDF인지(Q-13 fix4). true면 외부 변환을 지난 PDF를 만든다. */
+  pdf?: (reportId: string, view: 'int' | 'ext', external: boolean) => Promise<Buffer | null>;
 }
 export interface DeliverResult { accepted: number; retry: number; failed: number; unknown: number; discarded: number }
 
@@ -217,7 +218,7 @@ const EXTERNAL_NO_PDF = 'PDF 첨부를 만들지 못해 외부 수신자에게 �
 async function send(target: SmtpTarget & { from: string }, mail: OutgoingMail, c: Claimed, options: DeliverOptions, timeoutMs: number): Promise<SendOutcome> {
   if (c.pdf && options.pdf) {
     try {
-      const report = await options.pdf(c.report, c.view);
+      const report = await options.pdf(c.report, c.view, c.external);
       if (report) mail.attachments = [{ filename: pdfName(c.reportKey, c.view), content: report }];
     } catch {
       // PDF를 만들지 못했으면 보내기 전이므로 수락되지 않은 것이 확실하다.

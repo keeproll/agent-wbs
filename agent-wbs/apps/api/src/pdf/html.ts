@@ -89,8 +89,8 @@ function internal(s: ReportSnapshotData, kind: ReportHead['kind'], weekly: boole
 }
 
 /** 보고용(UI-11C, P L2228–2242) — ReportPage.tsx ExternalSections와 같은 순서·마크업 */
-function external(s: ReportSnapshotData, kind: ReportHead['kind'], weekly: boolean, appUrl: string | null) {
-  const e = externalDoc(s, kind, appUrl);
+function external(s: ReportSnapshotData, kind: ReportHead['kind'], weekly: boolean, forExternal: boolean) {
+  const e = externalDoc(s, kind, forExternal);
   const list = (items: string[]) => el('ul', 'class="rpt-ul"', ...items.map((t) => el('li', '', esc(t))));
   return [
     kpis(e.kpis),
@@ -151,7 +151,11 @@ const PRINT_CSS = 'html,body{background:#fff;margin:0}.rpt-doc{border:0;max-widt
 export interface ReportHtmlInput extends ReportHead {
   view: ReportView; snapshot: ReportSnapshotData;
   /** 앱 접속 주소(설정 → 알림). 보고용에서 자유 입력에 적힌 앱 주소를 지울 때 쓴다(Q-13 fix1). 없으면 로컬 · 사설 주소 규칙만 쓴다. */
-  appUrl?: string | null;
+  /**
+   * 외부 수신자에게 붙일 PDF인지(Q-13 fix4). true면 보고용 글이 외부 변환(externalText)을 지난다.
+   * false(기본)면 팀장 다운로드 · 내부 수신자용이다. 작업 제목에서 내부 용어만 뺀다(M6-01 규칙 그대로).
+   */
+  external?: boolean;
 }
 
 export function reportHtml(r: ReportHtmlInput): string {
@@ -160,14 +164,14 @@ export function reportHtml(r: ReportHtmlInput): string {
   const article = el('article', `class="rpt-doc" aria-label="${esc(`${r.reportKey} 보고서`)}"`,
     el('header', 'class="rpt-h"',
       el('div', 'class="rpt-kind"', esc(KIND[r.kind].doc)),
-      el('h2', '', esc(docTitle(reportProjectName(r.snapshot), r.kind, r.view, r.appUrl))),
+      el('h2', '', esc(docTitle(reportProjectName(r.snapshot), r.kind, r.view, r.external ?? false))),
       el('div', 'class="rpt-meta"',
         el('span', '', esc('기간 '), el('b', 'class="mono"', esc(periodLabel(r)))),
         el('span', '', esc('생성 '), span('mono', formatDateTime(r.generatedAt)), esc(` · ${byLabel(r.kind)}`)),
         span('mono', r.reportKey)),
       el('p', 'class="rpt-snap"', esc(`${snapLabel(r.generatedAt, r.snapshot)}${late ? ` · ${late}` : ''}`)),
       ...[settingsNote(r.snapshot), uncertainNote(r.snapshot)].map((note) => (note ? el('p', 'class="rpt-snap" role="note"', esc(note)) : ''))),
-    r.view === 'int' ? internal(r.snapshot, r.kind, weekly) : external(r.snapshot, r.kind, weekly, r.appUrl ?? null),
+    r.view === 'int' ? internal(r.snapshot, r.kind, weekly) : external(r.snapshot, r.kind, weekly, r.external ?? false),
     el('footer', 'class="rpt-f"', esc(`Agent WBS 자동 생성 · ${r.reportKey} · ${formatDateTime(r.generatedAt)}`)));
   return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${esc(`${r.reportKey}_${r.view === 'int' ? '팀장용' : '보고용'}`)}</title>`
     + `<style>${fontFaces()}</style><style>${prototypeCss()}</style><style>${PRINT_CSS}${PDF_CSS}</style></head><body>${article}</body></html>`;
@@ -177,8 +181,7 @@ export function reportHtml(r: ReportHtmlInput): string {
  * 보고용 PDF 검사기(Q-13 fix1). PDF로 바꾸기 직전의 문서에서 **보이는 글**(스타일 · 스크립트 · 태그 제외)과 링크 태그를 검사한다.
  * 남은 내부 용어 · 앱 링크 · 앱 경로를 돌려준다. 빈 목록이면 통과. 메일 첨부와 팀장 다운로드가 같은 검사를 지난다.
  */
-export function externalPdfLeaks(html: string, appUrl: string | null): string[] {
-  void appUrl;
+export function externalPdfLeaks(html: string): string[] {
   // 메일 본문과 같은 HTML 검사기(보이는 글 + 링크 태그). 같은 기준 하나로 「주소 모양 0건」을 본다(Q-13 fix2).
   return externalHtmlLeaks(html);
 }
