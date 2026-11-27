@@ -136,8 +136,9 @@ export class FakeSmtp {
 
 /** 원문에서 한 부분(text/plain·text/html)을 꺼낸다. quoted-printable·base64를 푼다. */
 export function mimePart(raw: string, type: 'text/plain' | 'text/html'): string | null {
-  const boundary = /boundary="?([^";\r\n]+)"?/i.exec(raw)?.[1];
-  const parts = boundary ? raw.split(`--${boundary}`) : [raw];
+  // PDF를 붙이면 multipart/mixed 안에 multipart/alternative가 들어간다(Q-13 외부 수신자). 모든 경계로 나눠 안쪽 본문까지 찾는다.
+  const boundaries = [...raw.matchAll(/boundary="?([^";\r\n]+)"?/gi)].map((m) => m[1] ?? '').filter(Boolean);
+  const parts = boundaries.length ? boundaries.reduce<string[]>((list, boundary) => list.flatMap((x) => x.split(`--${boundary}`)), [raw]) : [raw];
   for (const part of parts) {
     const split = part.indexOf('\r\n\r\n');
     if (split < 0) continue;

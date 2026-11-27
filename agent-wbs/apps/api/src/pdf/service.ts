@@ -26,7 +26,7 @@ import type { ReportKind, ReportSnapshotData } from '@awbs/shared';
 import { ApiError, invalid } from '../changes/http.ts';
 import { inEpoch } from '../platform/transaction.ts';
 import { readStoredFile } from '../reset/files.ts';
-import { reportHtml } from './html.ts';
+import { externalPdfLeaks, reportHtml } from './html.ts';
 import { pdfName, type ReportView } from './model.ts';
 import type { PdfRenderer } from './render.ts';
 
@@ -102,7 +102,8 @@ const running = new Map<string, Promise<ReportPdf>>();
  * - 일간 보고서는 팀장용만 있다(P canToggle L6416). 일간 보고용은 400.
  */
 export async function reportPdf(pool: Pool, root: string, renderer: PdfRenderer, epoch: number, reportId: string, view: ReportView,
-  onFailure?: (error: unknown) => void): Promise<ReportPdf> {
+  onFailure?: (error: unknown) => void, options: { external?: boolean } = {}): Promise<ReportPdf> {
+  if (options.external) return externalPdf(pool, renderer, reportId, onFailure);
   const key = `${String(epoch)}:${reportId}:${view}`;
   const current = running.get(key);
   if (current) return current;
@@ -112,6 +113,7 @@ export async function reportPdf(pool: Pool, root: string, renderer: PdfRenderer,
     if (row.kind === 'daily' && view === 'ext') throw invalid([{ path: 'view', rule: 'enum', message: '일간 보고서는 팀장용만 있습니다.' }], '일간 보고서는 팀장용만 있습니다.');
     const result = (file: Buffer): ReportPdf => ({ file, name: pdfName(row.reportKey, view), reportKey: row.reportKey });
     // PDF에 들어가는 값은 보고서 기록과 스냅샷뿐이다(프로젝트 이름도 스냅샷 값). 그 문서의 hash가 캐시 키다.
+    // 팀장 다운로드 · 내부 수신자용. 외부 변환을 하지 않는다(Q-13 fix4). 외부 수신자용은 externalPdf.
     const html = reportHtml({ ...row, view });
     const path = pathOf(epoch, reportId, view, sha256(Buffer.from(html)).slice(0, 16));
     const hit = await cached(root, epoch, row, path);
@@ -134,4 +136,27 @@ export async function reportPdf(pool: Pool, root: string, renderer: PdfRenderer,
   })();
   running.set(key, job);
   try { return await job; } finally { running.delete(key); }
+}
+
+/**
+ * 외부 수신자에게 붙일 보고용 PDF(Q-13 fix4). 보고용 글이 외부 변환(externalText)을 지나고, 만들기 직전에 보이는 글 전체를 검사한다.
+ * - 캐시에 저장하지 않는다. 왜: 팀장 다운로드 · 내부 수신자용 보고용 PDF와 내용이 다르다. 같은 캐시 줄(report, view)을 덮어쓰지 않게 한다.
+ * - 검사에 걸리면 만들지 않는다. 변환 함수가 이미 걸렀어야 하므로 코드 결함이다(메일은 보내기 전 실패 → 15분 재시도).
+ */
+async function externalPdf(pool: Pool, renderer: PdfRenderer, reportId: string, onFailure?: (error: unknown) => void): Promise<ReportPdf> {
+  const row = await load(pool, reportId, 'ext');
+  if (!row) throw notFound(reportId);
+  if (row.kind === 'daily') throw invalid([{ path: 'view', rule: 'enum', message: '일간 보고서는 팀장용만 있습니다.' }], '일간 보고서는 팀장용만 있습니다.');
+  const html = reportHtml({ ...row, view: 'ext', external: true });
+  const leaks = externalPdfLeaks(html);
+  if (leaks.length) {
+    onFailure?.(new Error(`외부 보고용 PDF 검사 실패: ${String(leaks.length)}건`));
+    throw new ApiError('PDF_FAILED', { reportId }, [], '보고용 PDF에 주소 · 내부 용어가 남아 만들지 않았습니다.', FAILED_FIX);
+  }
+  try {
+    return { file: await renderer.render(html), name: pdfName(row.reportKey, 'ext'), reportKey: row.reportKey };
+  } catch (error) {
+    onFailure?.(error);
+    throw new ApiError('PDF_FAILED', { reportId }, [], 'PDF를 만들지 못했습니다. 화면의 보고서는 계속 볼 수 있습니다.', FAILED_FIX);
+  }
 }

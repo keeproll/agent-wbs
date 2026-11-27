@@ -6,12 +6,18 @@
  *   왜: 수정 폼을 열어 둔 채 「연결 확인」을 눌렀다고 저장이 충돌(409)이 되면 안 된다.
  * - 받는 사람 주소는 대소문자를 무시하고 하나만 둔다(DB 고유 인덱스 `recipient_email_lower`).
  * - 일간·주간 구독을 모두 끄면 자동으로 중지된다(G L400). 구독 없이 「받는 중」은 될 수 없다(DB 검사 `recipient_schedule`).
+ * - Q-13 결정 A: 외부 수신자(`external`)는 보고용 보기 · PDF 첨부로 고정이고 일간을 받지 않는다(DB 검사 `recipient_external`).
+ *   왜 일간을 막나: 일간 보고서는 팀장용(Task ID 등 내부 용어 포함)만 있다(G L402, PDF도 팀장용만).
  */
 import type { PoolClient } from '@awbs/db';
 import { ApiError, assertSameVersion, invalid } from '../changes/http.ts';
 import { deferChange, iso } from '../changes/events.ts';
 import { readSmtpPassword, SMTP_SECRET, storeSmtpPassword } from './secret.ts';
-import { syncMailAlert } from './queue.ts';
+import { externalizePending, syncMailAlert } from './queue.ts';
+import { parseSender } from '@awbs/shared';
+
+/** 보내는 사람 이름 규칙 안내(화면 검사와 같은 문구) */
+export const SENDER_NAME_RULE = '보내는 주소는 「이름 <주소>」 또는 「주소」로 적습니다. 이름은 한글 · 영문 · 숫자 · 공백 · 하이픈만, 40자 이하이고 내부 용어(Task ID 등)를 넣을 수 없습니다 — 외부 수신자 메일에 그대로 보입니다.';
 import { checkSmtp, DEFAULT_TIMEOUT_MS, SMTP_SECURITY, type SmtpSecurity, type SmtpTarget } from './smtp.ts';
 
 export interface SmtpView {
@@ -48,6 +54,9 @@ export async function putSmtp(client: PoolClient, body: SmtpInput): Promise<Smtp
   if (!isSecurity(body.sec)) errors.push({ path: 'sec', rule: 'enum', message: `보안 방식은 ${SMTP_SECURITY.join(' · ')} 중 하나입니다.` });
   if (!body.host.trim()) errors.push({ path: 'host', rule: 'required', message: 'SMTP 서버를 입력하세요.' });
   if (!body.from.trim()) errors.push({ path: 'from', rule: 'required', message: '보내는 주소를 입력하세요.' });
+  // 보내는 사람은 허용 목록으로만 받는다(Q-13 fix3): 「이름 <주소>」 또는 「주소」, 이름은 한글 · 영문 · 숫자 · 공백 · 하이픈 40자 이하 · 내부 용어 없음.
+  // 왜: 표시 이름은 외부 수신자 메일 헤더에 그대로 나간다. 인코딩 · 주석 · 따옴표 · 줄바꿈 문법은 메일 앱에서 다른 이름으로 보일 수 있다.
+  else if (!parseSender(body.from)) errors.push({ path: 'from', rule: 'external', message: SENDER_NAME_RULE });
   if (errors.length) throw invalid(errors);
   const unchanged = body.password === undefined && before.updatedAt !== null
     && before.host === body.host.trim() && before.port === body.port && before.sec === body.sec && before.from === body.from.trim() && before.user === body.user.trim();
@@ -88,8 +97,8 @@ export async function checkSmtpSettings(client: PoolClient, timeoutMs = DEFAULT_
 
 /* ---- 받는 사람 ---- */
 
-export interface Recipient { id: string; email: string; name: string; daily: boolean; weekly: boolean; view: 'int' | 'ext'; pdf: boolean; active: boolean; createdAt: string; updatedAt: string }
-const RECIPIENT = `id,email,name,daily,weekly,view,pdf,active,${iso('created_at')} "createdAt",${iso('updated_at')} "updatedAt"`;
+export interface Recipient { id: string; email: string; name: string; daily: boolean; weekly: boolean; view: 'int' | 'ext'; pdf: boolean; external: boolean; active: boolean; createdAt: string; updatedAt: string }
+const RECIPIENT = `id,email,name,daily,weekly,view,pdf,external,active,${iso('created_at')} "createdAt",${iso('updated_at')} "updatedAt"`;
 
 export async function listRecipients(client: PoolClient) {
   return { items: (await client.query<Recipient>(`select ${RECIPIENT} from mail_recipients order by created_at,id`)).rows };
@@ -100,13 +109,31 @@ const noSubscription = () => invalid([
   { path: 'weekly', rule: 'oneOf', message: '일간 · 주간 중 하나 이상을 고르세요.' },
 ], '받을 보고서를 하나 이상 고르세요.');
 
-export async function addRecipient(client: PoolClient, body: { email: string; name: string; daily: boolean; weekly: boolean; view: 'int' | 'ext'; pdf: boolean }) {
+/**
+ * 외부 수신자 설정 검사(Q-13 결정 A). 어긋나는 칸마다 오류 하나. 문제가 없으면 빈 목록.
+ * 왜 조용히 고치지 않나: 팀장이 「일간」을 켜 달라고 보냈는데 서버가 몰래 끄면 받을 줄 알았던 메일이 오지 않는다.
+ */
+function externalProblems(next: { daily: boolean; view: 'int' | 'ext'; pdf: boolean }) {
+  const errors = [];
+  if (next.daily) errors.push({ path: 'daily', rule: 'external', message: '외부 수신자는 일간 보고를 받을 수 없습니다 — 일간 보고서는 팀장용만 있습니다.' });
+  if (next.view !== 'ext') errors.push({ path: 'view', rule: 'external', message: '외부 수신자는 보고용으로만 받습니다.' });
+  if (!next.pdf) errors.push({ path: 'pdf', rule: 'external', message: '외부 수신자에게는 PDF를 항상 첨부합니다 — 링크 대신 PDF로 전체 내용을 봅니다.' });
+  return errors;
+}
+const externalInvalid = (errors: ReturnType<typeof externalProblems>) => invalid(errors, errors[0]?.message ?? '외부 수신자 설정이 올바르지 않습니다.');
+
+export async function addRecipient(client: PoolClient, body: { email: string; name: string; daily: boolean; weekly: boolean; view: 'int' | 'ext'; pdf: boolean; external?: boolean }) {
   const email = body.email.trim();
+  const external = body.external ?? false;
   // P Sel.mailOk L4045: 최상위 도메인 2글자 이상
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) throw invalid([{ path: 'email', rule: 'format', message: '이메일 주소 형식이 올바르지 않습니다.' }]);
   if (!body.daily && !body.weekly) throw noSubscription();
-  const row = (await client.query<Recipient>(`insert into mail_recipients(email,name,active,daily,weekly,pdf,view) values($1,$2,true,$3,$4,$5,$6)
-    on conflict do nothing returning ${RECIPIENT}`, [email, body.name.trim(), body.daily, body.weekly, body.pdf, body.view])).rows[0];
+  if (external) {
+    const errors = externalProblems(body);
+    if (errors.length) throw externalInvalid(errors);
+  }
+  const row = (await client.query<Recipient>(`insert into mail_recipients(email,name,active,daily,weekly,pdf,view,external) values($1,$2,true,$3,$4,$5,$6,$7)
+    on conflict do nothing returning ${RECIPIENT}`, [email, body.name.trim(), body.daily, body.weekly, body.pdf, body.view, external])).rows[0];
   if (!row) throw new ApiError('RECIPIENT_DUPLICATE', { email }, [{ path: 'email', rule: 'unique', message: '이미 등록된 주소입니다(대소문자 무시).' }], '이미 등록된 받는 사람입니다.');
   deferChange(client, null, 'mail', { key: 'recipients' });
   return row;
@@ -118,10 +145,22 @@ async function lockRecipient(client: PoolClient, id: string): Promise<Recipient>
   return row;
 }
 
-export async function updateRecipient(client: PoolClient, id: string, body: { updatedAt: string; daily?: boolean; weekly?: boolean; view?: 'int' | 'ext'; pdf?: boolean; active?: boolean }) {
+export async function updateRecipient(client: PoolClient, id: string, body: { updatedAt: string; daily?: boolean; weekly?: boolean; view?: 'int' | 'ext'; pdf?: boolean; external?: boolean; active?: boolean }) {
   const before = await lockRecipient(client, id);
   await assertSameVersion(client, before.updatedAt, body.updatedAt, { current: before });
+  const external = body.external ?? before.external;
   const next = { daily: body.daily ?? before.daily, weekly: body.weekly ?? before.weekly, view: body.view ?? before.view, pdf: body.pdf ?? before.pdf, active: body.active ?? before.active };
+  if (external) {
+    // 「외부」로 바꿀 때 함께 보내지 않은 칸은 외부 규칙대로 맞춘다: 일간 끔 · 보고용 · PDF 첨부.
+    // 왜: 화면의 「외부」 단추 하나로 바꿀 수 있어야 한다. 함께 보낸 칸이 규칙과 어긋나면 고치지 않고 400으로 알린다.
+    if (!before.external) {
+      if (body.daily === undefined) next.daily = false;
+      if (body.view === undefined) next.view = 'ext';
+      if (body.pdf === undefined) next.pdf = true;
+    }
+    const errors = externalProblems(next);
+    if (errors.length) throw externalInvalid(errors);
+  }
   // 둘 다 끄면 자동 중지(G L400). 구독 없이 다시 받기는 거부한다.
   if (!next.daily && !next.weekly) {
     if (body.active === true) throw noSubscription();
@@ -129,9 +168,16 @@ export async function updateRecipient(client: PoolClient, id: string, body: { up
   }
   // 구독을 다시 켜면 받는 중으로 돌아간다(P setRecip: 원본도 구독 변경 시 active를 다시 계산한다)
   else if (body.active === undefined && !before.daily && !before.weekly) next.active = true;
-  const row = (await client.query<Recipient>(`update mail_recipients set daily=$2,weekly=$3,view=$4,pdf=$5,active=$6 where id=$1 returning ${RECIPIENT}`,
-    [id, next.daily, next.weekly, next.view, next.pdf, next.active])).rows[0];
+  // Q-13 fix1 3: 외부로 바꾸면 그 사람의 아직 보내지 않은 줄을 새 규칙으로 다시 정한다(보내는 중인 팀장용 메일이 있으면 409).
+  if (external && !before.external) await externalizePending(client, id);
+  const row = (await client.query<Recipient>(`update mail_recipients set daily=$2,weekly=$3,view=$4,pdf=$5,active=$6,external=$7 where id=$1 returning ${RECIPIENT}`,
+    [id, next.daily, next.weekly, next.view, next.pdf, next.active, external])).rows[0];
   deferChange(client, null, 'mail', { key: 'recipients' });
+  // 외부 여부가 바뀌면 「해소되지 않은 실패」가 달라진다(외부 · 일간 실패는 다시 보낼 수 없어 빠진다). 실패 목록과 대시보드 알림을 함께 맞춘다.
+  if (external !== before.external) {
+    const projectId = (await client.query<{ id: string }>('select id from projects limit 1')).rows[0]?.id ?? null;
+    await syncMailAlert(client, projectId);
+  }
   return row;
 }
 

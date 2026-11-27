@@ -29,7 +29,11 @@ export interface SmtpTarget {
   password: string | null;
 }
 export interface OutgoingMail {
-  from: string;
+  /**
+   * 보내는 사람. 글(옛 설정 그대로)이거나, 허용 목록으로 읽은 이름 · 주소(Q-13 fix3).
+   * 이름 · 주소로 주면 메일 생성기가 설정 글을 다시 해석하지 않고 이 두 값으로 From 헤더를 만든다.
+   */
+  from: string | { name: string; address: string };
   to: string;
   subject: string;
   html: string;
@@ -147,6 +151,7 @@ export async function sendSmtp(target: SmtpTarget, mail: OutgoingMail, timeoutMs
 }
 
 /** `Agent WBS <a@example.com>` → `a@example.com` */
-export function addressOf(from: string): string {
+export function addressOf(from: string | { name: string; address: string }): string {
+  if (typeof from !== 'string') return from.address;
   return /<([^>]+)>/.exec(from)?.[1]?.trim() ?? from.trim();
 }

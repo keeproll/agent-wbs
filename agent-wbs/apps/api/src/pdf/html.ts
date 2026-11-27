@@ -9,7 +9,7 @@
  *
  * 모든 값은 HTML 특수 문자를 바꿔 넣는다(`esc`). 왜: 제목·메시지에 `<script>` 같은 글자가 있어도 글자로만 보이게 한다.
  */
-import { reportProjectName, type ReportSnapshotData } from '@awbs/shared';
+import { externalHtmlLeaks, reportProjectName, type ReportSnapshotData } from '@awbs/shared';
 import {
   appendixTitle, byLabel, docTitle, externalDoc, formatDateTime, internalDoc, KIND, lateLabel, periodLabel, settingsNote, snapLabel, uncertainNote, type ReportHead, type ReportView,
 } from './model.ts';
@@ -89,8 +89,8 @@ function internal(s: ReportSnapshotData, kind: ReportHead['kind'], weekly: boole
 }
 
 /** 보고용(UI-11C, P L2228–2242) — ReportPage.tsx ExternalSections와 같은 순서·마크업 */
-function external(s: ReportSnapshotData, kind: ReportHead['kind'], weekly: boolean) {
-  const e = externalDoc(s, kind);
+function external(s: ReportSnapshotData, kind: ReportHead['kind'], weekly: boolean, forExternal: boolean) {
+  const e = externalDoc(s, kind, forExternal);
   const list = (items: string[]) => el('ul', 'class="rpt-ul"', ...items.map((t) => el('li', '', esc(t))));
   return [
     kpis(e.kpis),
@@ -148,7 +148,15 @@ const PRINT_CSS = 'html,body{background:#fff;margin:0}.rpt-doc{border:0;max-widt
  * 입력은 보고서 기록(번호·종류·기간·생성 시각·사유)과 스냅샷뿐이다. 프로젝트 이름도 스냅샷 값을 쓴다.
  * 왜: 보고서는 생성 시점 기록이다. 지금 DB 값을 읽으면 이름을 바꾼 뒤 만든 PDF가 그때의 보고서와 달라진다.
  */
-export interface ReportHtmlInput extends ReportHead { view: ReportView; snapshot: ReportSnapshotData }
+export interface ReportHtmlInput extends ReportHead {
+  view: ReportView; snapshot: ReportSnapshotData;
+  /** 앱 접속 주소(설정 → 알림). 보고용에서 자유 입력에 적힌 앱 주소를 지울 때 쓴다(Q-13 fix1). 없으면 로컬 · 사설 주소 규칙만 쓴다. */
+  /**
+   * 외부 수신자에게 붙일 PDF인지(Q-13 fix4). true면 보고용 글이 외부 변환(externalText)을 지난다.
+   * false(기본)면 팀장 다운로드 · 내부 수신자용이다. 작업 제목에서 내부 용어만 뺀다(M6-01 규칙 그대로).
+   */
+  external?: boolean;
+}
 
 export function reportHtml(r: ReportHtmlInput): string {
   const late = lateLabel(r);
@@ -156,15 +164,24 @@ export function reportHtml(r: ReportHtmlInput): string {
   const article = el('article', `class="rpt-doc" aria-label="${esc(`${r.reportKey} 보고서`)}"`,
     el('header', 'class="rpt-h"',
       el('div', 'class="rpt-kind"', esc(KIND[r.kind].doc)),
-      el('h2', '', esc(docTitle(reportProjectName(r.snapshot), r.kind, r.view))),
+      el('h2', '', esc(docTitle(reportProjectName(r.snapshot), r.kind, r.view, r.external ?? false))),
       el('div', 'class="rpt-meta"',
         el('span', '', esc('기간 '), el('b', 'class="mono"', esc(periodLabel(r)))),
         el('span', '', esc('생성 '), span('mono', formatDateTime(r.generatedAt)), esc(` · ${byLabel(r.kind)}`)),
         span('mono', r.reportKey)),
       el('p', 'class="rpt-snap"', esc(`${snapLabel(r.generatedAt, r.snapshot)}${late ? ` · ${late}` : ''}`)),
       ...[settingsNote(r.snapshot), uncertainNote(r.snapshot)].map((note) => (note ? el('p', 'class="rpt-snap" role="note"', esc(note)) : ''))),
-    r.view === 'int' ? internal(r.snapshot, r.kind, weekly) : external(r.snapshot, r.kind, weekly),
+    r.view === 'int' ? internal(r.snapshot, r.kind, weekly) : external(r.snapshot, r.kind, weekly, r.external ?? false),
     el('footer', 'class="rpt-f"', esc(`Agent WBS 자동 생성 · ${r.reportKey} · ${formatDateTime(r.generatedAt)}`)));
   return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${esc(`${r.reportKey}_${r.view === 'int' ? '팀장용' : '보고용'}`)}</title>`
     + `<style>${fontFaces()}</style><style>${prototypeCss()}</style><style>${PRINT_CSS}${PDF_CSS}</style></head><body>${article}</body></html>`;
+}
+
+/**
+ * 보고용 PDF 검사기(Q-13 fix1). PDF로 바꾸기 직전의 문서에서 **보이는 글**(스타일 · 스크립트 · 태그 제외)과 링크 태그를 검사한다.
+ * 남은 내부 용어 · 앱 링크 · 앱 경로를 돌려준다. 빈 목록이면 통과. 메일 첨부와 팀장 다운로드가 같은 검사를 지난다.
+ */
+export function externalPdfLeaks(html: string): string[] {
+  // 메일 본문과 같은 HTML 검사기(보이는 글 + 링크 태그). 같은 기준 하나로 「주소 모양 0건」을 본다(Q-13 fix2).
+  return externalHtmlLeaks(html);
 }

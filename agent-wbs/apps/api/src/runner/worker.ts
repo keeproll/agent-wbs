@@ -51,7 +51,7 @@ async function mailTick() {
   if (!mailRecovered) await step('메일 재시작 정리', async () => { await recoverMail(pool, current); mailRecovered = true; });
   // M6 통합: 받는 사람의 「PDF 첨부」가 켜져 있으면 보고서 PDF를 붙인다(M6-03 README §9). 팀장 다운로드와 같은 함수·같은 캐시다.
   // PDF를 만들지 못하면 deliverMail이 보내기 전 실패(rejected)로 처리한다.
-  await step('보고서 메일 발송', () => deliverMail(pool, current, { pdf: async (reportId, view) => (await reportPdf(pool, DATA_ROOT, pdfRenderer, current, reportId, view)).file }));
+  await step('보고서 메일 발송', () => deliverMail(pool, current, { pdf: async (reportId, view, external) => (await reportPdf(pool, DATA_ROOT, pdfRenderer, current, reportId, view, undefined, { external })).file }));
 }
 const runMail = () => { mailPending ??= mailTick().finally(() => { mailPending = undefined; }); };
 const mailTimer = setInterval(runMail, 10_000);

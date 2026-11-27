@@ -621,12 +621,15 @@ job 하나에 열린 보유 행 하나를 둔다. 닫힌 행은 과거 이력으
 - `mail_settings`/`mail_recipients`
   - `mail_settings`: SMTP(비밀값은 secrets)
   - `mail_recipients`: email lower unique, daily/weekly 하나 이상 또는 inactive.
-    - 외부 수신자 구분: owner Q-13 A(2026-11-27 아이템 19)로 필요해졌다. 외부 수신자에게는 링크 없이 PDF만 보낸다. 필드는 별도 작업으로 추가 중이다(main 023ac8f에는 아직 없음).
+    - 외부 수신자 구분: owner Q-13 A(2026-11-27 아이템 19)로 필요해졌다. 외부 수신자에게는 링크 없이 PDF만 보낸다.
+  - `mail_recipients.external`(Q-13 결정 A, 0041): 외부 수신자. 참이면 view='ext' · pdf=true · daily=false여야 한다(검사 `recipient_external`).
+    - 왜: 외부 수신자에게는 링크 없이 보고용 + PDF만 보낸다. 일간 보고서는 팀장용만 있다.
   - 근거: §4.11
 - `mail_outbox` / `mail_log`
   - `mail_outbox`: delivery_id(논리 발송), epoch, unique(report, recipient, try_no), state(§3.7)
     - 발송마다 보기·사유·제목·첨부 여부도 함께 저장한다(0031). 수신자 설정이 나중에 바뀌어도 「그때 어떤 보기로, 왜 보냈는지」가 남아야 하기 때문이다(G L407).
     - 15분 뒤 자동 재시도는 한 번뿐이고, 했는지를 기록한다.
+  - `mail_outbox.external`(Q-13 결정 A, 0041): 외부 수신자에게 간 발송인지(발송 당시 값). 참이면 view='ext' · pdf=true(검사 `mail_outbox_external`)
   - `mail_log`: 수신자 삭제 후에도 주소 보존
   - 근거: §9.6-6
 - `notify_settings`/`notify_rules`

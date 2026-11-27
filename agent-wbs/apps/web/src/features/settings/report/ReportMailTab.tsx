@@ -7,6 +7,7 @@
  * - 「Mock: SMTP 인증 실패 · 정상 복구」 버튼이 없다. 실패는 실제 연결 확인·발송 결과로만 생긴다(UAT-POLICY-05).
  * - 발송 상태에 「대기 · 보내는 중 · 15분 후 재시도 · 수락 여부 불명」이 더 있다. 원본은 즉시 「발송됨/실패」였다(서버 발송 큐, data-model §3.7).
  * - 받는 사람의 「등록 시각」은 계약 응답에 없어 이름만 보인다.
+ * - Q-13 결정 A: 받는 사람 행과 추가 폼에 「외부」 단추가 있다(원본에 없음). 켜면 일간 끔 · 보고용 · PDF 첨부로 고정되고, 메일에 앱 링크가 들어가지 않는다.
  */
 import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useApi } from '../../../shared/api/ApiProvider.tsx';
@@ -23,7 +24,7 @@ import { TableScroll } from '../../../shared/ui/TableScroll.tsx';
 import { CardHead, QueryGate, Row, Seg } from '../ui.tsx';
 import { DirtyContext } from '../useSettingForm.tsx';
 import {
-  BLANK_RECIPIENT, LOG_LIMIT, SECURITY, VIEW_LABEL, lastSend, recipientError, recipientSummary, smtpError, stateLabel,
+  BLANK_RECIPIENT, EXTERNAL_HINT, SENDER_NAME_RULE, senderNameProblem, LOG_LIMIT, SECURITY, VIEW_LABEL, lastSend, recipientError, recipientSummary, smtpError, stateLabel, withExternal,
   type MailLog, type Recipient, type RecipientForm, type Smtp, type SmtpForm,
 } from './model.ts';
 
@@ -47,7 +48,8 @@ export function ReportMailTab({ projectId }: { projectId: string | null }) {
   const reportList = reports.data?.items ?? [];
   const openFor = (r: Recipient) => {
     // 원본 pv: 주간만 받는 사람은 최신 주간, 아니면 최신 보고서(P mailVM L6503)
-    const pick = reportList.filter((x) => (r.weekly && !r.daily ? x.kind === 'weekly' : true))[0];
+    // 외부 수신자는 일간을 받지 않으므로 최신 주간을 보인다(Q-13 결정 A).
+    const pick = reportList.filter((x) => (r.external || (r.weekly && !r.daily) ? x.kind === 'weekly' : true))[0];
     if (pick) setPreview({ reportId: pick.id, kind: pick.kind, view: r.view, to: r.id });
     return Boolean(pick);
   };
@@ -95,7 +97,7 @@ function RecipientRow({ r, last, onPreview, refresh }: { r: Recipient; last: Ret
   const { client } = useApi();
   const notify = useNotice();
   const [note, setNote] = useState('');
-  interface Patch { daily?: boolean; weekly?: boolean; view?: 'int' | 'ext'; pdf?: boolean; active?: boolean }
+  interface Patch { daily?: boolean; weekly?: boolean; view?: 'int' | 'ext'; pdf?: boolean; external?: boolean; active?: boolean }
   // useSave는 누른 순간의 요청 내용을 request()로 찍는다. 버튼마다 내용이 달라 누르기 직전에 ref에 적어 둔다.
   const next = useRef<{ body: Patch; note: string }>({ body: {}, note: '' });
   const patch = useSave<ResponseOf<'updateRecipient'>, { body: Patch; note: string }>({
@@ -124,11 +126,19 @@ function RecipientRow({ r, last, onPreview, refresh }: { r: Recipient; last: Ret
   const busy = patch.busy || remove.busy;
   return (
     <div className={r.active ? 'gtr mrow' : 'gtr mrow off'} data-testid={`recipient-${r.email}`}>
-      <span className="gc"><span className="tcell"><b className="mono" style={{ fontSize: 12.5, wordBreak: 'break-all' }}>{r.email}</b><span className="tid">{`${r.name || '—'} · 등록 ${short(r.createdAt)}`}</span></span></span>
-      <span className="gc"><span className="seg"><button type="button" aria-pressed={r.daily} disabled={busy} onClick={() => { send({ daily: !r.daily }); }} aria-label="일간 보고 받기">일간</button></span></span>
+      <span className="gc"><span className="tcell">
+        <b className="mono" style={{ fontSize: 12.5, wordBreak: 'break-all' }}>{r.email}</b>
+        <span className="tid">{`${r.name || '—'} · 등록 ${short(r.createdAt)}`}</span>
+        {/* Q-13 결정 A: 외부 수신자 표시 겸 전환 단추. 켜면 서버가 일간 끔 · 보고용 · PDF로 맞춘다. */}
+        <span className="seg" style={{ marginTop: 3 }} title={EXTERNAL_HINT}>
+          <button type="button" aria-pressed={r.external} disabled={busy} aria-label="외부 수신자"
+            onClick={() => { send({ external: !r.external }, r.external ? `${r.email} 을(를) 내부 수신자로 바꿨습니다.` : `${r.email} 을(를) 외부 수신자로 바꿨습니다 — 링크 없이 보고용 + PDF로 보냅니다.`); }}>외부</button>
+        </span>
+      </span></span>
+      <span className="gc"><span className="seg"><button type="button" aria-pressed={r.daily} disabled={busy || r.external} title={r.external ? EXTERNAL_HINT : undefined} onClick={() => { send({ daily: !r.daily }); }} aria-label="일간 보고 받기">일간</button></span></span>
       <span className="gc"><span className="seg"><button type="button" aria-pressed={r.weekly} disabled={busy} onClick={() => { send({ weekly: !r.weekly }); }} aria-label="주간 보고 받기">주간</button></span></span>
-      <span className="gc"><Seg label="주간 보기" value={r.view} disabled={busy} onPick={(view) => { send({ view }); }} options={[{ value: 'int', label: '팀장용' }, { value: 'ext', label: '보고용' }]} /></span>
-      <span className="gc"><input type="checkbox" className="chk" checked={r.pdf} disabled={busy} onChange={() => { send({ pdf: !r.pdf }); }} aria-label="PDF 첨부" /></span>
+      <span className="gc"><Seg label="주간 보기" value={r.view} disabled={busy || r.external} onPick={(view) => { send({ view }); }} options={[{ value: 'int', label: '팀장용' }, { value: 'ext', label: '보고용' }]} /></span>
+      <span className="gc"><input type="checkbox" className="chk" checked={r.pdf} disabled={busy || r.external} onChange={() => { send({ pdf: !r.pdf }); }} aria-label="PDF 첨부" /></span>
       <span className="gc"><span className="tcell"><span className={last.cls}>{last.label}</span>{last.at && <span className="tid mono">{`${short(last.at)} · ${last.reportKey ?? ''}`}</span>}</span></span>
       <span className="gc"><span className={r.active ? 'vf v-pass' : 'vf v-none'}>{r.active ? '받는 중' : '중지'}</span></span>
       <span className="gc" style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
@@ -170,16 +180,21 @@ function AddRecipient({ existing, refresh }: { existing: readonly Recipient[]; r
         <Row label="이름 · 메모"><input className="inp" aria-label="이름 · 메모" value={form.name} onChange={(e) => { set({ name: e.target.value }); }} placeholder="예: 상급자 (주간보고)" style={{ maxWidth: 360 }} /></Row>
         <Row label={<>받을 보고서 <span className="req">*</span></>}>
           <div className="seg" role="group" aria-label="받을 보고서">
-            <button type="button" aria-pressed={form.daily} onClick={() => { set({ daily: !form.daily }); }}>일간 (매일 07:00)</button>
+            <button type="button" aria-pressed={form.daily} disabled={form.external} onClick={() => { set({ daily: !form.daily }); }}>일간 (매일 07:00)</button>
             <button type="button" aria-pressed={form.weekly} onClick={() => { set({ weekly: !form.weekly }); }}>주간 (월 07:00)</button>
           </div>
           <span className="fhint">둘 다 고를 수 있습니다.</span>
         </Row>
         <Row label="주간 보고서 보기">
-          <Seg label="주간 보고서 보기" value={form.view} onPick={(view) => { set({ view }); }} options={[{ value: 'int', label: VIEW_LABEL.int }, { value: 'ext', label: VIEW_LABEL.ext }]} />
+          <Seg label="주간 보고서 보기" value={form.view} disabled={form.external} onPick={(view) => { set({ view }); }} options={[{ value: 'int', label: VIEW_LABEL.int }, { value: 'ext', label: VIEW_LABEL.ext }]} />
           <span className="fhint">보고용은 Task ID · Agent 실행 세부를 빼고 진척 · 위험 · 다음 계획만 담습니다 — 상급자 · 외부 공유용.</span>
         </Row>
-        <Row label="PDF 첨부"><label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><input type="checkbox" className="chk" checked={form.pdf} onChange={() => { set({ pdf: !form.pdf }); }} />본문 HTML과 함께 같은 보기의 PDF를 첨부</label></Row>
+        <Row label="PDF 첨부"><label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><input type="checkbox" className="chk" checked={form.pdf} disabled={form.external} onChange={() => { set({ pdf: !form.pdf }); }} />본문 HTML과 함께 같은 보기의 PDF를 첨부</label></Row>
+        {/* Q-13 결정 A: 원본에 없는 줄. 원본 칸 순서를 지키려고 맨 끝에 둔다. */}
+        <Row label="외부 수신자">
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><input type="checkbox" className="chk" aria-label="외부 수신자" checked={form.external} onChange={() => { setForm((f) => withExternal(f, !f.external)); setError(''); }} />외부</label>
+          <span className="fhint">{EXTERNAL_HINT}</span>
+        </Row>
         {error && <p className="ferr" role="alert">{error}</p>}
         <div className="form-acts"><span className="sp" style={{ marginRight: 'auto' }}></span>
           <BusyButton busy={add.busy} busyLabel="추가 중…" onClick={() => {
@@ -252,6 +267,7 @@ function SmtpCard({ smtp, refresh }: { smtp: ReturnType<typeof useApiQuery<'getS
             <span className="kv-l">비밀번호</span><span className="kv-v">{data.pwSet ? '●●●●●●●● (저장됨 · 서버에 암호화 보관)' : '없음'}</span>
           </div>
           {c && !c.ok && c.error && <div className="banner danger" role="note"><div className="banner-b">{c.error}</div></div>}
+          {senderNameProblem(data.from) && <div className="banner danger" role="alert"><div className="banner-b"><b>설정 오류</b> — {SENDER_NAME_RULE} 고치기 전에는 외부 수신자에게 메일을 보내지 않습니다.</div></div>}
           <div className="msg-acts">
             <BusyButton small variant="default" busy={check.busy} busyLabel="확인 중…" onClick={() => { void check.save(); }}>연결 확인</BusyButton>
             <button type="button" className="btn ghost sm" onClick={open}>수정</button>
@@ -370,7 +386,7 @@ function LogRow({ l, canPreview, onPreview, refresh }: { l: MailLog; canPreview:
   return (
     <div className="gtr lrow" data-testid={`mail-log-${l.id}`}>
       <span className="gc"><span className="tcell"><span className="mono">{at(l.at)}</span><span className="tid mono">{l.logKey}</span></span></span><span className="gc mono">{l.reportKey}</span><span className="gc mono" style={{ wordBreak: 'break-all' }}>{l.to}</span>
-      <span className="gc">{VIEW_LABEL[l.view] + (l.pdf ? ' + PDF' : '')}</span>
+      <span className="gc">{VIEW_LABEL[l.view] + (l.pdf ? ' + PDF' : '')}{l.external && <> <span className="tag chg">외부</span></>}</span>
       <span className="gc"><span className={s.cls}>{s.label}</span></span>
       <span className="gc"><span className="tcell"><span>{l.reason}</span>{l.error && <span className="tid" style={{ color: 'var(--dg)' }}>{l.error}</span>}</span></span>
       <span className="gc" style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
@@ -400,7 +416,8 @@ export function MailPreview({ target, onClose }: { target: PreviewTarget; onClos
             <span className="kv-l">제목</span><span className="kv-v"><b>{d.subject}</b></span>
             <span className="kv-l">첨부</span><span className="kv-v mono">{`첨부: ${d.attachment ?? '없음'}`}</span>
           </div>
-          {target.kind !== 'daily' && (
+          {d.external && <div className="banner warn" role="note"><div className="banner-b"><b>외부 수신자</b> — 앱 링크 없이 보고용 본문과 PDF 첨부로 보냅니다.</div></div>}
+          {target.kind !== 'daily' && !d.external && (
             <div style={{ marginBottom: 8 }}>
               <Seg label="메일 보기" value={view} onPick={setView} options={[{ value: 'int', label: VIEW_LABEL.int }, { value: 'ext', label: VIEW_LABEL.ext }]} />
             </div>

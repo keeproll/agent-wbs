@@ -82,7 +82,9 @@ test('빈 DB와 0014·0016(master)·0017~0027·M6 중간(0029~0034) 단계 DB, M
     '0038_20261127_claim_return_merge_commits',
     '0039_20261127_resource_return_recovery',
     // M8 전 연결(조정자 결정 3): 해제 증거 cgroup_empty(0040)
-    '0040_20261127_cgroup_empty']);
+    '0040_20261127_cgroup_empty',
+    // Q-13 결정 A: 외부 수신자(0041)
+    '0041_20261127_mail_external']);
   // journal 시각 = 1795740000000 + 번호(0021 이후 규칙)
   for (const e of journal.entries.slice(26)) expect(e.when, e.tag).toBe(1795740000000 + Number(e.tag.slice(0, 4)));
   const fresh = await database('fresh');
@@ -202,5 +204,7 @@ test('옛 번호 0041로 CI 마이그레이션을 적용한 DB가 0026 재번호
   const after = await recorded();
   expect(after).toHaveLength(journal.entries.length);
   expect(after).toContain(String(ci.when));
-  expect(after).not.toContain('1795740000041');
+  // 옛 CI 기록 시각(…041)은 …026으로 바뀌어야 한다. Q-13의 0041(mail_external)이 지금 journal에서 같은 when(…041)을 쓰므로,
+  // 「…041이 하나도 없다」가 아니라 「journal에 있는 만큼만 있다」(옛 CI 줄이 남아 하나 더 있지 않다)로 본다.
+  expect(after.filter((at) => at === '1795740000041')).toHaveLength(journal.entries.filter((e) => e.when === 1795740000041).length);
 }, 60_000);

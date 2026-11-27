@@ -1339,10 +1339,13 @@ export const mailRecipients = pgTable(
     weekly: boolean().notNull(),
     pdf: boolean().notNull(),
     view: reportView().notNull(),
+    // Q-13 결정 A(0041): 외부 수신자. 링크 없이 보고용 보기 + PDF만 받는다. 일간(팀장용만 있음)은 받지 않는다.
+    external: boolean().notNull().default(false),
   },
   (t) => [
     uniqueIndex('recipient_email_lower').on(sql`lower(${t.email})`),
     check('recipient_schedule', sql`not ${t.active} or ${t.daily} or ${t.weekly}`),
+    check('recipient_external', sql`not ${t.external} or (${t.view}='ext' and ${t.pdf} and not ${t.daily})`),
   ],
 );
 export const mailOutbox = pgTable(
@@ -1370,6 +1373,8 @@ export const mailOutbox = pgTable(
     sent_at: at('sent_at'),
     log_key: text().notNull(),
     attempt: uuid(),
+    // Q-13 결정 A(0041): 외부 수신자에게 가는 발송인지(발송 당시 값). 링크 없이 보고용 + PDF로 보낸다.
+    external: boolean().notNull().default(false),
   },
   (t) => [
     unique().on(t.report, t.recipient, t.try_no),
@@ -1378,6 +1383,7 @@ export const mailOutbox = pgTable(
     check('mail_outbox_reason_text', sql`length(btrim(${t.reason}))>0`),
     check('mail_outbox_subject_text', sql`length(btrim(${t.subject}))>0`),
     check('mail_outbox_next_at', sql`(${t.state}='retry_wait')=(${t.next_at} is not null)`),
+    check('mail_outbox_external', sql`not ${t.external} or (${t.view}='ext' and ${t.pdf})`),
     index('mail_outbox_due').on(t.state, t.next_at),
   ],
 );

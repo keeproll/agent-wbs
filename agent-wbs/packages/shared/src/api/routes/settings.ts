@@ -226,6 +226,8 @@ const Recipient = Type.Object(
     email: Type.String(),
     name: Type.String(),
     ...subscription,
+    // Q-13 결정 A: 외부 수신자. true면 링크 없이 보고용 + PDF로 보내고, 일간은 받지 않는다(view='ext'·pdf=true·daily=false로 고정).
+    external: Type.Boolean(),
     active: Type.Boolean(),
     // M6-03: 등록 시각(P 받는 사람 표 「등록 2026-10-27 09:50」)
     createdAt: c.Timestamp,
@@ -247,6 +249,8 @@ const MailLog = Type.Object(
     to: Type.String(),
     subject: Type.String(),
     view: c.ReportView,
+    // Q-13 결정 A: 외부 수신자에게 간 발송인지(발송 당시 값). true면 본문에 링크가 없다.
+    external: Type.Boolean(),
     tryNo: Type.Integer({ minimum: 1 }),
     state: AnyOf('queued', 'sending', 'accepted', 'retry_wait', 'failed', 'unknown'),
     error: Nullable(Type.String()),
@@ -304,8 +308,8 @@ const mail = [
     id: 'addRecipient',
     method: 'POST',
     path: '/api/settings/mail/recipients',
-    summary: '받는 사람 추가(중복 409, 구독 하나 이상)',
-    body: Body({ email: c.Email, name: Type.String(), ...subscription }),
+    summary: '받는 사람 추가(중복 409, 구독 하나 이상, 외부 수신자는 주간만)',
+    body: Body({ email: c.Email, name: Type.String(), ...subscription, external: Opt(Type.Boolean()) }),
     responses: { 201: Recipient },
     errors: ['RECIPIENT_DUPLICATE'],
   }),
@@ -314,7 +318,7 @@ const mail = [
     id: 'updateRecipient',
     method: 'PATCH',
     path: '/api/settings/mail/recipients/:id',
-    summary: '구독·보기·PDF·받는 중 변경',
+    summary: '구독·보기·PDF·외부·받는 중 변경',
     body: Type.Object(
       {
         ...c.Version,
@@ -322,6 +326,7 @@ const mail = [
         weekly: Opt(Type.Boolean()),
         view: Opt(c.ReportView),
         pdf: Opt(Type.Boolean()),
+        external: Opt(Type.Boolean()),
         active: Opt(Type.Boolean()),
       },
       { additionalProperties: false, minProperties: 2 },
@@ -369,6 +374,8 @@ const mail = [
         to: Type.String(),
         html: Type.String(),
         attachment: Nullable(Type.String()),
+        // Q-13 결정 A: 외부 수신자용 미리보기(링크 없음 · 보고용 · PDF)인지
+        external: Type.Boolean(),
       }),
     },
   }),

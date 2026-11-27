@@ -59,7 +59,8 @@ try {
   node(['packages/db/src/seed-cli.ts', 'demo']);
   // 정기 보고서가 원본 기간(10-27~)부터 생기도록 시작일을 원본 값으로 맞춘다(P MOCK project.start). 보고서는 API worker가 아니라 시험이 만든다.
   execFileSync('docker', ['exec', '-i', name, 'psql', '-v', 'ON_ERROR_STOP=1', '-U', 'awbs_owner', '-d', 'awbs_test_mail'], {
-    input: "update projects set start_date='2026-10-27', target_date='2026-11-12';",
+    // Q-13 결정 A: 접속 주소를 넣어 둔다. 내부 수신자 메일에는 링크가 있고, 외부 수신자 메일에는 링크가 0건인지 화면 시험이 함께 본다.
+    input: "update projects set start_date='2026-10-27', target_date='2026-11-12'; update app_settings set app_url='http://127.0.0.1:5173/';",
     stdio: ['pipe', 'ignore', 'inherit'],
   });
   node(['apps/api/src/platform/auth-cli.ts', 'set-password'], `${leadPassword}\n`);

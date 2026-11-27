@@ -5,6 +5,7 @@
  * - 「메일로 보내기」: 원본 openSend·doSend(P L4977-4981)·mailSendVM(P L6542-6550)·마크업(P L2745-2760).
  *   기본 선택은 그 종류를 구독하는 활성 받는 사람이다(기간 지정 보고서는 활성 받는 사람 모두).
  *   보기는 「수신자 기본값 / 모두 팀장용 / 모두 보고용」이고, 일간은 팀장용으로만 보낸다.
+ * - Q-13 결정 A: 외부 수신자는 언제나 보고용 + PDF로, 앱 링크 없이 받는다. 일간 보고서에서는 외부 수신자를 고를 수 없다.
  * - 발송 기록 펼침: 원본 rp-sent(P L2131, rp.doc.sent·sentL L6417-6419). 발송 기록을 이 보고서로 거른다.
  *
  * 왜 서버 큐인가: 메일은 보고서 생성과 따로 worker가 보낸다(G L1050). 그래서 「보내기」는 대기열에 넣는 것까지다.
@@ -30,11 +31,11 @@ export const SEND_VIEWS: readonly { key: '' | ReportView; l: string }[] = [{ key
 
 /** 원본 openSend(P L4977): 그 종류를 구독하는 활성 받는 사람. 기간 지정은 활성 받는 사람 모두. */
 export function defaultRecipients(kind: ReportRow['kind'], list: readonly Recipient[]): string[] {
-  return list.filter((x) => x.active && (kind === 'daily' ? x.daily : kind === 'weekly' ? x.weekly : true)).map((x) => x.id);
+  return list.filter((x) => x.active && !(kind === 'daily' && x.external) && (kind === 'daily' ? x.daily : kind === 'weekly' ? x.weekly : true)).map((x) => x.id);
 }
 /** 원본 subL(P L6545) */
 export const recipientSub = (x: Recipient) =>
-  `${[x.daily ? '일간' : '', x.weekly ? '주간' : ''].filter(Boolean).join(' · ')}${x.active ? '' : ' · 중지됨'} · 기본 ${x.view === 'int' ? '팀장용' : '보고용'}`;
+  `${[x.daily ? '일간' : '', x.weekly ? '주간' : ''].filter(Boolean).join(' · ')}${x.active ? '' : ' · 중지됨'} · 기본 ${x.view === 'int' ? '팀장용' : '보고용'}${x.external ? ' · 외부(링크 없이 보고용 + PDF)' : ''}`;
 /** 원본 smtpL(P L6549). 연결이 확인됐으면 null */
 export function smtpWarning(smtp: Smtp | undefined): string | null {
   if (!smtp) return null;
@@ -75,7 +76,7 @@ function MailSend({ row, onClose }: { row: ReportRow; onClose: () => void }) {
   const ids = picked ?? Object.fromEntries(defaultRecipients(row.kind, list).map((id) => [id, true]));
   const [view, setView] = useState<'' | ReportView>('');
   const [err, setErr] = useState('');
-  const chosen = list.filter((x) => ids[x.id]).map((x) => x.id);
+  const chosen = list.filter((x) => ids[x.id] && !(row.kind === 'daily' && x.external)).map((x) => x.id);
   // 보낼 본문은 「보내기」를 누른 순간에 찍어 둔다(request). 다시 시도는 같은 멱등 키로 이 본문을 그대로 보낸다.
   // 왜: 실패 뒤 받는 사람·보기를 바꾸고 다시 시도하면 같은 키로 다른 본문이 나가 409가 되거나 다른 메일이 큐에 들어간다(M6 통합 Codex 리뷰 P2-1).
   const send = useSave<ResponseOf<'sendReportMail'>, { recipientIds: string[]; view?: ReportView }>({
@@ -107,9 +108,9 @@ function MailSend({ row, onClose }: { row: ReportRow; onClose: () => void }) {
       <div className="cl">
         {list.map((x) => (
           <label key={x.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '4px 0' }}>
-            <input type="checkbox" className="chk" checked={Boolean(ids[x.id])} style={{ marginTop: 2 }}
+            <input type="checkbox" className="chk" checked={Boolean(ids[x.id]) && !(row.kind === 'daily' && x.external)} disabled={row.kind === 'daily' && x.external} style={{ marginTop: 2 }}
               onChange={() => { setErr(''); setPicked({ ...ids, [x.id]: !ids[x.id] }); }} />
-            <span className="tcell"><b className="mono" style={{ fontSize: 12.5 }}>{x.email}</b><span className="tid">{`${x.name} · ${recipientSub(x)}`}</span></span>
+            <span className="tcell"><b className="mono" style={{ fontSize: 12.5 }}>{x.email}</b><span className="tid">{`${x.name} · ${recipientSub(x)}${row.kind === 'daily' && x.external ? ' — 일간 보고서는 외부 수신자에게 보내지 않습니다' : ''}`}</span></span>
           </label>
         ))}
       </div>
@@ -119,6 +120,7 @@ function MailSend({ row, onClose }: { row: ReportRow; onClose: () => void }) {
           <div className="seg" role="group" aria-label="보낼 보기">
             {SEND_VIEWS.map((o) => <button key={o.key} type="button" aria-pressed={view === o.key} onClick={() => { setView(o.key); }}>{o.l}</button>)}
           </div>
+          {list.some((x) => ids[x.id] && x.external) && <p className="fhint" style={{ margin: '6px 0 0' }}>외부 수신자는 어떤 보기를 골라도 보고용 + PDF로, 앱 링크 없이 받습니다.</p>}
         </>
       ) : <p className="fhint" style={{ margin: '10px 0 0' }}>일간 보고서는 팀장용(상세)으로 보냅니다.</p>}
       {err && <p className="ferr" role="alert">{err}</p>}

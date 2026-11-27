@@ -3,7 +3,7 @@
  */
 import { describe, expect, test } from 'vitest';
 import type { ReportSnapshotData } from '@awbs/shared';
-import { reportHtml, type ReportHtmlInput } from '../src/pdf/html.ts';
+import { externalPdfLeaks, reportHtml, type ReportHtmlInput } from '../src/pdf/html.ts';
 
 const summary: ReportSnapshotData['summary'] = {
   taskCount: 1, doneCount: 1, doneBefore: 0, workPct: 100, workPctBefore: 0, baselineVersion: 1, forecast: '2026-11-10', lo: '2026-11-08', hi: '2026-11-14',
@@ -58,5 +58,18 @@ describe('보고서 PDF HTML', () => {
     expect(html).not.toContain('rpt-appx');
     expect(html).not.toContain('TASK-0001');
     expect(html).toContain('(보고용)');
+  });
+});
+
+describe('Q-13 fix1: 보고용 PDF도 같은 변환 함수 · 검사기를 지난다', () => {
+  test('제목 · 프로젝트 이름의 앱 주소 · 내부 용어가 보고용 PDF 문서에 남지 않는다', () => {
+    const dirty = { ...snapshot, projectName: 'P http://127.0.0.1:5173/report/x', done: snapshot.done.map((t) => ({ ...t, title: 'TASK-0007 개선 http://127.0.0.1:5173/settings/report' })) } as typeof snapshot;
+    const html = reportHtml({ ...input('ext'), snapshot: dirty, external: true });
+    expect(externalPdfLeaks(html)).toEqual([]);
+    expect(externalPdfLeaks('<body>TASK-0007 http://127.0.0.1:5173/settings/report <a href="x">y</a></body>').length).toBeGreaterThanOrEqual(3);
+    // Q-13 fix4: 팀장 다운로드 · 내부 수신자용(external 없음)은 내부 용어만 빼고 주소는 그대로다.
+    const inside = reportHtml({ ...input('ext'), snapshot: dirty });
+    expect(inside).toContain('http://127.0.0.1:5173/settings/report');
+    expect(inside).not.toContain('TASK-0007');
   });
 });
