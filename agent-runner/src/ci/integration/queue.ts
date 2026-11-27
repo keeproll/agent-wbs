@@ -16,6 +16,8 @@ export interface IntegrationDeps extends Pick<TaskCheckOptions, 'repo' | 'heavy'
   readVerification: (request: IntegrationRequest) => Promise<{ passed: boolean; headSha: string; specRevision: number }>;
   /** 서버가 (project,A)의 정의 관측을 따로 보관하도록 기존 outbox에 넣는다. */
   observeMainPipeline: (basis: MainBasis) => Promise<void>;
+  /** ①·②의 실제 결과를 병합 PUT 전에 서버에 남긴다. */
+  onCheck?: (result: TaskCheckResult | IntegrationCheck, proof?: HeadSyncChainProof) => Promise<void>;
 }
 interface SyncEvidence {
   baseSha: string; qaHeadSha: string; syncedHeadSha: string; pipelineSha: string; headSync?: HeadSyncChainProof;
@@ -140,6 +142,7 @@ export class IntegrationQueue {
       await repo.createTaskCheckWorktree(id, syncedHeadSha);
       try { task = await runTaskCheck({ ...this.deps, basis, worktreeId: id, branch: `agent/${id}` }); }
       finally { await repo.removeWorktree(id); }
+      await this.deps.onCheck?.(task,proof ?? undefined);
       const taskChanged = await this.current(request, basis.baseSha, syncedHeadSha); if (taskChanged) return { ...taskChanged, ...sync, task };
       await github.setCommitStatus({ sha: syncedHeadSha, context: 'agentwbs/task',
         state: task.status === 'pass' ? 'success' : task.failScope === 'baseline' ? 'error' : 'failure' });
@@ -149,6 +152,7 @@ export class IntegrationQueue {
           : { kind: 'rework', reason: 'task_failed', failScope: 'task', ...sync, task };
       }
       const integration = await runIntegrationCheck(this.deps, basis, syncedHeadSha);
+      await this.deps.onCheck?.(integration,proof ?? undefined);
       const changed = await this.current(request, basis.baseSha, syncedHeadSha); if (changed) return { ...changed, ...sync, task, integration };
       await github.setCommitStatus({ sha: syncedHeadSha, context: 'agentwbs/int', state: integration.status === 'pass' ? 'success' : 'failure' });
       if (integration.status !== 'pass') return { kind: 'rework', reason: 'integration_failed', failScope: 'task', ...sync, task, integration };

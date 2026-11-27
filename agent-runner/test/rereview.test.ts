@@ -108,7 +108,7 @@ test('N: WBS credential authorization failures must stop the running app',async(
   vi.spyOn(a,'startSchedules').mockImplementation(()=>undefined);
   let outcome='pending';
   const running=a.run(controller.signal).then(()=>{outcome='resolved';},()=>{outcome='rejected';});
-  try {await pause(50);expect(outcome).toBe('rejected');}
+  try {await expect.poll(()=>outcome,{timeout:10_000}).toBe('rejected');}
   finally {controller.abort();await running;}
 });
 

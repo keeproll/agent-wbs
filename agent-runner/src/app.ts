@@ -26,6 +26,7 @@ import { collectModels } from './resources/models.ts';
 import { ResourceReporter, type SessionState } from './resources/reporter.ts';
 import { UsageTracker } from './resources/usage.ts';
 import type { State } from './state/state.ts';
+import { CiJobs, type CiJobsOptions } from './ci/jobs.ts';
 
 /** 세션 실행 계층(M5)이 시도 하나를 실행하는 동안 등록하는 보유. 지금(M4)은 비어 있다. */
 export interface ActiveSession extends SessionState {
@@ -63,6 +64,8 @@ export interface RunnerAppDeps {
   inputSource?: () => Promise<InputSource | undefined>;
   /** 입력 확인 주기(시험용 덮어쓰기). 없으면 서버 정책 inputCheckMinutes, 그것도 없으면 5분. */
   inputIntervalMs?: number;
+  /** Q-08 승인 전에는 fake 명령 실행기만 주입한다. */
+  ci?:Pick<CiJobsOptions,'repo'|'execute'|'collectTests'>;
 }
 
 /** 서버 정책을 받기 전 입력 확인 기본 주기(5분, 서버 정책 inputCheckMinutes의 기본값과 같음). */
@@ -87,6 +90,7 @@ export class RunnerApp {
   readonly github: { client: GitHubClient; connector: GithubConnector; mode: GithubMode; checkDeployKeys(): Promise<void> } | undefined;
   readonly bins: { codex: string; claude: string };
   readonly inputs: InputChangeReporter;
+  readonly ci:CiJobs|undefined;
   #identity: { hostId: string; bootId: string } | undefined;
   readonly #d: RunnerAppDeps;
   readonly #run: RunCommand;
@@ -185,6 +189,10 @@ export class RunnerApp {
       report: (body) => this.reportReadiness(body),
       obsNote: () => cgroupNote((path) => d.hostSources.readFile(path)),
     });
+    if (d.ci && this.github) this.ci = new CiJobs({ ...d.ci,api:d.api,outbox:this.runner.outbox,runnerId:runnerId(),
+      directory:join(d.home,'state','ci'),epoch:() => d.state.snapshot.epoch,ready:() => this.runner.ready,
+      identity:{ get hostId() { return app.identity.hostId; },get bootId() { return app.identity.bootId; } },
+      github:this.github.client,heavy:this.heavy,warn:d.warn });
   }
 
   get identity(): { hostId: string; bootId: string } {
@@ -329,7 +337,7 @@ export class RunnerApp {
   }
 
   /** 매일 점검(준비 점검 → CLI 최신 확인·유휴 적용 → 모델)과 주기 보고를 건다. 종료가 시작된 뒤에는 등록하지 않는다. */
-  startSchedules(): void {
+  startSchedules(signal?:AbortSignal): void {
     if (this.#stopping) return;
     const onError = (what: string) => (error: unknown) => {
       // WBS 인증 실패(401/403)는 일반 실패가 아니다. Runner 토큰이 폐기된 것이므로 앱 전체를 멈춘다(contracts §1.1 표).
@@ -346,6 +354,9 @@ export class RunnerApp {
     }, { onError: onError('매일 점검') }));
     this.#timers.push(scheduleDaily(() => this.reportConcurrency(), { intervalMs: 60_000, onError: onError('동시 실행 보고') }));
     this.#timers.push(scheduleDaily(() => this.reporter.reportUsage(this.usage), { intervalMs: 60_000, onError: onError('사용량 보고') }));
+    if (this.ci) this.#timers.push(scheduleDaily(async () => {
+      await this.ci?.runNext(this.reporter.caps?.total ?? 0,signal);
+    },{ intervalMs:1000,onError:onError('통합·CI 재실행') }));
     // 주기는 서버 정책(inputCheckMinutes)을 따른다. 정책이 없으면 기본 5분(P3-1 임시값).
     const policyMinutes = this.runner.policy?.inputCheckMinutes;
     const inputInterval = this.#d.inputIntervalMs ?? (policyMinutes ? policyMinutes * 60_000 : INPUT_INTERVAL_MS);
@@ -392,7 +403,7 @@ export class RunnerApp {
         if (this.runner.ready) {
           try {
             await this.bootstrap(internal.signal);
-            if (!internal.signal.aborted) this.startSchedules();
+            if (!internal.signal.aborted) this.startSchedules(internal.signal);
           } catch (error) {
             if (internal.signal.aborted) return;
             if (authenticationFailed(error) || (error instanceof DeployKeyError && !error.retryable)) { halt(error); return; }
@@ -411,6 +422,7 @@ export class RunnerApp {
       const timers = this.#timers;
       this.#timers = [];
       await Promise.allSettled(timers.map((timer) => timer.stop()));
+      await this.ci?.shutdown();
       signal.removeEventListener('abort', onAbort);
       this.#halt = undefined;
     }

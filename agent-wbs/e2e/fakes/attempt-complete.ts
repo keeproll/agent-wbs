@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { expect } from 'vitest';
-import { type ApiRequest } from '../../../agent-runner/src/api/client.ts';
+import { ApiTransportError, type ApiClient, type ApiRequest } from '../../../agent-runner/src/api/client.ts';
 import { Outbox } from '../../../agent-runner/src/api/outbox.ts';
-import { IntegrationQueue, type IntegrationResult } from '../../../agent-runner/src/ci/integration/queue.ts';
-import { runIntegrationCheck } from '../../../agent-runner/src/ci/integration/check.ts';
+import { type IntegrationResult } from '../../../agent-runner/src/ci/integration/queue.ts';
+import { CiJobs, type CiJobResult } from '../../../agent-runner/src/ci/jobs.ts';
 import { parsePipeline } from '../../../agent-runner/src/ci/pipeline.ts';
 import { runTaskCheck, type TaskCheckResult } from '../../../agent-runner/src/ci/task.ts';
 import { State } from '../../../agent-runner/src/state/state.ts';
@@ -26,15 +26,23 @@ export async function completeScenario() {
   const h = await scenario({ inputCommit:f.ref('main') });
   let state = await State.open(join(f.root,'outbox'));
   await state.update(d => { d.epoch = 1; });
-  let outbox = new Outbox(state,h.runner.api);
+  let outbox:Outbox;
   const claude = installFakeCli(join(f.root,'cli'),'claude');
   let codex = installFakeCli(join(f.root,'cli'),'codex');
   const checks = installFakeCli(join(f.root,'checks'),'codex',{ lines:['검사 통과'] });
   let failStep: string | undefined;
-  let queue: IntegrationQueue | undefined;
+  let deferCompletion = true;
+  const ciApi:ApiClient = async (operation,request) => {
+    if (deferCompletion && operation === 'reportMergeQueue' && (request as { body?:{status?:string} }).body?.status === 'merged') throw new ApiTransportError(operation);
+    return h.runner.api(operation,request);
+  };
+  outbox = new Outbox(state,ciApi);
+  const ci = () => new CiJobs({ ...f.deps,directory:join(f.root,'ci-jobs'),api:ciApi,outbox,runnerId:state.snapshot.runnerId,epoch:()=>1,ready:()=>true,
+    identity:{ hostId:h.runner.hostId,bootId:h.runner.bootId },execute:(_job,argv,cwd) => execute(argv,cwd),warn:()=>undefined });
+  let flow:CiJobs;
   let inputHead = f.ref('main');
   await h.rows("update notify_settings set enabled=true where singleton");
-  await h.rows("insert into notify_rules(key,enabled) values('done',true),('fail',true),('buildFail',true),('buildOk',true) on conflict(key) do update set enabled=true");
+  await h.rows("insert into notify_rules(key,enabled) values('done',true),('fail',true),('buildFail',true),('buildOk',true),('admin',true) on conflict(key) do update set enabled=true");
   const observe = async (basis: Awaited<ReturnType<typeof f.repo.mainPipeline>>) => {
     const pipeline = parsePipeline(basis.source);
     await h.runner.api('reportInputChanges',{ ...write(),body:{ base:inputHead,head:basis.baseSha,
@@ -100,40 +108,15 @@ export async function completeScenario() {
       return a;
     } finally { await f.repo.removeWorktree(id); }
   };
-  const integrate = async (head: string) => {
-    const claimed = await h.runner.api('claimJob',{ ...write(),body:{ kinds:['integrate'],capacity:20 } });
-    assert(claimed.status === 200 && claimed.body.job.kind === 'integrate','서버가 통합 job을 만들어야 합니다.');
-    const job = claimed.body.job;
-    await h.runner.api('startJob',{ ...write(),params:{ id:job.id },body:{ fence:job.fence,hostId:h.runner.hostId,bootId:h.runner.bootId,headSha:head,installedSubagents:[] } });
-    await h.runner.api('releaseJobSlots',{ ...write(),params:{ id:job.id },body:{ fence:job.fence,hostId:h.runner.hostId,proof:{ kind:'no_process',bootId:h.runner.bootId },at:new Date().toISOString() } });
-    const queued: QueueBody = { jobId:job.id,fence:job.fence,pr:1,taskKey:'TASK-0001',status:'queued',qaHeadSha:head };
-    await h.runner.api('reportMergeQueue',{ ...write(),body:queued });
-    await queue?.close();
-    queue = await IntegrationQueue.open({ ...f.deps,execute,observeMainPipeline:observe,readVerification:async () => {
-      const verifications = (await h.lead('GET','/api/tasks/TASK-0001/verifications')).body.items as { result:string;headSha:string;specRevision:number }[];
-      const v = verifications.find(v => v.headSha === head);
-      return { passed:v?.result === 'PASS',headSha:v?.headSha ?? '',specRevision:v?.specRevision ?? 0 };
-    } });
-    const result = await queue.run({ ...f.request,qaHeadSha:head });
-    let taskRun: string | undefined, intRun: string | undefined;
-    if ('task' in result && result.task) taskRun = await reportCheck(job,result.task);
-    if ('integration' in result && result.integration) intRun = await reportCheck(job,result.integration);
-    const evidence = { ...queued,...('baseSha' in result && result.baseSha && { baseSha:result.baseSha }),
-      ...('syncedHeadSha' in result && result.syncedHeadSha && { syncedHeadSha:result.syncedHeadSha }),
-      ...('headSync' in result && result.headSync && { headSync:result.headSync }),
-      ...(intRun && { ciRunId:intRun }),...('integration' in result && result.integration && { testedTreeSha:result.integration.treeSha }) };
-    if (result.kind === 'merged') await h.runner.api('reportMergeQueue',{ ...write(),body:{ ...evidence,status:'checking' } });
-    else if (result.kind === 'rework' || result.kind === 'baseline_failed') {
-      const ciRunId = intRun ?? taskRun;
-      await h.runner.api('reportMergeQueue',{ ...write(),body:{ ...evidence,status:'failed',...(ciRunId && { ciRunId }) } });
-    }
-    else await h.runner.api('reportMergeQueue',{ ...write(),body:{ ...evidence,status:'removed' } });
-    return { job,result,evidence };
+  flow = ci();
+  const integrate = async (head:string) => {
+    const outcome = await flow.runNext(20);
+    assert(outcome && outcome.job.kind === 'integrate' && outcome.result);
+    if ('qaHeadSha' in outcome.result) expect(outcome.result.qaHeadSha).toBe(head);
+    return { ...outcome,result:outcome.result };
   };
-  const completionBody = (integration: Awaited<ReturnType<typeof integrate>>, changes: Partial<QueueBody> = {}): QueueBody => {
-    const { result } = integration; assert(result.kind === 'merged');
-    return { ...integration.evidence,status:'merged',actualMergeSha:result.actualMergeSha,actualTreeSha:result.actualTreeSha,
-      mergeParents:result.mergeParents,mergedAt:new Date().toISOString(),...changes };
+  const completionBody = (integration:CiJobResult,changes:Partial<QueueBody> = {}):QueueBody => {
+    assert(integration.completion); return { ...integration.completion,...changes };
   };
   const processFailed = async (a: Running) => {
     const cli = installFakeCli(join(f.root,'failed'),'claude',{ exitCode:1,stderr:'프로세스 실패' });
@@ -144,28 +127,22 @@ export async function completeScenario() {
     await h.runner.api('reportAttemptResult',{ ...write(),params:{ attemptId:a.attemptId },body:{ fence:a.job.fence,summary:output.stderr,changedFiles:[],evidence:[],failure:'process_failed' } });
   };
   const retryIntegration = async () => {
-    const claimed = await h.runner.api('claimJob',{ ...write(),body:{ kinds:['ci_retry'],capacity:20 } });
-    assert(claimed.status === 200 && claimed.body.job.kind === 'ci_retry');
-    const job = claimed.body.job;
-    await h.runner.api('startJob',{ ...write(),params:{ id:job.id },body:{ fence:job.fence,hostId:h.runner.hostId,bootId:h.runner.bootId,headSha:job.payload.commit,installedSubagents:[] } });
-    const basis = await f.repo.mainPipeline(); await observe(basis);
-    const result = await runIntegrationCheck({ ...f.deps,execute },basis,job.payload.commit);
-    const id = await reportCheck(job,result);
-    await h.runner.api('releaseJobSlots',{ ...write(),params:{ id:job.id },body:{ fence:job.fence,hostId:h.runner.hostId,proof:{ kind:'no_process',bootId:h.runner.bootId },at:new Date().toISOString() } });
-    await h.runner.api('finishJob',{ ...write(),params:{ id:job.id },body:{ fence:job.fence,status:result.status === 'pass' ? 'done' : 'failed' } });
-    await h.runner.api('releaseJob',{ ...write(),params:{ id:job.id },body:{ fence:job.fence,hostId:h.runner.hostId,proof:{ kind:'no_process',bootId:h.runner.bootId },at:new Date().toISOString() } });
-    return { id,result };
+    const outcome = await flow.runNext(20); assert(outcome?.job.kind === 'ci_retry' && outcome.ciRunId);
+    const result = await h.lead('GET',`/api/projects/${h.project}/ci/runs/${outcome.ciRunId}`);
+    return { id:outcome.ciRunId,result:result.body };
   };
   return { ...h,f,next,develop,verify,integrate,reportCheck,observe,execute,processFailed,retryIntegration,
     get state() { return state; },get outbox() { return outbox; },
     complete: (integration: Awaited<ReturnType<typeof integrate>>, changes: Partial<QueueBody> = {}) => h.runner.api('reportMergeQueue',{ ...write(),body:completionBody(integration,changes) }),
     queueCompletion: async (integration: Awaited<ReturnType<typeof integrate>>) => {
-      const entry = await outbox.enqueue('reportMergeQueue',{ epoch:1,body:completionBody(integration) });
-      await queue?.acknowledge(); return entry;
+      const entry = state.snapshot.outbox.find(e => e.operation === 'reportMergeQueue' && e.request.body?.status === 'merged' && e.request.body.jobId === integration.job.id);
+      assert(entry); return entry;
     },
-    restartOutbox: async () => { await state.close(); state = await State.open(join(f.root,'outbox')); outbox = new Outbox(state,h.runner.api); },
+    restartOutbox: async () => { await flow.shutdown(); await state.close(); state = await State.open(join(f.root,'outbox')); deferCompletion = false; outbox = new Outbox(state,ciApi); flow = ci(); },
+    recoverCi: async () => { deferCompletion = false; return flow.runNext(20); },
+    allowCompletion: () => { deferCompletion = false; },
     fail: (step?: string) => { failStep = step; },
-    close: async () => { await queue?.close(); await state.close(); await h.close(); await f.close(); } };
+    close: async () => { await flow.shutdown(); await state.close(); await h.close(); await f.close(); } };
 }
 
 export type CompleteScenario = Awaited<ReturnType<typeof completeScenario>>;

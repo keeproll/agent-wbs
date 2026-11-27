@@ -9,6 +9,7 @@ import { registerRunnerMessageRoutes } from '../../../apps/api/src/messages/rout
 import { installProjectRunner } from '../../../apps/api/src/project/runner-routes.ts';
 import { watchRunner } from '../../../apps/api/src/runner/watch.ts';
 import { installCiRunner } from '../../../apps/api/src/ci/routes.ts';
+import { recheckMergedTasks } from '../../../apps/api/src/execution/recheck.ts';
 import { FakeRunner } from '../runner.ts';
 
 // HTTP 응답의 상세 모양은 각 시나리오가 검증한다. Runner 요청은 생성 클라이언트가 검사한다.
@@ -77,6 +78,7 @@ export async function scenario(options: { inputCommit?: string } = {}) {
       message: async (id: string): Promise<Body> => ((await lead('GET', '/api/messages?limit=200')).body.items as { id: string }[]).find(m => m.id === id),
       // 실제 감시 함수를 미래 시각으로 실행한다. 3분을 기다리는 대신 같은 만료 판정을 사용한다.
       watchDisconnected: () => watchRunner(pool, 1, new Date(Date.now() + 240_000)),
+      recheckCompletion: () => recheckMergedTasks(pool),
       close: async () => { await app.close(); await pool.end(); await owner.end(); },
     };
   } catch (error) {
