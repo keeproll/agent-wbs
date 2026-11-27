@@ -98,7 +98,7 @@ export const lockState = pgEnum('lock_state', [
   'released',
   'orphaned',
 ]);
-export const releaseProof = pgEnum('release_proof', ['no_process', 'group_empty', 'boot_changed']);
+export const releaseProof = pgEnum('release_proof', ['no_process', 'group_empty', 'boot_changed', 'cgroup_empty']);
 export const cleanupStatus = pgEnum('cleanup_status', ['none', 'pending', 'running', 'failed']);
 export const deliveryState = pgEnum('delivery_state', [
   'queued',

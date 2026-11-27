@@ -11,6 +11,11 @@ if [[ -f $R/.sudo-rules ]]; then
     if [[ $joined == $glob ]]; then printf '%b' "$out"; exit "$code"; fi
   done < "$R/.sudo-rules"
 fi
+# 래퍼 cli-version(install-agent-cli.sh): 가짜 CLI의 --version을 실제로 부른다(가짜 루트 안 경로만).
+if [[ $1 == -n && $2 == -u && $4 == -- && $6 == cli-version && $9 == -- ]]; then
+  [[ ${10} == "$R"/* ]] || { echo "가짜 루트 밖 경로: ${10}" >&2; exit 99; }
+  exec "${10}" --version
+fi
 # Agent 계정 명령: 기본은 적기만 한다(시험 계정으로 실제 실행하지 않는다). 거부 기본이면 「명령 실패」(rc=1)처럼 답한다.
 if [[ $1 == -u || ( $1 == -n && $2 == -u ) ]]; then
   [[ -f $R/.agent-deny ]] && printf 'rc=1'

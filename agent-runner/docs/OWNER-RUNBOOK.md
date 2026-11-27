@@ -180,9 +180,48 @@ pnpm -C agent-runner start
 ```
 
 - Runner가 CLI 최신 확인과 준비 점검을 합니다. 준비 점검의 Claude·Codex 로그인 항목이 `ok`이면 됩니다.
-- 참고: 실제 Agent 세션 실행은 exec 계층(M5-02)이 연결된 뒤에 시작됩니다(isolation.md §12.2).
+- 실행 계층은 연결됐습니다(isolation.md §12.2). Runner는 실행 직전마다 래퍼 점검과 사용자 scope 시험을 다시 하고, 통과할 때만 Agent 계정으로 세션을 띄웁니다.
+  - 사용자 scope에는 linger가 필요합니다. 아래로 확인합니다. `Linger=yes`가 보이면 됩니다.
+
+    ```bash
+    loginctl show-user "$USER" -p Linger
+    ```
+
+  - 실패하면 Runner 로그에 `실제 Agent 실행 보류: …`가 한 번 보입니다. 그 줄을 보내 주세요.
+- 참고: 실제 시도 흐름은 결과 수집기(`collect`)가 연결된 뒤에 시작됩니다(`src/jobs/README.md`). 그 전까지 Runner는 시도 job을 받지 않습니다.
 
 ---
+
+## 래퍼·CLI를 바꾼 뒤(fix1: ci-run·진입점 규칙·pnpm / fix2: git-inspect·git-bundle·cli-version·agent-file·ci-run --home)
+
+래퍼(`awbs-agent-exec`)를 고치면 설치본(`/usr/local/libexec/awbs-agent-exec`)은 저절로 바뀌지 않습니다. 아래를 순서대로 실행합니다.
+sudoers 규칙 한 줄은 바뀌지 않습니다(래퍼 하나만 허용).
+
+1. Runner를 끕니다(Runner 터미널에서 `Ctrl+C`).
+2. 설치 스크립트를 다시 실행합니다(이미 된 부분은 건너뛰고 래퍼만 새로 설치·점검합니다. 비밀번호를 물을 수 있습니다).
+
+   ```bash
+   cd ~/orca/workspaces/agent-wbs/m8prep-exec   # 병합 뒤에는 agent-wbs 저장소의 맨 위 폴더
+   bash agent-runner/scripts/isolation/setup-agent-user.sh 2>&1 | tee ~/awbs-setup-logs/fix1-setup.log; echo "exit=${PIPESTATUS[0]}"
+   ```
+
+3. ①·CI가 쓸 pnpm을 설치합니다(관리자 권한 없음). 새 CLI의 `--version` 확인은 2번에서 설치한 래퍼로 Agent 계정이 합니다(비밀번호 묻지 않음).
+
+   ```bash
+   bash agent-runner/scripts/isolation/install-agent-cli.sh 2>&1 | tee ~/awbs-setup-logs/fix1-cli.log; echo "exit=${PIPESTATUS[0]}"
+   ```
+
+4. 확인합니다. `cmp`가 아무것도 출력하지 않고 `same`이 보이면 설치본이 저장소와 같습니다.
+
+   ```bash
+   cmp agent-runner/scripts/isolation/awbs-agent-exec.sh /usr/local/libexec/awbs-agent-exec && echo same
+   bash agent-runner/scripts/isolation/check-agent-user.sh 2>&1 | tee ~/awbs-setup-logs/fix1-check.log; echo "exit=${PIPESTATUS[0]}"
+   ls -l /srv/agentwbs/cli/pnpm/current
+   ```
+
+- **성공이면:** 2·3단계 `exit=0`, `same`, 확인 스크립트 `결과: FAIL 0개`, pnpm `current → 버전`.
+- **CI 자동 실행은 기본 꺼짐입니다**(조정자 결정 7). 켜려면 `agent-runner/.env`에 `AWBS_CI_AUTO=1` 한 줄을 더하고 Runner를 다시 시작합니다.
+- **실패하면:** 그 단계의 로그 파일과 마지막 `exit=` 줄을 보내 주세요.
 
 ## 되돌리기
 

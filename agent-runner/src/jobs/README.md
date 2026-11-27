@@ -19,6 +19,11 @@ M7-06의 실제 ①을 `bindTaskCheck`로 연결한다.
 
 `RunnerAppDeps.execution`에 기존 작업 폴더 준비와 격리 공급원을 연결한다.
 `RunnerAppDeps.jobs`에 `collect`와 실제 `taskCheck`를 반드시 연결한다.
+실제 `taskCheck`는 ① 공급원(`TaskCheckSources`: `repo`·`worktree`·`launch`·`collectTests`·`observeMainPipeline`)으로 넘긴다.
+앱(`RunnerApp`)이 자기 GitHub 클라이언트·`Execution`·`Runner`·API로 `bindTaskCheck`를 부른다.
+GitHub 설정이 없으면 `github: null`로 묶는다(PR 없이 보고, 서버가 통합을 보류).
+왜: GitHub 클라이언트는 배포 키 검사·권한 거부 보고·토큰 무효화가 걸린 앱의 것 하나만 써야 한다. 밖에서 다른 클라이언트를 넘기면 PR 생성이 그 관문을 지나지 않는다.
+함수를 직접 넘기는 모양은 시험용이다.
 `taskCheck`가 없으면 구성 단계에서 거부한다.
 앱은 기존 `Runner`·`Execution`·자원 보고기·발송함을 공유한다.
 `jobs`를 연결하지 않은 앱은 시도 예약 반복을 시작하지 않는다.
@@ -42,6 +47,48 @@ claim과 run은 같은 `canStart` 함수에 `1 + 해당 역할의 하위 Agent �
 앱은 인증 실패 때 전체 실행을 멈춘다.
 나머지는 경고로 남긴다.
 `runNext`와 `run`은 오류를 호출자에게 돌려준다.
+
+## 연결 지점(다음 작업: `collect`·`execution.prepare`)
+
+지금 `main.ts`는 시도 흐름(`jobs`)을 켜지 않는다(조정자 답변 2026-11-27).
+왜: 실제 결과 수집기 `collect`와 시도별 작업 폴더 준비 `execution.prepare`가 아직 없다.
+둘을 만들면 `main.ts`의 `new RunnerApp({...})`에 아래 두 값만 더하면 된다. 나머지(격리·scope·①·GitHub 클라이언트·CI)는 이미 연결돼 있다.
+
+```ts
+new RunnerApp({
+  // …지금 값 그대로…
+  execution: { prepare },                    // 1) 시도별 작업 폴더
+  jobs: { collect, taskCheck: sources },     // 2) 결과 수집기 + ① 공급원
+});
+```
+
+### 1) `execution.prepare(job) → { cwd, headSha }`
+
+- 타입: `ExecutionOptions['prepare']`(`src/exec/session.ts`). `job`은 생성 클라이언트의 `attempt` job(`AttemptJob`)이다.
+- 부르는 곳: `Execution.run`이 등급(`getRunGrade`)을 받은 뒤, 하위 Agent 설치·`startJob` 전에 한 번 부른다.
+- 해야 할 일:
+  - 앱의 `GitRepository`(`GitRepository.open(home, repositoryId, { agentRoot })`)로 작업 폴더를 만든다: `createWorktree(<작업 폴더 id>, <로컬 agent 브랜치>, job.payload.baseCommit)`.
+  - 전용 계정 배치면 작업 폴더가 `/srv/agentwbs/worktrees/<저장소>/<id>` 아래에 0770으로 생긴다. 래퍼가 이 밖의 `--cwd`는 거부한다.
+  - `cwd`는 그 작업 폴더의 절대 경로, `headSha`는 그 폴더의 현재 커밋(전체 SHA)이다.
+  - 같은 Task·역할의 재개(`resume`)는 같은 `cwd`일 때만 CLI 세션을 이어 간다(`Execution`이 비교한다). 그래서 재작업은 같은 작업 폴더 id를 써야 한다.
+- 실패하면 예외를 던진다. `Execution`이 시작 전 실패로 처리한다(`finishJob(failed)` + `releaseJob(no_process)`).
+
+### 2) `jobs.collect(context) → { report, responses? }`
+
+- 타입: `AttemptFlowOptions['collect']`(`src/jobs/attempt-flow.ts`). `context`는 `AttemptContext`(`job`·`output`·`epoch`·`signal`·`messages`)다.
+- 부르는 곳: CLI와 자손 종료 확인 → 물리 슬롯 반환 → (dev·rework만) ① 통과 뒤. 같은 임대·같은 중단 신호 안이다.
+- 돌려줄 값: 아래 「결과 수집과 나가는 값」 절 그대로(`report`는 `reportAttemptResult` 본문에서 `fence`만 뺀 값).
+- 해야 할 일(contracts §5): Agent 종료 JSON의 스키마 검사, 형식 오류면 1회 수정 요청(같은 작업 폴더에서 CLI를 한 번 더 — `Execution`을 거쳐야 한다), 변경 파일은 git diff, Evidence는 업로드 뒤 ID.
+
+### 3) `jobs.taskCheck`: ① 공급원 `TaskCheckSources`
+
+- 함수가 아니라 공급원 객체를 넘긴다. 앱이 자기 GitHub 클라이언트·`Execution`·`Runner`·API로 `bindTaskCheck`를 부른다.
+- `repo`: 1)과 같은 `GitRepository`.
+- `worktree(context)`: 1)에서 만든 작업 폴더의 `{ id, branch }`.
+- `launch(argv, cwd)`: `ciLaunch(argv, cwd, env)`(`src/ci/launch.ts`)를 그대로 쓴다. 전용 계정이면 `Execution.command`가 래퍼 `ci-run`으로 감싼다.
+- `collectTests`: **생략한다.** 생략하면 `bindTaskCheck`가 이 시도의 job으로 묶인 실행기(`Execution.command`)로 `createTestCollector`(`src/ci/collect-tests.ts`)를 쓴다.
+  - 왜: 목록 명령도 Agent 코드(시험 설정)를 실행하므로 같은 job의 슬롯·보유·격리(래퍼 `ci-run`)로 돌아야 한다. 시험만 가짜 수집기를 넣는다.
+- `observeMainPipeline`: 고정한 main의 파이프라인 정의를 입력 관측 API로 보고한다(CI 처리기의 `#observe`와 같은 일).
 
 ## M7-06 연결 계약
 

@@ -16,7 +16,8 @@ import type { ResourceReporter, SessionState } from '../resources/reporter.ts';
 import type { HeavySemaphore } from '../resources/heavy.ts';
 import { atomicWrite } from '../state/files.ts';
 import type { ReportId } from '../state/state.ts';
-import { installSubagents, SubagentInstallError } from './install.ts';
+import { installSubagents, localAgentFiles, SubagentInstallError } from './install.ts';
+import type { AgentFiles } from '../git/agent-git.ts';
 import { Launches, type LaunchJob, type Proof } from './launches.ts';
 import { runProcess } from './process.ts';
 
@@ -38,6 +39,17 @@ export interface ExecutionOptions {
   heavy: HeavySemaphore;
   canStart: ResourceReporter['canStart'];
   isolation?: IsolationLayer;
+  /**
+   * 실행 직전 격리 재확인(전용 계정이면 래퍼 `check`와 사용자 scope 시험). 돌려준 계층으로 이번 실행을 감싼다.
+   * undefined를 돌려주면 이번 실행과 이후 claim을 거부한다. 없으면(시험) 지금 계층을 그대로 쓴다.
+   * 왜: 준비 점검 뒤에도 상태가 바뀔 수 있다. 예: 재부팅 뒤 /run/WSL 보호가 아직 안 돌았거나 사용자 systemd가 멈췄다(isolation.md §11).
+   */
+  recheckIsolation?: () => Promise<IsolationLayer | undefined>;
+  /**
+   * 작업 폴더 안 하위 Agent 정의 파일 접근(fix2 추가). 전용 계정 배치는 래퍼 `agent-file`(Agent 계정)을 넣는다.
+   * 없으면 같은 계정 배치의 직접 접근(`localAgentFiles`). 왜: Runner 계정은 Agent가 쓸 수 있는 폴더에 쓰지 않는다.
+   */
+  agentFiles?: AgentFiles;
   verified?: (agent: Agent, model: string, options: string) => boolean;
   updater?: { tryClaim(): (() => void) | null; applyPending(): Promise<unknown> };
   /**
@@ -84,8 +96,22 @@ export class Execution {
   readonly #jobs = new Set<string>();
   readonly #reservations = new Set<SessionState>();
   #recovered = false;
-  constructor(options: ExecutionOptions) { this.#d = options; this.launches = new Launches(options.home, options.identity); }
+  #isolation: IsolationLayer | undefined;
+  constructor(options: ExecutionOptions) { this.#d = options; this.#isolation = options.isolation; this.launches = new Launches(options.home, options.identity); }
   get heavy(): HeavySemaphore { return this.#d.heavy; }
+  /** 하위 Agent 정의 파일을 다루는 방법(전용 계정이면 Agent 계정). */
+  get agentFiles(): AgentFiles { return this.#d.agentFiles ?? localAgentFiles; }
+  /** 지금 쓰는 격리 계층. 없으면 실제 실행을 거부한다(Q-08). */
+  get isolation(): IsolationLayer | undefined { return this.#isolation; }
+  /** 준비 점검이 고른 격리 계층으로 바꾼다. undefined면 새 claim·실행을 거부한다. 이미 실행 중인 세션은 시작 때 계층을 그대로 쓴다. */
+  setIsolation(isolation: IsolationLayer | undefined): void { this.#isolation = isolation; }
+
+  /** 실행 직전 계층. 재확인이 실패하면 거부를 유지하고 실행하지 않는다. */
+  async #currentIsolation(): Promise<IsolationLayer> {
+    if (this.#d.recheckIsolation) this.#isolation = await this.#d.recheckIsolation();
+    if (!this.#isolation) throw new IsolationUndecidedError();
+    return this.#isolation;
+  }
 
   /** 서버 보유 대조가 끝나기 전에는 새 claim을 허용하지 않는다. */
   async recover(holds?: ExecutionHold[], signal?: AbortSignal): Promise<boolean> {
@@ -102,7 +128,7 @@ export class Execution {
       if (hold.boot_id === null || hold.fence === null) return false;
       const proof = hold.slot_state === 'none' && hold.pgid === null
         ? { kind: 'no_process' as const, bootId: hold.boot_id }
-        : await this.launches.reconcile({ job: hold.job, hostId: hold.host_id, bootId: hold.boot_id, processGroup: hold.pgid });
+        : await this.launches.reconcile({ job: hold.job, hostId: hold.host_id, bootId: hold.boot_id, processGroup: hold.pgid, cgroup: hold.cgroup });
       if (!proof) return false;
       if (hold.attempt !== null) {
         try { await this.#report('interruptAttempt', { epoch: hold.epoch, params: { attemptId: hold.attempt }, body: { fence: hold.fence, reason: 'reboot', at: new Date().toISOString() } }, signal); }
@@ -123,7 +149,7 @@ export class Execution {
   }
 
   async claim(capacity: number): Promise<ClaimedJob | null> {
-    if (!this.#d.isolation || !this.#recovered || !this.#d.ready()) return null;
+    if (!this.#isolation || !this.#recovered || !this.#d.ready()) return null;
     if (!Number.isSafeInteger(capacity) || capacity < 0) throw new RangeError('실행 용량이 올바르지 않습니다.');
     // 기존 보유는 서버의 claim 트랜잭션에서 빼므로 전체 한도를 그대로 보낸다.
     const allowed = capacity > 0 && (['dev', 'qa'] as const).some(role =>
@@ -175,7 +201,7 @@ export class Execution {
 
   async #command(job: LaunchJob, agent: Agent, launch: Launch, signal?: AbortSignal, heavyHeld = false) {
     const d = this.#d;
-    if (!d.isolation) throw new IsolationUndecidedError();
+    if (!this.#isolation) throw new IsolationUndecidedError();
     if (!this.#recovered || !d.ready()) throw new Error('Runner 정리가 끝나기 전에는 명령을 실행하지 않습니다.');
     const controller = new AbortController();
     this.#controllers.add(controller);
@@ -194,8 +220,16 @@ export class Execution {
       gate = d.updater?.tryClaim();
       if (d.updater && !gate) throw new Error('CLI 업데이트 중에는 명령을 시작하지 않습니다.');
       this.#assertStart(agent, 1, reservation);
-      const wrapped = d.isolation.wrap(launch, agent);
-      await this.#report('acquireJobSlots', { epoch: job.epoch, params: { id: job.id }, body: { fence: job.fence, hostId: d.identity.hostId } }, stopped);
+      // ①·CI 명령은 격리 계층의 command(전용 계정이면 래퍼 ci-run)로 감싼다. fake 계층(시험)만 wrap으로 대신한다.
+      const layer = await this.#currentIsolation();
+      const wrapped = layer.command ? layer.command(launch) : layer.wrap(launch, agent);
+      // CI job(integrate·ci_retry)은 claim 때 이미 물리 슬롯을 예약한다(reserved). 그때는 다시 받지 않고 그 예약으로 /process를 보낸다.
+      // 왜: 서버는 슬롯이 없는(none) 보유에만 acquire를 허락한다. 시도 job은 세션이 끝나 슬롯을 돌려준 뒤라 none이다.
+      const current = (await this.#call('getExecutionHolds', { epoch: job.epoch }, stopped)).body.holds
+        .find(h => h.job === job.id && h.epoch === job.epoch && h.fence === job.fence && h.host_id === d.identity.hostId && !h.closed_at);
+      if (current?.slot_state !== 'reserved') {
+        await this.#report('acquireJobSlots', { epoch: job.epoch, params: { id: job.id }, body: { fence: job.fence, hostId: d.identity.hostId } }, stopped);
+      }
       acquired = true;
       const logs: Record<'stdout' | 'stderr', Buffer[]> = { stdout: [], stderr: [] };
       const sizes = { stdout: 0, stderr: 0 };
@@ -268,7 +302,7 @@ export class Execution {
   async #execute(job: AttemptJob, options: AttemptOptions): Promise<AttemptOutput> {
     const d = this.#d, epoch = d.epoch(), role = job.payload.kind === 'dev' || job.payload.kind === 'rework' ? 'dev' : 'qa';
     if (!d.ready()) throw new Error('Runner 정리가 끝나기 전에는 실행하지 않습니다.');
-    if (!d.isolation) throw new IsolationUndecidedError();
+    if (!this.#isolation) throw new IsolationUndecidedError();
     if (!this.#recovered) throw new Error('launch 대조가 끝나기 전에는 실행하지 않습니다.');
     const slots = this.#attemptSlots(role), budget = slots - 1;
     const controller = new AbortController();
@@ -298,8 +332,9 @@ export class Execution {
       const resume = previous && previous.cwd === work.cwd && previous.agent === job.payload.agent && previous.model === grade.model && previous.effort === grade.effort ? previous.sessionId : undefined;
       const definitions = (await this.#call('getTaskSubagents', { epoch, params: { taskKey: job.payload.taskKey }, query: { role } }, signal)).body;
       const prompt = `${JSON.stringify(job.payload.instructions)}\n\n동시 하위 Agent 예산: ${budget}\n지정 하위 Agent: ${definitions.enabled ? definitions.items.map(i => i.key).join(', ') : '없음'}\n모델: ${grade.model}, Effort: ${grade.effort}\n입력 버전: ${job.payload.inputVersion}\n${options.prompt ?? ''}`;
-      const launch = buildLaunch(job.payload.agent, d.binaries[job.payload.agent], { ...grade, cwd: work.cwd, prompt, ...(resume && { resume }) }, { env: d.env, ...(d.isolation && { isolation: d.isolation }) });
-      const installedSubagents = await installSubagents(work.cwd, job.payload.agent, definitions, grade);
+      const isolation = await this.#currentIsolation();
+      const launch = buildLaunch(job.payload.agent, d.binaries[job.payload.agent], { ...grade, cwd: work.cwd, prompt, ...(resume && { resume }) }, { env: d.env, isolation });
+      const installedSubagents = await installSubagents(work.cwd, job.payload.agent, definitions, grade, this.agentFiles);
       signal.throwIfAborted();
       this.#assertStart(job.payload.agent, slots, reservation);
       const start = await this.#report('startJob', { epoch, params: { id: job.id }, body: { fence: job.fence, ...d.identity, headSha: work.headSha, installedSubagents } }, signal);
@@ -316,7 +351,7 @@ export class Execution {
       d.sessions.push(session);
       this.#reservations.delete(reservation);
       const active = session;
-      const verified = d.isolation ? d.verified?.(job.payload.agent, grade.model, sessionOptions(job.payload.agent, d.isolation, resume ? 'resume' : 'new')) ?? false : false;
+      const verified = d.verified?.(job.payload.agent, grade.model, sessionOptions(job.payload.agent, isolation, resume ? 'resume' : 'new')) ?? false;
       const apply = (records: ReturnType<JsonlDecoder['end']>) => {
         for (const record of records) for (const event of parse(record)) {
           observer.apply(event);
@@ -361,7 +396,7 @@ export class Execution {
       d.sessions.splice(d.sessions.indexOf(session), 1);
       session = undefined;
       if (definitions.enabled) {
-        try { await installSubagents(work.cwd, job.payload.agent, { enabled: false, items: [] }, grade); }
+        try { await installSubagents(work.cwd, job.payload.agent, { enabled: false, items: [] }, grade, this.agentFiles); }
         catch (error) { throw new Error('실행을 마친 하위 Agent 정의의 소유 hash를 확인할 수 없습니다.', { cause: error }); }
       }
       // shortcut: CLI 기록 형식이 검증되기 전에는 실제 사용을 확정하지 않는다. M5-03 실증 뒤 기록 해석기를 연결한다.
@@ -387,7 +422,7 @@ export class Execution {
         const holds = (await this.#call('getExecutionHolds', { epoch })).body.holds;
         const hold = holds.find(h => h.job === job.id);
         if (hold) {
-          const proof = await this.launches.reconcile({ job: job.id, ...d.identity, processGroup: hold.pgid });
+          const proof = await this.launches.reconcile({ job: job.id, ...d.identity, processGroup: hold.pgid, cgroup: hold.cgroup });
           if (proof) {
             await this.#report('releaseJob', { epoch, params: { id: job.id }, body: { fence: job.fence, hostId: d.identity.hostId, proof, at: new Date().toISOString() } });
             await this.#completeJob(jobRef);
@@ -415,8 +450,9 @@ export class Execution {
     const d = this.#d;
     const holds = (await this.#call('getExecutionHolds', { epoch: job.epoch }, AbortSignal.timeout(10000))).body.holds;
     const hold = holds.find(h => h.job === job.id && h.epoch === job.epoch && h.fence === job.fence && h.host_id === d.identity.hostId && h.boot_id === d.identity.bootId);
-    if (!hold || hold.cgroup !== null) throw new Error('현재 서버 보유의 종료 증명을 확인할 수 없습니다.');
-    const serverProof = await this.launches.reconcile({ job: job.id, hostId: d.identity.hostId, bootId: d.identity.bootId, processGroup: hold.pgid });
+    if (!hold) throw new Error('현재 서버 보유의 종료 증명을 확인할 수 없습니다.');
+    // 서버가 기록한 cgroup이 있으면 cgroup_empty, 없으면 group_empty를 낸다(조정자 결정 3). 기록과 다르면 증거를 내지 않는다.
+    const serverProof = await this.launches.reconcile({ job: job.id, hostId: d.identity.hostId, bootId: d.identity.bootId, processGroup: hold.pgid, cgroup: hold.cgroup });
     if (!serverProof) throw new Error('서버가 기록한 프로세스의 종료를 확인할 수 없습니다.');
     return serverProof;
   }
@@ -455,7 +491,9 @@ export class Execution {
   async #completeJob(job: LaunchJob): Promise<void> {
     for (const record of await this.launches.list()) {
       if (record.job.id !== job.id || record.job.fence !== job.fence || record.job.epoch !== job.epoch || record.completedAt) continue;
-      await this.launches.complete(record.launchId, record.pgid === null ? { kind: 'no_process', bootId: record.bootId } : { kind: 'group_empty', bootId: record.bootId, processGroup: record.pgid });
+      await this.launches.complete(record.launchId, record.pgid === null ? { kind: 'no_process', bootId: record.bootId }
+        : record.cgroup !== null ? { kind: 'cgroup_empty', bootId: record.bootId, processGroup: record.pgid, cgroup: record.cgroup }
+          : { kind: 'group_empty', bootId: record.bootId, processGroup: record.pgid });
     }
   }
 

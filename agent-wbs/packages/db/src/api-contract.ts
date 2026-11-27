@@ -50,10 +50,12 @@ export interface CleanupProof {
   job: string;
   hostId: string | null;
   bootId: string | null;
-  proof: 'no_process' | 'group_empty' | 'boot_changed';
+  proof: 'no_process' | 'group_empty' | 'cgroup_empty' | 'boot_changed';
   /** 예약만 하고 프로세스를 만들지 않은 보유가 부팅 변경으로 끝나면 null이다(API boot_changed). */
   processGroup?: number | null;
   currentBootId?: string;
+  /** cgroup_empty: 보유에 기록된 cgroup 경로(0040). */
+  cgroup?: string;
 }
 export interface CommandResultBody {
   status: 'done' | 'failed';

@@ -41,6 +41,21 @@ function setup(): void {
   writeExec(join(area, 'cli', 'codex', '1.0.0', 'bin', 'codex'), fakeCli);
   writeExec(join(area, 'cli', 'claude', '2.0.0', 'bin', 'claude'), fakeCli);
   writeExec(join(root, 'outside-cli'), fakeCli);
+  // 진입점이 아닌 실행 파일·바꿔치기 모양(조정자 결정 4 재현)
+  mkdirSync(join(area, 'cli', 'codex', '1.0.0', 'vendor'), { recursive: true });
+  writeExec(join(area, 'cli', 'codex', '1.0.0', 'vendor', 'bwrap'), fakeCli);
+  symlinkSync('1.0.0', join(area, 'cli', 'codex', '9.9.9'));
+  mkdirSync(join(area, 'cli', 'codex', '1.0.1', 'bin'), { recursive: true });
+  symlinkSync(join(area, 'cli', 'codex', '1.0.0', 'bin', 'codex'), join(area, 'cli', 'codex', '1.0.1', 'bin', 'codex'));
+  mkdirSync(join(area, 'cli', 'codex', 'evil', 'bin'), { recursive: true });
+  writeExec(join(area, 'cli', 'codex', 'evil', 'bin', 'codex'), fakeCli);
+  // ci-run용 작업 폴더 안 도구와 고정 PATH의 pnpm
+  mkdirSync(join(worktree, 'node_modules', '.bin'), { recursive: true });
+  mkdirSync(join(worktree, '.awbs-home'), { recursive: true });
+  writeExec(join(worktree, 'node_modules', '.bin', 'tool'), fakeCli);
+  mkdirSync(join(area, 'cli', 'pnpm', '1.0.0', 'bin'), { recursive: true });
+  writeExec(join(area, 'cli', 'pnpm', '1.0.0', 'bin', 'pnpm'), fakeCli);
+  symlinkSync('1.0.0', join(area, 'cli', 'pnpm', 'current'));
   writeConf(conf, { AGENT_USER: me });
   const original = readFileSync(join(import.meta.dirname, '..', '..', 'scripts', 'isolation', 'awbs-agent-exec.sh'), 'utf8');
   expect(original).toContain('\nCONF=/etc/agentwbs/agent-exec.conf\n');
@@ -74,7 +89,8 @@ function recorded(): { cwd: string; args: string[]; env: Record<string, string>;
   return { cwd: pick('cwd=')[0] ?? '', args: pick('arg='), env, stdin: pick('stdin=').join('\n') };
 }
 
-const codex = join(area, 'cli', 'codex', 'current', 'bin', 'codex');
+/** 진입점은 버전 폴더의 bin/<agent>다. current 링크는 Runner가 실행 시점의 버전으로 바꿔 넘긴다(조정자 결정 4). */
+const codex = join(area, 'cli', 'codex', '1.0.0', 'bin', 'codex');
 const runArgs = (over: { agent?: string; cwd?: string; bin?: string; env?: string[] } = {}) => [
   'run', '--agent', over.agent ?? 'codex', '--cwd', over.cwd ?? worktree, ...(over.env ?? []).flatMap((e) => ['--env', e]), '--', over.bin ?? codex, 'exec', '--json', '-',
 ];
@@ -97,7 +113,7 @@ describe.skipIf(!usable)('awbs-agent-exec 실행 래퍼(bash, 실제 실행)', (
     expect(Object.keys(got.env).filter((k) => k !== 'PWD' && k !== 'SHLVL' && k !== '_').sort()).toEqual(
       ['DISABLE_AUTOUPDATER', 'DISABLE_UPDATES', 'HOME', 'LANG', 'LOGNAME', 'PATH', 'TMPDIR', 'USER'],
     );
-    expect(got.env).toMatchObject({ HOME: home, USER: me, TMPDIR: `${home}/tmp`, LANG: 'ko_KR.UTF-8', PATH: `${join(area, 'runtime', 'node', 'bin')}:/usr/local/bin:/usr/bin:/bin` });
+    expect(got.env).toMatchObject({ HOME: home, USER: me, TMPDIR: `${home}/tmp`, LANG: 'ko_KR.UTF-8', PATH: `${join(area, 'runtime', 'node', 'bin')}:${join(area, 'cli', 'pnpm', 'current', 'bin')}:/usr/local/bin:/usr/bin:/bin` });
     expect(got.env.AWBS_RUNNER_TOKEN).toBeUndefined();
   });
 
@@ -106,6 +122,11 @@ describe.skipIf(!usable)('awbs-agent-exec 실행 래퍼(bash, 실제 실행)', (
     ['작업 폴더가 worktrees 자체', { cwd: join(area, 'worktrees') }, '작업 폴더'],
     ['작업 폴더 링크가 Runner 홈을 가리킴', { cwd: join(area, 'worktrees', 'p1', 'escape') }, '작업 폴더'],
     ['CLI가 설치본 밖', { bin: join(root, 'outside-cli') }, 'CLI'],
+    ['current 링크 경로(버전으로 바꾸지 않음)', { bin: join(area, 'cli', 'codex', 'current', 'bin', 'codex') }, '진입점'],
+    ['CLI 묶음 안의 다른 실행 파일(bwrap 등)', { bin: join(area, 'cli', 'codex', '1.0.0', 'vendor', 'bwrap') }, '진입점'],
+    ['링크로 만든 버전 폴더', { bin: join(area, 'cli', 'codex', '9.9.9', 'bin', 'codex') }, '진입점'],
+    ['진입점 링크가 버전 폴더 밖을 가리킴', { bin: join(area, 'cli', 'codex', '1.0.1', 'bin', 'codex') }, '진입점'],
+    ['버전이 숫자.숫자.숫자가 아님', { bin: join(area, 'cli', 'codex', 'evil', 'bin', 'codex') }, '진입점'],
     ['다른 Agent의 CLI', { agent: 'claude' }, 'CLI'],
     ['모르는 Agent', { agent: 'bash' }, '--agent'],
     ['토큰 환경 변수', { env: ['GH_TOKEN=ghp_x'] }, '허용하지 않는 환경 변수'],
@@ -175,10 +196,100 @@ describe.skipIf(!usable)('awbs-agent-exec 실행 래퍼(bash, 실제 실행)', (
     expect(r.code).toBe(2);
     expect(existsSync(out)).toBe(false);
     symlinkSync('2.0.0', join(area, 'cli', 'claude', 'current'));
+    // current 링크 경로는 받지 않는다. 버전 폴더의 진입점만.
     r = wrapper(['login-status', '--agent', 'claude', '--', join(area, 'cli', 'claude', 'current', 'bin', 'claude')]);
+    expect(r.code).toBe(2);
+    r = wrapper(['login-status', '--agent', 'claude', '--', join(area, 'cli', 'claude', '2.0.0', 'bin', 'claude')]);
     expect(r.code).toBe(0);
     got = recorded();
     expect(got.args).toEqual(['auth', 'status', '--json']);
+  });
+
+  test('ci-run: 고정 PATH의 명령을 작업 폴더에서, 허용 환경만 새로 만들어 실행한다', () => {
+    rmSync(out, { force: true });
+    const ciHome = join(worktree, '.awbs-home');
+    let r = wrapper(['ci-run', '--cwd', worktree, '--home', ciHome, '--env', 'CI=1', '--env', 'NODE_ENV=test', '--', 'pnpm', 'run', 'test'], '');
+    expect(r, r.stderr).toMatchObject({ code: 0, stderr: '' });
+    let got = recorded();
+    expect(got.cwd).toBe(worktree);
+    expect(got.args).toEqual(['run', 'test']);
+    // 실행마다 새 HOME·TMPDIR(조정자 결정 8): Agent 계정 공용 HOME이 아니라 검사 사본 안.
+    expect(got.env).toMatchObject({ CI: '1', NODE_ENV: 'test', HOME: ciHome, TMPDIR: join(ciHome, 'tmp'), USER: me });
+    expect(got.env.HOME).not.toBe(home);
+    expect(got.env.AWBS_RUNNER_TOKEN).toBeUndefined();
+    rmSync(out, { force: true });
+    r = wrapper(['ci-run', '--cwd', worktree, '--home', ciHome, '--', './node_modules/.bin/tool', 'list']);
+    expect(r.code, r.stderr).toBe(0);
+    got = recorded();
+    expect(got.args).toEqual(['list']);
+  });
+
+  test.each([
+    ['작업 폴더가 worktrees 밖', ['--cwd', join(area, 'inputs'), '--', 'pnpm'], '작업 폴더'],
+    ['작업 폴더 링크가 Runner 홈', ['--cwd', join(area, 'worktrees', 'p1', 'escape'), '--', 'pnpm'], '작업 폴더'],
+    ['경로 명령이 작업 폴더 밖', ['--cwd', worktree, '--', join(root, 'outside-cli')], '작업 폴더 안'],
+    ['경로 명령이 링크로 밖을 가리킴', ['--cwd', worktree, '--', '../escape/x'], '작업 폴더 안'],
+    ['고정 PATH에 없는 이름', ['--cwd', worktree, '--', 'no-such-tool-x'], 'PATH'],
+    ['토큰 환경 변수', ['--cwd', worktree, '--env', 'GH_TOKEN=ghp_x', '--', 'pnpm'], '허용하지 않는 환경 변수'],
+    ['환경 값에 공백', ['--cwd', worktree, '--env', 'CI=1 2', '--', 'pnpm'], '허용하지 않는 환경 변수'],
+    ['명령 없음', ['--cwd', worktree, '--'], '명령'],
+    ['--home 없음', ['--cwd', worktree, '--', 'pnpm'], '--home'],
+    ['--home이 다른 곳', ['--cwd', worktree, '--home', join(area, 'inputs'), '--', 'pnpm'], '--home'],
+  ])('ci-run 거부: %s', (_name, args, message) => {
+    rmSync(out, { force: true });
+    const withHome = args.includes('--home') || message === '--home' ? args : [args[0] ?? '', args[1] ?? '', '--home', `${args[1] ?? ''}/.awbs-home`, ...args.slice(2)];
+    const r = wrapper(['ci-run', ...withHome]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain(message);
+    expect(existsSync(out)).toBe(false);
+  });
+
+  test('git-inspect·git-bundle: Agent 계정 git으로 HEAD·상태·bundle만 낸다(조정자 결정 6)', () => {
+    const repo = join(area, 'worktrees', 'p1', 'git-1');
+    mkdirSync(repo, { recursive: true });
+    const g = (...a: string[]) => spawnSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@x', ...a], { encoding: 'utf8' });
+    g('init', '-q', '-b', 'agent/x'); writeFileSync(join(repo, 'a'), 'a'); g('add', 'a'); g('commit', '-qm', 'a');
+    const head = g('rev-parse', 'HEAD').stdout.trim();
+    const r = wrapper(['git-inspect', '--cwd', repo]);
+    expect(r, r.stderr).toMatchObject({ code: 0, stdout: `head ${head}\ndirty 0\n` });
+    writeFileSync(join(repo, 'b'), 'untracked');
+    expect(wrapper(['git-inspect', '--cwd', repo]).stdout).toContain('dirty 1');
+    rmSync(join(repo, 'b'));
+    g('update-index', '--assume-unchanged', 'a');
+    expect(wrapper(['git-inspect', '--cwd', repo]).stdout).toContain('dirty 1');
+    g('update-index', '--no-assume-unchanged', 'a');
+    const b = spawnSync(exec, ['git-bundle', '--cwd', repo, '--branch', 'agent/x'], { env: { PATH: '/usr/bin:/bin' } });
+    expect(b.status, b.stderr.toString()).toBe(0);
+    expect(b.stdout.subarray(0, 20).toString()).toMatch(/^# v[23] git bundle/);
+    for (const bad of [['--cwd', repo, '--branch', '../x'], ['--cwd', join(area, 'inputs'), '--branch', 'agent/x'], ['--cwd', repo, '--branch', '-x']]) {
+      expect(wrapper(['git-bundle', ...bad]).code).toBe(2);
+    }
+    expect(wrapper(['git-inspect', '--cwd', runnerHome]).code).toBe(2);
+  });
+
+  test('agent-file: 하위 Agent 정의만 Agent 계정으로 읽기·쓰기·지우기(fix2 추가)', () => {
+    const file = (args: string[], input?: string) => spawnSync(exec, ['agent-file', ...args], { input, encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } });
+    const rel = '.codex/agents/code-reviewer.toml';
+    expect(file(['read', '--cwd', worktree, '--path', rel]).status).toBe(3);
+    expect(file(['write', '--cwd', worktree, '--path', rel], 'name = "x"\n').status).toBe(0);
+    expect(readFileSync(join(worktree, rel), 'utf8')).toBe('name = "x"\n');
+    expect(file(['read', '--cwd', worktree, '--path', rel]).stdout).toBe('name = "x"\n');
+    expect(file(['remove', '--cwd', worktree, '--path', rel]).status).toBe(0);
+    expect(existsSync(join(worktree, rel))).toBe(false);
+    for (const bad of [['read', '--cwd', worktree, '--path', '../x/.codex/agents/a.toml'], ['write', '--cwd', worktree, '--path', '.codex/agents/../../a.toml'],
+      ['write', '--cwd', worktree, '--path', '.git/config'], ['read', '--cwd', join(area, 'inputs'), '--path', rel], ['chmod', '--cwd', worktree, '--path', rel]]) {
+      expect(file(bad, 'x').status, bad.join(' ')).toBe(2);
+    }
+    expect(file(['write', '--cwd', worktree, '--path', rel], 'x'.repeat(1024 * 1024 + 1)).status).toBe(2);
+  });
+
+  test('cli-version: 진입점 규칙으로 Agent 계정에서 --version만', () => {
+    rmSync(out, { force: true });
+    const r = wrapper(['cli-version', '--tool', 'codex', '--', codex]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(recorded().args).toEqual(['--version']);
+    expect(wrapper(['cli-version', '--tool', 'codex', '--', join(area, 'cli', 'codex', '1.0.0', 'vendor', 'bwrap')]).code).toBe(2);
+    expect(wrapper(['cli-version', '--tool', 'sh', '--', codex]).code).toBe(2);
   });
 
   test('모르는 하위 명령은 거부', () => {

@@ -9,7 +9,8 @@ import { githubWriteGate } from './github/write-gate.ts';
 import { createResetCleanup, type ResetCleanupDeps } from './cleanup/reset.ts';
 import { CliUpdater, cliBinary, type CliRegistry } from './cli-update/manager.ts';
 import { cliAwareRun, cliEnvironment } from './cli-update/registry.ts';
-import { AGENT_USER, agentIsolationConfig, agentLoginRun } from './cli/dedicated-user.ts';
+import { AGENT_USER, agentIsolationConfig, agentLoginRun, selectIsolation } from './cli/dedicated-user.ts';
+import type { IsolationLayer } from './cli/isolation.ts';
 import { lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { repositoryIdFor } from './git/identity.ts';
@@ -32,6 +33,10 @@ import { Execution, type ExecutionOptions } from './exec/session.ts';
 import { Launches } from './exec/launches.ts';
 import { CiJobs, type CiJobsOptions } from './ci/jobs.ts';
 import { AttemptFlow, type AttemptFlowOptions } from './jobs/attempt-flow.ts';
+import { bindTaskCheck, type TaskCheckSources } from './jobs/task-check.ts';
+import { createTestCollector } from './ci/collect-tests.ts';
+import { wrapperAgentFiles } from './git/agent-git.ts';
+import { ciLaunch } from './ci/launch.ts';
 
 /** 세션 실행 계층(M5)이 시도 하나를 실행하는 동안 등록하는 보유. 지금(M4)은 비어 있다. */
 export interface ActiveSession extends SessionState {
@@ -76,10 +81,22 @@ export interface RunnerAppDeps {
    * CLI 로그인 상태는 Agent 계정으로 확인한다(isolation.md §12). 없으면 지금처럼 Runner 홈.
    */
   agentRoot?: string | null;
-  /** Q-08 승인 전에는 fake 명령 실행기만 주입한다. */
+  /** 시험용 CI 실행기 주입(fake 명령 실행기). 전용 계정 격리(agentRoot)에서는 받지 않는다(Runner 계정 직접 실행 금지, 조정자 결정 1). */
   ci?:Pick<CiJobsOptions,'repo'|'execute'|'collectTests'>;
-  /** 검증한 결과 수집 공급원이 연결된 경우에만 시도 흐름을 시작한다. */
-  jobs?: Pick<AttemptFlowOptions, 'collect' | 'taskCheck'>;
+  /**
+   * 실제 CI 실행기(integrate·ci_retry, 조정자 결정 1·2). main이 켠다.
+   * - 저장소: GitHub 설정의 저장소를 Runner 로컬 clone에서 연다. clone이 아직 없으면(초기 분석 전) 생길 때까지 기다린다.
+   * - 명령: `Execution.command`(격리 계층의 command = 전용 계정이면 래퍼 ci-run, 사용자 scope 안)로만 실행한다.
+   * - 시험 목록: `createTestCollector`(pipeline 명령 → vitest·playwright 목록, 형식이 다르면 수집 불가).
+   * - 격리 계층이 없으면(전용 계정 미설치·점검 실패) CI job을 받지 않는다.
+   */
+  ciAuto?: boolean;
+  /**
+   * 검증한 결과 수집 공급원이 연결된 경우에만 시도 흐름을 시작한다.
+   * `taskCheck`는 실제 ① 공급원(`TaskCheckSources`)을 넘긴다. 앱이 자기 GitHub 클라이언트·Execution·Runner로 `bindTaskCheck`를 부른다.
+   * 함수를 직접 넘기는 모양은 시험용이다(실제 ①과 PR 생성을 거치지 않는다).
+   */
+  jobs?: Pick<AttemptFlowOptions, 'collect'> & { taskCheck: AttemptFlowOptions['taskCheck'] | TaskCheckSources };
 }
 
 /** 서버 정책을 받기 전 입력 확인 기본 주기(5분, 서버 정책 inputCheckMinutes의 기본값과 같음). */
@@ -106,7 +123,9 @@ export class RunnerApp {
   readonly github: { client: GitHubClient; connector: GithubConnector; mode: GithubMode; checkDeployKeys(): Promise<void> } | undefined;
   readonly bins: { codex: string; claude: string };
   readonly inputs: InputChangeReporter;
-  readonly ci:CiJobs|undefined;
+  #ci:CiJobs|undefined;
+  /** CI 처리기. 시험 주입이면 생성 때, 실제 실행기(ciAuto)면 로컬 clone이 생긴 뒤 만든다. */
+  get ci():CiJobs|undefined { return this.#ci; }
   #identity: { hostId: string; bootId: string } | undefined;
   readonly #d: RunnerAppDeps;
   readonly #run: RunCommand;
@@ -119,6 +138,8 @@ export class RunnerApp {
   /** 치명적 오류(인증 실패 등) 발생 시 앱 전체를 멈추는 내부 신호(P1-3). */
   #halt: ((error: unknown) => void) | undefined;
   #tokenSource: TokenSource | undefined;
+  /** 마지막으로 알린 격리 보류 이유. 같은 이유를 매번 다시 경고하지 않는다. */
+  #isolationReason: string | null | undefined;
 
   constructor(d: RunnerAppDeps) {
     this.#d = d;
@@ -189,7 +210,7 @@ export class RunnerApp {
       identity: () => this.identity,
       launchCheck: async hold => {
         if (!hold.hostId || !hold.bootId) return 'unknown';
-        return await new Launches(d.home, this.identity).reconcile({ job: hold.job, hostId: hold.hostId, bootId: hold.bootId, processGroup: hold.processGroup }) ? 'none' : 'unknown';
+        return await new Launches(d.home, this.identity).reconcile({ job: hold.job, hostId: hold.hostId, bootId: hold.bootId, processGroup: hold.processGroup, cgroup: hold.cgroup }) ? 'none' : 'unknown';
       },
       // 원격 초기화는 GitHub 설정이 있을 때 실제 클라이언트로 연결한다(교차 리뷰 P1-2).
       ...(this.github && { remote: createGithubRemoteCleanup({ client: this.github.client, warn: d.warn,
@@ -232,14 +253,20 @@ export class RunnerApp {
       budget: role => this.runner.policy?.subagentBudget[role] ?? 0,
       updater: this.updater,
       prepare: () => Promise.reject(new Error('작업 폴더 준비 공급원이 연결되지 않았습니다.')),
+      // 전용 계정 격리(Q-08)면 실행 직전마다 래퍼 check와 사용자 scope를 다시 확인한다. 시험이 격리 계층을 직접 주면 그대로 쓴다.
+      ...(d.agentRoot && !d.execution?.isolation && { recheckIsolation: () => this.refreshIsolation() }),
+      // 전용 계정 배치: 하위 Agent 정의 파일은 Agent 계정(래퍼 agent-file)으로만 쓴다(fix2 추가).
+      ...(d.agentRoot && { agentFiles: wrapperAgentFiles() }),
       ...d.execution,
     });
-    if (d.ci && this.github) this.ci = new CiJobs({ ...d.ci,api:d.api,outbox:this.runner.outbox,runnerId:runnerId(),
-      directory:join(d.home,'state','ci'),epoch:() => d.state.snapshot.epoch,ready:() => this.runner.ready,
-      identity:{ get hostId() { return app.identity.hostId; },get bootId() { return app.identity.bootId; } },
-      github:this.github.client,heavy:this.heavy,warn:d.warn });
-    if (d.jobs) this.jobs = new AttemptFlow({
+    if (d.ci && d.agentRoot) throw new Error('전용 계정 격리에서는 CI 실행기를 주입할 수 없습니다. 실제 실행기(ciAuto)는 Agent 계정으로만 돈다.');
+    if (d.ci && this.github) this.#ci = this.#ciJobs(d.ci);
+    const taskCheck = d.jobs?.taskCheck;
+    if (d.jobs && taskCheck) this.jobs = new AttemptFlow({
       ...d.jobs, execution: this.execution, runner: this.runner, api: d.api,
+      // 실제 ①은 앱의 GitHub 클라이언트로 PR을 연다. GitHub 설정이 없으면 null(PR 없이 보고, 서버가 통합을 보류).
+      taskCheck: typeof taskCheck === 'function' ? taskCheck
+        : bindTaskCheck({ ...taskCheck, api: d.api, runner: this.runner, execution: this.execution, github: this.github?.client ?? null }),
       epoch: () => d.state.snapshot.epoch,
       identity: { get hostId() { return app.identity.hostId; }, get bootId() { return app.identity.bootId; } },
       onError: error => {
@@ -247,6 +274,58 @@ export class RunnerApp {
         else d.warn(`시도 흐름 실패: ${message(error)}`);
       },
     });
+  }
+
+  #ciJobs(sources: Pick<CiJobsOptions,'repo'|'execute'|'collectTests'> & Pick<CiJobsOptions,'collectTestsFor'>): CiJobs {
+    const d = this.#d, github = this.github;
+    if (!github) throw new Error('GitHub 설정 없이 CI 처리기를 만들 수 없습니다.');
+    // eslint-disable-next-line @typescript-eslint/no-this-alias -- identity getter가 생성 뒤의 현재 식별자를 읽는다.
+    const app = this;
+    return new CiJobs({ ...sources,api:d.api,outbox:this.runner.outbox,runnerId:d.state.snapshot.runnerId,
+      directory:join(d.home,'state','ci'),epoch:() => d.state.snapshot.epoch,ready:() => this.runner.ready,
+      identity:{ get hostId() { return app.identity.hostId; },get bootId() { return app.identity.bootId; } },
+      github:github.client,heavy:this.heavy,warn:d.warn });
+  }
+
+  /**
+   * 실제 CI 실행기를 준비한다(ciAuto). 로컬 clone이 있으면 열어서 한 번만 만든다. 없으면 undefined(다음 주기에 다시 본다).
+   * 명령은 모두 `Execution.command`로 간다: job의 슬롯·보유·launch 기록을 거치고, 격리 계층의 command로 Agent 계정에서 돈다.
+   */
+  async #ensureCi(): Promise<CiJobs | undefined> {
+    if (this.#ci || !this.#d.ciAuto || !this.github) return this.#ci;
+    const repo = this.#d.github?.repo;
+    if (!repo) return undefined;
+    const repositoryId = repositoryIdFor(`https://github.com/${repo.owner}/${repo.repo}`);
+    if (!await lstat(join(this.#d.home, 'repos', repositoryId)).then(() => true, () => false)) return undefined;
+    const git = await GitRepository.open(this.#d.home, repositoryId, { agentRoot: this.#d.agentRoot ?? null });
+    const command = (job: { id: string; fence: number; epoch: number }, argv: readonly string[], cwd: string, signal?: AbortSignal) =>
+      this.execution.command({ id: job.id, fence: job.fence, epoch: job.epoch }, 'Codex', ciLaunch(argv, cwd, this.#d.env), signal, { heavyHeld: true });
+    this.#ci = this.#ciJobs({
+      repo: git, execute: command,
+      // job에 묶인 수집기를 쓴다. 이 기본값은 쓰이지 않아야 한다(쓰이면 수집 불가로 멈춘다).
+      collectTests: () => Promise.reject(new Error('시험 목록 수집 불가: job에 묶이지 않은 수집 요청입니다.')),
+      collectTestsFor: (job, argv, cwd, signal) => createTestCollector((list, dir, stopped) => command(job, list, dir, stopped))(argv, cwd, signal),
+    });
+    return this.#ci;
+  }
+
+  /**
+   * Agent 실행 격리 계층을 고른다(Q-08). 준비 점검 뒤와 실행 직전마다 부른다.
+   * - 전용 계정(`agentRoot`)이 없으면 지금 계층을 그대로 둔다. 기본은 실행 거부다.
+   * - 있으면 `selectIsolation`(래퍼 check + 사용자 scope 시험)을 돌려, 통과하면 「전용 계정 + 사용자 scope」, 아니면 거부로 바꾼다.
+   * - 보류 이유가 바뀔 때만 경고한다. 예: 「전용 Agent 계정 점검 실패: wsl_interop_accessible」.
+   * 왜 매번 다시 보나: 준비 점검 뒤에도 WSL 보호·사용자 systemd 상태가 바뀔 수 있다(isolation.md §11).
+   */
+  async refreshIsolation(): Promise<IsolationLayer | undefined> {
+    if (!this.#d.agentRoot || this.#d.execution?.isolation) return this.execution.isolation;
+    const choice = await selectIsolation({ AWBS_AGENT_USER: AGENT_USER }, this.#run);
+    const layer = choice.reason === null ? choice.isolation : undefined;
+    if (choice.reason !== this.#isolationReason) {
+      if (choice.reason !== null) this.#d.warn(`실제 Agent 실행 보류: ${choice.reason}`);
+      this.#isolationReason = choice.reason;
+    }
+    this.execution.setIsolation(layer);
+    return layer;
   }
 
   get identity(): { hostId: string; bootId: string } {
@@ -380,6 +459,7 @@ export class RunnerApp {
     if (!await this.execution.recover(undefined, signal)) throw new Error('launch 대조 실패: unconfirmed 보유가 있어 새 실행을 보류합니다.');
     await this.updater.recover();
     await this.checkReadiness();
+    await this.refreshIsolation();
     await this.reportModels();
     await this.checkGithub(signal).catch((error: unknown) => {
       if (signal?.aborted) throw error;
@@ -405,6 +485,7 @@ export class RunnerApp {
     }, { intervalMs: 1000, onError: onError('시도 예약') }));
     this.#timers.push(scheduleDaily(async () => {
       await this.checkReadiness();
+      await this.refreshIsolation();
       if (this.#d.cliUpdates !== false) {
         await this.updater.check();
         await this.updater.applyPending();
@@ -413,8 +494,10 @@ export class RunnerApp {
     }, { onError: onError('매일 점검') }));
     this.#timers.push(scheduleDaily(() => this.reportConcurrency(), { intervalMs: 60_000, onError: onError('동시 실행 보고') }));
     this.#timers.push(scheduleDaily(() => this.reporter.reportUsage(this.usage), { intervalMs: 60_000, onError: onError('사용량 보고') }));
-    if (this.ci) this.#timers.push(scheduleDaily(async () => {
-      await this.ci?.runNext(this.reporter.caps?.total ?? 0,signal);
+    if (this.#ci || this.#d.ciAuto) this.#timers.push(scheduleDaily(async () => {
+      // 실제 실행기는 격리 계층(전용 계정 + scope)이 있을 때만 CI job을 받는다. 없으면 받아도 실행할 수 없다.
+      if (this.#d.ciAuto && !this.execution.isolation) return;
+      await (await this.#ensureCi())?.runNext(this.reporter.caps?.total ?? 0,signal);
     },{ intervalMs:1000,onError:onError('통합·CI 재실행') }));
     // 주기는 서버 정책(inputCheckMinutes)을 따른다. 정책이 없으면 기본 5분(P3-1 임시값).
     const policyMinutes = this.runner.policy?.inputCheckMinutes;

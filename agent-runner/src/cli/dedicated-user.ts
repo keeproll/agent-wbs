@@ -1,7 +1,8 @@
 import { realpathSync } from 'node:fs';
-import { isAbsolute, join, normalize } from 'node:path';
+import { isAbsolute, join, normalize, resolve } from 'node:path';
 import type { Agent } from '../api/generated/client.ts';
-import type { RunCommand } from '../readiness/command.ts';
+import { createRunCommand, type RunCommand } from '../readiness/command.ts';
+import { probeUserScope, withUserScope } from '../exec/scope.ts';
 import { PENDING_ISOLATION, type IsolationLayer, type Launch } from './isolation.ts';
 
 /**
@@ -20,7 +21,7 @@ export interface DedicatedUserConfig {
   sudo?: string;
 }
 
-export type DedicatedUserCode = 'agent_config_invalid' | 'cwd_outside_agent_root' | 'binary_outside_agent_root';
+export type DedicatedUserCode = 'agent_config_invalid' | 'cwd_outside_agent_root' | 'binary_outside_agent_root' | 'agent_permissions_unrestored';
 
 export class DedicatedUserError extends Error {
   readonly code: DedicatedUserCode;
@@ -78,6 +79,36 @@ function inside(real: string, base: string): boolean {
   return real.startsWith(`${base}/`);
 }
 
+/** 버전 폴더 이름: 안정판 숫자.숫자.숫자만(설치 스크립트·CLI 업데이트와 같은 규칙). */
+const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+
+/**
+ * 래퍼에 넘길 CLI 진입점을 정한다(조정자 결정 4). 결과는 `<실제 cli 폴더>/<agent>/<버전>/bin/<agent>`다.
+ * - 입력은 `<root>/cli/<agent>/(current|<버전>)/bin/<agent>` 모양만 받는다. 다른 실행 파일(rg·bwrap 등)은 받지 않는다.
+ * - `current` 링크는 이 시점의 버전 폴더로 바꾼다. 실행 중 CLI 업데이트가 링크를 바꿔도 이 세션은 같은 버전이다.
+ * - 진입점 파일 자체의 링크(패키지 안 codex.js 등)는 따라가지 않고 그대로 넘긴다. CLI가 자기 위치로 패키지를 찾고, 래퍼도 이 모양만 받기 때문이다.
+ *   다만 링크를 따라간 실제 파일이 그 버전 폴더 안인지는 확인한다.
+ * 맞지 않으면 null.
+ */
+export function cliEntryPoint(cfg: Pick<DedicatedUserConfig, 'root'>, agent: Agent, file: string, realpath: (path: string) => string): string | null {
+  const name = agent.toLowerCase();
+  const prefix = `${cfg.root}/cli/${name}/`, suffix = `/bin/${name}`;
+  if (!file.startsWith(prefix) || !file.endsWith(suffix)) return null;
+  const segment = file.slice(prefix.length, file.length - suffix.length);
+  if (segment !== 'current' && !VERSION.test(segment)) return null;
+  try {
+    const base = realpath(join(cfg.root, 'cli', name));
+    const dir = realpath(join(cfg.root, 'cli', name, segment));
+    const version = dir.startsWith(`${base}/`) ? dir.slice(base.length + 1) : '';
+    if (!VERSION.test(version)) return null;
+    const entry = `${dir}/bin/${name}`;
+    if (!inside(realpath(entry), dir)) return null;
+    return entry;
+  } catch {
+    return null;
+  }
+}
+
 export interface DedicatedUserDeps {
   /** 링크를 따라간 실제 경로. 기본 `fs.realpathSync.native`. 시험은 fake를 넘긴다. */
   realpath?: (path: string) => string;
@@ -112,11 +143,8 @@ export function dedicatedUserIsolation(cfg: DedicatedUserConfig, deps: Dedicated
       const worktrees = real(join(cfg.root, 'worktrees'), 'cwd_outside_agent_root', outside);
       if (!inside(cwd, worktrees)) throw new DedicatedUserError('cwd_outside_agent_root', '작업 폴더가 Agent 작업 영역(worktrees) 밖입니다.');
       const name = agent.toLowerCase();
-      const notCli = 'CLI가 Agent 작업 영역의 Runner 설치본(cli) 밖입니다.';
-      const binary = real(launch.file, 'binary_outside_agent_root', notCli);
-      if (!inside(binary, real(join(cfg.root, 'cli', name), 'binary_outside_agent_root', notCli))) {
-        throw new DedicatedUserError('binary_outside_agent_root', 'CLI가 Agent 작업 영역의 Runner 설치본(cli) 밖입니다.');
-      }
+      const binary = cliEntryPoint(cfg, agent, launch.file, realpath);
+      if (!binary) throw new DedicatedUserError('binary_outside_agent_root', 'CLI가 Agent 작업 영역의 Runner 설치본 진입점(cli/<agent>/<버전>/bin/<agent>)이 아닙니다.');
       const env = (['LANG', 'LC_ALL'] as const).flatMap((key) => {
         const value = launch.env[key];
         return value !== undefined && LOCALE.test(value) ? ['--env', `${key}=${value}`] : [];
@@ -129,6 +157,44 @@ export function dedicatedUserIsolation(cfg: DedicatedUserConfig, deps: Dedicated
         stdin: launch.stdin,
       };
     },
+    command: (launch: Launch) => dedicatedCommand(cfg, launch, realpath),
+  };
+}
+
+/** ci-run에 넘길 수 있는 환경 변수 이름(래퍼와 같은 목록). 다른 이름은 넘기지 않는다. */
+export const CI_ENV_NAMES = ['LANG', 'LC_ALL', 'TZ', 'CI', 'NODE_ENV', 'FORCE_COLOR', 'NO_COLOR', 'AWBS_REPORT', 'AWBS_REPORT_NONCE', 'AWBS_EVIDENCE_DIR'] as const;
+const CI_VALUE = /^[A-Za-z0-9_.@:/+,=-]{0,512}$/;
+const CI_PROGRAM = /^[A-Za-z0-9._+-]{1,64}$/;
+
+/**
+ * ①·CI 검사 명령을 `sudo -n -u <Agent 계정> -- <래퍼> ci-run --cwd … [--env …] -- <명령> <인자>`로 감싼다(조정자 결정 1).
+ * - 작업 폴더는 worktrees 안이어야 한다(실제 경로 비교).
+ * - 명령은 이름(고정 PATH에서 찾음) 또는 작업 폴더 기준 경로다. 다른 경로는 거부한다.
+ * - 환경 변수는 `CI_ENV_NAMES`만 넘긴다. 허용 이름인데 값 모양이 틀리면 거부한다(조용히 바꾸지 않음).
+ */
+export function dedicatedCommand(cfg: DedicatedUserConfig, launch: Launch, realpath: (path: string) => string): Launch {
+  const outside = '작업 폴더가 Agent 작업 영역(worktrees) 밖입니다.';
+  let cwd: string, worktrees: string;
+  try { cwd = realpath(launch.cwd); worktrees = realpath(join(cfg.root, 'worktrees')); }
+  catch { throw new DedicatedUserError('cwd_outside_agent_root', outside); }
+  if (!inside(cwd, worktrees)) throw new DedicatedUserError('cwd_outside_agent_root', outside);
+  const program = launch.file;
+  if (program.includes('/') ? !inside(resolve(cwd, program), cwd) : !CI_PROGRAM.test(program)) {
+    throw new DedicatedUserError('binary_outside_agent_root', '검사 명령은 명령 이름 또는 작업 폴더 안의 경로여야 합니다.');
+  }
+  const env = CI_ENV_NAMES.flatMap((key) => {
+    const value = launch.env[key];
+    if (value === undefined) return [];
+    if (!CI_VALUE.test(value)) throw new DedicatedUserError('agent_config_invalid', `검사 명령 환경 변수 ${key}의 값 모양이 허용 범위 밖입니다.`);
+    return ['--env', `${key}=${value}`];
+  });
+  return {
+    file: cfg.sudo ?? '/usr/bin/sudo',
+    // 실행마다 새 HOME: 검사 사본 안의 .awbs-home(GitRepository.createTaskCheckWorktree가 만든다, 조정자 결정 8).
+    args: ['-n', '-u', cfg.user, '--', cfg.exec, 'ci-run', '--cwd', cwd, '--home', join(cwd, '.awbs-home'), ...env, '--', program, ...launch.args],
+    env: SUDO_ENV,
+    cwd,
+    stdin: launch.stdin,
   };
 }
 
@@ -175,11 +241,15 @@ export interface IsolationChoice {
 }
 
 /**
- * 준비 점검에서 격리 계층을 고른다.
+ * 준비 점검과 실행 직전에 격리 계층을 고른다.
  * - `AWBS_AGENT_USER`가 없으면(=테스트·미설치 PC) 지금처럼 `PENDING_ISOLATION`(실제 실행 거부).
  * - 있으면 래퍼 `check`를 Agent 계정으로 실제로 돌려 본다. 「ok」가 아니면 거부를 유지한다.
  *   - 왜: 설정만 믿으면 sudoers·래퍼·WSL 보호가 빠진 PC에서 격리된 줄 알고 실행하게 된다.
  *   - 예: 부팅 뒤 /run/WSL 보호 서비스가 아직 안 돌았으면 `fail wsl_interop_accessible`로 거부된다.
+ * - 그다음 사용자 cgroup scope를 실제로 한 번 만들어 본다(`probeUserScope`). 못 만들면 거부를 유지한다.
+ *   - 왜: Runner는 Agent 계정 프로세스에 신호를 보낼 수 없다. scope 없이 띄우면 그룹을 빠져나간 Agent 자손을 끝냈다고 증명할 수 없다.
+ *   - 예: PC를 재시작했는데 linger가 꺼져 있고 아무도 로그인하지 않았으면 사용자 systemd가 없어 거부된다.
+ * - 둘 다 통과하면 「전용 계정 + 사용자 scope」 계층을 돌려준다. 모든 세션은 `systemd-run --user --scope -- sudo -n -u awbs-agent -- 래퍼 run …`으로 뜬다.
  */
 export async function selectIsolation(env: NodeJS.ProcessEnv, run: RunCommand, deps: DedicatedUserDeps = {}): Promise<IsolationChoice> {
   let cfg: DedicatedUserConfig | null;
@@ -196,7 +266,9 @@ export async function selectIsolation(env: NodeJS.ProcessEnv, run: RunCommand, d
     const items = result.stdout.split('\n').map((line) => /^fail ([a-z_]+)$/.exec(line.trim())?.[1]).filter(Boolean);
     return { isolation: PENDING_ISOLATION, reason: `전용 Agent 계정 점검 실패${items.length ? `: ${items.join(', ')}` : '(sudoers·래퍼 확인 필요)'}` };
   }
-  return { isolation: dedicatedUserIsolation(cfg, deps), reason: null };
+  const scope = await probeUserScope(run);
+  if (scope) return { isolation: PENDING_ISOLATION, reason: scope };
+  return { isolation: withUserScope(dedicatedUserIsolation(cfg, deps)), reason: null };
 }
 
 /** 로그인 상태를 묻는 고정 인자(준비 점검·CLI 업데이트 무과금 점검이 쓰는 모양). */
@@ -215,16 +287,25 @@ export function agentLoginRun(cfg: DedicatedUserConfig, base: RunCommand, deps: 
       const tail = LOGIN_TAIL[agent];
       const isLogin = args.length >= tail.length && tail.every((word, i) => args[args.length - tail.length + i] === word);
       if (!isLogin) continue;
-      let binary: string;
-      try {
-        binary = realpath(cmd);
-      } catch {
-        return base(cmd, args);
-      }
-      if (!inside(binary, join(cfg.root, 'cli', agent.toLowerCase()))) continue;
+      const binary = cliEntryPoint(cfg, agent, cmd, realpath);
+      if (!binary) continue;
       const control = agentControl(cfg, { kind: 'login-status', agent, binary });
       return base(control.file, control.args);
     }
     return base(cmd, args);
   };
+}
+
+/**
+ * 작업 폴더를 지우기 전에, Agent가 지운 권한을 래퍼 `fix-perms`(Agent 계정)로 되돌린다.
+ * - 부르기 전에 그 작업 폴더를 쓰는 Agent 프로세스가 0개여야 한다. 사용자 scope 정리가 끝난 세션이면 이 조건을 지킨다.
+ * - 래퍼가 「fixed」를 말하지 않으면(종료 코드 4 등) 예외다. 이때 작업 폴더를 지웠다고 처리하지 않는다(isolation.md §9).
+ * 예: Agent가 `chmod 000 build/`를 했으면 Runner는 그 폴더를 열 수 없어 지우지 못한다. fix-perms가 Runner 권한을 되돌린다.
+ */
+export async function restoreAgentPermissions(path: string, run: RunCommand = createRunCommand({ env: SUDO_ENV, timeoutMs: 120_000 })): Promise<void> {
+  const control = agentControl({ user: AGENT_USER, root: AGENT_ROOT, exec: AGENT_EXEC }, { kind: 'fix-perms', path });
+  const result = await run(control.file, control.args);
+  if (result.code !== 0 || result.stdout.trim() !== 'fixed') {
+    throw new DedicatedUserError('agent_permissions_unrestored', 'Agent가 바꾼 파일 권한을 되돌리지 못해 작업 폴더를 지우지 않습니다.');
+  }
 }

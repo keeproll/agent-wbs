@@ -80,7 +80,9 @@ test('빈 DB와 0014·0016(master)·0017~0027·M6 중간(0029~0034) 단계 DB, M
     // M6 통합 fix2: 이력 순번 채우기·M6 표 저장 순번(0037)
     '0037_20261127_record_order',
     '0038_20261127_claim_return_merge_commits',
-    '0039_20261127_resource_return_recovery']);
+    '0039_20261127_resource_return_recovery',
+    // M8 전 연결(조정자 결정 3): 해제 증거 cgroup_empty(0040)
+    '0040_20261127_cgroup_empty']);
   // journal 시각 = 1795740000000 + 번호(0021 이후 규칙)
   for (const e of journal.entries.slice(26)) expect(e.when, e.tag).toBe(1795740000000 + Number(e.tag.slice(0, 4)));
   const fresh = await database('fresh');

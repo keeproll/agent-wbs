@@ -22,6 +22,8 @@ test('0021·0022 snapshot이 단계별 구조와 연결을 보존하고 다음 g
   const order2 = snapshot('0037');
   const claims = snapshot('0038');
   const recovery = snapshot('0039');
+  // M8 전 연결 fix1: 해제 증거 cgroup_empty(0040, 조정자 결정 3)
+  const cgroup = snapshot('0040');
   expect(project.prevId).toBe(before.id);
   expect(evidence.prevId).toBe(project.id);
   expect(observation.prevId).toBe(evidence.id);
@@ -58,7 +60,10 @@ test('0021·0022 snapshot이 단계별 구조와 연결을 보존하고 다음 g
   expect(await generateMigration(design, order2)).toHaveLength(6);
   for (const table of ['notify_outbox', 'reports', 'design_drifts']) expect(order2.tables[`public.${table}`]?.columns).toHaveProperty('record_no');
   expect(claims.tables['public.ci_merge_facts']?.columns).toHaveProperty('commit_parents');
-  expect(await generateMigration(recovery, generateDrizzleJson(schema, recovery.id))).toEqual([]);
+  expect(cgroup.prevId).toBe(recovery.id);
+  // 0040은 열거형 값 하나만 더한다. 트리거·정리 함수는 손으로 쓴 SQL이다.
+  expect(await generateMigration(recovery, cgroup)).toEqual(['ALTER TYPE "public"."release_proof" ADD VALUE \'cgroup_empty\';']);
+  expect(await generateMigration(cgroup, generateDrizzleJson(schema, cgroup.id))).toEqual([]);
   expect(mail.tables['public.mail_outbox']?.columns).toHaveProperty('retried');
   expect(mail.tables['public.mail_settings']?.columns).toHaveProperty('settings_version');
   expect(design.tables['public.mail_outbox']).toEqual(mail.tables['public.mail_outbox']);

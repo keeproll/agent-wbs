@@ -20,6 +20,11 @@ const PushedCommit = Body({ sha: c.Sha, at: c.Timestamp, author: Type.String(), 
  * 실행 권한만 바뀐 보고는 head·트리만 옮기고 팀장 확인 항목·입력 버전을 만들지 않는다.
  */
 const Mode = Type.String({ pattern: '^[0-7]{6}$' });
+/**
+ * Runner가 세션을 넣은 cgroup 경로(`/proc/<pid>/cgroup`의 `0::` 뒤 모양, 조정자 결정 3).
+ * 절대 경로이고 `..`·`//`·공백이 없다. 예: `/user.slice/user-1000.slice/user@1000.service/app.slice/awbs-<uuid>.scope`.
+ */
+const CgroupPath = Type.String({ pattern: '^(?!.*//)(?!.*/\\.\\.(/|$))/[A-Za-z0-9@._:/-]{1,511}$' });
 const InputDiff = Body({
   status: AnyOf('A', 'M', 'D', 'R', 'T'),
   path: c.RepoPath,
@@ -40,6 +45,8 @@ const InstalledSubagent = Body({ id: c.Id, version: c.Int4Count, hash: Text });
 const ReleaseProof = Type.Union([
   Body({ kind: AnyOf('no_process'), bootId: Text }),
   Body({ kind: AnyOf('group_empty'), bootId: Text, processGroup: Pid }),
+  // cgroup이 기록된 보유: 그 cgroup이 비었음(cgroup.events populated=0)을 확인했다. group_empty로는 닫을 수 없다(조정자 결정 3).
+  Body({ kind: AnyOf('cgroup_empty'), bootId: Text, processGroup: Pid, cgroup: CgroupPath }),
   // 예약만 하고 그룹이 없던 보유는 processGroup이 null이다. currentBootId는 host 보고의 bootId와 같아야 한다.
   Body({ kind: AnyOf('boot_changed'), bootId: Text, processGroup: Nullable(Pid), currentBootId: Text }),
 ]);
@@ -51,6 +58,7 @@ const cleanupBase = { job: c.Id, hostId: Nullable(Text), bootId: Nullable(Text) 
 const CleanupProof = Type.Union([
   Body({ ...cleanupBase, proof: AnyOf('no_process') }),
   Body({ ...cleanupBase, proof: AnyOf('group_empty'), processGroup: Pid }),
+  Body({ ...cleanupBase, proof: AnyOf('cgroup_empty'), processGroup: Pid, cgroup: CgroupPath }),
   Body({ ...cleanupBase, proof: AnyOf('boot_changed'), processGroup: Opt(Nullable(Pid)), currentBootId: Text }),
 ]);
 const CommandItems = List(Body({ name: Text, ok: Type.Boolean(), detail: Type.String() }));
@@ -851,7 +859,7 @@ export const runnerOperations = [
     path: '/api/runner/jobs/:id/process',
     summary: '프로세스 생성 직후 기록(reserved→active). 같은 pgid 재전송은 성공, 다른 pgid는 INVALID_TRANSITION',
     errors: ['INVALID_TRANSITION'],
-    body: Body({ fence, processGroup: Pid, cgroup: Nullable(Text) }),
+    body: Body({ fence, processGroup: Pid, cgroup: Nullable(CgroupPath) }),
     responses: { 204: null },
   }),
   operation({

@@ -408,7 +408,7 @@ CP(변경 제안)로 새 Task를 추가할 때 넣을 수 있는 선택 필드�
   - 근거: §1.2-4 §7.4-4
 - `execution_holds`
   - 같은 job의 열린 보유(`closed_at is null`)만 하나다. 닫힌 보유는 이력으로 여러 개 남을 수 있다.
-  - attempt?, epoch, host_id?, boot_id?, fence?, pgid/cgroup, task?, conflict_group?, agent, slots, heavy, **slot_state**, **lock_state**, lock_from_job?, handed_to_job?, release_proof(`no_process/group_empty/boot_changed`), closed_at.
+  - attempt?, epoch, host_id?, boot_id?, fence?, pgid/cgroup, task?, conflict_group?, agent, slots, heavy, **slot_state**, **lock_state**, lock_from_job?, handed_to_job?, release_proof(`no_process/group_empty/boot_changed/cgroup_empty`, cgroup_empty는 마이그레이션 0040 — cgroup이 기록된 보유만, cgroup 없는 보유는 group_empty만), closed_at.
   - 왜: PC 변경으로 닫힌 보유는 불변으로 남기고, 같은 대기 job은 새 보유로 실행해야 한다.
   - 대기 job의 담당·검증 Agent가 바뀌어도 옛 행의 `agent`는 바꾸지 않는다. 다음 claim에서 옛 행을 닫고 새 행을 만든다. `runner_jobs.payload.agent`는 새 실행 Agent와 맞춘다.
   - 왜: 과거 보유를 덮어쓰지 않으면서 새 모델 등급과 실제 Agent가 맞아야 한다.

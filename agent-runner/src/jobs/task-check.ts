@@ -2,19 +2,24 @@ import type { ApiClient } from '../api/client.ts';
 import type { Runner } from '../api/runner.ts';
 import type { Launch } from '../cli/isolation.ts';
 import { runTaskCheck, type TaskCheckOptions, type TaskCheckResult } from '../ci/task.ts';
+import { createTestCollector } from '../ci/collect-tests.ts';
 import { GitHubError, type GitHubClient } from '../github/client.ts';
 import { pushGate, serverWriteGuard, type OwnershipGuard } from '../github/write-gate.ts';
 import type { Execution } from '../exec/session.ts';
 import { reportEvent, type AttemptContext } from './attempt-flow.ts';
 
-interface TaskCheckDeps {
+export interface TaskCheckDeps {
   api: ApiClient;
   runner: Runner;
   execution: Execution;
   repo: TaskCheckOptions['repo'];
   worktree: (context: AttemptContext) => { id: string; branch: string };
   launch: (argv: readonly string[], cwd: string) => Launch;
-  collectTests: TaskCheckOptions['collectTests'];
+  /**
+   * 시험 목록 수집기. 생략하면 이 시도의 job으로 묶인 실행기(`Execution.command`)로 `createTestCollector`를 쓴다(조정자 결정 2).
+   * 목록 명령도 Agent 코드(시험 설정)를 실행하므로 같은 job·같은 격리(전용 계정이면 래퍼 ci-run)로 돌아야 한다.
+   */
+  collectTests?: TaskCheckOptions['collectTests'];
   observeMainPipeline: (basis: NonNullable<TaskCheckOptions['basis']>) => Promise<void>;
   /**
    * PR을 여는 GitHub 계층(M4 `createGitHubClient`). Runner가 개발 결과를 push한 뒤 같은 head 브랜치의 열린 PR을 쓰거나 새로 연다(조정자 결정 1).
@@ -22,6 +27,14 @@ interface TaskCheckDeps {
    */
   github: Pick<GitHubClient, 'ensurePullRequest' | 'findPullRequest' | 'permissions' | 'assertWritable'> | null;
 }
+
+/**
+ * 앱 밖(main)이 넘기는 ① 공급원. 공유 인스턴스(api·runner·execution)와 GitHub 클라이언트는 넣지 않는다.
+ * 앱(`RunnerApp`)이 자기 것으로 채워 `bindTaskCheck`를 부른다.
+ * 왜: GitHub 클라이언트는 배포 키 검사·권한 거부 보고·토큰 무효화가 걸린 앱의 것 하나만 써야 한다.
+ *   밖에서 다른 클라이언트를 만들어 넘기면 PR 생성이 그 관문을 지나지 않는다(M5-7 통합 보고 「알려진 한계」).
+ */
+export type TaskCheckSources = Omit<TaskCheckDeps, 'api' | 'runner' | 'execution' | 'github'>;
 
 /** ① 결과와 이번 시도가 쓴 PR(번호·head 브랜치). 시도 결과 보고에도 그대로 넣는다. */
 export type BoundTaskCheckResult = TaskCheckResult & { pullRequest?: { number: number; head: string } };
@@ -136,10 +149,10 @@ export function bindTaskCheck(d: TaskCheckDeps) {
     signal.throwIfAborted();
     const basis = await d.repo.mainPipeline();
     await d.observeMainPipeline(basis);
+    const execute: TaskCheckOptions['execute'] = (argv, cwd, signal) => d.execution.command({ id: job.id, fence: job.fence, epoch }, job.payload.agent,
+      d.launch(argv, cwd), signal, { heavyHeld: true });
     const result = await runTaskCheck({ repo: d.repo, worktreeId: work.id, branch: work.branch,
-      heavy: d.execution.heavy, collectTests: d.collectTests, basis, signal,
-      execute: (argv, cwd, signal) => d.execution.command({ id: job.id, fence: job.fence, epoch }, job.payload.agent,
-        d.launch(argv, cwd), signal, { heavyHeld: true }),
+      heavy: d.execution.heavy, collectTests: d.collectTests ?? createTestCollector(execute), basis, signal, execute,
     });
     signal.throwIfAborted();
     if (result.headSha !== head) throw new Error('PR에 올린 커밋과 ①이 검사한 커밋이 다릅니다.');

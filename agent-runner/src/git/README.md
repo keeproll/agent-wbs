@@ -29,6 +29,23 @@ const rejected = await repo.checkTask(latestMain, taskHead);
 - 부팅 번호가 바뀌었거나, PID가 사라졌거나, 같은 PID의 시작 값이 달라졌으면 이전 주인의 잠금만 자동 회수한다. 새 프로세스에 재사용된 PID를 이전 주인으로 오인하지 않는다. 구버전의 PID만 적힌 잠금은 그 PID가 없다는 확인이 있을 때만 회수한다. 살아 있는 주인이나 확인 권한이 없는 경우, 잘못된 형식은 지우지 않고 30초 뒤 경로와 함께 보고한다.
 - 회수 구간에는 Linux `flock`(util-linux 패키지)의 커널 잠금을 함께 사용하고 잠금 내용을 다시 대조한다. 다른 실행이 새로 얻은 잠금을 지우는 경쟁을 막으며 회수 도중 Runner가 강제 종료돼도 커널이 회수용 잠금을 해제한다. 이 PC에서 확인한 버전은 `flock 2.39.3`이다. `.lock.recover` 파일 자체는 정상적으로 남으므로 실행 중에는 삭제하지 않는다. 형식을 해석할 수 없는 잠금만 관련 실행이 모두 종료됐는지 확인한 뒤 수동 조치한다.
 
+## 전용 계정 배치의 경계(조정자 결정 6~8, fix2)
+
+`agentRoot`(전용 계정 배치)를 주면 **Runner 계정 git은 Agent가 쓸 수 있는 저장소·폴더에서 돌지 않는다.**
+왜: git은 저장소 설정(`.git/config`)의 많은 키로 명령을 실행한다(filter의 smudge·clean, partialClone의 uploadpack, hook 등). `-c 키=값`으로 하나씩 끄는 방식은 빠진 키 하나로 뚫린다(방어 점검 P1 두 건이 그 예).
+
+- **작업 폴더 만들기(`createWorktree`)**: Runner만 들어갈 수 있는 준비 폴더 `worktrees/<저장소>/.prep-<uuid>`(0700)에서 clone → remote remove → checkout을 끝낸다. 그 뒤 그룹 쓰기를 주고 0770으로 바꿔 제자리로 이름을 바꾼다.
+  - 0700 폴더는 기본 ACL이 있어도 ACL 상한(mask)이 `---`라 Agent 계정이 들어갈 수 없다. 그래서 clone과 checkout 사이에 filter를 끼워 넣을 틈이 없다.
+  - 검사 사본(`createTaskCheckWorktree`)은 실행마다 새 HOME `.awbs-home`(pnpm 저장소 포함)도 이때 만든다. `.git/info/exclude`에 적어 상태 검사에서 뺀다.
+- **결과 가져오기(`importWorktree`)**: Agent 계정 git이 만든 git bundle(데이터 파일)만 받는다(`AgentGit.bundle`, 래퍼 `git-bundle`). Runner bare 저장소에서 `git bundle verify` 뒤 그 파일에서 fetch한다(객체 fsck 검사 켬). Agent 폴더의 `.git`은 읽지 않는다.
+- **검사 사본 확인(`taskCheckPath`)**: HEAD SHA와 「커밋하지 않은 변경 있음」은 Agent 계정 git이 본다(`AgentGit.inspect`, 래퍼 `git-inspect`). 추적 안 된 파일, assume-unchanged·skip-worktree 표시도 변경으로 센다.
+- **실행 가드(`assertRunnerGit`)**: Runner git의 cwd·`--git-dir=`·`--work-tree=`·경로 인자가 Agent 작업 폴더 모음 안이면 거부한다. 예외는 준비 폴더(`.prep-<uuid>`)뿐이다. 새 코드가 Agent 폴더에서 git을 돌리면 여기서 멈춘다.
+- **지우기(`removeTree`)**: GNU `chmod -R`·`rm -rf --one-file-system`을 쓴다. 둘 다 링크를 따라가지 않는 순회라, 지우는 도중 Agent가 폴더를 Runner 폴더 링크로 바꿔도 Runner 파일을 지우지 않는다. 막히면 래퍼 `fix-perms` 뒤 한 번 더 지운다.
+- **작업 폴더 모음은 0710**: Agent는 지나가기만 하고 목록을 못 본다. 검사 사본 이름(무작위 UUID)을 다른 Task의 Agent가 찾기 어렵게 한다.
+- 모든 Runner git은 `GIT_NO_LAZY_FETCH=1`(늦은 가져오기 끔)로 돈다.
+- 같은 계정 배치(`agentRoot` 없음, 개발·시험)는 Agent도 Runner 계정이라 넘는 경계가 없으므로 예전 경로(Runner git이 작업 폴더를 직접 읽음)를 그대로 쓴다.
+- Runner가 Agent 폴더에 하는 git·파일 접근은 시험이 목록으로 고정한다(`test/git/agent-access-inventory.test.ts`, `agent-boundary.test.ts` 「전수 목록」).
+
 ## 입력과 Task 검사
 
 입력은 고정한 커밋의 `prototype/`만 Git 객체에서 읽는다. 파일 권한은 읽기 전용 `0444`, 폴더는 읽고 들어갈 수만 있는 `0555`다. 실행 파일도 실행하지 않는다. **심볼릭 링크(symlink)**는 다른 파일을 가리키는 지름길이므로 입력에 있으면 실패한다. **하위 모듈(submodule)**은 다른 저장소를 연결한 항목이므로 따라가지 않고 실패한다. 실패한 사본은 지운다.

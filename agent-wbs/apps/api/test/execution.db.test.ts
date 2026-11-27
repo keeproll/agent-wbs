@@ -525,3 +525,31 @@ test('Gate 뒤 브랜치 head가 바뀌면 옛 시도를 보존하고 새 head�
   expect((await get(`tasks/${a.key}/gate`)).json()).toMatchObject({ passed:true });
   expect((await owner.query('select head_sha from task_attempts where id=$1',[a.attempt])).rows).toEqual([{ head_sha:sha }]);
 });
+
+test('조정자 결정 3(0040): cgroup이 기록된 보유는 같은 경로·그룹의 cgroup_empty로만, cgroup 없는 보유는 group_empty로만 닫힌다', async () => {
+  const cgroup = `/user.slice/user-1000.slice/user@1000.service/app.slice/awbs-${randomUUID()}.scope`;
+  const at = () => new Date().toISOString();
+  const scoped = await running('dev', 'reserved');
+  // 경로 모양이 아니면 /process가 거부한다.
+  for (const bad of ['relative/x.scope', '/a//b', '/a/../b', '/a b']) {
+    expect((await post(`jobs/${scoped.job}/process`, { fence: 1, processGroup: 4242, cgroup: bad })).statusCode, bad).toBe(400);
+  }
+  expect((await post(`jobs/${scoped.job}/process`, { fence: 1, processGroup: 4242, cgroup })).statusCode).toBe(204);
+  const release = (proof: object) => post(`jobs/${scoped.job}/slots/release`, { fence: 1, hostId: 'host-a', proof, at: at() });
+  expect((await release({ kind: 'group_empty', bootId: 'boot-a', processGroup: 4242 })).statusCode).toBe(409);
+  expect((await release({ kind: 'cgroup_empty', bootId: 'boot-a', processGroup: 4242, cgroup: cgroup.replace('awbs-', 'awbs-x') })).statusCode).toBe(409);
+  expect((await release({ kind: 'cgroup_empty', bootId: 'boot-a', processGroup: 4243, cgroup })).statusCode).toBe(409);
+  expect((await release({ kind: 'cgroup_empty', bootId: 'boot-a', processGroup: 4242, cgroup })).statusCode).toBe(204);
+  expect((await owner.query('select slot_state,release_proof::text proof from execution_holds where job=$1', [scoped.job])).rows[0]).toEqual({ slot_state: 'none', proof: 'cgroup_empty' });
+
+  const plain = await running('dev', 'reserved');
+  expect((await post(`jobs/${plain.job}/process`, { fence: 1, processGroup: 4244, cgroup: null })).statusCode).toBe(204);
+  expect((await post(`jobs/${plain.job}/slots/release`, { fence: 1, hostId: 'host-a', proof: { kind: 'cgroup_empty', bootId: 'boot-a', processGroup: 4244, cgroup }, at: at() })).statusCode).toBe(409);
+  expect((await post(`jobs/${plain.job}/slots/release`, { fence: 1, hostId: 'host-a', proof: { kind: 'group_empty', bootId: 'boot-a', processGroup: 4244 }, at: at() })).statusCode).toBe(204);
+
+  // DB 트리거도 같은 규칙을 지킨다(서비스를 거치지 않은 쓰기).
+  const direct = await running('dev', 'reserved');
+  await owner.query("update execution_holds set slot_state='active',pgid=4245,cgroup=$2 where job=$1", [direct.job, cgroup]);
+  await expect(owner.query("update execution_holds set slot_state='none',release_proof='group_empty' where job=$1", [direct.job])).rejects.toThrow(/release proof/);
+  await owner.query("update execution_holds set slot_state='none',release_proof='cgroup_empty' where job=$1", [direct.job]);
+});

@@ -9,6 +9,11 @@ export interface Launch {
   cwd: string;
   /** 지시문. 인자 대신 표준 입력으로 넘겨 프로세스 목록(ps)에 드러나지 않고 길이 제한도 피한다. */
   stdin: string;
+  /**
+   * 이 실행을 넣은 사용자 cgroup scope 이름(`awbs-<uuid>`). 있으면 정리할 때 scope 전체를 끝내고 비었는지 확인한다(`exec/scope.ts`).
+   * 전용 계정 격리는 항상 채운다. 없으면 지금처럼 프로세스 그룹과 /proc로만 정리한다.
+   */
+  scope?: string;
 }
 
 /**
@@ -22,6 +27,12 @@ export interface IsolationLayer {
   readonly name: string;
   flags(agent: Agent): readonly string[];
   wrap(launch: Launch, agent: Agent): Launch;
+  /**
+   * ①·CI 검사 명령(Agent 코드의 시험·빌드)을 감싼다(조정자 결정 1). `launch.file`은 명령 이름 또는 작업 폴더 안 경로다.
+   * 전용 계정 계층은 래퍼 `ci-run`으로 Agent 계정에서 돌린다. 없으면(시험용 fake 계층) `wrap`을 쓴다.
+   * 왜 따로 두나: `wrap`은 Claude·Codex CLI 진입점만 받는다. 검사 명령은 pnpm 같은 다른 프로그램이다.
+   */
+  command?(launch: Launch): Launch;
 }
 
 export class IsolationUndecidedError extends Error {
@@ -39,6 +50,9 @@ export const PENDING_ISOLATION: IsolationLayer = {
   name: 'pending-q08',
   flags: () => [],
   wrap: () => {
+    throw new IsolationUndecidedError();
+  },
+  command: () => {
     throw new IsolationUndecidedError();
   },
 };
