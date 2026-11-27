@@ -67,7 +67,8 @@ export async function installSubagents(cwd: string, agent: Agent, defs: Definiti
         } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; }
       }
     }
-    await atomicWrite(dir, '.awbs-installed.json', JSON.stringify(next));
+    if (Object.keys(next).length) await atomicWrite(dir, '.awbs-installed.json', JSON.stringify(next));
+    else await rm(join(dir, '.awbs-installed.json'), { force: true });
     return items.map(({ id, version, hash }) => ({ id, version, hash }));
   } catch { throw new SubagentInstallError(); }
 }

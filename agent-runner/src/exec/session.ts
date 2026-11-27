@@ -70,6 +70,7 @@ export class Execution {
   readonly #reservations = new Set<SessionState>();
   #recovered = false;
   constructor(options: ExecutionOptions) { this.#d = options; this.launches = new Launches(options.home, options.identity); }
+  get heavy(): HeavySemaphore { return this.#d.heavy; }
 
   /** 서버 보유 대조가 끝나기 전에는 새 claim을 허용하지 않는다. */
   async recover(holds?: ExecutionHold[], signal?: AbortSignal): Promise<boolean> {
@@ -106,12 +107,18 @@ export class Execution {
     if (!this.#d.isolation || !this.#recovered || !this.#d.ready()) return null;
     if (!Number.isSafeInteger(capacity) || capacity < 0) throw new RangeError('실행 용량이 올바르지 않습니다.');
     // 기존 보유는 서버의 claim 트랜잭션에서 빼므로 전체 한도를 그대로 보낸다.
-    const allowed = capacity > 0 && (['Claude', 'Codex'] as const).some(agent => this.#admission(agent, 1).ok);
+    const allowed = capacity > 0 && (['dev', 'qa'] as const).some(role =>
+      (['Claude', 'Codex'] as const).some(agent => this.#admission(agent, this.#attemptSlots(role)).ok));
     const release = this.#d.updater?.tryClaim();
     if (this.#d.updater && !release) return null;
     try {
       const result = await this.#call('claimJob', { epoch: this.#d.epoch(), idempotencyKey: randomUUID(), body: { kinds: allowed ? ['attempt', 'stop_attempt'] : ['stop_attempt'], capacity } });
-      return result.status === 200 ? result.body.job : null;
+      const job = result.status === 200 ? result.body.job : null;
+      if (job?.kind === 'attempt') {
+        try { this.#assertStart(job.payload.agent, this.#attemptSlots(job.payload.kind === 'dev' || job.payload.kind === 'rework' ? 'dev' : 'qa')); }
+        catch (error) { await this.#finishUnstarted(job, this.#d.epoch()); throw error; }
+      }
+      return job;
     } finally { release?.(); }
   }
 
@@ -137,14 +144,14 @@ export class Execution {
   }
 
   /** ① 명령은 같은 무거운 작업 번호표를 쓰고 물리 슬롯만 반납한다. 논리 잠금은 후속 단계가 쓴다. */
-  command(job: LaunchJob, agent: Agent, launch: Launch, signal?: AbortSignal) {
-    const task = this.#command(job, agent, launch, signal);
+  command(job: LaunchJob, agent: Agent, launch: Launch, signal?: AbortSignal, options: { heavyHeld?: boolean } = {}) {
+    const task = this.#command(job, agent, launch, signal, options.heavyHeld ?? false);
     this.#tasks.add(task);
     void task.finally(() => this.#tasks.delete(task)).catch(() => undefined);
     return task;
   }
 
-  async #command(job: LaunchJob, agent: Agent, launch: Launch, signal?: AbortSignal) {
+  async #command(job: LaunchJob, agent: Agent, launch: Launch, signal?: AbortSignal, heavyHeld = false) {
     const d = this.#d;
     if (!d.isolation) throw new IsolationUndecidedError();
     if (!this.#recovered || !d.ready()) throw new Error('Runner 정리가 끝나기 전에는 명령을 실행하지 않습니다.');
@@ -160,20 +167,29 @@ export class Execution {
       this.#reservations.add(reservation);
       const renewed = await this.#call('renewJob', { epoch: job.epoch, params: { id: job.id }, idempotencyKey: randomUUID(), body: { fence: job.fence } }, stopped);
       stopLease = this.#holdLease(job, renewed.body.leaseUntil, controller);
-      release = await d.heavy.acquire(job.id, stopped);
+      // runTaskCheck가 같은 번호표를 이미 받았으면 두 번 기다리지 않는다.
+      if (!heavyHeld) release = await d.heavy.acquire(job.id, stopped);
       gate = d.updater?.tryClaim();
       if (d.updater && !gate) throw new Error('CLI 업데이트 중에는 명령을 시작하지 않습니다.');
       this.#assertStart(agent, 1, reservation);
       const wrapped = d.isolation.wrap(launch, agent);
       await this.#report('acquireJobSlots', { epoch: job.epoch, params: { id: job.id }, body: { fence: job.fence, hostId: d.identity.hostId } }, stopped);
       acquired = true;
-      const result = await runProcess({ launches: this.launches, job, launch: wrapped, signal: stopped, register: async record => {
+      const logs: Record<'stdout' | 'stderr', Buffer[]> = { stdout: [], stderr: [] };
+      const sizes = { stdout: 0, stderr: 0 };
+      // shortcut: 점검 명령처럼 출력마다 4 MiB만 보관한다. 원문 전체가 필요하면 파일 로그로 옮긴다.
+      const capture = (stream: 'stdout' | 'stderr', bytes: Buffer) => {
+        const kept = bytes.subarray(0, Math.max(0, 4 * 1024 * 1024 - sizes[stream]));
+        if (kept.length) { logs[stream].push(kept); sizes[stream] += kept.length; }
+      };
+      const result = await runProcess({ launches: this.launches, job, launch: wrapped, signal: stopped,
+        stdout: bytes => capture('stdout', bytes), stderr: bytes => capture('stderr', bytes), register: async record => {
         launchId = record.launchId;
         await this.#report('reportJobProcess', { epoch: job.epoch, params: { id: job.id }, body: { fence: job.fence, processGroup: record.pgid ?? 0, cgroup: record.cgroup } }, stopped);
         this.#assertStart(agent, 1, reservation);
       } });
       proof = result.proof;
-      return result;
+      return { ...result, stdout: Buffer.concat(logs.stdout).toString('utf8'), stderr: Buffer.concat(logs.stderr).toString('utf8') };
     } finally {
       await stopLease();
       this.#controllers.delete(controller);
@@ -198,12 +214,29 @@ export class Execution {
   }
 
   async #run(job: AttemptJob, options: AttemptOptions): Promise<AttemptOutput> {
+    const epoch = this.#d.epoch();
+    try { return await this.#execute(job, options); }
+    catch (error) { await this.#finishUnstarted(job, epoch); throw error; }
+  }
+
+  /** start 앞의 어느 경계에서 거부되어도 프로세스 없는 예약을 남기지 않는다. */
+  async #finishUnstarted(job: AttemptJob, epoch: number): Promise<void> {
+    const d = this.#d;
+    if (d.epoch() !== epoch) return;
+    const hold = (await this.#call('getExecutionHolds', { epoch }, AbortSignal.timeout(10_000))).body.holds.find(h => h.job === job.id && h.epoch === epoch && h.fence === job.fence && h.host_id === d.identity.hostId && h.boot_id === d.identity.bootId);
+    if (!hold || hold.closed_at !== null || hold.attempt !== null || hold.pgid !== null || hold.cgroup !== null) return;
+    await this.#report('finishJob', { epoch, params: { id: job.id }, body: { fence: job.fence, status: 'failed' } });
+    await this.#report('releaseJob', { epoch, params: { id: job.id }, body: { fence: job.fence, hostId: d.identity.hostId,
+      proof: { kind: 'no_process', bootId: d.identity.bootId }, at: new Date().toISOString() } });
+    await this.#completeJob({ id: job.id, epoch, fence: job.fence });
+  }
+
+  async #execute(job: AttemptJob, options: AttemptOptions): Promise<AttemptOutput> {
     const d = this.#d, epoch = d.epoch(), role = job.payload.kind === 'dev' || job.payload.kind === 'rework' ? 'dev' : 'qa';
     if (!d.ready()) throw new Error('Runner 정리가 끝나기 전에는 실행하지 않습니다.');
     if (!d.isolation) throw new IsolationUndecidedError();
     if (!this.#recovered) throw new Error('launch 대조가 끝나기 전에는 실행하지 않습니다.');
-    const budget = d.budget(role);
-    if (!Number.isSafeInteger(budget) || budget < 0) throw new RangeError('하위 Agent 예산이 올바르지 않습니다.');
+    const slots = this.#attemptSlots(role), budget = slots - 1;
     const controller = new AbortController();
     const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
     const jobRef: LaunchJob = { id: job.id, fence: job.fence, epoch };
@@ -213,10 +246,10 @@ export class Execution {
     let session: ActiveSession | undefined;
     let preparation: Awaited<ReturnType<Launches['create']>> | undefined;
     let physicalCleared = false;
-    const reservation: SessionState = { attemptId: `job:${job.id}`, agent: job.payload.agent, reserved: 1 + budget, observed: 0, state: 'ok' };
+    const reservation: SessionState = { attemptId: `job:${job.id}`, agent: job.payload.agent, reserved: slots, observed: 0, state: 'ok' };
     let grade: ApiResponse<'getRunGrade'>['body'] | undefined;
     try {
-      this.#assertStart(job.payload.agent, 1 + budget);
+      this.#assertStart(job.payload.agent, slots);
       this.#reservations.add(reservation);
       preparation = await this.launches.create(jobRef);
       grade = (await this.#call('getRunGrade', { epoch, params: { taskKey: job.payload.taskKey }, query: { role } }, signal)).body;
@@ -234,7 +267,7 @@ export class Execution {
       const launch = buildLaunch(job.payload.agent, d.binaries[job.payload.agent], { ...grade, cwd: work.cwd, prompt, ...(resume && { resume }) }, { env: d.env, ...(d.isolation && { isolation: d.isolation }) });
       const installedSubagents = await installSubagents(work.cwd, job.payload.agent, definitions, grade);
       signal.throwIfAborted();
-      this.#assertStart(job.payload.agent, 1 + budget, reservation);
+      this.#assertStart(job.payload.agent, slots, reservation);
       const start = await this.#report('startJob', { epoch, params: { id: job.id }, body: { fence: job.fence, ...d.identity, headSha: work.headSha, installedSubagents } }, signal);
       attemptId = start.body.attemptId;
       if (!attemptId) throw new Error('start 응답에 attemptId가 없습니다.');
@@ -293,6 +326,10 @@ export class Execution {
       await this.launches.complete(preparation.launchId, { kind: 'no_process', bootId: d.identity.bootId });
       d.sessions.splice(d.sessions.indexOf(session), 1);
       session = undefined;
+      if (definitions.enabled) {
+        try { await installSubagents(work.cwd, job.payload.agent, { enabled: false, items: [] }, grade); }
+        catch (error) { throw new Error('실행을 마친 하위 Agent 정의의 소유 hash를 확인할 수 없습니다.', { cause: error }); }
+      }
       // shortcut: CLI 기록 형식이 검증되기 전에는 실제 사용을 확정하지 않는다. M5-03 실증 뒤 기록 해석기를 연결한다.
       await d.outbox.enqueue('reportSubagentUsage', { epoch, params: { attemptId }, body: { fence: job.fence, confirm: 'partial', items: [] } });
       if (signal.aborted || !ok || result.code !== 0) {
@@ -353,6 +390,12 @@ export class Execution {
   #admission(agent: Agent, slots: number, own?: SessionState) {
     const local = [...this.#d.sessions, ...this.#reservations].filter(s => s !== own);
     return this.#d.canStart(agent, slots, local);
+  }
+
+  #attemptSlots(role: 'dev' | 'qa'): number {
+    const budget = this.#d.budget(role);
+    if (!Number.isSafeInteger(budget) || budget < 0) throw new RangeError('하위 Agent 예산이 올바르지 않습니다.');
+    return 1 + budget;
   }
 
   #assertStart(agent: Agent, slots: number, own?: SessionState): void {

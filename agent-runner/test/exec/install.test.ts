@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, symlink, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { afterEach, expect, test } from 'vitest';
 import { installSubagents } from '../../src/exec/install.ts';
 
 const roots: string[] = [];
 const temp = async () => {
-  const path = await mkdtemp('/home/keeproll/.orca/bots/agentwbs/archive/2026-11-27/M5-02/install-');
+  const path = await mkdtemp(join(process.env.AWBS_TEST_TMP ?? tmpdir(), 'install-'));
   roots.push(path);
   return path;
 };
@@ -60,4 +61,5 @@ test('버전을 갱신하고 사용을 끄면 Runner가 설치한 파일만 지�
   await installSubagents(cwd, 'Codex', { enabled: false, items: [] }, grade);
   await expect(readFile(join(dir, 'code-reviewer.toml'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect(await readFile(join(dir, 'user.toml'), 'utf8')).toBe('사용자 정의');
+  await expect(readFile(join(dir, '.awbs-installed.json'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
