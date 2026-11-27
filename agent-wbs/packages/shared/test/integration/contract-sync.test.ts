@@ -164,7 +164,7 @@ describe('Runner 정책 묶음: Claude 목록과 CLI 관측 등급', () => {
     subagentBudget: { dev: 2, qa: 3 },
     heartbeatSeconds: 60,
     inputCheckMinutes: 5,
-    ci: { taskCmds: [], intCmds: [], nightAt: '02:00', retry: 1, deployUrl: null },
+    ci: { taskCmds: [], intCmds: [], nightAt: '02:00', retry: 1, deployUrl: null, quarantined: [] },
     claudeModels: ['claude-haiku-5-5'],
     cliGrades: [{ agent: 'Codex', version: '0.172.0', model: 'gpt-6.1-sol', options: 'exec --json', grade: 'partial' }],
   };

@@ -1,7 +1,7 @@
 import type { PoolClient } from '@awbs/db';
 import { completionGate, lifecycleTransition, type GateInput, type HeadSync, type VerificationResult, type CompletionInput } from '@awbs/shared';
 import { PlatformError } from '../platform/errors.ts';
-import { RunnerRepository, required } from '../runner/repository.ts';
+import { RunnerRepository, type Task } from '../runner/repository.ts';
 import { assertExternal } from '../runner/service.ts';
 import { record, SYSTEM } from '../tasks/history.ts';
 import { deferChange } from '../changes/events.ts';
@@ -108,40 +108,60 @@ export async function invalidateTaskGate(client: PoolClient, taskKey: string, he
   return true;
 }
 
-export async function enqueueIntegration(client: PoolClient, taskId: string, epoch: number, options: { retry?: boolean; baseSha?: string; baselineOnly?: boolean } = {}) {
-  const repo = new RunnerRepository(client); await repo.lock();
-  const task = await repo.taskById(taskId);
-  if (!task || task.status !== 'gate') return;
+export interface IntegrationOptions { retry?:boolean; baseSha?:string; baselineOnly?:boolean; sourceRunId?:string }
+export type IntegrationDecision =
+  | { allowed:false; state:'none'|'pending'|'blocked'; reason:string }
+  | { allowed:true; state:'pending'; reason:string|null; existingJobId:string }
+  | { allowed:true; state:'pending'; reason:string|null; projectId:string; taskKey:string; payload:{ taskKey:string;qaHeadSha:string;branch:string|null|undefined;pr:number;commit:string;baseSha:string }; dedupKey:string; generation:number|null };
+
+/** 조회와 생성이 같은 조건을 쓴다. 잠금과 기록은 생성 경로에서만 수행한다. */
+export async function integrationDecision(client: PoolClient, taskId: string, options: IntegrationOptions = {}): Promise<IntegrationDecision> {
+  const repo = new RunnerRepository(client);
+  const deny = (state:'none'|'pending'|'blocked',reason:string):IntegrationDecision => ({ allowed:false,state,reason });
+  const task = (await client.query<Task>('select * from tasks where id=$1 and deleted_at is null',[taskId])).rows[0];
+  if (!task || task.status !== 'gate') return deny('none','현재 Task가 Gate 상태가 아닙니다.');
   const held = (await client.query<{ held: boolean }>(`select exists(select 1 from merge_queue where task=$1 and actual_merge_sha is not null)
     or exists(select 1 from alerts where project_id=$2 and key like 'ci:mergeMismatch|%' and target->>'taskKey'=$3 and resolved_at is null) held`,[task.id,task.project_id,task.task_key])).rows[0]?.held;
-  if (held) return;
+  if (held) return deny('blocked','실제 병합 결과를 먼저 확인해야 합니다.');
   const input = await gateInput(client,task.id);
   const baseline = (await client.query("select fail_scope='baseline' and status='fail' baseline from ci_runs where task=$1 and stage=1 and head_sha=$2 order by run_no desc limit 1",[task.id,input.basis.headSha])).rows[0]?.baseline;
-  // 기준 실패만 ① 재실행을 허용한다. 명세·입력·QA와 나머지 완료 조건은 그대로 확인한다.
   if (baseline && input.taskCheck) input.taskCheck = { ...input.taskCheck,result:'PASS' };
-  if (!completionGate(input).every(c => c.result === 'PASS')) return;
-  const verification = required((await client.query<{ id: string; head_sha: string }>('select v.id,v.head_sha from verifications v join task_attempts a on a.id=v.attempt where a.task=$1 order by a.attempt_no desc limit 1', [task.id])).rows[0]);
+  if (!completionGate(input).every(c => c.result === 'PASS')) return deny('blocked','Task의 완료 조건을 다시 확인해야 합니다.');
+  const verification = (await client.query<{ id:string;head_sha:string }>('select v.id,v.head_sha from verifications v join task_attempts a on a.id=v.attempt where a.task=$1 order by a.attempt_no desc limit 1',[task.id])).rows[0];
+  if (!verification) return deny('blocked','현재 검증 기록이 필요합니다.');
   if (options.baselineOnly) {
-    const previous = (await client.query<{ verification: string; baseline: boolean }>(`select q.verification,
+    const previous = (await client.query<{ verification:string;ci_run:string;baseline:boolean }>(`select q.verification,q.ci_run,
       q.status='failed' and c.stage=1 and c.status='fail' and c.fail_scope='baseline' and c.task=q.task and c.project_id=q.project_id
       and j.kind='integrate' and j.state='failed' baseline from merge_queue q left join ci_runs c on c.id=q.ci_run
       left join runner_jobs j on j.id=c.job where q.task=$1 order by q.queue_no desc limit 1`,[task.id])).rows[0];
-    if (!previous?.baseline || previous.verification !== verification.id) return;
+    if (!previous?.baseline || options.sourceRunId && previous.ci_run !== options.sourceRunId) return deny('none','현재 기준 실패 차수의 실행이 아닙니다.');
+    if (previous.verification !== verification.id) return deny('blocked','검증이 변경되어 재통합 조건을 다시 확인해야 합니다.');
   }
   const base = options.baseSha ?? await inputHead(client,task.project_id);
   const prefix = `integrate:${verification.id}:`;
-  const jobs = (await client.query<{ id: string; state: string; base_sha: string }>(`select j.id,j.state,coalesce(j.payload->>'baseSha',
+  const jobs = (await client.query<{ id:string;state:string;base_sha:string }>(`select j.id,j.state,coalesce(j.payload->>'baseSha',
     (select c.base_sha from ci_runs c where c.job=j.id and c.base_sha is not null order by c.run_no desc limit 1),$3) base_sha
     from runner_jobs j where starts_with(j.dedup_key,$1) or j.dedup_key=$2 order by j.record_no desc`,[prefix,`integrate:${verification.id}`,base])).rows;
-  if (jobs.some(j => j.state === 'reconcile')) return;
-  const open = jobs.find(j => ['queued','leased','started','reconcile'].includes(j.state));
-  if (open) return open.id;
+  if (jobs.some(j => j.state === 'reconcile')) return deny('blocked','이전 통합 작업의 실제 결과를 먼저 대조해야 합니다.');
+  const open = jobs.find(j => ['queued','leased','started'].includes(j.state));
+  if (open) return { allowed:true,state:'pending',reason:'통합 작업이 대기 중이거나 진행 중입니다.',existingJobId:open.id };
   const rounds = jobs.filter(j => j.base_sha === base);
-  if (rounds.length && !options.retry) return;
+  if (rounds.length && !options.retry) return deny('pending','main 변경을 기다립니다. 변경 뒤 서버가 조건을 다시 확인합니다.');
   const a = (await repo.history(task.id)).at(-1);
-  const pr = a?.pr ?? (await client.query<{ pr: number }>('select pr from ci_runs where task=$1 and head_sha=$2 and pr is not null order by run_no desc limit 1',[task.id,verification.head_sha])).rows[0]?.pr;
-  if (!pr) return;
-  const id = await repo.enqueue(task.project_id,epoch,'integrate',{ taskKey:task.task_key,qaHeadSha:verification.head_sha,branch:a?.branch,pr,commit:verification.head_sha,baseSha:base },`${prefix}${base}:${rounds.length+1}`,(await repo.authority())?.generation ?? null);
-  if (id) deferChange(client,task.project_id,'ci',{ taskKey:task.task_key });
+  const pr = a?.pr ?? (await client.query<{ pr:number }>('select pr from ci_runs where task=$1 and head_sha=$2 and pr is not null order by run_no desc limit 1',[task.id,verification.head_sha])).rows[0]?.pr;
+  if (!pr) return deny('blocked','PR 정보가 필요합니다.');
+  const authority = (await client.query<{ generation:number }>('select generation from external_write_authority where singleton')).rows[0];
+  return { allowed:true,state:'pending',reason:'재통합 대상으로 확인했습니다.',projectId:task.project_id,taskKey:task.task_key,
+    payload:{ taskKey:task.task_key,qaHeadSha:verification.head_sha,branch:a?.branch,pr,commit:verification.head_sha,baseSha:base },
+    dedupKey:`${prefix}${base}:${rounds.length+1}`,generation:authority?.generation ?? null };
+}
+
+export async function enqueueIntegration(client: PoolClient, taskId: string, epoch: number, options: IntegrationOptions = {}) {
+  const repo = new RunnerRepository(client); await repo.lock(); await repo.taskById(taskId);
+  const decision = await integrationDecision(client,taskId,options);
+  if (!decision.allowed) return;
+  if ('existingJobId' in decision) return decision.existingJobId;
+  const id = await repo.enqueue(decision.projectId,epoch,'integrate',decision.payload,decision.dedupKey,decision.generation);
+  if (id) deferChange(client,decision.projectId,'ci',{ taskKey:decision.taskKey });
   return id;
 }

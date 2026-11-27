@@ -7,7 +7,7 @@ import { reportInputChanges, reportProgress, reportRepoCheck, submitDraft, submi
 import type { StepStatus } from './steps.ts';
 import { inputErrors, OPERATIONS } from '@awbs/shared/api';
 import { ProjectError } from './errors.ts';
-import { deferChange } from '../changes/events.ts';
+import { resolveMovedBaselines } from '../ci/decisions.ts';
 import { RunnerRepository } from '../runner/repository.ts';
 import { enqueueIntegration } from '../execution/gate.ts';
 import { reportGithubStatus, type GithubReport } from './github.ts';
@@ -39,9 +39,7 @@ export function installProjectRunner(app: FastifyInstance, pool: Pool): void {
           for (const task of (await ctx.client.query<{ id: string }>("select id from tasks where project_id=$1 and status='gate' and deleted_at is null order by id",[project.id])).rows) {
             await enqueueIntegration(ctx.client,task.id,ctx.epoch,{ baseSha:result.head,baselineOnly:true });
           }
-          const resolved = await ctx.client.query("update alerts set resolved_at=clock_timestamp() where project_id=$1 and key like 'ci:baseline|%' and key<>$2 and resolved_at is null",[project.id,`ci:baseline|${result.head}`]);
-          await ctx.client.query("update notify_events set resolved_at=clock_timestamp() where project_id=$1 and ref->>'failScope'='baseline' and ref->>'baseSha'<>$2 and resolved_at is null",[project.id,result.head]);
-          if (resolved.rowCount) { deferChange(ctx.client,project.id,'alert',{}); deferChange(ctx.client,project.id,'notify',{}); }
+          await resolveMovedBaselines(ctx.client,project.id);
         }
       }
       return result;

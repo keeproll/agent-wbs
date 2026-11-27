@@ -1683,6 +1683,7 @@ export const ciRuns = pgTable(
     note: text(),
     e2e: jsonb(),
     github_status: jsonb(),
+    cause_candidates: jsonb().notNull().default([]),
     finished_at: at('finished_at'),
     log_excerpt: text(),
     artifact_path: text(),
@@ -1695,6 +1696,7 @@ export const ciRuns = pgTable(
   },
   (t) => [
     check('ci_stage', sql`${t.stage} between 1 and 4`),
+    check('ci_cause_candidates_array', sql`jsonb_typeof(${t.cause_candidates})='array'`),
     check('ci_fail_scope', sql`${t.fail_scope} is null or ${t.fail_scope} in ('baseline','task')`),
     index('ci_runs_input_version_idx').on(t.input_version),
     // job 없는 실행은 야간 점검뿐이라는 규칙은 0014의 트리거 ci_job_owner가 검사한다.
