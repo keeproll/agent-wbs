@@ -76,11 +76,25 @@ export async function loadMockSubagents(): Promise<MockSubagent[]> {
  * 기준: 검사기는 CLI(Claude Code·Codex)가 실제로 읽는 방식보다 관대하면 안 된다(리뷰 P2-3, 재리뷰).
  * 그래서 손으로 만든 해석 대신 표준 분석기를 쓴다.
  *   - Claude frontmatter: YAML 1.2 엄격 분석(`yaml` 패키지, strict·uniqueKeys). 경고도 오류로 본다.
- *   - Codex 역할 파일: TOML 1.0 분석기(`smol-toml`). Codex도 실제 TOML 분석기로 읽는다.
+ *   - Codex 역할 파일: TOML 분석기(`smol-toml` 1.9.1, 공식 설명상 TOML 1.1.0 지원). Codex도 실제 TOML 분석기(Rust `toml` crate)로 읽는다.
  * 분석 전에 파일 자체를 먼저 거른다: UTF-8로 읽을 수 없는 바이트, 맨 앞 BOM, 탭·LF 밖의 제어 문자, 비문자.
  */
 
-interface Parsed { name?: string; description?: string; keys: string[]; tools?: string[]; instructions: string }
+/**
+ * 분석기가 해석한 결과. 정책 검사(conflict·mock-text·model-effort·tools·common-rules)는 모두 이 값에 적용한다.
+ * - `visible`: CLI가 실제로 보게 될 문자열 전부(설정 값과 지시문 본문). 이스케이프·여러 줄 문자열·리터럴 문자열을 해석한 뒤의 값이다.
+ * - 파일 원문은 인코딩·문자(바이트 수준) 검사와 hash에만 쓴다.
+ *   왜: 원문만 보면 `Re\u0061ct`처럼 이스케이프로 적은 글자를 놓친다. CLI는 해석한 값 `React`를 받는다(3차 리뷰 P2).
+ */
+interface Parsed { name?: string; description?: string; keys: string[]; tools?: string[]; instructions: string; visible: string[] }
+
+/** TOML 값 안의 문자열을 모두 모은다(표·배열 안의 문자열 포함). */
+function stringLeaves(value: unknown): string[] {
+  if (typeof value === 'string') return [value];
+  if (Array.isArray(value)) return value.flatMap(stringLeaves);
+  if (value && typeof value === 'object') return Object.entries(value as Record<string, unknown>).flatMap(([k, v]) => [k, ...stringLeaves(v)]);
+  return [];
+}
 
 /** 파일 바이트를 UTF-8로 엄격하게 읽는다. 잘못된 바이트를 U+FFFD로 바꾸지 않고 오류를 돌려준다. BOM도 지우지 않는다. */
 export function decodeUtf8Strict(bytes: Uint8Array): { text: string; error?: string } {
@@ -92,11 +106,17 @@ export function decodeUtf8Strict(bytes: Uint8Array): { text: string; error?: str
 }
 
 /**
- * 정의 파일에 쓸 수 있는 문자만 남았는지 본다. YAML 1.2 §5.1의 c-printable과 TOML 1.0이 함께 받는 범위에서 다음만 허용한다.
+ * 정의 파일에 쓸 수 있는 문자만 남았는지 본다(바이트·문자 수준 검사). 허용 범위는 다음뿐이다.
  *   - 탭(U+0009)과 LF(U+000A)
  *   - U+0020~U+007E, U+00A0~U+D7FF, U+E000~U+FFFD(U+FEFF 제외), U+10000 이상
- * CR(U+000D)은 받지 않는다. 줄 끝 방식에 따라 hash가 달라지지 않게 LF만 쓴다.
- * C1 제어 문자(U+0080~U+009F, U+0085 포함)는 TOML은 받지만 YAML은 받지 않으므로 둘 다 막는다.
+ * 표준과 제품 규칙을 구분해 적는다.
+ *   - 표준이 거부하는 것:
+ *     - C0 제어 문자(탭·LF·CR 제외)와 DEL(U+007F)은 YAML 1.2 §5.1과 TOML이 모두 거부한다.
+ *     - U+0080~U+0084, U+0086~U+009F와 U+FFFE·U+FFFF는 YAML 1.2 §5.1이 거부한다. TOML은 받는다.
+ *   - 제품 규칙(표준보다 좁힘):
+ *     - U+0085(NEL)는 YAML 1.2가 받고 TOML도 받지만, C1 범위를 통째로 막는다. 줄바꿈처럼 보이는 글자가 화면·diff에서 숨지 않게 하려는 것이다.
+ *     - CR(U+000D)은 두 표준 모두 받지만 막는다. 줄 끝 방식에 따라 hash가 달라지지 않게 LF만 쓴다.
+ *     - 맨 앞 BOM(U+FEFF)과 중간의 U+FEFF도 막는다. CLI마다 BOM 처리가 달라 같은 파일을 다르게 읽을 수 있다.
  */
 export function textProblem(text: string): string | null {
   if (text.startsWith('\ufeff')) return '파일 맨 앞에 BOM(U+FEFF)이 있습니다.';
@@ -159,14 +179,14 @@ function parseClaude(text: string): Parsed | string {
     result = out;
   }
   if (!result) return 'frontmatter를 읽지 못했습니다.';
-  const parsed: Parsed = { keys: Object.keys(result), instructions: m[2] ?? '' };
+  const parsed: Parsed = { keys: Object.keys(result), instructions: m[2] ?? '', visible: [...Object.values(result), m[2] ?? ''] };
   if ('name' in result) parsed.name = result.name?.trim();
   if ('description' in result) parsed.description = result.description?.trim();
   if ('tools' in result) parsed.tools = (result.tools ?? '').split(',').map((t) => t.trim()).filter(Boolean);
   return parsed;
 }
 
-/** Codex: TOML 1.0 표준 분석. 최상위 값은 모두 문자열이어야 한다(표·배열·숫자는 받지 않는다). */
+/** Codex: 표준 TOML 분석(smol-toml, TOML 1.1.0). 허용한 키의 값은 문자열이어야 한다(표·배열·숫자는 받지 않는다). */
 function parseCodex(text: string): Parsed | string {
   let table: Record<string, unknown>;
   try {
@@ -174,7 +194,7 @@ function parseCodex(text: string): Parsed | string {
   } catch (error) {
     return `TOML 오류: ${(error instanceof Error ? error.message : String(error)).split('\n')[0] ?? ''}`;
   }
-  const out: Parsed = { keys: Object.keys(table), instructions: '' };
+  const out: Parsed = { keys: Object.keys(table), instructions: '', visible: Object.values(table).flatMap(stringLeaves) };
   for (const [key, value] of Object.entries(table)) {
     // 허용하지 않은 키는 config-key 규칙이 이름으로 잡는다. 허용한 키의 값만 여기서 문자열인지 본다.
     if (typeof value !== 'string') {
@@ -268,7 +288,9 @@ export function checkSubagentSet(set: SubagentSet, mock: readonly MockSubagent[]
       else if (!allowedKeys.has(key)) add(k, 'config-key', `허용하지 않은 설정 키입니다: ${key}`);
     }
     if (new Set(parsed.keys).size !== parsed.keys.length) add(k, 'format', '같은 설정 키가 두 번 있습니다.');
-    if (MODEL_TEXT.test(parsed.instructions) || MODEL_TEXT.test(parsed.description ?? '')) add(k, 'model-effort', '지시문에 모델 이름이나 effort를 적었습니다.');
+    // 정책 검사 대상: CLI가 보게 될 해석된 문자열 전부.
+    const visible = parsed.visible.join('\n');
+    if (MODEL_TEXT.test(visible)) add(k, 'model-effort', '지시문·설정 값에 모델 이름이나 effort를 적었습니다.');
 
     // 도구·권한
     if (d.agent === 'Claude') {
@@ -288,10 +310,10 @@ export function checkSubagentSet(set: SubagentSet, mock: readonly MockSubagent[]
 
     // Mock과 충돌 지시
     if (mockIds.has(k)) add(k, 'mock-text', `Mock 정의 이름(${k})을 그대로 썼습니다. demo 정의와 섞이지 않게 다른 이름을 씁니다.`);
-    const body = norm(d.text);
+    const body = norm(visible);
     for (const s of sentences) if (body.includes(s)) { add(k, 'mock-text', `SUB_MOCK 문장을 그대로 옮겼습니다: ${s.slice(0, 30)}…`); break; }
     for (const c of CONFLICT_PATTERNS) {
-      const hit = c.pattern.exec(d.text);
+      const hit = c.pattern.exec(visible);
       if (hit) add(k, 'conflict', `${c.why} (「${hit[0]}」)`);
     }
 

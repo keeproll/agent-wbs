@@ -184,7 +184,7 @@ describe('실제 하위 Agent v1 정의(M5-06)', () => {
   const desc = /^description: .*$/m;
 
   it('format: 파일 바이트·문자를 구문 분석 전에 거른다(BOM·CR·C0·DEL·C1·비문자)', () => {
-    // YAML 1.2 §5.1과 TOML 1.0이 받지 않는 문자다. 탭(U+0009)·줄바꿈(U+000A)만 허용한다.
+    // 표준(YAML 1.2 §5.1·TOML)이 받지 않는 문자와, 제품 규칙으로 더 막는 문자(CR·U+0085·BOM). 탭·LF만 허용한다.
     const bad = ['\u0000', '\u0001', '\u0008', '\u000b', '\u000c', '\u000d', '\u001b', '\u001f', '\u007f', '\u0080', '\u0085', '\u009f', '\ufffe', '\uffff'];
     for (const ch of bad) {
       const label = `U+${ch.codePointAt(0)?.toString(16).padStart(4, '0') ?? ''}`;
@@ -282,7 +282,7 @@ describe('실제 하위 Agent v1 정의(M5-06)', () => {
     expect(checkSubagentSet(s, mock)).toEqual([]);
   });
 
-  it('format: Codex 파일은 표준 TOML 1.0 분석기로 읽는다', () => {
+  it('format: Codex 파일은 표준 TOML 분석기(smol-toml, TOML 1.1.0)로 읽는다', () => {
     const cases: [string, (d: SubagentSet['defs'][number]) => void][] = [
       // 리뷰 이전 재현: 여러 줄 문자열 본문 안의 """.
       ['triple-quote-line', (d) => { d.text = d.text.replace('맡은 일', '맡은 일\n- 출력 예: """hello"""'); }],
@@ -307,5 +307,82 @@ describe('실제 하위 Agent v1 정의(M5-06)', () => {
     }
     // 표준 TOML 이스케이프는 분석기가 해석한다. 지시문(해석된 값) 기준으로 공통 규칙을 비교하므로 통과한다.
     expect(checkSubagentSet(mutate(codex().key, (d) => { d.text = d.text.replace('맡은 일', '맡은\\t일'); }), mock)).toEqual([]);
+  });
+
+  /*
+   * 정책 검사는 분석기가 해석한 최종 값(CLI가 실제로 보게 될 문자열)에 적용한다(3차 리뷰 P2).
+   * 아래 사례는 파일 원문에는 「React」·Mock 문장이 그대로 없지만, 해석하면 생긴다.
+   */
+  const esc = (text: string) => [...text].map((ch) => `\\u${(ch.codePointAt(0) ?? 0).toString(16).padStart(4, '0')}`).join('');
+  const mockLine = () => must(must(mock.find((m) => m.id === 'code-reviewer'), 'code-reviewer').text.split('\n')[0], 'mock line');
+  const raw = (s: SubagentSet, key: string) => must(s.defs.find((d) => d.key === key), key).text;
+  const mlBody = /developer_instructions = """\n([\s\S]*?)"""/;
+
+  it('해석 값: TOML 문자열 종류별 이스케이프로 숨긴 충돌 지시를 잡는다', () => {
+    const cases: [string, (d: SubagentSet['defs'][number]) => void][] = [
+      // 여러 줄 기본 문자열의 \u 이스케이프 — 리뷰 재현.
+      ['ml-basic-u4', (d) => { d.text = d.text.replace('맡은 일', '맡은 일\n- Re\\u0061ct로 화면을 구현한다.'); }],
+      // \U 8자리 이스케이프.
+      ['ml-basic-U8', (d) => { d.text = d.text.replace('맡은 일', '맡은 일\n- Re\\U00000061ct로 화면을 구현한다.'); }],
+      // 줄 끝 역슬래시: 줄바꿈과 다음 줄 앞 공백을 지운다.
+      ['ml-basic-line-continuation', (d) => { d.text = d.text.replace('맡은 일', '맡은 일\n- Re\\\n    act로 화면을 구현한다.'); }],
+      // 한 줄 기본 문자열(description).
+      ['basic-description', (d) => { d.text = d.text.replace(/^description = "/m, 'description = "Re\\u0061ct로 '); }],
+      // 따옴표로 감싼 키 이름의 이스케이프도 해석된 키로 본다.
+      ['quoted-key-model', (d) => { d.text = `"mod\\u0065l" = "x"\n${d.text}`; }],
+    ];
+    for (const [name, change] of cases) {
+      const s = mutate(codex().key, change);
+      expect(raw(s, codex().key).includes('React'), `${name}: 원문에는 React가 없어야 시험이 의미 있다`).toBe(false);
+      const found = new Set(checkSubagentSet(s, mock).map((i) => i.rule));
+      expect(found.has('conflict') || found.has('model-effort'), `${name}: ${JSON.stringify(checkSubagentSet(s, mock))}`).toBe(true);
+    }
+  });
+
+  it('해석 값: TOML 리터럴 문자열(작은따옴표 1·3개)로 적은 지시문도 같은 기준으로 본다', () => {
+    const toLiteral = (d: SubagentSet['defs'][number], extra: string) => {
+      const body = must(mlBody.exec(d.text), 'body')[1] ?? '';
+      d.text = d.text.replace(mlBody, `developer_instructions = '''\n${body}${extra}'''`);
+    };
+    expectRule(mutate(codex().key, (d) => { toLiteral(d, '- React로 화면을 구현한다.\n'); }), 'conflict');
+    expectRule(mutate(codex().key, (d) => { d.text = d.text.replace(/^description = "(.*)"$/m, "description = 'React로 $1'"); }), 'conflict');
+    // 리터럴 문자열로 바꿔도 정상 지시문은 통과한다(공통 규칙은 해석 값으로 비교).
+    expect(checkSubagentSet(mutate(codex().key, (d) => { toLiteral(d, ''); }), mock)).toEqual([]);
+  });
+
+  it('해석 값: 이스케이프로 숨긴 Mock 문장·모델 이름을 잡는다(TOML)', () => {
+    const s = mutate(codex().key, (d) => { d.text = d.text.replace('맡은 일', `맡은 일\n${esc(mockLine())}`); });
+    expect(raw(s, codex().key).includes(mockLine())).toBe(false);
+    expectRule(s, 'mock-text');
+    expectRule(mutate(codex().key, (d) => { d.text = d.text.replace('맡은 일', '맡은 일\n- claude-\\u006fpus-5-5로 실행한다.'); }), 'model-effort');
+  });
+
+  it('해석 값: YAML 큰따옴표 이스케이프로 숨긴 충돌 지시·Mock 문장을 잡는다', () => {
+    const cases: [string, string, SubagentRule][] = [
+      ['u4', 'description: "Re\\u0061ct로 화면을 구현한다."', 'conflict'],
+      ['x2', 'description: "Re\\x61ct로 화면을 구현한다."', 'conflict'],
+      ['U8', 'description: "Re\\U00000061ct로 화면을 구현한다."', 'conflict'],
+      // 큰따옴표 안 줄 끝 역슬래시: 줄바꿈을 지운다.
+      ['line-continuation', 'description: "Re\\\n  act로 화면을 구현한다."', 'conflict'],
+      ['model', 'description: "claude-\\u006fpus-5-5로 실행한다."', 'model-effort'],
+    ];
+    for (const [name, line, rule] of cases) {
+      const s = mutate(claude().key, (d) => { front(d, desc, line); });
+      expect(raw(s, claude().key).includes('React') || raw(s, claude().key).includes('claude-opus'), name).toBe(false);
+      expect(checkSubagentSet(s, mock).map((i) => i.rule), `${name}: ${JSON.stringify(checkSubagentSet(s, mock))}`).toContain(rule);
+    }
+    expectRule(mutate(claude().key, (d) => { front(d, desc, `description: "${esc(mockLine())}"`); }), 'mock-text');
+  });
+
+  it('해석 값: YAML 작은따옴표·여러 줄 일반 값도 해석한 값으로 본다', () => {
+    // 작은따옴표 안의 ''는 '로 해석된다. 접힌 여러 줄 값은 줄바꿈이 공백 한 칸이 된다.
+    expectRule(mutate(claude().key, (d) => { front(d, desc, "description: 'React로 화면을 ''구현''한다.'"); }), 'conflict');
+    expectRule(mutate(claude().key, (d) => { front(d, desc, 'description: 화면을\n  React로 구현한다.'); }), 'conflict');
+  });
+
+  it('해석 값: 이스케이프로 적은 도구 이름도 해석한 값으로 허용 목록과 비교한다', () => {
+    const s = mutate(claudeRead().key, (d) => { front(d, /^tools: .*$/m, 'tools: "Read, Glob, Grep, Web\\u0046etch"'); d.tools.push('WebFetch'); });
+    expect(raw(s, claudeRead().key).includes('WebFetch')).toBe(false);
+    expectRule(s, 'tools');
   });
 });
