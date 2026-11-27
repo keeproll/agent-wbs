@@ -1,10 +1,12 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { ClaimedJob, JudgedContent } from '../api/generated/client.ts';
-import { ANALYSIS_ORDER, CP_RULES, SPLIT_RULES, type AgentName, type Analysis, type SplitRule } from './agents.ts';
+import { ANALYSIS_ORDER, CP_RULES, SPLIT_RULES, type AgentName, type Analysis, type ProposalOp, type SplitProposalOp, type SplitRule } from './agents.ts';
+type AnyOp = ProposalOp | SplitProposalOp;
 import { isAnalysis, isAnalysisPair, isCross, isDisagreements, isEstimates } from './guards.ts';
 import { planningMode, splitWbs } from './payload.ts';
 import { agreeEstimates, agreeJudgements, agreeSplitJudgements } from './consensus.ts';
-import { judgeChanges, plainOps, proposalBind, sendProposal } from './input-diff.ts';
+import { judgeChanges, plainOps, proposalBind, sendProposal, splitContext } from './input-diff.ts';
+import { splitTasksOf } from './judged.ts';
 import { bindingProblem, bound, boundRef, fingerprint, judgedContentHash } from './binding.ts';
 import { PlanningCheckpointError } from './checkpoint.ts';
 import { JobRun, PlanningAgentFailed, type PlanningOutcome } from './run.ts';
@@ -58,7 +60,7 @@ async function rejudgeTasks(run: JobRun<Job<'planning'>>): Promise<PlanningOutco
       disagreements = [...disagreements, ...judged.disagreements];
       return { params: { taskKey: task.taskKey }, body: { jobId: run.job.id, fence: run.job.fence, grades: plan.grades, subagents: plan.subagents, conflictGroup,
         judgedRules: judged.records.get(task.taskKey) as never } };
-    }, bind, (problem) => new PlanningAgentFailed('Runner', 'Task 재판단', problem)), { bind });
+    }, bind, (problem) => new PlanningAgentFailed('Runner', 'Task 재판단', problem)), { bind, to: { params: { taskKey: task.taskKey } } });
   }
   return { status: 'done', result: { tasks: tasks.length, disagreements } };
 }
@@ -87,8 +89,8 @@ async function judgeProposal(run: JobRun<Job<'planning'>>, proposal: NonNullable
     return splitShown ? bindingProblem(body.splitJudgements, fingerprint(splitShown), '분할') : '분할 CP가 아닌데 분할 판단이 있습니다';
   };
   const stored = run.checkpoint.output(`judgements:${run.job.id}`, isDisagreements);
-  if (stored && run.checkpoint.sent(run.job.id, 'judgements')) {
-    await run.reporter.send('submitProposalJudgements', 'judgements', run.checkpoint.sent(run.job.id, 'judgements')?.request as never, { bind });
+  if (stored && run.checkpoint.sent(run.sendScope, 'judgements')) {
+    await run.reporter.send('submitProposalJudgements', 'judgements', run.checkpoint.sent(run.sendScope, 'judgements')?.request as never, { bind, to: { params: { id: proposal.id } } });
     return { status: 'done', result: { disagreements: stored.disagreements } };
   }
   const rules = enabledRules(run.job.payload.policy);
@@ -118,7 +120,7 @@ async function judgeProposal(run: JobRun<Job<'planning'>>, proposal: NonNullable
       judgements: subjects.map((s) => ({ target: s.target, judgedRules: judged.records.get(s.target) as never })),
       ...(split && { splitJudgements: split.record as never }),
     },
-  }, { bind });
+  }, { bind, to: { params: { id: proposal.id } } });
   return { status: 'done', result: { disagreements } };
 }
 
@@ -128,7 +130,7 @@ async function runSession(run: JobRun<Job<'planning'>>, session: { id: string; t
   for (const agent of ['Codex', 'Claude'] as const) {
     await run.reporter.send('submitPlanningAnalysis', `analysis:${agent}`, {
       params: { id: session.id }, body: { jobId: run.job.id, fence: run.job.fence, agent, summary: analyses[agent].summary, items: analyses[agent].items },
-    });
+    }, { to: { params: { id: session.id } } });
   }
   // 교차 검토도 먼저 저장한다. 재시작 때 다시 물으면 이미 보낸 검토와 다른 결과가 나올 수 있다.
   let cross = run.checkpoint.output('session:cross', isCross);
@@ -137,7 +139,7 @@ async function runSession(run: JobRun<Job<'planning'>>, session: { id: string; t
     await run.checkpoint.saveOutput('session:cross', cross, isCross);
   }
   if (cross.reviews.length) {
-    await run.reporter.send('submitPlanningReviews', 'reviews', { params: { id: session.id }, body: { jobId: run.job.id, fence: run.job.fence, reviews: cross.reviews } });
+    await run.reporter.send('submitPlanningReviews', 'reviews', { params: { id: session.id }, body: { jobId: run.job.id, fence: run.job.fence, reviews: cross.reviews } }, { to: { params: { id: session.id } } });
   }
   return { status: 'done', result: { planningId: session.id, reviews: cross.reviews.length } };
 }
@@ -153,7 +155,9 @@ async function sessionAnalyses(run: JobRun<Job<'planning'>>, request: Parameters
   if (saved) return saved;
   const pair = {} as Record<AgentName, Analysis>;
   for (const agent of ANALYSIS_ORDER) {
-    const body = (run.checkpoint.sent(run.job.id, `analysis:${agent}`)?.request as { body?: unknown } | undefined)?.body;
+    // 이번 임대의 기록, 없으면 이전 버전(범위 없는 키)의 기록에서 보낸 본문을 찾는다.
+    const sent = run.checkpoint.sent(run.sendScope, `analysis:${agent}`) ?? run.checkpoint.sent(run.job.id, `analysis:${agent}`);
+    const body = (sent?.request as { body?: unknown } | undefined)?.body;
     const restored = body && typeof body === 'object' ? { summary: (body as Analysis).summary, items: (body as Analysis).items } : undefined;
     pair[agent] = isAnalysis(restored) ? restored : await run.call(run.ctx.agents[agent], 'Planning 독립 분석', (a) => a.analyze(request));
   }
@@ -179,7 +183,7 @@ export async function runEstimate(run: JobRun<Job<'estimate'>>): Promise<Plannin
   // 어떤 보고도 보내기 전에 대조한다. 보내는 본문은 매번 검증된 합의(estimates:agreed)에서 만든다. 저장된 보낸 본문이 이것과 다르면 손상이다(3차 리뷰).
   // 고친 값으로 같은 멱등 키에 덮어쓰지 않는다: 서버가 처리한 본문과 다른 본문이 같은 키로 가게 된다.
   const body = { jobId: run.job.id, fence: run.job.fence, items: agreed.map(({ ref, ...values }) => ({ taskKey: ref, ...values })) };
-  const stored = run.checkpoint.sent(run.job.id, 'estimates');
+  const stored = run.checkpoint.sent(run.sendScope, 'estimates');
   if (stored && !isDeepStrictEqual((stored.request as { body?: unknown }).body, body)) {
     throw new PlanningCheckpointError('보낸 추정 본문이 저장된 합의 추정과 다릅니다.');
   }
@@ -193,9 +197,9 @@ export async function runEstimate(run: JobRun<Job<'estimate'>>): Promise<Plannin
       const current = task.content.conflictGroup;
       const conflictGroup = plan.conflictGroup !== undefined ? plan.conflictGroup : current ? { name: current, reason: '기존 충돌 묶음 유지' } : null;
       return { params: { taskKey: task.taskKey }, body: { jobId: run.job.id, fence: run.job.fence, grades: plan.grades, subagents: plan.subagents, conflictGroup } };
-    });
+    }, { to: { params: { taskKey: task.taskKey } } });
   }
-  await run.reporter.send('submitEstimates', 'estimates', { body });
+  await run.reporter.send('submitEstimates', 'estimates', { body }, { to: { params: null } });
   return { status: 'done', result: { tasks: agreed.length } };
 }
 
@@ -205,9 +209,10 @@ export async function runSplit(run: JobRun<Job<'split'>>): Promise<PlanningOutco
   if (!task || tasks.length !== 1) return unsupported('분할 작업은 Task 하나를 대상으로 합니다.');
   // 원 Task의 작업 묶음과 선행·후행 그래프가 든 WBS 스냅샷(계약 6). 새 Task의 wp와 순서 보장(D-34)을 이 위에서 설계한다.
   const wbs = splitWbs(run.job);
-  const splitTasks = [{ taskKey: task.taskKey, content: task.content }];
-  // 분할 판단에 보여 주는 입력: 판단 기록을 뺀 ops + 원래 Task 내용. 전송 직전에 실제 ops로 다시 만든다.
-  const splitShown = (ops: unknown[]) => ({ ops, splitTasks });
+  // 원 Task: 상속 전제(충돌 묶음)를 만든다. 작업 유형은 payload에 없어 조사 Task 상속은 명시를 요구한다(judged.ts effectiveGroup).
+  const original = { taskKey: task.taskKey, content: task.content, workType: null };
+  // 분할 판단(D-34)에 보여 주는 입력: 판단 기록을 뺀 ops + 대상 Task들의 지금 내용(서버 splitSubjectHash와 같은 구성).
+  const splitShown = (ops: AnyOp[]) => ({ ops, splitTasks: splitTasksOf(ops, task.taskKey, wbs) });
   const response = await sendProposal(run, async () => {
     const content = await run.ask('분할 제안', (a) => a.proposeSplit({ jobId: run.job.id, task, policy, wbs }));
     const adds = content.ops.flatMap((op) => (op.op === 'add' ? [op] : []));
@@ -215,16 +220,16 @@ export async function runSplit(run: JobRun<Job<'split'>>): Promise<PlanningOutco
     // 분할 CP의 새 Task는 분할 근거가 필수다(contracts §2.1). 비었으면 문구를 지어 넣지 않고 실패한다(data-model §2.3 basis).
     const blank = adds.find((op) => !op.t.splitBasis.trim());
     if (blank) throw new PlanningAgentFailed(run.author.name, '분할 제안', `${blank.ref}의 분할 근거가 비었습니다.`);
-    const { ops, taskJudgements, disagreements } = await judgeChanges(run, content.ops, wbs);
+    const { ops, taskJudgements, disagreements } = await judgeChanges(run, content.ops, wbs, splitContext(plainOps(content.ops), original));
     const shownOps = plainOps(content.ops);
-    const answers = await run.both('분할 판단', (a) => a.judgeSplit({ jobId: run.job.id, rules: CP_RULES, ops: shownOps as never, splitTasks }));
+    const answers = await run.both('분할 판단', (a) => a.judgeSplit({ jobId: run.job.id, rules: CP_RULES, ops: shownOps as never, splitTasks: splitShown(shownOps).splitTasks }));
     const split = agreeSplitJudgements(CP_RULES, answers, { judgedAt: run.iso(), sourceRef: run.job.id, sourceRefFor: () => boundRef(run.job.id, fingerprint(splitShown(shownOps))) });
     await run.checkpoint.saveOutput(`split:${run.job.id}`, { disagreements: [...disagreements, ...split.disagreements] }, isDisagreements);
     return {
       body: { jobId: run.job.id, fence: run.job.fence, title: content.title, reason: content.reason, source: { kind: 'split' as const, id: task.taskKey },
         ops: ops as never, splitJudgements: split.record, ...(taskJudgements.length && { taskJudgements: taskJudgements as never }) },
     };
-  }, proposalBind(wbs, splitShown));
+  }, proposalBind(wbs, { original, shown: splitShown }), { kind: 'split', id: task.taskKey });
   if (!response) return unsupported('분할 제안을 만들지 못했습니다.');
   const saved = run.checkpoint.output(`split:${run.job.id}`, isDisagreements);
   return { status: 'done', result: { proposalId: response.body.id, cpKey: response.body.cpKey, disagreements: saved?.disagreements ?? [] } };

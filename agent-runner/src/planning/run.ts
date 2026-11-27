@@ -68,12 +68,15 @@ export class JobRun<J extends ClaimedJob = ClaimedJob> {
     this.clock = ctx.now ?? Date.now;
     this.redact = createRedactor(ctx.secrets ?? []);
     this.reporter = new PlanningReporter({
-      api: ctx.api, epoch: ctx.epoch, runnerId: ctx.runnerId, jobId: job.id, checkpoint, now: this.clock,
+      api: ctx.api, epoch: ctx.epoch, runnerId: ctx.runnerId, jobId: job.id, fence: job.fence, scope: `${job.id}@${String(job.fence)}`, checkpoint, now: this.clock,
       ...(ctx.sleep && { sleep: ctx.sleep }), ...(ctx.signal && { signal: ctx.signal }), ...(ctx.maxAttempts && { maxAttempts: ctx.maxAttempts }),
     });
   }
 
   iso(): string { return new Date(this.clock()).toISOString(); }
+
+  /** 보낸 요청 기록의 범위: 이 job의 이번 임대(fence). reporter와 같은 값이다. */
+  get sendScope(): string { return `${this.job.id}@${String(this.job.fence)}`; }
 
   get author(): PlanningAgent { return this.ctx.agents[this.ctx.author ?? 'Claude']; }
 

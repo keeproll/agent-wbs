@@ -51,7 +51,7 @@ export async function runSteps(run: JobRun<Stepped>, steps: readonly Step[], hoo
     run.reporter.send('reportBootstrapProgress', `progress:${step.key}:${status}`, {
       params: { jobId: run.job.id },
       body: { fence: run.job.fence, stepKey: step.key as never, status, at: run.iso(), ...(note !== undefined && { note }) },
-    });
+    }, { to: { params: { jobId: run.job.id } } });
   let current: Step | undefined;
   try {
     for (const step of steps.slice(0, start)) {

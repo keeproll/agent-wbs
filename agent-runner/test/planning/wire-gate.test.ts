@@ -96,7 +96,7 @@ describe('저장된 보낸 요청을 하나씩 변조하면 아무것도 보내�
         const original = await readFile(join(dir, file), 'utf8');
         const doc = JSON.parse(original) as Doc;
         // 이 job이 보낸 요청만 변조한다(준비 실행의 요청은 이 job이 다시 보내지 않는다).
-        const own = { ...doc, sent: Object.fromEntries(Object.entries(doc.sent).filter(([k]) => k.startsWith(`${scenario.job.id}:`))) };
+        const own = { ...doc, sent: Object.fromEntries(Object.entries(doc.sent).filter(([k]) => k.startsWith(`${scenario.job.id}@${String(scenario.job.fence)}:`))) };
         for (const tampering of tamperings(own)) {
           const copy = JSON.parse(original) as Doc;
           tampering.apply(copy);
@@ -128,14 +128,14 @@ describe('전송 직전 관문: 진행 기록 검사를 거치지 않은 값도 
   test('재전송: 저장된 본문이 관문을 통과하지 못하면 보내지 않는다', async () => {
     const fake = fakeApi();
     const reporter = new PlanningReporter({ api: fake.api, epoch: 3, runnerId: 'runner-1', jobId: 'j', checkpoint: unchecked(bad) });
-    await expect(reporter.send('submitEstimates', 'estimates', bad as never)).rejects.toBeInstanceOf(PlanningCheckpointError);
+    await expect(reporter.send('submitEstimates', 'estimates', bad as never, { to: { params: null } })).rejects.toBeInstanceOf(PlanningCheckpointError);
     expect(fake.calls).toEqual([]);
   });
 
   test('첫 전송: 새로 만든 본문도 같은 관문을 지난다', async () => {
     const fake = fakeApi();
     const reporter = new PlanningReporter({ api: fake.api, epoch: 3, runnerId: 'runner-1', jobId: 'j', checkpoint: unchecked() });
-    await expect(reporter.send('submitEstimates', 'estimates', () => Promise.resolve(bad as never))).rejects.toThrow(/합의 주체/);
+    await expect(reporter.send('submitEstimates', 'estimates', () => Promise.resolve(bad as never), { to: { params: null } })).rejects.toThrow(/합의 주체/);
     expect(fake.calls).toEqual([]);
   });
 
@@ -160,7 +160,7 @@ describe('저장된 합의 추정과 보낸 추정 본문이 다르면 손상이
     const dir = join(home, 'state', 'planning');
     const [file] = await readdir(dir);
     const doc = JSON.parse(await readFile(join(dir, file ?? ''), 'utf8')) as Doc;
-    const entry = doc.sent[`${job.id}:estimates`];
+    const entry = doc.sent[`${job.id}@${String(job.fence)}:estimates`];
     const [item] = entry?.request.body.items as { estHours: number }[];
     if (item) item.estHours = 2.5;
     await writeFile(join(dir, file ?? ''), JSON.stringify(doc));

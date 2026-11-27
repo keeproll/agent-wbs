@@ -78,7 +78,7 @@ describe('P1: 새 충돌 묶음은 판단에도 보여 준다', () => {
     const [file] = await readdir(dir);
     const path = join(dir, file ?? '');
     const doc = JSON.parse(await readFile(path, 'utf8')) as { sent: Record<string, { request: { body: { conflictGroup: unknown } } }> };
-    const entry = doc.sent[`${rejudgeJob().id}:plan:TASK-0001`];
+    const entry = doc.sent[`${rejudgeJob().id}@1:plan:TASK-0001`];
     if (entry) entry.request.body.conflictGroup = { name: 'shared-db', reason: '변조' };
     await writeFile(path, JSON.stringify(doc));
     const fake = fakeApi();
@@ -92,7 +92,7 @@ describe('P1: 새 충돌 묶음은 판단에도 보여 준다', () => {
     const [file] = await readdir(dir);
     const path = join(dir, file ?? '');
     const doc = JSON.parse(await readFile(path, 'utf8')) as { sent: Record<string, { request: { body: { ops: { t?: { title: string } }[] } } }> };
-    const t = doc.sent[`${inputJob().id}:proposal`]?.request.body.ops[0]?.t;
+    const t = doc.sent[`${inputJob().id}@1:proposal`]?.request.body.ops[0]?.t;
     if (t) t.title = '판단하지 않은 제목';
     await writeFile(path, JSON.stringify(doc));
     const fake = fakeApi();

@@ -1,7 +1,8 @@
 import type { ClaimedJob } from '../api/generated/client.ts';
 import { SPLIT_RULES, type AgentName, type Analysis } from './agents.ts';
 import { isAnalysis, isCross, isDisagreements } from './guards.ts';
-import { bindingProblem, bound, boundRef, fingerprint, withoutJudged } from './binding.ts';
+import { bindingProblem, bound, boundRef, judgedContentHash, withoutJudged } from './binding.ts';
+import { judgedOfDraftTask } from './judged.ts';
 import type { BootstrapPayload } from './payload.ts';
 import { agreeEstimates, agreeJudgements, type Disagreement } from './consensus.ts';
 import { runSteps, type Step } from './steps.ts';
@@ -80,7 +81,7 @@ export async function runBootstrap(run: JobRun<BootJob>, payload: BootstrapPaylo
         // 전송 직전 대조: 초안 Task마다 판단이 그 Task(판단 기록 제외)를 본 판단인지 본다.
         const bind = (request: unknown) => {
           for (const t of ((request as { body?: { tasks?: Record<string, unknown>[] } }).body?.tasks ?? [])) {
-            const problem = bindingProblem(t.judgedRules, fingerprint(withoutJudged(t)), String(t.ref));
+            const problem = bindingProblem(t.judgedRules, judgedContentHash(judgedOfDraftTask(withoutJudged(t) as never)), String(t.ref));
             if (problem) return problem;
           }
           return null;
@@ -90,7 +91,7 @@ export async function runBootstrap(run: JobRun<BootJob>, payload: BootstrapPaylo
           const built = await buildDraft(run, { ...base(), cross: required(checkpoint.output('cross', isCross)), analyses: analyses(), decisions: decisionSnapshot, subagentDefs });
           await checkpoint.saveOutput(`draft:${job.id}`, { disagreements: built.disagreements }, isDisagreements);
           return { params: { jobId: job.id }, body: { fence: job.fence, ...built.body } };
-        }, bind, (problem) => new PlanningAgentFailed('Runner', LABELS.draft ?? '', problem)), { bind });
+        }, bind, (problem) => new PlanningAgentFailed('Runner', LABELS.draft ?? '', problem)), { bind, to: { params: { jobId: job.id } } });
         const saved = checkpoint.output(`draft:${job.id}`, isDisagreements);
         result = { revision: response.body.revision, disagreements: saved?.disagreements ?? [] };
         // 초안 단계 완료는 서버가 초안 등록 때 기록한다(진행 보고로 끝내면 400).
@@ -104,7 +105,7 @@ export async function runBootstrap(run: JobRun<BootJob>, payload: BootstrapPaylo
     await run.reporter.send('submitTechProposals', 'tech', {
       params: { jobId: job.id },
       body: { fence: job.fence, decisions: tech?.decisions ?? [], conditionJudgements: tech?.conditionJudgements ?? [] },
-    });
+    }, { to: { params: { jobId: job.id } } });
   };
   const failed = await runSteps(run, steps, techDone ? {} : { after: { cross: submitTech }, stopAfter: 'cross' });
   if (failed) return failed;
@@ -143,8 +144,9 @@ async function buildDraft(run: JobRun<BootJob>, request: Parameters<import('./ag
       ...(estimate.tokensK !== undefined && { tokensK: estimate.tokensK }) };
     return { ...task, estimate: values };
   });
-  const verdicts = await run.both('분할 규칙 판단', (a) => a.judgeRules({ jobId: run.job.id, rules: SPLIT_RULES, subjects: finals.map((t) => ({ target: t.ref, content: t })) }));
-  const fp = new Map(finals.map((t) => [t.ref, fingerprint(t)]));
+  // 판단 대상은 초안 Task가 WBS가 됐을 때의 JudgedContent(서버 draftSource와 같은 정의)다.
+  const verdicts = await run.both('분할 규칙 판단', (a) => a.judgeRules({ jobId: run.job.id, rules: SPLIT_RULES, subjects: finals.map((t) => ({ target: t.ref, content: judgedOfDraftTask(t) })) }));
+  const fp = new Map(finals.map((t) => [t.ref, judgedContentHash(judgedOfDraftTask(t))]));
   const { records, disagreements } = agreeJudgements(refs, SPLIT_RULES, verdicts,
     { judgedAt: run.iso(), sourceRef: run.job.id, sourceRefFor: (ref) => boundRef(run.job.id, fp.get(ref) ?? '') });
   const tasks = finals.map((task) => ({ ...task, judgedRules: records.get(task.ref) ?? { schemaVersion: 1 as const, items: [] } }));

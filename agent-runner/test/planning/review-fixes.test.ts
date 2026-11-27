@@ -76,7 +76,7 @@ describe('지적 1: 초기화 뒤 Planning 기록이 남지 않고, 기록은 �
     const checkpoint = await (await PlanningCheckpoints.open(home)).load(3, BOOT_KEY, 1);
     const fake = fakeApi();
     const reporter = new PlanningReporter({ api: fake.api, epoch: 4, runnerId: 'runner-1', jobId: 'j', checkpoint });
-    await expect(reporter.send('submitTechProposals', 'tech', { params: { jobId: 'j' }, body: { fence: 1, decisions: [] } })).rejects.toMatchObject({ code: 'EPOCH_MISMATCH' });
+    await expect(reporter.send('submitTechProposals', 'tech', { params: { jobId: 'j' }, body: { fence: 1, decisions: [] } }, { to: { params: { jobId: 'j' } } })).rejects.toMatchObject({ code: 'EPOCH_MISMATCH' });
     expect(fake.calls).toEqual([]);
   });
 });

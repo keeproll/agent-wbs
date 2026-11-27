@@ -101,10 +101,9 @@ describe('계약 6: WBS 스냅샷과 기존 Task 판단(taskJudgements)', () => 
     expect(body.taskJudgements.map((t) => t.taskKey)).toEqual(['TASK-0001']);
     expect(body.taskJudgements[0]?.judgedRules.items.map((i) => i.agreedBy.join())).toEqual(['Claude,Codex', 'Claude,Codex', 'Claude,Codex']);
     expect(JSON.stringify(body.taskJudgements)).not.toContain('subjectHash');
-    // 판단 대상은 스냅샷의 현재 내용 + 그 Task의 내용 변경(우선순위 변경은 판단 대상 아님)
-    const subject = (codex.calls.find((c) => c.method === 'judgeRules')?.request as { subjects: { target: string; content: { before: unknown; changes: unknown[] } }[] }).subjects.find((s) => s.target === 'TASK-0001');
-    expect(subject?.content.before).toEqual(content());
-    expect(subject?.content.changes).toEqual([{ op: 'modify', task: 'TASK-0001', field: 'title', after: '새 제목' }]);
+    // 판단 대상은 스냅샷의 현재 내용에 그 Task의 내용 변경을 적용한 JudgedContent(우선순위 변경은 판단 대상 아님, 5차 리뷰)
+    const subject = (codex.calls.find((c) => c.method === 'judgeRules')?.request as { subjects: { target: string; content: unknown }[] }).subjects.find((s) => s.target === 'TASK-0001');
+    expect(subject?.content).toEqual({ ...content(), title: '새 제목' });
   });
 
   test('내용 변경이 없는 수정(우선순위)만 있으면 taskJudgements를 보내지 않는다', async () => {

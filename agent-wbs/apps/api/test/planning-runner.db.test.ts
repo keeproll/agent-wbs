@@ -175,6 +175,11 @@ describe('실제 서버 + Runner Planning orchestration', () => {
 
     s = await project();
     expect(s.bootstrap.revision).toBe(1);
+    // 5차 리뷰 P1: 초안 Task마다 서버가 저장한 subjectHash(draftSource) = Runner가 판단에 묶은 입력 지문
+    const stored = (await ownerPool.query<{ content: { tasks: { subjectHash: string; judgedRules: { items: { sourceRef: string }[] } }[] } }>(
+      "select content from wbs_drafts where status='pending' order by revision desc limit 1")).rows[0]?.content.tasks ?? [];
+    expect(stored.length).toBeGreaterThan(0);
+    for (const t of stored) expect(t.judgedRules.items.every((i) => refFingerprint(i.sourceRef) === t.subjectHash)).toBe(true);
     const approve = await lead('POST', '/api/project/bootstrap/approve', { revision: 1 });
     expect(approve.statusCode, approve.body).toBe(200);
     expect((await project()).state).toBe('active');
@@ -210,6 +215,12 @@ describe('실제 서버 + Runner Planning orchestration', () => {
       expect(cp?.source).toBe('input');
       expect(cp?.task_judgements).toHaveLength(1);
       expect(cp?.task_judgements[0]?.judgedRules.items.every((i) => i.agreedBy.join() === 'Claude,Codex' && /^[0-9a-f]{64}$/.test(i.subjectHash))).toBe(true);
+      // 5차 리뷰 P1: 서버가 변경 후 내용으로 붙인 hash = Runner가 판단에 묶은 입력 지문(기존 Task 수정·새 Task 모두)
+      const stamped = (await ownerPool.query<{ task_judgements: { judgedRules: { items: { subjectHash: string; sourceRef: string }[] } }[]; ops: { op: string; t?: { judgedRules?: { items: { subjectHash: string; sourceRef: string }[] } } }[] }>(
+        'select task_judgements,ops from change_proposals where id=$1', [(outcome as unknown as { result: { proposalId: string } }).result.proposalId])).rows[0];
+      const items = [...(stamped?.task_judgements.flatMap((j) => j.judgedRules.items) ?? []), ...(stamped?.ops.flatMap((o) => o.t?.judgedRules?.items ?? []) ?? [])];
+      expect(items.length).toBeGreaterThan(3);
+      for (const i of items) expect(refFingerprint(i.sourceRef), '지문과 서버 hash').toBe(i.subjectHash);
       expect(await planningStatus('input_diff'), `${String(round)}회 뒤 차이 분석 상태`).toEqual(Array(round).fill('done'));
     }
   });
@@ -268,5 +279,43 @@ describe('실제 서버 + Runner Planning orchestration', () => {
     expect(recorded?.subjectHash).toBe(updated?.subjectHash);
     expect(refFingerprint(recorded?.sourceRef)).toBe(oldFingerprint);
     expect(refFingerprint(recorded?.sourceRef)).not.toBe(updated?.subjectHash);
+  });
+
+  test('5차 리뷰 P1(실제 DB): 원 Task를 취소하는 분할의 새 Task는 상속될 묶음(shared-db)을 보고 판단하고, 지문이 서버 hash와 같다', async () => {
+    const s = await project();
+    const original = (await wbsSnapshot(ownerPool, s.id)).tasks.find((t) => t.status !== 'done' && t.status !== 'cancelled');
+    if (!original) throw new Error('분할할 Task 없음');
+    await ownerPool.query("update tasks set conflict_group='shared-db' where task_key=$1", [original.taskKey]);
+    const detail = await lead('GET', `/api/tasks/${original.taskKey}`);
+    const requested = await lead('POST', `/api/tasks/${original.taskKey}/split`, { updatedAt: detail.json<{ updatedAt: string }>().updatedAt });
+    expect(requested.statusCode, requested.body).toBe(202);
+    const job = await claim('split');
+    const run = await context();
+    run.agents.Claude.proposeSplit = async (request) => {
+      run.agents.Claude.calls.push({ method: 'proposeSplit', request: structuredClone(request) });
+      const wp = request.wbs.tasks.find((t) => t.taskKey === original.taskKey)?.wp ?? '';
+      const add = (ref: string) => ({ op: 'add' as const, ref, preds: [], t: { title: `분할 ${ref}`, type: 'Implementation' as const, domain: 'BE' as const, wp, priority: 1,
+        assignee: 'Claude' as const, verifier: 'Codex' as const, purpose: '목적', doneCond: '테스트 통과', splitBasis: '계약 먼저', ac: [{ given: 'g', when: 'w', then: 't' }] } });
+      return { title: '분할', reason: '크기 상한', ops: [add('NEW-1'), add('NEW-2'), { op: 'remove' as const, task: original.taskKey }] };
+    };
+    for (const agent of Object.values(run.agents)) {
+      const judge = agent.judgeRules.bind(agent);
+      agent.judgeRules = async (request) => (await judge(request)).map((v) => ({ ...v,
+        result: (request.subjects.find((x) => x.target === v.target)?.content as { conflictGroup: string | null }).conflictGroup === 'shared-db' ? 'not_met' as const : 'met' as const }));
+    }
+    const outcome = await runPlanningJob(job, run.ctx);
+    expect(outcome, JSON.stringify(outcome)).toMatchObject({ status: 'done' });
+    await finish(job, outcome);
+    const shown = (run.agents.Codex.calls.find((c) => c.method === 'judgeRules')?.request as { subjects: { content: { conflictGroup: string | null } }[] }).subjects.map((x) => x.content.conflictGroup);
+    expect(shown).toEqual(['shared-db', 'shared-db']);
+    const cp = (await ownerPool.query<{ ops: { op: string; t?: { judgedRules?: { items: { result: string; subjectHash: string; sourceRef: string }[] } } }[] }>(
+      'select ops from change_proposals where id=$1', [(outcome as unknown as { result: { proposalId: string } }).result.proposalId])).rows[0];
+    const items = cp?.ops.flatMap((o) => o.t?.judgedRules?.items ?? []) ?? [];
+    expect(items.length).toBe(6);
+    // 서버가 상속을 적용한 변경 후 내용으로 붙인 hash = Runner가 판단에 보여 준 입력의 지문
+    for (const i of items) {
+      expect(i.result).toBe('not_met');
+      expect(refFingerprint(i.sourceRef)).toBe(i.subjectHash);
+    }
   });
 });

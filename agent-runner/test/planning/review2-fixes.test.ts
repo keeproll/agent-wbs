@@ -103,7 +103,7 @@ describe('재리뷰 2: 저장된 추정도 새 추정과 같은 검증을 거친
 
 describe('재리뷰 3: 보낸 요청에 필수 본문·경로 인자가 없으면 손상이다', () => {
   const key = 'submitEstimates:runner-1:00000000-0000-4000-8000-000000000001';
-  const sentKey = `${estimateJob().id}:estimates`;
+  const sentKey = `${estimateJob().id}@1:estimates`;
   test.each([
     ['본문 없음', { key, request: {} }],
     ['fence 없는 본문', { key, request: { body: { jobId: 'j', items: [] } } }],

@@ -1,11 +1,12 @@
 import type { ApiRequest } from '../api/client.ts';
-import type { ClaimedJob, PlanningProposalOp } from '../api/generated/client.ts';
+import type { ClaimedJob, JudgedContent, PlanningProposalOp } from '../api/generated/client.ts';
 import { SPLIT_RULES, type ProposalOp, type SplitProposalOp } from './agents.ts';
 import { isAnalysisPair, isDiff, isDisagreements } from './guards.ts';
 import type { InputDiffPayload, WbsSnapshot } from './payload.ts';
 import { LABELS } from './bootstrap.ts';
 import { agreeJudgements, type Disagreement } from './consensus.ts';
-import { bindingProblem, boundRef, fingerprint, withoutJudged } from './binding.ts';
+import { bindingProblem, boundRef, fingerprint, judgedContentHash, withoutJudged } from './binding.ts';
+import { applyContentChanges, effectiveGroup, judgedOfNewTask, type SplitContext } from './judged.ts';
 import { runSteps, type Step } from './steps.ts';
 import { JobRun, PlanningAgentFailed, type PlanningOutcome } from './run.ts';
 
@@ -84,7 +85,7 @@ export async function runInputDiff(run: JobRun<Extract<ClaimedJob, { kind: 'inpu
           await checkpoint.saveOutput(`cp:${job.id}`, { disagreements }, isDisagreements);
           return { body: { jobId: job.id, fence: job.fence, title: content.title, reason: content.reason, source: { kind: 'input' as const }, ops: ops as PlanningProposalOp[],
             ...(taskJudgements.length && { taskJudgements: taskJudgements as never }) } };
-        }, proposalBind(wbs));
+        }, proposalBind(wbs), { kind: 'input' });
         if (empty || !response) return '변경 없음 — 영향받는 Task가 없어 변경 제안을 만들지 않았습니다.';
         const saved = checkpoint.output(`cp:${job.id}`, isDisagreements);
         result = { proposalId: response.body.id, cpKey: response.body.cpKey, disagreements: saved?.disagreements ?? [] };
@@ -99,16 +100,18 @@ export async function runInputDiff(run: JobRun<Extract<ClaimedJob, { kind: 'inpu
 export type ProposalRequest = Omit<ApiRequest<'submitPlanningProposal'>, 'idempotencyKey' | 'epoch'>;
 
 /** 본문을 만들지 않기로 하면(null) 보내지 않는다. 이 job에서 이미 보낸 본문이 있으면 Agent에게 다시 묻지 않고 그대로 다시 보낸다. */
-export async function sendProposal(run: JobRun, build: () => Promise<ProposalRequest | null>, bind: (request: unknown) => string | null) {
-  const stored = run.checkpoint.sent(run.job.id, 'proposal');
-  if (stored) return run.reporter.send('submitPlanningProposal', 'proposal', stored.request as ProposalRequest, { bind });
+export async function sendProposal(run: JobRun, build: () => Promise<ProposalRequest | null>, bind: (request: unknown) => string | null, source: unknown) {
+  // 목적지: 경로 인자 없음 + 이 job이 정한 출처(차이 분석은 input, 분할은 원래 Task). 저장본의 출처는 믿지 않는다.
+  const to = { params: null, source };
+  const stored = run.checkpoint.sent(run.sendScope, 'proposal');
+  if (stored) return run.reporter.send('submitPlanningProposal', 'proposal', stored.request as ProposalRequest, { bind, to });
   // 새로 만든 본문이 보여 준 입력에 묶이지 않았으면 한 번 다시 판단한다(binding.ts bound와 같은 규칙).
   let problem = '';
   for (let attempt = 0; attempt < 2; attempt++) {
     const request = await build();
     if (request === null) return null;
     const found = bind(request);
-    if (found === null) return run.reporter.send('submitPlanningProposal', 'proposal', request, { bind });
+    if (found === null) return run.reporter.send('submitPlanningProposal', 'proposal', request, { bind, to });
     problem = found;
   }
   throw new PlanningAgentFailed('Runner', '변경 제안', problem);
@@ -129,24 +132,36 @@ const CONTENT_FIELDS = new Set(['title', 'doneCond', 'scopeAdd', 'acAdd']);
 type AnyOp = ProposalOp | SplitProposalOp;
 
 /**
- * 판단 대상 투영: 보낼 ops(판단 기록을 뺀 것)에서 대상마다 Agent에게 보여 줄 입력을 만든다.
+ * 판단 대상 투영: 보낼 ops(판단 기록을 뺀 것)에서 대상마다 Agent에게 보여 줄 JudgedContent를 만든다(judged.ts, 계약 정의 그대로).
  * 판단할 때와 전송 직전 대조(proposalBind)가 이 함수 하나를 쓴다.
- * - 새 Task: 그 add op의 `t`(판단 기록 제외)
- * - 내용이 바뀌는 기존 Task: `{before: 스냅샷의 현재 내용, changes: 그 Task의 내용 변경 op}`
+ * - 새 Task: 서버가 적용할 내용(설계 생략 = 권장 구역, 충돌 묶음 생략 = 분할 상속 적용 뒤 값)
+ * - 내용이 바뀌는 기존 Task: 스냅샷의 현재 내용에 그 Task의 내용 변경을 서버와 같은 규칙으로 적용한 내용
  */
-export function changeSubjects(ops: readonly AnyOp[], wbs: WbsSnapshot): { subjects: { target: string; content: unknown }[] } | { problem: string } {
+export function changeSubjects(ops: readonly AnyOp[], wbs: WbsSnapshot, split: SplitContext | null = null): { subjects: { target: string; content: JudgedContent }[] } | { problem: string } {
   const current = new Map(wbs.tasks.map((t) => [t.taskKey, t]));
-  const changes = new Map<string, unknown[]>();
+  const changes = new Map<string, AnyOp[]>();
   for (const op of ops) {
     if (op.op !== 'modify' || !CONTENT_FIELDS.has(op.field)) continue;
     if (!current.has(op.task)) return { problem: `${op.task}는 WBS 스냅샷에 없는 Task입니다.` };
     changes.set(op.task, [...(changes.get(op.task) ?? []), op]);
   }
-  const subjects = [
-    ...ops.flatMap((op) => (op.op === 'add' ? [{ target: op.ref, content: withoutJudged(op.t) }] : [])),
-    ...[...changes].map(([taskKey, list]) => ({ target: taskKey, content: { before: current.get(taskKey)?.content, changes: list } })),
-  ];
+  const subjects: { target: string; content: JudgedContent }[] = [];
+  for (const op of ops) {
+    if (op.op !== 'add') continue;
+    const group = effectiveGroup(op.t, split);
+    if ('problem' in group) return { problem: `${op.ref}: ${group.problem}` };
+    subjects.push({ target: op.ref, content: judgedOfNewTask(withoutJudged(op.t) as typeof op.t, group.group) });
+  }
+  for (const [taskKey, list] of changes) {
+    subjects.push({ target: taskKey, content: applyContentChanges(current.get(taskKey)?.content as JudgedContent, list) });
+  }
   return { subjects };
+}
+
+/** 분할 CP의 상속 전제: 원 Task와, 이 ops가 원 Task를 취소하는지(simulateProposal) */
+export function splitContext(ops: readonly AnyOp[], original: { taskKey: string; content: JudgedContent; workType: string | null }): SplitContext {
+  return { originalKey: original.taskKey, originalGroup: original.content.conflictGroup, originalWorkType: original.workType,
+    removesOriginal: ops.some((op) => op.op === 'remove' && op.task === original.taskKey) };
 }
 
 /** 보낸 ops에서 판단 기록을 지운 값. 분할 판단에 보여 준 ops와 같아야 한다. */
@@ -158,13 +173,13 @@ export function plainOps(ops: readonly unknown[]): AnyOp[] {
 }
 
 /** CP 제출 전송 직전 대조: 새 Task·기존 Task·분할 판단이 실제 보낼 ops의 투영에 묶였는지 본다. */
-export function proposalBind(wbs: WbsSnapshot, splitShown?: (ops: AnyOp[]) => unknown) {
+export function proposalBind(wbs: WbsSnapshot, split?: { original: { taskKey: string; content: JudgedContent; workType: string | null }; shown: (ops: AnyOp[]) => unknown }) {
   return (request: unknown): string | null => {
     const body = (request as { body?: { ops?: unknown[]; taskJudgements?: { taskKey: string; judgedRules: unknown }[]; splitJudgements?: unknown } }).body;
     const ops = plainOps(body?.ops ?? []);
-    const result = changeSubjects(ops, wbs);
+    const result = changeSubjects(ops, wbs, split ? splitContext(ops, split.original) : null);
     if ('problem' in result) return result.problem;
-    const expected = new Map(result.subjects.map((s) => [s.target, fingerprint(s.content)]));
+    const expected = new Map(result.subjects.map((s) => [s.target, judgedContentHash(s.content)]));
     for (const op of (body?.ops ?? []) as AnyOp[]) {
       if (op.op !== 'add') continue;
       const problem = bindingProblem((op.t as { judgedRules?: unknown }).judgedRules, expected.get(op.ref) ?? '', op.ref);
@@ -177,7 +192,7 @@ export function proposalBind(wbs: WbsSnapshot, splitShown?: (ops: AnyOp[]) => un
       if (problem) return problem;
     }
     if (body?.splitJudgements === undefined) return null;
-    return splitShown ? bindingProblem(body.splitJudgements, fingerprint(splitShown(ops)), '분할') : '분할 CP가 아닌데 분할 판단이 있습니다';
+    return split ? bindingProblem(body.splitJudgements, fingerprint(split.shown(ops)), '분할') : '분할 CP가 아닌데 분할 판단이 있습니다';
   };
 }
 
@@ -187,14 +202,14 @@ export function proposalBind(wbs: WbsSnapshot, splitShown?: (ops: AnyOp[]) => un
  * - 새 Task는 `t.judgedRules`, 내용이 바뀌는 기존 Task는 `taskJudgements[{taskKey,judgedRules}]`(서버 후속 4 계약 6).
  * - 「변경 후 내용」과 hash는 Runner가 만들지 않는다. acAdd 해석 같은 적용 규칙과 hash 계산은 서버가 기준이다.
  */
-export async function judgeChanges(run: JobRun, ops: readonly AnyOp[], wbs: WbsSnapshot) {
-  const result = changeSubjects(ops, wbs);
+export async function judgeChanges(run: JobRun, ops: readonly AnyOp[], wbs: WbsSnapshot, split: SplitContext | null = null) {
+  const result = changeSubjects(ops, wbs, split);
   if ('problem' in result) throw new PlanningAgentFailed(run.author.name, '변경 제안', result.problem);
   const { subjects } = result;
   const changed = subjects.filter((s) => !ops.some((op) => op.op === 'add' && op.ref === s.target)).map((s) => s.target);
   if (subjects.length === 0) return { ops: [...ops], taskJudgements: [] as { taskKey: string; judgedRules: unknown }[], disagreements: [] as Disagreement[] };
   const verdicts = await run.both('분할 규칙 판단', (a) => a.judgeRules({ jobId: run.job.id, rules: SPLIT_RULES, subjects }));
-  const fp = new Map(subjects.map((s) => [s.target, fingerprint(s.content)]));
+  const fp = new Map(subjects.map((s) => [s.target, judgedContentHash(s.content)]));
   const { records, disagreements } = agreeJudgements(subjects.map((s) => s.target), SPLIT_RULES, verdicts,
     { judgedAt: run.iso(), sourceRef: run.job.id, sourceRefFor: (target) => boundRef(run.job.id, fp.get(target) ?? '') });
   const empty = { schemaVersion: 1 as const, items: [] };

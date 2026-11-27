@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { JudgedContent } from '../api/generated/client.ts';
+import { normalizeJudged } from './judged.ts';
 
 /*
  * 판단과 「Agent에게 실제로 보여준 입력」을 묶는다(4차 리뷰 P1).
@@ -19,8 +20,6 @@ import type { JudgedContent } from '../api/generated/client.ts';
 
 export const INPUT_TAG = '#input-sha256:';
 const HEX = /^[0-9a-f]{64}$/;
-const SPEC_KEYS = ['req', 'work', 'steps', 'inputs', 'outputs', 'files', 'constraints', 'errors', 'docs', 'verify'] as const;
-const DESIGN_ORDER = ['DB', 'API', 'FE', 'DevOps'];
 
 /** 서버 canonicalJson과 같은 규칙: 객체 키를 UTF-16 순서로 정렬, undefined 키 제외, 배열 순서 유지, 공백 없음 */
 export function canonicalJson(value: unknown): string {
@@ -37,16 +36,9 @@ const sha256 = (text: string) => createHash('sha256').update(text).digest('hex')
 /** 아무 입력의 지문 */
 export function fingerprint(value: unknown): string { return sha256(canonicalJson(value)); }
 
-/** JudgedContent의 지문 = 서버 subjectHash(산출물 이름순·설계 종류순·명세 10칸) */
+/** JudgedContent의 지문 = 서버 subjectHash(judged.ts normalizeJudged + canonicalJson + SHA-256) */
 export function judgedContentHash(content: JudgedContent): string {
-  const spec = Object.fromEntries(SPEC_KEYS.map((key) => [key, [...((content.spec as Record<string, string[] | undefined>)[key] ?? [])]]));
-  return fingerprint({
-    title: content.title, scope: [...content.scope], out: [...content.out], doneCond: content.doneCond, spec,
-    ac: content.ac.map(({ given, when, then, method }) => ({ given, when, then, method })),
-    outputs: [...content.outputs].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).map(({ name, kind, required, verify }) => ({ name, kind, required, verify })),
-    designs: [...content.designs].sort((a, b) => DESIGN_ORDER.indexOf(a.kind) - DESIGN_ORDER.indexOf(b.kind)).map(({ kind, content: c }) => ({ kind, content: c })),
-    conflictGroup: content.conflictGroup,
-  });
+  return fingerprint(normalizeJudged(content));
 }
 
 export function boundRef(jobId: string, inputFingerprint: string): string { return `${jobId}${INPUT_TAG}${inputFingerprint}`; }

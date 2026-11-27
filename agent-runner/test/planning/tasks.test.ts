@@ -160,10 +160,10 @@ describe('분할 job(split, G§5.2-1)', () => {
     expect(body.ops.filter((o) => o.op === 'add').map((o) => o.t?.judgedRules.items.length)).toEqual([3, 3]);
     expect(body.splitJudgements.items.map((i) => `${i.rule}:${i.agreedBy.join()}`)).toEqual(['ac_meaning:Claude,Codex', 'layer_order:Claude,Codex', 'test_included:Claude,Codex']);
     expect(claude.called('proposeSplit') + codex.called('proposeSplit')).toBe(1);
-    // 분할 판단은 판단 기록을 뺀 ops와 원래 Task 내용을 본다.
+    // 분할 판단은 판단 기록을 뺀 ops와 대상 Task의 지금 내용(WBS 스냅샷, 서버 splitTasks와 같은 구성)을 본다.
     const seen = codex.calls.find((c) => c.method === 'judgeSplit')?.request as { ops: unknown[]; splitTasks: { taskKey: string }[] };
     expect(JSON.stringify(seen.ops)).not.toContain('judgedRules');
-    expect(seen.splitTasks).toEqual([{ taskKey: 'TASK-0001', content: content('큰 Task') }]);
+    expect(seen.splitTasks).toEqual([{ taskKey: 'TASK-0001', content: content() }]);
   });
 
   test('분할 근거가 빈 새 Task가 있으면 보내지 않고 실패한다(근거를 지어 넣지 않음)', async () => {
