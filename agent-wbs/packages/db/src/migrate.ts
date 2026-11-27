@@ -8,9 +8,11 @@ import type { Pool, PoolClient } from './pool.ts';
 
 /** 적용 누락 검사에 걸렸을 때 던지는 오류. 빠진 마이그레이션 이름(tag)을 담는다. */
 export class MigrationGapError extends Error {
-  constructor(readonly missing: string[]) {
+  readonly missing: string[];
+  constructor(missing: string[]) {
     super(`마이그레이션 적용 누락: ${missing.join(', ')}. DB 기록(drizzle.__drizzle_migrations)과 migrations 폴더가 맞지 않습니다.`);
     this.name = 'MigrationGapError';
+    this.missing = missing;
   }
 }
 

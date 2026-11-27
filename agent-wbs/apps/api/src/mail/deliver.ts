@@ -1,3 +1,4 @@
+import { reportProjectName } from '@awbs/shared';
 /**
  * 메일 발송 worker(architecture §2 worker, contracts §4.4 「외부 전송의 불확정 구간」).
  *
@@ -168,7 +169,8 @@ async function claimOne(client: PoolClient, now: string | null): Promise<{ c: Cl
   const c: Claimed = { id: row.id, report: row.report, email: row.email, view: row.view, pdf: row.pdf, retried: row.retried, projectId: row.projectId, reportKey: report.reportKey, sentAt: at, attempt };
   const target = await smtpTarget(client);
   if (!target) return { c, mail: null, target: null };
-  const project = (await client.query<{ name: string }>('select name from projects limit 1')).rows[0]?.name ?? '';
+  // M6 통합: 제목의 프로젝트 이름은 스냅샷 값이다(M6-02 조정자 7, 화면·PDF와 같은 reportProjectName). 지금 이름을 읽지 않는다.
+  const project = reportProjectName(report.snapshot);
   const appUrl = (await client.query<{ app_url: string | null }>('select app_url from app_settings where singleton')).rows[0]?.app_url ?? null;
   // 미리보기와 같은 함수로 만든다. 스냅샷이라 다시 보내도 같은 내용이다(G L407).
   const rendered = renderMail({ projectName: project, report, view: row.view, to: row.email, appUrl });

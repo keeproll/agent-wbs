@@ -10,7 +10,7 @@
  * 문구 상수는 원본(P)에서 웹이 옮긴 값과 같다. 출처: apps/web/src/features/task/labels.ts·settings/labels.ts.
  */
 import {
-  externalView, scrubInternal, internalKpis, monthDay, reportFigures, TASK_STATUSES, type ExternalView, type ReportKind, type ReportSnapshotData,
+  externalView, scrubInternal, stateMissingFrom, toMicro, internalKpis, monthDay, reportFigures, TASK_STATUSES, type ExternalView, type ReportKind, type ReportSnapshotData,
 } from '@awbs/shared';
 
 export type ReportView = 'int' | 'ext';
@@ -71,7 +71,27 @@ const isLate = (r: ReportHead) => r.kind !== 'custom' && (r.reason ?? '').includ
 /** 「서버 시작 시 누락분 보충 — 예정 2026-11-02 07:00」(G L377) */
 export const lateLabel = (r: ReportHead) => (isLate(r) && r.dueAt ? `${r.reason ?? ''} — 예정 ${formatDateTime(r.dueAt)}` : '');
 export const byLabel = (kind: ReportKind) => (kind === 'custom' ? '팀장' : '시스템 (정기)');
-export const snapLabel = (generatedAt: string) => `이 보고서는 ${formatDateTime(generatedAt)} 시점의 스냅샷입니다. 이후 데이터가 바뀌어도 내용은 바뀌지 않습니다.`;
+/* M6 통합: M6-01 기간 말 재구성(fb9d537)의 머리말 안내를 화면과 같게 옮긴다(snapLabel·settingsNote·uncertainNote·appendixTitle). */
+/** 설정 묶음 이름(스냅샷 basis.currentSettings 값) */
+const SETTING_GROUP: Record<string, string> = { schedule: '일정 정책', blackouts: '작업 불가일', heartbeat: '연결 확인 주기', concurrency: '동시 실행 한도' };
+/** 「설정은 현재 값」 안내. 그 시점 설정을 알 수 없어 지금 값으로 계산한 묶음이 있으면 문구, 없으면 null. */
+export function settingsNote(s: ReportSnapshotData): string | null {
+  const groups = s.basis?.currentSettings ?? [];
+  return groups.length ? `설정은 현재 값 — ${groups.map((g) => SETTING_GROUP[g] ?? g).join(' · ')}은 이 시점의 값을 알 수 없어 보고서를 만든 때의 값으로 계산했습니다.` : null;
+}
+/** 스냅샷 안내. 생성 시각과 상태 기준 시각(basis.asOf)을 따로 쓴다. basis가 없는 예전 보고서는 예전 문구. */
+export function snapLabel(generatedAt: string, s: ReportSnapshotData): string {
+  const asOf = s.basis?.asOf;
+  if (!asOf) return `이 보고서는 ${formatDateTime(generatedAt)} 시점의 스냅샷입니다. 이후 데이터가 바뀌어도 내용은 바뀌지 않습니다.`;
+  const end = toMicro(asOf) < toMicro(generatedAt) ? '(기간 끝)' : '(생성 시각)';
+  return `이 보고서는 ${formatDateTime(generatedAt)}에 만들었습니다. 상태 값은 ${formatDateTime(asOf)} 직전${end} 기준입니다. 이후 데이터가 바뀌어도 내용은 바뀌지 않습니다.`;
+}
+/** 「경계 불확실 n건」 안내. 실제 커밋 시각을 몰라 이 시점 상태에 넣지 않은 변경이 있으면 문구, 없으면 null. */
+export function uncertainNote(s: ReportSnapshotData): string | null {
+  const n = s.basis?.uncertain ?? 0;
+  return n > 0 ? `경계 불확실 ${String(n)}건 — 실제 커밋 시각을 알 수 없어 이 시점 상태에 넣지 않았습니다. 커밋 시계 값으로는 기준 전이지만 실제로 확정됐는지 확인되지 않은 변경입니다.` : null;
+}
+export const appendixTitle = (s: ReportSnapshotData) => `부록. 전체 Task 현황 (${s.basis ? '기간 끝 시점' : '보고서 생성 시점'})`;
 /** 보고용 제목의 프로젝트 이름도 자유 입력이라 내부 용어를 뺀다(리뷰 M6-01 3). */
 export const docTitle = (projectName: string, kind: ReportKind, view: ReportView) =>
   `${view === 'ext' ? scrubInternal(projectName) : projectName} — ${KIND[kind].doc}${view === 'ext' ? ' (보고용)' : ''}`;
@@ -105,9 +125,12 @@ export function internalDoc(s: S) {
   const a = s.summary.attempts;
   const maxS = Math.max(1, ...s.series.map((x) => Math.max(x.attempts, x.done)));
   const order = (st: string) => TASK_STATUSES.indexOf(st as never);
+  const missingFrom = stateMissingFrom(s);
   return {
     kpis: internalKpis(s),
-    statusLine: s.summary.statuses.length ? [...s.summary.statuses].sort((x, y) => order(x.status) - order(y.status)).map((x) => `${statusOf(x.status).l} ${String(x.count)}`).join(' · ') : 'Task 없음',
+    /** 그 시점 상태를 되살릴 수 없으면 안내 문구(상태 칸 대신 보인다), 아니면 null */
+    noRecord: missingFrom ? `기록 없음 — 이 기간 끝 시점의 상태는 상태 기록 시작(${missingFrom}) 전이라 되살릴 수 없습니다.` : null,
+    statusLine: missingFrom ? '기록 없음' : s.summary.statuses.length ? [...s.summary.statuses].sort((x, y) => order(x.status) - order(y.status)).map((x) => `${statusOf(x.status).l} ${String(x.count)}`).join(' · ') : 'Task 없음',
     execLine: `실행 시도 ${String(a.total)}건 (개발 · 재작업 ${String(a.dev)} / QA · 재검증 ${String(a.qa)}) · 검증 PASS ${String(a.pass)} · FAIL ${String(a.fail)} · 등급 자동 상향 ${String(a.escalated)} · 중단 ${String(a.interrupted)} · 토큰 ${tokensK(a.tokens)}`,
     issues: s.issues.map((x) => ({ ...(ISSUE[x.level] ?? { cls: 'sc sc-none', label: '참고' }), text: x.text, taskKey: x.taskKey })),
     series: s.series.map((x) => ({

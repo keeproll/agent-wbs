@@ -1,3 +1,4 @@
+import { reportProjectName } from '@awbs/shared';
 /**
  * 메일 API(G§8.5 표, contracts §2.3). 모두 팀장 세션이다.
  * 인증·CSRF·epoch·멱등 키·트랜잭션은 공통 관문(platform/security.ts)이 이미 처리한다.
@@ -29,7 +30,8 @@ async function preview(client: PoolClient, reportId: string, query: { view?: 'in
   }
   // 보기를 고르지 않았으면 받는 사람 기본값, 그것도 없으면 팀장용. 일간은 항상 팀장용(G L402).
   const view = mailView(report.kind, query.view ?? to?.view ?? 'int');
-  const project = (await client.query<{ name: string }>('select name from projects where id=$1', [report.projectId])).rows[0]?.name ?? '';
+  // M6 통합: 제목의 프로젝트 이름은 스냅샷 값이다(M6-02 조정자 7, 화면·PDF와 같은 reportProjectName). 지금 이름을 읽지 않는다.
+  const project = reportProjectName(report.snapshot);
   const appUrl = (await client.query<{ app_url: string | null }>('select app_url from app_settings where singleton')).rows[0]?.app_url ?? null;
   const rendered = renderMail({ projectName: project, report, view, to: to?.email ?? null, appUrl });
   const smtp = await getSmtp(client);

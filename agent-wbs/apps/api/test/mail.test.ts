@@ -73,6 +73,7 @@ describe('SMTP 결과 분류(contracts §4.4: 수락 / 확실한 실패 / 수락
 
 /** 빈 스냅샷(데이터가 하나도 없을 때) */
 const emptySnapshot = (): ReportSnapshotData => ({
+  projectName: '메일 시험 프로젝트', projectNameStatus: 'snapshot',
   summary: {
     taskCount: 0, doneCount: 0, doneBefore: 0, workPct: 0, workPctBefore: 0, baselineVersion: 0, forecast: null, lo: null, hi: null, forecastBefore: null,
     target: null, uptimePct: 0, ratePct: 0, blocked: 0, statuses: [], started: [],

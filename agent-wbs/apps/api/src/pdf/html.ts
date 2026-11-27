@@ -11,7 +11,7 @@
  */
 import { reportProjectName, type ReportSnapshotData } from '@awbs/shared';
 import {
-  byLabel, docTitle, externalDoc, formatDateTime, internalDoc, KIND, lateLabel, periodLabel, snapLabel, type ReportHead, type ReportView,
+  appendixTitle, byLabel, docTitle, externalDoc, formatDateTime, internalDoc, KIND, lateLabel, periodLabel, settingsNote, snapLabel, uncertainNote, type ReportHead, type ReportView,
 } from './model.ts';
 import { FONT_FILES, pdfAssets } from './assets.ts';
 
@@ -23,6 +23,8 @@ const plain = (text: string | number) => el('span', '', esc(text));
 const cell = (cls: string, ...children: string[]) => el('span', `${cls ? `class="${cls}" ` : ''}role="cell"`, ...children);
 const head = (cls: string, cols: readonly string[]) => el('div', `class="${cls}" role="row"`, ...cols.map((c) => el('span', 'role="columnheader"', esc(c))));
 const empty = (show: boolean, text: string) => (show ? el('p', 'class="muted"', esc(text)) : '');
+/** 그 시점 상태를 되살릴 수 없을 때 상태 칸 대신 보이는 안내(화면 ReportPage.tsx role="note"와 같음) */
+const noRecord = (text: string | null) => (text ? el('p', 'class="muted" role="note"', esc(text)) : '');
 const sec = (title: string, ...children: string[]) => el('section', 'class="rpt-sec"', el('h3', '', esc(title)), ...children);
 const task = (key: string) => span('reflink', key);
 const kv = (pairs: [string, string][]) => el('div', 'class="rpt-kv"', ...pairs.flatMap(([k, v]) => [plain(k), v]));
@@ -44,11 +46,11 @@ function internal(s: ReportSnapshotData, kind: ReportHead['kind'], weekly: boole
         cell('mono', esc(d.day)), cell('rpt-bc', bar('up', d.upBar), span('mono', d.up)), cell('rpt-bc', bar('at', d.aBar), span('mono', d.atts)),
         cell('mono', esc(d.done)), cell('mono', esc(d.fails)), cell('mono', esc(d.fc)))))) : '',
     el('p', 'class="rpt-note"', esc(`현재 상태 분포 — ${x.statusLine}`)),
-    sec('1. 완료한 Task', empty(!x.done.length, '기간 중 완료한 Task가 없습니다.'), ...x.done.map((t) => el('div', 'class="rpt-card"',
+    sec('1. 완료한 Task', noRecord(x.noRecord) || empty(!x.done.length, '기간 중 완료한 Task가 없습니다.'), ...x.done.map((t) => el('div', 'class="rpt-card"',
       el('div', 'class="rpt-ch"', span('sc sc-ok', '완료'), task(t.id), span('mono muted', t.wbs), el('b', '', esc(t.title)), span('muted', t.cls, 'margin-left:auto')),
       kv([['담당', plain(t.who)], ['실제 기간', span('mono', t.act)], ['작업량', plain(t.est)], ['기준 대비', plain(t.slip)],
         ['최종 검증', plain(t.verif)], ['체크리스트', plain(t.cl)], ['산출물', plain(t.out)], ['완료 조건', plain(t.cond)]])))),
-    sec('2. 진행 중 · 확인 필요 Task', empty(!x.active.length, '진행 중인 Task가 없습니다.'), ...x.active.map((t) => el('div', 'class="rpt-card"',
+    sec('2. 진행 중 · 확인 필요 Task', noRecord(x.noRecord) || empty(!x.active.length, '진행 중인 Task가 없습니다.'), ...x.active.map((t) => el('div', 'class="rpt-card"',
       el('div', 'class="rpt-ch"', span('tag', t.st), task(t.id), span('mono muted', t.wbs), el('b', '', esc(t.title)), span('muted', `${t.cls} · 진행률 ${t.pct}`, 'margin-left:auto')),
       kv([['담당', plain(t.who)], ['실제 시작', span('mono', t.start)],
         ['완료 예상', el('span', '', span('mono', t.fc), esc(` · ${t.slip} · 남은 작업량 ${t.remain}`))],
@@ -71,13 +73,13 @@ function internal(s: ReportSnapshotData, kind: ReportHead['kind'], weekly: boole
       ...x.gaps.map((g) => el('div', 'class="rpt-li"', span('mono', `${g.from} ~ ${g.to}`), span('mono', g.dur), plain(g.reason)))),
     sec('7. 팀장 지시 · Runner 응답', empty(!x.messages.length, '기간 중 메시지가 없습니다.'),
       ...x.messages.map((m) => el('div', 'class="rpt-li"', span('mono muted', m.at), span('mono', m.task), plain(m.dir), span('tag', m.type), span('muted', m.st), span('', m.body, 'flex-basis:100%')))),
-    sec(`8. ${kind === 'daily' ? '다음 날 예정' : '다음 주 예정'}`, empty(!x.next.length, '예정된 Task가 없습니다.'),
+    sec(`8. ${kind === 'daily' ? '다음 날 예정' : '다음 주 예정'}`, noRecord(x.noRecord) || empty(!x.next.length, '예정된 Task가 없습니다.'),
       x.next.length ? el('div', 'class="rpt-tbl" role="table" aria-label="예정"',
         head('rpt-trw h nx', ['Task', '제목', '상태', '예상 기간', '담당 · 등급', '선행 조건 · 충돌 묶음']),
         ...x.next.map((t) => el('div', 'class="rpt-trw nx" role="row"',
           cell('', task(t.id)), cell('', esc(`${t.title} `), span('muted', `(${t.est})`)), cell('', esc(t.st)), cell('mono', esc(t.per)),
           cell('', esc(t.who), '<br>', span('muted', t.grade)), cell('', esc(t.pre), '<br>', span('muted', t.cg))))) : ''),
-    el('section', 'class="rpt-sec rpt-appx"', el('h3', '', esc('부록. 전체 Task 현황 (보고서 생성 시점)')), empty(!x.all.length, 'Task가 없습니다.'),
+    el('section', 'class="rpt-sec rpt-appx"', el('h3', '', esc(appendixTitle(s))), noRecord(x.noRecord) || empty(!x.all.length, 'Task가 없습니다.'),
       el('div', 'class="rpt-tbl" role="table" aria-label="전체 Task 현황"',
         head('rpt-trw h al', ['WBS', 'Task', '제목', '상태', '개발/검증', '진행률', '체크리스트', '검증', '완료 예상', '기준 대비']),
         ...x.all.map((t) => el('div', 'class="rpt-trw al" role="row"',
@@ -159,7 +161,8 @@ export function reportHtml(r: ReportHtmlInput): string {
         el('span', '', esc('기간 '), el('b', 'class="mono"', esc(periodLabel(r)))),
         el('span', '', esc('생성 '), span('mono', formatDateTime(r.generatedAt)), esc(` · ${byLabel(r.kind)}`)),
         span('mono', r.reportKey)),
-      el('p', 'class="rpt-snap"', esc(`${snapLabel(r.generatedAt)}${late ? ` · ${late}` : ''}`))),
+      el('p', 'class="rpt-snap"', esc(`${snapLabel(r.generatedAt, r.snapshot)}${late ? ` · ${late}` : ''}`)),
+      ...[settingsNote(r.snapshot), uncertainNote(r.snapshot)].map((note) => (note ? el('p', 'class="rpt-snap" role="note"', esc(note)) : ''))),
     r.view === 'int' ? internal(r.snapshot, r.kind, weekly) : external(r.snapshot, r.kind, weekly),
     el('footer', 'class="rpt-f"', esc(`Agent WBS 자동 생성 · ${r.reportKey} · ${formatDateTime(r.generatedAt)}`)));
   return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${esc(`${r.reportKey}_${r.view === 'int' ? '팀장용' : '보고용'}`)}</title>`

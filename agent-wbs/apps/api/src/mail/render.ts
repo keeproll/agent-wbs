@@ -14,7 +14,7 @@
  * 숫자는 화면 보고서와 같은 계산(shared `reportFigures` — `internalKpis`·`externalView`가 쓰는 것)에서 온다.
  * 그래서 화면·메일·PDF가 같은 스냅샷에서 같은 숫자를 보인다(milestones §4.0).
  */
-import { monthDay, reportFigures, type Kpi, type ReportKind, type ReportSnapshotData } from '@awbs/shared';
+import { monthDay, reportFigures, scrubInternal, type Kpi, type ReportKind, type ReportSnapshotData } from '@awbs/shared';
 
 export interface MailReport {
   id: string;
@@ -134,6 +134,8 @@ export function renderMail(input: MailInput): RenderedMail {
   const label = `${KIND[r.kind]} 보고서 · ${view === 'ext' ? '보고용' : '팀장용'}`;
   const meta = `기간 ${period(r)} · 생성 ${seoulTime(r.generatedAt)} · ${r.reportKey}`;
   const link = reportLink(input);
+  // M6 통합: 보고용 제목의 프로젝트 이름은 내부 용어를 뺀다(화면·PDF docTitle과 같은 규칙, 리뷰 M6-01 3).
+  const projectName = view === 'ext' ? scrubInternal(input.projectName) : input.projectName;
 
   const cell = (k: Kpi) => `<td style="padding:10px 12px;border:1px solid #E1E5EA;width:25%;vertical-align:top;${FONT}"><div style="font-size:12px;color:#6B7480">${esc(k.label)}</div><div style="font-size:20px;font-weight:700;color:#1F2933;margin:2px 0">${esc(k.value)}</div><div style="font-size:12px;color:#6B7480">${esc(k.sub)}</div></td>`;
   const sec = (x: Section) => `<tr><td style="padding:18px 0 6px;${FONT}font-size:15px;font-weight:700;color:#1F2933;border-bottom:1px solid #E1E5EA">${esc(x.title)}</td></tr>`
@@ -143,7 +145,7 @@ export function renderMail(input: MailInput): RenderedMail {
     + '<table role="presentation" width="640" cellpadding="0" cellspacing="0" style="max-width:640px;width:100%;background:#FFFFFF;border:1px solid #E1E5EA;border-radius:8px"><tr><td style="padding:24px 28px">'
     + '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">'
     + `<tr><td style="${FONT}font-size:12px;font-weight:700;color:#2453CF">${esc(label)}</td></tr>`
-    + `<tr><td style="${FONT}font-size:20px;font-weight:700;color:#1F2933;padding:4px 0 2px">${esc(input.projectName)}</td></tr>`
+    + `<tr><td style="${FONT}font-size:20px;font-weight:700;color:#1F2933;padding:4px 0 2px">${esc(projectName)}</td></tr>`
     + `<tr><td style="${FONT}font-size:13px;color:#6B7480;padding-bottom:14px;border-bottom:2px solid #1F2933">${esc(meta)}</td></tr>`
     + `<tr><td style="padding:14px 0 0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse"><tr>${kpis.map(cell).join('')}</tr></table></td></tr>`
     + list.map(sec).join('')
@@ -152,7 +154,7 @@ export function renderMail(input: MailInput): RenderedMail {
     + '</table></td></tr></table></td></tr></table></body></html>';
 
   const text = [
-    label, input.projectName, meta, '',
+    label, projectName, meta, '',
     ...kpis.map((k) => `${k.label}: ${k.value} (${k.sub})`),
     ...list.flatMap((x) => ['', `■ ${x.title}`, ...(x.items.length ? x.items.map((t) => `• ${t}`) : ['없음'])]),
     ...(link ? ['', `Agent WBS에서 전체 보고서 보기: ${link}`] : []),

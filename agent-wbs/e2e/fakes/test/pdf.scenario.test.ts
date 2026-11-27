@@ -601,7 +601,10 @@ describe('PDF와 화면이 같은 계산을 쓴다', () => {
       }
       expect(pdfModel.periodLabel(row)).toBe(web.periodLabel(row));
       expect(pdfModel.lateLabel(row)).toBe(web.lateLabel(row));
-      expect(pdfModel.snapLabel(row.generatedAt)).toBe(web.snapLabel(row.generatedAt));
+      expect(pdfModel.snapLabel(row.generatedAt, snapshot)).toBe(web.snapLabel(row.generatedAt, snapshot));
+      expect(pdfModel.settingsNote(snapshot)).toBe(web.settingsNote(snapshot));
+      expect(pdfModel.uncertainNote(snapshot)).toBe(web.uncertainNote(snapshot));
+      expect(pdfModel.appendixTitle(snapshot)).toBe(web.appendixTitle(snapshot));
       expect(pdfModel.byLabel(kind)).toBe(web.rowView(row).byL);
       expect(pdfModel.KIND[kind].doc).toBe(web.KIND[kind].doc);
     }
