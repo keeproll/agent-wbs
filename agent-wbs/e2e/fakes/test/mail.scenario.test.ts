@@ -1093,8 +1093,8 @@ describe('Q-13 결정 A: 외부 수신자(링크 없이 보고용 + PDF)', () =>
    */
   test('[fix4 · fix5] 외부: 이메일 · IDN · punycode · 혼합 IDN · 따옴표 이메일 · 소문자 번호가 메일 · PDF에서 지워진다 / 내부 보고용: 내부 용어만 빠지고 나머지는 그대로', async () => {
     // fix5(재리뷰 5): 혼합 IDN · 따옴표 이메일도 함께 넣는다.
-    const TITLE = 'task-0007 Rp-002 문의 help@intranet.corp.example 내부.한국 intranet.xn--3e0b707e 내부.xn--3e0b707e "help"@intranet.corp.example help@내부.xn--3e0b707e file.txt Node.js 개선';
-    const INSIDE = '문의 help@intranet.corp.example 내부.한국 intranet.xn--3e0b707e 내부.xn--3e0b707e "help"@intranet.corp.example help@내부.xn--3e0b707e file.txt Node.js 개선'; // 내부 용어만 뺀 것(scrubInternal)
+    const TITLE = 'task-0007 Rp-002 문의 help@intranet.corp.example 내부.한국 intranet.xn--3e0b707e 내부.xn--3e0b707e "help"@intranet.corp.example help@내부.xn--3e0b707e 10.0.0.1 file.txt Node.js 2.5일 1.2.3 개선';
+    const INSIDE = '문의 help@intranet.corp.example 내부.한국 intranet.xn--3e0b707e 내부.xn--3e0b707e "help"@intranet.corp.example help@내부.xn--3e0b707e 10.0.0.1 file.txt Node.js 2.5일 1.2.3 개선'; // 내부 용어만 뺀 것(scrubInternal)
     const FRAGMENTS = ['help@', 'intranet', 'corp.example', '내부.한국', 'xn--', 'file.txt', 'Node.js', 'task-0007', 'Rp-002'];
     const root = await mkdtemp(join(tmpdir(), 'awbs-mail-fix4-'));
     const renderer = chromiumRenderer();
@@ -1130,6 +1130,10 @@ describe('Q-13 결정 A: 외부 수신자(링크 없이 보고용 + PDF)', () =>
       expect(externalLeaks(outPdf)).toEqual([]);
       for (const body of [outText, textOf(mimePart(out, 'text/html') ?? ''), outPdf, outPdf.replace(/\s+/g, '')]) for (const f of FRAGMENTS) expect(body, f).not.toContain(f);
       expect(outText).toContain('(주소 생략)');
+      // fix5 후속: 숫자 사이 점(기간 · 버전)은 외부 글에도 남는다. IPv4(숫자 4덩이)는 지워진다.
+      expect(outText).toContain('2.5일 1.2.3 개선');
+      expect(outPdf.replace(/\s+/g, '')).toContain('2.5일1.2.3개선');
+      expect(outText).not.toContain('10.0.0.1');
       // 내부 수신자(보고용): 내부 용어만 빠지고 나머지는 그대로(외부 변환 없음)
       const inside = mimePart(received('boss@example.com')[bc]?.raw ?? '', 'text/plain') ?? '';
       expect(inside).toContain(`• ${INSIDE}`);

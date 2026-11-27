@@ -212,8 +212,8 @@ describe('Q-13 fix3: 외부 글은 정규화한 뒤 주소 모양을 판정하�
     expect(externalLeaks('=?UTF-8?B?VEFTSy0wMDA3?=').length).toBeGreaterThan(0);
     expect(externalText('이름 =?UTF-8?Q?TASK=2D0007?= 끝')).toBe('이름 끝');
   });
-  test('버전 번호(숫자 세 덩이)도 IP 모양이라 생략된다 — 정보 손실로 받아들임(조정자 판단)', () => {
-    expect(externalText('버전 1.2.3 배포')).toBe('버전 (주소 생략) 배포');
+  test('버전 번호(숫자 사이 점)는 그대로다(fix5 후속: 보고 내용 보존)', () => {
+    expect(externalText('버전 1.2.3 배포')).toBe('버전 1.2.3 배포');
   });
 });
 
@@ -287,9 +287,9 @@ describe('Q-13 fix4: 이메일 · IDN · punycode · 대소문자 내부 번호'
     expect(externalText(`앞 ${input} 뒤`)).toMatch(OMITTED);
     expect(externalLeaks(`앞 ${input} 뒤`).length).toBeGreaterThan(0);
   });
-  test('점으로 이은 한글 단어 · 단위 붙은 소수도 생략된다(정보 손실, 조정자 판단) · 숫자만인 소수는 그대로', () => {
+  test('점으로 이은 한글 단어는 생략(정보 손실, 조정자 판단) · 숫자 사이 점(기간 · 수치)은 그대로', () => {
     expect(externalText('프로젝트.완료')).toBe('(주소 생략)');
-    expect(externalText('작업 2.5일 소요')).toBe('작업 (주소 생략) 소요');
+    expect(externalText('작업 2.5일 소요')).toBe('작업 2.5일 소요');
     expect(externalText('작업 2.5 일 소요')).toBe('작업 2.5 일 소요');
   });
   test.each(['TASK-0007 RP-002 ATT-0007-2', 'task-0007 rp-002 att-0007-2', 'tAsK-0007 Rp-002 aTt-0007-2'])('대소문자 무관 내부 번호: %s', (ids) => {
@@ -319,7 +319,9 @@ describe('Q-13 fix5: 마지막 토큰 규칙(@ · 점으로 이은 이름)', () 
     ['wbs%2Ecorp%2Eexample', '인코딩 점(정규화 뒤)'],
     ['@intranet', '@ 하나'],
     ['file.txt', '파일 이름 — 정보 손실 수용'],
-    ['1.2.3', '버전 — 정보 손실 수용'],
+    ['10.0.0.1', 'IPv4(숫자 4덩이)'],
+    ['192。168。0。10', 'IPv4(유니코드 점, 정규화 뒤)'],
+    ['123.456.com', '숫자 이름 + 글자 최상위 이름'],
     ['e.g.', '약어 — 정보 손실 수용'],
   ])('%s → 「(주소 생략)」 (%s)', (token) => {
     expect(externalLeaks(token).length).toBeGreaterThan(0);
@@ -335,5 +337,39 @@ describe('Q-13 fix5: 마지막 토큰 규칙(@ · 점으로 이은 이름)', () 
   test.each(['1.5', '12.34', '진척 10.5%', '(12.34%)', '완료했습니다. 다음', '누적 0 / 0', '07:00'])('숫자만인 소수 · 문장 끝 점은 그대로: %s', (t) => {
     expect(externalText(t)).toBe(t);
     expect(externalLeaks(t)).toEqual([]);
+  });
+});
+
+/**
+ * Q-13 fix5 후속: 점 옆이 글자일 때만 주소. 숫자 사이 점(기간 · 수치 · 버전)은 보고 내용이라 남긴다.
+ * 내부 호스트는 최상위 이름이 글자라 점 옆에 늘 글자가 있다 — 재리뷰 재현과 여러 호스트 표기로 확인한다.
+ */
+describe('Q-13 fix5 후속: 숫자 사이 점은 유지, 내부 호스트는 계속 막힘', () => {
+  test.each(['작업 2.5일 소요', '버전 1.2.3 배포', 'v1.2.3', '진척 12.34%', '1.5', '10.0.1', '완료했습니다. 다음', '산정 전.)', '기간 중 0건 완료, 누적 0 / 0건 (작업량 기준 0%).'])('그대로: %s', (t) => {
+    expect(externalText(t)).toBe(t);
+    expect(externalLeaks(t)).toEqual([]);
+  });
+  // [입력, 표준 URL 해석의 호스트]
+  test.each([
+    ['내부.xn--3e0b707e', 'xn--220bs6v.xn--3e0b707e'],
+    ['"help"@intranet.corp.example', null],
+    ['help@내부.xn--3e0b707e', null],
+    ['intranet.corp.example', 'intranet.corp.example'],
+    ['wbs-01.corp.example', 'wbs-01.corp.example'],
+    ['host1.local', 'host1.local'],
+    ['내부.한국', 'xn--220bs6v.xn--3e0b707e'],
+    ['intranet.xn--3e0b707e', 'intranet.xn--3e0b707e'],
+    ['10.0.0.1', '10.0.0.1'],
+    ['wbs%2Ecorp%2Eexample', 'wbs.corp.example'],
+  ])('내부 호스트 막힘: %s', (input, host) => {
+    if (host) {
+      const h = new URL(`http://${normalizeExternal(input)}`).hostname;
+      expect(h).toBe(host);
+      // 최상위 이름이 글자로 시작하거나(xn-- 포함) IPv4다 — 그래서 점 옆에 글자가 있거나 숫자 4덩이다.
+      expect(/(^|\.)[a-z][a-z0-9-]*$/.test(h) || /^\d+(\.\d+){3}$/.test(h)).toBe(true);
+    }
+    expect(externalText(`앞 ${input} 뒤`)).toBe('앞 (주소 생략) 뒤');
+    expect(externalLeaks(input).length).toBeGreaterThan(0);
+    expect(externalLeaks(externalText(`앞 ${input} 뒤`))).toEqual([]);
   });
 });

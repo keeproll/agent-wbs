@@ -246,7 +246,9 @@ describe('Q-13 fix4: 외부 변환은 외부 수신자에게만 — 내부 수�
   test('외부 수신자: 같은 제목이 외부 변환을 지나 검사기 0건', () => {
     const m = renderMail({ projectName: 'P', report: report('weekly', withTitle()), view: 'ext', to: 'outside@partner.example', appUrl: APP, external: true });
     expect(m.text).toMatch(/• 개선 (\((링크|주소) 생략\) )+/);
-    for (const f of ['file.txt', 'Node.js', 'help@', 'intranet', '127.0.0.1', '내부.한국', '1.2.3']) expect(m.text).not.toContain(f);
+    for (const f of ['file.txt', 'Node.js', 'help@', 'intranet', '127.0.0.1', '내부.한국']) expect(m.text).not.toContain(f);
+    // 숫자 사이 점(버전)은 보고 내용이라 남는다(fix5 후속).
+    expect(m.text).toContain('1.2.3');
     expect(externalMailLeaks({ ...m, to: 'outside@partner.example' }, null)).toEqual([]);
   });
 });
