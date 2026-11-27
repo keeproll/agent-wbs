@@ -10,7 +10,7 @@ import { fakeApi } from './support/fake-api.ts';
 import { ciData, installCi } from './support/ci-data.ts';
 import { compareRegion, hasBaseline, writeSummary, type Box, type VisualResult } from './support/visual.ts';
 
-const OUT = process.env.AWBS_VISUAL_OUT_M705 ?? join(homedir(), '.orca/bots/agentwbs/archive/2026-11-27/M7-05/visual');
+const OUT = process.env.AWBS_VISUAL_OUT_M705 ?? join(homedir(), '.orca/bots/agentwbs/archive/2026-11-27/M7-05/visual-fix1');
 
 test.skip(!hasBaseline(), '원본 스크린샷 폴더가 없다(~/.cache/agent-wbs-baseline).');
 test.describe.configure({ mode: 'serial' });
@@ -61,8 +61,7 @@ test('UI-08·08-01 실행 기록 목록(1920)', async ({ page }) => {
   const png = await shot(page);
   const F = `${C}/UI-08.png`;
   record('UI-08-title', F, at(65, 76, X, 1450), png, 0.02, '제목·설명. 같아야 함');
-  record('UI-08-mainline', F, at(141, 26, X, 1450), png, null,
-    '계약 차이: main 배지에 「E2E 12 / 12」 숫자가 없고 시각은 최근 main 관측 실행(야간 점검 02:00)의 시각. 원본 Mock 값(main.at 02:14)은 서버에 없음. 오른쪽 Mock 버튼(통합 확인 실패·보호 경로 변경)은 제품에 없음');
+  record('UI-08-mainline', F, at(141, 26, X, 1450), png, 0.02, 'main 배지(Runner 보고 E2E 수·끝난 시각, M7-04 fix2 계약 1)·요약. 같아야 함. 오른쪽 Mock 버튼은 비교 영역 밖(제품에 없음)');
   record('UI-08-tabs', F, at(180, 44), png, 0.02, '탭 5개·배지. 같아야 함');
   record('UI-08-01-filter', F, at(226, 36, X, 700), png, 0.02, '단계 필터와 건수. 같아야 함');
   record('UI-08-01-table', F, at(266, 572), png, 0.03, '실행 표. 같아야 함');
@@ -73,10 +72,8 @@ test('UI-08-01A 실행 상세(1920)', async ({ page }) => {
   const png = await shot(page);
   const F = `${C}/UI-08-01A.png`;
   record('UI-08-01A-rail', F, at(229, 851, 204, 262), png, 0.03, '레일(실행 기록 10·펼치기·선택 강조). 같아야 함');
-  record('UI-08-01A-head', F, { x: 480, y: 229, width: 1416, height: 270 }, png, null,
-    '계약 차이: 원본 note(「E2E 12/12 (재시도 통과 1 …)」) 문구가 실행 기록 계약에 없어 빠짐(아래 단계 표가 한 줄 위로 올라옴). 나머지 칸(대상·계기·시각·GitHub)은 같은 값');
-  record('UI-08-01A-steps', F, { x: 480, y: 520, width: 1416, height: 230 }, png, null,
-    '단계 시간: 원본은 화면 공식으로 꾸민 값, 제품은 Runner 보고값(시험 자료는 원본 공식 + 마지막 단계가 나머지). note 줄이 빠져 위치가 한 줄 위');
+  record('UI-08-01A-head', F, { x: 480, y: 229, width: 1416, height: 270 }, png, 0.02, '대상·계기·시각·GitHub·실행 설명(note, fix2 계약 2). 같아야 함');
+  record('UI-08-01A-steps', F, { x: 480, y: 520, width: 1416, height: 230 }, png, 0.03, '단계 표·스크린샷. 같아야 함(시험 자료의 단계 시간은 원본 공식 값)');
 });
 
 test('UI-08-02 병합 대기열(1920)', async ({ page }) => {
@@ -84,8 +81,7 @@ test('UI-08-02 병합 대기열(1920)', async ({ page }) => {
   const png = await shot(page);
   const F = `${C}/UI-08-02.png`;
   record('UI-08-02-head', F, at(229, 70), png, 0.02, '제목·안내. 같아야 함');
-  record('UI-08-02-table', F, at(296, 160), png, null,
-    '계약 차이: 대기열 행에 시각이 없어 연결된 통합 확인 실행의 시작 시각을 씀(원본 병합 시각 11:49 → 실행 시작 11:40). 검증 대기 행은 실행이 없어 「—」. 시각 칸은 실행 상세 링크');
+  record('UI-08-02-table', F, at(296, 160), png, 0.03, '대기열 행(병합됨=실제 병합 시각, 그 밖=대기열 시각, fix2 계약 3). 같아야 함. 시각 칸은 실행 상세 링크');
 });
 
 test('UI-08-03 배포 확인(1920)', async ({ page }) => {
@@ -102,7 +98,7 @@ test('UI-08-04 파이프라인 정의(1920, 전체 페이지)', async ({ page })
   const png = await fullShot(page);
   const F = `${C}/UI-08-04.full.png`;
   record('UI-08-04-def', F, at(229, 920), png, 0.02, '규칙 5개·4단계(실행 조건·통과 조건·단계). 같아야 함');
-  record('UI-08-04-settings', F, at(1165, 205), png, null, '계약 차이: 「서비스 기동」 값(docker-compose.ci.yml)이 CI 설정 계약에 없어 「파이프라인 정의의 ② 통합 확인 단계를 따릅니다」');
+  record('UI-08-04-settings', F, at(1165, 205), png, 0.02, '실행 설정(서비스 기동 = Runner가 main에서 읽은 구성, fix2 계약 5). 같아야 함');
 });
 
 test('UI-08-05 불안정 테스트(1920)', async ({ page }) => {

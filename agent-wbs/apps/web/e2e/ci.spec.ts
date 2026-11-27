@@ -5,7 +5,7 @@
  */
 import { expect, test, type Page } from '@playwright/test';
 import { errorBody, fakeApi, json, SESSION, type FakeApi } from './support/fake-api.ts';
-import { baselineRun, ciData, guardRun, installCi, mismatchItem, type CiData } from './support/ci-data.ts';
+import { baselineQueueItem, baselineRun, ciData, guardRun, installCi, mismatchItem, type CiData } from './support/ci-data.ts';
 
 const P = '/api/projects/p1/ci';
 
@@ -25,7 +25,8 @@ const detail = (page: Page) => page.getByRole('region', { name: /실행 상세$/
 test.describe('UAT-CI-01 실행 기록 · 상세', () => {
   test('요약·배지·목록(모든 쪽)·단계 필터가 실제 보고와 일치한다', async ({ page }) => {
     const { api } = await open(page, '/ci');
-    await expect(page.getByText(/^main 정상 · c4e81f0 · 2026-11-03 02:00$/)).toBeVisible();
+    // Runner가 보고한 E2E 수와 끝난 시각(M7-04 fix2 계약 1)
+    await expect(page.getByText(/^main 정상 · c4e81f0 · E2E 12 \/ 12 · 2026-11-03 02:14$/)).toBeVisible();
     await expect(page.getByText('실행 10 · 실패 미해결 0 · 병합 대기 1 · 마지막 배포 확인 2026-11-02 18:05 통과')).toBeVisible();
     // 모든 쪽을 읽었다(가짜 API는 2쪽으로 나눠 준다)
     expect(api.calls().filter((c) => c.startsWith(`GET ${P}/runs?`))).toHaveLength(2);
@@ -89,7 +90,10 @@ test.describe('UAT-CI-01 실행 기록 · 상세', () => {
     await expect(d).toContainText('agent/TASK-0004 @ 0d9e5a2');
     await expect(d).toContainText('Agent 작업 종료');
     await expect(d).toContainText('2026-11-03 17:40 · 4분 05초');
-    await expect(d).toContainText('GitHub PR #9 검사 상태 보고: agentwbs/task — failure');
+    // 실제 보고(githubStatus)의 검사 이름·상태·보고 시각(M7-04 fix2 계약 6)
+    await expect(d).toContainText('GitHub PR #9 검사 상태 보고: agentwbs/task — failure · 2026-11-03 17:44');
+    // 실행 설명(note)
+    await expect(d).toContainText('Runner가 Agent에게 실패 로그를 전달 → 같은 시도 안에서 수정');
     const steps = d.getByRole('table', { name: '단계' });
     await expect(steps.getByRole('row')).toHaveCount(8);
     await expect(steps.getByRole('row').nth(0)).toContainText('의존성 설치');
@@ -125,7 +129,7 @@ test.describe('UAT-CI-01 실행 기록 · 상세', () => {
     await open(page, '/ci', (d) => { d.runs.unshift(baselineRun()); });
     await expect(row(page, 'CI-0128')).toContainText('기준선 실패');
     await expect(row(page, 'CI-0128').locator('.vf.v-fail')).toHaveCount(0);
-    await expect(page.getByText(/^main 깨짐 · 기준선 검사 실패 · c4e81f0 · 2026-11-05 19:30$/)).toBeVisible();
+    await expect(page.getByText(/^main 깨짐 · 기준선 검사 실패 · c4e81f0 · 2026-11-05 19:31$/)).toBeVisible();
     await row(page, 'CI-0128').click();
     await expect(detail(page)).toContainText('main 기준 커밋에서도 실패');
   });
@@ -163,6 +167,8 @@ test('UAT-CI-04 보호 경로 변경: 첫 보호 검사에서 경로·거부 사
   await expect(d.locator('pre.code')).toContainText('M prototype/uiux/js/task-api.js');
   await expect(d.locator('pre.code')).toContainText('M .agentwbs/pipeline.yaml');
   await expect(d.locator('pre.code')).toContainText('Agent가 바꿀 수 없습니다');
+  // GitHub 보고가 아직 확인되지 않은 실행은 PASS·FAIL로 꾸미지 않는다
+  await expect(d).toContainText('GitHub PR #10 검사 상태 보고 확인 전 (agentwbs/task)');
   await expect(d).toContainText('Task 검사 실패는 Runner가 Agent에게 로그를 전달');
 });
 
@@ -179,7 +185,9 @@ test.describe('UAT-CI-03 병합 대기열', () => {
     await expect(rows.nth(0)).toContainText('Drizzle Schema 설계');
     await expect(rows.nth(0)).toContainText('검증 대기');
     await expect(rows.nth(1)).toContainText('병합됨');
-    await expect(rows.nth(1)).toContainText('2026-10-31 11:40');
+    // 병합됨은 실제 병합 시각, 검증 대기는 대기열에 들어온 시각(M7-04 fix2 계약 3)
+    await expect(rows.nth(1)).toContainText('2026-10-31 11:49');
+    await expect(rows.nth(0)).toContainText('2026-11-03 18:22');
     await expect(rows.nth(0).getByRole('link', { name: 'TASK-0004' })).toHaveAttribute('href', '/wbs/TASK-0004');
     await expect(rows.nth(1).getByRole('link', { name: 'CI-0112' })).toHaveAttribute('href', '/ci/ci-0112');
   });
@@ -229,6 +237,7 @@ test.describe('UAT-CI-06 파이프라인 정의 · 불안정 테스트', () => {
     await expect(page.getByText('매일 02:00', { exact: true })).toBeVisible();
     await expect(page.getByText('http://localhost:8080', { exact: true })).toBeVisible();
     await expect(page.getByText('1회 — 재시도로만 통과하면 불안정 후보')).toBeVisible();
+    await expect(page.getByText('docker compose — docker-compose.ci.yml', { exact: true })).toBeVisible();
   });
 
   test('정의 파일을 해석하지 못하면 원인을 보인다', async ({ page }) => {
@@ -240,6 +249,9 @@ test.describe('UAT-CI-06 파이프라인 정의 · 불안정 테스트', () => {
     const { api } = await open(page, '/ci?tab=flaky');
     const t = page.getByRole('table', { name: '불안정 테스트' });
     await expect(t.getByRole('row').nth(0)).toContainText('wbs-tree.spec.ts › 접힘 상태 유지');
+    // 마지막 실패 시각(lastFailedAt, M7-04 fix2 계약 4) — 기록 갱신 시각(02:14)이 아니다
+    await expect(t.getByRole('row').nth(0)).toContainText('2026-11-03 02:00');
+    await expect(t.getByRole('row').nth(0)).not.toContainText('02:14');
     await expect(t.getByRole('row').nth(0)).toContainText('2 / 20 실패');
     await expect(t.getByRole('row').nth(0)).toContainText('격리');
     await expect(t.getByRole('link', { name: 'TASK-0007' })).toHaveAttribute('href', '/wbs/TASK-0007');
@@ -248,7 +260,7 @@ test.describe('UAT-CI-06 파이프라인 정의 · 불안정 테스트', () => {
     await expect(t.getByRole('button', { name: '다시 격리' })).toBeVisible();
     await expect(t.getByRole('row').nth(0)).toContainText('정상 (격리 해제)');
     const body = api.requests(`PATCH ${P}/flaky/f1`)[0]?.postDataJSON() as unknown;
-    expect(body).toEqual({ updatedAt: new Date('2026-11-03T02:00:00+09:00').toISOString(), quarantined: false });
+    expect(body).toEqual({ updatedAt: new Date('2026-11-03T02:14:00+09:00').toISOString(), quarantined: false });
     await expect(page.getByText('불안정 테스트 상태를 바꿨습니다.')).toBeVisible();
   });
 
@@ -282,6 +294,43 @@ test.describe('UAT-EMPTY-05 빈 상태 · 조건 불일치', () => {
     await page.getByRole('button', { name: '필터 초기화' }).click();
     await expect(page).toHaveURL('/ci');
     await expect(runsTable(page).getByRole('row')).toHaveCount(10);
+  });
+});
+
+test.describe('fix1: 기준선 실패 재통합 · 병합 불일치 보류 · 관측 전 값', () => {
+  test('기준선 실패로 끝난 통합은 Task 탓이 아니라 「main 수정 뒤 자동 재통합」으로 보인다', async ({ page }) => {
+    await open(page, '/ci?tab=queue', (d) => { d.runs.unshift(baselineRun()); d.queue.push(baselineQueueItem()); });
+    const row = page.getByRole('table', { name: '병합 대기열' }).getByRole('row').nth(0);
+    await expect(row).toContainText('기준선 실패 — main 수정 뒤 자동 재통합');
+    await expect(row.locator('.vf.v-fail')).toHaveCount(0);
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    await row.getByRole('link', { name: /CI-0128/ }).click();
+    await expect(page).toHaveURL('/ci/ci-0128');
+    await expect(detail(page)).toContainText('main이 바뀌면 서버가 자동으로 다시 통합 확인합니다');
+    await expect(detail(page).getByRole('button', { name: '다시 실행' })).toBeEnabled();
+  });
+
+  test('병합 불일치로 보류 중인 Task의 실행은 다시 실행을 막고 이유를 보인다(서버도 409)', async ({ page }) => {
+    const { api } = await open(page, '/ci/ci-0128', (d) => { d.runs.unshift(baselineRun()); d.queue.push(mismatchItem()); });
+    await expect(detail(page).getByRole('button', { name: '다시 실행' })).toBeDisabled();
+    await expect(detail(page)).toContainText('TASK-0006의 실제 병합이 검증 근거와 달라 완료를 보류 중입니다');
+    expect(api.requests('POST /api/projects/p1/ci/runs/ci-0128/retry')).toHaveLength(0);
+  });
+
+  test('Runner가 아직 보고하지 않은 값은 꾸미지 않는다(E2E 수·병합 시각·마지막 실패·서비스 구성)', async ({ page }) => {
+    await open(page, '/ci', (d) => {
+      for (const r of d.runs) { r.e2e = null; }
+      for (const q of d.queue) { q.mergedAt = null; }
+      for (const f of d.flaky) { f.lastFailedAt = null; }
+      d.settings = { ...d.settings, serviceConfig: null };
+    });
+    await expect(page.getByText(/^main 정상 · c4e81f0 · 2026-11-03 02:14$/)).toBeVisible();
+    await page.getByRole('tab', { name: /병합 대기열/ }).click();
+    await expect(page.getByRole('table', { name: '병합 대기열' }).getByRole('row').nth(1)).toContainText('병합 시각 미확인');
+    await page.getByRole('tab', { name: /불안정 테스트/ }).click();
+    await expect(page.getByRole('table', { name: '불안정 테스트' }).getByRole('row').nth(0).getByRole('cell').nth(2)).toHaveText('—');
+    await page.getByRole('tab', { name: '파이프라인 정의' }).click();
+    await expect(page.getByText('아직 관측되지 않음', { exact: false })).toBeVisible();
   });
 });
 

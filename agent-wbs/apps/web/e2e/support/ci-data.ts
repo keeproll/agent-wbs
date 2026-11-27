@@ -29,29 +29,29 @@ export const PIPE_STEPS: Record<string, { when: string; gate: string; steps: str
 const ms = (dur: string) => { const m = /(?:(\d+)분 )?(\d+)초/.exec(dur); return ((Number(m?.[1] ?? 0) * 60) + Number(m?.[2] ?? 0)) * 1000; };
 
 /**
- * 단계 시간: 원본 공식(P L4770 `8 + (i*37 + id.length*13) % 140`초)으로 앞 단계를 채우고, 마지막 단계가 나머지를 가져 합이 원본 소요(dur)와 같다.
- * 실패 실행은 실패 단계까지 보고한다(그 뒤 단계는 Runner가 보내지 않는다).
+ * 단계 시간: 원본 공식(P L4770 `8 + (i*37 + id.length*13) % 140`초) 그대로다(원본 상세와 같은 값).
+ * 전체 소요는 finishedAt(시작 + 원본 dur)으로 따로 준다(M7-04 fix2 계약 1). 실패 실행은 실패 단계까지 보고한다.
  */
-function steps(id: string, stage: string, dur: string, status: string, failStep?: number): Run['steps'] {
+function steps(id: string, stage: string, status: string, failStep?: number): Run['steps'] {
   const names = PIPE_STEPS[stage]?.steps ?? [];
   const upto = status === 'fail' ? (failStep ?? 0) + 1 : names.length;
-  const total = ms(dur);
-  let pre = names.slice(0, upto - 1).map((_, i) => (8 + ((i * 37 + id.length * 13) % 140)) * 1000);
-  const sum = (xs: number[]) => xs.reduce((n, x) => n + x, 0);
-  // 앞 단계 합이 원본 소요를 넘으면(실패 실행) 비율로 줄여 마지막 단계가 최소 1초를 갖게 한다.
-  if (total - sum(pre) < 1000 && pre.length) { const f = (total * 0.9) / sum(pre); pre = pre.map((x) => Math.max(1000, Math.round((x * f) / 1000) * 1000)); }
-  const durations = [...pre, Math.max(1000, total - sum(pre))];
-  return names.slice(0, upto).map((name, i) => ({ name, status: (status === 'fail' && i === upto - 1 ? 'fail' : 'pass') as Run['steps'][number]['status'], durationMs: durations[i] ?? 1000 }));
+  return names.slice(0, upto).map((name, i) => ({ name, status: (status === 'fail' && i === upto - 1 ? 'fail' : 'pass') as Run['steps'][number]['status'], durationMs: (8 + ((i * 37 + id.length * 13) % 140)) * 1000 }));
 }
 
-interface Src { id: string; stage: Run['stage']; task?: string; att?: string; ref: string; pr?: number; at: string; dur: string; st: Run['status']; trig: string; failStep?: number; log?: string; url?: string; merged?: string; shots?: string[]; baseline?: boolean }
+interface Src { id: string; stage: Run['stage']; task?: string; att?: string; ref: string; pr?: number; at: string; dur: string; st: Run['status']; trig: string; failStep?: number; log?: string; url?: string; merged?: string; shots?: string[]; baseline?: boolean; note?: string; e2e?: [number, number]; github?: boolean }
 
+const finished = (s: Src) => new Date(Date.parse(kst(s.at)) + ms(s.dur)).toISOString();
+/** Runner가 GitHub에 보고하고 응답까지 확인한 상태(github=false면 보고 확인 전) */
+const githubStatus = (s: Src, head: string): NonNullable<Run['githubStatus']> | null => (s.pr === undefined || s.github === false || (s.st !== 'pass' && s.st !== 'fail') ? null
+  : { headSha: head, context: `agentwbs/${s.stage}`, state: s.st === 'pass' ? 'success' : 'failure', reportedAt: finished(s) });
 const run = (s: Src): Run => ({
   id: s.id.toLowerCase(), runKey: s.id, stage: s.stage, status: s.st, taskKey: s.task ?? null, attemptId: s.att ? s.att.toLowerCase() : null,
   ref: s.ref, pr: s.pr ?? null, trigger: s.trig, baseSha: MAIN, headSha: s.stage === 'task' ? sha(s.ref.split('@ ')[1] ?? 'a') : MAIN,
   mergeSha: s.merged ? sha(s.merged) : null, treeSha: null, pipelineSha: sha('9a9a9a9'),
-  steps: steps(s.id, s.stage, s.dur, s.st, s.failStep), failStep: s.failStep === undefined ? null : PIPE_STEPS[s.stage]?.steps[s.failStep] ?? null,
+  steps: steps(s.id, s.stage, s.st, s.failStep), failStep: s.failStep === undefined ? null : PIPE_STEPS[s.stage]?.steps[s.failStep] ?? null,
   failScope: s.st === 'fail' ? (s.baseline ? 'baseline' : 'task') : null, logExcerpt: s.log ?? null, artifacts: s.shots ?? [], url: s.url ?? null, startedAt: kst(s.at),
+  finishedAt: s.st === 'run' || s.st === 'queued' ? null : finished(s), note: s.note ?? null, e2e: s.e2e ? { passed: s.e2e[0], total: s.e2e[1] } : null,
+  githubStatus: githubStatus(s, s.stage === 'task' ? sha(s.ref.split('@ ')[1] ?? 'a') : MAIN),
 });
 
 /** 원본 CI_MOCK.runs(P L3533–3544)를 서버 순서(최근 기록 먼저)로. */
@@ -61,19 +61,19 @@ export const runs = (): Run[] => [
   run({ id: 'CI-0108', stage: 'int', task: 'TASK-0002', ref: 'main + #5', pr: 5, at: '2026-10-29 17:02', dur: '8분 15초', st: 'pass', trig: '검증 PASS → 병합 대기열', merged: '8e33b1d' }),
   run({ id: 'CI-0112', stage: 'int', task: 'TASK-0003', ref: 'main + #7', pr: 7, at: '2026-10-31 11:40', dur: '8분 51초', st: 'pass', trig: '검증 PASS → 병합 대기열', merged: 'c4e81f0' }),
   run({ id: 'CI-0118', stage: 'task', task: 'TASK-0007', att: 'ATT-0007-1', ref: 'agent/TASK-0007 @ 71f0a3c', pr: 8, at: '2026-11-01 11:44', dur: '3분 48초', st: 'pass', trig: 'Agent 작업 종료' }),
-  run({ id: 'CI-0120', stage: 'night', ref: 'main @ c4e81f0', at: '2026-11-02 02:00', dur: '14분 30초', st: 'pass', trig: '야간 일정' }),
-  run({ id: 'CI-0121', stage: 'deploy', ref: 'main @ c4e81f0', at: '2026-11-02 18:05', dur: '6분 10초', st: 'pass', trig: '팀장 요청', url: 'http://localhost:8080', shots: ['login.png', 'wbs.png', 'task-detail.png'] }),
+  run({ id: 'CI-0120', stage: 'night', ref: 'main @ c4e81f0', at: '2026-11-02 02:00', dur: '14분 30초', st: 'pass', trig: '야간 일정', e2e: [12, 12], note: 'E2E 12/12 · 화면 비교 9개 중 2개 경미한 차이(여백) · 불안정 후보 1' }),
+  run({ id: 'CI-0121', stage: 'deploy', ref: 'main @ c4e81f0', at: '2026-11-02 18:05', dur: '6분 10초', st: 'pass', trig: '팀장 요청', url: 'http://localhost:8080', shots: ['login.png', 'wbs.png', 'task-detail.png'], note: '접속 확인 — 로그인 · WBS · Task 상세 스크린샷 3장' }),
   run({
-    id: 'CI-0124', stage: 'task', task: 'TASK-0004', att: 'ATT-0004-1', ref: 'agent/TASK-0004 @ 0d9e5a2', pr: 9, at: '2026-11-03 17:40', dur: '4분 05초', st: 'fail', trig: 'Agent 작업 종료', failStep: 6,
+    id: 'CI-0124', stage: 'task', task: 'TASK-0004', att: 'ATT-0004-1', ref: 'agent/TASK-0004 @ 0d9e5a2', pr: 9, at: '2026-11-03 17:40', dur: '4분 05초', st: 'fail', trig: 'Agent 작업 종료', failStep: 6, note: 'Runner가 Agent에게 실패 로그를 전달 → 같은 시도 안에서 수정',
     log: 'contract-test › contracts/db/postgres/migrations/0004_tasks.sql\n  ✗ index "tasks_deleted_at_idx" exists in database but not in contracts/\n  1 failed, 38 passed (3.1s)\nexit code 1',
   }),
   run({ id: 'CI-0125', stage: 'task', task: 'TASK-0004', att: 'ATT-0004-1', ref: 'agent/TASK-0004 @ 6a41c77', pr: 9, at: '2026-11-03 17:47', dur: '3분 58초', st: 'pass', trig: '수정 후 재실행' }),
-  run({ id: 'CI-0126', stage: 'night', ref: 'main @ c4e81f0', at: '2026-11-03 02:00', dur: '14분 02초', st: 'pass', trig: '야간 일정', shots: ['비교 9화면 — 차이 2 (여백)'] }),
+  run({ id: 'CI-0126', stage: 'night', ref: 'main @ c4e81f0', at: '2026-11-03 02:00', dur: '14분 02초', st: 'pass', trig: '야간 일정', shots: ['비교 9화면 — 차이 2 (여백)'], e2e: [12, 12], note: 'E2E 12/12 (재시도 통과 1 — wbs-tree.spec.ts › 접힘 상태 유지)' }),
 ].reverse();
 
 /** 보호 경로 변경(원본 ciGuard P L4746–4754): 첫 보호 검사에서 거부, 뒤 단계 없음 */
 export const guardRun = (): Run => run({
-  id: 'CI-0127', stage: 'task', task: 'TASK-0005', att: 'ATT-0005-1', ref: 'agent/TASK-0005 @ 9f2c6d0', pr: 10, at: '2026-11-05 19:00', dur: '0분 41초', st: 'fail', trig: 'Agent 작업 종료', failStep: 1,
+  id: 'CI-0127', stage: 'task', task: 'TASK-0005', att: 'ATT-0005-1', ref: 'agent/TASK-0005 @ 9f2c6d0', pr: 10, at: '2026-11-05 19:00', dur: '0분 41초', st: 'fail', trig: 'Agent 작업 종료', failStep: 1, github: false, note: '이후 단계 실행 안 함 — Agent에게 되돌리기 지시 전달',
   log: 'protected-paths › 이 PR은 수정할 수 없는 경로를 바꿨습니다\n  M prototype/uiux/js/task-api.js\n  M .agentwbs/pipeline.yaml   (unit 단계에서 tests/api/** 제외)\n  → 입력 자료 · 파이프라인 정의는 Agent가 바꿀 수 없습니다. 변경을 되돌리고 src/ 에서 해결하세요.\nexit code 1',
 });
 
@@ -83,28 +83,34 @@ export const baselineRun = (): Run => run({
   log: 'unit › main 기준 커밋에서도 같은 테스트가 실패합니다\nexit code 1',
 });
 
-const q = (id: string, pr: number, taskKey: string, position: number, status: Queue['status'], ciRunId: string | null, actualMergeSha: string | null = null): Queue => ({
+const q = (id: string, pr: number, taskKey: string, position: number, status: Queue['status'], ciRunId: string | null, actualMergeSha: string | null = null, queuedAt = '', mergedAt = ''): Queue => ({
   id, pr, taskKey, position, status, qaHeadSha: null, syncedHeadSha: null, baseSha: MAIN, ciRunId, actualMergeSha,
+  ...(queuedAt ? { queuedAt: kst(queuedAt) } : {}), mergedAt: mergedAt ? kst(mergedAt) : null,
 });
 /** 원본 CI_MOCK.queue(P L3545) — 서버는 position 순서 */
 export const queue = (): Queue[] => [
-  q('q3', 3, 'TASK-0001', 1, 'merged', 'ci-0102', sha('4c1a0f7')),
-  q('q5', 5, 'TASK-0002', 2, 'merged', 'ci-0108', sha('8e33b1d')),
-  q('q7', 7, 'TASK-0003', 3, 'merged', 'ci-0112', sha('c4e81f0')),
-  q('q9', 9, 'TASK-0004', 4, 'waiting_verify', null),
+  q('q3', 3, 'TASK-0001', 1, 'merged', 'ci-0102', sha('4c1a0f7'), '2026-10-28 16:22', '2026-10-28 16:32'),
+  q('q5', 5, 'TASK-0002', 2, 'merged', 'ci-0108', sha('8e33b1d'), '2026-10-29 17:00', '2026-10-29 17:11'),
+  q('q7', 7, 'TASK-0003', 3, 'merged', 'ci-0112', sha('c4e81f0'), '2026-10-31 11:38', '2026-10-31 11:49'),
+  q('q9', 9, 'TASK-0004', 4, 'waiting_verify', null, null, '2026-11-03 18:22'),
 ];
-export const mismatchItem = (): Queue => q('q11', 11, 'TASK-0006', 5, 'checking', 'ci-0128', sha('dead000'));
+export const mismatchItem = (): Queue => q('q11', 11, 'TASK-0006', 5, 'checking', 'ci-0128', sha('dead000'), '2026-11-05 19:20');
+/** 기준선 실패로 끝난 통합(Task 탓 아님 → main이 바뀌면 서버가 자동 재통합, M7-04 fix3) */
+export const baselineQueueItem = (): Queue => q('q12', 11, 'TASK-0006', 5, 'failed', 'ci-0128', null, '2026-11-05 19:20');
 
 export const flaky = (): Flaky[] => [
-  { id: 'f1', testKey: 'wbs-tree.spec.ts › 접힘 상태 유지', rate: '2 / 20 실패', quarantined: true, taskKey: 'TASK-0007', updatedAt: kst('2026-11-03 02:00') },
+  { id: 'f1', testKey: 'wbs-tree.spec.ts › 접힘 상태 유지', rate: '2 / 20 실패', quarantined: true, taskKey: 'TASK-0007', lastFailedAt: kst('2026-11-03 02:00'), updatedAt: kst('2026-11-03 02:14') },
 ];
 
+/** 서비스 기동 구성(Runner가 main에서 읽은 파일, M7-04 fix2 계약 5) */
+export const serviceConfig = () => ({ path: 'docker-compose.ci.yml', commit: MAIN, status: 'ok' as const, raw: 'services: {}', error: null });
 export const pipeline = (): Pipeline => ({
+  serviceConfig: serviceConfig(),
   path: '.agentwbs/pipeline.yaml', commit: MAIN, status: 'ok', error: null, raw: null,
   stages: (['task', 'int', 'night', 'deploy'] as const).map((stage) => ({ stage, when: PIPE_STEPS[stage]?.when ?? '', gate: PIPE_STEPS[stage]?.gate ?? '', steps: PIPE_STEPS[stage]?.steps ?? [] })),
 });
 
-export const settings = (): Settings => ({ nightAt: '02:00', retry: 1, deployUrl: 'http://localhost:8080', updatedAt: kst('2026-10-27 09:00') });
+export const settings = (): Settings => ({ nightAt: '02:00', retry: 1, deployUrl: 'http://localhost:8080', serviceConfig: serviceConfig(), updatedAt: kst('2026-10-27 09:00') });
 
 export interface CiData { runs: Run[]; queue: Queue[]; flaky: Flaky[]; pipeline: Pipeline; settings: Settings }
 export const ciData = (): CiData => ({ runs: runs(), queue: queue(), flaky: flaky(), pipeline: pipeline(), settings: settings() });

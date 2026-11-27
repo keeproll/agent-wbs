@@ -37,6 +37,10 @@ describe('빌드·통합 화면 계산(UI-08, P ciVM L4765–4801)', () => {
     expect(resultLabel(run({ id: 'a', stage: 'task', status: 'run' })).l).toBe('실행 중');
   });
 
+  it('소요 시간: 끝난 시각이 있으면 시작~끝, 없으면 보고된 단계 시간의 합', () => {
+    expect(runDurationMs(run({ id: 'a', stage: 'night', status: 'pass', startedAt: '2026-11-02T17:00:00.000Z', finishedAt: '2026-11-02T17:14:02.000Z', steps: [{ name: 'x', status: 'pass', durationMs: 1000 }] }))).toBe(842_000);
+  });
+
   it('소요 시간은 보고된 단계 시간의 합. 단계가 없으면 「—」', () => {
     const r = run({ id: 'a', stage: 'task', status: 'pass', steps: [{ name: 'a', status: 'pass', durationMs: 120_000 }, { name: 'b', status: 'pass', durationMs: 2_400 }] });
     expect(runDurationMs(r)).toBe(122_400);
@@ -76,6 +80,9 @@ describe('빌드·통합 화면 계산(UI-08, P ciVM L4765–4801)', () => {
 
   it('main 상태: 가장 최근 야간 점검·병합된 통합 확인·기준선 실패로 정한다', () => {
     expect(mainStatus(runs)).toEqual({ l: `main 정상 · ${'c'.repeat(7)} · 2026-11-03 02:00`, c: 'vf v-pass' });
+    // Runner가 E2E 수와 끝난 시각을 보고하면 원본처럼 「E2E 12 / 12 · 끝난 시각」
+    const withE2e = [run({ id: 'n', stage: 'night', status: 'pass', headSha: sha('c'), e2e: { passed: 12, total: 12 }, startedAt: '2026-11-02T17:00:00.000Z', finishedAt: '2026-11-02T17:14:00.000Z' })];
+    expect(mainStatus(withE2e).l).toBe(`main 정상 · ${'c'.repeat(7)} · E2E 12 / 12 · 2026-11-03 02:14`);
     const broken = [run({ id: 'b', stage: 'task', status: 'fail', failScope: 'baseline', baseSha: sha('d'), startedAt: '2026-11-04T00:00:00.000Z' }), ...runs];
     expect(mainStatus(broken)).toEqual({ l: `main 깨짐 · 기준선 검사 실패 · ${'d'.repeat(7)} · 2026-11-04 09:00`, c: 'vf v-fail' });
     expect(mainStatus([])).toEqual({ l: 'main 빌드 기록 없음', c: 'vf v-none' });
@@ -83,10 +90,12 @@ describe('빌드·통합 화면 계산(UI-08, P ciVM L4765–4801)', () => {
     expect(mainStatus([run({ id: 'x', stage: 'int', status: 'fail', pr: 1 })]).l).toBe('main 빌드 기록 없음');
   });
 
-  it('GitHub 칸: PR이 있으면 보고하는 검사 이름·상태, 없으면 main 대상', () => {
-    expect(githubLabel(run({ id: 'a', stage: 'int', status: 'fail', pr: 5 }))).toBe('GitHub PR #5 검사 상태 보고: agentwbs/int — failure');
-    expect(githubLabel(run({ id: 'a', stage: 'task', status: 'run', pr: 9 }))).toBe('GitHub PR #9 검사 상태 보고: agentwbs/task — pending');
+  it('GitHub 칸: Runner가 실제로 보고한 상태만 「보고」로 보인다. 보고가 없으면 확인 전(PASS로 꾸미지 않음)', () => {
+    const gh = { headSha: sha('a'), context: 'agentwbs/int', state: 'failure' as const, reportedAt: '2026-10-29T08:12:00.000Z' };
+    expect(githubLabel(run({ id: 'a', stage: 'int', status: 'fail', pr: 5, githubStatus: gh }))).toBe('GitHub PR #5 검사 상태 보고: agentwbs/int — failure · 2026-10-29 17:12');
+    expect(githubLabel(run({ id: 'a', stage: 'task', status: 'pass', pr: 9 }))).toBe('GitHub PR #9 검사 상태 보고 확인 전 (agentwbs/task)');
     expect(githubLabel(run({ id: 'a', stage: 'night', status: 'pass' }))).toBe('main 대상 — PR 없음');
+    expect(githubLabel(run({ id: 'a', stage: 'night', status: 'pass', githubStatus: { ...gh, context: 'agentwbs/night', state: 'success' } }))).toBe('main 커밋 검사 상태 보고: agentwbs/night — success · 2026-10-29 17:12');
   });
 
   it('병합 대기열: 상태 이름·색, 실제 병합 SHA가 있는데 병합됨이 아니면 MERGE_MISMATCH 경고(완료 보류)', () => {
@@ -94,18 +103,26 @@ describe('빌드·통합 화면 계산(UI-08, P ciVM L4765–4801)', () => {
       pr: 9, taskKey: 'TASK-0004', position: 1, qaHeadSha: null, syncedHeadSha: null, baseSha: null, ciRunId: null, actualMergeSha: null, ...o,
     } as QueueItem);
     const rows = queueRows([
-      q({ id: 'q1', status: 'merged', ciRunId: 'r2', actualMergeSha: sha('e') }),
-      q({ id: 'q2', status: 'checking' }),
+      q({ id: 'q1', status: 'merged', ciRunId: 'r2', actualMergeSha: sha('e'), queuedAt: '2026-10-29T07:00:00.000Z', mergedAt: '2026-10-29T08:11:00.000Z' }),
+      q({ id: 'q2', status: 'checking', queuedAt: '2026-11-03T09:22:00.000Z' }),
       q({ id: 'q3', status: 'failed' }),
       q({ id: 'q4', status: 'checking', actualMergeSha: sha('f') }),
       q({ id: 'q5', status: 'waiting_verify' }),
-    ], new Map([['TASK-0004', 'Drizzle Schema 설계']]), runs);
+      q({ id: 'q6', status: 'merged', actualMergeSha: sha('e') }),
+      q({ id: 'q7', status: 'failed', ciRunId: 'rb' }),
+    ], new Map([['TASK-0004', 'Drizzle Schema 설계']]), [...runs, run({ id: 'rb', stage: 'task', status: 'fail', failScope: 'baseline', runKey: 'RB' })]);
     expect(rows.map((r) => [r.st, r.c])).toEqual([
       ['병합됨', 'vf v-pass'], ['통합 확인 중', 'vf v-run'], ['통합 실패 — 병합 보류', 'vf v-fail'], ['통합 확인 중', 'vf v-run'], ['검증 대기', 'vf v-none'],
+      ['병합됨', 'vf v-pass'],
+      // 기준선 실패로 끝난 통합: Task 탓이 아니고, main이 바뀌면 서버가 자동으로 다시 통합한다(M7-04 fix3)
+      ['기준선 실패 — main 수정 뒤 자동 재통합', 'sc sc-warn'],
     ]);
-    expect(rows.map((r) => r.mismatch)).toEqual([false, false, false, true, false]);
-    expect(rows[0]?.at).toBe('2026-10-29 17:02');
-    expect(rows[1]?.at).toBe('—');
+    expect(rows.map((r) => r.mismatch)).toEqual([false, false, false, true, false, false, false]);
+    // 시각: 병합됨은 실제 병합 시각, 그 밖은 대기열에 들어온 시각. 병합 시각을 모르면 꾸미지 않는다.
+    expect(rows[0]?.at).toBe('2026-10-29 17:11');
+    expect(rows[1]?.at).toBe('2026-11-03 18:22');
+    expect(rows[4]?.at).toBe('—');
+    expect(rows[5]?.at).toBe('병합 시각 미확인');
     expect(rows[0]?.title).toBe('Drizzle Schema 설계');
     expect(rows[0]?.ciRunKey).toBe('R2');
     expect(rows[1]?.ciRunKey).toBeNull();

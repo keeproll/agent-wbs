@@ -102,6 +102,9 @@ function CiBody({ project }: { project: ProjectState }) {
   const main = mainStatus(allRuns);
   const badges = tabBadges(allRuns, queue.data.items, flaky.data.items);
   const titles = new Map((tasks.data?.tasks ?? []).map((t) => [t.taskKey, t.title]));
+  const qRows = queueRows(queue.data.items, titles, allRuns).reverse();
+  /** 병합 불일치로 완료가 보류된 Task. 서버는 이 Task의 재통합(다시 실행)을 409로 거부한다(M7-04 fix3 보류 조건). */
+  const holds = new Set(qRows.filter((q) => q.mismatch).map((q) => q.taskKey));
   const badge: Partial<Record<Tab, [number, string]>> = { runs: [badges.runs, 'tab-c alert'], queue: [badges.queue, 'tab-c'], flaky: [badges.flaky, 'tab-c'] };
 
   return (
@@ -142,9 +145,10 @@ function CiBody({ project }: { project: ProjectState }) {
             if (ids.includes(cur) && next) void navigate(listPath({ run: next }));
           }}
           projectId={projectId}
+          holds={holds}
         />
       )}
-      {tab === 'queue' && <QueueTab rows={queueRows(queue.data.items, titles, allRuns).reverse()} />}
+      {tab === 'queue' && <QueueTab rows={qRows} />}
       {tab === 'deploy' && <DeployTab runs={allRuns} projectId={projectId} openRun={(id) => { void navigate(listPath({ run: id, stage: '' })); }} />}
       {tab === 'pipe' && <PipeTab projectId={projectId} />}
       {tab === 'flaky' && <FlakyTab items={flaky.data.items} projectId={projectId} />}
@@ -154,8 +158,8 @@ function CiBody({ project }: { project: ProjectState }) {
 
 /* ---------------- 실행 기록 + 상세 ---------------- */
 
-function RunsTab({ runs, stage, runId, onStage, onSelect, onClose, onStep, projectId }: {
-  runs: CiRun[]; stage: string; runId: string; projectId: string;
+function RunsTab({ runs, stage, runId, onStage, onSelect, onClose, onStep, projectId, holds }: {
+  runs: CiRun[]; stage: string; runId: string; projectId: string; holds: ReadonlySet<string>;
   onStage: (s: string) => void; onSelect: (id: string) => void; onClose: () => void; onStep: (ids: string[], delta: 1 | -1) => void;
 }) {
   const rows = runRows(runs, stage);
@@ -261,7 +265,7 @@ function RunsTab({ runs, stage, runId, onStage, onSelect, onClose, onStep, proje
         {detail.data === undefined && (detail.isError
           ? <DetailError error={detail.error} retrying={detail.isFetching} onRetry={() => { void detail.refetch(); }} onClose={onClose} />
           : <div className="card"><AreaLoading label="실행 상세 불러오는 중" /></div>)}
-        {detail.data && <RunDetail run={detail.data} pos={pos} onSelect={onSelect} projectId={projectId} />}
+        {detail.data && <RunDetail run={detail.data} pos={pos} onSelect={onSelect} projectId={projectId} held={detail.data.taskKey !== null && holds.has(detail.data.taskKey)} />}
       </div>
     </div>
   );
@@ -282,7 +286,7 @@ function DetailError({ error, retrying, onRetry, onClose }: { error: ApiError | 
   );
 }
 
-function RunDetail({ run, pos, onSelect, projectId }: { run: CiRun; pos: ReturnType<typeof position>; onSelect: (id: string) => void; projectId: string }) {
+function RunDetail({ run, pos, onSelect, projectId, held }: { run: CiRun; pos: ReturnType<typeof position>; onSelect: (id: string) => void; projectId: string; held: boolean }) {
   const { client } = useApi();
   const queryClient = useQueryClient();
   const res = resultLabel(run);
@@ -318,12 +322,14 @@ function RunDetail({ run, pos, onSelect, projectId }: { run: CiRun; pos: ReturnT
         </span>
         <span className="kv-l">계기</span><span className="kv-v">{run.trigger ?? '—'}</span>
         <span className="kv-l">시각 · 소요</span><span className="kv-v mono">{formatDateTime(run.startedAt)} · {formatDuration(runDurationMs(run))}</span>
-        <span className="kv-l">GitHub</span><span className="kv-v mono" style={{ fontSize: 12.5 }}>{githubLabel(run)}</span>
+        <span className="kv-l">GitHub</span>
+        <span className="kv-v mono" style={{ fontSize: 12.5 }}>{run.githubStatus?.url ? <a href={run.githubStatus.url} target="_blank" rel="noreferrer">{githubLabel(run)}</a> : githubLabel(run)}</span>
         {run.stage === 'int' && run.mergeSha && <><span className="kv-l">병합</span><span className="kv-v mono">병합됨 → main @ {short(run.mergeSha)}</span></>}
         {run.url && <><span className="kv-l">접속 URL</span><span className="kv-v mono">{run.url}</span></>}
       </div>
+      {run.note && <p className="fhint" style={{ margin: '0 0 10px' }}>{run.note}</p>}
       {run.failScope === 'baseline' && run.status === 'fail' && (
-        <p className="fhint" style={{ margin: '0 0 10px' }}>기준선 실패 — main 기준 커밋에서도 실패했습니다({short(run.baseSha)}). 이 Task의 변경 탓이 아니므로 Task 실패로 세지 않습니다.</p>
+        <p className="fhint" style={{ margin: '0 0 10px' }}>기준선 실패 — main 기준 커밋에서도 실패했습니다({short(run.baseSha)}). 이 Task의 변경 탓이 아니므로 Task 실패로 세지 않습니다. Gate에서 기다리는 Task는 main이 바뀌면 서버가 자동으로 다시 통합 확인합니다.</p>
       )}
       <h4 className="ds-h4">단계</h4>
       {steps.length === 0 ? <p className="empty">보고된 단계가 없습니다.</p> : (
@@ -341,8 +347,10 @@ function RunDetail({ run, pos, onSelect, projectId }: { run: CiRun; pos: ReturnT
       {run.artifacts.length > 0 && <><h4 className="ds-h4">{shotsTitle}</h4><div className="ds-chips">{run.artifacts.map((z) => <span key={z} className="tag mono">{z}</span>)}</div></>}
       {run.status === 'fail' && (
         <div className="form-acts" style={{ marginTop: 10 }}>
-          <span className="muted" style={{ marginRight: 'auto' }}>원인을 고친 뒤 다시 실행합니다. Task 검사 실패는 Runner가 Agent에게 로그를 전달해 같은 시도 안에서 고치게 합니다.</span>
-          <BusyButton busy={retry.busy} busyLabel="요청 중…" small onClick={() => { void retry.save(); }}>다시 실행</BusyButton>
+          <span className="muted" style={{ marginRight: 'auto' }}>{held
+            ? `${run.taskKey ?? ''}의 실제 병합이 검증 근거와 달라 완료를 보류 중입니다. 병합 결과를 확인하기 전에는 다시 실행할 수 없습니다.`
+            : '원인을 고친 뒤 다시 실행합니다. Task 검사 실패는 Runner가 Agent에게 로그를 전달해 같은 시도 안에서 고치게 합니다.'}</span>
+          <BusyButton busy={retry.busy} busyLabel="요청 중…" small disabled={held} onClick={() => { void retry.save(); }}>다시 실행</BusyButton>
         </div>
       )}
       {retry.conflictModal}
@@ -456,7 +464,7 @@ function PipeTab({ projectId }: { projectId: string }) {
           <div className="kv" style={{ gridTemplateColumns: '150px minmax(0,1fr)' }}>
             <span className="kv-l">야간 점검</span><span className="kv-v mono">매일 {s.nightAt}</span>
             <span className="kv-l">실패 테스트 재시도</span><span className="kv-v">{s.retry}회 — 재시도로만 통과하면 불안정 후보</span>
-            <span className="kv-l">서비스 기동</span><span className="kv-v">파이프라인 정의의 ② 통합 확인 단계(서비스 기동)를 따릅니다</span>
+            <span className="kv-l">서비스 기동</span><span className="kv-v mono">{serviceLabel(s.serviceConfig ?? null)}</span>
             <span className="kv-l">배포 확인 URL</span><span className="kv-v mono">{s.deployUrl ?? '설정되지 않음'}</span>
             <span className="kv-l">동시 실행</span><span className="kv-v">무거운 작업 상한(설정 → Runner · 실행 환경 → 동시 실행)을 Agent 세션과 함께 적용</span>
           </div>
@@ -464,6 +472,17 @@ function PipeTab({ projectId }: { projectId: string }) {
       </section>
     </>
   );
+}
+
+/**
+ * 서비스 기동 구성(M7-04 fix2 계약 5). Runner가 main 커밋에서 읽은 구성 파일이다.
+ * 원본 문구 「docker compose — docker-compose.ci.yml」 모양을 따른다. 아직 관측되지 않았으면 꾸미지 않는다.
+ */
+function serviceLabel(cfg: { path: string; commit: string; status: string; error: string | null } | null): string {
+  if (!cfg) return '아직 관측되지 않음 — Runner가 main에서 구성 파일을 읽으면 표시됩니다';
+  if (cfg.status === 'missing') return `${cfg.path} 없음 (main @ ${short(cfg.commit)})`;
+  if (cfg.status === 'error') return `${cfg.path} 해석 실패 — ${cfg.error ?? '원인 미보고'}`;
+  return `docker compose — ${cfg.path}`;
 }
 
 /* ---------------- 불안정 테스트 ---------------- */
@@ -527,7 +546,7 @@ function FlakyRow({ item: f, projectId }: { item: FlakyTest; projectId: string }
     <div className="gtr" role="row" style={{ gridTemplateColumns: 'minmax(220px,1fr) 110px 148px 140px 100px 100px', minWidth: 0 }}>
       <span className="gc mono" role="cell">{f.testKey}</span>
       <span className="gc" role="cell">{f.rate}</span>
-      <span className="gc mono" role="cell">{formatDateTime(f.updatedAt)}</span>
+      <span className="gc mono" role="cell" title="마지막 실패 시각">{f.lastFailedAt ? formatDateTime(f.lastFailedAt) : '—'}</span>
       <span className="gc" role="cell"><span className={st.c}>{st.l}</span></span>
       <span className="gc" role="cell">{f.taskKey ? <Link className="reflink mono" to={LINK.task(f.taskKey)}>{f.taskKey}</Link> : '—'}</span>
       <span className="gc" role="cell">

@@ -34,7 +34,11 @@ export function resultLabel(run: Pick<CiRun, 'status' | 'failScope'>): { l: stri
   return statusLabel(run.status);
 }
 
-export const runDurationMs = (run: CiRun): number | null => (run.steps.length ? run.steps.reduce((n, s) => n + s.durationMs, 0) : null);
+/** 소요 시간. Runner가 끝난 시각(finishedAt)을 보고했으면 시작~끝, 아니면 보고된 단계 시간의 합. */
+export function runDurationMs(run: CiRun): number | null {
+  if (run.finishedAt) return Math.max(0, Date.parse(run.finishedAt) - Date.parse(run.startedAt));
+  return run.steps.length ? run.steps.reduce((n, s) => n + s.durationMs, 0) : null;
+}
 
 /** 「3분 02초」「45초」(원본 dur 모양). 모르면 「—」 */
 export function formatDuration(ms: number | null): string {
@@ -88,28 +92,34 @@ export function openFailures(runs: readonly CiRun[]): number {
 }
 
 /**
- * main 상태 배지. 원본은 Mock 값(main.st)을 그대로 썼다. 제품은 실행 기록에서 정한다.
+ * main 상태 배지. 원본은 Mock 값(main.st·commit·e2e·at)을 그대로 썼다. 제품은 실행 기록에서 정한다.
  * - 가장 최근의 「main을 보는 실행」을 쓴다: 야간 점검(통과·실패), 병합된 통합 확인(통과 + 병합 SHA), 기준선 실패(Task 검사가 본 main 기준 커밋 자체가 실패).
  * - 통합 확인 실패는 병합되지 않았으므로 main을 깨지 않는다(G L475).
- * - 원본의 「E2E 12 / 12」는 계약에 숫자가 없어 보이지 않는다(보고 참고).
+ * - E2E 수는 Runner가 구조화해 보고한 값(e2e)이 있을 때만 보인다. 시각은 끝난 시각, 없으면 시작 시각이다(M7-04 fix2 계약 1).
  */
 export function mainStatus(runs: readonly CiRun[]): { l: string; c: string } {
   const r = runs.find((x) => (x.stage === 'night' && (x.status === 'pass' || x.status === 'fail'))
     || (x.stage === 'int' && x.status === 'pass' && x.mergeSha !== null)
     || (x.status === 'fail' && x.failScope === 'baseline'));
   if (!r) return { l: 'main 빌드 기록 없음', c: 'vf v-none' };
-  const at = formatDateTime(r.startedAt);
+  const at = formatDateTime(r.finishedAt ?? r.startedAt);
   if (r.failScope === 'baseline') return { l: `main 깨짐 · 기준선 검사 실패 · ${short(r.baseSha)} · ${at}`, c: 'vf v-fail' };
   const commit = short(r.stage === 'int' ? r.mergeSha : r.headSha ?? r.baseSha);
-  if (r.status === 'fail') return { l: `main 깨짐 · ${commit} · ${at}`, c: 'vf v-fail' };
-  return { l: `main 정상 · ${commit} · ${at}`, c: 'vf v-pass' };
+  const e2e = r.e2e ? ` · E2E ${String(r.e2e.passed)} / ${String(r.e2e.total)}` : '';
+  if (r.status === 'fail') return { l: `main 깨짐 · ${commit}${e2e} · ${at}`, c: 'vf v-fail' };
+  return { l: `main 정상 · ${commit}${e2e} · ${at}`, c: 'vf v-pass' };
 }
 
-/** GitHub 칸(P ghL L4776). Runner가 PR 검사 상태(commit status)로 보고하는 이름과 상태 */
-export function githubLabel(run: Pick<CiRun, 'pr' | 'stage' | 'status'>): string {
+/**
+ * GitHub 칸(P ghL L4776). Runner가 GitHub에 실제로 보고하고 응답을 확인한 상태(githubStatus)만 「보고」로 보인다.
+ * 값이 없으면 전송 여부를 모르는 것이다. CI 결과로 GitHub 상태를 추측하지 않는다(M7-04 fix2 계약 6).
+ */
+export function githubLabel(run: Pick<CiRun, 'pr' | 'stage' | 'githubStatus'>): string {
+  const g = run.githubStatus;
+  const target = run.pr === null ? 'main 커밋' : `GitHub PR #${String(run.pr)}`;
+  if (g) return `${target} 검사 상태 보고: ${g.context} — ${g.state} · ${formatDateTime(g.reportedAt)}`;
   if (run.pr === null) return 'main 대상 — PR 없음';
-  const state = run.status === 'pass' ? 'success' : run.status === 'fail' ? 'failure' : 'pending';
-  return `GitHub PR #${String(run.pr)} 검사 상태 보고: agentwbs/${run.stage} — ${state}`;
+  return `${target} 검사 상태 보고 확인 전 (agentwbs/${run.stage})`;
 }
 
 /** 병합 대기열 상태(P queue L4792의 문구를 계약 QueueStatus에 맞춤) */
@@ -117,23 +127,28 @@ const QUEUE: Record<string, { l: string; c: string }> = {
   waiting_verify: { l: '검증 대기', c: 'vf v-none' }, queued: { l: '대기', c: 'vf v-none' }, checking: { l: '통합 확인 중', c: 'vf v-run' },
   merged: { l: '병합됨', c: 'vf v-pass' }, failed: { l: '통합 실패 — 병합 보류', c: 'vf v-fail' }, removed: { l: '대기열에서 빠짐', c: 'vf v-none' },
 };
+const BASELINE_FAILED = { l: '기준선 실패 — main 수정 뒤 자동 재통합', c: 'sc sc-warn' };
 const PENDING = new Set(['waiting_verify', 'queued', 'checking']);
 
 export interface QueueRow { id: string; pr: string; taskKey: string; title: string; st: string; c: string; at: string; ciRunId: string | null; ciRunKey: string | null; mismatch: boolean; actualMergeSha: string | null }
 
 /**
  * 병합 대기열 행.
- * - 시각: 계약의 대기열 행에 시각이 없어, 연결된 통합 확인 실행(ciRunId)의 시작 시각을 쓴다. 없으면 「—」(보고 참고).
+ * - 시각: 병합됨은 실제 병합 시각(mergedAt), 그 밖은 대기열에 들어온 시각(queuedAt). 원본도 같은 칸에 두 시각을 썼다(P L3545).
+ *   병합됐는데 실제 병합 시각을 아직 확인하지 못했으면 「병합 시각 미확인」이다(서버 수신 시각으로 대신하지 않는다, M7-04 fix2 계약 3).
+ * - 기준선 실패: 연결된 실행이 failScope=baseline으로 실패했으면 Task 탓이 아니다. main이 바뀌면 서버가 자동으로 다시 통합한다(M7-04 fix3).
  * - mismatch: 실제 병합 SHA가 기록됐는데 병합됨이 아니면, 서버가 MERGE_MISMATCH로 완료를 보류한 것이다(M7-04 조정자 결정 4).
  */
 export function queueRows(queue: readonly QueueItem[], titles: ReadonlyMap<string, string>, runs: readonly CiRun[]): QueueRow[] {
   const byId = new Map(runs.map((r) => [r.id, r]));
   return queue.map((q) => {
-    const s = QUEUE[q.status] ?? { l: String(q.status), c: 'vf v-none' };
     const linked = q.ciRunId ? byId.get(q.ciRunId) : undefined;
-    const at = linked?.startedAt;
+    const baseline = q.status === 'failed' && linked?.status === 'fail' && linked.failScope === 'baseline';
+    const s = baseline ? BASELINE_FAILED : QUEUE[q.status] ?? { l: String(q.status), c: 'vf v-none' };
+    const time = q.status === 'merged' ? q.mergedAt : q.queuedAt;
+    const at = time ? formatDateTime(time) : q.status === 'merged' ? '병합 시각 미확인' : '—';
     return {
-      id: q.id, pr: prLabel(q.pr), taskKey: q.taskKey, title: titles.get(q.taskKey) ?? '', st: s.l, c: s.c, at: at ? formatDateTime(at) : '—',
+      id: q.id, pr: prLabel(q.pr), taskKey: q.taskKey, title: titles.get(q.taskKey) ?? '', st: s.l, c: s.c, at,
       ciRunId: q.ciRunId, ciRunKey: linked?.runKey ?? null, mismatch: q.actualMergeSha !== null && q.status !== 'merged', actualMergeSha: q.actualMergeSha,
     };
   });
