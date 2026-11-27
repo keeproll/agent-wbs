@@ -709,3 +709,13 @@ test('이전 통합 멱등 키를 가진 작업도 자동 중복 생성 없이 �
   expect(r.statusCode,r.body).toBe(202);
   expect((await owner.query('select dedup_key from runner_jobs where id=$1',[r.json().jobId])).rows[0]?.dedup_key).toMatch(new RegExp(`:${otherSha}:2$`));
 });
+
+
+test('기준 실패 재통합 분기는 아직 Gate 전인 Task의 기존 CI 다시 시도를 막지 않는다', async () => {
+  const a = await running(), run = await start(a), id = run.json().id as string;
+  await patch(id,{ fence:1,status:'run' }); await patch(id,{ fence:1,status:'fail',failScope:'baseline' });
+  const r = await app.inject({ method:'POST',url:`/api/projects/${project}/ci/runs/${id}/retry`,headers:lead() });
+  expect(r.statusCode,r.body).toBe(202);
+  expect((await owner.query('select kind from runner_jobs where id=$1',[r.json().jobId])).rows).toEqual([{ kind:'ci_retry' }]);
+  expect((await owner.query('select status from tasks where id=$1',[a.id])).rows).toEqual([{ status:'running' }]);
+});

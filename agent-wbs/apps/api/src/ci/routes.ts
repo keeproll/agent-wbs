@@ -72,7 +72,7 @@ export function registerCiRoutes(app: FastifyInstance, pool: Pool) {
       const source = id === 'retryCiRun' ? (await client.query<{ id: string; pr: number | null; head_sha: string; status: string; task: string | null; fail_scope: string | null }>('select id,pr,head_sha,status,task,fail_scope from ci_runs where id::text=$1 and project_id::text=$2',[params(r).id,params(r).projectId])).rows[0] : null;
       if (id === 'retryCiRun' && !source) throw new PlatformError('NOT_FOUND');
       if (source && source.status !== 'fail') throw new PlatformError('INVALID_TRANSITION');
-      if (source?.fail_scope === 'baseline' && source.task) {
+      if (source?.fail_scope === 'baseline' && source.task && (await repo.taskById(source.task))?.status === 'gate') {
         const jobId = await enqueueIntegration(client,source.task,r.platform?.epoch ?? 0,{ retry:true });
         if (!jobId) throw new PlatformError('INVALID_TRANSITION');
         await assertExternal(repo,required(await repo.job(jobId)));
