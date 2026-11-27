@@ -1,0 +1,6 @@
+{"type":"system","subtype":"init","session_id":"s-unk","model":"claude-haiku-5-5","uuid":"k-1"}
+{"type":"rate_limit_event","session_id":"s-unk","rate_limit_info":{"status":"allowed_warning","resetsAt":1790000000},"uuid":"k-2"}
+{"type":"system","subtype":"brand_new_subtype","session_id":"s-unk","payload":{"x":1},"uuid":"k-3"}
+{"type":"assistant","session_id":"s-unk","parent_tool_use_id":null,"uuid":"k-4","message":{"role":"assistant","content":[{"type":"future_block","data":"?"},{"type":"text","text":"계속"}]}}
+{"type":"stream_event","session_id":"s-unk","event":{"type":"content_block_delta"},"uuid":"k-5"}
+{"type":"result","subtype":"success","is_error":false,"session_id":"s-unk","result":"계속","usage":{"input_tokens":1,"output_tokens":1},"uuid":"k-6"}

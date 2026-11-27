@@ -1,6 +1,6 @@
 # Agent Runner
 
-개발 PC에서 Agent WBS에 연결하는 상주 프로그램이다. 현재는 정리 명령 조회, 정책·메시지 조회, 생존 신호와 세션 시작·종료 보고를 제공한다. 실제 Agent 실행은 다음 작업에서 연결한다.
+개발 PC에서 Agent WBS에 연결하는 상주 프로그램이다. 현재는 정리 명령 조회, 정책·메시지 조회, 생존 신호와 세션 시작·종료 보고를 제공한다. 실제 Agent 실행은 다음 작업에서 연결한다. Claude·Codex CLI 실행 인자·출력 해석·환경 변수 allowlist는 [src/cli/README.md](src/cli/README.md)에 있다(M5-01).
 
 ```sh
 pnpm -C agent-runner install --frozen-lockfile

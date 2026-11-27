@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","session_id":"s-api","model":"claude-opus-5-5","uuid":"p-1"}
+{"type":"result","subtype":"success","is_error":true,"session_id":"s-api","result":"API Error: 529 overloaded","stop_reason":null,"terminal_reason":"api_error","api_error_status":529,"usage":{"input_tokens":0,"output_tokens":0},"uuid":"p-2"}

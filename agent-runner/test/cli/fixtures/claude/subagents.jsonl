@@ -1,0 +1,10 @@
+{"type":"system","subtype":"init","session_id":"s-sub","model":"claude-sonnet-5-5","tools":["Agent"],"uuid":"a-1"}
+{"type":"assistant","session_id":"s-sub","parent_tool_use_id":null,"uuid":"a-2","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_A","name":"Agent","input":{"subagent_type":"fe-implementer","description":"화면 구현","prompt":"..."}},{"type":"tool_use","id":"toolu_B","name":"Agent","input":{"subagent_type":"qa","description":"검사","prompt":"..."}}]}}
+{"type":"system","subtype":"task_started","session_id":"s-sub","task_id":"task_A","tool_use_id":"toolu_A","description":"화면 구현","task_type":"local_agent","is_backgrounded":false,"spawn_depth":1,"uuid":"a-3"}
+{"type":"system","subtype":"task_started","session_id":"s-sub","task_id":"task_B","tool_use_id":"toolu_B","description":"검사","task_type":"local_agent","is_backgrounded":false,"spawn_depth":1,"uuid":"a-4"}
+{"type":"assistant","session_id":"s-sub","parent_tool_use_id":"toolu_A","uuid":"a-5","message":{"role":"assistant","content":[{"type":"text","text":"하위 Agent 진행 글"},{"type":"tool_use","id":"toolu_C","name":"Agent","input":{"subagent_type":"helper","description":"중첩","prompt":"..."}}]}}
+{"type":"system","subtype":"task_started","session_id":"s-sub","task_id":"task_C","tool_use_id":"toolu_C","parent_task_id":"task_A","description":"중첩","task_type":"local_agent","is_backgrounded":false,"spawn_depth":2,"uuid":"a-6"}
+{"type":"system","subtype":"task_started","session_id":"s-sub","task_id":"task_bash","tool_use_id":"toolu_bg","description":"서버","task_type":"local_bash","is_backgrounded":true,"uuid":"a-6b"}
+{"type":"user","session_id":"s-sub","parent_tool_use_id":"toolu_A","uuid":"a-7","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_C","content":"중첩 끝"}]}}
+{"type":"user","session_id":"s-sub","parent_tool_use_id":null,"uuid":"a-8","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_A","content":"화면 끝"}]}}
+{"type":"assistant","session_id":"s-sub","parent_tool_use_id":null,"uuid":"a-9","message":{"role":"assistant","content":[{"type":"text","text":"검사를 기다립니다."}]}}
