@@ -13,6 +13,7 @@ import { RunnerRepository } from '../src/runner/repository.ts';
 import { GitRepo } from './git-observe.ts';
 import { draft, met, task } from './project-fixture.ts';
 import { snapshotHash, wbsSnapshot } from '../src/planning/job-snapshot.ts';
+import { judgedContentHash } from '../src/tasks/hash.ts';
 
 /*
  * M2-03 프로젝트 등록·기술 결정·bootstrap·초기 WBS 승인·입력 변경·분석 안 함(G§4.2, contracts §2.2·§3.3).
@@ -711,6 +712,29 @@ describe('서버 후속 4: Runner 계약과 분석 완료', () => {
     expect((await runner(`/api/planning/bootstrap/${retried.id}/draft`, { fence: retried.fence, ...draft() })).statusCode).toBe(201);
   });
 
+  test('초안의 옛 입력 지문은 새 제목으로 바꿔 저장하지 않으며 같은 입력 지문만 받는다', async () => {
+    const { job } = await confirmed();
+    const old = draft();
+    const first = old.tasks[0];
+    if (!first) throw new Error('초안 없음');
+    first.title = '판단 뒤 바꾼 제목';
+    const rejected = await runner(`/api/planning/bootstrap/${job.id}/draft`, { fence: job.fence, ...old });
+    expect(rejected.statusCode, rejected.body).toBe(409);
+    expect(errorOf(rejected).code).toBe('VERSION_CONFLICT');
+    expect(errorOf(rejected).details.subjectHash).toBe(draft([task('t1', { title: first.title })], []).tasks[0]?.judgedRules?.items[0]?.sourceRef.slice(7));
+    expect(await count('select count(*) n from wbs_drafts')).toBe(0);
+    const invalid = draft();
+    const invalidTask = invalid.tasks[0];
+    if (!invalidTask) throw new Error('초안 없음');
+    invalidTask.title = '\ud800';
+    expect((await runner(`/api/planning/bootstrap/${job.id}/draft`, { fence: job.fence, ...invalid })).statusCode).toBe(400);
+    const correct = draft([task('t1', { title: first.title }), task('t2')]);
+    const accepted = await runner(`/api/planning/bootstrap/${job.id}/draft`, { fence: job.fence, ...correct });
+    expect(accepted.statusCode, accepted.body).toBe(201);
+    const stored = (await state()).bootstrap.draft?.tasks[0]?.judgedRules?.items[0];
+    expect(stored?.subjectHash).toBe(correct.tasks[0]?.judgedRules?.items[0]?.sourceRef.slice(7));
+  });
+
   test('저장한 초안도 결정이 바뀌면 승인할 수 없고 재분석은 새 결정 스냅샷을 받는다', async () => {
     const { job, decisions } = await confirmed();
     const submitted = await runner(`/api/planning/bootstrap/${job.id}/draft`, { fence: job.fence, ...draft() });
@@ -881,9 +905,13 @@ describe('서버 후속 4: Runner 계약과 분석 완료', () => {
     try {
       const job = await input(SHA2);
       await ownerPool.query("update tasks set title='외부에서 바뀐 제목' where task_key='TASK-0003'");
-      const submit = (target: string, after: string) => runner('/api/planning/proposals', { jobId: job.id, fence: job.fence, title: '수정', reason: '입력 변경', source: { kind: 'input' },
-        ops: [{ op: 'modify', task: target, field: 'doneCond', after }],
-        taskJudgements: [{ taskKey: target, judgedRules: { schemaVersion: 1, items: [met('revert'), met('contract'), met('refactor')] } }] });
+      const submit = async (target: string, after: string) => {
+        const current = (await wbsSnapshot(ownerPool, (await state()).id)).tasks.find((task) => task.taskKey === target);
+        const hash = judgedContentHash({ ...current?.content, doneCond: after });
+        return runner('/api/planning/proposals', { jobId: job.id, fence: job.fence, title: '수정', reason: '입력 변경', source: { kind: 'input' },
+          ops: [{ op: 'modify', task: target, field: 'doneCond', after }],
+          taskJudgements: [{ taskKey: target, judgedRules: { schemaVersion: 1, items: [met('revert', hash), met('contract', hash), met('refactor', hash)] } }] });
+      };
       for (const [target, after] of [['TASK-0001', '첫 변경'], ['TASK-0001', '같은 대상의 다음 변경'], ['TASK-0002', '이웃의 다음 변경']]) {
         const result = await submit(target ?? '', after ?? '');
         expect(result.statusCode, result.body).toBe(201);

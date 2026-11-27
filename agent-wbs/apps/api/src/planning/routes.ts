@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import type { Pool, PoolClient } from '@awbs/db';
-import type { JudgedRules } from '@awbs/shared';
+import type { JudgedRules, SplitJudgements } from '@awbs/shared';
 import { HOLD_ERROR, inputErrors, isTimestamp, OPERATIONS, type WireProposalOp } from '@awbs/shared/api';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { inEpoch } from '../platform/transaction.ts';
@@ -16,6 +16,7 @@ import { recordReplan, scheduleView } from './schedule.ts';
 import { registerSessionRoutes } from './sessions.ts';
 import { registerSplitRoutes } from './split.ts';
 import { deferChange } from '../changes/events.ts';
+import { bindJudgements } from './binding.ts';
 import { advanceWbs, proposalBasis, snapshotHash, wbsSnapshot } from './job-snapshot.ts';
 import { currentRunnerJob, lockPlanningJob } from '../project/jobs.ts';
 
@@ -65,7 +66,8 @@ function holdError(ev: Evaluation): TaskError {
 }
 
 /** rule별 최대 1건(data-model §2.3-1). JSON Schema로 쓸 수 없어 서버가 검사한다. */
-interface Judged { schemaVersion: 1; items: readonly { rule: string }[] }
+interface Judged { schemaVersion: 1; items: readonly Omit<JudgedRules['items'][number], 'subjectHash'>[] }
+interface SplitJudged { schemaVersion: 1; items: readonly Omit<SplitJudgements['items'][number], 'subjectHash'>[] }
 const judgedOf = (op: WireProposalOp): Judged | undefined => (op.op === 'add' ? (op.t as unknown as { judgedRules?: Judged }).judgedRules : undefined);
 
 function duplicateRules(record: { items: readonly { rule: string }[] } | undefined, path: string) {
@@ -278,7 +280,7 @@ export function registerPlanningRoutes(app: FastifyInstance, pool: Pool): void {
       const client = clientOf(request);
       const body = request.body as {
         jobId: string; fence: number; title: string; reason: string; source: { kind: string; id?: string }; ops: WireProposalOp[];
-        taskJudgements?: { taskKey: string; judgedRules: Judged }[]; splitJudgements?: Judged;
+        taskJudgements?: { taskKey: string; judgedRules: Judged }[]; splitJudgements?: SplitJudged;
       };
       const keys = (body.taskJudgements ?? []).map((entry) => entry.taskKey);
       const errors = [
@@ -312,19 +314,17 @@ export function registerPlanningRoutes(app: FastifyInstance, pool: Pool): void {
           throw new TaskError('VERSION_CONFLICT', { changes: [] }, [], '분석한 Task의 내용·상태·작업 묶음·의존 관계가 바뀌었습니다. 새 작업으로 다시 분석하세요.');
         }
       }
-      // 판단의 subjectHash는 서버가 「변경 적용 후 내용」으로 계산해 붙인다(contracts §3.3). 판단을 뺀 상태로 먼저 평가한다.
+      // 판단을 뺀 변경 후 내용과 Runner가 실제 판단한 입력 지문을 대조한다.
       const plain = await evaluate(client, { projectId, source: body.source.kind, sourceId: body.source.id ?? null, ops: stripJudgements(body.ops), taskJudgements: [], splitJudgements: null });
-      const stamp = (record: Judged, hash: string) => ({ ...record, items: record.items.map((item) => ({ ...item, subjectHash: hash })) }) as unknown as JudgedRules;
-      const missing = '0'.repeat(64);
       const ops = body.ops.map((op): WireProposalOp => {
         const judged = judgedOf(op);
         if (op.op !== 'add' || !judged) return op;
         const key = plain.refs.get(op.ref);
-        return { ...op, t: { ...op.t, judgedRules: stamp(judged, (key && plain.afterHash.get(key)) ?? missing) } } as WireProposalOp;
+        return { ...op, t: { ...op.t, judgedRules: bindJudgements(judged, key ? plain.afterHash.get(key) : undefined, op.ref) } } as WireProposalOp;
       });
       const row = await insertCp(client, projectId, { ...body, source, ops }, PLANNING, 'review', {
-        taskJudgements: (body.taskJudgements ?? []).map((entry) => ({ taskKey: entry.taskKey, judgedRules: stamp(entry.judgedRules, plain.afterHash.get(entry.taskKey) ?? missing) })),
-        splitJudgements: body.splitJudgements ? stamp(body.splitJudgements, plain.splitHash ?? missing) : null,
+        taskJudgements: (body.taskJudgements ?? []).map((entry) => ({ taskKey: entry.taskKey, judgedRules: bindJudgements(entry.judgedRules, plain.afterHash.get(entry.taskKey), entry.taskKey) })),
+        splitJudgements: body.splitJudgements ? bindJudgements(body.splitJudgements, plain.splitHash, 'split') : null,
       });
       const auto = (await client.query<{ cp_auto: boolean | null }>('select cp_auto from schedule_policy where singleton')).rows[0]?.cp_auto === true;
       const ev = await evaluate(client, inputOf(row));
@@ -345,7 +345,7 @@ export function registerPlanningRoutes(app: FastifyInstance, pool: Pool): void {
 
     route('submitProposalJudgements', 'CP 판단 기록', async (request, reply) => {
       const client = clientOf(request);
-      const body = request.body as { jobId: string; fence: number; judgements: { target: string; judgedRules: { items: { rule: string; subjectHash: string }[] } }[]; splitJudgements?: { items: { rule: string; subjectHash: string }[] } };
+      const body = request.body as { jobId: string; fence: number; judgements: { target: string; judgedRules: { items: { rule: string; subjectHash: string; sourceRef: string }[] } }[]; splitJudgements?: { items: { rule: string; subjectHash: string; sourceRef: string }[] } };
       const errors = [
         ...body.judgements.flatMap((entry, index) => duplicateRules(entry.judgedRules, `judgements.${String(index)}.judgedRules`)),
         ...duplicateRules(body.splitJudgements, 'splitJudgements'),
@@ -357,12 +357,8 @@ export function registerPlanningRoutes(app: FastifyInstance, pool: Pool): void {
       await lockGraph(client, row.project_id);
       const ev = await evaluate(client, inputOf(row));
       const current = new Map(ev.targets.map((target) => [target.target, target.subjectHash]));
-      // payload의 hash(판단한 내용)가 지금 내용의 hash와 다르면 판단이 낡았다(contracts §3.3).
-      const stale = body.judgements.filter((entry) => entry.judgedRules.items.some((item) => item.subjectHash !== current.get(entry.target)));
-      const staleSplit = body.splitJudgements?.items.some((item) => item.subjectHash !== ev.splitHash);
-      if (stale.length || staleSplit) {
-        throw new TaskError('VERSION_CONFLICT', { targets: ev.targets.map(({ target, subjectHash }) => ({ target, subjectHash })), splitSubjectHash: ev.splitHash, changes: [] }, [], '판단한 내용이 지금 변경 제안의 내용과 다릅니다.');
-      }
+      for (const entry of body.judgements) bindJudgements(entry.judgedRules, current.get(entry.target), entry.target);
+      if (body.splitJudgements) bindJudgements(body.splitJudgements, ev.splitHash, 'split');
       // ops의 변경 내용은 바꾸지 않고 판단 기록만 덧붙인다(새 Task → ops[].t.judgedRules, 기존 Task → task_judgements).
       const byTarget = new Map(body.judgements.map((entry) => [entry.target, entry.judgedRules]));
       const ops = row.ops.map((op) => (op.op === 'add' && byTarget.has(op.ref) ? { ...op, t: { ...op.t, judgedRules: byTarget.get(op.ref) } } : op));

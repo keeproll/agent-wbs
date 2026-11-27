@@ -116,7 +116,7 @@ const judgementJobs = async (proposalId: string) => (await ownerPool.query<{ id:
   proposal: { id: string; ops: unknown[]; targets: { target: string; subjectHash: string; before: unknown; after: unknown }[]; splitSubjectHash: string | null; splitTasks: { taskKey: string }[] | null };
 } }>("select id,state,payload from runner_jobs where kind='planning' and payload->'proposal'->>'id'=$1 order by created_at", [proposalId])).rows;
 const met = (rules: string[], subjectHash?: string) => ({ schemaVersion: 1, items: rules.map((rule) => ({
-  rule, result: 'met', agreedBy: ['Claude', 'Codex'], basis: '근거', judgedAt: '2026-11-26T00:00:00Z', sourceRef: 'planning-job', ...(subjectHash ? { subjectHash } : {}),
+  rule, result: 'met', agreedBy: ['Claude', 'Codex'], basis: '근거', judgedAt: '2026-11-26T00:00:00Z', sourceRef: `sha256:${subjectHash ?? 'a'.repeat(64)}`, ...(subjectHash ? { subjectHash } : {}),
 })) });
 const RULES = ['revert', 'contract', 'refactor'];
 

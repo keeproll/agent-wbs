@@ -44,3 +44,46 @@ reconcile(끊긴 작업의 실제 결과를 대조하는 복구 처리)도 대�
 
 용어: Runner는 작업 실행 프로그램이다. 임대는 일정 시간의 실행 권한이다.
 reconcile은 끊긴 작업의 결과 대조다. `resumeStep`은 재개할 단계다. DB는 데이터베이스다.
+
+## 판단과 입력 지문
+
+`sourceRef`는 판단할 때 실제로 본 입력의 지문이다.
+형식은 `sha256:<64 hex>`이며, `hex`에는 소문자 16진수 64자만 쓴다.
+JSON(JavaScript Object Notation)은 내용과 값을 문자열로 표현하는 형식이다.
+일반 Task(작업)의 지문은 `JudgedContent`(판단에 영향을 주는 작업 내용)를 JCS(JSON Canonicalization Scheme, 같은 내용을 항상 같은 JSON 문자열로 만드는 규칙)로 직렬화해서 계산한다.
+JCS는 [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785)를 따른다.
+그 문자열의 UTF-8(문자열을 바이트로 바꾸는 인코딩) 바이트를 SHA-256(Secure Hash Algorithm 256, 내용을 256비트 지문으로 만드는 계산법)에 넣은 값이 `subjectHash`다.
+`sourceRef`는 `sha256:` 뒤에 그 값을 붙인다.
+왜 이렇게 하나: 판단 뒤에 작업 내용이 바뀌면 같은 판단을 새 내용의 판단으로 받아들이면 안 된다.
+
+`JudgedContent`는 `title`, `scope`, `out`, `doneCond`, `spec`, `ac`, `outputs`, `designs`, `conflictGroup`으로 구성한다.
+`spec`의 10개 칸은 빠진 칸을 빈 목록으로 채운다.
+`outputs`는 이름순으로 정렬하고 `delivered`를 뺀다.
+`designs`는 `DB`, `API`, `FE`, `DevOps` 순서로 정렬한다.
+그 밖의 목록 순서는 유지한다.
+새 Task의 생략값과 분할 Task가 상속한 `conflictGroup`도 먼저 확정한다.
+Unicode 문자열은 정규화하지 않는다.
+잘못된 Unicode나 JSON으로 표현할 수 없는 값은 거부한다.
+왜 이렇게 하나: Runner와 서버가 같은 작업을 보고도 서로 다른 지문을 계산하는 일을 막는다.
+
+초안, 변경 제안의 새 Task, `taskJudgements`, Task 재판단, 변경 제안 재판단에 같은 검사를 적용한다.
+기존 Task 재판단 요청에 `subjectHash`도 있으면 `sourceRef`의 지문과 함께 변경 후 내용의 서버 계산값에 맞아야 한다.
+예를 들어 `conflictGroup`을 바꾸는 요청은 바꾼 묶음으로 판단하고 지문을 계산한다.
+지문이 다르면 저장하지 않고 `409 VERSION_CONFLICT`를 보낸다.
+응답의 `details.subjectHash`에는 현재 대상의 서버 계산값을 담는다.
+형식 자체가 틀린 `sourceRef`는 `400 VALIDATION_FAILED`다.
+서버는 옛 판단에 새 내용의 지문을 붙여 주지 않는다.
+옛 형식으로 저장된 판단도 유효한 판단으로 취급하지 않으므로 다시 판단해야 한다.
+왜 이렇게 하나: 지문을 새로 붙이는 것만으로는 Runner가 새 내용을 실제로 판단했는지 확인할 수 없다.
+
+분할 전체 판단(D-34)의 대상은 기존 `splitSubjectHash` 정의를 유지한다.
+판단 기록을 뺀 `ops`와 원래 Task의 내용이 든 `splitTasks`를 `{ops, splitTasks}`로 묶고 같은 JCS·UTF-8·SHA-256 계산을 적용한다.
+그 값으로 `sourceRef`를 만든다.
+왜 이렇게 하나: 분할 전체 판단은 조각 하나가 아니라 전체 변경과 원래 작업의 관계를 다룬다.
+
+언어가 달라도 대조할 수 있는 고정 입력·직렬화 결과·지문은 [`contracts/fixtures/judgement-bindings.json`](contracts/fixtures/judgement-bindings.json)에 있다.
+기본 예시의 지문은 `49813649157306979e9b5652a52674817589723f035e668c9b8a9e372027a1cb`다.
+
+용어: `sourceRef`는 판단 입력의 지문을 담는 필드다. `subjectHash`는 서버와 대조할 내용 지문이다.
+JCS는 JSON의 표준 직렬화 규칙이다. UTF-8은 문자열을 바이트로 바꾸는 인코딩이다.
+SHA-256은 바이트의 지문을 계산하는 함수다. `JudgedContent`는 판단 대상 내용이다.

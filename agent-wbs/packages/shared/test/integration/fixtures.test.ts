@@ -109,7 +109,7 @@ describe('변경 제안', () => {
     expect(judgementOf(taskOf, 'revert', hash).state).toBe('met');
   });
 
-  test('판단 fixture에 서버 hash를 붙이면 그대로 판정된다', () => {
+  test('판단 fixture의 입력 지문이 서버 hash와 같을 때 판정된다', () => {
     const { body } = fixture('runner', 'submitProposalJudgements');
     const [entry] = body.judgements as { judgedRules: JudgedRules }[];
     expect(ajv.validate(m.JudgedRules, entry?.judgedRules)).toBe(true);

@@ -214,11 +214,11 @@ test('착수 승인 요청·승인·반려(contracts §2.1)', () => {
 /* ---- D-33~35 (data-model §2.3-1) ---- */
 const HASH = 'd'.repeat(64);
 const judgement = (rule: string, extra: object = {}) => ({
-  rule, result: 'met', agreedBy: ['Claude', 'Codex'], basis: '근거', judgedAt: T, sourceRef: 'job-1', ...extra,
+  rule, result: 'met', agreedBy: ['Claude', 'Codex'], basis: '근거', judgedAt: T, sourceRef: `sha256:${HASH}`, ...extra,
 });
 const judged = (...items: object[]) => ({ schemaVersion: 1, items });
 
-test('D-33 초안·CP의 새 Task 판단은 hash 없이 받고, 기존 Task 재판단은 받은 hash를 돌려보낸다', () => {
+test('D-33 초안·CP 판단은 sourceRef를 받고, 기존 Task 재판단은 subjectHash도 받는다', () => {
   const draft = (judgedRules: unknown) => {
     const body = structuredClone(runner('submitDraft')) as { tasks: Record<string, unknown>[] };
     Object.assign(body.tasks[0] ?? {}, { judgedRules });
@@ -237,6 +237,8 @@ test('D-33 초안·CP의 새 Task 판단은 hash 없이 받고, 기존 Task 재�
   for (const bad of [
     judgement('size'), judgement('revert', { agreedBy: ['Codex'] }), judgement('revert', { agreedBy: ['Codex', 'Codex'] }),
     judgement('revert', { basis: '  ' }), judgement('revert', { result: 'ok' }),
+    ...['job-1', `job-1#input-sha256:${HASH}`, `sha256:${'A'.repeat(64)}`, `sha256:${'a'.repeat(63)}`, `sha256:${'g'.repeat(64)}`]
+      .map((sourceRef) => judgement('revert', { sourceRef })),
   ]) expect(draft(judged(bad)), JSON.stringify(bad)).toBe(false);
   expect(draft({ schemaVersion: 2, items: [] })).toBe(false);
   expect(op('submitTaskPlan').errors).toContain('VERSION_CONFLICT');
@@ -301,7 +303,7 @@ test('R1 기존 Task를 수정하는 Planning CP는 변경 후 판단을 함께 
   expect(accepts('submitPlanningProposal', body)).toBe(true);
   for (const bad of [
     entry({ taskKey: 'NEW-1' }), // 새 Task는 add.t.judgedRules 한 곳에만 쓴다.
-    entry({ judgedRules: judged(judgement('revert', { subjectHash: HASH })) }), // CP 저장 때 서버가 계산한다.
+    entry({ judgedRules: judged(judgement('revert', { subjectHash: HASH })) }), // CP 제출은 sourceRef에 입력 지문을 담는다.
     entry({ judgedRules: judged(judgement('ac_meaning')) }),
     { taskKey: 'TASK-0005' },
   ]) expect(accepts('submitPlanningProposal', { ...body, taskJudgements: [bad] }), JSON.stringify(bad)).toBe(false);

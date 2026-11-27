@@ -64,7 +64,7 @@ describe('project 판단 대상 hash(data-model §2.3-1)', () => {
   test('완료 조건이 바뀌면 hash도 바뀐다', () => {
     expect(subjectHash({ ...source, overview: { ...source.overview, doneCond: 'd2' } })).not.toBe(subjectHash(source));
   });
-  test('초안 저장 때 각 판단에 서버가 계산한 hash를 붙인다(요청에는 없음)', () => {
+  test('초안 저장 때 검증한 Runner 입력 지문을 subjectHash로 보관한다', () => {
     const stored = storeDraft(draft());
     const [first] = stored.tasks;
     expect(first?.judgedRules?.items.every((item) => item.subjectHash === first.subjectHash)).toBe(true);

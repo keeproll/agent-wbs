@@ -1,0 +1,68 @@
+[
+  {
+    "id": "judged-content-basic",
+    "kind": "JudgedContent",
+    "input": {
+      "title": "예시",
+      "scope": [
+        "기능"
+      ],
+      "out": [],
+      "doneCond": "테스트 통과",
+      "spec": {
+        "req": [],
+        "work": [],
+        "steps": [],
+        "inputs": [],
+        "outputs": [],
+        "files": [],
+        "constraints": [],
+        "errors": [],
+        "docs": [],
+        "verify": []
+      },
+      "ac": [],
+      "outputs": [],
+      "designs": [],
+      "conflictGroup": null
+    },
+    "canonical": "{\"ac\":[],\"conflictGroup\":null,\"designs\":[],\"doneCond\":\"테스트 통과\",\"out\":[],\"outputs\":[],\"scope\":[\"기능\"],\"spec\":{\"constraints\":[],\"docs\":[],\"errors\":[],\"files\":[],\"inputs\":[],\"outputs\":[],\"req\":[],\"steps\":[],\"verify\":[],\"work\":[]},\"title\":\"예시\"}",
+    "subjectHash": "49813649157306979e9b5652a52674817589723f035e668c9b8a9e372027a1cb",
+    "sourceRef": "sha256:49813649157306979e9b5652a52674817589723f035e668c9b8a9e372027a1cb"
+  },
+  {
+    "id": "rfc8785-numbers",
+    "kind": "JCS",
+    "input": {
+      "numbers": [
+        333333333.3333333,
+        1e+30,
+        4.5,
+        0.002,
+        1e-27
+      ],
+      "literals": [
+        null,
+        true,
+        false
+      ]
+    },
+    "canonical": "{\"literals\":[null,true,false],\"numbers\":[333333333.3333333,1e+30,4.5,0.002,1e-27]}",
+    "subjectHash": "f9ef8430c38ca3edd7fb96a698d14fdf39c74c63299627162d38b59af2af5abb"
+  },
+  {
+    "id": "rfc8785-utf16-keys",
+    "kind": "JCS",
+    "input": {
+      "\r": 0,
+      "1": 1,
+      "": 2,
+      "ö": 3,
+      "€": 4,
+      "😀": 5,
+      "דּ": 6
+    },
+    "canonical": "{\"\\r\":0,\"1\":1,\"\":2,\"ö\":3,\"€\":4,\"😀\":5,\"דּ\":6}",
+    "subjectHash": "102e1298923b83b2722fec200a28ca0582f5736bd1772f13a8e63396ceacfa25"
+  }
+]

@@ -1204,7 +1204,7 @@
         ],
         "basis": "공유 계약 변경 없음",
         "judgedAt": "2026-11-25T01:02:03.123456Z",
-        "sourceRef": "job-1"
+        "sourceRef": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
        }
       ]
      }
@@ -1306,7 +1306,7 @@
         ],
         "basis": "공유 계약 변경 없음",
         "judgedAt": "2026-11-25T01:02:03.123456Z",
-        "sourceRef": "job-1",
+        "sourceRef": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
         "subjectHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
        }
       ]

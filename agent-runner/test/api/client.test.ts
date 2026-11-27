@@ -196,6 +196,11 @@ const withSchema = (schema: unknown): OpenApiDocument => {
   return doc;
 };
 
+test('생성기는 계약 설명을 타입으로 해석하지 않는다', () => {
+  expect(generateClient(withSchema({ type: 'string', description: '판단 입력 지문 계약' })))
+    .toBe(generateClient(withSchema({ type: 'string' })));
+});
+
 test.each([
   ['모르는 키워드', { type: 'object', oneOf: [] }],
   ['모르는 type', { type: ['string', 'null'] }],

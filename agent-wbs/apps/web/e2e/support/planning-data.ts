@@ -62,7 +62,7 @@ export const CP3 = cp(3, {
   events: [{ at: '2026-11-04T01:00:00.000Z', actor: '팀장', action: 'submitted', comment: '' }], createdAt: '2026-11-04T01:00:00.000Z', updatedAt: '2026-11-04T01:00:00.000Z',
 });
 /** 보류된 Planning CP(D-33~35): 판단 불충족 + 진행 중 Task 새 차단 */
-const judged = (rule: string, result: string, basis: string) => ({ rule, result, agreedBy: ['Claude', 'Codex'], basis, judgedAt: '2026-11-04T02:00:00.000Z', sourceRef: 'job-7', subjectHash: 'a'.repeat(64) });
+const judged = (rule: string, result: string, basis: string) => ({ rule, result, agreedBy: ['Claude', 'Codex'], basis, judgedAt: '2026-11-04T02:00:00.000Z', sourceRef: `sha256:${'a'.repeat(64)}`, subjectHash: 'a'.repeat(64) });
 export const CP4 = cp(4, {
   title: 'Runner 메시지 처리 분할', reason: 'Planning 분할 판단', status: 'held', source: { kind: 'planning', id: PLN1 },
   ops: [
