@@ -86,9 +86,18 @@ export function position(ids: readonly string[], sel: string): { label: string; 
 /** 같은 대상인지(같은 단계 + 같은 Task·PR). 원본은 stage + task로 봤다(P L4782). PR이 없으면 main 대상 하나로 본다. */
 const sameTarget = (a: CiRun, b: CiRun) => a.stage === b.stage && a.taskKey === b.taskKey && a.pr === b.pr;
 
-/** 미해결 실패: 서버 순서(최근 먼저)에서 앞쪽(더 최근)에 같은 대상의 통과가 없는 실패 */
+/**
+ * 미해결 실패 수(실행 기록 탭 배지·요약).
+ * - 기준선 실패: 서버 판정값 baselineResolved가 정확히 false일 때만 미해결로 센다(재리뷰3 P2-1). 화면이 같은 대상의 PASS로 다시 판단하지 않는다.
+ *   null(서버 값 없음)은 미해결로 꾸미지 않는다.
+ * - 그 밖의 실패: 서버 순서(최근 먼저)에서 앞쪽(더 최근)에 같은 대상의 통과가 없으면 미해결이다.
+ */
 export function openFailures(runs: readonly CiRun[]): number {
-  return runs.filter((r, i) => r.status === 'fail' && !runs.slice(0, i).some((y) => y.status === 'pass' && sameTarget(r, y))).length;
+  return runs.filter((r, i) => {
+    if (r.status !== 'fail') return false;
+    if (r.failScope === 'baseline') return r.baselineResolved === false;
+    return !runs.slice(0, i).some((y) => y.status === 'pass' && sameTarget(r, y));
+  }).length;
 }
 
 /**
@@ -127,7 +136,8 @@ export function retryState(run: CiRun): { show: boolean; allowed: boolean; reaso
 /** 자동 재통합 안내(M7-04 fix4 autoReintegrate·autoReintegrateReason 그대로). none이면 안내 없음. */
 export function autoReintegrateNote(run: CiRun): string | null {
   const why = run.autoReintegrateReason;
-  if (run.autoReintegrate === 'pending') return `main이 바뀌면 서버가 자동으로 다시 통합 확인합니다.${why ? ` (${why})` : ''}`;
+  // pending은 main 변경 대기뿐 아니라 이미 대기·진행 중인 작업도 뜻한다(M7-04 fix4). 시작 조건을 덧붙이지 않고 서버 사유만 붙인다(재리뷰3 P3).
+  if (run.autoReintegrate === 'pending') return `자동 재통합 대기·진행${why ? ` — ${why}` : ''}`;
   if (run.autoReintegrate === 'blocked') return `자동 재통합 보류 — ${why ?? '사유 미보고'}`;
   return null;
 }
@@ -155,7 +165,7 @@ const QUEUE: Record<string, { l: string; c: string }> = {
   merged: { l: '병합됨', c: 'vf v-pass' }, failed: { l: '통합 실패 — 병합 보류', c: 'vf v-fail' }, removed: { l: '대기열에서 빠짐', c: 'vf v-none' },
 };
 const BASELINE: Record<string, { l: string; c: string }> = {
-  pending: { l: '기준선 실패 — main 수정 뒤 자동 재통합', c: 'sc sc-warn' },
+  pending: { l: '기준선 실패 — 자동 재통합 대기·진행', c: 'sc sc-warn' },
   blocked: { l: '기준선 실패 — 자동 재통합 보류', c: 'sc sc-warn' },
   none: { l: '기준선 실패', c: 'sc sc-warn' },
 };

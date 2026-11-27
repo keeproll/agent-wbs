@@ -378,7 +378,7 @@ function QueueTab({ rows }: { rows: QueueRow[] }) {
       <div className="dp-h"><h2>병합 대기열</h2></div>
       <p className="fhint" style={{ margin: '0 0 8px' }}>검증 PASS인 PR만 들어오고, ② 통합 확인을 한 번에 하나씩 거쳐 통과해야 main에 병합됩니다(GitHub main 보호 규칙: 「agentwbs/int 통과」 필수). 실패하면 병합하지 않고 원인 Task에 재작업을 요청합니다. 대기가 길어지면 여러 PR을 묶어 확인하고, 실패 시 나눠서 원인을 찾습니다.</p>
       {rows.some((r) => r.c === 'sc sc-warn') && (
-        <p className="fhint" style={{ margin: '0 0 8px' }}>기준선 실패는 예외입니다 — main 기준 커밋 자체가 실패한 것이라 원인 Task에 재작업을 요청하지 않습니다. Gate에서 기다리는 Task는 main이 고쳐지면 다시 통합 확인합니다.</p>
+        <p className="fhint" style={{ margin: '0 0 8px' }}>기준선 실패는 예외입니다 — main 기준 커밋 자체가 실패한 것이라 원인 Task에 재작업을 요청하지 않습니다. 자동 재통합 상태와 사유는 각 행과 연결된 실행 상세에서 확인합니다.</p>
       )}
       {mismatches.map((r) => (
         <div key={r.id} className="banner danger" role="alert" style={{ marginBottom: 8 }}>

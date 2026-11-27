@@ -304,11 +304,11 @@ test.describe('fix1: 기준선 실패 재통합 · 병합 불일치 보류 · �
     await open(page, '/ci?tab=queue', (d) => { d.runs.unshift({ ...baselineRun(), autoReintegrate: 'pending' }); d.queue.push(baselineQueueItem()); });
     await expect(page.getByText('기준선 실패는 예외입니다', { exact: false })).toBeVisible();
     const row = page.getByRole('table', { name: '병합 대기열' }).getByRole('row').nth(0);
-    await expect(row).toContainText('기준선 실패 — main 수정 뒤 자동 재통합');
+    await expect(row).toContainText('기준선 실패 — 자동 재통합 대기·진행');
     await expect(row.locator('.vf.v-fail')).toHaveCount(0);
     await row.getByRole('link', { name: /CI-0128/ }).click();
     await expect(page).toHaveURL('/ci/ci-0128');
-    await expect(detail(page)).toContainText('main이 바뀌면 서버가 자동으로 다시 통합 확인합니다');
+    await expect(detail(page)).toContainText('자동 재통합 대기·진행');
   });
 
   test('재리뷰 P2-3 재현: 화면이 모르는 reconcile 보류 — 서버가 blocked면 자동 진행을 약속하지 않고 사유를 보인다', async ({ page }) => {
@@ -319,6 +319,10 @@ test.describe('fix1: 기준선 실패 재통합 · 병합 불일치 보류 · �
       d.queue.push(baselineQueueItem());
     });
     await expect(page.getByRole('table', { name: '병합 대기열' }).getByRole('row').nth(0)).toContainText('기준선 실패 — 자동 재통합 보류');
+    // 재리뷰3 P2-2: 대기열 공통 안내도 진행을 약속하지 않는다(대기열 화면 전체 검사)
+    await expect(page.getByText('기준선 실패는 예외입니다', { exact: false })).toBeVisible();
+    await expect(page.locator('.main')).not.toContainText('다시 통합 확인합니다');
+    await expect(page.locator('.main')).not.toContainText('main이 고쳐지면');
     await page.goto('/ci/ci-0128');
     await expect(detail(page)).toContainText('자동 재통합 보류 — 이전 통합 작업이 대조 대기(reconcile) 중입니다');
     await expect(detail(page)).not.toContainText('자동으로 다시 통합');
@@ -353,6 +357,21 @@ test.describe('fix1: 기준선 실패 재통합 · 병합 불일치 보류 · �
       d.runs.unshift({ ...fail, id: 'ci-0129', runKey: 'CI-0129', status: 'pass', failScope: null, failStep: null, logExcerpt: null, baselineResolved: null, retryAllowed: false, startedAt: '2026-11-05T11:00:00.000Z', finishedAt: '2026-11-05T11:02:00.000Z' }, fail);
     });
     await expect(page.getByText(/^main 깨짐 · 기준선 검사 실패 · c4e81f0 · /)).toBeVisible();
+  });
+
+  test('재리뷰3 P2-1 재현: 서버가 미해소(false)로 둔 기준선 실패는 요약·탭 배지의 「실패 미해결」에 센다', async ({ page }) => {
+    await open(page, '/ci', (d) => {
+      const fail = baselineRun();
+      d.runs.unshift({ ...fail, id: 'ci-0129', runKey: 'CI-0129', status: 'pass', failScope: null, failStep: null, logExcerpt: null, baselineResolved: null, retryAllowed: false, startedAt: '2026-11-05T11:00:00.000Z', finishedAt: '2026-11-05T11:02:00.000Z' }, fail);
+    });
+    await expect(page.getByText(/실패 미해결 1 ·/)).toBeVisible();
+    await expect(page.getByRole('tab', { name: '실행 기록 1' })).toBeVisible();
+  });
+
+  test('재리뷰3 P2-1 재현 B: 서버가 해소(true)한 기준선 실패는 새 PASS가 없어도 미해결로 세지 않는다', async ({ page }) => {
+    await open(page, '/ci', (d) => { d.runs.unshift({ ...baselineRun(), baselineResolved: true }); });
+    await expect(page.getByText(/실패 미해결 0 ·/)).toBeVisible();
+    await expect(page.getByRole('tab', { name: '실행 기록', exact: true })).toBeVisible();
   });
 
   test('재리뷰 P2-2 재현 B: main이 이동해 서버가 해소(true)하면 깨짐을 남기지 않고 상세에 해소를 알린다', async ({ page }) => {

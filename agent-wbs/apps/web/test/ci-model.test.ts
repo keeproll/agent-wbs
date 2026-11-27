@@ -182,13 +182,14 @@ describe('빌드·통합 화면 계산(UI-08, P ciVM L4765–4801)', () => {
 
     it('자동 재통합 안내는 autoReintegrate·사유 그대로(대기열 행 이름도 같은 값)', () => {
       const b = (o: Partial<CiRun>) => run({ id: 'rb', stage: 'task', status: 'fail', failScope: 'baseline', runKey: 'RB', ...o });
-      expect(autoReintegrateNote(b({ autoReintegrate: 'pending' }))).toBe('main이 바뀌면 서버가 자동으로 다시 통합 확인합니다.');
-      expect(autoReintegrateNote(b({ autoReintegrate: 'pending', autoReintegrateReason: '새 main 관측 대기' }))).toBe('main이 바뀌면 서버가 자동으로 다시 통합 확인합니다. (새 main 관측 대기)');
+      expect(autoReintegrateNote(b({ autoReintegrate: 'pending' }))).toBe('자동 재통합 대기·진행');
+      // 재리뷰3 P3: pending에 「main이 바뀌면」 같은 시작 조건을 덧붙이지 않는다. 서버 사유만 붙인다.
+      expect(autoReintegrateNote(b({ autoReintegrate: 'pending', autoReintegrateReason: '통합 작업이 대기 중이거나 진행 중입니다.' }))).toBe('자동 재통합 대기·진행 — 통합 작업이 대기 중이거나 진행 중입니다.');
       expect(autoReintegrateNote(b({ autoReintegrate: 'blocked', autoReintegrateReason: '대조 대기(reconcile)' }))).toBe('자동 재통합 보류 — 대조 대기(reconcile)');
       expect(autoReintegrateNote(b({ autoReintegrate: 'blocked' }))).toBe('자동 재통합 보류 — 사유 미보고');
       expect(autoReintegrateNote(b({}))).toBeNull();
       const q = { id: 'q', pr: 11, taskKey: 'TASK-0006', position: 1, status: 'failed', qaHeadSha: null, syncedHeadSha: null, baseSha: null, ciRunId: 'rb', actualMergeSha: null } as QueueItem;
-      expect(queueRows([q], new Map(), [b({ autoReintegrate: 'pending' })])[0]?.st).toBe('기준선 실패 — main 수정 뒤 자동 재통합');
+      expect(queueRows([q], new Map(), [b({ autoReintegrate: 'pending' })])[0]?.st).toBe('기준선 실패 — 자동 재통합 대기·진행');
       expect(queueRows([q], new Map(), [b({ autoReintegrate: 'blocked' })])[0]?.st).toBe('기준선 실패 — 자동 재통합 보류');
       expect(queueRows([q], new Map(), [b({})])[0]?.st).toBe('기준선 실패');
     });
@@ -206,5 +207,21 @@ describe('빌드·통합 화면 계산(UI-08, P ciVM L4765–4801)', () => {
       expect(causeRows(r)).toEqual([{ commit: 'aaaaaaa', taskKey: 'TASK-0003' }, { commit: 'bbbbbbb', taskKey: null }]);
       expect(causeRows(run({ id: 'x', stage: 'night', status: 'fail' }))).toEqual([]);
     });
+  });
+
+  it('재리뷰3 P2-1: 미해결 실패 수는 기준선 실패에 서버 baselineResolved만 쓴다(같은 대상 PASS로 다시 판단하지 않음)', () => {
+    const fail = run({ id: 'b', stage: 'task', status: 'fail', failScope: 'baseline', taskKey: 'TASK-0006', pr: 11 });
+    const pass = run({ id: 'p', stage: 'task', status: 'pass', taskKey: 'TASK-0006', pr: 11 });
+    // 재현 A: 나중 PASS가 있어도 서버가 미해소(false)면 1건
+    expect(openFailures([pass, { ...fail, baselineResolved: false }])).toBe(1);
+    // 재현 B: 새 PASS가 없어도 서버가 해소(true)면 0건
+    expect(openFailures([{ ...fail, baselineResolved: true }])).toBe(0);
+    // 서버 값이 없으면(null) 미해소로 꾸미지 않는다
+    expect(openFailures([{ ...fail, baselineResolved: null }])).toBe(0);
+    // 요약·탭 배지도 같은 수
+    expect(summaryLine([pass, { ...fail, baselineResolved: false }], [])).toContain('실패 미해결 1');
+    expect(tabBadges([{ ...fail, baselineResolved: true }], [], []).runs).toBe(0);
+    // 일반 실패는 기존 규칙(같은 대상의 더 최근 PASS가 있으면 해결)
+    expect(openFailures(runs)).toBe(1);
   });
 });
