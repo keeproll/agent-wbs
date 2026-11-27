@@ -962,6 +962,92 @@ describe('서버 후속 4: Runner 계약과 분석 완료', () => {
     expect((await ownerPool.query('select status,fail from planning_jobs where id=$1', [job.payload.planningJobId])).rows[0])
       .toMatchObject({ status: 'failed', fail: { code: 'INCOMPLETE_ANALYSIS' } });
   });
+
+  async function analyzedBootstrap() {
+    await resetDb();
+    forgetRunnerView();
+    const check = await checkedRepo();
+    expect((await lead('POST', '/api/project', registration(check, { constraints: [] }))).statusCode).toBe(201);
+    const job = await claim('bootstrap');
+    for (const key of ['check', 'unzip', 'repo', 'codex', 'claude', 'cross']) await progress(job.id, job.fence, key);
+    return job;
+  }
+
+  test.each([
+    ['T1', 'tech', 'expiry'], ['T1', 'tech', 'restart'], ['T1', 'tech', 'failed'], ['T1', 'tech', 'cancelled'],
+    ['T2', 'approve', 'expiry'], ['T2', 'approve', 'restart'], ['T2', 'approve', 'failed'], ['T2', 'approve', 'cancelled'],
+  ])('%s: %s 대기 중 %s여도 사람의 결정만 기다리며 재시도·대체 job을 만들지 않는다', async (_id, phase, stop) => {
+    const job = phase === 'tech' ? await analyzedBootstrap() : (await confirmed()).job;
+    const submitted = phase === 'tech'
+      ? await runner(`/api/planning/bootstrap/${job.id}/tech`, { fence: job.fence, decisions: [] })
+      : await runner(`/api/planning/bootstrap/${job.id}/draft`, { fence: job.fence, ...draft() });
+    expect(submitted.statusCode, submitted.body).toBe(201);
+    const before = await state();
+    const jobsBefore = await count("select count(*) n from runner_jobs where kind='bootstrap'");
+    const host = (bootId: string) => runner('/api/runner/host', { hostId: 'host-1', bootId, cpu: 'cpu', cores: 8, memGB: 32, swapGB: 0, diskFreeGB: 500, os: 'linux', samples: 1 });
+    if (stop === 'expiry') expect(await watchRunner(pool, await epoch(), new Date(Date.now() + 61_000))).toBe(1);
+    else if (stop === 'restart') {
+      const response = await host('boot-restarted');
+      expect(response.statusCode, response.body).toBe(200);
+      expect((await host('boot-1')).statusCode).toBe(200);
+    } else {
+      const response = await runner(`/api/runner/jobs/${job.id}/finish`, { fence: job.fence, status: stop, error: { code: 'PROCESS_EXIT', message: '팀장 결정 대기 중 프로세스 종료' } });
+      expect(response.statusCode, response.body).toBe(204);
+    }
+    const after = await state();
+    expect(after.bootstrap).toMatchObject({ status: before.bootstrap.status, fail: null, revision: before.bootstrap.revision, steps: before.bootstrap.steps });
+    const retryBody = phase === 'tech' ? { revision: null, runNo: 1 } : { revision: before.bootstrap.revision };
+    expect(errorOf(await lead('POST', '/api/project/bootstrap/retry', retryBody)).code).toBe('INVALID_TRANSITION');
+    // 이전 버전에서 이미 failed로 기록했어도 사람 결정 대기 중 잘못된 재개 작업을 발급하지 않는다.
+    await ownerPool.query("update planning_jobs set status='failed' where id=$1", [before.bootstrap.jobId]);
+    expect(errorOf(await lead('POST', '/api/project/bootstrap/retry', retryBody)).code).toBe('INVALID_TRANSITION');
+    await ownerPool.query('update planning_jobs set status=$2 where id=$1', [before.bootstrap.jobId, before.bootstrap.status]);
+    expect(await count("select count(*) n from runner_jobs where kind='bootstrap'")).toBe(jobsBefore);
+    expect((await runner(`/api/runner/jobs/${job.id}/release`, { fence: job.fence, hostId: 'host-1', proof: { kind: 'no_process', bootId: 'boot-1' }, at: AT_NOW() })).statusCode).toBe(204);
+    if (stop === 'expiry' || stop === 'restart') {
+      const reconciled = await runner(`/api/runner/jobs/${job.id}/reconcile`, { fence: job.fence, evidence: { outcome: 'none', checkedAt: AT_NOW(), detail: {} } });
+      expect(reconciled.statusCode, reconciled.body).toBe(204);
+      expect(await count("select count(*) n from runner_jobs where kind='bootstrap'")).toBe(jobsBefore);
+      expect((await state()).bootstrap.fail).toBeNull();
+    }
+    if (phase === 'tech') {
+      const response = await lead('POST', `/api/projects/${before.id}/boot/tech/confirm`, { decisions: [] });
+      expect(response.statusCode, response.body).toBe(200);
+      expect((await ownerPool.query("select payload from runner_jobs where kind='bootstrap' and state='queued'")).rows[0]?.payload).toMatchObject({ resumeStep: 'draft', runNo: 1 });
+    } else {
+      const response = await lead('POST', '/api/project/bootstrap/approve', { revision: before.bootstrap.revision });
+      expect(response.statusCode, response.body).toBe(200);
+      expect((await ownerPool.query('select status from planning_jobs where id=$1', [before.bootstrap.jobId])).rows[0]?.status).toBe('done');
+      expect(await count("select count(*) n from runner_jobs where kind='bootstrap'")).toBe(jobsBefore);
+    }
+  });
+
+  test('재시도는 나중 단계의 fail 표시보다 DB의 마지막 완료 단계 다음을 선택한다', async () => {
+    const job = await analyzedBootstrap();
+    expect((await runner(`/api/runner/jobs/${job.id}/finish`, { fence: job.fence, status: 'failed' })).statusCode).toBe(204);
+    // cross는 끝났고 tech는 아직 wait다. 뒤의 draft fail로 건너뛰지 않는다.
+    const response = await lead('POST', '/api/project/bootstrap/retry', { revision: null, runNo: 1 });
+    expect(response.statusCode, response.body).toBe(202);
+    expect((await ownerPool.query("select payload from runner_jobs where kind='bootstrap' and state='queued'")).rows[0]?.payload.resumeStep).toBe('tech');
+  });
+
+  test('fail 표시가 없어도 마지막 완료 단계에서 이어가며 모든 단계가 끝났으면 재개 작업을 만들지 않는다', async () => {
+    const { job, s } = await confirmed();
+    await ownerPool.query("update planning_jobs set status='failed' where id=$1", [s.bootstrap.jobId]);
+    const retried = await lead('POST', '/api/project/bootstrap/retry', { revision: null, runNo: 1 });
+    expect(retried.statusCode, retried.body).toBe(202);
+    expect((await ownerPool.query("select payload from runner_jobs where kind='bootstrap' and state='queued'")).rows[0]?.payload.resumeStep).toBe('draft');
+    await finishClaim(job);
+    const current = await claim('bootstrap');
+    const submitted = await runner(`/api/planning/bootstrap/${current.id}/draft`, { fence: current.fence, ...draft() });
+    expect(submitted.statusCode, submitted.body).toBe(201);
+    expect((await lead('POST', '/api/project/bootstrap/approve', { revision: submitted.json<{ revision: number }>().revision })).statusCode).toBe(200);
+    await ownerPool.query("update planning_jobs set status='failed' where id=$1", [s.bootstrap.jobId]);
+    const countBefore = await count("select count(*) n from runner_jobs where kind='bootstrap'");
+    const response = await lead('POST', '/api/project/bootstrap/retry', { revision: null, runNo: 1 });
+    expect(errorOf(response).code).toBe('INVALID_TRANSITION');
+    expect(await count("select count(*) n from runner_jobs where kind='bootstrap'")).toBe(countBefore);
+  });
 });
 
 describe('project 리뷰 지적 회귀(M2-03-REVIEW 1~8)', () => {
@@ -998,10 +1084,12 @@ describe('project 리뷰 지적 회귀(M2-03-REVIEW 1~8)', () => {
   });
 
   test('1. 다시 시도 뒤 이전 job의 늦은 실패 보고는 409이고 새 시도를 실패로 만들지 않는다', async () => {
-    const { current } = await fresh();
+    const { s: original } = await fresh();
+    expect((await lead('POST', '/api/project/bootstrap/rerun', { revision: original.bootstrap.revision, instruction: '재분석' })).statusCode).toBe(202);
+    const current = await lease('bootstrap');
     await progress(current.id, current.fence, 'codex', 'fail', 'first failure');
     const s = await state();
-    expect((await lead('POST', '/api/project/bootstrap/retry', { revision: s.bootstrap.revision })).statusCode).toBe(202);
+    expect((await lead('POST', '/api/project/bootstrap/retry', { revision: null, runNo: s.bootstrap.runNo })).statusCode).toBe(202);
     const next = await lease('bootstrap');
     const late = await progressOf(current, 'codex', 'fail', 'old retry report');
     expect(errorOf(late).code).toBe('LEASE_LOST');

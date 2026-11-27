@@ -16,7 +16,7 @@ import {
 } from './jobs.ts';
 import { analyzable, analyze, chainHead, receive, type CommitState, type Ledger } from './ledger.ts';
 import { parseRepoUrl } from './repo.ts';
-import { BOOT_STEPS, INPUT_STEPS, LEAD_STEPS, RERUN_STEPS, type StepStatus } from './steps.ts';
+import { BOOT_STEPS, INPUT_STEPS, LEAD_STEPS, RERUN_STEPS, waitingForLead, type StepStatus } from './steps.ts';
 
 const STEP_LABEL: Record<string, string> = {
   check: 'GitHub 접근 · 커밋 고정', unzip: '입력 자료 checkout', repo: '작업 준비', codex: 'Codex 독립 분석', claude: 'Claude 독립 분석',
@@ -457,35 +457,40 @@ export async function retryBootstrap(db: Db, body: { revision: number } | { revi
 }
 
 async function resume(db: Db, job: PlanningJob, epoch: number): Promise<string> {
-  const failed = (await db.query<{ step_key: string }>("select step_key from planning_job_steps where job=$1 and status='fail' order by started_at nulls last limit 1", [job.id])).rows[0]?.step_key ?? null;
-  if (failed) await resetSteps(db, job.id, [failed]);
+  if (waitingForLead(job.kind, await steps(db, job.id))) {
+    throw new ProjectError('INVALID_TRANSITION', { message: '팀장의 기술 결정 또는 초안 승인을 기다리고 있습니다.' });
+  }
   const previous = (await db.query<{ payload: Record<string, unknown> }>('select payload from runner_jobs where id=$1', [await currentRunnerJob(db, job.id)])).rows[0]?.payload;
   let base: Record<string, unknown> | undefined;
-  let resumeStep = failed;
   if (job.kind === 'input_diff') {
     await lockGraph(db as PoolClient, job.project_id);
     const wbs = await wbsSnapshot(db, job.project_id);
     if (snapshotHash(previous?.wbs) !== snapshotHash(wbs)) {
       base = { wbs };
-      resumeStep = failed && ['check', 'unzip'].includes(failed) ? failed : 'diff';
       await resetSteps(db, job.id, ['diff', 'impact', 'cp']);
     }
   } else if ((await steps(db, job.id)).get('tech') === 'done') {
     const tech = await techSnapshot(db, job.project_id);
     if (previous?.techDecisionVersion !== tech.techDecisionVersion) {
       base = tech;
-      resumeStep = failed && ['check', 'unzip', 'repo'].includes(failed) ? failed : 'codex';
       await resetSteps(db, job.id, RERUN_STEPS);
       await db.query("update wbs_drafts set status='superseded' where job=$1 and status='pending'", [job.id]);
     }
   }
+  const progress = await steps(db, job.id);
+  const keys: readonly string[] = job.kind === 'bootstrap' ? BOOT_STEPS : INPUT_STEPS;
+  const resumeStep = keys.find((key) => progress.get(key) !== 'done');
+  if (!resumeStep || !progress.has(resumeStep) || resumeStep === 'approve') {
+    throw new ProjectError('INVALID_TRANSITION', { message: '저장된 단계에서 재개할 수 있는 Runner 작업이 없습니다.' });
+  }
+  if (progress.get(resumeStep) === 'fail') await resetSteps(db, job.id, [resumeStep]);
   // 전제가 바뀌면 새 회차로 시작해야 Runner가 이전 분석 결과를 재사용하지 않는다.
   if (base) {
     const next = (await db.query<{ run_no: number }>('update planning_jobs set run_no=run_no+1 where id=$1 returning run_no', [job.id])).rows[0]?.run_no;
     job = { ...job, run_no: next ?? job.run_no + 1 };
   }
   await db.query("update planning_jobs set status='queued',fail=null where id=$1", [job.id]);
-  await log(db, job, `팀장 다시 시도 — ${resumeStep ? STEP_LABEL[resumeStep] ?? resumeStep : '처음'}부터`);
+  await log(db, job, `팀장 다시 시도 — ${STEP_LABEL[resumeStep] ?? resumeStep}부터`);
   await followUpJob(db, job, epoch, { resumeStep, ...(base && { base }) });
   await changeEvent(db, job.project_id, { kind: 'planning_job', id: job.id }, 'planning');
   return job.id;
