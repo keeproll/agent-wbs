@@ -8,6 +8,8 @@
  */
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { parse as parseToml } from 'smol-toml';
+import { isAlias, isMap, isScalar, parseAllDocuments, visit } from 'yaml';
 import type { Pool } from './pool.ts';
 
 export type SubagentAgent = 'Claude' | 'Codex';
@@ -25,6 +27,8 @@ export interface SubagentDefFile {
   hash: string;
   /** `file`의 실제 내용. */
   text: string;
+  /** 파일을 UTF-8로 엄격하게 읽지 못했을 때의 이유. 있으면 format 오류다. */
+  encodingError?: string;
 }
 
 export interface SubagentSet {
@@ -49,7 +53,10 @@ export const sha256Hex = (text: string): string => createHash('sha256').update(t
 
 export async function loadSubagentSet(dir: URL = DIR): Promise<SubagentSet> {
   const manifest = JSON.parse(await readFile(new URL('manifest.json', dir), 'utf8')) as { defs: Omit<SubagentDefFile, 'text'>[] };
-  const defs = await Promise.all(manifest.defs.map(async (d) => ({ ...d, text: await readFile(new URL(d.file, dir), 'utf8') })));
+  const defs = await Promise.all(manifest.defs.map(async (d) => {
+    const decoded = decodeUtf8Strict(await readFile(new URL(d.file, dir)));
+    return { ...d, text: decoded.text, ...(decoded.error ? { encodingError: decoded.error } : {}) };
+  }));
   return {
     defs,
     common: await readFile(new URL('common-rules.md', dir), 'utf8'),
@@ -63,87 +70,120 @@ export async function loadMockSubagents(): Promise<MockSubagent[]> {
   return demo.sub.defs.map((d) => ({ id: d.id, text: d.text }));
 }
 
-/* ───────────── 파일 읽기(허용한 모양만) ───────────── */
+/* ───────────── 파일 읽기 ───────────── */
+
+/*
+ * 기준: 검사기는 CLI(Claude Code·Codex)가 실제로 읽는 방식보다 관대하면 안 된다(리뷰 P2-3, 재리뷰).
+ * 그래서 손으로 만든 해석 대신 표준 분석기를 쓴다.
+ *   - Claude frontmatter: YAML 1.2 엄격 분석(`yaml` 패키지, strict·uniqueKeys). 경고도 오류로 본다.
+ *   - Codex 역할 파일: TOML 1.0 분석기(`smol-toml`). Codex도 실제 TOML 분석기로 읽는다.
+ * 분석 전에 파일 자체를 먼저 거른다: UTF-8로 읽을 수 없는 바이트, 맨 앞 BOM, 탭·LF 밖의 제어 문자, 비문자.
+ */
 
 interface Parsed { name?: string; description?: string; keys: string[]; tools?: string[]; instructions: string }
 
-/** 탭·줄바꿈 밖의 제어 문자(U+0000~U+001F, U+007F)가 있는가. YAML·TOML 모두 이런 글자를 값으로 받지 않는다. */
-function hasControlChar(text: string): boolean {
-  for (const ch of text) {
-    const n = ch.codePointAt(0) ?? 0;
-    if ((n < 0x20 && n !== 0x09 && n !== 0x0a) || n === 0x7f) return true;
+/** 파일 바이트를 UTF-8로 엄격하게 읽는다. 잘못된 바이트를 U+FFFD로 바꾸지 않고 오류를 돌려준다. BOM도 지우지 않는다. */
+export function decodeUtf8Strict(bytes: Uint8Array): { text: string; error?: string } {
+  try {
+    return { text: new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes) };
+  } catch {
+    return { text: new TextDecoder('utf-8', { ignoreBOM: true }).decode(bytes), error: '파일을 UTF-8로 읽을 수 없습니다(잘못된 바이트 순서).' };
   }
-  return false;
 }
 
 /**
- * YAML 일반 값(따옴표 없는 값)으로 안전한지 본다. 검사기가 통과시킨 값은 실제 YAML 분석기도 읽어야 한다(리뷰 P2-3).
- * 지원하는 모양을 좁게 둔다: 특수 문자로 시작하지 않고, 「: 」「 #」을 안에 두지 않고, 「:」로 끝나지 않는 한 줄 값.
- * 왜: Claude Code는 YAML이 깨진 Agent 파일을 조용히 건너뛴다. 검사와 seed가 성공해도 설치 뒤 쓰이지 않는다.
+ * 정의 파일에 쓸 수 있는 문자만 남았는지 본다. YAML 1.2 §5.1의 c-printable과 TOML 1.0이 함께 받는 범위에서 다음만 허용한다.
+ *   - 탭(U+0009)과 LF(U+000A)
+ *   - U+0020~U+007E, U+00A0~U+D7FF, U+E000~U+FFFD(U+FEFF 제외), U+10000 이상
+ * CR(U+000D)은 받지 않는다. 줄 끝 방식에 따라 hash가 달라지지 않게 LF만 쓴다.
+ * C1 제어 문자(U+0080~U+009F, U+0085 포함)는 TOML은 받지만 YAML은 받지 않으므로 둘 다 막는다.
  */
-function yamlPlainProblem(value: string): string | null {
-  if (value === '') return null;
-  if (/^[-?:,[\]{}#&*!|>'"%@`]/.test(value)) return `YAML 값이 특수 문자(${value[0] ?? ''})로 시작합니다. 따옴표 없는 값으로 읽을 수 없습니다.`;
-  if (value.includes(': ') || value.endsWith(':')) return 'YAML 값 안에 「: 」가 있거나 「:」로 끝납니다(mapping values are not allowed).';
-  if (value.includes(' #')) return 'YAML 값 안의 「 #」 뒤는 주석으로 잘립니다.';
-  if (hasControlChar(value)) return 'YAML 값에 제어 문자가 있습니다.';
+export function textProblem(text: string): string | null {
+  if (text.startsWith('\ufeff')) return '파일 맨 앞에 BOM(U+FEFF)이 있습니다.';
+  let line = 1;
+  for (const ch of text) {
+    const n = ch.codePointAt(0) ?? 0;
+    if (n === 0x0a) { line++; continue; }
+    const ok = n === 0x09 || (n >= 0x20 && n <= 0x7e) || (n >= 0xa0 && n <= 0xd7ff) || (n >= 0xe000 && n <= 0xfffd && n !== 0xfeff) || n >= 0x10000;
+    if (!ok) return `${String(line)}번째 줄에 쓸 수 없는 문자 U+${n.toString(16).toUpperCase().padStart(4, '0')}가 있습니다(제어 문자·BOM·비문자·CR).`;
+  }
   return null;
 }
 
-/** Claude: `---` 사이 `키: 값` 줄 + 본문. 여러 줄 값·목록은 허용하지 않는다(검사가 못 보는 설정이 숨지 않게). */
+const firstError = (errors: readonly { message: string }[]) => (errors[0]?.message ?? '').split('\n')[0] ?? '';
+
+/**
+ * Claude: `---` 사이 frontmatter + 본문. frontmatter는 YAML 1.2 엄격 분석으로 읽는다.
+ * - 문서는 정확히 하나, 오류·경고 0건.
+ * - 앵커·별칭·태그를 쓰지 않는다. 값이 다른 곳에서 오거나 타입이 바뀌기 때문이다.
+ *   병합 키(<<)는 merge:false로 일반 키가 되어, 값이 문자열이 아니면 형식 오류, 문자열이면 허용하지 않은 키로 잡힌다.
+ * - 최상위는 문자열 키의 mapping, 값은 모두 문자열 하나.
+ * - YAML 1.1로 읽어도 같은 결과여야 한다. Claude Code가 쓰는 YAML 분석기의 버전을 확인하지 못했으므로
+ *   두 버전이 다르게 읽는 값(예: yes·on·1:2)은 받지 않는다.
+ */
 function parseClaude(text: string): Parsed | string {
   const m = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(text);
   if (!m) return '파일이 `---` frontmatter로 시작하지 않습니다.';
-  const out: Parsed = { keys: [], instructions: m[2] ?? '' };
-  for (const line of (m[1] ?? '').split('\n')) {
-    const kv = /^([A-Za-z_][\w-]*):\s?(.*)$/.exec(line);
-    if (!kv) return `frontmatter 줄을 읽을 수 없습니다: ${line}`;
-    const [, key = '', value = ''] = kv;
-    const problem = yamlPlainProblem(value.trim());
-    if (problem) return `${key}: ${problem}`;
-    out.keys.push(key);
-    if (key === 'name') out.name = value.trim();
-    if (key === 'description') out.description = value.trim();
-    if (key === 'tools') out.tools = value.split(',').map((t) => t.trim()).filter(Boolean);
+  const source = m[1] ?? '';
+  let result: Record<string, string> | null = null;
+  for (const version of ['1.2', '1.1'] as const) {
+    const docs = parseAllDocuments(source, { version, strict: true, uniqueKeys: true, prettyErrors: false, merge: false });
+    const list = Array.isArray(docs) ? docs : [docs];
+    if (list.length !== 1) return `frontmatter에는 YAML 문서가 하나만 있어야 합니다(${String(list.length)}개).`;
+    const doc = list[0];
+    if (!doc) return 'frontmatter가 비었습니다.';
+    if (doc.errors.length) return `frontmatter YAML 오류(${version}): ${firstError(doc.errors)}`;
+    if (doc.warnings.length) return `frontmatter YAML 경고(${version}, 오류로 봄): ${firstError(doc.warnings)}`;
+    let special: string | null = null;
+    visit(doc, {
+      Node(_, node) {
+        // 별칭은 앵커가 있어야 쓸 수 있으므로 둘을 함께 막는다.
+        if (isAlias(node) || node.anchor) { special = '앵커(&)·별칭(*)'; return visit.BREAK; }
+        if (node.tag) { special = `태그(${node.tag})`; return visit.BREAK; }
+        return undefined;
+      },
+    });
+    if (special) return `frontmatter에 ${special}를 쓰지 않습니다.`;
+    if (!isMap(doc.contents)) return 'frontmatter 최상위는 `키: 값` 목록이어야 합니다.';
+    const out: Record<string, string> = {};
+    for (const pair of doc.contents.items) {
+      if (!isScalar(pair.key) || typeof pair.key.value !== 'string') return 'frontmatter 키는 문자열이어야 합니다.';
+      const key = pair.key.value;
+      // `tools:`처럼 값을 비운 줄은 빈 값으로 본다(뒤의 tools·name 규칙이 잡는다). `~`·`null`처럼 적은 null은 문자열이 아니다.
+      const empty = pair.value === null || (isScalar(pair.value) && pair.value.value === null && pair.value.source === '');
+      if (empty) { out[key] = ''; continue; }
+      if (!isScalar(pair.value) || typeof pair.value.value !== 'string') return `frontmatter ${key} 값은 문자열 하나여야 합니다.`;
+      out[key] = pair.value.value;
+    }
+    if (result && JSON.stringify(result) !== JSON.stringify(out)) return 'frontmatter를 YAML 1.1과 1.2가 다르게 읽습니다.';
+    result = out;
   }
-  return out;
+  if (!result) return 'frontmatter를 읽지 못했습니다.';
+  const parsed: Parsed = { keys: Object.keys(result), instructions: m[2] ?? '' };
+  if ('name' in result) parsed.name = result.name?.trim();
+  if ('description' in result) parsed.description = result.description?.trim();
+  if ('tools' in result) parsed.tools = (result.tools ?? '').split(',').map((t) => t.trim()).filter(Boolean);
+  return parsed;
 }
 
-/**
- * Codex: `키 = "문자열"` 줄과 `developer_instructions = """ … """`만 허용한다.
- * 역슬래시는 TOML 이스케이프라 저장한 글자와 실제 지시가 달라질 수 있어 금지한다.
- */
+/** Codex: TOML 1.0 표준 분석. 최상위 값은 모두 문자열이어야 한다(표·배열·숫자는 받지 않는다). */
 function parseCodex(text: string): Parsed | string {
-  if (text.includes('\\')) return 'TOML에 역슬래시(\\)를 쓸 수 없습니다.';
-  // TOML 기본 문자열은 탭 밖의 제어 문자를 받지 않는다.
-  if (hasControlChar(text)) return 'TOML에 제어 문자가 있습니다.';
-  const out: Parsed = { keys: [], instructions: '' };
-  const lines = text.split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i] ?? '';
-    if (line.trim() === '' || line.startsWith('#')) continue;
-    const multi = /^([A-Za-z_][\w-]*) = """$/.exec(line);
-    if (multi) {
-      const end = lines.indexOf('"""', i + 1);
-      if (end < 0) return `${multi[1] ?? ''}의 """ 끝을 찾을 수 없습니다.`;
-      const value = lines.slice(i + 1, end).join('\n');
-      // 본문 안의 """는 문자열을 그 자리에서 끝낸다. 실제 TOML 분석기는 뒤의 글자를 오류로 본다(리뷰 P2-3).
-      if (value.includes('"""')) return `${multi[1] ?? ''} 본문 안에 """가 있습니다. 문자열이 그 자리에서 끝납니다.`;
-      out.keys.push(multi[1] ?? '');
-      if (multi[1] === 'developer_instructions') out.instructions = value;
-      i = end;
+  let table: Record<string, unknown>;
+  try {
+    table = parseToml(text) as Record<string, unknown>;
+  } catch (error) {
+    return `TOML 오류: ${(error instanceof Error ? error.message : String(error)).split('\n')[0] ?? ''}`;
+  }
+  const out: Parsed = { keys: Object.keys(table), instructions: '' };
+  for (const [key, value] of Object.entries(table)) {
+    // 허용하지 않은 키는 config-key 규칙이 이름으로 잡는다. 허용한 키의 값만 여기서 문자열인지 본다.
+    if (typeof value !== 'string') {
+      if (CODEX_KEYS.has(key)) return `TOML ${key} 값은 문자열이어야 합니다(표·배열·숫자 불가).`;
       continue;
     }
-    const kv = /^([A-Za-z_][\w-]*) = "([^"]*)"$/.exec(line);
-    if (!kv) {
-      const key = /^\[?\s*([A-Za-z_][\w.-]*)/.exec(line)?.[1];
-      if (key) { out.keys.push(key); continue; } // 키 이름은 config-key 검사가 잡는다.
-      return `TOML 줄을 읽을 수 없습니다: ${line}`;
-    }
-    const [, key = '', value = ''] = kv;
-    out.keys.push(key);
     if (key === 'name') out.name = value.trim();
     if (key === 'description') out.description = value.trim();
+    if (key === 'developer_instructions') out.instructions = value;
   }
   return out;
 }
@@ -213,6 +253,9 @@ export function checkSubagentSet(set: SubagentSet, mock: readonly MockSubagent[]
     if (!set.review.includes(`\`${k}\` v${String(d.version)} \`${d.hash}\``)) add(k, 'review', `REVIEW.md에 \`${k}\` v${String(d.version)}과 현재 hash의 검토 기록이 없습니다.`);
 
     // 파일 모양
+    // 파일 자체 검사(UTF-8·문자) → 표준 분석기 순서다. 앞 단계가 실패하면 분석 결과를 믿지 않는다.
+    const fileProblem = d.encodingError ?? textProblem(d.text);
+    if (fileProblem) { add(k, 'format', fileProblem); continue; }
     const parsed = d.agent === 'Claude' ? parseClaude(d.text) : parseCodex(d.text);
     if (typeof parsed === 'string') { add(k, 'format', parsed); continue; }
     if (parsed.name !== k) add(k, 'name', `파일 안 name(${parsed.name ?? '없음'})이 정의 이름과 다릅니다.`);

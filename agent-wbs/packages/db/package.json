@@ -20,13 +20,15 @@
     "seed:demo": "node --env-file-if-exists=../../.env --conditions=awbs-source src/seed-cli.ts demo"
   },
   "dependencies": {
+    "@awbs/shared": "workspace:*",
     "drizzle-orm": "0.45.4",
     "pg": "8.23.1",
-    "@awbs/shared": "workspace:*"
+    "smol-toml": "1.9.1",
+    "yaml": "2.9.1"
   },
   "devDependencies": {
     "@types/pg": "8.23.1",
-    "drizzle-kit": "0.31.11",
-    "ajv": "8.20.0"
+    "ajv": "8.20.0",
+    "drizzle-kit": "0.31.11"
   }
 }

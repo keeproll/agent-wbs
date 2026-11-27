@@ -1,4 +1,8 @@
 import { createHash } from 'node:crypto';
+import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   checkSubagentSet,
@@ -172,20 +176,136 @@ describe('실제 하위 Agent v1 정의(M5-06)', () => {
     expectRule(mutate(codex().key, (d) => { d.text = d.text.replace(first, `${first} 단, 급하면 예외로 한다.`); }), 'common-rules');
   });
 
-  it('format: Codex TOML이 허용한 모양(문자열 키와 """ 여러 줄 문자열)이 아니면 잡는다', () => {
-    expectRule(mutate(codex().key, (d) => { d.text = d.text.replace('맡은 일', '맡은 \\t일'); }), 'format');
-    expectRule(mutate(claude().key, (d) => { d.text = d.text.replace(/^---\n/, ''); }), 'format');
+  /** frontmatter의 한 줄을 바꾼다. 바꿀 줄이 없으면 시험을 잘못 쓴 것이므로 멈춘다. */
+  const front = (d: SubagentSet['defs'][number], from: RegExp, to: string) => {
+    if (!from.test(d.text)) throw new Error(`no match ${String(from)}`);
+    d.text = d.text.replace(from, to);
+  };
+  const desc = /^description: .*$/m;
+
+  it('format: 파일 바이트·문자를 구문 분석 전에 거른다(BOM·CR·C0·DEL·C1·비문자)', () => {
+    // YAML 1.2 §5.1과 TOML 1.0이 받지 않는 문자다. 탭(U+0009)·줄바꿈(U+000A)만 허용한다.
+    const bad = ['\u0000', '\u0001', '\u0008', '\u000b', '\u000c', '\u000d', '\u001b', '\u001f', '\u007f', '\u0080', '\u0085', '\u009f', '\ufffe', '\uffff'];
+    for (const ch of bad) {
+      const label = `U+${ch.codePointAt(0)?.toString(16).padStart(4, '0') ?? ''}`;
+      // 리뷰 재현 B: 설명 값 안의 U+0080 같은 글자. 본문에 넣어도 같다.
+      expectRule(mutate(claude().key, (d) => { front(d, desc, `description: 역할${ch}화면 구현`); }), 'format');
+      expect(rules(mutate(claude().key, (d) => { d.text = d.text.replace('맡은 일', `맡은${ch}일`); })).has('format'), `claude body ${label}`).toBe(true);
+      expect(rules(mutate(codex().key, (d) => { d.text = d.text.replace('맡은 일', `맡은${ch}일`); })).has('format'), `codex body ${label}`).toBe(true);
+      expect(rules(mutate(codex().key, (d) => { d.text = d.text.replace(/^description = "/m, `description = "${ch}`); })).has('format'), `codex value ${label}`).toBe(true);
+    }
+    // BOM(U+FEFF)이 맨 앞에 있으면 거부한다. CLI마다 BOM 처리가 달라 같은 파일을 다르게 읽을 수 있다.
+    expectRule(mutate(claude().key, (d) => { d.text = `\ufeff${d.text}`; }), 'format');
+    expectRule(mutate(codex().key, (d) => { d.text = `\ufeff${d.text}`; }), 'format');
+    // 줄 끝은 LF만 쓴다(hash가 줄 끝 방식에 따라 달라지지 않게).
+    expectRule(mutate(codex().key, (d) => { d.text = d.text.replaceAll('\n', '\r\n'); }), 'format');
   });
 
-  it('format: 실제 YAML·TOML 구문 분석기가 거부할 값을 잡는다(리뷰 P2-3)', () => {
-    // YAML: 따옴표 없는 값 안의 「: 」는 mapping values are not allowed here 오류다.
-    expectRule(mutate(claude().key, (d) => { d.text = d.text.replace(/^description: .*$/m, 'description: 역할: 화면 구현'); }), 'format');
-    for (const bad of ['"따옴표', "'작은따옴표", '- 목록', '[대괄호', '{중괄호', '&앵커', '*별표', '!태그', '|블록', '>접기', '%지시', '@예약', '`예약', '#주석', '값 #주석', '끝이 콜론:', '제어\u0001문자'])
-      expectRule(mutate(claude().key, (d) => { d.text = d.text.replace(/^description: .*$/m, `description: ${bad}`); }), 'format');
-    // TOML: 여러 줄 문자열 본문 안의 """는 문자열을 먼저 끝낸다.
-    expectRule(mutate(codex().key, (d) => { d.text = d.text.replace('맡은 일', '맡은 일\n- 출력 예: """hello"""'); }), 'format');
-    expectRule(mutate(codex().key, (d) => { d.text = d.text.replace('맡은 일', '맡은 일 """ 끝'); }), 'format');
-    // TOML 기본 문자열은 탭 밖의 제어 문자를 받지 않는다.
-    expectRule(mutate(codex().key, (d) => { d.text = d.text.replace('맡은 일', '맡은\u0001일'); }), 'format');
+  it('format: UTF-8로 읽을 수 없는 파일은 로드 단계에서 format으로 잡는다', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'awbs-subagents-'));
+    try {
+      await cp(fileURLToPath(new URL('../seed/subagents/', import.meta.url)), dir, { recursive: true });
+      const target = claude().file;
+      const bytes = await readFile(join(dir, target));
+      // 0xC3 0x28: 잘못된 2바이트 순서. 0xFF: UTF-8에 나올 수 없는 바이트.
+      for (const junk of [[0xc3, 0x28], [0xff], [0xed, 0xa0, 0x80]]) {
+        await writeFile(join(dir, target), Buffer.concat([bytes, Buffer.from(junk)]));
+        const loaded = await loadSubagentSet(pathToFileURL(`${dir}/`));
+        const found = checkSubagentSet(loaded, mock).filter((i) => i.key === claude().key);
+        expect(found.map((i) => i.rule), JSON.stringify(junk)).toContain('format');
+        expect(found.find((i) => i.rule === 'format')?.message).toContain('UTF-8');
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('format: Claude frontmatter는 YAML 1.2 엄격 분석(경고도 오류)으로 읽는다', () => {
+    expectRule(mutate(claude().key, (d) => { d.text = d.text.replace(/^---\n/, ''); }), 'format');
+    const cases: [string, (d: SubagentSet['defs'][number]) => void][] = [
+      // 리뷰 이전 재현과 재현 A: 따옴표 없는 값 안의 「: 」·「:<탭>」.
+      ['colon-space', (d) => { front(d, desc, 'description: 역할: 화면 구현'); }],
+      ['colon-tab', (d) => { front(d, desc, 'description: 역할:\t화면 구현'); }],
+      ['colon-end', (d) => { front(d, desc, 'description: 끝이 콜론:'); }],
+      // 탭 들여쓰기: YAML은 들여쓰기에 탭을 쓸 수 없다.
+      ['tab-indent', (d) => { front(d, desc, 'description:\n\t화면 구현'); }],
+      ['tab-before-key', (d) => { front(d, desc, '\tdescription: 화면 구현'); }],
+      // 중복 키: 뒤의 값이 앞의 값을 몰래 덮는다.
+      ['dup-key', (d) => { front(d, desc, 'description: 화면 구현\ndescription: 다른 설명'); }],
+      ['dup-name', (d) => { front(d, /^name: .*$/m, `name: ${d.key}\nname: ${d.key}`); }],
+      // 앵커·별칭·태그: 값이 다른 곳에서 오거나 타입이 바뀐다. 정의 파일에는 쓰지 않는다.
+      ['anchor', (d) => { front(d, desc, 'description: &d 화면 구현'); }],
+      ['alias', (d) => { front(d, /^name: (.*)$/m, 'name: &n $1'); front(d, desc, 'description: *n'); }],
+      ['undefined-alias', (d) => { front(d, desc, 'description: *없음'); }],
+      ['tag', (d) => { front(d, desc, 'description: !!str 화면 구현'); }],
+      ['local-tag', (d) => { front(d, desc, 'description: !태그 화면'); }],
+      ['merge-key', (d) => { front(d, desc, 'description: 화면 구현\n<<: {extra: x}'); }],
+      // 다중 문서: 문서 끝(...)·시작(--- 뒤 내용) 표시로 두 번째 문서를 숨긴다.
+      ['doc-end', (d) => { front(d, desc, 'description: 화면 구현\n...\nmodel: hidden'); }],
+      ['directive', (d) => { d.text = d.text.replace(/^---\n/, '---\n%YAML 1.2\n'); }],
+      // strict 모드에서만 오류: 1024자를 넘는 암묵 키(YAML 1.2 규칙).
+      ['long-key', (d) => { front(d, desc, `description: 화면 구현\n${'k'.repeat(1100)}: x`); }],
+      // 문자열이 아닌 값·여러 줄 구조.
+      ['flow-seq', (d) => { front(d, desc, 'description: [화면, 구현]'); }],
+      ['flow-map', (d) => { front(d, desc, 'description: {a: b}'); }],
+      ['block-seq', (d) => { front(d, /^tools: .*$/m, 'tools:\n  - Read\n  - Glob\n  - Grep'); d.tools = ['Read', 'Glob', 'Grep']; }],
+      ['number', (d) => { front(d, desc, 'description: 0x1f'); }],
+      // YAML 1.1과 1.2가 다르게 읽는 값: 어느 분석기로 읽어도 같은 문자열이어야 한다.
+      ['yaml11-bool', (d) => { front(d, desc, 'description: yes'); }],
+      ['yaml11-sexagesimal', (d) => { front(d, desc, 'description: 1:2'); }],
+      ['null', (d) => { front(d, desc, 'description: ~'); }],
+      // 따옴표·블록 표시가 깨진 값.
+      ['open-quote', (d) => { front(d, desc, 'description: "따옴표'); }],
+      ['open-single', (d) => { front(d, desc, "description: '작은따옴표"); }],
+      ['seq-in-value', (d) => { front(d, desc, 'description: - 목록'); }],
+      ['open-bracket', (d) => { front(d, desc, 'description: [대괄호'); }],
+      ['block-bad', (d) => { front(d, desc, 'description: |블록'); }],
+      ['reserved-at', (d) => { front(d, desc, 'description: @예약'); }],
+      ['reserved-backtick', (d) => { front(d, desc, 'description: `예약'); }],
+      ['percent', (d) => { front(d, desc, 'description: %지시'); }],
+    ];
+    for (const [name, change] of cases) {
+      const s = mutate(claude().key, change);
+      expect(rules(s).has('format'), `${name}: ${JSON.stringify(checkSubagentSet(s, mock))}`).toBe(true);
+    }
+  });
+
+  it('format: YAML 경고도 오류로 본다', () => {
+    // 해석할 수 없는 태그(!foo)는 yaml 패키지가 오류가 아니라 경고(TAG_RESOLVE_FAILED)로만 알린다.
+    const s = mutate(claude().key, (d) => { front(d, desc, 'description: !foo 화면 구현'); });
+    const found = checkSubagentSet(s, mock).filter((i) => i.rule === 'format');
+    expect(found.map((i) => i.message).join(' '), JSON.stringify(found)).toContain('경고');
+  });
+
+  it('format: 표준 YAML이 받는 따옴표 값은 통과한다(검사기가 CLI보다 엄격하기만 하고 다르게 읽지 않는다)', () => {
+    const s = mutate(claude().key, (d) => { front(d, desc, `description: "${must(/^description: (.*)$/m.exec(d.text), 'desc')[1] ?? ''}"`); });
+    expect(checkSubagentSet(s, mock)).toEqual([]);
+  });
+
+  it('format: Codex 파일은 표준 TOML 1.0 분석기로 읽는다', () => {
+    const cases: [string, (d: SubagentSet['defs'][number]) => void][] = [
+      // 리뷰 이전 재현: 여러 줄 문자열 본문 안의 """.
+      ['triple-quote-line', (d) => { d.text = d.text.replace('맡은 일', '맡은 일\n- 출력 예: """hello"""'); }],
+      ['triple-quote-inline', (d) => { d.text = d.text.replace('맡은 일', '맡은 일 """ 끝'); }],
+      ['bad-escape', (d) => { d.text = d.text.replace('맡은 일', '맡은 \\q일'); }],
+      ['bad-unicode-escape', (d) => { d.text = d.text.replace('맡은 일', '맡은 \\uD800일'); }],
+      ['dup-key', (d) => { d.text = `${d.text}name = "${d.key}"\n`; }],
+      ['dup-instructions', (d) => { d.text = `${d.text}developer_instructions = "x"\n`; }],
+      ['unterminated', (d) => { d.text = d.text.replace(/"""\n$/, ''); }],
+      ['open-string', (d) => { d.text = d.text.replace(/^description = "(.*)"$/m, 'description = "$1'); }],
+      ['bare-value', (d) => { d.text = d.text.replace(/^description = "(.*)"$/m, 'description = $1'); }],
+      ['number-name', (d) => { d.text = d.text.replace(/^name = ".*"$/m, 'name = 1'); }],
+      ['array-value', (d) => { d.text = d.text.replace(/^description = "(.*)"$/m, 'description = ["$1"]'); }],
+      ['table', (d) => { d.text = `${d.text}\n[extra]\nx = "y"\n`; }],
+      ['inline-table', (d) => { d.text = `extra = { x = "y" }\n${d.text}`; }],
+      ['dotted-key', (d) => { d.text = `features.shell_tool = false\n${d.text}`; }],
+    ];
+    for (const [name, change] of cases) {
+      const s = mutate(codex().key, change);
+      const found = new Set(checkSubagentSet(s, mock).map((i) => i.rule));
+      expect(found.has('format') || found.has('config-key'), `${name}: ${JSON.stringify(checkSubagentSet(s, mock))}`).toBe(true);
+    }
+    // 표준 TOML 이스케이프는 분석기가 해석한다. 지시문(해석된 값) 기준으로 공통 규칙을 비교하므로 통과한다.
+    expect(checkSubagentSet(mutate(codex().key, (d) => { d.text = d.text.replace('맡은 일', '맡은\\t일'); }), mock)).toEqual([]);
   });
 });
