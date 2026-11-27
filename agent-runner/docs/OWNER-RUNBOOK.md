@@ -62,21 +62,37 @@ bash agent-runner/scripts/isolation/setup-agent-user.sh 2>&1 | tee ~/awbs-setup-
 - **성공이면:** `래퍼 점검: ok`, `== 끝. 다음에 owner가 할 일`, `exit=0`이 보입니다.
 - **실패하면:** 종료 코드가 0이 아니고, 「설치가 중간에 멈췄습니다 … 닫힌 상태로 둡니다」가 보입니다. 로그 `2-setup.log`를 보내 주세요.
 
-## 2-1단계. WSL 다시 시작(2단계 뒤 한 번, DNS 설정을 굳힘)
+## 2-1단계. 2단계가 끝나면 **바로** WSL 다시 시작(DNS 설정을 굳힘)
 
-2단계가 `/etc/wsl.conf`를 바꿨으므로 WSL을 한 번 다시 시작합니다. 다시 시작한 뒤에도 `/etc/resolv.conf`가 실제 파일로 남아야 합니다.
+2단계가 `/etc/wsl.conf`에 `generateResolvConf = false`를 넣었습니다. 이 설정은 WSL을 다시 시작해야 적용됩니다.
+
+- **2단계와 이 단계 사이에 다른 일을 하지 마세요.** 그 사이 새 WSL 터미널이 열리면(Orca 작업자 포함) WSL이 `/etc/resolv.conf`를 다시 링크로 만들 수 있습니다.
+  - 그래도 복구 장치가 있습니다. 부팅 복구 서비스가 재시작 때 실제 파일로 되살리고, 2-2단계 재실행도 고칩니다.
+- **`wsl --shutdown`은 이 터미널만 끄는 것이 아닙니다.** 모든 WSL 배포판, Orca 작업자, Runner, Docker Desktop의 WSL 쪽까지 함께 멈춥니다. 하던 작업을 먼저 저장하고 정리하세요.
 
 ```bash
-/mnt/c/Windows/System32/wsl.exe --shutdown      # 이 터미널도 함께 닫힙니다. Windows PowerShell에서 wsl --shutdown 해도 같습니다
+/mnt/c/Windows/System32/wsl.exe --shutdown      # Windows PowerShell에서 wsl --shutdown 해도 같습니다
 ```
 
-터미널을 다시 연 뒤 확인합니다.
+## 2-2단계. 다시 연 뒤 설치를 한 번 더 실행(상태 확정)
+
+같은 설치 명령을 한 번 더 실행합니다. 이미 된 부분은 건너뜁니다. 재시작 틈에 링크가 다시 생겼어도 여기서 저장 사본으로 고칩니다.
+
+```bash
+bash agent-runner/scripts/isolation/setup-agent-user.sh 2>&1 | tee ~/awbs-setup-logs/2-setup-again.log; echo "exit=${PIPESTATUS[0]}"
+```
+
+확인합니다.
 
 ```bash
 ls -l /etc/resolv.conf          # 맨 앞이 l(링크)이 아니라 -(실제 파일)이어야 합니다
 head -n 3 /etc/resolv.conf      # 첫 줄 「# Agent WBS(Q-08): WSL DNS 터널링…」, 다음 줄 nameserver 10.255.255.254
 getent hosts api.anthropic.com  # 주소가 한 줄 나오면 owner·Runner DNS 정상
 ```
+
+- **DNS가 안 될 때:** 이 설정은 Windows 쪽 「DNS 터널링」에 기댑니다(주소 `10.255.255.254`). 나중에 `.wslconfig`의 `dnsTunneling=false`나 WSL 업데이트로 터널링이 꺼지면 이 주소가 응답하지 않습니다.
+  - 그때 확인 스크립트가 「Runner 계정도 … 찾지 못함」 FAIL을 냅니다.
+  - 할 일: 제거 스크립트로 되돌린 뒤(`remove-agent-user.sh`, 9단계) WSL을 다시 시작하고 설치를 다시 실행합니다. 그러면 설치가 그 상태에 맞는 방식(대체 방식 등)을 고릅니다.
 
 ## 3단계. Claude·Codex CLI 설치(관리자 권한 없음)
 

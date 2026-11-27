@@ -260,7 +260,7 @@ if [[ -e $WSL_BINFMT ]]; then
   dns_mode=''
   [[ -f $DNS_MODE_RECORD ]] && dns_mode=$(< "$DNS_MODE_RECORD")
   if [[ -L $RESOLV_DST ]]; then
-    fail "/etc/resolv.conf가 아직 링크임($(readlink -- "$RESOLV_DST")). Agent가 따라가지 못함. setup-agent-user.sh를 다시 실행하세요"
+    fail "/etc/resolv.conf가 아직 링크임($(readlink -- "$RESOLV_DST")). Agent가 따라가지 못함. setup-agent-user.sh를 다시 실행하세요(터널링이면 원본이 없어도 저장 사본으로 고침)"
   elif [[ -f $RESOLV_DST ]]; then
     pass '/etc/resolv.conf가 링크가 아닌 실제 파일'
   else
@@ -273,6 +273,12 @@ if [[ -e $WSL_BINFMT ]]; then
         pass '/etc/wsl.conf에 [network] generateResolvConf = false(WSL 재시작 뒤에도 실제 파일 유지)'
       else
         fail '/etc/wsl.conf에 [network] generateResolvConf = false가 없음(WSL 재시작 때 링크로 돌아감). setup-agent-user.sh를 다시 실행하세요'
+      fi
+      # 부팅 복구(fix9): 설치~재시작 틈에 링크가 굳어도 부팅 때 저장 사본으로 되살리는 서비스와 그 사본.
+      if [[ -f $RESOLV_RESTORE_UNIT_PATH && -x $RESOLV_RESTORE_PATH ]] && [[ -f $RESOLV_INSTALLED ]] && resolv_is_tunnel "$RESOLV_INSTALLED"; then
+        pass "부팅 복구 서비스($RESOLV_RESTORE_UNIT)와 저장 사본 있음"
+      else
+        fail "부팅 복구 서비스($RESOLV_RESTORE_UNIT) 또는 저장 사본($RESOLV_INSTALLED)이 없음. setup-agent-user.sh를 다시 실행하세요"
       fi
       if [[ -f $RESOLV_DST && ! -L $RESOLV_DST ]] && resolv_is_tunnel "$RESOLV_DST"; then
         pass "/etc/resolv.conf의 nameserver가 DNS 터널링 주소 $DNS_TUNNEL_NS 하나"

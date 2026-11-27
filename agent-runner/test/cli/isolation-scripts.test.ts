@@ -372,6 +372,58 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
       expect(readFileSync(join(R, 'etc/agentwbs/wsl.conf.before'), 'utf8')).toBe(WSL_CONF0);
     });
 
+    test('fix9: 터널링은 저장 사본과 부팅 복구 서비스(링크일 때만, 시간 제한)를 설치하고, 바로 재시작·재시작 뒤 다시 실행을 안내', () => {
+      rules(okCheck);
+      const r = setup();
+      expect(r.code, r.out).toBe(0);
+      expect(readFileSync(join(R, 'etc/agentwbs/resolv.conf.installed'), 'utf8')).toBe(readFileSync(join(R, 'etc/resolv.conf'), 'utf8'));
+      expect(r.log).toContain(`-- install -o root -g root -m 0755 ${join(scripts, 'awbs-resolv-restore.sh')} ${R}/usr/local/libexec/awbs-resolv-restore`);
+      const unit = readFileSync(join(R, 'etc/systemd/system/awbs-agent-resolv-restore.service'), 'utf8');
+      expect(unit).toContain('ConditionPathIsSymbolicLink=/etc/resolv.conf');
+      expect(unit).toContain('ExecStart=/usr/local/libexec/awbs-resolv-restore');
+      expect(unit).toContain('TimeoutStartSec=30');
+      expect(r.log).toContain('-- systemctl enable awbs-agent-resolv-restore.service');
+      expect(r.out).toContain('바로 WSL을 다시 시작하세요');
+      expect(r.out).toContain('모든 WSL 배포판');
+      expect(r.out).toContain('한 번 더 실행');
+    });
+
+    // 리뷰8 P2-1: 설치~재시작 틈에 WSL이 링크를 다시 만들어 굳고 원본도 없는 상태. 설치 다시 실행 하나로 고쳐져야 한다.
+    test('fix9: 방식 기록 tunnel + /etc/resolv.conf 링크 + 원본 없음 → 다시 실행하면 저장 사본으로 실제 파일을 다시 만든다', () => {
+      rules(okCheck);
+      expect(setup().code).toBe(0);
+      rmSync(join(R, 'etc/resolv.conf'));
+      symlinkSync(join(R, 'mnt/wsl/resolv.conf'), join(R, 'etc/resolv.conf'));
+      rmSync(join(R, 'mnt/wsl/resolv.conf'));
+      writeFileSync(join(R, 'sudo.log'), '');
+      const r = setup();
+      expect(r.code, r.out).toBe(0);
+      expect(r.out).toContain('Agent DNS 방식: 터널링');
+      expect(lstatSync(join(R, 'etc/resolv.conf')).isSymbolicLink()).toBe(false);
+      expect(readFileSync(join(R, 'etc/resolv.conf'), 'utf8')).toBe(`${RESOLV_FILE_MARK}\nnameserver 10.255.255.254\nsearch kornet\n`);
+    });
+
+    test('fix9: 저장 사본까지 없어도 고정 주소 한 줄로 다시 만든다', () => {
+      rules(okCheck);
+      expect(setup().code).toBe(0);
+      rmSync(join(R, 'etc/resolv.conf'));
+      symlinkSync(join(R, 'mnt/wsl/resolv.conf'), join(R, 'etc/resolv.conf'));
+      rmSync(join(R, 'mnt/wsl/resolv.conf'));
+      rmSync(join(R, 'etc/agentwbs/resolv.conf.installed'));
+      const r = setup();
+      expect(r.code, r.out).toBe(0);
+      expect(r.out).toContain('고정 주소(nameserver 10.255.255.254) 한 줄');
+      expect(readFileSync(join(R, 'etc/resolv.conf'), 'utf8')).toBe(`${RESOLV_FILE_MARK}\nnameserver 10.255.255.254\n`);
+    });
+
+    test('리뷰8 P3-1: 머리 뒤 주석·CRLF wsl.conf도 원래 [network] 절만 고치고 절을 겹치지 않는다', () => {
+      writeFileSync(join(R, 'etc/wsl.conf'), '[network] # net\r\ngenerateResolvConf=true\r\n[boot]\r\nsystemd=true\r\n');
+      rules(okCheck);
+      const r = setup();
+      expect(r.code, r.out).toBe(0);
+      expect(readFileSync(join(R, 'etc/wsl.conf'), 'utf8')).toBe('[network] # net\r\ngenerateResolvConf = false\r\n[boot]\r\nsystemd=true\r\n');
+    });
+
     test('fix8 터널링: [network] 절이 이미 있으면 그 안의 generateResolvConf만 false로, 다른 줄은 그대로', () => {
       writeFileSync(join(R, 'etc/wsl.conf'), '[network]\nhostname = box\ngenerateResolvConf = true\n[boot]\nsystemd=true\n');
       rules(okCheck);
@@ -400,7 +452,7 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
       expect(r.log).toContain('-- systemctl disable --now awbs-agent-resolv.path');
       expect(existsSync(join(R, 'etc/systemd/system/awbs-agent-resolv.path'))).toBe(false);
       expect(existsSync(join(R, 'usr/local/libexec/awbs-resolv-sync'))).toBe(false);
-      expect(r.log.some((l) => l.includes('install') && l.includes('awbs-agent-resolv'))).toBe(false);
+      expect(r.log.some((l) => l.includes('install') && /awbs-agent-resolv\.(service|path|timer)/.test(l))).toBe(false);
     });
 
     test('fix8 대체: nameserver가 고정 주소 하나가 아니면 크게 알리고 도우미 + 감시 + 타이머(시작 한도 끔·시간 제한). wsl.conf는 그대로', () => {
@@ -476,6 +528,10 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
       writeFileSync(join(R, 'etc/agentwbs/wsl.conf.installed'), conf);
       writeFileSync(join(R, 'etc/wsl.conf'), conf);
       writeFileSync(join(R, 'etc/agentwbs/dns-mode'), 'tunnel\n');
+      writeFileSync(join(R, 'etc/agentwbs/resolv.conf.installed'), `${RESOLV_FILE_MARK}\nnameserver 10.255.255.254\n`);
+      mkdirSync(join(R, 'etc/systemd/system'), { recursive: true });
+      writeFileSync(join(R, 'etc/systemd/system/awbs-agent-resolv-restore.service'), 'x');
+      writeFileSync(join(R, 'usr/local/libexec/awbs-resolv-restore'), 'x');
       rmSync(join(R, 'etc/resolv.conf'));
       writeFileSync(join(R, 'etc/resolv.conf'), `${RESOLV_FILE_MARK}\nnameserver 10.255.255.254\n`);
       return conf;
@@ -492,6 +548,27 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
       expect(existsSync(join(R, 'etc/agentwbs/wsl.conf.before'))).toBe(false);
       expect(existsSync(join(R, 'etc/agentwbs/dns-mode'))).toBe(false);
       expect(r.out).toContain('wsl --shutdown');
+    });
+
+    test('fix9: 제거는 부팅 복구 서비스·도우미·저장 사본도 지운다(wsl.conf를 되돌린 경우)', () => {
+      installedTunnel();
+      const r = run('remove-agent-user.sh');
+      expect(r.code, r.out).toBe(0);
+      expect(r.log).toContain('-- systemctl disable awbs-agent-resolv-restore.service');
+      expect(existsSync(join(R, 'etc/systemd/system/awbs-agent-resolv-restore.service'))).toBe(false);
+      expect(existsSync(join(R, 'usr/local/libexec/awbs-resolv-restore'))).toBe(false);
+      expect(existsSync(join(R, 'etc/agentwbs/resolv.conf.installed'))).toBe(false);
+    });
+
+    test('리뷰8 P3-2: wsl.conf를 되돌리지 못해 generateResolvConf = false가 남으면 링크로 되돌리지 않고 복구 서비스도 남긴다', () => {
+      installedTunnel();
+      writeFileSync(join(R, 'etc/wsl.conf'), `${WSL_CONF0}\n[network]\ngenerateResolvConf = false\nhostname = mine\n`);
+      const r = run('remove-agent-user.sh');
+      expect(r.code).toBe(3);
+      expect(r.log.some((l) => l.includes(' ln '))).toBe(false);
+      expect(lstatSync(join(R, 'etc/resolv.conf')).isSymbolicLink()).toBe(false);
+      expect(r.out).toContain('generateResolvConf = false가 남아 있어');
+      expect(existsSync(join(R, 'etc/systemd/system/awbs-agent-resolv-restore.service'))).toBe(true);
     });
 
     test('fix8: 설치 전에 wsl.conf가 없었으면 제거가 그 파일을 지운다', () => {
@@ -755,6 +832,11 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
       writeFileSync(join(R, 'etc/wsl.conf'), `${WSL_CONF0}\n[network]\ngenerateResolvConf = false\n`);
       mkdirSync(join(R, 'etc/agentwbs'), { recursive: true });
       writeFileSync(join(R, 'etc/agentwbs/dns-mode'), 'tunnel\n');
+      // 부팅 복구 서비스·도우미·저장 사본(fix9)
+      writeFileSync(join(R, 'etc/agentwbs/resolv.conf.installed'), `${RESOLV_FILE_MARK}\nnameserver 10.255.255.254\n`);
+      mkdirSync(join(R, 'etc/systemd/system'), { recursive: true });
+      writeFileSync(join(R, 'etc/systemd/system/awbs-agent-resolv-restore.service'), 'x');
+      exe(join(R, 'usr/local/libexec/awbs-resolv-restore'), '#!/bin/sh\n');
       writeFileSync(join(R, 'etc/hosts'), '160.79.104.10 api.anthropic.com\n');
     });
     const check = () => run('check-agent-user.sh');
@@ -912,6 +994,22 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
       expect(r.out).toContain(`FAIL  /etc/resolv.conf가 아직 링크임(${R}/mnt/wsl/resolv.conf)`);
       expect(r.out).toContain('FAIL  Agent가 못 함: DNS 설정 파일 읽기');
       expect(r.out).toContain('FAIL  Agent가 못 함: DNS 해석 api.anthropic.com');
+    });
+
+    test('fix9: 부팅 복구 서비스나 저장 사본이 없으면 FAIL', () => {
+      rmSync(join(R, 'etc/agentwbs/resolv.conf.installed'));
+      rules(...baseline());
+      const r = check();
+      expect(r.code).toBe(1);
+      expect(r.out).toContain('FAIL  부팅 복구 서비스(awbs-agent-resolv-restore.service) 또는 저장 사본');
+    });
+
+    test('리뷰8 P3-1: [network] 절이 겹치면(값이 달라 WSL이 무엇을 쓸지 모름) wsl.conf 검사 FAIL', () => {
+      writeFileSync(join(R, 'etc/wsl.conf'), '[network]\ngenerateResolvConf = true\n[network]\ngenerateResolvConf = false\n');
+      rules(...baseline());
+      const r = check();
+      expect(r.code).toBe(1);
+      expect(r.out).toContain('FAIL  /etc/wsl.conf에 [network] generateResolvConf = false가 없음');
     });
 
     test('fix8: wsl.conf에 generateResolvConf = false가 없으면 FAIL(WSL 재시작 때 링크로 돌아감)', () => {

@@ -62,6 +62,11 @@ RESOLV_WATCH=awbs-agent-resolv.path
 RESOLV_WATCH_PATH=$ROOT_PREFIX/etc/systemd/system/$RESOLV_WATCH
 RESOLV_TIMER=awbs-agent-resolv.timer
 RESOLV_TIMER_PATH=$ROOT_PREFIX/etc/systemd/system/$RESOLV_TIMER
+# 터널링 방식(fix9): 설치 때 만든 /etc/resolv.conf 사본과, 부팅 때 한 번 링크를 실제 파일로 되살리는 복구 서비스.
+RESOLV_INSTALLED=$CONF_DIR/resolv.conf.installed
+RESOLV_RESTORE_PATH=$ROOT_PREFIX/usr/local/libexec/awbs-resolv-restore
+RESOLV_RESTORE_UNIT=awbs-agent-resolv-restore.service
+RESOLV_RESTORE_UNIT_PATH=$ROOT_PREFIX/etc/systemd/system/$RESOLV_RESTORE_UNIT
 RESOLV_SRC=$ROOT_PREFIX/mnt/wsl/resolv.conf
 RESOLV_DST=$ROOT_PREFIX/etc/resolv.conf
 # 이 설치가 만든 /etc/resolv.conf의 첫 줄. 도우미(awbs-resolv-sync.sh)의 MARK·FILE_MARK와 글자 그대로 같아야 한다.
@@ -322,13 +327,15 @@ resolv_is_tunnel() {
 wsl_conf_with_resolv_off() {
   awk '
     function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
-    { lines[NR] = $0 }
-    /^[ \t]*\[/ { sec = tolower(trim($0)); if (sec == "[network]" && !first_net) first_net = NR }
+    # 줄 끝 CR(윈도 줄바꿈)과 머리 뒤 주석(# …)을 떼고 절 이름을 본다(리뷰8 P3-1: 절이 겹치지 않게).
+    function header(s) { sub(/\r$/, "", s); sub(/[#;].*$/, "", s); return tolower(trim(s)) }
+    { lines[NR] = $0; cr[NR] = ($0 ~ /\r$/) ? "\r" : "" }
+    /^[ \t]*\[/ { sec = header($0); if (sec == "[network]" && !first_net) first_net = NR }
     sec == "[network]" && tolower($0) ~ /^[ \t]*generateresolvconf[ \t]*=/ { key[NR] = 1; has_key = 1 }
     END {
       for (i = 1; i <= NR; i++) {
-        if (key[i]) print "generateResolvConf = false"; else print lines[i]
-        if (i == first_net && !has_key) print "generateResolvConf = false"
+        if (key[i]) print "generateResolvConf = false" cr[i]; else print lines[i]
+        if (i == first_net && !has_key) print "generateResolvConf = false" cr[i]
       }
       if (!first_net) {
         if (NR > 0 && lines[NR] != "") print ""
@@ -344,11 +351,15 @@ wsl_conf_resolv_off() {
   [[ -f $1 ]] || return 1
   awk '
     function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
-    /^[ \t]*\[/ { sec = tolower(trim($0)); next }
+    function header(s) { sub(/\r$/, "", s); sub(/[#;].*$/, "", s); return tolower(trim(s)) }
+    { sub(/\r$/, "") }
+    /^[ \t]*\[/ { sec = header($0); if (sec == "[network]") nets++; next }
     sec == "[network]" && tolower($0) ~ /^[ \t]*generateresolvconf[ \t]*=/ {
-      v = $0; sub(/^[^=]*=/, "", v); v = tolower(trim(v)); sub(/[ \t]*#.*$/, "", v); val = v
+      v = $0; sub(/^[^=]*=/, "", v); sub(/[ \t]*[#;].*$/, "", v); v = tolower(trim(v)); gsub(/"/, "", v)
+      vals[++n] = v
     }
-    END { exit (val == "false") ? 0 : 1 }' "$1"
+    # [network] 절이 하나뿐이고, 그 안의 값이 모두 false여야 한다(겹친 절·서로 다른 값이면 WSL이 무엇을 쓸지 몰라 실패로 본다).
+    END { if (nets != 1 || n == 0) exit 1; for (i = 1; i <= n; i++) if (vals[i] != "false") exit 1; exit 0 }' "$1"
 }
 
 # 대체 방식(도우미·감시·타이머)을 끄고 지운다. 타이머·감시를 먼저 끈다(켜 둔 채 지우면 다시 돌 수 있다). 없으면 아무것도 안 한다.
@@ -359,5 +370,16 @@ remove_resolv_sync() {
   if [[ -f $RESOLV_UNIT_PATH ]]; then as_root systemctl disable "$RESOLV_UNIT"; as_root rm -f -- "$RESOLV_UNIT_PATH"; changed=1; fi
   if ((changed)); then as_root systemctl daemon-reload; fi
   if [[ -f $RESOLV_SYNC_PATH ]]; then as_root rm -f -- "$RESOLV_SYNC_PATH"; fi
+  return 0
+}
+
+# 터널링 방식의 부팅 복구 서비스·도우미를 끄고 지운다(fix9). 없으면 아무것도 안 한다.
+remove_resolv_restore() {
+  if [[ -f $RESOLV_RESTORE_UNIT_PATH ]]; then
+    as_root systemctl disable "$RESOLV_RESTORE_UNIT"
+    as_root rm -f -- "$RESOLV_RESTORE_UNIT_PATH"
+    as_root systemctl daemon-reload
+  fi
+  if [[ -f $RESOLV_RESTORE_PATH ]]; then as_root rm -f -- "$RESOLV_RESTORE_PATH"; fi
   return 0
 }

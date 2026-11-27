@@ -53,6 +53,7 @@ NODE_BIN=$(realpath -e -- "$NODE_BIN") || die "node 파일이 없습니다: $NOD
 command -v sudo > /dev/null || die 'sudo가 없습니다.'
 [[ -f $HERE/awbs-agent-exec.sh ]] || die '실행 래퍼(awbs-agent-exec.sh)가 같은 폴더에 없습니다.'
 [[ -f $HERE/awbs-resolv-sync.sh ]] || die 'DNS 도우미(awbs-resolv-sync.sh)가 같은 폴더에 없습니다.'
+[[ -f $HERE/awbs-resolv-restore.sh ]] || die 'DNS 복구 도우미(awbs-resolv-restore.sh)가 같은 폴더에 없습니다.'
 IS_WSL=0
 [[ -e $WSL_BINFMT || -d $ROOT_PREFIX/run/WSL ]] && IS_WSL=1
 
@@ -61,6 +62,8 @@ IS_WSL=0
 #   sync:   그 밖의 주소 → fix7 도우미 + 감시 + 타이머(대체, 크게 알림)
 #   manual: /etc/resolv.conf가 owner가 직접 관리하는 실제 파일 → 건드리지 않음
 DNS_MODE='' DNS_BASE=''
+DNS_RECORDED=''
+[[ -f $DNS_MODE_RECORD ]] && DNS_RECORDED=$(< "$DNS_MODE_RECORD")
 if ((IS_WSL)); then
   if [[ -f $RESOLV_SRC && ! -L $RESOLV_SRC ]] && [[ $(owner_of "$RESOLV_SRC") == root ]]; then
     DNS_BASE=$RESOLV_SRC
@@ -69,6 +72,14 @@ if ((IS_WSL)); then
   fi
   if [[ -f $RESOLV_DST && ! -L $RESOLV_DST ]] && ! resolv_is_ours; then
     DNS_MODE=manual               # owner가 직접 관리하는 실제 파일(예: 이미 generateResolvConf = false로 손수 설정)
+  elif [[ $DNS_RECORDED == tunnel ]]; then
+    # 이미 터널링으로 설치한 PC(fix9, 리뷰8 P2-1): 원본이 없거나, 설치~재시작 틈에 WSL이 링크를 다시 만들어 굳었어도
+    # 저장 사본(설치 때 기록) → 고정 주소 순서로 실제 파일을 다시 만든다. 「설치 다시 실행」 하나로 언제나 복구되게.
+    DNS_MODE=tunnel
+    if [[ -z $DNS_BASE ]] || ! resolv_is_tunnel "$DNS_BASE"; then
+      DNS_BASE=''
+      [[ -f $RESOLV_INSTALLED ]] && resolv_is_tunnel "$RESOLV_INSTALLED" && DNS_BASE=$RESOLV_INSTALLED
+    fi
   elif [[ -n $DNS_BASE ]] && resolv_is_tunnel "$DNS_BASE"; then
     DNS_MODE=tunnel
   elif [[ -n $DNS_BASE && $DNS_BASE == "$RESOLV_SRC" ]]; then
@@ -103,7 +114,7 @@ done
 for p in "${WSL_BLOCK_DIRS[@]}"; do
   [[ -e $p || -L $p ]] && safe_fixed_path "$p"
 done
-for p in "$CRON_DENY" "$AT_DENY" "$RESOLV_SYNC_PATH" "$RESOLV_UNIT_PATH" "$RESOLV_WATCH_PATH" "$RESOLV_TIMER_PATH" "$WSL_CONF"; do
+for p in "$CRON_DENY" "$AT_DENY" "$RESOLV_SYNC_PATH" "$RESOLV_UNIT_PATH" "$RESOLV_WATCH_PATH" "$RESOLV_TIMER_PATH" "$RESOLV_RESTORE_PATH" "$RESOLV_RESTORE_UNIT_PATH" "$WSL_CONF"; do
   safe_fixed_path "$p"
 done
 # cron.allow·at.allow가 있으면 deny 파일은 쓰이지 않는다(allow에 없는 계정만 막힘). 그 경우 allow에 Agent가 없어야 한다.
@@ -227,7 +238,13 @@ dns_tunnel() {
   fi
   as_root install -o root -g root -m 0644 "$TMP/wsl.conf" "$WSL_CONF_INSTALLED"   # 설치가 쓴 모습(제거 때 그 뒤 바뀌었는지 본다)
   # /etc/resolv.conf: 표시 줄 + 허용한 설정 줄(값 모양까지 검사)
-  { printf '%s\n' "$RESOLV_FILE_MARK"; bash "$HERE/awbs-resolv-sync.sh" --filter < "$DNS_BASE"; } > "$TMP/resolv.conf"
+  # 기준: WSL 원본 → 저장 사본 → (둘 다 없으면) 고정 주소 한 줄. 저장 사본은 표시 줄이 있으므로 걸러내기가 빼 준다.
+  if [[ -n $DNS_BASE ]]; then
+    { printf '%s\n' "$RESOLV_FILE_MARK"; bash "$HERE/awbs-resolv-sync.sh" --filter < "$DNS_BASE"; } > "$TMP/resolv.conf"
+  else
+    note "원본과 저장 사본이 없어 고정 주소(nameserver $DNS_TUNNEL_NS) 한 줄로 만든다."
+    printf '%s\nnameserver %s\n' "$RESOLV_FILE_MARK" "$DNS_TUNNEL_NS" > "$TMP/resolv.conf"
+  fi
   resolv_is_tunnel "$TMP/resolv.conf" || die "만든 DNS 설정에 nameserver $DNS_TUNNEL_NS 한 줄이 없습니다."
   if ((DRY_RUN)); then printf '\n--- 만들 파일: /etc/resolv.conf\n'; cat "$TMP/resolv.conf"; fi
   if [[ -L $RESOLV_DST && $(readlink -- "$RESOLV_DST") != "$RESOLV_SRC" ]] || { [[ -e $RESOLV_DST && ! -L $RESOLV_DST ]] && ! resolv_is_ours; }; then
@@ -240,15 +257,48 @@ dns_tunnel() {
     as_root install -o root -g root -m 0644 "$TMP/resolv.conf" "$RESOLV_DST.awbs-new"
     as_root mv -fT -- "$RESOLV_DST.awbs-new" "$RESOLV_DST"
   fi
+  # 저장 사본(fix9): 원본이 없어져도 설치 다시 실행·부팅 복구가 이 내용으로 실제 파일을 다시 만든다.
+  if [[ -f $RESOLV_INSTALLED ]] && cmp -s -- "$TMP/resolv.conf" "$RESOLV_INSTALLED"; then
+    note "저장 사본($RESOLV_INSTALLED): 이미 같음"
+  else
+    as_root install -o root -g root -m 0644 "$TMP/resolv.conf" "$RESOLV_INSTALLED"
+  fi
+  # 부팅 때 한 번 도는 복구 서비스(fix9, 리뷰8 P2-1): 설치~재시작 틈에 WSL이 링크를 다시 만들어 굳었으면 저장 사본으로 되살린다.
+  # 자동 생성이 꺼진 뒤라 WSL과 싸우지 않는다. 그래서 감시·타이머 없이 부팅 때 한 번이면 된다.
+  cat > "$TMP/resolv-restore.service" << EOF
+# Agent WBS(Q-08 fix9): 부팅 때 /etc/resolv.conf가 링크로 남아 있으면 저장 사본으로 실제 파일을 되살린다(터널링 방식).
+[Unit]
+Description=Agent WBS: restore real /etc/resolv.conf from saved copy (WSL DNS tunneling)
+After=local-fs.target
+ConditionPathIsSymbolicLink=/etc/resolv.conf
+
+[Service]
+Type=oneshot
+TimeoutStartSec=30
+ExecStart=/usr/local/libexec/awbs-resolv-restore
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  if ((DRY_RUN)); then printf '\n--- 만들 파일: %s\n' "$RESOLV_RESTORE_UNIT"; cat "$TMP/resolv-restore.service"; fi
+  ensure_root_dir "$(dirname "$RESOLV_RESTORE_PATH")"
+  ensure_root_dir "$(dirname "$RESOLV_RESTORE_UNIT_PATH")"
+  as_root install -o root -g root -m 0755 "$HERE/awbs-resolv-restore.sh" "$RESOLV_RESTORE_PATH"     # 복구 도우미(root 소유)
+  as_root install -o root -g root -m 0644 "$TMP/resolv-restore.service" "$RESOLV_RESTORE_UNIT_PATH"
+  as_root systemctl daemon-reload
+  as_root systemctl enable "$RESOLV_RESTORE_UNIT"                        # 부팅 때 한 번(링크일 때만 돈다)
   printf 'tunnel\n' > "$TMP/dns-mode"
   as_root install -o root -g root -m 0644 "$TMP/dns-mode" "$DNS_MODE_RECORD"
-  note '★ WSL을 한 번 다시 시작해야 설정이 굳어집니다: Windows에서 「wsl --shutdown」 후 터미널을 다시 열고 확인 스크립트를 실행하세요.'
+  note '★ 이 설치가 끝나면 다른 일을 하지 말고 바로 WSL을 다시 시작하세요(Windows에서 「wsl --shutdown」).'
+  note '  wsl --shutdown은 이 터미널뿐 아니라 모든 WSL 배포판·Orca 작업자·Runner·Docker Desktop(WSL 쪽)을 함께 멈춥니다. 하던 일을 먼저 정리하세요.'
+  note '  다시 연 뒤 이 설치를 한 번 더 실행하면(같은 명령, 이미 된 부분은 건너뜀) 상태가 확정됩니다. 그다음 확인 스크립트를 실행하세요.'
 }
 
 # 대체(사본): 고정 주소가 아닌 PC. fix7 도우미에 리뷰7 지적을 반영한 단위를 쓴다.
 #   - 서비스: 시작 한도 끔(StartLimitIntervalSec=0), 30초 시간 제한, 감시 뒤에 시작
 #   - 타이머: 부팅 30초 뒤, 그 뒤 1분마다(감시가 놓치거나 멈춰도 1분 안에 복구)
 dns_sync() {
+  remove_resolv_restore   # 터널링 방식의 부팅 복구가 남아 있으면 끈다(방식이 바뀐 경우)
   printf '\n   ★★★ 주의: 이 PC의 WSL DNS는 터널링 고정 주소(%s) 하나가 아닙니다.\n' "$DNS_TUNNEL_NS"
   printf '   ★★★ 그래서 대체 방식(도우미 + 감시 + 1분 타이머)으로 /etc/resolv.conf 사본을 유지합니다.\n'
   printf '   ★★★ WSL이 링크를 다시 만들 때 Agent의 이름 찾기가 최대 1분 끊길 수 있습니다. 이 사실을 보고해 주세요.\n\n'
