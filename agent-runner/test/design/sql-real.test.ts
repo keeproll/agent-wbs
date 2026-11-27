@@ -4,11 +4,16 @@ import { parseContracts } from '../../src/design/parse.ts';
 import { buildDesignSnapshot } from '../../src/design/snapshot.ts';
 import { assertDesignSnapshot } from '../../src/design/validate.ts';
 
-test('M4 실제 마이그레이션 26개는 구조를 표시하되 DO 블록의 영향을 추측해 대조하지 않는다', async () => {
+test('M4 실제 마이그레이션 26개는 미승인 동적 SQL의 영향을 추측해 대조하지 않는다', async () => {
   const root = new URL('../../../agent-wbs/packages/db/migrations/', import.meta.url);
   const paths = readdirSync(root).filter(n => /^00(?:0\d|1\d|2[0-5])_.*\.sql$/.test(n)).sort();
   expect(paths).toHaveLength(26);
   const files = paths.map(n => ({ path: `contracts/db/postgres/migrations/${n}`, raw: readFileSync(new URL(n, root), 'utf8') }));
+  const prefix = parseContracts(files.slice(0, 6));
+  expect(prefix.items).toHaveLength(100);
+  expect(prefix.items.every(i => i.contract !== undefined)).toBe(true);
+  const checked = await buildDesignSnapshot({ commit: 'a'.repeat(40), ref: 'main', jobKind: 'design_apply', jobId: 'sql-prefix', fence: 1, files: files.slice(0, 6) }, { sql: async ({ item }) => item.contract });
+  expect(checked.drifts).toEqual([]);
   const parsed = parseContracts(files);
   expect(parsed.files.filter(f => f.status === 'error')).toEqual([]);
   expect(parsed.items).toHaveLength(100);

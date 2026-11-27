@@ -66,7 +66,6 @@ const sql = (raw: string) => parseContracts([{ path: 'contracts/db/postgres/001.
 
 test.each([
   "CREATE TABLE t(id integer, x integer NOT NULL); DO $$ BEGIN EXECUTE 'ALTER TABLE t DROP COLUMN x'; END $$; CREATE TABLE later(id integer);",
-  'DO $$ BEGIN NULL; END $$; CREATE TABLE later(id integer);',
   'CREATE TABLE t(id integer); CALL mutate_schema(); CREATE TABLE later(id integer);',
 ])('P2-2 영향 범위를 모르는 SQL은 기존·이후 테이블 모두 unchecked다: %s', raw => {
   const result = sql(raw);
@@ -119,7 +118,7 @@ test('P2-2 범위 불명 오염은 파일 이름순으로 다음 마이그레이
   const result = parseContracts([
     { path: 'contracts/db/postgres/003.sql', raw: 'CREATE TABLE later(id integer);' },
     { path: 'contracts/db/postgres/001.sql', raw: 'CREATE TABLE earlier(id integer);' },
-    { path: 'contracts/db/postgres/002.sql', raw: 'DO $$ BEGIN NULL; END $$;' },
+    { path: 'contracts/db/postgres/002.sql', raw: "DO $$ BEGIN EXECUTE 'ALTER TABLE earlier DROP COLUMN id'; END $$;" },
   ]);
   expect(result.files.every(f => f.status === 'ok')).toBe(true);
   expect(result.items.map(i => i.itemKey)).toEqual(['postgres:earlier', 'postgres:later']);
