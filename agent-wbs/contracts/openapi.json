@@ -10895,6 +10895,7 @@
                         "type": "object",
                         "required": [
                           "id",
+                          "reportKey",
                           "kind",
                           "from",
                           "to",
@@ -10906,6 +10907,10 @@
                         "properties": {
                           "id": {
                             "$ref": "#/components/schemas/Id"
+                          },
+                          "reportKey": {
+                            "type": "string",
+                            "pattern": "^RPT-(D-[0-9]{6}|W-[0-9]{6}|C-[0-9]{3,})$"
                           },
                           "kind": {
                             "enum": [
@@ -11081,6 +11086,7 @@
                   "type": "object",
                   "required": [
                     "id",
+                    "reportKey",
                     "kind",
                     "from",
                     "to",
@@ -11092,6 +11098,10 @@
                   "properties": {
                     "id": {
                       "$ref": "#/components/schemas/Id"
+                    },
+                    "reportKey": {
+                      "type": "string",
+                      "pattern": "^RPT-(D-[0-9]{6}|W-[0-9]{6}|C-[0-9]{3,})$"
                     },
                     "kind": {
                       "enum": [
@@ -11222,6 +11232,7 @@
                   "type": "object",
                   "required": [
                     "id",
+                    "reportKey",
                     "kind",
                     "from",
                     "to",
@@ -11235,6 +11246,10 @@
                   "properties": {
                     "id": {
                       "$ref": "#/components/schemas/Id"
+                    },
+                    "reportKey": {
+                      "type": "string",
+                      "pattern": "^RPT-(D-[0-9]{6}|W-[0-9]{6}|C-[0-9]{3,})$"
                     },
                     "kind": {
                       "enum": [
@@ -46003,6 +46018,53 @@
                 "blocked": {
                   "type": "boolean"
                 }
+              }
+            }
+          },
+          "basis": {
+            "type": "object",
+            "required": [
+              "asOf",
+              "stateFrom",
+              "missing"
+            ],
+            "properties": {
+              "asOf": {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              "stateFrom": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Timestamp"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "missing": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "state"
+                  ]
+                }
+              },
+              "currentSettings": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "schedule",
+                    "blackouts",
+                    "heartbeat",
+                    "concurrency"
+                  ]
+                }
+              },
+              "uncertain": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
               }
             }
           }

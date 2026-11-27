@@ -66,6 +66,8 @@ const EXTRA_BODY: Record<string, Record<string, unknown>> = {
   addSplitException: { rule: 'one', why: 'x' },
   updateTaskOutputs: { outputs: [] },
   updateTaskDesign: { content: {} },
+  // M6-01: 기간 지정 보고서. 한 칸만 틀리게 바꾸고 나머지는 맞는 값이어야 오류 위치를 검사할 수 있다.
+  createReport: { from: '2026-11-01', to: '2026-11-02', view: 'int' },
 };
 /** 경로 변수도 형식에 맞는 값을 넣는다. 형식이 틀리면 시각보다 경로 변수 오류가 먼저 나온다. */
 const urlOf = (op: Operation) => op.path.replace(':messageId', draftId).replace(':taskKey', 'TASK-0001').replace(':kind', 'DB').replace(/:\w+/g, UUID);

@@ -7,3 +7,4 @@ export * from './proposal/index.ts';
 export * from './split/index.ts';
 export * from './grade/index.ts';
 export * from './capacity/index.ts';
+export * from './report/index.ts';

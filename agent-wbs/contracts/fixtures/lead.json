@@ -1069,6 +1069,7 @@
   "status": 200,
   "response": {
    "id": "r1",
+   "reportKey": "RPT-W-261201",
    "kind": "weekly",
    "from": "2026-12-01",
    "to": "2026-12-01",

@@ -20,6 +20,10 @@ interface Context {
   idempotency?: { key: string; hash: string; project: string | null };
   /** 오류 응답이어도 트랜잭션을 커밋한다. 업무 처리기가 「보류 판정과 함께 남길 기록(판단 job)」만 쓴 뒤 켠다. 500은 언제나 롤백. */
   commitOnError?: boolean;
+  /** 보고서 생성(createReport)의 기준점(M6-01): 트랜잭션을 열기 전에 잡은 커밋 시계 값 */
+  reportAnchor?: string;
+  /** 보고서 생성 직렬화 잠금(세션 잠금)을 잡았는지. finish가 커밋·되돌림 뒤에 푼다. */
+  reportLock?: boolean;
 }
 declare module 'fastify' { interface FastifyRequest { platform: Context | null } }
 
@@ -41,6 +45,13 @@ export async function assertLanPassword(pool: Pool): Promise<void> {
   if (!result.rowCount) throw new Error('LAN 기동 거부: 먼저 auth CLI의 set-password로 비밀번호를 설정하세요.');
 }
 
+/**
+ * 기간 지정 보고서 생성을 한 번에 하나씩 처리하는 세션 잠금(M6-01 재리뷰 3 문제 2).
+ * 왜: 보고서 요청은 반복 읽기로 열려 읽기 시점이 첫 조회 때 정해진다. 같은 멱등 키 요청이나 번호 발급을 그 뒤에 기다리면,
+ * 앞 요청이 저장한 응답·번호를 보지 못한다. 그래서 **읽기 시점을 정하기 전에** 이 잠금으로 차례를 세운다.
+ */
+const REPORT_CREATE_LOCK = 'awbs:report-create';
+
 async function finish(request: FastifyRequest, commit: boolean): Promise<void> {
   const context = request.platform;
   const client = context?.client;
@@ -50,6 +61,7 @@ async function finish(request: FastifyRequest, commit: boolean): Promise<void> {
     // 트랜잭션 중간에 모아 둔 변경 이벤트는 모든 업무 잠금 뒤, 커밋 직전에 쓴다(changes/events.ts deferChange).
     if (commit) await flushChanges(client); else dropChanges(client);
     await client.query(commit ? 'commit' : 'rollback');
+    if (context.reportLock) { await client.query(`select pg_advisory_unlock(hashtextextended('${REPORT_CREATE_LOCK}',0))`); delete context.reportLock; }
   } catch (error) { dropChanges(client); client.release(true); throw error; }
   client.release();
 }
@@ -125,7 +137,14 @@ export function installSecurity(app: FastifyInstance, pool: Pool, options: Secur
     if (key !== undefined && (typeof key !== 'string' || key.length === 0 || key.length > 255 || /[^\x21-\x7e]/.test(key))) throw new PlatformError('VALIDATION_FAILED');
     const client = await pool.connect();
     context.client = client;
-    await client.query('begin');
+    if (operation?.id === 'createReport') {
+      // M6-01 보고서: ① 생성 차례 잠금 ② 기준점(자동 커밋) ③ 반복 읽기. 스냅샷과 저장이 한 연결·한 시점이 된다(reports/service.ts).
+      await client.query(`select pg_advisory_lock(hashtextextended('${REPORT_CREATE_LOCK}',0))`);
+      context.reportLock = true;
+      const anchor = (await client.query<{ at: string }>(`select to_char(public.awbs_report_anchor() at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') at`)).rows[0]?.at;
+      if (anchor) context.reportAnchor = anchor;
+      await client.query('begin isolation level repeatable read');
+    } else await client.query('begin');
     if (operation?.id === 'resetProject') {
       const state = (await client.query<{ epoch: number }>('select public.lock_epoch_exclusive() as epoch')).rows[0];
       assert(state);

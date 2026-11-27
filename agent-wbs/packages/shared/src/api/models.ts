@@ -1125,6 +1125,21 @@ export const ReportSnapshot = Type.Object(
         end: MaybeDate, slipDays: Nullable(N), blocked: Type.Boolean(),
       }),
     ),
+    /**
+     * 어느 시점 기준인가(owner 2026-11-27 아이템 13: 기간 말 시점 재구성).
+     * - asOf: 이 시각 직전까지의 기록과 그 시점 상태로 만들었다(기간 끝과 생성 시각 중 이른 쪽).
+     * - stateFrom: 상태를 되살릴 수 있는 가장 이른 시각(상태 기록 시작). null이면 처음부터 기록이 있다.
+     * - missing: 'state'면 그 시점 상태를 되살릴 수 없어 상태 칸(분포·진행 중·예정·전체 표 등)을 비웠다. 화면은 「기록 없음」으로 보인다.
+     * 이 필드가 생기기 전에 만든 보고서에는 없다(생성 시각 기준).
+     * - currentSettings: 그 시점 값을 알 수 없어 **지금 값**으로 계산한 설정 묶음(일정 정책·작업 불가일·heartbeat·동시 실행 한도).
+     *   비어 있으면 모든 설정을 그 시점 값으로 썼다. 화면은 「설정은 현재 값」으로 표시한다.
+     */
+    basis: c.Opt(obj({
+      asOf: c.Timestamp, stateFrom: Nullable(c.Timestamp), missing: List(AnyOf('state')),
+      currentSettings: c.Opt(List(AnyOf('schedule', 'blackouts', 'heartbeat', 'concurrency'))),
+      // 경계 불확실 건수: 실제 커밋 시각을 몰라 T 전에 확정됐는지 알 수 없어 넣지 않은 이력 행 수(재리뷰 4). 0이면 없다.
+      uncertain: c.Opt(c.Count),
+    })),
   },
   { title: 'ReportSnapshot' },
 );

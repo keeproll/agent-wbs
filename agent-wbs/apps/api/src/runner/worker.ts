@@ -2,6 +2,7 @@ import { createPool } from '@awbs/db';
 import { loadConfig } from '../config.ts';
 import { watchRunner } from './watch.ts';
 import { deleteFiles } from '../reset/files.ts';
+import { generateDueReports } from '../reports/service.ts';
 
 const config = loadConfig(process.env);
 const pool = createPool(config.databaseUrl, { onError: () => console.error('Runner 감시 DB 연결 오류') });
@@ -12,6 +13,8 @@ async function step(name: string, work: () => Promise<unknown>) {
     if ((error as { code?: string }).code !== 'AW001') console.error(`${name} 실패`);
   }
 }
+/** 첫 점검은 서버 시작 직후다. 그때 만든 보고서는 「서버 시작 시 누락분 보충」으로 표시한다(G L377, M6-01). */
+let started = false;
 async function tick() {
   let epoch: number | undefined;
   await step('세대 조회', async () => { epoch = (await pool.query<{ epoch: number }>('select epoch from system_state where id=1')).rows[0]?.epoch; });
@@ -19,6 +22,11 @@ async function tick() {
   const current = epoch;
   await step('Runner 생존 감시', () => watchRunner(pool, current));
   await step('초기화 파일 삭제', () => deleteFiles(pool, current));
+  const startup = !started;
+  started = true;
+  // 커밋된 변경의 실제 커밋 시각을 옮겨 적는다(보고서 상태 이력, M6-01). 오래 두면 DB가 실제 커밋 시각을 지운다.
+  await step('보고서 이력 정리', () => pool.query('select public.awbs_settle_commits()'));
+  await step('보고서 정기 생성', () => generateDueReports(pool, current, { startup }));
 }
 const run = () => { pending ??= tick().finally(() => { pending = undefined; }); };
 const timer = setInterval(run, 20_000);
