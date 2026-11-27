@@ -95,8 +95,9 @@ function compile(schema: unknown, root: unknown, cache: Map<unknown, DesignShape
   try {
     if (typeof resolved === 'boolean') return [{ path: '', type: resolved ? 'any' : 'never', required: false }];
     if (Object.keys(resolved).some(key => !KEYS.has(key))) throw new Error('알 수 없는 스키마 키워드입니다.');
+    if (resolved.type === undefined) throw new Error('type 없는 스키마는 대조 안 함입니다.');
     if (resolved.type === 'any' || Array.isArray(resolved.type) && resolved.type.includes('any')) throw new Error('JSON Schema의 타입이 아닙니다.');
-    const types: unknown[] = Array.isArray(resolved.type) ? resolved.type : [resolved.type ?? (resolved.properties ? 'object' : 'any')];
+    const types: unknown[] = Array.isArray(resolved.type) ? resolved.type : [resolved.type];
     if (!types.length || types.some(t => typeof t !== 'string' || !['any', 'null', 'object', 'array', 'string', 'number', 'integer', 'boolean'].includes(t))) throw new Error('필드 타입이 올바르지 않습니다.');
     const fingerprint: Record<string, unknown> = {};
     if (resolved.enum !== undefined) {

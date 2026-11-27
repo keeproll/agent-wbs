@@ -3,7 +3,7 @@ import { parse, type QName, type Statement } from 'pgsql-ast-parser';
 import { record } from './shape.ts';
 
 await loadModule();
-export interface UnparsedSql { type: 'raw constraint' | 'unsupported'; table?: QName; name?: string; sql: string }
+export interface UnparsedSql { type: 'raw constraint' | 'unsupported'; table?: QName; typeName?: QName; name?: string; sql: string }
 const NEUTRAL = new Set(['GrantStmt', 'GrantRoleStmt', 'CreateFunctionStmt', 'AlterFunctionStmt', 'CreateTrigStmt', 'AlterOwnerStmt', 'CreateExtensionStmt', 'CommentStmt', 'CreateRoleStmt', 'AlterRoleStmt', 'InsertStmt', 'UpdateStmt', 'DeleteStmt', 'CreateSchemaStmt']);
 const NEUTRAL_ALTER = new Set(['AT_EnableRowSecurity', 'AT_DisableRowSecurity', 'AT_ForceRowSecurity', 'AT_NoForceRowSecurity', 'AT_EnableTrig', 'AT_EnableAlwaysTrig', 'AT_DisableTrig', 'AT_EnableTrigAll', 'AT_DisableTrigAll', 'AT_EnableTrigUser', 'AT_DisableTrigUser', 'AT_ChangeOwner', 'AT_ValidateConstraint', 'AT_SetStatistics', 'AT_SetStorage', 'AT_SetCompression']);
 const text = (stmt: Record<string, unknown>) => deparseSync({ stmts: [{ stmt }] } as Parameters<typeof deparseSync>[0]);
@@ -11,10 +11,10 @@ const text = (stmt: Record<string, unknown>) => deparseSync({ stmts: [{ stmt }] 
 /** PostgreSQL 공식 구문 트리로 문장을 분류한다. 지원하지 않는 구조 변경은 대상 테이블을 대조 안 함으로 남긴다. */
 export function postgresStatements(raw: string): (Statement | UnparsedSql)[] {
   const output: (Statement | UnparsedSql)[] = [];
-  const convert = (stmt: Record<string, unknown>, table?: QName) => {
+  const convert = (stmt: Record<string, unknown>, table?: QName, typeName?: QName) => {
     const sql = text(stmt);
     try { for (const part of parse(sql)) output.push(part); }
-    catch { output.push({ type: 'unsupported', ...(table && { table }), sql }); }
+    catch { output.push({ type: 'unsupported', ...(table && { table }), ...(typeName && { typeName }), sql }); }
   };
   for (const source of parseSync(raw).stmts ?? []) {
     const stmt = record(source.stmt), [kind] = Object.keys(stmt);
@@ -22,7 +22,14 @@ export function postgresStatements(raw: string): (Statement | UnparsedSql)[] {
     const node = record(stmt[kind]);
     const relation = node.relation === undefined ? undefined : record(node.relation);
     const table = relation && typeof relation.relname === 'string' ? { name: relation.relname, ...(typeof relation.schemaname === 'string' && { schema: relation.schemaname }) } : undefined;
-    if (kind === 'AlterTableStmt' && Array.isArray(node.cmds)) {
+    const names = Array.isArray(node.typeName) ? node.typeName.map(part => record(record(part).String).sval) : [];
+    const name = names.at(-1), schema = names.length === 2 ? names[0] : undefined;
+    const typeName = names.length <= 2 && typeof name === 'string' ? { name, ...(typeof schema === 'string' && { schema }) } : undefined;
+    if (kind === 'AlterTableStmt' && node.objtype === 'OBJECT_TYPE') {
+      output.push({ type: 'unsupported', ...(table && { typeName: table }), sql: text(stmt) });
+    } else if (kind === 'AlterEnumStmt' && (node.oldVal !== undefined || node.newValNeighbor !== undefined)) {
+      output.push({ type: 'unsupported', ...(typeName && { typeName }), sql: text(stmt) });
+    } else if (kind === 'AlterTableStmt' && Array.isArray(node.cmds)) {
       for (const source of node.cmds) {
         const command = record(record(source).AlterTableCmd);
         if (NEUTRAL_ALTER.has(String(command.subtype))) continue;
@@ -46,7 +53,7 @@ export function postgresStatements(raw: string): (Statement | UnparsedSql)[] {
     } else if (kind === 'DoStmt') {
       output.push({ type: 'unsupported', sql: text(stmt) });
     } else if (NEUTRAL.has(kind) && kind !== 'CommentStmt') continue;
-    else convert(stmt, table);
+    else convert(stmt, table, typeName);
   }
   return output;
 }

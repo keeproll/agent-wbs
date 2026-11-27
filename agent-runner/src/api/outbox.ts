@@ -29,6 +29,10 @@ export function retryDelay(attempts: number, error: unknown, now: number, random
   return Math.min(60_000, Math.max(base * (1 + random * 0.2), Number.isFinite(after) ? after : 0));
 }
 
+function reportStream(entry: Entry): string {
+  return entry.operation === 'reportDesignSnapshot' ? `design:${String(entry.request.body?.ref)}` : entry.stream;
+}
+
 export class Outbox {
   private readonly state: State;
   private readonly api: ApiClient;
@@ -77,6 +81,7 @@ export class Outbox {
     const serialized = JSON.parse(JSON.stringify({ ...request, idempotencyKey: key })) as Entry['request'];
     const entry: Entry = { id, operation, request: serialized, stream: attemptId ? `attempt:${attemptId}` : operation,
       state: 'pending', attempts: 0, nextAt: 0 };
+    entry.stream = reportStream(entry);
     if (operation === 'uploadEvidence') {
       const { file, size } = (request as ApiRequest<'uploadEvidence'>).body;
       if (!(file instanceof Blob) || file.size > MAX_EVIDENCE_BYTES) throw new RangeError('증거 파일은 50 MiB 이하여야 합니다.');
@@ -122,8 +127,10 @@ export class Outbox {
       const latest = this.state.snapshot;
       if (!latest.outbox.some((e) => e.id === entry.id)) continue;
       if (latest.pendingEpoch !== null && entry.operation !== 'reportCommandResult') return;
-      if (blocked.has(entry.stream)) continue;
-      blocked.add(entry.stream);
+      // 구버전 대기함도 ref로 묶어, 보류가 다른 브랜치까지 막지 않게 한다.
+      const stream = reportStream(entry);
+      if (blocked.has(stream)) continue;
+      blocked.add(stream);
       if (entry.nextAt > 0 && !this.deadlines.has(entry.id)) {
         const delay = Math.max(0, Math.min(60_000, entry.nextAt - this.now()));
         this.deadlines.set(entry.id, this.monotonic() + delay);
@@ -152,7 +159,7 @@ export class Outbox {
             return item && ['checked', 'unchecked'].includes(String(c.serverState)) && c.commit === body?.commit && c.ref === body?.ref && c.serverContentHash === designItemHash(item);
           })) {
             await this.state.update(draft => { draft.outbox = draft.outbox.filter(e => e.id !== entry.id); });
-            this.deadlines.delete(entry.id); blocked.delete(entry.stream); continue;
+            this.deadlines.delete(entry.id); blocked.delete(stream); continue;
           }
         }
         if (error instanceof ApiError && error.error?.code === 'EPOCH_MISMATCH') {
@@ -179,7 +186,7 @@ export class Outbox {
             ...(error instanceof ApiError && error.error?.fix && { fix: error.error.fix }),
             ...(error instanceof ApiError && { status: error.status }) };
           await this.state.reject(record);
-          if (!entry.stream.startsWith('attempt:')) blocked.delete(entry.stream);
+          if (!entry.stream.startsWith('attempt:')) blocked.delete(stream);
           this.deadlines.delete(entry.id);
           if (authenticationFailed(error)) {
             try { await this.onRejected?.(structuredClone(record)); } catch { /* 인증 실패는 알림 오류와 관계없이 중지한다. */ }
@@ -193,7 +200,7 @@ export class Outbox {
       await this.state.update((draft) => { draft.outbox = draft.outbox.filter((e) => e.id !== entry.id); });
       await this.state.removeEvidence(entry);
       this.deadlines.delete(entry.id);
-      blocked.delete(entry.stream);
+      blocked.delete(stream);
     }
   }
 }

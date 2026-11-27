@@ -46,9 +46,9 @@ test('Q-a enum·const·format 변화는 타입 지문에 반영하고 enum 순�
   for (const [before, after] of [
     [{ type: 'string', enum: ['a', 'b'] }, { type: 'string', enum: ['a'] }],
     [{ type: 'string', format: 'uuid' }, { type: 'string', format: 'date-time' }],
-    [{ const: 1 }, { const: 2 }],
+    [{ type: 'integer', const: 1 }, { type: 'integer', const: 2 }],
   ]) expect(compareShapes({ fields: schemaFields(before, before, '/body', false) }, { fields: schemaFields(after, after, '/body', false) })?.compat).toBe('breaking');
-  expect(schemaFields({ enum: ['b', 'a'] }, {}, '/body', false)).toEqual(schemaFields({ enum: ['a', 'b'] }, {}, '/body', false));
+  expect(schemaFields({ type: 'string', enum: ['b', 'a'] }, {}, '/body', false)).toEqual(schemaFields({ type: 'string', enum: ['a', 'b'] }, {}, '/body', false));
 });
 
 test('H3 참조된 Multi Format JSON Schema는 풀고 Avro는 unchecked다', () => {

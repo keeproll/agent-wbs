@@ -4,18 +4,22 @@ import { parseContracts } from '../../src/design/parse.ts';
 import { buildDesignSnapshot } from '../../src/design/snapshot.ts';
 import { assertDesignSnapshot } from '../../src/design/validate.ts';
 
-test('M4 실제 저장소의 마이그레이션 26개에서 알려진 테이블 구조를 누적한다', async () => {
+test('M4 실제 마이그레이션 26개는 구조를 표시하되 DO 블록의 영향을 추측해 대조하지 않는다', async () => {
   const root = new URL('../../../agent-wbs/packages/db/migrations/', import.meta.url);
   const paths = readdirSync(root).filter(n => /^00(?:0\d|1\d|2[0-5])_.*\.sql$/.test(n)).sort();
   expect(paths).toHaveLength(26);
   const files = paths.map(n => ({ path: `contracts/db/postgres/migrations/${n}`, raw: readFileSync(new URL(n, root), 'utf8') }));
   const parsed = parseContracts(files);
   expect(parsed.files.filter(f => f.status === 'error')).toEqual([]);
-  expect(parsed.items.filter(i => i.contract).length).toBeGreaterThan(50);
-  expect(parsed.items.find(i => i.itemKey === 'postgres:tasks')?.contract?.fields).toContainEqual({ path: '/task_key', type: 'text', required: true });
-  expect(parsed.items.find(i => i.itemKey === 'postgres:task_specs')?.contract?.fields.some(f => f.path === '/id')).toBe(false);
-  const snapshot = await buildDesignSnapshot({ commit: 'a'.repeat(40), ref: 'main', jobKind: 'design_apply', jobId: 'sql-fixture', fence: 1, files }, { sql: async ({ item }) => item.contract });
-  expect(snapshot.drifts).toEqual([]);
+  expect(parsed.items).toHaveLength(100);
+  expect(parsed.items.every(i => i.contract === undefined)).toBe(true);
+  expect(parsed.items.find(i => i.itemKey === 'postgres:tasks')?.content).toMatchObject({ columns: expect.arrayContaining([expect.objectContaining({ name: 'task_key', type: 'text', nullable: false })]) });
+  expect(parsed.items.find(i => i.itemKey === 'postgres:task_specs')?.content).toMatchObject({ columns: expect.not.arrayContaining([expect.objectContaining({ name: 'id' })]) });
+  let extracted = 0;
+  const snapshot = await buildDesignSnapshot({ commit: 'a'.repeat(40), ref: 'main', jobKind: 'design_apply', jobId: 'sql-fixture', fence: 1, files }, { sql: async ({ item }) => { extracted++; return item.contract; } });
+  expect(extracted).toBe(0);
+  expect(snapshot.drifts).toHaveLength(100);
+  expect(snapshot.drifts.every(d => d.compat === 'unchecked')).toBe(true);
   expect(() => assertDesignSnapshot(snapshot)).not.toThrow();
 });
 

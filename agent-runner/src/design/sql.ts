@@ -16,6 +16,12 @@ interface Table {
 }
 
 const tableName = (name: QName) => name.schema && name.schema !== 'public' ? `${name.schema}.${name.name}` : name.name;
+const typeKey = (name: QName) => JSON.stringify([name.schema ?? 'public', name.name]);
+function columnTypeKey(column: CreateColumnDef): string {
+  let type = column.dataType;
+  while (type.kind === 'array') type = type.arrayOf;
+  return typeKey(type);
+}
 const primary = (table: Table, column: CreateColumnDef) => column.constraints?.some(c => c.type === 'primary key') ||
   table.constraints.some(c => c.type === 'primary key' && c.columns.some(k => k.name === column.name.name));
 const required = (table: Table, column: CreateColumnDef) => Boolean(primary(table, column) || /^(big|small)?serial\d?$/.test(toSql.dataType(column.dataType).trim()) || column.constraints?.some(c => c.type === 'not null' || c.type === 'add generated' && c.expression === undefined));
@@ -66,10 +72,15 @@ function renameColumnReferences(tables: Map<string, Table>, table: Table, before
   }
 }
 
-/** SQL을 실행하지 않고 구문 트리만 읽는다. 지원하지 않는 변경은 전체 SQL 스키마를 읽기 실패로 보고한다. */
+/** SQL을 실행하지 않고 읽는다. 모르는 변경이 닿을 수 있는 구조는 대조하지 않는다. */
 export function sqlItems(files: readonly ContractFile[]): DesignItem[] {
   const tables = new Map<string, Table>();
-  const unchecked = new Set<string>();
+  let unknownScope = false;
+  const uncheckedTypes = new Set<string>();
+  const taintType = (name: QName) => {
+    const key = typeKey(name); uncheckedTypes.add(key);
+    for (const table of tables.values()) if ([...table.columns.values()].some(c => columnTypeKey(c.definition) === key)) table.unchecked = true;
+  };
   const enums = new Map<string, string[]>();
   const columnType = (column: CreateColumnDef) => {
     const name = sqlType(toSql.dataType(column.dataType)), values = enums.get(name);
@@ -83,16 +94,24 @@ export function sqlItems(files: readonly ContractFile[]): DesignItem[] {
           const name = tableName(statement.table);
           let table = tables.get(name);
           if (!table) { table = { path: file.path, name, columns: new Map(), constraints: [], indexes: [], rawConstraints: new Map(), unchecked: true }; tables.set(name, table); }
-          if (statement.type === 'unsupported') unchecked.add(name);
+          if (statement.type === 'unsupported') table.unchecked = true;
           else table?.rawConstraints.set(statement.name ?? statement.sql, statement.sql);
+        } else if (statement.type === 'unsupported' && statement.typeName) taintType(statement.typeName);
+        else if (statement.type === 'unsupported') {
+          unknownScope = true;
+          for (const table of tables.values()) table.unchecked = true;
         }
         continue;
       }
+      if (statement.type === 'create composite type') { taintType(statement.name); continue; }
       if (statement.type === 'create enum') { enums.set(sqlType(tableName(statement.name)), statement.values.map(v => v.value)); continue; }
       if (statement.type === 'alter enum') {
         const name = sqlType(tableName(statement.name)), values = enums.get(name);
         if (statement.change.type === 'add value' && values) values.push(statement.change.add.value);
-        else for (const table of tables.values()) if ([...table.columns.values()].some(c => sqlType(toSql.dataType(c.definition.dataType)) === name)) table.unchecked = true;
+        else {
+          taintType(statement.name);
+          if (statement.change.type === 'rename') taintType({ ...statement.name, ...statement.change.to });
+        }
         continue;
       }
       if (statement.type === 'create table') {
@@ -102,7 +121,7 @@ export function sqlItems(files: readonly ContractFile[]): DesignItem[] {
           throw new Error('SQL 테이블이 중복입니다.');
         }
         if (statement.inherits?.length) throw new Error('상속 테이블은 대조 안 함입니다.');
-        const table: Table = { path: file.path, name, columns: new Map(), constraints: [], indexes: [], rawConstraints: new Map() };
+        const table: Table = { path: file.path, name, columns: new Map(), constraints: [], indexes: [], rawConstraints: new Map(), unchecked: unknownScope };
         for (const column of statement.columns) {
           if (column.kind !== 'column') throw new Error('LIKE 테이블은 대조 안 함입니다.');
           addColumn(table, column);
@@ -197,6 +216,6 @@ export function sqlItems(files: readonly ContractFile[]): DesignItem[] {
     }), constraints: [...table.constraints.map(constraintText), ...table.rawConstraints.values()], usedBy: [],
     indexes: table.indexes.map(i => ({ name: i.indexName?.name ?? '', columns: i.expressions.map(e => toSql.expr(e.expression)).join(', '), kind: i.unique ? 'UNIQUE' : (i.using?.name ?? 'BTREE').toUpperCase() })),
     },
-    ...(!table.unchecked && !unchecked.has(table.name) && { contract: { fields: [...table.columns.entries()].map(([name, { definition: c }]) => ({ path: `/${pointer(name)}`, type: columnType(c), required: required(table, c) })) } }),
+    ...(!table.unchecked && ![...table.columns.values()].some(c => uncheckedTypes.has(columnTypeKey(c.definition))) && { contract: { fields: [...table.columns.entries()].map(([name, { definition: c }]) => ({ path: `/${pointer(name)}`, type: columnType(c), required: required(table, c) })) } }),
   }));
 }
