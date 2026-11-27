@@ -6,7 +6,7 @@ import { PlanningCheckpointError, type PlanningCheckpoint } from '../../src/plan
 import { runPlanningJob, type PlanningJob } from '../../src/planning/index.ts';
 import { PlanningReporter } from '../../src/planning/reporter.ts';
 import { wireProblem } from '../../src/planning/wire.ts';
-import { addOp, bootstrapJob, content, context, fakeApi, HASH, inputJob, NOW, tempHome } from './harness.ts';
+import { addOp, bootstrapJob, content, context, fakeApi, HASH, inputJob, NOW, tempHome, wbsSnapshot } from './harness.ts';
 
 /*
  * 3차 리뷰(Codex, review3-codex.md): 디스크의 어떤 값도 전송 직전 관문(wireProblem)을 거치지 않고 서버로 가지 않는다.
@@ -23,23 +23,27 @@ const lease = (id: string) => ({ id, leaseUntil: NOW, fence: 5 });
 const tasks = [{ taskKey: 'TASK-0001', subjectHash: HASH, content: content() }];
 
 /** 시나리오마다: 준비 실행(앞 단계 기록)과 변조할 job */
-const SCENARIOS: { name: string; prepare?: PlanningJob; job: PlanningJob }[] = [
+const SCENARIOS: { name: string; prepare?: PlanningJob; job: PlanningJob; ops?: unknown[] }[] = [
+  { name: '차이 분석 CP(기존 Task 수정 → taskJudgements)', job: inputJob(), ops: [addOp('NEW-1'), { op: 'modify', task: 'TASK-0001', field: 'doneCond', after: '새 완료 조건' }] },
+  { name: '기존 Task 재판단', job: { ...lease('99999999-0000-4000-8000-999999999999'), kind: 'planning',
+    payload: { tasks, policy: {}, proposal: null, planning: null } } as Job<'planning'> },
   { name: '초기 분석(진행·기술 결정)', job: bootstrapJob() },
   { name: '초안 등록', prepare: bootstrapJob(), job: bootstrapJob({ fence: 2, resumeStep: 'draft' }) },
   { name: '차이 분석 CP', job: inputJob() },
   { name: 'CP 판단', job: { ...lease('44444444-4444-4444-8444-444444444444'), kind: 'planning', payload: { tasks: [], policy: {}, proposal: {
     id: '33333333-3333-4333-8333-000000000001', ops: [{ ...addOp('NEW-1'), t: { ...addOp('NEW-1').t, splitBasis: '계약' } }],
     targets: [{ target: 'TASK-0002', subjectHash: HASH, before: content('이전'), after: content('이후') }],
-    splitSubjectHash: 'd'.repeat(64), splitTasks: [{ taskKey: 'TASK-0001', content: content('원래') }] } } } satisfies Job<'planning'> },
+    splitSubjectHash: 'd'.repeat(64), splitTasks: [{ taskKey: 'TASK-0001', content: content('원래') }] }, planning: null } } as Job<'planning'> },
   { name: 'Planning 세션', job: { ...lease('55555555-5555-4555-8555-555555555555'), kind: 'planning',
     payload: { tasks: [], policy: {}, proposal: null, ...{ planning: { id: '66666666-6666-4666-8666-666666666666', title: '주제', scope: '범위' } } } } },
   { name: '추정·등급 재판단', job: { ...lease('77777777-7777-4777-8777-777777777777'), kind: 'estimate',
     payload: { tasks, policy: { rejudge: { reason: 'grade_changed', trigger: '고정', targets: [{ taskKey: 'TASK-0001', roles: ['dev'] }] } } } } },
-  { name: '분할', job: { ...lease('88888888-0000-4000-8000-888888888888'), kind: 'split', payload: { tasks, policy: {} } } },
+  { name: '분할', job: { ...lease('88888888-0000-4000-8000-888888888888'), kind: 'split', payload: { tasks, policy: {}, wbs: wbsSnapshot() } } },
 ];
 
 /** 본문에서 선택 필드가 아닌 최상위 키. 선택 필드는 지워도 정상 요청이다. */
-const OPTIONAL = new Set(['note', 'conditionJudgements', 'splitJudgements', 'taskJudgements']);
+// judgedRules: submitTaskPlan의 선택 필드(추정 job의 등급 재판단은 보내지 않음). 지워도 계약상 정상 요청이라 형식으로 구별할 수 없다.
+const OPTIONAL = new Set(['note', 'conditionJudgements', 'splitJudgements', 'taskJudgements', 'judgedRules']);
 interface Doc { sent: Record<string, { key: string; request: { body: Record<string, unknown> } }> }
 
 /** 키별 형식 오류 값: 합의 주체 하나, 틀린 신뢰도, 범위 역전, 숫자 아님, 빈 근거, 틀린 hash */
@@ -81,7 +85,9 @@ describe('저장된 보낸 요청을 하나씩 변조하면 아무것도 보내�
     test(scenario.name, async () => {
       if (scenario.prepare) await runPlanningJob(scenario.prepare, (await context(home, fakeApi().api)).ctx);
       const first = fakeApi();
-      expect((await runPlanningJob(scenario.job, (await context(home, first.api)).ctx)).status).toBe('done');
+      const prepared = await context(home, first.api);
+      if (scenario.ops) prepared.claude.ops = scenario.ops as never;
+      expect((await runPlanningJob(scenario.job, prepared.ctx)).status).toBe('done');
       expect(first.schemaErrors).toEqual([]);
       const dir = join(home, 'state', 'planning');
       const files = await readdir(dir);

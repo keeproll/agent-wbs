@@ -30,13 +30,14 @@ export const LABELS: Record<string, string> = {
 
 export async function runBootstrap(run: JobRun<BootJob>, payload: BootstrapPayload): Promise<PlanningOutcome> {
   const { job, ctx, checkpoint } = run;
-  const { commit, instruction, resumeStep, runNo, inputName, techConstraints, decisions } = payload;
+  const { commit, instruction, resumeStep, runNo, inputName, techConstraints, techDecisions, decisionSnapshot, subagentDefs } = payload;
   const ws = ctx.workspace;
-  // 재분석이거나 초안 단계부터라면 기술 결정은 이미 확정됐다(서버 confirmTech가 resumeStep=draft job을 만든다).
-  const techDone = runNo > 1 || resumeStep === 'draft';
+  // 기술 결정이 이미 확정됐는가: 초안 단계부터(confirmTech가 만든 job)·재분석(runNo ≥ 2)·확정 결정 목록이 있고 대기 결정이 없음.
+  // 확정 뒤에는 기술 결정을 다시 제안하지 않는다(서버도 tech 단계가 wait일 때만 받는다).
+  const techDone = runNo > 1 || resumeStep === 'draft' || (techDecisions.length > 0 && !techDecisions.some((d) => d.status === 'pending'));
   let inputPath = '';
-  // 기술 제약은 분석·교차 검토에 넘긴다. 조건부 선호의 판단을 constraintId로 답하게 하기 위해서다(서버 후속 4 계약).
-  const base = () => ({ kind: 'bootstrap' as const, jobId: job.id, instruction, inputPath, commit, ...(techConstraints && { techConstraints }) });
+  // 기술 제약은 분석·교차 검토에 넘긴다. 조건부 선호의 판단을 서버가 발급한 constraintId로 답하게 하기 위해서다(서버 후속 4 계약 2).
+  const base = () => ({ kind: 'bootstrap' as const, jobId: job.id, instruction, inputPath, commit, techConstraints });
   const analyses = () => {
     const pair = { Codex: checkpoint.output('analysis:Codex', isAnalysis), Claude: checkpoint.output('analysis:Claude', isAnalysis) };
     if (!pair.Codex || !pair.Claude) throw new Error('독립 분석 결과가 없습니다.');
@@ -77,7 +78,8 @@ export async function runBootstrap(run: JobRun<BootJob>, payload: BootstrapPaylo
       run: async () => {
         const response = await run.reporter.send('submitDraft', 'draft', async () => {
           // 확정 결정 스냅샷이 오면 함께 넘긴다. 교차 검토의 tech는 팀장이 정하기 전의 「제안」일 뿐이다(독립 리뷰 계약 3).
-          const built = await buildDraft(run, { ...base(), cross: required(checkpoint.output('cross', isCross)), analyses: analyses(), ...(decisions !== undefined && { decisions }) });
+          // 확정 결정 스냅샷(계약 3)과 허용된 하위 Agent 정의(계약 4)를 넘긴다. 교차 검토의 tech는 팀장이 정하기 전의 「제안」일 뿐이다.
+          const built = await buildDraft(run, { ...base(), cross: required(checkpoint.output('cross', isCross)), analyses: analyses(), decisions: decisionSnapshot, subagentDefs });
           await checkpoint.saveOutput(`draft:${job.id}`, { disagreements: built.disagreements }, isDisagreements);
           return { params: { jobId: job.id }, body: { fence: job.fence, ...built.body } };
         });
@@ -110,6 +112,14 @@ function required<T>(value: T | undefined): T {
 /** 작성자 초안에 두 Agent의 독립 추정·판단을 채운다. 작성자의 단독 추정·판단은 쓰지 않는다. */
 async function buildDraft(run: JobRun<BootJob>, request: Parameters<import('./agents.ts').PlanningAgent['draft']>[0]) {
   const content = await run.ask(LABELS.draft ?? '', (a) => a.draft(request));
+  // 하위 Agent는 허용된 정의 id만 쓴다. 다른 id는 서버가 거부하므로 보내기 전에 Agent 출력 오류로 멈춘다.
+  const allowed = new Map(request.subagentDefs.map((d) => [d.id, d.role]));
+  for (const task of content.tasks) {
+    for (const role of ['dev', 'qa'] as const) {
+      const unknown = task.subagents[role].find((id) => !allowed.has(id));
+      if (unknown) throw new PlanningAgentFailed(run.author.name, LABELS.draft ?? '', `${task.ref}의 ${role} 하위 Agent ${unknown}는 허용된 정의가 아닙니다.`);
+    }
+  }
   const refs = content.tasks.map((t) => t.ref);
   const subjects = content.tasks.map((t) => ({ target: t.ref, content: t }));
   const estimates = await run.both('작업량 추정', (a) => a.estimate({ jobId: run.job.id, tasks: subjects.map((s) => ({ ref: s.target, content: s.content })) }));

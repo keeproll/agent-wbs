@@ -6,7 +6,7 @@ import { PlanningCheckpoint, PlanningCheckpoints } from '../../src/planning/chec
 import { agreeEstimates, agreeJudgements } from '../../src/planning/consensus.ts';
 import { runPlanningJob } from '../../src/planning/index.ts';
 import { PlanningReporter } from '../../src/planning/reporter.ts';
-import { apiError, bootstrapJob, content, context, fakeApi, inputJob, NOW, progress, tempHome } from './harness.ts';
+import { apiError, bootstrapJob, content, context, fakeApi, NOW, tempHome, wbsSnapshot } from './harness.ts';
 
 /*
  * M5-04 독립 리뷰(Codex) 지적 1~5의 재현을 「안전한 동작」을 기대하는 회귀 시험으로 바꾼 것.
@@ -98,7 +98,7 @@ describe('지적 2: 실패·상실 결과에 비밀값이 나오지 않는다', 
     const { ctx, claude } = await context(home, fakeApi().api, { secrets: ['review-private-secret'] });
     claude.proposeSplit = () => { throw new TypeError('bad review-private-secret'); };
     const job = { id: '88888888-0000-4000-8000-888888888888', fence: 1, leaseUntil: NOW, kind: 'split' as const,
-      payload: { tasks: [{ taskKey: 'TASK-0001', subjectHash: 'a'.repeat(64), content: content() }], policy: {} } };
+      payload: { tasks: [{ taskKey: 'TASK-0001', subjectHash: 'a'.repeat(64), content: content() }], policy: {}, wbs: wbsSnapshot() } };
     expect(JSON.stringify(await runPlanningJob(job, ctx))).not.toContain('review-private-secret');
   });
 });
@@ -217,58 +217,5 @@ describe('지적 5: 잘못된 Agent 출력은 합의로 바꾸지 않고 오류�
       expect(records.get('T1')?.items).toEqual([]);
       expect(disagreements).toEqual([{ target: 'T1', rule: 'revert', reason: 'invalid' }]);
     }
-  });
-});
-
-describe('잠정 계약(payload.ts): 서버 후속 4의 필드를 받고, 필수 값이 없으면 추측하지 않는다', () => {
-  test('planningJobId·runNo가 없으면 커밋으로 대신하지 않고 실패한다', async () => {
-    for (const drop of ['planningJobId', 'runNo']) {
-      const base = bootstrapJob();
-      const job = { ...base, payload: Object.fromEntries(Object.entries(base.payload).filter(([key]) => key !== drop)) as typeof base.payload };
-      const fake = fakeApi();
-      expect(await runPlanningJob(job, (await context(home, fake.api)).ctx)).toMatchObject({ status: 'failed', error: { code: 'UNSUPPORTED_PAYLOAD' } });
-      expect(fake.calls).toEqual([]);
-    }
-  });
-
-  test('input_diff의 version이 없으면 실패한다', async () => {
-    const job = inputJob();
-    delete (job.payload as Record<string, unknown>).version;
-    expect(await runPlanningJob(job, (await context(home, fakeApi().api)).ctx)).toMatchObject({ status: 'failed', error: { code: 'UNSUPPORTED_PAYLOAD' } });
-  });
-
-  test('기술 제약은 분석·교차 검토에, 확정 결정 스냅샷은 초안 작성에 넘긴다', async () => {
-    const techConstraints = [{ id: 'c1', name: 'QuestDB', level: 'cond', condition: '시계열 데이터가 있으면' }];
-    const decisions = [{ id: 'd1', title: 'Redis', status: 'rejected' }];
-    const first = bootstrapJob();
-    Object.assign(first.payload, { techConstraints });
-    const one = await context(home, fakeApi().api);
-    await runPlanningJob(first, one.ctx);
-    for (const call of [...one.codex.calls, ...one.claude.calls].filter((c) => c.method === 'analyze' || c.method === 'crossReview')) {
-      expect(call.request).toMatchObject({ techConstraints });
-    }
-    const draftJob = bootstrapJob({ fence: 2, resumeStep: 'draft' });
-    Object.assign(draftJob.payload, { techConstraints, decisions });
-    const two = await context(home, fakeApi().api);
-    expect((await runPlanningJob(draftJob, two.ctx)).status).toBe('done');
-    expect(two.claude.calls.find((c) => c.method === 'draft')?.request).toMatchObject({ decisions, techConstraints });
-  });
-
-  test('형식이 틀린 기술 제약은 받지 않는다', async () => {
-    const job = bootstrapJob();
-    Object.assign(job.payload, { techConstraints: [{ id: 'c1', name: 'x', level: 'maybe', condition: null }] });
-    expect(await runPlanningJob(job, (await context(home, fakeApi().api)).ctx)).toMatchObject({ status: 'failed', error: { code: 'UNSUPPORTED_PAYLOAD' } });
-  });
-
-  test('현재 WBS 스냅샷은 영향 분석과 CP 작성에 넘긴다', async () => {
-    const wbs = { tasks: [{ taskKey: 'TASK-0001', status: 'ready' }] };
-    const job = inputJob();
-    Object.assign(job.payload, { wbs });
-    const fake = fakeApi();
-    const { ctx, claude, codex } = await context(home, fake.api);
-    expect((await runPlanningJob(job, ctx)).status).toBe('done');
-    expect(progress(fake.calls).at(-1)).toBe('cp:done');
-    for (const agent of [claude, codex]) expect(agent.calls.find((c) => c.method === 'analyze')?.request).toMatchObject({ wbs });
-    expect(claude.calls.find((c) => c.method === 'proposeChanges')?.request).toMatchObject({ wbs });
   });
 });

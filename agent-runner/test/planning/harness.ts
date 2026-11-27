@@ -190,14 +190,24 @@ export function bootstrapJob(over: { id?: string; fence?: number; resumeStep?: s
   return {
     id: over.id ?? '11111111-1111-4111-8111-111111111111', leaseUntil: NOW, fence: over.fence ?? 1, kind: 'bootstrap',
     payload: { commit: SHA, instruction: '계약 먼저', resumeStep: over.resumeStep ?? null,
-      ...{ planningJobId: over.planningJobId ?? '99999999-9999-4999-8999-999999999999', runNo: over.runNo ?? 1, previousCommit: null } },
+      planningJobId: over.planningJobId ?? '99999999-9999-4999-8999-999999999999', runNo: over.runNo ?? 1, version: 1, previousCommit: null,
+      techConstraints: [], techDecisions: [], techDecisionVersion: 'f'.repeat(64), subagentDefs: [] },
   };
 }
 export function inputJob(over: { id?: string; fence?: number; resumeStep?: string | null } = {}): Kind<'input_diff'> {
   return {
     id: over.id ?? '22222222-2222-4222-8222-222222222222', leaseUntil: NOW, fence: over.fence ?? 1, kind: 'input_diff',
     payload: { commit: SHA, previousCommit: PREV, instruction: '', resumeStep: over.resumeStep ?? null,
-      ...{ planningJobId: '88888888-8888-4888-8888-888888888888', runNo: 1, version: 2 } },
+      planningJobId: '88888888-8888-4888-8888-888888888888', runNo: 1, version: 2, wbs: wbsSnapshot() },
+  };
+}
+
+/** 기존 Task 하나(TASK-0001, WP-01)가 있는 WBS 스냅샷(서버 후속 4 계약 6) */
+export function wbsSnapshot() {
+  return {
+    phases: [{ id: 'PH-01', wps: [{ id: 'WP-01', tasks: ['TASK-0001'] }] }],
+    tasks: [{ taskKey: 'TASK-0001', wp: 'WP-01', status: 'ready' as const, subjectHash: HASH, content: content() }],
+    dependencies: [],
   };
 }
 

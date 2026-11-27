@@ -168,19 +168,38 @@ const outcome = await runPlanningJob(job, {
 - 단계 실패 메모는 비밀값을 가리고(`security/redact.ts`) 300자로 줄인다.
 - `runPlanningJob()`이 돌려주는 모든 결과(실패 메시지 포함)를 한 경계에서 다시 가린다. 이 결과는 finish 본문과 서버 job 이력으로 나가기 때문이다.
 
-## 잠정 계약(`payload.ts`)
+## job payload 계약(`payload.ts`, 서버 후속 4)
 
-서버 후속 4가 job payload 계약을 보완하는 중이다. 계약 밖 값을 읽는 코드는 `payload.ts` 한 파일에만 있다.
+서버 후속 4 계약(`srv4/REPORT.md` 「Runner가 맞춰야 할 계약」)을 생성 타입(`src/api/generated/client.ts`) 그대로 읽는다. 계약 밖 값을 읽는 코드는 없다.
 
-- 받는 값:
-  - bootstrap·input_diff: `planningJobId`·`runNo` 필수, input_diff는 `version`도 필수
-  - bootstrap: `techConstraints[{id,name,level,condition}]`(분석·교차 검토로 넘김), 확정 결정 스냅샷 `decisions`(초안 작성으로 넘김)
-  - input_diff: 현재 WBS 스냅샷 `wbs`(영향 분석·CP 작성으로 넘김)
-  - planning 세션: `planning:{id,title,scope}`
-- 필수 값이 없으면 추측하지 않고 `UNSUPPORTED_PAYLOAD`로 실패한다. 예전의 「커밋으로 대신 만든 작업 키」는 없앴다.
-  - 왜: 같은 커밋으로 Planning 작업이 두 번 생기면 서로의 기록을 이어 쓰게 된다.
-- `decisions`·`wbs`의 모양은 서버 계약을 따르며 Runner는 해석하지 않고 그대로 넘긴다.
-- 계약이 생성 타입(`src/api/generated/client.ts`)에 들어오면 `payload.ts`의 잠정 타입과 `field()`만 지우면 된다.
+- bootstrap·input_diff: `planningJobId`·`runNo`·`version` 필수다. 진행 기록 작업 키는 `planningJobId`로 만든다.
+  - 비었으면 추측하지 않고 `UNSUPPORTED_PAYLOAD`로 실패한다.
+  - 왜: 새 계약 전에 만든 옛 job이 올 수 있다. 서버 보고서도 옛 job은 정리하고 새 입력으로 재발급하라고 한다.
+- bootstrap
+  - `techConstraints[{id,name,level,condition}]`: 분석·교차 검토로 넘긴다. 조건부 선호(`cond`)는 서버가 발급한 `id`로 판단해 기술 결정 제안에 담는다.
+  - `techDecisions`·`techDecisionVersion`: 초안 작성자에게 `decisions{version, decisions, rejected}`로 넘긴다.
+    - `rejected`는 반려된 결정의 `tdKey` 목록이다. 반려된 제안을 사용 기술로 쓰지 않게 하려는 것이다(예: Redis 제안을 반려했으면 초안에 Redis를 쓰지 않는다).
+  - `subagentDefs`: 초안 작성자에게 넘긴다. 초안 Task가 목록에 없는 하위 Agent id를 고르면 보내지 않고 초안 단계 실패다.
+  - 결정 목록이 있고 대기(`pending`) 결정이 없으면 이미 확정된 것으로 보고 기술 결정을 다시 제안하지 않는다.
+- input_diff·split: `wbs{phases,tasks,dependencies}` 스냅샷을 영향 분석·CP 작성·분할 작성에 넘긴다.
+  - 내용이 바뀌는 기존 Task(modify의 `title`·`doneCond`·`scopeAdd`·`acAdd`)는 `taskJudgements`로 판단을 보낸다.
+    - 판단 대상은 스냅샷의 현재 내용과 그 Task의 변경 목록이다.
+    - 두 Agent가 각자 판단하고 합의한 것만 남긴다.
+    - 「변경 후 내용」과 hash는 Runner가 만들지 않는다. 적용 규칙(예: `acAdd` 문장 해석)과 hash 계산은 서버가 기준이다.
+  - 우선순위·담당 변경은 판단 대상이 아니다. 스냅샷에 없는 Task를 고치려 하면 보내지 않는다.
+- planning: 셋 중 하나다.
+  - `proposal`: CP 판단
+  - `planning`: Planning 세션
+  - `tasks`(1개 이상): 기존 Task 재판단. Task마다 등급·판단을 보내고, 판단에는 payload hash를 그대로 붙인다.
+  - 하나도 없으면 `UNSUPPORTED_PAYLOAD`다.
+- **`VERSION_CONFLICT`**: 이 job의 판단 전제(기술 결정 버전·WBS 스냅샷)가 지금 서버 값과 다르다는 뜻이다.
+  - 같은 키로 다시 보내지 않는다.
+  - 초기 분석·차이 분석은 그 단계를 실패로 보고하고, 결과 코드도 `VERSION_CONFLICT`로 남긴다.
+  - 팀장이 「다시 시도」하면 서버가 현재 스냅샷과 새 `runNo`로 job을 다시 만든다. 기술 결정이 바뀌었으면 `codex`부터, WBS가 바뀌었으면 `diff`부터다.
+- 새 필드도 전송 직전 관문(`wire.ts`)을 지난다: `taskJudgements`(taskKey 형식·중복, 합의 주체 둘), Task 재판단 `judgedRules`의 payload hash.
+- 실제 서버 시험: `agent-wbs/apps/api/test/planning-runner.db.test.ts`(`pnpm -C agent-wbs test:db -- planning-runner`)가 두 경로를 실제 서버 경로·DB 위에서 끝까지 돌린다.
+  - 초기 분석: 등록 → 분석 → 제안 → 확정(반려 포함) → 초안 → 승인
+  - 차이 분석: 두 번 연속
 
 ## 결과 코드
 
@@ -189,7 +208,8 @@ const outcome = await runPlanningJob(job, {
 | failed | `PLANNING_STEP_FAILED` | 초기 분석·차이 분석의 한 단계가 실패했다. 실패 단계를 보고했다 |
 | failed | `INVALID_RESUME_STEP` | Runner가 이어 할 수 없는 재개 단계다(예: 팀장 단계) |
 | failed | `PLANNING_AGENT_FAILED` | Agent 호출이나 합의가 실패했다. 아무것도 보내지 않았다 |
-| failed | `UNSUPPORTED_PAYLOAD` | 처리할 내용이 없거나 필수 값(planningJobId·runNo·version)이 없는 payload다 |
+| failed | `UNSUPPORTED_PAYLOAD` | 처리할 내용이 없거나 필수 값(planningJobId·runNo·version·wbs 등)이 없는 payload다 |
+| failed | `VERSION_CONFLICT` | 판단 전제(기술 결정·WBS)가 바뀌어 서버가 받지 않았다. 「다시 시도」가 새 스냅샷으로 다시 분석한다 |
 | failed | `CHECKPOINT_UNREADABLE` | 진행 기록을 읽지 못했다 |
 | failed | 서버 오류 코드 | 서버가 보고를 거부했다(예: `VERSION_CONFLICT`) |
 | lost | `LEASE_LOST`·`EPOCH_MISMATCH`·`AUTHENTICATION_FAILED` | 더 보고하지 않는다 |

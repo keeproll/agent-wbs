@@ -43,7 +43,8 @@ const REPORTS: Record<string, { params: readonly string[]; body: (b: Rec) => str
   submitPlanningReviews: { params: ['id'], body: (b) => (!isText(b.jobId) ? 'jobId가 없습니다' : !nonEmpty(b.reviews) ? 'reviews 목록이 없습니다' : null) },
   submitPlanningProposal: { params: [], body: (b) =>
     !isText(b.jobId) ? 'jobId가 없습니다' : !isText(b.title) ? 'title이 없습니다' : !isText(b.reason) ? 'reason이 없습니다'
-      : !(isRecord(b.source) && isText(b.source.kind)) ? 'source가 없습니다' : !nonEmpty(b.ops) ? 'ops 목록이 없습니다' : null },
+      : !(isRecord(b.source) && isText(b.source.kind)) ? 'source가 없습니다' : !nonEmpty(b.ops) ? 'ops 목록이 없습니다'
+        : b.taskJudgements === undefined ? null : taskJudgementsProblem(b.taskJudgements) },
   submitProposalJudgements: { params: ['id'], body: (b) => {
     if (!isText(b.jobId)) return 'jobId가 없습니다';
     if (!Array.isArray(b.judgements)) return 'judgements 목록이 없습니다';
@@ -57,7 +58,9 @@ const REPORTS: Record<string, { params: readonly string[]; body: (b: Rec) => str
   submitTaskPlan: { params: ['taskKey'], body: (b) =>
     !isText(b.jobId) ? 'jobId가 없습니다' : !(isRecord(b.grades) && isRecord(b.grades.dev) && isRecord(b.grades.qa)) ? 'grades(dev·qa)가 없습니다'
       : !(isRecord(b.subagents) && Array.isArray(b.subagents.dev) && Array.isArray(b.subagents.qa)) ? 'subagents가 없습니다'
-        : !('conflictGroup' in b) || !(b.conflictGroup === null || isRecord(b.conflictGroup)) ? 'conflictGroup이 없습니다' : null },
+        : !('conflictGroup' in b) || !(b.conflictGroup === null || isRecord(b.conflictGroup)) ? 'conflictGroup이 없습니다'
+          // 기존 Task 재판단은 작업 payload의 hash를 그대로 돌려보낸다.
+          : b.judgedRules === undefined ? null : recordProblem(b.judgedRules, true) },
   submitEstimates: { params: [], body: (b) => {
     if (!isText(b.jobId)) return 'jobId가 없습니다';
     if (!nonEmpty(b.items)) return 'items 목록이 없습니다';
@@ -71,6 +74,20 @@ const REPORTS: Record<string, { params: readonly string[]; body: (b: Rec) => str
 };
 
 export const PLANNING_REPORT_KINDS = Object.keys(REPORTS);
+
+/** 내용이 바뀌는 기존 Task의 판단(서버 후속 4로 input_diff·split에서 보냄). taskKey 중복 금지, hash는 서버가 붙인다. */
+function taskJudgementsProblem(value: unknown): string | null {
+  if (!Array.isArray(value)) return 'taskJudgements가 목록이 아닙니다';
+  const seen = new Set<string>();
+  for (const [i, entry] of value.entries()) {
+    if (!isRecord(entry) || !isText(entry.taskKey) || !/^TASK-[0-9]{4,}$/.test(entry.taskKey)) return `taskJudgements[${String(i)}].taskKey가 올바르지 않습니다`;
+    if (seen.has(entry.taskKey)) return `taskJudgements의 ${entry.taskKey}가 두 번 있습니다`;
+    seen.add(entry.taskKey);
+    const problem = recordProblem(entry.judgedRules, false);
+    if (problem) return `taskJudgements[${String(i)}]: ${problem}`;
+  }
+  return null;
+}
 
 /** 판단 기록 하나(D-33·D-34). 합의 주체는 Claude·Codex 둘이어야 한다. */
 function recordProblem(record: unknown, needsHash: boolean): string | null {

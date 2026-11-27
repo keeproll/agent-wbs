@@ -1,5 +1,5 @@
 import type { ClaimedJob } from '../api/generated/client.ts';
-import { PlanningStopped } from './reporter.ts';
+import { PlanningReportFailed, PlanningStopped } from './reporter.ts';
 import { JobRun, type PlanningOutcome } from './run.ts';
 
 /*
@@ -69,9 +69,14 @@ export async function runSteps(run: JobRun<Stepped>, steps: readonly Step[], hoo
   } catch (error) {
     if (error instanceof PlanningStopped) throw error;
     if (!current) throw error;
-    const message = run.note(`${current.label} 실패: ${messageOf(error)}`);
+    // VERSION_CONFLICT: 이 job의 판단 전제(기술 결정 버전·WBS 스냅샷)가 지금 서버 값과 다르다(서버 후속 4).
+    // 같은 키로 다시 보내지 않고 단계 실패로 남긴다. 팀장의 「다시 시도」는 서버가 새 스냅샷·새 runNo로 job을 다시 만든다.
+    const stale = error instanceof PlanningReportFailed && error.code === 'VERSION_CONFLICT';
+    const message = run.note(stale
+      ? `${current.label} 실패: 분석하는 동안 기술 결정이나 WBS가 바뀌어 서버가 받지 않았습니다(VERSION_CONFLICT). 다시 시도하면 새 내용으로 다시 분석합니다.`
+      : `${current.label} 실패: ${messageOf(error)}`);
     try { await report(current, 'fail', message); }
     catch (reportError) { if (reportError instanceof PlanningStopped) throw reportError; }
-    return { status: 'failed', error: { code: 'PLANNING_STEP_FAILED', message } };
+    return { status: 'failed', error: { code: stale ? 'VERSION_CONFLICT' : 'PLANNING_STEP_FAILED', message } };
   }
 }

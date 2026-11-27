@@ -1,7 +1,7 @@
 import type { ApiRequest } from '../api/client.ts';
 import type { Agent, Confidence, JudgedContent, PlanningProposalOp, PlanningSplitProposalOp } from '../api/generated/client.ts';
 import type { InputDiff } from '../git/inputs.ts';
-import type { DecisionSnapshot, TechConstraint, WbsSnapshot } from './payload.ts';
+import type { DecisionSnapshot, SubagentDef, TechConstraint, WbsSnapshot } from './payload.ts';
 
 /*
  * Planning Agent(계획을 세우는 Agent) 포트.
@@ -34,9 +34,9 @@ export interface AnalysisRequest {
   previousCommit?: string;
   diff?: InputDiff[];
   scope?: { title: string; scope: string };
-  /** 초기 분석: 등록 시점의 기술 제약(잠정 계약, payload.ts) */
+  /** 초기 분석: 등록 시점의 기술 제약. 조건부 선호는 constraintId로 판단해 답한다. */
   techConstraints?: TechConstraint[];
-  /** 차이 분석: 입력 버전 고정 시점의 현재 WBS(잠정 계약, payload.ts) */
+  /** 차이 분석: 입력 버전 고정 시점의 현재 WBS */
   wbs?: WbsSnapshot;
 }
 
@@ -56,9 +56,11 @@ type DraftBody = Omit<ApiRequest<'submitDraft'>['body'], 'fence'>;
 export type DraftContent = Omit<DraftBody, 'tasks'> & { tasks: Omit<DraftBody['tasks'][number], 'judgedRules'>[] };
 export interface DraftRequest {
   jobId: string; instruction: string; inputPath: string; commit: string; cross: CrossReview; analyses: Record<AgentName, Analysis>;
-  techConstraints?: TechConstraint[];
-  /** 팀장이 확정한 결정 스냅샷(잠정 계약). 반려된 제안은 초안에 쓰지 않는다. */
-  decisions?: DecisionSnapshot;
+  techConstraints: TechConstraint[];
+  /** 팀장이 확정한 결정 스냅샷(fixed·approved·rejected 구별). 반려된 제안(rejected의 tdKey)은 사용 기술로 쓰지 않는다. */
+  decisions: DecisionSnapshot;
+  /** 초안 Task의 하위 Agent는 이 목록의 id만 고른다. */
+  subagentDefs: SubagentDef[];
 }
 
 type StripJudged<T> = T extends { op: 'add'; t: infer U } ? Omit<T, 't'> & { t: Omit<U, 'judgedRules'> } : T;
@@ -66,8 +68,8 @@ export type ProposalOp = StripJudged<PlanningProposalOp>;
 export type SplitProposalOp = StripJudged<PlanningSplitProposalOp>;
 export interface ProposalContent { title: string; reason: string; ops: ProposalOp[] }
 export interface SplitContent { title: string; reason: string; ops: SplitProposalOp[] }
-export interface ProposalRequest { jobId: string; instruction: string; inputPath: string; diff: InputDiff[]; analyses: Record<AgentName, Analysis>; wbs?: WbsSnapshot }
-export interface SplitRequest { jobId: string; task: { taskKey: string; content: JudgedContent }; policy: Record<string, unknown> }
+export interface ProposalRequest { jobId: string; instruction: string; inputPath: string; diff: InputDiff[]; analyses: Record<AgentName, Analysis>; wbs: WbsSnapshot }
+export interface SplitRequest { jobId: string; task: { taskKey: string; content: JudgedContent }; policy: Record<string, unknown>; wbs: WbsSnapshot }
 
 type Plan = ApiRequest<'submitTaskPlan'>['body'];
 export interface TaskPlanRequest { jobId: string; taskKey: string; content: JudgedContent; roles: string[]; policy: Record<string, unknown> }

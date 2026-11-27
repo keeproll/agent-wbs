@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import type { ClaimedJob } from '../../src/api/generated/client.ts';
 import { runPlanningJob } from '../../src/planning/index.ts';
-import { addOp, bodyOf, content, context, fakeApi, HASH, NOW, tempHome } from './harness.ts';
+import { addOp, bodyOf, content, context, fakeApi, HASH, NOW, tempHome, wbsSnapshot } from './harness.ts';
 
 let home: string;
 let cleanup: () => Promise<void>;
@@ -22,7 +22,7 @@ function judgementJob(split: boolean): Job<'planning'> {
     ? { id: '33333333-3333-4333-8333-000000000001', ops: [{ ...addOp('NEW-1'), t: { ...addOp('NEW-1').t, splitBasis: '계약 먼저' } }], targets,
       splitSubjectHash: SPLIT_HASH, splitTasks: [{ taskKey: 'TASK-0001', content: content('원래') }] }
     : { id: '33333333-3333-4333-8333-000000000001', ops: [addOp('NEW-1')], targets, splitSubjectHash: null, splitTasks: null };
-  return { ...lease('44444444-4444-4444-8444-444444444444'), kind: 'planning', payload: { tasks: [], policy: { judgedRules: ['revert', 'contract'] }, proposal } };
+  return { ...lease('44444444-4444-4444-8444-444444444444'), kind: 'planning', payload: { tasks: [], policy: { judgedRules: ['revert', 'contract'] }, proposal, planning: null } } as Job<'planning'>;
 }
 
 describe('CP 판단 job(planning + proposal)', () => {
@@ -98,7 +98,7 @@ describe('Planning 세션 job(planning + payload.planning, G§4.5)', () => {
   test('세션도 CP도 없는 planning payload는 추측하지 않고 실패한다', async () => {
     const fake = fakeApi();
     const { ctx } = await context(home, fake.api);
-    const outcome = await runPlanningJob({ ...lease('55555555-5555-4555-8555-000000000000'), kind: 'planning', payload: { tasks: [], policy: {}, proposal: null } }, ctx);
+    const outcome = await runPlanningJob({ ...lease('55555555-5555-4555-8555-000000000000'), kind: 'planning', payload: { tasks: [], policy: {}, proposal: null, planning: null } } as never, ctx);
     expect(outcome).toMatchObject({ status: 'failed', error: { code: 'UNSUPPORTED_PAYLOAD' } });
     expect(fake.calls).toEqual([]);
   });
@@ -145,7 +145,7 @@ describe('추정 job(estimate)', () => {
 describe('분할 job(split, G§5.2-1)', () => {
   const splitJob = (): Job<'split'> => ({
     ...lease('88888888-0000-4000-8000-888888888888'), kind: 'split',
-    payload: { tasks: [{ taskKey: 'TASK-0001', subjectHash: HASH, content: content('큰 Task') }], policy: { split: { maxHours: 4 } } },
+    payload: { tasks: [{ taskKey: 'TASK-0001', subjectHash: HASH, content: content('큰 Task') }], policy: { split: { maxHours: 4 } }, wbs: wbsSnapshot() },
   });
 
   test('작성자가 나눈 CP에 새 Task별 판단과 분할 판단(D-34)을 두 Agent 합의로 붙여 분할 CP로 제출한다', async () => {

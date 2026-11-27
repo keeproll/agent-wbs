@@ -2,9 +2,9 @@ import { isDeepStrictEqual } from 'node:util';
 import type { ClaimedJob } from '../api/generated/client.ts';
 import { ANALYSIS_ORDER, CP_RULES, SPLIT_RULES, type AgentName, type Analysis, type SplitRule } from './agents.ts';
 import { isAnalysis, isAnalysisPair, isCross, isDisagreements, isEstimates } from './guards.ts';
-import { sessionOf } from './payload.ts';
+import { planningMode, splitWbs } from './payload.ts';
 import { agreeEstimates, agreeJudgements, agreeSplitJudgements } from './consensus.ts';
-import { judgeAdds, sendProposal } from './input-diff.ts';
+import { judgeChanges, sendProposal } from './input-diff.ts';
 import { PlanningCheckpointError } from './checkpoint.ts';
 import { JobRun, PlanningAgentFailed, type PlanningOutcome } from './run.ts';
 
@@ -20,11 +20,35 @@ type Job<K extends ClaimedJob['kind']> = Extract<ClaimedJob, { kind: K }>;
 const unsupported = (message: string): PlanningOutcome => ({ status: 'failed', error: { code: 'UNSUPPORTED_PAYLOAD', message } });
 
 export async function runPlanning(run: JobRun<Job<'planning'>>): Promise<PlanningOutcome> {
-  const { payload } = run.job;
-  if (payload.proposal) return judgeProposal(run, payload.proposal);
-  const session = sessionOf(run.job);
-  if (session) return runSession(run, session);
-  return unsupported('판단할 CP도 Planning 세션도 없는 planning 작업입니다.');
+  // 계약 5: CP 판단(proposal) · Planning 세션(planning) · 기존 Task 재판단(tasks) 중 하나다.
+  const mode = planningMode(run.job);
+  if (!mode) return unsupported('판단할 CP·Planning 세션·Task가 모두 없는 planning 작업입니다.');
+  if (mode.mode === 'proposal') return judgeProposal(run, mode.proposal);
+  if (mode.mode === 'session') return runSession(run, mode.session);
+  return rejudgeTasks(run);
+}
+
+/**
+ * 기존 Task 재판단(planning:null, proposal:null, tasks ≥ 1). Task마다 작성자가 등급·하위 Agent·충돌 묶음을 정하고,
+ * 규칙 5·7·9는 두 Agent가 각자 판단해 합의한 것만 payload hash를 그대로 붙여 보낸다(POST /planning/tasks/:taskKey/plan).
+ */
+async function rejudgeTasks(run: JobRun<Job<'planning'>>): Promise<PlanningOutcome> {
+  const { tasks, policy } = run.job.payload;
+  const rules = enabledRules(policy);
+  let disagreements: unknown[] = [];
+  for (const task of tasks) {
+    await run.reporter.send('submitTaskPlan', `plan:${task.taskKey}`, async () => {
+      const plan = await run.ask('Task 재판단', (a) => a.planTask({ jobId: run.job.id, taskKey: task.taskKey, content: task.content, roles: ['dev', 'qa'], policy }));
+      const verdicts = rules.length ? await run.both('분할 규칙 판단', (a) => a.judgeRules({ jobId: run.job.id, rules, subjects: [{ target: task.taskKey, content: task.content }] })) : { Claude: [], Codex: [] };
+      const judged = agreeJudgements([task.taskKey], rules, verdicts, { judgedAt: run.iso(), sourceRef: run.job.id, subjectHash: () => task.subjectHash });
+      disagreements = [...disagreements, ...judged.disagreements];
+      const currentGroup = task.content.conflictGroup;
+      const conflictGroup = plan.conflictGroup !== undefined ? plan.conflictGroup : currentGroup ? { name: currentGroup, reason: '기존 충돌 묶음 유지' } : null;
+      return { params: { taskKey: task.taskKey }, body: { jobId: run.job.id, fence: run.job.fence, grades: plan.grades, subagents: plan.subagents, conflictGroup,
+        judgedRules: judged.records.get(task.taskKey) as never } };
+    });
+  }
+  return { status: 'done', result: { tasks: tasks.length, disagreements } };
 }
 
 /** 켜진 규칙만 판단한다. 서버가 policy.judgedRules로 알려 준다(없으면 세 규칙 모두). */
@@ -152,21 +176,23 @@ export async function runSplit(run: JobRun<Job<'split'>>): Promise<PlanningOutco
   const { tasks, policy } = run.job.payload;
   const [task] = tasks;
   if (!task || tasks.length !== 1) return unsupported('분할 작업은 Task 하나를 대상으로 합니다.');
+  // 원 Task의 작업 묶음과 선행·후행 그래프가 든 WBS 스냅샷(계약 6). 새 Task의 wp와 순서 보장(D-34)을 이 위에서 설계한다.
+  const wbs = splitWbs(run.job);
   const response = await sendProposal(run, async () => {
-    const content = await run.ask('분할 제안', (a) => a.proposeSplit({ jobId: run.job.id, task, policy }));
+    const content = await run.ask('분할 제안', (a) => a.proposeSplit({ jobId: run.job.id, task, policy, wbs }));
     const adds = content.ops.flatMap((op) => (op.op === 'add' ? [op] : []));
     if (adds.length === 0) throw new PlanningAgentFailed(run.author.name, '분할 제안', '나눈 새 Task가 없습니다.');
     // 분할 CP의 새 Task는 분할 근거가 필수다(contracts §2.1). 비었으면 문구를 지어 넣지 않고 실패한다(data-model §2.3 basis).
     const blank = adds.find((op) => !op.t.splitBasis.trim());
     if (blank) throw new PlanningAgentFailed(run.author.name, '분할 제안', `${blank.ref}의 분할 근거가 비었습니다.`);
-    const { ops, disagreements } = await judgeAdds(run, content.ops);
+    const { ops, taskJudgements, disagreements } = await judgeChanges(run, content.ops, wbs);
     const splitTasks = [{ taskKey: task.taskKey, content: task.content }];
     const answers = await run.both('분할 판단', (a) => a.judgeSplit({ jobId: run.job.id, rules: CP_RULES, ops: content.ops, splitTasks }));
     const split = agreeSplitJudgements(CP_RULES, answers, { judgedAt: run.iso(), sourceRef: run.job.id });
     await run.checkpoint.saveOutput(`split:${run.job.id}`, { disagreements: [...disagreements, ...split.disagreements] }, isDisagreements);
     return {
       body: { jobId: run.job.id, fence: run.job.fence, title: content.title, reason: content.reason, source: { kind: 'split' as const, id: task.taskKey },
-        ops: ops as never, splitJudgements: split.record },
+        ops: ops as never, splitJudgements: split.record, ...(taskJudgements.length && { taskJudgements: taskJudgements as never }) },
     };
   });
   if (!response) return unsupported('분할 제안을 만들지 못했습니다.');

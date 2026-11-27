@@ -2,11 +2,11 @@ import type { ApiRequest } from '../api/client.ts';
 import type { ClaimedJob, PlanningProposalOp } from '../api/generated/client.ts';
 import { SPLIT_RULES, type ProposalOp, type SplitProposalOp } from './agents.ts';
 import { isAnalysisPair, isDiff, isDisagreements } from './guards.ts';
-import type { InputDiffPayload } from './payload.ts';
+import type { InputDiffPayload, WbsSnapshot } from './payload.ts';
 import { LABELS } from './bootstrap.ts';
 import { agreeJudgements, type Disagreement } from './consensus.ts';
 import { runSteps, type Step } from './steps.ts';
-import { JobRun, type PlanningOutcome } from './run.ts';
+import { JobRun, PlanningAgentFailed, type PlanningOutcome } from './run.ts';
 
 /*
  * 입력 자료 차이 분석 — G§4.2 ②, 원본 단계 P L4490.
@@ -21,13 +21,12 @@ import { JobRun, type PlanningOutcome } from './run.ts';
  * 영향받는 Task가 없으면 CP 없이 cp 단계를 「변경 없음」으로 끝낸다(CP는 변경이 1개 이상이어야 한다).
  */
 
-type DiffJob = Extract<ClaimedJob, { kind: 'input_diff' }>;
 
-export async function runInputDiff(run: JobRun<DiffJob>, payload: InputDiffPayload): Promise<PlanningOutcome> {
+export async function runInputDiff(run: JobRun<Extract<ClaimedJob, { kind: 'input_diff' }>>, payload: InputDiffPayload): Promise<PlanningOutcome> {
   const { job, ctx, checkpoint } = run;
   const { commit, previousCommit, instruction, inputName, wbs } = payload;
-  // 현재 WBS 스냅샷이 오면 영향 분석·CP 작성에 넘긴다(서버 후속 4 계약). 없으면 지금처럼 새 Task만 판단한다.
-  const withWbs = wbs !== undefined ? { wbs } : {};
+  // 현재 WBS 스냅샷을 영향 분석·CP 작성에 넘긴다(서버 후속 4 계약 6). 기존 Task 수정의 판단도 이 스냅샷으로 만든다.
+  const withWbs = { wbs };
   const ws = ctx.workspace;
   let inputPath = '';
   let result: { proposalId: string | null; cpKey: string | null; disagreements: Disagreement[] } = { proposalId: null, cpKey: null, disagreements: [] };
@@ -80,9 +79,10 @@ export async function runInputDiff(run: JobRun<DiffJob>, payload: InputDiffPaylo
         const response = await sendProposal(run, async () => {
           const content = await run.ask(LABELS.cp ?? '', (a) => a.proposeChanges({ jobId: job.id, instruction, inputPath, diff: diff(), analyses: impact(), ...withWbs }));
           if (content.ops.length === 0) { empty = true; return null; }
-          const { ops, disagreements } = await judgeAdds(run, content.ops);
+          const { ops, taskJudgements, disagreements } = await judgeChanges(run, content.ops, wbs);
           await checkpoint.saveOutput(`cp:${job.id}`, { disagreements }, isDisagreements);
-          return { body: { jobId: job.id, fence: job.fence, title: content.title, reason: content.reason, source: { kind: 'input' as const }, ops: ops as PlanningProposalOp[] } };
+          return { body: { jobId: job.id, fence: job.fence, title: content.title, reason: content.reason, source: { kind: 'input' as const }, ops: ops as PlanningProposalOp[],
+            ...(taskJudgements.length && { taskJudgements: taskJudgements as never }) } };
         });
         if (empty || !response) return '변경 없음 — 영향받는 Task가 없어 변경 제안을 만들지 않았습니다.';
         const saved = checkpoint.output(`cp:${job.id}`, isDisagreements);
@@ -105,13 +105,36 @@ export async function sendProposal(run: JobRun, build: () => Promise<ProposalReq
   return run.reporter.send('submitPlanningProposal', 'proposal', request);
 }
 
-/** 새 Task(add op)마다 규칙 5·7·9를 두 Agent가 판단하고 합의한 기록을 t.judgedRules에 넣는다. hash는 서버가 붙인다. */
-export async function judgeAdds(run: JobRun, ops: readonly (ProposalOp | SplitProposalOp)[]) {
+/** 판단 대상 내용(JudgedContent)을 바꾸는 수정 항목. 우선순위·담당 변경은 판단 대상이 아니다(data-model §2.3-1). */
+const CONTENT_FIELDS = new Set(['title', 'doneCond', 'scopeAdd', 'acAdd']);
+
+/**
+ * CP의 판단 기록을 채운다. 두 Agent가 각자 판단하고 합의한 것만 남긴다(D-33).
+ * - 새 Task(add op): 그 Task 내용(op.t)을 판단해 `t.judgedRules`에 넣는다.
+ * - 내용이 바뀌는 기존 Task(modify op의 title·doneCond·scopeAdd·acAdd): WBS 스냅샷의 현재 내용과 그 Task의 변경 목록을 함께 판단해
+ *   `taskJudgements[{taskKey,judgedRules}]`로 보낸다(서버 후속 4 계약 6).
+ *   - 「변경 후 내용」을 Runner가 직접 만들지 않는다. acAdd 문장 해석 같은 적용 규칙은 서버(simulate)가 기준이기 때문이다.
+ *   - hash도 보내지 않는다. 서버가 변경 적용 후 내용으로 계산해 붙인다(contracts §3.3).
+ * - 스냅샷에 없는 Task를 바꾸려 하면 Agent 출력 오류다(서버도 거부한다).
+ */
+export async function judgeChanges(run: JobRun, ops: readonly (ProposalOp | SplitProposalOp)[], wbs: WbsSnapshot) {
+  const current = new Map(wbs.tasks.map((t) => [t.taskKey, t]));
+  const changes = new Map<string, unknown[]>();
+  for (const op of ops) {
+    if (op.op !== 'modify' || !CONTENT_FIELDS.has(op.field)) continue;
+    if (!current.has(op.task)) throw new PlanningAgentFailed(run.author.name, '변경 제안', `${op.task}는 WBS 스냅샷에 없는 Task입니다.`);
+    changes.set(op.task, [...(changes.get(op.task) ?? []), op]);
+  }
   const adds = ops.flatMap((op) => (op.op === 'add' ? [op] : []));
-  if (adds.length === 0) return { ops: [...ops], disagreements: [] as Disagreement[] };
-  const subjects = adds.map((op) => ({ target: op.ref, content: op.t }));
+  const subjects = [
+    ...adds.map((op) => ({ target: op.ref, content: op.t })),
+    ...[...changes].map(([taskKey, list]) => ({ target: taskKey, content: { before: current.get(taskKey)?.content, changes: list } })),
+  ];
+  if (subjects.length === 0) return { ops: [...ops], taskJudgements: [] as { taskKey: string; judgedRules: unknown }[], disagreements: [] as Disagreement[] };
   const verdicts = await run.both('분할 규칙 판단', (a) => a.judgeRules({ jobId: run.job.id, rules: SPLIT_RULES, subjects }));
   const { records, disagreements } = agreeJudgements(subjects.map((s) => s.target), SPLIT_RULES, verdicts, { judgedAt: run.iso(), sourceRef: run.job.id });
-  const judged = ops.map((op) => (op.op === 'add' ? { ...op, t: { ...op.t, judgedRules: records.get(op.ref) ?? { schemaVersion: 1 as const, items: [] } } } : op));
-  return { ops: judged, disagreements };
+  const empty = { schemaVersion: 1 as const, items: [] };
+  const judged = ops.map((op) => (op.op === 'add' ? { ...op, t: { ...op.t, judgedRules: records.get(op.ref) ?? empty } } : op));
+  const taskJudgements = [...changes.keys()].map((taskKey) => ({ taskKey, judgedRules: records.get(taskKey) ?? empty }));
+  return { ops: judged, taskJudgements, disagreements };
 }
