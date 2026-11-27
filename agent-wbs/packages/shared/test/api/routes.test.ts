@@ -222,7 +222,9 @@ test('원본·계획에 없는 경로를 만들지 않았다', () => {
   const followup = ['PATCH /api/project', 'POST /api/project/inputs/check', 'GET /api/proposals/:id',
     'PATCH /api/proposals/:id', 'DELETE /api/proposals/:id', 'POST /api/proposals/:id/exclude',
     'POST /api/verifications/:id/evidence', 'GET /api/settings/split/violations', 'GET /api/settings/agent-usage',
-    'POST /api/alerts/:id/ack', 'POST /api/settings/readiness/check'];
+    'POST /api/alerts/:id/ack', 'POST /api/settings/readiness/check',
+    // M6 통합: M6-07 남은 연결 「브랜치 목록 API 없음」(coordinator 지시). 계획 문서(contracts §2.3 설계)에 아직 없어 보고서에 반영 문구를 적었다.
+    'GET /api/projects/:projectId/design/refs'];
   const known = new Set([
     'GET /health',
     'GET /health/db',

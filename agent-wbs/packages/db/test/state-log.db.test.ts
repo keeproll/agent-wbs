@@ -166,7 +166,8 @@ test('0036 전부터 있던 행은 seed로 한 번 남고 커밋 시계가 매�
     await cp(fileURLToPath(new URL('../migrations', import.meta.url)), folder, { recursive: true });
     const path = join(folder, 'meta/_journal.json');
     const journal = JSON.parse(await readFile(path, 'utf8')) as { entries: { tag: string }[] };
-    journal.entries = journal.entries.filter((e) => !e.tag.startsWith('0036_') && !e.tag.startsWith('0037_'));
+    // M6 통합: 0036 이후 전부를 뺀다. 0038(옛 0047) 이름 채움이 0036 상태 이력을 읽으므로, 실제 업그레이드 순서(0036 → 0037 → 0038 …)와 같게 둔다.
+    journal.entries = journal.entries.filter((e) => e.tag < '0036');
     await writeFile(path, JSON.stringify(journal));
     await recreateTestDatabase(old.href);
     await migrate(drizzle(pool), { migrationsFolder: folder });

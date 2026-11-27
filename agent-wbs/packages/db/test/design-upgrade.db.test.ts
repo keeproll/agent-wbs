@@ -40,7 +40,7 @@ test('옛 번호 0049(메일 큐)를 적용한 DB에도 0042·0043을 빠뜨리�
     await migrate(drizzle(pool), { migrationsFolder: folder });
     expect((await pool.query("select 1 from information_schema.columns where table_name='design_snapshots' and column_name='content'")).rowCount).toBe(0);
     // 2) runMigrations는 보충한다
-    await runMigrations(pool, { migrationsFolder: folder });
+    await runMigrations(pool, folder);
     expect((await pool.query("select 1 from information_schema.columns where table_name='design_snapshots' and column_name='content'")).rowCount).toBe(1);
     expect((await pool.query('select count(*)::int n from drizzle.__drizzle_migrations')).rows[0]?.n).toBe(28);
     const project = (await pool.query<{ id: string }>("insert into projects(name,repo_url,repo_owner,repo_name,lead_instruction,phase) values('legacy','https://github.com/o/r','o','r','','active') returning id")).rows[0]?.id;
@@ -49,7 +49,7 @@ test('옛 번호 0049(메일 큐)를 적용한 DB에도 0042·0043을 빠뜨리�
       ($1,'second','REST','호환','open',null,'2026-01-02T00:00:00Z'),
       ($1,'numbered','REST','호환','open','{"displayKey":"DR-99"}','2026-01-03T00:00:00Z')`, [project]);
     await write([...entries, { ...design, idx: 27 }, { ...display, idx: 28 }]);
-    await runMigrations(pool, { migrationsFolder: folder });
+    await runMigrations(pool, folder);
     expect((await pool.query('select item_key,resolution from design_drifts order by item_key')).rows).toEqual([
       { item_key: 'first', resolution: { displayKey: 'DR-100', text: '이전 기록' } },
       { item_key: 'numbered', resolution: { displayKey: 'DR-99' } },

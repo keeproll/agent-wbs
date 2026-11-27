@@ -18,9 +18,12 @@ export class MigrationGapError extends Error {
 
 interface Journal { entries: { idx: number; tag: string; when: number }[] }
 
-/** migrationsFolder: 시험이 일부만 담은 임시 폴더로 단계 DB를 올릴 때만 쓴다. 운영은 늘 기본 폴더다. */
-export async function runMigrations(pool: Pool, options: { migrationsFolder?: string } = {}): Promise<void> {
-  const config = { migrationsFolder: options.migrationsFolder ?? fileURLToPath(new URL('../migrations', import.meta.url)) };
+/**
+ * migrationsFolder: 시험이 일부만 담은 임시 폴더로 단계 DB를 올릴 때만 쓴다. 운영은 늘 기본 폴더다.
+ * (M5·M7 통합 브랜치와 같은 모양의 인수다. 두 통합을 합칠 때 충돌을 줄인다.)
+ */
+export async function runMigrations(pool: Pool, migrationsFolder = fileURLToPath(new URL('../migrations', import.meta.url))): Promise<void> {
+  const config = { migrationsFolder };
   const client = await pool.connect();
   try {
     await client.query("select pg_advisory_lock(hashtextextended('awbs:migrations',0))");
@@ -32,6 +35,11 @@ export async function runMigrations(pool: Pool, options: { migrationsFolder?: st
       const applied = await client.query('select 1 from drizzle.__drizzle_migrations where hash=$1', [contract?.hash]);
       // 옛 0016 사용량 보정의 시각 때문에 앞선 계약 0016이 건너뛰어진다. 그 한 건만 원본 그대로 보충한다.
       if (legacy.rowCount && !applied.rowCount && contract) await applyOne(client, contract);
+      // 재번호한 마이그레이션(예: 옛 0049 → 0039)은 내용(hash)이 같고 when만 다르다. 이미 적용한 hash의 기록 시각을 지금 journal 값으로 맞춘다
+      // (M5·M7 통합과 같은 처리). 내용이 다른 기록은 건드리지 않는다.
+      for (const file of files) {
+        await client.query('update drizzle.__drizzle_migrations set created_at=$2 where hash=$1 and created_at is distinct from $2', [file.hash, file.folderMillis]);
+      }
       await fillSkipped(client, files);
     }
     await migrate(drizzle(client), config);
@@ -90,7 +98,6 @@ async function assertAllApplied(client: Pick<PoolClient, 'query'>, files: Migrat
 }
 
 /** 적용 누락 검사만 따로 부른다(시험·점검용). 마이그레이션은 실행하지 않는다. */
-export async function checkMigrationsApplied(pool: Pool, options: { migrationsFolder?: string } = {}): Promise<void> {
-  const migrationsFolder = options.migrationsFolder ?? fileURLToPath(new URL('../migrations', import.meta.url));
+export async function checkMigrationsApplied(pool: Pool, migrationsFolder = fileURLToPath(new URL('../migrations', import.meta.url))): Promise<void> {
   await assertAllApplied(pool, readMigrationFiles({ migrationsFolder }), migrationsFolder);
 }

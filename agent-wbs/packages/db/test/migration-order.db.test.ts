@@ -47,8 +47,8 @@ test('[리뷰 지적 2] 최신까지 적용한 DB에 낮은 시각의 변경을 
   await withDb('fill', async (pool, folder) => {
     await runMigrations(pool);
     const journal = await addLateProbe(folder, 'CREATE TABLE "fix2_late_probe" ("id" integer PRIMARY KEY);');
-    await runMigrations(pool, { migrationsFolder: folder });
-    await runMigrations(pool, { migrationsFolder: folder });
+    await runMigrations(pool, folder);
+    await runMigrations(pool, folder);
     const state = (await pool.query<{ probe: string | null; applied: number }>(
       "select to_regclass('public.fix2_late_probe')::text probe,(select count(*)::int from drizzle.__drizzle_migrations) applied")).rows[0];
     expect(state).toEqual({ probe: 'fix2_late_probe', applied: journal.entries.length });
@@ -59,7 +59,7 @@ test('보충할 변경이 실패하면 그 변경은 기록하지 않고 오류�
   await withDb('fail', async (pool, folder) => {
     await runMigrations(pool);
     await addLateProbe(folder, 'SELECT 1/0;');
-    await expect(runMigrations(pool, { migrationsFolder: folder })).rejects.toThrow(/division by zero/);
+    await expect(runMigrations(pool, folder)).rejects.toThrow(/division by zero/);
     const n = (await pool.query<{ n: number }>("select count(*)::int n from drizzle.__drizzle_migrations where created_at=1795740000030")).rows[0]?.n;
     expect(n).toBe(0);
   });
