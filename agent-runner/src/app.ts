@@ -104,7 +104,7 @@ export interface RunnerAppDeps {
      * - 서버 정책의 `closedBranches`(done·cancelled이고 열린 실행 보유가 없는 Task의 브랜치). 취소된 Task는 이 길로만 알 수 있다.
      * 실패해도 병합·취소 결과는 그대로다. 경고만 남기고 다음 정책 확인 때 다시 한다. 남은 폴더는 초기화 정리도 지운다.
      */
-    release?: (branch: string) => Promise<void>;
+    release?: (branches: readonly string[]) => Promise<void>;
     /** 결과 수집기. 실제는 공급원(`CollectSources`)을 넘기고, 앱이 자기 Execution·Runner·API로 `bindCollect`를 부른다. 함수는 시험용이다. */
     collect: AttemptFlowOptions['collect'] | CollectSources;
     taskCheck: AttemptFlowOptions['taskCheck'] | TaskCheckSources;
@@ -514,22 +514,17 @@ export class RunnerApp {
       const outcome = await (await this.#ensureCi())?.runNext(this.reporter.caps?.total ?? 0,signal);
       // 병합을 확인했으면 그 Task의 개발·검증 폴더를 지운다(done 정리). 실패는 경고만 남긴다.
       if (outcome?.result?.kind === 'merged' && this.#d.jobs?.release) {
-        await this.#d.jobs.release(outcome.result.branch).catch((error: unknown) => { this.#d.warn(`병합 뒤 작업 폴더 정리 실패: ${message(error)}`); });
+        await this.#d.jobs.release([outcome.result.branch]).catch((error: unknown) => { this.#d.warn(`병합 뒤 작업 폴더 정리 실패: ${message(error)}`); });
       }
     },{ intervalMs:1000,onError:onError('통합·CI 재실행') }));
-    // 끝난 Task(done·취소)의 작업 폴더 정리: 서버 정책의 closedBranches 중 아직 정리하지 않은 것만(병합 뒤 정리와 같은 함수).
-    // 실패한 브랜치는 기록하지 않아 다음 주기에 다시 한다. 재시작 뒤에는 처음부터 다시 보며, 없는 폴더는 바로 넘어간다.
+    // 끝난 Task(done·취소)의 작업 폴더 정리: 서버 정책의 closedBranches 전체를 주기마다 다시 본다(병합 뒤 정리와 같은 함수).
+    // 왜 「이미 정리함」을 기억하지 않나(방어 점검 P3-2): 취소와 준비(prepare)가 엇갈리면, 정리한 뒤에 폴더가 생길 수 있다.
+    //   매번 생성 기록을 한 번 읽어 목록 브랜치의 폴더만 지우므로 가볍다. 없는 폴더는 바로 넘어간다.
     const release = this.#d.jobs?.release;
-    if (this.jobs && release) {
-      const released = new Set<string>();
-      this.#timers.push(scheduleDaily(async () => {
-        for (const branch of this.runner.policy?.closedBranches ?? []) {
-          if (released.has(branch)) continue;
-          try { await release(branch); released.add(branch); }
-          catch (error) { this.#d.warn(`끝난 Task의 작업 폴더 정리 실패(${branch}): ${message(error)}`); }
-        }
-      },{ intervalMs:30_000,onError:onError('끝난 Task 작업 폴더 정리') }));
-    }
+    if (this.jobs && release) this.#timers.push(scheduleDaily(async () => {
+      const branches = this.runner.policy?.closedBranches ?? [];
+      if (branches.length) await release(branches).catch((error: unknown) => { this.#d.warn(`끝난 Task의 작업 폴더 정리 실패: ${message(error)}`); });
+    },{ intervalMs:30_000,onError:onError('끝난 Task 작업 폴더 정리') }));
     // 주기는 서버 정책(inputCheckMinutes)을 따른다. 정책이 없으면 기본 5분(P3-1 임시값).
     const policyMinutes = this.runner.policy?.inputCheckMinutes;
     const inputInterval = this.#d.inputIntervalMs ?? (policyMinutes ? policyMinutes * 60_000 : INPUT_INTERVAL_MS);

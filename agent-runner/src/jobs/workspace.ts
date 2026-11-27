@@ -45,7 +45,7 @@ export interface AttemptWorkspace {
    * Task가 끝났을 때(병합 확인 → done, 또는 취소) 그 Task 브랜치의 개발·검증 폴더를 모두 지운다. 없으면 아무것도 하지 않는다.
    * 왜: QA PASS 뒤 정리가 실패했거나, 병합 전 재작업으로 다시 만든 폴더가 남으면 디스크와 생성 기록이 쌓인다.
    */
-  release(branch: string): Promise<void>;
+  release(branches: readonly string[]): Promise<void>;
 }
 
 const role = (job: AttemptJob) => job.payload.kind === 'dev' || job.payload.kind === 'rework' ? 'dev' : 'qa';
@@ -112,11 +112,17 @@ export function createWorkspace(options: WorkspaceOptions): AttemptWorkspace {
       const inputPath = await input(git, job);
       return { cwd, headSha, notes: outputGuide(job, inputPath) };
     },
-    async release(branch) {
+    async release(branches) {
       const git = await repo();
-      // 생성 기록을 한 번만 읽고, 그 브랜치의 폴더가 기록에 있을 때만 지운다(정책 목록이 길어도 가볍다).
+      // 생성 기록을 한 번만 읽고, 목록 브랜치의 폴더가 기록에 있을 때만 지운다(정책 목록이 길어도 가볍다).
       const recorded = new Set(await git.recordedWorktrees());
-      for (const id of [`w-${keyOf(branch)}-qa`, `w-${keyOf(branch)}-dev`]) if (recorded.has(id)) await git.removeWorktree(id);
+      const failures: string[] = [];
+      for (const branch of branches) for (const id of [`w-${keyOf(branch)}-qa`, `w-${keyOf(branch)}-dev`]) {
+        if (!recorded.has(id)) continue;
+        // 하나가 실패해도 나머지는 계속 지운다. 실패한 것은 다음 주기에 다시 본다.
+        try { await git.removeWorktree(id); } catch (error) { failures.push(`${branch}: ${error instanceof Error ? error.message : String(error)}`); }
+      }
+      if (failures.length) throw new Error(`작업 폴더 정리 실패 ${String(failures.length)}건: ${failures.slice(0, 3).join(' / ')}`);
     },
     async settle(job, verdict) {
       if (role(job) === 'dev') return;

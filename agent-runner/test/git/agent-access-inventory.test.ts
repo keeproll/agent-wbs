@@ -55,16 +55,21 @@ test('repository.ts 밖에서 작업 폴더 안 경로를 만드는 곳은 목�
 
 test('Runner git이 Agent .git을 저장소로 쓰는 모양(--git-dir=·Agent 경로 fetch)은 같은 계정 배치 갈래에만 남는다', () => {
   const text = readFileSync(join(src, 'git', 'repository.ts'), 'utf8');
-  // taskCheckPath·worktreeHead의 같은 계정 갈래(rev-parse, --work-tree diff·ls-files)와 importWorktree의 같은 계정 fetch.
+  // taskCheckPath·worktreeHead의 같은 계정 갈래(HEAD rev-parse)와 importWorktree의 같은 계정 fetch. 청결 판정은 파일 목록 대조라 --work-tree가 없다(P2-1).
   expect(text.match(/--git-dir=\$\{join\(path, '\.git'\)\}/g)).toHaveLength(2);
-  expect(text.match(/--work-tree=\$\{path\}/g)).toHaveLength(2);
+  expect(text.match(/--work-tree=\$\{path\}/g)).toBeNull();
   expect(text.match(/'--upload-pack=git-upload-pack', '--', join\(path, '\.git'\)/g)).toHaveLength(1);
   // 그 갈래는 모두 「this.agentGit이 없을 때」(같은 계정 배치) 뒤에 있다.
   for (const [from, to] of [['async taskCheckPath', 'async worktreeState'], ['async worktreeHead', 'async hasCommit']] as const) {
     const branch = text.slice(text.indexOf(from), text.indexOf(to));
-    expect(branch.indexOf('if (this.agentGit)')).toBeGreaterThan(-1);
-    expect(branch.indexOf('if (this.agentGit)')).toBeLessThan(branch.indexOf('--git-dir='));
+    const guard = Math.max(branch.indexOf('if (this.agentGit)'), branch.indexOf('this.agentGit ?'));
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(branch.indexOf('--git-dir='));
   }
+  // 청결 판정은 Runner bare의 tree와 파일 목록(manifest) 대조다. Agent의 git status를 판정에 쓰지 않는다.
+  const check = text.slice(text.indexOf('async taskCheckPath'), text.indexOf('async worktreeState'));
+  expect(check).toContain('compareManifest(expected, actual)');
+  expect(check).not.toContain('.dirty');
 });
 
 test('exec/install.ts: 직접 파일 접근은 같은 계정 배치용(localAgentFiles·directory)에만 있고, 설치 본문은 AgentFiles만 쓴다', () => {

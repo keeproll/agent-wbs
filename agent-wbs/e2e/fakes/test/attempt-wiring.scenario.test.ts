@@ -143,7 +143,7 @@ async function setup(options: { host?: 'account' | 'copy'; claude?: Partial<Agen
     ...(jobs.settle && { settle: jobs.settle }) });
   const ci = new CiJobs({ ...f.deps, heavy, directory: join(home, 'ci-jobs'), api: h.runner.api, outbox: runner.outbox,
     runnerId: state.snapshot.runnerId, epoch: () => 1, ready: () => runner.ready, identity, execute: (_job, argv, cwd) => f.deps.execute(argv, cwd), warn: () => undefined });
-  const release = async (branch: string) => { if (!jobs.release) throw new Error('정리 함수가 없습니다.'); await jobs.release(branch); };
+  const release = async (branch: string) => { if (!jobs.release) throw new Error('정리 함수가 없습니다.'); await jobs.release([branch]); };
   const harness = { f, h, home, repo, runner, execution, flow, ci, calls, errors, release,
     status: async () => (await h.lead('GET', '/api/tasks/TASK-0001')).body.lifecycleStatus as string,
     close: async () => {

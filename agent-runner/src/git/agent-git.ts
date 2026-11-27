@@ -1,6 +1,7 @@
+import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { lstat, mkdir, mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, open, readdir, readFile, readlink, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { AGENT_EXEC, AGENT_USER } from '../cli/dedicated-user.ts';
@@ -17,7 +18,13 @@ import { clearScope, inUserScope } from '../exec/scope.ts';
  * - bundle: 브랜치의 git bundle(데이터 파일)을 Runner 소유 파일로 받는다. Runner는 자기 bare 저장소에서 verify 뒤 fetch한다.
  */
 export interface AgentGit {
+  /** HEAD와 참고용 dirty. dirty는 Agent의 .git을 믿는 값이라 청결 판정에 쓰지 않는다(P2-1). 판정은 `manifest` 대조다. */
   inspect(path: string): Promise<{ head: string; dirty: boolean }>;
+  /**
+   * 작업 폴더의 실제 파일 목록(래퍼 `tree-manifest`, collect-prepare P2-1). Agent의 .git은 읽지 않는다.
+   * `tracked`(기대 커밋의 경로)만 내용 hash를 낸다. 나머지는 hash 없이 목록에만 오른다.
+   */
+  manifest(path: string, format: ObjectFormat, tracked: readonly string[]): Promise<ManifestEntry[]>;
   /** `out`은 Runner 전용 폴더의 새 파일 경로다(0600으로 만든다). */
   bundle(path: string, branch: string, out: string): Promise<void>;
 }
@@ -27,7 +34,86 @@ const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 export const BUNDLE_LIMIT = 2 * 1024 ** 3;
 const TIMEOUT_MS = 10 * 60_000;
 
-export class AgentGitError extends Error { override name = 'AgentGitError'; }
+export class AgentGitError extends Error {
+  override name = 'AgentGitError';
+  /** 명령의 종료 코드(알면). */
+  exitCode?: number | null;
+  /** 출력이 상한을 넘어 끊었다. */
+  overflow?: boolean;
+}
+/** 증거 파일이 받을 수 없는 모양(링크·일반 파일 아님·상한 초과)이다. 시도 중단이 아니라 Agent의 형식 문제로 센다(P3-3). */
+export class EvidenceRejectedError extends AgentGitError { override name = 'EvidenceRejectedError'; }
+
+export type ObjectFormat = 'sha1' | 'sha256';
+/** 파일 하나. kind는 git tree의 모드 표기(일반 파일 100644·실행 파일 100755·링크 120000), 그 밖은 other. */
+export interface ManifestEntry { kind: '100644' | '100755' | '120000' | 'other'; hash: string | null; path: string }
+/** 파일 목록 출력 상한(256 MiB). 넘으면 판정하지 않고 실패한다. */
+export const MANIFEST_LIMIT = 256 * 1024 ** 2;
+/** 맨 위에서 빼는 폴더. .git은 판정에 쓰지 않고, 나머지 둘은 Runner가 정한 커밋 대상 밖 폴더다. */
+export const MANIFEST_SKIP = ['.git', '.awbs-home', '.awbs-evidence'] as const;
+
+/** 래퍼 `tree-manifest` 출력(「종류 NUL hash NUL 경로 NUL」 반복)을 읽는다. 모양이 다르면 실패한다. */
+export function parseManifest(bytes: Buffer): ManifestEntry[] {
+  const fields = bytes.toString('utf8').split('\0');
+  if (fields.at(-1) !== '') throw new AgentGitError('파일 목록 모양이 다릅니다(끝).');
+  fields.pop();
+  if (fields.length % 3 !== 0) throw new AgentGitError('파일 목록 모양이 다릅니다(칸 수).');
+  const entries: ManifestEntry[] = [];
+  for (let i = 0; i < fields.length; i += 3) {
+    const kind = fields[i] ?? '', hash = fields[i + 1] ?? '', path = fields[i + 2] ?? '';
+    if (!['100644', '100755', '120000', 'other'].includes(kind) || !(hash === '-' || SHA.test(hash)) || path === '' || path.startsWith('/')) {
+      throw new AgentGitError('파일 목록 모양이 다릅니다(항목).');
+    }
+    entries.push({ kind: kind as ManifestEntry['kind'], hash: hash === '-' ? null : hash, path });
+  }
+  return entries;
+}
+
+/** git blob hash(필터 없이). `git hash-object --no-filters`와 같은 값이다. */
+export function blobHash(format: ObjectFormat, content: Buffer): string {
+  return createHash(format === 'sha256' ? 'sha256' : 'sha1').update(`blob ${String(content.length)}\0`).update(content).digest('hex');
+}
+
+/**
+ * 같은 계정 배치·시험용 파일 목록(래퍼 `tree-manifest`와 같은 규칙). 폴더를 직접 훑고 링크를 따라가지 않는다(lstat).
+ * 왜 따로 두나: 같은 계정 배치에는 래퍼가 없다. 규칙이 같아야 두 배치의 판정이 같다.
+ */
+export async function localManifest(root: string, format: ObjectFormat, tracked: readonly string[]): Promise<ManifestEntry[]> {
+  const wanted = new Set(tracked);
+  const entries: ManifestEntry[] = [];
+  const walk = async (rel: string): Promise<void> => {
+    for (const name of await readdir(join(root, rel))) {
+      const path = rel ? `${rel}/${name}` : name;
+      if (!rel && (MANIFEST_SKIP as readonly string[]).includes(name)) continue;
+      const info = await lstat(join(root, path));
+      if (info.isDirectory()) { await walk(path); continue; }
+      const kind: ManifestEntry['kind'] = path.includes('\n') ? 'other' : info.isSymbolicLink() ? '120000' : info.isFile() ? (info.mode & 0o100 ? '100755' : '100644') : 'other';
+      let hash: string | null = null;
+      if (wanted.has(path) && kind === '120000') hash = blobHash(format, Buffer.from(await readlink(join(root, path))));
+      else if (wanted.has(path) && kind !== 'other') hash = blobHash(format, await readFile(join(root, path)));
+      entries.push({ kind, hash, path });
+    }
+  };
+  await walk('');
+  return entries;
+}
+
+/**
+ * 기대 커밋(Runner bare 저장소의 tree)과 실제 파일 목록을 대조한다(P2-1).
+ * - 기대 경로: 종류(일반·실행·링크)와 blob hash가 같아야 한다. 없거나 다르면 `changed`.
+ * - 기대에 없는 경로: `extra`. 호출자가 커밋된 .gitignore로 무시되는지 본다(`untrackedNotIgnored`).
+ * gitlink(160000, 하위 저장소)는 대조할 수 없으므로 `changed`로 센다(추측하지 않는다).
+ */
+export function compareManifest(expected: readonly { mode: string; oid: string; path: string }[], actual: readonly ManifestEntry[]): { changed: string[]; extra: string[] } {
+  const seen = new Map(actual.map((entry) => [entry.path, entry]));
+  const changed: string[] = [];
+  for (const want of expected) {
+    const got = seen.get(want.path);
+    if (!got || got.kind !== want.mode || got.hash !== want.oid) changed.push(want.path);
+    seen.delete(want.path);
+  }
+  return { changed, extra: [...seen.keys()] };
+}
 
 /** `head <sha>` / `dirty 0|1` 두 줄만 받는다. 다른 모양이면 실패. */
 export function parseInspect(stdout: string): { head: string; dirty: boolean } {
@@ -97,9 +183,9 @@ export async function captureCode(command: Spawned, options: CaptureOptions): Pr
       throw new AgentGitError('Agent 계정 명령이 끝난 뒤에도 자손 프로세스가 출력 통로를 쥐고 있어 정리했습니다. 결과를 쓰지 않습니다.');
     }
     await writing;
-    if (overflow) throw new AgentGitError('Agent 계정 명령의 출력이 상한을 넘었습니다.');
+    if (overflow) throw Object.assign(new AgentGitError('Agent 계정 명령의 출력이 상한을 넘었습니다.'), { overflow: true });
     const code = first.code;
-    if (code === null || !(options.allow ?? [0]).includes(code)) throw new AgentGitError(`Agent 계정 명령이 종료 코드 ${String(code)}로 끝났습니다.`);
+    if (code === null || !(options.allow ?? [0]).includes(code)) throw Object.assign(new AgentGitError(`Agent 계정 명령이 종료 코드 ${String(code)}로 끝났습니다.`), { exitCode: code });
     return { code, stdout: Buffer.concat(chunks).toString('utf8') };
   } finally {
     destroy();
@@ -130,6 +216,13 @@ export function wrapperAgentGit(cfg: WrapperConfig = { user: AGENT_USER, exec: A
   const call = async (args: string[], out?: { path: string; limit: number }): Promise<string> => (await wrapperCall(cfg, args, { ...(out && { out }) })).stdout;
   return {
     async inspect(path) { return parseInspect(await call(['git-inspect', '--cwd', path])); },
+    async manifest(path, format, tracked) {
+      const out = join(tmpdir(), `awbs-manifest-${randomUUID()}`);
+      try {
+        await wrapperCall(cfg, ['tree-manifest', '--cwd', path, '--object-format', format], { input: tracked.map((p) => `${p}\0`).join(''), out: { path: out, limit: MANIFEST_LIMIT } });
+        return parseManifest(await readFile(out));
+      } finally { await rm(out, { force: true }); }
+    },
     async bundle(path, branch, out) { await call(['git-bundle', '--cwd', path, '--branch', branch], { path: out, limit: BUNDLE_LIMIT }); },
   };
 }
@@ -186,21 +279,12 @@ export function localAgentGit(options: { timeoutMs?: number } = {}): AgentGit {
     async inspect(path) {
       const head = (await git(path, ['rev-parse', '--verify', 'HEAD^{commit}'])).trim();
       if (!SHA.test(head)) throw new AgentGitError('HEAD 모양이 아닙니다.');
-      // 추적 파일 변경만 status로 본다. 추적 안 된 파일은 무시 규칙 없이 뽑아 커밋된 .gitignore로만 판정한다(래퍼와 같은 규칙).
-      const status = await git(path, ['status', '--porcelain=v1', '-z', '--untracked-files=no', '--ignore-submodules=none']);
+      // 참고용 dirty(래퍼 git-inspect와 같음). 청결 판정은 manifest 대조다.
+      const status = await git(path, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']);
       const flags = (await git(path, ['ls-files', '-v'])).split('\n').some((line) => /^[a-zS] /.test(line));
-      const work = await mkdtemp(join(tmpdir(), 'awbs-untracked-'));
-      let left: string[];
-      try {
-        const list = join(work, 'untracked');
-        await git(path, ['ls-files', '--others', '-z'], { path: list, limit: UNTRACKED_LIMIT });
-        const names = (await git(path, ['ls-tree', '-r', '-z', '--name-only', 'HEAD'])).split('\0').filter((name) => name.split('/').at(-1) === '.gitignore');
-        const rules = [];
-        for (const name of names) rules.push({ path: name, content: Buffer.from(await git(path, ['cat-file', 'blob', `HEAD:${name}`])) });
-        left = await untrackedNotIgnored(await readFile(list), rules);
-      } finally { await rm(work, { recursive: true, force: true }); }
-      return parseInspect(`head ${head}\ndirty ${status || flags || left.length ? '1' : '0'}\n`);
+      return parseInspect(`head ${head}\ndirty ${status || flags ? '1' : '0'}\n`);
     },
+    manifest: (path, format, tracked) => localManifest(path, format, tracked),
     async bundle(path, branch, out) { await git(path, ['bundle', 'create', '--quiet', '-', `refs/heads/${branch}`], { path: out, limit: BUNDLE_LIMIT }); },
   };
 }
@@ -261,8 +345,14 @@ export function wrapperAgentEvidence(cfg: WrapperConfig = { user: AGENT_USER, ex
   return {
     async read(cwd, name, out, limit) {
       if (!EVIDENCE_NAME.test(name)) throw new AgentGitError('증거 파일 이름 모양이 아닙니다.');
-      const result = await wrapperCall(cfg, ['evidence-read', '--cwd', cwd, '--name', name], { out: { path: out, limit }, allow: [0, 3] });
-      return result.code === 0;
+      try {
+        const result = await wrapperCall(cfg, ['evidence-read', '--cwd', cwd, '--name', name], { out: { path: out, limit }, allow: [0, 3] });
+        return result.code === 0;
+      } catch (error) {
+        // 4: 일반 파일이 아님(래퍼), overflow: 상한 초과. 그 밖(sudo·scope·시간 초과 등)은 그대로 알린다(결과를 모름).
+        if (error instanceof AgentGitError && (error.exitCode === 4 || error.overflow)) throw new EvidenceRejectedError(`증거 파일 ${name}을 받을 수 없습니다(${error.overflow ? '상한 초과' : '일반 파일이 아님'}).`, { cause: error });
+        throw error;
+      }
     },
   };
 }
@@ -273,19 +363,20 @@ export const localAgentEvidence: AgentEvidence = {
     if (!EVIDENCE_NAME.test(name)) throw new AgentGitError('증거 파일 이름 모양이 아닙니다.');
     const dir = await lstat(join(cwd, EVIDENCE_DIR)).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return undefined; throw error; });
     if (!dir) return false;
-    if (!dir.isDirectory() || dir.isSymbolicLink()) throw new AgentGitError('증거 폴더가 일반 폴더가 아닙니다.');
+    if (!dir.isDirectory() || dir.isSymbolicLink()) throw new EvidenceRejectedError('증거 폴더가 일반 폴더가 아닙니다.');
     let source;
     try { source = await open(join(cwd, EVIDENCE_DIR, name), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
-      throw new AgentGitError('증거 파일을 열 수 없습니다(링크이거나 일반 파일이 아님).', { cause: error });
+      if (['ELOOP', 'ENXIO', 'EISDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) throw new EvidenceRejectedError(`증거 파일 ${name}을 받을 수 없습니다(링크이거나 일반 파일이 아님).`, { cause: error });
+      throw new AgentGitError('증거 파일을 열 수 없습니다.', { cause: error });
     }
     try {
       const info = await source.stat();
-      if (!info.isFile()) throw new AgentGitError('증거 파일이 일반 파일이 아닙니다.');
-      if (info.size > limit) throw new AgentGitError('증거 파일이 상한보다 큽니다.');
+      if (!info.isFile()) throw new EvidenceRejectedError(`증거 파일 ${name}을 받을 수 없습니다(일반 파일이 아님).`);
+      if (info.size > limit) throw new EvidenceRejectedError(`증거 파일 ${name}을 받을 수 없습니다(상한 초과).`);
       const bytes = await source.readFile();
-      if (bytes.length > limit) throw new AgentGitError('증거 파일이 상한보다 큽니다.');
+      if (bytes.length > limit) throw new EvidenceRejectedError(`증거 파일 ${name}을 받을 수 없습니다(상한 초과).`);
       const target = await open(out, 'wx', 0o600);
       try { await target.writeFile(bytes); } finally { await target.close(); }
       return true;

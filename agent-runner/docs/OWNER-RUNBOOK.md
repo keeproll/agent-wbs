@@ -202,7 +202,7 @@ pnpm -C agent-runner start
 - fix3(2026-11-28): 래퍼의 Agent 계정 git(`git-inspect`·`git-bundle`)과 `ci-run`이 작업 폴더를 「dubious ownership(소유자가 다른 저장소)」으로 거부하던 문제를 고쳤습니다.
   - 왜 생겼나: 작업 폴더는 Runner 계정(keeproll)이 만들어 넘기므로 소유자가 Agent 계정과 다릅니다. git은 소유자가 다른 저장소를 기본으로 거부합니다.
   - 고친 방법: 래퍼가 부르는 git만, 그 한 폴더만 명령줄 설정(`-c safe.directory=<폴더>`)으로 허용합니다. 저장소 설정으로는 넓힐 수 없는 보호 설정입니다.
-  - 같은 묶음에 QA 증거 파일 읽기(`evidence-read`)도 더했습니다.
+  - 같은 묶음에 QA 증거 파일 읽기(`evidence-read`)와 실제 파일 목록(`tree-manifest`, 청결 판정을 Agent의 `.git`에 기대지 않게 하는 방어 점검 P2-1)도 더했습니다.
   - 확인 스크립트(6-2)가 `safe.directory`는 Agent 계정 전역 설정에만 있고 Runner 계정 설정에는 없는지 봅니다. Runner 쪽에 있다고 나오면 `git config --global --unset-all safe.directory`로 지웁니다.
   - 이 고침이 설치되기 전에는 전용 계정으로 시도 흐름을 돌릴 수 없습니다(HEAD 확인·결과 bundle이 실패).
 

@@ -1,11 +1,12 @@
 // 결과 수집기(contracts §5): 스키마 검사·1회 수정 요청·git diff 변경 파일·Evidence 업로드·QA 근거 고정·청결 재확인.
-import { symlink, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, expect, test } from 'vitest';
 import type { ApiClient } from '../../src/api/client.ts';
 import type { Runner } from '../../src/api/runner.ts';
 import type { AttemptJob, AttemptOutput, Execution } from '../../src/exec/session.ts';
-import { bindCollect, CollectError, FORMAT_FAILURE } from '../../src/jobs/collect.ts';
+import { bindCollect, CollectError, FORMAT_FAILURE, followUpFailure } from '../../src/jobs/collect.ts';
 import { createWorkspace } from '../../src/jobs/workspace.ts';
 import { commit, file, fixture, git } from '../ci/int-fixture.ts';
 
@@ -124,15 +125,39 @@ test('QA: 적힌 증거 파일이 없으면 형식 오류로 세어 한 번 수�
   expect(t.asked).toHaveLength(1);
   expect(t.asked[0]).toContain('증거 파일 log.txt');
   expect(result.report.evidence).toEqual(['ev-1']);
+});
+
+test('QA: 링크·일반 파일이 아닌 증거는 받지 않고 형식 문제로 세어 수정 요청한다(시도 중단 아님, 방어 점검 P3-3)', async () => {
+  const fixedOutput = JSON.stringify({ ...qa(), criteria: [{ ...qa().criteria[0], evidence: [] }] });
+  const t = await setup([fixedOutput, fixedOutput]);
+  await t.develop();
+  const prepared = await t.workspace.prepare(job('qa', t.base));
   const secret = join(f.root, 'runner-secret');
   await writeFile(secret, 'token');
   await symlink(secret, join(prepared.cwd, '.awbs-evidence', 'log.txt'));
-  await expect(t.collect(t.context('qa', JSON.stringify(qa()), prepared.cwd, prepared.headSha))).rejects.toThrow('링크');
-  expect(t.calls.filter(c => c.request.body?.kind === 'agent-evidence')).toEqual([]);
+  const linked = await t.collect(t.context('qa', JSON.stringify(qa()), prepared.cwd, prepared.headSha));
+  expect(t.asked[0]).toContain('증거 파일 log.txt을 받을 수 없습니다(링크이거나 일반 파일이 아님)');
+  expect(linked.report.evidence).toEqual(['ev-1']);
+  await rm(join(prepared.cwd, '.awbs-evidence', 'log.txt'));
+  execFileSync('mkfifo', [join(prepared.cwd, '.awbs-evidence', 'log.txt')]);
+  await t.collect(t.context('qa', JSON.stringify(qa()), prepared.cwd, prepared.headSha));
+  expect(t.asked[1]).toContain('증거 파일 log.txt을 받을 수 없습니다(일반 파일이 아님)');
+  // Runner 파일 내용은 어디에도 올라가지 않았다.
+  for (const call of t.calls) expect(await (call.request.body?.file as Blob).text()).not.toContain('token');
+});
+
+test('수정 요청 실행 자체가 실패하면 「형식 오류」가 아니라 「수정 요청 실행 실패」로 적는다(방어 점검 P3-1)', async () => {
+  const t = await setup();
+  const { work } = await t.develop();
+  const result = await t.collect(t.context('dev', '작업 끝', work.cwd, work.headSha));
+  expect(result.report).toMatchObject({ summary: '형식 수정 요청 실행 실패', failure: followUpFailure(1) });
+  expect(result.report.failure).not.toBe(FORMAT_FAILURE);
+  await t.workspace.prepare(job('qa', t.base));
+  await expect(t.collect(t.context('qa', '판정 없음', work.cwd, work.headSha))).rejects.toThrow('형식 수정 요청 실행 실패');
 });
 
 test('QA: 끝난 폴더가 더럽거나, 형식이 끝내 틀리면 판정을 지어내지 않고 멈춘다', async () => {
-  const t = await setup();
+  const t = await setup(['여전히 판정 없음']);
   await t.develop();
   const prepared = await t.workspace.prepare(job('qa', t.base));
   await writeFile(join(prepared.cwd, '.awbs-evidence', 'log.txt'), '로그');

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFile, rm } from 'node:fs/promises';
 import { extname } from 'node:path';
 import { MAX_EVIDENCE_BYTES } from '../state/state.ts';
+import { EvidenceRejectedError } from '../git/agent-git.ts';
 import type { ApiClient } from '../api/client.ts';
 import type { Runner } from '../api/runner.ts';
 import type { Execution } from '../exec/session.ts';
@@ -35,6 +36,8 @@ export class CollectError extends Error { override name = 'CollectError'; }
 
 /** 수정 요청 뒤에도 형식이 맞지 않았다는 표시(개발 시도의 failure 문구). */
 export const FORMAT_FAILURE = 'Agent 종료 메시지 형식 오류(수정 요청 1회 뒤에도 계약과 다름)';
+/** 수정 요청 실행이 실패했다는 표시. 형식 판정은 하지 못했다(P3-1). */
+export const followUpFailure = (code: number | null) => `형식 수정 요청 실행 실패(종료 코드 ${String(code)}), 형식은 판정하지 못함`;
 
 const MEDIA: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webm': 'video/webm', '.json': 'application/json',
   '.txt': 'text/plain', '.log': 'text/plain', '.html': 'text/html', '.pdf': 'application/pdf' };
@@ -55,26 +58,36 @@ export function bindCollect(d: CollectDeps): AttemptFlowOptions['collect'] {
       const missing: string[] = [];
       for (const name of new Set(result.value.criteria.flatMap(c => c.evidence))) {
         const out = git.evidenceTemp();
-        if (await git.readEvidence(d.workspace.verifyWorktree(job), name, out, MAX_EVIDENCE_BYTES)) files.set(name, out);
-        else { await rm(out, { force: true }); missing.push(`증거 파일 ${name}이 .awbs-evidence/에 없습니다.`); }
+        try {
+          if (await git.readEvidence(d.workspace.verifyWorktree(job), name, out, MAX_EVIDENCE_BYTES)) files.set(name, out);
+          else { await rm(out, { force: true }); missing.push(`증거 파일 ${name}이 .awbs-evidence/에 없습니다.`); }
+        } catch (error) {
+          await rm(out, { force: true });
+          // 링크·일반 파일 아님·50 MiB 초과는 지시문이 금지한 모양이므로 형식 문제로 센다(수정 요청 대상, P3-3). 그 밖은 결과를 모르므로 그대로 멈춘다.
+          if (error instanceof EvidenceRejectedError) missing.push(error.message);
+          else throw error;
+        }
       }
       if (missing.length) { await clear(); return { ok: false, problems: missing }; }
       return result;
     };
     try {
       let parsed = await check(output.text);
-      let fixed = false;
+      let fixed = false, failedRun: number | null | undefined;
       if (!parsed.ok) {
         // 횟수 규칙: 시도마다 한 번. 이 함수 밖에서 다시 부르지 않는다(contracts §5 「1회 수정 요청, 이후 실패」).
         const again = await d.execution.followUp(job, epoch, output, fixPrompt(job, parsed.problems), signal);
         signal.throwIfAborted();
         fixed = true;
+        if (!again.ok) failedRun = again.code;
         parsed = again.ok ? await check(again.text) : { ok: false, problems: [`수정 요청 실행이 실패했습니다(종료 코드 ${String(again.code)}).`] };
       }
-      return await finish(parsed, fixed);
+      return await finish(parsed, fixed, failedRun);
     } finally { await clear(); }
 
-    async function finish(parsed: Parsed, fixed: boolean) {
+    async function finish(parsed: Parsed, fixed: boolean, failedRun: number | null | undefined) {
+      // 수정 요청 실행 자체가 실패했으면 「형식이 틀렸다」가 아니라 「수정 요청의 결과를 모른다」다(P3-1). 문구를 나눠 적는다.
+      const failure = failedRun === undefined ? FORMAT_FAILURE : followUpFailure(failedRun);
       const upload = async (kind: string, value: object) => {
         const bytes = Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
         const sha256 = createHash('sha256').update(bytes).digest('hex');
@@ -88,12 +101,12 @@ export function bindCollect(d: CollectDeps): AttemptFlowOptions['collect'] {
         // ①이 Agent 계정 git-bundle로 가져와 검사·push한 커밋. 다시 가져오지 않는다(검사한 것과 보고하는 것이 같아야 한다).
         const head = await git.resultHead(work.id);
         if (!head) throw new CollectError('①이 가져온 개발 결과 커밋이 없어 변경 파일을 볼 수 없습니다.');
-        // 수정 요청 세션이 파일을 바꾸거나 커밋했으면 검사하지 않은 코드다. HEAD·청결은 Agent 계정 git으로 본다.
+        // 수정 요청 세션이 파일을 바꾸거나 커밋했으면 검사하지 않은 코드다. 청결은 실제 파일 목록을 Runner bare의 커밋과 대조해 본다.
         if (fixed) await git.taskCheckPath(work.id, head).catch((error: unknown) => { throw new CollectError('수정 요청 뒤 작업 폴더가 검사한 커밋과 다릅니다.', { cause: error }); });
         const changedFiles = await git.changedPaths(job.payload.baseCommit, head);
         if (!parsed.ok) {
           const evidence = await upload('agent-output-invalid', { headSha: head, changedFiles, problems: parsed.problems, fixRequested: fixed });
-          return { report: { summary: '종료 메시지 형식 오류', failure: FORMAT_FAILURE, changedFiles, evidence: [evidence] } };
+          return { report: { summary: failedRun === undefined ? '종료 메시지 형식 오류' : '형식 수정 요청 실행 실패', failure, changedFiles, evidence: [evidence] } };
         }
         const value = parsed.value as DevOutput;
         const evidence = await upload('dev-report', { headSha: head, baseCommit: job.payload.baseCommit, changedFiles, fixRequested: fixed,
@@ -102,7 +115,7 @@ export function bindCollect(d: CollectDeps): AttemptFlowOptions['collect'] {
       }
 
       // 검증: 서버가 qa 결과에 failure를 받지 않는다. 형식이 끝내 맞지 않으면 판정을 지어내지 않고 멈춘다.
-      if (!parsed.ok) throw new CollectError(`${FORMAT_FAILURE}: ${parsed.problems.slice(0, 5).join(' / ')}`);
+      if (!parsed.ok) throw new CollectError(`${failure}: ${parsed.problems.slice(0, 5).join(' / ')}`);
       const value = parsed.value as QaOutput;
       // 종료 때 HEAD·청결 재확인(contracts §4.1 「코드 근거 고정」 1). 다르면 이 판정은 검사한 코드의 것이 아니다.
       await git.taskCheckPath(d.workspace.verifyWorktree(job), output.headSha).catch((error: unknown) => {

@@ -53,7 +53,7 @@ test('done 정리: CI 실행기가 병합을 확인하면 그 Task 브랜치의 
     github:{ repo:{owner:'o',repo:'r'},mode:'gh',baseUrl:f.github.url },
     ci:{ repo:f.repo,execute:(_job,argv,cwd)=>f.deps.execute(argv,cwd),collectTests:f.deps.collectTests },
     jobs:{ collect:async () => ({ report:{ summary:'',changedFiles:[],evidence:[] } }),taskCheck:async () => { throw new Error('실행하지 않음'); },
-      release:async branch => { released.push(branch); throw new Error('정리 실패 흉내'); } } });
+      release:async branches => { released.push(...branches); throw new Error('정리 실패 흉내'); } } });
   vi.spyOn(a.runner,'ready','get').mockReturnValue(true);
   vi.spyOn(a.reporter,'caps','get').mockReturnValue({ total:1,Claude:1,Codex:1,heavy:1 });
   vi.spyOn(a.runner,'run').mockImplementation(signal => new Promise(resolve=>{ signal.addEventListener('abort',()=>resolve()); }));
@@ -76,12 +76,13 @@ test('done 정리: CI 실행기가 병합을 확인하면 그 Task 브랜치의 
   } finally { controller.abort(); await running; await f.close(); }
 });
 
-test('취소·done 정리: 정책의 closedBranches 중 아직 정리하지 않은 브랜치만 같은 정리 함수(jobs.release)로 지우고, 실패한 것은 다음 주기에 다시 한다', async () => {
-  const released: string[] = [];
+test('취소·done 정리: 정책의 closedBranches 전체를 주기마다 같은 정리 함수(jobs.release)로 다시 보고, 실패는 경고만 남긴다(방어 점검 P3-2)', async () => {
+  const calls: string[][] = [];
+  const warnings: string[] = [];
   let failOnce = true;
-  const a = app(undefined, undefined, undefined, { collect: async () => ({ report: { summary: '', changedFiles: [], evidence: [] } }),
+  const a = app(undefined, undefined, message => { warnings.push(message); }, { collect: async () => ({ report: { summary: '', changedFiles: [], evidence: [] } }),
     taskCheck: async () => { throw new Error('실행하지 않음'); },
-    release: async branch => { released.push(branch); if (branch === 'agent/TASK-0002-h1' && failOnce) { failOnce = false; throw new Error('정리 실패 흉내'); } } });
+    release: async branches => { calls.push([...branches]); if (failOnce) { failOnce = false; throw new Error('정리 실패 흉내'); } } });
   for (const name of ['checkReadiness','reportModels','reportConcurrency','reportInputs'] as const) vi.spyOn(a,name).mockResolvedValue(undefined as never);
   vi.spyOn(a.updater, 'check').mockResolvedValue();
   vi.spyOn(a.updater, 'applyPending').mockResolvedValue();
@@ -93,12 +94,14 @@ test('취소·done 정리: 정책의 closedBranches 중 아직 정리하지 않�
   try {
     a.startSchedules();
     await vi.advanceTimersByTimeAsync(0);
-    expect(released).toEqual(['agent/TASK-0001-h1', 'agent/TASK-0002-h1']);
-    if (a.runner.policy) a.runner.policy.closedBranches = ['agent/TASK-0003-h1', 'agent/TASK-0001-h1', 'agent/TASK-0002-h1'];
+    expect(calls).toEqual([['agent/TASK-0001-h1', 'agent/TASK-0002-h1']]);
+    expect(warnings.some(w => w.includes('끝난 Task의 작업 폴더 정리 실패'))).toBe(true);
+    // 다음 주기에도 같은 목록을 다시 본다. 정리한 뒤 준비(prepare)가 엇갈려 만든 폴더도 이때 지워진다.
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(released).toEqual(['agent/TASK-0001-h1', 'agent/TASK-0002-h1', 'agent/TASK-0003-h1', 'agent/TASK-0002-h1']);
+    expect(calls).toHaveLength(2);
+    if (a.runner.policy) a.runner.policy.closedBranches = [];
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(released).toHaveLength(4);
+    expect(calls).toHaveLength(2);
   } finally { vi.clearAllTimers(); vi.useRealTimers(); }
 });
 

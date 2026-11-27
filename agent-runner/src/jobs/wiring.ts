@@ -47,7 +47,7 @@ export function attemptWiring(o: AttemptWiringOptions): Pick<RunnerAppDeps, 'exe
         observeMainPipeline: async basis => { await observeMainPipeline(inputs, await repo(), basis); },
       },
       settle: async (context, report) => { await workspace.settle(context.job, report.verification?.result ?? null); },
-      release: async branch => { await workspace.release(branch); },
+      release: async branches => { await workspace.release(branches); },
     },
   };
 }

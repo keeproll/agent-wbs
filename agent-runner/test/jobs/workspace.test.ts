@@ -101,8 +101,8 @@ test('병합 뒤 정리(release): 그 Task 브랜치의 개발·검증 폴더를
   await w.prepare(job('qa', base));
   const other = await w.prepare({ ...job('dev', base), payload: { ...job('dev', base).payload, branch: 'agent/TASK-0002-h1' } });
   expect(await f.repo.recordedWorktrees()).toHaveLength(3);
-  await w.release(BRANCH);
-  await w.release(BRANCH);
+  await w.release([BRANCH]);
+  await w.release([BRANCH]);
   expect(await f.repo.recordedWorktrees()).toEqual([other.cwd.split('/').at(-1)]);
 });
 

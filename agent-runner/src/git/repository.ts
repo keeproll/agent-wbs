@@ -5,7 +5,7 @@ import { chmod, link, lstat, mkdir, open, readFile, readdir, rename, rm, statfs,
 import { setTimeout as delay } from 'node:timers/promises';
 import { basename, dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
 import { AGENT_ROOT, restoreAgentPermissions } from '../cli/dedicated-user.ts';
-import { EVIDENCE_DIR, localAgentEvidence, localAgentGit, untrackedNotIgnored, wrapperAgentEvidence, wrapperAgentGit, type AgentEvidence, type AgentGit } from './agent-git.ts';
+import { compareManifest, EVIDENCE_DIR, localAgentEvidence, localAgentGit, localManifest, untrackedNotIgnored, wrapperAgentEvidence, wrapperAgentGit, type AgentEvidence, type AgentGit } from './agent-git.ts';
 import { atomicWrite } from '../state/files.ts';
 import { parseCommits, parseRawNumstat, type InputDiff, type InputObservation } from './inputs.ts';
 
@@ -1189,31 +1189,24 @@ export class GitRepository {
     if (record.resetting || !record.worktrees.some((value) => value.id === worktreeId)) throw new GitSafetyError('검사할 수 있는 작업 폴더가 아닙니다.');
     const path = await safePath(join(this.worktrees, id(worktreeId)));
     await safePath(join(path, '.git'));
-    if (this.agentGit) {
-      // 전용 계정 배치(조정자 결정 6, 방어 점검 1): HEAD·상태는 Agent 계정 git으로만 본다. Runner git은 Agent `.git`을 읽지 않는다.
-      const inspected = await this.agentGit.inspect(path);
-      if (inspected.head !== sha(head)) throw new GitSafetyError('검사 대상 head와 작업 폴더가 다릅니다.');
-      if (inspected.dirty) throw new GitSafetyError('작업 폴더에 커밋하지 않은 변경이 있습니다.');
-      return path;
-    }
-    const current = (await run(path, [`--git-dir=${join(path, '.git')}`, 'rev-parse', '--verify', 'HEAD^{commit}'])).toString().trim();
+    // HEAD는 참고로 대조한다. 전용 계정 배치는 Agent 계정 git(git-inspect), 같은 계정 배치는 Runner git이 본다.
+    const current = this.agentGit ? (await this.agentGit.inspect(path)).head
+      : (await run(path, [`--git-dir=${join(path, '.git')}`, 'rev-parse', '--verify', 'HEAD^{commit}'])).toString().trim();
     if (current !== sha(head)) throw new GitSafetyError('검사 대상 head와 작업 폴더가 다릅니다.');
-    // Agent index의 assume-unchanged·skip-worktree와 filter 설정을 신뢰하지 않는다.
-    const index = join(dirname(this.statePath), `ci-index-${randomUUID()}`);
-    const env = { GIT_INDEX_FILE: index };
-    try {
-      await this.git(['read-tree', head], undefined, env);
-      const dirty = await this.git([`--work-tree=${path}`, 'diff', '--no-ext-diff', '--no-textconv', '--name-only', '-z', head, '--'], undefined, env);
-      // 추적 안 된 파일은 무시 규칙 없이 모두 뽑고, 무시 여부는 검사 대상 커밋에 든 .gitignore로만 정한다(전용 계정 갈래의 래퍼 git-inspect와 같은 규칙).
-      // 왜: 작업 폴더의 .gitignore 변경·info/exclude·전역 설정은 Agent가 바꿀 수 있어, 그것으로 남긴 파일을 숨길 수 있다.
-      const untracked = await this.git([`--work-tree=${path}`, 'ls-files', '--others', '-z'], undefined, env);
+    // 청결 판정(collect-prepare P2-1): Agent의 .git(설정·index·replace·core.worktree)을 쓰지 않는다.
+    // 기대값은 Runner bare 저장소의 커밋 tree(bundle로 받은 객체), 실제값은 작업 폴더를 직접 훑은 파일 목록과 내용이다.
+    // 왜: git status는 Agent가 고친 .git을 믿어서 clean filter·stat 위조·replace 객체·core.worktree로 「깨끗함」을 낼 수 있다.
+    const expected = await this.tree(head);
+    const format = head.length === 64 ? 'sha256' : 'sha1';
+    const actual = this.agentGit ? await this.agentGit.manifest(path, format, expected.map((entry) => entry.path)) : await localManifest(path, format, expected.map((entry) => entry.path));
+    const { changed, extra } = compareManifest(expected, actual);
+    if (changed.length) throw new GitSafetyError('작업 폴더에 커밋하지 않은 변경이 있습니다.');
+    // 기대 커밋에 없는 파일은 그 커밋의 .gitignore로 무시될 때만 허용한다(규칙도 Runner bare에서 읽는다).
+    if (extra.length) {
       const rules = [];
-      for (const entry of (await this.tree(head)).filter((value) => value.path.split('/').at(-1) === '.gitignore')) rules.push({ path: entry.path, content: await this.blob(entry) });
-      const left = await untrackedNotIgnored(untracked, rules, dirname(this.statePath));
-      if (dirty.length || left.length) throw new GitSafetyError('작업 폴더에 커밋하지 않은 변경이 있습니다.');
-    } finally {
-      await rm(index, { force: true });
-      await rm(`${index}.lock`, { force: true });
+      for (const entry of expected.filter((value) => value.path.split('/').at(-1) === '.gitignore')) rules.push({ path: entry.path, content: await this.blob(entry) });
+      const left = await untrackedNotIgnored(Buffer.from(extra.map((value) => `${value}\0`).join('')), rules, dirname(this.statePath));
+      if (left.length) throw new GitSafetyError('작업 폴더에 커밋하지 않은 변경이 있습니다.');
     }
     return path;
   }

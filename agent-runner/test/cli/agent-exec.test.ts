@@ -267,49 +267,83 @@ describe.skipIf(!usable)('awbs-agent-exec 실행 래퍼(bash, 실제 실행)', (
     expect(wrapper(['git-inspect', '--cwd', runnerHome]).code).toBe(2);
   });
 
-  test('git-inspect: 추적 안 된 파일은 커밋된 .gitignore로만 무시한다(Agent가 바꾼 무시 설정으로 숨길 수 없음, collect-prepare)', () => {
-    const repo = join(area, 'worktrees', 'p1', 'git-hide');
-    mkdirSync(join(repo, 'sub'), { recursive: true });
+  test('tree-manifest: Agent의 .git을 읽지 않고 실제 파일의 종류·실행 비트·blob hash를 낸다(collect-prepare P2-1)', () => {
+    const repo = join(area, 'worktrees', 'p1', 'manifest');
+    mkdirSync(join(repo, 'bin'), { recursive: true });
     const g = (...a: string[]) => spawnSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@x', ...a], { encoding: 'utf8' });
     g('init', '-q', '-b', 'agent/x');
-    writeFileSync(join(repo, '.gitignore'), 'node_modules/\n*.log\n!keep.log\n');
-    writeFileSync(join(repo, 'sub', '.gitignore'), 'gen/\n');
-    writeFileSync(join(repo, 'a'), 'a');
+    writeFileSync(join(repo, 'a.txt'), 'line1\n'); writeFileSync(join(repo, 'bin', 'run'), '#!/bin/sh\n'); chmodSync(join(repo, 'bin', 'run'), 0o755);
+    symlinkSync('a.txt', join(repo, 'link'));
     g('add', '-A'); g('commit', '-qm', 'a');
-    const dirty = () => wrapper(['git-inspect', '--cwd', repo]).stdout.split('\n')[1];
-    expect(dirty()).toBe('dirty 0');
-    // 커밋된 규칙으로 무시되는 것·Runner가 정한 폴더는 깨끗하다고 본다.
-    for (const path of ['node_modules/x/y.js', 'build.log', 'sub/gen/z.txt', '.awbs-evidence/e.png', '.awbs-home/tmp/t']) {
-      mkdirSync(join(repo, path, '..'), { recursive: true }); writeFileSync(join(repo, path), 'x');
-    }
-    expect(dirty()).toBe('dirty 0');
-    // 숨긴 파일 재현: 남긴 파일을 Agent가 바꿀 수 있는 무시 설정으로 숨겨도 더럽다고 본다.
-    const hidden = (setup: () => void, undo: () => void) => {
-      writeFileSync(join(repo, 'secret.txt'), '남긴 파일');
-      setup();
-      expect(g('status', '--porcelain').stdout, '보통 git status는 숨긴다').not.toContain('secret.txt');
-      expect(dirty()).toBe('dirty 1');
-      undo(); rmSync(join(repo, 'secret.txt'));
+    mkdirSync(join(repo, '.awbs-evidence'), { recursive: true }); writeFileSync(join(repo, '.awbs-evidence', 'e'), 'x');
+    const tree = new Map(g('ls-tree', '-r', '-z', 'HEAD').stdout.split('\0').filter(Boolean).map(line => {
+      const [meta = '', path = ''] = line.split('\t'); const [mode, , oid] = meta.split(' '); return [path, `${mode ?? ''} ${oid ?? ''}`] as const;
+    }));
+    const manifest = (wanted: string[]) => {
+      const r = spawnSync(exec, ['tree-manifest', '--cwd', repo, '--object-format', 'sha1'], { input: wanted.map(p => `${p}\0`).join(''), env: { PATH: '/usr/bin:/bin' } });
+      expect(r.status, r.stderr.toString()).toBe(0);
+      const f = r.stdout.toString().split('\0'); f.pop();
+      const out = new Map<string, string>();
+      for (let i = 0; i < f.length; i += 3) out.set(f[i + 2] ?? '', `${f[i] ?? ''} ${f[i + 1] ?? ''}`);
+      return out;
     };
+    // 기준: 커밋과 같다. .git·.awbs-evidence는 내지 않는다. 기대 경로가 아닌 파일은 hash 없이 낸다.
+    writeFileSync(join(repo, 'extra.log'), 'x');
+    const clean = manifest([...tree.keys()]);
+    for (const [path, want] of tree) expect(clean.get(path), path).toBe(want);
+    expect(clean.get('extra.log')).toBe('100644 -');
+    expect([...clean.keys()].some(p => p.startsWith('.git') || p.startsWith('.awbs-evidence'))).toBe(false);
+    rmSync(join(repo, 'extra.log')); rmSync(join(repo, '.awbs-evidence'), { recursive: true });
+    expect(wrapper(['git-inspect', '--cwd', repo]).stdout.split('\n')[1]).toBe('dirty 0');
+    // 리뷰어 재현: 아래 넷은 모두 git status(git-inspect의 참고 dirty)를 「깨끗함」으로 속인다. 실제 파일 hash는 속지 않는다.
+    const inspect = () => wrapper(['git-inspect', '--cwd', repo]).stdout.split('\n')[1];
+    const changedHash = () => manifest(['a.txt']).get('a.txt') !== tree.get('a.txt');
+    const reset = () => { g('checkout', '-q', '--', '.'); g('config', '--unset-all', 'filter.x.clean'); g('config', '--unset-all', 'core.worktree');
+      g('config', '--unset-all', 'core.checkStat'); g('config', '--unset-all', 'core.trustctime'); rmSync(join(repo, '.git', 'info', 'attributes'), { force: true });
+      for (const r of g('replace', '-l').stdout.split('\n').filter(Boolean)) g('replace', '-d', r); g('reset', '-q', '--hard'); };
+    // A. clean filter + index stat 0
+    writeFileSync(join(repo, 'a.txt'), 'changed!\n');
     mkdirSync(join(repo, '.git', 'info'), { recursive: true });
-    hidden(() => writeFileSync(join(repo, '.git', 'info', 'exclude'), 'secret.txt\n'), () => writeFileSync(join(repo, '.git', 'info', 'exclude'), ''));
-    hidden(() => { writeFileSync(join(repo, 'secret-rules'), 'secret.txt\nsecret-rules\n'); g('config', 'core.excludesFile', join(repo, 'secret-rules')); },
-      () => { g('config', '--unset', 'core.excludesFile'); rmSync(join(repo, 'secret-rules')); });
-    // 새 하위 .gitignore(커밋 안 됨)로 숨기기: `*`는 그 .gitignore 자신과 안의 파일을 모두 git status에서 숨긴다. 커밋된 규칙이 아니므로 남은 파일이다.
-    mkdirSync(join(repo, 'hide'), { recursive: true });
-    writeFileSync(join(repo, 'hide', '.gitignore'), '*\n'); writeFileSync(join(repo, 'hide', 'x'), 'x');
-    expect(g('status', '--porcelain').stdout, '보통 git status는 숨긴다').not.toContain('hide/');
-    expect(dirty()).toBe('dirty 1');
-    rmSync(join(repo, 'hide'), { recursive: true });
-    expect(dirty()).toBe('dirty 0');
-    // 부정 규칙(!keep.log)은 무시하지 않는다.
-    writeFileSync(join(repo, 'keep.log'), 'x');
-    expect(dirty()).toBe('dirty 1');
-    rmSync(join(repo, 'keep.log'));
-    // 커밋된 .gitignore를 고치지 않고(작업 폴더에서만) 바꾸면 그 자체가 추적 파일 변경이다.
-    writeFileSync(join(repo, '.gitignore'), 'node_modules/\n*.log\n!keep.log\nsecret.txt\n');
-    writeFileSync(join(repo, 'secret.txt'), 'x');
-    expect(dirty()).toBe('dirty 1');
+    writeFileSync(join(repo, '.git', 'info', 'attributes'), 'a.txt filter=x\n');
+    g('config', 'filter.x.clean', 'git show HEAD:a.txt');
+    const blob = g('rev-parse', 'HEAD:a.txt').stdout.trim();
+    spawnSync('git', ['-C', repo, 'update-index', '--index-info'], { input: `100644 ${blob}\ta.txt\n` });
+    expect(inspect()).toBe('dirty 0');
+    expect(changedHash()).toBe(true);
+    reset();
+    // B. core.worktree를 깨끗한 다른 폴더로
+    const decoy = join(area, 'worktrees', 'p1', 'decoy');
+    mkdirSync(decoy, { recursive: true });
+    for (const name of ['a.txt']) writeFileSync(join(decoy, name), 'line1\n');
+    mkdirSync(join(decoy, 'bin'), { recursive: true }); writeFileSync(join(decoy, 'bin', 'run'), '#!/bin/sh\n'); chmodSync(join(decoy, 'bin', 'run'), 0o755); symlinkSync('a.txt', join(decoy, 'link'));
+    writeFileSync(join(repo, 'a.txt'), 'changed!\n');
+    g('config', 'core.worktree', decoy);
+    expect(inspect()).toBe('dirty 0');
+    expect(changedHash()).toBe(true);
+    reset();
+    // D. stat 위조: 같은 크기로 바꾸고 시각을 되돌림 + checkStat=minimal
+    // index를 파일보다 나중 시각으로 다시 써 둔다(같은 초면 git이 「racy」로 보고 내용을 다시 읽기 때문). Agent도 같은 일을 할 수 있다.
+    spawnSync('sleep', ['1.1']); g('update-index', '--refresh');
+    const before = spawnSync('stat', ['-c', '%Y', join(repo, 'a.txt')], { encoding: 'utf8' }).stdout.trim();
+    g('config', 'core.checkStat', 'minimal'); g('config', 'core.trustctime', 'false');
+    writeFileSync(join(repo, 'a.txt'), 'LINE1\n');
+    spawnSync('touch', ['-d', `@${before}`, join(repo, 'a.txt')]);
+    expect(inspect()).toBe('dirty 0');
+    expect(changedHash()).toBe(true);
+    reset();
+    // E. replace 객체: 바뀐 내용으로 가짜 커밋을 만들어 원래 HEAD를 바꿔 보이게 함
+    const original = g('rev-parse', 'HEAD').stdout.trim();
+    writeFileSync(join(repo, 'a.txt'), 'changed!\n'); writeFileSync(join(repo, 'x.ts'), 'new');
+    g('add', '-A'); g('commit', '-qm', 'fake'); const fake = g('rev-parse', 'HEAD').stdout.trim();
+    g('update-ref', 'refs/heads/agent/x', original); g('replace', original, fake);
+    expect(wrapper(['git-inspect', '--cwd', repo]).stdout).toBe(`head ${original}\ndirty 0\n`);
+    const replaced = manifest([...tree.keys()]);
+    expect(replaced.get('a.txt')).not.toBe(tree.get('a.txt'));
+    expect(replaced.get('x.ts')).toBe('100644 -');
+    // 잘못된 인자는 거부한다.
+    for (const bad of [['--cwd', repo, '--object-format', 'md5'], ['--cwd', runnerHome, '--object-format', 'sha1'], ['--cwd', repo]]) {
+      expect(spawnSync(exec, ['tree-manifest', ...bad], { input: '', env: { PATH: '/usr/bin:/bin' } }).status, bad.join(' ')).toBe(2);
+    }
   });
 
   test('agent-file: 하위 Agent 정의만 Agent 계정으로 읽기·쓰기·지우기(fix2 추가)', () => {
@@ -342,7 +376,12 @@ describe.skipIf(!usable)('awbs-agent-exec 실행 래퍼(bash, 실제 실행)', (
     // 링크(Runner 파일을 가리키게 바꾼 것)·하위 경로·숨김 이름·작업 영역 밖은 거부한다.
     writeFileSync(join(runnerHome, 'token'), 'secret');
     symlinkSync(join(runnerHome, 'token'), join(dir, 'leak.txt'));
-    expect(read(['--cwd', worktree, '--name', 'leak.txt']).status).toBe(2);
+    expect(read(['--cwd', worktree, '--name', 'leak.txt']).status).toBe(4);
+    // FIFO·폴더처럼 일반 파일이 아닌 것도 4(Runner가 Agent의 형식 문제로 센다, 방어 점검 P3-3).
+    spawnSync('mkfifo', [join(dir, 'pipe.log')]);
+    expect(read(['--cwd', worktree, '--name', 'pipe.log']).status).toBe(4);
+    mkdirSync(join(dir, 'sub'));
+    expect(read(['--cwd', worktree, '--name', 'sub']).status).toBe(4);
     for (const bad of [['--cwd', worktree, '--name', '../a'], ['--cwd', worktree, '--name', '.hidden'], ['--cwd', worktree, '--name', 'a/b'], ['--cwd', runnerHome, '--name', 'token']]) {
       expect(read(bad).status, bad.join(' ')).toBe(2);
     }
