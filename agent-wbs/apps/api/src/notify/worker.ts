@@ -128,12 +128,13 @@ export async function sendTest(pool: Pool, epoch: number, input: { botToken?: st
     deferChange(db, project?.id ?? null, 'notify', { id });
   });
   let result = await processNotify(pool, epoch, new Date(), id);
-  if (!result) {
+  // 대화별 최소 간격(개인 1초·그룹 3초) 때문에 미뤄졌으면 그 시각까지 기다렸다가 다시 보낸다.
+  // M6 통합: 한 번만 기다리면 PC 시계가 그 사이 뒤로 가면(이 PC는 약 32초마다 2.3초) 아직 간격 안이라 rate_limited로 끝났다. 최대 3번까지 다시 확인한다.
+  for (let tries = 0; !result && tries < 3; tries++) {
     const next = (await pool.query<{ next_at: Date | null }>('select next_at from notify_outbox where id=$1', [id])).rows[0]?.next_at;
-    if (next) {
-      await delay(Math.max(0, Math.min(3010, Math.ceil(next.getTime() - Date.now()) + 10)));
-      result = await processNotify(pool, epoch, new Date(), id);
-    }
+    if (!next) break;
+    await delay(Math.max(0, Math.min(3010, Math.ceil(next.getTime() - Date.now()) + 10)));
+    result = await processNotify(pool, epoch, new Date(), id);
   }
   return { ...(result ?? { ok: false, error: 'rate_limited' as const, retryAfter: 3 }), testId: id };
 }
