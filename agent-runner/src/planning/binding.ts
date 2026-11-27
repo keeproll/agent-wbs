@@ -7,7 +7,7 @@ import { normalizeJudged } from './judged.ts';
  *
  * 원칙
  * 1. 보낼 내용을 먼저 확정하고, 그 내용에서 판단 대상(투영, projection)을 만들어 두 Agent에게 보여준다.
- * 2. 판단 기록의 `sourceRef`에 보여준 입력의 지문을 붙인다: `<job ID>#input-sha256:<64자>`.
+ * 2. 판단 기록의 `sourceRef`에 보여준 입력의 지문을 붙인다: `sha256:<64자>`(서버 계약, srv4 fix3).
  *    - JudgedContent를 보여줬으면 지문은 서버 subjectHash와 같은 계산(data-model §2.3-1)이다. 서버가 저장하는 변경 후 hash와 바로 대조할 수 있다.
  *    - 그 밖의 입력(초안 Task, CP의 새 Task, 기존 Task의 변경 목록, 분할 ops)은 같은 정규 JSON의 SHA-256이다.
  * 3. 서버로 보내기 직전에 실제 전송 본문에서 투영을 다시 만들어 지문을 비교한다. 다르면 보내지 않는다.
@@ -18,36 +18,47 @@ import { normalizeJudged } from './judged.ts';
  *     옛 묶음을 보여 주고 새 묶음과 함께 보내면, 서버는 새 내용의 hash로 판단을 저장해 「보지 않은 전제」가 유효한 판단처럼 기록된다.
  */
 
-export const INPUT_TAG = '#input-sha256:';
-const HEX = /^[0-9a-f]{64}$/;
+/** 서버 계약(srv4 fix3): 판단 입력 지문은 `sha256:<소문자 16진수 64자>`다. */
+const REF = /^sha256:([0-9a-f]{64})$/;
 
-/** 서버 canonicalJson과 같은 규칙: 객체 키를 UTF-16 순서로 정렬, undefined 키 제외, 배열 순서 유지, 공백 없음 */
+export class JcsError extends TypeError { override name = 'JcsError'; }
+
+/**
+ * RFC 8785 JCS(JSON Canonicalization Scheme). 서버 packages/shared judgement.ts `jcs`와 같은 규칙이다.
+ * - 객체 키를 UTF-16 코드 단위 순서로 정렬, 숫자·문자열은 ECMAScript JSON 표기, 공백 없음
+ * - 잘못된 Unicode 문자열·유한하지 않은 수·JSON 밖의 값은 다른 값으로 바꾸지 않고 거부한다
+ * - 값이 undefined인 객체 키는 뺀다: 전송 JSON에서 사라지는 키라 서버가 보는 본문과 같아진다
+ */
 export function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (value && typeof value === 'object') {
-    return `{${Object.entries(value).filter(([, item]) => item !== undefined).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(',')}}`;
+  if (typeof value === 'string') {
+    if (!value.isWellFormed()) throw new JcsError('JCS는 올바른 Unicode 문자열만 받습니다.');
+    return JSON.stringify(value);
   }
-  return JSON.stringify(value) ?? 'null';
+  if (typeof value === 'number' && !Number.isFinite(value)) throw new JcsError('JCS는 유한한 수만 받습니다.');
+  if (value === null || typeof value === 'number' || typeof value === 'boolean') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${Array.from(value, canonicalJson).join(',')}]`;
+  if (value && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    const entries = Object.entries(value).filter(([, item]) => item !== undefined).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([key, item]) => `${canonicalJson(key)}:${canonicalJson(item)}`).join(',')}}`;
+  }
+  throw new JcsError('JCS는 JSON 값만 받습니다.');
 }
 
-const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
+const sha256 = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex');
 
-/** 아무 입력의 지문 */
+/** 아무 입력의 지문: JCS 문자열의 UTF-8 바이트 SHA-256 */
 export function fingerprint(value: unknown): string { return sha256(canonicalJson(value)); }
 
-/** JudgedContent의 지문 = 서버 subjectHash(judged.ts normalizeJudged + canonicalJson + SHA-256) */
+/** JudgedContent의 지문 = 서버 subjectHash(judged.ts normalizeJudged + JCS + SHA-256) */
 export function judgedContentHash(content: JudgedContent): string {
   return fingerprint(normalizeJudged(content));
 }
 
-export function boundRef(jobId: string, inputFingerprint: string): string { return `${jobId}${INPUT_TAG}${inputFingerprint}`; }
+/** 판단 기록의 sourceRef: 보여 준 입력의 지문 */
+export function boundRef(inputFingerprint: string): string { return `sha256:${inputFingerprint}`; }
 
 export function refFingerprint(sourceRef: unknown): string | null {
-  if (typeof sourceRef !== 'string') return null;
-  const at = sourceRef.lastIndexOf(INPUT_TAG);
-  const hex = at < 0 ? '' : sourceRef.slice(at + INPUT_TAG.length);
-  return HEX.test(hex) ? hex : null;
+  return typeof sourceRef === 'string' ? REF.exec(sourceRef)?.[1] ?? null : null;
 }
 
 /** 판단 기록의 모든 항목이 기대 지문의 입력에 묶였는가. 문제가 없으면 null */

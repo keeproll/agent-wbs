@@ -80,7 +80,7 @@ describe('초기 분석(G§4.2 PL-000) 단계 진행', () => {
     expect(draft.fence).toBe(2);
     for (const task of draft.tasks) {
       expect(task.judgedRules.items.map((i) => i.rule)).toEqual(['revert', 'contract', 'refactor']);
-      expect(task.judgedRules.items.every((i) => i.agreedBy.join() === 'Claude,Codex' && i.sourceRef.startsWith(`${jobId}#input-sha256:`) && i.judgedAt === NOW)).toBe(true);
+      expect(task.judgedRules.items.every((i) => i.agreedBy.join() === 'Claude,Codex' && i.sourceRef.startsWith('sha256:') && i.judgedAt === NOW)).toBe(true);
       // 작성자 초안의 단독 추정은 버리고 두 Agent의 독립 추정을 합의한 값으로 바꾼다.
       expect(task.estimate).toMatchObject({ estHours: 2, agreedBy: ['Claude', 'Codex'] });
     }

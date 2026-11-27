@@ -261,24 +261,56 @@ describe('실제 서버 + Runner Planning orchestration', () => {
     expect(refFingerprint(recorded?.sourceRef)).toBe(updated?.subjectHash);
   });
 
-  test('서버 확인: Runner 관문을 거치지 않고 옛 내용에 묶인 판단을 새 묶음과 함께 보내면 서버는 막지 못한다(보고 대상)', async () => {
-    const { project: s, task, job } = await rejudgeJob('fix5-server-probe');
+  test('서버 확인(srv4 fix3): 옛 내용에 묶인 판단을 새 묶음과 함께 보내면 409 VERSION_CONFLICT이고 아무것도 저장하지 않는다', async () => {
+    const { project: s, task, job } = await rejudgeJob('fix6-server-probe');
+    const before = (await wbsSnapshot(ownerPool, s.id)).tasks.find((t) => t.taskKey === task.taskKey);
     // 옛 내용(지금 묶음)을 본 판단이라고 적고, 다른 새 묶음을 함께 보낸다. Runner는 이런 본문을 보내지 않는다(bind).
     const oldFingerprint = judgedContentHash(task.content);
     const item = { rule: 'revert', result: 'met', agreedBy: ['Claude', 'Codex'], basis: '옛 내용 판단', judgedAt: new Date().toISOString(),
-      sourceRef: boundRef(job.id, oldFingerprint), subjectHash: task.subjectHash };
-    const response = await api()('submitTaskPlan', { epoch: await epoch(), idempotencyKey: `submitTaskPlan:runner-1:${crypto.randomUUID()}`, params: { taskKey: task.taskKey },
+      sourceRef: boundRef(oldFingerprint), subjectHash: task.subjectHash };
+    const error = await api()('submitTaskPlan', { epoch: await epoch(), idempotencyKey: `submitTaskPlan:runner-1:${crypto.randomUUID()}`, params: { taskKey: task.taskKey },
       body: { jobId: job.id, fence: job.fence, grades: { dev: { modelId: 'm', effort: 'high', reason: 'r' }, qa: { modelId: 'm', effort: 'high', reason: 'r' } },
-        subagents: { dev: [], qa: [], basis: '' }, conflictGroup: { name: 'probe-group', reason: '시험' }, judgedRules: { schemaVersion: 1, items: [item] } as never } });
-    await finish(job, { status: 'done', result: {} });
+        subagents: { dev: [], qa: [], basis: '' }, conflictGroup: { name: 'probe-group', reason: '시험' }, judgedRules: { schemaVersion: 1, items: [item] } as never } })
+      .then(() => null, (e: unknown) => e as { status: number; error?: { code: string; details?: { subjectHash?: string } } });
+    await finish(job, { status: 'failed', error: { code: 'VERSION_CONFLICT', message: '시험' } });
+    expect(error?.status).toBe(409);
+    expect(error?.error?.code).toBe('VERSION_CONFLICT');
+    // 서버가 알려 준 현재 대상 hash = 새 묶음을 반영한 내용의 지문(Runner 계산과 같다)
+    expect(error?.error?.details?.subjectHash).toBe(judgedContentHash({ ...task.content, conflictGroup: 'probe-group' }));
+    const after = (await wbsSnapshot(ownerPool, s.id)).tasks.find((t) => t.taskKey === task.taskKey);
+    expect(after?.content.conflictGroup).toBe(before?.content.conflictGroup ?? null);
+  });
+
+  test('409 뒤 다시 판단(실제 DB): 판단하는 동안 Task가 바뀌면 VERSION_CONFLICT로 멈추고, 새 job은 새 내용을 보고 다시 판단해 저장된다', async () => {
+    const { project: s, task, job } = await rejudgeJob('fix6-stale-1');
+    const judgedRow = async () => JSON.stringify((await ownerPool.query('select sp.judged_rules,t.conflict_group from tasks t left join task_splits sp on sp.task=t.id where t.task_key=$1', [task.taskKey])).rows);
+    const beforeRow = await judgedRow();
+    const run = await context();
+    // 판단 도중 팀장이 Task 제목을 바꾼 상황: 첫 판단이 끝난 뒤 DB의 내용을 바꾼다.
+    const judge = run.agents.Codex.judgeRules.bind(run.agents.Codex);
+    run.agents.Codex.judgeRules = async (request) => {
+      await ownerPool.query('update tasks set title=$2 where task_key=$1', [task.taskKey, `${task.content.title} (수정)`]);
+      return judge(request);
+    };
+    const outcome = await runPlanningJob(job, run.ctx);
+    expect(outcome).toMatchObject({ status: 'failed', error: { code: 'VERSION_CONFLICT' } });
+    await finish(job, outcome);
+    // 거부된 보고는 판단 기록·충돌 묶음을 하나도 바꾸지 않았다.
+    expect(await judgedRow()).toBe(beforeRow);
+    // 새 job(서버가 다시 만든 것처럼 지금 스냅샷)으로 다시 판단하면 새 제목을 보고 판단하고 저장된다.
+    const retry = await rejudgeJob('fix6-stale-2');
+    expect(retry.task.content.title).toBe(`${task.content.title} (수정)`);
+    const again = await context();
+    const outcome2 = await runPlanningJob(retry.job, again.ctx);
+    expect(outcome2).toMatchObject({ status: 'done' });
+    await finish(retry.job, outcome2);
+    const shown = (again.agents.Codex.calls.find((c) => c.method === 'judgeRules')?.request as { subjects: { content: { title: string } }[] }).subjects[0]?.content.title;
+    expect(shown).toBe(`${task.content.title} (수정)`);
     const updated = (await wbsSnapshot(ownerPool, s.id)).tasks.find((t) => t.taskKey === task.taskKey);
     const recorded = (await ownerPool.query<{ judged_rules: { items: { subjectHash: string; sourceRef: string }[] } }>(
       'select s.judged_rules from task_splits s join tasks t on t.id=s.task where t.task_key=$1', [task.taskKey])).rows[0]?.judged_rules.items[0];
-    // 현재 서버 동작: 받아들이고 새 내용의 hash를 붙여 저장한다. 지문(sourceRef)은 옛 내용 → 서버가 지문을 대조하면 막을 수 있다.
-    expect(response.status).toBe(204);
     expect(recorded?.subjectHash).toBe(updated?.subjectHash);
-    expect(refFingerprint(recorded?.sourceRef)).toBe(oldFingerprint);
-    expect(refFingerprint(recorded?.sourceRef)).not.toBe(updated?.subjectHash);
+    expect(refFingerprint(recorded?.sourceRef)).toBe(updated?.subjectHash);
   });
 
   test('5차 리뷰 P1(실제 DB): 원 Task를 취소하는 분할의 새 Task는 상속될 묶음(shared-db)을 보고 판단하고, 지문이 서버 hash와 같다', async () => {

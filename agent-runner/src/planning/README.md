@@ -156,34 +156,47 @@ const outcome = await runPlanningJob(job, {
   - 왜: 잘못된 값을 「신뢰도 하」 같은 정상 값으로 바꾸면 일정 계산에 정상 합의처럼 쓰인다. 실제 CLI 출력 파서(M5-01)가 같은 검사를 해도 이 경계에서 다시 막는다.
 - 예: Claude 2h(1~4h, 상), Codex 4h(2~6h, 하) → 3h(1~6h, 하), `agreedBy: ['Claude','Codex']`.
 
-## 판단과 「보여 준 입력」 묶기(`binding.ts`, 4차 리뷰)
+## 판단과 「보여 준 입력」 묶기(`judged.ts`·`binding.ts`)
 
-판단 기록은 Agent가 실제로 본 내용에 대한 판단이어야 한다. 그래서 아래 순서를 지킨다.
+판단 기록은 Agent가 실제로 본 내용에 대한 판단이어야 한다. 서버(srv4 fix3)는 이것을 지문으로 대조한다.
 
-1. 보낼 내용을 먼저 확정한다.
-   - 예: 재판단은 작성자가 고른 충돌 묶음을 먼저 정한다.
-   - 예: 초안은 합의 추정을 반영한 Task를 먼저 만든다.
-2. 그 내용에서 판단 대상(투영)을 만들어 두 Agent에게 보여 준다.
-   - 재판단: payload 내용 + 보고에 담는 충돌 묶음
-   - CP 판단: 대상의 「변경 후」 내용
-   - CP 새 Task: `t`
-   - 기존 Task 변경: `{before, changes}`
-   - 분할: ops + 원래 Task
-   - 초안: 판단 기록을 뺀 Task
-3. 판단 기록의 `sourceRef`에 보여 준 입력의 지문을 붙인다: `<job ID>#input-sha256:<64자>`.
-   - JudgedContent를 보여 줬으면 지문은 서버 subjectHash와 같은 계산이다.
-   - 그래서 서버가 저장하는 변경 후 hash와 바로 비교할 수 있다.
-4. 서버로 보내기 직전(reporter의 `bind`)에 실제 전송 본문에서 투영을 다시 만들어 지문을 비교한다.
-   - 다르면 보내지 않는다.
-   - 새로 만든 본문이면 한 번 다시 판단한다.
-   - 진행 기록에서 읽은 본문이면 손상(`CHECKPOINT_UNREADABLE`)이다.
+- **판단 투영은 계약의 JudgedContent 정의 그대로다**(`judged.ts`, 서버 함수와 같은 규칙).
+  - 재판단: payload 내용 + 보고에 담는 충돌 묶음(먼저 확정)
+  - CP 판단: 대상의 「변경 후」 내용(payload `after`)
+  - CP 새 Task: 서버 `newTaskSource`와 같다.
+    - 설계를 생략하면 권장 구역이다.
+    - AC 방법 생략은 빈 문자열이다.
+    - **충돌 묶음 생략은 분할 상속을 적용한 값**이다: 원 Task를 취소하는 분할에서 원 Task를 대신하는 Task가 상속한다.
+    - 조사(Analysis) Task가 묶음을 생략하면, 원 Task 작업 유형이 payload에 없어 상속 여부를 정할 수 없다. 그래서 보내지 않는다(명시를 요구).
+  - 내용이 바뀌는 기존 Task: 스냅샷 내용에 title·doneCond·scopeAdd·acAdd를 서버와 같은 규칙으로 적용한 내용(acAdd 문장 해석 포함)
+  - 초안: 서버 `draftSource`(설계 없음)
+  - 분할 판단(D-34): 판단 기록을 뺀 ops + 대상 Task들(원 Task와 ops가 가리키는 기존 Task, 키 순서, 지금 내용)
+- **지문**: 투영을 JCS(RFC 8785)로 직렬화하고, UTF-8 바이트를 SHA-256으로 계산한다.
+  - 문자열은 정규화하지 않는다(NFC·공백 정리 없음).
+  - 잘못된 Unicode·유한하지 않은 수는 거부한다.
+  - 계약 고정 벡터 `agent-wbs/contracts/fixtures/judgement-bindings.json`으로 시험한다.
+- **sourceRef = `sha256:<소문자 64자>`**다. 재판단의 `subjectHash`도 변경 후 내용의 같은 지문이다.
+- 서버는 지문이 다르면 `409 VERSION_CONFLICT`(details.subjectHash = 현재 대상 hash)로 거부한다.
+  - 예: 판단하는 동안 Task가 바뀐 경우
+  - Runner는 같은 키로 다시 보내지 않고 결과 코드 `VERSION_CONFLICT`로 멈춘다.
+  - 다시 시도한 job(새 스냅샷)이 새 내용을 보고 다시 판단한다. 실제 DB 시험이 있다.
+- 서버로 보내기 직전(reporter의 `bind`)에 실제 전송 본문에서 투영을 다시 만들어 지문을 비교한다.
+  - 다르면 보내지 않는다.
+  - 새로 만든 본문이면 한 번 다시 판단한다.
+  - 진행 기록의 본문이면 `CHECKPOINT_UNREADABLE`이다.
+- 관문(`wire.ts`)은 계약이 정한 필드만 검사한다. 설계 `content` 같은 자유 JSON 안은 해석하지 않는다.
 
-- 왜: 작성자가 새 충돌 묶음을 고르는데 규칙 판단에 옛 묶음을 보여 주면, 서버는 새 내용의 hash로 판단을 저장한다. 「보지 않은 전제」가 유효한 판단처럼 기록된다.
-- 서버는 이 경우를 지금 막지 못한다. `sourceRef`의 지문과 저장 hash를 비교하면 서버에서도 막을 수 있다(fix5 보고).
-- 관문(`wire.ts`)은 계약이 정한 필드만 검사한다.
-  - 대상: 추정 `items`·초안 `estimate`의 값, CP 새 Task의 `conf`, 판단 기록(`judgedRules`·`taskJudgements`·`splitJudgements`)의 형식과 합의 주체 둘.
-  - 설계 `content` 같은 자유 JSON 안은 해석하지 않는다.
-  - 예: 제품 설계 예제의 숫자 `confidence: 0.91`은 Planning 신뢰도가 아니다.
+## 목적지 대조(5차 리뷰 P2)
+
+- 모든 보고는 목적지(`to`)를 지금 job payload에서 만들어 넘긴다.
+  - 경로 인자: jobId·taskKey·CP id·세션 id
+  - 출처: 분할은 원 Task, 차이 분석은 input
+- 전송 직전에 실제 요청의 경로 인자·출처, 본문의 jobId·fence를 이것과 대조한다.
+  - **저장본의 목적지는 믿지 않는다.**
+  - 다르면 고치거나 새 키로 대신 보내지 않고 멈춘다(`CHECKPOINT_UNREADABLE`).
+- 보낸 요청 기록은 이번 임대 범위(`<jobId>@<fence>`)로 둔다.
+  - 같은 job을 새 fence로 다시 받으면 새 요청이다.
+  - 왜: 옛 fence 본문은 서버가 LEASE_LOST로 거부한다.
 
 ## 보고와 멱등
 

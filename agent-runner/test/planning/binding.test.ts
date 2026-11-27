@@ -43,8 +43,8 @@ describe('P1: 새 충돌 묶음은 판단에도 보여 준다', () => {
     expect(body.conflictGroup.name).toBe('shared-db');
     const [item] = body.judgedRules.items;
     expect(item?.result).toBe('not_met');
-    // 낡은 내용 감지용 hash는 계약대로 payload 값, 보여 준 입력의 지문은 새 묶음을 반영한 내용의 서버 hash다.
-    expect(item?.subjectHash).toBe(HASH);
+    // 서버 계약(srv4 fix3): subjectHash와 sourceRef 지문 모두 새 묶음을 반영한 변경 후 내용의 서버 hash다.
+    expect(item?.subjectHash).toBe(judgedContentHash({ ...content(), conflictGroup: 'shared-db' }));
     expect(refFingerprint(item?.sourceRef)).toBe(judgedContentHash({ ...content(), conflictGroup: 'shared-db' }));
     expect(refFingerprint(item?.sourceRef)).not.toBe(judgedContentHash(content()));
   });
@@ -58,9 +58,9 @@ describe('P1: 새 충돌 묶음은 판단에도 보여 준다', () => {
   test('묶인 판단 검사: 지문 없음·다른 입력의 지문은 문제다', () => {
     const record = (sourceRef: string) => ({ schemaVersion: 1, items: [{ sourceRef }] });
     const fp = fingerprint({ a: 1 });
-    expect(bindingProblem(record(boundRef('j', fp)), fp, 'T')).toBeNull();
+    expect(bindingProblem(record(boundRef(fp)), fp, 'T')).toBeNull();
     expect(bindingProblem(record('j'), fp, 'T')).toMatch(/지문이 없습니다/);
-    expect(bindingProblem(record(boundRef('j', fingerprint({ a: 2 }))), fp, 'T')).toMatch(/본 입력과 보내는 내용이 다릅니다/);
+    expect(bindingProblem(record(boundRef(fingerprint({ a: 2 }))), fp, 'T')).toMatch(/본 입력과 보내는 내용이 다릅니다/);
   });
 
   test('새로 만든 본문이 묶이지 않으면 한 번 다시 판단하고, 그래도 다르면 멈춘다', async () => {

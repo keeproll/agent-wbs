@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import type { ClaimedJob } from '../../src/api/generated/client.ts';
+import { judgedContentHash } from '../../src/planning/binding.ts';
 import { runPlanningJob } from '../../src/planning/index.ts';
 import { wireProblem } from '../../src/planning/wire.ts';
 import { addOp, apiError, bodyOf, bootstrapJob, content, context, fakeApi, HASH, inputJob, NOW, progress, tempHome, wbsSnapshot } from './harness.ts';
@@ -134,7 +135,7 @@ describe('계약 6: WBS 스냅샷과 기존 Task 판단(taskJudgements)', () => 
 });
 
 describe('계약 5: 기존 Task 재판단(planning:null, proposal:null, tasks ≥ 1)', () => {
-  test('Task마다 등급·판단을 보내고, 판단에는 payload의 hash를 그대로 붙인다', async () => {
+  test('Task마다 등급·판단을 보내고, 판단의 subjectHash·sourceRef는 변경 후 내용의 서버 hash다(srv4 fix3 계약)', async () => {
     const fake = fakeApi();
     const { ctx } = await context(home, fake.api);
     const job: Job<'planning'> = { id: '99999999-0000-4000-8000-999999999999', leaseUntil: NOW, fence: 1, kind: 'planning',
@@ -142,7 +143,8 @@ describe('계약 5: 기존 Task 재판단(planning:null, proposal:null, tasks �
     expect((await runPlanningJob(job, ctx)).status).toBe('done');
     expect(fake.schemaErrors).toEqual([]);
     const body = bodyOf(fake.calls, 'submitTaskPlan') as { judgedRules: { items: { rule: string; subjectHash: string; agreedBy: string[] }[] } };
-    expect(body.judgedRules.items).toMatchObject([{ rule: 'revert', subjectHash: HASH, agreedBy: ['Claude', 'Codex'] }]);
+    const after = judgedContentHash(content());
+    expect(body.judgedRules.items).toMatchObject([{ rule: 'revert', subjectHash: after, sourceRef: `sha256:${after}`, agreedBy: ['Claude', 'Codex'] }]);
   });
 });
 

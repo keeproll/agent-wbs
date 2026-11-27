@@ -211,7 +211,7 @@ export async function judgeChanges(run: JobRun, ops: readonly AnyOp[], wbs: WbsS
   const verdicts = await run.both('분할 규칙 판단', (a) => a.judgeRules({ jobId: run.job.id, rules: SPLIT_RULES, subjects }));
   const fp = new Map(subjects.map((s) => [s.target, judgedContentHash(s.content)]));
   const { records, disagreements } = agreeJudgements(subjects.map((s) => s.target), SPLIT_RULES, verdicts,
-    { judgedAt: run.iso(), sourceRef: run.job.id, sourceRefFor: (target) => boundRef(run.job.id, fp.get(target) ?? '') });
+    { judgedAt: run.iso(), sourceRef: run.job.id, sourceRefFor: (target) => boundRef(fp.get(target) ?? '') });
   const empty = { schemaVersion: 1 as const, items: [] };
   const judged = ops.map((op) => (op.op === 'add' ? { ...op, t: { ...op.t, judgedRules: records.get(op.ref) ?? empty } } : op));
   const taskJudgements = changed.map((taskKey) => ({ taskKey, judgedRules: records.get(taskKey) ?? empty }));

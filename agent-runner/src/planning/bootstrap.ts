@@ -148,7 +148,7 @@ async function buildDraft(run: JobRun<BootJob>, request: Parameters<import('./ag
   const verdicts = await run.both('분할 규칙 판단', (a) => a.judgeRules({ jobId: run.job.id, rules: SPLIT_RULES, subjects: finals.map((t) => ({ target: t.ref, content: judgedOfDraftTask(t) })) }));
   const fp = new Map(finals.map((t) => [t.ref, judgedContentHash(judgedOfDraftTask(t))]));
   const { records, disagreements } = agreeJudgements(refs, SPLIT_RULES, verdicts,
-    { judgedAt: run.iso(), sourceRef: run.job.id, sourceRefFor: (ref) => boundRef(run.job.id, fp.get(ref) ?? '') });
+    { judgedAt: run.iso(), sourceRef: run.job.id, sourceRefFor: (ref) => boundRef(fp.get(ref) ?? '') });
   const tasks = finals.map((task) => ({ ...task, judgedRules: records.get(task.ref) ?? { schemaVersion: 1 as const, items: [] } }));
   return { body: { ...content, tasks }, disagreements };
 }
