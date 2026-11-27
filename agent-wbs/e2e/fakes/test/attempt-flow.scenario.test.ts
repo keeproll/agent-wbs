@@ -107,6 +107,7 @@ beforeEach(async () => {
     taskCheck: async context => {
       checks.push(context.job.payload.kind);
       const result = await taskCheck(context);
+      expect(result.status, JSON.stringify(result)).toBe(failCheckStep ? 'fail' : 'pass');
       return result;
     },
     // 종료 JSON은 가짜 자료다. 변경 파일과 작업 폴더 청결은 실제 Git으로 확인한다.
