@@ -13,7 +13,7 @@ const commit = 'a'.repeat(40);
 const raw = (properties: object, required: string[] = []) => JSON.stringify({ openapi: '3.1.0', paths: {
   '/users': { post: { requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties, required } } } }, responses: {} } },
 } });
-const input = { commit, jobId: 'job-1', fence: 4, files: [{ path: 'contracts/api/openapi.json', raw: raw({ id: { type: 'string' }, name: { type: 'string' } }) }] };
+const input = { commit, jobId: 'job-1', fence: 4, ref: 'main', jobKind: 'design_apply' as const, files: [{ path: 'contracts/api/openapi.json', raw: raw({ id: { type: 'string' }, name: { type: 'string' } }) }] };
 const generated: DesignExtractor = async ({ item }) => {
   const [actual] = parseContracts([{ path: 'contracts/api/generated.json', raw: raw({ id: { type: 'number' } }) }]).items;
   return actual?.itemKey === item.itemKey ? actual.contract : null;
@@ -50,7 +50,7 @@ test('branch·Task 연결을 유지하고 외부 어댑터가 계약 필드를 �
   let context: unknown;
   const source = input.files[0];
   if (!source) throw new Error('시험 입력이 없습니다.');
-  const snapshot = await buildDesignSnapshot({ ...input, ref: 'agent/task-5', files: [{ path: source.path,
+  const snapshot = await buildDesignSnapshot({ ...input, ref: 'agent/TASK-0005', jobKind: 'attempt', branch: 'agent/TASK-0005', files: [{ path: source.path,
     raw: source.raw.replace('"post":{', '"post":{"x-task-key":"TASK-0005",'),
   }] }, { openapi: async received => {
     context = { commit: received.commit, ref: received.ref, itemKey: received.item.itemKey };
@@ -59,7 +59,7 @@ test('branch·Task 연결을 유지하고 외부 어댑터가 계약 필드를 �
     field.type = 'number';
     return received.item.contract;
   } });
-  expect(context).toEqual({ commit, ref: 'agent/task-5', itemKey: 'POST /users' });
+  expect(context).toEqual({ commit, ref: 'agent/TASK-0005', itemKey: 'POST /users' });
   expect(snapshot.files[0]?.status).toBe('draft');
   expect(snapshot.items[0]?.contract?.fields[0]?.type).toBe('object');
   expect(snapshot.drifts[0]).toMatchObject({ taskKey: 'TASK-0005', compat: 'breaking' });
@@ -68,15 +68,15 @@ test('branch·Task 연결을 유지하고 외부 어댑터가 계약 필드를 �
 test('미지원 계약은 추출값이 있어도 unchecked이고 raw를 보존한다', async () => {
   const snapshot = await buildDesignSnapshot({ ...input, files: [{ path: 'contracts/db/neo4j/model.cypher', raw: 'CREATE CONSTRAINT foo' }] });
   expect(snapshot.files[0]?.raw).toBe('CREATE CONSTRAINT foo');
-  expect(snapshot.items[0]?.extracted).toBeNull();
-  expect(snapshot.drifts[0]?.compat).toBe('unchecked');
+  expect(snapshot.items).toEqual([]);
+  expect(snapshot.drifts).toEqual([]);
 });
 
 test('SQL·AsyncAPI 어댑터는 자기 항목만 추출하고 한 항목의 실패가 나머지를 막지 않는다', async () => {
   const seen: string[] = [];
   const snapshot = await buildDesignSnapshot({ ...input, files: [
     { path: 'contracts/db/postgres/migrations/001.sql', raw: 'CREATE TABLE users (id uuid PRIMARY KEY);' },
-    { path: 'contracts/events/asyncapi.json', raw: JSON.stringify({ asyncapi: '3.0.0', channels: { updates: { address: 'updates', messages: { changed: { payload: { type: 'string' } } } } } }) },
+    { path: 'contracts/events/asyncapi.json', raw: JSON.stringify({ asyncapi: '3.0.0', servers: { ws: { protocol: 'ws' } }, channels: { updates: { address: 'updates', messages: { changed: { payload: { type: 'string' } } } } } }) },
   ] }, {
     sql: async ({ item }) => { seen.push(item.itemKey); return item.contract; },
     asyncapi: async ({ item }) => { seen.push(item.itemKey); throw new Error('추출 실패'); },

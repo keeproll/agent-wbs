@@ -1,6 +1,7 @@
-import { astMapper, astVisitor, parse, toSql, type CreateColumnDef, type CreateIndexStatement, type Expr, type QName, type TableConstraint } from 'pgsql-ast-parser';
+import { astMapper, astVisitor, toSql, type CreateColumnDef, type CreateIndexStatement, type Expr, type QName, type TableConstraint } from 'pgsql-ast-parser';
 import type { ContractFile } from './parse.ts';
 import { pointer, type DesignItem } from './shape.ts';
+import { postgresStatements, sqlType } from './postgres.ts';
 
 interface Column { definition: CreateColumnDef; desc: string }
 interface Table {
@@ -9,12 +10,15 @@ interface Table {
   columns: Map<string, Column>;
   constraints: TableConstraint[];
   indexes: CreateIndexStatement[];
+  rawConstraints: Map<string, string>;
+  unchecked?: boolean;
+  description?: string | null;
 }
 
 const tableName = (name: QName) => name.schema && name.schema !== 'public' ? `${name.schema}.${name.name}` : name.name;
 const primary = (table: Table, column: CreateColumnDef) => column.constraints?.some(c => c.type === 'primary key') ||
   table.constraints.some(c => c.type === 'primary key' && c.columns.some(k => k.name === column.name.name));
-const required = (table: Table, column: CreateColumnDef) => Boolean(primary(table, column) || column.constraints?.some(c => c.type === 'not null'));
+const required = (table: Table, column: CreateColumnDef) => Boolean(primary(table, column) || /^(big|small)?serial\d?$/.test(toSql.dataType(column.dataType).trim()) || column.constraints?.some(c => c.type === 'not null' || c.type === 'add generated' && c.expression === undefined));
 
 function addColumn(table: Table, column: CreateColumnDef, ifNotExists = false): void {
   if (table.columns.has(column.name.name)) {
@@ -65,9 +69,32 @@ function renameColumnReferences(tables: Map<string, Table>, table: Table, before
 /** SQL을 실행하지 않고 구문 트리만 읽는다. 지원하지 않는 변경은 전체 SQL 스키마를 읽기 실패로 보고한다. */
 export function sqlItems(files: readonly ContractFile[]): DesignItem[] {
   const tables = new Map<string, Table>();
+  const unchecked = new Set<string>();
+  const enums = new Map<string, string[]>();
+  const columnType = (column: CreateColumnDef) => {
+    const name = sqlType(toSql.dataType(column.dataType)), values = enums.get(name);
+    return values ? `${name}:enum:${JSON.stringify(values)}` : name;
+  };
   for (const file of [...files].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0)) {
     if (file.error !== undefined || file.raw === undefined) throw new Error('SQL 파일을 읽지 못했습니다.');
-    for (const statement of parse(file.raw)) {
+    for (const statement of postgresStatements(file.raw)) {
+      if (statement.type === 'unsupported' || statement.type === 'raw constraint') {
+        if (statement.table) {
+          const name = tableName(statement.table);
+          let table = tables.get(name);
+          if (!table) { table = { path: file.path, name, columns: new Map(), constraints: [], indexes: [], rawConstraints: new Map(), unchecked: true }; tables.set(name, table); }
+          if (statement.type === 'unsupported') unchecked.add(name);
+          else table?.rawConstraints.set(statement.name ?? statement.sql, statement.sql);
+        }
+        continue;
+      }
+      if (statement.type === 'create enum') { enums.set(sqlType(tableName(statement.name)), statement.values.map(v => v.value)); continue; }
+      if (statement.type === 'alter enum') {
+        const name = sqlType(tableName(statement.name)), values = enums.get(name);
+        if (statement.change.type === 'add value' && values) values.push(statement.change.add.value);
+        else for (const table of tables.values()) if ([...table.columns.values()].some(c => sqlType(toSql.dataType(c.definition.dataType)) === name)) table.unchecked = true;
+        continue;
+      }
       if (statement.type === 'create table') {
         const name = tableName(statement.name);
         if (tables.has(name)) {
@@ -75,7 +102,7 @@ export function sqlItems(files: readonly ContractFile[]): DesignItem[] {
           throw new Error('SQL 테이블이 중복입니다.');
         }
         if (statement.inherits?.length) throw new Error('상속 테이블은 대조 안 함입니다.');
-        const table: Table = { path: file.path, name, columns: new Map(), constraints: [], indexes: [] };
+        const table: Table = { path: file.path, name, columns: new Map(), constraints: [], indexes: [], rawConstraints: new Map() };
         for (const column of statement.columns) {
           if (column.kind !== 'column') throw new Error('LIKE 테이블은 대조 안 함입니다.');
           addColumn(table, column);
@@ -125,7 +152,12 @@ export function sqlItems(files: readonly ContractFile[]): DesignItem[] {
             for (const owner of tables.values()) for (const reference of foreignReferences(owner)) if (tableName(reference.foreignTable) === table.name) reference.foreignTable.name = change.to.name;
             tables.delete(table.name); table.name = renamed; tables.set(renamed, table);
           } else if (change.type === 'add constraint') addConstraint(table, change.constraint);
-          else throw new Error('지원하지 않는 SQL 테이블 변경입니다.');
+          else if (change.type === 'drop constraint') {
+            const name = change.constraint.name;
+            table.rawConstraints.delete(name);
+            table.constraints = table.constraints.filter(c => c.constraintName?.name !== name && !(c.type === 'primary key' && name === `${table.name}_pkey`));
+            for (const column of table.columns.values()) column.definition.constraints = (column.definition.constraints ?? []).filter(c => c.constraintName?.name !== name && !(c.type === 'primary key' && name === `${table.name}_pkey`));
+          } else { table.unchecked = true; }
         }
       } else if (statement.type === 'create index') {
         const table = tables.get(tableName(statement.table));
@@ -140,7 +172,11 @@ export function sqlItems(files: readonly ContractFile[]): DesignItem[] {
         const target = statement.on.column;
         const column = tables.get(tableName({ name: target.table, ...(target.schema && { schema: target.schema }) }))?.columns.get(target.column);
         if (!column) throw new Error('설명을 넣을 SQL 컬럼이 없습니다.');
-        column.desc = statement.comment;
+        column.desc = statement.comment ?? '';
+      } else if (statement.type === 'comment' && statement.on.type === 'table') {
+        const table = tables.get(tableName(statement.on.name));
+        if (!table) throw new Error('설명을 넣을 SQL 테이블이 없습니다.');
+        if (statement.comment === null || statement.comment.length <= 8192) table.description = statement.comment;
       } else if (!['begin', 'start transaction', 'commit', 'insert', 'update', 'delete', 'comment', 'create schema'].includes(statement.type)) {
         // shortcut: 함수·동적 SQL은 안전하게 읽기 실패로 남긴다. 실제 SQL 추출기 연결 때 지원 범위를 늘린다.
         throw new Error(`지원하지 않는 SQL 구문입니다: ${statement.type}`);
@@ -149,6 +185,7 @@ export function sqlItems(files: readonly ContractFile[]): DesignItem[] {
   }
   return [...tables.values()].map(table => ({
     itemKey: `postgres:${table.name}`, name: table.name, kind: 'postgres', path: table.path,
+    ...(table.description !== undefined && { description: table.description }),
     content: { type: 'postgres', columns: [...table.columns.entries()].map(([name, { definition: c, desc }]) => {
       const reference = c.constraints?.find(c => c.type === 'reference');
       const foreign = table.constraints.find(c => c.type === 'foreign key' && c.localColumns.some(k => k.name === name));
@@ -156,10 +193,10 @@ export function sqlItems(files: readonly ContractFile[]): DesignItem[] {
         : foreign?.type === 'foreign key' ? `${tableName(foreign.foreignTable)}.${foreign.foreignColumns[foreign.localColumns.findIndex(k => k.name === name)]?.name ?? ''}` : null;
       const unique = Boolean(c.constraints?.some(c => c.type === 'primary key' || c.type === 'unique') || table.constraints.some(c => (c.type === 'primary key' || c.type === 'unique') && c.columns.length === 1 && c.columns[0]?.name === name));
       const fallback = c.constraints?.find(c => c.type === 'default');
-      return { name, type: toSql.dataType(c.dataType).trim(), nullable: !required(table, c), pk: Boolean(primary(table, c)), unique, fk, default: fallback?.type === 'default' ? toSql.expr(fallback.default) : null, desc };
-    }), constraints: table.constraints.map(constraintText), usedBy: [],
+      return { name, type: columnType(c), nullable: !required(table, c), pk: Boolean(primary(table, c)), unique, fk, default: fallback?.type === 'default' ? toSql.expr(fallback.default) : null, desc };
+    }), constraints: [...table.constraints.map(constraintText), ...table.rawConstraints.values()], usedBy: [],
     indexes: table.indexes.map(i => ({ name: i.indexName?.name ?? '', columns: i.expressions.map(e => toSql.expr(e.expression)).join(', '), kind: i.unique ? 'UNIQUE' : (i.using?.name ?? 'BTREE').toUpperCase() })),
     },
-    contract: { fields: [...table.columns.entries()].map(([name, { definition: c }]) => ({ path: `/${pointer(name)}`, type: toSql.dataType(c.dataType).trim(), required: required(table, c) })) },
+    ...(!table.unchecked && !unchecked.has(table.name) && { contract: { fields: [...table.columns.entries()].map(([name, { definition: c }]) => ({ path: `/${pointer(name)}`, type: columnType(c), required: required(table, c) })) } }),
   }));
 }

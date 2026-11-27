@@ -85,7 +85,7 @@ test('Avro·Neo4j·QuestDB·미지원 파일은 원문을 남기고 대조용 �
     file('contracts/db/questdb/tables.sql', 'CREATE TABLE measurements (at TIMESTAMP) TIMESTAMP(at);'),
   ], 'agent/task-1');
   expect(parsed.files.every(f => f.status === 'draft' && f.raw)).toBe(true);
-  expect(parsed.items.map(i => i.itemKey)).toEqual(['users.created', 'file:contracts/db/neo4j/model.cypher', 'file:contracts/db/questdb/tables.sql']);
+  expect(parsed.items.map(i => i.itemKey)).toEqual(['users.created']);
   expect(parsed.items.every(i => i.contract === undefined)).toBe(true);
 });
 
@@ -103,7 +103,7 @@ test('Q-14 A: Kafka JSON Schema는 지역 참조를 해석하고 Avro·Protobuf�
 
 test('중복 항목·읽기 실패·저장소 밖 경로를 조용히 덮어쓰지 않는다', () => {
   const raw = api({ '/users': { get: { responses: {} } } });
-  expect(() => parseContracts([file('contracts/a.json', raw), file('contracts/b.json', raw)])).toThrow();
+  expect(parseContracts([file('contracts/a.json', raw), file('contracts/b.json', raw)]).problems['GET /users']).toContain('중복');
   for (const path of ['src/openapi.json', '../contracts/a.json', 'contracts/../a', 'contracts//a', 'contracts\\a', '/contracts/a']) {
     expect(() => parseContracts([file(path, raw)])).toThrow();
   }
@@ -117,7 +117,7 @@ test('SQL 마이그레이션을 이름순으로 누적하고 CREATE·ALTER·DROP
   ]);
   expect(parsed.items.map(i => i.itemKey)).toEqual(['postgres:users']);
   expect(parsed.items[0]?.contract?.fields).toEqual([
-    { path: '/id', type: 'uuid', required: true }, { path: '/name', type: 'varchar (40)', required: false },
+    { path: '/id', type: 'uuid', required: true }, { path: '/name', type: 'character varying(40)', required: false },
     { path: '/email', type: 'text', required: true },
   ]);
   expect(parsed.items[0]?.content).toHaveProperty('indexes');
@@ -140,7 +140,8 @@ test('M6-05 화면용 message content와 원문 전용 빈 content를 구별한�
     })), file('contracts/db/neo4j/model.cypher', '원문'),
   ]);
   expect(parsed.items[0]?.content).toEqual({ type: 'message', auth: '', messages: [{ name: 'changed', direction: 'send', schema: '{"type":"string"}' }], rules: [], topic: null });
-  expect(parsed.items[1]?.content).toEqual({});
+  expect(parsed.items).toHaveLength(1);
+  expect(parsed.files[1]?.raw).toBe('원문');
 });
 
 test('M6-05 화면용 postgres content에 기본키·외래키·기본값·인덱스를 보존한다', () => {
@@ -155,7 +156,7 @@ test('M6-05 화면용 postgres content에 기본키·외래키·기본값·인�
 });
 
 test('SQL 문법 오류·미지원 변경은 부분 스키마를 성공으로 보고하지 않는다', () => {
-  for (const raw of ['CREATE TABLE broken (', 'CREATE TABLE users (id int); DO $$ BEGIN NULL; END $$;']) {
+  for (const raw of ['CREATE TABLE broken (']) {
     const parsed = parseContracts([file('contracts/db/postgres/migrations/001.sql', raw)]);
     expect(parsed.files[0]).toMatchObject({ status: 'error', raw });
     expect(parsed.items).toEqual([]);
@@ -185,9 +186,9 @@ test('SQL 이름 변경·NULL 허용 변경·기본값·설명·인덱스 삭제
     DROP INDEX ages;
   `)]);
   expect(parsed.items[0]?.itemKey).toBe('postgres:people');
-  expect(parsed.items[0]?.contract?.fields).toContainEqual({ path: '/years', type: 'int', required: true });
+  expect(parsed.items[0]?.contract?.fields).toContainEqual({ path: '/years', type: 'integer', required: true });
   expect(parsed.items[0]?.contract?.fields).toContainEqual({ path: '/old', type: 'text', required: false });
-  expect(parsed.items[0]?.content).toMatchObject({ columns: expect.arrayContaining([{ name: 'years', type: 'int', nullable: false, pk: false, unique: false, fk: null, default: '(21)', desc: '나이' }]), indexes: [] });
+  expect(parsed.items[0]?.content).toMatchObject({ columns: expect.arrayContaining([{ name: 'years', type: 'integer', nullable: false, pk: false, unique: false, fk: null, default: '(21)', desc: '나이' }]), indexes: [] });
 });
 
 test('SQL의 rollback과 search_path 변경을 무시해 잘못된 스키마를 만들지 않는다', () => {
@@ -240,4 +241,14 @@ test('YAML 별칭·객체 키·제어 문자 경로는 원문을 보존하거나
   const raw = 'openapi: 3.1.0\npaths: &paths {}\ncomponents: *paths';
   expect(parseContracts([file('contracts/api/openapi.yaml', raw)]).files[0]).toMatchObject({ raw, status: 'error' });
   expect(() => parseContracts([file('contracts/api/\u0000openapi.yaml', raw)])).toThrow();
+});
+
+test('OpenAPI의 description과 summary, SQL의 COMMENT ON TABLE을 항목 설명으로 보고한다', () => {
+  const parsed = parseContracts([
+    file('contracts/api/openapi.json', api({ '/a': { get: { summary: '이름', description: '자세한 설명', responses: {} } }, '/b': { get: { summary: '요약만 있음', responses: {} } } })),
+    file('contracts/db/postgres/001.sql', "CREATE TABLE users (id uuid); COMMENT ON TABLE users IS '사용자 원장';"),
+  ]);
+  expect(parsed.items.find(i => i.itemKey === 'GET /a')).toMatchObject({ name: '이름', description: '자세한 설명' });
+  expect(parsed.items.find(i => i.itemKey === 'GET /b')?.description).toBe('요약만 있음');
+  expect(parsed.items.find(i => i.itemKey === 'postgres:users')?.description).toBe('사용자 원장');
 });

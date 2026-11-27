@@ -166,9 +166,15 @@ importers:
 
   .:
     dependencies:
+      ajv:
+        specifier: 8.20.0
+        version: 8.20.0
       pgsql-ast-parser:
         specifier: 12.0.2
         version: 12.0.2
+      pgsql-parser:
+        specifier: 18.4.5
+        version: 18.4.5
       pino:
         specifier: 10.4.0
         version: 10.4.0
@@ -308,6 +314,12 @@ packages:
 
   '@oxc-project/types@0.156.0':
     resolution: {integrity: sha512-1Duyg48TdJNdyhEB8Xn1L36bT9Pv6GUtlKjHxOys8xkaF/rQq3XJE+bAurSK/AgIz5mGFsb77cn9Pb20+WCScw==}
+
+  '@pgsql/quotes@18.2.6':
+    resolution: {integrity: sha512-sSgfoskjN0aJ3Jk4q9y8j0UEICXrk74GCPJJAbbhI5+VLkWR24+494y9KQPg1h+O8Juf2FMAmEIc1MUAPxD+UQ==}
+
+  '@pgsql/types@18.0.0':
+    resolution: {integrity: sha512-jtAY4JU7jdVYZ/Vv3zlZqVP+FRWZokyCLKPPCnAApiaJAElpyyiMC3HRiquBu29kSrVs+rkqZD50SUIb/zyEGw==}
 
   '@pinojs/redact@0.4.0':
     resolution: {integrity: sha512-k2ENnmBugE/rzQfEcdWHcCY+/FM3VLzH9cYEsbdsoqrvzAKRhUZeRNhAZvB8OitQJ1TBed3yqWtdjzS6wJKBwg==}
@@ -527,6 +539,9 @@ packages:
   ajv@6.15.0:
     resolution: {integrity: sha512-fgFx7Hfoq60ytK2c7DhnF8jIvzYgOMxfugjLOSMHjLIPgenqa7S7oaagATUq99mV6IYvN2tRmC0wnTYX6iPbMw==}
 
+  ajv@8.20.0:
+    resolution: {integrity: sha512-Thbli+OlOj+iMPYFBVBfJ3OmCAnaSyNn4M1vz9T6Gka5Jt9ba/HIR56joy65tY6kx/FCF5VXNB819Y7/GUrBGA==}
+
   assertion-error@2.0.1:
     resolution: {integrity: sha512-Izi8RQcffqCeNVgFigKli1ssklIbpHnCYc6AknXGYoB6grJqyeby7jv12JUQgmTAnIDnbck1uxksT4dzN3PWBA==}
     engines: {node: '>=12'}
@@ -641,6 +656,9 @@ packages:
   fast-levenshtein@2.0.6:
     resolution: {integrity: sha512-DCXu6Ifhqcks7TZKY3Hxp3y6qphY5SJZmrWMDrKcERSOXWQdMhU9Ig/PYrzyw/ul9jOIyh0N4M0tbC5hodg8dw==}
 
+  fast-uri@3.1.9:
+    resolution: {integrity: sha512-hS/0Wt3Ya043oKXs0sIxrMpKQITXhMLIrVAKKXi4gozGC9v7YRWVnXIZzjNPTO02M9BdxLCWqK1yRXgNziVyJQ==}
+
   fdir@6.5.0:
     resolution: {integrity: sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg==}
     engines: {node: '>=12.0.0'}
@@ -712,6 +730,9 @@ packages:
   json-schema-traverse@0.4.1:
     resolution: {integrity: sha512-xbbCH5dCYU5T8LcEhhuh7HJ88HXuW3qsI3Y0zOZFKfZEHcpWiHU/Jxzk629Brsab/mMiHQti9wMP+845RPe3Vg==}
 
+  json-schema-traverse@1.0.0:
+    resolution: {integrity: sha512-NM8/P9n3XjXhIZn1lLhkFaACTOURQXjWhV4BA/RnOv8xvgqtqpAX9IO4mRQxSx1Rlo4tqzeqb0sOlruaOy3dug==}
+
   json-stable-stringify-without-jsonify@1.0.1:
     resolution: {integrity: sha512-Bdboy+l7tA3OGW6FjyFHWkP5LuByj1Tk33Ljyq0axyzdk9//JSi2u3fP1QSmd1KNwq6VOKYGlAu87CisVir6Pw==}
 
@@ -721,6 +742,9 @@ packages:
   levn@0.4.1:
     resolution: {integrity: sha512-+bT2uH4E5LGE7h/n3evcS/sQlJXCpIp6ym8OWJ5eV6+67Dsql/LaaT7qJBAt2rzfoa/5QBGBhxDix1dMt2kQKQ==}
     engines: {node: '>= 0.8.0'}
+
+  libpg-query@18.2.5:
+    resolution: {integrity: sha512-i+U2dBEcWid5s3LOGvyc2q/BCKKdWOG4kNKq/E/gXBV8WK9ZrhCW0tHUHy2tJ+kj+LYvUESSxnmdHu91t6ZE3A==}
 
   lightningcss-android-arm64@1.33.0:
     resolution: {integrity: sha512-gEpRTalKdosp4Bb8qWtc2iOgE5SeIHlpS1up9bFq2wAyYhl1UdTObYiHe98zEM9SQvSoqQZ1IQD0JNpg3Ml5pg==}
@@ -856,6 +880,12 @@ packages:
   pgsql-ast-parser@12.0.2:
     resolution: {integrity: sha512-1WWa96Sw6h4uv9GLw98EzH/+xoBTC8j2TwV/AMW3E+Ir/fHOu/jLLbj6kPiz3y2bGISTKNYvKWwHoqvQ5FLuAw==}
 
+  pgsql-deparser@18.5.5:
+    resolution: {integrity: sha512-7h5b7aWGkJHmcf/HZJ4cKXp9+M6htB1Cm0LQQ5VddQ6RRH/XlLCXIGjeN4DIqnsJaC/QSE2QvZEpWrirQxX8HQ==}
+
+  pgsql-parser@18.4.5:
+    resolution: {integrity: sha512-exeSGJyRlEGFxBPIaynxQtTUEJOB49C0iXydvinA2nyGDHaytDGzeQ7+4d3KZ6JZwb792FTV68Bvyp96sPqIlQ==}
+
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
 
@@ -904,6 +934,10 @@ packages:
 
   real-require@1.0.0:
     resolution: {integrity: sha512-P4nbQYQfePJxRSmY+v/KINxVucm4NF3p3s7pJveMTtom52FR4YGltUQLB8idDXwDDWW+eYrWDFbuzUnjoWHF7g==}
+
+  require-from-string@2.0.2:
+    resolution: {integrity: sha512-Xf0nWe6RseziFMu+Ap9biiUbmplq6S9/p+7w7YXP/JBHhrUDDUhwa+vANyubuqfZWTveU//DYVGsDG7RKL/vEw==}
+    engines: {node: '>=0.10.0'}
 
   ret@0.1.15:
     resolution: {integrity: sha512-TTlYpa+OL+vMMNG24xSlQGEJ3B/RzEfUlLct7b5G/ytav+wPrplCpVMFuwzXbkecJrb6IYo1iFb0S9v37754mg==}
@@ -1207,6 +1241,10 @@ snapshots:
 
   '@oxc-project/types@0.156.0': {}
 
+  '@pgsql/quotes@18.2.6': {}
+
+  '@pgsql/types@18.0.0': {}
+
   '@pinojs/redact@0.4.0': {}
 
   '@rolldown/binding-android-arm-eabi@1.2.19':
@@ -1404,6 +1442,13 @@ snapshots:
       json-schema-traverse: 0.4.1
       uri-js: 4.4.1
 
+  ajv@8.20.0:
+    dependencies:
+      fast-deep-equal: 3.1.3
+      fast-uri: 3.1.9
+      json-schema-traverse: 1.0.0
+      require-from-string: 2.0.2
+
   assertion-error@2.0.1: {}
 
   atomic-sleep@1.0.0: {}
@@ -1522,6 +1567,8 @@ snapshots:
 
   fast-levenshtein@2.0.6: {}
 
+  fast-uri@3.1.9: {}
+
   fdir@6.5.0(picomatch@4.0.7):
     optionalDependencies:
       picomatch: 4.0.7
@@ -1576,6 +1623,8 @@ snapshots:
 
   json-schema-traverse@0.4.1: {}
 
+  json-schema-traverse@1.0.0: {}
+
   json-stable-stringify-without-jsonify@1.0.1: {}
 
   keyv@5.6.0:
@@ -1586,6 +1635,10 @@ snapshots:
     dependencies:
       prelude-ls: 1.2.1
       type-check: 0.4.0
+
+  libpg-query@18.2.5:
+    dependencies:
+      '@pgsql/types': 18.0.0
 
   lightningcss-android-arm64@1.33.0:
     optional: true
@@ -1694,6 +1747,17 @@ snapshots:
       moo: 0.5.3
       nearley: 2.20.1
 
+  pgsql-deparser@18.5.5:
+    dependencies:
+      '@pgsql/quotes': 18.2.6
+      '@pgsql/types': 18.0.0
+
+  pgsql-parser@18.4.5:
+    dependencies:
+      '@pgsql/types': 18.0.0
+      libpg-query: 18.2.5
+      pgsql-deparser: 18.5.5
+
   picocolors@1.1.1: {}
 
   picomatch@4.0.7: {}
@@ -1744,6 +1808,8 @@ snapshots:
       ret: 0.1.15
 
   real-require@1.0.0: {}
+
+  require-from-string@2.0.2: {}
 
   ret@0.1.15: {}
 
