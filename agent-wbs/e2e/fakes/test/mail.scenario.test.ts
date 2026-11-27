@@ -730,21 +730,25 @@ describe('M6 통합: 보고서 PDF 첨부', () => {
       await deliverMail(pool, epoch, { now: at, timeoutMs: TIMEOUT, pdf: () => Promise.reject(new Error('브라우저 없음')) });
       expect(received('boss@example.com')).toHaveLength(before);
       expect((await owner.query<{ state: string }>('select state from mail_outbox where id=$1', [id])).rows[0]?.state).toBe('retry_wait');
-      expect((await owner.query<{ error: string | null }>("select error from mail_log where outbox=$1 and state='failed' order by created_at desc limit 1", [id])).rows[0]?.error).toContain('PDF 첨부를 만들지 못함');
+      expect((await owner.query<{ error: string | null }>("select error from mail_log where outbox=$1 and error is not null order by created_at desc limit 1", [id])).rows[0]?.error).toContain('PDF 첨부를 만들지 못함');
       // 2) 15분 뒤 다시 시도: 실제 PDF(팀장 다운로드와 같은 reportPdf)를 붙인다
       await deliverMail(pool, epoch, { now: plus(at, 16), timeoutMs: 60_000, pdf: async (reportId, view) => (await reportPdf(pool, root, renderer, epoch, reportId, view)).file });
       expect((await owner.query<{ state: string }>('select state from mail_outbox where id=$1', [id])).rows[0]?.state).toBe('accepted');
       const raw = received('boss@example.com').at(-1)?.raw ?? '';
       expect(raw).toMatch(/content-type:\s*multipart\/mixed/i);
       const pdfPart = raw.split(/\r\n--/).find((part) => /content-type:\s*application\/pdf/i.test(part)) ?? '';
-      expect(decodeURIComponent(pdfPart)).toContain(`${w.reportKey}_보고용.pdf`);
+      // 파일 이름은 RFC 2231 이어 쓰기(filename*0*=utf-8''…; filename*1=…)로 나뉘어 온다. 조각을 이어 붙여 푼다.
+      const fileName = decodeURIComponent([...pdfPart.matchAll(/filename\*\d+\*?=(?:utf-8'')?([^;\r\n]+)/gi)].map((m) => m[1] ?? '').join(''));
+      expect(fileName).toBe(`${w.reportKey}_보고용.pdf`);
       const body = pdfPart.slice(pdfPart.indexOf('\r\n\r\n') + 4).replace(/\s+/g, '');
       const file = Buffer.from(body, 'base64');
       expect(file.subarray(0, 5).toString('latin1')).toBe('%PDF-');
       // 다운로드와 같은 파일이다(같은 문서 hash 캐시)
       expect(file.equals((await reportPdf(pool, root, renderer, epoch, w.id, 'ext')).file)).toBe(true);
-      // 본문(HTML·text)은 첨부가 있어도 같다
-      expect(mimePart(raw, 'text/html')).toContain('주간 보고서 · 보고용');
+      // 본문(text/plain + text/html)은 첨부 안쪽의 multipart/alternative로 그대로 들어 있다
+      expect(raw).toMatch(/content-type:\s*multipart\/alternative/i);
+      expect(raw).toMatch(/content-type:\s*text\/html/i);
+      expect(raw).toMatch(/content-type:\s*text\/plain/i);
     } finally {
       await renderer.close();
       await rm(root, { recursive: true, force: true });

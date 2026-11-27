@@ -66,9 +66,12 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
     return next;
   };
   const [project, tasks, nodes, deps, attempts, verifs, defects, evidence, messages, replans, moves, sessions, alerts, proposals, checklist, outputs, grades] = await Promise.all([
-    // 통합(M6-01×M6-02): 목표일은 T 시점(되살린 관계식, M6-01), 이름은 **생성 시점** 지금 이름(M6-02 조정자 7 「보고서·PDF 제목은 스냅샷 값」).
+    // 통합(M6-01×M6-02): 목표일은 T 시점(되살린 관계식, M6-01), 이름은 **생성 시점** 이름(M6-02 조정자 7 「보고서·PDF 제목은 스냅샷 값」).
     // 이름을 T 시점 값으로 바꾸지 않는다: 제목은 「만든 때 이름」이라는 M6-02 계약이고, 0038(옛 0047) 이름 채움도 같은 기준이다.
-    q<{ target: string | null; name: string }>(`select (select to_char(target_date,'YYYY-MM-DD') from ${src.rel('projects')} p where id=$1) target,name from projects where id=$1`, [projectId]),
+    // 생성 시점 이름은 이 트랜잭션에서 보이는 프로젝트 행의 마지막 이력이다. 보고서 계산은 이력 표만 읽는다는 원칙(재리뷰 2 원칙 3)을 지킨다.
+    q<{ target: string | null; name: string | null }>(`select (select to_char(target_date,'YYYY-MM-DD') from ${src.rel('projects')} p where id=$1) target,
+      ${source === 'live' ? `(select name from public.projects where id=$1)`
+        : `(select l.data->>'name' from public.state_log l where l.project_id=$1 and l.tbl='projects' and l.row_id=$1 and l.op<>'delete' order by l.seq desc limit 1)`} name`, [projectId]),
     q<{ id: string; key: string; title: string; status: TaskStatus; work_type: string; domain: string; assignee: 'Claude' | 'Codex'; verifier: 'Claude' | 'Codex';
       verif_state: string; act_start: string | null; act_end: string | null; cg: string | null; done_cond: string | null; wbs_node_id: string; sort_order: number; est: string | null }>(
       // 각 관계식은 한 번만 되살린다(CTE MATERIALIZED). 통계가 낡아도 Task마다 다시 되살리는 계획이 나오지 않게 한다(재리뷰 3 문제 3).

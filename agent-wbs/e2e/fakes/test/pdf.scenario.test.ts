@@ -69,7 +69,7 @@ const renderer: PdfRenderer = {
 const kst = (day: string, hm = '00:00') => new Date(`${day}T${hm}:00+09:00`).toISOString().replace(/\.(\d{3})Z$/, '.$1000Z');
 
 /** M6-01 reports.scenario의 fixture와 같은 기록(demo seed에 없는 중단 구간·재조정·Evidence·알림). */
-async function fixture() {
+async function fixture(owner: Pool) {
   await owner.query("update projects set start_date='2026-10-27', target_date='2026-11-12'");
   await owner.query("update tasks set act_start=$1, act_end=$2 where task_key='TASK-0002'", [kst('2026-10-28', '20:00'), '2026-10-28T14:59:59.999Z']);
   await owner.query("update tasks set act_start=$1, act_end=$2 where task_key='TASK-0003'", [kst('2026-10-28', '21:00'), '2026-10-28T15:00:00.000Z']);
@@ -107,8 +107,21 @@ beforeAll(async () => {
   const app = buildApp(pool, false, { origin, lan: false }, { dataRoot: root }, { renderer });
   close = async () => { await app.close(); await pool.end(); await owner.end(); await rm(root, { recursive: true, force: true }); };
   await runMigrations(owner);
-  await seedDemo(owner, db.href);
-  await fixture();
+  // M6 통합: M6-01 기간 말 재구성 뒤에는 보고서가 기간 끝 시점의 상태를 이력에서 되살린다. M6-01 reports.scenario처럼
+  // 준비 자료를 「프로젝트 시작 전에 커밋했다」로 넣는다(시험 전용 시계 이동 awbs.test_clock_offset, 관리자 연결만). 아니면 오늘 넣은 자료가 10월 기간에는 없던 것이 된다.
+  const name = db.pathname.slice(1);
+  const shift = Math.floor((Date.parse('2026-10-20T00:00:00+09:00') - Date.now()) / 1000);
+  await owner.query(`alter database "${name}" set awbs.test_clock_offset='${String(shift)} seconds'`);
+  const past = createPool(db.href, { onError: () => undefined });
+  try {
+    await seedDemo(past, db.href);
+    await fixture(past);
+    // 실제 커밋 시각은 시험 시계로 옮길 수 없으므로 준비 자료의 커밋 시계 값을 실제 커밋 시각으로 옮겨 적는다(reports.scenario와 같음).
+    await past.query('insert into commit_real(xid,stamp,committed_at,observed_at) select xid,committed_at,committed_at,committed_at from commit_log on conflict do nothing');
+  } finally {
+    await past.end();
+    await owner.query(`alter database "${name}" reset awbs.test_clock_offset`);
+  }
   await generateDueReports(pool, 1, { now: kst('2026-11-04', '07:00'), startup: true });
   const link = await issueLoginLink(pool);
   baseUrl = await app.listen({ host: '127.0.0.1', port: 0 });
@@ -302,7 +315,7 @@ describe('주간 팀장용 PDF(RPT-W-261026, 12섹션에 값이 있다)', () => 
   });
 
   test('부록은 새 쪽에서 시작한다(G L392)', () => {
-    const heading = squash('부록. 전체 Task 현황 (보고서 생성 시점)');
+    const heading = squash('부록. 전체 Task 현황 (기간 끝 시점)');
     const at = doc.pages.findIndex((p) => p.text.includes(heading));
     expect(at).toBeGreaterThan(0);
     expect(doc.pages[at]?.text.startsWith(heading)).toBe(true);
@@ -399,12 +412,12 @@ describe('주간 팀장용 PDF(RPT-W-261026, 12섹션에 값이 있다)', () => 
     expect(text(between(flow, '7. 팀장 지시 · Runner 응답', heading('8. 다음 주 예정')))).toBe(join(x.messages.flatMap((m) => [m.at, m.task, m.dir, m.type, m.st, m.body])));
 
     // 8. 다음 주 예정: Task·제목(작업량)·상태·예상 기간·담당/등급·선행 조건/충돌 묶음
-    sameTable(between(flow, '8. 다음 주 예정', heading('부록. 전체 Task 현황 (보고서 생성 시점)')),
+    sameTable(between(flow, '8. 다음 주 예정', heading('부록. 전체 Task 현황 (기간 끝 시점)')),
       ['Task', '제목', '상태', '예상 기간', '담당 · 등급', '선행 조건 · 충돌 묶음'], (t) => /^TASK-\d+$/.test(t),
       x.next.map((t) => [t.id, `${t.title} (${t.est})`, t.st, t.per, `${t.who}${t.grade}`, `${t.pre}${t.cg}`]));
 
     // 부록: 전체 Task 모든 열
-    sameTable(between(flow, '부록. 전체 Task 현황 (보고서 생성 시점)', (t) => t.startsWith(squash('Agent WBS 자동 생성'))),
+    sameTable(between(flow, '부록. 전체 Task 현황 (기간 끝 시점)', (t) => t.startsWith(squash('Agent WBS 자동 생성'))),
       ['WBS', 'Task', '제목', '상태', '개발/검증', '진행률', '체크리스트', '검증', '완료 예상', '기준 대비'], (t) => /^\d+(\.\d+)+$/.test(t),
       x.all.map((t) => [t.wbs, t.id, `${t.title}${t.blocked ? '차단' : ''}`, t.st, t.who, t.pct, t.cl, t.verif, t.fc, t.slip]));
   });
@@ -497,13 +510,14 @@ describe('빈 상태(기록 없는 날 일간 RPT-D-261027)', () => {
     // 부록이 앞 쪽에 충분히 들어갈 만큼 작은 보고서: 기록 없는 날 스냅샷에서 진행 중 Task·확인 항목을 비우고 전체 표를 1건만 남긴다.
     // 왜: 부록이 한 쪽을 거의 채우면 「새 쪽 시작」 규칙이 없어도 자리가 모자라 다음 쪽으로 넘어가 버려, 규칙을 시험하지 못한다.
     const base = await reportOf('daily', '2026-10-27');
-    const small: ReportSnapshotData = { ...base.snapshot, active: [], issues: [], all: base.snapshot.all.slice(0, 1) };
+    // M6 통합: 기간 끝 시점 재구성 뒤에는 10-27 일간에도 다음 예정 Task가 있다. 작은 보고서가 되도록 다음 예정도 비운다.
+    const small: ReportSnapshotData = { ...base.snapshot, active: [], issues: [], next: [], all: base.snapshot.all.slice(0, 1) };
     const project = (await owner.query<{ id: string }>('select id from projects')).rows[0]?.id;
     const id = (await owner.query<{ id: string }>(`insert into reports(project_id,report_key,kind,"from","to",view,snapshot,generated_at,reason)
       values($1,'RPT-C-900','custom','2026-10-27','2026-10-27','int',$2::jsonb,now(),'팀장 지정') returning id`, [project, JSON.stringify(small)])).rows[0]?.id;
     assert(id);
     const { doc } = await fetchPdf(id, 'int');
-    const heading = squash('부록. 전체 Task 현황 (보고서 생성 시점)');
+    const heading = squash('부록. 전체 Task 현황 (기간 끝 시점)');
     expect(doc.pages).toHaveLength(2);
     // 기간 보고서는 「다음 주 예정」이라고 쓴다(화면과 같다).
     expect(doc.pages[0]?.text).toContain(squash('8. 다음 주 예정'));
@@ -526,10 +540,19 @@ describe('옛 보고서(M6-01 형식 스냅샷)를 실제 0038(옛 0047)로 옮�
     const sql = await readFile(new URL('../../../packages/db/migrations/0038_20261127_report_project_name.sql', import.meta.url), 'utf8');
     for (const statement of sql.split('--> statement-breakpoint')) await owner.query(statement);
   };
-  /** M6-01 형식(이름·출처 없음) 옛 보고서를 넣는다. */
-  const legacyReport = async (key: string) => {
+  /**
+   * M6-01 형식(이름·출처 없음) 옛 보고서를 넣는다.
+   * M6 통합: 0038은 이제 M6-01 상태 이력으로 「기준점(basis.asOf) 뒤 이름이 하나뿐인가」를 먼저 본다.
+   * 이 파일의 앞 시험(「생성 뒤 프로젝트 이름을 바꿔도…」)이 이름을 바꿨다가 되돌렸으므로, 주간 보고서의 기준점(11-02) 뒤로는 이름이 둘이다.
+   * 「이름을 바꾼 적 없는」 경우를 만들려면 기준점을 지금(그 변경 뒤)으로 잡는다. fresh=false면 원래 주간 기준점을 쓴다.
+   */
+  const legacyReport = async (key: string, fresh = true) => {
     const base = await reportOf('weekly', '2026-10-26');
     const legacy: Record<string, unknown> = { ...base.snapshot };
+    if (fresh) {
+      const asOf = (await owner.query<{ at: string }>(`select to_char(public.awbs_report_anchor() at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') at`)).rows[0]?.at;
+      legacy.basis = { ...base.snapshot.basis, asOf };
+    }
     delete legacy.projectName;
     delete legacy.projectNameStatus;
     const project = (await owner.query<{ id: string }>('select id from projects')).rows[0]?.id;
@@ -561,7 +584,7 @@ describe('옛 보고서(M6-01 형식 스냅샷)를 실제 0038(옛 0047)로 옮�
     assert(project);
     await owner.query(`insert into task_history(project_id,actor,kind,text,before,after,ref) values($1,'팀장','프로젝트 수정','프로젝트 정보를 수정했습니다.',$2::jsonb,$3::jsonb,'{"kind":"project"}')`,
       [project.id, JSON.stringify({ name: '예전 이름' }), JSON.stringify({ name: project.name })]);
-    const id = await legacyReport('RPT-C-951');
+    const id = await legacyReport('RPT-C-951', false);
     await run0038();
     const snapshot = await opened(id);
     expect([snapshot.projectName, snapshot.projectNameStatus]).toEqual([null, 'unknown']);
