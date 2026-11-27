@@ -1758,6 +1758,13 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
+        },
+        "cause_candidates": {
+          "name": "cause_candidates",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
         }
       },
       "indexes": {
@@ -1878,6 +1885,10 @@
         "ci_artifacts_array": {
           "name": "ci_artifacts_array",
           "value": "jsonb_typeof(\"ci_runs\".\"artifacts\")='array'"
+        },
+        "ci_cause_candidates_array": {
+          "name": "ci_cause_candidates_array",
+          "value": "jsonb_typeof(\"ci_runs\".\"cause_candidates\")='array'"
         }
       },
       "isRLSEnabled": false

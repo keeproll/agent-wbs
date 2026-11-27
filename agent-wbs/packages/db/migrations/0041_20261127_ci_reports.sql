@@ -94,3 +94,9 @@ ALTER TABLE public.ci_runs ADD COLUMN note text,ADD COLUMN e2e jsonb,ADD COLUMN 
 ALTER TABLE public.merge_queue ADD COLUMN merged_at timestamptz;
 --> statement-breakpoint
 ALTER TABLE public.flaky_tests ADD COLUMN last_failed_at timestamptz;
+
+--> statement-breakpoint
+-- 원인 후보는 Runner가 보고한 커밋만 보관하고 Task 연결은 서버 병합 원장에서 찾는다.
+ALTER TABLE public.ci_runs ADD COLUMN cause_candidates jsonb NOT NULL DEFAULT '[]';
+--> statement-breakpoint
+ALTER TABLE public.ci_runs ADD CONSTRAINT ci_cause_candidates_array CHECK (jsonb_typeof(cause_candidates)='array');

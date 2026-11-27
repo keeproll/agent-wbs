@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from '@awbs/db';
-import { CI_STAGE } from '@awbs/db';
+import { CI_STAGE, type schema } from '@awbs/db';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { DomainError } from '@awbs/shared';
 import { isTimestamp } from '@awbs/shared/api';
@@ -11,6 +11,7 @@ import { RunnerRepository, required } from '../runner/repository.ts';
 import { assertExternal } from '../runner/service.ts';
 import { inputHead } from '../project/service.ts';
 import { enqueueIntegration } from '../execution/gate.ts';
+import { ciRunDecisions, retryDecision } from './decisions.ts';
 import { pipelineDefinition } from './pipeline.ts';
 import { reportQueue, startRun, updateRun, type Start, type Update, type QueueReport } from './service.ts';
 
@@ -21,6 +22,11 @@ async function project(client: PoolClient, id: string) {
 const runSelect = `select c.id,c.run_no::text "runNo",c.run_key "runKey",case c.stage when 1 then 'task' when 2 then 'int' when 3 then 'night' when 4 then 'deploy' end stage,
   c.status,t.task_key "taskKey",c.attempt "attemptId",c.ref,c.pr,c.trigger,c.base_sha "baseSha",c.head_sha "headSha",c.merge_sha "mergeSha",c.tree_sha "treeSha",c.pipeline_sha "pipelineSha",
   c.note,c.e2e,c.github_status "githubStatus",${iso('c.finished_at')} "finishedAt",c.fail_step "failStep",c.fail_scope "failScope",c.log_excerpt "logExcerpt",c.artifacts,c.url,${iso('c.created_at')} "startedAt",
+  coalesce((select jsonb_agg(jsonb_build_object('commit',candidate.value->>'commit','taskKey',
+    (select case when count(distinct q.task)=1 then min(t.task_key) end from merge_queue q
+      join ci_merge_facts f on f.project_id=q.project_id and f.merge_sha=q.actual_merge_sha join tasks t on t.id=q.task
+      where q.project_id=c.project_id and q.status='merged' and (q.actual_merge_sha=candidate.value->>'commit' or f.parents->>1=candidate.value->>'commit')))
+    order by candidate.n) from jsonb_array_elements(c.cause_candidates) with ordinality candidate(value,n)),'[]') "causeCandidates",
   coalesce((select jsonb_agg(jsonb_build_object('name',s.step_key,'status',s.status,'durationMs',s.duration_ms) order by s.record_no) from ci_steps s where s.run=c.id),'[]') steps
   from ci_runs c left join tasks t on t.id=c.task`;
 
@@ -52,14 +58,14 @@ export function registerCiRoutes(app: FastifyInstance, pool: Pool) {
       [params(r).projectId,query.stage ? CI_STAGE[query.stage] : null,query.taskKey,cursor?.[0],cursor?.[1],limit+1])).rows;
       const items = rows.slice(0,limit), last = items.at(-1);
       const nextCursor = rows.length > limit && last ? encodeCursor([last.startedAt as string,last.runNo as string]) : null;
-      for (const item of items) delete item.runNo;
+      for (const item of items) { Object.assign(item,await ciRunDecisions(client,item.id as string)); delete item.runNo; }
       return { items,nextCursor };
     }));
     route('getCiRun',r => read(pool,r,async client => {
       await project(client,params(r).projectId);
       const row = (await client.query(`${runSelect} where c.project_id::text=$1 and c.id::text=$2`,[params(r).projectId,params(r).id])).rows[0];
       if (!row) throw new PlatformError('NOT_FOUND');
-      delete row.runNo; return row;
+      Object.assign(row,await ciRunDecisions(client,row.id as string)); delete row.runNo; return row;
     }));
     route('getMergeQueue',r => read(pool,r,async client => {
       await project(client,params(r).projectId);
@@ -69,14 +75,18 @@ export function registerCiRoutes(app: FastifyInstance, pool: Pool) {
     for (const [id,kind] of [['retryCiRun','ci_retry'],['requestDeployCheck','deploy_check']] as const) route(id,async (r,reply) => {
       const client = clientOf(r); const repo = new RunnerRepository(client); await repo.lock();
       await project(client,params(r).projectId);
-      const source = id === 'retryCiRun' ? (await client.query<{ id: string; pr: number | null; head_sha: string; status: string; task: string | null; fail_scope: string | null }>('select id,pr,head_sha,status,task,fail_scope from ci_runs where id::text=$1 and project_id::text=$2',[params(r).id,params(r).projectId])).rows[0] : null;
+      const source = id === 'retryCiRun' ? (await client.query<typeof schema.ciRuns.$inferSelect>('select * from ci_runs where id::text=$1 and project_id::text=$2',[params(r).id,params(r).projectId])).rows[0] : null;
       if (id === 'retryCiRun' && !source) throw new PlatformError('NOT_FOUND');
-      if (source && source.status !== 'fail') throw new PlatformError('INVALID_TRANSITION');
-      if (source?.fail_scope === 'baseline' && source.task && (await repo.taskById(source.task))?.status === 'gate') {
-        const jobId = await enqueueIntegration(client,source.task,r.platform?.epoch ?? 0,{ retry:true });
-        if (!jobId) throw new PlatformError('INVALID_TRANSITION');
-        await assertExternal(repo,required(await repo.job(jobId)));
-        return reply.code(202).send({ jobId });
+      if (source) {
+        if (source.task) await repo.taskById(source.task);
+        const decision=await retryDecision(client,source);
+        if (!decision.allowed) throw new PlatformError(decision.code,{...decision.details,reason:decision.reason});
+        if (decision.kind==='integrate') {
+          const jobId=await enqueueIntegration(client,required(source.task),r.platform?.epoch ?? 0,{retry:true});
+          if (!jobId) throw new PlatformError('INVALID_TRANSITION');
+          await assertExternal(repo,required(await repo.job(jobId)));
+          return reply.code(202).send({jobId});
+        }
       }
       const commit = id === 'retryCiRun' ? source?.head_sha : await inputHead(client,params(r).projectId);
       if (!commit) throw new PlatformError('INVALID_TRANSITION');

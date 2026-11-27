@@ -26399,6 +26399,22 @@
                       "task"
                     ]
                   },
+                  "causeCandidates": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "commit"
+                      ],
+                      "properties": {
+                        "commit": {
+                          "$ref": "#/components/schemas/Sha"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "uniqueItems": true
+                  },
                   "note": {
                     "type": "string"
                   },
@@ -27640,7 +27656,8 @@
                       "required": [
                         "nightAt",
                         "retry",
-                        "deployUrl"
+                        "deployUrl",
+                        "quarantined"
                       ],
                       "properties": {
                         "nightAt": {
@@ -27662,6 +27679,15 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "quarantined": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          },
+                          "uniqueItems": true
                         }
                       }
                     },
@@ -33176,7 +33202,16 @@
           "logExcerpt",
           "artifacts",
           "url",
-          "startedAt"
+          "startedAt",
+          "baselineResolved",
+          "autoReintegrate",
+          "autoReintegrateReason",
+          "retryAllowed",
+          "retryBlockedReason",
+          "taskStatus",
+          "mergeStatus",
+          "mergeCompleted",
+          "actualMergeSha"
         ],
         "properties": {
           "id": {
@@ -33453,6 +33488,105 @@
                 "type": "null"
               }
             ]
+          },
+          "baselineResolved": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "autoReintegrate": {
+            "enum": [
+              "none",
+              "pending",
+              "blocked"
+            ]
+          },
+          "autoReintegrateReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "retryAllowed": {
+            "type": "boolean"
+          },
+          "retryBlockedReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "taskStatus": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mergeStatus": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QueueStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mergeCompleted": {
+            "type": "boolean"
+          },
+          "actualMergeSha": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Sha"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "causeCandidates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "commit",
+                "taskKey"
+              ],
+              "properties": {
+                "commit": {
+                  "$ref": "#/components/schemas/Sha"
+                },
+                "taskKey": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TaskKey"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
           }
         },
         "title": "CiRun"
