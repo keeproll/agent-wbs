@@ -102,6 +102,7 @@ export class RunnerApp {
   readonly #cpu = new CpuMeter();
   #timers: { stop(): Promise<void> }[] = [];
   #bootstrapped = false;
+  #ciRecovery: Promise<void> | undefined;
   /** 종료가 시작되면 새 예약 작업을 등록하지 않는다(P1-4). */
   #stopping = false;
   /** 치명적 오류(인증 실패 등) 발생 시 앱 전체를 멈추는 내부 신호(P1-3). */
@@ -264,6 +265,7 @@ export class RunnerApp {
    * 왜: 동기화 전에 오는 정리 명령도 「이 PC·이 부팅의 보유인가」를 판단해야 한다.
    */
   async init(): Promise<void> {
+    await (this.#ciRecovery ??= GitRepository.recoverTaskChecks(this.#d.home));
     const host = await collectHost(this.#d.hostSources, this.#d.home);
     this.#identity = { hostId: host.hostId, bootId: host.bootId };
   }

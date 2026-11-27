@@ -9,6 +9,7 @@ import { issueLoginLink, issueRunnerToken } from '../src/platform/credentials.ts
 import { installRunner } from '../src/runner/routes.ts';
 import { completeMergedTask, invalidateTaskGate } from '../src/execution/gate.ts';
 import { inEpoch } from '../src/platform/transaction.ts';
+import { RunnerRepository } from '../src/runner/repository.ts';
 
 const db = new URL(inject('testDatabaseUrl'));
 db.pathname += '_execution';
@@ -109,8 +110,17 @@ test('개발 완료는 기록된 ① 실패를 거부하고 결과·파일·QA �
   expect((await next(a)).kind).toBe('qa');
 });
 
+test('M7-06: ① 기록 없는 개발 완료는 거부하고 QA job과 산출물 제출을 만들지 않는다', async () => {
+  const a = await running();
+  const response = await report(a,'PASS',{ changedFiles:['src/a.ts'] });
+  expect(response.statusCode,response.body).toBe(409);
+  expect((await owner.query('select status from task_attempts where id=$1',[a.attempt])).rows).toEqual([{ status:'running' }]);
+  expect((await owner.query("select count(*)::int n from runner_jobs where payload->>'kind'='qa'")).rows).toEqual([{ n:0 }]);
+  expect((await owner.query('select count(*)::int n from attempt_files')).rows).toEqual([{ n:0 }]);
+});
+
 // M2-09 runner-basic의 시나리오 6과 FakeRunner.result 순서(그룹 등록→슬롯 반환→결과 보고)를 실제 HTTP로 재현한다.
-test('M2-09 시나리오 6: ① 자리표시로 개발→QA FAIL→재작업→재검증 PASS까지 진행한다', async () => {
+test('M2-09 시나리오 6: 명시적인 ① 준비 기록으로 개발→QA FAIL→재작업→재검증 PASS까지 진행한다', async () => {
   const base = await app.listen({ host:'127.0.0.1',port:0 });
   const send = async (path: string, payload: object) => {
     const response = await fetch(`${base}/api/runner/${path}`,{ method:'POST',headers:{ ...headers(),'content-type':'application/json' },body:JSON.stringify(payload) });
@@ -122,6 +132,7 @@ test('M2-09 시나리오 6: ① 자리표시로 개발→QA FAIL→재작업→�
     const pgid = ++group;
     expect((await send(`jobs/${a.job}/process`,{ fence:a.fence,processGroup:pgid,cgroup:null })).status).toBe(204);
     expect((await send(`jobs/${a.job}/slots/release`,{ fence:a.fence,hostId:'host-a',proof:{ kind:'group_empty',bootId:'boot-a',processGroup:pgid },at:new Date().toISOString() })).status).toBe(204);
+    if (a.kind === 'dev' || a.kind === 'rework') await check(a);
     const reported = await send(`attempts/${a.attempt}/result`,result(a,outcome));
     expect(reported.status,JSON.stringify(reported.body)).toBe(201);
   };
@@ -143,8 +154,8 @@ test('M2-09 시나리오 6: ① 자리표시로 개발→QA FAIL→재작업→�
     { kind:'rework',status:'completed',effort:'xhigh' },{ kind:'reverify',status:'completed' },
   ]);
   expect((await get(`tasks/${dev.key}`)).json()).toMatchObject({ lifecycleStatus:'gate',verifState:'pass' });
-  expect((await owner.query('select * from ci_runs')).rowCount).toBe(0);
-  expect((await get(`tasks/${dev.key}/gate`)).json()).toMatchObject({ passed:false,conditions:expect.arrayContaining([expect.objectContaining({ key:'verification',result:'BLOCKED' })]) });
+  expect((await owner.query('select * from ci_runs')).rowCount).toBe(2);
+  expect((await get(`tasks/${dev.key}/gate`)).json()).toMatchObject({ passed:true });
 });
 
 test('① 기록이 없어도 명세가 바뀐 개발 결과를 자리표시로 통과시키지 않는다', async () => {
@@ -154,12 +165,25 @@ test('① 기록이 없어도 명세가 바뀐 개발 결과를 자리표시로 
   expect((await owner.query('select status from task_attempts where id=$1',[a.attempt])).rows).toEqual([{ status:'running' }]);
 });
 
-test('자리표시 뒤 실제 ① FAIL이 기록되면 QA 예약을 거부한다', async () => {
+test('① PASS 뒤 새 ① FAIL이 기록되면 QA 예약을 거부한다', async () => {
   const a = await running();
+  await check(a);
   expect((await report(a)).statusCode).toBe(201);
   await check(a,sha,'fail');
   expect((await post('jobs/claim',{ kinds:['attempt'],capacity:20 })).statusCode).toBe(204);
   expect((await owner.query('select kind from task_attempts where task=$1',[a.id])).rows).toEqual([{ kind:'dev' }]);
+});
+
+test('과거 자리표시 이벤트만 남은 개발 결과를 현재 ① 통과 근거로 삼지 않는다', async () => {
+  const a = await running();
+  await owner.query("update task_attempts set status='completed',ended_at=greatest(started_at,clock_timestamp()) where id=$1",[a.attempt]);
+  await owner.query("insert into runner_job_events(project_id,job,kind,detail) values($1,$2,'finished','{\"taskCheckPlaceholder\":true}')",[project,a.job]);
+  const client = await owner.connect();
+  try {
+    const repo = new RunnerRepository(client), task = await repo.taskById(a.id);
+    if (!task) throw new Error('시험 Task가 필요합니다.');
+    expect(await repo.taskCheck(task,sha)).toBe(false);
+  } finally { client.release(); }
 });
 
 test('QA FAIL 뒤 자동 재작업·재검증 PASS가 차단 결함을 해소하고 통합 job을 자동 생성한다', async () => {
@@ -301,10 +325,15 @@ test.each(['자동','버튼'])('%s 완료는 실제 병합·통합과 서버가 
   expect((await complete()).statusCode).toBe(409);
   const verification = ((await owner.query('select id from verifications where attempt=$1',[a.attempt])).rows[0] as { id: string }).id;
   const job = ((await owner.query("select id from runner_jobs where kind='integrate'")).rows[0] as { id: string }).id;
+  await owner.query('update runner_jobs set fence=1 where id=$1',[job]);
   const ci = ((await owner.query("insert into ci_runs(project_id,run_key,stage,pipeline_sha,head_sha,base_sha,tree_sha,ref,task,trigger,status,job,fence) values($1,$2,2,$3,$4,$4,$5,'agent/test',$6,'int','pass',$7,1) returning id",[project,randomUUID(),otherSha,sha,otherSha,a.id,job])).rows[0] as { id: string }).id;
   await owner.query("insert into merge_queue(project_id,task,pr,position,status,qa_head_sha,synced_head_sha,base_sha,verification,ci_run,tested_tree_sha,actual_merge_sha,actual_tree_sha) values($1,$2,1,1,'merged',$3,$3,$3,$4,$5,$6,$7,$6)",[project,a.id,sha,verification,ci,otherSha,'d'.repeat(40)]);
+  await owner.query('update merge_queue set merge_parents=$2::jsonb where task=$1',[a.id,JSON.stringify([sha,sha])]);
   expect((await complete()).json()).toMatchObject({ error:{ code:'GATE_NOT_PASSED' } });
   await owner.query('update ci_runs set pipeline_sha=$2 where id=$1',[ci,pipeline]);
+  await owner.query('update merge_queue set merge_parents=null where task=$1',[a.id]);
+  expect((await complete()).statusCode).toBe(409);
+  await owner.query('update merge_queue set merge_parents=$2::jsonb where task=$1',[a.id,JSON.stringify([sha,sha])]);
   awaitVersion = await version(a.key);
   if (mode === '자동') {
     await inEpoch(pool,1,client => completeMergedTask(client,a.key,pipeline));
@@ -400,7 +429,10 @@ test('Gate에서 명세 변경 뒤 새 ① 검사를 하면 새 revision의 재�
     await client.query('update task_specs set revision=2 where task=$1',[a.id]);
     await invalidateTaskGate(client,a.key);
   });
-  await check(a);
+  const freshCheck = await check(a);
+  await owner.query('set session_replication_role=replica');
+  await owner.query("update ci_runs set created_at='2000-01-01' where id=$1",[freshCheck]);
+  await owner.query('set session_replication_role=origin');
   const request = await app.inject({ method:'POST',url:`/api/tasks/${a.key}/runs`,headers:lead(),payload:{ updatedAt:await version(a.key),kind:'reverify' } });
   expect(request.statusCode,request.body).toBe(202);
   const retry = await next(a); expect(retry.kind).toBe('reverify');

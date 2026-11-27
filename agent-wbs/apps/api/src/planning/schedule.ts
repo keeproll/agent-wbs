@@ -53,7 +53,7 @@ export async function scheduleInput(client: PoolClient, projectId: string, polic
       conflict_group: string | null; fix_start: string | null; act_start: string | null; act_end: string | null; updated_at: string; est: string | null; lo: string | null; hi: string | null }>(
       `select t.id,t.task_key,t.wbs_node_id,t.sort_order,t.status,t.priority,t.assignee_agent,t.conflict_group,to_char(greatest(t.fix_start,p.start_date),${ymd}) as fix_start,
               ${isoAt('t.act_start')} as act_start,${isoAt('t.act_end')} as act_end,${isoAt('t.updated_at')} as updated_at,e.est::text as est,e.lo::text as lo,e.hi::text as hi
-         from tasks t join projects p on p.id=t.project_id left join lateral (select est,lo,hi from task_estimates where project_id=t.project_id and task=t.id order by created_at desc,id desc limit 1) e on true
+         from tasks t join projects p on p.id=t.project_id left join lateral (select est,lo,hi from task_estimates where project_id=t.project_id and task=t.id order by record_no desc limit 1) e on true
         where t.project_id=$1 and t.deleted_at is null`, [projectId]),
     client.query<{ pred: string; succ: string; type: 'FS' | 'SS' }>(
       'select p.task_key as pred,s.task_key as succ,d.dep_type as type from task_dependencies d join tasks p on p.id=d.pred join tasks s on s.id=d.succ where d.project_id=$1 and p.deleted_at is null and s.deleted_at is null', [projectId]),
@@ -61,10 +61,10 @@ export async function scheduleInput(client: PoolClient, projectId: string, polic
     client.query<{ from: string; to: string | null; last: string }>(`select ${isoAt('started_at')} as from,${isoAt('ended_at')} as to,${isoAt('last_heartbeat_at')} as last from runner_sessions`),
     client.query<{ date: string }>(`select to_char(date,${ymd}) as date from blackout_days order by date`),
     client.query<{ mode: string; caps: { total?: number; Claude?: number; Codex?: number } | null }>('select mode,caps from concurrency_settings where singleton'),
-    client.query<{ agent: Agent; remain: string; reset_at: string }>(`select distinct on (agent) agent,remain_pct::text as remain,${isoAt('reset_at')} as reset_at from agent_usage order by agent,created_at desc`),
+    client.query<{ agent: Agent; remain: string; reset_at: string }>(`select distinct on (agent) agent,remain_pct::text as remain,${isoAt('reset_at')} as reset_at from agent_usage order by agent,record_no desc`),
     client.query<{ heartbeat_seconds: number; heartbeat_misses: number }>('select heartbeat_seconds,heartbeat_misses from app_settings where singleton'),
     // 상한 안에서 Runner가 조절해 보고한 현재 한도(G§6.2). 가장 최근 보고를 쓴다.
-    client.query<{ limit: number }>('select "limit" from runner_concurrency_log order by created_at desc,id desc limit 1'),
+    client.query<{ limit: number }>('select "limit" from runner_concurrency_log order by record_no desc limit 1'),
     observedSubRatio(client, policy.windowDays),
   ]);
   const paths = wbsPaths(

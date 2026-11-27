@@ -27,11 +27,12 @@ export async function reportResult(client: PoolClient, attemptId: string, princi
   const qa = a.kind === 'qa' || a.kind === 'reverify';
   if (qa !== Boolean(body.verification) || qa && (body.changedFiles.length || body.failure)) throw new PlatformError('VALIDATION_FAILED');
   const executionFailed = !qa && Boolean(body.failure);
+  if ((await client.query("select 1 from ci_runs where attempt=$1 and stage=1 and fail_scope='baseline' and status='fail' and run_no=(select max(run_no) from ci_runs where attempt=$1 and stage=1)",[a.id])).rowCount) throw new PlatformError('GATE_NOT_PASSED',{ reasons:['기준선 검사 실패를 먼저 해결해야 합니다.'] });
   const evidenceIds = [...new Set([...body.evidence,...(body.verification?.checklist.flatMap(c => c.evidence ? [c.evidence] : []) ?? [])])];
   const evidence = await client.query('select id from evidence where id::text=any($1::text[]) and task=$2 and attempt=$3', [evidenceIds,task.id,a.id]);
   if (evidence.rowCount !== evidenceIds.length) throw new PlatformError('VALIDATION_FAILED', { reasons:['이 Task·시도에서 올린 Evidence만 참조할 수 있습니다.'] });
   const gate = await gateInput(client,task.id);
-  let status: string, disposition = 'current', taskCheckPlaceholder = false;
+  let status: string, disposition = 'current';
   if (body.verification) {
     const v = body.verification;
     const items = (await client.query<{ id: string; item_key: string; required: boolean; done: boolean; note: string | null; evidence: unknown }>('select id,item_key,required,done,note,evidence from checklist_items where task=$1', [task.id])).rows;
@@ -66,11 +67,9 @@ export async function reportResult(client: PoolClient, attemptId: string, princi
     status = finishAttempt(task.status,a,'failed',false).taskStatus;
   } else {
     const check = (await client.query<{ head_sha: string; status: string; spec_revision: number; input_version: string }>(`select c.head_sha,c.status,c.spec_revision,c.input_version from ci_runs c
-      where c.attempt=$1 and c.stage=1 order by c.created_at desc,c.id desc limit 1`, [a.id])).rows[0];
+      where c.attempt=$1 and c.stage=1 order by c.run_no desc limit 1`, [a.id])).rows[0];
     const input = await repo.input(task.project_id,task.src_input_version);
-    // shortcut: M7-06 전에는 ① 기록이 없을 때만 자리표시로 진행한다. 실제 ① 연결 시 이 대체 경로와 RunnerRepository.taskCheck의 대체 조회를 제거한다.
-    taskCheckPlaceholder = !check && a.head_sha === gate.basis.headSha && a.spec_revision === gate.basis.specRevision && a.input_version === input?.id;
-    const valid = taskCheckPlaceholder || check?.status === 'pass' && check.spec_revision === gate.basis.specRevision && check.input_version === input?.id;
+    const valid = check?.status === 'pass' && check.spec_revision === gate.basis.specRevision && check.input_version === input?.id;
     status = finishAttempt(task.status,a,'completed',valid).taskStatus;
     const head = check?.head_sha ?? a.head_sha;
     await client.query('update task_attempts set head_sha=$2 where id=$1', [a.id,head]);
@@ -86,7 +85,7 @@ export async function reportResult(client: PoolClient, attemptId: string, princi
   const verifState = !qa ? 'none' : disposition === 'stale' ? 'none' : required(body.verification).result.toLowerCase();
   await client.query('update tasks set status=$2,verif_state=$3 where id=$1', [task.id,status,verifState]);
   await repo.historyEvent(task,'시도 결과',{ attemptId:a.id,result:body.verification?.result ?? 'completed',disposition,before:task.status,after:status });
-  await repo.event(job,'finished',null,{ attemptId:a.id,disposition,...(taskCheckPlaceholder && { taskCheckPlaceholder:true }) });
+  await repo.event(job,'finished',null,{ attemptId:a.id,disposition });
   if (executionFailed) await retryFailedAttempt(client,a.id);
   else if (!qa) await handover(client,job.id,a.kind === 'dev' ? 'qa' : 'reverify',a.id);
   else if (disposition === 'current' && body.verification?.result === 'FAIL') {

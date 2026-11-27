@@ -310,6 +310,7 @@ const ciPath = '/api/projects/:projectId/ci';
 const FlakyTest = Type.Object({
   id: c.Id,
   testKey: Type.String(),
+  lastFailedAt:Opt(Nullable(c.Timestamp)),
   rate: Type.String(),
   quarantined: Type.Boolean(),
   taskKey: Nullable(c.TaskKey),
@@ -317,7 +318,7 @@ const FlakyTest = Type.Object({
 });
 // 같은 설정 한 벌의 다른 경로(`/api/settings/ci`). 저장 전에는 updatedAt이 null이다.
 const settingVersion = { updatedAt: Nullable(c.Timestamp) };
-const ciSettings = Type.Object({ ...m.CiSettings, ...settingVersion });
+const ciSettings = Type.Object({ ...m.CiSettings, ...m.CiObservedSettings, ...settingVersion });
 const ci = [
   operation({
     ...lead,

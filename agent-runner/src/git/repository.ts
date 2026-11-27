@@ -4,7 +4,7 @@ import { constants } from 'node:fs';
 import { chmod, link, lstat, mkdir, open, readFile, readdir, rename, rm, statfs, writeFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
-import { parseCommits, parseRawNumstat, type InputObservation } from './inputs.ts';
+import { parseCommits, parseRawNumstat, type InputDiff, type InputObservation } from './inputs.ts';
 
 export class GitSafetyError extends Error {
   override name = 'GitSafetyError';
@@ -42,6 +42,14 @@ export interface RejectedPath {
   path: string;
   reason: 'protected' | 'ignored';
 }
+
+export interface TaskReviewChange extends InputDiff { patch: string }
+/** H에 main A만 자동으로 합쳤다는 근거다. M7-04의 headSync 보고 형식과 같다. */
+export interface HeadSyncProof {
+  qaHeadSha: string; headSha: string; preserved: boolean; parents: string[];
+  autoMergeTreeSha: string; headTreeSha: string; additionalChanges: boolean;
+}
+export interface HeadSyncChainProof extends HeadSyncProof { chain?: HeadSyncProof[] }
 
 interface TreeEntry { mode: string; oid: string; path: string }
 interface WorktreeRecord { id: string; branch?: string; startCommit?: string }
@@ -279,6 +287,24 @@ export class GitRepository {
     }
     await repo.recoverInputCopies();
     return repo;
+  }
+
+  /** Runner 홈 잠금을 가진 시작 경로에서만 호출한다. 일반 open은 실행 중인 검사 사본을 건드리지 않는다. */
+  static async recoverTaskChecks(home: string): Promise<void> {
+    const directory = await safePath(join(home, 'state/git'));
+    const files = await readdir(directory).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    });
+    for (const file of files) {
+      if (!file.endsWith('.json')) continue;
+      const repo = await this.open(home, file.slice(0, -5));
+      const record = await repo.trusted();
+      for (const entry of record.worktrees) {
+        if (/^ci-[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(entry.id) &&
+          entry.branch === `agent/${entry.id}` && entry.startCommit) await repo.removeWorktree(entry.id);
+      }
+    }
   }
 
   /**
@@ -683,7 +709,7 @@ export class GitRepository {
   }
 
   async checkTask(base: string, head: string): Promise<RejectedPath[]> {
-    const mergeBase = sha((await this.git(['merge-base', sha(base), sha(head)])).toString().trim());
+    const mergeBase = await this.taskBase(base, head);
     // --no-renames면 이동도 삭제+추가가 되어 원래 경로와 새 경로를 모두 검사한다.
     const changed = (await this.git(['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', mergeBase, head, '--'])).toString().split('\0').filter(Boolean);
     const rejected: RejectedPath[] = changed.filter((path) => ['prototype', '.agentwbs'].some((prefix) => path === prefix || path.startsWith(`${prefix}/`)))
@@ -709,6 +735,124 @@ export class GitRepository {
       } finally { await rm(scratch, { recursive: true, force: true }); }
     }
     return rejected;
+  }
+
+  /** 등록한 원격 main을 가져와 한 커밋으로 고정한다. Agent 작업 폴더에서 정의를 읽지 않는다. */
+  async mainPipeline(): Promise<{ baseSha: string; pipelineSha: string; source: string }> {
+    const { source } = await this.trusted();
+    await this.git(['fetch', '--no-tags', '--no-recurse-submodules', '--upload-pack=git-upload-pack', '--', source,
+      'refs/heads/main:refs/remotes/origin/main']);
+    const baseSha = await this.remoteMain();
+    const entry = (await this.tree(baseSha)).find((value) => value.path === '.agentwbs/pipeline.yaml');
+    if (!entry || !['100644', '100755'].includes(entry.mode)) throw new GitSafetyError('main의 pipeline.yaml은 일반 파일이어야 합니다.');
+    return { baseSha, pipelineSha: sha(entry.oid), source: (await this.blob(entry)).toString('utf8') };
+  }
+
+  async taskBase(base: string, head: string): Promise<string> {
+    return sha((await this.git(['merge-base', sha(base), sha(head)])).toString().trim());
+  }
+
+  async fetchBranch(branch: string): Promise<string> {
+    await this.branch(branch);
+    const { source } = await this.trusted();
+    const ref = `refs/remotes/origin/${branch}`;
+    await this.git(['fetch', '--no-tags', '--no-recurse-submodules', '--upload-pack=git-upload-pack', '--', source,
+      `+refs/heads/${branch}:${ref}`]);
+    return sha((await this.git(['rev-parse', '--verify', `${ref}^{commit}`])).toString().trim());
+  }
+
+  async commitTree(commit: string): Promise<string> {
+    return sha((await this.git(['rev-parse', '--verify', `${sha(commit)}^{tree}`])).toString().trim());
+  }
+
+  private async integrationTree(base: string, head: string): Promise<string | null> {
+    const result = await this.git(['merge-tree', '--write-tree', '--no-messages', sha(head), sha(base)], undefined, undefined, [0, 1]);
+    const tree = result.toString().trim();
+    // 충돌 시 출력에는 경로와 단계별 blob도 섞인다. 성공한 tree 한 줄만 받는다.
+    return /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(tree) ? tree : null;
+  }
+
+  /** checkout·Agent 설정 없이 Git 객체만으로 H,A를 자동 병합한다. 충돌은 해결하지 않는다. */
+  async prepareIntegration(base: string, head: string): Promise<string | null> {
+    if (await this.taskBase(base, head) === base) return head;
+    const tree = await this.integrationTree(base, head);
+    if (!tree) return null;
+    return sha((await this.git(['commit-tree', tree, '-p', head, '-p', base, '-m', 'Agent WBS main 동기화'])).toString().trim());
+  }
+
+  /** 호출자가 준 preserved 값을 믿지 않고 부모 순서와 자동 병합 tree를 다시 계산한다. */
+  async integrationProof(base: string, head: string, synced: string): Promise<HeadSyncProof | null> {
+    if (synced === head) return null;
+    const parents = (await this.git(['show', '-s', '--format=%P', sha(synced)])).toString().trim().split(' ');
+    if (parents.length !== 2 || parents[0] !== head || parents[1] !== base) return null;
+    const autoMergeTreeSha = await this.integrationTree(base, head);
+    const headTreeSha = await this.commitTree(synced);
+    if (!autoMergeTreeSha || autoMergeTreeSha !== headTreeSha) return null;
+    return { qaHeadSha: head, headSha: synced, preserved: true, parents, autoMergeTreeSha, headTreeSha, additionalChanges: false };
+  }
+
+  /** 각 단계가 main만 합친 자동 동기화인지 QA의 H까지 거슬러 확인한다. */
+  async integrationChainProof(base: string, qaHead: string, head: string): Promise<HeadSyncChainProof | null> {
+    const chain: HeadSyncProof[] = [];
+    let cursor = head;
+    try {
+      while (cursor !== qaHead) {
+        const parents = (await this.git(['show', '-s', '--format=%P', sha(cursor)])).toString().trim().split(' ');
+        const [previous, main] = parents;
+        if (parents.length !== 2 || !previous || !main || await this.taskBase(base, main) !== main) return null;
+        const proof = await this.integrationProof(main, previous, cursor);
+        if (!proof) return null;
+        chain.push(proof); cursor = previous;
+      }
+    } catch (error) { if (error instanceof GitSafetyError) return null; throw error; }
+    const last = chain[0];
+    if (!last) return null;
+    return { ...last, qaHeadSha: qaHead, ...(chain.length > 1 && { chain: chain.reverse() }) };
+  }
+
+  /** 새 설정으로 테스트를 제외할 수도 있으므로 추가 파일까지 전부 QA 근거로 남긴다. */
+  async taskReviewChanges(base: string, head: string): Promise<TaskReviewChange[]> {
+    const mergeBase = await this.taskBase(base, head);
+    const raw = (await this.git(['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--raw', '--numstat', '-z', '--no-abbrev', mergeBase, head, '--'])).toString('utf8');
+    const changes = parseRawNumstat(raw);
+    const result: TaskReviewChange[] = [];
+    for (const change of changes) {
+      const patch = (await this.git(['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--binary', mergeBase, head, '--', change.path])).toString('utf8');
+      result.push({ ...change, patch });
+    }
+    return result;
+  }
+
+  /** 검사 폴더는 커밋만으로 새로 복사한다. Agent의 도구·무시 파일·Git 설정을 가져오지 않는다. */
+  async createTaskCheckWorktree(worktreeId: string, commit: string): Promise<string> {
+    const entries = await this.tree(commit);
+    if (entries.some((entry) => !['100644', '100755'].includes(entry.mode) || entry.path.split('/').includes('node_modules'))) {
+      throw new GitSafetyError('검사 커밋에는 node_modules, symlink, submodule을 넣을 수 없습니다.');
+    }
+    return this.createWorktree(worktreeId, `agent/${worktreeId}`, commit);
+  }
+
+  /** 고정한 커밋과 실제 작업 파일이 일치해야 다른 코드의 결과를 보고하지 않는다. */
+  async taskCheckPath(worktreeId: string, head: string): Promise<string> {
+    const record = await this.trusted();
+    if (record.resetting || !record.worktrees.some((value) => value.id === worktreeId)) throw new GitSafetyError('검사할 수 있는 작업 폴더가 아닙니다.');
+    const path = await safePath(join(this.worktrees, id(worktreeId)));
+    await safePath(join(path, '.git'));
+    const current = (await run(path, [`--git-dir=${join(path, '.git')}`, 'rev-parse', '--verify', 'HEAD^{commit}'])).toString().trim();
+    if (current !== sha(head)) throw new GitSafetyError('검사 대상 head와 작업 폴더가 다릅니다.');
+    // Agent index의 assume-unchanged·skip-worktree와 filter 설정을 신뢰하지 않는다.
+    const index = join(dirname(this.statePath), `ci-index-${randomUUID()}`);
+    const env = { GIT_INDEX_FILE: index };
+    try {
+      await this.git(['read-tree', head], undefined, env);
+      const dirty = await this.git([`--work-tree=${path}`, 'diff', '--no-ext-diff', '--no-textconv', '--name-only', '-z', head, '--'], undefined, env);
+      const untracked = await this.git([`--work-tree=${path}`, 'ls-files', '--others', '--exclude-standard', '-z'], undefined, env);
+      if (dirty.length || untracked.length) throw new GitSafetyError('작업 폴더에 커밋하지 않은 변경이 있습니다.');
+    } finally {
+      await rm(index, { force: true });
+      await rm(`${index}.lock`, { force: true });
+    }
+    return path;
   }
 
   async reset(options: ResetOptions): Promise<{ commit: string | null }> {
