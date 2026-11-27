@@ -44,6 +44,12 @@ export interface RejectedPath {
 }
 
 export interface TaskReviewChange extends InputDiff { patch: string }
+/** H에 main A만 자동으로 합쳤다는 근거다. M7-04의 headSync 보고 형식과 같다. */
+export interface HeadSyncProof {
+  qaHeadSha: string; headSha: string; preserved: boolean; parents: string[];
+  autoMergeTreeSha: string; headTreeSha: string; additionalChanges: boolean;
+}
+export interface HeadSyncChainProof extends HeadSyncProof { chain?: HeadSyncProof[] }
 
 interface TreeEntry { mode: string; oid: string; path: string }
 interface WorktreeRecord { id: string; branch?: string; startCommit?: string }
@@ -778,6 +784,64 @@ export class GitRepository {
 
   async taskBase(base: string, head: string): Promise<string> {
     return sha((await this.git(['merge-base', sha(base), sha(head)])).toString().trim());
+  }
+
+  async fetchBranch(branch: string): Promise<string> {
+    await this.branch(branch);
+    const { source } = await this.trusted();
+    const ref = `refs/remotes/origin/${branch}`;
+    await this.git(['fetch', '--no-tags', '--no-recurse-submodules', '--upload-pack=git-upload-pack', '--', source,
+      `+refs/heads/${branch}:${ref}`]);
+    return sha((await this.git(['rev-parse', '--verify', `${ref}^{commit}`])).toString().trim());
+  }
+
+  async commitTree(commit: string): Promise<string> {
+    return sha((await this.git(['rev-parse', '--verify', `${sha(commit)}^{tree}`])).toString().trim());
+  }
+
+  private async integrationTree(base: string, head: string): Promise<string | null> {
+    const result = await this.git(['merge-tree', '--write-tree', '--no-messages', sha(head), sha(base)], undefined, undefined, [0, 1]);
+    const tree = result.toString().trim();
+    // 충돌 시 출력에는 경로와 단계별 blob도 섞인다. 성공한 tree 한 줄만 받는다.
+    return /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(tree) ? tree : null;
+  }
+
+  /** checkout·Agent 설정 없이 Git 객체만으로 H,A를 자동 병합한다. 충돌은 해결하지 않는다. */
+  async prepareIntegration(base: string, head: string): Promise<string | null> {
+    if (await this.taskBase(base, head) === base) return head;
+    const tree = await this.integrationTree(base, head);
+    if (!tree) return null;
+    return sha((await this.git(['commit-tree', tree, '-p', head, '-p', base, '-m', 'Agent WBS main 동기화'])).toString().trim());
+  }
+
+  /** 호출자가 준 preserved 값을 믿지 않고 부모 순서와 자동 병합 tree를 다시 계산한다. */
+  async integrationProof(base: string, head: string, synced: string): Promise<HeadSyncProof | null> {
+    if (synced === head) return null;
+    const parents = (await this.git(['show', '-s', '--format=%P', sha(synced)])).toString().trim().split(' ');
+    if (parents.length !== 2 || parents[0] !== head || parents[1] !== base) return null;
+    const autoMergeTreeSha = await this.integrationTree(base, head);
+    const headTreeSha = await this.commitTree(synced);
+    if (!autoMergeTreeSha || autoMergeTreeSha !== headTreeSha) return null;
+    return { qaHeadSha: head, headSha: synced, preserved: true, parents, autoMergeTreeSha, headTreeSha, additionalChanges: false };
+  }
+
+  /** 각 단계가 main만 합친 자동 동기화인지 QA의 H까지 거슬러 확인한다. */
+  async integrationChainProof(base: string, qaHead: string, head: string): Promise<HeadSyncChainProof | null> {
+    const chain: HeadSyncProof[] = [];
+    let cursor = head;
+    try {
+      while (cursor !== qaHead) {
+        const parents = (await this.git(['show', '-s', '--format=%P', sha(cursor)])).toString().trim().split(' ');
+        const [previous, main] = parents;
+        if (parents.length !== 2 || !previous || !main || await this.taskBase(base, main) !== main) return null;
+        const proof = await this.integrationProof(main, previous, cursor);
+        if (!proof) return null;
+        chain.push(proof); cursor = previous;
+      }
+    } catch (error) { if (error instanceof GitSafetyError) return null; throw error; }
+    const last = chain[0];
+    if (!last) return null;
+    return { ...last, qaHeadSha: qaHead, ...(chain.length > 1 && { chain: chain.reverse() }) };
   }
 
   /** 새 설정으로 테스트를 제외할 수도 있으므로 추가 파일까지 전부 QA 근거로 남긴다. */
