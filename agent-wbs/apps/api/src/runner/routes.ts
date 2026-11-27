@@ -12,6 +12,7 @@ import { caps, claim, checkedJob, release, requestRun, runGrade, start, retryFai
 import { reportConcurrency, reportHost } from './telemetry.ts';
 import { runnerState } from './state.ts';
 import { installResetRunner } from '../reset/routes.ts';
+import { activeDesignApply, linkDesignApply } from '../design/jobs.ts';
 
 const params = (r: FastifyRequest) => r.params as { id: string; taskKey: string; attemptId: string };
 const body = <T>(r: FastifyRequest) => r.body as T;
@@ -145,7 +146,12 @@ export function installRunner(app: FastifyInstance, pool: Pool) {
     await repo.event(job, 'reconciled', null, b.evidence);
     await repo.state(job.id, b.evidence.outcome === 'done' ? 'done' : 'failed');
     if (h && !h.closed_at) await repo.release(h, required(h.release_proof), true);
-    if (b.evidence.outcome === 'none') await repo.enqueue(job.project_id, job.epoch, job.kind, job.payload, `reconcile:${job.id}:${job.fence}`, job.generation);
+    if (b.evidence.outcome === 'none') {
+      const driftId = String(job.payload.driftId);
+      const existing = job.kind === 'design_apply' ? await activeDesignApply(repo.client, job.project_id, driftId) : undefined;
+      const next = existing ?? await repo.enqueue(job.project_id, job.epoch, job.kind, job.payload, `reconcile:${job.id}:${job.fence}`, job.generation);
+      if (job.kind === 'design_apply') await linkDesignApply(repo.client, job.project_id, driftId, required(next));
+    }
   }, 204);
   route('interruptAttempt', async (repo, r) => {
     const b = body<{ fence: number; reason: string; at: string }>(r);
