@@ -2,7 +2,7 @@ import type { PoolClient } from '@awbs/db';
 import { execPolicyToApi } from '@awbs/db';
 import {
   claimReasons, startAttempt, resolveRunGrade, roleOf, effortLevel, floorOf, recommendedCaps, effectiveCaps,
-  sumHolds, heldSlots, memoryPressure, attemptPolicyCounts, DEFAULT_EXEC_POLICY, DEFAULT_MEM_RESERVE_GB,
+  sumHolds, heldSlots, memoryPressure, attemptPolicyCounts, taskBranch, DEFAULT_EXEC_POLICY, DEFAULT_MEM_RESERVE_GB,
   type AttemptKind, type Agent, type Caps, type ClaimInput, type Catalog, type ExecPolicy,
 } from '@awbs/shared';
 import { gradeAdjust } from '@awbs/shared/api';
@@ -116,10 +116,10 @@ async function checkAttempt(repo: RunnerRepository, job: Job, task: Task, advert
   return { cfg, grade, input, slots };
 }
 
-export async function assertExternal(repo: RunnerRepository, job: Job) {
+export async function assertExternal(repo: RunnerRepository, job?: Pick<Job, 'generation'>) {
   const authority = await repo.authority();
   const host = await repo.host();
-  if (!authority || authority.state !== 'granted' || authority.host_id !== host?.host_id || job.generation !== authority.generation) throw new PlatformError('EXTERNAL_WRITE_BLOCKED', { generation: authority?.generation });
+  if (!authority || authority.state !== 'granted' || authority.host_id !== host?.host_id || job && job.generation !== authority.generation) throw new PlatformError('EXTERNAL_WRITE_BLOCKED', { generation: authority?.generation });
 }
 
 export async function checkedJob(repo: RunnerRepository, id: string, fence: number, principal: string, reconcile = false) {
@@ -209,7 +209,7 @@ async function attemptPayload(repo: RunnerRepository, task: Task, kind: AttemptK
   if (!spec) rejection(['Task 명세가 필요합니다.']);
   const prev = previous(await repo.history(task.id));
   const agent = roleOf(kind) === 'dev' ? task.assignee_agent : task.verifier_agent;
-  return { taskKey: task.task_key, kind, agent, branch: `agent/${task.task_key}-h${authority?.generation ?? 1}`,
+  return { taskKey: task.task_key, kind, agent, branch: taskBranch(task.task_key, authority?.generation ?? 1),
     baseCommit: input?.commit_sha ?? prev?.head_sha, inputVersion: input?.v ?? 1, instructions: { ...spec },
     evidenceInvalidated:task.status === 'verifying' && prev?.verification_disposition === 'stale',...extra };
 }
