@@ -5,9 +5,11 @@ import type { Agent } from './api/generated/client.ts';
 import { Runner } from './api/runner.ts';
 import { authenticationFailed } from './api/outbox.ts';
 import { createGithubRemoteCleanup } from './cleanup/remote.ts';
+import { githubWriteGate } from './github/write-gate.ts';
 import { createResetCleanup, type ResetCleanupDeps } from './cleanup/reset.ts';
 import { CliUpdater, cliBinary, type CliRegistry } from './cli-update/manager.ts';
 import { cliAwareRun, cliEnvironment } from './cli-update/registry.ts';
+import { AGENT_USER, agentIsolationConfig, agentLoginRun } from './cli/dedicated-user.ts';
 import { lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { repositoryIdFor } from './git/identity.ts';
@@ -26,6 +28,10 @@ import { collectModels } from './resources/models.ts';
 import { ResourceReporter, type SessionState } from './resources/reporter.ts';
 import { UsageTracker } from './resources/usage.ts';
 import type { State } from './state/state.ts';
+import { Execution, type ExecutionOptions } from './exec/session.ts';
+import { Launches } from './exec/launches.ts';
+import { CiJobs, type CiJobsOptions } from './ci/jobs.ts';
+import { AttemptFlow, type AttemptFlowOptions } from './jobs/attempt-flow.ts';
 
 /** 세션 실행 계층(M5)이 시도 하나를 실행하는 동안 등록하는 보유. 지금(M4)은 비어 있다. */
 export interface ActiveSession extends SessionState {
@@ -63,6 +69,17 @@ export interface RunnerAppDeps {
   inputSource?: () => Promise<InputSource | undefined>;
   /** 입력 확인 주기(시험용 덮어쓰기). 없으면 서버 정책 inputCheckMinutes, 그것도 없으면 5분. */
   inputIntervalMs?: number;
+  /** M5 실행은 기존 격리 경계를 그대로 쓴다. 없으면 실제 실행을 거부한다(Q-08). */
+  execution?: Pick<ExecutionOptions, 'prepare' | 'isolation' | 'verified'>;
+  /**
+   * Agent 전용 OS 계정 격리(Q-08)의 작업 영역(고정 `/srv/agentwbs`). 주면 CLI 설치·작업 폴더·입력 사본을 이 아래에 두고,
+   * CLI 로그인 상태는 Agent 계정으로 확인한다(isolation.md §12). 없으면 지금처럼 Runner 홈.
+   */
+  agentRoot?: string | null;
+  /** Q-08 승인 전에는 fake 명령 실행기만 주입한다. */
+  ci?:Pick<CiJobsOptions,'repo'|'execute'|'collectTests'>;
+  /** 검증한 결과 수집 공급원이 연결된 경우에만 시도 흐름을 시작한다. */
+  jobs?: Pick<AttemptFlowOptions, 'collect' | 'taskCheck'>;
 }
 
 /** 서버 정책을 받기 전 입력 확인 기본 주기(5분, 서버 정책 inputCheckMinutes의 기본값과 같음). */
@@ -78,6 +95,8 @@ export const INPUT_INTERVAL_MS = 5 * 60_000;
  * - `sessions`: CLI 업데이트 유휴 판정과 동시 실행 보고가 같은 목록을 본다.
  */
 export class RunnerApp {
+  readonly execution: Execution;
+  readonly jobs: AttemptFlow | undefined;
   readonly runner: Runner;
   readonly heavy: HeavySemaphore;
   readonly reporter: ResourceReporter;
@@ -87,12 +106,14 @@ export class RunnerApp {
   readonly github: { client: GitHubClient; connector: GithubConnector; mode: GithubMode; checkDeployKeys(): Promise<void> } | undefined;
   readonly bins: { codex: string; claude: string };
   readonly inputs: InputChangeReporter;
+  readonly ci:CiJobs|undefined;
   #identity: { hostId: string; bootId: string } | undefined;
   readonly #d: RunnerAppDeps;
   readonly #run: RunCommand;
   readonly #cpu = new CpuMeter();
   #timers: { stop(): Promise<void> }[] = [];
   #bootstrapped = false;
+  #ciRecovery: Promise<void> | undefined;
   /** 종료가 시작되면 새 예약 작업을 등록하지 않는다(P1-4). */
   #stopping = false;
   /** 치명적 오류(인증 실패 등) 발생 시 앱 전체를 멈추는 내부 신호(P1-3). */
@@ -101,9 +122,13 @@ export class RunnerApp {
 
   constructor(d: RunnerAppDeps) {
     this.#d = d;
-    this.bins = { codex: cliBinary(d.home, 'Codex'), claude: cliBinary(d.home, 'Claude') };
+    const cliHome = d.agentRoot ?? d.home;
+    this.bins = { codex: cliBinary(cliHome, 'Codex'), claude: cliBinary(cliHome, 'Claude') };
     const base = d.run ?? createRunCommand({ env: probeEnv(d.env) });
-    const cli = d.cliRun ?? createRunCommand({ env: cliEnvironment(d.env) });
+    const plainCli = d.cliRun ?? createRunCommand({ env: cliEnvironment(d.env) });
+    // 전용 계정이면 로그인 상태 질의만 Agent 계정(래퍼 login-status)으로 보낸다. 나머지는 그대로.
+    const isolation = d.agentRoot ? agentIsolationConfig({ AWBS_AGENT_USER: AGENT_USER }) : null;
+    const cli = isolation ? agentLoginRun(isolation, plainCli) : plainCli;
     // M-1: 준비 점검의 codex·claude도 전용 설치 경로를 세션 실행과 같은 인자·환경으로 부른다.
     this.#run = cliAwareRun(base, cli, this.bins);
     this.heavy = new HeavySemaphore(0);
@@ -146,19 +171,26 @@ export class RunnerApp {
           throw error;
         }
       };
+      const githubRepo = `https://github.com/${d.github.repo.owner}/${d.github.repo.repo}`;
       const client = createGitHubClient({
         repo: d.github.repo,
         token: () => source.token(),
         ...(d.github.baseUrl && { baseUrl: d.github.baseUrl }),
         fetch: githubFetch,
-        beforeWrite: checkDeployKeys,
+        // 모든 외부 쓰기(REST·Git push)의 관문. push는 원격 저장소 확인 뒤 같은 배포 키 검사를 거친다.
+        beforeWrite: githubWriteGate(githubRepo, checkDeployKeys),
         onPermissionDenied: async (event) => { await connector.reportPermissionDenied(event, client.permissions(), mode); },
       });
       this.github = { client, connector, mode, checkDeployKeys };
     }
     const resetCleanup = createResetCleanup({
       home: d.home,
+      agentRoot: d.agentRoot ?? null,
       identity: () => this.identity,
+      launchCheck: async hold => {
+        if (!hold.hostId || !hold.bootId) return 'unknown';
+        return await new Launches(d.home, this.identity).reconcile({ job: hold.job, hostId: hold.hostId, bootId: hold.bootId, processGroup: hold.processGroup }) ? 'none' : 'unknown';
+      },
       // 원격 초기화는 GitHub 설정이 있을 때 실제 클라이언트로 연결한다(교차 리뷰 P1-2).
       ...(this.github && { remote: createGithubRemoteCleanup({ client: this.github.client, warn: d.warn,
         ...(d.github?.systemKey && { systemDeployKey: d.github.systemKey }) }) }),
@@ -174,15 +206,46 @@ export class RunnerApp {
       onCleanupQueued: (command) => resetCleanup.markReported(command),
     });
     this.updater = new CliUpdater({
-      home: d.home,
+      home: cliHome,
+      // 전용 계정이면 Agent 그룹이 읽고 실행만 하게 0o750(isolation.md §6).
+      ...(d.agentRoot && { dirMode: 0o750 }),
       // CliUpdater는 생성 때 식별자를 검사하므로 host 식별자를 읽은 뒤(bootstrap) 실제 값으로 바뀐다.
       owner: { get hostId() { return app.identity.hostId; }, get bootId() { return app.identity.bootId; }, get runnerId() { return runnerId(); } },
       registry: d.cliRegistry,
-      activity: () => Promise.resolve([{ ...this.owner, children: this.sessions.reduce((n, s) => n + s.children, 0), held: this.sessions.reduce((n, s) => n + s.reserved, 0) }]),
+      activity: async () => {
+        const holds = (await d.api('getExecutionHolds', { epoch: d.state.snapshot.epoch })).body.holds;
+        const held = holds.filter(h => h.host_id === this.identity.hostId && h.boot_id === this.identity.bootId).length;
+        return [{ ...this.owner, children: this.sessions.reduce((n, s) => n + s.children, 0), held: held + this.sessions.reduce((n, s) => n + s.reserved, 0) }];
+      },
       profiles: () => d.cliProfiles?.() ?? [],
       verified: () => verifiedFromPolicy(this.runner.policy?.cliGrades),
       report: (body) => this.reportReadiness(body),
       obsNote: () => cgroupNote((path) => d.hostSources.readFile(path)),
+    });
+    this.execution = new Execution({
+      home: d.home, api: d.api, outbox: this.runner.outbox,
+      identity: { get hostId() { return app.identity.hostId; }, get bootId() { return app.identity.bootId; } },
+      epoch: () => d.state.snapshot.epoch, ready: () => this.runner.ready,
+      env: d.env, binaries: { Codex: this.bins.codex, Claude: this.bins.claude },
+      sessions: this.sessions, heavy: this.heavy,
+      canStart: (agent, slots, sessions) => this.reporter.canStart(agent, slots, sessions),
+      budget: role => this.runner.policy?.subagentBudget[role] ?? 0,
+      updater: this.updater,
+      prepare: () => Promise.reject(new Error('작업 폴더 준비 공급원이 연결되지 않았습니다.')),
+      ...d.execution,
+    });
+    if (d.ci && this.github) this.ci = new CiJobs({ ...d.ci,api:d.api,outbox:this.runner.outbox,runnerId:runnerId(),
+      directory:join(d.home,'state','ci'),epoch:() => d.state.snapshot.epoch,ready:() => this.runner.ready,
+      identity:{ get hostId() { return app.identity.hostId; },get bootId() { return app.identity.bootId; } },
+      github:this.github.client,heavy:this.heavy,warn:d.warn });
+    if (d.jobs) this.jobs = new AttemptFlow({
+      ...d.jobs, execution: this.execution, runner: this.runner, api: d.api,
+      epoch: () => d.state.snapshot.epoch,
+      identity: { get hostId() { return app.identity.hostId; }, get bootId() { return app.identity.bootId; } },
+      onError: error => {
+        if (authenticationFailed(error)) this.#halt?.(error);
+        else d.warn(`시도 흐름 실패: ${message(error)}`);
+      },
     });
   }
 
@@ -226,6 +289,7 @@ export class RunnerApp {
    * 왜: 동기화 전에 오는 정리 명령도 「이 PC·이 부팅의 보유인가」를 판단해야 한다.
    */
   async init(): Promise<void> {
+    await (this.#ciRecovery ??= GitRepository.recoverTaskChecks(this.#d.home, { agentRoot: this.#d.agentRoot ?? null }));
     const host = await collectHost(this.#d.hostSources, this.#d.home);
     this.#identity = { hostId: host.hostId, bootId: host.bootId };
   }
@@ -300,7 +364,7 @@ export class RunnerApp {
     const repositoryId = repositoryIdFor(`https://github.com/${repo.owner}/${repo.repo}`);
     const exists = await lstat(join(this.#d.home, 'repos', repositoryId)).then(() => true, () => false);
     if (!exists) return undefined;
-    const git = await GitRepository.open(this.#d.home, repositoryId);
+    const git = await GitRepository.open(this.#d.home, repositoryId, { agentRoot: this.#d.agentRoot ?? null });
     return { fetch: () => git.fetch({ allowRewrite: true }), inputObservation: (base, head) => git.inputObservation(base, head) };
   }
 
@@ -312,6 +376,8 @@ export class RunnerApp {
     if (this.#bootstrapped) return;
     signal?.throwIfAborted();
     await this.reportHost();
+    await this.runner.outbox.flush();
+    if (!await this.execution.recover(undefined, signal)) throw new Error('launch 대조 실패: unconfirmed 보유가 있어 새 실행을 보류합니다.');
     await this.updater.recover();
     await this.checkReadiness();
     await this.reportModels();
@@ -327,13 +393,16 @@ export class RunnerApp {
   }
 
   /** 매일 점검(준비 점검 → CLI 최신 확인·유휴 적용 → 모델)과 주기 보고를 건다. 종료가 시작된 뒤에는 등록하지 않는다. */
-  startSchedules(): void {
+  startSchedules(signal?:AbortSignal): void {
     if (this.#stopping) return;
     const onError = (what: string) => (error: unknown) => {
       // WBS 인증 실패(401/403)는 일반 실패가 아니다. Runner 토큰이 폐기된 것이므로 앱 전체를 멈춘다(contracts §1.1 표).
       if (authenticationFailed(error)) { this.#halt?.(error); return; }
       this.#d.warn(`${what}: ${message(error)}`);
     };
+    if (this.jobs) this.#timers.push(scheduleDaily(async () => {
+      await this.jobs?.poll(this.reporter.caps?.total ?? 0, signal);
+    }, { intervalMs: 1000, onError: onError('시도 예약') }));
     this.#timers.push(scheduleDaily(async () => {
       await this.checkReadiness();
       if (this.#d.cliUpdates !== false) {
@@ -344,6 +413,9 @@ export class RunnerApp {
     }, { onError: onError('매일 점검') }));
     this.#timers.push(scheduleDaily(() => this.reportConcurrency(), { intervalMs: 60_000, onError: onError('동시 실행 보고') }));
     this.#timers.push(scheduleDaily(() => this.reporter.reportUsage(this.usage), { intervalMs: 60_000, onError: onError('사용량 보고') }));
+    if (this.ci) this.#timers.push(scheduleDaily(async () => {
+      await this.ci?.runNext(this.reporter.caps?.total ?? 0,signal);
+    },{ intervalMs:1000,onError:onError('통합·CI 재실행') }));
     // 주기는 서버 정책(inputCheckMinutes)을 따른다. 정책이 없으면 기본 5분(P3-1 임시값).
     const policyMinutes = this.runner.policy?.inputCheckMinutes;
     const inputInterval = this.#d.inputIntervalMs ?? (policyMinutes ? policyMinutes * 60_000 : INPUT_INTERVAL_MS);
@@ -390,7 +462,7 @@ export class RunnerApp {
         if (this.runner.ready) {
           try {
             await this.bootstrap(internal.signal);
-            if (!internal.signal.aborted) this.startSchedules();
+            if (!internal.signal.aborted) this.startSchedules(internal.signal);
           } catch (error) {
             if (internal.signal.aborted) return;
             if (authenticationFailed(error) || (error instanceof DeployKeyError && !error.retryable)) { halt(error); return; }
@@ -409,6 +481,9 @@ export class RunnerApp {
       const timers = this.#timers;
       this.#timers = [];
       await Promise.allSettled(timers.map((timer) => timer.stop()));
+      if (this.jobs) await this.jobs.shutdown();
+      else await this.execution.shutdown();
+      await this.ci?.shutdown();
       signal.removeEventListener('abort', onAbort);
       this.#halt = undefined;
     }

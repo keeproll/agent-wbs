@@ -92,13 +92,15 @@ async function checkAttempt(repo: RunnerRepository, job: Job, task: Task, advert
   const holds = await repo.holds();
   const dependencies = await repo.dependencies(task.id);
   const taskCheckPassed = await repo.taskCheck(task, task.execution_head_sha ?? prev?.head_sha);
+  const taskCheckFailed = task.status === 'rework' && prev?.status === 'failed' &&
+    (await repo.client.query<{ status: string; fail_scope: string | null }>('select status,fail_scope from ci_runs where attempt=$1 and stage=1 order by run_no desc limit 1', [prev.id])).rows.some(c => c.status === 'fail' && c.fail_scope === 'task');
   const input: ClaimInput = {
     status: task.status, kind, previousAttempt: domainHistory(history).at(-1) ?? null, hasOpenAttempt: history.some(a => a.status === 'running'),
     jobId: job.id, epoch: job.epoch, hostId: cfg.host.host_id,
     holds: holds.filter(h => h.task === task.id || h.conflict_group !== null && h.conflict_group === task.conflict_group).map(h => ({ jobId: h.job, epoch: h.epoch, hostId: h.host_id,
       slotState: h.slot_state, lockState: h.lock_state, lockFromJobId: h.lock_from_job, handedToJobId: h.handed_to_job })),
     cleanupPending: await repo.cleanup(), dependenciesMet: dependencies.every(d => d.dep_type === 'FS' ? d.status === 'done' : !['planning','approval','ready','cancelled'].includes(d.status)),
-    leaderRequested: job.payload.leaderRequested === true, taskCheckPassed, integrationFailed: job.payload.integrationFailed === true,
+    leaderRequested: job.payload.leaderRequested === true, taskCheckPassed, taskCheckFailed, integrationFailed: job.payload.integrationFailed === true,
     autoRetryLimit: grade.policy.autoRetryLimit, autoReworkLimit: grade.policy.autoReworkLimit,
     evidenceInvalidated: job.payload.evidenceInvalidated === true, history: domainHistory(history), modelId: grade.result.grade.modelId, effort: grade.result.grade.effort,
     resumeGrade: { previousModelAllowed: !grade.result.adjust.replaced, reassessed: Boolean(grade.result.adjust.replaced), modelId: grade.result.grade.modelId,
@@ -116,10 +118,14 @@ async function checkAttempt(repo: RunnerRepository, job: Job, task: Task, advert
   return { cfg, grade, input, slots };
 }
 
+export function externalWriteAllowed(authority: {state:string;host_id:string;generation:number}|undefined, host: string|null|undefined, generation:number|null|undefined) {
+  return Boolean(authority && authority.state==='granted' && authority.host_id===host && generation===authority.generation);
+}
+
 export async function assertExternal(repo: RunnerRepository, job: Job) {
   const authority = await repo.authority();
   const host = await repo.host();
-  if (!authority || authority.state !== 'granted' || authority.host_id !== host?.host_id || job.generation !== authority.generation) throw new PlatformError('EXTERNAL_WRITE_BLOCKED', { generation: authority?.generation });
+  if (!externalWriteAllowed(authority,host?.host_id,job.generation)) throw new PlatformError('EXTERNAL_WRITE_BLOCKED', { generation: authority?.generation });
 }
 
 export async function checkedJob(repo: RunnerRepository, id: string, fence: number, principal: string, reconcile = false) {
@@ -145,6 +151,10 @@ export async function claim(repo: RunnerRepository, kinds: string[], capacity: n
         const check = await checkAttempt(repo, candidate, task, capacity);
         agent = check.grade.agent; slots = check.slots;
       } else if (candidate.kind !== 'stop_attempt') {
+        if (candidate.kind === 'integrate' && typeof candidate.payload.taskKey === 'string') {
+          task = await repo.task(candidate.payload.taskKey as string);
+          if (!task || task.status !== 'gate') continue;
+        }
         const reasons = await capacityReasons(repo, candidate, agent, slots, true, capacity);
         if (capacity === 0 || reasons.length) continue;
       }

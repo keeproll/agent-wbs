@@ -19,7 +19,13 @@ describe('cli-update — 공식 npm 채널·무과금 점검', () => {
     expect(await registry.latest(agent)).toBe(version);
     await registry.install(agent, version, `${home}/cli/${agent.toLowerCase()}/.install-123`);
     expect(calls).toHaveLength(2);
-    expect(calls[0]?.cmd).toBe('npm');
+    // npm은 umask 0022를 정하는 자식 셸을 거쳐 실행된다(리뷰5 P3-5). 인자는 그대로 npm에 간다.
+    for (const call of calls.slice(0, 2)) {
+      expect(call.cmd).toBe('/bin/sh');
+      expect(call.args.slice(0, 4)).toEqual(['-c', 'umask 0022 && exec npm "$@"', 'sh', call.args[3]]);
+    }
+    expect(calls[0]?.args[3]).toBe('view');
+    expect(calls[1]?.args[3]).toBe('install');
     expect(calls[0]?.args).toEqual(expect.arrayContaining(['view', `${pkg}@latest`, 'version', '--json', '--registry=https://registry.npmjs.org', '--global']));
     expect(calls[1]?.args).toEqual(expect.arrayContaining(['install', '--global', '--prefix', `${home}/cli/${agent.toLowerCase()}/.install-123`, `${pkg}@${version}`]));
     expect(calls[1]?.args).toEqual(expect.arrayContaining(['--userconfig=/dev/null', `--globalconfig=${home}/cli/.npm-empty-globalconfig`, `--cache=${home}/cli/.npm-cache`]));

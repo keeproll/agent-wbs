@@ -5,9 +5,12 @@ import { eq } from 'drizzle-orm';
 import type { Pool } from './pool.ts';
 import { assertConnectedToTestDatabase, assertTestDatabaseUrl } from './test-database.ts';
 import * as s from './schema.ts';
+import { seedSubagents } from './subagents.ts';
 
 export async function seedSystem(pool: Pool): Promise<void> {
   await pool.query('select public.seed_system()');
+  // 검토를 마친 하위 Agent v1(M5-06). 정의 파일이 원본이라 SQL 함수가 아니라 여기서 넣는다(data-model §6).
+  await seedSubagents(pool);
 }
 
 interface DemoTask {
@@ -335,7 +338,7 @@ export async function seedDemo(pool: Pool, testDatabaseUrl: string): Promise<voi
             project_id: p.id, task: task.id, basis: t.split.basis, exceptions: t.split.exc,
             judged_rules: { schemaVersion: 1, items: ['revert', 'contract', 'refactor'].map(rule => ({
               rule, result: 'met', agreedBy: ['Claude', 'Codex'], basis: '데모 전용 합의 예시. 실제 Agent 판단이 아닙니다.',
-              subjectHash: hash, judgedAt: new Date(demoTime(demo.mock.project.boot.approvedAt)).toISOString(), sourceRef: `demo:${key}`,
+              subjectHash: hash, judgedAt: new Date(demoTime(demo.mock.project.boot.approvedAt)).toISOString(), sourceRef: `sha256:${hash}`,
             })) },
           });
           for (const [index, c] of t.checklist.entries()) {

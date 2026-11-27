@@ -10,6 +10,8 @@ test('가짜 npm·CLI를 실제 자식 프로세스로 실행해 전용 설치·
   const archive = join(homedir(), '.orca/bots/agentwbs/archive/2026-11-26/M4-05');
   await mkdir(archive, { recursive: true });
   const home = await mkdtemp(join(archive, 'process-test-'));
+  // Runner를 umask 0002 환경에서 띄운 경우를 흉내 낸다(리뷰5 P3-5). 자식 npm은 그래도 0022여야 한다.
+  const previousUmask = process.umask(0o002);
   try {
     const bin = join(home, 'fake-bin');
     await mkdir(bin);
@@ -40,6 +42,7 @@ import { join } from 'node:path';
 const args = process.argv.slice(2);
 if (process.env.AWBS_RUNNER_TOKEN || process.env.GITHUB_TOKEN) process.exit(74);
 appendFileSync(join(process.env.HOME, 'npm-calls.jsonl'), JSON.stringify(args) + '\\n');
+appendFileSync(join(process.env.HOME, 'npm-umask'), process.umask().toString(8) + '\\n');
 if (args[0] === 'view') console.log(JSON.stringify([args[1].startsWith('@openai/') ? '0.173.0' : '2.1.333']));
 else if (args[0] === 'install') {
   const i = args.indexOf('--prefix');
@@ -73,7 +76,9 @@ else if (args[0] === 'install') {
     expect(reports.at(-1)?.cli?.[0]?.version).toBe('0.173.0');
     const calls = (await readFile(join(home, 'npm-calls.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as string[]);
     expect(calls.filter((args) => args[0] === 'install')).toHaveLength(2);
+    // 리뷰5 P3-5: Runner의 umask와 상관없이 npm은 umask 0022로 돈다(설치본·캐시에 그룹 쓰기 없음)
+    expect(new Set((await readFile(join(home, 'npm-umask'), 'utf8')).trim().split('\n'))).toEqual(new Set(['22']));
     const cliCalls = (await readFile(join(home, 'cli-calls.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as { args: string[] });
     expect(cliCalls.every(({ args }) => ['--version', 'login status', 'auth status --json', 'exec --help', '--help'].includes(args.join(' ')))).toBe(true);
-  } finally { await rm(home, { recursive: true, force: true }); }
+  } finally { process.umask(previousUmask); await rm(home, { recursive: true, force: true }); }
 });

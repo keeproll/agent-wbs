@@ -65,3 +65,14 @@ export interface CommandResultBody {
 export function cleanupResult({ status, items, holds = [] }: CommandResultBody) {
   return { succeeded: status === 'done', result: { items, holds } };
 }
+
+/**
+ * runner_commands.payload를 API 본문으로 내보내는 SELECT 식. holds[]의 시각(closed_at·created_at·updated_at)만 계약 Timestamp(UTC, Z)로 바꾼다.
+ * 왜: reset_project()는 보유 행을 to_jsonb로 그대로 담아 시각이 `2026-11-27T03:07:56.40799+00:00`처럼 나온다.
+ * M5-02가 holds[]를 ExecutionHold(Timestamp 형식)로 계약에 묶었으므로, DB 함수를 다시 만들지 않고 내보낼 때 형식만 맞춘다.
+ * 다른 필드와 holds가 없는 payload는 그대로 둔다.
+ */
+export const COMMAND_PAYLOAD_SQL = `case when jsonb_typeof(payload->'holds')='array' then jsonb_set(payload,'{holds}',(
+  select coalesce(jsonb_agg(e.h || coalesce((select jsonb_object_agg(k,to_char((e.h->>k)::timestamptz at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'))
+    from unnest(array['closed_at','created_at','updated_at']) k where jsonb_typeof(e.h->k)='string'),'{}'::jsonb) order by e.n),'[]'::jsonb)
+  from jsonb_array_elements(payload->'holds') with ordinality e(h,n))) else payload end`;

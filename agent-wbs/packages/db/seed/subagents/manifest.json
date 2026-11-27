@@ -1,0 +1,172 @@
+{
+  "$comment": "실제 하위 Agent v1 정의 목록(M5-06). 파일 내용을 바꾸면 hash가 달라진다. 이미 배포한 버전은 고치지 말고 새 버전 파일을 더한다.",
+  "defs": [
+    {
+      "key": "ui-builder",
+      "version": 1,
+      "agent": "Claude",
+      "role": "화면 구현",
+      "tools": [
+        "Read",
+        "Glob",
+        "Grep",
+        "Edit",
+        "Write",
+        "Bash"
+      ],
+      "sandbox": "worktree 쓰기",
+      "allowed": true,
+      "ref": "https://code.claude.com/docs/en/sub-agents",
+      "file": "claude/ui-builder.v1.md",
+      "hash": "bbf10fd4a061bb11b5e1f09d08b3048f569fe91786ed5d12bcf984337587584b"
+    },
+    {
+      "key": "service-builder",
+      "version": 1,
+      "agent": "Claude",
+      "role": "서버 기능 구현",
+      "tools": [
+        "Read",
+        "Glob",
+        "Grep",
+        "Edit",
+        "Write",
+        "Bash"
+      ],
+      "sandbox": "worktree 쓰기",
+      "allowed": true,
+      "ref": "https://code.claude.com/docs/en/sub-agents",
+      "file": "claude/service-builder.v1.md",
+      "hash": "bebddb297b2a3567f0399ea32838aac3169e97c1e836a315d367afc63ed97bfe"
+    },
+    {
+      "key": "schema-migrator",
+      "version": 1,
+      "agent": "Claude",
+      "role": "DB 구조 변경",
+      "tools": [
+        "Read",
+        "Glob",
+        "Grep",
+        "Edit",
+        "Write",
+        "Bash"
+      ],
+      "sandbox": "worktree 쓰기",
+      "allowed": true,
+      "ref": "https://code.claude.com/docs/en/sub-agents",
+      "file": "claude/schema-migrator.v1.md",
+      "hash": "28a0f102e176580d529eac3655a1a538add336c0d67f1fc79d82cd09180df2f6"
+    },
+    {
+      "key": "change-reviewer",
+      "version": 1,
+      "agent": "Claude",
+      "role": "변경 검토",
+      "tools": [
+        "Read",
+        "Glob",
+        "Grep"
+      ],
+      "sandbox": "읽기 전용",
+      "allowed": true,
+      "ref": "https://code.claude.com/docs/en/sub-agents",
+      "file": "claude/change-reviewer.v1.md",
+      "hash": "4b2a5c2d094379dab7ab8f29f15f3ffd45b902d8a8506279e3808a31b0ed5adf"
+    },
+    {
+      "key": "contract-checker",
+      "version": 1,
+      "agent": "Claude",
+      "role": "인터페이스 계약 대조",
+      "tools": [
+        "Read",
+        "Glob",
+        "Grep"
+      ],
+      "sandbox": "읽기 전용",
+      "allowed": true,
+      "ref": "https://code.claude.com/docs/en/sub-agents",
+      "file": "claude/contract-checker.v1.md",
+      "hash": "d64fb63a709ea059ccc43bc50d16ff577c74ceea3dbb9569f5e10af0865a895d"
+    },
+    {
+      "key": "doc-editor",
+      "version": 1,
+      "agent": "Claude",
+      "role": "문서 작성",
+      "tools": [
+        "Read",
+        "Glob",
+        "Grep",
+        "Edit",
+        "Write"
+      ],
+      "sandbox": "worktree 쓰기 · 문서만(지시문)",
+      "allowed": true,
+      "ref": "https://code.claude.com/docs/en/sub-agents",
+      "file": "claude/doc-editor.v1.md",
+      "hash": "ac2a210a893583b08f205eaac37852062cbcf70d4615719d5a68e7ba90e0939e"
+    },
+    {
+      "key": "ac-verifier",
+      "version": 1,
+      "agent": "Codex",
+      "role": "인수 조건 검증",
+      "tools": [
+        "shell",
+        "apply_patch"
+      ],
+      "sandbox": "부모 세션 권한 상속 · 구현·테스트 수정 금지(지시문)",
+      "allowed": true,
+      "ref": "https://github.com/openai/codex/tree/main/codex-rs/agent-roles",
+      "file": "codex/ac-verifier.v1.toml",
+      "hash": "2e532748bd491c4244e901b19c5952ec92ee3918cf8c96430ba22eea4b1179b4"
+    },
+    {
+      "key": "test-author",
+      "version": 1,
+      "agent": "Codex",
+      "role": "테스트 작성",
+      "tools": [
+        "shell",
+        "apply_patch"
+      ],
+      "sandbox": "부모 세션 권한 상속 · 테스트만(지시문)",
+      "allowed": true,
+      "ref": "https://github.com/openai/codex/tree/main/codex-rs/agent-roles",
+      "file": "codex/test-author.v1.toml",
+      "hash": "ee8ea3abdeaf2707c46e263bed68ac0ad65843cecebf7db13008b2e3629758b3"
+    },
+    {
+      "key": "security-checker",
+      "version": 1,
+      "agent": "Codex",
+      "role": "보안 점검",
+      "tools": [
+        "shell",
+        "apply_patch"
+      ],
+      "sandbox": "부모 세션 권한 상속 · 수정 금지(지시문)",
+      "allowed": true,
+      "ref": "https://github.com/openai/codex/tree/main/codex-rs/agent-roles",
+      "file": "codex/security-checker.v1.toml",
+      "hash": "118453d3a627f3cbee47486ff3afee8e74ad23a877dba34050758a84c4ce310f"
+    },
+    {
+      "key": "failure-investigator",
+      "version": 1,
+      "agent": "Codex",
+      "role": "실패 원인 조사",
+      "tools": [
+        "shell",
+        "apply_patch"
+      ],
+      "sandbox": "부모 세션 권한 상속 · 수정 금지(지시문)",
+      "allowed": true,
+      "ref": "https://github.com/openai/codex/tree/main/codex-rs/agent-roles",
+      "file": "codex/failure-investigator.v1.toml",
+      "hash": "83750c10ed0353dff7cc894336ce80529c30dac50d8cd201161fa46eb41a6ef6"
+    }
+  ]
+}

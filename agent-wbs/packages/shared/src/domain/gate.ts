@@ -102,7 +102,7 @@ export function canIntegrate(input: IntegrationEntryInput): boolean {
 }
 
 export interface CompletionInput extends GateInput {
-  // Server-resolved pipeline definition at merge base A, independent of the post-merge current main.
+  // First Runner observation at main A, matched by the server independently of CI run reports.
   basePipelineSha: string;
   integration: Integration | null;
   merge: { mergeSha: string; headSha: string; baseSha: string; treeSha: string } | null;

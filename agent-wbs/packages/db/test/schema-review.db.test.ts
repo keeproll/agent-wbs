@@ -7,6 +7,7 @@ import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { afterAll, beforeAll, expect, inject, test, vi } from 'vitest';
 import { createPool, recreateTestDatabase, seedDemo, seedSystem } from '../src/index.ts';
 import { fillProjectTables } from './project-fixture.ts';
+import { loadSubagentSet } from '../src/subagents.ts';
 
 const reviewUrl = new URL(inject('testDatabaseUrl'));
 reviewUrl.pathname += '_review';
@@ -209,7 +210,8 @@ test('P1-3/P2-10: reset restores system defaults from the same source, preservin
       (await c.query('select heartbeat_seconds from app_settings')).rows[0]?.heartbeat_seconds,
     ).toBe(60);
     expect((await c.query('select count(*)::int n from agent_efforts')).rows[0]?.n).toBe(74);
-    expect((await c.query('select count(*)::int n from subagent_defs')).rows[0]?.n).toBe(1);
+    // 직접 넣은 검토 정의 1개 + system seed의 실제 v1 정의(M5-06)가 모두 남는다.
+    expect((await c.query('select count(*)::int n from subagent_defs')).rows[0]?.n).toBe(1 + (await loadSubagentSet()).defs.length);
     expect((await c.query('select cp_auto from schedule_policy')).rows[0]?.cp_auto).toBe(true);
   }));
 

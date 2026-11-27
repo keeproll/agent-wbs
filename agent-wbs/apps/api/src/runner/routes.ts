@@ -12,6 +12,8 @@ import { caps, claim, checkedJob, release, requestRun, runGrade, start, retryFai
 import { reportConcurrency, reportHost } from './telemetry.ts';
 import { runnerState } from './state.ts';
 import { installResetRunner } from '../reset/routes.ts';
+import { currentRunnerJob, steps } from '../project/jobs.ts';
+import { waitingForLead } from '../project/steps.ts';
 
 const params = (r: FastifyRequest) => r.params as { id: string; taskKey: string; attemptId: string };
 const body = <T>(r: FastifyRequest) => r.body as T;
@@ -66,15 +68,16 @@ export function installRunner(app: FastifyInstance, pool: Pool) {
     if (!task) throw new PlatformError('TASK_NOT_FOUND');
     const role = (r.query as { role: RunRole }).role;
     const prev = (await repo.history(task.id)).findLast(a => (a.kind === 'dev' || a.kind === 'rework' ? 'dev' : 'qa') === role);
-    const kind = prev && (prev.status === 'interrupted' || prev.status === 'failed') ? prev.kind : role === 'dev' ? task.status === 'rework' ? 'rework' : 'dev' : task.status === 'verifying' ? 'reverify' : 'qa';
+    const kind = ['paused','failed'].includes(task.status) && prev && (prev.status === 'interrupted' || prev.status === 'failed') ? prev.kind : role === 'dev' ? task.status === 'rework' ? 'rework' : 'dev' : task.status === 'verifying' ? 'reverify' : 'qa';
     return (await runGrade(repo, task, kind)).wire;
   });
+  route('getExecutionHolds', async (repo, r) => ({ holds: await repo.ownedHolds(principal(r), required(r.platform).epoch) }));
   route('getTaskSubagents', async (repo, r) => {
     const task = await repo.task(params(r).taskKey);
     if (!task) throw new PlatformError('TASK_NOT_FOUND');
     const defs = await repo.subagents(task.id, (r.query as { role: string }).role);
     if (defs.some(d => !d.allowed)) throw new PlatformError('CLAIM_REJECTED', { reasons: ['지정한 하위 Agent의 재판단이 필요합니다.'] });
-    return { enabled: defs.length > 0, items: defs.map(d => ({ id: d.id, agent: d.agent, version: d.version, hash: d.hash, file: d.text, sandbox: d.sandbox })) };
+    return { enabled: defs.length > 0, items: defs.map(d => ({ id: d.id, key: d.def_key, agent: d.agent, version: d.version, hash: d.hash, file: d.text, sandbox: d.sandbox })) };
   });
   route('claimJob', async (repo, r) => {
     const b = body<{ kinds: string[]; capacity: number }>(r);
@@ -135,7 +138,7 @@ export function installRunner(app: FastifyInstance, pool: Pool) {
       if (!task) throw new PlatformError('TASK_NOT_FOUND');
       await repo.historyEvent(task, '시작 전 실패', { jobId:job.id,error:b.error ?? null });
     }
-    await repo.state(job.id, b.status);
+    await repo.state(job.id, b.status, b.error);
   }, 204);
   route('reconcileJob', async (repo, r) => {
     const b = body<{ fence: number; evidence: { outcome: 'none' | 'done' | 'partial'; checkedAt: string; detail: object } }>(r);
@@ -145,7 +148,11 @@ export function installRunner(app: FastifyInstance, pool: Pool) {
     await repo.event(job, 'reconciled', null, b.evidence);
     await repo.state(job.id, b.evidence.outcome === 'done' ? 'done' : 'failed');
     if (h && !h.closed_at) await repo.release(h, required(h.release_proof), true);
-    if (b.evidence.outcome === 'none') await repo.enqueue(job.project_id, job.epoch, job.kind, job.payload, `reconcile:${job.id}:${job.fence}`, job.generation);
+    const planningId = ['bootstrap', 'input_diff'].includes(job.kind) ? job.payload.planningJobId as string | undefined : undefined;
+    const canReplace = !planningId || await currentRunnerJob(repo.client, planningId) === job.id
+      && (await repo.client.query<{ status: string }>('select status from planning_jobs where id=$1', [planningId])).rows[0]?.status !== 'done'
+      && !waitingForLead(job.kind, await steps(repo.client, planningId));
+    if (b.evidence.outcome === 'none' && canReplace) await repo.enqueue(job.project_id, job.epoch, job.kind, job.payload, `reconcile:${job.id}:${job.fence}`, job.generation);
   }, 204);
   route('interruptAttempt', async (repo, r) => {
     const b = body<{ fence: number; reason: string; at: string }>(r);
@@ -203,7 +210,7 @@ export function installRunner(app: FastifyInstance, pool: Pool) {
     const cliGrades = (await repo.observations()).map(o => ({ agent:o.cli,version:o.version,model:o.model,options:o.options,grade:fromDb(OBSERVATION_GRADE,o.grade) }));
     // shortcut: 입력 확인은 5분 주기다. 공통 설정에 주기 항목이 생기면 그 값을 읽는다.
     return { caps: { ...wireCaps(c.caps), memReserveGB: c.memReserveGB }, subagentBudget: c.budget, heartbeatSeconds: settings.heartbeat_seconds,
-      inputCheckMinutes: 5, inputRecheck: await repo.inputRecheck(), inputCheckRequest: await repo.inputCheckRequest(), readinessCheckRequest: settings.readiness_check_request, githubMode: (await repo.githubSettings())?.mode ?? 'gh', ci: { nightAt: ci.night_at, retry: ci.retry, deployUrl: ci.deploy_url },claudeModels:models.claudeModels,cliGrades };
+      inputCheckMinutes: 5, inputRecheck: await repo.inputRecheck(), inputCheckRequest: await repo.inputCheckRequest(), readinessCheckRequest: settings.readiness_check_request, githubMode: (await repo.githubSettings())?.mode ?? 'gh', ci: { nightAt: ci.night_at, retry: ci.retry, deployUrl: ci.deploy_url,quarantined:await repo.quarantinedTests() },claudeModels:models.claudeModels,cliGrades };
   });
   route('getRunnerState', repo => runnerState(repo));
 }

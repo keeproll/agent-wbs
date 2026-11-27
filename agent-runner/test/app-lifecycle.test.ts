@@ -5,17 +5,44 @@ import { join } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { ApiError, type ApiClient } from '../src/api/client.ts';
-import { RunnerApp } from '../src/app.ts';
+import { RunnerApp, type RunnerAppDeps } from '../src/app.ts';
 import { sealCredential } from '../src/github/credential.ts';
 import { DeployKeyError } from '../src/github/client.ts';
 import type { HostSources } from '../src/resources/host.ts';
 import { State } from '../src/state/state.ts';
 import { protectedMainResponse } from './fakes/github/rules.ts';
+import { fixture } from './ci/int-fixture.ts';
 
 let home: string;
 let state: State;
 beforeEach(async () => { home = await mkdtemp(join(process.env.AWBS_TEST_TMP ?? tmpdir(), 'app-life-')); state = await State.open(home); });
 afterEach(async () => { vi.restoreAllMocks(); await state.close(); await rm(home, { recursive: true, force: true }); });
+
+test('Runner 앱 반복이 실제 CI 실행기로 integrate·ci_retry를 예약한다', async () => {
+  const f = await fixture(), controller = new AbortController();
+  const claims:string[][] = [];
+  const api = (async (operation:string,request:{body?:{kinds:string[]}}) => {
+    if (operation === 'claimJob') claims.push(request.body?.kinds ?? []);
+    return { status:204,body:undefined,headers:new Headers() };
+  }) as unknown as ApiClient;
+  const a = new RunnerApp({ state,api,home,version:'t',env:{},warn:()=>undefined,hostSources,
+    cliRegistry:{ latest:async ()=>'1.0.0',install:async()=>undefined,probe:async()=>undefined },
+    github:{ repo:{owner:'o',repo:'r'},mode:'gh',baseUrl:f.github.url },
+    ci:{ repo:f.repo,execute:(_job,argv,cwd)=>f.deps.execute(argv,cwd),collectTests:f.deps.collectTests } });
+  vi.spyOn(a.runner,'ready','get').mockReturnValue(true);
+  vi.spyOn(a.reporter,'caps','get').mockReturnValue({ total:1,Claude:1,Codex:1,heavy:1 });
+  vi.spyOn(a.runner,'run').mockImplementation(signal => new Promise(resolve=>{ signal.addEventListener('abort',()=>resolve()); }));
+  vi.spyOn(a,'bootstrap').mockResolvedValue();
+  vi.spyOn(a,'checkReadiness').mockResolvedValue({ at:new Date().toISOString(),items:[] });
+  vi.spyOn(a,'reportModels').mockResolvedValue();
+  vi.spyOn(a,'reportConcurrency').mockResolvedValue();
+  vi.spyOn(a.reporter,'reportUsage').mockResolvedValue();
+  vi.spyOn(a.updater,'check').mockResolvedValue();
+  vi.spyOn(a.updater,'applyPending').mockResolvedValue();
+  const running = a.run(controller.signal);
+  try { await expect.poll(()=>claims,{ timeout:10_000 }).toEqual([['integrate','ci_retry']]); }
+  finally { controller.abort(); await running; await f.close(); }
+});
 
 test('지금 확인 요청 번호가 바뀌면 5분 주기를 기다리지 않고 새 입력 관측을 한다', async () => {
   const a = app();
@@ -47,12 +74,24 @@ const hostSources: HostSources = {
   readFile: (path) => Promise.resolve(({ '/etc/machine-id': 'm', '/proc/sys/kernel/random/boot_id': 'b', '/proc/meminfo': 'MemTotal: 1 kB\nSwapTotal: 0 kB\n' } as Record<string, string>)[path] ?? ''),
   hostname: () => 'h', kernel: () => 'k', cores: () => 1, diskFree: () => Promise.resolve(1),
 };
-function app(api: ApiClient = vi.fn() as unknown as ApiClient, githubFetch?: typeof fetch, warn: (message: string) => void = () => undefined) {
+function app(api: ApiClient = vi.fn() as unknown as ApiClient, githubFetch?: typeof fetch, warn: (message: string) => void = () => undefined, jobs?: RunnerAppDeps['jobs']) {
   return new RunnerApp({ state, api, home, version: 't', env: {}, warn, hostSources,
     cliRegistry: { latest: () => Promise.resolve('1.0.0'), install: () => Promise.resolve(), probe: () => Promise.resolve() },
     ...(githubFetch && { github: { repo: { owner: 'o', repo: 'r' }, mode: 'token' as const }, githubFetch }),
+    ...(jobs && { jobs }),
   });
 }
+
+test('M5-05: 조립한 job 실행은 같은 Execution을 사용하고 앱 종료가 진행 중인 흐름도 기다린다', async () => {
+  const a = app(undefined, undefined, undefined, { collect: async () => ({ report: { summary: '', changedFiles: [], evidence: [] } }), taskCheck: async () => { throw new Error('이 시험에서는 실행하지 않습니다.'); } });
+  expect(a.jobs).toBeDefined();
+  if (!a.jobs) throw new Error('시도 흐름이 연결되지 않았습니다.');
+  const shutdown = vi.spyOn(a.jobs, 'shutdown').mockResolvedValue();
+  const controller = new AbortController();
+  controller.abort();
+  await a.run(controller.signal);
+  expect(shutdown).toHaveBeenCalledOnce();
+});
 const settle = (p: Promise<unknown>) => { const r = { value: 'pending' }; p.then(() => { r.value = 'resolved'; }, () => { r.value = 'rejected'; }); return r; };
 
 test.each([false, true])('M4-06: 연결 확인과 쓰기 전에 다른 deploy key를 경고하고 중단한다(경고 출력 실패=%s)', async (warningFails) => {
@@ -76,6 +115,7 @@ test.each([false, true])('M4-06: 연결 확인과 쓰기 전에 다른 deploy ke
 
 test('M4-06: 시작 점검에서 키 정책을 확인할 수 없으면 계속 실행하지 않는다', async () => {
   const a = app();
+  vi.spyOn(a.execution, 'recover').mockResolvedValue(true);
   vi.spyOn(a, 'reportHost').mockResolvedValue();
   vi.spyOn(a.updater, 'recover').mockResolvedValue();
   vi.spyOn(a, 'checkReadiness').mockResolvedValue({ at: new Date().toISOString(), items: [] });

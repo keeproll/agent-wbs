@@ -1,6 +1,8 @@
 # Agent Runner
 
-개발 PC에서 Agent WBS에 연결하는 상주 프로그램이다. 현재는 정리 명령 조회, 정책·메시지 조회, 생존 신호와 세션 시작·종료 보고를 제공한다. 실제 Agent 실행은 다음 작업에서 연결한다.
+시도 실행과 M7-06의 연결 계약은 [시도 흐름 결합(M5-05)](src/jobs/README.md)에 있다.
+
+개발 PC에서 Agent WBS에 연결하는 상주 프로그램이다. 정리 명령 조회, 정책·메시지 조회, 생존 신호와 세션 시작·종료 보고를 제공한다. 시도 흐름은 작업 폴더·격리·결과 수집 공급원을 연결해야 실행한다. 공급원을 연결하지 않은 기본 실행은 계속 거부한다. Claude·Codex CLI 실행 인자·출력 해석·환경 변수 allowlist는 [src/cli/README.md](src/cli/README.md)에 있다(M5-01).
 
 ```sh
 pnpm -C agent-runner install --frozen-lockfile

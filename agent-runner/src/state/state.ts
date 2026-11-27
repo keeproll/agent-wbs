@@ -34,6 +34,9 @@ export interface Document {
   pendingEpoch: number | null;
   cursor: string | null;
   inbox: Message[];
+  /** 실패·중단된 시도에 전달한 Task 지시를 성공 보고까지 보존한다. */
+  /** responded: 이 지시에 업무 응답을 이미 보냈다. 다음 시도에 다시 전달해도 응답은 한 번만 보낸다(M5-05 P3-3). */
+  instructions?: { message: Message; attemptId: string; responded?: true }[];
   outbox: Entry[];
   epochStartedAt?: number;
 }
@@ -58,12 +61,14 @@ function validate(value: Document): void {
     ids.add(e.id);
   }
   if (value.inbox.some((m) => !m || typeof m.id !== 'string')) throw new Error('수신함 형식이 올바르지 않습니다.');
+  if (value.instructions !== undefined && (!Array.isArray(value.instructions) || value.instructions.some(i => !i || typeof i.attemptId !== 'string' || !i.attemptId ||
+    (i.responded !== undefined && i.responded !== true) || !i.message || typeof i.message.id !== 'string' || typeof i.message.taskKey !== 'string' || !['Codex', 'Claude'].includes(i.message.toAgent) || typeof i.message.body !== 'string'))) throw new Error('보관한 Task 지시 형식이 올바르지 않습니다.');
 }
 
 export class StateLockError extends Error { override name = 'StateLockError'; }
 export class StateStorageError extends Error { override name = 'StateStorageError'; }
 
-async function acquireLock(directory: string): Promise<FileHandle> {
+export async function acquireLock(directory: string): Promise<FileHandle> {
   const lock = await open(join(directory, 'lock'), 'a+', 0o600);
   try {
     // 자식의 fd 3과 부모의 fd는 같은 열린 파일을 가리켜, 자식 종료 뒤에도 부모가 잠금을 보유한다.
@@ -217,6 +222,7 @@ export class State {
       discarded = draft.outbox;
       draft.outbox = [];
       draft.inbox = [];
+      draft.instructions = [];
       draft.cursor = null;
     });
     for (const entry of discarded) await this.removeEvidence(entry);
@@ -229,6 +235,7 @@ export class State {
       discarded = draft.outbox;
       draft.outbox = [];
       draft.inbox = [];
+      draft.instructions = [];
       draft.cursor = null;
     });
     for (const entry of discarded) await this.removeEvidence(entry);

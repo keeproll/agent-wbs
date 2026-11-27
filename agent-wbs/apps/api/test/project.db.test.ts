@@ -9,8 +9,11 @@ import { issueLoginLink, issueRunnerToken } from '../src/platform/credentials.ts
 import { installProjectRunner } from '../src/project/runner-routes.ts';
 import { installRunner } from '../src/runner/routes.ts';
 import { watchRunner } from '../src/runner/watch.ts';
+import { RunnerRepository } from '../src/runner/repository.ts';
 import { GitRepo } from './git-observe.ts';
 import { draft, met, task } from './project-fixture.ts';
+import { snapshotHash, wbsSnapshot } from '../src/planning/job-snapshot.ts';
+import { judgedContentHash } from '../src/tasks/hash.ts';
 
 /*
  * M2-03 프로젝트 등록·기술 결정·bootstrap·초기 WBS 승인·입력 변경·분석 안 함(G§4.2, contracts §2.2·§3.3).
@@ -622,6 +625,471 @@ describe('project 입력 자료 변경·분석·분석 안 함(G§4.2 ②)', () 
 
 function AT_NOW() { return new Date().toISOString(); }
 
+describe('서버 후속 4: Runner 계약과 분석 완료', () => {
+  async function finishClaim(job: { id: string; fence: number }) {
+    expect((await runner(`/api/runner/jobs/${job.id}/finish`, { fence: job.fence, status: 'done' })).statusCode).toBe(204);
+    expect((await runner(`/api/runner/jobs/${job.id}/release`, { fence: job.fence, hostId: 'host-1', proof: { kind: 'no_process', bootId: 'boot-1' }, at: AT_NOW() })).statusCode).toBe(204);
+  }
+  async function claim(kind: string) {
+    const response = await runner('/api/runner/jobs/claim', { kinds: [kind], capacity: 10 });
+    expect(response.statusCode, response.body).toBe(200);
+    expectShape('claimJob', 200, response.json());
+    return response.json<{ job: { id: string; fence: number; kind: string; leaseUntil: string; payload: Record<string, unknown> } }>().job;
+  }
+  // M5·M7 통합: M5-06부터 system seed가 검토된 하위 Agent v1을 허용 상태로 넣는다. 기대값은 지금 허용된 정의 전체다(def_key 순).
+  const allowedSubagentDefs = async () => (await ownerPool.query(`select distinct on (def_key) id,def_key as "defKey",version,agent,role
+    from subagent_defs where allowed order by def_key,version desc`)).rows as Record<string, unknown>[];
+  async function confirmed() {
+    await resetDb();
+    forgetRunnerView();
+    const check = await checkedRepo();
+    expect((await lead('POST', '/api/project', registration(check, {
+      constraints: [{ name: 'QuestDB', level: 'cond', condition: '시계열 데이터가 있으면' }],
+    }))).statusCode).toBe(201);
+    const first = await claim('bootstrap');
+    const constraints = (await ownerPool.query('select id,name,level,condition from tech_constraints order by created_at,id')).rows;
+    expect(first.payload).toEqual({
+      planningJobId: (await state()).bootstrap.jobId, runNo: 1, version: 1, commit: SHA1, previousCommit: null,
+      instruction: '계약 먼저', resumeStep: null, techConstraints: constraints, subagentDefs: await allowedSubagentDefs(),
+      techDecisions: [], techDecisionVersion: snapshotHash([]),
+    });
+    expect(constraints).toEqual([{ id: expect.any(String), name: 'QuestDB', level: 'cond', condition: '시계열 데이터가 있으면' }]);
+    for (const field of ['planningJobId', 'runNo', 'version', 'techConstraints', 'techDecisionVersion']) {
+      const payload = Object.fromEntries(Object.entries(first.payload).filter(([key]) => key !== field));
+      expect(ajv.validate(OPERATIONS.find((op) => op.id === 'claimJob')?.responses[200], { job: { ...first, payload } }), field).toBe(false);
+    }
+    for (const key of ['check', 'unzip', 'repo', 'codex', 'claude', 'cross']) await progress(first.id, first.fence, key);
+    const proposed = await runner(`/api/planning/bootstrap/${first.id}/tech`, {
+      fence: first.fence,
+      decisions: [{ area: '데이터', title: '캐시', choice: 'Redis', reason: '속도', alternatives: '메모리' }],
+      conditionJudgements: [{ constraintId: constraints[0]?.id, result: 'not_met', reason: '시계열 데이터가 없습니다.' }],
+    });
+    expect(proposed.statusCode, proposed.body).toBe(201);
+    await finishClaim(first);
+    const s = await state();
+    expect((await lead('POST', `/api/projects/${s.id}/boot/tech/confirm`, {
+      decisions: s.bootstrap.decisions.map((decision) => ({ id: decision.id, choice: 'reject', updatedAt: decision.updatedAt })),
+    })).statusCode).toBe(200);
+    const next = await claim('bootstrap');
+    expect(next.payload).toMatchObject({ ...first.payload, resumeStep: 'draft', techDecisions: expect.any(Array), techDecisionVersion: expect.any(String) });
+    const decisions = next.payload.techDecisions as { id: string; status: string; updatedAt: string; content: { choice: string } }[];
+    expect(decisions.map((decision) => ({ status: decision.status, choice: decision.content.choice }))).toEqual([
+      { status: 'rejected', choice: 'QuestDB' }, { status: 'rejected', choice: 'Redis' },
+    ]);
+    expect(next.payload.techDecisionVersion).toBe(snapshotHash(decisions));
+    return { job: next, s: await state(), decisions };
+  }
+  async function active(content = draft()) {
+    const { job, s } = await confirmed();
+    const submitted = await runner(`/api/planning/bootstrap/${job.id}/draft`, { fence: job.fence, ...content });
+    expect(submitted.statusCode, submitted.body).toBe(201);
+    const approved = await lead('POST', '/api/project/bootstrap/approve', { revision: submitted.json<{ revision: number }>().revision });
+    expect(approved.statusCode, approved.body).toBe(200);
+    await finishClaim(job);
+    return s.id;
+  }
+  async function input(sha: string) {
+    expect((await chainReport([{ sha, at: AT_NOW(), author: '개발자', message: '입력 변경' }], [
+      { commitSha: sha, path: `prototype/docs/${sha[0] ?? ''}.md`, change: 'added', added: 1, deleted: 0 },
+    ])).statusCode).toBe(200);
+    const s = await state();
+    const response = await lead('POST', '/api/project/inputs', { updatedAt: s.updatedAt, commit: sha, commits: [sha] });
+    expect(response.statusCode, response.body).toBe(202);
+    return claim('input_diff');
+  }
+
+  test('조건부 제약의 실제 claim→제안→반려 후, 결정이 바뀌면 옛 초안을 거부한다', async () => {
+    const { job, decisions } = await confirmed();
+    await ownerPool.query("update tech_decisions set content=content||'{\"choice\":\"새 결정\"}'::jsonb where id=$1", [decisions[0]?.id]);
+    const stale = await runner(`/api/planning/bootstrap/${job.id}/draft`, { fence: job.fence, ...draft() });
+    expect(stale.statusCode, stale.body).toBe(409);
+    expect(errorOf(stale).code).toBe('VERSION_CONFLICT');
+    expect(await count('select count(*) n from wbs_drafts')).toBe(0);
+    await progress(job.id, job.fence, 'draft', 'fail', '기술 결정이 바뀜');
+    await finishClaim(job);
+    expect((await lead('POST', '/api/project/bootstrap/retry', { revision: null, runNo: 1 })).statusCode).toBe(202);
+    const retried = await claim('bootstrap');
+    expect(retried.payload).toMatchObject({ runNo: 2, version: 1, resumeStep: 'codex', techConstraints: job.payload.techConstraints });
+    expect(retried.payload.techDecisionVersion).not.toBe(job.payload.techDecisionVersion);
+    for (const key of ['codex', 'claude', 'cross']) await progress(retried.id, retried.fence, key);
+    expect((await runner(`/api/planning/bootstrap/${retried.id}/draft`, { fence: retried.fence, ...draft() })).statusCode).toBe(201);
+  });
+
+  test('초안의 옛 입력 지문은 새 제목으로 바꿔 저장하지 않으며 같은 입력 지문만 받는다', async () => {
+    const { job } = await confirmed();
+    const old = draft();
+    const first = old.tasks[0];
+    if (!first) throw new Error('초안 없음');
+    first.title = '판단 뒤 바꾼 제목';
+    const rejected = await runner(`/api/planning/bootstrap/${job.id}/draft`, { fence: job.fence, ...old });
+    expect(rejected.statusCode, rejected.body).toBe(409);
+    expect(errorOf(rejected).code).toBe('VERSION_CONFLICT');
+    expect(errorOf(rejected).details.subjectHash).toBe(draft([task('t1', { title: first.title })], []).tasks[0]?.judgedRules?.items[0]?.sourceRef.slice(7));
+    expect(await count('select count(*) n from wbs_drafts')).toBe(0);
+    const invalid = draft();
+    const invalidTask = invalid.tasks[0];
+    if (!invalidTask) throw new Error('초안 없음');
+    invalidTask.title = '\ud800';
+    expect((await runner(`/api/planning/bootstrap/${job.id}/draft`, { fence: job.fence, ...invalid })).statusCode).toBe(400);
+    const correct = draft([task('t1', { title: first.title }), task('t2')]);
+    const accepted = await runner(`/api/planning/bootstrap/${job.id}/draft`, { fence: job.fence, ...correct });
+    expect(accepted.statusCode, accepted.body).toBe(201);
+    const stored = (await state()).bootstrap.draft?.tasks[0]?.judgedRules?.items[0];
+    expect(stored?.subjectHash).toBe(correct.tasks[0]?.judgedRules?.items[0]?.sourceRef.slice(7));
+  });
+
+  test('저장한 초안도 결정이 바뀌면 승인할 수 없고 재분석은 새 결정 스냅샷을 받는다', async () => {
+    const { job, decisions } = await confirmed();
+    const submitted = await runner(`/api/planning/bootstrap/${job.id}/draft`, { fence: job.fence, ...draft() });
+    expect(submitted.statusCode, submitted.body).toBe(201);
+    const revision = submitted.json<{ revision: number }>().revision;
+    await ownerPool.query("update tech_decisions set content=content||'{\"choice\":\"새 결정\"}'::jsonb where id=$1", [decisions[0]?.id]);
+    const stale = await lead('POST', '/api/project/bootstrap/approve', { revision });
+    expect(errorOf(stale).code).toBe('VERSION_CONFLICT');
+    expect((await lead('POST', '/api/project/bootstrap/rerun', { revision, instruction: '새 결정으로 분석' })).statusCode).toBe(202);
+    await finishClaim(job);
+    const next = await claim('bootstrap');
+    expect(next.payload).toMatchObject({ runNo: 2, version: 1, resumeStep: 'codex', techConstraints: job.payload.techConstraints });
+    expect(next.payload.techDecisionVersion).not.toBe(job.payload.techDecisionVersion);
+    expect((next.payload.techDecisions as typeof decisions)[0]?.content.choice).toBe('새 결정');
+    for (const key of ['codex', 'claude', 'cross']) await progress(next.id, next.fence, key);
+    expect((await runner(`/api/planning/bootstrap/${next.id}/draft`, { fence: next.fence, ...draft() })).statusCode).toBe(201);
+  });
+
+  test('현재 WBS를 전달하고, 앞 단계가 끝난 cp:done 뒤 다음 차이 분석을 시작한다(변경 없음 포함)', async () => {
+    const projectId = await active();
+    const first = await input(SHA2);
+    expect(first.payload).toEqual({ planningJobId: (await state()).inputJob?.jobId, runNo: 1, version: 2,
+      commit: SHA2, previousCommit: SHA1, instruction: '', resumeStep: null, wbs: await wbsSnapshot(ownerPool, projectId) });
+    const wbs = first.payload.wbs as Awaited<ReturnType<typeof wbsSnapshot>>;
+    expect(wbs.tasks).toHaveLength(2);
+    expect(wbs.tasks[0]).toMatchObject({ taskKey: 'TASK-0001', workType: 'Implementation', status: 'ready', wp: expect.any(String), content: { title: '작업 t1' } });
+    expect(wbs.dependencies).toEqual([{ pred: 'TASK-0001', succ: 'TASK-0002', type: 'FS' }]);
+    const premature = await runner(`/api/runner/bootstrap/${first.id}/progress`, { fence: first.fence, stepKey: 'cp', status: 'done', at: AT_NOW() });
+    expect(errorOf(premature).code).toBe('INVALID_TRANSITION');
+    for (const key of ['check', 'unzip', 'diff', 'impact']) await progress(first.id, first.fence, key);
+    const complete = { fence: first.fence, stepKey: 'cp', status: 'done', at: AT_NOW(), note: '변경 없음' };
+    const key = crypto.randomUUID();
+    expect((await runner(`/api/runner/bootstrap/${first.id}/progress`, complete, key)).statusCode).toBe(204);
+    expect((await runner(`/api/runner/bootstrap/${first.id}/progress`, complete, key)).statusCode).toBe(204);
+    expect((await runner(`/api/runner/bootstrap/${first.id}/progress`, complete)).statusCode).toBe(204);
+    expect((await state()).inputJob?.status).toBe('done');
+    await finishClaim(first);
+    const second = await input(SHA3);
+    expect(second.payload).toMatchObject({ version: 3, previousCommit: SHA2 });
+    for (const step of ['check', 'unzip', 'diff', 'impact', 'cp']) await progress(second.id, second.fence, step);
+    expect((await state()).inputJob?.status).toBe('done');
+  });
+
+  test('차이 분석 중 내용·작업 유형·상태·작업 묶음·의존 관계가 바뀌면 제안을 거부한다', async () => {
+    await active();
+    const movedWp = (await ownerPool.query<{ id: string }>(`insert into wbs_nodes(project_id,node_key,kind,parent_id,title,sort_order)
+      select project_id,'WP-99','work_package',parent_id,'다른 묶음',99 from wbs_nodes where kind='work_package' limit 1 returning id`)).rows[0]?.id;
+    const job = await input(SHA2);
+    const submit = () => runner('/api/planning/proposals', { jobId: job.id, fence: job.fence, title: '완료 조건 수정', reason: '입력 변경', source: { kind: 'input' },
+      ops: [{ op: 'modify', task: 'TASK-0001', field: 'doneCond', after: '새 완료 조건' }] });
+    await ownerPool.query("update tasks set title='바뀐 제목' where task_key='TASK-0001'");
+    expect(errorOf(await submit()).code).toBe('VERSION_CONFLICT');
+    await ownerPool.query("update tasks set title='작업 t1',status='planning' where task_key='TASK-0001'");
+    expect(errorOf(await submit()).code).toBe('VERSION_CONFLICT');
+    await ownerPool.query("update tasks set status='ready' where task_key='TASK-0001'");
+    await ownerPool.query("update tasks set work_type='Analysis' where task_key='TASK-0001'");
+    expect(errorOf(await submit()).code).toBe('VERSION_CONFLICT');
+    await ownerPool.query("update tasks set work_type='Implementation' where task_key='TASK-0001'");
+    const oldWp = (job.payload.wbs as Awaited<ReturnType<typeof wbsSnapshot>>).tasks[0]?.wp;
+    await ownerPool.query("update tasks set wbs_node_id=$1 where task_key='TASK-0001'", [movedWp]);
+    expect(errorOf(await submit()).code).toBe('VERSION_CONFLICT');
+    await ownerPool.query("update tasks set wbs_node_id=$1 where task_key='TASK-0001'", [oldWp]);
+    await ownerPool.query("update task_dependencies set dep_type='SS'");
+    expect(errorOf(await submit()).code).toBe('VERSION_CONFLICT');
+    await ownerPool.query("update task_dependencies set dep_type='FS'");
+    const ok = await submit();
+    expect(ok.statusCode, ok.body).toBe(201);
+    const judgement = await claim('planning');
+    expect(judgement.payload).toMatchObject({ planning: null, proposal: { id: ok.json<{ id: string }>().id } });
+    await finishClaim(judgement);
+    for (const step of ['check', 'unzip', 'diff', 'impact', 'cp']) await progress(job.id, job.fence, step);
+    expect((await state()).inputJob?.status).toBe('done');
+    expect(errorOf(await submit()).code).toBe('INVALID_TRANSITION');
+  });
+
+  test('낡은 WBS로 실패한 차이 분석을 다시 시도하면 새 회차·현재 스냅샷으로 비교부터 한다', async () => {
+    await active();
+    const first = await input(SHA2);
+    for (const key of ['check', 'unzip', 'diff', 'impact']) await progress(first.id, first.fence, key);
+    await ownerPool.query("update tasks set title='수정한 제목' where task_key='TASK-0001'");
+    await progress(first.id, first.fence, 'cp', 'fail', '판단 대상이 바뀜');
+    await finishClaim(first);
+    const s = await state();
+    expect((await lead('POST', '/api/project/inputs/retry', { updatedAt: s.updatedAt, version: 2 })).statusCode).toBe(202);
+    const next = await claim('input_diff');
+    expect(next.payload).toMatchObject({ runNo: 2, version: 2, resumeStep: 'diff' });
+    expect((next.payload.wbs as Awaited<ReturnType<typeof wbsSnapshot>>).tasks[0]?.content.title).toBe('수정한 제목');
+    for (const key of ['diff', 'impact', 'cp']) await progress(next.id, next.fence, key);
+    expect((await state()).inputJob?.status).toBe('done');
+  });
+
+  test('분할 job은 원 Task의 작업 묶음과 양쪽 그래프를 전달하고 그래프가 바뀌면 거부한다', async () => {
+    await active(draft([task('t1'), task('t2', { workType: 'Analysis', conflictGroup: 'shared-db' }), task('t3')], [
+      { predRef: 't1', succRef: 't2', depType: 'FS' }, { predRef: 't2', succRef: 't3', depType: 'FS' },
+    ]));
+    const detail = async () => (await lead('GET', '/api/tasks/TASK-0002')).json<{ updatedAt: string }>();
+    const split = () => detail().then((d) => lead('POST', '/api/tasks/TASK-0002/split', { updatedAt: d.updatedAt }));
+    const queued = await split();
+    expect(queued.statusCode, queued.body).toBe(202);
+    const job = await claim('split');
+    const wbs = job.payload.wbs as Awaited<ReturnType<typeof wbsSnapshot>>;
+    expect(job.payload.tasks).toEqual([expect.objectContaining({ taskKey: 'TASK-0002', workType: 'Analysis' })]);
+    expect(wbs.tasks.find((item) => item.taskKey === 'TASK-0002')?.workType).toBe('Analysis');
+    const wp = wbs.tasks.find((item) => item.taskKey === 'TASK-0002')?.wp;
+    expect(wp).toEqual(expect.any(String));
+    expect(wbs.dependencies).toEqual([
+      { pred: 'TASK-0001', succ: 'TASK-0002', type: 'FS' }, { pred: 'TASK-0002', succ: 'TASK-0003', type: 'FS' },
+    ]);
+    const part = (ref: string) => ({ op: 'add', ref, preds: [{ pred: 'TASK-0001', type: 'FS' }],
+      t: { title: ref, type: 'Analysis', domain: 'BE', wp, priority: 1, assignee: 'Claude', verifier: 'Codex', purpose: '분할', doneCond: '완료', splitBasis: '목적별 분할' } });
+    const body = { jobId: job.id, fence: job.fence, title: '분할', reason: '목적별 분할', source: { kind: 'split', id: 'TASK-0002' }, ops: [
+      part('NEW-1'), part('NEW-2'), { op: 'remove', task: 'TASK-0002' },
+      { op: 'dep-add', pred: 'NEW-1', succ: 'TASK-0003', type: 'FS' }, { op: 'dep-add', pred: 'NEW-2', succ: 'TASK-0003', type: 'FS' },
+    ] };
+    await ownerPool.query("update task_dependencies set dep_type='SS' where pred=(select id from tasks where task_key='TASK-0001')");
+    expect(errorOf(await runner('/api/planning/proposals', body)).code).toBe('VERSION_CONFLICT');
+    expect((await split()).json<{ jobId: string }>().jobId).not.toBe(job.id);
+    await ownerPool.query("update task_dependencies set dep_type='FS'");
+    const result = await runner('/api/planning/proposals', body);
+    expect(result.statusCode, result.body).toBe(201);
+    const preview = await lead('GET', `/api/proposals/${result.json<{ id: string }>().id}/preview`);
+    expect(preview.statusCode, preview.body).toBe(200);
+    expect(preview.json<{ diff: { field: string; after: unknown }[] }>().diff.filter((item) => item.field === 'conflictGroup').map((item) => item.after))
+      .toEqual(['shared-db', 'shared-db']);
+  });
+
+  test('Planning 세션의 실제 claim에는 세션 ID·제목·범위가 있다', async () => {
+    await active();
+    const started = await lead('POST', '/api/plannings', { title: '알림 개편', scope: '알림 API' });
+    expect(started.statusCode, started.body).toBe(202);
+    const job = await claim('planning');
+    expect(job.payload).toEqual({ tasks: [], policy: {}, proposal: null,
+      planning: { id: started.json<{ id: string }>().id, title: '알림 개편', scope: '알림 API' } });
+  });
+
+  test('허용한 하위 Agent 정의의 ID·버전·역할을 초기 분석과 후속 job에 전달한다', async () => {
+    const id = (await ownerPool.query<{ id: string }>(`insert into subagent_defs(def_key,version,agent,role,tools,sandbox,text,hash,allowed)
+      values('srv4-dev',1,'Claude','dev','{}','workspace-write','개발 역할',$1,true) returning id`, ['a'.repeat(64)])).rows[0]?.id;
+    try {
+      const { job } = await confirmed();
+      expect(job.payload.subagentDefs).toContainEqual({ id, defKey: 'srv4-dev', version: 1, agent: 'Claude', role: 'dev' });
+    } finally { await ownerPool.query('update subagent_defs set allowed=false where id=$1', [id]); }
+  });
+
+  test('R1: 무관한 Task의 상태·내용 변경은 허용하고 인접 Task의 내용 변경은 거부한다', async () => {
+    await active(draft([task('t1'), task('t2'), task('t3')]));
+    const job = await input(SHA2);
+    const submit = () => runner('/api/planning/proposals', { jobId: job.id, fence: job.fence, title: '수정', reason: '입력 변경', source: { kind: 'input' },
+      ops: [{ op: 'modify', task: 'TASK-0001', field: 'doneCond', after: '새 완료 조건' }] });
+    await ownerPool.query("update tasks set status='planning',title='무관한 변경' where task_key='TASK-0003'");
+    const accepted = await submit();
+    expect(accepted.statusCode, accepted.body).toBe(201);
+    await ownerPool.query("update tasks set title='선후행 이웃 변경' where task_key='TASK-0002'");
+    expect(errorOf(await submit()).code).toBe('VERSION_CONFLICT');
+  });
+
+  test('R1: 새로 연결된 인접 그래프도 낡은 대상이며, 추가 Task의 선행 대상도 검사한다', async () => {
+    await active(draft([task('t1'), task('t2'), task('t3')], []));
+    const job = await input(SHA2);
+    await ownerPool.query(`insert into task_dependencies(project_id,pred,succ,dep_type)
+      select p.project_id,p.id,s.id,'FS' from tasks p,tasks s where p.task_key='TASK-0001' and s.task_key='TASK-0003'`);
+    const response = await runner('/api/planning/proposals', { jobId: job.id, fence: job.fence, title: '수정', reason: '입력 변경', source: { kind: 'input' },
+      ops: [{ op: 'modify', task: 'TASK-0001', field: 'doneCond', after: '새 완료 조건' }] });
+    expect(errorOf(response).code).toBe('VERSION_CONFLICT');
+    const wp = (job.payload.wbs as Awaited<ReturnType<typeof wbsSnapshot>>).tasks[0]?.wp;
+    const added = await runner('/api/planning/proposals', { jobId: job.id, fence: job.fence, title: '추가', reason: '입력 변경', source: { kind: 'input' }, ops: [
+      { op: 'add', ref: 'NEW-1', preds: [{ pred: 'TASK-0001', type: 'FS' }], t: {
+        title: '추가 작업', type: 'Implementation', domain: 'BE', wp, priority: 1, assignee: 'Claude', verifier: 'Codex', purpose: '목적', doneCond: '완료',
+      } },
+    ] });
+    expect(errorOf(added).code).toBe('VERSION_CONFLICT');
+  });
+
+  test('R2: 자동 반영한 같은 분석의 여러 CP를 순서대로 받고 무관한 외부 변경은 기준에 섞지 않는다', async () => {
+    await active(draft([task('t1'), task('t2'), task('t3')]));
+    await ownerPool.query('update schedule_policy set cp_auto=true');
+    try {
+      const job = await input(SHA2);
+      await ownerPool.query("update tasks set title='외부에서 바뀐 제목' where task_key='TASK-0003'");
+      const submit = async (target: string, after: string) => {
+        const current = (await wbsSnapshot(ownerPool, (await state()).id)).tasks.find((task) => task.taskKey === target);
+        const hash = judgedContentHash({ ...current?.content, doneCond: after });
+        return runner('/api/planning/proposals', { jobId: job.id, fence: job.fence, title: '수정', reason: '입력 변경', source: { kind: 'input' },
+          ops: [{ op: 'modify', task: target, field: 'doneCond', after }],
+          taskJudgements: [{ taskKey: target, judgedRules: { schemaVersion: 1, items: [met('revert', hash), met('contract', hash), met('refactor', hash)] } }] });
+      };
+      for (const [target, after] of [['TASK-0001', '첫 변경'], ['TASK-0001', '같은 대상의 다음 변경'], ['TASK-0002', '이웃의 다음 변경']]) {
+        const result = await submit(target ?? '', after ?? '');
+        expect(result.statusCode, result.body).toBe(201);
+        expect(result.json<{ status: string }>().status).toBe('applied');
+      }
+      const payload = (await ownerPool.query<{ payload: { wbs: Awaited<ReturnType<typeof wbsSnapshot>> } }>('select payload from runner_jobs where id=$1', [job.id])).rows[0]?.payload;
+      expect(payload?.wbs.tasks.find((t) => t.taskKey === 'TASK-0001')?.content.doneCond).toBe('같은 대상의 다음 변경');
+      expect(payload?.wbs.tasks.find((t) => t.taskKey === 'TASK-0003')?.content.title).toBe('작업 t3');
+      expect(errorOf(await submit('TASK-0003', '낡은 대상 변경')).code).toBe('VERSION_CONFLICT');
+    } finally { await ownerPool.query('update schedule_policy set cp_auto=false'); }
+  });
+
+  test.each(['failed', 'cancelled'])('R3: 단계 fail 없이 Runner가 %s로 끝나도 원인을 남기고 다시 시도할 수 있다', async (status) => {
+    await active();
+    const job = await input(SHA2);
+    for (const key of ['check', 'unzip', 'diff', 'impact']) await progress(job.id, job.fence, key);
+    const body = { fence: job.fence, status, error: { code: 'RUNNER_PROCESS_FAILED', message: '분석 프로세스 종료' } };
+    const key = crypto.randomUUID();
+    expect((await runner(`/api/runner/jobs/${job.id}/finish`, body, key)).statusCode).toBe(204);
+    expect((await runner(`/api/runner/jobs/${job.id}/finish`, body, key)).statusCode).toBe(204);
+    const planning = (await ownerPool.query<{ status: string; fail: { code: string; reason: string } }>('select status,fail from planning_jobs where id=$1', [job.payload.planningJobId])).rows[0];
+    expect(planning).toMatchObject({ status: 'failed', fail: { code: 'RUNNER_PROCESS_FAILED', reason: '분석 프로세스 종료' } });
+    const s = await state();
+    const retry = await lead('POST', '/api/project/inputs/retry', { updatedAt: s.updatedAt, version: 2 });
+    expect(retry.statusCode, retry.body).toBe(202);
+    // 이전 job의 뒤늦은 종료 처리는 새 시도를 바꾸지 않는다.
+    const client = await ownerPool.connect();
+    try { await client.query('begin'); await new RunnerRepository(client).state(job.id, status); await client.query('commit'); }
+    catch (error) { await client.query('rollback'); throw error; }
+    finally { client.release(); }
+    expect((await state()).inputJob?.status).toBe('queued');
+  });
+
+  test('R3: 임대 만료는 분석을 실패로 닫고, 수동 재시도 뒤 옛 reconcile은 새 job을 덮지 않는다', async () => {
+    await active();
+    const job = await input(SHA2);
+    for (const key of ['check', 'unzip', 'diff', 'impact']) await progress(job.id, job.fence, key);
+    expect(await watchRunner(pool, await epoch(), new Date(Date.now() + 61_000))).toBe(1);
+    const row = (await ownerPool.query<{ status: string; fail: { code: string } }>('select status,fail from planning_jobs where id=$1', [job.payload.planningJobId])).rows[0];
+    expect(row).toMatchObject({ status: 'failed', fail: { code: 'LEASE_LOST' } });
+    const s = await state();
+    expect((await lead('POST', '/api/project/inputs/retry', { updatedAt: s.updatedAt, version: 2 })).statusCode).toBe(202);
+    expect((await runner(`/api/runner/jobs/${job.id}/release`, { fence: job.fence, hostId: 'host-1', proof: { kind: 'no_process', bootId: 'boot-1' }, at: AT_NOW() })).statusCode).toBe(204);
+    expect((await runner(`/api/runner/jobs/${job.id}/reconcile`, { fence: job.fence, evidence: { outcome: 'none', checkedAt: AT_NOW(), detail: {} } })).statusCode).toBe(204);
+    expect((await ownerPool.query('select 1 from runner_jobs where dedup_key=$1', [`reconcile:${job.id}:${job.fence}`])).rowCount).toBe(0);
+    const next = await claim('input_diff');
+    for (const key of ['cp']) await progress(next.id, next.fence, key);
+    expect((await state()).inputJob?.status).toBe('done');
+  });
+
+  test('R3: Runner crash로 생존 보고가 멈추어도 분석을 닫고 다음 입력 분석이 시작된다', async () => {
+    await active();
+    const job = await input(SHA2);
+    expect((await runner('/api/runner/sessions', { runnerId: 'test-runner', event: 'start', at: new Date(Date.now() - 86_400_000).toISOString() })).statusCode).toBe(204);
+    expect(await watchRunner(pool, await epoch())).toBe(1);
+    expect((await state()).inputJob?.status).toBe('failed');
+    expect((await ownerPool.query('select slot_state from execution_holds where job=$1', [job.id])).rows[0]?.slot_state).toBe('unconfirmed');
+    expect((await runner(`/api/runner/jobs/${job.id}/release`, { fence: job.fence, hostId: 'host-1', proof: { kind: 'no_process', bootId: 'boot-1' }, at: AT_NOW() })).statusCode).toBe(204);
+    const next = await input(SHA3);
+    expect(next.payload.version).toBe(3);
+  });
+
+  test('R3: bootstrap의 단계 fail 없는 종료도 분석 실패가 되며 다시 시도한다', async () => {
+    const { job } = await confirmed();
+    const finished = await runner(`/api/runner/jobs/${job.id}/finish`, { fence: job.fence, status: 'failed', error: { code: 'PROCESS_EXIT', message: '초안 작성 프로세스 종료' } });
+    expect(finished.statusCode, finished.body).toBe(204);
+    expect((await state()).bootstrap).toMatchObject({ status: 'failed', fail: { reason: '초안 작성 프로세스 종료' } });
+    expect((await lead('POST', '/api/project/bootstrap/retry', { revision: null, runNo: 1 })).statusCode).toBe(202);
+  });
+
+  test('R3: cp:done 없이 성공 종료한 Runner도 분석을 방치하지 않고 누락 원인을 남긴다', async () => {
+    await active();
+    const job = await input(SHA2);
+    const response = await runner(`/api/runner/jobs/${job.id}/finish`, { fence: job.fence, status: 'done' });
+    expect(response.statusCode, response.body).toBe(204);
+    expect((await ownerPool.query('select status,fail from planning_jobs where id=$1', [job.payload.planningJobId])).rows[0])
+      .toMatchObject({ status: 'failed', fail: { code: 'INCOMPLETE_ANALYSIS' } });
+  });
+
+  async function analyzedBootstrap() {
+    await resetDb();
+    forgetRunnerView();
+    const check = await checkedRepo();
+    expect((await lead('POST', '/api/project', registration(check, { constraints: [] }))).statusCode).toBe(201);
+    const job = await claim('bootstrap');
+    for (const key of ['check', 'unzip', 'repo', 'codex', 'claude', 'cross']) await progress(job.id, job.fence, key);
+    return job;
+  }
+
+  test.each([
+    ['T1', 'tech', 'expiry'], ['T1', 'tech', 'restart'], ['T1', 'tech', 'failed'], ['T1', 'tech', 'cancelled'],
+    ['T2', 'approve', 'expiry'], ['T2', 'approve', 'restart'], ['T2', 'approve', 'failed'], ['T2', 'approve', 'cancelled'],
+  ])('%s: %s 대기 중 %s여도 사람의 결정만 기다리며 재시도·대체 job을 만들지 않는다', async (_id, phase, stop) => {
+    const job = phase === 'tech' ? await analyzedBootstrap() : (await confirmed()).job;
+    const submitted = phase === 'tech'
+      ? await runner(`/api/planning/bootstrap/${job.id}/tech`, { fence: job.fence, decisions: [] })
+      : await runner(`/api/planning/bootstrap/${job.id}/draft`, { fence: job.fence, ...draft() });
+    expect(submitted.statusCode, submitted.body).toBe(201);
+    const before = await state();
+    const jobsBefore = await count("select count(*) n from runner_jobs where kind='bootstrap'");
+    const host = (bootId: string) => runner('/api/runner/host', { hostId: 'host-1', bootId, cpu: 'cpu', cores: 8, memGB: 32, swapGB: 0, diskFreeGB: 500, os: 'linux', samples: 1 });
+    if (stop === 'expiry') expect(await watchRunner(pool, await epoch(), new Date(Date.now() + 61_000))).toBe(1);
+    else if (stop === 'restart') {
+      const response = await host('boot-restarted');
+      expect(response.statusCode, response.body).toBe(200);
+      expect((await host('boot-1')).statusCode).toBe(200);
+    } else {
+      const response = await runner(`/api/runner/jobs/${job.id}/finish`, { fence: job.fence, status: stop, error: { code: 'PROCESS_EXIT', message: '팀장 결정 대기 중 프로세스 종료' } });
+      expect(response.statusCode, response.body).toBe(204);
+    }
+    const after = await state();
+    expect(after.bootstrap).toMatchObject({ status: before.bootstrap.status, fail: null, revision: before.bootstrap.revision, steps: before.bootstrap.steps });
+    const retryBody = phase === 'tech' ? { revision: null, runNo: 1 } : { revision: before.bootstrap.revision };
+    expect(errorOf(await lead('POST', '/api/project/bootstrap/retry', retryBody)).code).toBe('INVALID_TRANSITION');
+    // 이전 버전에서 이미 failed로 기록했어도 사람 결정 대기 중 잘못된 재개 작업을 발급하지 않는다.
+    await ownerPool.query("update planning_jobs set status='failed' where id=$1", [before.bootstrap.jobId]);
+    expect(errorOf(await lead('POST', '/api/project/bootstrap/retry', retryBody)).code).toBe('INVALID_TRANSITION');
+    await ownerPool.query('update planning_jobs set status=$2 where id=$1', [before.bootstrap.jobId, before.bootstrap.status]);
+    expect(await count("select count(*) n from runner_jobs where kind='bootstrap'")).toBe(jobsBefore);
+    expect((await runner(`/api/runner/jobs/${job.id}/release`, { fence: job.fence, hostId: 'host-1', proof: { kind: 'no_process', bootId: 'boot-1' }, at: AT_NOW() })).statusCode).toBe(204);
+    if (stop === 'expiry' || stop === 'restart') {
+      const reconciled = await runner(`/api/runner/jobs/${job.id}/reconcile`, { fence: job.fence, evidence: { outcome: 'none', checkedAt: AT_NOW(), detail: {} } });
+      expect(reconciled.statusCode, reconciled.body).toBe(204);
+      expect(await count("select count(*) n from runner_jobs where kind='bootstrap'")).toBe(jobsBefore);
+      expect((await state()).bootstrap.fail).toBeNull();
+    }
+    if (phase === 'tech') {
+      const response = await lead('POST', `/api/projects/${before.id}/boot/tech/confirm`, { decisions: [] });
+      expect(response.statusCode, response.body).toBe(200);
+      expect((await ownerPool.query("select payload from runner_jobs where kind='bootstrap' and state='queued'")).rows[0]?.payload).toMatchObject({ resumeStep: 'draft', runNo: 1 });
+    } else {
+      const response = await lead('POST', '/api/project/bootstrap/approve', { revision: before.bootstrap.revision });
+      expect(response.statusCode, response.body).toBe(200);
+      expect((await ownerPool.query('select status from planning_jobs where id=$1', [before.bootstrap.jobId])).rows[0]?.status).toBe('done');
+      expect(await count("select count(*) n from runner_jobs where kind='bootstrap'")).toBe(jobsBefore);
+    }
+  });
+
+  test('재시도는 나중 단계의 fail 표시보다 DB의 마지막 완료 단계 다음을 선택한다', async () => {
+    const job = await analyzedBootstrap();
+    expect((await runner(`/api/runner/jobs/${job.id}/finish`, { fence: job.fence, status: 'failed' })).statusCode).toBe(204);
+    // cross는 끝났고 tech는 아직 wait다. 뒤의 draft fail로 건너뛰지 않는다.
+    const response = await lead('POST', '/api/project/bootstrap/retry', { revision: null, runNo: 1 });
+    expect(response.statusCode, response.body).toBe(202);
+    expect((await ownerPool.query("select payload from runner_jobs where kind='bootstrap' and state='queued'")).rows[0]?.payload.resumeStep).toBe('tech');
+  });
+
+  test('fail 표시가 없어도 마지막 완료 단계에서 이어가며 모든 단계가 끝났으면 재개 작업을 만들지 않는다', async () => {
+    const { job, s } = await confirmed();
+    await ownerPool.query("update planning_jobs set status='failed' where id=$1", [s.bootstrap.jobId]);
+    const retried = await lead('POST', '/api/project/bootstrap/retry', { revision: null, runNo: 1 });
+    expect(retried.statusCode, retried.body).toBe(202);
+    expect((await ownerPool.query("select payload from runner_jobs where kind='bootstrap' and state='queued'")).rows[0]?.payload.resumeStep).toBe('draft');
+    await finishClaim(job);
+    const current = await claim('bootstrap');
+    const submitted = await runner(`/api/planning/bootstrap/${current.id}/draft`, { fence: current.fence, ...draft() });
+    expect(submitted.statusCode, submitted.body).toBe(201);
+    expect((await lead('POST', '/api/project/bootstrap/approve', { revision: submitted.json<{ revision: number }>().revision })).statusCode).toBe(200);
+    await ownerPool.query("update planning_jobs set status='failed' where id=$1", [s.bootstrap.jobId]);
+    const countBefore = await count("select count(*) n from runner_jobs where kind='bootstrap'");
+    const response = await lead('POST', '/api/project/bootstrap/retry', { revision: null, runNo: 1 });
+    expect(errorOf(response).code).toBe('INVALID_TRANSITION');
+    expect(await count("select count(*) n from runner_jobs where kind='bootstrap'")).toBe(countBefore);
+  });
+});
+
 describe('project 리뷰 지적 회귀(M2-03-REVIEW 1~8)', () => {
   /** 초기화 뒤 새 프로젝트를 등록하고 초안 승인 대기까지 진행한다. */
   async function fresh(d = draft(), registrationCommit = SHA1) {
@@ -656,10 +1124,12 @@ describe('project 리뷰 지적 회귀(M2-03-REVIEW 1~8)', () => {
   });
 
   test('1. 다시 시도 뒤 이전 job의 늦은 실패 보고는 409이고 새 시도를 실패로 만들지 않는다', async () => {
-    const { current } = await fresh();
+    const { s: original } = await fresh();
+    expect((await lead('POST', '/api/project/bootstrap/rerun', { revision: original.bootstrap.revision, instruction: '재분석' })).statusCode).toBe(202);
+    const current = await lease('bootstrap');
     await progress(current.id, current.fence, 'codex', 'fail', 'first failure');
     const s = await state();
-    expect((await lead('POST', '/api/project/bootstrap/retry', { revision: s.bootstrap.revision })).statusCode).toBe(202);
+    expect((await lead('POST', '/api/project/bootstrap/retry', { revision: null, runNo: s.bootstrap.runNo })).statusCode).toBe(202);
     const next = await lease('bootstrap');
     const late = await progressOf(current, 'codex', 'fail', 'old retry report');
     expect(errorOf(late).code).toBe('LEASE_LOST');

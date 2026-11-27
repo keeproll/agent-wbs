@@ -1,3 +1,4 @@
+import { pushGate } from '../github/write-gate.ts';
 import { GitHubError, type GitHubClient } from '../github/client.ts';
 import { normalizeRepoUrl } from '../git/identity.ts';
 import type { GitRepository, SystemSsh } from '../git/repository.ts';
@@ -93,7 +94,8 @@ export function createGithubRemoteCleanup({ client, systemDeployKey, warn }: Git
         catch { /* 경고 출력 실패가 원래 거부 사유를 가리지 않게 한다. */ }
         throw error;
       }
-      await repo.pushSystemCommit(commit, parent, systemDeployKey);
+      // 모든 외부 쓰기의 같은 관문(M4: 원격 저장소 확인 → 배포 키 검사). 초기화 명령에는 job 임대가 없어 소유 확인은 붙이지 않는다.
+      await repo.pushSystemCommit(commit, parent, systemDeployKey, pushGate(client));
     },
   };
 }

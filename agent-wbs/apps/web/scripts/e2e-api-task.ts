@@ -17,7 +17,7 @@ import { createServer } from 'node:net';
 import { resolve } from 'node:path';
 
 const ROOT = resolve(import.meta.dirname, '../../..');
-const IMAGE = 'postgres:16-alpine@sha256:f2f98726820d0342055351c6e9d36e705f5bfffb3dd53ff556325114b08afb6d';
+const IMAGE = 'postgres:16@sha256:07abc3f43c9395b0bdbbab36bc25ddb0e8d83cd4fcafb5fb7d6abe14ff156dd8';
 const name = `m303-e2e-pg-${randomBytes(3).toString('hex')}`;
 const dbPassword = randomBytes(18).toString('base64url');
 const leadPassword = `e2e-${randomBytes(9).toString('base64url')}`;
@@ -34,7 +34,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let api: ChildProcess | undefined;
 let exitCode = 1;
 try {
-  execFileSync('docker', ['run', '-d', '--rm', '--name', name, '-e', 'POSTGRES_USER=awbs_owner', '-e', `POSTGRES_PASSWORD=${dbPassword}`,
+  execFileSync('docker', ['run', '-d', '--rm', '--name', name, '-e', 'LANG=C.UTF-8', '-e', 'POSTGRES_USER=awbs_owner', '-e', `POSTGRES_PASSWORD=${dbPassword}`,
     '-e', 'POSTGRES_DB=awbs_test_m303', '-p', '127.0.0.1::5432', IMAGE], { stdio: ['ignore', 'ignore', 'inherit'] });
   const dbPort = execFileSync('docker', ['port', name, '5432/tcp'], { encoding: 'utf8' }).trim().split(':').at(-1);
   for (let i = 0; i < 60; i++) {
@@ -71,6 +71,6 @@ try {
   exitCode = result.status ?? 1;
 } finally {
   api?.kill('SIGTERM');
-  spawnSync('docker', ['rm', '-f', name], { stdio: 'ignore' });
+  spawnSync('docker', ['rm', '-f', '-v', name], { stdio: 'ignore' });
   process.exitCode = exitCode;
 }

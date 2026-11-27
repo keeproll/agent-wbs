@@ -3,4 +3,5 @@ export * from './test-database.ts';
 export * from './migrate.ts';
 export * as schema from './schema.ts';
 export * from './seed.ts';
+export * from './subagents.ts';
 export * from './api-contract.ts';

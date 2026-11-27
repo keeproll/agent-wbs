@@ -11,4 +11,4 @@
   - status 목록: per_page(기본 30, 최대 100)·page와 `Link rel="next"`.
   - `tokenPermissions`: PR(Pull requests)·status(Commit statuses)·병합(Contents) 쓰기 권한을 따로 빼면 403과 `x-accepted-github-permissions`를 준다.
   실제 GitHub 응답 전체나 보호 규칙의 실재는 재현하지 않는다(M4-06에서 확인).
-- `claude/success.jsonl`, `codex/success.jsonl`은 **손으로 쓴 예시**다. 실제 CLI 기록이 아니므로 출력 형식의 근거로 쓰지 않는다. 기록 fixture는 M5-01에서 만든다.
+- `claude/success.jsonl`, `codex/success.jsonl`은 **손으로 쓴 예시**다. 실제 CLI 기록이 아니므로 출력 형식의 근거로 쓰지 않는다. M5-01의 출력 fixture는 `test/cli/fixtures/`에 있다. 그것도 공식 형식을 보고 만든 잠정본이며 실제 기록이 아니다.

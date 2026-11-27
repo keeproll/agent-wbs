@@ -222,7 +222,11 @@ test('원본·계획에 없는 경로를 만들지 않았다', () => {
   const followup = ['PATCH /api/project', 'POST /api/project/inputs/check', 'GET /api/proposals/:id',
     'PATCH /api/proposals/:id', 'DELETE /api/proposals/:id', 'POST /api/proposals/:id/exclude',
     'POST /api/verifications/:id/evidence', 'GET /api/settings/split/violations', 'GET /api/settings/agent-usage',
-    'POST /api/alerts/:id/ack', 'POST /api/settings/readiness/check'];
+    'POST /api/alerts/:id/ack', 'POST /api/settings/readiness/check',
+    // 조정자 승인(2026-11-27, M5-02): contracts §3.4-3의 재시작 전 보유 대조에 필요하다.
+    'GET /api/runner/holds',
+    // M7-06 조정자 결정 2: 실제 CI 작업의 소유권·QA·재실행 근거를 Runner가 읽는다.
+    'GET /api/runner/ci/jobs/:id'];
   const known = new Set([
     'GET /health',
     'GET /health/db',
@@ -253,7 +257,9 @@ test('오류 코드는 계획 §1.1 표·본문과 상태가 같다', () => {
   const inText: Record<string, number> = {};
   for (const [, status, code = ''] of contracts.matchAll(/(400|401|403|503) `([A-Z]+_[A-Z_]+)`/g)) inText[code] = Number(status);
   expect(inText).toMatchObject({ IDEMPOTENCY_KEY_REQUIRED: 400, LOGIN_FAILED: 401, PDF_FAILED: 503 });
-  expect(Object.keys(ERROR_STATUS).sort()).toEqual([...new Set([...Object.keys(listed), ...Object.keys(inText)])].sort());
+  // shortcut: MERGE_MISMATCH는 조정자 2026-11-27 결정이다, 계획 문서 동기화 뒤 이 예외를 지운다.
+  expect(ERROR_STATUS.MERGE_MISMATCH).toBe(409);
+  expect(Object.keys(ERROR_STATUS).sort()).toEqual([...new Set([...Object.keys(listed), ...Object.keys(inText), 'MERGE_MISMATCH'])].sort());
 });
 
 test('프로토타입 Endpoint가 정한 오류 코드·상태를 선언한다', () => {

@@ -17,8 +17,8 @@ import { reportResult, type ResultReport } from './result.ts';
 export interface ExecutionOptions {
   /** 서버 파일 루트(기본 ~/.agentwbs/wbs). Evidence 저장·내보내기(M2-04)·파일 삭제 큐가 모두 이 루트를 쓴다. */
   dataRoot?: string;
-  /** M7이 main A에서 직접 읽은 정의. Runner가 보고한 pipelineSha로 대신하지 않는다. */
-  resolveBasePipelineSha?: (client: PoolClient, baseSha: string) => Promise<string | null>;
+  /** Runner가 기준 main A에서 실행하며 고정한 파이프라인 정의를 저장 기록에서 찾는다. */
+  resolveBasePipelineSha?: (client: PoolClient, baseSha: string, projectId: string) => Promise<string | null>;
 }
 
 export function installExecution(app: FastifyInstance, pool: Pool, options: ExecutionOptions = {}) {
@@ -65,8 +65,8 @@ export function installExecution(app: FastifyInstance, pool: Pool, options: Exec
     const repo = new RunnerRepository(client); await repo.lock();
     const t = await lockTask(client,params(r).taskKey);
     await assertVersion(client,t,(r.body as { updatedAt: string }).updatedAt);
-    const q = (await client.query<{ base_sha: string }>('select base_sha from merge_queue where task=$1 order by created_at desc,id desc limit 1',[t.id])).rows[0];
-    const pipeline = q?.base_sha && options.resolveBasePipelineSha ? await options.resolveBasePipelineSha(client,q.base_sha) : null;
+    const q = (await client.query<{ base_sha: string }>('select base_sha from merge_queue where task=$1 order by queue_no desc limit 1',[t.id])).rows[0];
+    const pipeline = q?.base_sha && options.resolveBasePipelineSha ? await options.resolveBasePipelineSha(client,q.base_sha,t.project_id) : null;
     await completeMergedTask(client,t.task_key,pipeline);
     return changed(client,t,[{ field:'lifecycleStatus',before:t.status,after:'done' }]);
   });

@@ -38,7 +38,7 @@ export async function loadCp(client: PoolClient, id: string, lock: boolean): Pro
 
 export async function proposalView(client: PoolClient, row: CpRow) {
   const events = (await client.query<{ at: string; actor: string; action: string; comment: string }>(
-    `select ${iso('created_at')} as at,actor,kind as action,comment from change_proposal_events where proposal=$1 order by created_at,id`, [row.id])).rows;
+    `select ${iso('created_at')} as at,actor,kind as action,comment from change_proposal_events where proposal=$1 order by record_no`, [row.id])).rows;
   return {
     id: row.id, cpKey: row.cp_key, title: row.title, reason: row.reason, source: { kind: row.source, id: row.source_id }, status: row.status,
     ops: row.ops, idMap: row.id_map ?? {}, splitJudgements: row.split_judgements, taskJudgements: row.task_judgements,
@@ -57,7 +57,7 @@ export async function event(client: PoolClient, row: Pick<CpRow, 'id' | 'project
 export async function assertPlanningUnlocked(client: PoolClient, projectId: string, planningId: string): Promise<void> {
   await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [`awbs:planning-proposal:${planningId}`]);
   const existing = (await client.query<{ id: string }>(`select id from change_proposals where project_id=$1 and source='planning' and source_id=$2
-    and status<>'rejected' and deleted_at is null order by created_at desc,id desc limit 1`, [projectId, planningId])).rows[0];
+    and status<>'rejected' and deleted_at is null order by record_no desc limit 1`, [projectId, planningId])).rows[0];
   if (existing) throw new TaskError('INVALID_TRANSITION', { proposalId: existing.id }, [], '이 Planning 세션에는 반려되지 않은 CP가 있어 조정하거나 새로 작성할 수 없습니다.');
 }
 

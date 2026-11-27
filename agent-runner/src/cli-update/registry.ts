@@ -31,6 +31,16 @@ function checked(result: CommandResult): string {
   return result.stdout;
 }
 
+/**
+ * npm을 umask 0022로 실행한다(리뷰5 P3-5). 설치본·npm 캐시에 그룹 쓰기가 생기지 않게 한다.
+ * 왜: 전용 계정 격리에서는 CLI 폴더의 그룹이 Agent 계정이다. Runner를 umask 0002인 환경(예: 서비스)에서 띄우면
+ *   Agent가 CLI 파일을 고칠 수 있게 되고, 래퍼 check가 `fail cli_writable`로 실행을 막는다.
+ * umask는 프로세스 전체 값이라 Runner 안에서 바꾸지 않고, 자식 셸에서만 정한 뒤 npm으로 바꿔 실행한다.
+ */
+function npmCommand(run: RunCommand, args: readonly string[]): Promise<CommandResult> {
+  return run('/bin/sh', ['-c', 'umask 0022 && exec npm "$@"', 'sh', ...args]);
+}
+
 /** 공식 npm latest 채널. 전용 prefix를 써서 사용자 전역 설치와 설정을 건드리지 않는다. */
 export function createCliRegistry({ home, env, run = createRunCommand({ env: cliEnvironment(env), timeoutMs: 120_000 }) }: {
   home: string; env: NodeJS.ProcessEnv; run?: RunCommand;
@@ -39,7 +49,7 @@ export function createCliRegistry({ home, env, run = createRunCommand({ env: cli
     `--cache=${join(home, 'cli', '.npm-cache')}`, '--no-update-notifier'];
   return {
     async latest(agent) {
-      const output = checked(await run('npm', ['view', `${PACKAGES[agent]}@latest`, 'version', '--json', ...npmFlags]));
+      const output = checked(await npmCommand(run, ['view', `${PACKAGES[agent]}@latest`, 'version', '--json', ...npmFlags]));
       const parsed: unknown = JSON.parse(output);
       const version: unknown = Array.isArray(parsed) ? parsed.at(-1) : parsed;
       stableVersion(version);
@@ -52,7 +62,7 @@ export function createCliRegistry({ home, env, run = createRunCommand({ env: cli
         throw new Error('설치는 이 Agent의 전용 임시 폴더에서만 가능합니다.');
       }
       const scripts = agent === 'Claude' ? ['--allow-scripts=@anthropic-ai/claude-code'] : [];
-      checked(await run('npm', ['install', '--prefix', directory, `${PACKAGES[agent]}@${version}`, ...npmFlags, '--no-audit', '--no-fund', ...scripts]));
+      checked(await npmCommand(run, ['install', '--prefix', directory, `${PACKAGES[agent]}@${version}`, ...npmFlags, '--no-audit', '--no-fund', ...scripts]));
     },
     async probe(agent, version, binary) {
       stableVersion(version);

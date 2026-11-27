@@ -3,8 +3,9 @@ import { randomUUID, createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { chmod, link, lstat, mkdir, open, readFile, readdir, rename, rm, statfs, writeFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
-import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
-import { parseCommits, parseRawNumstat, type InputObservation } from './inputs.ts';
+import { basename, dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
+import { atomicWrite } from '../state/files.ts';
+import { parseCommits, parseRawNumstat, type InputDiff, type InputObservation } from './inputs.ts';
 
 export class GitSafetyError extends Error {
   override name = 'GitSafetyError';
@@ -18,6 +19,18 @@ export interface SystemSsh { socket: string; knownHosts: string }
 export function systemSshCommand(knownHosts: string): string {
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
   return `ssh -F /dev/null -o BatchMode=yes -o StrictHostKeyChecking=yes -o IdentityFile=none -o ForwardAgent=no -o GlobalKnownHostsFile=/dev/null -o UserKnownHostsFile=${quote(knownHosts)}`;
+}
+
+/** 중단 신호로 push를 끊었고, 그 push의 프로세스 그룹(git-remote-https 등 전송 하위 프로세스 포함)이 비었음을 확인했다. */
+export class GitPushAbortedError extends GitSafetyError {
+  override name = 'GitPushAbortedError';
+  constructor() { super('push를 중단했고 전송 프로세스가 모두 끝났음을 확인했습니다. 이미 원격에 닿은 갱신은 되돌리지 않습니다. 다음 push 전에 원격 브랜치를 다시 읽어 대조합니다.'); }
+}
+
+/** 중단 신호로 push를 끊었지만 전송 프로세스가 모두 끝났는지 확인하지 못했다. 원격 상태를 모른다. */
+export class GitPushUnknownError extends GitSafetyError {
+  override name = 'GitPushUnknownError';
+  constructor() { super('push를 중단했지만 전송 프로세스 종료를 확인하지 못해 원격 상태를 모릅니다. 다음 push 전에 원격 브랜치를 다시 읽어 대조합니다.'); }
 }
 
 export class GitCleanupError extends GitSafetyError {
@@ -43,9 +56,19 @@ export interface RejectedPath {
   reason: 'protected' | 'ignored';
 }
 
+export interface TaskReviewChange extends InputDiff { patch: string }
+/** H에 main A만 자동으로 합쳤다는 근거다. M7-04의 headSync 보고 형식과 같다. */
+export interface HeadSyncProof {
+  qaHeadSha: string; headSha: string; preserved: boolean; parents: string[];
+  autoMergeTreeSha: string; headTreeSha: string; additionalChanges: boolean;
+}
+export interface HeadSyncChainProof extends HeadSyncProof { chain?: HeadSyncProof[] }
+
 interface TreeEntry { mode: string; oid: string; path: string }
 interface WorktreeRecord { id: string; branch?: string; startCommit?: string }
 interface Registration { source: string; configHash: string; worktrees: WorktreeRecord[]; resetting?: boolean; resetGeneration?: number }
+/** 중단 push 기록 한 건. `id`는 기록마다 새로 붙이는 번호다(이전 형식에는 없다). */
+interface InterruptedPush { commit: string; outcome: string; id?: string }
 interface LockOwner { pid: number; bootId?: string; startTime?: string }
 const BOOT_ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 
@@ -163,12 +186,12 @@ async function safePath(path: string): Promise<string> {
   return path;
 }
 
-async function run(cwd: string, args: string[], input?: Buffer | string, extraEnv: NodeJS.ProcessEnv = {}, allowed = [0]): Promise<Buffer> {
-  return (await runWithCode(cwd, args, input, extraEnv, allowed)).output;
+async function run(cwd: string, args: string[], input?: Buffer | string, extraEnv: NodeJS.ProcessEnv = {}, allowed = [0], signal?: AbortSignal): Promise<Buffer> {
+  return (await runWithCode(cwd, args, input, extraEnv, allowed, signal)).output;
 }
 
 /** 허용한 종료 코드면 출력과 코드를 돌려주고, 그 밖은 GitSafetyError. 종료 코드로 답을 구분하는 명령(merge-base --is-ancestor)에 쓴다. */
-async function runWithCode(cwd: string, args: string[], input?: Buffer | string, extraEnv: NodeJS.ProcessEnv = {}, allowed = [0]): Promise<{ code: number; output: Buffer }> {
+async function runWithCode(cwd: string, args: string[], input?: Buffer | string, extraEnv: NodeJS.ProcessEnv = {}, allowed = [0], signal?: AbortSignal): Promise<{ code: number; output: Buffer }> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.excludesFile=/dev/null',
       '-c', 'core.fsmonitor=false', '-c', 'credential.helper=', '-c', 'core.sshCommand=false',
@@ -182,18 +205,43 @@ async function runWithCode(cwd: string, args: string[], input?: Buffer | string,
         GIT_ALLOW_PROTOCOL: 'file:https', GIT_LFS_SKIP_SMUDGE: '1', ...extraEnv,
       },
       stdio: ['pipe', 'pipe', 'pipe'],
+      // 중단할 수 있는 git(외부 쓰기인 push)은 자기 프로세스 그룹으로 띄운다. git이 띄우는 git-remote-https·git send-pack도 같은 그룹이다.
+      // 중단하면 그룹 전체를 끝내고(TERM → 짧은 대기 → KILL) 그룹이 비었음을 확인한 뒤에야 「중단됨」으로 끝낸다.
+      detached: signal !== undefined,
     });
     const output: Buffer[] = [];
+    let settled = false;
+    const settle = (fn: () => void) => { if (!settled) { settled = true; signal?.removeEventListener('abort', abort); fn(); } };
+    let leaderStart: Promise<string | null> = Promise.resolve(null);
+    const abort = () => {
+      if (settled) return;
+      settled = true;
+      void (async () => {
+        const pid = child.pid;
+        const start = await leaderStart;
+        const { terminateGroup } = await import('../exec/launches.ts');
+        const empty = pid !== undefined && start !== null && await terminateGroup(pid, start);
+        reject(empty ? new GitPushAbortedError() : new GitPushUnknownError());
+      })();
+    };
     // git 오류 원문에는 URL·인증 정보가 들어갈 수 있으므로 외부에 내보내지 않는다.
     child.stdout.on('data', (chunk: Buffer) => output.push(chunk));
     child.stderr.resume();
-    child.on('error', () => { reject(new GitSafetyError('git 명령을 실행할 수 없습니다.')); });
+    child.on('error', () => { settle(() => { reject(new GitSafetyError('git 명령을 실행할 수 없습니다.')); }); });
     child.on('close', (code) => {
-      if (code !== null && allowed.includes(code)) resolvePromise({ code, output: Buffer.concat(output) });
-      else reject(new GitSafetyError('git 작업이 실패했습니다. 저장소·커밋·도구 설치를 확인하세요.'));
+      settle(() => {
+        if (code !== null && allowed.includes(code)) resolvePromise({ code, output: Buffer.concat(output) });
+        else reject(new GitSafetyError('git 작업이 실패했습니다. 저장소·커밋·도구 설치를 확인하세요.'));
+      });
     });
     child.stdin.on('error', () => undefined);
     child.stdin.end(input);
+    if (signal) {
+      // 그룹 번호 재사용을 막으려고 leader의 시작 시각을 기록한다(그룹 정리는 그 뒤에 생긴 프로세스만 대상).
+      leaderStart = child.pid === undefined ? Promise.resolve(null) : import('../exec/launches.ts')
+        .then(async ({ processInfo }) => (await processInfo(child.pid as number)).startTime).catch(() => null);
+      if (signal.aborted) abort(); else signal.addEventListener('abort', abort, { once: true });
+    }
   });
 }
 
@@ -205,6 +253,34 @@ async function removeReadonly(path: string): Promise<void> {
     for (const name of await readdir(path)) await removeReadonly(join(path, name));
   }
   await rm(path, { recursive: true, force: true });
+}
+
+/**
+ * 작업 폴더 안의 모든 파일·폴더에 그룹 쓰기 권한을 준다(전용 계정 격리용). 링크는 따라가지 않는다.
+ * 왜: Runner가 만든 파일은 기본 ACL이 붙어도 권한 숫자의 그룹 칸(0644 → r--)이 ACL 상한(mask)이 되어, Agent가 고칠 수 없다.
+ *   그룹 칸을 열면 상한도 함께 열려 Agent 항목(rwx)이 효과를 가진다(isolation.md §6).
+ */
+async function groupWritable(path: string): Promise<void> {
+  const info = await lstat(path);
+  if (info.isSymbolicLink()) return;
+  const dir = info.isDirectory();
+  await chmod(path, (info.mode & 0o7777) | 0o060 | (dir || info.mode & 0o100 ? 0o010 : 0));
+  if (dir) for (const name of await readdir(path)) await groupWritable(join(path, name));
+}
+
+/** Agent 작업 영역 설정. 주면 작업 폴더·입력 사본을 Runner 홈이 아니라 그 아래에 둔다(Q-08 전용 계정). */
+/** H→H′→H″… 동기화 사슬을 따라가는 최대 단계 수. 넘으면 재QA로 돌린다(M7-02 P3). */
+export const MAX_SYNC_CHAIN = 50;
+
+/** push 직전 관문. 실패하면 던진다(push하지 않는다). 모양은 GitHub 클라이언트의 `branch_push` 쓰기 종류와 같다. */
+export type PushGate = ((operation: { kind: 'branch_push'; branch: string; remote: string }) => Promise<void>) & {
+  /** 작업 중단 신호. 관문 직후 다시 보고, 진행 중인 push도 끊는다. */
+  signal?: AbortSignal | undefined;
+};
+
+export interface GitLayout {
+  /** 예: /srv/agentwbs. 그 아래 `worktrees/<저장소>`·`inputs/<저장소>`를 쓴다. */
+  agentRoot?: string | null;
 }
 
 /** 입력 복사의 임시 폴더 접두사. 점으로 시작하므로 `inputIds()`(입력 이름)에 섞이지 않는다. */
@@ -224,34 +300,46 @@ export class GitRepository {
   private readonly worktrees: string;
   private readonly inputs: string;
   private readonly statePath: string;
+  /** 전용 계정 격리 사용 여부. 쓰면 Agent가 들어갈 폴더를 그룹에도 연다(작업 폴더 0o770, 모음 폴더 0o750). */
+  private readonly shared: boolean;
   private registration: Registration | undefined;
 
-  private constructor(home: string, repositoryId: string) {
+  private constructor(home: string, repositoryId: string, layout: GitLayout = {}) {
     this.home = home;
     this.repositoryId = repositoryId;
+    const area = layout.agentRoot ?? home;
+    this.shared = Boolean(layout.agentRoot);
     this.path = join(home, 'repos', repositoryId);
-    this.worktrees = join(home, 'worktrees', repositoryId);
-    this.inputs = join(home, 'inputs', repositoryId);
+    this.worktrees = join(area, 'worktrees', repositoryId);
+    this.inputs = join(area, 'inputs', repositoryId);
     this.statePath = join(home, 'state/git', `${repositoryId}.json`);
   }
 
-  private static async prepare(home: string, repositoryId: string): Promise<GitRepository> {
+  private static async prepare(home: string, repositoryId: string, layout: GitLayout = {}): Promise<GitRepository> {
     id(repositoryId);
     await safePath(home);
+    if (layout.agentRoot) await safePath(layout.agentRoot);
     // WSL의 Windows 드라이브는 작업 폴더로 사용하지 않는다(가이드 §6.6).
-    if (/^\/mnt\/[a-z](?:\/|$)/i.test(resolve(home))) throw new GitSafetyError('worktree는 Linux 파일 시스템에 만들어야 합니다.');
-    const repo = new GitRepository(home, repositoryId);
-    for (const path of [dirname(repo.path), repo.worktrees, repo.inputs, dirname(repo.statePath)]) {
+    for (const base of [home, layout.agentRoot ?? home]) {
+      if (/^\/mnt\/[a-z](?:\/|$)/i.test(resolve(base))) throw new GitSafetyError('worktree는 Linux 파일 시스템에 만들어야 합니다.');
+    }
+    const repo = new GitRepository(home, repositoryId, layout);
+    for (const path of [dirname(repo.path), dirname(repo.statePath)]) {
       await safePath(path);
       await mkdir(path, { recursive: true, mode: 0o700 });
+    }
+    // 작업 폴더·입력 사본 모음: 전용 계정이면 Agent 그룹이 들어가기만 하게 0o750(맨 위는 Agent가 못 바꿈).
+    for (const path of [repo.worktrees, repo.inputs]) {
+      await safePath(path);
+      await mkdir(path, { recursive: true, mode: repo.shared ? 0o750 : 0o700 });
     }
     if ((await statfs(repo.worktrees)).type !== 0xef53) throw new GitSafetyError('worktree는 ext4 파일 시스템에 만들어야 합니다.');
     await safePath(repo.path);
     return repo;
   }
 
-  static async clone(home: string, repositoryId: string, source: string): Promise<GitRepository> {
-    const repo = await this.prepare(home, repositoryId);
+  static async clone(home: string, repositoryId: string, source: string, layout: GitLayout = {}): Promise<GitRepository> {
+    const repo = await this.prepare(home, repositoryId, layout);
     sourceUrl(source);
     if (await stat(repo.path)) throw new GitSafetyError('이미 존재하는 저장소를 덮어쓰지 않습니다.');
     if (await stat(await safePath(repo.statePath))) throw new GitSafetyError('기존 저장소 등록 기록을 덮어쓰지 않습니다.');
@@ -271,14 +359,33 @@ export class GitRepository {
     }
   }
 
-  static async open(home: string, repositoryId: string): Promise<GitRepository> {
-    const repo = await this.prepare(home, repositoryId);
+  static async open(home: string, repositoryId: string, layout: GitLayout = {}): Promise<GitRepository> {
+    const repo = await this.prepare(home, repositoryId, layout);
     repo.registration = await repo.readRegistration();
     if ((await repo.git(['rev-parse', '--is-bare-repository'])).toString().trim() !== 'true') {
       throw new GitSafetyError('Runner의 bare 저장소가 아닙니다.');
     }
     await repo.recoverInputCopies();
     return repo;
+  }
+
+  /** Runner 홈 잠금을 가진 시작 경로에서만 호출한다. 일반 open은 실행 중인 검사 사본을 건드리지 않는다. */
+  static async recoverTaskChecks(home: string, layout: GitLayout = {}): Promise<void> {
+    const directory = await safePath(join(home, 'state/git'));
+    const files = await readdir(directory).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    });
+    for (const file of files) {
+      if (!file.endsWith('.json')) continue;
+      // 전용 계정 배치(agentRoot)면 사본이 Agent 작업 영역에 있으므로 같은 배치로 연다.
+      const repo = await this.open(home, file.slice(0, -5), layout);
+      const record = await repo.trusted();
+      for (const entry of record.worktrees) {
+        if (/^ci-[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(entry.id) &&
+          entry.branch === `agent/${entry.id}` && entry.startCommit) await repo.removeWorktree(entry.id);
+      }
+    }
   }
 
   /**
@@ -430,19 +537,93 @@ export class GitRepository {
   /**
    * 커밋을 등록 원격의 브랜치로 **일반 push**한다(강제 push 없음, 로컬 브랜치를 옮기지 않음).
    * 인증 헤더는 명령 인자가 아니라 환경 변수(GIT_CONFIG_*)로만 넘긴다. 왜: 인자는 다른 프로세스가 /proc에서 읽을 수 있다.
-   * 호출자(GitHub 원격 정리)가 외부 쓰기 권한과 원격 main 대조를 먼저 한다.
+   * `gate`는 필수다. push 직전에 반드시 부른다(Runner의 모든 외부 쓰기는 같은 관문을 지난다, `github/write-gate.ts`).
    */
-  async pushCommit(commit: string, branch: string, authorization?: string): Promise<void> {
+  async pushCommit(commit: string, branch: string, gate: PushGate, authorization?: string): Promise<'pushed' | 'already'> {
     sha(commit);
     if (branch !== 'main') await this.branch(branch);
     const { source } = await this.trusted();
     const env: NodeJS.ProcessEnv = authorization === undefined ? {}
       : { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.extraHeader', GIT_CONFIG_VALUE_0: `AUTHORIZATION: ${authorization}` };
-    await this.git(['push', '--no-verify', '--', source, `${commit}:refs/heads/${branch}`], undefined, env);
+    // 앞선 push를 중단했다면(중단됨·모름) 원격 브랜치 head를 먼저 다시 읽어 대조한다. 이미 그 커밋이면 쓰지 않는다.
+    if (await this.reconcileInterruptedPush(source, branch, commit, env) === 'already') return 'already';
+    // 마지막 확인 → 즉시 전송: 관문 뒤에는 다른 await 없이 git을 띄운다(저장소 신뢰 확인은 바로 위에서 끝났다).
+    await gate({ kind: 'branch_push', branch, remote: source });
+    gate.signal?.throwIfAborted();
+    try {
+      await run(this.path, ['push', '--no-verify', '--', source, `${commit}:refs/heads/${branch}`], undefined, env, [0], gate.signal);
+    } catch (error) {
+      if (error instanceof GitPushAbortedError || error instanceof GitPushUnknownError) await this.markInterruptedPush(branch, commit, error.name);
+      throw error;
+    }
+    return 'pushed';
+  }
+
+  /** 중단한 push 기록(브랜치 → 보내던 커밋·결과·기록 번호). 이름이 `.json`이 아니어야 시작 정리(recoverTaskChecks)가 저장소 기록으로 읽지 않는다. */
+  private get interruptedPushPath(): string {
+    return join(this.home, 'state/git', `${this.repositoryId}.push-interrupted`);
+  }
+
+  /**
+   * 중단 기록을 읽는다. 파일이 없으면 빈 기록이다. 읽거나 해석하지 못하면(손상) `unreadable`이다.
+   * 손상은 「기록 없음」으로 보지 않는다. 어떤 브랜치가 중단됐는지 모르므로 모든 브랜치를 재대조 대상으로 본다.
+   */
+  private async readInterruptedPushes(): Promise<{ record: Record<string, InterruptedPush>; unreadable: boolean }> {
+    let text: string;
+    try { text = await readFile(await safePath(this.interruptedPushPath), 'utf8'); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { record: {}, unreadable: false }; return { record: {}, unreadable: true }; }
+    try {
+      const value = JSON.parse(text) as unknown;
+      if (!value || typeof value !== 'object' || Array.isArray(value) ||
+        Object.values(value).some((entry) => !entry || typeof (entry as { commit?: unknown }).commit !== 'string' ||
+          !['string', 'undefined'].includes(typeof (entry as { id?: unknown }).id))) return { record: {}, unreadable: true };
+      return { record: value as Record<string, InterruptedPush>, unreadable: false };
+    } catch { return { record: {}, unreadable: true }; }
+  }
+
+  /**
+   * 중단 기록의 읽기·수정·쓰기는 모두 여기서, 저장소 잠금(`worktreeUpdate`) 아래에서 직렬로 한다. 쓰기는 원자적이다(`atomicWrite`).
+   * 왜: 같은 저장소의 두 작업이 동시에 중단되면 서로의 기록을 덮어 한 브랜치의 재대조가 빠졌다(Codex 재리뷰 4 P3).
+   * 손상된 기록은 고쳐 쓰지 않고 그대로 둔다(사람이 확인하기 전까지 모든 브랜치를 재대조한다).
+   */
+  private async updateInterruptedPushes(change: (record: Record<string, InterruptedPush>) => void): Promise<void> {
+    await this.worktreeUpdate(async () => {
+      const { record, unreadable } = await this.readInterruptedPushes();
+      if (unreadable) return;
+      change(record);
+      await atomicWrite(dirname(this.interruptedPushPath), basename(this.interruptedPushPath), JSON.stringify(record));
+    });
+  }
+
+  /** 기록마다 새 번호(`id`)를 붙인다. 왜: 같은 브랜치·같은 커밋을 다시 중단한 기록도 이전 기록과 구분해야 한다(Codex 재리뷰 5 P3). */
+  private async markInterruptedPush(branch: string, commit: string, outcome: string): Promise<void> {
+    await this.updateInterruptedPushes((record) => { record[branch] = { commit, outcome, id: randomUUID() }; });
+  }
+
+  /**
+   * 중단한 push가 남긴 기록이 있으면 원격 브랜치 head를 읽기만 해서 대조한다.
+   * - 원격 head가 보내던 커밋이면 그 push는 이미 반영됐다: 다시 쓰지 않는다('already').
+   * - 아니면 기록을 지우고 평소처럼 push한다(일반 push라 원격이 다른 커밋으로 움직였으면 git이 거부한다).
+   * - 기록이 손상됐으면 이 브랜치도 대조한다(기록은 지우지 않는다).
+   * 원격 읽기는 잠금 밖에서 한다. 지울 때는 잠금 아래에서, 읽은 기록과 번호(`id`)가 같을 때만 지운다.
+   * 그 사이 같은 브랜치가 다시 기록됐으면(같은 커밋이라도) 번호가 달라 지우지 않는다. 번호가 없는 이전 형식은 커밋으로 대조한다.
+   * 왜: 중단·모름은 「반영 안 됨」의 증거가 아니다. 원격 상태를 확인한 뒤에 다음 쓰기를 한다.
+   */
+  private async reconcileInterruptedPush(source: string, branch: string, commit: string, env: NodeJS.ProcessEnv): Promise<'already' | 'push'> {
+    const { record, unreadable } = await this.worktreeUpdate(() => this.readInterruptedPushes());
+    const marked = record[branch];
+    if (!marked && !unreadable) return 'push';
+    const line = (await this.git(['ls-remote', '--heads', '--', source, `refs/heads/${branch}`], undefined, env)).toString().trim();
+    const remoteHead = line ? line.split(/\s/)[0] : null;
+    if (marked) await this.updateInterruptedPushes((current) => {
+      const now = current[branch];
+      if (now && now.id === marked.id && now.commit === marked.commit) Reflect.deleteProperty(current, branch);
+    });
+    return remoteHead === commit ? 'already' : 'push';
   }
 
   /** 시스템 직접 push는 최초 생성 또는 세 초기화 경로만 바꾸는 단일 부모 커밋에 한한다. 호출자가 GitHub 키 목록과 main을 먼저 대조한다. */
-  async pushSystemCommit(commit: string, parent: string | null, ssh: SystemSsh): Promise<void> {
+  async pushSystemCommit(commit: string, parent: string | null, ssh: SystemSsh, gate: PushGate): Promise<void> {
     sha(commit);
     if (parent !== null) sha(parent);
     const parents = (await this.git(['show', '-s', '--format=%P', commit])).toString().trim();
@@ -462,9 +643,14 @@ export class GitRepository {
     if (!(await stat(await safePath(ssh.socket)))?.isSocket()) throw new GitSafetyError('시스템 SSH 소켓을 확인할 수 없습니다.');
     if (!(await stat(await safePath(ssh.knownHosts)))?.isFile()) throw new GitSafetyError('서버 키 목록 파일을 확인할 수 없습니다.');
     const remote = `ssh://git@ssh.github.com:443${url.pathname.replace(/\/$/, '').replace(/\.git$/, '')}.git`;
-    await this.git(['push', '--no-verify', '--', remote, `${commit}:refs/heads/main`], undefined, {
+    // 관문에는 등록된 https 원격(GitHub 저장소 주소)을 넘긴다. SSH 주소는 같은 저장소의 다른 표기다.
+    const { source } = await this.trusted();
+    // 마지막 확인 → 즉시 전송.
+    await gate({ kind: 'branch_push', branch: 'main', remote: source });
+    gate.signal?.throwIfAborted();
+    await run(this.path, ['push', '--no-verify', '--', remote, `${commit}:refs/heads/main`], undefined, {
       GIT_ALLOW_PROTOCOL: 'ssh', GIT_SSH_COMMAND: systemSshCommand(ssh.knownHosts), GIT_SSH_VARIANT: 'ssh', SSH_AUTH_SOCK: ssh.socket,
-    });
+    }, [0], gate.signal);
   }
 
   async head(): Promise<string> {
@@ -504,12 +690,14 @@ export class GitRepository {
       try {
         // 생성 중 종료돼도 폴더가 기록 없이 남지 않도록 먼저 예약한다.
         await this.saveRegistration({ ...record, worktrees: [...record.worktrees, { id: worktreeId, branch, startCommit: commit }] });
-        await mkdir(path, { mode: 0o700 });
+        // 전용 계정이면 0o770: 0o700으로 만들면 ACL 상한이 ---가 되어 Agent가 들어가지 못한다(isolation.md §6, Codex 리뷰 P2-5).
+        await mkdir(path, { mode: this.shared ? 0o770 : 0o700 });
         created = true;
         // 고정 커밋의 브랜치만 복사하여 최신 원격 객체도 받고 다른 Agent 결과는 제외한다.
         await run(this.home, ['-c', 'init.templateDir=', 'clone', '--no-local', '--no-hardlinks', '--single-branch', '--branch', branch, '--no-checkout', '--', this.path, path]);
         await run(path, ['remote', 'remove', 'origin']);
         await run(path, ['checkout', '--no-guess', branch]);
+        if (this.shared) await groupWritable(path);
         return path;
       } catch (error) {
         try {
@@ -683,7 +871,7 @@ export class GitRepository {
   }
 
   async checkTask(base: string, head: string): Promise<RejectedPath[]> {
-    const mergeBase = sha((await this.git(['merge-base', sha(base), sha(head)])).toString().trim());
+    const mergeBase = await this.taskBase(base, head);
     // --no-renames면 이동도 삭제+추가가 되어 원래 경로와 새 경로를 모두 검사한다.
     const changed = (await this.git(['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', mergeBase, head, '--'])).toString().split('\0').filter(Boolean);
     const rejected: RejectedPath[] = changed.filter((path) => ['prototype', '.agentwbs'].some((prefix) => path === prefix || path.startsWith(`${prefix}/`)))
@@ -692,7 +880,8 @@ export class GitRepository {
     if (tracked.length === 0) return rejected;
     // 작업 브랜치가 .gitignore를 지워 검사에서 빠져나가지 못하도록 기준 규칙도 적용한다.
     for (const commit of new Set([mergeBase, head])) {
-      const scratch = await safePath(join(this.home, 'inputs', this.repositoryId, `ignore-${randomUUID()}`));
+      // Runner 내부 임시 폴더라 Agent 영역이 아니라 Runner 상태 폴더 아래에 둔다.
+      const scratch = await safePath(join(dirname(this.statePath), `ignore-${this.repositoryId}-${randomUUID()}`));
       await mkdir(scratch, { mode: 0o700 });
       try {
         for (const entry of await this.tree(commit)) {
@@ -709,6 +898,172 @@ export class GitRepository {
       } finally { await rm(scratch, { recursive: true, force: true }); }
     }
     return rejected;
+  }
+
+  /** 등록한 원격 main을 가져와 한 커밋으로 고정한다. Agent 작업 폴더에서 정의를 읽지 않는다. */
+  async mainPipeline(): Promise<{ baseSha: string; pipelineSha: string; source: string }> {
+    const { source } = await this.trusted();
+    await this.git(['fetch', '--no-tags', '--no-recurse-submodules', '--upload-pack=git-upload-pack', '--', source,
+      'refs/heads/main:refs/remotes/origin/main']);
+    const baseSha = await this.remoteMain();
+    return this.pipelineAt(baseSha);
+  }
+
+  /** 재실행도 원래 main 커밋의 정의를 읽어 SHA를 대조한다(M7-06). */
+  async pipelineAt(baseSha: string): Promise<{ baseSha: string; pipelineSha: string; source: string }> {
+    await this.trusted(); sha(baseSha);
+    return { baseSha, ...await this.pipelineOf(baseSha) };
+  }
+
+  /**
+   * ④ 배포 확인: main을 가져온 뒤 그 커밋 자신의 정의를 읽는다(다시 빌드해도 같은 결과, G L486).
+   * M7-03에서는 `pipelineAt`이었다. M7-06의 재실행용 `pipelineAt`(main 조상 검사 없음, baseSha 포함)과 이름이 겹쳐 통합에서 이름을 나눴다.
+   */
+  async deployPipelineAt(commit: string): Promise<{ pipelineSha: string; source: string }> {
+    const { baseSha } = await this.mainPipeline();
+    // main에 들어간 커밋만 배포한다. 왜: 병합되지 않은 브랜치를 배포 확인으로 통과시키지 않는다.
+    if ((await this.taskBase(commit, baseSha).catch(() => null)) !== sha(commit)) throw new GitSafetyError('배포할 커밋이 main에 없습니다.');
+    return this.pipelineOf(sha(commit));
+  }
+
+  /** ③ 기준 렌더: 고정한 커밋에서 prefix 아래 일반 파일 경로 목록. symlink·submodule은 넣지 않는다. */
+  async listFiles(commit: string, prefix: string): Promise<string[]> {
+    return (await this.tree(sha(commit))).filter((entry) => entry.path.startsWith(prefix) && ['100644', '100755'].includes(entry.mode)).map((entry) => entry.path);
+  }
+
+  /** ③ 화면 비교 기준 이미지처럼, 고정한 커밋의 일반 파일 하나를 Git 객체에서 읽는다. 작업 폴더나 단계 출력은 보지 않는다. */
+  async fileAt(commit: string, path: string): Promise<Buffer> {
+    const entry = (await this.tree(sha(commit))).find((value) => value.path === path);
+    if (!entry || !['100644', '100755'].includes(entry.mode)) throw new GitSafetyError(`고정 커밋에 일반 파일 ${path}이 없습니다.`);
+    return this.blob(entry);
+  }
+
+  private async pipelineOf(commit: string): Promise<{ pipelineSha: string; source: string }> {
+    const entry = (await this.tree(commit)).find((value) => value.path === '.agentwbs/pipeline.yaml');
+    if (!entry || !['100644', '100755'].includes(entry.mode)) throw new GitSafetyError('main의 pipeline.yaml은 일반 파일이어야 합니다.');
+    return { pipelineSha: sha(entry.oid), source: (await this.blob(entry)).toString('utf8') };
+  }
+
+  /** ③ 원인 추적: from 뒤로 main에 들어온 first-parent 커밋(오래된 것부터). from이 조상이 아니면 빈 목록이다. */
+  async mainCommitsSince(from: string, to: string): Promise<string[]> {
+    if ((await this.taskBase(from, to).catch(() => null)) !== sha(from)) return [];
+    return (await this.git(['rev-list', '--first-parent', '--reverse', `${sha(from)}..${sha(to)}`])).toString().split('\n').filter(Boolean).map(sha);
+  }
+
+  async taskBase(base: string, head: string): Promise<string> {
+    return sha((await this.git(['merge-base', sha(base), sha(head)])).toString().trim());
+  }
+
+  async fetchBranch(branch: string): Promise<string> {
+    await this.branch(branch);
+    const { source } = await this.trusted();
+    const ref = `refs/remotes/origin/${branch}`;
+    await this.git(['fetch', '--no-tags', '--no-recurse-submodules', '--upload-pack=git-upload-pack', '--', source,
+      `+refs/heads/${branch}:${ref}`]);
+    return sha((await this.git(['rev-parse', '--verify', `${ref}^{commit}`])).toString().trim());
+  }
+
+  async commitTree(commit: string): Promise<string> {
+    return sha((await this.git(['rev-parse', '--verify', `${sha(commit)}^{tree}`])).toString().trim());
+  }
+
+  async commitParents(commit: string): Promise<string[]> {
+    await this.trusted();
+    const parents = (await this.git(['show','-s','--format=%P',sha(commit)])).toString().trim();
+    return parents ? parents.split(' ').map(sha) : [];
+  }
+
+  private async integrationTree(base: string, head: string): Promise<string | null> {
+    const result = await this.git(['merge-tree', '--write-tree', '--no-messages', sha(head), sha(base)], undefined, undefined, [0, 1]);
+    const tree = result.toString().trim();
+    // 충돌 시 출력에는 경로와 단계별 blob도 섞인다. 성공한 tree 한 줄만 받는다.
+    return /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(tree) ? tree : null;
+  }
+
+  /** checkout·Agent 설정 없이 Git 객체만으로 H,A를 자동 병합한다. 충돌은 해결하지 않는다. */
+  async prepareIntegration(base: string, head: string): Promise<string | null> {
+    if (await this.taskBase(base, head) === base) return head;
+    const tree = await this.integrationTree(base, head);
+    if (!tree) return null;
+    return sha((await this.git(['commit-tree', tree, '-p', head, '-p', base, '-m', 'Agent WBS main 동기화'])).toString().trim());
+  }
+
+  /** 호출자가 준 preserved 값을 믿지 않고 부모 순서와 자동 병합 tree를 다시 계산한다. */
+  async integrationProof(base: string, head: string, synced: string): Promise<HeadSyncProof | null> {
+    if (synced === head) return null;
+    const parents = (await this.git(['show', '-s', '--format=%P', sha(synced)])).toString().trim().split(' ');
+    if (parents.length !== 2 || parents[0] !== head || parents[1] !== base) return null;
+    const autoMergeTreeSha = await this.integrationTree(base, head);
+    const headTreeSha = await this.commitTree(synced);
+    if (!autoMergeTreeSha || autoMergeTreeSha !== headTreeSha) return null;
+    return { qaHeadSha: head, headSha: synced, preserved: true, parents, autoMergeTreeSha, headTreeSha, additionalChanges: false };
+  }
+
+  /** 각 단계가 main만 합친 자동 동기화인지 QA의 H까지 거슬러 확인한다. */
+  async integrationChainProof(base: string, qaHead: string, head: string): Promise<HeadSyncChainProof | null> {
+    const chain: HeadSyncProof[] = [];
+    let cursor = head;
+    try {
+      while (cursor !== qaHead) {
+        // 이미 main에 있는 커밋에서는 QA H(main에 없는 Task 커밋)에 닿을 수 없다. main 병합 이력을 따라 내려가지 않는다(M7-02 P3).
+        // 단계 수 상한도 둔다. 정상 사슬은 main이 움직인 횟수만큼이라 이보다 훨씬 짧다.
+        if (chain.length >= MAX_SYNC_CHAIN || await this.taskBase(base, cursor) === cursor) return null;
+        const parents = (await this.git(['show', '-s', '--format=%P', sha(cursor)])).toString().trim().split(' ');
+        const [previous, main] = parents;
+        if (parents.length !== 2 || !previous || !main || await this.taskBase(base, main) !== main) return null;
+        const proof = await this.integrationProof(main, previous, cursor);
+        if (!proof) return null;
+        chain.push(proof); cursor = previous;
+      }
+    } catch (error) { if (error instanceof GitSafetyError) return null; throw error; }
+    const last = chain[0];
+    if (!last) return null;
+    return { ...last, qaHeadSha: qaHead, ...(chain.length > 1 && { chain: chain.reverse() }) };
+  }
+
+  /** 새 설정으로 테스트를 제외할 수도 있으므로 추가 파일까지 전부 QA 근거로 남긴다. */
+  async taskReviewChanges(base: string, head: string): Promise<TaskReviewChange[]> {
+    const mergeBase = await this.taskBase(base, head);
+    const raw = (await this.git(['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--raw', '--numstat', '-z', '--no-abbrev', mergeBase, head, '--'])).toString('utf8');
+    const changes = parseRawNumstat(raw);
+    const result: TaskReviewChange[] = [];
+    for (const change of changes) {
+      const patch = (await this.git(['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--binary', mergeBase, head, '--', change.path])).toString('utf8');
+      result.push({ ...change, patch });
+    }
+    return result;
+  }
+
+  /** 검사 폴더는 커밋만으로 새로 복사한다. Agent의 도구·무시 파일·Git 설정을 가져오지 않는다. */
+  async createTaskCheckWorktree(worktreeId: string, commit: string): Promise<string> {
+    const entries = await this.tree(commit);
+    if (entries.some((entry) => !['100644', '100755'].includes(entry.mode) || entry.path.split('/').includes('node_modules'))) {
+      throw new GitSafetyError('검사 커밋에는 node_modules, symlink, submodule을 넣을 수 없습니다.');
+    }
+    return this.createWorktree(worktreeId, `agent/${worktreeId}`, commit);
+  }
+
+  /** 고정한 커밋과 실제 작업 파일이 일치해야 다른 코드의 결과를 보고하지 않는다. */
+  async taskCheckPath(worktreeId: string, head: string): Promise<string> {
+    const record = await this.trusted();
+    if (record.resetting || !record.worktrees.some((value) => value.id === worktreeId)) throw new GitSafetyError('검사할 수 있는 작업 폴더가 아닙니다.');
+    const path = await safePath(join(this.worktrees, id(worktreeId)));
+    await safePath(join(path, '.git'));
+    const current = (await run(path, [`--git-dir=${join(path, '.git')}`, 'rev-parse', '--verify', 'HEAD^{commit}'])).toString().trim();
+    if (current !== sha(head)) throw new GitSafetyError('검사 대상 head와 작업 폴더가 다릅니다.');
+    // Agent index의 assume-unchanged·skip-worktree와 filter 설정을 신뢰하지 않는다.
+    const index = join(dirname(this.statePath), `ci-index-${randomUUID()}`);
+    const env = { GIT_INDEX_FILE: index };
+    try {
+      await this.git(['read-tree', head], undefined, env);
+      const dirty = await this.git([`--work-tree=${path}`, 'diff', '--no-ext-diff', '--no-textconv', '--name-only', '-z', head, '--'], undefined, env);
+      const untracked = await this.git([`--work-tree=${path}`, 'ls-files', '--others', '--exclude-standard', '-z'], undefined, env);
+      if (dirty.length || untracked.length) throw new GitSafetyError('작업 폴더에 커밋하지 않은 변경이 있습니다.');
+    } finally {
+      await rm(index, { force: true });
+      await rm(`${index}.lock`, { force: true });
+    }
+    return path;
   }
 
   async reset(options: ResetOptions): Promise<{ commit: string | null }> {

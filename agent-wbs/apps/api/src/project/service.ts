@@ -1,6 +1,9 @@
 import { splitSettingsToDomain } from '@awbs/db';
 import type { PoolClient } from '@awbs/db';
+import { observePipeline, type PipelineObservation } from '../ci/pipeline.ts';
 import { invalidateTaskGate } from '../execution/gate.ts';
+import { snapshotHash, techSnapshot, wbsSnapshot } from '../planning/job-snapshot.ts';
+import { lockGraph } from '../tasks/write.ts';
 import type { Dependency } from '@awbs/shared';
 import { createBaseline, type BaselineTask } from './baseline.ts';
 import {
@@ -10,11 +13,11 @@ import { draftErrors, draftHolds, draftSplitSummary, storeDraft, type DraftInput
 import { ProjectError } from './errors.ts';
 import { nextMdList, type PathChange } from './inputs.ts';
 import {
-  bootstrapJob, createPlanningJob, currentRunnerJob, followUpJob, lockPlanningJob, log, resetSteps, setStep, steps, type PlanningJob,
+  bootstrapJob, createPlanningJob, currentRunnerJob, followUpJob, lockPlanningJob, log, resetSteps, setStep, steps, syncPlanningJob, type PlanningJob,
 } from './jobs.ts';
 import { analyzable, analyze, chainHead, receive, type CommitState, type Ledger } from './ledger.ts';
 import { parseRepoUrl } from './repo.ts';
-import { BOOT_STEPS, INPUT_STEPS, LEAD_STEPS, RERUN_STEPS, type StepStatus } from './steps.ts';
+import { BOOT_STEPS, INPUT_STEPS, LEAD_STEPS, RERUN_STEPS, waitingForLead, type StepStatus } from './steps.ts';
 
 const STEP_LABEL: Record<string, string> = {
   check: 'GitHub 접근 · 커밋 고정', unzip: '입력 자료 checkout', repo: '작업 준비', codex: 'Codex 독립 분석', claude: 'Claude 독립 분석',
@@ -120,15 +123,18 @@ export async function createProject(db: Db, body: Registration, epoch: number) {
     [project.id, commit, JSON.stringify({ uiuxFiles: structure.uiuxFiles }), JSON.stringify(structure.docs.filter(isDesignDoc).sort()), body.instruction]);
   const jobId = await createPlanningJob(db, { projectId: project.id, kind: 'bootstrap', instruction: body.instruction, stepKeys: BOOT_STEPS });
   await log(db, { id: jobId, project_id: project.id }, '프로젝트 등록 — Runner의 초기 분석을 기다립니다');
+  const techConstraints = (await db.query('select id,name,level,condition from tech_constraints where project_id=$1 order by created_at,id', [project.id])).rows;
+  const subagentDefs = (await db.query(`select distinct on (def_key) id,def_key as "defKey",version,agent,role from subagent_defs where allowed order by def_key,version desc`)).rows;
   await enqueueJob(db, { projectId: project.id, kind: 'bootstrap', epoch, dedupKey: `bootstrap:${jobId}:1`,
-    payload: { planningJobId: jobId, runNo: 1, commit, previousCommit: null, instruction: body.instruction, resumeStep: null } });
+    payload: { planningJobId: jobId, runNo: 1, version: 1, commit, previousCommit: null, instruction: body.instruction, resumeStep: null,
+      techConstraints, subagentDefs, ...await techSnapshot(db, project.id) } });
   await changeEvent(db, project.id, { kind: 'project', event: 'registered' });
   return { project, jobId };
 }
 
 /* ---------------- 초기 분석·차이 분석 진행 보고 ---------------- */
 
-async function reportedJob(db: Db, jobId: string, fence: number, principal: string, kinds: readonly string[]) {
+async function reportedJob(db: Db, jobId: string, fence: number, principal: string, kinds: readonly string[], allowDone = false) {
   const runnerJob = await leasedJob(db, { id: jobId }, kinds, fence, principal);
   const planningJobId = runnerJob.payload.planningJobId;
   if (typeof planningJobId !== 'string') throw new ProjectError('NOT_FOUND', { details: { resource: 'planning_job', id: jobId } });
@@ -138,23 +144,31 @@ async function reportedJob(db: Db, jobId: string, fence: number, principal: stri
   if (await currentRunnerJob(db, job.id) !== runnerJob.id) {
     throw new ProjectError('LEASE_LOST', { message: '이 분석 작업은 새 실행으로 넘어가 이전 실행의 보고를 받지 않습니다.', details: { jobId } });
   }
-  if (!['queued', 'running'].includes(job.status)) throw new ProjectError('INVALID_TRANSITION', { message: `이 분석 작업은 이미 ${job.status === 'failed' ? '실패로 멈췄' : '끝났'}습니다.` });
+  if (!['queued', 'running'].includes(job.status) && !(allowDone && job.kind === 'input_diff' && job.status === 'done')) throw new ProjectError('INVALID_TRANSITION', { message: `이 분석 작업은 이미 ${job.status === 'failed' ? '실패로 멈췄' : '끝났'}습니다.` });
   return job;
 }
 
 export async function reportProgress(db: Db, jobId: string, body: { fence: number; stepKey: string; status: StepStatus; note?: string }, principal: string): Promise<void> {
-  const job = await reportedJob(db, jobId, body.fence, principal, ['bootstrap', 'input_diff']);
+  const completing = body.stepKey === 'cp' && body.status === 'done';
+  const job = await reportedJob(db, jobId, body.fence, principal, ['bootstrap', 'input_diff'], completing);
   const allowed: readonly string[] = job.kind === 'bootstrap' ? BOOT_STEPS.filter((key) => !LEAD_STEPS.has(key)) : INPUT_STEPS;
   // 초안 단계의 완료는 초안 등록(submitDraft)만 기록한다. 진행 보고로 끝내면 승인할 초안 없이 멈춘다.
   if (!allowed.includes(body.stepKey) || job.kind === 'bootstrap' && body.stepKey === 'draft' && body.status === 'done') {
     throw new ProjectError('VALIDATION_FAILED', { errors: [{ path: 'stepKey', rule: 'step', message: `${job.kind === 'bootstrap' ? '초기 분석' : '차이 분석'}에서 Runner가 보고할 수 있는 단계가 아닙니다.` }] });
   }
+  if (job.kind === 'input_diff' && completing) {
+    const state = await steps(db, job.id);
+    if (INPUT_STEPS.filter((key) => key !== 'cp').some((key) => state.get(key) !== 'done')) {
+      throw new ProjectError('INVALID_TRANSITION', { message: '차이 분석의 앞 단계를 모두 끝낸 뒤 변경 제안 작성을 완료하세요.' });
+    }
+    if (job.status === 'done') return;
+  }
   await setStep(db, job.id, body.stepKey, body.status, body.note);
   await log(db, job, `${STEP_LABEL[body.stepKey] ?? body.stepKey} ${STATUS_LABEL[body.status]}${body.note ? ` — ${body.note}` : ''}`);
   if (body.status === 'fail') {
-    const fail = { reason: body.note ?? `${STEP_LABEL[body.stepKey] ?? body.stepKey} 단계가 실패했습니다.`, fix: '원인을 해결한 뒤 「다시 시도」를 누르세요. 끝난 단계는 건너뜁니다.' };
-    await db.query("update planning_jobs set status='failed',fail=$2::jsonb where id=$1", [job.id, JSON.stringify(fail)]);
-  } else if (job.status === 'queued') await db.query("update planning_jobs set status='running' where id=$1", [job.id]);
+    await syncPlanningJob(db, jobId, 'failed', { code: 'STEP_FAILED', message: body.note ?? `${STEP_LABEL[body.stepKey] ?? body.stepKey} 단계가 실패했습니다.` });
+  } else if (job.kind === 'input_diff' && completing) await syncPlanningJob(db, jobId, 'done');
+  else if (job.status === 'queued') await db.query("update planning_jobs set status='running' where id=$1", [job.id]);
   await changeEvent(db, job.project_id, { kind: 'planning_job', id: job.id }, 'planning');
 }
 
@@ -260,7 +274,7 @@ export async function confirmTech(db: Db, projectId: string, body: { decisions: 
   await setStep(db, job.id, 'tech', 'done', `확정 ${String(rows.length)}건`);
   await log(db, job, `기술 결정 확정 (팀장) — 승인 ${String(body.decisions.filter((d) => d.choice === 'approve').length)} · 반려 ${String(body.decisions.filter((d) => d.choice === 'reject').length)}`);
   // 확정된 결정 위에서 WBS 초안을 작성한다(G§4.2). Runner에게 초안 단계부터 이어 하라는 새 job을 준다.
-  await followUpJob(db, job, epoch, { resumeStep: 'draft' });
+  await followUpJob(db, job, epoch, { resumeStep: 'draft', base: await techSnapshot(db, project.id) });
   await changeEvent(db, project.id, { kind: 'decision' }, 'design');
 }
 
@@ -271,6 +285,11 @@ export async function submitDraft(db: Db, jobId: string, body: DraftInput & { fe
   const state = await steps(db, job.id);
   if (state.get('tech') !== 'done' || state.get('draft') === 'done') {
     throw new ProjectError('INVALID_TRANSITION', { message: '기술 결정이 확정되고 초안이 아직 없을 때만 초안을 받습니다.' });
+  }
+  const tech = await techSnapshot(db, job.project_id);
+  const payload = (await db.query<{ payload: Record<string, unknown> }>('select payload from runner_jobs where id=$1', [jobId])).rows[0]?.payload;
+  if (payload?.techDecisionVersion !== tech.techDecisionVersion || snapshotHash(payload.techDecisions) !== tech.techDecisionVersion) {
+    throw new ProjectError('VERSION_CONFLICT', { message: '초안의 판단 전제인 기술 결정이 바뀌었습니다. 새 작업으로 다시 분석하세요.', details: { changes: [] } });
   }
   const draft: DraftInput = { phases: body.phases, wps: body.wps, tasks: body.tasks, deps: body.deps };
   const errors = draftErrors(draft);
@@ -289,7 +308,7 @@ export async function submitDraft(db: Db, jobId: string, body: DraftInput & { fe
   const revision = (await db.query<{ next: number }>('select coalesce(max(revision),0)+1 as next from wbs_drafts where job=$1', [job.id])).rows[0]?.next ?? 1;
   await db.query("update wbs_drafts set status='superseded' where job=$1 and status='pending'", [job.id]);
   await db.query("insert into wbs_drafts(project_id,job,revision,content,split_check,status) values($1,$2,$3,$4::jsonb,$5::jsonb,'pending')",
-    [job.project_id, job.id, revision, JSON.stringify(stored), JSON.stringify(draftSplitSummary(stored, settings))]);
+    [job.project_id, job.id, revision, JSON.stringify({ ...stored, techDecisionVersion: tech.techDecisionVersion }), JSON.stringify(draftSplitSummary(stored, settings))]);
   await setStep(db, job.id, 'draft', 'done', `Phase ${String(draft.phases.length)} · Work Package ${String(draft.wps.length)} · Task ${String(draft.tasks.length)} · 의존성 ${String(draft.deps.length)}`);
   await setStep(db, job.id, 'approve', 'run');
   await log(db, job, `WBS 초안 r${String(revision)} 등록 — 팀장 승인 대기`);
@@ -297,7 +316,7 @@ export async function submitDraft(db: Db, jobId: string, body: DraftInput & { fe
   return { revision };
 }
 
-interface DraftRow { id: string; revision: number; content: StoredDraft }
+interface DraftRow { id: string; revision: number; content: StoredDraft & { techDecisionVersion: string } }
 /** 승인 대기 중인 최신 초안. 초기 분석이 승인 단계가 아니면 없다. */
 async function waitingDraft(db: Db, job: PlanningJob): Promise<DraftRow | undefined> {
   if ((await steps(db, job.id)).get('approve') !== 'run') return undefined;
@@ -319,6 +338,9 @@ export async function approveBootstrap(db: Db, revision: number) {
   const draft = await waitingDraft(db, job);
   if (!draft) throw new ProjectError('INVALID_TRANSITION', { message: '승인할 초안이 없습니다. 초기 분석이 끝나기를 기다리세요.' });
   if (draft.revision !== revision) throw new ProjectError('VERSION_CONFLICT', { details: { current: { revision: draft.revision }, changes: [] } });
+  if (draft.content.techDecisionVersion !== (await techSnapshot(db, project.id)).techDecisionVersion) {
+    throw new ProjectError('VERSION_CONFLICT', { message: '초안의 기술 결정이 바뀌었습니다. 다시 분석한 초안을 승인하세요.', details: { changes: [] } });
+  }
   const settings = await splitSettings(db);
   const holds = draftHolds(draft.content, settings);
   if (holds.length) throw new ProjectError('SPLIT_JUDGEMENT_REQUIRED', { details: { items: holds } });
@@ -416,7 +438,7 @@ export async function rerunBootstrap(db: Db, body: { revision: number; instructi
   const next = (await db.query<{ run_no: number }>("update planning_jobs set run_no=run_no+1,status='queued',fail=null,instruction=$2 where id=$1 returning run_no", [job.id, body.instruction])).rows[0]?.run_no ?? job.run_no + 1;
   await resetSteps(db, job.id, RERUN_STEPS);
   await log(db, job, `팀장 재분석 요청 (${String(next - 1)}회) — ${body.instruction}`);
-  await followUpJob(db, { ...job, run_no: next, instruction: body.instruction }, epoch, { resumeStep: 'codex' });
+  await followUpJob(db, { ...job, run_no: next, instruction: body.instruction }, epoch, { resumeStep: 'codex', base: await techSnapshot(db, job.project_id) });
   await changeEvent(db, job.project_id, { kind: 'planning_job', id: job.id }, 'planning');
   return { jobId: job.id };
 }
@@ -436,11 +458,41 @@ export async function retryBootstrap(db: Db, body: { revision: number } | { revi
 }
 
 async function resume(db: Db, job: PlanningJob, epoch: number): Promise<string> {
-  const failed = (await db.query<{ step_key: string }>("select step_key from planning_job_steps where job=$1 and status='fail' order by started_at nulls last limit 1", [job.id])).rows[0]?.step_key ?? null;
-  if (failed) await resetSteps(db, job.id, [failed]);
+  if (waitingForLead(job.kind, await steps(db, job.id))) {
+    throw new ProjectError('INVALID_TRANSITION', { message: '팀장의 기술 결정 또는 초안 승인을 기다리고 있습니다.' });
+  }
+  const previous = (await db.query<{ payload: Record<string, unknown> }>('select payload from runner_jobs where id=$1', [await currentRunnerJob(db, job.id)])).rows[0]?.payload;
+  let base: Record<string, unknown> | undefined;
+  if (job.kind === 'input_diff') {
+    await lockGraph(db as PoolClient, job.project_id);
+    const wbs = await wbsSnapshot(db, job.project_id);
+    if (snapshotHash(previous?.wbs) !== snapshotHash(wbs)) {
+      base = { wbs };
+      await resetSteps(db, job.id, ['diff', 'impact', 'cp']);
+    }
+  } else if ((await steps(db, job.id)).get('tech') === 'done') {
+    const tech = await techSnapshot(db, job.project_id);
+    if (previous?.techDecisionVersion !== tech.techDecisionVersion) {
+      base = tech;
+      await resetSteps(db, job.id, RERUN_STEPS);
+      await db.query("update wbs_drafts set status='superseded' where job=$1 and status='pending'", [job.id]);
+    }
+  }
+  const progress = await steps(db, job.id);
+  const keys: readonly string[] = job.kind === 'bootstrap' ? BOOT_STEPS : INPUT_STEPS;
+  const resumeStep = keys.find((key) => progress.get(key) !== 'done');
+  if (!resumeStep || !progress.has(resumeStep) || resumeStep === 'approve') {
+    throw new ProjectError('INVALID_TRANSITION', { message: '저장된 단계에서 재개할 수 있는 Runner 작업이 없습니다.' });
+  }
+  if (progress.get(resumeStep) === 'fail') await resetSteps(db, job.id, [resumeStep]);
+  // 전제가 바뀌면 새 회차로 시작해야 Runner가 이전 분석 결과를 재사용하지 않는다.
+  if (base) {
+    const next = (await db.query<{ run_no: number }>('update planning_jobs set run_no=run_no+1 where id=$1 returning run_no', [job.id])).rows[0]?.run_no;
+    job = { ...job, run_no: next ?? job.run_no + 1 };
+  }
   await db.query("update planning_jobs set status='queued',fail=null where id=$1", [job.id]);
-  await log(db, job, `팀장 다시 시도 — ${failed ? STEP_LABEL[failed] ?? failed : '처음'}부터`);
-  await followUpJob(db, job, epoch, { resumeStep: failed });
+  await log(db, job, `팀장 다시 시도 — ${STEP_LABEL[resumeStep] ?? resumeStep}부터`);
+  await followUpJob(db, job, epoch, { resumeStep, ...(base && { base }) });
   await changeEvent(db, job.project_id, { kind: 'planning_job', id: job.id }, 'planning');
   return job.id;
 }
@@ -452,7 +504,7 @@ interface InputDiff {
   status: 'A' | 'M' | 'D' | 'R' | 'T'; path: string; from?: string;
   oldBlob: string | null; newBlob: string | null; oldMode: string | null; newMode: string | null; added: number; deleted: number;
 }
-interface InputBody { base: string; head: string; baseIsAncestor: boolean; treeHash: string; changes: InputDiff[]; commits: PushedCommit[] }
+interface InputBody { base: string; head: string; baseIsAncestor: boolean; treeHash: string; changes: InputDiff[]; commits: PushedCommit[]; pipelineObservation?: PipelineObservation }
 /** 저장하는 보고 하나(input_change_commits.files jsonb, sha = 보고의 head) */
 interface StoredReport { seq: number; base: string; head: string; tree: string; changes: InputDiff[]; commits: PushedCommit[]; receivedAt: string }
 
@@ -494,6 +546,7 @@ export async function reportInputChanges(db: Db, body: InputBody): Promise<{ hea
     if (r.state === 'pending') await changeEvent(db, project.id, { kind: 'input_changes' });
   }
   // 팀장 확인 항목은 분석이 볼 내용이 바뀐 보고에만 생긴다(실행 권한만 바뀐 보고는 head·트리만 옮김).
+  if (body.pipelineObservation) await observePipeline(db,project.id,body.head,body.pipelineObservation);
   return { head: result.head, recorded: result.report?.state === 'pending', historyRewritten: false };
 }
 
@@ -583,6 +636,7 @@ export async function analyzeInputs(db: Db, body: { updatedAt: string; commit: s
   if ((await db.query("select 1 from planning_jobs where project_id=$1 and kind='input_diff' and status in ('queued','running')", [project.id])).rowCount) {
     throw new ProjectError('INVALID_TRANSITION', { message: '진행 중인 차이 분석이 끝난 뒤 다시 분석하세요.' });
   }
+  await lockGraph(db as PoolClient, project.id);
   const previous = (await db.query<{ v: number; commit_sha: string; md_list: string[] }>(
     'select v,commit_sha,md_list from input_versions where project_id=$1 order by v desc limit 1', [project.id])).rows[0];
   if (!previous) throw new Error('입력 v1이 없습니다.');
@@ -612,7 +666,8 @@ export async function analyzeInputs(db: Db, body: { updatedAt: string; commit: s
   const jobId = await createPlanningJob(db, { projectId: project.id, kind: 'input_diff', instruction: body.instr ?? '', stepKeys: INPUT_STEPS });
   await log(db, { id: jobId, project_id: project.id }, `입력 v${String(version)} 고정 — 차이 분석 대기`);
   await enqueueJob(db, { projectId: project.id, kind: 'input_diff', epoch, dedupKey: `input_diff:${jobId}:1`,
-    payload: { planningJobId: jobId, runNo: 1, version, commit: body.commit, previousCommit: previous.commit_sha, instruction: body.instr ?? '', resumeStep: null } });
+    payload: { planningJobId: jobId, runNo: 1, version, commit: body.commit, previousCommit: previous.commit_sha, instruction: body.instr ?? '', resumeStep: null,
+      wbs: await wbsSnapshot(db, project.id) } });
   await touchProject(db, project.id);
   return { jobId };
 }
@@ -623,8 +678,8 @@ export async function retryInputs(db: Db, body: { updatedAt: string; version: nu
   if (!(await sameTime(db, project.updated_at, body.updatedAt))) throw new ProjectError('VERSION_CONFLICT', { details: { current: { updatedAt: project.updated_at }, changes: [] } });
   const job = (await db.query<PlanningJob & { version: string | null }>(
     `select j.id,j.project_id,j.kind,j.run_no,j.status,j.instruction,
-       (select payload->>'version' from runner_jobs r where r.payload->>'planningJobId'=j.id::text order by r.created_at limit 1) version
-     from planning_jobs j where j.project_id=$1 and j.kind='input_diff' order by j.created_at desc limit 1 for update`, [project.id])).rows[0];
+       (select payload->>'version' from runner_jobs r where r.payload->>'planningJobId'=j.id::text order by r.record_no limit 1) version
+     from planning_jobs j where j.project_id=$1 and j.kind='input_diff' order by j.record_no desc limit 1 for update`, [project.id])).rows[0];
   if (!job || job.status !== 'failed' || Number(job.version) !== body.version) {
     throw new ProjectError('INVALID_TRANSITION', { message: `입력 v${String(body.version)}의 실패한 차이 분석이 없습니다.` });
   }

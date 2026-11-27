@@ -13,6 +13,7 @@
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint . --max-warnings 0",
     "test": "node scripts/vitest.ts",
+    "test:host": "node scripts/vitest.ts --config vitest.host.config.ts",
     "test:cli-update:real": "node --test test/cli-update/npm.real.ts",
     "test:github:real": "node scripts/github.real.ts",
     "client:generate": "node scripts/client.ts",
@@ -20,12 +21,14 @@
     "check": "pnpm run typecheck && pnpm run lint && pnpm run test"
   },
   "dependencies": {
-    "pino": "10.4.0"
+    "pino": "10.4.0",
+    "yaml": "2.9.1"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@types/node": "26.6.6",
     "eslint": "10.15.0",
+    "fast-check": "4.10.2",
     "globals": "17.14.0",
     "typescript": "6.0.3",
     "typescript-eslint": "8.74.0",

@@ -81,7 +81,9 @@ export const DepType = Named('DepType', ...v.DEPENDENCY_TYPES);
 export const DesignKind = Named('DesignKind', ...v.DESIGN_KINDS);
 export const Confidence = Named('Confidence', ...v.CONFIDENCES);
 export const ReadinessKey = AnyOf(
-  'claude', 'codex', 'git', 'node', 'pnpm', 'pg', 'repo', 'disk', 'subs', 'obs', 'gh', 'lfs', 'reports',
+  // font: 야간 화면 비교의 고정 글꼴 설치 여부(M7-03 결정 12, warn만).
+  // render: 화면 비교 기준 렌더러의 네트워크 차단 방식(M7-03 결정 16). 네임스페이스면 ok, 실행 인자 차단만이면 warn(실행은 허용).
+  'claude', 'codex', 'git', 'node', 'pnpm', 'pg', 'repo', 'disk', 'subs', 'obs', 'gh', 'lfs', 'reports', 'font', 'render',
 );
 export const ReadinessStatus = AnyOf('ok', 'warn', 'fail');
 export const ObservationState = AnyOf('ok', 'unconfirmed');

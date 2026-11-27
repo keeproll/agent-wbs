@@ -639,3 +639,27 @@ test('polling은 명령 우선·ETag 정책·동일 시각 메시지의 영속 �
   expect((await reopen()).snapshot.inbox.map((m) => m.id)).toEqual(['2']);
   expect(r.heartbeatSeconds).toBe(30);
 });
+
+test('실패한 시도의 ack 지시는 재시작·재ack 뒤에도 보존하고 성공 결과의 재전송 확인 때만 없앤다', async () => {
+  const message = { id: 'instruction-1', taskKey: 'TASK-0001', attemptId: null, toAgent: 'Codex' as const, type: '추가 지시' as const, body: '이전 지시', pendingNext: true, createdAt: '2026-11-27T00:00:00Z' };
+  await state.update(draft => { draft.inbox = [message]; });
+  const r = runner();
+  await r.ackMessage(message.id, 'attempt-1');
+  expect((await reopen()).snapshot).toMatchObject({ inbox: [], instructions: [{ message, attemptId: 'attempt-1' }] });
+  const resumed = runner();
+  expect(resumed.retainedMessages).toEqual([message]);
+  await resumed.ackMessage(message.id, 'attempt-2');
+  await resumed.outbox.enqueue('reportAttemptResult', { epoch: 0, params: { attemptId: 'attempt-2' }, body: { fence: 1, summary: '성공', changedFiles: [], evidence: [] } });
+  await reopen();
+  handle = (req, res) => res.writeHead(req.path.endsWith('/result') ? 201 : 204).end();
+  await new Outbox(state, api()).flush();
+  expect(state.snapshot).toMatchObject({ instructions: [], outbox: [] });
+});
+
+test('초기화는 이전 Task 지시도 버려 새 프로젝트 실행에 섞지 않는다', async () => {
+  await state.update(draft => { draft.inbox = [{ id: 'm', taskKey: 'TASK-0001', attemptId: null, toAgent: 'Codex', type: '추가 지시', body: '이전 프로젝트', pendingNext: true, createdAt: '2026-11-27T00:00:00Z' }]; });
+  await runner().ackMessage('m', 'old-attempt');
+  expect(state.snapshot).toMatchObject({ instructions: [expect.any(Object)] });
+  await state.observeEpoch(1);
+  expect((await reopen()).snapshot).toMatchObject({ instructions: [], inbox: [], outbox: [] });
+});

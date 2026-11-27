@@ -47,11 +47,11 @@ test('빈 DB와 0014·0016(master)·0017·0018·0019·0020·0021 단계 DB가 �
   expect(journal.entries.slice(15).map((e) => e.tag)).toEqual([
     '0015_20261126_platform_epoch_lock', '0016_20261126_contract_sync', '0017_20261126_usage_reset_unknown',
     '0018_20261126_message_read_touch', '0019_20261126_schedule_defaults', '0020_20261126_execution_basis',
-    '0021_20261127_project_followup', '0022_20261127_evidence_reference', '0023_20261127_project_observation_version', '0024_20261127_settings_followup', '0025_20261127_setting_versions']);
+    '0021_20261127_project_followup', '0022_20261127_evidence_reference', '0023_20261127_project_observation_version', '0024_20261127_settings_followup', '0025_20261127_setting_versions', '0026_20261127_ci_reports', '0027_20261127_planning_event_order']);
   const fresh = await database('fresh');
   await runMigrations(fresh);
   const expected = await schemaOf(fresh);
-  for (const stage of [14, 16, 17, 18, 19, 20, 21, 22, 23, 24]) {
+  for (const stage of [14, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26]) {
     const pool = await database(String(stage));
     const folder = await mkdtemp(join(tmpdir(), `awbs-stage-${String(stage)}-`));
     try {
@@ -64,7 +64,21 @@ test('빈 DB와 0014·0016(master)·0017·0018·0019·0020·0021 단계 DB가 �
       values('기존 프로젝트','','','','','active','2000-01-01T20:00:00Z')`);
     let attempts: unknown[] = [];
     if (stage === 23) {
-      await seedDemo(pool, base.href);
+      // 최신 seed에 필요한 관측 칸만 잠시 빌린 뒤 0023 구조로 되돌려 실제 업그레이드를 검사한다.
+      await pool.query("alter table projects add column pipeline_observations jsonb not null default '{}'");
+      const sequenceTables = ['planning_jobs','task_estimates','change_proposals','runner_jobs','task_attempts','attempt_observations','runner_hosts','runner_concurrency_log','agent_usage','task_history','ci_steps','runner_sessions','change_proposal_events','planning_job_logs','planning_reviews'];
+      for (const table of sequenceTables) await pool.query(`alter table ${table} add column record_no bigint default 1`);
+      await pool.query("alter table ci_runs add column note text,add column e2e jsonb,add column github_status jsonb,add column finished_at timestamptz,add column cause_candidates jsonb not null default '[]'");
+      await pool.query('alter table merge_queue add column merged_at timestamptz');
+      await pool.query('alter table flaky_tests add column last_failed_at timestamptz');
+      try { await seedDemo(pool, base.href); }
+      finally {
+        await pool.query('alter table projects drop column pipeline_observations');
+        await pool.query('alter table ci_runs drop column note,drop column e2e,drop column github_status,drop column finished_at,drop column cause_candidates');
+        await pool.query('alter table merge_queue drop column merged_at');
+        await pool.query('alter table flaky_tests drop column last_failed_at');
+        for (const table of sequenceTables) await pool.query(`alter table ${table} drop column record_no`);
+      }
       await pool.query('alter table counters disable trigger counter_monotone');
       await pool.query("update counters set value=1 where kind='message'");
       await pool.query('alter table counters enable trigger counter_monotone');
@@ -88,7 +102,49 @@ test('빈 DB와 0014·0016(master)·0017·0018·0019·0020·0021 단계 DB가 �
       expect(Number((await pool.query("select value from counters where kind='message'")).rows[0]?.value)).toBe(3);
       expect((await pool.query('select assume_rate,threshold_days from schedule_policy')).rows[0]).toEqual({ assume_rate: '0.8', threshold_days: '3' });
     }
+    // 0027: 기존 Planning 이벤트의 수신 순번은 업그레이드 전 정렬(시각·id)을 그대로 보존한다.
+    for (const [table, ordering] of [['change_proposal_events', 'created_at,id'], ['planning_job_logs', 'at,created_at,id'], ['planning_reviews', 'created_at,id']] as const) {
+      const same = (await pool.query<{ same: boolean }>(`select coalesce(array_agg(id order by record_no) = array_agg(id order by ${ordering}),true) same from ${table}`)).rows[0]?.same;
+      expect(same, `단계 ${String(stage)} ${table}`).toBe(true);
+    }
     expect(await schemaOf(pool), `단계 ${String(stage)}`).toBe(expected);
     expect((await pool.query<{ n: number }>('select count(*)::int n from drizzle.__drizzle_migrations')).rows[0]?.n, `단계 ${String(stage)}`).toBe(journal.entries.length);
   }
 }, 120_000);
+
+/*
+ * M5·M7 통합: CI 마이그레이션은 M7-04 브랜치에서 배정 번호 0041(when 1795740000041)로 만들었고,
+ * 통합하면서 최종 순번 0026(when 1795740000026)으로 다시 매겼다. 내용(hash)은 그대로다.
+ * 왜: 브랜치 시험 DB처럼 옛 번호로 이미 적용한 DB가 새 journal로 올릴 때 같은 내용을 다시 실행하거나,
+ * 반대로 무언가를 빠뜨린 채 조용히 넘어가면 안 된다. migrate.ts의 적용 누락 검사(hash 대조)가 통과해야 한다.
+ */
+test('옛 번호 0041로 CI 마이그레이션을 적용한 DB가 0026 재번호 journal로 누락 없이 올라간다', async () => {
+  const source = fileURLToPath(new URL('../migrations/', import.meta.url));
+  const journal = JSON.parse(await readFile(join(source, 'meta/_journal.json'), 'utf8')) as { entries: { idx: number; tag: string; when: number }[] };
+  const ci = journal.entries.find((e) => e.tag === '0026_20261127_ci_reports');
+  expect(ci?.when).toBe(1795740000026);
+  if (!ci) return;
+  const fresh = await database('renumber_fresh');
+  await runMigrations(fresh);
+  const expected = await schemaOf(fresh);
+  const pool = await database('renumber_old');
+  const folder = await mkdtemp(join(tmpdir(), 'awbs-stage-renumber-'));
+  try {
+    // 브랜치 DB 상태: 0025까지 + CI를 옛 번호 0041(when …041)로 적용. 통합에서 더한 0027 이후는 아직 없다.
+    await cp(source, folder, { recursive: true });
+    await cp(join(source, '0026_20261127_ci_reports.sql'), join(folder, '0041_20261127_ci_reports.sql'));
+    await writeFile(join(folder, 'meta/_journal.json'), JSON.stringify({ ...journal,
+      entries: journal.entries.filter((e) => e.idx <= ci.idx).map((e) => e === ci ? { ...e, tag: '0041_20261127_ci_reports', when: 1795740000041 } : e) }));
+    await migrate(drizzle(pool), { migrationsFolder: folder });
+  } finally { await rm(folder, { recursive: true, force: true }); }
+  const recorded = async () => (await pool.query<{ created_at: string }>('select created_at::text from drizzle.__drizzle_migrations order by id')).rows.map((row) => row.created_at);
+  expect((await recorded()).at(-1)).toBe('1795740000041');
+  // 옛 기록 시각(…041)이 그대로면 Drizzle은 그보다 작은 when(0027 = …027)을 건너뛰고, 누락 검사가 시작을 막는다.
+  // runMigrations는 이미 적용한 hash의 기록 시각을 지금 journal 값으로 맞춘 뒤 나머지를 적용한다.
+  await runMigrations(pool);
+  expect(await schemaOf(pool)).toBe(expected);
+  const after = await recorded();
+  expect(after).toHaveLength(journal.entries.length);
+  expect(after).toContain(String(ci.when));
+  expect(after).not.toContain('1795740000041');
+}, 60_000);

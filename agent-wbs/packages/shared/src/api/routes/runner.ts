@@ -54,6 +54,11 @@ const CleanupProof = Type.Union([
 ]);
 const CommandItems = List(Body({ name: Text, ok: Type.Boolean(), detail: Type.String() }));
 /** contracts §4.1 근거 고정: 단계별로 해당하는 값만 보낸다. */
+const headProof = {
+  qaHeadSha:c.Sha,headSha:c.Sha,preserved:Type.Boolean(),
+  parents:List(c.Sha,{ minItems:2,maxItems:2 }),
+  autoMergeTreeSha:c.Sha,headTreeSha:c.Sha,additionalChanges:Type.Boolean(),
+};
 const ciShas = {
   baseSha: Opt(c.Sha),
   headSha: Opt(c.Sha),
@@ -68,6 +73,8 @@ const ciStart = {
   attemptId: Opt(c.Id),
   ref: Text,
   pr: Opt(c.PositiveInt4),
+  /** pr의 head 브랜치 이름. ① 보고에서는 ref(시도 브랜치)와 같아야 한다(조정자 결정 1). pr과 함께 보낸다. */
+  prHead: Opt(Text),
   trigger: Text,
   ...ciShas,
   pipelineSha: c.Sha,
@@ -92,6 +99,12 @@ const resultCommon = {
   evidence: List(c.Id),
   failure: Opt(Type.String()),
   tokens: Opt(c.Count),
+  /**
+   * 개발·재작업 시도가 push한 agent 브랜치의 PR 번호와 그 PR의 head 브랜치 이름(M5·M7 통합 조정자 결정 1).
+   * 서버는 prHead가 이 시도의 브랜치와 같을 때만 받는다. 둘은 함께 보낸다.
+   */
+  pr: Opt(c.PositiveInt4),
+  prHead: Opt(Text),
 };
 /** 시도 종류와 본문 형식의 일치는 서버가 저장된 kind로 판정한다. */
 export const AttemptResult = Type.Union([
@@ -110,10 +123,10 @@ const JobKindSchema = AnyOf(...JOB_KINDS);
 const lease = { id: c.Id, leaseUntil: c.Timestamp, fence };
 const Job = <const K extends JobKind, P extends Record<string, Parameters<typeof Opt>[0]>>(kind: K, payload: P) =>
   Type.Object({ ...lease, kind: AnyOf(kind), payload: Type.Object(payload) });
-/** 현재 내용과 그 hash. hash는 재판단 보고에 그대로 돌려보낸다(data-model §2.3-1). */
+/** workType은 분할 상속을 정하는 별도 정보다. content와 subjectHash의 JudgedContent 정의에는 넣지 않는다. */
 const JudgedTasks = List(
   // 생략은 이전 서버 작업의 최초 등급(null)이다. 새 추정 작업은 Task마다 발행 시점 번호를 담는다.
-  Type.Object({ taskKey: c.TaskKey, subjectHash: c.Sha256, content: m.JudgedContent, gradeChange: Opt(Nullable(c.Uuid)) }),
+  Type.Object({ taskKey: c.TaskKey, workType: c.WorkType, subjectHash: c.Sha256, content: m.JudgedContent, gradeChange: Opt(Nullable(c.Uuid)) }),
 );
 /**
  * 판단할 CP의 snapshot. 내용과 hash는 같은 시점의 값이며 Runner는 이것만으로 판단한다.
@@ -138,12 +151,31 @@ const JudgedProposal = Type.Union([
     splitTasks: List(Type.Object({ taskKey: c.TaskKey, content: m.JudgedContent }), { minItems: 1 }),
   }),
 ]);
+const planningRun = { planningJobId: c.Id, runNo: c.PositiveInt4, version: c.PositiveInt4 };
+const tech = {
+  techDecisionVersion: c.Sha256,
+  techDecisions: List(Type.Object({
+    id: c.Id, tdKey: Type.String(), title: Type.String(), status: m.Decision.properties.status, authority: m.Decision.properties.authority,
+    updatedAt: c.Timestamp, content: c.Json,
+  })),
+};
+const WbsSnapshot = Type.Object({
+  phases: List(Type.Object({ id: c.Id, wps: List(Type.Object({ id: c.Id, tasks: List(c.TaskKey) })) })),
+  tasks: List(Type.Object({ taskKey: c.TaskKey, workType: c.WorkType, wp: c.Id, status: c.TaskStatus, subjectHash: c.Sha256, content: m.JudgedContent })),
+  dependencies: List(Type.Object({ pred: c.TaskKey, succ: c.TaskKey, type: c.DepType })),
+});
 export const ClaimedJob = Type.Union(
   [
     Job('repo_check', { repoCheckId: c.Id, url: c.RepoUrl }),
     Job('github_check', { mode: c.GithubMode }),
-    Job('bootstrap', { commit, instruction: Type.String(), resumeStep: Nullable(Type.String()) }),
+    Job('bootstrap', {
+      ...planningRun, ...tech, commit, previousCommit: Nullable(commit), instruction: Type.String(), resumeStep: Nullable(Type.String()),
+      techConstraints: List(Type.Object({ id: c.Id, name: Text, level: AnyOf('must', 'ban', 'cond'), condition: Nullable(Type.String()) })),
+      subagentDefs: List(Type.Object({ id: c.Id, defKey: Text, version: c.PositiveInt4, agent: c.Agent, role: Text })),
+    }),
     Job('input_diff', {
+      ...planningRun,
+      wbs: WbsSnapshot,
       commit,
       previousCommit: commit,
       instruction: Type.String(),
@@ -152,11 +184,25 @@ export const ClaimedJob = Type.Union(
     Job('planning', {
       tasks: JudgedTasks,
       policy: c.Json,
-      proposal: Nullable(JudgedProposal),
+      proposal: JudgedProposal,
+      planning: Type.Null(),
+    }),
+    Job('planning', {
+      tasks: JudgedTasks,
+      policy: c.Json,
+      proposal: Type.Null(),
+      planning: Type.Object({ id: c.Id, title: Text, scope: Type.String() }),
+    }),
+    // 기존 Task 재판단은 CP·세션 없이 대상 Task가 있어야 한다.
+    Job('planning', {
+      tasks: Type.Array(JudgedTasks.items, { minItems: 1 }),
+      policy: c.Json,
+      proposal: Type.Null(),
+      planning: Type.Null(),
     }),
     // 재판단(M2-08)도 같은 모양이고, 이유·대상 역할은 policy.rejudge에 싣는다.
     Job('estimate', { tasks: JudgedTasks, policy: m.EstimatePolicy }),
-    Job('split', { tasks: JudgedTasks, policy: c.Json }),
+    Job('split', { tasks: JudgedTasks, policy: c.Json, wbs: WbsSnapshot }),
     Job('attempt', {
       taskKey: c.TaskKey,
       kind: c.AttemptKind,
@@ -343,8 +389,10 @@ export const runnerOperations = [
         items: List(
           Type.Object({
             id: c.Id,
+            key: Type.String({ pattern: '^[a-z][a-z0-9-]{0,63}$' }),
             agent: c.Agent,
             version: c.Int4Count,
+            // owner M5-02: file 내용의 UTF-8 바이트를 SHA-256(hex)으로 계산한다.
             hash: Type.String(),
             file: Type.String(),
             sandbox: Type.String(),
@@ -498,6 +546,8 @@ export const runnerOperations = [
       treeHash: c.Sha,
       changes: List(InputDiff),
       commits: List(PushedCommit),
+      // 입력 head와 같은 main 커밋에서 별도로 읽은 정의. CI 실행 보고로 대신하지 않는다.
+      pipelineObservation: Opt(Body({ baseSha: c.Sha, pipelineSha: Nullable(c.Sha), definition: m.Pipeline })),
     }),
     responses: { 200: Type.Object({ head: c.Sha, recorded: Type.Boolean(), historyRewritten: Type.Boolean() }) },
     errors: ['INVALID_TRANSITION', 'VERSION_CONFLICT'],
@@ -530,6 +580,21 @@ export const runnerOperations = [
   }),
   operation({
     ...runner,
+    id: 'getCiJob',
+    method: 'GET',
+    path: '/api/runner/ci/jobs/:id',
+    summary: '예약한 CI job의 검증 근거와 재실행 원본 조회',
+    query: Body({ fence }),
+    responses: { 200: Body({
+      runnable:Type.Boolean(),taskKey:Nullable(c.TaskKey),branch:Nullable(Type.String()),
+      hold:Nullable(Body({ hostId:Type.String(),bootId:Nullable(Type.String()),processGroup:Nullable(c.PositiveInt4),slotState:AnyOf('none','reserved','active','unconfirmed') })),
+      verification:Nullable(Body({ passed:Type.Boolean(),headSha:c.Sha,specRevision:c.Count })),
+      source:Nullable(Body({ stage:c.CiStage,ref:Type.String(),pr:Nullable(c.PositiveInt4),baseSha:Nullable(c.Sha),headSha:c.Sha,pipelineSha:c.Sha })),
+    }) },
+    errors:['INVALID_TRANSITION','EXTERNAL_WRITE_BLOCKED'],
+  }),
+  operation({
+    ...runner,
     id: 'startCiRun',
     method: 'POST',
     path: '/api/runner/ci/runs',
@@ -552,6 +617,15 @@ export const runnerOperations = [
         fence: Nullable(fence),
         steps: Opt(List(m.CiStep)),
         status: Opt(c.CiStatus),
+        failScope: Opt(AnyOf('baseline', 'task')),
+        causeCandidates:Opt(List(Body({ commit:c.Sha }),{ uniqueItems:true })),
+        note:Opt(Type.String()),
+        finishedAt:Opt(c.Timestamp),
+        e2e:Opt(m.CiE2e),
+        githubStatus:Opt(m.CiGithubStatus),
+        flakyTests:Opt(List(Body({ testKey:Text,rate:Type.Number({ minimum:0,maximum:1 }),lastFailedAt:c.Timestamp }))),
+        // ④ 실패 뒤 마지막 정상 커밋 복구 결과(M7-03 결정 7·11). none=복구할 직전 통과 배포 없음(commit null). fail·none이면 서버가 서비스 없음 경보를 만든다.
+        deployRestore:Opt(Body({ commit:Nullable(c.Sha),status:AnyOf('pass','fail','none') })),
         logExcerpt: Opt(Type.String()),
         artifacts: Opt(List(Type.String())),
         url: Opt(c.HttpUrl),
@@ -579,9 +653,16 @@ export const runnerOperations = [
       testedTreeSha: Opt(c.Sha),
       actualMergeSha: Opt(c.Sha),
       actualTreeSha: Opt(c.Sha),
+      mergedAt:Opt(c.Timestamp),
+      // H→H′의 자동 병합 보존과 실제 PR 병합 부모를 서버의 저장 근거와 대조한다.
+      headSync: Opt(Body({
+        ...headProof,
+        chain:Opt(List(Body(headProof),{ minItems:2 })),
+      })),
+      mergeParents: Opt(List(c.Sha, { minItems: 2, maxItems: 2 })),
     }),
     responses: { 204: null },
-    errors: ['INVALID_TRANSITION', 'GATE_NOT_PASSED', 'EXTERNAL_WRITE_BLOCKED'],
+    errors: ['INVALID_TRANSITION', 'GATE_NOT_PASSED', 'EXTERNAL_WRITE_BLOCKED', 'MERGE_MISMATCH'],
   }),
   operation({
     ...runner,
@@ -677,7 +758,7 @@ export const runnerOperations = [
         inputCheckRequest: Opt(c.Count),
         readinessCheckRequest: Opt(c.Count),
         githubMode: Opt(c.GithubMode),
-        ci: Type.Object(m.CiSettings),
+        ci: Type.Object({ ...m.CiSettings,quarantined:List(Text,{ uniqueItems:true }) }),
         // Runner가 보고할 Claude 모델(설정값, 초기값=Q-06 승인표). owner 2026-11-26 아이템 8
         claudeModels: List(Type.String(), { minItems: 1, uniqueItems: true }),
         // 서버에 등록된 CLI 조합별 관측 등급(G§6.7-8). Runner 준비 점검 obs가 실행 조합과 대조한다.
@@ -692,6 +773,14 @@ export const runnerOperations = [
   /* ---- 명령·작업(contracts §3.2) ---- */
   operation({
     ...runner,
+    id: 'getExecutionHolds',
+    method: 'GET',
+    path: '/api/runner/holds',
+    summary: '현재 Runner principal·epoch의 미해제 실행 보유. 읽기 전용 재시작 대조',
+    responses: { 200: Type.Object({ holds: List(m.ExecutionHold) }) },
+  }),
+  operation({
+    ...runner,
     id: 'getCommands',
     method: 'GET',
     path: '/api/runner/commands',
@@ -701,7 +790,8 @@ export const runnerOperations = [
       200: Type.Object({
         currentEpoch: c.Epoch,
         commands: List(
-          Type.Object({ id: c.Id, kind: AnyOf('reset-cleanup'), epoch: c.Epoch, payload: c.Json }),
+          Type.Object({ id: c.Id, kind: AnyOf('reset-cleanup'), epoch: c.Epoch,
+            payload: Type.Object({ holds: Opt(List(m.ExecutionHold)) }, { additionalProperties: true }) }),
         ),
       }),
     },

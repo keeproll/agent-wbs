@@ -26,7 +26,7 @@ export function judgementOf(
   if (record?.schemaVersion !== 1 || !Array.isArray(record.items)) return missing;
   const found = (record as { items: readonly Partial<JudgedRules['items'][number]>[] }).items.filter(item => item?.rule === rule);
   const [item] = found;
-  if (!item || found.length !== 1 || !currentHash || item.subjectHash !== currentHash) return missing;
+  if (!item || found.length !== 1 || !currentHash || item.subjectHash !== currentHash || item.sourceRef !== `sha256:${currentHash}`) return missing;
   const { result, agreedBy, basis } = item;
   if (result !== 'met' && result !== 'not_met' || !filled(basis) || !utcIso(item.judgedAt) || !filled(item.sourceRef)) return missing;
   if (!Array.isArray(agreedBy) || agreedBy.length !== AGENTS.length || AGENTS.some(agent => !agreedBy.includes(agent))) {
@@ -35,7 +35,7 @@ export function judgementOf(
   return { state: result, detail: `${result === 'met' ? '충족' : '불충족'} — ${basis} (${agreedBy.join(' · ')})` };
 }
 
-/** Subject hashes by Task key. Only the server computes them; a Task without one counts as unjudged. */
+/** Task 키별 서버 계산값. Runner가 보낸 판단 입력 지문과 대조하며, 계산값이 없으면 판단도 없다. */
 export interface SubjectHashes {
   before: Readonly<Record<string, string>>;
   after: Readonly<Record<string, string>>;

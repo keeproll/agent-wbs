@@ -31,7 +31,7 @@ async function loadPlanning(client: PoolClient | Pool, id: string, lock = false)
 
 async function reviewsOf(client: PoolClient | Pool, planningId: string): Promise<ReviewRow[]> {
   return (await client.query<ReviewRow>(
-    `select id,topic,kind,codex,claude,choice,memo,${iso('updated_at')} as updated_at from planning_reviews where planning=$1 order by created_at,id`, [planningId])).rows;
+    `select id,topic,kind,codex,claude,choice,memo,${iso('updated_at')} as updated_at from planning_reviews where planning=$1 order by record_no`, [planningId])).rows;
 }
 
 async function planningView(client: PoolClient | Pool, row: PlanningRow) {
@@ -39,7 +39,7 @@ async function planningView(client: PoolClient | Pool, row: PlanningRow) {
     client.query<{ agent: string; analysis: { summary?: string; items?: string[] }; at: string }>(
       `select agent,analysis,${iso('updated_at')} as at from planning_analyses where planning=$1 order by agent`, [row.id]),
     reviewsOf(client, row.id),
-    client.query<{ id: string }>("select id from change_proposals where source='planning' and source_id=$1 and deleted_at is null order by created_at desc limit 1", [row.id]),
+    client.query<{ id: string }>("select id from change_proposals where source='planning' and source_id=$1 and deleted_at is null order by record_no desc limit 1", [row.id]),
   ]);
   return {
     id: row.id, planningKey: row.planning_key, title: row.title, scope: typeof row.scope === 'string' ? row.scope : JSON.stringify(row.scope),

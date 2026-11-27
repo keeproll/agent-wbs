@@ -66,6 +66,8 @@ const EXTRA_BODY: Record<string, Record<string, unknown>> = {
   addSplitException: { rule: 'one', why: 'x' },
   updateTaskOutputs: { outputs: [] },
   updateTaskDesign: { content: {} },
+  updateFlakyTest: { quarantined: false },
+  updateCiSettings: { retry: 1 },
 };
 /** 경로 변수도 형식에 맞는 값을 넣는다. 형식이 틀리면 시각보다 경로 변수 오류가 먼저 나온다. */
 const urlOf = (op: Operation) => op.path.replace(':messageId', draftId).replace(':taskKey', 'TASK-0001').replace(':kind', 'DB').replace(/:\w+/g, UUID);

@@ -9,7 +9,7 @@ import { approvalSpec, attempt, basis, claim, completion, failedHistory, pass, r
 // Independently transcribed from owner Q-05 / data-model §3.1 (b258334).
 const transitions: Record<TaskStatus, TaskStatus[]> = {
   planning: ['approval', 'cancelled'], approval: ['ready', 'planning', 'cancelled'],
-  ready: ['running', 'cancelled'], running: ['qa', 'verifying', 'failed', 'paused'],
+  ready: ['running', 'cancelled'], running: ['qa', 'verifying', 'failed', 'paused', 'rework'],
   failed: ['running', 'qa', 'verifying'], paused: ['running', 'qa', 'verifying'],
   qa: ['gate', 'rework', 'paused', 'failed', 'qa'],
   verifying: ['gate', 'rework', 'paused', 'failed', 'verifying'], rework: ['running'],
@@ -33,6 +33,22 @@ const allowed: Record<TaskStatus, readonly AttemptKind[]> = {
   failed: ['dev', 'qa', 'rework', 'reverify'], paused: ['dev', 'qa', 'rework', 'reverify'],
   done: [], cancelled: [],
 };
+
+test.each(['dev', 'rework'] as const)('조정자 결정: %s의 실제 ① 실패는 실패한 시도와 재작업 필요로 끝난다', kind => {
+  expect(finishAttempt('running', { kind, status: 'running' }, 'task-check-failed', false)).toEqual({ taskStatus: 'rework', attemptStatus: 'failed' });
+});
+
+test('① 실패 사건을 QA 결과 대신 쓰거나 끝난 시도에 적용할 수 없다', () => {
+  expect(() => finishAttempt('qa', { kind: 'qa', status: 'running' }, 'task-check-failed', false)).toThrow();
+  expect(() => finishAttempt('running', { kind: 'dev', status: 'completed' }, 'task-check-failed', false)).toThrow();
+});
+
+test('① 실패 기록이 있는 개발 시도만 QA 없이 자동 재작업을 시작할 수 있다', () => {
+  const input = claim({ status: 'rework', kind: 'rework', taskCheckFailed: true, previousAttempt: { ...attempt, kind: 'dev', status: 'failed' } });
+  expect(claimIssue(input)).toBeNull();
+  expect(claimIssue({ ...input, taskCheckFailed: false })).not.toBeNull();
+  expect(claimIssue({ ...input, previousAttempt: { ...attempt, kind: 'qa', status: 'failed' } })).not.toBeNull();
+});
 
 describe('owner Q-05: state x attempt-kind claim table', () => {
   for (const status of TASK_STATUSES) {

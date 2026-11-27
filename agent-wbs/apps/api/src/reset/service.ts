@@ -1,4 +1,4 @@
-import type { PoolClient } from '@awbs/db';
+import { COMMAND_PAYLOAD_SQL, type PoolClient } from '@awbs/db';
 import { ProjectError } from '../project/errors.ts';
 import { iso } from '../project/db.ts';
 import { redactText } from '../platform/redact.ts';
@@ -60,7 +60,7 @@ export async function listResets(db: PoolClient) {
 
 export async function getCommands(db: PoolClient, epoch: number) {
   // 차단 중인 원격 명령은 원장에 남겨 둔다. 권한 복구 전에는 Runner가 쓰기 명령을 받지 않는다.
-  const commands = (await db.query(`select id,kind,epoch,payload from runner_commands where status<>'done'
+  const commands = (await db.query(`select id,kind,epoch,${COMMAND_PAYLOAD_SQL} as payload from runner_commands where status<>'done'
     and (not (payload ? 'baseCommit') or not exists(select from external_write_authority where state='blocked')) order by created_at,id`)).rows;
   return { currentEpoch: epoch, commands };
 }

@@ -67,7 +67,7 @@ test('M4-06 pushReset: 시스템 키 목록을 매번 확인하고, 다른 키�
   await expect(withKey.pushReset(URL_, repo, next, 'f'.repeat(40))).rejects.toThrow(/원격 main/);
   expect(pushSystemCommit).not.toHaveBeenCalled();
   await withKey.pushReset(URL_, repo, next, parent);
-  expect(pushSystemCommit).toHaveBeenCalledWith(next, parent, systemDeployKey);
+  expect(pushSystemCommit).toHaveBeenCalledWith(next, parent, systemDeployKey, expect.any(Function));
   model.deployKeys.push({ id: 8, read_only: true });
   await expect(withKey.pushReset(URL_, repo, next, parent)).rejects.toThrow(/시스템 키 외/);
   expect(pushSystemCommit).toHaveBeenCalledTimes(1);

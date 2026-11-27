@@ -27,6 +27,7 @@ export async function requestJudgement(client: PoolClient, cp: { id: string; pro
   const payload = {
     tasks: [],
     policy: { judgedRules: JUDGED_RULES.filter((rule) => ev.loaded.settings.enabled[rule]) },
+    planning: null,
     proposal: { id: cp.id, ops: stripJudgements(cp.ops), targets: ev.targets, splitSubjectHash: ev.splitHash, splitTasks: ev.splitTasks },
   };
   return (await client.query<{ id: string }>(
@@ -51,7 +52,7 @@ export async function assertJob(client: PoolClient, jobId: string, fence: number
 export async function assertGradeChange(client: PoolClient, payload: unknown, taskId: string): Promise<void> {
   const latest = (await client.query<{ task_key: string; marker: string | null }>(
     `select t.task_key,(select h.ref->>'gradeChange' from task_history h where h.task=t.id and h.ref ? 'gradeChange'
-      order by h.at desc,h.created_at desc limit 1) marker from tasks t where t.id=$1`, [taskId])).rows[0];
+      order by h.record_no desc limit 1) marker from tasks t where t.id=$1`, [taskId])).rows[0];
   const snapshot = payload as { tasks?: { taskKey: string; gradeChange?: string | null }[]; policy?: { gradeChange?: string } } | null;
   const task = snapshot?.tasks?.find(t => t.taskKey === latest?.task_key);
   // 이전 버전의 단일 Task 고정 작업은 policy에 번호가 있고, 번호 없는 일반 작업은 최초 등급(null) 기준이다.

@@ -4,13 +4,25 @@ import * as c from './common.ts';
 
 const { AnyOf, Nullable, Opt, List, Text } = c;
 
+/** reset-cleanup의 holds[]와 정상 재시작 조회가 같은 DB 필드 이름을 쓴다. lease 정보는 조회 때만 덧붙인다. */
+export const ExecutionHold = Type.Object({
+  id: c.Id, project_id: Nullable(c.Id), job: c.Id, attempt: Nullable(c.Id), epoch: c.Epoch,
+  host_id: Nullable(Text), boot_id: Nullable(Text), fence: Nullable(c.Fence), pgid: Nullable(c.PositiveInt4), cgroup: Nullable(Text),
+  task: Nullable(c.Id), conflict_group: Nullable(Text), agent: c.Agent, slots: c.Int4Count, heavy: Type.Boolean(),
+  slot_state: AnyOf('none', 'reserved', 'active', 'unconfirmed'),
+  lock_state: AnyOf('none', 'held', 'orphaned', 'handed_over', 'released'),
+  lock_from_job: Nullable(c.Id), handed_to_job: Nullable(c.Id), release_proof: Nullable(AnyOf('no_process', 'group_empty', 'boot_changed')),
+  closed_at: Nullable(c.Timestamp), created_at: c.Timestamp, updated_at: c.Timestamp,
+  lease_owner: Opt(Nullable(Text)), lease_until: Opt(Nullable(c.Timestamp)),
+}, { title: 'ExecutionHold' });
+
 /* ---- 판단 기록(data-model §2.3-1, D-33·D-34). 이름과 구조를 그대로 쓴다. ---- */
 const judgement = {
   result: AnyOf('met', 'not_met'),
   agreedBy: List(c.Agent, { minItems: 2, uniqueItems: true }),
   basis: Text,
   judgedAt: c.Timestamp,
-  sourceRef: Text,
+  sourceRef: Type.String({ pattern: '^sha256:[0-9a-f]{64}$', description: '판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다.' }),
 };
 const splitRule = AnyOf('revert', 'contract', 'refactor');
 const cpRule = AnyOf('ac_meaning', 'layer_order', 'test_included');
@@ -18,10 +30,10 @@ const subjectHash = c.Sha256;
 /** rule별 최대 1건은 서버가 검사한다. */
 const judgements = <T extends TSchema>(item: T) =>
   c.Body({ schemaVersion: Type.Literal(1), items: List(item, { maxItems: 3 }) });
-/** 새 Task·초안·CP: hash는 서버가 저장할 때 계산한다. */
+/** 새 Task·초안·CP: sourceRef의 입력 지문을 대조한 뒤 그 지문을 subjectHash로 보관한다. */
 export const NewJudgedRules = judgements(c.Body({ rule: splitRule, ...judgement }));
 export const NewSplitJudgements = judgements(c.Body({ rule: cpRule, ...judgement }));
-/** 저장된 기록, 그리고 작업 payload의 hash를 돌려보내는 기존 Task 재판단 */
+/** 저장된 기록과 기존 Task 재판단. subjectHash와 sourceRef는 모두 실제 판단한 변경 후 내용을 가리킨다. */
 export const JudgedRules = judgements(c.Body({ rule: splitRule, ...judgement, subjectHash }));
 export const SplitJudgements = judgements(c.Body({ rule: cpRule, ...judgement, subjectHash }));
 
@@ -231,7 +243,7 @@ export const JudgedContent = Type.Object(
     designs: List(c.Body({ kind: c.DesignKind, content: c.Json })),
     conflictGroup: Nullable(Type.String()),
   },
-  { title: 'JudgedContent', additionalProperties: false },
+  { title: 'JudgedContent', additionalProperties: false, description: 'subjectHash는 이 객체의 RFC 8785 JCS 직렬화 UTF-8 바이트를 SHA-256으로 계산한 64자리 소문자 16진수다. sourceRef는 sha256: 뒤에 같은 값을 붙인다. Unicode 정규화는 하지 않는다. 고정 예시는 contracts/fixtures/judgement-bindings.json에 있다.' },
 );
 const checklist = {
   content: Text,
@@ -618,6 +630,10 @@ export const RepoStructure = c.Body({
 });
 
 /* ---- CI ---- */
+export const CiE2e = c.Body({ passed:c.Count,total:c.Count });
+export const CiGithubStatus = c.Body({ headSha:c.Sha,context:Text,state:AnyOf('pending','success','failure','error'),reportedAt:c.Timestamp,url:Opt(c.HttpUrl) });
+export const CiServiceConfig = c.Body({ path:c.RepoPath,commit:c.Sha,status:AnyOf('ok','error','missing'),raw:Nullable(Type.String()),error:Nullable(Type.String()) });
+export const CiObservedSettings = { serviceConfig:Opt(Nullable(CiServiceConfig)) };
 export const CiStep = c.Body({ name: Text, status: c.CiStatus, durationMs: c.Count });
 export const CiRun = Type.Object(
   {
@@ -637,10 +653,25 @@ export const CiRun = Type.Object(
     pipelineSha: Nullable(c.Sha),
     steps: List(CiStep),
     failStep: Nullable(Type.String()),
+    failScope: Opt(Nullable(c.AnyOf('baseline', 'task'))),
     logExcerpt: Nullable(Type.String()),
     artifacts: lines,
     url: Nullable(Type.String()),
     startedAt: c.Timestamp,
+    finishedAt:Opt(Nullable(c.Timestamp)),
+    note:Opt(Nullable(Type.String())),
+    e2e:Opt(Nullable(CiE2e)),
+    githubStatus:Opt(Nullable(CiGithubStatus)),
+    baselineResolved:Nullable(Type.Boolean()),
+    autoReintegrate:AnyOf('none','pending','blocked'),
+    autoReintegrateReason:Nullable(Type.String()),
+    retryAllowed:Type.Boolean(),
+    retryBlockedReason:Nullable(Type.String()),
+    taskStatus:Nullable(c.TaskStatus),
+    mergeStatus:Nullable(c.QueueStatus),
+    mergeCompleted:Type.Boolean(),
+    actualMergeSha:Nullable(c.Sha),
+    causeCandidates:Opt(List(c.Body({ commit:c.Sha,taskKey:Nullable(c.TaskKey) }))),
   },
   { title: 'CiRun' },
 );
@@ -656,6 +687,8 @@ export const MergeQueueItem = Type.Object(
     baseSha: Nullable(c.Sha),
     ciRunId: Nullable(c.Id),
     actualMergeSha: Nullable(c.Sha),
+    queuedAt:Opt(c.Timestamp),
+    mergedAt:Opt(Nullable(c.Timestamp)),
   },
   { title: 'MergeQueueItem' },
 );
@@ -1128,6 +1161,7 @@ export const ReportSnapshot = Type.Object(
 /** P CI_PIPE L3525. 원문은 main 커밋의 것이며 해석하지 못하면 stages가 null이다. */
 export const Pipeline = Type.Object(
   {
+    serviceConfig:Opt(CiServiceConfig),
     path: AnyOf('.agentwbs/pipeline.yaml'),
     commit: Nullable(c.Sha),
     status: AnyOf('ok', 'error', 'missing'),
