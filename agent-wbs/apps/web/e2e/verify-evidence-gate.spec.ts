@@ -60,12 +60,16 @@ test('UAT-VERIFY-02: 버전 충돌이면 충돌 창, 다시 적용은 최신 버
   const bodies: unknown[] = [];
   const { api, data } = await open(page, '/verify?sel=v-0007-1');
   acceptLink(api, data, bodies);
+  // M6 통합(간헐 실패 수정): 화면이 옛 버전(11-03)의 Task 상세를 다 읽은 뒤에 서버 버전을 바꾼다.
+  // 왜: 제목만 보고 바꾸면 아직 진행 중인 상세 조회가 새 버전을 받아 충돌이 생기지 않는다. 연결 버튼은 상세를 읽은 뒤에만 그려진다.
+  const link = page.locator('.evrow').filter({ hasText: '스크린샷' }).getByRole('button', { name: 'CL-0007-1' });
+  await expect(link).toBeEnabled();
   // 다른 곳에서 먼저 저장해 버전이 바뀐 상황
   data.details.set('TASK-0007', taskDetail('TASK-0007', [
     { itemKey: 'CL-0007-1', content: '필터 시 상위 행 유지', evidence: null },
     { itemKey: 'CL-0007-2', content: '1,000행 300ms 이내', evidence: null },
   ], kst('2026-11-05 19:59')));
-  await page.locator('.evrow').filter({ hasText: '스크린샷' }).getByRole('button', { name: 'CL-0007-1' }).click();
+  await link.click();
   const dialog = page.getByRole('alertdialog');
   await expect(dialog).toBeVisible();
   await dialog.getByRole('button', { name: /다시 적용/ }).click();

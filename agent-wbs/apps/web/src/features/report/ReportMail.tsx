@@ -19,6 +19,7 @@ import { formatDateTime } from '../../shared/format.ts';
 import { useSave } from '../../shared/state/useSave.tsx';
 import { BusyButton } from '../../shared/ui/BusyButton.tsx';
 import { Modal } from '../../shared/ui/Modal.tsx';
+import { useNotice } from '../../shared/ui/feedback.tsx';
 import { MailPreview } from '../settings/report/ReportMailTab.tsx';
 import { stateLabel, type MailLog, type Recipient, type Smtp } from '../settings/report/model.ts';
 import type { ReportRow, ReportView } from './model.ts';
@@ -65,6 +66,7 @@ export function ReportMailButtons({ row, view }: { row: ReportRow; view: ReportV
 function MailSend({ row, onClose }: { row: ReportRow; onClose: () => void }) {
   const { client } = useApi();
   const navigate = useNavigate();
+  const notify = useNotice();
   const smtp = useApiQuery('getSmtp', {}, { topics: ['mail', 'settings'] });
   const recipients = useApiQuery('listRecipients', {}, { topics: ['mail', 'settings'] });
   const list = useMemo(() => recipients.data?.items ?? [], [recipients.data]);
@@ -74,15 +76,15 @@ function MailSend({ row, onClose }: { row: ReportRow; onClose: () => void }) {
   const [view, setView] = useState<'' | ReportView>('');
   const [err, setErr] = useState('');
   const chosen = list.filter((x) => ids[x.id]).map((x) => x.id);
-  const send = useSave<ResponseOf<'sendReportMail'>>({
+  // 보낼 본문은 「보내기」를 누른 순간에 찍어 둔다(request). 다시 시도는 같은 멱등 키로 이 본문을 그대로 보낸다.
+  // 왜: 실패 뒤 받는 사람·보기를 바꾸고 다시 시도하면 같은 키로 다른 본문이 나가 409가 되거나 다른 메일이 큐에 들어간다(M6 통합 Codex 리뷰 P2-1).
+  const send = useSave<ResponseOf<'sendReportMail'>, { recipientIds: string[]; view?: ReportView }>({
     target: `${row.reportKey} 메일로 보내기`,
     failTitle: '메일을 보내지 못했습니다',
-    run: ({ idempotencyKey }) => client.call('sendReportMail', {
-      params: { reportId: row.id }, idempotencyKey,
-      body: { recipientIds: chosen, ...(row.kind !== 'daily' && view ? { view } : {}) },
-    }),
-    onSuccess: () => { onClose(); },
-    successNotice: `메일 ${String(chosen.length)}건을 발송 대기열에 넣었습니다.`,
+    request: () => ({ recipientIds: chosen, ...(row.kind !== 'daily' && view ? { view } : {}) }),
+    run: ({ idempotencyKey, payload }) => client.call('sendReportMail', { params: { reportId: row.id }, idempotencyKey, body: payload }),
+    // 건수는 서버가 큐에 넣은 결과에서 센다(지금 화면의 선택이 아니라).
+    onSuccess: (result) => { notify(`메일 ${String(result.ids.length)}건을 발송 대기열에 넣었습니다.`); onClose(); },
   });
   const warn = smtpWarning(smtp.data);
   const submit = () => {

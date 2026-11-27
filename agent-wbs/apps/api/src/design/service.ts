@@ -172,12 +172,19 @@ async function completeStaleApply(db: PoolClient, job: Job, body: DesignSnapshot
   const row = (await db.query<{ status: string; resolution: Record<string, unknown> }>('select status,resolution from design_drifts where id::text=$1 and project_id=$2', [job.payload.driftId, job.project_id])).rows[0];
   if (row?.status === 'done' && row.resolution.jobId === job.id && row.resolution.resultCommit) return;
   const target = row?.resolution.target as DesignShapeInput | undefined;
-  const now = (await snapshotItems(db, head)).find(item => item.item_key === job.payload.itemKey)?.content;
+  // 최신 항목은 행 전체로 본다. 그 파일을 최신 커밋에서 읽는 데 성공했고 자료도 최신 커밋에서 온 것이어야 「최신도 목표와 같다」고 말할 수 있다.
+  // 왜: 최신 파일 읽기가 실패하면 화면 표시용으로 과거 성공 자료(다른 sourceCommit)가 남는다. 그것으로 완료를 확정하면 확인하지 못한 최신 상태를 과거 성공으로 덮는다(Codex 리뷰 P2-2).
+  const latestRow = (await snapshotItems(db, head)).find(item => item.item_key === job.payload.itemKey);
+  const now = latestRow && latestRow.parse_status !== 'error' && latestRow.content.sourceCommit === head?.commit ? latestRow.content : undefined;
   if (!now || !now.contract || !now.extracted || compareDesign(now.contract, now.extracted, now.kind).changed
     || compareDesign(target, now.contract, now.kind).changed || compareDesign(now.contract, target, now.kind).changed) {
-    throw badState('보고한 커밋이 최신이 아니고 최신 설계가 요청한 명세와 다릅니다. 최신 커밋 기준으로 다시 보고하세요.');
+    throw badState('보고한 커밋이 최신이 아니고, 최신 커밋의 계약 파일을 읽지 못했거나 최신 설계가 요청한 명세와 다릅니다. 최신 커밋 기준으로 다시 보고하세요.');
   }
   await completeApply(db, job, body, ref);
+  // 늦은 결과로 마지막 불일치를 닫았으면 대시보드 경고도 같은 트랜잭션에서 맞춘다(Codex 리뷰 P3-1). 아래 이벤트도 커밋 때 함께 나간다.
+  const projectId = required(job.project_id);
+  await alert(db, projectId, 'design_drift', (await drifts(db, projectId)).some(drift => drift.status === 'open'), '계약과 코드의 불일치 또는 대조하지 못한 항목이 있습니다.');
+  deferChange(db, projectId, 'design', { commit: body.commit, ref });
 }
 
 async function completeApply(db: PoolClient, job: Job, body: DesignSnapshotInput, ref: string) {
