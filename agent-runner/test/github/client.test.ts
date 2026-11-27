@@ -783,12 +783,15 @@ describe('오류와 비밀값', () => {
   });
 
   test('기본 속도 제한 403은 x-ratelimit-reset까지 남은 초를 넘긴다', async () => {
-    const client = await setup();
-    model.limitNext(1, 'primary');
-    const error = (await client.getPullRequest(1).catch((e: unknown) => e)) as GitHubError;
-    expect(error).toMatchObject({ status: 403, retryable: true });
-    expect(error.retryAfterSeconds).toBeGreaterThan(100);
-    expect(error.retryAfterSeconds).toBeLessThanOrEqual(121);
+    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-27T00:00:00Z'));
+    try {
+      const client = await setup();
+      model.limitNext(1, 'primary');
+      const error = (await client.getPullRequest(1).catch((e: unknown) => e)) as GitHubError;
+      expect(error).toMatchObject({ status: 403, retryable: true });
+      expect(error.retryAfterSeconds).toBeGreaterThan(100);
+      expect(error.retryAfterSeconds).toBeLessThanOrEqual(121);
+    } finally { now.mockRestore(); }
   });
 
   test('권한 부족 403(속도 제한 신호 없음)은 재시도하지 않는다', async () => {

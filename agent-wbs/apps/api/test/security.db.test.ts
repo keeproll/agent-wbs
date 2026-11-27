@@ -122,7 +122,7 @@ test('링크는 hash 저장·1회 소비·만료·소켓 loopback 판정', async
   const results = await Promise.all([app.inject(request), app.inject(request)]);
   expect(results.map((r) => r.statusCode).sort()).toEqual([204, 401]);
   const expired = await issueLoginLink(pool);
-  await pool.query("update lead_login_tokens set expires_at=now()-interval '1 second' where used_at is null");
+  await pool.query("update lead_login_tokens set expires_at=now()-interval '1 hour' where used_at is null");
   expect((await app.inject({ ...request, payload: { method: 'link', token: expired } })).statusCode).toBe(401);
   expect(results.find((r) => r.statusCode === 204)?.headers['set-cookie']).toMatch(/HttpOnly; SameSite=Strict/);
 });
@@ -146,7 +146,7 @@ test('세션 정보는 캐시하지 않고 만료된 세션은 사용할 수 없
   const session = await app.inject({ url: '/api/session', headers: { cookie } });
   expect(session.json()).toMatchObject({ principal: 'lead', method: 'link', expiresAt: expect.any(String), csrfToken: expect.any(String) });
   expect(session.headers['cache-control']).toBe('no-store');
-  await pool.query("update lead_sessions set expires_at=now()-interval '1 second' where token_hash=$1", [tokenHash(cookie.slice('awbs_session='.length))]);
+  await pool.query("update lead_sessions set expires_at=now()-interval '1 hour' where token_hash=$1", [tokenHash(cookie.slice('awbs_session='.length))]);
   expect((await app.inject({ url: '/api/session', headers: { cookie } })).statusCode).toBe(401);
 });
 

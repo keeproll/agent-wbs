@@ -64,23 +64,26 @@ test.each([3100, 80])('M1: LAN 모드에서도 API 포트 %s의 loopback Origin�
 });
 
 test('M1·M2: LAN 공격자 제한은 다른 출처와 이 PC 링크 로그인에 영향을 주지 않는다', async () => {
-  const responses = await Promise.all(Array.from({ length: 20 }, () => passwordLogin('192.168.1.50', 'wrong')));
-  expect(responses.filter((response) => response.statusCode === 401)).toHaveLength(5);
-  expect(responses.filter((response) => response.statusCode === 429)).toHaveLength(15);
-  expect((await passwordLogin('192.168.1.50')).statusCode).toBe(429);
-  expect((await passwordLogin('192.168.1.51')).statusCode).toBe(204);
-  for (let attempt = 0; attempt < 5; attempt++) expect((await passwordLogin('127.0.0.1', 'wrong')).statusCode).toBe(401);
-  expect((await passwordLogin('127.0.0.1', 'wrong')).statusCode).toBe(429);
-  const local = await linkLogin();
-  expect(local.statusCode, local.body).toBe(204);
-  const cookie = cookieOf(local);
-  const session = (await app.inject({ url: '/api/session', headers: { cookie } })).json<{ csrfToken: string }>();
-  expect((await app.inject({ method: 'DELETE', url: '/api/auth/session', remoteAddress: '127.0.0.1', headers: { origin: localOrigin, cookie, 'x-csrf-token': session.csrfToken } })).statusCode).toBe(204);
-  const token = await issueLoginLink(pool);
-  expect((await app.inject({ method: 'POST', url: '/api/auth/session', remoteAddress: '192.168.1.52', headers: { origin: localOrigin }, payload: { method: 'link', token } })).statusCode).toBe(403);
-  const now = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000);
-  try { expect((await passwordLogin('192.168.1.50')).statusCode).toBe(204); }
-  finally { now.mockRestore(); }
+  const at = Date.now();
+  const now = vi.spyOn(Date, 'now').mockReturnValue(at);
+  try {
+    const responses = await Promise.all(Array.from({ length: 20 }, () => passwordLogin('192.168.1.50', 'wrong')));
+    expect(responses.filter((response) => response.statusCode === 401)).toHaveLength(5);
+    expect(responses.filter((response) => response.statusCode === 429)).toHaveLength(15);
+    expect((await passwordLogin('192.168.1.50')).statusCode).toBe(429);
+    expect((await passwordLogin('192.168.1.51')).statusCode).toBe(204);
+    for (let attempt = 0; attempt < 5; attempt++) expect((await passwordLogin('127.0.0.1', 'wrong')).statusCode).toBe(401);
+    expect((await passwordLogin('127.0.0.1', 'wrong')).statusCode).toBe(429);
+    const local = await linkLogin();
+    expect(local.statusCode, local.body).toBe(204);
+    const cookie = cookieOf(local);
+    const session = (await app.inject({ url: '/api/session', headers: { cookie } })).json<{ csrfToken: string }>();
+    expect((await app.inject({ method: 'DELETE', url: '/api/auth/session', remoteAddress: '127.0.0.1', headers: { origin: localOrigin, cookie, 'x-csrf-token': session.csrfToken } })).statusCode).toBe(204);
+    const token = await issueLoginLink(pool);
+    expect((await app.inject({ method: 'POST', url: '/api/auth/session', remoteAddress: '192.168.1.52', headers: { origin: localOrigin }, payload: { method: 'link', token } })).statusCode).toBe(403);
+    now.mockReturnValue(at + 61_000);
+    expect((await passwordLogin('192.168.1.50')).statusCode).toBe(204);
+  } finally { now.mockRestore(); }
 });
 
 test('M1: LAN 설정에서도 CLI 링크는 실제 API 포트의 loopback 주소로 발급한다', () => {
