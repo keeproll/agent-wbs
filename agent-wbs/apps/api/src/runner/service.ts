@@ -164,6 +164,9 @@ export async function claim(repo: RunnerRepository, kinds: string[], capacity: n
       }
       const authority = await repo.authority();
       if (EXTERNAL_JOBS.includes(candidate.kind) && authority?.state !== 'granted') continue;
+      const hold = await repo.hold(candidate.id);
+      // 임대를 바꾸기 전에 거부해야 잘못된 후보 하나가 뒤의 작업까지 막지 않는다.
+      if (hold && !hold.closed_at && (hold.slot_state !== 'none' || hold.agent !== agent || hold.attempt !== null || (hold.fence ?? 0) > candidate.fence)) rejection(['이전 실행 보유의 정리가 필요합니다.']);
       const job = await repo.lease(candidate, principal, authority?.generation ?? null);
       // 조회 전용 작업은 이전 임대의 프로세스를 보유하지 않는다.
       if (!['repo_check', 'github_check', 'stop_attempt'].includes(job.kind)) await repo.reserve(job, cfg.host.host_id, required(cfg.host.boot_id), agent, slots, job.kind !== 'attempt', task);

@@ -274,6 +274,13 @@
       "when": 1795740000038,
       "tag": "0038_20261127_claim_return_merge_commits",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1795740000039,
+      "tag": "0039_20261127_resource_return_recovery",
+      "breakpoints": true
     }
   ]
 }

@@ -21,6 +21,7 @@ test('0021·0022 snapshot이 단계별 구조와 연결을 보존하고 다음 g
   // M6 통합 fix2: 저장 순번(0037, notify_outbox·reports·design_drifts)
   const order2 = snapshot('0037');
   const claims = snapshot('0038');
+  const recovery = snapshot('0039');
   expect(project.prevId).toBe(before.id);
   expect(evidence.prevId).toBe(project.id);
   expect(observation.prevId).toBe(evidence.id);
@@ -32,6 +33,7 @@ test('0021·0022 snapshot이 단계별 구조와 연결을 보존하고 다음 g
   expect(design.prevId).toBe(mail.id);
   expect(order2.prevId).toBe(design.id);
   expect(claims.prevId).toBe(order2.id);
+  expect(recovery.prevId).toBe(claims.id);
   expect(project.tables['public.projects']?.columns).toHaveProperty('input_checked_at');
   expect(project.tables['public.change_proposals']?.columns).toHaveProperty('deleted_at');
   expect(project.tables['public.evidence']).toEqual(before.tables['public.evidence']);
@@ -56,7 +58,7 @@ test('0021·0022 snapshot이 단계별 구조와 연결을 보존하고 다음 g
   expect(await generateMigration(design, order2)).toHaveLength(6);
   for (const table of ['notify_outbox', 'reports', 'design_drifts']) expect(order2.tables[`public.${table}`]?.columns).toHaveProperty('record_no');
   expect(claims.tables['public.ci_merge_facts']?.columns).toHaveProperty('commit_parents');
-  expect(await generateMigration(claims, generateDrizzleJson(schema, claims.id))).toEqual([]);
+  expect(await generateMigration(recovery, generateDrizzleJson(schema, recovery.id))).toEqual([]);
   expect(mail.tables['public.mail_outbox']?.columns).toHaveProperty('retried');
   expect(mail.tables['public.mail_settings']?.columns).toHaveProperty('settings_version');
   expect(design.tables['public.mail_outbox']).toEqual(mail.tables['public.mail_outbox']);

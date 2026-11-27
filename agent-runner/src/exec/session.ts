@@ -46,6 +46,8 @@ export interface ExecutionOptions {
    * 임대(60초)에서 시계 역행 여유를 뺀 시간보다 짧아야 한다. 그래도 부족하면 서버 대기열에 반환한다.
    */
   admissionWaitMs?: number;
+  /** 전송 재시도 간격. 시험은 실제 10초 대기 대신 한 번의 재시도와 중단을 주입한다. */
+  retryDelay?: typeof retryDelay;
 }
 interface Resume { cwd: string; agent: Agent; model: string; effort: string; sessionId: string }
 class ResourceUnavailableError extends Error {}
@@ -491,7 +493,7 @@ export class Execution {
     for (let attempt = 0; ; attempt++) {
       signal?.throwIfAborted();
       try { return await this.#d.api(operation, request); }
-      catch (e) { if (!retryable(e)) throw e; await sleep(retryDelay(attempt, e, Date.now(), Math.random()), undefined, { ...(signal && { signal }) }); }
+      catch (e) { if (!retryable(e)) throw e; await sleep((this.#d.retryDelay ?? retryDelay)(attempt, e, Date.now(), Math.random()), undefined, { ...(signal && { signal }) }); }
     }
   }
 }

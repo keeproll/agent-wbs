@@ -776,6 +776,8 @@ export const runnerJobs = pgTable('runner_jobs', {
   fence: integer().notNull().default(0),
   epoch: integer().notNull(),
   attempts: integer().notNull().default(0),
+  resource_returns: integer().notNull().default(0),
+  resource_retry_at: at('resource_retry_at'),
   generation: integer(),
   dedup_key: text().notNull().unique(),
 });
@@ -851,7 +853,6 @@ export const executionHolds = pgTable(
     project_id: uuid().references(() => projects.id, { onDelete: 'restrict' }),
     job: uuid()
       .notNull()
-      .unique()
       .references(() => runnerJobs.id, { onDelete: 'restrict' }),
     attempt: uuid().references(() => taskAttempts.id, { onDelete: 'restrict' }),
     epoch: integer().notNull(),
@@ -873,6 +874,8 @@ export const executionHolds = pgTable(
     closed_at: at('closed_at'),
   },
   (t) => [
+    uniqueIndex('one_open_job_hold').on(t.job).where(sql`${t.closed_at} is null`),
+    index('hold_job_history').on(t.job,t.fence),
     check(
       'hold_lock_target',
       sql`${t.lock_state}<>'held' or ${t.task} is not null or ${t.conflict_group} is not null`,

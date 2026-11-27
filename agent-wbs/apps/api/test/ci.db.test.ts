@@ -898,26 +898,37 @@ test('fix4: 원인 후보는 병합 SHA·PR 부모로 Task를 찾고 main 부모
   expect((await get(`projects/${project}/ci/runs/${id}`)).json().causeCandidates).toEqual([]);
 });
 
-test('원인 후보의 중간 커밋은 검증된 병합 부모 사슬로 연결하고 끊긴 사슬은 거부한다', async () => {
+test('원인 후보의 중간 커밋은 검증된 병합 부모 사슬로 연결하고 첫 목록을 보존한다', async () => {
   const { a,tree,extra } = await integration(); await queue(a,'checking',extra);
   const merged='9'.repeat(40), middle='d'.repeat(40), earlier='e'.repeat(40), unknown='f'.repeat(40);
   const body = { ...extra,actualMergeSha:merged,actualTreeSha:tree,mergeParents:[otherSha,sha] };
-  for (const mergeCommits of [
-    [{ commit:sha,parents:[middle] },{ commit:middle,parents:[sha] }],
-    [{ commit:sha,parents:[otherSha] },{ commit:middle,parents:[otherSha] }],
-    [{ commit:sha,parents:[otherSha] },{ commit:otherSha,parents:[] }],
-    [{ commit:sha,parents:[middle] },{ commit:sha,parents:[otherSha] }],
-  ]) expect((await queue(a,'merged',{ ...body,mergeCommits })).statusCode).toBe(400);
   const mergeCommits = [{ commit:sha,parents:[middle,otherSha] },{ commit:middle,parents:[earlier] },{ commit:earlier,parents:[otherSha] }];
   const response=await queue(a,'merged',{ ...body,mergeCommits }); expect(response.statusCode,response.body).toBe(204);
   expect((await queue(a,'merged',{ ...body,mergeCommits })).statusCode).toBe(204);
-  expect((await queue(a,'merged',{ ...body,mergeCommits:[{ commit:sha,parents:[otherSha] }] })).statusCode).toBe(409);
+  expect((await queue(a,'merged',{ ...body,mergeCommits:mergeCommits.map(({ commit,parents })=>({ parents,commit })) })).statusCode).toBe(204);
+  expect((await queue(a,'merged',{ ...body,mergeCommits:[{ commit:sha,parents:[otherSha] }] })).statusCode).toBe(204);
   const id=(await post('ci/runs',{ stage:'night',ref:'main',trigger:'night',headSha:merged,pipelineSha:pipeline })).json().id as string;
   const candidates=[merged,sha,middle,earlier,otherSha,unknown].map(commit=>({ commit }));
   expect((await patch(id,{ fence:null,status:'run',causeCandidates:candidates })).statusCode).toBe(204);
   const expected=candidates.map(({ commit })=>({ commit,taskKey:[otherSha,unknown].includes(commit) ? null : a.key }));
   expect((await get(`projects/${project}/ci/runs/${id}`)).json().causeCandidates).toEqual(expected);
   expect((await get(`projects/${project}/ci/runs?stage=night`)).json().items[0].causeCandidates).toEqual(expected);
+});
+
+test.each([
+  [{ commit:sha,parents:['d'.repeat(40)] },{ commit:'d'.repeat(40),parents:[sha] }],
+  [{ commit:sha,parents:[otherSha] },{ commit:'d'.repeat(40),parents:[otherSha] }],
+  [{ commit:sha,parents:[otherSha] },{ commit:otherSha,parents:[] }],
+  [{ commit:sha,parents:['d'.repeat(40)] },{ commit:sha,parents:[otherSha] }],
+  [],
+])('보조 커밋 목록 오류는 경고만 남기고 실제 병합 사실과 완료를 보존한다: %j', async (...mergeCommits) => {
+  const { a,tree,extra }=await integration(); await queue(a,'checking',extra);
+  const actualMergeSha='9'.repeat(40);
+  const response=await queue(a,'merged',{ ...extra,actualMergeSha,actualTreeSha:tree,mergeParents:[otherSha,sha],mergeCommits });
+  expect(response.statusCode,response.body).toBe(204);
+  expect((await owner.query('select merge_sha,commit_parents from ci_merge_facts where merge_sha=$1',[actualMergeSha])).rows).toEqual([{ merge_sha:actualMergeSha,commit_parents:null }]);
+  expect((await owner.query('select status from tasks where id=$1',[a.id])).rows).toEqual([{ status:'done' }]);
+  expect((await get('alerts')).json().items).toEqual(expect.arrayContaining([expect.objectContaining({ key:'ci:mergeCommitsInvalid|#1' })]));
 });
 
 

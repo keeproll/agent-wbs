@@ -487,6 +487,7 @@ test('claim 응답 사이 자원이 부족해지면 물리 슬롯을 반납하�
   expect(await h.rows('select state,fence,attempts from runner_jobs')).toEqual([{ state: 'queued',fence:1,attempts:0 }]);
   expect(await h.rows('select slot_state,lock_state from execution_holds where closed_at is null')).toEqual([{ slot_state:'none',lock_state:'held' }]);
   executionOptions.canStart = () => ({ ok:true });
+  await h.rows("update runner_jobs set resource_retry_at=clock_timestamp()-interval '1 second' where state='queued'");
   await flow.runNext(20);
   expect(await h.rows('select kind,status from task_attempts')).toEqual([{ kind:'dev',status:'completed' }]);
 });
@@ -517,6 +518,7 @@ test.each(['qa','rework'] as const)('자동 %s도 자원 반환 뒤 팀장 버�
   expect(await h.rows(`select id,state,attempts,fence from runner_jobs where state='queued'`)).toEqual([{ id:before[0]?.id,state:'queued',attempts:0,fence:1 }]);
   executionOptions.canStart = () => ({ ok:true });
   installFakeCli(join(home,'fake'),'codex',codex('PASS'));
+  await h.rows("update runner_jobs set resource_retry_at=clock_timestamp()-interval '1 second' where state='queued'");
   await flow.runNext(20);
   expect(await h.rows(`select kind,status from task_attempts where kind='${kind}'`)).toEqual([{ kind,status:'completed' }]);
   expect(await h.rows("select count(*)::int n from runner_job_events where kind='prestart_failed'")).toEqual([{ n:0 }]);
@@ -526,24 +528,47 @@ test.each(['before','after'] as const)('자원 반환 전송 %s 응답 유실 �
   expect((await h.run('TASK-0001')).status).toBe(202);
   const api = executionOptions.api;
   let checks = 0;
+  let sends = 0;
   executionOptions.canStart = () => ++checks === 1 ? { ok:true } : { ok:false,reason:'limit' };
   executionOptions.admissionWaitMs = 0;
+  executionOptions.retryDelay = () => 0;
   executionOptions.api = async (operation,request) => {
     if (operation === 'returnJob') {
+      if (++sends > 1) throw new DOMException('시험: 재전송 뒤 Runner 재시작','AbortError');
       if (lost === 'after') await api(operation,request);
       throw new ApiTransportError('returnJob');
     }
     return api(operation,request);
   };
   await expect(execution.claim(20)).rejects.toThrow();
+  expect(sends).toBe(2);
   executionOptions.api = api;
   const holds = (await api('getExecutionHolds',{ epoch:state.snapshot.epoch })).body.holds;
   expect(await execution.recover(holds)).toBe(true);
   expect(await h.rows('select state,attempts,fence from runner_jobs')).toEqual([{ state:'queued',attempts:0,fence:1 }]);
+  expect(await h.rows('select resource_returns from runner_jobs')).toEqual([{ resource_returns:1 }]);
   expect(await h.rows('select slot_state,lock_state,closed_at from execution_holds')).toEqual([{ slot_state:'none',lock_state:'held',closed_at:null }]);
   executionOptions.canStart = () => ({ ok:true });
+  await h.rows("update runner_jobs set resource_retry_at=clock_timestamp()-interval '1 second' where state='queued'");
   await flow.runNext(20);
   expect(await h.rows('select kind,status from task_attempts')).toEqual([{ kind:'dev',status:'completed' }]);
+});
+
+test('로컬에서 막힌 Claude job은 지연·경보로 보류하고 뒤의 Codex job을 claim한다', async () => {
+  expect((await h.run('TASK-0001')).status).toBe(202);
+  expect((await h.run('TASK-0002')).status).toBe(202);
+  executionOptions.canStart=agent=>agent==='Claude' ? { ok:false,reason:'readiness_failed' } : { ok:true };
+  executionOptions.admissionWaitMs=0;
+  expect(await execution.claim(20)).toBeNull();
+  expect(await execution.claim(20)).toMatchObject({ kind:'attempt',payload:{ taskKey:'TASK-0002',agent:'Codex' } });
+  for (let n=2;n<=4;n++) {
+    await h.rows("update runner_jobs set resource_retry_at=clock_timestamp()-interval '1 second' where payload->>'taskKey'='TASK-0001'");
+    expect(await execution.claim(20)).toBeNull();
+  }
+  expect(await execution.claim(20)).toBeNull();
+  expect(await h.rows("select detail->>'waitSeconds' wait from runner_job_events where kind='returned' order by created_at")).toEqual([1,2,4,300].map(n=>({ wait:String(n) })));
+  expect(await h.rows("select count(*)::int n from alerts where key like 'runner:resources:%' and resolved_at is null")).toEqual([{ n:1 }]);
+  expect(await h.rows("select resource_returns,attempts from runner_jobs where payload->>'taskKey'='TASK-0001'")).toEqual([{ resource_returns:4,attempts:0 }]);
 });
 
 test('실행 실패는 같은 종류를 총 3회만 자동 실행하고 QA 결과를 만들지 않는다', async () => {

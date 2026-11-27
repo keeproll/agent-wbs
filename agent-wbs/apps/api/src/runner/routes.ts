@@ -98,8 +98,10 @@ export function installRunner(app: FastifyInstance, pool: Pool) {
       host?.host_id !== b.hostId || host.boot_id !== b.bootId || h.attempt || h.pgid !== null || h.cgroup !== null || !['reserved','none'].includes(h.slot_state)) throw new PlatformError('INVALID_TRANSITION');
     // 프로세스가 없는 예약만 반환한다. 다음 claim까지 논리 잠금과 번호표를 보존한다.
     await repo.release(h,'no_process',false);
-    await repo.client.query("update runner_jobs set state='queued',lease_owner=null,lease_until=null,attempts=attempts-1 where id=$1",[job.id]);
-    await repo.event(job,'returned',null,{ reason:b.reason });
+    const returns = Math.min(job.resource_returns+1,4), waitSeconds = returns > 3 ? 300 : 2**(returns-1);
+    await repo.client.query("update runner_jobs set state='queued',lease_owner=null,lease_until=null,attempts=attempts-1,resource_returns=$2,resource_retry_at=clock_timestamp()+make_interval(secs=>$3) where id=$1",[job.id,returns,waitSeconds]);
+    await repo.event(job,'returned',null,{ reason:b.reason,returns,waitSeconds });
+    if (returns > 3) await repo.alert(job.project_id,`runner:resources:${job.id}`,'로컬 자원 부족으로 작업을 5분 보류합니다.',{ jobId:job.id,taskKey:job.payload.taskKey });
   },204);
   route('startJob', async (repo, r) => {
     const b = body<Parameters<typeof start>[2] & { fence: number }>(r);

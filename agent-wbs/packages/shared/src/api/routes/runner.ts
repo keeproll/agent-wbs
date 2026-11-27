@@ -662,7 +662,7 @@ export const runnerOperations = [
       })),
       mergeParents: Opt(List(c.Sha, { minItems: 2, maxItems: 2 })),
       // main에 이미 있는 커밋은 제외한다. Task 연결은 서버가 이 부모 사슬로 계산한다.
-      mergeCommits: Opt(List(Body({ commit:c.Sha,parents:List(c.Sha,{ uniqueItems:true }) }),{ minItems:1 })),
+      mergeCommits: Opt(List(Body({ commit:c.Sha,parents:List(c.Sha,{ uniqueItems:true }) }))),
     }),
     responses: { 204: null },
     errors: ['INVALID_TRANSITION', 'GATE_NOT_PASSED', 'EXTERNAL_WRITE_BLOCKED', 'MERGE_MISMATCH'],

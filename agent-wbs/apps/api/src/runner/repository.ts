@@ -31,6 +31,7 @@ export class RunnerRepository {
   async job(id: string) { return (await this.client.query<Job>('select * from runner_jobs where id::text=$1 for update', [id])).rows[0]; }
   async candidates(kinds: readonly string[], epoch: number) {
     return (await this.client.query<Job>(`select * from runner_jobs where epoch=$1 and kind=any($2::job_kind[]) and
+      (resource_retry_at is null or resource_retry_at<=clock_timestamp()) and
       (state='queued' or kind='repo_check' and state in ('leased','started') and lease_until<=clock_timestamp())
       order by record_no for update skip locked`, [epoch, kinds])).rows;
   }
@@ -40,7 +41,7 @@ export class RunnerRepository {
       from execution_holds h join runner_jobs j on j.id=h.job
       where h.closed_at is null and h.epoch=$2 and j.epoch=$2 and j.lease_owner=$1 order by h.created_at,h.id`, [principal, epoch])).rows;
   }
-  async hold(job: string) { return (await this.client.query<Hold>('select * from execution_holds where job=$1 for update', [job])).rows[0]; }
+  async hold(job: string) { return (await this.client.query<Hold>('select * from execution_holds where job=$1 order by (closed_at is null) desc,fence desc nulls last,created_at desc,id desc limit 1 for update', [job])).rows[0]; }
   async history(task: string) {
     return (await this.client.query<Attempt>(`select a.*,v.result as verification_result,j.payload->>'automaticCause' as automatic_cause,
       case when exists(select 1 from verification_invalidations i where i.verification=v.id) then 'stale' else 'current' end verification_disposition
@@ -107,16 +108,16 @@ export class RunnerRepository {
   }
   async reserve(job: Job, host: string, boot: string, agent: string, slots: number, heavy: boolean, task?: Task) {
     const existing = await this.hold(job.id);
-    if (existing) {
-      await this.client.query("update execution_holds set host_id=$2,boot_id=$3,fence=$4,slot_state='reserved',slots=$5,heavy=$6 where job=$1", [job.id, host, boot, job.fence, slots, heavy]);
+    if (existing && !existing.closed_at) {
+      await this.client.query("update execution_holds set host_id=$2,boot_id=$3,fence=$4,slot_state='reserved',slots=$5,heavy=$6 where id=$1", [existing.id, host, boot, job.fence, slots, heavy]);
     } else await this.client.query(`insert into execution_holds(project_id,job,epoch,host_id,boot_id,fence,task,conflict_group,agent,slots,heavy,slot_state,lock_state)
       values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'reserved',$12)`, [job.project_id, job.id, job.epoch, host, boot, job.fence, task?.id ?? null, task?.conflict_group ?? null, agent, slots, heavy, task ? 'held' : 'none']);
   }
-  async process(job: string, pgid: number, cgroup: string | null) { await this.client.query("update execution_holds set slot_state='active',pgid=$2,cgroup=$3 where job=$1", [job, pgid, cgroup]); }
+  async process(job: string, pgid: number, cgroup: string | null) { await this.client.query("update execution_holds set slot_state='active',pgid=$2,cgroup=$3 where job=$1 and closed_at is null", [job, pgid, cgroup]); }
   async release(hold: Hold, proof: string, unlock: boolean) {
     const lock = unlock && hold.lock_state === 'held' ? 'released' : hold.lock_state;
     await this.client.query(`update execution_holds set slot_state='none',lock_state=$2::lock_state,release_proof=case when slot_state<>'none' then $3 else release_proof end,
-      closed_at=case when $2::lock_state='held' then null else clock_timestamp() end where job=$1`, [hold.job, lock, proof]);
+      closed_at=case when $2::lock_state='held' then null else clock_timestamp() end where id=$1`, [hold.id, lock, proof]);
   }
   async createAttempt(job: Job, task: Task, kind: AttemptKind, host: string, head: string, model: string, effort: string, adjust: object | null, resumed: string | null) {
     const spec = await this.spec(task.id);
@@ -126,9 +127,11 @@ export class RunnerRepository {
       values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'running',clock_timestamp(),$12,$13,$14,$15,$16,$17) returning id`,
     [task.project_id, task.id, attemptKey(task.task_key, n), n, job.id, job.payload.baseCommit, head, required(spec).revision, input?.id ?? task.src_input_version, kind,
       job.payload.agent, model, effort, adjust, resumed, job.payload.branch, job.generation])).rows[0]);
-    await this.client.query('update execution_holds set attempt=$2 where job=$1', [job.id, row.id]);
+    await this.client.query('update execution_holds set attempt=$2 where job=$1 and closed_at is null', [job.id, row.id]);
     await this.client.query("update tasks set status=$2,verif_state=$3,execution_head_sha=$4,act_start=coalesce(act_start,clock_timestamp()) where id=$1", [task.id, kind === 'qa' ? 'qa' : kind === 'reverify' ? 'verifying' : 'running',kind === 'qa' || kind === 'reverify' ? 'running' : 'none',head]);
     await this.state(job.id, 'started');
+    await this.client.query('update runner_jobs set resource_returns=0,resource_retry_at=null where id=$1',[job.id]);
+    await this.client.query('update alerts set resolved_at=clock_timestamp() where key=$1 and resolved_at is null',[`runner:resources:${job.id}`]);
     await this.event(job, 'started', null, { attemptId: row.id, host });
     return row.id;
   }
@@ -137,9 +140,9 @@ export class RunnerRepository {
     await this.client.query("update tasks set status=$2,verif_state='none' where id=$1", [a.task, status === 'failed' ? 'failed' : 'paused']);
   }
   async transfer(from: Hold, next: string) {
-    await this.client.query("update execution_holds set lock_state='handed_over',handed_to_job=$2,closed_at=clock_timestamp() where job=$1", [from.job, next]);
+    await this.client.query("update execution_holds set lock_state='handed_over',handed_to_job=$2,closed_at=clock_timestamp() where id=$1", [from.id, next]);
     await this.client.query(`insert into execution_holds(project_id,job,epoch,task,conflict_group,agent,slots,heavy,slot_state,lock_state,lock_from_job)
-      select project_id,$2,epoch,task,conflict_group,$3,0,false,'none','held',job from execution_holds where job=$1`, [from.job, next,
+      select project_id,$2,epoch,task,conflict_group,$3,0,false,'none','held',job from execution_holds where id=$1`, [from.id, next,
       required((await this.job(next))).payload.agent]);
   }
   async unconfirm(job: string, orphan = false) {
@@ -204,7 +207,7 @@ export class RunnerRepository {
   }
   async saveObservation(h: Hold, cli: string, version: string, grade: string, observed: number, reserved: number, state: string, at: string) {
     await this.client.query("insert into attempt_observations(project_id,attempt,cli,version,grade,observed,reserved,state,process_state,at) values($1,$2,$3,$4,$5,$6,$7,$8,'{}',$9)", [h.project_id,h.attempt,cli,version,grade,observed,reserved,state,at]);
-    if (h.slot_state !== 'none') await this.client.query("update execution_holds set slots=$2,slot_state=case when $3='unconfirmed' then 'unconfirmed' else slot_state end where job=$1", [h.job,1+reserved,state]);
+    if (h.slot_state !== 'none') await this.client.query("update execution_holds set slots=$2,slot_state=case when $3='unconfirmed' then 'unconfirmed' else slot_state end where id=$1", [h.id,1+reserved,state]);
   }
   async observationConfig(agent: string) { return (await this.client.query<{ conditions: object }>("select report->'cli' as conditions from agent_models where agent=$1 and report->'cli' is not null limit 1", [agent])).rows[0]; }
   async saveObservationConfig(agent: string, detail: object) { await this.client.query("update agent_models set report=jsonb_set(coalesce(report,'{}'),'{cli}',$2::jsonb) where agent=$1", [agent,JSON.stringify(detail)]); }
