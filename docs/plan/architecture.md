@@ -273,14 +273,41 @@ agent-runner/
   - allowlist 방식 env로 시작. (허용 목록에 있는 변수만 넘긴다.)
   - GitHub·Runner 토큰, SSH(원격 PC에 안전하게 접속하는 방식) agent, `AWBS_*` 제거.
   - 근거: §9.5-4-1
-- **실행 격리**
+- **실행 격리** (owner Q-08 B, 2026-11-27 아이템 15)
   - 세션별 worktree, CLI sandbox/권한 모드.
   - Agent뿐 아니라 **CI 명령·계약 추출·임시 SQL**도 같은 자격 증명 경계에서 실행.
-  - OS(운영체제) 수준 격리는 **Q-08**, 확정 전에는 fake 실행만.
+  - OS(운영체제) 수준 격리는 **Agent 전용 OS 계정**이다.
+    - Agent는 `awbs-agent` 계정으로 돈다. 이 계정은 로그인 셸과 sudo 권한이 없다.
+    - Runner(사람 계정)는 root 소유 실행 래퍼 하나만 이 계정으로 실행할 수 있다(sudoers 한 줄).
+    - Agent 작업 폴더·입력 사본·CLI는 Runner 홈 밖의 `/srv/agentwbs`에 둔다. Runner 홈(`~/.agentwbs`, `~/.config/gh`, `~/.ssh`)은 Agent가 읽지 못한다.
+    - WSL에서는 Windows 드라이브(`/mnt`)와 Windows 프로그램 실행 통로(`/run/WSL`)도 Agent 계정만 막는다. 실행 전마다 래퍼가 다시 확인한다.
+    - 왜: 같은 계정이면 CLI sandbox가 하나라도 뚫리는 순간 Runner의 비밀값을 모두 읽는다. 계정을 나누면 커널의 파일 권한이 경계가 된다.
+    - 같은 사용자 권한에서 생기는 TOCTOU(확인한 뒤 쓰기 전에 상태가 바뀌는 틈) 한계도 이 전용 계정 실행으로 막는다(M7-03 결정 10).
+  - 설계와 설치 절차: `agent-runner/docs/isolation.md`, owner 실행 순서: `agent-runner/docs/OWNER-RUNBOOK.md`.
+  - **지금 상태**(main 023ac8f): 설치 스크립트와 작업 영역 배치·CLI 설치·로그인 확인은 연결됐다. exec 계층이 전용 계정 실행을 아직 부르지 않아, Runner는 실제 Agent 세션과 실제 CI 명령을 띄우지 않는다(fake 실행만).
+  - 남은 위험(세션끼리의 접근, 같은 PC의 네트워크 서비스, 공용 `/tmp`)은 `agent-runner/docs/isolation.md` §11.
   - 근거: §6.7
 - **입력 자료**
   - 실행 금지, submodule(저장소 안에 다른 저장소를 끼워 넣은 것) 미추적, 읽기 전용, realpath(링크를 모두 따라간 실제 경로)·symlink 검사, HTML 응답으로 서빙하지 않음.
   - 근거: §9.5-3
+- **외부 쓰기 관문** (M5·M7 통합, 독립 리뷰 반영)
+  - Runner의 모든 외부 쓰기(GitHub REST 호출·Git push)는 **같은 M4 쓰기 관문**(권한·host·세대, deploy key 점검)을 지난다.
+    - 왜: 쓰기 경로마다 확인을 따로 두면 한 곳이 빠지는 순간 PC 변경 격리(contracts §3.4-5)가 깨진다.
+  - job에서 나온 쓰기(시도 job의 push·PR, 통합 job의 상태 기록·H′ push·병합)는 그 앞에 **소유 확인**(이 job을 아직 맡고 있는가: 임대·중단)이 더 붙는다.
+    - 소유 확인은 전송 **바로 앞**에서 하고, 그 사이에 다른 대기를 두지 않는다. 중단 신호는 진행 중인 요청과 push도 끊는다.
+    - 예외: 초기화 정리(PR 닫기·브랜치 삭제·시스템 push)는 job 임대가 없다. 서버의 초기화 세대(epoch)로 묶인 정리 명령이라 M4 관문만 지난다(`agent-runner/src/github/write-gate.ts` `WRITE_CALLERS`).
+  - GitHub가 연결되지 않았으면 push하지 않는다. 호출 횟수 제한 403은 권한 부족이 아니다.
+  - 응답을 잃은 것은 「실행 안 됨」이 아니다. 읽기로 대조하고, 확인하지 못하면 「모름」으로 둔다.
+  - push는 자기 프로세스 그룹으로 띄운다. 중단하면 그룹이 비었음을 확인한 뒤에만 「중단됨」이다.
+    - 그룹을 정리할 때는 신호를 보내기 직전마다 그룹 대표(leader)의 pid·시작 시각을 대조한다. 다르면 아무것도 죽이지 않는다.
+    - `/proc/<pid>/stat`의 상태 X(끝나서 회수되는 중)는 「없는 프로세스」로 본다. 그룹이 비었는지는 따로 확인한다.
+  - 중단하거나 결과를 모르는 push는 중단 기록에 남긴다. 다음 push 전에 원격 head를 다시 읽어 대조한다.
+    - 중단 기록은 잠금 아래 한 곳에서 원자적으로 고친다. 손상된 기록은 지우지 않고 보존한다.
+    - 기록마다 고유 번호를 붙이고, 대조 뒤에는 읽은 기록과 번호가 같을 때만 지운다.
+  - 「중단됨」은 원격이 바뀌지 않았다는 증거가 아니다. 원격에 이미 접수된 쓰기는 되돌리지 않는다.
+  - GitHub 쪽 조건(병합 head SHA, 브랜치 기준 PR 조회, 일반 push)은 소유 확인을 대신하지 않는다. 남는 아주 짧은 틈을 좁히는 추가 조건일 뿐이다.
+  - 중단된 뒤에는 외부 쓰기를 하지 않는다. 그래서 통합 대기열은 중단 뒤 GitHub 상태(commit status)도 기록하지 않는다. 통합 대기열의 H′ push와 초기화 시스템 push도 같은 M4 관문을 지난다(초기화는 소유 확인 없음, 위 예외).
+  - 메일(SMTP)·Telegram 발송은 이 관문의 「외부 쓰기」(Git·GitHub 쓰기)에 들지 않는다(contracts §4.4).
 - **명령 실행**
   - shell(명령어를 해석해 실행하는 프로그램) 문자열 조합 금지(argv). (명령과 인자를 배열로 따로 넘겨, 입력값이 명령으로 해석되지 않게 한다.)
   - `pipeline.yaml`은 **main 커밋** 것만 실행.
@@ -306,6 +333,11 @@ agent-runner/
 - 보호 경로(`prototype/`·`.agentwbs/`)와 빌드 결과물은 Task 검사 첫 단계에서 거부(§9.5-4).
 - 보호 경로 비교는 rename을 포함한 merge-base(두 브랜치가 갈라진 공통 조상 커밋) diff로 한다.
   - 왜: 파일 이름만 바꿔서 보호 경로를 건드리는 경우도 잡기 위해서다.
+- ① 검사 사본에서는 기준 커밋과 대상 커밋의 symlink(파일 모드 `120000`)를 거부한다(M7-01).
+  - 저장소 안을 가리키는 정상 상대 링크도 지금은 허용하지 않는다.
+  - 왜: 링크 연결 전체와 실행 중 목표 파일 변경을 검증하는 격리가 아직 없다. 링크를 따라가면 고정한 커밋 밖의 파일을 읽을 수 있다.
+  - 기준 사본에서 거부되면 `failScope: 'baseline'`, 대상 사본에서 거부되면 `failScope: 'task'`다. 기준 실패는 Task 재작업으로 보내지 않고 기준 문제 경보로 처리한다.
+  - symlink 허용 범위는 Q-08의 격리 검증 뒤 따로 정한다.
 
 ## 5. Runner 내부
 
@@ -316,6 +348,7 @@ Runner 안의 모듈(코드 묶음)별 책임이다.
   - 근거: §9.1-6
 - `jobs`
   - 책임: 정리 명령 우선 → 작업 임대 → 준비 → 시작 확정 → 실행 → 보고·보유 해제
+  - 개발 결과는 push한 뒤 PR을 열거나 기존 PR을 쓰고, 그 커밋으로 ①을 돌린다(contracts §3.6-1). push·PR은 외부 쓰기 관문(§4)을 지난다.
   - 근거: §4.2, §8.4
 - `resources`
   - 책임: host·readiness·usage·models·concurrency 보고, 적응형 한도, 무거운 작업 semaphore(CI와 공유)
@@ -326,6 +359,8 @@ Runner 안의 모듈(코드 묶음)별 책임이다.
   - **시도 종료와 자원 반환은 별개**: 같은 PC에서는 그룹이 빈 것을 확인하거나 boot ID가 바뀐 경우에만 슬롯·충돌 묶음을 반환([contracts §3.4](contracts.md#34-실행-보유와-복구)).
   - 강제 종료는 그룹 단위.
   - 왜: Agent가 띄운 자식 프로세스가 남아 있으면 실제로는 아직 PC 자원을 쓰고 파일을 고치고 있을 수 있다.
+  - 임대 끝 5초 전을 자기 마감으로 보고, claim 뒤 자원이 모자라면 최대 20초 기다린다(contracts §3.4-10·11). 시각 비교는 단조 시계(뒤로 가지 않는 시계)로 한다.
+  - 전용 계정(Q-08)에서는 Runner가 다른 계정의 프로세스에 신호를 보낼 수 없다. 그래서 cgroup 일괄 종료(`cgroup.kill`)를 먼저 쓰고, 안 되면 래퍼의 `kill-group`·`kill-all`을 Agent 계정으로 실행한다(`agent-runner/docs/isolation.md` §9).
   - 근거: §6.7
 - `cli`
   - 책임: Claude `stream-json` / Codex `exec --json` 어댑터. 모르는 이벤트는 보존하고 추정하지 않음. **hook(이벤트가 날 때 자동으로 부르는 사용자 스크립트) 미사용**
@@ -347,12 +382,20 @@ Runner 안의 모듈(코드 묶음)별 책임이다.
   - 근거: §4.12
 - `ci`
   - 책임: 4단계 실행기(엔진이 아니라 순차 실행·기록)
+  - ①은 main에 고정한 `pipeline.yaml`로 Runner 소유의 새 검사 사본에서 돈다. Agent 작업 폴더에서 돌리지 않는다(`agent-runner/src/ci/README.md`).
+  - Runner가 붙이는 단계 이름은 `runner:`로 시작하고, 실패 결과에 `failScope`(`baseline`·`task`)를 넣는다(contracts §3.6-2).
+  - **설정 지문이 다르면 시작하지 않는다**: Runner에 등록된 저장소 하나라도 `config` 파일 지문이 등록 때와 다르면 앱 전체가 멈춘다. 서버에 보고하기 전에 끝나므로 Runner 로그로 확인한다.
+    - 왜: 설정이 바뀌었다는 것은 누군가 Runner 소유 저장소를 건드렸다는 뜻이다(예: `core.hooksPath` 추가로 git 명령마다 임의 프로그램 실행). 다른 저장소만 골라 계속 돌리면 변조를 놓칠 수 있다.
+    - 복구 순서는 `agent-runner/src/ci/README.md` 「실행과 근거」 끝에 있다.
+  - ④는 job의 `commit`(요청 시점의 main) 자신의 `pipeline.yaml`을 읽는다(`deployPipelineAt`). main에 들어가지 않은 커밋은 배포 확인하지 않는다.
+  - ③④는 단계 결과 보고서(`AWBS_REPORT`)와 nonce로 이번 시도의 결과만 읽는다. ④는 이 PC의 compose만 대상으로 하고, 실패하면 마지막 정상 커밋으로 되돌린다(contracts §3.6-2·3, Q-15 A).
   - 근거: §4.13
 - `readiness`
   - 책임: 시작 시 + 매일: CLI·git·node·pnpm·pg·repo·disk·subs·obs·git-lfs
   - 준비 점검의 `codex`·`claude`와 CLI 업데이트(§5.1)는 같은 전용 설치 `AWBS_HOME/cli/<agent>/current/bin/<agent>`를 기준으로 보고한다(M4 통합, M4-05 리뷰 M-1).
     - 두 보고는 보고기 하나에서 key별로 합쳐진다.
     - 왜: 준비 점검과 CLI 업데이트가 서로 다른 실행 파일을 보면, 「준비됨」이라고 보고한 CLI와 실제로 실행하는 CLI가 달라진다.
+  - 야간 화면 비교용 `font`(고정 글꼴)와 `render`(렌더러 네트워크 차단 방식), 보고 거부 기록 `reports`도 보고한다(contracts §3.1).
   - `repo` 항목은 git 안전 계층이 쓰는 `/proc`와 `flock`(Linux 파일 잠금 명령)을 확인한다.
     - `/proc`를 읽을 수 없으면 fail이다. 작업 폴더 잠금을 확인할 수 없기 때문이다.
     - `flock`이 없으면 warn이다. 강제 종료로 남은 잠금을 자동으로 회수하지 못할 뿐, 잠금 자체는 보존된다.
@@ -362,9 +405,10 @@ Runner 안의 모듈(코드 묶음)별 책임이다.
 
 - WSL2, PID(프로세스 번호) 1 = systemd(리눅스에서 서비스를 띄우고 관리하는 프로그램), cgroup v2 마운트, 사용자 slice(systemd가 프로세스 묶음에 자원을 나눠 주는 단위) controller(cgroup에서 CPU·메모리 등 자원별로 재고 제한하는 기능) `cpu memory pids`.
   - 용어 풀이: CPU = 계산을 하는 처리 장치.
-- 세션 scope 생성·측정은 아직 시험하지 않았다.
-  - 그래서 **사용 가능 여부는 M5-03에서 확인**한다.
-  - 안 되면 프로세스 그룹 + `/proc` 합산을 쓴다(§6.7-6).
+- 세션 scope 생성·측정은 M5-03에서 실측했다(2026-11-27).
+  - 사용자 scope(`systemd-run --user --scope`)로 cgroup을 만들고 `cgroup.kill`로 자손까지 한 번에 끝낼 수 있었다. 측정값은 milestones M5-03 「검증 기록」.
+  - 직접 만들기(위임)는 `EACCES`로 안 됐다. 그래서 사용자 scope를 쓴다. 안 되면 프로세스 그룹 + `/proc` 합산을 쓴다(§6.7-6).
+  - 사용자 systemd는 로그인 세션이나 linger(`loginctl enable-linger <계정>`)가 있어야 뜬다. 운영 요구사항이다(§6.3).
 - 설치본은 Codex 0.172.0, Claude 2.1.332(같은 날 2.1.330에서 자동 갱신됨)이다.
   - G의 검증 조합(Codex 0.167.0)과 다르므로 「미검증」에서 시작한다.
 - `gh` 2.45.0과 `git-lfs`는 `/usr/bin`에 설치되어 있다(로그인 상태는 확인하지 않음).
@@ -376,7 +420,7 @@ owner는 Codex·Claude CLI를 항상 최신으로 쓰라고 정했다. 그런데
 - **대상**
   - Runner가 쓰는 Codex·Claude Code CLI.
   - 사용자 전역 설치를 건드리지 않고 `~/.agentwbs/cli/<agent>/<version>/`에 설치해 `current` 링크를 쓴다.
-  - 로그인 정보의 경계는 Q-08에 따른다.
+  - 전용 계정(Q-08)을 쓰면 설치 위치는 Agent 작업 영역 `/srv/agentwbs/cli`다. 로그인 상태 확인은 Agent 계정으로 한다. 로그인 정보는 Agent 계정 홈에 있다.
   - 공식 최신 채널의 정확한 설치 방법은 M4-05에서 확인한다.
 - **확인 시점**
   - Runner 시작과 매일 준비 점검.
@@ -405,7 +449,7 @@ owner는 Codex·Claude CLI를 항상 최신으로 쓰라고 정했다. 그런데
 - **버전 변경 뒤**
   - 같은 버전·모델·옵션 조합의 등록된 검증이 없으면 「미검증」, 보수 계산(확인되지 않은 값을 넉넉하게 잡는 계산, 1+예산), 재검증 대기.
   - 실행은 계속한다(§6.7).
-  - 유료 재검증은 Q-12-잔여 승인 전에는 실행하지 않는다.
+  - 유료 재검증은 owner Q-12-잔여 결정(2026-11-27 아이템 15) 안에서만 한다: 검증 단계 전체 30회, 1회 최대 Effort high, 상한에 닿으면 멈추고 owner에게 묻는다. 실검증은 M8-04다.
 - **화면**
   - 기존 readiness·관측 등급·경고만 쓴다.
   - 업데이트 버튼이나 설정을 추가하지 않는다.
@@ -426,6 +470,7 @@ owner는 Codex·Claude CLI를 항상 최신으로 쓰라고 정했다. 그런데
 | 운영 | 아래 목록 참고 |
 | 데이터 파일 | `~/.agentwbs/wbs/<epoch>/{evidence,pdf}` — epoch별 분리(초기화 경합 차단) |
 | Runner 데이터 | `~/.agentwbs/{repos,worktrees,inputs,runs,state}` |
+| Agent 작업 영역(Q-08 전용 계정) | `/srv/agentwbs/{cli,worktrees,inputs}` — 전용 계정을 쓰면 작업 폴더·입력 사본·CLI가 여기로 옮겨진다 |
 | 관리 대상 프로젝트 CI compose | project `awbs-ci-<repo>` · 포트는 Runner 할당 |
 
 - 운영: API가 web을 함께 서빙, 호스트 `5173`(G§4.14 기본 접속 주소와 같음). 개발과 동시 기동 시 `AWBS_PORT` 변경.
@@ -446,6 +491,7 @@ owner는 Codex·Claude CLI를 항상 최신으로 쓰라고 정했다. 그런데
   - 왜: 두 작업의 테스트가 같은 DB를 지우고 채우면 서로 결과를 망친다.
 - 테스트는 `awbs_test_` 접두어가 아니면 시작을 거부한다(파괴적 초기화 방지).
   - 왜: 테스트는 DB를 비우고 시작하므로, 실수로 개발 DB를 가리키면 데이터가 날아간다.
+- DB 이미지는 Debian 기반 `postgres:16`이고 `track_commit_timestamp=on`으로 띄운다. 시험 DB는 C.UTF-8 정렬로 만든다. 자세한 이유는 data-model §6 「DB 서버 요구사항」과 `agent-wbs/packages/db/TESTING.md`.
 
 ### 6.3 실행 명령(M0에서 제공)
 
@@ -462,6 +508,9 @@ pnpm -C agent-runner start          # 토큰 발급 후
   - 용어 풀이: Dockerfile = 컨테이너 이미지를 만드는 설명서; docker compose = 여러 컨테이너를 설정 파일 하나로 띄우는 도구.
 - `GET /health`, `GET /health/db`(P TASK-0001/0002).
 - Runner는 호스트 CLI·worktree를 다루므로 **컨테이너가 아니라** 사용자 systemd 서비스로 실행한다 [결정].
+  - Runner 계정에 linger를 켠다(`loginctl enable-linger <계정>`). 왜: 재시작 뒤 아무도 로그인하지 않으면 사용자 systemd가 없어 Runner와 cgroup scope가 뜨지 않는다.
+- 배포 확인(④) 대상은 이 PC의 docker compose다(owner Q-15 A, 2026-11-27 아이템 19). 원격 서버·SSH 대상은 넣지 않는다.
+- 서버 계약을 바꿔 배포할 때는 대기 중인 옛 job(`input_diff`·`split`·`estimate`·`planning`)을 다시 만드는 절차가 필요하다. M8 실환경 시작 전에 정한다.
 - 되돌리기는 커밋 해시로 다시 빌드한다(§4.13 L489).
 - DB는 배포 전 `pg_dump`로 백업한다 [결정].
 
@@ -470,6 +519,13 @@ pnpm -C agent-runner start          # 토큰 발급 후
 - 저장 UTC `timestamptz`(시간대를 반영해 UTC의 한 시점으로 저장하는 타입. 원래 시간대 정보는 보관하지 않는다), 표시·하루 경계·스케줄은 `Asia/Seoul`(§9.2-2, §9.6-2).
 - 프로세스 TZ(시간대 설정)에 의존하지 않고 명시적 변환을 쓴다.
   - 왜: 서버를 띄운 환경의 시간대 설정이 바뀌어도 「하루」의 경계가 흔들리지 않게 한다.
+- **벽시계는 뒤로 갈 수 있다고 본다** (2026-11-27 확인)
+  - 이 PC(WSL)의 시계는 약 32초마다 약 2.3초 뒤로 가는 것이 재현됐다.
+  - 그래서 순서 판단은 벽시계 대신 뒤로 가지 않는 값으로 한다.
+    - DB: 「최신 하나」는 저장 순번(`record_no`·`run_no`·`queue_no`)으로 고른다(data-model §1).
+    - 보고서: 커밋 시계(`log_clock`)로 「그 시점 전」을 가른다(data-model §2.7 「보고서 상태 이력」).
+    - Runner: 시간 간격은 단조 시계로 재고, 임대 끝 5초 전을 마감으로 본다(contracts §3.4-10).
+    - 웹: 초안 보관의 로그인·로그아웃·보관 순서는 모든 탭이 공유하는 단조 세션 번호(벽시계 값과 「마지막 번호 + 1」 중 큰 값)로 비교한다(`apps/web/src/shared/state/sessionDrafts.ts`).
 
 ## 7. 해석 결정 기록
 
