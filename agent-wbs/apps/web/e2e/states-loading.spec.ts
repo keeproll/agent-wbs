@@ -115,8 +115,12 @@ test('늦은 첫 응답: 0.2초 뒤 메뉴 배치 모양 skeleton → 응답 →
 
 test('이미 본 화면으로 다시 오면 이전 화면을 유지하고 상단 진행 막대를 보인다', async ({ page }) => {
   const api = await fakeApi(page);
-  await page.goto('/design'); // 아직 「준비 중」인 메뉴(빌드·통합은 M7-05에서 구현됨)
-  await expect(page.getByText('이 화면은 아직 구현되지 않았습니다.')).toBeVisible();
+  // M6 통합 재병합: M6-07(설계)·M7-05(빌드 · 통합)까지 들어와 자리 표시 메뉴가 하나도 없다. 실제 화면에서 시작한다.
+  // 시험하는 것은 「프로젝트 조회를 이미 한 번 마친 뒤 다른 메뉴로 옮길 때」의 로딩 모양이다. 시작 화면의 본문 내용은 상관없다.
+  emptyReports(api);
+  await page.goto('/ci');
+  await expect(page.getByRole('heading', { level: 1, name: '빌드 · 통합' })).toBeVisible();
+  await expect.poll(() => api.requests('GET /api/project').length).toBeGreaterThan(0);
   const slow = hold((route) => json(route, 200, ACTIVE_PROJECT));
   api.on('GET /api/project', slow.handler);
   await page.getByRole('navigation', { name: '주 메뉴' }).getByRole('link', { name: '보고서', exact: true }).click();
