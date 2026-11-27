@@ -5,6 +5,7 @@ import type { Agent } from './api/generated/client.ts';
 import { Runner } from './api/runner.ts';
 import { authenticationFailed } from './api/outbox.ts';
 import { createGithubRemoteCleanup } from './cleanup/remote.ts';
+import { githubWriteGate } from './github/write-gate.ts';
 import { createResetCleanup, type ResetCleanupDeps } from './cleanup/reset.ts';
 import { CliUpdater, cliBinary, type CliRegistry } from './cli-update/manager.ts';
 import { cliAwareRun, cliEnvironment } from './cli-update/registry.ts';
@@ -170,12 +171,14 @@ export class RunnerApp {
           throw error;
         }
       };
+      const githubRepo = `https://github.com/${d.github.repo.owner}/${d.github.repo.repo}`;
       const client = createGitHubClient({
         repo: d.github.repo,
         token: () => source.token(),
         ...(d.github.baseUrl && { baseUrl: d.github.baseUrl }),
         fetch: githubFetch,
-        beforeWrite: checkDeployKeys,
+        // 모든 외부 쓰기(REST·Git push)의 관문. push는 원격 저장소 확인 뒤 같은 배포 키 검사를 거친다.
+        beforeWrite: githubWriteGate(githubRepo, checkDeployKeys),
         onPermissionDenied: async (event) => { await connector.reportPermissionDenied(event, client.permissions(), mode); },
       });
       this.github = { client, connector, mode, checkDeployKeys };

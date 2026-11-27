@@ -27,7 +27,9 @@ export type WriteOperation =
   | { kind: 'pull_close'; pr: number }
   | { kind: 'branch_delete'; branch: string }
   | { kind: 'status'; sha: string; context: StatusContext }
-  | { kind: 'merge'; pr: number; headSha: string };
+  | { kind: 'merge'; pr: number; headSha: string }
+  /** Git push(REST가 아님). 호출자가 push 직전에 `assertWritable`로 같은 관문을 거친다. remote는 push할 원격 주소다. */
+  | { kind: 'branch_push'; branch: string; remote: string };
 
 /** 권한 이름. 원본 가이드 §9.5-4-1의 네 권한(README §4). */
 export type PermissionName = 'contents' | 'pulls' | 'statuses' | 'metadata';
@@ -731,6 +733,14 @@ export function createGitHubClient(options: GitHubClientOptions) {
     },
 
     getPullRequest,
+
+    /**
+     * REST가 아닌 외부 쓰기(Git push) 직전에 부른다. PR 생성·상태 기록과 같은 `beforeWrite` 관문(앱에서는 배포 키·원격 확인)을 그대로 거친다.
+     * 왜: push도 원격을 바꾸는 쓰기다. REST 쓰기만 막으면 「확인할 수 없으면 쓰기를 중단한다」는 M4 경계가 깨진다.
+     */
+    async assertWritable(operation: WriteOperation): Promise<void> {
+      await beforeWrite(operation);
+    },
 
     async closePullRequest(pr: number): Promise<void> {
       if (!Number.isSafeInteger(pr) || pr < 1) throw invalid('PR 번호가 올바르지 않습니다.');
