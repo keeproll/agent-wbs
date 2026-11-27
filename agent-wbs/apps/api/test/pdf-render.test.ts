@@ -217,10 +217,12 @@ describe('브라우저 손잡이: 늦은 띄우기 결과·정리·연결 끊김
     const fakes: Fake[] = [];
     let n = 0;
     const launcher = async () => {
-      const p = plan(++n);
+      // 기다리기 전에 ID를 고정한다(기다리는 사이 다른 띄우기가 n을 올려도 ID가 겹치지 않게, Codex 4차 P3).
+      const id = ++n;
+      const p = plan(id);
       await sleep(p.delayMs);
       if (p.fail) throw new Error('띄우기 실패');
-      const f: Fake = { id: n, alive: true, hang: p.hang, workMs: p.workMs, onDisconnect: [] };
+      const f: Fake = { id, alive: true, hang: p.hang, workMs: p.workMs, onDisconnect: [] };
       fakes.push(f);
       const closed = () => { if (!f.alive) throw new Error('Browser closed'); };
       const gate = () => (f.hang ? never() : sleep(f.workMs));
@@ -244,7 +246,7 @@ describe('브라우저 손잡이: 늦은 띄우기 결과·정리·연결 끊김
     };
     /** 밖에서 죽음(프로세스가 사라지고 연결 끊김 알림이 온다) */
     const crash = (f: Fake) => { f.alive = false; for (const cb of f.onDisconnect) cb(); };
-    return { fakes, launcher, crash, alive: () => fakes.filter((f) => f.alive).map((f) => f.id) };
+    return { fakes, launcher, crash, alive: () => fakes.filter((f) => f.alive).map((f) => f.id), launched: () => n };
   }
 
   test('늦은 띄우기 실패: 포기한 첫 띄우기가 새 브라우저가 뜬 뒤 실패해도, 새 브라우저의 손잡이를 지우지 않는다', async () => {
@@ -306,6 +308,43 @@ describe('브라우저 손잡이: 늦은 띄우기 결과·정리·연결 끊김
     expect(await a).toBe('PDF 변환 시간 초과');
     expect(await b).toMatch(/^%PDF-2$/);
     await renderer.close();
+    expect(w.alive()).toEqual([]);
+  });
+
+  test('닫은 뒤에는 끝: 기다리던 늦은 띄우기가 완료돼도 새 브라우저를 띄우지 않고, 그 뒤 렌더는 바로 거부한다(Codex 4차 P2-1)', async () => {
+    let release: () => void = () => undefined;
+    const w = world(() => ({ delayMs: 0, fail: false, hang: false, workMs: 10 }));
+    let calls = 0;
+    const renderer = chromiumRenderer({
+      timeoutMs: 100, cleanupMs: 30,
+      launcher: () => { calls++; return calls === 1 ? new Promise<void>((r) => { release = r; }).then(() => w.launcher()) : w.launcher(); },
+    });
+    // 첫 띄우기를 기다리던 변환이 시간 초과로 끝난다(띄우기는 아직 진행 중).
+    await expect(renderer.render('A')).rejects.toThrow('PDF 변환 시간 초과');
+    await renderer.close();
+    expect((await renderer.inspect()).pid).toBeNull();
+    // 닫은 뒤 늦은 띄우기가 완료된다. 옛 세대는 죽고, 기다리던 쪽이 새 브라우저를 다시 띄우지 않는다.
+    release();
+    await sleep(100);
+    expect(calls).toBe(1);
+    expect(w.alive()).toEqual([]);
+    // 닫은 뒤의 렌더는 띄우지 않고 바로 거부한다.
+    await expect(renderer.render('B')).rejects.toThrow('PDF 변환기가 닫혔습니다');
+    expect(calls).toBe(1);
+    expect(w.alive()).toEqual([]);
+  });
+
+  test('닫는 순간 자리를 기다리던 렌더도 브라우저를 띄우지 않고 거부한다', async () => {
+    const w = world(() => ({ delayMs: 0, fail: false, hang: true, workMs: 0 }));
+    const renderer = chromiumRenderer({ timeoutMs: 100, cleanupMs: 30, launcher: w.launcher });
+    // 자리 2개를 멈춘 변환이 차지하고, 셋째는 자리를 기다린다.
+    const jobs = ['A', 'B', 'C'].map((x) => renderer.render(x).then(() => 'ok', (e: unknown) => (e as Error).message));
+    await sleep(20);
+    await renderer.close();
+    const results = await Promise.all(jobs);
+    expect(results[2]).toBe('PDF 변환기가 닫혔습니다');
+    await sleep(50);
+    expect(w.launched()).toBe(1);
     expect(w.alive()).toEqual([]);
   });
 

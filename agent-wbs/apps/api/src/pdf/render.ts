@@ -67,11 +67,18 @@ const sleep = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolv
  *    모두 자기 token을 들고 와서, 손잡이가 아직 그 token일 때만 손잡이를 바꾼다.
  * 3. 손잡이가 아닌 세대의 브라우저(포기한 시작이 늦게 성공한 것 포함)는 반드시 죽인다. 죽이지 않은 브라우저는 live에 남는다.
  * 그래서 손잡이는 언제나 0개 또는 1개이고, 손잡이가 아닌 살아 있는 브라우저는 곧 죽는다.
+ * 4. close()는 끝 상태(closed)다. 그 뒤로는 새 세대를 만들지 않는다. 닫은 뒤 들어오거나 기다리던 변환은 바로 거부한다(Codex 4차 P2-1).
+ *    왜: 닫은 뒤 늦게 끝난 띄우기를 기다리던 변환이 다시 띄우면, 서버가 꺼진 뒤에도 브라우저가 남는다.
  */
+export class RendererClosed extends Error {
+  constructor() { super('PDF 변환기가 닫혔습니다'); }
+}
+
 class BrowserHandle {
   private lock: Promise<unknown> = Promise.resolve();
   private generation = 0;
   private current: { token: number; starting: Promise<Launched>; instance?: Launched } | null = null;
+  private closed = false;
   /** 띄웠고 아직 죽이지 않은 브라우저(세대 → 인스턴스) */
   private readonly live = new Map<number, Launched>();
 
@@ -92,6 +99,7 @@ class BrowserHandle {
   async acquire(onToken: (token: number) => void): Promise<Browser> {
     for (;;) {
       const { token, starting } = await this.serial(() => {
+        if (this.closed) throw new RendererClosed();
         if (!this.current) {
           const token = ++this.generation;
           const starting = this.launcher();
@@ -104,7 +112,10 @@ class BrowserHandle {
       });
       onToken(token);
       const instance = await starting;
-      if (await this.serial(() => this.current?.token === token)) return instance.browser;
+      // 다시 확인: 닫혔으면 거부, 그 세대가 아직 손잡이면 사용, 아니면(포기된 세대) 다시 얻는다.
+      const state = await this.serial(() => (this.closed ? 'closed' : this.current?.token === token ? 'ok' : 'retry'));
+      if (state === 'closed') throw new RendererClosed();
+      if (state === 'ok') return instance.browser;
     }
   }
 
@@ -142,6 +153,7 @@ class BrowserHandle {
   /** 모두 끝낸다: 손잡이를 비우고 살아 있는 모든 세대를 죽인다. 띄우는 중인 세대는 settle이 죽인다. */
   async close(): Promise<void> {
     const tokens = await this.serial(() => {
+      this.closed = true;
       this.current = null;
       return [...this.live.keys()];
     });
