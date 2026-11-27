@@ -86,7 +86,7 @@ try {
   exitCode = result.status ?? 1;
 } finally {
   api?.kill('SIGTERM');
-  spawnSync('docker', ['rm', '-f', name], { stdio: 'ignore' });
+  spawnSync('docker', ['rm', '-f', '-v', name], { stdio: 'ignore' }); // -v: 익명 볼륨까지 지운다(M6 통합, docker 규칙)
   rmSync(home, { recursive: true, force: true });
   process.exitCode = exitCode;
 }

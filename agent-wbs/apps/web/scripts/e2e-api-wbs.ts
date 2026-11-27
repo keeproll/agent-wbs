@@ -79,6 +79,6 @@ try {
     api.kill('SIGTERM');
     await Promise.race([exited, sleep(5_000)]);
   }
-  spawnSync('docker', ['rm', '-f', name], { stdio: 'ignore' });
+  spawnSync('docker', ['rm', '-f', '-v', name], { stdio: 'ignore' }); // -v: 익명 볼륨까지 지운다(M6 통합, docker 규칙)
   process.exitCode = exitCode;
 }
