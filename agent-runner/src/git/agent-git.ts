@@ -33,58 +33,91 @@ export function parseInspect(stdout: string): { head: string; dirty: boolean } {
   return { head: match[1], dirty: match[2] === '1' };
 }
 
-interface Spawned { file: string; args: string[]; env: NodeJS.ProcessEnv; cwd: string }
+export interface Spawned { file: string; args: string[]; env: NodeJS.ProcessEnv; cwd: string }
 
-interface CaptureOptions { out?: { path: string; limit: number }; input?: string; allow?: readonly number[] }
-
-/** 명령 하나를 돌려 표준 출력을 모으거나(상한) 파일로 쓴다. 허용하지 않은 종료 코드면 실패. */
-async function capture(command: Spawned, out?: { path: string; limit: number }): Promise<string> {
-  return (await captureCode(command, { ...(out && { out }) })).stdout;
+export interface CaptureOptions {
+  out?: { path: string; limit: number };
+  input?: string;
+  allow?: readonly number[];
+  /**
+   * 그 명령이 띄운 모든 프로세스를 끝낸다(래퍼 호출: 전용 scope의 cgroup.kill). 시간 초과 때와,
+   * 명령은 끝났는데 자손이 출력 통로를 쥐고 남았을 때 부른다(재점검 P2-1).
+   */
+  kill?: () => Promise<void>;
+  timeoutMs?: number;
+  /** 명령이 끝난 뒤 출력 통로가 닫히기를 기다리는 시간. 넘으면 자손이 통로를 쥔 것으로 보고 실패한다. */
+  graceMs?: number;
 }
 
-async function captureCode(command: Spawned, options: CaptureOptions): Promise<{ code: number; stdout: string }> {
+/**
+ * 명령 하나를 돌린다. Node의 `close`(프로세스 끝 + 통로 모두 닫힘)만 기다리지 않는다(재점검 P2-1).
+ * 왜: Agent 설정이 띄운 `setsid` 자손이 표준 출력·오류 통로를 쥐고 있으면 `close`가 오지 않아 Runner가 멈춘다.
+ *   그 자손은 다른 프로세스 그룹이고 Agent 계정이라, 그룹 신호로는 끝나지 않는다.
+ * 순서:
+ * 1. `exit`(직접 띄운 프로세스의 끝)나 시간 초과 중 먼저 오는 것을 기다린다.
+ * 2. 시간 초과면 `kill`(scope 전체 정리) + 그룹 신호 → 통로를 닫고 「시간 초과」로 실패한다.
+ * 3. 끝났으면 통로가 닫히기를 `graceMs`만 기다린다. 안 닫히면 `kill` → 통로를 닫고 「자손이 통로를 쥠」으로 실패한다.
+ * 결과는 통로가 정상으로 닫힌 경우에만 쓴다.
+ */
+export async function captureCode(command: Spawned, options: CaptureOptions): Promise<{ code: number; stdout: string }> {
   const out = options.out;
   const file = out ? await open(out.path, 'wx', 0o600) : undefined;
+  const child = spawn(command.file, command.args, { cwd: command.cwd, env: command.env, stdio: [options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], detached: true });
+  const killGroup = () => { try { process.kill(-(child.pid ?? 0), 'SIGKILL'); } catch { /* 이미 끝남 */ } };
+  const destroy = () => { child.stdout?.destroy(); child.stderr?.destroy(); child.stdin?.destroy(); };
+  const wait = (ms: number) => new Promise<'wait'>((resolve) => { const t = setTimeout(() => resolve('wait'), ms); t.unref(); });
   try {
-    return await new Promise<{ code: number; stdout: string }>((resolve, reject) => {
-      const child = spawn(command.file, command.args, { cwd: command.cwd, env: command.env, stdio: [options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], detached: true });
-      if (options.input !== undefined) { child.stdin?.on('error', () => undefined); child.stdin?.end(options.input); }
-      const chunks: Buffer[] = [];
-      let size = 0, failed: Error | undefined, writing = Promise.resolve();
-      const stop = (error: Error) => { failed ??= error; try { process.kill(-(child.pid ?? 0), 'SIGKILL'); } catch { /* 이미 끝남 */ } };
-      const timer = setTimeout(() => stop(new AgentGitError('Agent git 명령이 시간 안에 끝나지 않았습니다.')), TIMEOUT_MS);
-      child.stdout?.on('data', (bytes: Buffer) => {
-        size += bytes.length;
-        if (size > (out?.limit ?? 1024 * 1024)) { stop(new AgentGitError('Agent git 출력이 상한을 넘었습니다.')); return; }
-        if (file) { const f = file; writing = writing.then(async () => { await f.write(bytes); }); }
-        else chunks.push(bytes);
-      });
-      child.stderr?.resume();
-      child.once('error', reject);
-      child.once('close', (code) => {
-        clearTimeout(timer);
-        void writing.then(() => {
-          if (failed) reject(failed);
-          else if (code === null || !(options.allow ?? [0]).includes(code)) reject(new AgentGitError(`Agent 계정 명령이 종료 코드 ${String(code)}로 끝났습니다.`));
-          else resolve({ code, stdout: Buffer.concat(chunks).toString('utf8') });
-        }, reject);
-      });
+    if (options.input !== undefined) { child.stdin?.on('error', () => undefined); child.stdin?.end(options.input); }
+    const chunks: Buffer[] = [];
+    let size = 0, overflow = false, writing = Promise.resolve();
+    child.stdout?.on('data', (bytes: Buffer) => {
+      size += bytes.length;
+      if (size > (out?.limit ?? 1024 * 1024)) { overflow = true; killGroup(); return; }
+      if (file) { const f = file; writing = writing.then(async () => { await f.write(bytes); }); }
+      else chunks.push(bytes);
     });
-  } finally { await file?.close(); }
+    child.stderr?.resume();
+    const spawned = new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
+    const exited = new Promise<number | null>((resolve) => child.once('exit', (code) => resolve(code)));
+    const closed = new Promise<'closed'>((resolve) => child.once('close', () => resolve('closed')));
+    await spawned;
+    const first = await Promise.race([exited.then((code) => ({ code })), wait(options.timeoutMs ?? TIMEOUT_MS)]);
+    if (first === 'wait') {
+      await options.kill?.();
+      killGroup();
+      if (await Promise.race([closed, wait(options.graceMs ?? 2_000)]) === 'wait') destroy();
+      throw new AgentGitError('Agent 계정 명령이 시간 초과로 끝나지 않아 scope를 정리했습니다(시간 초과).');
+    }
+    if (await Promise.race([closed, wait(options.graceMs ?? 2_000)]) === 'wait') {
+      await options.kill?.();
+      if (await Promise.race([closed, wait(options.graceMs ?? 2_000)]) === 'wait') destroy();
+      throw new AgentGitError('Agent 계정 명령이 끝난 뒤에도 자손 프로세스가 출력 통로를 쥐고 있어 정리했습니다. 결과를 쓰지 않습니다.');
+    }
+    await writing;
+    if (overflow) throw new AgentGitError('Agent 계정 명령의 출력이 상한을 넘었습니다.');
+    const code = first.code;
+    if (code === null || !(options.allow ?? [0]).includes(code)) throw new AgentGitError(`Agent 계정 명령이 종료 코드 ${String(code)}로 끝났습니다.`);
+    return { code, stdout: Buffer.concat(chunks).toString('utf8') };
+  } finally {
+    destroy();
+    await file?.close();
+  }
 }
 
 /**
  * 실제 래퍼로 Agent 계정 git을 돌린다: `systemd-run --user --scope -- sudo -n -u awbs-agent -- 래퍼 git-…`.
  * Agent 설정이 무엇을 띄우든 그 프로세스는 scope 안이다. 끝나면 scope를 비우고 비었음을 확인한다(못 하면 실패).
  */
-export interface WrapperConfig { user: string; exec: string; sudo?: string }
+export interface WrapperConfig { user: string; exec: string; sudo?: string; /** 시험용 시간 초과(기본 10분) */ timeoutMs?: number }
 
 /** 래퍼 하위 명령 하나를 사용자 scope 안에서 Agent 계정으로 돌리고, 끝나면 scope를 비운 것을 확인한다. */
 async function wrapperCall(cfg: WrapperConfig, args: string[], options: CaptureOptions = {}): Promise<{ code: number; stdout: string }> {
   const launch = inUserScope({ file: cfg.sudo ?? '/usr/bin/sudo', args: ['-n', '-u', cfg.user, '--', cfg.exec, ...args], env: { PATH: '/usr/bin:/bin' }, cwd: '/', stdin: '' });
   // 결과를 쓰기 전에 scope를 비운다. Agent 설정이 띄운 프로세스가 남으면 결과도 믿지 않는다.
   let result: { code: number; stdout: string } | undefined, failure: unknown;
-  try { result = await captureCode(launch, options); } catch (error) { failure = error; }
+  // 호출마다 전용 scope(launch.scope)다. 시간 초과·통로를 쥔 자손이 있으면 그 scope 전체를 cgroup.kill로 끝낸다.
+  const kill = async () => { if (launch.scope) await clearScope(launch.scope); };
+  try { result = await captureCode(launch, { ...options, kill, ...(cfg.timeoutMs !== undefined && { timeoutMs: cfg.timeoutMs }) }); } catch (error) { failure = error; }
   if (launch.scope && !await clearScope(launch.scope)) throw new AgentGitError('Agent 계정 명령의 scope를 비우지 못했습니다.');
   if (failure !== undefined || result === undefined) throw failure instanceof Error ? failure : new AgentGitError('Agent 계정 명령이 실패했습니다.');
   return result;
@@ -99,11 +132,12 @@ export function wrapperAgentGit(cfg: WrapperConfig = { user: AGENT_USER, exec: A
 }
 
 /** 같은 계정 git(전용 계정이 없는 배치·시험). 래퍼와 같은 안전 기본값과 같은 출력 모양을 쓴다. */
-export function localAgentGit(): AgentGit {
+export function localAgentGit(options: { timeoutMs?: number } = {}): AgentGit {
   const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
     GIT_ALLOW_PROTOCOL: 'none', GIT_NO_LAZY_FETCH: '1', GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' };
-  const git = (dir: string, args: string[], out?: { path: string; limit: number }) => capture({ file: 'git',
-    args: ['-C', dir, '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'core.excludesFile=/dev/null', ...args], env, cwd: dir }, out);
+  const git = async (dir: string, args: string[], out?: { path: string; limit: number }) => (await captureCode({ file: 'git',
+    args: ['-C', dir, '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'core.excludesFile=/dev/null', ...args], env, cwd: dir },
+  { ...(out && { out }), ...(options.timeoutMs !== undefined && { timeoutMs: options.timeoutMs }) })).stdout;
   return {
     async inspect(path) {
       const head = (await git(path, ['rev-parse', '--verify', 'HEAD^{commit}'])).trim();

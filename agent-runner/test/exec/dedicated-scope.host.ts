@@ -382,6 +382,46 @@ test.runIf(systemdRun)('새 래퍼 사본 + 실제 scope: 결과는 bundle로만
   }
 });
 
+/**
+ * 재점검 P2-1(fix3): Agent가 심은 filter가 setsid 자손으로 출력 통로를 쥐어 git-inspect가 막혀도,
+ * 래퍼 호출의 전용 scope를 시간 초과 때 cgroup.kill로 비워 호출이 끝나고 자손도 남지 않아야 한다(새 래퍼 사본, 실제 scope).
+ */
+test.runIf(systemdRun)('재점검 P2-1 재현: filter의 setsid 자손이 통로를 쥐어도 래퍼 호출은 시간 초과로 끝나고 scope 전체가 정리된다', async () => {
+  const root = await mkdtemp(join(process.env.AWBS_TEST_TMP ?? tmpdir(), 'wrapper-hang-'));
+  const me = spawnSync('id', ['-un'], { encoding: 'utf8' }).stdout.trim();
+  const area = join(root, 'srv');
+  const repo = join(area, 'worktrees', 'p1', 'ci-hang');
+  const pidFile = join(root, 'stray.pid');
+  try {
+    for (const d of [repo, join(area, 'inputs'), join(area, 'cli'), join(root, 'node')]) await mkdir(d, { recursive: true });
+    const conf = join(root, 'agent-exec.conf');
+    await writeFile(conf, `AGENT_USER=${me}\nRUNNER_USER=${me}\nRUNNER_HOME=${join(root, 'runner-home')}\nAGENT_ROOT=${area}\nNODE_DIR=${join(root, 'node')}\n`);
+    const exec = join(root, 'awbs-agent-exec');
+    await writeFile(exec, readFileSync(WRAPPER_SOURCE, 'utf8').replace('\nCONF=/etc/agentwbs/agent-exec.conf\n', `\nCONF=${conf}\n`)); await chmod(exec, 0o755);
+    const sudo = join(root, 'fake-sudo');
+    await writeFile(sudo, '#!/bin/bash\n[[ $1 == -n && $2 == -u && $4 == -- ]] || exit 9\nshift 4\nexec env -i "$@"\n'); await chmod(sudo, 0o755);
+    const g = (...a: string[]) => spawnSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@x', '-c', 'commit.gpgSign=false', ...a], { encoding: 'utf8' });
+    g('init', '-q', '-b', 'main'); await writeFile(join(repo, 'a.txt'), 'a\n'); g('add', 'a.txt'); g('commit', '-qm', 'a');
+    // Agent가 심을 수 있는 설정: clean filter가 setsid 자손을 띄워 git의 통로를 쥔다(리뷰어 재현과 같은 모양, sleep infinity).
+    g('config', 'filter.x.clean', `setsid sh -c 'echo $$ > ${pidFile}; exec sleep infinity' & cat`);
+    await writeFile(join(repo, '.git', 'info', 'attributes'), '* filter=x\n');
+    await writeFile(join(repo, 'a.txt'), 'a\n');
+    const started = performance.now();
+    await expect(wrapperAgentGit({ user: me, exec, sudo, timeoutMs: 2_000 }).inspect(repo)).rejects.toThrow('시간 초과');
+    const elapsed = Math.round(performance.now() - started);
+    expect(elapsed).toBeLessThan(15_000);
+    const stray = Number(readFileSync(pidFile, 'utf8').trim());
+    expect(stray).toBeGreaterThan(1);
+    // scope 전체를 cgroup.kill로 비웠으므로 setsid 자손도 끝났다.
+    await expect.poll(() => alive(stray), { timeout: 3_000 }).toBe(false);
+    facts.wrapperHang = { elapsedMs: elapsed, strayPid: stray, strayAlive: await alive(stray) };
+  } finally {
+    const stray = Number(existsSync(pidFile) ? readFileSync(pidFile, 'utf8').trim() : 0);
+    if (stray > 1) try { process.kill(stray, 'SIGKILL'); } catch { /* 이미 끝남 */ }
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test.runIf(!installed)('전용 계정이 설치되지 않은 PC: 시험을 건너뛰었음을 기록한다', () => {
   facts.skipped = '래퍼 또는 awbs-agent 계정이 없어 실커널 전용 계정 시험을 건너뜀';
   expect(installed).toBe(false);
