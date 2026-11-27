@@ -39,8 +39,12 @@ try {
           run: agentLoginRun({ user: AGENT_USER, root: config.agentRoot, exec: AGENT_EXEC }, createRunCommand({ env: cliEnvironment(process.env), timeoutMs: 120_000 })),
         }),
       }),
+      // 전용 계정(agentRoot)이면 앱이 준비 점검 뒤·실행 직전마다 래퍼 check와 사용자 scope를 확인해 격리를 고른다. 없으면 실행 거부.
       agentRoot: config.agentRoot,
       cliUpdates: config.cliUpdates,
+      // 시도 흐름(jobs)·CI 실행기(ci)는 아직 연결하지 않는다. 실제 결과 수집기(collect)·테스트 식별자 수집기(collectTests)가 없기 때문이다.
+      // 연결할 때 jobs.taskCheck에는 ① 공급원(TaskCheckSources)만 넘긴다. 앱이 자기 GitHub 클라이언트로 bindTaskCheck를 부른다.
+      // GitHub 클라이언트를 여기서 따로 만들어 넘기지 않는다(배포 키 검사·권한 거부 보고가 걸린 앱의 것 하나만 쓴다).
       ...(config.github && { github: config.github }),
     });
     log.info({ wbsUrl: config.wbsUrl, home: config.home }, 'Runner 시작');

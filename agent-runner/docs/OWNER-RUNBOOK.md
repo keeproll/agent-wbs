@@ -180,7 +180,15 @@ pnpm -C agent-runner start
 ```
 
 - Runner가 CLI 최신 확인과 준비 점검을 합니다. 준비 점검의 Claude·Codex 로그인 항목이 `ok`이면 됩니다.
-- 참고: 실제 Agent 세션 실행은 exec 계층(M5-02)이 연결된 뒤에 시작됩니다(isolation.md §12.2).
+- 실행 계층은 연결됐습니다(isolation.md §12.2). Runner는 실행 직전마다 래퍼 점검과 사용자 scope 시험을 다시 하고, 통과할 때만 Agent 계정으로 세션을 띄웁니다.
+  - 사용자 scope에는 linger가 필요합니다. 아래로 확인합니다. `Linger=yes`가 보이면 됩니다.
+
+    ```bash
+    loginctl show-user "$USER" -p Linger
+    ```
+
+  - 실패하면 Runner 로그에 `실제 Agent 실행 보류: …`가 한 번 보입니다. 그 줄을 보내 주세요.
+- 참고: 실제 시도 흐름은 결과 수집기(`collect`)가 연결된 뒤에 시작됩니다(`src/jobs/README.md`). 그 전까지 Runner는 시도 job을 받지 않습니다.
 
 ---
 

@@ -46,7 +46,12 @@
   - 작업 폴더는 `/srv/agentwbs/worktrees/` 안, CLI는 `/srv/agentwbs/cli/<agent>/` 안이어야 한다. 대상과 기준 폴더를 둘 다 실제 경로로 바꾼 뒤 비교한다. 밖이거나 실제 경로를 못 구하면 `cwd_outside_agent_root`·`binary_outside_agent_root`.
   - 환경 변수는 `LANG`·`LC_ALL`만 래퍼 인자로 넘긴다. HOME·PATH·TMPDIR는 래퍼가 Agent 계정 값으로 새로 만든다.
   - 권한 모드(`DEDICATED_FLAGS`): Claude `--permission-mode bypassPermissions`, Codex `-c approval_policy="never" -c sandbox_mode="workspace-write"`.
-- `selectIsolation(env, run)`: `AWBS_AGENT_USER`가 없으면 거부 유지. 있으면 래퍼 `check`를 Agent 계정으로 돌려 `ok`일 때만 전용 계정 계층을 쓴다.
+- `selectIsolation(env, run)`: `AWBS_AGENT_USER`가 없으면 거부 유지. 있으면 래퍼 `check`를 Agent 계정으로 돌린다.
+  - `ok`이면 사용자 cgroup scope를 실제로 한 번 만들어 본다(`/usr/bin/env -i PATH=… XDG_RUNTIME_DIR=/run/user/<UID> systemd-run --user --scope … /bin/true`, 돈 들지 않음).
+  - 둘 다 통과할 때만 `withUserScope(dedicatedUserIsolation(...))`(이름 `dedicated-user+user-scope`)를 쓴다. 실행 계획은 `systemd-run --user --scope … -- sudo … 래퍼 run …`이다(`src/exec/scope.ts`).
+  - 왜 scope까지 보나: Runner는 Agent 계정 프로세스에 신호를 보낼 수 없다. scope 없이 띄우면 그룹을 빠져나간 Agent 자손을 끝냈다고 증명할 수 없다.
+  - scope는 CLI 옵션(`flags`)을 바꾸지 않는다. 그래서 관측 등급 조합(`sessionOptions`)도 그대로다.
+- `restoreAgentPermissions(path)`: 래퍼 `fix-perms`를 부르고 `fixed`가 아니면 `agent_permissions_unrestored`. 작업 폴더 삭제가 권한 문제로 막혔을 때 git 계층이 쓴다.
 - `agentControl`: Agent 계정으로 도는 정리 명령(`kill-group`·`kill-all`·`fix-perms`·`check`). Runner 계정은 다른 계정 프로세스에 신호를 보낼 수 없기 때문이다.
 - `sessionOptions(agent, isolation, kind)`은 관측 등급 조합의 「옵션」 문자열이다. readiness `cliProfiles`와 서버 `cliGrades`에 같은 값을 쓴다.
   - `kind`는 `new`(새 실행) 또는 `resume`(재개)이다. 재개는 다른 조합으로 센다.

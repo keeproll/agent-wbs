@@ -19,6 +19,11 @@ M7-06의 실제 ①을 `bindTaskCheck`로 연결한다.
 
 `RunnerAppDeps.execution`에 기존 작업 폴더 준비와 격리 공급원을 연결한다.
 `RunnerAppDeps.jobs`에 `collect`와 실제 `taskCheck`를 반드시 연결한다.
+실제 `taskCheck`는 ① 공급원(`TaskCheckSources`: `repo`·`worktree`·`launch`·`collectTests`·`observeMainPipeline`)으로 넘긴다.
+앱(`RunnerApp`)이 자기 GitHub 클라이언트·`Execution`·`Runner`·API로 `bindTaskCheck`를 부른다.
+GitHub 설정이 없으면 `github: null`로 묶는다(PR 없이 보고, 서버가 통합을 보류).
+왜: GitHub 클라이언트는 배포 키 검사·권한 거부 보고·토큰 무효화가 걸린 앱의 것 하나만 써야 한다. 밖에서 다른 클라이언트를 넘기면 PR 생성이 그 관문을 지나지 않는다.
+함수를 직접 넘기는 모양은 시험용이다.
 `taskCheck`가 없으면 구성 단계에서 거부한다.
 앱은 기존 `Runner`·`Execution`·자원 보고기·발송함을 공유한다.
 `jobs`를 연결하지 않은 앱은 시도 예약 반복을 시작하지 않는다.
