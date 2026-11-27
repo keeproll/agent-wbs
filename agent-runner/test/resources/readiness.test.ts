@@ -18,6 +18,7 @@ const HEALTHY: Record<string, CommandResult> = {
   'gh --version': ok('gh version 2.45.0 (2025-07-18 Ubuntu 2.45.0-1ubuntu0.3)\nhttps://github.com/cli/cli/releases/tag/v2.45.0\n'),
   'git lfs version': ok('git-lfs/3.4.1 (GitHub; linux amd64; go 1.22.2)\n'),
   'pg_isready -h 127.0.0.1 -p 25442': ok('127.0.0.1:25442 - accepting connections\n'),
+  'fc-list :family=Noto Sans KR family': ok('Noto Sans KR\n'),
 };
 
 const PROFILES = [
@@ -63,10 +64,10 @@ const item = async (key: string, over?: Record<string, CommandResult>, extra?: P
 };
 
 describe('checkReadiness — POST /runner/readiness(G §7.4 「Runner 준비 상태」, contracts §3.1)', () => {
-  test('모든 항목이 정상이면 12개 키가 모두 ok', async () => {
+  test('모든 항목이 정상이면 13개 키가 모두 ok', async () => {
     const report = await checkReadiness(deps().d, AT);
     expect(report.at).toBe('2026-11-26T09:00:00.000Z');
-    expect(report.items.map((i) => i.key)).toEqual(['claude', 'codex', 'git', 'node', 'pnpm', 'pg', 'repo', 'disk', 'subs', 'obs', 'gh', 'lfs']);
+    expect(report.items.map((i) => i.key)).toEqual(['claude', 'codex', 'git', 'node', 'pnpm', 'pg', 'repo', 'disk', 'subs', 'obs', 'gh', 'lfs', 'font']);
     expect(report.items.filter((i) => i.status !== 'ok')).toEqual([]);
   });
 
@@ -208,6 +209,17 @@ describe('checkReadiness — POST /runner/readiness(G §7.4 「Runner 준비 상
       status: 'warn',
       fix: expect.stringContaining('git-lfs'),
     });
+  });
+});
+
+describe('font — 야간 화면 비교 고정 글꼴(M7-03 결정 12)', () => {
+  test('설치돼 있으면 ok, 없으면 warn이고 실행을 멈추지 않는다', async () => {
+    expect(await item('font')).toMatchObject({ status: 'ok' });
+    const absent = await item('font', { 'fc-list :family=Noto Sans KR family': ok('') });
+    expect(absent).toMatchObject({ status: 'warn', detail: expect.stringContaining('비교 불가'), fix: expect.stringContaining('Noto Sans KR') });
+    const report = await checkReadiness(deps({ 'fc-list :family=Noto Sans KR family': missing }).d, AT);
+    expect(report.items.find(i => i.key === 'font')?.status).toBe('warn');
+    expect(blockedAgents(report.items)).toEqual([]);
   });
 });
 

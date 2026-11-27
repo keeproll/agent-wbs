@@ -1007,7 +1007,7 @@ export interface Operations {
       body: {
         at: Timestamp;
         items: ({
-          key: "claude" | "codex" | "git" | "node" | "pnpm" | "pg" | "repo" | "disk" | "subs" | "obs" | "gh" | "lfs" | "reports";
+          key: "claude" | "codex" | "git" | "node" | "pnpm" | "pg" | "repo" | "disk" | "subs" | "obs" | "gh" | "lfs" | "reports" | "font";
           status: "ok" | "warn" | "fail";
           detail: string;
           fix?: string;
@@ -1585,6 +1585,10 @@ export interface Operations {
           rate: number;
           lastFailedAt: Timestamp;
         })[];
+        deployRestore?: {
+          commit: Sha | null;
+          status: "pass" | "fail" | "none";
+        };
         logExcerpt?: string;
         artifacts?: (string)[];
         url?: string;

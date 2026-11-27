@@ -1,6 +1,7 @@
 import type { Agent } from '../api/generated/client.ts';
 import type { ApiRequest } from '../api/client.ts';
 import type { CommandResult, RunCommand } from './command.ts';
+import { checkBaselineFont } from '../ci/night/baseline.ts';
 
 /** POST /runner/readiness 본문 */
 export type ReadinessReport = ApiRequest<'reportReadiness'>['body'];
@@ -36,7 +37,7 @@ export interface ReadinessDeps {
 
 // reports는 로컬 도구 점검이 아니라 RunnerApp이 거부 기록으로 채운다.
 type EnvironmentKey = Exclude<ReadinessKey, 'reports'>;
-const KEYS: EnvironmentKey[] = ['claude', 'codex', 'git', 'node', 'pnpm', 'pg', 'repo', 'disk', 'subs', 'obs', 'gh', 'lfs'];
+const KEYS: EnvironmentKey[] = ['claude', 'codex', 'git', 'node', 'pnpm', 'pg', 'repo', 'disk', 'subs', 'obs', 'gh', 'lfs', 'font'];
 /** P `recCap`의 DISK_LOW 기준 */
 const DISK_WARN_GB = 50;
 /** 이보다 적으면 clone·설치가 실패할 가능성이 커서 멈춘다 [결정] */
@@ -196,6 +197,8 @@ export async function checkReadiness(d: ReadinessDeps, now: Date): Promise<Readi
     obs: () => obs(d, versions),
     gh: () => strip(tool(d, d.bins.gh, ['--version'], 'GitHub CLI(gh)', 'warn', 'gh 로그인 방식을 쓰려면 gh를 설치하세요.')),
     lfs: () => strip(tool(d, d.bins.git, ['lfs', 'version'], 'git-lfs', 'warn', 'LFS 파일이 있는 저장소를 쓰려면 git-lfs를 설치하세요.')),
+    // 야간 화면 비교의 고정 글꼴(M7-03 결정 12). 없으면 warn이고 화면 비교는 「비교 불가」가 된다. 실행은 멈추지 않는다.
+    font: () => checkBaselineFont(d.run),
   };
   const runCheck = async (key: EnvironmentKey): Promise<ReadinessItem> => {
     try {

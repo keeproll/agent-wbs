@@ -784,12 +784,45 @@ export class GitRepository {
     return this.pipelineAt(baseSha);
   }
 
-  /** 재실행도 원래 main 커밋의 정의를 읽어 SHA를 대조한다. */
+  /** 재실행도 원래 main 커밋의 정의를 읽어 SHA를 대조한다(M7-06). */
   async pipelineAt(baseSha: string): Promise<{ baseSha: string; pipelineSha: string; source: string }> {
     await this.trusted(); sha(baseSha);
-    const entry = (await this.tree(baseSha)).find((value) => value.path === '.agentwbs/pipeline.yaml');
+    return { baseSha, ...await this.pipelineOf(baseSha) };
+  }
+
+  /**
+   * ④ 배포 확인: main을 가져온 뒤 그 커밋 자신의 정의를 읽는다(다시 빌드해도 같은 결과, G L486).
+   * M7-03에서는 `pipelineAt`이었다. M7-06의 재실행용 `pipelineAt`(main 조상 검사 없음, baseSha 포함)과 이름이 겹쳐 통합에서 이름을 나눴다.
+   */
+  async deployPipelineAt(commit: string): Promise<{ pipelineSha: string; source: string }> {
+    const { baseSha } = await this.mainPipeline();
+    // main에 들어간 커밋만 배포한다. 왜: 병합되지 않은 브랜치를 배포 확인으로 통과시키지 않는다.
+    if ((await this.taskBase(commit, baseSha).catch(() => null)) !== sha(commit)) throw new GitSafetyError('배포할 커밋이 main에 없습니다.');
+    return this.pipelineOf(sha(commit));
+  }
+
+  /** ③ 기준 렌더: 고정한 커밋에서 prefix 아래 일반 파일 경로 목록. symlink·submodule은 넣지 않는다. */
+  async listFiles(commit: string, prefix: string): Promise<string[]> {
+    return (await this.tree(sha(commit))).filter((entry) => entry.path.startsWith(prefix) && ['100644', '100755'].includes(entry.mode)).map((entry) => entry.path);
+  }
+
+  /** ③ 화면 비교 기준 이미지처럼, 고정한 커밋의 일반 파일 하나를 Git 객체에서 읽는다. 작업 폴더나 단계 출력은 보지 않는다. */
+  async fileAt(commit: string, path: string): Promise<Buffer> {
+    const entry = (await this.tree(sha(commit))).find((value) => value.path === path);
+    if (!entry || !['100644', '100755'].includes(entry.mode)) throw new GitSafetyError(`고정 커밋에 일반 파일 ${path}이 없습니다.`);
+    return this.blob(entry);
+  }
+
+  private async pipelineOf(commit: string): Promise<{ pipelineSha: string; source: string }> {
+    const entry = (await this.tree(commit)).find((value) => value.path === '.agentwbs/pipeline.yaml');
     if (!entry || !['100644', '100755'].includes(entry.mode)) throw new GitSafetyError('main의 pipeline.yaml은 일반 파일이어야 합니다.');
-    return { baseSha, pipelineSha: sha(entry.oid), source: (await this.blob(entry)).toString('utf8') };
+    return { pipelineSha: sha(entry.oid), source: (await this.blob(entry)).toString('utf8') };
+  }
+
+  /** ③ 원인 추적: from 뒤로 main에 들어온 first-parent 커밋(오래된 것부터). from이 조상이 아니면 빈 목록이다. */
+  async mainCommitsSince(from: string, to: string): Promise<string[]> {
+    if ((await this.taskBase(from, to).catch(() => null)) !== sha(from)) return [];
+    return (await this.git(['rev-list', '--first-parent', '--reverse', `${sha(from)}..${sha(to)}`])).toString().split('\n').filter(Boolean).map(sha);
   }
 
   async taskBase(base: string, head: string): Promise<string> {

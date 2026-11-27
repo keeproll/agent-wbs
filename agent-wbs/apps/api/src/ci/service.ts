@@ -27,6 +27,7 @@ export interface Update extends Shas {
   note?: string; finishedAt?: string; e2e?: { passed:number;total:number };
   githubStatus?: { headSha:string;context:string;state:'pending'|'success'|'failure'|'error';reportedAt:string;url?:string };
   flakyTests?: { testKey:string;rate:number;lastFailedAt:string }[];
+  deployRestore?: { commit: string | null; status: 'pass' | 'fail' | 'none' };
 }
 export interface QueueReport {
   jobId: string; fence: number; pr: number; taskKey: string; status: string;
@@ -80,6 +81,11 @@ export async function updateRun(client: PoolClient, id: string, principal: strin
   if (body.failScope && (run.stage !== 1 || status !== 'fail' || run.status === 'fail' && body.failScope !== run.fail_scope)) throw new PlatformError('INVALID_TRANSITION');
   if (body.failScope === 'baseline' && !(body.baseSha ?? run.base_sha)) throw new PlatformError('VALIDATION_FAILED');
   assertCiTransition(run.status,status);
+  if (body.deployRestore) {
+    // none(복구할 배포 없음)만 커밋이 없다. 복구한 결과(pass·fail)에는 다시 기동한 커밋이 있어야 한다.
+    if ((body.deployRestore.status === 'none') !== (body.deployRestore.commit === null)) throw new PlatformError('VALIDATION_FAILED');
+    if (run.stage !== 4 || status !== 'fail') throw new PlatformError('INVALID_TRANSITION');
+  }
   if (body.e2e && body.e2e.passed > body.e2e.total || body.finishedAt && !['pass','fail','skip'].includes(status)) throw new PlatformError('VALIDATION_FAILED');
   if (body.githubStatus && body.githubStatus.headSha !== (body.headSha ?? run.head_sha)) throw new PlatformError('INVALID_TRANSITION');
   if (status === 'pass' && (!(body.headSha ?? run.head_sha) || run.stage === 2 && (!(body.baseSha ?? run.base_sha) || !(body.treeSha ?? run.tree_sha)))) throw new PlatformError('INVALID_TRANSITION');
@@ -100,6 +106,7 @@ export async function updateRun(client: PoolClient, id: string, principal: strin
   for (const flaky of body.flakyTests ?? []) await client.query(`insert into flaky_tests(project_id,test_key,rate,quarantined,task,last_failed_at) values($1,$2,$3,false,$4,$5)
     on conflict(test_key) do update set rate=excluded.rate,task=coalesce(excluded.task,flaky_tests.task),last_failed_at=excluded.last_failed_at
     where flaky_tests.project_id=excluded.project_id and (flaky_tests.last_failed_at is null or flaky_tests.last_failed_at<=excluded.last_failed_at)`,[run.project_id,flaky.testKey,flaky.rate,run.task,flaky.lastFailedAt]);
+  if (run.stage === 4) await serviceAvailability(client,{ ...run,status:status as Run['status'] },body.deployRestore);
   if (status !== run.status) await notifyResult(client,{ ...run,base_sha:run.base_sha ?? body.baseSha ?? null,status:status as Run['status'],fail_step:failStep,fail_scope:body.failScope ?? run.fail_scope });
   if (run.stage === 2 && status === 'pass' && run.task && run.job) await enqueueIntegration(client,run.task,required(await repo.job(run.job)).epoch);
   deferChange(client,run.project_id,'ci',{ id });
@@ -128,6 +135,32 @@ async function notifyResult(client: PoolClient, run: Run) {
   [run.project_id,kind === 'buildFail' ? run.fail_scope === 'baseline' ? `${key}|${run.id}` : key : `buildOk|${stage}|${run.id}`,kind,
     { id:run.id,stage,pr:run.pr,failStep:run.fail_step,failScope:run.fail_scope,baseSha:run.base_sha,path:`/ci/${run.id}` }]);
   if (run.fail_scope==='baseline' && baselineClosed && run.base_sha) await resolveBaselineFailure(client,run.project_id,run.base_sha);
+  deferChange(client,run.project_id,'alert',{ id:run.id });
+  deferChange(client,run.project_id,'notify',{ id:run.id });
+}
+
+/**
+ * M7-03 결정 11: 배포 확인이 실패하고 마지막 정상 커밋 복구도 실패했거나 복구할 배포가 없으면 「서비스 없음」이다.
+ * 일반 빌드 실패와 따로 높은 우선순위 경보(critical)와 serviceDown 알림을 만든다. 알림 규칙과 무관하게 전체 알림이 켜져 있으면 보낸다.
+ * 다음 배포 확인 통과(더 새로운 배포 실행이 없을 때)에서 해소한다.
+ */
+async function serviceAvailability(client: PoolClient, run: Run, restore: Update['deployRestore']) {
+  // 경보는 이 환경의 최신 배포 순번(run_no) 결과만 열고 닫는다. 늦게 온 옛 결과는 실행 이력으로만 남는다(M7-03 재리뷰 원칙 1).
+  // 왜: 벽시계가 아니라 순번으로 정해야 시계가 뒤로 가도, 보고가 늦게 와도 현재 서비스 상태를 뒤집지 않는다.
+  if (!['pass','fail'].includes(run.status)) return;
+  const newer = await client.query('select 1 from ci_runs where project_id=$1 and stage=4 and run_no>$2 limit 1',[run.project_id,run.run_no]);
+  if (newer.rowCount) return;
+  if (run.status === 'fail' && restore && restore.status !== 'pass') {
+    const ref = { id:run.id,path:`/ci/${run.id}`,restore:restore.status,restoreCommit:restore.commit,
+      message:`서비스 없음 — 배포 확인 실패 뒤 ${restore.status === 'none' ? '복구할 직전 통과 배포가 없음' : `마지막 정상 커밋 ${String(restore.commit).slice(0,7)} 복구 실패`}` };
+    await client.query("insert into alerts(project_id,key,severity,target) values($1,'ci:serviceDown','critical',$2) on conflict do nothing",[run.project_id,ref]);
+    await client.query(`insert into notify_events(project_id,dedup_key,kind,ref) select $1,'serviceDown','serviceDown',$2
+      where exists(select 1 from notify_settings where singleton and enabled)
+      on conflict((coalesce(project_id::text,'global')),dedup_key) where resolved_at is null do update set dup_count=notify_events.dup_count+1`,[run.project_id,ref]);
+  } else if (run.status === 'pass') {
+    await client.query("update alerts set resolved_at=clock_timestamp() where project_id=$1 and key='ci:serviceDown' and resolved_at is null",[run.project_id]);
+    await client.query("update notify_events set resolved_at=clock_timestamp() where project_id=$1 and dedup_key='serviceDown' and resolved_at is null",[run.project_id]);
+  } else return;
   deferChange(client,run.project_id,'alert',{ id:run.id });
   deferChange(client,run.project_id,'notify',{ id:run.id });
 }
