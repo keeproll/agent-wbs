@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { inject } from 'vitest';
-import { internalTerms, type ReportSnapshotData } from '../../../packages/shared/src/index.ts';
+import { internalTerms, reportProjectName, type ReportSnapshotData } from '../../../packages/shared/src/index.ts';
 import { createPool, recreateTestDatabase, runMigrations, seedDemo, type Pool } from '../../../packages/db/src/index.ts';
 import { buildApp } from '../../../apps/api/src/app.ts';
 import { issueLoginLink } from '../../../apps/api/src/platform/credentials.ts';
@@ -30,7 +30,7 @@ import * as pdfModel from '../../../apps/api/src/pdf/model.ts';
 import { externalDoc as pdfExternalDoc, internalDoc as pdfInternalDoc } from '../../../apps/api/src/pdf/model.ts';
 import * as web from '../../../apps/web/src/features/report/model.ts';
 import { externalDoc, internalDoc } from '../../../apps/web/src/features/report/model.ts';
-import { readPdf, squash, type PdfPage } from '../pdf-inspect.ts';
+import { between, readingOrder, readPdf, squash, table, text, type PdfPage, type Placed } from '../pdf-inspect.ts';
 import { chromium } from 'playwright-core';
 import { pdfAssets } from '../../../apps/api/src/pdf/assets.ts';
 import { reportHtml, type ReportHtmlInput } from '../../../apps/api/src/pdf/html.ts';
@@ -63,6 +63,7 @@ const renderer: PdfRenderer = {
     return real.render(html);
   },
   close: () => real.close(),
+  inspect: () => real.inspect(),
 };
 
 const kst = (day: string, hm = '00:00') => new Date(`${day}T${hm}:00+09:00`).toISOString().replace(/\.(\d{3})Z$/, '.$1000Z');
@@ -86,6 +87,11 @@ async function fixture() {
     unnest(array['evidence/TASK-0007/qa-1/vitest.txt','evidence/TASK-0007/qa-1/perf.json']) p
     where a.task=$1 and v.result='FAIL'`, [t7]);
   await owner.query(`insert into alerts(project_id,key,severity,target,created_at) values($1,'usage:Claude','warn','{"message":"Claude 사용량 부족 — 실행 보류"}',$2)`, [project, kst('2026-10-30', '09:00')]);
+  // 등급 조정 사유가 실행 기록 「요약」 칸에 나오는지 보려고, 끝난 시도 하나에 자동 상향 기록을 둔다(M6-02 시험 자료).
+  // 끝난 시도는 수정할 수 없으므로(attempt_terminal 트리거) 이 준비 동안만 트리거를 끈다.
+  await owner.query('alter table task_attempts disable trigger attempt_terminal');
+  await owner.query(`update task_attempts set grade_adjust='{"kind":"up","from":{"model":"codex-large","effort":"medium"},"to":{"model":"codex-large","effort":"high"},"reason":"QA FAIL 2건 — 자동 상향"}' where attempt_key='ATT-0007-2'`);
+  await owner.query('alter table task_attempts enable trigger attempt_terminal');
 }
 
 beforeAll(async () => {
@@ -140,6 +146,7 @@ const missing = (text: string, values: string[]) => values.filter((v) => v.trim(
  * - brokenWords: 표 머리글·칸 안의 단어(공백으로 나눈 조각) 중 하이픈(-) 바로 뒤가 아닌 곳에서 줄이 바뀐 것(조정자 규칙:
  *   한글 음절·영문 글자 중간 줄바꿈 0, 줄바꿈은 공백 또는 하이픈 바로 뒤만 허용). 글자마다 화면 위치를 재서 줄이 바뀐 곳을 찾는다.
  * - hyphenBreaks: 하이픈 바로 뒤에서 줄이 바뀐 단어(허용되지만, 등급 칸의 모델 ID는 통째로 유지해야 한다).
+ * - brokenWords·hyphenBreaks 항목은 「표 행 클래스:열 번호 단어 (칸 글자)」 모양이다.
  * - words: 잰 단어 수.
  */
 async function layoutAtPrintWidth(html: string): Promise<{ overflow: string[]; brokenWords: string[]; hyphenBreaks: string[]; words: number }> {
@@ -183,7 +190,12 @@ async function layoutAtPrintWidth(html: string): Promise<{ overflow: string[]; b
               ch.setStart(node, m.index + i);
               ch.setEnd(node, m.index + i + 1);
               const top = Math.round(ch.getBoundingClientRect().top);
-              if (prev !== null && top !== prev) { (m[0][i - 1] === '-' ? hyphenBreaks : brokenWords).push(m[0] + ' (' + cell.textContent.slice(0, 30) + ')'); break; }
+              if (prev !== null && top !== prev) {
+                // 어느 표(행 클래스)의 몇 번째 열인지 함께 남긴다. 예: 'at:2 claude-sonnet-5-5 (…)'
+                const where = (cell.parentElement.className.split(' ').at(-1) || '') + ':' + [...cell.parentElement.children].indexOf(cell);
+                (m[0][i - 1] === '-' ? hyphenBreaks : brokenWords).push(where + ' ' + m[0] + ' (' + cell.textContent.slice(0, 30) + ')');
+                break;
+              }
               prev = top;
             }
           }
@@ -257,7 +269,9 @@ describe('주간 팀장용 PDF(RPT-W-261026, 12섹션에 값이 있다)', () => 
       // 등급 칸의 모델 ID(예: claude-sonnet-5-5)는 하이픈에서도 끊기지 않는다(등급 열을 넓힌 이유).
       const models = new Set([...r.snapshot.attempts, ...r.snapshot.next].flatMap((a) => a.grade?.modelId ?? []));
       expect(models.size, view).toBeGreaterThan(0);
-      expect(found.hyphenBreaks.filter((w) => models.has(w.split(' ')[0] ?? '')), `${view} 모델 ID 끊김`).toEqual([]);
+      // 등급 열: 실행 기록(.at) 3번째 칸, 다음 예정(.nx) 5번째 칸(담당 · 등급). 자유 글(요약 등) 안의 모델 ID는 하이픈 뒤 줄바꿈 허용.
+      const gradeCols = new Set(['at:2', 'nx:4']);
+      expect(found.hyphenBreaks.filter((w) => { const [where = '', word = ''] = w.split(' '); return gradeCols.has(where) && models.has(word); }), `${view} 등급 열 모델 ID 끊김`).toEqual([]);
       // 시험이 실제로 표의 단어를 쟀다는 증거
       expect(found.words, view).toBeGreaterThan(view === 'int' ? 300 : 20);
     }
@@ -277,7 +291,7 @@ describe('주간 팀장용 PDF(RPT-W-261026, 12섹션에 값이 있다)', () => 
       expect(found.overflow, view).toEqual([]);
     }
     // 이런 글은 칸 끝에서 끊을 수밖에 없다(그래서 넘치지 않는다). 시험이 실제로 긴 글을 넣었다는 증거다.
-    expect((await layoutAtPrintWidth(reportHtml({ ...r, snapshot, view: 'int' }))).brokenWords.some((w) => w.startsWith('가나다라'))).toBe(true);
+    expect((await layoutAtPrintWidth(reportHtml({ ...r, snapshot, view: 'int' }))).brokenWords.some((w) => (w.split(' ')[1] ?? '').startsWith('가나다라'))).toBe(true);
   }, 60_000);
 
   test('폰트 embed: 글꼴은 모두 Pretendard GOV이고 글꼴 파일이 들어 있다(그림 글자 Type3 없음)', () => {
@@ -299,40 +313,100 @@ describe('주간 팀장용 PDF(RPT-W-261026, 12섹션에 값이 있다)', () => 
     expect(s.all.map((t) => t.taskKey).filter((k) => !appendix.includes(k))).toEqual([]);
   });
 
-  test('12섹션 필수 값이 PDF 글자에 모두 있다(화면 계산과 같은 값)', () => {
-    const text = textOf(doc.pages);
+  /**
+   * 12섹션 필수 값(milestones §4.0)을 PDF 글자에서 **제자리에서** 하나씩 확인한다(Codex 리뷰 P2).
+   * - 카드·목록 섹션: 제목 다음부터 다음 제목 앞까지의 글자(읽는 순서)가 기대한 「이름표·값」 순서와 정확히 같아야 한다.
+   *   값 하나가 빠지거나 바뀌면 섹션 글자가 달라진다.
+   * - 표(일별 추세·실행 기록·다음 예정·부록)와 핵심 지표: 칸 안 줄바꿈 때문에 읽는 순서가 섞이므로 열 위치(x)로 칸을 나눠
+   *   행마다 칸 글자가 기대값과 같은지 본다. 다른 칸에 같은 숫자가 있어도 대신 통과하지 않는다.
+   * 기대값은 화면 계산(apps/web report/model.ts internalDoc)이다.
+   */
+  test('12섹션 필수 값이 PDF의 제자리(섹션·행·열)에 화면 계산과 같은 값으로 있다', () => {
     const x = internalDoc(s);
-    const sections = ['팀장 확인 필요', '일별 추세', '현재 상태 분포', '1. 완료한 Task', '2. 진행 중 · 확인 필요 Task', '3. QA 실패 · 결함 상세', '4. 실행 기록', '5. 일정 재조정', '6. 작업 환경 중단', '7. 팀장 지시 · Runner 응답', '8. 다음 주 예정', '부록. 전체 Task 현황'];
-    expect(missing(text, sections)).toEqual([]);
-    expect(missing(text, [
-      // 핵심 지표
-      ...x.kpis.flatMap((k) => [k.label, k.value, k.sub]),
-      // 팀장 확인 필요
-      ...x.issues.map((i) => i.text),
-      // 일별 추세
-      ...x.series.flatMap((d) => [d.day, d.up]),
-      x.statusLine,
-      // 1. 완료
-      ...x.done.flatMap((t) => [t.id, t.title, t.who, t.act, t.est, t.verif, t.cl, t.out, t.cond, t.slip]),
-      // 2. 진행 중: 미충족 Gate와 다음 작업
-      ...x.active.flatMap((t) => [t.id, t.st, t.start, t.fc, t.last, t.verif, t.cl, t.gate, t.issue, t.next]),
-      // 3. QA 실패: 명령 → 결과
-      ...x.failures.flatMap((f) => [f.task, f.cmd, f.exp, f.act, f.defects, f.ev, f.follow]),
-      // 4. 실행 기록
-      x.execLine, ...x.attempts.flatMap((a) => [a.id, a.task, a.grade, a.time, a.sum, a.files, a.tok]),
-      // 5. 재조정
-      ...x.replans.flatMap((r) => [r.id, r.trigger, r.ch, r.range, ...r.moved.flatMap((m) => [m.task, m.title, m.ch])]),
-      // 6. 중단
-      ...x.gaps.flatMap((g) => [g.from, g.to, g.dur, g.reason]),
-      // 7. 메시지
-      ...x.messages.flatMap((m) => [m.task, m.dir, m.type, m.body]),
-      // 8. 예정
-      ...x.next.flatMap((t) => [t.id, t.title, t.per, t.pre, t.cg]),
-      // 부록: 모든 열
-      ...x.all.flatMap((t) => [t.wbs, t.id, t.title, t.st, t.who, t.pct, t.cl, t.verif, t.fc, t.slip]),
-    ])).toEqual([]);
-    expect(x.failures.length).toBeGreaterThan(0);
+    const flow = readingOrder(doc.pages);
+    const heading = (h: string) => (t: string) => t === squash(h);
+    const join = (parts: (string | number)[]) => squash(parts.map(String).join(''));
+    // 표 기대값과 비교(머리글 포함)
+    const sameTable = (region: Placed[], headers: readonly string[], key: (t: string) => boolean, rows: (string | number)[][]) => {
+      const got = table(region, headers, key);
+      expect(got.head).toEqual(headers.map((h) => squash(h)));
+      expect(got.rows).toEqual(rows.map((r) => r.map((c) => squash(String(c)))));
+    };
+
+    // 핵심 지표 4개: 칸마다 이름표·값·설명
+    // 첫 지표 이름표부터 「팀장 확인 필요」 앞까지
+    const kpiStart = flow.findIndex((i) => squash(i.str) === squash(x.kpis[0]?.label ?? ''));
+    const kpiRegion = flow.slice(kpiStart, flow.findIndex((i) => squash(i.str) === squash('팀장 확인 필요')));
+    expect(kpiStart).toBeGreaterThan(0);
+    const kpiCols = x.kpis.map((k) => kpiRegion.find((i) => squash(i.str) === squash(k.label))?.x ?? -1);
+    expect(kpiCols.every((c) => c >= 0)).toBe(true);
+    x.kpis.forEach((k, j) => {
+      const cell = kpiRegion.filter((i) => i.x >= (kpiCols[j] ?? 0) - 2 && i.x < (kpiCols[j + 1] ?? Infinity) - 2);
+      expect(text(cell), k.label).toBe(join([k.label, k.value, k.sub]));
+    });
+
+    // 팀장 확인 필요
+    expect(text(between(flow, '팀장 확인 필요', heading('일별 추세')))).toBe(join(x.issues.flatMap((i) => [i.label, i.text])));
+
+    // 일별 추세: 날짜·가동률·실행 시도·완료·QA FAIL·완료 예상
+    const trend = between(flow, '일별 추세', (t) => t.startsWith(squash('현재 상태 분포')));
+    sameTable(trend, ['날짜', '가동률', '실행 시도', '완료', 'QA FAIL', '완료 예상'], (t) => /^\d{2}-\d{2}$/.test(t),
+      x.series.map((d) => [d.day, d.up, d.atts, d.done, d.fails, d.fc]));
+
+    // 현재 상태 분포
+    expect(text(between(flow, '일별 추세', heading('1. 완료한 Task')).filter((i) => !trend.includes(i)))).toBe(join([`현재 상태 분포 — ${x.statusLine}`]));
+
+    // 1. 완료한 Task: 카드마다 분류·담당·기간·작업량·기준 대비·최종 검증(명령 → 결과)·체크리스트·산출물·완료 조건
+    expect(text(between(flow, '1. 완료한 Task', heading('2. 진행 중 · 확인 필요 Task')))).toBe(join(x.done.flatMap((t) => [
+      '완료', t.id, t.wbs, t.title, t.cls,
+      '담당', t.who, '실제 기간', t.act, '작업량', t.est, '기준 대비', t.slip, '최종 검증', t.verif, '체크리스트', t.cl, '산출물', t.out, '완료 조건', t.cond,
+    ])));
+
+    // 2. 진행 중: 상태·진행률·실제 시작·완료 예상/범위·기준 대비·남은 작업량·최근 실행/등급·검증·체크리스트·Gate(미충족)·이슈·다음 작업
+    expect(text(between(flow, '2. 진행 중 · 확인 필요 Task', heading('3. QA 실패 · 결함 상세')))).toBe(join(x.active.flatMap((t) => [
+      t.st, t.id, t.wbs, t.title, `${t.cls} · 진행률 ${t.pct}`,
+      '담당', t.who, '실제 시작', t.start, '완료 예상', `${t.fc} · ${t.slip} · 남은 작업량 ${t.remain}`, '최근 실행', t.last, '검증', t.verif,
+      '체크리스트', t.cl, 'Completion Gate', t.gate, '이슈', t.issue, '다음 작업', t.next,
+    ])));
     expect(x.active.some((t) => t.gate.includes('미충족'))).toBe(true);
+
+    // 3. QA 실패: 명령 → 기대·실제·결함·Evidence·후속 조치
+    expect(x.failures.length).toBeGreaterThan(0);
+    expect(text(between(flow, '3. QA 실패 · 결함 상세', heading('4. 실행 기록')))).toBe(join(x.failures.flatMap((f) => [
+      'FAIL', f.task, f.title, `${f.agent} · ${f.at}`,
+      '검증 명령', f.cmd, '기대 결과', f.exp, '실제 결과', f.act, '결함', f.defects, 'Evidence', f.ev, '후속 조치', f.follow,
+    ])));
+
+    // 4. 실행 기록: 요약 줄 + 시도·Task/종류·Agent/등급·시간·결과·요약(등급 조정 사유)·파일/토큰
+    const exec = between(flow, '4. 실행 기록', heading('5. 일정 재조정'));
+    const execLineEnd = exec.findIndex((i) => squash(i.str) === '시도');
+    expect(text(exec.slice(0, execLineEnd))).toBe(join([x.execLine]));
+    sameTable(exec.slice(execLineEnd), ['시도', 'Task · 종류', 'Agent · 등급', '시간', '결과', '요약', '파일 · 토큰'], (t) => /^ATT-\d+-\d+$/.test(t),
+      x.attempts.map((a) => [a.id, a.task, a.grade, a.time, a.st, `${a.sum}${a.esc ? `등급 조정: ${a.esc}` : ''}`, `${a.files} · ${a.tok}`]));
+
+    // 5. 재조정: 계기·예상 변화/범위·이동 Task 전후 날짜/일수
+    expect(x.replans.length).toBeGreaterThan(0);
+    expect(text(between(flow, '5. 일정 재조정', heading('6. 작업 환경 중단')))).toBe(join(x.replans.flatMap((r) => [
+      r.id, r.at, r.trigger, `완료 예상 ${r.ch} (범위 ${r.range})`, ...r.moved.flatMap((m) => [m.task, ` ${m.title} — ${m.kind} `, m.ch]),
+    ])));
+
+    // 6. 작업 환경 중단: 기간·시간·사유
+    expect(x.gaps.length).toBeGreaterThan(0);
+    expect(text(between(flow, '6. 작업 환경 중단', heading('7. 팀장 지시 · Runner 응답')))).toBe(join(x.gaps.flatMap((g) => [`${g.from} ~ ${g.to}`, g.dur, g.reason])));
+
+    // 7. 메시지: 시각·Task·방향·유형·전달 상태·첫 줄
+    expect(x.messages.length).toBeGreaterThan(0);
+    expect(text(between(flow, '7. 팀장 지시 · Runner 응답', heading('8. 다음 주 예정')))).toBe(join(x.messages.flatMap((m) => [m.at, m.task, m.dir, m.type, m.st, m.body])));
+
+    // 8. 다음 주 예정: Task·제목(작업량)·상태·예상 기간·담당/등급·선행 조건/충돌 묶음
+    sameTable(between(flow, '8. 다음 주 예정', heading('부록. 전체 Task 현황 (보고서 생성 시점)')),
+      ['Task', '제목', '상태', '예상 기간', '담당 · 등급', '선행 조건 · 충돌 묶음'], (t) => /^TASK-\d+$/.test(t),
+      x.next.map((t) => [t.id, `${t.title} (${t.est})`, t.st, t.per, `${t.who}${t.grade}`, `${t.pre}${t.cg}`]));
+
+    // 부록: 전체 Task 모든 열
+    sameTable(between(flow, '부록. 전체 Task 현황 (보고서 생성 시점)', (t) => t.startsWith(squash('Agent WBS 자동 생성'))),
+      ['WBS', 'Task', '제목', '상태', '개발/검증', '진행률', '체크리스트', '검증', '완료 예상', '기준 대비'], (t) => /^\d+(\.\d+)+$/.test(t),
+      x.all.map((t) => [t.wbs, t.id, `${t.title}${t.blocked ? '차단' : ''}`, t.st, t.who, t.pct, t.cl, t.verif, t.fc, t.slip]));
   });
 
   test('화면에만 있는 것(PDF 버튼·「생성 이후 변경」 안내)은 PDF에 없다', () => {
@@ -446,6 +520,26 @@ describe('빈 상태(기록 없는 날 일간 RPT-D-261027)', () => {
   }, 60_000);
 });
 
+describe('이름 없는 옛 보고서(M6-01 형식 스냅샷, Codex 리뷰 P2)', () => {
+  test('조회·팀장용·보고용 PDF 모두 열리고, 제목은 「프로젝트 이름 없음」이다(지금 이름으로 바꿔 넣지 않는다)', async () => {
+    const base = await reportOf('weekly', '2026-10-26');
+    const legacy: Record<string, unknown> = { ...base.snapshot };
+    delete legacy.projectName;
+    const project = (await owner.query<{ id: string }>('select id from projects')).rows[0]?.id;
+    const id = (await owner.query<{ id: string }>(`insert into reports(project_id,report_key,kind,"from","to",view,snapshot,generated_at,reason)
+      values($1,'RPT-C-950','custom','2026-10-26','2026-11-01','int',$2::jsonb,now(),'팀장 지정') returning id`, [project, JSON.stringify(legacy)])).rows[0]?.id;
+    assert(id);
+    expect((await fetch(`${baseUrl}/api/reports/${id}`, { headers })).status).toBe(200);
+    for (const view of ['int', 'ext'] as const) {
+      const { doc } = await fetchPdf(id, view);
+      const text = textOf(doc.pages);
+      expect(text, view).toContain(squash(`프로젝트 이름 없음 — 기간 보고서${view === 'ext' ? ' (보고용)' : ''}`));
+      expect(text, view).not.toContain('undefined');
+      expect(text, view).not.toContain(squash(base.snapshot.projectName));
+    }
+  }, 60_000);
+});
+
 describe('PDF와 화면이 같은 계산을 쓴다', () => {
   test('서버 PDF의 보기 계산이 화면(apps/web report/model.ts)과 모든 보고서에서 같다', async () => {
     const project = (await owner.query<{ id: string }>('select id from projects')).rows[0]?.id ?? '';
@@ -458,7 +552,7 @@ describe('PDF와 화면이 같은 계산을 쓴다', () => {
       expect(pdfExternalDoc(snapshot, kind)).toEqual(externalDoc(snapshot, kind));
       // 머리말(제목·기간·누락 보충·스냅샷 안내·파일 이름·생성 주체)도 같은 글자다.
       for (const view of ['int', 'ext'] as const) {
-        expect(pdfModel.docTitle(snapshot.projectName, kind, view)).toBe(web.docTitle(snapshot.projectName, kind, view));
+        expect(pdfModel.docTitle(reportProjectName(snapshot), kind, view)).toBe(web.docTitle(reportProjectName(snapshot), kind, view));
         expect(pdfModel.pdfName(row.reportKey, view)).toBe(web.pdfName(row.reportKey, view));
       }
       expect(pdfModel.periodLabel(row)).toBe(web.periodLabel(row));
