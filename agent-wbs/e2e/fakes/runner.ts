@@ -84,9 +84,15 @@ export class FakeRunner {
     await this.api('releaseJob', { ...this.write(), params: { id: a.job.id }, body: { fence: a.job.fence, hostId: this.hostId, proof: { kind: 'boot_changed', bootId: a.bootId, currentBootId: this.bootId, processGroup: a.processGroup }, at: new Date().toISOString() } });
   }
 
-  async result(a: Running, result: 'PASS' | 'FAIL' = 'PASS') {
+  async result(a: Running, result: 'PASS' | 'FAIL' = 'PASS', checked = false) {
     await this.api('releaseJobSlots', { ...this.write(), params: { id: a.job.id }, body: { fence: a.job.fence, hostId: this.hostId, proof: { kind: 'group_empty', bootId: a.bootId, processGroup: a.processGroup }, at: new Date().toISOString() } });
     const qa = a.job.payload.kind === 'qa' || a.job.payload.kind === 'reverify';
+    // 흐름만 보는 M2 시험 자료다. 실제 ①은 attempt-complete에서 실행한다.
+    if (!qa && !checked) {
+      const run = await this.api('startCiRun', { ...this.write(), body: { jobId:a.job.id,fence:a.job.fence,stage:'task',taskKey:a.job.payload.taskKey,
+        attemptId:a.attemptId,ref:a.job.payload.branch,trigger:'fixture',pipelineSha:'c'.repeat(40),headSha:a.job.payload.baseCommit } });
+      for (const status of ['run','pass'] as const) await this.api('updateCiRun', { ...this.write(),params:{ id:run.body.id },body:{ fence:a.job.fence,status } });
+    }
     await this.api('reportAttemptResult', { ...this.write(), params: { attemptId: a.attemptId }, body: {
       fence: a.job.fence, summary: '무료 가짜 실행 결과', changedFiles: qa ? [] : ['src/result.ts'], evidence: [],
       ...(qa && { verification: { headSha: a.job.payload.baseCommit, specRevision: 1, result, cmd: 'fake check', expected: '수용 기준 충족', actual: result,
