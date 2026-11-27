@@ -247,13 +247,17 @@ describe('runner 실제 PostgreSQL 검증', () => {
     } finally { await exec.shutdown(); await state.close(); await rm(home, { recursive: true, force: true }); }
   });
 
-  const releaseCases = (['reserved', 'running', 'stopping'] as const).flatMap(stage =>
-    (['reject', 'failure', 'cancel', 'crash'] as const).map(cause => ({ stage, cause })));
+  const releaseCases = [
+    ...(['reserved', 'running', 'stopping', 'unregistered-stopping'] as const).flatMap(stage =>
+      (['reject', 'failure', 'cancel', 'crash'] as const).map(cause => ({ stage, cause }))),
+    { stage: 'running', cause: 'lost-response' } as const,
+  ];
   test.each(releaseCases)('review3 matrix: $stage × $cause', async ({ stage, cause }) => {
+    const unregistered = stage === 'reserved' || stage === 'unregistered-stopping';
     const { mkdtemp, readFile, rm } = await import('node:fs/promises');
     const { join } = await import('node:path');
     const { setTimeout: sleep } = await import('node:timers/promises');
-    const { createApiClient } = await import('../../../../agent-runner/src/api/client.ts');
+    const { createApiClient, ApiTransportError } = await import('../../../../agent-runner/src/api/client.ts');
     const { Outbox } = await import('../../../../agent-runner/src/api/outbox.ts');
     const { Secret } = await import('../../../../agent-runner/src/security/secret.ts');
     const { State } = await import('../../../../agent-runner/src/state/state.ts');
@@ -286,13 +290,24 @@ describe('runner 실제 PostgreSQL 검증', () => {
     } });
     const reporter = new ResourceReporter({ api: transport, epoch: () => 1, heavy });
     const api: typeof transport = async (operation, request) => {
-      if (phase && operation === 'reportJobProcess' && stage === 'reserved') {
+      if (phase && operation === 'reportJobProcess' && unregistered) {
+        if (stage === 'unregistered-stopping' && !watched) {
+          watched = true;
+          await owner.query("update runner_jobs set lease_until=clock_timestamp()-interval '1 second' where id=$1", [currentJob]);
+          await watchRunner(pool, 1);
+          expect(await hold(currentJob)).toMatchObject({ slot_state: 'unconfirmed', pgid: null });
+        }
         if (cause === 'failure') throw new Error('REGISTER_IO_FAILED');
         if (cause === 'cancel') { controller.abort(); throw controller.signal.reason; }
-        await owner.query("update runner_jobs set lease_until=clock_timestamp()-interval '1 second' where id=$1", [currentJob]);
+        if (!watched) await owner.query("update runner_jobs set lease_until=clock_timestamp()-interval '1 second' where id=$1", [currentJob]);
       }
       const response = await transport(operation, request);
-      if (phase && operation === 'reportJobProcess' && stage !== 'reserved') {
+      if (phase && operation === 'reportJobProcess' && !unregistered) {
+        if (cause === 'lost-response') {
+          expect(response.status).toBe(204);
+          expect(await hold(currentJob)).toMatchObject({ slot_state: 'active', pgid: expect.any(Number) });
+          controller.abort(); throw new ApiTransportError('reportJobProcess');
+        }
         if (cause === 'reject') reporter.observe({ cpuPct: 1, memFreeGB: 0, swapUsedGB: 0 });
         if (cause === 'cancel') controller.abort();
       }
@@ -314,37 +329,38 @@ describe('runner 실제 PostgreSQL 검증', () => {
       installFakeCli(join(home, 'fake'), 'codex', { exitCode: 17, lines: [] });
       if (cause === 'crash') {
         expect((await post(`jobs/${currentJob}/slots/acquire`, { fence: claimResponse.fence, hostId: 'host-a' })).statusCode).toBe(204);
-        runner = spawn(process.execPath, [join(import.meta.dirname, '../../../../agent-runner/test/exec/kill-worker.ts'), home, stage === 'reserved' ? 'record' : 'exec', JSON.stringify({ identity: { hostId: 'host-a', bootId: 'boot-a' }, job: { id: currentJob, fence: claimResponse.fence, epoch: 1 } })], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+        runner = spawn(process.execPath, [join(import.meta.dirname, '../../../../agent-runner/test/exec/kill-worker.ts'), home, unregistered ? 'record' : 'exec', JSON.stringify({ identity: { hostId: 'host-a', bootId: 'boot-a' }, job: { id: currentJob, fence: claimResponse.fence, epoch: 1 } })], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
         const exited = once(runner, 'exit');
         const [message] = await once(runner, 'message');
         const record = (message as { record: { pgid: number } }).record;
-        if (stage !== 'reserved') {
+        if (!unregistered) {
           expect((await post(`jobs/${currentJob}/process`, { fence: claimResponse.fence, processGroup: record.pgid, cgroup: null })).statusCode).toBe(204);
           for (let i = 0; i < 200 && !await readFile(join(home, 'ran'), 'utf8').catch(() => ''); i++) await sleep(10);
           expect(await readFile(join(home, 'ran'), 'utf8')).toBe('ran');
         }
-        if (stage === 'stopping') {
+        if (stage === 'stopping' || stage === 'unregistered-stopping') {
           watched = true;
           await owner.query("update runner_jobs set lease_until=clock_timestamp()-interval '1 second' where id=$1", [currentJob]);
           await watchRunner(pool, 1);
         }
         expect((await hold(currentJob)).slot_state).toBe(stage === 'reserved' ? 'reserved' : stage === 'running' ? 'active' : 'unconfirmed');
+        if (unregistered) expect((await hold(currentJob)).pgid).toBeNull();
         runner.kill('SIGKILL'); await exited;
         expect(runner.signalCode).toBe('SIGKILL');
         expect(await exec.recover()).toBe(true);
       } else {
         const command = exec.command({ id: currentJob, fence: claimResponse.fence, epoch: 1 }, 'Codex', { file: fake.path, args: [], cwd: home, env: {}, stdin: '' }, controller.signal);
-        if (cause === 'failure' && stage !== 'reserved') expect((await command).code).toBe(17);
-        else if (cause === 'reject' && stage === 'reserved') await expect(command).rejects.toMatchObject({ error: { code: 'LEASE_LOST' } });
+        if (cause === 'failure' && !unregistered) expect((await command).code).toBe(17);
+        else if (cause === 'reject' && unregistered) await expect(command).rejects.toMatchObject({ error: { code: 'LEASE_LOST' } });
         else if (cause === 'failure') await expect(command).rejects.toThrow('REGISTER_IO_FAILED');
-        else if (cause === 'cancel') await expect(command).rejects.toMatchObject({ name: 'AbortError' });
+        else if (cause === 'cancel' || cause === 'lost-response') await expect(command).rejects.toMatchObject({ name: 'AbortError' });
         else await expect(command).rejects.toThrow('memory_pressure');
-        expect(fake.calls()).toHaveLength(cause === 'failure' && stage !== 'reserved' ? 1 : 0);
+        expect(fake.calls()).toHaveLength(cause === 'failure' && !unregistered ? 1 : 0);
       }
       const expectedState = cause === 'crash' ? 'unconfirmed' : stage === 'reserved' ? 'reserved' : stage === 'running' ? 'active' : 'unconfirmed';
       expect(releases).toHaveLength(1);
-      expect(releases[0]).toMatchObject({ state: expectedState, kind: stage === 'reserved' ? 'no_process' : 'group_empty', status: 204 });
-      if (stage !== 'reserved') expect(releases[0]?.group).toBe(releases[0]?.pgid);
+      expect(releases[0]).toMatchObject({ state: expectedState, kind: unregistered ? 'no_process' : 'group_empty', status: 204 });
+      if (!unregistered) expect(releases[0]?.group).toBe(releases[0]?.pgid);
       expect((await hold(currentJob)).slot_state).toBe('none');
       expect((await exec.launches.list()).every(r => r.completedAt)).toBe(true);
       expect(heavy.snapshot().running).toBe(0);
