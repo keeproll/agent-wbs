@@ -21,7 +21,9 @@ const verify = fixing ? prompt.includes('"verdict"') : prompt.includes('검사�
 // 시도 흐름이 지시문에 넣는 두 줄(이전 시도에서 받은 지시·전달할 메시지)의 메시지 ID만 읽는다.
 const ids = [...prompt.matchAll(/^(?:이전 시도에서 받은 지시|전달할 메시지): (\[.*\])$/gm)].flatMap(m => JSON.parse(m[1]).map(message => message.id));
 const responses = [...new Set(ids)].map(messageId => ({ messageId, text: '지시를 반영했습니다.', workState: '완료' }));
-const git = (...args) => execFileSync('git', ['-c', 'user.name=fake-agent', '-c', 'user.email=fake@example.invalid', '-c', 'core.hooksPath=/dev/null',
+// safe.directory: 실제 Claude·Codex 세션(래퍼 run)은 Agent 계정 전역 설정(safe.directory '*')을 쓴다. 이 fake는 래퍼 ci-run(새 HOME)으로
+// 뜨므로 그 설정이 없어, 같은 효과를 이 폴더 하나에만 명령줄로 준다(Runner 쪽 설정이 아니라 Agent 세션 흉내다).
+const git = (...args) => execFileSync('git', ['-c', `safe.directory=${cwd}`, '-c', 'user.name=fake-agent', '-c', 'user.email=fake@example.invalid', '-c', 'core.hooksPath=/dev/null',
   '-c', 'commit.gpgSign=false', ...args], { cwd, encoding: 'utf8', env: { PATH: '/usr/bin:/bin', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', HOME: cwd } }).trim();
 
 let report;
@@ -32,7 +34,9 @@ if (fixing && scenario.fixInvalid) {
   const line = /체크리스트\(acId로 쓰세요\): (.*)/.exec(prompt)?.[1] ?? '없음';
   const keys = line === '없음' ? [] : line.split(' / ').map(item => item.split('=')[0]);
   const verdict = scenario.qaVerdict ?? 'PASS';
-  report = { verdict, criteria: keys.map(acId => ({ acId, result: verdict, cmd: 'cat src/result.ts', expected: '결과 파일이 있음', actual: verdict === 'PASS' ? '있음' : '내용 부족', evidence: [] })),
+  // 증거 파일은 작업 폴더의 .awbs-evidence/ 안에 두고 이름만 적는다(Runner가 Agent 계정으로 읽어 올린다).
+  writeFileSync(join(cwd, '.awbs-evidence', 'check.log'), `검사 결과 ${verdict}\n`);
+  report = { verdict, criteria: keys.map(acId => ({ acId, result: verdict, cmd: 'cat src/result.ts', expected: '결과 파일이 있음', actual: verdict === 'PASS' ? '있음' : '내용 부족', evidence: ['check.log'] })),
     defects: verdict === 'FAIL' ? [{ text: '수용 기준 미충족', blocking: true }] : [], ...(responses.length && { responses }) };
 } else if (fixing) {
   report = { summary: '형식을 고쳐 다시 냅니다', selfCheck: ['결과 파일 확인'], followups: [], designItems: [], ...(responses.length && { responses }) };

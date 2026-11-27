@@ -98,6 +98,11 @@ export interface RunnerAppDeps {
    * 함수를 직접 넘기는 모양은 시험용이다(실제 ①과 PR 생성을 거치지 않는다).
    */
   jobs?: Pick<AttemptFlowOptions, 'settle'> & {
+    /**
+     * CI 처리기가 병합을 확인한 뒤(Task가 done으로 가는 길) 그 Task 브랜치의 작업 폴더를 정리한다(`AttemptWorkspace.release`).
+     * 실패해도 병합 결과는 그대로다. 경고만 남기고 남은 폴더는 초기화 정리가 지운다.
+     */
+    merged?: (branch: string) => Promise<void>;
     /** 결과 수집기. 실제는 공급원(`CollectSources`)을 넘기고, 앱이 자기 Execution·Runner·API로 `bindCollect`를 부른다. 함수는 시험용이다. */
     collect: AttemptFlowOptions['collect'] | CollectSources;
     taskCheck: AttemptFlowOptions['taskCheck'] | TaskCheckSources;
@@ -504,7 +509,11 @@ export class RunnerApp {
     if (this.#ci || this.#d.ciAuto) this.#timers.push(scheduleDaily(async () => {
       // 실제 실행기는 격리 계층(전용 계정 + scope)이 있을 때만 CI job을 받는다. 없으면 받아도 실행할 수 없다.
       if (this.#d.ciAuto && !this.execution.isolation) return;
-      await (await this.#ensureCi())?.runNext(this.reporter.caps?.total ?? 0,signal);
+      const outcome = await (await this.#ensureCi())?.runNext(this.reporter.caps?.total ?? 0,signal);
+      // 병합을 확인했으면 그 Task의 개발·검증 폴더를 지운다(done 정리). 실패는 경고만 남긴다.
+      if (outcome?.result?.kind === 'merged' && this.#d.jobs?.merged) {
+        await this.#d.jobs.merged(outcome.result.branch).catch((error: unknown) => { this.#d.warn(`병합 뒤 작업 폴더 정리 실패: ${message(error)}`); });
+      }
     },{ intervalMs:1000,onError:onError('통합·CI 재실행') }));
     // 주기는 서버 정책(inputCheckMinutes)을 따른다. 정책이 없으면 기본 5분(P3-1 임시값).
     const policyMinutes = this.runner.policy?.inputCheckMinutes;

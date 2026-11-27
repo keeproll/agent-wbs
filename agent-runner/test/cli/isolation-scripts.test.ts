@@ -815,6 +815,7 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
         allow('*test -x */.interop-*/whoami.exe'),
         allow('*test -r */etc/resolv.conf'),
         allow('*getent hosts api.anthropic.com'),
+        allow('*bash -c *git config --global --get-all safe.directory*'),
       ];
     }
     beforeEach(() => {
@@ -840,6 +841,19 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
       writeFileSync(join(R, 'etc/hosts'), '160.79.104.10 api.anthropic.com\n');
     });
     const check = () => run('check-agent-user.sh');
+
+    test('6-2: safe.directory는 Agent 계정 전역 설정에만 있어야 한다(Runner 전역·시스템 설정에 있으면 FAIL)', () => {
+      rules(...baseline().filter(rule => !rule[2].includes('safe.directory')));
+      expect(check().out).toContain("FAIL  Agent가 못 함: Agent 계정 전역 설정 safe.directory='*'");
+      rules(...baseline());
+      const ok = check();
+      expect(ok.out).toContain("PASS  Agent가 함: Agent 계정 전역 설정 safe.directory='*'");
+      expect(ok.out).toContain('PASS  Runner 계정 git 설정(전역·시스템)에 safe.directory 없음');
+      writeFileSync(join(R, 'runner.gitconfig'), '[safe]\n\tdirectory = *\n');
+      const bad = run('check-agent-user.sh', [], { GIT_CONFIG_GLOBAL: join(R, 'runner.gitconfig') });
+      expect(bad.out).toContain('FAIL  Runner 계정 git 설정에 safe.directory가 있음(지우세요): *');
+      expect(bad.code).toBe(1);
+    });
 
     test('기준: 모두 막히고 정책이 맞으면 FAIL 0개, 종료 코드 0', () => {
       rules(...baseline());

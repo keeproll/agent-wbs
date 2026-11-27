@@ -20,6 +20,8 @@
 #   agent-file read|write|remove --cwd <작업 폴더> --path <.claude|.codex>/agents/<이름>
 #                       하위 Agent 정의 파일을 Agent 계정이 읽고(표준 출력)·쓰고(표준 입력)·지운다(fix2 추가, 조정자 지시).
 #                       없는 파일 읽기는 종료 코드 3. Runner는 Agent가 쓸 수 있는 폴더에 직접 쓰지 않는다.
+#   evidence-read --cwd <작업 폴더> --name <이름>
+#                       작업 폴더의 .awbs-evidence/<이름>(QA 증거 파일, 일반 파일·50 MiB까지)을 Agent 계정이 읽어 표준 출력으로 낸다. 없으면 3.
 #
 # 주의: 이 래퍼는 Runner를 막는 보안 경계가 아니다. Runner 계정을 Agent 계정으로 바꾸는 「문」이다.
 #   ci-run은 고정 PATH의 아무 명령이나 받는다. 결정 4(「run은 진입점만」)는 run 하위 명령 안의 규칙일 뿐이다.
@@ -196,14 +198,11 @@ cmd_ci_run() {
     [[ $program == /* ]] || die "고정 PATH의 실행 파일이 아닙니다: $1"
   fi
   shift
-  # GIT_CONFIG_*: 검사 명령 안의 git(예: 시험 도구의 변경 파일 조회)이 이 사본(Runner 계정 소유)을 「dubious ownership」으로
-  #   거부하지 않게 이 폴더만 허용한다. 실행마다 새 HOME이라 Agent 계정의 전역 설정(safe.directory '*')이 없다.
   exec env -i \
     HOME="$real_home" USER="$AGENT_USER" LOGNAME="$AGENT_USER" \
     PATH="$AGENT_PATH" \
     TMPDIR="$real_home/tmp" \
     DISABLE_AUTOUPDATER=1 DISABLE_UPDATES=1 \
-    GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="$real_cwd" \
     "${extra[@]}" \
     "$program" "$@"
 }
@@ -298,6 +297,23 @@ cmd_agent_file() {
   esac
 }
 
+# Agent가 남긴 검증 증거 파일(collect-prepare). Runner는 Agent가 쓸 수 있는 폴더의 파일을 직접 읽지 않는다.
+# 왜: Runner 계정이 읽으면 Agent가 그 자리를 Runner 파일(토큰 등) 링크로 바꿔 서버로 새어 나가게 할 수 있다. Agent 계정이 읽으면 Agent 권한까지다.
+# 위치는 작업 폴더의 .awbs-evidence/<이름> 하나뿐이다(Runner가 준비 때 만들고 상태 검사에서 뺀다). 일반 파일만, 50 MiB까지.
+# 없으면 종료 코드 3. 내용은 그대로 표준 출력으로 낸다(바이너리 그대로).
+cmd_evidence_read() {
+  (($# == 4)) && [[ $1 == --cwd && $3 == --name ]] || die "evidence-read --cwd <작업 폴더> --name <이름>만 받습니다."
+  local name=$4 real_cwd
+  [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$ ]] || die "증거 파일 이름 모양이 아닙니다."
+  real_cwd=$(inside "$2" "$WORKTREES") || die "작업 폴더는 $WORKTREES 안이어야 합니다."
+  [[ -d $real_cwd ]] || die "작업 폴더가 폴더가 아닙니다."
+  cd -- "$real_cwd"
+  [[ -d .awbs-evidence && ! -L .awbs-evidence ]] || exit 3
+  [[ -e .awbs-evidence/$name || -L .awbs-evidence/$name ]] || exit 3
+  [[ -f .awbs-evidence/$name && ! -L .awbs-evidence/$name ]] || die "일반 파일이 아닙니다."
+  head -c 52428801 -- ".awbs-evidence/$name"
+}
+
 cmd_kill_group() {
   [[ ${1-} =~ ^[1-9][0-9]{0,9}$ ]] || die "pgid는 양의 정수입니다."
   # Agent 계정으로 보내므로 Agent 계정의 프로세스에만 닿는다. 다른 계정(Runner·root)의 프로세스는 죽일 수 없다.
@@ -375,10 +391,11 @@ case $sub in
   git-bundle) cmd_git_bundle "$@" ;;
   cli-version) cmd_cli_version "$@" ;;
   agent-file) cmd_agent_file "$@" ;;
+  evidence-read) cmd_evidence_read "$@" ;;
   kill-group) cmd_kill_group "$@" ;;
   kill-all) cmd_kill_all ;;
   fix-perms) cmd_fix_perms "$@" ;;
   check) cmd_check ;;
   login-status) cmd_login_status "$@" ;;
-  *) die "하위 명령은 run · ci-run · git-inspect · git-bundle · cli-version · agent-file · kill-group · kill-all · fix-perms · check · login-status 중 하나입니다." ;;
+  *) die "하위 명령은 run · ci-run · git-inspect · git-bundle · cli-version · agent-file · evidence-read · kill-group · kill-all · fix-perms · check · login-status 중 하나입니다." ;;
 esac

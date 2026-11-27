@@ -108,7 +108,10 @@ new RunnerApp({
 - dev·rework: 지우지 않는다. QA FAIL 뒤 재작업이 같은 폴더를 쓴다.
 - 왜 보고 뒤인가: 보고 전에 지우면, 응답을 잃고 다시 시작할 때 검사한 커밋을 다시 볼 수 없다.
 - 정리 실패는 경고로만 알린다(`onError`). 남은 폴더는 다음 준비나 초기화 정리(`reset`)가 다시 지운다.
-- 알려진 한계: Task가 `done`이 되거나 취소될 때 남은 개발 폴더를 지우는 연결은 아직 없다. 초기화 정리가 지운다.
+- 병합 뒤(done으로 가는 길): CI 처리기가 병합을 확인하면 앱이 그 Task 브랜치의 개발·검증 폴더를 모두 지운다(`jobs.merged` → `release`).
+  - 왜: QA PASS 뒤 정리가 실패했거나 병합 전 재작업으로 폴더를 다시 만들었으면 남아 있을 수 있다.
+  - 실패해도 병합 결과는 그대로다. 경고만 남긴다.
+- 알려진 한계: 팀장이 Task를 취소했을 때 남은 폴더를 지우는 연결은 아직 없다. 초기화 정리가 지운다.
 
 ## 결과 수집(`collect.ts`, `output.ts`)
 
@@ -135,9 +138,14 @@ new RunnerApp({
    - 끝난 폴더의 HEAD·청결을 Agent 계정 git으로 다시 본다(`taskCheckPath`). 다르거나 더러우면 멈춘다.
    - 체크리스트는 서버가 qa·reverify job의 지시문(`instructions.checklist`)에 준 키만 쓴다.
 6. Evidence: 검증한 종료 메시지와 Runner 관측(headSha·변경 파일 등)을 JSON 파일 하나로 먼저 올리고(`uploadEvidence`), 그 ID를 보고한다.
-   - 종류는 `dev-report`·`qa-report`·`agent-output-invalid`다.
-   - Agent가 폴더에 만든 증거 파일은 아직 올리지 않는다. 경로만 체크리스트 메모에 「Agent가 적은 근거」로 남긴다.
-   - 왜: Runner 계정이 Agent가 쓸 수 있는 폴더의 파일을 읽으면 링크를 통해 Runner 파일이 새어 나갈 수 있다. Agent 계정으로 읽는 길은 다음 작업이다.
+   - 종류는 `dev-report`·`qa-report`·`agent-output-invalid`·`agent-evidence`다.
+7. Agent 증거 파일(QA): QA는 검증 폴더의 `.awbs-evidence/` 안에 파일을 두고 `criteria[].evidence`에 파일 이름만 적는다.
+   - Runner는 그 파일을 Agent 계정(래퍼 `evidence-read`)으로만 받아 Runner 전용 임시 파일에 쓴 뒤 올린다(`agent-evidence`).
+   - 왜: Runner 계정이 Agent가 쓸 수 있는 폴더의 파일을 직접 열면, Agent가 그 자리를 Runner 파일(토큰 등) 링크로 바꿔 서버로 새어 나가게 할 수 있다.
+   - 일반 파일만, 파일마다 50 MiB, 모두 20개까지다. 하위 폴더·링크는 받지 않는다.
+   - 적힌 파일이 없으면 형식 오류로 센다(수정 요청 1회 대상).
+   - 체크리스트 항목의 증거는 그 항목의 첫 증거 파일이다. 없으면 QA 보고 JSON이다.
+   - `.awbs-evidence/`는 준비 때 만들고 `.git/info/exclude`로 청결 확인에서 뺀다. 증거는 커밋 대상이 아니다.
 
 ## M7-06 연결 계약
 

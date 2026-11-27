@@ -283,6 +283,38 @@ describe.skipIf(!usable)('awbs-agent-exec 실행 래퍼(bash, 실제 실행)', (
     expect(file(['write', '--cwd', worktree, '--path', rel], 'x'.repeat(1024 * 1024 + 1)).status).toBe(2);
   });
 
+  test('evidence-read: .awbs-evidence 안의 일반 파일만 Agent 계정으로 읽어 그대로 낸다(collect-prepare)', () => {
+    const read = (args: string[]) => spawnSync(exec, ['evidence-read', ...args], { env: { PATH: '/usr/bin:/bin' } });
+    const dir = join(worktree, '.awbs-evidence');
+    expect(read(['--cwd', worktree, '--name', 'unit.log']).status).toBe(3);
+    mkdirSync(dir, { recursive: true });
+    expect(read(['--cwd', worktree, '--name', 'unit.log']).status).toBe(3);
+    const bytes = Buffer.from([0, 1, 2, 255, 10]);
+    writeFileSync(join(dir, 'shot.png'), bytes);
+    const ok = read(['--cwd', worktree, '--name', 'shot.png']);
+    expect(ok.status, ok.stderr.toString()).toBe(0);
+    expect(Buffer.compare(ok.stdout, bytes)).toBe(0);
+    // 링크(Runner 파일을 가리키게 바꾼 것)·하위 경로·숨김 이름·작업 영역 밖은 거부한다.
+    writeFileSync(join(runnerHome, 'token'), 'secret');
+    symlinkSync(join(runnerHome, 'token'), join(dir, 'leak.txt'));
+    expect(read(['--cwd', worktree, '--name', 'leak.txt']).status).toBe(2);
+    for (const bad of [['--cwd', worktree, '--name', '../a'], ['--cwd', worktree, '--name', '.hidden'], ['--cwd', worktree, '--name', 'a/b'], ['--cwd', runnerHome, '--name', 'token']]) {
+      expect(read(bad).status, bad.join(' ')).toBe(2);
+    }
+    rmSync(dir, { recursive: true });
+    symlinkSync(runnerHome, dir);
+    expect(read(['--cwd', worktree, '--name', 'token']).status).toBe(3);
+    rmSync(dir);
+  });
+
+  test('래퍼 자신의 git은 -c safe.directory=<그 폴더 실제 경로>만 쓰고 전역 설정을 쓰지 않는다(fix3)', () => {
+    const text = readFileSync(join(import.meta.dirname, '..', '..', 'scripts', 'isolation', 'awbs-agent-exec.sh'), 'utf8');
+    expect(text.match(/safe\.directory/g)?.length).toBeGreaterThan(0);
+    expect(text).toContain('git -C "$dir" -c safe.directory="$dir"');
+    expect(text).not.toMatch(/GIT_CONFIG_(COUNT|KEY|VALUE)/);
+    expect(text).not.toMatch(/config --global/);
+  });
+
   test('cli-version: 진입점 규칙으로 Agent 계정에서 --version만', () => {
     rmSync(out, { force: true });
     const r = wrapper(['cli-version', '--tool', 'codex', '--', codex]);

@@ -103,7 +103,11 @@ keeproll ALL=(awbs-agent) NOPASSWD: /usr/local/libexec/awbs-agent-exec
     - CLI가 세션 안에서 스스로 부르는 `rg` 등은 같은 계정·같은 scope의 자식이라 따로 허용할 필요가 없다.
   - 다른 Agent의 CLI도 거부한다.
 - `git-inspect --cwd <작업 폴더>`·`git-bundle --cwd <작업 폴더> --branch <이름>`(fix2, 조정자 결정 6): Agent 작업 폴더의 git을 Agent 계정이 돌린다. 시스템·전역 설정 없음, `GIT_ALLOW_PROTOCOL=none`, `GIT_NO_LAZY_FETCH=1`, hook·fsmonitor 끔. Runner는 사용자 scope 안에서 부르고 끝나면 scope를 비운다.
-  - fix3: 그 작업 폴더 하나만 `-c safe.directory=<폴더>`(명령줄 보호 설정)로 허용한다. 작업 폴더 소유자가 Runner 계정이라 git이 「dubious ownership」으로 거부하기 때문이다. `ci-run`도 같은 이유로 `GIT_CONFIG_*` 환경 변수로 그 사본 하나만 허용한다(실행마다 새 HOME이라 Agent 계정의 전역 설정이 없다). Claude·Codex 세션(`run`)은 Agent 계정 전역 설정(`safe.directory '*'`, 설치 스크립트가 넣음)을 그대로 쓴다.
+  - fix3: 래퍼 자신이 부르는 git은 그 작업 폴더 하나만 `-c safe.directory=<폴더의 실제 경로>`(명령줄 보호 설정)로 허용한다. 작업 폴더 소유자가 Runner 계정이라 git이 「dubious ownership」으로 거부하기 때문이다. 래퍼는 전역 설정을 쓰지도 바꾸지도 않는다(`GIT_CONFIG_GLOBAL=/dev/null`).
+  - `evidence-read --cwd <작업 폴더> --name <이름>`(collect-prepare): QA가 `.awbs-evidence/<이름>`에 남긴 증거 파일을 Agent 계정이 읽어 표준 출력으로 낸다. 일반 파일만, 50 MiB까지. 없으면 종료 코드 3. Runner는 이 출력을 Runner 전용 파일로 받아 올린다(Agent 폴더의 파일을 Runner가 직접 열지 않는다).
+
+**Agent 세션 안의 git과 safe.directory(조정자 답변 2026-11-28).**
+Claude·Codex는 세션 안에서 git(status·diff·commit)을 쓴다. 작업 폴더는 Runner 계정 소유라, 그대로 두면 git이 「dubious ownership」으로 거부한다. 그래서 설치 스크립트가 **Agent 계정 전역 설정에만** `safe.directory '*'`를 넣는다(git 2.43은 경로 접두어 `/*`를 지원하지 않는다). 이 설정은 Agent가 Runner(믿는 쪽) 소유 저장소를 믿는 것이라 Agent 권한 밖으로 넓어지지 않는다. 위험한 방향은 반대(Runner가 Agent 소유 저장소를 믿어 Agent 설정이 Runner 권한으로 도는 것)다. 그래서 Runner 계정 git 설정(전역·시스템)에는 safe.directory가 없어야 하며, 확인 스크립트(`check-agent-user.sh` 6-2)가 두 가지를 모두 본다. 래퍼 자신의 git은 전역 설정 없이 `-c` 정확 경로만 쓴다. 조정자 결정 6의 「Agent 폴더의 git은 Agent 계정으로 래퍼를 통해」는 **Runner가 Agent 폴더에서 git을 실행하지 않는다**는 뜻이다. Agent 자신이 세션 안에서 커밋하는 것은 허용하고, Runner는 그 결과를 Agent 계정이 만든 bundle로만 받는다.
 - `cli-version --tool claude|codex|pnpm -- <진입점>`(fix2, 조정자 결정 8): 새로 설치한 CLI의 `--version`을 Agent 계정으로 실행한다(`install-agent-cli.sh`가 쓴다).
 - `agent-file read|write|remove --cwd <작업 폴더> --path <.claude|.codex>/agents/<이름>`(fix2 추가): 하위 Agent 정의 파일을 Agent 계정이 다룬다. 경로는 정해진 모양만(`.awbs-installed.json` 또는 `<키>.md|toml`), 1 MiB까지, 없는 파일 읽기는 종료 코드 3.
 - `ci-run`(①·CI 검사 명령, 조정자 결정 1, fix1): Agent 코드의 시험·빌드를 Agent 계정으로 실행한다.

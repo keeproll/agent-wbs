@@ -329,6 +329,15 @@ else
   fail "Runner가 $AGENT_ROOT/worktrees 안에 폴더를 못 만듦"
 fi
 
+step '6-2. git safe.directory(소유자가 다른 저장소 허용)는 Agent 계정 전역 설정에만'
+# Agent 계정 전역 설정의 safe.directory '*'는 Agent가 Runner(믿는 쪽) 소유 작업 폴더를 여는 데 필요하다(세션 안 git: status·diff·commit).
+# Runner 쪽(Runner 전역·시스템 설정)에는 없어야 한다. 왜: Runner git이 Agent가 만든 저장소를 믿으면 Agent 설정(filter·hook)이 Runner 권한으로 돈다.
+# shellcheck disable=SC2016  # 작은따옴표 안은 Agent 쪽 bash가 펼친다.
+agent_allowed "Agent 계정 전역 설정 safe.directory='*'" bash -c '[[ $(git config --global --get-all safe.directory) == "*" ]]'
+runner_safe=$(env -C / git config --get-all safe.directory 2> /dev/null || true)
+if [[ -z $runner_safe ]]; then pass 'Runner 계정 git 설정(전역·시스템)에 safe.directory 없음'
+else fail "Runner 계정 git 설정에 safe.directory가 있음(지우세요): $(printf '%s' "$runner_safe" | tr '\n' ' ')"; fi
+
 step '6-1. 예약 실행(cron·at) 막힘'
 # cron.allow(또는 at.allow)가 있으면 그 목록에 없는 계정은 막힌다. 없으면 deny 파일에 Agent가 있어야 한다.
 for pair in "cron:$CRON_ALLOW:$CRON_DENY" "at:$AT_ALLOW:$AT_DENY"; do

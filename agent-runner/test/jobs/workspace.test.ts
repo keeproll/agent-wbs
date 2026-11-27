@@ -91,6 +91,35 @@ test('재작업 폴더가 없으면 원격 Task 브랜치(①을 통과해 push�
   expect(rework).toMatchObject({ cwd: dev.cwd, headSha: head });
 });
 
+test('병합 뒤 정리(release): 그 Task 브랜치의 개발·검증 폴더를 모두 지우고, 다른 브랜치는 건드리지 않는다', async () => {
+  const base = await setup();
+  const w = createWorkspace({ repo: async () => f.repo });
+  const dev = await w.prepare(job('dev', base));
+  await agentCommit(dev.cwd);
+  const ids = w.worktree(job('dev', base));
+  await f.repo.importWorktree(ids.id, ids.branch);
+  await w.prepare(job('qa', base));
+  const other = await w.prepare({ ...job('dev', base), payload: { ...job('dev', base).payload, branch: 'agent/TASK-0002-h1' } });
+  expect(await f.repo.recordedWorktrees()).toHaveLength(3);
+  await w.release(BRANCH);
+  await w.release(BRANCH);
+  expect(await f.repo.recordedWorktrees()).toEqual([other.cwd.split('/').at(-1)]);
+});
+
+test('검증 폴더의 증거 폴더(.awbs-evidence)는 청결 확인에서 빠지고, 그 밖의 파일은 더럽다고 본다', async () => {
+  const base = await setup();
+  const w = createWorkspace({ repo: async () => f.repo });
+  const dev = await w.prepare(job('dev', base));
+  const head = await agentCommit(dev.cwd);
+  const ids = w.worktree(job('dev', base));
+  await f.repo.importWorktree(ids.id, ids.branch);
+  const qa = await w.prepare(job('qa', base));
+  await writeFile(join(qa.cwd, '.awbs-evidence', 'unit.log'), '로그');
+  await f.repo.taskCheckPath(w.verifyWorktree(job('qa', base)), head);
+  await writeFile(join(qa.cwd, 'stray.txt'), '남은 파일');
+  await expect(f.repo.taskCheckPath(w.verifyWorktree(job('qa', base)), head)).rejects.toThrow('커밋하지 않은 변경');
+});
+
 test('기록은 있는데 폴더가 사라졌으면 기록을 정리하고 다시 만든다', async () => {
   const base = await setup();
   const w = createWorkspace({ repo: async () => f.repo });

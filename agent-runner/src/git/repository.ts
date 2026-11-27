@@ -5,7 +5,7 @@ import { chmod, link, lstat, mkdir, open, readFile, readdir, rename, rm, statfs,
 import { setTimeout as delay } from 'node:timers/promises';
 import { basename, dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
 import { AGENT_ROOT, restoreAgentPermissions } from '../cli/dedicated-user.ts';
-import { localAgentGit, wrapperAgentGit, type AgentGit } from './agent-git.ts';
+import { EVIDENCE_DIR, localAgentEvidence, localAgentGit, wrapperAgentEvidence, wrapperAgentGit, type AgentEvidence, type AgentGit } from './agent-git.ts';
 import { atomicWrite } from '../state/files.ts';
 import { parseCommits, parseRawNumstat, type InputDiff, type InputObservation } from './inputs.ts';
 
@@ -337,6 +337,8 @@ export interface GitLayout {
    * 생략하면 `agentRoot`가 고정 작업 영역이면 실제 래퍼(Agent 계정), 아니면 같은 계정 git(시험 배치)이다.
    */
   agentGit?: AgentGit;
+  /** QA 증거 파일 읽기(collect-prepare). 생략하면 고정 작업 영역이면 래퍼 `evidence-read`(Agent 계정), 아니면 같은 계정 직접 읽기(O_NOFOLLOW). */
+  agentEvidence?: AgentEvidence;
 }
 
 /** 입력 복사의 임시 폴더 접두사. 점으로 시작하므로 `inputIds()`(입력 이름)에 섞이지 않는다. */
@@ -360,6 +362,7 @@ export class GitRepository {
   private readonly shared: boolean;
   private readonly restorePermissions: ((path: string) => Promise<void>) | null;
   private readonly agentGit: AgentGit | null;
+  private readonly agentEvidence: AgentEvidence;
   private registration: Registration | undefined;
 
   private constructor(home: string, repositoryId: string, layout: GitLayout = {}) {
@@ -374,6 +377,7 @@ export class GitRepository {
     this.inputs = join(area, 'inputs', repositoryId);
     this.statePath = join(home, 'state/git', `${repositoryId}.json`);
     this.agentGit = !this.shared ? null : layout.agentGit ?? (layout.agentRoot === AGENT_ROOT ? wrapperAgentGit() : localAgentGit());
+    this.agentEvidence = layout.agentEvidence ?? (layout.agentRoot === AGENT_ROOT ? wrapperAgentEvidence() : localAgentEvidence);
     if (this.shared) protectedAreas.add(this.worktrees);
   }
 
@@ -753,7 +757,7 @@ export class GitRepository {
    * - 넘긴 뒤에는 Runner git이 이 폴더를 쓰지 않는다(`assertRunnerGit`). HEAD·상태·결과는 Agent 계정 git(`AgentGit`)으로만 본다.
    * `options.ciHome`: 검사 사본이면 실행마다 새 HOME(`.awbs-home`, pnpm 저장소 포함)을 만든다(조정자 결정 8). 상태 검사에서 빠지게 `.git/info/exclude`에 적는다.
    */
-  async createWorktree(worktreeId: string, branch: string, commit: string, options: { ciHome?: boolean } = {}): Promise<string> {
+  async createWorktree(worktreeId: string, branch: string, commit: string, options: { ciHome?: boolean; evidence?: boolean } = {}): Promise<string> {
     return this.worktreeUpdate(async () => {
       const path = await safePath(join(this.worktrees, id(worktreeId)));
       await this.branch(branch);
@@ -781,6 +785,12 @@ export class GitRepository {
           await mkdir(join(build, '.awbs-home', 'tmp'), { recursive: true, mode: 0o770 });
           await mkdir(join(build, '.git', 'info'), { recursive: true, mode: 0o700 });
           await writeFile(join(build, '.git', 'info', 'exclude'), '/.awbs-home/\n', { flag: 'a' });
+        }
+        // 검증 폴더면 증거 폴더(.awbs-evidence)를 만들고 상태 검사에서 뺀다(collect-prepare). 증거는 커밋 대상이 아니다.
+        if (options.evidence) {
+          await mkdir(join(build, EVIDENCE_DIR), { mode: 0o770 });
+          await mkdir(join(build, '.git', 'info'), { recursive: true, mode: 0o700 });
+          await writeFile(join(build, '.git', 'info', 'exclude'), `/${EVIDENCE_DIR}/\n`, { flag: 'a' });
         }
         if (this.shared) {
           await groupWritable(build);
@@ -1193,7 +1203,8 @@ export class GitRepository {
     try {
       await this.git(['read-tree', head], undefined, env);
       const dirty = await this.git([`--work-tree=${path}`, 'diff', '--no-ext-diff', '--no-textconv', '--name-only', '-z', head, '--'], undefined, env);
-      const untracked = await this.git([`--work-tree=${path}`, 'ls-files', '--others', '--exclude-standard', '-z'], undefined, env);
+      // 증거 폴더(.awbs-evidence)는 커밋 대상이 아니므로 뺀다. 전용 계정 갈래는 작업 폴더의 .git/info/exclude로 같은 것을 뺀다.
+      const untracked = await this.git([`--work-tree=${path}`, 'ls-files', '--others', '--exclude-standard', `--exclude=/${EVIDENCE_DIR}/`, '-z'], undefined, env);
       if (dirty.length || untracked.length) throw new GitSafetyError('작업 폴더에 커밋하지 않은 변경이 있습니다.');
     } finally {
       await rm(index, { force: true });
@@ -1227,6 +1238,21 @@ export class GitRepository {
     if (this.agentGit) return sha((await this.agentGit.inspect(path)).head);
     // 같은 계정 배치(전용 계정 없음)만: Agent도 Runner 계정이라 넘는 경계가 없다(taskCheckPath의 같은 갈래와 같음).
     return sha((await run(path, [`--git-dir=${join(path, '.git')}`, 'rev-parse', '--verify', 'HEAD^{commit}'])).toString().trim());
+  }
+
+  /**
+   * 작업 폴더의 증거 파일(`.awbs-evidence/<이름>`)을 Runner 전용 파일 `out`으로 받는다. 없으면 false.
+   * 전용 계정 배치는 Agent 계정(래퍼 `evidence-read`)으로만 읽는다. Runner 계정은 그 폴더의 파일을 열지 않는다.
+   */
+  async readEvidence(worktreeId: string, name: string, out: string, limit: number): Promise<boolean> {
+    const state = await this.worktreeState(worktreeId);
+    if (state.kind !== 'ready') throw new GitSafetyError('준비된 작업 폴더가 아닙니다.');
+    return this.agentEvidence.read(state.path, name, out, limit);
+  }
+
+  /** 증거 파일을 받을 Runner 전용 임시 경로(`state/git/evidence-<uuid>`, Agent가 닿지 못함). 호출자가 다 쓴 뒤 지운다. */
+  evidenceTemp(): string {
+    return join(dirname(this.statePath), `evidence-${randomUUID()}`);
   }
 
   /** 이 커밋이 Runner bare 저장소에 있는가. 없으면 호출자가 `fetch()`로 받는다. */

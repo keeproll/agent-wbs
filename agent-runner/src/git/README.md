@@ -45,8 +45,11 @@ const rejected = await repo.checkTask(latestMain, taskHead);
   - `resultHead(id)`: `importWorktree`가 Runner bare 저장소에 가져온 결과 커밋(`refs/agent-results/<id>`). Agent 폴더를 보지 않는다.
   - `changedPaths(base, head)`: 공통 조상부터 head까지 바뀐 파일. Runner bare 저장소에서만 계산한다.
   - `hasCommit(sha)`·`inputPath(id)`: 커밋이 이미 있는지, 입력 사본이 이미 있는지.
+  - `readEvidence(id, 이름, out, 상한)`: 검증 폴더의 `.awbs-evidence/<이름>`을 Runner 전용 파일로 받는다. 전용 계정 배치는 래퍼 `evidence-read`(Agent 계정)로만 읽는다.
+  - `createWorktree(..., { evidence: true })`: 검증 폴더에 `.awbs-evidence/`를 만들고 `.git/info/exclude`에 적어 청결 확인에서 뺀다. 같은 계정 갈래의 청결 확인도 같은 폴더를 뺀다.
 - **소유자가 다른 저장소(dubious ownership)**: 작업 폴더는 Runner 계정 소유라, Agent 계정 git은 기본으로 거부한다.
-  - 래퍼는 그 폴더 하나만 명령줄 설정 `-c safe.directory=<폴더>`로 허용한다(fix3). `ci-run`은 같은 값을 `GIT_CONFIG_*` 환경 변수로 준다.
+  - 래퍼 자신이 부르는 git은 그 폴더 하나만 명령줄 설정 `-c safe.directory=<폴더의 실제 경로>`로 허용한다(fix3). 전역 설정은 쓰지 않는다.
+  - Agent 세션 안의 git(커밋 포함)은 Agent 계정 전역 설정의 `safe.directory '*'`(설치 스크립트)를 쓴다. 이유는 `docs/isolation.md` 「Agent 세션 안의 git과 safe.directory」.
   - 왜 명령줄인가: git은 저장소 설정의 `safe.directory`를 읽지 않는다. Agent가 저장소 설정으로 넓힐 수 없다.
   - 설치된 래퍼가 fix3 전이면 `git-inspect`·`git-bundle`이 실패한다. owner가 설치 스크립트를 다시 실행해야 한다(`docs/OWNER-RUNBOOK.md`).
 - **실행 가드(`assertRunnerGit`)**: Runner git의 cwd·`--git-dir=`·`--work-tree=`·경로 인자가 Agent 작업 폴더 모음 안이면 거부한다. 예외는 준비 폴더(`.prep-<uuid>`)뿐이다. 새 코드가 Agent 폴더에서 git을 돌리면 여기서 멈춘다.

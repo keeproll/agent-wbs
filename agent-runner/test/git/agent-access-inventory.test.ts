@@ -24,6 +24,7 @@ const REPOSITORY_METHODS: Record<string, string> = {
   endReset: 'readdir(이름만, 남은 항목 세기)',
   reset: '기록된 작업 폴더마다 removeWorktree',
   taskCheckPath: '전용 계정: safePath(lstat) + Agent git inspect / 같은 계정 배치만 Runner git rev-parse·diff',
+  // readEvidence도 이 경로를 받아 전용 계정이면 래퍼 evidence-read(Agent 계정), 같은 계정 배치만 직접 읽기(O_NOFOLLOW)로 증거 파일을 받는다.
   // worktreeHead는 이 경로를 받아 전용 계정이면 Agent git inspect(HEAD만), 같은 계정 배치만 Runner git rev-parse를 한다.
   worktreeState: 'safePath(lstat) + 폴더가 있는지 lstat만(내용을 읽지 않음)',
 };
@@ -33,6 +34,7 @@ const OTHER_SITES: Record<string, string> = {
   'ci/collect-tests.ts': 'package.json 읽기(O_NOFOLLOW·O_NONBLOCK·일반 파일·1 MiB)',
   'cli/dedicated-user.ts': 'ci-run --home 경로 문자열만(파일 접근 없음, 래퍼가 Agent 계정으로 확인)',
   'exec/install.ts': '같은 계정 배치(localAgentFiles)만 직접 fs. 전용 계정 배치는 래퍼 agent-file(Agent 계정)로만(fix2 추가)',
+  'git/agent-git.ts': '같은 계정 배치(localAgentEvidence)만 증거 파일 직접 읽기(lstat·O_NOFOLLOW·일반 파일). 전용 계정 배치는 래퍼 evidence-read(Agent 계정)로만(collect-prepare)',
 };
 
 test('repository.ts: Agent 작업 폴더 모음을 쓰는 메서드는 목록의 것뿐이다', () => {
@@ -76,4 +78,12 @@ test('exec/install.ts: 직접 파일 접근은 같은 계정 배치용(localAgen
 test('Execution은 전용 계정 배치에서 Agent 계정 파일 접근을 받는다(app.ts 연결)', () => {
   const text = readFileSync(join(src, 'app.ts'), 'utf8');
   expect(text).toContain('...(d.agentRoot && { agentFiles: wrapperAgentFiles() }),');
+});
+
+test('Agent 증거 파일: repository.ts의 기본은 고정 작업 영역이면 래퍼(Agent 계정), 직접 읽기는 같은 계정 배치에만', () => {
+  const text = readFileSync(join(src, 'git', 'repository.ts'), 'utf8');
+  expect(text).toContain("layout.agentEvidence ?? (layout.agentRoot === AGENT_ROOT ? wrapperAgentEvidence() : localAgentEvidence)");
+  const agentGit = readFileSync(join(src, 'git', 'agent-git.ts'), 'utf8');
+  const local = agentGit.slice(agentGit.indexOf('export const localAgentEvidence'));
+  expect(local).toContain('O_NOFOLLOW');
 });

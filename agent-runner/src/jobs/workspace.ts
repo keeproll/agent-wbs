@@ -41,10 +41,16 @@ export interface AttemptWorkspace {
    * - dev·rework: 지우지 않는다(QA FAIL 뒤 재작업이 같은 폴더를 쓴다).
    */
   settle(job: AttemptJob, verdict: 'PASS' | 'FAIL' | 'BLOCKED' | null): Promise<void>;
+  /**
+   * Task가 끝났을 때(병합 확인 → done) 그 Task 브랜치의 개발·검증 폴더를 모두 지운다. 없으면 아무것도 하지 않는다.
+   * 왜: QA PASS 뒤 정리가 실패했거나, 병합 전 재작업으로 다시 만든 폴더가 남으면 디스크와 생성 기록이 쌓인다.
+   */
+  release(branch: string): Promise<void>;
 }
 
 const role = (job: AttemptJob) => job.payload.kind === 'dev' || job.payload.kind === 'rework' ? 'dev' : 'qa';
-const key = (job: AttemptJob) => createHash('sha256').update(job.payload.branch).digest('hex').slice(0, 20);
+const keyOf = (branch: string) => createHash('sha256').update(branch).digest('hex').slice(0, 20);
+const key = (job: AttemptJob) => keyOf(job.payload.branch);
 
 export function createWorkspace(options: WorkspaceOptions): AttemptWorkspace {
   let opened: Promise<GitRepository> | undefined;
@@ -55,8 +61,8 @@ export function createWorkspace(options: WorkspaceOptions): AttemptWorkspace {
   const devId = (job: AttemptJob) => `w-${key(job)}-dev`;
   const qaId = (job: AttemptJob) => `w-${key(job)}-qa`;
   const branchOf = (id: string) => `agent/${id}`;
-  const create = async (git: GitRepository, id: string, commit: string) =>
-    git.createWorktree(id, branchOf(id), commit, { ...(options.sessionHome && { ciHome: true }) });
+  const create = async (git: GitRepository, id: string, commit: string, evidence = false) =>
+    git.createWorktree(id, branchOf(id), commit, { ...(options.sessionHome && { ciHome: true }), ...(evidence && { evidence: true }) });
 
   /** 입력 사본(고정 커밋의 `prototype/`, 읽기 전용). 이미 있으면 다시 쓴다. `prototype/`이 없는 커밋이면 null. */
   const input = async (git: GitRepository, job: AttemptJob): Promise<string | null> => {
@@ -99,11 +105,18 @@ export function createWorkspace(options: WorkspaceOptions): AttemptWorkspace {
         const id = qaId(job);
         headSha = await git.resultHead(devId(job)) ?? await git.fetchBranch(job.payload.branch);
         if ((await git.worktreeState(id)).kind !== 'none') await git.removeWorktree(id);
-        cwd = await create(git, id, headSha);
+        // 증거 폴더(.awbs-evidence)도 만든다. 상태 검사에서 빠지므로 QA가 증거를 남겨도 청결 확인을 통과한다.
+        cwd = await create(git, id, headSha, true);
       }
       if (!await git.hasCommit(job.payload.baseCommit)) await git.fetch();
       const inputPath = await input(git, job);
       return { cwd, headSha, notes: outputGuide(job, inputPath) };
+    },
+    async release(branch) {
+      const git = await repo();
+      for (const id of [`w-${keyOf(branch)}-qa`, `w-${keyOf(branch)}-dev`]) {
+        if ((await git.worktreeState(id)).kind !== 'none') await git.removeWorktree(id);
+      }
     },
     async settle(job, verdict) {
       if (role(job) === 'dev') return;

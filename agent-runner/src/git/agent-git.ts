@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
-import { open } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, open } from 'node:fs/promises';
+import { join } from 'node:path';
 import { AGENT_EXEC, AGENT_USER } from '../cli/dedicated-user.ts';
 import { clearScope, inUserScope } from '../exec/scope.ts';
 
@@ -188,3 +190,54 @@ export function wrapperAgentFiles(cfg: WrapperConfig = { user: AGENT_USER, exec:
     async remove(cwd, rel) { check(rel); await wrapperCall(cfg, ['agent-file', 'remove', '--cwd', cwd, '--path', rel]); },
   };
 }
+
+/**
+ * QA가 남긴 증거 파일(작업 폴더의 `.awbs-evidence/<이름>`)을 Runner 전용 파일로 받는다(collect-prepare).
+ * 전용 계정 배치는 래퍼 `evidence-read`(Agent 계정)로만 읽는다. Runner 계정은 Agent가 쓸 수 있는 폴더의 파일을 직접 열지 않는다.
+ * 왜: Runner가 열면 Agent가 그 자리를 Runner 파일(토큰·설정) 링크로 바꿔 서버로 올리게 만들 수 있다. Agent 계정으로 읽으면 Agent 권한까지다.
+ */
+export interface AgentEvidence {
+  /** `out`(Runner 전용 폴더의 새 파일, 0600)에 내용을 쓴다. 파일이 없으면 false. 일반 파일이 아니거나 `limit`보다 크면 예외다. */
+  read(cwd: string, name: string, out: string, limit: number): Promise<boolean>;
+}
+
+/** 증거 파일 이름. 폴더 구분(/)·숨김 이름(.으로 시작)은 받지 않는다. 래퍼와 같은 규칙이다. */
+export const EVIDENCE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+/** 작업 폴더 안 증거 폴더 이름. 준비 때 만들고 `.git/info/exclude`로 상태 검사에서 뺀다. */
+export const EVIDENCE_DIR = '.awbs-evidence';
+
+export function wrapperAgentEvidence(cfg: WrapperConfig = { user: AGENT_USER, exec: AGENT_EXEC }): AgentEvidence {
+  return {
+    async read(cwd, name, out, limit) {
+      if (!EVIDENCE_NAME.test(name)) throw new AgentGitError('증거 파일 이름 모양이 아닙니다.');
+      const result = await wrapperCall(cfg, ['evidence-read', '--cwd', cwd, '--name', name], { out: { path: out, limit }, allow: [0, 3] });
+      return result.code === 0;
+    },
+  };
+}
+
+/** 같은 계정 배치(전용 계정 없음·시험). 링크를 따라가지 않고(O_NOFOLLOW) 일반 파일만 읽는다. */
+export const localAgentEvidence: AgentEvidence = {
+  async read(cwd, name, out, limit) {
+    if (!EVIDENCE_NAME.test(name)) throw new AgentGitError('증거 파일 이름 모양이 아닙니다.');
+    const dir = await lstat(join(cwd, EVIDENCE_DIR)).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return undefined; throw error; });
+    if (!dir) return false;
+    if (!dir.isDirectory() || dir.isSymbolicLink()) throw new AgentGitError('증거 폴더가 일반 폴더가 아닙니다.');
+    let source;
+    try { source = await open(join(cwd, EVIDENCE_DIR, name), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw new AgentGitError('증거 파일을 열 수 없습니다(링크이거나 일반 파일이 아님).', { cause: error });
+    }
+    try {
+      const info = await source.stat();
+      if (!info.isFile()) throw new AgentGitError('증거 파일이 일반 파일이 아닙니다.');
+      if (info.size > limit) throw new AgentGitError('증거 파일이 상한보다 큽니다.');
+      const bytes = await source.readFile();
+      if (bytes.length > limit) throw new AgentGitError('증거 파일이 상한보다 큽니다.');
+      const target = await open(out, 'wx', 0o600);
+      try { await target.writeFile(bytes); } finally { await target.close(); }
+      return true;
+    } finally { await source.close(); }
+  },
+};

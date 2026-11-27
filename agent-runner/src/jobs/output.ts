@@ -1,5 +1,6 @@
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import type { AttemptJob } from '../exec/session.ts';
+import { EVIDENCE_DIR } from '../git/agent-git.ts';
 
 /*
  * Agent 종료 메시지 계약(contracts §5). Agent가 일을 마치고 마지막에 내는 JSON 하나의 모양이다.
@@ -19,6 +20,8 @@ export interface QaOutput { verdict: Verdict; criteria: QaCriterion[]; defects: 
 /** 지시문(job.payload.instructions)의 체크리스트 항목. 서버가 qa·reverify job에 넣는다. */
 export interface ChecklistItem { itemKey: string; content: string }
 
+/** 한 QA 보고가 올릴 수 있는 증거 파일 수. 넘으면 형식 오류다. */
+export const EVIDENCE_FILES_LIMIT = 20;
 /** 종료 메시지 원문 상한(256 KiB). 넘으면 형식 오류다. */
 export const OUTPUT_LIMIT = 256 * 1024;
 const text = { type: 'string', minLength: 1, maxLength: 20_000, pattern: '\\S' } as const;
@@ -33,7 +36,9 @@ export const QA_SCHEMA = { type: 'object', additionalProperties: false, required
   properties: {
     verdict,
     criteria: { type: 'array', maxItems: 200, items: { type: 'object', additionalProperties: false, required: ['acId', 'result', 'cmd', 'expected', 'actual', 'evidence'],
-      properties: { acId: { type: 'string', minLength: 1, maxLength: 128 }, result: verdict, cmd: text, expected: text, actual: text, evidence: { type: 'array', maxItems: 50, items: text } } } },
+      // evidence: 작업 폴더 `.awbs-evidence/` 안의 파일 이름(EVIDENCE_NAME과 같은 규칙). Runner가 Agent 계정으로 읽어 올린다.
+      properties: { acId: { type: 'string', minLength: 1, maxLength: 128 }, result: verdict, cmd: text, expected: text, actual: text,
+        evidence: { type: 'array', maxItems: 20, uniqueItems: true, items: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$' } } } } },
     defects: { type: 'array', maxItems: 200, items: { type: 'object', additionalProperties: false, required: ['text', 'blocking'], properties: { text, blocking: { type: 'boolean' } } } },
     responses,
   } } as const;
@@ -72,6 +77,7 @@ export function outputGuide(job: AttemptJob, inputPath: string | null): string {
     lines.push(`체크리스트(acId로 쓰세요): ${items.length ? items.map(i => `${i.itemKey}=${i.content}`).join(' / ') : '없음'}`);
     lines.push(`마지막 메시지는 다음 JSON 하나만 내세요(설명 없이): ${JSON.stringify(QA_SCHEMA)}`);
     lines.push('모든 체크리스트 항목을 criteria에 한 번씩 넣으세요. verdict가 PASS이면 모든 항목이 PASS여야 합니다.');
+    lines.push(`증거 파일(로그·스크린샷 등)은 이 작업 폴더의 ${EVIDENCE_DIR}/ 안에 두고, criteria[].evidence에 파일 이름만 적으세요(예: unit.log). 하위 폴더·링크는 받지 않습니다. 모두 ${String(EVIDENCE_FILES_LIMIT)}개, 파일마다 50 MiB까지입니다.`);
   } else {
     lines.push('변경은 이 작업 폴더의 지금 브랜치에 커밋하세요. 커밋하지 않은 변경이 남으면 ① 검사가 실패합니다. 변경 파일 목록은 Runner가 git으로 봅니다.');
     lines.push(`마지막 메시지는 다음 JSON 하나만 내세요(설명 없이): ${JSON.stringify(DEV_SCHEMA)}`);
@@ -112,6 +118,7 @@ export function parseOutput(job: AttemptJob, raw: string, delivered: readonly st
     for (const id of keys) if (!seen.includes(id)) problems.push(`체크리스트 항목 ${id}의 결과가 criteria에 없습니다.`);
     if (output.verdict === 'PASS' && output.criteria.some(c => c.result !== 'PASS')) problems.push('verdict가 PASS인데 PASS가 아닌 항목이 있습니다.');
     if (output.verdict === 'FAIL' && output.defects.length === 0) problems.push('verdict가 FAIL이면 defects에 결함을 하나 이상 적어야 합니다.');
+    if (new Set(output.criteria.flatMap(c => c.evidence)).size > EVIDENCE_FILES_LIMIT) problems.push(`증거 파일은 모두 ${String(EVIDENCE_FILES_LIMIT)}개까지입니다.`);
   }
   return problems.length ? { ok: false, problems } : { ok: true, value: output };
 }

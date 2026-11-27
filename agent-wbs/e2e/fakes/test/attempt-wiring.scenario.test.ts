@@ -18,7 +18,7 @@ import { attemptWiring } from '../../../../agent-runner/src/jobs/wiring.ts';
 import { CiJobs } from '../../../../agent-runner/src/ci/jobs.ts';
 import { ciLaunch } from '../../../../agent-runner/src/ci/launch.ts';
 import { GitRepository } from '../../../../agent-runner/src/git/repository.ts';
-import { wrapperAgentFiles, wrapperAgentGit } from '../../../../agent-runner/src/git/agent-git.ts';
+import { wrapperAgentEvidence, wrapperAgentFiles, wrapperAgentGit } from '../../../../agent-runner/src/git/agent-git.ts';
 import { AGENT_EXEC, AGENT_ROOT, AGENT_USER, dedicatedCommand } from '../../../../agent-runner/src/cli/dedicated-user.ts';
 import { withUserScope } from '../../../../agent-runner/src/exec/scope.ts';
 import type { IsolationLayer } from '../../../../agent-runner/src/cli/isolation.ts';
@@ -85,7 +85,8 @@ async function setup(options: { host?: 'account' | 'copy'; claude?: Partial<Agen
     agentRoot = cfg.root;
     const wrapper = { user: cfg.user, exec: cfg.exec, ...(cfg.sudo && { sudo: cfg.sudo }) };
     repo = await GitRepository.clone(join(home, 'runner'), id, f.remote, { agentRoot: cfg.root,
-      ...(options.host === 'copy' && { restorePermissions: null, agentGit: wrapperAgentGit(wrapper) }) });
+      // copy: 래퍼 사본의 git-inspect·git-bundle·evidence-read를 쓰게 직접 넘긴다(기본값은 고정 작업 영역일 때만 실제 래퍼다).
+      ...(options.host === 'copy' && { restorePermissions: null, agentGit: wrapperAgentGit(wrapper), agentEvidence: wrapperAgentEvidence(wrapper) }) });
     agentFiles = wrapperAgentFiles(wrapper);
     // fake CLI와 시나리오는 Agent 계정이 읽을 수 있는 곳(입력 사본 모음, Agent는 읽기만)에 둔다.
     const fakeDir = join(cfg.root, 'inputs', `${id}-fake`);
@@ -168,6 +169,10 @@ async function fullFlow(t: Harness) {
   expect(await t.status()).toBe('gate');
   // QA 근거 고정: 준비 때의 headSha(①이 검사한 커밋)와 지시문의 명세 버전.
   expect(await t.h.rows('select v.result,v.head_sha,v.spec_revision from verifications v')).toEqual([{ result: 'PASS', head_sha: head, spec_revision: 1 }]);
+  // QA 증거: 보고 JSON과, QA가 .awbs-evidence/에 남긴 파일(Agent 계정으로 받아 올림)이 체크리스트 항목에 연결됐다.
+  expect(await t.h.rows("select kind,size::int size from evidence where kind<>'dev-report' order by kind")).toEqual([{ kind: 'agent-evidence', size: Buffer.byteLength('검사 결과 PASS\n') }, { kind: 'qa-report', size: expect.any(Number) }]);
+  const [agentEvidence] = await t.h.rows("select id from evidence where kind='agent-evidence'") as { id: string }[];
+  expect(JSON.stringify(await t.h.rows("select evidence from checklist_items c join tasks t on t.id=c.task where t.task_key='TASK-0001'"))).toContain(agentEvidence?.id);
   expect(await t.h.rows("select item_key,done from checklist_items c join tasks t on t.id=c.task where t.task_key='TASK-0001'")).toEqual([{ item_key: 'CL-1', done: true }]);
   expect(await t.flow.runNext(20)).toBeNull();
   const outcome = await t.ci.runNext(20);

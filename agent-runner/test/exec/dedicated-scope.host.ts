@@ -39,6 +39,13 @@ const wrapperCurrent = installed && readFileSync(AGENT_EXEC, 'utf8') === readFil
 const systemdRun = spawnSync('systemd-run', ['--user', '--scope', '--quiet', '--collect', '/bin/true'], { env: { PATH: '/usr/bin:/bin', XDG_RUNTIME_DIR: `/run/user/${String(process.getuid?.())}` } }).status === 0;
 const archive = await hostArchive();
 const facts: Record<string, unknown> = { at: new Date().toISOString(), installed, wrapperCurrent, agentUser: AGENT_USER, agentUid, paidCalls: 0 };
+/**
+ * 설치된 래퍼가 저장소 소스와 다르면(owner가 setup-agent-user.sh를 다시 돌리기 전) 래퍼 동작에 기대는 시험은 돌리지 않고, 그 사실을 이름과 증거에 남긴다.
+ * 왜: 옛 래퍼 갈래(bwrap run)는 fix1 이후 어떤 설치본에도 없다. 그 갈래로 돌리면 「실패」가 래퍼 결함인지 설치 차이인지 가를 수 없다.
+ */
+const MISMATCH = wrapperCurrent ? '' : ' [건너뜀: 설치된 래퍼≠저장소 소스 — setup-agent-user.sh 재설치 뒤 실행]';
+if (installed && !wrapperCurrent) facts.skippedForWrapperMismatch = [];
+const mismatch = (name: string) => { if (installed && !wrapperCurrent) (facts.skippedForWrapperMismatch as string[]).push(name); return `${name}${MISMATCH}`; };
 afterAll(async () => { await writeFile(join(archive, 'dedicated-scope-facts.json'), JSON.stringify(facts, null, 2) + '\n'); });
 
 const CODEX_VENDOR = 'lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl';
@@ -115,7 +122,7 @@ function fakeSession(layer: IsolationLayer, dir: string, hold: boolean): Launch 
   return agentCommand(layer, dir, ['python3', join(dir, 'kernel-tree.py'), 'all', join(dir, 'pids.jsonl'), ...(hold ? ['--hold'] : [])]);
 }
 
-test.runIf(installed)('전용 계정 fake 세션: 모든 프로세스가 awbs-agent·사용자 scope 안에 있고, 중단 정리 뒤 0개다', async () => {
+test.runIf(installed && wrapperCurrent)(mismatch('전용 계정 fake 세션: 모든 프로세스가 awbs-agent·사용자 scope 안에 있고, 중단 정리 뒤 0개다'), async () => {
   const layer = await isolation();
   const dir = await workdir();
   const home = await mkdtemp(join(process.env.AWBS_TEST_TMP ?? tmpdir(), 'dedicated-scope-'));
@@ -174,7 +181,7 @@ test.runIf(installed)('전용 계정 fake 세션: 모든 프로세스가 awbs-ag
   }
 });
 
-test.runIf(installed)('전용 계정 fake 세션: 본체가 정상 종료해도 그룹 밖으로 숨은 Agent 자손까지 끝내고 증거를 낸다', async () => {
+test.runIf(installed && wrapperCurrent)(mismatch('전용 계정 fake 세션: 본체가 정상 종료해도 그룹 밖으로 숨은 Agent 자손까지 끝내고 증거를 낸다'), async () => {
   const layer = await isolation();
   const dir = await workdir();
   const home = await mkdtemp(join(process.env.AWBS_TEST_TMP ?? tmpdir(), 'dedicated-scope-'));
@@ -232,7 +239,7 @@ test.runIf(installed)('실제 CLI는 무료 명령(--version)만: 전용 계정 
   }
 });
 
-test.runIf(installed)('작업 폴더 삭제: Agent가 권한을 지운 폴더(chmod 000)도 실제 래퍼 fix-perms로 되돌린 뒤 지운다', async () => {
+test.runIf(installed && wrapperCurrent)(mismatch('작업 폴더 삭제: Agent가 권한을 지운 폴더(chmod 000)도 실제 래퍼 fix-perms로 되돌린 뒤 지운다'), async () => {
   const layer = await isolation();
   const root = await mkdtemp(join(process.env.AWBS_TEST_TMP ?? tmpdir(), 'dedicated-git-'));
   const source = join(root, 'source'), remote = join(root, 'remote.git');
@@ -274,7 +281,7 @@ test.runIf(installed)('작업 폴더 삭제: Agent가 권한을 지운 폴더(ch
   }
 });
 
-test.runIf(installed && wrapperCurrent)('조정자 결정 4: 설치된 래퍼는 CLI 묶음 안의 bwrap을 진입점으로 받지 않는다', async () => {
+test.runIf(installed && wrapperCurrent)(mismatch('조정자 결정 4: 설치된 래퍼는 CLI 묶음 안의 bwrap을 진입점으로 받지 않는다'), async () => {
   const bwrap = join(await realpath(join(AGENT_ROOT, 'cli', 'codex', 'current')), CODEX_VENDOR, 'codex-resources', 'bwrap');
   const r = await run('/usr/bin/sudo', ['-n', '-u', AGENT_USER, '--', AGENT_EXEC, 'run', '--agent', 'codex', '--cwd', join(AGENT_ROOT, 'worktrees'), '--', bwrap, '--version']);
   expect(r.code).toBe(2);
