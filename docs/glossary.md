@@ -57,6 +57,8 @@
 - **`ci_merge_facts`** — 병합 SHA마다 처음 보고된 tree·부모를 남기는 표. 첫 기록은 바꿀 수 없다. → data-model §2.8
 - **ciphertext** — 암호화된 값(암호문). 키 없이는 원래 값을 알 수 없다.
 - **claim** — Runner가 job을 「제가 하겠습니다」 하고 예약하는 요청. 예약만 하고 시도는 만들지 않는다. → contracts §3.2
+- **returnJob** — 시작 전 자원 부족으로 같은 job을 서버 대기열에 반환하는 요청. 논리 잠금과 현재 fence는 유지한다. 다음 claim은 새 fence를 받는다. → contracts §3.4
+- **mergeCommits** — 병합할 Task 커밋과 각 부모의 목록. main의 조상은 뺀다. 서버가 중간 커밋을 원인 Task에 연결하는 근거다. → data-model §3.5
 - **classic 토큰** — 권한 범위(scope)를 큰 단위로 고르는 예전 방식의 GitHub 개인 토큰. 응답의 `x-oauth-scopes` 헤더로 권한을 알 수 있다. → contracts §3.1
 - **CLI** — 명령줄에서 쓰는 프로그램. 여기서는 주로 Codex CLI·Claude Code CLI.
 - **clone** — 원격 git 저장소를 내 PC로 통째로 복사해 오는 것.

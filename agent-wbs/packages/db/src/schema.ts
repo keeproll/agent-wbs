@@ -776,6 +776,8 @@ export const runnerJobs = pgTable('runner_jobs', {
   fence: integer().notNull().default(0),
   epoch: integer().notNull(),
   attempts: integer().notNull().default(0),
+  resource_returns: integer().notNull().default(0),
+  resource_retry_at: at('resource_retry_at'),
   generation: integer(),
   dedup_key: text().notNull().unique(),
 });
@@ -795,7 +797,7 @@ export const runnerJobEvents = pgTable(
   (t) => [
     check(
       'job_event_kind',
-      sql`${t.kind} in ('prepared','prestart_failed','started','lease_lost','reconciled','finished')`,
+      sql`${t.kind} in ('prepared','prestart_failed','returned','started','lease_lost','reconciled','finished')`,
     ),
   ],
 );
@@ -851,7 +853,6 @@ export const executionHolds = pgTable(
     project_id: uuid().references(() => projects.id, { onDelete: 'restrict' }),
     job: uuid()
       .notNull()
-      .unique()
       .references(() => runnerJobs.id, { onDelete: 'restrict' }),
     attempt: uuid().references(() => taskAttempts.id, { onDelete: 'restrict' }),
     epoch: integer().notNull(),
@@ -873,6 +874,8 @@ export const executionHolds = pgTable(
     closed_at: at('closed_at'),
   },
   (t) => [
+    uniqueIndex('one_open_job_hold').on(t.job).where(sql`${t.closed_at} is null`),
+    index('hold_job_history').on(t.job,t.fence),
     check(
       'hold_lock_target',
       sql`${t.lock_state}<>'held' or ${t.task} is not null or ${t.conflict_group} is not null`,
@@ -1336,7 +1339,7 @@ export const mailRecipients = pgTable(
     weekly: boolean().notNull(),
     pdf: boolean().notNull(),
     view: reportView().notNull(),
-    // Q-13 결정 A(0039): 외부 수신자. 링크 없이 보고용 보기 + PDF만 받는다. 일간(팀장용만 있음)은 받지 않는다.
+    // Q-13 결정 A(0040): 외부 수신자. 링크 없이 보고용 보기 + PDF만 받는다. 일간(팀장용만 있음)은 받지 않는다.
     external: boolean().notNull().default(false),
   },
   (t) => [
@@ -1370,7 +1373,7 @@ export const mailOutbox = pgTable(
     sent_at: at('sent_at'),
     log_key: text().notNull(),
     attempt: uuid(),
-    // Q-13 결정 A(0039): 외부 수신자에게 가는 발송인지(발송 당시 값). 링크 없이 보고용 + PDF로 보낸다.
+    // Q-13 결정 A(0040): 외부 수신자에게 가는 발송인지(발송 당시 값). 링크 없이 보고용 + PDF로 보낸다.
     external: boolean().notNull().default(false),
   },
   (t) => [
@@ -1761,6 +1764,7 @@ export const ciMergeFacts = pgTable('ci_merge_facts', {
   merge_sha: text().notNull(),
   tree_sha: text(),
   parents: jsonb(),
+  commit_parents: jsonb(),
 }, (t) => [primaryKey({ columns:[t.project_id,t.merge_sha] })]);
 export const mergeQueue = pgTable(
   'merge_queue',

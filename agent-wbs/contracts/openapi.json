@@ -27621,6 +27621,29 @@
                     },
                     "minItems": 2,
                     "maxItems": 2
+                  },
+                  "mergeCommits": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "commit",
+                        "parents"
+                      ],
+                      "properties": {
+                        "commit": {
+                          "$ref": "#/components/schemas/Sha"
+                        },
+                        "parents": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Sha"
+                          },
+                          "uniqueItems": true
+                        }
+                      },
+                      "additionalProperties": false
+                    }
                   }
                 },
                 "additionalProperties": false
@@ -31596,6 +31619,143 @@
             "EPOCH_MISMATCH",
             "EXTERNAL_WRITE_BLOCKED",
             "IDEMPOTENCY_CONFLICT",
+            "LEASE_LOST"
+          ],
+          "429": [
+            "RATE_LIMITED"
+          ],
+          "500": [
+            "INTERNAL"
+          ],
+          "503": [
+            "UNAVAILABLE"
+          ]
+        }
+      }
+    },
+    "/api/runner/jobs/{id}/return": {
+      "post": {
+        "operationId": "returnJob",
+        "summary": "시작 전 자원 부족 attempt job을 재대기열에 반환. 시도 없이 잠금·fence 유지",
+        "tags": [
+          "runner"
+        ],
+        "security": [
+          {
+            "runnerToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ProjectEpoch"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "fence",
+                  "hostId",
+                  "bootId",
+                  "reason"
+                ],
+                "properties": {
+                  "fence": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2147483647
+                  },
+                  "hostId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "bootId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "reason": {
+                    "enum": [
+                      "resources"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "시작 전 자원 부족 attempt job을 재대기열에 반환. 시도 없이 잠금·fence 유지",
+            "headers": {
+              "Idempotency-Replayed": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "IDEMPOTENCY_KEY_REQUIRED, VALIDATION_FAILED"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "RUNNER_UNAUTHORIZED"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "NOT_FOUND"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "EPOCH_MISMATCH, EXTERNAL_WRITE_BLOCKED, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited",
+            "description": "RATE_LIMITED"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "INTERNAL"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error",
+            "description": "UNAVAILABLE"
+          }
+        },
+        "x-error-codes": {
+          "400": [
+            "IDEMPOTENCY_KEY_REQUIRED",
+            "VALIDATION_FAILED"
+          ],
+          "401": [
+            "RUNNER_UNAUTHORIZED"
+          ],
+          "404": [
+            "NOT_FOUND"
+          ],
+          "409": [
+            "EPOCH_MISMATCH",
+            "EXTERNAL_WRITE_BLOCKED",
+            "IDEMPOTENCY_CONFLICT",
+            "INVALID_TRANSITION",
             "LEASE_LOST"
           ],
           "429": [

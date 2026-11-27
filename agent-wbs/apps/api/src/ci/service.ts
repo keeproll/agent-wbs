@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { CI_STAGE, type PoolClient, type schema } from '@awbs/db';
 import { completionGate, lifecycleTransition, DomainError } from '@awbs/shared';
 import { deferChange } from '../changes/events.ts';
@@ -11,7 +12,7 @@ import { completeMergedTask, enqueueIntegration, gateInput, invalidateTaskGate }
 import { resolveBaselineFailure } from './decisions.ts';
 import { observedBases, resolveBasePipelineSha } from './pipeline.ts';
 export { resolveBasePipelineSha } from './pipeline.ts';
-import { assertCiTransition, preservedHead, type HeadProof } from './proof.ts';
+import { assertCiTransition, checkMergeCommits, preservedHead, type HeadProof } from './proof.ts';
 
 type Run = typeof schema.ciRuns.$inferSelect;
 /** Telegram 메시지의 단계 이름(M6-04 대응표). */
@@ -37,6 +38,7 @@ export interface QueueReport {
   jobId: string; fence: number; pr: number; taskKey: string; status: string;
   qaHeadSha?: string; syncedHeadSha?: string; baseSha?: string; ciRunId?: string; testedTreeSha?: string;
   actualMergeSha?: string; actualTreeSha?: string; mergedAt?: string; headSync?: HeadProof; mergeParents?: string[];
+  mergeCommits?: { commit:string;parents:string[] }[];
 }
 const bad = () => { throw new PlatformError('GATE_NOT_PASSED'); };
 
@@ -174,25 +176,46 @@ async function serviceAvailability(client: PoolClient, run: Run, restore: Update
 
 export async function reportQueue(client: PoolClient, principal: string, body: QueueReport) {
   if ((body.status === 'merged' || body.actualMergeSha) && (body.status !== 'merged' || !body.actualMergeSha || !body.actualTreeSha || body.mergeParents?.length !== 2)) throw new PlatformError('VALIDATION_FAILED');
+  if (body.mergeCommits) {
+    if (body.status !== 'merged' || !body.mergeParents) throw new PlatformError('VALIDATION_FAILED');
+  }
   const repo = new RunnerRepository(client); await repo.lock();
   const task = await repo.task(body.taskKey);
   if (!task) throw new PlatformError('TASK_NOT_FOUND');
   const job = await checkedJob(repo,body.jobId,body.fence,principal,task.status === 'done' || body.status === 'merged');
   if (body.status === 'merged') await assertExternal(repo,job);
   if (job.kind !== 'integrate' || job.project_id !== task.project_id || job.payload.taskKey !== task.task_key || job.payload.pr !== body.pr) throw new PlatformError('INVALID_TRANSITION');
+  const latest = (await client.query<Queue>(`select * from merge_queue where task=$1 order by queue_no desc limit 1 for update`,[task.id])).rows[0];
+  let mergeCommits = body.mergeCommits;
+  const warnCommits = () => repo.alert(task.project_id,`ci:mergeCommitsInvalid|#${body.pr}`,'중간 커밋 근거를 사용할 수 없어 병합 사실만 보존합니다.',{ taskKey:task.task_key,actualMergeSha:body.actualMergeSha });
+  if (mergeCommits && body.mergeParents) {
+    // 보조 목록의 오류로 실제 병합 사실을 버리지 않는다.
+    try { checkMergeCommits(mergeCommits,body.mergeParents); }
+    catch (error) {
+      if (!(error instanceof PlatformError) || error.code !== 'VALIDATION_FAILED') throw error;
+      mergeCommits = undefined;
+      await warnCommits();
+    }
+    const base = body.baseSha ?? latest?.base_sha, head = body.syncedHeadSha ?? latest?.synced_head_sha ?? job.payload.qaHeadSha;
+    if (body.mergeParents[0] !== base || body.mergeParents[1] !== head) mergeCommits = undefined;
+  }
   if (task.status === 'done' && body.status === 'merged') {
+    if (mergeCommits) {
+      const first = (await client.query<{ commit_parents:unknown }>('select commit_parents from ci_merge_facts where project_id=$1 and merge_sha=$2',[task.project_id,body.actualMergeSha])).rows[0];
+      if (!isDeepStrictEqual(first?.commit_parents,mergeCommits)) await warnCommits();
+    }
     const q = (await client.query<Queue>('select q.* from merge_queue q join ci_runs c on c.id=q.ci_run where q.task=$1 and c.job=$2 and c.fence=$3 order by q.queue_no desc limit 1',[task.id,job.id,job.fence])).rows[0];
     if (q?.status === 'merged' && q.pr === body.pr && q.actual_merge_sha === body.actualMergeSha && q.actual_tree_sha === body.actualTreeSha &&
       q.qa_head_sha === body.qaHeadSha && q.synced_head_sha === body.syncedHeadSha && q.base_sha === body.baseSha && q.ci_run === body.ciRunId &&
       JSON.stringify(q.merge_parents) === JSON.stringify(body.mergeParents)) return;
     throw new PlatformError('INVALID_TRANSITION');
   }
-  const latest = (await client.query<Queue>(`select * from merge_queue where task=$1 order by queue_no desc limit 1 for update`,[task.id])).rows[0];
   try {
     if (body.actualMergeSha) {
-      await client.query('insert into ci_merge_facts(project_id,merge_sha,tree_sha,parents) values($1,$2,$3,$4::jsonb) on conflict do nothing',[task.project_id,body.actualMergeSha,body.actualTreeSha,JSON.stringify(body.mergeParents ?? null)]);
-      const first = required((await client.query<{ tree_sha: string | null; parents: string[] | null }>('select tree_sha,parents from ci_merge_facts where project_id=$1 and merge_sha=$2',[task.project_id,body.actualMergeSha])).rows[0]);
-      if (first.tree_sha !== (body.actualTreeSha ?? null) || JSON.stringify(first.parents) !== JSON.stringify(body.mergeParents ?? null)) bad();
+      await client.query('insert into ci_merge_facts(project_id,merge_sha,tree_sha,parents,commit_parents) values($1,$2,$3,$4::jsonb,$5::jsonb) on conflict do nothing',[task.project_id,body.actualMergeSha,body.actualTreeSha,JSON.stringify(body.mergeParents ?? null),mergeCommits ? JSON.stringify(mergeCommits) : null]);
+      const first = required((await client.query<{ tree_sha: string | null; parents: string[] | null;commit_parents:unknown }>('select tree_sha,parents,commit_parents from ci_merge_facts where project_id=$1 and merge_sha=$2',[task.project_id,body.actualMergeSha])).rows[0]);
+      if (first.tree_sha !== (body.actualTreeSha ?? null) || !isDeepStrictEqual(first.parents,body.mergeParents ?? null)) bad();
+      if (mergeCommits && !isDeepStrictEqual(first.commit_parents,mergeCommits)) await warnCommits();
     }
     if (body.mergedAt && body.status !== 'merged') throw new PlatformError('VALIDATION_FAILED');
     const lateGateChange = body.status === 'merged' && task.status === 'verifying' && latest && ['checking','merged'].includes(latest.status);

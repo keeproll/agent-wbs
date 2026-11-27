@@ -404,10 +404,14 @@ CP(변경 제안)로 새 Task를 추가할 때 넣을 수 있는 선택 필드�
     - 왜: 끝난 job이 되살아나거나 fence가 내려가면, 이미 거절했어야 할 낡은 보고가 다시 통과한다.
   - 근거: D-03
 - `runner_job_events`
-  - 추가 전용: prepared·prestart_failed·started·lease_lost·reconciled·finished, code, detail — **시작 전 실패 기록**
+  - 추가 전용: prepared·prestart_failed·returned·started·lease_lost·reconciled·finished, code, detail — **시작 전 실패·자원 반환 기록**
   - 근거: §1.2-4 §7.4-4
 - `execution_holds`
-  - job unique, attempt?, epoch, host_id?, boot_id?, fence?, pgid/cgroup, task?, conflict_group?, agent, slots, heavy, **slot_state**, **lock_state**, lock_from_job?, handed_to_job?, release_proof(`no_process/group_empty/boot_changed`), closed_at.
+  - 같은 job의 열린 보유(`closed_at is null`)만 하나다. 닫힌 보유는 이력으로 여러 개 남을 수 있다.
+  - attempt?, epoch, host_id?, boot_id?, fence?, pgid/cgroup, task?, conflict_group?, agent, slots, heavy, **slot_state**, **lock_state**, lock_from_job?, handed_to_job?, release_proof(`no_process/group_empty/boot_changed`), closed_at.
+  - 왜: PC 변경으로 닫힌 보유는 불변으로 남기고, 같은 대기 job은 새 보유로 실행해야 한다.
+  - 대기 job의 담당·검증 Agent가 바뀌어도 옛 행의 `agent`는 바꾸지 않는다. 다음 claim에서 옛 행을 닫고 새 행을 만든다. `runner_jobs.payload.agent`는 새 실행 Agent와 맞춘다.
+  - 왜: 과거 보유를 덮어쓰지 않으면서 새 모델 등급과 실제 Agent가 맞아야 한다.
   - 별도 `state` 컬럼 없음 — 정의는 §2.5-1.
   - 닫히기 전 삭제 금지(초기화는 §5).
   - 행을 새로 만들 때(INSERT)도 §2.5-1의 상태 규칙을 검사한다.
@@ -451,7 +455,7 @@ CP(변경 제안)로 새 Task를 추가할 때 넣을 수 있는 선택 필드�
 - **물리 슬롯**: PC(개인용 컴퓨터)의 CPU(계산을 하는 처리 장치)·메모리 같은 실행 자리. 프로그램 실행에 쓸 PC 자리다. 실행 전 예약(`reserved`)과 종료 미확인 보유(`unconfirmed`)도 용량에 포함한다.
 - **논리 잠금**: 「이 Task(또는 충돌 묶음)는 지금 내가 맡고 있다」는 표시. 개발→검사→QA로 넘어가는 동안 계속 필요하다.
 
-job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며 **전체 상태는 저장하지 않고 계산**한다.
+job 하나에 열린 보유 행 하나를 둔다. 닫힌 행은 과거 이력으로 남긴다. 물리 슬롯과 논리 잠금은 두 축이며 **전체 상태는 저장하지 않고 계산**한다.
 
 - 왜 두 축으로 나누나: 검사 사이 잠깐 쉬는 동안 PC 자리는 돌려줘도 되지만, Task 잠금까지 풀면 다른 일이 끼어들어 같은 파일을 건드린다.
 
@@ -618,14 +622,14 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
   - `mail_settings`: SMTP(비밀값은 secrets)
   - `mail_recipients`: email lower unique, daily/weekly 하나 이상 또는 inactive.
     - 외부 수신자 구분: owner Q-13 A(2026-11-27 아이템 19)로 필요해졌다. 외부 수신자에게는 링크 없이 PDF만 보낸다.
-  - `mail_recipients.external`(Q-13 결정 A, 0039): 외부 수신자. 참이면 view='ext' · pdf=true · daily=false여야 한다(검사 `recipient_external`).
+  - `mail_recipients.external`(Q-13 결정 A, 0040): 외부 수신자. 참이면 view='ext' · pdf=true · daily=false여야 한다(검사 `recipient_external`).
     - 왜: 외부 수신자에게는 링크 없이 보고용 + PDF만 보낸다. 일간 보고서는 팀장용만 있다.
   - 근거: §4.11
 - `mail_outbox` / `mail_log`
   - `mail_outbox`: delivery_id(논리 발송), epoch, unique(report, recipient, try_no), state(§3.7)
     - 발송마다 보기·사유·제목·첨부 여부도 함께 저장한다(0031). 수신자 설정이 나중에 바뀌어도 「그때 어떤 보기로, 왜 보냈는지」가 남아야 하기 때문이다(G L407).
     - 15분 뒤 자동 재시도는 한 번뿐이고, 했는지를 기록한다.
-  - `mail_outbox.external`(Q-13 결정 A, 0039): 외부 수신자에게 간 발송인지(발송 당시 값). 참이면 view='ext' · pdf=true(검사 `mail_outbox_external`)
+  - `mail_outbox.external`(Q-13 결정 A, 0040): 외부 수신자에게 간 발송인지(발송 당시 값). 참이면 view='ext' · pdf=true(검사 `mail_outbox_external`)
   - `mail_log`: 수신자 삭제 후에도 주소 보존
   - 근거: §9.6-6
 - `notify_settings`/`notify_rules`
@@ -823,6 +827,14 @@ claim은 Runner가 「이 일을 제가 하겠습니다」 하고 job을 예약�
   - Task 코드 때문에 ①이 실패하면 `failed`이고 재작업으로 간다.
   - 기준(main) 실패(`failScope=baseline`)나 Runner·환경 문제로 결과를 모으지 못하면 `interrupted`이고 같은 시도를 다시 한다. 재작업 횟수에 세지 않는다.
 - **claim은 job 예약만 하고 시도를 만들지 않는다.**
+- 시작 전 자원 부족 반환(`POST /api/runner/jobs/:id/return`)은 job을 `leased → queued`로 돌린다. 시도 행은 만들지 않는다.
+- 반환 때 `attempts`는 1 줄인다. `lease_owner`와 `lease_until`은 비운다. fence(낡은 Runner의 보고를 막는 번호표)는 그대로 둔다.
+- 물리 슬롯은 `none`으로 돌리고 `no_process` 증거를 남긴다. 논리 잠금은 `held`로 유지한다. `runner_job_events`에는 `returned`를 남긴다.
+- 왜: 실행 전 자원 부족은 실패가 아니다. 잠금을 유지해야 같은 Task나 충돌 묶음의 다른 작업이 끼어들지 않는다.
+- `runner_jobs.resource_returns`는 같은 job의 연속 반환 횟수다. 4에서 더 늘리지 않는다. `resource_retry_at`은 다음 claim 가능 시각이다.
+- 1·2·3번째 반환은 1·2·4초를 기다린다. 4번째부터는 자원 부족 경보와 함께 5분 보류한다. 실제 시작하면 횟수와 대기 시각을 지우고 경보를 해소한다.
+- 왜: 재시작 후에도 대기와 경보를 유지하고, 다른 실행 가능한 job이 진행할 시간을 줘야 한다.
+- job이 `done`·`failed`·`cancelled`로 끝나면 자원 부족 경보를 해소한다. 왜: 끝난 job의 대기 경보를 계속 남기면 안 된다.
 - 하위 Agent 설치까지 성공한 뒤 `jobs/:id/start`가 시도를 만들고 Task를 전이한다.
   - 왜: 설치에 실패했을 때 「시도했다가 실패한 것」으로 기록되면 재시도 횟수와 이력이 부풀려진다.
 
@@ -860,6 +872,22 @@ claim은 Runner가 「이 일을 제가 하겠습니다」 하고 job을 예약�
 - 대기열: `waiting_verify → queued → checking → merged | failed | removed`.
 - `removed` 뒤 다시 대기열에 넣을 때는 열린 행을 닫고 새로 여는 일을 한 트랜잭션에서 한다(M7-04 결정 2). 열린 행이 겹쳐 500이 나던 문제를 막는다.
 - 병합 대조 실패는 `merged`가 아니라 보류다. 실제 병합 SHA와 경고는 먼저 저장한다(contracts §3.6-6).
+- 병합 보고의 `mergeCommits`는 `{commit, parents}` 목록이다. 자식 커밋을 부모보다 먼저 적는다. 현재 main과 그 조상은 제외한다.
+- 서버는 목록이 실제 병합의 두 번째 부모에서 이어지는지 확인한다. 첫 번째 부모(main), 중복, 순환, 끊긴 커밋은 거부한다.
+- 검증한 목록은 첫 병합 사실 `ci_merge_facts.commit_parents`에 저장한다. 이전 병합 기록은 이 값이 없을 수 있다.
+- `causeCandidates`의 커밋은 병합 SHA(커밋 식별값), PR 부모, QA head, 보존된 동기화 사슬, 저장한 중간 커밋에서 Task를 찾는다. 연결되는 Task가 정확히 하나일 때만 `taskKey`를 준다.
+- 왜: Runner가 원인 Task를 직접 지정하면 다른 Task가 잘못 지목될 수 있다. 서버 병합 기록에 있는 근거만 사용한다. 옛 기록에 없는 중간 커밋은 추측하지 않고 `null`로 둔다.
+- 형식은 맞지만 부모 사슬이 잘못된 `mergeCommits`는 버리고 경고를 남긴다. 첫 병합 사실은 저장한다. 이후 다른 목록을 받아도 첫 목록을 덮어쓰지 않는다.
+- 왜: 중간 커밋 근거는 병합 사실의 보조 자료다. 보조 자료가 틀렸다고 실제 병합을 지우면 안 된다.
+
+원인 연결에는 다음 한계가 있다.
+
+- 옛 병합 기록에는 중간 커밋이 없을 수 있다. 이를 채우는 보충 도구는 없다.
+- B가 A의 브랜치 위에서 만들어지고 B가 먼저 병합되면 A의 커밋도 B에 연결될 수 있다. 연결은 그 커밋을 main에 들여온 병합 Task를 뜻한다. 커밋을 처음 만든 Task와는 다를 수 있다.
+- 같은 커밋이 여러 Task의 근거에 있으면 `taskKey`는 `null`이다.
+- 조회는 후보마다 저장한 부모 목록을 펼친다. 이 목록에는 검색용 색인이 없다. 기록이 많아져 조회가 느려지면 커밋별 연결 원장과 색인을 검토한다.
+
+왜: 화면의 Task 링크가 뜻하는 범위와, 근거가 부족해 연결하지 못하는 경우를 구분해야 한다.
 
 ### 3.6 Change Proposal
 
