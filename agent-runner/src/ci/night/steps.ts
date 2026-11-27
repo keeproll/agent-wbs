@@ -1,5 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { lstat, mkdir, open, realpath } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, realpath, unlink } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
 import type { CommandResult } from '../../readiness/command.ts';
 import type { Redact } from '../../security/redact.ts';
@@ -23,15 +24,18 @@ export interface StepReport {
 }
 export interface StepAttempt { result: CommandResult; report: StepReport | null; reportError: string | null; log: string }
 
-const KEYS = ['tests', 'screens', 'timings', 'screenshots'];
+const KEYS = ['nonce', 'tests', 'screens', 'timings', 'screenshots'];
 const MAX_FILE = 50 * 1024 * 1024;
 const MAX_REPORT = 4 * 1024 * 1024;
 const text = (value: unknown): value is string => typeof value === 'string' && value !== '';
 const only = (item: Record<string, unknown>, keys: string[]) => Object.keys(item).every(k => keys.includes(k));
 
-function parseReport(value: unknown): StepReport {
+function parseReport(value: unknown, nonce: string): StepReport {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(k => !KEYS.includes(k))) throw new TypeError('보고서 형식이 올바르지 않습니다.');
-  const report = value as Record<string, unknown>;
+  const report = { ...value as Record<string, unknown> };
+  // 이번 시도에 준 nonce가 그대로 들어 있어야 이번 시도의 보고서다. 예전 실행·다른 시도의 보고서를 읽지 않는다(재리뷰 원칙 3).
+  if (report.nonce !== nonce) throw new TypeError('보고서의 nonce가 이번 시도의 값과 다릅니다(예전 보고서이거나 nonce를 적지 않음).');
+  delete report.nonce;
   const list = (key: string, check: (item: Record<string, unknown>) => boolean) => {
     const items = report[key];
     if (items === undefined) return;
@@ -124,10 +128,16 @@ export class Evidence {
   }
 
   async run(execute: CiExecute, argv: readonly string[], cwd: string, label: string, env: Record<string, string>, signal?: AbortSignal): Promise<StepAttempt> {
-    const reportPath = join(this.stepDir, `${label}.report.json`);
+    // 시작 전에 같은 단계·시도의 옛 보고서를 지운다(unlink는 링크를 따라가지 않고 링크 자체를 지운다).
+    // 그리고 이번 시도만의 새 경로와 nonce를 준다. 왜: 중단 뒤 같은 실행 ID로 재개하면 예전 보고서가 남아 있을 수 있다.
+    for (const name of await readdir(this.stepDir)) {
+      if (name.startsWith(`${label}.`) || name.startsWith(`${label}-`)) if (name.endsWith('.report.json')) await unlink(join(this.stepDir, name)).catch(() => undefined);
+    }
+    const nonce = randomUUID();
+    const reportPath = join(this.stepDir, `${label}-${nonce}.report.json`);
     let result: CommandResult;
     try {
-      result = await execute(argv, cwd, signal, { ...env, AWBS_REPORT: reportPath, AWBS_EVIDENCE_DIR: this.stepDir });
+      result = await execute(argv, cwd, signal, { ...env, AWBS_REPORT: reportPath, AWBS_REPORT_NONCE: nonce, AWBS_EVIDENCE_DIR: this.stepDir });
     } catch (error) {
       result = { code: null, stdout: '', stderr: error instanceof Error ? error.message : '실행하지 못했습니다.' };
     }
@@ -137,7 +147,7 @@ export class Evidence {
     let report: StepReport | null = null; let reportError: string | null = null;
     try {
       if (await lstat(reportPath).catch(() => null)) {
-        report = parseReport(JSON.parse((await readNoFollow(reportPath, MAX_REPORT)).toString('utf8')) as unknown);
+        report = parseReport(JSON.parse((await readNoFollow(reportPath, MAX_REPORT)).toString('utf8')) as unknown, nonce);
         this.files.add(reportPath);
       }
     } catch (error) { reportError = error instanceof Error ? error.message : '보고서를 읽지 못했습니다.'; }

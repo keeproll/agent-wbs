@@ -4,7 +4,8 @@ import type { CiReport, CiStartBody, CiUpdateBody } from '../../src/ci/night/rep
 import { commit, definition, file, fixture, git } from './int-fixture.ts';
 
 export interface StepCall { name: string; attempt: number; cwd: string; env: Record<string, string> }
-export type StepScript = (call: StepCall) => Promise<{ code: number | null; stdout?: string; stderr?: string; report?: unknown; files?: Record<string, Buffer | string> }>;
+/** report는 계약대로 이번 시도의 nonce를 붙여 쓴다. rawReport는 그대로 쓴다(nonce 누락·불일치 시험용). */
+export type StepScript = (call: StepCall) => Promise<{ code: number | null; stdout?: string; stderr?: string; report?: Record<string, unknown>; rawReport?: unknown; files?: Record<string, Buffer | string> }>;
 
 /** 야간·배포 시험 공통: 정의를 바꾼 main, 가짜 실행기, 보고 기록. */
 export async function ciFixture(stages: { night?: string[]; deploy?: string[] } = {}) {
@@ -26,7 +27,8 @@ export async function ciFixture(stages: { night?: string[]; deploy?: string[] } 
       const target = join(env.AWBS_EVIDENCE_DIR ?? '/nonexistent', path);
       await mkdir(dirname(target), { recursive: true }); await writeFile(target, value);
     }
-    if (out.report !== undefined && env.AWBS_REPORT) await writeFile(env.AWBS_REPORT, JSON.stringify(out.report));
+    if (out.report !== undefined && env.AWBS_REPORT) await writeFile(env.AWBS_REPORT, JSON.stringify({ nonce: env.AWBS_REPORT_NONCE, ...out.report }));
+    if (out.rawReport !== undefined && env.AWBS_REPORT) await writeFile(env.AWBS_REPORT, JSON.stringify(out.rawReport));
     return { code: out.code, stdout: out.stdout ?? '', stderr: out.stderr ?? '' };
   };
   const reports: { kind: 'start' | 'update'; id?: string; key?: string; body: CiStartBody | CiUpdateBody }[] = [];
