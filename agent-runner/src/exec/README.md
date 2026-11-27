@@ -198,6 +198,32 @@ start 뒤에는 실제 실행할 모델·Effort를 `/status`의 `running`으로 
 fake CLI와 실제 Linux 프로세스만 쓴다.
 실제 Claude·Codex·GitHub·SMTP·Telegram에는 연결하지 않는다.
 
+서버 슬롯 반환 회귀 표는 `agent-wbs/apps/api/test/runner.db.test.ts`의 `review3 matrix`로 검증한다.
+아래 행 이름은 시험 이름이다.
+새 API 상태를 뜻하지 않는다.
+각 칸은 해당 상태에서 거부·실패·취소·강제 종료를 따로 실행하는 실제 DB(데이터베이스) 시험이다.
+
+| 시험 행과 서버 보유 | 거부 reject | 실패 failure | 취소 cancel | 강제 종료 crash |
+|---|---|---|---|---|
+| reserved: reserved, pgid null | no_process | no_process | no_process | no_process |
+| running: active, pgid 등록됨 | group_empty | group_empty | group_empty | group_empty |
+| stopping: unconfirmed, pgid 등록됨 | group_empty | group_empty | group_empty | group_empty |
+| unregistered-stopping: unconfirmed, pgid null | no_process | no_process | no_process | no_process |
+
+`unregistered-stopping`은 등록 전에 실제 임대 감시가 보유를 미확인으로 바꾼 상태다.
+그 상태를 먼저 만든 뒤 각 종료 원인을 발생시킨다.
+왜: 미확인이라고 항상 서버에 pgid가 있는 것은 아니므로 별도 행으로 구분해야 한다.
+강제 종료는 실제 SIGKILL(운영체제의 강제 종료 신호) 뒤 복구한다.
+복구의 중단 보고가 상태를 unconfirmed로 바꾸어도 pgid 유무에 맞는 증거를 유지해야 한다.
+
+별도 `running × lost-response` 시험은 서버 등록 성공 뒤 응답만 잃고 취소한다.
+서버에 저장된 pgid의 group_empty로 반환되는지 확인한다.
+왜: 응답을 받지 못했다고 서버에도 번호가 없다고 추정하면 안 되기 때문이다.
+이 17개와 별도 기록 유실·부팅 변경 시험을 전체 상태 공간으로 해석하지 않는다.
+
+실행 명령은 `pnpm -C agent-wbs test:db -- runner.db -t 'review3 matrix'`다.
+새 전용 DB의 `TEST_DATABASE_URL`을 지정해야 한다.
+
 M5-02 리뷰의 초기화 결함은 `pnpm -C agent-runner test:host -- m502-pending`으로 따로 재현한다.
 첫 시험은 setsid 자손을 남긴 채 초기화가 완료되던 결함을 재현한다.
 M5-02 리뷰 수정 뒤에는 자손 종료까지 확인하여 통과한다.
