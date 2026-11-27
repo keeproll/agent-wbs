@@ -498,6 +498,12 @@ Runner만 부르는 API다. Runner 토큰과 epoch 헤더가 필요하다(§1).
   - §8.5-1
 - POST `/runner/ci/queue`★
   - 병합 상태(PR·병합 커밋) 보고 → 서버가 완료 판정
+  - 병합 완료 보고는 `mergeCommits: [{commit, parents}]`도 보낼 수 있다. main의 조상을 제외한 Task 커밋을 자식부터 부모 순서로 보낸다.
+  - 서버는 실제 병합의 두 번째 부모에서 이어지는 사슬만 저장한다. main 부모, 중복, 순환, 끊긴 커밋은 `VALIDATION_FAILED`로 거부한다.
+  - 실제 병합 부모 자체가 기존 검사 근거와 다르면 기존 `MERGE_MISMATCH`를 우선한다. 이때의 사슬은 Task 연결 근거로 저장하지 않는다.
+  - 왜: 실제 병합 불일치 경보와 첫 병합 사실을 새 목록 검사 때문에 잃으면 안 된다.
+  - `causeCandidates`에는 커밋만 보낸다. 서버가 확정된 병합 기록에서 Task를 찾는다. Task가 없거나 둘 이상이면 `taskKey`는 `null`이다.
+  - 왜: 중간 커밋도 원인 Task에 연결하되 Runner가 Task를 직접 지목하지 않게 한다. 이전 기록에 없는 커밋은 추측하지 않는다.
 - POST `/runner/design/snapshot`
   - §8.6
 - POST `/runner/github/status`★
@@ -585,6 +591,7 @@ GET  /api/runner/commands                → {currentEpoch, commands:[{id,kind:"
 POST /api/runner/commands/:id/result {status, items:[{name,ok,detail}], holds[]} → 204
 POST /api/runner/jobs/claim {kinds[],capacity} → 200 {job:{id,kind,payload,leaseUntil,fence}} | 204
 POST /api/runner/jobs/:id/renew {fence}  → {leaseUntil}         409 LEASE_LOST
+POST /api/runner/jobs/:id/return {fence,hostId,bootId,reason:'resources'} → 204
 POST /api/runner/jobs/:id/start {fence,hostId,bootId,headSha?,installedSubagents[]} → {attemptId?}
 POST /api/runner/jobs/:id/process {fence,processGroup,cgroup}      → 프로세스 생성 직후 기록: slot_state reserved→active
 POST /api/runner/jobs/:id/slots/release {fence,hostId,proof,at}      → 물리 슬롯만 반환, 논리 잠금 유지
@@ -807,6 +814,12 @@ Planning Agent(계획을 세우는 Agent)가 결과를 보고하는 API다.
    - 물리 슬롯은 CLI·① 각각 실행할 때만 잡는다.
    - ① 명령도 그룹·cgroup을 등록하고 무거운 작업 슬롯을 쓴다.
    - 슬롯을 다시 못 잡으면 잠금을 유지한 채 대기하고 사유를 표시한다.
+   - claim 직후 로컬 자원이 부족하면 짧게 기다린다. 계속 부족하면 `POST /api/runner/jobs/:id/return`으로 같은 job을 서버 대기열에 돌려준다.
+   - 반환은 `start` 전이고 프로세스를 만들지 않은 `attempt` job(dev·qa·rework·reverify)의 예약에만 허용한다. `fence`, `hostId`, `bootId`, `reason: 'resources'`를 보낸다.
+   - 서버는 시도를 만들지 않는다. 임대 횟수(`attempts`)는 claim 전 값으로 되돌린다. 자동 재시도와 자동 재작업 횟수에도 세지 않는다.
+   - 물리 슬롯은 `no_process`로 반환한다. Task·충돌 묶음의 논리 잠금과 현재 fence(낡은 Runner의 보고를 막는 번호표)는 유지한다.
+   - 임대 소유자와 만료 시각은 비운다. 다음 claim은 같은 job에 새 fence를 발급한다. 이전 fence로 보낸 시작·반환은 거부한다.
+   - 왜: 자원 경합 때문에 자동 QA·재작업이 팀장 버튼을 기다리지 않게 한다. 새 fence는 반환한 Runner가 뒤늦게 실행하는 일을 막는다.
 9. QA가 사용량 등으로 오래 대기하면 같은 묶음도 대기한다(직렬화 우선, §6.6 L741).
    - 용어 풀이: 직렬화 = 동시에 오는 일을 한 번에 하나씩 차례로 처리.
    - Task가 `paused`·`failed`·BLOCKED로 끝나면 그룹 empty 확인 후 논리 잠금을 해제하고 재개 때 다시 예약한다.
@@ -823,6 +836,8 @@ Planning Agent(계획을 세우는 Agent)가 결과를 보고하는 API다.
   - 그 종류가 완료되면 연속 횟수를 0으로 되돌린다.
   - 중단은 실패로 세지 않고 횟수를 바꾸지 않는다.
   - 시작 전 실패는 항상 「다시 시도」 버튼(G L864, P).
+  - 자원 부족으로 서버 대기열에 반환한 예약은 시작 전 실패가 아니다. 같은 job을 자동으로 다시 claim할 수 있다.
+    - 왜: 실행을 시작하지 않았으므로 실패 횟수와 팀장 조치를 늘리지 않는다.
   - 예: dev가 2번 연달아 실패하고 3번째에 성공하면 dev 횟수는 0으로 돌아간다. 그 뒤 qa가 실패하면 qa는 새로 1회째부터 센다.
 - **재작업**
   - QA FAIL과 통합 실패를 합쳐 Task당 **자동 재작업 최대 3회**.

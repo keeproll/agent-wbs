@@ -446,7 +446,7 @@ test('시작 전 정책·메시지 조회 실패는 시도 없이 job을 실패 
   expect(await h.rows('select count(*)::int n from execution_holds where closed_at is null')).toEqual([{ n: 0 }]);
 });
 
-test.each(['prepare', 'getRunGrade', 'getTaskSubagents', 'canStart', 'aborted', 'sync-before', 'sync-after'] as const)('리뷰 R1·R5: %s 시작 전 실패는 임대 만료 뒤에도 거짓 미확인과 409 막힘을 남기지 않는다', async boundary => {
+test.each(['prepare', 'getRunGrade', 'getTaskSubagents', 'canStart', 'aborted', 'sync-before', 'sync-after'] as const)('리뷰 R1·R5: %s 시작 전 거부는 임대 만료 뒤에도 거짓 미확인과 409 막힘을 남기지 않는다', async boundary => {
   expect((await h.run('TASK-0001')).status).toBe(202);
   const job = await execution.claim(20);
   if (!job) throw new Error('예약한 개발 job이 필요합니다.');
@@ -466,26 +466,29 @@ test.each(['prepare', 'getRunGrade', 'getTaskSubagents', 'canStart', 'aborted', 
   await expect(flow.run(job, controller.signal)).rejects.toThrow();
   if (boundary === 'sync-before' || boundary === 'sync-after') Reflect.deleteProperty(runner, 'ready');
   expect(await h.rows('select count(*)::int n from task_attempts')).toEqual([{ n: 0 }]);
-  expect(await h.rows('select state from runner_jobs')).toEqual([{ state: 'failed' }]);
-  expect(await h.rows('select slot_state,lock_state,release_proof from execution_holds')).toEqual([{ slot_state: 'none', lock_state: 'released', release_proof: 'no_process' }]);
-  expect(await h.rows("select count(*)::int n from runner_job_events where kind='prestart_failed'")).toEqual([{ n: 1 }]);
+  expect(await h.rows('select state from runner_jobs')).toEqual([{ state: boundary === 'canStart' ? 'queued' : 'failed' }]);
+  expect(await h.rows('select slot_state,lock_state,release_proof from execution_holds')).toEqual([{ slot_state: 'none', lock_state: boundary === 'canStart' ? 'held' : 'released', release_proof: 'no_process' }]);
+  expect(await h.rows("select count(*)::int n from runner_job_events where kind='prestart_failed'")).toEqual([{ n: boundary === 'canStart' ? 0 : 1 }]);
   await h.watchDisconnected();
   expect(await h.rows("select count(*)::int n from alerts where key like 'unconfirmed:%'")).toEqual([{ n: 0 }]);
   await h.runner.reconnect();
-  expect((await h.run('TASK-0001')).status).toBe(202);
+  if (boundary !== 'canStart') expect((await h.run('TASK-0001')).status).toBe(202);
 });
 
-test('claim 응답 사이 자원이 바뀌어 같은 canStart가 거절해도 새 보유를 남기지 않는다', async () => {
+test('claim 응답 사이 자원이 부족해지면 물리 슬롯을 반납하고 같은 job을 다시 실행한다', async () => {
   expect((await h.run('TASK-0001')).status).toBe(202);
   const calls: number[] = [];
   executionOptions.canStart = (_agent, slots) => { calls.push(slots); return calls.length === 1 ? { ok: true } : { ok: false, reason: 'limit' }; };
-  // 자원이 돌아오지 않으면 짧게 기다린 뒤에만 시작 전 실패로 끝낸다.
+  // 짧은 대기 뒤에도 자원이 부족하면 같은 job을 서버 대기열에 돌려준다.
   executionOptions.admissionWaitMs = 300;
-  await expect(execution.claim(20)).rejects.toThrow('limit');
+  await expect(execution.claim(20)).resolves.toBeNull();
   expect(calls.length).toBeGreaterThan(2);
   expect(new Set(calls)).toEqual(new Set([1]));
-  expect(await h.rows('select state from runner_jobs')).toEqual([{ state: 'failed' }]);
-  expect(await h.rows('select count(*)::int n from execution_holds where closed_at is null')).toEqual([{ n: 0 }]);
+  expect(await h.rows('select state,fence,attempts from runner_jobs')).toEqual([{ state: 'queued',fence:1,attempts:0 }]);
+  expect(await h.rows('select slot_state,lock_state from execution_holds where closed_at is null')).toEqual([{ slot_state:'none',lock_state:'held' }]);
+  executionOptions.canStart = () => ({ ok:true });
+  await flow.runNext(20);
+  expect(await h.rows('select kind,status from task_attempts')).toEqual([{ kind:'dev',status:'completed' }]);
 });
 
 // M5·M7 통합(M5-05 리뷰 P3-4): claim 직후의 짧은 자원 경합은 시작 전 실패가 아니라 대기다(contracts §3.4-8 「잠금을 유지한 채 대기」).
@@ -497,6 +500,50 @@ test('claim 응답 사이 자원이 잠깐 줄었다 돌아오면 실패하지 �
   expect(await execution.claim(20)).toMatchObject({ kind: 'attempt' });
   expect(calls.length).toBeGreaterThanOrEqual(4);
   expect(await h.rows('select state from runner_jobs')).toEqual([{ state: 'leased' }]);
+});
+
+test.each(['qa','rework'] as const)('자동 %s도 자원 반환 뒤 팀장 버튼 없이 같은 job을 실행한다', async kind => {
+  expect((await h.run('TASK-0001')).status).toBe(202);
+  await flow.runNext(20);
+  if (kind === 'rework') {
+    installFakeCli(join(home,'fake'),'codex',codex('FAIL'));
+    await flow.runNext(20);
+  }
+  const before = await h.rows(`select id from runner_jobs where state='queued' and payload->>'kind'='${kind}'`);
+  let checks = 0;
+  executionOptions.canStart = () => ++checks === 1 ? { ok:true } : { ok:false,reason:'limit' };
+  executionOptions.admissionWaitMs = 0;
+  expect(await flow.runNext(20)).toBeNull();
+  expect(await h.rows(`select id,state,attempts,fence from runner_jobs where state='queued'`)).toEqual([{ id:before[0]?.id,state:'queued',attempts:0,fence:1 }]);
+  executionOptions.canStart = () => ({ ok:true });
+  installFakeCli(join(home,'fake'),'codex',codex('PASS'));
+  await flow.runNext(20);
+  expect(await h.rows(`select kind,status from task_attempts where kind='${kind}'`)).toEqual([{ kind,status:'completed' }]);
+  expect(await h.rows("select count(*)::int n from runner_job_events where kind='prestart_failed'")).toEqual([{ n:0 }]);
+});
+
+test.each(['before','after'] as const)('자원 반환 전송 %s 응답 유실 뒤 복구해도 대기열 잠금을 닫지 않는다', async lost => {
+  expect((await h.run('TASK-0001')).status).toBe(202);
+  const api = executionOptions.api;
+  let checks = 0;
+  executionOptions.canStart = () => ++checks === 1 ? { ok:true } : { ok:false,reason:'limit' };
+  executionOptions.admissionWaitMs = 0;
+  executionOptions.api = async (operation,request) => {
+    if (operation === 'returnJob') {
+      if (lost === 'after') await api(operation,request);
+      throw new ApiTransportError('returnJob');
+    }
+    return api(operation,request);
+  };
+  await expect(execution.claim(20)).rejects.toThrow();
+  executionOptions.api = api;
+  const holds = (await api('getExecutionHolds',{ epoch:state.snapshot.epoch })).body.holds;
+  expect(await execution.recover(holds)).toBe(true);
+  expect(await h.rows('select state,attempts,fence from runner_jobs')).toEqual([{ state:'queued',attempts:0,fence:1 }]);
+  expect(await h.rows('select slot_state,lock_state,closed_at from execution_holds')).toEqual([{ slot_state:'none',lock_state:'held',closed_at:null }]);
+  executionOptions.canStart = () => ({ ok:true });
+  await flow.runNext(20);
+  expect(await h.rows('select kind,status from task_attempts')).toEqual([{ kind:'dev',status:'completed' }]);
 });
 
 test('실행 실패는 같은 종류를 총 3회만 자동 실행하고 QA 결과를 만들지 않는다', async () => {
@@ -560,6 +607,11 @@ test('M5·M7 통합: 실제 시도 흐름(dev → push → PR 열기 → ① →
     await runner.outbox.flush();
     expect((await h.lead('GET', '/api/tasks/TASK-0001')).body).toMatchObject({ lifecycleStatus: 'done' });
     expect(await h.rows("select count(*)::int n from execution_holds where closed_at is null")).toEqual([{ n: 0 }]);
+    const intermediate=git(f.repo.path,'rev-parse',`${head}^`);
+    const merged=f.ref('main');
+    const night=await h.runner.api('startCiRun',{ epoch:1,idempotencyKey:crypto.randomUUID(),body:{ stage:'night',ref:'main',trigger:'night',headSha:merged,pipelineSha:f.ref('main') } });
+    await h.runner.api('updateCiRun',{ epoch:1,idempotencyKey:crypto.randomUUID(),params:{ id:night.body.id },body:{ fence:null,status:'run',causeCandidates:[{ commit:intermediate }] } });
+    expect((await h.lead('GET',`/api/projects/${h.project}/ci/runs/${night.body.id}`)).body.causeCandidates).toEqual([{ commit:intermediate,taskKey:'TASK-0001' }]);
   } finally { await ci.shutdown(); }
 }, 60_000);
 

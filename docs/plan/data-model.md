@@ -394,7 +394,7 @@ CP(변경 제안)로 새 Task를 추가할 때 넣을 수 있는 선택 필드�
     - 왜: 끝난 job이 되살아나거나 fence가 내려가면, 이미 거절했어야 할 낡은 보고가 다시 통과한다.
   - 근거: D-03
 - `runner_job_events`
-  - 추가 전용: prepared·prestart_failed·started·lease_lost·reconciled·finished, code, detail — **시작 전 실패 기록**
+  - 추가 전용: prepared·prestart_failed·returned·started·lease_lost·reconciled·finished, code, detail — **시작 전 실패·자원 반환 기록**
   - 근거: §1.2-4 §7.4-4
 - `execution_holds`
   - job unique, attempt?, epoch, host_id?, boot_id?, fence?, pgid/cgroup, task?, conflict_group?, agent, slots, heavy, **slot_state**, **lock_state**, lock_from_job?, handed_to_job?, release_proof(`no_process/group_empty/boot_changed`), closed_at.
@@ -764,6 +764,10 @@ claim은 Runner가 「이 일을 제가 하겠습니다」 하고 job을 예약�
 - 시도 상태: `running → completed | failed | interrupted` (화면: 실행 중/완료/실패/중단).
 - 종료 상태는 불변.
 - **claim은 job 예약만 하고 시도를 만들지 않는다.**
+- 시작 전 자원 부족 반환(`POST /api/runner/jobs/:id/return`)은 job을 `leased → queued`로 돌린다. 시도 행은 만들지 않는다.
+- 반환 때 `attempts`는 1 줄인다. `lease_owner`와 `lease_until`은 비운다. fence(낡은 Runner의 보고를 막는 번호표)는 그대로 둔다.
+- 물리 슬롯은 `none`으로 돌리고 `no_process` 증거를 남긴다. 논리 잠금은 `held`로 유지한다. `runner_job_events`에는 `returned`를 남긴다.
+- 왜: 실행 전 자원 부족은 실패가 아니다. 잠금을 유지해야 같은 Task나 충돌 묶음의 다른 작업이 끼어들지 않는다.
 - 하위 Agent 설치까지 성공한 뒤 `jobs/:id/start`가 시도를 만들고 Task를 전이한다.
   - 왜: 설치에 실패했을 때 「시도했다가 실패한 것」으로 기록되면 재시도 횟수와 이력이 부풀려진다.
 
@@ -793,6 +797,11 @@ claim은 Runner가 「이 일을 제가 하겠습니다」 하고 job을 예약�
 
 - CI: `queued → run → pass | fail | skip`.
 - 대기열: `waiting_verify → queued → checking → merged | failed | removed`.
+- 병합 보고의 `mergeCommits`는 `{commit, parents}` 목록이다. 자식 커밋을 부모보다 먼저 적는다. 현재 main과 그 조상은 제외한다.
+- 서버는 목록이 실제 병합의 두 번째 부모에서 이어지는지 확인한다. 첫 번째 부모(main), 중복, 순환, 끊긴 커밋은 거부한다.
+- 검증한 목록은 첫 병합 사실 `ci_merge_facts.commit_parents`에 저장한다. 이전 병합 기록은 이 값이 없을 수 있다.
+- `causeCandidates`의 커밋은 병합 SHA(커밋 식별값), PR 부모, QA head, 보존된 동기화 사슬, 저장한 중간 커밋에서 Task를 찾는다. 연결되는 Task가 정확히 하나일 때만 `taskKey`를 준다.
+- 왜: Runner가 원인 Task를 직접 지정하면 다른 Task가 잘못 지목될 수 있다. 서버 병합 기록에 있는 근거만 사용한다. 옛 기록에 없는 중간 커밋은 추측하지 않고 `null`로 둔다.
 
 ### 3.6 Change Proposal
 

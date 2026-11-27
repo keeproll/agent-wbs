@@ -1661,6 +1661,10 @@ export interface Operations {
           })[];
         };
         mergeParents?: (Sha)[];
+        mergeCommits?: ({
+          commit: Sha;
+          parents: (Sha)[];
+        })[];
       };
       epoch: number;
       idempotencyKey: string;
@@ -2258,6 +2262,25 @@ export interface Operations {
       200: {
         leaseUntil: Timestamp;
       };
+    };
+  };
+  /** 시작 전 자원 부족 attempt job을 재대기열에 반환. 시도 없이 잠금·fence 유지 */
+  returnJob: {
+    request: {
+      params: {
+        id: Id;
+      };
+      body: {
+        fence: number;
+        hostId: string;
+        bootId: string;
+        reason: "resources";
+      };
+      epoch: number;
+      idempotencyKey: string;
+    };
+    responses: {
+      204: undefined;
     };
   };
   /** 시작 확정(attempt는 시도 생성·Task 전이). 슬롯은 reserved 유지 */
@@ -2907,6 +2930,7 @@ export const OPERATIONS = {
   reportCommandResult: { method: 'POST', path: '/api/runner/commands/{id}/result', content: 'json', statuses: { 204: false } },
   claimJob: { method: 'POST', path: '/api/runner/jobs/claim', content: 'json', statuses: { 200: true, 204: false } },
   renewJob: { method: 'POST', path: '/api/runner/jobs/{id}/renew', content: 'json', statuses: { 200: true } },
+  returnJob: { method: 'POST', path: '/api/runner/jobs/{id}/return', content: 'json', statuses: { 204: false } },
   startJob: { method: 'POST', path: '/api/runner/jobs/{id}/start', content: 'json', statuses: { 200: true } },
   reportJobProcess: { method: 'POST', path: '/api/runner/jobs/{id}/process', content: 'json', statuses: { 204: false } },
   releaseJobSlots: { method: 'POST', path: '/api/runner/jobs/{id}/slots/release', content: 'json', statuses: { 204: false } },

@@ -72,6 +72,8 @@ Q-08·Q-09의 결정 전에는 기존 GitHub client에 fake(실제 서비스 대
 
 - `merged`: 부모·tree 대조까지 끝났다.
   `actualMergeSha`, `actualTreeSha`, `mergeParents`를 서버에 보고한다.
+  연결 계층(`CiJobs`)은 `mergeCommits`에 중간 커밋과 부모도 담는다. 현재 main의 조상은 제외한다.
+  왜: 서버가 야간 점검의 원인 후보를 중간 커밋에서도 해당 Task로 연결해야 한다.
   자동 동기화했다면 M7-04 형식의 `headSync`도 함께 보고한다.
 - `recheck`: main·head·QA가 바뀌었거나 strict 보호가 거부했다.
   새 CI 실행으로 다시 검사한다.

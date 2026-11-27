@@ -795,7 +795,7 @@ export const runnerJobEvents = pgTable(
   (t) => [
     check(
       'job_event_kind',
-      sql`${t.kind} in ('prepared','prestart_failed','started','lease_lost','reconciled','finished')`,
+      sql`${t.kind} in ('prepared','prestart_failed','returned','started','lease_lost','reconciled','finished')`,
     ),
   ],
 );
@@ -1755,6 +1755,7 @@ export const ciMergeFacts = pgTable('ci_merge_facts', {
   merge_sha: text().notNull(),
   tree_sha: text(),
   parents: jsonb(),
+  commit_parents: jsonb(),
 }, (t) => [primaryKey({ columns:[t.project_id,t.merge_sha] })]);
 export const mergeQueue = pgTable(
   'merge_queue',

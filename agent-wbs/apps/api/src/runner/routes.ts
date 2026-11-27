@@ -90,6 +90,17 @@ export function installRunner(app: FastifyInstance, pool: Pool) {
     const job = await checkedJob(repo, params(r).id, body<{ fence: number }>(r).fence, principal(r));
     return { leaseUntil: (await repo.renew(job.id)).toISOString() };
   });
+  route('returnJob', async (repo, r) => {
+    const b = body<{ fence:number;hostId:string;bootId:string;reason:'resources' }>(r);
+    const job = await checkedJob(repo,params(r).id,b.fence,principal(r));
+    const h = await repo.hold(job.id), host = await repo.host();
+    if (job.kind !== 'attempt' || job.state !== 'leased' || !h || h.lock_state !== 'held' || h.closed_at || h.fence !== b.fence || h.host_id !== b.hostId || h.boot_id !== b.bootId ||
+      host?.host_id !== b.hostId || host.boot_id !== b.bootId || h.attempt || h.pgid !== null || h.cgroup !== null || !['reserved','none'].includes(h.slot_state)) throw new PlatformError('INVALID_TRANSITION');
+    // 프로세스가 없는 예약만 반환한다. 다음 claim까지 논리 잠금과 번호표를 보존한다.
+    await repo.release(h,'no_process',false);
+    await repo.client.query("update runner_jobs set state='queued',lease_owner=null,lease_until=null,attempts=attempts-1 where id=$1",[job.id]);
+    await repo.event(job,'returned',null,{ reason:b.reason });
+  },204);
   route('startJob', async (repo, r) => {
     const b = body<Parameters<typeof start>[2] & { fence: number }>(r);
     const job = await checkedJob(repo, params(r).id, b.fence, principal(r));

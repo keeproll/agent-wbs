@@ -78,13 +78,14 @@ test('빈 DB와 0014·0016(master)·0017~0027·M6 중간(0029~0034) 단계 DB, M
     // M6·M7 통합: CI 알림도 Telegram 대기열로(0036 awbs_notify_emit)
     '0036_20261127_notify_ci',
     // M6 통합 fix2: 이력 순번 채우기·M6 표 저장 순번(0037)
-    '0037_20261127_record_order']);
+    '0037_20261127_record_order',
+    '0038_20261127_claim_return_merge_commits']);
   // journal 시각 = 1795740000000 + 번호(0021 이후 규칙)
   for (const e of journal.entries.slice(26)) expect(e.when, e.tag).toBe(1795740000000 + Number(e.tag.slice(0, 4)));
   const fresh = await database('fresh');
   await runMigrations(fresh);
   const expected = await schemaOf(fresh);
-  const stages: (number | string)[] = [14, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 29, 30, 31, 33, 34, 35, 36, ...Object.keys(OLD)];
+  const stages: (number | string)[] = [14, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 29, 30, 31, 33, 34, 35, 36, 37, ...Object.keys(OLD)];
   for (const stage of stages) {
     const pool = await database(String(stage));
     const folder = await mkdtemp(join(tmpdir(), `awbs-stage-${String(stage)}-`));

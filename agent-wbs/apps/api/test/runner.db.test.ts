@@ -106,6 +106,48 @@ describe('runner 실제 PostgreSQL 검증', () => {
     expect((await app.inject({ url: '/api/runner/holds', headers: headers() })).json()).toEqual({ holds: [] });
   });
 
+  test('시작 전 자원 반환은 같은 job·잠금·fence를 유지하고 임대 횟수를 되돌린다', async () => {
+    const { job,t } = await claimed('same-group');
+    const payload = { fence:job.fence,hostId:'host-a',bootId:'boot-a',reason:'resources' };
+    expect((await post(`jobs/${job.id}/return`,{ ...payload,fence:job.fence+1 })).statusCode).toBe(409);
+    expect((await post(`jobs/${job.id}/return`,{ ...payload,bootId:'old-boot' })).statusCode).toBe(409);
+    const h = headers();
+    const send = () => app.inject({ method:'POST',url:`/api/runner/jobs/${job.id}/return`,headers:h,payload });
+    expect((await send()).statusCode).toBe(204);
+    expect((await send()).headers['idempotency-replayed']).toBe('true');
+    expect((await owner.query('select state,fence,attempts,lease_owner,lease_until from runner_jobs where id=$1',[job.id])).rows).toEqual([
+      { state:'queued',fence:job.fence,attempts:0,lease_owner:null,lease_until:null },
+    ]);
+    expect(await hold(job.id)).toMatchObject({ slot_state:'none',lock_state:'held',fence:job.fence,closed_at:null,release_proof:'no_process' });
+    expect((await owner.query('select count(*)::int n from task_attempts')).rows).toEqual([{ n:0 }]);
+    expect((await start(job)).statusCode).toBe(409);
+    const next = (await claim()).json().job as typeof job;
+    expect(next).toMatchObject({ id:job.id,fence:job.fence+1 });
+    expect((await send()).headers['idempotency-replayed']).toBe('true');
+    expect(await hold(job.id)).toMatchObject({ slot_state:'reserved',fence:next.fence,lock_state:'held',closed_at:null });
+    expect((await post(`jobs/${job.id}/return`,payload)).statusCode).toBe(409);
+    expect((await start(next)).statusCode).toBe(200);
+    expect((await post(`jobs/${job.id}/return`,{ ...payload,fence:next.fence })).statusCode).toBe(409);
+    expect((await owner.query('select status from tasks where id=$1',[t.id])).rows).toEqual([{ status:'running' }]);
+  });
+
+  test('프로세스를 등록한 예약과 다른 Runner는 자원 반환을 할 수 없다', async () => {
+    const { job } = await claimed();
+    const payload = { fence:job.fence,hostId:'host-a',bootId:'boot-a',reason:'resources' };
+    const other = await issueRunnerToken(pool,'other-return','fake');
+    expect((await app.inject({ method:'POST',url:`/api/runner/jobs/${job.id}/return`,headers:{ ...headers(),authorization:`Bearer ${other}` },payload })).statusCode).toBe(409);
+    expect((await post(`jobs/${job.id}/process`,{ fence:job.fence,processGroup:123,cgroup:null })).statusCode).toBe(204);
+    expect((await post(`jobs/${job.id}/return`,payload)).statusCode).toBe(409);
+    expect(await hold(job.id)).toMatchObject({ slot_state:'active',pgid:123 });
+  });
+
+  test('시도 job이 아닌 외부 작업에는 자원 반환을 적용하지 않는다', async () => {
+    await owner.query("insert into runner_jobs(project_id,epoch,kind,payload,dedup_key,state) values($1,1,'ci_retry',$2,'return-ci','queued')",[project,{ runId:randomUUID(),pr:1,commit:sha }]);
+    const job=(await claim(['ci_retry'])).json().job as { id:string;fence:number };
+    expect((await post(`jobs/${job.id}/return`,{ fence:job.fence,hostId:'host-a',bootId:'boot-a',reason:'resources' })).statusCode).toBe(409);
+    expect(await hold(job.id)).toMatchObject({ closed_at:null,slot_state:'reserved',lock_state:'none' });
+  });
+
   test('review: 준비 중 서버 등급이 바뀌면 이전 등급 CLI 실행을 거부해야 한다', async () => {
     const { mkdtemp, rm } = await import('node:fs/promises');
     const { join } = await import('node:path');

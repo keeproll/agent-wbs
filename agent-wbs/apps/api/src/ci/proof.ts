@@ -36,3 +36,19 @@ export function assertCiTransition(before: string, after: string) {
   if (before === after || before === 'queued' && after === 'run' || before === 'run' && ['pass','fail','skip'].includes(after)) return;
   throw new PlatformError('INVALID_TRANSITION');
 }
+
+/** Git의 자식→부모 순서와 H′ 연결을 확인한다. main 부모와 끊긴 커밋은 Task 근거가 아니다. */
+export function checkMergeCommits(commits: { commit:string;parents:string[] }[], parents: string[]) {
+  const [base,head] = parents;
+  const byCommit = new Map(commits.map((c,index) => [c.commit,{ ...c,index }]));
+  if (!base || !head || byCommit.size !== commits.length || byCommit.has(base) || commits[0]?.commit !== head ||
+    commits.some((c,i) => c.parents.some(p => (byCommit.get(p)?.index ?? Infinity) <= i))) throw new PlatformError('VALIDATION_FAILED');
+  const reached = new Set<string>(), pending = [head];
+  while (pending.length) {
+    const row = byCommit.get(pending.pop() ?? '');
+    if (!row || reached.has(row.commit)) continue;
+    reached.add(row.commit);
+    pending.push(...row.parents);
+  }
+  if (reached.size !== commits.length) throw new PlatformError('VALIDATION_FAILED');
+}
