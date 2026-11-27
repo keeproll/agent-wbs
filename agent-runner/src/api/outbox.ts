@@ -4,6 +4,8 @@ import { isDeepStrictEqual } from 'node:util';
 import { ApiError, ApiTransportError, type ApiClient, type ApiRequest, type ApiResponse, type OperationId } from './client.ts';
 import { MAX_EVIDENCE_BYTES, State, type Entry, type ReportId } from '../state/state.ts';
 import { requestHash } from '../state/rejections.ts';
+import { assertDesignSnapshot } from '../design/validate.ts';
+import { designItemHash } from '../design/hash.ts';
 
 export interface OutboxOptions {
   now?: () => number;
@@ -49,8 +51,9 @@ export class Outbox {
   /** M4-02의 readiness 보고자가 기존 점검 항목과 함께 표시한다. */
   get readinessWarnings(): string[] {
     const status = this.state.rejectionStatus;
-    return status.total || status.corrupt ? [`보고 거부 ${String(status.total)}건: 원문 ${String(status.kept)}건, 요약 ${String(status.summarized)}건, 고정 ${String(status.pinned)}건.`,
-      ...this.state.rejectionAlerts.map((a) => `${a.level}: ${a.detail}`)] : [];
+    const blocked = this.state.snapshot.outbox.filter(e => e.code === 'EXTERNAL_WRITE_BLOCKED').map(e => `설계 보고 보류: 외부 쓰기 권한 대조를 기다립니다 (${String(e.request.body?.jobId)}).`);
+    return [...blocked, ...(status.total || status.corrupt ? [`보고 거부 ${String(status.total)}건: 원문 ${String(status.kept)}건, 요약 ${String(status.summarized)}건, 고정 ${String(status.pinned)}건.`,
+      ...this.state.rejectionAlerts.map((a) => `${a.level}: ${a.detail}`)] : [])];
   }
 
   get rejected() { return this.state.rejected; }
@@ -58,6 +61,7 @@ export class Outbox {
 
   async enqueue<K extends ReportId>(operation: K, request: Omit<ApiRequest<K>, 'idempotencyKey'> & { idempotencyKey?: string }): Promise<Entry> {
     const input: Omit<Entry['request'], 'idempotencyKey'> = request;
+    if (operation === 'reportDesignSnapshot') assertDesignSnapshot(input.body);
     const at = typeof input.body?.at === 'string' ? input.body.at : new Date(this.now()).toISOString();
     const attemptId = input.params?.attemptId;
     const id = randomUUID();
@@ -131,27 +135,47 @@ export class Outbox {
       if ((this.deadlines.get(entry.id) ?? 0) > this.monotonic()) continue;
       try {
         const request = structuredClone(entry.request);
+        if (entry.operation === 'reportDesignSnapshot') assertDesignSnapshot(request.body);
         if (entry.file && request.body) request.body.file = new Blob([new Uint8Array(await this.state.evidence(entry))], { type: entry.file.type });
         const call = this.api as (id: OperationId, request: unknown) => Promise<ApiResponse<OperationId>>;
         await call(entry.operation, request);
       } catch (error) {
+        const designCode = entry.operation === 'reportDesignSnapshot' && error instanceof ApiError && error.status === 409 ? error.error?.code : undefined;
+        if (designCode === 'VERSION_CONFLICT' && error instanceof ApiError) {
+          const details = error.error?.details;
+          const conflicts = details?.conflicts;
+          const body = entry.request.body;
+          const items = Array.isArray(body?.items) ? body.items as { itemKey: string }[] : [];
+          if (Array.isArray(conflicts) && conflicts.length && conflicts.every((raw: unknown) => {
+            if (!raw || typeof raw !== 'object') return false;
+            const c = raw as Record<string, unknown>, item = items.find(i => i.itemKey === c.itemKey);
+            return item && ['checked', 'unchecked'].includes(String(c.serverState)) && c.commit === body?.commit && c.ref === body?.ref && c.serverContentHash === designItemHash(item);
+          })) {
+            await this.state.update(draft => { draft.outbox = draft.outbox.filter(e => e.id !== entry.id); });
+            this.deadlines.delete(entry.id); blocked.delete(entry.stream); continue;
+          }
+        }
         if (error instanceof ApiError && error.error?.code === 'EPOCH_MISMATCH') {
           await this.state.resetAfterMismatch(error.error.details?.currentEpoch);
           this.deadlines.clear();
           return;
         }
-        if (retryable(error) && !this.state.snapshot.outbox.some((e) => e.id === entry.id)) continue;
-        if (retryable(error)) {
+        const retry = retryable(error) || designCode === 'EXTERNAL_WRITE_BLOCKED';
+        if (retry && !this.state.snapshot.outbox.some((e) => e.id === entry.id)) continue;
+        if (retry) {
           const delay = retryDelay(entry.attempts, error, this.now(), this.random());
           this.deadlines.set(entry.id, this.monotonic() + delay);
           await this.state.update((draft) => {
             const stored = draft.outbox.find((e) => e.id === entry.id);
-            if (stored) { stored.attempts++; stored.nextAt = this.now() + delay; }
+            if (stored) {
+              stored.attempts++; stored.nextAt = this.now() + delay;
+              if (designCode === 'EXTERNAL_WRITE_BLOCKED') { stored.code = designCode; stored.reason = '외부 쓰기 권한 대조를 기다리며 설계 보고를 보류합니다.'; }
+            }
           });
         } else {
           const record = { ...entry, attempts: entry.attempts + 1, rejectedAt: this.now(),
             code: error instanceof ApiError ? error.error?.code ?? 'INVALID_RESPONSE' : 'INVALID_REQUEST',
-            reason: error instanceof ApiError ? error.error?.message ?? `서버가 보고를 거부했습니다: HTTP ${String(error.status)}` : '로컬 요청 또는 증거 파일을 확인하세요.',
+            reason: designCode === 'VERSION_CONFLICT' ? '서버와 불일치: 최신 항목 hash를 확인하고 중지했습니다.' : error instanceof ApiError ? error.error?.message ?? `서버가 보고를 거부했습니다: HTTP ${String(error.status)}` : '로컬 요청 또는 증거 파일을 확인하세요.',
             ...(error instanceof ApiError && error.error?.fix && { fix: error.error.fix }),
             ...(error instanceof ApiError && { status: error.status }) };
           await this.state.reject(record);
