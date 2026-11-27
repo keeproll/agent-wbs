@@ -43,17 +43,30 @@ SUDOERS_PATH=$ROOT_PREFIX/etc/sudoers.d/awbs-agent
 GUARD_UNIT=awbs-agent-wsl-guard.service
 GUARD_PATH=$ROOT_PREFIX/etc/systemd/system/$GUARD_UNIT
 WSL_BLOCK_DIRS=("$ROOT_PREFIX/mnt" "$ROOT_PREFIX/Docker" "$ROOT_PREFIX/run/WSL")
-# DNS 사본(fix7): WSL의 /etc/resolv.conf는 /mnt/wsl/resolv.conf로 가는 링크라, /mnt가 막힌 Agent는 이름을 못 찾는다.
-# /mnt는 그대로 막고, DNS 설정만 /etc/resolv.conf 실제 파일로 옮기는 도우미와 systemd 단위(서비스·경로 감시)를 둔다.
+# ------------------------------------------------------------------ WSL DNS(fix7·fix8)
+# 문제: WSL의 /etc/resolv.conf는 /mnt/wsl/resolv.conf로 가는 링크라, /mnt가 막힌 Agent는 이름(DNS)을 못 찾는다.
+# 기본 방식(fix8, 「터널링」): DNS 터널링은 주소가 10.255.255.254로 고정이다. 그래서
+#   /etc/wsl.conf에 [network] generateResolvConf = false를 더해 WSL이 링크를 다시 만들지 않게 하고,
+#   /etc/resolv.conf를 그 내용의 실제 파일로 둔다. 링크 재생성과 싸우지 않는다(리뷰7 P2-1: 감시가 놓치거나 멈춤).
+# 대체 방식(「사본」): 고정 주소가 아니면 fix7의 도우미를 쓰되 타이머를 더해 1분 안에 복구한다. 설치가 크게 알린다.
+DNS_TUNNEL_NS=10.255.255.254
+DNS_MODE_RECORD=$CONF_DIR/dns-mode                 # tunnel 또는 sync 한 단어
+WSL_CONF=$ROOT_PREFIX/etc/wsl.conf
+WSL_CONF_BACKUP=$CONF_DIR/wsl.conf.before          # 설치 전 /etc/wsl.conf 사본(제거 때 되돌림)
+WSL_CONF_ABSENT=$CONF_DIR/wsl.conf.absent          # 설치 전 /etc/wsl.conf가 없었다는 표시
+WSL_CONF_INSTALLED=$CONF_DIR/wsl.conf.installed    # 설치가 쓴 /etc/wsl.conf(제거 때 그 뒤 바뀌었는지 본다)
 RESOLV_SYNC_PATH=$ROOT_PREFIX/usr/local/libexec/awbs-resolv-sync
 RESOLV_UNIT=awbs-agent-resolv.service
 RESOLV_UNIT_PATH=$ROOT_PREFIX/etc/systemd/system/$RESOLV_UNIT
 RESOLV_WATCH=awbs-agent-resolv.path
 RESOLV_WATCH_PATH=$ROOT_PREFIX/etc/systemd/system/$RESOLV_WATCH
+RESOLV_TIMER=awbs-agent-resolv.timer
+RESOLV_TIMER_PATH=$ROOT_PREFIX/etc/systemd/system/$RESOLV_TIMER
 RESOLV_SRC=$ROOT_PREFIX/mnt/wsl/resolv.conf
 RESOLV_DST=$ROOT_PREFIX/etc/resolv.conf
-# 도우미가 만든 사본의 첫 줄(awbs-resolv-sync.sh의 MARK와 글자 그대로 같아야 한다). 제거 때 「우리가 만든 파일」인지 본다.
+# 이 설치가 만든 /etc/resolv.conf의 첫 줄. 도우미(awbs-resolv-sync.sh)의 MARK·FILE_MARK와 글자 그대로 같아야 한다.
 RESOLV_MARK='# Agent WBS(Q-08): /mnt/wsl/resolv.conf(WSL이 만든 원본)에서 awbs-resolv-sync가 옮긴 사본. 원본이 바뀌면 다시 옮긴다.'
+RESOLV_FILE_MARK='# Agent WBS(Q-08): WSL DNS 터널링 설정으로 owner 설치가 만든 파일. /etc/wsl.conf의 generateResolvConf = false로 WSL이 바꾸지 않는다.'
 # WSL에서 Windows 프로그램(.exe)을 실행해 주는 binfmt 등록 파일. 있으면 WSL이다.
 # 이름에 주의: WSL_INTEROP는 WSL이 터미널마다 내보내는 환경 변수(Windows 실행 통로 소켓 주소)다.
 #   같은 이름에 값을 넣으면 그 환경 변수가 바뀌어, 이 스크립트에서 부르는 .exe가 모두 「connect failed 13」으로 실패한다
@@ -281,4 +294,70 @@ rollback_pending() {
     as_root rm -f -- "$UID_RECORD" || { printf '남은 항목: UID 기록 %s 삭제 실패\n' "$UID_RECORD" >&2; return 1; }
   fi
   as_root rm -f -- "$PENDING_RECORD" || { printf '남은 항목: 진행 기록 %s 삭제 실패\n' "$PENDING_RECORD" >&2; return 1; }
+}
+
+# ------------------------------------------------------------------ WSL DNS 함수(fix8)
+# /etc/resolv.conf가 이 설치가 만든 실제 파일(사본·터널링 파일)인가.
+resolv_is_ours() {
+  [[ -f $RESOLV_DST && ! -L $RESOLV_DST ]] || return 1
+  local first
+  first=$(head -n 1 -- "$RESOLV_DST" 2> /dev/null || true)
+  [[ $first == "$RESOLV_MARK" || $first == "$RESOLV_FILE_MARK" ]]
+}
+
+# 그 파일의 nameserver 값들(한 줄에 하나).
+resolv_nameservers() { awk '$1 == "nameserver" { print $2 }' "$1" 2> /dev/null || true; }
+
+# 그 파일의 nameserver가 DNS 터널링 고정 주소 하나뿐인가.
+resolv_is_tunnel() {
+  local ns
+  ns=$(resolv_nameservers "$1")
+  [[ $ns == "$DNS_TUNNEL_NS" ]]
+}
+
+# wsl.conf 내용(표준 입력)에 [network] generateResolvConf = false를 넣은 결과를 표준 출력으로 낸다. 다른 줄은 그대로 둔다.
+#   - [network] 절에 generateResolvConf 줄이 있으면 그 줄만 false로 바꾼다.
+#   - [network] 절은 있는데 그 줄이 없으면 첫 [network] 머리 바로 아래에 넣는다.
+#   - [network] 절이 없으면 끝에 절을 더한다.
+wsl_conf_with_resolv_off() {
+  awk '
+    function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+    { lines[NR] = $0 }
+    /^[ \t]*\[/ { sec = tolower(trim($0)); if (sec == "[network]" && !first_net) first_net = NR }
+    sec == "[network]" && tolower($0) ~ /^[ \t]*generateresolvconf[ \t]*=/ { key[NR] = 1; has_key = 1 }
+    END {
+      for (i = 1; i <= NR; i++) {
+        if (key[i]) print "generateResolvConf = false"; else print lines[i]
+        if (i == first_net && !has_key) print "generateResolvConf = false"
+      }
+      if (!first_net) {
+        if (NR > 0 && lines[NR] != "") print ""
+        print "[network]"
+        print "# Agent WBS(Q-08): WSL이 /etc/resolv.conf를 링크로 다시 만들지 않게 한다(Agent 계정 DNS). 제거 스크립트가 되돌린다."
+        print "generateResolvConf = false"
+      }
+    }'
+}
+
+# 그 wsl.conf에 [network] generateResolvConf = false가 있는가(대소문자·공백 무시, 마지막 값 기준).
+wsl_conf_resolv_off() {
+  [[ -f $1 ]] || return 1
+  awk '
+    function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+    /^[ \t]*\[/ { sec = tolower(trim($0)); next }
+    sec == "[network]" && tolower($0) ~ /^[ \t]*generateresolvconf[ \t]*=/ {
+      v = $0; sub(/^[^=]*=/, "", v); v = tolower(trim(v)); sub(/[ \t]*#.*$/, "", v); val = v
+    }
+    END { exit (val == "false") ? 0 : 1 }' "$1"
+}
+
+# 대체 방식(도우미·감시·타이머)을 끄고 지운다. 타이머·감시를 먼저 끈다(켜 둔 채 지우면 다시 돌 수 있다). 없으면 아무것도 안 한다.
+remove_resolv_sync() {
+  local changed=0
+  if [[ -f $RESOLV_TIMER_PATH ]]; then as_root systemctl disable --now "$RESOLV_TIMER"; as_root rm -f -- "$RESOLV_TIMER_PATH"; changed=1; fi
+  if [[ -f $RESOLV_WATCH_PATH ]]; then as_root systemctl disable --now "$RESOLV_WATCH"; as_root rm -f -- "$RESOLV_WATCH_PATH"; changed=1; fi
+  if [[ -f $RESOLV_UNIT_PATH ]]; then as_root systemctl disable "$RESOLV_UNIT"; as_root rm -f -- "$RESOLV_UNIT_PATH"; changed=1; fi
+  if ((changed)); then as_root systemctl daemon-reload; fi
+  if [[ -f $RESOLV_SYNC_PATH ]]; then as_root rm -f -- "$RESOLV_SYNC_PATH"; fi
+  return 0
 }

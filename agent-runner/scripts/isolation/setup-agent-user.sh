@@ -52,9 +52,31 @@ NODE_BIN=$(realpath -e -- "$NODE_BIN") || die "node 파일이 없습니다: $NOD
 [[ -f $NODE_BIN && -x $NODE_BIN ]] || die "node가 실행 파일이 아닙니다: $NODE_BIN"
 command -v sudo > /dev/null || die 'sudo가 없습니다.'
 [[ -f $HERE/awbs-agent-exec.sh ]] || die '실행 래퍼(awbs-agent-exec.sh)가 같은 폴더에 없습니다.'
-[[ -f $HERE/awbs-resolv-sync.sh ]] || die 'DNS 사본 도우미(awbs-resolv-sync.sh)가 같은 폴더에 없습니다.'
+[[ -f $HERE/awbs-resolv-sync.sh ]] || die 'DNS 도우미(awbs-resolv-sync.sh)가 같은 폴더에 없습니다.'
 IS_WSL=0
 [[ -e $WSL_BINFMT || -d $ROOT_PREFIX/run/WSL ]] && IS_WSL=1
+
+# Agent DNS 방식 고르기(fix8). 아무것도 바꾸기 전에 정한다(dry-run에서도 보이게).
+#   tunnel: DNS 원본의 nameserver가 DNS 터널링 고정 주소(10.255.255.254) 하나뿐 → wsl.conf + 실제 파일(기본)
+#   sync:   그 밖의 주소 → fix7 도우미 + 감시 + 타이머(대체, 크게 알림)
+#   manual: /etc/resolv.conf가 owner가 직접 관리하는 실제 파일 → 건드리지 않음
+DNS_MODE='' DNS_BASE=''
+if ((IS_WSL)); then
+  if [[ -f $RESOLV_SRC && ! -L $RESOLV_SRC ]] && [[ $(owner_of "$RESOLV_SRC") == root ]]; then
+    DNS_BASE=$RESOLV_SRC
+  elif resolv_is_ours; then
+    DNS_BASE=$RESOLV_DST          # 이미 터널링 방식으로 바꾼 뒤다(WSL이 원본을 더 만들지 않을 수 있다).
+  fi
+  if [[ -f $RESOLV_DST && ! -L $RESOLV_DST ]] && ! resolv_is_ours; then
+    DNS_MODE=manual               # owner가 직접 관리하는 실제 파일(예: 이미 generateResolvConf = false로 손수 설정)
+  elif [[ -n $DNS_BASE ]] && resolv_is_tunnel "$DNS_BASE"; then
+    DNS_MODE=tunnel
+  elif [[ -n $DNS_BASE && $DNS_BASE == "$RESOLV_SRC" ]]; then
+    DNS_MODE=sync
+  else
+    die "WSL DNS 설정을 찾지 못했습니다($RESOLV_SRC 없음). WSL을 다시 시작한 뒤 다시 실행하세요."
+  fi
+fi
 
 # 계정: 없으면 새로 만들고, 있으면 이 설치가 만든 계정인지 확인한다. 다른 계정이면 손대지 않는다.
 ACCOUNT=$(agent_account_state)
@@ -81,7 +103,7 @@ done
 for p in "${WSL_BLOCK_DIRS[@]}"; do
   [[ -e $p || -L $p ]] && safe_fixed_path "$p"
 done
-for p in "$CRON_DENY" "$AT_DENY" "$RESOLV_SYNC_PATH" "$RESOLV_UNIT_PATH" "$RESOLV_WATCH_PATH"; do
+for p in "$CRON_DENY" "$AT_DENY" "$RESOLV_SYNC_PATH" "$RESOLV_UNIT_PATH" "$RESOLV_WATCH_PATH" "$RESOLV_TIMER_PATH" "$WSL_CONF"; do
   safe_fixed_path "$p"
 done
 # cron.allow·at.allow가 있으면 deny 파일은 쓰이지 않는다(allow에 없는 계정만 막힘). 그 경우 allow에 Agent가 없어야 한다.
@@ -100,6 +122,11 @@ note "Agent 계정: $AGENT_USER (홈 $AGENT_HOME, 상태: $ACCOUNT)"
 note "Agent 작업 영역: $AGENT_ROOT"
 note "Agent용 node: $NODE_BIN ($("$NODE_BIN" --version))"
 note "WSL 여부: $([[ $IS_WSL == 1 ]] && echo 예 || echo 아니오)"
+case $DNS_MODE in
+  tunnel) note "Agent DNS 방식: 터널링(nameserver $DNS_TUNNEL_NS 고정) → /etc/wsl.conf generateResolvConf = false + /etc/resolv.conf 실제 파일" ;;
+  sync) note "Agent DNS 방식: 대체(nameserver가 $DNS_TUNNEL_NS 하나가 아님) → 도우미 + 감시 + 타이머" ;;
+  manual) note 'Agent DNS 방식: /etc/resolv.conf를 직접 관리하는 파일로 보고 건드리지 않음' ;;
+esac
 ((DRY_RUN)) && note 'dry-run: 아래 sudo 명령은 실행하지 않고 보여 주기만 합니다.'
 
 # 여기부터는 현재 폴더를 루트(/)로 둔다. 아래 sudo -u awbs-agent 명령은 현재 폴더를 물려받는데,
@@ -111,7 +138,7 @@ cd / || die '루트 폴더(/)로 옮기지 못했습니다.'
 TMP=$(mktemp -d)
 FINISHED=0
 CREATING=0
-# shellcheck disable=SC2317  # trap으로 불린다.
+# shellcheck disable=SC2317,SC2329  # trap으로 불린다(shellcheck 0.10은 SC2317, 0.11은 SC2329로 알림. 리뷰7 P3-6).
 on_exit() {
   local rc=$?
   rm -rf -- "$TMP"
@@ -160,27 +187,89 @@ ExecStart=/usr/bin/setfacl -P -m u:$AGENT_USER:--- /run/WSL
 WantedBy=multi-user.target
 EOF
 
-# DNS 사본 서비스(fix7): 부팅 때 한 번 /mnt/wsl/resolv.conf를 /etc/resolv.conf 실제 파일로 옮긴다.
-# /mnt는 Agent에게 막혀 있어서, WSL이 만든 링크(/etc/resolv.conf → /mnt/wsl/resolv.conf)로는 Agent가 DNS 설정을 못 읽는다.
-cat > "$TMP/resolv.service" << EOF
-# Agent WBS(Q-08 fix7): WSL의 DNS 설정(/mnt/wsl/resolv.conf)을 /etc/resolv.conf 실제 파일로 옮긴다.
-# 왜: /mnt는 $AGENT_USER에게 막혀 있어(Windows 드라이브 차단) 링크를 따라가지 못해 이름 찾기(DNS)가 안 된다.
+# sudoers 문법을 미리 검사한다. 문법이 틀린 파일을 넣으면 sudo 전체가 멈출 수 있기 때문이다.
+if /usr/sbin/visudo -c -q -f "$TMP/sudoers" > /dev/null 2>&1; then
+  note 'sudoers 문법 검사(미리 보기): 통과'
+else
+  note 'sudoers 문법 검사(미리 보기): 관리자 권한 없이는 확인하지 못함. 마지막 단계에서 sudo로 다시 검사한다.'
+fi
+
+if ((DRY_RUN)); then
+  for f in agent-exec.conf sudoers guard.service; do
+    printf '\n--- 만들 파일: %s\n' "$f"
+    cat "$TMP/$f"
+  done
+fi
+
+# ---------------------------------------------------------------- DNS 방식별 할 일(4-1단계에서 부름)
+# 기본(터널링): WSL이 /etc/resolv.conf를 링크로 다시 만들지 않게 하고(wsl.conf), 그 내용의 실제 파일을 둔다.
+# 왜: WSL은 wsl.exe를 실행할 때마다 링크를 다시 만든다(0.4초에 3번). 감시로 따라가면 놓치거나 멈춘다(리뷰7 P2-1).
+#     DNS 터널링 주소는 10.255.255.254로 고정이라 실제 파일로 둬도 낡지 않는다.
+dns_tunnel() {
+  note "DNS 터널링(nameserver $DNS_TUNNEL_NS 고정)이라 WSL의 자동 생성을 끄고 실제 파일로 둔다."
+  # 대체 방식(fix7 도우미·감시·타이머)이 남아 있으면 먼저 끈다. 켜 둔 채면 서로 다른 내용으로 바꿀 수 있다.
+  remove_resolv_sync
+  # wsl.conf: 설치 전 모습을 한 번만 보관한다(다시 실행해도 처음 보관한 것을 덮어쓰지 않는다).
+  if [[ ! -e $WSL_CONF_BACKUP && ! -e $WSL_CONF_ABSENT ]]; then
+    if [[ -e $WSL_CONF ]]; then
+      as_root install -o root -g root -m 0644 "$WSL_CONF" "$WSL_CONF_BACKUP"          # 설치 전 /etc/wsl.conf 보관(제거 때 되돌림)
+    else
+      : > "$TMP/wsl.conf.absent"
+      as_root install -o root -g root -m 0644 "$TMP/wsl.conf.absent" "$WSL_CONF_ABSENT"  # 설치 전에는 없었다는 표시
+    fi
+  fi
+  if [[ -f $WSL_CONF ]]; then wsl_conf_with_resolv_off < "$WSL_CONF" > "$TMP/wsl.conf"; else wsl_conf_with_resolv_off < /dev/null > "$TMP/wsl.conf"; fi
+  if ((DRY_RUN)); then printf '\n--- 만들 파일: /etc/wsl.conf\n'; cat "$TMP/wsl.conf"; fi
+  if [[ -f $WSL_CONF ]] && cmp -s -- "$TMP/wsl.conf" "$WSL_CONF"; then
+    note '/etc/wsl.conf: 이미 generateResolvConf = false'
+  else
+    as_root install -o root -g root -m 0644 "$TMP/wsl.conf" "$WSL_CONF"   # 기존 줄은 그대로, [network] generateResolvConf = false만 더함
+  fi
+  as_root install -o root -g root -m 0644 "$TMP/wsl.conf" "$WSL_CONF_INSTALLED"   # 설치가 쓴 모습(제거 때 그 뒤 바뀌었는지 본다)
+  # /etc/resolv.conf: 표시 줄 + 허용한 설정 줄(값 모양까지 검사)
+  { printf '%s\n' "$RESOLV_FILE_MARK"; bash "$HERE/awbs-resolv-sync.sh" --filter < "$DNS_BASE"; } > "$TMP/resolv.conf"
+  resolv_is_tunnel "$TMP/resolv.conf" || die "만든 DNS 설정에 nameserver $DNS_TUNNEL_NS 한 줄이 없습니다."
+  if ((DRY_RUN)); then printf '\n--- 만들 파일: /etc/resolv.conf\n'; cat "$TMP/resolv.conf"; fi
+  if [[ -L $RESOLV_DST && $(readlink -- "$RESOLV_DST") != "$RESOLV_SRC" ]] || { [[ -e $RESOLV_DST && ! -L $RESOLV_DST ]] && ! resolv_is_ours; }; then
+    die "$RESOLV_DST가 WSL 링크도 이 설치가 만든 파일도 아니라 바꾸지 않습니다."
+  fi
+  if resolv_is_ours && cmp -s -- "$TMP/resolv.conf" "$RESOLV_DST"; then
+    note '/etc/resolv.conf: 이미 실제 파일(같은 내용)'
+  else
+    # 같은 폴더의 임시 이름에 둔 뒤 이름 바꾸기로 한 번에 바꾼다. 링크 너머 원본(/mnt/wsl/resolv.conf)은 건드리지 않는다.
+    as_root install -o root -g root -m 0644 "$TMP/resolv.conf" "$RESOLV_DST.awbs-new"
+    as_root mv -fT -- "$RESOLV_DST.awbs-new" "$RESOLV_DST"
+  fi
+  printf 'tunnel\n' > "$TMP/dns-mode"
+  as_root install -o root -g root -m 0644 "$TMP/dns-mode" "$DNS_MODE_RECORD"
+  note '★ WSL을 한 번 다시 시작해야 설정이 굳어집니다: Windows에서 「wsl --shutdown」 후 터미널을 다시 열고 확인 스크립트를 실행하세요.'
+}
+
+# 대체(사본): 고정 주소가 아닌 PC. fix7 도우미에 리뷰7 지적을 반영한 단위를 쓴다.
+#   - 서비스: 시작 한도 끔(StartLimitIntervalSec=0), 30초 시간 제한, 감시 뒤에 시작
+#   - 타이머: 부팅 30초 뒤, 그 뒤 1분마다(감시가 놓치거나 멈춰도 1분 안에 복구)
+dns_sync() {
+  printf '\n   ★★★ 주의: 이 PC의 WSL DNS는 터널링 고정 주소(%s) 하나가 아닙니다.\n' "$DNS_TUNNEL_NS"
+  printf '   ★★★ 그래서 대체 방식(도우미 + 감시 + 1분 타이머)으로 /etc/resolv.conf 사본을 유지합니다.\n'
+  printf '   ★★★ WSL이 링크를 다시 만들 때 Agent의 이름 찾기가 최대 1분 끊길 수 있습니다. 이 사실을 보고해 주세요.\n\n'
+  cat > "$TMP/resolv.service" << EOF
+# Agent WBS(Q-08 fix8 대체 방식): WSL의 DNS 설정(/mnt/wsl/resolv.conf)을 /etc/resolv.conf 실제 파일로 옮긴다.
 [Unit]
 Description=Agent WBS: copy WSL DNS settings to /etc/resolv.conf for $AGENT_USER
-After=local-fs.target
+After=local-fs.target $RESOLV_WATCH
 ConditionPathExists=/mnt/wsl/resolv.conf
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
+TimeoutStartSec=30
 ExecStart=/usr/local/libexec/awbs-resolv-sync
 
 [Install]
 WantedBy=multi-user.target
 EOF
-
-# DNS 사본 감시(fix7): 원본이 바뀌거나, WSL이 새 터미널을 열 때 /etc/resolv.conf를 다시 링크로 만들면 곧바로 다시 옮긴다.
-cat > "$TMP/resolv.path" << EOF
-# Agent WBS(Q-08 fix7): DNS 원본·/etc/resolv.conf가 바뀌면 $RESOLV_UNIT을 다시 실행한다.
+  cat > "$TMP/resolv.path" << EOF
+# Agent WBS(Q-08 fix8 대체 방식): DNS 원본·/etc/resolv.conf가 바뀌면 $RESOLV_UNIT을 다시 실행한다.
 [Unit]
 Description=Agent WBS: re-copy WSL DNS settings when they change
 
@@ -192,20 +281,36 @@ Unit=$RESOLV_UNIT
 [Install]
 WantedBy=multi-user.target
 EOF
+  cat > "$TMP/resolv.timer" << EOF
+# Agent WBS(Q-08 fix8 대체 방식): 감시가 변화를 놓치거나 멈춰도 1분 안에 다시 옮긴다(리뷰7 P2-1).
+[Unit]
+Description=Agent WBS: periodically re-copy WSL DNS settings
 
-# sudoers 문법을 미리 검사한다. 문법이 틀린 파일을 넣으면 sudo 전체가 멈출 수 있기 때문이다.
-if /usr/sbin/visudo -c -q -f "$TMP/sudoers" > /dev/null 2>&1; then
-  note 'sudoers 문법 검사(미리 보기): 통과'
-else
-  note 'sudoers 문법 검사(미리 보기): 관리자 권한 없이는 확인하지 못함. 마지막 단계에서 sudo로 다시 검사한다.'
-fi
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=60s
+Unit=$RESOLV_UNIT
 
-if ((DRY_RUN)); then
-  for f in agent-exec.conf sudoers guard.service resolv.service resolv.path; do
-    printf '\n--- 만들 파일: %s\n' "$f"
-    cat "$TMP/$f"
-  done
-fi
+[Install]
+WantedBy=timers.target
+EOF
+  if ((DRY_RUN)); then
+    for f in resolv.service resolv.path resolv.timer; do printf '\n--- 만들 파일: %s\n' "$f"; cat "$TMP/$f"; done
+  fi
+  ensure_root_dir "$(dirname "$RESOLV_SYNC_PATH")"
+  ensure_root_dir "$(dirname "$RESOLV_UNIT_PATH")"
+  as_root install -o root -g root -m 0755 "$HERE/awbs-resolv-sync.sh" "$RESOLV_SYNC_PATH"   # DNS 도우미(root 소유)
+  as_root install -o root -g root -m 0644 "$TMP/resolv.service" "$RESOLV_UNIT_PATH"
+  as_root install -o root -g root -m 0644 "$TMP/resolv.path" "$RESOLV_WATCH_PATH"
+  as_root install -o root -g root -m 0644 "$TMP/resolv.timer" "$RESOLV_TIMER_PATH"
+  as_root systemctl daemon-reload
+  as_root systemctl enable "$RESOLV_UNIT"                                # 부팅 때 한 번
+  as_root systemctl enable --now "$RESOLV_WATCH"                         # 바뀔 때마다
+  as_root systemctl enable --now "$RESOLV_TIMER"                         # 1분마다(안전망)
+  as_root systemctl start "$RESOLV_UNIT"                                 # 지금 한 번(실패하면 여기서 멈춘다)
+  printf 'sync\n' > "$TMP/dns-mode"
+  as_root install -o root -g root -m 0644 "$TMP/dns-mode" "$DNS_MODE_RECORD"
+}
 
 # ---------------------------------------------------------------- 1. 닫고 시작
 step '1. 기존의 비밀번호 없는 실행 규칙을 먼저 지움(설치 중에는 Runner가 Agent를 띄우지 못하게)'
@@ -298,20 +403,21 @@ if ((IS_WSL)); then
   done
   ensure_root_dir "$(dirname "$GUARD_PATH")"
   as_root install -o root -g root -m 0644 "$TMP/guard.service" "$GUARD_PATH"   # 다음 부팅부터도 /run/WSL을 막는 서비스
-  # DNS 사본(fix7): /mnt는 막은 채로 DNS 설정만 /etc/resolv.conf 실제 파일로 옮긴다. 그래야 Agent가 Claude·Codex 서버 이름을 찾는다.
-  note 'Agent는 /mnt가 막혀 WSL의 DNS 설정(/mnt/wsl/resolv.conf)을 못 읽는다. 그래서 설정 줄만 /etc/resolv.conf 실제 파일로 옮겨 둔다.'
-  ensure_root_dir "$(dirname "$RESOLV_SYNC_PATH")"
-  as_root install -o root -g root -m 0755 "$HERE/awbs-resolv-sync.sh" "$RESOLV_SYNC_PATH"   # DNS 사본 도우미(root 소유)
-  as_root install -o root -g root -m 0644 "$TMP/resolv.service" "$RESOLV_UNIT_PATH"         # 부팅 때 한 번 옮기는 서비스
-  as_root install -o root -g root -m 0644 "$TMP/resolv.path" "$RESOLV_WATCH_PATH"           # 바뀔 때마다 다시 옮기는 감시
   as_root systemctl daemon-reload                                        # 새 서비스 파일 읽기
   as_root systemctl enable "$GUARD_UNIT"                                 # 부팅 때 자동 실행
-  as_root systemctl enable "$RESOLV_UNIT"                                # 부팅 때 DNS 사본 만들기
-  as_root systemctl enable --now "$RESOLV_WATCH"                         # 지금부터 DNS 설정 변경 감시
-  as_root systemctl start "$RESOLV_UNIT"                                 # 재부팅 없이 지금 한 번 옮김(실패하면 여기서 멈춘다)
 else
   note 'WSL이 아니라 건너뜀'
 fi
+
+# ---------------------------------------------------------------- 4-1. Agent DNS(fix8)
+# Agent는 /mnt가 막혀 WSL의 DNS 설정(/mnt/wsl/resolv.conf)을 못 읽는다. /mnt는 그대로 막고 /etc/resolv.conf를 실제 파일로 둔다.
+step '4-1. Agent 계정 DNS(이름 찾기)'
+case $DNS_MODE in
+  tunnel) dns_tunnel ;;
+  sync) dns_sync ;;
+  manual) note '/etc/resolv.conf는 직접 관리하는 파일이라 그대로 둠(Agent가 읽을 수 있는지는 7단계 래퍼 점검이 본다)' ;;
+  *) note 'WSL이 아니라 건너뜀' ;;
+esac
 
 # ---------------------------------------------------------------- 5. 작업 영역
 step "5. Agent 작업 영역 $AGENT_ROOT"

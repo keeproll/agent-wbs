@@ -54,12 +54,29 @@ bash agent-runner/scripts/isolation/setup-agent-user.sh 2>&1 | tee ~/awbs-setup-
   3. `awbs-agent` 계정을 만듭니다(로그인 셸 없음, 비밀번호 잠금, sudo 없음).
   4. 이 계정의 예약 실행(cron·at)을 막습니다.
   5. 이 계정만 Windows 드라이브(`/mnt`)·Windows 프로그램 실행 통로(`/run/WSL`)에 못 들어가게 막습니다.
-     - `/mnt`가 막히면 WSL의 DNS 설정(`/mnt/wsl/resolv.conf`)도 못 읽습니다. 그래서 DNS 설정 줄만 `/etc/resolv.conf` 실제 파일로 옮겨 두는 서비스를 함께 켭니다(Agent가 Claude·Codex 서버 이름을 찾게).
+     - `/mnt`가 막히면 WSL의 DNS 설정(`/mnt/wsl/resolv.conf`)도 못 읽습니다. 그래서 DNS 터널링(주소 `10.255.255.254` 고정)이면 `/etc/wsl.conf`에 `generateResolvConf = false`를 더하고(설치 전 모습은 보관) `/etc/resolv.conf`를 실제 파일로 둡니다.
+     - 터널링이 아니면 ★★★ 표시와 함께 대체 방식(도우미 + 1분 타이머)을 씁니다. 이 표시가 보이면 알려 주세요.
   6. Agent 작업 영역 `/srv/agentwbs`(cli·inputs·worktrees)와 Agent용 node를 만듭니다.
   7. 실행 래퍼를 설치하고 Agent 계정으로 점검(`check`)합니다.
   8. 점검이 `ok`일 때만 마지막에 sudoers 규칙 한 줄을 넣습니다.
 - **성공이면:** `래퍼 점검: ok`, `== 끝. 다음에 owner가 할 일`, `exit=0`이 보입니다.
 - **실패하면:** 종료 코드가 0이 아니고, 「설치가 중간에 멈췄습니다 … 닫힌 상태로 둡니다」가 보입니다. 로그 `2-setup.log`를 보내 주세요.
+
+## 2-1단계. WSL 다시 시작(2단계 뒤 한 번, DNS 설정을 굳힘)
+
+2단계가 `/etc/wsl.conf`를 바꿨으므로 WSL을 한 번 다시 시작합니다. 다시 시작한 뒤에도 `/etc/resolv.conf`가 실제 파일로 남아야 합니다.
+
+```bash
+/mnt/c/Windows/System32/wsl.exe --shutdown      # 이 터미널도 함께 닫힙니다. Windows PowerShell에서 wsl --shutdown 해도 같습니다
+```
+
+터미널을 다시 연 뒤 확인합니다.
+
+```bash
+ls -l /etc/resolv.conf          # 맨 앞이 l(링크)이 아니라 -(실제 파일)이어야 합니다
+head -n 3 /etc/resolv.conf      # 첫 줄 「# Agent WBS(Q-08): WSL DNS 터널링…」, 다음 줄 nameserver 10.255.255.254
+getent hosts api.anthropic.com  # 주소가 한 줄 나오면 owner·Runner DNS 정상
+```
 
 ## 3단계. Claude·Codex CLI 설치(관리자 권한 없음)
 
@@ -133,7 +150,7 @@ grep '^AWBS_AGENT' agent-runner/.env
 bash agent-runner/scripts/isolation/check-agent-user.sh 2>&1 | tee ~/awbs-setup-logs/6-check.log; echo "exit=${PIPESTATUS[0]}"
 ```
 
-- **하는 일:** Agent 계정으로 직접 해 보며 막혔는지 봅니다. 예: Runner 홈·`~/.config/gh`·verum 폴더를 못 읽는지, Windows로 못 나가는지(`/mnt` 아래 모든 드라이브), Agent가 DNS로 서버 이름을 찾는지, sudo 정책이 래퍼 하나뿐인지, 예약 실행이 막혔는지, 로그인됐는지. 아무것도 고치지 않습니다.
+- **하는 일:** Agent 계정으로 직접 해 보며 막혔는지 봅니다. 예: Runner 홈·`~/.config/gh`·verum 폴더를 못 읽는지, Windows로 못 나가는지(`/mnt` 아래 모든 드라이브), Runner·Agent 양쪽이 DNS로 서버 이름을 찾는지, `/etc/resolv.conf`가 실제 파일이고 `/etc/wsl.conf`에 `generateResolvConf = false`가 있는지, sudo 정책이 래퍼 하나뿐인지, 예약 실행이 막혔는지, 로그인됐는지. 아무것도 고치지 않습니다.
 - **성공이면:** 마지막에 `결과: FAIL 0개`, `exit=0`.
 - **WARN은 실패가 아닙니다.** 흔한 WARN:
   - `/tmp에 Runner 계정 파일 중 누구나 읽을 수 있는 것이 …개`: 공용 임시 폴더 안내입니다.

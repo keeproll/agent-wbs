@@ -251,21 +251,57 @@ fi
 agent_blocked 'Docker 소켓 쓰기(root와 같은 권한)' test -w "$ROOT_PREFIX/var/run/docker.sock"
 agent_blocked 'Docker 소켓 읽기' test -r "$ROOT_PREFIX/var/run/docker.sock"
 
-step '5-1. Agent 계정 DNS(이름 찾기)'
+step '5-1. DNS(이름 찾기): Runner·Agent 양쪽'
 # Claude·Codex 로그인과 실행에는 서버 이름(예: api.anthropic.com)을 주소로 바꾸는 DNS가 필요하다.
-# WSL의 /etc/resolv.conf는 /mnt/wsl/resolv.conf로 가는 링크라, /mnt가 막힌 Agent는 그대로면 못 읽는다(fix7: 실제 파일 사본으로 바꿈).
-# 대조: Runner가 먼저 찾아 본다. Runner도 못 찾으면 인터넷·DNS 문제라 Agent 결과를 판단할 수 없으니 WARN으로 둔다.
+# WSL의 기본 /etc/resolv.conf는 /mnt/wsl/resolv.conf로 가는 링크라, /mnt가 막힌 Agent는 그대로면 못 읽는다.
+# 설치(fix8)는 DNS 터널링이면 /etc/wsl.conf에 generateResolvConf = false를 넣고 /etc/resolv.conf를 실제 파일로 둔다.
 DNS_NAME=api.anthropic.com
-if [[ -L $RESOLV_DST ]]; then
-  note "$RESOLV_DST: 링크($(readlink -- "$RESOLV_DST"))"
-elif [[ -f $RESOLV_DST ]]; then
-  if [[ $(head -n 1 -- "$RESOLV_DST" 2> /dev/null || true) == "$RESOLV_MARK" ]]; then note "$RESOLV_DST: 실제 파일(DNS 사본 도우미가 만듦)"; else note "$RESOLV_DST: 실제 파일(직접 관리)"; fi
+if [[ -e $WSL_BINFMT ]]; then
+  dns_mode=''
+  [[ -f $DNS_MODE_RECORD ]] && dns_mode=$(< "$DNS_MODE_RECORD")
+  if [[ -L $RESOLV_DST ]]; then
+    fail "/etc/resolv.conf가 아직 링크임($(readlink -- "$RESOLV_DST")). Agent가 따라가지 못함. setup-agent-user.sh를 다시 실행하세요"
+  elif [[ -f $RESOLV_DST ]]; then
+    pass '/etc/resolv.conf가 링크가 아닌 실제 파일'
+  else
+    fail '/etc/resolv.conf가 없음'
+  fi
+  case $dns_mode in
+    tunnel)
+      # WSL을 다시 시작해도 링크로 돌아가지 않게 하는 설정. 이것이 없으면 다음 재시작 때 Agent DNS가 다시 끊긴다.
+      if wsl_conf_resolv_off "$WSL_CONF"; then
+        pass '/etc/wsl.conf에 [network] generateResolvConf = false(WSL 재시작 뒤에도 실제 파일 유지)'
+      else
+        fail '/etc/wsl.conf에 [network] generateResolvConf = false가 없음(WSL 재시작 때 링크로 돌아감). setup-agent-user.sh를 다시 실행하세요'
+      fi
+      if [[ -f $RESOLV_DST && ! -L $RESOLV_DST ]] && resolv_is_tunnel "$RESOLV_DST"; then
+        pass "/etc/resolv.conf의 nameserver가 DNS 터널링 주소 $DNS_TUNNEL_NS 하나"
+      else
+        fail "/etc/resolv.conf의 nameserver가 $DNS_TUNNEL_NS 하나가 아님"
+      fi
+      ;;
+    sync)
+      warn '대체 방식(도우미 + 감시 + 1분 타이머): WSL이 링크를 다시 만들 때 Agent DNS가 최대 1분 끊길 수 있음'
+      if systemctl is-active --quiet "$RESOLV_TIMER" 2> /dev/null; then pass "$RESOLV_TIMER 동작 중"; else fail "$RESOLV_TIMER가 동작하지 않음"; fi
+      ;;
+    *)
+      fail "DNS 설정 방식 기록이 없음($DNS_MODE_RECORD). setup-agent-user.sh를 다시 실행하세요"
+      ;;
+  esac
+fi
+# Runner 쪽: 이 PC의 DNS 자체가 되는지(설정을 바꾼 뒤에도 owner·Runner 네트워크가 멀쩡한지).
+runner_dns=0
+if getent hosts "$DNS_NAME" > /dev/null 2>&1; then
+  pass "Runner 계정 DNS 해석 $DNS_NAME"
+  runner_dns=1
+else
+  fail "Runner 계정도 $DNS_NAME을 찾지 못함(인터넷 연결과 /etc/resolv.conf를 확인하세요)"
 fi
 agent_allowed "DNS 설정 파일 읽기 $RESOLV_DST" test -r "$RESOLV_DST"
-if getent hosts "$DNS_NAME" > /dev/null 2>&1; then
+if ((runner_dns)); then
   agent_allowed "DNS 해석 $DNS_NAME" getent hosts "$DNS_NAME"
 else
-  warn "Runner 계정도 $DNS_NAME을 찾지 못함(인터넷·DNS 확인). Agent DNS 검사는 건너뜀"
+  fail "확인 못 함: Runner DNS가 안 돼 Agent DNS를 판단할 수 없음"
 fi
 if [[ -e $RESOLV_SRC ]]; then
   agent_blocked "WSL DNS 원본 직접 읽기 $RESOLV_SRC(/mnt는 계속 막힘)" cat -- "$RESOLV_SRC"

@@ -50,6 +50,7 @@ case $cmd in
   test) for a in "$@"; do [[ $a == /* ]] && inside "$a"; done; test "$@" ;;
   find) for a in "$@"; do [[ $a == /* ]] && inside "$a"; done ;;
   ln) dst=${*: -1}; inside "$dst"; ln "$@" ;;
+  mv) for a in "$@"; do [[ $a == /* ]] && inside "$a"; done; mv "$@" ;;
   groupdel) sed -i '/^awbs-agent:/d' "$R/etc/group" ;;
   pkill) [[ -s $R/.procs ]] || exit 1; [[ -f $R/.procs-stubborn ]] || : > "$R/.procs"; exit 0 ;;
   pgrep) [[ -s $R/.procs ]] && exit 0; exit 1 ;;
