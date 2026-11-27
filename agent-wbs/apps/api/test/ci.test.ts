@@ -22,3 +22,25 @@ test('CI 실행은 순서대로 진행하고 최종 결과를 다른 결과로 �
     expect(() => assertCiTransition(before,after)).toThrow();
   }
 });
+
+
+test('결정 16: 관측된 main을 잇는 두 단계 사슬은 원래 QA를 보존하고 중간 변조는 거부한다', () => {
+  const nextBase = 'e'.repeat(40), nextHead = 'f'.repeat(40), nextTree = '1'.repeat(40);
+  const last = { ...proof,qaHeadSha:head,headSha:nextHead,parents:[head,nextBase],autoMergeTreeSha:nextTree,headTreeSha:nextTree };
+  const chain = { ...last,qaHeadSha:qa,chain:[proof,last] };
+  expect(preservedHead(qa,nextHead,nextBase,nextTree,chain,[base,nextBase])).toEqual({ qaHeadSha:qa,headSha:nextHead,preserved:true });
+  for (const altered of [{ ...proof,headTreeSha:qa },{ ...proof,parents:[qa,qa] },{ ...proof,additionalChanges:true }]) {
+    expect(() => preservedHead(qa,nextHead,nextBase,nextTree,{ ...chain,chain:[altered,last] },[base,nextBase])).toThrow();
+  }
+  expect(() => preservedHead(qa,nextHead,nextBase,nextTree,{ ...chain,chain:[proof,{ ...last,qaHeadSha:qa }] },[base,nextBase])).toThrow();
+  expect(() => preservedHead(qa,nextHead,nextBase,nextTree,{ ...chain,parents:[qa,nextBase] },[base,nextBase])).toThrow();
+});
+
+
+test.each(['reverse','repeat'])('리뷰3: 동기화 사슬의 main %s는 거부한다', order => {
+  const nextBase='e'.repeat(40), nextHead='f'.repeat(40), nextTree='1'.repeat(40);
+  const finalBase=order==='reverse' ? base : nextBase;
+  const first={ ...proof,parents:[qa,nextBase] };
+  const last={ ...proof,qaHeadSha:head,headSha:nextHead,parents:[head,finalBase],autoMergeTreeSha:nextTree,headTreeSha:nextTree };
+  expect(() => preservedHead(qa,nextHead,finalBase,nextTree,{ ...last,qaHeadSha:qa,chain:[first,last] },[base,nextBase])).toThrow();
+});

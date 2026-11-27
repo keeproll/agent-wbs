@@ -625,8 +625,8 @@ export async function retryInputs(db: Db, body: { updatedAt: string; version: nu
   if (!(await sameTime(db, project.updated_at, body.updatedAt))) throw new ProjectError('VERSION_CONFLICT', { details: { current: { updatedAt: project.updated_at }, changes: [] } });
   const job = (await db.query<PlanningJob & { version: string | null }>(
     `select j.id,j.project_id,j.kind,j.run_no,j.status,j.instruction,
-       (select payload->>'version' from runner_jobs r where r.payload->>'planningJobId'=j.id::text order by r.created_at limit 1) version
-     from planning_jobs j where j.project_id=$1 and j.kind='input_diff' order by j.created_at desc limit 1 for update`, [project.id])).rows[0];
+       (select payload->>'version' from runner_jobs r where r.payload->>'planningJobId'=j.id::text order by r.record_no limit 1) version
+     from planning_jobs j where j.project_id=$1 and j.kind='input_diff' order by j.record_no desc limit 1 for update`, [project.id])).rows[0];
   if (!job || job.status !== 'failed' || Number(job.version) !== body.version) {
     throw new ProjectError('INVALID_TRANSITION', { message: `입력 v${String(body.version)}의 실패한 차이 분석이 없습니다.` });
   }

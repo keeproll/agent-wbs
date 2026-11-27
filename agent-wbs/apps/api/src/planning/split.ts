@@ -59,7 +59,7 @@ export function registerSplitRoutes(route: RouteFn, epochOf: (request: FastifyRe
     const key = `split:${task.task_key}:${hash}${marker ? `:${marker}` : ''}`;
     await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [key]);
     const existing = (await client.query<{ id: string | null; n: number }>(
-      "select (array_agg(id order by created_at desc) filter (where state::text=any($2)))[1] as id,count(*)::int as n from runner_jobs where dedup_key like $1",
+      "select (array_agg(id order by record_no desc) filter (where state::text=any($2)))[1] as id,count(*)::int as n from runner_jobs where dedup_key like $1",
       [`${key}:%`, OPEN])).rows[0];
     if (existing?.id) return reply.code(202).send({ jobId: existing.id });
     const settings = (await client.query<{ split: unknown }>('select split from app_settings where singleton')).rows[0]?.split ?? null;

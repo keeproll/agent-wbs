@@ -481,6 +481,13 @@ export type JudgedSplitProposalOp = {
 export type PassFail = "PASS" | "FAIL" | "BLOCKED";
 
 export type Pipeline = {
+  serviceConfig?: {
+    path: RepoPath;
+    commit: Sha;
+    status: "ok" | "error" | "missing";
+    raw: string | null;
+    error: string | null;
+  };
   path: ".agentwbs/pipeline.yaml";
   commit: Sha | null;
   status: "ok" | "error" | "missing";
@@ -1365,6 +1372,24 @@ export interface Operations {
         })[];
         status?: CiStatus;
         failScope?: "baseline" | "task";
+        note?: string;
+        finishedAt?: Timestamp;
+        e2e?: {
+          passed: number;
+          total: number;
+        };
+        githubStatus?: {
+          headSha: Sha;
+          context: string;
+          state: "pending" | "success" | "failure" | "error";
+          reportedAt: Timestamp;
+          url?: string;
+        };
+        flakyTests?: ({
+          testKey: string;
+          rate: number;
+          lastFailedAt: Timestamp;
+        })[];
         logExcerpt?: string;
         artifacts?: (string)[];
         url?: string;
@@ -1397,6 +1422,7 @@ export interface Operations {
         testedTreeSha?: Sha;
         actualMergeSha?: Sha;
         actualTreeSha?: Sha;
+        mergedAt?: Timestamp;
         headSync?: {
           qaHeadSha: Sha;
           headSha: Sha;
@@ -1405,6 +1431,15 @@ export interface Operations {
           autoMergeTreeSha: Sha;
           headTreeSha: Sha;
           additionalChanges: boolean;
+          chain?: ({
+            qaHeadSha: Sha;
+            headSha: Sha;
+            preserved: boolean;
+            parents: (Sha)[];
+            autoMergeTreeSha: Sha;
+            headTreeSha: Sha;
+            additionalChanges: boolean;
+          })[];
         };
         mergeParents?: (Sha)[];
       };

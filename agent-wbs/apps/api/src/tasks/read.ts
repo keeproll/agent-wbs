@@ -141,7 +141,7 @@ export async function taskDetail(client: PoolClient, taskKey: string, withSchedu
     client.query<{ basis: string; judged_rules: unknown; exceptions: unknown }>('select basis,judged_rules,exceptions from task_splits where task=$1', [task.id]),
     client.query<{ estHours: number; loHours: number; hiHours: number; tokensK: number | null; confidence: string; basis: string; agreedBy: string; at: string }>(
       `select est::float8 "estHours",lo::float8 "loHours",hi::float8 "hiHours",tokens_k::float8 "tokensK",confidence,basis,agreed_by "agreedBy",${iso('created_at')} at
-       from task_estimates where task=$1 order by created_at desc,id desc limit 1`, [task.id]),
+       from task_estimates where task=$1 order by record_no desc limit 1`, [task.id]),
     client.query<{ fixStart: string | null; actStart: string | null; actEnd: string | null; actualHours: number }>(
       `select to_char(fix_start,'YYYY-MM-DD') "fixStart",${iso('act_start')} "actStart",${iso('act_end')} "actEnd",
        coalesce((select sum(greatest(0,extract(epoch from (coalesce(ended_at,clock_timestamp())-started_at)))/3600)::float8
