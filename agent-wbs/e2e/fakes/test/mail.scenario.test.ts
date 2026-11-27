@@ -996,10 +996,13 @@ describe('Q-13 결정 A: 외부 수신자(링크 없이 보고용 + PDF)', () =>
    * Codex 재리뷰(fix2) 지적 1 재현: 같은 앱 주소의 다른 표기 · 일반 외부 주소를 작업 제목에 넣고 실제 경로(큐 → worker → 가짜 SMTP, 실제 Chromium PDF)로 보낸다.
    * 기준은 검사기 정규식만이 아니다: 원래 주소 글자 조각(호스트 · 포트 · 경로)이 메일 · PDF 어디에도 없는지 따로 본다.
    */
-  test('[fix2 1] 앱 주소의 다른 표기(127.1 · 10진수 · IPv6 · %77)와 일반 외부 주소도 외부 메일 · 실제 PDF에서 「(링크 생략)」만 남는다', async () => {
-    const VARIANTS = ['http://127.1:5173/report/abc', 'http://2130706433:5173/report/abc', 'http://[0:0:0:0:0:0:0:1]:5173/report/abc', 'https://%77bs.corp.example/report/abc', 'https://notwbs.corp.example.org/spec'];
+  test('[fix2 1 · fix3 2] 앱 주소의 다른 표기(127.1 · 10진수 · IPv6 · %77 · 유니코드 점 · 인코딩 점)와 일반 외부 주소도 외부 메일 · 실제 PDF에서 「(링크 생략)」만 남는다', async () => {
+    const VARIANTS = ['http://127.1:5173/report/abc', 'http://2130706433:5173/report/abc', 'http://[0:0:0:0:0:0:0:1]:5173/report/abc', 'https://%77bs.corp.example/report/abc', 'https://notwbs.corp.example.org/spec',
+      // fix3(재리뷰 3-2): 점을 다른 글자로 적은 주소. 앞의 것이 리뷰어가 실제 발송으로 재현한 입력이다.
+      '192。168。0。10:5173/report/abc', 'wbs．corp．example/report/abc', 'wbs｡corp｡example/report/abc', 'wbs%2Ecorp%2Eexample/report/abc', 'wbs&#46;corp&#46;example/report/abc'];
     const TITLE = `TASK-0007 개선 ${VARIANTS.join(' ')}`;
-    const FRAGMENTS = ['5173', '127.1', '2130706433', '0:0:0', '%77', 'corp.example', '/report/abc', '/spec', 'http', 'TASK-0007'];
+    const FRAGMENTS = ['5173', '127.1', '2130706433', '0:0:0', '%77', 'corp.example', '/report/abc', '/spec', 'http', 'TASK-0007',
+      '192.168', '192。168', '。', '．', '｡', '%2E', '&#46;', 'wbs.corp', 'corp'];
     const root = await mkdtemp(join(tmpdir(), 'awbs-mail-fix2-'));
     const renderer = chromiumRenderer();
     try {
@@ -1038,15 +1041,19 @@ describe('Q-13 결정 A: 외부 수신자(링크 없이 보고용 + PDF)', () =>
   }, 120_000);
 
   /** Codex 재리뷰(fix2) 지적 2 재현: 보내는 사람 표시 이름. 저장은 400, 이미 저장된 옛 값이면 외부 메일을 보내지 않고 설정 오류로 남긴다. */
-  test('[fix2 2] 보내는 사람 표시 이름에 내부 용어 · 주소가 있으면 저장 400, 옛 설정이면 외부 메일을 보내지 않음(설정 오류)', async () => {
+  test('[fix2 2 · fix3 1] 보내는 사람이 허용 목록 밖이면 저장 400, 옛 설정이면 외부 메일을 보내지 않음(설정 오류) · From 헤더는 읽어 낸 이름 · 주소로 만든다', async () => {
     const BAD = '"TASK-0007 owner http://127.0.0.1:5173/settings/report" <agent-wbs@example.com>';
+    // fix3(재리뷰 3-1): 메일 생성기가 다르게 읽는 표기(인코딩 · 주석 · 꺾쇠 없는 이름 · 줄바꿈)도 모두 저장 거부
+    const encoded = `=?UTF-8?B?${Buffer.from('TASK-0007 owner http://127.0.0.1:5173/settings/report').toString('base64')}?= <agent-wbs@example.com>`;
     const current = (await lead('GET', '/api/settings/mail/smtp')).body;
-    const put = await lead('PUT', '/api/settings/mail/smtp', { updatedAt: current.updatedAt, host: current.host, port: current.port, sec: current.sec, user: current.user, from: BAD });
-    expect(put.status).toBe(400);
-    expect(put.body.error.errors[0]).toMatchObject({ path: 'from', rule: 'external' });
+    for (const from of [BAD, encoded, '=?UTF-8?Q?TASK=2D0007?= <agent@example.com>', 'agent@example.com (TASK-0007)', 'TASK-0007 agent@example.com', '"TASK-0007\nhttp://127.0.0.1:5173/settings/report" <agent@example.com>']) {
+      const put = await lead('PUT', '/api/settings/mail/smtp', { updatedAt: current.updatedAt, host: current.host, port: current.port, sec: current.sec, user: current.user, from });
+      expect(put.status, from).toBe(400);
+      expect(put.body.error.errors[0], from).toMatchObject({ path: 'from', rule: 'external' });
+    }
     // 이 규칙 전에 저장된 값이라고 가정한다(API를 거치지 않고 넣음).
     const before = current.from as string;
-    await owner.query('update mail_settings set "from"=$1', [BAD]);
+    await owner.query('update mail_settings set "from"=$1', [encoded]);
     try {
       const partner = await recipient(PARTNER);
       const t = await lead('POST', `/api/settings/mail/recipients/${partner.id}/test`);
@@ -1061,6 +1068,8 @@ describe('Q-13 결정 A: 외부 수신자(링크 없이 보고용 + PDF)', () =>
       await deliverMail(pool, epoch, { now: plus(at, 146), timeoutMs: TIMEOUT, pdf: FAKE_PDF });
       expect((await rowOf(id))?.state).toBe('accepted');
       const raw = received(PARTNER).at(-1)?.raw ?? '';
+      // From 헤더를 풀면 설정한 이름 · 주소 그대로다(메일 생성기가 설정 글을 다시 해석하지 않음).
+      expect((mimeHeader(raw, 'From') ?? '').replace(/"/g, '')).toBe(before);
       expect(externalMailLeaks({ from: mimeHeader(raw, 'From') ?? '', subject: mimeHeader(raw, 'Subject') ?? '', html: mimePart(raw, 'text/html') ?? '', text: mimePart(raw, 'text/plain') ?? '', to: PARTNER }, null)).toEqual([]);
     } finally {
       await owner.query('update mail_settings set "from"=$1', [before]);

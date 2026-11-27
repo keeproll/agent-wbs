@@ -6,7 +6,8 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { internalTerms, type ReportSnapshotData } from '@awbs/shared';
 import { FakeSmtp, mimePart } from '../../../e2e/fakes/smtp.ts';
 import { checkSmtp, describeError, sendSmtp, type SmtpTarget } from '../src/mail/smtp.ts';
-import { externalMailLeaks, mailSubject, renderMail, senderName, senderNameLeaks, type MailReport } from '../src/mail/render.ts';
+import { externalMailLeaks, mailSubject, renderMail, type MailReport } from '../src/mail/render.ts';
+import { parseSender } from '@awbs/shared';
 
 const smtp = new FakeSmtp();
 let target: SmtpTarget;
@@ -200,17 +201,23 @@ describe('Q-13 fix1: 외부 메일은 모든 글이 변환 함수를 지나고 �
   });
 });
 
-describe('Q-13 fix2: 보내는 사람 표시 이름도 헤더 검사에 들어간다(Codex 재리뷰 2)', () => {
-  test('표시 이름만 꺼내 검사하고, 메일 주소 자체는 검사 대상이 아니다', () => {
-    expect(senderName('Agent WBS <agent-wbs@example.com>')).toBe('Agent WBS');
-    expect(senderName('"팀장 보고" <lead@example.com>')).toBe('팀장 보고');
-    expect(senderName('agent-wbs@example.com')).toBe('');
-    expect(senderNameLeaks('Agent WBS <agent-wbs@example.com>')).toEqual([]);
-    expect(senderNameLeaks('"TASK-0007 owner http://127.0.0.1:5173/settings/report" <agent-wbs@example.com>').length).toBeGreaterThanOrEqual(2);
-  });
-  test('externalMailLeaks는 From 표시 이름까지 본다', () => {
+describe('Q-13 fix2 · fix3: 보내는 사람은 허용 목록으로만 읽고, 헤더 검사에 들어간다', () => {
+  test('externalMailLeaks는 From까지 본다(읽을 수 없는 보내는 사람은 그 자체로 실패)', () => {
     const base = { subject: '주간 보고(요약)', html: '<p>본문</p>', text: '본문' };
     expect(externalMailLeaks({ ...base, from: 'Agent WBS <a@example.com>' }, null)).toEqual([]);
+    expect(externalMailLeaks({ ...base, from: { name: '에이전트 보고', address: 'a@example.com' } }, null)).toEqual([]);
     expect(externalMailLeaks({ ...base, from: '"TASK-0007 http://127.1:5173/x" <a@example.com>' }, null).length).toBeGreaterThan(0);
+    expect(externalMailLeaks({ ...base, from: '=?UTF-8?B?VEFTSy0wMDA3?= <a@example.com>' }, null)).toEqual(['보내는 사람 형식']);
+  });
+  test('From 헤더는 읽어 낸 이름 · 주소로 만든다: 실제 메일 생성기 결과를 풀면 설정한 이름 그대로다', async () => {
+    const { default: MailComposer } = await import('nodemailer/lib/mail-composer');
+    for (const from of ['Agent WBS <agent-wbs@example.com>', '에이전트 보고-1 <a@example.com>', 'a@example.com']) {
+      const sender = parseSender(from);
+      expect(sender, from).not.toBeNull();
+      const raw = (await new MailComposer({ from: sender ?? '', to: 'b@example.com', subject: 's', text: 't' }).compile().build()).toString();
+      const header = /^From: (.*)$/m.exec(raw)?.[1] ?? '';
+      const decoded = header.replace(/=\?utf-8\?([bq])\?([^?]*)\?=/gi, (_m, e: string, t: string) => (e.toLowerCase() === 'b' ? Buffer.from(t, 'base64').toString('utf8') : t)).replace(/"/g, '');
+      expect(decoded).toBe(sender?.name ? `${sender.name} <${sender.address}>` : (sender?.address ?? ''));
+    }
   });
 });

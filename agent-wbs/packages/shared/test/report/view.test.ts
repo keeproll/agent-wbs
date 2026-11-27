@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { Value } from 'typebox/value';
-import { externalLeaks, externalText, externalView, internalKpis, internalTerms, reportFigures, ReportSnapshotSchema as ReportSnapshot, scrubInternal, type ReportSnapshotData } from '@awbs/shared';
+import { externalLeaks, externalText, externalView, normalizeExternal, parseSender, internalKpis, internalTerms, reportFigures, ReportSnapshotSchema as ReportSnapshot, scrubInternal, type ReportSnapshotData } from '@awbs/shared';
 
 /** 빈 스냅샷에 필요한 칸만 채운다. */
 type Patch = Partial<Omit<ReportSnapshotData, 'summary'>> & { summary?: Partial<ReportSnapshotData['summary']> };
@@ -169,3 +169,72 @@ describe('Q-13 fix2: 외부 글은 주소 모양을 모두 「(링크 생략)」
 });
 
 
+
+/**
+ * Q-13 fix3: 정규화 뒤 판정(Codex 재리뷰 3-2). 리뷰어 재현과 인코딩 변형을 표로 둔다.
+ * 기준은 정규식만이 아니다: 각 입력을 표준 URL 해석기로 읽어 원래 주소(호스트)를 먼저 확인한다.
+ */
+describe('Q-13 fix3: 외부 글은 정규화한 뒤 주소 모양을 판정하고, 출력도 정규화한 글이다', () => {
+  // [입력, 표준 URL 해석의 호스트, 설명]
+  const VARIANTS: [string, string, string][] = [
+    ['192。168。0。10:5173/report/abc', '192.168.0.10', 'U+3002 점(재리뷰 재현 · 실제 발송)'],
+    ['wbs。corp。example/report/abc', 'wbs.corp.example', 'U+3002 점'],
+    ['wbs．corp．example/report/abc', 'wbs.corp.example', 'U+FF0E 전각 점'],
+    ['wbs｡corp｡example/report/abc', 'wbs.corp.example', 'U+FF61 반각 점'],
+    ['wbs%2Ecorp%2Eexample/report/abc', 'wbs.corp.example', '퍼센트 인코딩 점'],
+    ['wbs%252Ecorp%252Eexample/report/abc', 'wbs.corp.example', '두 번 퍼센트 인코딩'],
+    ['wbs&#46;corp&#x2e;example/report/abc', 'wbs.corp.example', 'HTML 숫자 기호 점'],
+    ['wbs&period;corp&period;example/report/abc', 'wbs.corp.example', 'HTML 이름 기호 점'],
+    ['wbs​.corp.‍example/report/abc', 'wbs.corp.example', '폭 없는 글자 끼움'],
+    ['ｗｂｓ．ｃｏｒｐ．ｅｘａｍｐｌｅ／ｒｅｐｏｒｔ', 'wbs.corp.example', '전각 영문 전체'],
+    ['https%3A%2F%2Fwbs%2Ecorp%2Eexample%2Freport%2Fabc', 'wbs.corp.example', '주소 전체 퍼센트 인코딩'],
+  ];
+  test.each(VARIANTS)('%s → 「(링크 생략)」, 검사기 0건 (%s · %s)', (input, host) => {
+    const asUrl = normalizeExternal(input).replace(/^(?!https?:)/, 'http://');
+    // 표준 URL 해석기로 본 호스트(정규식과 따로 세운 기준)
+    expect(new URL(asUrl).hostname).toBe(host);
+    expect(externalLeaks(input).length).toBeGreaterThan(0);
+    const out = externalText(`앞 ${input} 뒤`);
+    expect(out).toBe('앞 (링크 생략) 뒤');
+    expect(externalLeaks(out)).toEqual([]);
+  });
+  test('출력은 정규화한 글이다(원문 표기가 아니라)', () => {
+    expect(externalText('프로젝트。완료 ｢보고｣')).toBe(normalizeExternal('프로젝트。완료 ｢보고｣'));
+    expect(externalText('프로젝트。완료')).toBe('프로젝트.완료');
+  });
+  test('정규화해도 업무 문장 · 퍼센트 · 시각 · 날짜는 그대로다', () => {
+    for (const t of ['진척 10% · 누적 0 / 0', '생성 2026-11-04 07:00', '기간 2026-10-26 ~ 2026-11-01', 'A/B 시험', '보고서 개선 완료']) expect(externalText(t), t).toBe(t);
+  });
+  test('메일 헤더 인코딩 문법(=?…?=)은 외부 글에서 빠지고 검사기가 찾는다', () => {
+    expect(externalLeaks('=?UTF-8?B?VEFTSy0wMDA3?=').length).toBeGreaterThan(0);
+    expect(externalText('이름 =?UTF-8?Q?TASK=2D0007?= 끝')).toBe('이름 끝');
+  });
+  test('버전 번호(숫자 세 덩이)도 IP 모양이라 생략된다 — 정보 손실로 받아들임(조정자 판단)', () => {
+    expect(externalText('버전 1.2.3 배포')).toBe('버전 (링크 생략) 배포');
+  });
+});
+
+/** Q-13 fix3: 보내는 사람 허용 목록(Codex 재리뷰 3-1 재현). 해석할 수 없으면 null — 빈 이름으로 통과시키지 않는다. */
+describe('Q-13 fix3: 보내는 사람은 허용 목록으로만 읽는다', () => {
+  test.each([
+    ['Agent WBS <agent-wbs@example.com>', { name: 'Agent WBS', address: 'agent-wbs@example.com' }],
+    ['에이전트 보고-1 <a@example.com>', { name: '에이전트 보고-1', address: 'a@example.com' }],
+    ['agent-wbs@example.com', { name: '', address: 'agent-wbs@example.com' }],
+    [`${'가'.repeat(40)} <a@example.com>`, { name: '가'.repeat(40), address: 'a@example.com' }],
+  ])('허용: %s', (from, expected) => { expect(parseSender(from)).toEqual(expected); });
+  test.each([
+    ['=?UTF-8?B?VEFTSy0wMDA3?= <agent@example.com>', 'B 방식 인코딩(재리뷰 재현)'],
+    ['=?UTF-8?Q?TASK=2D0007?= <agent@example.com>', 'Q 방식 인코딩(재리뷰 재현)'],
+    ['agent@example.com (TASK-0007)', '주석 표기(재리뷰 재현)'],
+    ['TASK-0007 agent@example.com', '꺾쇠 없는 이름(재리뷰 재현)'],
+    ['"TASK-0007\nhttp://127.0.0.1:5173/settings/report" <agent@example.com>', '줄바꿈(재리뷰 재현)'],
+    ['"Agent WBS" <a@example.com>', '따옴표'],
+    ['TASK-0007 <a@example.com>', '허용 글자지만 내부 용어'],
+    ['Agent.WBS <a@example.com>', '점'],
+    ['ａｇｅｎｔ <a@example.com>', '전각 영문'],
+    [`${'가'.repeat(41)} <a@example.com>`, '41자'],
+    ['<a@example.com>', '꺾쇠만 있고 이름 없음'],
+    ['Agent <a@example.com>, B <b@example.com>', '주소 둘'],
+    ['Agent <not-an-address>', '주소 형식 아님'],
+  ])('거부: %s (%s)', (from) => { expect(parseSender(from)).toBeNull(); });
+});

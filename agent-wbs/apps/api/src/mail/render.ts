@@ -14,7 +14,7 @@
  * 숫자는 화면 보고서와 같은 계산(shared `reportFigures` — `internalKpis`·`externalView`가 쓰는 것)에서 온다.
  * 그래서 화면·메일·PDF가 같은 스냅샷에서 같은 숫자를 보인다(milestones §4.0).
  */
-import { externalHtmlLeaks, externalLeaks, externalText, monthDay, reportFigures, type Kpi, type ReportKind, type ReportSnapshotData } from '@awbs/shared';
+import { externalHtmlLeaks, externalLeaks, externalText, monthDay, parseSender, reportFigures, type Kpi, type ReportKind, type ReportSnapshotData } from '@awbs/shared';
 
 export interface MailReport {
   id: string;
@@ -187,21 +187,14 @@ export function renderMail(input: MailInput): RenderedMail {
  * 메일 worker가 SMTP를 부르기 직전에 부르고(deliver.ts), 시험도 같은 함수를 쓴다. 빈 목록이면 통과.
  * 바닥글의 받는 사람 주소는 검사에서 뺀다(받는 사람 자신의 주소다).
  */
-export function externalMailLeaks(mail: { from?: string; subject: string; html: string; text: string; to?: string | null; attachments?: readonly { filename: string }[] }, appUrl: string | null): string[] {
+export function externalMailLeaks(mail: { from?: string | Sender; subject: string; html: string; text: string; to?: string | null; attachments?: readonly { filename: string }[] }, appUrl: string | null): string[] {
   void appUrl;
   const own = (t: string) => (mail.to ? t.split(mail.to).join('') : t);
-  // 헤더: 보내는 사람 표시 이름 · 제목 · 첨부 이름(Q-13 fix2). 받는 주소(To)는 그 사람 자신의 주소라 뺀다. Reply-To · Cc는 넣지 않는다.
-  const headers = [senderName(mail.from ?? ''), mail.subject, ...(mail.attachments ?? []).map((a) => a.filename)];
-  return [...headers.flatMap((t) => externalLeaks(t)), ...externalHtmlLeaks(own(mail.html)), ...externalLeaks(own(mail.text))];
+  // 헤더: 보내는 사람 표시 이름 · 제목 · 첨부 이름(Q-13 fix2 · fix3). 받는 주소(To)는 그 사람 자신의 주소라 뺀다. Reply-To · Cc는 넣지 않는다.
+  // 보내는 사람이 글이면 허용 목록(parseSender)으로 읽는다. 읽을 수 없으면 그 자체가 검사 실패다(빈 이름으로 통과시키지 않는다).
+  const sender = typeof mail.from === 'string' ? parseSender(mail.from) : (mail.from ?? { name: '', address: '' });
+  const senderProblem = sender ? externalLeaks(sender.name) : ['보내는 사람 형식'];
+  const headers = [mail.subject, ...(mail.attachments ?? []).map((a) => a.filename)];
+  return [...senderProblem, ...headers.flatMap((t) => externalLeaks(t)), ...externalHtmlLeaks(own(mail.html)), ...externalLeaks(own(mail.text))];
 }
-
-/**
- * 보내는 사람 설정(`Agent WBS <agent-wbs@example.com>`)에서 표시 이름만 꺼낸다. 주소만 적었으면 빈 글.
- * 표시 이름은 설정 값을 그대로 쓰되, 외부 메일 헤더에 나가므로 검사기를 통과해야 한다(Q-13 fix2, Codex 재리뷰 2).
- */
-export function senderName(from: string): string {
-  const m = /^\s*(.*?)\s*<[^<>]*>\s*$/.exec(from);
-  return (m?.[1] ?? '').replace(/^"(.*)"$/, '$1');
-}
-/** 보내는 사람 표시 이름 검사. 빈 목록이면 통과 */
-export const senderNameLeaks = (from: string): string[] => externalLeaks(senderName(from));
+export interface Sender { name: string; address: string }

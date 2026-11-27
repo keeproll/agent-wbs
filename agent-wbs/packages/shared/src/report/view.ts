@@ -144,7 +144,7 @@ const TAIL = String.raw`[^\s<>"'()[\]{}「」『』]*`;
  * - 스킴이 있는 주소: `http://…`, `https://…`, `ftp://…`, `//…`
  * - `www.`로 시작하는 주소
  * - 대괄호 IPv6: `[::1]`, `[0:0:…:1]:5173`
- * - 숫자 IP(점 셋 이상): `127.0.0.1`, `10.0.0.5/x`
+ * - 숫자 IP(숫자 세 덩이 이상 = 점 둘 이상): `127.0.0.1`, `10.0.0.5/x`. 버전 번호 `1.2.3`도 여기에 걸려 생략된다(정보 손실, 조정자 판단으로 받아들임)
  * - 호스트:포트: `localhost:5173`, `127.1:5173`, `wbs.corp.example:443`, `2130706433:5173`
  * - 호스트/경로: `wbs.corp.example/report/1`, `example.org/spec`
  * - 경로형: 공백 · 괄호 뒤의 `/report/abc`, `/settings`(「A/B」, 「0 / 0」은 아니다)
@@ -165,44 +165,105 @@ const ADDRESS: readonly RegExp[] = [
 const APP_HINTS: readonly RegExp[] = [
   /설정\s*→\s*[^\s,.)」』]+(?:\s*·\s*[^\s,.)」』]+)?/g,
   /href\s*=/gi,
+  // 메일 헤더 인코딩 문법(`=?UTF-8?B?…?=`). 글에 적혀 있으면 메일 앱이 풀어서 다른 글로 보일 수 있다.
+  /=\?[^?\s]*\?[bq]\?[^?\s]*\?=/gi,
 ];
 
+/** 이름 있는 HTML 글자 기호 중 주소에 쓰일 수 있는 것과 흔한 것(나머지는 숫자 기호 `&#46;`로 온다) */
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', period: '.', sol: '/', colon: ':', commat: '@', percnt: '%', num: '#', quest: '?', equals: '=', lowbar: '_', hyphen: '-', dash: '-',
+};
+/** 폭이 없는 글자 · 방향 제어 글자 · 줄 바꿈 가능 표시(보이지 않지만 주소 사이에 끼워 넣을 수 있다) */
+// 결합 문자(이음 표시 · 변형 선택자)는 글자 묶음 안에 두면 앞 글자와 붙어 보이므로 따로 나열한다.
+const INVISIBLE = new RegExp('[\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u206F]|\\u00AD|\\u061C|\\u115F|\\u1160|\\u17B4|\\u17B5|\\u3164|\\uFEFF|\\uFFA0|\\u034F|\\u180B|\\u180C|\\u180D|\\u180E|\\u180F|\\uFE00|\\uFE01|\\uFE02|\\uFE03|\\uFE04|\\uFE05|\\uFE06|\\uFE07|\\uFE08|\\uFE09|\\uFE0A|\\uFE0B|\\uFE0C|\\uFE0D|\\uFE0E|\\uFE0F', 'g');
+/** 점으로 읽히는 글자(NFKC 뒤에도 남는 것): 。 ｡ ︒ ﹒ ․ 등 */
+const DOTS = new RegExp('[\\u3002\\uFF61\\uFE12\\uFE52\\u2024\\uFF0E\\u0701\\u0702\\u2E33\\u2E3C]', 'g');
+
 /**
- * 외부로 나가는 글을 보고용으로 바꾸는 **하나뿐인** 변환 함수(G L396 · L1052, Q-13 결정 A · fix1 · fix2).
+ * 외부 글 정규화(Q-13 fix3). 주소 모양을 판정하기 **전에** 글을 한 가지 표기로 모은다. 변환 함수와 검사기가 같은 결과를 쓴다.
+ * 1. HTML 글자 기호를 푼다(`&#46;` → `.`, `&period;` → `.`).
+ * 2. 퍼센트 인코딩을 푼다(`%2E` → `.`). 풀 수 없는 조각(「10%」)은 그대로 둔다.
+ * 3. NFKC(호환 글자를 기본 글자로: 전각 `．` → `.`, 전각 영문 → 영문).
+ * 4. 남은 점류(。 ｡ 등)를 `.`으로, 폭 없는 글자 · 방향 제어 글자를 지운다.
+ * 두 번 인코딩한 글(`%252E`)도 풀리도록 결과가 더 바뀌지 않을 때까지(최대 4번) 되풀이한다.
+ * 왜: 같은 주소를 여러 글자로 적을 수 있다(`192。168。0。10`, `wbs%2Ecorp%2Eexample`). 모양 규칙을 늘리지 않고 표기를 하나로 모은 뒤 판정한다.
+ * 출력에는 정규화한 글을 쓴다. 예: 「프로젝트。완료」는 「프로젝트.완료」로 나간다.
+ */
+export function normalizeExternal(text: string): string {
+  let current = text;
+  for (let round = 0; round < 4; round++) {
+    const next = current
+      .replace(/&#(\d{1,7});?/g, (m, n: string) => { const c = Number(n); return c > 0 && c <= 0x10FFFF ? String.fromCodePoint(c) : m; })
+      .replace(/&#x([0-9a-f]{1,6});?/gi, (m, n: string) => { const c = parseInt(n, 16); return c > 0 && c <= 0x10FFFF ? String.fromCodePoint(c) : m; })
+      .replace(/&([a-z]+);/gi, (m, n: string) => NAMED_ENTITIES[n.toLowerCase()] ?? m)
+      .replace(/(?:%[0-9a-f]{2})+/gi, (m) => { try { return decodeURIComponent(m); } catch { return m; } })
+      .normalize('NFKC')
+      .replace(DOTS, '.')
+      .replace(INVISIBLE, '');
+    if (next === current) break;
+    current = next;
+  }
+  return current;
+}
+
+/**
+ * 외부로 나가는 글을 보고용으로 바꾸는 **하나뿐인** 변환 함수(G L396 · L1052, Q-13 결정 A · fix1 · fix2 · fix3).
  * 메일 헤더(제목 등) · 본문(HTML · text/plain) · 보고용 화면 · 보고용 PDF가 모두 이 함수를 지난다.
- * 1. 주소처럼 보이는 것(ADDRESS)을 통째로 「(링크 생략)」으로 바꾼다. 일반 외부 주소도 예외가 없다.
- * 2. 내부 용어(Task ID · RP · 시도 · 모델 · Effort · 토큰)와 앱 메뉴 안내 · `href=`를 뺀다.
+ * 1. 정규화한다(normalizeExternal). 이후 단계와 **출력**은 모두 정규화한 글을 쓴다.
+ * 2. 주소처럼 보이는 것(ADDRESS)을 통째로 「(링크 생략)」으로 바꾼다. 일반 외부 주소도 예외가 없다.
+ * 3. 내부 용어(Task ID · RP · 시도 · 모델 · Effort · 토큰)와 앱 메뉴 안내 · `href=` · 메일 헤더 인코딩 문법(`=?…?=`)을 뺀다.
  * 왜: 제목 · 이름은 자유 입력이다. 메일 앱은 글로 적힌 주소도 링크로 바꿔 준다.
  * 예: 「TASK-0007 개선 http://127.1:5173/report/abc」 → 「개선 (링크 생략)」. 모두 지워져 빈 글이 되면 「(제목 비공개)」.
- * appUrl은 더 이상 판별에 쓰지 않는다(모든 주소 모양을 지운다). 호출하는 쪽과의 호환을 위해 받기만 한다.
+ * appUrl은 판별에 쓰지 않는다(모든 주소 모양을 지운다). 호출하는 쪽과의 호환을 위해 받기만 한다.
  */
 export function externalText(text: string, appUrl?: string | null): string {
   void appUrl;
-  const linked = ADDRESS.reduce((acc, re) => acc.replace(new RegExp(re.source, re.flags), ` ${LINK_OMITTED} `), text);
+  const linked = ADDRESS.reduce((acc, re) => acc.replace(new RegExp(re.source, re.flags), ` ${LINK_OMITTED} `), normalizeExternal(text));
   const cleaned = [...APP_HINTS, ...INTERNAL_TERMS].reduce((acc, re) => acc.replace(new RegExp(re.source, re.flags), ''), linked)
     .replace(/\s+/g, ' ').replace(/(\(링크 생략\)\s*)+/g, `${LINK_OMITTED} `).trim();
   return cleaned || '(제목 비공개)';
 }
 /**
- * 외부로 나가는 글 검사기(Q-13 결정 A · fix2). 변환 함수와 **같은 기준**으로 남은 주소 모양 · 내부 용어 · 메뉴 안내 · `href=`를 모두 돌려준다.
- * 빈 목록이면 통과(「주소 모양 0건」). 시험과 발송 직전(메일 worker · 보고용 PDF 생성 · SMTP 설정 저장) 모두 이 함수를 쓴다.
+ * 외부로 나가는 글 검사기(Q-13 결정 A · fix2 · fix3). 변환 함수와 **같은 기준**(정규화 뒤 같은 모양 규칙)으로
+ * 남은 주소 모양 · 내부 용어 · 메뉴 안내 · `href=` · 헤더 인코딩 문법을 모두 돌려준다. 빈 목록이면 통과(「주소 모양 0건」).
+ * 시험과 발송 직전(메일 worker · 보고용 PDF 생성 · SMTP 설정 저장) 모두 이 함수를 쓴다.
  * 글자(text/plain · 제목 · 헤더)에 쓴다. HTML은 externalHtmlLeaks로 보이는 글과 링크 태그를 함께 본다.
  */
 export function externalLeaks(text: string, appUrl?: string | null): string[] {
   void appUrl;
-  return [...ADDRESS, ...APP_HINTS, ...INTERNAL_TERMS].flatMap((re) => text.match(new RegExp(re.source, re.flags)) ?? []);
+  const normal = normalizeExternal(text);
+  return [...ADDRESS, ...APP_HINTS, ...INTERNAL_TERMS].flatMap((re) => normal.match(new RegExp(re.source, re.flags)) ?? []);
 }
-/** HTML에서 보이는 글만(스타일 · 스크립트 · 태그를 빼고 글자 기호를 푼다). 메일 본문 · PDF 문서 검사가 함께 쓴다. */
+/** HTML에서 보이는 글만(스타일 · 스크립트 · 제목 태그 · 태그를 뺀다). 글자 기호 풀기는 검사기의 정규화가 맡는다. */
 export function htmlVisibleText(html: string): string {
-  return html.replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<title[\s\S]*?<\/title>/gi, ' ').replace(/<[^>]+>/g, ' ')
-    .replace(/&#(\d+);/g, (_m, n: string) => String.fromCharCode(Number(n))).replace(/&#x([0-9a-f]+);/gi, (_m, n: string) => String.fromCharCode(parseInt(n, 16)))
-    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&');
+  return html.replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<title[\s\S]*?<\/title>/gi, ' ').replace(/<[^>]+>/g, ' ');
 }
-/** HTML 검사: 링크가 되는 태그 · 속성(`<a`, `href=`, `src=http…`)과 보이는 글의 externalLeaks. 빈 목록이면 통과 */
+/** HTML 검사: 링크가 되는 태그 · 속성(`<a`, `href=`, `src=http…`)과 보이는 글 · 문서 제목의 externalLeaks. 빈 목록이면 통과 */
 export function externalHtmlLeaks(html: string): string[] {
   const tags = html.match(/<a\b|<area\b|<base\b|\bhref\s*=|\bsrc\s*=\s*["']?(?:https?:|\/\/)/gi) ?? [];
   const title = /<title>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? '';
-  return [...tags, ...externalLeaks(htmlVisibleText(title)), ...externalLeaks(htmlVisibleText(html))];
+  return [...tags, ...externalLeaks(title), ...externalLeaks(htmlVisibleText(html))];
+}
+
+/**
+ * 보내는 사람 설정(`이름 <주소>` 또는 `주소`)을 **허용 목록**으로 읽는다(Q-13 fix3, Codex 재리뷰 3-1).
+ * - 이름: 한글 · 영문 · 숫자 · 공백 · 하이픈만, 40자 이하, 내부 용어 0건. 따옴표 · 괄호 · `=?…?=` · 줄바꿈 같은 그 밖의 글자는 모두 거부한다.
+ * - 주소: 평범한 메일 주소(`name@example.com`) 하나.
+ * 맞지 않으면 null(해석할 수 없는 이름을 빈 이름으로 통과시키지 않는다).
+ * 왜 허용 목록인가: 메일 생성기는 인코딩(`=?UTF-8?B?…?=`) · 주석(`(…)`) · 따옴표 · 줄바꿈을 여러 방식으로 읽는다.
+ *   그 해석을 따라가며 검사하기보다, 그런 문법이 될 수 있는 글자를 처음부터 받지 않는다. 헤더는 이 결과(이름 · 주소)로 우리가 만든다.
+ */
+export const SENDER_NAME_MAX = 40;
+export function parseSender(from: string): { name: string; address: string } | null {
+  // 제어 글자(줄바꿈 · 탭 등)가 하나라도 있으면 거부한다. 헤더 줄을 나누거나 이어 붙이는 데 쓰일 수 있다.
+  if ([...from].some((ch) => { const c = ch.codePointAt(0) ?? 0; return c < 0x20 || c === 0x7f; })) return null;
+  const angle = /^([^<>]*)<([^<>]+)>$/.exec(from.trim());
+  const name = (angle ? angle[1] ?? '' : '').trim();
+  const address = (angle ? angle[2] ?? '' : from).trim();
+  if (!/^[A-Za-z0-9._+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/.test(address)) return null;
+  if (angle && !name) return null;
+  if (name && !(new RegExp(`^[가-힣ㄱ-ㅎㅏ-ㅣA-Za-z0-9 -]{1,${String(SENDER_NAME_MAX)}}$`).test(name) && externalLeaks(name).length === 0)) return null;
+  return { name, address };
 }
 /** 옛 이름. externalText와 같은 함수다(앱 접속 주소를 모를 때). */
 export const scrubInternal = (text: string): string => externalText(text);
