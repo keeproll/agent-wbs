@@ -9,6 +9,8 @@
   /* 단계 표의 이름 칸 최소 폭(220px)이 휴대폰 폭을 넘지 않게 줄인다. 이름은 줄바꿈된다. */
   .ci-detail .gtr { grid-template-columns: minmax(0, 1fr) 72px 64px !important; }
   .ci-detail .vf-nav { flex-wrap: wrap; }
+  /* main 배지(.vf는 줄바꿈 금지)가 E2E 수·시각까지 담으면 390px 폭을 넘는다. 휴대폰에서만 줄바꿈을 허용한다(fix2, UAT-RESP-02). */
+  .ci-main { white-space: normal; }
 }
 
 /* 대기열 시각 칸의 실행 링크: 원본 글자 모양(검은 mono)을 그대로 두고, 가리키면 밑줄로 링크임을 알린다. */

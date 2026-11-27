@@ -116,7 +116,7 @@ function CiBody({ project }: { project: ProjectState }) {
         <div>
           <h1>{TITLE}</h1>
           <p className="page-sub">{SUB}</p>
-          <p className="page-sub" style={{ marginTop: 4 }}><span className={main.c}>{main.l}</span> <span className="mono muted">{summaryLine(allRuns, queue.data.items)}</span></p>
+          <p className="page-sub" style={{ marginTop: 4 }}><span className={`${main.c} ci-main`}>{main.l}</span> <span className="mono muted">{summaryLine(allRuns, queue.data.items)}</span></p>
         </div>
       </div>
       {allRuns.length === 0 && (

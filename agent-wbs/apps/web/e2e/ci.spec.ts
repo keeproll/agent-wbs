@@ -376,8 +376,9 @@ test.describe('재리뷰(review2-codex) 재현', () => {
   test('P2-1: 병합 불일치 실행의 상세는 「병합됨」이라 하지 않고 서버 대기열 상태를 보인다', async ({ page }) => {
     // 리뷰어 재현 그대로: ② PASS(mergeSha c4e81f0) + 연결 대기열 checking·actualMergeSha dead000
     await open(page, '/ci/ci-0112', (d) => {
-      const r = { ...d.runs.find((x) => x.id === 'ci-0112')!, startedAt: '2026-11-06T00:00:00Z' } as (typeof d.runs)[number];
-      d.runs = [r];
+      const found = d.runs.find((x) => x.id === 'ci-0112');
+      if (!found) throw new Error('시험 자료에 ci-0112가 없다');
+      d.runs = [{ ...found, startedAt: '2026-11-06T00:00:00Z' }];
       d.queue = [{ ...mismatchItem(), taskKey: 'TASK-0003', pr: 7, ciRunId: 'ci-0112' }];
     });
     await expect(page.getByText(/main 확인 필요 · 병합 불일치/)).toBeVisible();
@@ -438,6 +439,14 @@ test.describe('UAT-RESP-01 표 가로 스크롤(1024·768)', () => {
 
 test.describe('390px 휴대폰', () => {
   test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3 });
+
+  test('fix2: main 배지가 길어도(E2E 수·시각) 390px 머리글을 넘지 않는다(글꼴 로딩과 무관)', async ({ page }) => {
+    // 재현: 웹 글꼴이 오기 전 대체 글꼴에서 배지가 347px > 머리글 306px로 넘쳤다(review2 1회 실패, fix2 실측). 숫자가 크면 글꼴과 무관하게 넘친다.
+    await open(page, '/ci', (d) => { for (const r of d.runs) if (r.stage === 'night') r.e2e = { passed: 1234, total: 1250 }; });
+    await page.evaluate(() => document.fonts.ready);
+    await expect(page.getByText(/E2E 1234 \/ 1250/)).toBeVisible();
+    expect(await pageOverflow(page)).toEqual({ page: false, offenders: [] });
+  });
 
   test('UAT-RESP-02 / UAT-TG-09: 알림 링크(/ci/<id>)로 로그인 후 CI 상세를 잘림 없이 열람한다', async ({ page }) => {
     const api = await fakeApi(page);
