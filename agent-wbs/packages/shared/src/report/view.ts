@@ -8,7 +8,7 @@
 import type { Static } from 'typebox';
 import { Value } from 'typebox/value';
 import { ReportSnapshot } from '../api/models.ts';
-import { daysBetween } from './period.ts';
+import { daysBetween, seoulDay } from './period.ts';
 
 export type ReportSnapshotData = Static<typeof ReportSnapshot>;
 /** 스냅샷 저장 전 검사(data-model §1: jsonb는 쓰기 시 TypeBox 검증)에 쓰는 계약 스키마. */
@@ -18,6 +18,16 @@ export interface Kpi { label: string; value: string; sub: string }
 /** `2026-11-10` → `11-10`. 없으면 `—` */
 export const monthDay = (day: string | null): string => (day ? day.slice(5) : '—');
 const fullDay = (day: string | null): string => day ?? '—';
+
+/**
+ * 그 시점 상태를 되살릴 수 없는 보고서면 상태 기록 시작일(서울 날짜), 아니면 null(owner 2026-11-27 아이템 13).
+ * 이때 상태에서 나온 숫자(완료·작업량·상태 분포 등)는 0이 아니라 「기록 없음」이다. 지어낸 0을 보이지 않는다.
+ */
+export function stateMissingFrom(s: ReportSnapshotData): string | null {
+  if (!s.basis?.missing.includes('state')) return null;
+  return s.basis.stateFrom ? seoulDay(s.basis.stateFrom) : '—';
+}
+export const NO_RECORD = '기록 없음';
 
 /** 두 보기가 함께 쓰는 계산값. 화면 문구는 이 값만 쓴다. */
 export function reportFigures(s: ReportSnapshotData) {
@@ -47,9 +57,11 @@ const pctText = (n: number) => `${String(n)}%`;
 export function internalKpis(s: ReportSnapshotData): Kpi[] {
   const f = reportFigures(s);
   const delta = forecastDeltaLabel(f.forecastDeltaDays);
+  const none = stateMissingFrom(s);
+  const noneSub = `상태 기록 시작(${none ?? ''}) 전 시점`;
   return [
-    { label: '완료 (기간)', value: `${String(f.doneInPeriod)}건`, sub: `누적 ${String(f.doneTotal)} / ${String(f.taskCount)}건` },
-    { label: '작업량 기준 완료율', value: pctText(f.workPct), sub: `기간 시작 ${pctText(f.workPctBefore)}` },
+    none ? { label: '완료 (기간)', value: NO_RECORD, sub: noneSub } : { label: '완료 (기간)', value: `${String(f.doneInPeriod)}건`, sub: `누적 ${String(f.doneTotal)} / ${String(f.taskCount)}건` },
+    none ? { label: '작업량 기준 완료율', value: NO_RECORD, sub: noneSub } : { label: '작업량 기준 완료율', value: pctText(f.workPct), sub: `기간 시작 ${pctText(f.workPctBefore)}` },
     { label: `완료 예상 (기준 v${String(f.baselineVersion)})`, value: monthDay(f.forecast), sub: `범위 ${monthDay(f.lo)} ~ ${monthDay(f.hi)}${delta ? ` · ${delta}` : ''}` },
     { label: '가동률 (기간)', value: pctText(f.uptimePct), sub: f.gapHours ? `중단 ${String(f.gapHours)}시간` : '중단 없음' },
   ];
@@ -70,8 +82,9 @@ export function externalView(s: ReportSnapshotData, kind: 'daily' | 'weekly' | '
   const delta = forecastDeltaLabel(f.forecastDeltaDays);
   const slack = f.slackDays;
   const target = fullDay(f.target);
+  const none = stateMissingFrom(s);
   const summary = [
-    `기간 중 ${String(f.doneInPeriod)}건 완료, 누적 ${String(f.doneTotal)} / ${String(f.taskCount)}건 (작업량 기준 ${pctText(f.workPct)}${f.workPct !== f.workPctBefore ? `, 기간 시작 ${pctText(f.workPctBefore)}` : ''}).`,
+    none ? `이 기간 끝 시점의 진행 현황은 기록이 없어 산정하지 않았습니다(상태 기록 시작 ${none}).` : `기간 중 ${String(f.doneInPeriod)}건 완료, 누적 ${String(f.doneTotal)} / ${String(f.taskCount)}건 (작업량 기준 ${pctText(f.workPct)}${f.workPct !== f.workPctBefore ? `, 기간 시작 ${pctText(f.workPctBefore)}` : ''}).`,
     f.forecast !== null
       ? `완료 예상일은 ${f.forecast} (범위 ${monthDay(f.lo)} ~ ${monthDay(f.hi)})${delta ? `, ${delta}` : ''}${slack === null ? '.' : slack >= 0 ? ` — 목표일(${target})까지 여유 ${String(slack)}일.` : ` — 목표일(${target}) 대비 ${String(-slack)}일 초과 예상.`}`
       : '완료 예상일을 아직 산정하지 않았습니다.',
@@ -85,11 +98,12 @@ export function externalView(s: ReportSnapshotData, kind: 'daily' | 'weekly' | '
   if (f.fail) risks.push(`품질 보완 작업 ${String(f.fail)}건 — 보완 후 재검증 예정`);
   if (f.blocked) risks.push(`선행 작업 대기 ${String(f.blocked)}건 — 선행 완료 후 순차 진행`);
   if (f.gapHours >= 12) risks.push('작업 환경 가동 중단이 길어 진행 속도 저하');
+  if (none) risks.push(`진행 현황 기록 없음 — 상태 기록 시작(${none}) 전 기간`);
   if (!risks.length) risks.push('특이 위험 없음');
   return {
     kpis: [
-      { label: '완료', value: `${String(f.doneInPeriod)}건`, sub: `누적 ${String(f.doneTotal)} / ${String(f.taskCount)}건` },
-      { label: '진척률 (작업량)', value: pctText(f.workPct), sub: `기간 시작 ${pctText(f.workPctBefore)}` },
+      none ? { label: '완료', value: NO_RECORD, sub: `상태 기록 시작(${none}) 전 시점` } : { label: '완료', value: `${String(f.doneInPeriod)}건`, sub: `누적 ${String(f.doneTotal)} / ${String(f.taskCount)}건` },
+      none ? { label: '진척률 (작업량)', value: NO_RECORD, sub: `상태 기록 시작(${none}) 전 시점` } : { label: '진척률 (작업량)', value: pctText(f.workPct), sub: `기간 시작 ${pctText(f.workPctBefore)}` },
       { label: '완료 예상일', value: fullDay(f.forecast), sub: `범위 ${monthDay(f.lo)} ~ ${monthDay(f.hi)}` },
       { label: '목표일 대비', value: slack === null ? '—' : slack >= 0 ? `여유 ${String(slack)}일` : `${String(-slack)}일 초과`, sub: `목표 ${target}` },
     ],

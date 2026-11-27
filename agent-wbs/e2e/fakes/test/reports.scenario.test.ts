@@ -17,6 +17,7 @@ import { createPool, recreateTestDatabase, runMigrations, seedDemo, type Pool } 
 import { buildApp } from '../../../apps/api/src/app.ts';
 import { issueLoginLink } from '../../../apps/api/src/platform/credentials.ts';
 import { createCustomReport, generateDueReports } from '../../../apps/api/src/reports/service.ts';
+import { buildSnapshot } from '../../../apps/api/src/reports/snapshot.ts';
 import { inEpoch } from '../../../apps/api/src/platform/transaction.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -28,10 +29,12 @@ let pool: Pool;
 let close: () => Promise<void>;
 let lead: (method: string, path: string, body?: object) => Promise<{ status: number; body: Body }>;
 
+/** 원본 자료가 이미 그 상태였다고 보는 시각(원본 프로젝트 시작 10-27 전) */
+const PAST = '2026-10-20T00:00:00+09:00';
 /** 서울 날짜·시각 → UTC ISO */
 const kst = (day: string, hm = '00:00') => new Date(`${day}T${hm}:00+09:00`).toISOString().replace(/\.(\d{3})Z$/, '.$1000Z');
 
-async function fixture() {
+async function fixture(owner: Pool) {
   // 원본 프로젝트 시작일(P MOCK project.start). 등록 시각 기본값(오늘) 대신 원본 값을 쓴다.
   await owner.query("update projects set start_date='2026-10-27', target_date='2026-11-12'");
   // 자정 경계: TASK-0002는 10-28 23:59:59.999(서울)에, TASK-0003은 10-29 00:00:00(서울)에 완료.
@@ -69,8 +72,29 @@ beforeAll(async () => {
   const app = buildApp(pool, false, { origin, lan: false });
   close = async () => { await app.close(); await pool.end(); await owner.end(); };
   await runMigrations(owner);
-  await seedDemo(owner, db.href);
-  await fixture();
+  // 원본 자료는 「프로젝트 시작(10-27) 전부터 이 상태였다」로 넣는다. 상태 기록(state_log)의 시각을 원본 시작 전으로 둔다.
+  // 왜: 보고서는 기간 끝 시점의 상태를 상태 기록에서 되살린다(owner 2026-11-27 아이템 13). 오늘 넣은 자료는 10월 기간에는 없던 것이 된다.
+  // 기록 시각 지정(awbs.state_at)은 시험·데모 자료 전용이다. 새 연결에만 적용되므로 이 준비용 연결 묶음을 따로 쓴다.
+  const name = db.pathname.slice(1);
+  await owner.query(`alter database "${name}" set awbs.state_at='${PAST}'`);
+  const past = createPool(db.href, { onError: () => undefined });
+  try {
+    await seedDemo(past, db.href);
+    await fixture(past);
+    // 추가 전용 표(검증·결함·Evidence·파일·추정·입력 버전)의 기록 시각도 과거로 둔다. 보호 트리거를 끈 준비용 연결에서만 한다.
+    const c = await past.connect();
+    try {
+      await c.query('begin');
+      await c.query('set local session_replication_role=replica');
+      for (const t of ['verifications', 'defects', 'evidence', 'attempt_files', 'task_estimates', 'input_versions', 'input_version_results']) {
+        await c.query(`update ${t} set created_at=$1 where created_at>$1`, [PAST]);
+      }
+      await c.query('commit');
+    } finally { c.release(); }
+  } finally {
+    await past.end();
+    await owner.query(`alter database "${name}" reset awbs.state_at`);
+  }
   const link = await issueLoginLink(pool);
   const baseUrl = await app.listen({ host: '127.0.0.1', port: 0 });
   const login = await fetch(`${baseUrl}/api/auth/session`, { method: 'POST', headers: { origin, 'content-type': 'application/json' }, body: JSON.stringify({ method: 'link', token: link }) });
@@ -165,9 +189,10 @@ describe('§4.0 보고서 12섹션 필드(값이 있는 주간 RPT-W-261026)', (
   test('2. 알림·보류 CP·전달 실패·재작업', () => {
     const texts = s.issues.map((i) => i.text).join('\n');
     expect(texts).toContain('Claude 사용량 부족');
-    expect(texts).toContain('메시지 MSG-003 전달 실패 (TASK-0005)');
-    // demo seed의 변경 제안(CP-002 review)은 등록 시각(오늘)에 생겼다. 생성 시각(11-04)보다 늦어 이 보고서에는 없다.
-    expect(texts).not.toContain('CP-002');
+    // MSG-003(11-03 전달 실패)은 기간 끝(11-02 00:00) 뒤의 일이라 이 주간 보고서에는 없다(기간 말 시점).
+    expect(texts).not.toContain('MSG-003');
+    // 준비 자료에서 CP-002(review)는 10-20부터 있었다(상태 기록 기준). 기간 끝 시점에 검토 대기다.
+    expect(texts).toMatch(/CP-002 Change Proposal 검토 대기 — /);
     expect(s.issues.some((i) => i.taskKey === 'TASK-0007' && i.text.includes('재작업 필요'))).toBe(true);
   });
   test('3. 일별 5지표(주간: 7일)', () => {
@@ -355,7 +380,7 @@ describe('누락 보충 상한(G L1047)', () => {
  * 리뷰 1 재현용: 보고서가 체크리스트를 읽은 직후, 다른 연결이 필수 항목 완료를 해제하고 저장한다.
  * 보고서의 읽기는 한 시점이어야 하므로 체크리스트·Gate가 서로 다른 시점 값을 담으면 안 된다.
  */
-function poolChangingChecklistMidway(base: Pool): Pool {
+function poolChangingChecklistMidway(base: Pool, stateAt?: string): Pool {
   let fired = false;
   return {
     connect: async () => {
@@ -366,9 +391,16 @@ function poolChangingChecklistMidway(base: Pool): Pool {
       const release = c.release.bind(client);
       c.query = async (...args: unknown[]) => {
         const result = await query(...args);
-        if (!fired && typeof args[0] === 'string' && /from checklist_items/.test(args[0])) {
+        if (!fired && typeof args[0] === 'string' && /checklist_items/.test(args[0])) {
           fired = true;
-          await owner.query("update checklist_items set done=false where required and task=(select id from tasks where task_key='TASK-0007')");
+          // stateAt: 보고서 시점(T)보다 앞선 시각으로 기록되지만 늦게 커밋되는 변경(진행 중이던 트랜잭션)을 흉내 낸다.
+          const w = await owner.connect();
+          try {
+            await w.query('begin');
+            if (stateAt) await w.query("select set_config('awbs.state_at',$1,true)", [stateAt]);
+            await w.query("update checklist_items set done=false where required and task=(select id from tasks where task_key='TASK-0007')");
+            await w.query('commit');
+          } finally { w.release(); }
         }
         return result;
       };
@@ -385,9 +417,11 @@ describe('리뷰 1·2: 한 시점 읽기, 자동 반영 보류 CP', () => {
   };
   test('기간 지정: 생성 도중 체크리스트가 바뀌어도 체크리스트와 Gate가 같은 시점 값이다', async () => {
     await owner.query("update checklist_items set done=true where task=(select id from tasks where task_key='TASK-0007')");
+    await new Promise((r) => setTimeout(r, 20));
+    const inflight = new Date(Date.now() - 5).toISOString();
     const today = seoulDay(new Date());
     const id = await projectId();
-    const r = await inEpoch(pool, 1, (c) => createCustomReport(c, id, { from: addDays(today, -1), to: today, view: 'int' }, poolChangingChecklistMidway(pool)));
+    const r = await inEpoch(pool, 1, (c) => createCustomReport(c, id, { from: addDays(today, -1), to: today, view: 'int' }, poolChangingChecklistMidway(pool, inflight)));
     const t = await t7(r.id);
     expect(t?.checklist.requiredLeft).toBe(0);
     expect(t?.gate.unmet).not.toContain('checklist');
@@ -395,11 +429,13 @@ describe('리뷰 1·2: 한 시점 읽기, 자동 반영 보류 CP', () => {
   test('정기 생성: 같은 상황에서도 같은 시점 값이다', async () => {
     await owner.query("update checklist_items set done=true where task=(select id from tasks where task_key='TASK-0007')");
     expect(await generateDueReports(poolChangingChecklistMidway(pool), 1, { now: kst('2027-02-02', '07:00') })).toBeGreaterThan(0);
-    const r = (await list('daily')).find((x) => x.from === '2027-02-01');
+    // 첫 보고서(01-31 일간)를 만드는 도중에 변경이 커밋된다. 그 보고서 안에서 체크리스트와 Gate가 같은 시점인지 본다.
+    const r = (await list('daily')).find((x) => x.from === '2027-01-31');
     assert(r);
     const t = await t7(r.id);
-    expect(t?.checklist.requiredLeft).toBe(0);
-    expect(t?.gate.unmet).not.toContain('checklist');
+    assert(t);
+    // 정기 생성은 동시 수정과 부딪히면(40001) 새 시점으로 다시 만든다. 그때는 변경 뒤 값이 되므로, 어느 시점이든 둘이 같은 말을 하는지 본다.
+    expect(t.checklist.requiredLeft === 0, JSON.stringify({ checklist: t.checklist, gate: t.gate })).toBe(!t.gate.unmet.includes('checklist'));
   });
   test('held 변경 제안은 「자동 반영 보류」, review는 「검토 대기」로 구분한다(P L3812)', async () => {
     await owner.query("update change_proposals set status='held' where cp_key='CP-002'");
@@ -408,6 +444,76 @@ describe('리뷰 1·2: 한 시점 읽기, 자동 반영 보류 CP', () => {
     const issues = (await open(r.body.id as string)).snapshot.issues.map((i) => i.text);
     await owner.query("update change_proposals set status='review' where cp_key='CP-002'");
     expect(issues.find((x) => x.startsWith('CP-002'))).toMatch(/^CP-002 Change Proposal 자동 반영 보류 — /);
+  });
+});
+
+describe('기간 말 재구성(owner 2026-11-27 아이템 13): 그때 바로 찍은 값 = 나중에 되살린 값', () => {
+  /** 한 시점(반복 읽기) 연결에서 지금 표(live)와 상태 기록(log)으로 같은 시각 T의 스냅샷을 만든다. */
+  const capture = async (at?: string) => {
+    const c = await pool.connect();
+    try {
+      await c.query('begin isolation level repeatable read read only');
+      const now = at ?? (await c.query<{ now: string }>(`select to_char(clock_timestamp() at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') now`)).rows[0]?.now ?? '';
+      const today = seoulDay(now);
+      const period = { kind: 'custom' as const, from: '2026-10-26', to: today, at: now };
+      const id = await projectId();
+      const live = at ? null : await buildSnapshot(c, id, period, 'live');
+      const log = await buildSnapshot(c, id, period, 'log');
+      await c.query('commit');
+      return { now, live, log };
+    } finally { c.release(); }
+  };
+  /** 결정적 난수(같은 씨앗이면 같은 변경 순서) */
+  const rng = (seed: number) => () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  async function mutate(r: () => number, steps: number) {
+    const pick = <T,>(xs: T[]) => xs[Math.floor(r() * xs.length)] as T;
+    const tasks = (await owner.query<{ id: string }>('select id from tasks where deleted_at is null')).rows.map((x) => x.id);
+    const ops = [
+      async (t: string) => owner.query('update tasks set title=$2 where id=$1', [t, `바뀐 제목 ${String(Math.floor(r() * 1000))}`]),
+      async (t: string) => owner.query("update tasks set status=$2 where id=$1 and status in ('ready','approval','planning')", [t, pick(['ready', 'approval', 'planning'])]),
+      async (t: string) => owner.query('update tasks set conflict_group=$2 where id=$1', [t, pick([null, 'FE', 'BE'])]),
+      async (t: string) => owner.query('update checklist_items set done=not done where task=$1', [t]),
+      async (t: string) => owner.query('update task_outputs set delivered=not delivered where task=$1', [t]),
+      async (t: string) => owner.query('update task_grades set effort=$2 where task=$1', [t, pick(['low', 'medium', 'high'])]),
+      async (t: string) => owner.query('update messages set pending_next=not pending_next where task=$1 and dir=$2', [t, 'out']),
+      async () => owner.query("update change_proposals set status=$1 where cp_key='CP-002'", [pick(['review', 'changes', 'held'])]),
+      async (t: string) => owner.query("update tasks set deleted_at=case when deleted_at is null then now() end where id=$1 and status='planning'", [t]),
+    ];
+    for (let i = 0; i < steps; i++) {
+      try { await pick(ops)(pick(tasks)); } catch { /* 제약이 거부한 변경은 건너뛴다(그 자체가 기록되지 않는다) */ }
+    }
+  }
+
+  test('같은 시각이면 상태 기록으로 되살린 스냅샷이 지금 표로 만든 것과 같다(정기·기간 지정 공통 함수)', async () => {
+    const { live, log } = await capture();
+    expect(log).toEqual(live);
+    expect(log.all.length).toBeGreaterThan(0);
+  });
+
+  test.each([1, 2, 3, 4, 5])('씨앗 %i: T에 바로 찍은 스냅샷 = 그 뒤 무작위 변경 30번 후 T로 되살린 스냅샷', async (seed) => {
+    const first = await capture();
+    await mutate(rng(seed), 30);
+    const later = await capture(first.now);
+    expect(later.log).toEqual(first.live);
+  });
+
+  test('상태 기록이 시작되기 전 시점은 지어내지 않고 「기록 없음」(basis.missing=state)', async () => {
+    // 0036 이전 DB를 흉내 낸다: 상태 기록 시작(seed) 표시를 11-10에 남긴다.
+    const id = await projectId();
+    await owner.query("insert into state_log(created_at,project_id,tbl,row_id,op,data) values($1,$2,'projects',$2,'seed',null)", [kst('2026-11-10', '00:00'), id]);
+    const c = await pool.connect();
+    try {
+      await c.query('begin isolation level repeatable read read only');
+      const old = await buildSnapshot(c, id, { kind: 'weekly', from: '2026-10-26', to: '2026-11-01', at: kst('2026-11-02', '07:00') });
+      const recent = await buildSnapshot(c, id, { kind: 'custom', from: '2026-11-10', to: seoulDay(new Date()), at: new Date().toISOString() });
+      await c.query('commit');
+      expect(old.basis).toEqual({ asOf: expect.any(String), stateFrom: kst('2026-11-10', '00:00'), missing: ['state'] });
+      expect([old.summary.statuses, old.active, old.all, old.next, old.done]).toEqual([[], [], [], [], []]);
+      // 추가 전용 기록(재조정·중단)은 시각으로 알 수 있어 그대로 남는다.
+      expect(old.replans.map((r) => r.replanId)).toEqual(['RP-002']);
+      expect(recent.basis?.missing).toEqual([]);
+      expect(snapshotProblem(old)).toBeNull();
+    } finally { c.release(); }
   });
 });
 

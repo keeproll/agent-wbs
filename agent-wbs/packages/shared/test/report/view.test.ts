@@ -99,3 +99,21 @@ describe('리뷰 3: 보고용에 들어가는 자유 입력(작업 제목·프�
     expect(ext.plan).toEqual(['개선 2단계 (11-03 ~ 11-04)']);
   });
 });
+
+describe('기간 말 재구성: 그 시점 상태를 되살릴 수 없으면 「기록 없음」(owner 2026-11-27 아이템 13)', () => {
+  const missing = snap({ basis: { asOf: '2026-11-01T15:00:00.000Z', stateFrom: '2026-11-09T15:00:00.000000Z', missing: ['state'] } });
+  test('팀장용: 상태에서 나온 지표(완료·작업량)는 숫자 대신 기록 없음', () => {
+    const k = internalKpis(missing);
+    expect([k[0]?.value, k[1]?.value]).toEqual(['기록 없음', '기록 없음']);
+    expect(k[0]?.sub).toBe('상태 기록 시작(2026-11-10) 전 시점');
+  });
+  test('보고용: 지어낸 숫자 문장 대신 기록 없음 문장', () => {
+    const e = externalView(missing, 'weekly');
+    expect([e.kpis[0]?.value, e.kpis[1]?.value]).toEqual(['기록 없음', '기록 없음']);
+    expect(e.summary[0]).toBe('이 기간 끝 시점의 진행 현황은 기록이 없어 산정하지 않았습니다(상태 기록 시작 2026-11-10).');
+    expect(e.risks).not.toContain('특이 위험 없음');
+  });
+  test('기록이 있으면 지금과 같다', () => {
+    expect(internalKpis(snap())[0]?.value).toBe('0건');
+  });
+});

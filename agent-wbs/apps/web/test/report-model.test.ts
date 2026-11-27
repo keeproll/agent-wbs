@@ -137,3 +137,10 @@ test('리뷰 3: 보고용 문서 제목의 프로젝트 이름에서도 내부 �
   expect(docTitle('TASK-0001 이관 프로젝트', 'weekly', 'ext')).toBe('이관 프로젝트 — 주간 보고서 (보고용)');
   expect(docTitle('TASK-0001 이관 프로젝트', 'weekly', 'int')).toBe('TASK-0001 이관 프로젝트 — 주간 보고서');
 });
+
+test('기간 말 재구성: 그 시점 상태가 기록 전이면 상태 칸은 「기록 없음」 안내(owner 2026-11-27 아이템 13)', () => {
+  const d = internalDoc({ ...empty, basis: { asOf: T('2026-11-02 00:00'), stateFrom: T('2026-11-10 00:00'), missing: ['state'] } });
+  expect(d.statusLine).toBe('기록 없음');
+  expect(d.noRecord).toBe('기록 없음 — 이 기간 끝 시점의 상태는 상태 기록 시작(2026-11-10) 전이라 되살릴 수 없습니다.');
+  expect(internalDoc(empty).noRecord).toBeNull();
+});

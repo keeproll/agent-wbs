@@ -43706,6 +43706,37 @@
                 }
               }
             }
+          },
+          "basis": {
+            "type": "object",
+            "required": [
+              "asOf",
+              "stateFrom",
+              "missing"
+            ],
+            "properties": {
+              "asOf": {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              "stateFrom": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Timestamp"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "missing": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "state"
+                  ]
+                }
+              }
+            }
           }
         },
         "title": "ReportSnapshot"

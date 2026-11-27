@@ -7,7 +7,7 @@
  *   왜: 화면·메일·PDF의 숫자와 문장이 서로 어긋나지 않게 한다.
  */
 import {
-  addDays, customPeriodProblem, externalView, scrubInternal, internalKpis, MAX_CUSTOM_DAYS, monthDay, mondayOf, reportFigures, TASK_STATUSES,
+  addDays, customPeriodProblem, externalView, scrubInternal, stateMissingFrom, internalKpis, MAX_CUSTOM_DAYS, monthDay, mondayOf, reportFigures, TASK_STATUSES,
   type ExternalView, type Kpi, type ReportSnapshotData,
 } from '@awbs/shared';
 import type { ResponseOf } from '../../shared/api/contract.ts';
@@ -102,9 +102,12 @@ export function internalDoc(s: S) {
   const a = s.summary.attempts;
   const maxS = Math.max(1, ...s.series.map((x) => Math.max(x.attempts, x.done)));
   const order = (st: string) => TASK_STATUSES.indexOf(st as never);
+  const missingFrom = stateMissingFrom(s);
   return {
     kpis: internalKpis(s),
-    statusLine: s.summary.statuses.length ? [...s.summary.statuses].sort((x, y) => order(x.status) - order(y.status)).map((x) => `${statusOf(x.status).l} ${String(x.count)}`).join(' · ') : 'Task 없음',
+    /** 그 시점 상태를 되살릴 수 없으면 안내 문구(상태 칸 대신 보인다), 아니면 null */
+    noRecord: missingFrom ? `기록 없음 — 이 기간 끝 시점의 상태는 상태 기록 시작(${missingFrom}) 전이라 되살릴 수 없습니다.` : null,
+    statusLine: missingFrom ? '기록 없음' : s.summary.statuses.length ? [...s.summary.statuses].sort((x, y) => order(x.status) - order(y.status)).map((x) => `${statusOf(x.status).l} ${String(x.count)}`).join(' · ') : 'Task 없음',
     execLine: `실행 시도 ${String(a.total)}건 (개발 · 재작업 ${String(a.dev)} / QA · 재검증 ${String(a.qa)}) · 검증 PASS ${String(a.pass)} · FAIL ${String(a.fail)} · 등급 자동 상향 ${String(a.escalated)} · 중단 ${String(a.interrupted)} · 토큰 ${tokensK(a.tokens)}`,
     issues: s.issues.map((x) => ({ ...(ISSUE[x.level] ?? { cls: 'sc sc-none', label: '참고' }), text: x.text, taskKey: x.taskKey })),
     series: s.series.map((x) => ({

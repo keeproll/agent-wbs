@@ -223,7 +223,7 @@ function InternalView({ d, kind, weekly }: { d: ReportDoc; kind: ReportKind; wee
       )}
       <p className="rpt-note">현재 상태 분포 — {x.statusLine}</p>
       <section className="rpt-sec"><h3>1. 완료한 Task</h3>
-        {!x.done.length && <p className="muted">기간 중 완료한 Task가 없습니다.</p>}
+        {x.noRecord ? <p className="muted" role="note">{x.noRecord}</p> : !x.done.length && <p className="muted">기간 중 완료한 Task가 없습니다.</p>}
         {x.done.map((t) => (
           <div key={t.id} className="rpt-card">
             <div className="rpt-ch"><span className="sc sc-ok">완료</span>{task(t.id)}<span className="mono muted">{t.wbs}</span><b>{t.title}</b><span className="muted" style={{ marginLeft: 'auto' }}>{t.cls}</span></div>
@@ -235,7 +235,7 @@ function InternalView({ d, kind, weekly }: { d: ReportDoc; kind: ReportKind; wee
         ))}
       </section>
       <section className="rpt-sec"><h3>2. 진행 중 · 확인 필요 Task</h3>
-        {!x.active.length && <p className="muted">진행 중인 Task가 없습니다.</p>}
+        {x.noRecord ? <p className="muted" role="note">{x.noRecord}</p> : !x.active.length && <p className="muted">진행 중인 Task가 없습니다.</p>}
         {x.active.map((t) => (
           <div key={t.id} className="rpt-card">
             <div className="rpt-ch"><span className="tag">{t.st}</span>{task(t.id)}<span className="mono muted">{t.wbs}</span><b>{t.title}</b><span className="muted" style={{ marginLeft: 'auto' }}>{t.cls} · 진행률 {t.pct}</span></div>
@@ -296,7 +296,7 @@ function InternalView({ d, kind, weekly }: { d: ReportDoc; kind: ReportKind; wee
         ))}
       </section>
       <section className="rpt-sec"><h3>8. {kind === 'daily' ? '다음 날 예정' : '다음 주 예정'}</h3>
-        {!x.next.length && <p className="muted">예정된 Task가 없습니다.</p>}
+        {x.noRecord ? <p className="muted" role="note">{x.noRecord}</p> : !x.next.length && <p className="muted">예정된 Task가 없습니다.</p>}
         {x.next.length > 0 && (
           <div className="rpt-tbl" role="table" aria-label="예정">
             <div className="rpt-trw h nx" role="row">{['Task', '제목', '상태', '예상 기간', '담당 · 등급', '선행 조건 · 충돌 묶음'].map((h) => <span key={h} role="columnheader">{h}</span>)}</div>
@@ -310,7 +310,7 @@ function InternalView({ d, kind, weekly }: { d: ReportDoc; kind: ReportKind; wee
         )}
       </section>
       <section className="rpt-sec rpt-appx"><h3>부록. 전체 Task 현황 (보고서 생성 시점)</h3>
-        {!x.all.length && <p className="muted">Task가 없습니다.</p>}
+        {x.noRecord ? <p className="muted" role="note">{x.noRecord}</p> : !x.all.length && <p className="muted">Task가 없습니다.</p>}
         <div className="rpt-tbl" role="table" aria-label="전체 Task 현황">
           <div className="rpt-trw h al" role="row">{['WBS', 'Task', '제목', '상태', '개발/검증', '진행률', '체크리스트', '검증', '완료 예상', '기준 대비'].map((h) => <span key={h} role="columnheader">{h}</span>)}</div>
           {x.all.map((t) => (

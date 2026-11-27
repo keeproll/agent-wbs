@@ -1,0 +1,97 @@
+// 0036 상태 기록(state_log, M6-01 기간 말 재구성 — owner 2026-11-27 아이템 13).
+// - 보고서가 읽는 바뀌는 표의 행이 바뀔 때마다 행 전체를 추가 전용으로 남긴다.
+// - 앱 권한은 고치기·지우기·비우기를 못 한다. 초기화(reset_project)가 끝나면 기록이 모두 지워진다.
+// - 0036 전부터 있던 행은 「seed」로 한 번 남는다(그보다 이른 시점은 되살릴 수 없다).
+import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { drizzle } from 'drizzle-orm/node-postgres';
+import { migrate } from 'drizzle-orm/node-postgres/migrator';
+import { afterAll, beforeAll, expect, inject, test } from 'vitest';
+import { createPool, recreateTestDatabase, runMigrations, seedSystem, type Pool } from '../src/index.ts';
+
+const url = new URL(inject('testDatabaseUrl'));
+url.pathname += '_state_log';
+let owner: Pool;
+let app: Pool;
+
+async function project(pool: Pool) {
+  const p = (await pool.query<{ id: string }>("insert into projects(name,repo_url,repo_owner,repo_name,lead_instruction,phase) values('기록 시험','https://github.com/o/r','o','r','','active') returning id")).rows[0]?.id ?? '';
+  const ph = (await pool.query<{ id: string }>("insert into wbs_nodes(project_id,node_key,kind,title,sort_order) values($1,'PH','phase','단계',1) returning id", [p])).rows[0]?.id;
+  const wp = (await pool.query<{ id: string }>("insert into wbs_nodes(project_id,node_key,kind,parent_id,title,sort_order) values($1,'WP','work_package',$2,'묶음',1) returning id", [p, ph])).rows[0]?.id;
+  const t = (await pool.query<{ id: string }>(`insert into tasks(project_id,task_key,wbs_node_id,sort_order,title,work_type,primary_domain,related_domains,priority,assignee_agent,verifier_agent,status,verif_state)
+    values($1,'TASK-0001',$2,1,'기록','Test','BE','{}',1,'Codex','Claude','ready','none') returning id`, [p, wp])).rows[0]?.id ?? '';
+  return { p, t };
+}
+
+beforeAll(async () => {
+  await recreateTestDatabase(url.href);
+  owner = createPool(url.href, { max: 3, onError: () => undefined });
+  await runMigrations(owner);
+  await seedSystem(owner);
+  const appUrl = new URL(url);
+  appUrl.searchParams.set('options', '-c role=awbs_app');
+  app = createPool(appUrl.href, { max: 3, onError: () => undefined });
+});
+afterAll(async () => { await app.end(); await owner.end(); });
+
+test('행을 만들고·고치고·지우면 그때의 행 전체가 차례로 남는다', async () => {
+  const { p, t } = await project(app);
+  await app.query("update tasks set status='running' where id=$1", [t]);
+  await app.query("update tasks set status='qa',deleted_at=now() where id=$1", [t]);
+  const rows = (await owner.query<{ op: string; status: string | null; deleted: string | null; project_id: string }>(
+    "select op,data->>'status' status,data->>'deleted_at' deleted,project_id from state_log where tbl='tasks' and row_id=$1 order by created_at,seq", [t])).rows;
+  expect(rows.map((r) => [r.op, r.status, r.deleted !== null])).toEqual([['insert', 'ready', false], ['update', 'running', false], ['update', 'qa', true]]);
+  expect(new Set(rows.map((r) => r.project_id))).toEqual(new Set([p]));
+  // 되살리기: 원래 표 모양의 행으로 돌아간다.
+  const back = (await owner.query<{ status: string; task_key: string }>(
+    "select (jsonb_populate_record(null::public.tasks,data)).status::text status,(jsonb_populate_record(null::public.tasks,data)).task_key from state_log where tbl='tasks' and row_id=$1 order by seq limit 1", [t])).rows[0];
+  expect(back).toEqual({ status: 'ready', task_key: 'TASK-0001' });
+  expect((await owner.query("select count(*)::int n from state_log where tbl='projects' and row_id=$1 and project_id=$1", [p])).rows[0]?.n).toBe(1);
+});
+
+test('awbs.state_at으로 과거 시점 기록을 넣을 수 있다(시험·데모 자료 전용)', async () => {
+  const c = await owner.connect();
+  try {
+    await c.query("select set_config('awbs.state_at','2026-10-20T00:00:00+09:00',false)");
+    await c.query("update tasks set title='과거' where task_key='TASK-0001'");
+    await c.query("select set_config('awbs.state_at','',false)");
+  } finally { c.release(); }
+  const at = (await owner.query<{ at: string }>("select created_at::text at from state_log where tbl='tasks' and data->>'title'='과거'")).rows[0]?.at;
+  expect(at).toBe('2026-10-19 15:00:00+00');
+});
+
+test('앱 권한은 기록을 고치거나 지우거나 비울 수 없다', async () => {
+  await expect(app.query("update state_log set op='x'")).rejects.toMatchObject({ code: '42501' });
+  await expect(app.query('delete from state_log')).rejects.toMatchObject({ code: '42501' });
+  await expect(app.query('truncate state_log')).rejects.toMatchObject({ code: '42501' });
+  await expect(owner.query("update state_log set op='x'")).rejects.toMatchObject({ code: '42501' });
+});
+
+test('초기화가 끝나면 상태 기록도 모두 지워진다(삭제 과정은 기록하지 않는다)', async () => {
+  expect((await owner.query('select count(*)::int n from state_log')).rows[0]?.n).toBeGreaterThan(0);
+  const name = (await owner.query<{ name: string }>('select name from projects')).rows[0]?.name;
+  await app.query("select reset_project(1,$1,true,'팀장')", [name]);
+  expect((await owner.query('select count(*)::int n from state_log')).rows[0]?.n).toBe(0);
+});
+
+test('0036 전부터 있던 행은 seed로 한 번 남는다', async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'awbs-0036-'));
+  const old = new URL(url);
+  old.pathname += '_old';
+  const pool = createPool(old.href, { max: 2, onError: () => undefined });
+  try {
+    await cp(fileURLToPath(new URL('../migrations', import.meta.url)), folder, { recursive: true });
+    const path = join(folder, 'meta/_journal.json');
+    const journal = JSON.parse(await readFile(path, 'utf8')) as { entries: { tag: string }[] };
+    journal.entries = journal.entries.filter((e) => !e.tag.startsWith('0036_'));
+    await writeFile(path, JSON.stringify(journal));
+    await recreateTestDatabase(old.href);
+    await migrate(drizzle(pool), { migrationsFolder: folder });
+    await pool.query('select public.seed_system()');
+    const { t } = await project(pool);
+    await runMigrations(pool);
+    expect((await pool.query("select op,data->>'status' status from state_log where tbl='tasks' and row_id=$1", [t])).rows).toEqual([{ op: 'seed', status: 'ready' }]);
+  } finally { await pool.end(); await rm(folder, { recursive: true, force: true }); }
+});

@@ -1121,6 +1121,14 @@ export const ReportSnapshot = Type.Object(
         end: MaybeDate, slipDays: Nullable(N), blocked: Type.Boolean(),
       }),
     ),
+    /**
+     * 어느 시점 기준인가(owner 2026-11-27 아이템 13: 기간 말 시점 재구성).
+     * - asOf: 이 시각 직전까지의 기록과 그 시점 상태로 만들었다(기간 끝과 생성 시각 중 이른 쪽).
+     * - stateFrom: 상태를 되살릴 수 있는 가장 이른 시각(상태 기록 시작). null이면 처음부터 기록이 있다.
+     * - missing: 'state'면 그 시점 상태를 되살릴 수 없어 상태 칸(분포·진행 중·예정·전체 표 등)을 비웠다. 화면은 「기록 없음」으로 보인다.
+     * 이 필드가 생기기 전에 만든 보고서에는 없다(생성 시각 기준).
+     */
+    basis: c.Opt(obj({ asOf: c.Timestamp, stateFrom: Nullable(c.Timestamp), missing: List(AnyOf('state')) })),
   },
   { title: 'ReportSnapshot' },
 );
