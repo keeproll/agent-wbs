@@ -5,6 +5,7 @@ import { buildApp } from '../src/app.ts';
 import { issueLoginLink, issueRunnerToken } from '../src/platform/credentials.ts';
 import { installRunner } from '../src/runner/routes.ts';
 import { installCiRunner } from '../src/ci/routes.ts';
+import { observedBases } from '../src/ci/pipeline.ts';
 import { resolveBasePipelineSha } from '../src/ci/service.ts';
 import { installProjectRunner } from '../src/project/runner-routes.ts';
 import { policyOf, scheduleInput } from '../src/planning/schedule.ts';
@@ -727,4 +728,83 @@ test('결정 14: 이전 버전이 이미 저장한 error 관측도 첫 성공 �
   await owner.query('update projects set pipeline_observations=$2::jsonb where id=$1',[project,JSON.stringify({ [otherSha]:{ baseSha:otherSha,pipelineSha:null,definition:{ path:'.agentwbs/pipeline.yaml',commit:otherSha,status:'error',error:'이전 읽기 실패',raw:null,stages:null } } })]);
   await observe();
   expect((await get(`projects/${project}/ci/pipeline`)).json()).toMatchObject({ status:'ok',raw:'version: 1' });
+});
+
+
+test.each([false,true])('리뷰3 Q1·Q7: 기준 실패가 아닌 통합 종료 뒤 main 이동은 재통합하지 않는다(불일치=%s)', async mismatch => {
+  const prepared = mismatch ? await integration() : null;
+  const a = prepared?.a ?? await gateTask();
+  if (prepared) {
+    await queue(a,'checking',prepared.extra);
+    const r = await queue(a,'merged',{ ...prepared.extra,actualMergeSha:'9'.repeat(40),actualTreeSha:prepared.tree,mergeParents:[sha,otherSha] });
+    expect(r.statusCode,r.body).toBe(409);
+    expect(r.json().error.code).toBe('MERGE_MISMATCH');
+  }
+  await owner.query("update runner_jobs set state='done' where id=$1",[a.job]);
+  await observe('9'.repeat(40));
+  expect((await owner.query("select count(*)::int n from runner_jobs where kind='integrate' and state='queued'")).rows).toEqual([{ n:0 }]);
+  expect((await owner.query('select status from tasks where id=$1',[a.id])).rows).toEqual([{ status:'gate' }]);
+  if (mismatch) expect((await get('alerts')).json().items).toHaveLength(1);
+});
+
+test.each(['alert','fact','reconcile'])('리뷰3: 기준 실패가 있어도 %s 보류는 자동·수동 재통합에서 제외한다', async held => {
+  const { a,id } = await baselineFailed();
+  if (held==='alert') await owner.query("insert into alerts(project_id,key,severity,target) values($1,'ci:mergeMismatch|#1','error',$2)",[project,{ taskKey:a.key }]);
+  else if (held==='fact') await owner.query('update merge_queue set actual_merge_sha=$2 where task=$1',[a.id,'9'.repeat(40)]);
+  else await owner.query("insert into runner_jobs(project_id,epoch,kind,payload,dedup_key,state,generation) select $1,1,'integrate',$2,'integrate:'||verification::text||':reconcile','reconcile',1 from merge_queue where task=$3",[project,{ taskKey:a.key,pr:1 },a.id]);
+  await observe('d'.repeat(40));
+  expect((await owner.query("select count(*)::int n from runner_jobs where kind='integrate' and state='queued'")).rows).toEqual([{ n:0 }]);
+  const r = await app.inject({ method:'POST',url:`/api/projects/${project}/ci/runs/${id}/retry`,headers:lead() });
+  expect(r.statusCode,r.body).toBe(409);
+});
+
+test('리뷰3 Q2: 불완전한 실제 병합 보고를 저장하지 않고 같은 SHA의 완전한 보고를 받는다', async () => {
+  const { a,tree,extra } = await integration(); await queue(a,'checking',extra);
+  const actualMergeSha = '9'.repeat(40);
+  for (const report of [
+    { status:'checking',actualMergeSha },
+    { status:'merged',actualMergeSha,mergeParents:[otherSha,sha] },
+    { status:'merged',actualMergeSha,actualTreeSha:tree },
+  ]) {
+    const r = await queue(a,report.status,{ ...extra,...report });
+    expect(r.statusCode,r.body).toBe(400);
+    expect(r.json().error.code).toBe('VALIDATION_FAILED');
+    expect((await owner.query('select count(*)::int n from ci_merge_facts')).rows).toEqual([{ n:0 }]);
+    expect((await get('alerts')).json().items).toHaveLength(0);
+  }
+  expect((await queue(a,'merged',{ ...extra,actualMergeSha,actualTreeSha:tree,mergeParents:[otherSha,sha] })).statusCode).toBe(204);
+});
+
+test('리뷰3: 야간 flaky 보고는 담당 Task와 격리 여부를 보존한다', async () => {
+  const a = await running(), r = await start(a);
+  expect((await patch(r.json().id as string,{ fence:1,status:'run',flakyTests:[{ testKey:'E2E/login',rate:0.2,lastFailedAt:'2026-11-26T00:00:00Z' }] })).statusCode).toBe(204);
+  await owner.query("update flaky_tests set quarantined=true where test_key='E2E/login'");
+  const night = await post('ci/runs',{ stage:'night',ref:'main',trigger:'night',headSha:sha,pipelineSha:pipeline });
+  expect(night.statusCode,night.body).toBe(201);
+  expect((await patch(night.json().id as string,{ fence:null,status:'run',flakyTests:[{ testKey:'E2E/login',rate:0.3,lastFailedAt:'2026-11-27T00:00:00Z' }] })).statusCode).toBe(204);
+  expect((await get(`projects/${project}/ci/flaky`)).json()).toMatchObject({ items:[{ testKey:'E2E/login',taskKey:a.key,quarantined:true,rate:'0.3',lastFailedAt:'2026-11-27T00:00:00.000000Z' }] });
+});
+
+test('리뷰3: main 증거 목록은 원장으로 이어진 조상 순서이며 끊긴 관측은 제외한다', async () => {
+  await observe();
+  const middle = 'd'.repeat(40), last = 'e'.repeat(40), unrelated = 'f'.repeat(40);
+  expect((await post('input-changes',{ base:otherSha,head:middle,baseIsAncestor:true,treeHash:sha,changes:[],commits:[] })).statusCode).toBe(200);
+  await observe(last);
+  await owner.query("update projects set pipeline_observations=pipeline_observations||$2::jsonb where id=$1",[project,JSON.stringify({ [unrelated]:{ definition:{ status:'ok' } } })]);
+  const client = await pool.connect();
+  try { expect(await observedBases(client,project)).toEqual([otherSha,last]); }
+  finally { client.release(); }
+});
+
+
+test.each(['reverse','repeat'])('리뷰3: main %s 사슬은 API에서도 거부하고 QA를 무효화한다', async order => {
+  const a=await gateTask(), nextBase='d'.repeat(40), head1='e'.repeat(40), head2='f'.repeat(40), tree1='1'.repeat(40), tree2='2'.repeat(40);
+  await observe(nextBase);
+  const finalBase=order==='reverse' ? otherSha : nextBase;
+  const first={ qaHeadSha:sha,headSha:head1,preserved:true,parents:[sha,nextBase],autoMergeTreeSha:tree1,headTreeSha:tree1,additionalChanges:false };
+  const last={ qaHeadSha:head1,headSha:head2,preserved:true,parents:[head1,finalBase],autoMergeTreeSha:tree2,headTreeSha:tree2,additionalChanges:false };
+  const r=await queue(a,'queued',{ baseSha:finalBase,syncedHeadSha:head2,headSync:{ ...last,qaHeadSha:sha,chain:[first,last] } });
+  expect(r.statusCode,r.body).toBe(409);
+  expect(r.json().error).toMatchObject({ code:'GATE_NOT_PASSED',details:{ reverify:true } });
+  expect((await owner.query('select status from tasks where id=$1',[a.id])).rows).toEqual([{ status:'verifying' }]);
 });

@@ -90,7 +90,7 @@ export async function updateRun(client: PoolClient, id: string, principal: strin
     base_sha=coalesce(base_sha,$6),head_sha=coalesce(head_sha,$7),merge_sha=coalesce(merge_sha,$8),tree_sha=coalesce(tree_sha,$9),fail_step=$10,fail_scope=coalesce($11,fail_scope),note=coalesce($12,note),e2e=coalesce($13::jsonb,e2e),finished_at=coalesce(finished_at,$14::timestamptz),github_status=coalesce($15::jsonb,github_status) where id=$1`,
   [id,status,body.logExcerpt,body.artifacts === undefined ? null : JSON.stringify(body.artifacts),body.url,body.baseSha,body.headSha,body.mergeSha,body.treeSha,failStep,body.failScope,body.note,body.e2e ? JSON.stringify(body.e2e) : null,body.finishedAt,body.githubStatus ? JSON.stringify(body.githubStatus) : null]);
   for (const flaky of body.flakyTests ?? []) await client.query(`insert into flaky_tests(project_id,test_key,rate,quarantined,task,last_failed_at) values($1,$2,$3,false,$4,$5)
-    on conflict(test_key) do update set rate=excluded.rate,task=excluded.task,last_failed_at=excluded.last_failed_at
+    on conflict(test_key) do update set rate=excluded.rate,task=coalesce(excluded.task,flaky_tests.task),last_failed_at=excluded.last_failed_at
     where flaky_tests.project_id=excluded.project_id and (flaky_tests.last_failed_at is null or flaky_tests.last_failed_at<=excluded.last_failed_at)`,[run.project_id,flaky.testKey,flaky.rate,run.task,flaky.lastFailedAt]);
   if (status !== run.status) await notifyResult(client,{ ...run,base_sha:run.base_sha ?? body.baseSha ?? null,status:status as Run['status'],fail_step:failStep,fail_scope:body.failScope ?? run.fail_scope });
   deferChange(client,run.project_id,'ci',{ id });
@@ -136,6 +136,7 @@ export async function resolveBasePipelineSha(client: PoolClient, baseSha: string
 }
 
 export async function reportQueue(client: PoolClient, principal: string, body: QueueReport) {
+  if ((body.status === 'merged' || body.actualMergeSha) && (body.status !== 'merged' || !body.actualMergeSha || !body.actualTreeSha || body.mergeParents?.length !== 2)) throw new PlatformError('VALIDATION_FAILED');
   const repo = new RunnerRepository(client); await repo.lock();
   const task = await repo.task(body.taskKey);
   if (!task) throw new PlatformError('TASK_NOT_FOUND');

@@ -35,3 +35,12 @@ test('결정 16: 관측된 main을 잇는 두 단계 사슬은 원래 QA를 보�
   expect(() => preservedHead(qa,nextHead,nextBase,nextTree,{ ...chain,chain:[proof,{ ...last,qaHeadSha:qa }] },[base,nextBase])).toThrow();
   expect(() => preservedHead(qa,nextHead,nextBase,nextTree,{ ...chain,parents:[qa,nextBase] },[base,nextBase])).toThrow();
 });
+
+
+test.each(['reverse','repeat'])('리뷰3: 동기화 사슬의 main %s는 거부한다', order => {
+  const nextBase='e'.repeat(40), nextHead='f'.repeat(40), nextTree='1'.repeat(40);
+  const finalBase=order==='reverse' ? base : nextBase;
+  const first={ ...proof,parents:[qa,nextBase] };
+  const last={ ...proof,qaHeadSha:head,headSha:nextHead,parents:[head,finalBase],autoMergeTreeSha:nextTree,headTreeSha:nextTree };
+  expect(() => preservedHead(qa,nextHead,finalBase,nextTree,{ ...last,qaHeadSha:qa,chain:[first,last] },[base,nextBase])).toThrow();
+});

@@ -15,13 +15,16 @@ export function preservedHead(qa: string, head: string, base: string, tree: stri
   const fail = () => { throw new PlatformError('GATE_NOT_PASSED'); };
   if (!proof?.preserved || proof.qaHeadSha !== qa || proof.headSha !== head || proof.additionalChanges) return fail();
   let previous = qa;
+  let previousMain = -1;
   const chain = proof.chain ?? [proof];
   if (proof.chain && chain.length < 2) return fail();
   for (const step of chain) {
+    const main = observed.indexOf(step.parents[1] ?? '');
     if (!step.preserved || step.additionalChanges || step.qaHeadSha !== previous || step.parents.length !== 2 ||
       step.parents[0] !== previous || step.autoMergeTreeSha !== step.headTreeSha ||
-      proof.chain && !observed.includes(step.parents[1] ?? '')) return fail();
+      proof.chain && main <= previousMain) return fail();
     previous = step.headSha;
+    previousMain = main;
   }
   const last = chain.at(-1);
   if (!last || previous !== head || last.parents[1] !== base || last.headTreeSha !== tree || proof.autoMergeTreeSha !== tree ||
