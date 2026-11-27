@@ -56,6 +56,56 @@ worker는 호출 동안 초기화 세대인 `epoch`의 공유 잠금을 잡는�
 그룹은 최소 3초 간격으로 보낸다.
 이 제한은 테스트 알림과 업무 알림에 함께 적용한다.
 
+## 전이 알림 대응표 (M6 통합 정리)
+
+전이 알림은 「어떤 상태 변화가 어떤 Telegram 알림이 되는가」를 정한 규칙이다.
+원본 기준은 P L3651-3658의 `TG_EV`(알림 종류 6개)와 `TG_RULES0`(처음 켜짐 여부)다.
+실제 판정은 0040(옛 0051)·0041(옛 0052) 마이그레이션의 `awbs_notify_transition` 트리거가 한다.
+왜 표로 모으나: 알림 종류가 여러 표(Task·CI·설정·승인)에 흩어져 있어, 새 기능이 들어올 때 빠뜨리기 쉽다.
+
+알림 종류마다 다음 순서로 적는다: 원본 이름 → 처음 켜짐 → 바뀌는 표와 조건 → 상태 문구 → 화면 이동.
+
+- `done`(Task 완료)
+  - 처음에는 꺼져 있다.
+  - `tasks.status`가 `done`이 되고, 그 Task가 병합(`merge_queue.status='merged'`)과 ② 통합 확인 통과를 함께 가질 때만 보낸다.
+  - 상태 문구는 「WBS 최종 완료」다.
+  - 이동은 `/wbs/<Task>`다.
+- `fail`(Task 실패)
+  - 처음부터 켜져 있다.
+  - `tasks.verif_state`가 `fail`이 될 때 보낸다. 상태 문구는 「QA FAIL 확정」이다.
+  - `alerts`에 `retry:<Task>` 경보가 열릴 때도 보낸다. 상태 문구는 「실행 실패 — 자동 재시도 한도 초과」다.
+  - 이동은 `/wbs/<Task>`다.
+- `admin`(관리자 개입 필요)
+  - 처음부터 켜져 있다.
+  - `runner_readiness.status='fail'` → 「준비 상태 실패」, 이동 `/settings/runner`.
+  - `github_settings.status='failed'` → 「GitHub 인증 실패」, 이동 `/settings/runner`.
+  - `execution_holds.slot_state='unconfirmed'` → 「하위 Agent 관측 미확인(보유)」, 이동 `/settings/runner`.
+  - `input_change_commits.state='pending'` → 「팀장 확인 대기」, 이동 `/project`.
+- `approve`(승인 요청)
+  - 처음부터 켜져 있다.
+  - `change_proposals.status='review'` → 「Change Proposal 승인 대기」, 이동 `/change/<CP>`.
+  - `tech_decisions.status`가 `pending` 또는 `change` → 「기술 결정 승인 대기」, 이동 `/design`. M6-05 설계 원장의 Agent 제안 결정(TD-xx)이 여기에 해당한다.
+  - `wbs_drafts.status='pending'` → 「초기 WBS 승인 대기」, 이동 `/wbs`.
+- `buildOk`(빌드 성공)
+  - 처음에는 꺼져 있다.
+  - `ci_runs`의 ② 통합 확인·④ 배포 확인이 `pass`가 될 때 보낸다. ① Task 검사와 ③ 야간 점검은 보내지 않는다.
+  - 상태 문구에 통과한 단계 목록을 넣는다.
+  - 이동은 `/ci/<CI>`다.
+- `buildFail`(빌드 실패)
+  - 처음부터 켜져 있다.
+  - `ci_runs`의 ②·③·④가 `fail`이 될 때 보낸다. 상태 문구에 실패 단계를 넣는다.
+  - 같은 단계·같은 PR(또는 ref)이 통과하면 그 실패 키를 닫는다.
+  - 이동은 `/ci/<CI>`다.
+
+M6 다른 기능의 경보는 Telegram으로 보내지 않는다.
+- M6-03 메일 발송 실패(`mail:failed` 경보)는 대시보드 알림과 설정 탭 배지로만 보인다.
+- M6-05 설계 불일치(`design_drift`)·계약 파일 읽기 실패(`design_parse`) 경보도 대시보드 알림으로만 보인다.
+- 왜: 원본 `TG_EV`의 여섯 종류에 이 상황이 없다. 새 종류를 만들려면 owner 결정이 필요하다.
+
+M5·M7 통합이 main에 들어간 뒤 할 일이 하나 있다.
+- M7-03의 서비스 없음 알림 `serviceDown`(M7-03 결정 14)을 이 표와 트리거에 더한다.
+- 이 브랜치에는 M7 코드가 없어서 지금은 넣지 못했다(계획 문서 미결 목록 「Telegram 전이 알림 대응표에 serviceDown 추가」).
+
 ## 연결 확인과 화면
 
 서버가 수락한 테스트의 토큰·Chat ID 조합만 활성화할 수 있다.
