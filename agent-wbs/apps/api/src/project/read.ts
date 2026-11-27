@@ -20,7 +20,7 @@ async function view(db: Db, job: PlanningJob, order: readonly string[]) {
 }
 
 const DECISION_FIELDS = ['area', 'choice', 'level', 'condition', 'reason', 'alternatives', 'by', 'at', 'constraintId', 'conditionResult'] as const;
-async function decisions(db: Db, projectId: string) {
+export async function decisions(db: Db, projectId: string) {
   const rows = (await db.query<{ id: string; td_key: string; title: string; authority: 'lead' | 'agent' | 'free'; status: string; content: Record<string, unknown>; updated_at: string }>(
     `select id,td_key,title,authority,status,content,${iso('updated_at')} as updated_at from tech_decisions where project_id=$1 order by td_key`, [projectId])).rows;
   return rows.map((row) => {
@@ -28,7 +28,8 @@ async function decisions(db: Db, projectId: string) {
     return { id: row.id, tdKey: row.td_key, area: String(c.area ?? ''), title: row.title, choice: String(c.choice ?? ''), authority: row.authority,
       level: (c.level ?? null) as string | null, condition: String(c.condition ?? ''), status: row.status, reason: String(c.reason ?? ''),
       alternatives: String(c.alternatives ?? ''), by: String(c.by ?? ''), at: new Date(String(c.at ?? row.updated_at)).toISOString(), updatedAt: row.updated_at,
-      constraintId: (c.constraintId ?? null) as string | null, conditionResult: (c.conditionResult ?? null) as 'met' | 'not_met' | null };
+      constraintId: (c.constraintId ?? null) as string | null, conditionResult: (c.conditionResult ?? null) as 'met' | 'not_met' | null,
+      ...(row.content.change ? { change: row.content.change } : {}) };
   });
 }
 

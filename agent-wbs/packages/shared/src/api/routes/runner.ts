@@ -592,6 +592,7 @@ export const runnerOperations = [
     summary: '커밋 기준 계약 파일 해석·대조 결과',
     body: DesignSnapshot,
     responses: { 204: null },
+    errors: ['VERSION_CONFLICT', 'INVALID_TRANSITION', 'EXTERNAL_WRITE_BLOCKED'],
   }),
   operation({
     ...runner,
