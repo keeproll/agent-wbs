@@ -111,6 +111,36 @@ test('「테스트」 → 발송 기록 → 「미리보기」로 HTML 메일 �
   await expect(dialog).toBeHidden();
 });
 
+test('보고서 화면: 메일 미리보기 · 메일로 보내기 · 발송 기록 펼침(M6 통합, M6-03 README §9 · 원본 P L2127-2131)', async ({ page }) => {
+  await login(page, '/report');
+  const bar = page.locator('.rp-bar');
+  await bar.getByRole('button', { name: '메일 미리보기' }).click();
+  const pv = page.getByRole('dialog', { name: '메일 미리보기' });
+  await expect(pv.getByText(/^\[Agent WBS\] (일간|주간|기간) 보고/)).toBeVisible();
+  await expect(pv.frameLocator('iframe[title="메일 본문 미리보기"]').locator('table[width="640"]')).toHaveCount(1);
+  await pv.getByRole('button', { name: '닫기' }).first().click();
+  await expect(pv).toBeHidden();
+
+  const sent = page.locator('details.rp-sent');
+  await bar.getByRole('button', { name: '메일로 보내기' }).click();
+  const dialog = page.getByRole('dialog', { name: '메일로 보내기' });
+  const qa = dialog.getByRole('checkbox', { name: /qa@example\.com/ });
+  await expect(qa).toBeVisible();
+  // 기본 선택은 그 종류의 구독자다(qa는 일간 구독). 선택이 없으면 보내지 않고 안내한다(원본 doSend).
+  if (!(await qa.isChecked())) {
+    await dialog.getByRole('button', { name: '보내기', exact: true }).click();
+    await expect(dialog.getByRole('alert')).toHaveText('받는 사람을 한 명 이상 선택하세요.');
+    await qa.check();
+  }
+  await dialog.getByRole('button', { name: '보내기', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByText('메일 1건을 발송 대기열에 넣었습니다.')).toBeVisible();
+  await expect(sent.locator('summary')).toHaveText(/메일 발송 \d+건/, { timeout: 15_000 });
+  await sent.locator('summary').click();
+  await expect(sent.locator('.gtr', { hasText: '수동 발송' }).first()).toContainText('qa@example.com');
+  await expect(sent.locator('.gtr', { hasText: '수동 발송' }).first()).toContainText('발송됨', { timeout: 15_000 });
+});
+
 test('SMTP 인증 실패 → 실패 배너 · 탭 배지 · 대시보드 알림 → 정상 복구 → 「실패 건 모두 다시 보내기」 → 알림 해제', async ({ page }) => {
   await login(page, '/settings/report');
   await smtpMode('auth_fail');

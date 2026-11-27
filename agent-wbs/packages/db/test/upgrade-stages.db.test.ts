@@ -55,7 +55,7 @@ const OLD: Record<string, { tag: string; from?: string; fixture?: string }[]> = 
 
 test('빈 DB와 0014·0016(master)·0017~0025·M6 중간(0036~0042) 단계 DB, M6 옛 번호 DB가 최신으로 올린 뒤 같은 구조가 된다', async () => {
   const journalPath = fileURLToPath(new URL('../migrations/meta/_journal.json', import.meta.url));
-  type Entry = { idx: number; tag: string; when: number; version: string; breakpoints: boolean };
+  interface Entry { idx: number; tag: string; when: number; version: string; breakpoints: boolean }
   const journal = JSON.parse(await readFile(journalPath, 'utf8')) as { entries: Entry[] };
   expect(journal.entries.slice(15).map((e) => e.tag)).toEqual([
     '0015_20261126_platform_epoch_lock', '0016_20261126_contract_sync', '0017_20261126_usage_reset_unknown',

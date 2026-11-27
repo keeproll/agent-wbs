@@ -1,9 +1,11 @@
 import { createPool } from '@awbs/db';
 import { loadConfig } from '../config.ts';
 import { watchRunner } from './watch.ts';
-import { deleteFiles } from '../reset/files.ts';
+import { DATA_ROOT, deleteFiles } from '../reset/files.ts';
 import { generateDueReports } from '../reports/service.ts';
 import { deliverMail, recoverMail } from '../mail/deliver.ts';
+import { chromiumRenderer } from '../pdf/render.ts';
+import { reportPdf } from '../pdf/service.ts';
 
 const config = loadConfig(process.env);
 const pool = createPool(config.databaseUrl, { onError: () => console.error('Runner 감시 DB 연결 오류') });
@@ -38,6 +40,8 @@ run();
  * 시작 때 한 번, 앞 프로세스가 보내다 죽은 메일을 「수락 여부 불명」으로 정리한다(자동 재발송 없음, contracts §4.4).
  */
 let mailPending: Promise<void> | undefined;
+/** 메일 첨부용 PDF 변환기. 브라우저는 처음 쓸 때 띄운다(chromiumRenderer). */
+const pdfRenderer = chromiumRenderer();
 let mailRecovered = false;
 async function mailTick() {
   let epoch: number | undefined;
@@ -45,12 +49,14 @@ async function mailTick() {
   if (epoch === undefined) return;
   const current = epoch;
   if (!mailRecovered) await step('메일 재시작 정리', async () => { await recoverMail(pool, current); mailRecovered = true; });
-  await step('보고서 메일 발송', () => deliverMail(pool, current));
+  // M6 통합: 받는 사람의 「PDF 첨부」가 켜져 있으면 보고서 PDF를 붙인다(M6-03 README §9). 팀장 다운로드와 같은 함수·같은 캐시다.
+  // PDF를 만들지 못하면 deliverMail이 보내기 전 실패(rejected)로 처리한다.
+  await step('보고서 메일 발송', () => deliverMail(pool, current, { pdf: async (reportId, view) => (await reportPdf(pool, DATA_ROOT, pdfRenderer, current, reportId, view)).file }));
 }
 const runMail = () => { mailPending ??= mailTick().finally(() => { mailPending = undefined; }); };
 const mailTimer = setInterval(runMail, 10_000);
 runMail();
-async function stop() { clearInterval(timer); clearInterval(mailTimer); await pending; await mailPending; await pool.end(); }
+async function stop() { clearInterval(timer); clearInterval(mailTimer); await pending; await mailPending; await pdfRenderer.close(); await pool.end(); }
 let stopping = false;
 for (const signal of ['SIGINT','SIGTERM']) process.once(signal, () => {
   if (!stopping) { stopping = true; void stop(); }

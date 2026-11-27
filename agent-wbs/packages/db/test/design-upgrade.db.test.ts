@@ -22,7 +22,7 @@ test('옛 번호 0049(메일 큐)를 적용한 DB에도 0042·0043을 빠뜨리�
     await cp(fileURLToPath(new URL('../migrations/', import.meta.url)), folder, { recursive: true });
     // 옛 번호 이름으로 같은 내용(hash가 같다)
     await copyFile(join(folder, '0039_20261127_mail_queue.sql'), join(folder, '0049_20261127_mail_queue.sql'));
-    type Entry = { idx: number; tag: string; when: number; version: string; breakpoints: boolean };
+    interface Entry { idx: number; tag: string; when: number; version: string; breakpoints: boolean }
     const journal = JSON.parse(await readFile(join(folder, 'meta/_journal.json'), 'utf8')) as { entries: Entry[] };
     const byTag = (prefix: string) => {
       const entry = journal.entries.find(e => e.tag.startsWith(prefix));

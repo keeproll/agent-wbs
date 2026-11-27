@@ -5,7 +5,8 @@
  * - 보고서 내용은 서버 스냅샷 그대로다. 열 때 다시 계산하지 않는다(G L373). 「생성 이후 변경」만 지금 기준이다.
  * - 정기 생성은 서버 worker가 한다(07:00 · 월 07:00 · 시작 때 누락분 보충). 원본의 「정기 생성 점검 (Mock)」 버튼은 두지 않는다.
  * - PDF 다운로드는 서버 PDF(M6-02)를 받아 저장한다. 실패하면 오류 막대에 다시 시도·기간 분리 안내를 보이고 본문은 그대로 둔다(G L49).
- * - 문서 제목의 프로젝트 이름은 스냅샷 값이다(생성 시점 기록). 메일 미리보기·보내기·발송 기록은 M6-03이 붙인다.
+ * - 문서 제목의 프로젝트 이름은 스냅샷 값이다(생성 시점 기록).
+ * - 메일 미리보기·메일로 보내기·발송 기록 펼침은 M6-03 API를 쓴다(M6 통합, ReportMail.tsx).
  */
 import { useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
@@ -26,6 +27,7 @@ import {
   RULE_TEXT, appendixTitle, settingsNote, snapLabel, uncertainNote, VIEWS, type Kpi, type ReportDoc, type ReportKind, type ReportRow, type ReportView,
 } from './model.ts';
 import { formatDateTime } from '../../shared/format.ts';
+import { ReportMailButtons, ReportSent } from './ReportMail.tsx';
 import './report.css';
 
 const KINDS: readonly ('all' | ReportKind)[] = ['all', 'daily', 'weekly', 'custom'];
@@ -175,9 +177,11 @@ function ReportDocument({ row, view, onView }: { row: ReportRow; view: ReportVie
           </div>
         )}
         <span className="muted" style={{ marginRight: 'auto' }} />
-        {/* 서버 PDF(M6-02). 파일 이름은 G L405 예시 형식이다. */}
+        {/* 메일(M6-03, 원본 P L2127-2128)과 서버 PDF(M6-02). PDF 파일 이름은 G L405 예시 형식이다. */}
+        <ReportMailButtons row={row} view={view} />
         <PdfButton row={row} view={view} />
       </div>
+      <ReportSent reportId={row.id} />
       {changed && <div className="banner warn rp-noprint" role="status"><div className="banner-b">{changed}</div></div>}
       <article className="rpt-doc" aria-label={`${row.reportKey} 보고서`}>
         <header className="rpt-h">

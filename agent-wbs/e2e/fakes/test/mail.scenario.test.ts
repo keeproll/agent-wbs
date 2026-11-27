@@ -10,7 +10,10 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { inject } from 'vitest';
@@ -23,6 +26,8 @@ import { deliverMail, recoverMail } from '../../../apps/api/src/mail/deliver.ts'
 import { checkSmtpSettings, getSmtp, putSmtp } from '../../../apps/api/src/mail/settings.ts';
 import { inEpoch } from '../../../apps/api/src/platform/transaction.ts';
 import { FakeSmtp, mimeHeader, mimePart } from '../smtp.ts';
+import { chromiumRenderer } from '../../../apps/api/src/pdf/render.ts';
+import { reportPdf } from '../../../apps/api/src/pdf/service.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Body = any;
@@ -700,6 +705,51 @@ describe('늦은 결과와 정리 · 수동 발송 경합(fix3)', () => {
     expect(await stateOf(id)).toBe('retry_wait');
     await owner.query("update mail_outbox set state='accepted',next_at=null where id=$1", [id]);
   }, 30_000);
+});
+
+/**
+ * M6 통합: PDF 첨부(M6-03 README §9 연결 지점 + M6-02 reportPdf). worker와 같은 연결(runner/worker.ts)을 시험에서 그대로 만든다.
+ * - 받는 사람의 「PDF 첨부」가 켜져 있으면 팀장 다운로드와 같은 PDF가 `RPT-…_보고용.pdf` 이름으로 붙는다.
+ * - PDF를 만들지 못하면 보내기 전 실패(rejected)라 15분 뒤 한 번 다시 시도한다(수락되지 않은 것이 확실하다).
+ */
+describe('M6 통합: 보고서 PDF 첨부', () => {
+  test('PDF 변환이 실패하면 보내지 않고 15분 재시도, 다시 시도 때는 보고용 PDF를 붙여 보낸다', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'awbs-mail-pdf-'));
+    const renderer = chromiumRenderer();
+    try {
+      const boss = await recipient('boss@example.com');
+      expect(boss.pdf).toBe(true);
+      const w = (await reports('weekly'))[0];
+      assert(w);
+      const queued = await lead('POST', `/api/reports/${w.id}/mail`, { recipientIds: [boss.id] });
+      expect(queued.status).toBe(202);
+      const id = queued.body.ids[0] as string;
+      const before = received('boss@example.com').length;
+      const at = kst('2026-11-06', '09:00');
+      // 1) 변환 실패 → 보내지 않음, 기록에 원인, 15분 재시도 대기
+      await deliverMail(pool, epoch, { now: at, timeoutMs: TIMEOUT, pdf: () => Promise.reject(new Error('브라우저 없음')) });
+      expect(received('boss@example.com')).toHaveLength(before);
+      expect((await owner.query<{ state: string }>('select state from mail_outbox where id=$1', [id])).rows[0]?.state).toBe('retry_wait');
+      expect((await owner.query<{ error: string | null }>("select error from mail_log where outbox=$1 and state='failed' order by created_at desc limit 1", [id])).rows[0]?.error).toContain('PDF 첨부를 만들지 못함');
+      // 2) 15분 뒤 다시 시도: 실제 PDF(팀장 다운로드와 같은 reportPdf)를 붙인다
+      await deliverMail(pool, epoch, { now: plus(at, 16), timeoutMs: 60_000, pdf: async (reportId, view) => (await reportPdf(pool, root, renderer, epoch, reportId, view)).file });
+      expect((await owner.query<{ state: string }>('select state from mail_outbox where id=$1', [id])).rows[0]?.state).toBe('accepted');
+      const raw = received('boss@example.com').at(-1)?.raw ?? '';
+      expect(raw).toMatch(/content-type:\s*multipart\/mixed/i);
+      const pdfPart = raw.split(/\r\n--/).find((part) => /content-type:\s*application\/pdf/i.test(part)) ?? '';
+      expect(decodeURIComponent(pdfPart)).toContain(`${w.reportKey}_보고용.pdf`);
+      const body = pdfPart.slice(pdfPart.indexOf('\r\n\r\n') + 4).replace(/\s+/g, '');
+      const file = Buffer.from(body, 'base64');
+      expect(file.subarray(0, 5).toString('latin1')).toBe('%PDF-');
+      // 다운로드와 같은 파일이다(같은 문서 hash 캐시)
+      expect(file.equals((await reportPdf(pool, root, renderer, epoch, w.id, 'ext')).file)).toBe(true);
+      // 본문(HTML·text)은 첨부가 있어도 같다
+      expect(mimePart(raw, 'text/html')).toContain('주간 보고서 · 보고용');
+    } finally {
+      await renderer.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 120_000);
 });
 
 describe('수신자 삭제 · 초기화 경합(G L407-408, data-model §5)', () => {
