@@ -12,7 +12,7 @@ const summary: ReportSnapshotData['summary'] = {
 };
 const evil = '<script>alert(1)</script> & "따옴표"';
 const snapshot: ReportSnapshotData = {
-  projectName: `프로젝트 ${evil}`, issues: [], series: [], active: [], failures: [], attempts: [], replans: [], gaps: [], messages: [], next: [], summary,
+  projectName: `프로젝트 ${evil}`, projectNameStatus: 'snapshot', issues: [], series: [], active: [], failures: [], attempts: [], replans: [], gaps: [], messages: [], next: [], summary,
   done: [{
     taskKey: 'TASK-0001', wbsPath: '1.1.1', title: evil, assignee: 'Claude', verifier: 'Codex', workType: 'Implementation', domain: 'BE',
     actStart: '2026-10-27T01:00:00.000Z', actEnd: '2026-10-28T01:00:00.000Z', estHours: 3, actualHours: 2.5, attempts: 1, slipDays: 0,

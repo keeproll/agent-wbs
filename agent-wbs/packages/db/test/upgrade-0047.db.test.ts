@@ -1,8 +1,8 @@
 /**
  * 0047: 이름 없는 옛 보고서 스냅샷(M6-01 형식)의 프로젝트 이름(Codex 리뷰 P2, 재리뷰 3차 P2-2). 추측하지 않는다.
  *
- * - 이름 변경 기록이 전혀 없는 프로젝트: 지금 이름을 넣는다(이름이 한 번도 바뀌지 않았으니 그때 이름과 같다). 표시 current.
- * - 이름 변경 기록이 하나라도 있는 프로젝트: 그때 이름이 확실하지 않으므로 이름을 넣지 않고 표시 unknown만 남긴다.
+ * - 이름 변경 기록이 전혀 없는 프로젝트: 지금 이름을 넣는다(이름이 한 번도 바뀌지 않았으니 그때 이름과 같다). 출처 filled.
+ * - 이름 변경 기록이 하나라도 있는 프로젝트: 그때 이름이 확실하지 않으므로 projectName = null, 출처 unknown.
  *   (DB에 커밋 시각이 없어, 변경이 보고서 앞인지 뒤인지 확정할 수 없다. 트랜잭션 번호 등으로 추정하지 않는다.)
  * - 리뷰어 재현(편집과 보고서가 겹치는 세 순서)이 모두 unknown이 되는지 본다. 시나리오마다 DB를 따로 만든다(프로젝트는 DB마다 하나).
  */
@@ -51,8 +51,8 @@ const rename = async (db: Db, projectId: string, from: string, to: string, at: s
   [projectId, JSON.stringify({ name: from, description: '' }), JSON.stringify({ name: to, description: '' }), at]);
 };
 const snap = async (db: Db, id: string | undefined) => (await db.query<{ snapshot: Record<string, unknown> }>('select snapshot from reports where id=$1', [id])).rows[0]?.snapshot;
-const current = (name: string) => ({ summary: { taskCount: 1 }, projectName: name, projectNameFilled: { source: 'current' } });
-const unknown = { summary: { taskCount: 1 }, projectNameFilled: { source: 'unknown' } };
+const current = (name: string) => ({ summary: { taskCount: 1 }, projectName: name, projectNameStatus: 'filled' });
+const unknown = { summary: { taskCount: 1 }, projectName: null, projectNameStatus: 'unknown' };
 
 const pools: Pool[] = [];
 afterAll(async () => { await Promise.all(pools.map((p) => p.end())); });
@@ -70,15 +70,15 @@ beforeAll(async () => {
   ids.named = await report(dated, p, 'RPT-C-003', '2026-10-30T00:00:00Z', { projectName: '스냅샷 이름', summary: { taskCount: 3 } });
 }, 60_000);
 
-test('이름을 바꾼 적이 있는 프로젝트의 옛 보고서는 변경 앞뒤와 관계없이 이름 미상(unknown)이다. 이미 이름이 있으면 그대로. 두 번 올려도 같다', async () => {
+test('이름을 바꾼 적이 있는 프로젝트의 옛 보고서는 변경 앞뒤와 관계없이 이름 미상(unknown)이다. 이미 이름이 있으면 이름은 그대로 두고 출처 snapshot만 붙인다. 두 번 올려도 같다', async () => {
   await runMigrations(dated);
   await runMigrations(dated);
   expect(await snap(dated, ids.before)).toEqual(unknown);
   expect(await snap(dated, ids.after)).toEqual(unknown);
-  expect(await snap(dated, ids.named)).toEqual({ projectName: '스냅샷 이름', summary: { taskCount: 3 } });
+  expect(await snap(dated, ids.named)).toEqual({ projectName: '스냅샷 이름', projectNameStatus: 'snapshot', summary: { taskCount: 3 } });
 });
 
-test('이름을 바꾼 적 없는 프로젝트는 지금 이름(current)이다', async () => {
+test('이름을 바꾼 적 없는 프로젝트는 지금 이름(filled)이다', async () => {
   const db = await legacyDb('same');
   pools.push(db);
   const p = await project(db, '그대로');

@@ -303,6 +303,7 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
 
   return {
     projectName: project[0]?.name ?? '',
+    projectNameStatus: 'snapshot',
     summary: {
       taskCount: tasks.length, doneCount: doneTo.length, doneBefore: doneFrom.length, workPct: workPct(doneTo), workPctBefore: workPct(doneFrom),
       baselineVersion: last?.baseline_v ?? schedule?.project.baselineVersion ?? 0,

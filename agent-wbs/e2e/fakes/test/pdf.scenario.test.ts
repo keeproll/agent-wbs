@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { inject } from 'vitest';
-import { internalTerms, reportProjectName, type ReportSnapshotData } from '../../../packages/shared/src/index.ts';
+import { internalTerms, reportProjectName, scrubInternal, snapshotProblem, type ReportSnapshotData } from '../../../packages/shared/src/index.ts';
 import { createPool, recreateTestDatabase, runMigrations, seedDemo, type Pool } from '../../../packages/db/src/index.ts';
 import { buildApp } from '../../../apps/api/src/app.ts';
 import { issueLoginLink } from '../../../apps/api/src/platform/credentials.ts';
@@ -520,40 +520,68 @@ describe('빈 상태(기록 없는 날 일간 RPT-D-261027)', () => {
   }, 60_000);
 });
 
-describe('이름 없는 옛 보고서(M6-01 형식 스냅샷, Codex 리뷰 P2)', () => {
-  test('조회·팀장용·보고용 PDF 모두 열리고, 제목은 「프로젝트 이름 없음」이다(지금 이름으로 바꿔 넣지 않는다)', async () => {
+describe('옛 보고서(M6-01 형식 스냅샷)를 실제 0047로 옮긴 뒤 조회·PDF(Codex 리뷰 P2·4차 P2-2)', () => {
+  /** 실제 마이그레이션 0047의 SQL을 이 DB에 다시 실행한다(출처가 없는 보고서만 다룬다). */
+  const run0047 = async () => {
+    const sql = await readFile(new URL('../../../packages/db/migrations/0047_20261127_report_project_name.sql', import.meta.url), 'utf8');
+    for (const statement of sql.split('--> statement-breakpoint')) await owner.query(statement);
+  };
+  /** M6-01 형식(이름·출처 없음) 옛 보고서를 넣는다. */
+  const legacyReport = async (key: string) => {
     const base = await reportOf('weekly', '2026-10-26');
     const legacy: Record<string, unknown> = { ...base.snapshot };
     delete legacy.projectName;
+    delete legacy.projectNameStatus;
     const project = (await owner.query<{ id: string }>('select id from projects')).rows[0]?.id;
     const id = (await owner.query<{ id: string }>(`insert into reports(project_id,report_key,kind,"from","to",view,snapshot,generated_at,reason)
-      values($1,'RPT-C-950','custom','2026-10-26','2026-11-01','int',$2::jsonb,now(),'팀장 지정') returning id`, [project, JSON.stringify(legacy)])).rows[0]?.id;
+      values($1,$2,'custom','2026-10-26','2026-11-01','int',$3::jsonb,now(),'팀장 지정') returning id`, [project, key, JSON.stringify(legacy)])).rows[0]?.id;
     assert(id);
-    expect((await fetch(`${baseUrl}/api/reports/${id}`, { headers })).status).toBe(200);
+    return id;
+  };
+  const opened = async (id: string) => {
+    const response = await fetch(`${baseUrl}/api/reports/${id}`, { headers });
+    expect(response.status).toBe(200);
+    return ((await response.json()) as { snapshot: ReportSnapshotData }).snapshot;
+  };
+
+  test('이름을 바꾼 적 없는 프로젝트: filled + 지금 이름. 조회 응답이 공유 계약 검사를 통과하고 PDF 제목도 그 이름이다', async () => {
+    const id = await legacyReport('RPT-C-950');
+    await run0047();
+    const name = (await owner.query<{ name: string }>('select name from projects')).rows[0]?.name ?? '';
+    const snapshot = await opened(id);
+    expect([snapshot.projectName, snapshot.projectNameStatus]).toEqual([name, 'filled']);
+    expect(snapshotProblem(snapshot)).toBeNull();
     for (const view of ['int', 'ext'] as const) {
-      const { doc } = await fetchPdf(id, view);
-      const text = textOf(doc.pages);
-      expect(text, view).toContain(squash(`프로젝트 이름 없음 — 기간 보고서${view === 'ext' ? ' (보고용)' : ''}`));
-      expect(text, view).not.toContain('undefined');
-      expect(text, view).not.toContain(squash(base.snapshot.projectName));
+      expect(textOf((await fetchPdf(id, view)).doc.pages), view).toContain(squash(`${view === 'ext' ? scrubInternal(name) : name} — 기간 보고서`));
     }
   }, 60_000);
 
-  test('0047이 「그때 이름을 알 수 없음」(unknown)으로 표시한 옛 보고서는 「이름 미상(기존 보고서)」이다', async () => {
-    const base = await reportOf('weekly', '2026-10-26');
-    const legacy: Record<string, unknown> = { ...base.snapshot, projectNameFilled: { source: 'unknown' } };
-    delete legacy.projectName;
-    const project = (await owner.query<{ id: string }>('select id from projects')).rows[0]?.id;
-    const id = (await owner.query<{ id: string }>(`insert into reports(project_id,report_key,kind,"from","to",view,snapshot,generated_at,reason)
-      values($1,'RPT-C-951','custom','2026-10-26','2026-11-01','int',$2::jsonb,now(),'팀장 지정') returning id`, [project, JSON.stringify(legacy)])).rows[0]?.id;
-    assert(id);
-    expect((await fetch(`${baseUrl}/api/reports/${id}`, { headers })).status).toBe(200);
+  test('이름을 바꾼 적 있는 프로젝트: unknown + projectName null. 조회 응답이 공유 계약 검사를 통과하고 PDF 제목은 「이름 미상(기존 보고서)」이다', async () => {
+    const project = (await owner.query<{ id: string; name: string }>('select id,name from projects')).rows[0];
+    assert(project);
+    await owner.query(`insert into task_history(project_id,actor,kind,text,before,after,ref) values($1,'팀장','프로젝트 수정','프로젝트 정보를 수정했습니다.',$2::jsonb,$3::jsonb,'{"kind":"project"}')`,
+      [project.id, JSON.stringify({ name: '예전 이름' }), JSON.stringify({ name: project.name })]);
+    const id = await legacyReport('RPT-C-951');
+    await run0047();
+    const snapshot = await opened(id);
+    expect([snapshot.projectName, snapshot.projectNameStatus]).toEqual([null, 'unknown']);
+    expect(snapshotProblem(snapshot)).toBeNull();
     for (const view of ['int', 'ext'] as const) {
       const text = textOf((await fetchPdf(id, view)).doc.pages);
       expect(text, view).toContain(squash(`이름 미상(기존 보고서) — 기간 보고서${view === 'ext' ? ' (보고용)' : ''}`));
-      expect(text, view).not.toContain(squash(base.snapshot.projectName));
+      expect(text, view).not.toContain(squash(project.name));
     }
   }, 60_000);
+
+  test('계약 검사는 출처와 이름이 어긋난 스냅샷을 거부한다(새 보고서는 이름이 반드시 있다)', async () => {
+    const s = (await reportOf('weekly', '2026-10-26')).snapshot;
+    expect(snapshotProblem(s)).toBeNull();
+    expect(s.projectNameStatus).toBe('snapshot');
+    expect(snapshotProblem({ ...s, projectName: null })).toMatch(/projectName/);
+    expect(snapshotProblem({ ...s, projectName: '  ' })).toMatch(/projectName/);
+    expect(snapshotProblem({ ...s, projectNameStatus: 'unknown' })).toMatch(/projectName/);
+    expect(snapshotProblem({ ...s, projectName: null, projectNameStatus: 'unknown' })).toBeNull();
+  });
 });
 
 describe('PDF와 화면이 같은 계산을 쓴다', () => {

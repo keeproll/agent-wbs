@@ -42218,6 +42218,7 @@
         "type": "object",
         "required": [
           "projectName",
+          "projectNameStatus",
           "summary",
           "issues",
           "series",
@@ -42233,21 +42234,21 @@
         ],
         "properties": {
           "projectName": {
-            "type": "string"
-          },
-          "projectNameFilled": {
-            "type": "object",
-            "required": [
-              "source"
-            ],
-            "properties": {
-              "source": {
-                "enum": [
-                  "current",
-                  "unknown"
-                ]
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
               }
-            }
+            ]
+          },
+          "projectNameStatus": {
+            "enum": [
+              "snapshot",
+              "filled",
+              "unknown"
+            ]
           },
           "summary": {
             "type": "object",

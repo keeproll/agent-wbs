@@ -171,7 +171,7 @@ test('F9 보고서 snapshot이 생성 시점 프로젝트 이름(M6-02)과 가�
   const report = fixtures<{ id: string; response: Record<string, unknown> }>('lead').find((item) => item.id === 'getReport');
   const snapshot = report?.response.snapshot as Record<string, unknown>;
   expect(Object.keys(snapshot)).toEqual([
-    'projectName', 'summary', 'issues', 'series', 'done', 'active', 'failures', 'attempts', 'replans', 'gaps', 'messages', 'next', 'all',
+    'projectName', 'projectNameStatus', 'summary', 'issues', 'series', 'done', 'active', 'failures', 'attempts', 'replans', 'gaps', 'messages', 'next', 'all',
   ]);
   for (const key of Object.keys(snapshot)) {
     const partial = Object.fromEntries(Object.entries(snapshot).filter(([name]) => name !== key));

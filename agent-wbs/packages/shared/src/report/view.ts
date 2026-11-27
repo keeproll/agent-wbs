@@ -125,7 +125,18 @@ export function scrubInternal(text: string): string {
 
 /** 스냅샷이 계약(ReportSnapshot)에 맞는지. 맞지 않으면 첫 위반 위치를 돌려준다. */
 export function snapshotProblem(value: unknown): string | null {
-  if (Value.Check(ReportSnapshot, value)) return null;
+  if (Value.Check(ReportSnapshot, value)) return projectNameProblem(value);
   const first = [...Value.Errors(ReportSnapshot, value)][0];
   return `${first?.instancePath ?? ''} ${first?.message ?? ''}`.trim() || '형식 위반';
+}
+
+/**
+ * 이름 출처와 이름이 맞는지(M6-02, Codex 리뷰 4차 P2-2). 형식 검사만으로는 표현하기 어려워 여기서 본다.
+ * - snapshot(새 보고서): 이름이 빈 글이 아니어야 한다. 왜: 새 보고서는 생성할 때 이름을 반드시 기록한다.
+ * - filled: 이름이 있어야 한다. unknown: 이름이 null이어야 한다.
+ */
+function projectNameProblem(s: ReportSnapshotData): string | null {
+  if (s.projectNameStatus === 'unknown') return s.projectName === null ? null : '/projectName 이름 미상(unknown)이면 null이어야 합니다';
+  if (s.projectName === null || (s.projectNameStatus === 'snapshot' && !s.projectName.trim())) return `/projectName ${s.projectNameStatus}이면 이름이 있어야 합니다`;
+  return null;
 }

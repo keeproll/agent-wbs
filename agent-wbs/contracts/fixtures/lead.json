@@ -1079,6 +1079,7 @@
    "reason": null,
    "snapshot": {
     "projectName": "Agent WBS",
+    "projectNameStatus": "snapshot",
     "summary": {
      "taskCount": 10,
      "doneCount": 2,
