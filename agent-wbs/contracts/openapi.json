@@ -23057,7 +23057,8 @@
                             "obs",
                             "gh",
                             "lfs",
-                            "reports"
+                            "reports",
+                            "font"
                           ]
                         },
                         "status": {
@@ -26502,6 +26503,33 @@
                       },
                       "additionalProperties": false
                     }
+                  },
+                  "deployRestore": {
+                    "type": "object",
+                    "required": [
+                      "commit",
+                      "status"
+                    ],
+                    "properties": {
+                      "commit": {
+                        "anyOf": [
+                          {
+                            "$ref": "#/components/schemas/Sha"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "status": {
+                        "enum": [
+                          "pass",
+                          "fail",
+                          "none"
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
                   },
                   "logExcerpt": {
                     "type": "string"
@@ -44751,7 +44779,8 @@
                             "obs",
                             "gh",
                             "lfs",
-                            "reports"
+                            "reports",
+                            "font"
                           ]
                         },
                         "status": {

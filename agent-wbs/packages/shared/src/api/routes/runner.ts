@@ -566,6 +566,8 @@ export const runnerOperations = [
         e2e:Opt(m.CiE2e),
         githubStatus:Opt(m.CiGithubStatus),
         flakyTests:Opt(List(Body({ testKey:Text,rate:Type.Number({ minimum:0,maximum:1 }),lastFailedAt:c.Timestamp }))),
+        // ④ 실패 뒤 마지막 정상 커밋 복구 결과(M7-03 결정 7·11). none=복구할 직전 통과 배포 없음(commit null). fail·none이면 서버가 서비스 없음 경보를 만든다.
+        deployRestore:Opt(Body({ commit:Nullable(c.Sha),status:AnyOf('pass','fail','none') })),
         logExcerpt: Opt(Type.String()),
         artifacts: Opt(List(Type.String())),
         url: Opt(c.HttpUrl),

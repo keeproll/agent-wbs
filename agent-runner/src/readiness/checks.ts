@@ -35,7 +35,7 @@ export interface ReadinessDeps {
 }
 
 // reports는 로컬 도구 점검이 아니라 RunnerApp이 거부 기록으로 채운다.
-type EnvironmentKey = Exclude<ReadinessKey, 'reports'>;
+type EnvironmentKey = Exclude<ReadinessKey, 'reports' | 'font'>;
 const KEYS: EnvironmentKey[] = ['claude', 'codex', 'git', 'node', 'pnpm', 'pg', 'repo', 'disk', 'subs', 'obs', 'gh', 'lfs'];
 /** P `recCap`의 DISK_LOW 기준 */
 const DISK_WARN_GB = 50;

@@ -931,3 +931,60 @@ test('fix4 판정: 늦은 옛 기준 실패는 더 나중의 올바른 PASS를 �
   expect((await get('alerts')).json().items).toHaveLength(0);
   expect((await owner.query("select resolved_at is not null resolved from notify_events where ref->>'id'=$1",[old.json().id])).rows).toEqual([{resolved:true}]);
 });
+
+async function deployJob() {
+  const job = ((await owner.query(`insert into runner_jobs(project_id,epoch,kind,payload,dedup_key,state,lease_owner,lease_until,fence,generation)
+    values($1,1,'deploy_check',$2,$3,'started','runner:ci',now()+interval '5 minutes',1,1) returning id`,[project,{ commit:sha },randomUUID()])).rows[0] as { id: string }).id;
+  const r = await post('ci/runs',{ jobId:job,fence:1,stage:'deploy',ref:'main',trigger:'팀장 요청',pipelineSha:pipeline,headSha:sha });
+  expect(r.statusCode,r.body).toBe(201);
+  const id = r.json().id as string;
+  expect((await patch(id,{ fence:1,status:'run' })).statusCode).toBe(204);
+  return id;
+}
+const serviceDown = async () => ({
+  alerts:(await owner.query("select severity,target from alerts where key='ci:serviceDown' and resolved_at is null")).rows,
+  events:(await owner.query("select kind,ref from notify_events where kind='serviceDown' and resolved_at is null")).rows,
+});
+
+test('결정 11: 배포 실패 뒤 복구도 실패하거나 복구할 배포가 없으면 서비스 없음 경보(높은 우선순위)와 serviceDown 알림을 만든다', async () => {
+  const failed = await deployJob();
+  expect((await patch(failed,{ fence:1,status:'fail',steps:[{ name:'up',status:'fail',durationMs:1 }],deployRestore:{ commit:otherSha,status:'fail' } })).statusCode).toBe(204);
+  expect(await serviceDown()).toMatchObject({ alerts:[{ severity:'critical',target:{ id:failed,path:`/ci/${failed}`,restoreCommit:otherSha } }],
+    events:[{ kind:'serviceDown',ref:{ id:failed,path:`/ci/${failed}`,restoreCommit:otherSha,restore:'fail' } }] });
+  expect((await owner.query("select count(*)::int n from notify_events where kind='buildFail' and resolved_at is null")).rows).toEqual([{ n:1 }]);
+  const none = await deployJob();
+  expect((await patch(none,{ fence:1,status:'fail',deployRestore:{ commit:null,status:'none' } })).statusCode).toBe(204);
+  expect((await serviceDown()).alerts).toHaveLength(1);
+  expect((await owner.query("select dup_count from notify_events where kind='serviceDown' and resolved_at is null")).rows).toEqual([{ dup_count:1 }]);
+  const passed = await deployJob();
+  expect((await patch(passed,{ fence:1,status:'pass' })).statusCode).toBe(204);
+  expect(await serviceDown()).toEqual({ alerts:[],events:[] });
+});
+
+test('결정 11: 복구가 통과하면 서비스 없음 경보를 만들지 않고, 알림이 꺼져 있으면 경보만 남긴다', async () => {
+  const restored = await deployJob();
+  expect((await patch(restored,{ fence:1,status:'fail',deployRestore:{ commit:otherSha,status:'pass' } })).statusCode).toBe(204);
+  expect(await serviceDown()).toEqual({ alerts:[],events:[] });
+  await owner.query('update notify_settings set enabled=false where singleton');
+  const failed = await deployJob();
+  expect((await patch(failed,{ fence:1,status:'fail',deployRestore:{ commit:otherSha,status:'fail' } })).statusCode).toBe(204);
+  expect(await serviceDown()).toMatchObject({ alerts:[{ severity:'critical' }],events:[] });
+});
+
+test('결정 11: deployRestore는 배포 확인의 실패 결과에서만, 상태에 맞는 커밋과 함께 받는다', async () => {
+  const id = await deployJob();
+  expect((await patch(id,{ fence:1,status:'fail',deployRestore:{ commit:sha,status:'none' } })).statusCode).toBe(400);
+  expect((await patch(id,{ fence:1,status:'fail',deployRestore:{ commit:null,status:'fail' } })).statusCode).toBe(400);
+  expect((await patch(id,{ fence:1,deployRestore:{ commit:sha,status:'fail' } })).statusCode).toBe(409);
+  const night = (await post('ci/runs',{ stage:'night',ref:'main',trigger:'night',pipelineSha:pipeline,headSha:sha })).json().id as string;
+  await patch(night,{ fence:null,status:'run' });
+  expect((await patch(night,{ fence:null,status:'fail',deployRestore:{ commit:sha,status:'fail' } })).statusCode).toBe(409);
+  expect(await serviceDown()).toEqual({ alerts:[],events:[] });
+  expect((await patch(id,{ fence:1,status:'pass',deployRestore:{ commit:sha,status:'fail' } })).statusCode).toBe(409);
+});
+
+test('결정 12: Runner 준비 점검은 고정 글꼴(font) 항목을 보고할 수 있다', async () => {
+  const r = await post('readiness',{ at:new Date().toISOString(),items:[{ key:'font',status:'warn',detail:'화면 비교 고정 글꼴 Noto Sans KR이 없어 야간 화면 비교는 비교 불가로 처리됩니다.',fix:'글꼴을 설치하세요.' }] });
+  expect(r.statusCode,r.body).toBe(204);
+  expect((await owner.query("select status from runner_readiness where key='font'")).rows).toEqual([{ status:'warn' }]);
+});

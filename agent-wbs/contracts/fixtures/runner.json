@@ -60,6 +60,12 @@
      "status": "fail",
      "detail": "없음",
      "fix": "git-lfs 설치"
+    },
+    {
+     "key": "font",
+     "status": "warn",
+     "detail": "화면 비교 고정 글꼴 없음",
+     "fix": "글꼴 설치"
     }
    ],
    "cli": [
@@ -507,18 +513,21 @@
   "body": {
    "steps": [
     {
-     "name": "lint",
-     "status": "pass",
+     "name": "up",
+     "status": "fail",
      "durationMs": 1200
     }
    ],
-   "status": "pass",
+   "status": "fail",
    "logExcerpt": "",
    "artifacts": [
     "runs/ci-1/log.txt"
    ],
-   "treeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-   "fence": 3
+   "fence": 3,
+   "deployRestore": {
+    "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "status": "fail"
+   }
   },
   "status": 204
  },
