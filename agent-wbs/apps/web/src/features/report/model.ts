@@ -68,6 +68,16 @@ export const QUICK: readonly { key: 'thisWeek' | 'lastWeek' | 'last30'; l: strin
 export function changedLabel(c: ReportDoc['changesSince']): string | null {
   return c.replans > 0 ? `생성 이후 일정 재조정 ${String(c.replans)}회 — 현재 완료 예상 ${c.currentEnd ?? '—'} (보고서 기준 ${c.reportEnd ?? '—'})` : null;
 }
+/** 설정 묶음 이름(스냅샷 basis.currentSettings 값) */
+const SETTING_GROUP: Record<string, string> = { schedule: '일정 정책', blackouts: '작업 불가일', heartbeat: '연결 확인 주기', concurrency: '동시 실행 한도' };
+/**
+ * 「설정은 현재 값」 안내(기간 말 재구성 보완). 그 시점 설정을 알 수 없어 지금 값으로 계산한 묶음이 있으면 문구, 없으면 null.
+ * 왜 알리나: 완료 예상·Task별 예상 날짜는 설정으로 계산한다. 지금 값으로 계산했다는 사실을 숨기면 과거 예상을 그대로 믿게 된다.
+ */
+export function settingsNote(s: ReportSnapshotData): string | null {
+  const groups = s.basis?.currentSettings ?? [];
+  return groups.length ? `설정은 현재 값 — ${groups.map((g) => SETTING_GROUP[g] ?? g).join(' · ')}은 이 시점의 값을 알 수 없어 보고서를 만든 때의 값으로 계산했습니다.` : null;
+}
 export const snapLabel = (generatedAt: string) => `이 보고서는 ${formatDateTime(generatedAt)} 시점의 스냅샷입니다. 이후 데이터가 바뀌어도 내용은 바뀌지 않습니다.`;
 /** 보고용 제목의 프로젝트 이름도 자유 입력이라 내부 용어를 뺀다(리뷰 M6-01 3). */
 export const docTitle = (projectName: string, kind: ReportKind, view: ReportView) =>

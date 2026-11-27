@@ -62,6 +62,31 @@ test('awbs.state_at으로 과거 시점 기록을 넣을 수 있다(시험·데�
   expect(at).toBe('2026-10-19 15:00:00+00');
 });
 
+test('0037: 앱 역할은 기록 시각(awbs.state_at)을 지정할 수 없다(이력 시각 위조 차단)', async () => {
+  const c = await app.connect();
+  try {
+    await c.query("select set_config('awbs.state_at','2020-01-01T00:00:00Z',false)");
+    await expect(c.query("update tasks set title='위조 시도' where task_key='TASK-0001'")).rejects.toMatchObject({ code: '42501' });
+    await c.query("select set_config('awbs.state_at','',false)");
+    await c.query("update tasks set title='정상' where task_key='TASK-0001'");
+  } finally { c.release(); }
+  expect((await owner.query("select count(*)::int n from state_log where created_at<'2021-01-01'")).rows[0]?.n).toBe(0);
+});
+
+test('0037: 재조정 상태(pending→applied)와 설정 표 변경도 기록한다(설정은 project_id 없음)', async () => {
+  const p = (await owner.query<{ id: string }>('select id from projects')).rows[0]?.id;
+  const r = (await app.query<{ id: string }>("insert into replans(project_id,rp_key,trigger,actor,status,before,after) values($1,'RP-901','시험','팀장','pending','{}','{}') returning id", [p])).rows[0]?.id;
+  await app.query("update replans set status='applied' where id=$1", [r]);
+  expect((await owner.query("select op,data->>'status' st from state_log where tbl='replans' and row_id=$1 order by seq", [r])).rows)
+    .toEqual([{ op: 'insert', st: 'pending' }, { op: 'update', st: 'applied' }]);
+  await app.query('update schedule_policy set assume_rate=0.7');
+  await app.query("insert into blackout_days(date,note) values('2026-12-25','성탄절')");
+  await app.query('update app_settings set heartbeat_seconds=heartbeat_seconds+1');
+  await app.query("insert into concurrency_settings(mode) values('manual') on conflict (singleton) do update set mode='manual'");
+  const rows = (await owner.query<{ tbl: string; project_id: string | null }>("select distinct tbl,project_id from state_log where tbl in ('schedule_policy','blackout_days','app_settings','concurrency_settings') and op<>'seed' order by tbl")).rows;
+  expect(rows).toEqual(['app_settings', 'blackout_days', 'concurrency_settings', 'schedule_policy'].map((tbl) => ({ tbl, project_id: null })));
+});
+
 test('앱 권한은 기록을 고치거나 지우거나 비울 수 없다', async () => {
   await expect(app.query("update state_log set op='x'")).rejects.toMatchObject({ code: '42501' });
   await expect(app.query('delete from state_log')).rejects.toMatchObject({ code: '42501' });
@@ -69,10 +94,15 @@ test('앱 권한은 기록을 고치거나 지우거나 비울 수 없다', asyn
   await expect(owner.query("update state_log set op='x'")).rejects.toMatchObject({ code: '42501' });
 });
 
-test('초기화가 끝나면 상태 기록도 모두 지워진다(삭제 과정은 기록하지 않는다)', async () => {
-  expect((await owner.query('select count(*)::int n from state_log')).rows[0]?.n).toBeGreaterThan(0);
+test('초기화: 설정 유지면 프로젝트 기록만 지우고 설정 기록은 남긴다. 설정까지 지우면 모두 지운다', async () => {
+  expect((await owner.query('select count(*)::int n from state_log where project_id is not null')).rows[0]?.n).toBeGreaterThan(0);
   const name = (await owner.query<{ name: string }>('select name from projects')).rows[0]?.name;
   await app.query("select reset_project(1,$1,true,'팀장')", [name]);
+  expect((await owner.query('select count(*)::int n from state_log where project_id is not null')).rows[0]?.n).toBe(0);
+  expect((await owner.query("select count(*)::int n from state_log where tbl='schedule_policy'")).rows[0]?.n).toBeGreaterThan(0);
+  const { p } = await project(app);
+  const again = (await owner.query<{ name: string }>('select name from projects where id=$1', [p])).rows[0]?.name;
+  await app.query("select reset_project(2,$1,false,'팀장')", [again]);
   expect((await owner.query('select count(*)::int n from state_log')).rows[0]?.n).toBe(0);
 });
 
@@ -85,7 +115,7 @@ test('0036 전부터 있던 행은 seed로 한 번 남는다', async () => {
     await cp(fileURLToPath(new URL('../migrations', import.meta.url)), folder, { recursive: true });
     const path = join(folder, 'meta/_journal.json');
     const journal = JSON.parse(await readFile(path, 'utf8')) as { entries: { tag: string }[] };
-    journal.entries = journal.entries.filter((e) => !e.tag.startsWith('0036_'));
+    journal.entries = journal.entries.filter((e) => !e.tag.startsWith('0036_') && !e.tag.startsWith('0037_'));
     await writeFile(path, JSON.stringify(journal));
     await recreateTestDatabase(old.href);
     await migrate(drizzle(pool), { migrationsFolder: folder });

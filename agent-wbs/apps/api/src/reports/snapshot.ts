@@ -4,7 +4,7 @@ import {
   type GateInput, type ReportKind, type ReportSnapshotData, type TaskStatus, type VerificationResult,
 } from '@awbs/shared';
 import { wbsPaths } from '../tasks/wbs.ts';
-import { asOf, scheduleAt, stateFrom, type StateSource } from './state.ts';
+import { asOf, scheduleAt, settingsAt, stateFrom, type StateSource } from './state.ts';
 
 /**
  * 보고서 스냅샷 만들기(G§4.11 L371-396, P report L3800-3868, milestones §4.0).
@@ -89,7 +89,7 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
     q<{ key: string; task: string; dir: 'in' | 'out'; type: string; to_agent: 'Claude' | 'Codex' | null; from_agent: 'Claude' | 'Codex' | null; body: string; delivery: string | null; pending_next: boolean; at: string }>(
       `select msg_key key,task,dir,type,to_agent,from_agent,body,delivery::text delivery,pending_next,${iso('created_at')} at from ${src.rel('messages')} m where project_id=$1 and not draft order by created_at,id`, [projectId]),
     q<{ id: string; key: string; trigger: string; baseline_v: number | null; before: { end?: unknown }; after: { end?: unknown; lo?: unknown; hi?: unknown }; at: string }>(
-      `select id,rp_key key,trigger,baseline_v,before,after,${iso('created_at')} at from ${src.added('replans')} r where project_id=$1 and status='applied' order by created_at,id`, [projectId]),
+      `select id,rp_key key,trigger,baseline_v,before,after,${iso('created_at')} at from ${src.rel('replans')} r where project_id=$1 and status='applied' order by created_at,id`, [projectId]),
     q<{ replan: string; task: string; kind: 'delayed' | 'advanced' | 'new' | 'excluded'; before: { end?: unknown } | null; after: { end?: unknown } | null }>(
       `select replan,task,kind,before,after from ${src.added('replan_moves')} m where project_id=$1 order by created_at,id`, [projectId]),
     // 세션은 T 뒤에 끝났으면 T에는 아직 열려 있었다.
@@ -114,7 +114,8 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
   const est = (t: (typeof tasks)[number]) => (t.est === null ? 0 : Number(t.est));
 
   // 일정(T 시점). 순환 같은 일정 오류가 있어도 보고서는 만든다(일정 칸만 비운다).
-  const schedule = tasks.length ? await scheduleAt(client, projectId, src) : null;
+  const settings = await settingsAt(client, src);
+  const schedule = tasks.length ? await scheduleAt(client, projectId, src, settings) : null;
   const plan = new Map((schedule?.tasks ?? []).map((s) => [s.taskKey, s]));
 
   // 의존성: 공유 판정 함수(blockers)를 그대로 쓴다. 삭제·취소된 Task는 선행 조건에서 빠진다.
@@ -330,7 +331,7 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
       },
     },
     issues, series, done, active, failures, attempts: attemptRows, replans: replanRows, gaps: up.gaps, messages: messageRows, next, all,
-    basis: { asOf: at, stateFrom: coverage0, missing: missing ? ['state'] : [] },
+    basis: { asOf: at, stateFrom: coverage0, missing: missing ? ['state'] : [], currentSettings: settings.current },
   };
 }
 

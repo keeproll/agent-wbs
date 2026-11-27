@@ -43735,6 +43735,17 @@
                     "state"
                   ]
                 }
+              },
+              "currentSettings": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "schedule",
+                    "blackouts",
+                    "heartbeat",
+                    "concurrency"
+                  ]
+                }
               }
             }
           }

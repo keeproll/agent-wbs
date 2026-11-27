@@ -1127,8 +1127,13 @@ export const ReportSnapshot = Type.Object(
      * - stateFrom: 상태를 되살릴 수 있는 가장 이른 시각(상태 기록 시작). null이면 처음부터 기록이 있다.
      * - missing: 'state'면 그 시점 상태를 되살릴 수 없어 상태 칸(분포·진행 중·예정·전체 표 등)을 비웠다. 화면은 「기록 없음」으로 보인다.
      * 이 필드가 생기기 전에 만든 보고서에는 없다(생성 시각 기준).
+     * - currentSettings: 그 시점 값을 알 수 없어 **지금 값**으로 계산한 설정 묶음(일정 정책·작업 불가일·heartbeat·동시 실행 한도).
+     *   비어 있으면 모든 설정을 그 시점 값으로 썼다. 화면은 「설정은 현재 값」으로 표시한다.
      */
-    basis: c.Opt(obj({ asOf: c.Timestamp, stateFrom: Nullable(c.Timestamp), missing: List(AnyOf('state')) })),
+    basis: c.Opt(obj({
+      asOf: c.Timestamp, stateFrom: Nullable(c.Timestamp), missing: List(AnyOf('state')),
+      currentSettings: c.Opt(List(AnyOf('schedule', 'blackouts', 'heartbeat', 'concurrency'))),
+    })),
   },
   { title: 'ReportSnapshot' },
 );

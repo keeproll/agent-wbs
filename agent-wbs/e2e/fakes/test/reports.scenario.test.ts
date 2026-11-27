@@ -321,6 +321,8 @@ describe('시나리오 16: 주간 보고서 → 생성 이후 재조정 표시 �
     expect(listed.map((r) => r.id)).toContain(created.body.id);
     const doc = await open(created.body.id as string);
     expect(doc.snapshot.series).toHaveLength(7);
+    // 다음 예정: 일간은 다음 1일, 주간·기간 지정은 제목(「다음 주 예정」)대로 다음 7일(원본 P L3807은 기간 지정도 1일로 계산 — 원본 안의 모순, fix2.md)
+    for (const n of doc.snapshot.next) expect(n.start <= addDays(to, 7) && n.end >= addDays(to, 1)).toBe(true);
     expect(snapshotProblem(doc.snapshot)).toBeNull();
     // 오늘 만든 보고서에는 검토 대기 변경 제안이 「팀장 확인 필요」로 들어간다.
     expect(doc.snapshot.issues.map((i) => i.text)).toContain('CP-002 Change Proposal 검토 대기 — ' + String((await owner.query("select title from change_proposals where cp_key='CP-002'")).rows[0]?.title));
@@ -478,6 +480,12 @@ describe('기간 말 재구성(owner 2026-11-27 아이템 13): 그때 바로 찍
       async (t: string) => owner.query('update messages set pending_next=not pending_next where task=$1 and dir=$2', [t, 'out']),
       async () => owner.query("update change_proposals set status=$1 where cp_key='CP-002'", [pick(['review', 'changes', 'held'])]),
       async (t: string) => owner.query("update tasks set deleted_at=case when deleted_at is null then now() end where id=$1 and status='planning'", [t]),
+      // 설정 변경(0037부터 기록): 일정 정책·작업 불가일·heartbeat·동시 실행 한도
+      async () => owner.query('update schedule_policy set assume_rate=$1', [pick(['0.5', '0.6', '0.8'])]),
+      async () => owner.query("insert into blackout_days(date,note) values($1,'시험 휴무') on conflict (date) do nothing", [addDays('2026-12-01', Math.floor(r() * 20))]),
+      async () => owner.query('update app_settings set heartbeat_seconds=$1', [pick([20, 30, 45])]),
+      async () => owner.query(`insert into concurrency_settings(mode,caps) values('manual',$1) on conflict (singleton) do update set mode='manual',caps=$1`,
+        [JSON.stringify({ total: pick([2, 3, 4]), Claude: 1, Codex: 1, heavy: 1 })]),
     ];
     for (let i = 0; i < steps; i++) {
       try { await pick(ops)(pick(tasks)); } catch { /* 제약이 거부한 변경은 건너뛴다(그 자체가 기록되지 않는다) */ }
@@ -497,6 +505,35 @@ describe('기간 말 재구성(owner 2026-11-27 아이템 13): 그때 바로 찍
     expect(later.log).toEqual(first.live);
   });
 
+  test('재조정 상태도 기간 끝 시점: T에 pending이던 재조정은 뒤에 applied가 되어도 T 보고서에 넣지 않는다', async () => {
+    const id = await projectId();
+    const rp = (await owner.query<{ id: string }>(`insert into replans(project_id,rp_key,trigger,actor,baseline_v,status,before,after)
+      values($1,'RP-050','대기 재조정','시스템',null,'pending','{"end":"2026-11-10"}','{"end":"2026-11-30","lo":"2026-11-28","hi":"2026-12-02"}') returning id`, [id])).rows[0]?.id;
+    const first = await capture();
+    expect(first.live?.replans.map((r) => r.replanId)).not.toContain('RP-050');
+    await owner.query("update replans set status='applied' where id=$1", [rp]);
+    const later = await capture(first.now);
+    expect(later.log).toEqual(first.live);
+    expect((await capture()).log.replans.map((r) => r.replanId)).toContain('RP-050');
+  });
+
+  test('설정: 기록 전 시점은 버전으로 확인하고, 확인할 수 없는 묶음만 「지금 값」으로 표시한다', async () => {
+    const id = await projectId();
+    const c = await pool.connect();
+    try {
+      await c.query('begin isolation level repeatable read read only');
+      // 10-06은 준비 자료의 기록 시각(10-20)보다 이르다. 일정 정책 버전은 그 뒤(준비 시각)라 그때 값을 모른다.
+      const early = await buildSnapshot(c, id, { kind: 'custom', from: '2026-10-01', to: '2026-10-05', at: kst('2026-10-06', '09:00') });
+      const now = await buildSnapshot(c, id, { kind: 'custom', from: '2026-11-01', to: seoulDay(new Date()), at: new Date().toISOString() });
+      await c.query('commit');
+      expect(early.basis?.currentSettings).toEqual(expect.arrayContaining(['schedule', 'blackouts', 'heartbeat']));
+      // 동시 실행 설정 행이 아직 없으면(첫 저장 전) 그때도 없었다 → 확인됨
+      const conc = (await owner.query('select count(*)::int n from concurrency_settings')).rows[0]?.n;
+      if (conc === 0) expect(early.basis?.currentSettings).not.toContain('concurrency');
+      expect(now.basis?.currentSettings).toEqual([]);
+    } finally { c.release(); }
+  });
+
   test('상태 기록이 시작되기 전 시점은 지어내지 않고 「기록 없음」(basis.missing=state)', async () => {
     // 0036 이전 DB를 흉내 낸다: 상태 기록 시작(seed) 표시를 11-10에 남긴다.
     const id = await projectId();
@@ -507,7 +544,7 @@ describe('기간 말 재구성(owner 2026-11-27 아이템 13): 그때 바로 찍
       const old = await buildSnapshot(c, id, { kind: 'weekly', from: '2026-10-26', to: '2026-11-01', at: kst('2026-11-02', '07:00') });
       const recent = await buildSnapshot(c, id, { kind: 'custom', from: '2026-11-10', to: seoulDay(new Date()), at: new Date().toISOString() });
       await c.query('commit');
-      expect(old.basis).toEqual({ asOf: expect.any(String), stateFrom: kst('2026-11-10', '00:00'), missing: ['state'] });
+      expect(old.basis).toEqual({ asOf: expect.any(String), stateFrom: kst('2026-11-10', '00:00'), missing: ['state'], currentSettings: expect.any(Array) });
       expect([old.summary.statuses, old.active, old.all, old.next, old.done]).toEqual([[], [], [], [], []]);
       // 추가 전용 기록(재조정·중단)은 시각으로 알 수 있어 그대로 남는다.
       expect(old.replans.map((r) => r.replanId)).toEqual(['RP-002']);

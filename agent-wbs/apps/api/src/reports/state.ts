@@ -1,6 +1,8 @@
 import type { PoolClient } from '@awbs/db';
 import { schedule as computeSchedule, ScheduleError, type ScheduleInput, type TaskStatus } from '@awbs/shared';
-import { policyOf, scheduleInput } from '../planning/schedule.ts';
+import { OWNER_ASSUME_RATE, OWNER_THRESHOLD_DAYS } from '../planning/schedule.ts';
+import { caps as runnerCaps, wireCaps } from '../runner/service.ts';
+import type { RunnerRepository } from '../runner/repository.ts';
 import { wbsPaths } from '../tasks/wbs.ts';
 
 /**
@@ -18,13 +20,19 @@ import { wbsPaths } from '../tasks/wbs.ts';
  *
  * 되살릴 수 없는 것:
  * - 0036 전부터 있던 행은 마이그레이션 때 「seed」로 한 번 남았다. 그보다 이른 시점의 상태는 모른다 → `missing: ['state']`.
- * - 설정(일정 정책·작업 불가일·동시 실행 한도)은 기록하지 않아 지금 값을 쓴다. 이 값은 Task별 예상 날짜 계산에만 영향을 준다.
+ * - 설정(일정 정책·작업 불가일·heartbeat·동시 실행 한도)은 0037부터 기록한다(project_id 없음). 기록이 T 전에 없으면
+ *   설정 묶음별 버전(편집 시각)이 T 전인지로 「지금 값이 그때도 같았다」를 확인한다. 확인할 수 없으면 지금 값을 쓰고 `basis.currentSettings`에 적는다.
  */
 export type StateSource = 'log' | 'live';
 export const LOGGED_TABLES = [
   'projects', 'wbs_nodes', 'tasks', 'task_specs', 'task_dependencies', 'checklist_items', 'task_outputs', 'task_grades',
-  'task_attempts', 'messages', 'change_proposals', 'ci_runs',
+  'task_attempts', 'messages', 'change_proposals', 'ci_runs', 'replans',
 ] as const;
+/** 프로젝트가 없는 설정 표(0037부터 기록) */
+export const SETTING_TABLES = ['schedule_policy', 'blackout_days', 'app_settings', 'concurrency_settings'] as const;
+export type SettingTable = (typeof SETTING_TABLES)[number];
+/** 보고서가 「지금 값」을 쓴 설정 묶음(스냅샷 basis.currentSettings 값) */
+export type SettingGroup = 'schedule' | 'blackouts' | 'heartbeat' | 'concurrency';
 export type LoggedTable = (typeof LOGGED_TABLES)[number];
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -35,6 +43,8 @@ export interface AsOf {
   source: StateSource;
   /** 표 이름 → SQL 관계식(괄호로 묶은 하위 질의 또는 표 이름) */
   rel: (table: LoggedTable) => string;
+  /** 설정 표(project_id 없음)를 T 직전 상태로 */
+  setting: (table: SettingTable) => string;
   /** 추가 전용 표: 기록 시각이 T 전인 행 */
   added: (table: string, column?: string) => string;
   /** SQL에 넣는 T(timestamptz 상수) */
@@ -54,6 +64,9 @@ export function asOf(projectId: string, before: string, source: StateSource): As
       where l.project_id='${projectId}' and l.tbl='${table}' and l.created_at<${t} order by l.row_id,l.created_at desc,l.seq desc) l
       cross join lateral jsonb_populate_record(null::public.${table},l.data) r where l.op<>'delete')`),
     added: (table, column = 'created_at') => `(select * from public.${table} where ${column}<${t})`,
+    setting: (table) => (source === 'live' ? `public.${table}` : `(select r.* from (select distinct on (l.row_id) l.op,l.data from public.state_log l
+      where l.project_id is null and l.tbl='${table}' and l.created_at<${t} order by l.row_id,l.created_at desc,l.seq desc) l
+      cross join lateral jsonb_populate_record(null::public.${table},l.data) r where l.op<>'delete')`),
   };
 }
 
@@ -68,9 +81,51 @@ export async function stateFrom(client: PoolClient, projectId: string): Promise<
  * T 시점의 일정 계산. 계산 함수는 GET /api/schedule과 같은 shared `schedule()`이다.
  * 입력 중 Task·의존성·추정·세션·사용량·관측 비율·기준 일정은 T 시점 값, 설정(정책·불가일·한도·heartbeat)은 지금 값이다.
  */
-export async function scheduleAt(client: PoolClient, projectId: string, a: AsOf) {
-  const policy = await policyOf(client);
-  const { input: current } = await scheduleInput(client, projectId, policy);
+/**
+ * T 시점 설정. 묶음마다 다음 순서로 정한다.
+ * 1. 상태 기록에 T 전 기록이 있으면 그것(정확).
+ * 2. 없으면 지금 표. 묶음 버전(편집 시각)이 T 전이면 그때도 같은 값이었다(정확).
+ * 3. 그것도 아니면 지금 값을 쓰고 그 묶음을 `current`에 넣는다(보고서가 「설정은 현재 값」으로 표시).
+ */
+export async function settingsAt(client: PoolClient, a: AsOf) {
+  const q = <T extends object>(sql: string, args: unknown[] = []) => client.query<T>(sql, args).then((r) => r.rows);
+  const current: SettingGroup[] = [];
+  const logged = async (table: SettingTable) => a.source === 'log'
+    && Boolean((await q(`select 1 from state_log where project_id is null and tbl=$1 and created_at<${a.t} limit 1`, [table])).length);
+  // 기록이 없을 때: 지금 표 + 「그때도 같았나」 확인식(SQL, T 전이면 참)
+  const pick = async (table: SettingTable, group: SettingGroup, proof: string) => {
+    if (await logged(table)) return a.setting(table);
+    if (a.source === 'log' && !(await q<{ ok: boolean }>(`select coalesce((${proof}),true) ok`))[0]?.ok) current.push(group);
+    return `public.${table}`;
+  };
+  interface Policy { auto_replan: boolean | null; threshold_days: string | null; assume_rate: string | null; window_days: number | null; min_hours: string | null }
+  const policyRel = await pick('schedule_policy', 'schedule', `select settings_version<${a.t} from schedule_policy where singleton`);
+  const row = (await q<Policy>(`select auto_replan,threshold_days::text,assume_rate::text,window_days,min_hours::text from ${policyRel} p where singleton`))[0];
+  const policy = {
+    autoReplan: row?.auto_replan ?? false,
+    thresholdDays: row?.threshold_days == null ? OWNER_THRESHOLD_DAYS : Number(row.threshold_days),
+    assumeRate: row?.assume_rate == null ? OWNER_ASSUME_RATE : Number(row.assume_rate),
+    windowDays: row?.window_days ?? 7, minHours: Number(row?.min_hours ?? 72),
+  };
+  const blackoutRel = await pick('blackout_days', 'blackouts', `select blackouts_version<${a.t} from app_settings where singleton`);
+  const blackouts = (await q<{ date: string }>(`select to_char(date,'YYYY-MM-DD') date from ${blackoutRel} b order by date`)).map((r) => r.date);
+  const appRel = await pick('app_settings', 'heartbeat', `select updated_at<${a.t} from app_settings where singleton`);
+  const hb = (await q<{ heartbeat_seconds: number; heartbeat_misses: number }>(`select heartbeat_seconds,heartbeat_misses from ${appRel} s where singleton`))[0];
+  // 동시 실행 설정 행이 T 뒤에 처음 만들어졌으면 T에는 없었다(기본값).
+  const concRel = await pick('concurrency_settings', 'concurrency', `select coalesce(concurrency_version,created_at)<${a.t} or created_at>=${a.t} from concurrency_settings where singleton`);
+  const concRows = await q<Record<string, unknown> & { created_at: Date }>(`select * from ${concRel} c where singleton`);
+  const conc = concRows[0] && !(a.source === 'log' && concRel === 'public.concurrency_settings' && concRows[0].created_at.getTime() >= Date.parse(a.before)) ? concRows[0] : undefined;
+  // 실행 PC 사양은 추가 전용 기록이라 T 전 마지막 보고를 쓴다. 한도 계산은 실행 화면과 같은 함수(runner/service caps)다.
+  const host = (await q(`select * from ${a.added('runner_hosts')} h order by seen_at desc,created_at desc limit 1`))[0];
+  const repo = { host: () => Promise.resolve(host), settings: () => Promise.resolve(conc) } as unknown as RunnerRepository;
+  const manual = conc?.mode === 'manual' ? conc.caps as { total?: number; Claude?: number; Codex?: number } | null : null;
+  const cap: { total?: number; Claude?: number; Codex?: number } = host ? wireCaps((await runnerCaps(repo)).caps) : manual ?? {};
+  return { policy, blackouts, heartbeat: hb ? { intervalSec: hb.heartbeat_seconds, missLimit: hb.heartbeat_misses } : null, cap, current };
+}
+
+export async function scheduleAt(client: PoolClient, projectId: string, a: AsOf, settings?: Awaited<ReturnType<typeof settingsAt>>) {
+  const set = settings ?? await settingsAt(client, a);
+  const policy = set.policy;
   const q = <T extends object>(sql: string, args: unknown[] = []) => client.query<T>(sql, args).then((r) => r.rows);
   const isoAt = (c: string) => `to_char(${c} at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
   const tasks = await q<{ id: string; task_key: string; wbs_node_id: string; sort_order: number; status: TaskStatus; priority: number; assignee_agent: 'Claude' | 'Codex' | null;
@@ -94,9 +149,13 @@ export async function scheduleAt(client: PoolClient, projectId: string, a: AsOf)
      from ${a.added('runner_concurrency_log')} c where running>0 and created_at>=${a.t}-make_interval(days=>$1)`, [policy.windowDays]))[0]?.ratio ?? 0);
   const paths = wbsPaths(nodes.map((n) => ({ id: n.id, kind: n.kind, parentId: n.parent_id, sortOrder: n.sort_order })),
     tasks.map((t) => ({ id: t.id, wbsNodeId: t.wbs_node_id, sortOrder: t.sort_order, deleted: false })));
+  const total = set.cap.total ?? 2;
   const input: ScheduleInput = {
-    ...current,
     now: a.before,
+    assumeRate: policy.assumeRate,
+    policy: { windowDays: policy.windowDays, minHours: policy.minHours },
+    ...(set.heartbeat ? { heartbeat: set.heartbeat } : {}),
+    blackouts: set.blackouts,
     tasks: tasks.map((task) => {
       const est = task.est === null ? 0 : Number(task.est);
       const done = task.status === 'done';
@@ -111,7 +170,7 @@ export async function scheduleAt(client: PoolClient, projectId: string, a: AsOf)
     }),
     deps,
     sessions: sessions.map((s) => ({ from: s.from, ...(s.to ? { to: s.to } : {}), lastHeartbeatAt: s.last })),
-    concurrency: { ...current.concurrency, current: Math.min(current.concurrency.total, limit ?? current.concurrency.total), subRatio: ratio },
+    concurrency: { total, current: Math.min(total, limit ?? total), subRatio: ratio, Claude: set.cap.Claude ?? 1, Codex: set.cap.Codex ?? 1 },
     usage: Object.fromEntries(usage.map((row) => [row.agent, { remain: Number(row.remain), resetAt: row.reset_at }])),
   };
   const baselines = await q<{ v: number; expected: { end?: string }; range: { lo: string; hi: string }; id: string }>(

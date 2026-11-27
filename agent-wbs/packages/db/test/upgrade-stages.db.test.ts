@@ -49,7 +49,7 @@ test('빈 DB와 0014·0016(master)·0017·0018·0019·0020·0021 단계 DB가 �
     '0018_20261126_message_read_touch', '0019_20261126_schedule_defaults', '0020_20261126_execution_basis',
     '0021_20261127_project_followup', '0022_20261127_evidence_reference', '0023_20261127_project_observation_version', '0024_20261127_settings_followup', '0025_20261127_setting_versions',
     // M6-01 기간 말 재구성의 상태 기록(배정 번호 0036)
-    '0036_20261127_report_state_log']);
+    '0036_20261127_report_state_log', '0037_20261127_report_state_log_settings']);
   const fresh = await database('fresh');
   await runMigrations(fresh);
   const expected = await schemaOf(fresh);

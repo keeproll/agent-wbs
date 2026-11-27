@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { internalTerms, type ReportSnapshotData } from '@awbs/shared';
 import {
-  changedLabel, defaultView, docTitle, externalDoc, formProblem, internalDoc, lateLabel, quickRange, rowView, type ReportRow,
+  changedLabel, defaultView, docTitle, externalDoc, settingsNote, formProblem, internalDoc, lateLabel, quickRange, rowView, type ReportRow,
 } from '../src/features/report/model.ts';
 
 const T = (kst: string) => new Date(`${kst}:00+09:00`).toISOString();
@@ -143,4 +143,11 @@ test('기간 말 재구성: 그 시점 상태가 기록 전이면 상태 칸은 
   expect(d.statusLine).toBe('기록 없음');
   expect(d.noRecord).toBe('기록 없음 — 이 기간 끝 시점의 상태는 상태 기록 시작(2026-11-10) 전이라 되살릴 수 없습니다.');
   expect(internalDoc(empty).noRecord).toBeNull();
+});
+
+test('설정을 그 시점 값으로 알 수 없으면 「설정은 현재 값」을 묶음 이름과 함께 알린다', () => {
+  const s = { ...empty, basis: { asOf: T('2026-11-02 00:00'), stateFrom: null, missing: [], currentSettings: ['schedule', 'blackouts'] as ('schedule' | 'blackouts')[] } };
+  expect(settingsNote(s)).toBe('설정은 현재 값 — 일정 정책 · 작업 불가일은 이 시점의 값을 알 수 없어 보고서를 만든 때의 값으로 계산했습니다.');
+  expect(settingsNote({ ...s, basis: { ...s.basis, currentSettings: [] } })).toBeNull();
+  expect(settingsNote(empty)).toBeNull();
 });

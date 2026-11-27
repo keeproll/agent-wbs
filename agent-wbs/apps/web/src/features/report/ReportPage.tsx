@@ -21,7 +21,7 @@ import { useTopBar } from '../../shared/ui/feedback.tsx';
 import { LINK } from '../../shared/links.ts';
 import {
   changedLabel, defaultView, docTitle, externalDoc, formProblem, internalDoc, KIND, lateLabel, pdfName, periodLabel, QUICK, quickRange, rowView,
-  RULE_TEXT, snapLabel, VIEWS, type Kpi, type ReportDoc, type ReportKind, type ReportRow, type ReportView,
+  RULE_TEXT, settingsNote, snapLabel, VIEWS, type Kpi, type ReportDoc, type ReportKind, type ReportRow, type ReportView,
 } from './model.ts';
 import { formatDateTime } from '../../shared/format.ts';
 import './report.css';
@@ -187,6 +187,7 @@ function ReportDocument({ row, projectName, view, onView }: { row: ReportRow; pr
             <span className="mono">{row.reportKey}</span>
           </div>
           <p className="rpt-snap">{snapLabel(row.generatedAt)}{late && ` · ${late}`}</p>
+          {settingsNote(d.snapshot) && <p className="rpt-snap" role="note">{settingsNote(d.snapshot)}</p>}
         </header>
         {view === 'int' ? <InternalView d={d} kind={row.kind} weekly={weekly} /> : <ExternalSections d={d} kind={row.kind} weekly={weekly} />}
         <footer className="rpt-f">Agent WBS 자동 생성 · {row.reportKey} · {formatDateTime(row.generatedAt)}</footer>
