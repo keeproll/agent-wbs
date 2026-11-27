@@ -19,7 +19,8 @@
     "check": "pnpm run typecheck && pnpm run lint && pnpm run test",
     "openapi:generate": "node scripts/openapi.ts",
     "openapi:check": "node scripts/openapi.ts --check",
-    "db:migrate": "pnpm --filter @awbs/db run migrate"
+    "db:migrate": "pnpm --filter @awbs/db run migrate",
+    "subagents:check": "node --conditions=awbs-source packages/db/src/subagents-cli.ts"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

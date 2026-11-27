@@ -115,7 +115,7 @@ test('늦은 첫 응답: 0.2초 뒤 메뉴 배치 모양 skeleton → 응답 →
 
 test('이미 본 화면으로 다시 오면 이전 화면을 유지하고 상단 진행 막대를 보인다', async ({ page }) => {
   const api = await fakeApi(page);
-  await page.goto('/ci');
+  await page.goto('/design'); // 아직 「준비 중」인 메뉴(빌드·통합은 M7-05에서 구현됨)
   await expect(page.getByText('이 화면은 아직 구현되지 않았습니다.')).toBeVisible();
   const slow = hold((route) => json(route, 200, ACTIVE_PROJECT));
   api.on('GET /api/project', slow.handler);

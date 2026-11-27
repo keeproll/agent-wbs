@@ -4,12 +4,12 @@ import type { NewTask, SimulationOp, ProposalSnapshot, ProposalTask, JudgedRule,
 export const ac = (then: string) => ({ given: 'g', when: 'w', then, method: '' });
 
 // Fixture records of a Planning agreement; real hashes are the server's.
-export const HASH = 'hash';
+export const HASH = 'a'.repeat(64);
 export const JUDGED = ['revert', 'contract', 'refactor'] as const;
 export const SPLIT_JUDGED = ['ac_meaning', 'layer_order', 'test_included'] as const;
 export const judgement = <R extends string>(rule: R, patch: Partial<Judgement<R>> = {}): Judgement<R> => ({
   rule, result: 'met', agreedBy: ['Claude', 'Codex'], basis: '확인', subjectHash: HASH,
-  judgedAt: '2026-11-25T00:00:00Z', sourceRef: 'PL-001', ...patch });
+  judgedAt: '2026-11-25T00:00:00Z', ...patch, sourceRef: patch.sourceRef ?? `sha256:${patch.subjectHash ?? HASH}` });
 export const judged = (rules: readonly JudgedRule[] = JUDGED, patch: Partial<Judgement<JudgedRule>> = {}): JudgedRules =>
   ({ schemaVersion: 1, items: rules.map(rule => judgement(rule, patch)) });
 

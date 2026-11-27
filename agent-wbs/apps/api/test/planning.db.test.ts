@@ -5,6 +5,9 @@ import { createRequire } from 'node:module';
 import { afterAll, beforeAll, describe, expect, inject, test } from 'vitest';
 import { buildApp } from '../src/app.ts';
 import { issueLoginLink, issueRunnerToken } from '../src/platform/credentials.ts';
+import { proposalFixture } from './judgement-fixture.ts';
+import { judgedTasks } from '../src/policy/judged.ts';
+import { judgedContentHash } from '../src/tasks/hash.ts';
 
 /*
  * M2-07 완료 조건(milestones.md): Planning·변경 제안(CP) 미리보기=반영·자동/보류·추정·재조정·분할.
@@ -113,7 +116,7 @@ async function job(kind = 'planning', payload: object = {}) {
     [projectId, kind, payload, epoch, `test:${randomUUID()}`])).rows[0]?.id ?? '';
 }
 async function planningCp(body: Record<string, unknown>) {
-  const response = await runner('/api/planning/proposals', { jobId: await job(), fence: 1, title: 'Planning 제안', reason: '사유', source: { kind: 'planning' }, ...body });
+  const response = await runner('/api/planning/proposals', { jobId: await job(), fence: 1, title: 'Planning 제안', reason: '사유', source: { kind: 'planning' }, ...await proposalFixture(ownerPool, projectId, body) });
   expect(response.statusCode, response.body).toBe(201);
   expectShape('submitPlanningProposal', 201, response.json());
   const { id } = response.json<{ id: string }>();
@@ -131,7 +134,7 @@ const judgementJobs = async (proposalId: string) => (await ownerPool.query<{ id:
   proposal: { id: string; ops: unknown[]; targets: { target: string; subjectHash: string; before: unknown; after: unknown }[]; splitSubjectHash: string | null; splitTasks: { taskKey: string }[] | null };
 } }>("select id,state,payload from runner_jobs where kind='planning' and payload->'proposal'->>'id'=$1 order by created_at", [proposalId])).rows;
 const met = (rules: string[], subjectHash?: string) => ({ schemaVersion: 1, items: rules.map((rule) => ({
-  rule, result: 'met', agreedBy: ['Claude', 'Codex'], basis: '근거', judgedAt: '2026-11-26T00:00:00Z', sourceRef: 'planning-job', ...(subjectHash ? { subjectHash } : {}),
+  rule, result: 'met', agreedBy: ['Claude', 'Codex'], basis: '근거', judgedAt: '2026-11-26T00:00:00Z', sourceRef: `sha256:${subjectHash ?? 'a'.repeat(64)}`, ...(subjectHash ? { subjectHash } : {}),
 })) });
 const RULES = ['revert', 'contract', 'refactor'];
 
@@ -206,6 +209,12 @@ describe('planning 취소 반영(D-27): 미리보기 영향 = 반영 결과, 한
     // 재조정도 같은 반영에서 기록된다.
     expect(await countRows('replans')).toBe(replansBefore + 1);
     expect(result.proposal.events.map((e) => e.action)).toEqual(['created', 'submitted', 'approved', 'applied']);
+    // M5·M7 통합(조정자 추가 범위): 시계가 뒤로 가서 나중 이벤트가 더 작은 시각을 받아도 이력은 기록 순서다(M6-01 fix5 간헐 실패).
+    await ownerPool.query("alter table change_proposal_events disable trigger user");
+    try {
+      await ownerPool.query("update change_proposal_events set created_at=created_at - interval '1 hour' where proposal=$1 and kind in ('approved','applied')", [result.proposal.id]);
+    } finally { await ownerPool.query("alter table change_proposal_events enable trigger user"); }
+    expect((await proposalOf(result.proposal.id)).events.map((e) => e.action)).toEqual(['created', 'submitted', 'approved', 'applied']);
   });
 
   test('반영 중 재조정 기록이 실패하면 취소·관계 제거·이력이 모두 되돌려진다', async () => {
@@ -496,7 +505,7 @@ describe('planning CP splitBasis와 add 선택 필드', () => {
       await ownerPool.query("update tasks set conflict_group='pay' where task_key=$1", [second]);
       await estimate(second, 10);
       await ownerPool.query('update task_specs set ac=$2 where task=$1', [await idOf(second), JSON.stringify(ac.map((x) => ({ ...x, method: '' })))]);
-      // 판단 규칙을 켜고 조각마다 판단을 함께 보낸다. 서버는 상속한 묶음을 넣은 내용으로 hash를 계산해 붙인다.
+      // 판단 규칙을 켜고 조각마다 상속한 묶음을 포함한 내용의 입력 지문을 함께 보낸다.
       await judgedRulesOn(true);
       const opsTwo = ops.map((op) => ('task' in op ? { ...op, task: second } : { ...op, t: { ...op.t, judgedRules: met(RULES) } }));
       const stored = await planningCp({ source: { kind: 'split', id: second }, ops: opsTwo, splitJudgements: met(['ac_meaning', 'layer_order', 'test_included']) });
@@ -525,4 +534,64 @@ test('변경 제안으로 들어온 깨진 설계도 Task에 저장하기 전에
   const response = await call('POST', `/api/proposals/${cp.id}/submit`, { updatedAt: cp.updatedAt });
   expect(response.statusCode, response.body).toBe(400);
   expect(errorOf(response).errors).toEqual(expect.arrayContaining([expect.objectContaining({ path: 'ops.0.t.design.0.content.ents.0.f.name' })]));
+});
+
+test('CP의 옛 입력 판단은 저장하지 않으며 같은 변경 후 입력만 통과한다(재판단도 동일)', async () => {
+  await judgedRulesOn(true);
+  await ownerPool.query('update schedule_policy set cp_auto=false');
+  const key = await task({ title: '지문 대조 대상' });
+  const client = await ownerPool.connect();
+  let before: Awaited<ReturnType<typeof judgedTasks>>[number];
+  try {
+    const rows = await judgedTasks(client, [await idOf(key)]);
+    if (!rows[0]) throw new Error('판단 대상 없음');
+    before = rows[0];
+  } finally { client.release(); }
+  const hash = judgedContentHash({ ...before.content, doneCond: '판단한 새 완료 조건' });
+  const body = { jobId: await job(), fence: 1, title: '입력 지문 대조', reason: '시험', source: { kind: 'planning' },
+    ops: [{ op: 'modify', task: key, field: 'doneCond', after: '판단한 새 완료 조건' }] };
+  const countBefore = await countRows('change_proposals');
+  const old = await runner('/api/planning/proposals', { ...body, taskJudgements: [{ taskKey: key, judgedRules: met(RULES, undefined) }] });
+  expect(old.statusCode, old.body).toBe(409);
+  expect(errorOf(old).details.subjectHash).toBe(hash);
+  expect(await countRows('change_proposals')).toBe(countBefore);
+  const good = met(RULES);
+  good.items.forEach((item) => { item.sourceRef = `sha256:${hash}`; });
+  const accepted = await runner('/api/planning/proposals', { ...body, taskJudgements: [{ taskKey: key, judgedRules: good }] });
+  expect(accepted.statusCode, accepted.body).toBe(201);
+  const id = accepted.json<{ id: string }>().id;
+  const stored = (await ownerPool.query<{ task_judgements: { judgedRules: { items: { sourceRef: string; subjectHash: string }[] } }[] }>('select task_judgements from change_proposals where id=$1', [id])).rows[0];
+  expect(stored?.task_judgements[0]?.judgedRules.items).toEqual(good.items.map((item) => ({ ...item, subjectHash: hash })));
+  const badSource = met(RULES, hash);
+  badSource.items.forEach((item) => { item.sourceRef = `sha256:${before.subjectHash}`; });
+  const rejected = await runner(`/api/planning/proposals/${id}/judgements`, { jobId: body.jobId, fence: 1, judgements: [{ target: key, judgedRules: badSource }] });
+  expect(rejected.statusCode, rejected.body).toBe(409);
+  expect(errorOf(rejected).details.subjectHash).toBe(hash);
+  const report = await runner(`/api/planning/proposals/${id}/judgements`, { jobId: body.jobId, fence: 1, judgements: [{ target: key, judgedRules: met(RULES, hash) }] });
+  expect(report.statusCode, report.body).toBe(204);
+});
+
+test.each(['새 Task', '분할 전체'])('CP %s 판단도 옛 지문을 새 지문으로 바꿔 저장하지 않는다', async (kind) => {
+  await ownerPool.query('update schedule_policy set cp_auto=false');
+  const original = await task({ title: '분할할 원래 Task' });
+  const splitting = kind === '분할 전체';
+  const good = await proposalFixture(ownerPool, projectId, {
+    source: splitting ? { kind: 'split', id: original } : { kind: 'planning' },
+    ops: [leadAdd('NEW-1', { splitBasis: '분할 근거', ...(!splitting && { judgedRules: met(RULES) }) })],
+    ...(splitting && { splitJudgements: met(['ac_meaning', 'layer_order', 'test_included']) }),
+  });
+  const wrong = structuredClone(good);
+  const added = wrong.ops.find((op) => op.op === 'add');
+  const record = splitting ? wrong.splitJudgements : added?.t.judgedRules;
+  if (!record) throw new Error('판단 기록 없음');
+  const expected = record.items[0]?.sourceRef.slice(7);
+  record.items.forEach((item) => { item.sourceRef = `sha256:${'0'.repeat(64)}`; });
+  const base = { jobId: await job(), fence: 1, title: '지문 대조', reason: '시험' };
+  const n = await countRows('change_proposals');
+  const rejected = await runner('/api/planning/proposals', { ...base, ...wrong });
+  expect(rejected.statusCode, rejected.body).toBe(409);
+  expect(errorOf(rejected).details.subjectHash).toBe(expected);
+  expect(await countRows('change_proposals')).toBe(n);
+  const accepted = await runner('/api/planning/proposals', { ...base, ...good });
+  expect(accepted.statusCode, accepted.body).toBe(201);
 });

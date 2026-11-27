@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { afterAll, expect, inject, test } from 'vitest';
-import { checkMigrationsApplied, createPool, recreateTestDatabase, runMigrations, seedDemo, type Pool } from '../src/index.ts';
+import { checkMigrationsApplied, createPool, MigrationGapError, recreateTestDatabase, runMigrations, seedDemo, type Pool } from '../src/index.ts';
 
 /*
  * M2 통합: 마이그레이션 배정 번호(0015 platform, 0016 contract_sync, 0017 usage_reset_unknown, 0018~0019 M2-08, 0020 M2-06)를
@@ -42,18 +42,27 @@ async function schemaOf(pool: Pool): Promise<string> {
 }
 
 /*
- * M6 통합 재번호(0036~0043). 옛 번호 DB: 각 M6 작업 브랜치에서 그 작업의 마이그레이션을 옛 이름·옛 시각(when)으로 적용한 DB.
- * - 옛 이름 파일은 같은 내용으로 만든다(hash가 같다). 옛 0047만 내용이 바뀌었으므로(이력 판단 추가) 옛 내용(fixtures)을 쓴다.
- * - 옛 시각이 새 번호보다 커서 Drizzle만으로는 새 번호 마이그레이션을 건너뛴다. runMigrations의 보충이 채워야 한다.
+ * M6 통합 재번호(새 main 위 0028~0035). 옛 번호 DB: M6 마이그레이션을 옛 이름·옛 시각(when)으로 적용한 DB.
+ * - m6int·m6int_29: M6 통합 브랜치(8ff0cee, main 반영 전)의 번호 0036~0043. 0026·0027(M5·M7)은 아직 없다.
+ * - m6_03~m6_05: 각 M6 작업 브랜치의 번호(0049·0051·0052·0053·0054).
+ * - 옛 이름 파일은 같은 내용으로 만든다(hash가 같다). 그래서 runMigrations가 기록 시각을 맞추고, 빠진 앞 번호(0026·0027 등)를 보충한다.
+ * - m6_02: 옛 0047은 내용이 바뀌었다(이력 판단 추가, 옛 내용 fixtures). 모르는 hash의 기록이 있으면 보충하지 않고
+ *   누락 검사(MigrationGapError)로 멈춘다(M5·M7 통합 원칙: 내용이 다른 옛 판을 적용한 DB는 새로 만든다).
  */
+const M6_TAGS = ['0028_20261127_report_state_log', '0029_20261127_report_state_log_settings', '0030_20261127_report_project_name',
+  '0031_20261127_mail_queue', '0032_20261127_telegram_transitions', '0033_20261127_telegram_review',
+  '0034_20261127_design_ledger', '0035_20261127_design_display_keys'];
+const m6int = (count: number) => M6_TAGS.slice(0, count).map((from) => ({ tag: String(Number(from.slice(0, 4)) + 8).padStart(4, '0') + from.slice(4), from }));
 const OLD: Record<string, { tag: string; from?: string; fixture?: string }[]> = {
+  m6int_29: m6int(2),
+  m6int: m6int(8),
   m6_02: [{ tag: '0047_20261127_report_project_name', fixture: 'fixtures/0047_20261127_report_project_name.sql' }],
-  m6_03: [{ tag: '0049_20261127_mail_queue', from: '0039_20261127_mail_queue' }],
-  m6_04: [{ tag: '0051_20261127_telegram_transitions', from: '0040_20261127_telegram_transitions' }, { tag: '0052_20261127_telegram_review', from: '0041_20261127_telegram_review' }],
-  m6_05: [{ tag: '0053_20261127_design_ledger', from: '0042_20261127_design_ledger' }, { tag: '0054_20261127_design_display_keys', from: '0043_20261127_design_display_keys' }],
+  m6_03: [{ tag: '0049_20261127_mail_queue', from: '0031_20261127_mail_queue' }],
+  m6_04: [{ tag: '0051_20261127_telegram_transitions', from: '0032_20261127_telegram_transitions' }, { tag: '0052_20261127_telegram_review', from: '0033_20261127_telegram_review' }],
+  m6_05: [{ tag: '0053_20261127_design_ledger', from: '0034_20261127_design_ledger' }, { tag: '0054_20261127_design_display_keys', from: '0035_20261127_design_display_keys' }],
 };
 
-test('빈 DB와 0014·0016(master)·0017~0025·M6 중간(0036~0042) 단계 DB, M6 옛 번호 DB가 최신으로 올린 뒤 같은 구조가 된다', async () => {
+test('빈 DB와 0014·0016(master)·0017~0027·M6 중간(0029~0034) 단계 DB, M6 옛 번호 DB가 최신으로 올린 뒤 같은 구조가 된다', async () => {
   const journalPath = fileURLToPath(new URL('../migrations/meta/_journal.json', import.meta.url));
   interface Entry { idx: number; tag: string; when: number; version: string; breakpoints: boolean }
   const journal = JSON.parse(await readFile(journalPath, 'utf8')) as { entries: Entry[] };
@@ -61,17 +70,17 @@ test('빈 DB와 0014·0016(master)·0017~0025·M6 중간(0036~0042) 단계 DB, M
     '0015_20261126_platform_epoch_lock', '0016_20261126_contract_sync', '0017_20261126_usage_reset_unknown',
     '0018_20261126_message_read_touch', '0019_20261126_schedule_defaults', '0020_20261126_execution_basis',
     '0021_20261127_project_followup', '0022_20261127_evidence_reference', '0023_20261127_project_observation_version', '0024_20261127_settings_followup', '0025_20261127_setting_versions',
-    // M6 통합 재번호(옛 번호): M6-01 상태 이력 0036·0037(그대로), M6-02 이름 채움 0038(0047), M6-03 메일 큐 0039(0049),
-    // M6-04 Telegram 0040·0041(0051·0052), M6-05 설계 원장 0042·0043(0053·0054)
-    '0036_20261127_report_state_log', '0037_20261127_report_state_log_settings', '0038_20261127_report_project_name',
-    '0039_20261127_mail_queue', '0040_20261127_telegram_transitions', '0041_20261127_telegram_review',
-    '0042_20261127_design_ledger', '0043_20261127_design_display_keys']);
+    // M5·M7 통합(main): CI 0026, Planning 수신 순번 0027
+    '0026_20261127_ci_reports', '0027_20261127_planning_event_order',
+    // M6 통합 재번호(새 main 위): M6-01 상태 이력 0028·0029, M6-02 이름 채움 0030, M6-03 메일 큐 0031,
+    // M6-04 Telegram 0032·0033, M6-05 설계 원장 0034·0035
+    ...M6_TAGS]);
   // journal 시각 = 1795740000000 + 번호(0021 이후 규칙)
   for (const e of journal.entries.slice(26)) expect(e.when, e.tag).toBe(1795740000000 + Number(e.tag.slice(0, 4)));
   const fresh = await database('fresh');
   await runMigrations(fresh);
   const expected = await schemaOf(fresh);
-  const stages: (number | string)[] = [14, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 31, 32, ...Object.keys(OLD)];
+  const stages: (number | string)[] = [14, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 29, 30, 31, 33, 34, ...Object.keys(OLD)];
   for (const stage of stages) {
     const pool = await database(String(stage));
     const folder = await mkdtemp(join(tmpdir(), `awbs-stage-${String(stage)}-`));
@@ -90,12 +99,30 @@ test('빈 DB와 0014·0016(master)·0017~0025·M6 중간(0036~0042) 단계 DB, M
       await writeFile(join(folder, 'meta/_journal.json'), JSON.stringify({ ...journal, entries }));
       await migrate(drizzle(pool), { migrationsFolder: folder });
     } finally { await rm(folder, { recursive: true, force: true }); }
+    if (stage === 'm6_02') {
+      await expect(runMigrations(pool), '단계 m6_02').rejects.toBeInstanceOf(MigrationGapError);
+      continue;
+    }
     await pool.query('select seed_system()');
     if (stage === 20) await pool.query(`insert into projects(name,repo_url,repo_owner,repo_name,lead_instruction,phase,created_at)
       values('기존 프로젝트','','','','','active','2000-01-01T20:00:00Z')`);
     let attempts: unknown[] = [];
     if (stage === 23) {
-      await seedDemo(pool, base.href);
+      // 최신 seed에 필요한 관측 칸만 잠시 빌린 뒤 0023 구조로 되돌려 실제 업그레이드를 검사한다.
+      await pool.query("alter table projects add column pipeline_observations jsonb not null default '{}'");
+      const sequenceTables = ['planning_jobs','task_estimates','change_proposals','runner_jobs','task_attempts','attempt_observations','runner_hosts','runner_concurrency_log','agent_usage','task_history','ci_steps','runner_sessions','change_proposal_events','planning_job_logs','planning_reviews'];
+      for (const table of sequenceTables) await pool.query(`alter table ${table} add column record_no bigint default 1`);
+      await pool.query("alter table ci_runs add column note text,add column e2e jsonb,add column github_status jsonb,add column finished_at timestamptz,add column cause_candidates jsonb not null default '[]'");
+      await pool.query('alter table merge_queue add column merged_at timestamptz');
+      await pool.query('alter table flaky_tests add column last_failed_at timestamptz');
+      try { await seedDemo(pool, base.href); }
+      finally {
+        await pool.query('alter table projects drop column pipeline_observations');
+        await pool.query('alter table ci_runs drop column note,drop column e2e,drop column github_status,drop column finished_at,drop column cause_candidates');
+        await pool.query('alter table merge_queue drop column merged_at');
+        await pool.query('alter table flaky_tests drop column last_failed_at');
+        for (const table of sequenceTables) await pool.query(`alter table ${table} drop column record_no`);
+      }
       await pool.query('alter table counters disable trigger counter_monotone');
       await pool.query("update counters set value=1 where kind='message'");
       await pool.query('alter table counters enable trigger counter_monotone');
@@ -119,10 +146,51 @@ test('빈 DB와 0014·0016(master)·0017~0025·M6 중간(0036~0042) 단계 DB, M
       expect(Number((await pool.query("select value from counters where kind='message'")).rows[0]?.value)).toBe(3);
       expect((await pool.query('select assume_rate,threshold_days from schedule_policy')).rows[0]).toEqual({ assume_rate: '0.8', threshold_days: '3' });
     }
+    // 0027: 기존 Planning 이벤트의 수신 순번은 업그레이드 전 정렬(시각·id)을 그대로 보존한다.
+    for (const [table, ordering] of [['change_proposal_events', 'created_at,id'], ['planning_job_logs', 'at,created_at,id'], ['planning_reviews', 'created_at,id']] as const) {
+      const same = (await pool.query<{ same: boolean }>(`select coalesce(array_agg(id order by record_no) = array_agg(id order by ${ordering}),true) same from ${table}`)).rows[0]?.same;
+      expect(same, `단계 ${String(stage)} ${table}`).toBe(true);
+    }
     expect(await schemaOf(pool), `단계 ${String(stage)}`).toBe(expected);
-    // 옛 0047은 내용이 달라(hash 다름) 기록이 하나 더 남는다. 숫자 단계는 개수가 같아야 하고, 모든 단계는 누락이 없어야 한다.
-    const extra = stage === 'm6_02' ? 1 : 0;
-    expect((await pool.query<{ n: number }>('select count(*)::int n from drizzle.__drizzle_migrations')).rows[0]?.n, `단계 ${String(stage)}`).toBe(journal.entries.length + extra);
+    // 모든 단계는 기록 개수가 journal과 같고(같은 내용을 두 번 적용하지 않음), 누락이 없어야 한다.
+    expect((await pool.query<{ n: number }>('select count(*)::int n from drizzle.__drizzle_migrations')).rows[0]?.n, `단계 ${String(stage)}`).toBe(journal.entries.length);
     await checkMigrationsApplied(pool);
   }
 }, 600_000);
+
+/*
+ * M5·M7 통합: CI 마이그레이션은 M7-04 브랜치에서 배정 번호 0041(when 1795740000041)로 만들었고,
+ * 통합하면서 최종 순번 0026(when 1795740000026)으로 다시 매겼다. 내용(hash)은 그대로다.
+ * 왜: 브랜치 시험 DB처럼 옛 번호로 이미 적용한 DB가 새 journal로 올릴 때 같은 내용을 다시 실행하거나,
+ * 반대로 무언가를 빠뜨린 채 조용히 넘어가면 안 된다. migrate.ts의 적용 누락 검사(hash 대조)가 통과해야 한다.
+ */
+test('옛 번호 0041로 CI 마이그레이션을 적용한 DB가 0026 재번호 journal로 누락 없이 올라간다', async () => {
+  const source = fileURLToPath(new URL('../migrations/', import.meta.url));
+  const journal = JSON.parse(await readFile(join(source, 'meta/_journal.json'), 'utf8')) as { entries: { idx: number; tag: string; when: number }[] };
+  const ci = journal.entries.find((e) => e.tag === '0026_20261127_ci_reports');
+  expect(ci?.when).toBe(1795740000026);
+  if (!ci) return;
+  const fresh = await database('renumber_fresh');
+  await runMigrations(fresh);
+  const expected = await schemaOf(fresh);
+  const pool = await database('renumber_old');
+  const folder = await mkdtemp(join(tmpdir(), 'awbs-stage-renumber-'));
+  try {
+    // 브랜치 DB 상태: 0025까지 + CI를 옛 번호 0041(when …041)로 적용. 통합에서 더한 0027 이후는 아직 없다.
+    await cp(source, folder, { recursive: true });
+    await cp(join(source, '0026_20261127_ci_reports.sql'), join(folder, '0041_20261127_ci_reports.sql'));
+    await writeFile(join(folder, 'meta/_journal.json'), JSON.stringify({ ...journal,
+      entries: journal.entries.filter((e) => e.idx <= ci.idx).map((e) => e === ci ? { ...e, tag: '0041_20261127_ci_reports', when: 1795740000041 } : e) }));
+    await migrate(drizzle(pool), { migrationsFolder: folder });
+  } finally { await rm(folder, { recursive: true, force: true }); }
+  const recorded = async () => (await pool.query<{ created_at: string }>('select created_at::text from drizzle.__drizzle_migrations order by id')).rows.map((row) => row.created_at);
+  expect((await recorded()).at(-1)).toBe('1795740000041');
+  // 옛 기록 시각(…041)이 그대로면 Drizzle은 그보다 작은 when(0027 = …027)을 건너뛰고, 누락 검사가 시작을 막는다.
+  // runMigrations는 이미 적용한 hash의 기록 시각을 지금 journal 값으로 맞춘 뒤 나머지를 적용한다.
+  await runMigrations(pool);
+  expect(await schemaOf(pool)).toBe(expected);
+  const after = await recorded();
+  expect(after).toHaveLength(journal.entries.length);
+  expect(after).toContain(String(ci.when));
+  expect(after).not.toContain('1795740000041');
+}, 60_000);

@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import { textChecks } from './schema-values.ts';
 import {
   pgTable,
+  primaryKey,
   pgEnum,
   uuid,
   text,
@@ -265,6 +266,7 @@ export const projects = pgTable(
     target_date: date(),
     input_checked_at: at('input_checked_at'),
     input_check_request: integer().notNull().default(0),
+    pipeline_observations: jsonb().notNull().default({}),
     lead_instruction: text().notNull(),
     phase: projectPhase().notNull(),
   },
@@ -349,6 +351,7 @@ export const planningJobs = pgTable(
   'planning_jobs',
   {
     ...row(),
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
     ...project(),
     kind: text().notNull(),
     run_no: integer().notNull(),
@@ -391,6 +394,7 @@ export const planningJobLogs = pgTable('planning_job_logs', {
     .references(() => planningJobs.id, { onDelete: 'restrict' }),
   at: at('at').notNull().defaultNow(),
   text: text().notNull(),
+  record_no: bigserial({ mode: 'number' }).notNull().unique(),
 });
 export const wbsDrafts = pgTable(
   'wbs_drafts',
@@ -537,6 +541,7 @@ export const taskEstimates = pgTable(
   'task_estimates',
   {
     ...row(),
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
     ...project(),
     ...task(),
     est: numeric().notNull(),
@@ -700,6 +705,7 @@ export const planningReviews = pgTable(
     choice: text(),
     memo: text(),
     ...version(),
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
   },
   (t) => textChecks('planning_reviews', t),
 );
@@ -707,6 +713,7 @@ export const changeProposals = pgTable(
   'change_proposals',
   {
     ...row(),
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
     ...project(),
     cp_key: text().notNull().unique(),
     // API Proposal의 title·reason·source.id(M1 통합). 분할 CP의 source_id는 원래 Task 키다.
@@ -752,11 +759,13 @@ export const changeProposalEvents = pgTable(
     kind: text().notNull(),
     actor: text().notNull(),
     comment: text().notNull(),
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
   },
   (t) => textChecks('change_proposal_events', t),
 );
 export const runnerJobs = pgTable('runner_jobs', {
   ...row(),
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
   project_id: uuid().references(() => projects.id, { onDelete: 'restrict' }),
   kind: jobKind().notNull(),
   payload: jsonb().notNull(),
@@ -794,6 +803,7 @@ export const taskAttempts = pgTable(
   'task_attempts',
   {
     ...row(),
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
     ...project(),
     ...task(),
     attempt_key: text().notNull().unique(),
@@ -952,6 +962,7 @@ export const attemptObservations = pgTable(
   'attempt_observations',
   {
     ...row(),
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
     ...project(),
     attempt: uuid()
       .notNull()
@@ -1055,6 +1066,7 @@ export const evidence = pgTable(
 );
 export const runnerSessions = pgTable('runner_sessions', {
   ...row(),
+  record_no: bigserial({ mode: 'number' }).notNull().unique(),
   runner_id: text().notNull(),
   started_at: at('started_at').notNull(),
   ended_at: at('ended_at'),
@@ -1063,6 +1075,7 @@ export const runnerSessions = pgTable('runner_sessions', {
 }, t=>textChecks('runner_sessions',t));
 export const runnerHosts = pgTable('runner_hosts', {
   ...row(),
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
   host_id: text().notNull(),
   // host 보고의 현재 bootId(M1 통합). 이 열이 생기기 전 행은 null이다.
   boot_id: text(),
@@ -1078,6 +1091,7 @@ export const runnerHosts = pgTable('runner_hosts', {
 }, (t) => [check('runner_host_boot_text', sql`${t.boot_id} is null or length(btrim(${t.boot_id}))>0`)]);
 export const runnerConcurrencyLog = pgTable('runner_concurrency_log', {
   ...row(),
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
   host_id: text().notNull(),
   limit: integer().notNull(),
   running: integer().notNull(),
@@ -1121,6 +1135,7 @@ export const agentUsage = pgTable(
   'agent_usage',
   {
     ...row(),
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
     agent: agent().notNull(),
     remain_pct: numeric().notNull(),
     reset_at: at('reset_at'),
@@ -1303,7 +1318,7 @@ export const mailSettings = pgTable(
     checked_at: at('checked_at'),
     status: text(),
     error: text(),
-    // M6-03(0039, 옛 0049): 편집 버전. 연결 확인 결과를 적어도 바뀌지 않는다.
+    // M6-03(0031, 옛 0049): 편집 버전. 연결 확인 결과를 적어도 바뀌지 않는다.
     settings_version: at('settings_version'),
   },
   (t) => [check('mail_singleton', sql`${t.singleton}`)],
@@ -1341,7 +1356,7 @@ export const mailOutbox = pgTable(
     state: deliveryState().notNull(),
     next_at: at('next_at'),
     error: text(),
-    // M6-03(0039, 옛 0049): 발송 당시의 보기·사유·제목·첨부, 자동 재시도 여부, SMTP 호출 시작 시각
+    // M6-03(0031, 옛 0049): 발송 당시의 보기·사유·제목·첨부, 자동 재시도 여부, SMTP 호출 시작 시각
     view: reportView().notNull(),
     reason: text().notNull(),
     subject: text().notNull(),
@@ -1372,7 +1387,7 @@ export const mailLog = pgTable('mail_log', {
   state: deliveryState().notNull(),
   error: text(),
   at: at('at').notNull(),
-  // M6-03(0039, 옛 0049): 어느 큐 행의 몇 번째 발송 결과인지
+  // M6-03(0031, 옛 0049): 어느 큐 행의 몇 번째 발송 결과인지
   outbox: uuid(),
   try_no: integer(),
 }, (t) => [check('mail_log_try_positive', sql`${t.try_no} is null or ${t.try_no}>0`)]);
@@ -1670,6 +1685,7 @@ export const ciRuns = pgTable(
     ...row(),
     ...project(),
     run_key: text().notNull().unique(),
+    run_no: bigserial({ mode: 'number' }).notNull().unique(),
     stage: integer().notNull(),
     base_sha: text(),
     head_sha: text(),
@@ -1685,6 +1701,12 @@ export const ciRuns = pgTable(
     trigger: text().notNull(),
     status: ciStatus().notNull(),
     fail_step: text(),
+    fail_scope: text(),
+    note: text(),
+    e2e: jsonb(),
+    github_status: jsonb(),
+    cause_candidates: jsonb().notNull().default([]),
+    finished_at: at('finished_at'),
     log_excerpt: text(),
     artifact_path: text(),
     url: text(),
@@ -1692,9 +1714,12 @@ export const ciRuns = pgTable(
     job: uuid().references(() => runnerJobs.id, { onDelete: 'restrict' }),
     fence: integer(),
     artifacts: jsonb().notNull().default([]),
+    reporter: text(),
   },
   (t) => [
     check('ci_stage', sql`${t.stage} between 1 and 4`),
+    check('ci_cause_candidates_array', sql`jsonb_typeof(${t.cause_candidates})='array'`),
+    check('ci_fail_scope', sql`${t.fail_scope} is null or ${t.fail_scope} in ('baseline','task')`),
     index('ci_runs_input_version_idx').on(t.input_version),
     // job 없는 실행은 야간 점검뿐이라는 규칙은 0014의 트리거 ci_job_owner가 검사한다.
     check('ci_job_fence', sql`(${t.job} is null)=(${t.fence} is null) and (${t.fence} is null or ${t.fence}>=0)`),
@@ -1705,24 +1730,33 @@ export const ciSteps = pgTable(
   'ci_steps',
   {
     ...row(),
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
     ...project(),
     run: uuid()
       .notNull()
       .references(() => ciRuns.id, { onDelete: 'restrict' }),
     step_key: text().notNull(),
+    duration_ms: bigint({ mode: 'number' }).notNull().default(0),
     status: ciStatus().notNull(),
     command: text().notNull(),
     exit_code: integer(),
     log_excerpt: text(),
   },
-  (t) => [unique().on(t.run, t.step_key)],
+  (t) => [unique().on(t.run, t.step_key), check('ci_step_duration', sql`${t.duration_ms} >= 0 and ${t.duration_ms} <= 9007199254740991`)],
 );
+export const ciMergeFacts = pgTable('ci_merge_facts', {
+  project_id: uuid().notNull().references(() => projects.id,{ onDelete:'cascade' }),
+  merge_sha: text().notNull(),
+  tree_sha: text(),
+  parents: jsonb(),
+}, (t) => [primaryKey({ columns:[t.project_id,t.merge_sha] })]);
 export const mergeQueue = pgTable(
   'merge_queue',
   {
     ...row(),
     ...project(),
     ...task(),
+    queue_no: bigserial({ mode: 'number' }).notNull().unique(),
     pr: integer().notNull(),
     position: integer().notNull(),
     status: queueStatus().notNull(),
@@ -1736,6 +1770,9 @@ export const mergeQueue = pgTable(
     tested_tree_sha: text(),
     actual_merge_sha: text(),
     actual_tree_sha: text(),
+    merged_at: at('merged_at'),
+    head_sync: jsonb(),
+    merge_parents: jsonb(),
   },
   (t) => [
     uniqueIndex('one_open_merge_task')
@@ -1749,6 +1786,7 @@ export const flakyTests = pgTable(
     ...row(),
     ...project(),
     test_key: text().notNull().unique(),
+    last_failed_at: at('last_failed_at'),
     rate: numeric().notNull(),
     quarantined: boolean().notNull(),
     task: uuid().references(() => tasks.id, { onDelete: 'restrict' }),
@@ -1763,6 +1801,7 @@ export const ciSettings = pgTable(
     night_at: text(),
     retry: integer().notNull(),
     deploy_url: text(),
+    settings_version: at('settings_version'),
   },
   (t) => [check('ci_singleton', sql`${t.singleton}`)],
 );
@@ -1798,6 +1837,7 @@ export const taskHistory = pgTable(
   'task_history',
   {
     ...row(),
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
     ...globalProject(),
     at: at('at').notNull().defaultNow(),
     actor: text().notNull(),

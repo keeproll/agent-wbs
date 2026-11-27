@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { NO_PROJECT_NAME, reportProjectName, UNKNOWN_PROJECT_NAME } from '@awbs/shared';
 
-test('보고서 제목의 프로젝트 이름은 스냅샷 값이다(생성 때 기록·0038(옛 0047)이 채움)', () => {
+test('보고서 제목의 프로젝트 이름은 스냅샷 값이다(생성 때 기록·0030(옛 0047)이 채움)', () => {
   expect(reportProjectName({ projectName: 'Agent WBS', projectNameStatus: 'snapshot' })).toBe('Agent WBS');
   expect(reportProjectName({ projectName: 'Agent WBS', projectNameStatus: 'filled' })).toBe('Agent WBS');
 });

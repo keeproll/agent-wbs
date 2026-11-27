@@ -12074,6 +12074,16 @@
                           "testKey": {
                             "type": "string"
                           },
+                          "lastFailedAt": {
+                            "anyOf": [
+                              {
+                                "$ref": "#/components/schemas/Timestamp"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "rate": {
                             "type": "string"
                           },
@@ -12226,6 +12236,16 @@
                     },
                     "testKey": {
                       "type": "string"
+                    },
+                    "lastFailedAt": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/Timestamp"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "rate": {
                       "type": "string"
@@ -12442,6 +12462,59 @@
                         }
                       ]
                     },
+                    "serviceConfig": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": [
+                            "path",
+                            "commit",
+                            "status",
+                            "raw",
+                            "error"
+                          ],
+                          "properties": {
+                            "path": {
+                              "$ref": "#/components/schemas/RepoPath"
+                            },
+                            "commit": {
+                              "$ref": "#/components/schemas/Sha"
+                            },
+                            "status": {
+                              "enum": [
+                                "ok",
+                                "error",
+                                "missing"
+                              ]
+                            },
+                            "raw": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "error": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "updatedAt": {
                       "anyOf": [
                         {
@@ -12603,6 +12676,59 @@
                         {
                           "type": "string",
                           "pattern": "^https?://[^\\s/@]+(/[^\\s]*)?$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "serviceConfig": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": [
+                            "path",
+                            "commit",
+                            "status",
+                            "raw",
+                            "error"
+                          ],
+                          "properties": {
+                            "path": {
+                              "$ref": "#/components/schemas/RepoPath"
+                            },
+                            "commit": {
+                              "$ref": "#/components/schemas/Sha"
+                            },
+                            "status": {
+                              "enum": [
+                                "ok",
+                                "error",
+                                "missing"
+                              ]
+                            },
+                            "raw": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "error": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "additionalProperties": false
                         },
                         {
                           "type": "null"
@@ -18868,6 +18994,59 @@
                         }
                       ]
                     },
+                    "serviceConfig": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": [
+                            "path",
+                            "commit",
+                            "status",
+                            "raw",
+                            "error"
+                          ],
+                          "properties": {
+                            "path": {
+                              "$ref": "#/components/schemas/RepoPath"
+                            },
+                            "commit": {
+                              "$ref": "#/components/schemas/Sha"
+                            },
+                            "status": {
+                              "enum": [
+                                "ok",
+                                "error",
+                                "missing"
+                              ]
+                            },
+                            "raw": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "error": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "updatedAt": {
                       "anyOf": [
                         {
@@ -19009,6 +19188,59 @@
                         {
                           "type": "string",
                           "pattern": "^https?://[^\\s/@]+(/[^\\s]*)?$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "serviceConfig": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": [
+                            "path",
+                            "commit",
+                            "status",
+                            "raw",
+                            "error"
+                          ],
+                          "properties": {
+                            "path": {
+                              "$ref": "#/components/schemas/RepoPath"
+                            },
+                            "commit": {
+                              "$ref": "#/components/schemas/Sha"
+                            },
+                            "status": {
+                              "enum": [
+                                "ok",
+                                "error",
+                                "missing"
+                              ]
+                            },
+                            "raw": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "error": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "additionalProperties": false
                         },
                         {
                           "type": "null"
@@ -23316,7 +23548,9 @@
                             "obs",
                             "gh",
                             "lfs",
-                            "reports"
+                            "reports",
+                            "font",
+                            "render"
                           ]
                         },
                         "status": {
@@ -24268,6 +24502,7 @@
                         "type": "object",
                         "required": [
                           "id",
+                          "key",
                           "agent",
                           "version",
                           "hash",
@@ -24277,6 +24512,10 @@
                         "properties": {
                           "id": {
                             "$ref": "#/components/schemas/Id"
+                          },
+                          "key": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9-]{0,63}$"
                           },
                           "agent": {
                             "$ref": "#/components/schemas/Agent"
@@ -25195,6 +25434,16 @@
                         "type": "integer",
                         "minimum": 0,
                         "maximum": 9007199254740991
+                      },
+                      "pr": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 2147483647
+                      },
+                      "prHead": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
                       }
                     },
                     "additionalProperties": false
@@ -25236,6 +25485,16 @@
                         "type": "integer",
                         "minimum": 0,
                         "maximum": 9007199254740991
+                      },
+                      "pr": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 2147483647
+                      },
+                      "prHead": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
                       },
                       "verification": {
                         "type": "object",
@@ -25881,6 +26140,33 @@
                       },
                       "additionalProperties": false
                     }
+                  },
+                  "pipelineObservation": {
+                    "type": "object",
+                    "required": [
+                      "baseSha",
+                      "pipelineSha",
+                      "definition"
+                    ],
+                    "properties": {
+                      "baseSha": {
+                        "$ref": "#/components/schemas/Sha"
+                      },
+                      "pipelineSha": {
+                        "anyOf": [
+                          {
+                            "$ref": "#/components/schemas/Sha"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "definition": {
+                        "$ref": "#/components/schemas/Pipeline"
+                      }
+                    },
+                    "additionalProperties": false
                   }
                 },
                 "additionalProperties": false
@@ -26313,6 +26599,278 @@
         }
       }
     },
+    "/api/runner/ci/jobs/{id}": {
+      "get": {
+        "operationId": "getCiJob",
+        "summary": "예약한 CI job의 검증 근거와 재실행 원본 조회",
+        "tags": [
+          "runner"
+        ],
+        "security": [
+          {
+            "runnerToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "fence",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ProjectEpoch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "예약한 CI job의 검증 근거와 재실행 원본 조회",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "runnable",
+                    "taskKey",
+                    "branch",
+                    "hold",
+                    "verification",
+                    "source"
+                  ],
+                  "properties": {
+                    "runnable": {
+                      "type": "boolean"
+                    },
+                    "taskKey": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/TaskKey"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "branch": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "hold": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": [
+                            "hostId",
+                            "bootId",
+                            "processGroup",
+                            "slotState"
+                          ],
+                          "properties": {
+                            "hostId": {
+                              "type": "string"
+                            },
+                            "bootId": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "processGroup": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 2147483647
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "slotState": {
+                              "enum": [
+                                "none",
+                                "reserved",
+                                "active",
+                                "unconfirmed"
+                              ]
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "verification": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": [
+                            "passed",
+                            "headSha",
+                            "specRevision"
+                          ],
+                          "properties": {
+                            "passed": {
+                              "type": "boolean"
+                            },
+                            "headSha": {
+                              "$ref": "#/components/schemas/Sha"
+                            },
+                            "specRevision": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "source": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": [
+                            "stage",
+                            "ref",
+                            "pr",
+                            "baseSha",
+                            "headSha",
+                            "pipelineSha"
+                          ],
+                          "properties": {
+                            "stage": {
+                              "$ref": "#/components/schemas/CiStage"
+                            },
+                            "ref": {
+                              "type": "string"
+                            },
+                            "pr": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 2147483647
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "baseSha": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/components/schemas/Sha"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "headSha": {
+                              "$ref": "#/components/schemas/Sha"
+                            },
+                            "pipelineSha": {
+                              "$ref": "#/components/schemas/Sha"
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "VALIDATION_FAILED"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "RUNNER_UNAUTHORIZED"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "NOT_FOUND"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "EPOCH_MISMATCH, EXTERNAL_WRITE_BLOCKED, INVALID_TRANSITION"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited",
+            "description": "RATE_LIMITED"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "INTERNAL"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error",
+            "description": "UNAVAILABLE"
+          }
+        },
+        "x-error-codes": {
+          "400": [
+            "VALIDATION_FAILED"
+          ],
+          "401": [
+            "RUNNER_UNAUTHORIZED"
+          ],
+          "404": [
+            "NOT_FOUND"
+          ],
+          "409": [
+            "EPOCH_MISMATCH",
+            "EXTERNAL_WRITE_BLOCKED",
+            "INVALID_TRANSITION"
+          ],
+          "429": [
+            "RATE_LIMITED"
+          ],
+          "500": [
+            "INTERNAL"
+          ],
+          "503": [
+            "UNAVAILABLE"
+          ]
+        }
+      }
+    },
     "/api/runner/ci/runs": {
       "post": {
         "operationId": "startCiRun",
@@ -26377,6 +26935,11 @@
                         "minimum": 1,
                         "maximum": 2147483647
                       },
+                      "prHead": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
                       "trigger": {
                         "type": "string",
                         "minLength": 1,
@@ -26429,6 +26992,11 @@
                         "type": "integer",
                         "minimum": 1,
                         "maximum": 2147483647
+                      },
+                      "prHead": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
                       },
                       "trigger": {
                         "type": "string",
@@ -26625,6 +27193,143 @@
                   "status": {
                     "$ref": "#/components/schemas/CiStatus"
                   },
+                  "failScope": {
+                    "enum": [
+                      "baseline",
+                      "task"
+                    ]
+                  },
+                  "causeCandidates": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "commit"
+                      ],
+                      "properties": {
+                        "commit": {
+                          "$ref": "#/components/schemas/Sha"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "uniqueItems": true
+                  },
+                  "note": {
+                    "type": "string"
+                  },
+                  "finishedAt": {
+                    "$ref": "#/components/schemas/Timestamp"
+                  },
+                  "e2e": {
+                    "type": "object",
+                    "required": [
+                      "passed",
+                      "total"
+                    ],
+                    "properties": {
+                      "passed": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "total": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "githubStatus": {
+                    "type": "object",
+                    "required": [
+                      "headSha",
+                      "context",
+                      "state",
+                      "reportedAt"
+                    ],
+                    "properties": {
+                      "headSha": {
+                        "$ref": "#/components/schemas/Sha"
+                      },
+                      "context": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      "state": {
+                        "enum": [
+                          "pending",
+                          "success",
+                          "failure",
+                          "error"
+                        ]
+                      },
+                      "reportedAt": {
+                        "$ref": "#/components/schemas/Timestamp"
+                      },
+                      "url": {
+                        "type": "string",
+                        "pattern": "^https?://[^\\s/@]+(/[^\\s]*)?$"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "flakyTests": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "testKey",
+                        "rate",
+                        "lastFailedAt"
+                      ],
+                      "properties": {
+                        "testKey": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "rate": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        },
+                        "lastFailedAt": {
+                          "$ref": "#/components/schemas/Timestamp"
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "deployRestore": {
+                    "type": "object",
+                    "required": [
+                      "commit",
+                      "status"
+                    ],
+                    "properties": {
+                      "commit": {
+                        "anyOf": [
+                          {
+                            "$ref": "#/components/schemas/Sha"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "status": {
+                        "enum": [
+                          "pass",
+                          "fail",
+                          "none"
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  },
                   "logExcerpt": {
                     "type": "string"
                   },
@@ -26801,6 +27506,103 @@
                   },
                   "actualTreeSha": {
                     "$ref": "#/components/schemas/Sha"
+                  },
+                  "mergedAt": {
+                    "$ref": "#/components/schemas/Timestamp"
+                  },
+                  "headSync": {
+                    "type": "object",
+                    "required": [
+                      "qaHeadSha",
+                      "headSha",
+                      "preserved",
+                      "parents",
+                      "autoMergeTreeSha",
+                      "headTreeSha",
+                      "additionalChanges"
+                    ],
+                    "properties": {
+                      "qaHeadSha": {
+                        "$ref": "#/components/schemas/Sha"
+                      },
+                      "headSha": {
+                        "$ref": "#/components/schemas/Sha"
+                      },
+                      "preserved": {
+                        "type": "boolean"
+                      },
+                      "parents": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/components/schemas/Sha"
+                        },
+                        "minItems": 2,
+                        "maxItems": 2
+                      },
+                      "autoMergeTreeSha": {
+                        "$ref": "#/components/schemas/Sha"
+                      },
+                      "headTreeSha": {
+                        "$ref": "#/components/schemas/Sha"
+                      },
+                      "additionalChanges": {
+                        "type": "boolean"
+                      },
+                      "chain": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "qaHeadSha",
+                            "headSha",
+                            "preserved",
+                            "parents",
+                            "autoMergeTreeSha",
+                            "headTreeSha",
+                            "additionalChanges"
+                          ],
+                          "properties": {
+                            "qaHeadSha": {
+                              "$ref": "#/components/schemas/Sha"
+                            },
+                            "headSha": {
+                              "$ref": "#/components/schemas/Sha"
+                            },
+                            "preserved": {
+                              "type": "boolean"
+                            },
+                            "parents": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/components/schemas/Sha"
+                              },
+                              "minItems": 2,
+                              "maxItems": 2
+                            },
+                            "autoMergeTreeSha": {
+                              "$ref": "#/components/schemas/Sha"
+                            },
+                            "headTreeSha": {
+                              "$ref": "#/components/schemas/Sha"
+                            },
+                            "additionalChanges": {
+                              "type": "boolean"
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "minItems": 2
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "mergeParents": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/Sha"
+                    },
+                    "minItems": 2,
+                    "maxItems": 2
                   }
                 },
                 "additionalProperties": false
@@ -26833,7 +27635,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "EPOCH_MISMATCH, EXTERNAL_WRITE_BLOCKED, GATE_NOT_PASSED, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST"
+            "description": "EPOCH_MISMATCH, EXTERNAL_WRITE_BLOCKED, GATE_NOT_PASSED, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST, MERGE_MISMATCH"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited",
@@ -26865,7 +27667,8 @@
             "GATE_NOT_PASSED",
             "IDEMPOTENCY_CONFLICT",
             "INVALID_TRANSITION",
-            "LEASE_LOST"
+            "LEASE_LOST",
+            "MERGE_MISMATCH"
           ],
           "429": [
             "RATE_LIMITED"
@@ -29670,7 +30473,8 @@
                       "required": [
                         "nightAt",
                         "retry",
-                        "deployUrl"
+                        "deployUrl",
+                        "quarantined"
                       ],
                       "properties": {
                         "nightAt": {
@@ -29692,6 +30496,15 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "quarantined": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          },
+                          "uniqueItems": true
                         }
                       }
                     },
@@ -29748,6 +30561,85 @@
               "ETag": {
                 "schema": {
                   "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "RUNNER_UNAUTHORIZED"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "EPOCH_MISMATCH"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited",
+            "description": "RATE_LIMITED"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "INTERNAL"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error",
+            "description": "UNAVAILABLE"
+          }
+        },
+        "x-error-codes": {
+          "401": [
+            "RUNNER_UNAUTHORIZED"
+          ],
+          "409": [
+            "EPOCH_MISMATCH"
+          ],
+          "429": [
+            "RATE_LIMITED"
+          ],
+          "500": [
+            "INTERNAL"
+          ],
+          "503": [
+            "UNAVAILABLE"
+          ]
+        }
+      }
+    },
+    "/api/runner/holds": {
+      "get": {
+        "operationId": "getExecutionHolds",
+        "summary": "현재 Runner principal·epoch의 미해제 실행 보유. 읽기 전용 재시작 대조",
+        "tags": [
+          "runner"
+        ],
+        "security": [
+          {
+            "runnerToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectEpoch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "현재 Runner principal·epoch의 미해제 실행 보유. 읽기 전용 재시작 대조",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "holds"
+                  ],
+                  "properties": {
+                    "holds": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ExecutionHold"
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -29852,9 +30744,15 @@
                           },
                           "payload": {
                             "type": "object",
-                            "patternProperties": {
-                              "^.*$": {}
-                            }
+                            "properties": {
+                              "holds": {
+                                "type": "array",
+                                "items": {
+                                  "$ref": "#/components/schemas/ExecutionHold"
+                                }
+                              }
+                            },
+                            "additionalProperties": true
                           }
                         }
                       }
@@ -32786,8 +33684,8 @@
                                   },
                                   "sourceRef": {
                                     "type": "string",
-                                    "minLength": 1,
-                                    "pattern": "\\S"
+                                    "pattern": "^sha256:[0-9a-f]{64}$",
+                                    "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                                   }
                                 },
                                 "additionalProperties": false
@@ -32911,7 +33809,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "EPOCH_MISMATCH, EXTERNAL_WRITE_BLOCKED, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST"
+            "description": "EPOCH_MISMATCH, EXTERNAL_WRITE_BLOCKED, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST, VERSION_CONFLICT"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited",
@@ -32942,7 +33840,8 @@
             "EXTERNAL_WRITE_BLOCKED",
             "IDEMPOTENCY_CONFLICT",
             "INVALID_TRANSITION",
-            "LEASE_LOST"
+            "LEASE_LOST",
+            "VERSION_CONFLICT"
           ],
           "429": [
             "RATE_LIMITED"
@@ -33707,8 +34606,8 @@
                                 },
                                 "sourceRef": {
                                   "type": "string",
-                                  "minLength": 1,
-                                  "pattern": "\\S"
+                                  "pattern": "^sha256:[0-9a-f]{64}$",
+                                  "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                                 }
                               },
                               "additionalProperties": false
@@ -33785,8 +34684,8 @@
                                       },
                                       "sourceRef": {
                                         "type": "string",
-                                        "minLength": 1,
-                                        "pattern": "\\S"
+                                        "pattern": "^sha256:[0-9a-f]{64}$",
+                                        "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                                       }
                                     },
                                     "additionalProperties": false
@@ -33915,8 +34814,8 @@
                                 },
                                 "sourceRef": {
                                   "type": "string",
-                                  "minLength": 1,
-                                  "pattern": "\\S"
+                                  "pattern": "^sha256:[0-9a-f]{64}$",
+                                  "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                                 }
                               },
                               "additionalProperties": false
@@ -33993,8 +34892,8 @@
                                       },
                                       "sourceRef": {
                                         "type": "string",
-                                        "minLength": 1,
-                                        "pattern": "\\S"
+                                        "pattern": "^sha256:[0-9a-f]{64}$",
+                                        "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                                       }
                                     },
                                     "additionalProperties": false
@@ -34107,7 +35006,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST"
+            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST, VERSION_CONFLICT"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited",
@@ -34137,7 +35036,8 @@
             "EPOCH_MISMATCH",
             "IDEMPOTENCY_CONFLICT",
             "INVALID_TRANSITION",
-            "LEASE_LOST"
+            "LEASE_LOST",
+            "VERSION_CONFLICT"
           ],
           "429": [
             "RATE_LIMITED"
@@ -34268,8 +35168,8 @@
                                   },
                                   "sourceRef": {
                                     "type": "string",
-                                    "minLength": 1,
-                                    "pattern": "\\S"
+                                    "pattern": "^sha256:[0-9a-f]{64}$",
+                                    "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                                   },
                                   "subjectHash": {
                                     "$ref": "#/components/schemas/Sha256"
@@ -34342,8 +35242,8 @@
                             },
                             "sourceRef": {
                               "type": "string",
-                              "minLength": 1,
-                              "pattern": "\\S"
+                              "pattern": "^sha256:[0-9a-f]{64}$",
+                              "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                             },
                             "subjectHash": {
                               "$ref": "#/components/schemas/Sha256"
@@ -34653,8 +35553,8 @@
                             },
                             "sourceRef": {
                               "type": "string",
-                              "minLength": 1,
-                              "pattern": "\\S"
+                              "pattern": "^sha256:[0-9a-f]{64}$",
+                              "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                             },
                             "subjectHash": {
                               "$ref": "#/components/schemas/Sha256"
@@ -35206,7 +36106,16 @@
           "logExcerpt",
           "artifacts",
           "url",
-          "startedAt"
+          "startedAt",
+          "baselineResolved",
+          "autoReintegrate",
+          "autoReintegrateReason",
+          "retryAllowed",
+          "retryBlockedReason",
+          "taskStatus",
+          "mergeStatus",
+          "mergeCompleted",
+          "actualMergeSha"
         ],
         "properties": {
           "id": {
@@ -35353,6 +36262,19 @@
               }
             ]
           },
+          "failScope": {
+            "anyOf": [
+              {
+                "enum": [
+                  "baseline",
+                  "task"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "logExcerpt": {
             "anyOf": [
               {
@@ -35381,6 +36303,194 @@
           },
           "startedAt": {
             "$ref": "#/components/schemas/Timestamp"
+          },
+          "finishedAt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "e2e": {
+            "anyOf": [
+              {
+                "type": "object",
+                "required": [
+                  "passed",
+                  "total"
+                ],
+                "properties": {
+                  "passed": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "total": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "githubStatus": {
+            "anyOf": [
+              {
+                "type": "object",
+                "required": [
+                  "headSha",
+                  "context",
+                  "state",
+                  "reportedAt"
+                ],
+                "properties": {
+                  "headSha": {
+                    "$ref": "#/components/schemas/Sha"
+                  },
+                  "context": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "state": {
+                    "enum": [
+                      "pending",
+                      "success",
+                      "failure",
+                      "error"
+                    ]
+                  },
+                  "reportedAt": {
+                    "$ref": "#/components/schemas/Timestamp"
+                  },
+                  "url": {
+                    "type": "string",
+                    "pattern": "^https?://[^\\s/@]+(/[^\\s]*)?$"
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "baselineResolved": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "autoReintegrate": {
+            "enum": [
+              "none",
+              "pending",
+              "blocked"
+            ]
+          },
+          "autoReintegrateReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "retryAllowed": {
+            "type": "boolean"
+          },
+          "retryBlockedReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "taskStatus": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mergeStatus": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QueueStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mergeCompleted": {
+            "type": "boolean"
+          },
+          "actualMergeSha": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Sha"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "causeCandidates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "commit",
+                "taskKey"
+              ],
+              "properties": {
+                "commit": {
+                  "$ref": "#/components/schemas/Sha"
+                },
+                "taskKey": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TaskKey"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
           }
         },
         "title": "CiRun"
@@ -35517,13 +36627,99 @@
               "payload": {
                 "type": "object",
                 "required": [
+                  "planningJobId",
+                  "runNo",
+                  "version",
+                  "techDecisionVersion",
+                  "techDecisions",
                   "commit",
+                  "previousCommit",
                   "instruction",
-                  "resumeStep"
+                  "resumeStep",
+                  "techConstraints",
+                  "subagentDefs"
                 ],
                 "properties": {
+                  "planningJobId": {
+                    "$ref": "#/components/schemas/Id"
+                  },
+                  "runNo": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2147483647
+                  },
+                  "version": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2147483647
+                  },
+                  "techDecisionVersion": {
+                    "$ref": "#/components/schemas/Sha256"
+                  },
+                  "techDecisions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "tdKey",
+                        "title",
+                        "status",
+                        "authority",
+                        "updatedAt",
+                        "content"
+                      ],
+                      "properties": {
+                        "id": {
+                          "$ref": "#/components/schemas/Id"
+                        },
+                        "tdKey": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "fixed",
+                            "approved",
+                            "pending",
+                            "rejected",
+                            "noted",
+                            "change"
+                          ]
+                        },
+                        "authority": {
+                          "enum": [
+                            "lead",
+                            "agent",
+                            "free"
+                          ]
+                        },
+                        "updatedAt": {
+                          "$ref": "#/components/schemas/Timestamp"
+                        },
+                        "content": {
+                          "type": "object",
+                          "patternProperties": {
+                            "^.*$": {}
+                          }
+                        }
+                      }
+                    }
+                  },
                   "commit": {
                     "$ref": "#/components/schemas/Sha"
+                  },
+                  "previousCommit": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/Sha"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   "instruction": {
                     "type": "string"
@@ -35537,6 +36733,81 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "techConstraints": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "name",
+                        "level",
+                        "condition"
+                      ],
+                      "properties": {
+                        "id": {
+                          "$ref": "#/components/schemas/Id"
+                        },
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "level": {
+                          "enum": [
+                            "must",
+                            "ban",
+                            "cond"
+                          ]
+                        },
+                        "condition": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "subagentDefs": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "defKey",
+                        "version",
+                        "agent",
+                        "role"
+                      ],
+                      "properties": {
+                        "id": {
+                          "$ref": "#/components/schemas/Id"
+                        },
+                        "defKey": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "version": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 2147483647
+                        },
+                        "agent": {
+                          "$ref": "#/components/schemas/Agent"
+                        },
+                        "role": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        }
+                      }
+                    }
                   }
                 }
               }
@@ -35571,12 +36842,131 @@
               "payload": {
                 "type": "object",
                 "required": [
+                  "planningJobId",
+                  "runNo",
+                  "version",
+                  "wbs",
                   "commit",
                   "previousCommit",
                   "instruction",
                   "resumeStep"
                 ],
                 "properties": {
+                  "planningJobId": {
+                    "$ref": "#/components/schemas/Id"
+                  },
+                  "runNo": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2147483647
+                  },
+                  "version": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2147483647
+                  },
+                  "wbs": {
+                    "type": "object",
+                    "required": [
+                      "phases",
+                      "tasks",
+                      "dependencies"
+                    ],
+                    "properties": {
+                      "phases": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "id",
+                            "wps"
+                          ],
+                          "properties": {
+                            "id": {
+                              "$ref": "#/components/schemas/Id"
+                            },
+                            "wps": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "id",
+                                  "tasks"
+                                ],
+                                "properties": {
+                                  "id": {
+                                    "$ref": "#/components/schemas/Id"
+                                  },
+                                  "tasks": {
+                                    "type": "array",
+                                    "items": {
+                                      "$ref": "#/components/schemas/TaskKey"
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "tasks": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "taskKey",
+                            "workType",
+                            "wp",
+                            "status",
+                            "subjectHash",
+                            "content"
+                          ],
+                          "properties": {
+                            "taskKey": {
+                              "$ref": "#/components/schemas/TaskKey"
+                            },
+                            "workType": {
+                              "$ref": "#/components/schemas/WorkType"
+                            },
+                            "wp": {
+                              "$ref": "#/components/schemas/Id"
+                            },
+                            "status": {
+                              "$ref": "#/components/schemas/TaskStatus"
+                            },
+                            "subjectHash": {
+                              "$ref": "#/components/schemas/Sha256"
+                            },
+                            "content": {
+                              "$ref": "#/components/schemas/JudgedContent"
+                            }
+                          }
+                        }
+                      },
+                      "dependencies": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "pred",
+                            "succ",
+                            "type"
+                          ],
+                          "properties": {
+                            "pred": {
+                              "$ref": "#/components/schemas/TaskKey"
+                            },
+                            "succ": {
+                              "$ref": "#/components/schemas/TaskKey"
+                            },
+                            "type": {
+                              "$ref": "#/components/schemas/DepType"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
                   "commit": {
                     "$ref": "#/components/schemas/Sha"
                   },
@@ -35631,7 +37021,8 @@
                 "required": [
                   "tasks",
                   "policy",
-                  "proposal"
+                  "proposal",
+                  "planning"
                 ],
                 "properties": {
                   "tasks": {
@@ -35640,12 +37031,16 @@
                       "type": "object",
                       "required": [
                         "taskKey",
+                        "workType",
                         "subjectHash",
                         "content"
                       ],
                       "properties": {
                         "taskKey": {
                           "$ref": "#/components/schemas/TaskKey"
+                        },
+                        "workType": {
+                          "$ref": "#/components/schemas/WorkType"
                         },
                         "subjectHash": {
                           "$ref": "#/components/schemas/Sha256"
@@ -35675,193 +37070,382 @@
                   "proposal": {
                     "anyOf": [
                       {
-                        "anyOf": [
-                          {
-                            "type": "object",
-                            "required": [
-                              "id",
-                              "ops",
-                              "targets",
-                              "splitSubjectHash",
-                              "splitTasks"
-                            ],
-                            "properties": {
-                              "id": {
-                                "$ref": "#/components/schemas/Id"
-                              },
-                              "ops": {
-                                "type": "array",
-                                "items": {
-                                  "$ref": "#/components/schemas/JudgedProposalOp"
-                                },
-                                "minItems": 1
-                              },
-                              "targets": {
-                                "type": "array",
-                                "items": {
-                                  "anyOf": [
-                                    {
-                                      "type": "object",
-                                      "required": [
-                                        "target",
-                                        "subjectHash",
-                                        "before",
-                                        "after"
-                                      ],
-                                      "properties": {
-                                        "target": {
-                                          "$ref": "#/components/schemas/TaskKey"
-                                        },
-                                        "subjectHash": {
-                                          "$ref": "#/components/schemas/Sha256"
-                                        },
-                                        "before": {
-                                          "$ref": "#/components/schemas/JudgedContent"
-                                        },
-                                        "after": {
-                                          "$ref": "#/components/schemas/JudgedContent"
-                                        }
-                                      }
-                                    },
-                                    {
-                                      "type": "object",
-                                      "required": [
-                                        "target",
-                                        "subjectHash",
-                                        "before",
-                                        "after"
-                                      ],
-                                      "properties": {
-                                        "target": {
-                                          "type": "string",
-                                          "pattern": "^NEW-[0-9]+$"
-                                        },
-                                        "subjectHash": {
-                                          "$ref": "#/components/schemas/Sha256"
-                                        },
-                                        "before": {
-                                          "type": "null"
-                                        },
-                                        "after": {
-                                          "$ref": "#/components/schemas/JudgedContent"
-                                        }
-                                      }
-                                    }
-                                  ]
-                                }
-                              },
-                              "splitSubjectHash": {
-                                "type": "null"
-                              },
-                              "splitTasks": {
-                                "type": "null"
-                              }
-                            }
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "ops",
+                          "targets",
+                          "splitSubjectHash",
+                          "splitTasks"
+                        ],
+                        "properties": {
+                          "id": {
+                            "$ref": "#/components/schemas/Id"
                           },
-                          {
-                            "type": "object",
-                            "required": [
-                              "id",
-                              "ops",
-                              "targets",
-                              "splitSubjectHash",
-                              "splitTasks"
-                            ],
-                            "properties": {
-                              "id": {
-                                "$ref": "#/components/schemas/Id"
-                              },
-                              "ops": {
-                                "type": "array",
-                                "items": {
-                                  "$ref": "#/components/schemas/JudgedSplitProposalOp"
-                                },
-                                "minItems": 1
-                              },
-                              "targets": {
-                                "type": "array",
-                                "items": {
-                                  "anyOf": [
-                                    {
-                                      "type": "object",
-                                      "required": [
-                                        "target",
-                                        "subjectHash",
-                                        "before",
-                                        "after"
-                                      ],
-                                      "properties": {
-                                        "target": {
-                                          "$ref": "#/components/schemas/TaskKey"
-                                        },
-                                        "subjectHash": {
-                                          "$ref": "#/components/schemas/Sha256"
-                                        },
-                                        "before": {
-                                          "$ref": "#/components/schemas/JudgedContent"
-                                        },
-                                        "after": {
-                                          "$ref": "#/components/schemas/JudgedContent"
-                                        }
-                                      }
-                                    },
-                                    {
-                                      "type": "object",
-                                      "required": [
-                                        "target",
-                                        "subjectHash",
-                                        "before",
-                                        "after"
-                                      ],
-                                      "properties": {
-                                        "target": {
-                                          "type": "string",
-                                          "pattern": "^NEW-[0-9]+$"
-                                        },
-                                        "subjectHash": {
-                                          "$ref": "#/components/schemas/Sha256"
-                                        },
-                                        "before": {
-                                          "type": "null"
-                                        },
-                                        "after": {
-                                          "$ref": "#/components/schemas/JudgedContent"
-                                        }
-                                      }
-                                    }
-                                  ]
-                                }
-                              },
-                              "splitSubjectHash": {
-                                "$ref": "#/components/schemas/Sha256"
-                              },
-                              "splitTasks": {
-                                "type": "array",
-                                "items": {
+                          "ops": {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/components/schemas/JudgedProposalOp"
+                            },
+                            "minItems": 1
+                          },
+                          "targets": {
+                            "type": "array",
+                            "items": {
+                              "anyOf": [
+                                {
                                   "type": "object",
                                   "required": [
-                                    "taskKey",
-                                    "content"
+                                    "target",
+                                    "subjectHash",
+                                    "before",
+                                    "after"
                                   ],
                                   "properties": {
-                                    "taskKey": {
+                                    "target": {
                                       "$ref": "#/components/schemas/TaskKey"
                                     },
-                                    "content": {
+                                    "subjectHash": {
+                                      "$ref": "#/components/schemas/Sha256"
+                                    },
+                                    "before": {
+                                      "$ref": "#/components/schemas/JudgedContent"
+                                    },
+                                    "after": {
                                       "$ref": "#/components/schemas/JudgedContent"
                                     }
                                   }
                                 },
-                                "minItems": 1
-                              }
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "target",
+                                    "subjectHash",
+                                    "before",
+                                    "after"
+                                  ],
+                                  "properties": {
+                                    "target": {
+                                      "type": "string",
+                                      "pattern": "^NEW-[0-9]+$"
+                                    },
+                                    "subjectHash": {
+                                      "$ref": "#/components/schemas/Sha256"
+                                    },
+                                    "before": {
+                                      "type": "null"
+                                    },
+                                    "after": {
+                                      "$ref": "#/components/schemas/JudgedContent"
+                                    }
+                                  }
+                                }
+                              ]
                             }
+                          },
+                          "splitSubjectHash": {
+                            "type": "null"
+                          },
+                          "splitTasks": {
+                            "type": "null"
                           }
-                        ]
+                        }
                       },
                       {
-                        "type": "null"
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "ops",
+                          "targets",
+                          "splitSubjectHash",
+                          "splitTasks"
+                        ],
+                        "properties": {
+                          "id": {
+                            "$ref": "#/components/schemas/Id"
+                          },
+                          "ops": {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/components/schemas/JudgedSplitProposalOp"
+                            },
+                            "minItems": 1
+                          },
+                          "targets": {
+                            "type": "array",
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "target",
+                                    "subjectHash",
+                                    "before",
+                                    "after"
+                                  ],
+                                  "properties": {
+                                    "target": {
+                                      "$ref": "#/components/schemas/TaskKey"
+                                    },
+                                    "subjectHash": {
+                                      "$ref": "#/components/schemas/Sha256"
+                                    },
+                                    "before": {
+                                      "$ref": "#/components/schemas/JudgedContent"
+                                    },
+                                    "after": {
+                                      "$ref": "#/components/schemas/JudgedContent"
+                                    }
+                                  }
+                                },
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "target",
+                                    "subjectHash",
+                                    "before",
+                                    "after"
+                                  ],
+                                  "properties": {
+                                    "target": {
+                                      "type": "string",
+                                      "pattern": "^NEW-[0-9]+$"
+                                    },
+                                    "subjectHash": {
+                                      "$ref": "#/components/schemas/Sha256"
+                                    },
+                                    "before": {
+                                      "type": "null"
+                                    },
+                                    "after": {
+                                      "$ref": "#/components/schemas/JudgedContent"
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          "splitSubjectHash": {
+                            "$ref": "#/components/schemas/Sha256"
+                          },
+                          "splitTasks": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "taskKey",
+                                "content"
+                              ],
+                              "properties": {
+                                "taskKey": {
+                                  "$ref": "#/components/schemas/TaskKey"
+                                },
+                                "content": {
+                                  "$ref": "#/components/schemas/JudgedContent"
+                                }
+                              }
+                            },
+                            "minItems": 1
+                          }
+                        }
                       }
                     ]
+                  },
+                  "planning": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "leaseUntil",
+              "fence",
+              "kind",
+              "payload"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/Id"
+              },
+              "leaseUntil": {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              "fence": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 2147483647
+              },
+              "kind": {
+                "enum": [
+                  "planning"
+                ]
+              },
+              "payload": {
+                "type": "object",
+                "required": [
+                  "tasks",
+                  "policy",
+                  "proposal",
+                  "planning"
+                ],
+                "properties": {
+                  "tasks": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "taskKey",
+                        "workType",
+                        "subjectHash",
+                        "content"
+                      ],
+                      "properties": {
+                        "taskKey": {
+                          "$ref": "#/components/schemas/TaskKey"
+                        },
+                        "workType": {
+                          "$ref": "#/components/schemas/WorkType"
+                        },
+                        "subjectHash": {
+                          "$ref": "#/components/schemas/Sha256"
+                        },
+                        "content": {
+                          "$ref": "#/components/schemas/JudgedContent"
+                        },
+                        "gradeChange": {
+                          "anyOf": [
+                            {
+                              "$ref": "#/components/schemas/Uuid"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "policy": {
+                    "type": "object",
+                    "patternProperties": {
+                      "^.*$": {}
+                    }
+                  },
+                  "proposal": {
+                    "type": "null"
+                  },
+                  "planning": {
+                    "type": "object",
+                    "required": [
+                      "id",
+                      "title",
+                      "scope"
+                    ],
+                    "properties": {
+                      "id": {
+                        "$ref": "#/components/schemas/Id"
+                      },
+                      "title": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      "scope": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "leaseUntil",
+              "fence",
+              "kind",
+              "payload"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/Id"
+              },
+              "leaseUntil": {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              "fence": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 2147483647
+              },
+              "kind": {
+                "enum": [
+                  "planning"
+                ]
+              },
+              "payload": {
+                "type": "object",
+                "required": [
+                  "tasks",
+                  "policy",
+                  "proposal",
+                  "planning"
+                ],
+                "properties": {
+                  "tasks": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "taskKey",
+                        "workType",
+                        "subjectHash",
+                        "content"
+                      ],
+                      "properties": {
+                        "taskKey": {
+                          "$ref": "#/components/schemas/TaskKey"
+                        },
+                        "workType": {
+                          "$ref": "#/components/schemas/WorkType"
+                        },
+                        "subjectHash": {
+                          "$ref": "#/components/schemas/Sha256"
+                        },
+                        "content": {
+                          "$ref": "#/components/schemas/JudgedContent"
+                        },
+                        "gradeChange": {
+                          "anyOf": [
+                            {
+                              "$ref": "#/components/schemas/Uuid"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "minItems": 1
+                  },
+                  "policy": {
+                    "type": "object",
+                    "patternProperties": {
+                      "^.*$": {}
+                    }
+                  },
+                  "proposal": {
+                    "type": "null"
+                  },
+                  "planning": {
+                    "type": "null"
                   }
                 }
               }
@@ -35906,12 +37490,16 @@
                       "type": "object",
                       "required": [
                         "taskKey",
+                        "workType",
                         "subjectHash",
                         "content"
                       ],
                       "properties": {
                         "taskKey": {
                           "$ref": "#/components/schemas/TaskKey"
+                        },
+                        "workType": {
+                          "$ref": "#/components/schemas/WorkType"
                         },
                         "subjectHash": {
                           "$ref": "#/components/schemas/Sha256"
@@ -35969,7 +37557,8 @@
                 "type": "object",
                 "required": [
                   "tasks",
-                  "policy"
+                  "policy",
+                  "wbs"
                 ],
                 "properties": {
                   "tasks": {
@@ -35978,12 +37567,16 @@
                       "type": "object",
                       "required": [
                         "taskKey",
+                        "workType",
                         "subjectHash",
                         "content"
                       ],
                       "properties": {
                         "taskKey": {
                           "$ref": "#/components/schemas/TaskKey"
+                        },
+                        "workType": {
+                          "$ref": "#/components/schemas/WorkType"
                         },
                         "subjectHash": {
                           "$ref": "#/components/schemas/Sha256"
@@ -36008,6 +37601,108 @@
                     "type": "object",
                     "patternProperties": {
                       "^.*$": {}
+                    }
+                  },
+                  "wbs": {
+                    "type": "object",
+                    "required": [
+                      "phases",
+                      "tasks",
+                      "dependencies"
+                    ],
+                    "properties": {
+                      "phases": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "id",
+                            "wps"
+                          ],
+                          "properties": {
+                            "id": {
+                              "$ref": "#/components/schemas/Id"
+                            },
+                            "wps": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "id",
+                                  "tasks"
+                                ],
+                                "properties": {
+                                  "id": {
+                                    "$ref": "#/components/schemas/Id"
+                                  },
+                                  "tasks": {
+                                    "type": "array",
+                                    "items": {
+                                      "$ref": "#/components/schemas/TaskKey"
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "tasks": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "taskKey",
+                            "workType",
+                            "wp",
+                            "status",
+                            "subjectHash",
+                            "content"
+                          ],
+                          "properties": {
+                            "taskKey": {
+                              "$ref": "#/components/schemas/TaskKey"
+                            },
+                            "workType": {
+                              "$ref": "#/components/schemas/WorkType"
+                            },
+                            "wp": {
+                              "$ref": "#/components/schemas/Id"
+                            },
+                            "status": {
+                              "$ref": "#/components/schemas/TaskStatus"
+                            },
+                            "subjectHash": {
+                              "$ref": "#/components/schemas/Sha256"
+                            },
+                            "content": {
+                              "$ref": "#/components/schemas/JudgedContent"
+                            }
+                          }
+                        }
+                      },
+                      "dependencies": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "pred",
+                            "succ",
+                            "type"
+                          ],
+                          "properties": {
+                            "pred": {
+                              "$ref": "#/components/schemas/TaskKey"
+                            },
+                            "succ": {
+                              "$ref": "#/components/schemas/TaskKey"
+                            },
+                            "type": {
+                              "$ref": "#/components/schemas/DepType"
+                            }
+                          }
+                        }
+                      }
                     }
                   }
                 }
@@ -37483,6 +39178,7 @@
                   "ACTIVE_TASK_BLOCKED",
                   "ORDER_NOT_PRESERVED",
                   "GATE_NOT_PASSED",
+                  "MERGE_MISMATCH",
                   "CLAIM_REJECTED",
                   "LEASE_LOST",
                   "CLEANUP_PENDING",
@@ -37639,6 +39335,250 @@
           }
         },
         "title": "Evidence"
+      },
+      "ExecutionHold": {
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "job",
+          "attempt",
+          "epoch",
+          "host_id",
+          "boot_id",
+          "fence",
+          "pgid",
+          "cgroup",
+          "task",
+          "conflict_group",
+          "agent",
+          "slots",
+          "heavy",
+          "slot_state",
+          "lock_state",
+          "lock_from_job",
+          "handed_to_job",
+          "release_proof",
+          "closed_at",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "job": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "attempt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "epoch": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "host_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "boot_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fence": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 2147483647
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pgid": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cgroup": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "task": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "conflict_group": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "agent": {
+            "$ref": "#/components/schemas/Agent"
+          },
+          "slots": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "heavy": {
+            "type": "boolean"
+          },
+          "slot_state": {
+            "enum": [
+              "none",
+              "reserved",
+              "active",
+              "unconfirmed"
+            ]
+          },
+          "lock_state": {
+            "enum": [
+              "none",
+              "held",
+              "orphaned",
+              "handed_over",
+              "released"
+            ]
+          },
+          "lock_from_job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "handed_to_job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "release_proof": {
+            "anyOf": [
+              {
+                "enum": [
+                  "no_process",
+                  "group_empty",
+                  "boot_changed"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "closed_at": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "lease_owner": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lease_until": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "ExecutionHold"
       },
       "Gate": {
         "type": "object",
@@ -38179,7 +40119,8 @@
           }
         },
         "title": "JudgedContent",
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "subjectHash는 이 객체의 RFC 8785 JCS 직렬화 UTF-8 바이트를 SHA-256으로 계산한 64자리 소문자 16진수다. sourceRef는 sha256: 뒤에 같은 값을 붙인다. Unicode 정규화는 하지 않는다. 고정 예시는 contracts/fixtures/judgement-bindings.json에 있다."
       },
       "JudgedProposalOp": {
         "anyOf": [
@@ -40288,6 +42229,19 @@
                 "type": "null"
               }
             ]
+          },
+          "queuedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "mergedAt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "title": "MergeQueueItem"
@@ -40437,6 +42391,52 @@
           "stages"
         ],
         "properties": {
+          "serviceConfig": {
+            "type": "object",
+            "required": [
+              "path",
+              "commit",
+              "status",
+              "raw",
+              "error"
+            ],
+            "properties": {
+              "path": {
+                "$ref": "#/components/schemas/RepoPath"
+              },
+              "commit": {
+                "$ref": "#/components/schemas/Sha"
+              },
+              "status": {
+                "enum": [
+                  "ok",
+                  "error",
+                  "missing"
+                ]
+              },
+              "raw": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "error": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
           "path": {
             "enum": [
               ".agentwbs/pipeline.yaml"
@@ -40839,8 +42839,8 @@
                             },
                             "sourceRef": {
                               "type": "string",
-                              "minLength": 1,
-                              "pattern": "\\S"
+                              "pattern": "^sha256:[0-9a-f]{64}$",
+                              "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                             }
                           },
                           "additionalProperties": false
@@ -41466,8 +43466,8 @@
                             },
                             "sourceRef": {
                               "type": "string",
-                              "minLength": 1,
-                              "pattern": "\\S"
+                              "pattern": "^sha256:[0-9a-f]{64}$",
+                              "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                             }
                           },
                           "additionalProperties": false
@@ -42913,8 +44913,8 @@
                                           },
                                           "sourceRef": {
                                             "type": "string",
-                                            "minLength": 1,
-                                            "pattern": "\\S"
+                                            "pattern": "^sha256:[0-9a-f]{64}$",
+                                            "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                                           },
                                           "subjectHash": {
                                             "$ref": "#/components/schemas/Sha256"
@@ -43617,8 +45617,8 @@
                         },
                         "sourceRef": {
                           "type": "string",
-                          "minLength": 1,
-                          "pattern": "\\S"
+                          "pattern": "^sha256:[0-9a-f]{64}$",
+                          "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                         },
                         "subjectHash": {
                           "$ref": "#/components/schemas/Sha256"
@@ -43704,8 +45704,8 @@
                           },
                           "sourceRef": {
                             "type": "string",
-                            "minLength": 1,
-                            "pattern": "\\S"
+                            "pattern": "^sha256:[0-9a-f]{64}$",
+                            "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                           },
                           "subjectHash": {
                             "$ref": "#/components/schemas/Sha256"
@@ -44134,8 +46134,8 @@
                             },
                             "sourceRef": {
                               "type": "string",
-                              "minLength": 1,
-                              "pattern": "\\S"
+                              "pattern": "^sha256:[0-9a-f]{64}$",
+                              "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                             },
                             "subjectHash": {
                               "$ref": "#/components/schemas/Sha256"
@@ -46642,7 +48642,9 @@
                             "obs",
                             "gh",
                             "lfs",
-                            "reports"
+                            "reports",
+                            "font",
+                            "render"
                           ]
                         },
                         "status": {
@@ -48497,8 +50499,8 @@
                                 },
                                 "sourceRef": {
                                   "type": "string",
-                                  "minLength": 1,
-                                  "pattern": "\\S"
+                                  "pattern": "^sha256:[0-9a-f]{64}$",
+                                  "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                                 },
                                 "subjectHash": {
                                   "$ref": "#/components/schemas/Sha256"

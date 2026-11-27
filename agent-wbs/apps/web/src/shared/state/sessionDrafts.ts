@@ -63,7 +63,7 @@ export function registerDraft(id: string, snapshot: () => DraftEntry): () => voi
 }
 
 /** 세션이 끊길 때 등록된 초안을 모두 저장한다(ApiProvider가 부른다). 저장소가 막혀 있으면 조용히 건너뛴다. */
-export function persistRegisteredDrafts(storage: Storage, tabId: string, now: number = Date.now()): void {
+export function persistRegisteredDrafts(storage: Storage, tabId: string, now: number = sessionStamp()): void {
   for (const [id, snapshot] of registry) {
     try {
       const entry = snapshot();
@@ -109,9 +109,26 @@ export function clearAllDrafts(storage: Storage): void {
 
 const LOGOUT_KEY = 'awbs.logoutAt';
 const CHANNEL = 'awbs.session';
+const STAMP_KEY = 'awbs.sessionStamp';
+
+/**
+ * 세션 사건(로그인·로그아웃·초안 보관·페이지 열기)에 붙이는 번호(ms). 벽시계 값과 「모든 탭에서 마지막으로 쓴 번호 + 1」 중 큰 값이다.
+ * 왜: 벽시계가 뒤로 가면(이 PC는 약 32초마다 2.3초) 나중 로그아웃이 앞선 로그인보다 작은 시각으로 찍혀,
+ * 로그아웃 뒤에도 초안 보관을 허용하는 쪽으로 틀릴 수 있다. 번호를 모든 탭이 보는 localStorage에 두어 순서를 지킨다.
+ * 저장소가 막혀 있으면 벽시계 값을 그대로 쓴다.
+ */
+export function sessionStamp(local: Storage | null = browserLocalStorage(), now: number = Date.now()): number {
+  let stamp = now;
+  try {
+    const last = Number(local?.getItem(STAMP_KEY));
+    if (Number.isFinite(last) && last >= stamp) stamp = last + 1;
+    local?.setItem(STAMP_KEY, String(stamp));
+  } catch { /* 막힌 저장소: 벽시계 값 */ }
+  return stamp;
+}
 
 /** 명시적 로그아웃 시각을 남긴다(모든 탭이 보는 localStorage). */
-export function recordLogout(local: Storage, now: number = Date.now()): void {
+export function recordLogout(local: Storage, now: number = sessionStamp(local)): void {
   try { local.setItem(LOGOUT_KEY, String(now)); } catch { /* 무시 */ }
 }
 
@@ -144,11 +161,11 @@ export function draftsAllowed({ blocked, logoutAt, loginAt }: { blocked: boolean
 
 const LOGIN_KEY = 'awbs.loginAt';
 /** 이 페이지를 연 시각. 이 탭에서 로그인한 기록이 없을 때(이미 로그인된 세션으로 연 탭) 로그인 시각으로 본다. */
-const pageOpenedAt = Date.now();
+const pageOpenedAt = sessionStamp();
 let blockedByLogout = false;
 
 /** 이 탭에서 로그인이 성공했다: 시각을 남기고 보관 차단을 푼다. */
-export function markLoggedIn(now: number = Date.now()): void {
+export function markLoggedIn(now: number = sessionStamp()): void {
   blockedByLogout = false;
   const storage = browserStorage();
   try { storage?.setItem(LOGIN_KEY, String(now)); } catch { /* 무시 */ }
@@ -174,7 +191,7 @@ function dropAllHere(): void {
 }
 
 /** 이 탭에서 명시적으로 로그아웃했다: 시각을 남기고, 이 탭 초안을 지우고, 다른 탭에 알린다. */
-export function announceLogout(now: number = Date.now()): void {
+export function announceLogout(now: number = sessionStamp()): void {
   const local = browserLocalStorage();
   if (local) recordLogout(local, now);
   dropAllHere();

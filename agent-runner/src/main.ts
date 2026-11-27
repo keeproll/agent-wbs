@@ -1,6 +1,8 @@
 import { ApiError, createApiClient } from './api/client.ts';
 import { RunnerApp } from './app.ts';
-import { createCliRegistry } from './cli-update/registry.ts';
+import { cliEnvironment, createCliRegistry } from './cli-update/registry.ts';
+import { AGENT_EXEC, AGENT_USER, agentLoginRun } from './cli/dedicated-user.ts';
+import { createRunCommand } from './readiness/command.ts';
 import { ConfigError, loadConfig } from './config.ts';
 import { createLogger } from './log.ts';
 import { nodeHostSources } from './resources/host.ts';
@@ -29,7 +31,15 @@ try {
       env: process.env,
       warn: (message) => log.warn(message),
       hostSources: nodeHostSources(),
-      cliRegistry: createCliRegistry({ home: config.home, env: process.env }),
+      // 전용 계정 격리면 CLI를 Agent 작업 영역(/srv/agentwbs/cli)에 설치하고, 설치 점검의 로그인 확인은 Agent 계정으로 한다.
+      cliRegistry: createCliRegistry({
+        home: config.agentRoot ?? config.home,
+        env: process.env,
+        ...(config.agentRoot && {
+          run: agentLoginRun({ user: AGENT_USER, root: config.agentRoot, exec: AGENT_EXEC }, createRunCommand({ env: cliEnvironment(process.env), timeoutMs: 120_000 })),
+        }),
+      }),
+      agentRoot: config.agentRoot,
       cliUpdates: config.cliUpdates,
       ...(config.github && { github: config.github }),
     });

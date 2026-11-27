@@ -11,7 +11,7 @@ import { gradeAdjust, OPERATIONS, proposalReasons } from '@awbs/shared/api';
 import * as c from '../../shared/src/api/common.ts';
 import * as m from '../../shared/src/api/models.ts';
 import {
-  CI_STAGE, cleanupResult, createPool, DRIFT_COMPAT, execPolicyToApi, fromDb, OBSERVATION_GRADE, recreateTestDatabase, seedSystem,
+  CI_STAGE, cleanupResult, COMMAND_PAYLOAD_SQL, createPool, DRIFT_COMPAT, execPolicyToApi, fromDb, OBSERVATION_GRADE, recreateTestDatabase, seedSystem,
   splitSettingsToDomain,
 } from '../src/index.ts';
 import type { CommandResultBody } from '../src/index.ts';
@@ -213,7 +213,7 @@ describe('API가 요구하는 저장 위치', () => {
 
   test('CP 판단·보류 JSON은 API·도메인 결과 그대로 저장된다', () => transaction(async (client) => {
     const p = await project(client);
-    const judgement = { result: 'met', agreedBy: ['Claude', 'Codex'], basis: 'b', judgedAt: '2026-11-26T00:00:00Z', sourceRef: 'job-1', subjectHash: 'a'.repeat(64) };
+    const judgement = { result: 'met', agreedBy: ['Claude', 'Codex'], basis: 'b', judgedAt: '2026-11-26T00:00:00Z', sourceRef: `sha256:${'a'.repeat(64)}`, subjectHash: 'a'.repeat(64) };
     const split = { schemaVersion: 1, items: [{ rule: 'ac_meaning', ...judgement }] };
     const tasks = [{ taskKey: 'TASK-0001', judgedRules: { schemaVersion: 1, items: [{ rule: 'revert', ...judgement }] } }];
     expect(ajv.validate(m.SplitJudgements, split)).toBe(true);
@@ -274,7 +274,7 @@ describe('API가 요구하는 저장 위치', () => {
       "insert into execution_holds(project_id,job,task,epoch,agent,slots,heavy,host_id,boot_id,fence,slot_state,lock_state) values($1,$2,$3,1,'Claude',1,false,'host','boot',5,'reserved','held')",
       [p, job, task]);
     await client.query("select reset_project(1,'p',true,'lead')");
-    const command = await one<{ id: string; epoch: number; payload: { holds: { job: string }[] } }>(client, 'select id,epoch,payload from runner_commands');
+    const command = await one<{ id: string; epoch: number; payload: { holds: { job: string }[] } }>(client, `select id,epoch,${COMMAND_PAYLOAD_SQL} payload from runner_commands`);
     expect(ajv.validate(op('getCommands').responses[200] ?? false, { currentEpoch: 2, commands: [{ id: command.id, kind: 'reset-cleanup', epoch: command.epoch, payload: command.payload }] })).toBe(true);
     const report = (holds: CommandResultBody['holds'] = [], status: CommandResultBody['status'] = 'done'): CommandResultBody =>
       ({ status, items: [{ name: 'worktree', ok: true, detail: '' }], holds });

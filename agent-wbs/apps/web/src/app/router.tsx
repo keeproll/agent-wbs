@@ -5,6 +5,7 @@
  * - `/wbs/:taskKey` — WBS 레일 + Task 상세(G§4.3). `?tab=`으로 탭을 고른다.
  * - `/exec/:taskKey` — 작업 실행에서 그 Task(M3-06). `?att=`로 시도를 고른다.
  * - `/change/:cpRef` — 변경 제안 상세(CP 키 또는 id, M3-05).
+ * - `/ci/:runId` — 빌드·통합 실행 상세(M7-05). 서버 알림 ref의 path와 같다.
  * - `/settings/:tab` — 설정 탭(G§4.9).
  * 모든 하위 주소의 해석 규칙(알림 링크 → 주소)은 shared/auth/login-link.ts 한 곳에 있다.
  *
@@ -13,6 +14,7 @@
 import { lazy, Suspense, type ComponentType } from 'react';
 import { createBrowserRouter, Navigate, type RouteObject } from 'react-router';
 import { LoginPage } from '../features/auth/LoginPage.tsx';
+import { CiPage } from '../features/ci/CiPage.tsx';
 import { ChangePage } from '../features/change/ChangePage.tsx';
 import { DashboardPage } from '../features/dashboard/DashboardPage.tsx';
 import { DesignPage } from '../features/design/DesignPage.tsx';
@@ -48,6 +50,7 @@ const SCREENS: Partial<Record<MenuKey, ComponentType>> = {
   change: ChangePage, // M3-05
   history: HistoryPage, // M3-07
   report: ReportPage, // M6-01
+  ci: CiPage, // M7-05(/ci/:runId는 실행 상세)
   settings: SettingsPage, // M3-08(/settings는 기본 Runner 탭)
 };
 
@@ -69,6 +72,7 @@ function screen(key: MenuKey) {
 const DETAIL: Partial<Record<MenuKey, string>> = {
   exec: '/exec/:taskKey', // M3-06 작업 실행에서 그 Task(`?att=`로 시도)
   change: '/change/:cpRef', // M3-05 알림 링크로 여는 CP 상세(CP 키 또는 id)
+  ci: '/ci/:runId', // M7-05 알림 링크로 여는 CI 실행 상세(서버 path `/ci/<id>`)
   settings: '/settings/:tab', // G§4.9 설정 탭
   report: '/report/:reportId', // M6-01 보고서 하나(메일 발송 기록의 보고서 링크)
 };

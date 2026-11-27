@@ -2,8 +2,9 @@ import type { PoolClient } from '@awbs/db';
 import type { TaskStatus } from '@awbs/shared';
 import { isTimestamp } from '@awbs/shared/api';
 import { TaskError } from './errors.ts';
-import { iso, publicDetail, taskDetail } from './read.ts';
-import { deferChange } from '../changes/events.ts';
+import { publicDetail, taskDetail } from './read.ts';
+// iso는 import 순환(read → gate → project/service → write)에서도 모듈 로드 때 바로 쓰이므로 의존이 없는 events.ts에서 가져온다.
+import { deferChange, iso } from '../changes/events.ts';
 
 /** 잠근 Task 행. updatedAt은 마이크로초까지 비교한다. */
 export interface LockedTask { id: string; project_id: string; task_key: string; status: TaskStatus; updated_at: string; deleted_at: string | null }
@@ -42,7 +43,7 @@ export async function assertVersion(client: PoolClient, task: LockedTask, expect
   const same = (await client.query<{ same: boolean }>('select $1::timestamptz=$2::timestamptz as same', [task.updated_at, expected])).rows[0]?.same;
   if (same) return;
   const history = await client.query<{ at: string; actor: string; kind: string; before: unknown; after: unknown; ref: { field?: string } | null }>(
-    `select ${iso('at')} as at,actor,kind,before,after,ref from task_history where task=$1 and at>$2::timestamptz order by at,created_at`, [task.id, expected]);
+    `select ${iso('at')} as at,actor,kind,before,after,ref from task_history where task=$1 and at>$2::timestamptz order by record_no`, [task.id, expected]);
   const current = await taskDetail(client, task.task_key);
   throw new TaskError('VERSION_CONFLICT', {
     current: current ? publicDetail(current) : null,

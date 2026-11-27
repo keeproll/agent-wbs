@@ -87,5 +87,8 @@ describe('대시보드 계산(UI-01, P dashVM L6274–6333)', () => {
     expect(alertLink(a('input_history_rewritten')).to).toBe('/project');
     expect(alertLink(a('external-write-blocked')).to).toBe('/settings/runner');
     expect(alertLink(a('mail:fail')).to).toBe('/settings/report');
+    // CI 알림(M7-05): 서버 target은 실행 id(ref 규칙 taskKey → id) → 그 실행 상세. 대상이 없으면 빌드·통합 목록
+    expect(alertLink({ ...a('ci:buildFail|int|#9'), target: 'r-1' })).toEqual({ to: '/ci/r-1', label: '빌드 · 통합 보기' });
+    expect(alertLink(a('ci:baseline|abc')).to).toBe('/ci');
   });
 });

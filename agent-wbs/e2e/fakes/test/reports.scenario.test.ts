@@ -489,7 +489,7 @@ describe('기간 말 재구성(owner 2026-11-27 아이템 13): 그때 바로 찍
       async (t: string) => exec.query('update messages set pending_next=not pending_next where task=$1 and dir=$2', [t, 'out']),
       async () => exec.query("update change_proposals set status=$1 where cp_key='CP-002'", [pick(['review', 'changes', 'held'])]),
       async (t: string) => exec.query("update tasks set deleted_at=case when deleted_at is null then now() end where id=$1 and status='planning'", [t]),
-      // 설정 변경(0037부터 기록): 일정 정책·작업 불가일·heartbeat·동시 실행 한도
+      // 설정 변경(0029부터 기록): 일정 정책·작업 불가일·heartbeat·동시 실행 한도
       async () => exec.query('update schedule_policy set assume_rate=$1', [pick(['0.5', '0.6', '0.8'])]),
       async () => exec.query("insert into blackout_days(date,note) values($1,'시험 휴무') on conflict (date) do nothing", [addDays('2026-12-01', Math.floor(r() * 20))]),
       async () => exec.query('update app_settings set heartbeat_seconds=$1', [pick([20, 30, 45])]),
@@ -577,7 +577,7 @@ describe('기간 말 재구성(owner 2026-11-27 아이템 13): 그때 바로 찍
   });
 
   test('상태 기록이 시작되기 전 시점은 지어내지 않고 「기록 없음」(basis.missing=state)', async () => {
-    // 0036 이전 DB를 흉내 낸다: 상태 기록 시작(seed) 표시를 커밋 시계 11-10으로 남긴다(관리자만 할 수 있는 시험 준비).
+    // 0028 이전 DB를 흉내 낸다: 상태 기록 시작(seed) 표시를 커밋 시계 11-10으로 남긴다(관리자만 할 수 있는 시험 준비).
     const id = await projectId();
     const w = await owner.connect();
     try {

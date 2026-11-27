@@ -13,15 +13,19 @@ test('0021·0022 snapshot이 단계별 구조와 연결을 보존하고 다음 g
   const observation = snapshot('0023');
   const settings = snapshot('0024');
   const versions = snapshot('0025');
-  // M6 통합 재번호: 메일 큐(M6-03, 옛 0049) → 0039, 설계 원장(M6-05, 옛 0053) → 0042. 사슬은 0025 → 0039 → 0042.
-  const mail = snapshot('0039');
-  const design = snapshot('0042');
+  const ci = snapshot('0026');
+  const order = snapshot('0027');
+  // M6 통합 재번호(새 main 위): 메일 큐(M6-03) → 0031, 설계 원장(M6-05) → 0034. 사슬은 0025 → 0026 → 0027 → 0031 → 0034.
+  const mail = snapshot('0031');
+  const design = snapshot('0034');
   expect(project.prevId).toBe(before.id);
   expect(evidence.prevId).toBe(project.id);
   expect(observation.prevId).toBe(evidence.id);
   expect(settings.prevId).toBe(observation.id);
   expect(versions.prevId).toBe(settings.id);
-  expect(mail.prevId).toBe(versions.id);
+  expect(ci.prevId).toBe(versions.id);
+  expect(order.prevId).toBe(ci.id);
+  expect(mail.prevId).toBe(order.id);
   expect(design.prevId).toBe(mail.id);
   expect(project.tables['public.projects']?.columns).toHaveProperty('input_checked_at');
   expect(project.tables['public.change_proposals']?.columns).toHaveProperty('deleted_at');
@@ -33,6 +37,13 @@ test('0021·0022 snapshot이 단계별 구조와 연결을 보존하고 다음 g
   expect(settings.tables['public.github_settings']?.columns).toHaveProperty('checked_at');
   expect(versions.tables['public.app_settings']?.columns).toHaveProperty('split_version');
   expect(versions.tables['public.concurrency_settings']?.columns).toHaveProperty('budget_version');
+  expect(ci.tables['public.merge_queue']?.columns).toHaveProperty('head_sync');
+  expect(ci.tables['public.ci_steps']?.columns).toHaveProperty('duration_ms');
+  // M5·M7 통합: Planning 이벤트 수신 순번(0027). 「다음 generate가 빈 변경」은 마지막 snapshot(0034)으로 아래에서 확인한다.
+  for (const table of ['change_proposal_events', 'planning_job_logs', 'planning_reviews']) expect(order.tables[`public.${table}`]?.columns).toHaveProperty('record_no');
+  // M6: 0027 위에 메일 큐(0031)를 더하면 메일 열만 바뀌고, 설계 원장(0034)은 설계 두 줄만 더한다.
+  expect(await generateMigration(order, mail)).not.toEqual([]);
+  expect(mail.tables['public.ci_runs']).toEqual(order.tables['public.ci_runs']);
   expect(await generateMigration(mail, design)).toEqual([
     'ALTER TABLE "design_versions" ALTER COLUMN "snapshot" DROP NOT NULL;',
     'ALTER TABLE "design_snapshots" ADD COLUMN "content" jsonb DEFAULT \'{}\'::jsonb NOT NULL;',

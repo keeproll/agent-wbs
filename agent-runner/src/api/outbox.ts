@@ -22,6 +22,10 @@ export function retryable(error: unknown): boolean {
   return error instanceof ApiTransportError || (error instanceof ApiError && (error.status === 408 || error.status === 429 || (error.status >= 500 && error.status <= 599)));
 }
 
+export function resultSucceeded(body: ApiRequest<'reportAttemptResult'>['body']): boolean {
+  return !body.failure && (!('verification' in body) || body.verification.result === 'PASS');
+}
+
 export function retryDelay(attempts: number, error: unknown, now: number, random: number): number {
   const base = Math.min(60_000, 1000 * 2 ** Math.min(attempts, 6));
   const header = error instanceof ApiError ? error.retryAfter : null;
@@ -61,6 +65,7 @@ export class Outbox {
   }
 
   get rejected() { return this.state.rejected; }
+  get pending() { return this.state.snapshot.outbox; }
   rejectedFor(attemptId: string) { return this.state.rejectedFor(attemptId); }
 
   async enqueue<K extends ReportId>(operation: K, request: Omit<ApiRequest<K>, 'idempotencyKey'> & { idempotencyKey?: string }): Promise<Entry> {
@@ -103,7 +108,7 @@ export class Outbox {
       }
       if (operation === 'ackMessage') {
         const messageId = input.params?.messageId;
-        if (!draft.inbox.some((m) => m.id === messageId)) throw new Error('수신함에 없는 메시지입니다.');
+        if (!draft.inbox.some((m) => m.id === messageId) && !draft.instructions?.some(i => i.message.id === messageId)) throw new Error('수신함에 없는 메시지입니다.');
         draft.inbox = draft.inbox.filter((m) => m.id !== messageId);
       }
       draft.outbox.push(entry);
@@ -147,6 +152,12 @@ export class Outbox {
         const call = this.api as (id: OperationId, request: unknown) => Promise<ApiResponse<OperationId>>;
         await call(entry.operation, request);
       } catch (error) {
+        if (entry.operation === 'reportMergeQueue' && entry.request.body?.status === 'merged' && error instanceof ApiError &&
+          error.error?.code === 'GATE_NOT_PASSED' && error.error.details?.event === 'GATE_UNMET_AFTER_MERGE') {
+          // 병합 사실은 이미 커밋됐다. Gate 회복은 서버 재평가가 맡는다.
+          await this.state.update(draft => { draft.outbox = draft.outbox.filter(e => e.id !== entry.id); });
+          this.deadlines.delete(entry.id); blocked.delete(stream); continue;
+        }
         const designCode = entry.operation === 'reportDesignSnapshot' && error instanceof ApiError && error.status === 409 ? error.error?.code : undefined;
         if (designCode === 'VERSION_CONFLICT' && error instanceof ApiError) {
           const details = error.error?.details;
@@ -197,7 +208,12 @@ export class Outbox {
         if (authenticationFailed(error)) throw error;
         continue;
       }
-      await this.state.update((draft) => { draft.outbox = draft.outbox.filter((e) => e.id !== entry.id); });
+      await this.state.update((draft) => {
+        draft.outbox = draft.outbox.filter((e) => e.id !== entry.id);
+        if (entry.operation === 'reportAttemptResult' && resultSucceeded(entry.request.body as ApiRequest<'reportAttemptResult'>['body'])) {
+          draft.instructions = (draft.instructions ?? []).filter(i => i.attemptId !== entry.request.params?.attemptId);
+        }
+      });
       await this.state.removeEvidence(entry);
       this.deadlines.delete(entry.id);
       blocked.delete(stream);

@@ -1,4 +1,4 @@
-// 0036·0037 상태 이력(M6-01 기간 말 재구성, 재리뷰 2 원칙).
+// 0028·0029 상태 이력(M6-01 기간 말 재구성, 재리뷰 2 원칙).
 // - 행 변경은 SECURITY DEFINER 트리거만 기록한다. 커밋 순서대로 단조 증가하는 커밋 시계 값을 트랜잭션마다 매긴다.
 // - 앱 로그인(관리자 아님, awbs_app 권한)은 이력을 직접 쓰거나 고치거나 지울 수 없고, 기록을 건너뛸 수도 없다.
 // - 초기화가 끝나면 프로젝트 이력은 지우고 전역 이력(설정·실행 PC·전역 알림)은 남긴다.
@@ -157,8 +157,8 @@ test('초기화: 프로젝트 이력은 지우고, 전역 이력은 남기며 �
   expect((await owner.query("select op from global_log where tbl='alerts' and row_id=(select row_id from global_log where data->>'key'='global:test' limit 1) order by seq desc limit 1")).rows[0]?.op).toBe('delete');
 });
 
-test('0036 전부터 있던 행은 seed로 한 번 남고 커밋 시계가 매겨진다', async () => {
-  const folder = await mkdtemp(join(tmpdir(), 'awbs-0036-'));
+test('0028 전부터 있던 행은 seed로 한 번 남고 커밋 시계가 매겨진다', async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'awbs-0028-'));
   const old = new URL(url);
   old.pathname += '_old';
   const pool = createPool(old.href, { max: 2, onError: () => undefined });
@@ -166,8 +166,8 @@ test('0036 전부터 있던 행은 seed로 한 번 남고 커밋 시계가 매�
     await cp(fileURLToPath(new URL('../migrations', import.meta.url)), folder, { recursive: true });
     const path = join(folder, 'meta/_journal.json');
     const journal = JSON.parse(await readFile(path, 'utf8')) as { entries: { tag: string }[] };
-    // M6 통합: 0036 이후 전부를 뺀다. 0038(옛 0047) 이름 채움이 0036 상태 이력을 읽으므로, 실제 업그레이드 순서(0036 → 0037 → 0038 …)와 같게 둔다.
-    journal.entries = journal.entries.filter((e) => e.tag < '0036');
+    // M6 통합: 0028(상태 이력, 옛 0036) 이후 전부를 뺀다. 0030(옛 0047) 이름 채움이 0028 상태 이력을 읽으므로, 실제 업그레이드 순서(0028 → 0029 → 0030 …)와 같게 둔다.
+    journal.entries = journal.entries.filter((e) => e.tag < '0028');
     await writeFile(path, JSON.stringify(journal));
     await recreateTestDatabase(old.href);
     await migrate(drizzle(pool), { migrationsFolder: folder });

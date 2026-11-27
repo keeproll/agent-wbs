@@ -11,6 +11,7 @@ interface Schema {
   required?: string[];
   patternProperties?: Record<string, Schema>;
   contentMediaType?: string;
+  additionalProperties?: boolean;
 }
 interface Parameter {
   $ref?: string;
@@ -38,7 +39,7 @@ export interface OpenApiDocument {
 const KNOWN = new Set([
   '$ref', 'type', 'enum', 'const', 'anyOf', 'allOf', 'items', 'properties', 'required', 'patternProperties', 'contentMediaType', 'description',
   // 타입에 영향이 없는 검증 규칙
-  'title', 'pattern', 'minLength', 'maxLength', 'minimum', 'maximum', 'exclusiveMinimum', 'minItems', 'uniqueItems',
+  'title', 'description', 'pattern', 'minLength', 'maxLength', 'minimum', 'maximum', 'exclusiveMinimum', 'minItems', 'uniqueItems',
   'maxItems', 'minProperties', 'additionalProperties',
 ]);
 
@@ -85,7 +86,7 @@ export function generateClient(doc: OpenApiDocument): string {
           if (!value || rest.length > 0) throw new Error('지원하지 않는 patternProperties');
           return `Record<string, ${type(value, indent)}>`;
         }
-        return fields(
+        const object = fields(
           Object.entries(schema.properties ?? {}).map(([name, item]) => ({
             name,
             required: schema.required?.includes(name) ?? false,
@@ -93,6 +94,9 @@ export function generateClient(doc: OpenApiDocument): string {
           })),
           indent,
         );
+        return schema.additionalProperties === true
+          ? object.replace(/\n(\s*)}$/, `\n${indent}  [key: string]: unknown;\n$1}`)
+          : object;
       }
       case undefined:
         if (Object.keys(schema).length === 0) return 'unknown';

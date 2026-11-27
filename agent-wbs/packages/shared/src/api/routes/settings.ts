@@ -174,7 +174,7 @@ const settings = [
       },
     },
   ),
-  ...setting('CiDefaults', '/api/settings/ci', 'CI 실행 설정', m.CiSettings),
+  ...setting('CiDefaults', '/api/settings/ci', 'CI 실행 설정', m.CiSettings, { read:m.CiObservedSettings }),
   ...setting(
     'GithubSettings',
     '/api/settings/github',

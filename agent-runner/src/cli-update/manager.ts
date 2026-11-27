@@ -23,6 +23,11 @@ export interface UpdateDeps {
   report(body: ReadinessReport): Promise<void>;
   /** obs 항목 뒤에 붙일 보조 설명(cgroup 노출). 준비 점검(M4-02)과 같은 문구를 쓰게 한다(M-1). 없으면 빈 문자열. */
   obsNote?: () => Promise<string>;
+  /**
+   * CLI 폴더(버전 폴더 포함)를 만들 때의 권한. 기본 0o700(Runner만).
+   * 전용 계정 격리에서는 0o750: Agent 계정이 그룹으로 읽고 실행만 하게(쓰기는 못 함). isolation.md §6.
+   */
+  dirMode?: number;
 }
 
 /**
@@ -145,10 +150,10 @@ export class CliUpdater {
 
   async #ensureBase(agent: Agent): Promise<string> {
     const root = join(this.#d.home, 'cli');
-    await mkdir(root, { recursive: true, mode: 0o700 });
+    await mkdir(root, { recursive: true, mode: this.#d.dirMode ?? 0o700 });
     if (!(await lstat(root)).isDirectory()) throw new Error('CLI 루트는 실제 폴더여야 합니다.');
     const base = this.#base(agent);
-    await mkdir(base, { recursive: true, mode: 0o700 });
+    await mkdir(base, { recursive: true, mode: this.#d.dirMode ?? 0o700 });
     if (!(await lstat(base)).isDirectory()) throw new Error('CLI 설치 위치는 실제 폴더여야 합니다.');
     return base;
   }
@@ -203,7 +208,7 @@ export class CliUpdater {
     try {
       const exists = await lstat(versionDir).then(() => true, (e: NodeJS.ErrnoException) => { if (e.code === 'ENOENT') return false; throw e; });
       if (!exists) {
-        await mkdir(stage, { mode: 0o700 });
+        await mkdir(stage, { mode: this.#d.dirMode ?? 0o700 });
         await this.#d.registry.install(agent, pending, stage);
         await this.#probe(agent, pending, stage);
         await rename(stage, versionDir);

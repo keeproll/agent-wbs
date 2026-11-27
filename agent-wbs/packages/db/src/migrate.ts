@@ -10,7 +10,8 @@ import type { Pool, PoolClient } from './pool.ts';
 export class MigrationGapError extends Error {
   readonly missing: string[];
   constructor(missing: string[]) {
-    super(`마이그레이션 적용 누락: ${missing.join(', ')}. DB 기록(drizzle.__drizzle_migrations)과 migrations 폴더가 맞지 않습니다.`);
+    // 앞 문구 「적용되지 않은 마이그레이션이 있습니다」는 M5·M7 통합 판의 문구다(같은 검사를 하나로 합쳤다).
+    super(`적용되지 않은 마이그레이션이 있습니다. journal 순서를 확인하세요: ${missing.join(', ')}. DB 기록(drizzle.__drizzle_migrations)과 migrations 폴더가 맞지 않습니다.`);
     this.name = 'MigrationGapError';
     this.missing = missing;
   }
@@ -35,8 +36,9 @@ export async function runMigrations(pool: Pool, migrationsFolder = fileURLToPath
       const applied = await client.query('select 1 from drizzle.__drizzle_migrations where hash=$1', [contract?.hash]);
       // 옛 0016 사용량 보정의 시각 때문에 앞선 계약 0016이 건너뛰어진다. 그 한 건만 원본 그대로 보충한다.
       if (legacy.rowCount && !applied.rowCount && contract) await applyOne(client, contract);
-      // 재번호한 마이그레이션(예: 옛 0049 → 0039)은 내용(hash)이 같고 when만 다르다. 이미 적용한 hash의 기록 시각을 지금 journal 값으로 맞춘다
-      // (M5·M7 통합과 같은 처리). 내용이 다른 기록은 건드리지 않는다.
+      // 통합 때 다시 매긴 마이그레이션(예: M5·M7 브랜치 0041 → 최종 0026, M6 통합 0039 → 0031)은 내용(hash)이 같고 when만 다르다.
+      // 옛 when이 DB에 남아 있으면 Drizzle은 「마지막 적용 시각」보다 작은 when의 새 마이그레이션(예: 0027)을 건너뛴다.
+      // 이미 적용한 hash의 기록 시각만 지금 journal 값으로 맞춘다. 내용이 다른 기록은 건드리지 않으므로, 진짜 순서 오류는 아래 누락 검사가 그대로 잡는다.
       for (const file of files) {
         await client.query('update drizzle.__drizzle_migrations set created_at=$2 where hash=$1 and created_at is distinct from $2', [file.hash, file.folderMillis]);
       }
@@ -66,7 +68,7 @@ async function applyOne(client: PoolClient, file: MigrationMeta): Promise<void> 
  * 무엇이 문제인가
  * - Drizzle은 「DB에 마지막으로 기록된 시각(created_at)보다 journal 시각(when)이 큰 것」만 적용한다.
  *   그래서 when이 더 낮은 마이그레이션이 나중에 합쳐지면 **오류 없이 건너뛴다**(M6-03 리뷰 지적 2).
- * - 예: 옛 번호 0049(when …049)를 적용한 DB에 재번호한 0038(when …038)이 오면, 0038은 영영 적용되지 않는다.
+ * - 예: 옛 번호 0049(when …049)를 적용한 DB에 재번호한 0030(when …030)이 오면, 0030은 영영 적용되지 않는다.
  *
  * 어떻게 하나
  * - journal 순서대로 보면서, 내용(hash)이 DB에 없고 시각이 마지막 기록 이하인 것(= Drizzle이 건너뛸 것)을 하나씩 먼저 적용한다.
@@ -77,6 +79,11 @@ async function applyOne(client: PoolClient, file: MigrationMeta): Promise<void> 
 async function fillSkipped(client: PoolClient, files: MigrationMeta[]): Promise<void> {
   const rows = (await client.query<{ hash: string; created_at: string }>('select hash,created_at::text from drizzle.__drizzle_migrations')).rows;
   if (!rows.length) return;
+  // 지금 폴더에 없는 내용(hash)의 기록이 하나라도 있으면 보충하지 않는다(M5·M7 통합 원칙, 시험 ci-migration 「리뷰 R skip」).
+  // 왜: 모르는 기록은 내용이 다른 옛 판이거나 늦게 병합된 마이그레이션이라, 순서를 바꿔 적용하면 새로 만든 DB와 구조가 달라질 수 있다.
+  // 그때는 누락 검사(MigrationGapError)로 멈추고, 그 DB는 새로 만든다. 재번호(이름만 바뀜)는 모든 기록이 아는 hash라 여기를 지난다.
+  const known = new Set(files.map((file) => file.hash));
+  if (rows.some((r) => !known.has(r.hash))) return;
   const last = Math.max(...rows.map((r) => Number(r.created_at)));
   const applied = new Set(rows.map((r) => r.hash));
   for (const file of files) {

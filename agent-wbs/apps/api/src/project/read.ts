@@ -36,7 +36,7 @@ export async function decisions(db: Db, projectId: string) {
 
 /** 저장 때 붙인 Task별 hash는 서버 내부 값이라 응답에서 뺀다(판단 기록 안의 subjectHash는 보인다). */
 function publicDraft(draft: StoredDraft) {
-  return { ...draft, tasks: draft.tasks.map((task) => {
+  return { phases: draft.phases, wps: draft.wps, deps: draft.deps, tasks: draft.tasks.map((task) => {
     const copy: Partial<typeof task> = { ...task };
     delete copy.subjectHash;
     return copy;
@@ -78,9 +78,9 @@ export async function projectState(db: Db) {
     });
   const inputPlanning = (await db.query<PlanningJob & { version: string | null; proposal_id: string | null }>(
     `select j.id,j.project_id,j.kind,j.run_no,j.status,j.instruction,
-       (select payload->>'version' from runner_jobs r where r.payload->>'planningJobId'=j.id::text order by r.created_at limit 1) version,
-       (select c.id from change_proposals c where c.project_id=j.project_id and c.source='input' and c.source_id=j.id::text and c.deleted_at is null order by c.created_at desc,c.id desc limit 1) proposal_id
-     from planning_jobs j where j.project_id=$1 and j.kind='input_diff' order by j.created_at desc limit 1`, [p.id])).rows[0];
+       (select payload->>'version' from runner_jobs r where r.payload->>'planningJobId'=j.id::text order by r.record_no limit 1) version,
+       (select c.id from change_proposals c where c.project_id=j.project_id and c.source='input' and c.source_id=j.id::text and c.deleted_at is null order by c.record_no desc limit 1) proposal_id
+     from planning_jobs j where j.project_id=$1 and j.kind='input_diff' order by j.record_no desc limit 1`, [p.id])).rows[0];
   const registered = {
     ...base, id: p.id, name: p.name, description: p.description, startDate: p.start_date, inputCheckedAt: p.input_checked_at,
     repo: { url: p.repo_url, owner: p.repo_owner, name: p.repo_name, branch: 'main' as const, baseCommit: p.base_commit },
@@ -91,7 +91,7 @@ export async function projectState(db: Db) {
   };
 
   const job = (await db.query<PlanningJob>(
-    "select id,project_id,kind,run_no,status,instruction from planning_jobs where project_id=$1 and kind='bootstrap' order by created_at desc limit 1", [p.id])).rows[0];
+    "select id,project_id,kind,run_no,status,instruction from planning_jobs where project_id=$1 and kind='bootstrap' order by record_no desc limit 1", [p.id])).rows[0];
   if (p.phase === 'active') {
     const approved = (await db.query<{ at: string; n: number }>(
       `select ${iso('max(planning_approved_at)')} at,count(*)::int n from tasks t join input_versions v on v.id=t.src_input_version where v.project_id=$1 and v.v=1`, [p.id])).rows[0];

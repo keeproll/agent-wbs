@@ -196,6 +196,17 @@ const withSchema = (schema: unknown): OpenApiDocument => {
   return doc;
 };
 
+test('추가 필드를 허용한 명령 payload는 생성 타입에서도 잃지 않는다', () => {
+  const generated = generateClient(withSchema({ type: 'object', properties: { holds: { type: 'array', items: { type: 'string' } } }, additionalProperties: true }));
+  expect(generated).toContain('[key: string]: unknown;');
+  expect(generated).toContain('holds?: (string)[];');
+});
+
+test('생성기는 계약 설명을 타입으로 해석하지 않는다', () => {
+  expect(generateClient(withSchema({ type: 'string', description: '판단 입력 지문 계약' })))
+    .toBe(generateClient(withSchema({ type: 'string' })));
+});
+
 test.each([
   ['모르는 키워드', { type: 'object', oneOf: [] }],
   ['모르는 type', { type: ['string', 'null'] }],

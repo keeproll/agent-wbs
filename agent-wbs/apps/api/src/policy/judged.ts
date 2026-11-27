@@ -1,5 +1,5 @@
 import type { PoolClient } from '@awbs/db';
-import type { DesignKind } from '@awbs/shared';
+import type { DesignKind, WorkType } from '@awbs/shared';
 import { canonicalJson, judgedContent, subjectHash, type Ac, type JudgedSource } from '../tasks/hash.ts';
 
 /**
@@ -13,13 +13,13 @@ const text = (value: unknown) => (typeof value === 'string' ? value : '');
 /** 키를 정렬한 JSON(undefined 값은 뺌). `tasks/hash.ts`의 canonicalJson과 같은 함수다. */
 export const hashJson = canonicalJson;
 
-export interface JudgedTask { taskKey: string; subjectHash: string; content: Record<string, unknown>; gradeChange: string | null }
+export interface JudgedTask { taskKey: string; workType: WorkType; subjectHash: string; content: Record<string, unknown>; gradeChange: string | null }
 
 /** Task들의 현재 판단 대상 내용과 hash를 한 트랜잭션 시점에서 읽는다. 명세가 아직 없으면 빈 값으로 본다. */
 export async function judgedTasks(client: PoolClient, taskIds: readonly string[]): Promise<JudgedTask[]> {
-  const tasks = (await client.query<{ id: string; task_key: string; title: string; conflict_group: string | null; overview: Record<string, unknown> | null; spec: Record<string, unknown> | null; ac: unknown[] | null; grade_change: string | null }>(
-    `select t.id,t.task_key,t.title,t.conflict_group,s.overview,s.spec,s.ac,
-      (select h.ref->>'gradeChange' from task_history h where h.task=t.id and h.ref ? 'gradeChange' order by h.at desc,h.created_at desc limit 1) grade_change
+  const tasks = (await client.query<{ id: string; task_key: string; work_type: WorkType; title: string; conflict_group: string | null; overview: Record<string, unknown> | null; spec: Record<string, unknown> | null; ac: unknown[] | null; grade_change: string | null }>(
+    `select t.id,t.task_key,t.work_type,t.title,t.conflict_group,s.overview,s.spec,s.ac,
+      (select h.ref->>'gradeChange' from task_history h where h.task=t.id and h.ref ? 'gradeChange' order by h.record_no desc limit 1) grade_change
      from tasks t left join task_specs s on s.task=t.id
      where t.id=any($1::uuid[]) order by t.task_key`, [taskIds])).rows;
   const outputs = (await client.query<{ task: string; name: string; kind: string; required: boolean; verify: string }>(
@@ -38,6 +38,6 @@ export async function judgedTasks(client: PoolClient, taskIds: readonly string[]
       designs: designs.filter((d) => d.task === t.id).map(({ kind, content }) => ({ kind, content })),
       conflictGroup: t.conflict_group,
     };
-    return { taskKey: t.task_key, subjectHash: subjectHash(source), content: judgedContent(source), gradeChange: t.grade_change };
+    return { taskKey: t.task_key, workType: t.work_type, subjectHash: subjectHash(source), content: judgedContent(source), gradeChange: t.grade_change };
   });
 }

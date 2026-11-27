@@ -60,6 +60,12 @@
      "status": "fail",
      "detail": "없음",
      "fix": "git-lfs 설치"
+    },
+    {
+     "key": "font",
+     "status": "warn",
+     "detail": "화면 비교 고정 글꼴 없음",
+     "fix": "글꼴 설치"
     }
    ],
    "cli": [
@@ -216,6 +222,7 @@
    "items": [
     {
      "id": "qa-verifier",
+     "key": "qa-verifier",
      "agent": "Codex",
      "version": 4,
      "hash": "e81d5c",
@@ -507,18 +514,21 @@
   "body": {
    "steps": [
     {
-     "name": "lint",
-     "status": "pass",
+     "name": "up",
+     "status": "fail",
      "durationMs": 1200
     }
    ],
-   "status": "pass",
+   "status": "fail",
    "logExcerpt": "",
    "artifacts": [
     "runs/ci-1/log.txt"
    ],
-   "treeSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-   "fence": 3
+   "fence": 3,
+   "deployRestore": {
+    "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "status": "fail"
+   }
   },
   "status": 204
  },
@@ -633,7 +643,8 @@
    "ci": {
     "nightAt": "02:00",
     "retry": 1,
-    "deployUrl": null
+    "deployUrl": null,
+    "quarantined": []
    },
    "claudeModels": [
     "claude-haiku-5-5",
@@ -651,6 +662,11 @@
     }
    ]
   }
+ },
+ {
+  "id": "getExecutionHolds",
+  "status": 200,
+  "response": { "holds": [] }
  },
  {
   "id": "getCommands",
@@ -1205,7 +1221,7 @@
         ],
         "basis": "공유 계약 변경 없음",
         "judgedAt": "2026-11-25T01:02:03.123456Z",
-        "sourceRef": "job-1"
+        "sourceRef": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
        }
       ]
      }
@@ -1307,7 +1323,7 @@
         ],
         "basis": "공유 계약 변경 없음",
         "judgedAt": "2026-11-25T01:02:03.123456Z",
-        "sourceRef": "job-1",
+        "sourceRef": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
         "subjectHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
        }
       ]
@@ -1316,5 +1332,27 @@
    ]
   },
   "status": 204
+ },
+ {
+  "id": "getCiJob",
+  "params": {
+   "id": "00000000-0000-4000-8000-000000000001"
+  },
+  "query": {
+   "fence": 1
+  },
+  "status": 200,
+  "response": {
+   "runnable": true,
+   "taskKey": "TASK-0001",
+   "branch": "agent/TASK-0001-h1",
+   "hold": null,
+   "verification": {
+    "passed": true,
+    "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "specRevision": 1
+   },
+   "source": null
+  }
  }
 ]

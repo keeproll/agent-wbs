@@ -20,6 +20,8 @@ import { registerReportRoutes } from './reports/routes.ts';
 import { registerReportPdfRoutes, type PdfOptions } from './pdf/routes.ts';
 import { registerMailRoutes } from './mail/routes.ts';
 import { registerNotifyRoutes } from './notify/routes.ts';
+import { registerCiRoutes } from './ci/routes.ts';
+import { resolveBasePipelineSha } from './ci/service.ts';
 
 export function buildApp(pool: Pool, logger: FastifyServerOptions['logger'] = false,
   security: SecurityOptions = { origin: 'http://127.0.0.1:3100', lan: false }, execution: ExecutionOptions = {}, pdf: PdfOptions = {}): FastifyInstance {
@@ -39,7 +41,8 @@ export function buildApp(pool: Pool, logger: FastifyServerOptions['logger'] = fa
   app.addHook('preHandler', validateTransport);
   installSecurity(app, pool, security);
   registerTaskRoutes(app, pool);
-  installExecution(app, pool, execution);
+  installExecution(app, pool, { resolveBasePipelineSha, ...execution });
+  registerCiRoutes(app, pool);
   registerChangeRoutes(app, pool);
   registerMessageRoutes(app, pool);
   registerPolicyRoutes(app, pool);

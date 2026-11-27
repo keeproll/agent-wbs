@@ -1,0 +1,10 @@
+{"type":"thread.started","thread_id":"019a7c1e-3b2f-7d40-9c6e-5f1a2b3c4d5e"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"테스트를 먼저 본다"}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"bash -lc 'pnpm test'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"bash -lc 'pnpm test'","aggregated_output":"ok\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"file_change","changes":[{"path":"src/a.ts","kind":"update"}],"status":"completed"}}
+{"type":"item.started","item":{"id":"item_3","type":"todo_list","items":[{"text":"구현","completed":false}]}}
+{"type":"item.updated","item":{"id":"item_3","type":"todo_list","items":[{"text":"구현","completed":true}]}}
+{"type":"item.completed","item":{"id":"item_4","type":"agent_message","text":"완료했습니다."}}
+{"type":"turn.completed","usage":{"input_tokens":2400,"cached_input_tokens":1200,"cache_write_input_tokens":0,"output_tokens":310,"reasoning_output_tokens":120}}

@@ -3,6 +3,7 @@ import { ERROR_STATUS, type ErrorCode, type InputError } from '@awbs/shared/api'
 import type { FastifyInstance, FastifySchemaValidationError } from 'fastify';
 import { validationErrors } from '../platform/errors.ts';
 import { redact } from '../platform/redact.ts';
+import { JcsError } from './hash.ts';
 
 const MESSAGES: Partial<Record<ErrorCode, string>> = {
   VALIDATION_FAILED: '입력이 올바르지 않습니다.',
@@ -49,6 +50,7 @@ export class TaskError extends Error {
  */
 export function installTaskErrors(scope: FastifyInstance, actions: ReadonlyMap<string, string>): void {
   scope.setErrorHandler((error, request, reply) => {
+    if (error instanceof JcsError) error = new TaskError('VALIDATION_FAILED', {}, [{ path: 'body', rule: 'JCS', message: error.message }]);
     const action = actions.get(`${request.method} ${request.routeOptions.url ?? ''}`) ?? 'Task 처리';
     const failure = error as { validation?: FastifySchemaValidationError[] };
     if (!(error instanceof TaskError) && !failure.validation) throw error;

@@ -46,6 +46,8 @@ export const READINESS_LABEL: Record<string, string> = {
   gh: 'GitHub 인증',
   lfs: 'git LFS',
   reports: '보고서 저장 공간',
+  font: '화면 비교 고정 글꼴',
+  render: '화면 비교 렌더러 네트워크 차단',
 };
 /** P L6740 rd */
 export const READINESS_STATUS: Record<string, { label: string; cls: string }> = {

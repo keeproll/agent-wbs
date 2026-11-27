@@ -103,6 +103,7 @@ test('N: WBS credential authorization failures must stop the running app',{timeo
     return{status:204,body:undefined,headers:new Headers()};
   }) as unknown as ApiClient;
   const a=app(api,vi.fn() as unknown as typeof fetch); const controller=new AbortController();
+  vi.spyOn(a.execution,'recover').mockResolvedValue(true);
   vi.spyOn(a.runner,'ready','get').mockReturnValue(true);
   vi.spyOn(a.runner,'run').mockImplementation(signal=>new Promise(resolve=>signal.addEventListener('abort',()=>resolve())));
   vi.spyOn(a,'reportHost').mockResolvedValue(); vi.spyOn(a,'reportModels').mockResolvedValue();

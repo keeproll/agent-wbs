@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, readFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ApiRequest, ApiResponse } from '../api/client.ts';
 import { normalizeRepoUrl, repositoryIdFor } from '../git/identity.ts';
 import { GitCleanupError, GitRepository } from '../git/repository.ts';
+import { planningStateDirectory } from '../planning/checkpoint.ts';
 import { atomicWrite } from '../state/files.ts';
 import { RepositoryMismatch, SystemCredentialMissing, sameRepository, type RemoteCleanup } from './remote.ts';
 
@@ -86,11 +87,14 @@ export function processGroupEmpty(pgid: number): boolean {
 
 export interface ResetCleanupDeps {
   home: string;
+  /** 전용 계정 격리의 Agent 작업 영역(작업 폴더·입력 사본 위치). 없으면 Runner 홈. */
+  agentRoot?: string | null;
   /** 현재 PC·부팅 식별자(host 보고와 같은 값) */
   identity: () => { hostId: string; bootId: string };
+  /** 기존 주입의 호환 필드다. 빈 pgid만으로 자손 종료를 증명하지 않으며 launchCheck가 반드시 확인한다. */
   groupEmpty?: (pgid: number) => boolean;
   /**
-   * pgid가 없는 같은 부팅의 보유에 대해 launch 기록을 대조한다(contracts §3.4-3, M5-02 실행 계층이 제공).
+   * 같은 부팅의 보유에 대해 launch 기록을 대조하고 남은 그룹을 종료한다(contracts §3.4-3, M5-02 실행 계층이 제공).
    * `none`: 실행 명령도 래퍼도 없음을 확인. `unknown`: 확인할 수 없음 → unconfirmed 유지.
    */
   launchCheck?: (hold: PayloadHold) => Promise<'none' | 'unknown'>;
@@ -129,7 +133,6 @@ export interface ResetCleanup {
 }
 
 export function createResetCleanup(deps: ResetCleanupDeps): ResetCleanup {
-  const groupEmpty = deps.groupEmpty ?? processGroupEmpty;
   const launchCheck = deps.launchCheck ?? (() => Promise.resolve('unknown' as const));
   /** 명령별로 아직 기록하지 않은 새 경고 참조 해시 */
   const pending = new Map<string, string[]>();
@@ -157,7 +160,7 @@ export function createResetCleanup(deps: ResetCleanupDeps): ResetCleanup {
         proofs.push({ ...original, proof: 'boot_changed', processGroup: hold.processGroup, currentBootId: bootId });
         items.push({ name, ok: true, detail: '부팅이 바뀜 — 이전 프로세스는 존재할 수 없음' });
       } else if (hold.processGroup !== null) {
-        if (groupEmpty(hold.processGroup)) {
+        if ((await launchCheck(hold)) === 'none') {
           proofs.push({ ...original, proof: 'group_empty', processGroup: hold.processGroup });
           items.push({ name, ok: true, detail: `프로세스 그룹 ${String(hold.processGroup)} 비었음` });
         } else {
@@ -180,6 +183,24 @@ export function createResetCleanup(deps: ResetCleanupDeps): ResetCleanup {
     items.push({ name: 'authority', ok: true, detail: `외부 쓰기 권한 세대 ${payload.generation === null ? '없음' : String(payload.generation)}` });
     const failed = (item: Item): CommandResult => ({ status: 'failed', items: [...items, item], holds: proofs });
 
+    // Planning 진행 기록(분석 결과·기술 결정 제안·초안·CP 요청 본문, M5-04)도 프로젝트 기록이다. 초기화는 남기지 않는다(G§4.2 ③).
+    // 프로세스 종료를 증명한 뒤에 지운다. 지우지 못하면 정리 실패다(독립 리뷰 1).
+    const planningDir = planningStateDirectory(deps.home);
+    // 「없음」은 ENOENT일 때만이다. 권한 거부(EACCES) 같은 조회 오류를 없음으로 보면 기록이 남았는데 done이 된다(재리뷰 1).
+    const planningFailed = (error: unknown) => failed({ name: 'planning:local', ok: false,
+      detail: `Planning 진행 기록을 확인·삭제하지 못함 — ${(error instanceof Error ? error.message : '삭제 실패').slice(0, 300)}` });
+    let planningExists = true;
+    try { await lstat(planningDir); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return planningFailed(error);
+      planningExists = false;
+    }
+    if (planningExists) {
+      try { await rm(planningDir, { recursive: true, force: true }); }
+      catch (error) { return planningFailed(error); }
+      items.push({ name: 'planning:local', ok: true, detail: 'Planning 진행 기록 삭제' });
+    }
+
     if (payload.repo) {
       const { repoUrl, baseCommit, branches, prs } = payload.repo;
       const repositoryId = repositoryIdFor(repoUrl);
@@ -189,7 +210,7 @@ export function createResetCleanup(deps: ResetCleanupDeps): ResetCleanup {
       let remoteMain: string | null = null;
       try {
         if (exists) {
-          repo = await GitRepository.open(deps.home, repositoryId);
+          repo = await GitRepository.open(deps.home, repositoryId, { agentRoot: deps.agentRoot ?? null });
           if (normalizeRepoUrl(await repo.source()) !== normalizeRepoUrl(repoUrl)) {
             return failed({ name: 'git:open', ok: false, detail: '로컬 저장소의 등록 원격이 명령의 저장소와 다름 — 정리를 중지합니다.' });
           }

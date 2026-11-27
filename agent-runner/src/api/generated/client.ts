@@ -32,9 +32,36 @@ export type ClaimedJob = {
   fence: number;
   kind: "bootstrap";
   payload: {
+    planningJobId: Id;
+    runNo: number;
+    version: number;
+    techDecisionVersion: Sha256;
+    techDecisions: ({
+      id: Id;
+      tdKey: string;
+      title: string;
+      status: "fixed" | "approved" | "pending" | "rejected" | "noted" | "change";
+      authority: "lead" | "agent" | "free";
+      updatedAt: Timestamp;
+      content: Record<string, unknown>;
+    })[];
     commit: Sha;
+    previousCommit: Sha | null;
     instruction: string;
     resumeStep: string | null;
+    techConstraints: ({
+      id: Id;
+      name: string;
+      level: "must" | "ban" | "cond";
+      condition: string | null;
+    })[];
+    subagentDefs: ({
+      id: Id;
+      defKey: string;
+      version: number;
+      agent: Agent;
+      role: string;
+    })[];
   };
 } | {
   id: Id;
@@ -42,6 +69,31 @@ export type ClaimedJob = {
   fence: number;
   kind: "input_diff";
   payload: {
+    planningJobId: Id;
+    runNo: number;
+    version: number;
+    wbs: {
+      phases: ({
+        id: Id;
+        wps: ({
+          id: Id;
+          tasks: (TaskKey)[];
+        })[];
+      })[];
+      tasks: ({
+        taskKey: TaskKey;
+        workType: WorkType;
+        wp: Id;
+        status: TaskStatus;
+        subjectHash: Sha256;
+        content: JudgedContent;
+      })[];
+      dependencies: ({
+        pred: TaskKey;
+        succ: TaskKey;
+        type: DepType;
+      })[];
+    };
     commit: Sha;
     previousCommit: Sha;
     instruction: string;
@@ -55,6 +107,7 @@ export type ClaimedJob = {
   payload: {
     tasks: ({
       taskKey: TaskKey;
+      workType: WorkType;
       subjectHash: Sha256;
       content: JudgedContent;
       gradeChange?: Uuid | null;
@@ -95,7 +148,46 @@ export type ClaimedJob = {
         taskKey: TaskKey;
         content: JudgedContent;
       })[];
-    } | null;
+    };
+    planning: null;
+  };
+} | {
+  id: Id;
+  leaseUntil: Timestamp;
+  fence: number;
+  kind: "planning";
+  payload: {
+    tasks: ({
+      taskKey: TaskKey;
+      workType: WorkType;
+      subjectHash: Sha256;
+      content: JudgedContent;
+      gradeChange?: Uuid | null;
+    })[];
+    policy: Record<string, unknown>;
+    proposal: null;
+    planning: {
+      id: Id;
+      title: string;
+      scope: string;
+    };
+  };
+} | {
+  id: Id;
+  leaseUntil: Timestamp;
+  fence: number;
+  kind: "planning";
+  payload: {
+    tasks: ({
+      taskKey: TaskKey;
+      workType: WorkType;
+      subjectHash: Sha256;
+      content: JudgedContent;
+      gradeChange?: Uuid | null;
+    })[];
+    policy: Record<string, unknown>;
+    proposal: null;
+    planning: null;
   };
 } | {
   id: Id;
@@ -105,6 +197,7 @@ export type ClaimedJob = {
   payload: {
     tasks: ({
       taskKey: TaskKey;
+      workType: WorkType;
       subjectHash: Sha256;
       content: JudgedContent;
       gradeChange?: Uuid | null;
@@ -119,11 +212,34 @@ export type ClaimedJob = {
   payload: {
     tasks: ({
       taskKey: TaskKey;
+      workType: WorkType;
       subjectHash: Sha256;
       content: JudgedContent;
       gradeChange?: Uuid | null;
     })[];
     policy: Record<string, unknown>;
+    wbs: {
+      phases: ({
+        id: Id;
+        wps: ({
+          id: Id;
+          tasks: (TaskKey)[];
+        })[];
+      })[];
+      tasks: ({
+        taskKey: TaskKey;
+        workType: WorkType;
+        wp: Id;
+        status: TaskStatus;
+        subjectHash: Sha256;
+        content: JudgedContent;
+      })[];
+      dependencies: ({
+        pred: TaskKey;
+        succ: TaskKey;
+        type: DepType;
+      })[];
+    };
   };
 } | {
   id: Id;
@@ -234,7 +350,7 @@ export type Domain = "FE" | "BE" | "DB" | "DevOps" | "API" | "QA" | "Architectur
 
 export type ErrorResponse = {
   error: {
-    code: "VALIDATION_FAILED" | "DEPENDENCY_SELF" | "LIMIT_EXCEEDS_CAP" | "IDEMPOTENCY_KEY_REQUIRED" | "LEAD_UNAUTHORIZED" | "RUNNER_UNAUTHORIZED" | "LOGIN_FAILED" | "FORBIDDEN_PRINCIPAL" | "TASK_NOT_FOUND" | "PROJECT_NOT_FOUND" | "WBS_NODE_NOT_FOUND" | "DEPENDENCY_NOT_FOUND" | "ATTEMPT_NOT_FOUND" | "MESSAGE_NOT_FOUND" | "NOT_FOUND" | "VERSION_CONFLICT" | "EPOCH_MISMATCH" | "DEPENDENCY_DUPLICATE" | "RECIPIENT_DUPLICATE" | "DEPENDENCY_CYCLE" | "TASK_HAS_SUCCESSORS" | "EXTERNAL_WRITE_BLOCKED" | "PROJECT_EXISTS" | "INPUT_UNCHANGED" | "ATTEMPT_CLOSED" | "SCHEDULE_CYCLE" | "INVALID_TRANSITION" | "SPLIT_JUDGEMENT_REQUIRED" | "ACTIVE_TASK_BLOCKED" | "ORDER_NOT_PRESERVED" | "GATE_NOT_PASSED" | "CLAIM_REJECTED" | "LEASE_LOST" | "CLEANUP_PENDING" | "IDEMPOTENCY_CONFLICT" | "DECISIONS_PENDING" | "SUBAGENT_INSTALL_FAILED" | "RATE_LIMITED" | "INTERNAL" | "UNAVAILABLE" | "PDF_FAILED";
+    code: "VALIDATION_FAILED" | "DEPENDENCY_SELF" | "LIMIT_EXCEEDS_CAP" | "IDEMPOTENCY_KEY_REQUIRED" | "LEAD_UNAUTHORIZED" | "RUNNER_UNAUTHORIZED" | "LOGIN_FAILED" | "FORBIDDEN_PRINCIPAL" | "TASK_NOT_FOUND" | "PROJECT_NOT_FOUND" | "WBS_NODE_NOT_FOUND" | "DEPENDENCY_NOT_FOUND" | "ATTEMPT_NOT_FOUND" | "MESSAGE_NOT_FOUND" | "NOT_FOUND" | "VERSION_CONFLICT" | "EPOCH_MISMATCH" | "DEPENDENCY_DUPLICATE" | "RECIPIENT_DUPLICATE" | "DEPENDENCY_CYCLE" | "TASK_HAS_SUCCESSORS" | "EXTERNAL_WRITE_BLOCKED" | "PROJECT_EXISTS" | "INPUT_UNCHANGED" | "ATTEMPT_CLOSED" | "SCHEDULE_CYCLE" | "INVALID_TRANSITION" | "SPLIT_JUDGEMENT_REQUIRED" | "ACTIVE_TASK_BLOCKED" | "ORDER_NOT_PRESERVED" | "GATE_NOT_PASSED" | "MERGE_MISMATCH" | "CLAIM_REJECTED" | "LEASE_LOST" | "CLEANUP_PENDING" | "IDEMPOTENCY_CONFLICT" | "DECISIONS_PENDING" | "SUBAGENT_INSTALL_FAILED" | "RATE_LIMITED" | "INTERNAL" | "UNAVAILABLE" | "PDF_FAILED";
     message: string;
     action: string;
     fix: string;
@@ -251,6 +367,35 @@ export type ErrorResponse = {
 export type EstimatePolicy = {
   rejudge?: RejudgeRequest;
   gradeChange?: Uuid;
+  [key: string]: unknown;
+};
+
+export type ExecutionHold = {
+  id: Id;
+  project_id: Id | null;
+  job: Id;
+  attempt: Id | null;
+  epoch: number;
+  host_id: string | null;
+  boot_id: string | null;
+  fence: number | null;
+  pgid: number | null;
+  cgroup: string | null;
+  task: Id | null;
+  conflict_group: string | null;
+  agent: Agent;
+  slots: number;
+  heavy: boolean;
+  slot_state: "none" | "reserved" | "active" | "unconfirmed";
+  lock_state: "none" | "held" | "orphaned" | "handed_over" | "released";
+  lock_from_job: Id | null;
+  handed_to_job: Id | null;
+  release_proof: "no_process" | "group_empty" | "boot_changed" | null;
+  closed_at: Timestamp | null;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+  lease_owner?: string | null;
+  lease_until?: Timestamp | null;
 };
 
 export type GithubMode = "gh" | "token";
@@ -488,6 +633,27 @@ export type JudgedSplitProposalOp = {
 };
 
 export type PassFail = "PASS" | "FAIL" | "BLOCKED";
+
+export type Pipeline = {
+  serviceConfig?: {
+    path: RepoPath;
+    commit: Sha;
+    status: "ok" | "error" | "missing";
+    raw: string | null;
+    error: string | null;
+  };
+  path: ".agentwbs/pipeline.yaml";
+  commit: Sha | null;
+  status: "ok" | "error" | "missing";
+  error: string | null;
+  raw: string | null;
+  stages: ({
+    stage: CiStage;
+    when: string;
+    gate: string;
+    steps: (string)[];
+  })[] | null;
+};
 
 export type PlanningProposalOp = {
   op: "add";
@@ -745,6 +911,8 @@ export type StepStatus = "wait" | "run" | "done" | "fail";
 
 export type TaskKey = string;
 
+export type TaskStatus = "planning" | "approval" | "ready" | "running" | "paused" | "qa" | "rework" | "verifying" | "gate" | "failed" | "done" | "cancelled";
+
 export type Timestamp = string;
 
 export type Uuid = string;
@@ -859,7 +1027,7 @@ export interface Operations {
       body: {
         at: Timestamp;
         items: ({
-          key: "claude" | "codex" | "git" | "node" | "pnpm" | "pg" | "repo" | "disk" | "subs" | "obs" | "gh" | "lfs" | "reports";
+          key: "claude" | "codex" | "git" | "node" | "pnpm" | "pg" | "repo" | "disk" | "subs" | "obs" | "gh" | "lfs" | "reports" | "font" | "render";
           status: "ok" | "warn" | "fail";
           detail: string;
           fix?: string;
@@ -1013,6 +1181,7 @@ export interface Operations {
         enabled: boolean;
         items: ({
           id: Id;
+          key: string;
           agent: Agent;
           version: number;
           hash: string;
@@ -1149,6 +1318,8 @@ export interface Operations {
         evidence: (Id)[];
         failure?: string;
         tokens?: number;
+        pr?: number;
+        prHead?: string;
       } | {
         fence: number;
         summary: string;
@@ -1156,6 +1327,8 @@ export interface Operations {
         evidence: (Id)[];
         failure?: string;
         tokens?: number;
+        pr?: number;
+        prHead?: string;
         verification: {
           headSha: Sha;
           specRevision: number;
@@ -1251,6 +1424,11 @@ export interface Operations {
           author: string;
           message: string;
         })[];
+        pipelineObservation?: {
+          baseSha: Sha;
+          pipelineSha: Sha | null;
+          definition: Pipeline;
+        };
       };
       epoch: number;
       idempotencyKey: string;
@@ -1311,6 +1489,44 @@ export interface Operations {
       204: undefined;
     };
   };
+  /** 예약한 CI job의 검증 근거와 재실행 원본 조회 */
+  getCiJob: {
+    request: {
+      params: {
+        id: Id;
+      };
+      query: {
+        fence: number;
+      };
+      epoch: number;
+    };
+    responses: {
+      200: {
+        runnable: boolean;
+        taskKey: TaskKey | null;
+        branch: string | null;
+        hold: {
+          hostId: string;
+          bootId: string | null;
+          processGroup: number | null;
+          slotState: "none" | "reserved" | "active" | "unconfirmed";
+        } | null;
+        verification: {
+          passed: boolean;
+          headSha: Sha;
+          specRevision: number;
+        } | null;
+        source: {
+          stage: CiStage;
+          ref: string;
+          pr: number | null;
+          baseSha: Sha | null;
+          headSha: Sha;
+          pipelineSha: Sha;
+        } | null;
+      };
+    };
+  };
   /** 빌드·통합 실행 시작 */
   startCiRun: {
     request: {
@@ -1322,6 +1538,7 @@ export interface Operations {
         attemptId?: Id;
         ref: string;
         pr?: number;
+        prHead?: string;
         trigger: string;
         baseSha?: Sha;
         headSha?: Sha;
@@ -1334,6 +1551,7 @@ export interface Operations {
         attemptId?: Id;
         ref: string;
         pr?: number;
+        prHead?: string;
         trigger: string;
         baseSha?: Sha;
         headSha?: Sha;
@@ -1365,6 +1583,32 @@ export interface Operations {
           durationMs: number;
         })[];
         status?: CiStatus;
+        failScope?: "baseline" | "task";
+        causeCandidates?: ({
+          commit: Sha;
+        })[];
+        note?: string;
+        finishedAt?: Timestamp;
+        e2e?: {
+          passed: number;
+          total: number;
+        };
+        githubStatus?: {
+          headSha: Sha;
+          context: string;
+          state: "pending" | "success" | "failure" | "error";
+          reportedAt: Timestamp;
+          url?: string;
+        };
+        flakyTests?: ({
+          testKey: string;
+          rate: number;
+          lastFailedAt: Timestamp;
+        })[];
+        deployRestore?: {
+          commit: Sha | null;
+          status: "pass" | "fail" | "none";
+        };
         logExcerpt?: string;
         artifacts?: (string)[];
         url?: string;
@@ -1397,6 +1641,26 @@ export interface Operations {
         testedTreeSha?: Sha;
         actualMergeSha?: Sha;
         actualTreeSha?: Sha;
+        mergedAt?: Timestamp;
+        headSync?: {
+          qaHeadSha: Sha;
+          headSha: Sha;
+          preserved: boolean;
+          parents: (Sha)[];
+          autoMergeTreeSha: Sha;
+          headTreeSha: Sha;
+          additionalChanges: boolean;
+          chain?: ({
+            qaHeadSha: Sha;
+            headSha: Sha;
+            preserved: boolean;
+            parents: (Sha)[];
+            autoMergeTreeSha: Sha;
+            headTreeSha: Sha;
+            additionalChanges: boolean;
+          })[];
+        };
+        mergeParents?: (Sha)[];
       };
       epoch: number;
       idempotencyKey: string;
@@ -1850,6 +2114,7 @@ export interface Operations {
           nightAt: string;
           retry: number;
           deployUrl: string | null;
+          quarantined: (string)[];
         };
         claudeModels: (string)[];
         cliGrades: ({
@@ -1861,6 +2126,17 @@ export interface Operations {
         })[];
       };
       304: undefined;
+    };
+  };
+  /** 현재 Runner principal·epoch의 미해제 실행 보유. 읽기 전용 재시작 대조 */
+  getExecutionHolds: {
+    request: {
+      epoch: number;
+    };
+    responses: {
+      200: {
+        holds: (ExecutionHold)[];
+      };
     };
   };
   /** 정리 명령(다른 작업보다 먼저) */
@@ -1875,7 +2151,10 @@ export interface Operations {
           id: Id;
           kind: "reset-cleanup";
           epoch: number;
-          payload: Record<string, unknown>;
+          payload: {
+            holds?: (ExecutionHold)[];
+            [key: string]: unknown;
+          };
         })[];
       };
     };
@@ -2614,6 +2893,7 @@ export const OPERATIONS = {
   reportInputChanges: { method: 'POST', path: '/api/runner/input-changes', content: 'json', statuses: { 200: true } },
   reportRepoCheck: { method: 'POST', path: '/api/runner/repo-checks/{id}/result', content: 'json', statuses: { 204: false } },
   reportBootstrapProgress: { method: 'POST', path: '/api/runner/bootstrap/{jobId}/progress', content: 'json', statuses: { 204: false } },
+  getCiJob: { method: 'GET', path: '/api/runner/ci/jobs/{id}', content: 'none', statuses: { 200: true } },
   startCiRun: { method: 'POST', path: '/api/runner/ci/runs', content: 'json', statuses: { 201: true } },
   updateCiRun: { method: 'PATCH', path: '/api/runner/ci/runs/{id}', content: 'json', statuses: { 204: false } },
   reportMergeQueue: { method: 'POST', path: '/api/runner/ci/queue', content: 'json', statuses: { 204: false } },
@@ -2622,6 +2902,7 @@ export const OPERATIONS = {
   registerGithubKey: { method: 'POST', path: '/api/runner/github/key', content: 'json', statuses: { 200: true } },
   getGithubCredential: { method: 'GET', path: '/api/runner/github/credential', content: 'none', statuses: { 200: true } },
   getRunnerPolicy: { method: 'GET', path: '/api/runner/policy', content: 'none', statuses: { 200: true, 304: false } },
+  getExecutionHolds: { method: 'GET', path: '/api/runner/holds', content: 'none', statuses: { 200: true } },
   getCommands: { method: 'GET', path: '/api/runner/commands', content: 'none', statuses: { 200: true } },
   reportCommandResult: { method: 'POST', path: '/api/runner/commands/{id}/result', content: 'json', statuses: { 204: false } },
   claimJob: { method: 'POST', path: '/api/runner/jobs/claim', content: 'json', statuses: { 200: true, 204: false } },

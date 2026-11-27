@@ -86,7 +86,7 @@ export async function generateDueReports(pool: Pool, epoch: number, options: { n
 /** 재시도할 DB 오류: 동시 수정과 충돌(40001)·교착(40P01). 세대 불일치(AW001)는 재시도하지 않는다. */
 const RETRYABLE = new Set(['40001', '40P01']);
 
-/** 보고서 기준점(0037 awbs_report_anchor). 트랜잭션 밖(자동 커밋)에서 불러야 한다. 마이크로초 6자리 UTC. */
+/** 보고서 기준점(0029 awbs_report_anchor). 트랜잭션 밖(자동 커밋)에서 불러야 한다. 마이크로초 6자리 UTC. */
 export async function reportAnchor(client: Pick<PoolClient, 'query'>): Promise<string> {
   const at = (await client.query<{ at: string }>(`select ${iso('public.awbs_report_anchor()')} at`)).rows[0]?.at;
   if (!at) throw new Error('보고서 기준점을 잡지 못했습니다.');

@@ -74,6 +74,8 @@ const EXTRA_BODY: Record<string, Record<string, unknown>> = {
   updateRecipient: { daily: true },
   // M6 통합: M6-05 resolveDrift는 how가 필수다(M6-01·M6-03과 같은 방식으로 기본 본문을 준다).
   resolveDrift: { how: 'contract' },
+  updateFlakyTest: { quarantined: false },
+  updateCiSettings: { retry: 1 },
 };
 /** 경로 변수도 형식에 맞는 값을 넣는다. 형식이 틀리면 시각보다 경로 변수 오류가 먼저 나온다. */
 const urlOf = (op: Operation) => op.path.replace(':messageId', draftId).replace(':taskKey', 'TASK-0001').replace(':kind', 'DB').replace(/:\w+/g, UUID);

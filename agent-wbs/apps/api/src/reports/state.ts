@@ -10,7 +10,7 @@ import { FALLBACK_CURRENT, GLOBAL_TABLES, MIXED_TABLES, PROJECT_TABLES, type Tra
  * 보고서의 「그 시점」 자료(owner 2026-11-27 아이템 13, G L375 기간 말 재구성 · 재리뷰 2 원칙).
  *
  * 무엇을 어떻게 되살리나
- * - 보고서가 읽는 모든 표(tracked.ts TRACKED)는 행이 바뀔 때마다 이력(state_log·global_log, 마이그레이션 0036)에 남는다.
+ * - 보고서가 읽는 모든 표(tracked.ts TRACKED)는 행이 바뀔 때마다 이력(state_log·global_log, 마이그레이션 0028)에 남는다.
  * - 「T 전」은 **커밋 기준**이다. 이력 행을 쓴 트랜잭션의 커밋 시계 값과 실제 커밋 시각(commit_real, track_commit_timestamp)이
  *   모두 T보다 작은 것만 쓴다. 커밋 시계 값만 보면, 제약 트리거를 일찍 실행해(SET CONSTRAINTS ALL IMMEDIATE) 값을 먼저 받고
  *   늦게 커밋한 변경이 T 전으로 잘못 들어간다(재리뷰 3 문제 1).
@@ -22,7 +22,7 @@ import { FALLBACK_CURRENT, GLOBAL_TABLES, MIXED_TABLES, PROJECT_TABLES, type Tra
  * - 그 행을 jsonb_populate_record로 원래 표 모양으로 되돌린다(`rel`). 보고서 SQL은 표 이름 대신 이 관계식을 읽는다.
  *
  * 기준점과 「그때 = 나중」
- * - 보고서는 읽기 전에 기준점(awbs_report_anchor, 0037)을 잡는다. 그 뒤의 커밋은 모두 기준점보다 큰 값을 받으므로,
+ * - 보고서는 읽기 전에 기준점(awbs_report_anchor, 0029)을 잡는다. 그 뒤의 커밋은 모두 기준점보다 큰 값을 받으므로,
  *   T ≤ 기준점이면 「커밋 시계 < T」인 이력은 읽기 시작 전에 모두 확정돼 있다. 나중에 같은 T로 다시 읽어도 범위가 같다.
  *
  * source
@@ -30,7 +30,7 @@ import { FALLBACK_CURRENT, GLOBAL_TABLES, MIXED_TABLES, PROJECT_TABLES, type Tra
  * - `live`(시험 전용): 지금 표를 그대로 읽는다. 「그때 바로 찍은 값 = 나중에 되살린 값」을 시험으로 비교한다.
  *
  * 되살릴 수 없는 것
- * - 0036 전부터 있던 행은 마이그레이션 때 「seed」로 한 번 남았다. 그 커밋 시계보다 이른 T의 상태는 모른다 → `missing: ['state']`.
+ * - 0028 전부터 있던 행은 마이그레이션 때 「seed」로 한 번 남았다. 그 커밋 시계보다 이른 T의 상태는 모른다 → `missing: ['state']`.
  * - 설정은 기록이 T 전에 없으면 묶음 버전(편집 시각)으로 「지금 값이 그때도 같았나」를 확인하고, 모르면 `basis.currentSettings`에 적는다.
  *
  * 경계 오차(문서 fix3.md §3)
@@ -82,7 +82,7 @@ export function asOf(projectId: string, before: string, source: StateSource): As
 }
 
 /**
- * 상태를 되살릴 수 있는 가장 이른 커밋 시계 값(0036 seed). null이면 처음부터 기록이 있다.
+ * 상태를 되살릴 수 있는 가장 이른 커밋 시계 값(0028 seed). null이면 처음부터 기록이 있다.
  * 프로젝트 이력과 전역 이력(실행 PC·설정) 중 이른 쪽이다(같은 마이그레이션 트랜잭션이라 보통 같다).
  */
 export async function stateFrom(client: PoolClient, projectId: string): Promise<string | null> {
@@ -105,7 +105,7 @@ export async function stateFrom(client: PoolClient, projectId: string): Promise<
 export async function settingsAt(client: PoolClient, a: AsOf) {
   const q = <T extends object>(sql: string, args: unknown[] = []) => client.query<T>(sql, args).then((r) => r.rows);
   const current: SettingGroup[] = [];
-  // 기록 시작(0036 업그레이드 표시) 이후의 T면 이력이 완전하다 → 이력만 읽는다(빈 표도 「그때 비어 있었다」).
+  // 기록 시작(0028 업그레이드 표시) 이후의 T면 이력이 완전하다 → 이력만 읽는다(빈 표도 「그때 비어 있었다」).
   const start = a.source === 'log'
     ? (await q<{ at: string | null }>(`select min(c.stamp)::text at from global_log l join commit_real c on c.xid=l.xid where l.tbl='log_start'`))[0]?.at ?? null : null;
   const covered = a.source === 'live' || start === null

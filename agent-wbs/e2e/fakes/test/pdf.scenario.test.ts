@@ -534,15 +534,15 @@ describe('빈 상태(기록 없는 날 일간 RPT-D-261027)', () => {
   }, 60_000);
 });
 
-describe('옛 보고서(M6-01 형식 스냅샷)를 실제 0038(옛 0047)로 옮긴 뒤 조회·PDF(Codex 리뷰 P2·4차 P2-2)', () => {
-  /** 실제 마이그레이션 0038(옛 0047)의 SQL을 이 DB에 다시 실행한다(출처가 없는 보고서만 다룬다). */
-  const run0038 = async () => {
-    const sql = await readFile(new URL('../../../packages/db/migrations/0038_20261127_report_project_name.sql', import.meta.url), 'utf8');
+describe('옛 보고서(M6-01 형식 스냅샷)를 실제 0030(옛 0047)로 옮긴 뒤 조회·PDF(Codex 리뷰 P2·4차 P2-2)', () => {
+  /** 실제 마이그레이션 0030(옛 0047)의 SQL을 이 DB에 다시 실행한다(출처가 없는 보고서만 다룬다). */
+  const run0030 = async () => {
+    const sql = await readFile(new URL('../../../packages/db/migrations/0030_20261127_report_project_name.sql', import.meta.url), 'utf8');
     for (const statement of sql.split('--> statement-breakpoint')) await owner.query(statement);
   };
   /**
    * M6-01 형식(이름·출처 없음) 옛 보고서를 넣는다.
-   * M6 통합: 0038은 이제 M6-01 상태 이력으로 「기준점(basis.asOf) 뒤 이름이 하나뿐인가」를 먼저 본다.
+   * M6 통합: 0030은 이제 M6-01 상태 이력으로 「기준점(basis.asOf) 뒤 이름이 하나뿐인가」를 먼저 본다.
    * 이 파일의 앞 시험(「생성 뒤 프로젝트 이름을 바꿔도…」)이 이름을 바꿨다가 되돌렸으므로, 주간 보고서의 기준점(11-02) 뒤로는 이름이 둘이다.
    * 「이름을 바꾼 적 없는」 경우를 만들려면 기준점을 지금(그 변경 뒤)으로 잡는다. fresh=false면 원래 주간 기준점을 쓴다.
    */
@@ -569,7 +569,7 @@ describe('옛 보고서(M6-01 형식 스냅샷)를 실제 0038(옛 0047)로 옮�
 
   test('이름을 바꾼 적 없는 프로젝트: filled + 지금 이름. 조회 응답이 공유 계약 검사를 통과하고 PDF 제목도 그 이름이다', async () => {
     const id = await legacyReport('RPT-C-950');
-    await run0038();
+    await run0030();
     const name = (await owner.query<{ name: string }>('select name from projects')).rows[0]?.name ?? '';
     const snapshot = await opened(id);
     expect([snapshot.projectName, snapshot.projectNameStatus]).toEqual([name, 'filled']);
@@ -585,7 +585,7 @@ describe('옛 보고서(M6-01 형식 스냅샷)를 실제 0038(옛 0047)로 옮�
     await owner.query(`insert into task_history(project_id,actor,kind,text,before,after,ref) values($1,'팀장','프로젝트 수정','프로젝트 정보를 수정했습니다.',$2::jsonb,$3::jsonb,'{"kind":"project"}')`,
       [project.id, JSON.stringify({ name: '예전 이름' }), JSON.stringify({ name: project.name })]);
     const id = await legacyReport('RPT-C-951', false);
-    await run0038();
+    await run0030();
     const snapshot = await opened(id);
     expect([snapshot.projectName, snapshot.projectNameStatus]).toEqual([null, 'unknown']);
     expect(snapshotProblem(snapshot)).toBeNull();

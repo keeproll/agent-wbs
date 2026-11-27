@@ -172,7 +172,8 @@ export function alertLink(a: AlertItem): { to: string; label: string } {
   if (a.taskKey) return { to: LINK.exec(a.taskKey), label: `${a.taskKey} 실행 보기` };
   if (k.startsWith('input')) return { to: '/project', label: '프로젝트 보기' };
   if (k.startsWith('drift') || k.startsWith('contract')) return { to: '/design', label: '설계 보기' };
-  if (k.startsWith('ci')) return { to: '/ci', label: '빌드 · 통합 보기' };
+  // CI 알림의 target은 실행 id다(서버 ref 규칙 taskKey → id). 있으면 그 실행 상세를 연다(M7-05).
+  if (k.startsWith('ci')) return { to: a.target ? LINK.ci(a.target) : '/ci', label: '빌드 · 통합 보기' };
   if (k.startsWith('mail')) return { to: LINK.settings('report'), label: '설정 보기' };
   if (k.startsWith('tg') || k.startsWith('telegram') || k.startsWith('notify')) return { to: LINK.settings('notify'), label: '설정 보기' };
   return { to: LINK.settings('runner'), label: 'Runner 설정 보기' };

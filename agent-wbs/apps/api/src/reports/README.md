@@ -4,10 +4,10 @@
 
 ## 1. 용어
 
-- **이력**: 보고서가 읽는 표의 행이 바뀔 때마다 남기는 행 전체 기록(`state_log`·`global_log`, 마이그레이션 0036). 기록 대상 목록은 `tracked.ts` 한 곳에 있다.
+- **이력**: 보고서가 읽는 표의 행이 바뀔 때마다 남기는 행 전체 기록(`state_log`·`global_log`, 마이그레이션 0028). 기록 대상 목록은 `tracked.ts` 한 곳에 있다.
 - **커밋 시계 값(stamp)**: 쓰기 트랜잭션마다 커밋 직전(또는 그보다 이르게) 매기는 값. 커밋 순서대로 커지고 줄지 않는다(`log_clock`).
 - **실제 커밋 시각**: DB가 기록한 진짜 커밋 시각(서버 설정 `track_commit_timestamp=on`, `pg_xact_commit_timestamp`).
-- **정리(settle)**: 커밋된 트랜잭션의 두 값을 `commit_real`에 옮겨 적는 단계(0037 `awbs_settle_commits`). 보고서 기준점과 worker가 부른다.
+- **정리(settle)**: 커밋된 트랜잭션의 두 값을 `commit_real`에 옮겨 적는 단계(0029 `awbs_settle_commits`). 보고서 기준점과 worker가 부른다.
 - **관측 시각(observed_at)**: 정리가 그 트랜잭션을 「커밋됨」으로 처음 본 시각.
 
 ## 2. 「T 전」 규칙

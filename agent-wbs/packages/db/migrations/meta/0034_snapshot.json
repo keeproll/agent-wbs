@@ -199,6 +199,12 @@
           "notNull": true,
           "default": "now()"
         },
+        "record_no": {
+          "name": "record_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
+        },
         "agent": {
           "name": "agent",
           "type": "agent",
@@ -228,7 +234,15 @@
       "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "agent_usage_record_no_unique": {
+          "name": "agent_usage_record_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "record_no"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
         "usage_percent": {
@@ -627,6 +641,12 @@
           "notNull": true,
           "default": "now()"
         },
+        "record_no": {
+          "name": "record_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
+        },
         "project_id": {
           "name": "project_id",
           "type": "uuid",
@@ -718,7 +738,15 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "attempt_observations_record_no_unique": {
+          "name": "attempt_observations_record_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "record_no"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
         "attempt_observations_grade_value": {
@@ -1161,6 +1189,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "record_no": {
+          "name": "record_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
         }
       },
       "indexes": {},
@@ -1193,7 +1227,15 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "change_proposal_events_record_no_unique": {
+          "name": "change_proposal_events_record_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "record_no"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
         "change_proposal_events_kind_value": {
@@ -1227,6 +1269,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "record_no": {
+          "name": "record_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
         },
         "project_id": {
           "name": "project_id",
@@ -1340,6 +1388,13 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
+        "change_proposals_record_no_unique": {
+          "name": "change_proposals_record_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "record_no"
+          ]
+        },
         "change_proposals_cp_key_unique": {
           "name": "change_proposals_cp_key_unique",
           "nullsNotDistinct": false,
@@ -1511,6 +1566,65 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.ci_merge_facts": {
+      "name": "ci_merge_facts",
+      "schema": "",
+      "columns": {
+        "project_id": {
+          "name": "project_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "merge_sha": {
+          "name": "merge_sha",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tree_sha": {
+          "name": "tree_sha",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "parents": {
+          "name": "parents",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "ci_merge_facts_project_id_projects_id_fk": {
+          "name": "ci_merge_facts_project_id_projects_id_fk",
+          "tableFrom": "ci_merge_facts",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "ci_merge_facts_project_id_merge_sha_pk": {
+          "name": "ci_merge_facts_project_id_merge_sha_pk",
+          "columns": [
+            "project_id",
+            "merge_sha"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.ci_runs": {
       "name": "ci_runs",
       "schema": "",
@@ -1545,6 +1659,12 @@
         "run_key": {
           "name": "run_key",
           "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "run_no": {
+          "name": "run_no",
+          "type": "bigserial",
           "primaryKey": false,
           "notNull": true
         },
@@ -1639,6 +1759,43 @@
           "primaryKey": false,
           "notNull": false
         },
+        "fail_scope": {
+          "name": "fail_scope",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "note": {
+          "name": "note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "e2e": {
+          "name": "e2e",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "github_status": {
+          "name": "github_status",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cause_candidates": {
+          "name": "cause_candidates",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "finished_at": {
+          "name": "finished_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "log_excerpt": {
           "name": "log_excerpt",
           "type": "text",
@@ -1675,6 +1832,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'[]'::jsonb"
+        },
+        "reporter": {
+          "name": "reporter",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -1769,6 +1932,13 @@
           "columns": [
             "run_key"
           ]
+        },
+        "ci_runs_run_no_unique": {
+          "name": "ci_runs_run_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "run_no"
+          ]
         }
       },
       "policies": {},
@@ -1776,6 +1946,14 @@
         "ci_stage": {
           "name": "ci_stage",
           "value": "\"ci_runs\".\"stage\" between 1 and 4"
+        },
+        "ci_cause_candidates_array": {
+          "name": "ci_cause_candidates_array",
+          "value": "jsonb_typeof(\"ci_runs\".\"cause_candidates\")='array'"
+        },
+        "ci_fail_scope": {
+          "name": "ci_fail_scope",
+          "value": "\"ci_runs\".\"fail_scope\" is null or \"ci_runs\".\"fail_scope\" in ('baseline','task')"
         },
         "ci_job_fence": {
           "name": "ci_job_fence",
@@ -1837,6 +2015,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "settings_version": {
+          "name": "settings_version",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {},
@@ -1885,6 +2069,12 @@
           "notNull": true,
           "default": "now()"
         },
+        "record_no": {
+          "name": "record_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
+        },
         "project_id": {
           "name": "project_id",
           "type": "uuid",
@@ -1902,6 +2092,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "duration_ms": {
+          "name": "duration_ms",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
         },
         "status": {
           "name": "status",
@@ -1960,6 +2157,13 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
+        "ci_steps_record_no_unique": {
+          "name": "ci_steps_record_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "record_no"
+          ]
+        },
         "ci_steps_run_step_key_unique": {
           "name": "ci_steps_run_step_key_unique",
           "nullsNotDistinct": false,
@@ -1970,7 +2174,12 @@
         }
       },
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "ci_step_duration": {
+          "name": "ci_step_duration",
+          "value": "\"ci_steps\".\"duration_ms\" >= 0 and \"ci_steps\".\"duration_ms\" <= 9007199254740991"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.cli_observation_grades": {
@@ -2557,7 +2766,7 @@
         },
         "drift_compat": {
           "name": "drift_compat",
-          "value": "\"design_drifts\".\"compat\" in ('호환','깨짐','대조 안 함')"
+          "value": "\"design_drifts\".\"compat\" in ('\ud638\ud658','\uae68\uc9d0','\ub300\uc870 \uc548 \ud568')"
         }
       },
       "isRLSEnabled": false
@@ -3271,7 +3480,7 @@
         },
         "design_versions_compat_value": {
           "name": "design_versions_compat_value",
-          "value": "\"design_versions\".\"compat\" in ('호환', '깨짐', '대조 안 함')"
+          "value": "\"design_versions\".\"compat\" in ('\ud638\ud658', '\uae68\uc9d0', '\ub300\uc870 \uc548 \ud568')"
         }
       },
       "isRLSEnabled": false
@@ -4098,6 +4307,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "last_failed_at": {
+          "name": "last_failed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         },
         "rate": {
           "name": "rate",
@@ -4975,15 +5190,15 @@
           "primaryKey": false,
           "notNull": true
         },
-        "outbox": {
-          "name": "outbox",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
         "try_no": {
           "name": "try_no",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "outbox": {
+          "name": "outbox",
+          "type": "uuid",
           "primaryKey": false,
           "notNull": false
         }
@@ -5121,27 +5336,14 @@
           "primaryKey": false,
           "notNull": true
         },
-        "reason": {
-          "name": "reason",
-          "type": "text",
+        "attempt": {
+          "name": "attempt",
+          "type": "uuid",
           "primaryKey": false,
-          "notNull": true
-        },
-        "subject": {
-          "name": "subject",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "pdf": {
           "name": "pdf",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "retried": {
-          "name": "retried",
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,
@@ -5153,17 +5355,30 @@
           "primaryKey": false,
           "notNull": false
         },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
         "log_key": {
           "name": "log_key",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "attempt": {
-          "name": "attempt",
-          "type": "uuid",
+        "retried": {
+          "name": "retried",
+          "type": "boolean",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true,
+          "default": false
+        },
+        "subject": {
+          "name": "subject",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
         }
       },
       "indexes": {
@@ -5243,6 +5458,10 @@
           "name": "mail_try_positive",
           "value": "\"mail_outbox\".\"try_no\">0"
         },
+        "mail_outbox_next_at": {
+          "name": "mail_outbox_next_at",
+          "value": "(\"mail_outbox\".\"state\"='retry_wait')=(\"mail_outbox\".\"next_at\" is not null)"
+        },
         "mail_outbox_reason_text": {
           "name": "mail_outbox_reason_text",
           "value": "length(btrim(\"mail_outbox\".\"reason\"))>0"
@@ -5250,10 +5469,6 @@
         "mail_outbox_subject_text": {
           "name": "mail_outbox_subject_text",
           "value": "length(btrim(\"mail_outbox\".\"subject\"))>0"
-        },
-        "mail_outbox_next_at": {
-          "name": "mail_outbox_next_at",
-          "value": "(\"mail_outbox\".\"state\"='retry_wait')=(\"mail_outbox\".\"next_at\" is not null)"
         }
       },
       "isRLSEnabled": false
@@ -5521,6 +5736,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "queue_no": {
+          "name": "queue_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
+        },
         "pr": {
           "name": "pr",
           "type": "integer",
@@ -5585,6 +5806,24 @@
         "actual_tree_sha": {
           "name": "actual_tree_sha",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "merged_at": {
+          "name": "merged_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "head_sync": {
+          "name": "head_sync",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "merge_parents": {
+          "name": "merge_parents",
+          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         }
@@ -5662,7 +5901,15 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "merge_queue_queue_no_unique": {
+          "name": "merge_queue_queue_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "queue_no"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -5846,7 +6093,7 @@
         },
         "messages_type_value": {
           "name": "messages_type_value",
-          "value": "\"messages\".\"type\" in ('추가 지시', '수정 요청', '질문', '일반 의견', '응답')"
+          "value": "\"messages\".\"type\" in ('\ucd94\uac00 \uc9c0\uc2dc', '\uc218\uc815 \uc694\uccad', '\uc9c8\ubb38', '\uc77c\ubc18 \uc758\uacac', '\uc751\ub2f5')"
         },
         "message_participants": {
           "name": "message_participants",
@@ -6515,6 +6762,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "record_no": {
+          "name": "record_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
         }
       },
       "indexes": {},
@@ -6547,7 +6800,15 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "planning_job_logs_record_no_unique": {
+          "name": "planning_job_logs_record_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "record_no"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -6690,6 +6951,12 @@
           "notNull": true,
           "default": "now()"
         },
+        "record_no": {
+          "name": "record_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
+        },
         "project_id": {
           "name": "project_id",
           "type": "uuid",
@@ -6761,7 +7028,15 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "planning_jobs_record_no_unique": {
+          "name": "planning_jobs_record_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "record_no"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
         "planning_kind": {
@@ -6854,6 +7129,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": 1
+        },
+        "record_no": {
+          "name": "record_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
         }
       },
       "indexes": {},
@@ -6886,7 +7167,15 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "planning_reviews_record_no_unique": {
+          "name": "planning_reviews_record_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "record_no"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
         "planning_reviews_kind_value": {
@@ -7095,6 +7384,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": 0
+        },
+        "pipeline_observations": {
+          "name": "pipeline_observations",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
         },
         "lead_instruction": {
           "name": "lead_instruction",
@@ -7932,6 +8228,12 @@
           "notNull": true,
           "default": "now()"
         },
+        "record_no": {
+          "name": "record_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
+        },
         "host_id": {
           "name": "host_id",
           "type": "text",
@@ -7985,7 +8287,15 @@
       "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "runner_concurrency_log_record_no_unique": {
+          "name": "runner_concurrency_log_record_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "record_no"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -8014,6 +8324,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "record_no": {
+          "name": "record_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
         },
         "host_id": {
           "name": "host_id",
@@ -8085,7 +8401,15 @@
       "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "runner_hosts_record_no_unique": {
+          "name": "runner_hosts_record_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "record_no"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
         "runner_host_boot_text": {
@@ -8223,6 +8547,12 @@
           "notNull": true,
           "default": "now()"
         },
+        "record_no": {
+          "name": "record_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
+        },
         "project_id": {
           "name": "project_id",
           "type": "uuid",
@@ -8319,6 +8649,13 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
+        "runner_jobs_record_no_unique": {
+          "name": "runner_jobs_record_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "record_no"
+          ]
+        },
         "runner_jobs_dedup_key_unique": {
           "name": "runner_jobs_dedup_key_unique",
           "nullsNotDistinct": false,
@@ -8437,6 +8774,12 @@
           "notNull": true,
           "default": "now()"
         },
+        "record_no": {
+          "name": "record_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
+        },
         "runner_id": {
           "name": "runner_id",
           "type": "text",
@@ -8471,7 +8814,15 @@
       "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "runner_sessions_record_no_unique": {
+          "name": "runner_sessions_record_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "record_no"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
         "runner_sessions_end_reason_value": {
@@ -8999,6 +9350,12 @@
           "notNull": true,
           "default": "now()"
         },
+        "record_no": {
+          "name": "record_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
+        },
         "project_id": {
           "name": "project_id",
           "type": "uuid",
@@ -9234,6 +9591,13 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
+        "task_attempts_record_no_unique": {
+          "name": "task_attempts_record_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "record_no"
+          ]
+        },
         "task_attempts_attempt_key_unique": {
           "name": "task_attempts_attempt_key_unique",
           "nullsNotDistinct": false,
@@ -9609,6 +9973,12 @@
           "notNull": true,
           "default": "now()"
         },
+        "record_no": {
+          "name": "record_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
+        },
         "project_id": {
           "name": "project_id",
           "type": "uuid",
@@ -9694,12 +10064,20 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "task_estimates_record_no_unique": {
+          "name": "task_estimates_record_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "record_no"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
         "task_estimates_confidence_value": {
           "name": "task_estimates_confidence_value",
-          "value": "\"task_estimates\".\"confidence\" in ('상', '중', '하')"
+          "value": "\"task_estimates\".\"confidence\" in ('\uc0c1', '\uc911', '\ud558')"
         },
         "estimate_bounds": {
           "name": "estimate_bounds",
@@ -9858,6 +10236,12 @@
           "notNull": true,
           "default": "now()"
         },
+        "record_no": {
+          "name": "record_no",
+          "type": "bigserial",
+          "primaryKey": false,
+          "notNull": true
+        },
         "project_id": {
           "name": "project_id",
           "type": "uuid",
@@ -9944,7 +10328,15 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "task_history_record_no_unique": {
+          "name": "task_history_record_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "record_no"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
         "task_history_kind_value": {
@@ -11808,6 +12200,6 @@
     "tables": {},
     "columns": {}
   },
-  "id": "dbd76aec-45da-4aec-bdc0-e83757bbe3f5",
-  "prevId": "7658ec89-df80-47db-b929-3ed226337ec9"
+  "id": "cd91f90f-e599-40d0-a737-0d43b38ab62d",
+  "prevId": "c248ef36-7989-42c6-9c3f-97c3e9073517"
 }

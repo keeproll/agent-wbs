@@ -135,7 +135,8 @@ test.each([true, false])('설정 유지=%s: 연결·인증·검토 정의는 보
   for (const table of ['github_settings', 'runner_tokens', 'lead_sessions']) expect((await owner.query(`select count(*)::int n from ${table}`)).rows[0]?.n, table).toBeGreaterThan(0);
   for (const table of ['mail_recipients', 'runner_hosts']) expect((await owner.query(`select count(*)::int n from ${table}`)).rows).toEqual([{ n: keepSettings ? 1 : 0 }]);
   expect((await owner.query("select key from secrets order by key")).rows).toEqual(keepSettings ? [{ key: 'github-secret' }, { key: 'smtp-secret' }] : [{ key: 'github-secret' }]);
-  expect((await owner.query('select def_key from subagent_defs order by def_key')).rows).toEqual(keepSettings ? [{ def_key: 'demo' }, { def_key: 'reviewed' }] : [{ def_key: 'reviewed' }]);
+  // system seed의 실제 하위 Agent v1(M5-06)은 따로 남는다. 여기서는 이 시험이 넣은 두 정의만 본다.
+  expect((await owner.query("select def_key from subagent_defs where def_key in ('demo','reviewed') order by def_key")).rows).toEqual(keepSettings ? [{ def_key: 'demo' }, { def_key: 'reviewed' }] : [{ def_key: 'reviewed' }]);
 });
 
 test('이름 불일치·낡은 화면·Runner의 초기화는 데이터를 지우지 못한다', async () => {

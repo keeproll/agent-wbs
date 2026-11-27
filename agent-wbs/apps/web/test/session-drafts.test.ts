@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  clearAllDrafts, discardStoredDraft, draftsAllowed, lastLogoutAt, persistRegisteredDrafts, readStoredDraft, recordLogout, registerDraft, resolveTabId, stripSecrets,
+  clearAllDrafts, discardStoredDraft, draftsAllowed, lastLogoutAt, persistRegisteredDrafts, readStoredDraft, recordLogout, registerDraft, resolveTabId, sessionStamp, stripSecrets,
 } from '../src/shared/state/sessionDrafts.ts';
 
 class MemoryStorage {
@@ -118,5 +118,22 @@ describe('세션 만료 초안 보관(조정자 결정)', () => {
     expect(draftsAllowed({ blocked: true, logoutAt: 0, loginAt: 100 })).toBe(false);
     expect(draftsAllowed({ blocked: false, logoutAt: 100, loginAt: 100 })).toBe(false);
     expect(draftsAllowed({ blocked: false, logoutAt: 150, loginAt: 100 })).toBe(false);
+  });
+
+  // M5·M7 통합 [제품 위험]: 이 PC의 벽시계는 약 32초마다 2.3초 뒤로 간다.
+  // 로그인 뒤 시계가 뒤로 가서 로그아웃 시각이 더 작게 찍히면, 로그아웃했는데도 초안 보관을 허용하는 쪽으로 틀린다.
+  it('시계가 뒤로 가도 세션 사건 번호는 앞선 사건보다 항상 크다(로그인 뒤 로그아웃이면 보관을 막는다)', () => {
+    const local = new MemoryStorage();
+    const loginAt = sessionStamp(local, 1_000_000);
+    const logoutAt = sessionStamp(local, 1_000_000 - 2_300);
+    expect(logoutAt).toBeGreaterThan(loginAt);
+    expect(draftsAllowed({ blocked: false, logoutAt, loginAt })).toBe(false);
+    // 시계가 다시 앞으로 가면 벽시계 값을 그대로 쓴다.
+    expect(sessionStamp(local, 2_000_000)).toBe(2_000_000);
+    // 저장소가 깨졌거나 막혀도 벽시계 값으로 동작한다.
+    local.setItem('awbs.sessionStamp', 'bad');
+    expect(sessionStamp(local, 5)).toBe(5);
+    const blocked = { length: 0, key: () => null, getItem: () => { throw new Error('b'); }, setItem: () => { throw new Error('b'); }, removeItem: () => undefined };
+    expect(sessionStamp(blocked, 7)).toBe(7);
   });
 });

@@ -214,11 +214,11 @@ test('착수 승인 요청·승인·반려(contracts §2.1)', () => {
 /* ---- D-33~35 (data-model §2.3-1) ---- */
 const HASH = 'd'.repeat(64);
 const judgement = (rule: string, extra: object = {}) => ({
-  rule, result: 'met', agreedBy: ['Claude', 'Codex'], basis: '근거', judgedAt: T, sourceRef: 'job-1', ...extra,
+  rule, result: 'met', agreedBy: ['Claude', 'Codex'], basis: '근거', judgedAt: T, sourceRef: `sha256:${HASH}`, ...extra,
 });
 const judged = (...items: object[]) => ({ schemaVersion: 1, items });
 
-test('D-33 초안·CP의 새 Task 판단은 hash 없이 받고, 기존 Task 재판단은 받은 hash를 돌려보낸다', () => {
+test('D-33 초안·CP 판단은 sourceRef를 받고, 기존 Task 재판단은 subjectHash도 받는다', () => {
   const draft = (judgedRules: unknown) => {
     const body = structuredClone(runner('submitDraft')) as { tasks: Record<string, unknown>[] };
     Object.assign(body.tasks[0] ?? {}, { judgedRules });
@@ -237,6 +237,8 @@ test('D-33 초안·CP의 새 Task 판단은 hash 없이 받고, 기존 Task 재�
   for (const bad of [
     judgement('size'), judgement('revert', { agreedBy: ['Codex'] }), judgement('revert', { agreedBy: ['Codex', 'Codex'] }),
     judgement('revert', { basis: '  ' }), judgement('revert', { result: 'ok' }),
+    ...['job-1', `job-1#input-sha256:${HASH}`, `sha256:${'A'.repeat(64)}`, `sha256:${'a'.repeat(63)}`, `sha256:${'g'.repeat(64)}`]
+      .map((sourceRef) => judgement('revert', { sourceRef })),
   ]) expect(draft(judged(bad)), JSON.stringify(bad)).toBe(false);
   expect(draft({ schemaVersion: 2, items: [] })).toBe(false);
   expect(op('submitTaskPlan').errors).toContain('VERSION_CONFLICT');
@@ -301,7 +303,7 @@ test('R1 기존 Task를 수정하는 Planning CP는 변경 후 판단을 함께 
   expect(accepts('submitPlanningProposal', body)).toBe(true);
   for (const bad of [
     entry({ taskKey: 'NEW-1' }), // 새 Task는 add.t.judgedRules 한 곳에만 쓴다.
-    entry({ judgedRules: judged(judgement('revert', { subjectHash: HASH })) }), // CP 저장 때 서버가 계산한다.
+    entry({ judgedRules: judged(judgement('revert', { subjectHash: HASH })) }), // CP 제출은 sourceRef에 입력 지문을 담는다.
     entry({ judgedRules: judged(judgement('ac_meaning')) }),
     { taskKey: 'TASK-0005' },
   ]) expect(accepts('submitPlanningProposal', { ...body, taskJudgements: [bad] }), JSON.stringify(bad)).toBe(false);
@@ -337,7 +339,7 @@ const claim = (name: string) => {
 test('N1 판단 job은 판단 대상의 변경 전·후 내용과 hash를 함께 준다', () => {
   expect(claims().map((item) => item.kind)).toEqual(['lead-proposal', 'split-proposal', 'rejudge']);
   for (const item of claims()) expect(responds('claimJob', item.response), `${item.kind} ${ajv.errorsText()}`).toBe(true);
-  expect(responds('claimJob', { job: { ...claim('rejudge').job, payload: { tasks: [], policy: {}, proposal: null } } })).toBe(true);
+  expect(responds('claimJob', { job: { ...claim('rejudge').job, payload: { tasks: [], policy: {}, proposal: null, planning: null } } })).toBe(false);
 
   // ID·hash만 있는 job은 판단할 수 없다.
   const broken = (name: string, change: (proposal: Record<string, never> & { targets: Record<string, unknown>[] }) => void) => {
@@ -384,11 +386,37 @@ test('N1 snapshot은 hash 계산 대상과 같은 범위다(data-model §2.3-1)'
   expect(responds('claimJob', response)).toBe(false);
 });
 
-test('N1 기존 Task 재판단 job도 현재 내용을 준다', () => {
-  const response = claim('rejudge');
-  const [task] = response.job.payload.tasks as Record<string, unknown>[];
-  Reflect.deleteProperty(task ?? {}, 'content');
-  expect(responds('claimJob', response)).toBe(false);
+test('N1 기존 Task 재판단 job도 현재 내용과 workType을 준다', () => {
+  for (const field of ['content', 'workType']) {
+    const response = claim('rejudge');
+    const [task] = response.job.payload.tasks as Record<string, unknown>[];
+    Reflect.deleteProperty(task ?? {}, field);
+    expect(responds('claimJob', response)).toBe(false);
+  }
+});
+
+test.each(['split', 'input_diff'])('%s claim의 Task 작업 유형은 필수이며 Analysis를 그대로 전달한다', (kind) => {
+  const [base] = claim('rejudge').job.payload.tasks as Record<string, unknown>[];
+  if (!base) throw new Error('Task fixture 없음');
+  const task: Record<string, unknown> = { ...base, workType: 'Analysis' };
+  const snapshotTask: Record<string, unknown> = {
+    taskKey: task.taskKey, workType: task.workType, subjectHash: task.subjectHash, content: task.content, wp: 'WP-1', status: 'ready',
+  };
+  const wbs = { phases: [{ id: 'PH-1', wps: [{ id: 'WP-1', tasks: [task.taskKey] }] }], tasks: [snapshotTask], dependencies: [] };
+  const payload = kind === 'split' ? { tasks: [task], policy: {}, wbs }
+    : { planningJobId: 'planning-1', runNo: 1, version: 2, commit: 'a'.repeat(40), previousCommit: 'b'.repeat(40), instruction: '', resumeStep: null, wbs };
+  const response = { job: { ...claim('rejudge').job, kind, payload } };
+  expect(responds('claimJob', response), ajv.errorsText()).toBe(true);
+  for (const invalid of [undefined, 'Unknown']) {
+    snapshotTask.workType = invalid;
+    expect(responds('claimJob', response)).toBe(false);
+    snapshotTask.workType = 'Analysis';
+    if (kind === 'split') {
+      task.workType = invalid;
+      expect(responds('claimJob', response)).toBe(false);
+      task.workType = 'Analysis';
+    }
+  }
 });
 
 test('N1 팀장 CP → claim → 판단 제출이 같은 대상과 hash로 이어진다', () => {

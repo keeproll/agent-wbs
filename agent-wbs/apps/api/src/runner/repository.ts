@@ -3,6 +3,7 @@ import { deferChange } from '../changes/events.ts';
 import type { PoolClient, schema, ExecPolicyRow } from '@awbs/db';
 import { attemptKey, placeModel, modelRanks, taskBranch, type ModelSettings, type Agent, type AttemptKind } from '@awbs/shared';
 import assert from 'node:assert/strict';
+import { syncPlanningJob } from '../project/jobs.ts';
 
 export function required<T>(value: T | null | undefined): T { assert(value !== null && value !== undefined); return value; }
 
@@ -18,8 +19,8 @@ export class RunnerRepository {
   constructor(client: PoolClient) { this.client = client; }
   async lock() { await this.client.query("select pg_advisory_xact_lock(hashtextextended('runner-dispatch',0))"); }
   async now() { return required((await this.client.query<{ at: Date }>('select clock_timestamp() as at')).rows[0]).at; }
-  async host() { return (await this.client.query<typeof schema.runnerHosts.$inferSelect>('select * from runner_hosts order by seen_at desc,created_at desc limit 1')).rows[0]; }
-  async hostBoot(host: string) { return (await this.client.query<{ boot_id: string }>('select boot_id from runner_hosts where host_id=$1 order by seen_at desc,created_at desc limit 1', [host])).rows[0]?.boot_id; }
+  async host() { return (await this.client.query<typeof schema.runnerHosts.$inferSelect>('select * from runner_hosts order by record_no desc limit 1')).rows[0]; }
+  async hostBoot(host: string) { return (await this.client.query<{ boot_id: string }>('select boot_id from runner_hosts where host_id=$1 order by record_no desc limit 1', [host])).rows[0]?.boot_id; }
   async authority() { return (await this.client.query<typeof schema.externalWriteAuthority.$inferSelect>('select * from external_write_authority where singleton for update')).rows[0]; }
   async cleanup() { return Boolean((await this.client.query("select 1 from system_state where cleanup_status='pending' union all select 1 from runner_commands where status<>'done' limit 1")).rowCount); }
   async task(key: string) { return (await this.client.query<Task>('select * from tasks where task_key=$1 and deleted_at is null for update', [key])).rows[0]; }
@@ -31,9 +32,14 @@ export class RunnerRepository {
   async candidates(kinds: readonly string[], epoch: number) {
     return (await this.client.query<Job>(`select * from runner_jobs where epoch=$1 and kind=any($2::job_kind[]) and
       (state='queued' or kind='repo_check' and state in ('leased','started') and lease_until<=clock_timestamp())
-      order by created_at,id for update skip locked`, [epoch, kinds])).rows;
+      order by record_no for update skip locked`, [epoch, kinds])).rows;
   }
   async holds() { return (await this.client.query<Hold>('select * from execution_holds where closed_at is null for update')).rows; }
+  async ownedHolds(principal: string, epoch: number) {
+    return (await this.client.query<Hold & { lease_owner: string; lease_until: Date | null }>(`select h.*,j.lease_owner,j.lease_until
+      from execution_holds h join runner_jobs j on j.id=h.job
+      where h.closed_at is null and h.epoch=$2 and j.epoch=$2 and j.lease_owner=$1 order by h.created_at,h.id`, [principal, epoch])).rows;
+  }
   async hold(job: string) { return (await this.client.query<Hold>('select * from execution_holds where job=$1 for update', [job])).rows[0]; }
   async history(task: string) {
     return (await this.client.query<Attempt>(`select a.*,v.result as verification_result,j.payload->>'automaticCause' as automatic_cause,
@@ -46,11 +52,11 @@ export class RunnerRepository {
   async policy() { return required((await this.client.query<ExecPolicyRow>('select * from exec_policy where singleton')).rows[0]); }
   async settings() { return (await this.client.query<typeof schema.concurrencySettings.$inferSelect>('select * from concurrency_settings where singleton')).rows[0]; }
   async appSettings() { return required((await this.client.query<typeof schema.appSettings.$inferSelect>('select * from app_settings where singleton')).rows[0]); }
-  async usage(agent: string) { return (await this.client.query<{ remain_pct: string }>('select remain_pct from agent_usage where agent=$1 order by created_at desc limit 1', [agent])).rows[0]; }
+  async usage(agent: string) { return (await this.client.query<{ remain_pct: string }>('select remain_pct from agent_usage where agent=$1 order by record_no desc limit 1', [agent])).rows[0]; }
   async readiness() { return (await this.client.query<typeof schema.runnerReadiness.$inferSelect>('select * from runner_readiness')).rows; }
-  async concurrency() { return (await this.client.query<PgRow<typeof schema.runnerConcurrencyLog.$inferSelect>>('select * from runner_concurrency_log where host_id=(select host_id from runner_hosts order by seen_at desc,created_at desc limit 1) order by created_at desc limit 1')).rows[0]; }
+  async concurrency() { return (await this.client.query<PgRow<typeof schema.runnerConcurrencyLog.$inferSelect>>('select * from runner_concurrency_log where host_id=(select host_id from runner_hosts order by record_no desc limit 1) order by record_no desc limit 1')).rows[0]; }
   async observations() { return (await this.client.query<typeof schema.cliObservationGrades.$inferSelect>('select * from cli_observation_grades')).rows; }
-  async latestObservation(attempt: string) { return (await this.client.query<typeof schema.attemptObservations.$inferSelect>('select * from attempt_observations where attempt=$1 order by at desc,created_at desc limit 1', [attempt])).rows[0]; }
+  async latestObservation(attempt: string) { return (await this.client.query<typeof schema.attemptObservations.$inferSelect>('select * from attempt_observations where attempt=$1 order by record_no desc limit 1', [attempt])).rows[0]; }
   async dependencies(task: string) {
     return (await this.client.query<{ dep_type: 'FS' | 'SS'; status: Task['status'] }>('select d.dep_type,t.status from task_dependencies d join tasks t on t.id=d.pred where d.succ=$1', [task])).rows;
   }
@@ -58,13 +64,8 @@ export class RunnerRepository {
     const check = (await this.client.query<{ passed: boolean }>(`select c.status='pass' and c.spec_revision=s.revision
       and c.input_version is not distinct from coalesce(t.src_input_version,(select id from input_versions where project_id=t.project_id order by v desc limit 1)) passed
       from ci_runs c join task_specs s on s.task=c.task join tasks t on t.id=c.task
-      where c.task=$1 and c.stage=1 and c.head_sha=$2 order by c.created_at desc,c.id desc limit 1`, [task.id, head ?? null])).rows[0];
-    if (check) return Boolean(check.passed);
-    // shortcut: M7-06에서 제거할 흐름 전용 자리표시다. 실제 CI가 있으면 그 결과가 우선하며 Gate의 ① 근거로 쓰지 않는다.
-    return Boolean((await this.client.query(`select 1 from task_attempts a join tasks t on t.id=a.task join task_specs s on s.task=t.id
-      where a.task=$1 and a.head_sha=$2 and a.kind in ('dev','rework') and a.status='completed' and a.spec_revision=s.revision
-      and a.input_version is not distinct from coalesce(t.src_input_version,(select id from input_versions where project_id=t.project_id order by v desc limit 1))
-      and exists(select 1 from runner_job_events e where e.job=a.job and e.kind='finished' and e.detail->>'taskCheckPlaceholder'='true') limit 1`, [task.id,head ?? null])).rowCount);
+      where c.task=$1 and c.stage=1 and c.head_sha=$2 order by c.run_no desc limit 1`, [task.id, head ?? null])).rows[0];
+    return Boolean(check?.passed);
   }
   async spec(task: string) { return (await this.client.query<{ revision: number; overview: object; spec: object; ac: unknown[] }>('select revision,overview,spec,ac from task_specs where task=$1', [task])).rows[0]; }
   async input(project: string, id: string | null = null) { return (await this.client.query<{ id: string; v: number; commit_sha: string }>('select id,v,commit_sha from input_versions where project_id=$1 and ($2::uuid is null or id=$2) order by v desc limit 1', [project,id])).rows[0]; }
@@ -78,8 +79,10 @@ export class RunnerRepository {
     await this.client.query("insert into task_history(project_id,task,kind,actor,text,ref) values($1,$2,$3,'runner',$3,$4)", [task.project_id, task.id, event, detail]);
   }
   async enqueue(project: string | null, epoch: number, kind: string, payload: object, dedup: string, generation: number | null = null) {
-    return (await this.client.query<{ id: string }>(`insert into runner_jobs(project_id,epoch,kind,payload,dedup_key,state,generation) values($1,$2,$3,$4,$5,'queued',$6)
+    const id = (await this.client.query<{ id: string }>(`insert into runner_jobs(project_id,epoch,kind,payload,dedup_key,state,generation) values($1,$2,$3,$4,$5,'queued',$6)
       on conflict(dedup_key) do nothing returning id`, [project, epoch, kind, payload, dedup, generation])).rows[0]?.id;
+    if (id && ['bootstrap', 'input_diff'].includes(kind)) await syncPlanningJob(this.client, id, 'queued');
+    return id;
   }
   async openJob(taskKey: string) { return (await this.client.query<Job>("select * from runner_jobs where kind='attempt' and payload->>'taskKey'=$1 and state in ('queued','leased','started','reconcile') limit 1", [taskKey])).rows[0]; }
   async lease(job: Job, owner: string, generation: number | null) {
@@ -89,8 +92,9 @@ export class RunnerRepository {
     return leased;
   }
   async renew(job: string) { return required((await this.client.query<{ lease_until: Date }>("update runner_jobs set lease_until=clock_timestamp()+interval '60 seconds' where id=$1 returning lease_until", [job])).rows[0]).lease_until; }
-  async state(job: string, state: string) {
+  async state(job: string, state: string, error?: { code: string; message: string }) {
     const row = (await this.client.query<Pick<Job, 'id' | 'project_id' | 'kind'>>('update runner_jobs set state=$2 where id=$1 returning id,project_id,kind', [job, state])).rows[0];
+    await syncPlanningJob(this.client, job, state, error);
     if (row) this.designJobChanged(row);
   }
   /**
@@ -154,7 +158,7 @@ export class RunnerRepository {
   async inputRecheck() { return (await this.client.query<{ n: number }>("select coalesce(max((target->>'recheck')::int),0)::int n from alerts where key='input_history_rewritten' and resolved_at is null")).rows[0]?.n ?? 0; }
   async inputCheckRequest() { return (await this.client.query<{ n: number }>('select input_check_request n from projects')).rows[0]?.n ?? 0; }
   async heartbeat(runner: string) { await this.client.query('update runner_sessions set last_heartbeat_at=clock_timestamp() where runner_id=$1 and ended_at is null', [runner]); }
-  async sessions() { return (await this.client.query<PgRow<typeof schema.runnerSessions.$inferSelect>>('select * from runner_sessions order by started_at')).rows; }
+  async sessions() { return (await this.client.query<PgRow<typeof schema.runnerSessions.$inferSelect>>('select * from runner_sessions order by record_no')).rows; }
   async session(runner: string, event: string, at: string, reason?: string) {
     if (event === 'start') await this.client.query('insert into runner_sessions(runner_id,started_at,last_heartbeat_at) values($1,$2,$2)', [runner, at]);
     else await this.client.query('update runner_sessions set ended_at=$2,end_reason=$3 where runner_id=$1 and ended_at is null', [runner, at, reason ?? 'manual']);
@@ -208,8 +212,9 @@ export class RunnerRepository {
     for (const d of defs) await this.client.query("insert into attempt_subagents(project_id,attempt,subagent,designated,installed,version,def_hash) values($1,$2,$3,true,true,$4,$5)", [task.project_id,attemptId,d.id,d.version,d.hash]);
   }
   async allTasks() { return (await this.client.query<Task>('select * from tasks where deleted_at is null')).rows; }
-  async hostHistory() { return (await this.client.query<PgRow<typeof schema.runnerHosts.$inferSelect>>('select * from runner_hosts order by seen_at desc,created_at desc limit 20')).rows; }
-  async allUsage() { return (await this.client.query<PgRow<typeof schema.agentUsage.$inferSelect>>("select distinct on(agent) * from agent_usage order by agent,created_at desc")).rows; }
+  async hostHistory() { return (await this.client.query<PgRow<typeof schema.runnerHosts.$inferSelect>>('select * from runner_hosts order by record_no desc limit 20')).rows; }
+  async allUsage() { return (await this.client.query<PgRow<typeof schema.agentUsage.$inferSelect>>("select distinct on(agent) * from agent_usage order by agent,record_no desc")).rows; }
+  async quarantinedTests() { return (await this.client.query<{ test_key:string }>('select test_key from flaky_tests where quarantined and project_id=(select id from projects) order by test_key')).rows.map(r => r.test_key); }
   async ciSettings() { return required((await this.client.query<typeof schema.ciSettings.$inferSelect>('select * from ci_settings where singleton')).rows[0]); }
   async githubSettings() { return (await this.client.query<typeof schema.githubSettings.$inferSelect>('select * from github_settings where singleton')).rows[0]; }
   async grantAuthority(generation: number) { return (await this.client.query("update external_write_authority set state='granted',blocked_reason=null,reconciled_at=clock_timestamp() where singleton and generation=$1 returning generation", [generation])).rowCount; }

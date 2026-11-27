@@ -2,12 +2,34 @@ import { createHash } from 'node:crypto';
 import type { WireProposalOp } from '@awbs/shared/api';
 import { describe, expect, test } from 'vitest';
 import { judgementJobKey, newTaskSource, previewHash, splitSubjectHash, stripJudgements } from '../src/planning/content.ts';
-import { canonicalJson, subjectHash } from '../src/tasks/hash.ts';
+import { canonicalJson, judgedContent, subjectHash } from '../src/tasks/hash.ts';
+import { advanceWbs, type wbsSnapshot } from '../src/planning/job-snapshot.ts';
 
 const add = (t: Record<string, unknown> = {}): Extract<WireProposalOp, { op: 'add' }> => ({
   op: 'add', ref: 'NEW-1', preds: [],
   t: { title: '새 작업', type: 'Implementation', domain: 'BE', rel: ['FE'], wp: 'wp', priority: 2, assignee: 'Claude', verifier: 'Codex', purpose: '목적', doneCond: '완료', ...t },
 } as Extract<WireProposalOp, { op: 'add' }>);
+
+test('같은 job의 반영분은 Task 추가·제거와 그래프만 누적하고 무관한 외부 내용은 받아들이지 않는다', () => {
+  type Wbs = Awaited<ReturnType<typeof wbsSnapshot>>;
+  const task = (taskKey: string, title: string): Wbs['tasks'][number] => {
+    const source = newTaskSource(add({ title }).t, null);
+    return { taskKey, workType: 'Implementation', wp: 'wp', status: 'ready', subjectHash: subjectHash(source), content: judgedContent(source) };
+  };
+  const basis: Wbs = { tasks: [task('TASK-0001', 'A'), task('TASK-0002', 'B'), task('TASK-0003', 'C')],
+    phases: [{ id: 'phase', wps: [{ id: 'wp', tasks: ['TASK-0001', 'TASK-0002', 'TASK-0003'] }] }],
+    dependencies: [{ pred: 'TASK-0001', succ: 'TASK-0002', type: 'FS' }] };
+  const before: Wbs = { ...basis, tasks: [task('TASK-0001', 'A'), task('TASK-0002', 'B'), task('TASK-0003', '외부 변경')] };
+  const after: Wbs = { ...before, tasks: [task('TASK-0001', '내가 바꾼 A'), task('TASK-0003', '외부 변경'), task('TASK-0004', '추가 D')],
+    dependencies: [{ pred: 'TASK-0001', succ: 'TASK-0004', type: 'SS' }] };
+  const advanced = advanceWbs(before, after, basis);
+  expect(advanced.tasks.map((item) => [item.taskKey, item.content.title])).toEqual([
+    ['TASK-0001', '내가 바꾼 A'], ['TASK-0003', 'C'], ['TASK-0004', '추가 D'],
+  ]);
+  expect(advanced.dependencies).toEqual(after.dependencies);
+  expect(advanced.phases[0]?.wps[0]?.tasks).toEqual(['TASK-0001', 'TASK-0003', 'TASK-0004']);
+  expect(basis.tasks[0]?.content.title).toBe('A');
+});
 
 describe('planning 새 Task의 판단 대상 내용(data-model §2.4-1·§2.3-1)', () => {
   test('선택 필드를 생략하면 범위·파일은 빈 목록, 설계는 영역에 맞는 빈 구역(P recKinds)이다', () => {
@@ -37,7 +59,7 @@ describe('planning 새 Task의 판단 대상 내용(data-model §2.4-1·§2.3-1)
 });
 
 describe('planning 판단 기록 제외와 분할 hash', () => {
-  const judged = { schemaVersion: 1, items: [{ rule: 'revert', result: 'met', agreedBy: ['Claude', 'Codex'], basis: 'b', judgedAt: '2026-11-26T00:00:00Z', sourceRef: 'job', subjectHash: 'a'.repeat(64) }] };
+  const judged = { schemaVersion: 1, items: [{ rule: 'revert', result: 'met', agreedBy: ['Claude', 'Codex'], basis: 'b', judgedAt: '2026-11-26T00:00:00Z', sourceRef: `sha256:${'a'.repeat(64)}`, subjectHash: 'a'.repeat(64) }] };
   test('ops에서 판단 기록만 뺀다. 원본은 바꾸지 않는다', () => {
     const op = add({ judgedRules: judged, conflictGroup: 'G' });
     const stripped = stripJudgements([op, { op: 'remove', task: 'TASK-0001' }]);
