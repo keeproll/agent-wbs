@@ -10,6 +10,7 @@ export interface Running {
   grade: ApiResponse<'getRunGrade'>['body'];
   bootId: string;
   processGroup: number;
+  headSha: string;
 }
 
 /** 실행 파일·유료 Agent를 호출하지 않는다. Runner의 계약만 써서 실제 HTTP 서버에 보고한다. */
@@ -60,31 +61,32 @@ export class FakeRunner {
     await this.api('reportUsage', { ...this.write(), body: { agent, remainPct, ...(resetAt && { resetAt }) } });
   }
 
-  async startNext(): Promise<Running | undefined> {
+  async startNext(headSha?: string): Promise<Running | undefined> {
     const claimed = await this.api('claimJob', { ...this.write(), body: { kinds: ['attempt'], capacity: 20 } });
     if (claimed.status === 204) return undefined;
     const job = claimed.body.job;
     assert.equal(job.kind, 'attempt');
     assert(job.kind === 'attempt');
+    headSha ??= job.payload.baseCommit;
     const role = job.payload.kind === 'dev' || job.payload.kind === 'rework' ? 'dev' : 'qa';
     const params = { taskKey: job.payload.taskKey };
     const grade = await this.api('getRunGrade', { epoch: 1, params, query: { role } });
     const subs = await this.api('getTaskSubagents', { epoch: 1, params, query: { role } });
     assert.equal(subs.body.items.length, 0, '이 시나리오는 하위 Agent 없는 준비 자료를 사용합니다.');
-    const started = await this.api('startJob', { ...this.write(), params: { id: job.id }, body: { fence: job.fence, hostId: this.hostId, bootId: this.bootId, headSha: job.payload.baseCommit, installedSubagents: [] } });
+    const started = await this.api('startJob', { ...this.write(), params: { id: job.id }, body: { fence: job.fence, hostId: this.hostId, bootId: this.bootId, headSha, installedSubagents: [] } });
     assert(started.body.attemptId, '시작 응답에 시도 ID가 없습니다.');
     const attemptId = started.body.attemptId;
     await this.api('reportAttemptStatus', { ...this.write(), params: { attemptId }, body: { fence: job.fence, status: 'running', at: new Date().toISOString(), model: grade.body.model, effort: grade.body.effort } });
     const processGroup = ++this.processGroup;
     await this.api('reportJobProcess', { ...this.write(), params: { id: job.id }, body: { fence: job.fence, processGroup, cgroup: null } });
-    return { job, attemptId, grade: grade.body, bootId: this.bootId, processGroup };
+    return { job, attemptId, grade: grade.body, bootId: this.bootId, processGroup, headSha };
   }
 
   async releaseAfterReboot(a: Running) {
     await this.api('releaseJob', { ...this.write(), params: { id: a.job.id }, body: { fence: a.job.fence, hostId: this.hostId, proof: { kind: 'boot_changed', bootId: a.bootId, currentBootId: this.bootId, processGroup: a.processGroup }, at: new Date().toISOString() } });
   }
 
-  async result(a: Running, result: 'PASS' | 'FAIL' = 'PASS', checked = false) {
+  async result(a: Running, result: 'PASS' | 'FAIL' | 'BLOCKED' = 'PASS', checked = false) {
     await this.api('releaseJobSlots', { ...this.write(), params: { id: a.job.id }, body: { fence: a.job.fence, hostId: this.hostId, proof: { kind: 'group_empty', bootId: a.bootId, processGroup: a.processGroup }, at: new Date().toISOString() } });
     const qa = a.job.payload.kind === 'qa' || a.job.payload.kind === 'reverify';
     // 흐름만 보는 M2 시험 자료다. 실제 ①은 attempt-complete에서 실행한다.
@@ -95,7 +97,7 @@ export class FakeRunner {
     }
     await this.api('reportAttemptResult', { ...this.write(), params: { attemptId: a.attemptId }, body: {
       fence: a.job.fence, summary: '무료 가짜 실행 결과', changedFiles: qa ? [] : ['src/result.ts'], evidence: [],
-      ...(qa && { verification: { headSha: a.job.payload.baseCommit, specRevision: 1, result, cmd: 'fake check', expected: '수용 기준 충족', actual: result,
+      ...(qa && { verification: { headSha: a.headSha, specRevision: 1, result, cmd: 'fake check', expected: '수용 기준 충족', actual: result,
         defects: result === 'FAIL' ? [{ text: '수용 기준 미충족', blocking: true }] : [], checklist: [{ itemKey: 'CL-1', done: result === 'PASS' }] } }),
     } });
   }

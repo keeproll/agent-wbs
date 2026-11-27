@@ -9,6 +9,7 @@ import { issueLoginLink, issueRunnerToken } from '../src/platform/credentials.ts
 import { installRunner } from '../src/runner/routes.ts';
 import { completeMergedTask, invalidateTaskGate } from '../src/execution/gate.ts';
 import { inEpoch } from '../src/platform/transaction.ts';
+import { RunnerRepository } from '../src/runner/repository.ts';
 
 const db = new URL(inject('testDatabaseUrl'));
 db.pathname += '_execution';
@@ -171,6 +172,18 @@ test('① PASS 뒤 새 ① FAIL이 기록되면 QA 예약을 거부한다', asyn
   await check(a,sha,'fail');
   expect((await post('jobs/claim',{ kinds:['attempt'],capacity:20 })).statusCode).toBe(204);
   expect((await owner.query('select kind from task_attempts where task=$1',[a.id])).rows).toEqual([{ kind:'dev' }]);
+});
+
+test('과거 자리표시 이벤트만 남은 개발 결과를 현재 ① 통과 근거로 삼지 않는다', async () => {
+  const a = await running();
+  await owner.query("update task_attempts set status='completed',ended_at=greatest(started_at,clock_timestamp()) where id=$1",[a.attempt]);
+  await owner.query("insert into runner_job_events(project_id,job,kind,detail) values($1,$2,'finished','{\"taskCheckPlaceholder\":true}')",[project,a.job]);
+  const client = await owner.connect();
+  try {
+    const repo = new RunnerRepository(client), task = await repo.taskById(a.id);
+    if (!task) throw new Error('시험 Task가 필요합니다.');
+    expect(await repo.taskCheck(task,sha)).toBe(false);
+  } finally { client.release(); }
 });
 
 test('QA FAIL 뒤 자동 재작업·재검증 PASS가 차단 결함을 해소하고 통합 job을 자동 생성한다', async () => {
