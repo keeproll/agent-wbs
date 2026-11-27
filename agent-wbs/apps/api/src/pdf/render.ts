@@ -6,7 +6,8 @@
  *   그 밖의 요청은 모두 끊는다. 왜: 보고서 내용이 밖으로 나가거나, 외부 파일 때문에 결과가 바뀌면 안 된다.
  * - 글꼴이 실제로 다 읽혔는지 확인한 뒤에 PDF를 만든다. 하나라도 실패하면 변환 실패로 본다.
  *   왜: 글꼴이 늦게 읽히면 다른 글꼴로 찍힌 PDF가 캐시에 남는다.
- * - 열이 잘리거나 글자 단위로 쪼개지지 않아야 한다(UAT-REPORT-04·05). 문서를 화면 폭(900px)으로 배치하고 PDF에서 줄인다(LAYOUT_PX).
+ * - 100% 배율로 찍는다. 문서는 인쇄 폭(A4 − 좌우 14mm = 182mm ≈ 688px)에 그대로 배치한다.
+ *   왜: 줄여 찍으면 본문(13px = 9.75pt)이 9pt 밑으로 작아진다. 표가 인쇄 폭에 들어가게 하는 것은 PDF 전용 열 너비(html.ts PDF_COLUMNS)가 맡는다.
  * - 브라우저는 처음 쓸 때 한 번 띄워 계속 쓰고, 동시에 2개까지만 변환한다. 한 번 변환은 30초를 넘기지 않는다.
  */
 import { chromium, type Browser } from 'playwright-core';
@@ -20,12 +21,6 @@ export interface PdfRenderer {
 const ORIGIN = 'https://report.awbs.invalid';
 /** A4 210mm − 좌우 여백 14mm×2 = 182mm를 화면 점(px, 1in=96px)으로 */
 const PRINTABLE_PX = (182 / 25.4) * 96;
-/**
- * 문서를 배치할 폭(px). 화면에서 보고서 문서가 차지하는 폭과 비슷하게 잡고, PDF에는 인쇄 폭에 맞게 줄여(약 0.76배) 넣는다.
- * 왜: 표의 고정 열 너비 합(부록 약 770px)이 인쇄 폭(약 688px)보다 넓다. 인쇄 폭에 그대로 배치하면 남는 폭으로 늘어나는
- * 제목·요약 열이 몇 px로 줄어 한두 글자씩 줄바꿈된다. 잘리지는 않아도 읽을 수 없다(UAT-REPORT-04 「모든 열을 판단」).
- */
-const LAYOUT_PX = 900;
 const MARGIN = '14mm';
 const TIMEOUT_MS = 30_000;
 const MAX_PARALLEL = 2;
@@ -49,7 +44,7 @@ export function chromiumRenderer(): PdfRenderer {
 
   async function convert(html: string): Promise<Buffer> {
     const files = pdfAssets().fonts;
-    const context = await (await launch()).newContext({ viewport: { width: LAYOUT_PX, height: 1123 } });
+    const context = await (await launch()).newContext({ viewport: { width: Math.floor(PRINTABLE_PX), height: 1123 } });
     try {
       context.setDefaultTimeout(TIMEOUT_MS);
       await context.route('**/*', (route) => {
@@ -71,9 +66,9 @@ export function chromiumRenderer(): PdfRenderer {
         return faces.length > 0 && faces.every((f) => f.status === 'loaded');
       })()`) as boolean;
       if (!loaded) throw new Error('보고서 글꼴을 읽지 못했습니다.');
-      // scale로 배치 폭을 LAYOUT_PX로 정한다(인쇄 배치 폭 = 인쇄 폭 ÷ scale).
+      // 배율을 주지 않는다(100%). 표가 넘치면 Chromium이 줄여 찍으므로, 넘치지 않는지는 시나리오 시험이 확인한다.
       // 잘림·열 쪼개짐이 없는지는 시나리오 시험이 PDF 글자 위치와 조각으로 확인한다(pdf.scenario 「잘림 없음」·「좁은 열」).
-      return await page.pdf({ format: 'A4', margin: { top: MARGIN, right: MARGIN, bottom: MARGIN, left: MARGIN }, printBackground: true, scale: PRINTABLE_PX / LAYOUT_PX });
+      return await page.pdf({ format: 'A4', margin: { top: MARGIN, right: MARGIN, bottom: MARGIN, left: MARGIN }, printBackground: true });
     } finally {
       await context.close().catch(() => undefined);
     }

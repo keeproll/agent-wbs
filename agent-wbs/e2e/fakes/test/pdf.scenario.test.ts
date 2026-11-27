@@ -31,6 +31,9 @@ import { externalDoc as pdfExternalDoc, internalDoc as pdfInternalDoc } from '..
 import * as web from '../../../apps/web/src/features/report/model.ts';
 import { externalDoc, internalDoc } from '../../../apps/web/src/features/report/model.ts';
 import { readPdf, squash, type PdfPage } from '../pdf-inspect.ts';
+import { chromium } from 'playwright-core';
+import { pdfAssets } from '../../../apps/api/src/pdf/assets.ts';
+import { reportHtml, type ReportHtmlInput } from '../../../apps/api/src/pdf/html.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Body = any;
@@ -130,6 +133,67 @@ const textOf = (pages: PdfPage[]) => pages.map((p) => p.text).join('');
 /** 문서에 이 글자가 있는가(공백 무시). 없으면 어떤 값이 빠졌는지 보이게 값을 그대로 돌려준다. */
 const missing = (text: string, values: string[]) => values.filter((v) => v.trim() && !text.includes(squash(v)));
 
+/**
+ * 인쇄 폭(A4 − 좌우 14mm = 182mm ≈ 688px)으로 실제 Chromium에 배치해(print 매체, 100%) 표를 잰다.
+ * PDF도 같은 엔진·같은 폭·100%로 찍으므로 배치가 같다.
+ * - overflow: 문서·표·행·칸 중 내용이 칸보다 넓은 곳.
+ * - brokenWords: 표 머리글·칸 안의 단어(공백으로 나눈 조각) 중 하이픈(-) 바로 뒤가 아닌 곳에서 줄이 바뀐 것(조정자 규칙:
+ *   한글 음절·영문 글자 중간 줄바꿈 0, 줄바꿈은 공백 또는 하이픈 바로 뒤만 허용). 글자마다 화면 위치를 재서 줄이 바뀐 곳을 찾는다.
+ * - hyphenBreaks: 하이픈 바로 뒤에서 줄이 바뀐 단어(허용되지만, 등급 칸의 모델 ID는 통째로 유지해야 한다).
+ * - words: 잰 단어 수.
+ */
+async function layoutAtPrintWidth(html: string): Promise<{ overflow: string[]; brokenWords: string[]; hyphenBreaks: string[]; words: number }> {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: Math.floor((182 / 25.4) * 96), height: 1123 } });
+    const fonts = pdfAssets().fonts;
+    await page.route('**/*', (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname === '/doc') return route.fulfill({ contentType: 'text/html; charset=utf-8', body: html });
+      const font = fonts.get(url.pathname);
+      return font ? route.fulfill({ contentType: 'font/woff2', body: font }) : route.abort();
+    });
+    await page.emulateMedia({ media: 'print' });
+    await page.goto('https://layout.awbs.invalid/doc');
+    return await page.evaluate(`(async () => {
+      await Promise.all([...document.fonts].map((f) => f.load()));
+      const overflow = [], brokenWords = [], hyphenBreaks = [];
+      let words = 0;
+      const doc = document.querySelector('.rpt-doc');
+      if (doc.scrollWidth > window.innerWidth) overflow.push('문서 ' + doc.scrollWidth);
+      const cells = document.querySelectorAll('.rpt-tbl [role=cell], .rpt-tbl [role=columnheader], .rpt-trend [role=cell], .rpt-trend [role=columnheader]');
+      for (const e of document.querySelectorAll('.rpt-tbl, .rpt-trend, [role=row]')) {
+        if (e.scrollWidth > e.clientWidth + 1) overflow.push((e.getAttribute('role') || e.className) + ' ' + e.scrollWidth + '>' + e.clientWidth);
+      }
+      for (const cell of cells) {
+        if (cell.scrollWidth > cell.clientWidth + 1) overflow.push('칸 ' + cell.scrollWidth + '>' + cell.clientWidth + ' ' + cell.textContent);
+        const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          for (const m of node.textContent.matchAll(/\\S+/g)) {
+            words++;
+            const range = document.createRange();
+            range.setStart(node, m.index);
+            range.setEnd(node, m.index + m[0].length);
+            const tops = new Set([...range.getClientRects()].filter((r) => r.width > 0).map((r) => Math.round(r.top)));
+            if (tops.size < 2) continue;
+            // 두 줄에 걸쳤다. 줄이 바뀐 글자 바로 앞이 하이픈(-)이면 허용, 아니면 단어 중간 줄바꿈이다.
+            let prev = null;
+            for (let i = 0; i < m[0].length; i++) {
+              const ch = document.createRange();
+              ch.setStart(node, m.index + i);
+              ch.setEnd(node, m.index + i + 1);
+              const top = Math.round(ch.getBoundingClientRect().top);
+              if (prev !== null && top !== prev) { (m[0][i - 1] === '-' ? hyphenBreaks : brokenWords).push(m[0] + ' (' + cell.textContent.slice(0, 30) + ')'); break; }
+              prev = top;
+            }
+          }
+        }
+      }
+      return { overflow, brokenWords, hyphenBreaks, words };
+    })()`) as { overflow: string[]; brokenWords: string[]; hyphenBreaks: string[]; words: number };
+  } finally { await browser.close(); }
+}
+
 // A4 = 210×297mm = 595.28×841.89pt. Chromium은 쪽 크기를 화면 점(px) 단위로 맞추므로 1pt 남짓 차이가 난다.
 const A4 = { width: 595.28, height: 841.89 };
 const MARGIN = (14 / 25.4) * 72;
@@ -137,6 +201,7 @@ const MARGIN = (14 / 25.4) * 72;
 describe('주간 팀장용 PDF(RPT-W-261026, 12섹션에 값이 있다)', () => {
   let s: ReportSnapshotData;
   let id: string;
+  let head: Report;
   let doc: Awaited<ReturnType<typeof readPdf>>;
   let response: Response;
   let bytes: Uint8Array;
@@ -144,6 +209,7 @@ describe('주간 팀장용 PDF(RPT-W-261026, 12섹션에 값이 있다)', () => 
     const r = await reportOf('weekly', '2026-10-26');
     s = r.snapshot;
     id = r.id;
+    head = r;
     ({ response, bytes, doc } = await fetchPdf(id, 'int'));
   }, 60_000);
 
@@ -166,15 +232,53 @@ describe('주간 팀장용 PDF(RPT-W-261026, 12섹션에 값이 있다)', () => 
     expect(outside).toEqual([]);
   });
 
-  test('좁은 열도 읽을 수 있다: 부록 제목·실행 기록 요약이 글자 단위로 쪼개지지 않는다', () => {
-    // 고정 열 너비 합(부록 약 770px)이 인쇄 폭(약 688px)보다 넓다. 그대로 찍으면 남는 폭이 없는 제목 열이 몇 px로 줄어
-    // 「Monorepo」가 「Mo/no/re/po」처럼 한두 글자씩 줄바꿈된다. 잘리지는 않지만 읽을 수 없다(UAT-REPORT-04 「모든 열을 판단」).
+  test('본문 글자는 9pt 이상이다(100% 배율). 9pt 미만은 원본 11~11.5px인 태그·배지·꼬리말뿐이다', () => {
     const x = internalDoc(s);
-    const pieces = doc.pages.flatMap((p) => p.items.map((i) => i.str));
-    const firstWord = (t: string) => t.split(/\s+/).find((w) => w.length >= 4) ?? t;
-    const broken = [...x.all.map((t) => t.title), ...x.attempts.map((a) => a.sum)].map(firstWord).filter((w) => !pieces.some((p) => p.includes(w)));
-    expect(broken).toEqual([]);
+    // 원본 크기 그대로 두기로 한 예외(조정자 승인): .tag(11px)·.sc(11.5px)·.rpt-f(11px)
+    const small = new Set([
+      ...x.issues.map((i) => i.label), '완료', 'FAIL', '차단',
+      ...x.active.map((t) => t.st), ...x.messages.map((m) => m.type),
+    ].map(squash));
+    const footer = squash(`Agent WBS 자동 생성 · ${head.reportKey} · ${pdfModel.formatDateTime(head.generatedAt)}`);
+    const under = doc.pages.flatMap((p) => p.items.filter((i) => i.size < 8.95).map((i) => squash(i.str)))
+      .filter((t) => !small.has(t) && !footer.includes(t));
+    expect(under).toEqual([]);
+    // 본문(13px)이 9.75pt다 = 줄이지 않고 찍었다.
+    const sizes = doc.pages.flatMap((p) => p.items.map((i) => Math.round(i.size * 100) / 100));
+    expect(sizes).toContain(9.75);
   });
+
+  test('표가 인쇄 폭(182mm = 688px)을 넘지 않고, 모든 열 제목·값이 단어 중간에서 줄바꿈되지 않는다(팀장용·보고용)', async () => {
+    const r = await json(`/api/reports/${id}`) as ReportHtmlInput;
+    for (const view of ['int', 'ext'] as const) {
+      const found = await layoutAtPrintWidth(reportHtml({ ...r, view }));
+      expect(found.overflow, `${view} 넘침`).toEqual([]);
+      expect(found.brokenWords, `${view} 단어 중간 줄바꿈`).toEqual([]);
+      // 등급 칸의 모델 ID(예: claude-sonnet-5-5)는 하이픈에서도 끊기지 않는다(등급 열을 넓힌 이유).
+      const models = new Set([...r.snapshot.attempts, ...r.snapshot.next].flatMap((a) => a.grade?.modelId ?? []));
+      expect(models.size, view).toBeGreaterThan(0);
+      expect(found.hyphenBreaks.filter((w) => models.has(w.split(' ')[0] ?? '')), `${view} 모델 ID 끊김`).toEqual([]);
+      // 시험이 실제로 표의 단어를 쟀다는 증거
+      expect(found.words, view).toBeGreaterThan(view === 'int' ? 300 : 20);
+    }
+  }, 60_000);
+
+  test('띄어쓰기 없는 아주 긴 글(한글·영문)도 어떤 칸의 너비도 넘지 않는다(keep-all + overflow-wrap:anywhere)', async () => {
+    const r = await json(`/api/reports/${id}`) as ReportHtmlInput;
+    const long = `${'가나다라마바사'.repeat(12)}${'ABCDEFGHIJ'.repeat(12)}`;
+    const snapshot: ReportSnapshotData = {
+      ...r.snapshot,
+      all: r.snapshot.all.map((t, n) => (n === 0 ? { ...t, title: long, taskKey: 'TASK-0001' } : t)),
+      next: r.snapshot.next.map((t, n) => (n === 0 ? { ...t, title: long, conflictGroup: long } : t)),
+      attempts: r.snapshot.attempts.map((a, n) => (n === 0 ? { ...a, summary: long } : a)),
+    };
+    for (const view of ['int', 'ext'] as const) {
+      const found = await layoutAtPrintWidth(reportHtml({ ...r, snapshot, view }));
+      expect(found.overflow, view).toEqual([]);
+    }
+    // 이런 글은 칸 끝에서 끊을 수밖에 없다(그래서 넘치지 않는다). 시험이 실제로 긴 글을 넣었다는 증거다.
+    expect((await layoutAtPrintWidth(reportHtml({ ...r, snapshot, view: 'int' }))).brokenWords.some((w) => w.startsWith('가나다라'))).toBe(true);
+  }, 60_000);
 
   test('폰트 embed: 글꼴은 모두 Pretendard GOV이고 글꼴 파일이 들어 있다(그림 글자 Type3 없음)', () => {
     expect(doc.fonts.baseFonts.length).toBeGreaterThan(0);

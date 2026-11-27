@@ -7,9 +7,10 @@
  */
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 
-/** x·y: 글자 조각의 왼쪽 아래 위치(pt, 쪽 왼쪽 아래가 0). */
-export interface PdfItem { str: string; x: number; y: number; width: number }
-export interface PdfPage { width: number; height: number; items: PdfItem[]; text: string }
+/** x·y: 글자 조각의 왼쪽 아래 위치(pt, 쪽 왼쪽 아래가 0). size: 글자 크기(pt). */
+export interface PdfItem { str: string; x: number; y: number; width: number; size: number }
+/** lines: 같은 높이(y)의 조각을 왼쪽부터 이은 줄(공백 제거). 글자 사이 간격(kerning) 때문에 조각이 「AT T」처럼 나뉘어도 한 줄로 본다. */
+export interface PdfPage { width: number; height: number; items: PdfItem[]; text: string; lines: string[] }
 export interface PdfFonts { baseFonts: string[]; embeddedFiles: number; descriptors: number; type3: number }
 
 /** 공백·줄바꿈을 지운 글자. 한 줄이 PDF에서 여러 조각으로 나뉘어도 비교할 수 있게 한다. */
@@ -23,8 +24,11 @@ export async function readPdf(data: Uint8Array): Promise<{ pages: PdfPage[]; fon
     const page = await doc.getPage(n);
     const [, , width = 0, height = 0] = page.view;
     const content = await page.getTextContent();
-    const items = content.items.flatMap((item) => ('str' in item && item.str.trim() ? [{ str: item.str, x: item.transform[4] as number, y: item.transform[5] as number, width: item.width }] : []));
-    pages.push({ width, height, items, text: squash(items.map((i) => i.str).join('')) });
+    const items = content.items.flatMap((item) => ('str' in item && item.str.trim() ? [{ str: item.str, x: item.transform[4] as number, y: item.transform[5] as number, width: item.width, size: Math.hypot(item.transform[0] as number, item.transform[1] as number) }] : []));
+    const rows = new Map<number, PdfItem[]>();
+    for (const i of items) rows.set(Math.round(i.y), [...(rows.get(Math.round(i.y)) ?? []), i]);
+    const lines = [...rows.values()].map((row) => squash(row.sort((a, b) => a.x - b.x).map((i) => i.str).join('')));
+    pages.push({ width, height, items, text: squash(items.map((i) => i.str).join('')), lines });
   }
   await task.destroy();
   const raw = Buffer.from(data).toString('latin1');

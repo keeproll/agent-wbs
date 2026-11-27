@@ -114,6 +114,31 @@ const prototypeCss = () => pdfAssets().css;
 const fontFaces = () => Object.entries(FONT_FILES).map(([weight, name]) =>
   `@font-face{font-family:'Pretendard GOV Variable';font-weight:${weight};font-style:normal;font-display:block;src:url('/fonts/PretendardGOV-${name}.woff2') format('woff2')}`).join('');
 
+/**
+ * PDF 전용 CSS(조정자 결정 C). **원본 인쇄 경로(P L5000–5012)와 다른 점은 아래 두 가지뿐이다.** 화면 CSS는 바꾸지 않는다.
+ *
+ * 1. 표 3개의 고정 열 너비
+ *    - 원본 고정 열 너비 합(부록 .al 약 770px, 실행 기록 .at 약 708px)이 인쇄 폭(182mm ≈ 688px)보다 넓다.
+ *      원본대로 찍으면 Chromium이 문서 전체를 약 0.89배로 줄여 본문이 9pt 밑이 되고, 남는 폭이 없는 제목 열이 글자 단위로 쪼개진다.
+ *    - 그래서 세 표(.at 실행 기록, .nx 다음 예정, .al 부록)의 고정 열 너비만 바꿔 688px 안에 넣는다. 글자 크기·간격·순서는 원본 그대로다.
+ *    - 등급 열(.at 3번째)은 모델 ID(예: claude-sonnet-5-5)가 하이픈에서 끊기지 않을 만큼 넓힌다.
+ *    - 원본 값(prototype.css L549–551): .at `96px 148px 150px 120px 56px minmax(0,1fr) 90px`,
+ *      .nx `90px minmax(0,1.4fr) 80px 100px 160px minmax(0,1.2fr)`, .al `56px 86px minmax(0,1.6fr) 90px 110px 56px 76px 66px 90px 66px`
+ * 2. 표 칸 `word-break:keep-all` + 문서 `overflow-wrap:anywhere`
+ *    - Chromium은 한글을 음절 사이 어디서나 줄바꿈한다. 그래서 좁은 칸에서 「개발」이 「개/발」로 쪼개진다.
+ *      keep-all이면 한글도 띄어쓰기에서만 줄바꿈한다.
+ *    - 띄어쓰기 없는 아주 긴 글이 칸·문서 밖으로 넘치지 않게, 한 줄에 다 들어가지 않는 글만 줄 끝에서 끊는다(overflow-wrap:anywhere).
+ *      보통 글에는 영향이 없다. 문서 전체에 두는 이유: 보고용의 목록(주요 완료 항목 등)도 표가 아니지만 넘치면 문서 전체가 줄어든다.
+ *    - 하이픈(-) 바로 뒤 줄바꿈은 허용한다(마크업은 화면과 같게 둔다).
+ */
+const PDF_CSS = [
+  '.rpt-trw.at{grid-template-columns:80px 78px 168px 86px 44px minmax(0,1fr) 54px}',
+  '.rpt-trw.nx{grid-template-columns:72px minmax(0,1fr) 72px 92px 128px 128px}',
+  '.rpt-trw.al{grid-template-columns:40px 72px minmax(0,1fr) 60px 88px 40px 60px 58px 64px 44px}',
+  '.rpt-tbl [role=cell],.rpt-tbl [role=columnheader]{word-break:keep-all}',
+  '.rpt-doc{overflow-wrap:anywhere}',
+].join('');
+
 /** 원본 인쇄 경로(P L5005)가 문서에 덧붙인 CSS 그대로 */
 const PRINT_CSS = 'html,body{background:#fff;margin:0}.rpt-doc{border:0;max-width:none;padding:0}.reflink{color:inherit;text-decoration:none;border:0;background:none;padding:0;font:inherit}@page{size:A4;margin:14mm}';
 
@@ -138,5 +163,5 @@ export function reportHtml(r: ReportHtmlInput): string {
     r.view === 'int' ? internal(r.snapshot, r.kind, weekly) : external(r.snapshot, r.kind, weekly),
     el('footer', 'class="rpt-f"', esc(`Agent WBS 자동 생성 · ${r.reportKey} · ${formatDateTime(r.generatedAt)}`)));
   return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${esc(`${r.reportKey}_${r.view === 'int' ? '팀장용' : '보고용'}`)}</title>`
-    + `<style>${fontFaces()}</style><style>${prototypeCss()}</style><style>${PRINT_CSS}</style></head><body>${article}</body></html>`;
+    + `<style>${fontFaces()}</style><style>${prototypeCss()}</style><style>${PRINT_CSS}${PDF_CSS}</style></head><body>${article}</body></html>`;
 }
