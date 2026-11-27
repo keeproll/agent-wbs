@@ -116,6 +116,12 @@ test('telegram UI-12-05: 원본 클래스의 연결/규칙/미리보기/주소/�
   await page.setViewportSize({ width: 1280, height: 900 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   if (process.env.AWBS_TEST_ARTIFACT_DIR) await page.screenshot({ path: join(process.env.AWBS_TEST_ARTIFACT_DIR, 'telegram-settings-1280.png'), fullPage: true });
+  const card = page.getByRole('region', { name: 'Telegram 연결 설정' });
+  await card.getByRole('button', { name: '토큰 교체', exact: true }).click();
+  await card.getByLabel('Bot Token', { exact: true }).fill(`123456789:${'replacement_only_'.repeat(3)}abcd`);
+  await card.getByRole('button', { name: '교체 취소', exact: true }).click();
+  await expect(card.getByRole('button', { name: '켜기', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(card.getByText('●●●● 등록됨 (끝 xxxx)')).toBeVisible();
 });
 
 test('telegram UAT-TG-08: 서버 자동 재시도 성공이 저장된 테스트 실패 표시를 해소한다', async ({ page }) => {

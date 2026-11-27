@@ -79,7 +79,7 @@ export async function processNotify(pool: Pool, epoch: number, now = new Date(),
           await db.query('update notify_settings set test_fingerprint=$1 where secret_key=$2 and chat_id=$3', [result.ok ? row.payload.fingerprint : null, row.payload.secretKey, row.payload.chatId]);
         }
         await db.query('insert into notify_log(project_id,delivery_id,kind,state,error,at) values($1,$2,$3,$4,$5,$6)', [row.project_id, row.delivery_id, row.kind, state, error, now]);
-        await statusAlert(db, row.project_id, result);
+        if (!result.ok || row.kind === 'test') await statusAlert(db, row.project_id, result);
         deferChange(db, row.project_id, 'notify', { id: row.id });
         await flushChanges(db);
         await db.query('commit');

@@ -58,7 +58,7 @@ export function Connection() {
   const error = liveTest?.error ?? liveBot?.error ?? (savedMatch ? q.query.data?.test?.error : null);
   const shownBot = liveBot?.bot ?? (!f?.replace ? q.query.data?.bot : null);
   const changeIdentity = (change: Partial<Form>) => {
-    form.edit(current => ({ ...current, ...change, enabled: false }));
+    form.edit(current => ({ ...current, ...change, enabled: change.enabled ?? false }));
     setTest(null);
     if ('botToken' in change || 'replace' in change) setBot(null);
   };
@@ -70,7 +70,7 @@ export function Connection() {
       {(error || connectionAlert) && <div className="banner danger" role="alert"><div className="banner-b">{error ? ERRORS[error] : connectionAlert?.text}</div></div>}
       <Row label={<label htmlFor="tg-token">Bot Token <span className="req" aria-hidden="true">*</span></label>}>
         {f.replace ? <div className="notify-controls"><input id="tg-token" aria-label="Bot Token" className="inp mono" type="password" autoComplete="new-password" value={f.botToken} onChange={e => { changeIdentity({ botToken: e.target.value }); }} />
-          {q.query.data?.tokenSet && <button type="button" className="btn sm" onClick={() => { changeIdentity({ replace: false, botToken: '' }); }}>교체 취소</button>}</div>
+          {q.query.data?.tokenSet && <button type="button" className="btn sm" onClick={() => { changeIdentity({ replace: false, botToken: '', enabled: !!q.query.data?.enabled && f.chatId === q.query.data?.chatId && q.query.data?.test?.ok === true }); }}>교체 취소</button>}</div>
           : <div className="notify-controls"><span>●●●● 등록됨 (끝 {q.query.data?.tokenLast4})</span><button type="button" className="btn sm" onClick={() => { changeIdentity({ replace: true, botToken: '' }); }}>토큰 교체</button></div>}
         <span className="fhint">BotFather에서 받은 토큰입니다. 저장 후에는 다시 보여 주지 않고 끝 4자리만 표시합니다. 서버에만 암호화하며 브라우저 저장소 · 로그 · 이력에 남기지 않습니다. 노출되면 BotFather에서 즉시 폐기(/revoke)하세요.</span>
       </Row>

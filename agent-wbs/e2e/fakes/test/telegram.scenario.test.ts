@@ -398,3 +398,15 @@ test('telegram: 서로 다른 CI 행의 같은 원인 동시 실패도 대기열
   expect(await active().rows("select dup_count from notify_events where dedup_key='buildFail|2|11'")).toEqual([{ dup_count: 1 }]);
   expect(await active().rows("select id from notify_outbox where payload->>'event'='buildFail'")).toHaveLength(1);
 });
+
+test('telegram: 업무 전송 성공은 연결 오류 배지를 지우지 않고 테스트 성공을 기다린다', async () => {
+  const f = await connect();
+  const { processNotify } = await import('../../../apps/api/src/notify/worker.ts');
+  f.fail(403);
+  await active().rows("insert into runner_readiness(key,status,detail,fix,at) values('badge-fail','fail','실패','확인',now())");
+  await processNotify(active().pool, 1, new Date(Date.now() + 5000));
+  f.fail(0);
+  await active().rows("insert into runner_readiness(key,status,detail,fix,at) values('badge-ok','fail','실패','확인',now())");
+  await processNotify(active().pool, 1, new Date(Date.now() + 10000));
+  expect((await active().lead('GET', '/api/alerts')).body.items.some((a: { key: string }) => a.key === 'telegram-connection')).toBe(true);
+});
