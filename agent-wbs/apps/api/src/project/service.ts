@@ -1,5 +1,6 @@
 import { splitSettingsToDomain } from '@awbs/db';
 import type { PoolClient } from '@awbs/db';
+import { observePipeline, type PipelineObservation } from '../ci/pipeline.ts';
 import { invalidateTaskGate } from '../execution/gate.ts';
 import { snapshotHash, techSnapshot, wbsSnapshot } from '../planning/job-snapshot.ts';
 import { lockGraph } from '../tasks/write.ts';
@@ -503,7 +504,7 @@ interface InputDiff {
   status: 'A' | 'M' | 'D' | 'R' | 'T'; path: string; from?: string;
   oldBlob: string | null; newBlob: string | null; oldMode: string | null; newMode: string | null; added: number; deleted: number;
 }
-interface InputBody { base: string; head: string; baseIsAncestor: boolean; treeHash: string; changes: InputDiff[]; commits: PushedCommit[] }
+interface InputBody { base: string; head: string; baseIsAncestor: boolean; treeHash: string; changes: InputDiff[]; commits: PushedCommit[]; pipelineObservation?: PipelineObservation }
 /** 저장하는 보고 하나(input_change_commits.files jsonb, sha = 보고의 head) */
 interface StoredReport { seq: number; base: string; head: string; tree: string; changes: InputDiff[]; commits: PushedCommit[]; receivedAt: string }
 
@@ -545,6 +546,7 @@ export async function reportInputChanges(db: Db, body: InputBody): Promise<{ hea
     if (r.state === 'pending') await changeEvent(db, project.id, { kind: 'input_changes' });
   }
   // 팀장 확인 항목은 분석이 볼 내용이 바뀐 보고에만 생긴다(실행 권한만 바뀐 보고는 head·트리만 옮김).
+  if (body.pipelineObservation) await observePipeline(db,project.id,body.head,body.pipelineObservation);
   return { head: result.head, recorded: result.report?.state === 'pending', historyRewritten: false };
 }
 
@@ -676,8 +678,8 @@ export async function retryInputs(db: Db, body: { updatedAt: string; version: nu
   if (!(await sameTime(db, project.updated_at, body.updatedAt))) throw new ProjectError('VERSION_CONFLICT', { details: { current: { updatedAt: project.updated_at }, changes: [] } });
   const job = (await db.query<PlanningJob & { version: string | null }>(
     `select j.id,j.project_id,j.kind,j.run_no,j.status,j.instruction,
-       (select payload->>'version' from runner_jobs r where r.payload->>'planningJobId'=j.id::text order by r.created_at limit 1) version
-     from planning_jobs j where j.project_id=$1 and j.kind='input_diff' order by j.created_at desc limit 1 for update`, [project.id])).rows[0];
+       (select payload->>'version' from runner_jobs r where r.payload->>'planningJobId'=j.id::text order by r.record_no limit 1) version
+     from planning_jobs j where j.project_id=$1 and j.kind='input_diff' order by j.record_no desc limit 1 for update`, [project.id])).rows[0];
   if (!job || job.status !== 'failed' || Number(job.version) !== body.version) {
     throw new ProjectError('INVALID_TRANSITION', { message: `입력 v${String(body.version)}의 실패한 차이 분석이 없습니다.` });
   }

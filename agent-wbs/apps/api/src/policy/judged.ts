@@ -19,7 +19,7 @@ export interface JudgedTask { taskKey: string; workType: WorkType; subjectHash: 
 export async function judgedTasks(client: PoolClient, taskIds: readonly string[]): Promise<JudgedTask[]> {
   const tasks = (await client.query<{ id: string; task_key: string; work_type: WorkType; title: string; conflict_group: string | null; overview: Record<string, unknown> | null; spec: Record<string, unknown> | null; ac: unknown[] | null; grade_change: string | null }>(
     `select t.id,t.task_key,t.work_type,t.title,t.conflict_group,s.overview,s.spec,s.ac,
-      (select h.ref->>'gradeChange' from task_history h where h.task=t.id and h.ref ? 'gradeChange' order by h.at desc,h.created_at desc limit 1) grade_change
+      (select h.ref->>'gradeChange' from task_history h where h.task=t.id and h.ref ? 'gradeChange' order by h.record_no desc limit 1) grade_change
      from tasks t left join task_specs s on s.task=t.id
      where t.id=any($1::uuid[]) order by t.task_key`, [taskIds])).rows;
   const outputs = (await client.query<{ task: string; name: string; kind: string; required: boolean; verify: string }>(

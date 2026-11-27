@@ -633,7 +633,8 @@
    "ci": {
     "nightAt": "02:00",
     "retry": 1,
-    "deployUrl": null
+    "deployUrl": null,
+    "quarantined": []
    },
    "claudeModels": [
     "claude-haiku-5-5",

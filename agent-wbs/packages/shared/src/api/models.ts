@@ -630,6 +630,10 @@ export const RepoStructure = c.Body({
 });
 
 /* ---- CI ---- */
+export const CiE2e = c.Body({ passed:c.Count,total:c.Count });
+export const CiGithubStatus = c.Body({ headSha:c.Sha,context:Text,state:AnyOf('pending','success','failure','error'),reportedAt:c.Timestamp,url:Opt(c.HttpUrl) });
+export const CiServiceConfig = c.Body({ path:c.RepoPath,commit:c.Sha,status:AnyOf('ok','error','missing'),raw:Nullable(Type.String()),error:Nullable(Type.String()) });
+export const CiObservedSettings = { serviceConfig:Opt(Nullable(CiServiceConfig)) };
 export const CiStep = c.Body({ name: Text, status: c.CiStatus, durationMs: c.Count });
 export const CiRun = Type.Object(
   {
@@ -649,10 +653,25 @@ export const CiRun = Type.Object(
     pipelineSha: Nullable(c.Sha),
     steps: List(CiStep),
     failStep: Nullable(Type.String()),
+    failScope: Opt(Nullable(c.AnyOf('baseline', 'task'))),
     logExcerpt: Nullable(Type.String()),
     artifacts: lines,
     url: Nullable(Type.String()),
     startedAt: c.Timestamp,
+    finishedAt:Opt(Nullable(c.Timestamp)),
+    note:Opt(Nullable(Type.String())),
+    e2e:Opt(Nullable(CiE2e)),
+    githubStatus:Opt(Nullable(CiGithubStatus)),
+    baselineResolved:Nullable(Type.Boolean()),
+    autoReintegrate:AnyOf('none','pending','blocked'),
+    autoReintegrateReason:Nullable(Type.String()),
+    retryAllowed:Type.Boolean(),
+    retryBlockedReason:Nullable(Type.String()),
+    taskStatus:Nullable(c.TaskStatus),
+    mergeStatus:Nullable(c.QueueStatus),
+    mergeCompleted:Type.Boolean(),
+    actualMergeSha:Nullable(c.Sha),
+    causeCandidates:Opt(List(c.Body({ commit:c.Sha,taskKey:Nullable(c.TaskKey) }))),
   },
   { title: 'CiRun' },
 );
@@ -668,6 +687,8 @@ export const MergeQueueItem = Type.Object(
     baseSha: Nullable(c.Sha),
     ciRunId: Nullable(c.Id),
     actualMergeSha: Nullable(c.Sha),
+    queuedAt:Opt(c.Timestamp),
+    mergedAt:Opt(Nullable(c.Timestamp)),
   },
   { title: 'MergeQueueItem' },
 );
@@ -1140,6 +1161,7 @@ export const ReportSnapshot = Type.Object(
 /** P CI_PIPE L3525. 원문은 main 커밋의 것이며 해석하지 못하면 stages가 null이다. */
 export const Pipeline = Type.Object(
   {
+    serviceConfig:Opt(CiServiceConfig),
     path: AnyOf('.agentwbs/pipeline.yaml'),
     commit: Nullable(c.Sha),
     status: AnyOf('ok', 'error', 'missing'),

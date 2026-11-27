@@ -71,7 +71,7 @@ export interface JobRow { id: string; kind: string; payload: Record<string, unkn
  */
 export async function leasedJob(db: Db, where: { id?: string; repoCheckId?: string }, kinds: readonly string[], fence: number, principal: string): Promise<JobRow> {
   const id = where.id ?? (await db.query<{ id: string }>(
-    "select id from runner_jobs where kind='repo_check' and payload->>'repoCheckId'=$1 order by created_at desc limit 1", [where.repoCheckId])).rows[0]?.id;
+    "select id from runner_jobs where kind='repo_check' and payload->>'repoCheckId'=$1 order by record_no desc limit 1", [where.repoCheckId])).rows[0]?.id;
   const kind = id && isUuid(id) ? (await db.query<{ kind: string }>('select kind from runner_jobs where id=$1', [id])).rows[0]?.kind : undefined;
   if (!id || !kind || !kinds.includes(kind)) throw new ProjectError('NOT_FOUND', { details: { resource: 'runner_job', id: where.id ?? where.repoCheckId } });
   // RunnerRepository는 query만 쓴다. 공통 관문이 연 같은 트랜잭션의 연결을 그대로 넘긴다.

@@ -123,7 +123,7 @@ export async function fillProjectTables(
         values.push('host', 'boot', 1, f.task);
       }
       const placeholders = names.map((_, i) => `$${i + 1}`).join(',');
-      const key = table === 'task_specs' ? 'task' : table === 'change_events' ? 'seq' : 'id';
+      const key = table === 'task_specs' ? 'task' : table === 'change_events' ? 'seq' : table === 'ci_merge_facts' ? 'merge_sha' : 'id';
       const row = (
         await c.query(
           `insert into ${c.escapeIdentifier(table)}(${names.map((name) => c.escapeIdentifier(name)).join(',')}) values(${placeholders}) returning ${c.escapeIdentifier(key)} as id`,

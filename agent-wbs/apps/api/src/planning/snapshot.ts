@@ -39,7 +39,7 @@ export async function loadSnapshot(client: Pick<PoolClient, 'query'>, projectId:
               (exists(select 1 from task_attempts a where a.task=t.id) or exists(select 1 from execution_holds h where h.task=t.id and h.closed_at is null)) as started,
               sp.basis,sp.judged_rules,sp.exceptions,e.est::text as est,e.lo::text as lo,e.hi::text as hi,e.confidence
          from tasks t left join task_specs s on s.task=t.id left join task_splits sp on sp.task=t.id
-         left join lateral (select est,lo,hi,confidence from task_estimates where project_id=t.project_id and task=t.id order by created_at desc,id desc limit 1) e on true
+         left join lateral (select est,lo,hi,confidence from task_estimates where project_id=t.project_id and task=t.id order by record_no desc limit 1) e on true
         where t.project_id=$1 and t.deleted_at is null order by t.task_key`, [projectId]),
     client.query<{ pred: string; succ: string; type: 'FS' | 'SS' }>(
       `select p.task_key as pred,s.task_key as succ,d.dep_type as type from task_dependencies d join tasks p on p.id=d.pred join tasks s on s.id=d.succ

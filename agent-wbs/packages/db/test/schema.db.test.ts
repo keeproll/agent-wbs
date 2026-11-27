@@ -140,7 +140,8 @@ test('schema: all planned tables and Drizzle columns match the migrated database
         col.getSQLType().replace('bigserial', 'bigint'),
       );
   }
-  expect(tables).toHaveLength(100);
+  // 결정 15의 불변 병합 사실 원장이 추가됐다.
+  expect(tables).toHaveLength(101);
 });
 
 test('schema: previous migration upgrades with data preserved and repeated migrate is inert', async () => {

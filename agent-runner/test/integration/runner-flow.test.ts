@@ -158,7 +158,7 @@ test('M4 결합: 연결부터 CLI 유휴 적용까지 한 시나리오', { timeo
         case 'GET /api/runner/policy':
           json(res, {
             caps: { ...caps, memReserveGB: 4 }, subagentBudget: { dev: 2, qa: 1 }, heartbeatSeconds: 60, inputCheckMinutes: 10,
-            ci: { nightAt: '02:00', retry: 1, deployUrl: null },
+            ci: { nightAt: '02:00', retry: 1, deployUrl: null, quarantined: [] },
             claudeModels: ['claude-opus-5-5', 'claude-sonnet-5-5'],
             cliGrades: [
               { agent: 'Codex', version: '0.172.0', model: 'gpt-6.2-sol', options: 'exec --json', grade: 'verified' },

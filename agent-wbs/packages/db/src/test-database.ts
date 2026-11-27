@@ -38,7 +38,7 @@ export async function recreateTestDatabase(value: string | undefined): Promise<s
   await client.connect();
   try {
     await client.query(`drop database if exists ${client.escapeIdentifier(name)} with (force)`);
-    await client.query(`create database ${client.escapeIdentifier(name)}`);
+    await client.query(`create database ${client.escapeIdentifier(name)} template template0 encoding 'UTF8' lc_collate 'C.UTF-8' lc_ctype 'C.UTF-8'`);
   } finally {
     await client.end();
   }

@@ -12059,6 +12059,16 @@
                           "testKey": {
                             "type": "string"
                           },
+                          "lastFailedAt": {
+                            "anyOf": [
+                              {
+                                "$ref": "#/components/schemas/Timestamp"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "rate": {
                             "type": "string"
                           },
@@ -12211,6 +12221,16 @@
                     },
                     "testKey": {
                       "type": "string"
+                    },
+                    "lastFailedAt": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/Timestamp"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     },
                     "rate": {
                       "type": "string"
@@ -12427,6 +12447,59 @@
                         }
                       ]
                     },
+                    "serviceConfig": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": [
+                            "path",
+                            "commit",
+                            "status",
+                            "raw",
+                            "error"
+                          ],
+                          "properties": {
+                            "path": {
+                              "$ref": "#/components/schemas/RepoPath"
+                            },
+                            "commit": {
+                              "$ref": "#/components/schemas/Sha"
+                            },
+                            "status": {
+                              "enum": [
+                                "ok",
+                                "error",
+                                "missing"
+                              ]
+                            },
+                            "raw": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "error": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "updatedAt": {
                       "anyOf": [
                         {
@@ -12588,6 +12661,59 @@
                         {
                           "type": "string",
                           "pattern": "^https?://[^\\s/@]+(/[^\\s]*)?$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "serviceConfig": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": [
+                            "path",
+                            "commit",
+                            "status",
+                            "raw",
+                            "error"
+                          ],
+                          "properties": {
+                            "path": {
+                              "$ref": "#/components/schemas/RepoPath"
+                            },
+                            "commit": {
+                              "$ref": "#/components/schemas/Sha"
+                            },
+                            "status": {
+                              "enum": [
+                                "ok",
+                                "error",
+                                "missing"
+                              ]
+                            },
+                            "raw": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "error": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "additionalProperties": false
                         },
                         {
                           "type": "null"
@@ -18493,6 +18619,59 @@
                         }
                       ]
                     },
+                    "serviceConfig": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": [
+                            "path",
+                            "commit",
+                            "status",
+                            "raw",
+                            "error"
+                          ],
+                          "properties": {
+                            "path": {
+                              "$ref": "#/components/schemas/RepoPath"
+                            },
+                            "commit": {
+                              "$ref": "#/components/schemas/Sha"
+                            },
+                            "status": {
+                              "enum": [
+                                "ok",
+                                "error",
+                                "missing"
+                              ]
+                            },
+                            "raw": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "error": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "updatedAt": {
                       "anyOf": [
                         {
@@ -18634,6 +18813,59 @@
                         {
                           "type": "string",
                           "pattern": "^https?://[^\\s/@]+(/[^\\s]*)?$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "serviceConfig": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": [
+                            "path",
+                            "commit",
+                            "status",
+                            "raw",
+                            "error"
+                          ],
+                          "properties": {
+                            "path": {
+                              "$ref": "#/components/schemas/RepoPath"
+                            },
+                            "commit": {
+                              "$ref": "#/components/schemas/Sha"
+                            },
+                            "status": {
+                              "enum": [
+                                "ok",
+                                "error",
+                                "missing"
+                              ]
+                            },
+                            "raw": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "error": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "additionalProperties": false
                         },
                         {
                           "type": "null"
@@ -25395,6 +25627,33 @@
                       },
                       "additionalProperties": false
                     }
+                  },
+                  "pipelineObservation": {
+                    "type": "object",
+                    "required": [
+                      "baseSha",
+                      "pipelineSha",
+                      "definition"
+                    ],
+                    "properties": {
+                      "baseSha": {
+                        "$ref": "#/components/schemas/Sha"
+                      },
+                      "pipelineSha": {
+                        "anyOf": [
+                          {
+                            "$ref": "#/components/schemas/Sha"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "definition": {
+                        "$ref": "#/components/schemas/Pipeline"
+                      }
+                    },
+                    "additionalProperties": false
                   }
                 },
                 "additionalProperties": false
@@ -26139,6 +26398,116 @@
                   "status": {
                     "$ref": "#/components/schemas/CiStatus"
                   },
+                  "failScope": {
+                    "enum": [
+                      "baseline",
+                      "task"
+                    ]
+                  },
+                  "causeCandidates": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "commit"
+                      ],
+                      "properties": {
+                        "commit": {
+                          "$ref": "#/components/schemas/Sha"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "uniqueItems": true
+                  },
+                  "note": {
+                    "type": "string"
+                  },
+                  "finishedAt": {
+                    "$ref": "#/components/schemas/Timestamp"
+                  },
+                  "e2e": {
+                    "type": "object",
+                    "required": [
+                      "passed",
+                      "total"
+                    ],
+                    "properties": {
+                      "passed": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "total": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "githubStatus": {
+                    "type": "object",
+                    "required": [
+                      "headSha",
+                      "context",
+                      "state",
+                      "reportedAt"
+                    ],
+                    "properties": {
+                      "headSha": {
+                        "$ref": "#/components/schemas/Sha"
+                      },
+                      "context": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      "state": {
+                        "enum": [
+                          "pending",
+                          "success",
+                          "failure",
+                          "error"
+                        ]
+                      },
+                      "reportedAt": {
+                        "$ref": "#/components/schemas/Timestamp"
+                      },
+                      "url": {
+                        "type": "string",
+                        "pattern": "^https?://[^\\s/@]+(/[^\\s]*)?$"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "flakyTests": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "testKey",
+                        "rate",
+                        "lastFailedAt"
+                      ],
+                      "properties": {
+                        "testKey": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "rate": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        },
+                        "lastFailedAt": {
+                          "$ref": "#/components/schemas/Timestamp"
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
                   "logExcerpt": {
                     "type": "string"
                   },
@@ -26315,6 +26684,103 @@
                   },
                   "actualTreeSha": {
                     "$ref": "#/components/schemas/Sha"
+                  },
+                  "mergedAt": {
+                    "$ref": "#/components/schemas/Timestamp"
+                  },
+                  "headSync": {
+                    "type": "object",
+                    "required": [
+                      "qaHeadSha",
+                      "headSha",
+                      "preserved",
+                      "parents",
+                      "autoMergeTreeSha",
+                      "headTreeSha",
+                      "additionalChanges"
+                    ],
+                    "properties": {
+                      "qaHeadSha": {
+                        "$ref": "#/components/schemas/Sha"
+                      },
+                      "headSha": {
+                        "$ref": "#/components/schemas/Sha"
+                      },
+                      "preserved": {
+                        "type": "boolean"
+                      },
+                      "parents": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/components/schemas/Sha"
+                        },
+                        "minItems": 2,
+                        "maxItems": 2
+                      },
+                      "autoMergeTreeSha": {
+                        "$ref": "#/components/schemas/Sha"
+                      },
+                      "headTreeSha": {
+                        "$ref": "#/components/schemas/Sha"
+                      },
+                      "additionalChanges": {
+                        "type": "boolean"
+                      },
+                      "chain": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "qaHeadSha",
+                            "headSha",
+                            "preserved",
+                            "parents",
+                            "autoMergeTreeSha",
+                            "headTreeSha",
+                            "additionalChanges"
+                          ],
+                          "properties": {
+                            "qaHeadSha": {
+                              "$ref": "#/components/schemas/Sha"
+                            },
+                            "headSha": {
+                              "$ref": "#/components/schemas/Sha"
+                            },
+                            "preserved": {
+                              "type": "boolean"
+                            },
+                            "parents": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/components/schemas/Sha"
+                              },
+                              "minItems": 2,
+                              "maxItems": 2
+                            },
+                            "autoMergeTreeSha": {
+                              "$ref": "#/components/schemas/Sha"
+                            },
+                            "headTreeSha": {
+                              "$ref": "#/components/schemas/Sha"
+                            },
+                            "additionalChanges": {
+                              "type": "boolean"
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "minItems": 2
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "mergeParents": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/Sha"
+                    },
+                    "minItems": 2,
+                    "maxItems": 2
                   }
                 },
                 "additionalProperties": false
@@ -26347,7 +26813,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "EPOCH_MISMATCH, EXTERNAL_WRITE_BLOCKED, GATE_NOT_PASSED, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST"
+            "description": "EPOCH_MISMATCH, EXTERNAL_WRITE_BLOCKED, GATE_NOT_PASSED, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST, MERGE_MISMATCH"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited",
@@ -26379,7 +26845,8 @@
             "GATE_NOT_PASSED",
             "IDEMPOTENCY_CONFLICT",
             "INVALID_TRANSITION",
-            "LEASE_LOST"
+            "LEASE_LOST",
+            "MERGE_MISMATCH"
           ],
           "429": [
             "RATE_LIMITED"
@@ -27194,7 +27661,8 @@
                       "required": [
                         "nightAt",
                         "retry",
-                        "deployUrl"
+                        "deployUrl",
+                        "quarantined"
                       ],
                       "properties": {
                         "nightAt": {
@@ -27216,6 +27684,15 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "quarantined": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          },
+                          "uniqueItems": true
                         }
                       }
                     },
@@ -32817,7 +33294,16 @@
           "logExcerpt",
           "artifacts",
           "url",
-          "startedAt"
+          "startedAt",
+          "baselineResolved",
+          "autoReintegrate",
+          "autoReintegrateReason",
+          "retryAllowed",
+          "retryBlockedReason",
+          "taskStatus",
+          "mergeStatus",
+          "mergeCompleted",
+          "actualMergeSha"
         ],
         "properties": {
           "id": {
@@ -32964,6 +33450,19 @@
               }
             ]
           },
+          "failScope": {
+            "anyOf": [
+              {
+                "enum": [
+                  "baseline",
+                  "task"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "logExcerpt": {
             "anyOf": [
               {
@@ -32992,6 +33491,194 @@
           },
           "startedAt": {
             "$ref": "#/components/schemas/Timestamp"
+          },
+          "finishedAt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "e2e": {
+            "anyOf": [
+              {
+                "type": "object",
+                "required": [
+                  "passed",
+                  "total"
+                ],
+                "properties": {
+                  "passed": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "total": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "githubStatus": {
+            "anyOf": [
+              {
+                "type": "object",
+                "required": [
+                  "headSha",
+                  "context",
+                  "state",
+                  "reportedAt"
+                ],
+                "properties": {
+                  "headSha": {
+                    "$ref": "#/components/schemas/Sha"
+                  },
+                  "context": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "state": {
+                    "enum": [
+                      "pending",
+                      "success",
+                      "failure",
+                      "error"
+                    ]
+                  },
+                  "reportedAt": {
+                    "$ref": "#/components/schemas/Timestamp"
+                  },
+                  "url": {
+                    "type": "string",
+                    "pattern": "^https?://[^\\s/@]+(/[^\\s]*)?$"
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "baselineResolved": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "autoReintegrate": {
+            "enum": [
+              "none",
+              "pending",
+              "blocked"
+            ]
+          },
+          "autoReintegrateReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "retryAllowed": {
+            "type": "boolean"
+          },
+          "retryBlockedReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "taskStatus": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mergeStatus": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QueueStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mergeCompleted": {
+            "type": "boolean"
+          },
+          "actualMergeSha": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Sha"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "causeCandidates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "commit",
+                "taskKey"
+              ],
+              "properties": {
+                "commit": {
+                  "$ref": "#/components/schemas/Sha"
+                },
+                "taskKey": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TaskKey"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
           }
         },
         "title": "CiRun"
@@ -35608,6 +36295,7 @@
                   "ACTIVE_TASK_BLOCKED",
                   "ORDER_NOT_PRESERVED",
                   "GATE_NOT_PASSED",
+                  "MERGE_MISMATCH",
                   "CLAIM_REJECTED",
                   "LEASE_LOST",
                   "CLEANUP_PENDING",
@@ -38642,6 +39330,19 @@
                 "type": "null"
               }
             ]
+          },
+          "queuedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "mergedAt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "title": "MergeQueueItem"
@@ -38791,6 +39492,52 @@
           "stages"
         ],
         "properties": {
+          "serviceConfig": {
+            "type": "object",
+            "required": [
+              "path",
+              "commit",
+              "status",
+              "raw",
+              "error"
+            ],
+            "properties": {
+              "path": {
+                "$ref": "#/components/schemas/RepoPath"
+              },
+              "commit": {
+                "$ref": "#/components/schemas/Sha"
+              },
+              "status": {
+                "enum": [
+                  "ok",
+                  "error",
+                  "missing"
+                ]
+              },
+              "raw": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "error": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
           "path": {
             "enum": [
               ".agentwbs/pipeline.yaml"

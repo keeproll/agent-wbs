@@ -7,6 +7,9 @@ import { reportInputChanges, reportProgress, reportRepoCheck, submitDraft, submi
 import type { StepStatus } from './steps.ts';
 import { inputErrors, OPERATIONS } from '@awbs/shared/api';
 import { ProjectError } from './errors.ts';
+import { resolveMovedBaselines } from '../ci/decisions.ts';
+import { RunnerRepository } from '../runner/repository.ts';
+import { enqueueIntegration } from '../execution/gate.ts';
 import { reportGithubStatus, type GithubReport } from './github.ts';
 
 const body = <T>(ctx: Ctx) => ctx.request.body as T;
@@ -27,7 +30,20 @@ export function installProjectRunner(app: FastifyInstance, pool: Pool): void {
       await reportGithubStatus(ctx.client, body<GithubReport>(ctx), ctx.principal);
     }, 204);
     routeOf(scope, pool, 'reportRepoCheck', (ctx) => reportRepoCheck(ctx.client, param(ctx, 'id'), body(ctx), ctx.principal), 204);
-    routeOf(scope, pool, 'reportInputChanges', (ctx) => reportInputChanges(ctx.client, body(ctx)));
+    routeOf(scope, pool, 'reportInputChanges', async (ctx) => {
+      const repo = new RunnerRepository(ctx.client); await repo.lock();
+      const result = await reportInputChanges(ctx.client,body(ctx));
+      if (!result.historyRewritten) {
+        const project = (await ctx.client.query<{ id: string }>('select id from projects')).rows[0];
+        if (project) {
+          for (const task of (await ctx.client.query<{ id: string }>("select id from tasks where project_id=$1 and status='gate' and deleted_at is null order by id",[project.id])).rows) {
+            await enqueueIntegration(ctx.client,task.id,ctx.epoch,{ baseSha:result.head,baselineOnly:true });
+          }
+          await resolveMovedBaselines(ctx.client,project.id);
+        }
+      }
+      return result;
+    });
     routeOf(scope, pool, 'reportBootstrapProgress', (ctx) =>
       reportProgress(ctx.client, param(ctx, 'jobId'), body<{ fence: number; stepKey: string; status: StepStatus; note?: string }>(ctx), ctx.principal), 204);
     routeOf(scope, pool, 'submitDraft', (ctx) => submitDraft(ctx.client, param(ctx, 'jobId'), body<DraftInput & { fence: number }>(ctx), ctx.principal), 201);
