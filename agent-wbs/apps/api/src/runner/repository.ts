@@ -16,8 +16,8 @@ export class RunnerRepository {
   constructor(client: PoolClient) { this.client = client; }
   async lock() { await this.client.query("select pg_advisory_xact_lock(hashtextextended('runner-dispatch',0))"); }
   async now() { return required((await this.client.query<{ at: Date }>('select clock_timestamp() as at')).rows[0]).at; }
-  async host() { return (await this.client.query<typeof schema.runnerHosts.$inferSelect>('select * from runner_hosts order by seen_at desc,created_at desc limit 1')).rows[0]; }
-  async hostBoot(host: string) { return (await this.client.query<{ boot_id: string }>('select boot_id from runner_hosts where host_id=$1 order by seen_at desc,created_at desc limit 1', [host])).rows[0]?.boot_id; }
+  async host() { return (await this.client.query<typeof schema.runnerHosts.$inferSelect>('select * from runner_hosts order by record_no desc limit 1')).rows[0]; }
+  async hostBoot(host: string) { return (await this.client.query<{ boot_id: string }>('select boot_id from runner_hosts where host_id=$1 order by record_no desc limit 1', [host])).rows[0]?.boot_id; }
   async authority() { return (await this.client.query<typeof schema.externalWriteAuthority.$inferSelect>('select * from external_write_authority where singleton for update')).rows[0]; }
   async cleanup() { return Boolean((await this.client.query("select 1 from system_state where cleanup_status='pending' union all select 1 from runner_commands where status<>'done' limit 1")).rowCount); }
   async task(key: string) { return (await this.client.query<Task>('select * from tasks where task_key=$1 and deleted_at is null for update', [key])).rows[0]; }
@@ -29,7 +29,7 @@ export class RunnerRepository {
   async candidates(kinds: readonly string[], epoch: number) {
     return (await this.client.query<Job>(`select * from runner_jobs where epoch=$1 and kind=any($2::job_kind[]) and
       (state='queued' or kind='repo_check' and state in ('leased','started') and lease_until<=clock_timestamp())
-      order by created_at,id for update skip locked`, [epoch, kinds])).rows;
+      order by record_no for update skip locked`, [epoch, kinds])).rows;
   }
   async holds() { return (await this.client.query<Hold>('select * from execution_holds where closed_at is null for update')).rows; }
   async hold(job: string) { return (await this.client.query<Hold>('select * from execution_holds where job=$1 for update', [job])).rows[0]; }
@@ -44,11 +44,11 @@ export class RunnerRepository {
   async policy() { return required((await this.client.query<ExecPolicyRow>('select * from exec_policy where singleton')).rows[0]); }
   async settings() { return (await this.client.query<typeof schema.concurrencySettings.$inferSelect>('select * from concurrency_settings where singleton')).rows[0]; }
   async appSettings() { return required((await this.client.query<typeof schema.appSettings.$inferSelect>('select * from app_settings where singleton')).rows[0]); }
-  async usage(agent: string) { return (await this.client.query<{ remain_pct: string }>('select remain_pct from agent_usage where agent=$1 order by created_at desc limit 1', [agent])).rows[0]; }
+  async usage(agent: string) { return (await this.client.query<{ remain_pct: string }>('select remain_pct from agent_usage where agent=$1 order by record_no desc limit 1', [agent])).rows[0]; }
   async readiness() { return (await this.client.query<typeof schema.runnerReadiness.$inferSelect>('select * from runner_readiness')).rows; }
-  async concurrency() { return (await this.client.query<PgRow<typeof schema.runnerConcurrencyLog.$inferSelect>>('select * from runner_concurrency_log where host_id=(select host_id from runner_hosts order by seen_at desc,created_at desc limit 1) order by created_at desc limit 1')).rows[0]; }
+  async concurrency() { return (await this.client.query<PgRow<typeof schema.runnerConcurrencyLog.$inferSelect>>('select * from runner_concurrency_log where host_id=(select host_id from runner_hosts order by record_no desc limit 1) order by record_no desc limit 1')).rows[0]; }
   async observations() { return (await this.client.query<typeof schema.cliObservationGrades.$inferSelect>('select * from cli_observation_grades')).rows; }
-  async latestObservation(attempt: string) { return (await this.client.query<typeof schema.attemptObservations.$inferSelect>('select * from attempt_observations where attempt=$1 order by at desc,created_at desc limit 1', [attempt])).rows[0]; }
+  async latestObservation(attempt: string) { return (await this.client.query<typeof schema.attemptObservations.$inferSelect>('select * from attempt_observations where attempt=$1 order by record_no desc limit 1', [attempt])).rows[0]; }
   async dependencies(task: string) {
     return (await this.client.query<{ dep_type: 'FS' | 'SS'; status: Task['status'] }>('select d.dep_type,t.status from task_dependencies d join tasks t on t.id=d.pred where d.succ=$1', [task])).rows;
   }
@@ -56,7 +56,7 @@ export class RunnerRepository {
     const check = (await this.client.query<{ passed: boolean }>(`select c.status='pass' and c.spec_revision=s.revision
       and c.input_version is not distinct from coalesce(t.src_input_version,(select id from input_versions where project_id=t.project_id order by v desc limit 1)) passed
       from ci_runs c join task_specs s on s.task=c.task join tasks t on t.id=c.task
-      where c.task=$1 and c.stage=1 and c.head_sha=$2 order by c.created_at desc,c.id desc limit 1`, [task.id, head ?? null])).rows[0];
+      where c.task=$1 and c.stage=1 and c.head_sha=$2 order by c.run_no desc limit 1`, [task.id, head ?? null])).rows[0];
     if (check) return Boolean(check.passed);
     // shortcut: M7-06에서 제거할 흐름 전용 자리표시다. 실제 CI가 있으면 그 결과가 우선하며 Gate의 ① 근거로 쓰지 않는다.
     return Boolean((await this.client.query(`select 1 from task_attempts a join tasks t on t.id=a.task join task_specs s on s.task=t.id
@@ -139,7 +139,7 @@ export class RunnerRepository {
   async inputRecheck() { return (await this.client.query<{ n: number }>("select coalesce(max((target->>'recheck')::int),0)::int n from alerts where key='input_history_rewritten' and resolved_at is null")).rows[0]?.n ?? 0; }
   async inputCheckRequest() { return (await this.client.query<{ n: number }>('select input_check_request n from projects')).rows[0]?.n ?? 0; }
   async heartbeat(runner: string) { await this.client.query('update runner_sessions set last_heartbeat_at=clock_timestamp() where runner_id=$1 and ended_at is null', [runner]); }
-  async sessions() { return (await this.client.query<PgRow<typeof schema.runnerSessions.$inferSelect>>('select * from runner_sessions order by started_at')).rows; }
+  async sessions() { return (await this.client.query<PgRow<typeof schema.runnerSessions.$inferSelect>>('select * from runner_sessions order by record_no')).rows; }
   async session(runner: string, event: string, at: string, reason?: string) {
     if (event === 'start') await this.client.query('insert into runner_sessions(runner_id,started_at,last_heartbeat_at) values($1,$2,$2)', [runner, at]);
     else await this.client.query('update runner_sessions set ended_at=$2,end_reason=$3 where runner_id=$1 and ended_at is null', [runner, at, reason ?? 'manual']);
@@ -189,8 +189,8 @@ export class RunnerRepository {
     for (const d of defs) await this.client.query("insert into attempt_subagents(project_id,attempt,subagent,designated,installed,version,def_hash) values($1,$2,$3,true,true,$4,$5)", [task.project_id,attemptId,d.id,d.version,d.hash]);
   }
   async allTasks() { return (await this.client.query<Task>('select * from tasks where deleted_at is null')).rows; }
-  async hostHistory() { return (await this.client.query<PgRow<typeof schema.runnerHosts.$inferSelect>>('select * from runner_hosts order by seen_at desc,created_at desc limit 20')).rows; }
-  async allUsage() { return (await this.client.query<PgRow<typeof schema.agentUsage.$inferSelect>>("select distinct on(agent) * from agent_usage order by agent,created_at desc")).rows; }
+  async hostHistory() { return (await this.client.query<PgRow<typeof schema.runnerHosts.$inferSelect>>('select * from runner_hosts order by record_no desc limit 20')).rows; }
+  async allUsage() { return (await this.client.query<PgRow<typeof schema.agentUsage.$inferSelect>>("select distinct on(agent) * from agent_usage order by agent,record_no desc")).rows; }
   async ciSettings() { return required((await this.client.query<typeof schema.ciSettings.$inferSelect>('select * from ci_settings where singleton')).rows[0]); }
   async githubSettings() { return (await this.client.query<typeof schema.githubSettings.$inferSelect>('select * from github_settings where singleton')).rows[0]; }
   async grantAuthority(generation: number) { return (await this.client.query("update external_write_authority set state='granted',blocked_reason=null,reconciled_at=clock_timestamp() where singleton and generation=$1 returning generation", [generation])).rowCount; }

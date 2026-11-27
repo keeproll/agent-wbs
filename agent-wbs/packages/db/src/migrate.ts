@@ -4,8 +4,8 @@ import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { readMigrationFiles } from 'drizzle-orm/migrator';
 import type { Pool } from './pool.ts';
 
-export async function runMigrations(pool: Pool): Promise<void> {
-  const config = { migrationsFolder: fileURLToPath(new URL('../migrations', import.meta.url)) };
+export async function runMigrations(pool: Pool, migrationsFolder = fileURLToPath(new URL('../migrations', import.meta.url))): Promise<void> {
+  const config = { migrationsFolder };
   const client = await pool.connect();
   try {
     await client.query("select pg_advisory_lock(hashtextextended('awbs:migrations',0))");
@@ -26,6 +26,9 @@ export async function runMigrations(pool: Pool): Promise<void> {
       }
     }
     await migrate(drizzle(client), config);
+    const applied = new Set((await client.query<{ hash: string }>('select hash from drizzle.__drizzle_migrations')).rows.map(row => row.hash));
+    const missing = readMigrationFiles(config).filter(file => !applied.has(file.hash));
+    if (missing.length) throw new Error(`적용되지 않은 마이그레이션이 있습니다. journal 순서를 확인하세요: ${missing.map(file => file.hash).join(', ')}`);
   } finally {
     try { await client.query("select pg_advisory_unlock(hashtextextended('awbs:migrations',0))"); }
     finally { client.release(); }

@@ -225,7 +225,7 @@ export type Domain = "FE" | "BE" | "DB" | "DevOps" | "API" | "QA" | "Architectur
 
 export type ErrorResponse = {
   error: {
-    code: "VALIDATION_FAILED" | "DEPENDENCY_SELF" | "LIMIT_EXCEEDS_CAP" | "IDEMPOTENCY_KEY_REQUIRED" | "LEAD_UNAUTHORIZED" | "RUNNER_UNAUTHORIZED" | "LOGIN_FAILED" | "FORBIDDEN_PRINCIPAL" | "TASK_NOT_FOUND" | "PROJECT_NOT_FOUND" | "WBS_NODE_NOT_FOUND" | "DEPENDENCY_NOT_FOUND" | "ATTEMPT_NOT_FOUND" | "MESSAGE_NOT_FOUND" | "NOT_FOUND" | "VERSION_CONFLICT" | "EPOCH_MISMATCH" | "DEPENDENCY_DUPLICATE" | "RECIPIENT_DUPLICATE" | "DEPENDENCY_CYCLE" | "TASK_HAS_SUCCESSORS" | "EXTERNAL_WRITE_BLOCKED" | "PROJECT_EXISTS" | "INPUT_UNCHANGED" | "ATTEMPT_CLOSED" | "SCHEDULE_CYCLE" | "INVALID_TRANSITION" | "SPLIT_JUDGEMENT_REQUIRED" | "ACTIVE_TASK_BLOCKED" | "ORDER_NOT_PRESERVED" | "GATE_NOT_PASSED" | "CLAIM_REJECTED" | "LEASE_LOST" | "CLEANUP_PENDING" | "IDEMPOTENCY_CONFLICT" | "DECISIONS_PENDING" | "SUBAGENT_INSTALL_FAILED" | "RATE_LIMITED" | "INTERNAL" | "UNAVAILABLE" | "PDF_FAILED";
+    code: "VALIDATION_FAILED" | "DEPENDENCY_SELF" | "LIMIT_EXCEEDS_CAP" | "IDEMPOTENCY_KEY_REQUIRED" | "LEAD_UNAUTHORIZED" | "RUNNER_UNAUTHORIZED" | "LOGIN_FAILED" | "FORBIDDEN_PRINCIPAL" | "TASK_NOT_FOUND" | "PROJECT_NOT_FOUND" | "WBS_NODE_NOT_FOUND" | "DEPENDENCY_NOT_FOUND" | "ATTEMPT_NOT_FOUND" | "MESSAGE_NOT_FOUND" | "NOT_FOUND" | "VERSION_CONFLICT" | "EPOCH_MISMATCH" | "DEPENDENCY_DUPLICATE" | "RECIPIENT_DUPLICATE" | "DEPENDENCY_CYCLE" | "TASK_HAS_SUCCESSORS" | "EXTERNAL_WRITE_BLOCKED" | "PROJECT_EXISTS" | "INPUT_UNCHANGED" | "ATTEMPT_CLOSED" | "SCHEDULE_CYCLE" | "INVALID_TRANSITION" | "SPLIT_JUDGEMENT_REQUIRED" | "ACTIVE_TASK_BLOCKED" | "ORDER_NOT_PRESERVED" | "GATE_NOT_PASSED" | "MERGE_MISMATCH" | "CLAIM_REJECTED" | "LEASE_LOST" | "CLEANUP_PENDING" | "IDEMPOTENCY_CONFLICT" | "DECISIONS_PENDING" | "SUBAGENT_INSTALL_FAILED" | "RATE_LIMITED" | "INTERNAL" | "UNAVAILABLE" | "PDF_FAILED";
     message: string;
     action: string;
     fix: string;
@@ -479,6 +479,27 @@ export type JudgedSplitProposalOp = {
 };
 
 export type PassFail = "PASS" | "FAIL" | "BLOCKED";
+
+export type Pipeline = {
+  serviceConfig?: {
+    path: RepoPath;
+    commit: Sha;
+    status: "ok" | "error" | "missing";
+    raw: string | null;
+    error: string | null;
+  };
+  path: ".agentwbs/pipeline.yaml";
+  commit: Sha | null;
+  status: "ok" | "error" | "missing";
+  error: string | null;
+  raw: string | null;
+  stages: ({
+    stage: CiStage;
+    when: string;
+    gate: string;
+    steps: (string)[];
+  })[] | null;
+};
 
 export type PlanningProposalOp = {
   op: "add";
@@ -1231,6 +1252,11 @@ export interface Operations {
           author: string;
           message: string;
         })[];
+        pipelineObservation?: {
+          baseSha: Sha;
+          pipelineSha: Sha | null;
+          definition: Pipeline;
+        };
       };
       epoch: number;
       idempotencyKey: string;
@@ -1345,6 +1371,25 @@ export interface Operations {
           durationMs: number;
         })[];
         status?: CiStatus;
+        failScope?: "baseline" | "task";
+        note?: string;
+        finishedAt?: Timestamp;
+        e2e?: {
+          passed: number;
+          total: number;
+        };
+        githubStatus?: {
+          headSha: Sha;
+          context: string;
+          state: "pending" | "success" | "failure" | "error";
+          reportedAt: Timestamp;
+          url?: string;
+        };
+        flakyTests?: ({
+          testKey: string;
+          rate: number;
+          lastFailedAt: Timestamp;
+        })[];
         logExcerpt?: string;
         artifacts?: (string)[];
         url?: string;
@@ -1377,6 +1422,26 @@ export interface Operations {
         testedTreeSha?: Sha;
         actualMergeSha?: Sha;
         actualTreeSha?: Sha;
+        mergedAt?: Timestamp;
+        headSync?: {
+          qaHeadSha: Sha;
+          headSha: Sha;
+          preserved: boolean;
+          parents: (Sha)[];
+          autoMergeTreeSha: Sha;
+          headTreeSha: Sha;
+          additionalChanges: boolean;
+          chain?: ({
+            qaHeadSha: Sha;
+            headSha: Sha;
+            preserved: boolean;
+            parents: (Sha)[];
+            autoMergeTreeSha: Sha;
+            headTreeSha: Sha;
+            additionalChanges: boolean;
+          })[];
+        };
+        mergeParents?: (Sha)[];
       };
       epoch: number;
       idempotencyKey: string;

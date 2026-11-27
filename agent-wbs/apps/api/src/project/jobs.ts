@@ -21,7 +21,7 @@ export async function lockPlanningJob(db: Db, id: string): Promise<PlanningJob> 
 /** 현재 초기 분석 작업. 프로젝트당 하나다(초기화하면 프로젝트와 함께 지워진다). */
 export async function bootstrapJob(db: Db, projectId: string): Promise<PlanningJob | undefined> {
   return (await db.query<PlanningJob>(
-    "select id,project_id,kind,run_no,status,instruction from planning_jobs where project_id=$1 and kind='bootstrap' order by created_at desc limit 1 for update", [projectId])).rows[0];
+    "select id,project_id,kind,run_no,status,instruction from planning_jobs where project_id=$1 and kind='bootstrap' order by record_no desc limit 1 for update", [projectId])).rows[0];
 }
 
 export async function steps(db: Db, jobId: string): Promise<Map<string, StepStatus>> {
@@ -64,7 +64,7 @@ export async function followUpJob(db: Db, job: PlanningJob, epoch: number, chang
   const previous = (await db.query<{ payload: Record<string, unknown>; n: string }>(
     `select payload,(select coalesce(max((split_part(dedup_key,':',3))::int),0) from runner_jobs
        where split_part(dedup_key,':',2)=$1 and split_part(dedup_key,':',1) in ('bootstrap','input_diff')) n
-     from runner_jobs where payload->>'planningJobId'=$1 order by created_at desc limit 1`, [job.id])).rows[0];
+     from runner_jobs where payload->>'planningJobId'=$1 order by record_no desc limit 1`, [job.id])).rows[0];
   const count = Number(previous?.n ?? 0);
   const payload = { ...previous?.payload, ...change.base, planningJobId: job.id, runNo: job.run_no, resumeStep: change.resumeStep, instruction: change.instruction ?? job.instruction };
   return enqueueJob(db, { projectId: job.project_id, kind: job.kind, payload, epoch, dedupKey: `${job.kind}:${job.id}:${String(count + 1)}` });

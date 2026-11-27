@@ -301,10 +301,15 @@ test.each(['자동','버튼'])('%s 완료는 실제 병합·통합과 서버가 
   expect((await complete()).statusCode).toBe(409);
   const verification = ((await owner.query('select id from verifications where attempt=$1',[a.attempt])).rows[0] as { id: string }).id;
   const job = ((await owner.query("select id from runner_jobs where kind='integrate'")).rows[0] as { id: string }).id;
+  await owner.query('update runner_jobs set fence=1 where id=$1',[job]);
   const ci = ((await owner.query("insert into ci_runs(project_id,run_key,stage,pipeline_sha,head_sha,base_sha,tree_sha,ref,task,trigger,status,job,fence) values($1,$2,2,$3,$4,$4,$5,'agent/test',$6,'int','pass',$7,1) returning id",[project,randomUUID(),otherSha,sha,otherSha,a.id,job])).rows[0] as { id: string }).id;
   await owner.query("insert into merge_queue(project_id,task,pr,position,status,qa_head_sha,synced_head_sha,base_sha,verification,ci_run,tested_tree_sha,actual_merge_sha,actual_tree_sha) values($1,$2,1,1,'merged',$3,$3,$3,$4,$5,$6,$7,$6)",[project,a.id,sha,verification,ci,otherSha,'d'.repeat(40)]);
+  await owner.query('update merge_queue set merge_parents=$2::jsonb where task=$1',[a.id,JSON.stringify([sha,sha])]);
   expect((await complete()).json()).toMatchObject({ error:{ code:'GATE_NOT_PASSED' } });
   await owner.query('update ci_runs set pipeline_sha=$2 where id=$1',[ci,pipeline]);
+  await owner.query('update merge_queue set merge_parents=null where task=$1',[a.id]);
+  expect((await complete()).statusCode).toBe(409);
+  await owner.query('update merge_queue set merge_parents=$2::jsonb where task=$1',[a.id,JSON.stringify([sha,sha])]);
   awaitVersion = await version(a.key);
   if (mode === '자동') {
     await inEpoch(pool,1,client => completeMergedTask(client,a.key,pipeline));
@@ -400,7 +405,10 @@ test('Gate에서 명세 변경 뒤 새 ① 검사를 하면 새 revision의 재�
     await client.query('update task_specs set revision=2 where task=$1',[a.id]);
     await invalidateTaskGate(client,a.key);
   });
-  await check(a);
+  const freshCheck = await check(a);
+  await owner.query('set session_replication_role=replica');
+  await owner.query("update ci_runs set created_at='2000-01-01' where id=$1",[freshCheck]);
+  await owner.query('set session_replication_role=origin');
   const request = await app.inject({ method:'POST',url:`/api/tasks/${a.key}/runs`,headers:lead(),payload:{ updatedAt:await version(a.key),kind:'reverify' } });
   expect(request.statusCode,request.body).toBe(202);
   const retry = await next(a); expect(retry.kind).toBe('reverify');

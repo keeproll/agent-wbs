@@ -47,11 +47,11 @@ test('빈 DB와 0014·0016(master)·0017·0018·0019·0020·0021 단계 DB가 �
   expect(journal.entries.slice(15).map((e) => e.tag)).toEqual([
     '0015_20261126_platform_epoch_lock', '0016_20261126_contract_sync', '0017_20261126_usage_reset_unknown',
     '0018_20261126_message_read_touch', '0019_20261126_schedule_defaults', '0020_20261126_execution_basis',
-    '0021_20261127_project_followup', '0022_20261127_evidence_reference', '0023_20261127_project_observation_version', '0024_20261127_settings_followup', '0025_20261127_setting_versions']);
+    '0021_20261127_project_followup', '0022_20261127_evidence_reference', '0023_20261127_project_observation_version', '0024_20261127_settings_followup', '0025_20261127_setting_versions', '0041_20261127_ci_reports']);
   const fresh = await database('fresh');
   await runMigrations(fresh);
   const expected = await schemaOf(fresh);
-  for (const stage of [14, 16, 17, 18, 19, 20, 21, 22, 23, 24]) {
+  for (const stage of [14, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]) {
     const pool = await database(String(stage));
     const folder = await mkdtemp(join(tmpdir(), `awbs-stage-${String(stage)}-`));
     try {
@@ -64,7 +64,21 @@ test('빈 DB와 0014·0016(master)·0017·0018·0019·0020·0021 단계 DB가 �
       values('기존 프로젝트','','','','','active','2000-01-01T20:00:00Z')`);
     let attempts: unknown[] = [];
     if (stage === 23) {
-      await seedDemo(pool, base.href);
+      // 최신 seed에 필요한 관측 칸만 잠시 빌린 뒤 0023 구조로 되돌려 실제 업그레이드를 검사한다.
+      await pool.query("alter table projects add column pipeline_observations jsonb not null default '{}'");
+      const sequenceTables = ['planning_jobs','task_estimates','change_proposals','runner_jobs','task_attempts','attempt_observations','runner_hosts','runner_concurrency_log','agent_usage','task_history','ci_steps','runner_sessions'];
+      for (const table of sequenceTables) await pool.query(`alter table ${table} add column record_no bigint default 1`);
+      await pool.query('alter table ci_runs add column note text,add column e2e jsonb,add column github_status jsonb,add column finished_at timestamptz');
+      await pool.query('alter table merge_queue add column merged_at timestamptz');
+      await pool.query('alter table flaky_tests add column last_failed_at timestamptz');
+      try { await seedDemo(pool, base.href); }
+      finally {
+        await pool.query('alter table projects drop column pipeline_observations');
+        await pool.query('alter table ci_runs drop column note,drop column e2e,drop column github_status,drop column finished_at');
+        await pool.query('alter table merge_queue drop column merged_at');
+        await pool.query('alter table flaky_tests drop column last_failed_at');
+        for (const table of sequenceTables) await pool.query(`alter table ${table} drop column record_no`);
+      }
       await pool.query('alter table counters disable trigger counter_monotone');
       await pool.query("update counters set value=1 where kind='message'");
       await pool.query('alter table counters enable trigger counter_monotone');

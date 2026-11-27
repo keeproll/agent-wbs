@@ -17,6 +17,8 @@ test('PostgreSQL 16 테스트 DB에 연결된다', async () => {
   expect(await pingDatabase(pool)).toBeGreaterThanOrEqual(0);
   const { rows } = await pool.query<{ server_version: string }>('show server_version');
   expect(rows[0]?.server_version).toMatch(/^16\./);
+  expect((await pool.query('select datcollate,datctype from pg_database where datname=current_database()')).rows)
+    .toEqual([{ datcollate:'C.UTF-8',datctype:'C.UTF-8' }]);
 });
 
 test('빈 DB에 migrate할 수 있고 반복해도 같다', async () => {
