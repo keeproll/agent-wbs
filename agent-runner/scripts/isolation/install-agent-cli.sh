@@ -15,6 +15,8 @@
 #   2. /srv/agentwbs/cli/<claude|codex|pnpm>/<버전>/ 에 설치한다(임시 폴더에 설치 → 점검 → 이름 바꾸기).
 #      pnpm은 ①·CI 검사 명령(래퍼 ci-run)이 Agent 계정의 고정 PATH에서 찾는다(조정자 결정 1). Agent용 node에는 corepack이 없다.
 #   3. 설치한 프로그램이 그 버전을 말하는지(--version) 확인한다. 돈이 드는 호출은 하지 않는다.
+#      이 확인은 Agent 계정으로 한다(래퍼 cli-version, 조정자 결정 8). 새로 받은 프로그램을 Runner 계정으로 실행하지 않는다.
+#      그래서 setup-agent-user.sh(래퍼·sudoers 설치)를 먼저 실행해야 한다.
 #   4. current 링크를 새 버전으로 한 번에 바꾼다.
 # bash 전용이다. sh(dash)로 부르면 pipefail에서 알 수 없는 오류가 나므로 여기서 먼저 멈춘다.
 if [ -z "${BASH_VERSION:-}" ]; then echo "bash로 실행하세요. 예: bash $0" >&2; exit 2; fi
@@ -97,13 +99,15 @@ for agent in claude codex pnpm; do
     if ! act npm install --prefix "$stage" "$pkg@$latest" "${NPM_FLAGS[@]}" --no-audit --no-fund "${scripts[@]}"; then
       rm -rf -- "$stage"; note '설치 실패. 이전 버전을 그대로 둡니다.'; FAILED=1; continue
     fi
-    bin=$stage/bin/$agent
-    # 실행 파일이 설치 폴더 안에 있고, 그 버전을 말하는지 본다(돈이 드는 호출 없음).
-    real=$(realpath -e -- "$bin" 2> /dev/null || true)
-    if [[ $real != "$stage"/* ]] || ! "$bin" --version 2> /dev/null | grep -Fq "$latest"; then
-      rm -rf -- "$stage"; note '설치한 CLI 점검 실패. 이전 버전을 그대로 둡니다.'; FAILED=1; continue
+    real=$(realpath -e -- "$stage/bin/$agent" 2> /dev/null || true)
+    if [[ $real != "$stage"/* ]]; then
+      rm -rf -- "$stage"; note '설치한 CLI 점검 실패(실행 파일이 설치 폴더 밖). 이전 버전을 그대로 둡니다.'; FAILED=1; continue
     fi
     act mv -T -- "$stage" "$base/$latest"
+    # 그 버전을 말하는지 Agent 계정으로 본다(래퍼 cli-version, 진입점 규칙). 새 프로그램을 Runner 계정으로 실행하지 않는다.
+    if ! sudo -n -u "$AGENT_USER" -- "$EXEC_PATH" cli-version --tool "$agent" -- "$base/$latest/bin/$agent" 2> /dev/null | grep -Fq "$latest"; then
+      rm -rf -- "${base:?}/$latest"; note '설치한 CLI 점검 실패(Agent 계정 --version). 이전 버전을 그대로 둡니다.'; FAILED=1; continue
+    fi
   fi
   # current 링크를 한 번에 바꾼다(임시 링크를 만든 뒤 이름 바꾸기). 실행 중인 세션은 이미 실제 경로로 고정돼 영향이 없다.
   act ln -s -- "$latest" "$base/.current-new"

@@ -1,20 +1,19 @@
 // M8 전 연결: 전용 계정 배치에서 Agent가 자기 파일 권한을 지워 작업 폴더 삭제가 막히면 래퍼 fix-perms로 되돌린 뒤 지운다.
-// 같은 계정 시험에서는 권한 거부를 만들 수 없어 rm만 한 번 EACCES로 바꾼다. 실제 Agent 계정 재현은 dedicated-scope.host.ts.
+// 같은 계정 시험에서는 권한 거부를 만들 수 없어 삭제(treeOps.remove)만 한 번 EACCES로 바꾼다. 실제 Agent 계정 재현은 dedicated-scope.host.ts.
 import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, expect, test } from 'vitest';
 
 const blocked = new Set<string>();
-vi.mock('node:fs/promises', async (original) => {
-  const actual = await original<typeof import('node:fs/promises')>();
-  return { ...actual, rm: async (path: Parameters<typeof actual.rm>[0], options?: Parameters<typeof actual.rm>[1]) => {
-    if (typeof path === 'string' && blocked.delete(path)) throw Object.assign(new Error('권한 없음(시험)'), { code: 'EACCES' });
-    return actual.rm(path, options);
-  } };
-});
-const { GitRepository } = await import('../../src/git/repository.ts');
+const { GitRepository, treeOps } = await import('../../src/git/repository.ts');
+const realRemove = treeOps.remove;
+// 같은 계정 시험에서는 권한 거부를 만들 수 없어, 그 경로의 첫 삭제만 EACCES로 바꾼다.
+treeOps.remove = async (path: string) => {
+  if (blocked.delete(path)) throw Object.assign(new Error('권한 없음(시험)'), { code: 'EACCES' });
+  return realRemove(path);
+};
 
 let root: string, remote: string, base: string;
 const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgSign=false', ...args],

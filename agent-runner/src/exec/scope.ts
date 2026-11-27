@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { Agent } from '../api/generated/client.ts';
 import type { IsolationLayer, Launch } from '../cli/isolation.ts';
@@ -106,9 +106,25 @@ export function withUserScope(inner: IsolationLayer): IsolationLayer {
  */
 export async function probeUserScope(run: RunCommand): Promise<string | null> {
   const env = Object.entries(scopeEnv()).map(([key, value]) => `${key}=${value ?? ''}`);
-  const result = await run('/usr/bin/env', ['-i', ...env, SYSTEMD_RUN, '--user', '--scope', '--quiet', '--collect', '--slice=app.slice', '--', '/bin/true']);
-  if (result.code === 0) return null;
-  return '사용자 systemd scope를 만들 수 없습니다(linger·로그인 세션 확인: loginctl enable-linger).';
+  const unit = newScopeUnit();
+  // scope 안에서 cgroup 파일 시스템 종류와 자기 cgroup 경로를 읽는다(방어 점검 4, 조정자 결정 8).
+  // 왜: 정리·증거는 계산한 경로(scopeCgroup)를 본다. 이 PC에서 실제 경로가 다르면(cgroup v1·혼합, 다른 slice) 「없음=비었음」이 거짓 증거가 된다.
+  const result = await run('/usr/bin/env', ['-i', ...env, SYSTEMD_RUN, '--user', '--scope', '--quiet', '--collect', '--slice=app.slice', `--unit=${unit}`,
+    '--', '/bin/sh', '-c', 'stat -f -c %T /sys/fs/cgroup; cat /proc/self/cgroup']);
+  if (result.code !== 0) return '사용자 systemd scope를 만들 수 없습니다(linger·로그인 세션 확인: loginctl enable-linger).';
+  if (result.stdout !== `cgroup2fs\n0::${scopeCgroupPath(unit)}\n`) return '사용자 scope의 cgroup 위치가 예상과 다릅니다(cgroup v2 단일 계층과 app.slice 필요).';
+  return null;
+}
+
+/** 이 cgroup 경로(`0::<경로>`)에 든 프로세스가 /proc에 하나라도 있는가. 다른 계정 프로세스의 /proc/<pid>/cgroup도 읽힌다. */
+async function hasMembers(unit: string): Promise<boolean> {
+  const line = `0::${scopeCgroupPath(unit)}`;
+  for (const name of await readdir('/proc')) {
+    if (!/^[1-9]\d*$/.test(name)) continue;
+    try { if ((await readFile(`/proc/${name}/cgroup`, 'utf8')).split('\n').includes(line)) return true; }
+    catch (e) { if (!['ENOENT', 'ESRCH'].includes((e as NodeJS.ErrnoException).code ?? '')) throw e; }
+  }
+  return false;
 }
 
 const gone = (e: unknown) => (e as NodeJS.ErrnoException).code === 'ENOENT';
@@ -121,7 +137,8 @@ export async function scopeEmpty(unit: string): Promise<boolean> {
     if (populated === undefined) throw new Error('cgroup.events 형식이 다릅니다.');
     return populated === '0';
   } catch (e) {
-    if (gone(e)) return true;
+    // scope 폴더가 없다고 바로 「비었다」로 보지 않는다(방어 점검 4). /proc에서 그 경로의 프로세스가 정말 없는지 대조한다.
+    if (gone(e)) return !await hasMembers(unit);
     throw e;
   }
 }
@@ -138,8 +155,8 @@ export async function clearScope(unit: string, timeoutMs = 2_000): Promise<boole
     if (await scopeEmpty(unit)) return true;
     await writeFile(`${path}/cgroup.kill`, '1');
   } catch (e) {
-    // 확인과 쓰기 사이에 비어서 systemd가 지웠다.
-    if (gone(e)) return true;
+    // 확인과 쓰기 사이에 비어서 systemd가 지웠다. 그래도 /proc에서 그 경로의 프로세스가 없는지 대조한다.
+    if (gone(e)) return !await hasMembers(unit);
     throw e;
   }
   const deadline = performance.now() + timeoutMs;

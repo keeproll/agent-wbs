@@ -7,6 +7,7 @@ import type { ApiClient } from '../src/api/client.ts';
 import type { HostSources } from '../src/resources/host.ts';
 import type { RunCommand } from '../src/readiness/command.ts';
 import { State } from '../src/state/state.ts';
+import { scopeProbeReply } from './helpers/scope-probe.ts';
 
 const bound: unknown[] = [];
 vi.mock('../src/jobs/task-check.ts', async (original) => {
@@ -41,7 +42,8 @@ test('전용 계정 설정이 없으면 격리를 고르지 않고 명령도 돌
 
 test('전용 계정이면 래퍼 check와 사용자 scope 시험을 통과할 때만 「전용 계정 + scope」를 쓰고, 실패 이유는 바뀔 때만 경고한다', async () => {
   let scopeOk = true;
-  const run = vi.fn<RunCommand>(async (cmd) => cmd === '/usr/bin/sudo' ? { code: 0, stdout: 'ok\n', stderr: '' } : { code: scopeOk ? 0 : 1, stdout: '', stderr: '' });
+  const run = vi.fn<RunCommand>(async (cmd, args) => cmd === '/usr/bin/sudo' ? { code: 0, stdout: 'ok\n', stderr: '' }
+    : scopeOk ? scopeProbeReply(cmd, args) ?? { code: 1, stdout: '', stderr: '' } : { code: 1, stdout: '', stderr: '' });
   const warn = vi.fn();
   const a = app(run, '/srv/agentwbs', warn);
   expect((await a.refreshIsolation())?.name).toBe('dedicated-user+user-scope');

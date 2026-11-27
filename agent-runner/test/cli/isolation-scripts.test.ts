@@ -1178,7 +1178,11 @@ esac
       // ①·CI 검사 명령(ci-run)이 쓸 pnpm도 같은 방식으로 설치한다(조정자 결정 1).
       expect(readlinkSync(cli('pnpm', 'current'))).toBe('11.2.0');
       expect(statSync(cli('codex', '0.180.0')).mode & 0o777).toBe(0o750);
-      expect(r.log).toEqual([]);  // sudo는 쓰지 않는다
+      // 관리자 권한(sudo root)은 쓰지 않는다. sudo는 새 CLI의 --version을 Agent 계정(래퍼 cli-version)으로 돌릴 때만 쓴다(조정자 결정 8).
+      expect(r.log.map((line) => line.replaceAll(R, '<R>'))).toEqual(['claude/2.1.400', 'codex/0.180.0', 'pnpm/11.2.0'].map((v) => {
+        const [tool] = v.split('/');
+        return `-n -u awbs-agent -- <R>/usr/local/libexec/awbs-agent-exec cli-version --tool ${tool ?? ''} -- <R>/srv/agentwbs/cli/${v}/bin/${tool ?? ''}`;
+      }));
       r = install();
       expect(r.code).toBe(0);
       expect(r.out.match(/이미 최신입니다/g)?.length).toBe(3);

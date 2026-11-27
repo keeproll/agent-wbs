@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { open } from 'node:fs/promises';
 import { isAbsolute, join, relative } from 'node:path';
 import type { CommandResult } from '../readiness/command.ts';
 
@@ -34,11 +35,26 @@ export class TestCollectionError extends Error {
 const SHELL = /["'`$|&;<>(){}*?!~\\\n\r]/;
 const SCRIPT = /^[A-Za-z0-9:._-]{1,100}$/;
 
+/**
+ * Agent가 쓸 수 있는 폴더의 package.json을 안전하게 읽는다(방어 점검 9).
+ * 링크는 따라가지 않고(O_NOFOLLOW), FIFO에서 멈추지 않으며(O_NONBLOCK), 일반 파일만, 1 MiB까지만 읽는다.
+ */
+async function readPackageJson(path: string): Promise<string> {
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const info = await handle.stat();
+    if (!info.isFile() || info.size > 1024 * 1024) throw new Error('일반 파일이 아니거나 너무 큽니다.');
+    const buffer = Buffer.alloc(info.size);
+    const { bytesRead } = await handle.read(buffer, 0, info.size, 0);
+    return buffer.subarray(0, bytesRead).toString('utf8');
+  } finally { await handle.close(); }
+}
+
 /** 작업 폴더 package.json의 스크립트 글자. 없거나 셸 기호가 있으면 수집 불가. */
 async function scriptWords(cwd: string, name: string): Promise<string[]> {
   if (!SCRIPT.test(name)) throw new TestCollectionError('pnpm 스크립트 이름 모양이 아닙니다.');
   let scripts: unknown;
-  try { scripts = (JSON.parse(await readFile(join(cwd, 'package.json'), 'utf8')) as { scripts?: unknown }).scripts; }
+  try { scripts = (JSON.parse(await readPackageJson(join(cwd, 'package.json'))) as { scripts?: unknown }).scripts; }
   catch { throw new TestCollectionError('작업 폴더의 package.json을 읽지 못했습니다.'); }
   const text = scripts && typeof scripts === 'object' ? (scripts as Record<string, unknown>)[name] : undefined;
   if (typeof text !== 'string' || text.trim() === '') throw new TestCollectionError(`package.json에 ${name} 스크립트가 없습니다.`);

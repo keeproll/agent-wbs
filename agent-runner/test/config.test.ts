@@ -44,3 +44,11 @@ test('전용 계정 격리: AWBS_AGENT_USER=awbs-agent면 agentRoot는 고정 /s
   expect(loadConfig({ AWBS_RUNNER_TOKEN, AWBS_AGENT_USER: 'awbs-agent' }).agentRoot).toBe('/srv/agentwbs');
   expect(() => loadConfig({ AWBS_RUNNER_TOKEN, AWBS_AGENT_USER: 'root' })).toThrow('AWBS_AGENT_USER');
 });
+
+test('조정자 결정 7: CI 실행기(AWBS_CI_AUTO)는 기본 꺼짐, 1일 때만 켜짐, 다른 값은 설정 오류', () => {
+  const base = { AWBS_WBS_URL: 'http://127.0.0.1:3100', AWBS_RUNNER_TOKEN: 'awbs_rt_' + 'a'.repeat(40) };
+  expect(loadConfig(base).ciAuto).toBe(false);
+  expect(loadConfig({ ...base, AWBS_CI_AUTO: '0' }).ciAuto).toBe(false);
+  expect(loadConfig({ ...base, AWBS_CI_AUTO: '1' }).ciAuto).toBe(true);
+  expect(() => loadConfig({ ...base, AWBS_CI_AUTO: 'yes' })).toThrow('AWBS_CI_AUTO');
+});

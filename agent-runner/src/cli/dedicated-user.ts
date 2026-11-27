@@ -190,7 +190,8 @@ export function dedicatedCommand(cfg: DedicatedUserConfig, launch: Launch, realp
   });
   return {
     file: cfg.sudo ?? '/usr/bin/sudo',
-    args: ['-n', '-u', cfg.user, '--', cfg.exec, 'ci-run', '--cwd', cwd, ...env, '--', program, ...launch.args],
+    // 실행마다 새 HOME: 검사 사본 안의 .awbs-home(GitRepository.createTaskCheckWorktree가 만든다, 조정자 결정 8).
+    args: ['-n', '-u', cfg.user, '--', cfg.exec, 'ci-run', '--cwd', cwd, '--home', join(cwd, '.awbs-home'), ...env, '--', program, ...launch.args],
     env: SUDO_ENV,
     cwd,
     stdin: launch.stdin,

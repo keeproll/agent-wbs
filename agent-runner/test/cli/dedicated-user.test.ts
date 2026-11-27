@@ -5,6 +5,7 @@ import {
 } from '../../src/cli/dedicated-user.ts';
 import { IsolationUndecidedError, PENDING_ISOLATION } from '../../src/cli/isolation.ts';
 import type { RunCommand } from '../../src/readiness/command.ts';
+import { scopeProbeReply } from '../helpers/scope-probe.ts';
 
 /** 「계정이 있다고 가정한」 설정. 실제 계정·sudo는 쓰지 않는다(명령 구성만 본다). */
 const cfg: DedicatedUserConfig = { user: 'awbs-agent', root: '/srv/agentwbs', exec: '/usr/local/libexec/awbs-agent-exec' };
@@ -162,7 +163,8 @@ describe('agentControl — Agent 계정 프로세스·파일 정리 명령', () 
 
 describe('selectIsolation — 준비 점검에서 격리 계층 고르기', () => {
   const env = { AWBS_AGENT_USER: 'awbs-agent' };
-  const runner = (stdout: string, code: number | null = 0) => vi.fn<RunCommand>(async () => ({ code, stdout, stderr: '' }));
+  // 래퍼 check는 주어진 출력, scope 시험(probe)은 실제 scope였다면 나왔을 응답.
+  const runner = (stdout: string, code: number | null = 0) => vi.fn<RunCommand>(async (cmd, args) => scopeProbeReply(cmd, args) ?? { code, stdout, stderr: '' });
 
   test('전용 계정 설정이 없으면(테스트·미설치 PC) 거부 유지, 명령도 실행하지 않는다', async () => {
     const run = runner('ok');
@@ -186,12 +188,29 @@ describe('selectIsolation — 준비 점검에서 격리 계층 고르기', () =
     expect(run).toHaveBeenCalledWith('/usr/bin/sudo', ['-n', '-u', 'awbs-agent', '--', '/usr/local/libexec/awbs-agent-exec', 'check']);
   });
 
-  test('M8 전 연결: check 다음 사용자 scope를 실제로 한 번 만들어 본다(/bin/true, 사용자 systemd 주소만 붙임)', async () => {
+  test('M8 전 연결: check 다음 사용자 scope를 실제로 한 번 만들어, 그 안의 cgroup 종류·경로가 계산한 값과 같은지 본다(방어 점검 4)', async () => {
     const run = runner('ok\n');
     await selectIsolation(env, run, { realpath });
     const uid = String(process.getuid?.());
-    expect(run.mock.calls[1]).toEqual(['/usr/bin/env', ['-i', 'PATH=/usr/bin:/bin', `XDG_RUNTIME_DIR=/run/user/${uid}`,
-      '/usr/bin/systemd-run', '--user', '--scope', '--quiet', '--collect', '--slice=app.slice', '--', '/bin/true']]);
+    const [cmd, args] = run.mock.calls[1] ?? ['', []];
+    expect(cmd).toBe('/usr/bin/env');
+    expect(args.slice(0, 10)).toEqual(['-i', 'PATH=/usr/bin:/bin', `XDG_RUNTIME_DIR=/run/user/${uid}`,
+      '/usr/bin/systemd-run', '--user', '--scope', '--quiet', '--collect', '--slice=app.slice', expect.stringMatching(/^--unit=awbs-/)]);
+    expect(args.slice(10)).toEqual(['--', '/bin/sh', '-c', 'stat -f -c %T /sys/fs/cgroup; cat /proc/self/cgroup']);
+  });
+
+  test.each([
+    ['cgroup v1·혼합(cgroup2fs 아님)', (path: string) => `tmpfs\n0::${path}\n`],
+    ['scope가 다른 위치(경로 다름)', (path: string) => `cgroup2fs\n0::${path.replace('app.slice', 'other.slice')}\n`],
+  ] as const)('scope 위치를 확인할 수 없으면 거부 유지: %s', async (_name, reply) => {
+    const run = vi.fn<RunCommand>(async (cmd, args) => {
+      const ok = scopeProbeReply(cmd, args);
+      if (!ok) return { code: 0, stdout: 'ok\n', stderr: '' };
+      return { ...ok, stdout: reply(ok.stdout.split('0::')[1]?.trim() ?? '') };
+    });
+    const choice = await selectIsolation(env, run, { realpath });
+    expect(choice.isolation).toBe(PENDING_ISOLATION);
+    expect(choice.reason).toContain('cgroup 위치');
   });
 
   test('M8 전 연결: 사용자 scope를 만들 수 없으면(linger 꺼짐 등) check가 ok여도 거부 유지', async () => {
@@ -285,7 +304,7 @@ describe('조정자 결정 1: ①·CI 명령은 래퍼 ci-run으로 Agent 계정
   test('sudo -n -u awbs-agent -- 래퍼 ci-run --cwd … --env(허용 이름만) -- 명령', () => {
     const l = iso.command?.(launch);
     expect(l?.file).toBe('/usr/bin/sudo');
-    expect(l?.args).toEqual(['-n', '-u', 'awbs-agent', '--', '/usr/local/libexec/awbs-agent-exec', 'ci-run', '--cwd', launch.cwd, '--env', 'LANG=C.UTF-8', '--env', 'CI=1', '--', 'pnpm', 'run', 'test']);
+    expect(l?.args).toEqual(['-n', '-u', 'awbs-agent', '--', '/usr/local/libexec/awbs-agent-exec', 'ci-run', '--cwd', launch.cwd, '--home', `${launch.cwd}/.awbs-home`, '--env', 'LANG=C.UTF-8', '--env', 'CI=1', '--', 'pnpm', 'run', 'test']);
     expect(l?.env).toEqual({ PATH: '/usr/bin:/bin' });
     expect(l?.args.join(' ')).not.toContain('ghp_x');
   });
@@ -302,7 +321,7 @@ describe('조정자 결정 1: ①·CI 명령은 래퍼 ci-run으로 Agent 계정
     expect(iso.command?.({ ...launch, file: './node_modules/.bin/vitest' }).args).toContain('./node_modules/.bin/vitest');
   });
   test('scope 계층은 ci-run도 systemd-run --user --scope로 감싼다. 거부 계층은 명령도 거부', async () => {
-    const choice = await selectIsolation({ AWBS_AGENT_USER: 'awbs-agent' }, vi.fn<RunCommand>(async () => ({ code: 0, stdout: 'ok\n', stderr: '' })), { realpath });
+    const choice = await selectIsolation({ AWBS_AGENT_USER: 'awbs-agent' }, vi.fn<RunCommand>(async (cmd, args) => scopeProbeReply(cmd, args) ?? { code: 0, stdout: 'ok\n', stderr: '' }), { realpath });
     const l = choice.isolation.command?.(launch);
     expect(l?.file).toBe('/usr/bin/systemd-run');
     expect(l?.scope).toMatch(/^awbs-/);

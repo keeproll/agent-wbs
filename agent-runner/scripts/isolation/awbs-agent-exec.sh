@@ -13,6 +13,14 @@
 #   ci-run --cwd <작업 폴더> [--env 이름=값]... -- <명령> [인자...]
 #                       ①·CI 검사 명령(Agent 코드의 시험·빌드)을 Agent 계정으로 실행한다(조정자 결정 1).
 #                       명령은 이름(예: pnpm)이면 고정 PATH에서, 경로면 작업 폴더 안에서만 찾는다.
+#                       --home <작업 폴더>/.awbs-home 필수: 실행마다 새 HOME·TMPDIR(pnpm 저장소 포함)를 그 사본 안에 둔다(조정자 결정 8).
+#   git-inspect --cwd <작업 폴더>       작업 폴더의 HEAD와 「커밋하지 않은 변경이 있는가」를 Agent 계정 git으로 본다(조정자 결정 6)
+#   git-bundle --cwd <작업 폴더> --branch <이름>   그 브랜치의 git bundle(데이터 파일)을 표준 출력으로 낸다(조정자 결정 6)
+#   cli-version --tool claude|codex|pnpm -- <진입점>   새로 설치한 CLI의 --version을 Agent 계정으로 실행한다(조정자 결정 8)
+#
+# 주의: 이 래퍼는 Runner를 막는 보안 경계가 아니다. Runner 계정을 Agent 계정으로 바꾸는 「문」이다.
+#   ci-run은 고정 PATH의 아무 명령이나 받는다. 결정 4(「run은 진입점만」)는 run 하위 명령 안의 규칙일 뿐이다.
+#   경계는 「Agent 계정이 Runner 홈·토큰에 닿지 못한다」와 「Runner 계정이 Agent가 쓴 것을 실행·해석하지 않는다」다.
 #   kill-group <pgid>   그 프로세스 그룹의 awbs-agent 프로세스를 모두 강제 종료
 #   kill-all            awbs-agent 계정의 프로세스를 모두 강제 종료(세션이 0일 때 남은 것 청소)
 #   fix-perms <경로>     작업 폴더 안 Agent 파일에 Runner 계정의 읽기·쓰기 권한을 되돌려 줌
@@ -148,11 +156,12 @@ cmd_login_status() {
 # 래퍼는 그 출처를 알 수 없으므로 실행 범위를 막는다: 작업 폴더는 worktrees 안, 환경 변수는 허용 목록, 계정은 Agent.
 # 왜 계정을 바꾸나: 시험·빌드는 Agent가 쓴 코드(설정 파일·스크립트)를 실행한다. Runner 계정으로 돌리면 Runner 홈·토큰에 닿는다.
 cmd_ci_run() {
-  local cwd='' extra=()
+  local cwd='' home='' extra=()
   while (($#)); do
     [[ $1 == -- ]] || (($# >= 2)) || die "옵션 값이 없습니다: $1"
     case $1 in
       --cwd) cwd=$2; shift 2 ;;
+      --home) home=$2; shift 2 ;;
       --env)
         # 검사 명령에 넘겨도 되는 이름만. 값은 경로·숫자·짧은 낱말 모양만 받는다(줄바꿈·공백·따옴표 없음).
         [[ $2 =~ ^(LANG|LC_ALL|TZ|CI|NODE_ENV|FORCE_COLOR|NO_COLOR|AWBS_REPORT|AWBS_REPORT_NONCE|AWBS_EVIDENCE_DIR)=[A-Za-z0-9_.@:/+,=-]{0,512}$ ]] \
@@ -166,6 +175,12 @@ cmd_ci_run() {
   local real_cwd program
   real_cwd=$(inside "$cwd" "$WORKTREES") || die "작업 폴더는 $WORKTREES 안이어야 합니다."
   [[ -d $real_cwd ]] || die "작업 폴더가 폴더가 아닙니다."
+  # 실행마다 새 HOME(조정자 결정 8): 그 검사 사본 안의 .awbs-home(Runner가 사본을 만들 때 함께 만든 실제 폴더)만 받는다.
+  # 왜: Agent 계정 HOME(pnpm 저장소·캐시)을 모든 Task가 같이 쓰면 다른 Task의 Agent가 이 검사의 의존성을 바꿀 수 있다.
+  [[ $home == "$cwd/.awbs-home" && -d $home && ! -L $home ]] || die "--home은 작업 폴더 안의 .awbs-home 폴더여야 합니다."
+  local real_home
+  real_home=$(inside "$home" "$real_cwd") || die "--home은 작업 폴더 안이어야 합니다."
+  mkdir -p -- "$real_home/tmp"
   cd -- "$real_cwd"
   if [[ $1 == */* ]]; then
     # 경로로 준 명령(예: ./node_modules/.bin/vitest)은 작업 폴더 안의 실행 파일만.
@@ -179,12 +194,70 @@ cmd_ci_run() {
   fi
   shift
   exec env -i \
-    HOME="$AGENT_HOME" USER="$AGENT_USER" LOGNAME="$AGENT_USER" \
+    HOME="$real_home" USER="$AGENT_USER" LOGNAME="$AGENT_USER" \
     PATH="$AGENT_PATH" \
-    TMPDIR="$AGENT_HOME/tmp" \
+    TMPDIR="$real_home/tmp" \
     DISABLE_AUTOUPDATER=1 DISABLE_UPDATES=1 \
     "${extra[@]}" \
     "$program" "$@"
+}
+
+# Agent 계정 git(조정자 결정 6). Runner 계정은 Agent가 쓸 수 있는 저장소에서 git을 돌리지 않는다.
+# 왜: git은 저장소 설정(.git/config)의 많은 키로 명령을 실행한다(filter·partialClone uploadpack 등). 옵션으로 하나씩 끌 수 없다.
+#   그래서 Agent 작업 폴더의 git은 Agent 계정이 돌린다. 설정이 무엇을 실행하든 Agent 권한이다.
+# 안전 기본값: 시스템·전역 설정 없음, 원격 전송 금지(GIT_ALLOW_PROTOCOL=none), 늦은 가져오기 금지, hook·fsmonitor 끔.
+agent_git() {
+  local dir=$1; shift
+  env -i HOME="$AGENT_HOME" USER="$AGENT_USER" LOGNAME="$AGENT_USER" PATH=/usr/bin:/bin \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ALLOW_PROTOCOL=none GIT_NO_LAZY_FETCH=1 \
+    GIT_TERMINAL_PROMPT=0 GIT_OPTIONAL_LOCKS=0 LANG=C.UTF-8 \
+    git -C "$dir" -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.excludesFile=/dev/null "$@"
+}
+
+git_cwd() {
+  local cwd=${2-}
+  [[ ${1-} == --cwd && -n $cwd ]] || die "--cwd가 필요합니다."
+  local real
+  real=$(inside "$cwd" "$WORKTREES") || die "작업 폴더는 $WORKTREES 안이어야 합니다."
+  [[ -d $real && -e $real/.git ]] || die "git 작업 폴더가 아닙니다."
+  printf '%s' "$real"
+}
+
+# 출력: 「head <40자 SHA>」 한 줄, 「dirty 0|1」 한 줄. 커밋하지 않은 변경·추적 안 된 파일·assume-unchanged/skip-worktree 표시가 있으면 dirty 1.
+cmd_git_inspect() {
+  (($# == 2)) || die "git-inspect --cwd <작업 폴더>만 받습니다."
+  local dir head status flags
+  dir=$(git_cwd "$@")
+  head=$(agent_git "$dir" rev-parse --verify 'HEAD^{commit}') || die "HEAD를 읽지 못했습니다."
+  [[ $head =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]] || die "HEAD 모양이 아닙니다."
+  status=$(agent_git "$dir" status --porcelain=v1 -z --untracked-files=all --ignore-submodules=none | tr '\0' '\n') || die "상태를 읽지 못했습니다."
+  flags=$(agent_git "$dir" ls-files -v | grep -E '^[a-zS] ' || true)
+  printf 'head %s\n' "$head"
+  if [[ -n $status || -n $flags ]]; then echo 'dirty 1'; else echo 'dirty 0'; fi
+}
+
+# 브랜치 하나의 전체 기록을 bundle로 표준 출력에 쓴다. Runner는 이 데이터만 받아 자기 bare 저장소에서 verify 뒤 fetch한다.
+cmd_git_bundle() {
+  (($# == 4)) && [[ $3 == --branch ]] || die "git-bundle --cwd <작업 폴더> --branch <이름>만 받습니다."
+  local dir branch=$4
+  dir=$(git_cwd "$1" "$2")
+  [[ $branch =~ ^[A-Za-z0-9._/-]{1,200}$ && $branch != *..* && $branch != */ && $branch != /* ]] || die "브랜치 이름 모양이 아닙니다."
+  agent_git "$dir" check-ref-format --branch "$branch" > /dev/null || die "브랜치 이름 모양이 아닙니다."
+  agent_git "$dir" bundle create --quiet - "refs/heads/$branch"
+}
+
+# 새로 설치한 CLI의 --version(조정자 결정 8). 모양은 run 진입점 규칙과 같고, pnpm도 받는다.
+cmd_cli_version() {
+  local tool=''
+  [[ ${1-} == --tool ]] && { tool=${2-}; shift 2; }
+  [[ ${1-} == -- ]] && shift
+  [[ $tool == claude || $tool == codex || $tool == pnpm ]] || die "--tool은 claude·codex·pnpm입니다."
+  (($# == 1)) || die "진입점 하나만 받습니다."
+  local bin
+  bin=$(entry_point "$tool" "$1") || die "진입점은 $CLI_DIR/$tool/<버전>/bin/$tool이어야 합니다."
+  cd -- "$AGENT_HOME"
+  exec env -i HOME="$AGENT_HOME" USER="$AGENT_USER" LOGNAME="$AGENT_USER" PATH="$AGENT_PATH" TMPDIR="$AGENT_HOME/tmp" \
+    DISABLE_AUTOUPDATER=1 DISABLE_UPDATES=1 "$bin" --version
 }
 
 cmd_kill_group() {
@@ -260,10 +333,13 @@ sub=${1-}
 case $sub in
   run) cmd_run "$@" ;;
   ci-run) cmd_ci_run "$@" ;;
+  git-inspect) cmd_git_inspect "$@" ;;
+  git-bundle) cmd_git_bundle "$@" ;;
+  cli-version) cmd_cli_version "$@" ;;
   kill-group) cmd_kill_group "$@" ;;
   kill-all) cmd_kill_all ;;
   fix-perms) cmd_fix_perms "$@" ;;
   check) cmd_check ;;
   login-status) cmd_login_status "$@" ;;
-  *) die "하위 명령은 run · ci-run · kill-group · kill-all · fix-perms · check · login-status 중 하나입니다." ;;
+  *) die "하위 명령은 run · ci-run · git-inspect · git-bundle · cli-version · kill-group · kill-all · fix-perms · check · login-status 중 하나입니다." ;;
 esac

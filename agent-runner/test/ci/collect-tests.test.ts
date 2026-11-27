@@ -68,3 +68,17 @@ test('실제 vitest(이 저장소, node scripts/vitest.ts)로 목록을 모은�
   expect(ids.length).toBeGreaterThanOrEqual(3);
   expect(ids).toContain('test/config.test.ts::기본값');
 }, 60_000);
+
+test('방어 점검 9: package.json이 링크·FIFO면 따라가거나 기다리지 않고 수집 불가', async () => {
+  const { mkfifo } = { mkfifo: (p: string) => import('node:child_process').then(({ execFileSync }) => execFileSync('mkfifo', [p])) };
+  const linked = await project({});
+  const secret = join(linked, 'secret.json');
+  await writeFile(secret, JSON.stringify({ scripts: { test: 'vitest run' } }));
+  await rm(join(linked, 'package.json'));
+  await import('node:fs/promises').then(({ symlink }) => symlink(secret, join(linked, 'package.json')));
+  await expect(listCommand(['pnpm', 'test'], linked)).rejects.toThrow('package.json');
+  const fifo = await project({});
+  await rm(join(fifo, 'package.json'));
+  await mkfifo(join(fifo, 'package.json'));
+  await expect(listCommand(['pnpm', 'test'], fifo)).rejects.toThrow('package.json');
+});
