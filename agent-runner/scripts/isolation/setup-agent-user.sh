@@ -53,7 +53,7 @@ NODE_BIN=$(realpath -e -- "$NODE_BIN") || die "node 파일이 없습니다: $NOD
 command -v sudo > /dev/null || die 'sudo가 없습니다.'
 [[ -f $HERE/awbs-agent-exec.sh ]] || die '실행 래퍼(awbs-agent-exec.sh)가 같은 폴더에 없습니다.'
 IS_WSL=0
-[[ -e $WSL_INTEROP || -d $ROOT_PREFIX/run/WSL ]] && IS_WSL=1
+[[ -e $WSL_BINFMT || -d $ROOT_PREFIX/run/WSL ]] && IS_WSL=1
 
 # 계정: 없으면 새로 만들고, 있으면 이 설치가 만든 계정인지 확인한다. 다른 계정이면 손대지 않는다.
 ACCOUNT=$(agent_account_state)
@@ -100,6 +100,11 @@ note "Agent 작업 영역: $AGENT_ROOT"
 note "Agent용 node: $NODE_BIN ($("$NODE_BIN" --version))"
 note "WSL 여부: $([[ $IS_WSL == 1 ]] && echo 예 || echo 아니오)"
 ((DRY_RUN)) && note 'dry-run: 아래 sudo 명령은 실행하지 않고 보여 주기만 합니다.'
+
+# 여기부터는 현재 폴더를 루트(/)로 둔다. 아래 sudo -u awbs-agent 명령은 현재 폴더를 물려받는데,
+# owner가 홈(/home/keeproll)에서 실행하면 Agent가 들어갈 수 없는 폴더에서 명령이 돌아 실패할 수 있다.
+# 상대 경로(--node ./node 등)는 위에서 이미 절대 경로로 바꿨으므로 옮겨도 된다.
+cd / || die '루트 폴더(/)로 옮기지 못했습니다.'
 
 # 설치할 파일 내용은 먼저 Runner 계정의 임시 폴더(0700)에 만들고, 확인한 뒤 root 소유로 옮긴다.
 TMP=$(mktemp -d)

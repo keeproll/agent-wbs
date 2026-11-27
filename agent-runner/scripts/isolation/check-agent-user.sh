@@ -209,7 +209,7 @@ for t in "$ROOT_PREFIX/mnt" "$ROOT_PREFIX/mnt/c" "$ROOT_PREFIX/run/WSL" "$ROOT_P
   agent_blocked "목록 읽기 $t" test -r "$t"
   agent_blocked "지나가기 $t" test -x "$t"
 done
-if [[ -e $WSL_INTEROP ]]; then
+if [[ -e $WSL_BINFMT ]]; then
   exe=$ROOT_PREFIX/mnt/c/Windows/System32/whoami.exe
   if [[ ! -f $exe ]]; then
     fail "확인 못 함: Windows 실행 시험에 쓸 $exe가 없음"
@@ -220,8 +220,13 @@ if [[ -e $WSL_INTEROP ]]; then
     chmod 0755 "$probe/whoami.exe"
     # 그다음 Agent가 읽고 실행만 할 수 있게 연다(0750 → ACL 상한 r-x). 0700 그대로면 폴더 때문에 막혀 시험이 무의미하다(리뷰 P2-5).
     chmod 0750 "$probe"
-    if ! "$probe/whoami.exe" > /dev/null 2>&1; then
+    # 실패하면 원인을 찾을 수 있게 오류 출력·종료 코드·WSL_INTEROP 값을 함께 보여 준다.
+    rc_w=0
+    err=$("$probe/whoami.exe" 2>&1 > /dev/null < /dev/null) || rc_w=$?
+    if ((rc_w != 0)); then
       fail '확인 못 함: Runner 계정에서도 Windows 프로그램이 안 돎(대조 실패)'
+      note "진단: 종료 코드 $rc_w, WSL_INTEROP=${WSL_INTEROP-(없음)}, 현재 폴더 $PWD"
+      [[ -n $err ]] && note "진단: 오류 출력 $(printf '%s' "$err" | head -n 3 | tr '\n' ' ')"
     else
       rc_r=0; agent_rc test -r "$probe/whoami.exe" || rc_r=$?
       rc_x=0; agent_rc test -x "$probe/whoami.exe" || rc_x=$?

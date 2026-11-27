@@ -43,7 +43,11 @@ SUDOERS_PATH=$ROOT_PREFIX/etc/sudoers.d/awbs-agent
 GUARD_UNIT=awbs-agent-wsl-guard.service
 GUARD_PATH=$ROOT_PREFIX/etc/systemd/system/$GUARD_UNIT
 WSL_BLOCK_DIRS=("$ROOT_PREFIX/mnt" "$ROOT_PREFIX/Docker" "$ROOT_PREFIX/run/WSL")
-WSL_INTEROP=$ROOT_PREFIX/proc/sys/fs/binfmt_misc/WSLInterop
+# WSL에서 Windows 프로그램(.exe)을 실행해 주는 binfmt 등록 파일. 있으면 WSL이다.
+# 이름에 주의: WSL_INTEROP는 WSL이 터미널마다 내보내는 환경 변수(Windows 실행 통로 소켓 주소)다.
+#   같은 이름에 값을 넣으면 그 환경 변수가 바뀌어, 이 스크립트에서 부르는 .exe가 모두 「connect failed 13」으로 실패한다
+#   (owner 확인 5단계 「Runner 계정에서도 Windows 프로그램이 안 돎(대조 실패)」의 원인). 그래서 다른 이름을 쓴다.
+WSL_BINFMT=$ROOT_PREFIX/proc/sys/fs/binfmt_misc/WSLInterop
 # 설치·제거·확인 스크립트가 실제 sudo 정책에서 기대하는 실행 래퍼 경로(시험 모드에서도 실제 경로 문자열)
 REAL_EXEC_PATH=/usr/local/libexec/awbs-agent-exec
 DRY_RUN=0

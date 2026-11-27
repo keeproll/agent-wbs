@@ -59,8 +59,10 @@ function rules(...lines: [code: number, out: string, glob: string][]): void {
   writeFileSync(join(R, '.sudo-rules'), lines.map((l) => l.join('\x1f')).join('\n') + '\n');
 }
 
-function run(script: string, args: string[] = [], env: NodeJS.ProcessEnv = {}) {
-  const r = spawnSync('bash', [join(scripts, script), ...args], {
+/** lockedCwd: 그 폴더로 들어간 뒤 권한을 000으로 바꾸고 스크립트를 부른다(owner가 홈에서 실행한 상황을 흉내). */
+function run(script: string, args: string[] = [], env: NodeJS.ProcessEnv = {}, lockedCwd?: string) {
+  const argv = lockedCwd ? ['-c', 'cd -- "$1" && chmod 000 . && shift && exec bash "$@"', '_', lockedCwd, join(scripts, script), ...args] : [join(scripts, script), ...args];
+  const r = spawnSync('bash', argv, {
     encoding: 'utf8',
     env: { PATH: `${R}/bin:/usr/bin:/bin`, HOME: join(R, 'home/runner'), AWBS_ISOLATION_TEST_ROOT: R, LANG: 'C.UTF-8', ...env },
   });
@@ -185,6 +187,33 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
       const r = setup();
       expect(r.code, r.out).toBe(0);
       expect(r.log.some((l) => l.includes('useradd'))).toBe(false);
+    });
+
+    // owner 설치 1차 실패 뒤의 실제 상태를 흉내 낸다: 계정·UID 기록·cron/at 막기·작업 영역·래퍼·CLI는 있고, sudoers만 없다.
+    // 이 상태에서 setup을 다시 실행하면 새로 만들지 않고 이어서 끝나야 한다(멱등). owner는 홈에서 실행하므로 현재 폴더도 홈(들어갈 수 없음)으로 둔다.
+    test('fix6: 일부 설치된 상태(sudoers만 없음)에서 홈 폴더에서 다시 실행하면 이어서 끝나고, sudo는 모두 /에서 불린다', () => {
+      fresh({ account: AGENT_LINE, uid: '998' });
+      writeFileSync(join(R, 'etc/cron.deny'), 'awbs-agent\n');
+      writeFileSync(join(R, 'etc/at.deny'), 'awbs-agent\n');
+      for (const d of ['srv/agentwbs/cli/claude/2.1.332/bin', 'srv/agentwbs/cli/codex/0.172.0/bin', 'srv/agentwbs/inputs', 'srv/agentwbs/worktrees', 'srv/agentwbs/runtime/node/bin', 'etc/systemd/system']) {
+        mkdirSync(join(R, d), { recursive: true });
+      }
+      symlinkSync('2.1.332', join(R, 'srv/agentwbs/cli/claude/current'));
+      symlinkSync('0.172.0', join(R, 'srv/agentwbs/cli/codex/current'));
+      writeFileSync(join(R, '.owners'), '/srv/agentwbs/cli ' + me + '\n/srv/agentwbs/inputs ' + me + '\n/srv/agentwbs/worktrees ' + me + '\n');
+      rules(okCheck);
+      const home = join(R, 'home/runner');
+      const r = run('setup-agent-user.sh', ['--node', process.execPath], {}, home);
+      chmodSync(home, 0o755);
+      expect(r.code, r.out).toBe(0);
+      expect(r.log.some((l) => l.includes('useradd'))).toBe(false);
+      expect(r.out).toContain('/etc/cron.deny: 이미 있음');
+      expect(r.log.at(-1)).toMatch(/^-- install -o root -g root -m 0440 .* \S+\/etc\/sudoers.d\/awbs-agent$/);
+      expect(readFileSync(join(R, 'etc/sudoers.d/awbs-agent'), 'utf8')).toBe(`${sudoersContent()}\n`);
+      // CLI 설치본은 건드리지 않는다
+      expect(r.log.filter((l) => l.includes('/srv/agentwbs/cli/'))).toEqual([]);
+      const cwds = readFileSync(join(R, 'sudo.cwd.log'), 'utf8').split('\n').filter(Boolean);
+      expect(new Set(cwds)).toEqual(new Set(['/']));
     });
 
     test.each([
@@ -617,6 +646,27 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
       expect(r.code).toBe(1);
       expect(r.out).toContain(`FAIL  확인 못 함(Agent로 실행 실패): 목록 읽기 ${R}/home/runner/.config/gh`);
       expect(r.out).toContain(`PASS  Agent가 못 함: 지나가기 ${R}/home/runner/.config/gh`);
+    });
+
+    // owner 확인 5단계 실패 재현: common.sh가 같은 이름(WSL_INTEROP)에 binfmt 경로를 넣어,
+    // 터미널이 내보낸 Windows 실행 통로 소켓 주소가 바뀌었다. 그래서 Runner의 .exe도 「connect failed 13」으로 실패했다.
+    test('fix6: 터미널의 WSL_INTEROP 값을 바꾸지 않고 Runner 대조 실행에 그대로 넘긴다', () => {
+      exe(join(R, 'mnt/c/Windows/System32/whoami.exe'), '#!/bin/sh\n[ "$WSL_INTEROP" = /run/WSL/77_interop ] || { echo "UtilConnectUnix: connect failed 13" >&2; exit 1; }\n');
+      rules(...baseline());
+      const r = run('check-agent-user.sh', [], { WSL_INTEROP: '/run/WSL/77_interop' });
+      expect(r.out).not.toContain('대조 실패');
+      expect(r.out).toContain('PASS  Agent가 못 함: Windows 실행 통로로 Windows 프로그램 실행');
+      expect(r.code, r.out).toBe(0);
+    });
+
+    test('fix6: Runner 대조 실행이 실패하면 종료 코드·WSL_INTEROP·오류 출력을 진단으로 보여 준다', () => {
+      exe(join(R, 'mnt/c/Windows/System32/whoami.exe'), '#!/bin/sh\necho "UtilConnectUnix: connect failed 13" >&2\nexit 1\n');
+      rules(...baseline());
+      const r = run('check-agent-user.sh', [], { WSL_INTEROP: '/run/WSL/77_interop' });
+      expect(r.code).toBe(1);
+      expect(r.out).toContain('FAIL  확인 못 함: Runner 계정에서도 Windows 프로그램이 안 돎(대조 실패)');
+      expect(r.out).toContain('진단: 종료 코드 1, WSL_INTEROP=/run/WSL/77_interop');
+      expect(r.out).toContain('진단: 오류 출력 UtilConnectUnix: connect failed 13');
     });
 
     test('P2-5: Agent가 Windows 시험 복사본을 못 읽으면 「통로 차단」 PASS가 아니라 FAIL', () => {

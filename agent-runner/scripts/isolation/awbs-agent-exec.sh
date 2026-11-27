@@ -46,6 +46,11 @@ done
 # 이 래퍼는 Agent 계정으로만 돈다. Runner 계정이나 root로 직접 부르면 격리된 것처럼 보이기만 하므로 거부한다.
 [[ $(id -un) == "$AGENT_USER" ]] || die "Agent 계정($AGENT_USER)으로만 실행합니다. 현재: $(id -un)" 3
 
+# 작업 폴더를 먼저 루트(/)로 옮긴다. sudo는 부른 쪽의 현재 폴더(예: Runner 홈)를 그대로 물려주는데,
+# Agent는 그 폴더에 들어갈 수 없다. 그 상태에서 GNU find는 끝날 때 「처음 폴더로 돌아갈 수 없음」으로 실패해
+# check가 cli_unverified·inputs_unverified를 내고 fix-perms도 실패한다(owner 설치 1차 실패 원인).
+cd / || die "루트 폴더(/)로 옮기지 못했습니다."
+
 # 기준 폴더도 실제 경로로 바꿔 둔다. 비교하는 양쪽을 같은 방법으로 정규화해야 한다.
 WORKTREES=$(realpath -e -- "$AGENT_ROOT/worktrees" 2> /dev/null) || die "작업 폴더 모음이 없습니다."
 CLI_DIR=$(realpath -e -- "$AGENT_ROOT/cli" 2> /dev/null) || die "CLI 폴더가 없습니다."

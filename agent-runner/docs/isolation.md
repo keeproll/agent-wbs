@@ -101,6 +101,12 @@ keeproll ALL=(awbs-agent) NOPASSWD: /usr/local/libexec/awbs-agent-exec
 - 설정 파일(`/etc/agentwbs/agent-exec.conf`)은 실행하지 않고, 정해진 이름만 한 줄씩 읽는다.
   - 왜: 설정 파일에 명령을 숨겨 두어도 실행되지 않게 한다.
 - 래퍼와 설정 파일은 root 소유다. Runner도 Agent도 고칠 수 없다.
+- 래퍼는 시작하자마자 현재 폴더를 루트(`/`)로 옮긴다.
+  - 왜: sudo는 부른 쪽의 현재 폴더(예: `/home/keeproll`)를 그대로 물려준다. Agent는 그 폴더에 들어갈 수 없다.
+  - 그 상태에서 GNU find(파일 찾기 명령)는 끝날 때 「처음 폴더로 돌아갈 수 없음」으로 실패한다. 그러면 `check`가 `cli_unverified`·`inputs_unverified`를 내고 `fix-perms`도 실패한다(owner 설치 1차 실패, fix6).
+- `check`는 cli·inputs가 비어 있어도 그 항목을 실패로 보지 않는다. 「Agent가 하나도 쓸 수 없는가」만 본다.
+  - 왜: 설치 순서가 「설치(2단계, 여기서 `check`) → CLI 설치(3단계)」라서 `check` 때는 CLI가 아직 없다.
+  - CLI가 있는지는 확인 스크립트 7단계와 Runner 준비 점검이 따로 본다.
 
 Runner 쪽 코드(`src/cli/dedicated-user.ts`)가 만드는 실행 계획:
 

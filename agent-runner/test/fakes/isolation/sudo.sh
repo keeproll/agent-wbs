@@ -1,6 +1,8 @@
 #!/bin/bash
 R=__ROOT__
 printf '%s\n' "$*" >> "$R/sudo.log"
+# 어느 폴더에서 불렸는지도 따로 적는다(Agent 명령이 Agent가 못 들어가는 폴더에서 돌지 않는지 시험).
+printf '%s\n' "$PWD" >> "$R/sudo.cwd.log"
 joined="$*"
 if [[ -f $R/.sudo-rules ]]; then
   while IFS=$'\x1f' read -r code out glob; do
