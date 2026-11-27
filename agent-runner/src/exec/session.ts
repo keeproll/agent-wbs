@@ -172,7 +172,8 @@ export class Execution {
       if (!acquired || proof) {
         try {
           if (acquired && proof) {
-            await this.#report('releaseJobSlots', { epoch: job.epoch, params: { id: job.id }, body: { fence: job.fence, hostId: d.identity.hostId, proof, at: new Date().toISOString() } });
+            const serverProof = await this.#serverProof(job);
+            await this.#report('releaseJobSlots', { epoch: job.epoch, params: { id: job.id }, body: { fence: job.fence, hostId: d.identity.hostId, proof: serverProof, at: new Date().toISOString() } });
             if (launchId) await this.launches.complete(launchId, proof);
           }
         } finally { this.#reservations.delete(reservation); release?.(); gate?.(); }
@@ -313,6 +314,17 @@ export class Execution {
       }
       await d.updater?.applyPending();
     }
+  }
+
+  /** 로컬 종료를 확인한 뒤 서버 장부에 맞는 증거를 고른다. */
+  async #serverProof(job: LaunchJob): Promise<Proof> {
+    const d = this.#d;
+    const holds = (await this.#call('getExecutionHolds', { epoch: job.epoch }, AbortSignal.timeout(10000))).body.holds;
+    const hold = holds.find(h => h.job === job.id && h.epoch === job.epoch && h.fence === job.fence && h.host_id === d.identity.hostId && h.boot_id === d.identity.bootId);
+    if (!hold || hold.cgroup !== null) throw new Error('현재 서버 보유의 종료 증명을 확인할 수 없습니다.');
+    const serverProof = await this.launches.reconcile({ job: job.id, hostId: d.identity.hostId, bootId: d.identity.bootId, processGroup: hold.pgid });
+    if (!serverProof) throw new Error('서버가 기록한 프로세스의 종료를 확인할 수 없습니다.');
+    return serverProof;
   }
 
   #admission(agent: Agent, slots: number, own?: SessionState) {

@@ -2,7 +2,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { afterEach, expect, test } from 'vitest';
-import { ApiTransportError, createApiClient } from '../../src/api/client.ts';
+import { ApiError, ApiTransportError, createApiClient } from '../../src/api/client.ts';
 import { Outbox } from '../../src/api/outbox.ts';
 import { Secret } from '../../src/security/secret.ts';
 import { State } from '../../src/state/state.ts';
@@ -10,7 +10,7 @@ import { Execution } from '../../src/exec/session.ts';
 import { HeavySemaphore } from '../../src/resources/heavy.ts';
 import { ResourceReporter } from '../../src/resources/reporter.ts';
 import { installFakeCli } from '../fakes/cli.ts';
-import type { ClaimedJob } from '../../src/api/generated/client.ts';
+import type { ClaimedJob, ExecutionHold } from '../../src/api/generated/client.ts';
 import type { ExecutionOptions } from '../../src/exec/session.ts';
 
 const roots: string[] = [];
@@ -27,6 +27,13 @@ async function setup({ installBad = false, isolation = true, lines, hang = false
   const state = await State.open(home); states.push(state);
   const requests: { path: string; body: Record<string, unknown>; key: string | null }[] = [];
   const replay = new Map<string, Response>();
+  const remote = new Map<string, ExecutionHold>();
+  const reserve = (id: string, fence: number, attempt: string | null = null) => remote.set(id, {
+    id: `hold-${id}`, project_id: null, job: id, attempt, epoch: state.snapshot.epoch,
+    host_id: 'host', boot_id: 'boot', fence, pgid: null, cgroup: null, task: null, conflict_group: null,
+    agent: 'Codex', slots: 1, heavy: true, slot_state: 'reserved', lock_state: 'held', lock_from_job: null,
+    handed_to_job: null, release_proof: null, closed_at: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+  });
   const api = createApiClient({ baseUrl: 'http://fake.invalid', token: new Secret('fake'), fetch: async (url, init) => {
     const path = new URL(String(url)).pathname;
     const body = typeof init?.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : {};
@@ -40,13 +47,25 @@ async function setup({ installBad = false, isolation = true, lines, hang = false
     else if (path.endsWith('/subagents')) reply = { enabled: installBad, items: installBad ? [{ id: 'def', key: 'helper', agent: 'Codex', version: 1, hash: '0'.repeat(64), file: 'instruction', sandbox: 'read-only' }] : [] };
     else if (path.endsWith('/start')) {
       if (startMismatch) return Response.json({ error: { code: 'SUBAGENT_INSTALL_FAILED', message: '설치 중 허용 버전이 바뀜', action: '시작', fix: '정의 재조회', errors: [], details: {}, requestId: 'fake' } }, { status: 422 });
-      reply = { attemptId: `attempt-${requests.filter(r => r.path.endsWith('/start')).length}` };
+      const attemptId = `attempt-${requests.filter(r => r.path.endsWith('/start')).length}`;
+      reply = { attemptId };
+      reserve(path.split('/').at(-2) ?? '', Number(body.fence), attemptId);
     }
     else if (path.endsWith('/renew')) reply = { leaseUntil: renewPast ? '2020-01-01T00:00:00.000Z' : new Date(Date.now() + 60000).toISOString() };
-    else if (path.endsWith('/holds')) { if (holdsUnavailable) throw new ApiTransportError('getExecutionHolds'); reply = { holds: [] }; }
+    else if (path.endsWith('/holds')) { if (holdsUnavailable) throw new ApiTransportError('getExecutionHolds'); reply = { holds: [...remote.values()] }; }
     else if (path.endsWith('/jobs/claim')) reply = { job: (body.kinds as string[]).includes('attempt') ? job : { id: 'stop-job', kind: 'stop_attempt', fence: 1, leaseUntil: new Date(Date.now() + 60000).toISOString(), payload: { attemptId: 'attempt-1', reason: 'manual' } } };
     else if (path.endsWith('/interrupt')) reply = { taskStatus: 'paused' };
-    else if (path.endsWith('/process')) { expect(fake.calls()).toHaveLength(requests.filter(r => r.path.endsWith('/process')).length - 1); }
+    else if (path.endsWith('/slots/acquire')) reserve(path.split('/').at(-3) ?? '', Number(body.fence));
+    else if (path.endsWith('/process')) {
+      expect(fake.calls()).toHaveLength(requests.filter(r => r.path.endsWith('/process')).length - 1);
+      const hold = remote.get(path.split('/').at(-2) ?? '');
+      if (hold) { hold.pgid = Number(body.processGroup); hold.slot_state = 'active'; }
+    }
+    else if (path.endsWith('/slots/release')) {
+      const hold = remote.get(path.split('/').at(-3) ?? '');
+      if (hold) hold.slot_state = 'none';
+    }
+    else if (path.endsWith('/release')) remote.delete(path.split('/').at(-2) ?? '');
     const response = reply === undefined ? new Response(null, { status: 204 }) : Response.json(reply);
     if (key) replay.set(key, response.clone());
     return response;
@@ -59,7 +78,7 @@ async function setup({ installBad = false, isolation = true, lines, hang = false
   const options: ExecutionOptions = { home, identity: { hostId: 'host', bootId: 'boot' }, api, outbox, epoch: () => state.snapshot.epoch, ready: () => true, env: { PATH: process.env.PATH }, binaries: { Codex: fake.path, Claude: '/never-claude' }, prepare: async () => { await prepare?.(); return { cwd: home, headSha: 'a'.repeat(40) }; }, budget: () => 2, sessions, heavy, canStart: (agent, slots, local) => reporter.canStart(agent, slots, local), ...(isolation ? { isolation: { name: 'fake', flags: () => [], wrap: l => l } } : {}) };
   const exec = new Execution(options);
   if (recovered) await exec.recover();
-  return { home, exec, requests, fake, sessions, outbox, heavy, options };
+  return { home, exec, requests, fake, sessions, outbox, heavy, options, remote };
 }
 
 test('기본 격리 거부는 start와 실제 CLI 실행 전에 멈춘다', async () => {
@@ -295,7 +314,8 @@ test('review: 완료된 launch는 보유 없는 재시작 대조에서 제외한
   await t.exec.run(job);
   const records = await t.exec.launches.list();
   expect(records.every(r => r.completedAt)).toBe(true);
-  const [record] = records;
+  t.remote.clear();
+  const record = records.find(r => r.pgid !== null);
   if (!record) throw new Error('실행 기록이 없습니다.');
   record.pgid = process.pid; record.startTime = '0';
   await t.exec.launches.save(record);
@@ -386,3 +406,19 @@ test('review2: 명령 기록이 사라지면 과거 완료 기록으로 해제�
   expect(t.heavy.snapshot().running).toBe(1);
   expect(await t.exec.claim(6)).toMatchObject({ kind: 'stop_attempt' });
 }, 15000);
+
+
+test('review3: 등록 거부는 서버의 no_process와 로컬 그룹 종료를 각각 확인한다', async () => {
+  const t = await setup();
+  const api = t.options.api;
+  const denied = new ApiError('reportJobProcess', 409, { code: 'LEASE_LOST', message: '임대 만료', action: '정리', fix: '다시 받기', errors: [], details: {}, requestId: 'fake' }, null);
+  t.options.api = async (operation, request) => {
+    if (operation === 'reportJobProcess') throw denied;
+    return api(operation, request);
+  };
+  await expect(t.exec.command({ id: job.id, fence: job.fence, epoch: 0 }, 'Codex', { file: t.fake.path, args: [], cwd: t.home, env: {}, stdin: '' })).rejects.toBe(denied);
+  expect(t.requests.find(r => r.path.endsWith('/slots/release'))?.body).toMatchObject({ proof: { kind: 'no_process' } });
+  expect(t.fake.calls()).toEqual([]);
+  expect((await t.exec.launches.list()).every(r => r.completedAt)).toBe(true);
+  expect(t.heavy.snapshot().running).toBe(0);
+});

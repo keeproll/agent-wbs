@@ -193,6 +193,168 @@ describe('runner 실제 PostgreSQL 검증', () => {
     } finally { await exec.shutdown(); await state.close(); await rm(home, { recursive: true, force: true }); }
   });
 
+  test('review3: process 등록이 거부돼도 서버 슬롯은 종료 증명으로 반환해야 한다', async () => {
+    const { mkdtemp, rm } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { createApiClient } = await import('../../../../agent-runner/src/api/client.ts');
+    const { Outbox } = await import('../../../../agent-runner/src/api/outbox.ts');
+    const { Secret } = await import('../../../../agent-runner/src/security/secret.ts');
+    const { State } = await import('../../../../agent-runner/src/state/state.ts');
+    const { Execution } = await import('../../../../agent-runner/src/exec/session.ts');
+    const { HeavySemaphore } = await import('../../../../agent-runner/src/resources/heavy.ts');
+    const { ResourceReporter } = await import('../../../../agent-runner/src/resources/reporter.ts');
+    const { installFakeCli } = await import('../../../../agent-runner/test/fakes/cli.ts');
+    const t = await task();
+    const home = await mkdtemp(join(process.env.AWBS_TEST_TMP ?? tmpdir(), 'review3-release-reject-'));
+    const state = await State.open(home);
+    await state.update(d => { d.epoch = 1; });
+    const fake = installFakeCli(join(home, 'fake'), 'codex', { lines: [{ type: 'thread.started', thread_id: 'new-thread' }, { type: 'turn.completed', usage: {} }] });
+    let commandPhase = false;
+    const failures: unknown[] = [];
+    const heavy = new HeavySemaphore(1);
+    const api = createApiClient({ baseUrl: 'http://fake.invalid', token: new Secret(bearer), fetch: async (input, init) => {
+      const u = new URL(String(input));
+      if (commandPhase && u.pathname.endsWith('/process')) await owner.query("update runner_jobs set lease_until=clock_timestamp()-interval '1 second' where id=$1", [u.pathname.split('/').at(-2)]);
+      const r = await app.inject({ method: init?.method as 'GET' | 'POST', url: u.pathname + u.search, headers: Object.fromEntries(new Headers(init?.headers)), ...(init?.body && { payload: String(init.body) }) });
+      if (commandPhase && r.statusCode >= 400) failures.push({ path: u.pathname, status: r.statusCode, body: r.body, request: String(init?.body) });
+      return new Response(r.statusCode === 204 ? null : r.body, { status: r.statusCode, headers: r.headers as Record<string, string> });
+    } });
+    const reporter = new ResourceReporter({ api, epoch: () => 1, heavy: new HeavySemaphore(1) });
+    await reporter.reportHost({ hostId: 'host-a', bootId: 'boot-a', cpu: 'fake', cores: 20, memGB: 32, swapGB: 0, diskFreeGB: 100, os: 'fake' });
+    const exec = new Execution({ canStart: (agent, slots, local) => reporter.canStart(agent, slots, local), home, identity: { hostId: 'host-a', bootId: 'boot-a' }, api, outbox: new Outbox(state, api), epoch: () => 1, ready: () => true, env: { PATH: process.env.PATH }, binaries: { Codex: fake.path, Claude: fake.path }, prepare: async () => {
+      return { cwd: home, headSha: sha };
+    }, budget: () => 0, sessions: [], heavy, isolation: { name: 'fake', flags: () => [], wrap: l => l } });
+    try {
+      await exec.recover();
+      expect((await request(t.key)).statusCode).toBe(202);
+      const claimResponse = await claim();
+      expect(claimResponse.statusCode).toBe(200);
+      const job = claimResponse.json().job;
+      const fullJob = (await owner.query('select * from runner_jobs where id=$1', [job.id])).rows[0];
+      const result = await exec.run({ ...job, kind: 'attempt', payload: fullJob.payload, leaseUntil: fullJob.lease_until.toISOString() });
+      expect(result.ok).toBe(true);
+      expect((await hold(job.id)).slot_state).toBe('none');
+      commandPhase = true;
+      let error: unknown;
+      try { await exec.command({ id: job.id, fence: job.fence, epoch: 1 }, 'Codex', { file: fake.path, args: [], cwd: home, env: {}, stdin: '① 검사' }); }
+      catch (e) { error = e; }
+      const after = await hold(job.id);
+      expect(error).toMatchObject({ error: { code: 'LEASE_LOST' } });
+      expect(failures).toMatchObject([{ status: 409, body: expect.stringContaining('LEASE_LOST') }]);
+      expect(fake.calls()).toHaveLength(1);
+      expect(heavy.snapshot().running).toBe(0);
+      expect(after.slot_state).toBe('none');
+    } finally { await exec.shutdown(); await state.close(); await rm(home, { recursive: true, force: true }); }
+  });
+
+  const releaseCases = (['reserved', 'running', 'stopping'] as const).flatMap(stage =>
+    (['reject', 'failure', 'cancel', 'crash'] as const).map(cause => ({ stage, cause })));
+  test.each(releaseCases)('review3 matrix: $stage × $cause', async ({ stage, cause }) => {
+    const { mkdtemp, readFile, rm } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { setTimeout: sleep } = await import('node:timers/promises');
+    const { createApiClient } = await import('../../../../agent-runner/src/api/client.ts');
+    const { Outbox } = await import('../../../../agent-runner/src/api/outbox.ts');
+    const { Secret } = await import('../../../../agent-runner/src/security/secret.ts');
+    const { State } = await import('../../../../agent-runner/src/state/state.ts');
+    const { Execution } = await import('../../../../agent-runner/src/exec/session.ts');
+    const { HeavySemaphore } = await import('../../../../agent-runner/src/resources/heavy.ts');
+    const { ResourceReporter } = await import('../../../../agent-runner/src/resources/reporter.ts');
+    const { installFakeCli } = await import('../../../../agent-runner/test/fakes/cli.ts');
+    const taskRow = await task();
+    const home = await mkdtemp(join(process.env.AWBS_TEST_TMP ?? tmpdir(), 'fix3-matrix-'));
+    const state = await State.open(home); await state.update(d => { d.epoch = 1; });
+    const fake = installFakeCli(join(home, 'fake'), 'codex');
+    const controller = new AbortController(), heavy = new HeavySemaphore(1);
+    let phase = false, currentJob = '', watched = false;
+    const releases: { state: string; pgid: number | null; kind: string; group?: number; status: number }[] = [];
+    const transport = createApiClient({ baseUrl: 'http://fake.invalid', token: new Secret(bearer), fetch: async (input, init) => {
+      const u = new URL(String(input));
+      const releasing = phase && /\/(slots\/release|release)$/.test(u.pathname);
+      if (phase && stage === 'stopping' && !watched && (releasing || cause === 'crash' && u.pathname.endsWith('/holds'))) {
+        watched = true;
+        await owner.query("update runner_jobs set lease_until=clock_timestamp()-interval '1 second' where id=$1", [currentJob]);
+        await watchRunner(pool, 1);
+      }
+      const before = releasing ? await hold(currentJob) : undefined;
+      const r = await app.inject({ method: init?.method as 'GET' | 'POST', url: u.pathname + u.search, headers: Object.fromEntries(new Headers(init?.headers)), ...(init?.body && { payload: String(init.body) }) });
+      if (before && before.slot_state !== 'none') {
+        const proof = (JSON.parse(String(init?.body)) as { proof: { kind: string; processGroup?: number } }).proof;
+        releases.push({ state: before.slot_state, pgid: before.pgid, kind: proof.kind, ...(proof.processGroup !== undefined && { group: proof.processGroup }), status: r.statusCode });
+      }
+      return new Response(r.statusCode === 204 ? null : r.body, { status: r.statusCode, headers: r.headers as Record<string, string> });
+    } });
+    const reporter = new ResourceReporter({ api: transport, epoch: () => 1, heavy });
+    const api: typeof transport = async (operation, request) => {
+      if (phase && operation === 'reportJobProcess' && stage === 'reserved') {
+        if (cause === 'failure') throw new Error('REGISTER_IO_FAILED');
+        if (cause === 'cancel') { controller.abort(); throw controller.signal.reason; }
+        await owner.query("update runner_jobs set lease_until=clock_timestamp()-interval '1 second' where id=$1", [currentJob]);
+      }
+      const response = await transport(operation, request);
+      if (phase && operation === 'reportJobProcess' && stage !== 'reserved') {
+        if (cause === 'reject') reporter.observe({ cpuPct: 1, memFreeGB: 0, swapUsedGB: 0 });
+        if (cause === 'cancel') controller.abort();
+      }
+      return response;
+    };
+    await reporter.reportHost({ hostId: 'host-a', bootId: 'boot-a', cpu: 'fake', cores: 20, memGB: 32, swapGB: 0, diskFreeGB: 100, os: 'fake' });
+    const outbox = new Outbox(state, api);
+    const exec = new Execution({ canStart: (agent, slots, local) => reporter.canStart(agent, slots, local), home, identity: { hostId: 'host-a', bootId: 'boot-a' }, api, outbox, epoch: () => 1, ready: () => true, env: { PATH: process.env.PATH }, binaries: { Codex: fake.path, Claude: fake.path }, prepare: async () => ({ cwd: home, headSha: sha }), budget: () => 0, sessions: [], heavy, isolation: { name: 'fake', flags: () => [], wrap: l => l } });
+    let runner: ReturnType<typeof spawn> | undefined;
+    try {
+      await exec.recover();
+      expect((await request(taskRow.key)).statusCode).toBe(202);
+      const claimResponse = await exec.claim(6);
+      if (!claimResponse || claimResponse.kind !== 'attempt') throw new Error('작업을 받지 못했습니다.');
+      currentJob = claimResponse.id;
+      expect((await exec.run(claimResponse)).ok).toBe(true);
+      expect((await hold(currentJob)).slot_state).toBe('none');
+      phase = true;
+      installFakeCli(join(home, 'fake'), 'codex', { exitCode: 17, lines: [] });
+      if (cause === 'crash') {
+        expect((await post(`jobs/${currentJob}/slots/acquire`, { fence: claimResponse.fence, hostId: 'host-a' })).statusCode).toBe(204);
+        runner = spawn(process.execPath, [join(import.meta.dirname, '../../../../agent-runner/test/exec/kill-worker.ts'), home, stage === 'reserved' ? 'record' : 'exec', JSON.stringify({ identity: { hostId: 'host-a', bootId: 'boot-a' }, job: { id: currentJob, fence: claimResponse.fence, epoch: 1 } })], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+        const exited = once(runner, 'exit');
+        const [message] = await once(runner, 'message');
+        const record = (message as { record: { pgid: number } }).record;
+        if (stage !== 'reserved') {
+          expect((await post(`jobs/${currentJob}/process`, { fence: claimResponse.fence, processGroup: record.pgid, cgroup: null })).statusCode).toBe(204);
+          for (let i = 0; i < 200 && !await readFile(join(home, 'ran'), 'utf8').catch(() => ''); i++) await sleep(10);
+          expect(await readFile(join(home, 'ran'), 'utf8')).toBe('ran');
+        }
+        if (stage === 'stopping') {
+          watched = true;
+          await owner.query("update runner_jobs set lease_until=clock_timestamp()-interval '1 second' where id=$1", [currentJob]);
+          await watchRunner(pool, 1);
+        }
+        expect((await hold(currentJob)).slot_state).toBe(stage === 'reserved' ? 'reserved' : stage === 'running' ? 'active' : 'unconfirmed');
+        runner.kill('SIGKILL'); await exited;
+        expect(runner.signalCode).toBe('SIGKILL');
+        expect(await exec.recover()).toBe(true);
+      } else {
+        const command = exec.command({ id: currentJob, fence: claimResponse.fence, epoch: 1 }, 'Codex', { file: fake.path, args: [], cwd: home, env: {}, stdin: '' }, controller.signal);
+        if (cause === 'failure' && stage !== 'reserved') expect((await command).code).toBe(17);
+        else if (cause === 'reject' && stage === 'reserved') await expect(command).rejects.toMatchObject({ error: { code: 'LEASE_LOST' } });
+        else if (cause === 'failure') await expect(command).rejects.toThrow('REGISTER_IO_FAILED');
+        else if (cause === 'cancel') await expect(command).rejects.toMatchObject({ name: 'AbortError' });
+        else await expect(command).rejects.toThrow('memory_pressure');
+        expect(fake.calls()).toHaveLength(cause === 'failure' && stage !== 'reserved' ? 1 : 0);
+      }
+      const expectedState = cause === 'crash' ? 'unconfirmed' : stage === 'reserved' ? 'reserved' : stage === 'running' ? 'active' : 'unconfirmed';
+      expect(releases).toHaveLength(1);
+      expect(releases[0]).toMatchObject({ state: expectedState, kind: stage === 'reserved' ? 'no_process' : 'group_empty', status: 204 });
+      if (stage !== 'reserved') expect(releases[0]?.group).toBe(releases[0]?.pgid);
+      expect((await hold(currentJob)).slot_state).toBe('none');
+      expect((await exec.launches.list()).every(r => r.completedAt)).toBe(true);
+      expect(heavy.snapshot().running).toBe(0);
+    } finally {
+      if (runner && runner.exitCode === null && runner.signalCode === null) { const ended = once(runner, 'exit'); runner.kill('SIGKILL'); await ended; }
+      for (const record of await exec.launches.list().catch(() => [])) if (!record.completedAt) await exec.launches.reconcile({ job: record.job.id, hostId: record.hostId, bootId: record.bootId, processGroup: record.pgid });
+      await exec.shutdown(); await state.close(); await rm(home, { recursive: true, force: true });
+    }
+  });
+
   test('review: 아직 서버에 보고하지 않은 예산 초과도 새 세션을 막아야 한다', async () => {
     const { mkdtemp, rm } = await import('node:fs/promises');
     const { join } = await import('node:path');
