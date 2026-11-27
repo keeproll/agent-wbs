@@ -721,3 +721,10 @@ test('기준 실패 재통합 분기는 아직 Gate 전인 Task의 기존 CI 다
   expect((await owner.query('select kind from runner_jobs where id=$1',[r.json().jobId])).rows).toEqual([{ kind:'ci_retry' }]);
   expect((await owner.query('select status from tasks where id=$1',[a.id])).rows).toEqual([{ status:'running' }]);
 });
+
+
+test('결정 14: 이전 버전이 이미 저장한 error 관측도 첫 성공 관측으로 복구한다', async () => {
+  await owner.query('update projects set pipeline_observations=$2::jsonb where id=$1',[project,JSON.stringify({ [otherSha]:{ baseSha:otherSha,pipelineSha:null,definition:{ path:'.agentwbs/pipeline.yaml',commit:otherSha,status:'error',error:'이전 읽기 실패',raw:null,stages:null } } })]);
+  await observe();
+  expect((await get(`projects/${project}/ci/pipeline`)).json()).toMatchObject({ status:'ok',raw:'version: 1' });
+});

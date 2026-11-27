@@ -16,7 +16,7 @@ export async function observePipeline(client: Pick<PoolClient,'query'>, project:
   if (observation.definition.status !== 'ok') return;
   // shortcut: 프로젝트 JSON에 첫 관측을 보관한다, 관측 이력이 커지면 별도 원장 표로 옮긴다.
   const saved = await client.query(`update projects set pipeline_observations=jsonb_set(pipeline_observations,array[$2],$3::jsonb)
-    where id=$1 and not (pipeline_observations ? $2)`,[project,head,JSON.stringify(observation)]);
+    where id=$1 and (not (pipeline_observations ? $2) or pipeline_observations->$2->'definition'->>'status' is distinct from 'ok')`,[project,head,JSON.stringify(observation)]);
   let changed = Boolean(saved.rowCount);
   if (!changed && observation.definition.serviceConfig) {
     // 구형 Runner의 빈 선택 칸만 보충한다. 같은 main의 첫 정의와 첫 서비스 구성은 고정한다.
