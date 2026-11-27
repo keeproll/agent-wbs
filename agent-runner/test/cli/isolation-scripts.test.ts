@@ -1153,8 +1153,8 @@ case $cmd in
   view) name=\${pkg%@latest}; f="$R/.npm-latest-\${name//[@\\/]/_}"; [[ -f $f ]] || exit 1; if [[ $name == @openai/codex ]]; then printf '[\\n  "%s"\\n]\\n' "$(cat "$f")"; else printf '"%s"\\n' "$(cat "$f")"; fi ;;
   install)
     prefix='' spec=''
-    while (($#)); do case $1 in --prefix) prefix=$2; shift 2 ;; @*) spec=$1; shift ;; *) shift ;; esac; done
-    ver=\${spec##*@}; name=claude; [[ $spec == @openai/codex@* ]] && name=codex
+    while (($#)); do case $1 in --prefix) prefix=$2; shift 2 ;; @*|pnpm@*) spec=$1; shift ;; *) shift ;; esac; done
+    ver=\${spec##*@}; name=claude; [[ $spec == @openai/codex@* ]] && name=codex; [[ $spec == pnpm@* ]] && name=pnpm
     say=$ver; [[ -f "$R/.npm-bad-version" ]] && say=0.0.0
     mkdir -p "$prefix/bin"; printf '#!/bin/sh\\necho "%s (fake)"\\n' "$say" > "$prefix/bin/$name"; chmod 755 "$prefix/bin/$name"
     printf '%s\\n' "$*" >> "$R/npm.log" ;;
@@ -1162,6 +1162,7 @@ esac
 `);
       writeFileSync(join(R, '.npm-latest-_anthropic-ai_claude-code'), '2.1.400');
       writeFileSync(join(R, '.npm-latest-_openai_codex'), '0.180.0');
+      writeFileSync(join(R, '.npm-latest-pnpm'), '11.2.0');
       mkdirSync(join(R, 'srv/agentwbs/cli'), { recursive: true });
     }
     const install = (args: string[] = []) => run('install-agent-cli.sh', args);
@@ -1174,11 +1175,13 @@ esac
       const { readlinkSync, statSync } = await import('node:fs');
       expect(readlinkSync(cli('claude', 'current'))).toBe('2.1.400');
       expect(readlinkSync(cli('codex', 'current'))).toBe('0.180.0');
+      // ①·CI 검사 명령(ci-run)이 쓸 pnpm도 같은 방식으로 설치한다(조정자 결정 1).
+      expect(readlinkSync(cli('pnpm', 'current'))).toBe('11.2.0');
       expect(statSync(cli('codex', '0.180.0')).mode & 0o777).toBe(0o750);
       expect(r.log).toEqual([]);  // sudo는 쓰지 않는다
       r = install();
       expect(r.code).toBe(0);
-      expect(r.out.match(/이미 최신입니다/g)?.length).toBe(2);
+      expect(r.out.match(/이미 최신입니다/g)?.length).toBe(3);
       // 새 버전이 나오면 그 버전으로 바꾼다(항상 최신, owner Q-12)
       writeFileSync(join(R, '.npm-latest-_openai_codex'), '0.181.0');
       r = install();

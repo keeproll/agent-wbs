@@ -8,7 +8,11 @@
 #   그래서 sudoers는 「이 래퍼만」 허용하고, 무엇을 실행해도 되는지는 이 래퍼가 검사한다.
 #
 # 하위 명령
-#   run --agent claude|codex --cwd <작업 폴더> [--env LANG=값]... -- <CLI 실행 파일> [인자...]
+#   run --agent claude|codex --cwd <작업 폴더> [--env LANG=값]... -- <CLI 진입점> [인자...]
+#                       CLI 진입점은 $AGENT_ROOT/cli/<agent>/<버전>/bin/<agent> 하나뿐이다(조정자 결정 4).
+#   ci-run --cwd <작업 폴더> [--env 이름=값]... -- <명령> [인자...]
+#                       ①·CI 검사 명령(Agent 코드의 시험·빌드)을 Agent 계정으로 실행한다(조정자 결정 1).
+#                       명령은 이름(예: pnpm)이면 고정 PATH에서, 경로면 작업 폴더 안에서만 찾는다.
 #   kill-group <pgid>   그 프로세스 그룹의 awbs-agent 프로세스를 모두 강제 종료
 #   kill-all            awbs-agent 계정의 프로세스를 모두 강제 종료(세션이 0일 때 남은 것 청소)
 #   fix-perms <경로>     작업 폴더 안 Agent 파일에 Runner 계정의 읽기·쓰기 권한을 되돌려 줌
@@ -58,12 +62,35 @@ INPUTS_DIR=$(realpath -e -- "$AGENT_ROOT/inputs" 2> /dev/null) || die "입력 �
 AGENT_HOME=$(getent passwd "$AGENT_USER" | cut -d: -f6)
 [[ -n $AGENT_HOME && -d $AGENT_HOME ]] || die "Agent 계정의 홈 폴더가 없습니다."
 
+# Agent 계정의 고정 PATH. ci-run도 같은 PATH를 쓴다. pnpm은 Runner가 설치한 $CLI_DIR/pnpm/current/bin에서 찾는다.
+AGENT_PATH="$NODE_DIR:$CLI_DIR/pnpm/current/bin:/usr/local/bin:/usr/bin:/bin"
+
 # 경로를 링크까지 모두 따라간 실제 경로로 바꾸고, 기준 폴더 「안」에 있는지 본다(기준 폴더 자체는 안 됨).
 inside() {
   local real
   real=$(realpath -e -- "$1" 2> /dev/null) || return 1
   [[ $real == "$2"/* ]] || return 1
   printf '%s' "$real"
+}
+
+# CLI 진입점 검사(조정자 결정 4). 허용하는 모양은 $CLI_DIR/<agent>/<버전>/bin/<agent> 하나다.
+# - <버전>은 숫자.숫자.숫자이고 링크가 아닌 실제 폴더다(current 링크는 Runner가 실행 시점의 버전으로 바꿔 넘긴다).
+# - 진입점은 보통 패키지 안 파일을 가리키는 링크다. 링크를 따라간 실제 파일도 그 버전 폴더 안이어야 한다.
+# 왜: CLI 묶음 안에는 rg·bwrap 같은 다른 실행 파일도 있다. bwrap은 임의 명령을 띄울 수 있으므로 진입점만 받는다.
+#   CLI가 세션 안에서 스스로 부르는 rg 등은 같은 계정·같은 scope의 자식이라 따로 허용할 필요가 없다.
+# 출력: 진입점 경로(링크 그대로). CLI는 자기 위치로 패키지를 찾으므로 링크 경로로 실행한다.
+entry_point() {
+  local agent=$1 path=$2 version dir real
+  [[ $path =~ ^/[A-Za-z0-9._/-]+$ && $path != *..* && $path != *//* ]] || return 1
+  [[ $path == "$CLI_DIR/$agent/"*"/bin/$agent" ]] || return 1
+  version=${path#"$CLI_DIR/$agent/"}
+  version=${version%"/bin/$agent"}
+  [[ $version =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || return 1
+  dir=$CLI_DIR/$agent/$version
+  [[ -d $dir && ! -L $dir && ! -L $dir/bin ]] || return 1
+  real=$(realpath -e -- "$path" 2> /dev/null) || return 1
+  [[ $real == "$dir"/* && -f $real && -x $real ]] || return 1
+  printf '%s' "$path"
 }
 
 cmd_run() {
@@ -86,15 +113,14 @@ cmd_run() {
   local real_cwd real_bin
   real_cwd=$(inside "$cwd" "$WORKTREES") || die "작업 폴더는 $WORKTREES 안이어야 합니다."
   [[ -d $real_cwd ]] || die "작업 폴더가 폴더가 아닙니다."
-  real_bin=$(inside "$1" "$CLI_DIR/$agent") || die "CLI는 $CLI_DIR/$agent 안의 Runner 설치본이어야 합니다."
-  [[ -f $real_bin && -x $real_bin ]] || die "CLI 실행 파일이 아닙니다."
+  real_bin=$(entry_point "$agent" "$1") || die "CLI는 $CLI_DIR/$agent/<버전>/bin/$agent 진입점이어야 합니다."
   shift
   cd -- "$real_cwd"
   # env -i: Runner에게서 받은 환경을 모두 버리고 아래 값만 새로 만든다.
   # HOME은 Agent 계정의 홈이다. Claude·Codex 로그인 정보도 이 홈(~/.claude, ~/.codex)에서 읽는다.
   exec env -i \
     HOME="$AGENT_HOME" USER="$AGENT_USER" LOGNAME="$AGENT_USER" \
-    PATH="$NODE_DIR:/usr/local/bin:/usr/bin:/bin" \
+    PATH="$AGENT_PATH" \
     TMPDIR="$AGENT_HOME/tmp" \
     DISABLE_AUTOUPDATER=1 DISABLE_UPDATES=1 \
     "${extra[@]}" \
@@ -109,14 +135,56 @@ cmd_login_status() {
   [[ $agent == claude || $agent == codex ]] || die "--agent는 claude 또는 codex입니다."
   (($# == 1)) || die "CLI 실행 파일 하나만 받습니다."
   local real_bin
-  real_bin=$(inside "$1" "$CLI_DIR/$agent") || die "CLI는 $CLI_DIR/$agent 안의 Runner 설치본이어야 합니다."
-  [[ -f $real_bin && -x $real_bin ]] || die "CLI 실행 파일이 아닙니다."
+  real_bin=$(entry_point "$agent" "$1") || die "CLI는 $CLI_DIR/$agent/<버전>/bin/$agent 진입점이어야 합니다."
   local args=(auth status --json)
   [[ $agent == codex ]] && args=(-c check_for_update_on_startup=false login status)
   cd -- "$AGENT_HOME"
   exec env -i HOME="$AGENT_HOME" USER="$AGENT_USER" LOGNAME="$AGENT_USER" \
-    PATH="$NODE_DIR:/usr/local/bin:/usr/bin:/bin" TMPDIR="$AGENT_HOME/tmp" \
+    PATH="$AGENT_PATH" TMPDIR="$AGENT_HOME/tmp" \
     DISABLE_AUTOUPDATER=1 DISABLE_UPDATES=1 "$real_bin" "${args[@]}"
+}
+
+# ①·CI 검사 명령(조정자 결정 1). Runner가 main에 고정된 pipeline.yaml에서 만든 argv만 보낸다.
+# 래퍼는 그 출처를 알 수 없으므로 실행 범위를 막는다: 작업 폴더는 worktrees 안, 환경 변수는 허용 목록, 계정은 Agent.
+# 왜 계정을 바꾸나: 시험·빌드는 Agent가 쓴 코드(설정 파일·스크립트)를 실행한다. Runner 계정으로 돌리면 Runner 홈·토큰에 닿는다.
+cmd_ci_run() {
+  local cwd='' extra=()
+  while (($#)); do
+    [[ $1 == -- ]] || (($# >= 2)) || die "옵션 값이 없습니다: $1"
+    case $1 in
+      --cwd) cwd=$2; shift 2 ;;
+      --env)
+        # 검사 명령에 넘겨도 되는 이름만. 값은 경로·숫자·짧은 낱말 모양만 받는다(줄바꿈·공백·따옴표 없음).
+        [[ $2 =~ ^(LANG|LC_ALL|TZ|CI|NODE_ENV|FORCE_COLOR|NO_COLOR|AWBS_REPORT|AWBS_REPORT_NONCE|AWBS_EVIDENCE_DIR)=[A-Za-z0-9_.@:/+,=-]{0,512}$ ]] \
+          || die "허용하지 않는 환경 변수입니다: ${2%%=*}"
+        extra+=("$2"); shift 2 ;;
+      --) shift; break ;;
+      *) die "모르는 옵션입니다: $1" ;;
+    esac
+  done
+  (($# >= 1)) || die "실행할 명령이 없습니다."
+  local real_cwd program
+  real_cwd=$(inside "$cwd" "$WORKTREES") || die "작업 폴더는 $WORKTREES 안이어야 합니다."
+  [[ -d $real_cwd ]] || die "작업 폴더가 폴더가 아닙니다."
+  cd -- "$real_cwd"
+  if [[ $1 == */* ]]; then
+    # 경로로 준 명령(예: ./node_modules/.bin/vitest)은 작업 폴더 안의 실행 파일만.
+    program=$(inside "$1" "$real_cwd") || die "경로로 준 명령은 작업 폴더 안이어야 합니다."
+    [[ -f $program && -x $program ]] || die "실행 파일이 아닙니다."
+    program=$1
+  else
+    [[ $1 =~ ^[A-Za-z0-9._+-]{1,64}$ ]] || die "명령 이름 형식이 아닙니다."
+    program=$(PATH="$AGENT_PATH" command -v -- "$1") || die "고정 PATH에서 명령을 찾지 못했습니다: $1"
+    [[ $program == /* ]] || die "고정 PATH의 실행 파일이 아닙니다: $1"
+  fi
+  shift
+  exec env -i \
+    HOME="$AGENT_HOME" USER="$AGENT_USER" LOGNAME="$AGENT_USER" \
+    PATH="$AGENT_PATH" \
+    TMPDIR="$AGENT_HOME/tmp" \
+    DISABLE_AUTOUPDATER=1 DISABLE_UPDATES=1 \
+    "${extra[@]}" \
+    "$program" "$@"
 }
 
 cmd_kill_group() {
@@ -191,10 +259,11 @@ sub=${1-}
 (($#)) && shift
 case $sub in
   run) cmd_run "$@" ;;
+  ci-run) cmd_ci_run "$@" ;;
   kill-group) cmd_kill_group "$@" ;;
   kill-all) cmd_kill_all ;;
   fix-perms) cmd_fix_perms "$@" ;;
   check) cmd_check ;;
   login-status) cmd_login_status "$@" ;;
-  *) die "하위 명령은 run · kill-group · kill-all · fix-perms · check · login-status 중 하나입니다." ;;
+  *) die "하위 명령은 run · ci-run · kill-group · kill-all · fix-perms · check · login-status 중 하나입니다." ;;
 esac

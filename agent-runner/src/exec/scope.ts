@@ -83,6 +83,11 @@ export function withUserScope(inner: IsolationLayer): IsolationLayer {
     name: `${inner.name}+user-scope`,
     flags: (agent: Agent) => inner.flags(agent),
     wrap: (launch: Launch, agent: Agent) => inUserScope(inner.wrap(launch, agent)),
+    // ①·CI 명령도 같은 사용자 scope 안에서 돈다. 안쪽 계층에 command가 없으면 scope로 감쌀 대상도 없으므로 거부한다.
+    command: (launch: Launch) => {
+      if (!inner.command) throw new Error('이 격리 계층은 ①·CI 명령을 실행하지 않습니다.');
+      return inUserScope(inner.command(launch));
+    },
   };
 }
 

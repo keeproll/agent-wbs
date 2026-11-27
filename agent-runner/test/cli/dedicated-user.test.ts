@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 import { buildLaunch, sessionOptions, type RunSpec } from '../../src/cli/args.ts';
 import {
-  agentControl, agentIsolationConfig, agentLoginRun, DEDICATED_FLAGS, dedicatedUserIsolation, DedicatedUserError, selectIsolation, type DedicatedUserConfig,
+  agentControl, agentIsolationConfig, agentLoginRun, cliEntryPoint, DEDICATED_FLAGS, dedicatedUserIsolation, DedicatedUserError, selectIsolation, type DedicatedUserConfig,
 } from '../../src/cli/dedicated-user.ts';
 import { IsolationUndecidedError, PENDING_ISOLATION } from '../../src/cli/isolation.ts';
 import type { RunCommand } from '../../src/readiness/command.ts';
@@ -12,8 +12,11 @@ const CODEX_REAL = '/srv/agentwbs/cli/codex/0.172.0/bin/codex';
 const CLAUDE_REAL = '/srv/agentwbs/cli/claude/2.1.332/bin/claude';
 /** 링크 해석 fake: current 링크는 버전 폴더로, 링크된 작업 폴더는 지정한 곳으로. */
 const links: Record<string, string> = {
-  '/srv/agentwbs/cli/codex/current/bin/codex': CODEX_REAL,
-  '/srv/agentwbs/cli/claude/current/bin/claude': CLAUDE_REAL,
+  // current 링크는 버전 폴더로. 진입점(bin/<agent>)은 패키지 안 파일을 가리키는 링크다(실제 설치 모양).
+  '/srv/agentwbs/cli/codex/current': '/srv/agentwbs/cli/codex/0.172.0',
+  '/srv/agentwbs/cli/claude/current': '/srv/agentwbs/cli/claude/2.1.332',
+  [CODEX_REAL]: '/srv/agentwbs/cli/codex/0.172.0/lib/node_modules/@openai/codex/bin/codex.js',
+  [CLAUDE_REAL]: '/srv/agentwbs/cli/claude/2.1.332/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe',
   '/srv/agentwbs/worktrees/p1/escape': '/home/keeproll/.agentwbs/state',
 };
 const realpath = (p: string) => links[p] ?? p;
@@ -254,5 +257,56 @@ describe('agentLoginRun — 로그인 상태만 Agent 계정(래퍼 login-status
       ['/srv/agentwbs/cli/codex/current/bin/codex', ['--version']],
       ['/usr/local/bin/claude', ['auth', 'status', '--json']],
     ]);
+  });
+});
+
+describe('조정자 결정 4: 래퍼에 넘기는 CLI는 claude·codex 진입점만', () => {
+  test('current 링크는 버전 폴더로 고정하고, 진입점 파일의 링크는 따라가지 않고 그대로 넘긴다', () => {
+    expect(cliEntryPoint(cfg, 'Codex', '/srv/agentwbs/cli/codex/current/bin/codex', realpath)).toBe(CODEX_REAL);
+    expect(cliEntryPoint(cfg, 'Claude', '/srv/agentwbs/cli/claude/2.1.332/bin/claude', realpath)).toBe(CLAUDE_REAL);
+  });
+  test.each([
+    ['CLI 묶음 안의 bwrap', '/srv/agentwbs/cli/codex/current/lib/node_modules/@openai/codex/vendor/bwrap'],
+    ['다른 Agent 진입점', '/srv/agentwbs/cli/claude/current/bin/claude'],
+    ['버전이 숫자가 아님', '/srv/agentwbs/cli/codex/latest/bin/codex'],
+    ['설치본 밖', '/usr/local/bin/codex'],
+  ])('%s → 거부', (_name, file) => {
+    expect(cliEntryPoint(cfg, 'Codex', file, realpath)).toBeNull();
+    expect(() => buildLaunch('Codex', file, spec, { env: hostEnv, isolation: iso })).toThrow(expect.objectContaining({ code: 'binary_outside_agent_root' }));
+  });
+  test('진입점 링크가 버전 폴더 밖을 가리키면 거부', () => {
+    const evil = (p: string) => p === CODEX_REAL ? '/srv/agentwbs/cli/codex/0.1.0/bin/codex' : realpath(p);
+    expect(cliEntryPoint(cfg, 'Codex', '/srv/agentwbs/cli/codex/current/bin/codex', evil)).toBeNull();
+  });
+});
+
+describe('조정자 결정 1: ①·CI 명령은 래퍼 ci-run으로 Agent 계정에서', () => {
+  const launch = { file: 'pnpm', args: ['run', 'test'], env: { PATH: '/home/keeproll/.nvm/bin', CI: '1', LANG: 'C.UTF-8', GH_TOKEN: 'ghp_x' }, cwd: '/srv/agentwbs/worktrees/p1/ci-1', stdin: '' };
+  test('sudo -n -u awbs-agent -- 래퍼 ci-run --cwd … --env(허용 이름만) -- 명령', () => {
+    const l = iso.command?.(launch);
+    expect(l?.file).toBe('/usr/bin/sudo');
+    expect(l?.args).toEqual(['-n', '-u', 'awbs-agent', '--', '/usr/local/libexec/awbs-agent-exec', 'ci-run', '--cwd', launch.cwd, '--env', 'LANG=C.UTF-8', '--env', 'CI=1', '--', 'pnpm', 'run', 'test']);
+    expect(l?.env).toEqual({ PATH: '/usr/bin:/bin' });
+    expect(l?.args.join(' ')).not.toContain('ghp_x');
+  });
+  test.each([
+    ['작업 폴더가 worktrees 밖', { cwd: '/home/keeproll/project' }, 'cwd_outside_agent_root'],
+    ['절대 경로 명령', { file: '/bin/sh' }, 'binary_outside_agent_root'],
+    ['작업 폴더 밖 상대 경로', { file: '../../x' }, 'binary_outside_agent_root'],
+    ['명령 이름에 공백', { file: 'pnpm test' }, 'binary_outside_agent_root'],
+    ['허용 이름의 값에 공백', { env: { CI: 'a b' } }, 'agent_config_invalid'],
+  ] as const)('%s → 거부', (_name, over, code) => {
+    expect(() => iso.command?.({ ...launch, ...over })).toThrow(expect.objectContaining({ code }));
+  });
+  test('작업 폴더 안 상대 경로 명령은 받는다', () => {
+    expect(iso.command?.({ ...launch, file: './node_modules/.bin/vitest' }).args).toContain('./node_modules/.bin/vitest');
+  });
+  test('scope 계층은 ci-run도 systemd-run --user --scope로 감싼다. 거부 계층은 명령도 거부', async () => {
+    const choice = await selectIsolation({ AWBS_AGENT_USER: 'awbs-agent' }, vi.fn<RunCommand>(async () => ({ code: 0, stdout: 'ok\n', stderr: '' })), { realpath });
+    const l = choice.isolation.command?.(launch);
+    expect(l?.file).toBe('/usr/bin/systemd-run');
+    expect(l?.scope).toMatch(/^awbs-/);
+    expect(l?.args).toContain('ci-run');
+    expect(() => PENDING_ISOLATION.command?.(launch)).toThrow(IsolationUndecidedError);
   });
 });

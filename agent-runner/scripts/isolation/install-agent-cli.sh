@@ -11,8 +11,9 @@
 #     Runner를 오래 끄고 있었거나 바로 최신으로 맞추고 싶을 때만 Runner를 멈춘 상태에서 다시 실행한다.
 #
 # 하는 일(Runner의 CLI 업데이트와 같은 방식·같은 폴더 모양)
-#   1. npm 공식 저장소에서 @anthropic-ai/claude-code, @openai/codex의 latest 버전 번호를 읽는다.
-#   2. /srv/agentwbs/cli/<claude|codex>/<버전>/ 에 설치한다(임시 폴더에 설치 → 점검 → 이름 바꾸기).
+#   1. npm 공식 저장소에서 @anthropic-ai/claude-code, @openai/codex, pnpm의 latest 버전 번호를 읽는다.
+#   2. /srv/agentwbs/cli/<claude|codex|pnpm>/<버전>/ 에 설치한다(임시 폴더에 설치 → 점검 → 이름 바꾸기).
+#      pnpm은 ①·CI 검사 명령(래퍼 ci-run)이 Agent 계정의 고정 PATH에서 찾는다(조정자 결정 1). Agent용 node에는 corepack이 없다.
 #   3. 설치한 프로그램이 그 버전을 말하는지(--version) 확인한다. 돈이 드는 호출은 하지 않는다.
 #   4. current 링크를 새 버전으로 한 번에 바꾼다.
 # bash 전용이다. sh(dash)로 부르면 pipefail에서 알 수 없는 오류가 나므로 여기서 먼저 멈춘다.
@@ -65,10 +66,11 @@ act() {
 }
 
 FAILED=0
-for agent in claude codex; do
+for agent in claude codex pnpm; do
   pkg=@openai/codex
   scripts=()
   if [[ $agent == claude ]]; then pkg=@anthropic-ai/claude-code; scripts=(--allow-scripts=@anthropic-ai/claude-code); fi
+  if [[ $agent == pnpm ]]; then pkg=pnpm; fi
   step "$agent ($pkg)"
   if ! raw=$(npm view "$pkg@latest" version --json "${NPM_FLAGS[@]}" 2> /dev/null); then
     note '최신 버전을 읽지 못했습니다(네트워크·npm 확인).'; FAILED=1; continue

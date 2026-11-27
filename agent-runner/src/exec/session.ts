@@ -202,8 +202,16 @@ export class Execution {
       gate = d.updater?.tryClaim();
       if (d.updater && !gate) throw new Error('CLI 업데이트 중에는 명령을 시작하지 않습니다.');
       this.#assertStart(agent, 1, reservation);
-      const wrapped = (await this.#currentIsolation()).wrap(launch, agent);
-      await this.#report('acquireJobSlots', { epoch: job.epoch, params: { id: job.id }, body: { fence: job.fence, hostId: d.identity.hostId } }, stopped);
+      // ①·CI 명령은 격리 계층의 command(전용 계정이면 래퍼 ci-run)로 감싼다. fake 계층(시험)만 wrap으로 대신한다.
+      const layer = await this.#currentIsolation();
+      const wrapped = layer.command ? layer.command(launch) : layer.wrap(launch, agent);
+      // CI job(integrate·ci_retry)은 claim 때 이미 물리 슬롯을 예약한다(reserved). 그때는 다시 받지 않고 그 예약으로 /process를 보낸다.
+      // 왜: 서버는 슬롯이 없는(none) 보유에만 acquire를 허락한다. 시도 job은 세션이 끝나 슬롯을 돌려준 뒤라 none이다.
+      const current = (await this.#call('getExecutionHolds', { epoch: job.epoch }, stopped)).body.holds
+        .find(h => h.job === job.id && h.epoch === job.epoch && h.fence === job.fence && h.host_id === d.identity.hostId && !h.closed_at);
+      if (current?.slot_state !== 'reserved') {
+        await this.#report('acquireJobSlots', { epoch: job.epoch, params: { id: job.id }, body: { fence: job.fence, hostId: d.identity.hostId } }, stopped);
+      }
       acquired = true;
       const logs: Record<'stdout' | 'stderr', Buffer[]> = { stdout: [], stderr: [] };
       const sizes = { stdout: 0, stderr: 0 };
