@@ -20,7 +20,7 @@ afterEach(async () => { await chmod(join(home, 'state'), 0o700).catch(() => unde
 const EPOCH = 3;
 const command = { id: 'reset', epoch: 4, kind: 'reset-cleanup', payload: { holds: [], generation: null, unparsedPrs: [] } } as never;
 const estimateJob = () => ({ id: '77777777-7777-4777-8777-777777777777', fence: 1, leaseUntil: NOW, kind: 'estimate' as const,
-  payload: { tasks: [{ taskKey: 'TASK-0001', subjectHash: 'a'.repeat(64), content: content() }], policy: {} } });
+  payload: { tasks: [{ taskKey: 'TASK-0001', workType: 'Implementation' as const, subjectHash: 'a'.repeat(64), content: content() }], policy: {} } });
 const workKey = `estimate:${estimateJob().id}`;
 const good = { ref: 'TASK-0001', estHours: 2, loHours: 1, hiHours: 3, confidence: '중', basis: 'Claude: a\nCodex: b', agreedBy: ['Claude', 'Codex'] };
 

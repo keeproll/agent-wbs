@@ -128,7 +128,7 @@ describe('계약 6: WBS 스냅샷과 기존 Task 판단(taskJudgements)', () => 
     const fake = fakeApi();
     const { ctx, claude } = await context(home, fake.api);
     const job: Job<'split'> = { id: '88888888-0000-4000-8000-888888888888', leaseUntil: NOW, fence: 1, kind: 'split',
-      payload: { tasks: [{ taskKey: 'TASK-0001', subjectHash: HASH, content: content() }], policy: {}, wbs: wbsSnapshot() } };
+      payload: { tasks: [{ taskKey: 'TASK-0001', workType: 'Implementation' as const, subjectHash: HASH, content: content() }], policy: {}, wbs: wbsSnapshot() } };
     expect((await runPlanningJob(job, ctx)).status).toBe('done');
     expect(claude.calls.find((c) => c.method === 'proposeSplit')?.request).toMatchObject({ wbs: wbsSnapshot() });
   });
@@ -139,7 +139,7 @@ describe('계약 5: 기존 Task 재판단(planning:null, proposal:null, tasks �
     const fake = fakeApi();
     const { ctx } = await context(home, fake.api);
     const job: Job<'planning'> = { id: '99999999-0000-4000-8000-999999999999', leaseUntil: NOW, fence: 1, kind: 'planning',
-      payload: { tasks: [{ taskKey: 'TASK-0001', subjectHash: HASH, content: content() }], policy: { judgedRules: ['revert'] }, proposal: null, planning: null } } as Job<'planning'>;
+      payload: { tasks: [{ taskKey: 'TASK-0001', workType: 'Implementation' as const, subjectHash: HASH, content: content() }], policy: { judgedRules: ['revert'] }, proposal: null, planning: null } } as Job<'planning'>;
     expect((await runPlanningJob(job, ctx)).status).toBe('done');
     expect(fake.schemaErrors).toEqual([]);
     const body = bodyOf(fake.calls, 'submitTaskPlan') as { judgedRules: { items: { rule: string; subjectHash: string; agreedBy: string[] }[] } };
@@ -168,7 +168,7 @@ describe('서버 규칙: VERSION_CONFLICT(전제가 바뀜)', () => {
   test('분할 CP의 VERSION_CONFLICT는 결과 코드로 남긴다', async () => {
     const fake = fakeApi((call) => (call.op === 'submitPlanningProposal' ? apiError(call.op, 409, 'VERSION_CONFLICT') : undefined));
     const job: Job<'split'> = { id: '88888888-0000-4000-8000-888888888889', leaseUntil: NOW, fence: 1, kind: 'split',
-      payload: { tasks: [{ taskKey: 'TASK-0001', subjectHash: HASH, content: content() }], policy: {}, wbs: wbsSnapshot() } };
+      payload: { tasks: [{ taskKey: 'TASK-0001', workType: 'Implementation' as const, subjectHash: HASH, content: content() }], policy: {}, wbs: wbsSnapshot() } };
     expect(await runPlanningJob(job, (await context(home, fake.api)).ctx)).toMatchObject({ status: 'failed', error: { code: 'VERSION_CONFLICT' } });
   });
 });

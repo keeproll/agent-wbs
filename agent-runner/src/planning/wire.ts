@@ -64,7 +64,7 @@ const REPORTS: Record<string, { params: readonly string[]; body: (b: Rec) => str
     !isText(b.jobId) ? 'jobId가 없습니다' : !(isRecord(b.grades) && isRecord(b.grades.dev) && isRecord(b.grades.qa)) ? 'grades(dev·qa)가 없습니다'
       : !(isRecord(b.subagents) && Array.isArray(b.subagents.dev) && Array.isArray(b.subagents.qa)) ? 'subagents가 없습니다'
         : !('conflictGroup' in b) || !(b.conflictGroup === null || isRecord(b.conflictGroup)) ? 'conflictGroup이 없습니다'
-          // 기존 Task 재판단은 작업 payload의 hash를 그대로 돌려보낸다.
+          // 기존 Task 재판단의 subjectHash는 변경 후 내용의 지문이다(여기서는 형식만 보고, 값은 bind와 서버가 대조한다).
           : b.judgedRules === undefined ? null : recordProblem(b.judgedRules, true) },
   submitEstimates: { params: [], body: (b) => {
     if (!isText(b.jobId)) return 'jobId가 없습니다';

@@ -86,7 +86,7 @@ describe('지적 2: 실패·상실 결과에 비밀값이 나오지 않는다', 
     const { ctx, codex } = await context(home, fakeApi().api, { secrets: ['review-private-secret'] });
     codex.fail.estimate = new Error('CLI token=review-private-secret sk-abcdefghijklmnopqrstuvwxyz');
     const job = { id: '77777777-7777-4777-8777-777777777777', fence: 1, leaseUntil: NOW, kind: 'estimate' as const,
-      payload: { tasks: [{ taskKey: 'TASK-0001', subjectHash: 'a'.repeat(64), content: content() }], policy: {} } };
+      payload: { tasks: [{ taskKey: 'TASK-0001', workType: 'Implementation' as const, subjectHash: 'a'.repeat(64), content: content() }], policy: {} } };
     const outcome = await runPlanningJob(job, ctx);
     expect(outcome).toMatchObject({ status: 'failed', error: { code: 'PLANNING_AGENT_FAILED' } });
     expect(JSON.stringify(outcome)).not.toContain('review-private-secret');
@@ -98,7 +98,7 @@ describe('지적 2: 실패·상실 결과에 비밀값이 나오지 않는다', 
     const { ctx, claude } = await context(home, fakeApi().api, { secrets: ['review-private-secret'] });
     claude.proposeSplit = () => { throw new TypeError('bad review-private-secret'); };
     const job = { id: '88888888-0000-4000-8000-888888888888', fence: 1, leaseUntil: NOW, kind: 'split' as const,
-      payload: { tasks: [{ taskKey: 'TASK-0001', subjectHash: 'a'.repeat(64), content: content() }], policy: {}, wbs: wbsSnapshot() } };
+      payload: { tasks: [{ taskKey: 'TASK-0001', workType: 'Implementation' as const, subjectHash: 'a'.repeat(64), content: content() }], policy: {}, wbs: wbsSnapshot() } };
     expect(JSON.stringify(await runPlanningJob(job, ctx))).not.toContain('review-private-secret');
   });
 });
@@ -149,7 +149,7 @@ describe('지적 3: 재시작해도 서버에 보고한 분석으로 교차 검�
 
   test('추정을 보낸 뒤 재시작해도 다시 묻지 않고 같은 합의를 보낸다', async () => {
     const job = { id: '77777777-7777-4777-8777-777777777778', fence: 1, leaseUntil: NOW, kind: 'estimate' as const,
-      payload: { tasks: [{ taskKey: 'TASK-0001', subjectHash: 'a'.repeat(64), content: content() }], policy: {} } };
+      payload: { tasks: [{ taskKey: 'TASK-0001', workType: 'Implementation' as const, subjectHash: 'a'.repeat(64), content: content() }], policy: {} } };
     const a = fakeApi();
     await runPlanningJob(job, (await context(home, a.api)).ctx);
     const b = fakeApi();

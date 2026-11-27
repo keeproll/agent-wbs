@@ -144,7 +144,7 @@ const outcome = await runPlanningJob(job, {
   - `invalid`: 결론이 `met`·`not_met`이 아니거나 근거가 문자열이 아님
 - 왜: 판단 기록은 합의 주체가 둘 다일 때만 유효하다(data-model §2.3-1). 기록이 없으면 서버가 `JUDGEMENT_MISSING`으로 승인을 보류하고 팀장 화면에 보인다. 한쪽 결론을 합의처럼 적으면, 합의하지 않은 분할이 승인을 통과한다.
 - 새 Task·초안·새 CP의 판단에는 `subjectHash`를 넣지 않는다. 서버가 저장할 때 계산한다.
-- 저장된 대상의 재판단에는 작업 payload의 hash를 그대로 돌려보낸다. 서버가 지금 내용과 대조해 바뀌었으면 `VERSION_CONFLICT`로 거부한다.
+- 저장된 대상의 재판단은 변경 후 내용의 지문을 `subjectHash`와 `sourceRef`에 함께 붙인다. 서버가 지금 내용과 대조해 다르면 `VERSION_CONFLICT`로 거부한다.
 
 추정 합의는 계획 문서에 공식이 없어 Runner가 정한 규칙이다.
 
@@ -167,7 +167,7 @@ const outcome = await runPlanningJob(job, {
     - 설계를 생략하면 권장 구역이다.
     - AC 방법 생략은 빈 문자열이다.
     - **충돌 묶음 생략은 분할 상속을 적용한 값**이다: 원 Task를 취소하는 분할에서 원 Task를 대신하는 Task가 상속한다.
-    - 조사(Analysis) Task가 묶음을 생략하면, 원 Task 작업 유형이 payload에 없어 상속 여부를 정할 수 없다. 그래서 보내지 않는다(명시를 요구).
+    - 조사(Analysis) Task는 원 Task도 조사일 때만 상속한다(원 Task 작업 유형은 payload `tasks[].workType`, 서버 8406865). 작업 유형이 없는 옛 job은 처리하지 않는다.
   - 내용이 바뀌는 기존 Task: 스냅샷 내용에 title·doneCond·scopeAdd·acAdd를 서버와 같은 규칙으로 적용한 내용(acAdd 문장 해석 포함)
   - 초안: 서버 `draftSource`(설계 없음)
   - 분할 판단(D-34): 판단 기록을 뺀 ops + 대상 Task들(원 Task와 ops가 가리키는 기존 Task, 키 순서, 지금 내용)
@@ -227,18 +227,18 @@ const outcome = await runPlanningJob(job, {
   - 내용이 바뀌는 기존 Task(modify의 `title`·`doneCond`·`scopeAdd`·`acAdd`)는 `taskJudgements`로 판단을 보낸다.
     - 판단 대상은 스냅샷의 현재 내용과 그 Task의 변경 목록이다.
     - 두 Agent가 각자 판단하고 합의한 것만 남긴다.
-    - 「변경 후 내용」과 hash는 Runner가 만들지 않는다. 적용 규칙(예: `acAdd` 문장 해석)과 hash 계산은 서버가 기준이다.
+    - 판단 대상은 서버와 같은 적용 규칙(예: `acAdd` 문장 해석)으로 만든 변경 후 JudgedContent다. 그 지문을 서버가 저장할 hash와 대조한다.
   - 우선순위·담당 변경은 판단 대상이 아니다. 스냅샷에 없는 Task를 고치려 하면 보내지 않는다.
 - planning: 셋 중 하나다.
   - `proposal`: CP 판단
   - `planning`: Planning 세션
-  - `tasks`(1개 이상): 기존 Task 재판단. Task마다 등급·판단을 보내고, 판단에는 payload hash를 그대로 붙인다.
+  - `tasks`(1개 이상): 기존 Task 재판단. Task마다 등급·판단을 보내고, 판단에는 변경 후 내용(작성자의 충돌 묶음 반영)의 지문을 붙인다.
   - 하나도 없으면 `UNSUPPORTED_PAYLOAD`다.
 - **`VERSION_CONFLICT`**: 이 job의 판단 전제(기술 결정 버전·WBS 스냅샷)가 지금 서버 값과 다르다는 뜻이다.
   - 같은 키로 다시 보내지 않는다.
   - 초기 분석·차이 분석은 그 단계를 실패로 보고하고, 결과 코드도 `VERSION_CONFLICT`로 남긴다.
   - 팀장이 「다시 시도」하면 서버가 현재 스냅샷과 새 `runNo`로 job을 다시 만든다. 기술 결정이 바뀌었으면 `codex`부터, WBS가 바뀌었으면 `diff`부터다.
-- 새 필드도 전송 직전 관문(`wire.ts`)을 지난다: `taskJudgements`(taskKey 형식·중복, 합의 주체 둘), Task 재판단 `judgedRules`의 payload hash.
+- 새 필드도 전송 직전 관문(`wire.ts`)을 지난다: `taskJudgements`(taskKey 형식·중복, 합의 주체 둘), Task 재판단 `judgedRules`의 subjectHash 형식.
 - 실제 서버 시험: `agent-wbs/apps/api/test/planning-runner.db.test.ts`(`pnpm -C agent-wbs test:db -- planning-runner`)가 두 경로를 실제 서버 경로·DB 위에서 끝까지 돌린다.
   - 초기 분석: 등록 → 분석 → 제안 → 확정(반려 포함) → 초안 → 승인
   - 차이 분석: 두 번 연속

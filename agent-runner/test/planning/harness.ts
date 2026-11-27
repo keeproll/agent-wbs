@@ -206,7 +206,7 @@ export function inputJob(over: { id?: string; fence?: number; resumeStep?: strin
 export function wbsSnapshot() {
   return {
     phases: [{ id: 'PH-01', wps: [{ id: 'WP-01', tasks: ['TASK-0001'] }] }],
-    tasks: [{ taskKey: 'TASK-0001', wp: 'WP-01', status: 'ready' as const, subjectHash: HASH, content: content() }],
+    tasks: [{ taskKey: 'TASK-0001', wp: 'WP-01', workType: 'Implementation' as const, status: 'ready' as const, subjectHash: HASH, content: content() }],
     dependencies: [],
   };
 }

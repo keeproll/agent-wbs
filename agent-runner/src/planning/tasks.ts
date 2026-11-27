@@ -20,6 +20,7 @@ import { JobRun, PlanningAgentFailed, type PlanningOutcome } from './run.ts';
  */
 
 type Job<K extends ClaimedJob['kind']> = Extract<ClaimedJob, { kind: K }>;
+const WORK_TYPES: readonly string[] = ['Analysis', 'Design', 'Implementation', 'Configuration', 'Test', 'Verification', 'Documentation', 'Integration'];
 const unsupported = (message: string): PlanningOutcome => ({ status: 'failed', error: { code: 'UNSUPPORTED_PAYLOAD', message } });
 
 export async function runPlanning(run: JobRun<Job<'planning'>>): Promise<PlanningOutcome> {
@@ -33,7 +34,8 @@ export async function runPlanning(run: JobRun<Job<'planning'>>): Promise<Plannin
 
 /**
  * 기존 Task 재판단(planning:null, proposal:null, tasks ≥ 1). Task마다 작성자가 등급·하위 Agent·충돌 묶음을 정하고,
- * 규칙 5·7·9는 두 Agent가 각자 판단해 합의한 것만 payload hash를 그대로 붙여 보낸다(POST /planning/tasks/:taskKey/plan).
+ * 규칙 5·7·9는 두 Agent가 각자 판단해 합의한 것만 보낸다(POST /planning/tasks/:taskKey/plan).
+ * 판단 대상은 작성자가 고른 충돌 묶음을 반영한 변경 후 내용이고, subjectHash와 sourceRef 모두 그 지문이다(srv4 fix3 계약 3).
  */
 async function rejudgeTasks(run: JobRun<Job<'planning'>>): Promise<PlanningOutcome> {
   const { tasks, policy } = run.job.payload;
@@ -210,8 +212,9 @@ export async function runSplit(run: JobRun<Job<'split'>>): Promise<PlanningOutco
   if (!task || tasks.length !== 1) return unsupported('분할 작업은 Task 하나를 대상으로 합니다.');
   // 원 Task의 작업 묶음과 선행·후행 그래프가 든 WBS 스냅샷(계약 6). 새 Task의 wp와 순서 보장(D-34)을 이 위에서 설계한다.
   const wbs = splitWbs(run.job);
-  // 원 Task: 상속 전제(충돌 묶음)를 만든다. 작업 유형은 payload에 없어 조사 Task 상속은 명시를 요구한다(judged.ts effectiveGroup).
-  const original = { taskKey: task.taskKey, content: task.content, workType: null };
+  // 원 Task: 상속 전제(충돌 묶음·작업 유형)를 만든다(judged.ts effectiveGroup).
+  if (!WORK_TYPES.includes(task.workType)) return unsupported(`분할할 Task ${task.taskKey}의 작업 유형(workType)이 없습니다. 옛 job은 서버가 다시 발급해야 합니다.`);
+  const original = { taskKey: task.taskKey, content: task.content, workType: task.workType };
   // 분할 판단(D-34)에 보여 주는 입력: 판단 기록을 뺀 ops + 대상 Task들의 지금 내용(서버 splitSubjectHash와 같은 구성).
   const splitShown = (ops: AnyOp[]) => ({ ops, splitTasks: splitTasksOf(ops, task.taskKey, wbs) });
   const response = await sendProposal(run, async () => {

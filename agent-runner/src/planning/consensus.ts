@@ -25,7 +25,7 @@ export interface Disagreement<R extends string = string> {
 export interface JudgementMeta {
   judgedAt: string;
   sourceRef: string;
-  /** 기존 대상의 재판단은 작업 payload의 hash를 그대로 돌려보낸다. 새 대상은 서버가 계산하므로 생략한다. */
+  /** 저장된 대상의 판단에 붙일 subjectHash(변경 후 내용의 지문). 새 대상은 생략한다(sourceRef의 지문으로 서버가 대조). */
   subjectHash?: (target: string) => string;
   /** 대상별 sourceRef. 보여준 입력의 지문을 붙일 때 쓴다(binding.ts). 없으면 sourceRef를 그대로 쓴다. */
   sourceRefFor?: (target: string) => string;

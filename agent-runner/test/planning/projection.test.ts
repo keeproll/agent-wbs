@@ -26,7 +26,7 @@ const sharedWbs = () => {
   return { ...w, tasks: w.tasks.map((t) => ({ ...t, content: { ...t.content, conflictGroup: 'shared-db' } })) };
 };
 const splitJob = (id = '88888888-0000-4000-8000-888888888888'): Job<'split'> => ({ id, leaseUntil: NOW, fence: 1, kind: 'split',
-  payload: { tasks: [{ taskKey: 'TASK-0001', subjectHash: HASH, content: { ...content(), conflictGroup: 'shared-db' } }], policy: {}, wbs: sharedWbs() } });
+  payload: { tasks: [{ taskKey: 'TASK-0001', workType: 'Implementation' as const, subjectHash: HASH, content: { ...content(), conflictGroup: 'shared-db' } }], policy: {}, wbs: sharedWbs() } });
 const impl = (ref: string, extra: object = {}) => ({ ...addOp(ref), t: { ...addOp(ref).t, splitBasis: '계약 먼저', ...extra } });
 /** 판단 Agent: 보여 준 내용의 충돌 묶음이 shared-db면 not_met */
 function groupSensitive(...agents: FakeAgent[]) {
@@ -72,11 +72,32 @@ describe('P1: 분할 새 Task의 판단 투영은 상속 묶음을 포함한다'
     expect(shownGroups(codex)).toEqual(['NEW-1:null', 'NEW-2:other']);
   });
 
-  test('조사 Task가 묶음을 생략하면 상속 여부를 정할 수 없어(원 Task 작업 유형 없음) 보내지 않는다', async () => {
+  test('조사 Task의 상속은 원 Task 작업 유형(payload workType)으로 정한다: 원 Task가 구현이면 조사 Task는 상속하지 않는다', async () => {
     const fake = fakeApi();
-    const { ctx, claude } = await context(home, fake.api);
+    const { ctx, claude, codex } = await context(home, fake.api);
     claude.ops = [impl('NEW-1', { type: 'Analysis' }), impl('NEW-2'), { op: 'remove', task: 'TASK-0001' }] as never;
-    expect(await runPlanningJob(splitJob(), ctx)).toMatchObject({ status: 'failed', error: { code: 'PLANNING_AGENT_FAILED' } });
+    groupSensitive(claude, codex);
+    expect((await runPlanningJob(splitJob(), ctx)).status).toBe('done');
+    expect(fake.schemaErrors).toEqual([]);
+    // 앞에 두는 조사 Task는 원 Task를 대신하지 않는다 → 묶음 없음. 구현 Task는 상속.
+    expect(shownGroups(codex)).toEqual(['NEW-1:null', 'NEW-2:shared-db']);
+  });
+
+  test('원 Task도 조사(Analysis)면 조사 Task도 상속한다', async () => {
+    const { ctx, claude, codex } = await context(home, fakeApi().api);
+    claude.ops = [impl('NEW-1', { type: 'Analysis' }), { op: 'remove', task: 'TASK-0001' }] as never;
+    groupSensitive(claude, codex);
+    const job = splitJob();
+    const analysis = { ...job, payload: { ...job.payload, tasks: job.payload.tasks.map((t) => ({ ...t, workType: 'Analysis' as const })) } };
+    expect((await runPlanningJob(analysis, ctx)).status).toBe('done');
+    expect(shownGroups(codex)).toEqual(['NEW-1:shared-db']);
+  });
+
+  test('분할할 Task의 작업 유형이 없는 옛 job은 추측하지 않고 처리하지 않는다', async () => {
+    const fake = fakeApi();
+    const job = splitJob();
+    const old = { ...job, payload: { ...job.payload, tasks: job.payload.tasks.map((t) => Object.fromEntries(Object.entries(t).filter(([key]) => key !== 'workType'))) } } as never;
+    expect(await runPlanningJob(old, (await context(home, fake.api)).ctx)).toMatchObject({ status: 'failed', error: { code: 'UNSUPPORTED_PAYLOAD' } });
     expect(fake.calls).toEqual([]);
   });
 
@@ -107,7 +128,7 @@ describe('P1: 분할 새 Task의 판단 투영은 상속 묶음을 포함한다'
 
 describe('P2: 저장본의 목적지는 믿지 않는다', () => {
   const rejudge = (): Job<'planning'> => ({ id: '99999999-0000-4000-8000-999999999999', leaseUntil: NOW, fence: 1, kind: 'planning',
-    payload: { tasks: [{ taskKey: 'TASK-0001', subjectHash: HASH, content: content() }], policy: { judgedRules: ['revert'] }, proposal: null, planning: null } } as Job<'planning'>);
+    payload: { tasks: [{ taskKey: 'TASK-0001', workType: 'Implementation' as const, subjectHash: HASH, content: content() }], policy: { judgedRules: ['revert'] }, proposal: null, planning: null } } as Job<'planning'>);
   async function tamper(job: { id: string; fence: number }, name: string, change: (request: { params?: Record<string, string>; body: Record<string, unknown> }) => void) {
     const dir = join(home, 'state', 'planning');
     for (const file of await readdir(dir)) {

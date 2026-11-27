@@ -1,4 +1,4 @@
-import type { JudgedContent } from '../api/generated/client.ts';
+import type { JudgedContent, WorkType } from '../api/generated/client.ts';
 import type { ProposalOp, SplitProposalOp } from './agents.ts';
 import type { WbsSnapshot } from './payload.ts';
 
@@ -69,22 +69,23 @@ export function judgedOfDraftTask(task: { title: string; overview?: { scope: str
   });
 }
 
-/** 분할 CP의 상속 전제. 원 Task를 취소하는 분할에서만 묶음이 넘어간다(simulateProposal). */
-export interface SplitContext { originalKey: string; originalGroup: string | null; originalWorkType: string | null; removesOriginal: boolean }
+/**
+ * 분할 CP의 상속 전제. 원 Task를 취소하는 분할에서만 묶음이 넘어간다(simulateProposal).
+ * 원 Task의 작업 유형은 분할 job payload의 `tasks[].workType`이다(서버 후속 4, 8406865 필수 필드).
+ */
+export interface SplitContext { originalKey: string; originalGroup: string | null; originalWorkType: WorkType; removesOriginal: boolean }
 
 /**
  * 새 Task의 실효 충돌 묶음. 생략은 「원 Task 상속」이고 명시한 값(null 포함)은 그대로다.
- * 상속은 원 Task를 대신하는 Task만 받는다: 조사(Analysis) Task는 원 Task도 조사일 때만(replacesOriginal).
- * 원 Task의 작업 유형을 모르면 조사 Task의 상속 여부를 정할 수 없으므로 추측하지 않고 문제로 돌려준다.
+ * 상속은 원 Task를 대신하는 Task만 받는다(서버 replacesOriginal):
+ * - 조사(Analysis)가 아닌 새 Task는 상속한다.
+ * - 조사 Task는 원 Task도 조사일 때만 상속한다. 원 Task 앞에 두는 조사 Task는 원 Task를 대신하지 않기 때문이다.
  */
-export function effectiveGroup(t: AddT, split: SplitContext | null): { group: string | null } | { problem: string } {
+export function effectiveGroup(t: AddT, split: SplitContext | null): { group: string | null } {
   if (t.conflictGroup !== undefined) return { group: t.conflictGroup };
   if (!split?.removesOriginal) return { group: null };
-  if (t.type !== 'Analysis') return { group: split.originalGroup };
-  if (split.originalWorkType === null) {
-    return { problem: `조사 Task의 충돌 묶음 상속 여부를 정할 수 없습니다(원 Task ${split.originalKey}의 작업 유형이 payload에 없음). conflictGroup을 명시하세요.` };
-  }
-  return { group: split.originalWorkType === 'Analysis' ? split.originalGroup : null };
+  const replaces = t.type !== 'Analysis' || split.originalWorkType === 'Analysis';
+  return { group: replaces ? split.originalGroup : null };
 }
 
 /** 서버 parseAcceptanceCriterion과 같은 규칙 */

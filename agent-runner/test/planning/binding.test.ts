@@ -21,7 +21,7 @@ afterEach(async () => cleanup());
 
 type Job<K extends ClaimedJob['kind']> = Extract<ClaimedJob, { kind: K }>;
 const rejudgeJob = (): Job<'planning'> => ({ id: '99999999-0000-4000-8000-999999999999', leaseUntil: NOW, fence: 1, kind: 'planning',
-  payload: { tasks: [{ taskKey: 'TASK-0001', subjectHash: HASH, content: content() }], policy: { judgedRules: ['revert'] }, proposal: null, planning: null } } as Job<'planning'>);
+  payload: { tasks: [{ taskKey: 'TASK-0001', workType: 'Implementation' as const, subjectHash: HASH, content: content() }], policy: { judgedRules: ['revert'] }, proposal: null, planning: null } } as Job<'planning'>);
 
 describe('P1: 새 충돌 묶음은 판단에도 보여 준다', () => {
   test('리뷰어 재현의 반대: 작성자가 shared-db를 고르면 두 Agent는 shared-db가 반영된 내용을 판단하고, 그 판단(not_met)을 보낸다', async () => {

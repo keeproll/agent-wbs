@@ -1,5 +1,5 @@
 import type { ApiRequest } from '../api/client.ts';
-import type { ClaimedJob, JudgedContent, PlanningProposalOp } from '../api/generated/client.ts';
+import type { ClaimedJob, JudgedContent, PlanningProposalOp, WorkType } from '../api/generated/client.ts';
 import { SPLIT_RULES, type ProposalOp, type SplitProposalOp } from './agents.ts';
 import { isAnalysisPair, isDiff, isDisagreements } from './guards.ts';
 import type { InputDiffPayload, WbsSnapshot } from './payload.ts';
@@ -120,15 +120,6 @@ export async function sendProposal(run: JobRun, build: () => Promise<ProposalReq
 /** 판단 대상 내용(JudgedContent)을 바꾸는 수정 항목. 우선순위·담당 변경은 판단 대상이 아니다(data-model §2.3-1). */
 const CONTENT_FIELDS = new Set(['title', 'doneCond', 'scopeAdd', 'acAdd']);
 
-/**
- * CP의 판단 기록을 채운다. 두 Agent가 각자 판단하고 합의한 것만 남긴다(D-33).
- * - 새 Task(add op): 그 Task 내용(op.t)을 판단해 `t.judgedRules`에 넣는다.
- * - 내용이 바뀌는 기존 Task(modify op의 title·doneCond·scopeAdd·acAdd): WBS 스냅샷의 현재 내용과 그 Task의 변경 목록을 함께 판단해
- *   `taskJudgements[{taskKey,judgedRules}]`로 보낸다(서버 후속 4 계약 6).
- *   - 「변경 후 내용」을 Runner가 직접 만들지 않는다. acAdd 문장 해석 같은 적용 규칙은 서버(simulate)가 기준이기 때문이다.
- *   - hash도 보내지 않는다. 서버가 변경 적용 후 내용으로 계산해 붙인다(contracts §3.3).
- * - 스냅샷에 없는 Task를 바꾸려 하면 Agent 출력 오류다(서버도 거부한다).
- */
 type AnyOp = ProposalOp | SplitProposalOp;
 
 /**
@@ -149,7 +140,6 @@ export function changeSubjects(ops: readonly AnyOp[], wbs: WbsSnapshot, split: S
   for (const op of ops) {
     if (op.op !== 'add') continue;
     const group = effectiveGroup(op.t, split);
-    if ('problem' in group) return { problem: `${op.ref}: ${group.problem}` };
     subjects.push({ target: op.ref, content: judgedOfNewTask(withoutJudged(op.t) as typeof op.t, group.group) });
   }
   for (const [taskKey, list] of changes) {
@@ -159,7 +149,7 @@ export function changeSubjects(ops: readonly AnyOp[], wbs: WbsSnapshot, split: S
 }
 
 /** 분할 CP의 상속 전제: 원 Task와, 이 ops가 원 Task를 취소하는지(simulateProposal) */
-export function splitContext(ops: readonly AnyOp[], original: { taskKey: string; content: JudgedContent; workType: string | null }): SplitContext {
+export function splitContext(ops: readonly AnyOp[], original: { taskKey: string; content: JudgedContent; workType: WorkType }): SplitContext {
   return { originalKey: original.taskKey, originalGroup: original.content.conflictGroup, originalWorkType: original.workType,
     removesOriginal: ops.some((op) => op.op === 'remove' && op.task === original.taskKey) };
 }
@@ -173,7 +163,7 @@ export function plainOps(ops: readonly unknown[]): AnyOp[] {
 }
 
 /** CP 제출 전송 직전 대조: 새 Task·기존 Task·분할 판단이 실제 보낼 ops의 투영에 묶였는지 본다. */
-export function proposalBind(wbs: WbsSnapshot, split?: { original: { taskKey: string; content: JudgedContent; workType: string | null }; shown: (ops: AnyOp[]) => unknown }) {
+export function proposalBind(wbs: WbsSnapshot, split?: { original: { taskKey: string; content: JudgedContent; workType: WorkType }; shown: (ops: AnyOp[]) => unknown }) {
   return (request: unknown): string | null => {
     const body = (request as { body?: { ops?: unknown[]; taskJudgements?: { taskKey: string; judgedRules: unknown }[]; splitJudgements?: unknown } }).body;
     const ops = plainOps(body?.ops ?? []);
@@ -200,7 +190,8 @@ export function proposalBind(wbs: WbsSnapshot, split?: { original: { taskKey: st
  * CP의 판단 기록을 채운다. 두 Agent가 각자 판단하고 합의한 것만 남긴다(D-33).
  * 판단 대상은 changeSubjects의 투영이고, 판단 기록의 sourceRef에 그 투영의 지문을 묶는다(4차 리뷰 P1).
  * - 새 Task는 `t.judgedRules`, 내용이 바뀌는 기존 Task는 `taskJudgements[{taskKey,judgedRules}]`(서버 후속 4 계약 6).
- * - 「변경 후 내용」과 hash는 Runner가 만들지 않는다. acAdd 해석 같은 적용 규칙과 hash 계산은 서버가 기준이다.
+ * - 판단 대상은 변경 후 JudgedContent(judged.ts: 새 Task는 judgedOfNewTask, 기존 Task는 applyContentChanges)다.
+ *   적용 규칙(acAdd 해석·설계 생략·분할 상속)은 서버와 같다. 지문(sha256:)은 서버가 저장할 hash와 같고, 다르면 서버가 409로 거부한다.
  */
 export async function judgeChanges(run: JobRun, ops: readonly AnyOp[], wbs: WbsSnapshot, split: SplitContext | null = null) {
   const result = changeSubjects(ops, wbs, split);

@@ -44,7 +44,7 @@ function stepped(job: BootJob | DiffJob): SteppedPayload {
 function wbsProblem(wbs: unknown): string | null {
   const w = wbs as Partial<WbsSnapshot> | null | undefined;
   if (!w || !Array.isArray(w.phases) || !Array.isArray(w.tasks) || !Array.isArray(w.dependencies)) return 'wbs 스냅샷(phases·tasks·dependencies)이 없습니다';
-  for (const t of w.tasks) if (!t || !isId(t.taskKey) || !isId(t.wp) || typeof t.subjectHash !== 'string' || !HASH.test(t.subjectHash)) return 'wbs.tasks 형식이 다릅니다';
+  for (const t of w.tasks) if (!t || !isId(t.taskKey) || !isId(t.wp) || typeof t.subjectHash !== 'string' || !HASH.test(t.subjectHash) || !isId(t.workType)) return 'wbs.tasks 형식이 다릅니다';
   return null;
 }
 

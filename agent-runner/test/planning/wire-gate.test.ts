@@ -20,7 +20,7 @@ afterEach(async () => cleanup());
 
 type Job<K extends ClaimedJob['kind']> = Extract<ClaimedJob, { kind: K }>;
 const lease = (id: string) => ({ id, leaseUntil: NOW, fence: 5 });
-const tasks = [{ taskKey: 'TASK-0001', subjectHash: HASH, content: content() }];
+const tasks = [{ taskKey: 'TASK-0001', workType: 'Implementation' as const, subjectHash: HASH, content: content() }];
 
 /** 시나리오마다: 준비 실행(앞 단계 기록)과 변조할 job */
 const SCENARIOS: { name: string; prepare?: PlanningJob; job: PlanningJob; ops?: unknown[] }[] = [

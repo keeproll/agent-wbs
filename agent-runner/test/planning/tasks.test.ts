@@ -108,7 +108,7 @@ describe('Planning 세션 job(planning + payload.planning, G§4.5)', () => {
 describe('추정 job(estimate)', () => {
   const estimateJob = (policy: Job<'estimate'>['payload']['policy'] = {}): Job<'estimate'> => ({
     ...lease('77777777-7777-4777-8777-777777777777'), kind: 'estimate',
-    payload: { tasks: [{ taskKey: 'TASK-0001', subjectHash: HASH, content: content() }, { taskKey: 'TASK-0002', subjectHash: HASH, content: { ...content(), conflictGroup: 'auth' } }], policy },
+    payload: { tasks: [{ taskKey: 'TASK-0001', workType: 'Implementation' as const, subjectHash: HASH, content: content() }, { taskKey: 'TASK-0002', workType: 'Implementation' as const, subjectHash: HASH, content: { ...content(), conflictGroup: 'auth' } }], policy },
   });
 
   test('두 Agent의 독립 추정을 합의해 한 번에 등록한다', async () => {
@@ -146,7 +146,7 @@ describe('추정 job(estimate)', () => {
 describe('분할 job(split, G§5.2-1)', () => {
   const splitJob = (): Job<'split'> => ({
     ...lease('88888888-0000-4000-8000-888888888888'), kind: 'split',
-    payload: { tasks: [{ taskKey: 'TASK-0001', subjectHash: HASH, content: content('큰 Task') }], policy: { split: { maxHours: 4 } }, wbs: wbsSnapshot() },
+    payload: { tasks: [{ taskKey: 'TASK-0001', workType: 'Implementation' as const, subjectHash: HASH, content: content('큰 Task') }], policy: { split: { maxHours: 4 } }, wbs: wbsSnapshot() },
   });
 
   test('작성자가 나눈 CP에 새 Task별 판단과 분할 판단(D-34)을 두 Agent 합의로 붙여 분할 CP로 제출한다', async () => {

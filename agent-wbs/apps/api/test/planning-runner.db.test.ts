@@ -350,4 +350,37 @@ describe('실제 서버 + Runner Planning orchestration', () => {
       expect(refFingerprint(i.sourceRef)).toBe(i.subjectHash);
     }
   });
+
+  test('fix7(실제 DB): 조사 Task의 상속은 원 Task 작업 유형(payload workType)으로 정한다 — 구현 원 Task면 조사 Task는 묶음 없음, 구현 Task는 상속', async () => {
+    const s = await project();
+    const candidates = (await wbsSnapshot(ownerPool, s.id)).tasks.filter((t) => t.status !== 'done' && t.status !== 'cancelled');
+    const original = candidates.at(-1);
+    if (!original) throw new Error('분할할 Task 없음');
+    await ownerPool.query("update tasks set conflict_group='shared-db' where task_key=$1", [original.taskKey]);
+    const detail = await lead('GET', `/api/tasks/${original.taskKey}`);
+    const requested = await lead('POST', `/api/tasks/${original.taskKey}/split`, { updatedAt: detail.json<{ updatedAt: string }>().updatedAt });
+    expect(requested.statusCode, requested.body).toBe(202);
+    const job = await claim('split');
+    expect(job.kind === 'split' && job.payload.tasks[0]?.workType).toBe('Implementation');
+    const run = await context();
+    run.agents.Claude.proposeSplit = async (request) => {
+      run.agents.Claude.calls.push({ method: 'proposeSplit', request: structuredClone(request) });
+      const wp = request.wbs.tasks.find((t) => t.taskKey === original.taskKey)?.wp ?? '';
+      const add = (ref: string, type: 'Analysis' | 'Implementation') => ({ op: 'add' as const, ref, preds: [], t: { title: `분할 ${ref}`, type, domain: 'BE' as const, wp, priority: 1,
+        assignee: 'Claude' as const, verifier: 'Codex' as const, purpose: '목적', doneCond: '테스트 통과', splitBasis: '조사 먼저', ac: [{ given: 'g', when: 'w', then: 't' }] } });
+      return { title: '조사 뒤 구현', reason: '불확실', ops: [add('NEW-1', 'Analysis'), add('NEW-2', 'Implementation'), { op: 'remove' as const, task: original.taskKey }] };
+    };
+    const outcome = await runPlanningJob(job, run.ctx);
+    expect(outcome, JSON.stringify(outcome)).toMatchObject({ status: 'done' });
+    await finish(job, outcome);
+    const shown = (run.agents.Codex.calls.find((c) => c.method === 'judgeRules')?.request as { subjects: { target: string; content: { conflictGroup: string | null } }[] }).subjects
+      .map((x) => `${x.target}:${String(x.content.conflictGroup)}`);
+    expect(shown).toEqual(['NEW-1:null', 'NEW-2:shared-db']);
+    // 서버(replacesOriginal)가 정한 상속과 Runner가 보여 준 내용이 같아야 지문이 맞는다(다르면 서버가 409로 거부한다).
+    const cp = (await ownerPool.query<{ ops: { op: string; t?: { judgedRules?: { items: { subjectHash: string; sourceRef: string }[] } } }[] }>(
+      'select ops from change_proposals where id=$1', [(outcome as unknown as { result: { proposalId: string } }).result.proposalId])).rows[0];
+    const items = cp?.ops.flatMap((o) => o.t?.judgedRules?.items ?? []) ?? [];
+    expect(items.length).toBe(6);
+    for (const i of items) expect(refFingerprint(i.sourceRef)).toBe(i.subjectHash);
+  });
 });

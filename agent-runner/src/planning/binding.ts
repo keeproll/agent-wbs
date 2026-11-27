@@ -8,8 +8,9 @@ import { normalizeJudged } from './judged.ts';
  * 원칙
  * 1. 보낼 내용을 먼저 확정하고, 그 내용에서 판단 대상(투영, projection)을 만들어 두 Agent에게 보여준다.
  * 2. 판단 기록의 `sourceRef`에 보여준 입력의 지문을 붙인다: `sha256:<64자>`(서버 계약, srv4 fix3).
- *    - JudgedContent를 보여줬으면 지문은 서버 subjectHash와 같은 계산(data-model §2.3-1)이다. 서버가 저장하는 변경 후 hash와 바로 대조할 수 있다.
- *    - 그 밖의 입력(초안 Task, CP의 새 Task, 기존 Task의 변경 목록, 분할 ops)은 같은 정규 JSON의 SHA-256이다.
+ *    - 일반 판단(재판단·CP 판단·CP 새 Task·기존 Task 변경·초안)은 모두 변경 후 JudgedContent(judged.ts)를 보여 준다.
+ *      지문은 서버 subjectHash와 같은 계산(JCS·UTF-8·SHA-256)이라, 서버가 저장할 hash와 바로 대조된다.
+ *    - 분할 전체 판단(D-34)만 `{ops, splitTasks}`의 같은 계산(서버 splitSubjectHash)이다.
  * 3. 서버로 보내기 직전에 실제 전송 본문에서 투영을 다시 만들어 지문을 비교한다. 다르면 보내지 않는다.
  *    - 새로 만든 본문: 한 번 다시 판단한다. 그래도 다르면 Agent 출력 오류로 멈춘다.
  *    - 진행 기록에서 읽은 본문: 손상으로 보고 멈춘다(CHECKPOINT_UNREADABLE).
