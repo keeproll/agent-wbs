@@ -253,16 +253,14 @@ test('오류 코드는 계획 §1.1 표·본문과 상태가 같다', () => {
     const list = statuses.split('/').map(Number);
     codes.forEach((code, i) => (listed[code] = list[Math.min(i, list.length - 1)] ?? 0));
   }
-  expect(Object.keys(listed)).toHaveLength(35);
+  expect(Object.keys(listed)).toHaveLength(36);
   expect(ERROR_STATUS).toMatchObject(listed);
 
   // §1·§2.3·§2.4 본문에만 있는 코드
   const inText: Record<string, number> = {};
   for (const [, status, code = ''] of contracts.matchAll(/(400|401|403|503) `([A-Z]+_[A-Z_]+)`/g)) inText[code] = Number(status);
   expect(inText).toMatchObject({ IDEMPOTENCY_KEY_REQUIRED: 400, LOGIN_FAILED: 401, PDF_FAILED: 503 });
-  // shortcut: MERGE_MISMATCH는 조정자 2026-11-27 결정이다, 계획 문서 동기화 뒤 이 예외를 지운다.
-  expect(ERROR_STATUS.MERGE_MISMATCH).toBe(409);
-  expect(Object.keys(ERROR_STATUS).sort()).toEqual([...new Set([...Object.keys(listed), ...Object.keys(inText), 'MERGE_MISMATCH'])].sort());
+  expect(Object.keys(ERROR_STATUS).sort()).toEqual([...new Set([...Object.keys(listed), ...Object.keys(inText)])].sort());
 });
 
 test('프로토타입 Endpoint가 정한 오류 코드·상태를 선언한다', () => {

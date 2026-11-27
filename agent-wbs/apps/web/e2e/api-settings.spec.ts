@@ -54,6 +54,24 @@ test('설정 조회 API 응답 기록(구현 여부)', async ({ page }) => {
   }
 });
 
+test('Q-07: 실제 API도 실행 중 전달 켜기를 거부하고 화면은 준비 중이다', async ({ page }) => {
+  await login(page, '/settings/runner');
+  const card = page.getByRole('region', { name: 'Runner 연결' });
+  await expect(card.getByRole('button', { name: /준비 중/ })).toBeDisabled();
+  const result = await page.evaluate(async () => {
+    const session = await fetch('/api/session').then((r) => r.json() as Promise<{ csrfToken: string }>);
+    const current = await fetch('/api/settings/workflow').then((r) => r.json() as Promise<Record<string, unknown>>);
+    const res = await fetch('/api/settings/workflow', {
+      method: 'PUT', headers: { 'content-type': 'application/json', 'x-csrf-token': session.csrfToken },
+      body: JSON.stringify({ ...current, liveInject: true }),
+    });
+    return { status: res.status, body: await res.json() as { error: { code: string } }, current };
+  });
+  expect(result.current.liveInject).toBe(false);
+  expect(result.status).toBe(400);
+  expect(result.body.error.code).toBe('VALIDATION_FAILED');
+});
+
 test('실행 정책: seed 기본값 표시 → 변경 저장 → 새로고침해도 유지, 낡은 버전 저장은 충돌 창', async ({ page }) => {
   await login(page, '/settings/agent');
   const card = page.getByRole('region', { name: 'Agent 실행 정책 — 모델 · Effort' });

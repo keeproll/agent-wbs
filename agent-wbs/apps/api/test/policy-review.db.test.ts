@@ -91,13 +91,13 @@ test('read preserves exact message version; failure, resend and late ack have hi
   expect(history.items.some((x: {text:string})=>x.text.includes('전달 실패'))).toBe(true);
 });
 
-test('지적 5: 실행 중·실행 중 전달 꺼짐에서 재전송하면 다음 실행 대기', async () => {
+test('Q-07·지적 5: 기존 live_inject=true여도 실행 중 재전송은 다음 실행 대기', async () => {
   const m = (await h.lead('POST','/api/messages',{taskKey:'TASK-0001',type:'질문',toAgent:'Claude',body:'resend'})).body;
   await h.lead('POST',`/api/messages/${m.id}/send`,{updatedAt:m.updatedAt});
   await inEpoch(h.pool,1,c=>failUndelivered(c,'offline'));
   const failed=(await get('/api/messages?taskKey=TASK-0001')).items.find((x: {id:string})=>x.id===m.id);
   await h.owner.query("update tasks set status='running' where id=$1",[f.tasks['TASK-0001']]);
-  await h.owner.query('update exec_policy set live_inject=false');
+  await h.owner.query('update exec_policy set live_inject=true');
   const resent = await h.lead('POST',`/api/messages/${m.id}/resend`,{updatedAt:failed.updatedAt});
   obs('resend in active task',resent);
   expect(resent.body.pendingNext).toBe(true);
