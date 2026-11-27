@@ -33,7 +33,13 @@ export async function pipelineDefinition(client: PoolClient, project: string, he
   return row?.observation?.definition ?? { path:'.agentwbs/pipeline.yaml',commit:head,status:'missing',error:null,raw:null,stages:null };
 }
 
-/** 사슬의 main 부모도 이 프로젝트에서 성공 관측한 커밋이어야 한다. */
+/** 수용한 main 원장의 조상→자손 순서다. 원장과 이어지지 않는 관측은 증거로 쓰지 않는다. */
 export async function observedBases(client: PoolClient, project: string): Promise<string[]> {
-  return (await client.query<{ sha: string }>(`select key sha from projects p,jsonb_each(p.pipeline_observations) o where p.id=$1 and o.value->'definition'->>'status'='ok'`,[project])).rows.map(r => r.sha);
+  return (await client.query<{ sha: string }>(`with recursive history(sha,seq,path) as (
+    select commit_sha,0::bigint,array[commit_sha] from input_versions where project_id=$1 and v=1
+    union all
+    select c.sha,(c.files->>'seq')::bigint,h.path||c.sha from history h join input_change_commits c
+      on c.project_id=$1 and c.files->>'base'=h.sha where (c.files->>'seq')::bigint>h.seq and not c.sha=any(h.path)
+  ) select o.key sha from projects p,jsonb_each(p.pipeline_observations) o,history h
+    where p.id=$1 and o.key=h.sha and o.value->'definition'->>'status'='ok' order by h.seq`,[project])).rows.map(r => r.sha);
 }
