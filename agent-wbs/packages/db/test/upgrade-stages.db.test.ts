@@ -68,9 +68,15 @@ test('빈 DB와 0014·0016(master)·0017·0018·0019·0020·0021 단계 DB가 �
       await pool.query("alter table projects add column pipeline_observations jsonb not null default '{}'");
       const sequenceTables = ['planning_jobs','task_estimates','change_proposals','runner_jobs','task_attempts','attempt_observations','runner_hosts','runner_concurrency_log','agent_usage','task_history','ci_steps','runner_sessions'];
       for (const table of sequenceTables) await pool.query(`alter table ${table} add column record_no bigint default 1`);
+      await pool.query('alter table ci_runs add column note text,add column e2e jsonb,add column github_status jsonb,add column finished_at timestamptz');
+      await pool.query('alter table merge_queue add column merged_at timestamptz');
+      await pool.query('alter table flaky_tests add column last_failed_at timestamptz');
       try { await seedDemo(pool, base.href); }
       finally {
         await pool.query('alter table projects drop column pipeline_observations');
+        await pool.query('alter table ci_runs drop column note,drop column e2e,drop column github_status,drop column finished_at');
+        await pool.query('alter table merge_queue drop column merged_at');
+        await pool.query('alter table flaky_tests drop column last_failed_at');
         for (const table of sequenceTables) await pool.query(`alter table ${table} drop column record_no`);
       }
       await pool.query('alter table counters disable trigger counter_monotone');

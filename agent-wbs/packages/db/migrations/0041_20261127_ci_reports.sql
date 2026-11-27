@@ -74,6 +74,10 @@ END $$;
 -- Git 객체의 사실은 같은 SHA로 다시 보고해도 고칠 수 없다.
 CREATE TABLE public.ci_merge_facts(project_id uuid NOT NULL CONSTRAINT ci_merge_facts_project_id_projects_id_fk REFERENCES public.projects(id) ON DELETE CASCADE,merge_sha text NOT NULL,tree_sha text,parents jsonb,CONSTRAINT ci_merge_facts_project_id_merge_sha_pk PRIMARY KEY(project_id,merge_sha));
 --> statement-breakpoint
+INSERT INTO public.ci_merge_facts(project_id,merge_sha,tree_sha,parents)
+SELECT DISTINCT ON (project_id,actual_merge_sha) project_id,actual_merge_sha,actual_tree_sha,merge_parents
+FROM public.merge_queue WHERE actual_merge_sha IS NOT NULL ORDER BY project_id,actual_merge_sha,queue_no;
+--> statement-breakpoint
 ALTER TABLE public.ci_merge_facts OWNER TO awbs_data_owner;
 --> statement-breakpoint
 CREATE TRIGGER guard_truncate BEFORE TRUNCATE ON public.ci_merge_facts FOR EACH STATEMENT EXECUTE FUNCTION public.awbs_immutable();
@@ -82,3 +86,11 @@ CREATE TRIGGER guard_delete BEFORE DELETE ON public.ci_merge_facts FOR EACH ROW 
 GRANT SELECT,INSERT ON public.ci_merge_facts TO awbs_app;
 --> statement-breakpoint
 CREATE TRIGGER append_only BEFORE UPDATE ON public.ci_merge_facts FOR EACH ROW EXECUTE FUNCTION public.awbs_immutable();
+
+--> statement-breakpoint
+-- 모르는 화면 값은 null로 둔다. Runner가 실제 관측한 값만 기록한다.
+ALTER TABLE public.ci_runs ADD COLUMN note text,ADD COLUMN e2e jsonb,ADD COLUMN github_status jsonb,ADD COLUMN finished_at timestamptz;
+--> statement-breakpoint
+ALTER TABLE public.merge_queue ADD COLUMN merged_at timestamptz;
+--> statement-breakpoint
+ALTER TABLE public.flaky_tests ADD COLUMN last_failed_at timestamptz;

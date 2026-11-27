@@ -1734,6 +1734,30 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "note": {
+          "name": "note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "e2e": {
+          "name": "e2e",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "github_status": {
+          "name": "github_status",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "finished_at": {
+          "name": "finished_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -4210,6 +4234,12 @@
           "type": "uuid",
           "primaryKey": false,
           "notNull": false
+        },
+        "last_failed_at": {
+          "name": "last_failed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {},
@@ -5581,6 +5611,12 @@
         "merge_parents": {
           "name": "merge_parents",
           "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "merged_at": {
+          "name": "merged_at",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         }

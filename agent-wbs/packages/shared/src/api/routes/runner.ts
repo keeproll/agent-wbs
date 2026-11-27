@@ -560,6 +560,11 @@ export const runnerOperations = [
         steps: Opt(List(m.CiStep)),
         status: Opt(c.CiStatus),
         failScope: Opt(AnyOf('baseline', 'task')),
+        note:Opt(Type.String()),
+        finishedAt:Opt(c.Timestamp),
+        e2e:Opt(m.CiE2e),
+        githubStatus:Opt(m.CiGithubStatus),
+        flakyTests:Opt(List(Body({ testKey:Text,rate:Type.Number({ minimum:0,maximum:1 }),lastFailedAt:c.Timestamp }))),
         logExcerpt: Opt(Type.String()),
         artifacts: Opt(List(Type.String())),
         url: Opt(c.HttpUrl),
@@ -587,6 +592,7 @@ export const runnerOperations = [
       testedTreeSha: Opt(c.Sha),
       actualMergeSha: Opt(c.Sha),
       actualTreeSha: Opt(c.Sha),
+      mergedAt:Opt(c.Timestamp),
       // H→H′의 자동 병합 보존과 실제 PR 병합 부모를 서버의 저장 근거와 대조한다.
       headSync: Opt(Body({
         ...headProof,

@@ -392,7 +392,7 @@ test('리뷰 R8: CI 설정 두 경로는 같은 버전과 값을 저장하고 �
   const saved = await app.inject({ method:'PATCH',url:`/api/projects/${project}/ci/settings`,headers:lead(),payload:{ updatedAt:settings.updatedAt,retry:2 } });
   expect(saved.statusCode,saved.body).toBe(200);
   expect((await get('settings/ci')).json()).toMatchObject({ retry:2,updatedAt:saved.json().updatedAt });
-  const defaults = await app.inject({ method:'PUT',url:'/api/settings/ci',headers:lead(),payload:{ ...saved.json() as Record<string,unknown>,retry:1 } });
+  const defaults = await app.inject({ method:'PUT',url:'/api/settings/ci',headers:lead(),payload:{ updatedAt:saved.json().updatedAt,nightAt:saved.json().nightAt,deployUrl:saved.json().deployUrl,retry:1 } });
   expect(defaults.statusCode,defaults.body).toBe(200);
   expect((await get(`projects/${project}/ci/settings`)).json()).toMatchObject({ retry:1 });
   expect((await get(`projects/${project}/ci/pipeline`)).statusCode).toBe(200);
@@ -570,4 +570,142 @@ test.each([false,true])('결정 16: 두 단계 main 사슬은 원래 QA를 유�
   expect((await queue(a,'checking',extra)).statusCode).toBe(204);
   expect((await queue(a,'merged',{ ...extra,actualMergeSha:'9'.repeat(40),actualTreeSha:tree2,mergeParents:[base2,head2] })).statusCode).toBe(204);
   expect((await owner.query('select head_sha from verifications')).rows).toEqual([{ head_sha:sha }]);
+});
+
+
+test('M7-05: Runner가 보고한 실행 설명·E2E 수·완료 시각·실제 GitHub 보고와 flaky 실패 시각을 조회한다', async () => {
+  const a = await running(), r = await start(a), id = r.json().id as string;
+  expect((await patch(id,{ fence:1,status:'run' })).statusCode).toBe(204);
+  const finishedAt = '2026-11-27T00:00:00.000000Z';
+  const githubStatus = { headSha:sha,context:'agentwbs/task',state:'success',reportedAt:finishedAt };
+  const done = await patch(id,{ fence:1,status:'pass',note:'E2E 재시도 통과',e2e:{ passed:12,total:12 },finishedAt,githubStatus,
+    flakyTests:[{ testKey:'E2E/login',rate:0.2,lastFailedAt:finishedAt }] });
+  expect(done.statusCode,done.body).toBe(204);
+  expect((await get(`projects/${project}/ci/runs/${id}`)).json()).toMatchObject({ note:'E2E 재시도 통과',e2e:{ passed:12,total:12 },finishedAt,githubStatus });
+  expect((await get(`projects/${project}/ci/flaky`)).json()).toMatchObject({ items:[{ testKey:'E2E/login',rate:'0.2',lastFailedAt:finishedAt,taskKey:a.key }] });
+  const unknown = await start(a);
+  expect((await get(`projects/${project}/ci/runs/${unknown.json().id}`)).json()).toMatchObject({ e2e:null,note:null,githubStatus:null,finishedAt:null });
+  expect((await patch(unknown.json().id as string,{ fence:1,e2e:{ passed:13,total:12 } })).statusCode).toBe(400);
+  expect((await patch(unknown.json().id as string,{ fence:1,githubStatus:{ ...githubStatus,headSha:otherSha } })).statusCode).toBe(409);
+});
+
+test('M7-05: 관측한 main 서비스 구성을 읽고 실제 병합 시각과 서버 대기열 수신 시각을 구분한다', async () => {
+  const a = await gateTask(), base = 'd'.repeat(40);
+  const serviceConfig = { path:'docker-compose.ci.yml',commit:base,status:'ok',raw:'services: {}',error:null };
+  const observed = await post('input-changes',{ base:otherSha,head:base,baseIsAncestor:true,treeHash:sha,changes:[],commits:[],pipelineObservation:{ baseSha:base,pipelineSha:pipeline,definition:{ path:'.agentwbs/pipeline.yaml',commit:base,status:'ok',error:null,raw:'version: 1',stages:[],serviceConfig } } });
+  expect(observed.statusCode,observed.body).toBe(200);
+  expect((await get(`projects/${project}/ci/settings`)).json()).toMatchObject({ serviceConfig });
+  expect((await get('settings/ci')).json()).toMatchObject({ serviceConfig });
+  expect((await get(`projects/${project}/ci/pipeline`)).json()).toMatchObject({ serviceConfig });
+  await queue(a,'queued',{ baseSha:base });
+  const one = await start(a,'task',{ attemptId:undefined,baseSha:base }), two = await start(a,'int',{ attemptId:undefined,treeSha:sha,baseSha:base });
+  for (const r of [one,two]) { await patch(r.json().id as string,{ fence:1,status:'run' }); await patch(r.json().id as string,{ fence:1,status:'pass' }); }
+  const extra = { ciRunId:two.json().id,testedTreeSha:sha,baseSha:base };
+  expect((await queue(a,'checking',extra)).statusCode).toBe(204);
+  const mergedAt = '2026-11-27T00:01:00.000000Z';
+  expect((await queue(a,'merged',{ ...extra,actualMergeSha:'9'.repeat(40),actualTreeSha:sha,mergeParents:[base,sha],mergedAt })).statusCode).toBe(204);
+  expect((await get(`projects/${project}/ci/queue`)).json()).toMatchObject({ items:[{ mergedAt,queuedAt:expect.stringMatching(/^\d{4}-/) }] });
+});
+
+
+test('결정 12: 호스트·부팅·동시 실행 한도·시도 관측·세션도 시계 역행보다 수신 순번을 따른다', async () => {
+  const a = await running();
+  await owner.query(`insert into runner_hosts(host_id,boot_id,cpu,cores,mem_gb,swap_gb,disk_gb,os,samples,seen_at,created_at)
+    values('host-a','future-old','fake',20,32,0,100,'fake',0,now()+interval '1 hour',now()+interval '1 hour'),
+      ('host-a','past-new','fake',20,32,0,100,'fake',0,now()-interval '1 hour',now()-interval '1 hour')`);
+  await owner.query(`insert into runner_concurrency_log(host_id,"limit",running,subagents,heavy,resources,created_at)
+    values('host-a',1,0,'{}',0,'{}',now()+interval '1 hour'),('host-a',7,0,'{}',0,'{}',now()-interval '1 hour')`);
+  await owner.query(`insert into attempt_observations(project_id,attempt,cli,version,grade,reserved,observed,state,process_state,at,created_at)
+    values($1,$2,'Codex','old','ok',1,1,'ok','{}',now()+interval '1 hour',now()+interval '1 hour'),($1,$2,'Codex','new','ok',1,1,'ok','{}',now()-interval '1 hour',now()-interval '1 hour')`,[project,a.attempt]);
+  await owner.query(`insert into runner_sessions(runner_id,started_at,last_heartbeat_at,ended_at,end_reason)
+    values('old',now()+interval '1 hour',now()+interval '1 hour',now()+interval '2 hour','manual'),('new',now()-interval '1 hour',now()-interval '1 hour',now(),'manual')`);
+  const client = await pool.connect();
+  try {
+    const repo = new RunnerRepository(client);
+    expect((await repo.host())?.boot_id).toBe('past-new');
+    expect(await repo.hostBoot('host-a')).toBe('past-new');
+    expect((await repo.hostHistory())[0]?.boot_id).toBe('past-new');
+    expect((await repo.concurrency())?.limit).toBe(7);
+    expect((await repo.latestObservation(a.attempt))?.version).toBe('new');
+    expect((await repo.sessions()).at(-1)?.runner_id).toBe('new');
+  } finally { client.release(); }
+});
+
+test('결정 16: ② 없는 기준 실패 차수에도 동기화 근거를 보존하고 새 main 차수를 연다', async () => {
+  const a = await gateTask(), head = 'e'.repeat(40), tree = 'f'.repeat(40);
+  const headSync = { qaHeadSha:sha,headSha:head,preserved:true,parents:[sha,otherSha],autoMergeTreeSha:tree,headTreeSha:tree,additionalChanges:false };
+  await queue(a,'queued',{ syncedHeadSha:head,headSync });
+  const run = await start(a,'task',{ attemptId:undefined,headSha:head }); const id = run.json().id as string;
+  await patch(id,{ fence:1,status:'run' }); await patch(id,{ fence:1,status:'fail',failScope:'baseline' });
+  expect((await queue(a,'failed',{ syncedHeadSha:head,headSync,ciRunId:id })).statusCode).toBe(204);
+  const nextBase = 'd'.repeat(40); await observe(nextBase);
+  const job = (await owner.query("select id from runner_jobs where state='queued' and kind='integrate'")).rows[0]?.id as string;
+  expect(job).toBeTypeOf('string');
+  await owner.query("update runner_jobs set state='started',fence=1,lease_owner='runner:ci',lease_until=now()+interval '5 minutes' where id=$1",[job]);
+  expect((await queue({ ...a,job },'queued',{ baseSha:nextBase,syncedHeadSha:head,headSync })).statusCode).toBe(204);
+  expect((await owner.query('select status,head_sync,tested_tree_sha from merge_queue where task=$1 order by queue_no',[a.id])).rows).toEqual([
+    { status:'failed',head_sync:headSync,tested_tree_sha:null },{ status:'queued',head_sync:headSync,tested_tree_sha:null },
+  ]);
+});
+
+
+test('결정 11: 같은 기준의 실패마다 알리고 자동 재작업 상한과 무관하게 수동 재통합한다', async () => {
+  const a = await gateTask();
+  for (let n=0;n<2;n++) {
+    const r = await start(a,'task',{ attemptId:undefined });
+    await patch(r.json().id as string,{ fence:1,status:'run' });
+    expect((await patch(r.json().id as string,{ fence:1,status:'fail',failScope:'baseline' })).statusCode).toBe(204);
+  }
+  expect((await owner.query("select count(*)::int n from notify_events where ref->>'failScope'='baseline'")).rows).toEqual([{ n:2 }]);
+  await owner.query("update runner_jobs set state='failed' where id=$1",[a.job]);
+  const id = (await owner.query('select id from ci_runs where task=$1 order by run_no desc limit 1',[a.id])).rows[0]?.id as string;
+  for (let n=2;n<=4;n++) {
+    const r = await app.inject({ method:'POST',url:`/api/projects/${project}/ci/runs/${id}/retry`,headers:lead() });
+    expect(r.statusCode,r.body).toBe(202);
+    expect((await owner.query('select dedup_key from runner_jobs where id=$1',[r.json().jobId])).rows[0]?.dedup_key).toMatch(new RegExp(`:${otherSha}:${n}$`));
+    await owner.query("update runner_jobs set state='failed' where id=$1",[r.json().jobId]);
+  }
+});
+
+
+test('M7-05: 같은 main의 뒤늦은 서비스 구성만 보충하며 첫 pipeline과 첫 구성은 덮어쓰지 않는다', async () => {
+  await observe();
+  const send = (raw: string, pipelineSha = pipeline) => post('input-changes',{ base:otherSha,head:otherSha,baseIsAncestor:true,treeHash:sha,changes:[],commits:[],pipelineObservation:{ baseSha:otherSha,pipelineSha,definition:{ path:'.agentwbs/pipeline.yaml',commit:otherSha,status:'ok',error:null,raw:'version: 1',stages:[],serviceConfig:{ path:'docker-compose.ci.yml',commit:otherSha,status:'ok',raw,error:null } } } });
+  expect((await send('다른 정의','d'.repeat(40))).statusCode).toBe(200);
+  expect((await get(`projects/${project}/ci/settings`)).json()).toMatchObject({ serviceConfig:null });
+  expect((await send('services: {}')).statusCode).toBe(200);
+  expect((await send('바꾸려는 내용')).statusCode).toBe(200);
+  expect((await get(`projects/${project}/ci/settings`)).json()).toMatchObject({ serviceConfig:{ raw:'services: {}' } });
+});
+
+
+test('기준 경보는 최신 올바른 main 정의의 ① PASS 때만 해소한다', async () => {
+  const a = await gateTask();
+  const old = await start(a,'task',{ attemptId:undefined }); const oldId = old.json().id as string;
+  await patch(oldId,{ fence:1,status:'run' });
+  const failed = await start(a,'task',{ attemptId:undefined }); const failedId = failed.json().id as string;
+  await patch(failedId,{ fence:1,status:'run' }); await patch(failedId,{ fence:1,status:'fail',failScope:'baseline' });
+  await patch(oldId,{ fence:1,status:'pass' });
+  expect((await get('alerts')).json().items).toHaveLength(1);
+  const wrong = await start(a,'task',{ attemptId:undefined,pipelineSha:'d'.repeat(40) }); const wrongId = wrong.json().id as string;
+  await patch(wrongId,{ fence:1,status:'run' }); await patch(wrongId,{ fence:1,status:'pass' });
+  expect((await get('alerts')).json().items).toHaveLength(1);
+  const good = await start(a,'task',{ attemptId:undefined }); const goodId = good.json().id as string;
+  await patch(goodId,{ fence:1,status:'run' }); await patch(goodId,{ fence:1,status:'pass' });
+  expect((await get('alerts')).json().items).toHaveLength(0);
+  expect((await owner.query("select count(*)::int n from notify_events where ref->>'failScope'='baseline' and resolved_at is null")).rows).toEqual([{ n:0 }]);
+});
+
+test('이전 통합 멱등 키를 가진 작업도 자동 중복 생성 없이 수동 재시도한다', async () => {
+  const { a,id } = await baselineFailed();
+  const legacy = await owner.connect();
+  try {
+    await legacy.query('set session_replication_role=replica');
+    await legacy.query("update runner_jobs set dedup_key=regexp_replace(dedup_key,':[a-f0-9]{40}:[0-9]+$',''),payload=payload-'baseSha' where id=$1",[a.job]);
+  } finally { await legacy.query('set session_replication_role=origin'); legacy.release(); }
+  await observe();
+  expect((await owner.query("select count(*)::int n from runner_jobs where kind='integrate'")).rows).toEqual([{ n:1 }]);
+  const r = await app.inject({ method:'POST',url:`/api/projects/${project}/ci/runs/${id}/retry`,headers:lead() });
+  expect(r.statusCode,r.body).toBe(202);
+  expect((await owner.query('select dedup_key from runner_jobs where id=$1',[r.json().jobId])).rows[0]?.dedup_key).toMatch(new RegExp(`:${otherSha}:2$`));
 });

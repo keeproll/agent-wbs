@@ -20,11 +20,14 @@ export interface Update extends Shas {
   fence: number | null; status?: string; steps?: { name: string; status: string; durationMs: number }[];
   artifacts?: string[]; url?: string; logExcerpt?: string;
   failScope?: 'baseline' | 'task';
+  note?: string; finishedAt?: string; e2e?: { passed:number;total:number };
+  githubStatus?: { headSha:string;context:string;state:'pending'|'success'|'failure'|'error';reportedAt:string;url?:string };
+  flakyTests?: { testKey:string;rate:number;lastFailedAt:string }[];
 }
 export interface QueueReport {
   jobId: string; fence: number; pr: number; taskKey: string; status: string;
   qaHeadSha?: string; syncedHeadSha?: string; baseSha?: string; ciRunId?: string; testedTreeSha?: string;
-  actualMergeSha?: string; actualTreeSha?: string; headSync?: HeadProof; mergeParents?: string[];
+  actualMergeSha?: string; actualTreeSha?: string; mergedAt?: string; headSync?: HeadProof; mergeParents?: string[];
 }
 const bad = () => { throw new PlatformError('GATE_NOT_PASSED'); };
 
@@ -69,6 +72,8 @@ export async function updateRun(client: PoolClient, id: string, principal: strin
   if (body.failScope && (run.stage !== 1 || status !== 'fail' || run.status === 'fail' && body.failScope !== run.fail_scope)) throw new PlatformError('INVALID_TRANSITION');
   if (body.failScope === 'baseline' && !(body.baseSha ?? run.base_sha)) throw new PlatformError('VALIDATION_FAILED');
   assertCiTransition(run.status,status);
+  if (body.e2e && body.e2e.passed > body.e2e.total || body.finishedAt && !['pass','fail','skip'].includes(status)) throw new PlatformError('VALIDATION_FAILED');
+  if (body.githubStatus && body.githubStatus.headSha !== (body.headSha ?? run.head_sha)) throw new PlatformError('INVALID_TRANSITION');
   if (status === 'pass' && (!(body.headSha ?? run.head_sha) || run.stage === 2 && (!(body.baseSha ?? run.base_sha) || !(body.treeSha ?? run.tree_sha)))) throw new PlatformError('INVALID_TRANSITION');
   for (const [key,column] of [['baseSha','base_sha'],['headSha','head_sha'],['mergeSha','merge_sha'],['treeSha','tree_sha'],['pipelineSha','pipeline_sha']] as const) {
     if (body[key] && run[column] && body[key] !== run[column]) throw new PlatformError('INVALID_TRANSITION');
@@ -82,16 +87,21 @@ export async function updateRun(client: PoolClient, id: string, principal: strin
   const failStep = (await client.query<{ step_key: string }>("select step_key from ci_steps where run=$1 and status='fail' order by record_no limit 1",[id])).rows[0]?.step_key ?? null;
   if (status === 'pass' && (await client.query("select 1 from ci_steps where run=$1 and status not in ('pass','skip') limit 1",[id])).rowCount) throw new PlatformError('INVALID_TRANSITION');
   await client.query(`update ci_runs set status=$2,log_excerpt=coalesce($3,log_excerpt),artifacts=coalesce($4::jsonb,artifacts),url=coalesce($5,url),
-    base_sha=coalesce(base_sha,$6),head_sha=coalesce(head_sha,$7),merge_sha=coalesce(merge_sha,$8),tree_sha=coalesce(tree_sha,$9),fail_step=$10,fail_scope=coalesce($11,fail_scope) where id=$1`,
-  [id,status,body.logExcerpt,body.artifacts === undefined ? null : JSON.stringify(body.artifacts),body.url,body.baseSha,body.headSha,body.mergeSha,body.treeSha,failStep,body.failScope]);
+    base_sha=coalesce(base_sha,$6),head_sha=coalesce(head_sha,$7),merge_sha=coalesce(merge_sha,$8),tree_sha=coalesce(tree_sha,$9),fail_step=$10,fail_scope=coalesce($11,fail_scope),note=coalesce($12,note),e2e=coalesce($13::jsonb,e2e),finished_at=coalesce(finished_at,$14::timestamptz),github_status=coalesce($15::jsonb,github_status) where id=$1`,
+  [id,status,body.logExcerpt,body.artifacts === undefined ? null : JSON.stringify(body.artifacts),body.url,body.baseSha,body.headSha,body.mergeSha,body.treeSha,failStep,body.failScope,body.note,body.e2e ? JSON.stringify(body.e2e) : null,body.finishedAt,body.githubStatus ? JSON.stringify(body.githubStatus) : null]);
+  for (const flaky of body.flakyTests ?? []) await client.query(`insert into flaky_tests(project_id,test_key,rate,quarantined,task,last_failed_at) values($1,$2,$3,false,$4,$5)
+    on conflict(test_key) do update set rate=excluded.rate,task=excluded.task,last_failed_at=excluded.last_failed_at
+    where flaky_tests.project_id=excluded.project_id and (flaky_tests.last_failed_at is null or flaky_tests.last_failed_at<=excluded.last_failed_at)`,[run.project_id,flaky.testKey,flaky.rate,run.task,flaky.lastFailedAt]);
   if (status !== run.status) await notifyResult(client,{ ...run,base_sha:run.base_sha ?? body.baseSha ?? null,status:status as Run['status'],fail_step:failStep,fail_scope:body.failScope ?? run.fail_scope });
   deferChange(client,run.project_id,'ci',{ id });
 }
 
 async function notifyResult(client: PoolClient, run: Run) {
-  if (run.stage === 1 && run.status === 'pass' && run.base_sha) {
-    await client.query("update alerts set resolved_at=clock_timestamp() where project_id=$1 and key=$2 and resolved_at is null and not exists(select 1 from ci_runs where project_id=$1 and base_sha=$3 and stage=1 and run_no>$4 and fail_scope='baseline')",[run.project_id,`ci:baseline|${run.base_sha}`,run.base_sha,run.run_no]);
-    await client.query("update notify_events set resolved_at=clock_timestamp() where project_id=$1 and ref->>'failScope'='baseline' and ref->>'baseSha'=$2 and resolved_at is null and not exists(select 1 from ci_runs where project_id=$1 and base_sha=$2 and stage=1 and run_no>$3 and fail_scope='baseline')",[run.project_id,run.base_sha,run.run_no]);
+  if (run.stage === 1 && run.status === 'pass' && run.base_sha && await resolveBasePipelineSha(client,run.base_sha,run.project_id) === run.pipeline_sha) {
+    const alerts = await client.query("update alerts set resolved_at=clock_timestamp() where project_id=$1 and key=$2 and resolved_at is null and not exists(select 1 from ci_runs where project_id=$1 and base_sha=$3 and stage=1 and run_no>$4 and fail_scope='baseline')",[run.project_id,`ci:baseline|${run.base_sha}`,run.base_sha,run.run_no]);
+    const notifications = await client.query("update notify_events set resolved_at=clock_timestamp() where project_id=$1 and ref->>'failScope'='baseline' and ref->>'baseSha'=$2 and resolved_at is null and not exists(select 1 from ci_runs where project_id=$1 and base_sha=$2 and stage=1 and run_no>$3 and fail_scope='baseline')",[run.project_id,run.base_sha,run.run_no]);
+    if (alerts.rowCount) deferChange(client,run.project_id,'alert',{ id:run.id });
+    if (notifications.rowCount) deferChange(client,run.project_id,'notify',{ id:run.id });
   }
   if (run.stage === 1 && run.fail_scope !== 'baseline' || !['pass','fail'].includes(run.status)) return;
   const stage = Object.keys(CI_STAGE).find(k => CI_STAGE[k as keyof typeof CI_STAGE] === run.stage);
@@ -145,6 +155,7 @@ export async function reportQueue(client: PoolClient, principal: string, body: Q
       const first = required((await client.query<{ tree_sha: string | null; parents: string[] | null }>('select tree_sha,parents from ci_merge_facts where project_id=$1 and merge_sha=$2',[task.project_id,body.actualMergeSha])).rows[0]);
       if (first.tree_sha !== (body.actualTreeSha ?? null) || JSON.stringify(first.parents) !== JSON.stringify(body.mergeParents ?? null)) bad();
     }
+    if (body.mergedAt && body.status !== 'merged') throw new PlatformError('VALIDATION_FAILED');
     if (task.status !== 'gate') throw new PlatformError('INVALID_TRANSITION');
     const v = (await client.query<{ id: string; head_sha: string }>(`select v.id,v.head_sha from verifications v join task_attempts a on a.id=v.attempt
       where a.task=$1 and a.kind in ('qa','reverify') order by a.attempt_no desc limit 1`,[task.id])).rows[0];
@@ -183,12 +194,12 @@ export async function reportQueue(client: PoolClient, principal: string, body: Q
     const parents = body.mergeParents ?? previous?.merge_parents as string[] | null;
     if (body.status === 'merged' && !body.actualMergeSha) bad();
     if (body.status === 'merged' && (body.actualTreeSha !== tree || !parents || parents.length !== 2 || parents[0] !== base || parents[1] !== head)) bad();
-    const values = [task.project_id,task.id,body.pr,body.status,required(v).head_sha,head,base,v?.id,ciId,tree,body.actualMergeSha,body.actualTreeSha,proof ? JSON.stringify(proof) : null,parents ? JSON.stringify(parents) : null];
+    const values = [task.project_id,task.id,body.pr,body.status,required(v).head_sha,head,base,v?.id,ciId,tree,body.actualMergeSha,body.actualTreeSha,proof ? JSON.stringify(proof) : null,parents ? JSON.stringify(parents) : null,body.mergedAt];
     if (previous) await client.query(`update merge_queue set status=$4,synced_head_sha=$6,base_sha=$7,ci_run=$9,tested_tree_sha=$10,
-      actual_merge_sha=coalesce($11,actual_merge_sha),actual_tree_sha=coalesce($12,actual_tree_sha),head_sync=$13::jsonb,merge_parents=$14::jsonb
-      where project_id=$1 and task=$2 and pr=$3 and qa_head_sha=$5 and verification=$8 and id=$15`,[...values,previous.id]);
-    else await client.query(`insert into merge_queue(project_id,task,pr,position,status,qa_head_sha,synced_head_sha,base_sha,verification,ci_run,tested_tree_sha,actual_merge_sha,actual_tree_sha,head_sync,merge_parents)
-      values($1,$2,$3,(select coalesce(max(position),0)+1 from merge_queue),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14::jsonb)`,values);
+      actual_merge_sha=coalesce($11,actual_merge_sha),actual_tree_sha=coalesce($12,actual_tree_sha),head_sync=$13::jsonb,merge_parents=$14::jsonb,merged_at=coalesce(merged_at,$15::timestamptz)
+      where project_id=$1 and task=$2 and pr=$3 and qa_head_sha=$5 and verification=$8 and id=$16`,[...values,previous.id]);
+    else await client.query(`insert into merge_queue(project_id,task,pr,position,status,qa_head_sha,synced_head_sha,base_sha,verification,ci_run,tested_tree_sha,actual_merge_sha,actual_tree_sha,head_sync,merge_parents,merged_at)
+      values($1,$2,$3,(select coalesce(max(position),0)+1 from merge_queue),$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14::jsonb,$15)`,values);
     if (body.status === 'merged') {
       await completeMergedTask(client,task.task_key,await resolveBasePipelineSha(client,required(base),task.project_id),sync);
       await client.query("update alerts set resolved_at=clock_timestamp() where project_id=$1 and key=$2 and target->>'actualMergeSha'=$3 and resolved_at is null",[task.project_id,`ci:mergeMismatch|#${body.pr}`,body.actualMergeSha]);
