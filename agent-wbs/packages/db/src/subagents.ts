@@ -9,7 +9,7 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { parse as parseToml } from 'smol-toml';
-import { isAlias, isMap, isScalar, parseAllDocuments, visit } from 'yaml';
+import { isAlias, isMap, isScalar, Lexer, parseAllDocuments, visit } from 'yaml';
 import type { Pool } from './pool.ts';
 
 export type SubagentAgent = 'Claude' | 'Codex';
@@ -145,6 +145,9 @@ function parseClaude(text: string): Parsed | string {
   const m = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(text);
   if (!m) return '파일이 `---` frontmatter로 시작하지 않습니다.';
   const source = m[1] ?? '';
+  // 주석 금지(owner 결정): 「지시문 보기」 화면의 원문과 CLI가 받는 값이 같아야 한다. yaml 패키지의 lexer가 주석으로 나눈 토큰을 찾는다.
+  const comment = [...new Lexer().lex(source)].find((token) => token.startsWith('#'));
+  if (comment !== undefined) return `frontmatter에 YAML 주석(${comment.slice(0, 20)})을 쓰지 않습니다. 화면의 원문과 CLI가 받는 값이 달라집니다.`;
   let result: Record<string, string> | null = null;
   for (const version of ['1.2', '1.1'] as const) {
     const docs = parseAllDocuments(source, { version, strict: true, uniqueKeys: true, prettyErrors: false, merge: false });
@@ -186,6 +189,24 @@ function parseClaude(text: string): Parsed | string {
   return parsed;
 }
 
+/**
+ * TOML 주석이 있는지 표준 분석기만으로 판단한다(손으로 만든 문자열 경계 해석을 쓰지 않는다).
+ * 방법: 원문의 모든 `#`을 파일에 없는 글자로 바꿔 다시 분석한다.
+ *   - `#`가 모두 문자열 안에 있으면 분석이 성공하고, 그 글자를 `#`로 되돌린 결과가 원래 결과와 같다.
+ *   - 하나라도 주석을 여는 `#`이면 분석이 실패하거나(값 뒤에 맨 글자) 결과가 달라진다(`#model = …` → 새 키).
+ */
+const COMMENT_PROBE = '\u{F0000}';
+function tomlHasComment(text: string, table: Record<string, unknown>): boolean {
+  if (!text.includes('#')) return false;
+  if (text.includes(COMMENT_PROBE)) return true; // 확인할 수 없으면 주석이 있는 것으로 본다(fail-closed).
+  try {
+    const probed = JSON.stringify(parseToml(text.replaceAll('#', COMMENT_PROBE))).replaceAll(COMMENT_PROBE, '#');
+    return probed !== JSON.stringify(table);
+  } catch {
+    return true;
+  }
+}
+
 /** Codex: 표준 TOML 분석(smol-toml, TOML 1.1.0). 허용한 키의 값은 문자열이어야 한다(표·배열·숫자는 받지 않는다). */
 function parseCodex(text: string): Parsed | string {
   let table: Record<string, unknown>;
@@ -194,6 +215,7 @@ function parseCodex(text: string): Parsed | string {
   } catch (error) {
     return `TOML 오류: ${(error instanceof Error ? error.message : String(error)).split('\n')[0] ?? ''}`;
   }
+  if (tomlHasComment(text, table)) return 'TOML 주석(#)을 쓰지 않습니다. 화면의 원문과 CLI가 받는 값이 달라집니다.';
   const out: Parsed = { keys: Object.keys(table), instructions: '', visible: Object.values(table).flatMap(stringLeaves) };
   for (const [key, value] of Object.entries(table)) {
     // 허용하지 않은 키는 config-key 규칙이 이름으로 잡는다. 허용한 키의 값만 여기서 문자열인지 본다.

@@ -385,4 +385,65 @@ describe('실제 하위 Agent v1 정의(M5-06)', () => {
     expect(raw(s, claudeRead().key).includes('WebFetch')).toBe(false);
     expectRule(s, 'tools');
   });
+
+  /*
+   * 주석 금지(owner 결정, fix3 이후): YAML frontmatter와 TOML 파일에는 주석을 쓰지 않는다.
+   * 왜: 「지시문 보기」 화면은 원문을 보여 주는데 CLI는 주석을 받지 않는다. 사람이 보는 내용과 CLI가 받는 값이 달라지면 안 된다.
+   * Markdown 본문은 CLI가 그대로 받으므로 주석 금지 대상이 아니다(지금처럼 정책 검사 대상).
+   */
+  it('주석: YAML frontmatter의 주석을 거부한다', () => {
+    const cases: [string, (d: SubagentSet['defs'][number]) => void][] = [
+      ['line-end', (d) => { front(d, desc, `${must(desc.exec(d.text), 'desc')[0]} # React로 만든다`); }],
+      ['own-line-top', (d) => { d.text = d.text.replace(/^---\n/, '---\n# 메모\n'); }],
+      ['own-line-indented', (d) => { front(d, desc, `${must(desc.exec(d.text), 'desc')[0]}\n  # 들여쓴 주석`); }],
+      ['before-closing', (d) => { d.text = d.text.replace(/\n---\n/, '\n# 끝 주석\n---\n'); }],
+      ['empty-comment', (d) => { front(d, desc, `${must(desc.exec(d.text), 'desc')[0]} #`); }],
+    ];
+    for (const [name, change] of cases) {
+      const s = mutate(claude().key, change);
+      const found = checkSubagentSet(s, mock).filter((i) => i.rule === 'format');
+      expect(found.map((i) => i.message).join(' '), `${name}: ${JSON.stringify(checkSubagentSet(s, mock))}`).toContain('주석');
+    }
+  });
+
+  it('주석: YAML 값 안의 #는 주석이 아니므로 통과한다', () => {
+    // 따옴표 안의 「 #」과 공백 없이 붙은 #는 값의 일부다. CLI도 값으로 받는다.
+    for (const line of ['description: "화면 # 구현"', "description: '화면 # 구현'", 'description: 화면#구현'])
+      expect(checkSubagentSet(mutate(claude().key, (d) => { front(d, desc, line); }), mock), line).toEqual([]);
+  });
+
+  it('주석: Markdown 본문의 #(제목)은 주석이 아니며 정책 검사 대상이다', () => {
+    expect(checkSubagentSet(mutate(claude().key, (d) => { d.text = d.text.replace('맡은 일', '맡은 일\n\n## 참고 제목\n'); }), mock)).toEqual([]);
+    expectRule(mutate(claude().key, (d) => { d.text = d.text.replace('맡은 일', '맡은 일\n\n# React로 만든다\n'); }), 'conflict');
+  });
+
+  it('주석: TOML 파일의 주석을 거부한다', () => {
+    const cases: [string, (d: SubagentSet['defs'][number]) => void][] = [
+      ['top', (d) => { d.text = `# 메모\n${d.text}`; }],
+      ['line-end-basic', (d) => { d.text = d.text.replace(/^(description = ".*")$/m, '$1 # React'); }],
+      ['line-end-name', (d) => { d.text = d.text.replace(/^(name = ".*")$/m, '$1 #'); }],
+      ['after-multiline', (d) => { d.text = d.text.replace(/"""\n$/, '""" # 끝\n'); }],
+      ['own-line-between', (d) => { d.text = d.text.replace(/^(description = ".*")$/m, '$1\n# 사이 주석'); }],
+      ['commented-key', (d) => { d.text = `#model = "x"\n${d.text}`; }],
+      ['end-of-file', (d) => { d.text = `${d.text}# 끝\n`; }],
+      ['indented', (d) => { d.text = `${d.text}   # 들여쓴 주석\n`; }],
+    ];
+    for (const [name, change] of cases) {
+      const s = mutate(codex().key, change);
+      const found = checkSubagentSet(s, mock).filter((i) => i.rule === 'format');
+      expect(found.map((i) => i.message).join(' '), `${name}: ${JSON.stringify(checkSubagentSet(s, mock))}`).toContain('주석');
+    }
+  });
+
+  it('주석: TOML 문자열 안의 #는 주석이 아니므로 통과한다', () => {
+    // 지시문 본문의 「# 제목」은 여러 줄 문자열 안이므로 값의 일부다(현재 정의가 이미 그렇다).
+    expect(must(mlBody.exec(codex().text), 'body')[1]).toMatch(/^# /m);
+    const cases: [string, (d: SubagentSet['defs'][number]) => void][] = [
+      ['basic', (d) => { d.text = d.text.replace(/^description = "/m, 'description = "#1 '); }],
+      ['literal', (d) => { d.text = d.text.replace(/^description = "(.*)"$/m, "description = '$1 # 표시'"); }],
+      ['ml-basic', (d) => { d.text = d.text.replace('맡은 일', '맡은 일 # 표시'); }],
+      ['escaped', (d) => { d.text = d.text.replace('맡은 일', '맡은 일 \\u0023 표시'); }],
+    ];
+    for (const [name, change] of cases) expect(checkSubagentSet(mutate(codex().key, change), mock), name).toEqual([]);
+  });
 });
