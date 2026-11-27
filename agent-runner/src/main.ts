@@ -39,8 +39,18 @@ try {
           run: agentLoginRun({ user: AGENT_USER, root: config.agentRoot, exec: AGENT_EXEC }, createRunCommand({ env: cliEnvironment(process.env), timeoutMs: 120_000 })),
         }),
       }),
+      // 전용 계정(agentRoot)이면 앱이 준비 점검 뒤·실행 직전마다 래퍼 check와 사용자 scope를 확인해 격리를 고른다. 없으면 실행 거부.
       agentRoot: config.agentRoot,
       cliUpdates: config.cliUpdates,
+      // CI 실행기(integrate·ci_retry, 조정자 결정 1·2·7): GitHub 설정이 있고 AWBS_CI_AUTO=1이면 켠다.
+      // 명령·시험 목록은 Execution.command → 격리 계층 command(전용 계정이면 래퍼 ci-run, 사용자 scope)로만 돈다.
+      // 격리 계층이 없으면(AWBS_AGENT_USER 미설정·점검 실패) 앱이 CI job을 받지 않는다. 로컬 clone이 생기기 전에도 받지 않는다.
+      // 기본 꺼짐(조정자 결정 7): .env에 AWBS_CI_AUTO=1을 적어야 켠다.
+      ...(config.github && config.ciAuto && { ciAuto: true }),
+      // 시도 흐름(jobs, AttemptFlow)은 아직 켜지 않는다(조정자 답변 2026-11-27).
+      // 왜: 실제 결과 수집기 collect(contracts §5 스키마 검사·수정 요청·git diff·Evidence)와 시도별 작업 폴더 준비 execution.prepare가 아직 없다.
+      // 둘이 생기면 jobs: { collect, taskCheck: <TaskCheckSources> }와 execution: { prepare }를 넘긴다(주입 지점: src/jobs/README.md 「연결 지점」).
+      // jobs.taskCheck에는 ① 공급원만 넘긴다. 앱이 자기 GitHub 클라이언트로 bindTaskCheck를 부른다(여기서 클라이언트를 따로 만들지 않는다).
       ...(config.github && { github: config.github }),
     });
     log.info({ wbsUrl: config.wbsUrl, home: config.home }, 'Runner 시작');

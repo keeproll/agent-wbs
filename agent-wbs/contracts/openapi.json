@@ -31013,6 +31013,61 @@
                                 "hostId",
                                 "bootId",
                                 "proof",
+                                "processGroup",
+                                "cgroup"
+                              ],
+                              "properties": {
+                                "job": {
+                                  "$ref": "#/components/schemas/Id"
+                                },
+                                "hostId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "pattern": "\\S"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "bootId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "pattern": "\\S"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "proof": {
+                                  "enum": [
+                                    "cgroup_empty"
+                                  ]
+                                },
+                                "processGroup": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 2147483647
+                                },
+                                "cgroup": {
+                                  "type": "string",
+                                  "pattern": "^(?!.*//)(?!.*/\\.\\.(/|$))/[A-Za-z0-9@._:/-]{1,511}$"
+                                }
+                              },
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "required": [
+                                "job",
+                                "hostId",
+                                "bootId",
+                                "proof",
                                 "currentBootId"
                               ],
                               "properties": {
@@ -31205,6 +31260,61 @@
                                   "type": "integer",
                                   "minimum": 1,
                                   "maximum": 2147483647
+                                }
+                              },
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "required": [
+                                "job",
+                                "hostId",
+                                "bootId",
+                                "proof",
+                                "processGroup",
+                                "cgroup"
+                              ],
+                              "properties": {
+                                "job": {
+                                  "$ref": "#/components/schemas/Id"
+                                },
+                                "hostId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "pattern": "\\S"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "bootId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "pattern": "\\S"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "proof": {
+                                  "enum": [
+                                    "cgroup_empty"
+                                  ]
+                                },
+                                "processGroup": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 2147483647
+                                },
+                                "cgroup": {
+                                  "type": "string",
+                                  "pattern": "^(?!.*//)(?!.*/\\.\\.(/|$))/[A-Za-z0-9@._:/-]{1,511}$"
                                 }
                               },
                               "additionalProperties": false
@@ -31999,8 +32109,7 @@
                     "anyOf": [
                       {
                         "type": "string",
-                        "minLength": 1,
-                        "pattern": "\\S"
+                        "pattern": "^(?!.*//)(?!.*/\\.\\.(/|$))/[A-Za-z0-9@._:/-]{1,511}$"
                       },
                       {
                         "type": "null"
@@ -32177,6 +32286,37 @@
                             "type": "integer",
                             "minimum": 1,
                             "maximum": 2147483647
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "required": [
+                          "kind",
+                          "bootId",
+                          "processGroup",
+                          "cgroup"
+                        ],
+                        "properties": {
+                          "kind": {
+                            "enum": [
+                              "cgroup_empty"
+                            ]
+                          },
+                          "bootId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          },
+                          "processGroup": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 2147483647
+                          },
+                          "cgroup": {
+                            "type": "string",
+                            "pattern": "^(?!.*//)(?!.*/\\.\\.(/|$))/[A-Za-z0-9@._:/-]{1,511}$"
                           }
                         },
                         "additionalProperties": false
@@ -32519,6 +32659,37 @@
                             "type": "integer",
                             "minimum": 1,
                             "maximum": 2147483647
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "required": [
+                          "kind",
+                          "bootId",
+                          "processGroup",
+                          "cgroup"
+                        ],
+                        "properties": {
+                          "kind": {
+                            "enum": [
+                              "cgroup_empty"
+                            ]
+                          },
+                          "bootId": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          },
+                          "processGroup": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 2147483647
+                          },
+                          "cgroup": {
+                            "type": "string",
+                            "pattern": "^(?!.*//)(?!.*/\\.\\.(/|$))/[A-Za-z0-9@._:/-]{1,511}$"
                           }
                         },
                         "additionalProperties": false
@@ -39709,7 +39880,8 @@
                 "enum": [
                   "no_process",
                   "group_empty",
-                  "boot_changed"
+                  "boot_changed",
+                  "cgroup_empty"
                 ]
               },
               {

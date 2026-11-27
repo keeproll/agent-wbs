@@ -484,3 +484,29 @@ test('review3: 등록 거부는 서버의 no_process와 로컬 그룹 종료를 
   expect((await t.exec.launches.list()).every(r => r.completedAt)).toBe(true);
   expect(t.heavy.snapshot().running).toBe(0);
 });
+
+test('M8 전 연결: 실행 직전 격리 재확인이 실패하면 start·CLI 전에 멈추고 이후 claim도 받지 않는다', async () => {
+  const t = await setup();
+  let checks = 0;
+  t.options.recheckIsolation = async () => { checks += 1; return undefined; };
+  await expect(t.exec.run(job)).rejects.toMatchObject({ code: 'isolation_undecided' });
+  expect(checks).toBe(1);
+  expect(t.requests.some(r => r.path.endsWith('/start'))).toBe(false);
+  expect(t.fake.calls()).toEqual([]);
+  expect(t.exec.isolation).toBeUndefined();
+  expect(await t.exec.claim(6)).toBeNull();
+});
+
+test('M8 전 연결: 재확인이 돌려준 계층으로 이번 실행을 감싼다(setIsolation으로 바꾼 계층도 같다)', async () => {
+  const t = await setup();
+  const wrapped: string[] = [];
+  const layer = { name: 'rechecked', flags: () => [], wrap: (l: Parameters<NonNullable<ExecutionOptions['isolation']>['wrap']>[0]) => { wrapped.push(l.file); return l; } };
+  t.options.recheckIsolation = async () => layer;
+  const result = await t.exec.run(job);
+  expect(result.ok).toBe(true);
+  expect(wrapped).toEqual([t.fake.path]);
+  expect(t.exec.isolation).toBe(layer);
+  t.exec.setIsolation(undefined);
+  delete t.options.recheckIsolation;
+  expect(await t.exec.claim(6)).toBeNull();
+});

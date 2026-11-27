@@ -23,7 +23,8 @@ export function spawnWaiting(record: LaunchRecord, launch: Launch): ChildProcess
 
 export async function runProcess(o: ProcessOptions): Promise<{ code: number | null; signal: NodeJS.Signals | null; proof: Proof; launchId: string }> {
   o.signal?.throwIfAborted();
-  const record = await o.launches.create(o.job);
+  // scope 이름은 프로세스를 띄우기 전에 기록한다. Runner가 그 사이 죽어도 다음 대조가 scope를 비울 수 있다.
+  const record = await o.launches.create(o.job, o.launch.scope === undefined ? {} : { scope: o.launch.scope });
   const child = spawnWaiting(record, o.launch);
   const permit = child.stdio[3] as Writable;
   permit.on('error', () => undefined);

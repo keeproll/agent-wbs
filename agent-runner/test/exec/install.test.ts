@@ -63,3 +63,31 @@ test('버전을 갱신하고 사용을 끄면 Runner가 설치한 파일만 지�
   expect(await readFile(join(dir, 'user.toml'), 'utf8')).toBe('사용자 정의');
   await expect(readFile(join(dir, '.awbs-installed.json'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
+
+test('fix2 추가: Agent 계정 파일 접근(AgentFiles)을 주면 Runner는 작업 폴더에 직접 읽거나 쓰지 않는다', async () => {
+  // 존재하지 않는 경로: Runner가 직접 접근하면 실패한다. 모든 접근이 files를 거쳐야 통과한다.
+  const cwd = join(await temp(), 'no-such-worktree');
+  const store = new Map<string, string>();
+  const ops: string[] = [];
+  const files = {
+    kind: 'agent-account' as const,
+    read: async (_cwd: string, rel: string) => { ops.push(`read ${rel}`); return store.get(rel); },
+    write: async (_cwd: string, rel: string, text: string) => { ops.push(`write ${rel}`); store.set(rel, text); },
+    remove: async (_cwd: string, rel: string) => { ops.push(`remove ${rel}`); store.delete(rel); },
+  };
+  await installSubagents(cwd, 'Codex', { enabled: true, items: [def] }, grade, files);
+  expect(store.get('.codex/agents/code-reviewer.toml')).toContain('name = "code-reviewer"');
+  // 실행을 마치면 같은 경로로 걷어 낸다(소유 hash 확인 뒤).
+  await installSubagents(cwd, 'Codex', { enabled: false, items: [] }, grade, files);
+  expect([...store.keys()]).toEqual([]);
+  expect(ops).toEqual([
+    'read .codex/agents/.awbs-installed.json', 'read .codex/agents/code-reviewer.toml',
+    'write .codex/agents/.awbs-installed.json', 'write .codex/agents/code-reviewer.toml', 'write .codex/agents/.awbs-installed.json',
+    'read .codex/agents/.awbs-installed.json', 'write .codex/agents/.awbs-installed.json',
+    'read .codex/agents/code-reviewer.toml', 'remove .codex/agents/code-reviewer.toml', 'remove .codex/agents/.awbs-installed.json',
+  ]);
+  // Agent가 바꾼 정의는 덮어쓰거나 지우지 않는다(같은 소유 hash 규칙).
+  store.set('.codex/agents/code-reviewer.toml', 'Agent가 바꿈');
+  store.set('.codex/agents/.awbs-installed.json', JSON.stringify({ 'code-reviewer.toml': ['0'.repeat(64)] }));
+  await expect(installSubagents(cwd, 'Codex', { enabled: true, items: [def] }, grade, files)).rejects.toMatchObject({ code: 'SUBAGENT_INSTALL_FAILED' });
+});

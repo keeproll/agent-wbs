@@ -96,8 +96,23 @@ keeproll ALL=(awbs-agent) NOPASSWD: /usr/local/libexec/awbs-agent-exec
   - 왜: Runner가 실수로 래퍼를 직접 부르면 격리된 것처럼 보이기만 한다.
 - 작업 폴더의 실제 경로(링크를 모두 따라간 경로)가 `/srv/agentwbs/worktrees/` **안**인지 본다.
   - 예: 작업 폴더 안의 링크가 `/home/keeproll`을 가리키면 거부한다.
-- CLI 실행 파일의 실제 경로가 `/srv/agentwbs/cli/<claude|codex>/` 안인지 본다. 다른 Agent의 CLI도 거부한다.
-- 넘겨받는 환경 변수는 `LANG`·`LC_ALL`뿐이다. 다른 이름(예: `GH_TOKEN`)은 거부한다.
+- CLI는 **진입점 하나만** 받는다: `/srv/agentwbs/cli/<claude|codex>/<버전>/bin/<claude|codex>`(조정자 결정 4, fix1).
+  - `<버전>`은 숫자.숫자.숫자이고 링크가 아닌 실제 폴더여야 한다. `current` 링크는 Runner가 실행 시점의 버전으로 바꿔 넘긴다.
+  - 진입점은 보통 패키지 안 파일을 가리키는 링크다. 링크를 따라간 실제 파일도 그 버전 폴더 안이어야 한다.
+  - 왜: CLI 묶음 안에는 `rg`·`bwrap` 같은 다른 실행 파일도 있다. `bwrap`은 임의 명령을 띄울 수 있으므로 진입점만 받는다.
+    - CLI가 세션 안에서 스스로 부르는 `rg` 등은 같은 계정·같은 scope의 자식이라 따로 허용할 필요가 없다.
+  - 다른 Agent의 CLI도 거부한다.
+- `git-inspect --cwd <작업 폴더>`·`git-bundle --cwd <작업 폴더> --branch <이름>`(fix2, 조정자 결정 6): Agent 작업 폴더의 git을 Agent 계정이 돌린다. 시스템·전역 설정 없음, `GIT_ALLOW_PROTOCOL=none`, `GIT_NO_LAZY_FETCH=1`, hook·fsmonitor 끔. Runner는 사용자 scope 안에서 부르고 끝나면 scope를 비운다.
+- `cli-version --tool claude|codex|pnpm -- <진입점>`(fix2, 조정자 결정 8): 새로 설치한 CLI의 `--version`을 Agent 계정으로 실행한다(`install-agent-cli.sh`가 쓴다).
+- `agent-file read|write|remove --cwd <작업 폴더> --path <.claude|.codex>/agents/<이름>`(fix2 추가): 하위 Agent 정의 파일을 Agent 계정이 다룬다. 경로는 정해진 모양만(`.awbs-installed.json` 또는 `<키>.md|toml`), 1 MiB까지, 없는 파일 읽기는 종료 코드 3.
+- `ci-run`(①·CI 검사 명령, 조정자 결정 1, fix1): Agent 코드의 시험·빌드를 Agent 계정으로 실행한다.
+  - `--home <작업 폴더>/.awbs-home`이 필수다(fix2, 조정자 결정 8). 실행마다 새 HOME·TMPDIR(pnpm 저장소 포함)라 다른 Task와 공유하지 않는다.
+  - 작업 폴더는 `run`과 같은 규칙(worktrees 안)이다.
+  - 명령은 이름(예: `pnpm`)이면 고정 PATH(`<Agent node>:/srv/agentwbs/cli/pnpm/current/bin:/usr/local/bin:/usr/bin:/bin`)에서 찾고, 경로면 작업 폴더 안의 실행 파일만 받는다.
+  - 환경 변수는 `LANG`·`LC_ALL`·`TZ`·`CI`·`NODE_ENV`·`FORCE_COLOR`·`NO_COLOR`·`AWBS_REPORT`·`AWBS_REPORT_NONCE`·`AWBS_EVIDENCE_DIR`만, 값은 경로·짧은 낱말 모양만 받는다.
+  - 래퍼는 명령이 main의 pipeline.yaml에서 왔는지 알 수 없다. 그 출처는 Runner가 지킨다. 래퍼는 실행 범위(계정·폴더·환경)를 막는다.
+  - pnpm은 `install-agent-cli.sh`가 `/srv/agentwbs/cli/pnpm/<버전>`에 설치한다(Agent용 node에는 corepack이 없다).
+- `run`이 넘겨받는 환경 변수는 `LANG`·`LC_ALL`뿐이다. 다른 이름(예: `GH_TOKEN`)은 거부한다.
 - 설정 파일(`/etc/agentwbs/agent-exec.conf`)은 실행하지 않고, 정해진 이름만 한 줄씩 읽는다.
   - 왜: 설정 파일에 명령을 숨겨 두어도 실행되지 않게 한다.
 - 래퍼와 설정 파일은 root 소유다. Runner도 Agent도 고칠 수 없다.
@@ -245,17 +260,21 @@ Agent 계정이 못 읽는 곳(확인 스크립트가 하나씩 시험한다):
 리눅스에서는 다른 계정의 프로세스에 신호(종료 요청)를 보낼 수 없다. 그래서 Runner(keeproll)는 Agent 프로세스를 직접 죽이지 못한다(`EPERM`, 권한 없음 오류).
 
 - 살아 있는지 확인(`kill -0`)은 지금처럼 된다. `EPERM`은 「살아 있음」으로 본다(`processGroupEmpty`가 이미 그렇게 한다).
-- 정리 순서(exec 계층 M5-02·M5-03에서 연결):
-  1. **cgroup을 쓸 수 있으면** 세션 cgroup의 `cgroup.kill`에 1을 쓴다.
+- 정리 순서(M8 전 연결에서 exec 계층에 연결함, `src/exec/README.md` 「전용 계정 + 사용자 scope 실행」):
+  1. **세션마다 사용자 cgroup scope를 쓴다.** 실행은 `systemd-run --user --scope … -- sudo -n -u awbs-agent -- 래퍼 run …`이다. 정리할 때 그 scope의 `cgroup.kill`에 1을 쓴다.
      - cgroup(control group) = 프로세스 묶음별로 CPU·메모리를 재고 제한하는 리눅스 기능.
+     - scope = 사용자 systemd가 프로세스 묶음에 붙이는 이름표. 커널에서는 cgroup 하나다. Runner 계정의 사용자 systemd가 만들므로 cgroup 파일이 Runner 소유다.
      - Runner가 만든 cgroup 안의 프로세스는 계정과 상관없이 커널이 한 번에 끝낸다. Agent는 다른 계정의 cgroup 파일을 쓸 수 없어 빠져나가지 못한다.
-     - sudo는 Ubuntu에서 새 로그인 세션(pam_systemd)을 만들지 않으므로 Agent 프로세스는 Runner의 세션 cgroup에 그대로 남는다. 이 PC에서 쓸 수 있는지는 M5-03에서 확인한다.
-  2. **안 되면** 래퍼 `kill-group <pgid>`를 Agent 계정으로 실행한다(`agentControl`).
+     - sudo는 Ubuntu에서 새 로그인 세션(pam_systemd)을 만들지 않으므로 Agent 프로세스는 scope에 그대로 남는다. 이 PC에서 실제로 확인했다(`test/exec/dedicated-scope.host.ts`: setsid·nohup·이중 fork·표식 지우기 자손 8개가 모두 같은 scope, 정리 뒤 0개).
+     - scope를 만들 수 없으면(사용자 systemd 없음, linger 꺼짐) 실행을 거부한다. 2·3으로 대신하지 않는다.
+       - 왜: `kill-group`은 그룹을 빠져나간 자손을 못 잡고, `kill-all`은 다른 세션까지 끝낸다. 둘 다 「이 세션이 끝났다」는 증거가 되지 못한다.
+  2. 래퍼 `kill-group <pgid>`(`agentControl`)는 손으로 정리할 때 쓰는 보조 수단으로 남긴다. 제품 코드는 부르지 않는다.
      - Agent 계정으로 보내므로 그 그룹의 Agent 프로세스만 끝난다. Runner·root 프로세스에는 닿지 않는다.
-  3. **세션이 0이 되면** 래퍼 `kill-all`로 Agent 계정에 남은 프로세스를 청소한다.
-     - 전용 계정이라 「이 계정의 프로세스 = Agent 실행」이다. 그룹을 빠져나간(`setsid`) 자손도 여기서 잡힌다.
-     - 그래도 남으면 「정리 안 된 실행」 알림을 올린다(G §6.7 규칙 4).
-- 작업 폴더를 지우기 전에 래퍼 `fix-perms <경로>`로 Agent 파일에 Runner 권한을 되돌린다.
+  3. 래퍼 `kill-all`도 같은 보조 수단이다. Agent 계정의 모든 프로세스를 끝낸다.
+     - 전용 계정이라 「이 계정의 프로세스 = Agent 실행」이다. 다른 세션이 돌고 있으면 그것도 끝나므로 세션이 0일 때만 쓴다.
+- 작업 폴더를 지울 때 권한 문제(EACCES·EPERM)로 막히면 래퍼 `fix-perms <경로>`로 Agent 파일에 Runner 권한을 되돌린 뒤 한 번 더 지운다(`GitRepository.removeWorktree` → `restoreAgentPermissions`, M8 전 연결).
+  - 지우는 동안 Runner 소유 폴더는 `0770`으로 둔다. `0700`으로 바꾸면 ACL 상한이 `---`가 되어 Agent 계정으로 도는 `fix-perms`가 그 폴더에 못 들어가 실패한다(실계정 시험에서 재현, 종료 코드 4).
+  - Agent 소유 폴더는 Runner가 권한 숫자를 바꿀 수 없다(EPERM). 그 폴더는 `fix-perms`가 준 ACL로 들어가 지운다.
   - 왜: Agent가 자기 파일의 권한을 지우면(예: `chmod 000`) Runner가 지울 수 없다.
   - 순서: 그 세션의 Agent 프로세스가 0개인지 먼저 확인한다. 살아 있으면 고친 권한을 다시 지울 수 있다.
   - 폴더는 들어가기 전에 하나씩 바로 고친다. 그래서 `000`인 폴더가 겹겹이 있어도 한 번에 안쪽까지 되돌린다(Codex 리뷰 P2-8).
@@ -428,8 +447,19 @@ bash agent-runner/scripts/isolation/remove-agent-user.sh --purge-work     # 작�
   - 계정 삭제(`userdel`)도 같은 구조다. 그래서 위험은 낮다고 보고 고치지 않고 남긴다.
   - 줄이는 방법(제안): 숫자 대신 계정 이름으로 신호 보내기(`sudo -u awbs-agent -- kill -KILL -1`). 이름을 번호로 바꾸는 일과 신호가 한 명령 안에서 일어난다.
 - **`/tmp`·`/var/tmp`·`/dev/shm`에 Agent가 만든 파일은 제거 뒤 숫자 UID로 남는다.** 제거 스크립트는 이 공용 폴더를 지우지 않는다(다른 계정 파일과 섞여 있기 때문). 재부팅하면 `/tmp`·`/dev/shm`은 비워진다.
-- **Agent가 작업 폴더의 git 설정을 바꿀 수 있다.** Runner가 그 폴더에서 git을 실행하면 바뀐 설정이 Runner 권한으로 돌 수 있다.
-  - 지금 `importWorktree`는 bare 저장소에서 `fetch`만 하고 `--upload-pack`을 고정한다. 이 경로가 계정이 다른 폴더에서도 안전한지 M5-02 연결 때 다시 검토한다.
+- **Agent가 작업 폴더의 git 설정을 바꿀 수 있다.** 그래서 Runner 계정 git은 그 폴더에서 돌지 않는다(fix2, 조정자 결정 6).
+  - 작업 폴더 준비는 Runner 전용 준비 폴더(0700)에서 끝낸 뒤 넘기고, HEAD·상태는 래퍼 `git-inspect`, 결과는 래퍼 `git-bundle`(Agent 계정)로만 받는다. 자세한 것은 `src/git/README.md` 「전용 계정 배치의 경계」.
+- **알려진 남은 위험(조정자 결정 9, 재점검 P2-2): 같은 전용 계정 안의 다른 Task Agent는 검사 사본에 쓸 수 있다.**
+  - 무엇이 가능한가: 모든 Task가 같은 awbs-agent 계정을 쓴다. 다른 Task의 Agent가 `/proc`(예: 다른 프로세스의 `cwd`·명령 인자)로 검사 사본 경로를 알아내면, 그 사본의 파일을 바꿀 수 있다.
+  - 0710(목록 숨김)은 경로 짐작을 어렵게 할 뿐이다. `/proc`로 알아내는 것은 막지 못한다.
+  - 왜 받아들이나: 같은 프로젝트의 Agent끼리는 같은 신뢰 영역으로 본다. 막으려면 Task마다 다른 OS 계정이나 mount namespace가 필요하고, 이것은 Q-08 범위 밖이다.
+  - 그래서 유지하는 대조: Runner는 결과를 Agent 폴더에서 직접 믿지 않는다. 결과 커밋은 bundle verify·fetch(객체 fsck)로만 받고, 검사는 고정 커밋으로 새로 만든 사본에서 하며, 실행 전후 HEAD·상태(`git-inspect`)를 대조한다.
+  - 이 대조로도 「다른 Task Agent가 같은 계정으로 검사 중인 사본을 바꿔 시험 결과를 흔드는 것」은 완전히 막지 못한다(같은 계정 안 무결성). 이것이 받아들인 범위다.
+- **래퍼 호출이 멈추지 않게(재점검 P2-1, fix3)**: Agent 설정(filter 등)이 띄운 `setsid` 자손이 출력 통로를 쥐어도 Runner는 멈추지 않는다.
+  - 래퍼 호출마다 전용 사용자 scope가 있다. 시간 초과(기본 10분)면 그 scope를 `cgroup.kill`로 비우고 통로를 닫은 뒤 「시간 초과」로 실패한다.
+  - 명령은 끝났는데 자손이 통로를 쥐고 남으면(2초) scope를 비우고 결과를 쓰지 않고 실패한다.
+- **래퍼는 Runner를 막는 경계가 아니다.** Runner 계정을 Agent 계정으로 바꾸는 「문」이다. `ci-run`은 고정 PATH의 아무 명령이나 받는다. 결정 4(「`run`은 진입점만」)는 `run` 안의 규칙일 뿐이다.
+- **하위 Agent 정의 설치(`exec/install.ts`)**: 전용 계정 배치에서는 래퍼 `agent-file`(Agent 계정)로만 읽고·쓰고·지운다(fix2 추가). Runner 계정은 Agent가 쓸 수 있는 폴더에 쓰지 않는다. 같은 계정 배치(개발·시험)만 직접 쓴다.
 
 ## 12. 후속 연결 작업
 
@@ -442,10 +472,16 @@ bash agent-runner/scripts/isolation/remove-agent-user.sh --purge-work     # 작�
 2. **CLI 설치 위치**: 같은 조건에서 CLI 업데이트(`cli-update`)가 `/srv/agentwbs/cli`에 0750 폴더로 설치·갱신한다. 처음 설치는 `install-agent-cli.sh`(§10.4).
 3. **준비 점검·CLI 업데이트의 로그인 확인**: Runner 설치본 CLI의 로그인 상태 질의만 래퍼 `login-status`로 Agent 계정에서 돈다(`agentLoginRun`). 다른 명령(`--version` 등)은 그대로 Runner 계정에서 돈다.
 
-### 12.2 아직 남음
+### 12.2 M8 전 연결에서 연결함
 
-4. **exec 계층(M5-02)**: 세션 실행에서 `selectIsolation`을 부르고, 정리에 `agentControl`(`kill-group`·`kill-all`·`fix-perms`)을 쓴다. 이것이 연결되기 전까지 Runner는 실제 Agent 세션을 띄우지 않는다.
-5. **CI·계약 추출·임시 SQL**도 같은 계정 경계에서 실행한다(architecture §4 「실행 격리」). 래퍼에 하위 명령을 더하거나 같은 방식의 실행 계획을 쓴다.
+4. **exec 계층(M5-02)**: `RunnerApp`이 준비 점검 뒤·매일·실행 직전마다 `selectIsolation`(래퍼 `check` + 사용자 scope 시험)을 부른다. 통과하면 세션을 「전용 계정 + 사용자 scope」로 띄우고, 정리는 scope의 `cgroup.kill`로 한다(§9). 작업 폴더 삭제는 막히면 `fix-perms`를 쓴다.
+   - `AWBS_AGENT_USER`가 없으면 지금처럼 실행을 거부한다.
+   - 실제 시도 흐름은 결과 수집기(`collect`)가 연결돼야 돈다. 이 수집기는 아직 없다(`src/jobs/README.md`).
+
+### 12.3 아직 남음
+
+5. **CI**: fix1에서 연결함. ①·②·재실행 명령은 래퍼 `ci-run`으로 Agent 계정·사용자 scope에서 돈다(§5.1, 조정자 결정 1). 래퍼 `run`은 claude·codex 진입점만 받는다(결정 4).
+   - **계약 추출·임시 SQL**은 아직 이 경계를 쓰지 않는다(그 실행기가 앱에 연결되지 않았다). 연결할 때 `ci-run`과 같은 `Execution.command`를 쓴다.
 6. **`importWorktree`의 계정 간 안전성**(§11) 재검토.
 
 ## 13. 시험
@@ -454,7 +490,12 @@ bash agent-runner/scripts/isolation/remove-agent-user.sh --purge-work     # 작�
 pnpm -C agent-runner test -- cli
 ```
 
-- `test/cli/dedicated-user.test.ts`: 「계정이 있다고 가정한」 명령 구성. 실제 계정·sudo 없이 실행 계획 모양만 본다.
+- `test/cli/dedicated-user.test.ts`: 「계정이 있다고 가정한」 명령 구성. 실제 계정·sudo 없이 실행 계획 모양만 본다. scope 시험 명령과 「systemd-run … -- sudo …」 모양도 본다.
+- `test/exec/dedicated-scope.host.ts`(`pnpm -C agent-runner test:host`): **설치된 PC에서** 실제 래퍼·sudoers·awbs-agent 계정으로 돈다. 유료 호출 없음.
+  - fake 세션: Codex 묶음의 `bwrap`으로 `kernel-tree.py`(setsid·nohup·이중 fork·표식 지우기 자손)를 띄운다. 모든 프로세스가 awbs-agent·같은 scope 안인지, Runner의 직접 신호가 EPERM인지, 중단·정상 종료 뒤 Agent 프로세스가 0개인지 본다.
+  - 작업 폴더 삭제: Agent가 `chmod 000`한 폴더를 `fix-perms`로 되돌린 뒤 지운다.
+  - 실제 CLI는 `--version`만 부른다.
+  - 래퍼나 계정이 없는 PC에서는 건너뛰고 그 사실을 증거 파일에 적는다.
 - `test/cli/agent-exec.test.ts`: 래퍼를 실제 bash로 돌린다.
   - 설정 파일 경로만 시험 폴더로 바꾼 사본을 쓰고, 「Agent 계정」은 시험을 돌리는 계정으로 둔다.
   - sudo 자리에는 fake sudo를 둔다. 인자 모양(`-n -u <계정> --`)을 확인하고 환경을 비운 뒤 실행한다.
@@ -475,6 +516,10 @@ pnpm -C agent-runner test -- cli
 - **allowlist(허용 목록)**: 목록에 있는 것만 통과시키는 방식. 반대는 「막을 것만 적는」 방식.
 - **bare 저장소**: 작업 파일 없이 git 기록만 보관하는 저장소.
 - **cgroup(control group)**: 프로세스 묶음별로 CPU·메모리를 재고 제한하고, 묶음째 끝낼 수 있는 리눅스 기능.
+- **cgroup.kill**: cgroup 폴더의 파일. 1을 쓰면 커널이 그 묶음의 모든 프로세스를 계정과 상관없이 강제 종료한다.
+- **scope(사용자 scope)**: 사용자 systemd(`systemd-run --user --scope`)가 프로세스 묶음에 붙이는 이름표. 커널에서는 cgroup 하나다.
+- **linger**: 로그아웃·재시작 뒤에도 그 계정의 사용자 systemd를 띄워 두는 설정(`loginctl enable-linger <계정>`). 꺼져 있고 아무도 로그인하지 않으면 scope를 만들 수 없다.
+- **좀비 프로세스**: 끝났지만 부모가 아직 거두지(회수하지) 않은 프로세스. 거둘 때까지 프로세스 그룹에 남아 보인다.
 - **CLI sandbox**: CLI 프로그램이 스스로 건드릴 수 있는 파일·네트워크 범위를 막는 기능.
 - **dry-run**: 실제로 바꾸지 않고 무엇을 할지 보여 주기만 하는 실행.
 - **fail-closed**: 확인하지 못하면 「안전하지 않음」으로 치는 방식. 반대로 확인 못 한 것을 통과시키면 위험을 숨긴다.

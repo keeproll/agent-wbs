@@ -26,6 +26,11 @@ export interface Config {
    * 이때 CLI 설치(`cli/`)·작업 폴더(`worktrees/`)·입력 사본(`inputs/`)은 Runner 홈이 아니라 이 영역에 둔다(isolation.md §12).
    */
   agentRoot: string | null;
+  /**
+   * 실제 CI 실행기(integrate·ci_retry)를 켤지. `AWBS_CI_AUTO=1`일 때만 true(조정자 결정 7, 기본 꺼짐).
+   * 왜: CI는 Agent 코드를 실행하는 경로라, 켜는 것은 owner가 명시적으로 정한다.
+   */
+  ciAuto: boolean;
 }
 
 export class ConfigError extends Error {
@@ -86,6 +91,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     } else if (github) github.systemKey = { id: Number(keyId), socket, knownHosts };
   }
   const cliUpdates = env.AWBS_CLI_UPDATE !== '0';
+  const ciAuto = env.AWBS_CI_AUTO === '1';
+  if (env.AWBS_CI_AUTO !== undefined && !['0', '1', ''].includes(env.AWBS_CI_AUTO)) problems.push('AWBS_CI_AUTO는 1(켜기) 또는 0(끄기)만 쓸 수 있습니다.');
   let agentRoot: string | null = null;
   try {
     agentRoot = agentIsolationConfig(env)?.root ?? null;
@@ -94,5 +101,5 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   }
 
   if (!url || problems.length > 0) throw new ConfigError(problems.join('\n'));
-  return { wbsUrl: url.href.replace(/\/+$/, ''), token: new Secret(token), home, logLevel, github, cliUpdates, agentRoot };
+  return { wbsUrl: url.href.replace(/\/+$/, ''), token: new Secret(token), home, logLevel, github, cliUpdates, agentRoot, ciAuto };
 }

@@ -26,6 +26,11 @@ export interface CiJobsOptions extends Pick<IntegrationDeps,'repo'|'github'|'hea
   identity:{ hostId:string;bootId:string };
   /** 프로세스 등록·종료 확인·슬롯 반환을 마친 실행기다. heavy 번호표는 검사 함수가 이미 보유한다. */
   execute:(job:Job & { epoch:number },argv:readonly string[],cwd:string,signal?:AbortSignal)=>ReturnType<IntegrationDeps['execute']>;
+  /**
+   * job에 묶인 시험 목록 수집기(조정자 결정 2). 있으면 `collectTests` 대신 쓴다.
+   * 왜: 실제 수집기는 목록 명령도 같은 job의 슬롯·보유로(전용 계정이면 래퍼 ci-run으로) 돌려야 한다.
+   */
+  collectTestsFor?:(job:Job & { epoch:number },argv:readonly string[],cwd:string,signal?:AbortSignal)=>ReturnType<IntegrationDeps['collectTests']>;
   warn:(message:string)=>void;
 }
 export interface CiJobResult { job:Job;result:IntegrationResult|null;completion?:QueueBody;ciRunId?:string }
@@ -147,6 +152,8 @@ export class CiJobs {
     const context = (await d.api('getCiJob',{ epoch:saved.epoch,params:{ id:job.id },query:{ fence:job.fence } })).body;
     saved.context ??= context; await this.#save();
     const execute:IntegrationDeps['execute'] = (argv,cwd,stopped) => d.execute({ ...job,epoch:saved.epoch },argv,cwd,stopped);
+    const collectFor = d.collectTestsFor;
+    const collectTests:IntegrationDeps['collectTests'] = collectFor ? (argv,cwd,stopped) => collectFor({ ...job,epoch:saved.epoch },argv,cwd,stopped) : d.collectTests;
     if (job.kind === 'ci_retry') {
       if (!context.runnable || !context.source) throw new Error('재실행 임대 또는 원본 근거가 없습니다.');
       saved.round++; await this.#save();
@@ -158,7 +165,7 @@ export class CiJobs {
       let check:TaskCheckResult|IntegrationCheck;
       if (context.source.stage === 'task') {
         const id = `ci-${randomUUID()}`; await d.repo.createTaskCheckWorktree(id,context.source.headSha);
-        try { check = await runTaskCheck({ ...d,execute,basis,worktreeId:id,branch:`agent/${id}`,signal }); }
+        try { check = await runTaskCheck({ ...d,execute,collectTests,basis,worktreeId:id,branch:`agent/${id}`,signal }); }
         finally { await d.repo.removeWorktree(id); }
       } else check = await runIntegrationCheck({ ...d,execute,signal },basis,context.source.headSha,context.source.stage);
       const ciRunId = await this.#check(saved,check);
@@ -168,7 +175,7 @@ export class CiJobs {
     const qa = saved.context?.verification, branch = saved.context?.branch;
     if (!qa || !branch || !saved.context?.taskKey) throw new Error('통합할 QA·브랜치가 없습니다.');
     // H′ push·상태 기록·병합 직전마다 서버 기준 소유(fence·임대)와 중단을 확인한다(모든 외부 쓰기의 같은 관문).
-    const deps:IntegrationDeps = { ...d,execute,directory:join(d.directory,'merge'),signal,guard:serverWriteGuard(d.api,job,saved.epoch,signal),
+    const deps:IntegrationDeps = { ...d,execute,collectTests,directory:join(d.directory,'merge'),signal,guard:serverWriteGuard(d.api,job,saved.epoch,signal),
       observeMainPipeline:basis => this.#observe(basis),readVerification:async () => {
         const latest = (await d.api('getCiJob',{ epoch:saved.epoch,params:{ id:job.id },query:{ fence:job.fence } })).body;
         return latest.verification ? { ...latest.verification,passed:latest.runnable && latest.verification.passed } : { passed:false,headSha:qa.headSha,specRevision:qa.specRevision };

@@ -38,6 +38,11 @@ export interface AnalysisRequest {
   techConstraints?: TechConstraint[];
   /** 차이 분석: 입력 버전 고정 시점의 현재 WBS */
   wbs?: WbsSnapshot;
+  /**
+   * 초기 분석: 확정·반려된 기술 결정을 따르라는 지시문(`instructions.ts`의 `decisionGuide`).
+   * 기술 결정이 확정된 뒤(재분석·초안)에만 넣는다. 실제 CLI 어댑터는 이 글을 지시문에 그대로 붙인다.
+   */
+  decisionGuide?: string;
 }
 
 type Reviews = ApiRequest<'submitPlanningReviews'>['body']['reviews'];
@@ -59,6 +64,8 @@ export interface DraftRequest {
   techConstraints: TechConstraint[];
   /** 팀장이 확정한 결정 스냅샷(fixed·approved·rejected 구별). 반려된 제안(rejected의 tdKey)은 사용 기술로 쓰지 않는다. */
   decisions: DecisionSnapshot;
+  /** 위 스냅샷을 상태별 규칙과 함께 글로 만든 지시문(`decisionGuide`). 실제 CLI 어댑터는 이 글을 지시문에 그대로 붙인다. */
+  decisionGuide: string;
   /** 초안 Task의 하위 Agent는 이 목록의 id만 고른다. */
   subagentDefs: SubagentDef[];
 }

@@ -22,6 +22,8 @@ export interface PayloadHold {
   hostId: string | null;
   bootId: string | null;
   processGroup: number | null;
+  /** 보유에 기록된 cgroup 경로(Runner가 /process로 보고한 사용자 scope). 있으면 정리 증거는 cgroup_empty다(조정자 결정 3). */
+  cgroup: string | null;
   slotState: string;
 }
 
@@ -61,7 +63,9 @@ export function parseResetPayload(payload: Record<string, unknown>): ResetPayloa
     const pgid = row.pgid ?? null;
     if (pgid !== null && (!Number.isSafeInteger(pgid) || (pgid as number) <= 1)) throw new PayloadError('보유 항목의 pgid가 올바르지 않습니다.');
     if (!isText(row.slot_state)) throw new PayloadError('보유 항목에 slot_state가 없습니다.');
-    return { job: row.job, hostId: optionalText(row.host_id), bootId: optionalText(row.boot_id), processGroup: pgid as number | null, slotState: row.slot_state };
+    const cgroup = row.cgroup ?? null;
+    if (cgroup !== null && !isText(cgroup)) throw new PayloadError('보유 항목의 cgroup이 올바르지 않습니다.');
+    return { job: row.job, hostId: optionalText(row.host_id), bootId: optionalText(row.boot_id), processGroup: pgid as number | null, cgroup, slotState: row.slot_state };
   });
   let repo: ResetPayload['repo'] = null;
   if (baseCommit !== undefined && baseCommit !== null) {
@@ -161,8 +165,10 @@ export function createResetCleanup(deps: ResetCleanupDeps): ResetCleanup {
         items.push({ name, ok: true, detail: '부팅이 바뀜 — 이전 프로세스는 존재할 수 없음' });
       } else if (hold.processGroup !== null) {
         if ((await launchCheck(hold)) === 'none') {
-          proofs.push({ ...original, proof: 'group_empty', processGroup: hold.processGroup });
-          items.push({ name, ok: true, detail: `프로세스 그룹 ${String(hold.processGroup)} 비었음` });
+          // cgroup이 기록된 보유는 cgroup_empty로만 닫힌다(launchCheck가 그 scope가 빈 것까지 확인했다).
+          proofs.push(hold.cgroup !== null ? { ...original, proof: 'cgroup_empty', processGroup: hold.processGroup, cgroup: hold.cgroup }
+            : { ...original, proof: 'group_empty', processGroup: hold.processGroup });
+          items.push({ name, ok: true, detail: hold.cgroup !== null ? `프로세스 그룹 ${String(hold.processGroup)}·cgroup 비었음` : `프로세스 그룹 ${String(hold.processGroup)} 비었음` });
         } else {
           // pgid 재사용 가능성 때문에 시작 시각·launchId 대조 없이 죽이지 않는다(§3.4-3). 실행 계층(M5-02)이 종료한 뒤 다시 시도된다.
           items.push({ name, ok: false, detail: `프로세스 그룹 ${String(hold.processGroup)}이 아직 살아 있음 — 종료 확인 뒤 다시 시도` });

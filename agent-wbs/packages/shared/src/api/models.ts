@@ -11,7 +11,7 @@ export const ExecutionHold = Type.Object({
   task: Nullable(c.Id), conflict_group: Nullable(Text), agent: c.Agent, slots: c.Int4Count, heavy: Type.Boolean(),
   slot_state: AnyOf('none', 'reserved', 'active', 'unconfirmed'),
   lock_state: AnyOf('none', 'held', 'orphaned', 'handed_over', 'released'),
-  lock_from_job: Nullable(c.Id), handed_to_job: Nullable(c.Id), release_proof: Nullable(AnyOf('no_process', 'group_empty', 'boot_changed')),
+  lock_from_job: Nullable(c.Id), handed_to_job: Nullable(c.Id), release_proof: Nullable(AnyOf('no_process', 'group_empty', 'boot_changed', 'cgroup_empty')),
   closed_at: Nullable(c.Timestamp), created_at: c.Timestamp, updated_at: c.Timestamp,
   lease_owner: Opt(Nullable(Text)), lease_until: Opt(Nullable(c.Timestamp)),
 }, { title: 'ExecutionHold' });

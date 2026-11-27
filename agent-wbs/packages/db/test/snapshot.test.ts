@@ -22,8 +22,10 @@ test('0021·0022 snapshot이 단계별 구조와 연결을 보존하고 다음 g
   const order2 = snapshot('0037');
   const claims = snapshot('0038');
   const recovery = snapshot('0039');
-  // Q-13 결정 A: 외부 수신자(0040, mail_recipients·mail_outbox의 external)
-  const external = snapshot('0040');
+  // M8 전 연결 fix1: 해제 증거 cgroup_empty(0040, 조정자 결정 3)
+  const cgroup = snapshot('0040');
+  // Q-13 결정 A: 외부 수신자(0041, mail_recipients·mail_outbox의 external)
+  const external = snapshot('0041');
   expect(project.prevId).toBe(before.id);
   expect(evidence.prevId).toBe(project.id);
   expect(observation.prevId).toBe(evidence.id);
@@ -36,7 +38,6 @@ test('0021·0022 snapshot이 단계별 구조와 연결을 보존하고 다음 g
   expect(order2.prevId).toBe(design.id);
   expect(claims.prevId).toBe(order2.id);
   expect(recovery.prevId).toBe(claims.id);
-  expect(external.prevId).toBe(recovery.id);
   expect(project.tables['public.projects']?.columns).toHaveProperty('input_checked_at');
   expect(project.tables['public.change_proposals']?.columns).toHaveProperty('deleted_at');
   expect(project.tables['public.evidence']).toEqual(before.tables['public.evidence']);
@@ -61,8 +62,12 @@ test('0021·0022 snapshot이 단계별 구조와 연결을 보존하고 다음 g
   expect(await generateMigration(design, order2)).toHaveLength(6);
   for (const table of ['notify_outbox', 'reports', 'design_drifts']) expect(order2.tables[`public.${table}`]?.columns).toHaveProperty('record_no');
   expect(claims.tables['public.ci_merge_facts']?.columns).toHaveProperty('commit_parents');
-  // 0040은 외부 수신자 열 두 개와 검사 두 개만 더한다. 「다음 generate가 빈 변경」은 마지막 snapshot(0040)으로 확인한다.
-  expect(await generateMigration(recovery, external)).toHaveLength(4);
+  expect(cgroup.prevId).toBe(recovery.id);
+  // 0040은 열거형 값 하나만 더한다. 트리거·정리 함수는 손으로 쓴 SQL이다.
+  expect(await generateMigration(recovery, cgroup)).toEqual(['ALTER TYPE "public"."release_proof" ADD VALUE \'cgroup_empty\';']);
+  expect(external.prevId).toBe(cgroup.id);
+  // 0041은 외부 수신자 열 두 개와 검사 두 개만 더한다. 「다음 generate가 빈 변경」은 마지막 snapshot(0041)으로 확인한다.
+  expect(await generateMigration(cgroup, external)).toHaveLength(4);
   for (const table of ['mail_recipients', 'mail_outbox']) expect(external.tables[`public.${table}`]?.columns).toHaveProperty('external');
   expect(await generateMigration(external, generateDrizzleJson(schema, external.id))).toEqual([]);
   expect(mail.tables['public.mail_outbox']?.columns).toHaveProperty('retried');

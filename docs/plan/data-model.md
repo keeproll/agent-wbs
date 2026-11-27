@@ -408,7 +408,7 @@ CP(변경 제안)로 새 Task를 추가할 때 넣을 수 있는 선택 필드�
   - 근거: §1.2-4 §7.4-4
 - `execution_holds`
   - 같은 job의 열린 보유(`closed_at is null`)만 하나다. 닫힌 보유는 이력으로 여러 개 남을 수 있다.
-  - attempt?, epoch, host_id?, boot_id?, fence?, pgid/cgroup, task?, conflict_group?, agent, slots, heavy, **slot_state**, **lock_state**, lock_from_job?, handed_to_job?, release_proof(`no_process/group_empty/boot_changed`), closed_at.
+  - attempt?, epoch, host_id?, boot_id?, fence?, pgid/cgroup, task?, conflict_group?, agent, slots, heavy, **slot_state**, **lock_state**, lock_from_job?, handed_to_job?, release_proof(`no_process/group_empty/boot_changed/cgroup_empty`, cgroup_empty는 마이그레이션 0040 — cgroup이 기록된 보유만, cgroup 없는 보유는 group_empty만), closed_at.
   - 왜: PC 변경으로 닫힌 보유는 불변으로 남기고, 같은 대기 job은 새 보유로 실행해야 한다.
   - 대기 job의 담당·검증 Agent가 바뀌어도 옛 행의 `agent`는 바꾸지 않는다. 다음 claim에서 옛 행을 닫고 새 행을 만든다. `runner_jobs.payload.agent`는 새 실행 Agent와 맞춘다.
   - 왜: 과거 보유를 덮어쓰지 않으면서 새 모델 등급과 실제 Agent가 맞아야 한다.
@@ -622,14 +622,14 @@ job 하나에 열린 보유 행 하나를 둔다. 닫힌 행은 과거 이력으
   - `mail_settings`: SMTP(비밀값은 secrets)
   - `mail_recipients`: email lower unique, daily/weekly 하나 이상 또는 inactive.
     - 외부 수신자 구분: owner Q-13 A(2026-11-27 아이템 19)로 필요해졌다. 외부 수신자에게는 링크 없이 PDF만 보낸다.
-  - `mail_recipients.external`(Q-13 결정 A, 0040): 외부 수신자. 참이면 view='ext' · pdf=true · daily=false여야 한다(검사 `recipient_external`).
+  - `mail_recipients.external`(Q-13 결정 A, 0041): 외부 수신자. 참이면 view='ext' · pdf=true · daily=false여야 한다(검사 `recipient_external`).
     - 왜: 외부 수신자에게는 링크 없이 보고용 + PDF만 보낸다. 일간 보고서는 팀장용만 있다.
   - 근거: §4.11
 - `mail_outbox` / `mail_log`
   - `mail_outbox`: delivery_id(논리 발송), epoch, unique(report, recipient, try_no), state(§3.7)
     - 발송마다 보기·사유·제목·첨부 여부도 함께 저장한다(0031). 수신자 설정이 나중에 바뀌어도 「그때 어떤 보기로, 왜 보냈는지」가 남아야 하기 때문이다(G L407).
     - 15분 뒤 자동 재시도는 한 번뿐이고, 했는지를 기록한다.
-  - `mail_outbox.external`(Q-13 결정 A, 0040): 외부 수신자에게 간 발송인지(발송 당시 값). 참이면 view='ext' · pdf=true(검사 `mail_outbox_external`)
+  - `mail_outbox.external`(Q-13 결정 A, 0041): 외부 수신자에게 간 발송인지(발송 당시 값). 참이면 view='ext' · pdf=true(검사 `mail_outbox_external`)
   - `mail_log`: 수신자 삭제 후에도 주소 보존
   - 근거: §9.6-6
 - `notify_settings`/`notify_rules`

@@ -4,6 +4,8 @@ import { constants } from 'node:fs';
 import { chmod, link, lstat, mkdir, open, readFile, readdir, rename, rm, statfs, writeFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { basename, dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
+import { AGENT_ROOT, restoreAgentPermissions } from '../cli/dedicated-user.ts';
+import { localAgentGit, wrapperAgentGit, type AgentGit } from './agent-git.ts';
 import { atomicWrite } from '../state/files.ts';
 import { parseCommits, parseRawNumstat, type InputDiff, type InputObservation } from './inputs.ts';
 
@@ -191,7 +193,30 @@ async function run(cwd: string, args: string[], input?: Buffer | string, extraEn
 }
 
 /** 허용한 종료 코드면 출력과 코드를 돌려주고, 그 밖은 GitSafetyError. 종료 코드로 답을 구분하는 명령(merge-base --is-ancestor)에 쓴다. */
+/**
+ * Runner git이 쓰면 안 되는 폴더(전용 계정 배치의 Agent 작업 폴더 모음). 조정자 결정 6.
+ * 예외는 Runner만 들어갈 수 있는 준비 폴더(`.prep-<uuid>`, 0700)뿐이다. 거기서 clone·checkout을 끝낸 뒤 Agent에게 넘긴다.
+ */
+const protectedAreas = new Set<string>();
+/** 시험용: Runner git 호출을 모두 본다(Agent 폴더 접근 전수 목록 시험). 제품 코드는 쓰지 않는다. */
+let gitAudit: ((cwd: string, args: readonly string[]) => void) | undefined;
+export function setGitAudit(audit: ((cwd: string, args: readonly string[]) => void) | undefined): void { gitAudit = audit; }
+
+/** cwd·인자 중 보호 영역 안의 경로가 있으면 거부한다(준비 폴더 제외). 새 코드가 Agent 폴더에서 git을 돌리면 여기서 멈춘다. */
+export function assertRunnerGit(cwd: string, args: readonly string[]): void {
+  for (const area of protectedAreas) {
+    for (const value of [cwd, ...args.map((arg) => arg.replace(/^--(?:git-dir|work-tree)=/, ''))]) {
+      if (!value.startsWith(`${area}/`)) continue;
+      const rest = value.slice(area.length + 1);
+      if (/^\.prep-[0-9a-f-]{36}(?:\/|$)/.test(rest)) continue;
+      throw new GitSafetyError('Runner git은 Agent가 쓸 수 있는 작업 폴더에서 돌지 않습니다(조정자 결정 6).');
+    }
+  }
+}
+
 async function runWithCode(cwd: string, args: string[], input?: Buffer | string, extraEnv: NodeJS.ProcessEnv = {}, allowed = [0], signal?: AbortSignal): Promise<{ code: number; output: Buffer }> {
+  gitAudit?.(cwd, args);
+  assertRunnerGit(cwd, args);
   return new Promise((resolvePromise, reject) => {
     const child = spawn('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.excludesFile=/dev/null',
       '-c', 'core.fsmonitor=false', '-c', 'credential.helper=', '-c', 'core.sshCommand=false',
@@ -202,7 +227,9 @@ async function runWithCode(cwd: string, args: string[], input?: Buffer | string,
       env: {
         PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8',
         GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0',
-        GIT_ALLOW_PROTOCOL: 'file:https', GIT_LFS_SKIP_SMUDGE: '1', ...extraEnv,
+        GIT_ALLOW_PROTOCOL: 'file:https', GIT_LFS_SKIP_SMUDGE: '1',
+        // 늦은 가져오기(partial clone의 lazy fetch)를 끈다. Runner 저장소는 partial clone이 아니라 잃는 것이 없다(방어 점검 1의 겹 방어).
+        GIT_NO_LAZY_FETCH: '1', ...extraEnv,
       },
       stdio: ['pipe', 'pipe', 'pipe'],
       // 중단할 수 있는 git(외부 쓰기인 push)은 자기 프로세스 그룹으로 띄운다. git이 띄우는 git-remote-https·git send-pack도 같은 그룹이다.
@@ -245,15 +272,34 @@ async function runWithCode(cwd: string, args: string[], input?: Buffer | string,
   });
 }
 
-async function removeReadonly(path: string): Promise<void> {
+/** 도구 한 번 실행(셸 없음). 종료 코드를 돌려준다. */
+function tool(file: string, args: string[]): Promise<number> {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(file, args, { stdio: 'ignore', env: { PATH: '/usr/bin:/bin', LANG: 'C' } });
+    child.once('error', reject);
+    child.once('close', (code) => resolvePromise(code ?? 1));
+  });
+}
+
+/**
+ * 폴더를 통째로 지운다(조정자 결정 8, 방어 점검 3).
+ * - GNU `chmod -R`·`rm -rf --one-file-system`을 쓴다. 둘 다 링크를 따라가지 않고(fts 물리 순회) 폴더 핸들 기준으로 지운다.
+ *   왜: lstat로 「진짜 폴더」를 본 뒤 readdir·chmod 하는 방식은, 그 사이 다른 Agent 세션이 폴더를 링크로 바꾸면 Runner 파일을 지운다.
+ * - `chmod u+rwX`는 Runner 소유 읽기 전용 폴더(입력 사본 0555 등)만 연다. 그룹 칸은 건드리지 않는다(fix-perms가 들어갈 수 있게).
+ * - 다 지우지 못하면 EACCES 오류다(Agent가 지운 권한은 fix-perms로 되돌린 뒤 다시 부른다).
+ */
+async function removeTree(path: string): Promise<void> {
   const info = await stat(path);
   if (!info) return;
-  if (info.isDirectory() && !info.isSymbolicLink()) {
-    await chmod(path, 0o700);
-    for (const name of await readdir(path)) await removeReadonly(join(path, name));
-  }
-  await rm(path, { recursive: true, force: true });
+  // 링크 자체만 지운다(가리키는 곳은 따라가지 않는다).
+  if (info.isSymbolicLink()) { await rm(path); return; }
+  await tool('chmod', ['-R', '-f', 'u+rwX', '--', path]);
+  await tool('rm', ['-rf', '--one-file-system', '--', path]);
+  if (await stat(path)) throw Object.assign(new Error('폴더를 모두 지우지 못했습니다.'), { code: 'EACCES' });
 }
+
+/** 시험이 삭제 실패를 흉내 낼 수 있게 한 곳에 둔다. */
+export const treeOps = { remove: removeTree };
 
 /**
  * 작업 폴더 안의 모든 파일·폴더에 그룹 쓰기 권한을 준다(전용 계정 격리용). 링크는 따라가지 않는다.
@@ -281,6 +327,16 @@ export type PushGate = ((operation: { kind: 'branch_push'; branch: string; remot
 export interface GitLayout {
   /** 예: /srv/agentwbs. 그 아래 `worktrees/<저장소>`·`inputs/<저장소>`를 쓴다. */
   agentRoot?: string | null;
+  /**
+   * 작업 폴더 삭제가 권한 문제로 막혔을 때 Agent 파일 권한을 되돌리는 방법(래퍼 `fix-perms`).
+   * 생략하면 `agentRoot`가 고정 작업 영역(/srv/agentwbs)일 때만 실제 래퍼를 쓴다. null이면 쓰지 않는다. 시험은 가짜를 넣는다.
+   */
+  restorePermissions?: ((path: string) => Promise<void>) | null;
+  /**
+   * Agent 작업 폴더 안의 git(조정자 결정 6). 전용 계정 배치에서만 쓴다.
+   * 생략하면 `agentRoot`가 고정 작업 영역이면 실제 래퍼(Agent 계정), 아니면 같은 계정 git(시험 배치)이다.
+   */
+  agentGit?: AgentGit;
 }
 
 /** 입력 복사의 임시 폴더 접두사. 점으로 시작하므로 `inputIds()`(입력 이름)에 섞이지 않는다. */
@@ -302,6 +358,8 @@ export class GitRepository {
   private readonly statePath: string;
   /** 전용 계정 격리 사용 여부. 쓰면 Agent가 들어갈 폴더를 그룹에도 연다(작업 폴더 0o770, 모음 폴더 0o750). */
   private readonly shared: boolean;
+  private readonly restorePermissions: ((path: string) => Promise<void>) | null;
+  private readonly agentGit: AgentGit | null;
   private registration: Registration | undefined;
 
   private constructor(home: string, repositoryId: string, layout: GitLayout = {}) {
@@ -309,10 +367,14 @@ export class GitRepository {
     this.repositoryId = repositoryId;
     const area = layout.agentRoot ?? home;
     this.shared = Boolean(layout.agentRoot);
+    this.restorePermissions = layout.restorePermissions !== undefined ? layout.restorePermissions
+      : layout.agentRoot === AGENT_ROOT ? (path) => restoreAgentPermissions(path) : null;
     this.path = join(home, 'repos', repositoryId);
     this.worktrees = join(area, 'worktrees', repositoryId);
     this.inputs = join(area, 'inputs', repositoryId);
     this.statePath = join(home, 'state/git', `${repositoryId}.json`);
+    this.agentGit = !this.shared ? null : layout.agentGit ?? (layout.agentRoot === AGENT_ROOT ? wrapperAgentGit() : localAgentGit());
+    if (this.shared) protectedAreas.add(this.worktrees);
   }
 
   private static async prepare(home: string, repositoryId: string, layout: GitLayout = {}): Promise<GitRepository> {
@@ -328,10 +390,14 @@ export class GitRepository {
       await safePath(path);
       await mkdir(path, { recursive: true, mode: 0o700 });
     }
-    // 작업 폴더·입력 사본 모음: 전용 계정이면 Agent 그룹이 들어가기만 하게 0o750(맨 위는 Agent가 못 바꿈).
-    for (const path of [repo.worktrees, repo.inputs]) {
+    // 작업 폴더·입력 사본 모음(전용 계정이면 맨 위는 Agent가 못 바꿈).
+    // - 작업 폴더 모음은 0o710: Agent는 지나가기만 하고 목록은 못 본다(조정자 결정 8, 방어 점검 5).
+    //   왜: 검사 사본 이름은 무작위 UUID다. 목록을 못 보면 다른 Task의 Agent가 이 사본을 찾아 바꾸기 어렵다.
+    // - 입력 사본 모음은 0o750: 입력 사본은 읽기 전용이라 목록을 봐도 바꿀 수 없다.
+    for (const [path, mode] of [[repo.worktrees, 0o710], [repo.inputs, 0o750]] as const) {
       await safePath(path);
-      await mkdir(path, { recursive: true, mode: repo.shared ? 0o750 : 0o700 });
+      await mkdir(path, { recursive: true, mode: repo.shared ? mode : 0o700 });
+      if (repo.shared) await chmod(path, mode);
     }
     if ((await statfs(repo.worktrees)).type !== 0xef53) throw new GitSafetyError('worktree는 ext4 파일 시스템에 만들어야 합니다.');
     await safePath(repo.path);
@@ -403,7 +469,7 @@ export class GitRepository {
   /** 잠금 안에서만 부른다. 입력 복사 임시 폴더를 모두 지운다. */
   private async removeInputTemps(): Promise<void> {
     for (const name of await readdir(await safePath(this.inputs)).catch(() => [] as string[])) {
-      if (name.startsWith(INPUT_TEMP)) await removeReadonly(join(this.inputs, name));
+      if (name.startsWith(INPUT_TEMP)) await treeOps.remove(join(this.inputs, name));
     }
   }
 
@@ -516,6 +582,10 @@ export class GitRepository {
       await this.saveRegistration({ ...record, resetting: true, resetGeneration: (record.resetGeneration ?? 0) + 1 });
       // 공개되지 못한 임시 사본(강제 종료로 남은 것 포함)은 이 초기화가 지운다.
       await this.removeInputTemps();
+      // 작업 폴더 준비 중 강제 종료로 남은 준비 폴더(.prep-<uuid>, Runner 전용)도 지운다. 남으면 endReset이 「남은 항목」으로 멈춘다.
+      for (const name of await readdir(await safePath(this.worktrees)).catch(() => [] as string[])) {
+        if (/^\.prep-[0-9a-f-]{36}$/.test(name)) await this.removeAgentTree(join(this.worktrees, name));
+      }
     });
   }
 
@@ -675,7 +745,15 @@ export class GitRepository {
     await this.git(['check-ref-format', '--branch', branch]);
   }
 
-  async createWorktree(worktreeId: string, branch: string, commit: string): Promise<string> {
+  /**
+   * Agent 작업 폴더를 만든다.
+   * 전용 계정 배치(조정자 결정 6, 방어 점검 2): clone·checkout을 Runner만 들어갈 수 있는 준비 폴더(`.prep-<uuid>`, 0700)에서 끝낸 뒤 넘긴다.
+   * - 왜: 처음부터 0770 폴더에서 clone → checkout 하면, 그 사이 다른 Agent 세션이 `.git/config`에 filter를 심어 checkout이 Runner 계정으로 그 명령을 실행한다.
+   * - 순서: 준비 폴더 0700 → clone → remote remove → checkout → (검사 사본이면 .awbs-home) → 그룹 쓰기 → 0770 → 제자리로 이름 바꾸기.
+   * - 넘긴 뒤에는 Runner git이 이 폴더를 쓰지 않는다(`assertRunnerGit`). HEAD·상태·결과는 Agent 계정 git(`AgentGit`)으로만 본다.
+   * `options.ciHome`: 검사 사본이면 실행마다 새 HOME(`.awbs-home`, pnpm 저장소 포함)을 만든다(조정자 결정 8). 상태 검사에서 빠지게 `.git/info/exclude`에 적는다.
+   */
+  async createWorktree(worktreeId: string, branch: string, commit: string, options: { ciHome?: boolean } = {}): Promise<string> {
     return this.worktreeUpdate(async () => {
       const path = await safePath(join(this.worktrees, id(worktreeId)));
       await this.branch(branch);
@@ -686,22 +764,34 @@ export class GitRepository {
       if (record.worktrees.some((value) => value.id === worktreeId)) throw new GitSafetyError('이 작업 폴더는 정리 후 다시 만들어야 합니다.');
       const ref = `refs/heads/${branch}`;
       await this.git(['update-ref', ref, commit, '']);
+      const build = this.shared ? join(this.worktrees, `.prep-${randomUUID()}`) : path;
       let created = false;
       try {
         // 생성 중 종료돼도 폴더가 기록 없이 남지 않도록 먼저 예약한다.
         await this.saveRegistration({ ...record, worktrees: [...record.worktrees, { id: worktreeId, branch, startCommit: commit }] });
-        // 전용 계정이면 0o770: 0o700으로 만들면 ACL 상한이 ---가 되어 Agent가 들어가지 못한다(isolation.md §6, Codex 리뷰 P2-5).
-        await mkdir(path, { mode: this.shared ? 0o770 : 0o700 });
+        // 0700: 기본 ACL이 있어도 ACL 상한(mask)이 ---가 되어 Agent 계정은 들어갈 수 없다.
+        await mkdir(build, { mode: 0o700 });
+        await chmod(build, 0o700);
         created = true;
         // 고정 커밋의 브랜치만 복사하여 최신 원격 객체도 받고 다른 Agent 결과는 제외한다.
-        await run(this.home, ['-c', 'init.templateDir=', 'clone', '--no-local', '--no-hardlinks', '--single-branch', '--branch', branch, '--no-checkout', '--', this.path, path]);
-        await run(path, ['remote', 'remove', 'origin']);
-        await run(path, ['checkout', '--no-guess', branch]);
-        if (this.shared) await groupWritable(path);
+        await run(this.home, ['-c', 'init.templateDir=', 'clone', '--no-local', '--no-hardlinks', '--single-branch', '--branch', branch, '--no-checkout', '--', this.path, build]);
+        await run(build, ['remote', 'remove', 'origin']);
+        await run(build, ['checkout', '--no-guess', branch]);
+        if (options.ciHome && this.shared) {
+          await mkdir(join(build, '.awbs-home', 'tmp'), { recursive: true, mode: 0o770 });
+          await mkdir(join(build, '.git', 'info'), { recursive: true, mode: 0o700 });
+          await writeFile(join(build, '.git', 'info', 'exclude'), '/.awbs-home/\n', { flag: 'a' });
+        }
+        if (this.shared) {
+          await groupWritable(build);
+          await chmod(build, 0o770);
+          await rename(build, path);
+        }
         return path;
       } catch (error) {
         try {
-          if (created) await removeReadonly(path);
+          if (created) await treeOps.remove(build);
+          if (build !== path && await stat(path)) await this.removeAgentTree(path);
           const latest = await this.trusted();
           await this.saveRegistration({ ...latest, worktrees: latest.worktrees.filter((value) => value.id !== worktreeId) });
         } finally { await this.git(['update-ref', '-d', ref, commit]); }
@@ -710,13 +800,28 @@ export class GitRepository {
     });
   }
 
+  /**
+   * Agent 결과(브랜치)를 Runner 저장소로 가져온다.
+   * 전용 계정 배치(조정자 결정 6): Agent 계정 git이 만든 bundle(데이터 파일)만 받아, Runner bare 저장소에서 `bundle verify` 뒤 fetch한다.
+   * Runner는 Agent 폴더의 `.git`을 저장소로 쓰지 않는다(그 폴더에서 upload-pack도 돌리지 않는다). 객체는 fetch의 fsck 검사를 거친다.
+   */
   async importWorktree(worktreeId: string, branch: string): Promise<string> {
-    const path = await safePath(join(this.worktrees, id(worktreeId), '.git'));
+    const path = await safePath(join(this.worktrees, id(worktreeId)));
     if (!(await this.trusted()).worktrees.some((value) => value.id === worktreeId)) throw new GitSafetyError('기록하지 않은 작업 폴더입니다.');
     await this.branch(branch);
     const ref = `refs/agent-results/${worktreeId}`;
-    // Agent 설정을 읽어 checkout하지 않고, Git의 객체 검증을 거쳐 결과만 가져온다.
-    await this.git(['fetch', '--no-tags', '--no-recurse-submodules', '--upload-pack=git-upload-pack', '--', path, `+refs/heads/${branch}:${ref}`]);
+    if (this.agentGit) {
+      const bundle = join(dirname(this.statePath), `bundle-${randomUUID()}.bundle`);
+      try {
+        await this.agentGit.bundle(path, branch, bundle);
+        await this.git(['bundle', 'verify', '--quiet', bundle]);
+        await this.git(['fetch', '--no-tags', '--no-recurse-submodules', '--', bundle, `+refs/heads/${branch}:${ref}`]);
+      } finally { await rm(bundle, { force: true }); }
+    } else {
+      // 같은 계정 배치(전용 계정 없음): Agent도 Runner 계정이라 넘는 경계가 없다. Git의 객체 검증을 거쳐 결과만 가져온다.
+      await safePath(join(path, '.git'));
+      await this.git(['fetch', '--no-tags', '--no-recurse-submodules', '--upload-pack=git-upload-pack', '--', join(path, '.git'), `+refs/heads/${branch}:${ref}`]);
+    }
     return sha((await this.git(['rev-parse', '--verify', `${ref}^{commit}`])).toString().trim());
   }
 
@@ -733,7 +838,7 @@ export class GitRepository {
       if (entry.branch && entry.startCommit) {
         await this.branch(entry.branch);
       }
-      await removeReadonly(path);
+      await this.removeAgentTree(path);
       if (entry.branch && entry.startCommit) {
         const ref = `refs/heads/${entry.branch}`;
         const current = (await this.git(['rev-parse', '--verify', '--quiet', ref], undefined, undefined, [0, 1])).toString().trim();
@@ -742,6 +847,20 @@ export class GitRepository {
       await this.git(['update-ref', '-d', `refs/agent-results/${worktreeId}`]);
       await this.saveRegistration({ ...record, worktrees: record.worktrees.filter((value) => value.id !== worktreeId) });
     });
+  }
+
+  /**
+   * 작업 폴더를 지운다. 전용 계정 배치에서 Agent가 자기 파일 권한을 지워 막히면(EACCES·EPERM)
+   * 래퍼 `fix-perms`로 Runner 권한을 되돌린 뒤 한 번만 다시 지운다. 되돌리지 못하면 지우지 않은 채 예외다.
+   */
+  private async removeAgentTree(path: string): Promise<void> {
+    try { await treeOps.remove(path); }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? '';
+      if (!this.shared || !this.restorePermissions || !['EACCES', 'EPERM'].includes(code)) throw error;
+      await this.restorePermissions(path);
+      await treeOps.remove(path);
+    }
   }
 
   private async tree(commit: string): Promise<TreeEntry[]> {
@@ -837,7 +956,7 @@ export class GitRepository {
           return path;
         } catch (error) {
           // 자기 임시 폴더만 지운다(공개 경로는 건드리지 않음).
-          await removeReadonly(temp).catch(() => undefined);
+          await treeOps.remove(temp).catch(() => undefined);
           throw error;
         }
       });
@@ -847,7 +966,7 @@ export class GitRepository {
   }
 
   async removeInput(inputId: string): Promise<void> {
-    await removeReadonly(await safePath(join(this.inputs, id(inputId))));
+    await treeOps.remove(await safePath(join(this.inputs, id(inputId))));
   }
 
   /**
@@ -1050,7 +1169,7 @@ export class GitRepository {
     if (entries.some((entry) => !['100644', '100755'].includes(entry.mode) || entry.path.split('/').includes('node_modules'))) {
       throw new GitSafetyError('검사 커밋에는 node_modules, symlink, submodule을 넣을 수 없습니다.');
     }
-    return this.createWorktree(worktreeId, `agent/${worktreeId}`, commit);
+    return this.createWorktree(worktreeId, `agent/${worktreeId}`, commit, { ciHome: true });
   }
 
   /** 고정한 커밋과 실제 작업 파일이 일치해야 다른 코드의 결과를 보고하지 않는다. */
@@ -1059,6 +1178,13 @@ export class GitRepository {
     if (record.resetting || !record.worktrees.some((value) => value.id === worktreeId)) throw new GitSafetyError('검사할 수 있는 작업 폴더가 아닙니다.');
     const path = await safePath(join(this.worktrees, id(worktreeId)));
     await safePath(join(path, '.git'));
+    if (this.agentGit) {
+      // 전용 계정 배치(조정자 결정 6, 방어 점검 1): HEAD·상태는 Agent 계정 git으로만 본다. Runner git은 Agent `.git`을 읽지 않는다.
+      const inspected = await this.agentGit.inspect(path);
+      if (inspected.head !== sha(head)) throw new GitSafetyError('검사 대상 head와 작업 폴더가 다릅니다.');
+      if (inspected.dirty) throw new GitSafetyError('작업 폴더에 커밋하지 않은 변경이 있습니다.');
+      return path;
+    }
     const current = (await run(path, [`--git-dir=${join(path, '.git')}`, 'rev-parse', '--verify', 'HEAD^{commit}'])).toString().trim();
     if (current !== sha(head)) throw new GitSafetyError('검사 대상 head와 작업 폴더가 다릅니다.');
     // Agent index의 assume-unchanged·skip-worktree와 filter 설정을 신뢰하지 않는다.

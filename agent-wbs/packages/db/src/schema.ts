@@ -98,7 +98,7 @@ export const lockState = pgEnum('lock_state', [
   'released',
   'orphaned',
 ]);
-export const releaseProof = pgEnum('release_proof', ['no_process', 'group_empty', 'boot_changed']);
+export const releaseProof = pgEnum('release_proof', ['no_process', 'group_empty', 'boot_changed', 'cgroup_empty']);
 export const cleanupStatus = pgEnum('cleanup_status', ['none', 'pending', 'running', 'failed']);
 export const deliveryState = pgEnum('delivery_state', [
   'queued',
@@ -1339,7 +1339,7 @@ export const mailRecipients = pgTable(
     weekly: boolean().notNull(),
     pdf: boolean().notNull(),
     view: reportView().notNull(),
-    // Q-13 결정 A(0040): 외부 수신자. 링크 없이 보고용 보기 + PDF만 받는다. 일간(팀장용만 있음)은 받지 않는다.
+    // Q-13 결정 A(0041): 외부 수신자. 링크 없이 보고용 보기 + PDF만 받는다. 일간(팀장용만 있음)은 받지 않는다.
     external: boolean().notNull().default(false),
   },
   (t) => [
@@ -1373,7 +1373,7 @@ export const mailOutbox = pgTable(
     sent_at: at('sent_at'),
     log_key: text().notNull(),
     attempt: uuid(),
-    // Q-13 결정 A(0040): 외부 수신자에게 가는 발송인지(발송 당시 값). 링크 없이 보고용 + PDF로 보낸다.
+    // Q-13 결정 A(0041): 외부 수신자에게 가는 발송인지(발송 당시 값). 링크 없이 보고용 + PDF로 보낸다.
     external: boolean().notNull().default(false),
   },
   (t) => [

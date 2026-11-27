@@ -2,7 +2,8 @@
 
 이 계층은 서버가 승인한 일을 실행한다.
 등급·재시도·Task 상태를 임의로 판단하지 않는다.
-실제 CLI(명령줄 프로그램)는 Q-08의 실행 격리가 정해지기 전까지 기본 거부한다.
+실제 CLI(명령줄 프로그램)는 Q-08 전용 계정 격리가 설치·확인된 PC에서만 실행한다(아래 「전용 계정 + 사용자 scope 실행」).
+그 밖의 PC(시험·CI·미설치)는 지금처럼 기본 거부한다.
 시험은 기존 `IsolationLayer`에 fake(실제 서비스 대신 쓰는 시험 프로그램)를 넣는다.
 
 ## 실행 순서
@@ -92,15 +93,77 @@ TERM 처리 중 새 그룹을 만든 자손도 KILL 전에 다시 찾는다.
 사용자 scope 위임·실측이 실패하면 오류를 기록하고 host 시험도 실패한다.
 scope 안의 검사기가 이번 실행에 만든 실측 파일과 실제 측정값이 모두 있어야 통과한다.
 가짜 명령이 성공 코드나 예전 결과를 표준 출력으로 돌려주는 것만으로는 통과하지 않는다.
-시험 성공은 운영 연결을 뜻하지 않는다.
-현재 `LaunchRecord.cgroup`은 `null`이며 운영 실행은 이 시험의 scope를 쓰지 않는다.
-Q-08의 `IsolationLayer.wrap(Launch, agent)` 경계는 그대로 유지한다.
-전용 계정의 환경 초기화·종료 권한과 cgroup 밖으로 옮길 권한 차단은 격리 계층과 연결해 추가 확인해야 한다.
-왜: 다른 사용자는 현재 `/proc` 탐색 대상이 아니며 Runner에게 직접 종료 권한도 없다.
+이 시험은 같은 계정의 실측이다.
+전용 계정 실행의 운영 연결은 아래 「전용 계정 + 사용자 scope 실행」과 `dedicated-scope.host.ts`가 본다.
+서버 보고용 `LaunchRecord.cgroup`은 지금도 `null`이다(이유는 아래 절).
 이 시험으로 실제 Claude·Codex의 관측 등급을 올리지 않는다.
 CLI·버전·모델·옵션 조합의 등급은 실제 기록 검증 전까지 `unverified`(미검증)다.
 
+## 전용 계정 + 사용자 scope 실행(M8 전 연결)
+
+`AWBS_AGENT_USER=awbs-agent`이면 모든 세션과 ① 명령이 아래 모양으로 뜬다.
+
+```text
+/bin/sh(허가 대기) → /usr/bin/systemd-run --user --scope --quiet --collect --slice=app.slice --unit=awbs-<uuid> --
+  /usr/bin/sudo -n -u awbs-agent -- /usr/local/libexec/awbs-agent-exec run --agent … --cwd … -- <CLI 실제 경로> <인자>
+```
+
+- scope(사용자 systemd가 프로세스 묶음에 붙이는 이름표, 커널에서는 cgroup 하나)는 Runner 계정의 사용자 systemd가 만든다.
+  - 그래서 그 cgroup 파일은 Runner 계정 소유다. Agent 계정은 그 파일을 쓸 수 없어 scope 밖으로 나가지 못한다.
+- `systemd-run --scope`는 자기 자신을 scope로 옮긴 뒤 sudo로 바뀐다(exec). 프로세스 번호가 그대로라 launch 정체성(pgid·시작 시각)이 유지된다.
+- scope 이름(`awbs-<uuid>`)은 프로세스를 띄우기 **전에** launch 기록(`LaunchRecord.scope`)에 저장한다.
+  - 왜: Runner가 그 사이 죽어도 다음 대조가 같은 scope를 찾아 비울 수 있어야 한다.
+- cgroup 위치는 정해져 있다: `/sys/fs/cgroup/user.slice/user-<UID>.slice/user@<UID>.service/app.slice/awbs-<uuid>.scope`.
+
+### 정리 순서
+
+`Launches.reconcile`은 scope가 있는 launch를 이렇게 정리한다.
+
+1. scope의 `cgroup.kill`에 1을 쓴다. 커널이 그 안의 모든 프로세스(sudo=root, Agent=awbs-agent)를 끝낸다.
+2. `cgroup.events`의 `populated 0`(또는 systemd가 빈 scope를 지워 폴더가 없음)을 확인한다.
+3. 지금처럼 프로세스 그룹을 대조한다. scope가 생기기 전의 허가 대기 셸·systemd-run은 이 단계가 끝낸다.
+4. scope를 한 번 더 비우고 확인한 뒤에만 종료 증거(`group_empty`)를 낸다.
+
+- 왜 scope가 필요한가: Runner(keeproll)는 다른 계정 프로세스에 신호를 보낼 수 없다(EPERM). `/proc`에서도 그 프로세스의 소속을 가리지 못한다.
+  - 그래서 그룹만 보면 setsid·이중 fork로 그룹을 빠져나간 Agent 자손이 남아도 「비었다」고 증명하게 된다.
+- 왜 두 번 비우나: 1과 3 사이에 대기 셸이 허가를 받아 scope를 새로 만들 수 있다. 그룹이 빈 뒤에는 새 scope를 만들 프로세스가 없다.
+- scope를 비운 뒤 leader(sudo였던 프로세스)가 Runner에게 회수될 때까지 최대 1초 기다린다.
+  - 왜: 회수 전에는 좀비(끝났지만 부모가 아직 거두지 않은 프로세스)가 그룹에 남아 그룹이 비지 않은 것으로 보인다.
+- 비우지 못하면(쓰기 거부·시간 초과) 증거를 내지 않고 `unconfirmed`를 유지한다.
+
+### 서버 보고(`/process`의 cgroup)
+
+- scope로 띄운 launch는 `reportJobProcess.cgroup`에 그 scope의 cgroup 경로를 보낸다(조정자 결정 3, fix1).
+  - 모양: `/user.slice/user-<UID>.slice/user@<UID>.service/app.slice/awbs-<uuid>.scope`(`/proc/<pid>/cgroup`의 `0::` 뒤와 같은 모양, `scopeCgroupPath`).
+  - 이 경로는 launch 기록(`LaunchRecord.cgroup`)에도 실행 전에 저장한다.
+- 해제 증거는 `cgroup_empty`(`{kind, bootId, processGroup, cgroup}`)다. 서버는 cgroup이 기록된 보유를 이것(또는 `boot_changed`)으로만 닫는다.
+  - `Launches.reconcile`은 scope를 비운 것을 확인한 뒤에만 이 증거를 낸다. 서버 보유의 cgroup을 받으면 launch 기록과 같아야 한다. 다르면 증거를 내지 않는다(「모름」).
+  - scope 없는 launch(시험용 fake 계층)는 지금처럼 `group_empty`다.
+  - 초기화 정리(`cleanup/reset.ts`)도 cgroup이 기록된 보유에는 `cgroup_empty`를 보낸다.
+
+### 격리 다시 확인
+
+- `RunnerApp.refreshIsolation()`이 준비 점검 뒤·매일 점검·**실행 직전마다** `selectIsolation`을 다시 부른다.
+  - 래퍼 `check`가 `ok`이고 사용자 scope를 실제로 한 번 만들 수 있을 때만 「전용 계정 + scope」(`dedicated-user+user-scope`)를 쓴다.
+  - 하나라도 실패하면 그 실행을 거부하고(`isolation_undecided`), 새 claim도 받지 않는다. 이유가 바뀔 때만 경고한다.
+- 왜 실행 직전마다 보나: 재부팅 뒤 `/run/WSL` 보호가 아직 안 돌았거나, linger(로그아웃·재시작 뒤에도 사용자 systemd를 띄워 두는 설정)가 꺼져 사용자 systemd가 없을 수 있다. 래퍼 `check`는 약 40ms다.
+
+### ①·CI 명령(`Execution.command`)
+
+- 격리 계층의 `command`로 감싼다. 전용 계정이면 `systemd-run --user --scope … -- sudo -n -u awbs-agent -- 래퍼 ci-run --cwd … [--env …] -- <명령> <인자>`다(조정자 결정 1).
+  - 명령은 pipeline.yaml argv 그대로다. 이름(`pnpm`)이면 래퍼가 고정 PATH에서, 경로면 작업 폴더 안에서만 찾는다.
+  - 환경 변수는 허용 목록(`CI_ENV_NAMES`: LANG·LC_ALL·TZ·CI·NODE_ENV·FORCE_COLOR·NO_COLOR·AWBS_REPORT·AWBS_REPORT_NONCE·AWBS_EVIDENCE_DIR)만 넘긴다.
+  - 시험용 fake 계층(`command` 없음)만 `wrap`으로 대신한다.
+- CI job(`integrate`·`ci_retry`)은 claim 때 물리 슬롯이 이미 `reserved`다. 그때는 `acquireJobSlots` 없이 그 예약으로 `/process`를 보낸다. 슬롯이 `none`이면(시도 job의 ①) 지금처럼 acquire한다.
+
+### 남은 것
+
+- scope의 `cpu.stat`·`memory.current`로 세션 자원을 재는 일은 M8-04(CLI 실측) 범위다(조정자 결정 5).
+
 ## Q-08 운영 연결 경계 — 전용 계정 격리 작업(아이템 16)
+
+> M8 전 연결에서 1~5번을 위 절처럼 연결했다. 2번의 「`/process`에 실제 cgroup 경로」는 fix1에서 서버 계약(`cgroup_empty`, 마이그레이션 0040)과 함께 연결했다.
+> 4번의 CPU·메모리 읽기는 M8-04 범위다.
 
 조정자가 cgroup 운영 연결을 Q-08 전용 계정 격리 작업(아이템 16)에 배정했다.
 전용 계정 CLI는 Runner 사용자가 소유한 systemd 사용자 scope 안에서 실행한다.

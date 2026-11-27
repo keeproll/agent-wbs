@@ -901,7 +901,8 @@ test('전용 계정 격리(agentRoot): 작업 폴더·입력 사본은 Agent 작
   const work = await shared.createWorktree('task-1', 'agent/TASK-1-h2', baseline);
   expect(work).toBe(join(agentRoot, 'worktrees', 'project', 'task-1'));
   expect((await lstat(work)).mode & 0o777).toBe(0o770);
-  expect((await lstat(join(agentRoot, 'worktrees', 'project'))).mode & 0o777).toBe(0o750);
+  // 조정자 결정 8: 작업 폴더 모음은 0710(Agent는 지나가기만, 목록 못 봄)
+  expect((await lstat(join(agentRoot, 'worktrees', 'project'))).mode & 0o777).toBe(0o710);
   // Runner가 checkout한 파일도 그룹 쓰기 가능(ACL 상한이 열려 Agent가 고칠 수 있음)
   expect((await lstat(join(work, 'src/existing.ts'))).mode & 0o060).toBe(0o060);
   expect((await lstat(join(work, '.git'))).mode & 0o070).toBe(0o070);
