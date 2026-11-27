@@ -16034,7 +16034,9 @@
                       "$ref": "#/components/schemas/Agent"
                     },
                     "liveInject": {
-                      "type": "boolean"
+                      "type": "boolean",
+                      "const": false,
+                      "description": "Q-07(owner 2026-11-27 아이템 18): 준비 중. false만 허용하며 기존 true도 false로 취급한다. 메시지는 다음 실행 때 전달한다."
                     },
                     "heartbeatSeconds": {
                       "type": "integer",
@@ -16142,7 +16144,9 @@
                     "$ref": "#/components/schemas/Agent"
                   },
                   "liveInject": {
-                    "type": "boolean"
+                    "type": "boolean",
+                    "const": false,
+                    "description": "Q-07(owner 2026-11-27 아이템 18): 준비 중. false만 허용하며 기존 true도 false로 취급한다. 메시지는 다음 실행 때 전달한다."
                   },
                   "heartbeatSeconds": {
                     "type": "integer",
@@ -16183,7 +16187,9 @@
                       "$ref": "#/components/schemas/Agent"
                     },
                     "liveInject": {
-                      "type": "boolean"
+                      "type": "boolean",
+                      "const": false,
+                      "description": "Q-07(owner 2026-11-27 아이템 18): 준비 중. false만 허용하며 기존 true도 false로 취급한다. 메시지는 다음 실행 때 전달한다."
                     },
                     "heartbeatSeconds": {
                       "type": "integer",

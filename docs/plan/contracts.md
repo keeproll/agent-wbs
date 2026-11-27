@@ -235,6 +235,12 @@
   - 용도: §4.9 탭.
   - `settings/ci`와 §2.3의 `ci/settings`는 **같은 설정 한 벌**(같은 행·버전).
   - 저장 전 `updatedAt`은 null.
+  - Q-07(owner 2026-11-27 아이템 18): `workflow.liveInject`는 `false`만 허용한다.
+    - `true` 저장 요청은 HTTP(웹 요청 방식) 400과 `VALIDATION_FAILED`로 거부한다.
+    - DB(데이터베이스)의 `exec_policy.live_inject`에 이미 `true`가 있어도 조회와 메시지 처리는 `false`로 취급한다.
+    - 실행 중인 Task(작업)의 메시지는 `running`·`qa`·`verifying` 모두 `pendingNext=true`로 보관한다.
+    - 설정 화면은 같은 자리에 「준비 중」을 표시하고 켤 수 없게 한다.
+    - 왜: 이번 범위는 다음 실행 때 전달하는 동작만 제공한다. 실행 중 전달은 CLI(명령줄 도구) 실측 뒤 다시 판단한다.
   - `models` PUT은 모델마다 `{agent,id,allowed}`만 받는다. 이름·rank·efforts는 읽기 전용이다(§7.1, Q-06).
   - **모델 순서는 설정값이다** (owner 2026-11-26 아이템 8).
     - 같은 `models` PUT에 `rankOrder`·`codexFamilyOrder`·`claudeModels`를 실어 바꾼다. 바꿀 때만 보내고, 빠진 항목은 그대로 둔다.

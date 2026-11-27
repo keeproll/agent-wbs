@@ -547,7 +547,8 @@ job 하나에 보유 행 하나. 물리 슬롯과 논리 잠금은 두 축이며
   - 근거: §7.2
 - `exec_policy`
   - on_usage, low_pct(사용량 부족 기준, 기본 20% — owner 2026-11-26), on_rework, esc_notify, floors, live_inject, auto_retry_limit=2, auto_rework_limit=3
-  - `live_inject`(실행 중 전달): owner Q-07(2026-11-27 아이템 18)로 이번 범위에서는 켤 수 없다. 화면은 「준비 중」, 서버는 켜는 저장을 거부한다(구현은 별도 작업, main 023ac8f에서는 아직 켤 수 있음).
+  - `live_inject`(실행 중 전달): owner Q-07(2026-11-27 아이템 18)로 이번 범위에서는 켤 수 없다. 화면은 「준비 중」, 서버는 켜는 저장을 거부한다.
+  - 기존 `true`는 `false`로 취급한다. 다음 Workflow(기본 실행 흐름) 설정 저장 때 `false`로 정리한다. 왜: 이번 범위는 메시지를 다음 실행 때 전달하는 동작만 제공하기 때문이다.
   - API 이름과의 대응:
     - `esc_notify`는 API의 `notifyAt`이다.
     - `low_pct`가 null이면 API는 도메인 기본값 20을 보낸다(경계 변환 `execPolicyToApi`).
