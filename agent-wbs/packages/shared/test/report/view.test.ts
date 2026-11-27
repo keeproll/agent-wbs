@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { Value } from 'typebox/value';
-import { externalLeaks, externalText, externalView, isAddressToken, normalizeExternal, parseSender, internalKpis, internalTerms, reportFigures, ReportSnapshotSchema as ReportSnapshot, scrubInternal, type ReportSnapshotData } from '@awbs/shared';
+import { externalLeaks, externalText, externalView, isAddressShape, isAddressToken, isHostToken, normalizeExternal, parseSender, internalKpis, internalTerms, reportFigures, ReportSnapshotSchema as ReportSnapshot, scrubInternal, type ReportSnapshotData } from '@awbs/shared';
 /** 외부 글에서 주소를 지운 자리(Q-13 fix5부터 점 · @ 토큰은 「(주소 생략)」, 스킴 · 포트 · 경로는 「(링크 생략)」) */
 const OMITTED = /^앞 \((링크|주소) 생략\)( \.)? 뒤$/;
 
@@ -393,7 +393,7 @@ describe('Q-13 fix5 후속 2: 결합 문자로 끝나는 호스트 · 무작위 
   /** 시험용 의사 난수(씨앗 고정). 실패하면 같은 씨앗으로 다시 재현할 수 있다. */
   const random = (seed: number) => () => { seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t ^= t + Math.imul(t ^ (t >>> 7), 61 | t); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
   /** 여러 범주의 글자: 글자(라틴 · 한글 · 데바나가리 · 아랍) · 결합 문자 · 십진 숫자(ASCII · 아랍-인도) · 다른 숫자(², Ⅻ) · 문장부호 · 기호 · 공백 · 점 · @ */
-  const POOL = [...'abzAZ한국내부कपनभअبيت', '́', '̸', 'ी', '़', 'ं', ...'0159', '٠', '٥', '²', 'Ⅻ', ...'.,)(-_!?「」\'"', ...'%+$₩=', ' ', ' ', '\t', ...'....', '@'];
+  const POOL = [...'abzAZ한국내부कपनभअبيتג', '́', '̸', 'ी', '़', 'ं', ...'0159', '٠', '٥', '²', 'Ⅻ', ...'.,)(-_!?「」\'"', ...'%+$₩=', ' ', ' ', '\t', ...'....', '\u05F3', '@'];
   /** 정의 그대로의 판정(정규식과 따로 씀): 토큰 안의 점 양옆이 모두 있고, 둘 다 공백 · 문장부호 · 기호가 아니며, 둘 중 하나가 십진 숫자가 아니면 주소. */
   const is = (ch: string, re: RegExp) => re.test(ch);
   const oracle = (token: string): boolean => {
@@ -408,12 +408,14 @@ describe('Q-13 fix5 후속 2: 결합 문자로 끝나는 호스트 · 무작위 
     }
     return /(?<![\d.])\d+(?:\.\d+){3,}/.test(token);
   };
-  test.each([1, 2, 3, 4, 5])('무작위 유니코드 토큰(씨앗 %i): 규칙(isAddressToken)과 정의 그대로의 판정이 같다', (seed) => {
+  test.each([1, 2, 3, 4, 5])('무작위 유니코드 토큰(씨앗 %i): 모양 규칙(isAddressShape)과 정의 그대로의 판정이 같다', (seed) => {
     const next = random(seed);
     for (let n = 0; n < 4000; n++) {
       const token = Array.from({ length: 2 + Math.floor(next() * 7) }, () => POOL[Math.floor(next() * POOL.length)] ?? '.').join('').replace(/\s+/gu, '');
       if (!token) continue;
-      expect(isAddressToken(token), JSON.stringify(token)).toBe(oracle(token));
+      expect(isAddressShape(token), JSON.stringify(token)).toBe(oracle(token));
+      // 주소 토큰 = 모양 규칙 또는 의미 규칙(fix5 후속 3)
+      expect(isAddressToken(token)).toBe(oracle(token) || isHostToken(token));
     }
   });
   test.each([11, 12, 13])('무작위 유니코드 문장(씨앗 %i): 외부 변환 뒤에는 검사기가 0건이다', (seed) => {
@@ -422,5 +424,46 @@ describe('Q-13 fix5 후속 2: 결합 문자로 끝나는 호스트 · 무작위 
       const text = Array.from({ length: 4 + Math.floor(next() * 20) }, () => POOL[Math.floor(next() * POOL.length)] ?? ' ').join('');
       expect(externalLeaks(externalText(text)), JSON.stringify(text)).toEqual([]);
     }
+  });
+});
+
+/**
+ * Q-13 fix5 후속 3(Codex 재리뷰 7): 의미 규칙 — 브라우저가 호스트로 받아들이는 토큰은 문자 종류와 무관하게 주소.
+ * 표의 둘째 칸은 표준 URL 해석기가 실제로 읽은 hostname이다(판정의 근거를 시험에 함께 적는다).
+ */
+describe('Q-13 fix5 후속 3: 해석기가 호스트로 받는 토큰은 주소', () => {
+  const hostOf = (core: string): string | null => { try { return new URL(`http://${core}`).hostname; } catch { return null; } };
+  const strip = (t: string) => t.replace(/^\p{P}+|\p{P}+$/gu, '');
+  test.each([
+    ['ג׳.example', 'xn--6db0e.example', 'U+05F3 히브리 문장부호(재리뷰 7 재현)'],
+    ['ג׳.example:5173/report/1', 'xn--6db0e.example', '포트 · 경로(재리뷰 7 재현)'],
+    ['api_.local', 'api_.local', '밑줄 사설 별칭(재리뷰 7)'],
+    ['api._local', 'api._local', '밑줄 사설 별칭(재리뷰 7)'],
+    ['api_.corp_.example', 'api_.corp_.example', '밑줄 사설 별칭(재리뷰 7)'],
+    ['api_.local/report/1', 'api_.local', '밑줄 사설 별칭 + 경로(재리뷰 7)'],
+    ['(wbs.corp.example)', 'wbs.corp.example', '앞뒤 문장부호'],
+  ])('%s (URL 호스트 %s, %s) → 「(주소 생략)」', (input, host) => {
+    expect(hostOf(strip(input))).toBe(host);
+    expect(isHostToken(input)).toBe(true);
+    expect(externalText(`앞 ${input} 뒤`)).toBe('앞 (주소 생략) 뒤');
+    expect(externalLeaks(input).length).toBeGreaterThan(0);
+    expect(externalLeaks(externalText(`앞 ${input} 뒤`))).toEqual([]);
+  });
+  // [입력, URL 해석 hostname(null = 해석 실패), 남는 이유]
+  test.each([
+    ['완료했습니다.', 'xn--9i1b3b84w7zldoe8v1a', '앞뒤 문장부호를 떼면 점이 없음'],
+    ['2.5일', '2.xn--5-5f7f', '마지막 이름이 숫자로 시작(단위 붙은 소수)'],
+    ['1.5배', '1.xn--5-wp2f', '마지막 이름이 숫자로 시작'],
+    ['1.2.3', '1.2.0.3', 'hostname이 숫자와 점뿐(숫자를 IPv4로 읽음)'],
+    ['(12.34%)', '12.0.0.34', 'hostname이 숫자와 점뿐'],
+    ['v1.2.3', null, '해석 실패'],
+    ['07:00', '0.0.0.7', 'hostname이 숫자와 점뿐'],
+    ['A/B', 'a', 'hostname에 점이 없음'],
+  ])('그대로: %s (URL 호스트 %s, %s)', (input: string, host: string | null, why: string) => {
+    void why; // 남는 이유는 시험 이름에 보인다
+    expect(hostOf(strip(input))).toBe(host);
+    expect(isHostToken(input)).toBe(false);
+    expect(externalText(`앞 ${input} 뒤`)).toBe(`앞 ${input} 뒤`);
+    expect(externalLeaks(input)).toEqual([]);
   });
 });

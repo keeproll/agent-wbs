@@ -165,11 +165,37 @@ export const EMAIL_OMITTED = '(주소 생략)';
 const WORD = String.raw`[^\s\p{P}\p{S}]`;
 const LETTERISH = String.raw`[^\s\p{P}\p{S}\p{Nd}]`;
 const LETTER_DOT = new RegExp(`${LETTERISH}\\.${WORD}|${WORD}\\.${LETTERISH}`, 'u');
-/** 주소 토큰인지(변환 · 검사기 · 시험이 같은 함수를 쓴다). */
-export function isAddressToken(token: string): boolean {
+/** 모양 규칙: `@` · 점 옆 글자 · IPv4 모양(fix5 · 후속 · 후속 2). */
+export function isAddressShape(token: string): boolean {
   if (token.includes('@')) return true;
   if (LETTER_DOT.test(token)) return true;
   return /(?<![\d.])\d+(?:\.\d+){3,}/.test(token);
+}
+
+/**
+ * 의미 규칙(Q-13 fix5 후속 3, Codex 재리뷰 7): 브라우저가 호스트로 받아들이는 토큰이면 문자 종류와 무관하게 주소다.
+ * 1. 토큰 앞뒤의 문장부호(\p{P})만 뗀다(「(wbs.corp.example)」 → `wbs.corp.example`, 「완료했습니다.」 → 「완료했습니다」).
+ * 2. `new URL('http://' + 토큰)`이 성공하고, 그 hostname에 점이 있으면 호스트 후보다.
+ * 3. 숫자 모양이면 주소가 아니다:
+ *    - hostname이 숫자와 점뿐(`1.2.3` → `1.2.0.3`, `12.34` → `12.0.0.34`처럼 숫자를 IPv4로 읽은 결과). IPv4 4덩이는 모양 규칙(c)이 따로 잡는다.
+ *    - 적힌 호스트의 마지막 이름이 숫자로 시작(「2.5일」 → `2.xn--5-5f7f`, 「1.5배」). 실제 최상위 이름은 숫자로 시작하지 않는다.
+ * 왜: 문자 분류(문장부호 · 결합 문자 …)를 하나씩 늘리면 늘 빠짐이 남는다(`ג׳.example`의 U+05F3). 해석기가 호스트로 받는지를 직접 본다.
+ * 밑줄 사설 별칭(`api_.local`, `api._local`)도 해석기가 받아들이므로 막힌다.
+ */
+export function isHostToken(token: string): boolean {
+  const core = token.replace(/^\p{P}+|\p{P}+$/gu, '');
+  if (!core) return false;
+  let host: string;
+  try { host = new URL(`http://${core}`).hostname; } catch { return false; }
+  if (!host.includes('.') || /^[\d.]+$/.test(host)) return false;
+  const typedHost = core.split(/[:/?#\\]/)[0] ?? '';
+  const last = typedHost.split('.').filter(Boolean).at(-1) ?? '';
+  return !/^\p{Nd}/u.test(last);
+}
+
+/** 주소 토큰인지 — 모양 규칙이나 의미 규칙 중 하나라도 걸리면(변환 · 검사기 · 시험이 같은 함수를 쓴다). */
+export function isAddressToken(token: string): boolean {
+  return isAddressShape(token) || isHostToken(token);
 }
 /** 토큰 규칙을 적용한다. 공백은 그대로 두고 해당 토큰만 바꾼다. */
 const omitAddressTokens = (text: string) => text.split(/(\s+)/).map((part) => (/\s/.test(part) || !isAddressToken(part) ? part : EMAIL_OMITTED)).join('');
