@@ -170,6 +170,11 @@ describe('재리뷰 2 원칙 3: 기록 대상 목록 한 곳 대조', () => {
     expect(tables).toEqual([...TRACKED].sort());
   });
   /** 스냅샷 하나를 만들 때 읽은 표 이름(질의의 from·join 뒤) */
+  /**
+   * M6 통합: 스냅샷의 projectName(M6-02)은 기간 끝 재구성 대상이 아니라 「생성 시점」 지금 이름이다(조정자 결정 7).
+   * 그래서 이름 한 칸만 지금 projects 행을 읽는다(snapshot.ts 주석). 다른 값이 projects를 직접 읽으면 여전히 실패한다.
+   */
+  const NAME_SOURCE: readonly string[] = ['projects'];
   async function tablesRead(period: { kind: 'weekly' | 'custom'; from: string; to: string; at: string }) {
     const seen = new Set<string>();
     const c = await pool.connect();
@@ -192,12 +197,12 @@ describe('재리뷰 2 원칙 3: 기록 대상 목록 한 곳 대조', () => {
   test('보고서 계산은 이력 표만 읽는다(기록 대상 표를 직접 읽는 질의가 생기면 실패)', async () => {
     const now = (await capture()).now;
     const read = await tablesRead({ kind: 'custom', from: addDays(seoulDay(now), -6), to: seoulDay(now), at: now });
-    expect(read.filter((t) => !(LOG_TABLES as readonly string[]).includes(t))).toEqual([]);
+    expect(read.filter((t) => !(LOG_TABLES as readonly string[]).includes(t) && !NAME_SOURCE.includes(t))).toEqual([]);
     expect(read).toEqual(expect.arrayContaining(['state_log', 'global_log', 'commit_real']));
   });
   test('기록이 시작되기 전 시점에서만 설정 확인용으로 지금 설정 표를 더 읽는다(FALLBACK_CURRENT)', async () => {
     const read = await tablesRead({ kind: 'weekly', from: '2026-10-26', to: '2026-11-01', at: '2026-11-02T07:00:00.000000Z' });
-    const allowed = new Set<string>([...LOG_TABLES, ...FALLBACK_CURRENT]);
+    const allowed = new Set<string>([...LOG_TABLES, ...FALLBACK_CURRENT, ...NAME_SOURCE]);
     expect(read.filter((t) => !allowed.has(t))).toEqual([]);
   });
 });
