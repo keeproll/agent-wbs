@@ -13,6 +13,7 @@
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint . --max-warnings 0",
     "test": "node scripts/vitest.ts",
+    "test:design-contract": "node scripts/vitest.ts --config vitest.design-contract.config.ts",
     "test:cli-update:real": "node --test test/cli-update/npm.real.ts",
     "test:github:real": "node scripts/github.real.ts",
     "client:generate": "node scripts/client.ts",
@@ -20,7 +21,12 @@
     "check": "pnpm run typecheck && pnpm run lint && pnpm run test"
   },
   "dependencies": {
-    "pino": "10.4.0"
+    "ajv": "8.20.0",
+    "libpg-query": "18.2.5",
+    "pgsql-ast-parser": "12.0.2",
+    "pgsql-parser": "18.4.5",
+    "pino": "10.4.0",
+    "yaml": "2.9.1"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
