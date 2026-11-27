@@ -59,17 +59,106 @@ const MAX_PARALLEL = 2;
 const sleep = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); });
 
 /**
- * 띄운 브라우저 인스턴스. gen은 띄운 순서(세대) 번호다.
- * 왜 세대를 두나: 브라우저를 다시 띄운 뒤에 옛 브라우저에서 시작한 변환의 정리가 늦게 끝나면, 그 정리가 새 브라우저를 죽이면 안 된다.
- * 정리는 자기가 쓴 인스턴스만 죽이고, 공용 `running`은 아직 그 인스턴스를 가리킬 때만 비운다.
+ * 브라우저 손잡이 관리자(Codex 재리뷰 3차 P2-1: 땜질 대신 한 곳으로 모음).
+ *
+ * 규칙은 세 가지뿐이다.
+ * 1. 손잡이(current)를 바꾸거나 지우는 일은 모두 serial() 안에서만 한다. serial()은 한 번에 하나씩 차례로 실행한다(뮤텍스).
+ * 2. 브라우저를 띄울 때마다 세대 번호(token)를 하나 준다. 띄우기 결과(늦은 성공·늦은 실패), 정리, 연결 끊김은
+ *    모두 자기 token을 들고 와서, 손잡이가 아직 그 token일 때만 손잡이를 바꾼다.
+ * 3. 손잡이가 아닌 세대의 브라우저(포기한 시작이 늦게 성공한 것 포함)는 반드시 죽인다. 죽이지 않은 브라우저는 live에 남는다.
+ * 그래서 손잡이는 언제나 0개 또는 1개이고, 손잡이가 아닌 살아 있는 브라우저는 곧 죽는다.
  */
-interface Instance extends Launched { gen: number }
+class BrowserHandle {
+  private lock: Promise<unknown> = Promise.resolve();
+  private generation = 0;
+  private current: { token: number; starting: Promise<Launched>; instance?: Launched } | null = null;
+  /** 띄웠고 아직 죽이지 않은 브라우저(세대 → 인스턴스) */
+  private readonly live = new Map<number, Launched>();
+
+  private readonly launcher: () => Promise<Launched>;
+
+  constructor(launcher: () => Promise<Launched>) { this.launcher = launcher; }
+
+  private serial<T>(fn: () => T): Promise<T> {
+    const run = this.lock.then(fn);
+    this.lock = run.catch(() => undefined);
+    return run;
+  }
+
+  /**
+   * 쓸 브라우저를 얻는다. 손잡이가 없으면 새 세대를 띄운다. onToken으로 이 변환이 쓰는 세대를 먼저 알린다(정리가 그 세대만 다루게).
+   * 기다리는 사이 그 세대가 포기됐으면(손잡이가 바뀜) 쓰지 않고 다시 얻는다.
+   */
+  async acquire(onToken: (token: number) => void): Promise<Browser> {
+    for (;;) {
+      const { token, starting } = await this.serial(() => {
+        if (!this.current) {
+          const token = ++this.generation;
+          const starting = this.launcher();
+          this.current = { token, starting };
+          // 띄우기 결과는 늦더라도 모두 settle()을 지난다.
+          starting.then((instance) => this.settle(token, instance), () => this.settle(token, null));
+          return { token, starting };
+        }
+        return { token: this.current.token, starting: this.current.starting };
+      });
+      onToken(token);
+      const instance = await starting;
+      if (await this.serial(() => this.current?.token === token)) return instance.browser;
+    }
+  }
+
+  /** 띄우기 결과 처리. 지금 손잡이 세대면 손잡이에 붙이고, 아니면(포기된 세대) 죽인다. 실패면 손잡이가 그 세대일 때만 비운다. */
+  private async settle(token: number, instance: Launched | null): Promise<void> {
+    const stale = await this.serial(() => {
+      if (!instance) {
+        if (this.current?.token === token) this.current = null;
+        return false;
+      }
+      this.live.set(token, instance);
+      if (this.current?.token !== token) return true;
+      this.current.instance = instance;
+      instance.browser.on('disconnected', () => { void this.retire(token); });
+      return false;
+    });
+    if (stale) await this.kill(token);
+  }
+
+  /** 그 세대를 끝낸다: 손잡이가 아직 그 세대면 비우고, 그 세대 브라우저를 죽인다(아직 띄우는 중이면 settle이 죽인다). */
+  async retire(token: number): Promise<void> {
+    await this.serial(() => { if (this.current?.token === token) this.current = null; });
+    await this.kill(token);
+  }
+
+  private async kill(token: number): Promise<void> {
+    const instance = await this.serial(() => {
+      const found = this.live.get(token);
+      this.live.delete(token);
+      return found;
+    });
+    await instance?.kill().catch(() => undefined);
+  }
+
+  /** 모두 끝낸다: 손잡이를 비우고 살아 있는 모든 세대를 죽인다. 띄우는 중인 세대는 settle이 죽인다. */
+  async close(): Promise<void> {
+    const tokens = await this.serial(() => {
+      this.current = null;
+      return [...this.live.keys()];
+    });
+    await Promise.all(tokens.map((token) => this.kill(token)));
+  }
+
+  /** 지금 손잡이의 브라우저(준비된 것만) */
+  ready(): Promise<Launched | undefined> {
+    return this.serial(() => this.current?.instance);
+  }
+}
 
 /**
  * 한 번의 변환. 시간 초과가 나면 aborted가 켜지고, 그 뒤에 만들어지는 작업 공간은 바로 닫는다.
- * launching: 이 변환이 쓰는 브라우저(띄우는 중일 수도 있다). 정리가 이 브라우저만 다시 띄우게 한다.
+ * token: 이 변환이 쓰는 브라우저 세대. 정리가 이 세대만 끝내게 한다.
  */
-interface Job { context?: BrowserContext; aborted: boolean; launching?: Promise<Instance> }
+interface Job { context?: BrowserContext; aborted: boolean; token?: number }
 
 class Timeout extends Error {
   constructor() { super('PDF 변환 시간 초과'); }
@@ -78,34 +167,9 @@ class Timeout extends Error {
 export function chromiumRenderer(options: RendererOptions = {}): PdfRenderer {
   const timeoutMs = options.timeoutMs ?? 30_000;
   const cleanupMs = options.cleanupMs ?? 5_000;
-  const launcher = options.launcher ?? launchChromium;
-  let running: Promise<Instance> | undefined;
-  let generation = 0;
+  const handle = new BrowserHandle(options.launcher ?? launchChromium);
   let active = 0;
   const waiting: (() => void)[] = [];
-
-  /** 브라우저를 띄운다(이미 있으면 그것). 연결이 끊기면 그 인스턴스를 잊고 다음 변환이 새로 띄운다. */
-  const launch = (): Promise<Instance> => (running ??= (async () => {
-    const instance: Instance = { ...(await launcher()), gen: ++generation };
-    const mine = running;
-    instance.browser.on('disconnected', () => {
-      if (running === mine) running = undefined;
-      void instance.kill().catch(() => undefined);
-    });
-    return instance;
-  })().catch((error: unknown) => { running = undefined; throw error; }));
-
-  /**
-   * 한 인스턴스를 죽이고 잊는다. 공용 running은 아직 그 인스턴스일 때만 비운다(새로 띄운 브라우저는 건드리지 않는다).
-   * 띄우는 중이면 다 뜬 뒤에 죽인다. 다음 변환은 새 인스턴스를 띄운다.
-   */
-  async function retire(target: Promise<Instance> | undefined) {
-    if (!target) return;
-    if (running === target) running = undefined;
-    const instance = await Promise.race([target.catch(() => undefined), sleep(cleanupMs).then(() => 'pending' as const)]);
-    if (instance === 'pending') { void target.then((i) => i.kill(), () => undefined); return; }
-    await instance?.kill().catch(() => undefined);
-  }
 
   async function slot<T>(fn: () => Promise<T>): Promise<T> {
     if (active >= MAX_PARALLEL) await new Promise<void>((resolve) => { waiting.push(resolve); });
@@ -115,8 +179,7 @@ export function chromiumRenderer(options: RendererOptions = {}): PdfRenderer {
 
   async function convert(html: string, job: Job): Promise<Buffer> {
     const files = pdfAssets().fonts;
-    job.launching = launch();
-    const { browser } = await job.launching;
+    const browser = await handle.acquire((token) => { job.token = token; });
     const context = await browser.newContext({ viewport: { width: Math.floor(PRINTABLE_PX), height: 1123 } });
     job.context = context;
     try {
@@ -167,7 +230,7 @@ export function chromiumRenderer(options: RendererOptions = {}): PdfRenderer {
           void job.context?.close().catch(() => undefined);
           // 변환이 정리까지 끝나기를 기다린다. 정해진 시간 안에 끝나지 않으면 브라우저가 비정상이므로 다시 띄운다.
           const settled = await Promise.race([work.then(() => true, () => true), sleep(cleanupMs).then(() => false)]);
-          if (!settled) await retire(job.launching);
+          if (!settled && job.token !== undefined) await handle.retire(job.token);
           throw new Timeout();
         }
         throw error;
@@ -176,10 +239,10 @@ export function chromiumRenderer(options: RendererOptions = {}): PdfRenderer {
       }
     }),
     async close() {
-      await retire(running);
+      await handle.close();
     },
     async inspect() {
-      const started = await running?.catch(() => undefined);
+      const started = await handle.ready();
       if (!started) return { pid: null, contexts: 0, pages: 0 };
       const contexts = started.browser.contexts();
       return { pid: started.pid, contexts: contexts.length, pages: contexts.reduce((n, c) => n + c.pages().length, 0) };

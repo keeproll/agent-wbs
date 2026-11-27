@@ -200,3 +200,148 @@ describe('늦은 정리와 브라우저 교체가 겹칠 때', () => {
     expect(killed.at(-1)).toBe(2);
   }, 10_000);
 });
+
+/**
+ * 브라우저 손잡이 관리(Codex 재리뷰 3차 P2-1). 가짜 브라우저로 일정을 정확히 맞추거나 무작위로 섞는다.
+ * 가짜 브라우저는 「살아 있음」을 스스로 기록한다(띄우기 성공 ~ kill 전). 실제 Chromium처럼 죽이면 연결 끊김 알림을 보낸다. 증명할 것:
+ * - 모든 일이 끝나면 살아 있는 브라우저는 최대 1개이고, 그것은 지금 손잡이다(남는 브라우저 0).
+ * - 닫으면 살아 있는 브라우저는 0개다.
+ */
+describe('브라우저 손잡이: 늦은 띄우기 결과·정리·연결 끊김이 겹쳐도', () => {
+  const sleep = (ms: number) => new Promise<void>((r) => { setTimeout(r, ms); });
+  const never = () => new Promise<never>(() => undefined);
+
+  interface Fake { id: number; alive: boolean; hang: boolean; workMs: number; onDisconnect: (() => void)[] }
+  /** 가짜 세계: 띄우기마다 계획(지연·실패·멈춤·작업 시간)을 정해 둔다. */
+  function world(plan: (n: number) => { delayMs: number; fail: boolean; hang: boolean; workMs: number }) {
+    const fakes: Fake[] = [];
+    let n = 0;
+    const launcher = async () => {
+      const p = plan(++n);
+      await sleep(p.delayMs);
+      if (p.fail) throw new Error('띄우기 실패');
+      const f: Fake = { id: n, alive: true, hang: p.hang, workMs: p.workMs, onDisconnect: [] };
+      fakes.push(f);
+      const closed = () => { if (!f.alive) throw new Error('Browser closed'); };
+      const gate = () => (f.hang ? never() : sleep(f.workMs));
+      const browser = {
+        on: (_: string, cb: () => void) => { f.onDisconnect.push(cb); },
+        contexts: () => [],
+        newContext: async () => {
+          closed();
+          const page = {
+            emulateMedia: async () => undefined,
+            goto: async () => { await gate(); closed(); },
+            evaluate: async () => { closed(); return true; },
+            pdf: async () => { closed(); return Buffer.from(`%PDF-${String(f.id)}`); },
+          };
+          return { setDefaultTimeout: () => undefined, route: async () => undefined, newPage: async () => page,
+            close: async () => { if (f.hang && f.alive) await never(); } };
+        },
+      };
+      // 실제 Chromium처럼, 죽이면 연결 끊김 알림이 온다.
+      return { browser: browser as never, pid: f.id, kill: async () => { if (!f.alive) return; f.alive = false; await sleep(1); for (const cb of f.onDisconnect) cb(); } };
+    };
+    /** 밖에서 죽음(프로세스가 사라지고 연결 끊김 알림이 온다) */
+    const crash = (f: Fake) => { f.alive = false; for (const cb of f.onDisconnect) cb(); };
+    return { fakes, launcher, crash, alive: () => fakes.filter((f) => f.alive).map((f) => f.id) };
+  }
+
+  test('늦은 띄우기 실패: 포기한 첫 띄우기가 새 브라우저가 뜬 뒤 실패해도, 새 브라우저의 손잡이를 지우지 않는다', async () => {
+    let failFirst: (e: Error) => void = () => undefined;
+    const w = world(() => ({ delayMs: 0, fail: false, hang: false, workMs: 20 }));
+    let calls = 0;
+    const renderer = chromiumRenderer({
+      timeoutMs: 100, cleanupMs: 50,
+      launcher: () => (++calls === 1 ? new Promise((_, reject) => { failFirst = reject; }) : w.launcher()),
+    });
+    // 첫 띄우기가 멈춰 시간 초과 → 그 세대를 포기한다.
+    await expect(renderer.render('A')).rejects.toThrow('PDF 변환 시간 초과');
+    // 새 세대로 정상 변환
+    expect((await renderer.render('B')).toString()).toMatch(/^%PDF-/);
+    const pid = (await renderer.inspect()).pid;
+    expect(pid).not.toBeNull();
+    failFirst(new Error('늦은 실패'));
+    await sleep(20);
+    expect((await renderer.inspect()).pid).toBe(pid);
+    await renderer.close();
+    expect(w.alive()).toEqual([]);
+  });
+
+  test('늦은 띄우기 성공: 포기한 첫 브라우저가 늦게 뜨면 바로 죽이고, 새 브라우저의 손잡이는 그대로다', async () => {
+    let resolveFirst: () => void = () => undefined;
+    const w = world(() => ({ delayMs: 0, fail: false, hang: false, workMs: 20 }));
+    let calls = 0;
+    const renderer = chromiumRenderer({
+      timeoutMs: 100, cleanupMs: 50,
+      launcher: () => (++calls === 1 ? new Promise<void>((r) => { resolveFirst = r; }).then(() => w.launcher()) : w.launcher()),
+    });
+    await expect(renderer.render('A')).rejects.toThrow('PDF 변환 시간 초과');
+    expect((await renderer.render('B')).toString()).toMatch(/^%PDF-/);
+    const pid = (await renderer.inspect()).pid;
+    resolveFirst();
+    await sleep(20);
+    // 늦게 뜬 첫 브라우저는 죽었고, 살아 있는 것은 손잡이 하나뿐이다.
+    expect(w.alive()).toEqual([pid]);
+    expect((await renderer.inspect()).pid).toBe(pid);
+    await renderer.close();
+    expect(w.alive()).toEqual([]);
+  });
+
+  test('같은 띄우기를 기다리던 다른 변환은, 그 띄우기가 포기된 뒤 늦게 성공해도 죽은 브라우저를 쓰지 않고 새로 띄워 성공한다', async () => {
+    let release: () => void = () => undefined;
+    const w = world(() => ({ delayMs: 0, fail: false, hang: false, workMs: 10 }));
+    let calls = 0;
+    const renderer = chromiumRenderer({
+      timeoutMs: 300, cleanupMs: 50,
+      launcher: () => (++calls === 1 ? new Promise<void>((r) => { release = r; }).then(() => w.launcher()) : w.launcher()),
+    });
+    // A(0ms)와 B(150ms)가 같은 첫 띄우기를 기다린다. A는 350ms에 그 세대를 포기한다.
+    const a = renderer.render('A').catch((e: unknown) => (e as Error).message);
+    await sleep(150);
+    const b = renderer.render('B').then((x) => x.toString(), (e: unknown) => (e as Error).message);
+    await sleep(220);
+    // 370ms: 포기된 첫 띄우기가 늦게 성공한다. B(시간 한도 450ms)는 그것을 쓰지 않고 새 세대를 띄운다.
+    release();
+    expect(await a).toBe('PDF 변환 시간 초과');
+    expect(await b).toMatch(/^%PDF-2$/);
+    await renderer.close();
+    expect(w.alive()).toEqual([]);
+  });
+
+  test('무작위 일정 60가지(늦은 성공·늦은 실패·멈춤·정리 겹침·밖에서 죽음): 끝나면 살아 있는 브라우저는 손잡이 하나 이하, 닫으면 0', async () => {
+    // 같은 결과를 다시 얻을 수 있게 씨앗을 고정한 의사 난수(mulberry32)
+    const rng = (seed: number) => () => {
+      seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const failures: string[] = [];
+    await Promise.all(Array.from({ length: 60 }, async (_, seed) => {
+      const r = rng(seed + 1);
+      // 띄우기 지연(0~250ms)이 시간 한도(80ms)+정리 한도(30ms)를 자주 넘게 해, 포기한 띄우기가 늦게 끝나는 일정을 많이 만든다.
+      const w = world(() => ({ delayMs: Math.floor(r() * 250), fail: r() < 0.2, hang: r() < 0.3, workMs: Math.floor(r() * 60) }));
+      const renderer = chromiumRenderer({ timeoutMs: 80, cleanupMs: 30, launcher: w.launcher });
+      const jobs = Array.from({ length: 6 + Math.floor(r() * 5) }, async (_, i) => {
+        await sleep(Math.floor(r() * 200));
+        // 가끔 살아 있는 브라우저 하나를 밖에서 죽인다.
+        if (r() < 0.2) { const victim = w.fakes.find((f) => f.alive); if (victim) w.crash(victim); }
+        return renderer.render(`doc-${String(i)}`).then((b) => b.toString(), (e: unknown) => (e as Error).message);
+      });
+      const results = await Promise.all(jobs);
+      // 늦은 띄우기가 모두 끝나도록 충분히 기다린다(최대 지연 250ms).
+      await sleep(400);
+      const odd = results.filter((x) => !/^%PDF-/.test(x) && !['PDF 변환 시간 초과', '띄우기 실패', 'Browser closed'].includes(x));
+      const alive = w.alive();
+      const pid = (await renderer.inspect()).pid;
+      if (odd.length) failures.push(`seed ${String(seed)}: 뜻밖의 결과 ${odd.join(',')}`);
+      if (alive.length > 1) failures.push(`seed ${String(seed)}: 살아 있는 브라우저 ${String(alive.length)}개 ${alive.join(',')}`);
+      if (alive.length === 1 && alive[0] !== pid) failures.push(`seed ${String(seed)}: 살아 있는 브라우저(${String(alive[0])})가 손잡이(${String(pid)})가 아니다`);
+      await renderer.close();
+      await sleep(10);
+      if (w.alive().length) failures.push(`seed ${String(seed)}: 닫은 뒤 남은 브라우저 ${w.alive().join(',')}`);
+    }));
+    expect(failures).toEqual([]);
+  }, 30_000);
+});
