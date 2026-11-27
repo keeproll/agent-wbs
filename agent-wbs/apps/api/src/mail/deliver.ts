@@ -28,6 +28,7 @@ import { deferChange, iso } from '../changes/events.ts';
 import { loadReport, syncMailAlert } from './queue.ts';
 import { pdfName, renderMail } from './render.ts';
 import { smtpTarget } from './settings.ts';
+import { mailTransition, type Incoming, type MailState } from './transition.ts';
 import { DEFAULT_TIMEOUT_MS, sendSmtp, type OutgoingMail, type SendOutcome, type SmtpTarget } from './smtp.ts';
 
 /** 자동 재시도 간격(G L407 「15분 후 1회」) */
@@ -48,7 +49,8 @@ export interface DeliverOptions {
 }
 export interface DeliverResult { accepted: number; retry: number; failed: number; unknown: number; discarded: number }
 
-interface Claimed { id: string; report: string; reportKey: string; email: string; view: 'int' | 'ext'; pdf: boolean; retried: boolean; projectId: string; sentAt: string }
+/** 찜한 한 통. attempt는 이번 찜하기에서 새로 매긴 시도 ID다(결과가 이 시도의 것인지 판정). */
+interface Claimed { id: string; report: string; reportKey: string; email: string; view: 'int' | 'ext'; pdf: boolean; retried: boolean; projectId: string; sentAt: string; attempt: string }
 
 const SMTP_MISSING = 'SMTP 서버 미설정 — 설정 → 보고서 · 메일에서 메일 서버를 등록하세요.';
 
@@ -67,27 +69,40 @@ const RESULT_LOST = '발송 결과를 저장하지 못함 — 수락 여부 불�
 const RECIPIENT_GONE = '받는 사람이 삭제되어 보내지 않음';
 
 /**
- * 결과를 적는다. 찜한 그 발송(sent_at이 같은 줄)만 고친다.
+ * 도착한 결과를 적는다. 상태를 어떻게 바꿀지는 전이표(transition.ts) 하나로 정한다.
+ * - 줄을 잠그고 지금 상태 · 지금 시도(attempt)를 읽는다. 내가 찜한 시도가 아직 현재인지 비교한다(원칙 1).
+ * - unknown에서는 늦은 accepted만 고친다. 늦은 실패는 이력에만 남기고 자동 재시도를 다시 켜지 않는다(원칙 2).
  * - 시각은 DB 시계다(시험은 options.now). 15분 재시도는 **결과를 기록하는 지금**부터 센다(리뷰 지적 6).
  *   왜 DB 시계인가: 이 PC의 시계는 가끔 뒤로 간다(약 32초마다 2.3초). 판정(next_at ≤ 지금)과 기록을 같은 시계로 해야 일찍 다시 보내지 않는다.
- * - unknown으로 정리된 뒤에 수락 응답이 늦게 기록되면 accepted로 고친다(사실에 더 가깝다).
  */
-async function record(client: PoolClient, c: Claimed, outcome: SendOutcome, now: string | null): Promise<keyof DeliverResult> {
-  let state: 'accepted' | 'retry_wait' | 'failed' | 'unknown';
-  let error: string | null = null;
-  if (outcome.state === 'accepted') state = 'accepted';
-  else if (outcome.state === 'unknown') { state = 'unknown'; error = outcome.error; }
-  else { state = c.retried ? 'failed' : 'retry_wait'; error = outcome.error; }
+async function applyResult(client: PoolClient, c: Claimed, incoming: Incoming, error: string | null, now: string | null): Promise<keyof DeliverResult> {
+  const row = (await client.query<{ state: MailState; attempt: string | null; retried: boolean }>(
+    'select state::text state,attempt::text attempt,retried from mail_outbox where id=$1 for update', [c.id])).rows[0];
+  if (!row) return 'discarded';
+  const t = mailTransition(row.state, incoming, { current: row.attempt === c.attempt, retried: row.retried });
   const at = (await client.query<{ at: string }>(`select ${iso('coalesce($1::timestamptz,clock_timestamp())')} at`, [now])).rows[0]?.at ?? new Date().toISOString();
-  const updated = await client.query(
-    `update mail_outbox set state=$2,error=$3,next_at=case when $6 then $4::timestamptz + interval '${String(RETRY_MINUTES)} minutes' end,
-       retried=retried or $6 where id=$1 and state in ('sending','unknown') and sent_at=$5::timestamptz`,
-    [c.id, state, error, at, c.sentAt, state === 'retry_wait']);
-  if (!updated.rowCount) return 'discarded';
-  await appendLog(client, c.id, state, error, at);
-  await syncMailAlert(client, c.projectId);
-  deferChange(client, c.projectId, 'mail', { key: 'log' });
-  return state === 'retry_wait' ? 'retry' : state;
+  if (t.to) {
+    await client.query(
+      `update mail_outbox set state=$2,error=$3,next_at=case when $5 then $4::timestamptz + interval '${String(RETRY_MINUTES)} minutes' end,
+         retried=retried or $5 where id=$1`,
+      [c.id, t.to, t.to === 'accepted' ? null : error, at, t.to === 'retry_wait']);
+    if (t.log) await appendLog(client, c.id, t.to, t.to === 'accepted' ? null : error, at);
+    await syncMailAlert(client, c.projectId);
+    deferChange(client, c.projectId, 'mail', { key: 'log' });
+    return t.to === 'retry_wait' ? 'retry' : t.to === 'accepted' || t.to === 'failed' || t.to === 'unknown' ? t.to : 'discarded';
+  }
+  // 상태는 그대로. 실제로 받은 응답은 무엇이었는지 이력에만 남긴다.
+  if (t.log) {
+    const logState = incoming === 'accepted' ? 'accepted' : incoming === 'rejected' ? 'failed' : 'unknown';
+    await appendLog(client, c.id, logState, `늦은 응답(상태 변경 없음 · 지금 ${row.state}): ${error ?? '수락(250)'}`, at);
+    deferChange(client, c.projectId, 'mail', { key: 'log' });
+  }
+  return 'discarded';
+}
+
+async function record(client: PoolClient, c: Claimed, outcome: SendOutcome, now: string | null): Promise<keyof DeliverResult> {
+  if (outcome.state === 'accepted') return applyResult(client, c, 'accepted', null, now);
+  return applyResult(client, c, outcome.state === 'unknown' ? 'unknown' : 'rejected', outcome.error, now);
 }
 
 const isEpochMismatch = (error: unknown) => (error as { code?: string }).code === 'AW001';
@@ -107,13 +122,7 @@ async function recordSafely(pool: Pool, epoch: number, c: Claimed, outcome: Send
   }
   try {
     return await inEpoch(pool, epoch, async (client) => {
-      const at = (await client.query<{ at: string }>(`select ${iso('coalesce($1::timestamptz,clock_timestamp())')} at`, [now])).rows[0]?.at ?? new Date().toISOString();
-      const updated = await client.query(`update mail_outbox set state='unknown',error=$2,next_at=null where id=$1 and state='sending' and sent_at=$3::timestamptz`, [c.id, RESULT_LOST, c.sentAt]);
-      if (!updated.rowCount) return 'discarded' as const;
-      await appendLog(client, c.id, 'unknown', RESULT_LOST, at);
-      await syncMailAlert(client, c.projectId);
-      deferChange(client, c.projectId, 'mail', { key: 'log' });
-      return 'unknown' as const;
+      return applyResult(client, c, 'record_lost', RESULT_LOST, now);
     });
   } catch { return 'unknown'; }
 }
@@ -137,7 +146,7 @@ async function sweepStale(client: PoolClient, now: string | null, timeoutMs: num
  * 돌려주는 것: 보낼 것 / 건너뛴 것 / 없음(null)
  */
 async function claimOne(client: PoolClient, now: string | null): Promise<{ c: Claimed; mail: OutgoingMail | null; target: (SmtpTarget & { from: string }) | null } | 'skipped' | null> {
-  const row = (await client.query<Omit<Claimed, 'sentAt' | 'reportKey'> & { recipient: string }>(
+  const row = (await client.query<Omit<Claimed, 'sentAt' | 'reportKey' | 'attempt'> & { recipient: string }>(
     `select id,report,recipient,email,view,pdf,retried,project_id "projectId" from mail_outbox
      where state='queued' or (state='retry_wait' and next_at<=coalesce($1::timestamptz,clock_timestamp()))
      order by coalesce(next_at,created_at),created_at,id limit 1 for update skip locked`, [now])).rows[0];
@@ -152,10 +161,11 @@ async function claimOne(client: PoolClient, now: string | null): Promise<{ c: Cl
     deferChange(client, row.projectId, 'mail', { key: 'log' });
     return 'skipped';
   }
-  await client.query("update mail_outbox set state='sending',next_at=null,sent_at=$2 where id=$1", [row.id, at]);
+  // 찜할 때마다 새 시도 ID를 매긴다. 결과는 이 ID가 아직 현재일 때만 상태를 바꾼다(transition.ts 원칙 1).
+  const attempt = (await client.query<{ attempt: string }>("update mail_outbox set state='sending',next_at=null,sent_at=$2,attempt=gen_random_uuid() where id=$1 returning attempt::text attempt", [row.id, at])).rows[0]?.attempt ?? '';
   await appendLog(client, row.id, 'sending', null, at);
   const report = await loadReport(client, row.report);
-  const c: Claimed = { id: row.id, report: row.report, email: row.email, view: row.view, pdf: row.pdf, retried: row.retried, projectId: row.projectId, reportKey: report.reportKey, sentAt: at };
+  const c: Claimed = { id: row.id, report: row.report, email: row.email, view: row.view, pdf: row.pdf, retried: row.retried, projectId: row.projectId, reportKey: report.reportKey, sentAt: at, attempt };
   const target = await smtpTarget(client);
   if (!target) return { c, mail: null, target: null };
   const project = (await client.query<{ name: string }>('select name from projects limit 1')).rows[0]?.name ?? '';

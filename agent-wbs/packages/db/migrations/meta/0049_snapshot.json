@@ -5151,6 +5151,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "attempt": {
+          "name": "attempt",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {

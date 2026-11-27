@@ -622,6 +622,86 @@ describe('리뷰 지적 회귀(fix2)', () => {
   }, 30_000);
 });
 
+
+/**
+ * Codex 재리뷰(review2-codex.md) P1 회귀(fix3). 결과 기록은 그 시도(attempt)가 현재일 때만 상태를 바꾸고,
+ * unknown에서는 늦은 accepted만 받는다. 늦은 실패는 이력에만 남기고 자동 재시도를 다시 켜지 않는다.
+ */
+describe('늦은 결과와 정리 · 수동 발송 경합(fix3)', () => {
+  const hold = () => {
+    let entered!: () => void;
+    let release!: () => void;
+    const reached = new Promise<void>((r) => { entered = r; });
+    const held = new Promise<void>((r) => { release = r; });
+    let first = true;
+    smtp.onMessage = async () => { if (first) { first = false; entered(); await held; } };
+    return { reached, release };
+  };
+  const stateOf = async (id: string) => (await owner.query<{ state: string }>('select state from mail_outbox where id=$1', [id])).rows[0]?.state;
+
+  test.each(['sweep', 'restart'] as const)('[재리뷰 P1] %s 정리 → 수동 다시 보내기 성공 → 원래 시도의 늦은 451: 원본은 unknown 그대로, 자동 추가 발송 0', async (recovery) => {
+    const a = await recipient('lead@example.com');
+    const id = (await lead('POST', `/api/settings/mail/recipients/${a.id}/test`)).body.ids[0] as string;
+    const at = kst('2026-11-04', recovery === 'sweep' ? '20:00' : '21:00');
+    const h = hold();
+    const active = deliverMail(pool, epoch, { now: at, timeoutMs: 60_000 });
+    await h.reached;
+    try {
+      if (recovery === 'sweep') expect((await deliver(plus(at, 30))).unknown).toBe(1);
+      else expect(await recoverMail(pool, epoch, { now: plus(at, 1) })).toBe(1);
+      expect(await stateOf(id)).toBe('unknown');
+      const manual = await lead('POST', `/api/mail/log/${id}/resend`);
+      expect(manual.status).toBe(202);
+      const manualId = manual.body.ids[0] as string;
+      await deliver(plus(at, 30));
+      expect(await stateOf(manualId)).toBe('accepted');
+      // 원래 요청에는 뒤늦게 확실한 451 거부를 돌려준다.
+      smtp.mode = 'temp_fail';
+    } finally { h.release(); }
+    await active;
+    smtp.onMessage = null;
+    smtp.mode = 'accept';
+    expect(await stateOf(id)).toBe('unknown');
+    const before = smtp.messages.length;
+    const auto = await deliver(plus(at, 50));
+    expect(auto.accepted).toBe(0);
+    expect(smtp.messages.length).toBe(before);
+    // 늦은 거부는 이력에는 남는다(무슨 일이 있었는지 알 수 있게).
+    const late = (await owner.query<{ state: string; error: string | null }>("select state,error from mail_log where outbox=$1 order by created_at desc limit 1", [id])).rows[0];
+    expect(late?.state).toBe('failed');
+    expect(late?.error).toContain('늦은 응답');
+  }, 30_000);
+
+  test('정리로 unknown이 된 뒤 원래 시도의 늦은 250 수락은 accepted로 고친다', async () => {
+    const a = await recipient('lead@example.com');
+    const id = (await lead('POST', `/api/settings/mail/recipients/${a.id}/test`)).body.ids[0] as string;
+    const at = kst('2026-11-04', '22:00');
+    const h = hold();
+    const active = deliverMail(pool, epoch, { now: at, timeoutMs: 60_000 });
+    await h.reached;
+    try { expect(await recoverMail(pool, epoch, { now: plus(at, 1) })).toBe(1); } finally { h.release(); }
+    await active;
+    smtp.onMessage = null;
+    expect(await stateOf(id)).toBe('accepted');
+    expect(await mailAlert()).toBeUndefined();
+  }, 30_000);
+
+  test('현재 시도가 아닌(낡은) 결과는 상태를 바꾸지 않는다', async () => {
+    const a = await recipient('lead@example.com');
+    const id = (await lead('POST', `/api/settings/mail/recipients/${a.id}/test`)).body.ids[0] as string;
+    const at = kst('2026-11-04', '23:00');
+    const h = hold();
+    const active = deliverMail(pool, epoch, { now: at, timeoutMs: 60_000 });
+    await h.reached;
+    // 그 사이에 같은 줄이 새 시도로 바뀐 상황(예: 운영 도구로 다시 찜)
+    try { await owner.query("update mail_outbox set attempt=gen_random_uuid(),state='retry_wait',next_at=$2 where id=$1", [id, plus(at, 15)]); } finally { h.release(); }
+    await active;
+    smtp.onMessage = null;
+    expect(await stateOf(id)).toBe('retry_wait');
+    await owner.query("update mail_outbox set state='accepted',next_at=null where id=$1", [id]);
+  }, 30_000);
+});
+
 describe('수신자 삭제 · 초기화 경합(G L407-408, data-model §5)', () => {
   test('받는 사람을 삭제해도 발송 기록은 주소와 함께 남는다', async () => {
     const qa = await recipient('qa@example.com');

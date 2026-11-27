@@ -1349,6 +1349,7 @@ export const mailOutbox = pgTable(
     retried: boolean().notNull().default(false),
     sent_at: at('sent_at'),
     log_key: text().notNull(),
+    attempt: uuid(),
   },
   (t) => [
     unique().on(t.report, t.recipient, t.try_no),

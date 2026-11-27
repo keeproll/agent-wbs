@@ -16,6 +16,8 @@ ALTER TABLE "mail_outbox" ADD COLUMN "log_key" text;--> statement-breakpoint
 UPDATE "mail_outbox" SET "log_key"='ML-' || lpad(n::text,4,'0') FROM (SELECT id,row_number() OVER (PARTITION BY project_id ORDER BY created_at,id) n FROM "mail_outbox") x WHERE x.id="mail_outbox".id;--> statement-breakpoint
 ALTER TABLE "mail_outbox" ALTER COLUMN "log_key" SET NOT NULL;--> statement-breakpoint
 ALTER TABLE "mail_outbox" ADD CONSTRAINT "mail_outbox_log_key_unique" UNIQUE("project_id","log_key");--> statement-breakpoint
+-- 시도 ID. 찜할 때마다 새로 매긴다. 결과는 이 시도가 아직 현재일 때만 상태를 바꾼다(늦은 옛 응답이 지금 상태를 덮지 않게).
+ALTER TABLE "mail_outbox" ADD COLUMN "attempt" uuid;--> statement-breakpoint
 -- 마지막으로 SMTP 호출을 시작한 시각(sending 커밋 시각). 진단과 「수락 여부 불명」 판정 기록에 쓴다.
 ALTER TABLE "mail_outbox" ADD COLUMN "sent_at" timestamp with time zone;--> statement-breakpoint
 ALTER TABLE "mail_outbox" ADD CONSTRAINT "mail_outbox_reason_text" CHECK (length(btrim("mail_outbox"."reason"))>0);--> statement-breakpoint
