@@ -218,7 +218,7 @@
   - H′가 「QA한 H + main의 충돌 없는 병합」임을 증거 사슬로 증명하면 QA를 다시 하지 않는다. 증거가 끊기면 QA를 다시 한다.
   - 적용: contracts §4.1 코드 근거 고정 3-2
 - **M7-03 야간 점검·배포 확인** (결정 1~16)
-  - 격리 테스트 목록, 화면 비교 기준, 응답 시간 기준(`budgetMs`), 단계 결과 보고서(`AWBS_REPORT`), 원인 후보, 배포 실패 뒤 자동 복구, 「서비스 없음」 알림(`serviceDown`), 준비 점검 `font`·`render`.
+  - 격리 테스트 목록, 화면 비교 기준, 응답 시간 기준(실제 필드 `budgetsMs`, 결정 원문 표기는 `budgetMs`), 단계 결과 보고서(`AWBS_REPORT`), 원인 후보, 배포 실패 뒤 자동 복구, 「서비스 없음」 알림(`serviceDown`), 준비 점검 `font`·`render`.
   - 적용: contracts §3.6, architecture §5 `ci`
 - **M7-04 서버 CI** (결정 1~16)
   - 통합 실패는 gate → rework, 병합 대조 실패는 409 `MERGE_MISMATCH`와 보류, pipeline 출처는 Runner의 main 관측, 「최신 하나」는 단조 순번으로 고른다.
@@ -420,7 +420,7 @@ owner가 답한 질문이다. 「무엇을 물었나 → 결정 → 근거 → �
 - **영향** (M6-06 구현)
   - Avro·Protobuf·Neo4j·QuestDB·Redis 같은 미지원 형식은 원문만 보존하고 대조하지 않는다(「대조 안 함」 = `unchecked`).
   - JSON Schema의 외부·순환 참조, 64단계보다 깊은 스키마, 조합·동적 규칙은 `unchecked`다.
-  - SQL의 함수·동적 SQL·상속 등 해석기가 모르는 문장이 있으면 그 SQL 묶음 전체를 `unchecked`로 둔다(contracts §2.3 「설계」).
+  - SQL에서 해석기가 모르는 문장은 그 표만, 영향 범위를 모르면 전체 표를 `unchecked`로 둔다. 실제 읽기 오류가 나면 SQL 묶음의 부분 결과를 보고하지 않는다(contracts §2.3 「설계」).
 
 ### Q-15 배포 확인 대상 — 결정: (A) 이 PC의 docker compose
 - 출처: G L477, L1151.
