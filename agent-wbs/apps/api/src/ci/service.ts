@@ -222,8 +222,8 @@ export async function reportQueue(client: PoolClient, principal: string, body: Q
   } catch (error) {
     if (body.status !== 'merged' || !body.actualMergeSha || !latest ||
       !(error instanceof PlatformError || error instanceof DomainError) || !['GATE_NOT_PASSED','INVALID_TRANSITION'].includes(error.code)) throw error;
-    await client.query(`update merge_queue q set status=$4,actual_merge_sha=f.merge_sha,actual_tree_sha=f.tree_sha,merge_parents=f.parents
-      from ci_merge_facts f where q.id=$1 and f.project_id=$2 and f.merge_sha=$3`,[latest.id,task.project_id,body.actualMergeSha,latest.status]);
+    await client.query(`update merge_queue q set status=$4,actual_merge_sha=f.merge_sha,actual_tree_sha=f.tree_sha,merge_parents=f.parents,merged_at=coalesce(q.merged_at,$5::timestamptz)
+      from ci_merge_facts f where q.id=$1 and f.project_id=$2 and f.merge_sha=$3`,[latest.id,task.project_id,body.actualMergeSha,latest.status,body.mergedAt]);
     const key = `ci:mergeMismatch|#${body.pr}`;
     const ref = { taskKey:task.task_key,id:latest.id,actualMergeSha:body.actualMergeSha,message:'실제 병합이 검증 근거와 다릅니다. 완료를 보류합니다.' };
     await client.query("insert into alerts(project_id,key,severity,target) values($1,$2,'error',$3) on conflict do nothing",[task.project_id,key,ref]);

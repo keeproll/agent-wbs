@@ -347,10 +347,12 @@ test('리뷰 R1: removed 뒤 다시 연 대기열의 checking은 열린 행 하�
 
 test('리뷰 R2: 실제 병합 불일치는 SHA·경고를 커밋하고 Task는 완료하지 않는다', async () => {
   const { a,tree,extra } = await integration(); await queue(a,'checking',extra);
-  const r = await queue(a,'merged',{ ...extra,actualMergeSha:'9'.repeat(40),actualTreeSha:tree,mergeParents:[sha,otherSha] });
+  const mergedAt = '2026-11-27T00:01:00.000000Z';
+  const r = await queue(a,'merged',{ ...extra,actualMergeSha:'9'.repeat(40),actualTreeSha:tree,mergeParents:[sha,otherSha],mergedAt });
   expect(r.statusCode,r.body).toBe(409);
   expect(r.json()).toMatchObject({ error:{ code:'MERGE_MISMATCH' } });
   expect((await owner.query('select status,actual_merge_sha from merge_queue where task=$1',[a.id])).rows).toEqual([{ status:'checking',actual_merge_sha:'9'.repeat(40) }]);
+  expect((await get(`projects/${project}/ci/queue`)).json()).toMatchObject({ items:[{ mergedAt }] });
   expect((await owner.query('select status from tasks where id=$1',[a.id])).rows).toEqual([{ status:'gate' }]);
   expect((await get('alerts')).json().items).toMatchObject([{ key:'ci:mergeMismatch|#1' }]);
   expect((await owner.query("select kind from notify_events where dedup_key='ci:mergeMismatch|#1'")).rows).toEqual([{ kind:'buildFail' }]);
