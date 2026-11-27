@@ -49,13 +49,21 @@ function setup(): void {
   writeExec(sudo, `#!/bin/bash\n[[ $1 == -n && $2 == -u && $4 == -- ]] || { echo bad-sudo-args >&2; exit 9; }\nshift 4\nexec env -i "$@"\n`);
 }
 
+/** 저장소의 래퍼 원본 내용. */
+function original(): string {
+  return readFileSync(join(import.meta.dirname, '..', '..', 'scripts', 'isolation', 'awbs-agent-exec.sh'), 'utf8');
+}
+
 function writeConf(file: string, over: Record<string, string>): void {
   const values = { AGENT_USER: me, RUNNER_USER: 'keeproll', RUNNER_HOME: runnerHome, AGENT_ROOT: area, NODE_DIR: join(area, 'runtime', 'node', 'bin'), ...over };
   writeFileSync(file, `# 시험 설정\n${Object.entries(values).map(([k, v]) => `${k}=${v}`).join('\n')}\n`);
 }
 
-function wrapper(args: string[], input = '', file = exec, path = '/usr/bin:/bin') {
-  const r = spawnSync(file, args, { input, encoding: 'utf8', env: { PATH: path, AWBS_RUNNER_TOKEN: 'runner-secret', HOME: runnerHome } });
+/** lockedCwd: 그 폴더로 들어간 뒤 권한을 000으로 바꾸고 래퍼를 부른다(들어갈 수 없는 현재 폴더를 물려받은 상황). */
+function wrapper(args: string[], input = '', file = exec, path = '/usr/bin:/bin', lockedCwd?: string) {
+  const [cmd, argv] = lockedCwd ? ['/bin/bash', ['-c', 'cd -- "$1" && chmod 000 . && shift && exec "$@"', '_', lockedCwd, file, ...args]] as const : [file, args] as const;
+  const r = spawnSync(cmd, argv, { input, encoding: 'utf8', env: { PATH: path, AWBS_RUNNER_TOKEN: 'runner-secret', HOME: runnerHome } });
+  if (lockedCwd) chmodSync(lockedCwd, 0o755);
   return { code: r.status, stdout: r.stdout, stderr: r.stderr };
 }
 
@@ -256,6 +264,71 @@ describe.skipIf(!usable)('awbs-agent-exec 실행 래퍼(bash, 실제 실행)', (
       }
     });
     rmSync(hidden, { recursive: true });
+  });
+
+  // owner 설치 1차 실패 재현: sudo는 부른 쪽의 현재 폴더(Runner 홈)를 물려준다. Agent는 거기 못 들어가므로
+  // GNU find가 「처음 폴더로 돌아갈 수 없음」으로 실패해 cli_unverified·inputs_unverified가 났다. 래퍼는 먼저 /로 옮긴다.
+  test('check·fix-perms: 들어갈 수 없는 현재 폴더에서 불러도 확인을 끝낸다(cwd를 /로 옮김)', () => {
+    const noEntry = join(root, 'no-entry-cwd');
+    mkdirSync(noEntry, { recursive: true });
+    readonlyTree(join(area, 'cli'), () => readonlyTree(join(area, 'inputs'), () => {
+      const r = wrapper(['check'], '', exec, '/usr/bin:/bin', noEntry);
+      expect(r.stderr).not.toContain('Failed to restore');
+      expect(r.stdout).toContain('fail runner_home_accessible');
+      expect(r.stdout).not.toMatch(/fail (cli|inputs)_(unverified|writable)/);
+    }));
+    const sub = join(worktree, 'perm-from-locked-cwd');
+    mkdirSync(sub, { recursive: true });
+    const fakeBin = join(root, 'fake-acl-cwd');
+    mkdirSync(fakeBin, { recursive: true });
+    writeExec(join(fakeBin, 'setfacl'), '#!/bin/bash\nexit 0\n');
+    const r = wrapper(['fix-perms', sub], '', exec, `${fakeBin}:/usr/bin:/bin`, noEntry);
+    expect(r).toMatchObject({ code: 0, stdout: 'fixed\n' });
+    rmSync(sub, { recursive: true });
+  });
+
+  // 런북 순서: setup(래퍼 check) → CLI 설치. 그래서 check는 빈 cli·inputs를 정상으로 본다(「Agent가 쓸 수 없음」만 본다).
+  // CLI가 있는지는 확인 스크립트 7단계와 Runner 준비 점검이 따로 본다.
+  test('check: CLI 설치 전(빈 cli·inputs)이어도 cli·inputs 항목은 fail이 아니다', () => {
+    const empty = join(root, 'empty-area');
+    for (const d of ['cli', 'inputs', 'worktrees']) mkdirSync(join(empty, d), { recursive: true });
+    mkdirSync(join(empty, 'runtime', 'node', 'bin'), { recursive: true });
+    symlinkSync(process.execPath, join(empty, 'runtime', 'node', 'bin', 'node'));
+    const c = join(root, 'empty.conf');
+    writeConf(c, { AGENT_ROOT: empty, NODE_DIR: join(empty, 'runtime', 'node', 'bin') });
+    const file = join(root, 'exec-empty');
+    writeExec(file, readFileSync(exec, 'utf8').replace(`\nCONF=${conf}\n`, `\nCONF=${c}\n`));
+    chmodSync(join(empty, 'cli'), 0o555);
+    chmodSync(join(empty, 'inputs'), 0o555);
+    try {
+      const r = wrapper(['check'], '', file);
+      expect(r.stdout).not.toMatch(/fail (cli|inputs)_/);
+      expect(r.stdout).not.toContain('fail node_missing');
+    } finally {
+      chmodSync(join(empty, 'cli'), 0o755);
+      chmodSync(join(empty, 'inputs'), 0o755);
+    }
+  });
+
+  // fix7: WSL 링크(/etc/resolv.conf → /mnt/wsl/...)가 그대로면 /mnt가 막힌 Agent는 DNS 설정을 못 읽는다.
+  test('check: DNS 설정 파일을 읽을 수 없으면 fail resolv_unreadable, 읽을 수 있으면 그 항목 없음', () => {
+    expect(original()).toContain(`[[ -e /etc/resolv.conf || -L /etc/resolv.conf ]] && [[ ! -r /etc/resolv.conf ]]`);
+    expect(wrapper(['check']).stdout).not.toContain('resolv_unreadable');
+    const locked = join(root, 'locked-mnt');
+    mkdirSync(locked, { recursive: true });
+    writeFileSync(join(locked, 'resolv.conf'), 'nameserver 10.255.255.254\n');
+    const link = join(root, 'resolv-link.conf');
+    symlinkSync(join(locked, 'resolv.conf'), link);
+    const file = join(root, 'exec-resolv');
+    writeExec(file, readFileSync(exec, 'utf8').replaceAll('/etc/resolv.conf', link));
+    chmodSync(locked, 0o000);
+    try {
+      const r = wrapper(['check'], '', file);
+      expect(r.code).toBe(1);
+      expect(r.stdout).toContain('fail resolv_unreadable');
+    } finally {
+      chmodSync(locked, 0o755);
+    }
   });
 
   test('check: Windows 경로는 목록 읽기와 지나가기를 따로 보고, /Docker도 본다', () => {

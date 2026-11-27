@@ -54,11 +54,45 @@ bash agent-runner/scripts/isolation/setup-agent-user.sh 2>&1 | tee ~/awbs-setup-
   3. `awbs-agent` 계정을 만듭니다(로그인 셸 없음, 비밀번호 잠금, sudo 없음).
   4. 이 계정의 예약 실행(cron·at)을 막습니다.
   5. 이 계정만 Windows 드라이브(`/mnt`)·Windows 프로그램 실행 통로(`/run/WSL`)에 못 들어가게 막습니다.
+     - `/mnt`가 막히면 WSL의 DNS 설정(`/mnt/wsl/resolv.conf`)도 못 읽습니다. 그래서 DNS 터널링(주소 `10.255.255.254` 고정)이면 `/etc/wsl.conf`에 `generateResolvConf = false`를 더하고(설치 전 모습은 보관) `/etc/resolv.conf`를 실제 파일로 둡니다.
+     - 터널링이 아니면 ★★★ 표시와 함께 대체 방식(도우미 + 1분 타이머)을 씁니다. 이 표시가 보이면 알려 주세요.
   6. Agent 작업 영역 `/srv/agentwbs`(cli·inputs·worktrees)와 Agent용 node를 만듭니다.
   7. 실행 래퍼를 설치하고 Agent 계정으로 점검(`check`)합니다.
   8. 점검이 `ok`일 때만 마지막에 sudoers 규칙 한 줄을 넣습니다.
 - **성공이면:** `래퍼 점검: ok`, `== 끝. 다음에 owner가 할 일`, `exit=0`이 보입니다.
 - **실패하면:** 종료 코드가 0이 아니고, 「설치가 중간에 멈췄습니다 … 닫힌 상태로 둡니다」가 보입니다. 로그 `2-setup.log`를 보내 주세요.
+
+## 2-1단계. 2단계가 끝나면 **바로** WSL 다시 시작(DNS 설정을 굳힘)
+
+2단계가 `/etc/wsl.conf`에 `generateResolvConf = false`를 넣었습니다. 이 설정은 WSL을 다시 시작해야 적용됩니다.
+
+- **2단계와 이 단계 사이에 다른 일을 하지 마세요.** 그 사이 새 WSL 터미널이 열리면(Orca 작업자 포함) WSL이 `/etc/resolv.conf`를 다시 링크로 만들 수 있습니다.
+  - 그래도 복구 장치가 있습니다. 부팅 복구 서비스가 재시작 때 실제 파일로 되살리고, 2-2단계 재실행도 고칩니다.
+- **`wsl --shutdown`은 이 터미널만 끄는 것이 아닙니다.** 모든 WSL 배포판, Orca 작업자, Runner, Docker Desktop의 WSL 쪽까지 함께 멈춥니다. 하던 작업을 먼저 저장하고 정리하세요.
+
+```bash
+/mnt/c/Windows/System32/wsl.exe --shutdown      # Windows PowerShell에서 wsl --shutdown 해도 같습니다
+```
+
+## 2-2단계. 다시 연 뒤 설치를 한 번 더 실행(상태 확정)
+
+같은 설치 명령을 한 번 더 실행합니다. 이미 된 부분은 건너뜁니다. 재시작 틈에 링크가 다시 생겼어도 여기서 저장 사본으로 고칩니다.
+
+```bash
+bash agent-runner/scripts/isolation/setup-agent-user.sh 2>&1 | tee ~/awbs-setup-logs/2-setup-again.log; echo "exit=${PIPESTATUS[0]}"
+```
+
+확인합니다.
+
+```bash
+ls -l /etc/resolv.conf          # 맨 앞이 l(링크)이 아니라 -(실제 파일)이어야 합니다
+head -n 3 /etc/resolv.conf      # 첫 줄 「# Agent WBS(Q-08): WSL DNS 터널링…」, 다음 줄 nameserver 10.255.255.254
+getent hosts api.anthropic.com  # 주소가 한 줄 나오면 owner·Runner DNS 정상
+```
+
+- **DNS가 안 될 때:** 이 설정은 Windows 쪽 「DNS 터널링」에 기댑니다(주소 `10.255.255.254`). 나중에 `.wslconfig`의 `dnsTunneling=false`나 WSL 업데이트로 터널링이 꺼지면 이 주소가 응답하지 않습니다.
+  - 그때 확인 스크립트가 「Runner 계정도 … 찾지 못함」 FAIL을 냅니다.
+  - 할 일: 제거 스크립트로 되돌린 뒤(`remove-agent-user.sh`, 9단계) WSL을 다시 시작하고 설치를 다시 실행합니다. 그러면 설치가 그 상태에 맞는 방식(대체 방식 등)을 고릅니다.
 
 ## 3단계. Claude·Codex CLI 설치(관리자 권한 없음)
 
@@ -132,12 +166,12 @@ grep '^AWBS_AGENT' agent-runner/.env
 bash agent-runner/scripts/isolation/check-agent-user.sh 2>&1 | tee ~/awbs-setup-logs/6-check.log; echo "exit=${PIPESTATUS[0]}"
 ```
 
-- **하는 일:** Agent 계정으로 직접 해 보며 막혔는지 봅니다. 예: Runner 홈·`~/.config/gh`·verum 폴더를 못 읽는지, Windows로 못 나가는지, sudo 정책이 래퍼 하나뿐인지, 예약 실행이 막혔는지, 로그인됐는지. 아무것도 고치지 않습니다.
+- **하는 일:** Agent 계정으로 직접 해 보며 막혔는지 봅니다. 예: Runner 홈·`~/.config/gh`·verum 폴더를 못 읽는지, Windows로 못 나가는지(`/mnt` 아래 모든 드라이브), Runner·Agent 양쪽이 DNS로 서버 이름을 찾는지, `/etc/resolv.conf`가 실제 파일이고 `/etc/wsl.conf`에 `generateResolvConf = false`가 있는지, sudo 정책이 래퍼 하나뿐인지, 예약 실행이 막혔는지, 로그인됐는지. 아무것도 고치지 않습니다.
 - **성공이면:** 마지막에 `결과: FAIL 0개`, `exit=0`.
 - **WARN은 실패가 아닙니다.** 흔한 WARN:
   - `/tmp에 Runner 계정 파일 중 누구나 읽을 수 있는 것이 …개`: 공용 임시 폴더 안내입니다.
   - `관리자 규칙(비밀번호 없음)`: keeproll이 비밀번호 없이 root가 될 수 있다는 안내입니다. 원하면 NOPASSWD를 빼세요.
-- **실패하면:** `FAIL`로 시작하는 줄을 **그대로** 보내 주세요. 특히 `허용 목록에 없는 sudo 규칙`·`해석하지 않는 sudo 출력 줄`은 이 PC의 sudo 출력 모양을 처음 보는 경우라 그 줄이 꼭 필요합니다.
+- **실패하면:** `FAIL`로 시작하는 줄을 **그대로** 보내 주세요. 바로 아래 `진단:` 줄이 있으면 함께 보내 주세요. 특히 `허용 목록에 없는 sudo 규칙`·`해석하지 않는 sudo 출력 줄`은 이 PC의 sudo 출력 모양을 처음 보는 경우라 그 줄이 꼭 필요합니다.
 
 ## 7단계. Runner 시작
 

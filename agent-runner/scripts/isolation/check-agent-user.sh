@@ -203,13 +203,20 @@ for f in "$RUNNER_HOME/.config/gh/hosts.yml" "$RUNNER_HOME/.bashrc"; do
 done
 
 step '5. WSL 탈출 통로'
-for t in "$ROOT_PREFIX/mnt" "$ROOT_PREFIX/mnt/c" "$ROOT_PREFIX/run/WSL" "$ROOT_PREFIX/Docker" "$ROOT_PREFIX/Docker/host"; do
+# /mnt 아래는 하나도 빠짐없이 본다: 드라이브(c·d·x 등, 0777이라 하나라도 열리면 Windows 파일을 읽고 쓴다), wsl·wslg와 그 안쪽까지.
+# 왜: /mnt를 통째로 막는 것이 기본이지만, 막힘이 하나라도 풀렸는지 이름마다 확인해야 「빠짐없음」을 증명할 수 있다(fix7).
+wsl_targets=("$ROOT_PREFIX/mnt")
+for t in "$ROOT_PREFIX"/mnt/* "$ROOT_PREFIX"/mnt/wsl/*; do
+  [[ -e $t || -L $t ]] && wsl_targets+=("$t")
+done
+wsl_targets+=("$ROOT_PREFIX/run/WSL" "$ROOT_PREFIX/Docker" "$ROOT_PREFIX/Docker/host")
+for t in "${wsl_targets[@]}"; do
   [[ -e $t ]] || continue
   # 목록 읽기와 지나가기를 따로 본다. 목록이 막혀도 이름을 알면 지나갈 수 있다(리뷰 P2-7).
   agent_blocked "목록 읽기 $t" test -r "$t"
   agent_blocked "지나가기 $t" test -x "$t"
 done
-if [[ -e $WSL_INTEROP ]]; then
+if [[ -e $WSL_BINFMT ]]; then
   exe=$ROOT_PREFIX/mnt/c/Windows/System32/whoami.exe
   if [[ ! -f $exe ]]; then
     fail "확인 못 함: Windows 실행 시험에 쓸 $exe가 없음"
@@ -220,8 +227,13 @@ if [[ -e $WSL_INTEROP ]]; then
     chmod 0755 "$probe/whoami.exe"
     # 그다음 Agent가 읽고 실행만 할 수 있게 연다(0750 → ACL 상한 r-x). 0700 그대로면 폴더 때문에 막혀 시험이 무의미하다(리뷰 P2-5).
     chmod 0750 "$probe"
-    if ! "$probe/whoami.exe" > /dev/null 2>&1; then
+    # 실패하면 원인을 찾을 수 있게 오류 출력·종료 코드·WSL_INTEROP 값을 함께 보여 준다.
+    rc_w=0
+    err=$("$probe/whoami.exe" 2>&1 > /dev/null < /dev/null) || rc_w=$?
+    if ((rc_w != 0)); then
       fail '확인 못 함: Runner 계정에서도 Windows 프로그램이 안 돎(대조 실패)'
+      note "진단: 종료 코드 $rc_w, WSL_INTEROP=${WSL_INTEROP-(없음)}, 현재 폴더 $PWD"
+      [[ -n $err ]] && note "진단: 오류 출력 $(printf '%s' "$err" | head -n 3 | tr '\n' ' ')"
     else
       rc_r=0; agent_rc test -r "$probe/whoami.exe" || rc_r=$?
       rc_x=0; agent_rc test -x "$probe/whoami.exe" || rc_x=$?
@@ -238,6 +250,68 @@ else
 fi
 agent_blocked 'Docker 소켓 쓰기(root와 같은 권한)' test -w "$ROOT_PREFIX/var/run/docker.sock"
 agent_blocked 'Docker 소켓 읽기' test -r "$ROOT_PREFIX/var/run/docker.sock"
+
+step '5-1. DNS(이름 찾기): Runner·Agent 양쪽'
+# Claude·Codex 로그인과 실행에는 서버 이름(예: api.anthropic.com)을 주소로 바꾸는 DNS가 필요하다.
+# WSL의 기본 /etc/resolv.conf는 /mnt/wsl/resolv.conf로 가는 링크라, /mnt가 막힌 Agent는 그대로면 못 읽는다.
+# 설치(fix8)는 DNS 터널링이면 /etc/wsl.conf에 generateResolvConf = false를 넣고 /etc/resolv.conf를 실제 파일로 둔다.
+DNS_NAME=api.anthropic.com
+if [[ -e $WSL_BINFMT ]]; then
+  dns_mode=''
+  [[ -f $DNS_MODE_RECORD ]] && dns_mode=$(< "$DNS_MODE_RECORD")
+  if [[ -L $RESOLV_DST ]]; then
+    fail "/etc/resolv.conf가 아직 링크임($(readlink -- "$RESOLV_DST")). Agent가 따라가지 못함. setup-agent-user.sh를 다시 실행하세요(터널링이면 원본이 없어도 저장 사본으로 고침)"
+  elif [[ -f $RESOLV_DST ]]; then
+    pass '/etc/resolv.conf가 링크가 아닌 실제 파일'
+  else
+    fail '/etc/resolv.conf가 없음'
+  fi
+  case $dns_mode in
+    tunnel)
+      # WSL을 다시 시작해도 링크로 돌아가지 않게 하는 설정. 이것이 없으면 다음 재시작 때 Agent DNS가 다시 끊긴다.
+      if wsl_conf_resolv_off "$WSL_CONF"; then
+        pass '/etc/wsl.conf에 [network] generateResolvConf = false(WSL 재시작 뒤에도 실제 파일 유지)'
+      else
+        fail '/etc/wsl.conf에 [network] generateResolvConf = false가 없음(WSL 재시작 때 링크로 돌아감). setup-agent-user.sh를 다시 실행하세요'
+      fi
+      # 부팅 복구(fix9): 설치~재시작 틈에 링크가 굳어도 부팅 때 저장 사본으로 되살리는 서비스와 그 사본.
+      if [[ -f $RESOLV_RESTORE_UNIT_PATH && -x $RESOLV_RESTORE_PATH ]] && [[ -f $RESOLV_INSTALLED ]] && resolv_is_tunnel "$RESOLV_INSTALLED"; then
+        pass "부팅 복구 서비스($RESOLV_RESTORE_UNIT)와 저장 사본 있음"
+      else
+        fail "부팅 복구 서비스($RESOLV_RESTORE_UNIT) 또는 저장 사본($RESOLV_INSTALLED)이 없음. setup-agent-user.sh를 다시 실행하세요"
+      fi
+      if [[ -f $RESOLV_DST && ! -L $RESOLV_DST ]] && resolv_is_tunnel "$RESOLV_DST"; then
+        pass "/etc/resolv.conf의 nameserver가 DNS 터널링 주소 $DNS_TUNNEL_NS 하나"
+      else
+        fail "/etc/resolv.conf의 nameserver가 $DNS_TUNNEL_NS 하나가 아님"
+      fi
+      ;;
+    sync)
+      warn '대체 방식(도우미 + 감시 + 1분 타이머): WSL이 링크를 다시 만들 때 Agent DNS가 최대 1분 끊길 수 있음'
+      if systemctl is-active --quiet "$RESOLV_TIMER" 2> /dev/null; then pass "$RESOLV_TIMER 동작 중"; else fail "$RESOLV_TIMER가 동작하지 않음"; fi
+      ;;
+    *)
+      fail "DNS 설정 방식 기록이 없음($DNS_MODE_RECORD). setup-agent-user.sh를 다시 실행하세요"
+      ;;
+  esac
+fi
+# Runner 쪽: 이 PC의 DNS 자체가 되는지(설정을 바꾼 뒤에도 owner·Runner 네트워크가 멀쩡한지).
+runner_dns=0
+if getent hosts "$DNS_NAME" > /dev/null 2>&1; then
+  pass "Runner 계정 DNS 해석 $DNS_NAME"
+  runner_dns=1
+else
+  fail "Runner 계정도 $DNS_NAME을 찾지 못함(인터넷 연결과 /etc/resolv.conf를 확인하세요)"
+fi
+agent_allowed "DNS 설정 파일 읽기 $RESOLV_DST" test -r "$RESOLV_DST"
+if ((runner_dns)); then
+  agent_allowed "DNS 해석 $DNS_NAME" getent hosts "$DNS_NAME"
+else
+  fail "확인 못 함: Runner DNS가 안 돼 Agent DNS를 판단할 수 없음"
+fi
+if [[ -e $RESOLV_SRC ]]; then
+  agent_blocked "WSL DNS 원본 직접 읽기 $RESOLV_SRC(/mnt는 계속 막힘)" cat -- "$RESOLV_SRC"
+fi
 
 step '6. 작업 영역 권한'
 agent_allowed "CLI 폴더 들어가기 $AGENT_ROOT/cli" test -x "$AGENT_ROOT/cli"

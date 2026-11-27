@@ -79,7 +79,7 @@ left() { LEFT+=("$1"); printf '   건너뜀: %s\n' "$1"; }
 uid_owner() { getent passwd "$1" | cut -d: -f1 || true; }
 
 # root가 다룰 고정 경로를 먼저 검사한다(링크·예상 밖 소유자면 멈춤).
-for p in "$SUDOERS_PATH" "$EXEC_PATH" "$CONF_PATH" "$GUARD_PATH"; do
+for p in "$SUDOERS_PATH" "$EXEC_PATH" "$CONF_PATH" "$GUARD_PATH" "$RESOLV_SYNC_PATH" "$RESOLV_UNIT_PATH" "$RESOLV_WATCH_PATH" "$RESOLV_TIMER_PATH" "$RESOLV_RESTORE_PATH" "$RESOLV_RESTORE_UNIT_PATH" "$WSL_CONF"; do
   safe_fixed_path "$p"
 done
 safe_fixed_path "$AGENT_ROOT" "$RUNNER_USER"
@@ -97,7 +97,7 @@ note "작업 영역 $AGENT_ROOT: $([[ $PURGE == 1 ]] && echo 삭제 || echo 남�
 ((DRY_RUN)) && note 'dry-run: 아래 sudo 명령은 실행하지 않고 보여 주기만 합니다.'
 
 FINISHED=0
-# shellcheck disable=SC2317  # trap으로 불린다.
+# shellcheck disable=SC2317,SC2329  # trap으로 불린다(리뷰7 P3-6).
 on_exit() {
   local rc=$?
   if ((rc != 0 && !DRY_RUN && !FINISHED)); then
@@ -208,6 +208,55 @@ else
     done
   fi
 fi
+
+step '4-1. Agent DNS 설정 되돌리기(wsl.conf·/etc/resolv.conf)'
+# DNS 설정은 Agent를 더 막는 장치가 아니라 Agent가 이름을 찾게 해 주는 장치다. 그래서 계정 삭제 여부와 관계없이 정리한다.
+# 1) 대체 방식(도우미·감시·타이머)이 있으면 끄고 지운다. 타이머·감시를 먼저 끈다.
+remove_resolv_sync
+# 2) /etc/wsl.conf: 설치가 쓴 모습 그대로일 때만 설치 전 모습으로 되돌린다. 그 뒤 owner가 고쳤으면 손대지 않고 알린다.
+WSL_CONF_RESTORED=0
+if [[ -f $WSL_CONF_INSTALLED ]]; then
+  if [[ -f $WSL_CONF ]] && cmp -s -- "$WSL_CONF" "$WSL_CONF_INSTALLED"; then
+    if [[ -f $WSL_CONF_BACKUP ]]; then
+      as_root install -o root -g root -m 0644 "$WSL_CONF_BACKUP" "$WSL_CONF"   # 설치 전 /etc/wsl.conf로 되돌림
+      WSL_CONF_RESTORED=1
+    elif [[ -f $WSL_CONF_ABSENT ]]; then
+      as_root rm -f -- "$WSL_CONF"                                         # 설치 전에는 없던 파일
+      WSL_CONF_RESTORED=1
+    else
+      left "/etc/wsl.conf 설치 전 사본이 없음: [network] generateResolvConf = false 줄을 직접 지우세요"
+    fi
+  else
+    left "/etc/wsl.conf가 설치 뒤 바뀌어 되돌리지 않음: [network] generateResolvConf = false 줄을 직접 확인하세요(설치 전 사본: $WSL_CONF_BACKUP)"
+  fi
+fi
+# 3) /etc/resolv.conf: 이 설치가 만든 파일일 때만 WSL 원래 모양(원본으로 가는 링크)으로 되돌린다.
+#    원본이 지금 없으면(자동 생성을 꺼 둔 동안) 링크가 끊겨 모든 계정의 DNS가 멈추므로, 파일을 그대로 두고 WSL 재시작을 안내한다.
+#    wsl.conf에 generateResolvConf = false가 남아 있으면(되돌리지 못함) 링크로 되돌리지 않는다.
+#    재시작 뒤 WSL이 원본을 만들지 않으면 링크가 끊겨 모든 계정의 DNS가 멈추기 때문이다(리뷰8 P3-2).
+if resolv_is_ours && ((!WSL_CONF_RESTORED)) && wsl_conf_resolv_off "$WSL_CONF"; then
+  note '/etc/wsl.conf에 generateResolvConf = false가 남아 있어 /etc/resolv.conf 실제 파일을 그대로 둠(wsl.conf를 정리한 뒤 다시 실행)'
+elif resolv_is_ours; then
+  if [[ -f $RESOLV_SRC ]]; then
+    # 임시 이름으로 링크를 만든 뒤 이름 바꾸기로 한 번에 바꾼다(파일이 잠깐 없는 순간이 없게, 리뷰7 P3-4).
+    as_root ln -sfnT "$RESOLV_SRC" "$RESOLV_DST.awbs-link"
+    as_root mv -fT -- "$RESOLV_DST.awbs-link" "$RESOLV_DST"
+  else
+    note "$RESOLV_SRC가 지금 없어 /etc/resolv.conf 실제 파일을 그대로 둠. WSL을 다시 시작하면 WSL이 다시 만든다(wsl --shutdown)"
+  fi
+else
+  note '/etc/resolv.conf는 이 설치가 만든 파일이 아니라 그대로 둠'
+fi
+# 4) 부팅 복구 서비스: wsl.conf를 되돌렸거나 자동 생성 끄기가 없을 때만 지운다.
+#    끄기가 남아 있으면 링크가 굳을 수 있으므로, 남은 항목을 정리할 때까지 복구 서비스를 그대로 둔다.
+if ((WSL_CONF_RESTORED)) || ! wsl_conf_resolv_off "$WSL_CONF"; then
+  remove_resolv_restore
+fi
+if ((WSL_CONF_RESTORED)); then
+  as_root rm -f -- "$WSL_CONF_INSTALLED" "$WSL_CONF_BACKUP" "$WSL_CONF_ABSENT" "$RESOLV_INSTALLED"
+  note '★ WSL을 한 번 다시 시작해야 되돌린 /etc/wsl.conf가 적용됩니다(Windows에서 wsl --shutdown).'
+fi
+if [[ -f $DNS_MODE_RECORD ]] && [[ ! -f $WSL_CONF_INSTALLED ]]; then as_root rm -f -- "$DNS_MODE_RECORD"; fi
 
 step '5. 작업 영역'
 if ((${#LEFT[@]})); then

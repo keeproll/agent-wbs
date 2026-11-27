@@ -101,6 +101,12 @@ keeproll ALL=(awbs-agent) NOPASSWD: /usr/local/libexec/awbs-agent-exec
 - 설정 파일(`/etc/agentwbs/agent-exec.conf`)은 실행하지 않고, 정해진 이름만 한 줄씩 읽는다.
   - 왜: 설정 파일에 명령을 숨겨 두어도 실행되지 않게 한다.
 - 래퍼와 설정 파일은 root 소유다. Runner도 Agent도 고칠 수 없다.
+- 래퍼는 시작하자마자 현재 폴더를 루트(`/`)로 옮긴다.
+  - 왜: sudo는 부른 쪽의 현재 폴더(예: `/home/keeproll`)를 그대로 물려준다. Agent는 그 폴더에 들어갈 수 없다.
+  - 그 상태에서 GNU find(파일 찾기 명령)는 끝날 때 「처음 폴더로 돌아갈 수 없음」으로 실패한다. 그러면 `check`가 `cli_unverified`·`inputs_unverified`를 내고 `fix-perms`도 실패한다(owner 설치 1차 실패, fix6).
+- `check`는 cli·inputs가 비어 있어도 그 항목을 실패로 보지 않는다. 「Agent가 하나도 쓸 수 없는가」만 본다.
+  - 왜: 설치 순서가 「설치(2단계, 여기서 `check`) → CLI 설치(3단계)」라서 `check` 때는 CLI가 아직 없다.
+  - CLI가 있는지는 확인 스크립트 7단계와 Runner 준비 점검이 따로 본다.
 
 Runner 쪽 코드(`src/cli/dedicated-user.ts`)가 만드는 실행 계획:
 
@@ -159,6 +165,52 @@ Agent 계정이 못 읽는 곳(확인 스크립트가 하나씩 시험한다):
 - `/home/keeproll` 전체. 홈이 `0750`이고 Agent는 keeproll 그룹이 아니기 때문이다.
   - 그 안의 `~/.agentwbs`(`0700`), `~/.config/gh`, `~/.ssh`, `~/.orca`, `~/.claude`, `~/.codex`, `~/projects/verum-*`, `~/.config/verum-*`.
 - `/mnt`(Windows 드라이브), `/run/WSL`(Windows 실행 통로), `/Docker`, `/var/run/docker.sock`.
+
+### 6.1 WSL에서 Agent의 DNS(이름 찾기) — fix7·fix8
+
+- **문제:** WSL은 `/etc/resolv.conf`를 `/mnt/wsl/resolv.conf`로 가는 링크로 만든다. `/mnt`는 Agent에게 통째로 막혀 있어서 Agent는 링크를 따라가지 못한다.
+  - 그래서 Agent 계정의 Claude 로그인이 `getaddrinfo EAI_AGAIN platform.claude.com`으로 실패했다.
+- **fix7(버림):** 링크가 바뀔 때마다 감시(systemd path)로 다시 사본을 만들었다.
+  - 이 PC는 `wsl.exe`를 실행할 때마다 링크를 다시 만든다(0.4초에 3번까지 확인, 리뷰7).
+  - systemd 감시는 서비스가 도는 동안의 변화를 놓치고, 10초에 5번 넘게 돌면 시작 한도에 걸려 멈춘다(리뷰7 P2-1).
+  - 그래서 링크 재생성과 계속 싸우는 방식은 버렸다.
+- **fix8 기본 방식(터널링):** 이 PC는 WSL DNS 터널링을 쓴다. DNS 주소가 `10.255.255.254`로 고정이다.
+  1. 설치가 DNS 원본의 `nameserver`가 `10.255.255.254` **하나뿐인지** 확인한다.
+  2. `/etc/wsl.conf`에 `[network]` `generateResolvConf = false`를 더한다. 다른 줄은 그대로 둔다.
+     - 설치 전 모습은 `/etc/agentwbs/wsl.conf.before`에 한 번만 보관한다. 원래 없었으면 `wsl.conf.absent` 표시를 남긴다.
+     - 설치가 쓴 모습은 `/etc/agentwbs/wsl.conf.installed`에 남긴다. 제거 때 그 뒤 owner가 고쳤는지 본다.
+  3. `/etc/resolv.conf`를 그 내용의 **실제 파일**로 둔다(임시 이름에 쓴 뒤 `mv`로 한 번에 바꿈).
+  4. 방식을 `/etc/agentwbs/dns-mode`에 `tunnel`로 적는다.
+  - 왜 이 방식인가: WSL이 더 이상 링크를 만들지 않는다. 그래서 싸울 상대가 없다. 주소가 고정이라 실제 파일로 둬도 낡지 않는다.
+  - **WSL 재시작이 꼭 필요하다:** Windows에서 `wsl --shutdown` 후 다시 열고 확인 스크립트로 「실제 파일 유지」를 확인한다. 재시작 뒤에도 유지되는지가 핵심이다.
+  - Runner·owner에게 주는 영향: 같은 주소(`10.255.255.254`)에 묻는다. 확인 스크립트가 Runner DNS도 검사한다.
+  - 남는 점: 검색 도메인(`search`)은 설치 때 값으로 고정된다. 이름 끝까지 쓰는 주소(예: `api.anthropic.com`)에는 영향이 없다.
+- **fix9 보강(리뷰8 P2-1):** `generateResolvConf = false`는 재시작해야 적용된다. 설치와 재시작 사이에 `wsl.exe`가 돌면 WSL이 링크를 다시 만들고, 재시작 뒤 그 링크가 굳는다. 원본이 없으면 모든 계정의 DNS가 끊긴다.
+  - **저장 사본:** 설치가 만든 `/etc/resolv.conf`를 `/etc/agentwbs/resolv.conf.installed`에 둔다.
+  - **설치 다시 실행으로 복구:** 방식 기록이 `tunnel`이면 원본이 없어도 「원본 → 저장 사본 → 고정 주소 한 줄」 순서로 실제 파일을 다시 만든다.
+  - **부팅 복구 서비스:** `awbs-agent-resolv-restore.service`가 부팅 때 한 번, `/etc/resolv.conf`가 링크일 때만(`ConditionPathIsSymbolicLink`) 저장 사본으로 실제 파일을 되살린다.
+    - 도우미는 `/usr/local/libexec/awbs-resolv-restore`(root 소유)다.
+    - 자동 생성이 꺼진 뒤라 WSL과 싸우지 않는다. 그래서 감시·타이머가 필요 없다.
+    - 저장 사본은 root 소유 일반 파일이고, 첫 줄 표시와 nameserver(고정 주소 하나)가 맞을 때만 쓴다. 아니면 고정 주소 한 줄로 만든다.
+  - **런북:** 설치 직후 바로 재시작하고(`wsl --shutdown`은 모든 WSL 배포판·Docker Desktop을 멈춤), 재시작 뒤 설치를 한 번 더 실행해 상태를 확정한다.
+  - **wsl.conf 편집(리뷰8 P3-1):** 줄 끝 CR(윈도 줄바꿈)과 머리 뒤 주석(`[network] # …`)을 떼고 절을 알아본다. 그래서 절이 겹치지 않는다.
+    - 확인은 `[network]` 절이 하나이고 그 안의 값이 모두 `false`일 때만 PASS다.
+  - **기대는 것(리뷰8 P3-4):** Windows 쪽 DNS 터널링(기본으로 켜짐)이다. 꺼지면 `10.255.255.254`가 응답하지 않는다.
+    - 확인 스크립트의 Runner DNS FAIL이 잡는다. 할 일은 제거 → 재시작 → 설치 다시 실행이다(런북 2-2단계).
+    - `search` 도메인도 설치 때 값으로 고정된다.
+- **fix8 대체 방식(사본):** `nameserver`가 고정 주소 하나가 아니면(예: NAT 모드의 바뀌는 주소) 설치가 ★로 크게 알리고 fix7 도우미를 쓴다.
+  - 리뷰7 지적을 반영했다: 서비스 시작 한도 끔(`StartLimitIntervalSec=0`), 30초 시간 제한, 감시 뒤에 시작, **1분 타이머**(감시가 놓치거나 멈춰도 1분 안에 복구).
+  - 도우미는 바꾼 뒤 1초 기다렸다가 다시 링크가 됐으면 다시 옮긴다(최대 5번).
+  - 이 방식에서는 WSL이 링크를 다시 만들 때 Agent DNS가 최대 1분 끊길 수 있다.
+- **도우미·설정 줄의 안전 규칙**(두 방식 공통)
+  - 원본은 링크가 아닌 root 소유 일반 파일만 읽는다. 열 때도 링크를 따라가지 않는다(`dd iflag=nofollow`).
+  - `nameserver`는 IP 주소 모양만, `search`·`domain`·`options`·`sortlist`도 값 모양을 본다.
+  - `/etc/resolv.conf`가 WSL 링크이거나 이 설치가 만든 파일(첫 줄 표시)일 때만 바꾼다. owner가 직접 관리하는 파일은 건드리지 않는다(방식 `manual`).
+- **제거:** 대체 방식 단위(타이머·감시 먼저)를 끄고, `/etc/wsl.conf`가 설치가 쓴 모습 그대로면 설치 전 모습으로 되돌린다.
+  - 그 뒤 owner가 고쳤으면 되돌리지 않고 남은 항목으로 알린다(종료 코드 3).
+  - `/etc/resolv.conf`는 원본이 있을 때만 WSL 링크로 한 번에 되돌린다(임시 이름 → `mv`). 원본이 없으면 파일을 그대로 두고 WSL 재시작을 안내한다.
+  - `/etc/wsl.conf`를 되돌리지 못해 `generateResolvConf = false`가 남으면 링크로 되돌리지 않고, 부팅 복구 서비스도 남긴다(리뷰8 P3-2). 재시작 뒤 끊긴 링크가 굳지 않게 하려는 것이다.
+- **고르지 않은 방법:** `/mnt`·`/mnt/wsl`에 Agent 「지나가기만」 허용 + 자식마다 차단. 드라이브(drvfs)는 0777이고 리눅스 ACL이 걸린다는 보장이 없다. 하나라도 빠지면 Windows 파일을 읽고 쓴다.
 
 ## 7. 환경 변수(env allowlist와 결합)
 
@@ -240,6 +292,7 @@ bash agent-runner/scripts/isolation/setup-agent-user.sh
      - Agent 홈 안(`chmod 0700`, `tmp/` 만들기, git 설정)은 **Agent 계정 권한으로** 한다.
      - 왜: Agent는 자기 홈 안에 링크를 심을 수 있다. root가 그 링크를 따라가면 시스템 폴더의 소유자·권한이 바뀐다(Codex 리뷰 P1-1).
   4. WSL이면 `/mnt`·`/Docker`·`/run/WSL`에 Agent 차단 ACL(`setfacl -P`: 링크는 따라가지 않음), 부팅 때 `/run/WSL`을 다시 막는 서비스 등록.
+     - 4-1단계 Agent DNS(§6.1): 터널링이면 `/etc/wsl.conf` `generateResolvConf = false` + `/etc/resolv.conf` 실제 파일. 아니면 대체 방식(도우미·감시·타이머). 실패하면 여기서 멈춘다(닫힘).
   5. `/srv/agentwbs` 폴더와 권한, Agent용 node 복사.
   6. 래퍼·설정 파일 설치(root 소유).
   7. 래퍼 `check`를 Agent 계정으로 돌려 `ok`인지 본다.
@@ -310,7 +363,9 @@ bash agent-runner/scripts/isolation/check-agent-user.sh --protect /home/keeproll
     - 왜 실행해 보지 않나: root로 실행이 허용돼도 래퍼가 「Agent 계정이 아님」으로 스스로 실패한다. 실행 결과로는 허용 여부를 알 수 없다(Codex 리뷰 P2-6).
   - 비밀번호 없이 래퍼가 실제로 돌고 래퍼 점검이 `ok`.
   - 못 읽는 곳: Runner 홈, `~/.agentwbs`, `~/.config/gh`, `~/.ssh`, `~/.orca`, `~/.claude`, `~/.codex`, `~/projects/verum-*`, `~/.config/verum-*`, 그리고 `--protect` 경로. 목록 읽기와 지나가기를 따로 본다.
-  - WSL: `/mnt`·`/mnt/c`·`/run/WSL`·`/Docker`·`/Docker/host`의 목록 읽기와 지나가기를 따로 본다.
+  - WSL: `/mnt`와 그 아래 **모든** 항목(드라이브 c·d·x 등, `wsl`·`wslg`, `/mnt/wsl` 안쪽), `/run/WSL`·`/Docker`·`/Docker/host`의 목록 읽기와 지나가기를 따로 본다(fix7: 이름을 고정하지 않고 지금 있는 것을 모두).
+  - DNS(fix8): `/etc/resolv.conf`가 링크가 아닌지, 터널링 방식이면 `/etc/wsl.conf` 설정과 nameserver, Runner·Agent 양쪽이 `api.anthropic.com`을 찾는지 본다. `/mnt/wsl/resolv.conf` 원본은 Agent가 여전히 못 읽는지도 본다.
+    - Runner도 못 찾으면 FAIL이다(설정을 바꾼 뒤 owner·Runner 네트워크가 멀쩡한지도 확인해야 하므로).
   - Windows 실행: 진짜 Windows 프로그램(`whoami.exe`) 복사본을 Agent로 실행해 보고 막히는지 본다.
     - 복사본은 Runner만 쓸 수 있는 폴더(`0700`)에 먼저 복사하고, 그다음 Agent가 읽고 실행만 하게 연다(`0750`).
     - Runner로는 돌고(대조), Agent가 복사본을 읽고 실행할 권한도 있다는 것을 확인한 뒤에만 「막힘」을 PASS로 센다(Codex 리뷰 P2-5).
@@ -335,6 +390,7 @@ bash agent-runner/scripts/isolation/remove-agent-user.sh --purge-work     # 작�
   2. 기록한 UID의 프로세스를 끝내고 0개인지 확인한다. 종료 명령 오류는 「없음」으로 치지 않는다.
   3. 계정을 지운다(로그인 정보도 함께).
   4. **그 뒤에야** Windows 차단을 푼다. 숫자 UID로 지운다(계정 이름은 이미 없으므로).
+     - Agent DNS 설정(§6.1)도 되돌린다. `/etc/wsl.conf`는 설치 전 사본으로, `/etc/resolv.conf`는 WSL 링크로.
   5. 작업 영역을 남기는 경우에도 Agent 흔적을 남김없이 지운다. ACL(이름·숫자·기본)을 모두 지우고, Agent가 소유했던 파일은 Runner 소유로 바꾼다.
      - 왜: 나중에 같은 숫자 UID가 다른 계정에 배정되면 남은 파일에 접근할 수 있다(Codex 리뷰 P2-9).
   6. 마지막에 UID 기록과 진행 기록을 지운다.
@@ -425,6 +481,10 @@ pnpm -C agent-runner test -- cli
 - **EPERM**: 「권한 없음」 오류. 다른 계정의 프로세스에 신호를 보내면 난다.
 - **env(환경 변수)**: 프로그램에 넘기는 설정 값. 예: `HOME`, `PATH`.
 - **mask(ACL 상한)**: 이름 있는 사용자·그룹 항목에 줄 수 있는 권한의 공통 상한. 폴더를 `0700`으로 만들면 `---`가 된다.
+- **DNS(이름 찾기)**: `api.anthropic.com` 같은 이름을 IP 주소로 바꾸는 일. 리눅스는 `/etc/resolv.conf`에 적힌 DNS 서버에 묻는다.
+- **resolv.conf**: DNS 서버 주소(`nameserver`)와 검색 도메인(`search`)을 적는 설정 파일.
+- **systemd path 단위**: 파일이 바뀌는 것을 지켜보다가 정해진 서비스를 실행하는 systemd 기능.
+- **drvfs**: WSL이 Windows 드라이브(`C:` 등)를 `/mnt/c`처럼 붙일 때 쓰는 파일 시스템.
 - **interop(WSL)**: WSL 안에서 Windows 프로그램(.exe)을 실행하게 해 주는 기능. 실행된 프로그램은 Windows 사용자 권한으로 돈다.
 - **nologin**: 로그인을 거부하는 셸. 계정은 있지만 사람이 들어와 명령을 칠 수 없다.
 - **NOPASSWD**: sudoers에서 「비밀번호를 묻지 않는다」는 표시.
