@@ -17,7 +17,7 @@ import { BASELINE_RENDER, baselineImage, prototypePath, type BaselineRenderer } 
 import { compareImages, decodePng } from './visual.ts';
 
 export interface NightOptions {
-  repo: Pick<GitRepository, 'mainPipeline' | 'pipelineAt' | 'fileAt' | 'createTaskCheckWorktree' | 'taskCheckPath' | 'removeWorktree' | 'mainCommitsSince'>;
+  repo: Pick<GitRepository, 'mainPipeline' | 'pipelineAt' | 'fileAt' | 'listFiles' | 'createTaskCheckWorktree' | 'taskCheckPath' | 'removeWorktree' | 'mainCommitsSince'>;
   heavy: HeavySemaphore;
   execute: CiExecute;
   report: CiReport;
@@ -154,7 +154,10 @@ export async function runNightCheck(options: NightOptions, date: string): Promis
   let logExcerpt: string | null = null;
   // 앱 화면도 기준 이미지와 같은 크기로 찍도록 알려 준다.
   const screenEnv = { AWBS_SCREEN_WIDTH: String(BASELINE_RENDER.viewport.width), AWBS_SCREEN_HEIGHT: String(BASELINE_RENDER.viewport.height) };
-  const readPrototype = async (file: string) => repo.fileAt(basis.baseSha, prototypePath(file));
+  const prototypeSource = {
+    read: async (file: string) => repo.fileAt(basis.baseSha, prototypePath(file)),
+    files: async () => repo.listFiles(basis.baseSha, 'prototype/uiux/'),
+  };
   const release = await heavy.acquire(`ci-night:${date}`, signal);
   const id = `night-${randomUUID()}`;
   let created = false;
@@ -204,7 +207,7 @@ export async function runNightCheck(options: NightOptions, date: string): Promis
             if (actual === undefined) throw new Error(`${screen}: 화면 스크린샷이 없습니다.`);
             const app = decodePng(await evidence.file(actual));
             // 기준 이미지는 고정한 main의 HTML을 Runner가 렌더해 만든다. 단계 출력이 기준을 바꿀 수 없다(원칙 A, 결정 8).
-            const expected = decodePng(await baselineImage(home, basis.baseSha, screen, target, readPrototype, options.renderBaseline, signal));
+            const expected = decodePng(await baselineImage(home, basis.baseSha, screen, target, prototypeSource, options.renderBaseline, signal));
             const diff = compareImages(app, expected);
             result.screens.push({ name: screen, status: diff.sizeMatch && diff.diffPixels === 0 ? 'same' : 'diff', ratio: diff.ratio });
           } catch (error) {

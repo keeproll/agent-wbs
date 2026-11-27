@@ -1,11 +1,13 @@
 // 조정자 결정 8: 화면 비교 기준 이미지는 main의 prototype/uiux HTML을 Runner 소유 렌더러가 직접 만든다.
-import { lstat, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, test } from 'vitest';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { afterEach, beforeEach, expect, test } from 'vitest';
 import { parsePipeline } from '../../src/ci/pipeline.ts';
 import { HeavySemaphore } from '../../src/resources/heavy.ts';
 import { runNightCheck } from '../../src/ci/night/run.ts';
-import { BASELINE_RENDER, checkBaselineFont, createPlaywrightRenderer, type BaselineRenderer, type RenderRequest } from '../../src/ci/night/baseline.ts';
+import { BASELINE_RENDER, NETWORK_DENY_ARGS, checkBaselineFont, createPlaywrightRenderer, type BaselineRenderer, type ChromiumLike, type RenderRequest } from '../../src/ci/night/baseline.ts';
 import { commit, definition, file, git } from './int-fixture.ts';
 import { ciFixture } from './night-fixture.ts';
 import { png } from './png.ts';
@@ -152,26 +154,30 @@ test('기준 렌더가 실패하거나 렌더러가 없으면 비교 불가로 �
 function fakeChromium(options: { ready?: boolean; fontInstalled?: boolean; failClick?: string } = {}) {
   const log: string[] = [];
   const files: Record<string, string> = { 'prototype/uiux/Main.dc.html': '<html></html>', 'prototype/uiux/app.css': 'body{}' };
-  type Handler = (route: { request: () => { url: () => string }; fulfill: (r: { status: number; body: Buffer; contentType: string }) => Promise<void>; abort: () => Promise<void> }) => Promise<void>;
+  type Handler = (route: { request: () => { url: () => string }; continue: () => Promise<void>; abort: () => Promise<void> }) => Promise<void>;
   let handler: Handler | undefined;
   const pageListeners: ((p: { close: () => Promise<void> }) => unknown)[] = [];
+  const request = async (u: string) => handler?.({ request: () => ({ url: () => u }),
+    continue: async () => { log.push(`continue ${u}`); }, abort: async () => { log.push(`abort ${u}`); } });
+  const disk: { root: string; html: string | null; css: string | null; wrapper: string | null } = { root: '', html: null, css: null, wrapper: null };
+  let launchOptions: { args: string[]; executablePath?: string } | null = null;
   const page = {
-    route: async () => { log.push('page.route'); },
     goto: async (url: string) => {
       log.push(`goto ${url}`);
-      for (const u of ['http://baseline.invalid/prototype/uiux/app.css', 'https://cdn.example.com/prototype/uiux/app.css', 'http://baseline.invalid/src/secret.ts']) {
-        await handler?.({ request: () => ({ url: () => u }),
-          fulfill: async r => { log.push(`fulfill ${u} ${r.contentType} ${r.body.toString()}`); },
-          abort: async () => { log.push(`abort ${u}`); } });
-      }
+      const path = fileURLToPath(url.split('#')[0] ?? '');
+      disk.root = path.slice(0, path.indexOf('/prototype/uiux/'));
+      // 렌더러가 main 파일을 Runner 소유 폴더에 꺼낸 뒤 file://로 여는지 본다.
+      disk.html = await readFile(path, 'utf8').catch(() => null);
+      disk.css = await readFile(join(disk.root, 'prototype/uiux/app.css'), 'utf8').catch(() => null);
+      if (launchOptions?.executablePath) disk.wrapper = await readFile(launchOptions.executablePath, 'utf8').catch(() => null);
+      for (const u of [pathToFileURL(join(disk.root, 'prototype/uiux/app.css')).href, 'file:///etc/passwd', `${pathToFileURL(disk.root).href}-other/x.css`, 'https://cdn.example.com/x.css', 'http://127.0.0.1:9/x']) await request(u);
     },
     click: async (selector: string, o: Record<string, unknown>) => {
       log.push(`click ${selector} ${JSON.stringify(o)}`);
       if (selector === options.failClick) throw new Error('Timeout 10000ms exceeded');
       if (selector === '#popup') {
         // 새 창: 컨텍스트 가로채기가 첫 요청을 받고, 창은 바로 닫혀야 한다.
-        await handler?.({ request: () => ({ url: () => 'http://127.0.0.1:43387/popup' }),
-          fulfill: async () => { log.push('fulfill popup'); }, abort: async () => { log.push('abort popup'); } });
+        await request('http://127.0.0.1:43387/popup');
         const popup = { close: async () => { log.push('popup closed'); } };
         for (const listener of pageListeners) await listener(popup);
       }
@@ -185,54 +191,83 @@ function fakeChromium(options: { ready?: boolean; fontInstalled?: boolean; failC
     evaluate: async (_script: unknown, arg?: unknown) => { log.push(`evaluate ${JSON.stringify(arg ?? null)}`); return arg === undefined ? undefined : options.fontInstalled !== false; },
     screenshot: async (o: Record<string, unknown>) => { log.push(`shot ${JSON.stringify(o)}`); return red; },
   };
-  const chromium = { launch: async () => ({
-    newContext: async (o: Record<string, unknown>) => {
-      log.push(`context ${JSON.stringify(o)}`);
-      return { newPage: async () => page, close: async () => undefined,
-        route: async (_: string, h: Handler) => { log.push('context.route'); handler = h; },
-        routeWebSocket: async () => { log.push('context.routeWebSocket'); },
-        on: (event: string, listener: (p: { close: () => Promise<void> }) => unknown) => { log.push(`context.on ${event}`); if (event === 'page') pageListeners.push(listener); } };
-    },
-    close: async () => { log.push('close'); },
-  }) };
-  // 렌더러 스스로도 경로를 거른다. read가 무엇이든 내주더라도 prototype/uiux 밖은 막아야 한다.
-  const request = { entry: 'prototype/uiux/Main.dc.html', route: '#wbs', ready: '[data-screen=wbs]', settings: BASELINE_RENDER,
-    read: async (path: string) => Buffer.from(files[path] ?? `leaked ${path}`) };
-  return { log, chromium, request };
+  const chromium = { executablePath: () => "/opt/chrome it's/chrome", launch: async (o: { args: string[]; executablePath?: string }) => {
+    launchOptions = o; log.push(`launch ${JSON.stringify(o.args)}`);
+    return {
+      newContext: async (c: Record<string, unknown>) => {
+        log.push(`context ${JSON.stringify(c)}`);
+        return { newPage: async () => page, close: async () => undefined,
+          route: async (_: string, h: Handler) => { log.push('context.route'); handler = h; },
+          routeWebSocket: async () => { log.push('context.routeWebSocket'); },
+          on: (event: string, listener: (p: { close: () => Promise<void> }) => unknown) => { log.push(`context.on ${event}`); if (event === 'page') pageListeners.push(listener); } };
+      },
+      close: async () => { log.push('close'); },
+    };
+  } };
+  const req = { entry: 'prototype/uiux/Main.dc.html', route: '#wbs', ready: '[data-screen=wbs]', settings: BASELINE_RENDER,
+    files: async () => Object.keys(files), read: async (path: string) => Buffer.from(files[path] ?? `leaked ${path}`) };
+  return { log, chromium, request: req, disk, launch: () => launchOptions };
 }
+let work = '';
+beforeEach(async () => { work = await mkdtemp(join(tmpdir(), 'awbs-render-unit-')); });
+afterEach(async () => { await rm(work, { recursive: true, force: true }); });
+const render = (chromium: ChromiumLike, isolation: 'namespace' | 'proxy' = 'namespace') => createPlaywrightRenderer(chromium, { isolation, workDir: work });
 const WAIT = `wait [data-screen=wbs] ${JSON.stringify({ state: 'visible', timeout: 10_000 })}`;
 
-test('Playwright 렌더러는 라우트 URL로 열고 준비 선택자가 보일 때까지 기다린 뒤, main 파일만 내보내며 고정 설정으로 찍는다', async () => {
-  const { log, chromium, request } = fakeChromium();
-  expect(await createPlaywrightRenderer(chromium)(request)).toBe(red);
+test('렌더러는 네트워크 없는 브라우저(네임스페이스 래퍼·차단 인자)로 main 파일을 file://로 열고, 준비 선택자를 기다려 고정 설정으로 찍는다', async () => {
+  const { log, chromium, request, disk, launch } = fakeChromium();
+  expect(await render(chromium)(request)).toBe(red);
+  expect(launch()?.args).toEqual([...NETWORK_DENY_ARGS]);
+  expect(NETWORK_DENY_ARGS).toEqual(expect.arrayContaining(['--proxy-server=socks5://127.0.0.1:9', '--proxy-bypass-list=<-loopback>', '--host-resolver-rules=MAP * ~NOTFOUND']));
+  expect(NETWORK_DENY_ARGS.join(' ')).not.toContain('EXCLUDE');
+  // 래퍼는 사용자 네트워크 네임스페이스 안에서 원래 Chromium을 실행한다(경로는 셸 따옴표로 감싼다).
+  expect(disk.wrapper).toBe(`#!/bin/sh\nexec unshare --user --map-current-user --net -- '/opt/chrome it'\\''s/chrome' "$@"\n`);
+  expect(disk.html).toBe('<html></html>');
+  expect(disk.css).toBe('body{}');
+  expect(disk.root.startsWith(work)).toBe(true);
+  expect(log).toContain(`goto ${pathToFileURL(join(disk.root, 'prototype/uiux/Main.dc.html')).href}#wbs`);
   expect(log).toContain(`context ${JSON.stringify({ viewport: BASELINE_RENDER.viewport, deviceScaleFactor: 1, locale: 'ko-KR', timezoneId: 'Asia/Seoul', reducedMotion: 'reduce', javaScriptEnabled: true, serviceWorkers: 'block', acceptDownloads: false })}`);
-  // 가로채기는 페이지가 아니라 컨텍스트 전체에 설치한다(새 창의 첫 요청까지 막음). 페이지를 만들기 전에 설치한다.
-  expect(log).toContain('context.route');
-  expect(log).not.toContain('page.route');
-  expect(log.indexOf('context.route')).toBeLessThan(log.indexOf('goto http://baseline.invalid/prototype/uiux/Main.dc.html#wbs'));
+  // 2차 방어: 컨텍스트 가로채기는 그 폴더의 file://만 통과시킨다.
+  expect(log.indexOf('context.route')).toBeLessThan(log.findIndex(l => l.startsWith('goto')));
+  expect(log).toContain(`continue ${pathToFileURL(join(disk.root, 'prototype/uiux/app.css')).href}`);
+  expect(log).toContain('abort file:///etc/passwd');
+  expect(log).toContain(`abort ${pathToFileURL(disk.root).href}-other/x.css`);
+  expect(log).toContain('abort https://cdn.example.com/x.css');
+  expect(log).toContain('abort http://127.0.0.1:9/x');
   expect(log).toContain('context.routeWebSocket');
-  expect(log).toContain('goto http://baseline.invalid/prototype/uiux/Main.dc.html#wbs');
-  expect(log).toContain('fulfill http://baseline.invalid/prototype/uiux/app.css text/css body{}');
-  expect(log).toContain('abort https://cdn.example.com/prototype/uiux/app.css');
-  expect(log).toContain('abort http://baseline.invalid/src/secret.ts');
   expect(log).toContain(WAIT);
   expect(log.some(l => l.startsWith('style') && l.includes(BASELINE_RENDER.font))).toBe(true);
   expect(log).toContain(`evaluate ${JSON.stringify(BASELINE_RENDER.font)}`);
   expect(log.indexOf(WAIT)).toBeLessThan(log.findIndex(l => l.startsWith('shot')));
   expect(log).toContain(`shot ${JSON.stringify({ type: 'png', fullPage: false, animations: 'disabled', caret: 'hide' })}`);
   expect(log.at(-1)).toBe('close');
+  // 끝나면 프로토타입 사본과 래퍼를 지운다.
+  expect(await readdir(work)).toEqual([]);
+});
+
+test('네임스페이스를 쓸 수 없으면 래퍼 없이 차단 인자만으로 띄운다', async () => {
+  const { chromium, request, launch } = fakeChromium();
+  await render(chromium, 'proxy')(request);
+  expect(launch()).toEqual({ args: [...NETWORK_DENY_ARGS] });
+});
+
+test('prototype/uiux 밖의 파일이 목록에 있으면 브라우저를 띄우지 않고 실패한다', async () => {
+  const { log, chromium, request } = fakeChromium();
+  await expect(render(chromium)({ ...request, files: async () => ['prototype/uiux/Main.dc.html', 'src/secret.ts'] })).rejects.toThrow('prototype/uiux/');
+  expect(log.some(l => l.startsWith('launch'))).toBe(false);
+  expect(await readdir(work)).toEqual([]);
 });
 
 test('준비 선택자가 나타나지 않으면(라우트로 열 수 없는 화면) 렌더 실패다', async () => {
   const { log, chromium, request } = fakeChromium({ ready: false });
-  await expect(createPlaywrightRenderer(chromium)(request)).rejects.toThrow('준비 선택자 [data-screen=wbs]');
+  await expect(render(chromium)(request)).rejects.toThrow('준비 선택자 [data-screen=wbs]');
   expect(log.some(l => l.startsWith('shot'))).toBe(false);
   expect(log.at(-1)).toBe('close');
 });
 
 test('고정 글꼴이 설치되어 있지 않으면 렌더 실패(비교 불가)다', async () => {
   const { log, chromium, request } = fakeChromium({ fontInstalled: false });
-  await expect(createPlaywrightRenderer(chromium)(request)).rejects.toThrow('고정 글꼴 Noto Sans KR');
+  await expect(render(chromium)(request)).rejects.toThrow('고정 글꼴 Noto Sans KR');
   expect(log.some(l => l.startsWith('shot'))).toBe(false);
 });
 
@@ -250,8 +285,8 @@ test('준비 점검용 글꼴 확인은 fontconfig로 고정 글꼴 설치 여�
 test('렌더러는 정의한 조작 단계를 순서대로 한 뒤 준비 선택자를 기다려 찍는다', async () => {
   const { log, chromium, request } = fakeChromium();
   const steps = [{ click: 'nav [data-nav=ci]' }, { waitFor: '.ci-tabs' }, { setViewport: { width: 390, height: 844 } }];
-  expect(await createPlaywrightRenderer(chromium)({ ...request, route: '', steps })).toBe(red);
-  const order = ['goto http://baseline.invalid/prototype/uiux/Main.dc.html', `click nav [data-nav=ci] ${JSON.stringify({ timeout: 10_000 })}`,
+  expect(await render(chromium)({ ...request, route: '', steps })).toBe(red);
+  const order = [log.find(l => l.startsWith('goto ')) ?? 'goto', `click nav [data-nav=ci] ${JSON.stringify({ timeout: 10_000 })}`,
     `wait .ci-tabs ${JSON.stringify({ state: 'visible', timeout: 10_000 })}`, `viewport ${JSON.stringify({ width: 390, height: 844 })}`, WAIT];
   expect(order.map(line => log.indexOf(line))).toEqual([...order.map(line => log.indexOf(line))].sort((a, b) => a - b));
   expect(order.every(line => log.includes(line))).toBe(true);
@@ -260,7 +295,7 @@ test('렌더러는 정의한 조작 단계를 순서대로 한 뒤 준비 선택
 
 test('조작 단계가 실패하면 렌더 실패(비교 불가)이고 찍지 않는다', async () => {
   const { log, chromium, request } = fakeChromium({ failClick: 'nav [data-nav=ci]' });
-  await expect(createPlaywrightRenderer(chromium)({ ...request, route: '', steps: [{ click: 'nav [data-nav=ci]' }] })).rejects.toThrow('조작 단계 1(click nav [data-nav=ci])');
+  await expect(render(chromium)({ ...request, route: '', steps: [{ click: 'nav [data-nav=ci]' }] })).rejects.toThrow('조작 단계 1(click nav [data-nav=ci])');
   expect(log.some(l => l.startsWith('shot'))).toBe(false);
   expect(log.at(-1)).toBe('close');
 });
@@ -281,8 +316,8 @@ test('조작 단계는 기준 이미지 보관 키에 들어가 바뀌면 다시
 
 test('새 창은 첫 요청부터 컨텍스트 가로채기로 막고 바로 닫는다', async () => {
   const { log, chromium, request } = fakeChromium();
-  await createPlaywrightRenderer(chromium)({ ...request, route: '', steps: [{ click: '#popup' }] });
-  expect(log).toContain('abort popup');
-  expect(log).not.toContain('fulfill popup');
+  await render(chromium)({ ...request, route: '', steps: [{ click: '#popup' }] });
+  expect(log).toContain('abort http://127.0.0.1:43387/popup');
+  expect(log).not.toContain('continue http://127.0.0.1:43387/popup');
   expect(log).toContain('popup closed');
 });

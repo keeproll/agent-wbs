@@ -754,6 +754,11 @@ export class GitRepository {
     return this.pipelineOf(sha(commit));
   }
 
+  /** ③ 기준 렌더: 고정한 커밋에서 prefix 아래 일반 파일 경로 목록. symlink·submodule은 넣지 않는다. */
+  async listFiles(commit: string, prefix: string): Promise<string[]> {
+    return (await this.tree(sha(commit))).filter((entry) => entry.path.startsWith(prefix) && ['100644', '100755'].includes(entry.mode)).map((entry) => entry.path);
+  }
+
   /** ③ 화면 비교 기준 이미지처럼, 고정한 커밋의 일반 파일 하나를 Git 객체에서 읽는다. 작업 폴더나 단계 출력은 보지 않는다. */
   async fileAt(commit: string, path: string): Promise<Buffer> {
     const entry = (await this.tree(sha(commit))).find((value) => value.path === path);

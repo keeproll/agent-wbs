@@ -77,8 +77,10 @@ Runner는 ③④의 각 단계 명령에 아래 환경 변수를 준다.
 
 - 보고서는 없어도 된다. 없으면 종료 코드만으로 판정한다.
 - 보고서를 쓴다면 `nonce`에 이번 시도의 `AWBS_REPORT_NONCE`를 그대로 적는다. 없거나 다르면 형식 오류이고 그 단계는 실패다(재리뷰 원칙 3).
-  - Runner는 단계를 시작하기 전에 같은 단계·시도의 옛 보고서 파일을 지운다(링크는 따라가지 않고 링크 자체를 지운다).
-  - 왜: 중단된 야간 점검은 같은 실행 ID로 재개한다. 예전 보고서가 남아 있으면 이번 측정이 없는데도 통과할 수 있다.
+  - Runner는 시도마다 새 무작위 경로를 주고, 그 경로의 보고서만 nonce를 확인해 읽는다.
+  - 옛 보고서는 지우지 않는다. 이번 시도의 경로는 새 무작위 이름이라 지울 것이 없다.
+    - 왜: 이름 앞부분으로 고르면 `a-1`과 `a`처럼 이름이 겹치는 다른 단계의 근거를 지울 수 있다(3차 리뷰). 옛 파일은 실행 폴더 보존 정책(30일)으로 정리한다.
+  - 왜 새 경로와 nonce인가: 중단된 야간 점검은 같은 실행 ID로 재개한다. 예전 보고서를 읽으면 이번 측정이 없는데도 통과할 수 있다.
 - 최상위 항목은 `nonce`와 아래 넷만 쓸 수 있다. 다른 항목이 있으면 형식 오류이고 그 단계는 실패다.
 - 크기는 4 MiB 이하여야 한다.
 
@@ -194,13 +196,29 @@ Runner는 ③④의 각 단계 명령에 아래 환경 변수를 준다.
     - 글꼴 `Noto Sans KR`(CSS로 모든 요소에 강제)
     - 언어 `ko-KR`, 시간대 `Asia/Seoul`, 애니메이션·커서 끔
     - 왜: 같은 main이면 언제 렌더해도 같은 기준이 나와야 한다.
-  - 렌더러의 네트워크는 기본 거부다(재리뷰 원칙 2).
-    - 가로채기를 페이지가 아니라 브라우저 컨텍스트 전체에, 페이지를 만들기 전에 설치한다. 그래서 새 창(`target=_blank`, `window.open`)의 첫 요청도 막힌다.
-    - 허용 출처의 main `prototype/uiux/` 파일만 응답하고, 그 밖의 요청(CDN, 외부 글꼴·CSS·이미지, fetch)은 모두 막는다.
-    - WebSocket은 모두 닫는다. 서비스 워커는 막는다(서비스 워커가 가로챈 요청은 컨텍스트 가로채기를 거치지 않는다). 다운로드는 받지 않는다.
-    - 첫 페이지 외에 열린 창은 바로 닫는다.
-    - 왜: 네트워크에서 받은 글꼴·스크립트가 바뀌면 같은 main이라도 기준이 달라지고, 기준 렌더가 바깥에 접속해서도 안 된다.
-    - 실제 Chromium 시험(`ci-night-chromium`)으로 확인한다. Runner에 Playwright가 없어 지금은 이 PC의 agent-wbs 웹 앱 설치본을 쓰고, 없으면 건너뛴다.
+  - 렌더러 브라우저는 네트워크가 없는 상태로 띄운다(3차 리뷰, 조정자 지시).
+    - 왜: 페이지 안 가로채기로 하나씩 막으면 끝이 없다. 예를 들어 blob Worker 안의 WebSocket은 Playwright의 가로채기를 거치지 않았다. 소켓 자체가 바깥에 닿지 않아야 한다.
+    - 1순위 `namespace`: 사용자 네트워크 네임스페이스(`unshare --user --map-current-user --net`, root 불필요) 안에서 Chromium을 띄운다.
+      - 그 안에는 꺼진 loopback 하나뿐이라 이 PC의 다른 서비스를 포함해 어디에도 접속할 수 없다.
+      - Runner가 작업 폴더에 작은 실행 래퍼(`chromium-netns.sh`)를 만들어 Playwright의 `executablePath`로 넘긴다. Playwright는 파이프로 브라우저와 이야기하므로 네트워크가 없어도 조작할 수 있다.
+      - `detectNetworkIsolation()`이 실제로 네임스페이스를 만들어 보고 쓸 수 있는지 정한다. 이 개발 PC(WSL2, util-linux 2.39.3)에서는 된다.
+    - 2순위 `proxy`(네임스페이스를 못 쓸 때): 실행 인자로 모든 소켓을 막는다.
+    - 두 방식 모두 아래 차단 인자(`NETWORK_DENY_ARGS`)를 붙인다.
+      - `--proxy-server=socks5://127.0.0.1:9`: 모든 요청을 죽은 주소(discard 포트)의 프록시로 보낸다.
+      - `--proxy-bypass-list=<-loopback>`: loopback도 프록시를 거치게 한다(기본 우회를 끈다).
+      - `--host-resolver-rules=MAP * ~NOTFOUND`: localhost를 포함한 모든 이름 해석을 실패시킨다(EXCLUDE 없음).
+      - `--force-webrtc-ip-handling-policy=disable_non_proxied_udp`: WebRTC가 프록시를 거치지 않는 UDP를 쓰지 못한다.
+      - 백그라운드 통신 끄기(`--disable-background-networking`, `--disable-component-update`, `--dns-prefetch-disable`, `--no-pings`)
+    - 프로토타입은 고정한 main의 `prototype/uiux/` 파일을 Runner 소유 작업 폴더(`<AWBS_HOME>/ci/render/<무작위>/`)에 꺼내 `file://`로만 연다. 끝나면 지운다.
+    - 2차 방어: 컨텍스트 가로채기(그 폴더의 `file://`만 통과, 나머지 모두 차단), WebSocket 닫기, 서비스 워커·다운로드 차단, 새 창 바로 닫기.
+    - 실제 Chromium 시험(`ci-night-chromium`)으로 확인한다.
+      - 페이지·Worker·SharedWorker의 WebSocket, WebRTC(STUN·TURN), fetch keepalive, EventSource, sendBeacon, 새 창, `window.open`, 외부 CSS·이미지·글꼴이 두 방식 모두 접속 0건이다.
+      - 대조 시험: 같은 프로토타입을 보호 없이 띄우면 실제로 접속이 기록된다. 시험 장치가 누출을 잡는다는 증거다.
+      - 겹마다 따로 시험한다. 네임스페이스 래퍼만, 차단 인자만, 그 안의 프록시 쌍만, 이름 해석 차단만으로도 각각 접속 0건이다.
+        - 왜: 여러 겹이 함께 있으면 한 겹이 빠져도 다른 겹이 가려 시험이 알아채지 못한다.
+      - blob SharedWorker는 `file://` 문서(불투명 출처)에서 시작되지 않는다. 렌더러도 `file://`로 열므로 같은 이유로 막힌다.
+      - 리뷰어 방식(관측용 프록시를 브라우저에 끼워 넣음)으로도 네임스페이스 안의 Worker WebSocket은 닿지 않는다.
+      - Runner에 Playwright가 없어 지금은 이 PC의 agent-wbs 웹 앱 설치본을 쓰고, 없으면 건너뛴다.
   - 만든 기준 이미지는 `<AWBS_HOME>/ci/baselines/<main SHA>/`에 보관한다. 같은 main이면 다시 렌더하지 않는다.
     - 보관본은 링크를 따라가지 않고 읽는다. 손상됐으면 다시 렌더한다.
   - 렌더가 실패하거나 렌더러가 연결되지 않았으면 그 화면은 `missing`(비교 불가)이고 실패다.
