@@ -111,3 +111,39 @@ test('P2-1 채울 수 없는 행: 순번이 생기기 전에 지워진 행의 �
     expect((await db.query("select data->'record_no' no from global_log where row_id='30000000-0000-4000-8000-000000000003'")).rows).toEqual([{ no: 0 }]);
   } finally { await db.query('rollback'); db.release(); }
 });
+
+test('fix3(리뷰 4차 P2 재현): 0037 전에 한 트랜잭션으로 함께 만든 정기 보고서는 업그레이드 뒤에도 기간 끝이 늦은 보고서가 최신이다', async () => {
+  const old = createPool(url('reports'), { onError: () => undefined });
+  const folder = await mkdtemp(join(tmpdir(), 'awbs-latest-reports-'));
+  try {
+    await recreateTestDatabase(url('reports'));
+    // 0036까지만 적용한 DB(0037 전).
+    const source = fileURLToPath(new URL('../../../packages/db/migrations/', import.meta.url));
+    await cp(source, folder, { recursive: true });
+    const journal = JSON.parse(await readFile(join(source, 'meta/_journal.json'), 'utf8')) as { entries: { idx: number }[] };
+    await writeFile(join(folder, 'meta/_journal.json'), JSON.stringify({ ...journal, entries: journal.entries.filter(e => e.idx <= 36) }));
+    await runMigrations(old, folder);
+    await seedSystem(old);
+    const project = (await old.query<{ id: string }>("insert into projects(name,repo_url,repo_owner,repo_name,lead_instruction,phase) values('fix3','','','','','active') returning id")).rows[0]?.id;
+    const recipient = (await old.query<{ id: string }>("insert into mail_recipients(name,email,view,pdf,active,daily,weekly) values('fix3','fix3@example.com','int',false,true,true,true) returning id")).rows[0]?.id ?? '';
+    const snapshot = { done: [], summary: { forecast: null } };
+    // 서버가 꺼진 동안의 일간 보고서 보충처럼 한 트랜잭션에서 같은 생성 시각으로 만든다. id는 기간 끝과 반대 순서로 준다.
+    const db = await old.connect();
+    try {
+      await db.query('begin');
+      for (const [id, key, day] of [['ffffffff-0000-4000-8000-000000000001', 'RPT-D-261125', '2026-11-25'], ['10000000-0000-4000-8000-000000000002', 'RPT-D-261126', '2026-11-26']] as const) {
+        await db.query(`insert into reports(id,project_id,report_key,kind,"from","to",snapshot,generated_at,reason) values($1,$2,$3,'daily',$4,$4,$5,'2026-11-27T10:00:00Z','test')`, [id, project, key, day, snapshot]);
+      }
+      await db.query('commit');
+    } finally { db.release(); }
+    await runMigrations(old);
+    expect((await old.query('select report_key from reports order by record_no')).rows).toEqual([{ report_key: 'RPT-D-261125' }, { report_key: 'RPT-D-261126' }]);
+    const client = await old.connect();
+    try {
+      await client.query('begin');
+      const queued = await testRecipient(client, recipient);
+      expect((await client.query('select r.report_key from mail_outbox m join reports r on r.id=m.report where m.id=$1', [queued.ids[0]])).rows).toEqual([{ report_key: 'RPT-D-261126' }]);
+      await client.query('rollback');
+    } finally { client.release(); }
+  } finally { await old.end(); await rm(folder, { recursive: true, force: true }); }
+}, 120_000);

@@ -27,7 +27,7 @@ EXCEPTION WHEN OTHERS THEN
   RAISE;
 END $$;
 --> statement-breakpoint
--- 2) M6 자체 표 3개에 저장 순번(record_no)을 더한다. 기존 행은 지금까지의 정렬 순서(시각·id)대로 번호를 매긴다.
+-- 2) M6 자체 표 3개에 저장 순번(record_no)을 더한다. 기존 행은 지금까지의 「최신」 조회와 같은 정렬 순서대로 번호를 매긴다.
 --    - notify_outbox: 최근 연결 테스트 선택(설정 켜기의 근거)과 발송 순서.
 --    - reports: 메일 테스트 발송의 「최신 보고서」.
 --    - design_drifts: 같은 항목의 최신 불일치.
@@ -35,7 +35,10 @@ DO $$ DECLARE t text; ordering text; old_role text := current_setting('session_r
   PERFORM set_config('session_replication_role','replica',true);
   FOREACH t IN ARRAY ARRAY['notify_outbox','reports','design_drifts'] LOOP
     EXECUTE format('ALTER TABLE public.%I ADD COLUMN record_no bigserial NOT NULL',t);
-    ordering := CASE WHEN t='reports' THEN 'generated_at,created_at,id' ELSE 'created_at,id' END;
+    -- reports는 fix2 전 「최신 보고서」 조회와 같은 순서(generated_at → 기간 끝 "to" → id)로 번호를 매긴다(fix3, Codex 리뷰 4차 P2).
+    -- 왜: 서버가 꺼진 동안의 정기 보고서는 한 트랜잭션에서 같은 생성 시각·등록 시각으로 함께 만들어진다. 그때 기간 끝이 늦은 보고서가 최신이다.
+    --   생성 시각과 기간 끝까지 같으면 id로 정해 늘 같은 결과가 나오게 한다(업그레이드 전후 선택이 같다).
+    ordering := CASE WHEN t='reports' THEN 'generated_at,"to",id' ELSE 'created_at,id' END;
     EXECUTE format('WITH ordered AS (SELECT id,row_number() OVER (ORDER BY %s) n FROM public.%I) UPDATE public.%I r SET record_no=o.n FROM ordered o WHERE o.id=r.id',ordering,t,t);
     EXECUTE format('SELECT setval(%L,coalesce((SELECT max(record_no) FROM public.%I),1),EXISTS(SELECT 1 FROM public.%I))','public.'||t||'_record_no_seq',t,t);
     EXECUTE format('ALTER TABLE public.%I ADD CONSTRAINT %I UNIQUE(record_no)',t,t||'_record_no_unique');
