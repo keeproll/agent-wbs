@@ -83,7 +83,7 @@ describe('화면 비교', () => {
 
   test('PNG가 아니거나 손상되면 거부한다', () => {
     expect(() => decodePng(Buffer.from('not png'))).toThrow();
-    const broken = png(2, 2, red); broken[broken.length - 13] ^= 0xff;
+    const broken = png(2, 2, red); broken.writeUInt8((broken.at(-13) ?? 0) ^ 0xff, broken.length - 13);
     expect(() => decodePng(broken)).toThrow();
   });
 });

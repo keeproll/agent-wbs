@@ -10,6 +10,7 @@ import { flakyRate, parseHistory, recordHistory, type FlakyHistory } from './his
 import { judgeTimings, type TimingJudgement } from './perf.ts';
 import type { CiReport } from './report.ts';
 import { pruneEvidence } from './retention.ts';
+import { nightDue } from './schedule.ts';
 import { Evidence, excerpt, type CiExecute, type StepAttempt } from './steps.ts';
 import { judgeTests, type TestOutcome } from './tests.ts';
 import { compareImages, decodePng } from './visual.ts';
@@ -59,6 +60,11 @@ export async function readNightState(home: string): Promise<NightState> {
   if (value.version !== 1 || ![value.lastDate, value.runId].every(v => v === null || typeof v === 'string') ||
     !(value.lastPassSha === null || SHA.test(value.lastPassSha))) throw new Error('야간 상태가 손상되었습니다. 원본을 보존하고 확인하세요.');
   return { ...value, history: parseHistory(value.history) };
+}
+
+/** 지금 야간 점검을 시작해야 하면 그 날짜를 준다. 마지막으로 시작한 날짜는 Runner를 다시 켜도 남아 있다. */
+export async function dueNight(home: string, now: number, nightAt: string): Promise<string | null> {
+  return nightDue(now, nightAt, (await readNightState(home)).lastDate);
 }
 
 async function saveNightState(home: string, state: NightState): Promise<void> {

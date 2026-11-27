@@ -2,7 +2,7 @@ import { lstat, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
 import { HeavySemaphore } from '../../src/resources/heavy.ts';
-import { runNightCheck } from '../../src/ci/night/run.ts';
+import { dueNight, runNightCheck } from '../../src/ci/night/run.ts';
 import { ciFixture } from './night-fixture.ts';
 import { png } from './png.ts';
 import { file, commit, git } from './int-fixture.ts';
@@ -206,5 +206,17 @@ test('원인 후보는 main의 first-parent 커밋만 센다', async () => {
     expect(commits).toEqual([m1, merge]);
     expect(commits).not.toContain(side);
     expect(await f.repo.mainCommitsSince(side, m1)).toEqual([]);
+  } finally { await f.close(); }
+});
+
+test('이미 시작한 날짜는 다시 돌리지 않는다(Runner 재시작·시계 역행)', async () => {
+  const f = await ciFixture();
+  try {
+    expect(await dueNight(f.home, NOW, '02:00')).toBe('2026-11-27');
+    f.script(async () => ({ code: 0 }));
+    await runNightCheck(options(f), '2026-11-27');
+    expect(await dueNight(f.home, NOW, '02:00')).toBeNull();
+    expect(await dueNight(f.home, NOW - 2_300, '02:00')).toBeNull();
+    expect(await dueNight(f.home, NOW + 86_400_000, '02:00')).toBe('2026-11-28');
   } finally { await f.close(); }
 });

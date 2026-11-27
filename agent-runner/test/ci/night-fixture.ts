@@ -32,7 +32,7 @@ export async function ciFixture(stages: { night?: string[]; deploy?: string[] } 
   const reports: { kind: 'start' | 'update'; id?: string; key?: string; body: CiStartBody | CiUpdateBody }[] = [];
   let nextId = 1;
   const report: CiReport = {
-    start: async (body, key) => { reports.push({ kind: 'start', key, body }); return { id: `00000000-0000-4000-8000-${String(nextId++).padStart(12, '0')}`, runKey: 'CI-x' }; },
+    start: async (body, key) => { reports.push({ kind: 'start', ...(key !== undefined && { key }), body }); return { id: `00000000-0000-4000-8000-${String(nextId++).padStart(12, '0')}`, runKey: 'CI-x' }; },
     update: async (id, body) => { reports.push({ kind: 'update', id, body }); },
   };
   const home = join(f.root, 'home');

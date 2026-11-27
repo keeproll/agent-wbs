@@ -743,9 +743,21 @@ export class GitRepository {
     await this.git(['fetch', '--no-tags', '--no-recurse-submodules', '--upload-pack=git-upload-pack', '--', source,
       'refs/heads/main:refs/remotes/origin/main']);
     const baseSha = await this.remoteMain();
-    const entry = (await this.tree(baseSha)).find((value) => value.path === '.agentwbs/pipeline.yaml');
+    return { baseSha, ...await this.pipelineOf(baseSha) };
+  }
+
+  /** ④ 배포 확인: main을 가져온 뒤 그 커밋 자신의 정의를 읽는다(다시 빌드해도 같은 결과, G L486). */
+  async pipelineAt(commit: string): Promise<{ pipelineSha: string; source: string }> {
+    const { baseSha } = await this.mainPipeline();
+    // main에 들어간 커밋만 배포한다. 왜: 병합되지 않은 브랜치를 배포 확인으로 통과시키지 않는다.
+    if ((await this.taskBase(commit, baseSha).catch(() => null)) !== sha(commit)) throw new GitSafetyError('배포할 커밋이 main에 없습니다.');
+    return this.pipelineOf(sha(commit));
+  }
+
+  private async pipelineOf(commit: string): Promise<{ pipelineSha: string; source: string }> {
+    const entry = (await this.tree(commit)).find((value) => value.path === '.agentwbs/pipeline.yaml');
     if (!entry || !['100644', '100755'].includes(entry.mode)) throw new GitSafetyError('main의 pipeline.yaml은 일반 파일이어야 합니다.');
-    return { baseSha, pipelineSha: sha(entry.oid), source: (await this.blob(entry)).toString('utf8') };
+    return { pipelineSha: sha(entry.oid), source: (await this.blob(entry)).toString('utf8') };
   }
 
   /** ③ 원인 추적: from 뒤로 main에 들어온 first-parent 커밋(오래된 것부터). from이 조상이 아니면 빈 목록이다. */
