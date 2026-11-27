@@ -83,6 +83,14 @@ const isErrorBody = (value: unknown): value is ErrorBody => {
   return typeof error?.code === 'string' && typeof error.message === 'string';
 };
 
+/** 실패 응답 → ApiError. 본문이 계약 모양이 아니면 상태 코드로 코드를 정한다. */
+function errorOf(response: Response, parsed: unknown): ApiError {
+  const errorBody = isErrorBody(parsed) ? parsed : null;
+  const code = (errorBody?.error.code as ErrorCode | undefined) ?? FALLBACK_CODE[response.status] ?? (response.status >= 500 ? 'INTERNAL' : 'VALIDATION_FAILED');
+  const retryAfter = Number(response.headers.get('retry-after'));
+  return new ApiError(kindOf(response.status, code), response.status, code, errorBody, Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : null);
+}
+
 export type CallArgs<Id extends OperationId> = {
   signal?: AbortSignal;
   /** POST 재시도 때 같은 키를 다시 쓰려면 넘긴다. 없으면 새로 만든다. */
@@ -197,12 +205,56 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
         if (parseFailed || text === '') throw new ApiError('server', response.status, 'INTERNAL', null);
         return parsed as ResponseOf<typeof id>;
       }
-      const errorBody = isErrorBody(parsed) ? parsed : null;
-      const code = (errorBody?.error.code as ErrorCode | undefined) ?? FALLBACK_CODE[response.status] ?? (response.status >= 500 ? 'INTERNAL' : 'VALIDATION_FAILED');
-      const retryAfter = Number(response.headers.get('retry-after'));
-      const error = new ApiError(kindOf(response.status, code), response.status, code, errorBody, Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : null);
+      const error = errorOf(response, parsed);
       if (error.kind === 'unauthorized') options.onUnauthorized?.();
       throw error;
     },
   };
+}
+
+/** 파일 내려받기 기다림 한도. 서버 PDF 변환은 한 번에 30초까지라 그보다 넉넉하게 둔다(일반 요청은 10초). */
+export const FILE_TIMEOUT_MS = 60_000;
+
+/** `filename*=UTF-8''…`(RFC 5987: 한글 이름을 적는 방식)을 먼저, 없으면 `filename="…"`을 읽는다. */
+function fileNameOf(disposition: string | null): string | null {
+  if (!disposition) return null;
+  const star = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1];
+  if (star) { try { return decodeURIComponent(star); } catch { /* 아래 filename으로 */ } }
+  return /filename="([^"]+)"/i.exec(disposition)?.[1] ?? null;
+}
+
+/**
+ * 파일을 받아 실패를 화면에서 다룰 수 있게 한다(M6-02 보고서 PDF).
+ * 왜 `<a download>`만 쓰지 않나: 서버가 503(PDF 생성 실패)을 주면 브라우저가 오류 본문을 파일로 저장해 버린다.
+ * 받아서 성공이면 저장하고, 실패면 오류 막대(다시 시도·기간 분리 안내)를 보인다(G L49, UAT-REPORT-05).
+ */
+export async function downloadFile<Id extends FileOperationId>(
+  id: Id,
+  args: Parameters<typeof apiUrl<Id>>[1],
+  options: { fetch?: typeof globalThis.fetch; timeoutMs?: number; signal?: AbortSignal } = {},
+): Promise<{ blob: Blob; fileName: string | null }> {
+  const doFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
+  const controller = new AbortController();
+  const timer = setTimeout(() => { controller.abort(new DOMException('timeout', 'TimeoutError')); }, options.timeoutMs ?? FILE_TIMEOUT_MS);
+  const onAbort = () => { controller.abort(options.signal?.reason); };
+  options.signal?.addEventListener('abort', onAbort, { once: true });
+  try {
+    let response: Response;
+    let blob: Blob;
+    try {
+      response = await doFetch(apiUrl(id, args), { method: 'GET', credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
+      blob = await response.blob();
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      if (controller.signal.aborted) throw new ApiError('timeout', null, 'TIMEOUT', null);
+      throw new ApiError('network', null, 'NETWORK_ERROR', null);
+    }
+    if (response.ok) return { blob, fileName: fileNameOf(response.headers.get('content-disposition')) };
+    let parsed: unknown = null;
+    try { parsed = JSON.parse(await blob.text()); } catch { /* 계약 모양이 아닌 본문 */ }
+    throw errorOf(response, parsed);
+  } finally {
+    clearTimeout(timer);
+    options.signal?.removeEventListener('abort', onAbort);
+  }
 }

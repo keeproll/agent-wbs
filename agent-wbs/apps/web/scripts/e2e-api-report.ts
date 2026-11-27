@@ -9,8 +9,10 @@
  */
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { resolve } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
 const ROOT = resolve(import.meta.dirname, '../../..');
 const IMAGE = 'postgres:16-alpine@sha256:f2f98726820d0342055351c6e9d36e705f5bfffb3dd53ff556325114b08afb6d';
@@ -28,6 +30,7 @@ const freePort = () => new Promise<number>((done, fail) => {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 let api: ChildProcess | undefined;
+const home = mkdtempSync(join(tmpdir(), 'awbs-report-e2e-home-'));
 let exitCode = 1;
 try {
   execFileSync('docker', ['run', '-d', '--rm', '--name', name, '-e', 'POSTGRES_USER=awbs_owner', '-e', `POSTGRES_PASSWORD=${dbPassword}`,
@@ -45,6 +48,9 @@ try {
     TEST_DATABASE_URL: `postgres://awbs_owner:${dbPassword}@127.0.0.1:${String(dbPort)}/awbs_test_report`,
     AWBS_HOST: '127.0.0.2', AWBS_PORT: String(apiPort), AWBS_ALLOW_LAN: 'true',
     AWBS_ORIGIN: `http://127.0.0.1:${String(webPort)}`, LOG_LEVEL: 'warn',
+    // API가 쓰는 파일(Evidence·보고서 PDF, ~/.agentwbs/wbs)을 시험 전용 폴더에 둔다. 실제 사용자 폴더를 건드리지 않는다(M6-02).
+    // HOME을 바꾸면 Playwright가 브라우저를 못 찾으므로 원래 설치 위치를 알려 준다.
+    HOME: home, PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH ?? join(homedir(), '.cache', 'ms-playwright'),
   };
   const node = (args: string[], input?: string) => execFileSync('node', ['--conditions=awbs-source', ...args], { cwd: ROOT, env, input, encoding: 'utf8' });
   node(['packages/db/src/migrate-cli.ts']);
@@ -80,5 +86,6 @@ try {
 } finally {
   api?.kill('SIGTERM');
   spawnSync('docker', ['rm', '-f', name], { stdio: 'ignore' });
+  rmSync(home, { recursive: true, force: true });
   process.exitCode = exitCode;
 }

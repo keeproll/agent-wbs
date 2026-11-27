@@ -44531,6 +44531,8 @@
       "ReportSnapshot": {
         "type": "object",
         "required": [
+          "projectName",
+          "projectNameStatus",
           "summary",
           "issues",
           "series",
@@ -44545,6 +44547,23 @@
           "all"
         ],
         "properties": {
+          "projectName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "projectNameStatus": {
+            "enum": [
+              "snapshot",
+              "filled",
+              "unknown"
+            ]
+          },
           "summary": {
             "type": "object",
             "required": [

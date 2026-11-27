@@ -50,6 +50,8 @@ test('빈 DB와 0014·0016(master)·0017·0018·0019·0020·0021 단계 DB가 �
     '0021_20261127_project_followup', '0022_20261127_evidence_reference', '0023_20261127_project_observation_version', '0024_20261127_settings_followup', '0025_20261127_setting_versions',
     // M6-01 기간 말 재구성의 상태 기록(배정 번호 0036)
     '0036_20261127_report_state_log', '0037_20261127_report_state_log_settings',
+    // M6-02: 옛 보고서 스냅샷에 생성 시점 프로젝트 이름 채우기(데이터만 바꾼다)
+    '0047_20261127_report_project_name',
     '0053_20261127_design_ledger', '0054_20261127_design_display_keys']);
   const fresh = await database('fresh');
   await runMigrations(fresh);

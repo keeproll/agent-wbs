@@ -17,9 +17,10 @@ import { DATA_ROOT } from './reset/files.ts';
 import { registerResetRoutes } from './reset/routes.ts';
 import { registerDesignRoutes } from './design/routes.ts';
 import { registerReportRoutes } from './reports/routes.ts';
+import { registerReportPdfRoutes, type PdfOptions } from './pdf/routes.ts';
 
 export function buildApp(pool: Pool, logger: FastifyServerOptions['logger'] = false,
-  security: SecurityOptions = { origin: 'http://127.0.0.1:3100', lan: false }, execution: ExecutionOptions = {}): FastifyInstance {
+  security: SecurityOptions = { origin: 'http://127.0.0.1:3100', lan: false }, execution: ExecutionOptions = {}, pdf: PdfOptions = {}): FastifyInstance {
   const app = Fastify({
     logger,
     schemaController: { compilersFactory: { buildValidator } },
@@ -47,6 +48,7 @@ export function buildApp(pool: Pool, logger: FastifyServerOptions['logger'] = fa
   registerReportRoutes(app, pool); // M6-01
   // Evidence 저장·내보내기·파일 삭제가 같은 루트를 쓴다(M2 통합: M2-06 evidenceRoot와 M2-04 dataRoot 통일).
   registerResetRoutes(app, pool, execution.dataRoot ?? DATA_ROOT);
+  registerReportPdfRoutes(app, pool, execution.dataRoot ?? DATA_ROOT, pdf); // M6-02: PDF 파일도 같은 루트의 세대별 폴더에 둔다
 
   app.get('/health', (): HealthResponse => ({ status: 'ok' }));
 

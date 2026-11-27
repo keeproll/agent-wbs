@@ -4,11 +4,12 @@
  * 주소: `/report`(최신 보고서) · `/report/:reportId`(그 보고서) · `?kind=daily|weekly|custom`(목록 필터) · `?view=int|ext`(보기).
  * - 보고서 내용은 서버 스냅샷 그대로다. 열 때 다시 계산하지 않는다(G L373). 「생성 이후 변경」만 지금 기준이다.
  * - 정기 생성은 서버 worker가 한다(07:00 · 월 07:00 · 시작 때 누락분 보충). 원본의 「정기 생성 점검 (Mock)」 버튼은 두지 않는다.
- * - PDF 다운로드는 M6-02 서버 PDF, 메일 미리보기·보내기·발송 기록은 M6-03이 붙인다.
+ * - PDF 다운로드는 서버 PDF(M6-02)를 받아 저장한다. 실패하면 오류 막대에 다시 시도·기간 분리 안내를 보이고 본문은 그대로 둔다(G L49).
+ * - 문서 제목의 프로젝트 이름은 스냅샷 값이다(생성 시점 기록). 메일 미리보기·보내기·발송 기록은 M6-03이 붙인다.
  */
 import { useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
-import { seoulDay } from '@awbs/shared';
+import { reportProjectName, seoulDay } from '@awbs/shared';
 import { useApi } from '../../shared/api/ApiProvider.tsx';
 import { useAllPages } from '../../shared/api/allPages.ts';
 import { useApiQuery } from '../../shared/api/queries.ts';
@@ -17,7 +18,8 @@ import { Page } from '../../shared/layout/Page.tsx';
 import { useSave } from '../../shared/state/useSave.tsx';
 import { BusyButton } from '../../shared/ui/BusyButton.tsx';
 import { LoadError } from '../../shared/ui/LoadError.tsx';
-import { useTopBar } from '../../shared/ui/feedback.tsx';
+import { useErrorBar, useTopBar } from '../../shared/ui/feedback.tsx';
+import { ApiError, downloadFile } from '../../shared/api/client.ts';
 import { LINK } from '../../shared/links.ts';
 import {
   changedLabel, defaultView, docTitle, externalDoc, formProblem, internalDoc, KIND, lateLabel, pdfName, periodLabel, QUICK, quickRange, rowView,
@@ -30,10 +32,10 @@ const KINDS: readonly ('all' | ReportKind)[] = ['all', 'daily', 'weekly', 'custo
 const isKind = (v: string | null): v is ReportKind => v === 'daily' || v === 'weekly' || v === 'custom';
 
 export function ReportPage() {
-  return <MenuScreen menu="report">{(project) => ('id' in project ? <ReportBody projectId={project.id} projectName={project.name} /> : null)}</MenuScreen>;
+  return <MenuScreen menu="report">{(project) => ('id' in project ? <ReportBody projectId={project.id} /> : null)}</MenuScreen>;
 }
 
-function ReportBody({ projectId, projectName }: { projectId: string; projectName: string }) {
+function ReportBody({ projectId }: { projectId: string }) {
   const { reportId } = useParams();
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
@@ -97,7 +99,7 @@ function ReportBody({ projectId, projectName }: { projectId: string; projectName
               <p className="fhint" style={{ margin: 0 }}>일간 보고서는 매일 07:00, 주간 보고서는 매주 월요일 07:00에 자동으로 생성됩니다. 위에서 기간을 지정해 지금 바로 만들 수도 있습니다.</p>
             </section>
           )}
-          {selected && <ReportDocument key={selected.id} row={selected} projectName={projectName} view={defaultView(selected, picked)} onView={(v) => { setParam('view', v); }} />}
+          {selected && <ReportDocument key={selected.id} row={selected} view={defaultView(selected, picked)} onView={(v) => { setParam('view', v); }} />}
         </div>
       </div>
     </Page>
@@ -155,7 +157,7 @@ function Kpis({ items }: { items: Kpi[] }) {
   );
 }
 
-function ReportDocument({ row, projectName, view, onView }: { row: ReportRow; projectName: string; view: ReportView; onView: (v: ReportView) => void }) {
+function ReportDocument({ row, view, onView }: { row: ReportRow; view: ReportView; onView: (v: ReportView) => void }) {
   const doc = useApiQuery('getReport', { params: { reportId: row.id } }, { topics: ['report', 'schedule'], keepPrevious: false });
   useRefreshError(doc, '보고서 최신 내용 불러오기');
   if (doc.data === undefined && doc.isError) return <LoadError title="보고서" error={doc.error} retrying={doc.isFetching} onRetry={() => { void doc.refetch(); }} />;
@@ -174,13 +176,13 @@ function ReportDocument({ row, projectName, view, onView }: { row: ReportRow; pr
         )}
         <span className="muted" style={{ marginRight: 'auto' }} />
         {/* 서버 PDF(M6-02). 파일 이름은 G L405 예시 형식이다. */}
-        <a className="btn primary" href={`/api/reports/${encodeURIComponent(row.id)}/pdf?view=${view}`} download={pdfName(row.reportKey, view)}>PDF 다운로드</a>
+        <PdfButton row={row} view={view} />
       </div>
       {changed && <div className="banner warn rp-noprint" role="status"><div className="banner-b">{changed}</div></div>}
       <article className="rpt-doc" aria-label={`${row.reportKey} 보고서`}>
         <header className="rpt-h">
           <div className="rpt-kind">{KIND[row.kind].doc}</div>
-          <h2>{docTitle(projectName, row.kind, view)}</h2>
+          <h2>{docTitle(reportProjectName(d.snapshot), row.kind, view)}</h2>
           <div className="rpt-meta">
             <span>기간 <b className="mono">{periodLabel(row)}</b></span>
             <span>생성 <span className="mono">{formatDateTime(row.generatedAt)}</span> · {rowView(row).byL}</span>
@@ -195,6 +197,39 @@ function ReportDocument({ row, projectName, view, onView }: { row: ReportRow; pr
       </article>
     </>
   );
+}
+
+/**
+ * PDF 다운로드(UI-11D, P printReport L5000–5012 → 서버 PDF). 서버에서 받아 성공하면 파일로 저장한다.
+ * 실패하면 원본 오류 막대(P err pdf L6850)처럼 「PDF를 만들지 못했습니다」와 서버 안내(다시 시도·기간을 나눠 생성)를 보이고 「다시 시도」를 둔다.
+ * 보고서 본문은 그대로 볼 수 있다(G L49).
+ */
+function PdfButton({ row, view }: { row: ReportRow; view: ReportView }) {
+  const [busy, setBusy] = useState(false);
+  const errorBar = useErrorBar();
+  const [owner] = useState(() => Symbol('report-pdf'));
+  const name = pdfName(row.reportKey, view);
+  const download = async () => {
+    setBusy(true);
+    errorBar.clear(owner);
+    try {
+      const file = await downloadFile('getReportPdf', { params: { reportId: row.id }, query: { view } });
+      const url = URL.createObjectURL(file.blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = file.fileName ?? name;
+      document.body.append(a);
+      a.click();
+      a.remove();
+      setTimeout(() => { URL.revokeObjectURL(url); }, 10_000);
+    } catch (error) {
+      if (!(error instanceof ApiError)) throw error;
+      errorBar.show({ owner, error, target: `PDF 생성 (${name})`, failTitle: 'PDF를 만들지 못했습니다', retry: () => { void download(); } });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return <BusyButton busy={busy} busyLabel="PDF 만드는 중…" onClick={() => { void download(); }}>PDF 다운로드</BusyButton>;
 }
 
 /** 팀장용(UI-11B, P L2147–2224). 섹션 번호는 원본 화면 그대로다. */
