@@ -132,7 +132,7 @@ export async function saveSnapshot(db: PoolClient, body: DesignSnapshotInput, pr
     const comparison = compareDesign(item.contract, item.extracted, item.kind);
     const submitted = body.drifts.find(drift => drift.itemKey === item.itemKey);
     const current = (await db.query<{ id: string; resolution: Record<string, unknown> }>(`select id,resolution from design_drifts where project_id=$1 and item_key=$2 and status='open'
-      and coalesce(resolution->>'ref','main')=$3 order by created_at desc limit 1 for update`, [projectId, item.itemKey, ref])).rows[0];
+      and coalesce(resolution->>'ref','main')=$3 order by record_no desc limit 1 for update`, [projectId, item.itemKey, ref])).rows[0];
     if (!comparison.changed) {
       if (current && !await activeDesignApply(db, projectId, current.id)) await db.query("update design_drifts set status='done',compat=$3,resolution=resolution||$2::jsonb where id=$1", [current.id, JSON.stringify({ commit: body.commit, resultCommit: body.commit, resolvedBy: 'comparison', extracted: item.extracted }), DRIFT_COMPAT[comparison.compat]]);
       continue;

@@ -22,7 +22,7 @@ export async function testOf(db: Db, fp: string | null, id?: string) {
   return (await db.query<{ state: string; error: string | null; payload: NotifyPayload; at: string }>(
     `select state,error,payload,${iso('updated_at')} at from notify_outbox where kind='test'
      and epoch=(select epoch from system_state where id=1) and (($2::uuid is not null and id=$2) or ($2::uuid is null and payload->>'fingerprint'=$1))
-     order by created_at desc,id desc limit 1`, [fp, id ?? null])).rows[0] ?? null;
+     order by record_no desc limit 1`, [fp, id ?? null])).rows[0] ?? null;
 }
 
 export async function getTelegram(db: Db, testId?: string) {

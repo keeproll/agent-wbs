@@ -55,7 +55,7 @@ export async function processNotify(pool: Pool, epoch: number, now = new Date(),
       const row = await inEpoch(pool, epoch, async db => {
         const found = (await db.query<Delivery & { state: string }>(`select * from notify_outbox where epoch=$1 and ($3::uuid is null or id=$3)
           and ((state in ('queued','retry_wait') and (next_at is null or next_at<=$2)) or (state='sending' and updated_at<$2::timestamptz-interval '30 seconds'))
-          order by created_at,id for update skip locked limit 1`, [epoch, now, onlyId ?? null])).rows[0];
+          order by record_no for update skip locked limit 1`, [epoch, now, onlyId ?? null])).rows[0];
         if (!found) return null;
         const reason = await cancellation(db, found);
         if (reason) { await cancel(db, found, reason, now); return null; }

@@ -1271,6 +1271,8 @@ export const reports = pgTable(
   'reports',
   {
     ...row(),
+    // M6 통합 fix2(0037): 「최신」은 벽시계 대신 저장 순번으로 고른다.
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
     ...project(),
     report_key: text().notNull().unique(),
     kind: reportKind().notNull(),
@@ -1436,6 +1438,8 @@ export const notifyOutbox = pgTable(
   'notify_outbox',
   {
     ...row(),
+    // M6 통합 fix2(0037): 「최신」은 벽시계 대신 저장 순번으로 고른다.
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
     ...globalProject(),
     event: uuid().references(() => notifyEvents.id, { onDelete: 'restrict' }),
     delivery_id: uuid().notNull(),
@@ -1650,6 +1654,8 @@ export const designDrifts = pgTable(
   'design_drifts',
   {
     ...row(),
+    // M6 통합 fix2(0037): 「최신」은 벽시계 대신 저장 순번으로 고른다.
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
     ...project(),
     item_key: text().notNull(),
     kind: text().notNull(),

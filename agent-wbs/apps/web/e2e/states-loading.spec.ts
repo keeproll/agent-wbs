@@ -106,10 +106,20 @@ test('늦은 첫 응답: 0.2초 뒤 메뉴 배치 모양 skeleton → 응답 →
   await expect(skeleton).toBeVisible();
   // 보고서 배치: 위쪽 큰 카드 1 + 오른쪽 문서 카드 1(왼쪽 목록은 카드 아님)
   await expect(skeleton.locator('.sk-c.card')).toHaveCount(2);
+  // fix2(Codex 리뷰 3차 P3): 요청 개수는 응답을 풀기 전부터 1이라 「응답 처리 완료」의 근거가 아니다.
+  // 실제 응답 도착을 기다린 뒤, 앱 시계를 최소 유지 시간(0.3초)보다 넉넉히 감고, 비동기 처리가 예약한 앱 타이머를 16ms씩 제한된 횟수만 더 감는다.
+  const projectAnswered = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/project');
   gate.release();
-  await expect.poll(() => api.requests('GET /api/project').length).toBe(1);
+  await projectAnswered;
+  expect(api.requests('GET /api/project')).toHaveLength(1);
   await page.clock.runFor(400);
-  await expect(page.getByText(REPORT_BODY)).toBeVisible();
+  const body = page.getByText(REPORT_BODY);
+  let shown = false;
+  for (let step = 0; step < 16 && !shown; step++) {
+    shown = await body.waitFor({ timeout: 500 }).then(() => true, () => false);
+    if (!shown) await page.clock.runFor(16);
+  }
+  expect(shown).toBe(true);
   await expect(skeleton).toHaveCount(0);
 });
 
