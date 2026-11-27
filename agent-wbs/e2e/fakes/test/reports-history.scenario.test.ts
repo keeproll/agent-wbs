@@ -66,6 +66,16 @@ beforeAll(async () => {
 }, 60_000);
 afterAll(async () => { for (const close of closers.reverse()) await close(); });
 
+/** 벽시계(clock_timestamp)가 커밋 시계(log_clock)를 넘을 때까지 기다린다. 이 PC의 시계 역행(최대 2.3초) 뒤에는 커밋 시계가 앞서 있을 수 있다. */
+async function waitWallPastCommitClock() {
+  for (let i = 0; i < 100; i++) {
+    const ok = (await owner.query<{ ok: boolean }>('select coalesce((select t from log_clock where singleton) < clock_timestamp(), true) ok')).rows[0]?.ok;
+    if (ok) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error('커밋 시계가 5초 넘게 벽시계보다 앞서 있다');
+}
+
 describe('재리뷰 2 문제 1: 늦은 커밋', () => {
   test('T 전에 시작해 이력을 남겼지만 T 뒤에 커밋한 변경은 나중에 같은 T로 다시 만들어도 끼어들지 않는다(실제 생성 경로)', async () => {
     const app = buildApp(pool, false, { origin: 'http://127.0.0.1:3100', lan: false });
@@ -125,12 +135,20 @@ describe('재리뷰 2 문제 3: 알림·실행 PC 세션도 그 시점 값', () 
 
 describe('재리뷰 2 문제 4: 마이크로초', () => {
   test('경계가 변경의 커밋 값(커밋 시계·실제 커밋 시각 중 늦은 쪽) 1µs 뒤면 들어가고, 그 값과 같으면 빠진다', async () => {
-    await owner.query("update tasks set title='before-cutoff' where task_key='TASK-0008'");
-    await owner.query("update tasks set title='microsecond-cutoff' where task_key='TASK-0008'");
-    // 그 변경이 「T 전」이 되는 가장 이른 값 = 커밋 시계 값과 실제 커밋 시각 중 늦은 쪽(정리 뒤 commit_real)
-    await owner.query('select awbs_settle_commits()');
-    const stamp = (await owner.query<{ at: string }>(`select to_char(greatest(c.stamp,c.committed_at) at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') at from state_log l join commit_real c on c.xid=l.xid
-      where l.tbl='tasks' and l.data->>'title'='microsecond-cutoff'`)).rows[0]?.at ?? '';
+    // M6 통합 fix1(간헐 실패 수정): 이 PC는 약 32초마다 시계가 2.3초 뒤로 간다. 두 변경 사이에 시계가 뒤로 가면
+    // 앞 변경의 실제 커밋 시각이 뒤 변경의 경계 바로 앞(-1µs)보다 늦어져 셋째 단정의 전제가 깨진다. 전제가 성립할 때까지 다시 만든다(최대 4번).
+    const effective = (title: string) => owner.query<{ at: string }>(`select to_char(greatest(c.stamp,c.committed_at) at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') at from state_log l join commit_real c on c.xid=l.xid
+      where l.tbl='tasks' and l.data->>'title'=$1 order by l.seq desc limit 1`, [title]).then((r) => r.rows[0]?.at ?? '');
+    let stamp = '';
+    for (let tries = 0; tries < 4; tries++) {
+      await waitWallPastCommitClock();
+      await owner.query("update tasks set title='before-cutoff' where task_key='TASK-0008'");
+      await owner.query("update tasks set title='microsecond-cutoff' where task_key='TASK-0008'");
+      // 그 변경이 「T 전」이 되는 가장 이른 값 = 커밋 시계 값과 실제 커밋 시각 중 늦은 쪽(정리 뒤 commit_real)
+      await owner.query('select awbs_settle_commits()');
+      stamp = await effective('microsecond-cutoff');
+      if ((await effective('before-cutoff')) < micro(stamp, -1)) break;
+    }
     expect(titleOf((await capture(micro(stamp, 1))).log, 'TASK-0008')).toBe('microsecond-cutoff');
     expect(titleOf((await capture(stamp)).log, 'TASK-0008')).toBe('before-cutoff');
     expect(titleOf((await capture(micro(stamp, -1))).log, 'TASK-0008')).toBe('before-cutoff');
@@ -219,6 +237,9 @@ describe('재리뷰 3 문제 4: 대조 시험의 표 이름 인식', () => {
 
 describe('재리뷰 3 문제 1: 제약 트리거를 먼저 실행해도 실제 커밋 전 변경은 T에 들어가지 않는다', () => {
   test('앱 역할이 SET CONSTRAINTS ALL IMMEDIATE로 시계 값을 먼저 받고 T 뒤에 커밋해도 T 보고서에 없다', async () => {
+    // M6 통합 fix1(간헐 실패 수정): 시계가 뒤로 간 직후에는 커밋 시계가 벽시계보다 최대 2.3초 앞선다. 그때 매긴 시계 값은 벽시계로 잡은 T보다 커서
+    // 「시계 값은 T 전·실제 커밋은 T 뒤」 상황을 만들 수 없다. 벽시계가 커밋 시계를 넘을 때까지 기다린 뒤 시작한다(조건 대기).
+    await waitWallPastCommitClock();
     const early = await pool.connect();
     let t: string;
     try {
