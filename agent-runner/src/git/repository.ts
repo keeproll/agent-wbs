@@ -20,6 +20,18 @@ export function systemSshCommand(knownHosts: string): string {
   return `ssh -F /dev/null -o BatchMode=yes -o StrictHostKeyChecking=yes -o IdentityFile=none -o ForwardAgent=no -o GlobalKnownHostsFile=/dev/null -o UserKnownHostsFile=${quote(knownHosts)}`;
 }
 
+/** 중단 신호로 push를 끊었고, 그 push의 프로세스 그룹(git-remote-https 등 전송 하위 프로세스 포함)이 비었음을 확인했다. */
+export class GitPushAbortedError extends GitSafetyError {
+  override name = 'GitPushAbortedError';
+  constructor() { super('push를 중단했고 전송 프로세스가 모두 끝났음을 확인했습니다. 이미 원격에 닿은 갱신은 되돌리지 않습니다. 다음 push 전에 원격 브랜치를 다시 읽어 대조합니다.'); }
+}
+
+/** 중단 신호로 push를 끊었지만 전송 프로세스가 모두 끝났는지 확인하지 못했다. 원격 상태를 모른다. */
+export class GitPushUnknownError extends GitSafetyError {
+  override name = 'GitPushUnknownError';
+  constructor() { super('push를 중단했지만 전송 프로세스 종료를 확인하지 못해 원격 상태를 모릅니다. 다음 push 전에 원격 브랜치를 다시 읽어 대조합니다.'); }
+}
+
 export class GitCleanupError extends GitSafetyError {
   override name = 'GitCleanupError';
   readonly failures: CleanupFailure[];
@@ -190,20 +202,43 @@ async function runWithCode(cwd: string, args: string[], input?: Buffer | string,
         GIT_ALLOW_PROTOCOL: 'file:https', GIT_LFS_SKIP_SMUDGE: '1', ...extraEnv,
       },
       stdio: ['pipe', 'pipe', 'pipe'],
-      // 외부 쓰기(push) 중 작업이 중단되면 진행 중인 git을 끊는다. 원격 브랜치 갱신은 git 서버에서 원자적이다(전부 또는 없음).
-      ...(signal && { signal }),
+      // 중단할 수 있는 git(외부 쓰기인 push)은 자기 프로세스 그룹으로 띄운다. git이 띄우는 git-remote-https·git send-pack도 같은 그룹이다.
+      // 중단하면 그룹 전체를 끝내고(TERM → 짧은 대기 → KILL) 그룹이 비었음을 확인한 뒤에야 「중단됨」으로 끝낸다.
+      detached: signal !== undefined,
     });
     const output: Buffer[] = [];
+    let settled = false;
+    const settle = (fn: () => void) => { if (!settled) { settled = true; signal?.removeEventListener('abort', abort); fn(); } };
+    let leaderStart: Promise<string | null> = Promise.resolve(null);
+    const abort = () => {
+      if (settled) return;
+      settled = true;
+      void (async () => {
+        const pid = child.pid;
+        const start = await leaderStart;
+        const { terminateGroup } = await import('../exec/launches.ts');
+        const empty = pid !== undefined && start !== null && await terminateGroup(pid, start);
+        reject(empty ? new GitPushAbortedError() : new GitPushUnknownError());
+      })();
+    };
     // git 오류 원문에는 URL·인증 정보가 들어갈 수 있으므로 외부에 내보내지 않는다.
     child.stdout.on('data', (chunk: Buffer) => output.push(chunk));
     child.stderr.resume();
-    child.on('error', () => { reject(new GitSafetyError('git 명령을 실행할 수 없습니다.')); });
+    child.on('error', () => { settle(() => { reject(new GitSafetyError('git 명령을 실행할 수 없습니다.')); }); });
     child.on('close', (code) => {
-      if (code !== null && allowed.includes(code)) resolvePromise({ code, output: Buffer.concat(output) });
-      else reject(new GitSafetyError('git 작업이 실패했습니다. 저장소·커밋·도구 설치를 확인하세요.'));
+      settle(() => {
+        if (code !== null && allowed.includes(code)) resolvePromise({ code, output: Buffer.concat(output) });
+        else reject(new GitSafetyError('git 작업이 실패했습니다. 저장소·커밋·도구 설치를 확인하세요.'));
+      });
     });
     child.stdin.on('error', () => undefined);
     child.stdin.end(input);
+    if (signal) {
+      // 그룹 번호 재사용을 막으려고 leader의 시작 시각을 기록한다(그룹 정리는 그 뒤에 생긴 프로세스만 대상).
+      leaderStart = child.pid === undefined ? Promise.resolve(null) : import('../exec/launches.ts')
+        .then(async ({ processInfo }) => (await processInfo(child.pid as number)).startTime).catch(() => null);
+      if (signal.aborted) abort(); else signal.addEventListener('abort', abort, { once: true });
+    }
   });
 }
 
@@ -501,16 +536,54 @@ export class GitRepository {
    * 인증 헤더는 명령 인자가 아니라 환경 변수(GIT_CONFIG_*)로만 넘긴다. 왜: 인자는 다른 프로세스가 /proc에서 읽을 수 있다.
    * `gate`는 필수다. push 직전에 반드시 부른다(Runner의 모든 외부 쓰기는 같은 관문을 지난다, `github/write-gate.ts`).
    */
-  async pushCommit(commit: string, branch: string, gate: PushGate, authorization?: string): Promise<void> {
+  async pushCommit(commit: string, branch: string, gate: PushGate, authorization?: string): Promise<'pushed' | 'already'> {
     sha(commit);
     if (branch !== 'main') await this.branch(branch);
     const { source } = await this.trusted();
     const env: NodeJS.ProcessEnv = authorization === undefined ? {}
       : { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.extraHeader', GIT_CONFIG_VALUE_0: `AUTHORIZATION: ${authorization}` };
+    // 앞선 push를 중단했다면(중단됨·모름) 원격 브랜치 head를 먼저 다시 읽어 대조한다. 이미 그 커밋이면 쓰지 않는다.
+    if (await this.reconcileInterruptedPush(source, branch, commit, env) === 'already') return 'already';
     // 마지막 확인 → 즉시 전송: 관문 뒤에는 다른 await 없이 git을 띄운다(저장소 신뢰 확인은 바로 위에서 끝났다).
     await gate({ kind: 'branch_push', branch, remote: source });
     gate.signal?.throwIfAborted();
-    await run(this.path, ['push', '--no-verify', '--', source, `${commit}:refs/heads/${branch}`], undefined, env, [0], gate.signal);
+    try {
+      await run(this.path, ['push', '--no-verify', '--', source, `${commit}:refs/heads/${branch}`], undefined, env, [0], gate.signal);
+    } catch (error) {
+      if (error instanceof GitPushAbortedError || error instanceof GitPushUnknownError) await this.markInterruptedPush(branch, commit, error.name);
+      throw error;
+    }
+    return 'pushed';
+  }
+
+  /** 중단한 push 기록(브랜치 → 보내던 커밋). 이름이 `.json`이 아니어야 시작 정리(recoverTaskChecks)가 저장소 기록으로 읽지 않는다. */
+  private get interruptedPushPath(): string {
+    return join(this.home, 'state/git', `${this.repositoryId}.push-interrupted`);
+  }
+
+  private async markInterruptedPush(branch: string, commit: string, outcome: string): Promise<void> {
+    const path = await safePath(this.interruptedPushPath);
+    let record: Record<string, { commit: string; outcome: string }> = {};
+    try { record = JSON.parse(await readFile(path, 'utf8')) as typeof record; } catch { /* 처음 */ }
+    record[branch] = { commit, outcome };
+    await writeFile(path, JSON.stringify(record), { mode: 0o600 });
+  }
+
+  /**
+   * 중단한 push가 남긴 기록이 있으면 원격 브랜치 head를 읽기만 해서 대조한다.
+   * - 원격 head가 보내던 커밋이면 그 push는 이미 반영됐다: 다시 쓰지 않는다('already').
+   * - 아니면 기록을 지우고 평소처럼 push한다(일반 push라 원격이 다른 커밋으로 움직였으면 git이 거부한다).
+   * 왜: 중단·모름은 「반영 안 됨」의 증거가 아니다. 원격 상태를 확인한 뒤에 다음 쓰기를 한다.
+   */
+  private async reconcileInterruptedPush(source: string, branch: string, commit: string, env: NodeJS.ProcessEnv): Promise<'already' | 'push'> {
+    const path = await safePath(this.interruptedPushPath);
+    let record: Record<string, { commit: string; outcome: string }>;
+    try { record = JSON.parse(await readFile(path, 'utf8')) as typeof record; } catch { return 'push'; }
+    if (!record[branch]) return 'push';
+    const line = (await this.git(['ls-remote', '--heads', '--', source, `refs/heads/${branch}`], undefined, env)).toString().trim();
+    const remoteHead = line ? line.split(/\s/)[0] : null;
+    await writeFile(path, JSON.stringify(Object.fromEntries(Object.entries(record).filter(([name]) => name !== branch))), { mode: 0o600 });
+    return remoteHead === commit ? 'already' : 'push';
   }
 
   /** 시스템 직접 push는 최초 생성 또는 세 초기화 경로만 바꾸는 단일 부모 커밋에 한한다. 호출자가 GitHub 키 목록과 main을 먼저 대조한다. */

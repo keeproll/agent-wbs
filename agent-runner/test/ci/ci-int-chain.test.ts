@@ -98,7 +98,7 @@ test('PR push 경합은 사람의 커밋을 보존하고 head_changed로 돌려�
   let human = '';
   f.repo.pushCommit = async (...args) => {
     git(f.source, 'checkout', 'agent/task'); await file(join(f.source, 'human'), '사람 변경'); human = commit(f.source);
-    git(f.source, 'push', f.remote, 'agent/task'); await push(...args);
+    git(f.source, 'push', f.remote, 'agent/task'); return push(...args);
   };
   expect(await (await open()).run(f.request)).toMatchObject({ kind: 'recheck', reason: 'head_changed' });
   expect(f.ref('agent/task')).toBe(human); expect(puts()).toEqual([]);

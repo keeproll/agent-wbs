@@ -99,6 +99,44 @@ async function signalOwnedGroup(pgid: number, snapshot: Proc[], signal: NodeJS.S
   }
 }
 
+/**
+ * 이 Runner가 직접 띄운 detached 자식(자기 프로세스 그룹의 leader)의 그룹 하나를 끝낸다.
+ * M5-02·M5-03의 그룹 정리 방식(`signalOwnedGroup`·`processGroupEmpty`)을 그대로 쓴다: TERM → graceMs 대기 → 남으면 KILL → 1초 대기.
+ * 그룹이 비었음을 확인하면 true, 확인하지 못하면 false다(그때 호출자는 결과를 「모름」으로 다룬다).
+ * 신호는 leader 시작 이후에 생긴 같은 사용자 프로세스가 지금도 그 그룹에 있을 때만 보낸다(번호 재사용 방지).
+ * 예: git push를 끊으면 git이 띄운 git-remote-https·git send-pack까지 같은 그룹이라 함께 끝난다.
+ */
+export async function terminateGroup(pgid: number, leaderStartTime: string, graceMs = 2_000): Promise<boolean> {
+  if (!validPid(pgid) || pgid === process.pid || !/^\d+$/.test(leaderStartTime)) return false;
+  const members = async (): Promise<Proc[]> => {
+    const found: Proc[] = [];
+    for (const name of await readdir('/proc')) {
+      if (!/^[1-9]\d*$/.test(name)) continue;
+      try {
+        if ((await stat(`/proc/${name}`)).uid !== process.getuid?.()) continue;
+        const info = await processInfo(Number(name));
+        if (info.pgid === pgid && BigInt(info.startTime) >= BigInt(leaderStartTime) && !['Z', 'X'].includes(info.state)) found.push({ pid: Number(name), ...info, launchId: undefined });
+      } catch (e) { if (!gone(e)) throw e; }
+    }
+    return found;
+  };
+  try {
+    if (processGroupEmpty(pgid)) return true;
+    const first = await members();
+    // 그룹은 남았는데 우리 구성원이 하나도 보이지 않으면 남의 그룹일 수 있다. 신호를 보내지 않고 「모름」이다.
+    if (first.length === 0) return false;
+    await signalOwnedGroup(pgid, first, 'SIGTERM');
+    let deadline = performance.now() + graceMs;
+    while (!processGroupEmpty(pgid) && performance.now() < deadline) await sleep(10);
+    if (!processGroupEmpty(pgid)) {
+      await signalOwnedGroup(pgid, await members(), 'SIGKILL');
+      deadline = performance.now() + 1_000;
+      while (!processGroupEmpty(pgid) && performance.now() < deadline) await sleep(10);
+    }
+    return processGroupEmpty(pgid);
+  } catch { return false; }
+}
+
 export class Launches {
   problem: string | null = null;
   readonly home: string;

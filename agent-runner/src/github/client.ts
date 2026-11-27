@@ -415,8 +415,8 @@ export function createGitHubClient(options: GitHubClientOptions) {
     });
     if (init.body !== undefined) headers.set('content-type', 'application/json');
     // 쓰기: 마지막 확인 → 즉시 전송. 소유 확인(guard) 뒤에는 다른 await가 없다(중단 신호 확인은 동기).
-    // 확인과 전송 사이의 남은 아주 짧은 틈은 GitHub 쪽 보호가 막는다: 병합은 기대 head SHA(sha)를 보내 다른 head면 409,
-    // PR 생성은 브랜치 기준 멱등 조회(이미 있으면 그 PR)다. 중단 신호가 오면 진행 중인 요청도 끊는다.
+    // 중단 신호가 오면 진행 중인 요청도 끊는다. 확인과 GitHub 처리 사이의 분산 경계는 남는다(README 「보장하지 않는 것」).
+    // 병합의 기대 head SHA·PR 브랜치 조회는 그 경계를 없애는 소유 확인이 아니라 좁은 범위의 추가 무결성 조건이다.
     if (init.write?.guard) await init.write.guard();
     init.write?.signal?.throwIfAborted();
     const timeout = AbortSignal.timeout(timeoutMs);
