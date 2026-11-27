@@ -12,9 +12,9 @@ const settingVersion = { updatedAt: Nullable(c.Timestamp) };
 const jobCreated = { 202: Type.Object({ jobId: c.Id }) };
 
 /** GET·PUT 쌍. 응답은 저장값 + updatedAt */
-const setting = <const Name extends string, T extends TProperties, W extends TProperties = Record<never, never>, R extends TProperties = Record<never, never>>(
+const setting = <const Name extends string, const Path extends string, T extends TProperties, W extends TProperties = Record<never, never>, R extends TProperties = Record<never, never>>(
   name: Name,
-  path: string,
+  path: Path,
   summary: string,
   fields: T,
   extra: { write?: W; read?: R } = {},
@@ -436,6 +436,10 @@ const notifyLog = {
   kind: AnyOf('biz', 'test'),
   event: Nullable(NotifyEvent),
   target: Type.String(),
+  projectName: Opt(Type.String()),
+  targetName: Opt(Type.String()),
+  chatId: Opt(c.ChatId),
+  path: Opt(Type.String({ pattern: '^/' })),
   // unknown은 화면에서 「실패 — 수락 여부 불명」(data-model §3.7)
   state: AnyOf('queued', 'sending', 'accepted', 'retry_wait', 'failed', 'unknown'),
   attempts: c.Count,
@@ -450,6 +454,7 @@ const notify = [
     method: 'GET',
     path: '/api/notify/telegram',
     summary: '연결 설정(토큰은 끝 4자리만)',
+    query: Type.Object({ testId: Opt(c.Uuid) }),
     responses: { 200: TelegramSettings },
   }),
   operation({
@@ -497,7 +502,7 @@ const notify = [
     path: '/api/notify/telegram/test',
     summary: '테스트 알림(저장 전 값으로 발송)',
     body: Body({ ...TOKEN_OPTIONAL, chatId: c.ChatId, targetName: Type.String() }),
-    responses: { 200: Type.Object(telegramResult) },
+    responses: { 200: Type.Object({ ...telegramResult, testId: Opt(c.Id) }) },
   }),
   ...setting('NotifyRules', '/api/projects/:projectId/notify/rules', '알림 규칙 6종', NotifyRules),
   operation({

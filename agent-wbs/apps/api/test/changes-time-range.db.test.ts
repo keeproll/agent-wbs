@@ -31,6 +31,8 @@ async function baseBody(op: Operation): Promise<Record<string, unknown>> {
   if (op.method === 'PUT' && get) {
     const current = (await h.lead('GET', op.path)).body as Record<string, unknown>;
     const base = Object.fromEntries(Object.entries(current).filter(([k]) => k in props(op.body)));
+    if (op.id === 'putTelegram') return { ...base, chatId: '512345678', targetName: '시각 검증' };
+    if (op.id === 'putNotifyRules') return { done: false, fail: true, admin: true, approve: true, buildOk: false, buildFail: true };
     return op.id === 'putSubagentSettings' ? { ...base, allowed: [] } : base;
   }
   if (op.path.startsWith('/api/messages/:messageId')) {

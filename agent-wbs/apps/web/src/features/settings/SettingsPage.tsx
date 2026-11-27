@@ -18,6 +18,7 @@ import { PlanTab } from './PlanTab.tsx';
 import { ReportMailTab } from './report/ReportMailTab.tsx';
 import { RunnerTab } from './RunnerTab.tsx';
 import { SystemTab } from './SystemTab.tsx';
+import { NotifyTab } from './notify/NotifyTab.tsx';
 import { DirtyContext, useDirtyRegistry } from './useSettingForm.tsx';
 import './settings.css';
 
@@ -29,7 +30,7 @@ export function SettingsPage() {
   if (tab !== undefined && !isSettingsTab(tab)) return <Navigate to="/settings/runner" replace />;
   return (
     <MenuScreen menu="settings">
-      {(project) => <SettingsBody tab={tab ?? 'runner'} preReg={preRegNotice(project.state)} repoUrl={repoUrlOf(project)} projectId={'id' in project ? project.id : null} />}
+      {(project) => <SettingsBody tab={tab ?? 'runner'} preReg={preRegNotice(project.state)} repoUrl={repoUrlOf(project)} projectId={project.state === 'none' ? null : project.id} projectName={project.state === 'none' ? '' : project.name} />}
     </MenuScreen>
   );
 }
@@ -60,10 +61,16 @@ function useBadges(): Partial<Record<SettingsTab, { count: number; alert: boolea
   // 보고서 · 메일 탭: 아직 해소되지 않은 발송 실패 수(G§4.9 「아직 성공하지 못한 발송 실패 수 (빨강)」, M6-03).
   const mail = useApiQuery('listMailLog', { query: { status: 'failed', limit: 200 } }, { topics: ['mail'] });
   const mailFailed = mail.data?.items.length ?? 0;
-  return { runner: { count, alert: count > 0 }, plan: { count: split.data?.count ?? 0, alert: false }, report: { count: mailFailed, alert: mailFailed > 0 } };
+  // 알림 탭: Telegram 경고(M6-04).
+  const alerts = useApiQuery('listAlerts', {}, { topics: ['alert', 'notify'] });
+  const notifyBad = alerts.data?.items.some(alert => alert.text.startsWith('Telegram ')) ? 1 : 0;
+  return {
+    runner: { count, alert: count > 0 }, plan: { count: split.data?.count ?? 0, alert: false },
+    report: { count: mailFailed, alert: mailFailed > 0 }, notify: { count: notifyBad, alert: true },
+  };
 }
 
-function SettingsBody({ tab, preReg, repoUrl, projectId }: { tab: SettingsTab; preReg: string | null; repoUrl: string | null; projectId: string | null }) {
+function SettingsBody({ tab, preReg, repoUrl, projectId, projectName }: { tab: SettingsTab; preReg: string | null; repoUrl: string | null; projectId: string | null; projectName: string }) {
   const { anyDirty, report } = useDirtyRegistry();
   useEditGuard(anyDirty);
   const badges = useBadges();
@@ -98,11 +105,7 @@ function SettingsBody({ tab, preReg, repoUrl, projectId }: { tab: SettingsTab; p
         {tab === 'plan' && <PlanTab />}
         {tab === 'system' && <SystemTab />}
         {tab === 'report' && <ReportMailTab projectId={projectId} />}
-        {tab === 'notify' && (
-          <section className="card" aria-label={current.label}>
-            <p style={{ margin: 0 }}>이 탭은 아직 구현되지 않았습니다.</p>
-          </section>
-        )}
+        {tab === 'notify' && <NotifyTab projectId={projectId} projectName={projectName} />}
       </Page>
     </DirtyContext.Provider>
   );

@@ -16,7 +16,7 @@ type Body = any;
 export const HEAD = 'a'.repeat(40);
 
 /** inputCommit: 입력 v1(등록 커밋). 실제 git 저장소로 입력 보고를 시험할 때 그 저장소의 커밋을 넣는다. */
-export async function scenario(options: { inputCommit?: string } = {}) {
+export async function scenario(options: { inputCommit?: string; logger?: Parameters<typeof buildApp>[1] } = {}) {
   const db = new URL(inject('testDatabaseUrl'));
   db.pathname += '_runner_scenario';
   await recreateTestDatabase(db.href);
@@ -25,7 +25,7 @@ export async function scenario(options: { inputCommit?: string } = {}) {
   appUrl.searchParams.set('options', '-c role=awbs_app');
   const pool = createPool(appUrl.href, { onError: () => undefined });
   const origin = 'http://127.0.0.1:3100';
-  const app = buildApp(pool, false, { origin, lan: false });
+  const app = buildApp(pool, options.logger ?? false, { origin, lan: false });
   installRunner(app, pool);
   registerRunnerMessageRoutes(app);
   // main.ts와 같은 Runner 경로 묶음(M2-03 프로젝트 보고 포함).
@@ -68,7 +68,7 @@ export async function scenario(options: { inputCommit?: string } = {}) {
     await owner.query('update agent_models set allowed=true');
     const version = async () => (await lead('GET', '/api/tasks/TASK-0001')).body.updatedAt as string;
     return {
-      runner, lead,
+      runner, lead, pool,
       rows: async (sql: string) => (await owner.query(sql)).rows,
       run: async (key: string) => lead('POST', `/api/tasks/${key}/runs`, { kind: 'dev', updatedAt: (await lead('GET', `/api/tasks/${key}`)).body.updatedAt }),
       resume: async (attempt: string) => lead('POST', `/api/attempts/${attempt}/resume`, { updatedAt: await version() }),

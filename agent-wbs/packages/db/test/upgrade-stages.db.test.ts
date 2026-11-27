@@ -54,6 +54,8 @@ test('빈 DB와 0014·0016(master)·0017·0018·0019·0020·0021 단계 DB가 �
     '0047_20261127_report_project_name',
         // M6-03: 메일 큐
     '0049_20261127_mail_queue',
+        // M6-04: Telegram 전이 알림
+    '0051_20261127_telegram_transitions', '0052_20261127_telegram_review',
     '0053_20261127_design_ledger', '0054_20261127_design_display_keys']);
   const fresh = await database('fresh');
   await runMigrations(fresh);

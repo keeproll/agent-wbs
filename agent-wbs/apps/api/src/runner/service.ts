@@ -268,7 +268,7 @@ export async function retryFailedAttempt(client: PoolClient, attemptId: string) 
   if (count <= (await repo.policy()).auto_retry_limit) return handover(client, a.job, a.kind, a.id, { automaticCause: job?.payload.automaticCause });
   if (job && !['done','failed','cancelled'].includes(job.state)) await repo.state(job.id, 'failed');
   if (hold?.slot_state === 'none' && !hold.closed_at) await repo.release(hold, required(hold.release_proof), true);
-  await repo.alert(task.project_id, `retry:${a.id}`, '실행 실패의 자동 재시도 한도를 넘었습니다.', { taskKey: task.task_key, attemptId }, 'fail');
+  await repo.alert(task.project_id, `retry:${a.id}`, '실행 실패의 자동 재시도 한도를 넘었습니다.', { taskKey: task.task_key, attemptId });
   return null;
 }
 

@@ -21212,6 +21212,16 @@
             "leadSession": []
           }
         ],
+        "parameters": [
+          {
+            "name": "testId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Uuid"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "연결 설정(토큰은 끝 4자리만)",
@@ -21222,6 +21232,10 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "VALIDATION_FAILED"
           },
           "401": {
             "$ref": "#/components/responses/Error",
@@ -21241,6 +21255,9 @@
           }
         },
         "x-error-codes": {
+          "400": [
+            "VALIDATION_FAILED"
+          ],
           "401": [
             "LEAD_UNAUTHORIZED"
           ],
@@ -21819,6 +21836,9 @@
                           "type": "null"
                         }
                       ]
+                    },
+                    "testId": {
+                      "$ref": "#/components/schemas/Id"
                     }
                   }
                 }
@@ -22281,6 +22301,20 @@
                           "target": {
                             "type": "string"
                           },
+                          "projectName": {
+                            "type": "string"
+                          },
+                          "targetName": {
+                            "type": "string"
+                          },
+                          "chatId": {
+                            "type": "string",
+                            "pattern": "^-?[0-9]{5,20}$"
+                          },
+                          "path": {
+                            "type": "string",
+                            "pattern": "^/"
+                          },
                           "state": {
                             "enum": [
                               "queued",
@@ -22457,6 +22491,20 @@
                     },
                     "target": {
                       "type": "string"
+                    },
+                    "projectName": {
+                      "type": "string"
+                    },
+                    "targetName": {
+                      "type": "string"
+                    },
+                    "chatId": {
+                      "type": "string",
+                      "pattern": "^-?[0-9]{5,20}$"
+                    },
+                    "path": {
+                      "type": "string",
+                      "pattern": "^/"
                     },
                     "state": {
                       "enum": [

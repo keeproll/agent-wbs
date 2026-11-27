@@ -1,6 +1,7 @@
 import type { Db } from './db.ts';
 import { changeEvent, iso, leasedJob } from './db.ts';
 import { ProjectError } from './errors.ts';
+import { repeatFailure } from '../notify/events.ts';
 
 /** 비밀 열은 조회하지 않는다. 연결 여부는 Runner의 실제 보고만으로 정한다(contracts §2.2·§3.1). */
 export async function githubSettings(db: Db) {
@@ -28,6 +29,7 @@ export async function reportGithubStatus(db: Db, body: GithubReport, principal: 
   await db.query(`insert into github_settings(singleton,mode,status,account,scopes,warning,expires_at,checked_at) values(true,$1,$2,$3,$4::jsonb,$5,$6,clock_timestamp())
     on conflict (singleton) do update set mode=excluded.mode,status=excluded.status,account=excluded.account,scopes=excluded.scopes,warning=excluded.warning,expires_at=excluded.expires_at,checked_at=excluded.checked_at`,
   [body.mode, body.ok ? 'ok' : 'failed', body.account, body.scopes === null ? null : JSON.stringify(body.scopes), body.warning ?? null, body.expiresAt]);
+  if (!body.ok && current.status === 'failed') await repeatFailure(db, 'admin|github');
   if (body.jobId !== undefined) await db.query("update runner_jobs set state='done',lease_until=null where id=$1", [body.jobId]);
   await changeEvent(db, null, { kind: 'github' }, 'settings');
 }

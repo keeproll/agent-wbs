@@ -13,4 +13,8 @@ describe('계약 타입: .map으로 만든 요청도 이름으로 고른다(M3-0
   it('정확한 이름의 요청은 이전처럼 하나만 고른다', () => {
     expectTypeOf<OperationOf<'getTask'>['path']>().toEqualTypeOf<'/api/tasks/:taskKey'>();
   });
+  it('설정 쌍도 프로젝트 경로 인수를 보존한다', () => {
+    expectTypeOf<ParamsOf<'getNotifyRules'>>().toEqualTypeOf<Record<'projectId', string>>();
+    expectTypeOf<ParamsOf<'putNotifyRules'>>().toEqualTypeOf<Record<'projectId', string>>();
+  });
 });

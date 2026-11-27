@@ -52,7 +52,9 @@ for (const op of runnerOps) {
   } });
 }
 // 초기화(/api/project/reset)는 M2-04, 착수 승인(/api/tasks/:taskKey/approve)은 M2-02, 프로젝트 등록(/api/project)은 M2-03의 실제 경로가 같은 관문을 거치므로 대역을 두지 않는다.
-app.get('/api/settings/app-url', () => { throw new Error('Bearer hunter2 /bot123:hunter2/send'); });
+app.addHook('preHandler', async request => {
+  if (request.routeOptions.url === '/api/settings/app-url') throw new Error('Bearer hunter2 /bot123:hunter2/send');
+});
 
 beforeAll(async () => {
   await recreateTestDatabase(dbUrl.href);
