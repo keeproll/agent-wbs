@@ -121,7 +121,7 @@ describe('보류 사유(D-33~35)', () => {
 
 describe('판단 결과(D-33·D-34)', () => {
   it('기존 Task·새 Task·분할 판단을 대상별로 모은다', () => {
-    const item = { result: 'met', agreedBy: ['Claude', 'Codex'], basis: '되돌리기 쉬움', judgedAt: '2026-11-03T02:00:00.000Z', sourceRef: 'job-1', subjectHash: 'a'.repeat(64) };
+    const item = { result: 'met', agreedBy: ['Claude', 'Codex'], basis: '되돌리기 쉬움', judgedAt: '2026-11-03T02:00:00.000Z', sourceRef: `sha256:${'a'.repeat(64)}`, subjectHash: 'a'.repeat(64) };
     const cp = {
       ops: [{ op: 'add', ref: 'NEW-1', preds: [], t: { title: 'x', judgedRules: { schemaVersion: 1, items: [{ ...item, rule: 'refactor', result: 'not_met' }] } } }],
       idMap: { 'NEW-1': 'TASK-0013' },

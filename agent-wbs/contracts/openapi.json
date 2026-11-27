@@ -30305,8 +30305,8 @@
                                   },
                                   "sourceRef": {
                                     "type": "string",
-                                    "minLength": 1,
-                                    "pattern": "\\S"
+                                    "pattern": "^sha256:[0-9a-f]{64}$",
+                                    "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                                   }
                                 },
                                 "additionalProperties": false
@@ -31227,8 +31227,8 @@
                                 },
                                 "sourceRef": {
                                   "type": "string",
-                                  "minLength": 1,
-                                  "pattern": "\\S"
+                                  "pattern": "^sha256:[0-9a-f]{64}$",
+                                  "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                                 }
                               },
                               "additionalProperties": false
@@ -31305,8 +31305,8 @@
                                       },
                                       "sourceRef": {
                                         "type": "string",
-                                        "minLength": 1,
-                                        "pattern": "\\S"
+                                        "pattern": "^sha256:[0-9a-f]{64}$",
+                                        "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                                       }
                                     },
                                     "additionalProperties": false
@@ -31435,8 +31435,8 @@
                                 },
                                 "sourceRef": {
                                   "type": "string",
-                                  "minLength": 1,
-                                  "pattern": "\\S"
+                                  "pattern": "^sha256:[0-9a-f]{64}$",
+                                  "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                                 }
                               },
                               "additionalProperties": false
@@ -31513,8 +31513,8 @@
                                       },
                                       "sourceRef": {
                                         "type": "string",
-                                        "minLength": 1,
-                                        "pattern": "\\S"
+                                        "pattern": "^sha256:[0-9a-f]{64}$",
+                                        "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                                       }
                                     },
                                     "additionalProperties": false
@@ -31789,8 +31789,8 @@
                                   },
                                   "sourceRef": {
                                     "type": "string",
-                                    "minLength": 1,
-                                    "pattern": "\\S"
+                                    "pattern": "^sha256:[0-9a-f]{64}$",
+                                    "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                                   },
                                   "subjectHash": {
                                     "$ref": "#/components/schemas/Sha256"
@@ -31863,8 +31863,8 @@
                             },
                             "sourceRef": {
                               "type": "string",
-                              "minLength": 1,
-                              "pattern": "\\S"
+                              "pattern": "^sha256:[0-9a-f]{64}$",
+                              "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                             },
                             "subjectHash": {
                               "$ref": "#/components/schemas/Sha256"
@@ -32174,8 +32174,8 @@
                             },
                             "sourceRef": {
                               "type": "string",
-                              "minLength": 1,
-                              "pattern": "\\S"
+                              "pattern": "^sha256:[0-9a-f]{64}$",
+                              "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                             },
                             "subjectHash": {
                               "$ref": "#/components/schemas/Sha256"
@@ -36186,7 +36186,8 @@
           }
         },
         "title": "JudgedContent",
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "subjectHash는 이 객체의 RFC 8785 JCS 직렬화 UTF-8 바이트를 SHA-256으로 계산한 64자리 소문자 16진수다. sourceRef는 sha256: 뒤에 같은 값을 붙인다. Unicode 정규화는 하지 않는다. 고정 예시는 contracts/fixtures/judgement-bindings.json에 있다."
       },
       "JudgedProposalOp": {
         "anyOf": [
@@ -38830,8 +38831,8 @@
                             },
                             "sourceRef": {
                               "type": "string",
-                              "minLength": 1,
-                              "pattern": "\\S"
+                              "pattern": "^sha256:[0-9a-f]{64}$",
+                              "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                             }
                           },
                           "additionalProperties": false
@@ -39457,8 +39458,8 @@
                             },
                             "sourceRef": {
                               "type": "string",
-                              "minLength": 1,
-                              "pattern": "\\S"
+                              "pattern": "^sha256:[0-9a-f]{64}$",
+                              "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                             }
                           },
                           "additionalProperties": false
@@ -40904,8 +40905,8 @@
                                           },
                                           "sourceRef": {
                                             "type": "string",
-                                            "minLength": 1,
-                                            "pattern": "\\S"
+                                            "pattern": "^sha256:[0-9a-f]{64}$",
+                                            "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                                           },
                                           "subjectHash": {
                                             "$ref": "#/components/schemas/Sha256"
@@ -41608,8 +41609,8 @@
                         },
                         "sourceRef": {
                           "type": "string",
-                          "minLength": 1,
-                          "pattern": "\\S"
+                          "pattern": "^sha256:[0-9a-f]{64}$",
+                          "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                         },
                         "subjectHash": {
                           "$ref": "#/components/schemas/Sha256"
@@ -41695,8 +41696,8 @@
                           },
                           "sourceRef": {
                             "type": "string",
-                            "minLength": 1,
-                            "pattern": "\\S"
+                            "pattern": "^sha256:[0-9a-f]{64}$",
+                            "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                           },
                           "subjectHash": {
                             "$ref": "#/components/schemas/Sha256"
@@ -42125,8 +42126,8 @@
                             },
                             "sourceRef": {
                               "type": "string",
-                              "minLength": 1,
-                              "pattern": "\\S"
+                              "pattern": "^sha256:[0-9a-f]{64}$",
+                              "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                             },
                             "subjectHash": {
                               "$ref": "#/components/schemas/Sha256"
@@ -46418,8 +46419,8 @@
                                 },
                                 "sourceRef": {
                                   "type": "string",
-                                  "minLength": 1,
-                                  "pattern": "\\S"
+                                  "pattern": "^sha256:[0-9a-f]{64}$",
+                                  "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                                 },
                                 "subjectHash": {
                                   "$ref": "#/components/schemas/Sha256"

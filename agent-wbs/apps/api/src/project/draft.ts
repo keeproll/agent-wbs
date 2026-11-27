@@ -3,7 +3,8 @@ import {
   type Agent, type Confidence, type DependencyType, type JudgedRule, type ProposalTask, type SplitSettings, type TechDomain, type WorkType,
 } from '@awbs/shared';
 import type { InputError } from './errors.ts';
-import { subjectHash, type Ac, type JudgedSource, type Output, type Overview } from './hash.ts';
+import { boundJudgements, subjectHash, type Ac, type JudgedSource, type Output, type Overview } from './hash.ts';
+import { ProjectError } from './errors.ts';
 
 /*
  * 초기 WBS 초안(contracts §3.3, shared models `WbsDraft`).
@@ -112,7 +113,7 @@ export function draftErrors(draft: DraftInput): InputError[] {
 }
 
 /**
- * 저장할 초안. 판단 기록에는 서버가 계산한 hash를 붙인다(data-model §2.3-1 「계산은 서버만」).
+ * 초안의 판단 입력 지문을 대조한다. 기록의 지문을 현재 내용으로 바꾸어 정당화하지 않는다.
  * 판단 미기록·불충족 초안도 저장해 화면에 보여 주고, 보류는 승인 때 한다(contracts §3.3).
  */
 export function storeDraft(draft: DraftInput): StoredDraft {
@@ -120,7 +121,8 @@ export function storeDraft(draft: DraftInput): StoredDraft {
     ...draft,
     tasks: draft.tasks.map(({ judgedRules, ...task }) => {
       const hash = subjectHash(draftSource(task));
-      return { ...task, subjectHash: hash, ...(judgedRules && { judgedRules: { schemaVersion: 1, items: judgedRules.items.map((item) => ({ ...item, subjectHash: hash })) } }) };
+      try { return { ...task, subjectHash: hash, ...(judgedRules && { judgedRules: boundJudgements(judgedRules, hash) }) }; }
+      catch { throw new ProjectError('VERSION_CONFLICT', { details: { target: task.ref, subjectHash: hash, changes: [] }, message: '초안의 판단 입력이 현재 Task 내용과 다릅니다.' }); }
     }),
   };
 }

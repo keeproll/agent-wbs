@@ -11,6 +11,7 @@ import { judgedTasks } from '../policy/judged.ts';
 import { assertGradeChange, assertJob } from './jobs.ts';
 import { clientOf } from './proposals.ts';
 import { loadSnapshot } from './snapshot.ts';
+import { bindJudgements } from './binding.ts';
 import { snapshotHash, wbsSnapshot } from './job-snapshot.ts';
 
 /*
@@ -121,26 +122,20 @@ export function registerSplitRoutes(route: RouteFn, epochOf: (request: FastifyRe
       .find((target) => target.taskKey === task.task_key)?.roles ?? [];
     assertEditable(task);
     const before = await detailOf(client, task.task_key);
-    const hash = subjectHash(sourceOf(before));
-    // 기존 Task 재판단은 payload의 hash를 그대로 돌려받아 판단한 뒤 내용이 바뀌었는지 검출한다(data-model §2.3-1).
-    if (body.judgedRules?.items.some((item) => item.subjectHash !== hash)) {
-      throw new TaskError('VERSION_CONFLICT', { taskKey: task.task_key, subjectHash: hash, changes: [] }, [], '판단한 내용이 지금 Task 내용과 다릅니다.');
-    }
+    const group = body.conflictGroup?.name ?? null;
+    const hash = subjectHash({ ...sourceOf(before), conflictGroup: group });
+    if (body.judgedRules) bindJudgements(body.judgedRules, hash, task.task_key);
     const projectId = task.project_id;
     const history = (input: Omit<Parameters<typeof record>[1], 'projectId' | 'taskId' | 'actor'>) => record(client, { projectId, taskId: task.id, actor: 'Planning', ...input });
 
-    const group = body.conflictGroup?.name ?? null;
     if (group !== before.conflictGroup) {
       await client.query('update tasks set conflict_group=$2 where id=$1', [task.id, group]);
       await history({ kind: '충돌 묶음', text: `충돌 묶음 ${group ?? '없음'}${body.conflictGroup ? ` — ${body.conflictGroup.reason}` : ''}`, before: before.conflictGroup, after: group, ref: { field: 'conflictGroup' } });
     }
     if (body.judgedRules) {
-      // 충돌 묶음 판단과 규칙 5·7·9 판단은 같은 보고에 함께 온다. 함께 정한 묶음을 반영한 내용으로 hash를 서버가 다시 붙인다.
-      const after = group === before.conflictGroup ? hash : subjectHash({ ...sourceOf(before), conflictGroup: group });
-      const judged = { ...body.judgedRules, items: body.judgedRules.items.map((item) => ({ ...item, subjectHash: after })) };
       await client.query(`insert into task_splits(project_id,task,basis,judged_rules,exceptions) values($1,$2,'',$3::jsonb,'[]'::jsonb)
-        on conflict (task) do update set judged_rules=excluded.judged_rules`, [projectId, task.id, JSON.stringify(judged)]);
-      await history({ kind: '분할 판단', text: '규칙 5·7·9 판단 기록', before: before.split?.judgedRules ?? null, after: judged, ref: { field: 'judgedRules' } });
+        on conflict (task) do update set judged_rules=excluded.judged_rules`, [projectId, task.id, JSON.stringify(body.judgedRules)]);
+      await history({ kind: '분할 판단', text: '규칙 5·7·9 판단 기록', before: before.split?.judgedRules ?? null, after: body.judgedRules, ref: { field: 'judgedRules' } });
     }
     for (const role of ['dev', 'qa'] as const) {
       const grade = body.grades[role];

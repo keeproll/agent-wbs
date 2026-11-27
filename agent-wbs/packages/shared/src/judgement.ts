@@ -42,6 +42,35 @@ export function canonicalJson(value: unknown): string {
   return JSON.stringify(value) ?? 'null';
 }
 
+export class JcsError extends TypeError {}
+
+/** RFC 8785 JCS. JSON 바깥 값과 잘못된 Unicode를 조용히 다른 내용으로 바꾸지 않는다. */
+export function jcs(value: unknown): string {
+  if (typeof value === 'string') {
+    if (!value.isWellFormed()) throw new JcsError('JCS는 올바른 Unicode 문자열만 받습니다.');
+    return JSON.stringify(value);
+  }
+  if (typeof value === 'number' && !Number.isFinite(value)) throw new JcsError('JCS는 유한한 수만 받습니다.');
+  if (value === null || typeof value === 'number' || typeof value === 'boolean') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${Array.from(value, jcs).join(',')}]`;
+  if (value && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    return `{${Object.keys(value).sort().map((key) => `${jcs(key)}:${jcs((value as Record<string, unknown>)[key])}`).join(',')}}`;
+  }
+  throw new JcsError('JCS는 JSON 값만 받습니다.');
+}
+
+export const judgedContentHash = (content: unknown): string => createHash('sha256').update(jcs(content), 'utf8').digest('hex');
+
+/** 지문은 Runner가 보낸 값을 유지한다. 호출자는 문제를 현재 subjectHash와 함께 409로 응답한다. */
+export function boundJudgements<T extends { items: readonly { sourceRef: string; subjectHash?: string }[] }>(record: T, currentHash: string): Omit<T, 'items'> & { items: (T['items'][number] & { subjectHash: string })[] } {
+  const items = record.items.map((item) => {
+    const hash = /^sha256:([0-9a-f]{64})$/.exec(item.sourceRef)?.[1];
+    if (hash !== currentHash || item.subjectHash !== undefined && item.subjectHash !== hash) throw new Error('JUDGEMENT_INPUT_MISMATCH');
+    return { ...item, subjectHash: hash };
+  });
+  return { ...record, items };
+}
+
 /**
  * data-model §2.3-1의 JudgedContent. 목적·배경·선행 조건·제출 여부·우선순위·담당·상태는 넣지 않는다.
  * 산출물은 저장 순서가 없어 이름순, 설계는 종류 순서(DB·API·FE·DevOps)로 고정한다.
@@ -63,5 +92,5 @@ export function judgedContent(source: JudgedSource) {
 }
 
 export function subjectHash(source: JudgedSource): string {
-  return createHash('sha256').update(canonicalJson(judgedContent(source))).digest('hex');
+  return judgedContentHash(judgedContent(source));
 }

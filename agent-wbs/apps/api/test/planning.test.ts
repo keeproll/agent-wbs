@@ -59,7 +59,7 @@ describe('planning 새 Task의 판단 대상 내용(data-model §2.4-1·§2.3-1)
 });
 
 describe('planning 판단 기록 제외와 분할 hash', () => {
-  const judged = { schemaVersion: 1, items: [{ rule: 'revert', result: 'met', agreedBy: ['Claude', 'Codex'], basis: 'b', judgedAt: '2026-11-26T00:00:00Z', sourceRef: 'job', subjectHash: 'a'.repeat(64) }] };
+  const judged = { schemaVersion: 1, items: [{ rule: 'revert', result: 'met', agreedBy: ['Claude', 'Codex'], basis: 'b', judgedAt: '2026-11-26T00:00:00Z', sourceRef: `sha256:${'a'.repeat(64)}`, subjectHash: 'a'.repeat(64) }] };
   test('ops에서 판단 기록만 뺀다. 원본은 바꾸지 않는다', () => {
     const op = add({ judgedRules: judged, conflictGroup: 'G' });
     const stripped = stripJudgements([op, { op: 'remove', task: 'TASK-0001' }]);

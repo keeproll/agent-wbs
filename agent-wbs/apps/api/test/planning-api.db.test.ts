@@ -182,21 +182,31 @@ describe('planning Task 판단 보고(/plan)', () => {
     jobId, fence: 1, grades: { dev: { modelId: 'claude-sonnet-5-5', effort: 'high', reason: '구현' }, qa: { modelId: 'gpt-5.5', effort: 'medium', reason: '검증' } },
     subagents: { dev: [], qa: [], basis: '' }, conflictGroup: null, ...body,
   }));
-  const judged = (hash: string) => ({ schemaVersion: 1, items: ['revert', 'contract', 'refactor'].map((rule) => ({ rule, result: 'met', agreedBy: ['Claude', 'Codex'], basis: '근거', judgedAt: '2026-11-26T00:00:00Z', sourceRef: 'job', subjectHash: hash })) });
+  const judged = (hash: string) => ({ schemaVersion: 1, items: ['revert', 'contract', 'refactor'].map((rule) => ({ rule, result: 'met', agreedBy: ['Claude', 'Codex'], basis: '근거', judgedAt: '2026-11-26T00:00:00Z', sourceRef: `sha256:${hash}`, subjectHash: hash })) });
 
-  test('payload hash가 현재와 같으면 판단·등급·충돌 묶음을 저장하고 다르면 409 VERSION_CONFLICT', async () => {
+  test('옛 입력 판단은 새 hash를 보내도 409이고 같은 변경 후 입력의 판단만 그대로 저장한다', async () => {
     const key = await task();
-    const hash = subjectHash(sourceOf(await detail(key)));
+    const before = await detail(key);
+    const hash = subjectHash(sourceOf(before));
+    const afterHash = subjectHash({ ...sourceOf(before), conflictGroup: 'orders' });
     const stale = await plan(key, { judgedRules: judged('e'.repeat(64)) });
     expect(errorOf(stale).code).toBe('VERSION_CONFLICT');
-    const ok = await plan(key, { judgedRules: judged(hash), conflictGroup: { name: 'orders', reason: '같은 테이블' } });
+    const oldInput = judged(afterHash);
+    oldInput.items.forEach((item) => { item.sourceRef = `sha256:${hash}`; });
+    const rejected = await plan(key, { judgedRules: oldInput, conflictGroup: { name: 'orders', reason: '같은 테이블' } });
+    expect(rejected.statusCode, rejected.body).toBe(409);
+    expect(rejected.json<{ error: { details: { subjectHash: string } } }>().error.details.subjectHash).toBe(afterHash);
+    expect((await detail(key)).conflictGroup).toBeNull();
+    expect((await detail(key)).split?.judgedRules ?? null).toBeNull();
+    const correct = judged(afterHash);
+    const ok = await plan(key, { judgedRules: correct, conflictGroup: { name: 'orders', reason: '같은 테이블' } });
     expect(ok.statusCode, ok.body).toBe(204);
     const d = await detail(key);
     expect(d.conflictGroup).toBe('orders');
     expect(d.grades.dev?.modelId).toBe('claude-sonnet-5-5');
-    // 함께 정한 충돌 묶음을 반영한 내용으로 서버가 hash를 다시 붙인다. 그래서 착수 승인(M2-02) 판정에서 바로 유효하다.
+    // 서버가 새 지문을 찍지 않고 Runner가 보낸 판단을 그대로 보관한다.
     expect(subjectHash(sourceOf(d))).not.toBe(hash);
-    expect(d.split?.judgedRules).toMatchObject({ items: [{ subjectHash: subjectHash(sourceOf(d)) }, {}, {}] });
+    expect(d.split?.judgedRules).toEqual(correct);
     const kinds = (await ownerPool.query<{ kind: string }>('select kind from task_history where task=$1 order by at', [await idOf(key)])).rows.map((r) => r.kind);
     expect(kinds).toEqual(expect.arrayContaining(['분할 판단', '충돌 묶음', '등급']));
   });

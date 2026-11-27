@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { DesignKind, TechDomain } from '@awbs/shared';
 import type { WireProposalOp } from '@awbs/shared/api';
-import { canonicalJson, type JudgedSource } from '../tasks/hash.ts';
+import { canonicalJson, jcs, type JudgedSource } from '../tasks/hash.ts';
 
 /**
  * 판단 대상 지문(subjectHash)과 미리보기 지문(previewHash) 계산에 쓰는 순수 함수들.
@@ -61,7 +61,7 @@ const sha256 = (value: unknown) => createHash('sha256').update(canonicalJson(val
 
 /** 분할 CP의 판단 대상 = 판단을 뺀 ops 전체 + 대상 Task의 현재 JudgedContent(contracts §3.2 splitSubjectHash) */
 export function splitSubjectHash(ops: readonly WireProposalOp[], splitTasks: readonly { taskKey: string; content: unknown }[]): string {
-  return sha256({ ops: stripJudgements(ops), splitTasks });
+  return createHash('sha256').update(jcs({ ops: stripJudgements(ops), splitTasks }), 'utf8').digest('hex');
 }
 
 /** 팀장이 본 미리보기의 지문. 승인·반영 때 다시 계산해 같아야 한다(contracts §1.3). */
