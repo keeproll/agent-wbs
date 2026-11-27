@@ -1,10 +1,14 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { Runner } from '../../../../agent-runner/src/api/runner.ts';
 import { ApiTransportError } from '../../../../agent-runner/src/api/client.ts';
 import { Execution, type ExecutionOptions } from '../../../../agent-runner/src/exec/session.ts';
 import { AttemptFlow, finishJob, type AttemptFlowOptions } from '../../../../agent-runner/src/jobs/attempt-flow.ts';
+import { bindTaskCheck } from '../../../../agent-runner/src/jobs/task-check.ts';
+import { parsePipeline } from '../../../../agent-runner/src/ci/pipeline.ts';
+import { fixture, file, commit, git } from '../../../../agent-runner/test/ci/int-fixture.ts';
 import { HeavySemaphore } from '../../../../agent-runner/src/resources/heavy.ts';
 import { ResourceReporter } from '../../../../agent-runner/src/resources/reporter.ts';
 import { State } from '../../../../agent-runner/src/state/state.ts';
@@ -19,12 +23,15 @@ let flow: AttemptFlow;
 let runner: Runner;
 let options: AttemptFlowOptions;
 let executionOptions: ExecutionOptions;
+let f: Awaited<ReturnType<typeof fixture>>;
+let head = HEAD;
+let failCheckStep: string | undefined;
 const checks: string[] = [];
 
 function cli(result: 'PASS' | 'FAIL' = 'PASS', hang = false): CliScenario {
   const report = {
     summary: '가짜 CLI가 낸 결과', changedFiles: ['src/result.ts'], evidence: [],
-    verification: { headSha: HEAD, specRevision: 1, result, cmd: 'fake check', expected: '수용 기준 충족', actual: result,
+    verification: { headSha: head, specRevision: 1, result, cmd: 'fake check', expected: '수용 기준 충족', actual: result,
       defects: result === 'FAIL' ? [{ text: '수용 기준 미충족', blocking: true }] : [], checklist: [{ itemKey: 'CL-1', done: result === 'PASS' }] },
   };
   return { hang, lines: [
@@ -43,8 +50,15 @@ function codex(result: 'PASS' | 'FAIL' = 'PASS', hang = false): CliScenario {
 }
 
 beforeEach(async () => {
-  h = await scenario();
-  home = await mkdtemp('/home/keeproll/.orca/bots/agentwbs/archive/2026-11-27/M5-05/flow-');
+  f = await fixture('agent/TASK-0001-h1');
+  await file(join(f.source, 'prototype/docs/guide.md'), '시나리오 입력');
+  commit(f.source); git(f.source, 'push', f.remote, 'main');
+  head = f.ref(f.request.branch);
+  h = await scenario({ inputCommit: f.ref('main') });
+  home = await mkdtemp(join(process.env.AWBS_TEST_TMP ?? tmpdir(), 'flow-'));
+  const work = await f.repo.createWorktree('task', 'agent/m505-work', head);
+  await file(join(work, 'src/result.ts'), 'export const result = true;\n');
+  head = commit(work);
   state = await State.open(home);
   await state.update(draft => { draft.epoch = 1; draft.runnerId = 'm209-fake'; });
   runner = new Runner({ state, api: h.runner.api, version: 'm505-fake' });
@@ -55,24 +69,53 @@ beforeEach(async () => {
   const heavy = new HeavySemaphore(1);
   const reporter = new ResourceReporter({ api: h.runner.api, epoch: () => 1, heavy });
   await reporter.reportHost({ ...identity, cpu: 'fake', cores: 20, memGB: 32, swapGB: 0, diskFreeGB: 100, os: 'fake' });
+  heavy.resize(1);
   executionOptions = {
     home, identity, api: h.runner.api, outbox: runner.outbox,
     epoch: () => 1, ready: () => runner.ready, env: { PATH: process.env.PATH },
     binaries: { Claude: claude.path, Codex: cx.path },
-    prepare: async () => ({ cwd: home, headSha: HEAD }), budget: () => 0,
+    prepare: async () => ({ cwd: work, headSha: head }), budget: () => 0,
     sessions: [], heavy, canStart: (agent, slots, sessions) => reporter.canStart(agent, slots, sessions),
     isolation: { name: 'fake-only', flags: () => [], wrap: launch => launch },
   };
   execution = new Execution(executionOptions);
   await execution.recover();
   checks.length = 0;
+  failCheckStep = undefined;
+  let inputHead = f.ref('main');
+  const taskCheck = bindTaskCheck({ get execution() { return execution; }, get runner() { return runner; }, api: h.runner.api, repo: f.repo, worktree: () => ({ id: 'task', branch: 'agent/m505-work' }),
+    collectTests: f.deps.collectTests,
+    launch: (argv, cwd) => {
+      const failed = argv[1] === failCheckStep;
+      const command = installFakeCli(join(home, 'checks'), 'codex', { lines: [failed ? '검사 실패' : '검사 통과'], exitCode: failed ? 1 : 0 });
+      return { file: command.path, args: [...argv.slice(1)], cwd, env: { PATH: process.env.PATH }, stdin: '' };
+    },
+    observeMainPipeline: async basis => {
+      const pipeline = parsePipeline(basis.source);
+      await h.runner.api('reportInputChanges', { epoch: 1, idempotencyKey: crypto.randomUUID(), body: {
+        base: inputHead, head: basis.baseSha, ...await f.repo.inputObservation(inputHead, basis.baseSha),
+        pipelineObservation: { baseSha: basis.baseSha, pipelineSha: basis.pipelineSha, definition: {
+          path: '.agentwbs/pipeline.yaml', commit: basis.baseSha, status: 'ok', error: null, raw: basis.source,
+          stages: Object.entries(pipeline.stages).map(([stage, steps]) => ({ stage: stage as 'task' | 'int' | 'night' | 'deploy', when: '시험', gate: '시험', steps: steps.map(s => s.name) })),
+        } },
+      } });
+      inputHead = basis.baseSha;
+    },
+  });
   options = {
     execution, runner, api: h.runner.api, epoch: () => 1, identity,
-    taskCheck: async ({ job }) => { checks.push(job.payload.kind); },
-    // 가짜 CLI의 고정 결과만 읽는 시험 공급원이다. 실제 출력 검증·Git·Evidence는 M7-06 공급원의 책임이다.
+    taskCheck: async context => {
+      checks.push(context.job.payload.kind);
+      const result = await taskCheck(context);
+      return result;
+    },
+    // 종료 JSON은 가짜 자료다. 변경 파일과 작업 폴더 청결은 실제 Git으로 확인한다.
     collect: async ({ job, output, messages }) => {
       const parsed = JSON.parse(output.text) as Awaited<ReturnType<AttemptFlowOptions['collect']>>['report'] & { verification: object };
-      const dev = { summary: parsed.summary, changedFiles: parsed.changedFiles, evidence: parsed.evidence };
+      await f.repo.taskCheckPath('task', head);
+      const base = git(f.repo.path, 'merge-base', f.ref('main'), head);
+      const changedFiles = git(f.repo.path, 'diff', '--no-ext-diff', '--no-textconv', '--name-only', '-z', base, head, '--').split('\0').filter(Boolean);
+      const dev = { summary: parsed.summary, changedFiles, evidence: parsed.evidence };
       return { report: job.payload.kind === 'qa' || job.payload.kind === 'reverify' ? { ...parsed, changedFiles: [] } : dev,
         responses: messages.map(m => ({ messageId: m.id, text: '지시를 반영했습니다.', workState: '완료' })) };
     },
@@ -83,6 +126,7 @@ afterEach(async () => {
   await flow?.shutdown();
   await state?.close();
   await h?.close();
+  await f?.close();
   if (home) await rm(home, { recursive: true, force: true });
 });
 
@@ -134,7 +178,7 @@ test.each(['dev', 'qa', 'reverify'] as const)('시나리오 7: %s 중 보낸 지
     expect(await h.rows("select body,work_state from messages where dir='in'")).toEqual([{ body: '지시를 반영했습니다.', work_state: '완료' }]);
     expect(runner.messages).toEqual([]);
   } finally { proceed.resolve(undefined); await running.catch(() => undefined); }
-}, 25_000);
+}, 60_000);
 
 test('시나리오 9: 실제 CLI 실행 중 재부팅 보고→보유 해제 전 재개 거부→대조→같은 등급 새 시도', async () => {
   const fake = installFakeCli(join(home, 'fake'), 'claude', cli('PASS', true));
@@ -267,6 +311,85 @@ test('① 공급원이 실패하면 결과와 다음 QA를 만들지 않고 종�
   expect(await h.rows('select count(*)::int n from execution_holds where closed_at is null')).toEqual([{ n: 0 }]);
 });
 
+test('조정자 결정 3: 실제 ①의 Task 코드 실패는 failed와 자동 재작업으로 이어지고 재작업 횟수에 센다', async () => {
+  failCheckStep = 'unit';
+  expect((await h.run('TASK-0001')).status).toBe(202);
+  await flow.runNext(20);
+  expect((await h.lead('GET', '/api/tasks/TASK-0001')).body.lifecycleStatus).toBe('rework');
+  expect(await h.rows('select status from task_attempts')).toEqual([{ status: 'failed' }]);
+  expect(await h.rows("select status,fail_scope from ci_runs where stage=1")).toEqual([{ status: 'fail', fail_scope: 'task' }]);
+  failCheckStep = undefined;
+  expect((await flow.runNext(20))?.payload).toMatchObject({ kind: 'rework' });
+  expect(await h.rows("select count(distinct j.payload->>'automaticCause')::int n from task_attempts a join runner_jobs j on j.id=a.job where a.kind='rework'")).toEqual([{ n: 1 }]);
+});
+
+test('조정자 결정 3: 실제 ①의 baseline 실패는 interrupted이며 재작업 없이 같은 종류·등급으로 재개한다', async () => {
+  failCheckStep = 'install';
+  expect((await h.run('TASK-0001')).status).toBe(202);
+  await expect(flow.runNext(20)).rejects.toThrow('기준 또는 실행 환경');
+  expect((await h.lead('GET', '/api/tasks/TASK-0001')).body.lifecycleStatus).toBe('paused');
+  const first = (await h.rows('select id,model_id,effort,status from task_attempts'))[0] as { id: string; model_id: string; effort: string };
+  expect(first).toMatchObject({ status: 'interrupted' });
+  expect(await h.rows("select fail_scope from ci_runs where stage=1")).toEqual([{ fail_scope: 'baseline' }]);
+  expect(await flow.runNext(20)).toBeNull();
+  expect((await h.resume(first.id)).status).toBe(202);
+  failCheckStep = undefined;
+  await flow.runNext(20);
+  expect(await h.rows("select kind,model_id,effort from task_attempts where resumed_from is not null")).toEqual([{ kind: 'dev', model_id: first.model_id, effort: first.effort }]);
+  expect(await h.rows("select count(*)::int n from task_attempts where kind='rework'")).toEqual([{ n: 0 }]);
+});
+
+test.each(['process', 'collect', 'interrupt', 'qa-fail'] as const)('조정자 결정 4: %s 뒤 ack된 지시를 디스크에서 복구해 다음 시도에 다시 넣고 ack한다', async failure => {
+  const agent = failure === 'qa-fail' ? 'Codex' : 'Claude';
+  const collect = options.collect;
+  expect((await h.run('TASK-0001')).status).toBe(202);
+  if (failure === 'qa-fail') await flow.runNext(20);
+  const draft = await h.lead('POST', '/api/messages', { taskKey: 'TASK-0001', type: '추가 지시', toAgent: agent, body: '실패해도 다음 시도에서 지켜야 하는 지시입니다.' });
+  const id = String(draft.body.id);
+  expect((await h.lead('POST', `/api/messages/${id}/send`, { updatedAt: draft.body.updatedAt })).status).toBe(200);
+  if (failure === 'process') installFakeCli(join(home, 'fake'), 'claude', { ...cli(), exitCode: 1 });
+  if (failure === 'qa-fail') installFakeCli(join(home, 'fake'), 'codex', codex('FAIL'));
+  if (failure === 'collect') options.collect = async () => { throw new Error('결과 수집 실패'); };
+  if (failure === 'interrupt') installFakeCli(join(home, 'fake'), 'claude', cli('PASS', true));
+  const firstRun = flow.runNext(20);
+  void firstRun.catch(() => undefined);
+  if (failure === 'interrupt') {
+    await expect.poll(async () => (await h.message(id)).delivery, { timeout: 10_000 }).toBe('Acknowledged');
+    const first = (await h.rows('select id from task_attempts order by attempt_no desc limit 1'))[0] as { id: string };
+    execution.stop(first.id);
+  }
+  if (failure === 'collect') await expect(firstRun).rejects.toThrow('결과 수집 실패');
+  else await firstRun;
+  expect(await h.message(id)).toMatchObject({ delivery: 'Acknowledged' });
+  expect(runner.retainedMessages.map(m => m.id)).toEqual([id]);
+  const first = (await h.rows('select id,status from task_attempts order by attempt_no desc limit 1'))[0] as { id: string; status: string };
+  await flow.shutdown();
+  await state.close();
+  state = await State.open(home);
+  let acknowledgements = 0;
+  const api = h.runner.api;
+  runner = new Runner({ state, version: 'm505-restarted', api: async (operation, request) => {
+    if (operation === 'ackMessage') acknowledgements++;
+    return api(operation, request);
+  } });
+  await runner.poll();
+  executionOptions = { ...executionOptions, outbox: runner.outbox };
+  execution = new Execution(executionOptions);
+  await execution.recover();
+  options.collect = collect;
+  flow = new AttemptFlow({ ...options, execution, runner });
+  if (first.status === 'interrupted') expect((await h.resume(first.id)).status).toBe(202);
+  if (agent === 'Claude') installFakeCli(join(home, 'fake'), 'claude', cli());
+  else installFakeCli(join(home, 'fake'), 'codex', codex());
+  if (failure === 'qa-fail') await flow.runNext(20);
+  await flow.runNext(20);
+  const calls = await readFile(join(home, 'fake', `${agent.toLowerCase()}.calls.jsonl`), 'utf8');
+  expect(calls).toContain('이전 시도에서 받은 지시');
+  expect(calls).toContain(id);
+  expect(acknowledgements).toBe(1);
+  expect(runner.retainedMessages).toEqual([]);
+}, 60_000);
+
 test('프로세스가 남아 있는 job은 no_process로 끝냈다고 보고하지 않는다', async () => {
   const fake = installFakeCli(join(home, 'fake'), 'claude', cli('PASS', true));
   expect((await h.run('TASK-0001')).status).toBe(202);
@@ -298,6 +421,45 @@ test('시작 전 정책·메시지 조회 실패는 시도 없이 job을 실패 
   expect(await h.rows('select count(*)::int n from execution_holds where closed_at is null')).toEqual([{ n: 0 }]);
 });
 
+test.each(['prepare', 'getRunGrade', 'getTaskSubagents', 'canStart', 'aborted', 'sync-before', 'sync-after'] as const)('리뷰 R1·R5: %s 시작 전 실패는 임대 만료 뒤에도 거짓 미확인과 409 막힘을 남기지 않는다', async boundary => {
+  expect((await h.run('TASK-0001')).status).toBe(202);
+  const job = await execution.claim(20);
+  if (!job) throw new Error('예약한 개발 job이 필요합니다.');
+  if (boundary === 'sync-before') Object.defineProperty(runner, 'ready', { configurable: true, get: () => false });
+  if (boundary === 'sync-after') runner.poll = async () => { Object.defineProperty(runner, 'ready', { configurable: true, get: () => false }); };
+  if (boundary === 'prepare') executionOptions.prepare = async () => { throw new Error('작업 폴더 준비 실패'); };
+  if (boundary === 'canStart') executionOptions.canStart = () => ({ ok: false, reason: 'limit' });
+  if (boundary === 'getRunGrade' || boundary === 'getTaskSubagents') {
+    const api = executionOptions.api;
+    executionOptions.api = async (operation, request) => {
+      if (operation === boundary) throw new Error('조회 실패');
+      return api(operation, request);
+    };
+  }
+  const controller = new AbortController();
+  if (boundary === 'aborted') controller.abort();
+  await expect(flow.run(job, controller.signal)).rejects.toThrow();
+  if (boundary === 'sync-before' || boundary === 'sync-after') Reflect.deleteProperty(runner, 'ready');
+  expect(await h.rows('select count(*)::int n from task_attempts')).toEqual([{ n: 0 }]);
+  expect(await h.rows('select state from runner_jobs')).toEqual([{ state: 'failed' }]);
+  expect(await h.rows('select slot_state,lock_state,release_proof from execution_holds')).toEqual([{ slot_state: 'none', lock_state: 'released', release_proof: 'no_process' }]);
+  expect(await h.rows("select count(*)::int n from runner_job_events where kind='prestart_failed'")).toEqual([{ n: 1 }]);
+  await h.watchDisconnected();
+  expect(await h.rows("select count(*)::int n from alerts where key like 'unconfirmed:%'")).toEqual([{ n: 0 }]);
+  await h.runner.reconnect();
+  expect((await h.run('TASK-0001')).status).toBe(202);
+});
+
+test('claim 응답 사이 자원이 바뀌어 같은 canStart가 거절해도 새 보유를 남기지 않는다', async () => {
+  expect((await h.run('TASK-0001')).status).toBe(202);
+  const calls: number[] = [];
+  executionOptions.canStart = (_agent, slots) => { calls.push(slots); return calls.length === 1 ? { ok: true } : { ok: false, reason: 'limit' }; };
+  await expect(execution.claim(20)).rejects.toThrow('limit');
+  expect(calls).toEqual([1, 1]);
+  expect(await h.rows('select state from runner_jobs')).toEqual([{ state: 'failed' }]);
+  expect(await h.rows('select count(*)::int n from execution_holds where closed_at is null')).toEqual([{ n: 0 }]);
+});
+
 test('실행 실패는 같은 종류를 총 3회만 자동 실행하고 QA 결과를 만들지 않는다', async () => {
   installFakeCli(join(home, 'fake'), 'claude', { ...cli(), exitCode: 1 });
   expect((await h.run('TASK-0001')).status).toBe(202);
@@ -317,7 +479,22 @@ test('QA FAIL은 자동 재작업 3회 뒤 멈추고 중단이나 실행 실패�
   expect(await flow.runNext(20)).toBeNull();
   expect(await h.rows("select count(*)::int n from task_attempts where kind='rework'")).toEqual([{ n: 3 }]);
   expect((await h.lead('GET', '/api/tasks/TASK-0001')).body.lifecycleStatus).toBe('rework');
-}, 25_000);
+}, 60_000);
+
+test('재작업 안의 프로세스 실패 재시도는 같은 재작업 회차를 유지한다', async () => {
+  expect((await h.run('TASK-0001')).status).toBe(202);
+  await flow.runNext(20);
+  installFakeCli(join(home, 'fake'), 'codex', codex('FAIL'));
+  await flow.runNext(20);
+  installFakeCli(join(home, 'fake'), 'claude', { ...cli(), exitCode: 1 });
+  await flow.runNext(20);
+  installFakeCli(join(home, 'fake'), 'claude', cli());
+  await flow.runNext(20);
+  expect(await h.rows("select kind,status from task_attempts where kind='rework' order by attempt_no")).toEqual([
+    { kind: 'rework', status: 'failed' }, { kind: 'rework', status: 'completed' },
+  ]);
+  expect(await h.rows("select count(distinct j.payload->>'automaticCause')::int n from task_attempts a join runner_jobs j on j.id=a.job where a.kind='rework'")).toEqual([{ n: 1 }]);
+}, 60_000);
 
 test('시나리오 6: 실제 세션 결합으로 개발→QA FAIL→상향 재작업→재검증 PASS→Gate 대기', async () => {
   expect(await flow.runNext(20)).toBeNull();
@@ -337,4 +514,4 @@ test('시나리오 6: 실제 세션 결합으로 개발→QA FAIL→상향 재�
   expect(await flow.runNext(20)).toBeNull();
   expect(await h.rows("select count(*)::int n from ci_runs where stage=2")).toEqual([{ n: 0 }]);
   expect(await h.rows("select count(*)::int n from execution_holds where closed_at is null")).toEqual([{ n: 0 }]);
-});
+}, 60_000);

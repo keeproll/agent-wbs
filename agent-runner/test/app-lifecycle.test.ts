@@ -56,7 +56,7 @@ function app(api: ApiClient = vi.fn() as unknown as ApiClient, githubFetch?: typ
 }
 
 test('M5-05: 조립한 job 실행은 같은 Execution을 사용하고 앱 종료가 진행 중인 흐름도 기다린다', async () => {
-  const a = app(undefined, undefined, undefined, { collect: async () => ({ report: { summary: '', changedFiles: [], evidence: [] } }) });
+  const a = app(undefined, undefined, undefined, { collect: async () => ({ report: { summary: '', changedFiles: [], evidence: [] } }), taskCheck: async () => { throw new Error('이 시험에서는 실행하지 않습니다.'); } });
   expect(a.jobs).toBeDefined();
   if (!a.jobs) throw new Error('시도 흐름이 연결되지 않았습니다.');
   const shutdown = vi.spyOn(a.jobs, 'shutdown').mockResolvedValue();
