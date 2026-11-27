@@ -69,12 +69,13 @@ export function installRunner(app: FastifyInstance, pool: Pool) {
     const kind = prev && (prev.status === 'interrupted' || prev.status === 'failed') ? prev.kind : role === 'dev' ? task.status === 'rework' ? 'rework' : 'dev' : task.status === 'verifying' ? 'reverify' : 'qa';
     return (await runGrade(repo, task, kind)).wire;
   });
+  route('getExecutionHolds', async (repo, r) => ({ holds: await repo.ownedHolds(principal(r), required(r.platform).epoch) }));
   route('getTaskSubagents', async (repo, r) => {
     const task = await repo.task(params(r).taskKey);
     if (!task) throw new PlatformError('TASK_NOT_FOUND');
     const defs = await repo.subagents(task.id, (r.query as { role: string }).role);
     if (defs.some(d => !d.allowed)) throw new PlatformError('CLAIM_REJECTED', { reasons: ['지정한 하위 Agent의 재판단이 필요합니다.'] });
-    return { enabled: defs.length > 0, items: defs.map(d => ({ id: d.id, agent: d.agent, version: d.version, hash: d.hash, file: d.text, sandbox: d.sandbox })) };
+    return { enabled: defs.length > 0, items: defs.map(d => ({ id: d.id, key: d.def_key, agent: d.agent, version: d.version, hash: d.hash, file: d.text, sandbox: d.sandbox })) };
   });
   route('claimJob', async (repo, r) => {
     const b = body<{ kinds: string[]; capacity: number }>(r);

@@ -153,6 +153,7 @@ test('M4 결합: 연결부터 CLI 유휴 적용까지 한 시나리오', { timeo
             } },
           ].filter((c) => !resulted.has(c.id)) });
           return;
+        case 'GET /api/runner/holds': json(res, { holds: [] }); return;
         case 'GET /api/runner/policy':
           json(res, {
             caps: { ...caps, memReserveGB: 4 }, subagentBudget: { dev: 2, qa: 1 }, heartbeatSeconds: 60, inputCheckMinutes: 10,

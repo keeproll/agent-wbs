@@ -24,6 +24,7 @@ beforeEach(async () => {
   if (!app.github) throw new Error('GitHub 시험 설정이 없습니다.');
   github = app.github;
   vi.spyOn(app, 'reportHost').mockResolvedValue();
+  vi.spyOn(app.execution, 'recover').mockResolvedValue(true);
   vi.spyOn(app.updater, 'recover').mockResolvedValue();
   vi.spyOn(app, 'checkReadiness').mockResolvedValue({ at: new Date().toISOString(), items: [] });
   vi.spyOn(app, 'reportModels').mockResolvedValue();
@@ -92,7 +93,7 @@ test.each(['external', 'communication'])('P2: 한 시간 재시도 대기도 종
     expect(sleep).toHaveBeenCalledWith(3_600_000, undefined, { signal: expect.any(AbortSignal) });
     expect(keys).toHaveBeenCalledOnce();
     expect(github.client.checkConnection).not.toHaveBeenCalled();
-    expect(flush).not.toHaveBeenCalled();
+    expect(flush).toHaveBeenCalledOnce();
     expect(schedules).not.toHaveBeenCalled();
     expect(warnings).toEqual([]);
   } finally {

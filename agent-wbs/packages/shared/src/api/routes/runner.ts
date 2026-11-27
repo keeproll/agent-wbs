@@ -343,8 +343,10 @@ export const runnerOperations = [
         items: List(
           Type.Object({
             id: c.Id,
+            key: Type.String({ pattern: '^[a-z][a-z0-9-]{0,63}$' }),
             agent: c.Agent,
             version: c.Int4Count,
+            // owner M5-02: file 내용의 UTF-8 바이트를 SHA-256(hex)으로 계산한다.
             hash: Type.String(),
             file: Type.String(),
             sandbox: Type.String(),
@@ -692,6 +694,14 @@ export const runnerOperations = [
   /* ---- 명령·작업(contracts §3.2) ---- */
   operation({
     ...runner,
+    id: 'getExecutionHolds',
+    method: 'GET',
+    path: '/api/runner/holds',
+    summary: '현재 Runner principal·epoch의 미해제 실행 보유. 읽기 전용 재시작 대조',
+    responses: { 200: Type.Object({ holds: List(m.ExecutionHold) }) },
+  }),
+  operation({
+    ...runner,
     id: 'getCommands',
     method: 'GET',
     path: '/api/runner/commands',
@@ -701,7 +711,8 @@ export const runnerOperations = [
       200: Type.Object({
         currentEpoch: c.Epoch,
         commands: List(
-          Type.Object({ id: c.Id, kind: AnyOf('reset-cleanup'), epoch: c.Epoch, payload: c.Json }),
+          Type.Object({ id: c.Id, kind: AnyOf('reset-cleanup'), epoch: c.Epoch,
+            payload: Type.Object({ holds: Opt(List(m.ExecutionHold)) }, { additionalProperties: true }) }),
         ),
       }),
     },

@@ -23777,6 +23777,7 @@
                         "type": "object",
                         "required": [
                           "id",
+                          "key",
                           "agent",
                           "version",
                           "hash",
@@ -23786,6 +23787,10 @@
                         "properties": {
                           "id": {
                             "$ref": "#/components/schemas/Id"
+                          },
+                          "key": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9-]{0,63}$"
                           },
                           "agent": {
                             "$ref": "#/components/schemas/Agent"
@@ -27311,6 +27316,85 @@
         }
       }
     },
+    "/api/runner/holds": {
+      "get": {
+        "operationId": "getExecutionHolds",
+        "summary": "현재 Runner principal·epoch의 미해제 실행 보유. 읽기 전용 재시작 대조",
+        "tags": [
+          "runner"
+        ],
+        "security": [
+          {
+            "runnerToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectEpoch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "현재 Runner principal·epoch의 미해제 실행 보유. 읽기 전용 재시작 대조",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "holds"
+                  ],
+                  "properties": {
+                    "holds": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ExecutionHold"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "RUNNER_UNAUTHORIZED"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "EPOCH_MISMATCH"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited",
+            "description": "RATE_LIMITED"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "INTERNAL"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error",
+            "description": "UNAVAILABLE"
+          }
+        },
+        "x-error-codes": {
+          "401": [
+            "RUNNER_UNAUTHORIZED"
+          ],
+          "409": [
+            "EPOCH_MISMATCH"
+          ],
+          "429": [
+            "RATE_LIMITED"
+          ],
+          "500": [
+            "INTERNAL"
+          ],
+          "503": [
+            "UNAVAILABLE"
+          ]
+        }
+      }
+    },
     "/api/runner/commands": {
       "get": {
         "operationId": "getCommands",
@@ -27371,9 +27455,15 @@
                           },
                           "payload": {
                             "type": "object",
-                            "patternProperties": {
-                              "^.*$": {}
-                            }
+                            "properties": {
+                              "holds": {
+                                "type": "array",
+                                "items": {
+                                  "$ref": "#/components/schemas/ExecutionHold"
+                                }
+                              }
+                            },
+                            "additionalProperties": true
                           }
                         }
                       }
@@ -35087,6 +35177,250 @@
           }
         },
         "title": "Evidence"
+      },
+      "ExecutionHold": {
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "job",
+          "attempt",
+          "epoch",
+          "host_id",
+          "boot_id",
+          "fence",
+          "pgid",
+          "cgroup",
+          "task",
+          "conflict_group",
+          "agent",
+          "slots",
+          "heavy",
+          "slot_state",
+          "lock_state",
+          "lock_from_job",
+          "handed_to_job",
+          "release_proof",
+          "closed_at",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "job": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "attempt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "epoch": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "host_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "boot_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fence": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 2147483647
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pgid": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cgroup": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "task": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "conflict_group": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "agent": {
+            "$ref": "#/components/schemas/Agent"
+          },
+          "slots": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "heavy": {
+            "type": "boolean"
+          },
+          "slot_state": {
+            "enum": [
+              "none",
+              "reserved",
+              "active",
+              "unconfirmed"
+            ]
+          },
+          "lock_state": {
+            "enum": [
+              "none",
+              "held",
+              "orphaned",
+              "handed_over",
+              "released"
+            ]
+          },
+          "lock_from_job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "handed_to_job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "release_proof": {
+            "anyOf": [
+              {
+                "enum": [
+                  "no_process",
+                  "group_empty",
+                  "boot_changed"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "closed_at": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "lease_owner": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lease_until": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "ExecutionHold"
       },
       "Gate": {
         "type": "object",

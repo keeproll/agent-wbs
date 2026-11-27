@@ -1,0 +1,213 @@
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { afterEach, expect, test } from 'vitest';
+import { ApiTransportError, createApiClient } from '../../src/api/client.ts';
+import { Outbox } from '../../src/api/outbox.ts';
+import { Secret } from '../../src/security/secret.ts';
+import { State } from '../../src/state/state.ts';
+import { Execution } from '../../src/exec/session.ts';
+import { HeavySemaphore } from '../../src/resources/heavy.ts';
+import { installFakeCli } from '../fakes/cli.ts';
+import type { ClaimedJob } from '../../src/api/generated/client.ts';
+
+const roots: string[] = [];
+const states: State[] = [];
+afterEach(async () => {
+  await Promise.all(states.splice(0).map(s => s.close()));
+  await Promise.all(roots.splice(0).map(p => rm(p, { recursive: true, force: true })));
+});
+const job: Extract<ClaimedJob, { kind: 'attempt' }> = { id: 'job', kind: 'attempt', fence: 9, leaseUntil: new Date(Date.now() + 60000).toISOString(), payload: { taskKey: 'TASK-0001', kind: 'dev', agent: 'Codex', branch: 'agent/task', baseCommit: 'a'.repeat(40), inputVersion: 1, instructions: { spec: '작업 지시' } } };
+async function setup({ installBad = false, isolation = true, lines, hang = false, recovered = true, startMismatch = false, renewPast = false, closeStdout = false, holdsUnavailable = false }: { installBad?: boolean; isolation?: boolean; lines?: unknown[]; hang?: boolean; recovered?: boolean; startMismatch?: boolean; renewPast?: boolean; closeStdout?: boolean; holdsUnavailable?: boolean } = {}) {
+  const home = await mkdtemp('/home/keeproll/.orca/bots/agentwbs/archive/2026-11-27/M5-02/session-'); roots.push(home);
+  const fake = installFakeCli(join(home, 'fake'), 'codex', { lines: lines ?? [{ type: 'thread.started', thread_id: 'thread-1' }, { type: 'turn.completed', usage: { input_tokens: 10, cached_input_tokens: 2, output_tokens: 3 } }], hang, closeStdout });
+  const state = await State.open(home); states.push(state);
+  const requests: { path: string; body: Record<string, unknown>; key: string | null }[] = [];
+  const replay = new Map<string, Response>();
+  const api = createApiClient({ baseUrl: 'http://fake.invalid', token: new Secret('fake'), fetch: async (url, init) => {
+    const path = new URL(String(url)).pathname;
+    const body = typeof init?.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : {};
+    requests.push({ path, body, key: new Headers(init?.headers).get('idempotency-key') });
+    const key = new Headers(init?.headers).get('idempotency-key');
+    const cached = key ? replay.get(key) : undefined;
+    if (cached) return cached.clone();
+    let reply: unknown;
+    if (path.endsWith('/run-grade')) reply = { model: 'gpt-6.2-sol', effort: 'high', adjust: null, locked: false, floorEffort: 'low', allowedModels: ['gpt-6.2-sol'], policy: { onUsage: 'wait', lowPct: 20, onRework: 'up1', notifyAt: 2 } };
+    else if (path.endsWith('/subagents')) reply = { enabled: installBad, items: installBad ? [{ id: 'def', key: 'helper', agent: 'Codex', version: 1, hash: '0'.repeat(64), file: 'instruction', sandbox: 'read-only' }] : [] };
+    else if (path.endsWith('/start')) {
+      if (startMismatch) return Response.json({ error: { code: 'SUBAGENT_INSTALL_FAILED', message: '설치 중 허용 버전이 바뀜', action: '시작', fix: '정의 재조회', errors: [], details: {}, requestId: 'fake' } }, { status: 422 });
+      reply = { attemptId: `attempt-${requests.filter(r => r.path.endsWith('/start')).length}` };
+    }
+    else if (path.endsWith('/renew')) reply = { leaseUntil: renewPast ? '2020-01-01T00:00:00.000Z' : new Date(Date.now() + 60000).toISOString() };
+    else if (path.endsWith('/holds')) { if (holdsUnavailable) throw new ApiTransportError('getExecutionHolds'); reply = { holds: [] }; }
+    else if (path.endsWith('/jobs/claim')) reply = { job: (body.kinds as string[]).includes('attempt') ? job : { id: 'stop-job', kind: 'stop_attempt', fence: 1, leaseUntil: new Date(Date.now() + 60000).toISOString(), payload: { attemptId: 'attempt-1', reason: 'manual' } } };
+    else if (path.endsWith('/interrupt')) reply = { taskStatus: 'paused' };
+    else if (path.endsWith('/process')) { expect(fake.calls()).toHaveLength(requests.filter(r => r.path.endsWith('/process')).length - 1); }
+    const response = reply === undefined ? new Response(null, { status: 204 }) : Response.json(reply);
+    if (key) replay.set(key, response.clone());
+    return response;
+  } });
+  const outbox = new Outbox(state, api);
+  const sessions: { attemptId: string; agent: 'Codex' | 'Claude'; observed: number; reserved: number; state: 'ok' | 'unconfirmed'; children: number }[] = [];
+  const heavy = new HeavySemaphore(1);
+  const exec = new Execution({ home, identity: { hostId: 'host', bootId: 'boot' }, api, outbox, epoch: () => state.snapshot.epoch, ready: () => true, env: { PATH: process.env.PATH }, binaries: { Codex: fake.path, Claude: '/never-claude' }, prepare: () => Promise.resolve({ cwd: home, headSha: 'a'.repeat(40) }), budget: () => 2, sessions, heavy, ...(isolation ? { isolation: { name: 'fake', flags: () => [], wrap: l => l } } : {}) });
+  if (recovered) await exec.recover();
+  return { home, exec, requests, fake, sessions, outbox, heavy };
+}
+
+test('기본 격리 거부는 start와 실제 CLI 실행 전에 멈춘다', async () => {
+  const t = await setup({ isolation: false });
+  await expect(t.exec.run(job)).rejects.toMatchObject({ code: 'isolation_undecided' });
+  expect(t.requests.some(r => r.path.endsWith('/start'))).toBe(false);
+  expect(t.fake.calls()).toEqual([]);
+});
+
+test('설치 실패면 시도를 만들지 않고 SUBAGENT_INSTALL_FAILED를 outbox에 남긴다', async () => {
+  const t = await setup({ installBad: true });
+  await expect(t.exec.run(job)).rejects.toMatchObject({ code: 'SUBAGENT_INSTALL_FAILED' });
+  await t.outbox.flush();
+  expect(t.requests.some(r => r.path.endsWith('/start'))).toBe(false);
+  expect(t.requests.find(r => r.path.endsWith('/finish'))?.body).toMatchObject({ fence: 9, status: 'failed', error: { code: 'SUBAGENT_INSTALL_FAILED' } });
+  expect(t.requests.find(r => r.path.endsWith('/release'))?.body).toMatchObject({ proof: { kind: 'no_process' } });
+  expect(t.fake.calls()).toEqual([]);
+});
+
+test('설치 후 서버의 정의 버전 대조가 거절되어도 실제 CLI를 실행하지 않는다', async () => {
+  const t = await setup({ startMismatch: true });
+  await expect(t.exec.run(job)).rejects.toMatchObject({ status: 422, error: { code: 'SUBAGENT_INSTALL_FAILED' } });
+  expect(t.fake.calls()).toEqual([]);
+  expect(t.requests.find(r => r.path.endsWith('/finish'))?.body).toMatchObject({ status: 'failed', error: { code: 'SUBAGENT_INSTALL_FAILED' } });
+});
+
+test('start→process 순서를 지키고 예산을 지시문에 넣으며 같은 등급·작업 폴더에서만 CLI resume', async () => {
+  const t = await setup();
+  const first = await t.exec.run(job);
+  expect(first.observation.state).toBe('ok');
+  expect(first.reserved).toBe(3);
+  expect(t.fake.calls()[0]?.stdin).toContain('동시 하위 Agent 예산: 2');
+  expect(t.requests.findIndex(r => r.path.endsWith('/start'))).toBeLessThan(t.requests.findIndex(r => r.path.endsWith('/process')));
+  expect(t.sessions).toHaveLength(0);
+  await t.exec.run({ ...job, id: 'job-2', fence: 10 }, { resume: true });
+  expect(t.fake.calls()[1]?.argv).toContain('resume');
+  expect(t.fake.calls()[1]?.argv).toContain('thread-1');
+  await t.outbox.flush();
+  expect(t.requests.filter(r => r.path.endsWith('/slots/release')).every(r => (r.body.proof as { kind: string }).kind === 'group_empty')).toBe(true);
+  expect([...new Map(t.requests.filter(r => r.path.endsWith('/start')).map(r => [r.key, r.body.fence])).values()]).toEqual([9, 10]);
+});
+
+test('출력 단절은 수를 0으로 확정하지 않고 보수 예산을 유지한다', async () => {
+  const t = await setup({ lines: [{ type: 'thread.started', thread_id: 'thread-1' }] });
+  const result = await t.exec.run(job);
+  expect(result.observation.state).toBe('unconfirmed');
+  expect(result.reserved).toBe(3);
+  expect(result.ok).toBe(false);
+  await t.outbox.flush();
+  expect(t.requests.find(r => r.path.endsWith('/status'))?.body).toMatchObject({ status: 'failed', model: 'gpt-6.2-sol', effort: 'high', fence: 9 });
+});
+
+test.each([{ cwd: '/다른/폴더' }, { agent: 'Claude' }, { model: '다른-model' }, { effort: 'low' }])('CLI resume 로컬 조건이 달라지면 새 세션: %j', async change => {
+  const t = await setup();
+  await t.exec.run(job);
+  const dir = join(t.home, 'state/sessions'), [name] = await readdir(dir);
+  if (!name) throw new Error('세션 기록이 없습니다.');
+  const path = join(dir, name);
+  await writeFile(path, JSON.stringify({ ...JSON.parse(await readFile(path, 'utf8')) as object, ...change }));
+  await t.exec.run({ ...job, id: 'next-job' }, { resume: true });
+  expect(t.fake.calls()[1]?.argv).not.toContain('resume');
+});
+
+test('실행 중 lease 만료는 스트림이 살아 있어도 그룹을 멈춘다', async () => {
+  const t = await setup({ hang: true });
+  const result = await t.exec.run({ ...job, leaseUntil: new Date(Date.now() + 1500).toISOString() });
+  expect(result.ok).toBe(false);
+  expect(result.proof.kind).toBe('group_empty');
+  expect(t.sessions).toEqual([]);
+});
+
+test('재시작 대조를 마친 뒤에만 attempt claim을 보내고 기본 격리에서는 받지 않는다', async () => {
+  const t = await setup({ recovered: false });
+  expect(await t.exec.claim(3)).toBeNull();
+  expect(t.requests.some(r => r.path.endsWith('/jobs/claim'))).toBe(false);
+  expect(await t.exec.recover()).toBe(true);
+  expect(await t.exec.claim(3)).toMatchObject({ id: 'job', fence: 9 });
+  const pending = await setup({ isolation: false });
+  await pending.exec.recover();
+  expect(await pending.exec.claim(3)).toBeNull();
+});
+
+test('보유 조회 통신이 끊겨도 종료 신호는 재시작 대조의 재시도를 끝낸다', async () => {
+  const t = await setup({ recovered: false, holdsUnavailable: true });
+  const controller = new AbortController();
+  const recovering = t.exec.recover(undefined, controller.signal);
+  setTimeout(() => controller.abort(), 20);
+  await expect(recovering).rejects.toThrow();
+}, 500);
+
+test('관측 미확인은 새 세션을 막지만 중단 명령은 계속 받는다', async () => {
+  const t = await setup();
+  t.sessions.push({ attemptId: 'attempt-1', agent: 'Codex', observed: 2, reserved: 3, state: 'unconfirmed', children: 3 });
+  expect(await t.exec.claim(10)).toMatchObject({ kind: 'stop_attempt' });
+  expect(t.requests.find(r => r.path.endsWith('/jobs/claim'))?.body).toMatchObject({ kinds: ['stop_attempt'], capacity: 0 });
+});
+
+test('프로세스가 살아 있는 동안 stdout만 끊겨도 즉시 미확인으로 보유한다', async () => {
+  const t = await setup({ hang: true, closeStdout: true, lines: [{ type: 'thread.started', thread_id: 'thread-1' }] });
+  const running = t.exec.run(job);
+  try {
+    for (let i = 0; i < 100 && t.sessions[0]?.state !== 'unconfirmed'; i++) await sleep(10);
+    expect(t.sessions[0]).toMatchObject({ state: 'unconfirmed', reserved: 3 });
+    expect(await t.exec.claim(3)).toMatchObject({ kind: 'stop_attempt' });
+  } finally { await t.exec.shutdown(); await running.catch(() => undefined); }
+});
+
+test('임대가 이미 끝났으면 실제 실행과 start를 거부한다', async () => {
+  const t = await setup();
+  await expect(t.exec.run({ ...job, leaseUntil: '2020-01-01T00:00:00.000Z' })).rejects.toThrow();
+  expect(t.fake.calls()).toEqual([]);
+  expect(t.requests.some(r => r.path.endsWith('/start'))).toBe(false);
+});
+
+test('① 명령도 같은 HeavySemaphore와 acquire→process→release 절차를 사용한다', async () => {
+  const t = await setup();
+  const release = await t.heavy.acquire('다른 전체 테스트');
+  const command = t.exec.command({ id: 'job', fence: 9, epoch: 0 }, 'Codex', { file: t.fake.path, args: [], cwd: t.home, env: {}, stdin: '명령' });
+  await sleep(30);
+  expect(t.fake.calls()).toEqual([]);
+  expect(t.heavy.snapshot().waiting).toBe(1);
+  release();
+  expect((await command).code).toBe(0);
+  expect(t.heavy.snapshot().running).toBe(0);
+  expect(t.requests.filter(r => /slots\/acquire|\/process|slots\/release/.test(r.path)).map(r => r.path.split('/').slice(-2).join('/'))).toEqual(['slots/acquire', 'job/process', 'slots/release']);
+});
+
+test('① 명령도 임대가 유지되는지 확인한 뒤에만 실행한다', async () => {
+  const t = await setup({ renewPast: true });
+  await expect(t.exec.command({ id: 'job', fence: 9, epoch: 0 }, 'Codex', { file: t.fake.path, args: [], cwd: t.home, env: {}, stdin: '' })).rejects.toThrow('임대');
+  expect(t.fake.calls()).toEqual([]);
+  expect(t.heavy.snapshot().running).toBe(0);
+});
+
+test('실행 중 중단은 그룹 종료 뒤 interrupt를 보고하고 새 시도는 다른 attemptId를 쓴다', async () => {
+  const t = await setup({ hang: true });
+  const running = t.exec.run(job);
+  for (let i = 0; i < 100 && !t.fake.calls().length; i++) await sleep(10);
+  expect(t.exec.stop('attempt-1')).toBe(true);
+  const result = await running;
+  expect(result.ok).toBe(false);
+  expect(result.proof.kind).toBe('group_empty');
+  await t.outbox.flush();
+  expect(t.requests.find(r => r.path.endsWith('/interrupt'))?.body).toMatchObject({ fence: 9, reason: 'error' });
+  expect(t.sessions).toEqual([]);
+});
+
+test('같은 job을 동시에 두 번 실행해도 두 번째 CLI를 띄우지 않는다', async () => {
+  const t = await setup({ hang: true });
+  const first = t.exec.run(job);
+  try {
+    await expect(t.exec.run(job)).rejects.toThrow('이미 실행 중');
+  } finally {
+    await t.exec.shutdown();
+    await first.catch(() => undefined);
+  }
+  expect(t.fake.calls().length).toBeLessThanOrEqual(1);
+});

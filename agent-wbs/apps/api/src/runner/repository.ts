@@ -32,6 +32,11 @@ export class RunnerRepository {
       order by created_at,id for update skip locked`, [epoch, kinds])).rows;
   }
   async holds() { return (await this.client.query<Hold>('select * from execution_holds where closed_at is null for update')).rows; }
+  async ownedHolds(principal: string, epoch: number) {
+    return (await this.client.query<Hold & { lease_owner: string; lease_until: Date | null }>(`select h.*,j.lease_owner,j.lease_until
+      from execution_holds h join runner_jobs j on j.id=h.job
+      where h.closed_at is null and h.epoch=$2 and j.epoch=$2 and j.lease_owner=$1 order by h.created_at,h.id`, [principal, epoch])).rows;
+  }
   async hold(job: string) { return (await this.client.query<Hold>('select * from execution_holds where job=$1 for update', [job])).rows[0]; }
   async history(task: string) {
     return (await this.client.query<Attempt>(`select a.*,v.result as verification_result,j.payload->>'automaticCause' as automatic_cause,
