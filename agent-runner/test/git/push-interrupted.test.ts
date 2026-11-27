@@ -70,5 +70,35 @@ test('대조 중 같은 브랜치가 다시 기록되면(다른 커밋) 그 새 
   };
   const gate: PushGate = async () => { throw new Error('관문에서 멈춤(쓰기 없음)'); };
   await expect(repo.pushCommit(head, 'agent/e', gate)).rejects.toThrow('관문에서 멈춤');
-  expect(JSON.parse(await readFile(recordPath(), 'utf8'))).toEqual({ 'agent/e': { commit: next, outcome: 'GitPushUnknownError' } });
+  expect(JSON.parse(await readFile(recordPath(), 'utf8'))).toEqual({ 'agent/e': { commit: next, outcome: 'GitPushUnknownError', id: expect.any(String) } });
+});
+
+// Codex 재리뷰 5 P3(same-commit-new-mark-lost)의 반대 단언: 같은 브랜치·같은 커밋으로 다시 기록돼도 새 기록은 남고, 다음 push가 원격을 다시 읽는다.
+test('대조 중 같은 브랜치가 같은 커밋으로 다시 기록돼도 새 기록은 지우지 않고, 다음 push가 다시 대조한다', async () => {
+  await marks().markInterruptedPush('agent/same', head, 'GitPushAbortedError');
+  const original = (repo as unknown as { git(args: string[], input?: unknown, env?: NodeJS.ProcessEnv): Promise<Buffer> }).git.bind(repo);
+  let lsRemote = 0;
+  let injected = false;
+  (repo as unknown as { git: typeof original }).git = async (args, input, env) => {
+    const result = await original(args, input, env);
+    if (args[0] === 'ls-remote') {
+      lsRemote++;
+      // 원격 조회는 끝났고, 결과를 돌려주기 전에 같은 H의 새 중단 기록이 생긴다(리뷰어 재현과 같은 순서).
+      if (!injected) { injected = true; await marks().markInterruptedPush('agent/same', head, 'GitPushUnknownError'); }
+    }
+    return result;
+  };
+  const gate: PushGate = async () => { throw new Error('관문에서 멈춤(쓰기 없음)'); };
+  await expect(repo.pushCommit(head, 'agent/same', gate)).rejects.toThrow('관문에서 멈춤');
+  expect(JSON.parse(await readFile(recordPath(), 'utf8'))).toEqual({ 'agent/same': { commit: head, outcome: 'GitPushUnknownError', id: expect.any(String) } });
+  await expect(repo.pushCommit(head, 'agent/same', gate)).rejects.toThrow('관문에서 멈춤');
+  expect(lsRemote).toBe(2);
+});
+
+test('id가 없는 이전 형식의 기록도 읽고, 같은 커밋이면 대조 뒤 지운다', async () => {
+  await writeFile(recordPath(), JSON.stringify({ 'agent/old': { commit: head, outcome: 'GitPushAbortedError' } }));
+  git(repo.path, 'push', remote, `${head}:refs/heads/agent/old`);
+  const gate: PushGate = async () => { throw new Error('관문에 오면 안 됨'); };
+  expect(await repo.pushCommit(head, 'agent/old', gate)).toBe('already');
+  expect(JSON.parse(await readFile(recordPath(), 'utf8'))).toEqual({});
 });

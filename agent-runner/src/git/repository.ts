@@ -67,6 +67,8 @@ export interface HeadSyncChainProof extends HeadSyncProof { chain?: HeadSyncProo
 interface TreeEntry { mode: string; oid: string; path: string }
 interface WorktreeRecord { id: string; branch?: string; startCommit?: string }
 interface Registration { source: string; configHash: string; worktrees: WorktreeRecord[]; resetting?: boolean; resetGeneration?: number }
+/** 중단 push 기록 한 건. `id`는 기록마다 새로 붙이는 번호다(이전 형식에는 없다). */
+interface InterruptedPush { commit: string; outcome: string; id?: string }
 interface LockOwner { pid: number; bootId?: string; startTime?: string }
 const BOOT_ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 
@@ -557,7 +559,7 @@ export class GitRepository {
     return 'pushed';
   }
 
-  /** 중단한 push 기록(브랜치 → 보내던 커밋). 이름이 `.json`이 아니어야 시작 정리(recoverTaskChecks)가 저장소 기록으로 읽지 않는다. */
+  /** 중단한 push 기록(브랜치 → 보내던 커밋·결과·기록 번호). 이름이 `.json`이 아니어야 시작 정리(recoverTaskChecks)가 저장소 기록으로 읽지 않는다. */
   private get interruptedPushPath(): string {
     return join(this.home, 'state/git', `${this.repositoryId}.push-interrupted`);
   }
@@ -566,15 +568,16 @@ export class GitRepository {
    * 중단 기록을 읽는다. 파일이 없으면 빈 기록이다. 읽거나 해석하지 못하면(손상) `unreadable`이다.
    * 손상은 「기록 없음」으로 보지 않는다. 어떤 브랜치가 중단됐는지 모르므로 모든 브랜치를 재대조 대상으로 본다.
    */
-  private async readInterruptedPushes(): Promise<{ record: Record<string, { commit: string; outcome: string }>; unreadable: boolean }> {
+  private async readInterruptedPushes(): Promise<{ record: Record<string, InterruptedPush>; unreadable: boolean }> {
     let text: string;
     try { text = await readFile(await safePath(this.interruptedPushPath), 'utf8'); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { record: {}, unreadable: false }; return { record: {}, unreadable: true }; }
     try {
       const value = JSON.parse(text) as unknown;
       if (!value || typeof value !== 'object' || Array.isArray(value) ||
-        Object.values(value).some((entry) => !entry || typeof (entry as { commit?: unknown }).commit !== 'string')) return { record: {}, unreadable: true };
-      return { record: value as Record<string, { commit: string; outcome: string }>, unreadable: false };
+        Object.values(value).some((entry) => !entry || typeof (entry as { commit?: unknown }).commit !== 'string' ||
+          !['string', 'undefined'].includes(typeof (entry as { id?: unknown }).id))) return { record: {}, unreadable: true };
+      return { record: value as Record<string, InterruptedPush>, unreadable: false };
     } catch { return { record: {}, unreadable: true }; }
   }
 
@@ -583,7 +586,7 @@ export class GitRepository {
    * 왜: 같은 저장소의 두 작업이 동시에 중단되면 서로의 기록을 덮어 한 브랜치의 재대조가 빠졌다(Codex 재리뷰 4 P3).
    * 손상된 기록은 고쳐 쓰지 않고 그대로 둔다(사람이 확인하기 전까지 모든 브랜치를 재대조한다).
    */
-  private async updateInterruptedPushes(change: (record: Record<string, { commit: string; outcome: string }>) => void): Promise<void> {
+  private async updateInterruptedPushes(change: (record: Record<string, InterruptedPush>) => void): Promise<void> {
     await this.worktreeUpdate(async () => {
       const { record, unreadable } = await this.readInterruptedPushes();
       if (unreadable) return;
@@ -592,8 +595,9 @@ export class GitRepository {
     });
   }
 
+  /** 기록마다 새 번호(`id`)를 붙인다. 왜: 같은 브랜치·같은 커밋을 다시 중단한 기록도 이전 기록과 구분해야 한다(Codex 재리뷰 5 P3). */
   private async markInterruptedPush(branch: string, commit: string, outcome: string): Promise<void> {
-    await this.updateInterruptedPushes((record) => { record[branch] = { commit, outcome }; });
+    await this.updateInterruptedPushes((record) => { record[branch] = { commit, outcome, id: randomUUID() }; });
   }
 
   /**
@@ -601,7 +605,8 @@ export class GitRepository {
    * - 원격 head가 보내던 커밋이면 그 push는 이미 반영됐다: 다시 쓰지 않는다('already').
    * - 아니면 기록을 지우고 평소처럼 push한다(일반 push라 원격이 다른 커밋으로 움직였으면 git이 거부한다).
    * - 기록이 손상됐으면 이 브랜치도 대조한다(기록은 지우지 않는다).
-   * 원격 읽기는 잠금 밖에서 한다. 지울 때는 잠금 아래에서, 그 사이 같은 브랜치가 다시 기록됐으면 지우지 않는다.
+   * 원격 읽기는 잠금 밖에서 한다. 지울 때는 잠금 아래에서, 읽은 기록과 번호(`id`)가 같을 때만 지운다.
+   * 그 사이 같은 브랜치가 다시 기록됐으면(같은 커밋이라도) 번호가 달라 지우지 않는다. 번호가 없는 이전 형식은 커밋으로 대조한다.
    * 왜: 중단·모름은 「반영 안 됨」의 증거가 아니다. 원격 상태를 확인한 뒤에 다음 쓰기를 한다.
    */
   private async reconcileInterruptedPush(source: string, branch: string, commit: string, env: NodeJS.ProcessEnv): Promise<'already' | 'push'> {
@@ -611,7 +616,8 @@ export class GitRepository {
     const line = (await this.git(['ls-remote', '--heads', '--', source, `refs/heads/${branch}`], undefined, env)).toString().trim();
     const remoteHead = line ? line.split(/\s/)[0] : null;
     if (marked) await this.updateInterruptedPushes((current) => {
-      if (current[branch]?.commit === marked.commit) Reflect.deleteProperty(current, branch);
+      const now = current[branch];
+      if (now && now.id === marked.id && now.commit === marked.commit) Reflect.deleteProperty(current, branch);
     });
     return remoteHead === commit ? 'already' : 'push';
   }
