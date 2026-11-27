@@ -203,7 +203,14 @@ for f in "$RUNNER_HOME/.config/gh/hosts.yml" "$RUNNER_HOME/.bashrc"; do
 done
 
 step '5. WSL 탈출 통로'
-for t in "$ROOT_PREFIX/mnt" "$ROOT_PREFIX/mnt/c" "$ROOT_PREFIX/run/WSL" "$ROOT_PREFIX/Docker" "$ROOT_PREFIX/Docker/host"; do
+# /mnt 아래는 하나도 빠짐없이 본다: 드라이브(c·d·x 등, 0777이라 하나라도 열리면 Windows 파일을 읽고 쓴다), wsl·wslg와 그 안쪽까지.
+# 왜: /mnt를 통째로 막는 것이 기본이지만, 막힘이 하나라도 풀렸는지 이름마다 확인해야 「빠짐없음」을 증명할 수 있다(fix7).
+wsl_targets=("$ROOT_PREFIX/mnt")
+for t in "$ROOT_PREFIX"/mnt/* "$ROOT_PREFIX"/mnt/wsl/*; do
+  [[ -e $t || -L $t ]] && wsl_targets+=("$t")
+done
+wsl_targets+=("$ROOT_PREFIX/run/WSL" "$ROOT_PREFIX/Docker" "$ROOT_PREFIX/Docker/host")
+for t in "${wsl_targets[@]}"; do
   [[ -e $t ]] || continue
   # 목록 읽기와 지나가기를 따로 본다. 목록이 막혀도 이름을 알면 지나갈 수 있다(리뷰 P2-7).
   agent_blocked "목록 읽기 $t" test -r "$t"
@@ -243,6 +250,26 @@ else
 fi
 agent_blocked 'Docker 소켓 쓰기(root와 같은 권한)' test -w "$ROOT_PREFIX/var/run/docker.sock"
 agent_blocked 'Docker 소켓 읽기' test -r "$ROOT_PREFIX/var/run/docker.sock"
+
+step '5-1. Agent 계정 DNS(이름 찾기)'
+# Claude·Codex 로그인과 실행에는 서버 이름(예: api.anthropic.com)을 주소로 바꾸는 DNS가 필요하다.
+# WSL의 /etc/resolv.conf는 /mnt/wsl/resolv.conf로 가는 링크라, /mnt가 막힌 Agent는 그대로면 못 읽는다(fix7: 실제 파일 사본으로 바꿈).
+# 대조: Runner가 먼저 찾아 본다. Runner도 못 찾으면 인터넷·DNS 문제라 Agent 결과를 판단할 수 없으니 WARN으로 둔다.
+DNS_NAME=api.anthropic.com
+if [[ -L $RESOLV_DST ]]; then
+  note "$RESOLV_DST: 링크($(readlink -- "$RESOLV_DST"))"
+elif [[ -f $RESOLV_DST ]]; then
+  if [[ $(head -n 1 -- "$RESOLV_DST" 2> /dev/null || true) == "$RESOLV_MARK" ]]; then note "$RESOLV_DST: 실제 파일(DNS 사본 도우미가 만듦)"; else note "$RESOLV_DST: 실제 파일(직접 관리)"; fi
+fi
+agent_allowed "DNS 설정 파일 읽기 $RESOLV_DST" test -r "$RESOLV_DST"
+if getent hosts "$DNS_NAME" > /dev/null 2>&1; then
+  agent_allowed "DNS 해석 $DNS_NAME" getent hosts "$DNS_NAME"
+else
+  warn "Runner 계정도 $DNS_NAME을 찾지 못함(인터넷·DNS 확인). Agent DNS 검사는 건너뜀"
+fi
+if [[ -e $RESOLV_SRC ]]; then
+  agent_blocked "WSL DNS 원본 직접 읽기 $RESOLV_SRC(/mnt는 계속 막힘)" cat -- "$RESOLV_SRC"
+fi
 
 step '6. 작업 영역 권한'
 agent_allowed "CLI 폴더 들어가기 $AGENT_ROOT/cli" test -x "$AGENT_ROOT/cli"

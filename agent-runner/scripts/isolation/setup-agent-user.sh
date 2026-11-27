@@ -52,6 +52,7 @@ NODE_BIN=$(realpath -e -- "$NODE_BIN") || die "node 파일이 없습니다: $NOD
 [[ -f $NODE_BIN && -x $NODE_BIN ]] || die "node가 실행 파일이 아닙니다: $NODE_BIN"
 command -v sudo > /dev/null || die 'sudo가 없습니다.'
 [[ -f $HERE/awbs-agent-exec.sh ]] || die '실행 래퍼(awbs-agent-exec.sh)가 같은 폴더에 없습니다.'
+[[ -f $HERE/awbs-resolv-sync.sh ]] || die 'DNS 사본 도우미(awbs-resolv-sync.sh)가 같은 폴더에 없습니다.'
 IS_WSL=0
 [[ -e $WSL_BINFMT || -d $ROOT_PREFIX/run/WSL ]] && IS_WSL=1
 
@@ -80,7 +81,7 @@ done
 for p in "${WSL_BLOCK_DIRS[@]}"; do
   [[ -e $p || -L $p ]] && safe_fixed_path "$p"
 done
-for p in "$CRON_DENY" "$AT_DENY"; do
+for p in "$CRON_DENY" "$AT_DENY" "$RESOLV_SYNC_PATH" "$RESOLV_UNIT_PATH" "$RESOLV_WATCH_PATH"; do
   safe_fixed_path "$p"
 done
 # cron.allow·at.allow가 있으면 deny 파일은 쓰이지 않는다(allow에 없는 계정만 막힘). 그 경우 allow에 Agent가 없어야 한다.
@@ -159,6 +160,39 @@ ExecStart=/usr/bin/setfacl -P -m u:$AGENT_USER:--- /run/WSL
 WantedBy=multi-user.target
 EOF
 
+# DNS 사본 서비스(fix7): 부팅 때 한 번 /mnt/wsl/resolv.conf를 /etc/resolv.conf 실제 파일로 옮긴다.
+# /mnt는 Agent에게 막혀 있어서, WSL이 만든 링크(/etc/resolv.conf → /mnt/wsl/resolv.conf)로는 Agent가 DNS 설정을 못 읽는다.
+cat > "$TMP/resolv.service" << EOF
+# Agent WBS(Q-08 fix7): WSL의 DNS 설정(/mnt/wsl/resolv.conf)을 /etc/resolv.conf 실제 파일로 옮긴다.
+# 왜: /mnt는 $AGENT_USER에게 막혀 있어(Windows 드라이브 차단) 링크를 따라가지 못해 이름 찾기(DNS)가 안 된다.
+[Unit]
+Description=Agent WBS: copy WSL DNS settings to /etc/resolv.conf for $AGENT_USER
+After=local-fs.target
+ConditionPathExists=/mnt/wsl/resolv.conf
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/awbs-resolv-sync
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# DNS 사본 감시(fix7): 원본이 바뀌거나, WSL이 새 터미널을 열 때 /etc/resolv.conf를 다시 링크로 만들면 곧바로 다시 옮긴다.
+cat > "$TMP/resolv.path" << EOF
+# Agent WBS(Q-08 fix7): DNS 원본·/etc/resolv.conf가 바뀌면 $RESOLV_UNIT을 다시 실행한다.
+[Unit]
+Description=Agent WBS: re-copy WSL DNS settings when they change
+
+[Path]
+PathChanged=/mnt/wsl/resolv.conf
+PathChanged=/etc/resolv.conf
+Unit=$RESOLV_UNIT
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 # sudoers 문법을 미리 검사한다. 문법이 틀린 파일을 넣으면 sudo 전체가 멈출 수 있기 때문이다.
 if /usr/sbin/visudo -c -q -f "$TMP/sudoers" > /dev/null 2>&1; then
   note 'sudoers 문법 검사(미리 보기): 통과'
@@ -167,7 +201,7 @@ else
 fi
 
 if ((DRY_RUN)); then
-  for f in agent-exec.conf sudoers guard.service; do
+  for f in agent-exec.conf sudoers guard.service resolv.service resolv.path; do
     printf '\n--- 만들 파일: %s\n' "$f"
     cat "$TMP/$f"
   done
@@ -264,8 +298,17 @@ if ((IS_WSL)); then
   done
   ensure_root_dir "$(dirname "$GUARD_PATH")"
   as_root install -o root -g root -m 0644 "$TMP/guard.service" "$GUARD_PATH"   # 다음 부팅부터도 /run/WSL을 막는 서비스
+  # DNS 사본(fix7): /mnt는 막은 채로 DNS 설정만 /etc/resolv.conf 실제 파일로 옮긴다. 그래야 Agent가 Claude·Codex 서버 이름을 찾는다.
+  note 'Agent는 /mnt가 막혀 WSL의 DNS 설정(/mnt/wsl/resolv.conf)을 못 읽는다. 그래서 설정 줄만 /etc/resolv.conf 실제 파일로 옮겨 둔다.'
+  ensure_root_dir "$(dirname "$RESOLV_SYNC_PATH")"
+  as_root install -o root -g root -m 0755 "$HERE/awbs-resolv-sync.sh" "$RESOLV_SYNC_PATH"   # DNS 사본 도우미(root 소유)
+  as_root install -o root -g root -m 0644 "$TMP/resolv.service" "$RESOLV_UNIT_PATH"         # 부팅 때 한 번 옮기는 서비스
+  as_root install -o root -g root -m 0644 "$TMP/resolv.path" "$RESOLV_WATCH_PATH"           # 바뀔 때마다 다시 옮기는 감시
   as_root systemctl daemon-reload                                        # 새 서비스 파일 읽기
   as_root systemctl enable "$GUARD_UNIT"                                 # 부팅 때 자동 실행
+  as_root systemctl enable "$RESOLV_UNIT"                                # 부팅 때 DNS 사본 만들기
+  as_root systemctl enable --now "$RESOLV_WATCH"                         # 지금부터 DNS 설정 변경 감시
+  as_root systemctl start "$RESOLV_UNIT"                                 # 재부팅 없이 지금 한 번 옮김(실패하면 여기서 멈춘다)
 else
   note 'WSL이 아니라 건너뜀'
 fi

@@ -49,6 +49,11 @@ function setup(): void {
   writeExec(sudo, `#!/bin/bash\n[[ $1 == -n && $2 == -u && $4 == -- ]] || { echo bad-sudo-args >&2; exit 9; }\nshift 4\nexec env -i "$@"\n`);
 }
 
+/** 저장소의 래퍼 원본 내용. */
+function original(): string {
+  return readFileSync(join(import.meta.dirname, '..', '..', 'scripts', 'isolation', 'awbs-agent-exec.sh'), 'utf8');
+}
+
 function writeConf(file: string, over: Record<string, string>): void {
   const values = { AGENT_USER: me, RUNNER_USER: 'keeproll', RUNNER_HOME: runnerHome, AGENT_ROOT: area, NODE_DIR: join(area, 'runtime', 'node', 'bin'), ...over };
   writeFileSync(file, `# 시험 설정\n${Object.entries(values).map(([k, v]) => `${k}=${v}`).join('\n')}\n`);
@@ -302,6 +307,27 @@ describe.skipIf(!usable)('awbs-agent-exec 실행 래퍼(bash, 실제 실행)', (
     } finally {
       chmodSync(join(empty, 'cli'), 0o755);
       chmodSync(join(empty, 'inputs'), 0o755);
+    }
+  });
+
+  // fix7: WSL 링크(/etc/resolv.conf → /mnt/wsl/...)가 그대로면 /mnt가 막힌 Agent는 DNS 설정을 못 읽는다.
+  test('check: DNS 설정 파일을 읽을 수 없으면 fail resolv_unreadable, 읽을 수 있으면 그 항목 없음', () => {
+    expect(original()).toContain(`[[ -e /etc/resolv.conf || -L /etc/resolv.conf ]] && [[ ! -r /etc/resolv.conf ]]`);
+    expect(wrapper(['check']).stdout).not.toContain('resolv_unreadable');
+    const locked = join(root, 'locked-mnt');
+    mkdirSync(locked, { recursive: true });
+    writeFileSync(join(locked, 'resolv.conf'), 'nameserver 10.255.255.254\n');
+    const link = join(root, 'resolv-link.conf');
+    symlinkSync(join(locked, 'resolv.conf'), link);
+    const file = join(root, 'exec-resolv');
+    writeExec(file, readFileSync(exec, 'utf8').replaceAll('/etc/resolv.conf', link));
+    chmodSync(locked, 0o000);
+    try {
+      const r = wrapper(['check'], '', file);
+      expect(r.code).toBe(1);
+      expect(r.stdout).toContain('fail resolv_unreadable');
+    } finally {
+      chmodSync(locked, 0o755);
     }
   });
 

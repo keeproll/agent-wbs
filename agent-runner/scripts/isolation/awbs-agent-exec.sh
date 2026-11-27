@@ -180,6 +180,9 @@ cmd_check() {
   rc=0; writable_below "$INPUTS_DIR" || rc=$?
   case $rc in 0) fail inputs_writable ;; 2) fail inputs_unverified ;; esac
   if [[ ! -x $NODE_DIR/node ]]; then fail node_missing; fi
+  # DNS 설정을 읽을 수 있어야 Claude·Codex 서버 이름을 찾는다. WSL 링크(/etc/resolv.conf → /mnt/wsl/...)가 그대로면
+  # /mnt가 막힌 Agent는 못 읽는다(fix7). 설정 파일이 아예 없는 PC는 여기서 보지 않는다.
+  if [[ -e /etc/resolv.conf || -L /etc/resolv.conf ]] && [[ ! -r /etc/resolv.conf ]]; then fail resolv_unreadable; fi
   if ((failed == 0)); then echo ok; fi
   return "$failed"
 }

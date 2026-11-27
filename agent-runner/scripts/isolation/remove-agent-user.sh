@@ -79,7 +79,7 @@ left() { LEFT+=("$1"); printf '   건너뜀: %s\n' "$1"; }
 uid_owner() { getent passwd "$1" | cut -d: -f1 || true; }
 
 # root가 다룰 고정 경로를 먼저 검사한다(링크·예상 밖 소유자면 멈춤).
-for p in "$SUDOERS_PATH" "$EXEC_PATH" "$CONF_PATH" "$GUARD_PATH"; do
+for p in "$SUDOERS_PATH" "$EXEC_PATH" "$CONF_PATH" "$GUARD_PATH" "$RESOLV_SYNC_PATH" "$RESOLV_UNIT_PATH" "$RESOLV_WATCH_PATH"; do
   safe_fixed_path "$p"
 done
 safe_fixed_path "$AGENT_ROOT" "$RUNNER_USER"
@@ -207,6 +207,29 @@ else
       as_root setfacl -P -x "u:$UID_NUM" "$dir"                            # 숫자 UID로 지움. -P: 링크는 따라가지 않음
     done
   fi
+fi
+
+step '4-1. DNS 사본 정리(WSL이 만든 링크로 되돌림)'
+# DNS 사본은 Agent를 더 막는 장치가 아니라 Agent가 이름을 찾게 해 주는 장치다. 그래서 계정 삭제 여부와 관계없이 정리한다.
+# 감시(path)를 먼저 끈다. 켜 둔 채 링크로 되돌리면 감시가 바로 다시 사본으로 바꾼다.
+resolv_units=0
+if [[ -f $RESOLV_WATCH_PATH ]]; then
+  as_root systemctl disable --now "$RESOLV_WATCH"                        # 변경 감시 끄기
+  as_root rm -f -- "$RESOLV_WATCH_PATH"
+  resolv_units=1
+fi
+if [[ -f $RESOLV_UNIT_PATH ]]; then
+  as_root systemctl disable "$RESOLV_UNIT"                               # 부팅 때 사본 만들기 끄기
+  as_root rm -f -- "$RESOLV_UNIT_PATH"
+  resolv_units=1
+fi
+((resolv_units)) && as_root systemctl daemon-reload
+[[ -f $RESOLV_SYNC_PATH ]] && as_root rm -f -- "$RESOLV_SYNC_PATH"        # DNS 사본 도우미 삭제
+# /etc/resolv.conf가 도우미가 만든 사본일 때만 WSL 원래 모양(원본으로 가는 링크)으로 되돌린다. 직접 관리하는 파일은 그대로 둔다.
+if [[ -f $RESOLV_DST && ! -L $RESOLV_DST ]] && [[ $(head -n 1 -- "$RESOLV_DST" 2> /dev/null || true) == "$RESOLV_MARK" ]]; then
+  as_root ln -sfnT "$RESOLV_SRC" "$RESOLV_DST"
+else
+  note '/etc/resolv.conf는 DNS 사본이 아니라 그대로 둠'
 fi
 
 step '5. 작업 영역'

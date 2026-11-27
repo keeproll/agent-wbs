@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
@@ -24,6 +24,8 @@ const MARK = 'Agent WBS agent awbs-agent-setup-0123456789abcdef';
 const AGENT_LINE = `awbs-agent:x:998:998:${MARK}:/home/awbs-agent:/usr/sbin/nologin`;
 const UNMARKED_LINE = 'awbs-agent:x:998:998:Agent WBS agent:/home/awbs-agent:/usr/sbin/nologin';
 const EXEC = '/usr/local/libexec/awbs-agent-exec';
+/** DNS 사본 도우미가 만든 /etc/resolv.conf의 첫 줄(common.sh RESOLV_MARK와 같음). */
+const RESOLV_MARK = '# Agent WBS(Q-08): /mnt/wsl/resolv.conf(WSL이 만든 원본)에서 awbs-resolv-sync가 옮긴 사본. 원본이 바뀌면 다시 옮긴다.';
 
 let R = '';
 let n = 0;
@@ -321,6 +323,37 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
       });
     });
 
+    test('fix7: WSL이면 DNS 사본 도우미·서비스·감시를 설치하고 지금 한 번 옮긴 뒤에 래퍼 점검·실행 규칙', () => {
+      rules(okCheck);
+      const r = setup();
+      expect(r.code, r.out).toBe(0);
+      const i = (p: string) => at(r.log, p);
+      expect(r.log).toContain(`-- install -o root -g root -m 0755 ${join(scripts, 'awbs-resolv-sync.sh')} ${R}/usr/local/libexec/awbs-resolv-sync`);
+      expect(i(`${R}/etc/systemd/system/awbs-agent-resolv.service`)).toBeGreaterThan(-1);
+      expect(i(`${R}/etc/systemd/system/awbs-agent-resolv.path`)).toBeGreaterThan(-1);
+      expect(i('-- systemctl enable awbs-agent-resolv.service')).toBeGreaterThan(-1);
+      expect(i('-- systemctl enable --now awbs-agent-resolv.path')).toBeGreaterThan(-1);
+      const start = i('-- systemctl start awbs-agent-resolv.service');
+      expect(start).toBeGreaterThan(i('-- systemctl enable --now awbs-agent-resolv.path'));
+      expect(start).toBeLessThan(i('awbs-agent-exec check'));
+      // 서비스 파일: 도우미를 root로 실행. 감시: 원본과 /etc/resolv.conf 둘 다
+      const unit = readFileSync(join(R, 'etc/systemd/system/awbs-agent-resolv.service'), 'utf8');
+      expect(unit).toContain('ExecStart=/usr/local/libexec/awbs-resolv-sync');
+      const watch = readFileSync(join(R, 'etc/systemd/system/awbs-agent-resolv.path'), 'utf8');
+      expect(watch).toContain('PathChanged=/mnt/wsl/resolv.conf');
+      expect(watch).toContain('PathChanged=/etc/resolv.conf');
+      // /mnt는 여전히 통째로 막는다
+      expect(r.log).toContain(`-- setfacl -P -m u:awbs-agent:--- ${R}/mnt`);
+    });
+
+    test('fix7: DNS 사본을 지금 만들지 못하면(서비스 실패) 실행 규칙을 넣지 않고 닫힌 상태로 끝난다', () => {
+      rules([1, '', '-- systemctl start awbs-agent-resolv.service'], okCheck);
+      const r = setup();
+      expect(r.code).not.toBe(0);
+      expect(r.log.some((l) => l.includes('-m 0440'))).toBe(false);
+      expect(r.out).toContain('닫힌 상태로 둡니다');
+    });
+
     test('dry-run은 가짜 sudo도 부르지 않는다', () => {
       const r = setup(['--dry-run']);
       expect(r.code, r.out).toBe(0);
@@ -334,6 +367,32 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
       fresh({ account: AGENT_LINE, uid: '998' });
       mkdirSync(join(R, 'srv/agentwbs/worktrees'), { recursive: true });
       writeFileSync(join(R, '.procs'), '1234\n');
+    });
+
+    test('fix7: 제거는 감시를 먼저 끄고 DNS 사본 단위·도우미를 지운 뒤, 사본이면 WSL 링크로 되돌린다', () => {
+      mkdirSync(join(R, 'etc/systemd/system'), { recursive: true });
+      mkdirSync(join(R, 'mnt/wsl'), { recursive: true });
+      writeFileSync(join(R, 'mnt/wsl/resolv.conf'), 'nameserver 10.255.255.254\n');
+      writeFileSync(join(R, 'etc/systemd/system/awbs-agent-resolv.service'), 'x');
+      writeFileSync(join(R, 'etc/systemd/system/awbs-agent-resolv.path'), 'x');
+      writeFileSync(join(R, 'usr/local/libexec/awbs-resolv-sync'), 'x');
+      writeFileSync(join(R, 'etc/resolv.conf'), `${RESOLV_MARK}\nnameserver 10.255.255.254\n`);
+      const r = run('remove-agent-user.sh');
+      expect(r.code, r.out).toBe(0);
+      const i = (p: string) => at(r.log, p);
+      expect(i('-- systemctl disable --now awbs-agent-resolv.path')).toBeLessThan(i('-- ln -sfnT'));
+      expect(r.log).toContain(`-- rm -f -- ${R}/usr/local/libexec/awbs-resolv-sync`);
+      expect(r.log).toContain(`-- ln -sfnT ${R}/mnt/wsl/resolv.conf ${R}/etc/resolv.conf`);
+      expect(readlinkSync(join(R, 'etc/resolv.conf'))).toBe(join(R, 'mnt/wsl/resolv.conf'));
+      expect(existsSync(join(R, 'etc/systemd/system/awbs-agent-resolv.path'))).toBe(false);
+    });
+
+    test('fix7: /etc/resolv.conf가 직접 관리하는 파일이면 제거도 건드리지 않는다', () => {
+      writeFileSync(join(R, 'etc/resolv.conf'), 'nameserver 1.1.1.1\n');
+      const r = run('remove-agent-user.sh');
+      expect(r.code, r.out).toBe(0);
+      expect(r.log.some((l) => l.includes(' ln '))).toBe(false);
+      expect(readFileSync(join(R, 'etc/resolv.conf'), 'utf8')).toBe('nameserver 1.1.1.1\n');
     });
 
     test('정상(작업 영역 남김): 규칙 회수 → 프로세스 0개 확인 → 계정 삭제 → 그 뒤 Windows 차단 해제 → 숫자 권한 항목 정리', () => {
@@ -525,6 +584,8 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
         allow('*mkdir * _ */worktrees/.check-*'),
         allow('*test -r */.interop-*/whoami.exe'),
         allow('*test -x */.interop-*/whoami.exe'),
+        allow('*test -r */etc/resolv.conf'),
+        allow('*getent hosts api.anthropic.com'),
       ];
     }
     beforeEach(() => {
@@ -536,6 +597,11 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
       writeFileSync(join(R, 'etc/sudoers.d/awbs-agent'), `${sudoersContent()}\n`);
       writeFileSync(join(R, 'etc/cron.deny'), 'awbs-agent\n');
       writeFileSync(join(R, 'etc/at.deny'), 'daemon\nawbs-agent\n');
+      // WSL DNS 흉내: 원본은 /mnt/wsl 아래, /etc/resolv.conf는 도우미가 만든 사본. Runner는 이름을 찾을 수 있다.
+      mkdirSync(join(R, 'mnt/wsl'), { recursive: true });
+      writeFileSync(join(R, 'mnt/wsl/resolv.conf'), 'nameserver 10.255.255.254\n');
+      writeFileSync(join(R, 'etc/resolv.conf'), `${RESOLV_MARK}\nnameserver 10.255.255.254\n`);
+      writeFileSync(join(R, 'etc/hosts'), '160.79.104.10 api.anthropic.com\n');
     });
     const check = () => run('check-agent-user.sh');
 
@@ -667,6 +733,53 @@ describe.skipIf(!usable)('설치·되돌리기·확인 스크립트(가짜 루�
       expect(r.out).toContain('FAIL  확인 못 함: Runner 계정에서도 Windows 프로그램이 안 돎(대조 실패)');
       expect(r.out).toContain('진단: 종료 코드 1, WSL_INTEROP=/run/WSL/77_interop');
       expect(r.out).toContain('진단: 오류 출력 UtilConnectUnix: connect failed 13');
+    });
+
+    // fix7: Agent 계정 DNS. WSL 링크(/etc/resolv.conf → /mnt/wsl/resolv.conf)가 그대로면 /mnt가 막힌 Agent는 못 읽는다.
+    test('fix7: Agent가 DNS 설정을 읽고 이름을 찾으면 PASS, /mnt/wsl 원본은 여전히 못 읽어야 PASS', () => {
+      rules(...baseline());
+      const r = check();
+      expect(r.out).toContain(`PASS  Agent가 함: DNS 설정 파일 읽기 ${R}/etc/resolv.conf`);
+      expect(r.out).toContain('PASS  Agent가 함: DNS 해석 api.anthropic.com');
+      expect(r.out).toContain(`PASS  Agent가 못 함: WSL DNS 원본 직접 읽기 ${R}/mnt/wsl/resolv.conf`);
+      expect(r.out).toContain('실제 파일(DNS 사본 도우미가 만듦)');
+      expect(r.code, r.out).toBe(0);
+    });
+
+    test('fix7: /etc/resolv.conf가 /mnt 쪽 링크 그대로라 Agent가 못 읽고 이름도 못 찾으면 FAIL(링크 위치를 보여 줌)', () => {
+      rmSync(join(R, 'etc/resolv.conf'));
+      symlinkSync(join(R, 'mnt/wsl/resolv.conf'), join(R, 'etc/resolv.conf'));
+      rules(...baseline().filter(([, , g]) => !g.includes('resolv.conf') && !g.includes('getent hosts')));
+      const r = check();
+      expect(r.code).toBe(1);
+      expect(r.out).toContain(`링크(${R}/mnt/wsl/resolv.conf)`);
+      expect(r.out).toContain('FAIL  Agent가 못 함: DNS 설정 파일 읽기');
+      expect(r.out).toContain('FAIL  Agent가 못 함: DNS 해석 api.anthropic.com');
+    });
+
+    test('fix7: Runner도 이름을 못 찾으면(인터넷 끊김) Agent DNS 검사는 WARN으로 건너뛴다', () => {
+      rmSync(join(R, 'etc/hosts'));
+      rules(...baseline());
+      const r = check();
+      expect(r.out).toContain('WARN  Runner 계정도 api.anthropic.com을 찾지 못함');
+      expect(r.out).not.toContain('DNS 해석 api.anthropic.com');
+      expect(r.code, r.out).toBe(0);
+    });
+
+    test('fix7: /mnt 아래 드라이브·wsl·wslg와 /mnt/wsl 안쪽을 하나도 빠짐없이 본다. 하나라도 열리면 FAIL', () => {
+      for (const d of ['mnt/d', 'mnt/x', 'mnt/wslg', 'mnt/wsl/docker-desktop', 'mnt/wsl/docker-desktop-bind-mounts']) mkdirSync(join(R, d), { recursive: true });
+      rules(...baseline());
+      let r = check();
+      expect(r.code, r.out).toBe(0);
+      for (const d of ['mnt', 'mnt/c', 'mnt/d', 'mnt/x', 'mnt/wsl', 'mnt/wslg', 'mnt/wsl/docker-desktop', 'mnt/wsl/docker-desktop-bind-mounts', 'mnt/wsl/resolv.conf']) {
+        expect(r.out).toContain(`PASS  Agent가 못 함: 지나가기 ${R}/${d}\n`);
+        expect(r.out).toContain(`PASS  Agent가 못 함: 목록 읽기 ${R}/${d}\n`);
+      }
+      // 드라이브 x 하나만 Agent가 지나갈 수 있게 되면 FAIL
+      rules(...baseline(), allow(`*test -x ${R}/mnt/x`));
+      r = check();
+      expect(r.code).toBe(1);
+      expect(r.out).toContain(`FAIL  Agent가 할 수 있음: 지나가기 ${R}/mnt/x`);
     });
 
     test('P2-5: Agent가 Windows 시험 복사본을 못 읽으면 「통로 차단」 PASS가 아니라 FAIL', () => {

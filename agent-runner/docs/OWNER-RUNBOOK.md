@@ -54,6 +54,7 @@ bash agent-runner/scripts/isolation/setup-agent-user.sh 2>&1 | tee ~/awbs-setup-
   3. `awbs-agent` 계정을 만듭니다(로그인 셸 없음, 비밀번호 잠금, sudo 없음).
   4. 이 계정의 예약 실행(cron·at)을 막습니다.
   5. 이 계정만 Windows 드라이브(`/mnt`)·Windows 프로그램 실행 통로(`/run/WSL`)에 못 들어가게 막습니다.
+     - `/mnt`가 막히면 WSL의 DNS 설정(`/mnt/wsl/resolv.conf`)도 못 읽습니다. 그래서 DNS 설정 줄만 `/etc/resolv.conf` 실제 파일로 옮겨 두는 서비스를 함께 켭니다(Agent가 Claude·Codex 서버 이름을 찾게).
   6. Agent 작업 영역 `/srv/agentwbs`(cli·inputs·worktrees)와 Agent용 node를 만듭니다.
   7. 실행 래퍼를 설치하고 Agent 계정으로 점검(`check`)합니다.
   8. 점검이 `ok`일 때만 마지막에 sudoers 규칙 한 줄을 넣습니다.
@@ -132,7 +133,7 @@ grep '^AWBS_AGENT' agent-runner/.env
 bash agent-runner/scripts/isolation/check-agent-user.sh 2>&1 | tee ~/awbs-setup-logs/6-check.log; echo "exit=${PIPESTATUS[0]}"
 ```
 
-- **하는 일:** Agent 계정으로 직접 해 보며 막혔는지 봅니다. 예: Runner 홈·`~/.config/gh`·verum 폴더를 못 읽는지, Windows로 못 나가는지, sudo 정책이 래퍼 하나뿐인지, 예약 실행이 막혔는지, 로그인됐는지. 아무것도 고치지 않습니다.
+- **하는 일:** Agent 계정으로 직접 해 보며 막혔는지 봅니다. 예: Runner 홈·`~/.config/gh`·verum 폴더를 못 읽는지, Windows로 못 나가는지(`/mnt` 아래 모든 드라이브), Agent가 DNS로 서버 이름을 찾는지, sudo 정책이 래퍼 하나뿐인지, 예약 실행이 막혔는지, 로그인됐는지. 아무것도 고치지 않습니다.
 - **성공이면:** 마지막에 `결과: FAIL 0개`, `exit=0`.
 - **WARN은 실패가 아닙니다.** 흔한 WARN:
   - `/tmp에 Runner 계정 파일 중 누구나 읽을 수 있는 것이 …개`: 공용 임시 폴더 안내입니다.

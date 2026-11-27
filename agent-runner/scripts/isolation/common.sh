@@ -43,6 +43,17 @@ SUDOERS_PATH=$ROOT_PREFIX/etc/sudoers.d/awbs-agent
 GUARD_UNIT=awbs-agent-wsl-guard.service
 GUARD_PATH=$ROOT_PREFIX/etc/systemd/system/$GUARD_UNIT
 WSL_BLOCK_DIRS=("$ROOT_PREFIX/mnt" "$ROOT_PREFIX/Docker" "$ROOT_PREFIX/run/WSL")
+# DNS 사본(fix7): WSL의 /etc/resolv.conf는 /mnt/wsl/resolv.conf로 가는 링크라, /mnt가 막힌 Agent는 이름을 못 찾는다.
+# /mnt는 그대로 막고, DNS 설정만 /etc/resolv.conf 실제 파일로 옮기는 도우미와 systemd 단위(서비스·경로 감시)를 둔다.
+RESOLV_SYNC_PATH=$ROOT_PREFIX/usr/local/libexec/awbs-resolv-sync
+RESOLV_UNIT=awbs-agent-resolv.service
+RESOLV_UNIT_PATH=$ROOT_PREFIX/etc/systemd/system/$RESOLV_UNIT
+RESOLV_WATCH=awbs-agent-resolv.path
+RESOLV_WATCH_PATH=$ROOT_PREFIX/etc/systemd/system/$RESOLV_WATCH
+RESOLV_SRC=$ROOT_PREFIX/mnt/wsl/resolv.conf
+RESOLV_DST=$ROOT_PREFIX/etc/resolv.conf
+# 도우미가 만든 사본의 첫 줄(awbs-resolv-sync.sh의 MARK와 글자 그대로 같아야 한다). 제거 때 「우리가 만든 파일」인지 본다.
+RESOLV_MARK='# Agent WBS(Q-08): /mnt/wsl/resolv.conf(WSL이 만든 원본)에서 awbs-resolv-sync가 옮긴 사본. 원본이 바뀌면 다시 옮긴다.'
 # WSL에서 Windows 프로그램(.exe)을 실행해 주는 binfmt 등록 파일. 있으면 WSL이다.
 # 이름에 주의: WSL_INTEROP는 WSL이 터미널마다 내보내는 환경 변수(Windows 실행 통로 소켓 주소)다.
 #   같은 이름에 값을 넣으면 그 환경 변수가 바뀌어, 이 스크립트에서 부르는 .exe가 모두 「connect failed 13」으로 실패한다
