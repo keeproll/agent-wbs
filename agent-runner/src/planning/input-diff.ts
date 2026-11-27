@@ -1,0 +1,210 @@
+import type { ApiRequest } from '../api/client.ts';
+import type { ClaimedJob, JudgedContent, PlanningProposalOp, WorkType } from '../api/generated/client.ts';
+import { SPLIT_RULES, type ProposalOp, type SplitProposalOp } from './agents.ts';
+import { isAnalysisPair, isDiff, isDisagreements } from './guards.ts';
+import type { InputDiffPayload, WbsSnapshot } from './payload.ts';
+import { LABELS } from './bootstrap.ts';
+import { agreeJudgements, type Disagreement } from './consensus.ts';
+import { bindingProblem, boundRef, fingerprint, judgedContentHash, withoutJudged } from './binding.ts';
+import { applyContentChanges, effectiveGroup, judgedOfNewTask, type SplitContext } from './judged.ts';
+import { runSteps, type Step } from './steps.ts';
+import { JobRun, PlanningAgentFailed, type PlanningOutcome } from './run.ts';
+
+/*
+ * 입력 자료 차이 분석 — G§4.2 ②, 원본 단계 P L4490.
+ *
+ *   check  GitHub 접근 · 커밋 고정(팀장이 「이 버전으로 분석」으로 고정한 커밋)
+ *   unzip  변경 파일 checkout(prototype/ 읽기 전용)
+ *   diff   이전 버전 커밋과 git diff 비교
+ *   impact 영향 분석 — Codex·Claude가 같은 diff를 각자 분석한다
+ *   cp     변경 제안 작성 — 작성자가 Task 추가·수정·재작업·취소를 CP로 쓰고, 새 Task의 판단은 두 Agent 합의로 채운다
+ *
+ * CP는 source.kind=input으로 제출한다. 어느 입력 작업에서 왔는지(source.id)는 서버가 job으로 정한다(Agent가 다른 버전을 가리키지 못하게).
+ * 영향받는 Task가 없으면 CP 없이 cp 단계를 「변경 없음」으로 끝낸다(CP는 변경이 1개 이상이어야 한다).
+ */
+
+
+export async function runInputDiff(run: JobRun<Extract<ClaimedJob, { kind: 'input_diff' }>>, payload: InputDiffPayload): Promise<PlanningOutcome> {
+  const { job, ctx, checkpoint } = run;
+  const { commit, previousCommit, instruction, inputName, wbs } = payload;
+  // 현재 WBS 스냅샷을 영향 분석·CP 작성에 넘긴다(서버 후속 4 계약 6). 기존 Task 수정의 판단도 이 스냅샷으로 만든다.
+  const withWbs = { wbs };
+  const ws = ctx.workspace;
+  let inputPath = '';
+  let result: { proposalId: string | null; cpKey: string | null; disagreements: Disagreement[] } = { proposalId: null, cpKey: null, disagreements: [] };
+  const diff = () => {
+    const saved = checkpoint.output('diff', isDiff);
+    if (!saved) throw new Error('diff 결과가 없습니다.');
+    return saved;
+  };
+  const computeDiff = async () => {
+    const changes = await ws.diff(previousCommit, commit);
+    await checkpoint.saveOutput('diff', changes, isDiff);
+    return changes;
+  };
+  const impact = () => {
+    const saved = checkpoint.output('impact', isAnalysisPair);
+    if (!saved) throw new Error('영향 분석 결과가 없습니다.');
+    return saved;
+  };
+
+  const steps: Step[] = [
+    { key: 'check', label: LABELS.check ?? '', kind: 'workspace', run: async () => (await ws.fixCommit(commit)).note, ensure: async () => { await ws.fixCommit(commit); } },
+    {
+      key: 'unzip', label: LABELS.unzip ?? '', kind: 'workspace',
+      run: async () => { const out = await ws.checkoutInput(inputName, commit); inputPath = out.path; return out.note; },
+      ensure: async () => { inputPath = (await ws.checkoutInput(inputName, commit)).path; },
+    },
+    {
+      key: 'diff', label: LABELS.diff ?? '', kind: 'workspace',
+      run: async () => {
+        const changes = await computeDiff();
+        const added = changes.reduce((sum, c) => sum + c.added, 0);
+        const deleted = changes.reduce((sum, c) => sum + c.deleted, 0);
+        return `변경 파일 ${String(changes.length)}개 (+${String(added)} −${String(deleted)})`;
+      },
+      // 다른 PC면 같은 두 커밋으로 다시 계산한다. 같은 커밋 쌍의 diff는 같다.
+      ensure: async () => { if (!checkpoint.output('diff', isDiff)) await computeDiff(); },
+    },
+    {
+      key: 'impact', label: LABELS.impact ?? '', kind: 'agent', saved: () => checkpoint.output('impact', isAnalysisPair) !== undefined,
+      run: async () => {
+        const analyses = await run.both(LABELS.impact ?? '', (a) => a.analyze({ kind: 'input_diff', jobId: job.id, instruction, inputPath, commit, previousCommit, diff: diff(), ...withWbs }));
+        await checkpoint.saveOutput('impact', analyses, isAnalysisPair);
+        return `Codex: ${analyses.Codex.summary} / Claude: ${analyses.Claude.summary}`;
+      },
+    },
+    {
+      key: 'cp', label: LABELS.cp ?? '', kind: 'agent', saved: () => false,
+      run: async () => {
+        let empty = false;
+        const response = await sendProposal(run, async () => {
+          const content = await run.ask(LABELS.cp ?? '', (a) => a.proposeChanges({ jobId: job.id, instruction, inputPath, diff: diff(), analyses: impact(), ...withWbs }));
+          if (content.ops.length === 0) { empty = true; return null; }
+          const { ops, taskJudgements, disagreements } = await judgeChanges(run, content.ops, wbs);
+          await checkpoint.saveOutput(`cp:${job.id}`, { disagreements }, isDisagreements);
+          return { body: { jobId: job.id, fence: job.fence, title: content.title, reason: content.reason, source: { kind: 'input' as const }, ops: ops as PlanningProposalOp[],
+            ...(taskJudgements.length && { taskJudgements: taskJudgements as never }) } };
+        }, proposalBind(wbs), { kind: 'input' });
+        if (empty || !response) return '변경 없음 — 영향받는 Task가 없어 변경 제안을 만들지 않았습니다.';
+        const saved = checkpoint.output(`cp:${job.id}`, isDisagreements);
+        result = { proposalId: response.body.id, cpKey: response.body.cpKey, disagreements: saved?.disagreements ?? [] };
+        return `${response.body.cpKey} 제출(${response.body.status})`;
+      },
+    },
+  ];
+  const failed = await runSteps(run, steps);
+  return failed ?? { status: 'done', result };
+}
+
+export type ProposalRequest = Omit<ApiRequest<'submitPlanningProposal'>, 'idempotencyKey' | 'epoch'>;
+
+/** 본문을 만들지 않기로 하면(null) 보내지 않는다. 이 job에서 이미 보낸 본문이 있으면 Agent에게 다시 묻지 않고 그대로 다시 보낸다. */
+export async function sendProposal(run: JobRun, build: () => Promise<ProposalRequest | null>, bind: (request: unknown) => string | null, source: unknown) {
+  // 목적지: 경로 인자 없음 + 이 job이 정한 출처(차이 분석은 input, 분할은 원래 Task). 저장본의 출처는 믿지 않는다.
+  const to = { params: null, source };
+  const stored = run.checkpoint.sent(run.sendScope, 'proposal');
+  if (stored) return run.reporter.send('submitPlanningProposal', 'proposal', stored.request as ProposalRequest, { bind, to });
+  // 새로 만든 본문이 보여 준 입력에 묶이지 않았으면 한 번 다시 판단한다(binding.ts bound와 같은 규칙).
+  let problem = '';
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const request = await build();
+    if (request === null) return null;
+    const found = bind(request);
+    if (found === null) return run.reporter.send('submitPlanningProposal', 'proposal', request, { bind, to });
+    problem = found;
+  }
+  throw new PlanningAgentFailed('Runner', '변경 제안', problem);
+}
+
+/** 판단 대상 내용(JudgedContent)을 바꾸는 수정 항목. 우선순위·담당 변경은 판단 대상이 아니다(data-model §2.3-1). */
+const CONTENT_FIELDS = new Set(['title', 'doneCond', 'scopeAdd', 'acAdd']);
+
+type AnyOp = ProposalOp | SplitProposalOp;
+
+/**
+ * 판단 대상 투영: 보낼 ops(판단 기록을 뺀 것)에서 대상마다 Agent에게 보여 줄 JudgedContent를 만든다(judged.ts, 계약 정의 그대로).
+ * 판단할 때와 전송 직전 대조(proposalBind)가 이 함수 하나를 쓴다.
+ * - 새 Task: 서버가 적용할 내용(설계 생략 = 권장 구역, 충돌 묶음 생략 = 분할 상속 적용 뒤 값)
+ * - 내용이 바뀌는 기존 Task: 스냅샷의 현재 내용에 그 Task의 내용 변경을 서버와 같은 규칙으로 적용한 내용
+ */
+export function changeSubjects(ops: readonly AnyOp[], wbs: WbsSnapshot, split: SplitContext | null = null): { subjects: { target: string; content: JudgedContent }[] } | { problem: string } {
+  const current = new Map(wbs.tasks.map((t) => [t.taskKey, t]));
+  const changes = new Map<string, AnyOp[]>();
+  for (const op of ops) {
+    if (op.op !== 'modify' || !CONTENT_FIELDS.has(op.field)) continue;
+    if (!current.has(op.task)) return { problem: `${op.task}는 WBS 스냅샷에 없는 Task입니다.` };
+    changes.set(op.task, [...(changes.get(op.task) ?? []), op]);
+  }
+  const subjects: { target: string; content: JudgedContent }[] = [];
+  for (const op of ops) {
+    if (op.op !== 'add') continue;
+    const group = effectiveGroup(op.t, split);
+    subjects.push({ target: op.ref, content: judgedOfNewTask(withoutJudged(op.t) as typeof op.t, group.group) });
+  }
+  for (const [taskKey, list] of changes) {
+    subjects.push({ target: taskKey, content: applyContentChanges(current.get(taskKey)?.content as JudgedContent, list) });
+  }
+  return { subjects };
+}
+
+/** 분할 CP의 상속 전제: 원 Task와, 이 ops가 원 Task를 취소하는지(simulateProposal) */
+export function splitContext(ops: readonly AnyOp[], original: { taskKey: string; content: JudgedContent; workType: WorkType }): SplitContext {
+  return { originalKey: original.taskKey, originalGroup: original.content.conflictGroup, originalWorkType: original.workType,
+    removesOriginal: ops.some((op) => op.op === 'remove' && op.task === original.taskKey) };
+}
+
+/** 보낸 ops에서 판단 기록을 지운 값. 분할 판단에 보여 준 ops와 같아야 한다. */
+export function plainOps(ops: readonly unknown[]): AnyOp[] {
+  return ops.map((op) => {
+    const o = op as AnyOp;
+    return o.op === 'add' ? { ...o, t: withoutJudged(o.t) } as AnyOp : o;
+  });
+}
+
+/** CP 제출 전송 직전 대조: 새 Task·기존 Task·분할 판단이 실제 보낼 ops의 투영에 묶였는지 본다. */
+export function proposalBind(wbs: WbsSnapshot, split?: { original: { taskKey: string; content: JudgedContent; workType: WorkType }; shown: (ops: AnyOp[]) => unknown }) {
+  return (request: unknown): string | null => {
+    const body = (request as { body?: { ops?: unknown[]; taskJudgements?: { taskKey: string; judgedRules: unknown }[]; splitJudgements?: unknown } }).body;
+    const ops = plainOps(body?.ops ?? []);
+    const result = changeSubjects(ops, wbs, split ? splitContext(ops, split.original) : null);
+    if ('problem' in result) return result.problem;
+    const expected = new Map(result.subjects.map((s) => [s.target, judgedContentHash(s.content)]));
+    for (const op of (body?.ops ?? []) as AnyOp[]) {
+      if (op.op !== 'add') continue;
+      const problem = bindingProblem((op.t as { judgedRules?: unknown }).judgedRules, expected.get(op.ref) ?? '', op.ref);
+      if (problem) return problem;
+    }
+    for (const tj of body?.taskJudgements ?? []) {
+      const fp = expected.get(tj.taskKey);
+      if (!fp) return `${tj.taskKey}는 내용이 바뀌지 않아 판단 대상이 아닙니다`;
+      const problem = bindingProblem(tj.judgedRules, fp, tj.taskKey);
+      if (problem) return problem;
+    }
+    if (body?.splitJudgements === undefined) return null;
+    return split ? bindingProblem(body.splitJudgements, fingerprint(split.shown(ops)), '분할') : '분할 CP가 아닌데 분할 판단이 있습니다';
+  };
+}
+
+/**
+ * CP의 판단 기록을 채운다. 두 Agent가 각자 판단하고 합의한 것만 남긴다(D-33).
+ * 판단 대상은 changeSubjects의 투영이고, 판단 기록의 sourceRef에 그 투영의 지문을 묶는다(4차 리뷰 P1).
+ * - 새 Task는 `t.judgedRules`, 내용이 바뀌는 기존 Task는 `taskJudgements[{taskKey,judgedRules}]`(서버 후속 4 계약 6).
+ * - 판단 대상은 변경 후 JudgedContent(judged.ts: 새 Task는 judgedOfNewTask, 기존 Task는 applyContentChanges)다.
+ *   적용 규칙(acAdd 해석·설계 생략·분할 상속)은 서버와 같다. 지문(sha256:)은 서버가 저장할 hash와 같고, 다르면 서버가 409로 거부한다.
+ */
+export async function judgeChanges(run: JobRun, ops: readonly AnyOp[], wbs: WbsSnapshot, split: SplitContext | null = null) {
+  const result = changeSubjects(ops, wbs, split);
+  if ('problem' in result) throw new PlanningAgentFailed(run.author.name, '변경 제안', result.problem);
+  const { subjects } = result;
+  const changed = subjects.filter((s) => !ops.some((op) => op.op === 'add' && op.ref === s.target)).map((s) => s.target);
+  if (subjects.length === 0) return { ops: [...ops], taskJudgements: [] as { taskKey: string; judgedRules: unknown }[], disagreements: [] as Disagreement[] };
+  const verdicts = await run.both('분할 규칙 판단', (a) => a.judgeRules({ jobId: run.job.id, rules: SPLIT_RULES, subjects }));
+  const fp = new Map(subjects.map((s) => [s.target, judgedContentHash(s.content)]));
+  const { records, disagreements } = agreeJudgements(subjects.map((s) => s.target), SPLIT_RULES, verdicts,
+    { judgedAt: run.iso(), sourceRef: run.job.id, sourceRefFor: (target) => boundRef(fp.get(target) ?? '') });
+  const empty = { schemaVersion: 1 as const, items: [] };
+  const judged = ops.map((op) => (op.op === 'add' ? { ...op, t: { ...op.t, judgedRules: records.get(op.ref) ?? empty } } : op));
+  const taskJudgements = changed.map((taskKey) => ({ taskKey, judgedRules: records.get(taskKey) ?? empty }));
+  return { ops: judged, taskJudgements, disagreements };
+}

@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, readFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ApiRequest, ApiResponse } from '../api/client.ts';
 import { normalizeRepoUrl, repositoryIdFor } from '../git/identity.ts';
 import { GitCleanupError, GitRepository } from '../git/repository.ts';
+import { planningStateDirectory } from '../planning/checkpoint.ts';
 import { atomicWrite } from '../state/files.ts';
 import { RepositoryMismatch, SystemCredentialMissing, sameRepository, type RemoteCleanup } from './remote.ts';
 
@@ -179,6 +180,24 @@ export function createResetCleanup(deps: ResetCleanupDeps): ResetCleanup {
     // 외부 쓰기 권한 확인은 서버 책임이다(조정자 결정 2-A). Runner는 받은 세대를 기록만 한다.
     items.push({ name: 'authority', ok: true, detail: `외부 쓰기 권한 세대 ${payload.generation === null ? '없음' : String(payload.generation)}` });
     const failed = (item: Item): CommandResult => ({ status: 'failed', items: [...items, item], holds: proofs });
+
+    // Planning 진행 기록(분석 결과·기술 결정 제안·초안·CP 요청 본문, M5-04)도 프로젝트 기록이다. 초기화는 남기지 않는다(G§4.2 ③).
+    // 프로세스 종료를 증명한 뒤에 지운다. 지우지 못하면 정리 실패다(독립 리뷰 1).
+    const planningDir = planningStateDirectory(deps.home);
+    // 「없음」은 ENOENT일 때만이다. 권한 거부(EACCES) 같은 조회 오류를 없음으로 보면 기록이 남았는데 done이 된다(재리뷰 1).
+    const planningFailed = (error: unknown) => failed({ name: 'planning:local', ok: false,
+      detail: `Planning 진행 기록을 확인·삭제하지 못함 — ${(error instanceof Error ? error.message : '삭제 실패').slice(0, 300)}` });
+    let planningExists = true;
+    try { await lstat(planningDir); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return planningFailed(error);
+      planningExists = false;
+    }
+    if (planningExists) {
+      try { await rm(planningDir, { recursive: true, force: true }); }
+      catch (error) { return planningFailed(error); }
+      items.push({ name: 'planning:local', ok: true, detail: 'Planning 진행 기록 삭제' });
+    }
 
     if (payload.repo) {
       const { repoUrl, baseCommit, branches, prs } = payload.repo;
