@@ -1,0 +1,1720 @@
+[
+  {
+    "id": "rest-checked",
+    "validSchema": true,
+    "expectedStatus": 204,
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "0000000000000000000000000000000000000001",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "GET /users",
+          "kind": "REST",
+          "path": "contracts/api/openapi.yaml",
+          "content": {},
+          "contract": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          },
+          "extracted": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          }
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "neo4j-raw-with-checked-rest",
+    "validSchema": true,
+    "expectedStatus": 204,
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "0000000000000000000000000000000000000002",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        },
+        {
+          "path": "contracts/db/neo4j/model.cypher",
+          "kind": "file",
+          "format": "cypher",
+          "status": "ok",
+          "raw": "CREATE CONSTRAINT"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "GET /users",
+          "kind": "REST",
+          "path": "contracts/api/openapi.yaml",
+          "content": {},
+          "contract": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          },
+          "extracted": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          }
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "WebSocket-unparsed",
+    "validSchema": true,
+    "expectedStatus": 204,
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "0000000000000000000000000000000000000003",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "user.created",
+          "kind": "WebSocket",
+          "path": "contracts/api/openapi.yaml",
+          "content": {}
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "SSE-unparsed",
+    "validSchema": true,
+    "expectedStatus": 204,
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "0000000000000000000000000000000000000004",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "user.created",
+          "kind": "SSE",
+          "path": "contracts/api/openapi.yaml",
+          "content": {}
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "Kafka-unparsed",
+    "validSchema": true,
+    "expectedStatus": 204,
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "0000000000000000000000000000000000000005",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "user.created",
+          "kind": "Kafka",
+          "path": "contracts/api/openapi.yaml",
+          "content": {}
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "postgres-unparsed",
+    "validSchema": true,
+    "expectedStatus": 204,
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "0000000000000000000000000000000000000006",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "postgres:users",
+          "kind": "postgres",
+          "path": "contracts/api/openapi.yaml",
+          "content": {}
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "neo4j-unparsed",
+    "validSchema": true,
+    "expectedStatus": 204,
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "0000000000000000000000000000000000000007",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "neo4j:users",
+          "kind": "neo4j",
+          "path": "contracts/api/openapi.yaml",
+          "content": {}
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "questdb-unparsed",
+    "validSchema": true,
+    "expectedStatus": 204,
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "0000000000000000000000000000000000000008",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "questdb:users",
+          "kind": "questdb",
+          "path": "contracts/api/openapi.yaml",
+          "content": {}
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "redis-unparsed",
+    "validSchema": true,
+    "expectedStatus": 204,
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "0000000000000000000000000000000000000009",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "redis:users",
+          "kind": "redis",
+          "path": "contracts/api/openapi.yaml",
+          "content": {}
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "duplicate-file-path",
+    "validSchema": true,
+    "expectedStatus": 400,
+    "expectedRule": "unique",
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "000000000000000000000000000000000000000a",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        },
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "GET /users",
+          "kind": "REST",
+          "path": "contracts/api/openapi.yaml",
+          "content": {},
+          "contract": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          },
+          "extracted": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          }
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "duplicate-item-key",
+    "validSchema": true,
+    "expectedStatus": 400,
+    "expectedRule": "unique",
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "000000000000000000000000000000000000000b",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "GET /users",
+          "kind": "REST",
+          "path": "contracts/api/openapi.yaml",
+          "content": {},
+          "contract": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          },
+          "extracted": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          }
+        },
+        {
+          "itemKey": "GET /users",
+          "kind": "REST",
+          "path": "contracts/api/openapi.yaml",
+          "content": {},
+          "contract": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          },
+          "extracted": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          }
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "duplicate-contract-field",
+    "validSchema": true,
+    "expectedStatus": 400,
+    "expectedRule": "unique",
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "000000000000000000000000000000000000000c",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "GET /users",
+          "kind": "REST",
+          "path": "contracts/api/openapi.yaml",
+          "content": {},
+          "contract": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              },
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": false
+              }
+            ]
+          },
+          "extracted": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          }
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "duplicate-extracted-field",
+    "validSchema": true,
+    "expectedStatus": 400,
+    "expectedRule": "unique",
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "000000000000000000000000000000000000000d",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "GET /users",
+          "kind": "REST",
+          "path": "contracts/api/openapi.yaml",
+          "content": {},
+          "contract": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          },
+          "extracted": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              },
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": false
+              }
+            ]
+          }
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "duplicate-drift-key",
+    "validSchema": true,
+    "expectedStatus": 400,
+    "expectedRule": "unique",
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "000000000000000000000000000000000000000e",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "GET /users",
+          "kind": "REST",
+          "path": "contracts/api/openapi.yaml",
+          "content": {},
+          "contract": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          },
+          "extracted": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          }
+        }
+      ],
+      "drifts": [
+        {
+          "itemKey": "GET /users",
+          "kind": "REST",
+          "where": "/responses/200/id",
+          "text": "차이",
+          "compat": "breaking"
+        },
+        {
+          "itemKey": "GET /users",
+          "kind": "REST",
+          "where": "/responses/200/id",
+          "text": "또 다른 차이",
+          "compat": "breaking"
+        }
+      ]
+    }
+  },
+  {
+    "id": "missing-item-file",
+    "validSchema": true,
+    "expectedStatus": 400,
+    "expectedRule": "reference",
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "000000000000000000000000000000000000000f",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "GET /users",
+          "kind": "REST",
+          "path": "contracts/missing.yaml",
+          "content": {},
+          "contract": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          },
+          "extracted": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          }
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "failed-item-file",
+    "validSchema": true,
+    "expectedStatus": 400,
+    "expectedRule": "reference",
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "0000000000000000000000000000000000000010",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "error",
+          "raw": "openapi: 3.1.0",
+          "error": "문법 오류"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "GET /users",
+          "kind": "REST",
+          "path": "contracts/api/openapi.yaml",
+          "content": {},
+          "contract": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          },
+          "extracted": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          }
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "missing-edge-endpoint",
+    "validSchema": true,
+    "expectedStatus": 400,
+    "expectedRule": "reference",
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "0000000000000000000000000000000000000011",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "GET /users",
+          "kind": "REST",
+          "path": "contracts/api/openapi.yaml",
+          "content": {},
+          "contract": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          },
+          "extracted": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          }
+        }
+      ],
+      "drifts": [],
+      "edges": [
+        {
+          "from": "GET /users",
+          "to": "postgres:missing",
+          "kind": "read"
+        }
+      ]
+    }
+  },
+  {
+    "id": "missing-drift-item",
+    "validSchema": true,
+    "expectedStatus": 400,
+    "expectedRule": "reference",
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "0000000000000000000000000000000000000012",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "GET /users",
+          "kind": "REST",
+          "path": "contracts/api/openapi.yaml",
+          "content": {},
+          "contract": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          },
+          "extracted": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          }
+        }
+      ],
+      "drifts": [
+        {
+          "itemKey": "GET /missing",
+          "kind": "REST",
+          "where": "/",
+          "text": "누락",
+          "compat": "unchecked"
+        }
+      ]
+    }
+  },
+  {
+    "id": "unsupported-item-kind",
+    "validSchema": false,
+    "expectedStatus": 400,
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "0000000000000000000000000000000000000013",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "GET /users",
+          "kind": "file",
+          "path": "contracts/api/openapi.yaml",
+          "content": {},
+          "contract": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          },
+          "extracted": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          }
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "unsupported-rest-method",
+    "validSchema": false,
+    "expectedStatus": 400,
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "0000000000000000000000000000000000000014",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "TRACE /users",
+          "kind": "REST",
+          "path": "contracts/api/openapi.yaml",
+          "content": {},
+          "contract": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          },
+          "extracted": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          }
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "relative-rest-key",
+    "validSchema": false,
+    "expectedStatus": 400,
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "0000000000000000000000000000000000000015",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "GET users",
+          "kind": "REST",
+          "path": "contracts/api/openapi.yaml",
+          "content": {},
+          "contract": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          },
+          "extracted": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          }
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "empty-data-name",
+    "validSchema": false,
+    "expectedStatus": 400,
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "0000000000000000000000000000000000000016",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "postgres: ",
+          "kind": "postgres",
+          "path": "contracts/api/openapi.yaml",
+          "content": {},
+          "contract": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          },
+          "extracted": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          }
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "wrong-content-shape",
+    "validSchema": false,
+    "expectedStatus": 400,
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "0000000000000000000000000000000000000017",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "GET /users",
+          "kind": "REST",
+          "path": "contracts/api/openapi.yaml",
+          "content": {
+            "type": "REST",
+            "errors": "bad"
+          },
+          "contract": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          },
+          "extracted": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          }
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "wrong-content-kind",
+    "validSchema": false,
+    "expectedStatus": 400,
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "0000000000000000000000000000000000000018",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "GET /users",
+          "kind": "REST",
+          "path": "contracts/api/openapi.yaml",
+          "content": {
+            "type": "redis",
+            "use": "",
+            "value": "",
+            "ttl": "",
+            "invalidation": "",
+            "persistence": ""
+          },
+          "contract": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          },
+          "extracted": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          }
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "empty-file-format",
+    "validSchema": false,
+    "expectedStatus": 400,
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "0000000000000000000000000000000000000019",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "GET /users",
+          "kind": "REST",
+          "path": "contracts/api/openapi.yaml",
+          "content": {},
+          "contract": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          },
+          "extracted": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          }
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "outside-contracts",
+    "validSchema": false,
+    "expectedStatus": 400,
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "000000000000000000000000000000000000001a",
+      "ref": "main",
+      "files": [
+        {
+          "path": "src/api.ts",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "GET /users",
+          "kind": "REST",
+          "path": "src/api.ts",
+          "content": {},
+          "contract": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          },
+          "extracted": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          }
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "missing-parse-error",
+    "validSchema": false,
+    "expectedStatus": 400,
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "000000000000000000000000000000000000001b",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "error",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [],
+      "drifts": []
+    }
+  },
+  {
+    "id": "checked-conflict",
+    "validSchema": true,
+    "expectedStatus": 409,
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "0000000000000000000000000000000000000001",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "GET /users",
+          "kind": "REST",
+          "path": "contracts/api/openapi.yaml",
+          "content": {},
+          "contract": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          },
+          "extracted": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "integer",
+                "required": true
+              }
+            ]
+          }
+        }
+      ],
+      "drifts": []
+    },
+    "prior": "rest-checked",
+    "expectedConflicts": [
+      {
+        "itemKey": "GET /users",
+        "serverState": "checked",
+        "serverContentHash": "23d76faa7d08cb779a007338528af13738f96f96565f00966dc820750d3178f5",
+        "commit": "0000000000000000000000000000000000000001",
+        "ref": "main"
+      }
+    ],
+    "hashInput": "{\"content\":{},\"contract\":{\"fields\":[{\"path\":\"/responses/200/id\",\"required\":true,\"type\":\"string\"}]},\"description\":null,\"extracted\":{\"fields\":[{\"path\":\"/responses/200/id\",\"required\":true,\"type\":\"string\"}]},\"itemKey\":\"GET /users\",\"kind\":\"REST\",\"name\":null,\"path\":\"contracts/api/openapi.yaml\",\"taskKey\":null}"
+  },
+  {
+    "id": "ordered-fields",
+    "validSchema": true,
+    "expectedStatus": 204,
+    "serverContentHash": "431d3016b6db7dcd2058ab59c4a7e066c632439098c1400ab46c0af335469e02",
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "dddddddddddddddddddddddddddddddddddddddd",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "GET /users",
+          "kind": "REST",
+          "path": "contracts/api/openapi.yaml",
+          "content": {},
+          "contract": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              },
+              {
+                "path": "/responses/200/name",
+                "type": "string",
+                "required": false
+              }
+            ]
+          },
+          "extracted": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              },
+              {
+                "path": "/responses/200/name",
+                "type": "string",
+                "required": false
+              }
+            ]
+          }
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "reordered-fields",
+    "prior": "ordered-fields",
+    "validSchema": true,
+    "expectedStatus": 204,
+    "serverContentHash": "431d3016b6db7dcd2058ab59c4a7e066c632439098c1400ab46c0af335469e02",
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "dddddddddddddddddddddddddddddddddddddddd",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "GET /users",
+          "kind": "REST",
+          "path": "contracts/api/openapi.yaml",
+          "content": {},
+          "contract": {
+            "fields": [
+              {
+                "path": "/responses/200/name",
+                "type": "string",
+                "required": false
+              },
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          },
+          "extracted": {
+            "fields": [
+              {
+                "path": "/responses/200/name",
+                "type": "string",
+                "required": false
+              },
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          }
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "item-description",
+    "validSchema": true,
+    "expectedStatus": 204,
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "GET /users",
+          "kind": "REST",
+          "path": "contracts/api/openapi.yaml",
+          "content": {},
+          "contract": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          },
+          "extracted": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          },
+          "description": "사용자 목록을 조회한다."
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "message-decision-keys",
+    "validSchema": true,
+    "expectedStatus": 204,
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "ffffffffffffffffffffffffffffffffffffffff",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "created",
+          "kind": "Kafka",
+          "path": "contracts/api/openapi.yaml",
+          "description": null,
+          "content": {
+            "type": "message",
+            "auth": "",
+            "messages": [],
+            "rules": [],
+            "topic": null,
+            "decisionKeys": [
+              "TD-07"
+            ]
+          }
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "invalid-decision-key",
+    "validSchema": false,
+    "expectedStatus": 400,
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "ffffffffffffffffffffffffffffffffffffffff",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "created",
+          "kind": "Kafka",
+          "path": "contracts/api/openapi.yaml",
+          "content": {
+            "type": "message",
+            "auth": "",
+            "messages": [],
+            "rules": [],
+            "topic": null,
+            "decisionKeys": [
+              "wrong"
+            ]
+          }
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "ordered-message-decision-keys",
+    "validSchema": true,
+    "expectedStatus": 204,
+    "serverContentHash": "2a0e6b97d184999c9a6398916f33c791da169da383c5ce233266df31c2471014",
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "8888888888888888888888888888888888888888",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "created",
+          "kind": "Kafka",
+          "path": "contracts/api/openapi.yaml",
+          "description": null,
+          "content": {
+            "type": "message",
+            "auth": "",
+            "messages": [],
+            "rules": [],
+            "topic": null,
+            "decisionKeys": [
+              "TD-07",
+              "TD-08"
+            ]
+          }
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "reordered-message-decision-keys",
+    "prior": "ordered-message-decision-keys",
+    "validSchema": true,
+    "expectedStatus": 204,
+    "serverContentHash": "2a0e6b97d184999c9a6398916f33c791da169da383c5ce233266df31c2471014",
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "8888888888888888888888888888888888888888",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "created",
+          "kind": "Kafka",
+          "path": "contracts/api/openapi.yaml",
+          "description": null,
+          "content": {
+            "type": "message",
+            "auth": "",
+            "messages": [],
+            "rules": [],
+            "topic": null,
+            "decisionKeys": [
+              "TD-08",
+              "TD-07"
+            ]
+          }
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "ordered-table-links",
+    "validSchema": true,
+    "expectedStatus": 204,
+    "serverContentHash": "2e65752c22cd123a5ade5cbc68e8d773402ebf0aecd8bc19360f55a95b86ad49",
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "9999999999999999999999999999999999999999",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "GET /users",
+          "kind": "REST",
+          "path": "contracts/api/openapi.yaml",
+          "content": {
+            "type": "REST",
+            "auth": "",
+            "request": "",
+            "response": "",
+            "validation": [],
+            "errors": [],
+            "tables": [
+              "postgres:posts",
+              "postgres:users"
+            ]
+          },
+          "contract": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          },
+          "extracted": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          }
+        }
+      ],
+      "drifts": []
+    }
+  },
+  {
+    "id": "reordered-table-links",
+    "prior": "ordered-table-links",
+    "validSchema": true,
+    "expectedStatus": 204,
+    "serverContentHash": "2e65752c22cd123a5ade5cbc68e8d773402ebf0aecd8bc19360f55a95b86ad49",
+    "body": {
+      "jobId": "fixture-job",
+      "fence": 1,
+      "commit": "9999999999999999999999999999999999999999",
+      "ref": "main",
+      "files": [
+        {
+          "path": "contracts/api/openapi.yaml",
+          "kind": "REST",
+          "format": "OpenAPI 3.1",
+          "status": "ok",
+          "raw": "openapi: 3.1.0"
+        }
+      ],
+      "items": [
+        {
+          "itemKey": "GET /users",
+          "kind": "REST",
+          "path": "contracts/api/openapi.yaml",
+          "content": {
+            "type": "REST",
+            "auth": "",
+            "request": "",
+            "response": "",
+            "validation": [],
+            "errors": [],
+            "tables": [
+              "postgres:users",
+              "postgres:posts"
+            ]
+          },
+          "contract": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          },
+          "extracted": {
+            "fields": [
+              {
+                "path": "/responses/200/id",
+                "type": "string",
+                "required": true
+              }
+            ]
+          }
+        }
+      ],
+      "drifts": []
+    }
+  }
+]

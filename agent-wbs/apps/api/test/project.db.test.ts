@@ -383,6 +383,8 @@ describe('project 기술 결정 확정(G§4.2·§4.12)', () => {
     expect(after.bootstrap.decisions.map((d) => d.status)).toEqual(['fixed', 'fixed', 'approved', 'approved', 'rejected']);
     expect(step(after, 'tech')).toBe('done');
     expect(await count("select count(*) n from tech_decision_events where kind in ('approve','reject')")).toBe(3);
+    const design = await lead('GET', `/api/projects/${s.id}/design`);
+    expect(design.json<{ version: number; pending: number }>()).toMatchObject({ version: 1, pending: 0 });
     const job = await lease('bootstrap');
     expect(job.payload).toMatchObject({ resumeStep: 'draft', runNo: 1 });
   });

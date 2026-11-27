@@ -1,4 +1,5 @@
 import Type from 'typebox';
+import { DesignSnapshot } from '../design.ts';
 import * as c from '../common.ts';
 import * as m from '../models.ts';
 import { operation } from '../operation.ts';
@@ -589,25 +590,9 @@ export const runnerOperations = [
     method: 'POST',
     path: '/api/runner/design/snapshot',
     summary: '커밋 기준 계약 파일 해석·대조 결과',
-    body: Body({
-      ...c.JobContext,
-      commit: c.Sha,
-      files: List(
-        Body({ path: c.RepoPath, kind: Text, format: Text, status: AnyOf('ok', 'draft', 'error'), error: Opt(Text) }),
-      ),
-      items: List(Body({ itemKey: Text, kind: Text, path: c.RepoPath, content: c.Json })),
-      drifts: List(
-        Body({
-          itemKey: Text,
-          kind: Text,
-          where: Text,
-          text: Text,
-          taskKey: Opt(c.TaskKey),
-          compat: AnyOf('compatible', 'breaking', 'unchecked'),
-        }),
-      ),
-    }),
+    body: DesignSnapshot,
     responses: { 204: null },
+    errors: ['VERSION_CONFLICT', 'INVALID_TRANSITION', 'EXTERNAL_WRITE_BLOCKED'],
   }),
   operation({
     ...runner,

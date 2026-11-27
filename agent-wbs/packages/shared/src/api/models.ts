@@ -578,6 +578,8 @@ export const Decision = Type.Object(
     // 조건부 선호에서 만든 결정: 원래 제약과 Planning의 조건 충족 판단(근거는 reason)
     constraintId: Opt(Nullable(c.Id)),
     conditionResult: Opt(Nullable(AnyOf('met', 'not_met'))),
+    itemKey: Opt(Text), driftId: Opt(c.Id),
+    change: Opt(c.Body({ choice: Text, reason: Text, previousStatus: AnyOf('fixed', 'approved'), itemKey: Opt(Text), driftId: Opt(c.Id) })),
   },
   { title: 'Decision' },
 );
@@ -595,6 +597,7 @@ export const IfaceKind = AnyOf('REST', 'WebSocket', 'SSE', 'Kafka');
 export const Drift = Type.Object(
   {
     id: c.Id,
+    displayKey: Type.String({ pattern: '^DR-[0-9]{2,}$' }),
     itemKey: Type.String(),
     kind: Type.String(),
     where: Type.String(),
@@ -603,6 +606,7 @@ export const Drift = Type.Object(
     compat: AnyOf('compatible', 'breaking', 'unchecked'),
     status: AnyOf('open', 'done'),
     updatedAt: c.Timestamp,
+    resolution: Opt(Type.Intersect([c.Json, Type.Object({ jobStatus: Opt(AnyOf('queued', 'running', 'done', 'failed')) })])),
   },
   { title: 'Drift' },
 );
@@ -1144,7 +1148,7 @@ export const designOverview = {
   components: List(obj({ id: c.Id, layer: Str, name: Str, tech: Str, note: Str, decisionId: Nullable(c.Id) })),
   links: List(obj({ from: c.Id, to: c.Id, via: Str, contractPath: MaybeStr })),
   files: List(
-    obj({ path: Str, kind: Str, format: Str, status: fileStatus, commit: Nullable(c.Sha), itemCount: c.Count, error: MaybeStr }),
+    obj({ path: Str, kind: Str, format: Str, status: fileStatus, commit: Nullable(c.Sha), itemCount: c.Count, error: MaybeStr, raw: Opt(MaybeStr), sourceCommit: Opt(Nullable(c.Sha)) }),
   ),
   versions: List(obj({ v: c.PositiveInt4, at: c.Timestamp, by: Str, note: Str, breaking: Type.Boolean() })),
 };
@@ -1161,6 +1165,7 @@ export const IfaceContent = Nullable(
     }),
     obj({
       type: AnyOf('message'), auth: Str, messages: List(obj({ name: Str, direction: Str, schema: Str })), rules: List(Str),
+      decisionKeys: Opt(List(Type.String({ pattern: '^TD-[0-9]{2,}$' }), { maxItems: 256 })),
       topic: Nullable(
         obj({ key: Str, partitions: Str, retention: Str, delivery: Str, dlq: Str, compat: Str, consumers: List(Str) }),
       ),
