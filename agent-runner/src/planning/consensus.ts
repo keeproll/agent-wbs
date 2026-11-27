@@ -27,6 +27,8 @@ export interface JudgementMeta {
   sourceRef: string;
   /** 기존 대상의 재판단은 작업 payload의 hash를 그대로 돌려보낸다. 새 대상은 서버가 계산하므로 생략한다. */
   subjectHash?: (target: string) => string;
+  /** 대상별 sourceRef. 보여준 입력의 지문을 붙일 때 쓴다(binding.ts). 없으면 sourceRef를 그대로 쓴다. */
+  sourceRefFor?: (target: string) => string;
 }
 export interface Item<R extends string> { rule: R; result: Result; agreedBy: AgentName[]; basis: string; judgedAt: string; sourceRef: string; subjectHash?: string }
 export interface Record_<R extends string> { schemaVersion: 1; items: Item<R>[] }
@@ -50,7 +52,7 @@ function agreeOne<R extends string>(target: string, rule: R, answers: Record<Age
   const item: Item<R> = {
     rule, result: picked.Claude.result, agreedBy: [...AGENTS],
     basis: AGENTS.map((agent) => `${agent}: ${picked[agent].basis.trim()}`).join('\n'),
-    judgedAt: meta.judgedAt, sourceRef: meta.sourceRef,
+    judgedAt: meta.judgedAt, sourceRef: meta.sourceRefFor?.(target) ?? meta.sourceRef,
   };
   if (meta.subjectHash) item.subjectHash = meta.subjectHash(target);
   return { item };

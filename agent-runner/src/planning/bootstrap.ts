@@ -1,6 +1,7 @@
 import type { ClaimedJob } from '../api/generated/client.ts';
 import { SPLIT_RULES, type AgentName, type Analysis } from './agents.ts';
 import { isAnalysis, isCross, isDisagreements } from './guards.ts';
+import { bindingProblem, bound, boundRef, fingerprint, withoutJudged } from './binding.ts';
 import type { BootstrapPayload } from './payload.ts';
 import { agreeEstimates, agreeJudgements, type Disagreement } from './consensus.ts';
 import { runSteps, type Step } from './steps.ts';
@@ -76,13 +77,20 @@ export async function runBootstrap(run: JobRun<BootJob>, payload: BootstrapPaylo
     {
       key: 'draft', label: LABELS.draft ?? '', kind: 'agent', saved: () => false,
       run: async () => {
-        const response = await run.reporter.send('submitDraft', 'draft', async () => {
-          // 확정 결정 스냅샷이 오면 함께 넘긴다. 교차 검토의 tech는 팀장이 정하기 전의 「제안」일 뿐이다(독립 리뷰 계약 3).
+        // 전송 직전 대조: 초안 Task마다 판단이 그 Task(판단 기록 제외)를 본 판단인지 본다.
+        const bind = (request: unknown) => {
+          for (const t of ((request as { body?: { tasks?: Record<string, unknown>[] } }).body?.tasks ?? [])) {
+            const problem = bindingProblem(t.judgedRules, fingerprint(withoutJudged(t)), String(t.ref));
+            if (problem) return problem;
+          }
+          return null;
+        };
+        const response = await run.reporter.send('submitDraft', 'draft', () => bound(async () => {
           // 확정 결정 스냅샷(계약 3)과 허용된 하위 Agent 정의(계약 4)를 넘긴다. 교차 검토의 tech는 팀장이 정하기 전의 「제안」일 뿐이다.
           const built = await buildDraft(run, { ...base(), cross: required(checkpoint.output('cross', isCross)), analyses: analyses(), decisions: decisionSnapshot, subagentDefs });
           await checkpoint.saveOutput(`draft:${job.id}`, { disagreements: built.disagreements }, isDisagreements);
           return { params: { jobId: job.id }, body: { fence: job.fence, ...built.body } };
-        });
+        }, bind, (problem) => new PlanningAgentFailed('Runner', LABELS.draft ?? '', problem)), { bind });
         const saved = checkpoint.output(`draft:${job.id}`, isDisagreements);
         result = { revision: response.body.revision, disagreements: saved?.disagreements ?? [] };
         // 초안 단계 완료는 서버가 초안 등록 때 기록한다(진행 보고로 끝내면 400).
@@ -122,18 +130,23 @@ async function buildDraft(run: JobRun<BootJob>, request: Parameters<import('./ag
   }
   const refs = content.tasks.map((t) => t.ref);
   const subjects = content.tasks.map((t) => ({ target: t.ref, content: t }));
+  // 추정은 판단 기록이 아니므로 작성자 초안을 보여 준다.
   const estimates = await run.both('작업량 추정', (a) => a.estimate({ jobId: run.job.id, tasks: subjects.map((s) => ({ ref: s.target, content: s.content })) }));
   let agreed;
   try { agreed = new Map(agreeEstimates(refs, estimates).map((e) => [e.ref, e])); }
   catch (error) { throw new PlanningAgentFailed('Runner', '추정 합의', error instanceof Error ? error.message : String(error)); }
-  const verdicts = await run.both('분할 규칙 판단', (a) => a.judgeRules({ jobId: run.job.id, rules: SPLIT_RULES, subjects }));
-  const { records, disagreements } = agreeJudgements(refs, SPLIT_RULES, verdicts, { judgedAt: run.iso(), sourceRef: run.job.id });
-  const tasks = content.tasks.map((task) => {
+  // 보낼 Task(합의 추정 반영)를 먼저 만들고, 그 Task를 그대로 규칙 판단에 보여 준다(4차 리뷰 P1).
+  const finals = content.tasks.map((task) => {
     const estimate = agreed.get(task.ref);
     if (!estimate) throw new Error(`${task.ref} 추정이 없습니다.`);
     const values = { estHours: estimate.estHours, loHours: estimate.loHours, hiHours: estimate.hiHours, confidence: estimate.confidence, basis: estimate.basis, agreedBy: estimate.agreedBy,
       ...(estimate.tokensK !== undefined && { tokensK: estimate.tokensK }) };
-    return { ...task, estimate: values, judgedRules: records.get(task.ref) ?? { schemaVersion: 1 as const, items: [] } };
+    return { ...task, estimate: values };
   });
+  const verdicts = await run.both('분할 규칙 판단', (a) => a.judgeRules({ jobId: run.job.id, rules: SPLIT_RULES, subjects: finals.map((t) => ({ target: t.ref, content: t })) }));
+  const fp = new Map(finals.map((t) => [t.ref, fingerprint(t)]));
+  const { records, disagreements } = agreeJudgements(refs, SPLIT_RULES, verdicts,
+    { judgedAt: run.iso(), sourceRef: run.job.id, sourceRefFor: (ref) => boundRef(run.job.id, fp.get(ref) ?? '') });
+  const tasks = finals.map((task) => ({ ...task, judgedRules: records.get(task.ref) ?? { schemaVersion: 1 as const, items: [] } }));
   return { body: { ...content, tasks }, disagreements };
 }

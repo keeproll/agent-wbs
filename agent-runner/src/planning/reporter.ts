@@ -46,6 +46,8 @@ export interface ReporterOptions {
 }
 
 type Request<K extends ReportId> = Omit<ApiRequest<K>, 'idempotencyKey' | 'epoch'>;
+/** bind: 전송 본문의 판단이 보여준 입력에 묶였는지 검사(문제가 있으면 이유). 첫 전송·재전송 모두 API 호출 직전에 부른다. */
+export interface SendOptions { bind?: (request: unknown) => string | null }
 
 export class PlanningReporter {
   private readonly sleep: NonNullable<ReporterOptions['sleep']>;
@@ -59,7 +61,7 @@ export class PlanningReporter {
    * `name`은 job 안에서 요청을 구분하는 이름이다(예: `progress:codex:run`, `draft`).
    * `request`가 함수면 이 job에서 처음 보낼 때만 불러 본문을 만든다. 이미 보낸 적 있으면 저장한 본문을 다시 보낸다.
    */
-  async send<K extends ReportId>(operation: K, name: string, request: Request<K> | (() => Promise<Request<K>>)): Promise<ApiResponse<K>> {
+  async send<K extends ReportId>(operation: K, name: string, request: Request<K> | (() => Promise<Request<K>>), options: SendOptions = {}): Promise<ApiResponse<K>> {
     const { api, epoch, runnerId, jobId, checkpoint, maxAttempts = 6, now = Date.now, random = Math.random, signal } = this.options;
     // 진행 기록은 초기화 번호별 파일이다. 다른 번호의 기록으로 보내지 않는다(독립 리뷰 1: 옛 요청에 새 번호를 붙이지 않음).
     if (checkpoint.epoch !== epoch) throw new PlanningStopped('EPOCH_MISMATCH', `${operation}: 진행 기록의 초기화 번호(${String(checkpoint.epoch)})가 현재(${String(epoch)})와 다릅니다.`);
@@ -69,7 +71,8 @@ export class PlanningReporter {
       await checkpoint.recordSent(jobId, name, sent);
     }
     // 전송 직전 관문: 첫 전송·재전송 모두 여기를 지난다. API를 부르는 곳은 아래 한 곳뿐이다(3차 리뷰).
-    const problem = wireProblem(operation, sent.request);
+    // 판단을 담은 보고는 「보여준 입력」과 실제 전송 본문이 같은지도 여기서 본다(binding.ts, 4차 리뷰 P1).
+    const problem = wireProblem(operation, sent.request) ?? options.bind?.(sent.request) ?? null;
     if (problem) throw new PlanningCheckpointError(`${operation} 「${name}」을 보내지 않습니다: ${problem}`);
     const full = { ...(sent.request as Request<K>), epoch, idempotencyKey: sent.key } as unknown as ApiRequest<K>;
     for (let attempt = 0; ; attempt++) {

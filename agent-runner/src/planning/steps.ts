@@ -1,4 +1,5 @@
 import type { ClaimedJob } from '../api/generated/client.ts';
+import { PlanningCheckpointError } from './checkpoint.ts';
 import { PlanningReportFailed, PlanningStopped } from './reporter.ts';
 import { JobRun, type PlanningOutcome } from './run.ts';
 
@@ -77,6 +78,8 @@ export async function runSteps(run: JobRun<Stepped>, steps: readonly Step[], hoo
       : `${current.label} 실패: ${messageOf(error)}`);
     try { await report(current, 'fail', message); }
     catch (reportError) { if (reportError instanceof PlanningStopped) throw reportError; }
-    return { status: 'failed', error: { code: stale ? 'VERSION_CONFLICT' : 'PLANNING_STEP_FAILED', message } };
+    // 진행 기록 손상(예: 보낸 본문이 판단한 내용과 다름)은 단계 실패로 보고하되 결과 코드로 원인을 남긴다.
+    const corrupt = error instanceof PlanningCheckpointError;
+    return { status: 'failed', error: { code: stale ? 'VERSION_CONFLICT' : corrupt ? 'CHECKPOINT_UNREADABLE' : 'PLANNING_STEP_FAILED', message } };
   }
 }

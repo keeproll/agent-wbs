@@ -11,6 +11,8 @@ import type { ClaimedJob } from '../../../../agent-runner/src/api/generated/clie
 import { PlanningCheckpoints, runPlanningJob, type PlanningJob } from '../../../../agent-runner/src/planning/index.ts';
 import { Secret } from '../../../../agent-runner/src/security/secret.ts';
 import { FakeAgent, fakeWorkspace, tempHome } from '../../../../agent-runner/test/planning/harness.ts';
+import { boundRef, judgedContentHash, refFingerprint } from '../../../../agent-runner/src/planning/binding.ts';
+import { wbsSnapshot } from '../src/planning/job-snapshot.ts';
 
 /*
  * M5-04 fix4: 서버 후속 4 계약 위에서 Runner Planning orchestration이 실제 서버와 끝까지 가는지 본다.
@@ -210,5 +212,61 @@ describe('실제 서버 + Runner Planning orchestration', () => {
       expect(cp?.task_judgements[0]?.judgedRules.items.every((i) => i.agreedBy.join() === 'Claude,Codex' && /^[0-9a-f]{64}$/.test(i.subjectHash))).toBe(true);
       expect(await planningStatus('input_diff'), `${String(round)}회 뒤 차이 분석 상태`).toEqual(Array(round).fill('done'));
     }
+  });
+
+  /** 기존 Task 재판단 job(계약 5: planning:null, proposal:null, tasks ≥ 1)을 서버 스냅샷으로 만든다. */
+  async function rejudgeJob(dedup: string) {
+    const s = await project();
+    const task = (await wbsSnapshot(ownerPool, s.id)).tasks[0];
+    if (!task) throw new Error('Task 없음');
+    const payload = { tasks: [{ taskKey: task.taskKey, subjectHash: task.subjectHash, content: task.content }], policy: { judgedRules: ['revert'] }, planning: null, proposal: null };
+    await ownerPool.query("insert into runner_jobs(project_id,kind,payload,state,epoch,dedup_key) values($1,'planning',$2::jsonb,'queued',$3,$4)", [s.id, JSON.stringify(payload), await epoch(), dedup]);
+    return { project: s, task, job: await claim('planning') };
+  }
+
+  test('4차 리뷰 P1(실제 DB): 새 충돌 묶음을 고르면 그 묶음을 본 판단이 저장되고, 판단의 입력 지문이 저장된 hash와 같다', async () => {
+    const { project: s, task, job } = await rejudgeJob('fix5-task-plan');
+    expect(task.content.conflictGroup).toBeNull();
+    const run = await context();
+    const plan = run.agents.Claude.planTask.bind(run.agents.Claude);
+    run.agents.Claude.planTask = async (request) => ({ ...await plan(request), conflictGroup: { name: 'shared-db', reason: '공통 파일' } });
+    for (const agent of Object.values(run.agents)) {
+      const judge = agent.judgeRules.bind(agent);
+      agent.judgeRules = async (request) => (await judge(request)).map((v) => ({ ...v,
+        result: (request.subjects[0]?.content as { conflictGroup: string | null }).conflictGroup === 'shared-db' ? 'not_met' as const : 'met' as const }));
+    }
+    const outcome = await runPlanningJob(job, run.ctx);
+    expect(outcome).toMatchObject({ status: 'done' });
+    await finish(job, outcome);
+    const updated = (await wbsSnapshot(ownerPool, s.id)).tasks.find((t) => t.taskKey === task.taskKey);
+    const recorded = (await ownerPool.query<{ judged_rules: { items: { result: string; subjectHash: string; sourceRef: string }[] } }>(
+      'select s.judged_rules from task_splits s join tasks t on t.id=s.task where t.task_key=$1', [task.taskKey])).rows[0]?.judged_rules.items[0];
+    const shown = (run.agents.Codex.calls.find((c) => c.method === 'judgeRules')?.request as { subjects: { content: { conflictGroup: string | null } }[] }).subjects[0]?.content.conflictGroup;
+    expect(shown).toBe('shared-db');
+    expect(updated?.content.conflictGroup).toBe('shared-db');
+    expect(recorded?.result).toBe('not_met');
+    expect(recorded?.subjectHash).toBe(updated?.subjectHash);
+    // 판단 기록에 묶은 「보여 준 입력」의 지문 = 서버가 저장한 새 내용의 hash(같은 계산식)
+    expect(refFingerprint(recorded?.sourceRef)).toBe(updated?.subjectHash);
+  });
+
+  test('서버 확인: Runner 관문을 거치지 않고 옛 내용에 묶인 판단을 새 묶음과 함께 보내면 서버는 막지 못한다(보고 대상)', async () => {
+    const { project: s, task, job } = await rejudgeJob('fix5-server-probe');
+    // 옛 내용(지금 묶음)을 본 판단이라고 적고, 다른 새 묶음을 함께 보낸다. Runner는 이런 본문을 보내지 않는다(bind).
+    const oldFingerprint = judgedContentHash(task.content);
+    const item = { rule: 'revert', result: 'met', agreedBy: ['Claude', 'Codex'], basis: '옛 내용 판단', judgedAt: new Date().toISOString(),
+      sourceRef: boundRef(job.id, oldFingerprint), subjectHash: task.subjectHash };
+    const response = await api()('submitTaskPlan', { epoch: await epoch(), idempotencyKey: `submitTaskPlan:runner-1:${crypto.randomUUID()}`, params: { taskKey: task.taskKey },
+      body: { jobId: job.id, fence: job.fence, grades: { dev: { modelId: 'm', effort: 'high', reason: 'r' }, qa: { modelId: 'm', effort: 'high', reason: 'r' } },
+        subagents: { dev: [], qa: [], basis: '' }, conflictGroup: { name: 'probe-group', reason: '시험' }, judgedRules: { schemaVersion: 1, items: [item] } as never } });
+    await finish(job, { status: 'done', result: {} });
+    const updated = (await wbsSnapshot(ownerPool, s.id)).tasks.find((t) => t.taskKey === task.taskKey);
+    const recorded = (await ownerPool.query<{ judged_rules: { items: { subjectHash: string; sourceRef: string }[] } }>(
+      'select s.judged_rules from task_splits s join tasks t on t.id=s.task where t.task_key=$1', [task.taskKey])).rows[0]?.judged_rules.items[0];
+    // 현재 서버 동작: 받아들이고 새 내용의 hash를 붙여 저장한다. 지문(sourceRef)은 옛 내용 → 서버가 지문을 대조하면 막을 수 있다.
+    expect(response.status).toBe(204);
+    expect(recorded?.subjectHash).toBe(updated?.subjectHash);
+    expect(refFingerprint(recorded?.sourceRef)).toBe(oldFingerprint);
+    expect(refFingerprint(recorded?.sourceRef)).not.toBe(updated?.subjectHash);
   });
 });

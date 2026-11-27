@@ -156,6 +156,35 @@ const outcome = await runPlanningJob(job, {
   - 왜: 잘못된 값을 「신뢰도 하」 같은 정상 값으로 바꾸면 일정 계산에 정상 합의처럼 쓰인다. 실제 CLI 출력 파서(M5-01)가 같은 검사를 해도 이 경계에서 다시 막는다.
 - 예: Claude 2h(1~4h, 상), Codex 4h(2~6h, 하) → 3h(1~6h, 하), `agreedBy: ['Claude','Codex']`.
 
+## 판단과 「보여 준 입력」 묶기(`binding.ts`, 4차 리뷰)
+
+판단 기록은 Agent가 실제로 본 내용에 대한 판단이어야 한다. 그래서 아래 순서를 지킨다.
+
+1. 보낼 내용을 먼저 확정한다.
+   - 예: 재판단은 작성자가 고른 충돌 묶음을 먼저 정한다.
+   - 예: 초안은 합의 추정을 반영한 Task를 먼저 만든다.
+2. 그 내용에서 판단 대상(투영)을 만들어 두 Agent에게 보여 준다.
+   - 재판단: payload 내용 + 보고에 담는 충돌 묶음
+   - CP 판단: 대상의 「변경 후」 내용
+   - CP 새 Task: `t`
+   - 기존 Task 변경: `{before, changes}`
+   - 분할: ops + 원래 Task
+   - 초안: 판단 기록을 뺀 Task
+3. 판단 기록의 `sourceRef`에 보여 준 입력의 지문을 붙인다: `<job ID>#input-sha256:<64자>`.
+   - JudgedContent를 보여 줬으면 지문은 서버 subjectHash와 같은 계산이다.
+   - 그래서 서버가 저장하는 변경 후 hash와 바로 비교할 수 있다.
+4. 서버로 보내기 직전(reporter의 `bind`)에 실제 전송 본문에서 투영을 다시 만들어 지문을 비교한다.
+   - 다르면 보내지 않는다.
+   - 새로 만든 본문이면 한 번 다시 판단한다.
+   - 진행 기록에서 읽은 본문이면 손상(`CHECKPOINT_UNREADABLE`)이다.
+
+- 왜: 작성자가 새 충돌 묶음을 고르는데 규칙 판단에 옛 묶음을 보여 주면, 서버는 새 내용의 hash로 판단을 저장한다. 「보지 않은 전제」가 유효한 판단처럼 기록된다.
+- 서버는 이 경우를 지금 막지 못한다. `sourceRef`의 지문과 저장 hash를 비교하면 서버에서도 막을 수 있다(fix5 보고).
+- 관문(`wire.ts`)은 계약이 정한 필드만 검사한다.
+  - 대상: 추정 `items`·초안 `estimate`의 값, CP 새 Task의 `conf`, 판단 기록(`judgedRules`·`taskJudgements`·`splitJudgements`)의 형식과 합의 주체 둘.
+  - 설계 `content` 같은 자유 JSON 안은 해석하지 않는다.
+  - 예: 제품 설계 예제의 숫자 `confidence: 0.91`은 Planning 신뢰도가 아니다.
+
 ## 보고와 멱등
 
 보고는 `PlanningReporter`가 보낸다. 기존 Outbox(보고 대기함)는 응답 본문을 버리지만, Planning은 응답(초안 revision, CP 번호)이 결과에 필요하기 때문이다. 대신 Outbox와 같은 약속을 지킨다.

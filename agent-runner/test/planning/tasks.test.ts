@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import type { ClaimedJob } from '../../src/api/generated/client.ts';
+import { boundRef, judgedContentHash } from '../../src/planning/binding.ts';
 import { runPlanningJob } from '../../src/planning/index.ts';
 import { addOp, bodyOf, content, context, fakeApi, HASH, NOW, tempHome, wbsSnapshot } from './harness.ts';
 
@@ -41,9 +42,9 @@ describe('CP 판단 job(planning + proposal)', () => {
       jobId: job.id, fence: 5,
       judgements: [
         { target: 'TASK-0002', judgedRules: { schemaVersion: 1, items: ['revert', 'contract'].map((rule) => ({ rule, result: 'met', agreedBy: ['Claude', 'Codex'],
-          basis: `Claude: Claude: ${rule} 근거\nCodex: Codex: ${rule} 근거`, judgedAt: NOW, sourceRef: job.id, subjectHash: HASH })) } },
+          basis: `Claude: Claude: ${rule} 근거\nCodex: Codex: ${rule} 근거`, judgedAt: NOW, sourceRef: boundRef(job.id, judgedContentHash(content('이후'))), subjectHash: HASH })) } },
         { target: 'NEW-1', judgedRules: { schemaVersion: 1, items: [{ rule: 'revert', result: 'met', agreedBy: ['Claude', 'Codex'],
-          basis: 'Claude: Claude: revert 근거\nCodex: Codex: revert 근거', judgedAt: NOW, sourceRef: job.id, subjectHash: NEW_HASH }] } },
+          basis: 'Claude: Claude: revert 근거\nCodex: Codex: revert 근거', judgedAt: NOW, sourceRef: boundRef(job.id, judgedContentHash(content('새 Task'))), subjectHash: NEW_HASH }] } },
       ],
     });
     for (const agent of [claude, codex]) {

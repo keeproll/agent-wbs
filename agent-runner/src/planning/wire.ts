@@ -34,6 +34,10 @@ const REPORTS: Record<string, { params: readonly string[]; body: (b: Rec) => str
       if (!isRecord(task) || !isText(task.ref)) return `tasks[${String(i)}].ref가 없습니다`;
       const problem = agreedEstimateProblem({ ...(isRecord(task.estimate) ? task.estimate : {}), ref: task.ref });
       if (problem) return `tasks[${String(i)}].estimate: ${problem}`;
+      if (task.judgedRules !== undefined) {
+        const judged = recordProblem(task.judgedRules, false);
+        if (judged) return `tasks[${String(i)}].judgedRules: ${judged}`;
+      }
     }
     return null;
   } },
@@ -44,7 +48,8 @@ const REPORTS: Record<string, { params: readonly string[]; body: (b: Rec) => str
   submitPlanningProposal: { params: [], body: (b) =>
     !isText(b.jobId) ? 'jobId가 없습니다' : !isText(b.title) ? 'title이 없습니다' : !isText(b.reason) ? 'reason이 없습니다'
       : !(isRecord(b.source) && isText(b.source.kind)) ? 'source가 없습니다' : !nonEmpty(b.ops) ? 'ops 목록이 없습니다'
-        : b.taskJudgements === undefined ? null : taskJudgementsProblem(b.taskJudgements) },
+        : opsProblem(b.ops) ?? (b.taskJudgements === undefined ? null : taskJudgementsProblem(b.taskJudgements))
+          ?? (b.splitJudgements === undefined ? null : recordProblem(b.splitJudgements, false)) },
   submitProposalJudgements: { params: ['id'], body: (b) => {
     if (!isText(b.jobId)) return 'jobId가 없습니다';
     if (!Array.isArray(b.judgements)) return 'judgements 목록이 없습니다';
@@ -96,29 +101,27 @@ function recordProblem(record: unknown, needsHash: boolean): string | null {
     if (!isRecord(item) || !isText(item.rule) || !['met', 'not_met'].includes(String(item.result)) || !isText(item.basis) || !isText(item.judgedAt) || !isText(item.sourceRef)) {
       return `판단 items[${String(i)}] 형식이 다릅니다`;
     }
+    // 합의 주체는 판단 기록마다 필수이고 Claude·Codex 둘이어야 한다(D-33, 4차 리뷰 P3: 속성이 없어도 잡는다).
+    const agreedBy = item.agreedBy;
+    if (!(Array.isArray(agreedBy) && agreedBy.length === AGENTS.length && AGENTS.every((a) => agreedBy.includes(a)))) return `판단 items[${String(i)}]: 합의 주체가 Claude·Codex 둘이 아닙니다`;
     if (needsHash && !(typeof item.subjectHash === 'string' && HASH.test(item.subjectHash))) return `판단 items[${String(i)}]의 subjectHash가 없습니다`;
   }
   return null;
 }
 
-/** 본문 어디에 있든 합의 주체(agreedBy)는 Claude·Codex 둘, 신뢰도(confidence·conf)는 하·중·상이어야 한다. */
-function deepProblem(value: unknown, path: string): string | null {
-  if (Array.isArray(value)) {
-    for (const [i, v] of value.entries()) { const p = deepProblem(v, `${path}[${String(i)}]`); if (p) return p; }
-    return null;
-  }
-  if (!isRecord(value)) return null;
-  for (const [key, v] of Object.entries(value)) {
-    if (key === 'agreedBy' && !(Array.isArray(v) && v.length === AGENTS.length && AGENTS.every((a) => v.includes(a)))) {
-      return `${path}.agreedBy: 합의 주체가 Claude·Codex 둘이 아닙니다`;
+/**
+ * CP 변경 목록의 계약 필드 검사: 새 Task(add)의 신뢰도(`t.conf`)와 판단 기록(`t.judgedRules`)만 본다.
+ * 설계(`t.design[].content`)처럼 계약상 자유 JSON인 곳은 해석하지 않는다(4차 리뷰 P2).
+ * 예: 제품 DB 설계 예제의 `{"confidence": 0.91}`은 Planning 추정의 신뢰도가 아니다.
+ */
+function opsProblem(ops: unknown[]): string | null {
+  for (const [i, op] of ops.entries()) {
+    if (!isRecord(op) || op.op !== 'add' || !isRecord(op.t)) continue;
+    if (op.t.conf !== undefined && !CONFIDENCE.includes(op.t.conf as string)) return `ops[${String(i)}].t.conf: 신뢰도가 하·중·상이 아닙니다`;
+    if (op.t.judgedRules !== undefined) {
+      const problem = recordProblem(op.t.judgedRules, false);
+      if (problem) return `ops[${String(i)}].t.judgedRules: ${problem}`;
     }
-    if ((key === 'confidence' || key === 'conf') && !CONFIDENCE.includes(v as string)) return `${path}.${key}: 신뢰도가 하·중·상이 아닙니다`;
-    if ((key === 'judgedRules' || key === 'splitJudgements') && v !== undefined) {
-      const p = recordProblem(v, false);
-      if (p) return `${path}.${key}: ${p}`;
-    }
-    const p = deepProblem(v, `${path}.${key}`);
-    if (p) return p;
   }
   return null;
 }
@@ -132,5 +135,6 @@ export function wireProblem(operation: string, request: unknown): string | null 
   if (params !== undefined && !isRecord(params)) return '경로 인자가 객체가 아닙니다';
   if (report.params.length && !(isRecord(params) && report.params.every((name) => isText(params[name])))) return `경로 인자(${report.params.join(',')})가 없습니다`;
   if (!isRecord(body) || typeof body.fence !== 'number') return '본문(fence 포함)이 없습니다';
-  return report.body(body) ?? deepProblem(body, '본문');
+  // 보고별 검사는 계약이 정한 필드(추정·판단 기록·신뢰도)만 본다. 본문 전체를 이름으로 훑지 않는다(4차 리뷰 P2).
+  return report.body(body);
 }
