@@ -76,6 +76,15 @@ test('정의에 기준이 하나도 없으면 모두 기록만 한다', async ()
   } finally { await f.close(); }
 });
 
+test('화면 비교 기준은 night 단계의 screens로 받는다(경로·라우트·준비 선택자)', () => {
+  const wbs = { page: 'prototype/uiux/Main.dc.html', route: '#wbs', ready: '[data-screen=wbs]' };
+  expect(parsePipeline(night({ screens: { wbs } })).stages.night[0]?.screens).toEqual({ wbs });
+  const stages = structuredClone(definition.stages) as Record<string, Record<string, unknown>[]>;
+  const first = stages.deploy?.[0];
+  if (first) first.screens = { wbs };
+  expect(() => parsePipeline(JSON.stringify({ ...definition, stages }))).toThrow();
+});
+
 test('정책의 격리 목록(ci.quarantined, 필수)을 판정 집합으로 바꾼다', () => {
   expect(policyQuarantine({ quarantined: [] })).toEqual(new Set());
   expect(policyQuarantine({ quarantined: ['a', 'b'] })).toEqual(new Set(['a', 'b']));

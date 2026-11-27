@@ -5,7 +5,7 @@ import { expect, test } from 'vitest';
 import { parsePipeline } from '../../src/ci/pipeline.ts';
 import { HeavySemaphore } from '../../src/resources/heavy.ts';
 import { runNightCheck } from '../../src/ci/night/run.ts';
-import { BASELINE_RENDER, createPlaywrightRenderer, type BaselineRenderer, type RenderRequest } from '../../src/ci/night/baseline.ts';
+import { BASELINE_RENDER, checkBaselineFont, createPlaywrightRenderer, type BaselineRenderer, type RenderRequest } from '../../src/ci/night/baseline.ts';
 import { commit, definition, file, git } from './int-fixture.ts';
 import { ciFixture } from './night-fixture.ts';
 import { png } from './png.ts';
@@ -17,7 +17,8 @@ const blue = png(2, 2, () => [0, 0, 255, 255]);
 const night = (f: F, renderBaseline?: BaselineRenderer) => ({ repo: f.repo, heavy: new HeavySemaphore(1), execute: f.execute, report: f.report, home: f.home,
   quarantined: new Set<string>(), retry: 1, now: () => NOW, ...(renderBaseline && { renderBaseline }) });
 
-async function prototype(f: F, html: string, screens: Record<string, string> = { wbs: 'prototype/uiux/Main.dc.html#wbs' }) {
+const WBS = { page: 'prototype/uiux/Main.dc.html', route: '#wbs', ready: '[data-screen=wbs]' };
+async function prototype(f: F, html: string, screens: Record<string, unknown> = { wbs: WBS }) {
   await file(join(f.source, 'prototype/uiux/Main.dc.html'), html);
   await file(join(f.source, 'prototype/uiux/app.css'), 'body{}');
   await file(join(f.source, '.agentwbs/pipeline.yaml'), JSON.stringify({ ...f.pipeline, stages: { ...f.pipeline.stages, night: [{ name: 'visual', argv: ['fake', 'night-visual'], screens }] } }));
@@ -36,13 +37,25 @@ function renderer() {
 const shoot = (f: F, image: Buffer) => f.script(async ({ name }) => name === 'visual'
   ? { code: 0, files: { 'app.png': image }, report: { screens: [{ name: 'wbs', actual: 'app.png' }] } } : { code: 0 });
 
-test('정의의 screens는 prototype/uiux 아래 HTML(선택적으로 #화면)만 받는다', () => {
+test('screens는 화면마다 prototype/uiux HTML 경로·#라우트·준비 완료 선택자를 둔다', () => {
   const night = (screens: unknown) => JSON.stringify({ ...definition, stages: { ...definition.stages, night: [{ name: 'visual', argv: ['x'], screens }] } });
-  expect(parsePipeline(night({ wbs: 'prototype/uiux/Main.dc.html#wbs' })).stages.night[0]?.screens).toEqual({ wbs: 'prototype/uiux/Main.dc.html#wbs' });
-  expect(parsePipeline(night({ home: 'prototype/uiux/Main.dc.html' })).stages.night[0]?.screens).toEqual({ home: 'prototype/uiux/Main.dc.html' });
-  for (const bad of ['prototype/uiux/shots/wbs.png', 'src/index.html', 'prototype/uiux/../x.html', 'prototype/uiux/x.html?y=1', 'prototype/uiux/x.html#']) {
-    expect(() => parsePipeline(night({ wbs: bad }))).toThrow();
-  }
+  expect(parsePipeline(night({ wbs: WBS })).stages.night[0]?.screens).toEqual({ wbs: WBS });
+  for (const bad of [
+    'prototype/uiux/Main.dc.html#wbs',
+    { page: 'prototype/uiux/Main.dc.html', ready: 'main' },
+    { page: 'prototype/uiux/Main.dc.html', route: '', ready: 'main' },
+    { page: 'prototype/uiux/Main.dc.html', route: 'wbs', ready: 'main' },
+    { page: 'prototype/uiux/Main.dc.html', route: '#', ready: 'main' },
+    { page: 'prototype/uiux/Main.dc.html', route: '#a b', ready: 'main' },
+    { page: 'prototype/uiux/Main.dc.html', route: '#wbs' },
+    { page: 'prototype/uiux/Main.dc.html', route: '#wbs', ready: '' },
+    { page: 'prototype/uiux/Main.dc.html', route: '#wbs', ready: 'a\nb' },
+    { page: 'prototype/uiux/Main.dc.html#x', route: '#wbs', ready: 'main' },
+    { page: 'prototype/uiux/shots/wbs.png', route: '#wbs', ready: 'main' },
+    { page: 'src/index.html', route: '#wbs', ready: 'main' },
+    { page: 'prototype/uiux/../x.html', route: '#wbs', ready: 'main' },
+    { ...WBS, extra: 1 },
+  ]) expect(() => parsePipeline(night({ wbs: bad })), JSON.stringify(bad)).toThrow();
 });
 
 test('기준 이미지는 Runner 렌더러가 main의 HTML을 고정 뷰포트·글꼴로 렌더해 만든다', async () => {
@@ -54,7 +67,7 @@ test('기준 이미지는 Runner 렌더러가 main의 HTML을 고정 뷰포트·
     const out = await runNightCheck(night(f, r.render), '2026-11-27');
     expect(out).toMatchObject({ status: 'pass', screens: [{ name: 'wbs', status: 'same', ratio: 0 }] });
     expect(r.calls).toHaveLength(1);
-    expect(r.calls[0]).toMatchObject({ entry: 'prototype/uiux/Main.dc.html', fragment: '#wbs', settings: BASELINE_RENDER });
+    expect(r.calls[0]).toMatchObject({ entry: 'prototype/uiux/Main.dc.html', route: '#wbs', ready: '[data-screen=wbs]', settings: BASELINE_RENDER });
     expect(BASELINE_RENDER).toMatchObject({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
     expect((await r.calls[0]?.read('prototype/uiux/app.css'))?.toString()).toBe('body{}');
     await expect(r.calls[0]?.read('.agentwbs/pipeline.yaml') ?? Promise.resolve()).rejects.toThrow();
@@ -120,7 +133,7 @@ test('기준 렌더가 실패하거나 렌더러가 없으면 비교 불가로 �
   } finally { await f.close(); }
 });
 
-test('Playwright 렌더러는 main 파일만 내보내고 밖으로 나가는 요청은 막으며 고정 설정으로 찍는다', async () => {
+function fakeChromium(options: { ready?: boolean; fontInstalled?: boolean } = {}) {
   const log: string[] = [];
   const files: Record<string, string> = { 'prototype/uiux/Main.dc.html': '<html></html>', 'prototype/uiux/app.css': 'body{}' };
   type Handler = (route: { request: () => { url: () => string }; fulfill: (r: { status: number; body: Buffer; contentType: string }) => Promise<void>; abort: () => Promise<void> }) => Promise<void>;
@@ -135,25 +148,60 @@ test('Playwright 렌더러는 main 파일만 내보내고 밖으로 나가는 �
           abort: async () => { log.push(`abort ${u}`); } });
       }
     },
+    waitForSelector: async (selector: string, o: Record<string, unknown>) => {
+      log.push(`wait ${selector} ${JSON.stringify(o)}`);
+      if (options.ready === false) throw new Error('Timeout 10000ms exceeded');
+    },
     addStyleTag: async ({ content }: { content: string }) => { log.push(`style ${content}`); },
-    evaluate: async () => undefined,
+    evaluate: async (_script: unknown, arg?: unknown) => { log.push(`evaluate ${JSON.stringify(arg ?? null)}`); return arg === undefined ? undefined : options.fontInstalled !== false; },
     screenshot: async (o: Record<string, unknown>) => { log.push(`shot ${JSON.stringify(o)}`); return red; },
   };
   const chromium = { launch: async () => ({
     newContext: async (o: Record<string, unknown>) => { log.push(`context ${JSON.stringify(o)}`); return { newPage: async () => page, close: async () => undefined }; },
     close: async () => { log.push('close'); },
   }) };
-  const render = createPlaywrightRenderer(chromium);
-  const image = await render({ entry: 'prototype/uiux/Main.dc.html', fragment: '#wbs', settings: BASELINE_RENDER,
-    // 렌더러 스스로도 경로를 거른다. read가 무엇이든 내주더라도 prototype/uiux 밖은 막아야 한다.
-    read: async path => Buffer.from(files[path] ?? `leaked ${path}`) });
-  expect(image).toBe(red);
+  // 렌더러 스스로도 경로를 거른다. read가 무엇이든 내주더라도 prototype/uiux 밖은 막아야 한다.
+  const request = { entry: 'prototype/uiux/Main.dc.html', route: '#wbs', ready: '[data-screen=wbs]', settings: BASELINE_RENDER,
+    read: async (path: string) => Buffer.from(files[path] ?? `leaked ${path}`) };
+  return { log, chromium, request };
+}
+const WAIT = `wait [data-screen=wbs] ${JSON.stringify({ state: 'visible', timeout: 10_000 })}`;
+
+test('Playwright 렌더러는 라우트 URL로 열고 준비 선택자가 보일 때까지 기다린 뒤, main 파일만 내보내며 고정 설정으로 찍는다', async () => {
+  const { log, chromium, request } = fakeChromium();
+  expect(await createPlaywrightRenderer(chromium)(request)).toBe(red);
   expect(log).toContain(`context ${JSON.stringify({ viewport: BASELINE_RENDER.viewport, deviceScaleFactor: 1, locale: 'ko-KR', timezoneId: 'Asia/Seoul', reducedMotion: 'reduce', javaScriptEnabled: true })}`);
   expect(log).toContain('goto http://baseline.invalid/prototype/uiux/Main.dc.html#wbs');
   expect(log).toContain('fulfill http://baseline.invalid/prototype/uiux/app.css text/css body{}');
   expect(log).toContain('abort https://cdn.example.com/prototype/uiux/app.css');
   expect(log).toContain('abort http://baseline.invalid/src/secret.ts');
+  expect(log).toContain(WAIT);
   expect(log.some(l => l.startsWith('style') && l.includes(BASELINE_RENDER.font))).toBe(true);
+  expect(log).toContain(`evaluate ${JSON.stringify(BASELINE_RENDER.font)}`);
+  expect(log.indexOf(WAIT)).toBeLessThan(log.findIndex(l => l.startsWith('shot')));
   expect(log).toContain(`shot ${JSON.stringify({ type: 'png', fullPage: false, animations: 'disabled', caret: 'hide' })}`);
   expect(log.at(-1)).toBe('close');
+});
+
+test('준비 선택자가 나타나지 않으면(라우트로 열 수 없는 화면) 렌더 실패다', async () => {
+  const { log, chromium, request } = fakeChromium({ ready: false });
+  await expect(createPlaywrightRenderer(chromium)(request)).rejects.toThrow('준비 선택자 [data-screen=wbs]');
+  expect(log.some(l => l.startsWith('shot'))).toBe(false);
+  expect(log.at(-1)).toBe('close');
+});
+
+test('고정 글꼴이 설치되어 있지 않으면 렌더 실패(비교 불가)다', async () => {
+  const { log, chromium, request } = fakeChromium({ fontInstalled: false });
+  await expect(createPlaywrightRenderer(chromium)(request)).rejects.toThrow('고정 글꼴 Noto Sans KR');
+  expect(log.some(l => l.startsWith('shot'))).toBe(false);
+});
+
+test('준비 점검용 글꼴 확인은 fontconfig로 고정 글꼴 설치 여부를 본다', async () => {
+  const calls: string[][] = [];
+  const run = (stdout: string, code = 0) => async (cmd: string, args: readonly string[]) => { calls.push([cmd, ...args]); return { code, stdout, stderr: '' }; };
+  expect(await checkBaselineFont(run('Noto Sans KR\n'))).toEqual({ status: 'ok', detail: '화면 비교 고정 글꼴 Noto Sans KR 설치됨' });
+  expect(calls[0]).toEqual(['fc-list', ':family=Noto Sans KR', 'family']);
+  expect(await checkBaselineFont(run(''))).toMatchObject({ status: 'warn', detail: expect.stringContaining('비교 불가') });
+  expect(await checkBaselineFont(run('', 127))).toMatchObject({ status: 'warn' });
+  expect(await checkBaselineFont(async () => { throw new Error('ENOENT'); })).toMatchObject({ status: 'warn' });
 });

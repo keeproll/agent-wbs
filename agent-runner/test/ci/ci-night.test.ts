@@ -89,7 +89,8 @@ test('테스트 실패 없이 종료 코드만 실패면 격리와 관계없이 
 async function screens(f: Awaited<ReturnType<typeof ciFixture>>, table: Record<string, string>, files: Record<string, Buffer>) {
   // 기준은 HTML이다. 시험 렌더러(pngRenderer)는 HTML 내용을 base64 PNG로 읽는다.
   for (const [path, value] of Object.entries(files)) await file(join(f.source, path), value.toString('base64'));
-  const stages = { ...f.pipeline.stages, night: [{ name: 'visual', argv: ['fake', 'night-visual'], screens: table }] };
+  const defined = Object.fromEntries(Object.entries(table).map(([name, page]) => [name, { page, route: `#${name}`, ready: 'main' }]));
+  const stages = { ...f.pipeline.stages, night: [{ name: 'visual', argv: ['fake', 'night-visual'], screens: defined }] };
   await file(join(f.source, '.agentwbs/pipeline.yaml'), JSON.stringify({ ...f.pipeline, stages }));
   commit(f.source); git(f.source, 'push', f.remote, 'main');
 }

@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto';
 import { lstat, mkdir, open } from 'node:fs/promises';
 import { join, posix } from 'node:path';
 import { atomicWrite } from '../../state/files.ts';
+import type { RunCommand } from '../../readiness/command.ts';
+import type { ScreenTarget } from '../pipeline.ts';
 import { decodePng } from './visual.ts';
 
 /**
@@ -22,8 +24,10 @@ export const BASELINE_RENDER = {
 export interface RenderRequest {
   /** 시작 HTML의 저장소 경로(예: prototype/uiux/Main.dc.html). */
   entry: string;
-  /** 화면을 고르는 `#…` 조각. 없으면 빈 문자열. */
-  fragment: string;
+  /** 화면을 여는 `#…` 라우트. */
+  route: string;
+  /** 화면 준비가 끝났음을 알리는 CSS 선택자. 보일 때까지 기다린 뒤 찍는다. */
+  ready: string;
   /** 고정한 main 커밋의 `prototype/uiux/` 파일만 읽는다. 다른 경로는 거부한다. */
   read: (path: string) => Promise<Buffer>;
   settings: typeof BASELINE_RENDER;
@@ -32,6 +36,36 @@ export interface RenderRequest {
 export type BaselineRenderer = (request: RenderRequest, signal?: AbortSignal) => Promise<Buffer>;
 
 const PREFIX = 'prototype/uiux/';
+const READY_TIMEOUT_MS = 10_000;
+
+/**
+ * 브라우저 안에서 글꼴 설치 여부를 잰다. 고정 글꼴을 앞세운 글자 폭이 대체 글꼴만 쓴 폭과 모두 같으면 없는 것이다.
+ * 왜 document.fonts.check를 쓰지 않나: 없는 글꼴 이름에도 true를 돌려준다.
+ */
+function fontInstalled(font: string): boolean {
+  const doc = (globalThis as unknown as { document: { createElement(tag: 'canvas'): { getContext(type: '2d'): { font: string; measureText(text: string): { width: number } } | null } } }).document;
+  const context = doc.createElement('canvas').getContext('2d');
+  if (!context) return false;
+  const sample = '가나다라마바사 WBS 0123 mmmmmmmmmmlli';
+  return ['monospace', 'serif', 'sans-serif'].some(base => {
+    context.font = `72px ${base}`; const fallback = context.measureText(sample).width;
+    context.font = `72px '${font}', ${base}`; return context.measureText(sample).width !== fallback;
+  });
+}
+
+/**
+ * Runner 준비 점검용 글꼴 확인(결정 12). fontconfig(`fc-list`)로 고정 글꼴이 설치됐는지 본다.
+ * 없으면 warn이다. 이때 야간 화면 비교는 「비교 불가」가 된다(통과로 보지 않음).
+ */
+export async function checkBaselineFont(run: RunCommand): Promise<{ status: 'ok' | 'warn'; detail: string; fix?: string }> {
+  const font = BASELINE_RENDER.font;
+  const missing = { status: 'warn' as const, detail: `화면 비교 고정 글꼴 ${font}이 없어 야간 화면 비교는 비교 불가로 처리됩니다.`, fix: `${font} 글꼴을 설치하세요(예: fonts-noto-cjk).` };
+  try {
+    const result = await run('fc-list', [`:family=${font}`, 'family']);
+    return result.code === 0 && result.stdout.split('\n').some(line => line.split(',').map(v => v.trim()).includes(font))
+      ? { status: 'ok', detail: `화면 비교 고정 글꼴 ${font} 설치됨` } : missing;
+  } catch { return missing; }
+}
 const ORIGIN = 'http://baseline.invalid';
 const TYPES: Record<string, string> = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.mjs': 'text/javascript', '.json': 'application/json',
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.webp': 'image/webp',
@@ -49,8 +83,9 @@ interface RouteLike { request(): { url(): string }; fulfill(response: { status: 
 interface PageLike {
   route(pattern: string, handler: (route: RouteLike) => Promise<void>): Promise<void>;
   goto(url: string): Promise<unknown>;
+  waitForSelector(selector: string, options: { state: 'visible'; timeout: number }): Promise<unknown>;
   addStyleTag(options: { content: string }): Promise<unknown>;
-  evaluate(script: () => unknown): Promise<unknown>;
+  evaluate<A>(script: (arg: A) => unknown, arg?: A): Promise<unknown>;
   screenshot(options: { type: 'png'; fullPage: boolean; animations: 'disabled'; caret: 'hide' }): Promise<Buffer>;
 }
 export interface ChromiumLike {
@@ -67,7 +102,7 @@ export interface ChromiumLike {
  * - 글꼴은 CSS로 고정한다. 애니메이션·커서는 끈다.
  */
 export function createPlaywrightRenderer(chromium: ChromiumLike): BaselineRenderer {
-  return async ({ entry, fragment, read, settings }) => {
+  return async ({ entry, route, ready, read, settings }) => {
     const browser = await chromium.launch();
     try {
       const context = await browser.newContext({ viewport: settings.viewport, deviceScaleFactor: settings.deviceScaleFactor,
@@ -82,9 +117,14 @@ export function createPlaywrightRenderer(chromium: ChromiumLike): BaselineRender
             await route.fulfill({ status: 200, body: await read(path), contentType: TYPES[posix.extname(path).toLowerCase()] ?? 'application/octet-stream' });
           } catch { await route.abort(); }
         });
-        await page.goto(`${ORIGIN}/${entry}${fragment}`);
+        await page.goto(`${ORIGIN}/${entry}${route}`);
+        // 화면이 다 그려졌다는 표시가 보일 때까지 기다린다. 안 보이면 그 라우트로 열 수 없는 화면이다(결정 13).
+        try { await page.waitForSelector(ready, { state: 'visible', timeout: READY_TIMEOUT_MS }); }
+        catch (error) { throw new Error(`준비 선택자 ${ready}가 ${String(READY_TIMEOUT_MS)}ms 안에 보이지 않습니다(라우트 ${route}로 열 수 없는 화면).`, { cause: error }); }
         await page.addStyleTag({ content: `*, *::before, *::after { font-family: '${settings.font}' !important; }` });
         await page.evaluate(() => (globalThis as unknown as { document: { fonts: { ready: Promise<unknown> } } }).document.fonts.ready);
+        // 고정 글꼴이 없으면 브라우저가 다른 글꼴로 바꿔 그린다. 그런 기준은 비교 근거가 될 수 없다(결정 12).
+        if (await page.evaluate(fontInstalled, settings.font) !== true) throw new Error(`고정 글꼴 ${settings.font}이 설치되어 있지 않아 기준 화면을 만들 수 없습니다(비교 불가).`);
         return await page.screenshot({ type: 'png', fullPage: false, animations: 'disabled', caret: 'hide' });
       } finally { await context.close(); }
     } finally { await browser.close(); }
@@ -97,7 +137,7 @@ export function createPlaywrightRenderer(chromium: ChromiumLike): BaselineRender
  * - 보관본은 링크를 따라가지 않고 읽는다. 손상됐거나 PNG가 아니면 다시 렌더해 바꾼다.
  * - 렌더러가 없거나 실패하면 오류를 던진다. 호출한 쪽은 「비교 불가」로 본다.
  */
-export async function baselineImage(home: string, baseSha: string, screen: string, target: string, read: RenderRequest['read'], render: BaselineRenderer | undefined, signal?: AbortSignal): Promise<Buffer> {
+export async function baselineImage(home: string, baseSha: string, screen: string, target: ScreenTarget, read: RenderRequest['read'], render: BaselineRenderer | undefined, signal?: AbortSignal): Promise<Buffer> {
   if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(baseSha)) throw new TypeError('main SHA가 올바르지 않습니다.');
   const directory = join(home, 'ci', 'baselines', baseSha);
   for (const path of [join(home, 'ci'), join(home, 'ci', 'baselines'), directory]) {
@@ -112,9 +152,8 @@ export async function baselineImage(home: string, baseSha: string, screen: strin
     } finally { await file.close(); }
   } catch { /* 없거나 손상됐거나 링크면 다시 렌더한다. */ }
   if (!render) throw new Error('기준 이미지 렌더러가 연결되지 않았습니다.');
-  const [entry = '', fragment = ''] = target.split(/(?=#)/);
   let image: Buffer;
-  try { image = await render({ entry, fragment, read, settings: BASELINE_RENDER }, signal); }
+  try { image = await render({ entry: target.page, route: target.route, ready: target.ready, read, settings: BASELINE_RENDER }, signal); }
   catch (error) { throw new Error(`기준 이미지를 렌더하지 못했습니다: ${error instanceof Error ? error.message : ''}`, { cause: error }); }
   try { decodePng(image); } catch { throw new Error('기준 이미지 렌더 결과가 PNG가 아닙니다.'); }
   // rename으로 바꾸므로 같은 이름의 링크가 있어도 따라가지 않고 링크 자체를 바꾼다.

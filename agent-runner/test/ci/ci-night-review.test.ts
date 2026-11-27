@@ -58,7 +58,7 @@ test('화면 비교 기준은 main 고정 정의의 prototype/uiux HTML을 렌�
   const f = await ciFixture({ night: ['visual'] });
   try {
     const proto = png(2, 2, () => [9, 9, 9, 255]);
-    await define(f, { name: 'visual', screens: { wbs: 'prototype/uiux/shots/wbs.html' } }, { 'prototype/uiux/shots/wbs.html': proto });
+    await define(f, { name: 'visual', screens: { wbs: { page: 'prototype/uiux/shots/wbs.html', route: '#wbs', ready: 'main' } } }, { 'prototype/uiux/shots/wbs.html': proto });
     f.script(async ({ name }) => name === 'visual' ? { code: 0, files: { 'fake.png': shot }, report: { screens: [{ name: 'wbs', actual: 'fake.png' }] } } : { code: 0 });
     expect(await runNightCheck(night(f), '2026-11-27')).toMatchObject({ status: 'pass', screens: [{ name: 'wbs', status: 'diff', ratio: 1 }] });
     f.script(async ({ name }) => name === 'visual' ? { code: 0, files: { 'fake.png': shot }, report: { screens: [{ name: 'wbs', actual: 'fake.png', expected: 'fake.png' }] } } : { code: 0 });
