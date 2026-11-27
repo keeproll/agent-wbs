@@ -26,7 +26,12 @@ function shape(value: unknown): unknown {
 export function designItemHash(value: unknown): string {
   if (value === null) return createHash('sha256').update('null').digest('hex');
   const item = record(value);
+  const content = { ...record(item.content) };
+  for (const key of ['decisionKeys', 'tables', 'usedBy']) {
+    const values = content[key];
+    if (Array.isArray(values)) content[key] = [...values].sort();
+  }
   const normalized = { itemKey: item.itemKey, kind: item.kind, path: item.path, name: item.name ?? null, description: item.description ?? null, taskKey: item.taskKey ?? null,
-    content: item.content, contract: shape(item.contract), extracted: shape(item.extracted) };
+    content, contract: shape(item.contract), extracted: shape(item.extracted) };
   return createHash('sha256').update(jcs(normalized)).digest('hex');
 }
