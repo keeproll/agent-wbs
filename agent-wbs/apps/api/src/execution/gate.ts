@@ -108,21 +108,32 @@ export async function invalidateTaskGate(client: PoolClient, taskKey: string, he
   return true;
 }
 
-export async function enqueueIntegration(client: PoolClient, taskId: string, epoch: number, options: { retry?: boolean; baseSha?: string } = {}) {
+export async function enqueueIntegration(client: PoolClient, taskId: string, epoch: number, options: { retry?: boolean; baseSha?: string; baselineOnly?: boolean } = {}) {
   const repo = new RunnerRepository(client); await repo.lock();
   const task = await repo.taskById(taskId);
   if (!task || task.status !== 'gate') return;
+  const held = (await client.query<{ held: boolean }>(`select exists(select 1 from merge_queue where task=$1 and actual_merge_sha is not null)
+    or exists(select 1 from alerts where project_id=$2 and key like 'ci:mergeMismatch|%' and target->>'taskKey'=$3 and resolved_at is null) held`,[task.id,task.project_id,task.task_key])).rows[0]?.held;
+  if (held) return;
   const input = await gateInput(client,task.id);
   const baseline = (await client.query("select fail_scope='baseline' and status='fail' baseline from ci_runs where task=$1 and stage=1 and head_sha=$2 order by run_no desc limit 1",[task.id,input.basis.headSha])).rows[0]?.baseline;
   // 기준 실패만 ① 재실행을 허용한다. 명세·입력·QA와 나머지 완료 조건은 그대로 확인한다.
   if (baseline && input.taskCheck) input.taskCheck = { ...input.taskCheck,result:'PASS' };
   if (!completionGate(input).every(c => c.result === 'PASS')) return;
   const verification = required((await client.query<{ id: string; head_sha: string }>('select v.id,v.head_sha from verifications v join task_attempts a on a.id=v.attempt where a.task=$1 order by a.attempt_no desc limit 1', [task.id])).rows[0]);
+  if (options.baselineOnly) {
+    const previous = (await client.query<{ verification: string; baseline: boolean }>(`select q.verification,
+      q.status='failed' and c.stage=1 and c.status='fail' and c.fail_scope='baseline' and c.task=q.task and c.project_id=q.project_id
+      and j.kind='integrate' and j.state='failed' baseline from merge_queue q left join ci_runs c on c.id=q.ci_run
+      left join runner_jobs j on j.id=c.job where q.task=$1 order by q.queue_no desc limit 1`,[task.id])).rows[0];
+    if (!previous?.baseline || previous.verification !== verification.id) return;
+  }
   const base = options.baseSha ?? await inputHead(client,task.project_id);
   const prefix = `integrate:${verification.id}:`;
   const jobs = (await client.query<{ id: string; state: string; base_sha: string }>(`select j.id,j.state,coalesce(j.payload->>'baseSha',
     (select c.base_sha from ci_runs c where c.job=j.id and c.base_sha is not null order by c.run_no desc limit 1),$3) base_sha
     from runner_jobs j where starts_with(j.dedup_key,$1) or j.dedup_key=$2 order by j.record_no desc`,[prefix,`integrate:${verification.id}`,base])).rows;
+  if (jobs.some(j => j.state === 'reconcile')) return;
   const open = jobs.find(j => ['queued','leased','started','reconcile'].includes(j.state));
   if (open) return open.id;
   const rounds = jobs.filter(j => j.base_sha === base);

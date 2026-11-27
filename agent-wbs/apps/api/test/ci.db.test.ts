@@ -728,3 +728,32 @@ test('결정 14: 이전 버전이 이미 저장한 error 관측도 첫 성공 �
   await observe();
   expect((await get(`projects/${project}/ci/pipeline`)).json()).toMatchObject({ status:'ok',raw:'version: 1' });
 });
+
+
+test.each([false,true])('리뷰3 Q1·Q7: 기준 실패가 아닌 통합 종료 뒤 main 이동은 재통합하지 않는다(불일치=%s)', async mismatch => {
+  const prepared = mismatch ? await integration() : null;
+  const a = prepared?.a ?? await gateTask();
+  if (prepared) {
+    await queue(a,'checking',prepared.extra);
+    const r = await queue(a,'merged',{ ...prepared.extra,actualMergeSha:'9'.repeat(40),actualTreeSha:prepared.tree,mergeParents:[sha,otherSha] });
+    expect(r.statusCode,r.body).toBe(409);
+    expect(r.json().error.code).toBe('MERGE_MISMATCH');
+  }
+  await owner.query("update runner_jobs set state='done' where id=$1",[a.job]);
+  await observe('9'.repeat(40));
+  expect((await owner.query("select count(*)::int n from runner_jobs where kind='integrate' and state='queued'")).rows).toEqual([{ n:0 }]);
+  expect((await owner.query('select status from tasks where id=$1',[a.id])).rows).toEqual([{ status:'gate' }]);
+  if (mismatch) expect((await get('alerts')).json().items).toHaveLength(1);
+});
+
+test.each(['alert','fact','reconcile'])('리뷰3: 기준 실패가 있어도 %s 보류는 자동·수동 재통합에서 제외한다', async held => {
+  const { a,id } = await baselineFailed();
+  if (held==='alert') await owner.query("insert into alerts(project_id,key,severity,target) values($1,'ci:mergeMismatch|#1','error',$2)",[project,{ taskKey:a.key }]);
+  else if (held==='fact') await owner.query('update merge_queue set actual_merge_sha=$2 where task=$1',[a.id,'9'.repeat(40)]);
+  else await owner.query("insert into runner_jobs(project_id,epoch,kind,payload,dedup_key,state,generation) select $1,1,'integrate',$2,'integrate:'||verification::text||':reconcile','reconcile',1 from merge_queue where task=$3",[project,{ taskKey:a.key,pr:1 },a.id]);
+  await observe('d'.repeat(40));
+  expect((await owner.query("select count(*)::int n from runner_jobs where kind='integrate' and state='queued'")).rows).toEqual([{ n:0 }]);
+  const r = await app.inject({ method:'POST',url:`/api/projects/${project}/ci/runs/${id}/retry`,headers:lead() });
+  expect(r.statusCode,r.body).toBe(409);
+});
+
