@@ -17,6 +17,7 @@ let s: Scenario | undefined;
 const active = () => { if (!s) throw new Error('시나리오가 없습니다.'); return s; };
 let bot: ReturnType<typeof createServer> | undefined;
 afterEach(async () => {
+  vi.useRealTimers();
   await s?.close(); s = undefined;
   await new Promise<void>(resolve => bot ? bot.close(() => resolve()) : resolve()); bot = undefined;
   delete process.env.AWBS_TELEGRAM_BOT_API_URL;
@@ -101,23 +102,31 @@ test.each(['unset', 'http://127.0.0.1:1', 'refused', 'https://api.telegram.org']
 });
 
 test.each(['disabled', 'chat', 'token'].flatMap(change => [false, true].map(retrying => [change, retrying] as const)))('telegram fix1 R3: %s 변경 뒤 쌓인 업무 알림은 보내지 않는다 (재시도 %s)', async (change, retrying) => {
+  // 실제 시간이 흘러도 시험 시계는 움직이지 않는다. 속도 제한 경계는 worker의 시각 인자로 제어한다.
+  vi.useFakeTimers({ toFake: ['Date'] });
   const f = await connect();
   await active().rows("insert into runner_readiness(key,status,detail,fix,at) values('cancel','fail','실패','확인',now())");
   const { processNotify } = await import('../../../apps/api/src/notify/worker.ts');
   if (retrying) {
     f.fail(429);
-    await new Promise(resolve => setTimeout(resolve, 3100));
-    await processNotify(active().pool, 1);
+    const last = (await active().rows("select max(at) at from notify_log where state='sending'"))[0]?.at as Date;
+    await processNotify(active().pool, 1, new Date(last.getTime() + 10_000));
     expect((await active().rows("select state from notify_outbox where kind='biz'"))[0]?.state).toBe('retry_wait');
     f.fail(0);
   }
   const chatId = change === 'chat' ? '512345678' : '-4123456789';
   const botToken = change === 'token' ? token.replace('abcd', 'zzzz') : undefined;
-  if (change !== 'disabled') await active().lead('POST', '/api/notify/telegram/test', { botToken, chatId, targetName: '새 대상' });
+  if (change !== 'disabled') {
+    const tested = await active().lead('POST', '/api/notify/telegram/test', { botToken, chatId, targetName: '새 대상' });
+    const last = (await active().rows("select max(at) at from notify_log where state='sending'"))[0]?.at as Date;
+    await processNotify(active().pool, 1, new Date(last.getTime() + 10_000), String(tested.body.testId));
+    expect((await active().lead('GET', `/api/notify/telegram?testId=${String(tested.body.testId)}`)).body.test).toMatchObject({ ok: true });
+  }
   const saved = await active().lead('PUT', '/api/notify/telegram', { botToken, enabled: change !== 'disabled', chatId, targetName: '새 대상', updatedAt: f.saved.updatedAt });
   expect(saved.status).toBe(200);
   const sends = f.requests.filter(r => r.method === 'sendMessage').length;
-  await processNotify(active().pool, 1, new Date(Date.now() + 60_000));
+  const last = (await active().rows("select max(at) at from notify_log where state='sending'"))[0]?.at as Date;
+  await processNotify(active().pool, 1, new Date(last.getTime() + 60_000));
   expect(f.requests.filter(r => r.method === 'sendMessage')).toHaveLength(sends);
   expect(await active().rows("select state,attempts from notify_outbox where kind='biz'")).toEqual([{ state: 'failed', attempts: retrying ? 1 : 0 }]);
 });
@@ -293,21 +302,24 @@ test.each([[401, 'token_invalid'], [400, 'chat_not_found'], [403, 'forbidden'], 
   });
 
 test('telegram: 429는 retry_after 전 보내지 않고 나중에 성공하면 테스트와 연결 알림도 복구', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
   const { fail, requests, project, delay, responseAt } = await connect();
-  // 대화별 3초 제한은 별도 시험에서 확인한다. 여기서는 실제 429 응답부터 재시도 간격을 잰다.
-  await new Promise(resolve => setTimeout(resolve, 3100));
+  const { processNotify } = await import('../../../apps/api/src/notify/worker.ts');
   fail(429);
   delay(100);
-  expect((await active().lead('POST', '/api/notify/telegram/test', { chatId: '-4123456789', targetName: '팀장' })).body).toMatchObject({ error: 'rate_limited', retryAfter: 15 });
+  const tested = await active().lead('POST', '/api/notify/telegram/test', { chatId: '-4123456789', targetName: '팀장' });
+  const last = (await active().rows("select max(at) at from notify_log where state='sending'"))[0]?.at as Date;
+  const sendAt = new Date(last.getTime() + 10_000);
+  await processNotify(active().pool, 1, sendAt, String(tested.body.testId));
   const retryAt = (await active().rows('select next_at from notify_outbox order by created_at desc limit 1'))[0]?.next_at as Date;
+  expect(retryAt.getTime()).toBe(sendAt.getTime() + 15_000);
   expect(retryAt.getTime()).toBeGreaterThanOrEqual(responseAt() + 15_000);
   expect((await active().lead('GET', '/api/notify/telegram')).body.test).toMatchObject({ ok: false, error: 'rate_limited' });
-  const { processNotify } = await import('../../../apps/api/src/notify/worker.ts');
   const sends = requests.filter(r => r.method === 'sendMessage').length;
-  await processNotify(active().pool, 1);
+  await processNotify(active().pool, 1, new Date(retryAt.getTime() - 1));
   expect(requests.filter(r => r.method === 'sendMessage')).toHaveLength(sends);
   fail(0);
-  await processNotify(active().pool, 1, new Date(Date.now() + 16_000));
+  await processNotify(active().pool, 1, retryAt);
   expect((await active().lead('GET', '/api/notify/telegram')).body.test).toMatchObject({ ok: true, error: null });
   expect((await active().lead('GET', `/api/projects/${project}/notify/log`)).body.items[0]).toMatchObject({ state: 'accepted', attempts: 2 });
   expect((await active().lead('GET', '/api/alerts')).body.items.some((a: { text: string }) => a.text.includes('Telegram'))).toBe(false);
