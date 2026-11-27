@@ -26,7 +26,7 @@ import type { ReportKind, ReportSnapshotData } from '@awbs/shared';
 import { ApiError, invalid } from '../changes/http.ts';
 import { inEpoch } from '../platform/transaction.ts';
 import { readStoredFile } from '../reset/files.ts';
-import { reportHtml } from './html.ts';
+import { externalPdfLeaks, reportHtml } from './html.ts';
 import { pdfName, type ReportView } from './model.ts';
 import type { PdfRenderer } from './render.ts';
 
@@ -40,6 +40,8 @@ const notFound = (reportId: string) => new ApiError('NOT_FOUND', { reportId }, [
 interface Row {
   reportKey: string; kind: ReportKind; from: string; to: string; generatedAt: string; dueAt: string | null; reason: string | null;
   snapshot: ReportSnapshotData; projectId: string; path: string | null; sha256: string | null;
+  /** 앱 접속 주소(보고용에서 자유 입력의 앱 주소를 지울 때, Q-13 fix1) */
+  appUrl: string | null;
 }
 const iso = (column: string) => `to_char(${column} at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
 
@@ -49,7 +51,8 @@ async function load(pool: Pool, reportId: string, view: ReportView): Promise<Row
     await client.query('begin isolation level repeatable read read only');
     const row = (await client.query<Row>(
       `select r.report_key "reportKey",r.kind,to_char(r."from",'YYYY-MM-DD') "from",to_char(r."to",'YYYY-MM-DD') "to",${iso('r.generated_at')} "generatedAt",
-         ${iso('r.due_at')} "dueAt",r.reason,r.snapshot,r.project_id "projectId",c.path,c.sha256
+         ${iso('r.due_at')} "dueAt",r.reason,r.snapshot,r.project_id "projectId",c.path,c.sha256,
+         (select app_url from app_settings where singleton) "appUrl"
        from reports r left join report_pdfs c on c.report=r.id and c.view=$2 where r.id=$1`, [reportId, view])).rows[0];
     await client.query('commit');
     return row;
@@ -113,6 +116,15 @@ export async function reportPdf(pool: Pool, root: string, renderer: PdfRenderer,
     const result = (file: Buffer): ReportPdf => ({ file, name: pdfName(row.reportKey, view), reportKey: row.reportKey });
     // PDF에 들어가는 값은 보고서 기록과 스냅샷뿐이다(프로젝트 이름도 스냅샷 값). 그 문서의 hash가 캐시 키다.
     const html = reportHtml({ ...row, view });
+    // 보고용은 외부로 나간다(메일 첨부). 만들기 전에 보이는 글 전체를 검사한다(Q-13 fix1: 검사기를 발송 직전에도).
+    // 변환 함수가 이미 걸렀어야 하므로 여기서 걸리면 코드 결함이다. 만들지 않고 실패로 알린다(메일은 보내기 전 실패 → 15분 재시도).
+    if (view === 'ext') {
+      const leaks = externalPdfLeaks(html, row.appUrl);
+      if (leaks.length) {
+        onFailure?.(new Error(`보고용 PDF 검사 실패: ${String(leaks.length)}건`));
+        throw new ApiError('PDF_FAILED', { reportId }, [], '보고용 PDF에 링크 · 앱 경로 · 내부 용어가 남아 만들지 않았습니다.', FAILED_FIX);
+      }
+    }
     const path = pathOf(epoch, reportId, view, sha256(Buffer.from(html)).slice(0, 16));
     const hit = await cached(root, epoch, row, path);
     if (hit) return result(hit);

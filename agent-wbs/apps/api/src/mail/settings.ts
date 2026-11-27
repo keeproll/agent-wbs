@@ -13,7 +13,7 @@ import type { PoolClient } from '@awbs/db';
 import { ApiError, assertSameVersion, invalid } from '../changes/http.ts';
 import { deferChange, iso } from '../changes/events.ts';
 import { readSmtpPassword, SMTP_SECRET, storeSmtpPassword } from './secret.ts';
-import { syncMailAlert } from './queue.ts';
+import { externalizePending, syncMailAlert } from './queue.ts';
 import { checkSmtp, DEFAULT_TIMEOUT_MS, SMTP_SECURITY, type SmtpSecurity, type SmtpTarget } from './smtp.ts';
 
 export interface SmtpView {
@@ -161,9 +161,16 @@ export async function updateRecipient(client: PoolClient, id: string, body: { up
   }
   // 구독을 다시 켜면 받는 중으로 돌아간다(P setRecip: 원본도 구독 변경 시 active를 다시 계산한다)
   else if (body.active === undefined && !before.daily && !before.weekly) next.active = true;
+  // Q-13 fix1 3: 외부로 바꾸면 그 사람의 아직 보내지 않은 줄을 새 규칙으로 다시 정한다(보내는 중인 팀장용 메일이 있으면 409).
+  if (external && !before.external) await externalizePending(client, id);
   const row = (await client.query<Recipient>(`update mail_recipients set daily=$2,weekly=$3,view=$4,pdf=$5,active=$6,external=$7 where id=$1 returning ${RECIPIENT}`,
     [id, next.daily, next.weekly, next.view, next.pdf, next.active, external])).rows[0];
   deferChange(client, null, 'mail', { key: 'recipients' });
+  // 외부 여부가 바뀌면 「해소되지 않은 실패」가 달라진다(외부 · 일간 실패는 다시 보낼 수 없어 빠진다). 실패 목록과 대시보드 알림을 함께 맞춘다.
+  if (external !== before.external) {
+    const projectId = (await client.query<{ id: string }>('select id from projects limit 1')).rows[0]?.id ?? null;
+    await syncMailAlert(client, projectId);
+  }
   return row;
 }
 

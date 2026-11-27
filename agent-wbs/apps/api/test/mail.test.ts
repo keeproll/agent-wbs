@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { internalTerms, type ReportSnapshotData } from '@awbs/shared';
 import { FakeSmtp, mimePart } from '../../../e2e/fakes/smtp.ts';
 import { checkSmtp, describeError, sendSmtp, type SmtpTarget } from '../src/mail/smtp.ts';
-import { mailSubject, renderMail, type MailReport } from '../src/mail/render.ts';
+import { externalMailLeaks, mailSubject, renderMail, type MailReport } from '../src/mail/render.ts';
 
 const smtp = new FakeSmtp();
 let target: SmtpTarget;
@@ -177,3 +177,25 @@ describe('메일 지표 이름 · 요약 문장은 원본 메일 문구(P mailHt
   });
 });
 
+
+describe('Q-13 fix1: 외부 메일은 모든 글이 변환 함수를 지나고 검사기 0건(리뷰 재현)', () => {
+  const APP = 'http://127.0.0.1:5173';
+  const withTitle = (title: string) => {
+    const s = emptySnapshot();
+    s.done.push({ taskKey: 'TASK-0001', wbsPath: '1.1', title, assignee: 'Claude', verifier: 'Codex', workType: 'Implementation', domain: 'FE', actStart: null, actEnd: '2026-10-27T01:00:00.000Z',
+      estHours: 1, actualHours: 1, attempts: 1, slipDays: null, verification: null, checklist: { done: 1, total: 1 }, outputs: { delivered: 1, names: [] }, doneCond: '' } as unknown as ReportSnapshotData['done'][number]);
+    return s;
+  };
+  test.each([
+    ['내부 용어(리뷰 1)', 'TASK-0007 RP-002 Effort 토큰 개선'],
+    ['앱 주소 · 앱 경로(리뷰 2)', 'TASK-0007 개선 http://127.0.0.1:5173/settings/report'],
+    ['메뉴 안내 · 경로만', '개선 /report/abc 설정 → 보고서 · 메일'],
+  ])('%s: 제목 · HTML · text/plain · 첨부 이름 모두 0건이고 남은 말은 보인다', (_name, title) => {
+    const m = renderMail({ projectName: `P ${APP}/report/x TASK-0009`, report: report('weekly', withTitle(title)), view: 'ext', to: 'outside@partner.example', appUrl: APP, external: true });
+    expect(externalMailLeaks({ ...m, to: 'outside@partner.example', attachments: [{ filename: 'RPT-W-261026_보고용.pdf' }] }, APP)).toEqual([]);
+    expect(m.text).toContain('• 개선');
+  });
+  test('검사기는 남은 링크 · 내부 용어를 찾는다(발송 직전 차단의 근거)', () => {
+    expect(externalMailLeaks({ subject: 'TASK-0001 보고', html: '<a href="http://127.0.0.1:5173/report/1">x</a>', text: '설정 → 알림', attachments: [{ filename: 'RP-001.pdf' }] }, APP).length).toBeGreaterThanOrEqual(5);
+  });
+});

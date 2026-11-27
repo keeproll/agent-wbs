@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { Value } from 'typebox/value';
-import { externalView, internalKpis, internalTerms, reportFigures, ReportSnapshotSchema as ReportSnapshot, scrubInternal, type ReportSnapshotData } from '@awbs/shared';
+import { externalLeaks, externalText, externalView, internalKpis, internalTerms, reportFigures, ReportSnapshotSchema as ReportSnapshot, scrubInternal, type ReportSnapshotData } from '@awbs/shared';
 
 /** 빈 스냅샷에 필요한 칸만 채운다. */
 type Patch = Partial<Omit<ReportSnapshotData, 'summary'>> & { summary?: Partial<ReportSnapshotData['summary']> };
@@ -115,5 +115,33 @@ describe('기간 말 재구성: 그 시점 상태를 되살릴 수 없으면 「
   });
   test('기록이 있으면 지금과 같다', () => {
     expect(internalKpis(snap())[0]?.value).toBe('0건');
+  });
+});
+
+describe('Q-13 fix1: 외부로 나가는 글의 변환 함수 하나(externalText)와 검사기(externalLeaks)', () => {
+  const APP = 'https://wbs.corp.example/';
+  test('앱 주소 · 로컬/사설 주소 · 앱 경로 · 메뉴 안내 · 내부 용어를 뺀다', () => {
+    expect(externalText('TASK-0007 개선 http://127.0.0.1:5173/settings/report')).toBe('개선');
+    expect(externalText('배포 https://wbs.corp.example/report/1 확인', APP)).toBe('배포 확인');
+    expect(externalText('wbs.corp.example/wbs/TASK-0001 정리', APP)).toBe('정리');
+    expect(externalText('192.168.0.10:3100/ci/9 빌드 · localhost:5173 확인')).toBe('빌드 · 확인');
+    expect(externalText('/report/abc 와 (/settings/mail) 안내')).toBe('와 () 안내');
+    expect(externalText('설정 → 보고서 · 메일 안내 개선')).toBe('안내 개선');
+    expect(externalText('http://127.0.0.1:5173/')).toBe('(제목 비공개)');
+  });
+  test('일반 업무 문장과 외부 참고 주소는 그대로 둔다', () => {
+    for (const t of ['참고 https://example.org/spec 반영', '누적 0 / 0', 'A/B 시험', '보고서 개선', '설정 화면 정리', 'API 문서 갱신']) expect(externalText(t, APP)).toBe(t);
+  });
+  test('scrubInternal은 같은 함수다(앱 주소를 모를 때)', () => {
+    expect(scrubInternal('TASK-0007 개선 http://localhost:5173/report/1')).toBe(externalText('TASK-0007 개선 http://localhost:5173/report/1'));
+  });
+  test('검사기는 변환 전에는 찾고, 변환 뒤에는 0건이다', () => {
+    const dirty = 'TASK-0007 RP-002 Effort 토큰 개선 https://wbs.corp.example/report/1 /settings/report 설정 → 알림 <a href="x">';
+    expect(externalLeaks(dirty, APP)).toEqual(expect.arrayContaining(['TASK-0007', 'RP-002', 'Effort', '토큰', 'https://wbs.corp.example/report/1', '/settings/report', '설정 → 알림', 'href=']));
+    expect(externalLeaks(externalText(dirty, APP), APP)).toEqual([]);
+  });
+  test('보고용 보기(화면 · PDF)는 앱 주소를 받아 제목에서 뺀다', () => {
+    const s = snap({ done: [doneTask('TASK-0001', '개선 https://wbs.corp.example/report/1')] });
+    expect(externalView(s, 'weekly', APP).highlights).toEqual(['개선']);
   });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { internalTerms, type ReportSnapshotData } from '@awbs/shared';
+import { APP_PATHS, internalTerms, type ReportSnapshotData } from '@awbs/shared';
+import { MENU } from '../src/shared/layout/menu.ts';
 import {
   appendixTitle, changedLabel, defaultView, docTitle, externalDoc, settingsNote, snapLabel, uncertainNote, formProblem, internalDoc, lateLabel, quickRange, rowView, type ReportRow,
 } from '../src/features/report/model.ts';
@@ -169,4 +170,9 @@ test('재리뷰 4: 경계 불확실 건수가 있으면 넣지 않았다고 알�
   expect(uncertainNote(s)).toBe('경계 불확실 2건 — 실제 커밋 시각을 알 수 없어 이 시점 상태에 넣지 않았습니다. 커밋 시계 값으로는 기준 전이지만 실제로 확정됐는지 확인되지 않은 변경입니다.');
   expect(uncertainNote({ ...s, basis: { ...s.basis, uncertain: 0 } })).toBeNull();
   expect(uncertainNote(empty)).toBeNull();
+});
+
+/** Q-13 fix1: 외부 글에서 지우는 앱 경로(shared APP_PATHS)가 실제 메뉴 주소를 모두 덮는지. 메뉴를 늘리면 이 시험이 알려 준다. */
+test('APP_PATHS는 web 메뉴 주소를 모두 포함한다', () => {
+  for (const m of MENU) expect(APP_PATHS as readonly string[]).toContain(m.key);
 });

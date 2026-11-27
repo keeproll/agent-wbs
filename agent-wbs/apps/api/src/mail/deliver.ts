@@ -26,8 +26,8 @@ import { reportProjectName } from '@awbs/shared';
 import type { Pool, PoolClient } from '@awbs/db';
 import { inEpoch } from '../platform/transaction.ts';
 import { deferChange, iso } from '../changes/events.ts';
-import { loadReport, syncMailAlert } from './queue.ts';
-import { mailSubject, pdfName, renderMail } from './render.ts';
+import { appendLog, EXTERNAL_DAILY_SKIP, loadReport, syncMailAlert } from './queue.ts';
+import { externalMailLeaks, mailSubject, pdfName, renderMail } from './render.ts';
 import { smtpTarget } from './settings.ts';
 import { mailTransition, type Incoming, type MailState } from './transition.ts';
 import { DEFAULT_TIMEOUT_MS, sendSmtp, type OutgoingMail, type SendOutcome, type SmtpTarget } from './smtp.ts';
@@ -51,7 +51,7 @@ export interface DeliverOptions {
 export interface DeliverResult { accepted: number; retry: number; failed: number; unknown: number; discarded: number }
 
 /** 찜한 한 통. attempt는 이번 찜하기에서 새로 매긴 시도 ID다(결과가 이 시도의 것인지 판정). */
-interface Claimed { id: string; report: string; reportKey: string; email: string; view: 'int' | 'ext'; pdf: boolean; external: boolean; retried: boolean; projectId: string; sentAt: string; attempt: string }
+interface Claimed { id: string; report: string; reportKey: string; email: string; view: 'int' | 'ext'; pdf: boolean; external: boolean; retried: boolean; projectId: string; sentAt: string; attempt: string; appUrl?: string | null }
 
 const SMTP_MISSING = 'SMTP 서버 미설정 — 설정 → 보고서 · 메일에서 메일 서버를 등록하세요.';
 
@@ -59,17 +59,11 @@ async function clock(client: PoolClient, now: string | undefined): Promise<strin
   return now ?? (await client.query<{ now: string }>(`select ${iso('clock_timestamp()')} now`)).rows[0]?.now ?? new Date().toISOString();
 }
 
-async function appendLog(client: PoolClient, outbox: string, state: string, error: string | null, at: string) {
-  await client.query(`insert into mail_log(project_id,delivery_id,report,email,state,error,at,outbox,try_no)
-    select project_id,delivery_id,report,email,$2,$3,$4,id,try_no from mail_outbox where id=$1`, [outbox, state, error, at]);
-}
 
 /** 이 시각보다 오래 `sending`에 머문 줄은 결과를 기록하지 못한 것으로 본다(SMTP 응답 대기의 10배 + 2분). */
 const staleSeconds = (timeoutMs: number) => Math.ceil((timeoutMs * 10) / 1000) + 120;
 const RESULT_LOST = '발송 결과를 저장하지 못함 — 수락 여부 불명(받는 쪽에 도착했을 수 있음). 확인 후 다시 보내세요.';
 const RECIPIENT_GONE = '받는 사람이 삭제되어 보내지 않음';
-/** 큐에 넣은 뒤 받는 사람이 외부 수신자로 바뀌었는데 일간 보고서일 때(Q-13 결정 A) */
-const EXTERNAL_DAILY_SKIP = '받는 사람이 외부 수신자로 바뀌어 보내지 않음 — 일간 보고서는 팀장용만 있어 외부로 보내지 않습니다.';
 
 /**
  * 도착한 결과를 적는다. 상태를 어떻게 바꿀지는 전이표(transition.ts) 하나로 정한다.
@@ -184,6 +178,7 @@ async function claimOne(client: PoolClient, now: string | null): Promise<{ c: Cl
   // 미리보기와 같은 함수로 만든다. 스냅샷이라 다시 보내도 같은 내용이다(G L407).
   // 외부 수신자면 링크 · 내부 경로 없이 만든다(Q-13 결정 A).
   const rendered = renderMail({ projectName: project, report, view: row.view, to: row.email, appUrl, external: row.external });
+  c.appUrl = appUrl;
   return { c, mail: { from: target.from, to: row.email, ...rendered }, target };
 }
 
@@ -214,6 +209,7 @@ export async function deliverMail(pool: Pool, epoch: number, options: DeliverOpt
 }
 
 /** 외부 수신자 메일에 PDF가 없을 때(Q-13 결정 A) */
+const EXTERNAL_LEAK = '외부 수신자 메일 검사 실패 — 링크 · 앱 경로 · 내부 용어가 남아 보내지 않음';
 const EXTERNAL_NO_PDF = 'PDF 첨부를 만들지 못해 외부 수신자에게 보내지 않음 — 외부 수신자는 링크 없이 PDF로만 전체 내용을 봅니다.';
 
 async function send(target: SmtpTarget & { from: string }, mail: OutgoingMail, c: Claimed, options: DeliverOptions, timeoutMs: number): Promise<SendOutcome> {
@@ -228,6 +224,12 @@ async function send(target: SmtpTarget & { from: string }, mail: OutgoingMail, c
   }
   // 외부 수신자는 링크가 없으므로 PDF가 유일한 전체 보고서다. PDF 없이 요약만 보내지 않는다(보내기 전 실패 → 15분 재시도 규칙).
   if (c.external && !mail.attachments?.length) return { state: 'rejected', error: EXTERNAL_NO_PDF };
+  // 발송 직전 검사(Q-13 fix1): 외부로 나가는 제목 · 본문 · 첨부 이름 전체에 링크 · 앱 경로 · 내부 용어가 하나라도 남았으면 보내지 않는다.
+  // 변환 함수(externalText)가 이미 걸렀어야 한다. 그래도 남았다면 코드 결함이므로, 보내기 전 실패로 남겨 팀장이 보게 한다.
+  if (c.external) {
+    const leaks = externalMailLeaks(mail, c.appUrl ?? null);
+    if (leaks.length) return { state: 'rejected', error: `${EXTERNAL_LEAK} (${String(leaks.length)}건)` };
+  }
   return sendSmtp(target, mail, timeoutMs);
 }
 

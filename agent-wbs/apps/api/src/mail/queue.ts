@@ -36,6 +36,15 @@ export const ALERT_KEY = 'mail:failed';
 
 interface Target { id: string; email: string; view: 'int' | 'ext'; pdf: boolean; external: boolean }
 
+/** 큐에 넣은 뒤 받는 사람이 외부 수신자로 바뀌었는데 일간 보고서일 때(Q-13 결정 A) */
+export const EXTERNAL_DAILY_SKIP = '받는 사람이 외부 수신자로 바뀌어 보내지 않음 — 일간 보고서는 팀장용만 있어 외부로 보내지 않습니다.';
+
+/** 발송 기록(mail_log, 추가 전용)에 한 줄을 남긴다. 큐 줄의 보고서 · 주소 · 발송 번호를 함께 적는다. */
+export async function appendLog(client: PoolClient, outbox: string, state: string, error: string | null, at: string) {
+  await client.query(`insert into mail_log(project_id,delivery_id,report,email,state,error,at,outbox,try_no)
+    select project_id,delivery_id,report,email,$2,$3,$4,id,try_no from mail_outbox where id=$1`, [outbox, state, error, at]);
+}
+
 /** 외부 수신자에게 일간 보고서를 보내려 할 때의 안내(Q-13 결정 A) */
 export const EXTERNAL_DAILY = '외부 수신자에게는 일간 보고서를 보내지 않습니다 — 일간 보고서는 팀장용(내부 용어 포함)만 있습니다.';
 
@@ -229,4 +238,33 @@ export async function syncMailAlert(client: PoolClient, projectId: string | null
   const id = (await client.query<{ id: string }>("insert into alerts(project_id,key,severity,target) values($1,$2,'error',$3) on conflict do nothing returning id",
     [projectId, ALERT_KEY, JSON.stringify(target)])).rows[0]?.id;
   if (id) deferChange(client, projectId, 'alert', { id });
+}
+
+/**
+ * 받는 사람을 외부로 바꿀 때(Q-13 fix1 3), 그 사람의 **아직 보내지 않은** 줄(queued · retry_wait)을 새 규칙으로 다시 정한다.
+ * - 주간 · 기간: 외부 줄로 바꾼다(보고용 · PDF · 링크 없음). 발송 번호 · 자동 재시도 여부는 그대로다(같은 줄).
+ * - 일간: 외부용이 없으므로 보내지 않고 `failed`로 적는다. 이 실패는 「해소되지 않은 실패」에서 빠진다(PENDING).
+ * - 지금 다른 worker가 찜하는 중인 줄은 `skip locked`로 건너뛴다. 그 줄은 찜하기가 같은 규칙으로 다시 본다(deliver.ts claimOne).
+ *   왜 건너뛰나: 찜하기는 줄 → 받는 사람 순서로 잠그고 여기는 반대 순서라, 기다리면 서로 막힌다(교착).
+ * 이미 `sending`인 내부 줄이 있으면 바꾸지 않고 409다. 왜: 그 메일은 이미 팀장용으로 만들어져 SMTP로 가는 중이라 되돌릴 수 없다.
+ */
+export async function externalizePending(client: PoolClient, recipientId: string): Promise<void> {
+  const busy = (await client.query("select 1 from mail_outbox where recipient=$1 and state='sending' and not external limit 1", [recipientId])).rowCount;
+  if (busy) {
+    throw new ApiError('INVALID_TRANSITION', { id: recipientId }, [], '이 받는 사람에게 팀장용 메일을 보내는 중이라 지금은 외부로 바꿀 수 없습니다.', '발송 기록에서 「보내는 중」이 끝난 뒤 다시 바꾸세요.');
+  }
+  const rows = (await client.query<{ id: string; report: string; projectId: string }>(
+    `select id,report,project_id "projectId" from mail_outbox where recipient=$1 and not external and state in ('queued','retry_wait')
+     order by created_at,id for update skip locked`, [recipientId])).rows;
+  const at = (await client.query<{ at: string }>(`select ${iso('clock_timestamp()')} at`)).rows[0]?.at ?? new Date().toISOString();
+  for (const r of rows) {
+    const report = await loadReport(client, r.report);
+    if (report.kind === 'daily') {
+      await client.query("update mail_outbox set state='failed',error=$2,next_at=null where id=$1", [r.id, EXTERNAL_DAILY_SKIP]);
+      await appendLog(client, r.id, 'failed', EXTERNAL_DAILY_SKIP, at);
+    } else {
+      await client.query("update mail_outbox set external=true,view='ext',pdf=true,subject=$2 where id=$1", [r.id, mailSubject(report, 'ext')]);
+    }
+  }
+  if (rows[0]) deferChange(client, rows[0].projectId, 'mail', { key: 'log' });
 }

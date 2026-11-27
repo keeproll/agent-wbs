@@ -14,7 +14,7 @@
  * 숫자는 화면 보고서와 같은 계산(shared `reportFigures` — `internalKpis`·`externalView`가 쓰는 것)에서 온다.
  * 그래서 화면·메일·PDF가 같은 스냅샷에서 같은 숫자를 보인다(milestones §4.0).
  */
-import { monthDay, reportFigures, scrubInternal, type Kpi, type ReportKind, type ReportSnapshotData } from '@awbs/shared';
+import { externalLeaks, externalText, monthDay, reportFigures, type Kpi, type ReportKind, type ReportSnapshotData } from '@awbs/shared';
 
 export interface MailReport {
   id: string;
@@ -76,7 +76,7 @@ const day = (d: string | null) => d ?? '—';
  * 본문 지표와 섹션 목록(G L403: 팀장용 6개 / 보고용 4개). 문구는 P mailHtml L4006-4020 그대로다.
  * 원본 변수와 스냅샷의 대응: D.failN = QA 실패 목록 수(failures), D.blocked = 선행 대기(summary.blocked), D.gaps = 중단 구간(gaps).
  */
-function sections(r: MailReport, view: 'int' | 'ext'): { kpis: Kpi[]; sections: Section[] } {
+function sections(r: MailReport, view: 'int' | 'ext', appUrl: string | null): { kpis: Kpi[]; sections: Section[] } {
   const s = r.snapshot;
   const f = reportFigures(s);
   const failN = s.failures.length;
@@ -101,9 +101,10 @@ function sections(r: MailReport, view: 'int' | 'ext'): { kpis: Kpi[]; sections: 
           f.forecast !== null ? `완료 예상일 ${f.forecast} (${range}).` : '완료 예상일 산정 전.',
           failN ? `품질 검증 ${String(failN)}건 보완 진행.` : '품질 검증 이상 없음.',
         ] },
-        { title: '주요 완료 항목', items: s.done.map((t) => t.title) },
+        // 작업 제목은 자유 입력이라 내부 용어 · 앱 주소가 섞일 수 있다. 보고용은 변환 함수 하나를 지난다(Q-13 fix1 1·2).
+        { title: '주요 완료 항목', items: s.done.map((t) => externalText(t.title, appUrl)) },
         { title: '위험 · 이슈', items: risks },
-        { title: '다음 계획', items: s.next.map((t) => `${t.title} (${monthDay(t.start)} ~ ${monthDay(t.end)})`) },
+        { title: '다음 계획', items: s.next.map((t) => `${externalText(t.title, appUrl)} (${monthDay(t.start)} ~ ${monthDay(t.end)})`) },
       ],
     };
   }
@@ -138,16 +139,22 @@ const reportLink = (input: MailInput) => {
 export function renderMail(input: MailInput): RenderedMail {
   const r = input.report;
   const view = mailView(r.kind, input.view);
-  const subject = mailSubject(r, view);
-  const { kpis, sections: list } = sections(r, view);
   // 외부 수신자는 보고용만 받는다(일간은 팀장용만 있어 외부로 보내지 않는다 — queue.ts가 막는다).
   if (input.external && view !== 'ext') throw new Error('외부 수신자 메일은 보고용 보기만 만들 수 있습니다.');
-  const footer = input.external ? FOOTER_EXTERNAL : FOOTER;
-  const label = `${KIND[r.kind]} 보고서 · ${view === 'ext' ? '보고용' : '팀장용'}`;
-  const meta = `기간 ${period(r)} · 생성 ${seoulTime(r.generatedAt)} · ${r.reportKey}`;
+  const appUrl = input.appUrl;
+  // 외부 수신자 메일은 제목 · 본문의 **모든 글**이 보고용 변환 함수(externalText)를 지난다(Q-13 fix1 원칙).
+  // 받는 사람 주소(바닥글 「수신: …」)만 그대로 둔다. 왜: 받는 사람 자신의 주소이고, 바꾸면 누구에게 보냈는지 알 수 없다.
+  const out = input.external ? (t: string) => externalText(t, appUrl) : (t: string) => t;
+  const subject = out(mailSubject(r, view));
+  const raw = sections(r, view, appUrl);
+  const kpis = raw.kpis.map((k) => ({ ...k, label: out(k.label), value: out(k.value), sub: out(k.sub) }));
+  const list = raw.sections.map((x) => ({ title: out(x.title), items: x.items.map(out) }));
+  const footer = out(input.external ? FOOTER_EXTERNAL : FOOTER);
+  const label = out(`${KIND[r.kind]} 보고서 · ${view === 'ext' ? '보고용' : '팀장용'}`);
+  const meta = out(`기간 ${period(r)} · 생성 ${seoulTime(r.generatedAt)} · ${r.reportKey}`);
   const link = reportLink(input);
-  // M6 통합: 보고용 제목의 프로젝트 이름은 내부 용어를 뺀다(화면·PDF docTitle과 같은 규칙, 리뷰 M6-01 3).
-  const projectName = view === 'ext' ? scrubInternal(input.projectName) : input.projectName;
+  // M6 통합: 보고용 제목의 프로젝트 이름은 내부 용어 · 앱 주소를 뺀다(화면·PDF docTitle과 같은 변환 함수, 리뷰 M6-01 3).
+  const projectName = view === 'ext' ? externalText(input.projectName, appUrl) : input.projectName;
 
   const cell = (k: Kpi) => `<td style="padding:10px 12px;border:1px solid #E1E5EA;width:25%;vertical-align:top;${FONT}"><div style="font-size:12px;color:#6B7480">${esc(k.label)}</div><div style="font-size:20px;font-weight:700;color:#1F2933;margin:2px 0">${esc(k.value)}</div><div style="font-size:12px;color:#6B7480">${esc(k.sub)}</div></td>`;
   const sec = (x: Section) => `<tr><td style="padding:18px 0 6px;${FONT}font-size:15px;font-weight:700;color:#1F2933;border-bottom:1px solid #E1E5EA">${esc(x.title)}</td></tr>`
@@ -173,4 +180,14 @@ export function renderMail(input: MailInput): RenderedMail {
     '', footerLead(input.to), footer, '',
   ].join('\n');
   return { subject, html, text };
+}
+
+/**
+ * 외부 수신자 메일 검사기(Q-13 fix1). 제목 · HTML · text/plain · 첨부 파일 이름 전체에서 남은 링크 · 앱 경로 · 내부 용어를 찾는다.
+ * 메일 worker가 SMTP를 부르기 직전에 부르고(deliver.ts), 시험도 같은 함수를 쓴다. 빈 목록이면 통과.
+ * 바닥글의 받는 사람 주소는 검사에서 뺀다(받는 사람 자신의 주소다).
+ */
+export function externalMailLeaks(mail: { subject: string; html: string; text: string; to?: string | null; attachments?: readonly { filename: string }[] }, appUrl: string | null): string[] {
+  const own = (t: string) => (mail.to ? t.split(mail.to).join('') : t);
+  return [mail.subject, own(mail.html), own(mail.text), ...(mail.attachments ?? []).map((a) => a.filename)].flatMap((t) => externalLeaks(t, appUrl));
 }

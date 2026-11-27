@@ -10,7 +10,7 @@
  * 문구 상수는 원본(P)에서 웹이 옮긴 값과 같다. 출처: apps/web/src/features/task/labels.ts·settings/labels.ts.
  */
 import {
-  externalView, scrubInternal, stateMissingFrom, toMicro, internalKpis, monthDay, reportFigures, TASK_STATUSES, type ExternalView, type ReportKind, type ReportSnapshotData,
+  externalText, externalView, stateMissingFrom, toMicro, internalKpis, monthDay, reportFigures, TASK_STATUSES, type ExternalView, type ReportKind, type ReportSnapshotData,
 } from '@awbs/shared';
 
 export type ReportView = 'int' | 'ext';
@@ -92,9 +92,9 @@ export function uncertainNote(s: ReportSnapshotData): string | null {
   return n > 0 ? `경계 불확실 ${String(n)}건 — 실제 커밋 시각을 알 수 없어 이 시점 상태에 넣지 않았습니다. 커밋 시계 값으로는 기준 전이지만 실제로 확정됐는지 확인되지 않은 변경입니다.` : null;
 }
 export const appendixTitle = (s: ReportSnapshotData) => `부록. 전체 Task 현황 (${s.basis ? '기간 끝 시점' : '보고서 생성 시점'})`;
-/** 보고용 제목의 프로젝트 이름도 자유 입력이라 내부 용어를 뺀다(리뷰 M6-01 3). */
-export const docTitle = (projectName: string, kind: ReportKind, view: ReportView) =>
-  `${view === 'ext' ? scrubInternal(projectName) : projectName} — ${KIND[kind].doc}${view === 'ext' ? ' (보고용)' : ''}`;
+/** 보고용 제목의 프로젝트 이름도 자유 입력이라 내부 용어 · 앱 주소를 뺀다(리뷰 M6-01 3, Q-13 fix1: 메일과 같은 변환 함수). */
+export const docTitle = (projectName: string, kind: ReportKind, view: ReportView, appUrl?: string | null) =>
+  `${view === 'ext' ? externalText(projectName, appUrl) : projectName} — ${KIND[kind].doc}${view === 'ext' ? ' (보고용)' : ''}`;
 /** PDF 파일 이름(G L410 예: `RPT-W-261027_보고용.pdf`) */
 export const pdfName = (reportKey: string, view: ReportView) => `${reportKey}_${view === 'int' ? '팀장용' : '보고용'}.pdf`;
 
@@ -195,7 +195,7 @@ export function internalDoc(s: S) {
 export type InternalDoc = ReturnType<typeof internalDoc>;
 
 /** 보고용(P kpisExt·summ·risksExt·plan). 계산은 shared externalView 하나다. */
-export function externalDoc(s: S, kind: ReportKind): ExternalView & { trendRows: { day: string; up: string; upBar: number; done: string; fc: string }[] } {
-  const e = externalView(s, kind);
+export function externalDoc(s: S, kind: ReportKind, appUrl?: string | null): ExternalView & { trendRows: { day: string; up: string; upBar: number; done: string; fc: string }[] } {
+  const e = externalView(s, kind, appUrl);
   return { ...e, trendRows: e.trend.map((x) => ({ day: monthDay(x.day), up: `${String(x.uptimePct)}%`, upBar: Math.max(2, x.uptimePct * 0.4), done: String(x.done), fc: monthDay(x.forecast) })) };
 }

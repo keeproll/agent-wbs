@@ -17,7 +17,9 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { inject } from 'vitest';
-import { externalView, internalKpis, internalTerms, type ReportSnapshotData } from '../../../packages/shared/src/index.ts';
+import { externalLeaks, externalView, internalKpis, internalTerms, snapshotProblem, type ReportSnapshotData } from '../../../packages/shared/src/index.ts';
+import { externalMailLeaks } from '../../../apps/api/src/mail/render.ts';
+import { readPdf } from '../pdf-inspect.ts';
 import { createPool, recreateTestDatabase, runMigrations, seedDemo, type Pool } from '../../../packages/db/src/index.ts';
 import { buildApp } from '../../../apps/api/src/app.ts';
 import { issueLoginLink } from '../../../apps/api/src/platform/credentials.ts';
@@ -936,6 +938,119 @@ describe('Q-13 결정 A: 외부 수신자(링크 없이 보고용 + PDF)', () =>
     const resend = await lead('POST', `/api/mail/log/${daily}/resend`);
     expect(resend.status).toBe(409);
     expect(resend.body.error.message).toContain('외부 수신자');
+    expect((await lead('DELETE', `/api/settings/mail/recipients/${r.body.id}?updatedAt=${encodeURIComponent(ext.body.updatedAt)}`)).status).toBe(204);
+  });
+
+  /**
+   * Codex 리뷰 fix1 1·2 재현: 작업 제목(자유 입력)에 내부 용어와 앱 주소 · 앱 경로를 넣는다.
+   * 외부 메일의 제목 · HTML · text/plain · 첨부 이름과 **실제 PDF(Chromium)** 글자 모두에서 0건이어야 한다.
+   * 검사기는 발송 직전과 같은 함수(externalMailLeaks · externalLeaks)다.
+   */
+  test('[fix1 1·2] 작업 제목의 내부 용어 · 앱 주소 · 앱 경로는 외부 메일 본문 · 제목 · 실제 PDF 어디에도 남지 않는다', async () => {
+    const APP = 'http://127.0.0.1:5173/';
+    const DIRTY = 'TASK-0007 RP-002 Effort 토큰 개선 http://127.0.0.1:5173/settings/report /report/abc 설정 → 보고서 · 메일';
+    // 시험 방법이 맞는지: 검사기는 이 제목에서 내부 용어와 링크를 찾아야 한다.
+    expect(externalLeaks(DIRTY, APP).length).toBeGreaterThanOrEqual(7);
+    const root = await mkdtemp(join(tmpdir(), 'awbs-mail-fix1-'));
+    const renderer = chromiumRenderer();
+    try {
+      // 계약 형식에 맞는 보고서 하나를 만든다(리뷰어 재현과 같은 자료). 시드 보고서 기간에는 완료 작업이 없어 스냅샷을 직접 꾸민다.
+      const base = (await reports('weekly'))[0];
+      assert(base);
+      const snap = structuredClone((await lead('GET', `/api/reports/${base.id}`)).body.snapshot as ReportSnapshotData);
+      snap.done = [{ taskKey: 'TASK-0001', wbsPath: '1.1', title: DIRTY, assignee: 'Claude', verifier: 'Codex', workType: 'Implementation', domain: 'FE', actStart: null, actEnd: '2026-10-27T01:00:00.000Z',
+        estHours: 1, actualHours: 1, attempts: 1, slipDays: null, verification: null, checklist: { done: 1, total: 1, requiredLeft: 0 }, outputs: { delivered: 1, names: ['a.ts'] }, doneCond: '시험 통과' }] as unknown as ReportSnapshotData['done'];
+      if (snap.projectNameStatus === 'snapshot' || snap.projectName) snap.projectName = `시험 프로젝트 ${APP}report/x TASK-0009`;
+      expect(snapshotProblem(snap)).toBeNull();
+      const made = (await owner.query<{ id: string; reportKey: string }>(
+        `insert into reports(project_id,report_key,kind,"from","to",view,snapshot,generated_at,reason)
+         select project_id,'RPT-C-FIX1','custom',"from","to",'ext',$2::jsonb,generated_at,'Q-13 fix1 재현' from reports where id=$1 returning id,report_key "reportKey"`,
+        [base.id, JSON.stringify(snap)])).rows[0];
+      assert(made);
+      const partner = await recipient(PARTNER);
+      const q = await lead('POST', `/api/reports/${made.id}/mail`, { recipientIds: [partner.id] });
+      expect(q.status).toBe(202);
+      const count = received(PARTNER).length;
+      const got: { pdf?: Buffer } = {};
+      await deliverMail(pool, epoch, { now: plus(at, 120), timeoutMs: 60_000, pdf: async (reportId, view) => { got.pdf = (await reportPdf(pool, root, renderer, epoch, reportId, view)).file; return got.pdf; } });
+      expect((await rowOf(q.body.ids[0] as string))?.state).toBe('accepted');
+      const raw = received(PARTNER)[count]?.raw ?? '';
+      const mail = { subject: mimeHeader(raw, 'Subject') ?? '', html: mimePart(raw, 'text/html') ?? '', text: mimePart(raw, 'text/plain') ?? '', to: PARTNER, attachments: [{ filename: `${made.reportKey}_보고용.pdf` }] };
+      expect(externalMailLeaks(mail, APP)).toEqual([]);
+      for (const body of [mail.subject, mail.html, mail.text]) expect(links(body)).toEqual([]);
+      expect(mail.text).toContain('개선');
+      // 실제 첨부 PDF의 글자(Chromium으로 만든 파일을 다시 읽음)
+      assert(got.pdf);
+      const pages = (await readPdf(new Uint8Array(got.pdf))).pages;
+      const pdfText = pages.flatMap((page) => page.lines).join('\n');
+      expect(externalLeaks(pdfText, APP)).toEqual([]);
+      expect(pdfText).not.toContain('127.0.0.1');
+      expect(pdfText.replace(/\s+/g, '')).toContain('개선');
+    } finally {
+      await renderer.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  test('[fix1 3] 실패가 남은 받는 사람을 외부로 바꾸면 실패 목록과 대시보드 알림이 함께 다시 계산된다', async () => {
+    const r = await lead('POST', '/api/settings/mail/recipients', { email: 'alert@example.com', name: '알림 재현', daily: true, weekly: true, view: 'int', pdf: false });
+    const d = (await reports('daily'))[0];
+    assert(d);
+    const q = await lead('POST', `/api/reports/${d.id}/mail`, { recipientIds: [r.body.id] });
+    const id = q.body.ids[0] as string;
+    smtp.mode = 'auth_fail';
+    try {
+      await deliverMail(pool, epoch, { now: plus(at, 150), timeoutMs: TIMEOUT });
+      await deliverMail(pool, epoch, { now: plus(at, 170), timeoutMs: TIMEOUT });
+    } finally { smtp.mode = 'accept'; }
+    expect((await rowOf(id))?.state).toBe('failed');
+    expect((await log(true)).map((x) => x.id)).toEqual([id]);
+    expect(await mailAlert()).toBeDefined();
+    const ext = await lead('PATCH', `/api/settings/mail/recipients/${r.body.id}`, { updatedAt: r.body.updatedAt, external: true });
+    expect(ext.status).toBe(200);
+    // 외부 · 일간 실패는 다시 보낼 수 없으므로 목록 · 배지 · 알림에서 함께 빠진다(worker 주기를 기다리지 않음).
+    expect(await log(true)).toEqual([]);
+    expect(await mailAlert()).toBeUndefined();
+    // 내부로 되돌리면 다시 보낼 수 있으므로 실패와 알림이 다시 열린다.
+    const back = await lead('PATCH', `/api/settings/mail/recipients/${r.body.id}`, { updatedAt: ext.body.updatedAt, external: false });
+    expect((await log(true)).map((x) => x.id)).toEqual([id]);
+    expect(await mailAlert()).toBeDefined();
+    expect((await lead('DELETE', `/api/settings/mail/recipients/${r.body.id}?updatedAt=${encodeURIComponent(back.body.updatedAt)}`)).status).toBe(204);
+    expect(await mailAlert()).toBeUndefined();
+  });
+
+  test('[fix1 3] 외부로 바꾸면 그 사람의 대기 중 줄을 바로 새 규칙으로 바꾸고, 팀장용 메일을 보내는 중이면 409로 거부한다', async () => {
+    const r = await lead('POST', '/api/settings/mail/recipients', { email: 'race@example.com', name: '경합 재현', daily: true, weekly: true, view: 'int', pdf: true });
+    const [d, w] = [(await reports('daily'))[0], (await reports('weekly'))[0]];
+    assert(d && w);
+    // 1) 보내는 중(찜하기 뒤 PDF 만드는 중)인 팀장용 메일이 있으면 외부 전환은 409
+    const sending = (await lead('POST', `/api/reports/${w.id}/mail`, { recipientIds: [r.body.id] })).body.ids[0] as string;
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let reached: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => { reached = resolve; });
+    const active = deliverMail(pool, epoch, { now: plus(at, 200), timeoutMs: TIMEOUT, pdf: async () => { reached(); await held; return Buffer.from('%PDF-1.4 fake'); } });
+    await started;
+    expect((await rowOf(sending))?.state).toBe('sending');
+    const busy = await lead('PATCH', `/api/settings/mail/recipients/${r.body.id}`, { updatedAt: r.body.updatedAt, external: true });
+    expect(busy.status).toBe(409);
+    expect(busy.body.error.code).toBe('INVALID_TRANSITION');
+    release();
+    await active;
+    expect(await rowOf(sending)).toMatchObject({ state: 'accepted', external: false });
+    // 2) 대기 중 줄은 전환하는 순간 바뀐다: 주간 → 외부 줄, 일간 → 보내지 않고 실패
+    const daily = (await lead('POST', `/api/reports/${d.id}/mail`, { recipientIds: [r.body.id] })).body.ids[0] as string;
+    const weekly = (await lead('POST', `/api/reports/${w.id}/mail`, { recipientIds: [r.body.id] })).body.ids[0] as string;
+    const now = await recipient('race@example.com');
+    const ext = await lead('PATCH', `/api/settings/mail/recipients/${r.body.id}`, { updatedAt: now.updatedAt, external: true });
+    expect(ext.status).toBe(200);
+    expect(await rowOf(weekly)).toMatchObject({ state: 'queued', external: true, view: 'ext', pdf: true });
+    expect(await rowOf(daily)).toMatchObject({ state: 'failed', external: false });
+    expect((await log(true)).some((x) => x.id === daily)).toBe(false);
+    await deliverMail(pool, epoch, { now: plus(at, 201), timeoutMs: TIMEOUT, pdf: FAKE_PDF });
+    expect((await rowOf(weekly))?.state).toBe('accepted');
+    const last = received('race@example.com').at(-1)?.raw ?? '';
+    expect(externalMailLeaks({ subject: mimeHeader(last, 'Subject') ?? '', html: mimePart(last, 'text/html') ?? '', text: mimePart(last, 'text/plain') ?? '', to: 'race@example.com' }, 'http://127.0.0.1:5173/')).toEqual([]);
     expect((await lead('DELETE', `/api/settings/mail/recipients/${r.body.id}?updatedAt=${encodeURIComponent(ext.body.updatedAt)}`)).status).toBe(204);
   });
 

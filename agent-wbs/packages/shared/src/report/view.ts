@@ -77,7 +77,7 @@ export interface ExternalView {
 }
 
 /** 보고용(요약) 보기(P summ·risksExt·kpisExt·plan L6400-6412·L6420·L6430). 일간은 보고용이 없지만 같은 함수로 만들 수 있다. */
-export function externalView(s: ReportSnapshotData, kind: 'daily' | 'weekly' | 'custom'): ExternalView {
+export function externalView(s: ReportSnapshotData, kind: 'daily' | 'weekly' | 'custom', appUrl?: string | null): ExternalView {
   const f = reportFigures(s);
   const delta = forecastDeltaLabel(f.forecastDeltaDays);
   const slack = f.slackDays;
@@ -110,9 +110,9 @@ export function externalView(s: ReportSnapshotData, kind: 'daily' | 'weekly' | '
     summary,
     // 일간은 추이를 보이지 않는다(P isWeekly L6413).
     trend: kind === 'daily' ? [] : s.series.map((x) => ({ day: x.day, uptimePct: x.uptimePct, done: x.done, forecast: x.forecast })),
-    highlights: s.done.map((x) => scrubInternal(x.title)),
+    highlights: s.done.map((x) => externalText(x.title, appUrl)),
     risks,
-    plan: s.next.map((x) => `${scrubInternal(x.title)} (${monthDay(x.start)} ~ ${monthDay(x.end)})`),
+    plan: s.next.map((x) => `${externalText(x.title, appUrl)} (${monthDay(x.start)} ~ ${monthDay(x.end)})`),
   };
 }
 
@@ -128,13 +128,59 @@ export function internalTerms(text: string): string[] {
 }
 
 /**
- * 보고용에 넣는 자유 입력(작업 제목·프로젝트 이름)에서 내부 용어를 뺀다(G L396, 리뷰 M6-01 3).
- * 왜: 제목은 팀장이 자유롭게 쓰므로 「TASK-0007 수정」처럼 내부 용어가 섞일 수 있다. 숫자·문장은 그대로 두고 용어만 지운다.
+ * 앱 화면의 첫 경로(apps/web 메뉴 · 로그인 · API). 「/report/…」처럼 글에 적힌 앱 안 경로를 찾을 때 쓴다.
+ * 메뉴를 늘리면 여기에도 더한다(shared 시험이 web 메뉴와 같은지 확인한다).
+ */
+export const APP_PATHS = ['dashboard', 'project', 'wbs', 'design', 'planning', 'exec', 'verify', 'ci', 'change', 'history', 'report', 'settings', 'api', 'login'] as const;
+/** 같은 PC · 같은 네트워크에서만 열리는 주소(로컬 · 사설 IP · .local). 외부 사람에게는 열리지 않는 앱 주소로 본다. */
+const LOCAL_HOST = String.raw`(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|\[::1\]|[\w-]+\.local)`;
+const escapeRe = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const hostOf = (appUrl: string | null | undefined) => { try { return appUrl ? new URL(appUrl.trim()).host : null; } catch { return null; } };
+
+/**
+ * 앱 링크 · 앱 안 경로 · 앱 메뉴 안내를 찾는 정규식(Q-13 결정 A, Codex 리뷰 fix1 2).
+ * - 앱 접속 주소(설정 → 알림의 `app_url`)의 호스트가 들어간 주소(`http://` 생략 포함)
+ * - 로컬 · 사설 주소(위 LOCAL_HOST)
+ * - 공백 · 괄호 뒤에 오는 앱 경로(`/report/…`, `/settings/report` 등 APP_PATHS)
+ * - 「설정 → 보고서 · 메일」 같은 앱 메뉴 안내
+ * 일반 외부 참고 주소(예: `https://example.org/spec`)는 지우지 않는다. 왜: 업무 문장의 참고 자료까지 없애면 보고 내용이 상한다.
+ */
+function linkPatterns(appUrl?: string | null): RegExp[] {
+  const host = hostOf(appUrl);
+  return [
+    ...(host ? [new RegExp(String.raw`(?:https?:\/\/)?${escapeRe(host)}[^\s<>"'()[\]」』]*`, 'gi')] : []),
+    new RegExp(String.raw`(?:https?:\/\/)?${LOCAL_HOST}(?::\d+)?(?:\/[^\s<>"'()[\]」』]*)?`, 'gi'),
+    new RegExp(String.raw`(?<![\w.:/-])\/(?:${APP_PATHS.join('|')})(?:\/[^\s<>"'()[\]」』]*)?(?![\w-])`, 'g'),
+    /설정\s*→\s*[^\s,.)」』]+(?:\s*·\s*[^\s,.)」』]+)?/g,
+    // 링크 속성 글자. 제목에 「<a href=…>」가 적혀 와도 메일 HTML에서 링크처럼 보이지 않게 지운다.
+    /href\s*=/gi,
+  ];
+}
+
+/**
+ * 외부로 나가는 글을 보고용으로 바꾸는 **하나뿐인** 변환 함수(G L396 · L1052, Q-13 결정 A).
+ * 메일 제목 · 본문(HTML · text/plain) · 보고용 화면 · 보고용 PDF가 모두 이 함수를 지난다.
+ * - 내부 용어(Task ID · RP · 시도 · 모델 · Effort · 토큰)를 뺀다.
+ * - 앱 링크 · 앱 안 경로 · 앱 메뉴 안내를 뺀다(linkPatterns).
+ * 왜: 제목 · 이름은 팀장이 자유롭게 쓰므로 「TASK-0007 개선 http://127.0.0.1:5173/settings/report」처럼 섞일 수 있다.
+ *   HTML의 `<a>`가 없어도 메일 앱은 글로 적힌 주소를 링크로 바꿔 준다.
  * 예: 「TASK-0007 RP-002 개선」 → 「개선」. 모두 지워져 빈 글이 되면 「(제목 비공개)」.
  */
-export function scrubInternal(text: string): string {
-  const cleaned = INTERNAL_TERMS.reduce((acc, re) => acc.replace(new RegExp(re.source, re.flags), ''), text).replace(/\s+/g, ' ').trim();
+export function externalText(text: string, appUrl?: string | null): string {
+  const patterns = [...linkPatterns(appUrl), ...INTERNAL_TERMS];
+  const cleaned = patterns.reduce((acc, re) => acc.replace(new RegExp(re.source, re.flags), ''), text).replace(/\s+/g, ' ').trim();
   return cleaned || '(제목 비공개)';
+}
+/** 옛 이름. externalText와 같은 함수다(앱 접속 주소를 모를 때). */
+export const scrubInternal = (text: string): string => externalText(text);
+
+/**
+ * 외부로 나가는 글 검사기(Q-13 결정 A). 남은 내부 용어 · 앱 링크 · 앱 경로 · 메뉴 안내를 모두 돌려준다. 빈 목록이면 통과.
+ * 시험과 발송 직전(메일 worker · 보고용 PDF 생성) 둘 다 이 함수를 쓴다.
+ * HTML이면 `href=`도 찾는다(linkPatterns). 왜: 보이는 글자에 주소가 없어도 링크 태그가 남으면 누를 수 있다.
+ */
+export function externalLeaks(text: string, appUrl?: string | null): string[] {
+  return [...linkPatterns(appUrl), ...INTERNAL_TERMS].flatMap((re) => text.match(new RegExp(re.source, re.flags)) ?? []);
 }
 
 /** 스냅샷이 계약(ReportSnapshot)에 맞는지. 맞지 않으면 첫 위반 위치를 돌려준다. */
