@@ -209,6 +209,12 @@ describe('planning 취소 반영(D-27): 미리보기 영향 = 반영 결과, 한
     // 재조정도 같은 반영에서 기록된다.
     expect(await countRows('replans')).toBe(replansBefore + 1);
     expect(result.proposal.events.map((e) => e.action)).toEqual(['created', 'submitted', 'approved', 'applied']);
+    // M5·M7 통합(조정자 추가 범위): 시계가 뒤로 가서 나중 이벤트가 더 작은 시각을 받아도 이력은 기록 순서다(M6-01 fix5 간헐 실패).
+    await ownerPool.query("alter table change_proposal_events disable trigger user");
+    try {
+      await ownerPool.query("update change_proposal_events set created_at=created_at - interval '1 hour' where proposal=$1 and kind in ('approved','applied')", [result.proposal.id]);
+    } finally { await ownerPool.query("alter table change_proposal_events enable trigger user"); }
+    expect((await proposalOf(result.proposal.id)).events.map((e) => e.action)).toEqual(['created', 'submitted', 'approved', 'applied']);
   });
 
   test('반영 중 재조정 기록이 실패하면 취소·관계 제거·이력이 모두 되돌려진다', async () => {

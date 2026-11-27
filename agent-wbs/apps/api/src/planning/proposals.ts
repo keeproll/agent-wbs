@@ -38,7 +38,7 @@ export async function loadCp(client: PoolClient, id: string, lock: boolean): Pro
 
 export async function proposalView(client: PoolClient, row: CpRow) {
   const events = (await client.query<{ at: string; actor: string; action: string; comment: string }>(
-    `select ${iso('created_at')} as at,actor,kind as action,comment from change_proposal_events where proposal=$1 order by created_at,id`, [row.id])).rows;
+    `select ${iso('created_at')} as at,actor,kind as action,comment from change_proposal_events where proposal=$1 order by record_no`, [row.id])).rows;
   return {
     id: row.id, cpKey: row.cp_key, title: row.title, reason: row.reason, source: { kind: row.source, id: row.source_id }, status: row.status,
     ops: row.ops, idMap: row.id_map ?? {}, splitJudgements: row.split_judgements, taskJudgements: row.task_judgements,

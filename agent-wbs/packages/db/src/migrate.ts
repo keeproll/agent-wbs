@@ -24,6 +24,12 @@ export async function runMigrations(pool: Pool, migrationsFolder = fileURLToPath
           await client.query('commit');
         } catch (error) { await client.query('rollback'); throw error; }
       }
+      // 통합 때 다시 매긴 마이그레이션(예: 브랜치 0041 → 최종 0026)은 내용(hash)이 같고 when만 다르다.
+      // 옛 when이 DB에 남아 있으면 Drizzle은 「마지막 적용 시각」보다 작은 when의 새 마이그레이션(예: 0027)을 건너뛴다.
+      // 이미 적용한 hash의 기록 시각만 지금 journal 값으로 맞춘다. 내용이 다른 기록은 건드리지 않으므로, 진짜 순서 오류는 아래 누락 검사가 그대로 잡는다.
+      for (const file of readMigrationFiles(config)) {
+        await client.query('update drizzle.__drizzle_migrations set created_at=$2 where hash=$1 and created_at is distinct from $2', [file.hash, file.folderMillis]);
+      }
     }
     await migrate(drizzle(client), config);
     const applied = new Set((await client.query<{ hash: string }>('select hash from drizzle.__drizzle_migrations')).rows.map(row => row.hash));

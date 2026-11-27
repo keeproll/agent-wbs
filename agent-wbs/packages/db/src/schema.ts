@@ -394,6 +394,7 @@ export const planningJobLogs = pgTable('planning_job_logs', {
     .references(() => planningJobs.id, { onDelete: 'restrict' }),
   at: at('at').notNull().defaultNow(),
   text: text().notNull(),
+  record_no: bigserial({ mode: 'number' }).notNull().unique(),
 });
 export const wbsDrafts = pgTable(
   'wbs_drafts',
@@ -704,6 +705,7 @@ export const planningReviews = pgTable(
     choice: text(),
     memo: text(),
     ...version(),
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
   },
   (t) => textChecks('planning_reviews', t),
 );
@@ -757,6 +759,7 @@ export const changeProposalEvents = pgTable(
     kind: text().notNull(),
     actor: text().notNull(),
     comment: text().notNull(),
+    record_no: bigserial({ mode: 'number' }).notNull().unique(),
   },
   (t) => textChecks('change_proposal_events', t),
 );

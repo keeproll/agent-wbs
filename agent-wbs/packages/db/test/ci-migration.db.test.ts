@@ -18,7 +18,9 @@ test('리뷰 R skip: 0040 적용 뒤 더 작은 when의 마이그레이션을 �
     await cp(fileURLToPath(new URL('../migrations',import.meta.url)),folder,{ recursive:true });
     const path = join(folder,'meta/_journal.json');
     const journal = JSON.parse(await readFile(path,'utf8')) as { entries: { idx: number; version: string; when: number; tag: string; breakpoints: boolean }[] };
-    const ci = journal.entries.pop(); expect(ci).toBeDefined(); if (!ci) return;
+    // CI(0026)와 그 뒤 항목(통합에서 더한 0027 등)을 떼어 「CI 이전」 DB를 만든다.
+    const later = journal.entries.splice(journal.entries.findIndex(e => e.tag === '0026_20261127_ci_reports'));
+    const ci = later[0]; expect(ci?.tag).toBe('0026_20261127_ci_reports'); if (!ci) return;
     await writeFile(path,JSON.stringify(journal));
     await runMigrations(pool,folder);
     const oldCi = `alter table ci_runs add column reporter text;
@@ -42,9 +44,11 @@ test('리뷰 R skip: 0040 적용 뒤 더 작은 when의 마이그레이션을 �
     await pool.query('create index review_ci_physical on ci_runs(run_key desc)');
     await pool.query('cluster ci_runs using review_ci_physical');
     await pool.query('drop index review_ci_physical');
-    await pool.query('insert into drizzle.__drizzle_migrations(hash,created_at) values($1,$2)',[createHash('sha256').update(oldCi).digest('hex'),1795740000040]);
+    // 옛 CI 마이그레이션 기록. M5·M7 통합에서 CI 마이그레이션을 0026(when 1795740000026)으로 재번호했으므로,
+    // 늦게 병합된 작은 when(…005)보다 크고 현재 CI(…026)보다 작은 시각으로 남겨 「현재 CI는 적용, 늦은 것은 건너뜀」 상황을 만든다.
+    await pool.query('insert into drizzle.__drizzle_migrations(hash,created_at) values($1,$2)',[createHash('sha256').update(oldCi).digest('hex'),1795740000020]);
     journal.entries.push({ ...ci,tag:'0026_20261127_late_worker',when:1795740000005 });
-    journal.entries.push({ ...ci,idx:ci.idx+1 });
+    for (const entry of later) journal.entries.push({ ...entry,idx:entry.idx+1 });
     await writeFile(join(folder,'0026_20261127_late_worker.sql'),'CREATE TABLE public.review_late_worker(id integer);');
     await writeFile(path,JSON.stringify(journal));
     await expect(runMigrations(pool,folder)).rejects.toThrow('적용되지 않은 마이그레이션');

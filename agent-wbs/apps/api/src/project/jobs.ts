@@ -130,6 +130,6 @@ export async function jobView(db: Db, job: PlanningJob) {
   const stepRows = (await db.query<{ key: string; status: StepStatus; at: string | null; note: string | null }>(
     `select step_key as key,status,${iso('coalesce(finished_at,started_at)')} as at,note from planning_job_steps where job=$1`, [job.id])).rows;
   const fail = (await db.query<{ fail: { reason: string; fix: string } | null }>('select fail from planning_jobs where id=$1', [job.id])).rows[0]?.fail ?? null;
-  const logs = (await db.query<{ at: string; text: string }>(`select ${iso('at')} as at,text from planning_job_logs where job=$1 order by at,created_at`, [job.id])).rows;
+  const logs = (await db.query<{ at: string; text: string }>(`select ${iso('at')} as at,text from planning_job_logs where job=$1 order by record_no`, [job.id])).rows;
   return { jobId: job.id, runNo: job.run_no, status: job.status, stepRows, logs, fail };
 }

@@ -31,7 +31,7 @@ async function loadPlanning(client: PoolClient | Pool, id: string, lock = false)
 
 async function reviewsOf(client: PoolClient | Pool, planningId: string): Promise<ReviewRow[]> {
   return (await client.query<ReviewRow>(
-    `select id,topic,kind,codex,claude,choice,memo,${iso('updated_at')} as updated_at from planning_reviews where planning=$1 order by created_at,id`, [planningId])).rows;
+    `select id,topic,kind,codex,claude,choice,memo,${iso('updated_at')} as updated_at from planning_reviews where planning=$1 order by record_no`, [planningId])).rows;
 }
 
 async function planningView(client: PoolClient | Pool, row: PlanningRow) {
