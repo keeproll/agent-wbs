@@ -174,6 +174,7 @@
 - **payload** — 요청이나 job에 실어 보내는 실제 내용.
 - **PC** — 개인용 컴퓨터. 이 문서에서는 Runner와 Agent가 도는 개발 PC(host)를 뜻한다.
 - **PDF** — 인쇄·배포용 문서 파일 형식.
+- **pdfjs-dist** — PDF 파일을 열어 글자·위치를 꺼내는 라이브러리. 시험이 보고서 PDF의 글자·쪽 크기·글꼴을 확인할 때 쓴다(제품 코드에는 없음). → apps/api/src/pdf/README.md
 - **pgid (process group ID)** — 프로세스 그룹 번호. Agent가 띄운 자식 프로세스까지 한꺼번에 관리·종료하는 데 쓴다. → contracts §3.4
 - **PID** — 프로세스 번호(Process ID). PID 1은 시스템이 처음 띄운 프로세스.
 - **pino** — Node.js 로그 라이브러리. redact로 비밀값을 가린다.
@@ -184,7 +185,7 @@
 - **PostgreSQL** — 표(테이블)로 데이터를 저장하는 관계형 데이터베이스.
 - **PR (Pull Request)** — GitHub에서 브랜치 변경을 main에 합쳐 달라는 요청. Task당 1개. → contracts §6
 - **prefers-reduced-motion** — 사용자가 OS에서 「움직임 줄이기」를 켰는지 알려 주는 브라우저 설정. 켜져 있으면 애니메이션을 줄인다.
-- **Pretendard GOV** — 화면과 PDF에 쓰는 한글 글꼴.
+- **Pretendard GOV** — 화면과 PDF에 쓰는 한글 글꼴. 화면은 가변 글꼴 파일을, PDF는 같은 판(1.3.9)의 고정 굵기 글꼴 파일을 쓴다. 왜: 가변 글꼴은 PDF에서 Type3 그림 글자가 되어 글꼴 파일이 들어가지 않는다.
 - **principal** — 요청한 주체(`lead` 팀장 또는 `runner`). → architecture §4
 - **private (저장소)** — 허가된 사람만 볼 수 있는 GitHub 저장소 공개 설정.
 - **proof (해제 증거)** — 보유를 풀어도 된다는 증거. `no_process`·`group_empty`·`boot_changed` 세 가지. → contracts §3.4
@@ -205,6 +206,7 @@
 - **repositoryIdFor** — 저장소 주소를 정규화해 SHA-256을 구하고, 그 앞 16자리 앞에 `r-`를 붙인 로컬 저장소 이름(예: `r-0ef6f111ef40232e`). Runner가 정리 명령의 `repoUrl`로 로컬 저장소를 찾을 때 쓴다. → contracts §3.2
 - **REST** — HTTP의 GET·POST·PUT·PATCH·DELETE 요청으로 자원(데이터)을 주고받는 API 방식.
 - **Retry-After** — 서버가 「몇 초 뒤 다시 보내라」고 알려 주는 응답 헤더. 429와 함께 온다.
+- **RFC 5987 (`filename*`)** — 내려받을 파일 이름에 한글 같은 글자를 적는 방식. 예: `filename*=UTF-8''RPT-W-261026_%ED%8C%80…pdf`. 한글을 못 읽는 프로그램을 위해 `filename="RPT-W-261026.pdf"`도 함께 보낸다. → apps/api/src/pdf/routes.ts
 - **rework / reverify** — 재작업 시도와, 재작업 후의 재검증 시도. → data-model §3.1
 - **Route / Service / Repository** — API 서버 코드의 세 층. Route는 요청 모양 검증, Service는 업무 규칙, Repository는 DB 쿼리만 맡는다.
 - **RP** — 재조정(replan) 기록의 표시 ID(예: `RP-004`).
@@ -222,6 +224,7 @@
 - **SHA** — git 커밋의 고유 번호(hash).
 - **SHA-256 / sha256** — 내용으로 256비트 지문(hash)을 만드는 방식. 토큰 저장·파일 무결성 확인에 쓴다.
 - **shell** — 명령줄 문자열을 해석해 실행하는 프로그램(bash 등). 문자열을 이어 붙여 명령을 만들면 입력값이 명령으로 해석될 위험이 있다.
+- **shrink-to-fit** — 쪽보다 넓은 문서를 인쇄할 때 브라우저가 쪽 폭에 맞춰 줄여 찍는 동작. 줄면 글자도 작아진다.
 - **slice (systemd slice)** — systemd가 프로세스 묶음에 CPU·메모리를 나눠 주는 상위 단위. 사용자 slice 아래에 세션 scope를 만든다.
 - **slot (물리 슬롯)** — PC의 CPU·메모리 같은 실행 자리. 프로그램 실행에 쓸 PC 자리다. 실행 전 예약(`reserved`)과 종료 미확인 보유(`unconfirmed`)도 용량에 포함한다. → data-model §2.5-1
 - **SMTP** — 메일을 보내는 표준 방식(메일 서버). → contracts §4.4
@@ -250,6 +253,7 @@
 - **treeHash** — 입력 변경 보고의 필드. head 커밋의 `prototype/` 폴더 전체(파일 모드 포함)를 나타내는 git 트리 SHA다. → contracts §3.1 입력 변경 보고
 - **trim** — 문자열 앞뒤의 공백을 지우는 처리. `subjectHash` 계산은 trim을 하지 않으므로 앞뒤 공백도 내용 차이다. → data-model §2.3-1
 - **TS / TypeScript** — 변수·함수에 타입을 붙여 실수를 미리 잡는 JavaScript. TS로 줄여 쓴다.
+- **Type3 (그림 글자)** — PDF 안에 글꼴 파일 대신 글자 모양을 그림처럼 넣는 방식. 글꼴 파일이 들어간 것(폰트 embed)이 아니라서 보고서 PDF에는 쓰지 않는다. 시험이 0개인지 확인한다.
 - **TypeBox** — TypeScript로 스키마를 정의해 검증·타입·OpenAPI를 한 번에 만드는 도구. → architecture §3.2
 - **typescript-eslint** — TypeScript 코드에 lint 규칙을 적용하는 도구.
 - **TZ** — 프로세스의 시간대(time zone) 설정 환경 변수.
@@ -282,16 +286,19 @@
 ## ㄱ
 
 - **가동률** — 실제로 일할 수 있는 시간의 비율. 일정 계산(낙관·중간·비관)에 쓴다. → architecture D-32
+- **가변 글꼴 (Variable font)** — 파일 하나로 굵기를 자유롭게 바꾸는 글꼴. 화면은 이것을 쓰지만, Chromium PDF에서는 굵은 글자가 Type3 그림 글자가 된다. ↔ 고정 굵기 글꼴
 - **가상 스크롤** — 긴 목록에서 화면에 보이는 행만 그려 빠르게 만드는 기법.
 - **검증** — QA·재검증 시도가 Task 결과를 확인하는 것. 결과는 `verifications`에 추가 전용으로 남는다. → data-model §2.5
 - **결과 미확정 (병합)** — 병합 요청의 응답을 잃었는데 조회에서 병합이 보이지 않는 상태. 「병합 안 됨」으로 확정하지 않고, 같은 요청을 다시 보내지 않으며, 쓰기 없는 재조회로만 해소한다. → contracts §3.4-6·§4.1
 - **결함(defect)** — 검증에서 찾은 문제. 원 행은 바꾸지 않고 해소는 이벤트 행으로 남긴다. → data-model §2.5
 - **경계 변환** — DB에 저장한 값과 API 값의 철자가 다를 때, 서버가 DB↔API 사이에서 바꿔 주는 것. 예: CI 단계 DB `1` ↔ API `task`. → contracts §1 값 철자
 - **계열 (Codex 모델 계열)** — Codex 모델 이름 끝부분(luna·terra·astra·sol). 같은 세대 안의 등급 순서를 정한다. 초기 순서는 luna < terra < astra < sol. → data-model §6.2
+- **고정 굵기 글꼴 (static font)** — 굵기마다 따로 만든 글꼴 파일(예: Regular 400, Bold 700). 보고서 PDF는 이 파일 4개(400·500·600·700)를 넣는다. ↔ 가변 글꼴
 - **고정 벡터** — 입력과 정답(예: 지문·암호문)을 고정해 둔 시험 예시. 따로 만든 두 구현이 같은 결과를 내는지 확인한다. 수학의 벡터가 아니다. → data-model §2.3-1, contracts §6.1
 - **관측 등급** — CLI 버전·모델·옵션 조합별로 등록하는 관측 검증 결과(`cli_observation_grades`). 등록된 검증이 없으면 「미검증」으로 보고 보수 계산한다. → architecture §5.1, data-model §2.6
 - **교차 리뷰** — 담당이 아닌 쪽 Agent가 결과를 검토하는 것. → milestones §1
 - **교착(deadlock)** — 둘 이상이 서로 상대를 기다리느라 아무도 진행하지 못하는 상태. → architecture D-04, data-model §5.1
+- **그림 글자** — Type3를 보라.
 - **기준 일정(baseline)** — 비교의 기준으로 고정해 둔 일정 버전. → data-model §2.7
 
 ## ㄴ
@@ -312,9 +319,11 @@
 
 - **멱등(idempotency)** — 같은 요청을 여러 번 보내도 결과가 한 번 보낸 것과 같은 성질. `Idempotency-Key`로 보장한다. → contracts §1
 - **명세** — Task의 목적·범위·요구·작업·입출력·AC 등. 착수 승인에 필수 항목이 있다. → contracts §2.5
+- **문서 hash (PDF 캐시 키)** — 스냅샷으로 만든 PDF용 HTML의 hash. 캐시 파일 이름에 앞 16자를 넣는다. 서식이 바뀌어 HTML이 달라지면 키도 달라져 PDF를 다시 만든다. → apps/api/src/pdf/service.ts
 
 ## ㅂ
 
+- **배치 폭** — 문서를 줄 바꿈·열 너비로 배치할 때 기준이 되는 폭(px). 보고서 PDF는 이 폭과 인쇄 폭(A4 − 여백)의 비율로 줄이거나 키운다. → apps/api/src/pdf/README.md
 - **보수 계산** — 관측이 검증되지 않았을 때 자원 사용을 넉넉하게(1+예산) 잡는 계산.
 - **보조 속도 제한 (secondary rate limit)** — 짧은 시간에 요청이 몰리면 GitHub가 따로 거는 제한. 429나 「속도 제한 403」으로 온다. → contracts §6
 - **보호 경로** — Agent가 바꾸면 안 되는 경로(`prototype/`·`.agentwbs/`). → architecture §4
