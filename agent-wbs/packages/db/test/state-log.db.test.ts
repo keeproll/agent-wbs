@@ -73,7 +73,7 @@ test('0037: 앱 역할은 기록 시각(awbs.state_at)을 지정할 수 없다(�
   expect((await owner.query("select count(*)::int n from state_log where created_at<'2021-01-01'")).rows[0]?.n).toBe(0);
 });
 
-test('0037: 재조정 상태(pending→applied)와 설정 표 변경도 기록한다(설정은 project_id 없음)', async () => {
+test('0037: 재조정 상태(pending→applied)는 상태 기록, 설정 표 변경은 설정 기록(setting_log)에 남긴다', async () => {
   const p = (await owner.query<{ id: string }>('select id from projects')).rows[0]?.id;
   const r = (await app.query<{ id: string }>("insert into replans(project_id,rp_key,trigger,actor,status,before,after) values($1,'RP-901','시험','팀장','pending','{}','{}') returning id", [p])).rows[0]?.id;
   await app.query("update replans set status='applied' where id=$1", [r]);
@@ -83,8 +83,10 @@ test('0037: 재조정 상태(pending→applied)와 설정 표 변경도 기록�
   await app.query("insert into blackout_days(date,note) values('2026-12-25','성탄절')");
   await app.query('update app_settings set heartbeat_seconds=heartbeat_seconds+1');
   await app.query("insert into concurrency_settings(mode) values('manual') on conflict (singleton) do update set mode='manual'");
-  const rows = (await owner.query<{ tbl: string; project_id: string | null }>("select distinct tbl,project_id from state_log where tbl in ('schedule_policy','blackout_days','app_settings','concurrency_settings') and op<>'seed' order by tbl")).rows;
-  expect(rows).toEqual(['app_settings', 'blackout_days', 'concurrency_settings', 'schedule_policy'].map((tbl) => ({ tbl, project_id: null })));
+  const rows = (await owner.query<{ tbl: string }>("select distinct tbl from setting_log where op<>'seed' order by tbl")).rows;
+  expect(rows).toEqual(['app_settings', 'blackout_days', 'concurrency_settings', 'schedule_policy'].map((tbl) => ({ tbl })));
+  expect((await owner.query("select count(*)::int n from state_log where tbl in ('schedule_policy','blackout_days','app_settings','concurrency_settings')")).rows[0]?.n).toBe(0);
+  await expect(app.query("update setting_log set op='x'")).rejects.toMatchObject({ code: '42501' });
 });
 
 test('앱 권한은 기록을 고치거나 지우거나 비울 수 없다', async () => {
@@ -98,12 +100,12 @@ test('초기화: 설정 유지면 프로젝트 기록만 지우고 설정 기록
   expect((await owner.query('select count(*)::int n from state_log where project_id is not null')).rows[0]?.n).toBeGreaterThan(0);
   const name = (await owner.query<{ name: string }>('select name from projects')).rows[0]?.name;
   await app.query("select reset_project(1,$1,true,'팀장')", [name]);
-  expect((await owner.query('select count(*)::int n from state_log where project_id is not null')).rows[0]?.n).toBe(0);
-  expect((await owner.query("select count(*)::int n from state_log where tbl='schedule_policy'")).rows[0]?.n).toBeGreaterThan(0);
+  expect((await owner.query('select count(*)::int n from state_log')).rows[0]?.n).toBe(0);
+  expect((await owner.query("select count(*)::int n from setting_log where tbl='schedule_policy'")).rows[0]?.n).toBeGreaterThan(0);
   const { p } = await project(app);
   const again = (await owner.query<{ name: string }>('select name from projects where id=$1', [p])).rows[0]?.name;
   await app.query("select reset_project(2,$1,false,'팀장')", [again]);
-  expect((await owner.query('select count(*)::int n from state_log')).rows[0]?.n).toBe(0);
+  expect((await owner.query('select (select count(*) from state_log)+(select count(*) from setting_log) n')).rows[0]?.n).toBe('0');
 });
 
 test('0036 전부터 있던 행은 seed로 한 번 남는다', async () => {

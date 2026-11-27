@@ -20,7 +20,7 @@ import { wbsPaths } from '../tasks/wbs.ts';
  *
  * 되살릴 수 없는 것:
  * - 0036 전부터 있던 행은 마이그레이션 때 「seed」로 한 번 남았다. 그보다 이른 시점의 상태는 모른다 → `missing: ['state']`.
- * - 설정(일정 정책·작업 불가일·heartbeat·동시 실행 한도)은 0037부터 기록한다(project_id 없음). 기록이 T 전에 없으면
+ * - 설정(일정 정책·작업 불가일·heartbeat·동시 실행 한도)은 0037부터 설정 기록(setting_log)에 남긴다. 기록이 T 전에 없으면
  *   설정 묶음별 버전(편집 시각)이 T 전인지로 「지금 값이 그때도 같았다」를 확인한다. 확인할 수 없으면 지금 값을 쓰고 `basis.currentSettings`에 적는다.
  */
 export type StateSource = 'log' | 'live';
@@ -28,7 +28,7 @@ export const LOGGED_TABLES = [
   'projects', 'wbs_nodes', 'tasks', 'task_specs', 'task_dependencies', 'checklist_items', 'task_outputs', 'task_grades',
   'task_attempts', 'messages', 'change_proposals', 'ci_runs', 'replans',
 ] as const;
-/** 프로젝트가 없는 설정 표(0037부터 기록) */
+/** 프로젝트가 없는 설정 표(0037부터 setting_log에 기록) */
 export const SETTING_TABLES = ['schedule_policy', 'blackout_days', 'app_settings', 'concurrency_settings'] as const;
 export type SettingTable = (typeof SETTING_TABLES)[number];
 /** 보고서가 「지금 값」을 쓴 설정 묶음(스냅샷 basis.currentSettings 값) */
@@ -43,7 +43,7 @@ export interface AsOf {
   source: StateSource;
   /** 표 이름 → SQL 관계식(괄호로 묶은 하위 질의 또는 표 이름) */
   rel: (table: LoggedTable) => string;
-  /** 설정 표(project_id 없음)를 T 직전 상태로 */
+  /** 설정 표를 설정 기록(setting_log)에서 T 직전 상태로 */
   setting: (table: SettingTable) => string;
   /** 추가 전용 표: 기록 시각이 T 전인 행 */
   added: (table: string, column?: string) => string;
@@ -64,8 +64,8 @@ export function asOf(projectId: string, before: string, source: StateSource): As
       where l.project_id='${projectId}' and l.tbl='${table}' and l.created_at<${t} order by l.row_id,l.created_at desc,l.seq desc) l
       cross join lateral jsonb_populate_record(null::public.${table},l.data) r where l.op<>'delete')`),
     added: (table, column = 'created_at') => `(select * from public.${table} where ${column}<${t})`,
-    setting: (table) => (source === 'live' ? `public.${table}` : `(select r.* from (select distinct on (l.row_id) l.op,l.data from public.state_log l
-      where l.project_id is null and l.tbl='${table}' and l.created_at<${t} order by l.row_id,l.created_at desc,l.seq desc) l
+    setting: (table) => (source === 'live' ? `public.${table}` : `(select r.* from (select distinct on (l.row_id) l.op,l.data from public.setting_log l
+      where l.tbl='${table}' and l.created_at<${t} order by l.row_id,l.created_at desc,l.seq desc) l
       cross join lateral jsonb_populate_record(null::public.${table},l.data) r where l.op<>'delete')`),
   };
 }
@@ -91,7 +91,7 @@ export async function settingsAt(client: PoolClient, a: AsOf) {
   const q = <T extends object>(sql: string, args: unknown[] = []) => client.query<T>(sql, args).then((r) => r.rows);
   const current: SettingGroup[] = [];
   const logged = async (table: SettingTable) => a.source === 'log'
-    && Boolean((await q(`select 1 from state_log where project_id is null and tbl=$1 and created_at<${a.t} limit 1`, [table])).length);
+    && Boolean((await q(`select 1 from setting_log where tbl=$1 and created_at<${a.t} limit 1`, [table])).length);
   // 기록이 없을 때: 지금 표 + 「그때도 같았나」 확인식(SQL, T 전이면 참)
   const pick = async (table: SettingTable, group: SettingGroup, proof: string) => {
     if (await logged(table)) return a.setting(table);
