@@ -38,6 +38,12 @@ export interface ExecutionOptions {
   heavy: HeavySemaphore;
   canStart: ResourceReporter['canStart'];
   isolation?: IsolationLayer;
+  /**
+   * 실행 직전 격리 재확인(전용 계정이면 래퍼 `check`와 사용자 scope 시험). 돌려준 계층으로 이번 실행을 감싼다.
+   * undefined를 돌려주면 이번 실행과 이후 claim을 거부한다. 없으면(시험) 지금 계층을 그대로 쓴다.
+   * 왜: 준비 점검 뒤에도 상태가 바뀔 수 있다. 예: 재부팅 뒤 /run/WSL 보호가 아직 안 돌았거나 사용자 systemd가 멈췄다(isolation.md §11).
+   */
+  recheckIsolation?: () => Promise<IsolationLayer | undefined>;
   verified?: (agent: Agent, model: string, options: string) => boolean;
   updater?: { tryClaim(): (() => void) | null; applyPending(): Promise<unknown> };
   /**
@@ -81,8 +87,20 @@ export class Execution {
   readonly #jobs = new Set<string>();
   readonly #reservations = new Set<SessionState>();
   #recovered = false;
-  constructor(options: ExecutionOptions) { this.#d = options; this.launches = new Launches(options.home, options.identity); }
+  #isolation: IsolationLayer | undefined;
+  constructor(options: ExecutionOptions) { this.#d = options; this.#isolation = options.isolation; this.launches = new Launches(options.home, options.identity); }
   get heavy(): HeavySemaphore { return this.#d.heavy; }
+  /** 지금 쓰는 격리 계층. 없으면 실제 실행을 거부한다(Q-08). */
+  get isolation(): IsolationLayer | undefined { return this.#isolation; }
+  /** 준비 점검이 고른 격리 계층으로 바꾼다. undefined면 새 claim·실행을 거부한다. 이미 실행 중인 세션은 시작 때 계층을 그대로 쓴다. */
+  setIsolation(isolation: IsolationLayer | undefined): void { this.#isolation = isolation; }
+
+  /** 실행 직전 계층. 재확인이 실패하면 거부를 유지하고 실행하지 않는다. */
+  async #currentIsolation(): Promise<IsolationLayer> {
+    if (this.#d.recheckIsolation) this.#isolation = await this.#d.recheckIsolation();
+    if (!this.#isolation) throw new IsolationUndecidedError();
+    return this.#isolation;
+  }
 
   /** 서버 보유 대조가 끝나기 전에는 새 claim을 허용하지 않는다. */
   async recover(holds?: ExecutionHold[], signal?: AbortSignal): Promise<boolean> {
@@ -116,7 +134,7 @@ export class Execution {
   }
 
   async claim(capacity: number): Promise<ClaimedJob | null> {
-    if (!this.#d.isolation || !this.#recovered || !this.#d.ready()) return null;
+    if (!this.#isolation || !this.#recovered || !this.#d.ready()) return null;
     if (!Number.isSafeInteger(capacity) || capacity < 0) throw new RangeError('실행 용량이 올바르지 않습니다.');
     // 기존 보유는 서버의 claim 트랜잭션에서 빼므로 전체 한도를 그대로 보낸다.
     const allowed = capacity > 0 && (['dev', 'qa'] as const).some(role =>
@@ -165,7 +183,7 @@ export class Execution {
 
   async #command(job: LaunchJob, agent: Agent, launch: Launch, signal?: AbortSignal, heavyHeld = false) {
     const d = this.#d;
-    if (!d.isolation) throw new IsolationUndecidedError();
+    if (!this.#isolation) throw new IsolationUndecidedError();
     if (!this.#recovered || !d.ready()) throw new Error('Runner 정리가 끝나기 전에는 명령을 실행하지 않습니다.');
     const controller = new AbortController();
     this.#controllers.add(controller);
@@ -184,7 +202,7 @@ export class Execution {
       gate = d.updater?.tryClaim();
       if (d.updater && !gate) throw new Error('CLI 업데이트 중에는 명령을 시작하지 않습니다.');
       this.#assertStart(agent, 1, reservation);
-      const wrapped = d.isolation.wrap(launch, agent);
+      const wrapped = (await this.#currentIsolation()).wrap(launch, agent);
       await this.#report('acquireJobSlots', { epoch: job.epoch, params: { id: job.id }, body: { fence: job.fence, hostId: d.identity.hostId } }, stopped);
       acquired = true;
       const logs: Record<'stdout' | 'stderr', Buffer[]> = { stdout: [], stderr: [] };
@@ -246,7 +264,7 @@ export class Execution {
   async #execute(job: AttemptJob, options: AttemptOptions): Promise<AttemptOutput> {
     const d = this.#d, epoch = d.epoch(), role = job.payload.kind === 'dev' || job.payload.kind === 'rework' ? 'dev' : 'qa';
     if (!d.ready()) throw new Error('Runner 정리가 끝나기 전에는 실행하지 않습니다.');
-    if (!d.isolation) throw new IsolationUndecidedError();
+    if (!this.#isolation) throw new IsolationUndecidedError();
     if (!this.#recovered) throw new Error('launch 대조가 끝나기 전에는 실행하지 않습니다.');
     const slots = this.#attemptSlots(role), budget = slots - 1;
     const controller = new AbortController();
@@ -276,7 +294,8 @@ export class Execution {
       const resume = previous && previous.cwd === work.cwd && previous.agent === job.payload.agent && previous.model === grade.model && previous.effort === grade.effort ? previous.sessionId : undefined;
       const definitions = (await this.#call('getTaskSubagents', { epoch, params: { taskKey: job.payload.taskKey }, query: { role } }, signal)).body;
       const prompt = `${JSON.stringify(job.payload.instructions)}\n\n동시 하위 Agent 예산: ${budget}\n지정 하위 Agent: ${definitions.enabled ? definitions.items.map(i => i.key).join(', ') : '없음'}\n모델: ${grade.model}, Effort: ${grade.effort}\n입력 버전: ${job.payload.inputVersion}\n${options.prompt ?? ''}`;
-      const launch = buildLaunch(job.payload.agent, d.binaries[job.payload.agent], { ...grade, cwd: work.cwd, prompt, ...(resume && { resume }) }, { env: d.env, ...(d.isolation && { isolation: d.isolation }) });
+      const isolation = await this.#currentIsolation();
+      const launch = buildLaunch(job.payload.agent, d.binaries[job.payload.agent], { ...grade, cwd: work.cwd, prompt, ...(resume && { resume }) }, { env: d.env, isolation });
       const installedSubagents = await installSubagents(work.cwd, job.payload.agent, definitions, grade);
       signal.throwIfAborted();
       this.#assertStart(job.payload.agent, slots, reservation);
@@ -294,7 +313,7 @@ export class Execution {
       d.sessions.push(session);
       this.#reservations.delete(reservation);
       const active = session;
-      const verified = d.isolation ? d.verified?.(job.payload.agent, grade.model, sessionOptions(job.payload.agent, d.isolation, resume ? 'resume' : 'new')) ?? false : false;
+      const verified = d.verified?.(job.payload.agent, grade.model, sessionOptions(job.payload.agent, isolation, resume ? 'resume' : 'new')) ?? false;
       const apply = (records: ReturnType<JsonlDecoder['end']>) => {
         for (const record of records) for (const event of parse(record)) {
           observer.apply(event);

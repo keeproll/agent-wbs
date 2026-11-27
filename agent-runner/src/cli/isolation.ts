@@ -9,6 +9,11 @@ export interface Launch {
   cwd: string;
   /** 지시문. 인자 대신 표준 입력으로 넘겨 프로세스 목록(ps)에 드러나지 않고 길이 제한도 피한다. */
   stdin: string;
+  /**
+   * 이 실행을 넣은 사용자 cgroup scope 이름(`awbs-<uuid>`). 있으면 정리할 때 scope 전체를 끝내고 비었는지 확인한다(`exec/scope.ts`).
+   * 전용 계정 격리는 항상 채운다. 없으면 지금처럼 프로세스 그룹과 /proc로만 정리한다.
+   */
+  scope?: string;
 }
 
 /**

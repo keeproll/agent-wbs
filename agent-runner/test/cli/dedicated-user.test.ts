@@ -179,8 +179,40 @@ describe('selectIsolation — 준비 점검에서 격리 계층 고르기', () =
     const run = runner('ok\n');
     const choice = await selectIsolation(env, run, { realpath });
     expect(choice.reason).toBeNull();
-    expect(choice.isolation.name).toBe('dedicated-user');
+    expect(choice.isolation.name).toBe('dedicated-user+user-scope');
     expect(run).toHaveBeenCalledWith('/usr/bin/sudo', ['-n', '-u', 'awbs-agent', '--', '/usr/local/libexec/awbs-agent-exec', 'check']);
+  });
+
+  test('M8 전 연결: check 다음 사용자 scope를 실제로 한 번 만들어 본다(/bin/true, 사용자 systemd 주소만 붙임)', async () => {
+    const run = runner('ok\n');
+    await selectIsolation(env, run, { realpath });
+    const uid = String(process.getuid?.());
+    expect(run.mock.calls[1]).toEqual(['/usr/bin/env', ['-i', 'PATH=/usr/bin:/bin', `XDG_RUNTIME_DIR=/run/user/${uid}`,
+      '/usr/bin/systemd-run', '--user', '--scope', '--quiet', '--collect', '--slice=app.slice', '--', '/bin/true']]);
+  });
+
+  test('M8 전 연결: 사용자 scope를 만들 수 없으면(linger 꺼짐 등) check가 ok여도 거부 유지', async () => {
+    const run = vi.fn<RunCommand>(async (cmd) => cmd === '/usr/bin/sudo' ? { code: 0, stdout: 'ok\n', stderr: '' } : { code: 1, stdout: '', stderr: 'Failed to connect to bus' });
+    const choice = await selectIsolation(env, run, { realpath });
+    expect(choice.isolation).toBe(PENDING_ISOLATION);
+    expect(choice.reason).toContain('linger');
+    expect(choice.reason).not.toContain('Failed to connect');
+  });
+
+  test('M8 전 연결: 고른 계층은 「systemd-run --user --scope -- sudo … 래퍼 run …」이고 CLI 옵션(관측 조합)은 그대로', async () => {
+    const choice = await selectIsolation(env, runner('ok\n'), { realpath });
+    const plain = buildLaunch('Codex', '/srv/agentwbs/cli/codex/current/bin/codex', spec, { env: hostEnv, isolation: iso });
+    const scoped = buildLaunch('Codex', '/srv/agentwbs/cli/codex/current/bin/codex', spec, { env: hostEnv, isolation: choice.isolation });
+    expect(scoped.file).toBe('/usr/bin/systemd-run');
+    expect(scoped.scope).toMatch(/^awbs-[0-9a-f-]{36}$/);
+    expect(scoped.args).toEqual(['--user', '--scope', '--quiet', '--collect', '--slice=app.slice', `--unit=${scoped.scope ?? ''}`, '--', plain.file, ...plain.args]);
+    expect(scoped.env).toEqual({ PATH: '/usr/bin:/bin', XDG_RUNTIME_DIR: `/run/user/${String(process.getuid?.())}` });
+    expect(scoped.stdin).toBe(plain.stdin);
+    expect(scoped.cwd).toBe(plain.cwd);
+    expect(sessionOptions('Codex', choice.isolation, 'new')).toBe(sessionOptions('Codex', iso, 'new'));
+    expect(sessionOptions('Claude', choice.isolation, 'resume')).toBe(sessionOptions('Claude', iso, 'resume'));
+    // 실행마다 다른 scope 이름을 쓴다.
+    expect(buildLaunch('Codex', '/srv/agentwbs/cli/codex/current/bin/codex', spec, { env: hostEnv, isolation: choice.isolation }).scope).not.toBe(scoped.scope);
   });
 
   test('점검 실패 항목은 이름만 옮긴다', async () => {

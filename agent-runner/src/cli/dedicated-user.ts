@@ -1,7 +1,8 @@
 import { realpathSync } from 'node:fs';
 import { isAbsolute, join, normalize } from 'node:path';
 import type { Agent } from '../api/generated/client.ts';
-import type { RunCommand } from '../readiness/command.ts';
+import { createRunCommand, type RunCommand } from '../readiness/command.ts';
+import { probeUserScope, withUserScope } from '../exec/scope.ts';
 import { PENDING_ISOLATION, type IsolationLayer, type Launch } from './isolation.ts';
 
 /**
@@ -20,7 +21,7 @@ export interface DedicatedUserConfig {
   sudo?: string;
 }
 
-export type DedicatedUserCode = 'agent_config_invalid' | 'cwd_outside_agent_root' | 'binary_outside_agent_root';
+export type DedicatedUserCode = 'agent_config_invalid' | 'cwd_outside_agent_root' | 'binary_outside_agent_root' | 'agent_permissions_unrestored';
 
 export class DedicatedUserError extends Error {
   readonly code: DedicatedUserCode;
@@ -175,11 +176,15 @@ export interface IsolationChoice {
 }
 
 /**
- * 준비 점검에서 격리 계층을 고른다.
+ * 준비 점검과 실행 직전에 격리 계층을 고른다.
  * - `AWBS_AGENT_USER`가 없으면(=테스트·미설치 PC) 지금처럼 `PENDING_ISOLATION`(실제 실행 거부).
  * - 있으면 래퍼 `check`를 Agent 계정으로 실제로 돌려 본다. 「ok」가 아니면 거부를 유지한다.
  *   - 왜: 설정만 믿으면 sudoers·래퍼·WSL 보호가 빠진 PC에서 격리된 줄 알고 실행하게 된다.
  *   - 예: 부팅 뒤 /run/WSL 보호 서비스가 아직 안 돌았으면 `fail wsl_interop_accessible`로 거부된다.
+ * - 그다음 사용자 cgroup scope를 실제로 한 번 만들어 본다(`probeUserScope`). 못 만들면 거부를 유지한다.
+ *   - 왜: Runner는 Agent 계정 프로세스에 신호를 보낼 수 없다. scope 없이 띄우면 그룹을 빠져나간 Agent 자손을 끝냈다고 증명할 수 없다.
+ *   - 예: PC를 재시작했는데 linger가 꺼져 있고 아무도 로그인하지 않았으면 사용자 systemd가 없어 거부된다.
+ * - 둘 다 통과하면 「전용 계정 + 사용자 scope」 계층을 돌려준다. 모든 세션은 `systemd-run --user --scope -- sudo -n -u awbs-agent -- 래퍼 run …`으로 뜬다.
  */
 export async function selectIsolation(env: NodeJS.ProcessEnv, run: RunCommand, deps: DedicatedUserDeps = {}): Promise<IsolationChoice> {
   let cfg: DedicatedUserConfig | null;
@@ -196,7 +201,9 @@ export async function selectIsolation(env: NodeJS.ProcessEnv, run: RunCommand, d
     const items = result.stdout.split('\n').map((line) => /^fail ([a-z_]+)$/.exec(line.trim())?.[1]).filter(Boolean);
     return { isolation: PENDING_ISOLATION, reason: `전용 Agent 계정 점검 실패${items.length ? `: ${items.join(', ')}` : '(sudoers·래퍼 확인 필요)'}` };
   }
-  return { isolation: dedicatedUserIsolation(cfg, deps), reason: null };
+  const scope = await probeUserScope(run);
+  if (scope) return { isolation: PENDING_ISOLATION, reason: scope };
+  return { isolation: withUserScope(dedicatedUserIsolation(cfg, deps)), reason: null };
 }
 
 /** 로그인 상태를 묻는 고정 인자(준비 점검·CLI 업데이트 무과금 점검이 쓰는 모양). */
@@ -227,4 +234,18 @@ export function agentLoginRun(cfg: DedicatedUserConfig, base: RunCommand, deps: 
     }
     return base(cmd, args);
   };
+}
+
+/**
+ * 작업 폴더를 지우기 전에, Agent가 지운 권한을 래퍼 `fix-perms`(Agent 계정)로 되돌린다.
+ * - 부르기 전에 그 작업 폴더를 쓰는 Agent 프로세스가 0개여야 한다. 사용자 scope 정리가 끝난 세션이면 이 조건을 지킨다.
+ * - 래퍼가 「fixed」를 말하지 않으면(종료 코드 4 등) 예외다. 이때 작업 폴더를 지웠다고 처리하지 않는다(isolation.md §9).
+ * 예: Agent가 `chmod 000 build/`를 했으면 Runner는 그 폴더를 열 수 없어 지우지 못한다. fix-perms가 Runner 권한을 되돌린다.
+ */
+export async function restoreAgentPermissions(path: string, run: RunCommand = createRunCommand({ env: SUDO_ENV, timeoutMs: 120_000 })): Promise<void> {
+  const control = agentControl({ user: AGENT_USER, root: AGENT_ROOT, exec: AGENT_EXEC }, { kind: 'fix-perms', path });
+  const result = await run(control.file, control.args);
+  if (result.code !== 0 || result.stdout.trim() !== 'fixed') {
+    throw new DedicatedUserError('agent_permissions_unrestored', 'Agent가 바꾼 파일 권한을 되돌리지 못해 작업 폴더를 지우지 않습니다.');
+  }
 }

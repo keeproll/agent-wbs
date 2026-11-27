@@ -4,6 +4,7 @@ import { constants } from 'node:fs';
 import { chmod, link, lstat, mkdir, open, readFile, readdir, rename, rm, statfs, writeFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { basename, dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
+import { AGENT_ROOT, restoreAgentPermissions } from '../cli/dedicated-user.ts';
 import { atomicWrite } from '../state/files.ts';
 import { parseCommits, parseRawNumstat, type InputDiff, type InputObservation } from './inputs.ts';
 
@@ -245,12 +246,18 @@ async function runWithCode(cwd: string, args: string[], input?: Buffer | string,
   });
 }
 
-async function removeReadonly(path: string): Promise<void> {
+/**
+ * 읽기 전용 표시를 풀며 지운다. `dirMode`는 지우기 전에 폴더에 주는 권한이다.
+ * 전용 계정 배치의 작업 폴더는 0o770을 쓴다. 왜: 0o700으로 바꾸면 ACL 상한(mask)이 `---`가 되어 Agent가 그 폴더에 못 들어간다.
+ *   그러면 Agent가 지운 권한을 되돌릴 래퍼 `fix-perms`(Agent 계정으로 돈다)도 들어가지 못해 실패한다(M8 전 실계정 시험에서 재현).
+ */
+async function removeReadonly(path: string, dirMode = 0o700): Promise<void> {
   const info = await stat(path);
   if (!info) return;
   if (info.isDirectory() && !info.isSymbolicLink()) {
-    await chmod(path, 0o700);
-    for (const name of await readdir(path)) await removeReadonly(join(path, name));
+    // 남의 계정(Agent) 폴더는 권한 숫자를 바꿀 수 없다(EPERM). 그 폴더는 fix-perms가 준 ACL로 들어간다.
+    if (info.uid === process.getuid?.()) await chmod(path, dirMode);
+    for (const name of await readdir(path)) await removeReadonly(join(path, name), dirMode);
   }
   await rm(path, { recursive: true, force: true });
 }
@@ -281,6 +288,11 @@ export type PushGate = ((operation: { kind: 'branch_push'; branch: string; remot
 export interface GitLayout {
   /** 예: /srv/agentwbs. 그 아래 `worktrees/<저장소>`·`inputs/<저장소>`를 쓴다. */
   agentRoot?: string | null;
+  /**
+   * 작업 폴더 삭제가 권한 문제로 막혔을 때 Agent 파일 권한을 되돌리는 방법(래퍼 `fix-perms`).
+   * 생략하면 `agentRoot`가 고정 작업 영역(/srv/agentwbs)일 때만 실제 래퍼를 쓴다. null이면 쓰지 않는다. 시험은 가짜를 넣는다.
+   */
+  restorePermissions?: ((path: string) => Promise<void>) | null;
 }
 
 /** 입력 복사의 임시 폴더 접두사. 점으로 시작하므로 `inputIds()`(입력 이름)에 섞이지 않는다. */
@@ -302,6 +314,7 @@ export class GitRepository {
   private readonly statePath: string;
   /** 전용 계정 격리 사용 여부. 쓰면 Agent가 들어갈 폴더를 그룹에도 연다(작업 폴더 0o770, 모음 폴더 0o750). */
   private readonly shared: boolean;
+  private readonly restorePermissions: ((path: string) => Promise<void>) | null;
   private registration: Registration | undefined;
 
   private constructor(home: string, repositoryId: string, layout: GitLayout = {}) {
@@ -309,6 +322,8 @@ export class GitRepository {
     this.repositoryId = repositoryId;
     const area = layout.agentRoot ?? home;
     this.shared = Boolean(layout.agentRoot);
+    this.restorePermissions = layout.restorePermissions !== undefined ? layout.restorePermissions
+      : layout.agentRoot === AGENT_ROOT ? (path) => restoreAgentPermissions(path) : null;
     this.path = join(home, 'repos', repositoryId);
     this.worktrees = join(area, 'worktrees', repositoryId);
     this.inputs = join(area, 'inputs', repositoryId);
@@ -733,7 +748,7 @@ export class GitRepository {
       if (entry.branch && entry.startCommit) {
         await this.branch(entry.branch);
       }
-      await removeReadonly(path);
+      await this.removeAgentTree(path);
       if (entry.branch && entry.startCommit) {
         const ref = `refs/heads/${entry.branch}`;
         const current = (await this.git(['rev-parse', '--verify', '--quiet', ref], undefined, undefined, [0, 1])).toString().trim();
@@ -742,6 +757,21 @@ export class GitRepository {
       await this.git(['update-ref', '-d', `refs/agent-results/${worktreeId}`]);
       await this.saveRegistration({ ...record, worktrees: record.worktrees.filter((value) => value.id !== worktreeId) });
     });
+  }
+
+  /**
+   * 작업 폴더를 지운다. 전용 계정 배치에서 Agent가 자기 파일 권한을 지워 막히면(EACCES·EPERM)
+   * 래퍼 `fix-perms`로 Runner 권한을 되돌린 뒤 한 번만 다시 지운다. 되돌리지 못하면 지우지 않은 채 예외다.
+   */
+  private async removeAgentTree(path: string): Promise<void> {
+    const dirMode = this.shared ? 0o770 : 0o700;
+    try { await removeReadonly(path, dirMode); }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? '';
+      if (!this.shared || !this.restorePermissions || !['EACCES', 'EPERM'].includes(code)) throw error;
+      await this.restorePermissions(path);
+      await removeReadonly(path, dirMode);
+    }
   }
 
   private async tree(commit: string): Promise<TreeEntry[]> {

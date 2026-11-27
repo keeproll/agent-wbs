@@ -5,10 +5,16 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import type { ApiRequest } from '../api/client.ts';
 import { processGroupEmpty } from '../cleanup/reset.ts';
 import { atomicWrite } from '../state/files.ts';
+import { clearScope, validScopeUnit } from './scope.ts';
 export type Proof = ApiRequest<'releaseJob'>['body']['proof'];
 export interface Hold { job: string; hostId: string; bootId: string; processGroup: number | null }
 export interface LaunchJob { id: string; fence: number; epoch: number }
-export interface LaunchRecord { launchId: string; job: LaunchJob; hostId: string; bootId: string; pgid: number | null; startTime: string | null; sessionId?: number; completedAt?: string; createdAfter: string; cgroup: null }
+/**
+ * launch 한 번의 정체성 기록.
+ * - `cgroup`은 서버 보고용(`reportJobProcess.cgroup`)이라 지금은 늘 null이다. 서버 보유에 cgroup이 있으면 그룹 증거로 해제할 수 없기 때문이다.
+ * - `scope`는 이 PC 안에서만 쓰는 사용자 cgroup scope 이름이다. 있으면 정리할 때 scope를 비운 것까지 확인해야 종료 증거를 낸다.
+ */
+export interface LaunchRecord { launchId: string; job: LaunchJob; hostId: string; bootId: string; pgid: number | null; startTime: string | null; sessionId?: number; completedAt?: string; createdAfter: string; cgroup: null; scope?: string }
 
 interface Proc { pid: number; ppid: number; pgid: number; sessionId: number; startTime: string; launchId: string | undefined }
 const gone = (e: unknown) => ['ENOENT', 'ESRCH'].includes((e as NodeJS.ErrnoException).code ?? '');
@@ -183,8 +189,11 @@ export class Launches {
   constructor(home: string, identity: { hostId: string; bootId: string }) { this.home = home; this.identity = identity; }
   get directory(): string { return join(this.home, 'state', 'launches'); }
 
-  async create(job: LaunchJob): Promise<LaunchRecord> {
-    const record: LaunchRecord = { launchId: randomUUID(), job, ...this.identity, pgid: null, startTime: null, createdAfter: (await processInfo(process.pid)).startTime, cgroup: null };
+  /** `scope`: 이 launch를 넣을 사용자 scope 이름. 프로세스를 띄우기 전에 기록해 두어야 Runner가 죽어도 다음 대조가 scope를 찾는다. */
+  async create(job: LaunchJob, options: { scope?: string } = {}): Promise<LaunchRecord> {
+    if (options.scope !== undefined && !validScopeUnit(options.scope)) throw new Error('scope 이름이 Runner가 만든 모양이 아닙니다.');
+    const record: LaunchRecord = { launchId: randomUUID(), job, ...this.identity, pgid: null, startTime: null, createdAfter: (await processInfo(process.pid)).startTime, cgroup: null,
+      ...(options.scope !== undefined && { scope: options.scope }) };
     await this.save(record);
     return record;
   }
@@ -212,6 +221,7 @@ export class Launches {
       const r = JSON.parse(await readFile(join(this.directory, name), 'utf8')) as LaunchRecord;
       if (!r || !/^[a-f0-9-]{36}$/.test(r.launchId) || name !== `${r.launchId}.json` || typeof r.job?.id !== 'string' || !Number.isSafeInteger(r.job.fence) || !Number.isSafeInteger(r.job.epoch) || typeof r.hostId !== 'string' || typeof r.bootId !== 'string' || !/^\d+$/.test(r.createdAfter) || (r.pgid !== null && !validPid(r.pgid)) || (r.startTime !== null && !/^\d+$/.test(r.startTime))) throw new Error('launch 기록이 손상됐습니다.');
       if ((r.sessionId !== undefined && !validPid(r.sessionId)) || (r.completedAt !== undefined && !Number.isFinite(Date.parse(r.completedAt)))) throw new Error('launch 정체성·완료 기록이 손상됐습니다.');
+      if (r.scope !== undefined && !validScopeUnit(r.scope)) throw new Error('launch scope 기록이 손상됐습니다.');
       records.push(r);
     }
     return records;
@@ -245,45 +255,86 @@ export class Launches {
     try {
       const records = (await this.list()).filter(r => r.job.id === hold.job && r.hostId === hold.hostId && r.bootId === hold.bootId);
       if (!records.length) return null;
-      const createdAfter = records.reduce((min, r) => BigInt(r.createdAfter) < min ? BigInt(r.createdAfter) : min, BigInt(records[0]?.createdAfter ?? '0'));
-      const groups = new Set<number>();
-      const known = new Map<number, string>();
-      const snapshot = await processes(createdAfter, records, known);
-      const owned = (p: Proc) => known.get(p.pid) === p.startTime;
-      for (const p of snapshot) if (owned(p)) groups.add(p.pgid);
-      for (const r of records) {
-        for (const p of snapshot) if (p.launchId === r.launchId) groups.add(p.pgid);
-        if (r.pgid !== null && !r.completedAt) {
-          const leader = snapshot.find(p => p.pid === r.pgid);
-          if (leader && leader.startTime !== r.startTime) {
-            if (!orphan) return null;
-            continue;
-          }
-          // 원래 leader가 사라져도 session ID를 쓰는 자손이 있으면 그 번호는 아직 재사용될 수 없다.
-          for (const p of snapshot) if (p.sessionId === (r.sessionId ?? r.pgid) && BigInt(p.startTime) >= BigInt(r.startTime ?? '0')) groups.add(p.pgid);
-          if (leader) groups.add(r.pgid);
-          else if (!orphan && !processGroupEmpty(r.pgid) && !groups.has(r.pgid)) return null;
-        }
+      const scoped = records.filter(r => r.scope !== undefined && !r.completedAt);
+      if (!scoped.length) return await this.#reconcileGroups(hold, records, graceMs, orphan);
+      // 사용자 scope 순서: ① scope 비우기 → ② 그룹 대조(scope가 생기기 전의 대기 셸·systemd-run) → ③ scope 다시 비우고 확인.
+      // 왜 두 번 비우나: ①과 ② 사이에 대기 셸이 허가를 받아 scope를 새로 만들 수 있다. 그룹이 빈 뒤에는 새 scope를 만들 프로세스가 없다.
+      for (let attempt = 0; ; attempt++) {
+        if (!await this.#clearScopes(scoped)) return null;
+        const proof = await this.#reconcileGroups(hold, records, graceMs, orphan);
+        if (proof) return await this.#clearScopes(scoped) ? proof : null;
+        // 그룹 대조가 「모름」이면 그 사이 scope에 들어간 프로세스 때문일 수 있다. 한 번만 다시 해 본다.
+        if (attempt >= 1) return null;
       }
-      if (!orphan && hold.processGroup !== null && !records.some(r => r.pgid === hold.processGroup)) return null;
-      for (const g of groups) await signalOwnedGroup(g, snapshot.filter(p => owned(p)), 'SIGTERM');
-      const empty = async () => {
-        const current = await processes(createdAfter, records, known);
-        return [...groups].every(processGroupEmpty) && !current.some(p => owned(p));
-      };
-      let deadline = performance.now() + graceMs;
-      while (!(await empty()) && performance.now() < deadline) await sleep(10);
-      if (!(await empty())) {
-        // 다시 대조한다. 대기 중 번호가 재사용됐으면 새 프로세스를 죽이지 않는다.
-        const current = await processes(createdAfter, records, known);
-        // TERM 처리 중 새 그룹으로 분리된 자손도 다시 묶는다(M5-03 실커널 재현).
-        for (const p of current) if (owned(p)) groups.add(p.pgid);
-        for (const g of groups) await signalOwnedGroup(g, current.filter(p => owned(p)), 'SIGKILL');
-        deadline = performance.now() + 1000;
-        while (!(await empty()) && performance.now() < deadline) await sleep(10);
-      }
-      if (!(await empty())) return null;
-      return hold.processGroup === null ? { kind: 'no_process', bootId: hold.bootId } : { kind: 'group_empty', bootId: hold.bootId, processGroup: hold.processGroup };
     } catch (e) { this.problem = e instanceof Error ? e.message : 'launch 대조 오류'; return null; }
   }
+
+  /**
+   * 기록된 scope를 모두 비운다. scope 안의 sudo(root)·Agent 계정 프로세스는 Runner가 신호를 보낼 수 없어 이 방법으로만 끝난다.
+   * 비운 뒤에는 그 launch의 leader(sudo였던 프로세스)가 Runner에게 회수될 때까지 잠깐 기다린다.
+   * 왜: 회수 전에는 좀비(끝났지만 부모가 아직 거두지 않은 프로세스)가 그룹에 남아 그룹이 비지 않은 것으로 보인다.
+   */
+  async #clearScopes(records: LaunchRecord[]): Promise<boolean> {
+    for (const r of records) {
+      if (!r.scope || !await clearScope(r.scope)) {
+        this.problem = 'Agent 실행 scope를 비우지 못했습니다.';
+        return false;
+      }
+    }
+    for (const r of records) {
+      if (r.pgid === null) continue;
+      const deadline = performance.now() + 1_000;
+      // leader가 아직 Runner 계정 프로세스(허가 대기 셸·systemd-run)면 그룹 대조가 직접 끝낸다. 기다리지 않는다.
+      while (!processGroupEmpty(r.pgid) && !await runnerOwned(r.pgid) && performance.now() < deadline) await sleep(10);
+    }
+    return true;
+  }
+
+  async #reconcileGroups(hold: Hold, records: LaunchRecord[], graceMs: number, orphan: boolean): Promise<Proof | null> {
+    const createdAfter = records.reduce((min, r) => BigInt(r.createdAfter) < min ? BigInt(r.createdAfter) : min, BigInt(records[0]?.createdAfter ?? '0'));
+    const groups = new Set<number>();
+    const known = new Map<number, string>();
+    const snapshot = await processes(createdAfter, records, known);
+    const owned = (p: Proc) => known.get(p.pid) === p.startTime;
+    for (const p of snapshot) if (owned(p)) groups.add(p.pgid);
+    for (const r of records) {
+      for (const p of snapshot) if (p.launchId === r.launchId) groups.add(p.pgid);
+      if (r.pgid !== null && !r.completedAt) {
+        const leader = snapshot.find(p => p.pid === r.pgid);
+        if (leader && leader.startTime !== r.startTime) {
+          if (!orphan) return null;
+          continue;
+        }
+        // 원래 leader가 사라져도 session ID를 쓰는 자손이 있으면 그 번호는 아직 재사용될 수 없다.
+        for (const p of snapshot) if (p.sessionId === (r.sessionId ?? r.pgid) && BigInt(p.startTime) >= BigInt(r.startTime ?? '0')) groups.add(p.pgid);
+        if (leader) groups.add(r.pgid);
+        else if (!orphan && !processGroupEmpty(r.pgid) && !groups.has(r.pgid)) return null;
+      }
+    }
+    if (!orphan && hold.processGroup !== null && !records.some(r => r.pgid === hold.processGroup)) return null;
+    for (const g of groups) await signalOwnedGroup(g, snapshot.filter(p => owned(p)), 'SIGTERM');
+    const empty = async () => {
+      const current = await processes(createdAfter, records, known);
+      return [...groups].every(processGroupEmpty) && !current.some(p => owned(p));
+    };
+    let deadline = performance.now() + graceMs;
+    while (!(await empty()) && performance.now() < deadline) await sleep(10);
+    if (!(await empty())) {
+      // 다시 대조한다. 대기 중 번호가 재사용됐으면 새 프로세스를 죽이지 않는다.
+      const current = await processes(createdAfter, records, known);
+      // TERM 처리 중 새 그룹으로 분리된 자손도 다시 묶는다(M5-03 실커널 재현).
+      for (const p of current) if (owned(p)) groups.add(p.pgid);
+      for (const g of groups) await signalOwnedGroup(g, current.filter(p => owned(p)), 'SIGKILL');
+      deadline = performance.now() + 1000;
+      while (!(await empty()) && performance.now() < deadline) await sleep(10);
+    }
+    if (!(await empty())) return null;
+    return hold.processGroup === null ? { kind: 'no_process', bootId: hold.bootId } : { kind: 'group_empty', bootId: hold.bootId, processGroup: hold.processGroup };
+  }
+}
+
+/** 그 번호의 프로세스가 지금 Runner 계정 소유인가. 없으면 false. */
+async function runnerOwned(pid: number): Promise<boolean> {
+  try { return (await stat(`/proc/${String(pid)}`)).uid === process.getuid?.(); }
+  catch (e) { if (gone(e)) return false; throw e; }
 }

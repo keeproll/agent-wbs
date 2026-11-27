@@ -9,7 +9,8 @@ import { githubWriteGate } from './github/write-gate.ts';
 import { createResetCleanup, type ResetCleanupDeps } from './cleanup/reset.ts';
 import { CliUpdater, cliBinary, type CliRegistry } from './cli-update/manager.ts';
 import { cliAwareRun, cliEnvironment } from './cli-update/registry.ts';
-import { AGENT_USER, agentIsolationConfig, agentLoginRun } from './cli/dedicated-user.ts';
+import { AGENT_USER, agentIsolationConfig, agentLoginRun, selectIsolation } from './cli/dedicated-user.ts';
+import type { IsolationLayer } from './cli/isolation.ts';
 import { lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { repositoryIdFor } from './git/identity.ts';
@@ -32,6 +33,7 @@ import { Execution, type ExecutionOptions } from './exec/session.ts';
 import { Launches } from './exec/launches.ts';
 import { CiJobs, type CiJobsOptions } from './ci/jobs.ts';
 import { AttemptFlow, type AttemptFlowOptions } from './jobs/attempt-flow.ts';
+import { bindTaskCheck, type TaskCheckSources } from './jobs/task-check.ts';
 
 /** 세션 실행 계층(M5)이 시도 하나를 실행하는 동안 등록하는 보유. 지금(M4)은 비어 있다. */
 export interface ActiveSession extends SessionState {
@@ -78,8 +80,12 @@ export interface RunnerAppDeps {
   agentRoot?: string | null;
   /** Q-08 승인 전에는 fake 명령 실행기만 주입한다. */
   ci?:Pick<CiJobsOptions,'repo'|'execute'|'collectTests'>;
-  /** 검증한 결과 수집 공급원이 연결된 경우에만 시도 흐름을 시작한다. */
-  jobs?: Pick<AttemptFlowOptions, 'collect' | 'taskCheck'>;
+  /**
+   * 검증한 결과 수집 공급원이 연결된 경우에만 시도 흐름을 시작한다.
+   * `taskCheck`는 실제 ① 공급원(`TaskCheckSources`)을 넘긴다. 앱이 자기 GitHub 클라이언트·Execution·Runner로 `bindTaskCheck`를 부른다.
+   * 함수를 직접 넘기는 모양은 시험용이다(실제 ①과 PR 생성을 거치지 않는다).
+   */
+  jobs?: Pick<AttemptFlowOptions, 'collect'> & { taskCheck: AttemptFlowOptions['taskCheck'] | TaskCheckSources };
 }
 
 /** 서버 정책을 받기 전 입력 확인 기본 주기(5분, 서버 정책 inputCheckMinutes의 기본값과 같음). */
@@ -119,6 +125,8 @@ export class RunnerApp {
   /** 치명적 오류(인증 실패 등) 발생 시 앱 전체를 멈추는 내부 신호(P1-3). */
   #halt: ((error: unknown) => void) | undefined;
   #tokenSource: TokenSource | undefined;
+  /** 마지막으로 알린 격리 보류 이유. 같은 이유를 매번 다시 경고하지 않는다. */
+  #isolationReason: string | null | undefined;
 
   constructor(d: RunnerAppDeps) {
     this.#d = d;
@@ -232,14 +240,20 @@ export class RunnerApp {
       budget: role => this.runner.policy?.subagentBudget[role] ?? 0,
       updater: this.updater,
       prepare: () => Promise.reject(new Error('작업 폴더 준비 공급원이 연결되지 않았습니다.')),
+      // 전용 계정 격리(Q-08)면 실행 직전마다 래퍼 check와 사용자 scope를 다시 확인한다. 시험이 격리 계층을 직접 주면 그대로 쓴다.
+      ...(d.agentRoot && !d.execution?.isolation && { recheckIsolation: () => this.refreshIsolation() }),
       ...d.execution,
     });
     if (d.ci && this.github) this.ci = new CiJobs({ ...d.ci,api:d.api,outbox:this.runner.outbox,runnerId:runnerId(),
       directory:join(d.home,'state','ci'),epoch:() => d.state.snapshot.epoch,ready:() => this.runner.ready,
       identity:{ get hostId() { return app.identity.hostId; },get bootId() { return app.identity.bootId; } },
       github:this.github.client,heavy:this.heavy,warn:d.warn });
-    if (d.jobs) this.jobs = new AttemptFlow({
+    const taskCheck = d.jobs?.taskCheck;
+    if (d.jobs && taskCheck) this.jobs = new AttemptFlow({
       ...d.jobs, execution: this.execution, runner: this.runner, api: d.api,
+      // 실제 ①은 앱의 GitHub 클라이언트로 PR을 연다. GitHub 설정이 없으면 null(PR 없이 보고, 서버가 통합을 보류).
+      taskCheck: typeof taskCheck === 'function' ? taskCheck
+        : bindTaskCheck({ ...taskCheck, api: d.api, runner: this.runner, execution: this.execution, github: this.github?.client ?? null }),
       epoch: () => d.state.snapshot.epoch,
       identity: { get hostId() { return app.identity.hostId; }, get bootId() { return app.identity.bootId; } },
       onError: error => {
@@ -247,6 +261,25 @@ export class RunnerApp {
         else d.warn(`시도 흐름 실패: ${message(error)}`);
       },
     });
+  }
+
+  /**
+   * Agent 실행 격리 계층을 고른다(Q-08). 준비 점검 뒤와 실행 직전마다 부른다.
+   * - 전용 계정(`agentRoot`)이 없으면 지금 계층을 그대로 둔다. 기본은 실행 거부다.
+   * - 있으면 `selectIsolation`(래퍼 check + 사용자 scope 시험)을 돌려, 통과하면 「전용 계정 + 사용자 scope」, 아니면 거부로 바꾼다.
+   * - 보류 이유가 바뀔 때만 경고한다. 예: 「전용 Agent 계정 점검 실패: wsl_interop_accessible」.
+   * 왜 매번 다시 보나: 준비 점검 뒤에도 WSL 보호·사용자 systemd 상태가 바뀔 수 있다(isolation.md §11).
+   */
+  async refreshIsolation(): Promise<IsolationLayer | undefined> {
+    if (!this.#d.agentRoot || this.#d.execution?.isolation) return this.execution.isolation;
+    const choice = await selectIsolation({ AWBS_AGENT_USER: AGENT_USER }, this.#run);
+    const layer = choice.reason === null ? choice.isolation : undefined;
+    if (choice.reason !== this.#isolationReason) {
+      if (choice.reason !== null) this.#d.warn(`실제 Agent 실행 보류: ${choice.reason}`);
+      this.#isolationReason = choice.reason;
+    }
+    this.execution.setIsolation(layer);
+    return layer;
   }
 
   get identity(): { hostId: string; bootId: string } {
@@ -380,6 +413,7 @@ export class RunnerApp {
     if (!await this.execution.recover(undefined, signal)) throw new Error('launch 대조 실패: unconfirmed 보유가 있어 새 실행을 보류합니다.');
     await this.updater.recover();
     await this.checkReadiness();
+    await this.refreshIsolation();
     await this.reportModels();
     await this.checkGithub(signal).catch((error: unknown) => {
       if (signal?.aborted) throw error;
@@ -405,6 +439,7 @@ export class RunnerApp {
     }, { intervalMs: 1000, onError: onError('시도 예약') }));
     this.#timers.push(scheduleDaily(async () => {
       await this.checkReadiness();
+      await this.refreshIsolation();
       if (this.#d.cliUpdates !== false) {
         await this.updater.check();
         await this.updater.applyPending();

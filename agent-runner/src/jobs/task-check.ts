@@ -7,7 +7,7 @@ import { pushGate, serverWriteGuard, type OwnershipGuard } from '../github/write
 import type { Execution } from '../exec/session.ts';
 import { reportEvent, type AttemptContext } from './attempt-flow.ts';
 
-interface TaskCheckDeps {
+export interface TaskCheckDeps {
   api: ApiClient;
   runner: Runner;
   execution: Execution;
@@ -22,6 +22,14 @@ interface TaskCheckDeps {
    */
   github: Pick<GitHubClient, 'ensurePullRequest' | 'findPullRequest' | 'permissions' | 'assertWritable'> | null;
 }
+
+/**
+ * 앱 밖(main)이 넘기는 ① 공급원. 공유 인스턴스(api·runner·execution)와 GitHub 클라이언트는 넣지 않는다.
+ * 앱(`RunnerApp`)이 자기 것으로 채워 `bindTaskCheck`를 부른다.
+ * 왜: GitHub 클라이언트는 배포 키 검사·권한 거부 보고·토큰 무효화가 걸린 앱의 것 하나만 써야 한다.
+ *   밖에서 다른 클라이언트를 만들어 넘기면 PR 생성이 그 관문을 지나지 않는다(M5-7 통합 보고 「알려진 한계」).
+ */
+export type TaskCheckSources = Omit<TaskCheckDeps, 'api' | 'runner' | 'execution' | 'github'>;
 
 /** ① 결과와 이번 시도가 쓴 PR(번호·head 브랜치). 시도 결과 보고에도 그대로 넣는다. */
 export type BoundTaskCheckResult = TaskCheckResult & { pullRequest?: { number: number; head: string } };
