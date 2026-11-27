@@ -1058,7 +1058,7 @@ export const ReportSnapshot = Type.Object(
     projectName: Nullable(Str),
     // 이름의 출처(Codex 리뷰 4차 P2-2).
     // snapshot = 생성할 때 기록(새 보고서는 늘 이것이고 이름이 반드시 있다).
-    // filled = 옛 보고서에 마이그레이션 0047이 채움(이름을 바꾼 적 없는 프로젝트라 지금 이름이 그때 이름).
+    // filled = 옛 보고서에 마이그레이션 0038(옛 0047)이 채움(이름을 바꾼 적 없는 프로젝트라 지금 이름이 그때 이름).
     // unknown = 옛 보고서인데 이름을 바꾼 적이 있어 그때 이름을 알 수 없음(projectName = null, 화면·PDF는 「이름 미상(기존 보고서)」).
     // 출처와 이름이 맞는지(snapshot·filled는 이름 있음, unknown은 null)는 snapshotProblem()이 검사한다.
     projectNameStatus: AnyOf('snapshot', 'filled', 'unknown'),

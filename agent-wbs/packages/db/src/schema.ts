@@ -1303,7 +1303,7 @@ export const mailSettings = pgTable(
     checked_at: at('checked_at'),
     status: text(),
     error: text(),
-    // M6-03(0049): 편집 버전. 연결 확인 결과를 적어도 바뀌지 않는다.
+    // M6-03(0039, 옛 0049): 편집 버전. 연결 확인 결과를 적어도 바뀌지 않는다.
     settings_version: at('settings_version'),
   },
   (t) => [check('mail_singleton', sql`${t.singleton}`)],
@@ -1341,7 +1341,7 @@ export const mailOutbox = pgTable(
     state: deliveryState().notNull(),
     next_at: at('next_at'),
     error: text(),
-    // M6-03(0049): 발송 당시의 보기·사유·제목·첨부, 자동 재시도 여부, SMTP 호출 시작 시각
+    // M6-03(0039, 옛 0049): 발송 당시의 보기·사유·제목·첨부, 자동 재시도 여부, SMTP 호출 시작 시각
     view: reportView().notNull(),
     reason: text().notNull(),
     subject: text().notNull(),
@@ -1372,7 +1372,7 @@ export const mailLog = pgTable('mail_log', {
   state: deliveryState().notNull(),
   error: text(),
   at: at('at').notNull(),
-  // M6-03(0049): 어느 큐 행의 몇 번째 발송 결과인지
+  // M6-03(0039, 옛 0049): 어느 큐 행의 몇 번째 발송 결과인지
   outbox: uuid(),
   try_no: integer(),
 }, (t) => [check('mail_log_try_positive', sql`${t.try_no} is null or ${t.try_no}>0`)]);

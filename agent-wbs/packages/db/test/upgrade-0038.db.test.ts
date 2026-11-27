@@ -1,9 +1,10 @@
 /**
- * 0047: 이름 없는 옛 보고서 스냅샷(M6-01 형식)의 프로젝트 이름(Codex 리뷰 P2, 재리뷰 3차 P2-2). 추측하지 않는다.
+ * 0038(옛 0047): 이름 없는 옛 보고서 스냅샷(M6-01 형식)의 프로젝트 이름(Codex 리뷰 P2, 재리뷰 3차 P2-2). 추측하지 않는다.
  *
  * - 이름 변경 기록이 전혀 없는 프로젝트: 지금 이름을 넣는다(이름이 한 번도 바뀌지 않았으니 그때 이름과 같다). 출처 filled.
  * - 이름 변경 기록이 하나라도 있는 프로젝트: 그때 이름이 확실하지 않으므로 projectName = null, 출처 unknown.
  *   (DB에 커밋 시각이 없어, 변경이 보고서 앞인지 뒤인지 확정할 수 없다. 트랜잭션 번호 등으로 추정하지 않는다.)
+ * - M6 통합: 스냅샷에 basis.asOf(T)가 있고 M6-01 상태 이력(0036)이 T를 덮으면, 이력의 커밋 순서로 판단한다(아래 「이력」 시험).
  * - 리뷰어 재현(편집과 보고서가 겹치는 세 순서)이 모두 unknown이 되는지 본다. 시나리오마다 DB를 따로 만든다(프로젝트는 DB마다 하나).
  */
 import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -18,7 +19,7 @@ import { createPool, recreateTestDatabase, runMigrations } from '../src/index.ts
 type Pool = ReturnType<typeof createPool>;
 interface Db { query: Pool['query'] }
 
-/** 시나리오마다 따로 만드는 0047 앞 단계 DB(프로젝트는 DB마다 하나뿐이다). */
+/** 시나리오마다 따로 만드는 0038(옛 0047) 앞 단계 DB(프로젝트는 DB마다 하나뿐이다). */
 async function legacyDb(name: string): Promise<Pool> {
   const url = new URL(inject('testDatabaseUrl'));
   url.pathname += `_legacy47_${name}`;
@@ -29,8 +30,8 @@ async function legacyDb(name: string): Promise<Pool> {
     await cp(fileURLToPath(new URL('../migrations/', import.meta.url)), folder, { recursive: true });
     const path = join(folder, 'meta/_journal.json');
     const journal = JSON.parse(await readFile(path, 'utf8')) as { entries: { tag: string }[] };
-    // 0047 바로 앞까지만 올린다(M6-01 형식 DB).
-    journal.entries = journal.entries.filter((e) => e.tag < '0047');
+    // 0038 바로 앞까지만 올린다(M6-01 형식 DB, 0036·0037 상태 이력 포함).
+    journal.entries = journal.entries.filter((e) => e.tag < '0038');
     await writeFile(path, JSON.stringify(journal));
     await migrate(drizzle(pool), { migrationsFolder: folder });
   } finally { await rm(folder, { recursive: true }); }
@@ -149,3 +150,42 @@ test('채운 뒤에도 보고서는 수정할 수 없다(append_only 트리거�
   await expect(dated.query("update reports set reason='x' where id=$1", [ids.before])).rejects.toThrow();
   expect((await dated.query("select tgenabled from pg_trigger where tgname='append_only' and tgrelid='public.reports'::regclass")).rows).toEqual([{ tgenabled: 'O' }]);
 });
+
+/** M6-01 보고서처럼 기준점(awbs_report_anchor, 0037)을 잡는다. 마이크로초 6자리 UTC. */
+const anchor = async (db: Db) => (await db.query<{ at: string }>(
+  `select to_char(public.awbs_report_anchor() at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') at`)).rows[0]?.at ?? '';
+const withBasis = (asOf: string) => ({ summary: { taskCount: 1 }, basis: { asOf } });
+
+test('이력(M6 통합): 이름을 바꾼 뒤 기준점을 잡은 보고서는, 기준점 뒤로 이름이 바뀌지 않았으면 그 이름(filled)이다', async () => {
+  const db = await legacyDb('log_after');
+  pools.push(db);
+  const p = await project(db, '옛 이름');
+  await rename(db, p, '옛 이름', '지금 이름');
+  const t = await anchor(db);
+  const id = await report(db, p, 'RPT-C-020', null, withBasis(t));
+  await runMigrations(db);
+  expect(await snap(db, id)).toEqual({ ...withBasis(t), projectName: '지금 이름', projectNameStatus: 'filled' });
+}, 60_000);
+
+test('이력(M6 통합): 기준점 뒤에 이름이 바뀌었으면 어느 이름인지 모르므로 unknown이다', async () => {
+  const db = await legacyDb('log_before');
+  pools.push(db);
+  const p = await project(db, 'A');
+  const t = await anchor(db);
+  const id = await report(db, p, 'RPT-C-021', null, withBasis(t));
+  await rename(db, p, 'A', 'B');
+  await runMigrations(db);
+  expect(await snap(db, id)).toEqual({ ...withBasis(t), projectName: null, projectNameStatus: 'unknown' });
+}, 60_000);
+
+test('이력(M6 통합): 기준점이 이력 시작 전이면 이력으로 판단하지 않고 옛 규칙(이름 변경 기록)을 쓴다', async () => {
+  const db = await legacyDb('log_missing');
+  pools.push(db);
+  const p = await project(db, '처음');
+  const id = await report(db, p, 'RPT-C-022', null, withBasis('2000-01-01T00:00:00.000000Z'));
+  await rename(db, p, '처음', '나중');
+  const plain = await report(db, p, 'RPT-C-023', null, withBasis('형식 아님'));
+  await runMigrations(db);
+  expect(await snap(db, id)).toEqual({ ...withBasis('2000-01-01T00:00:00.000000Z'), projectName: null, projectNameStatus: 'unknown' });
+  expect(await snap(db, plain)).toEqual({ ...withBasis('형식 아님'), projectName: null, projectNameStatus: 'unknown' });
+}, 60_000);

@@ -4974,6 +4974,18 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
+        },
+        "outbox": {
+          "name": "outbox",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "try_no": {
+          "name": "try_no",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {},
@@ -5008,7 +5020,12 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "mail_log_try_positive": {
+          "name": "mail_log_try_positive",
+          "value": "\"mail_log\".\"try_no\" is null or \"mail_log\".\"try_no\">0"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.mail_outbox": {
@@ -5096,9 +5113,82 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "view": {
+          "name": "view",
+          "type": "report_view",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "subject": {
+          "name": "subject",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "pdf": {
+          "name": "pdf",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "retried": {
+          "name": "retried",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "sent_at": {
+          "name": "sent_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "log_key": {
+          "name": "log_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "attempt": {
+          "name": "attempt",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
         }
       },
-      "indexes": {},
+      "indexes": {
+        "mail_outbox_due": {
+          "name": "mail_outbox_due",
+          "columns": [
+            {
+              "expression": "state",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "next_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {
         "mail_outbox_project_id_projects_id_fk": {
           "name": "mail_outbox_project_id_projects_id_fk",
@@ -5137,6 +5227,14 @@
             "recipient",
             "try_no"
           ]
+        },
+        "mail_outbox_log_key_unique": {
+          "name": "mail_outbox_log_key_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "project_id",
+            "log_key"
+          ]
         }
       },
       "policies": {},
@@ -5144,6 +5242,18 @@
         "mail_try_positive": {
           "name": "mail_try_positive",
           "value": "\"mail_outbox\".\"try_no\">0"
+        },
+        "mail_outbox_reason_text": {
+          "name": "mail_outbox_reason_text",
+          "value": "length(btrim(\"mail_outbox\".\"reason\"))>0"
+        },
+        "mail_outbox_subject_text": {
+          "name": "mail_outbox_subject_text",
+          "value": "length(btrim(\"mail_outbox\".\"subject\"))>0"
+        },
+        "mail_outbox_next_at": {
+          "name": "mail_outbox_next_at",
+          "value": "(\"mail_outbox\".\"state\"='retry_wait')=(\"mail_outbox\".\"next_at\" is not null)"
         }
       },
       "isRLSEnabled": false
@@ -5329,6 +5439,12 @@
         "error": {
           "name": "error",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "settings_version": {
+          "name": "settings_version",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         }
@@ -11693,5 +11809,5 @@
     "columns": {}
   },
   "id": "dbd76aec-45da-4aec-bdc0-e83757bbe3f5",
-  "prevId": "107a10f8-96f2-432b-b1eb-38ce272f0227"
+  "prevId": "7658ec89-df80-47db-b929-3ed226337ec9"
 }

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { afterAll, expect, inject, test } from 'vitest';
-import { createPool, recreateTestDatabase, runMigrations, seedDemo, type Pool } from '../src/index.ts';
+import { checkMigrationsApplied, createPool, recreateTestDatabase, runMigrations, seedDemo, type Pool } from '../src/index.ts';
 
 /*
  * M2 통합: 마이그레이션 배정 번호(0015 platform, 0016 contract_sync, 0017 usage_reset_unknown, 0018~0019 M2-08, 0020 M2-06)를
@@ -41,31 +41,53 @@ async function schemaOf(pool: Pool): Promise<string> {
   ].join('\n--\n');
 }
 
-test('빈 DB와 0014·0016(master)·0017·0018·0019·0020·0021 단계 DB가 최신으로 올린 뒤 같은 구조가 된다', async () => {
+/*
+ * M6 통합 재번호(0036~0043). 옛 번호 DB: 각 M6 작업 브랜치에서 그 작업의 마이그레이션을 옛 이름·옛 시각(when)으로 적용한 DB.
+ * - 옛 이름 파일은 같은 내용으로 만든다(hash가 같다). 옛 0047만 내용이 바뀌었으므로(이력 판단 추가) 옛 내용(fixtures)을 쓴다.
+ * - 옛 시각이 새 번호보다 커서 Drizzle만으로는 새 번호 마이그레이션을 건너뛴다. runMigrations의 보충이 채워야 한다.
+ */
+const OLD: Record<string, { tag: string; from?: string; fixture?: string }[]> = {
+  'm6-02': [{ tag: '0047_20261127_report_project_name', fixture: 'fixtures/0047_20261127_report_project_name.sql' }],
+  'm6-03': [{ tag: '0049_20261127_mail_queue', from: '0039_20261127_mail_queue' }],
+  'm6-04': [{ tag: '0051_20261127_telegram_transitions', from: '0040_20261127_telegram_transitions' }, { tag: '0052_20261127_telegram_review', from: '0041_20261127_telegram_review' }],
+  'm6-05': [{ tag: '0053_20261127_design_ledger', from: '0042_20261127_design_ledger' }, { tag: '0054_20261127_design_display_keys', from: '0043_20261127_design_display_keys' }],
+};
+
+test('빈 DB와 0014·0016(master)·0017~0025·M6 중간(0036~0042) 단계 DB, M6 옛 번호 DB가 최신으로 올린 뒤 같은 구조가 된다', async () => {
   const journalPath = fileURLToPath(new URL('../migrations/meta/_journal.json', import.meta.url));
-  const journal = JSON.parse(await readFile(journalPath, 'utf8')) as { entries: { idx: number; tag: string }[] };
+  type Entry = { idx: number; tag: string; when: number; version: string; breakpoints: boolean };
+  const journal = JSON.parse(await readFile(journalPath, 'utf8')) as { entries: Entry[] };
   expect(journal.entries.slice(15).map((e) => e.tag)).toEqual([
     '0015_20261126_platform_epoch_lock', '0016_20261126_contract_sync', '0017_20261126_usage_reset_unknown',
     '0018_20261126_message_read_touch', '0019_20261126_schedule_defaults', '0020_20261126_execution_basis',
     '0021_20261127_project_followup', '0022_20261127_evidence_reference', '0023_20261127_project_observation_version', '0024_20261127_settings_followup', '0025_20261127_setting_versions',
-    // M6-01 기간 말 재구성의 상태 기록(배정 번호 0036)
-    '0036_20261127_report_state_log', '0037_20261127_report_state_log_settings',
-    // M6-02: 옛 보고서 스냅샷에 생성 시점 프로젝트 이름 채우기(데이터만 바꾼다)
-    '0047_20261127_report_project_name',
-        // M6-03: 메일 큐
-    '0049_20261127_mail_queue',
-        // M6-04: Telegram 전이 알림
-    '0051_20261127_telegram_transitions', '0052_20261127_telegram_review',
-    '0053_20261127_design_ledger', '0054_20261127_design_display_keys']);
+    // M6 통합 재번호(옛 번호): M6-01 상태 이력 0036·0037(그대로), M6-02 이름 채움 0038(0047), M6-03 메일 큐 0039(0049),
+    // M6-04 Telegram 0040·0041(0051·0052), M6-05 설계 원장 0042·0043(0053·0054)
+    '0036_20261127_report_state_log', '0037_20261127_report_state_log_settings', '0038_20261127_report_project_name',
+    '0039_20261127_mail_queue', '0040_20261127_telegram_transitions', '0041_20261127_telegram_review',
+    '0042_20261127_design_ledger', '0043_20261127_design_display_keys']);
+  // journal 시각 = 1795740000000 + 번호(0021 이후 규칙)
+  for (const e of journal.entries.slice(26)) expect(e.when, e.tag).toBe(1795740000000 + Number(e.tag.slice(0, 4)));
   const fresh = await database('fresh');
   await runMigrations(fresh);
   const expected = await schemaOf(fresh);
-  for (const stage of [14, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]) {
+  const stages: (number | string)[] = [14, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 27, 28, 29, 31, 32, ...Object.keys(OLD)];
+  for (const stage of stages) {
     const pool = await database(String(stage));
     const folder = await mkdtemp(join(tmpdir(), `awbs-stage-${String(stage)}-`));
     try {
       await cp(fileURLToPath(new URL('../migrations/', import.meta.url)), folder, { recursive: true });
-      await writeFile(join(folder, 'meta/_journal.json'), JSON.stringify({ ...journal, entries: journal.entries.filter((e) => e.idx <= stage) }));
+      let entries: Entry[];
+      if (typeof stage === 'number') entries = journal.entries.filter((e) => e.idx <= stage);
+      else {
+        entries = journal.entries.filter((e) => e.idx <= 25);
+        for (const old of OLD[stage] ?? []) {
+          const source = old.fixture ? new URL(old.fixture, import.meta.url) : join(folder, `${old.from ?? ''}.sql`);
+          await writeFile(join(folder, `${old.tag}.sql`), await readFile(source, 'utf8'));
+          entries.push({ idx: entries.length, version: '7', when: 1795740000000 + Number(old.tag.slice(0, 4)), tag: old.tag, breakpoints: true });
+        }
+      }
+      await writeFile(join(folder, 'meta/_journal.json'), JSON.stringify({ ...journal, entries }));
       await migrate(drizzle(pool), { migrationsFolder: folder });
     } finally { await rm(folder, { recursive: true, force: true }); }
     await pool.query('select seed_system()');
@@ -98,6 +120,9 @@ test('빈 DB와 0014·0016(master)·0017·0018·0019·0020·0021 단계 DB가 �
       expect((await pool.query('select assume_rate,threshold_days from schedule_policy')).rows[0]).toEqual({ assume_rate: '0.8', threshold_days: '3' });
     }
     expect(await schemaOf(pool), `단계 ${String(stage)}`).toBe(expected);
-    expect((await pool.query<{ n: number }>('select count(*)::int n from drizzle.__drizzle_migrations')).rows[0]?.n, `단계 ${String(stage)}`).toBe(journal.entries.length);
+    // 옛 0047은 내용이 달라(hash 다름) 기록이 하나 더 남는다. 숫자 단계는 개수가 같아야 하고, 모든 단계는 누락이 없어야 한다.
+    const extra = stage === 'm6-02' ? 1 : 0;
+    expect((await pool.query<{ n: number }>('select count(*)::int n from drizzle.__drizzle_migrations')).rows[0]?.n, `단계 ${String(stage)}`).toBe(journal.entries.length + extra);
+    await checkMigrationsApplied(pool);
   }
-}, 120_000);
+}, 600_000);
