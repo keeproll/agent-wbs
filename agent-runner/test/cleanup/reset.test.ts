@@ -74,7 +74,7 @@ test('P1-1: 실제 reset_project payload(기준 있음)를 받아 PR 닫기·브
 });
 
 test('보유별 증거: 예약 전 no_process, 부팅 변경 boot_changed, 빈 그룹 group_empty, 슬롯 없는 잠금 no_process', async () => {
-  const cleanup = createResetCleanup({ home, identity, groupEmpty: (pgid) => pgid === 77 });
+  const cleanup = createResetCleanup({ home, identity, launchCheck: h => Promise.resolve(h.processGroup === 77 ? 'none' : 'unknown') });
   const result = await cleanup(command(noBase([
     row({ job: 'j0', host_id: null, boot_id: null }),
     row({ job: 'j1', boot_id: 'old-boot', pgid: 55 }),
@@ -96,6 +96,11 @@ test('하나라도 종료를 증명하지 못하면 failed이고 git 정리를 �
     expect(result.status).toBe('failed');
     expect(result.items.map((i) => i.name)).toEqual(['hold:j']);
   }
+});
+
+test('빈 pgid라도 launch 기록을 잃었으면 초기화를 완료하지 않는다', async () => {
+  const cleanup = createResetCleanup({ home, identity, groupEmpty: () => true });
+  expect((await cleanup(command(noBase([row({ pgid: 77, slot_state: 'active' })])))).status).toBe('failed');
 });
 
 test('pgid 없는 보유는 launch 대조가 none일 때만 no_process', async () => {

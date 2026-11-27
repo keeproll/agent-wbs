@@ -203,6 +203,7 @@ export class RunnerApp {
       epoch: () => d.state.snapshot.epoch, ready: () => this.runner.ready,
       env: d.env, binaries: { Codex: this.bins.codex, Claude: this.bins.claude },
       sessions: this.sessions, heavy: this.heavy,
+      canStart: (agent, slots, sessions) => this.reporter.canStart(agent, slots, sessions),
       budget: role => this.runner.policy?.subagentBudget[role] ?? 0,
       updater: this.updater,
       prepare: () => Promise.reject(new Error('작업 폴더 준비 공급원이 연결되지 않았습니다.')),
