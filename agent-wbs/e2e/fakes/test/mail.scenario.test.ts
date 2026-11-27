@@ -1091,9 +1091,10 @@ describe('Q-13 결정 A: 외부 수신자(링크 없이 보고용 + PDF)', () =>
    * Codex 재리뷰 4 재현(fix4): 자유 입력 이메일 속 내부 호스트 · 국제화 도메인 · 소문자 내부 번호.
    * 같은 보고서를 내부 수신자(보고용 · PDF)와 외부 수신자에게 함께 보내, 외부에서만 지워지고 내부는 바뀌지 않는지 실제 메일 · 실제 Chromium PDF로 본다.
    */
-  test('[fix4] 외부: 이메일 · IDN · punycode · 소문자 번호가 메일 · PDF에서 지워진다 / 내부 보고용: 내부 용어만 빠지고 나머지는 그대로', async () => {
-    const TITLE = 'task-0007 Rp-002 문의 help@intranet.corp.example 내부.한국 intranet.xn--3e0b707e file.txt Node.js 개선';
-    const INSIDE = '문의 help@intranet.corp.example 내부.한국 intranet.xn--3e0b707e file.txt Node.js 개선'; // 내부 용어만 뺀 것(scrubInternal)
+  test('[fix4 · fix5] 외부: 이메일 · IDN · punycode · 혼합 IDN · 따옴표 이메일 · 소문자 번호가 메일 · PDF에서 지워진다 / 내부 보고용: 내부 용어만 빠지고 나머지는 그대로', async () => {
+    // fix5(재리뷰 5): 혼합 IDN · 따옴표 이메일도 함께 넣는다.
+    const TITLE = 'task-0007 Rp-002 문의 help@intranet.corp.example 내부.한국 intranet.xn--3e0b707e 내부.xn--3e0b707e "help"@intranet.corp.example help@내부.xn--3e0b707e file.txt Node.js 개선';
+    const INSIDE = '문의 help@intranet.corp.example 내부.한국 intranet.xn--3e0b707e 내부.xn--3e0b707e "help"@intranet.corp.example help@내부.xn--3e0b707e file.txt Node.js 개선'; // 내부 용어만 뺀 것(scrubInternal)
     const FRAGMENTS = ['help@', 'intranet', 'corp.example', '내부.한국', 'xn--', 'file.txt', 'Node.js', 'task-0007', 'Rp-002'];
     const root = await mkdtemp(join(tmpdir(), 'awbs-mail-fix4-'));
     const renderer = chromiumRenderer();

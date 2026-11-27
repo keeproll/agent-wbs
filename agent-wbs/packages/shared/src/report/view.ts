@@ -146,30 +146,21 @@ export const LINK_OMITTED = '(링크 생략)';
 /** 외부 글에서 이메일 주소를 지운 자리에 넣는 말(Q-13 fix4) */
 export const EMAIL_OMITTED = '(주소 생략)';
 /**
- * 이메일 주소 모양(Q-13 fix4). 외부 글에서는 예외 없이 지운다.
- * 왜: 「문의 help@intranet.corp.example」처럼 이메일 뒤에도 내부 호스트 이름이 보인다.
- * 실제 배달 주소(To)와 보내는 사람(From)은 설정 · 받는 사람 값으로 따로 만들므로 이 규칙과 상관없다.
+ * **마지막 규칙**(Q-13 fix5): 정규화한 글을 공백으로 나눈 토큰 가운데
+ * (a) `@`가 있거나, (b) 글자(어느 문자 체계든) · 숫자 사이에 `.`이 있는 토큰은 통째로 「(주소 생략)」이다.
+ * 예외는 숫자만으로 된 소수(`1.5`, `12.34`) 하나뿐이다(앞뒤에 `%` · 괄호 등이 붙어도 그 소수 부분은 예외).
+ * 왜 하나의 넓은 규칙인가: 이메일 · 맨 호스트 · 국제화 도메인 · 그 혼합(`내부.xn--…`, `"help"@intranet…`)을 조합마다 따로 찾으면 늘 빠짐이 생긴다.
+ *   「점으로 이은 이름」과 「@」라는 모양 하나로 모두 잡는다.
+ * 정보 손실(조정자 판단으로 수용): 점으로 이은 단어(「프로젝트.완료」, `e.g.`) · 파일 이름(`file.txt`) · 제품 이름(`Node.js`) · 버전(`1.2.3`) · 「2.5일」도 생략된다.
  */
-const EMAIL = /(?<![\p{L}\p{N}._%+-])[\p{L}\p{N}._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+/giu;
-/**
- * 국제화 도메인(IDN) 후보: 점으로 이어진 이름에 영문 밖 글자가 있고, 마지막 이름이 글자만 2자 이상인 토큰(예: 「내부.한국」).
- * 마지막 이름에 숫자가 있으면(「2.5일」) 후보가 아니다. 왜: 소수 · 단위 표기까지 주소로 보지 않게 한다.
- * 앞뒤 경계는 맨 호스트 규칙과 같다(바꾼 토큰은 늘 생략된다. punycode가 출력에 남지 않는다).
- */
-const IDN_CANDIDATE = /(?<![\p{L}\p{N}.-])[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,}(?![\p{L}\p{N}@-]|\.[\p{L}\p{N}-])/gu;
-/**
- * 정규화한 글에서 국제화 도메인을 ASCII(punycode, `xn--…`)로 바꾼다(Q-13 fix4).
- * 표준 URL 해석기가 읽는 호스트 그대로다. 그 뒤 맨 호스트 규칙(마지막 이름 `xn--…` 포함)이 같은 기준으로 판정한다.
- * 예: 「내부.한국」 → `xn--220bs6v.xn--3e0b707e` → 「(링크 생략)」. 「프로젝트.완료」처럼 점으로 이은 한글 단어도 같은 모양이라 생략된다(정보 손실, 조정자 판단).
- */
-function asciiHosts(text: string): string {
-  return text.replace(IDN_CANDIDATE, (token) => {
-    if (![...token].some((ch) => (ch.codePointAt(0) ?? 0) > 0x7f)) return token;
-    try { return new URL(`http://${token}`).hostname || token; } catch { return token; }
-  });
+function isAddressToken(token: string): boolean {
+  if (token.includes('@')) return true;
+  return (token.match(/[\p{L}\p{N}.]+/gu) ?? []).some((run) => /[\p{L}\p{N}]\.[\p{L}\p{N}]/u.test(run) && !/^\d+\.\d+$/.test(run.replace(/^\.+|\.+$/g, '')));
 }
-/** 외부 글 판정 전 준비: 정규화 → 국제화 도메인을 ASCII로. 변환 함수와 검사기가 같은 결과를 쓴다. */
-const prepareExternal = (text: string) => asciiHosts(normalizeExternal(text));
+/** 토큰 규칙을 적용한다. 공백은 그대로 두고 해당 토큰만 바꾼다. */
+const omitAddressTokens = (text: string) => text.split(/(\s+)/).map((part) => (/\s/.test(part) || !isAddressToken(part) ? part : EMAIL_OMITTED)).join('');
+/** 검사기용: 토큰 규칙에 걸리는 토큰 목록 */
+const addressTokens = (text: string) => text.split(/\s+/).filter((part) => part && isAddressToken(part));
 /** 주소 조각이 끝나는 글자(공백 · 따옴표 · 괄호 · 꺾쇠) */
 const TAIL = String.raw`[^\s<>"'()[\]{}「」『』]*`;
 /**
@@ -189,16 +180,10 @@ const TAIL = String.raw`[^\s<>"'()[\]{}「」『』]*`;
 const ADDRESS: readonly RegExp[] = [
   new RegExp(String.raw`\b[a-z][a-z0-9+.-]*:\/\/${TAIL}`, 'gi'),
   new RegExp(String.raw`(?<![\w:/])\/\/[^\s/]${TAIL}`, 'gi'),
-  new RegExp(String.raw`\bwww\.${TAIL}`, 'gi'),
   new RegExp(String.raw`\[[0-9a-f.%]*:[0-9a-f:.%]*\](?::\d{1,5})?${TAIL}`, 'gi'),
-  new RegExp(String.raw`(?<![\w.])\d{1,3}(?:\.\d{1,3}){2,}(?::\d{1,5})?(?:\/${TAIL})?`, 'g'),
   new RegExp(String.raw`(?<![\w.-])(?:[a-z][\w-]*(?:\.[\w-]+)*|\d[\w-]*(?:\.[\w-]+)+|\d{3,}):\d{1,5}(?![\d:])(?:\/${TAIL})?`, 'gi'),
-  new RegExp(String.raw`(?<![\w.@-])[\w-]+(?:\.[\w-]+)+\/${TAIL}`, 'gi'),
   // `<` 뒤는 경로가 아니라 닫는 태그 모양(`</b>`)이다. 글자로 바뀌어 보일 뿐 링크가 되지 않는다.
-  new RegExp(String.raw`(?<![\w.:/~<-])\/[a-z0-9_.~%-]+(?:\/${TAIL})?`, 'gi'),  // 맨 호스트(Q-13 fix3 후속): 영숫자 · 하이픈 이름이 점으로 2개 이상 이어지고 마지막 이름이 글자 2자 이상(`wbs.corp.example`, `intranet.local`).
-  // 왜: 스킴 · 포트 · 경로가 없어도 내부 호스트 이름이 밖으로 나간다. `file.txt` 같은 파일 이름도 지워지는 정보 손실은 받아들인다(조정자 판단).
-  // 메일 주소(`first.last@example.com`)의 앞 · 뒤 부분은 `@` 옆이라 건너뛴다.
-  new RegExp(String.raw`(?<![a-z0-9.@-])[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:[a-z]{2,}|xn--[a-z0-9-]+)(?![a-z0-9@-]|\.[a-z0-9-])`, 'gi'),
+  new RegExp(String.raw`(?<![\w.:/~<-])\/[a-z0-9_.~%-]+(?:\/${TAIL})?`, 'gi'),
 ];
 /** 주소는 아니지만 외부 글에 남기지 않는 것: 앱 메뉴 안내(「설정 → 알림」)와 링크 속성 글자(`href=`) */
 const APP_HINTS: readonly RegExp[] = [
@@ -257,9 +242,9 @@ export function normalizeExternal(text: string): string {
  */
 export function externalText(text: string, appUrl?: string | null): string {
   void appUrl;
-  const mailed = prepareExternal(text).replace(new RegExp(EMAIL.source, EMAIL.flags), ` ${EMAIL_OMITTED} `);
-  const linked = ADDRESS.reduce((acc, re) => acc.replace(new RegExp(re.source, re.flags), ` ${LINK_OMITTED} `), mailed);
-  const cleaned = [...APP_HINTS, ...INTERNAL_TERMS].reduce((acc, re) => acc.replace(new RegExp(re.source, re.flags), ''), linked)
+  // 스킴 주소 · 호스트:포트 · 경로처럼 점이 없어도 링크인 것은 「(링크 생략)」, 그 밖의 주소 모양은 마지막 토큰 규칙이 「(주소 생략)」으로 바꾼다.
+  const linked = ADDRESS.reduce((acc, re) => acc.replace(new RegExp(re.source, re.flags), ` ${LINK_OMITTED} `), normalizeExternal(text));
+  const cleaned = [...APP_HINTS, ...INTERNAL_TERMS].reduce((acc, re) => acc.replace(new RegExp(re.source, re.flags), ''), omitAddressTokens(linked))
     .replace(/\s+/g, ' ').replace(/(\(링크 생략\)\s*)+/g, `${LINK_OMITTED} `).replace(/(\(주소 생략\)\s*)+/g, `${EMAIL_OMITTED} `).trim();
   return cleaned || '(제목 비공개)';
 }
@@ -271,8 +256,8 @@ export function externalText(text: string, appUrl?: string | null): string {
  */
 export function externalLeaks(text: string, appUrl?: string | null): string[] {
   void appUrl;
-  const normal = prepareExternal(text);
-  return [EMAIL, ...ADDRESS, ...APP_HINTS, ...INTERNAL_TERMS].flatMap((re) => normal.match(new RegExp(re.source, re.flags)) ?? []);
+  const normal = normalizeExternal(text);
+  return [...addressTokens(normal), ...[...ADDRESS, ...APP_HINTS, ...INTERNAL_TERMS].flatMap((re) => normal.match(new RegExp(re.source, re.flags)) ?? [])];
 }
 /** HTML에서 보이는 글만(스타일 · 스크립트 · 제목 태그 · 태그를 뺀다). 글자 기호 풀기는 검사기의 정규화가 맡는다. */
 export function htmlVisibleText(html: string): string {

@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import { Value } from 'typebox/value';
 import { externalLeaks, externalText, externalView, normalizeExternal, parseSender, internalKpis, internalTerms, reportFigures, ReportSnapshotSchema as ReportSnapshot, scrubInternal, type ReportSnapshotData } from '@awbs/shared';
+/** 외부 글에서 주소를 지운 자리(Q-13 fix5부터 점 · @ 토큰은 「(주소 생략)」, 스킴 · 포트 · 경로는 「(링크 생략)」) */
+const OMITTED = /^앞 \((링크|주소) 생략\)( \.)? 뒤$/;
 
 /** 빈 스냅샷에 필요한 칸만 채운다. */
 type Patch = Partial<Omit<ReportSnapshotData, 'summary'>> & { summary?: Partial<ReportSnapshotData['summary']> };
@@ -123,7 +125,7 @@ describe('Q-13 fix2: 외부 글은 주소 모양을 모두 「(링크 생략)」
     expect(externalText('TASK-0007 개선 http://127.0.0.1:5173/settings/report')).toBe('개선 (링크 생략)');
     for (const a of ['https://wbs.corp.example/report/1', 'https://example.org/spec', 'ftp://files.example.org/a', '//cdn.example.org/x', 'www.example.org', 'www.example.org/x',
       '[::1]:5173/report', '127.0.0.1', '10.0.0.5/x', 'localhost:5173', 'wbs.corp.example:443', '127.1:5173/x', 'wbs.corp.example/report/1', 'example.org/spec', '/report/abc', '/settings']) {
-      expect(externalText(`앞 ${a} 뒤`), a).toBe('앞 (링크 생략) 뒤');
+      expect(externalText(`앞 ${a} 뒤`), a).toMatch(OMITTED);
     }
     expect(externalText('설정 → 보고서 · 메일 안내 개선')).toBe('안내 개선');
     expect(externalText('http://127.0.0.1:5173/')).toBe('(링크 생략)');
@@ -196,7 +198,7 @@ describe('Q-13 fix3: 외부 글은 정규화한 뒤 주소 모양을 판정하�
     expect(new URL(asUrl).hostname).toBe(host);
     expect(externalLeaks(input).length).toBeGreaterThan(0);
     const out = externalText(`앞 ${input} 뒤`);
-    expect(out).toBe('앞 (링크 생략) 뒤');
+    expect(out).toMatch(OMITTED);
     expect(externalLeaks(out)).toEqual([]);
   });
   test('출력은 정규화한 글이다(원문 표기가 아니라)', () => {
@@ -211,7 +213,7 @@ describe('Q-13 fix3: 외부 글은 정규화한 뒤 주소 모양을 판정하�
     expect(externalText('이름 =?UTF-8?Q?TASK=2D0007?= 끝')).toBe('이름 끝');
   });
   test('버전 번호(숫자 세 덩이)도 IP 모양이라 생략된다 — 정보 손실로 받아들임(조정자 판단)', () => {
-    expect(externalText('버전 1.2.3 배포')).toBe('버전 (링크 생략) 배포');
+    expect(externalText('버전 1.2.3 배포')).toBe('버전 (주소 생략) 배포');
   });
 });
 
@@ -248,16 +250,15 @@ describe('Q-13 fix3 후속: 맨 호스트(이름.이름…, 마지막 이름 글
     ['intranet.local', '로컬 호스트'],
     ['a-b.example.org', '하이픈 이름'],
     ['WBS.Corp.Example', '대문자'],
-    ['www.\nexample.org', '줄바꿈으로 끊긴 www(재리뷰 §4)'],
     ['file.txt', '파일 이름 — 정보 손실 수용(조정자 판단)'],
     ['Node.js', '점 있는 제품 이름 — 정보 손실 수용'],
   ])('%s → 「(링크 생략)」, 검사기가 찾고 변환 뒤 0건 (%s)', (host) => {
     expect(externalLeaks(host).length).toBeGreaterThan(0);
     const out = externalText(`앞 ${host} 뒤`);
-    expect(out).toBe('앞 (링크 생략) 뒤');
+    expect(out).toMatch(OMITTED);
     expect(externalLeaks(out)).toEqual([]);
   });
-  test.each(['10.5% 진척', 'v1.2.3 배포', 'e.g. 예시', 'RPT-W-261026_보고용', 'Verum-SDN Agent WBS', '작업 2.5일 소요'])(
+  test.each(['10.5% 진척', '진척 (12.34%)', 'RPT-W-261026_보고용', 'Verum-SDN Agent WBS', '완료했습니다. 다음'])(
     '주소가 아닌 것은 그대로: %s', (t) => { expect(externalText(t)).toBe(t); expect(externalLeaks(t)).toEqual([]); });
 });
 
@@ -283,17 +284,56 @@ describe('Q-13 fix4: 이메일 · IDN · punycode · 대소문자 내부 번호'
     ['wbs.corp.example.', 'wbs.corp.example'],
   ])('IDN · punycode · 문장 끝 점: %s (URL 호스트 %s) → 「(링크 생략)」', (input, host) => {
     expect(new URL(`http://${input}`).hostname.replace(/\.$/, '')).toBe(host);
-    expect(externalText(`앞 ${input} 뒤`)).toMatch(/^앞 \(링크 생략\) \.? ?뒤$/);
+    expect(externalText(`앞 ${input} 뒤`)).toMatch(OMITTED);
     expect(externalLeaks(`앞 ${input} 뒤`).length).toBeGreaterThan(0);
   });
-  test('점으로 이은 한글 단어도 IDN 모양이라 생략된다(정보 손실, 조정자 판단) · 소수 단위는 그대로', () => {
-    expect(externalText('프로젝트.완료')).toBe('(링크 생략)');
-    expect(externalText('작업 2.5일 소요')).toBe('작업 2.5일 소요');
+  test('점으로 이은 한글 단어 · 단위 붙은 소수도 생략된다(정보 손실, 조정자 판단) · 숫자만인 소수는 그대로', () => {
+    expect(externalText('프로젝트.완료')).toBe('(주소 생략)');
+    expect(externalText('작업 2.5일 소요')).toBe('작업 (주소 생략) 소요');
+    expect(externalText('작업 2.5 일 소요')).toBe('작업 2.5 일 소요');
   });
   test.each(['TASK-0007 RP-002 ATT-0007-2', 'task-0007 rp-002 att-0007-2', 'tAsK-0007 Rp-002 aTt-0007-2'])('대소문자 무관 내부 번호: %s', (ids) => {
     expect(externalText(`${ids} 개선`)).toBe('개선');
     expect(scrubInternal(`${ids} 개선`)).toBe('개선');
     expect(externalLeaks(ids)).toHaveLength(3);
     expect(parseSender(`${ids.split(' ')[0] ?? ''} <owner@example.com>`)).toBeNull();
+  });
+});
+
+/**
+ * Q-13 fix5(Codex 재리뷰 5): 마지막 규칙 하나 — 공백으로 나눈 토큰에 `@`가 있거나 글자 · 숫자 사이에 `.`이 있으면 통째로 「(주소 생략)」.
+ * 예외는 숫자만으로 된 소수뿐. 리뷰어 재현(혼합 IDN · 따옴표 이메일)과 예전 표기를 한 표에 둔다.
+ */
+describe('Q-13 fix5: 마지막 토큰 규칙(@ · 점으로 이은 이름)', () => {
+  test.each([
+    ['내부.xn--3e0b707e', '혼합 IDN(재리뷰 5 재현)'],
+    ['"help"@intranet.corp.example', '따옴표 사용자 이름 이메일(재리뷰 5 재현)'],
+    ['help@내부.xn--3e0b707e', '혼합 IDN 이메일(재리뷰 5 재현)'],
+    ['help@intranet.corp.example', '이메일'],
+    ['내부.한국', 'IDN'],
+    ['intranet.xn--3e0b707e', 'punycode'],
+    ['wbs.corp.example', '맨 호스트'],
+    ['wbs.corp.example.', '문장 끝 점'],
+    ['(wbs.corp.example)', '괄호'],
+    ['x_wbs.corp.example', '밑줄 옆'],
+    ['wbs%2Ecorp%2Eexample', '인코딩 점(정규화 뒤)'],
+    ['@intranet', '@ 하나'],
+    ['file.txt', '파일 이름 — 정보 손실 수용'],
+    ['1.2.3', '버전 — 정보 손실 수용'],
+    ['e.g.', '약어 — 정보 손실 수용'],
+  ])('%s → 「(주소 생략)」 (%s)', (token) => {
+    expect(externalLeaks(token).length).toBeGreaterThan(0);
+    expect(externalText(`앞 ${token} 뒤`)).toBe('앞 (주소 생략) 뒤');
+    expect(externalLeaks(externalText(`앞 ${token} 뒤`))).toEqual([]);
+  });
+  test('재리뷰 5 재현 셋은 표준 URL 해석기로 보면 같은 내부 호스트다', () => {
+    expect(new URL('http://내부.xn--3e0b707e').hostname).toBe(new URL('http://내부.한국').hostname);
+  });
+  test('줄바꿈으로 끊긴 www: 호스트 부분이 토큰 규칙으로 지워지고 「www.」만 남는다', () => {
+    expect(externalText('앞 www.\nexample.org 뒤')).toBe('앞 www. (주소 생략) 뒤');
+  });
+  test.each(['1.5', '12.34', '진척 10.5%', '(12.34%)', '완료했습니다. 다음', '누적 0 / 0', '07:00'])('숫자만인 소수 · 문장 끝 점은 그대로: %s', (t) => {
+    expect(externalText(t)).toBe(t);
+    expect(externalLeaks(t)).toEqual([]);
   });
 });
