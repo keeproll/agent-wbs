@@ -245,6 +245,9 @@ export async function runDeployCheck(options: DeployOptions): Promise<DeployResu
     ...(options.url && target && { url: options.url }),
     ...(result.note && { note: result.note }),
     ...(logExcerpt && { logExcerpt: redact(logExcerpt) }),
+    // 복구 결과를 서버에 알린다. fail·none이면 서버가 「서비스 없음」 경보를 만든다(결정 11).
+    ...(result.status === 'fail' && result.failStep !== RUNNER_TARGET && target && {
+      deployRestore: result.restore ? { commit: result.restore.commit, status: result.restore.status } : { commit: null, status: 'none' as const } }),
     artifacts: evidence.artifacts,
   });
   return result;

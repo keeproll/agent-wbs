@@ -46,6 +46,7 @@ test('새 배포가 실패하면 직전 통과 커밋을 다시 기동하고 접
     expect(f.final().steps?.map(s => [s.name, s.status])).toEqual([['image', 'pass'], ['up', 'fail'], ['browser', 'skip'], ['runner:url-check', 'skip'], ['runner:screenshots', 'skip'], ['runner:restore', 'pass']]);
     expect(f.final().note).toContain(`마지막 정상 커밋 ${a.slice(0, 7)}을 다시 기동해 접속 확인 통과`);
     expect(f.final().status).toBe('fail');
+    expect(f.final().deployRestore).toEqual({ commit: a, status: 'pass' });
   } finally { await f.close(); }
 });
 
@@ -78,6 +79,7 @@ test('복구도 실패하면 「서비스 없음」을 사실대로 보고한다
     expect(f.final().steps?.at(-1)).toMatchObject({ name: 'runner:restore', status: 'fail' });
     expect(f.final().note).toContain('복구 실패 — 서비스 없음');
     expect(f.final().note).not.toContain('통과');
+    expect(f.final().deployRestore).toEqual({ commit: a, status: 'fail' });
   } finally { await f.close(); }
 });
 
@@ -104,6 +106,7 @@ test('직전 통과 배포가 없으면 복구하지 않고 그 사실과 실제
     expect(out.restore).toBeUndefined();
     expect(f.final().steps?.map(s => s.name)).not.toContain('runner:restore');
     expect(f.final().note).toContain('복구할 직전 통과 배포가 없음 — 서비스 없음');
+    expect(f.final().deployRestore).toEqual({ commit: null, status: 'none' });
   } finally { await f.close(); }
 });
 
@@ -117,6 +120,7 @@ test('대상 확인(runner:target)에서 멈춘 실패는 아무것도 바꾸지
     expect(out).toMatchObject({ failStep: 'runner:target' });
     expect(out.restore).toBeUndefined();
     expect(f.calls).toHaveLength(0);
+    expect(f.final()).not.toHaveProperty('deployRestore');
   } finally { await f.close(); }
 });
 
