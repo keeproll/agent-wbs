@@ -8,6 +8,8 @@ export interface UnparsedSql { type: 'raw constraint' | 'unsupported'; table?: Q
 const NEUTRAL = new Set(['CreateFunctionStmt', 'AlterFunctionStmt', 'CreateExtensionStmt', 'CommentStmt', 'CreateRoleStmt', 'AlterRoleStmt', 'InsertStmt', 'UpdateStmt', 'DeleteStmt', 'CreateSchemaStmt']);
 const NEUTRAL_ALTER = new Set(['AT_EnableRowSecurity', 'AT_DisableRowSecurity', 'AT_ForceRowSecurity', 'AT_NoForceRowSecurity', 'AT_EnableTrig', 'AT_EnableAlwaysTrig', 'AT_DisableTrig', 'AT_EnableTrigAll', 'AT_DisableTrigAll', 'AT_EnableTrigUser', 'AT_DisableTrigUser', 'AT_ValidateConstraint', 'AT_SetStatistics', 'AT_SetStorage', 'AT_SetCompression']);
 const text = (stmt: Record<string, unknown>) => deparseSync({ stmts: [{ stmt }] } as Parameters<typeof deparseSync>[0]);
+// 구조를 바꾸지 않는 기본 함수만 신뢰한다. 같은 이름의 정의는 아래에서 전역 대조 안 함으로 막는다.
+const SAFE_FUNCTIONS = new Set(['cardinality', 'array_length', 'array_agg', 'coalesce', 'nullif', 'greatest', 'least', 'format', 'quote_ident', 'quote_literal', 'lower', 'upper', 'length', 'concat', 'concat_ws', 'string_agg', 'count', 'max', 'min', 'sum', 'regexp_replace', 'split_part', 'to_regclass', 'unnest', 'md5', 'current_database']);
 
 /** 대상은 몰라도 승인된 문장 종류는 필드 집합·타입·필수 여부를 바꾸지 않는다. PRIMARY KEY는 제외한다. */
 function fieldsUnchanged(statement: Record<string, unknown>): boolean {
@@ -76,15 +78,27 @@ function doStatements(raw: string, depth: number): UnparsedSql[] {
     if (Array.isArray(value)) { for (const child of value) walk(child, level + 1); return; }
     if (!value || typeof value !== 'object') return;
     for (const [key, child] of Object.entries(value)) {
-      if (key === 'PLpgSQL_expr') continue;
-      if (key === 'PLpgSQL_stmt_execsql' || key === 'PLpgSQL_stmt_dynexecute') {
+      if (key === 'PLpgSQL_expr') {
+        const expression = record(child), query = expression.query;
+        if (typeof query !== 'string' || ![undefined, 0, 2].includes(expression.parseMode as number | undefined)) throw new Error('표현식 형식을 해석하지 못했습니다.');
+        const statements = parseSync(expression.parseMode === 2 ? `SELECT ${query}` : query).stmts;
+        if (statements?.length !== 1) throw new Error('표현식 문장 수를 확인하지 못했습니다.');
+        walk(statements, level + 1);
+        continue;
+      }
+      if (key === 'FuncCall') {
+        const names = record(child).funcname;
+        const parts = Array.isArray(names) ? names.map(n => record(record(n).String).sval) : [];
+        const name = parts.at(-1);
+        if (typeof name !== 'string' || !SAFE_FUNCTIONS.has(name) || !(parts.length === 1 || parts.length === 2 && parts[0] === 'pg_catalog')) throw new Error('허용하지 않은 함수 호출입니다.');
+      } else if (key === 'PLpgSQL_stmt_execsql' || key === 'PLpgSQL_stmt_dynexecute') {
         const statement = record(child), dynamic = key === 'PLpgSQL_stmt_dynexecute';
         const query = record(record(statement[dynamic ? 'query' : 'sqlstmt']).PLpgSQL_expr).query;
         if (typeof query !== 'string') throw new Error('PL/pgSQL 문장이 없습니다.');
         if (!dynamic) staticSql(query);
         else if (!harmlessTemplate(query)) unknown(query);
       } else if (key.startsWith('PLpgSQL_stmt_') && !CONTROL.has(key.slice('PLpgSQL_stmt_'.length))) unknown(key);
-      else walk(child, level + 1);
+      walk(child, level + 1);
     }
   };
   try {
@@ -109,6 +123,13 @@ export function postgresStatements(raw: string, depth = 0): (Statement | Unparse
     const stmt = record(source.stmt), [kind] = Object.keys(stmt);
     if (!kind) continue;
     const node = record(stmt[kind]);
+    if (kind === 'CreateFunctionStmt' && Array.isArray(node.funcname)) {
+      const name = record(record(node.funcname.at(-1)).String).sval;
+      if (typeof name === 'string' && SAFE_FUNCTIONS.has(name)) {
+        output.push({ type: 'unsupported', sql: text(stmt) });
+        continue;
+      }
+    }
     const relation = node.relation === undefined ? undefined : record(node.relation);
     const table = relation && typeof relation.relname === 'string' ? { name: relation.relname, ...(typeof relation.schemaname === 'string' && { schema: relation.schemaname }) } : undefined;
     const names = Array.isArray(node.typeName) ? node.typeName.map(part => record(record(part).String).sval) : [];
