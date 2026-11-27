@@ -1,6 +1,6 @@
 import type { PoolClient } from '@awbs/db';
 import {
-  blockers as blockersOf, blockedTasks, completionGate, daysBetween, periodBounds, seoulDay, seoulMidnight, addDays, STAGE_PCT, TASK_STATUSES,
+  blockers as blockersOf, blockedTasks, completionGate, daysBetween, periodBounds, seoulDay, seoulMidnight, addDays, STAGE_PCT, TASK_STATUSES, toMicro,
   type GateInput, type ReportKind, type ReportSnapshotData, type TaskStatus, type VerificationResult,
 } from '@awbs/shared';
 import { wbsPaths } from '../tasks/wbs.ts';
@@ -53,9 +53,10 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
   const at = end;
   const src = asOf(projectId, end, source);
   const coverage0 = await stateFrom(client, projectId);
-  const missing = source === 'log' && coverage0 !== null && ms(at) < ms(coverage0);
-  const inRange = (v: string | null | undefined) => !!v && ms(v) >= ms(start) && ms(v) < ms(end);
-  const upTo = (v: string | null | undefined) => !!v && ms(v) < ms(at);
+  const missing = source === 'log' && coverage0 !== null && at < coverage0;
+  // 경계 비교는 마이크로초 문자열로 한다(정밀도를 줄이지 않는다, 재리뷰 2 원칙 4). DB 시각은 모두 6자리 UTC다.
+  const inRange = (v: string | null | undefined) => !!v && toMicro(v) >= start && toMicro(v) < end;
+  const upTo = (v: string | null | undefined) => !!v && toMicro(v) < at;
 
   // 한 연결에서 질의를 동시에 보내지 않는다(pg는 한 연결의 동시 질의를 차례로 줄 세우며, 그 방식은 다음 판에서 없어진다). 앞 질의가 끝난 뒤 다음을 보낸다.
   let chain: Promise<unknown> = Promise.resolve();
@@ -71,32 +72,32 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
       `select t.id,t.task_key key,t.title,t.status,t.work_type,t.primary_domain domain,t.assignee_agent assignee,t.verifier_agent verifier,t.verif_state,
         ${iso('t.act_start')} act_start,${iso('t.act_end')} act_end,t.conflict_group cg,s.overview->>'doneCond' done_cond,t.wbs_node_id,t.sort_order,e.est::text est
        from ${src.rel('tasks')} t left join ${src.rel('task_specs')} s on s.task=t.id
-       left join lateral(select est from ${src.added('task_estimates')} x where x.task=t.id order by created_at desc,id desc limit 1) e on true
+       left join lateral(select est from ${src.rel('task_estimates')} x where x.task=t.id order by created_at desc,id desc limit 1) e on true
        where t.project_id=$1 and t.deleted_at is null and t.status<>'cancelled' and not $2::boolean order by t.task_key`, [projectId, missing]),
     q<{ id: string; kind: 'phase' | 'work_package'; parent_id: string | null; sort_order: number }>(`select id,kind,parent_id,sort_order from ${src.rel('wbs_nodes')} n where project_id=$1 order by id`, [projectId]),
     q<{ pred: string; succ: string; type: 'FS' | 'SS' }>(`select pred,succ,dep_type type from ${src.rel('task_dependencies')} d where project_id=$1 order by id`, [projectId]),
     q<{ id: string; task: string; key: string; no: number; kind: 'dev' | 'qa' | 'rework' | 'reverify'; agent: 'Claude' | 'Codex'; status: 'running' | 'completed' | 'failed' | 'interrupted';
       started_at: string; ended_at: string | null; model_id: string; effort: string; adjust: ReportSnapshotData['attempts'][number]['adjust']; summary: string | null; tokens: string | null; files: number }>(
       `select a.id,a.task,a.attempt_key key,a.attempt_no no,a.kind,a.agent,a.status,${iso('a.started_at')} started_at,${iso('a.ended_at')} ended_at,a.model_id,a.effort,
-        a.grade_adjust adjust,a.summary,a.tokens::text tokens,(select count(*)::int from ${src.added('attempt_files')} f where f.attempt=a.id) files
+        a.grade_adjust adjust,a.summary,a.tokens::text tokens,(select count(*)::int from ${src.rel('attempt_files')} f where f.attempt=a.id) files
        from ${src.rel('task_attempts')} a where a.project_id=$1 order by a.started_at,a.attempt_no,a.id`, [projectId]),
     // 검증 시각: QA 시도가 끝난 시각(없으면 기록 시각). 검증 결과는 시도 종료와 함께 보고된다(contracts §3.5).
     q<{ id: string; attempt: string; task: string; agent: 'Claude' | 'Codex'; result: 'PASS' | 'FAIL' | 'BLOCKED'; cmd: string; expected: string; actual: string; at: string; no: number }>(
       `select v.id,v.attempt,a.task,a.agent,v.result,v.cmd,v.expected,v.actual,${iso('coalesce(a.ended_at,v.created_at)')} at,a.attempt_no no
-       from ${src.added('verifications')} v join ${src.rel('task_attempts')} a on a.id=v.attempt where v.project_id=$1 order by coalesce(a.ended_at,v.created_at),v.id`, [projectId]),
-    q<{ verification: string; text: string; blocking: boolean }>(`select verification,def_key||' '||content text,blocking from ${src.added('defects')} d where project_id=$1 order by def_key`, [projectId]),
-    q<{ verification: string; path: string }>(`select verification,coalesce(reference_path,storage_path) path from ${src.added('evidence')} e where project_id=$1 and verification is not null order by created_at,id`, [projectId]),
+       from ${src.rel('verifications')} v join ${src.rel('task_attempts')} a on a.id=v.attempt where v.project_id=$1 order by coalesce(a.ended_at,v.created_at),v.id`, [projectId]),
+    q<{ verification: string; text: string; blocking: boolean }>(`select verification,def_key||' '||content text,blocking from ${src.rel('defects')} d where project_id=$1 order by def_key`, [projectId]),
+    q<{ verification: string; path: string }>(`select verification,coalesce(reference_path,storage_path) path from ${src.rel('evidence')} e where project_id=$1 and verification is not null order by created_at,id`, [projectId]),
     q<{ key: string; task: string; dir: 'in' | 'out'; type: string; to_agent: 'Claude' | 'Codex' | null; from_agent: 'Claude' | 'Codex' | null; body: string; delivery: string | null; pending_next: boolean; at: string }>(
       `select msg_key key,task,dir,type,to_agent,from_agent,body,delivery::text delivery,pending_next,${iso('created_at')} at from ${src.rel('messages')} m where project_id=$1 and not draft order by created_at,id`, [projectId]),
     q<{ id: string; key: string; trigger: string; baseline_v: number | null; before: { end?: unknown }; after: { end?: unknown; lo?: unknown; hi?: unknown }; at: string }>(
       `select id,rp_key key,trigger,baseline_v,before,after,${iso('created_at')} at from ${src.rel('replans')} r where project_id=$1 and status='applied' order by created_at,id`, [projectId]),
     q<{ replan: string; task: string; kind: 'delayed' | 'advanced' | 'new' | 'excluded'; before: { end?: unknown } | null; after: { end?: unknown } | null }>(
-      `select replan,task,kind,before,after from ${src.added('replan_moves')} m where project_id=$1 order by created_at,id`, [projectId]),
-    // 세션은 T 뒤에 끝났으면 T에는 아직 열려 있었다.
-    q<{ from: string; to: string | null; reason: string | null }>(`select ${iso('started_at')} "from",case when ended_at<${src.t} then ${iso('ended_at')} end "to",
-      case when ended_at<${src.t} then end_reason end reason from runner_sessions where started_at<${src.t} order by started_at,id`),
+      `select replan,task,kind,before,after from ${src.rel('replan_moves')} m where project_id=$1 order by created_at,id`, [projectId]),
+    // 실행 PC 세션·알림도 T 시점 행이다(끝 시각·해소 시각·본문 모두 그때 값, 재리뷰 2 문제 3).
+    q<{ from: string; to: string | null; reason: string | null }>(`select ${iso('started_at')} "from",${iso('ended_at')} "to",end_reason reason
+      from ${src.rel('runner_sessions')} s order by started_at,id`),
     q<{ key: string; target: Record<string, unknown> | null; at: string; resolved: string | null }>(
-      `select key,target,${iso('created_at')} at,${iso('resolved_at')} resolved from ${src.added('alerts')} x where project_id=$1 or project_id is null order by created_at,id`, [projectId]),
+      `select key,target,${iso('created_at')} at,${iso('resolved_at')} resolved from ${src.rel('alerts')} x where project_id=$1 or project_id is null order by created_at,id`, [projectId]),
     q<{ key: string; title: string; status: string; at: string }>(
       `select cp_key key,title,status,${iso('created_at')} at from ${src.rel('change_proposals')} c where project_id=$1 and deleted_at is null and status in ('review','changes','held') order by created_at,id`, [projectId]),
     q<{ task: string; required: boolean; done: boolean }>(`select task,required,done from ${src.rel('checklist_items')} c where project_id=$1 order by task,sort_order,id`, [projectId]),
@@ -146,10 +147,10 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
   const totalEst = tasks.reduce((sum, t) => sum + est(t), 0) || 1;
   const workPct = (list: typeof tasks) => clampPct(Math.round((list.reduce((sum, t) => sum + est(t), 0) / totalEst) * 1000) / 10);
   const doneTo = tasks.filter((t) => upTo(t.act_end));
-  const doneFrom = tasks.filter((t) => t.act_end && ms(t.act_end) < ms(start));
+  const doneFrom = tasks.filter((t) => t.act_end && toMicro(t.act_end) < start);
   const rpsUpTo = replans.filter((r) => upTo(r.at));
   const last = rpsUpTo.at(-1);
-  const before = replans.filter((r) => ms(r.at) < ms(start)).at(-1);
+  const before = replans.filter((r) => toMicro(r.at) < start).at(-1);
   const endOf = (r: (typeof replans)[number] | undefined) => (r && isDate(r.after.end) ? r.after.end : null);
   const inAtts = attempts.filter((a) => inRange(a.started_at));
   const inVerifs = verifs.filter((v) => inRange(v.at));
@@ -180,7 +181,8 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
 
   // 2. 팀장 확인 필요(P issues L3810-3814)
   const issues: ReportSnapshotData['issues'] = [];
-  for (const a of alerts.filter((x) => upTo(x.at) && (!x.resolved || ms(x.resolved) > ms(at)))) {
+  // 그 시점에 열려 있던 알림: T 시점 행에서 해소 시각이 비어 있다(해소가 T 뒤에 커밋됐으면 T 시점 행에는 없다).
+  for (const a of alerts.filter((x) => !x.resolved)) {
     const target = a.target ?? {};
     const text = typeof target.message === 'string' && target.message.trim() ? target.message : a.key;
     const taskKey = typeof target.taskKey === 'string' && /^TASK-\d{4,}$/.test(target.taskKey) ? target.taskKey : null;
@@ -204,13 +206,14 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
   const series: ReportSnapshotData['series'] = [];
   if (period.kind !== 'daily') {
     for (let day = period.from; day <= period.to; day = addDays(day, 1)) {
-      const a = ms(seoulMidnight(day));
-      const b = Math.min(ms(seoulMidnight(addDays(day, 1))), ms(at));
-      const inDay = (v: string | null) => !!v && ms(v) >= a && ms(v) < b;
+      const a = seoulMidnight(day);
+      const next = seoulMidnight(addDays(day, 1));
+      const b = next < at ? next : at;
+      const inDay = (v: string | null) => !!v && toMicro(v) >= a && toMicro(v) < b;
       series.push({
         day, done: tasks.filter((t) => inDay(t.act_end)).length, attempts: attempts.filter((x) => inDay(x.started_at)).length,
-        fails: verifs.filter((v) => v.result === 'FAIL' && inDay(v.at)).length, uptimePct: b > a ? coverage(a, b).pct : 0,
-        forecast: endOf(replans.filter((r) => ms(r.at) < b).at(-1)),
+        fails: verifs.filter((v) => v.result === 'FAIL' && inDay(v.at)).length, uptimePct: b > a ? coverage(ms(a), ms(b)).pct : 0,
+        forecast: endOf(replans.filter((r) => toMicro(r.at) < b).at(-1)),
       });
     }
   }
@@ -348,19 +351,19 @@ async function gateInputsAt(client: PoolClient, src: ReturnType<typeof asOf>, ta
     select t.id,t.planning_approved_at,s.revision,iv.v input_v,coalesce(t.execution_head_sha,a.head_sha) head_sha,
       exists(select 1 from ${src.rel('task_attempts')} q where q.task=t.id and q.status='running' and q.kind in ('qa','reverify')) open_qa,
       v.verification,c.status check_result,c.spec_revision check_revision,c.input_v check_input,
-      (select count(*)::int from ${src.added('defects')} d join ${src.added('verifications')} dv on dv.id=d.verification join ${src.rel('task_attempts')} da on da.id=dv.attempt
-        where da.task=t.id and d.blocking and not exists(select 1 from ${src.added('defect_events')} e where e.defect=d.id and e.kind='resolved')
-        and not exists(select 1 from ${src.added('verification_invalidations')} vi where vi.verification=dv.id)) defects,
+      (select count(*)::int from ${src.rel('defects')} d join ${src.rel('verifications')} dv on dv.id=d.verification join ${src.rel('task_attempts')} da on da.id=dv.attempt
+        where da.task=t.id and d.blocking and not exists(select 1 from ${src.rel('defect_events')} e where e.defect=d.id and e.kind='resolved')
+        and not exists(select 1 from ${src.rel('verification_invalidations')} vi where vi.verification=dv.id)) defects,
       coalesce((select jsonb_agg(jsonb_build_object('required',required,'done',done) order by ci.sort_order,ci.id) from ${src.rel('checklist_items')} ci where ci.task=t.id),'[]') checklist,
       coalesce((select jsonb_agg(jsonb_build_object('name',name,'required',required,'delivered',delivered) order by o.name,o.id) from ${src.rel('task_outputs')} o where o.task=t.id),'[]') outputs
     from ${src.rel('tasks')} t left join ${src.rel('task_specs')} s on s.task=t.id
-    left join lateral(select * from ${src.added('input_versions')} x where x.project_id=t.project_id and (t.src_input_version is null or x.id=t.src_input_version) order by v desc limit 1) iv on true
+    left join lateral(select * from ${src.rel('input_versions')} x where x.project_id=t.project_id and (t.src_input_version is null or x.id=t.src_input_version) order by v desc limit 1) iv on true
     left join lateral(select head_sha from ${src.rel('task_attempts')} x where x.task=t.id order by attempt_no desc limit 1) a on true
     left join lateral(select case when v.id is not null then jsonb_build_object('result',v.result,'headSha',v.head_sha,'specRevision',v.spec_revision,'inputVersion',coalesce(iv.v,0),
-      'invalidated',exists(select 1 from ${src.added('verification_invalidations')} i where i.verification=v.id)) end verification
-      from ${src.rel('task_attempts')} qa left join ${src.added('verifications')} v on v.attempt=qa.id left join ${src.added('input_versions')} iv on iv.id=qa.input_version
+      'invalidated',exists(select 1 from ${src.rel('verification_invalidations')} i where i.verification=v.id)) end verification
+      from ${src.rel('task_attempts')} qa left join ${src.rel('verifications')} v on v.attempt=qa.id left join ${src.rel('input_versions')} iv on iv.id=qa.input_version
       where qa.task=t.id and qa.kind in ('qa','reverify') order by qa.attempt_no desc limit 1) v on true
-    left join lateral(select c.status,c.spec_revision,iv.v input_v from ${src.rel('ci_runs')} c left join ${src.added('input_versions')} iv on iv.id=c.input_version
+    left join lateral(select c.status,c.spec_revision,iv.v input_v from ${src.rel('ci_runs')} c left join ${src.rel('input_versions')} iv on iv.id=c.input_version
       where c.project_id=t.project_id and c.task=t.id and c.stage=1 and c.head_sha=coalesce(t.execution_head_sha,a.head_sha) order by c.created_at desc,c.id desc limit 1) c on true
     where t.id=any($1::uuid[])`, [taskIds])).rows;
   return new Map(rows.map((task) => {

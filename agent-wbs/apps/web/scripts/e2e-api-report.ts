@@ -49,17 +49,14 @@ try {
   const node = (args: string[], input?: string) => execFileSync('node', ['--conditions=awbs-source', ...args], { cwd: ROOT, env, input, encoding: 'utf8' });
   node(['packages/db/src/migrate-cli.ts']);
   const psql = (sql: string) => execFileSync('docker', ['exec', '-i', name, 'psql', '-v', 'ON_ERROR_STOP=1', '-U', 'awbs_owner', '-d', 'awbs_test_report'], { input: sql, stdio: ['pipe', 'ignore', 'inherit'] });
-  // 보고서는 기간 끝 시점의 상태를 상태 기록(state_log)에서 되살린다(owner 2026-11-27 아이템 13).
-  // 원본 자료를 「프로젝트 시작(10-27) 전부터 이 상태였다」로 넣으려고, seed 동안만 기록 시각을 과거로 둔다(시험·데모 전용 설정).
-  psql("alter database awbs_test_report set awbs.state_at='2026-10-20T00:00:00+09:00';");
+  // 보고서는 기간 끝 시점의 상태를 이력에서 커밋 순서로 되살린다(owner 2026-11-27 아이템 13).
+  // 원본 자료를 「프로젝트 시작(10-27) 전부터 이 상태였다」로 넣으려고, seed 동안만 커밋 시계를 과거로 옮긴다(관리자 전용 시험 설정).
+  const shift = Math.floor((Date.parse('2026-10-20T00:00:00+09:00') - Date.now()) / 1000);
+  psql(`alter database awbs_test_report set awbs.test_clock_offset='${String(shift)} seconds';`);
   node(['packages/db/src/seed-cli.ts', 'demo']);
-  psql(`begin; set local session_replication_role=replica;
-    update verifications set created_at='2026-10-20T00:00:00+09:00'; update defects set created_at='2026-10-20T00:00:00+09:00';
-    update attempt_files set created_at='2026-10-20T00:00:00+09:00'; update task_estimates set created_at='2026-10-20T00:00:00+09:00';
-    update input_versions set created_at='2026-10-20T00:00:00+09:00'; commit;`);
   // 정기 보고서가 원본 기간(10-27~)부터 생기도록 시작일을 원본 값으로 맞춘다(P MOCK project.start). 보고서는 API worker가 아니라 시험이 만든다.
   execFileSync('docker', ['exec', '-i', name, 'psql', '-v', 'ON_ERROR_STOP=1', '-U', 'awbs_owner', '-d', 'awbs_test_report'], {
-    input: "update projects set start_date='2026-10-27', target_date='2026-11-12'; alter database awbs_test_report reset awbs.state_at;",
+    input: "update projects set start_date='2026-10-27', target_date='2026-11-12'; alter database awbs_test_report reset awbs.test_clock_offset;",
     stdio: ['pipe', 'ignore', 'inherit'],
   });
   node(['apps/api/src/platform/auth-cli.ts', 'set-password'], `${leadPassword}\n`);

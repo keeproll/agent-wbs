@@ -20,6 +20,8 @@ interface Context {
   idempotency?: { key: string; hash: string; project: string | null };
   /** 오류 응답이어도 트랜잭션을 커밋한다. 업무 처리기가 「보류 판정과 함께 남길 기록(판단 job)」만 쓴 뒤 켠다. 500은 언제나 롤백. */
   commitOnError?: boolean;
+  /** 보고서 생성(createReport)의 기준점(M6-01): 트랜잭션을 열기 전에 잡은 커밋 시계 값 */
+  reportAnchor?: string;
 }
 declare module 'fastify' { interface FastifyRequest { platform: Context | null } }
 
@@ -125,7 +127,12 @@ export function installSecurity(app: FastifyInstance, pool: Pool, options: Secur
     if (key !== undefined && (typeof key !== 'string' || key.length === 0 || key.length > 255 || /[^\x21-\x7e]/.test(key))) throw new PlatformError('VALIDATION_FAILED');
     const client = await pool.connect();
     context.client = client;
-    await client.query('begin');
+    if (operation?.id === 'createReport') {
+      // M6-01 보고서: 기준점을 먼저 잡고(자동 커밋), 반복 읽기로 연다. 스냅샷과 저장이 한 연결·한 시점이 된다(reports/service.ts).
+      const anchor = (await client.query<{ at: string }>(`select to_char(public.awbs_report_anchor() at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') at`)).rows[0]?.at;
+      if (anchor) context.reportAnchor = anchor;
+      await client.query('begin isolation level repeatable read');
+    } else await client.query('begin');
     if (operation?.id === 'resetProject') {
       const state = (await client.query<{ epoch: number }>('select public.lock_epoch_exclusive() as epoch')).rows[0];
       assert(state);

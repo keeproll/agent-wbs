@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from '@awbs/db';
-import { customPeriodProblem, duePeriodic, reportKey, seoulDay, snapshotProblem, type ReportKind, type ReportSnapshotData } from '@awbs/shared';
+import { customPeriodProblem, duePeriodic, reportKey, seoulDay, snapshotProblem, toMicro, type ReportKind, type ReportSnapshotData } from '@awbs/shared';
 import { ApiError, invalid } from '../changes/http.ts';
 import { decodeCursor, encodeCursor, InputProblem } from '../changes/history.ts';
 import { deferChange, dropChanges, flushChanges } from '../changes/events.ts';
@@ -55,10 +55,11 @@ export async function generateDueReports(pool: Pool, epoch: number, options: { n
     // 중복 자체는 고유 인덱스가 막는다(architecture §2 worker).
     await client.query("select pg_advisory_lock(hashtextextended('awbs:reports',0))");
     try {
-      return await consistentWrite(client, epoch, async () => {
+      return await consistentWrite(client, epoch, async (anchor) => {
         const project = (await client.query<{ id: string; start: string }>("select id,to_char(start_date,'YYYY-MM-DD') start from projects where phase='active'")).rows[0];
         if (!project) return 0;
-        const now = options.now ?? (await client.query<{ now: string }>(`select ${iso('clock_timestamp()')} now`)).rows[0]?.now ?? new Date().toISOString();
+        // 생성 시각 = 기준점(커밋 시계). 시험은 점검 시각을 정해 부른다(정기 예정 계산용).
+        const now = options.now ? toMicro(options.now) : anchor;
         const last = (await client.query<{ kind: 'daily' | 'weekly'; to: string }>(
           `select kind,to_char(max("to"),'YYYY-MM-DD') "to" from reports where project_id=$1 and kind in ('daily','weekly') group by kind`, [project.id])).rows;
         const due = duePeriodic({ now, start: project.start, lastDaily: last.find((r) => r.kind === 'daily')?.to ?? null, lastWeekly: last.find((r) => r.kind === 'weekly')?.to ?? null });
@@ -79,17 +80,27 @@ export async function generateDueReports(pool: Pool, epoch: number, options: { n
 /** 재시도할 DB 오류: 동시 수정과 충돌(40001)·교착(40P01). 세대 불일치(AW001)는 재시도하지 않는다. */
 const RETRYABLE = new Set(['40001', '40P01']);
 
+/** 보고서 기준점(0037 awbs_report_anchor). 트랜잭션 밖(자동 커밋)에서 불러야 한다. 마이크로초 6자리 UTC. */
+export async function reportAnchor(client: Pick<PoolClient, 'query'>): Promise<string> {
+  const at = (await client.query<{ at: string }>(`select ${iso('public.awbs_report_anchor()')} at`)).rows[0]?.at;
+  if (!at) throw new Error('보고서 기준점을 잡지 못했습니다.');
+  return at;
+}
+
 /**
- * 한 시점(REPEATABLE READ)으로 읽고 쓰는 worker 트랜잭션. 세대 잠금(lock_epoch)이 첫 조회다.
+ * 한 시점(REPEATABLE READ)으로 읽고 쓰는 worker 트랜잭션. 연결 하나로 끝난다(재리뷰 2 원칙 5).
+ * 1. 기준점을 먼저 잡는다(자동 커밋). 그 뒤의 커밋은 모두 기준점보다 큰 커밋 시계 값을 받는다.
+ * 2. 반복 읽기 트랜잭션을 연다. 세대 잠금(lock_epoch)이 첫 조회라 그때 읽기 시점이 정해진다.
  * 왜 반복 읽기인가: 기본(READ COMMITTED)은 조회마다 그때의 최신 값을 읽는다. 체크리스트를 읽은 뒤 누가 바꾸면,
  * 같은 Task의 체크리스트와 Gate가 서로 다른 시점 값으로 저장된다(리뷰 M6-01 1). 저장한 보고서는 고칠 수 없어 모순이 영원히 남는다.
  */
-async function consistentWrite<T>(client: PoolClient, epoch: number, fn: () => Promise<T>): Promise<T> {
+async function consistentWrite<T>(client: PoolClient, epoch: number, fn: (anchor: string) => Promise<T>): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try {
+      const anchor = await reportAnchor(client);
       await client.query('begin isolation level repeatable read');
       await client.query('select public.lock_epoch($1)', [epoch]);
-      const result = await fn();
+      const result = await fn(anchor);
       await flushChanges(client);
       await client.query('commit');
       return result;
@@ -101,42 +112,42 @@ async function consistentWrite<T>(client: PoolClient, epoch: number, fn: () => P
   }
 }
 
-/** 읽기 전용 한 시점 트랜잭션(기간 지정 보고서용). 쓰기는 공통 관문이 연 트랜잭션이 한다. */
-async function consistentRead<T>(pool: Pool, fn: (client: PoolClient) => Promise<T>): Promise<T> {
-  const client = await pool.connect();
-  try {
-    await client.query('begin isolation level repeatable read read only');
-    const result = await fn(client);
-    await client.query('commit');
-    return result;
-  } catch (error) {
-    await client.query('rollback').catch(() => undefined);
-    throw error;
-  } finally { client.release(); }
-}
-
 /**
- * 기간 지정 보고서(POST /api/projects/:projectId/reports).
- * - 스냅샷은 `reader`의 다른 연결에서 **한 시점(반복 읽기, 읽기 전용)**으로 만든다.
- *   왜: 공통 관문의 트랜잭션은 기본(READ COMMITTED)이고 이미 조회를 시작해 격리 수준을 바꿀 수 없다.
- * - 저장(번호 발급·보고서 행)은 공통 관문 트랜잭션(client)에서 한다. 그래서 멱등 키·세대 잠금 규칙은 다른 변경과 같다.
- * - 생성 시각은 그 한 시점 트랜잭션의 첫 조회 시각이다.
+ * 기간 지정 보고서(POST /api/projects/:projectId/reports). 연결 하나로 끝난다(재리뷰 2 원칙 5).
+ * - 공통 관문이 이 요청만 기준점(anchor)을 먼저 잡고, 그 뒤 **반복 읽기** 트랜잭션을 연다(platform/security.ts).
+ *   그래서 스냅샷과 저장이 같은 연결·같은 시점이다. 다른 연결을 더 빌리지 않으므로 연결 수 1에서도 된다.
+ * - 생성 시각 = 기준점. 기간이 오늘을 포함하면 T도 기준점이다.
+ * - 번호: 반복 읽기에서는 번호 칸(counters)을 고치면 동시 생성과 충돌(40001)한다. 그래서 저장된 기간 지정 보고서의
+ *   가장 큰 번호 다음을 쓰고, 다른 요청이 먼저 같은 번호를 저장했으면(고유 키) 다음 번호로 다시 넣는다.
  */
-export async function createCustomReport(client: PoolClient, projectId: string, input: { from: string; to: string; view: 'int' | 'ext' }, reader: Pool) {
+export async function createCustomReport(client: PoolClient, projectId: string, input: { from: string; to: string; view: 'int' | 'ext' }, anchor: string) {
   const project = (await client.query<{ id: string }>('select id from projects where id=$1', [projectId])).rows[0];
   if (!project) throw new ApiError('PROJECT_NOT_FOUND', {}, [], '프로젝트를 찾을 수 없습니다.');
-  const { now, snapshot } = await consistentRead(reader, async (r) => {
-    const at = (await r.query<{ now: string }>(`select ${iso('clock_timestamp()')} now`)).rows[0]?.now ?? new Date().toISOString();
-    const problem = customPeriodProblem(input.from, input.to, seoulDay(at));
-    if (problem) throw invalid([{ path: problem.path, rule: problem.rule, message: problem.message }], problem.message);
-    return { now: at, snapshot: await buildSnapshot(r, projectId, { kind: 'custom', from: input.from, to: input.to, at }) };
-  });
-  const seq = (await client.query<{ value: number }>(
-    `insert into counters(project_id,kind,value) values($1,'report_custom',1)
-     on conflict (project_id,kind) do update set value=counters.value+1 returning value::int value`, [projectId])).rows[0]?.value ?? 1;
-  const row = await insertReport(client, projectId, { key: reportKey('custom', input.from, seq), kind: 'custom', ...input, snapshot, at: now, dueAt: null, reason: REASON.custom });
-  if (!row) throw new Error('기간 지정 보고서 번호가 겹쳤습니다.');
-  return summaryOf(row);
+  const now = toMicro(anchor);
+  const problem = customPeriodProblem(input.from, input.to, seoulDay(now));
+  if (problem) throw invalid([{ path: problem.path, rule: problem.rule, message: problem.message }], problem.message);
+  const snapshot = await buildSnapshot(client, projectId, { kind: 'custom', from: input.from, to: input.to, at: now });
+  const shape = snapshotProblem(snapshot);
+  if (shape) throw new Error(`보고서 스냅샷이 계약과 다릅니다: ${shape}`);
+  const top = (await client.query<{ n: number }>(
+    "select coalesce(max(substring(report_key from 7)::int),0)::int n from reports where project_id=$1 and kind='custom' and report_key ~ '^RPT-C-[0-9]+$'", [projectId])).rows[0]?.n ?? 0;
+  for (let k = 1; k <= 20; k++) {
+    await client.query('savepoint report_key');
+    try {
+      const row = (await client.query<ReportSummary>(
+        `insert into reports(project_id,report_key,kind,"from","to",view,snapshot,generated_at,due_at,reason) values($1,$2,'custom',$3,$4,$5,$6::jsonb,$7,null,$8)
+         returning ${SUMMARY}`,
+        [projectId, reportKey('custom', input.from, top + k), input.from, input.to, input.view, JSON.stringify(snapshot), now, REASON.custom])).rows[0];
+      await client.query('release savepoint report_key');
+      if (!row) break;
+      deferChange(client, projectId, 'report', { id: row.id });
+      return summaryOf(row);
+    } catch (error) {
+      await client.query('rollback to savepoint report_key');
+      if ((error as { code?: string }).code !== '23505') throw error;
+    }
+  }
+  throw new Error('기간 지정 보고서 번호를 정하지 못했습니다.');
 }
 
 const PAGE = 50;

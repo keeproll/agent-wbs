@@ -46,7 +46,7 @@ test('보고서 없음 → 기간 지정 오류 → 생성 → 팀장용 12섹�
 
   const doc = page.getByRole('article', { name: /RPT-C-001 보고서/ });
   await expect(doc).toBeVisible();
-  for (const h of ['팀장 확인 필요', '일별 추세', '1. 완료한 Task', '2. 진행 중 · 확인 필요 Task', '3. QA 실패 · 결함 상세', '4. 실행 기록', '5. 일정 재조정', '6. 작업 환경 중단', '7. 팀장 지시 · Runner 응답', '8. 다음 주 예정', '부록. 전체 Task 현황 (보고서 생성 시점)']) {
+  for (const h of ['팀장 확인 필요', '일별 추세', '1. 완료한 Task', '2. 진행 중 · 확인 필요 Task', '3. QA 실패 · 결함 상세', '4. 실행 기록', '5. 일정 재조정', '6. 작업 환경 중단', '7. 팀장 지시 · Runner 응답', '8. 다음 주 예정', '부록. 전체 Task 현황 (기간 끝 시점)']) {
     await expect(doc.getByRole('heading', { name: h, exact: true })).toBeVisible();
   }
   const id = new URL(page.url()).pathname.split('/').at(-1) ?? '';

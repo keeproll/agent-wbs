@@ -21,13 +21,29 @@ export const PERIODIC_HOUR = 7;
 const dayNumber = (day: string) => Date.parse(`${day}T00:00:00Z`) / DAY_MS;
 const fromDayNumber = (n: number) => new Date(n * DAY_MS).toISOString().slice(0, 10);
 
+/**
+ * 시각 문자열을 **마이크로초 6자리 UTC**(`2026-10-27T15:00:00.123456Z`)로 맞춘다. 정밀도를 줄이지 않는다(재리뷰 2 원칙 4).
+ * 왜: DB 시각은 마이크로초까지 있다. JavaScript Date로 바꾸면 밀리초로 잘려, 같은 밀리초 안의 앞선 변경이 경계 뒤로 밀린다.
+ * 같은 모양의 문자열끼리는 사전순 비교가 시각 순서와 같다.
+ */
+export function toMicro(iso: string): string {
+  const m = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}(?::?\d{2})?)$/.exec(iso);
+  if (!m) throw new RangeError(`시각 형식이 아닙니다: ${iso}`);
+  const [, day = '', time = '', frac = '', zone = 'Z'] = m;
+  const digits = frac.slice(1).padEnd(6, '0');
+  if (digits.length > 6) throw new RangeError(`마이크로초보다 정밀한 시각은 받지 않습니다: ${iso}`);
+  const zoneText = zone === 'Z' ? 'Z' : zone.length === 3 ? `${zone}:00` : zone.includes(':') ? zone : `${zone.slice(0, 3)}:${zone.slice(3)}`;
+  const seconds = new Date(`${day}T${time}${zoneText}`).toISOString().slice(0, 19);
+  return `${seconds}.${digits}Z`;
+}
+
 /** 시각이 속한 서울 날짜. */
 export const seoulDay = (instant: string | Date): string =>
   new Date((typeof instant === 'string' ? Date.parse(instant) : instant.getTime()) + SEOUL_MS).toISOString().slice(0, 10);
 /** 서울 날짜의 00:00을 UTC 시각으로. */
-export const seoulMidnight = (day: string): string => new Date(dayNumber(day) * DAY_MS - SEOUL_MS).toISOString();
+export const seoulMidnight = (day: string): string => toMicro(new Date(dayNumber(day) * DAY_MS - SEOUL_MS).toISOString());
 /** 서울 날짜의 hh:00을 UTC 시각으로. */
-export const seoulAt = (day: string, hour: number): string => new Date(dayNumber(day) * DAY_MS - SEOUL_MS + hour * 3_600_000).toISOString();
+export const seoulAt = (day: string, hour: number): string => toMicro(new Date(dayNumber(day) * DAY_MS - SEOUL_MS + hour * 3_600_000).toISOString());
 export const addDays = (day: string, n: number): string => fromDayNumber(dayNumber(day) + n);
 /** 두 날짜의 차이(일). to - from */
 export const daysBetween = (from: string, to: string): number => dayNumber(to) - dayNumber(from);
@@ -40,7 +56,8 @@ export const mondayOf = (day: string): string => addDays(day, -((new Date(dayNum
  */
 export function periodBounds(from: string, to: string, at: string): { start: string; end: string } {
   const end = seoulMidnight(addDays(to, 1));
-  return { start: seoulMidnight(from), end: Date.parse(at) < Date.parse(end) ? new Date(Date.parse(at)).toISOString() : end };
+  const now = toMicro(at);
+  return { start: seoulMidnight(from), end: now < end ? now : end };
 }
 
 export interface PeriodProblem { path: 'from' | 'to'; rule: 'order' | 'future' | 'maxDays'; message: string }

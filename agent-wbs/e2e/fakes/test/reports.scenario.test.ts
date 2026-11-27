@@ -16,9 +16,9 @@ import {
 import { createPool, recreateTestDatabase, runMigrations, seedDemo, type Pool } from '../../../packages/db/src/index.ts';
 import { buildApp } from '../../../apps/api/src/app.ts';
 import { issueLoginLink } from '../../../apps/api/src/platform/credentials.ts';
-import { createCustomReport, generateDueReports } from '../../../apps/api/src/reports/service.ts';
+import { createCustomReport, generateDueReports, reportAnchor } from '../../../apps/api/src/reports/service.ts';
+import { flushChanges } from '../../../apps/api/src/changes/events.ts';
 import { buildSnapshot } from '../../../apps/api/src/reports/snapshot.ts';
-import { inEpoch } from '../../../apps/api/src/platform/transaction.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Body = any;
@@ -72,28 +72,20 @@ beforeAll(async () => {
   const app = buildApp(pool, false, { origin, lan: false });
   close = async () => { await app.close(); await pool.end(); await owner.end(); };
   await runMigrations(owner);
-  // 원본 자료는 「프로젝트 시작(10-27) 전부터 이 상태였다」로 넣는다. 상태 기록(state_log)의 시각을 원본 시작 전으로 둔다.
-  // 왜: 보고서는 기간 끝 시점의 상태를 상태 기록에서 되살린다(owner 2026-11-27 아이템 13). 오늘 넣은 자료는 10월 기간에는 없던 것이 된다.
-  // 기록 시각 지정(awbs.state_at)은 시험·데모 자료 전용이다. 새 연결에만 적용되므로 이 준비용 연결 묶음을 따로 쓴다.
+  // 원본 자료는 「프로젝트 시작(10-27) 전부터 이 상태였다」로 넣는다. 그 커밋들이 원본 시작 전의 커밋 시계 값을 받게 한다.
+  // 왜: 보고서는 기간 끝 시점의 상태를 이력에서 커밋 순서로 되살린다(owner 2026-11-27 아이템 13). 오늘 넣은 자료는 10월 기간에는 없던 것이 된다.
+  // 시험 전용 시계 이동(awbs.test_clock_offset)은 관리자 로그인 연결만 쓸 수 있다. 새 연결에만 적용되므로 이 준비용 연결 묶음을 따로 쓴다.
+  // 커밋 시계는 줄지 않으므로, 준비가 끝난 뒤의 커밋은 다시 실제 시각을 받는다.
   const name = db.pathname.slice(1);
-  await owner.query(`alter database "${name}" set awbs.state_at='${PAST}'`);
+  const shift = Math.floor((Date.parse(PAST) - Date.now()) / 1000);
+  await owner.query(`alter database "${name}" set awbs.test_clock_offset='${String(shift)} seconds'`);
   const past = createPool(db.href, { onError: () => undefined });
   try {
     await seedDemo(past, db.href);
     await fixture(past);
-    // 추가 전용 표(검증·결함·Evidence·파일·추정·입력 버전)의 기록 시각도 과거로 둔다. 보호 트리거를 끈 준비용 연결에서만 한다.
-    const c = await past.connect();
-    try {
-      await c.query('begin');
-      await c.query('set local session_replication_role=replica');
-      for (const t of ['verifications', 'defects', 'evidence', 'attempt_files', 'task_estimates', 'input_versions', 'input_version_results']) {
-        await c.query(`update ${t} set created_at=$1 where created_at>$1`, [PAST]);
-      }
-      await c.query('commit');
-    } finally { c.release(); }
   } finally {
     await past.end();
-    await owner.query(`alter database "${name}" reset awbs.state_at`);
+    await owner.query(`alter database "${name}" reset awbs.test_clock_offset`);
   }
   const link = await issueLoginLink(pool);
   const baseUrl = await app.listen({ host: '127.0.0.1', port: 0 });
@@ -382,7 +374,7 @@ describe('누락 보충 상한(G L1047)', () => {
  * 리뷰 1 재현용: 보고서가 체크리스트를 읽은 직후, 다른 연결이 필수 항목 완료를 해제하고 저장한다.
  * 보고서의 읽기는 한 시점이어야 하므로 체크리스트·Gate가 서로 다른 시점 값을 담으면 안 된다.
  */
-function poolChangingChecklistMidway(base: Pool, stateAt?: string): Pool {
+function poolChangingChecklistMidway(base: Pool): Pool {
   let fired = false;
   return {
     connect: async () => {
@@ -395,11 +387,9 @@ function poolChangingChecklistMidway(base: Pool, stateAt?: string): Pool {
         const result = await query(...args);
         if (!fired && typeof args[0] === 'string' && /checklist_items/.test(args[0])) {
           fired = true;
-          // stateAt: 보고서 시점(T)보다 앞선 시각으로 기록되지만 늦게 커밋되는 변경(진행 중이던 트랜잭션)을 흉내 낸다.
           const w = await owner.connect();
           try {
             await w.query('begin');
-            if (stateAt) await w.query("select set_config('awbs.state_at',$1,true)", [stateAt]);
             await w.query("update checklist_items set done=false where required and task=(select id from tasks where task_key='TASK-0007')");
             await w.query('commit');
           } finally { w.release(); }
@@ -419,11 +409,19 @@ describe('리뷰 1·2: 한 시점 읽기, 자동 반영 보류 CP', () => {
   };
   test('기간 지정: 생성 도중 체크리스트가 바뀌어도 체크리스트와 Gate가 같은 시점 값이다', async () => {
     await owner.query("update checklist_items set done=true where task=(select id from tasks where task_key='TASK-0007')");
-    await new Promise((r) => setTimeout(r, 20));
-    const inflight = new Date(Date.now() - 5).toISOString();
     const today = seoulDay(new Date());
     const id = await projectId();
-    const r = await inEpoch(pool, 1, (c) => createCustomReport(c, id, { from: addDays(today, -1), to: today, view: 'int' }, poolChangingChecklistMidway(pool, inflight)));
+    // 공통 관문과 같은 순서: 기준점 → 반복 읽기 → 세대 잠금 → 생성(한 연결)
+    const c = await poolChangingChecklistMidway(pool).connect();
+    let r: { id: string };
+    try {
+      const anchor = await reportAnchor(c);
+      await c.query('begin isolation level repeatable read');
+      await c.query('select public.lock_epoch(1)');
+      r = await createCustomReport(c, id, { from: addDays(today, -1), to: today, view: 'int' }, anchor);
+      await flushChanges(c);
+      await c.query('commit');
+    } finally { c.release(); }
     const t = await t7(r.id);
     expect(t?.checklist.requiredLeft).toBe(0);
     expect(t?.gate.unmet).not.toContain('checklist');
@@ -454,8 +452,10 @@ describe('기간 말 재구성(owner 2026-11-27 아이템 13): 그때 바로 찍
   const capture = async (at?: string) => {
     const c = await pool.connect();
     try {
+      // 운영과 같은 순서: 기준점(커밋 시계)을 먼저 잡고 반복 읽기로 읽는다. 다시 만들 때도 기준점을 잡는다(그 뒤 커밋이 T보다 크도록).
+      const anchor = await reportAnchor(c);
       await c.query('begin isolation level repeatable read read only');
-      const now = at ?? (await c.query<{ now: string }>(`select to_char(clock_timestamp() at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') now`)).rows[0]?.now ?? '';
+      const now = at ?? anchor;
       const today = seoulDay(now);
       const period = { kind: 'custom' as const, from: '2026-10-26', to: today, at: now };
       const id = await projectId();
@@ -467,28 +467,40 @@ describe('기간 말 재구성(owner 2026-11-27 아이템 13): 그때 바로 찍
   };
   /** 결정적 난수(같은 씨앗이면 같은 변경 순서) */
   const rng = (seed: number) => () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  /**
+   * 무작위 변경. 절반은 「시계가 뒤로 간」 연결(관리자 전용 시험 시계 이동 −2.3초)로 한다.
+   * 이 PC는 약 32초마다 2.3초 뒤로 간다(재리뷰 2 원칙 2). 커밋 순서 기준이면 결과가 같아야 한다.
+   */
   async function mutate(r: () => number, steps: number) {
     const pick = <T,>(xs: T[]) => xs[Math.floor(r() * xs.length)] as T;
+    const back = await owner.connect();
+    await back.query("select set_config('awbs.test_clock_offset','-2.3 seconds',false)");
+    const exec = { query: (sql: string, args?: unknown[]) => (r() < 0.5 ? back : owner).query(sql, args) };
     const tasks = (await owner.query<{ id: string }>('select id from tasks where deleted_at is null')).rows.map((x) => x.id);
     const ops = [
-      async (t: string) => owner.query('update tasks set title=$2 where id=$1', [t, `바뀐 제목 ${String(Math.floor(r() * 1000))}`]),
-      async (t: string) => owner.query("update tasks set status=$2 where id=$1 and status in ('ready','approval','planning')", [t, pick(['ready', 'approval', 'planning'])]),
-      async (t: string) => owner.query('update tasks set conflict_group=$2 where id=$1', [t, pick([null, 'FE', 'BE'])]),
-      async (t: string) => owner.query('update checklist_items set done=not done where task=$1', [t]),
-      async (t: string) => owner.query('update task_outputs set delivered=not delivered where task=$1', [t]),
-      async (t: string) => owner.query('update task_grades set effort=$2 where task=$1', [t, pick(['low', 'medium', 'high'])]),
-      async (t: string) => owner.query('update messages set pending_next=not pending_next where task=$1 and dir=$2', [t, 'out']),
-      async () => owner.query("update change_proposals set status=$1 where cp_key='CP-002'", [pick(['review', 'changes', 'held'])]),
-      async (t: string) => owner.query("update tasks set deleted_at=case when deleted_at is null then now() end where id=$1 and status='planning'", [t]),
+      async (t: string) => exec.query('update tasks set title=$2 where id=$1', [t, `바뀐 제목 ${String(Math.floor(r() * 1000))}`]),
+      async (t: string) => exec.query("update tasks set status=$2 where id=$1 and status in ('ready','approval','planning')", [t, pick(['ready', 'approval', 'planning'])]),
+      async (t: string) => exec.query('update tasks set conflict_group=$2 where id=$1', [t, pick([null, 'FE', 'BE'])]),
+      async (t: string) => exec.query('update checklist_items set done=not done where task=$1', [t]),
+      async (t: string) => exec.query('update task_outputs set delivered=not delivered where task=$1', [t]),
+      async (t: string) => exec.query('update task_grades set effort=$2 where task=$1', [t, pick(['low', 'medium', 'high'])]),
+      async (t: string) => exec.query('update messages set pending_next=not pending_next where task=$1 and dir=$2', [t, 'out']),
+      async () => exec.query("update change_proposals set status=$1 where cp_key='CP-002'", [pick(['review', 'changes', 'held'])]),
+      async (t: string) => exec.query("update tasks set deleted_at=case when deleted_at is null then now() end where id=$1 and status='planning'", [t]),
       // 설정 변경(0037부터 기록): 일정 정책·작업 불가일·heartbeat·동시 실행 한도
-      async () => owner.query('update schedule_policy set assume_rate=$1', [pick(['0.5', '0.6', '0.8'])]),
-      async () => owner.query("insert into blackout_days(date,note) values($1,'시험 휴무') on conflict (date) do nothing", [addDays('2026-12-01', Math.floor(r() * 20))]),
-      async () => owner.query('update app_settings set heartbeat_seconds=$1', [pick([20, 30, 45])]),
-      async () => owner.query(`insert into concurrency_settings(mode,caps) values('manual',$1) on conflict (singleton) do update set mode='manual',caps=$1`,
+      async () => exec.query('update schedule_policy set assume_rate=$1', [pick(['0.5', '0.6', '0.8'])]),
+      async () => exec.query("insert into blackout_days(date,note) values($1,'시험 휴무') on conflict (date) do nothing", [addDays('2026-12-01', Math.floor(r() * 20))]),
+      async () => exec.query('update app_settings set heartbeat_seconds=$1', [pick([20, 30, 45])]),
+      async () => exec.query(`insert into concurrency_settings(mode,caps) values('manual',$1) on conflict (singleton) do update set mode='manual',caps=$1`,
         [JSON.stringify({ total: pick([2, 3, 4]), Claude: 1, Codex: 1, heavy: 1 })]),
     ];
-    for (let i = 0; i < steps; i++) {
-      try { await pick(ops)(pick(tasks)); } catch { /* 제약이 거부한 변경은 건너뛴다(그 자체가 기록되지 않는다) */ }
+    try {
+      for (let i = 0; i < steps; i++) {
+        try { await pick(ops)(pick(tasks)); } catch { /* 제약이 거부한 변경은 건너뛴다(그 자체가 기록되지 않는다) */ }
+      }
+    } finally {
+      await back.query("select set_config('awbs.test_clock_offset','',false)");
+      back.release();
     }
   }
 
@@ -498,11 +510,25 @@ describe('기간 말 재구성(owner 2026-11-27 아이템 13): 그때 바로 찍
     expect(log.all.length).toBeGreaterThan(0);
   });
 
-  test.each([1, 2, 3, 4, 5])('씨앗 %i: T에 바로 찍은 스냅샷 = 그 뒤 무작위 변경 30번 후 T로 되살린 스냅샷', async (seed) => {
-    const first = await capture();
+  test.each([1, 2, 3, 4, 5])('씨앗 %i: T에 바로 찍은 스냅샷 = 늦은 커밋·시계 역행·무작위 변경 30번 뒤 T로 되살린 스냅샷', async (seed) => {
+    // 늦은 커밋: T 전에 시작해 이력을 남겼지만 T 뒤에 커밋하는 트랜잭션(재리뷰 2 문제 1)
+    const late = await owner.connect();
+    let first: Awaited<ReturnType<typeof capture>>;
+    try {
+      await late.query('begin');
+      await late.query("update tasks set title=$1 where task_key='TASK-0007'", [`late-commit-${String(seed)}`]);
+      await late.query("update checklist_items set done=not done where task=(select id from tasks where task_key='TASK-0005')");
+      first = await capture();
+      await late.query('commit');
+    } finally { late.release(); }
     await mutate(rng(seed), 30);
     const later = await capture(first.now);
     expect(later.log).toEqual(first.live);
+    expect(JSON.stringify(first.live)).not.toContain(`late-commit-${String(seed)}`);
+    // 늦은 커밋은 기준점보다 큰 커밋 시계 값을 받았다(그래서 T 보고서에서 빠진다)
+    const stamped = (await owner.query<{ at: string }>(`select to_char(c.committed_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') at from state_log l join commit_log c on c.xid=l.xid
+      where l.tbl='tasks' and l.data->>'title'=$1`, [`late-commit-${String(seed)}`])).rows[0]?.at ?? '';
+    expect(stamped > first.now).toBe(true);
   });
 
   test('재조정 상태도 기간 끝 시점: T에 pending이던 재조정은 뒤에 applied가 되어도 T 보고서에 넣지 않는다', async () => {
@@ -517,27 +543,46 @@ describe('기간 말 재구성(owner 2026-11-27 아이템 13): 그때 바로 찍
     expect((await capture()).log.replans.map((r) => r.replanId)).toContain('RP-050');
   });
 
-  test('설정: 기록 전 시점은 버전으로 확인하고, 확인할 수 없는 묶음만 「지금 값」으로 표시한다', async () => {
+  test('설정: 빈 DB에서 시작하면 이력이 완전하고, 업그레이드 전 시점은 버전으로 확인해 모르는 묶음만 「지금 값」으로 표시한다', async () => {
     const id = await projectId();
-    const c = await pool.connect();
+    const build = async (period: { kind: 'weekly' | 'custom'; from: string; to: string; at: string }) => {
+      const c = await pool.connect();
+      try {
+        await reportAnchor(c);
+        await c.query('begin isolation level repeatable read read only');
+        const r = await buildSnapshot(c, id, period);
+        await c.query('commit');
+        return r;
+      } finally { c.release(); }
+    };
+    const early = { kind: 'weekly' as const, from: '2026-10-26', to: '2026-11-01', at: kst('2026-11-02', '07:00') };
+    // 이 DB는 빈 DB에서 시작했다 → 기록 시작 표시가 없고, 과거 시점도 이력만으로 정확하다.
+    expect((await build(early)).basis?.currentSettings).toEqual([]);
+    // 업그레이드한 DB를 흉내 낸다: 기록 시작 표시를 커밋 시계 11-10으로 남긴다(관리자만 할 수 있는 시험 준비).
+    const w = await owner.connect();
     try {
-      await c.query('begin isolation level repeatable read read only');
-      // 10-06은 준비 자료의 기록 시각(10-20)보다 이르다. 일정 정책 버전은 그 뒤(준비 시각)라 그때 값을 모른다.
-      const early = await buildSnapshot(c, id, { kind: 'custom', from: '2026-10-01', to: '2026-10-05', at: kst('2026-10-06', '09:00') });
-      const now = await buildSnapshot(c, id, { kind: 'custom', from: '2026-11-01', to: seoulDay(new Date()), at: new Date().toISOString() });
-      await c.query('commit');
-      expect(early.basis?.currentSettings).toEqual(expect.arrayContaining(['schedule', 'blackouts', 'heartbeat']));
-      // 동시 실행 설정 행이 아직 없으면(첫 저장 전) 그때도 없었다 → 확인됨
-      const conc = (await owner.query('select count(*)::int n from concurrency_settings')).rows[0]?.n;
-      if (conc === 0) expect(early.basis?.currentSettings).not.toContain('concurrency');
-      expect(now.basis?.currentSettings).toEqual([]);
-    } finally { c.release(); }
+      await w.query('begin');
+      await w.query('insert into commit_log(xid,committed_at) values(pg_current_xact_id(),$1)', [kst('2026-11-10', '00:00')]);
+      await w.query("insert into global_log(tbl,row_id,op,data) values('log_start','00000000-0000-0000-0000-000000000000','seed',null)");
+      await w.query('commit');
+    } finally { w.release(); }
+    // 기록 시작 전(11-02): 설정 버전(준비 시각)이 T 뒤라 그때 값을 모른다 → 지금 값으로 계산하고 표시한다.
+    expect((await build(early)).basis?.currentSettings).toEqual(expect.arrayContaining(['schedule', 'blackouts', 'heartbeat']));
+    // 기록 시작 뒤(오늘): 이력으로 정확하다.
+    const now = (await capture()).now;
+    expect((await build({ kind: 'custom', from: '2026-11-10', to: seoulDay(now), at: now })).basis?.currentSettings).toEqual([]);
   });
 
   test('상태 기록이 시작되기 전 시점은 지어내지 않고 「기록 없음」(basis.missing=state)', async () => {
-    // 0036 이전 DB를 흉내 낸다: 상태 기록 시작(seed) 표시를 11-10에 남긴다.
+    // 0036 이전 DB를 흉내 낸다: 상태 기록 시작(seed) 표시를 커밋 시계 11-10으로 남긴다(관리자만 할 수 있는 시험 준비).
     const id = await projectId();
-    await owner.query("insert into state_log(created_at,project_id,tbl,row_id,op,data) values($1,$2,'projects',$2,'seed',null)", [kst('2026-11-10', '00:00'), id]);
+    const w = await owner.connect();
+    try {
+      await w.query('begin');
+      await w.query('insert into commit_log(xid,committed_at) values(pg_current_xact_id(),$1)', [kst('2026-11-10', '00:00')]);
+      await w.query("insert into state_log(project_id,tbl,row_id,op,data) values($1,'projects',$1,'seed',null)", [id]);
+      await w.query('commit');
+    } finally { w.release(); }
     const c = await pool.connect();
     try {
       await c.query('begin isolation level repeatable read read only');

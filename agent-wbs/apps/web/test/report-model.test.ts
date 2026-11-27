@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { internalTerms, type ReportSnapshotData } from '@awbs/shared';
 import {
-  changedLabel, defaultView, docTitle, externalDoc, settingsNote, formProblem, internalDoc, lateLabel, quickRange, rowView, type ReportRow,
+  appendixTitle, changedLabel, defaultView, docTitle, externalDoc, settingsNote, snapLabel, formProblem, internalDoc, lateLabel, quickRange, rowView, type ReportRow,
 } from '../src/features/report/model.ts';
 
 const T = (kst: string) => new Date(`${kst}:00+09:00`).toISOString();
@@ -150,4 +150,16 @@ test('설정을 그 시점 값으로 알 수 없으면 「설정은 현재 값�
   expect(settingsNote(s)).toBe('설정은 현재 값 — 일정 정책 · 작업 불가일은 이 시점의 값을 알 수 없어 보고서를 만든 때의 값으로 계산했습니다.');
   expect(settingsNote({ ...s, basis: { ...s.basis, currentSettings: [] } })).toBeNull();
   expect(settingsNote(empty)).toBeNull();
+});
+
+describe('재리뷰 2 문제 7: 생성 시각과 상태 기준 시각을 따로 알린다', () => {
+  test('기간 말 재구성 보고서: 상태 값은 기간 끝 직전 기준이라고 쓴다', () => {
+    const s = { ...empty, basis: { asOf: '2026-11-01T15:00:00.000000Z', stateFrom: null, missing: [], currentSettings: [] } };
+    expect(snapLabel(T('2026-11-27 09:10'), s)).toBe('이 보고서는 2026-11-27 09:10에 만들었습니다. 상태 값은 2026-11-02 00:00 직전(기간 끝) 기준입니다. 이후 데이터가 바뀌어도 내용은 바뀌지 않습니다.');
+    expect(appendixTitle(s)).toBe('부록. 전체 Task 현황 (기간 끝 시점)');
+  });
+  test('기준 시각 정보가 없는 예전 보고서는 생성 시점 기준 문구를 그대로 쓴다', () => {
+    expect(snapLabel(T('2026-11-27 09:10'), empty)).toBe('이 보고서는 2026-11-27 09:10 시점의 스냅샷입니다. 이후 데이터가 바뀌어도 내용은 바뀌지 않습니다.');
+    expect(appendixTitle(empty)).toBe('부록. 전체 Task 현황 (보고서 생성 시점)');
+  });
 });

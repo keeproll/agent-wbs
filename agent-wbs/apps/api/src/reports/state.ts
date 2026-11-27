@@ -4,97 +4,111 @@ import { OWNER_ASSUME_RATE, OWNER_THRESHOLD_DAYS } from '../planning/schedule.ts
 import { caps as runnerCaps, wireCaps } from '../runner/service.ts';
 import type { RunnerRepository } from '../runner/repository.ts';
 import { wbsPaths } from '../tasks/wbs.ts';
+import { FALLBACK_CURRENT, GLOBAL_TABLES, MIXED_TABLES, PROJECT_TABLES, type TrackedTable } from './tracked.ts';
 
 /**
- * 보고서의 「그 시점」 자료(owner 2026-11-27 아이템 13, G L375 기간 말 재구성).
+ * 보고서의 「그 시점」 자료(owner 2026-11-27 아이템 13, G L375 기간 말 재구성 · 재리뷰 2 원칙).
  *
- * 무엇을 어떻게 되살리나:
- * - 바뀌는 표(Task·체크리스트·산출물·의존성·등급·명세·시도·메시지·변경 제안·CI 실행·WBS·프로젝트)는
- *   상태 기록(state_log, 마이그레이션 0036)에서 시각 T **직전**의 마지막 행을 원래 표 모양으로 되돌린다(`rel`).
- * - 추가 전용 표(검증·결함·Evidence·추정·재조정·기준 일정 등)는 기록 시각이 T 전인 행만 쓴다.
- * - 끝 시각이 있는 기록(실행 PC 세션·알림)은 T 뒤에 끝난 것을 「T에는 아직 열림」으로 본다.
+ * 무엇을 어떻게 되살리나
+ * - 보고서가 읽는 모든 표(tracked.ts TRACKED)는 행이 바뀔 때마다 이력(state_log·global_log, 마이그레이션 0036)에 남는다.
+ * - 「T 전」은 **커밋 기준**이다. 이력 행을 쓴 트랜잭션의 커밋 시계 값(commit_log.committed_at)이 T보다 작은 것만 쓴다.
+ *   - 커밋 시계는 커밋 순서대로 단조 증가한다(PC 시계가 뒤로 가도 줄지 않는다).
+ *   - 같은 행의 여러 기록 중에서는 순번(seq)이 가장 큰 것을 고른다. 같은 행의 변경은 행 잠금으로 차례가 정해지므로 순번 순서 = 커밋 순서다.
+ * - 그 행을 jsonb_populate_record로 원래 표 모양으로 되돌린다(`rel`). 보고서 SQL은 표 이름 대신 이 관계식을 읽는다.
  *
- * source:
- * - `log`(운영): 위 규칙으로 되살린다. 정기(일간·주간)·기간 지정 모두 이것만 쓴다.
- * - `live`(시험 전용): 지금 표를 그대로 읽는다. 「그때 바로 찍은 값 = 나중에 되살린 값」을 시험으로 비교하는 데 쓴다.
+ * 기준점과 「그때 = 나중」
+ * - 보고서는 읽기 전에 기준점(awbs_report_anchor, 0037)을 잡는다. 그 뒤의 커밋은 모두 기준점보다 큰 값을 받으므로,
+ *   T ≤ 기준점이면 「커밋 시계 < T」인 이력은 읽기 시작 전에 모두 확정돼 있다. 나중에 같은 T로 다시 읽어도 범위가 같다.
  *
- * 되살릴 수 없는 것:
- * - 0036 전부터 있던 행은 마이그레이션 때 「seed」로 한 번 남았다. 그보다 이른 시점의 상태는 모른다 → `missing: ['state']`.
- * - 설정(일정 정책·작업 불가일·heartbeat·동시 실행 한도)은 0037부터 설정 기록(setting_log)에 남긴다. 기록이 T 전에 없으면
- *   설정 묶음별 버전(편집 시각)이 T 전인지로 「지금 값이 그때도 같았다」를 확인한다. 확인할 수 없으면 지금 값을 쓰고 `basis.currentSettings`에 적는다.
+ * source
+ * - `log`(운영): 위 규칙. 정기(일간·주간)·기간 지정 모두 이것만 쓴다.
+ * - `live`(시험 전용): 지금 표를 그대로 읽는다. 「그때 바로 찍은 값 = 나중에 되살린 값」을 시험으로 비교한다.
+ *
+ * 되살릴 수 없는 것
+ * - 0036 전부터 있던 행은 마이그레이션 때 「seed」로 한 번 남았다. 그 커밋 시계보다 이른 T의 상태는 모른다 → `missing: ['state']`.
+ * - 설정은 기록이 T 전에 없으면 묶음 버전(편집 시각)으로 「지금 값이 그때도 같았나」를 확인하고, 모르면 `basis.currentSettings`에 적는다.
+ *
+ * 경계 오차(문서 fix3.md §3)
+ * - 커밋 시계 값은 greatest(직전 값 + 1µs, 지금 시각)이다. PC 시계가 d초 뒤로 가면 그 뒤 최대 d초 동안의 커밋은 벽시계보다 늦은 값을 받는다.
+ *   그래서 자정 같은 경계 T 근처(최대 d초)의 커밋은 실제 벽시계 기준보다 늦은 쪽(다음 기간)으로 분류될 수 있다. 이 PC는 d≈2.3초다.
+ *   이 오차는 「몇 번을 다시 만들어도 같은 결과」(결정성)에는 영향이 없다.
  */
+
 export type StateSource = 'log' | 'live';
-export const LOGGED_TABLES = [
-  'projects', 'wbs_nodes', 'tasks', 'task_specs', 'task_dependencies', 'checklist_items', 'task_outputs', 'task_grades',
-  'task_attempts', 'messages', 'change_proposals', 'ci_runs', 'replans',
-] as const;
-/** 프로젝트가 없는 설정 표(0037부터 setting_log에 기록) */
-export const SETTING_TABLES = ['schedule_policy', 'blackout_days', 'app_settings', 'concurrency_settings'] as const;
-export type SettingTable = (typeof SETTING_TABLES)[number];
+export type SettingTable = (typeof FALLBACK_CURRENT)[number];
 /** 보고서가 「지금 값」을 쓴 설정 묶음(스냅샷 basis.currentSettings 값) */
 export type SettingGroup = 'schedule' | 'blackouts' | 'heartbeat' | 'concurrency';
-export type LoggedTable = (typeof LOGGED_TABLES)[number];
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const MICRO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
 
 export interface AsOf {
-  /** T(이 시각 **전**까지의 기록을 쓴다). UTC ISO */
+  /** T(이 커밋 시계 값 **전**까지). 마이크로초 6자리 UTC ISO */
   before: string;
   source: StateSource;
-  /** 표 이름 → SQL 관계식(괄호로 묶은 하위 질의 또는 표 이름) */
-  rel: (table: LoggedTable) => string;
-  /** 설정 표를 설정 기록(setting_log)에서 T 직전 상태로 */
-  setting: (table: SettingTable) => string;
-  /** 추가 전용 표: 기록 시각이 T 전인 행 */
-  added: (table: string, column?: string) => string;
+  /** 표 이름 → T 시점의 그 표(SQL 관계식) */
+  rel: (table: TrackedTable) => string;
   /** SQL에 넣는 T(timestamptz 상수) */
   t: string;
 }
 
+const isGlobal = (table: string) => (GLOBAL_TABLES as readonly string[]).includes(table);
+const isMixed = (table: string) => (MIXED_TABLES as readonly string[]).includes(table);
+const isProject = (table: string) => (PROJECT_TABLES as readonly string[]).includes(table);
+
 export function asOf(projectId: string, before: string, source: StateSource): AsOf {
   if (!UUID.test(projectId)) throw new Error('프로젝트 id 형식이 아닙니다.');
-  const time = new Date(before);
-  if (Number.isNaN(time.getTime())) throw new Error('시각 형식이 아닙니다.');
-  // 마이크로초까지 보존한다(DB 시각과 같은 정밀도). 입력은 서버가 만든 ISO 문자열이다.
-  const iso = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$/.test(before) ? before : time.toISOString();
-  const t = `'${iso}'::timestamptz`;
+  // 정밀도를 줄이지 않는다: 마이크로초 6자리 문자열만 받는다(재리뷰 2 원칙 4).
+  if (!MICRO.test(before)) throw new Error(`기준 시각은 마이크로초 6자리 UTC여야 합니다: ${before}`);
+  const t = `'${before}'::timestamptz`;
+  const latest = (log: 'state_log' | 'global_log', table: string) => `(select distinct on (l.row_id) l.op,l.data from public.${log} l
+      join public.commit_log c on c.xid=l.xid where ${log === 'state_log' ? `l.project_id='${projectId}' and ` : ''}l.tbl='${table}' and c.committed_at<${t}
+      order by l.row_id,l.seq desc)`;
+  const populate = (inner: string, table: string) => `(select r.* from ${inner} l cross join lateral jsonb_populate_record(null::public.${table},l.data) r where l.op<>'delete')`;
   return {
-    before: iso, source, t,
-    rel: (table) => (source === 'live' ? `public.${table}` : `(select r.* from (select distinct on (l.row_id) l.op,l.data from public.state_log l
-      where l.project_id='${projectId}' and l.tbl='${table}' and l.created_at<${t} order by l.row_id,l.created_at desc,l.seq desc) l
-      cross join lateral jsonb_populate_record(null::public.${table},l.data) r where l.op<>'delete')`),
-    added: (table, column = 'created_at') => `(select * from public.${table} where ${column}<${t})`,
-    setting: (table) => (source === 'live' ? `public.${table}` : `(select r.* from (select distinct on (l.row_id) l.op,l.data from public.setting_log l
-      where l.tbl='${table}' and l.created_at<${t} order by l.row_id,l.created_at desc,l.seq desc) l
-      cross join lateral jsonb_populate_record(null::public.${table},l.data) r where l.op<>'delete')`),
+    before, source, t,
+    rel: (table) => {
+      if (!isProject(table) && !isGlobal(table) && !isMixed(table)) throw new Error(`기록 대상이 아닌 표: ${table}`);
+      if (source === 'live') return `public.${table}`;
+      if (isMixed(table)) return `(${populate(latest('state_log', table), table)} union all ${populate(latest('global_log', table), table)})`;
+      return populate(latest(isGlobal(table) ? 'global_log' : 'state_log', table), table);
+    },
   };
 }
 
-/** 그 프로젝트의 상태를 되살릴 수 있는 가장 이른 시각(0036 seed). null이면 처음부터 기록이 있다. */
+/**
+ * 상태를 되살릴 수 있는 가장 이른 커밋 시계 값(0036 seed). null이면 처음부터 기록이 있다.
+ * 프로젝트 이력과 전역 이력(실행 PC·설정) 중 이른 쪽이다(같은 마이그레이션 트랜잭션이라 보통 같다).
+ */
 export async function stateFrom(client: PoolClient, projectId: string): Promise<string | null> {
   const row = (await client.query<{ at: string | null }>(
-    `select to_char(min(created_at) at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') at from state_log where project_id=$1 and op='seed'`, [projectId])).rows[0];
+    `select to_char(min(c.committed_at) at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') at from (
+       select xid from state_log where project_id=$1 and op='seed' union all select xid from global_log where op='seed') s join commit_log c on c.xid=s.xid`, [projectId])).rows[0];
   return row?.at ?? null;
 }
 
 /**
  * T 시점의 일정 계산. 계산 함수는 GET /api/schedule과 같은 shared `schedule()`이다.
- * 입력 중 Task·의존성·추정·세션·사용량·관측 비율·기준 일정은 T 시점 값, 설정(정책·불가일·한도·heartbeat)은 지금 값이다.
+ * 입력은 모두 T 시점 값이다(설정은 settingsAt 규칙).
  */
 /**
  * T 시점 설정. 묶음마다 다음 순서로 정한다.
- * 1. 상태 기록에 T 전 기록이 있으면 그것(정확).
- * 2. 없으면 지금 표. 묶음 버전(편집 시각)이 T 전이면 그때도 같은 값이었다(정확).
+ * 1. T가 기록 시작 이후면 전역 이력(global_log)에서 되살린다(정확). 빈 DB에서 시작했으면 언제나 이 경우다.
+ * 2. 업그레이드 전 시점(T < 기록 시작)이면 지금 표를 읽고, 묶음 버전(편집 시각)이 T 전이면 그때도 같은 값이었다(정확).
  * 3. 그것도 아니면 지금 값을 쓰고 그 묶음을 `current`에 넣는다(보고서가 「설정은 현재 값」으로 표시).
  */
 export async function settingsAt(client: PoolClient, a: AsOf) {
   const q = <T extends object>(sql: string, args: unknown[] = []) => client.query<T>(sql, args).then((r) => r.rows);
   const current: SettingGroup[] = [];
-  const logged = async (table: SettingTable) => a.source === 'log'
-    && Boolean((await q(`select 1 from setting_log where tbl=$1 and created_at<${a.t} limit 1`, [table])).length);
+  // 기록 시작(0036 업그레이드 표시) 이후의 T면 이력이 완전하다 → 이력만 읽는다(빈 표도 「그때 비어 있었다」).
+  const start = a.source === 'log'
+    ? (await q<{ at: string | null }>(`select min(c.committed_at)::text at from global_log l join commit_log c on c.xid=l.xid where l.tbl='log_start'`))[0]?.at ?? null : null;
+  const covered = a.source === 'live' || start === null
+    || Boolean((await q<{ ok: boolean }>(`select $1::timestamptz<=${a.t} ok`, [start]))[0]?.ok);
+  const logged = () => Promise.resolve(a.source === 'log' && covered);
   // 기록이 없을 때: 지금 표 + 「그때도 같았나」 확인식(SQL, T 전이면 참)
   const pick = async (table: SettingTable, group: SettingGroup, proof: string) => {
-    if (await logged(table)) return a.setting(table);
+    if (await logged()) return a.rel(table);
     if (a.source === 'log' && !(await q<{ ok: boolean }>(`select coalesce((${proof}),true) ok`))[0]?.ok) current.push(group);
     return `public.${table}`;
   };
@@ -115,8 +129,8 @@ export async function settingsAt(client: PoolClient, a: AsOf) {
   const concRel = await pick('concurrency_settings', 'concurrency', `select coalesce(concurrency_version,created_at)<${a.t} or created_at>=${a.t} from concurrency_settings where singleton`);
   const concRows = await q<Record<string, unknown> & { created_at: Date }>(`select * from ${concRel} c where singleton`);
   const conc = concRows[0] && !(a.source === 'log' && concRel === 'public.concurrency_settings' && concRows[0].created_at.getTime() >= Date.parse(a.before)) ? concRows[0] : undefined;
-  // 실행 PC 사양은 추가 전용 기록이라 T 전 마지막 보고를 쓴다. 한도 계산은 실행 화면과 같은 함수(runner/service caps)다.
-  const host = (await q(`select * from ${a.added('runner_hosts')} h order by seen_at desc,created_at desc limit 1`))[0];
+  // 실행 PC 사양은 T 시점의 마지막 보고를 쓴다. 한도 계산은 실행 화면과 같은 함수(runner/service caps)다.
+  const host = (await q(`select * from ${a.rel('runner_hosts')} h order by seen_at desc,created_at desc,id desc limit 1`))[0];
   const repo = { host: () => Promise.resolve(host), settings: () => Promise.resolve(conc) } as unknown as RunnerRepository;
   const manual = conc?.mode === 'manual' ? conc.caps as { total?: number; Claude?: number; Codex?: number } | null : null;
   const cap: { total?: number; Claude?: number; Codex?: number } = host ? wireCaps((await runnerCaps(repo)).caps) : manual ?? {};
@@ -133,20 +147,20 @@ export async function scheduleAt(client: PoolClient, projectId: string, a: AsOf,
     `select t.id,t.task_key,t.wbs_node_id,t.sort_order,t.status,t.priority,t.assignee_agent,t.conflict_group,to_char(greatest(t.fix_start,p.start_date),'YYYY-MM-DD') fix_start,
        ${isoAt('t.act_start')} act_start,${isoAt('t.act_end')} act_end,${isoAt('t.updated_at')} updated_at,e.est::text est,e.lo::text lo,e.hi::text hi
      from ${a.rel('tasks')} t join ${a.rel('projects')} p on p.id=t.project_id
-     left join lateral(select est,lo,hi from ${a.added('task_estimates')} x where x.task=t.id order by created_at desc,id desc limit 1) e on true
+     left join lateral(select est,lo,hi from ${a.rel('task_estimates')} x where x.task=t.id order by created_at desc,id desc limit 1) e on true
      where t.project_id=$1 and t.deleted_at is null order by t.task_key`, [projectId]);
   const deps = await q<{ pred: string; succ: string; type: 'FS' | 'SS' }>(
     `select p.task_key pred,s.task_key succ,d.dep_type type from ${a.rel('task_dependencies')} d join ${a.rel('tasks')} p on p.id=d.pred join ${a.rel('tasks')} s on s.id=d.succ
      where d.project_id=$1 and p.deleted_at is null and s.deleted_at is null order by d.id`, [projectId]);
   const nodes = await q<{ id: string; kind: 'phase' | 'work_package'; parent_id: string | null; sort_order: number }>(`select id,kind,parent_id,sort_order from ${a.rel('wbs_nodes')} n where n.project_id=$1 order by n.id`, [projectId]);
   const sessions = await q<{ from: string; to: string | null; last: string }>(
-    `select ${isoAt('started_at')} "from",case when ended_at<${a.t} then ${isoAt('ended_at')} end "to",${isoAt(`least(last_heartbeat_at,${a.t})`)} last from runner_sessions where started_at<${a.t}`);
+    `select ${isoAt('started_at')} "from",${isoAt('ended_at')} "to",${isoAt('last_heartbeat_at')} last from ${a.rel('runner_sessions')} s order by started_at,id`);
   const usage = await q<{ agent: 'Claude' | 'Codex'; remain: string; reset_at: string }>(
-    `select distinct on (agent) agent,remain_pct::text remain,${isoAt('reset_at')} reset_at from ${a.added('agent_usage')} u order by agent,created_at desc`);
-  const limit = (await q<{ limit: number }>(`select "limit" from ${a.added('runner_concurrency_log')} c order by created_at desc,id desc limit 1`))[0]?.limit;
+    `select distinct on (agent) agent,remain_pct::text remain,${isoAt('reset_at')} reset_at from ${a.rel('agent_usage')} u order by agent,created_at desc,id desc`);
+  const limit = (await q<{ limit: number }>(`select "limit" from ${a.rel('runner_concurrency_log')} c order by created_at desc,id desc limit 1`))[0]?.limit;
   const ratio = Number((await q<{ ratio: string | null }>(
     `select sum(case jsonb_typeof(subagents) when 'number' then (subagents#>>'{}')::numeric else coalesce((subagents->>'observed')::numeric,0) end)/nullif(sum(running),0) ratio
-     from ${a.added('runner_concurrency_log')} c where running>0 and created_at>=${a.t}-make_interval(days=>$1)`, [policy.windowDays]))[0]?.ratio ?? 0);
+     from ${a.rel('runner_concurrency_log')} c where running>0 and created_at>=${a.t}-make_interval(days=>$1)`, [policy.windowDays]))[0]?.ratio ?? 0);
   const paths = wbsPaths(nodes.map((n) => ({ id: n.id, kind: n.kind, parentId: n.parent_id, sortOrder: n.sort_order })),
     tasks.map((t) => ({ id: t.id, wbsNodeId: t.wbs_node_id, sortOrder: t.sort_order, deleted: false })));
   const total = set.cap.total ?? 2;
@@ -174,10 +188,10 @@ export async function scheduleAt(client: PoolClient, projectId: string, a: AsOf,
     usage: Object.fromEntries(usage.map((row) => [row.agent, { remain: Number(row.remain), resetAt: row.reset_at }])),
   };
   const baselines = await q<{ v: number; expected: { end?: string }; range: { lo: string; hi: string }; id: string }>(
-    `select id,v,expected,range from ${a.added('schedule_baselines')} b where project_id=$1 order by v`, [projectId]);
+    `select id,v,expected,range from ${a.rel('schedule_baselines')} b where project_id=$1 order by v`, [projectId]);
   const last = baselines.at(-1);
   const items = last ? await q<{ task_key: string; end: string }>(
-    `select t.task_key,to_char(b."end" at time zone 'Asia/Seoul','YYYY-MM-DD') "end" from ${a.added('baseline_items')} b join ${a.rel('tasks')} t on t.id=b.task where b.baseline=$1`, [last.id]) : [];
+    `select t.task_key,to_char(b."end" at time zone 'Asia/Seoul','YYYY-MM-DD') "end" from ${a.rel('baseline_items')} b join ${a.rel('tasks')} t on t.id=b.task where b.baseline=$1 order by t.task_key`, [last.id]) : [];
   const baseEnd = new Map(items.map((i) => [i.task_key, i.end]));
   let result;
   try { result = computeSchedule(input); } catch (error) {

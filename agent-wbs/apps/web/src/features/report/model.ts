@@ -7,7 +7,7 @@
  *   왜: 화면·메일·PDF의 숫자와 문장이 서로 어긋나지 않게 한다.
  */
 import {
-  addDays, customPeriodProblem, externalView, scrubInternal, stateMissingFrom, internalKpis, MAX_CUSTOM_DAYS, monthDay, mondayOf, reportFigures, TASK_STATUSES,
+  addDays, customPeriodProblem, externalView, scrubInternal, stateMissingFrom, toMicro, internalKpis, MAX_CUSTOM_DAYS, monthDay, mondayOf, reportFigures, TASK_STATUSES,
   type ExternalView, type Kpi, type ReportSnapshotData,
 } from '@awbs/shared';
 import type { ResponseOf } from '../../shared/api/contract.ts';
@@ -78,7 +78,18 @@ export function settingsNote(s: ReportSnapshotData): string | null {
   const groups = s.basis?.currentSettings ?? [];
   return groups.length ? `설정은 현재 값 — ${groups.map((g) => SETTING_GROUP[g] ?? g).join(' · ')}은 이 시점의 값을 알 수 없어 보고서를 만든 때의 값으로 계산했습니다.` : null;
 }
-export const snapLabel = (generatedAt: string) => `이 보고서는 ${formatDateTime(generatedAt)} 시점의 스냅샷입니다. 이후 데이터가 바뀌어도 내용은 바뀌지 않습니다.`;
+/**
+ * 스냅샷 안내(재리뷰 2 문제 7). 생성 시각과 상태 기준 시각(basis.asOf, 기간 끝과 생성 시각 중 이른 쪽)을 따로 쓴다.
+ * 왜: 지난주 보고서를 오늘 만들면 상태는 지난주 끝 기준인데 「오늘 시점」이라고 쓰면 현재 현황으로 오해한다.
+ * basis가 없는 예전 보고서는 생성 시점 기준이었으므로 예전 문구를 쓴다.
+ */
+export function snapLabel(generatedAt: string, s: ReportSnapshotData): string {
+  const asOf = s.basis?.asOf;
+  if (!asOf) return `이 보고서는 ${formatDateTime(generatedAt)} 시점의 스냅샷입니다. 이후 데이터가 바뀌어도 내용은 바뀌지 않습니다.`;
+  const end = toMicro(asOf) < toMicro(generatedAt) ? '(기간 끝)' : '(생성 시각)';
+  return `이 보고서는 ${formatDateTime(generatedAt)}에 만들었습니다. 상태 값은 ${formatDateTime(asOf)} 직전${end} 기준입니다. 이후 데이터가 바뀌어도 내용은 바뀌지 않습니다.`;
+}
+export const appendixTitle = (s: ReportSnapshotData) => `부록. 전체 Task 현황 (${s.basis ? '기간 끝 시점' : '보고서 생성 시점'})`;
 /** 보고용 제목의 프로젝트 이름도 자유 입력이라 내부 용어를 뺀다(리뷰 M6-01 3). */
 export const docTitle = (projectName: string, kind: ReportKind, view: ReportView) =>
   `${view === 'ext' ? scrubInternal(projectName) : projectName} — ${KIND[kind].doc}${view === 'ext' ? ' (보고용)' : ''}`;

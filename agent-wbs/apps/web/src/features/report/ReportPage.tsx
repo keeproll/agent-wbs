@@ -21,7 +21,7 @@ import { useTopBar } from '../../shared/ui/feedback.tsx';
 import { LINK } from '../../shared/links.ts';
 import {
   changedLabel, defaultView, docTitle, externalDoc, formProblem, internalDoc, KIND, lateLabel, pdfName, periodLabel, QUICK, quickRange, rowView,
-  RULE_TEXT, settingsNote, snapLabel, VIEWS, type Kpi, type ReportDoc, type ReportKind, type ReportRow, type ReportView,
+  RULE_TEXT, appendixTitle, settingsNote, snapLabel, VIEWS, type Kpi, type ReportDoc, type ReportKind, type ReportRow, type ReportView,
 } from './model.ts';
 import { formatDateTime } from '../../shared/format.ts';
 import './report.css';
@@ -186,7 +186,7 @@ function ReportDocument({ row, projectName, view, onView }: { row: ReportRow; pr
             <span>생성 <span className="mono">{formatDateTime(row.generatedAt)}</span> · {rowView(row).byL}</span>
             <span className="mono">{row.reportKey}</span>
           </div>
-          <p className="rpt-snap">{snapLabel(row.generatedAt)}{late && ` · ${late}`}</p>
+          <p className="rpt-snap">{snapLabel(row.generatedAt, d.snapshot)}{late && ` · ${late}`}</p>
           {settingsNote(d.snapshot) && <p className="rpt-snap" role="note">{settingsNote(d.snapshot)}</p>}
         </header>
         {view === 'int' ? <InternalView d={d} kind={row.kind} weekly={weekly} /> : <ExternalSections d={d} kind={row.kind} weekly={weekly} />}
@@ -310,7 +310,7 @@ function InternalView({ d, kind, weekly }: { d: ReportDoc; kind: ReportKind; wee
           </div>
         )}
       </section>
-      <section className="rpt-sec rpt-appx"><h3>부록. 전체 Task 현황 (보고서 생성 시점)</h3>
+      <section className="rpt-sec rpt-appx"><h3>{appendixTitle(d.snapshot)}</h3>
         {x.noRecord ? <p className="muted" role="note">{x.noRecord}</p> : !x.all.length && <p className="muted">Task가 없습니다.</p>}
         <div className="rpt-tbl" role="table" aria-label="전체 Task 현황">
           <div className="rpt-trw h al" role="row">{['WBS', 'Task', '제목', '상태', '개발/검증', '진행률', '체크리스트', '검증', '완료 예상', '기준 대비'].map((h) => <span key={h} role="columnheader">{h}</span>)}</div>
