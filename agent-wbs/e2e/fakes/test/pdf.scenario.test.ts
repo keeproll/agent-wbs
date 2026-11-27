@@ -26,13 +26,15 @@ import { issueLoginLink } from '../../../apps/api/src/platform/credentials.ts';
 import { generateDueReports } from '../../../apps/api/src/reports/service.ts';
 import { chromiumRenderer, type PdfRenderer } from '../../../apps/api/src/pdf/render.ts';
 import { reportPdf } from '../../../apps/api/src/pdf/service.ts';
+import * as pdfModel from '../../../apps/api/src/pdf/model.ts';
 import { externalDoc as pdfExternalDoc, internalDoc as pdfInternalDoc } from '../../../apps/api/src/pdf/model.ts';
+import * as web from '../../../apps/web/src/features/report/model.ts';
 import { externalDoc, internalDoc } from '../../../apps/web/src/features/report/model.ts';
 import { readPdf, squash, type PdfPage } from '../pdf-inspect.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Body = any;
-interface Report { id: string; reportKey: string; kind: string; from: string; to: string }
+interface Report { id: string; reportKey: string; kind: string; from: string; to: string; generatedAt: string }
 
 let owner: Pool;
 let pool: Pool;
@@ -233,6 +235,9 @@ describe('주간 팀장용 PDF(RPT-W-261026, 12섹션에 값이 있다)', () => 
     expect(textOf(doc.pages)).not.toContain('PDF다운로드');
   });
 
+  /** 캐시 파일 경로: `<세대>/pdf/<보고서>-<보기>-<문서 hash 앞 16자>.pdf` */
+  const cachedPath = async () => (await owner.query<{ path: string }>("select path from report_pdfs where report=$1 and view='int'", [id])).rows[0]?.path ?? '';
+
   test('캐시: 두 번째 요청은 다시 만들지 않고 같은 파일을 준다(report_pdfs에 sha256 기록)', async () => {
     const before = probe.calls;
     const again = new Uint8Array(await (await pdf(id, 'int')).arrayBuffer());
@@ -240,22 +245,51 @@ describe('주간 팀장용 PDF(RPT-W-261026, 12섹션에 값이 있다)', () => 
     expect(Buffer.from(again).equals(Buffer.from(bytes))).toBe(true);
     const rows = (await owner.query<{ path: string; sha256: string; view: string }>('select path,sha256,view from report_pdfs where report=$1', [id])).rows;
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.path).toBe(`1/pdf/${id}-int.pdf`);
+    expect(rows[0]?.path).toMatch(new RegExp(`^1/pdf/${id}-int-[0-9a-f]{16}\\.pdf$`));
     const { createHash } = await import('node:crypto');
     expect(rows[0]?.sha256).toBe(createHash('sha256').update(bytes).digest('hex'));
-    expect(Buffer.from(await readFile(join(root, '1', 'pdf', `${id}-int.pdf`))).equals(Buffer.from(bytes))).toBe(true);
+    expect(Buffer.from(await readFile(join(root, await cachedPath()))).equals(Buffer.from(bytes))).toBe(true);
   });
 
   test('캐시 파일이 바뀌었거나 없어졌으면 다시 만든다(지문이 다른 파일을 내보내지 않음)', async () => {
-    await writeFile(join(root, '1', 'pdf', `${id}-int.pdf`), 'broken');
+    await writeFile(join(root, await cachedPath()), 'broken');
     const before = probe.calls;
     const r = await fetchPdf(id, 'int');
     expect(probe.calls).toBe(before + 1);
     expect(Buffer.from(r.bytes.subarray(0, 5)).toString()).toBe('%PDF-');
-    await rm(join(root, '1', 'pdf', `${id}-int.pdf`));
+    await rm(join(root, await cachedPath()));
     expect((await fetchPdf(id, 'int')).doc.pages.length).toBe(doc.pages.length);
     expect(probe.calls).toBe(before + 2);
     expect((await owner.query('select 1 from report_pdfs where report=$1', [id])).rowCount).toBe(1);
+  }, 60_000);
+
+  test('캐시 키는 문서 hash다: 행이 다른 문서의 파일을 가리키면(지문은 맞아도) 쓰지 않고 다시 만든다', async () => {
+    // 다른 문서(예: 예전 서식)로 만든 파일이 남아 있는 상황을 만든다. 파일 지문은 행과 맞게 둔다.
+    const other = `1/pdf/${id}-int-${'0'.repeat(16)}.pdf`;
+    await writeFile(join(root, other), 'other document');
+    const { createHash } = await import('node:crypto');
+    await owner.query("update report_pdfs set path=$2,sha256=$3 where report=$1 and view='int'", [id, other, createHash('sha256').update('other document').digest('hex')]);
+    const before = probe.calls;
+    const r = await fetchPdf(id, 'int');
+    expect(probe.calls).toBe(before + 1);
+    expect(Buffer.from(r.bytes.subarray(0, 5)).toString()).toBe('%PDF-');
+    expect(await cachedPath()).not.toBe(other);
+    // 행이 가리키던 옛 파일은 지운다.
+    await expect(readFile(join(root, other))).rejects.toThrow();
+  }, 60_000);
+
+  test('PDF의 모든 값은 스냅샷에서 온다: 생성 뒤 프로젝트 이름을 바꿔도 제목은 생성 때 이름이다', async () => {
+    expect(s.projectName).toBe('Verum-SDN Agent WBS — Self Development');
+    await owner.query("update projects set name='바뀐 이름'");
+    try {
+      await rm(join(root, await cachedPath()));
+      const r = await fetchPdf(id, 'int');
+      const text = textOf(r.doc.pages);
+      expect(text).toContain(squash(`${s.projectName} — 주간 보고서`));
+      expect(text).not.toContain('바뀐이름');
+    } finally {
+      await owner.query('update projects set name=$1', [s.projectName]);
+    }
   }, 60_000);
 });
 
@@ -310,11 +344,24 @@ describe('빈 상태(기록 없는 날 일간 RPT-D-261027)', () => {
 
 describe('PDF와 화면이 같은 계산을 쓴다', () => {
   test('서버 PDF의 보기 계산이 화면(apps/web report/model.ts)과 모든 보고서에서 같다', async () => {
-    const rows = (await owner.query<{ snapshot: ReportSnapshotData; kind: 'daily' | 'weekly' | 'custom' }>('select snapshot,kind from reports')).rows;
-    expect(rows.length).toBeGreaterThan(5);
-    for (const row of rows) {
-      expect(pdfInternalDoc(row.snapshot)).toEqual(internalDoc(row.snapshot));
-      expect(pdfExternalDoc(row.snapshot, row.kind)).toEqual(externalDoc(row.snapshot, row.kind));
+    const project = (await owner.query<{ id: string }>('select id from projects')).rows[0]?.id ?? '';
+    const list = (await json(`/api/projects/${project}/reports?limit=200`)).items as (Report & Parameters<typeof web.lateLabel>[0])[];
+    expect(list.length).toBeGreaterThan(5);
+    for (const row of list) {
+      const { snapshot } = await json(`/api/reports/${row.id}`) as { snapshot: ReportSnapshotData };
+      const kind = row.kind as 'daily' | 'weekly' | 'custom';
+      expect(pdfInternalDoc(snapshot)).toEqual(internalDoc(snapshot));
+      expect(pdfExternalDoc(snapshot, kind)).toEqual(externalDoc(snapshot, kind));
+      // 머리말(제목·기간·누락 보충·스냅샷 안내·파일 이름·생성 주체)도 같은 글자다.
+      for (const view of ['int', 'ext'] as const) {
+        expect(pdfModel.docTitle(snapshot.projectName, kind, view)).toBe(web.docTitle(snapshot.projectName, kind, view));
+        expect(pdfModel.pdfName(row.reportKey, view)).toBe(web.pdfName(row.reportKey, view));
+      }
+      expect(pdfModel.periodLabel(row)).toBe(web.periodLabel(row));
+      expect(pdfModel.lateLabel(row)).toBe(web.lateLabel(row));
+      expect(pdfModel.snapLabel(row.generatedAt)).toBe(web.snapLabel(row.generatedAt));
+      expect(pdfModel.byLabel(kind)).toBe(web.rowView(row).byL);
+      expect(pdfModel.KIND[kind].doc).toBe(web.KIND[kind].doc);
     }
   });
 });
@@ -407,6 +454,6 @@ describe('생성 중 프로젝트 초기화(contracts §8 초기화 경합)', ()
     // 같은 보고서를 현재 세대로 요청하면 정상으로 만들고 세대 2 폴더에 둔다.
     const response = await pdf(id, 'int');
     expect(response.status).toBe(200);
-    expect(await readdir(join(root, '2', 'pdf'))).toEqual([`${id}-int.pdf`]);
+    expect(await readdir(join(root, '2', 'pdf'))).toEqual([expect.stringMatching(new RegExp(`^${id}-int-[0-9a-f]{16}\\.pdf$`))]);
   }, 60_000);
 });

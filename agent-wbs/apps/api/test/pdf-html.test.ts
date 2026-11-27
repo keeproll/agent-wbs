@@ -12,7 +12,7 @@ const summary: ReportSnapshotData['summary'] = {
 };
 const evil = '<script>alert(1)</script> & "따옴표"';
 const snapshot: ReportSnapshotData = {
-  issues: [], series: [], active: [], failures: [], attempts: [], replans: [], gaps: [], messages: [], next: [], summary,
+  projectName: `프로젝트 ${evil}`, issues: [], series: [], active: [], failures: [], attempts: [], replans: [], gaps: [], messages: [], next: [], summary,
   done: [{
     taskKey: 'TASK-0001', wbsPath: '1.1.1', title: evil, assignee: 'Claude', verifier: 'Codex', workType: 'Implementation', domain: 'BE',
     actStart: '2026-10-27T01:00:00.000Z', actEnd: '2026-10-28T01:00:00.000Z', estHours: 3, actualHours: 2.5, attempts: 1, slipDays: 0,
@@ -24,7 +24,7 @@ const snapshot: ReportSnapshotData = {
 const bodyOf = (html: string) => html.slice(html.indexOf('<body>'));
 const input = (view: 'int' | 'ext'): ReportHtmlInput => ({
   reportKey: 'RPT-W-261026', kind: 'weekly', from: '2026-10-26', to: '2026-11-01', generatedAt: '2026-11-03T22:00:00.000000Z', dueAt: null, reason: '정기 생성',
-  projectName: `프로젝트 ${evil}`, view, snapshot,
+  view, snapshot,
 });
 
 describe('보고서 PDF HTML', () => {

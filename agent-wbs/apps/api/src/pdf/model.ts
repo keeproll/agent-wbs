@@ -10,7 +10,7 @@
  * 문구 상수는 원본(P)에서 웹이 옮긴 값과 같다. 출처: apps/web/src/features/task/labels.ts·settings/labels.ts.
  */
 import {
-  externalView, internalKpis, monthDay, reportFigures, TASK_STATUSES, type ExternalView, type ReportKind, type ReportSnapshotData,
+  externalView, scrubInternal, internalKpis, monthDay, reportFigures, TASK_STATUSES, type ExternalView, type ReportKind, type ReportSnapshotData,
 } from '@awbs/shared';
 
 export type ReportView = 'int' | 'ext';
@@ -72,7 +72,9 @@ const isLate = (r: ReportHead) => r.kind !== 'custom' && (r.reason ?? '').includ
 export const lateLabel = (r: ReportHead) => (isLate(r) && r.dueAt ? `${r.reason ?? ''} — 예정 ${formatDateTime(r.dueAt)}` : '');
 export const byLabel = (kind: ReportKind) => (kind === 'custom' ? '팀장' : '시스템 (정기)');
 export const snapLabel = (generatedAt: string) => `이 보고서는 ${formatDateTime(generatedAt)} 시점의 스냅샷입니다. 이후 데이터가 바뀌어도 내용은 바뀌지 않습니다.`;
-export const docTitle = (projectName: string, kind: ReportKind, view: ReportView) => `${projectName} — ${KIND[kind].doc}${view === 'ext' ? ' (보고용)' : ''}`;
+/** 보고용 제목의 프로젝트 이름도 자유 입력이라 내부 용어를 뺀다(리뷰 M6-01 3). */
+export const docTitle = (projectName: string, kind: ReportKind, view: ReportView) =>
+  `${view === 'ext' ? scrubInternal(projectName) : projectName} — ${KIND[kind].doc}${view === 'ext' ? ' (보고용)' : ''}`;
 /** PDF 파일 이름(G L410 예: `RPT-W-261027_보고용.pdf`) */
 export const pdfName = (reportKey: string, view: ReportView) => `${reportKey}_${view === 'int' ? '팀장용' : '보고용'}.pdf`;
 

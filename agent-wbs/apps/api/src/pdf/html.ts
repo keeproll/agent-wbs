@@ -9,14 +9,11 @@
  *
  * 모든 값은 HTML 특수 문자를 바꿔 넣는다(`esc`). 왜: 제목·메시지에 `<script>` 같은 글자가 있어도 글자로만 보이게 한다.
  */
-import { readFileSync } from 'node:fs';
 import type { ReportSnapshotData } from '@awbs/shared';
 import {
   byLabel, docTitle, externalDoc, formatDateTime, internalDoc, KIND, lateLabel, periodLabel, snapLabel, type ReportHead, type ReportView,
 } from './model.ts';
-
-/** 글꼴 굵기별 파일. 이 주소는 렌더러(render.ts)가 패키지 파일로 응답한다. */
-export const FONT_FILES = { 400: 'Regular', 500: 'Medium', 600: 'SemiBold', 700: 'Bold' } as const;
+import { FONT_FILES, pdfAssets } from './assets.ts';
 
 const esc = (value: string | number) => String(value).replace(/[&<>"']/g, (c) => `&#${String(c.charCodeAt(0))};`);
 /** 태그 이름·속성은 이 파일이 정한 고정값이다. 바깥 값은 children(이미 esc 처리)으로만 들어온다. */
@@ -106,9 +103,8 @@ function external(s: ReportSnapshotData, kind: ReportHead['kind'], weekly: boole
   ].join('');
 }
 
-/** 화면 CSS 원본. 웹과 같은 파일을 읽는다(복사하지 않는다). 서버가 떠 있는 동안 한 번만 읽는다. */
-let styles: string | undefined;
-const prototypeCss = () => (styles ??= readFileSync(new URL('../../../web/src/shared/styles/prototype.css', import.meta.url), 'utf8'));
+/** 화면 CSS. 웹과 같은 파일이다(빌드 산출물에서는 빌드가 복사한 것, assets.ts). */
+const prototypeCss = () => pdfAssets().css;
 
 /**
  * 글꼴: Pretendard GOV 1.3.9(G§9.7). 화면과 같은 글꼴 이름을 쓰되 PDF에는 **굵기별 고정 글꼴 파일**을 넣는다.
@@ -121,7 +117,11 @@ const fontFaces = () => Object.entries(FONT_FILES).map(([weight, name]) =>
 /** 원본 인쇄 경로(P L5005)가 문서에 덧붙인 CSS 그대로 */
 const PRINT_CSS = 'html,body{background:#fff;margin:0}.rpt-doc{border:0;max-width:none;padding:0}.reflink{color:inherit;text-decoration:none;border:0;background:none;padding:0;font:inherit}@page{size:A4;margin:14mm}';
 
-export interface ReportHtmlInput extends ReportHead { projectName: string; view: ReportView; snapshot: ReportSnapshotData }
+/**
+ * 입력은 보고서 기록(번호·종류·기간·생성 시각·사유)과 스냅샷뿐이다. 프로젝트 이름도 스냅샷 값을 쓴다.
+ * 왜: 보고서는 생성 시점 기록이다. 지금 DB 값을 읽으면 이름을 바꾼 뒤 만든 PDF가 그때의 보고서와 달라진다.
+ */
+export interface ReportHtmlInput extends ReportHead { view: ReportView; snapshot: ReportSnapshotData }
 
 export function reportHtml(r: ReportHtmlInput): string {
   const late = lateLabel(r);
@@ -129,7 +129,7 @@ export function reportHtml(r: ReportHtmlInput): string {
   const article = el('article', `class="rpt-doc" aria-label="${esc(`${r.reportKey} 보고서`)}"`,
     el('header', 'class="rpt-h"',
       el('div', 'class="rpt-kind"', esc(KIND[r.kind].doc)),
-      el('h2', '', esc(docTitle(r.projectName, r.kind, r.view))),
+      el('h2', '', esc(docTitle(r.snapshot.projectName, r.kind, r.view))),
       el('div', 'class="rpt-meta"',
         el('span', '', esc('기간 '), el('b', 'class="mono"', esc(periodLabel(r)))),
         el('span', '', esc('생성 '), span('mono', formatDateTime(r.generatedAt)), esc(` · ${byLabel(r.kind)}`)),

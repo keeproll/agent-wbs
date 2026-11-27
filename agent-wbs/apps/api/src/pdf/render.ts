@@ -9,11 +9,8 @@
  * - 열이 잘리거나 글자 단위로 쪼개지지 않아야 한다(UAT-REPORT-04·05). 문서를 화면 폭(900px)으로 배치하고 PDF에서 줄인다(LAYOUT_PX).
  * - 브라우저는 처음 쓸 때 한 번 띄워 계속 쓰고, 동시에 2개까지만 변환한다. 한 번 변환은 30초를 넘기지 않는다.
  */
-import { readFile } from 'node:fs/promises';
-import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
 import { chromium, type Browser } from 'playwright-core';
-import { FONT_FILES } from './html.ts';
+import { pdfAssets } from './assets.ts';
 
 export interface PdfRenderer {
   render(html: string): Promise<Buffer>;
@@ -33,11 +30,8 @@ const MARGIN = '14mm';
 const TIMEOUT_MS = 30_000;
 const MAX_PARALLEL = 2;
 
-const fontDir = () => join(dirname(createRequire(import.meta.url).resolve('pretendard-gov/package.json')), 'dist', 'web', 'static', 'woff2');
-
 export function chromiumRenderer(): PdfRenderer {
   let browser: Promise<Browser> | undefined;
-  let fonts: Promise<Map<string, Buffer>> | undefined;
   let active = 0;
   const waiting: (() => void)[] = [];
 
@@ -46,9 +40,6 @@ export function chromiumRenderer(): PdfRenderer {
     b.on('disconnected', () => { browser = undefined; });
     return b;
   }, (error: unknown) => { browser = undefined; throw error; }));
-  const loadFonts = () => (fonts ??= Promise.all(Object.values(FONT_FILES).map(async (name) =>
-    [`/fonts/PretendardGOV-${name}.woff2`, await readFile(join(fontDir(), `PretendardGOV-${name}.woff2`))] as const)).then((list) => new Map(list),
-  (error: unknown) => { fonts = undefined; throw error; }));
 
   async function slot<T>(fn: () => Promise<T>): Promise<T> {
     if (active >= MAX_PARALLEL) await new Promise<void>((resolve) => { waiting.push(resolve); });
@@ -57,7 +48,7 @@ export function chromiumRenderer(): PdfRenderer {
   }
 
   async function convert(html: string): Promise<Buffer> {
-    const files = await loadFonts();
+    const files = pdfAssets().fonts;
     const context = await (await launch()).newContext({ viewport: { width: LAYOUT_PX, height: 1123 } });
     try {
       context.setDefaultTimeout(TIMEOUT_MS);
