@@ -29,9 +29,13 @@ SQL 파일 이름과 snapshot(DB 구조 기록)의 연결도 함께 맞춘다.
 
 ```sh
 docker run -d --name <이름>-pg -e POSTGRES_USER=awbs_owner -e POSTGRES_PASSWORD=<비밀번호> -e LANG=C.UTF-8 \
-  -p 127.0.0.1:<포트>:5432 postgres:16 -c fsync=off -c synchronous_commit=off -c full_page_writes=off
+  -p 127.0.0.1:<포트>:5432 postgres:16 -c track_commit_timestamp=on -c fsync=off -c synchronous_commit=off -c full_page_writes=off
 docker rm -f -v <이름>-pg   # 끝나면 익명 볼륨까지 지운다
 ```
+
+`track_commit_timestamp=on`은 꼭 켠다(M6 통합).
+왜: M6-01 보고서 상태 이력이 트랜잭션의 실제 커밋 시각을 쓴다. 꺼져 있으면 시험 준비(`scripts/test-db-setup.ts`)가 바로 멈춘다.
+이 설정은 서버를 시작할 때만 바꿀 수 있다. 그래서 컨테이너를 띄우는 명령에 넣는다(`compose.yaml`과 같다).
 
 `fsync=off` 등 세 설정은 시험 컨테이너에만 쓴다. 개발·운영 DB에는 쓰지 않는다.
 이 설정은 커밋할 때마다 디스크에 기록이 끝날 때까지 기다리는 일을 생략한다.
