@@ -33,3 +33,7 @@ export function png(width: number, height: number, pixel: (x: number, y: number)
   return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', header),
     chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
+
+/** 시험용 기준 렌더러: HTML 파일 내용을 base64 PNG로 보고 그대로 돌려준다. 실제 렌더는 ci-night-render 시험이 다룬다. */
+export const pngRenderer = async (request: { entry: string; read: (path: string) => Promise<Buffer> }): Promise<Buffer> =>
+  Buffer.from((await request.read(request.entry)).toString(), 'base64');

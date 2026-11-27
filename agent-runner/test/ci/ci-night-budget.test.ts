@@ -84,13 +84,13 @@ test('서버 계약이 나오면 받을 자리: 정책의 격리 목록과 원�
   expect(causeCandidates({ suspects: ['a'.repeat(40)] })).toEqual([{ commit: 'a'.repeat(40) }]);
 });
 
-test('화면 비교 기준 이미지는 night 단계의 screens로 받고 prototype/uiux 아래 PNG만 허용한다', () => {
-  expect(parsePipeline(night({ screens: { wbs: 'prototype/uiux/shots/wbs.png' } })).stages.night[0]?.screens).toEqual({ wbs: 'prototype/uiux/shots/wbs.png' });
-  for (const screens of [{ wbs: 'shots/wbs.png' }, { wbs: 'prototype/uiux/../x.png' }, { wbs: 'prototype/uiux/x.jpg' }, { wbs: 1 }, {}, { '': 'prototype/uiux/x.png' }, { wbs: 'prototype/uiux//x.png' }]) {
+test('화면 비교 기준은 night 단계의 screens로 받고 prototype/uiux 아래 HTML만 허용한다', () => {
+  expect(parsePipeline(night({ screens: { wbs: 'prototype/uiux/Main.dc.html#wbs' } })).stages.night[0]?.screens).toEqual({ wbs: 'prototype/uiux/Main.dc.html#wbs' });
+  for (const screens of [{ wbs: 'shots/wbs.html' }, { wbs: 'prototype/uiux/../x.html' }, { wbs: 'prototype/uiux/x.png' }, { wbs: 1 }, {}, { '': 'prototype/uiux/x.html' }, { wbs: 'prototype/uiux//x.html' }]) {
     expect(() => parsePipeline(night({ screens }))).toThrow();
   }
   const stages = structuredClone(definition.stages) as Record<string, Record<string, unknown>[]>;
   const first = stages.deploy?.[0];
-  if (first) first.screens = { wbs: 'prototype/uiux/x.png' };
+  if (first) first.screens = { wbs: 'prototype/uiux/x.html' };
   expect(() => parsePipeline(JSON.stringify({ ...definition, stages }))).toThrow();
 });

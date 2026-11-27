@@ -80,7 +80,7 @@ test('health check가 응답하지 않으면 실패하고, 기다림은 정한 �
   } finally { await f.close(); }
 });
 
-test('포트 충돌로 실패하면 원인을 적고 직전 통과 이미지를 남긴다', async () => {
+test('포트 충돌로 실패하면 원인을 적고 직전 통과 커밋 복구 결과를 적는다', async () => {
   const f = await ciFixture();
   try {
     browser(f);
@@ -89,7 +89,7 @@ test('포트 충돌로 실패하면 원인을 적고 직전 통과 이미지를 
     const result = await runDeployCheck(options(f));
     expect(result).toMatchObject({ status: 'fail', failStep: 'up' });
     expect(f.final().note).toContain('포트 8080 사용 중');
-    expect(f.final().note).toContain(`직전 통과 커밋 ${f.main.slice(0, 7)}의 이미지는 남겨 둠`);
+    expect(f.final().note).toContain(`마지막 정상 커밋 ${f.main.slice(0, 7)}`);
     expect(f.calls.some(c => c.name === 'browser' && c.attempt === 2)).toBe(false);
   } finally { await f.close(); }
 });

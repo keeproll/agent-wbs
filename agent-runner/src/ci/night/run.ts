@@ -13,6 +13,7 @@ import { pruneEvidence } from './retention.ts';
 import { nightDue } from './schedule.ts';
 import { Evidence, excerpt, type CiExecute, type StepAttempt } from './steps.ts';
 import { judgeTests, type TestOutcome } from './tests.ts';
+import { BASELINE_RENDER, baselineImage, prototypePath, type BaselineRenderer } from './baseline.ts';
 import { compareImages, decodePng } from './visual.ts';
 
 export interface NightOptions {
@@ -26,6 +27,8 @@ export interface NightOptions {
   quarantined: ReadonlySet<string>;
   /** 정책의 「실패 테스트 재시도」 횟수(ci.retry, 기본 1). */
   retry: number;
+  /** Runner 소유 기준 화면 렌더러(조정자 결정 8). M7-06이 Playwright 렌더러를 연결한다. 없으면 화면 비교는 「비교 불가」다. */
+  renderBaseline?: BaselineRenderer;
   now?: () => number;
   redact?: Redact;
   signal?: AbortSignal;
@@ -150,6 +153,9 @@ export async function runNightCheck(options: NightOptions, date: string): Promis
   const tests = { passed: 0, total: 0 };
   const failedOnce: Record<string, boolean> = {};
   let logExcerpt: string | null = null;
+  // 앱 화면도 기준 이미지와 같은 크기로 찍도록 알려 준다.
+  const screenEnv = { AWBS_SCREEN_WIDTH: String(BASELINE_RENDER.viewport.width), AWBS_SCREEN_HEIGHT: String(BASELINE_RENDER.viewport.height) };
+  const readPrototype = async (file: string) => repo.fileAt(basis.baseSha, prototypePath(file));
   const release = await heavy.acquire(`ci-night:${date}`, signal);
   const id = `night-${randomUUID()}`;
   let created = false;
@@ -168,7 +174,7 @@ export async function runNightCheck(options: NightOptions, date: string): Promis
       while (attempts.length < limit) {
         signal?.throwIfAborted();
         await repo.taskCheckPath(id, basis.baseSha);
-        const attempt = await evidence.run(execute, command.argv, path, `${name.replace(':', '.')}-${String(attempts.length + 1)}`, {}, signal);
+        const attempt = await evidence.run(execute, command.argv, path, `${name.replace(':', '.')}-${String(attempts.length + 1)}`, screenEnv, signal);
         attempts.push(attempt);
         // 각 단계 뒤에도 사본이 커밋과 같아야 한다. 다른 파일로 한 검사를 그 커밋의 근거로 남기지 않는다(원칙 C).
         try { await repo.taskCheckPath(id, basis.baseSha); } catch (error) {
@@ -192,20 +198,24 @@ export async function runNightCheck(options: NightOptions, date: string): Promis
       }
       if (passed && (command.screens || last?.report?.screens)) {
         const reported = new Map((last?.report?.screens ?? []).map(s => [s.name, s.actual]));
-        for (const [screen, baseline] of Object.entries(command.screens ?? {})) {
+        const problems: string[] = [];
+        for (const [screen, target] of Object.entries(command.screens ?? {})) {
           try {
             const actual = reported.get(screen);
-            if (actual === undefined) throw new Error('화면 스크린샷이 없습니다.');
-            // 기준 이미지는 고정한 main 커밋의 Git 객체에서 읽는다. 단계 출력이 기준을 바꿀 수 없다(원칙 A).
-            const diff = compareImages(decodePng(await evidence.file(actual)), decodePng(await repo.fileAt(basis.baseSha, baseline)));
+            if (actual === undefined) throw new Error(`${screen}: 화면 스크린샷이 없습니다.`);
+            const app = decodePng(await evidence.file(actual));
+            // 기준 이미지는 고정한 main의 HTML을 Runner가 렌더해 만든다. 단계 출력이 기준을 바꿀 수 없다(원칙 A, 결정 8).
+            const expected = decodePng(await baselineImage(home, basis.baseSha, screen, target, readPrototype, options.renderBaseline, signal));
+            const diff = compareImages(app, expected);
             result.screens.push({ name: screen, status: diff.sizeMatch && diff.diffPixels === 0 ? 'same' : 'diff', ratio: diff.ratio });
-          } catch {
-            // 비교할 화면이 없거나 읽을 수 없으면 비교하지 못한 것이다. 「차이 없음」으로 보지 않는다.
+          } catch (error) {
+            // 비교할 화면이나 기준을 만들 수 없으면 비교하지 못한 것이다. 「차이 없음」으로 보지 않는다.
+            problems.push(`${screen}: ${error instanceof Error ? error.message : '비교 불가'}`);
             result.screens.push({ name: screen, status: 'missing', ratio: null });
           }
         }
         for (const screen of reported.keys()) if (!Object.hasOwn(command.screens ?? {}, screen)) result.screens.push({ name: screen, status: 'unchecked', ratio: null });
-        if (result.screens.some(s => s.status === 'missing')) { passed = false; reason = `비교할 화면이 없습니다: ${result.screens.filter(s => s.status === 'missing').map(s => s.name).join(', ')}`; }
+        if (problems.length) { passed = false; reason = `화면 비교 불가 — ${problems.join(' / ')}`; }
       }
       if (command.budgetsMs || timingRuns.some(Boolean)) {
         try {

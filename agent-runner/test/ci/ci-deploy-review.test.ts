@@ -37,7 +37,7 @@ test('Runner가 붙이는 단계 이름은 사용자 단계 이름과 겹치지 
   } finally { await f.close(); }
 });
 
-test('배포 실패 뒤 이전 서비스가 응답하지 않으면 「그대로」라고 보고하지 않고 확인한 사실만 적는다', async () => {
+test('배포 실패 뒤 복구도 안 되면 「그대로」라고 보고하지 않고 서비스 없음을 적는다', async () => {
   const f = await ciFixture();
   try {
     let serviceRunning = false;
@@ -53,21 +53,18 @@ test('배포 실패 뒤 이전 서비스가 응답하지 않으면 「그대로�
     });
     const out = await runDeployCheck(deploy(f, fetch));
     expect(out.note).not.toContain('그대로');
-    expect(out.note).toContain('실패 뒤 접속 확인: 응답 없음');
-    expect(out.note).toContain(`직전 통과 커밋 ${f.main.slice(0, 7)}의 이미지는 남겨 둠`);
-    expect(out.previous).toEqual({ commit: f.main, responding: false });
+    expect(out.note).toContain(`마지막 정상 커밋 ${f.main.slice(0, 7)} 복구 실패 — 서비스 없음`);
+    expect(out.restore).toMatchObject({ commit: f.main, status: 'fail' });
   } finally { await f.close(); }
 });
 
-test('배포 실패 뒤 서비스가 응답하면 응답했다는 사실만 적는다', async () => {
+test('직전 통과 배포가 없는데 실패 뒤 서비스가 응답하면 응답했다는 사실만 적는다', async () => {
   const f = await ciFixture();
   try {
-    f.script(async ({ name }) => name === 'browser' ? { code: 0, files: { 'shot.png': shot }, report: { screenshots: ['shot.png'] } } : { code: 0 });
-    await runDeployCheck(deploy(f));
     f.script(async ({ name }) => ({ code: name === 'browser' ? 1 : 0 }));
     const out = await runDeployCheck(deploy(f));
-    expect(out.note).toContain('실패 뒤 접속 확인: /api/health 응답 200(응답한 서비스의 커밋은 확인하지 않음)');
-    expect(out.previous).toEqual({ commit: f.main, responding: true });
+    expect(out.note).toContain('복구할 직전 통과 배포가 없음 — 실패 뒤 /api/health 응답 200(응답한 서비스의 커밋은 확인하지 않음)');
+    expect(out.restore).toBeUndefined();
   } finally { await f.close(); }
 });
 

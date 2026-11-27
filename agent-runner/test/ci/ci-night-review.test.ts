@@ -8,14 +8,14 @@ import { judgeTests } from '../../src/ci/night/tests.ts';
 import { pruneEvidence } from '../../src/ci/night/retention.ts';
 import { ciFixture } from './night-fixture.ts';
 import { commit, file, git } from './int-fixture.ts';
-import { png } from './png.ts';
+import { png, pngRenderer } from './png.ts';
 
 const NOW = Date.parse('2026-11-27T09:00:00Z');
 type F = Awaited<ReturnType<typeof ciFixture>>;
-const night = (f: F) => ({ repo: f.repo, heavy: new HeavySemaphore(1), execute: f.execute, report: f.report, home: f.home, quarantined: new Set<string>(), retry: 1, now: () => NOW });
+const night = (f: F) => ({ repo: f.repo, heavy: new HeavySemaphore(1), execute: f.execute, report: f.report, home: f.home, quarantined: new Set<string>(), retry: 1, now: () => NOW, renderBaseline: pngRenderer });
 const shot = png(2, 2, () => [1, 2, 3, 255]);
 async function define(f: F, step: Record<string, unknown>, files: Record<string, Buffer> = {}) {
-  for (const [path, value] of Object.entries(files)) await file(join(f.source, path), value as unknown as string);
+  for (const [path, value] of Object.entries(files)) await file(join(f.source, path), value.toString('base64'));
   await file(join(f.source, '.agentwbs/pipeline.yaml'), JSON.stringify({ ...f.pipeline, stages: { ...f.pipeline.stages, night: [{ argv: ['fake', `night-${String(step.name)}`], ...step }] } }));
   commit(f.source); git(f.source, 'push', f.remote, 'main');
 }
@@ -54,11 +54,11 @@ test('응답 시간은 어느 시도든 기준을 넘으면 기준 초과로 기
   } finally { await f.close(); }
 });
 
-test('화면 비교 기준 이미지는 main 고정 정의의 prototype/uiux 파일이고 실행 출력이 바꿀 수 없다', async () => {
+test('화면 비교 기준은 main 고정 정의의 prototype/uiux HTML을 렌더한 것이고 실행 출력이 바꿀 수 없다', async () => {
   const f = await ciFixture({ night: ['visual'] });
   try {
     const proto = png(2, 2, () => [9, 9, 9, 255]);
-    await define(f, { name: 'visual', screens: { wbs: 'prototype/uiux/shots/wbs.png' } }, { 'prototype/uiux/shots/wbs.png': proto });
+    await define(f, { name: 'visual', screens: { wbs: 'prototype/uiux/shots/wbs.html' } }, { 'prototype/uiux/shots/wbs.html': proto });
     f.script(async ({ name }) => name === 'visual' ? { code: 0, files: { 'fake.png': shot }, report: { screens: [{ name: 'wbs', actual: 'fake.png' }] } } : { code: 0 });
     expect(await runNightCheck(night(f), '2026-11-27')).toMatchObject({ status: 'pass', screens: [{ name: 'wbs', status: 'diff', ratio: 1 }] });
     f.script(async ({ name }) => name === 'visual' ? { code: 0, files: { 'fake.png': shot }, report: { screens: [{ name: 'wbs', actual: 'fake.png', expected: 'fake.png' }] } } : { code: 0 });

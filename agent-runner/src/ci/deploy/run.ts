@@ -5,7 +5,7 @@ import type { GitRepository } from '../../git/repository.ts';
 import type { HeavySemaphore } from '../../resources/heavy.ts';
 import { createRedactor, type Redact } from '../../security/redact.ts';
 import { atomicWrite } from '../../state/files.ts';
-import { parsePipeline } from '../pipeline.ts';
+import { parsePipeline, type PipelineStep } from '../pipeline.ts';
 import type { CiReport } from '../night/report.ts';
 import { Evidence, excerpt, type CiExecute } from '../night/steps.ts';
 import { decodePng } from '../night/visual.ts';
@@ -33,8 +33,8 @@ export interface DeployStepResult { name: string; status: 'pass' | 'fail' | 'ski
 export interface DeployResult {
   runId: string; status: 'pass' | 'fail'; commit: string; pipelineSha: string; url: string | null;
   steps: DeployStepResult[]; failStep: string | null; screenshots: string[]; note: string;
-  /** 실패했을 때 직전 통과 배포와, 실패 뒤 URL이 실제로 응답했는지 확인한 결과. 응답한 서비스의 커밋까지는 확인하지 않는다. */
-  previous?: { commit: string; responding: boolean };
+  /** 실패했을 때 마지막으로 통과한 커밋을 다시 기동하고 접속 확인한 결과(조정자 결정 7). 직전 통과 기록이 없으면 없다. */
+  restore?: { commit: string; status: 'pass' | 'fail'; detail: string };
 }
 interface DeployState { version: 1; lastPass: { commit: string; tag: string } | null; images: string[] }
 
@@ -47,6 +47,7 @@ const PORT_IN_USE = /EADDRINUSE|address already in use|port is already allocated
 export const RUNNER_TARGET = 'runner:target';
 export const RUNNER_URL = 'runner:url-check';
 export const RUNNER_SHOTS = 'runner:screenshots';
+export const RUNNER_RESTORE = 'runner:restore';
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 async function readState(directory: string): Promise<DeployState> {
@@ -95,6 +96,52 @@ export async function runDeployCheck(options: DeployOptions): Promise<DeployResu
     }
     return { ok: true, last };
   };
+  /**
+   * 정의의 deploy 단계를 순서대로 실행한다. 각 단계 뒤에 사본이 커밋과 같은지 확인한다(원칙 C).
+   * 처음 실패한 단계에서 멈춘다. 배포 확인과 복구가 같은 절차를 쓴다.
+   */
+  const runSteps = async (commands: readonly PipelineStep[], commit: string, image: string, path: string, worktree: string, prefix: string,
+    record: DeployStepResult[] | null): Promise<{ failed: { name: string; detail: string; portInUse: boolean } | null; shots: string[] }> => {
+    const env = { AWBS_DEPLOY_COMMIT: commit, AWBS_DEPLOY_TAG: image, AWBS_DEPLOY_URL: (options.url ?? '').replace(/\/$/, ''), COMPOSE_PROJECT_NAME: COMPOSE_PROJECT };
+    const shots: string[] = [];
+    for (const [index, command] of commands.entries()) {
+      const step = record?.[index];
+      const begin = performance.now();
+      await repo.taskCheckPath(worktree, commit);
+      const attempt = await evidence.run(execute, command.argv, path, `${prefix}${command.name}-1`, env, signal);
+      if (step) step.durationMs = Math.max(0, Math.round(performance.now() - begin));
+      const changed = await repo.taskCheckPath(worktree, commit).then(() => null, (error: unknown) => `단계가 검사 사본의 커밋 파일을 바꿨습니다: ${error instanceof Error ? error.message : ''}`);
+      if (changed) return { failed: { name: command.name, detail: changed, portInUse: false }, shots };
+      if (attempt.result.code !== 0 || attempt.reportError) {
+        return { failed: { name: command.name, detail: excerpt(attempt.result, attempt.reportError), portInUse: PORT_IN_USE.test(`${attempt.result.stderr}\n${attempt.result.stdout}`) }, shots };
+      }
+      if (step) step.status = 'pass';
+      shots.push(...attempt.report?.screenshots ?? []);
+    }
+    return { failed: null, shots };
+  };
+  /**
+   * 조정자 결정 7: 마지막으로 통과한 커밋을 그 커밋 자신의 정의로 다시 기동하고 접속 확인한다(로컬 compose 범위).
+   * 이미지는 보존해 두었으므로 보통 빌드 캐시로 빠르다. 무중단 교체는 Q-15 뒤다.
+   */
+  const restoreLastPass = async (pass: { commit: string; tag: string }, url: URL): Promise<NonNullable<DeployResult['restore']>> => {
+    const release = await heavy.acquire(`ci-deploy-restore:${pass.commit}`, signal);
+    const worktree = `deploy-restore-${randomUUID()}`;
+    let created = false;
+    try {
+      const commands = parsePipeline((await repo.pipelineAt(pass.commit)).source).stages.deploy;
+      const path = await repo.createTaskCheckWorktree(worktree, pass.commit); created = true;
+      const run = await runSteps(commands, pass.commit, pass.tag, path, worktree, 'runner.restore-', null);
+      if (run.failed) return { commit: pass.commit, status: 'fail', detail: `${run.failed.name} 실패` };
+      const checked = await probe(url, monotonic() + (options.healthTimeoutMs ?? 60_000));
+      return { commit: pass.commit, status: checked.ok ? 'pass' : 'fail', detail: checked.ok ? '접속 확인 통과' : `접속 확인 실패: ${checked.last}` };
+    } catch (error) {
+      return { commit: pass.commit, status: 'fail', detail: redact(error instanceof Error ? error.message : '복구하지 못했습니다.') };
+    } finally {
+      try { if (created) await repo.removeWorktree(worktree); }
+      finally { release(); }
+    }
+  };
   const stateDir = join(home, 'ci', 'deploy');
   const state = await readState(stateDir);
   const { pipelineSha, source } = await repo.pipelineAt(job.commit);
@@ -127,26 +174,12 @@ export async function runDeployCheck(options: DeployOptions): Promise<DeployResu
     let created = false;
     try {
       const path = await repo.createTaskCheckWorktree(id, job.commit); created = true;
-      const env = { AWBS_DEPLOY_COMMIT: job.commit, AWBS_DEPLOY_TAG: tag, AWBS_DEPLOY_URL: url.href.replace(/\/$/, ''), COMPOSE_PROJECT_NAME: COMPOSE_PROJECT };
-      const shots: string[] = [];
-      for (const [index, command] of pipeline.stages.deploy.entries()) {
-        const step = result.steps[index];
-        if (!step) throw new Error('배포 단계가 없습니다.');
-        const begin = performance.now();
-        await repo.taskCheckPath(id, job.commit);
-        const attempt = await evidence.run(execute, command.argv, path, `${command.name}-1`, env, signal);
-        step.durationMs = Math.max(0, Math.round(performance.now() - begin));
-        // 각 단계 뒤에도 사본이 커밋과 같아야 한다. 다른 파일로 한 확인을 그 커밋의 근거로 남기지 않는다(원칙 C).
-        const changed = await repo.taskCheckPath(id, job.commit).then(() => null, (error: unknown) => `단계가 검사 사본의 커밋 파일을 바꿨습니다: ${error instanceof Error ? error.message : ''}`);
-        if (changed) { fail(command.name, changed); break; }
-        if (attempt.result.code !== 0 || attempt.reportError) {
-          fail(command.name, excerpt(attempt.result, attempt.reportError));
-          if (PORT_IN_USE.test(`${attempt.result.stderr}\n${attempt.result.stdout}`)) notes.push(`포트 ${port} 사용 중`);
-          break;
-        }
-        step.status = 'pass';
-        shots.push(...attempt.report?.screenshots ?? []);
+      const run = await runSteps(pipeline.stages.deploy, job.commit, tag, path, id, '', result.steps);
+      if (run.failed) {
+        fail(run.failed.name, run.failed.detail);
+        if (run.failed.portInUse) notes.push(`포트 ${port} 사용 중`);
       }
+      const shots = run.shots;
       if (!result.failStep) {
         const step = result.steps[names.indexOf(RUNNER_URL)];
         const begin = monotonic();
@@ -186,13 +219,18 @@ export async function runDeployCheck(options: DeployOptions): Promise<DeployResu
     const removed = await execute(['docker', 'image', 'rm', '--', image], home, signal).catch(() => ({ code: null }));
     if (removed.code !== 0) { remaining.push(image); notes.push(`이전 이미지 ${image} 정리 실패`); }
   }
-  // 이전 서비스가 유지되는지는 짐작하지 않는다. 실패 뒤 실제로 접속해 본 결과만 적는다(원칙 C).
+  // 실패하면 마지막으로 통과한 커밋을 다시 기동한다. 결과는 실제 접속 확인으로만 판단해 보고한다(원칙 C, 결정 7).
   if (result.status === 'fail' && result.failStep !== RUNNER_TARGET && target) {
-    const after = await probe(new URL('/api/health', target), monotonic());
-    notes.push(after.ok ? '실패 뒤 접속 확인: /api/health 응답 200(응답한 서비스의 커밋은 확인하지 않음)' : `실패 뒤 접속 확인: 응답 없음(${after.last})`);
     if (state.lastPass) {
-      result.previous = { commit: state.lastPass.commit, responding: after.ok };
-      notes.push(`직전 통과 커밋 ${state.lastPass.commit.slice(0, 7)}의 이미지는 남겨 둠`);
+      const begin = monotonic();
+      result.restore = await restoreLastPass(state.lastPass, target);
+      result.steps.push({ name: RUNNER_RESTORE, status: result.restore.status, durationMs: Math.max(0, Math.round(monotonic() - begin)) });
+      const short = state.lastPass.commit.slice(0, 7);
+      notes.push(result.restore.status === 'pass' ? `마지막 정상 커밋 ${short}을 다시 기동해 접속 확인 통과`
+        : `마지막 정상 커밋 ${short} 복구 실패 — 서비스 없음(${result.restore.detail})`);
+    } else {
+      const after = await probe(new URL('/api/health', target), monotonic());
+      notes.push(`복구할 직전 통과 배포가 없음 — ${after.ok ? '실패 뒤 /api/health 응답 200(응답한 서비스의 커밋은 확인하지 않음)' : '서비스 없음'}`);
     }
   }
   if (result.failStep && result.failStep !== RUNNER_TARGET) notes.unshift(`실패 단계: ${result.failStep}`);

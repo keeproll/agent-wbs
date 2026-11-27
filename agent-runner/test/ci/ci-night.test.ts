@@ -4,13 +4,13 @@ import { expect, test } from 'vitest';
 import { HeavySemaphore } from '../../src/resources/heavy.ts';
 import { dueNight, runNightCheck } from '../../src/ci/night/run.ts';
 import { ciFixture } from './night-fixture.ts';
-import { png } from './png.ts';
+import { png, pngRenderer } from './png.ts';
 import { file, commit, git } from './int-fixture.ts';
 
 const NOW = Date.parse('2026-11-26T17:00:30Z');
 const options = (f: Awaited<ReturnType<typeof ciFixture>>, extra: Partial<Parameters<typeof runNightCheck>[0]> = {}) => ({
   repo: f.repo, heavy: new HeavySemaphore(1), execute: f.execute, report: f.report, home: f.home,
-  quarantined: new Set<string>(), retry: 1, now: () => NOW, ...extra,
+  quarantined: new Set<string>(), retry: 1, now: () => NOW, renderBaseline: pngRenderer, ...extra,
 });
 
 test('main을 고정해 job 없이 night:<date> 키로 시작하고 fence null로 보고한다', async () => {
@@ -87,7 +87,8 @@ test('테스트 실패 없이 종료 코드만 실패면 격리와 관계없이 
 });
 
 async function screens(f: Awaited<ReturnType<typeof ciFixture>>, table: Record<string, string>, files: Record<string, Buffer>) {
-  for (const [path, value] of Object.entries(files)) await file(join(f.source, path), value as unknown as string);
+  // 기준은 HTML이다. 시험 렌더러(pngRenderer)는 HTML 내용을 base64 PNG로 읽는다.
+  for (const [path, value] of Object.entries(files)) await file(join(f.source, path), value.toString('base64'));
   const stages = { ...f.pipeline.stages, night: [{ name: 'visual', argv: ['fake', 'night-visual'], screens: table }] };
   await file(join(f.source, '.agentwbs/pipeline.yaml'), JSON.stringify({ ...f.pipeline, stages }));
   commit(f.source); git(f.source, 'push', f.remote, 'main');
@@ -98,8 +99,8 @@ test('화면 스크린샷을 main의 프로토타입 기준 이미지와 픽셀 
   try {
     const same = png(2, 2, () => [10, 20, 30, 255]);
     const diff = png(2, 2, (x) => x ? [10, 20, 30, 255] : [0, 0, 0, 255]);
-    await screens(f, { wbs: 'prototype/uiux/shots/wbs.png', task: 'prototype/uiux/shots/task.png' },
-      { 'prototype/uiux/shots/wbs.png': same, 'prototype/uiux/shots/task.png': same });
+    await screens(f, { wbs: 'prototype/uiux/shots/wbs.html', task: 'prototype/uiux/shots/task.html' },
+      { 'prototype/uiux/shots/wbs.html': same, 'prototype/uiux/shots/task.html': same });
     f.script(async ({ name }) => name !== 'visual' ? { code: 0 } : { code: 0,
       files: { 'shots/wbs.png': same, 'shots/task.png': diff, 'shots/extra.png': same },
       report: { screens: [{ name: 'wbs', actual: 'shots/wbs.png' }, { name: 'task', actual: 'shots/task.png' }, { name: 'extra', actual: 'shots/extra.png' }] } });
@@ -120,7 +121,7 @@ test('보고서 경로가 근거 폴더 밖이면 거부한다', async () => {
   const f = await ciFixture({ night: ['visual'] });
   try {
     const outside = png(1, 1, () => [1, 1, 1, 255]);
-    await screens(f, { x: 'prototype/uiux/x.png' }, { 'prototype/uiux/x.png': outside });
+    await screens(f, { x: 'prototype/uiux/x.html' }, { 'prototype/uiux/x.html': outside });
     f.script(async ({ name }) => name !== 'visual' ? { code: 0 } : { code: 0, files: { '../outside.png': outside },
       report: { screens: [{ name: 'x', actual: '../outside.png' }] } });
     expect(await runNightCheck(options(f), '2026-11-27')).toMatchObject({ status: 'fail', failStep: 'visual', screens: [{ name: 'x', status: 'missing' }] });
