@@ -760,7 +760,7 @@ describe('서버 후속 4: Runner 계약과 분석 완료', () => {
       commit: SHA2, previousCommit: SHA1, instruction: '', resumeStep: null, wbs: await wbsSnapshot(ownerPool, projectId) });
     const wbs = first.payload.wbs as Awaited<ReturnType<typeof wbsSnapshot>>;
     expect(wbs.tasks).toHaveLength(2);
-    expect(wbs.tasks[0]).toMatchObject({ taskKey: 'TASK-0001', status: 'ready', wp: expect.any(String), content: { title: '작업 t1' } });
+    expect(wbs.tasks[0]).toMatchObject({ taskKey: 'TASK-0001', workType: 'Implementation', status: 'ready', wp: expect.any(String), content: { title: '작업 t1' } });
     expect(wbs.dependencies).toEqual([{ pred: 'TASK-0001', succ: 'TASK-0002', type: 'FS' }]);
     const premature = await runner(`/api/runner/bootstrap/${first.id}/progress`, { fence: first.fence, stepKey: 'cp', status: 'done', at: AT_NOW() });
     expect(errorOf(premature).code).toBe('INVALID_TRANSITION');
@@ -778,7 +778,7 @@ describe('서버 후속 4: Runner 계약과 분석 완료', () => {
     expect((await state()).inputJob?.status).toBe('done');
   });
 
-  test('차이 분석 중 내용·상태·작업 묶음·의존 관계가 바뀌면 제안을 거부한다', async () => {
+  test('차이 분석 중 내용·작업 유형·상태·작업 묶음·의존 관계가 바뀌면 제안을 거부한다', async () => {
     await active();
     const movedWp = (await ownerPool.query<{ id: string }>(`insert into wbs_nodes(project_id,node_key,kind,parent_id,title,sort_order)
       select project_id,'WP-99','work_package',parent_id,'다른 묶음',99 from wbs_nodes where kind='work_package' limit 1 returning id`)).rows[0]?.id;
@@ -790,6 +790,9 @@ describe('서버 후속 4: Runner 계약과 분석 완료', () => {
     await ownerPool.query("update tasks set title='작업 t1',status='planning' where task_key='TASK-0001'");
     expect(errorOf(await submit()).code).toBe('VERSION_CONFLICT');
     await ownerPool.query("update tasks set status='ready' where task_key='TASK-0001'");
+    await ownerPool.query("update tasks set work_type='Analysis' where task_key='TASK-0001'");
+    expect(errorOf(await submit()).code).toBe('VERSION_CONFLICT');
+    await ownerPool.query("update tasks set work_type='Implementation' where task_key='TASK-0001'");
     const oldWp = (job.payload.wbs as Awaited<ReturnType<typeof wbsSnapshot>>).tasks[0]?.wp;
     await ownerPool.query("update tasks set wbs_node_id=$1 where task_key='TASK-0001'", [movedWp]);
     expect(errorOf(await submit()).code).toBe('VERSION_CONFLICT');
@@ -824,7 +827,7 @@ describe('서버 후속 4: Runner 계약과 분석 완료', () => {
   });
 
   test('분할 job은 원 Task의 작업 묶음과 양쪽 그래프를 전달하고 그래프가 바뀌면 거부한다', async () => {
-    await active(draft([task('t1'), task('t2'), task('t3')], [
+    await active(draft([task('t1'), task('t2', { workType: 'Analysis', conflictGroup: 'shared-db' }), task('t3')], [
       { predRef: 't1', succRef: 't2', depType: 'FS' }, { predRef: 't2', succRef: 't3', depType: 'FS' },
     ]));
     const detail = async () => (await lead('GET', '/api/tasks/TASK-0002')).json<{ updatedAt: string }>();
@@ -833,13 +836,15 @@ describe('서버 후속 4: Runner 계약과 분석 완료', () => {
     expect(queued.statusCode, queued.body).toBe(202);
     const job = await claim('split');
     const wbs = job.payload.wbs as Awaited<ReturnType<typeof wbsSnapshot>>;
+    expect(job.payload.tasks).toEqual([expect.objectContaining({ taskKey: 'TASK-0002', workType: 'Analysis' })]);
+    expect(wbs.tasks.find((item) => item.taskKey === 'TASK-0002')?.workType).toBe('Analysis');
     const wp = wbs.tasks.find((item) => item.taskKey === 'TASK-0002')?.wp;
     expect(wp).toEqual(expect.any(String));
     expect(wbs.dependencies).toEqual([
       { pred: 'TASK-0001', succ: 'TASK-0002', type: 'FS' }, { pred: 'TASK-0002', succ: 'TASK-0003', type: 'FS' },
     ]);
     const part = (ref: string) => ({ op: 'add', ref, preds: [{ pred: 'TASK-0001', type: 'FS' }],
-      t: { title: ref, type: 'Implementation', domain: 'BE', wp, priority: 1, assignee: 'Claude', verifier: 'Codex', purpose: '분할', doneCond: '완료', splitBasis: '목적별 분할' } });
+      t: { title: ref, type: 'Analysis', domain: 'BE', wp, priority: 1, assignee: 'Claude', verifier: 'Codex', purpose: '분할', doneCond: '완료', splitBasis: '목적별 분할' } });
     const body = { jobId: job.id, fence: job.fence, title: '분할', reason: '목적별 분할', source: { kind: 'split', id: 'TASK-0002' }, ops: [
       part('NEW-1'), part('NEW-2'), { op: 'remove', task: 'TASK-0002' },
       { op: 'dep-add', pred: 'NEW-1', succ: 'TASK-0003', type: 'FS' }, { op: 'dep-add', pred: 'NEW-2', succ: 'TASK-0003', type: 'FS' },
@@ -850,6 +855,10 @@ describe('서버 후속 4: Runner 계약과 분석 완료', () => {
     await ownerPool.query("update task_dependencies set dep_type='FS'");
     const result = await runner('/api/planning/proposals', body);
     expect(result.statusCode, result.body).toBe(201);
+    const preview = await lead('GET', `/api/proposals/${result.json<{ id: string }>().id}/preview`);
+    expect(preview.statusCode, preview.body).toBe(200);
+    expect(preview.json<{ diff: { field: string; after: unknown }[] }>().diff.filter((item) => item.field === 'conflictGroup').map((item) => item.after))
+      .toEqual(['shared-db', 'shared-db']);
   });
 
   test('Planning 세션의 실제 claim에는 세션 ID·제목·범위가 있다', async () => {

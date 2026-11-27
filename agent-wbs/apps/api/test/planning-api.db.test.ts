@@ -147,16 +147,18 @@ describe('planning 추정·재조정', () => {
 });
 
 describe('planning 분할 요청·예외 사유', () => {
-  test('시작 전 Task의 분할 요청은 판단 대상 내용·hash를 실은 split job을 하나 만든다(같은 내용 재요청은 같은 job)', async () => {
-    const key = await task({ title: '분할할 작업' });
+  test.each(['Implementation', 'Analysis'])('%s Task의 분할 요청은 workType·내용·hash를 실은 split job을 하나 만든다', async (workType) => {
+    const key = await task({ title: '분할할 작업', workType });
     const d = await detail(key);
     const response = await call('POST', `/api/tasks/${key}/split`, { updatedAt: d.updatedAt });
     expect(response.statusCode, response.body).toBe(202);
     expectShape('splitTask', 202, response.json());
     const { jobId } = response.json<{ jobId: string }>();
-    const stored = (await ownerPool.query<{ kind: string; payload: { tasks: { taskKey: string; subjectHash: string; content: { title: string } }[] } }>('select kind,payload from runner_jobs where id=$1', [jobId])).rows[0];
+    const stored = (await ownerPool.query<{ kind: string; payload: { tasks: { taskKey: string; workType: string; subjectHash: string; content: { title: string } }[]; wbs: { tasks: { taskKey: string; workType: string }[] } } }>('select kind,payload from runner_jobs where id=$1', [jobId])).rows[0];
     expect(stored?.kind).toBe('split');
-    expect(stored?.payload.tasks).toEqual([expect.objectContaining({ taskKey: key, subjectHash: subjectHash(sourceOf(d)), content: expect.objectContaining({ title: '분할할 작업' }) })]);
+    expect(stored?.payload.tasks).toEqual([expect.objectContaining({ taskKey: key, workType, subjectHash: subjectHash(sourceOf(d)), content: expect.objectContaining({ title: '분할할 작업' }) })]);
+    expect(stored?.payload.wbs.tasks.find((task) => task.taskKey === key)?.workType).toBe(workType);
+    expect(stored?.payload.tasks[0]?.content).not.toHaveProperty('workType');
     const again = await call('POST', `/api/tasks/${key}/split`, { updatedAt: (await detail(key)).updatedAt });
     expect(again.json<{ jobId: string }>().jobId).toBe(jobId);
     expect(errorOf(await call('POST', `/api/tasks/${key}/split`, { updatedAt: '2020-01-01T00:00:00Z' })).code).toBe('VERSION_CONFLICT');

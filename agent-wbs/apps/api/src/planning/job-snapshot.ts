@@ -26,7 +26,7 @@ export async function wbsSnapshot(db: Db, projectId: string) {
     if (!source) throw new Error(`Task 판단 내용 없음: ${task.id}`);
     const wp = snapshot.phases.flatMap((phase) => phase.wps).find((item) => item.tasks.includes(task.id))?.id;
     if (!wp) throw new Error(`Task 작업 묶음 없음: ${task.id}`);
-    return { taskKey: task.id, wp, status: task.status, subjectHash: subjectHash(source), content: judgedContent(source) };
+    return { taskKey: task.id, workType: task.workType, wp, status: task.status, subjectHash: subjectHash(source), content: judgedContent(source) };
   });
   return { phases: snapshot.phases, tasks, dependencies: snapshot.dependencies };
 }
@@ -47,9 +47,9 @@ export function proposalBasis(wbs: Wbs | undefined, ops: readonly WireProposalOp
   }
   const dependencies = wbs.dependencies.filter((dep) => targets.has(dep.pred) || targets.has(dep.succ));
   const neighbors = new Set([...targets, ...dependencies.flatMap((dep) => [dep.pred, dep.succ])]);
-  const tasks = wbs.tasks.filter((task) => neighbors.has(task.taskKey)).map(({ taskKey, wp, status, subjectHash }) => {
+  const tasks = wbs.tasks.filter((task) => neighbors.has(task.taskKey)).map(({ taskKey, workType, wp, status, subjectHash }) => {
     wps.add(wp);
-    return { taskKey, wp, status, subjectHash };
+    return { taskKey, workType, wp, status, subjectHash };
   });
   const packages = wbs.phases.flatMap((phase) => phase.wps.filter((wp) => wps.has(wp.id)).map((wp) => ({ id: wp.id, phase: phase.id })));
   return { tasks, dependencies, wps: packages };

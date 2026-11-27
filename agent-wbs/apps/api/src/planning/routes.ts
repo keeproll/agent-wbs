@@ -311,7 +311,7 @@ export function registerPlanningRoutes(app: FastifyInstance, pool: Pool): void {
         currentWbs = await wbsSnapshot(client, projectId);
         const splitTask = source.kind === 'split' ? source.id : undefined;
         if (snapshotHash(proposalBasis(before, body.ops, splitTask)) !== snapshotHash(proposalBasis(currentWbs, body.ops, splitTask))) {
-          throw new TaskError('VERSION_CONFLICT', { changes: [] }, [], '분석한 Task의 내용·상태·작업 묶음·의존 관계가 바뀌었습니다. 새 작업으로 다시 분석하세요.');
+          throw new TaskError('VERSION_CONFLICT', { changes: [] }, [], '분석한 Task의 내용·작업 유형·상태·작업 묶음·의존 관계가 바뀌었습니다. 새 작업으로 다시 분석하세요.');
         }
       }
       // 판단을 뺀 변경 후 내용과 Runner가 실제 판단한 입력 지문을 대조한다.
