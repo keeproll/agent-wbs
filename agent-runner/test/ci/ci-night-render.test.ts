@@ -154,8 +154,9 @@ function fakeChromium(options: { ready?: boolean; fontInstalled?: boolean; failC
   const files: Record<string, string> = { 'prototype/uiux/Main.dc.html': '<html></html>', 'prototype/uiux/app.css': 'body{}' };
   type Handler = (route: { request: () => { url: () => string }; fulfill: (r: { status: number; body: Buffer; contentType: string }) => Promise<void>; abort: () => Promise<void> }) => Promise<void>;
   let handler: Handler | undefined;
+  const pageListeners: ((p: { close: () => Promise<void> }) => unknown)[] = [];
   const page = {
-    route: async (_: string, h: Handler) => { handler = h; },
+    route: async () => { log.push('page.route'); },
     goto: async (url: string) => {
       log.push(`goto ${url}`);
       for (const u of ['http://baseline.invalid/prototype/uiux/app.css', 'https://cdn.example.com/prototype/uiux/app.css', 'http://baseline.invalid/src/secret.ts']) {
@@ -167,6 +168,13 @@ function fakeChromium(options: { ready?: boolean; fontInstalled?: boolean; failC
     click: async (selector: string, o: Record<string, unknown>) => {
       log.push(`click ${selector} ${JSON.stringify(o)}`);
       if (selector === options.failClick) throw new Error('Timeout 10000ms exceeded');
+      if (selector === '#popup') {
+        // 새 창: 컨텍스트 가로채기가 첫 요청을 받고, 창은 바로 닫혀야 한다.
+        await handler?.({ request: () => ({ url: () => 'http://127.0.0.1:43387/popup' }),
+          fulfill: async () => { log.push('fulfill popup'); }, abort: async () => { log.push('abort popup'); } });
+        const popup = { close: async () => { log.push('popup closed'); } };
+        for (const listener of pageListeners) await listener(popup);
+      }
     },
     setViewportSize: async (size: { width: number; height: number }) => { log.push(`viewport ${JSON.stringify(size)}`); },
     waitForSelector: async (selector: string, o: Record<string, unknown>) => {
@@ -178,7 +186,13 @@ function fakeChromium(options: { ready?: boolean; fontInstalled?: boolean; failC
     screenshot: async (o: Record<string, unknown>) => { log.push(`shot ${JSON.stringify(o)}`); return red; },
   };
   const chromium = { launch: async () => ({
-    newContext: async (o: Record<string, unknown>) => { log.push(`context ${JSON.stringify(o)}`); return { newPage: async () => page, close: async () => undefined }; },
+    newContext: async (o: Record<string, unknown>) => {
+      log.push(`context ${JSON.stringify(o)}`);
+      return { newPage: async () => page, close: async () => undefined,
+        route: async (_: string, h: Handler) => { log.push('context.route'); handler = h; },
+        routeWebSocket: async () => { log.push('context.routeWebSocket'); },
+        on: (event: string, listener: (p: { close: () => Promise<void> }) => unknown) => { log.push(`context.on ${event}`); if (event === 'page') pageListeners.push(listener); } };
+    },
     close: async () => { log.push('close'); },
   }) };
   // 렌더러 스스로도 경로를 거른다. read가 무엇이든 내주더라도 prototype/uiux 밖은 막아야 한다.
@@ -191,7 +205,12 @@ const WAIT = `wait [data-screen=wbs] ${JSON.stringify({ state: 'visible', timeou
 test('Playwright 렌더러는 라우트 URL로 열고 준비 선택자가 보일 때까지 기다린 뒤, main 파일만 내보내며 고정 설정으로 찍는다', async () => {
   const { log, chromium, request } = fakeChromium();
   expect(await createPlaywrightRenderer(chromium)(request)).toBe(red);
-  expect(log).toContain(`context ${JSON.stringify({ viewport: BASELINE_RENDER.viewport, deviceScaleFactor: 1, locale: 'ko-KR', timezoneId: 'Asia/Seoul', reducedMotion: 'reduce', javaScriptEnabled: true })}`);
+  expect(log).toContain(`context ${JSON.stringify({ viewport: BASELINE_RENDER.viewport, deviceScaleFactor: 1, locale: 'ko-KR', timezoneId: 'Asia/Seoul', reducedMotion: 'reduce', javaScriptEnabled: true, serviceWorkers: 'block', acceptDownloads: false })}`);
+  // 가로채기는 페이지가 아니라 컨텍스트 전체에 설치한다(새 창의 첫 요청까지 막음). 페이지를 만들기 전에 설치한다.
+  expect(log).toContain('context.route');
+  expect(log).not.toContain('page.route');
+  expect(log.indexOf('context.route')).toBeLessThan(log.indexOf('goto http://baseline.invalid/prototype/uiux/Main.dc.html#wbs'));
+  expect(log).toContain('context.routeWebSocket');
   expect(log).toContain('goto http://baseline.invalid/prototype/uiux/Main.dc.html#wbs');
   expect(log).toContain('fulfill http://baseline.invalid/prototype/uiux/app.css text/css body{}');
   expect(log).toContain('abort https://cdn.example.com/prototype/uiux/app.css');
@@ -258,4 +277,12 @@ test('조작 단계는 기준 이미지 보관 키에 들어가 바뀌면 다시
     await runNightCheck(night(f, r.render), '2026-11-28');
     expect(r.calls).toHaveLength(2);
   } finally { await f.close(); }
+});
+
+test('새 창은 첫 요청부터 컨텍스트 가로채기로 막고 바로 닫는다', async () => {
+  const { log, chromium, request } = fakeChromium();
+  await createPlaywrightRenderer(chromium)({ ...request, route: '', steps: [{ click: '#popup' }] });
+  expect(log).toContain('abort popup');
+  expect(log).not.toContain('fulfill popup');
+  expect(log).toContain('popup closed');
 });

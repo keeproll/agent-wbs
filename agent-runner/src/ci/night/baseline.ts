@@ -83,7 +83,6 @@ export function prototypePath(path: string): string {
 /** Playwright의 필요한 부분만 적은 형태. M7-06이 `(await import('playwright')).chromium`을 넘긴다. */
 interface RouteLike { request(): { url(): string }; fulfill(response: { status: number; body: Buffer; contentType: string }): Promise<void>; abort(): Promise<void> }
 interface PageLike {
-  route(pattern: string, handler: (route: RouteLike) => Promise<void>): Promise<void>;
   goto(url: string): Promise<unknown>;
   click(selector: string, options: { timeout: number }): Promise<unknown>;
   setViewportSize(size: { width: number; height: number }): Promise<unknown>;
@@ -94,15 +93,24 @@ interface PageLike {
 }
 export interface ChromiumLike {
   launch(): Promise<{
-    newContext(options: Record<string, unknown>): Promise<{ newPage(): Promise<PageLike>; close(): Promise<void> }>;
+    newContext(options: Record<string, unknown>): Promise<{
+      newPage(): Promise<PageLike>; close(): Promise<void>;
+      route(pattern: string, handler: (route: RouteLike) => Promise<void>): Promise<void>;
+      routeWebSocket(pattern: RegExp, handler: (ws: { close(): Promise<void> | void }) => unknown): Promise<void>;
+      on(event: 'page', listener: (page: { close(): Promise<void> }) => unknown): unknown;
+    }>;
     close(): Promise<void>;
   }>;
 }
 
 /**
- * Playwright로 기준 화면을 찍는 렌더러.
- * - 모든 요청을 가로채 고정한 main의 `prototype/uiux/` 파일로만 응답한다. 바깥 주소(CDN 등)는 막는다.
- *   왜: 네트워크에서 받은 글꼴·스크립트가 바뀌면 같은 main이라도 기준이 달라진다.
+ * Playwright로 기준 화면을 찍는 렌더러. 네트워크는 기본 거부다(재리뷰 원칙 2).
+ * - 가로채기는 페이지가 아니라 브라우저 컨텍스트 전체에, 페이지를 만들기 전에 설치한다.
+ *   왜: 페이지에만 설치하면 새 창(target=_blank, window.open)의 첫 요청이 빠져나간다(Playwright Page.route 문서).
+ * - 허용 출처의 main `prototype/uiux/` 파일만 응답하고, 그 밖의 요청(CDN·외부 글꼴·fetch 등)은 모두 막는다.
+ *   왜: 네트워크에서 받은 글꼴·스크립트가 바뀌면 같은 main이라도 기준이 달라지고, 기준 렌더가 바깥에 접속해서도 안 된다.
+ * - WebSocket은 모두 닫는다. 서비스 워커는 막는다(서비스 워커가 가로채면 컨텍스트 가로채기를 거치지 않는다). 다운로드는 받지 않는다.
+ * - 첫 페이지 외에 열린 창(팝업)은 바로 닫는다.
  * - 글꼴은 CSS로 고정한다. 애니메이션·커서는 끈다.
  */
 export function createPlaywrightRenderer(chromium: ChromiumLike): BaselineRenderer {
@@ -110,10 +118,10 @@ export function createPlaywrightRenderer(chromium: ChromiumLike): BaselineRender
     const browser = await chromium.launch();
     try {
       const context = await browser.newContext({ viewport: settings.viewport, deviceScaleFactor: settings.deviceScaleFactor,
-        locale: settings.locale, timezoneId: settings.timezoneId, reducedMotion: 'reduce', javaScriptEnabled: true });
+        locale: settings.locale, timezoneId: settings.timezoneId, reducedMotion: 'reduce', javaScriptEnabled: true, serviceWorkers: 'block', acceptDownloads: false });
       try {
-        const page = await context.newPage();
-        await page.route('**/*', async route => {
+        await context.routeWebSocket(/.*/, ws => ws.close());
+        await context.route('**/*', async route => {
           const url = new URL(route.request().url());
           if (url.origin !== ORIGIN) { await route.abort(); return; }
           try {
@@ -121,6 +129,10 @@ export function createPlaywrightRenderer(chromium: ChromiumLike): BaselineRender
             await route.fulfill({ status: 200, body: await read(path), contentType: TYPES[posix.extname(path).toLowerCase()] ?? 'application/octet-stream' });
           } catch { await route.abort(); }
         });
+        let main: unknown = null;
+        context.on('page', popup => { if (main !== null && popup !== main) void popup.close().catch(() => undefined); });
+        const page = await context.newPage();
+        main = page;
         await page.goto(`${ORIGIN}/${entry}${route}`);
         // 정의에 적힌 제한된 조작만 순서대로 한다. 임의 스크립트는 실행하지 않는다(결정 13 보완).
         for (const [index, step] of steps.entries()) {
