@@ -6,19 +6,19 @@ import { parsePipeline } from '../pipeline.ts';
 export type MainBasis = NonNullable<TaskCheckOptions['basis']>;
 export type CheckDeps = Pick<TaskCheckOptions, 'repo' | 'heavy' | 'execute' | 'redact' | 'signal'>;
 export interface IntegrationCheck {
-  stage: 'int'; status: 'pass' | 'fail'; baseSha: string; headSha: string; treeSha: string;
+  stage: 'int' | 'night' | 'deploy'; status: 'pass' | 'fail'; baseSha: string; headSha: string; treeSha: string;
   pipelineSha: string; steps: TaskCheckStep[]; failStep: string | null; flakyCandidates: string[];
 }
 
 /** ②는 main 정의로 새 사본을 설치하고 검사한다. 실제 실행기는 Q-08 결정 전까지 연결하지 않는다. */
-export async function runIntegrationCheck(deps: CheckDeps, basis: MainBasis, headSha: string): Promise<IntegrationCheck> {
+export async function runIntegrationCheck(deps: CheckDeps, basis: MainBasis, headSha: string, stage: IntegrationCheck['stage'] = 'int'): Promise<IntegrationCheck> {
   const { repo, heavy, execute, signal } = deps;
   const redact = deps.redact ?? createRedactor();
   const pipeline = parsePipeline(basis.source);
   const install = pipeline.stages.task[0];
   if (!install) throw new Error('설치 단계가 없습니다.');
-  const commands = [install, ...pipeline.stages.int];
-  const result: IntegrationCheck = { stage: 'int', status: 'fail', baseSha: basis.baseSha, headSha,
+  const commands = [install, ...pipeline.stages[stage]];
+  const result: IntegrationCheck = { stage, status: 'fail', baseSha: basis.baseSha, headSha,
     treeSha: await repo.commitTree(headSha), pipelineSha: basis.pipelineSha,
     steps: commands.map(c => ({ name: c.name, status: 'skip', durationMs: 0, attempts: [] })),
     failStep: null, flakyCandidates: [] };

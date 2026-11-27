@@ -27,7 +27,7 @@ export const definition = { version: 1, stages: {
   night: [{ name: 'night', argv: ['fake', 'night'] }], deploy: [{ name: 'deploy', argv: ['fake', 'deploy'] }],
 } };
 
-export async function fixture() {
+export async function fixture(taskBranch = 'agent/task') {
   const root = await mkdtemp(join(tmpdir(), 'ci-int-'));
   const source = join(root, 'source'); const remote = join(root, 'remote.git'); await mkdir(source);
   git(source, 'init', '-b', 'main');
@@ -35,7 +35,7 @@ export async function fixture() {
   await file(join(source, '.gitignore'), 'node_modules/\ndist/\n');
   await file(join(source, 'shared'), 'original');
   commit(source);
-  git(source, 'checkout', '-b', 'agent/task');
+  git(source, 'checkout', '-b', taskBranch);
   await file(join(source, 'task'), 'task'); const head = commit(source);
   git(source, 'checkout', 'main');
   await file(join(source, 'other'), 'main'); const base = commit(source);
@@ -44,7 +44,7 @@ export async function fixture() {
   const github = await startFakeGitHub('FAKE');
   const statuses = new Map<string, string>();
   const merged = new Map<number, string>();
-  const branch = (pr: number) => pr === 1 ? 'agent/task' : `agent/task${String(pr)}`;
+  const branch = (pr: number) => pr === 1 ? taskBranch : `agent/task${String(pr)}`;
   const ref = (name: string) => git(remote, 'rev-parse', `refs/heads/${name}`);
   let beforeWrite: (op: WriteOperation) => void | Promise<void> = () => undefined;
   github.on('GET /repos/o/r/branches/main', () => ({ body: { commit: { sha: ref('main') } } }));
@@ -87,7 +87,7 @@ export async function fixture() {
     },
     collectTests: async () => ['test/value::value'], readVerification: async () => qa,
   };
-  const request = { pr: 1, branch: 'agent/task', qaHeadSha: head, specRevision: 1 };
+  const request = { pr: 1, branch: taskBranch, qaHeadSha: head, specRevision: 1 };
   return { root, repo, source, remote, client, github, deps, request, head, base, merged, statuses, calls, observations, ref,
     action: (next: typeof action) => { action = next; }, qa: (next: typeof qa) => { qa = next; },
     beforeWrite: (next: typeof beforeWrite) => { beforeWrite = next; },

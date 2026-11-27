@@ -777,6 +777,12 @@ export class GitRepository {
     await this.git(['fetch', '--no-tags', '--no-recurse-submodules', '--upload-pack=git-upload-pack', '--', source,
       'refs/heads/main:refs/remotes/origin/main']);
     const baseSha = await this.remoteMain();
+    return this.pipelineAt(baseSha);
+  }
+
+  /** 재실행도 원래 main 커밋의 정의를 읽어 SHA를 대조한다. */
+  async pipelineAt(baseSha: string): Promise<{ baseSha: string; pipelineSha: string; source: string }> {
+    await this.trusted(); sha(baseSha);
     const entry = (await this.tree(baseSha)).find((value) => value.path === '.agentwbs/pipeline.yaml');
     if (!entry || !['100644', '100755'].includes(entry.mode)) throw new GitSafetyError('main의 pipeline.yaml은 일반 파일이어야 합니다.');
     return { baseSha, pipelineSha: sha(entry.oid), source: (await this.blob(entry)).toString('utf8') };
@@ -797,6 +803,12 @@ export class GitRepository {
 
   async commitTree(commit: string): Promise<string> {
     return sha((await this.git(['rev-parse', '--verify', `${sha(commit)}^{tree}`])).toString().trim());
+  }
+
+  async commitParents(commit: string): Promise<string[]> {
+    await this.trusted();
+    const parents = (await this.git(['show','-s','--format=%P',sha(commit)])).toString().trim();
+    return parents ? parents.split(' ').map(sha) : [];
   }
 
   private async integrationTree(base: string, head: string): Promise<string | null> {

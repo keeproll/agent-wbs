@@ -224,7 +224,9 @@ test('원본·계획에 없는 경로를 만들지 않았다', () => {
     'POST /api/verifications/:id/evidence', 'GET /api/settings/split/violations', 'GET /api/settings/agent-usage',
     'POST /api/alerts/:id/ack', 'POST /api/settings/readiness/check',
     // 조정자 승인(2026-11-27, M5-02): contracts §3.4-3의 재시작 전 보유 대조에 필요하다.
-    'GET /api/runner/holds'];
+    'GET /api/runner/holds',
+    // M7-06 조정자 결정 2: 실제 CI 작업의 소유권·QA·재실행 근거를 Runner가 읽는다.
+    'GET /api/runner/ci/jobs/:id'];
   const known = new Set([
     'GET /health',
     'GET /health/db',

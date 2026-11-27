@@ -9,6 +9,7 @@ import { issueLoginLink, issueRunnerToken } from '../src/platform/credentials.ts
 import { installRunner } from '../src/runner/routes.ts';
 import { completeMergedTask, invalidateTaskGate } from '../src/execution/gate.ts';
 import { inEpoch } from '../src/platform/transaction.ts';
+import { RunnerRepository } from '../src/runner/repository.ts';
 
 const db = new URL(inject('testDatabaseUrl'));
 db.pathname += '_execution';
@@ -109,8 +110,17 @@ test('개발 완료는 기록된 ① 실패를 거부하고 결과·파일·QA �
   expect((await next(a)).kind).toBe('qa');
 });
 
+test('M7-06: ① 기록 없는 개발 완료는 거부하고 QA job과 산출물 제출을 만들지 않는다', async () => {
+  const a = await running();
+  const response = await report(a,'PASS',{ changedFiles:['src/a.ts'] });
+  expect(response.statusCode,response.body).toBe(409);
+  expect((await owner.query('select status from task_attempts where id=$1',[a.attempt])).rows).toEqual([{ status:'running' }]);
+  expect((await owner.query("select count(*)::int n from runner_jobs where payload->>'kind'='qa'")).rows).toEqual([{ n:0 }]);
+  expect((await owner.query('select count(*)::int n from attempt_files')).rows).toEqual([{ n:0 }]);
+});
+
 // M2-09 runner-basic의 시나리오 6과 FakeRunner.result 순서(그룹 등록→슬롯 반환→결과 보고)를 실제 HTTP로 재현한다.
-test('M2-09 시나리오 6: ① 자리표시로 개발→QA FAIL→재작업→재검증 PASS까지 진행한다', async () => {
+test('M2-09 시나리오 6: 명시적인 ① 준비 기록으로 개발→QA FAIL→재작업→재검증 PASS까지 진행한다', async () => {
   const base = await app.listen({ host:'127.0.0.1',port:0 });
   const send = async (path: string, payload: object) => {
     const response = await fetch(`${base}/api/runner/${path}`,{ method:'POST',headers:{ ...headers(),'content-type':'application/json' },body:JSON.stringify(payload) });
@@ -122,6 +132,7 @@ test('M2-09 시나리오 6: ① 자리표시로 개발→QA FAIL→재작업→�
     const pgid = ++group;
     expect((await send(`jobs/${a.job}/process`,{ fence:a.fence,processGroup:pgid,cgroup:null })).status).toBe(204);
     expect((await send(`jobs/${a.job}/slots/release`,{ fence:a.fence,hostId:'host-a',proof:{ kind:'group_empty',bootId:'boot-a',processGroup:pgid },at:new Date().toISOString() })).status).toBe(204);
+    if (a.kind === 'dev' || a.kind === 'rework') await check(a);
     const reported = await send(`attempts/${a.attempt}/result`,result(a,outcome));
     expect(reported.status,JSON.stringify(reported.body)).toBe(201);
   };
@@ -143,8 +154,8 @@ test('M2-09 시나리오 6: ① 자리표시로 개발→QA FAIL→재작업→�
     { kind:'rework',status:'completed',effort:'xhigh' },{ kind:'reverify',status:'completed' },
   ]);
   expect((await get(`tasks/${dev.key}`)).json()).toMatchObject({ lifecycleStatus:'gate',verifState:'pass' });
-  expect((await owner.query('select * from ci_runs')).rowCount).toBe(0);
-  expect((await get(`tasks/${dev.key}/gate`)).json()).toMatchObject({ passed:false,conditions:expect.arrayContaining([expect.objectContaining({ key:'verification',result:'BLOCKED' })]) });
+  expect((await owner.query('select * from ci_runs')).rowCount).toBe(2);
+  expect((await get(`tasks/${dev.key}/gate`)).json()).toMatchObject({ passed:true });
 });
 
 test('① 기록이 없어도 명세가 바뀐 개발 결과를 자리표시로 통과시키지 않는다', async () => {
@@ -154,12 +165,25 @@ test('① 기록이 없어도 명세가 바뀐 개발 결과를 자리표시로 
   expect((await owner.query('select status from task_attempts where id=$1',[a.attempt])).rows).toEqual([{ status:'running' }]);
 });
 
-test('자리표시 뒤 실제 ① FAIL이 기록되면 QA 예약을 거부한다', async () => {
+test('① PASS 뒤 새 ① FAIL이 기록되면 QA 예약을 거부한다', async () => {
   const a = await running();
+  await check(a);
   expect((await report(a)).statusCode).toBe(201);
   await check(a,sha,'fail');
   expect((await post('jobs/claim',{ kinds:['attempt'],capacity:20 })).statusCode).toBe(204);
   expect((await owner.query('select kind from task_attempts where task=$1',[a.id])).rows).toEqual([{ kind:'dev' }]);
+});
+
+test('과거 자리표시 이벤트만 남은 개발 결과를 현재 ① 통과 근거로 삼지 않는다', async () => {
+  const a = await running();
+  await owner.query("update task_attempts set status='completed',ended_at=greatest(started_at,clock_timestamp()) where id=$1",[a.attempt]);
+  await owner.query("insert into runner_job_events(project_id,job,kind,detail) values($1,$2,'finished','{\"taskCheckPlaceholder\":true}')",[project,a.job]);
+  const client = await owner.connect();
+  try {
+    const repo = new RunnerRepository(client), task = await repo.taskById(a.id);
+    if (!task) throw new Error('시험 Task가 필요합니다.');
+    expect(await repo.taskCheck(task,sha)).toBe(false);
+  } finally { client.release(); }
 });
 
 test('QA FAIL 뒤 자동 재작업·재검증 PASS가 차단 결함을 해소하고 통합 job을 자동 생성한다', async () => {

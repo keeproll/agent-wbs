@@ -77,10 +77,10 @@ export interface RunResult {
 export function runCli(
   path: string,
   args: string[],
-  options: { stdin?: string; env?: NodeJS.ProcessEnv; onFirstOutput?: (child: ChildProcess) => void } = {},
+  options: { stdin?: string; env?: NodeJS.ProcessEnv; cwd?: string; onFirstOutput?: (child: ChildProcess) => void } = {},
 ): Promise<RunResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(path, args, { env: options.env ?? { PATH: '/usr/bin:/bin' } });
+    const child = spawn(path, args, { env: options.env ?? { PATH: '/usr/bin:/bin' },...(options.cwd && { cwd:options.cwd }) });
     let stdout = '';
     let stderr = '';
     child.stdout.setEncoding('utf8').on('data', (chunk: string) => (stdout += chunk));

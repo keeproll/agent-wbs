@@ -1322,5 +1322,27 @@
    ]
   },
   "status": 204
+ },
+ {
+  "id": "getCiJob",
+  "params": {
+   "id": "00000000-0000-4000-8000-000000000001"
+  },
+  "query": {
+   "fence": 1
+  },
+  "status": 200,
+  "response": {
+   "runnable": true,
+   "taskKey": "TASK-0001",
+   "branch": "agent/TASK-0001-h1",
+   "hold": null,
+   "verification": {
+    "passed": true,
+    "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "specRevision": 1
+   },
+   "source": null
+  }
  }
 ]

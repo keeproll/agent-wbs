@@ -572,6 +572,21 @@ export const runnerOperations = [
   }),
   operation({
     ...runner,
+    id: 'getCiJob',
+    method: 'GET',
+    path: '/api/runner/ci/jobs/:id',
+    summary: '예약한 CI job의 검증 근거와 재실행 원본 조회',
+    query: Body({ fence }),
+    responses: { 200: Body({
+      runnable:Type.Boolean(),taskKey:Nullable(c.TaskKey),branch:Nullable(Type.String()),
+      hold:Nullable(Body({ hostId:Type.String(),bootId:Nullable(Type.String()),processGroup:Nullable(c.PositiveInt4),slotState:AnyOf('none','reserved','active','unconfirmed') })),
+      verification:Nullable(Body({ passed:Type.Boolean(),headSha:c.Sha,specRevision:c.Count })),
+      source:Nullable(Body({ stage:c.CiStage,ref:Type.String(),pr:Nullable(c.PositiveInt4),baseSha:Nullable(c.Sha),headSha:c.Sha,pipelineSha:c.Sha })),
+    }) },
+    errors:['INVALID_TRANSITION','EXTERNAL_WRITE_BLOCKED'],
+  }),
+  operation({
+    ...runner,
     id: 'startCiRun',
     method: 'POST',
     path: '/api/runner/ci/runs',
