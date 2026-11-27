@@ -213,7 +213,7 @@ describe('API가 요구하는 저장 위치', () => {
 
   test('CP 판단·보류 JSON은 API·도메인 결과 그대로 저장된다', () => transaction(async (client) => {
     const p = await project(client);
-    const judgement = { result: 'met', agreedBy: ['Claude', 'Codex'], basis: 'b', judgedAt: '2026-11-26T00:00:00Z', sourceRef: 'job-1', subjectHash: 'a'.repeat(64) };
+    const judgement = { result: 'met', agreedBy: ['Claude', 'Codex'], basis: 'b', judgedAt: '2026-11-26T00:00:00Z', sourceRef: `sha256:${'a'.repeat(64)}`, subjectHash: 'a'.repeat(64) };
     const split = { schemaVersion: 1, items: [{ rule: 'ac_meaning', ...judgement }] };
     const tasks = [{ taskKey: 'TASK-0001', judgedRules: { schemaVersion: 1, items: [{ rule: 'revert', ...judgement }] } }];
     expect(ajv.validate(m.SplitJudgements, split)).toBe(true);

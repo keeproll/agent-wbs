@@ -32,9 +32,36 @@ export type ClaimedJob = {
   fence: number;
   kind: "bootstrap";
   payload: {
+    planningJobId: Id;
+    runNo: number;
+    version: number;
+    techDecisionVersion: Sha256;
+    techDecisions: ({
+      id: Id;
+      tdKey: string;
+      title: string;
+      status: "fixed" | "approved" | "pending" | "rejected" | "noted" | "change";
+      authority: "lead" | "agent" | "free";
+      updatedAt: Timestamp;
+      content: Record<string, unknown>;
+    })[];
     commit: Sha;
+    previousCommit: Sha | null;
     instruction: string;
     resumeStep: string | null;
+    techConstraints: ({
+      id: Id;
+      name: string;
+      level: "must" | "ban" | "cond";
+      condition: string | null;
+    })[];
+    subagentDefs: ({
+      id: Id;
+      defKey: string;
+      version: number;
+      agent: Agent;
+      role: string;
+    })[];
   };
 } | {
   id: Id;
@@ -42,6 +69,31 @@ export type ClaimedJob = {
   fence: number;
   kind: "input_diff";
   payload: {
+    planningJobId: Id;
+    runNo: number;
+    version: number;
+    wbs: {
+      phases: ({
+        id: Id;
+        wps: ({
+          id: Id;
+          tasks: (TaskKey)[];
+        })[];
+      })[];
+      tasks: ({
+        taskKey: TaskKey;
+        workType: WorkType;
+        wp: Id;
+        status: TaskStatus;
+        subjectHash: Sha256;
+        content: JudgedContent;
+      })[];
+      dependencies: ({
+        pred: TaskKey;
+        succ: TaskKey;
+        type: DepType;
+      })[];
+    };
     commit: Sha;
     previousCommit: Sha;
     instruction: string;
@@ -55,6 +107,7 @@ export type ClaimedJob = {
   payload: {
     tasks: ({
       taskKey: TaskKey;
+      workType: WorkType;
       subjectHash: Sha256;
       content: JudgedContent;
       gradeChange?: Uuid | null;
@@ -95,7 +148,46 @@ export type ClaimedJob = {
         taskKey: TaskKey;
         content: JudgedContent;
       })[];
-    } | null;
+    };
+    planning: null;
+  };
+} | {
+  id: Id;
+  leaseUntil: Timestamp;
+  fence: number;
+  kind: "planning";
+  payload: {
+    tasks: ({
+      taskKey: TaskKey;
+      workType: WorkType;
+      subjectHash: Sha256;
+      content: JudgedContent;
+      gradeChange?: Uuid | null;
+    })[];
+    policy: Record<string, unknown>;
+    proposal: null;
+    planning: {
+      id: Id;
+      title: string;
+      scope: string;
+    };
+  };
+} | {
+  id: Id;
+  leaseUntil: Timestamp;
+  fence: number;
+  kind: "planning";
+  payload: {
+    tasks: ({
+      taskKey: TaskKey;
+      workType: WorkType;
+      subjectHash: Sha256;
+      content: JudgedContent;
+      gradeChange?: Uuid | null;
+    })[];
+    policy: Record<string, unknown>;
+    proposal: null;
+    planning: null;
   };
 } | {
   id: Id;
@@ -105,6 +197,7 @@ export type ClaimedJob = {
   payload: {
     tasks: ({
       taskKey: TaskKey;
+      workType: WorkType;
       subjectHash: Sha256;
       content: JudgedContent;
       gradeChange?: Uuid | null;
@@ -119,11 +212,34 @@ export type ClaimedJob = {
   payload: {
     tasks: ({
       taskKey: TaskKey;
+      workType: WorkType;
       subjectHash: Sha256;
       content: JudgedContent;
       gradeChange?: Uuid | null;
     })[];
     policy: Record<string, unknown>;
+    wbs: {
+      phases: ({
+        id: Id;
+        wps: ({
+          id: Id;
+          tasks: (TaskKey)[];
+        })[];
+      })[];
+      tasks: ({
+        taskKey: TaskKey;
+        workType: WorkType;
+        wp: Id;
+        status: TaskStatus;
+        subjectHash: Sha256;
+        content: JudgedContent;
+      })[];
+      dependencies: ({
+        pred: TaskKey;
+        succ: TaskKey;
+        type: DepType;
+      })[];
+    };
   };
 } | {
   id: Id;
@@ -764,6 +880,8 @@ export type Sha256 = string;
 export type StepStatus = "wait" | "run" | "done" | "fail";
 
 export type TaskKey = string;
+
+export type TaskStatus = "planning" | "approval" | "ready" | "running" | "paused" | "qa" | "rework" | "verifying" | "gate" | "failed" | "done" | "cancelled";
 
 export type Timestamp = string;
 

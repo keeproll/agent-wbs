@@ -51,7 +51,7 @@ export const planningOperations = [
       ...m.WbsDraft,
     }),
     responses: { 201: Type.Object({ revision: Type.Integer({ minimum: 1 }) }) },
-    errors: ['INVALID_TRANSITION', 'EXTERNAL_WRITE_BLOCKED'],
+    errors: ['INVALID_TRANSITION', 'EXTERNAL_WRITE_BLOCKED', 'VERSION_CONFLICT'],
   }),
   operation({
     ...planning,
@@ -126,7 +126,7 @@ export const planningOperations = [
     ),
     inputRules: ['uniqueDesignKind'],
     responses: { 201: Type.Object({ id: c.Id, cpKey: Type.String(), status: m.ProposalStatus }) },
-    errors: ['INVALID_TRANSITION'],
+    errors: ['INVALID_TRANSITION', 'VERSION_CONFLICT'],
   }),
   operation({
     ...planning,

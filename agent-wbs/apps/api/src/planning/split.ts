@@ -4,13 +4,15 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { TaskError } from '../tasks/errors.ts';
 import { subjectHash, type JudgedSource } from '../tasks/hash.ts';
 import { taskDetail, type TaskDetail } from '../tasks/read.ts';
-import { assertEditable, assertVersion, changed, LEAD, lockTask, record, touch, type LockedTask } from '../tasks/write.ts';
+import { assertEditable, assertVersion, changed, LEAD, lockGraph, lockTask, record, touch, type LockedTask } from '../tasks/write.ts';
 import { ApiError } from '../changes/http.ts';
 import { applyRegrade } from '../policy/service.ts';
 import { judgedTasks } from '../policy/judged.ts';
 import { assertGradeChange, assertJob } from './jobs.ts';
 import { clientOf } from './proposals.ts';
 import { loadSnapshot } from './snapshot.ts';
+import { bindJudgements } from './binding.ts';
+import { snapshotHash, wbsSnapshot } from './job-snapshot.ts';
 
 /*
  * 분할 요청·예외 사유(G§5.2-1)와 Planning의 Task 판단 보고(contracts §3.3 /planning/tasks/:taskKey/plan).
@@ -44,6 +46,8 @@ export function registerSplitRoutes(route: RouteFn, epochOf: (request: FastifyRe
   route('splitTask', '분할 제안 요청', async (request, reply) => {
     const client = clientOf(request);
     const body = request.body as { updatedAt: string };
+    const found = (await client.query<{ project_id: string }>('select project_id from tasks where task_key=$1', [keyOf(request)])).rows[0];
+    if (found) await lockGraph(client, found.project_id);
     const task = await lockTask(client, keyOf(request));
     await assertVersion(client, task, body.updatedAt);
     assertEditable(task);
@@ -53,17 +57,18 @@ export function registerSplitRoutes(route: RouteFn, epochOf: (request: FastifyRe
     }
     const detail = await detailOf(client, task.task_key);
     const tasks = await judgedTasks(client, [task.id]);
+    const wbs = await wbsSnapshot(client, task.project_id);
     const hash = subjectHash(sourceOf(detail));
     // 내용이나 등급이 바뀌면 옛 판단을 받지 않으므로 새 분할 job이 필요하다.
     const marker = tasks[0]?.gradeChange;
-    const key = `split:${task.task_key}:${hash}${marker ? `:${marker}` : ''}`;
+    const key = `split:${task.task_key}:${hash}:${snapshotHash(wbs)}${marker ? `:${marker}` : ''}`;
     await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [key]);
     const existing = (await client.query<{ id: string | null; n: number }>(
       "select (array_agg(id order by created_at desc) filter (where state::text=any($2)))[1] as id,count(*)::int as n from runner_jobs where dedup_key like $1",
       [`${key}:%`, OPEN])).rows[0];
     if (existing?.id) return reply.code(202).send({ jobId: existing.id });
     const settings = (await client.query<{ split: unknown }>('select split from app_settings where singleton')).rows[0]?.split ?? null;
-    const payload = { tasks, policy: { split: settings }, proposal: null };
+    const payload = { tasks, policy: { split: settings }, wbs };
     const jobId = (await client.query<{ id: string }>(
       "insert into runner_jobs(project_id,kind,payload,state,epoch,dedup_key) values($1,'split',$2::jsonb,'queued',$3,$4) returning id",
       [task.project_id, JSON.stringify(payload), epochOf(request), `${key}:${String((existing?.n ?? 0) + 1)}`])).rows[0]?.id;
@@ -117,26 +122,20 @@ export function registerSplitRoutes(route: RouteFn, epochOf: (request: FastifyRe
       .find((target) => target.taskKey === task.task_key)?.roles ?? [];
     assertEditable(task);
     const before = await detailOf(client, task.task_key);
-    const hash = subjectHash(sourceOf(before));
-    // 기존 Task 재판단은 payload의 hash를 그대로 돌려받아 판단한 뒤 내용이 바뀌었는지 검출한다(data-model §2.3-1).
-    if (body.judgedRules?.items.some((item) => item.subjectHash !== hash)) {
-      throw new TaskError('VERSION_CONFLICT', { taskKey: task.task_key, subjectHash: hash, changes: [] }, [], '판단한 내용이 지금 Task 내용과 다릅니다.');
-    }
+    const group = body.conflictGroup?.name ?? null;
+    const hash = subjectHash({ ...sourceOf(before), conflictGroup: group });
+    if (body.judgedRules) bindJudgements(body.judgedRules, hash, task.task_key);
     const projectId = task.project_id;
     const history = (input: Omit<Parameters<typeof record>[1], 'projectId' | 'taskId' | 'actor'>) => record(client, { projectId, taskId: task.id, actor: 'Planning', ...input });
 
-    const group = body.conflictGroup?.name ?? null;
     if (group !== before.conflictGroup) {
       await client.query('update tasks set conflict_group=$2 where id=$1', [task.id, group]);
       await history({ kind: '충돌 묶음', text: `충돌 묶음 ${group ?? '없음'}${body.conflictGroup ? ` — ${body.conflictGroup.reason}` : ''}`, before: before.conflictGroup, after: group, ref: { field: 'conflictGroup' } });
     }
     if (body.judgedRules) {
-      // 충돌 묶음 판단과 규칙 5·7·9 판단은 같은 보고에 함께 온다. 함께 정한 묶음을 반영한 내용으로 hash를 서버가 다시 붙인다.
-      const after = group === before.conflictGroup ? hash : subjectHash({ ...sourceOf(before), conflictGroup: group });
-      const judged = { ...body.judgedRules, items: body.judgedRules.items.map((item) => ({ ...item, subjectHash: after })) };
       await client.query(`insert into task_splits(project_id,task,basis,judged_rules,exceptions) values($1,$2,'',$3::jsonb,'[]'::jsonb)
-        on conflict (task) do update set judged_rules=excluded.judged_rules`, [projectId, task.id, JSON.stringify(judged)]);
-      await history({ kind: '분할 판단', text: '규칙 5·7·9 판단 기록', before: before.split?.judgedRules ?? null, after: judged, ref: { field: 'judgedRules' } });
+        on conflict (task) do update set judged_rules=excluded.judged_rules`, [projectId, task.id, JSON.stringify(body.judgedRules)]);
+      await history({ kind: '분할 판단', text: '규칙 5·7·9 판단 기록', before: before.split?.judgedRules ?? null, after: body.judgedRules, ref: { field: 'judgedRules' } });
     }
     for (const role of ['dev', 'qa'] as const) {
       const grade = body.grades[role];

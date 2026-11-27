@@ -30395,8 +30395,8 @@
                                   },
                                   "sourceRef": {
                                     "type": "string",
-                                    "minLength": 1,
-                                    "pattern": "\\S"
+                                    "pattern": "^sha256:[0-9a-f]{64}$",
+                                    "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                                   }
                                 },
                                 "additionalProperties": false
@@ -30520,7 +30520,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "EPOCH_MISMATCH, EXTERNAL_WRITE_BLOCKED, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST"
+            "description": "EPOCH_MISMATCH, EXTERNAL_WRITE_BLOCKED, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST, VERSION_CONFLICT"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited",
@@ -30551,7 +30551,8 @@
             "EXTERNAL_WRITE_BLOCKED",
             "IDEMPOTENCY_CONFLICT",
             "INVALID_TRANSITION",
-            "LEASE_LOST"
+            "LEASE_LOST",
+            "VERSION_CONFLICT"
           ],
           "429": [
             "RATE_LIMITED"
@@ -31316,8 +31317,8 @@
                                 },
                                 "sourceRef": {
                                   "type": "string",
-                                  "minLength": 1,
-                                  "pattern": "\\S"
+                                  "pattern": "^sha256:[0-9a-f]{64}$",
+                                  "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                                 }
                               },
                               "additionalProperties": false
@@ -31394,8 +31395,8 @@
                                       },
                                       "sourceRef": {
                                         "type": "string",
-                                        "minLength": 1,
-                                        "pattern": "\\S"
+                                        "pattern": "^sha256:[0-9a-f]{64}$",
+                                        "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                                       }
                                     },
                                     "additionalProperties": false
@@ -31524,8 +31525,8 @@
                                 },
                                 "sourceRef": {
                                   "type": "string",
-                                  "minLength": 1,
-                                  "pattern": "\\S"
+                                  "pattern": "^sha256:[0-9a-f]{64}$",
+                                  "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                                 }
                               },
                               "additionalProperties": false
@@ -31602,8 +31603,8 @@
                                       },
                                       "sourceRef": {
                                         "type": "string",
-                                        "minLength": 1,
-                                        "pattern": "\\S"
+                                        "pattern": "^sha256:[0-9a-f]{64}$",
+                                        "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                                       }
                                     },
                                     "additionalProperties": false
@@ -31716,7 +31717,7 @@
           },
           "409": {
             "$ref": "#/components/responses/Error",
-            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST"
+            "description": "EPOCH_MISMATCH, IDEMPOTENCY_CONFLICT, INVALID_TRANSITION, LEASE_LOST, VERSION_CONFLICT"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited",
@@ -31746,7 +31747,8 @@
             "EPOCH_MISMATCH",
             "IDEMPOTENCY_CONFLICT",
             "INVALID_TRANSITION",
-            "LEASE_LOST"
+            "LEASE_LOST",
+            "VERSION_CONFLICT"
           ],
           "429": [
             "RATE_LIMITED"
@@ -31877,8 +31879,8 @@
                                   },
                                   "sourceRef": {
                                     "type": "string",
-                                    "minLength": 1,
-                                    "pattern": "\\S"
+                                    "pattern": "^sha256:[0-9a-f]{64}$",
+                                    "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                                   },
                                   "subjectHash": {
                                     "$ref": "#/components/schemas/Sha256"
@@ -31951,8 +31953,8 @@
                             },
                             "sourceRef": {
                               "type": "string",
-                              "minLength": 1,
-                              "pattern": "\\S"
+                              "pattern": "^sha256:[0-9a-f]{64}$",
+                              "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                             },
                             "subjectHash": {
                               "$ref": "#/components/schemas/Sha256"
@@ -32262,8 +32264,8 @@
                             },
                             "sourceRef": {
                               "type": "string",
-                              "minLength": 1,
-                              "pattern": "\\S"
+                              "pattern": "^sha256:[0-9a-f]{64}$",
+                              "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                             },
                             "subjectHash": {
                               "$ref": "#/components/schemas/Sha256"
@@ -33126,13 +33128,99 @@
               "payload": {
                 "type": "object",
                 "required": [
+                  "planningJobId",
+                  "runNo",
+                  "version",
+                  "techDecisionVersion",
+                  "techDecisions",
                   "commit",
+                  "previousCommit",
                   "instruction",
-                  "resumeStep"
+                  "resumeStep",
+                  "techConstraints",
+                  "subagentDefs"
                 ],
                 "properties": {
+                  "planningJobId": {
+                    "$ref": "#/components/schemas/Id"
+                  },
+                  "runNo": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2147483647
+                  },
+                  "version": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2147483647
+                  },
+                  "techDecisionVersion": {
+                    "$ref": "#/components/schemas/Sha256"
+                  },
+                  "techDecisions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "tdKey",
+                        "title",
+                        "status",
+                        "authority",
+                        "updatedAt",
+                        "content"
+                      ],
+                      "properties": {
+                        "id": {
+                          "$ref": "#/components/schemas/Id"
+                        },
+                        "tdKey": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "fixed",
+                            "approved",
+                            "pending",
+                            "rejected",
+                            "noted",
+                            "change"
+                          ]
+                        },
+                        "authority": {
+                          "enum": [
+                            "lead",
+                            "agent",
+                            "free"
+                          ]
+                        },
+                        "updatedAt": {
+                          "$ref": "#/components/schemas/Timestamp"
+                        },
+                        "content": {
+                          "type": "object",
+                          "patternProperties": {
+                            "^.*$": {}
+                          }
+                        }
+                      }
+                    }
+                  },
                   "commit": {
                     "$ref": "#/components/schemas/Sha"
+                  },
+                  "previousCommit": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/Sha"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   "instruction": {
                     "type": "string"
@@ -33146,6 +33234,81 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "techConstraints": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "name",
+                        "level",
+                        "condition"
+                      ],
+                      "properties": {
+                        "id": {
+                          "$ref": "#/components/schemas/Id"
+                        },
+                        "name": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "level": {
+                          "enum": [
+                            "must",
+                            "ban",
+                            "cond"
+                          ]
+                        },
+                        "condition": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "subagentDefs": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "defKey",
+                        "version",
+                        "agent",
+                        "role"
+                      ],
+                      "properties": {
+                        "id": {
+                          "$ref": "#/components/schemas/Id"
+                        },
+                        "defKey": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "version": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 2147483647
+                        },
+                        "agent": {
+                          "$ref": "#/components/schemas/Agent"
+                        },
+                        "role": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        }
+                      }
+                    }
                   }
                 }
               }
@@ -33180,12 +33343,131 @@
               "payload": {
                 "type": "object",
                 "required": [
+                  "planningJobId",
+                  "runNo",
+                  "version",
+                  "wbs",
                   "commit",
                   "previousCommit",
                   "instruction",
                   "resumeStep"
                 ],
                 "properties": {
+                  "planningJobId": {
+                    "$ref": "#/components/schemas/Id"
+                  },
+                  "runNo": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2147483647
+                  },
+                  "version": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2147483647
+                  },
+                  "wbs": {
+                    "type": "object",
+                    "required": [
+                      "phases",
+                      "tasks",
+                      "dependencies"
+                    ],
+                    "properties": {
+                      "phases": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "id",
+                            "wps"
+                          ],
+                          "properties": {
+                            "id": {
+                              "$ref": "#/components/schemas/Id"
+                            },
+                            "wps": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "id",
+                                  "tasks"
+                                ],
+                                "properties": {
+                                  "id": {
+                                    "$ref": "#/components/schemas/Id"
+                                  },
+                                  "tasks": {
+                                    "type": "array",
+                                    "items": {
+                                      "$ref": "#/components/schemas/TaskKey"
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "tasks": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "taskKey",
+                            "workType",
+                            "wp",
+                            "status",
+                            "subjectHash",
+                            "content"
+                          ],
+                          "properties": {
+                            "taskKey": {
+                              "$ref": "#/components/schemas/TaskKey"
+                            },
+                            "workType": {
+                              "$ref": "#/components/schemas/WorkType"
+                            },
+                            "wp": {
+                              "$ref": "#/components/schemas/Id"
+                            },
+                            "status": {
+                              "$ref": "#/components/schemas/TaskStatus"
+                            },
+                            "subjectHash": {
+                              "$ref": "#/components/schemas/Sha256"
+                            },
+                            "content": {
+                              "$ref": "#/components/schemas/JudgedContent"
+                            }
+                          }
+                        }
+                      },
+                      "dependencies": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "pred",
+                            "succ",
+                            "type"
+                          ],
+                          "properties": {
+                            "pred": {
+                              "$ref": "#/components/schemas/TaskKey"
+                            },
+                            "succ": {
+                              "$ref": "#/components/schemas/TaskKey"
+                            },
+                            "type": {
+                              "$ref": "#/components/schemas/DepType"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
                   "commit": {
                     "$ref": "#/components/schemas/Sha"
                   },
@@ -33240,7 +33522,8 @@
                 "required": [
                   "tasks",
                   "policy",
-                  "proposal"
+                  "proposal",
+                  "planning"
                 ],
                 "properties": {
                   "tasks": {
@@ -33249,12 +33532,16 @@
                       "type": "object",
                       "required": [
                         "taskKey",
+                        "workType",
                         "subjectHash",
                         "content"
                       ],
                       "properties": {
                         "taskKey": {
                           "$ref": "#/components/schemas/TaskKey"
+                        },
+                        "workType": {
+                          "$ref": "#/components/schemas/WorkType"
                         },
                         "subjectHash": {
                           "$ref": "#/components/schemas/Sha256"
@@ -33284,193 +33571,382 @@
                   "proposal": {
                     "anyOf": [
                       {
-                        "anyOf": [
-                          {
-                            "type": "object",
-                            "required": [
-                              "id",
-                              "ops",
-                              "targets",
-                              "splitSubjectHash",
-                              "splitTasks"
-                            ],
-                            "properties": {
-                              "id": {
-                                "$ref": "#/components/schemas/Id"
-                              },
-                              "ops": {
-                                "type": "array",
-                                "items": {
-                                  "$ref": "#/components/schemas/JudgedProposalOp"
-                                },
-                                "minItems": 1
-                              },
-                              "targets": {
-                                "type": "array",
-                                "items": {
-                                  "anyOf": [
-                                    {
-                                      "type": "object",
-                                      "required": [
-                                        "target",
-                                        "subjectHash",
-                                        "before",
-                                        "after"
-                                      ],
-                                      "properties": {
-                                        "target": {
-                                          "$ref": "#/components/schemas/TaskKey"
-                                        },
-                                        "subjectHash": {
-                                          "$ref": "#/components/schemas/Sha256"
-                                        },
-                                        "before": {
-                                          "$ref": "#/components/schemas/JudgedContent"
-                                        },
-                                        "after": {
-                                          "$ref": "#/components/schemas/JudgedContent"
-                                        }
-                                      }
-                                    },
-                                    {
-                                      "type": "object",
-                                      "required": [
-                                        "target",
-                                        "subjectHash",
-                                        "before",
-                                        "after"
-                                      ],
-                                      "properties": {
-                                        "target": {
-                                          "type": "string",
-                                          "pattern": "^NEW-[0-9]+$"
-                                        },
-                                        "subjectHash": {
-                                          "$ref": "#/components/schemas/Sha256"
-                                        },
-                                        "before": {
-                                          "type": "null"
-                                        },
-                                        "after": {
-                                          "$ref": "#/components/schemas/JudgedContent"
-                                        }
-                                      }
-                                    }
-                                  ]
-                                }
-                              },
-                              "splitSubjectHash": {
-                                "type": "null"
-                              },
-                              "splitTasks": {
-                                "type": "null"
-                              }
-                            }
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "ops",
+                          "targets",
+                          "splitSubjectHash",
+                          "splitTasks"
+                        ],
+                        "properties": {
+                          "id": {
+                            "$ref": "#/components/schemas/Id"
                           },
-                          {
-                            "type": "object",
-                            "required": [
-                              "id",
-                              "ops",
-                              "targets",
-                              "splitSubjectHash",
-                              "splitTasks"
-                            ],
-                            "properties": {
-                              "id": {
-                                "$ref": "#/components/schemas/Id"
-                              },
-                              "ops": {
-                                "type": "array",
-                                "items": {
-                                  "$ref": "#/components/schemas/JudgedSplitProposalOp"
-                                },
-                                "minItems": 1
-                              },
-                              "targets": {
-                                "type": "array",
-                                "items": {
-                                  "anyOf": [
-                                    {
-                                      "type": "object",
-                                      "required": [
-                                        "target",
-                                        "subjectHash",
-                                        "before",
-                                        "after"
-                                      ],
-                                      "properties": {
-                                        "target": {
-                                          "$ref": "#/components/schemas/TaskKey"
-                                        },
-                                        "subjectHash": {
-                                          "$ref": "#/components/schemas/Sha256"
-                                        },
-                                        "before": {
-                                          "$ref": "#/components/schemas/JudgedContent"
-                                        },
-                                        "after": {
-                                          "$ref": "#/components/schemas/JudgedContent"
-                                        }
-                                      }
-                                    },
-                                    {
-                                      "type": "object",
-                                      "required": [
-                                        "target",
-                                        "subjectHash",
-                                        "before",
-                                        "after"
-                                      ],
-                                      "properties": {
-                                        "target": {
-                                          "type": "string",
-                                          "pattern": "^NEW-[0-9]+$"
-                                        },
-                                        "subjectHash": {
-                                          "$ref": "#/components/schemas/Sha256"
-                                        },
-                                        "before": {
-                                          "type": "null"
-                                        },
-                                        "after": {
-                                          "$ref": "#/components/schemas/JudgedContent"
-                                        }
-                                      }
-                                    }
-                                  ]
-                                }
-                              },
-                              "splitSubjectHash": {
-                                "$ref": "#/components/schemas/Sha256"
-                              },
-                              "splitTasks": {
-                                "type": "array",
-                                "items": {
+                          "ops": {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/components/schemas/JudgedProposalOp"
+                            },
+                            "minItems": 1
+                          },
+                          "targets": {
+                            "type": "array",
+                            "items": {
+                              "anyOf": [
+                                {
                                   "type": "object",
                                   "required": [
-                                    "taskKey",
-                                    "content"
+                                    "target",
+                                    "subjectHash",
+                                    "before",
+                                    "after"
                                   ],
                                   "properties": {
-                                    "taskKey": {
+                                    "target": {
                                       "$ref": "#/components/schemas/TaskKey"
                                     },
-                                    "content": {
+                                    "subjectHash": {
+                                      "$ref": "#/components/schemas/Sha256"
+                                    },
+                                    "before": {
+                                      "$ref": "#/components/schemas/JudgedContent"
+                                    },
+                                    "after": {
                                       "$ref": "#/components/schemas/JudgedContent"
                                     }
                                   }
                                 },
-                                "minItems": 1
-                              }
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "target",
+                                    "subjectHash",
+                                    "before",
+                                    "after"
+                                  ],
+                                  "properties": {
+                                    "target": {
+                                      "type": "string",
+                                      "pattern": "^NEW-[0-9]+$"
+                                    },
+                                    "subjectHash": {
+                                      "$ref": "#/components/schemas/Sha256"
+                                    },
+                                    "before": {
+                                      "type": "null"
+                                    },
+                                    "after": {
+                                      "$ref": "#/components/schemas/JudgedContent"
+                                    }
+                                  }
+                                }
+                              ]
                             }
+                          },
+                          "splitSubjectHash": {
+                            "type": "null"
+                          },
+                          "splitTasks": {
+                            "type": "null"
                           }
-                        ]
+                        }
                       },
                       {
-                        "type": "null"
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "ops",
+                          "targets",
+                          "splitSubjectHash",
+                          "splitTasks"
+                        ],
+                        "properties": {
+                          "id": {
+                            "$ref": "#/components/schemas/Id"
+                          },
+                          "ops": {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/components/schemas/JudgedSplitProposalOp"
+                            },
+                            "minItems": 1
+                          },
+                          "targets": {
+                            "type": "array",
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "target",
+                                    "subjectHash",
+                                    "before",
+                                    "after"
+                                  ],
+                                  "properties": {
+                                    "target": {
+                                      "$ref": "#/components/schemas/TaskKey"
+                                    },
+                                    "subjectHash": {
+                                      "$ref": "#/components/schemas/Sha256"
+                                    },
+                                    "before": {
+                                      "$ref": "#/components/schemas/JudgedContent"
+                                    },
+                                    "after": {
+                                      "$ref": "#/components/schemas/JudgedContent"
+                                    }
+                                  }
+                                },
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "target",
+                                    "subjectHash",
+                                    "before",
+                                    "after"
+                                  ],
+                                  "properties": {
+                                    "target": {
+                                      "type": "string",
+                                      "pattern": "^NEW-[0-9]+$"
+                                    },
+                                    "subjectHash": {
+                                      "$ref": "#/components/schemas/Sha256"
+                                    },
+                                    "before": {
+                                      "type": "null"
+                                    },
+                                    "after": {
+                                      "$ref": "#/components/schemas/JudgedContent"
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          "splitSubjectHash": {
+                            "$ref": "#/components/schemas/Sha256"
+                          },
+                          "splitTasks": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "taskKey",
+                                "content"
+                              ],
+                              "properties": {
+                                "taskKey": {
+                                  "$ref": "#/components/schemas/TaskKey"
+                                },
+                                "content": {
+                                  "$ref": "#/components/schemas/JudgedContent"
+                                }
+                              }
+                            },
+                            "minItems": 1
+                          }
+                        }
                       }
                     ]
+                  },
+                  "planning": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "leaseUntil",
+              "fence",
+              "kind",
+              "payload"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/Id"
+              },
+              "leaseUntil": {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              "fence": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 2147483647
+              },
+              "kind": {
+                "enum": [
+                  "planning"
+                ]
+              },
+              "payload": {
+                "type": "object",
+                "required": [
+                  "tasks",
+                  "policy",
+                  "proposal",
+                  "planning"
+                ],
+                "properties": {
+                  "tasks": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "taskKey",
+                        "workType",
+                        "subjectHash",
+                        "content"
+                      ],
+                      "properties": {
+                        "taskKey": {
+                          "$ref": "#/components/schemas/TaskKey"
+                        },
+                        "workType": {
+                          "$ref": "#/components/schemas/WorkType"
+                        },
+                        "subjectHash": {
+                          "$ref": "#/components/schemas/Sha256"
+                        },
+                        "content": {
+                          "$ref": "#/components/schemas/JudgedContent"
+                        },
+                        "gradeChange": {
+                          "anyOf": [
+                            {
+                              "$ref": "#/components/schemas/Uuid"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "policy": {
+                    "type": "object",
+                    "patternProperties": {
+                      "^.*$": {}
+                    }
+                  },
+                  "proposal": {
+                    "type": "null"
+                  },
+                  "planning": {
+                    "type": "object",
+                    "required": [
+                      "id",
+                      "title",
+                      "scope"
+                    ],
+                    "properties": {
+                      "id": {
+                        "$ref": "#/components/schemas/Id"
+                      },
+                      "title": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      "scope": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "leaseUntil",
+              "fence",
+              "kind",
+              "payload"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/Id"
+              },
+              "leaseUntil": {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              "fence": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 2147483647
+              },
+              "kind": {
+                "enum": [
+                  "planning"
+                ]
+              },
+              "payload": {
+                "type": "object",
+                "required": [
+                  "tasks",
+                  "policy",
+                  "proposal",
+                  "planning"
+                ],
+                "properties": {
+                  "tasks": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "taskKey",
+                        "workType",
+                        "subjectHash",
+                        "content"
+                      ],
+                      "properties": {
+                        "taskKey": {
+                          "$ref": "#/components/schemas/TaskKey"
+                        },
+                        "workType": {
+                          "$ref": "#/components/schemas/WorkType"
+                        },
+                        "subjectHash": {
+                          "$ref": "#/components/schemas/Sha256"
+                        },
+                        "content": {
+                          "$ref": "#/components/schemas/JudgedContent"
+                        },
+                        "gradeChange": {
+                          "anyOf": [
+                            {
+                              "$ref": "#/components/schemas/Uuid"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "minItems": 1
+                  },
+                  "policy": {
+                    "type": "object",
+                    "patternProperties": {
+                      "^.*$": {}
+                    }
+                  },
+                  "proposal": {
+                    "type": "null"
+                  },
+                  "planning": {
+                    "type": "null"
                   }
                 }
               }
@@ -33515,12 +33991,16 @@
                       "type": "object",
                       "required": [
                         "taskKey",
+                        "workType",
                         "subjectHash",
                         "content"
                       ],
                       "properties": {
                         "taskKey": {
                           "$ref": "#/components/schemas/TaskKey"
+                        },
+                        "workType": {
+                          "$ref": "#/components/schemas/WorkType"
                         },
                         "subjectHash": {
                           "$ref": "#/components/schemas/Sha256"
@@ -33578,7 +34058,8 @@
                 "type": "object",
                 "required": [
                   "tasks",
-                  "policy"
+                  "policy",
+                  "wbs"
                 ],
                 "properties": {
                   "tasks": {
@@ -33587,12 +34068,16 @@
                       "type": "object",
                       "required": [
                         "taskKey",
+                        "workType",
                         "subjectHash",
                         "content"
                       ],
                       "properties": {
                         "taskKey": {
                           "$ref": "#/components/schemas/TaskKey"
+                        },
+                        "workType": {
+                          "$ref": "#/components/schemas/WorkType"
                         },
                         "subjectHash": {
                           "$ref": "#/components/schemas/Sha256"
@@ -33617,6 +34102,108 @@
                     "type": "object",
                     "patternProperties": {
                       "^.*$": {}
+                    }
+                  },
+                  "wbs": {
+                    "type": "object",
+                    "required": [
+                      "phases",
+                      "tasks",
+                      "dependencies"
+                    ],
+                    "properties": {
+                      "phases": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "id",
+                            "wps"
+                          ],
+                          "properties": {
+                            "id": {
+                              "$ref": "#/components/schemas/Id"
+                            },
+                            "wps": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "id",
+                                  "tasks"
+                                ],
+                                "properties": {
+                                  "id": {
+                                    "$ref": "#/components/schemas/Id"
+                                  },
+                                  "tasks": {
+                                    "type": "array",
+                                    "items": {
+                                      "$ref": "#/components/schemas/TaskKey"
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "tasks": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "taskKey",
+                            "workType",
+                            "wp",
+                            "status",
+                            "subjectHash",
+                            "content"
+                          ],
+                          "properties": {
+                            "taskKey": {
+                              "$ref": "#/components/schemas/TaskKey"
+                            },
+                            "workType": {
+                              "$ref": "#/components/schemas/WorkType"
+                            },
+                            "wp": {
+                              "$ref": "#/components/schemas/Id"
+                            },
+                            "status": {
+                              "$ref": "#/components/schemas/TaskStatus"
+                            },
+                            "subjectHash": {
+                              "$ref": "#/components/schemas/Sha256"
+                            },
+                            "content": {
+                              "$ref": "#/components/schemas/JudgedContent"
+                            }
+                          }
+                        }
+                      },
+                      "dependencies": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "pred",
+                            "succ",
+                            "type"
+                          ],
+                          "properties": {
+                            "pred": {
+                              "$ref": "#/components/schemas/TaskKey"
+                            },
+                            "succ": {
+                              "$ref": "#/components/schemas/TaskKey"
+                            },
+                            "type": {
+                              "$ref": "#/components/schemas/DepType"
+                            }
+                          }
+                        }
+                      }
                     }
                   }
                 }
@@ -35961,7 +36548,8 @@
           }
         },
         "title": "JudgedContent",
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "subjectHash는 이 객체의 RFC 8785 JCS 직렬화 UTF-8 바이트를 SHA-256으로 계산한 64자리 소문자 16진수다. sourceRef는 sha256: 뒤에 같은 값을 붙인다. Unicode 정규화는 하지 않는다. 고정 예시는 contracts/fixtures/judgement-bindings.json에 있다."
       },
       "JudgedProposalOp": {
         "anyOf": [
@@ -38605,8 +39193,8 @@
                             },
                             "sourceRef": {
                               "type": "string",
-                              "minLength": 1,
-                              "pattern": "\\S"
+                              "pattern": "^sha256:[0-9a-f]{64}$",
+                              "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                             }
                           },
                           "additionalProperties": false
@@ -39232,8 +39820,8 @@
                             },
                             "sourceRef": {
                               "type": "string",
-                              "minLength": 1,
-                              "pattern": "\\S"
+                              "pattern": "^sha256:[0-9a-f]{64}$",
+                              "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                             }
                           },
                           "additionalProperties": false
@@ -40679,8 +41267,8 @@
                                           },
                                           "sourceRef": {
                                             "type": "string",
-                                            "minLength": 1,
-                                            "pattern": "\\S"
+                                            "pattern": "^sha256:[0-9a-f]{64}$",
+                                            "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                                           },
                                           "subjectHash": {
                                             "$ref": "#/components/schemas/Sha256"
@@ -41383,8 +41971,8 @@
                         },
                         "sourceRef": {
                           "type": "string",
-                          "minLength": 1,
-                          "pattern": "\\S"
+                          "pattern": "^sha256:[0-9a-f]{64}$",
+                          "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                         },
                         "subjectHash": {
                           "$ref": "#/components/schemas/Sha256"
@@ -41470,8 +42058,8 @@
                           },
                           "sourceRef": {
                             "type": "string",
-                            "minLength": 1,
-                            "pattern": "\\S"
+                            "pattern": "^sha256:[0-9a-f]{64}$",
+                            "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                           },
                           "subjectHash": {
                             "$ref": "#/components/schemas/Sha256"
@@ -41900,8 +42488,8 @@
                             },
                             "sourceRef": {
                               "type": "string",
-                              "minLength": 1,
-                              "pattern": "\\S"
+                              "pattern": "^sha256:[0-9a-f]{64}$",
+                              "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                             },
                             "subjectHash": {
                               "$ref": "#/components/schemas/Sha256"
@@ -46193,8 +46781,8 @@
                                 },
                                 "sourceRef": {
                                   "type": "string",
-                                  "minLength": 1,
-                                  "pattern": "\\S"
+                                  "pattern": "^sha256:[0-9a-f]{64}$",
+                                  "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
                                 },
                                 "subjectHash": {
                                   "$ref": "#/components/schemas/Sha256"

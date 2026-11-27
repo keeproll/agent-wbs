@@ -94,7 +94,7 @@ const sourceOf = (d: Detail): JudgedSource => ({
 async function judge(key: string, items: (readonly [string, 'met' | 'not_met'])[], hash?: string) {
   const d = await detail(key);
   const record = { schemaVersion: 1, items: items.map(([rule, result]) => ({
-    rule, result, agreedBy: ['Claude', 'Codex'], basis: '근거', subjectHash: hash ?? subjectHash(sourceOf(d)), judgedAt: '2026-11-26T00:00:00Z', sourceRef: 'planning-job-1',
+    rule, result, agreedBy: ['Claude', 'Codex'], basis: '근거', subjectHash: hash ?? subjectHash(sourceOf(d)), judgedAt: '2026-11-26T00:00:00Z', sourceRef: `sha256:${hash ?? subjectHash(sourceOf(d))}`,
   })) };
   await ownerPool.query(`insert into task_splits(project_id,task,basis,judged_rules,exceptions) values($1,$2,'',$3,'[]')
     on conflict (task) do update set judged_rules=excluded.judged_rules`, [projectId, d.id, record]);
@@ -851,6 +851,10 @@ describe('tasks 착수 승인 요청→승인/반려', () => {
     const d = await detail(key);
     await ownerPool.query(`update task_splits set judged_rules=jsonb_set(judged_rules,'{items,0,subjectHash}',to_jsonb($2::text)) where task=$1`, [d.id, subjectHash(sourceOf(d))]);
     await ownerPool.query(`update task_splits set judged_rules=jsonb_set(judged_rules,'{items,1,subjectHash}',to_jsonb($2::text)) where task=$1`, [d.id, subjectHash(sourceOf(d))]);
+    // 현재 hash만 찍어 주어도 옛 입력 지문의 판단은 여전히 무효다.
+    const rebound = errorOf(await call('POST', `/api/tasks/${key}/approve`, { updatedAt: await version(key) }));
+    expect((rebound.details.items as { rule: string }[]).map((i) => i.rule)).toEqual(['revert', 'contract', 'refactor']);
+    for (const index of [0, 1]) await ownerPool.query(`update task_splits set judged_rules=jsonb_set(judged_rules,$2::text[],to_jsonb($3::text)) where task=$1`, [d.id, ['items', String(index), 'sourceRef'], `sha256:${subjectHash(sourceOf(d))}`]);
     const partial = errorOf(await call('POST', `/api/tasks/${key}/approve`, { updatedAt: await version(key) }));
     expect((partial.details.items as { rule: string }[]).map((i) => i.rule)).toEqual(['refactor']);
   });

@@ -22,7 +22,7 @@ export async function watchRunner(pool: Pool, epoch: number, at?: Date) {
           if (task) await repo.historyEvent(task, 'Runner 연결 중단', { attemptId: a.id });
         }
       }
-      await repo.state(job.id, EXTERNAL_JOBS.includes(job.kind) ? 'reconcile' : 'cancelled');
+      await repo.state(job.id, EXTERNAL_JOBS.includes(job.kind) ? 'reconcile' : 'cancelled', { code: 'LEASE_LOST', message: 'Runner의 작업 임대 또는 생존 보고가 만료되어 분석을 중단했습니다.' });
       await repo.event(job, 'lease_lost');
       if (hold && hold.slot_state !== 'none') await repo.alert(job.project_id, `unconfirmed:${job.id}`, 'Runner 연결이 끊겨 프로세스 종료를 확인하지 못했습니다.', { jobId:job.id });
     }

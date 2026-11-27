@@ -110,10 +110,10 @@ const JobKindSchema = AnyOf(...JOB_KINDS);
 const lease = { id: c.Id, leaseUntil: c.Timestamp, fence };
 const Job = <const K extends JobKind, P extends Record<string, Parameters<typeof Opt>[0]>>(kind: K, payload: P) =>
   Type.Object({ ...lease, kind: AnyOf(kind), payload: Type.Object(payload) });
-/** 현재 내용과 그 hash. hash는 재판단 보고에 그대로 돌려보낸다(data-model §2.3-1). */
+/** workType은 분할 상속을 정하는 별도 정보다. content와 subjectHash의 JudgedContent 정의에는 넣지 않는다. */
 const JudgedTasks = List(
   // 생략은 이전 서버 작업의 최초 등급(null)이다. 새 추정 작업은 Task마다 발행 시점 번호를 담는다.
-  Type.Object({ taskKey: c.TaskKey, subjectHash: c.Sha256, content: m.JudgedContent, gradeChange: Opt(Nullable(c.Uuid)) }),
+  Type.Object({ taskKey: c.TaskKey, workType: c.WorkType, subjectHash: c.Sha256, content: m.JudgedContent, gradeChange: Opt(Nullable(c.Uuid)) }),
 );
 /**
  * 판단할 CP의 snapshot. 내용과 hash는 같은 시점의 값이며 Runner는 이것만으로 판단한다.
@@ -138,12 +138,31 @@ const JudgedProposal = Type.Union([
     splitTasks: List(Type.Object({ taskKey: c.TaskKey, content: m.JudgedContent }), { minItems: 1 }),
   }),
 ]);
+const planningRun = { planningJobId: c.Id, runNo: c.PositiveInt4, version: c.PositiveInt4 };
+const tech = {
+  techDecisionVersion: c.Sha256,
+  techDecisions: List(Type.Object({
+    id: c.Id, tdKey: Type.String(), title: Type.String(), status: m.Decision.properties.status, authority: m.Decision.properties.authority,
+    updatedAt: c.Timestamp, content: c.Json,
+  })),
+};
+const WbsSnapshot = Type.Object({
+  phases: List(Type.Object({ id: c.Id, wps: List(Type.Object({ id: c.Id, tasks: List(c.TaskKey) })) })),
+  tasks: List(Type.Object({ taskKey: c.TaskKey, workType: c.WorkType, wp: c.Id, status: c.TaskStatus, subjectHash: c.Sha256, content: m.JudgedContent })),
+  dependencies: List(Type.Object({ pred: c.TaskKey, succ: c.TaskKey, type: c.DepType })),
+});
 export const ClaimedJob = Type.Union(
   [
     Job('repo_check', { repoCheckId: c.Id, url: c.RepoUrl }),
     Job('github_check', { mode: c.GithubMode }),
-    Job('bootstrap', { commit, instruction: Type.String(), resumeStep: Nullable(Type.String()) }),
+    Job('bootstrap', {
+      ...planningRun, ...tech, commit, previousCommit: Nullable(commit), instruction: Type.String(), resumeStep: Nullable(Type.String()),
+      techConstraints: List(Type.Object({ id: c.Id, name: Text, level: AnyOf('must', 'ban', 'cond'), condition: Nullable(Type.String()) })),
+      subagentDefs: List(Type.Object({ id: c.Id, defKey: Text, version: c.PositiveInt4, agent: c.Agent, role: Text })),
+    }),
     Job('input_diff', {
+      ...planningRun,
+      wbs: WbsSnapshot,
       commit,
       previousCommit: commit,
       instruction: Type.String(),
@@ -152,11 +171,25 @@ export const ClaimedJob = Type.Union(
     Job('planning', {
       tasks: JudgedTasks,
       policy: c.Json,
-      proposal: Nullable(JudgedProposal),
+      proposal: JudgedProposal,
+      planning: Type.Null(),
+    }),
+    Job('planning', {
+      tasks: JudgedTasks,
+      policy: c.Json,
+      proposal: Type.Null(),
+      planning: Type.Object({ id: c.Id, title: Text, scope: Type.String() }),
+    }),
+    // 기존 Task 재판단은 CP·세션 없이 대상 Task가 있어야 한다.
+    Job('planning', {
+      tasks: Type.Array(JudgedTasks.items, { minItems: 1 }),
+      policy: c.Json,
+      proposal: Type.Null(),
+      planning: Type.Null(),
     }),
     // 재판단(M2-08)도 같은 모양이고, 이유·대상 역할은 policy.rejudge에 싣는다.
     Job('estimate', { tasks: JudgedTasks, policy: m.EstimatePolicy }),
-    Job('split', { tasks: JudgedTasks, policy: c.Json }),
+    Job('split', { tasks: JudgedTasks, policy: c.Json, wbs: WbsSnapshot }),
     Job('attempt', {
       taskKey: c.TaskKey,
       kind: c.AttemptKind,

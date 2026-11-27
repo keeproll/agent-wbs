@@ -22,7 +22,7 @@ const judgement = {
   agreedBy: List(c.Agent, { minItems: 2, uniqueItems: true }),
   basis: Text,
   judgedAt: c.Timestamp,
-  sourceRef: Text,
+  sourceRef: Type.String({ pattern: '^sha256:[0-9a-f]{64}$', description: '판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다.' }),
 };
 const splitRule = AnyOf('revert', 'contract', 'refactor');
 const cpRule = AnyOf('ac_meaning', 'layer_order', 'test_included');
@@ -30,10 +30,10 @@ const subjectHash = c.Sha256;
 /** rule별 최대 1건은 서버가 검사한다. */
 const judgements = <T extends TSchema>(item: T) =>
   c.Body({ schemaVersion: Type.Literal(1), items: List(item, { maxItems: 3 }) });
-/** 새 Task·초안·CP: hash는 서버가 저장할 때 계산한다. */
+/** 새 Task·초안·CP: sourceRef의 입력 지문을 대조한 뒤 그 지문을 subjectHash로 보관한다. */
 export const NewJudgedRules = judgements(c.Body({ rule: splitRule, ...judgement }));
 export const NewSplitJudgements = judgements(c.Body({ rule: cpRule, ...judgement }));
-/** 저장된 기록, 그리고 작업 payload의 hash를 돌려보내는 기존 Task 재판단 */
+/** 저장된 기록과 기존 Task 재판단. subjectHash와 sourceRef는 모두 실제 판단한 변경 후 내용을 가리킨다. */
 export const JudgedRules = judgements(c.Body({ rule: splitRule, ...judgement, subjectHash }));
 export const SplitJudgements = judgements(c.Body({ rule: cpRule, ...judgement, subjectHash }));
 
@@ -243,7 +243,7 @@ export const JudgedContent = Type.Object(
     designs: List(c.Body({ kind: c.DesignKind, content: c.Json })),
     conflictGroup: Nullable(Type.String()),
   },
-  { title: 'JudgedContent', additionalProperties: false },
+  { title: 'JudgedContent', additionalProperties: false, description: 'subjectHash는 이 객체의 RFC 8785 JCS 직렬화 UTF-8 바이트를 SHA-256으로 계산한 64자리 소문자 16진수다. sourceRef는 sha256: 뒤에 같은 값을 붙인다. Unicode 정규화는 하지 않는다. 고정 예시는 contracts/fixtures/judgement-bindings.json에 있다.' },
 );
 const checklist = {
   content: Text,

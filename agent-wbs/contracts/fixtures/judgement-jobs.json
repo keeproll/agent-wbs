@@ -10,6 +10,7 @@
     "payload": {
      "tasks": [],
      "policy": {},
+     "planning": null,
      "proposal": {
       "id": "cp-1",
       "ops": [
@@ -201,6 +202,7 @@
     "payload": {
      "tasks": [],
      "policy": {},
+     "planning": null,
      "proposal": {
       "id": "cp-2",
       "ops": [
@@ -407,6 +409,7 @@
      "tasks": [
       {
        "taskKey": "TASK-0005",
+       "workType": "Implementation",
        "subjectHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
        "content": {
         "title": "CRUD",
@@ -454,6 +457,7 @@
       }
      ],
      "policy": {},
+     "planning": null,
      "proposal": null
     }
    }

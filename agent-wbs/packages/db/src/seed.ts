@@ -335,7 +335,7 @@ export async function seedDemo(pool: Pool, testDatabaseUrl: string): Promise<voi
             project_id: p.id, task: task.id, basis: t.split.basis, exceptions: t.split.exc,
             judged_rules: { schemaVersion: 1, items: ['revert', 'contract', 'refactor'].map(rule => ({
               rule, result: 'met', agreedBy: ['Claude', 'Codex'], basis: '데모 전용 합의 예시. 실제 Agent 판단이 아닙니다.',
-              subjectHash: hash, judgedAt: new Date(demoTime(demo.mock.project.boot.approvedAt)).toISOString(), sourceRef: `demo:${key}`,
+              subjectHash: hash, judgedAt: new Date(demoTime(demo.mock.project.boot.approvedAt)).toISOString(), sourceRef: `sha256:${hash}`,
             })) },
           });
           for (const [index, c] of t.checklist.entries()) {

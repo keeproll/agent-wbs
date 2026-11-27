@@ -8,6 +8,9 @@ export const RERUN_STEPS = ['codex', 'claude', 'cross', 'draft', 'approve'] as c
 export const LEAD_STEPS = new Set<string>(['tech', 'approve']);
 
 export type StepStatus = 'wait' | 'run' | 'done' | 'fail';
+export function waitingForLead(kind: string, progress: ReadonlyMap<string, StepStatus>): boolean {
+  return kind === 'bootstrap' && [...LEAD_STEPS].some((key) => progress.get(key) === 'run');
+}
 export type BootPhase = 'analyzing' | 'tech_wait' | 'drafting' | 'approval_wait';
 
 /**

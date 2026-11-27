@@ -12,6 +12,8 @@ import { caps, claim, checkedJob, release, requestRun, runGrade, start, retryFai
 import { reportConcurrency, reportHost } from './telemetry.ts';
 import { runnerState } from './state.ts';
 import { installResetRunner } from '../reset/routes.ts';
+import { currentRunnerJob, steps } from '../project/jobs.ts';
+import { waitingForLead } from '../project/steps.ts';
 
 const params = (r: FastifyRequest) => r.params as { id: string; taskKey: string; attemptId: string };
 const body = <T>(r: FastifyRequest) => r.body as T;
@@ -136,7 +138,7 @@ export function installRunner(app: FastifyInstance, pool: Pool) {
       if (!task) throw new PlatformError('TASK_NOT_FOUND');
       await repo.historyEvent(task, '시작 전 실패', { jobId:job.id,error:b.error ?? null });
     }
-    await repo.state(job.id, b.status);
+    await repo.state(job.id, b.status, b.error);
   }, 204);
   route('reconcileJob', async (repo, r) => {
     const b = body<{ fence: number; evidence: { outcome: 'none' | 'done' | 'partial'; checkedAt: string; detail: object } }>(r);
@@ -146,7 +148,11 @@ export function installRunner(app: FastifyInstance, pool: Pool) {
     await repo.event(job, 'reconciled', null, b.evidence);
     await repo.state(job.id, b.evidence.outcome === 'done' ? 'done' : 'failed');
     if (h && !h.closed_at) await repo.release(h, required(h.release_proof), true);
-    if (b.evidence.outcome === 'none') await repo.enqueue(job.project_id, job.epoch, job.kind, job.payload, `reconcile:${job.id}:${job.fence}`, job.generation);
+    const planningId = ['bootstrap', 'input_diff'].includes(job.kind) ? job.payload.planningJobId as string | undefined : undefined;
+    const canReplace = !planningId || await currentRunnerJob(repo.client, planningId) === job.id
+      && (await repo.client.query<{ status: string }>('select status from planning_jobs where id=$1', [planningId])).rows[0]?.status !== 'done'
+      && !waitingForLead(job.kind, await steps(repo.client, planningId));
+    if (b.evidence.outcome === 'none' && canReplace) await repo.enqueue(job.project_id, job.epoch, job.kind, job.payload, `reconcile:${job.id}:${job.fence}`, job.generation);
   }, 204);
   route('interruptAttempt', async (repo, r) => {
     const b = body<{ fence: number; reason: string; at: string }>(r);

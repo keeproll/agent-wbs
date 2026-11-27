@@ -3,6 +3,7 @@ import { ERROR_STATUS, type ErrorCode } from '@awbs/shared/api';
 import type { FastifyInstance, FastifySchemaValidationError } from 'fastify';
 import { validationErrors } from '../platform/errors.ts';
 import { redact } from '../platform/redact.ts';
+import { JcsError } from './hash.ts';
 
 /** 400 `errors[]` 한 줄. path는 본문 안의 위치(예: `tasks.0.wpRef`)다. */
 export interface InputError { path: string; rule: string; message: string }
@@ -52,6 +53,7 @@ export class ProjectError extends Error {
  */
 export function installProjectErrors(scope: FastifyInstance, action: (method: string, url: string) => string): void {
   scope.setErrorHandler((error, request, reply) => {
+    if (error instanceof JcsError) error = new ProjectError('VALIDATION_FAILED', { errors: [{ path: 'body', rule: 'JCS', message: error.message }] });
     const failure = error as { validation?: FastifySchemaValidationError[] };
     if (!(error instanceof ProjectError) && !failure.validation) throw error;
     // 형식 검증 오류의 경로·규칙 변환은 공통 처리(platform validationErrors)를 그대로 쓴다(리뷰 8).
