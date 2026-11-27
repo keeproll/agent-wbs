@@ -47,9 +47,11 @@ beforeAll(async () => {
   plainUrl.username = plainRole;
   plainUrl.password = password;
   plain = createPool(plainUrl.href, { max: 2, onError: () => undefined });
-});
+  // 새 DB + 마이그레이션 전체 + 로그인 역할 준비. 전체 DB 시험 중 부하가 높으면 기본 60초를 넘을 수 있다(upgrade-stages와 같은 120초).
+}, 120_000);
 afterAll(async () => {
-  await plain.end(); await app.end();
+  // 준비가 중간에 실패해도 남은 연결·역할을 정리한다.
+  await plain?.end(); await app?.end();
   await owner.query(`drop owned by ${plainRole}`).catch(() => undefined);
   await owner.query(`drop role if exists ${plainRole}`).catch(() => undefined);
   await owner.end();
