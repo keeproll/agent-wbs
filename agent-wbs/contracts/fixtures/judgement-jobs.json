@@ -409,6 +409,7 @@
      "tasks": [
       {
        "taskKey": "TASK-0005",
+       "workType": "Implementation",
        "subjectHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
        "content": {
         "title": "CRUD",

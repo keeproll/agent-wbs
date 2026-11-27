@@ -14,7 +14,7 @@ test('같은 job의 반영분은 Task 추가·제거와 그래프만 누적하�
   type Wbs = Awaited<ReturnType<typeof wbsSnapshot>>;
   const task = (taskKey: string, title: string): Wbs['tasks'][number] => {
     const source = newTaskSource(add({ title }).t, null);
-    return { taskKey, wp: 'wp', status: 'ready', subjectHash: subjectHash(source), content: judgedContent(source) };
+    return { taskKey, workType: 'Implementation', wp: 'wp', status: 'ready', subjectHash: subjectHash(source), content: judgedContent(source) };
   };
   const basis: Wbs = { tasks: [task('TASK-0001', 'A'), task('TASK-0002', 'B'), task('TASK-0003', 'C')],
     phases: [{ id: 'phase', wps: [{ id: 'wp', tasks: ['TASK-0001', 'TASK-0002', 'TASK-0003'] }] }],

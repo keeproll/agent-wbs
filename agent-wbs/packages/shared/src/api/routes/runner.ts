@@ -110,10 +110,10 @@ const JobKindSchema = AnyOf(...JOB_KINDS);
 const lease = { id: c.Id, leaseUntil: c.Timestamp, fence };
 const Job = <const K extends JobKind, P extends Record<string, Parameters<typeof Opt>[0]>>(kind: K, payload: P) =>
   Type.Object({ ...lease, kind: AnyOf(kind), payload: Type.Object(payload) });
-/** 현재 내용과 그 hash. hash는 재판단 보고에 그대로 돌려보낸다(data-model §2.3-1). */
+/** workType은 분할 상속을 정하는 별도 정보다. content와 subjectHash의 JudgedContent 정의에는 넣지 않는다. */
 const JudgedTasks = List(
   // 생략은 이전 서버 작업의 최초 등급(null)이다. 새 추정 작업은 Task마다 발행 시점 번호를 담는다.
-  Type.Object({ taskKey: c.TaskKey, subjectHash: c.Sha256, content: m.JudgedContent, gradeChange: Opt(Nullable(c.Uuid)) }),
+  Type.Object({ taskKey: c.TaskKey, workType: c.WorkType, subjectHash: c.Sha256, content: m.JudgedContent, gradeChange: Opt(Nullable(c.Uuid)) }),
 );
 /**
  * 판단할 CP의 snapshot. 내용과 hash는 같은 시점의 값이며 Runner는 이것만으로 판단한다.
@@ -148,7 +148,7 @@ const tech = {
 };
 const WbsSnapshot = Type.Object({
   phases: List(Type.Object({ id: c.Id, wps: List(Type.Object({ id: c.Id, tasks: List(c.TaskKey) })) })),
-  tasks: List(Type.Object({ taskKey: c.TaskKey, wp: c.Id, status: c.TaskStatus, subjectHash: c.Sha256, content: m.JudgedContent })),
+  tasks: List(Type.Object({ taskKey: c.TaskKey, workType: c.WorkType, wp: c.Id, status: c.TaskStatus, subjectHash: c.Sha256, content: m.JudgedContent })),
   dependencies: List(Type.Object({ pred: c.TaskKey, succ: c.TaskKey, type: c.DepType })),
 });
 export const ClaimedJob = Type.Union(

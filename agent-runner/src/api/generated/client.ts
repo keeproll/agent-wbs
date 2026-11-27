@@ -82,6 +82,7 @@ export type ClaimedJob = {
       })[];
       tasks: ({
         taskKey: TaskKey;
+        workType: WorkType;
         wp: Id;
         status: TaskStatus;
         subjectHash: Sha256;
@@ -106,6 +107,7 @@ export type ClaimedJob = {
   payload: {
     tasks: ({
       taskKey: TaskKey;
+      workType: WorkType;
       subjectHash: Sha256;
       content: JudgedContent;
       gradeChange?: Uuid | null;
@@ -157,6 +159,7 @@ export type ClaimedJob = {
   payload: {
     tasks: ({
       taskKey: TaskKey;
+      workType: WorkType;
       subjectHash: Sha256;
       content: JudgedContent;
       gradeChange?: Uuid | null;
@@ -177,6 +180,7 @@ export type ClaimedJob = {
   payload: {
     tasks: ({
       taskKey: TaskKey;
+      workType: WorkType;
       subjectHash: Sha256;
       content: JudgedContent;
       gradeChange?: Uuid | null;
@@ -193,6 +197,7 @@ export type ClaimedJob = {
   payload: {
     tasks: ({
       taskKey: TaskKey;
+      workType: WorkType;
       subjectHash: Sha256;
       content: JudgedContent;
       gradeChange?: Uuid | null;
@@ -207,6 +212,7 @@ export type ClaimedJob = {
   payload: {
     tasks: ({
       taskKey: TaskKey;
+      workType: WorkType;
       subjectHash: Sha256;
       content: JudgedContent;
       gradeChange?: Uuid | null;
@@ -222,6 +228,7 @@ export type ClaimedJob = {
       })[];
       tasks: ({
         taskKey: TaskKey;
+        workType: WorkType;
         wp: Id;
         status: TaskStatus;
         subjectHash: Sha256;

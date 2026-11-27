@@ -33326,6 +33326,7 @@
                           "type": "object",
                           "required": [
                             "taskKey",
+                            "workType",
                             "wp",
                             "status",
                             "subjectHash",
@@ -33334,6 +33335,9 @@
                           "properties": {
                             "taskKey": {
                               "$ref": "#/components/schemas/TaskKey"
+                            },
+                            "workType": {
+                              "$ref": "#/components/schemas/WorkType"
                             },
                             "wp": {
                               "$ref": "#/components/schemas/Id"
@@ -33438,12 +33442,16 @@
                       "type": "object",
                       "required": [
                         "taskKey",
+                        "workType",
                         "subjectHash",
                         "content"
                       ],
                       "properties": {
                         "taskKey": {
                           "$ref": "#/components/schemas/TaskKey"
+                        },
+                        "workType": {
+                          "$ref": "#/components/schemas/WorkType"
                         },
                         "subjectHash": {
                           "$ref": "#/components/schemas/Sha256"
@@ -33702,12 +33710,16 @@
                       "type": "object",
                       "required": [
                         "taskKey",
+                        "workType",
                         "subjectHash",
                         "content"
                       ],
                       "properties": {
                         "taskKey": {
                           "$ref": "#/components/schemas/TaskKey"
+                        },
+                        "workType": {
+                          "$ref": "#/components/schemas/WorkType"
                         },
                         "subjectHash": {
                           "$ref": "#/components/schemas/Sha256"
@@ -33803,12 +33815,16 @@
                       "type": "object",
                       "required": [
                         "taskKey",
+                        "workType",
                         "subjectHash",
                         "content"
                       ],
                       "properties": {
                         "taskKey": {
                           "$ref": "#/components/schemas/TaskKey"
+                        },
+                        "workType": {
+                          "$ref": "#/components/schemas/WorkType"
                         },
                         "subjectHash": {
                           "$ref": "#/components/schemas/Sha256"
@@ -33885,12 +33901,16 @@
                       "type": "object",
                       "required": [
                         "taskKey",
+                        "workType",
                         "subjectHash",
                         "content"
                       ],
                       "properties": {
                         "taskKey": {
                           "$ref": "#/components/schemas/TaskKey"
+                        },
+                        "workType": {
+                          "$ref": "#/components/schemas/WorkType"
                         },
                         "subjectHash": {
                           "$ref": "#/components/schemas/Sha256"
@@ -33958,12 +33978,16 @@
                       "type": "object",
                       "required": [
                         "taskKey",
+                        "workType",
                         "subjectHash",
                         "content"
                       ],
                       "properties": {
                         "taskKey": {
                           "$ref": "#/components/schemas/TaskKey"
+                        },
+                        "workType": {
+                          "$ref": "#/components/schemas/WorkType"
                         },
                         "subjectHash": {
                           "$ref": "#/components/schemas/Sha256"
@@ -34040,6 +34064,7 @@
                           "type": "object",
                           "required": [
                             "taskKey",
+                            "workType",
                             "wp",
                             "status",
                             "subjectHash",
@@ -34048,6 +34073,9 @@
                           "properties": {
                             "taskKey": {
                               "$ref": "#/components/schemas/TaskKey"
+                            },
+                            "workType": {
+                              "$ref": "#/components/schemas/WorkType"
                             },
                             "wp": {
                               "$ref": "#/components/schemas/Id"

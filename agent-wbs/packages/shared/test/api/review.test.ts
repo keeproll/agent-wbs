@@ -386,11 +386,37 @@ test('N1 snapshot은 hash 계산 대상과 같은 범위다(data-model §2.3-1)'
   expect(responds('claimJob', response)).toBe(false);
 });
 
-test('N1 기존 Task 재판단 job도 현재 내용을 준다', () => {
-  const response = claim('rejudge');
-  const [task] = response.job.payload.tasks as Record<string, unknown>[];
-  Reflect.deleteProperty(task ?? {}, 'content');
-  expect(responds('claimJob', response)).toBe(false);
+test('N1 기존 Task 재판단 job도 현재 내용과 workType을 준다', () => {
+  for (const field of ['content', 'workType']) {
+    const response = claim('rejudge');
+    const [task] = response.job.payload.tasks as Record<string, unknown>[];
+    Reflect.deleteProperty(task ?? {}, field);
+    expect(responds('claimJob', response)).toBe(false);
+  }
+});
+
+test.each(['split', 'input_diff'])('%s claim의 Task 작업 유형은 필수이며 Analysis를 그대로 전달한다', (kind) => {
+  const [base] = claim('rejudge').job.payload.tasks as Record<string, unknown>[];
+  if (!base) throw new Error('Task fixture 없음');
+  const task: Record<string, unknown> = { ...base, workType: 'Analysis' };
+  const snapshotTask: Record<string, unknown> = {
+    taskKey: task.taskKey, workType: task.workType, subjectHash: task.subjectHash, content: task.content, wp: 'WP-1', status: 'ready',
+  };
+  const wbs = { phases: [{ id: 'PH-1', wps: [{ id: 'WP-1', tasks: [task.taskKey] }] }], tasks: [snapshotTask], dependencies: [] };
+  const payload = kind === 'split' ? { tasks: [task], policy: {}, wbs }
+    : { planningJobId: 'planning-1', runNo: 1, version: 2, commit: 'a'.repeat(40), previousCommit: 'b'.repeat(40), instruction: '', resumeStep: null, wbs };
+  const response = { job: { ...claim('rejudge').job, kind, payload } };
+  expect(responds('claimJob', response), ajv.errorsText()).toBe(true);
+  for (const invalid of [undefined, 'Unknown']) {
+    snapshotTask.workType = invalid;
+    expect(responds('claimJob', response)).toBe(false);
+    snapshotTask.workType = 'Analysis';
+    if (kind === 'split') {
+      task.workType = invalid;
+      expect(responds('claimJob', response)).toBe(false);
+      task.workType = 'Analysis';
+    }
+  }
 });
 
 test('N1 팀장 CP → claim → 판단 제출이 같은 대상과 hash로 이어진다', () => {

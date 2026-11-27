@@ -81,6 +81,14 @@ Unicode 문자열은 정규화하지 않는다.
 그 값으로 `sourceRef`를 만든다.
 왜 이렇게 하나: 분할 전체 판단은 조각 하나가 아니라 전체 변경과 원래 작업의 관계를 다룬다.
 
+분할 작업의 `payload.tasks[]`와 WBS(Work Breakdown Structure, 작업을 단계와 묶음으로 나눈 구조) 스냅샷의 `tasks[]`에는 `workType`(작업 유형)이 필수다.
+같은 Task 입력 구조를 쓰는 재판단·추정 작업에도 `workType`을 담는다.
+값은 DB에 저장된 `Analysis`, `Implementation` 등의 유형을 그대로 쓴다.
+`workType`은 `JudgedContent` 안에 넣지 않으므로 기존 판단 지문과 고정 벡터는 바뀌지 않는다.
+분석 중 제안 대상이나 그 이웃의 작업 유형이 바뀌면 `409 VERSION_CONFLICT`로 거부한다.
+왜 이렇게 하나: `Analysis` 조각이 원래 Task의 충돌 묶음을 상속하는지는 원래 작업 유형에 따라 달라진다.
+Runner가 유형을 추측하면 잘못된 묶음을 전제로 판단할 수 있다.
+
 언어가 달라도 대조할 수 있는 고정 입력·직렬화 결과·지문은 [`contracts/fixtures/judgement-bindings.json`](contracts/fixtures/judgement-bindings.json)에 있다.
 기본 예시의 지문은 `49813649157306979e9b5652a52674817589723f035e668c9b8a9e372027a1cb`다.
 
