@@ -72,6 +72,8 @@ const EXTRA_BODY: Record<string, Record<string, unknown>> = {
   createReport: { from: '2026-11-01', to: '2026-11-02', view: 'int' },
   // M6-03: 받는 사람 변경은 계약상 updatedAt 말고 바꿀 칸이 하나 이상 있어야 한다(minProperties 2).
   updateRecipient: { daily: true },
+  // M6 통합: M6-05 resolveDrift는 how가 필수다(M6-01·M6-03과 같은 방식으로 기본 본문을 준다).
+  resolveDrift: { how: 'contract' },
 };
 /** 경로 변수도 형식에 맞는 값을 넣는다. 형식이 틀리면 시각보다 경로 변수 오류가 먼저 나온다. */
 const urlOf = (op: Operation) => op.path.replace(':messageId', draftId).replace(':taskKey', 'TASK-0001').replace(':kind', 'DB').replace(/:\w+/g, UUID);
