@@ -194,16 +194,16 @@ export class Launches {
         const current = await processes(createdAfter, records, known);
         return [...groups].every(processGroupEmpty) && !current.some(p => owned(p));
       };
-      let deadline = Date.now() + graceMs;
-      while (!(await empty()) && Date.now() < deadline) await sleep(10);
+      let deadline = performance.now() + graceMs;
+      while (!(await empty()) && performance.now() < deadline) await sleep(10);
       if (!(await empty())) {
         // 다시 대조한다. 대기 중 번호가 재사용됐으면 새 프로세스를 죽이지 않는다.
         const current = await processes(createdAfter, records, known);
         // TERM 처리 중 새 그룹으로 분리된 자손도 다시 묶는다(M5-03 실커널 재현).
         for (const p of current) if (owned(p)) groups.add(p.pgid);
         for (const g of groups) await signalOwnedGroup(g, current.filter(p => owned(p)), 'SIGKILL');
-        deadline = Date.now() + 1000;
-        while (!(await empty()) && Date.now() < deadline) await sleep(10);
+        deadline = performance.now() + 1000;
+        while (!(await empty()) && performance.now() < deadline) await sleep(10);
       }
       if (!(await empty())) return null;
       return hold.processGroup === null ? { kind: 'no_process', bootId: hold.bootId } : { kind: 'group_empty', bootId: hold.bootId, processGroup: hold.processGroup };

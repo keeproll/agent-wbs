@@ -7,6 +7,7 @@ import { ApiTransportError } from '../../../../agent-runner/src/api/client.ts';
 import { Execution, type ExecutionOptions } from '../../../../agent-runner/src/exec/session.ts';
 import { AttemptFlow, finishJob, type AttemptFlowOptions } from '../../../../agent-runner/src/jobs/attempt-flow.ts';
 import { bindTaskCheck } from '../../../../agent-runner/src/jobs/task-check.ts';
+import { CiJobs } from '../../../../agent-runner/src/ci/jobs.ts';
 import { parsePipeline } from '../../../../agent-runner/src/ci/pipeline.ts';
 import { fixture, file, commit, git } from '../../../../agent-runner/test/ci/int-fixture.ts';
 import { HeavySemaphore } from '../../../../agent-runner/src/resources/heavy.ts';
@@ -85,6 +86,8 @@ beforeEach(async () => {
   let inputHead = f.ref('main');
   const taskCheck = bindTaskCheck({ get execution() { return execution; }, get runner() { return runner; }, api: h.runner.api, repo: f.repo, worktree: () => ({ id: 'task', branch: 'agent/m505-work' }),
     collectTests: f.deps.collectTests,
+    // 시험 저장소의 PR 번호(가짜 GitHub). 제품에는 아직 PR을 여는 구현이 없다.
+    pr: () => f.request.pr,
     launch: (argv, cwd) => {
       const failed = argv[1] === failCheckStep;
       const command = installFakeCli(join(home, 'checks'), 'codex', { lines: [failed ? '검사 실패' : '검사 통과'], exitCode: failed ? 1 : 0 });
@@ -391,6 +394,27 @@ test.each(['process', 'collect', 'interrupt', 'qa-fail'] as const)('조정자 �
   expect(runner.retainedMessages).toEqual([]);
 }, 60_000);
 
+// M5·M7 통합(M5-05 리뷰 P3-3): QA FAIL 시도에서 응답한 지시는 재검증에 다시 전달되지만 업무 응답은 한 번만 남긴다.
+// 왜: 같은 지시에 응답 행이 두 개 생기면 팀장 화면에 같은 답이 두 번 보이고, 어느 쪽이 최신인지 헷갈린다.
+test('QA FAIL 뒤 재검증에 다시 전달한 지시에는 업무 응답을 다시 보내지 않는다', async () => {
+  expect((await h.run('TASK-0001')).status).toBe(202);
+  await flow.runNext(20);
+  const draft = await h.lead('POST', '/api/messages', { taskKey: 'TASK-0001', type: '추가 지시', toAgent: 'Codex', body: '검증 때 이 항목도 확인하세요.' });
+  const id = String(draft.body.id);
+  expect((await h.lead('POST', `/api/messages/${id}/send`, { updatedAt: draft.body.updatedAt })).status).toBe(200);
+  installFakeCli(join(home, 'fake'), 'codex', codex('FAIL'));
+  expect((await flow.runNext(20))?.payload).toMatchObject({ kind: 'qa' });
+  expect(runner.retainedMessages.map(m => m.id)).toEqual([id]);
+  expect((await flow.runNext(20))?.payload).toMatchObject({ kind: 'rework' });
+  installFakeCli(join(home, 'fake'), 'codex', codex('PASS'));
+  expect((await flow.runNext(20))?.payload).toMatchObject({ kind: 'reverify' });
+  await runner.outbox.flush();
+  const calls = await readFile(join(home, 'fake', 'codex.calls.jsonl'), 'utf8');
+  expect(calls).toContain('이전 시도에서 받은 지시');
+  expect(await h.rows("select count(*)::int n from messages where dir='in' and type='응답'")).toEqual([{ n: 1 }]);
+  expect(runner.retainedMessages).toEqual([]);
+}, 60_000);
+
 test('프로세스가 남아 있는 job은 no_process로 끝냈다고 보고하지 않는다', async () => {
   const fake = installFakeCli(join(home, 'fake'), 'claude', cli('PASS', true));
   expect((await h.run('TASK-0001')).status).toBe(202);
@@ -455,10 +479,24 @@ test('claim 응답 사이 자원이 바뀌어 같은 canStart가 거절해도 �
   expect((await h.run('TASK-0001')).status).toBe(202);
   const calls: number[] = [];
   executionOptions.canStart = (_agent, slots) => { calls.push(slots); return calls.length === 1 ? { ok: true } : { ok: false, reason: 'limit' }; };
+  // 자원이 돌아오지 않으면 짧게 기다린 뒤에만 시작 전 실패로 끝낸다.
+  executionOptions.admissionWaitMs = 300;
   await expect(execution.claim(20)).rejects.toThrow('limit');
-  expect(calls).toEqual([1, 1]);
+  expect(calls.length).toBeGreaterThan(2);
+  expect(new Set(calls)).toEqual(new Set([1]));
   expect(await h.rows('select state from runner_jobs')).toEqual([{ state: 'failed' }]);
   expect(await h.rows('select count(*)::int n from execution_holds where closed_at is null')).toEqual([{ n: 0 }]);
+});
+
+// M5·M7 통합(M5-05 리뷰 P3-4): claim 직후의 짧은 자원 경합은 시작 전 실패가 아니라 대기다(contracts §3.4-8 「잠금을 유지한 채 대기」).
+// 왜: 자동으로 만든 QA·재작업 job이 몇 초 경합 때문에 실패하면 팀장이 「다시 시도」를 눌러야만 이어진다.
+test('claim 응답 사이 자원이 잠깐 줄었다 돌아오면 실패하지 않고 같은 임대로 기다렸다 시작한다', async () => {
+  expect((await h.run('TASK-0001')).status).toBe(202);
+  const calls: number[] = [];
+  executionOptions.canStart = () => { calls.push(1); return calls.length === 1 || calls.length >= 4 ? { ok: true } : { ok: false, reason: 'limit' }; };
+  expect(await execution.claim(20)).toMatchObject({ kind: 'attempt' });
+  expect(calls.length).toBeGreaterThanOrEqual(4);
+  expect(await h.rows('select state from runner_jobs')).toEqual([{ state: 'leased' }]);
 });
 
 test('실행 실패는 같은 종류를 총 3회만 자동 실행하고 QA 결과를 만들지 않는다', async () => {
@@ -495,6 +533,31 @@ test('재작업 안의 프로세스 실패 재시도는 같은 재작업 회차�
     { kind: 'rework', status: 'failed' }, { kind: 'rework', status: 'completed' },
   ]);
   expect(await h.rows("select count(distinct j.payload->>'automaticCause')::int n from task_attempts a join runner_jobs j on j.id=a.job where a.kind='rework'")).toEqual([{ n: 1 }]);
+}, 60_000);
+
+// M5·M7 통합(M5-05 리뷰 P3-5): M5-05 시도 흐름과 M7-06 CI 실행기를 한 줄로 잇는다.
+// 왜: 두 브랜치는 각각 자기 쪽을 실제로, 다른 쪽은 준비 코드로 시험했다. 통합 뒤에는 실제 dev·①·QA가 실제 ②·병합으로 이어져야 한다.
+// 두 실행기는 claim하는 job 종류가 다르다(attempt·stop_attempt / integrate·ci_retry). 같은 무거운 작업 상한(HeavySemaphore)을 쓴다.
+test('M5·M7 통합: 실제 시도 흐름(dev·①·QA PASS) 뒤 실제 CI 실행기가 ②·병합을 하고 Task가 자동 완료된다', async () => {
+  expect((await h.run('TASK-0001')).status).toBe(202);
+  expect((await flow.runNext(20))?.payload).toMatchObject({ kind: 'dev', agent: 'Claude' });
+  expect((await flow.runNext(20))?.payload).toMatchObject({ kind: 'qa', agent: 'Codex' });
+  expect((await h.lead('GET', '/api/tasks/TASK-0001')).body).toMatchObject({ lifecycleStatus: 'gate' });
+  expect(checks).toEqual(['dev']);
+  // ① 통과 뒤 시도 흐름이 검사한 커밋을 PR 브랜치에 올렸는지 원격에서 확인한다.
+  expect(f.ref(f.request.branch)).toBe(head);
+  const ci = new CiJobs({ ...f.deps, heavy: executionOptions.heavy, directory: join(home, 'ci-jobs'), api: h.runner.api, outbox: runner.outbox,
+    runnerId: state.snapshot.runnerId, epoch: () => 1, ready: () => runner.ready, identity: executionOptions.identity,
+    execute: (_job, argv, cwd) => f.deps.execute(argv, cwd), warn: () => undefined });
+  try {
+    expect(await flow.runNext(20)).toBeNull();
+    const outcome = await ci.runNext(20);
+    expect(outcome?.job.kind).toBe('integrate');
+    expect(outcome?.result).toMatchObject({ kind: 'merged', qaHeadSha: head });
+    await runner.outbox.flush();
+    expect((await h.lead('GET', '/api/tasks/TASK-0001')).body).toMatchObject({ lifecycleStatus: 'done' });
+    expect(await h.rows("select count(*)::int n from execution_holds where closed_at is null")).toEqual([{ n: 0 }]);
+  } finally { await ci.shutdown(); }
 }, 60_000);
 
 test('시나리오 6: 실제 세션 결합으로 개발→QA FAIL→상향 재작업→재검증 PASS→Gate 대기', async () => {

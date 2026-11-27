@@ -119,3 +119,25 @@ test('성공 status 직후 QA가 바뀌면 pending으로 되돌리고 병합하�
     headSync: { qaHeadSha: f.head, headSha: f.ref('agent/task') } });
   expect(f.statuses.get(`${f.ref('agent/task')}:agentwbs/int`)).toBe('pending'); expect(puts()).toEqual([]);
 });
+
+// M5·M7 통합 [M7 통합 때] M7-02 P3: 사슬 걷기가 main의 병합 이력을 따라 끝없이 내려가지 않는다.
+// 왜: 부모가 [main, main~1]이고 tree가 main과 같은 head는 main의 PR 병합 커밋마다 검사를 통과해, main 병합 수만큼 걷는다.
+// 대기열은 직렬이라 다른 PR도 함께 기다린다. 걷는 커밋이 이미 main에 있으면 QA H에 닿을 수 없으므로 바로 끝낸다.
+test('main 커밋에 닿은 사슬 걷기는 main 이력을 더 따라가지 않고 재QA(null)로 끝난다', async () => {
+  git(f.source, 'checkout', '-q', 'main');
+  for (let i = 0; i < 5; i++) {
+    git(f.source, 'checkout', '-q', '-b', `pr${String(i)}`); await file(join(f.source, `p${String(i)}`), String(i)); const pr = commit(f.source);
+    git(f.source, 'checkout', '-q', 'main');
+    const merged = git(f.source, 'commit-tree', git(f.source, 'rev-parse', `${pr}^{tree}`), '-p', 'main', '-p', pr, '-m', `merge ${String(i)}`);
+    git(f.source, 'reset', '-q', '--hard', merged);
+  }
+  git(f.source, 'push', '-q', f.remote, 'main');
+  const main = f.ref('main');
+  const swapped = git(f.remote, 'commit-tree', git(f.remote, 'rev-parse', `${main}^{tree}`), '-p', main, '-p', `${main}~1`, '-m', 'swapped');
+  git(f.remote, 'update-ref', 'refs/heads/agent/task', swapped);
+  await f.repo.mainPipeline();
+  const head = await f.repo.fetchBranch('agent/task');
+  const proofs = vi.spyOn(f.repo, 'integrationProof');
+  expect(await f.repo.integrationChainProof(main, f.head, head)).toBeNull();
+  expect(proofs.mock.calls.length).toBeLessThanOrEqual(1);
+});

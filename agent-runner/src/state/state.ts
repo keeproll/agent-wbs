@@ -35,7 +35,8 @@ export interface Document {
   cursor: string | null;
   inbox: Message[];
   /** 실패·중단된 시도에 전달한 Task 지시를 성공 보고까지 보존한다. */
-  instructions?: { message: Message; attemptId: string }[];
+  /** responded: 이 지시에 업무 응답을 이미 보냈다. 다음 시도에 다시 전달해도 응답은 한 번만 보낸다(M5-05 P3-3). */
+  instructions?: { message: Message; attemptId: string; responded?: true }[];
   outbox: Entry[];
   epochStartedAt?: number;
 }
@@ -61,7 +62,7 @@ function validate(value: Document): void {
   }
   if (value.inbox.some((m) => !m || typeof m.id !== 'string')) throw new Error('수신함 형식이 올바르지 않습니다.');
   if (value.instructions !== undefined && (!Array.isArray(value.instructions) || value.instructions.some(i => !i || typeof i.attemptId !== 'string' || !i.attemptId ||
-    !i.message || typeof i.message.id !== 'string' || typeof i.message.taskKey !== 'string' || !['Codex', 'Claude'].includes(i.message.toAgent) || typeof i.message.body !== 'string'))) throw new Error('보관한 Task 지시 형식이 올바르지 않습니다.');
+    (i.responded !== undefined && i.responded !== true) || !i.message || typeof i.message.id !== 'string' || typeof i.message.taskKey !== 'string' || !['Codex', 'Claude'].includes(i.message.toAgent) || typeof i.message.body !== 'string'))) throw new Error('보관한 Task 지시 형식이 올바르지 않습니다.');
 }
 
 export class StateLockError extends Error { override name = 'StateLockError'; }

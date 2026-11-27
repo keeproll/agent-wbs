@@ -203,9 +203,22 @@ export class Runner {
     if (!message) throw new Error('수신함에 없는 메시지입니다.');
     if (attemptId) await this.state.update(draft => {
       if (draft.epoch !== epoch || draft.pendingEpoch !== null) throw new Error('초기화된 프로젝트의 지시는 보관하지 않습니다.');
-      draft.instructions = [...(draft.instructions ?? []).filter(i => i.message.id !== messageId), { message, attemptId }];
+      const responded = (draft.instructions ?? []).some(i => i.message.id === messageId && i.responded);
+      draft.instructions = [...(draft.instructions ?? []).filter(i => i.message.id !== messageId), { message, attemptId, ...(responded && { responded: true as const }) }];
     });
     await this.outbox.enqueue('ackMessage', { epoch, params: { messageId } });
+  }
+
+  /** 이 지시에 업무 응답을 이미 보냈는가. 실패한 시도의 지시는 다음 시도에도 전달하지만 응답은 다시 보내지 않는다(M5-05 P3-3). */
+  responded(messageId: string): boolean {
+    return (this.state.snapshot.instructions ?? []).some(i => i.message.id === messageId && i.responded);
+  }
+
+  /** 업무 응답을 보낸(outbox에 넣은) 뒤 호출한다. */
+  async markResponded(messageId: string): Promise<void> {
+    await this.state.update(draft => {
+      draft.instructions = (draft.instructions ?? []).map(i => i.message.id === messageId ? { ...i, responded: true as const } : i);
+    });
   }
 
   async completeMessages(attemptId: string): Promise<void> {

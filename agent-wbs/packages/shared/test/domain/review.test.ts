@@ -103,6 +103,15 @@ test('R6 counters use ordered attempt history, preserving independent kinds and 
   expect(domain.claimIssue(claim({ status: 'failed', previousAttempt: { ...attempt, status: 'failed' }, history: [] }))).not.toBeNull();
 });
 
+// M5·M7 통합 조정자 결정(M5-05 리뷰 P3-2): 재작업 중 ① 실패도 자동 재시도 횟수에 센다.
+test('재작업 중 ① 실패는 재작업 원인과 자동 재시도 연속 실패를 함께 쓴다', () => {
+  const history = [
+    { ...attempt, id: 'r1', kind: 'rework' as const, status: 'failed' as const, automaticReworkCause: 'qa-fail-1' }, // ① Task 실패
+    { ...attempt, id: 'r2', kind: 'rework' as const, status: 'failed' as const, automaticReworkCause: 'task-check-r1' }, // 프로세스 실패
+  ];
+  expect(domain.attemptPolicyCounts(history)).toEqual({ consecutiveFailures: { dev: 0, qa: 0, rework: 2, reverify: 0 }, automaticReworks: 2 });
+});
+
 test.each(domain.ATTEMPT_KINDS)('R6 %s completion resets only its own failure streak, interruptions leave it unchanged', kind => {
   const other = domain.ATTEMPT_KINDS.find(value => value !== kind);
   if (!other) throw new Error('fixture');

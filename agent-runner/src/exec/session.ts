@@ -40,6 +40,12 @@ export interface ExecutionOptions {
   isolation?: IsolationLayer;
   verified?: (agent: Agent, model: string, options: string) => boolean;
   updater?: { tryClaim(): (() => void) | null; applyPending(): Promise<unknown> };
+  /**
+   * claim 응답 뒤 자원 확인이 실패하면 이 시간(ms)까지 같은 임대로 기다리며 다시 확인한다. 기본 20초.
+   * 왜: claim 요청과 응답 사이의 짧은 경합 때문에 자동 QA·재작업 job이 시작 전 실패가 되면 팀장 버튼이 필요해진다(M5-05 P3-4, contracts §3.4-8).
+   * 임대(60초)에서 시계 역행 여유를 뺀 시간보다 짧아야 한다. 그래도 돌아오지 않으면 지금처럼 시작 전 실패로 끝낸다.
+   */
+  admissionWaitMs?: number;
 }
 interface Resume { cwd: string; agent: Agent; model: string; effort: string; sessionId: string }
 export type AttemptOutput = Awaited<ReturnType<typeof runProcess>> & {
@@ -60,6 +66,12 @@ export interface AttemptOptions {
 }
 
 /** 서버 등급과 fence(낡은 Runner를 막는 번호표)를 그대로 사용한다. */
+/**
+ * 서버 임대 끝보다 이만큼 먼저 스스로 멈춘다(ms). 이 PC의 벽시계는 약 32초마다 2.3초 뒤로 간다.
+ * 서버가 준 끝 시각을 Runner 벽시계로 재므로, 시계가 뒤로 가면 서버가 임대를 끝낸 뒤에도 일할 수 있다.
+ * 그 폭보다 넉넉한 5초를 여유로 둔다(통합 [제품 위험] 결정: 여유 ≥5초).
+ */
+export const LEASE_SAFETY_MS = 5_000;
 export class Execution {
   readonly launches: Launches;
   readonly #d: ExecutionOptions;
@@ -115,7 +127,7 @@ export class Execution {
       const result = await this.#call('claimJob', { epoch: this.#d.epoch(), idempotencyKey: randomUUID(), body: { kinds: allowed ? ['attempt', 'stop_attempt'] : ['stop_attempt'], capacity } });
       const job = result.status === 200 ? result.body.job : null;
       if (job?.kind === 'attempt') {
-        try { this.#assertStart(job.payload.agent, this.#attemptSlots(job.payload.kind === 'dev' || job.payload.kind === 'rework' ? 'dev' : 'qa')); }
+        try { await this.#awaitStart(job, this.#attemptSlots(job.payload.kind === 'dev' || job.payload.kind === 'rework' ? 'dev' : 'qa')); }
         catch (error) { await this.#finishUnstarted(job, this.#d.epoch()); throw error; }
       }
       return job;
@@ -398,6 +410,20 @@ export class Execution {
     return 1 + budget;
   }
 
+  /** claim한 job의 자원 확인. 실패하면 임대 안에서 정해진 시간만큼 기다리며 다시 확인한다(단조 시계). */
+  async #awaitStart(job: AttemptJob, slots: number): Promise<void> {
+    const epoch = this.#d.epoch();
+    const leaseLeft = Date.parse(job.leaseUntil) - LEASE_SAFETY_MS - Date.now() - 10_000;
+    const deadline = performance.now() + Math.max(0, Math.min(this.#d.admissionWaitMs ?? 20_000, leaseLeft));
+    for (;;) {
+      try { this.#assertStart(job.payload.agent, slots); return; }
+      catch (error) {
+        if (performance.now() >= deadline || this.#d.epoch() !== epoch) throw error;
+        await sleep(250);
+      }
+    }
+  }
+
   #assertStart(agent: Agent, slots: number, own?: SessionState): void {
     const result = this.#admission(agent, slots, own);
     if (!result.ok) throw new Error(`새 실행을 보류합니다: ${result.reason}`);
@@ -418,12 +444,12 @@ export class Execution {
   }
 
   #holdLease(job: LaunchJob, until: string, execution: AbortController): () => Promise<void> {
-    const initial = Date.parse(until);
-    if (!Number.isFinite(initial) || initial <= Date.now()) throw new Error('임대가 끝난 job은 시작하지 않습니다.');
+    const initial = Date.parse(until) - LEASE_SAFETY_MS;
+    if (!Number.isFinite(initial) || initial <= Date.now()) throw new Error('임대가 끝났거나 곧 끝나는 job은 시작하지 않습니다.');
     const stop = new AbortController();
     let timer = setTimeout(() => execution.abort(), initial - Date.now());
     const renewing = this.#renew(job, stop.signal, execution, next => {
-      const deadline = Date.parse(next);
+      const deadline = Date.parse(next) - LEASE_SAFETY_MS;
       clearTimeout(timer);
       if (!Number.isFinite(deadline) || deadline <= Date.now()) { execution.abort(); return; }
       timer = setTimeout(() => execution.abort(), deadline - Date.now());

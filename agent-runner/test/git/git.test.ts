@@ -916,6 +916,22 @@ test('전용 계정 격리(agentRoot): 작업 폴더·입력 사본은 Agent 작
   expect(await reopened.checkTask(baseline, baseline)).toEqual([]);
 });
 
+// M5·M7 통합: M7-01의 시작 정리(남은 ci- 검사 사본 회수)와 Q-08 전용 계정 배치(agentRoot)가 함께 동작해야 한다.
+// 왜: 배치 없이 열면 Runner 홈 아래의 없는 폴더를 지우고 생성 기록만 버려, Agent 작업 영역의 진짜 사본이 영영 남는다.
+test('전용 계정 격리(agentRoot): 시작 정리는 Agent 작업 영역의 ci 사본을 지우고 기록도 정리한다', async () => {
+  git(source, 'push', 'origin', 'main');
+  const agentRoot = join(root, 'srv', 'agentwbs');
+  await mkdir(join(agentRoot, 'worktrees'), { recursive: true });
+  await mkdir(join(agentRoot, 'inputs'), { recursive: true });
+  const shared = await GitRepository.clone(join(root, 'runner'), 'project', remote, { agentRoot });
+  const stale = 'ci-11111111-1111-4111-8111-111111111111';
+  const stalePath = await shared.createTaskCheckWorktree(stale, baseline);
+  expect(stalePath).toBe(join(agentRoot, 'worktrees', 'project', stale));
+  await GitRepository.recoverTaskChecks(join(root, 'runner'), { agentRoot });
+  await expect(lstat(stalePath)).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(await (await GitRepository.open(join(root, 'runner'), 'project', { agentRoot })).recordedWorktrees()).toEqual([]);
+});
+
 test('agentRoot 없이(기존 배치) 작업 폴더는 그대로 0700', async () => {
   repo = await clone();
   const work = await repo.createWorktree('task-1', 'agent/TASK-1-h2', baseline);

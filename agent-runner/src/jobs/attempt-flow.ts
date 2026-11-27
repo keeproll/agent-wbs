@@ -135,7 +135,12 @@ export class AttemptFlow {
         const { report, responses = [] } = await d.collect(context);
         stopped.throwIfAborted();
         if (responses.some(r => !messages.some(m => m.id === r.messageId)) || new Set(responses.map(r => r.messageId)).size !== responses.length) throw new Error('이번 실행에 전달하지 않은 메시지의 응답입니다.');
-        for (const { messageId, text, workState } of responses) await reportEvent(d, 'respondMessage', { epoch, params: { messageId }, body: { text, workState } }, stopped);
+        for (const { messageId, text, workState } of responses) {
+          // QA FAIL처럼 결과는 보냈지만 성공하지 못한 시도의 지시는 다음 시도에 다시 전달된다. 업무 응답은 한 번만 보낸다.
+          if (d.runner.responded(messageId)) continue;
+          await reportEvent(d, 'respondMessage', { epoch, params: { messageId }, body: { text, workState } }, stopped);
+          await d.runner.markResponded(messageId);
+        }
         await reportEvent(d, 'reportAttemptResult', { epoch, params: { attemptId: output.attemptId }, body: { ...report, fence: job.fence } }, stopped);
         if (resultSucceeded({ ...report, fence: job.fence })) await d.runner.completeMessages(output.attemptId);
       },

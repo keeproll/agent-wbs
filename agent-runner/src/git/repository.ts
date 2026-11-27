@@ -229,6 +229,9 @@ async function groupWritable(path: string): Promise<void> {
 }
 
 /** Agent 작업 영역 설정. 주면 작업 폴더·입력 사본을 Runner 홈이 아니라 그 아래에 둔다(Q-08 전용 계정). */
+/** H→H′→H″… 동기화 사슬을 따라가는 최대 단계 수. 넘으면 재QA로 돌린다(M7-02 P3). */
+export const MAX_SYNC_CHAIN = 50;
+
 export interface GitLayout {
   /** 예: /srv/agentwbs. 그 아래 `worktrees/<저장소>`·`inputs/<저장소>`를 쓴다. */
   agentRoot?: string | null;
@@ -321,7 +324,7 @@ export class GitRepository {
   }
 
   /** Runner 홈 잠금을 가진 시작 경로에서만 호출한다. 일반 open은 실행 중인 검사 사본을 건드리지 않는다. */
-  static async recoverTaskChecks(home: string): Promise<void> {
+  static async recoverTaskChecks(home: string, layout: GitLayout = {}): Promise<void> {
     const directory = await safePath(join(home, 'state/git'));
     const files = await readdir(directory).catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT') return [];
@@ -329,7 +332,8 @@ export class GitRepository {
     });
     for (const file of files) {
       if (!file.endsWith('.json')) continue;
-      const repo = await this.open(home, file.slice(0, -5));
+      // 전용 계정 배치(agentRoot)면 사본이 Agent 작업 영역에 있으므로 같은 배치로 연다.
+      const repo = await this.open(home, file.slice(0, -5), layout);
       const record = await repo.trusted();
       for (const entry of record.worktrees) {
         if (/^ci-[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(entry.id) &&
@@ -408,7 +412,7 @@ export class GitRepository {
     if (!BOOT_ID.test(bootId)) throw new GitSafetyError('부팅 식별자를 확인할 수 없습니다.');
     const owner = JSON.stringify({ pid: process.pid, bootId, startTime: await startTime(process.pid) });
     const prepared = `${path}.${randomUUID()}`;
-    const deadline = Date.now() + 30_000;
+    const deadline = performance.now() + 30_000;
     let acquired = false;
     try {
       // 내용을 완성한 뒤 원자적으로 연결하므로, 종료돼도 빈 잠금은 공개되지 않는다.
@@ -418,7 +422,7 @@ export class GitRepository {
         catch (error) {
           if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
           if (await recoverLock(path, bootId)) continue;
-          if (Date.now() >= deadline) throw new GitSafetyError(`저장소 잠금 대기 시간이 지났습니다. 주인 확인 불가 시 수동 조치가 필요합니다: ${path}`);
+          if (performance.now() >= deadline) throw new GitSafetyError(`저장소 잠금 대기 시간이 지났습니다. 주인 확인 불가 시 수동 조치가 필요합니다: ${path}`);
           await delay(25);
         }
       }
@@ -843,6 +847,9 @@ export class GitRepository {
     let cursor = head;
     try {
       while (cursor !== qaHead) {
+        // 이미 main에 있는 커밋에서는 QA H(main에 없는 Task 커밋)에 닿을 수 없다. main 병합 이력을 따라 내려가지 않는다(M7-02 P3).
+        // 단계 수 상한도 둔다. 정상 사슬은 main이 움직인 횟수만큼이라 이보다 훨씬 짧다.
+        if (chain.length >= MAX_SYNC_CHAIN || await this.taskBase(base, cursor) === cursor) return null;
         const parents = (await this.git(['show', '-s', '--format=%P', sha(cursor)])).toString().trim().split(' ');
         const [previous, main] = parents;
         if (parents.length !== 2 || !previous || !main || await this.taskBase(base, main) !== main) return null;

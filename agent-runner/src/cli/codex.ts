@@ -35,7 +35,8 @@ export function createCodexParser(): (event: Json) => CliEvent[] {
     for (const id of ids) {
       const state = states[id];
       const status = isObject(state) ? str(state.status) : undefined;
-      const phase: SubagentPhase = status === undefined ? 'unknown' : (PHASE[status] ?? 'unknown');
+      // 표에 직접 적은 상태만 읽는다. constructor 같은 상속 속성은 모르는 상태(unknown)다.
+      const phase: SubagentPhase = status !== undefined && Object.hasOwn(PHASE, status) ? PHASE[status] ?? 'unknown' : 'unknown';
       const event: CliEvent = { type: 'subagent', id, phase, ...(status === undefined ? {} : { status }) };
       if (tool === 'spawn_agent' && sender !== undefined) event.parentId = sender;
       out.push(event);

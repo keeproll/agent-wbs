@@ -191,7 +191,8 @@ test.each([{ cwd: '/다른/폴더' }, { agent: 'Claude' }, { model: '다른-mode
 
 test('실행 중 lease 만료는 스트림이 살아 있어도 그룹을 멈춘다', async () => {
   const t = await setup({ hang: true });
-  const result = await t.exec.run({ ...job, leaseUntil: new Date(Date.now() + 1500).toISOString() });
+  // 임대 끝 5초 전(시계 역행 여유)에 멈추므로, 시작 뒤 약 1.5초에 멈추도록 6.5초 남은 임대를 준다.
+  const result = await t.exec.run({ ...job, leaseUntil: new Date(Date.now() + 6500).toISOString() });
   expect(result.ok).toBe(false);
   expect(result.proof.kind).toBe('group_empty');
   expect(t.sessions).toEqual([]);
@@ -231,6 +232,16 @@ test('프로세스가 살아 있는 동안 stdout만 끊겨도 즉시 미확인�
     expect(t.sessions[0]).toMatchObject({ state: 'unconfirmed', reserved: 3 });
     expect(await t.exec.claim(3)).toMatchObject({ kind: 'stop_attempt' });
   } finally { await t.exec.shutdown(); await running.catch(() => undefined); }
+});
+
+// M5·M7 통합 [제품 위험]: 이 PC의 벽시계는 약 32초마다 2.3초 뒤로 간다.
+// Runner가 서버 임대 끝 시각을 자기 벽시계로 재므로, 시계가 뒤로 가면 서버가 임대를 끝낸 뒤에도 몇 초 더 일할 수 있다.
+// 그래서 임대 끝 5초 전을 자기 마감으로 본다(여유 ≥ 시계 역행 폭).
+test('임대가 시계 역행 여유(5초) 안에 끝나면 실제 실행과 start를 거부한다', async () => {
+  const t = await setup();
+  await expect(t.exec.run({ ...job, leaseUntil: new Date(Date.now() + 3000).toISOString() })).rejects.toThrow();
+  expect(t.fake.calls()).toEqual([]);
+  expect(t.requests.some(r => r.path.endsWith('/start'))).toBe(false);
 });
 
 test('임대가 이미 끝났으면 실제 실행과 start를 거부한다', async () => {

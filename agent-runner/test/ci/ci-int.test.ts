@@ -154,7 +154,7 @@ test('다른 대기열 인스턴스의 동시 실행을 파일 잠금으로 막�
 test('① 기준 설치 실패는 Task 재작업으로 돌리지 않고 baseline 근거로 보류한다', async () => {
   f.action(async argv => argv[1] === 'install' ? 1 : 0);
   expect(await (await open()).run(f.request)).toMatchObject({ kind: 'baseline_failed', failScope: 'baseline',
-    task: { failScope: 'baseline', failStep: 'baseline-install' } });
+    task: { failScope: 'baseline', failStep: 'runner:baseline-install' } });
   expect(f.statuses.get(`${f.ref('agent/task')}:agentwbs/int`)).toBe('error');
   expect(puts()).toEqual([]);
 });

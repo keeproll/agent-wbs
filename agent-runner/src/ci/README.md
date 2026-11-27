@@ -90,7 +90,7 @@ SHA(파일이나 커밋 내용을 구별하는 해시 값)는 두 가지를 구�
 검사 전 Agent의 결과 커밋을 Runner 저장소에 가져와 `headSha`로 고정한다.
 보호 경로와 빌드 결과물 검사는 기존 `GitRepository.checkTask`를 쓴다.
 두 커밋의 merge-base(브랜치가 갈라진 공통 조상)부터 비교한다.
-Agent 폴더에 미커밋 변경이 있으면 `failStep: worktree`인 실패 결과를 반환한다.
+Agent 폴더에 미커밋 변경이 있으면 `failStep: runner:worktree`인 실패 결과를 반환한다.
 Agent index(다음 커밋에 넣을 파일 목록)의 숨김 설정은 믿지 않는다.
 Runner가 만든 임시 index로 직접 대조한다.
 
@@ -129,8 +129,14 @@ Q-08에서 이 경계를 확인하기 전에는 일반 파일만 검사 사본�
 실행 오류와 중단은 테스트 실패로 재시도하지 않는다.
 실패한 단계 다음의 명령은 실행하지 않는다.
 결과에는 단계별 종료 코드, 출력, 소요 시간과 `failStep`을 남긴다.
+Runner가 붙이는 단계 이름에는 `runner:` 접두어를 붙인다(M7-03 결정 9, M5·M7 통합에서 ①에 적용).
+대상은 `runner:worktree`, `runner:protected-paths`, `runner:baseline-install`, `runner:test-collection-before`, `runner:test-collection-after`다.
+`install`과 그 뒤 단계는 정의 파일의 단계이므로 이름을 그대로 둔다.
+왜: 정의의 단계 이름은 영소문자·숫자·`-`만 쓰므로 `:`이 든 이름과 겹치지 않는다.
+예를 들어 정의에 `worktree`라는 단계를 만들어도 Runner 단계와 섞이지 않는다.
+②는 정의의 단계만 보고하므로 접두어가 붙는 단계가 없다.
 실패 결과에는 선택 필드 `failScope`도 넣는다.
-`baseline-install`과 `test-collection-before`의 실패는 `baseline`이다.
+`runner:baseline-install`과 `runner:test-collection-before`의 실패는 `baseline`이다.
 나머지 검사 실패는 `task`다.
 성공 결과에는 이 필드가 없다.
 `status`와 기존 필드·함수 인자는 그대로 유지한다.
@@ -155,7 +161,27 @@ uuid는 사본 이름에 붙인 무작위 고유 번호다.
 기록이 없는 폴더나 다른 Task의 브랜치는 보존한다.
 왜: 강제 종료로 남은 검사 사본을 회수하면서 사용자 작업을 잘못 지우지 않아야 한다.
 일반 `GitRepository.open`과 시작 후 반복 호출에서는 이 정리를 하지 않는다.
-정리가 실패하면 새 작업을 시작하지 않고 오류를 보고한다.
+전용 계정 배치(`agentRoot`)를 쓰면 사본이 Agent 작업 영역에 있으므로 같은 배치로 저장소를 열어 정리한다.
+
+정리가 실패하면 Runner가 시작하지 않는다(의도한 안전 동작).
+`state/git/*.json`에 등록된 저장소 중 하나라도 열 수 없거나 설정 지문(등록 당시 `config` 파일의 해시)이 다르면,
+`init()`가 "Runner 저장소 설정이 등록 당시와 다릅니다" 오류를 던지고 앱 전체가 멈춘다.
+이때 생존 신호와 다른 프로젝트의 작업도 함께 멈추며, 서버에 오류를 보고하기 전에 끝나므로 Runner 로그로 확인한다.
+왜: 저장소 설정이 바뀌었다는 것은 누군가 Runner 소유 저장소를 건드렸다는 뜻이다.
+예를 들어 `core.fsmonitor`나 `core.hooksPath`가 추가되면 git 명령마다 임의 프로그램이 실행될 수 있다.
+이 상태에서 다른 저장소만 골라 계속 돌리면 변조를 놓칠 수 있으므로 전체를 멈추는 쪽을 택했다(M7-01 리뷰 P3-1, 통합에서 의도로 확정).
+`state/git`에 저장소 id 형식이 아닌 `.json` 파일이 있어도 같은 이유로 시작하지 않는다.
+
+복구 방법:
+
+1. Runner 로그에서 어느 저장소인지 확인한다(`state/git/<저장소 id>.json`).
+2. `repos/<저장소 id>/config`를 등록 당시 내용과 비교해, 바뀐 이유를 확인한다.
+3. 의도하지 않은 변경이면 그 줄을 등록 당시 내용 그대로 되돌린다. 내용이 같아지면 지문도 같아져 다시 시작할 수 있다.
+4. 되돌릴 수 없으면 Runner를 멈추고 `state/git/<저장소 id>.json`과 `repos/<저장소 id>`를 Runner 홈 밖으로 옮긴 뒤 시작한다.
+   그 저장소는 다시 clone·등록해야 쓸 수 있다(지금 Runner에는 자동으로 다시 clone하는 경로가 없다).
+   남은 작업 폴더(`worktrees/<저장소 id>`, 전용 계정 배치면 `agentRoot` 아래)는 손으로 확인한 뒤 정리한다.
+5. id 형식이 아닌 `.json` 파일은 Runner가 만든 것이 아니므로 다른 곳으로 옮긴다.
+
 실제 실행기를 연결할 때는 재시작 후 살아 있는 자손 프로세스의 종료 확인도 먼저 연결해야 한다.
 현재 Q-08 이전 경로는 fake만 실행한다.
 

@@ -52,7 +52,8 @@ export async function runTaskCheck({ repo, worktreeId, branch, heavy, execute, c
   const headSha = await repo.importWorktree(worktreeId, branch);
   const baselineSha = await repo.taskBase(baseSha, headSha);
   const changes = await repo.taskReviewChanges(baseSha, headSha);
-  const stages = ['worktree', 'protected-paths', 'baseline-install', 'test-collection-before', 'install', 'test-collection-after',
+  // Runner가 붙이는 단계에는 `runner:` 접두어를 붙인다(M7-03 결정 9). 정의 단계 이름(영소문자·숫자·-)에는 `:`이 없어 겹치지 않는다.
+  const stages = ['runner:worktree', 'runner:protected-paths', 'runner:baseline-install', 'runner:test-collection-before', 'install', 'runner:test-collection-after',
     ...pipeline.stages.task.slice(1).map((command) => command.name)];
   const result: TaskCheckResult = {
     stage: 'task', status: 'fail', baseSha, headSha, pipelineSha,
@@ -71,16 +72,16 @@ export async function runTaskCheck({ repo, worktreeId, branch, heavy, execute, c
     failed.status = 'fail';
     failed.attempts.push(redact({ code: null, stdout: '', stderr: message(error) }));
     result.failStep = name;
-    result.failScope = ['baseline-install', 'test-collection-before'].includes(name) ? 'baseline' : 'task';
+    result.failScope = ['runner:baseline-install', 'runner:test-collection-before'].includes(name) ? 'baseline' : 'task';
     return redact(result);
   };
-  try { await repo.taskCheckPath(worktreeId, headSha); step('worktree').status = 'pass'; }
-  catch (error) { return fail('worktree', error); }
+  try { await repo.taskCheckPath(worktreeId, headSha); step('runner:worktree').status = 'pass'; }
+  catch (error) { return fail('runner:worktree', error); }
   const guardStarted = performance.now();
   result.rejectedPaths = await repo.checkTask(baseSha, headSha);
-  step('protected-paths').durationMs = Math.max(0, Math.round(performance.now() - guardStarted));
-  step('protected-paths').status = result.rejectedPaths.length ? 'fail' : 'pass';
-  if (result.rejectedPaths.length) { result.failStep = 'protected-paths'; result.failScope = 'task'; return redact(result); }
+  step('runner:protected-paths').durationMs = Math.max(0, Math.round(performance.now() - guardStarted));
+  step('runner:protected-paths').status = result.rejectedPaths.length ? 'fail' : 'pass';
+  if (result.rejectedPaths.length) { result.failStep = 'runner:protected-paths'; result.failScope = 'task'; return redact(result); }
 
   const release = await heavy.acquire(`ci-task:${worktreeId}`, signal);
   const checkouts: string[] = [];
@@ -116,12 +117,12 @@ export async function runTaskCheck({ repo, worktreeId, branch, heavy, execute, c
     current.durationMs = Math.max(0, Math.round(performance.now() - started));
     if (current.status === 'fail') {
       result.failStep = name;
-      result.failScope = name === 'baseline-install' ? 'baseline' : 'task';
+      result.failScope = name === 'runner:baseline-install' ? 'baseline' : 'task';
     }
     return current.status === 'pass';
   };
   const collect = async (phase: 'before' | 'after', snapshot: Snapshot): Promise<boolean> => {
-    const current = step(`test-collection-${phase}`);
+    const current = step(`runner:test-collection-${phase}`);
     const started = performance.now();
     const identifiers: string[] = [];
     try {
@@ -142,12 +143,12 @@ export async function runTaskCheck({ repo, worktreeId, branch, heavy, execute, c
     } catch (error) { fail(current.name, error); return false; }
     finally { current.durationMs = Math.max(0, Math.round(performance.now() - started)); }
   };
-  let preparing = 'baseline-install';
+  let preparing = 'runner:baseline-install';
   try {
     const install = pipeline.stages.task[0];
     if (!install) throw new Error('설치 단계가 없습니다.');
     const baseline = await checkout(baselineSha);
-    if (!await command('baseline-install', install.argv, baseline) || !await collect('before', baseline)) return redact(result);
+    if (!await command('runner:baseline-install', install.argv, baseline) || !await collect('before', baseline)) return redact(result);
     preparing = 'install';
     const target = baselineSha === headSha ? baseline : await checkout(headSha);
     if (baselineSha !== headSha && !await command('install', install.argv, target)) return redact(result);

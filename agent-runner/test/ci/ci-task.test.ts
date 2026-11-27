@@ -108,7 +108,7 @@ test('main 정의의 blob SHA와 같은 head에서 6개 명령을 순서대로 �
   expect(execute.mock.calls.map(([argv]) => argv)).toEqual([definition.stages.task[0]?.argv, ...definition.stages.task.map((step) => step.argv)]);
   expect(execute.mock.calls.every(([, cwd]) => cwd !== work)).toBe(true);
   expect(result.steps.map((s) => [s.name, s.status])).toEqual([
-    ...['worktree', 'protected-paths', 'baseline-install', 'test-collection-before', 'install', 'test-collection-after'].map((name) => [name, 'pass']),
+    ...['runner:worktree', 'runner:protected-paths', 'runner:baseline-install', 'runner:test-collection-before', 'install', 'runner:test-collection-after'].map((name) => [name, 'pass']),
     ...names.slice(1).map((name) => [name, 'pass']),
   ]);
   expect(heavy.snapshot().running).toBe(0);
@@ -119,7 +119,7 @@ test.each(['prototype/guide.md', '.agentwbs/pipeline.yaml', 'dist/compiled.js'])
   git(work, 'add', '-f', path);
   git(work, 'commit', '-m', '변조');
   const result = await run();
-  expect(result).toMatchObject({ status: 'fail', failStep: 'protected-paths' });
+  expect(result).toMatchObject({ status: 'fail', failStep: 'runner:protected-paths' });
   expect(result.rejectedPaths.map((p) => p.path)).toContain(path);
   expect(execute).not.toHaveBeenCalled();
 });
@@ -187,8 +187,8 @@ test('계속 실패한 테스트에서 중단하고 로그와 실행 코드를 �
 test('실행 어댑터 오류도 실패 기록으로 바꾸고 번호표를 돌려준다', async () => {
   execute.mockRejectedValueOnce(new Error('TOKEN=super-secret-value'));
   const result = await run();
-  expect(result).toMatchObject({ status: 'fail', failStep: 'baseline-install' });
-  expect(result.steps.find((step) => step.name === 'baseline-install')?.attempts[0]).toMatchObject({ code: null });
+  expect(result).toMatchObject({ status: 'fail', failStep: 'runner:baseline-install' });
+  expect(result.steps.find((step) => step.name === 'runner:baseline-install')?.attempts[0]).toMatchObject({ code: null });
   expect(JSON.stringify(result)).not.toContain('super-secret-value');
   expect(heavy.snapshot().running).toBe(0);
 });
@@ -247,7 +247,7 @@ test('삭제한 테스트를 가진 검사 결과는 원본 assertion의 diff를
 
 test('미커밋 변경은 실패하고 실행 중 Agent head 이동은 고정한 검사 커밋에 영향을 주지 않는다', async () => {
   await file(join(work, 'src/main.ts'), '미커밋 변경');
-  expect(await run()).toMatchObject({ status: 'fail', failStep: 'worktree' });
+  expect(await run()).toMatchObject({ status: 'fail', failStep: 'runner:worktree' });
   expect(execute).not.toHaveBeenCalled();
   git(work, 'checkout', '--', 'src/main.ts');
   execute.mockImplementationOnce(async () => {
@@ -273,7 +273,7 @@ test('pipeline symlink는 git 객체에서 일반 파일이 아닌 것으로 거
 test('Agent index의 assume-unchanged로 미커밋 테스트 약화를 숨길 수 없다', async () => {
   git(work, 'update-index', '--assume-unchanged', 'test/value.test.ts');
   await file(join(work, 'test/value.test.ts'), 'test.skip("value", () => {});');
-  expect(await run()).toMatchObject({ status: 'fail', failStep: 'worktree' });
+  expect(await run()).toMatchObject({ status: 'fail', failStep: 'runner:worktree' });
   expect(execute).not.toHaveBeenCalled();
 });
 
@@ -349,9 +349,9 @@ test('P2: 새 설정으로 제외한 테스트는 수집 결과의 전후 차이
 test('P2: 테스트 수집 실패나 잘못된 식별자는 QA 근거를 비운 채 통과시키지 않는다', async () => {
   collectTests.mockRejectedValueOnce(new Error('수집 실패'));
   const failed = await run();
-  expect(failed).toMatchObject({ status: 'fail', failStep: 'test-collection-before' });
+  expect(failed).toMatchObject({ status: 'fail', failStep: 'runner:test-collection-before' });
   collectTests.mockResolvedValueOnce(['']);
-  expect(await run()).toMatchObject({ status: 'fail', failStep: 'test-collection-before' });
+  expect(await run()).toMatchObject({ status: 'fail', failStep: 'runner:test-collection-before' });
   expect(heavy.snapshot().running).toBe(0);
   expect(await repo.recordedWorktrees()).toEqual(['task-1']);
 });
@@ -361,7 +361,7 @@ test('P2: 변경 후 수집 실패도 두 사본을 정리하고 실패 결과�
   commit(work);
   collectTests.mockResolvedValueOnce(['test/value.test.ts::value'])
     .mockResolvedValueOnce(['test/value.test.ts::value']).mockRejectedValueOnce(new Error('변경 후 수집 실패'));
-  expect(await run()).toMatchObject({ status: 'fail', failStep: 'test-collection-after' });
+  expect(await run()).toMatchObject({ status: 'fail', failStep: 'runner:test-collection-after' });
   expect(heavy.snapshot().running).toBe(0);
   expect(await repo.recordedWorktrees()).toEqual(['task-1']);
   for (const [, cwd] of execute.mock.calls) await expect(lstat(cwd)).rejects.toMatchObject({ code: 'ENOENT' });
@@ -394,8 +394,8 @@ test('P2: 관계없는 브랜치의 force push는 ①의 main fetch를 막지 �
 test('P3: 미커밋 변경은 예외 대신 Agent에게 전달할 실패 결과로 남는다', async () => {
   await file(join(work, 'src/main.ts'), '미커밋 변경');
   const result = await run();
-  expect(result).toMatchObject({ status: 'fail', failScope: 'task', failStep: 'worktree' });
-  expect(result.steps.find((step) => step.name === 'worktree')?.attempts[0]?.stderr).toContain('커밋하지 않은 변경');
+  expect(result).toMatchObject({ status: 'fail', failScope: 'task', failStep: 'runner:worktree' });
+  expect(result.steps.find((step) => step.name === 'runner:worktree')?.attempts[0]?.stderr).toContain('커밋하지 않은 변경');
   expect(execute).not.toHaveBeenCalled();
 });
 
@@ -430,11 +430,11 @@ test('P3: 대괄호 파일 이름의 QA diff에 다른 파일을 섞지 않는�
 
 test('P3 재리뷰: 기준 설치·수집 실패는 Task 실패와 기계적으로 구분한다', async () => {
   execute.mockResolvedValueOnce({ code: 1, stdout: '', stderr: '기준 설치 실패' });
-  expect(await run()).toMatchObject({ status: 'fail', failScope: 'baseline', failStep: 'baseline-install' });
+  expect(await run()).toMatchObject({ status: 'fail', failScope: 'baseline', failStep: 'runner:baseline-install' });
   expect(execute).toHaveBeenCalledOnce();
   execute.mockClear();
   collectTests.mockRejectedValueOnce(new Error('기준 수집 실패'));
-  expect(await run()).toMatchObject({ status: 'fail', failScope: 'baseline', failStep: 'test-collection-before' });
+  expect(await run()).toMatchObject({ status: 'fail', failScope: 'baseline', failStep: 'runner:test-collection-before' });
   execute.mockImplementation(async (argv) => ({ code: argv[1] === 'typecheck' ? 1 : 0, stdout: '', stderr: '' }));
   expect(await run()).toMatchObject({ status: 'fail', failScope: 'task', failStep: 'typecheck' });
 });

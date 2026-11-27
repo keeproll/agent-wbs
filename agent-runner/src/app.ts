@@ -286,7 +286,7 @@ export class RunnerApp {
    * 왜: 동기화 전에 오는 정리 명령도 「이 PC·이 부팅의 보유인가」를 판단해야 한다.
    */
   async init(): Promise<void> {
-    await (this.#ciRecovery ??= GitRepository.recoverTaskChecks(this.#d.home));
+    await (this.#ciRecovery ??= GitRepository.recoverTaskChecks(this.#d.home, { agentRoot: this.#d.agentRoot ?? null }));
     const host = await collectHost(this.#d.hostSources, this.#d.home);
     this.#identity = { hostId: host.hostId, bootId: host.bootId };
   }

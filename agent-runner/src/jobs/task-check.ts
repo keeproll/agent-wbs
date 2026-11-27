@@ -14,6 +14,11 @@ interface TaskCheckDeps {
   launch: (argv: readonly string[], cwd: string) => Launch;
   collectTests: TaskCheckOptions['collectTests'];
   observeMainPipeline: (basis: NonNullable<TaskCheckOptions['basis']>) => Promise<void>;
+  /**
+   * 이 Task 브랜치의 PR 번호 공급원. 서버는 ① 실행의 PR 번호로 통합(②·병합) job을 만든다.
+   * 지금 제품에는 PR을 여는 구현이 없어 연결하지 않으면 PR 없이 보고하고, 서버는 'PR 정보가 필요합니다'로 통합을 보류한다(M5·M7 통합에서 확인한 빈 곳).
+   */
+  pr?: (context: AttemptContext) => Promise<number | undefined> | number | undefined;
 }
 
 /** M7-06의 실제 ①을 M5-02의 명령 실행·보유와 M5-05의 결과 흐름에 연결한다. */
@@ -29,8 +34,9 @@ export function bindTaskCheck(d: TaskCheckDeps) {
         d.launch(argv, cwd), signal, { heavyHeld: true }),
     });
     signal.throwIfAborted();
+    const pr = await d.pr?.(context);
     const run = await reportEvent(d, 'startCiRun', { epoch, body: { jobId: job.id, fence: job.fence, stage: 'task',
-      taskKey: job.payload.taskKey, attemptId: output.attemptId, ref: job.payload.branch, trigger: 'attempt-flow',
+      taskKey: job.payload.taskKey, attemptId: output.attemptId, ref: job.payload.branch, trigger: 'attempt-flow', ...(pr !== undefined && { pr }),
       baseSha: result.baseSha, headSha: result.headSha, pipelineSha: result.pipelineSha } }, signal);
     await reportEvent(d, 'updateCiRun', { epoch, params: { id: run.body.id }, body: { fence: job.fence, status: 'run' } }, signal);
     await reportEvent(d, 'updateCiRun', { epoch, params: { id: run.body.id }, body: { fence: job.fence, status: result.status,
