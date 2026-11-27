@@ -1051,9 +1051,9 @@ export const ReportSnapshot = Type.Object(
   {
     // 생성 시점의 프로젝트 이름(M6-02). 보고서·PDF 제목은 이 값을 쓴다. 왜: 보고서는 생성 시점 기록이라 나중에 이름을 바꿔도 그대로여야 한다.
     projectName: Str,
-    // 옛 보고서(M6-01 형식)에 마이그레이션 0047이 이름을 채웠다는 표시. 새로 만드는 보고서에는 없다.
-    // history = 이름 변경 기록에서 그때 이름을 찾음, current = 생성 뒤 이름 변경이 없어 지금 이름을 넣음.
-    projectNameFilled: Type.Optional(obj({ source: AnyOf('history', 'current') })),
+    // 옛 보고서(M6-01 형식)를 마이그레이션 0047이 다뤘다는 표시. 새로 만드는 보고서에는 없다.
+    // current = 이름을 바꾼 적이 없어 지금 이름을 넣음(확실). unknown = 이름을 바꾼 적이 있어 그때 이름을 알 수 없음(projectName 없음).
+    projectNameFilled: Type.Optional(obj({ source: AnyOf('current', 'unknown') })),
     summary: obj({
       taskCount: c.Count, doneCount: c.Count, doneBefore: c.Count, workPct: c.Pct, workPctBefore: c.Pct,
       baselineVersion: c.Count, forecast: MaybeDate, lo: MaybeDate, hi: MaybeDate, forecastBefore: MaybeDate,

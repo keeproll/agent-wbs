@@ -42243,8 +42243,8 @@
             "properties": {
               "source": {
                 "enum": [
-                  "history",
-                  "current"
+                  "current",
+                  "unknown"
                 ]
               }
             }

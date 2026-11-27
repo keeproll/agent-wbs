@@ -538,6 +538,22 @@ describe('이름 없는 옛 보고서(M6-01 형식 스냅샷, Codex 리뷰 P2)',
       expect(text, view).not.toContain(squash(base.snapshot.projectName));
     }
   }, 60_000);
+
+  test('0047이 「그때 이름을 알 수 없음」(unknown)으로 표시한 옛 보고서는 「이름 미상(기존 보고서)」이다', async () => {
+    const base = await reportOf('weekly', '2026-10-26');
+    const legacy: Record<string, unknown> = { ...base.snapshot, projectNameFilled: { source: 'unknown' } };
+    delete legacy.projectName;
+    const project = (await owner.query<{ id: string }>('select id from projects')).rows[0]?.id;
+    const id = (await owner.query<{ id: string }>(`insert into reports(project_id,report_key,kind,"from","to",view,snapshot,generated_at,reason)
+      values($1,'RPT-C-951','custom','2026-10-26','2026-11-01','int',$2::jsonb,now(),'팀장 지정') returning id`, [project, JSON.stringify(legacy)])).rows[0]?.id;
+    assert(id);
+    expect((await fetch(`${baseUrl}/api/reports/${id}`, { headers })).status).toBe(200);
+    for (const view of ['int', 'ext'] as const) {
+      const text = textOf((await fetchPdf(id, view)).doc.pages);
+      expect(text, view).toContain(squash(`이름 미상(기존 보고서) — 기간 보고서${view === 'ext' ? ' (보고용)' : ''}`));
+      expect(text, view).not.toContain(squash(base.snapshot.projectName));
+    }
+  }, 60_000);
 });
 
 describe('PDF와 화면이 같은 계산을 쓴다', () => {

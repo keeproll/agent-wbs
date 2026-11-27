@@ -1,13 +1,10 @@
 /**
- * 0047: 이름 없는 옛 보고서 스냅샷에 생성 시점 프로젝트 이름을 채운다(Codex 리뷰 M6-02 P2, 재리뷰 P2-2).
+ * 0047: 이름 없는 옛 보고서 스냅샷(M6-01 형식)의 프로젝트 이름(Codex 리뷰 P2, 재리뷰 3차 P2-2). 추측하지 않는다.
  *
- * 기준 시각은 보고서 생성 시각(reports.generated_at)이다. 이름 변경 기록(task_history 「프로젝트 수정」)마다
- * 「보고서 생성 뒤의 변경인가」를 아래 근거로 판정하고, 생성 뒤 첫 변경의 바꾸기 전 이름을 넣는다. 없으면 지금 이름이다.
- * - 변경 트랜잭션이 생성 시각보다 늦게 시작했다(created_at > generated_at).
- * - 변경 알림(change_events)의 순번이 보고서 알림보다 크다(나중에 커밋했다).
- * - 변경을 쓴 트랜잭션이 보고서 행을 쓴 트랜잭션보다 새것이다(보고서를 저장한 뒤에 이름을 썼다. 리뷰어 재현).
- * 같은 트랜잭션 안의 여러 변경은 시각이 같으므로, 이름 사슬(before → after) 순서로 첫 변경을 정한다.
- * 이 시험은 시나리오마다 프로젝트를 따로 둔다.
+ * - 이름 변경 기록이 전혀 없는 프로젝트: 지금 이름을 넣는다(이름이 한 번도 바뀌지 않았으니 그때 이름과 같다). 표시 current.
+ * - 이름 변경 기록이 하나라도 있는 프로젝트: 그때 이름이 확실하지 않으므로 이름을 넣지 않고 표시 unknown만 남긴다.
+ *   (DB에 커밋 시각이 없어, 변경이 보고서 앞인지 뒤인지 확정할 수 없다. 트랜잭션 번호 등으로 추정하지 않는다.)
+ * - 리뷰어 재현(편집과 보고서가 겹치는 세 순서)이 모두 unknown이 되는지 본다. 시나리오마다 DB를 따로 만든다(프로젝트는 DB마다 하나).
  */
 import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -53,10 +50,9 @@ const rename = async (db: Db, projectId: string, from: string, to: string, at: s
     ($1,'팀장','프로젝트 수정','프로젝트 정보를 수정했습니다.',$2::jsonb,$3::jsonb,'{"kind":"project"}',coalesce($4::timestamptz,now()),coalesce($4::timestamptz,now()))`,
   [projectId, JSON.stringify({ name: from, description: '' }), JSON.stringify({ name: to, description: '' }), at]);
 };
-const event = (db: Db, projectId: string, topic: 'report' | 'project', ref: object, at: string) =>
-  db.query('insert into change_events(project_id,topic,ref,at) values($1,$2,$3::jsonb,$4)', [projectId, topic, JSON.stringify(ref), at]);
 const snap = async (db: Db, id: string | undefined) => (await db.query<{ snapshot: Record<string, unknown> }>('select snapshot from reports where id=$1', [id])).rows[0]?.snapshot;
-const filled = (name: string, source: 'history' | 'current') => ({ summary: { taskCount: 1 }, projectName: name, projectNameFilled: { source } });
+const current = (name: string) => ({ summary: { taskCount: 1 }, projectName: name, projectNameFilled: { source: 'current' } });
+const unknown = { summary: { taskCount: 1 }, projectNameFilled: { source: 'unknown' } };
 
 const pools: Pool[] = [];
 afterAll(async () => { await Promise.all(pools.map((p) => p.end())); });
@@ -64,7 +60,7 @@ const ids: Record<string, string> = {};
 let dated: Pool;
 
 beforeAll(async () => {
-  // 1. 날짜가 분명한 이름 변경(11-02) 앞뒤의 보고서, 이미 이름이 있는 보고서
+  // 이름을 바꾼 프로젝트(11-02): 변경 전·후 보고서, 이미 이름이 있는 보고서
   dated = await legacyDb('dated');
   pools.push(dated);
   const p = await project(dated, '옛 이름');
@@ -74,16 +70,27 @@ beforeAll(async () => {
   ids.named = await report(dated, p, 'RPT-C-003', '2026-10-30T00:00:00Z', { projectName: '스냅샷 이름', summary: { taskCount: 3 } });
 }, 60_000);
 
-test('날짜가 분명한 변경: 변경 전 보고서는 바꾸기 전 이름, 변경 뒤 보고서는 지금 이름, 이미 이름이 있으면 그대로. 두 번 올려도 같다', async () => {
+test('이름을 바꾼 적이 있는 프로젝트의 옛 보고서는 변경 앞뒤와 관계없이 이름 미상(unknown)이다. 이미 이름이 있으면 그대로. 두 번 올려도 같다', async () => {
   await runMigrations(dated);
   await runMigrations(dated);
-  expect(await snap(dated, ids.before)).toEqual(filled('옛 이름', 'history'));
-  expect(await snap(dated, ids.after)).toEqual(filled('지금 이름', 'current'));
+  expect(await snap(dated, ids.before)).toEqual(unknown);
+  expect(await snap(dated, ids.after)).toEqual(unknown);
   expect(await snap(dated, ids.named)).toEqual({ projectName: '스냅샷 이름', summary: { taskCount: 3 } });
 });
 
-test('리뷰어 재현: 편집 트랜잭션이 먼저 시작해(기록 시각이 더 이르다) 보고서 저장 뒤에 이름을 바꿨으면, 그때 이름은 옛 이름이다', async () => {
-  const db = await legacyDb('race');
+test('이름을 바꾼 적 없는 프로젝트는 지금 이름(current)이다', async () => {
+  const db = await legacyDb('same');
+  pools.push(db);
+  const p = await project(db, '그대로');
+  const id = await report(db, p, 'RPT-C-040', '2026-11-01T00:00:00Z');
+  // 이름이 그대로인 「프로젝트 수정」(설명만 바꿈)은 이름 변경이 아니다.
+  await rename(db, p, '그대로', '그대로', '2026-11-02T00:00:00Z');
+  await runMigrations(db);
+  expect(await snap(db, id)).toEqual(current('그대로'));
+}, 60_000);
+
+test('리뷰어 재현 1: 편집이 먼저 시작하고, 그사이 보고서를 저장한 뒤 이름을 바꿔 커밋 → unknown(옛 이름·새 이름 어느 쪽으로도 채우지 않는다)', async () => {
+  const db = await legacyDb('race1');
   pools.push(db);
   const p = await project(db, '경합 옛 이름');
   const edit = await db.connect();
@@ -96,62 +103,46 @@ test('리뷰어 재현: 편집 트랜잭션이 먼저 시작해(기록 시각이
     await rename(edit, p, '경합 옛 이름', '경합 새 이름');
     await edit.query('commit');
   } finally { edit.release(); }
-  // 전제 확인: 변경 기록 시각이 보고서 생성 시각보다 이르다(시각만 보면 「변경 뒤 보고서」로 잘못 판정된다).
-  const t = (await db.query<{ early: boolean }>("select h.created_at < r.generated_at early from task_history h, reports r where h.kind='프로젝트 수정' and r.id=$1", [id])).rows[0];
-  expect(t?.early).toBe(true);
   await runMigrations(db);
-  expect(await snap(db, id)).toEqual(filled('경합 옛 이름', 'history'));
+  expect(await snap(db, id)).toEqual(unknown);
 }, 60_000);
 
-test('한 트랜잭션 안의 두 변경(A→B→C)은 이름 사슬 순서로 판정한다(기록을 거꾸로 넣어도 첫 변경 A→B의 바꾸기 전 이름 A)', async () => {
-  const db = await legacyDb('chain');
+test('리뷰어 재현 2(3차 2-a): 보고서 트랜잭션이 세대 잠금을 잡은 뒤 이름 변경이 커밋되고, 보고서가 새 이름을 읽어 저장 → unknown', async () => {
+  const db = await legacyDb('race2');
+  pools.push(db);
+  await db.query("insert into system_state(id,epoch) values(1,1) on conflict (id) do nothing");
+  const p = await project(db, 'A');
+  const rep = await db.connect();
+  let id: string;
+  try {
+    await rep.query('begin');
+    await rep.query('select public.lock_epoch(1)');
+    await rename(db, p, 'A', 'B');
+    const seen = (await rep.query<{ name: string }>('select name from projects where id=$1', [p])).rows[0]?.name;
+    expect(seen).toBe('B');
+    id = await report(rep, p, 'RPT-C-011', null);
+    await rep.query('commit');
+  } finally { rep.release(); }
+  await runMigrations(db);
+  expect(await snap(db, id)).toEqual(unknown);
+}, 60_000);
+
+test('리뷰어 재현 3(3차 2-b): 이름 변경을 쓰고 커밋하기 전에 보고서를 저장(옛 이름을 읽음)한 뒤 커밋 → unknown(지금 이름으로 확정하지 않는다)', async () => {
+  const db = await legacyDb('race3');
   pools.push(db);
   const p = await project(db, 'A');
-  const id = await report(db, p, 'RPT-C-020', '2026-11-10T00:00:00Z');
-  const tx = await db.connect();
+  const edit = await db.connect();
+  let id: string;
   try {
-    await tx.query('begin');
-    await tx.query("update projects set name='C' where id=$1", [p]);
-    for (const [from, to] of [['B', 'C'], ['A', 'B']]) {
-      await tx.query(`insert into task_history(project_id,actor,kind,text,before,after,ref) values($1,'팀장','프로젝트 수정','프로젝트 정보를 수정했습니다.',$2::jsonb,$3::jsonb,'{"kind":"project"}')`,
-        [p, JSON.stringify({ name: from, description: '' }), JSON.stringify({ name: to, description: '' })]);
-    }
-    await tx.query('commit');
-  } finally { tx.release(); }
+    await edit.query('begin');
+    await rename(edit, p, 'A', 'B');
+    const seen = (await db.query<{ name: string }>('select name from projects where id=$1', [p])).rows[0]?.name;
+    expect(seen).toBe('A');
+    id = await report(db, p, 'RPT-C-012', null);
+    await edit.query('commit');
+  } finally { edit.release(); }
   await runMigrations(db);
-  expect(await snap(db, id)).toEqual(filled('A', 'history'));
-}, 60_000);
-
-test('변경 알림 순서로만 판정되는 경우: 기록 시각이 이르고 기록도 먼저 썼지만, 변경 알림이 보고서 알림보다 뒤면 옛 이름이다', async () => {
-  const db = await legacyDb('event');
-  pools.push(db);
-  const p = await project(db, '알림 옛 이름');
-  await rename(db, p, '알림 옛 이름', '알림 새 이름', '2026-11-09T00:00:00Z');
-  const id = await report(db, p, 'RPT-C-030', '2026-11-10T00:00:00Z');
-  await event(db, p, 'report', { id }, '2026-11-10T00:00:00Z');
-  await event(db, p, 'project', { kind: 'project' }, '2026-11-09T00:00:00Z');
-  await runMigrations(db);
-  expect(await snap(db, id)).toEqual(filled('알림 옛 이름', 'history'));
-}, 60_000);
-
-test('시작 시각으로만 판정되는 경우: 보고서 생성(11-01)을 시작한 뒤 변경 트랜잭션이 시작(11-02)해 먼저 기록했고, 보고서 행은 그 뒤에 저장했다 → 옛 이름', async () => {
-  const db = await legacyDb('start');
-  pools.push(db);
-  const p = await project(db, '시작 옛 이름');
-  await rename(db, p, '시작 옛 이름', '시작 새 이름', '2026-11-02T00:00:00Z');
-  // 보고서 행은 변경 기록보다 나중에 썼다(트랜잭션 순서로는 「변경 전」처럼 보인다). 알림도 없다.
-  const id = await report(db, p, 'RPT-C-050', '2026-11-01T00:00:00Z');
-  await runMigrations(db);
-  expect(await snap(db, id)).toEqual(filled('시작 옛 이름', 'history'));
-}, 60_000);
-
-test('이름을 바꾼 적 없는 프로젝트는 지금 이름이다', async () => {
-  const db = await legacyDb('same');
-  pools.push(db);
-  const p = await project(db, '그대로');
-  const id = await report(db, p, 'RPT-C-040', '2026-11-01T00:00:00Z');
-  await runMigrations(db);
-  expect(await snap(db, id)).toEqual(filled('그대로', 'current'));
+  expect(await snap(db, id)).toEqual(unknown);
 }, 60_000);
 
 test('채운 뒤에도 보고서는 수정할 수 없다(append_only 트리거가 켜져 있다)', async () => {
