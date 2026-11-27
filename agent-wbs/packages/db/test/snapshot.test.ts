@@ -13,7 +13,7 @@ test('0021·0022 snapshot이 단계별 구조와 연결을 보존하고 다음 g
   const observation = snapshot('0023');
   const settings = snapshot('0024');
   const versions = snapshot('0025');
-  const ci = snapshot('0041');
+  const ci = snapshot('0026');
   expect(project.prevId).toBe(before.id);
   expect(evidence.prevId).toBe(project.id);
   expect(observation.prevId).toBe(evidence.id);

@@ -47,7 +47,7 @@ test('빈 DB와 0014·0016(master)·0017·0018·0019·0020·0021 단계 DB가 �
   expect(journal.entries.slice(15).map((e) => e.tag)).toEqual([
     '0015_20261126_platform_epoch_lock', '0016_20261126_contract_sync', '0017_20261126_usage_reset_unknown',
     '0018_20261126_message_read_touch', '0019_20261126_schedule_defaults', '0020_20261126_execution_basis',
-    '0021_20261127_project_followup', '0022_20261127_evidence_reference', '0023_20261127_project_observation_version', '0024_20261127_settings_followup', '0025_20261127_setting_versions', '0041_20261127_ci_reports']);
+    '0021_20261127_project_followup', '0022_20261127_evidence_reference', '0023_20261127_project_observation_version', '0024_20261127_settings_followup', '0025_20261127_setting_versions', '0026_20261127_ci_reports']);
   const fresh = await database('fresh');
   await runMigrations(fresh);
   const expected = await schemaOf(fresh);
@@ -106,3 +106,36 @@ test('빈 DB와 0014·0016(master)·0017·0018·0019·0020·0021 단계 DB가 �
     expect((await pool.query<{ n: number }>('select count(*)::int n from drizzle.__drizzle_migrations')).rows[0]?.n, `단계 ${String(stage)}`).toBe(journal.entries.length);
   }
 }, 120_000);
+
+/*
+ * M5·M7 통합: CI 마이그레이션은 M7-04 브랜치에서 배정 번호 0041(when 1795740000041)로 만들었고,
+ * 통합하면서 최종 순번 0026(when 1795740000026)으로 다시 매겼다. 내용(hash)은 그대로다.
+ * 왜: 브랜치 시험 DB처럼 옛 번호로 이미 적용한 DB가 새 journal로 올릴 때 같은 내용을 다시 실행하거나,
+ * 반대로 무언가를 빠뜨린 채 조용히 넘어가면 안 된다. migrate.ts의 적용 누락 검사(hash 대조)가 통과해야 한다.
+ */
+test('옛 번호 0041로 CI 마이그레이션을 적용한 DB가 0026 재번호 journal로 누락 없이 올라간다', async () => {
+  const source = fileURLToPath(new URL('../migrations/', import.meta.url));
+  const journal = JSON.parse(await readFile(join(source, 'meta/_journal.json'), 'utf8')) as { entries: { idx: number; tag: string; when: number }[] };
+  const ci = journal.entries.find((e) => e.tag === '0026_20261127_ci_reports');
+  expect(ci?.when).toBe(1795740000026);
+  if (!ci) return;
+  const fresh = await database('renumber_fresh');
+  await runMigrations(fresh);
+  const expected = await schemaOf(fresh);
+  const pool = await database('renumber_old');
+  const folder = await mkdtemp(join(tmpdir(), 'awbs-stage-renumber-'));
+  try {
+    await cp(source, folder, { recursive: true });
+    await cp(join(source, '0026_20261127_ci_reports.sql'), join(folder, '0041_20261127_ci_reports.sql'));
+    await writeFile(join(folder, 'meta/_journal.json'), JSON.stringify({ ...journal,
+      entries: journal.entries.map((e) => e === ci ? { ...e, tag: '0041_20261127_ci_reports', when: 1795740000041 } : e) }));
+    await migrate(drizzle(pool), { migrationsFolder: folder });
+  } finally { await rm(folder, { recursive: true, force: true }); }
+  const before = (await pool.query<{ created_at: string }>('select created_at::text from drizzle.__drizzle_migrations order by id')).rows.map((row) => row.created_at);
+  expect(before.at(-1)).toBe('1795740000041');
+  await runMigrations(pool);
+  expect(await schemaOf(pool)).toBe(expected);
+  // 같은 hash가 이미 있으므로 아무것도 다시 실행하거나 기록하지 않는다.
+  expect((await pool.query<{ created_at: string }>('select created_at::text from drizzle.__drizzle_migrations order by id')).rows.map((row) => row.created_at)).toEqual(before);
+  expect(before).toHaveLength(journal.entries.length);
+}, 60_000);
