@@ -138,6 +138,11 @@ async function notifyResult(client: PoolClient, run: Run) {
  * 다음 배포 확인 통과(더 새로운 배포 실행이 없을 때)에서 해소한다.
  */
 async function serviceAvailability(client: PoolClient, run: Run, restore: Update['deployRestore']) {
+  // 경보는 이 환경의 최신 배포 순번(run_no) 결과만 열고 닫는다. 늦게 온 옛 결과는 실행 이력으로만 남는다(M7-03 재리뷰 원칙 1).
+  // 왜: 벽시계가 아니라 순번으로 정해야 시계가 뒤로 가도, 보고가 늦게 와도 현재 서비스 상태를 뒤집지 않는다.
+  if (!['pass','fail'].includes(run.status)) return;
+  const newer = await client.query('select 1 from ci_runs where project_id=$1 and stage=4 and run_no>$2 limit 1',[run.project_id,run.run_no]);
+  if (newer.rowCount) return;
   if (run.status === 'fail' && restore && restore.status !== 'pass') {
     const ref = { id:run.id,path:`/ci/${run.id}`,restore:restore.status,restoreCommit:restore.commit,
       message:`서비스 없음 — 배포 확인 실패 뒤 ${restore.status === 'none' ? '복구할 직전 통과 배포가 없음' : `마지막 정상 커밋 ${String(restore.commit).slice(0,7)} 복구 실패`}` };
@@ -146,8 +151,6 @@ async function serviceAvailability(client: PoolClient, run: Run, restore: Update
       where exists(select 1 from notify_settings where singleton and enabled)
       on conflict((coalesce(project_id::text,'global')),dedup_key) where resolved_at is null do update set dup_count=notify_events.dup_count+1`,[run.project_id,ref]);
   } else if (run.status === 'pass') {
-    const newer = await client.query('select 1 from ci_runs where project_id=$1 and stage=4 and run_no>$2 limit 1',[run.project_id,run.run_no]);
-    if (newer.rowCount) return;
     await client.query("update alerts set resolved_at=clock_timestamp() where project_id=$1 and key='ci:serviceDown' and resolved_at is null",[run.project_id]);
     await client.query("update notify_events set resolved_at=clock_timestamp() where project_id=$1 and dedup_key='serviceDown' and resolved_at is null",[run.project_id]);
   } else return;

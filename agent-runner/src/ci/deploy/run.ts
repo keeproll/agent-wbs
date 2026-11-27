@@ -36,7 +36,10 @@ export interface DeployResult {
   /** 실패했을 때 마지막으로 통과한 커밋을 다시 기동하고 접속 확인한 결과(조정자 결정 7). 직전 통과 기록이 없으면 없다. */
   restore?: { commit: string; status: 'pass' | 'fail'; detail: string };
 }
-interface DeployState { version: 1; lastPass: { commit: string; tag: string } | null; images: string[] }
+/**
+ * seq: 이 환경에서 시작한 배포 확인의 단조 증가 순번(재리뷰 원칙 1). 복구는 자기 순번이 아직 최신일 때만 한다.
+ */
+interface DeployState { version: 1; seq: number; lastPass: { commit: string; tag: string } | null; images: string[] }
 
 /** compose 프로젝트 이름을 고정해 이전 배포 확인의 컨테이너를 같은 이름으로 바꿔 띄운다. */
 export const COMPOSE_PROJECT = 'agentwbs-deploy';
@@ -54,13 +57,13 @@ async function readState(directory: string): Promise<DeployState> {
   try {
     const path = join(directory, 'state.json');
     if (!(await lstat(path)).isFile()) throw new Error('배포 상태는 일반 파일이어야 합니다.');
-    const value = JSON.parse(await readFile(path, 'utf8')) as DeployState;
-    if (value.version !== 1 || !Array.isArray(value.images) || !value.images.every(i => typeof i === 'string' && i.startsWith('agentwbs-deploy:'))) {
+    const value = { seq: 0, ...JSON.parse(await readFile(path, 'utf8')) as Partial<DeployState> } as DeployState;
+    if (value.version !== 1 || !Number.isSafeInteger(value.seq) || value.seq < 0 || !Array.isArray(value.images) || !value.images.every(i => typeof i === 'string' && i.startsWith('agentwbs-deploy:'))) {
       throw new Error('배포 상태가 손상되었습니다. 원본을 보존하고 확인하세요.');
     }
     return value;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1, lastPass: null, images: [] };
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1, seq: 0, lastPass: null, images: [] };
     throw error;
   }
 }
@@ -71,7 +74,26 @@ async function readState(directory: string): Promise<DeployState> {
  * 왜: 단계가 「통과」라고 말한 것만으로는 근거가 아니다(G L466).
  * Q-15가 정해지기 전에는 이 PC(loopback)의 compose만 대상으로 한다.
  */
-export async function runDeployCheck(options: DeployOptions): Promise<DeployResult> {
+/** 환경(배포 상태 폴더)별 실행 꼬리. 같은 환경의 배포·복구·상태 저장을 한 번에 하나씩 한다. */
+const lanes = new Map<string, Promise<unknown>>();
+
+/**
+ * 같은 환경의 배포 확인을 들어온 순서대로 하나씩 실행한다(재리뷰 원칙 1).
+ * 마지막 통과 기록 읽기부터 복구·상태 저장까지 한 구간이다. 왜: 무거운 작업 번호표만으로는 순서가 보장되지 않아,
+ * 앞 배포의 복구 전에 뒤 배포가 끼어들면 복구가 더 새 정상 배포를 되돌린다.
+ * 다른 Runner 프로세스와의 배타는 데이터 폴더 잠금(한 AWBS_HOME에 Runner 하나, state.ts)이 맡는다.
+ */
+export function runDeployCheck(options: DeployOptions): Promise<DeployResult> {
+  const lane = join(options.home, 'ci', 'deploy');
+  const previous = lanes.get(lane) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(() => deployOnce(options));
+  const tail = next.catch(() => undefined);
+  lanes.set(lane, tail);
+  void tail.then(() => { if (lanes.get(lane) === tail) lanes.delete(lane); });
+  return next;
+}
+
+async function deployOnce(options: DeployOptions): Promise<DeployResult> {
   const { repo, heavy, execute, report, home, job, signal } = options;
   const now = options.now ?? Date.now;
   const monotonic = options.monotonic ?? (() => performance.now());
@@ -148,6 +170,11 @@ export async function runDeployCheck(options: DeployOptions): Promise<DeployResu
   const pipeline = parsePipeline(source);
   const tag = imageTag(job.commit);
   const names = [...pipeline.stages.deploy.map(s => s.name), RUNNER_URL, RUNNER_SHOTS];
+  // 이 배포의 순번을 먼저 남긴다. 실행 도중 더 큰 순번이 기록되면 더 새 배포가 이 환경을 맡은 것이다.
+  const seq = state.seq + 1;
+  await mkdir(stateDir, { recursive: true, mode: 0o700 });
+  await atomicWrite(stateDir, 'state.json', `${JSON.stringify({ ...state, seq } satisfies DeployState)}\n`);
+  const superseded = async () => (await readState(stateDir)).seq !== seq;
   const started = await report.start({ jobId: job.jobId, fence: job.fence, stage: 'deploy', ref: 'main', trigger: '팀장 요청', headSha: job.commit, pipelineSha });
   await report.update(started.id, { fence: job.fence, status: 'run' });
   const evidence = await Evidence.open(home, started.id, redact);
@@ -209,18 +236,22 @@ export async function runDeployCheck(options: DeployOptions): Promise<DeployResu
     }
   }
 
+  // 더 새 배포가 시작됐으면 이 환경의 상태(복구·이미지·마지막 통과)는 그 배포가 맡는다. 이 실행은 결과만 보고한다.
+  const stale = await superseded();
   // 이미지 보존: 통과한 이미지는 다음 배포 확인까지만, 실패하면 직전 통과 이미지를 남긴다(G L489).
   const lastPass = result.status === 'pass' ? { commit: job.commit, tag } : state.lastPass;
   const images = [...new Set([...state.images, ...(result.failStep === RUNNER_TARGET ? [] : [tag])])];
   const keep = new Set([lastPass?.tag, result.status === 'pass' ? tag : undefined].filter(Boolean));
   const remaining: string[] = [];
-  for (const image of images) {
+  for (const image of stale ? [] : images) {
     if (keep.has(image) || image === tag && result.status !== 'pass') { remaining.push(image); continue; }
     const removed = await execute(['docker', 'image', 'rm', '--', image], home, signal).catch(() => ({ code: null }));
     if (removed.code !== 0) { remaining.push(image); notes.push(`이전 이미지 ${image} 정리 실패`); }
   }
   // 실패하면 마지막으로 통과한 커밋을 다시 기동한다. 결과는 실제 접속 확인으로만 판단해 보고한다(원칙 C, 결정 7).
-  if (result.status === 'fail' && result.failStep !== RUNNER_TARGET && target) {
+  if (result.status === 'fail' && result.failStep !== RUNNER_TARGET && target && stale) {
+    notes.push('더 새 배포가 시작되어 복구하지 않음');
+  } else if (result.status === 'fail' && result.failStep !== RUNNER_TARGET && target) {
     if (state.lastPass) {
       const begin = monotonic();
       result.restore = await restoreLastPass(state.lastPass, target);
@@ -235,8 +266,7 @@ export async function runDeployCheck(options: DeployOptions): Promise<DeployResu
   }
   if (result.failStep && result.failStep !== RUNNER_TARGET) notes.unshift(`실패 단계: ${result.failStep}`);
   result.note = notes.join(' · ');
-  await mkdir(stateDir, { recursive: true, mode: 0o700 });
-  await atomicWrite(stateDir, 'state.json', `${JSON.stringify({ version: 1, lastPass, images: remaining } satisfies DeployState)}\n`);
+  if (!stale) await atomicWrite(stateDir, 'state.json', `${JSON.stringify({ version: 1, seq, lastPass, images: remaining } satisfies DeployState)}\n`);
   const finishedAt = new Date(now()).toISOString();
   await evidence.finish({ stage: 'deploy', status: result.status, commit: job.commit, finishedAt });
   await report.update(started.id, {
@@ -246,7 +276,7 @@ export async function runDeployCheck(options: DeployOptions): Promise<DeployResu
     ...(result.note && { note: result.note }),
     ...(logExcerpt && { logExcerpt: redact(logExcerpt) }),
     // 복구 결과를 서버에 알린다. fail·none이면 서버가 「서비스 없음」 경보를 만든다(결정 11).
-    ...(result.status === 'fail' && result.failStep !== RUNNER_TARGET && target && {
+    ...(result.status === 'fail' && result.failStep !== RUNNER_TARGET && target && !stale && {
       deployRestore: result.restore ? { commit: result.restore.commit, status: result.restore.status } : { commit: null, status: 'none' as const } }),
     artifacts: evidence.artifacts,
   });

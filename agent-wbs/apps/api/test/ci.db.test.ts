@@ -996,3 +996,20 @@ test('결정 11: 늦게 끝난 이전 배포 실행의 통과는 더 새로운 �
   expect((await patch(older,{ fence:1,status:'pass' })).statusCode).toBe(204);
   expect((await serviceDown()).alerts).toHaveLength(1);
 });
+
+test('재리뷰 원칙 1: 더 새 배포가 통과한 뒤 늦게 온 옛 실패는 서비스 없음 경보를 다시 만들지 않는다(이력만)', async () => {
+  const older = await deployJob();
+  const newer = await deployJob();
+  expect((await patch(newer,{ fence:1,status:'pass' })).statusCode).toBe(204);
+  expect(await serviceDown()).toEqual({ alerts:[],events:[] });
+  expect((await patch(older,{ fence:1,status:'fail',deployRestore:{ commit:otherSha,status:'fail' } })).statusCode).toBe(204);
+  expect(await serviceDown()).toEqual({ alerts:[],events:[] });
+  expect((await owner.query('select status from ci_runs where id=$1',[older])).rows).toEqual([{ status:'fail' }]);
+});
+
+test('재리뷰 원칙 1: 더 새 배포가 아직 진행 중이어도 옛 실패는 경보를 열지 않는다', async () => {
+  const older = await deployJob();
+  await deployJob();
+  expect((await patch(older,{ fence:1,status:'fail',deployRestore:{ commit:null,status:'none' } })).statusCode).toBe(204);
+  expect(await serviceDown()).toEqual({ alerts:[],events:[] });
+});
