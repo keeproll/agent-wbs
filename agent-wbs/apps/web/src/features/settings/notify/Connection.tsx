@@ -63,9 +63,9 @@ export function Connection() {
     if ('botToken' in change || 'replace' in change) setBot(null);
   };
   return <section className="card" aria-labelledby="tg-connect">
-    <CardHead id="tg-connect" title="Telegram 연결 설정"><span className={error || connectionAlert ? 'vf v-fail' : success ? 'vf v-pass' : 'vf v-blk'}>{error || connectionAlert ? '연결 오류' : success ? '테스트 성공' : q.query.data?.tokenSet ? '수신 대상 테스트 필요' : '설정 전'}</span></CardHead>
+    <CardHead id="tg-connect" title="Telegram 연결 설정"><div className="notify-controls"><span className={error || connectionAlert ? 'vf v-fail' : success ? 'vf v-pass' : 'vf v-blk'}>{error || connectionAlert ? '연결 오류' : success ? '테스트 성공' : shownBot ? '수신 대상 테스트 필요' : q.query.data?.tokenSet || f?.botToken ? '봇 확인 필요' : '설정 전'}</span><span className={f?.enabled ? 'vf v-pass' : 'vf v-blk'}>{f?.enabled ? '알림 켜짐' : '알림 꺼짐'}</span></div></CardHead>
     <QueryGate query={q.query} label="Telegram 연결 설정" />{form.restoreOffer}
-    <p className="fhint">봇 1개 → 수신 대화 1개입니다. 서버가 대기열로 보내므로 브라우저를 닫아도 발송합니다. 전송 실패는 Task · Agent 실행에 영향을 주지 않습니다. 승인 · 조치는 WBS 화면에서 합니다.</p>
+    <p className="fhint">봇 1개 → 수신 대화 1개입니다. 서버가 대기열로 보내므로 브라우저를 닫아도 발송합니다. 전송 실패는 Task · Agent 실행에 영향을 주지 않습니다. 승인 · 조치는 WBS 화면에서 합니다. 「전송 요청 수락」은 Telegram이 요청을 받았다는 뜻이며 읽음 · 도착을 뜻하지 않습니다.</p>
     {f && <div className="form">
       {(error || connectionAlert) && <div className="banner danger" role="alert"><div className="banner-b">{error ? ERRORS[error] : connectionAlert?.text}</div></div>}
       <Row label={<label htmlFor="tg-token">Bot Token <span className="req" aria-hidden="true">*</span></label>}>
@@ -74,7 +74,7 @@ export function Connection() {
           : <div className="notify-controls"><span>●●●● 등록됨 (끝 {q.query.data?.tokenLast4})</span><button type="button" className="btn sm" onClick={() => { changeIdentity({ replace: true, botToken: '' }); }}>토큰 교체</button></div>}
         <span className="fhint">BotFather에서 받은 토큰입니다. 저장 후에는 다시 보여 주지 않고 끝 4자리만 표시합니다. 서버에만 암호화하며 브라우저 저장소 · 로그 · 이력에 남기지 않습니다. 노출되면 BotFather에서 즉시 폐기(/revoke)하세요.</span>
       </Row>
-      <Row label="봇"><div className="notify-controls"><span>{shownBot ? `@${shownBot.username}` : '봇 확인 필요'}</span>
+      <Row label="봇"><div className="notify-controls"><span>{shownBot ? `${shownBot.name} · @${shownBot.username}` : '봇 확인 필요'}</span>
         <BusyButton small variant="default" busy={bot.busy} busyLabel="봇 확인 중…" onClick={() => { void bot.save(); }}>봇 확인</BusyButton></div>
         {liveBot?.error && <span className="ferr" role="alert">{ERRORS[liveBot.error]}</span>}
         <span className="fhint">토큰이 유효한지만 확인합니다 (getMe). 수신 대화는 테스트 알림으로 확인합니다.</span>
@@ -83,7 +83,7 @@ export function Connection() {
       <Row label={<label htmlFor="tg-chat">Chat ID <span className="req" aria-hidden="true">*</span></label>}><div className="notify-controls"><input id="tg-chat" aria-label="Chat ID" className="inp mono" value={f.chatId} onChange={e => { changeIdentity({ chatId: e.target.value }); }} /><button type="button" className="btn sm" onClick={() => { setFinding(true); }}>수신 대상 찾기</button></div>
         <span className="fhint">5~20자리 숫자입니다. 개인은 양수, 그룹은 음수 그대로 입력합니다. 전화번호 · @사용자명은 쓸 수 없습니다.</span>
       </Row>
-      <Row label="수신 대화"><span>{q.query.data?.chat?.chatId === f.chatId ? q.query.data.chat.title : '테스트 알림으로 확인하세요.'}</span></Row>
+      <Row label="수신 대화"><span>{q.query.data?.chat?.chatId === f.chatId ? `${q.query.data.chat.title} · ${{ private: '개인', group: '그룹', supergroup: '슈퍼그룹' }[q.query.data.chat.type] ?? q.query.data.chat.type}` : '테스트 알림으로 확인하세요.'}</span></Row>
       <Row label="테스트 알림"><div className="notify-controls"><BusyButton small variant="default" busy={test.busy} busyLabel="테스트 전송 중…" onClick={() => { void test.save(); }}>테스트 알림 보내기</BusyButton>
         {success && <span className="vf v-pass">전송 요청 수락 — 실제 도착은 Telegram 앱에서 확인</span>}</div><span className="fhint">저장 전 현재 입력값으로 보냅니다. Bot Token · Chat ID를 바꾸면 다시 테스트해야 합니다.</span></Row>
       <Row label="알림 사용"><div className="seg" role="group" aria-label="알림 사용"><button type="button" aria-pressed={f.enabled} disabled={!success} onClick={() => { form.edit(current => ({ ...current, enabled: true })); }}>켜기</button><button type="button" aria-pressed={!f.enabled} onClick={() => { form.edit(current => ({ ...current, enabled: false })); }}>끄기</button></div></Row>

@@ -5,5 +5,7 @@
 #tg-app-url { max-width: 340px; }
 .notify-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .notify-table th, .notify-table td { padding: 9px 8px; border-bottom: 1px solid var(--ln); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
-.notify-table th { color: var(--mut); font-weight: 600; }
+.notify-table th { color: var(--ink2); font-weight: 600; background: var(--sf2); }
 .tg-rules .tid { white-space: normal; }
+.notify-url .form-acts { margin: 0 !important; padding: 0; border: 0; }
+.notify-url .form-acts > .fhint { display: none; }

@@ -1,11 +1,41 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { fakeApi, json, errorBody, type FakeApi, type Handler } from './support/fake-api.ts';
 import { settingsApi } from './support/settings-fixtures.ts';
 import { join } from 'node:path';
-import { copyFile } from 'node:fs/promises';
+import { copyFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 
 const initial = { enabled: false, targetName: '', chatId: null, tokenSet: false, tokenLast4: null, bot: null, chat: null, test: null, updatedAt: null };
+const paths = ['/wbs/TASK-0001', '/change/CP-0001', '/ci/CI-0127', '/settings/runner', '/project', '/design'];
+const history = [...paths, '/settings/notify'].map((path, index) => ({ id: `log-${index}`, at: '2026-11-27T01:00:00Z',
+  projectName: '시나리오 프로젝트', kind: index === 6 ? 'test' : 'biz', event: index === 6 ? null : 'admin', target: `대상 ${index}`,
+  path, targetName: '팀장 개인 알림', chatId: '512345678', state: index === 0 ? 'sending' : index === 2 ? 'failed' : index === 3 ? 'retry_wait' : 'accepted', attempts: 1, duplicates: 0,
+  error: index === 1 ? '중복 도착 가능' : index === 2 ? '전송 권한 없음 · 봇 차단(403)' : index === 3 ? '요청 제한(429) — 재시도 대기' : null, message: `실제로 보낸 메시지 ${index}\n대상: ${path}` }));
+function historyApi(api: FakeApi) {
+  api.on('GET /api/projects/p1/notify/log', (route, request) => {
+    const kind = new URL(request.url()).searchParams.get('kind');
+    return json(route, 200, { items: history.filter(row => !kind || row.kind === kind), nextCursor: null });
+  });
+  for (const row of history) api.on(`GET /api/projects/p1/notify/log/${row.id}`, route => json(route, 200, row));
+}
+
+// 본문 상자가 스크롤되므로 원본 캡처와 같이 본문 길이만큼 화면을 늘린다.
+async function fullCapture(page: Page, name: string) {
+  const size = page.viewportSize();
+  if (!size) throw new Error('화면 크기 없음');
+  const extra = await page.evaluate(() => Math.max(0, ...Array.from(document.querySelectorAll('.main,.main *'))
+    .filter(e => /auto|scroll/.test(getComputedStyle(e).overflowY)).map(e => e.scrollHeight - e.clientHeight)));
+  await page.setViewportSize({ width: size.width, height: size.height + extra });
+  const historyBox = await page.getByRole('region', { name: '전송 이력', exact: true }).boundingBox();
+  expect(historyBox).not.toBeNull();
+  expect((historyBox?.y ?? 0) + (historyBox?.height ?? 0)).toBeLessThanOrEqual(size.height + extra);
+  expect(extra).toBeGreaterThan(0);
+  if (process.env.AWBS_TEST_ARTIFACT_DIR) {
+    await page.screenshot({ path: join(process.env.AWBS_TEST_ARTIFACT_DIR, name), animations: 'disabled', caret: 'hide' });
+    await writeFile(join(process.env.AWBS_TEST_ARTIFACT_DIR, `${name}.json`), JSON.stringify({ width: size.width, height: size.height + extra, historyBox }));
+  }
+  await page.setViewportSize(size);
+}
 function telegramApi(api: FakeApi) {
   settingsApi(api);
   api.on('GET /api/notify/telegram', route => json(route, 200, initial));
@@ -27,11 +57,13 @@ test('telegram UAT-TG-01/02/03: 테스트 후 활성화, 저장 실패 초안 �
   await expect(card.getByRole('button', { name: '켜기', exact: true })).toBeDisabled();
   const token = `123456789:${'fake_only_'.repeat(4)}abcd`;
   await card.getByLabel('Bot Token', { exact: true }).fill(token);
+  await expect(card.locator('.dp-h')).toContainText('봇 확인 필요');
   await card.getByRole('button', { name: '봇 확인', exact: true }).click();
-  await expect(card.getByText('@test_bot')).toBeVisible();
+  await expect(card.locator('.dp-h')).toContainText('수신 대상 테스트 필요');
+  await expect(card.getByText('시험 봇 · @test_bot')).toBeVisible();
   await card.getByLabel('수신 대상 이름').fill('팀장');
   await card.getByLabel('Chat ID', { exact: true }).fill('-4123456789');
-  await expect(card.getByText('@test_bot')).toBeVisible();
+  await expect(card.getByText('시험 봇 · @test_bot')).toBeVisible();
   await card.getByRole('button', { name: '테스트 알림 보내기', exact: true }).click();
   await expect(card.getByText(/전송 요청 수락/)).toBeVisible();
   await card.getByRole('button', { name: '켜기', exact: true }).click();
@@ -102,26 +134,77 @@ test('telegram UAT-TG-04/06/EMPTY-08: 후보 선택은 입력만 변경, 모달 
 
 test('telegram UI-12-05: 원본 클래스의 연결/규칙/미리보기/주소/이력 배치와 1280px 가로 넘침', async ({ page }) => {
   const api = await fakeApi(page); telegramApi(api);
+  historyApi(api);
   api.on('GET /api/notify/telegram', route => json(route, 200, { ...initial, enabled: true, targetName: '팀장 개인 알림', chatId: '512345678', tokenSet: true, tokenLast4: 'xxxx',
     bot: { id: 123, username: 'test_bot', name: 'Agent WBS 알림' }, chat: { chatId: '512345678', title: '팀장 개인', type: 'private' }, test: { ok: true, error: null, at: '2026-11-27T01:00:00Z' } }));
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.goto('/settings/notify');
   await expect(page.getByText('●●●● 등록됨 (끝 xxxx)')).toBeVisible();
+  const connection = page.getByRole('region', { name: 'Telegram 연결 설정' });
+  await expect(connection.getByText('알림 켜짐', { exact: true })).toBeVisible();
+  await expect(connection.getByText('Agent WBS 알림 · @test_bot', { exact: true })).toBeVisible();
+  await expect(connection.getByText('팀장 개인 · 개인', { exact: true })).toBeVisible();
+  const badges = await connection.locator('.dp-h .vf').all();
+  const firstBadge = await badges[0]?.boundingBox(), secondBadge = await badges[1]?.boundingBox();
+  expect(firstBadge?.y).toBe(secondBadge?.y);
+  expect((secondBadge?.x ?? 0) - (firstBadge?.x ?? 0) - (firstBadge?.width ?? 0)).toBeLessThan(12);
+  await expect(page.getByRole('cell', { name: '대기', exact: true })).toHaveCount(1);
+  await expect(page.getByRole('cell', { name: '팀장 개인 알림 (512345678)', exact: true })).toHaveCount(7);
   await expect(page.getByRole('region', { name: '메시지 미리보기', exact: true })).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
   if (process.env.AWBS_TEST_ARTIFACT_DIR) {
-    await page.screenshot({ path: join(process.env.AWBS_TEST_ARTIFACT_DIR, 'telegram-settings-1920.png'), fullPage: true });
     await copyFile(join(homedir(), '.cache/agent-wbs-baseline/desktop/UI-12-05.full.png'), join(process.env.AWBS_TEST_ARTIFACT_DIR, 'telegram-prototype-1920.png'));
   }
+  await fullCapture(page, 'telegram-settings-1920.png');
   await page.setViewportSize({ width: 1280, height: 900 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  if (process.env.AWBS_TEST_ARTIFACT_DIR) await page.screenshot({ path: join(process.env.AWBS_TEST_ARTIFACT_DIR, 'telegram-settings-1280.png'), fullPage: true });
+  await fullCapture(page, 'telegram-settings-1280.png');
   const card = page.getByRole('region', { name: 'Telegram 연결 설정' });
   await card.getByRole('button', { name: '토큰 교체', exact: true }).click();
   await card.getByLabel('Bot Token', { exact: true }).fill(`123456789:${'replacement_only_'.repeat(3)}abcd`);
   await card.getByRole('button', { name: '교체 취소', exact: true }).click();
   await expect(card.getByRole('button', { name: '켜기', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(card.getByText('●●●● 등록됨 (끝 xxxx)')).toBeVisible();
+});
+
+test('telegram UAT-TG-09: 빈 주소·localhost 경고·저장한 공용 주소와 실제 이력 필터', async ({ page }) => {
+  const api = await fakeApi(page); telegramApi(api); historyApi(api);
+  let appUrl: string | null = null;
+  api.on('GET /api/settings/app-url', route => json(route, 200, { appUrl, updatedAt: null }));
+  api.on('PUT /api/settings/app-url', (route, request) => { appUrl = (request.postDataJSON() as { appUrl: string | null }).appUrl; return json(route, 200, { appUrl, updatedAt: null }); });
+  api.on('GET /api/projects/p1/notify/preview', route => json(route, 200, { text: `[Agent WBS] Task 완료${appUrl ? `\nWBS에서 확인: ${appUrl}/wbs/TASK-0001` : ''}` }));
+  await page.goto('/settings/notify');
+  const preview = page.getByRole('region', { name: '메시지 미리보기', exact: true });
+  await expect(preview.locator('.tg-bubble')).not.toContainText('WBS에서 확인:');
+  const card = page.getByRole('region', { name: 'Agent WBS 접속 주소', exact: true });
+  await card.getByLabel('접속 주소', { exact: true }).fill('http://localhost:3100');
+  await expect(card.getByText(/이 PC에서만 열림/)).toBeVisible();
+  await card.getByLabel('접속 주소', { exact: true }).fill('http://192.168.0.10:3100');
+  await card.getByRole('button', { name: '저장', exact: true }).click();
+  await page.reload();
+  await expect(preview.locator('.tg-bubble')).toContainText('WBS에서 확인: http://192.168.0.10:3100/wbs/TASK-0001');
+  await card.getByLabel('접속 주소', { exact: true }).fill('');
+  await card.getByRole('button', { name: '저장', exact: true }).click();
+  await page.reload();
+  await expect(preview.locator('.tg-bubble')).not.toContainText('WBS에서 확인:');
+  const logs = page.getByRole('region', { name: '전송 이력', exact: true });
+  await expect(logs.locator('tbody tr')).toHaveCount(7);
+  await logs.getByRole('button', { name: '업무', exact: true }).click();
+  await expect(logs.locator('tbody tr')).toHaveCount(6);
+  await logs.getByRole('button', { name: '테스트', exact: true }).click();
+  await expect(logs.locator('tbody tr')).toHaveCount(1);
+  await logs.getByRole('button', { name: '전체', exact: true }).click();
+  await expect(logs.locator('tbody tr')).toHaveCount(7);
+});
+
+for (const [index, path] of paths.entries()) test(`telegram UAT-TG-09: 실제 메시지와 ${path} 화면 이동`, async ({ page }) => {
+  const api = await fakeApi(page); telegramApi(api); historyApi(api);
+  await page.goto('/settings/notify');
+  const logs = page.getByRole('region', { name: '전송 이력', exact: true });
+  await logs.getByRole('button', { name: `대상 ${index}`, exact: true }).click();
+  await expect(logs.locator('.tg-det .tg-bubble')).toHaveText(`실제로 보낸 메시지 ${index}\n대상: ${path}`);
+  await logs.getByRole('link', { name: 'WBS에서 확인', exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`${path}$`));
 });
 
 test('telegram UAT-TG-08: 서버 자동 재시도 성공이 저장된 테스트 실패 표시를 해소한다', async ({ page }) => {

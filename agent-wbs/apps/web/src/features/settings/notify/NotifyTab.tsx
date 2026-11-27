@@ -12,16 +12,16 @@ import { Connection } from './Connection.tsx';
 import './notify.css';
 
 const EVENTS = {
-  done: ['Task 완료', 'Completion Gate 통과 · 통합 확인 통과 · PR 병합 후. Agent 시도 완료는 해당 없음'],
-  fail: ['Task 실패', 'QA FAIL 확정 · 실행 실패 자동 한도 초과'],
-  admin: ['관리자 개입 필요', '준비 상태 · 인증 실패 · 입력 자료 변경 등'],
-  approve: ['승인 요청', '변경 제안 · 기술 결정 · 초기 WBS 승인 대기'],
-  buildOk: ['빌드 성공', '② 통합 확인 · ④ 배포 확인 통과'],
-  buildFail: ['빌드 실패', '② 통합 확인 · ③ 야간 점검 · ④ 배포 확인 실패'],
+  done: ['Task 완료', 'WBS 최종 완료 판정 — Completion Gate 통과 · 통합 확인 통과 · PR 병합 후. Agent 시도 완료나 Runner 종료 코드 0은 해당 안 됨'],
+  fail: ['Task 실패', '검증(QA) FAIL 확정 · 실행 시도 실패가 재시도 한도 초과 — 시도마다 보내지 않음'],
+  admin: ['관리자 개입 필요', '사람이 조치해야 진행되는 상황 — CLI 로그인 만료 · GitHub 인증 실패 · 하위 Agent 관측 미확인(보유) · 입력 자료 변경 확인 대기'],
+  approve: ['승인 요청', 'Change Proposal 승인 대기 · 기술 결정 승인 대기 · 초기 WBS 승인'],
+  buildOk: ['빌드 성공', '② 통합 확인 · ④ 배포 확인 통과 (① Task 검사는 제외). 빌드 성공 ≠ 테스트 성공 — 통과한 단계를 명시'],
+  buildFail: ['빌드 실패', '② 통합 확인 · ③ 야간 점검 · ④ 배포 확인 실패 — 실패 단계(빌드 / 테스트 / E2E / 기동)를 명시'],
 } as const;
 type Event = keyof typeof EVENTS;
 const keys = Object.keys(EVENTS) as Event[];
-const STATES = { queued: '대기', sending: '전송 중', accepted: '전송 요청 수락', retry_wait: '재시도 대기', failed: '실패', unknown: '실패 — 수락 여부 불명' };
+const STATES = { queued: '대기', sending: '대기', accepted: '전송 요청 수락', retry_wait: '재시도 대기', failed: '실패', unknown: '실패 — 수락 여부 불명' };
 
 export function NotifyTab({ projectId, projectName }: { projectId: string | null; projectName: string }) {
   return <>
@@ -70,9 +70,9 @@ function AppUrl() {
   try { local = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(form.form?.appUrl ?? '').hostname); } catch { /* 입력 중에는 형식 안내만 표시한다. */ }
   return <section className="card" aria-labelledby="tg-url"><CardHead id="tg-url" title="Agent WBS 접속 주소"><span className="muted">메일 · Telegram 링크 공용</span></CardHead>
     <QueryGate query={q.query} label="Agent WBS 접속 주소" />{form.restoreOffer}
-    {form.form !== undefined && <div className="form"><Row label={<label htmlFor="tg-app-url">접속 주소</label>}><input id="tg-app-url" className="inp mono" value={form.form.appUrl} onChange={e => { const value = e.target.value; form.edit(() => ({ appUrl: value })); }} placeholder="예: http://192.168.0.10:3100" />
+    {form.form !== undefined && <div className="form"><Row label={<label htmlFor="tg-app-url">접속 주소</label>}><div className="notify-controls notify-url"><input id="tg-app-url" className="inp mono" value={form.form.appUrl} onChange={e => { const value = e.target.value; form.edit(() => ({ appUrl: value })); }} placeholder="예: http://192.168.0.10:3100" />{form.footer}{!form.dirty && !form.busy && <button type="button" className="btn sm" disabled>저장</button>}</div>
       {local && <div className="banner warn"><div className="banner-b">이 PC에서만 열림 — 휴대폰에서 열 수 없음. 같은 네트워크의 PC 주소를 쓰세요.</div></div>}
-      {!form.form.appUrl && <span className="fhint">비어 있으면 메일 · Telegram 메시지에 「WBS에서 확인」 링크를 넣지 않습니다.</span>}</Row>{form.footer}</div>}
+      {!form.form.appUrl && <span className="fhint">비어 있으면 메일 · Telegram 메시지에 「WBS에서 확인」 링크를 넣지 않습니다.</span>}</Row></div>}
   </section>;
 }
 
@@ -86,7 +86,7 @@ function History({ projectId }: { projectId: string }) {
   useRefreshError(query, '전송 이력'); useRefreshError(detail, '전송 이력 상세');
   const row = (log: ResponseOf<'listNotifyLog'>['items'][number]) => <tr key={log.id}>
     <td className="mono">{formatDateTime(log.at)}</td><td>{log.projectName}</td><td><button type="button" className="btn ghost sm" onClick={() => { setSelected(log.id); }}>{log.target}</button></td>
-    <td>{log.event ? EVENTS[log.event][0] : '테스트'}</td><td>{log.targetName}<br /><span className="mono">{log.chatId}</span></td>
+    <td>{log.event ? EVENTS[log.event][0] : '테스트'}</td><td>{log.targetName} ({log.chatId})</td>
     <td><span className={log.state === 'accepted' ? 'vf v-pass' : ['failed', 'unknown'].includes(log.state) ? 'vf v-fail' : 'vf v-blk'}>{STATES[log.state]}</span>{log.duplicates > 0 && <div className="tid">중복 생략 {log.duplicates}회</div>}</td><td>{log.attempts}</td><td>{log.error ?? '—'}</td><td>{log.kind === 'biz' ? '업무' : '테스트'}</td>
   </tr>;
   return <section className="card" aria-labelledby="tg-history"><CardHead id="tg-history" title="전송 이력"><div className="seg" role="group" aria-label="이력 구분">{([undefined, 'biz', 'test'] as const).map((value, index) => <button key={index} type="button" aria-pressed={kind === value} onClick={() => { setKind(value); setCursor(undefined); setSelected(null); }}>{['전체', '업무', '테스트'][index]}</button>)}</div></CardHead>
