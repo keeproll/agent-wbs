@@ -217,6 +217,51 @@ describe('runner 실제 PostgreSQL 검증', () => {
     expect((await owner.query('select state,fence,attempts from runner_jobs where id=$1',[job.id])).rows).toEqual([{ state:'queued',fence:job.fence,attempts:1 }]);
   });
 
+  test.each(['return','qa'])('%s 대기 중 팀장이 Agent를 바꾸면 옛 보유를 닫고 새 Agent로 예약·시작한다', async waiting => {
+    const { t,job }=await claimed('Agent 변경');
+    let waitingId=job.id;
+    if (waiting==='return') {
+      expect((await post(`jobs/${job.id}/return`,{ fence:job.fence,hostId:'host-a',bootId:'boot-a',reason:'resources' })).statusCode).toBe(204);
+    } else {
+      const started=await start(job); expect(started.statusCode,started.body).toBe(200);
+      await release(job,{ kind:'no_process',bootId:'boot-a' },true);
+      waitingId=required(await inEpoch(pool,1,async c=>{
+        await c.query("update task_attempts set status='completed',ended_at=now() where id=$1",[started.json().attemptId]);
+        await c.query("update tasks set status='qa' where id=$1",[t.id]);
+        await c.query("insert into ci_runs(project_id,run_key,stage,pipeline_sha,head_sha,ref,task,attempt,trigger,status,job,fence) values($1,'CI-agent-change',1,$2,$2,'agent/test',$3,$4,'task','pass',$5,$6)",[project,sha,t.id,started.json().attemptId,job.id,job.fence]);
+        return handover(c,job.id,'qa',started.json().attemptId);
+      }));
+    }
+    const previous=await hold(waitingId);
+    await post('models',{ agent:'Claude',models:[{ id:'claude-opus-5-5',label:'시험',efforts:['high'] }] });
+    await owner.query("update agent_models set allowed=true where agent='Claude'");
+    await post('readiness',{ at:now(),items:['claude','codex','git','node','pnpm','pg','repo','disk','subs'].map(key=>({ key,status:'ok',detail:'' })) });
+    await post('usage',{ agent:'Claude',remainPct:100,resetAt:now() });
+    await owner.query("update task_grades set model_id='claude-opus-5-5' where task=$1 and role=$2",[t.id,waiting==='return' ? 'dev' : 'qa']);
+    const current=(await app.inject({ url:`/api/tasks/${t.key}`,headers:lead() })).json();
+    const patched=await app.inject({ method:'PATCH',url:`/api/tasks/${t.key}`,headers:lead(),payload:{ updatedAt:current.updatedAt,...(waiting==='return' ? { assigneeAgent:'Claude' } : { verifierAgent:'Claude' }) } });
+    expect(patched.statusCode,patched.body).toBe(200);
+    await owner.query("update runner_jobs set resource_retry_at=clock_timestamp()-interval '1 day' where id=$1",[waitingId]);
+    const response=await claim(); expect(response.statusCode,response.body).toBe(200);
+    const next=response.json().job as typeof job;
+    expect(next).toMatchObject({ id:waitingId,payload:{ agent:'Claude' } });
+    const replaced=await inEpoch(pool,1,c=>new RunnerRepository(c).hold(waitingId));
+    expect(replaced).toMatchObject({ agent:'Claude',lock_state:'held',slot_state:'reserved',closed_at:null });
+    expect(replaced?.id).not.toBe(previous?.id);
+    expect((await owner.query('select agent,lock_state,closed_at from execution_holds where id=$1',[previous?.id])).rows[0]).toMatchObject({ agent:'Codex',lock_state:'released',closed_at:expect.any(Date) });
+    const started=await start(next); expect(started.statusCode,started.body).toBe(200);
+    expect((await owner.query('select agent,model_id from task_attempts where id=$1',[started.json().attemptId])).rows).toEqual([{ agent:'Claude',model_id:'claude-opus-5-5' }]);
+  });
+
+  test.each(['cancelled','failed','done'])('자원 보류 job이 %s로 끝나면 같은 경보를 해소한다', async state => {
+    const { job }=await claimed();
+    await owner.query('update runner_jobs set resource_returns=3 where id=$1',[job.id]);
+    expect((await post(`jobs/${job.id}/return`,{ fence:job.fence,hostId:'host-a',bootId:'boot-a',reason:'resources' })).statusCode).toBe(204);
+    expect((await owner.query('select count(*)::int n from alerts where key=$1 and resolved_at is null',[`runner:resources:${job.id}`])).rows).toEqual([{ n:1 }]);
+    await inEpoch(pool,1,c=>new RunnerRepository(c).state(job.id,state));
+    expect((await owner.query('select count(*)::int n from alerts where key=$1 and resolved_at is null',[`runner:resources:${job.id}`])).rows).toEqual([{ n:0 }]);
+  });
+
   test('review: 준비 중 서버 등급이 바뀌면 이전 등급 CLI 실행을 거부해야 한다', async () => {
     const { mkdtemp, rm } = await import('node:fs/promises');
     const { join } = await import('node:path');

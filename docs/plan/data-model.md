@@ -400,6 +400,8 @@ CP(변경 제안)로 새 Task를 추가할 때 넣을 수 있는 선택 필드�
   - 같은 job의 열린 보유(`closed_at is null`)만 하나다. 닫힌 보유는 이력으로 여러 개 남을 수 있다.
   - attempt?, epoch, host_id?, boot_id?, fence?, pgid/cgroup, task?, conflict_group?, agent, slots, heavy, **slot_state**, **lock_state**, lock_from_job?, handed_to_job?, release_proof(`no_process/group_empty/boot_changed`), closed_at.
   - 왜: PC 변경으로 닫힌 보유는 불변으로 남기고, 같은 대기 job은 새 보유로 실행해야 한다.
+  - 대기 job의 담당·검증 Agent가 바뀌어도 옛 행의 `agent`는 바꾸지 않는다. 다음 claim에서 옛 행을 닫고 새 행을 만든다. `runner_jobs.payload.agent`는 새 실행 Agent와 맞춘다.
+  - 왜: 과거 보유를 덮어쓰지 않으면서 새 모델 등급과 실제 Agent가 맞아야 한다.
   - 별도 `state` 컬럼 없음 — 정의는 §2.5-1.
   - 닫히기 전 삭제 금지(초기화는 §5).
   - 행을 새로 만들 때(INSERT)도 §2.5-1의 상태 규칙을 검사한다.
@@ -773,6 +775,7 @@ claim은 Runner가 「이 일을 제가 하겠습니다」 하고 job을 예약�
 - `runner_jobs.resource_returns`는 같은 job의 연속 반환 횟수다. 4에서 더 늘리지 않는다. `resource_retry_at`은 다음 claim 가능 시각이다.
 - 1·2·3번째 반환은 1·2·4초를 기다린다. 4번째부터는 자원 부족 경보와 함께 5분 보류한다. 실제 시작하면 횟수와 대기 시각을 지우고 경보를 해소한다.
 - 왜: 재시작 후에도 대기와 경보를 유지하고, 다른 실행 가능한 job이 진행할 시간을 줘야 한다.
+- job이 `done`·`failed`·`cancelled`로 끝나면 자원 부족 경보를 해소한다. 왜: 끝난 job의 대기 경보를 계속 남기면 안 된다.
 - 하위 Agent 설치까지 성공한 뒤 `jobs/:id/start`가 시도를 만들고 Task를 전이한다.
   - 왜: 설치에 실패했을 때 「시도했다가 실패한 것」으로 기록되면 재시도 횟수와 이력이 부풀려진다.
 

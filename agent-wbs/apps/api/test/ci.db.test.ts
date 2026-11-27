@@ -906,7 +906,9 @@ test('원인 후보의 중간 커밋은 검증된 병합 부모 사슬로 연결
   const response=await queue(a,'merged',{ ...body,mergeCommits }); expect(response.statusCode,response.body).toBe(204);
   expect((await queue(a,'merged',{ ...body,mergeCommits })).statusCode).toBe(204);
   expect((await queue(a,'merged',{ ...body,mergeCommits:mergeCommits.map(({ commit,parents })=>({ parents,commit })) })).statusCode).toBe(204);
+  expect((await owner.query("select count(*)::int n from alerts where key='ci:mergeCommitsInvalid|#1'")).rows).toEqual([{ n:0 }]);
   expect((await queue(a,'merged',{ ...body,mergeCommits:[{ commit:sha,parents:[otherSha] }] })).statusCode).toBe(204);
+  expect((await owner.query("select count(*)::int n from alerts where key='ci:mergeCommitsInvalid|#1'")).rows).toEqual([{ n:1 }]);
   const id=(await post('ci/runs',{ stage:'night',ref:'main',trigger:'night',headSha:merged,pipelineSha:pipeline })).json().id as string;
   const candidates=[merged,sha,middle,earlier,otherSha,unknown].map(commit=>({ commit }));
   expect((await patch(id,{ fence:null,status:'run',causeCandidates:candidates })).statusCode).toBe(204);

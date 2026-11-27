@@ -86,9 +86,9 @@ export class RunnerRepository {
     return id;
   }
   async openJob(taskKey: string) { return (await this.client.query<Job>("select * from runner_jobs where kind='attempt' and payload->>'taskKey'=$1 and state in ('queued','leased','started','reconcile') limit 1", [taskKey])).rows[0]; }
-  async lease(job: Job, owner: string, generation: number | null) {
+  async lease(job: Job, owner: string, generation: number | null, agent: Agent) {
     const leased = required((await this.client.query<Job>(`update runner_jobs set state='leased',lease_owner=$2,lease_until=clock_timestamp()+interval '60 seconds',fence=fence+1,attempts=attempts+1,generation=$3::int,
-      payload=case when kind='attempt' then payload||jsonb_build_object('branch',$4::text) else payload end where id=$1 returning *`, [job.id, owner, generation, job.kind === 'attempt' ? taskBranch(String(job.payload.taskKey), generation ?? 1) : null])).rows[0]);
+      payload=case when kind='attempt' then payload||jsonb_build_object('branch',$4::text,'agent',$5::text) else payload end where id=$1 returning *`, [job.id, owner, generation, job.kind === 'attempt' ? taskBranch(String(job.payload.taskKey), generation ?? 1) : null,agent])).rows[0]);
     this.designJobChanged(leased);
     return leased;
   }
@@ -96,6 +96,7 @@ export class RunnerRepository {
   async state(job: string, state: string, error?: { code: string; message: string }) {
     const row = (await this.client.query<Pick<Job, 'id' | 'project_id' | 'kind'>>('update runner_jobs set state=$2 where id=$1 returning id,project_id,kind', [job, state])).rows[0];
     await syncPlanningJob(this.client, job, state, error);
+    if (['done','failed','cancelled'].includes(state)) await this.client.query('update alerts set resolved_at=clock_timestamp() where key=$1 and resolved_at is null',[`runner:resources:${job}`]);
     if (row) this.designJobChanged(row);
   }
   /**
