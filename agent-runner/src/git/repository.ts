@@ -748,6 +748,12 @@ export class GitRepository {
     return { baseSha, pipelineSha: sha(entry.oid), source: (await this.blob(entry)).toString('utf8') };
   }
 
+  /** ③ 원인 추적: from 뒤로 main에 들어온 first-parent 커밋(오래된 것부터). from이 조상이 아니면 빈 목록이다. */
+  async mainCommitsSince(from: string, to: string): Promise<string[]> {
+    if ((await this.taskBase(from, to).catch(() => null)) !== sha(from)) return [];
+    return (await this.git(['rev-list', '--first-parent', '--reverse', `${sha(from)}..${sha(to)}`])).toString().split('\n').filter(Boolean).map(sha);
+  }
+
   async taskBase(base: string, head: string): Promise<string> {
     return sha((await this.git(['merge-base', sha(base), sha(head)])).toString().trim());
   }
