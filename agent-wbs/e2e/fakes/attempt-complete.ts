@@ -8,6 +8,7 @@ import { type IntegrationResult } from '../../../agent-runner/src/ci/integration
 import { CiJobs, type CiJobResult } from '../../../agent-runner/src/ci/jobs.ts';
 import { parsePipeline } from '../../../agent-runner/src/ci/pipeline.ts';
 import { runTaskCheck, type TaskCheckResult } from '../../../agent-runner/src/ci/task.ts';
+import { openPullRequest } from '../../../agent-runner/src/jobs/task-check.ts';
 import { State } from '../../../agent-runner/src/state/state.ts';
 import { installFakeCli, runCli } from '../../../agent-runner/test/fakes/cli.ts';
 import { commit, file, fixture, git } from '../../../agent-runner/test/ci/int-fixture.ts';
@@ -17,7 +18,10 @@ import type { Running } from './runner.ts';
 const write = () => ({ epoch:1,idempotencyKey:randomUUID() });
 type QueueBody = ApiRequest<'reportMergeQueue'>['body'];
 
-/** shortcut: M5-05가 아직 없다, 병합되면 claim·CLI·결과 연결 준비 코드를 그 실행기로 교체한다. */
+/**
+ * CI 실행기(M7-06) 시나리오의 준비 코드. 시도 흐름(M5-05) 자체의 실제 연결은 attempt-flow.scenario.test.ts의 「M5·M7 통합」 시나리오가 확인한다.
+ * 여기서도 PR은 실제 M4 GitHub 계층으로 연다(조정자 결정 1). PR 번호를 주입하지 않는다.
+ */
 export async function completeScenario() {
   const f = await fixture('agent/TASK-0001-h1');
   // 입력 관측도 실제 git 트리를 읽게 한다. 이 파일은 시험용 저장소에만 있다.
@@ -57,9 +61,11 @@ export async function completeScenario() {
     installFakeCli(join(f.root,'checks'),'codex',{ lines:[failed ? '검사 실패' : '검사 통과'],exitCode:failed ? 1 : 0 });
     return runCli(checks.path,argv.slice(1),{ cwd });
   };
-  const reportCheck = async (job: { id:string;fence:number }, result: TaskCheckResult | Extract<IntegrationResult,{ kind:'merged' }>['integration'], attemptId?: string) => {
+  // PR 번호는 주입하지 않는다. ① 보고는 Runner가 실제로 연 PR(번호·head 브랜치)을, 통합 결과는 통합 job의 PR을 보낸다(조정자 결정 1).
+  const reportCheck = async (job: { id:string;fence:number }, result: TaskCheckResult | Extract<IntegrationResult,{ kind:'merged' }>['integration'],
+    attemptId?: string, pull?: { number:number;head:string }) => {
     const run = await h.runner.api('startCiRun',{ ...write(),body:{ jobId:job.id,fence:job.fence,stage:result.stage,taskKey:'TASK-0001',
-      ...(attemptId && { attemptId }),ref:f.request.branch,pr:1,trigger:'attempt-complete',baseSha:result.baseSha,headSha:result.headSha,pipelineSha:result.pipelineSha,
+      ...(attemptId && { attemptId }),ref:f.request.branch,...(pull && { pr:pull.number,prHead:pull.head }),trigger:'attempt-complete',baseSha:result.baseSha,headSha:result.headSha,pipelineSha:result.pipelineSha,
       ...('treeSha' in result && { treeSha:result.treeSha }) } });
     await h.runner.api('updateCiRun',{ ...write(),params:{ id:run.body.id },body:{ fence:job.fence,status:'run' } });
     await h.runner.api('updateCiRun',{ ...write(),params:{ id:run.body.id },body:{ fence:job.fence,status:result.status,steps:result.steps.map(({ name,status,durationMs }) => ({ name,status,durationMs })),
@@ -83,11 +89,12 @@ export async function completeScenario() {
       assert(output.stdout.includes('"is_error":false'));
       await file(join(path,'src/result.ts'),`export const attempt = ${JSON.stringify(a.attemptId)};\n`);
       const head = commit(path);
+      // 조정자 결정 1: dev → push → PR 열기 → ①. 실제 M4 GitHub 계층(fake GitHub)으로 PR을 연다.
+      const pull = await openPullRequest({ github:f.deps.github,repo:f.repo },a.job,await f.repo.importWorktree(id,branch));
       const basis = await f.repo.mainPipeline(); await observe(basis);
       const result = await runTaskCheck({ ...f.deps,execute,basis,worktreeId:id,branch });
       expect(result.status).toBe('pass'); expect(result.headSha).toBe(head);
-      await reportCheck(a.job,result,a.attemptId);
-      await f.repo.pushCommit(head,a.job.payload.branch);
+      await reportCheck(a.job,result,a.attemptId,pull);
       // FakeRunner에 ① 대체 기록을 만들지 않게 한다. 위 실제 실행 기록만 서버가 사용한다.
       await h.runner.result(a,'PASS',true);
       return { a,head,result };
