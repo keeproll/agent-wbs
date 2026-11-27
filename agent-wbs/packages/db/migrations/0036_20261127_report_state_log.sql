@@ -28,6 +28,16 @@ CREATE TABLE public.commit_log (
   committed_at timestamp with time zone NOT NULL
 );
 --> statement-breakpoint
+-- 실제 커밋 시각(재리뷰 3 문제 1). 커밋 시계 값(commit_log)은 제약 트리거를 일찍 실행하면(SET CONSTRAINTS ALL IMMEDIATE)
+-- 실제 커밋보다 먼저 매겨질 수 있다. 그래서 트랜잭션이 **실제로 커밋된 시각**(track_commit_timestamp)을 정리 단계(0037 awbs_settle_commits)가
+-- 커밋 뒤에 옮겨 적는다. 보고서는 「커밋 시계 < T 이고 실제 커밋 시각 < T」인 변경만 T 전으로 본다.
+-- 옮겨 적는 이유: 실제 커밋 시각은 오래되면 vacuum freeze 때 지워진다.
+CREATE TABLE public.commit_real (
+  xid xid8 PRIMARY KEY,
+  stamp timestamp with time zone NOT NULL,
+  committed_at timestamp with time zone NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE public.state_log (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   seq bigserial NOT NULL,
@@ -53,11 +63,13 @@ CREATE INDEX state_log_asof ON public.state_log (project_id, tbl, row_id, seq DE
 CREATE INDEX state_log_xid ON public.state_log (xid);
 CREATE INDEX global_log_asof ON public.global_log (tbl, row_id, seq DESC);
 CREATE INDEX global_log_xid ON public.global_log (xid);
+CREATE INDEX commit_log_at ON public.commit_log (committed_at);
+CREATE INDEX commit_real_stamp ON public.commit_real (stamp);
 --> statement-breakpoint
 DO $$
 DECLARE t pg_catalog.text;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['log_clock','commit_log','state_log','global_log'] LOOP
+  FOREACH t IN ARRAY ARRAY['log_clock','commit_log','commit_real','state_log','global_log'] LOOP
     EXECUTE format('ALTER TABLE public.%I OWNER TO awbs_data_owner', t);
     EXECUTE format('REVOKE ALL ON public.%I FROM awbs_app', t);
     EXECUTE format('GRANT SELECT ON public.%I TO awbs_app', t);
@@ -65,7 +77,7 @@ BEGIN
     EXECUTE format('CREATE TRIGGER guard_truncate BEFORE TRUNCATE ON public.%I FOR EACH STATEMENT EXECUTE FUNCTION public.awbs_immutable()', t);
   END LOOP;
   -- 시계 행만 함수가 고친다. 나머지 셋은 추가 전용이다.
-  FOREACH t IN ARRAY ARRAY['commit_log','state_log','global_log'] LOOP
+  FOREACH t IN ARRAY ARRAY['commit_log','commit_real','state_log','global_log'] LOOP
     EXECUTE format('CREATE TRIGGER append_only BEFORE UPDATE ON public.%I FOR EACH ROW EXECUTE FUNCTION public.awbs_immutable()', t);
   END LOOP;
 END $$;

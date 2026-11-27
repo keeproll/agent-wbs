@@ -83,6 +83,8 @@ beforeAll(async () => {
   try {
     await seedDemo(past, db.href);
     await fixture(past);
+    // 실제 커밋 시각(track_commit_timestamp)은 시험 시계로 옮길 수 없다. 준비 자료는 「그때 커밋했다」로 커밋 시계 값을 실제 커밋 시각으로 옮겨 적는다(관리자만 할 수 있는 시험 준비).
+    await past.query('insert into commit_real(xid,stamp,committed_at) select xid,committed_at,committed_at from commit_log on conflict do nothing');
   } finally {
     await past.end();
     await owner.query(`alter database "${name}" reset awbs.test_clock_offset`);
@@ -563,6 +565,7 @@ describe('기간 말 재구성(owner 2026-11-27 아이템 13): 그때 바로 찍
     try {
       await w.query('begin');
       await w.query('insert into commit_log(xid,committed_at) values(pg_current_xact_id(),$1)', [kst('2026-11-10', '00:00')]);
+      await w.query('insert into commit_real(xid,stamp,committed_at) values(pg_current_xact_id(),$1,$1)', [kst('2026-11-10', '00:00')]);
       await w.query("insert into global_log(tbl,row_id,op,data) values('log_start','00000000-0000-0000-0000-000000000000','seed',null)");
       await w.query('commit');
     } finally { w.release(); }
@@ -580,6 +583,7 @@ describe('기간 말 재구성(owner 2026-11-27 아이템 13): 그때 바로 찍
     try {
       await w.query('begin');
       await w.query('insert into commit_log(xid,committed_at) values(pg_current_xact_id(),$1)', [kst('2026-11-10', '00:00')]);
+      await w.query('insert into commit_real(xid,stamp,committed_at) values(pg_current_xact_id(),$1,$1)', [kst('2026-11-10', '00:00')]);
       await w.query("insert into state_log(project_id,tbl,row_id,op,data) values($1,'projects',$1,'seed',null)", [id]);
       await w.query('commit');
     } finally { w.release(); }

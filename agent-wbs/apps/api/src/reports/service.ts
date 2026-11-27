@@ -117,8 +117,8 @@ async function consistentWrite<T>(client: PoolClient, epoch: number, fn: (anchor
  * - 공통 관문이 이 요청만 기준점(anchor)을 먼저 잡고, 그 뒤 **반복 읽기** 트랜잭션을 연다(platform/security.ts).
  *   그래서 스냅샷과 저장이 같은 연결·같은 시점이다. 다른 연결을 더 빌리지 않으므로 연결 수 1에서도 된다.
  * - 생성 시각 = 기준점. 기간이 오늘을 포함하면 T도 기준점이다.
- * - 번호: 반복 읽기에서는 번호 칸(counters)을 고치면 동시 생성과 충돌(40001)한다. 그래서 저장된 기간 지정 보고서의
- *   가장 큰 번호 다음을 쓰고, 다른 요청이 먼저 같은 번호를 저장했으면(고유 키) 다음 번호로 다시 넣는다.
+ * - 번호: 저장된 기간 지정 보고서의 가장 큰 번호 다음을 쓴다. 공통 관문이 생성을 차례로 세우므로(읽기 시점 전 잠금) 겹치지 않는다.
+ *   그래도 겹치면(다른 경로의 저장) 다시 시도하지 않고 409 VERSION_CONFLICT로 알린다.
  */
 export async function createCustomReport(client: PoolClient, projectId: string, input: { from: string; to: string; view: 'int' | 'ext' }, anchor: string) {
   const project = (await client.query<{ id: string }>('select id from projects where id=$1', [projectId])).rows[0];
@@ -131,23 +131,21 @@ export async function createCustomReport(client: PoolClient, projectId: string, 
   if (shape) throw new Error(`보고서 스냅샷이 계약과 다릅니다: ${shape}`);
   const top = (await client.query<{ n: number }>(
     "select coalesce(max(substring(report_key from 7)::int),0)::int n from reports where project_id=$1 and kind='custom' and report_key ~ '^RPT-C-[0-9]+$'", [projectId])).rows[0]?.n ?? 0;
-  for (let k = 1; k <= 20; k++) {
-    await client.query('savepoint report_key');
-    try {
-      const row = (await client.query<ReportSummary>(
-        `insert into reports(project_id,report_key,kind,"from","to",view,snapshot,generated_at,due_at,reason) values($1,$2,'custom',$3,$4,$5,$6::jsonb,$7,null,$8)
-         returning ${SUMMARY}`,
-        [projectId, reportKey('custom', input.from, top + k), input.from, input.to, input.view, JSON.stringify(snapshot), now, REASON.custom])).rows[0];
-      await client.query('release savepoint report_key');
-      if (!row) break;
-      deferChange(client, projectId, 'report', { id: row.id });
-      return summaryOf(row);
-    } catch (error) {
-      await client.query('rollback to savepoint report_key');
-      if ((error as { code?: string }).code !== '23505') throw error;
+  try {
+    const row = (await client.query<ReportSummary>(
+      `insert into reports(project_id,report_key,kind,"from","to",view,snapshot,generated_at,due_at,reason) values($1,$2,'custom',$3,$4,$5,$6::jsonb,$7,null,$8)
+       returning ${SUMMARY}`,
+      [projectId, reportKey('custom', input.from, top + 1), input.from, input.to, input.view, JSON.stringify(snapshot), now, REASON.custom])).rows[0];
+    if (!row) throw new Error('보고서를 저장하지 못했습니다.');
+    deferChange(client, projectId, 'report', { id: row.id });
+    return summaryOf(row);
+  } catch (error) {
+    // 생성은 공통 관문의 차례 잠금으로 하나씩이라 번호가 겹치지 않는다. 그래도 다른 경로가 먼저 그 번호를 썼으면 다시 시도하지 않고 알린다.
+    if ((error as { code?: string }).code === '23505') {
+      throw new ApiError('VERSION_CONFLICT', { reportKey: reportKey('custom', input.from, top + 1) }, [], '보고서 번호가 다른 생성과 겹쳤습니다.', '보고서 목록을 새로 고친 뒤 다시 만드세요.');
     }
+    throw error;
   }
-  throw new Error('기간 지정 보고서 번호를 정하지 못했습니다.');
 }
 
 const PAGE = 50;

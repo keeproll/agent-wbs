@@ -24,6 +24,8 @@ async function tick() {
   await step('초기화 파일 삭제', () => deleteFiles(pool, current));
   const startup = !started;
   started = true;
+  // 커밋된 변경의 실제 커밋 시각을 옮겨 적는다(보고서 상태 이력, M6-01). 오래 두면 DB가 실제 커밋 시각을 지운다.
+  await step('보고서 이력 정리', () => pool.query('select public.awbs_settle_commits()'));
   await step('보고서 정기 생성', () => generateDueReports(pool, current, { startup }));
 }
 const run = () => { pending ??= tick().finally(() => { pending = undefined; }); };

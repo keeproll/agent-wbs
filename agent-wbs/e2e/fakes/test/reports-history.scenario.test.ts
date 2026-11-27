@@ -124,10 +124,12 @@ describe('재리뷰 2 문제 3: 알림·실행 PC 세션도 그 시점 값', () 
 });
 
 describe('재리뷰 2 문제 4: 마이크로초', () => {
-  test('경계가 변경 커밋 1µs 뒤면 그 변경이 들어가고, 경계가 그 커밋 값과 같으면 빠진다', async () => {
+  test('경계가 변경의 커밋 값(커밋 시계·실제 커밋 시각 중 늦은 쪽) 1µs 뒤면 들어가고, 그 값과 같으면 빠진다', async () => {
     await owner.query("update tasks set title='before-cutoff' where task_key='TASK-0008'");
     await owner.query("update tasks set title='microsecond-cutoff' where task_key='TASK-0008'");
-    const stamp = (await owner.query<{ at: string }>(`select to_char(c.committed_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') at from state_log l join commit_log c on c.xid=l.xid
+    // 그 변경이 「T 전」이 되는 가장 이른 값 = 커밋 시계 값과 실제 커밋 시각 중 늦은 쪽(정리 뒤 commit_real)
+    await owner.query('select awbs_settle_commits()');
+    const stamp = (await owner.query<{ at: string }>(`select to_char(greatest(c.stamp,c.committed_at) at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') at from state_log l join commit_real c on c.xid=l.xid
       where l.tbl='tasks' and l.data->>'title'='microsecond-cutoff'`)).rows[0]?.at ?? '';
     expect(titleOf((await capture(micro(stamp, 1))).log, 'TASK-0008')).toBe('microsecond-cutoff');
     expect(titleOf((await capture(stamp)).log, 'TASK-0008')).toBe('before-cutoff');
@@ -175,7 +177,7 @@ describe('재리뷰 2 원칙 3: 기록 대상 목록 한 곳 대조', () => {
     const raw = c as unknown as { query: Fn };
     const query = raw.query.bind(c);
     raw.query = (...args: unknown[]) => {
-      if (typeof args[0] === 'string') for (const m of args[0].matchAll(/\b(?:from|join)\s+(?:public\.)?([a-z_][a-z0-9_]*)/gi)) seen.add((m[1] ?? '').toLowerCase());
+      if (typeof args[0] === 'string') for (const t of tablesIn(args[0])) seen.add(t);
       return query(...args);
     };
     try {
@@ -191,12 +193,100 @@ describe('재리뷰 2 원칙 3: 기록 대상 목록 한 곳 대조', () => {
     const now = (await capture()).now;
     const read = await tablesRead({ kind: 'custom', from: addDays(seoulDay(now), -6), to: seoulDay(now), at: now });
     expect(read.filter((t) => !(LOG_TABLES as readonly string[]).includes(t))).toEqual([]);
-    expect(read).toEqual(expect.arrayContaining(['state_log', 'global_log', 'commit_log']));
+    expect(read).toEqual(expect.arrayContaining(['state_log', 'global_log', 'commit_real']));
   });
   test('기록이 시작되기 전 시점에서만 설정 확인용으로 지금 설정 표를 더 읽는다(FALLBACK_CURRENT)', async () => {
     const read = await tablesRead({ kind: 'weekly', from: '2026-10-26', to: '2026-11-01', at: '2026-11-02T07:00:00.000000Z' });
     const allowed = new Set<string>([...LOG_TABLES, ...FALLBACK_CURRENT]);
     expect(read.filter((t) => !allowed.has(t))).toEqual([]);
+  });
+});
+
+describe('재리뷰 3 문제 4: 대조 시험의 표 이름 인식', () => {
+  test('따옴표로 감싼 표 이름·스키마도 읽은 표로 센다', () => {
+    expect(tablesIn('select count(*) from "review_new_report_source"')).toEqual(['review_new_report_source']);
+    expect(tablesIn('select 1 from review_new_report_source x join "public"."Tasks" t on true')).toEqual(['review_new_report_source', 'tasks']);
+    expect(tablesIn('select 1 from public."state_log" l cross join lateral jsonb_populate_record(null::public.tasks,l.data) r')).toEqual(['state_log', 'lateral']);
+    // WITH로 만든 이름은 빼고, 그 안에서 읽은 표는 센다
+    expect(tablesIn('with t as materialized (select * from "review_new_report_source" x), e as (select 1 from tasks) select 1 from t join e on true')).toEqual(['review_new_report_source', 'tasks']);
+  });
+});
+
+describe('재리뷰 3 문제 1: 제약 트리거를 먼저 실행해도 실제 커밋 전 변경은 T에 들어가지 않는다', () => {
+  test('앱 역할이 SET CONSTRAINTS ALL IMMEDIATE로 시계 값을 먼저 받고 T 뒤에 커밋해도 T 보고서에 없다', async () => {
+    const early = await pool.connect();
+    let t: string;
+    try {
+      await early.query('begin');
+      await early.query('set constraints all immediate');
+      await early.query("update tasks set title='early-stamp-late-commit' where task_key='TASK-0011'");
+      // 시계 값이 이미 매겨졌다(커밋 전).
+      expect((await owner.query("select count(*)::int n from state_log l join commit_log c on c.xid=l.xid where l.data->>'title'='early-stamp-late-commit'")).rows[0]?.n).toBe(0);
+      await new Promise((r) => setTimeout(r, 20));
+      t = (await owner.query<{ at: string }>(`select to_char(clock_timestamp() at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') at`)).rows[0]?.at ?? '';
+      await new Promise((r) => setTimeout(r, 20));
+      await early.query('commit');
+    } finally { early.release(); }
+    const stamped = (await owner.query<{ at: string }>(`select to_char(c.committed_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') at from state_log l join commit_log c on c.xid=l.xid
+      where l.data->>'title'='early-stamp-late-commit'`)).rows[0]?.at ?? '';
+    expect(stamped < t).toBe(true);
+    expect(titleOf((await capture(t)).log, 'TASK-0011')).not.toBe('early-stamp-late-commit');
+    expect(titleOf((await capture()).log, 'TASK-0011')).toBe('early-stamp-late-commit');
+  });
+});
+
+describe('재리뷰 3 문제 2: 동시 기간 지정 생성', () => {
+  /** 세대 행을 잠가 두면 보고서 요청이 세대 잠금에서 기다린다(그 전에 읽기 시점이 정해진다). 겹친 요청을 재현한다. */
+  async function overlapped<T>(run: () => Promise<T>, meanwhile?: () => Promise<void>) {
+    const hold = await owner.connect();
+    try {
+      await hold.query('begin');
+      await hold.query('select epoch from system_state where id=1 for update');
+      const pending = run();
+      await new Promise((r) => setTimeout(r, 300));
+      if (meanwhile) await meanwhile();
+      await hold.query('commit');
+      return await pending;
+    } finally { hold.release(); }
+  }
+  let lead: Awaited<ReturnType<typeof login>>;
+  beforeAll(async () => {
+    const app = buildApp(pool, false, { origin: 'http://127.0.0.1:3100', lan: false });
+    const base = await app.listen({ host: '127.0.0.1', port: 0 });
+    closers.push(() => app.close());
+    lead = await login(base, pool);
+  });
+  test('같은 멱등 키의 요청 두 개가 겹쳐도 보고서는 하나이고, 둘째는 첫 응답을 재생한다', async () => {
+    const before = (await owner.query<{ n: number }>("select count(*)::int n from reports where kind='custom'")).rows[0]?.n ?? 0;
+    const today = seoulDay(new Date());
+    const key = randomUUID();
+    const [a, b] = await overlapped(() => Promise.all([
+      lead('POST', `/api/projects/${projectId}/reports`, { from: today, to: today, view: 'int' }, key),
+      lead('POST', `/api/projects/${projectId}/reports`, { from: today, to: today, view: 'int' }, key),
+    ]));
+    expect([a.status, b.status]).toEqual([201, 201]);
+    expect((a.body as { id: string }).id).toBe((b.body as { id: string }).id);
+    expect([a.replayed, b.replayed].sort()).toEqual([false, true]);
+    expect((await owner.query<{ n: number }>("select count(*)::int n from reports where kind='custom'")).rows[0]?.n).toBe(before + 1);
+  });
+  test('겹친 서로 다른 요청 다섯 개는 모두 만들어지고 번호가 이어진다', async () => {
+    const today = seoulDay(new Date());
+    const results = await overlapped(() => Promise.all([1, 2, 3, 4, 5].map(() => lead('POST', `/api/projects/${projectId}/reports`, { from: today, to: today, view: 'ext' }))));
+    expect(results.map((r) => r.status)).toEqual([201, 201, 201, 201, 201]);
+    const keys = results.map((r) => Number((r.body as { reportKey: string }).reportKey.slice(6))).sort((x, y) => x - y);
+    expect(keys).toEqual(keys.map((_, i) => (keys[0] ?? 0) + i));
+  });
+  test('번호가 다른 경로로 먼저 쓰이면 다시 시도하지 않고 409로 알린다(보고서는 만들지 않는다)', async () => {
+    const before = (await owner.query<{ n: number }>("select count(*)::int n from reports where kind='custom'")).rows[0]?.n ?? 0;
+    const top = (await owner.query<{ n: number }>("select coalesce(max(substring(report_key from 7)::int),0)::int n from reports where kind='custom'")).rows[0]?.n ?? 0;
+    const today = seoulDay(new Date());
+    const r = await overlapped(() => lead('POST', `/api/projects/${projectId}/reports`, { from: today, to: today, view: 'int' }), async () => {
+      await owner.query(`insert into reports(project_id,report_key,kind,"from","to",view,snapshot,generated_at,reason)
+        select project_id,$1,kind,"from","to",view,snapshot,generated_at,reason from reports where kind='custom' limit 1`, [`RPT-C-${String(top + 1).padStart(3, '0')}`]);
+    });
+    expect(r.status).toBe(409);
+    expect((r.body as { error: { code: string } }).error.code).toBe('VERSION_CONFLICT');
+    expect((await owner.query<{ n: number }>("select count(*)::int n from reports where kind='custom'")).rows[0]?.n).toBe(before + 1);
   });
 });
 
@@ -252,9 +342,24 @@ async function login(base: string, p: Pool) {
   const cookie = res.headers.get('set-cookie')?.split(';')[0];
   assert(cookie);
   const { csrfToken } = await (await fetch(`${base}/api/session`, { headers: { cookie } })).json() as { csrfToken: string };
-  return async (method: string, path: string, body?: object) => {
-    const response = await fetch(base + path, { method, headers: { cookie, origin, 'x-csrf-token': csrfToken, 'x-project-epoch': '1', 'idempotency-key': randomUUID(), ...(body && { 'content-type': 'application/json' }) }, ...(body && { body: JSON.stringify(body) }) });
+  return async (method: string, path: string, body?: object, key = randomUUID()) => {
+    const response = await fetch(base + path, { method, headers: { cookie, origin, 'x-csrf-token': csrfToken, 'x-project-epoch': '1', 'idempotency-key': key, ...(body && { 'content-type': 'application/json' }) }, ...(body && { body: JSON.stringify(body) }) });
     const text = await response.text();
-    return { status: response.status, body: (text ? JSON.parse(text) : undefined) as unknown };
+    return { status: response.status, body: (text ? JSON.parse(text) : undefined) as unknown, replayed: response.headers.get('idempotency-replayed') === 'true' };
   };
+}
+
+/**
+ * SQL 문자열에서 from·join 뒤에 오는 표 이름(소문자). 스키마·큰따옴표 표기를 모두 인식한다(재리뷰 3 문제 4).
+ * 예: `from public."state_log"` → state_log, `join "Tasks"` → tasks.
+ */
+function tablesIn(sql: string): string[] {
+  // 같은 질의 안에서 WITH로 만든 이름(CTE)은 표가 아니다.
+  const ctes = new Set([...sql.matchAll(/(?:\bwith|,)\s+(?:"([^"]+)"|([a-z_][a-z0-9_]*))\s+as\s+(?:not\s+)?(?:materialized\s+)?\(/gi)].map((m) => (m[1] ?? m[2] ?? '').toLowerCase()));
+  const out: string[] = [];
+  for (const m of sql.matchAll(/\b(?:from|join)\s+(?:(?:"[^"]+"|[a-z_][a-z0-9_]*)\s*\.\s*)?(?:"([^"]+)"|([a-z_][a-z0-9_]*))/gi)) {
+    const name = (m[1] ?? m[2] ?? '').toLowerCase();
+    if (!ctes.has(name)) out.push(name);
+  }
+  return out;
 }

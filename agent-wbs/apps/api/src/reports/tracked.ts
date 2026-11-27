@@ -23,7 +23,7 @@ export const MIXED_TABLES = ['alerts'] as const;
 export const TRACKED = [...PROJECT_TABLES, ...GLOBAL_TABLES, ...MIXED_TABLES] as const;
 export type TrackedTable = (typeof TRACKED)[number];
 /** 이력 자체의 표(보고서가 읽어도 되는 표) */
-export const LOG_TABLES = ['state_log', 'global_log', 'commit_log'] as const;
+export const LOG_TABLES = ['state_log', 'global_log', 'commit_real'] as const;
 /**
  * 기록이 시작되기 전 시점일 때만 「지금 값이 그때도 같았나」를 확인하려고 지금 표를 읽는 설정 표(state.ts settingsAt).
  * 확인하지 못하면 보고서에 「설정은 현재 값」으로 표시한다.

@@ -6,6 +6,8 @@ services:
     container_name: awbs-postgres
     # 16-alpine
     image: postgres:16-alpine@sha256:f2f98726820d0342055351c6e9d36e705f5bfffb3dd53ff556325114b08afb6d
+    # 보고서 상태 이력(M6-01)이 트랜잭션의 실제 커밋 시각을 쓴다(pg_xact_commit_timestamp). 서버 시작 때만 바꿀 수 있는 설정이다.
+    command: ['postgres', '-c', 'track_commit_timestamp=on']
     environment:
       POSTGRES_USER: awbs_owner
       # 기본값을 두지 않는다. 비어 있으면 postgres가 초기화를 거부한다(`pnpm env:init`).

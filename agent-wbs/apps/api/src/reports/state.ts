@@ -11,7 +11,9 @@ import { FALLBACK_CURRENT, GLOBAL_TABLES, MIXED_TABLES, PROJECT_TABLES, type Tra
  *
  * 무엇을 어떻게 되살리나
  * - 보고서가 읽는 모든 표(tracked.ts TRACKED)는 행이 바뀔 때마다 이력(state_log·global_log, 마이그레이션 0036)에 남는다.
- * - 「T 전」은 **커밋 기준**이다. 이력 행을 쓴 트랜잭션의 커밋 시계 값(commit_log.committed_at)이 T보다 작은 것만 쓴다.
+ * - 「T 전」은 **커밋 기준**이다. 이력 행을 쓴 트랜잭션의 커밋 시계 값과 실제 커밋 시각(commit_real, track_commit_timestamp)이
+ *   모두 T보다 작은 것만 쓴다. 커밋 시계 값만 보면, 제약 트리거를 일찍 실행해(SET CONSTRAINTS ALL IMMEDIATE) 값을 먼저 받고
+ *   늦게 커밋한 변경이 T 전으로 잘못 들어간다(재리뷰 3 문제 1).
  *   - 커밋 시계는 커밋 순서대로 단조 증가한다(PC 시계가 뒤로 가도 줄지 않는다).
  *   - 같은 행의 여러 기록 중에서는 순번(seq)이 가장 큰 것을 고른다. 같은 행의 변경은 행 잠금으로 차례가 정해지므로 순번 순서 = 커밋 순서다.
  * - 그 행을 jsonb_populate_record로 원래 표 모양으로 되돌린다(`rel`). 보고서 SQL은 표 이름 대신 이 관계식을 읽는다.
@@ -62,7 +64,7 @@ export function asOf(projectId: string, before: string, source: StateSource): As
   if (!MICRO.test(before)) throw new Error(`기준 시각은 마이크로초 6자리 UTC여야 합니다: ${before}`);
   const t = `'${before}'::timestamptz`;
   const latest = (log: 'state_log' | 'global_log', table: string) => `(select distinct on (l.row_id) l.op,l.data from public.${log} l
-      join public.commit_log c on c.xid=l.xid where ${log === 'state_log' ? `l.project_id='${projectId}' and ` : ''}l.tbl='${table}' and c.committed_at<${t}
+      join public.commit_real c on c.xid=l.xid where ${log === 'state_log' ? `l.project_id='${projectId}' and ` : ''}l.tbl='${table}' and c.stamp<${t} and c.committed_at<${t}
       order by l.row_id,l.seq desc)`;
   const populate = (inner: string, table: string) => `(select r.* from ${inner} l cross join lateral jsonb_populate_record(null::public.${table},l.data) r where l.op<>'delete')`;
   return {
@@ -82,8 +84,8 @@ export function asOf(projectId: string, before: string, source: StateSource): As
  */
 export async function stateFrom(client: PoolClient, projectId: string): Promise<string | null> {
   const row = (await client.query<{ at: string | null }>(
-    `select to_char(min(c.committed_at) at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') at from (
-       select xid from state_log where project_id=$1 and op='seed' union all select xid from global_log where op='seed') s join commit_log c on c.xid=s.xid`, [projectId])).rows[0];
+    `select to_char(min(c.stamp) at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') at from (
+       select xid from state_log where project_id=$1 and op='seed' union all select xid from global_log where op='seed') s join commit_real c on c.xid=s.xid`, [projectId])).rows[0];
   return row?.at ?? null;
 }
 
@@ -102,7 +104,7 @@ export async function settingsAt(client: PoolClient, a: AsOf) {
   const current: SettingGroup[] = [];
   // 기록 시작(0036 업그레이드 표시) 이후의 T면 이력이 완전하다 → 이력만 읽는다(빈 표도 「그때 비어 있었다」).
   const start = a.source === 'log'
-    ? (await q<{ at: string | null }>(`select min(c.committed_at)::text at from global_log l join commit_log c on c.xid=l.xid where l.tbl='log_start'`))[0]?.at ?? null : null;
+    ? (await q<{ at: string | null }>(`select min(c.stamp)::text at from global_log l join commit_real c on c.xid=l.xid where l.tbl='log_start'`))[0]?.at ?? null : null;
   const covered = a.source === 'live' || start === null
     || Boolean((await q<{ ok: boolean }>(`select $1::timestamptz<=${a.t} ok`, [start]))[0]?.ok);
   const logged = () => Promise.resolve(a.source === 'log' && covered);
@@ -144,14 +146,17 @@ export async function scheduleAt(client: PoolClient, projectId: string, a: AsOf,
   const isoAt = (c: string) => `to_char(${c} at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
   const tasks = await q<{ id: string; task_key: string; wbs_node_id: string; sort_order: number; status: TaskStatus; priority: number; assignee_agent: 'Claude' | 'Codex' | null;
     conflict_group: string | null; fix_start: string | null; act_start: string | null; act_end: string | null; updated_at: string; est: string | null; lo: string | null; hi: string | null }>(
-    `select t.id,t.task_key,t.wbs_node_id,t.sort_order,t.status,t.priority,t.assignee_agent,t.conflict_group,to_char(greatest(t.fix_start,p.start_date),'YYYY-MM-DD') fix_start,
+    `with t as materialized (select * from ${a.rel('tasks')} x), p as materialized (select * from ${a.rel('projects')} x),
+       e as materialized (select distinct on (x.task) x.task,x.est,x.lo,x.hi from ${a.rel('task_estimates')} x order by x.task,x.created_at desc,x.id desc)
+     select t.id,t.task_key,t.wbs_node_id,t.sort_order,t.status,t.priority,t.assignee_agent,t.conflict_group,to_char(greatest(t.fix_start,p.start_date),'YYYY-MM-DD') fix_start,
        ${isoAt('t.act_start')} act_start,${isoAt('t.act_end')} act_end,${isoAt('t.updated_at')} updated_at,e.est::text est,e.lo::text lo,e.hi::text hi
-     from ${a.rel('tasks')} t join ${a.rel('projects')} p on p.id=t.project_id
-     left join lateral(select est,lo,hi from ${a.rel('task_estimates')} x where x.task=t.id order by created_at desc,id desc limit 1) e on true
+     from t join p on p.id=t.project_id left join e on e.task=t.id
      where t.project_id=$1 and t.deleted_at is null order by t.task_key`, [projectId]);
-  const deps = await q<{ pred: string; succ: string; type: 'FS' | 'SS' }>(
-    `select p.task_key pred,s.task_key succ,d.dep_type type from ${a.rel('task_dependencies')} d join ${a.rel('tasks')} p on p.id=d.pred join ${a.rel('tasks')} s on s.id=d.succ
-     where d.project_id=$1 and p.deleted_at is null and s.deleted_at is null order by d.id`, [projectId]);
+  // 의존성은 id만 읽고 위 Task 목록(삭제 제외)으로 키를 붙인다. 되살린 Task 관계식을 다시 조인하지 않는다(성능, 재리뷰 3 문제 3).
+  const keyOf = new Map(tasks.map((t) => [t.id, t.task_key]));
+  const deps = (await q<{ pred: string; succ: string; type: 'FS' | 'SS' }>(
+    `select d.pred,d.succ,d.dep_type type from ${a.rel('task_dependencies')} d where d.project_id=$1 order by d.id`, [projectId]))
+    .flatMap((d) => { const pred = keyOf.get(d.pred); const succ = keyOf.get(d.succ); return pred && succ ? [{ pred, succ, type: d.type }] : []; });
   const nodes = await q<{ id: string; kind: 'phase' | 'work_package'; parent_id: string | null; sort_order: number }>(`select id,kind,parent_id,sort_order from ${a.rel('wbs_nodes')} n where n.project_id=$1 order by n.id`, [projectId]);
   const sessions = await q<{ from: string; to: string | null; last: string }>(
     `select ${isoAt('started_at')} "from",${isoAt('ended_at')} "to",${isoAt('last_heartbeat_at')} last from ${a.rel('runner_sessions')} s order by started_at,id`);
@@ -191,7 +196,8 @@ export async function scheduleAt(client: PoolClient, projectId: string, a: AsOf,
     `select id,v,expected,range from ${a.rel('schedule_baselines')} b where project_id=$1 order by v`, [projectId]);
   const last = baselines.at(-1);
   const items = last ? await q<{ task_key: string; end: string }>(
-    `select t.task_key,to_char(b."end" at time zone 'Asia/Seoul','YYYY-MM-DD') "end" from ${a.rel('baseline_items')} b join ${a.rel('tasks')} t on t.id=b.task where b.baseline=$1 order by t.task_key`, [last.id]) : [];
+    `with t as materialized (select id,task_key from ${a.rel('tasks')} x), b as materialized (select * from ${a.rel('baseline_items')} x)
+     select t.task_key,to_char(b."end" at time zone 'Asia/Seoul','YYYY-MM-DD') "end" from b join t on t.id=b.task where b.baseline=$1 order by t.task_key`, [last.id]) : [];
   const baseEnd = new Map(items.map((i) => [i.task_key, i.end]));
   let result;
   try { result = computeSchedule(input); } catch (error) {

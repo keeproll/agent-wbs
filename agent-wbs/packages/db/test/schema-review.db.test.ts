@@ -756,7 +756,7 @@ test('P3: every table and SECURITY DEFINER function has the declared policy', as
     )).rows[0];
     expect(privileges?.readable, table.tablename).toBe(true);
     // M6-01 보고서 상태 이력(0036): 앱은 읽기만 한다. 기록은 SECURITY DEFINER 트리거·함수만 쓴다(재리뷰 2 원칙 6).
-    const readOnly = ['system_state', 'reset_log', 'runner_commands', 'state_log', 'global_log', 'commit_log', 'log_clock'];
+    const readOnly = ['system_state', 'reset_log', 'runner_commands', 'state_log', 'global_log', 'commit_log', 'commit_real', 'log_clock'];
     expect(privileges?.insertable, table.tablename).toBe(!readOnly.includes(table.tablename));
     expect(privileges?.truncatable, table.tablename).toBe(false);
     expect(privileges?.updatable, table.tablename).toBe(!triggers.includes('append_only') && !readOnly.includes(table.tablename));

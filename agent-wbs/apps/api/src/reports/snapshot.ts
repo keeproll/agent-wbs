@@ -69,10 +69,12 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
     q<{ target: string | null }>(`select to_char(target_date,'YYYY-MM-DD') target from ${src.rel('projects')} p where id=$1`, [projectId]),
     q<{ id: string; key: string; title: string; status: TaskStatus; work_type: string; domain: string; assignee: 'Claude' | 'Codex'; verifier: 'Claude' | 'Codex';
       verif_state: string; act_start: string | null; act_end: string | null; cg: string | null; done_cond: string | null; wbs_node_id: string; sort_order: number; est: string | null }>(
-      `select t.id,t.task_key key,t.title,t.status,t.work_type,t.primary_domain domain,t.assignee_agent assignee,t.verifier_agent verifier,t.verif_state,
+      // 각 관계식은 한 번만 되살린다(CTE MATERIALIZED). 통계가 낡아도 Task마다 다시 되살리는 계획이 나오지 않게 한다(재리뷰 3 문제 3).
+      `with t as materialized (select * from ${src.rel('tasks')} x), s as materialized (select task,overview from ${src.rel('task_specs')} x),
+         e as materialized (select distinct on (x.task) x.task,x.est from ${src.rel('task_estimates')} x order by x.task,x.created_at desc,x.id desc)
+       select t.id,t.task_key key,t.title,t.status,t.work_type,t.primary_domain domain,t.assignee_agent assignee,t.verifier_agent verifier,t.verif_state,
         ${iso('t.act_start')} act_start,${iso('t.act_end')} act_end,t.conflict_group cg,s.overview->>'doneCond' done_cond,t.wbs_node_id,t.sort_order,e.est::text est
-       from ${src.rel('tasks')} t left join ${src.rel('task_specs')} s on s.task=t.id
-       left join lateral(select est from ${src.rel('task_estimates')} x where x.task=t.id order by created_at desc,id desc limit 1) e on true
+       from t left join s on s.task=t.id left join e on e.task=t.id
        where t.project_id=$1 and t.deleted_at is null and t.status<>'cancelled' and not $2::boolean order by t.task_key`, [projectId, missing]),
     q<{ id: string; kind: 'phase' | 'work_package'; parent_id: string | null; sort_order: number }>(`select id,kind,parent_id,sort_order from ${src.rel('wbs_nodes')} n where project_id=$1 order by id`, [projectId]),
     q<{ pred: string; succ: string; type: 'FS' | 'SS' }>(`select pred,succ,dep_type type from ${src.rel('task_dependencies')} d where project_id=$1 order by id`, [projectId]),
@@ -348,24 +350,41 @@ async function gateInputsAt(client: PoolClient, src: ReturnType<typeof asOf>, ta
     verification: { result: VerificationResult; headSha: string; specRevision: number; inputVersion: number; invalidated: boolean } | null;
     check_result: string | null; check_revision: number; check_input: number; defects: number;
     checklist: { required: boolean; done: boolean }[]; outputs: { name: string; required: boolean; delivered: boolean }[] }>(`
+    -- 성능(재리뷰 3 문제 3): 각 표의 T 시점 행을 한 번만 되살리고(CTE MATERIALIZED) Task별로는 모아 둔 결과를 붙인다.
+    -- 이전에는 Task마다 상관 하위 질의 안에서 같은 표를 다시 되살려 Task 수의 제곱으로 느려졌다.
+    with t as materialized (select * from ${src.rel('tasks')} x where x.id=any($1::uuid[])),
+      att as materialized (select * from ${src.rel('task_attempts')} x where x.task=any($1::uuid[])),
+      ver as materialized (select * from ${src.rel('verifications')} x),
+      inv as materialized (select distinct verification from ${src.rel('verification_invalidations')} x),
+      res as materialized (select distinct defect from ${src.rel('defect_events')} x where x.kind='resolved'),
+      ivs as materialized (select * from ${src.rel('input_versions')} x),
+      spec as materialized (select * from ${src.rel('task_specs')} x where x.task=any($1::uuid[])),
+      cl as materialized (select task,jsonb_agg(jsonb_build_object('required',required,'done',done) order by sort_order,id) items
+        from ${src.rel('checklist_items')} x where x.task=any($1::uuid[]) group by task),
+      outp as materialized (select task,jsonb_agg(jsonb_build_object('name',name,'required',required,'delivered',delivered) order by name,id) items
+        from ${src.rel('task_outputs')} x where x.task=any($1::uuid[]) group by task),
+      cir as materialized (select * from ${src.rel('ci_runs')} x where x.stage=1 and x.task=any($1::uuid[])),
+      lastatt as materialized (select distinct on (task) task,head_sha from att order by task,attempt_no desc),
+      openqa as materialized (select distinct task from att where status='running' and kind in ('qa','reverify')),
+      lastqa as materialized (select distinct on (qa.task) qa.task,v.id,v.result,v.head_sha,v.spec_revision,iv.v input_v
+        from att qa left join ver v on v.attempt=qa.id left join ivs iv on iv.id=qa.input_version where qa.kind in ('qa','reverify') order by qa.task,qa.attempt_no desc),
+      blocking as materialized (select da.task,count(*)::int n from ${src.rel('defects')} d join ver dv on dv.id=d.verification join att da on da.id=dv.attempt
+        where d.blocking and not exists(select 1 from res where res.defect=d.id) and not exists(select 1 from inv where inv.verification=dv.id) group by da.task)
     select t.id,t.planning_approved_at,s.revision,iv.v input_v,coalesce(t.execution_head_sha,a.head_sha) head_sha,
-      exists(select 1 from ${src.rel('task_attempts')} q where q.task=t.id and q.status='running' and q.kind in ('qa','reverify')) open_qa,
-      v.verification,c.status check_result,c.spec_revision check_revision,c.input_v check_input,
-      (select count(*)::int from ${src.rel('defects')} d join ${src.rel('verifications')} dv on dv.id=d.verification join ${src.rel('task_attempts')} da on da.id=dv.attempt
-        where da.task=t.id and d.blocking and not exists(select 1 from ${src.rel('defect_events')} e where e.defect=d.id and e.kind='resolved')
-        and not exists(select 1 from ${src.rel('verification_invalidations')} vi where vi.verification=dv.id)) defects,
-      coalesce((select jsonb_agg(jsonb_build_object('required',required,'done',done) order by ci.sort_order,ci.id) from ${src.rel('checklist_items')} ci where ci.task=t.id),'[]') checklist,
-      coalesce((select jsonb_agg(jsonb_build_object('name',name,'required',required,'delivered',delivered) order by o.name,o.id) from ${src.rel('task_outputs')} o where o.task=t.id),'[]') outputs
-    from ${src.rel('tasks')} t left join ${src.rel('task_specs')} s on s.task=t.id
-    left join lateral(select * from ${src.rel('input_versions')} x where x.project_id=t.project_id and (t.src_input_version is null or x.id=t.src_input_version) order by v desc limit 1) iv on true
-    left join lateral(select head_sha from ${src.rel('task_attempts')} x where x.task=t.id order by attempt_no desc limit 1) a on true
-    left join lateral(select case when v.id is not null then jsonb_build_object('result',v.result,'headSha',v.head_sha,'specRevision',v.spec_revision,'inputVersion',coalesce(iv.v,0),
-      'invalidated',exists(select 1 from ${src.rel('verification_invalidations')} i where i.verification=v.id)) end verification
-      from ${src.rel('task_attempts')} qa left join ${src.rel('verifications')} v on v.attempt=qa.id left join ${src.rel('input_versions')} iv on iv.id=qa.input_version
-      where qa.task=t.id and qa.kind in ('qa','reverify') order by qa.attempt_no desc limit 1) v on true
-    left join lateral(select c.status,c.spec_revision,iv.v input_v from ${src.rel('ci_runs')} c left join ${src.rel('input_versions')} iv on iv.id=c.input_version
-      where c.project_id=t.project_id and c.task=t.id and c.stage=1 and c.head_sha=coalesce(t.execution_head_sha,a.head_sha) order by c.created_at desc,c.id desc limit 1) c on true
-    where t.id=any($1::uuid[])`, [taskIds])).rows;
+      exists(select 1 from openqa o where o.task=t.id) open_qa,
+      case when q.id is not null then jsonb_build_object('result',q.result,'headSha',q.head_sha,'specRevision',q.spec_revision,'inputVersion',coalesce(q.input_v,0),
+        'invalidated',exists(select 1 from inv where inv.verification=q.id)) end verification,
+      c.status check_result,c.spec_revision check_revision,c.input_v check_input,
+      coalesce(b.n,0) defects, coalesce(cl.items,'[]') checklist, coalesce(outp.items,'[]') outputs
+    from t left join spec s on s.task=t.id
+    left join lateral(select * from ivs x where x.project_id=t.project_id and (t.src_input_version is null or x.id=t.src_input_version) order by v desc limit 1) iv on true
+    left join lastatt a on a.task=t.id
+    left join lastqa q on q.task=t.id
+    left join blocking b on b.task=t.id
+    left join cl on cl.task=t.id
+    left join outp on outp.task=t.id
+    left join lateral(select c.status,c.spec_revision,iv2.v input_v from cir c left join ivs iv2 on iv2.id=c.input_version
+      where c.project_id=t.project_id and c.task=t.id and c.head_sha=coalesce(t.execution_head_sha,a.head_sha) order by c.created_at desc,c.id desc limit 1) c on true`, [taskIds])).rows;
   return new Map(rows.map((task) => {
     const basis = { headSha: task.head_sha ?? '', specRevision: task.revision ?? 0, inputVersion: task.input_v ?? 0 };
     return [task.id, {
