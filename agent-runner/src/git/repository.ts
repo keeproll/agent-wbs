@@ -232,6 +232,9 @@ async function groupWritable(path: string): Promise<void> {
 /** H→H′→H″… 동기화 사슬을 따라가는 최대 단계 수. 넘으면 재QA로 돌린다(M7-02 P3). */
 export const MAX_SYNC_CHAIN = 50;
 
+/** push 직전 관문. 실패하면 던진다(push하지 않는다). 모양은 GitHub 클라이언트의 `branch_push` 쓰기 종류와 같다. */
+export type PushGate = (operation: { kind: 'branch_push'; branch: string; remote: string }) => Promise<void>;
+
 export interface GitLayout {
   /** 예: /srv/agentwbs. 그 아래 `worktrees/<저장소>`·`inputs/<저장소>`를 쓴다. */
   agentRoot?: string | null;
@@ -491,19 +494,20 @@ export class GitRepository {
   /**
    * 커밋을 등록 원격의 브랜치로 **일반 push**한다(강제 push 없음, 로컬 브랜치를 옮기지 않음).
    * 인증 헤더는 명령 인자가 아니라 환경 변수(GIT_CONFIG_*)로만 넘긴다. 왜: 인자는 다른 프로세스가 /proc에서 읽을 수 있다.
-   * 호출자(GitHub 원격 정리)가 외부 쓰기 권한과 원격 main 대조를 먼저 한다.
+   * `gate`는 필수다. push 직전에 반드시 부른다(Runner의 모든 외부 쓰기는 같은 관문을 지난다, `github/write-gate.ts`).
    */
-  async pushCommit(commit: string, branch: string, authorization?: string): Promise<void> {
+  async pushCommit(commit: string, branch: string, gate: PushGate, authorization?: string): Promise<void> {
     sha(commit);
     if (branch !== 'main') await this.branch(branch);
     const { source } = await this.trusted();
+    await gate({ kind: 'branch_push', branch, remote: source });
     const env: NodeJS.ProcessEnv = authorization === undefined ? {}
       : { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.extraHeader', GIT_CONFIG_VALUE_0: `AUTHORIZATION: ${authorization}` };
     await this.git(['push', '--no-verify', '--', source, `${commit}:refs/heads/${branch}`], undefined, env);
   }
 
   /** 시스템 직접 push는 최초 생성 또는 세 초기화 경로만 바꾸는 단일 부모 커밋에 한한다. 호출자가 GitHub 키 목록과 main을 먼저 대조한다. */
-  async pushSystemCommit(commit: string, parent: string | null, ssh: SystemSsh): Promise<void> {
+  async pushSystemCommit(commit: string, parent: string | null, ssh: SystemSsh, gate: PushGate): Promise<void> {
     sha(commit);
     if (parent !== null) sha(parent);
     const parents = (await this.git(['show', '-s', '--format=%P', commit])).toString().trim();
@@ -523,6 +527,8 @@ export class GitRepository {
     if (!(await stat(await safePath(ssh.socket)))?.isSocket()) throw new GitSafetyError('시스템 SSH 소켓을 확인할 수 없습니다.');
     if (!(await stat(await safePath(ssh.knownHosts)))?.isFile()) throw new GitSafetyError('서버 키 목록 파일을 확인할 수 없습니다.');
     const remote = `ssh://git@ssh.github.com:443${url.pathname.replace(/\/$/, '').replace(/\.git$/, '')}.git`;
+    // 관문에는 등록된 https 원격(GitHub 저장소 주소)을 넘긴다. SSH 주소는 같은 저장소의 다른 표기다.
+    await gate({ kind: 'branch_push', branch: 'main', remote: (await this.trusted()).source });
     await this.git(['push', '--no-verify', '--', remote, `${commit}:refs/heads/main`], undefined, {
       GIT_ALLOW_PROTOCOL: 'ssh', GIT_SSH_COMMAND: systemSshCommand(ssh.knownHosts), GIT_SSH_VARIANT: 'ssh', SSH_AUTH_SOCK: ssh.socket,
     });

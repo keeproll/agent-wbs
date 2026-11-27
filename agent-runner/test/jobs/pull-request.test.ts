@@ -7,6 +7,7 @@ import { ApiError } from '../../src/api/client.ts';
 import { bindTaskCheck, ExternalWriteBlockedError, openPullRequest, PushedThenStoppedError, serverWriteGuard } from '../../src/jobs/task-check.ts';
 import { createGitHubClient, DeployKeyError, GitHubError, type WriteOperation } from '../../src/github/client.ts';
 import { githubWriteGate } from '../../src/github/write-gate.ts';
+import type { PushGate } from '../../src/git/repository.ts';
 import { Secret } from '../../src/security/secret.ts';
 import { commit, file, fixture } from '../ci/int-fixture.ts';
 import { startFakeGitHub, type FakeGitHub } from '../fakes/github/server.ts';
@@ -23,7 +24,9 @@ const job = { id: 'job', fence: 1, kind: 'attempt' as const, leaseUntil: new Dat
 const deps = (onDenied?: () => void) => ({
   github: createGitHubClient({ repo: { owner: 'o', repo: 'r' }, token: async () => new Secret('FAKE'), baseUrl: fake.url, timeoutMs: 2_000,
     ...(onDenied && { onPermissionDenied: onDenied }) }),
-  repo: { source: async () => 'https://github.com/o/r', pushCommit: async (commit: string, branch: string) => { pushes.push(`${commit}:${branch}`); } } as never,
+  repo: { pushCommit: async (commit: string, branch: string, gate: PushGate) => {
+    await gate({ kind: 'branch_push', branch, remote: 'https://github.com/o/r' }); pushes.push(`${commit}:${branch}`);
+  } } as never,
 });
 const HEAD = 'd'.repeat(40);
 

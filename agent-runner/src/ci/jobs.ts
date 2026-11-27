@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { serverWriteGuard } from '../github/write-gate.ts';
 import { ApiError, type ApiClient, type ApiRequest, type ApiResponse } from '../api/client.ts';
 import { retryable, type Outbox } from '../api/outbox.ts';
 import type { ClaimedJob } from '../api/generated/client.ts';
@@ -166,7 +167,8 @@ export class CiJobs {
     }
     const qa = saved.context?.verification, branch = saved.context?.branch;
     if (!qa || !branch || !saved.context?.taskKey) throw new Error('통합할 QA·브랜치가 없습니다.');
-    const deps:IntegrationDeps = { ...d,execute,directory:join(d.directory,'merge'),signal,
+    // H′ push·상태 기록·병합 직전마다 서버 기준 소유(fence·임대)와 중단을 확인한다(모든 외부 쓰기의 같은 관문).
+    const deps:IntegrationDeps = { ...d,execute,directory:join(d.directory,'merge'),signal,guard:serverWriteGuard(d.api,job,saved.epoch,signal),
       observeMainPipeline:basis => this.#observe(basis),readVerification:async () => {
         const latest = (await d.api('getCiJob',{ epoch:saved.epoch,params:{ id:job.id },query:{ fence:job.fence } })).body;
         return latest.verification ? { ...latest.verification,passed:latest.runnable && latest.verification.passed } : { passed:false,headSha:qa.headSha,specRevision:qa.specRevision };

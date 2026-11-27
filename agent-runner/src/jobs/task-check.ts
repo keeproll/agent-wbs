@@ -2,9 +2,8 @@ import type { ApiClient } from '../api/client.ts';
 import type { Runner } from '../api/runner.ts';
 import type { Launch } from '../cli/isolation.ts';
 import { runTaskCheck, type TaskCheckOptions, type TaskCheckResult } from '../ci/task.ts';
-import { randomUUID } from 'node:crypto';
 import { GitHubError, type GitHubClient } from '../github/client.ts';
-import { LEASE_SAFETY_MS } from '../exec/session.ts';
+import { pushGate, serverWriteGuard, type OwnershipGuard } from '../github/write-gate.ts';
 import type { Execution } from '../exec/session.ts';
 import { reportEvent, type AttemptContext } from './attempt-flow.ts';
 
@@ -32,22 +31,9 @@ export class ExternalWriteBlockedError extends Error {
   override name = 'ExternalWriteBlockedError';
 }
 
-/** 외부 쓰기 직전에 이 job을 아직 맡고 있는지 확인한다. 아니면 던진다(쓰지 않는다). */
-export type WriteGuard = () => Promise<void>;
-
-/**
- * 서버 기준 소유 확인. 임대 연장(renewJob)은 서버가 fence·임대·Runner를 대조해 맞을 때만 성공한다(아니면 409 LEASE_LOST).
- * 연장된 임대가 시계 역행 여유(LEASE_SAFETY_MS)보다 짧게 남았어도 쓰지 않는다.
- * 왜: 로컬 중단 신호만으로는 서버가 이미 다른 Runner에 넘긴 job을 알 수 없다. 낡은 실행이 원격을 바꾸면 되돌릴 수 없다.
- */
-export function serverWriteGuard(api: ApiClient, job: { id: string; fence: number }, epoch: number, signal: AbortSignal): WriteGuard {
-  return async () => {
-    signal.throwIfAborted();
-    const renewed = await api('renewJob', { epoch, idempotencyKey: randomUUID(), params: { id: job.id }, body: { fence: job.fence } });
-    signal.throwIfAborted();
-    if (!(Date.parse(renewed.body.leaseUntil) - LEASE_SAFETY_MS > Date.now())) throw new Error('임대가 곧 끝나 외부 쓰기를 시작하지 않습니다.');
-  };
-}
+/** 외부 쓰기 직전 소유 확인(중단·임대). 정의는 모든 외부 쓰기가 함께 쓰는 `github/write-gate.ts`에 있다. */
+export type WriteGuard = OwnershipGuard;
+export { serverWriteGuard };
 
 /** push는 끝났지만 그 뒤 확인에서 멈췄다. 원격 브랜치가 바뀐 사실을 그대로 알린다. */
 export class PushedThenStoppedError extends Error {
@@ -80,10 +66,8 @@ export async function openPullRequest(d: Pick<TaskCheckDeps, 'github' | 'repo'>,
   const blocked = () => new ExternalWriteBlockedError('GitHub 쓰기 권한(contents·pulls)이 없어 PR을 열 수 없습니다. 외부 쓰기 막힘으로 보류합니다.');
   const permissions = github.permissions();
   if (permissions.contents === 'missing' || permissions.pulls === 'missing') throw blocked();
-  await guard();
-  await github.assertWritable({ kind: 'branch_push', branch, remote: await d.repo.source() });
-  await guard();
-  await d.repo.pushCommit(head, branch);
+  // 같은 관문: 소유 확인 → M4 쓰기 관문(원격 저장소·배포 키) → 소유 확인 → push.
+  await d.repo.pushCommit(head, branch, pushGate(github, guard));
   const input = { branch, title: `${job.payload.taskKey} ${job.payload.kind}`, body: `Agent WBS가 ${job.payload.taskKey}의 개발 결과로 연 PR입니다.` };
   const ensure = async () => {
     try { await guard(); }
@@ -131,8 +115,8 @@ export function bindTaskCheck(d: TaskCheckDeps) {
     await reportEvent(d, 'updateCiRun', { epoch, params: { id: run.body.id }, body: { fence: job.fence, status: result.status,
       steps: result.steps.map(({ name, status, durationMs }) => ({ name, status, durationMs })),
       ...(result.failScope && { failScope: result.failScope }) } }, signal);
-    // GitHub가 연결되지 않았으면 예전처럼 통과한 커밋만 올린다.
-    if (!pullRequest && result.status === 'pass') { await guard(); await d.repo.pushCommit(result.headSha, job.payload.branch); }
+    // GitHub가 연결되지 않았으면 push하지 않는다. 관문(원격·배포 키 확인)을 거칠 수 없는 외부 쓰기는 하지 않는다.
+    // PR도 없으므로 서버는 'PR 정보가 필요합니다'로 통합을 보류한다.
     return { ...result, ...(pullRequest && { pullRequest }) };
   };
 }

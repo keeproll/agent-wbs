@@ -167,11 +167,13 @@ test('① Task 코드 실패는 Task 재작업이며 H′의 status에도 실패
   expect(f.calls.some(c => c.argv[1] === 'int-build')).toBe(false); expect(puts()).toEqual([]);
 });
 
-test('② 중단은 테스트 재시도를 하지 않고 출력과 정리를 보존한다', async () => {
+// M5·M7 통합(모든 외부 쓰기는 같은 관문): 중단 뒤에는 GitHub 상태 기록도 하지 않는다. 그래서 결과 대신 중단으로 끝난다.
+test('② 중단은 테스트 재시도를 하지 않고 정리를 보존하며, 중단 뒤 외부 쓰기(상태·병합)를 하지 않는다', async () => {
   const controller = new AbortController();
   const queue = await IntegrationQueue.open({ ...f.deps, signal: controller.signal }); queues.push(queue);
   f.action(async argv => { if (argv[1] === 'int-test') controller.abort(new Error('중단')); return 0; });
-  expect(await queue.run(f.request)).toMatchObject({ kind: 'rework', integration: { status: 'fail', failStep: 'test' } });
+  await expect(queue.run(f.request)).rejects.toThrow('중단');
+  expect([...f.statuses.values()].filter(state => state !== 'pending' && state !== 'success')).toEqual([]);
   expect(f.calls.filter(c => c.argv[1] === 'int-test')).toHaveLength(1);
   expect(f.deps.heavy.snapshot().running).toBe(0); expect(await f.repo.recordedWorktrees()).toEqual([]);
   expect(puts()).toEqual([]);

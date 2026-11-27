@@ -53,6 +53,9 @@ afterEach(async () => {
   await rm(home, { recursive: true, force: true });
 });
 
+/** 관문 통과(관문 자체의 시험은 test/external-writes.test.ts). */
+const pass = async (): Promise<void> => undefined;
+
 test('M4-06: 시스템 SSH만 허용하고, 서버 확인·소켓·main 일반 push를 고정한다', async () => {
   const bin = join(home, 'bin'); await mkdir(bin);
   const capture = join(home, 'ssh.json');
@@ -62,9 +65,14 @@ const r=cp.spawnSync('git-receive-pack',[${JSON.stringify(remote)}],{stdio:'inhe
   await chmod(join(bin, 'ssh'), 0o700);
   vi.stubEnv('PATH', `${bin}:${process.env.PATH ?? ''}`);
   const before = createHash('sha256').update(await readFile(join(repo.path, 'config'))).digest('hex');
-  await repo.pushSystemCommit(parent, null, { socket, knownHosts });
+  // M5·M7 통합: 관문(M4 원격·배포 키)이 거부하면 push하지 않는다. 관문은 등록된 https 원격을 받는다.
+  const seen: unknown[] = [];
+  await expect(repo.pushSystemCommit(parent, null, { socket, knownHosts }, async (operation) => { seen.push(operation); throw new Error('관문 거부'); })).rejects.toThrow('관문 거부');
+  expect(seen).toEqual([{ kind: 'branch_push', branch: 'main', remote: await repo.source() }]);
+  await expect(readFile(capture, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  await repo.pushSystemCommit(parent, null, { socket, knownHosts }, pass);
   expect(git(remote, 'rev-parse', 'main')).toBe(parent);
-  await repo.pushSystemCommit(commit, parent, { socket, knownHosts });
+  await repo.pushSystemCommit(commit, parent, { socket, knownHosts }, pass);
   expect(git(remote, 'rev-parse', 'main')).toBe(commit);
   const call = JSON.parse(await readFile(capture, 'utf8')) as { args: string[]; socket: string; protocol: string };
   expect(call.socket).toBe(socket);
@@ -80,15 +88,15 @@ const r=cp.spawnSync('git-receive-pack',[${JSON.stringify(remote)}],{stdio:'inhe
 
 test('M4-06: 부모 불일치·초기화 밖 경로 변경·잘못된 인증 경로는 SSH 실행 전에 거부한다', async () => {
   const ssh = { socket, knownHosts };
-  await expect(repo.pushSystemCommit(commit, 'f'.repeat(40), ssh)).rejects.toThrow(/부모/);
-  await expect(repo.pushSystemCommit(commit, null, ssh)).rejects.toThrow(/최초/);
+  await expect(repo.pushSystemCommit(commit, 'f'.repeat(40), ssh, pass)).rejects.toThrow(/부모/);
+  await expect(repo.pushSystemCommit(commit, null, ssh, pass)).rejects.toThrow(/최초/);
   await writeFile(join(source, 'unrelated.txt'), 'must stay');
   git(source, 'add', '.'); git(source, 'commit', '-m', 'outside');
   const outside = git(source, 'rev-parse', 'HEAD');
   git(repo.path, 'fetch', source, 'main');
-  await expect(repo.pushSystemCommit(outside, commit, ssh)).rejects.toThrow(/초기화 대상 밖/);
-  await expect(repo.pushSystemCommit(commit, parent, { socket: knownHosts, knownHosts })).rejects.toThrow(/소켓/);
-  await expect(repo.pushSystemCommit(commit, parent, { socket, knownHosts: socket })).rejects.toThrow(/서버 키/);
+  await expect(repo.pushSystemCommit(outside, commit, ssh, pass)).rejects.toThrow(/초기화 대상 밖/);
+  await expect(repo.pushSystemCommit(commit, parent, { socket: knownHosts, knownHosts }, pass)).rejects.toThrow(/소켓/);
+  await expect(repo.pushSystemCommit(commit, parent, { socket, knownHosts: socket }, pass)).rejects.toThrow(/서버 키/);
   expect(git(remote, 'rev-parse', 'main')).toBe(parent);
 });
 
@@ -101,6 +109,6 @@ test.each(['https://example.com/o/r.git', 'file://github.com/o/r.git'])('L1: 다
   const record = JSON.parse(await readFile(registration, 'utf8')) as { source: string };
   record.source = sourceUrl; await writeFile(registration, JSON.stringify(record));
   repo = await GitRepository.open(home, 'p1');
-  await expect(repo.pushSystemCommit(commit, parent, { socket, knownHosts })).rejects.toThrow(/등록된 github.com/);
+  await expect(repo.pushSystemCommit(commit, parent, { socket, knownHosts }, pass)).rejects.toThrow(/등록된 github.com/);
   await expect(readFile(marker)).rejects.toMatchObject({ code: 'ENOENT' });
 });

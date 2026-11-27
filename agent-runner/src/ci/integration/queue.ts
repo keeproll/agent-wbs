@@ -3,6 +3,7 @@ import { lstat, mkdir, readFile, type FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { HeadSyncChainProof } from '../../git/repository.ts';
 import type { GitHubClient, MergeOutcome } from '../../github/client.ts';
+import { ownedGitHub, pushGate, type OwnershipGuard } from '../../github/write-gate.ts';
 import { atomicWrite } from '../../state/files.ts';
 import { acquireLock } from '../../state/state.ts';
 import { runTaskCheck, type TaskCheckOptions, type TaskCheckResult } from '../task.ts';
@@ -12,7 +13,12 @@ import { diagnoseBatch, type BatchDiagnostic } from './batch.ts';
 export interface IntegrationRequest { pr: number; branch: string; qaHeadSha: string; specRevision: number }
 export interface IntegrationDeps extends Pick<TaskCheckOptions, 'repo' | 'heavy' | 'execute' | 'collectTests' | 'redact' | 'signal'> {
   directory: string;
-  github: Pick<GitHubClient, 'getPullRequest' | 'mainSha' | 'setCommitStatus' | 'mergePullRequest' | 'reconcileMerge'>;
+  github: Pick<GitHubClient, 'getPullRequest' | 'mainSha' | 'setCommitStatus' | 'mergePullRequest' | 'reconcileMerge' | 'assertWritable'>;
+  /**
+   * 외부 쓰기(H′ push, 상태 기록, 병합) 직전의 소유 확인(중단·서버 임대). CiJobs는 serverWriteGuard를 넘긴다.
+   * 모든 외부 쓰기는 같은 관문을 지난다(github/write-gate.ts). 없으면 중단 신호만 본다.
+   */
+  guard?: OwnershipGuard;
   readVerification: (request: IntegrationRequest) => Promise<{ passed: boolean; headSha: string; specRevision: number }>;
   /** 서버가 (project,A)의 정의 관측을 따로 보관하도록 기존 outbox에 넣는다. */
   observeMainPipeline: (basis: MainBasis) => Promise<void>;
@@ -56,7 +62,9 @@ export class IntegrationQueue {
   private readonly lock: FileHandle;
   private journal: Journal | null;
   private constructor(deps: IntegrationDeps, lock: FileHandle, journal: Journal | null) {
-    this.deps = deps; this.lock = lock; this.journal = journal;
+    const guard: OwnershipGuard = deps.guard ?? (async () => { deps.signal?.throwIfAborted(); });
+    // 상태 기록·병합은 소유 확인 뒤 M4 관문(클라이언트 안의 beforeWrite)을 지난다.
+    this.deps = { ...deps, guard, github: ownedGitHub(deps.github, guard) }; this.lock = lock; this.journal = journal;
   }
 
   static async open(deps: IntegrationDeps): Promise<IntegrationQueue> {
@@ -128,7 +136,7 @@ export class IntegrationQueue {
       if (syncedHeadSha !== request.qaHeadSha && !proof) return { kind: 'rework', reason: 'invalid_sync', ...previous };
       const moved = await this.current(request, basis.baseSha, head); if (moved) return { ...moved, ...previous };
       if (syncedHeadSha !== head) {
-        try { await repo.pushCommit(syncedHeadSha, request.branch); }
+        try { await repo.pushCommit(syncedHeadSha, request.branch, pushGate(github, this.deps.guard)); }
         catch (error) {
           const changed = await this.current(request, basis.baseSha, head);
           if (changed) return { ...changed, ...previous };
