@@ -34,7 +34,8 @@ function parseReport(value: unknown): StepReport {
   };
   list('tests', t => text(t.key) && (t.status === 'pass' || t.status === 'fail'));
   list('screens', s => text(s.name) && text(s.actual) && text(s.expected));
-  list('timings', t => text(t.name) && Array.isArray(t.samplesMs) && typeof t.budgetMs === 'number');
+  // 기준(budgetMs)은 받지 않는다. 기준은 main 정의에만 있다(조정자 결정 3).
+  list('timings', t => Object.keys(t).every(k => k === 'name' || k === 'samplesMs') && text(t.name) && Array.isArray(t.samplesMs));
   if (report.screenshots !== undefined && (!Array.isArray(report.screenshots) || !report.screenshots.every(text))) throw new TypeError('보고서의 screenshots가 올바르지 않습니다.');
   return report as StepReport;
 }

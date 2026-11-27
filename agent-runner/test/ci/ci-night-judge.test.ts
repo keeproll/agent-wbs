@@ -45,15 +45,18 @@ describe('응답 시간', () => {
     expect(p95([30, 10, 20])).toBe(30);
   });
 
-  test('예산을 넘은 API만 초과로 표시한다', () => {
-    expect(judgeTimings([{ name: 'GET /api/tasks', samplesMs: [100, 120, 400], budgetMs: 300 }, { name: 'GET /api/wbs', samplesMs: [50], budgetMs: 300 }]))
-      .toEqual([{ name: 'GET /api/tasks', p95Ms: 400, budgetMs: 300, over: true }, { name: 'GET /api/wbs', p95Ms: 50, budgetMs: 300, over: false }]);
+  test('기준을 넘은 API만 초과로 표시하고 기준이 없으면 기록만 한다', () => {
+    expect(judgeTimings([{ name: 'GET /api/tasks', samplesMs: [100, 120, 400] }, { name: 'GET /api/wbs', samplesMs: [50] }, { name: 'GET /api/x', samplesMs: [9_000] }],
+      { 'GET /api/tasks': 300, 'GET /api/wbs': 300 }))
+      .toEqual([{ name: 'GET /api/tasks', p95Ms: 400, budgetMs: 300, over: true }, { name: 'GET /api/wbs', p95Ms: 50, budgetMs: 300, over: false },
+        { name: 'GET /api/x', p95Ms: 9_000, budgetMs: null, over: false }]);
+    expect(judgeTimings([{ name: 'toString', samplesMs: [1] }])).toEqual([{ name: 'toString', p95Ms: 1, budgetMs: null, over: false }]);
   });
 
-  test('표본이 없거나 숫자가 아니면 거부한다', () => {
+  test('표본이 없거나 숫자가 아니거나 이름이 겹치면 거부한다', () => {
     expect(() => p95([])).toThrow();
-    expect(() => judgeTimings([{ name: 'x', samplesMs: [Number.NaN], budgetMs: 1 }])).toThrow();
-    expect(() => judgeTimings([{ name: 'x', samplesMs: [1], budgetMs: 0 }])).toThrow();
+    expect(() => judgeTimings([{ name: 'x', samplesMs: [Number.NaN] }])).toThrow();
+    expect(() => judgeTimings([{ name: 'x', samplesMs: [1] }, { name: 'x', samplesMs: [1] }])).toThrow();
   });
 });
 

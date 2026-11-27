@@ -62,6 +62,24 @@ export async function readNightState(home: string): Promise<NightState> {
   return { ...value, history: parseHistory(value.history) };
 }
 
+/**
+ * 정책의 격리 목록(`policy.ci.quarantined[]`, 조정자 결정 1)을 판정용 집합으로 바꾼다.
+ * 서버 계약에 필드가 추가되기 전에는 필드가 없으므로 빈 집합이다. 형식이 틀리면 추정하지 않고 거부한다.
+ */
+export function policyQuarantine(ci: { quarantined?: unknown }): Set<string> {
+  if (ci.quarantined === undefined) return new Set();
+  if (!Array.isArray(ci.quarantined) || !ci.quarantined.every(k => typeof k === 'string' && k !== '')) throw new TypeError('격리 목록 형식이 올바르지 않습니다.');
+  return new Set(ci.quarantined as string[]);
+}
+
+/**
+ * 원인 후보를 CI 보고 계약 형식(`causeCandidates[{commit}]`, 조정자 결정 5)으로 바꾼다.
+ * 서버 계약에 필드가 추가되면 결과 보고에 넣는다. 그 전에는 note에만 짧은 SHA로 남긴다.
+ */
+export function causeCandidates(result: Pick<NightResult, 'suspects'>): { commit: string }[] {
+  return result.suspects.map(commit => ({ commit }));
+}
+
 /** 지금 야간 점검을 시작해야 하면 그 날짜를 준다. 마지막으로 시작한 날짜는 Runner를 다시 켜도 남아 있다. */
 export async function dueNight(home: string, now: number, nightAt: string): Promise<string | null> {
   return nightDue(now, nightAt, (await readNightState(home)).lastDate);
@@ -153,9 +171,9 @@ export async function runNightCheck(options: NightOptions, date: string): Promis
       }
       if (passed && last?.report?.timings) {
         try {
-          const judged = judgeTimings(last.report.timings);
+          const judged = judgeTimings(last.report.timings, command.budgetsMs);
           result.timings.push(...judged);
-          if (judged.some(t => t.over)) { passed = false; reason = `응답 시간 기준 초과: ${judged.filter(t => t.over).map(t => `${t.name} p95 ${String(t.p95Ms)}ms > ${String(t.budgetMs)}ms`).join(', ')}`; }
+          if (judged.some(t => t.over)) { passed = false; reason = `응답 시간 기준 초과: ${judged.filter(t => t.over).map(t => `${t.name} p95 ${String(t.p95Ms)}ms > ${String(t.budgetMs ?? 0)}ms`).join(', ')}`; }
         } catch (error) { passed = false; reason = error instanceof Error ? error.message : '응답 시간 기준이 올바르지 않습니다.'; }
       }
       step.attempts = attempts.length;
@@ -186,7 +204,7 @@ export async function runNightCheck(options: NightOptions, date: string): Promis
   result.note = [
     result.e2e && `E2E ${String(tests.passed)}/${String(tests.total)}`,
     result.screens.length && `화면 비교 ${String(result.screens.length)}개 중 ${String(diffs)}개 차이`,
-    result.timings.length && `응답 시간 초과 ${String(result.timings.filter(t => t.over).length)}`,
+    result.timings.length && `응답 시간 ${String(result.timings.length)}개 기록 · 기준 없음 ${String(result.timings.filter(t => t.budgetMs === null).length)} · 초과 ${String(result.timings.filter(t => t.over).length)}`,
     result.flaky.length && `불안정 후보 ${String(result.flaky.length)}`,
     result.quarantinedFailures.length && `격리 실패 ${String(result.quarantinedFailures.length)}`,
     result.failStep && `실패 단계: ${result.failStep}`,

@@ -27,12 +27,14 @@ M7-06에서 실제 실행기·API에 연결한다.
      - `AWBS_DEPLOY_TAG`: 만들 이미지 이름(`agentwbs-deploy:<커밋 앞 12자>`)
      - `AWBS_DEPLOY_URL`: 접속할 주소
      - `COMPOSE_PROJECT_NAME`: `agentwbs-deploy`로 고정. 이전 배포 확인의 컨테이너를 같은 이름으로 바꿔 띄운다.
-     - `AWBS_REPORT`, `AWBS_EVIDENCE_DIR`: ③과 같다(night/README.md).
+     - `AWBS_REPORT`, `AWBS_EVIDENCE_DIR`: ③과 같다(night/README.md 「단계 결과 보고서 계약」).
+   - 이 환경 변수 이름과 보고서 형식은 승인된 계약이다(조정자 결정 4).
    - 배포 단계는 재시도하지 않는다.
 3. `url-check`: Runner가 직접 `<URL>/api/health`와 `<URL>/`에 접속해 200이 오는지 본다.
    - 응답이 올 때까지 정한 시간(기본 60초) 안에서 다시 확인한다.
    - 시간은 단조 시계(뒤로 가지 않는 시계)로 잰다. 왜: 이 PC는 벽시계가 뒤로 간다.
 4. `screenshots`: 브라우저 접속 단계가 보고서 `screenshots`에 적은 PNG 파일이 실제로 있는지 확인한다.
+   - 보고서 형식은 night/README.md 「단계 결과 보고서 계약」의 `screenshots[]`다.
    - 한 장도 없거나 PNG가 아니면 실패다.
    - 왜: 「정상 기동 + 브라우저 접속」의 근거는 Runner가 확인한 응답과 스크린샷이다. 단계가 「통과」라고 말한 것만으로는 근거가 아니다(G L466).
 

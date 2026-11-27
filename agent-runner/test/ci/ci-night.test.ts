@@ -117,14 +117,17 @@ test('보고서 경로가 근거 폴더 밖이면 거부한다', async () => {
   } finally { await f.close(); }
 });
 
-test('주요 API p95가 기준을 넘으면 실패다', async () => {
+test('주요 API p95가 정의의 기준을 넘으면 실패하고 재시도하지 않는다', async () => {
   const f = await ciFixture({ night: ['perf'] });
   try {
-    f.script(async ({ name }) => name !== 'perf' ? { code: 0 } : { code: 0, report: { timings: [{ name: 'GET /api/tasks', samplesMs: [100, 900], budgetMs: 300 }] } });
+    const stages = { ...f.pipeline.stages, night: [{ name: 'perf', argv: ['fake', 'night-perf'], budgetsMs: { 'GET /api/tasks': 300 } }] };
+    await file(join(f.source, '.agentwbs/pipeline.yaml'), JSON.stringify({ ...f.pipeline, stages }));
+    commit(f.source); git(f.source, 'push', f.remote, 'main');
+    f.script(async ({ name }) => name !== 'perf' ? { code: 0 } : { code: 0, report: { timings: [{ name: 'GET /api/tasks', samplesMs: [100, 900] }] } });
     const result = await runNightCheck(options(f), '2026-11-27');
     expect(result).toMatchObject({ status: 'fail', failStep: 'perf', timings: [{ name: 'GET /api/tasks', p95Ms: 900, over: true }] });
     expect(f.calls.filter(c => c.name === 'perf')).toHaveLength(1);
-    expect(f.final().note).toContain('응답 시간 초과 1');
+    expect(f.final().note).toContain('초과 1');
   } finally { await f.close(); }
 });
 
