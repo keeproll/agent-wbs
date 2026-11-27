@@ -74,6 +74,18 @@ export async function checkBaselineFont(run: RunCommand): Promise<{ status: 'ok'
   } catch { return missing; }
 }
 
+/**
+ * Runner 준비 점검용 렌더러 네트워크 차단 방식 확인(M7-03 결정 16).
+ * 사용자 네트워크 네임스페이스를 만들 수 있으면 ok, 실행 인자 차단(proxy)만 가능하면 warn이다. warn이어도 화면 비교는 실행한다.
+ * 왜: 인자 차단은 Chromium 설정에 기대므로 네임스페이스보다 약하다. 팀장이 그 차이를 준비 점검에서 볼 수 있어야 한다.
+ */
+export async function checkRendererIsolation(detect: () => Promise<NetworkIsolation> = detectNetworkIsolation): Promise<{ status: 'ok' | 'warn'; detail: string; fix?: string }> {
+  return await detect() === 'namespace'
+    ? { status: 'ok', detail: '화면 비교 렌더러를 사용자 네트워크 네임스페이스 안에서 실행합니다(네트워크 없음).' }
+    : { status: 'warn', detail: '사용자 네트워크 네임스페이스를 만들 수 없어 실행 인자로만 렌더러의 네트워크를 막습니다.',
+      fix: 'unshare --user --net이 동작하도록 사용자 네임스페이스를 허용하세요(예: kernel.unprivileged_userns_clone=1).' };
+}
+
 /** `prototype/uiux/` 안의 정규화된 경로만 받는다. */
 export function prototypePath(path: string): string {
   const normal = posix.normalize(path);

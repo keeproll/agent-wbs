@@ -1,7 +1,7 @@
 import type { Agent } from '../api/generated/client.ts';
 import type { ApiRequest } from '../api/client.ts';
 import type { CommandResult, RunCommand } from './command.ts';
-import { checkBaselineFont } from '../ci/night/baseline.ts';
+import { checkBaselineFont, checkRendererIsolation } from '../ci/night/baseline.ts';
 
 /** POST /runner/readiness 본문 */
 export type ReadinessReport = ApiRequest<'reportReadiness'>['body'];
@@ -24,7 +24,7 @@ export interface ReadinessDeps {
   /** 점검할 PostgreSQL 주소. 설정이 없으면 null. */
   pg: { host: string; port: number } | null;
   /** 다른 모듈이 맡는 점검: 작업 저장소 접근(M4-03), 하위 Agent 정의 동기화(M5-02). 없으면 「확인 안 함」 warn. */
-  probes: Partial<Record<'repo' | 'subs', () => Promise<Check>>>;
+  probes: Partial<Record<'repo' | 'subs' | 'render', () => Promise<Check>>>;
   /** 세션을 실행할 때 쓸 모델·옵션. 관측 등급 판정용 `cli[]`에 버전과 함께 싣는다. */
   cliProfiles?: { agent: Agent; model: string; options: string }[];
   /**
@@ -37,7 +37,7 @@ export interface ReadinessDeps {
 
 // reports는 로컬 도구 점검이 아니라 RunnerApp이 거부 기록으로 채운다.
 type EnvironmentKey = Exclude<ReadinessKey, 'reports'>;
-const KEYS: EnvironmentKey[] = ['claude', 'codex', 'git', 'node', 'pnpm', 'pg', 'repo', 'disk', 'subs', 'obs', 'gh', 'lfs', 'font'];
+const KEYS: EnvironmentKey[] = ['claude', 'codex', 'git', 'node', 'pnpm', 'pg', 'repo', 'disk', 'subs', 'obs', 'gh', 'lfs', 'font', 'render'];
 /** P `recCap`의 DISK_LOW 기준 */
 const DISK_WARN_GB = 50;
 /** 이보다 적으면 clone·설치가 실패할 가능성이 커서 멈춘다 [결정] */
@@ -199,6 +199,8 @@ export async function checkReadiness(d: ReadinessDeps, now: Date): Promise<Readi
     lfs: () => strip(tool(d, d.bins.git, ['lfs', 'version'], 'git-lfs', 'warn', 'LFS 파일이 있는 저장소를 쓰려면 git-lfs를 설치하세요.')),
     // 야간 화면 비교의 고정 글꼴(M7-03 결정 12). 없으면 warn이고 화면 비교는 「비교 불가」가 된다. 실행은 멈추지 않는다.
     font: () => checkBaselineFont(d.run),
+    // 렌더러 네트워크 차단 방식(M7-03 결정 16). 네임스페이스면 ok, 인자 차단만이면 warn. 실행은 멈추지 않는다.
+    render: () => (d.probes.render ?? (() => checkRendererIsolation()))(),
   };
   const runCheck = async (key: EnvironmentKey): Promise<ReadinessItem> => {
     try {

@@ -67,7 +67,7 @@ describe('checkReadiness — POST /runner/readiness(G §7.4 「Runner 준비 상
   test('모든 항목이 정상이면 13개 키가 모두 ok', async () => {
     const report = await checkReadiness(deps().d, AT);
     expect(report.at).toBe('2026-11-26T09:00:00.000Z');
-    expect(report.items.map((i) => i.key)).toEqual(['claude', 'codex', 'git', 'node', 'pnpm', 'pg', 'repo', 'disk', 'subs', 'obs', 'gh', 'lfs', 'font']);
+    expect(report.items.map((i) => i.key)).toEqual(['claude', 'codex', 'git', 'node', 'pnpm', 'pg', 'repo', 'disk', 'subs', 'obs', 'gh', 'lfs', 'font', 'render']);
     expect(report.items.filter((i) => i.status !== 'ok')).toEqual([]);
   });
 

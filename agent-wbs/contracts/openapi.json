@@ -23058,7 +23058,8 @@
                             "gh",
                             "lfs",
                             "reports",
-                            "font"
+                            "font",
+                            "render"
                           ]
                         },
                         "status": {
@@ -46004,7 +46005,8 @@
                             "gh",
                             "lfs",
                             "reports",
-                            "font"
+                            "font",
+                            "render"
                           ]
                         },
                         "status": {

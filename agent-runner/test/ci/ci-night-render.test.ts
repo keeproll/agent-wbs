@@ -7,7 +7,7 @@ import { afterEach, beforeEach, expect, test } from 'vitest';
 import { parsePipeline } from '../../src/ci/pipeline.ts';
 import { HeavySemaphore } from '../../src/resources/heavy.ts';
 import { runNightCheck } from '../../src/ci/night/run.ts';
-import { BASELINE_RENDER, NETWORK_DENY_ARGS, checkBaselineFont, createPlaywrightRenderer, type BaselineRenderer, type ChromiumLike, type RenderRequest } from '../../src/ci/night/baseline.ts';
+import { BASELINE_RENDER, NETWORK_DENY_ARGS, checkBaselineFont, checkRendererIsolation, createPlaywrightRenderer, type BaselineRenderer, type ChromiumLike, type RenderRequest } from '../../src/ci/night/baseline.ts';
 import { commit, definition, file, git } from './int-fixture.ts';
 import { ciFixture } from './night-fixture.ts';
 import { png } from './png.ts';
@@ -320,4 +320,10 @@ test('새 창은 첫 요청부터 컨텍스트 가로채기로 막고 바로 닫
   expect(log).toContain('abort http://127.0.0.1:43387/popup');
   expect(log).not.toContain('continue http://127.0.0.1:43387/popup');
   expect(log).toContain('popup closed');
+});
+
+// M7-03 결정 16(M5·M7 통합에서 반영): 렌더러 네트워크 차단 방식을 준비 점검에 보인다.
+test('준비 점검: 네임스페이스로 막으면 ok, 실행 인자 차단만이면 warn(실행은 허용)', async () => {
+  expect(await checkRendererIsolation(async () => 'namespace')).toMatchObject({ status: 'ok' });
+  expect(await checkRendererIsolation(async () => 'proxy')).toMatchObject({ status: 'warn', detail: expect.stringContaining('실행 인자'), fix: expect.any(String) });
 });

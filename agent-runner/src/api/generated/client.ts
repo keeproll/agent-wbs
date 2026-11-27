@@ -1007,7 +1007,7 @@ export interface Operations {
       body: {
         at: Timestamp;
         items: ({
-          key: "claude" | "codex" | "git" | "node" | "pnpm" | "pg" | "repo" | "disk" | "subs" | "obs" | "gh" | "lfs" | "reports" | "font";
+          key: "claude" | "codex" | "git" | "node" | "pnpm" | "pg" | "repo" | "disk" | "subs" | "obs" | "gh" | "lfs" | "reports" | "font" | "render";
           status: "ok" | "warn" | "fail";
           detail: string;
           fix?: string;
