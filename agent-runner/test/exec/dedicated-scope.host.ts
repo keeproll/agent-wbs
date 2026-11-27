@@ -136,8 +136,15 @@ test.runIf(installed)('전용 계정 fake 세션: 모든 프로세스가 awbs-ag
     const owners = await Promise.all(procs.map(async pid => ({ pid, ...(await uids(pid)), cgroup: (await readFile(`/proc/${String(pid)}/cgroup`, 'utf8')).trim() })));
     const relative = scopeCgroup(unit).slice('/sys/fs/cgroup'.length);
     const agent = owners.filter(o => o.real === agentUid);
-    // kernel-tree.py 자손 6개 + python 본체 + bwrap. sudo 자신은 root(유효 UID 0)로 같은 scope에 있다.
-    expect(agent.length).toBeGreaterThanOrEqual(8);
+    // kernel-tree.py 자손 6개(child·grandchild·setsid·nohup·double-fork·scrub) + python 본체 = 7개. sudo 자신은 root(유효 UID 0)로 같은 scope에 있다.
+    // 새 래퍼 ci-run은 python을 바로 exec한다(사이에 낀 프로세스 없음). 그래서 Agent 프로세스는 정확히 7개이고 모두 kernel-tree.py다.
+    // 옛 래퍼 갈래(bwrap run)는 bwrap 프로세스가 하나 더 있어 8개 이상이다.
+    if (wrapperCurrent) {
+      expect(agent.length).toBe(7);
+      for (const o of agent) expect(await readFile(`/proc/${String(o.pid)}/cmdline`, 'utf8')).toContain(join(dir, 'kernel-tree.py'));
+    } else {
+      expect(agent.length).toBeGreaterThanOrEqual(8);
+    }
     expect(owners.some(o => o.effective === 0)).toBe(true);
     for (const o of owners) expect(o.cgroup).toBe(`0::${relative}`);
     // 이 PC의 Agent 계정 프로세스는 모두 이 scope 안이다(새로 생긴 것 기준).
@@ -243,7 +250,9 @@ test.runIf(installed)('작업 폴더 삭제: Agent가 권한을 지운 폴더(ch
     git(source, 'init', '--bare', '-b', 'main', remote);
     git(source, 'push', remote, 'main');
     const repo = await GitRepository.clone(join(root, 'runner'), repositoryId, remote, { agentRoot: AGENT_ROOT });
-    const work = await repo.createWorktree('task-1', 'agent/TASK-1', base);
+    // 새 래퍼의 임의 명령(ci-run)은 실행마다 새 HOME(.awbs-home)이 있는 검사 사본에서만 돈다(조정자 결정 8). 실제 Runner도 ci-run은 검사 사본에만 쓴다.
+    // 옛 래퍼 갈래(bwrap run)는 보통 작업 폴더에서 돈다. 어느 쪽이든 같은 removeWorktree 경로로 지운다.
+    const work = wrapperCurrent ? await repo.createTaskCheckWorktree('task-1', base) : await repo.createWorktree('task-1', 'agent/TASK-1', base);
     const launch = agentCommand(layer, work, ['sh', '-c', 'mkdir -p locked/inner && echo x > locked/inner/f && chmod 000 locked/inner locked && echo done']);
     const out: Buffer[] = [];
     const result = await runProcess({ launches, job: { id: 'perms', fence: 1, epoch: 0 }, launch, register: async () => undefined, graceMs: 200, stdout: bytes => { out.push(bytes); } });
