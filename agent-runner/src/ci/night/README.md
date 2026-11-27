@@ -150,18 +150,37 @@ Runner는 ③④의 각 단계 명령에 아래 환경 변수를 준다.
 
 ### 화면 비교
 
-- 기준은 main 정의의 night 단계 선택 필드 `screens`에 적는다(원칙 A).
-  - 값은 `prototype/uiux/` 아래 HTML 파일이다. 화면을 고르는 `#조각`을 붙일 수 있다.
+- 기준은 main 정의의 night 단계 선택 필드 `screens`에 적는다(원칙 A, 조정자 결정 13과 보완).
+  - 화면 하나마다 아래 필드를 적는다.
+    - `page`(필수): `prototype/uiux/` 아래 HTML 파일
+    - `route`(선택): 화면을 여는 `#조각`
+    - `steps`(선택): 화면까지 가는 제한된 조작. 1~20개.
+    - `ready`(필수): 화면 준비가 끝났음을 알리는 CSS 선택자. 이것이 보일 때까지 기다린 뒤 찍는다.
+  - `steps`에 쓸 수 있는 조작은 세 가지뿐이다.
+    - `click: 선택자` — 그 요소를 누른다.
+    - `waitFor: 선택자` — 그 요소가 보일 때까지 기다린다.
+    - `setViewport: { width, height }` — 화면 크기를 바꾼다(가로 320~3840, 세로 240~2160).
+  - 임의 JavaScript 실행은 받지 않는다. 다른 조작이나 필드가 있으면 정의 전체를 거부한다.
+    - 왜: 기준을 만드는 절차가 코드 실행이 되면, 정의만 보고 무엇을 찍는지 알 수 없다.
+  - 원본 프로토타입(`Main.dc.html`)에는 `#조각` 라우팅이 없다. 그래서 보통 `steps`로 화면까지 찾아간다.
 
 ```yaml
   night:
     - name: visual
       argv: [node, capture.mjs]
       screens:
-        wbs: prototype/uiux/Main.dc.html#wbs
-        task: prototype/uiux/Main.dc.html#task
+        home:
+          page: prototype/uiux/Main.dc.html
+          ready: main
+        ci:
+          page: prototype/uiux/Main.dc.html
+          steps:
+            - click: "nav [data-nav=ci]"
+            - waitFor: .ci-tabs
+          ready: .ci-tabs
 ```
 
+- 조작이 실패하거나 `ready`가 10초 안에 보이지 않으면, 그 화면은 `missing`(비교 불가)이고 실패다.
 - 기준 이미지는 Runner가 직접 만든다(조정자 결정 8). 커밋한 PNG는 요구하지 않는다.
   - Runner 소유 렌더러가 고정한 main 커밋의 HTML을 렌더해 PNG로 찍는다.
     - 렌더러는 단계(정의의 명령)가 아니라 Runner가 실행한다. 그래서 Agent가 만든 코드가 기준을 만들 수 없다.
@@ -175,6 +194,9 @@ Runner는 ③④의 각 단계 명령에 아래 환경 변수를 준다.
   - 만든 기준 이미지는 `<AWBS_HOME>/ci/baselines/<main SHA>/`에 보관한다. 같은 main이면 다시 렌더하지 않는다.
     - 보관본은 링크를 따라가지 않고 읽는다. 손상됐으면 다시 렌더한다.
   - 렌더가 실패하거나 렌더러가 연결되지 않았으면 그 화면은 `missing`(비교 불가)이고 실패다.
+  - 고정 글꼴이 없으면 브라우저가 다른 글꼴로 그린다. 그래서 렌더러가 브라우저 안에서 글꼴 설치를 재고, 없으면 렌더를 멈춘다(비교 불가, 결정 12).
+    - 글자 폭으로 잰다. `document.fonts.check`는 없는 글꼴에도 true를 돌려주므로 쓰지 않는다.
+    - Runner 준비 점검의 `font` 항목도 `fc-list`로 같은 글꼴을 확인한다. 없으면 warn이고, 실행은 멈추지 않는다.
   - 실제 브라우저 렌더러(`createPlaywrightRenderer`)는 M7-06에서 Playwright의 chromium을 넘겨 연결한다.
     - Runner에 Playwright 의존성을 더하는 일(lockfile 변경)은 그때 한다.
 - 단계는 앱 화면도 같은 크기로 찍어야 한다. Runner가 `AWBS_SCREEN_WIDTH=1440`, `AWBS_SCREEN_HEIGHT=900`을 준다.

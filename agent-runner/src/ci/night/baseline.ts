@@ -4,7 +4,7 @@ import { lstat, mkdir, open } from 'node:fs/promises';
 import { join, posix } from 'node:path';
 import { atomicWrite } from '../../state/files.ts';
 import type { RunCommand } from '../../readiness/command.ts';
-import type { ScreenTarget } from '../pipeline.ts';
+import type { ScreenStep, ScreenTarget } from '../pipeline.ts';
 import { decodePng } from './visual.ts';
 
 /**
@@ -24,8 +24,10 @@ export const BASELINE_RENDER = {
 export interface RenderRequest {
   /** 시작 HTML의 저장소 경로(예: prototype/uiux/Main.dc.html). */
   entry: string;
-  /** 화면을 여는 `#…` 라우트. */
+  /** 화면을 여는 `#…` 라우트. 없으면 빈 문자열. */
   route: string;
+  /** 화면까지 가는 제한된 조작(click·waitFor·setViewport). 순서대로 한다. */
+  steps?: readonly ScreenStep[];
   /** 화면 준비가 끝났음을 알리는 CSS 선택자. 보일 때까지 기다린 뒤 찍는다. */
   ready: string;
   /** 고정한 main 커밋의 `prototype/uiux/` 파일만 읽는다. 다른 경로는 거부한다. */
@@ -83,6 +85,8 @@ interface RouteLike { request(): { url(): string }; fulfill(response: { status: 
 interface PageLike {
   route(pattern: string, handler: (route: RouteLike) => Promise<void>): Promise<void>;
   goto(url: string): Promise<unknown>;
+  click(selector: string, options: { timeout: number }): Promise<unknown>;
+  setViewportSize(size: { width: number; height: number }): Promise<unknown>;
   waitForSelector(selector: string, options: { state: 'visible'; timeout: number }): Promise<unknown>;
   addStyleTag(options: { content: string }): Promise<unknown>;
   evaluate<A>(script: (arg: A) => unknown, arg?: A): Promise<unknown>;
@@ -102,7 +106,7 @@ export interface ChromiumLike {
  * - 글꼴은 CSS로 고정한다. 애니메이션·커서는 끈다.
  */
 export function createPlaywrightRenderer(chromium: ChromiumLike): BaselineRenderer {
-  return async ({ entry, route, ready, read, settings }) => {
+  return async ({ entry, route, steps = [], ready, read, settings }) => {
     const browser = await chromium.launch();
     try {
       const context = await browser.newContext({ viewport: settings.viewport, deviceScaleFactor: settings.deviceScaleFactor,
@@ -118,6 +122,15 @@ export function createPlaywrightRenderer(chromium: ChromiumLike): BaselineRender
           } catch { await route.abort(); }
         });
         await page.goto(`${ORIGIN}/${entry}${route}`);
+        // 정의에 적힌 제한된 조작만 순서대로 한다. 임의 스크립트는 실행하지 않는다(결정 13 보완).
+        for (const [index, step] of steps.entries()) {
+          const label = 'click' in step ? `click ${step.click}` : 'waitFor' in step ? `waitFor ${step.waitFor}` : `setViewport ${String(step.setViewport.width)}x${String(step.setViewport.height)}`;
+          try {
+            if ('click' in step) await page.click(step.click, { timeout: READY_TIMEOUT_MS });
+            else if ('waitFor' in step) await page.waitForSelector(step.waitFor, { state: 'visible', timeout: READY_TIMEOUT_MS });
+            else await page.setViewportSize(step.setViewport);
+          } catch (error) { throw new Error(`조작 단계 ${String(index + 1)}(${label})이 실패해 기준 화면을 만들 수 없습니다(비교 불가).`, { cause: error }); }
+        }
         // 화면이 다 그려졌다는 표시가 보일 때까지 기다린다. 안 보이면 그 라우트로 열 수 없는 화면이다(결정 13).
         try { await page.waitForSelector(ready, { state: 'visible', timeout: READY_TIMEOUT_MS }); }
         catch (error) { throw new Error(`준비 선택자 ${ready}가 ${String(READY_TIMEOUT_MS)}ms 안에 보이지 않습니다(라우트 ${route}로 열 수 없는 화면).`, { cause: error }); }
@@ -153,7 +166,7 @@ export async function baselineImage(home: string, baseSha: string, screen: strin
   } catch { /* 없거나 손상됐거나 링크면 다시 렌더한다. */ }
   if (!render) throw new Error('기준 이미지 렌더러가 연결되지 않았습니다.');
   let image: Buffer;
-  try { image = await render({ entry: target.page, route: target.route, ready: target.ready, read, settings: BASELINE_RENDER }, signal); }
+  try { image = await render({ entry: target.page, route: target.route ?? '', ...(target.steps && { steps: target.steps }), ready: target.ready, read, settings: BASELINE_RENDER }, signal); }
   catch (error) { throw new Error(`기준 이미지를 렌더하지 못했습니다: ${error instanceof Error ? error.message : ''}`, { cause: error }); }
   try { decodePng(image); } catch { throw new Error('기준 이미지 렌더 결과가 PNG가 아닙니다.'); }
   // rename으로 바꾸므로 같은 이름의 링크가 있어도 따라가지 않고 링크 자체를 바꾼다.

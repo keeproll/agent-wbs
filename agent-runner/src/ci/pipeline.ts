@@ -8,12 +8,25 @@ export interface PipelineStep {
   budgetsMs?: Record<string, number>;
   /**
    * ③ night 단계에만 쓰는 선택 필드. 화면 이름 → 기준 화면을 여는 방법(조정자 결정 8·13).
-   * page: main의 `prototype/uiux/` 아래 HTML, route: 화면을 여는 `#조각`(필수), ready: 화면 준비가 끝났음을 알리는 CSS 선택자.
+   * page: main의 `prototype/uiux/` 아래 HTML, route: 화면을 여는 `#조각`(선택), steps: 화면까지 가는 제한된 조작(선택),
+   * ready: 화면 준비가 끝났음을 알리는 CSS 선택자(필수).
    */
   screens?: Record<string, ScreenTarget>;
 }
 const MAX_BUDGET_MS = 600_000;
-export interface ScreenTarget { page: string; route: string; ready: string }
+/** 기준 화면까지 가는 제한된 조작. 이 세 가지만 허용한다. 임의 JS 실행은 받지 않는다(결정 13 보완). */
+export type ScreenStep = { click: string } | { waitFor: string } | { setViewport: { width: number; height: number } };
+export interface ScreenTarget { page: string; route?: string; ready: string; steps?: ScreenStep[] }
+const MAX_SCREEN_STEPS = 20;
+const selector = (value: unknown): value is string => typeof value === 'string' && value.trim() !== '' && value.length <= 200 && !/[\0\r\n]/.test(value);
+function screenStep(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 1) return false;
+  const [[kind, arg]] = Object.entries(value) as [[string, unknown]];
+  if (kind === 'click' || kind === 'waitFor') return selector(arg);
+  if (kind !== 'setViewport' || !arg || typeof arg !== 'object' || Array.isArray(arg) || Object.keys(arg).length !== 2) return false;
+  const { width, height } = arg as Record<string, unknown>;
+  return Number.isSafeInteger(width) && Number.isSafeInteger(height) && (width as number) >= 320 && (width as number) <= 3840 && (height as number) >= 240 && (height as number) <= 2160;
+}
 export interface Pipeline { version: 1; stages: Record<typeof STAGES[number], PipelineStep[]> }
 
 function invalid(): never { throw new TypeError('pipeline.yaml 스키마가 올바르지 않습니다.'); }
@@ -51,13 +64,14 @@ export function parsePipeline(source: string): Pipeline {
       if (extras.includes('budgetsMs')) result.budgetsMs = table(step.budgetsMs, (_, ms) => Number.isSafeInteger(ms) && (ms as number) >= 1 && (ms as number) <= MAX_BUDGET_MS);
       // 기준은 팀장만 바꾸는 보호 경로(prototype/uiux/)의 HTML이다. Runner가 직접 렌더한다(조정자 결정 8).
       // 왜: Agent가 기준을 자기 화면으로 바꾸지 못하게 한다. 커밋한 PNG는 요구하지 않는다.
-      // 화면은 경로+#라우트로 열 수 있어야 한다. 라우트가 없는 화면은 여기서 거부한다(결정 13).
+      // 화면은 경로로 열고, 필요하면 #라우트나 제한된 조작으로 찾아간다(결정 13과 보완). 그 밖의 필드는 거부한다.
       if (extras.includes('screens')) result.screens = table(step.screens, (_, target) => {
         if (!target || typeof target !== 'object' || Array.isArray(target)) return false;
-        const { page, route, ready } = target as Record<string, unknown>;
-        return Object.keys(target).length === 3 && typeof page === 'string' && typeof route === 'string' && typeof ready === 'string' &&
+        const { page, route, ready, steps } = target as Record<string, unknown>;
+        return Object.keys(target).every(k => ['page', 'route', 'ready', 'steps'].includes(k)) && typeof page === 'string' &&
           /^prototype\/uiux\/[^#?\0]+\.html$/.test(page) && !page.split('/').some(part => ['', '.', '..'].includes(part)) &&
-          /^#[^#\s]+$/.test(route) && ready.trim() !== '' && ready.length <= 200 && !/[\0\r\n]/.test(ready);
+          (route === undefined || typeof route === 'string' && /^#[^#\s]+$/.test(route)) && selector(ready) &&
+          (steps === undefined || Array.isArray(steps) && steps.length >= 1 && steps.length <= MAX_SCREEN_STEPS && steps.every(screenStep));
       });
       return result;
     });

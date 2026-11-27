@@ -42,7 +42,6 @@ test('screens는 화면마다 prototype/uiux HTML 경로·#라우트·준비 완
   expect(parsePipeline(night({ wbs: WBS })).stages.night[0]?.screens).toEqual({ wbs: WBS });
   for (const bad of [
     'prototype/uiux/Main.dc.html#wbs',
-    { page: 'prototype/uiux/Main.dc.html', ready: 'main' },
     { page: 'prototype/uiux/Main.dc.html', route: '', ready: 'main' },
     { page: 'prototype/uiux/Main.dc.html', route: 'wbs', ready: 'main' },
     { page: 'prototype/uiux/Main.dc.html', route: '#', ready: 'main' },
@@ -55,7 +54,24 @@ test('screens는 화면마다 prototype/uiux HTML 경로·#라우트·준비 완
     { page: 'src/index.html', route: '#wbs', ready: 'main' },
     { page: 'prototype/uiux/../x.html', route: '#wbs', ready: 'main' },
     { ...WBS, extra: 1 },
+    { ...WBS, steps: [] },
+    { ...WBS, steps: [{ evaluate: 'document.body.click()' }] },
+    { ...WBS, steps: [{ click: 'a', waitFor: 'b' }] },
+    { ...WBS, steps: [{ click: '' }] },
+    { ...WBS, steps: [{ setViewport: { width: 100, height: 900 } }] },
+    { ...WBS, steps: [{ setViewport: { width: 1440.5, height: 900 } }] },
+    { ...WBS, steps: [{ setViewport: { width: 1440, height: 900, scale: 2 } }] },
+    { ...WBS, steps: Array.from({ length: 21 }, () => ({ click: 'a' })) },
   ]) expect(() => parsePipeline(night({ wbs: bad })), JSON.stringify(bad)).toThrow();
+});
+
+test('원본에 hash 라우팅이 없으므로 화면까지 가는 제한된 조작 단계(click·waitFor·setViewport)를 둘 수 있다', () => {
+  const night = (screens: unknown) => JSON.stringify({ ...definition, stages: { ...definition.stages, night: [{ name: 'visual', argv: ['x'], screens }] } });
+  const ci = { page: 'prototype/uiux/Main.dc.html', ready: '.ci-tabs', steps: [{ click: 'nav [data-nav=ci]' }, { waitFor: '.ci-tabs' }, { setViewport: { width: 390, height: 844 } }] };
+  expect(parsePipeline(night({ ci })).stages.night[0]?.screens).toEqual({ ci });
+  // 라우트도 조작도 없으면 처음 열리는 화면이다.
+  const home = { page: 'prototype/uiux/Main.dc.html', ready: 'main' };
+  expect(parsePipeline(night({ home })).stages.night[0]?.screens).toEqual({ home });
 });
 
 test('기준 이미지는 Runner 렌더러가 main의 HTML을 고정 뷰포트·글꼴로 렌더해 만든다', async () => {
@@ -133,7 +149,7 @@ test('기준 렌더가 실패하거나 렌더러가 없으면 비교 불가로 �
   } finally { await f.close(); }
 });
 
-function fakeChromium(options: { ready?: boolean; fontInstalled?: boolean } = {}) {
+function fakeChromium(options: { ready?: boolean; fontInstalled?: boolean; failClick?: string } = {}) {
   const log: string[] = [];
   const files: Record<string, string> = { 'prototype/uiux/Main.dc.html': '<html></html>', 'prototype/uiux/app.css': 'body{}' };
   type Handler = (route: { request: () => { url: () => string }; fulfill: (r: { status: number; body: Buffer; contentType: string }) => Promise<void>; abort: () => Promise<void> }) => Promise<void>;
@@ -148,9 +164,14 @@ function fakeChromium(options: { ready?: boolean; fontInstalled?: boolean } = {}
           abort: async () => { log.push(`abort ${u}`); } });
       }
     },
+    click: async (selector: string, o: Record<string, unknown>) => {
+      log.push(`click ${selector} ${JSON.stringify(o)}`);
+      if (selector === options.failClick) throw new Error('Timeout 10000ms exceeded');
+    },
+    setViewportSize: async (size: { width: number; height: number }) => { log.push(`viewport ${JSON.stringify(size)}`); },
     waitForSelector: async (selector: string, o: Record<string, unknown>) => {
       log.push(`wait ${selector} ${JSON.stringify(o)}`);
-      if (options.ready === false) throw new Error('Timeout 10000ms exceeded');
+      if (options.ready === false && selector === '[data-screen=wbs]') throw new Error('Timeout 10000ms exceeded');
     },
     addStyleTag: async ({ content }: { content: string }) => { log.push(`style ${content}`); },
     evaluate: async (_script: unknown, arg?: unknown) => { log.push(`evaluate ${JSON.stringify(arg ?? null)}`); return arg === undefined ? undefined : options.fontInstalled !== false; },
@@ -203,5 +224,38 @@ test('준비 점검용 글꼴 확인은 fontconfig로 고정 글꼴 설치 여�
   expect(calls[0]).toEqual(['fc-list', ':family=Noto Sans KR', 'family']);
   expect(await checkBaselineFont(run(''))).toMatchObject({ status: 'warn', detail: expect.stringContaining('비교 불가') });
   expect(await checkBaselineFont(run('', 127))).toMatchObject({ status: 'warn' });
+  expect(await checkBaselineFont(run('Noto Sans KR\n', 1))).toMatchObject({ status: 'warn' });
   expect(await checkBaselineFont(async () => { throw new Error('ENOENT'); })).toMatchObject({ status: 'warn' });
+});
+
+test('렌더러는 정의한 조작 단계를 순서대로 한 뒤 준비 선택자를 기다려 찍는다', async () => {
+  const { log, chromium, request } = fakeChromium();
+  const steps = [{ click: 'nav [data-nav=ci]' }, { waitFor: '.ci-tabs' }, { setViewport: { width: 390, height: 844 } }];
+  expect(await createPlaywrightRenderer(chromium)({ ...request, route: '', steps })).toBe(red);
+  const order = ['goto http://baseline.invalid/prototype/uiux/Main.dc.html', `click nav [data-nav=ci] ${JSON.stringify({ timeout: 10_000 })}`,
+    `wait .ci-tabs ${JSON.stringify({ state: 'visible', timeout: 10_000 })}`, `viewport ${JSON.stringify({ width: 390, height: 844 })}`, WAIT];
+  expect(order.map(line => log.indexOf(line))).toEqual([...order.map(line => log.indexOf(line))].sort((a, b) => a - b));
+  expect(order.every(line => log.includes(line))).toBe(true);
+  expect(log.indexOf(WAIT)).toBeLessThan(log.findIndex(l => l.startsWith('shot')));
+});
+
+test('조작 단계가 실패하면 렌더 실패(비교 불가)이고 찍지 않는다', async () => {
+  const { log, chromium, request } = fakeChromium({ failClick: 'nav [data-nav=ci]' });
+  await expect(createPlaywrightRenderer(chromium)({ ...request, route: '', steps: [{ click: 'nav [data-nav=ci]' }] })).rejects.toThrow('조작 단계 1(click nav [data-nav=ci])');
+  expect(log.some(l => l.startsWith('shot'))).toBe(false);
+  expect(log.at(-1)).toBe('close');
+});
+
+test('조작 단계는 기준 이미지 보관 키에 들어가 바뀌면 다시 렌더한다', async () => {
+  const f = await ciFixture({ night: ['visual'] });
+  try {
+    await prototype(f, '<html>RED</html>', { wbs: { ...WBS, steps: [{ click: 'a' }] } });
+    const r = renderer();
+    shoot(f, red);
+    await runNightCheck(night(f, r.render), '2026-11-27');
+    expect(r.calls[0]?.steps).toEqual([{ click: 'a' }]);
+    await prototype(f, '<html>RED</html>', { wbs: { ...WBS, steps: [{ click: 'b' }] } });
+    await runNightCheck(night(f, r.render), '2026-11-28');
+    expect(r.calls).toHaveLength(2);
+  } finally { await f.close(); }
 });
