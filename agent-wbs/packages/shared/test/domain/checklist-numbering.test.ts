@@ -1,6 +1,16 @@
 import { expect, test } from 'vitest';
-import { applyChecklistVerification, attemptKey, checklistSummary, displayKey, wbsNumbers } from '../../src/domain/index.ts';
+import { applyChecklistVerification, attemptKey, checklistSummary, displayKey, wbsNumbers, taskBranch, DESIGN_REF_PATTERN } from '../../src/domain/index.ts';
 import type { ChecklistItem, Phase } from '../../src/domain/index.ts';
+
+test('브랜치 생성과 ref 검증은 같은 Task 키·권한 세대 규칙을 쓴다', () => {
+  expect(taskBranch('TASK-0001', 3)).toBe('agent/TASK-0001-h3');
+  expect(taskBranch('TASK-0001')).toBe('agent/TASK-0001');
+  const pattern = new RegExp(DESIGN_REF_PATTERN);
+  for (const ref of ['main', taskBranch('TASK-0001'), taskBranch('TASK-0001', 3)]) expect(pattern.test(ref)).toBe(true);
+  for (const ref of ['Main', 'refs/heads/main', 'agent/foo', 'agent/task-0001']) expect(pattern.test(ref)).toBe(false);
+  expect(() => taskBranch('wrong')).toThrow();
+  expect(() => taskBranch('TASK-0001', -1)).toThrow();
+});
 
 test('checklist counts required and optional items and rounds total progress as the prototype', () => {
   expect(checklistSummary([])).toEqual({ total: 0, done: 0, requiredLeft: 0, percent: 0 });

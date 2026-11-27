@@ -29,7 +29,8 @@ export async function decisions(db: Db, projectId: string) {
       level: (c.level ?? null) as string | null, condition: String(c.condition ?? ''), status: row.status, reason: String(c.reason ?? ''),
       alternatives: String(c.alternatives ?? ''), by: String(c.by ?? ''), at: new Date(String(c.at ?? row.updated_at)).toISOString(), updatedAt: row.updated_at,
       constraintId: (c.constraintId ?? null) as string | null, conditionResult: (c.conditionResult ?? null) as 'met' | 'not_met' | null,
-      ...(row.content.change ? { change: row.content.change } : {}) };
+      ...(row.content.change ? { change: row.content.change } : {}),
+      ...(typeof row.content.itemKey === 'string' && typeof row.content.driftId === 'string' ? { itemKey: row.content.itemKey, driftId: row.content.driftId } : {}) };
   });
 }
 
