@@ -988,3 +988,11 @@ test('결정 12: Runner 준비 점검은 고정 글꼴(font) 항목을 보고할
   expect(r.statusCode,r.body).toBe(204);
   expect((await owner.query("select status from runner_readiness where key='font'")).rows).toEqual([{ status:'warn' }]);
 });
+
+test('결정 11: 늦게 끝난 이전 배포 실행의 통과는 더 새로운 서비스 없음 경보를 해소하지 않는다', async () => {
+  const older = await deployJob();
+  const newer = await deployJob();
+  expect((await patch(newer,{ fence:1,status:'fail',deployRestore:{ commit:null,status:'none' } })).statusCode).toBe(204);
+  expect((await patch(older,{ fence:1,status:'pass' })).statusCode).toBe(204);
+  expect((await serviceDown()).alerts).toHaveLength(1);
+});
