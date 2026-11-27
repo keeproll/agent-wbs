@@ -58,14 +58,20 @@ describe('팀장 메시지 초안·전송·취소', () => {
     expect((await h.lead('PATCH', `/api/messages/${created.id}`, { updatedAt: created.updatedAt, status: 'Sent' })).status).toBe(400);
   });
 
-  test('실행 중 Task + 실행 중 전달 꺼짐 → 다음 실행 대기, 켜짐 → 바로 대기열', async () => {
+  test('Q-07: running·qa·verifying는 기존 live_inject=true여도 다음 실행 대기', async () => {
     const mk = async () => (await h.lead('POST', '/api/messages', { taskKey: 'TASK-0002', type: '수정 요청', toAgent: 'Claude', body: 'b' })).body;
     await h.owner.query('update exec_policy set live_inject=false');
     const a = await mk();
     expect((await send(a.id, a.updatedAt)).body).toMatchObject({ delivery: 'Queued', pendingNext: true });
     await h.owner.query('update exec_policy set live_inject=true');
-    const b = await mk();
-    expect((await send(b.id, b.updatedAt)).body).toMatchObject({ delivery: 'Queued', pendingNext: false });
+    for (const status of ['running', 'qa', 'verifying']) {
+      await h.owner.query('update tasks set status=$1 where task_key=$2', [status, 'TASK-0002']);
+      const b = await mk();
+      expect((await send(b.id, b.updatedAt)).body).toMatchObject({ delivery: 'Queued', pendingNext: true });
+      const queued = (await h.runner('GET', '/api/runner/messages')).body.messages;
+      expect(queued.find((m: { id: string }) => m.id === b.id)).toMatchObject({ pendingNext: true });
+    }
+    await h.owner.query("update tasks set status='running' where task_key='TASK-0002'");
   });
 
   test('취소는 Draft/Queued만, Runner가 가져간 뒤(Sent)는 409', async () => {

@@ -59,7 +59,7 @@ test('설정 열 묶음 10개는 자기 묶음만 버전을 바꾸고 같은 묶
       const change: Record<string, () => Body> = {
         split: () => ({ ...value, maxHours: value.maxHours + 1 }),
         blackouts: () => ({ ...value, days: [{ date: '2030-12-24', note: '휴무' }] }),
-        workflow: () => ({ ...value, liveInject: !value.liveInject }),
+        workflow: () => ({ ...value, heartbeatSeconds: value.heartbeatSeconds + 1 }),
         models: () => ({ ...value, rankOrder: { ...value.rankOrder, Claude: [...value.rankOrder.Claude].reverse() } }),
         subagents: () => ({ ...value, enabled: !value.enabled }),
         'exec-policy': () => ({ ...value, lowPct: value.lowPct + 1 }),

@@ -374,7 +374,7 @@ test('P2-1: start retains reserved until process registration; duplicate process
     await rejects(c, 'update execution_holds set pgid=456 where id=$1', [h]);
     await c.query("update execution_holds set slot_state='unconfirmed' where id=$1", [h]);
     await rejects(c, "update execution_holds set slot_state='none',release_proof='no_process' where id=$1", [h]);
-    // 0041(조정자 결정 3): cgroup이 기록된 보유는 group_empty로 닫을 수 없고 cgroup_empty로만 닫는다.
+    // 0040(조정자 결정 3): cgroup이 기록된 보유는 group_empty로 닫을 수 없고 cgroup_empty로만 닫는다.
     await rejects(c, "update execution_holds set slot_state='none',release_proof='group_empty' where id=$1", [h]);
     await c.query("update execution_holds set slot_state='none',release_proof='cgroup_empty' where id=$1", [h]);
   }));

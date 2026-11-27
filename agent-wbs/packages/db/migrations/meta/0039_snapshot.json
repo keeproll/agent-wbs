@@ -1593,6 +1593,12 @@
           "type": "jsonb",
           "primaryKey": false,
           "notNull": false
+        },
+        "commit_parents": {
+          "name": "commit_parents",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {},
@@ -2780,7 +2786,7 @@
         },
         "drift_compat": {
           "name": "drift_compat",
-          "value": "\"design_drifts\".\"compat\" in ('\ud638\ud658','\uae68\uc9d0','\ub300\uc870 \uc548 \ud568')"
+          "value": "\"design_drifts\".\"compat\" in ('호환','깨짐','대조 안 함')"
         }
       },
       "isRLSEnabled": false
@@ -3494,7 +3500,7 @@
         },
         "design_versions_compat_value": {
           "name": "design_versions_compat_value",
-          "value": "\"design_versions\".\"compat\" in ('\ud638\ud658', '\uae68\uc9d0', '\ub300\uc870 \uc548 \ud568')"
+          "value": "\"design_versions\".\"compat\" in ('호환', '깨짐', '대조 안 함')"
         }
       },
       "isRLSEnabled": false
@@ -3961,6 +3967,43 @@
         }
       },
       "indexes": {
+        "one_open_job_hold": {
+          "name": "one_open_job_hold",
+          "columns": [
+            {
+              "expression": "job",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"execution_holds\".\"closed_at\" is null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "hold_job_history": {
+          "name": "hold_job_history",
+          "columns": [
+            {
+              "expression": "job",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "fence",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "one_task_lock": {
           "name": "one_task_lock",
           "columns": [
@@ -4075,15 +4118,7 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "execution_holds_job_unique": {
-          "name": "execution_holds_job_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "job"
-          ]
-        }
-      },
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
         "hold_lock_target": {
@@ -6107,7 +6142,7 @@
         },
         "messages_type_value": {
           "name": "messages_type_value",
-          "value": "\"messages\".\"type\" in ('\ucd94\uac00 \uc9c0\uc2dc', '\uc218\uc815 \uc694\uccad', '\uc9c8\ubb38', '\uc77c\ubc18 \uc758\uacac', '\uc751\ub2f5')"
+          "value": "\"messages\".\"type\" in ('추가 지시', '수정 요청', '질문', '일반 의견', '응답')"
         },
         "message_participants": {
           "name": "message_participants",
@@ -8557,7 +8592,7 @@
       "checkConstraints": {
         "job_event_kind": {
           "name": "job_event_kind",
-          "value": "\"runner_job_events\".\"kind\" in ('prepared','prestart_failed','started','lease_lost','reconciled','finished')"
+          "value": "\"runner_job_events\".\"kind\" in ('prepared','prestart_failed','returned','started','lease_lost','reconciled','finished')"
         }
       },
       "isRLSEnabled": false
@@ -8657,6 +8692,19 @@
           "primaryKey": false,
           "notNull": true,
           "default": 0
+        },
+        "resource_returns": {
+          "name": "resource_returns",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "resource_retry_at": {
+          "name": "resource_retry_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         },
         "generation": {
           "name": "generation",
@@ -10117,7 +10165,7 @@
       "checkConstraints": {
         "task_estimates_confidence_value": {
           "name": "task_estimates_confidence_value",
-          "value": "\"task_estimates\".\"confidence\" in ('\uc0c1', '\uc911', '\ud558')"
+          "value": "\"task_estimates\".\"confidence\" in ('상', '중', '하')"
         },
         "estimate_bounds": {
           "name": "estimate_bounds",
@@ -12131,8 +12179,7 @@
       "values": [
         "no_process",
         "group_empty",
-        "boot_changed",
-        "cgroup_empty"
+        "boot_changed"
       ]
     },
     "public.report_kind": {
@@ -12241,6 +12288,6 @@
     "tables": {},
     "columns": {}
   },
-  "id": "509269f8-c688-46df-9bba-7540c0b259d1",
-  "prevId": "f6e545b3-009c-44ad-bacc-7ecd7b8fbd26"
+  "id": "8b8ec410-c560-479f-839f-c83c4605d708",
+  "prevId": "52f1d872-37e8-46f0-80b4-2530e7d5931d"
 }

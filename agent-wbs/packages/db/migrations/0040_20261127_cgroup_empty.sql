@@ -47,7 +47,7 @@ BEGIN
   ELSIF NEW.slot_state='none' AND OLD.slot_state<>'none' THEN
     IF NEW.release_proof IS NULL OR (NEW.release_proof='no_process' AND
       (OLD.slot_state='active' OR OLD.pgid IS NOT NULL OR OLD.cgroup IS NOT NULL))
-      -- 0041: cgroup이 기록된 보유는 cgroup_empty(또는 부팅 변경)로만, cgroup이 없는 보유는 group_empty로만 닫는다.
+      -- 0040: cgroup이 기록된 보유는 cgroup_empty(또는 부팅 변경)로만, cgroup이 없는 보유는 group_empty로만 닫는다.
       OR (NEW.release_proof::text='group_empty' AND OLD.cgroup IS NOT NULL)
       OR (NEW.release_proof::text='cgroup_empty' AND (OLD.cgroup IS NULL OR OLD.pgid IS NULL)) THEN
       RAISE EXCEPTION 'fresh, compatible release proof required' USING ERRCODE='23514';
@@ -89,7 +89,7 @@ BEGIN
         OR jsonb_typeof(proof->'proof') IS DISTINCT FROM 'string' OR proof->>'proof' NOT IN ('no_process','group_empty','cgroup_empty','boot_changed') OR NOT proof ? 'proof'
         OR (proof->>'proof'='no_process' AND (h->>'pgid' IS NOT NULL OR h->>'cgroup' IS NOT NULL OR h->>'slot_state'='active'))
         OR (proof->>'proof'='group_empty' AND (h->>'pgid' IS DISTINCT FROM proof->>'processGroup' OR h->>'cgroup' IS NOT NULL))
-        -- 0041: cgroup이 기록된 보유는 같은 cgroup 경로와 그룹 번호의 cgroup_empty로만 정리를 확인한다.
+        -- 0040: cgroup이 기록된 보유는 같은 cgroup 경로와 그룹 번호의 cgroup_empty로만 정리를 확인한다.
         OR (proof->>'proof'='cgroup_empty' AND (h->>'cgroup' IS NULL OR h->>'cgroup' IS DISTINCT FROM proof->>'cgroup'
           OR h->>'pgid' IS DISTINCT FROM proof->>'processGroup'))
         OR (proof->>'proof'='boot_changed' AND (proof->>'currentBootId' IS NULL OR proof->>'currentBootId'=h->>'boot_id')) THEN

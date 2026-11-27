@@ -25,7 +25,10 @@ const runSelect = `select c.id,c.run_no::text "runNo",c.run_key "runKey",case c.
   coalesce((select jsonb_agg(jsonb_build_object('commit',candidate.value->>'commit','taskKey',
     (select case when count(distinct q.task)=1 then min(t.task_key) end from merge_queue q
       join ci_merge_facts f on f.project_id=q.project_id and f.merge_sha=q.actual_merge_sha join tasks t on t.id=q.task
-      where q.project_id=c.project_id and q.status='merged' and (q.actual_merge_sha=candidate.value->>'commit' or f.parents->>1=candidate.value->>'commit')))
+      where q.project_id=c.project_id and q.status='merged' and (q.actual_merge_sha=candidate.value->>'commit' or f.parents->>1=candidate.value->>'commit'
+        or q.qa_head_sha=candidate.value->>'commit'
+        or q.synced_head_sha<>q.qa_head_sha and exists(select 1 from jsonb_array_elements(coalesce(q.head_sync->'chain','[]')) step where step->>'headSha'=candidate.value->>'commit' or step->>'qaHeadSha'=candidate.value->>'commit')
+        or exists(select 1 from jsonb_array_elements(coalesce(f.commit_parents,'[]')) edge where edge->>'commit'=candidate.value->>'commit'))))
     order by candidate.n) from jsonb_array_elements(c.cause_candidates) with ordinality candidate(value,n)),'[]') "causeCandidates",
   coalesce((select jsonb_agg(jsonb_build_object('name',s.step_key,'status',s.status,'durationMs',s.duration_ms) order by s.record_no) from ci_steps s where s.run=c.id),'[]') steps
   from ci_runs c left join tasks t on t.id=c.task`;

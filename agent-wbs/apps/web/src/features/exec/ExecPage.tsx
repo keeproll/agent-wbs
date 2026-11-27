@@ -140,7 +140,7 @@ function ExecBody({ projectId }: { projectId: string }) {
             key={`messages:${task.taskKey}`}
             taskKey={task.taskKey} taskStatus={String(task.lifecycleStatus)} defaultAgent={task.assigneeAgent ?? 'Claude'}
             attempts={attempts} scopeAttempt={explicit ? attempt : null} messages={data.messages}
-            online={online} liveInject={data.workflow.data?.liveInject ?? false}
+            online={online}
           />
         )}
       </div>

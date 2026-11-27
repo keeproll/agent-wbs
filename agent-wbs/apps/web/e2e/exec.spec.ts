@@ -314,6 +314,7 @@ test.describe('UAT-MSG-01·MSG-UI 메시지', () => {
   test('MSG-UI a: running·qa·verifying 모두 다음 실행 대기로 안내·표시', async ({ page }) => {
     for (const status of ['running', 'qa', 'verifying'] as const) {
       const api = await execApi(page);
+      api.state.liveInject = true; // Q-07: 예전 설정값에도 작성 안내는 다음 실행 대기다.
       api.state.tasks.push(summary('TASK-0020', '3.1.1', `상태 ${status}`, status));
       api.state.messages['TASK-0020'] = [message('MSG-020', 'TASK-0020', { delivery: 'Queued', pendingNext: true, body: '추가 지시' })];
       await page.goto('/exec/TASK-0020');

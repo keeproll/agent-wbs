@@ -119,11 +119,10 @@ export async function leadAction(client: PoolClient, id: string, action: 'send' 
   await assertMessageVersion(client, row, expected);
   const next = row.dir === 'out' ? nextDelivery(row.delivery as Delivery, action) : null;
   if (!next) throw badState(row, ACTION_LABEL[action]);
-  /** 지금 조건(Task 실행 중·실행 중 전달)으로 다음 실행 대기를 정한다. 전송과 재전송이 같은 판정을 쓴다(리뷰 지적 5). */
+  /** Q-07: 실행 중이면 항상 다음 실행 대기다. 전송과 재전송이 같은 판정을 쓴다. */
   const pendingNow = async () => {
     const running = (await client.query<{ running: boolean }>("select status in ('running','qa','verifying') as running from tasks where id=$1", [row.task])).rows[0]?.running ?? false;
-    const live = (await client.query<{ live: boolean }>('select live_inject as live from exec_policy where singleton')).rows[0]?.live ?? false;
-    return pendingNextAtSend({ taskRunning: running, liveInject: live });
+    return pendingNextAtSend({ taskRunning: running });
   };
   if (action === 'send') {
     if (!row.body.trim()) throw invalid([{ path: 'body', rule: 'minLength', message: '보낼 내용을 입력하세요.' }]);

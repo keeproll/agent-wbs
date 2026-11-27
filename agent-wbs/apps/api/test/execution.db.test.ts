@@ -526,7 +526,7 @@ test('Gate 뒤 브랜치 head가 바뀌면 옛 시도를 보존하고 새 head�
   expect((await owner.query('select head_sha from task_attempts where id=$1',[a.attempt])).rows).toEqual([{ head_sha:sha }]);
 });
 
-test('조정자 결정 3(0041): cgroup이 기록된 보유는 같은 경로·그룹의 cgroup_empty로만, cgroup 없는 보유는 group_empty로만 닫힌다', async () => {
+test('조정자 결정 3(0040): cgroup이 기록된 보유는 같은 경로·그룹의 cgroup_empty로만, cgroup 없는 보유는 group_empty로만 닫힌다', async () => {
   const cgroup = `/user.slice/user-1000.slice/user@1000.service/app.slice/awbs-${randomUUID()}.scope`;
   const at = () => new Date().toISOString();
   const scoped = await running('dev', 'reserved');

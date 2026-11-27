@@ -4,7 +4,7 @@
  * - 일반 채팅이 아니라 Task·실행 시도에 연결된 지시 · 응답 기록이다(G§4.10). 말풍선을 쓰지 않는다.
  * - 전달 상태(Draft→Queued→Sent→Acknowledged / Failed / Cancelled)와 Agent 응답 · 작업 상태는 따로 보인다(G§9.4-1).
  *   수신 확인(ack)은 작업 완료가 아니다.
- * - 실행 중 전달을 지원하지 않으면 「다음 실행 대기」로 보인다(서버 pendingNext 값 그대로).
+ * - Q-07: 실행 중 Task의 메시지는 「다음 실행 대기」로 보인다(서버 pendingNext 값 그대로).
  * - 메시지는 공식 명세를 바꾸지 않는다. 명세 변경은 Change Proposal로 간다.
  * - 작성 초안은 Task별로 보관한다(messageDrafts.ts). 다른 Task로 옮겨도 남는다.
  */
@@ -34,13 +34,12 @@ export interface MessagesProps {
   /** 메시지 조회(모든 쪽). 실패를 「메시지 없음」으로 보이지 않기 위해 query 그대로 받는다. */
   messages: ExecData['messages'];
   online: boolean;
-  liveInject: boolean;
 }
 
 /** 원본은 running만 다음 실행 대기로 봤다(MM-08). QA·재검증 실행 중도 같은 실행 세션이다(G L355). */
 const RUNNING_STATES = ['running', 'qa', 'verifying'];
 
-export function ExecMessages({ taskKey, taskStatus, defaultAgent, attempts, scopeAttempt, messages, online, liveInject }: MessagesProps) {
+export function ExecMessages({ taskKey, taskStatus, defaultAgent, attempts, scopeAttempt, messages, online }: MessagesProps) {
   const [composing, setComposing] = useState(false);
   const list = messages.data ?? [];
   const shown = scopeAttempt ? list.filter((m) => m.attemptId === scopeAttempt.id) : list;
@@ -75,7 +74,7 @@ export function ExecMessages({ taskKey, taskStatus, defaultAgent, attempts, scop
       {open && (
         <Composer
           key={taskKey} taskKey={taskKey} defaultAgent={defaultAgent} attempts={attempts} scopeAttempt={scopeAttempt}
-          runningWarn={RUNNING_STATES.includes(taskStatus) && !liveInject} offline={!online} onClose={() => { setComposing(false); }}
+          runningWarn={RUNNING_STATES.includes(taskStatus)} offline={!online} onClose={() => { setComposing(false); }}
         />
       )}
     </aside>

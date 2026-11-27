@@ -78,13 +78,17 @@ test('빈 DB와 0014·0016(master)·0017~0027·M6 중간(0029~0034) 단계 DB, M
     // M6·M7 통합: CI 알림도 Telegram 대기열로(0036 awbs_notify_emit)
     '0036_20261127_notify_ci',
     // M6 통합 fix2: 이력 순번 채우기·M6 표 저장 순번(0037)
-    '0037_20261127_record_order', '0041_20261127_cgroup_empty']);
+    '0037_20261127_record_order',
+    '0038_20261127_claim_return_merge_commits',
+    '0039_20261127_resource_return_recovery',
+    // M8 전 연결(조정자 결정 3): 해제 증거 cgroup_empty(0040)
+    '0040_20261127_cgroup_empty']);
   // journal 시각 = 1795740000000 + 번호(0021 이후 규칙)
   for (const e of journal.entries.slice(26)) expect(e.when, e.tag).toBe(1795740000000 + Number(e.tag.slice(0, 4)));
   const fresh = await database('fresh');
   await runMigrations(fresh);
   const expected = await schemaOf(fresh);
-  const stages: (number | string)[] = [14, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 29, 30, 31, 33, 34, 35, 36, ...Object.keys(OLD)];
+  const stages: (number | string)[] = [14, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 29, 30, 31, 33, 34, 35, 36, 37, 38, ...Object.keys(OLD)];
   for (const stage of stages) {
     const pool = await database(String(stage));
     const folder = await mkdtemp(join(tmpdir(), `awbs-stage-${String(stage)}-`));
@@ -119,12 +123,14 @@ test('빈 DB와 0014·0016(master)·0017~0027·M6 중간(0029~0034) 단계 DB, M
       await pool.query("alter table ci_runs add column note text,add column e2e jsonb,add column github_status jsonb,add column finished_at timestamptz,add column cause_candidates jsonb not null default '[]'");
       await pool.query('alter table merge_queue add column merged_at timestamptz');
       await pool.query('alter table flaky_tests add column last_failed_at timestamptz');
+      await pool.query('alter table runner_jobs add column resource_returns integer not null default 0,add column resource_retry_at timestamptz');
       try { await seedDemo(pool, base.href); }
       finally {
         await pool.query('alter table projects drop column pipeline_observations');
         await pool.query('alter table ci_runs drop column note,drop column e2e,drop column github_status,drop column finished_at,drop column cause_candidates');
         await pool.query('alter table merge_queue drop column merged_at');
         await pool.query('alter table flaky_tests drop column last_failed_at');
+        await pool.query('alter table runner_jobs drop column resource_returns,drop column resource_retry_at');
         for (const table of sequenceTables) await pool.query(`alter table ${table} drop column record_no`);
       }
       await pool.query('alter table counters disable trigger counter_monotone');
@@ -196,8 +202,5 @@ test('옛 번호 0041로 CI 마이그레이션을 적용한 DB가 0026 재번호
   const after = await recorded();
   expect(after).toHaveLength(journal.entries.length);
   expect(after).toContain(String(ci.when));
-  // 옛 CI 기록의 시각(…041)은 0026 값으로 바뀌어야 한다. 지금 journal에 같은 시각(…041)의 다른 마이그레이션(0041 cgroup_empty)이 있으면
-  // 그 한 줄만 남는다(조정자 배정 번호가 옛 브랜치 번호와 같은 시각을 씀 — fix1 보고 참고).
-  const reused = journal.entries.filter((e) => e.when === 1795740000041).length;
-  expect(after.filter((v) => v === '1795740000041')).toHaveLength(reused);
+  expect(after).not.toContain('1795740000041');
 }, 60_000);

@@ -194,7 +194,7 @@ test('명령 epoch와 정리 증거를 검사하고 실패 재시도·수동 대
   expect(history.json()).toMatchObject({ items: [{ epoch: 2, runnerCleanupStatus: 'done', deletedTaskCount: 1, keepSettings: false, finishedAt: expect.any(String) }] });
 });
 
-test('조정자 결정 3(0041): cgroup이 기록된 보유의 정리 증거는 같은 경로·그룹의 cgroup_empty만 받는다', async () => {
+test('조정자 결정 3(0040): cgroup이 기록된 보유의 정리 증거는 같은 경로·그룹의 cgroup_empty만 받는다', async () => {
   const cgroup = '/user.slice/user-1000.slice/user@1000.service/app.slice/awbs-0b6f3c2e-6a1d-4f7e-8a9b-0123456789ab.scope';
   await owner.query("insert into execution_holds(project_id,job,epoch,agent,slots,heavy,slot_state,lock_state,host_id,boot_id,fence) values($1,$2,1,'Codex',1,false,'reserved','none','host','boot',1)", [project, job]);
   await owner.query("update execution_holds set slot_state='active',pgid=4242,cgroup=$2 where job=$1", [job, cgroup]);

@@ -186,6 +186,7 @@ flowchart LR
 - **M2-08** — 정책·모델·하위 Agent·메시지·이력·변경 이벤트·무결성 점검(저장된 데이터끼리 모순이 없는지 검사)
   - Task 등급 고정·해제 API(`PUT/DELETE /api/tasks/:taskKey/grade`)와 추정 job 연결도 이 작업 몫이다(M2-07 리뷰 판정).
     - 2026-11-27(main 862e66a) 기준 이 두 경로는 계약에만 있고 서버 구현이 없다. 남은 일이다.
+    - main 023ac8f(M6 통합 뒤)에서도 서버 라우트가 없다. 그대로 남은 일이다.
   - 완료 조건(검증): `W --filter api test -- policy messages changes` + `W test:db -- policy messages changes` (**허용 해제→재판단→재개 이력(D-29)**)
   - 디렉토리: `apps/api/src/{policy,messages,changes}` · 병렬: ∥ · 담당 / 리뷰: Claude / Codex
 - **M2-09** — fake Runner 시나리오 드라이버
@@ -265,12 +266,12 @@ flowchart LR
   - 결합 시험: `R test -- test/integration/runner-flow`(모듈 결합 시나리오)와 실제 진입점 `node src/main.ts`를 띄우는 `test/integration/main-entry`.
     - 둘 다 실제 `reset_project()` 출력과 대조된 공용 fixture(`contracts/fixtures/reset-cleanup-payloads.json`)의 payload를 쓴다.
   - 이후 교차 리뷰 수정으로 정리 명령 payload 고정(contracts §3.2)과 원격 정리(PR 닫기 → 브랜치 삭제 → 되돌림 push, contracts §6)가 연결됐다.
-  - 남은 일(2026-11-27, main 862e66a 기준):
-    - readiness 거부 기록 key(계약 작업, contracts §1.2 [미정])
-    - 결과 SHA push 실행기: 지금은 refspec 규칙(`resultRefspec`)만 있다(M5)
-    - launch 기록 대조(M5-02). 그 전까지 물리 슬롯이 남아 있는데 pgid가 없는 같은 PC·부팅의 보유는 증명 실패로 두고, contracts §3.4-3대로 `unconfirmed`를 유지한다.
+  - 남은 일(2026-11-27, main 862e66a 기준)과 main 023ac8f에서 다시 본 상태:
+    - readiness 거부 기록 key(계약 작업, contracts §1.2) — **처리됨**: key `reports`로 보고한다(contracts §1.2).
+    - 결과 SHA push 실행기 — **처리됨**(M5·M7 통합): Runner가 push한 뒤 PR을 열거나 기존 PR을 쓴다(contracts §3.6-1). 모든 push는 외부 쓰기 관문 하나를 지난다(architecture §4 「외부 쓰기 관문」).
+    - launch 기록 대조(M5-02) — **처리됨**: 세션 실행은 재시작 복구(로컬 launch 기록과 서버 보유 대조)가 끝난 뒤에만 claim한다. 초기화 정리도 같은 기록으로 보유를 확인한다(`exec/launches.ts`).
       - 물리 슬롯 없이 논리 잠금만 남은 보유(`slot_state='none'`)는 지금도 `no_process`로 완료한다(contracts §3.2).
-    - `CliUpdater.tryClaim`을 job claim에 연결(M5)
+    - `CliUpdater.tryClaim`을 job claim에 연결 — **처리됨**: 세션 실행이 claim 때 업데이트 잠금을 확인한다(`exec/session.ts`).
     - Runner가 외부 쓰기 권한 세대를 서버에 묻는 API는 아직 없다. Runner는 정리 결과의 `authority` 항목에 `generation`을 기록만 한다.
 
 ### M5 — 실행 · Planning
@@ -286,6 +287,18 @@ flowchart LR
 - **M5-03** — 프로세스 그룹/cgroup 실증과 관측 등급 기록
   - 완료 조건(검증): `R test:host -- cgroup` 결과를 `docs/plan/` 검증 기록에 남김
   - 디렉토리: `src/exec` · 병렬: M5-02 후 · 담당 / 리뷰: Codex / Claude
+  - **검증 기록(2026-11-27)** — 실제 WSL2 커널에서 잰 `host-facts.json`(측정값 파일)이 근거다. 종료 코드만으로 성공을 판정하지 않는다.
+    - 왜 측정값인가: 「명령이 0으로 끝났다」는 cgroup이 실제로 만들어져 프로세스를 묶었다는 증거가 아니다. 시험이 측정 파일과 값이 없으면 실패하게 만든 이유다.
+    - 사용자 scope: `userScope.available:true`, controller `cpu memory pids`.
+    - 직접 만들기: `directDelegation.available:false`, 경로 `0::/non-systemd`, 오류 `EACCES`.
+    - 사용자 scope의 종료 전 값: `populated=1`, `pids=7`, `memory=36286464` 바이트, `cpuUsec=234031`.
+    - `cgroup.kill` 뒤 값: `populated=0`, `pids=0`, `memory=2162688` 바이트, `cpuUsec=236920`.
+    - 자식·손자·setsid·nohup·이중 fork·환경 표식 제거 자손 6개가 같은 cgroup을 물려받고 함께 끝나는 것을 확인했다.
+    - 같은 사용자·launchId 보존 조건의 프로세스 그룹 정리도 확인했다. 표식을 지운 분리 자손은 이 대안(프로세스 그룹)으로 보장하지 못한다.
+    - `/proc` 합계는 시험 프로그램의 자기 측정값이다. 운영 Runner의 자원 합산은 아직 없다.
+    - 이 실측은 `productionConnected:false`, `dedicatedAccountVerified:false`다. 운영 연결(전용 계정 CLI를 Runner 사용자의 scope 안에서 실행)은 Q-08 후속 작업과 M8 실측이 맡는다. 그때까지 실제 CLI 관측 등급은 `unverified`다.
+    - 숫자를 남기는 이유: 다시 재면 다른 PC·세션에서 값이 달라질 수 있다.
+    - 운영 요구사항: 사용자 systemd가 떠 있어야 한다. 로그인 세션이 없으면 linger가 필요하다(open-questions §3 「세션 cgroup 생성·측정」).
 - **M5-04** — 초기 분석·차이 분석·추정·분할 orchestration(여러 단계를 차례로 엮어 실행)
   - 완료 조건(검증): `R test -- planning` (단계 실패 후 재개, 초안 스키마, `judgedRules`·`splitJudgements` 두 Agent 합의 출력)
   - 디렉토리: `src/planning` · 병렬: ∥ · 담당 / 리뷰: Claude / Codex
@@ -296,6 +309,22 @@ flowchart LR
 - **M5-06** — 실제 하위 Agent v1 정의 작성·교차 검토(Mock 미사용)
   - 완료 조건(검증): `W subagents:check` (hash·버전·model/effort 부재·허용 도구·SUB_MOCK 문안과 충돌 지시 0건) + 리뷰 기록
   - 디렉토리: `packages/db/seed/subagents` · 병렬: ∥ · 담당 / 리뷰: Claude / Codex
+  - 리뷰에서 확인한 사실: Codex 하위 Agent는 역할 파일의 `sandbox_mode`를 무시하고 부모 세션의 권한을 물려받는다(최신 codex 소스 기준). 그래서 v1 Codex 정의는 `sandbox_mode`를 적지 않고, 검사기가 적힌 것을 거부한다(data-model §2.6 `subagent_defs`).
+    - 실측이 필요한 5건과 `def_key` 응답 연동은 M8 확인 목록(`packages/db/seed/subagents/REVIEW.md`)에 있다.
+- **M5 결정(조정자 2026-11-27)**
+  - ①·결과 수집 실패의 분류와 실패한 시도의 지시 전달(M5-05 결정 3·4): contracts §3.5, data-model §3.2·§3.3.
+  - 재작업 중 ①의 Task 실패는 재작업 원인 횟수와 자동 재시도 횟수에 모두 센다(contracts §3.5).
+  - 임대 마감 5초 여유와 claim 뒤 최대 20초 대기(contracts §3.4-10·11).
+- **M5·M7 통합(2026-11-27, PR #11 → main 08644ab)** — M5-01~06과 M7-01~06을 한 브랜치로 합쳤다. 자세한 M7 내용은 아래 M7 절에 있다.
+  - Runner가 PR을 열고 번호를 보고한다(contracts §3.6-1). 모든 외부 쓰기는 관문 하나를 지난다(architecture §4).
+  - 마이그레이션 `0026`·`0027`(CI 보고, 저장 순번)을 최종 순번으로 다시 매겼다(data-model §6).
+  - Q-08 전용 계정 설치 스크립트(`agent-runner/scripts/isolation/`)가 들어갔다.
+  - **알려진 한계**
+    - 실제 Runner 진입점(`main.ts`)은 시도 흐름(`jobs`)과 CI 실행기(`ci`)를 아직 연결하지 않는다. 그래서 실제 Runner는 Agent 실행을 하지 않는다(Q-08 exec 계층 연결 전의 의도).
+    - 연결할 때 `bindTaskCheck`에 앱의 GitHub 클라이언트를 넘겨야 한다.
+    - 원격에 이미 접수된 쓰기는 되돌리지 않는다. 「중단됨」은 원격이 안 바뀌었다는 증거가 아니다.
+    - 응답 기록과 「응답함」 표시 사이에 Runner가 죽으면 다음 시도에서 응답이 한 번 더 갈 수 있다. 응답을 잃는 것보다 낫다고 보고 이 순서로 두었다.
+    - 확인하지 않은 것: 실제 GitHub 쓰기, 실제 PID 번호 순환, 저장 도중 전원 차단, M8 실환경.
 
 ### M6 — 보고서 · 알림 · 설계
 
@@ -328,6 +357,20 @@ flowchart LR
 - **M6-07** — 설계 화면 6탭·Task 연결
   - 완료 조건(검증): `W e2e -- design` (28·29)
   - 디렉토리: `features/design` · 병렬: M6-05 후 · 담당 / 리뷰: Claude / Codex
+- **M6 결정**
+  - 기간 지정 보고서는 상태 이력으로 **기간 끝 시점의 상태**를 되살린다. 첫 주간 보고서는 프로젝트 시작일이 든 주의 **월요일부터 일요일까지**다(owner 2026-11-27 아이템 13). 원본은 시작일부터 7일을 한 주로 셌다(P L3876).
+  - 「다음 예정」 범위는 일간 1일, 주간·기간 지정 7일이다(조정자 결정, M6-01). 원본 P L3810은 기간 지정도 1일만 세어 제목 「다음 주 예정」과 모순이었다.
+  - 설계 보고·결정·호환 판정 규칙(M6-05·M6-06 조정자 결정): contracts §2.3 「설계」.
+- **M6 통합(2026-11-27, PR #12 → main 023ac8f)** — M6-01~07을 M5·M7 통합 뒤의 main에 다시 병합했다.
+  - 마이그레이션은 main 다음 순번 `0028~0035`로 다시 매겼다. 새로 `0036`(알림 공통 함수)과 `0037`(저장 순번 보충)을 더했다(data-model §6).
+  - PostgreSQL은 Debian `postgres:16`이고 `track_commit_timestamp=on`이 꼭 필요하다(data-model §6, architecture §6.2).
+  - CI 알림도 Telegram 대기열로 나간다. 「서비스 없음」(`serviceDown`) 알림을 더했다(data-model §3.7).
+  - UAT-TG-05: M7-06 완료 흐름에서 실제 알림 worker가 fake BotAPI(시험용 가짜 Telegram 서버)로 「Task 완료」·「빌드 성공」·「관리자 개입 필요」를 보내는지 시험으로 확인했다.
+  - 「최신 하나」는 벽시계 대신 저장 순번으로 고른다. M6 자체 표(`notify_outbox`·`reports`·`design_drifts`)에도 순번을 더했다(`0037`).
+  - **알려진 한계**
+    - 메일 실패·설계 경보를 Telegram 종류에 넣을지는 결정 전이다(open-questions §3 「후속 결정 필요」).
+    - 옛 M6-02 작업 브랜치 번호(0047)로 만든 시험 DB는 새로 만들어야 한다.
+    - Q-13 A의 수신자 「외부」 구분은 별도 작업으로 구현 중이다(open-questions §2.1 Q-13).
 
 ### M7 — 빌드 · 통합
 
@@ -336,6 +379,15 @@ flowchart LR
 - **M7-01** — pipeline.yaml 스키마·main 고정·①Task 검사
   - 완료 조건(검증): `R test -- ci-task` (정의 변조·보호 경로·테스트 삭제)
   - 디렉토리: `agent-runner/src/ci` · 병렬: — · 담당 / 리뷰: Codex / Claude
+  - 정한 동작 (자세한 것은 `agent-runner/src/ci/README.md`, 계약은 contracts §3.6)
+    - **symlink는 정상 링크도 거부한다.** 검사 사본에는 일반 파일만 넣는다. 기준 커밋(main)에서 거부되면 `failScope: 'baseline'`, 대상 커밋에서 거부되면 `failScope: 'task'`다.
+      - 왜: 링크를 따라가면 고정한 커밋 밖의 파일이나 실행 도중 바뀐 파일을 읽을 수 있다. 링크 연결 전체를 검증하는 격리는 아직 없다.
+      - 링크 허용 범위는 Q-08 격리 검증 뒤 따로 정한다.
+    - **설정 지문이 다르면 Runner가 시작하지 않는다.** Runner에 등록된 저장소 하나라도 `config` 파일 지문이 등록 때와 다르면 앱 전체가 멈춘다(의도한 안전 동작).
+      - 왜: 설정이 바뀌었다는 것은 누군가 Runner 소유 저장소를 건드렸다는 뜻이다. 예를 들어 `core.hooksPath`가 추가되면 git 명령마다 임의 프로그램이 돈다.
+      - 복구 방법은 같은 README 「실행과 근거」 끝에 있다.
+    - Runner가 붙이는 단계 이름은 `runner:`로 시작한다(M7-03 결정 9). ①에서는 `runner:worktree`, `runner:protected-paths`, `runner:baseline-install`, `runner:test-collection-before`, `runner:test-collection-after`다.
+    - 실패 결과의 선택 필드 `failScope`: `runner:baseline-install`·`runner:test-collection-before`의 실패는 `baseline`, 나머지 검사 실패는 `task`다. 기준 실패는 Task 재작업으로 보내지 않는다.
 - **M7-02** — ②통합 확인·병합 대기열·묶음 확인
   - 완료 조건(검증): `R test -- ci-int`
     - 검사 후 main A→B, QA 후 H 변경, 병합 호출 직전 이동 각각 미병합·재검사
@@ -344,18 +396,45 @@ flowchart LR
     - pipeline SHA
     - 병합 직후 crash 대조
   - 디렉토리: `src/ci/integration` · 병렬: M7-01·**M4-06** 후 · 담당 / 리뷰: Codex / Claude
+  - 정한 동작: H′가 「QA한 H + main의 충돌 없는 병합」임을 증거 사슬(`headSync`, 여러 번이면 `headSync.chain`)로 증명하면 QA를 다시 하지 않는다(조정자 결정, contracts §4.1 코드 근거 고정 3-2).
+    - 사슬은 main에 이미 있는 커밋에 닿으면 멈추고 재QA로 본다. 단계 상한은 50이다(M5·M7 통합).
 - **M7-03** — ③야간(화면 비교·응답 시간·불안정)·④배포 확인·보존 정책
   - 완료 조건(검증): `R test -- ci-night ci-deploy`
   - 디렉토리: `src/ci/{night,deploy}` · 병렬: M7-02 후 · 담당 / 리뷰: Claude / Codex
+  - 정한 동작(M7-03 조정자 결정 1~16, 계약 요약은 contracts §3.6, 자세한 것은 `agent-runner/src/ci/night/README.md`·`deploy/README.md`)
+    - 격리 테스트 목록은 서버 정책 `ci.quarantined[]`로 받는다(결정 1).
+    - 화면 비교: 원본 CI-0120(P L3539)대로 차이는 기록만 하고, 비교할 수 없을 때만 실패다(결정 2).
+      - 기준 이미지는 main의 `prototype/uiux` HTML을 Runner 소유 단계가 고정 뷰포트·고정 글꼴로 직접 그려 만든다. 커밋된 PNG를 요구하지 않는다(결정 8).
+      - 고정 글꼴이 없으면 화면 비교는 「비교 불가」이고 준비 점검 `font`가 경고한다(결정 12). 렌더러 네트워크 차단 방식은 준비 점검 `render`에 보인다(결정 16).
+      - 화면 정의에는 경로·#조각·준비 완료 선택자와 제한된 조작 단계(`click`·`waitFor`·`setViewport`만, 임의 JS 금지)를 둔다(결정 13·15).
+    - 응답 시간 기준은 main에 고정된 `pipeline.yaml`의 `night` 단계 선택 필드 `budgetsMs`에서 읽는다. 실행 결과로 기준을 바꾸지 못하게 하려는 것이다(결정 3).
+    - 단계 결과 보고서 형식(`AWBS_REPORT` JSON)과 환경 변수 이름은 계약이다(결정 4).
+    - 원인 후보는 CI 보고의 `causeCandidates[{commit}]`로 보내고, 서버가 병합 기록으로 commit→Task를 잇는다(결정 5).
+    - ④ 대상은 이 PC의 compose(loopback)만이다. 원격 주소는 대상 실패다(결정 6, Q-15 A).
+    - 새 배포 확인이 실패하면 마지막으로 확인을 통과한 커밋을 다시 띄워 확인한다(결정 7). 복구도 실패하면 「서비스 없음」을 보고하고 높은 우선순위 알림(`serviceDown`)을 보낸다(결정 11·14).
 - **M7-04** — 서버 CI API·완료 판정 연결·알림
   - 완료 조건(검증): `W --filter api test -- ci`
   - 디렉토리: `apps/api/src/ci` · 병렬: ∥ · 담당 / 리뷰: Codex / Claude
+  - 정한 동작(M7-04 조정자 결정 1~16, 계약은 contracts §3.6·§4.1)
+    - 통합 실패는 gate → rework다(결정 1). 병합 대조 실패는 409 `MERGE_MISMATCH`와 보류다(결정 4·15).
+    - pipeline 출처: 서버는 git을 읽지 않는다. Runner가 main A의 pipeline SHA를 따로 관측해 보고하고, 서버가 (project, A)별 첫 관측과 ② 실행 값을 대조한다(결정 5·13·14).
+      - 한계: 관측도 같은 Runner가 한다. 그래서 Runner 자체가 거짓말하는 경우까지 막지는 못한다.
+    - 「가장 최근 것」을 고르는 모든 곳은 `created_at`이 아니라 단조 증가 순번으로 정렬한다(결정 7·8·12).
+    - 기준(main) 실패 뒤에는 Task가 gate에 머물되 막히지 않는다. main이 움직이면 자동 재통합하고 팀장 「다시 시도」로도 재통합한다(결정 11).
+    - main 순서는 서버의 입력 변경 원장(입력 head)에 기댄다. 재통합의 기준 SHA도 이 값이다.
 - **M7-05** — 빌드·통합 화면 5탭
   - 완료 조건(검증): `W e2e -- ci` (32, **390px 알림 링크 CI 상세 열람**)
   - 디렉토리: `features/ci` · 병렬: M7-04 후 · 담당 / 리뷰: Claude / Codex
 - **M7-06** — **실제 ①→QA→②→병합→done 결합**(fake CLI·로컬 git·fake GitHub, 자리표시 제거)
   - 완료 조건(검증): `W test:scenario -- attempt-complete` (6 전체, SHA 연결·Gate·알림)
   - 디렉토리: e2e · 병렬: M7-02·M7-04 후 · 담당 / 리뷰: Codex / Claude
+  - 정한 동작(M7-06 조정자 결정)
+    - 병합은 됐는데 Gate 조건이 깨졌으면 `GATE_UNMET_AFTER_MERGE` 사건으로 기록하고 Task는 gate에 머문다. 조건이 다시 충족되면 서버가 자동 완료한다(결정 1, contracts §4.1).
+    - `integrate`·`ci_retry` job의 실제 Runner 처리(claim → ② 실행 → 보고)를 이 작업에서 연결했다(결정 2). 시나리오가 실제 처리 경로를 지난다.
+- **M7 남은 일**(2026-11-27, main 023ac8f)
+  - 원인 후보의 중간 커밋 연결과 claim 직후 자원 경합의 서버 재대기열은 후속 계약으로 구현했다(M5·M7 통합 조정자 결정 2).
+    - 왜: 당시의 남은 일과 현재 구현을 구분해야 한다. 현재 규칙은 contracts §3.1·§3.4와 data-model §3.2·§3.5에 적었다.
+  - 실제 실행기 연결: ①②③④ 명령의 실제 실행기는 Q-08 전용 계정 실행이 exec 계층에 연결된 뒤 붙인다. 지금은 fake 실행기만 쓴다.
 
 ### M8 — 통합 · 실환경 인수
 
@@ -372,13 +451,16 @@ flowchart LR
   - 디렉토리: 양쪽 · 병렬: ∥ · 담당 / 리뷰: Codex / Claude
 - **M8-04** — CLI 실측: Codex·Claude 하위 Agent 관측 항목(§6.7, §11-6·8)
   - 완료 조건(검증): 실환경 기록 + 등급 등록(승인된 모델·호출 한도 안에서만)
-  - 디렉토리: `agent-runner` · 병렬: Q-08·Q-12-잔여 gate 후 · 담당 / 리뷰: Codex / Claude
+  - 디렉토리: `agent-runner` · 병렬: Q-08·Q-12-잔여 gate 후(둘 다 2026-11-27 결정됨) · 담당 / 리뷰: Codex / Claude
+  - 유료 호출은 검증 단계 전체 30회, 1회 최대 Effort high까지다. 상한에 닿으면 멈추고 owner에게 묻는다(Q-12-잔여).
 - **M8-05** — 실 GitHub 저장소로 등록→분석→Task 1건→병합→초기화
   - 완료 조건(검증): 실환경 증거. **보호 규칙 적용 확인**(미검증 직접 병합 거부, 우회 커밋 종류 제한, CODEOWNERS) — M4-06 결과 재확인
-  - 디렉토리: 양쪽 · 병렬: Q-08·Q-09 gate 후(시험 저장소, owner Q-10) · 담당 / 리뷰: Claude / Codex
+  - 디렉토리: 양쪽 · 병렬: Q-08·Q-09 gate 후(둘 다 2026-11-27 결정됨, 시험 저장소, owner Q-10) · 담당 / 리뷰: Claude / Codex
+  - 입력(`prototype/`) 변경도 PR로 올리고 owner가 GitHub에서 병합한다. Runner는 병합 뒤 main을 감지한다(Q-09).
 - **M8-06** — 운영 이미지·systemd(리눅스에서 서비스를 띄우고 관리하는 프로그램)·백업/복원·실 SMTP/Telegram
   - 완료 조건(검증): `docker compose … config`, 복원 리허설, 실환경 기록
-  - 디렉토리: 양쪽 · 병렬: Q-13·Q-15·Q-16 gate 후 · 담당 / 리뷰: Claude / Codex
+  - 디렉토리: 양쪽 · 병렬: Q-13·Q-15·Q-16 gate 후(셋 다 2026-11-27 결정됨: owner SMTP·외부는 PDF만, 이 PC compose, 즉시 발송) · 담당 / 리뷰: Claude / Codex
+  - Runner 사용자 systemd 서비스에는 linger가 필요하다(open-questions §3). 서버 계약을 바꿔 배포할 때 옛 job 재발급 절차도 이 전에 정한다.
 
 ## 4. 추적표 — 가이드 절 → 마일스톤
 

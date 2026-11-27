@@ -669,6 +669,8 @@ export const runnerOperations = [
         chain:Opt(List(Body(headProof),{ minItems:2 })),
       })),
       mergeParents: Opt(List(c.Sha, { minItems: 2, maxItems: 2 })),
+      // main에 이미 있는 커밋은 제외한다. Task 연결은 서버가 이 부모 사슬로 계산한다.
+      mergeCommits: Opt(List(Body({ commit:c.Sha,parents:List(c.Sha,{ uniqueItems:true }) }))),
     }),
     responses: { 204: null },
     errors: ['INVALID_TRANSITION', 'GATE_NOT_PASSED', 'EXTERNAL_WRITE_BLOCKED', 'MERGE_MISMATCH'],
@@ -822,6 +824,16 @@ export const runnerOperations = [
     body: Body({ fence }),
     responses: { 200: Type.Object({ leaseUntil: c.Timestamp }) },
     errors: ['EXTERNAL_WRITE_BLOCKED'],
+  }),
+  operation({
+    ...runner,
+    id: 'returnJob',
+    method: 'POST',
+    path: '/api/runner/jobs/:id/return',
+    summary: '시작 전 자원 부족 attempt job을 재대기열에 반환. 시도 없이 잠금·fence 유지',
+    body: Body({ fence,hostId:Text,bootId:Text,reason:AnyOf('resources') }),
+    responses: { 204:null },
+    errors: ['INVALID_TRANSITION','EXTERNAL_WRITE_BLOCKED'],
   }),
   operation({
     ...runner,

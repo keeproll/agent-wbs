@@ -1092,6 +1092,16 @@ export class GitRepository {
     return parents ? parents.split(' ').map(sha) : [];
   }
 
+  /** 병합할 head에서 main의 조상을 빼야 다른 Task의 커밋을 원인으로 연결하지 않는다. */
+  async mergeCommits(base: string, head: string): Promise<{ commit:string;parents:string[] }[]> {
+    await this.trusted();
+    const output = (await this.git(['rev-list','--topo-order','--parents',sha(head),'--not',sha(base)])).toString().trim();
+    return output ? output.split('\n').map(line => {
+      const [commit = '',...parents] = line.split(' ');
+      return { commit:sha(commit),parents:parents.map(sha) };
+    }) : [];
+  }
+
   private async integrationTree(base: string, head: string): Promise<string | null> {
     const result = await this.git(['merge-tree', '--write-tree', '--no-messages', sha(head), sha(base)], undefined, undefined, [0, 1]);
     const tree = result.toString().trim();

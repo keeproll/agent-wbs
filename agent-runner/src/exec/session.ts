@@ -55,11 +55,14 @@ export interface ExecutionOptions {
   /**
    * claim 응답 뒤 자원 확인이 실패하면 이 시간(ms)까지 같은 임대로 기다리며 다시 확인한다. 기본 20초.
    * 왜: claim 요청과 응답 사이의 짧은 경합 때문에 자동 QA·재작업 job이 시작 전 실패가 되면 팀장 버튼이 필요해진다(M5-05 P3-4, contracts §3.4-8).
-   * 임대(60초)에서 시계 역행 여유를 뺀 시간보다 짧아야 한다. 그래도 돌아오지 않으면 지금처럼 시작 전 실패로 끝낸다.
+   * 임대(60초)에서 시계 역행 여유를 뺀 시간보다 짧아야 한다. 그래도 부족하면 서버 대기열에 반환한다.
    */
   admissionWaitMs?: number;
+  /** 전송 재시도 간격. 시험은 실제 10초 대기 대신 한 번의 재시도와 중단을 주입한다. */
+  retryDelay?: typeof retryDelay;
 }
 interface Resume { cwd: string; agent: Agent; model: string; effort: string; sessionId: string }
+class ResourceUnavailableError extends Error {}
 export type AttemptOutput = Awaited<ReturnType<typeof runProcess>> & {
   attemptId: string; cwd: string; headSha: string; ok: boolean; text: string;
   observation: ReturnType<SubagentObserver['snapshot']>; reserved: number;
@@ -114,9 +117,13 @@ export class Execution {
   async recover(holds?: ExecutionHold[], signal?: AbortSignal): Promise<boolean> {
     this.#recovered = false;
     signal?.throwIfAborted();
+    // 반환 보고를 일반 해제보다 먼저 대조해야 대기열의 논리 잠금을 닫지 않는다.
+    const returns = this.#d.outbox.pending.filter(e => e.operation === 'returnJob' && e.request.epoch === this.#d.epoch());
+    for (const entry of returns) await this.#call('returnJob',entry.request as ApiRequest<'returnJob'>,signal);
     const remote = holds ?? (await this.#call('getExecutionHolds', { epoch: this.#d.epoch() }, signal)).body.holds;
     for (const hold of remote) {
       signal?.throwIfAborted();
+      if (returns.some(e => e.request.params?.id === hold.job && e.request.body?.fence === hold.fence)) continue;
       if (hold.host_id !== this.#d.identity.hostId) continue;
       if (hold.boot_id === null || hold.fence === null) return false;
       const proof = hold.slot_state === 'none' && hold.pgid === null
@@ -154,7 +161,10 @@ export class Execution {
       const job = result.status === 200 ? result.body.job : null;
       if (job?.kind === 'attempt') {
         try { await this.#awaitStart(job, this.#attemptSlots(job.payload.kind === 'dev' || job.payload.kind === 'rework' ? 'dev' : 'qa')); }
-        catch (error) { await this.#finishUnstarted(job, this.#d.epoch()); throw error; }
+        catch (error) {
+          if (error instanceof ResourceUnavailableError) { await this.#returnUnstarted(job,this.#d.epoch()); return null; }
+          await this.#finishUnstarted(job, this.#d.epoch()); throw error;
+        }
       }
       return job;
     } finally { release?.(); }
@@ -262,7 +272,19 @@ export class Execution {
   async #run(job: AttemptJob, options: AttemptOptions): Promise<AttemptOutput> {
     const epoch = this.#d.epoch();
     try { return await this.#execute(job, options); }
-    catch (error) { await this.#finishUnstarted(job, epoch); throw error; }
+    catch (error) {
+      if (error instanceof ResourceUnavailableError) await this.#returnUnstarted(job,epoch);
+      else await this.#finishUnstarted(job, epoch);
+      throw error;
+    }
+  }
+
+  async #returnUnstarted(job: AttemptJob, epoch: number): Promise<void> {
+    if (this.#d.epoch() !== epoch) return;
+    const hold = (await this.#call('getExecutionHolds',{ epoch },AbortSignal.timeout(10_000))).body.holds.find(h => h.job === job.id && h.fence === job.fence && h.host_id === this.#d.identity.hostId && h.boot_id === this.#d.identity.bootId);
+    if (!hold || hold.attempt !== null || hold.pgid !== null || hold.cgroup !== null || hold.closed_at !== null) return;
+    await this.#report('returnJob',{ epoch,params:{ id:job.id },body:{ fence:job.fence,...this.#d.identity,reason:'resources' } });
+    await this.#completeJob({ id:job.id,epoch,fence:job.fence });
   }
 
   /** start 앞의 어느 경계에서 거부되어도 프로세스 없는 예약을 남기지 않는다. */
@@ -462,7 +484,7 @@ export class Execution {
 
   #assertStart(agent: Agent, slots: number, own?: SessionState): void {
     const result = this.#admission(agent, slots, own);
-    if (!result.ok) throw new Error(`새 실행을 보류합니다: ${result.reason}`);
+    if (!result.ok) throw new ResourceUnavailableError(`새 실행을 보류합니다: ${result.reason}`);
   }
 
   /** job 전체 해제를 서버가 확인한 뒤 남은 준비·명령 기록을 완료한다. */
@@ -509,7 +531,7 @@ export class Execution {
     for (let attempt = 0; ; attempt++) {
       signal?.throwIfAborted();
       try { return await this.#d.api(operation, request); }
-      catch (e) { if (!retryable(e)) throw e; await sleep(retryDelay(attempt, e, Date.now(), Math.random()), undefined, { ...(signal && { signal }) }); }
+      catch (e) { if (!retryable(e)) throw e; await sleep((this.#d.retryDelay ?? retryDelay)(attempt, e, Date.now(), Math.random()), undefined, { ...(signal && { signal }) }); }
     }
   }
 }

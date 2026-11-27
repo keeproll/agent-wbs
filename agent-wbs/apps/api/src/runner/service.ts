@@ -164,7 +164,12 @@ export async function claim(repo: RunnerRepository, kinds: string[], capacity: n
       }
       const authority = await repo.authority();
       if (EXTERNAL_JOBS.includes(candidate.kind) && authority?.state !== 'granted') continue;
-      const job = await repo.lease(candidate, principal, authority?.generation ?? null);
+      const hold = await repo.hold(candidate.id);
+      // 임대를 바꾸기 전에 거부해야 잘못된 후보 하나가 뒤의 작업까지 막지 않는다.
+      if (hold && !hold.closed_at && (hold.slot_state !== 'none' || hold.attempt !== null || (hold.fence ?? 0) > candidate.fence)) rejection(['이전 실행 보유의 정리가 필요합니다.']);
+      // 담당 변경은 과거 Agent를 덮어쓰지 않고 같은 트랜잭션에서 새 보유로 넘긴다.
+      if (hold && !hold.closed_at && hold.agent !== agent) await repo.release(hold,hold.release_proof ?? 'no_process',true);
+      const job = await repo.lease(candidate, principal, authority?.generation ?? null,agent);
       // 조회 전용 작업은 이전 임대의 프로세스를 보유하지 않는다.
       if (!['repo_check', 'github_check', 'stop_attempt'].includes(job.kind)) await repo.reserve(job, cfg.host.host_id, required(cfg.host.boot_id), agent, slots, job.kind !== 'attempt', task);
       await repo.event(job, 'prepared');
@@ -208,7 +213,7 @@ export interface Proof { kind: 'no_process' | 'group_empty' | 'cgroup_empty' | '
 export async function release(repo: RunnerRepository, job: Job, host: string, proof: Proof, slotsOnly: boolean) {
   const hold = await repo.hold(job.id);
   if (!hold || hold.host_id !== host || hold.boot_id !== proof.bootId || hold.fence !== job.fence) throw new PlatformError('INVALID_TRANSITION');
-  // cgroup이 기록된 보유는 cgroup_empty(같은 경로·그룹)로만, cgroup이 없는 보유는 group_empty로만 닫는다(조정자 결정 3, 0041).
+  // cgroup이 기록된 보유는 cgroup_empty(같은 경로·그룹)로만, cgroup이 없는 보유는 group_empty로만 닫는다(조정자 결정 3, 0040).
   if (proof.kind === 'no_process' && (hold.pgid !== null || hold.cgroup !== null) || proof.kind === 'group_empty' && (hold.pgid !== proof.processGroup || hold.cgroup !== null) ||
     proof.kind === 'cgroup_empty' && (hold.cgroup === null || hold.cgroup !== proof.cgroup || hold.pgid !== proof.processGroup) ||
     proof.kind === 'boot_changed' && (hold.pgid !== proof.processGroup || proof.currentBootId === proof.bootId || proof.currentBootId !== await repo.hostBoot(host))) throw new PlatformError('INVALID_TRANSITION');

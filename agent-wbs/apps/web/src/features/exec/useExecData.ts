@@ -1,7 +1,7 @@
 /**
  * 작업 실행 화면이 읽는 서버 데이터. 모두 계약 operation id로 부른다(shared/README §2).
  * - 왼쪽 목록: Task 목록 + 목록에 보이는 Task마다 시도 목록(계약에 전체 시도 목록 API가 없어서 Task별로 읽는다).
- * - 가운데·오른쪽: 선택 Task의 시도·검증·메시지·Evidence, Runner 상태, 열린 알림, 「실행 중 전달」 설정.
+ * - 가운데·오른쪽: 선택 Task의 시도·검증·메시지·Evidence, Runner 상태, 열린 알림.
  *
  * 쪽 나눔(M3-06 리뷰 #8): 시도·검증·메시지·Evidence는 nextCursor가 없을 때까지 끝까지 읽는다.
  * 왜: 서버는 id 순서로 주므로 최신 시도가 첫 쪽에 있다는 보장이 없다. 일부만 읽으면 현재 실행을 놓친다.
@@ -75,9 +75,8 @@ export function useExecData(projectId: string, requestedKey: string | undefined)
   });
   const runner = useApiQuery('getRunnerState', {}, { topics: ['runner'] });
   const alerts = useApiQuery('listAlerts', {}, { topics: ['alert'] });
-  const workflow = useApiQuery('getWorkflowSettings', {}, { topics: ['settings'] });
 
-  return { tasks, listed, task, missingTask, attemptsByTask, own, verifications, messages, evidence, runner, alerts, workflow };
+  return { tasks, listed, task, missingTask, attemptsByTask, own, verifications, messages, evidence, runner, alerts };
 }
 
 export type ExecData = ReturnType<typeof useExecData>;

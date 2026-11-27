@@ -210,7 +210,8 @@ export class CiJobs {
     const evidence = this.#evidence(saved,result);
     if (result.kind === 'merged') {
       saved.completion = { jobId:job.id,fence:job.fence,pr:job.payload.pr,taskKey:saved.context.taskKey,qaHeadSha:qa.headSha,
-        status:'merged',...evidence,actualMergeSha:result.actualMergeSha,actualTreeSha:result.actualTreeSha,mergeParents:result.mergeParents,mergedAt:new Date().toISOString() };
+        status:'merged',...evidence,actualMergeSha:result.actualMergeSha,actualTreeSha:result.actualTreeSha,mergeParents:result.mergeParents,
+        mergeCommits:await d.repo.mergeCommits(result.mergeParents[0],result.mergeParents[1]),mergedAt:new Date().toISOString() };
       await this.#save();
       try { await this.#queueReport(saved,'merged',saved.completion); }
       catch (error) {
@@ -225,8 +226,10 @@ export class CiJobs {
     if (result.kind === 'verify_failed') {
       await d.repo.fetch();
       const parents = await d.repo.commitParents(result.actualMergeSha);
-      if (parents.length === 2) await this.#queueReport(saved,'merged',{ ...evidence,actualMergeSha:result.actualMergeSha,
-        actualTreeSha:await d.repo.commitTree(result.actualMergeSha),mergeParents:parents,mergedAt:new Date().toISOString() });
+      const [base,head] = parents;
+      if (parents.length === 2 && base && head) await this.#queueReport(saved,'merged',{ ...evidence,actualMergeSha:result.actualMergeSha,
+        actualTreeSha:await d.repo.commitTree(result.actualMergeSha),mergeParents:parents,
+        mergeCommits:await d.repo.mergeCommits(base,head),mergedAt:new Date().toISOString() });
     }
     if (result.kind === 'unknown' || result.kind === 'verify_failed' || result.kind === 'blocked') {
       d.warn('병합 결과를 확정하지 못해 CI 작업 기록을 보존합니다.'); return { job,result };

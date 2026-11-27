@@ -54,7 +54,7 @@ export interface CleanupProof {
   /** 예약만 하고 프로세스를 만들지 않은 보유가 부팅 변경으로 끝나면 null이다(API boot_changed). */
   processGroup?: number | null;
   currentBootId?: string;
-  /** cgroup_empty: 보유에 기록된 cgroup 경로(0041). */
+  /** cgroup_empty: 보유에 기록된 cgroup 경로(0040). */
   cgroup?: string;
 }
 export interface CommandResultBody {

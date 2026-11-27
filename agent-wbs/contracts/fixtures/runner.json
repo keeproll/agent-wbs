@@ -666,7 +666,9 @@
  {
   "id": "getExecutionHolds",
   "status": 200,
-  "response": { "holds": [] }
+  "response": {
+   "holds": []
+  }
  },
  {
   "id": "getCommands",
@@ -753,6 +755,19 @@
   "response": {
    "leaseUntil": "2026-11-25T01:02:03.123456Z"
   }
+ },
+ {
+  "id": "returnJob",
+  "params": {
+   "id": "job-1"
+  },
+  "body": {
+   "fence": 3,
+   "hostId": "h1",
+   "bootId": "b1",
+   "reason": "resources"
+  },
+  "status": 204
  },
  {
   "id": "startJob",
