@@ -107,7 +107,12 @@ export async function testRecipient(client: PoolClient, recipientId: string) {
  * 「아직 해소되지 않은 실패」: 같은 보고서·같은 사람의 **마지막** 발송이 failed·unknown인 줄(P Sel.mailPending L4038).
  * 뒤에 다시 보내 수락됐거나 보내는 중이면 해소(또는 진행 중)로 본다.
  */
-const PENDING = `o.state in ('failed','unknown') and not exists(select from mail_outbox n where n.report=o.report and n.recipient=o.recipient and n.try_no>o.try_no)`;
+/**
+ * 삭제한 받는 사람의 실패는 다시 보낼 수 없으므로 「해소되지 않은 실패」에서 뺀다(리뷰 지적 3, UAT-MAIL-05).
+ * 기록 자체는 주소와 함께 남는다(G L407).
+ */
+const PENDING = `o.state in ('failed','unknown') and not exists(select from mail_outbox n where n.report=o.report and n.recipient=o.recipient and n.try_no>o.try_no)
+  and exists(select from mail_recipients m where m.id=o.recipient)`;
 
 /** 다시 보내기(행별). 해소되지 않은 실패 줄만 받는다. 이미 해소됐으면 409 — 같은 메일이 두 번 나가지 않게 한다. */
 export async function resendMail(client: PoolClient, outboxId: string) {
@@ -117,10 +122,12 @@ export async function resendMail(client: PoolClient, outboxId: string) {
   if (!row) throw new ApiError('NOT_FOUND', { resource: 'mail_log', id: outboxId }, [], '발송 기록을 찾을 수 없습니다.');
   // 같은 보고서를 잠그고 다시 판정한다(두 탭에서 동시에 눌러도 한 번만).
   await client.query("select pg_advisory_xact_lock(hashtextextended('mail:report:' || $1,0))", [row.report]);
+  // 지금의 받는 사람 목록으로 확인한다. 삭제와 겹치면 삭제가 끝날 때까지 기다린다(for share). 원본도 삭제된 수신자는 다시 보내지 않는다(P resend L4969).
+  const alive = (await client.query('select 1 from mail_recipients where id=$1 for share', [row.recipient])).rowCount;
+  if (!alive) throw new ApiError('INVALID_TRANSITION', { id: outboxId }, [], '받는 사람이 삭제되어 다시 보낼 수 없습니다.', '받는 사람을 다시 등록한 뒤 「테스트」나 「메일로 보내기」로 보내세요.');
   const still = (await client.query<{ pending: boolean }>(`select (${PENDING}) pending from mail_outbox o where o.id=$1`, [outboxId])).rows[0]?.pending;
   if (!still) throw new ApiError('INVALID_TRANSITION', { id: outboxId }, [], '이미 다시 보냈거나 실패가 아닌 발송입니다.', '발송 기록을 새로 고친 뒤 확인하세요.');
   const report = await loadReport(client, row.report);
-  // 받는 사람을 지웠어도 기록의 주소로 다시 보낸다(같은 recipient ID로 번호를 이어 간다).
   // 사유는 원본처럼 「다시 보내기 (ML-0001)」 — 어떤 실패 기록을 다시 보냈는지 남긴다(P resend L4970).
   return { ids: await enqueue(client, report, [{ id: row.recipient, email: row.email, view: row.view, pdf: row.pdf }], `${MAIL_REASON.resend} (${row.logKey})`) };
 }

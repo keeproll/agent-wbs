@@ -162,3 +162,34 @@ test('수신 설정: 일간 · 주간을 모두 끄면 자동으로 중지, 삭�
   await expect(row).toBeHidden();
   await expect(logRows).toHaveCount(count);
 });
+
+test('[리뷰 지적 4] SMTP 수정 폼을 연 뒤 다른 탭이 먼저 저장하면 충돌 창이 뜨고 다른 탭의 값이 사라지지 않는다', async ({ page }) => {
+  await login(page, '/settings/report');
+  const other = await page.context().newPage();
+  await other.goto('/settings/report');
+  const smtpA = page.getByRole('region', { name: '메일 서버 (SMTP)' });
+  const smtpB = other.getByRole('region', { name: '메일 서버 (SMTP)' });
+  // A: 수정 폼을 연다(이 순간의 설정 버전을 기준으로 삼아야 한다).
+  await smtpA.getByRole('button', { name: '수정' }).click();
+  // B: 포트를 바꿔 먼저 저장한다. A는 변경 알림으로 최신 설정을 다시 읽는다.
+  const refreshed = page.waitForResponse((r) => r.url().includes('/api/settings/mail/smtp') && r.request().method() === 'GET');
+  await smtpB.getByRole('button', { name: '수정' }).click();
+  await smtpB.getByLabel('포트').fill('2525');
+  await smtpB.getByRole('button', { name: '저장' }).click();
+  await expect(smtpB.getByText(/127\.0\.0\.1:2525/)).toBeVisible();
+  await refreshed;
+  // A: 열어 둔 폼으로 저장 → 낡은 편집이므로 덮어쓰지 않고 충돌 창
+  await smtpA.getByLabel('포트').fill('2526');
+  await smtpA.getByRole('button', { name: '저장' }).click();
+  const conflict = page.getByRole('alertdialog', { name: '다른 변경이 먼저 저장되었습니다' });
+  await expect(conflict).toBeVisible();
+  await conflict.getByRole('button', { name: '최신 내용 불러오기 (내 변경 버림)' }).click();
+  await expect(conflict).toBeHidden();
+  await expect(smtpA.getByText(/127\.0\.0\.1:2525/)).toBeVisible();
+  // 되돌림: 가짜 SMTP 포트로 다시 저장
+  await smtpA.getByRole('button', { name: '수정' }).click();
+  await smtpA.getByLabel('포트').fill(String(fake?.smtpPort));
+  await smtpA.getByRole('button', { name: '저장' }).click();
+  await expect(smtpA.getByText(new RegExp(`127\\.0\\.0\\.1:${String(fake?.smtpPort)}`))).toBeVisible();
+  await other.close();
+});

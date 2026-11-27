@@ -199,15 +199,20 @@ function SmtpCard({ smtp, refresh }: { smtp: ReturnType<typeof useApiQuery<'getS
   const { client } = useApi();
   const data = smtp.data;
   const [form, setForm] = useState<SmtpForm | null>(null);
+  /**
+   * 폼을 연 순간의 설정 버전(리뷰 지적 4). 저장은 이 버전으로 보낸다.
+   * 왜: 열어 둔 동안 다른 탭이 저장해 화면 데이터가 새로 읽혀도, 내 편집은 옛 설정에서 시작했다. 최신 버전을 붙이면 서버의 충돌 검사를 지나쳐 남의 저장을 덮어쓴다.
+   */
+  const [base, setBase] = useState<string | null>(null);
   const [error, setError] = useState('');
   const report = useContext(DirtyContext);
   useEffect(() => { report('mail-smtp', form !== null); }, [report, form]);
   useEffect(() => () => { report('mail-smtp', false); }, [report]);
-  const open = () => { if (data) setForm({ host: data.host, port: String(data.port), sec: data.sec, from: data.from, user: data.user, pw: '' }); setError(''); };
+  const open = () => { if (data) { setForm({ host: data.host, port: String(data.port), sec: data.sec, from: data.from, user: data.user, pw: '' }); setBase(data.updatedAt); } setError(''); };
   const set = (p: Partial<SmtpForm>) => { setForm((f) => (f ? { ...f, ...p } : f)); setError(''); };
   const save = useSave<ResponseOf<'putSmtp'>, SmtpForm & { updatedAt: string | null }>({
     target: 'SMTP 설정 저장',
-    request: () => ({ ...(form as SmtpForm), updatedAt: data?.updatedAt ?? null }),
+    request: () => ({ ...(form as SmtpForm), updatedAt: base }),
     run: ({ payload }) => client.call('putSmtp', { body: {
       updatedAt: payload.updatedAt, host: payload.host.trim(), port: Number(payload.port), sec: payload.sec, from: payload.from.trim(), user: payload.user.trim(),
       ...(payload.pw ? { password: payload.pw } : {}),
@@ -216,6 +221,11 @@ function SmtpCard({ smtp, refresh }: { smtp: ReturnType<typeof useApiQuery<'getS
     successNotice: 'SMTP 설정을 저장했습니다. 「연결 확인」으로 확인하세요.',
     onFieldErrors: (errors) => { if (errors[0]) setError(errors[0].message); },
     onConflictReload: () => { setForm(null); refresh(); },
+    // 「최신 내용에 내 변경 다시 적용」: 최신 설정을 읽어 그 버전 위에 내 폼 값을 저장한다(공통 useSave 경로).
+    reapplyRequest: async ({ signal }) => {
+      const latest = await client.call('getSmtp', { signal });
+      return { ...(form as SmtpForm), updatedAt: latest.updatedAt };
+    },
     mine: 'SMTP 설정 변경',
   });
   const check = useSave<ResponseOf<'checkSmtp'>>({

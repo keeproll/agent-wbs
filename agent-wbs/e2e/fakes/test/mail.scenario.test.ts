@@ -10,6 +10,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { createServer } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { inject } from 'vitest';
@@ -19,6 +20,8 @@ import { buildApp } from '../../../apps/api/src/app.ts';
 import { issueLoginLink } from '../../../apps/api/src/platform/credentials.ts';
 import { generateDueReports } from '../../../apps/api/src/reports/service.ts';
 import { deliverMail, recoverMail } from '../../../apps/api/src/mail/deliver.ts';
+import { checkSmtpSettings, getSmtp, putSmtp } from '../../../apps/api/src/mail/settings.ts';
+import { inEpoch } from '../../../apps/api/src/platform/transaction.ts';
 import { FakeSmtp, mimeHeader, mimePart } from '../smtp.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -481,6 +484,141 @@ describe('수락 여부를 모를 때 자동으로 다시 보내지 않는다(co
     await lead('POST', `/api/mail/log/${id}/resend`);
     await deliver(plus(at, 241));
     expect(await mailAlert()).toBeUndefined();
+  }, 30_000);
+});
+
+
+/**
+ * Codex 리뷰(review-codex.md) 재현을 올바른 동작으로 고정한 시험(fix2).
+ * 각 시험은 리뷰어가 재현한 잘못된 동작이 다시 생기면 실패한다.
+ */
+describe('리뷰 지적 회귀(fix2)', () => {
+  test('[지적 1] 한 통의 결과 저장이 계속 실패해도 큐가 멈추지 않는다 — 그 행만 unknown, 나머지는 보낸다', async () => {
+    const a = await recipient('lead@example.com');
+    const b = await recipient('boss@example.com');
+    const first = (await lead('POST', `/api/settings/mail/recipients/${a.id}/test`)).body.ids[0] as string;
+    const second = (await lead('POST', `/api/settings/mail/recipients/${b.id}/test`)).body.ids[0] as string;
+    // 첫 행의 accepted 저장만 DB 오류가 나게 한다(일시 장애 흉내). 상태를 unknown으로 적는 것은 막지 않는다.
+    await owner.query(`create function public.fix2_fail_record() returns trigger language plpgsql as $$ begin
+      if new.state='accepted' and new.id='${first}' then raise exception 'fix2 injected result write failure'; end if; return new; end $$`);
+    await owner.query('create trigger fix2_fail_record before update on mail_outbox for each row execute function public.fix2_fail_record()');
+    const before = smtp.messages.length;
+    try {
+      // 예외로 worker 단계가 끝나지 않는다.
+      await expect(deliver(kst('2026-11-04', '12:55'))).resolves.toBeDefined();
+    } finally {
+      await owner.query('drop trigger fix2_fail_record on mail_outbox');
+      await owner.query('drop function public.fix2_fail_record()');
+    }
+    expect(smtp.messages.length - before).toBe(2);
+    const rows = (await owner.query<{ id: string; state: string; error: string | null }>('select id,state,error from mail_outbox where id=any($1::uuid[])', [[first, second]])).rows;
+    expect(rows.find((r) => r.id === first)).toMatchObject({ state: 'unknown' });
+    expect(rows.find((r) => r.id === first)?.error).toContain('수락 여부 불명');
+    expect(rows.find((r) => r.id === second)?.state).toBe('accepted');
+    // 다시 돌려도 이미 나간 메일을 또 보내지 않는다.
+    await deliver(kst('2026-11-04', '13:55'));
+    expect(smtp.messages.length - before).toBe(2);
+    expect((await mailAlert())?.text).toContain('수락 여부 불명');
+    await lead('POST', `/api/mail/log/${first}/resend`);
+    await deliver(kst('2026-11-04', '13:56'));
+    expect(await mailAlert()).toBeUndefined();
+  });
+
+  test('[지적 1] 기록조차 못 한 채 sending에 남은 행은 다음 주기에 unknown으로 드러난다(프로세스 재시작 없이)', async () => {
+    const a = await recipient('lead@example.com');
+    const id = (await lead('POST', `/api/settings/mail/recipients/${a.id}/test`)).body.ids[0] as string;
+    // 기록 경로가 모두 막혀 sending으로 남은 상태를 만든다.
+    await owner.query("update mail_outbox set state='sending',sent_at=$2 where id=$1", [id, kst('2026-11-04', '14:00')]);
+    const before = smtp.messages.length;
+    await deliver(kst('2026-11-04', '14:30'));
+    expect((await owner.query<{ state: string }>('select state from mail_outbox where id=$1', [id])).rows[0]?.state).toBe('unknown');
+    expect(smtp.messages.length).toBe(before);
+    await lead('POST', `/api/mail/log/${id}/resend`);
+    await deliver(kst('2026-11-04', '14:31'));
+  });
+
+  test('[지적 3] 삭제한 받는 사람에게는 다시 보내지 않는다(행별 409 · 전체 재발송 제외 · 발송 직전 확인)', async () => {
+    const add = async (email: string) => (await lead('POST', '/api/settings/mail/recipients', { email, name: '삭제 재현', daily: true, weekly: false, view: 'int', pdf: false })).body as { id: string };
+    const r1 = await add('removed@example.com');
+    const failed = (await lead('POST', `/api/settings/mail/recipients/${r1.id}/test`)).body.ids[0] as string;
+    smtp.mode = 'auth_fail';
+    await deliverMail(pool, epoch, { now: kst('2026-11-04', '15:00'), timeoutMs: TIMEOUT });
+    await deliverMail(pool, epoch, { now: kst('2026-11-04', '15:15'), timeoutMs: TIMEOUT });
+    smtp.mode = 'accept';
+    expect((await owner.query<{ state: string }>('select state from mail_outbox where id=$1', [failed])).rows[0]?.state).toBe('failed');
+    // 큐에만 들어 있고 아직 보내지 않은 발송(다른 사람)
+    const r2 = await add('removed2@example.com');
+    const queuedOnly = (await lead('POST', `/api/settings/mail/recipients/${r2.id}/test`)).body.ids[0] as string;
+    for (const email of ['removed@example.com', 'removed2@example.com']) {
+      const current = await recipient(email);
+      expect((await lead('DELETE', `/api/settings/mail/recipients/${current.id}?updatedAt=${encodeURIComponent(current.updatedAt)}`)).status).toBe(204);
+    }
+    const resend = await lead('POST', `/api/mail/log/${failed}/resend`);
+    expect(resend.status).toBe(409);
+    expect(resend.body.error.message).toContain('삭제');
+    const all = await lead('POST', '/api/mail/log/resend-failed');
+    expect(all.status).toBe(202);
+    expect(all.body.ids).toEqual([]);
+    await deliver(kst('2026-11-04', '15:16'));
+    expect(received('removed@example.com')).toHaveLength(0);
+    expect(received('removed2@example.com')).toHaveLength(0);
+    const skipped = (await owner.query<{ state: string; error: string | null }>('select state,error from mail_outbox where id=$1', [queuedOnly])).rows[0];
+    expect(skipped?.state).toBe('failed');
+    expect(skipped?.error).toContain('받는 사람이 삭제');
+    // 삭제한 사람의 실패는 다시 보낼 대상이 아니므로 실패 목록 · 알림에서 빠진다(기록은 남는다).
+    expect((await log()).filter((x) => x.to === 'removed@example.com').length).toBeGreaterThan(0);
+    expect((await log(true)).filter((x) => x.to.startsWith('removed'))).toEqual([]);
+    expect(await mailAlert()).toBeUndefined();
+  });
+
+  test('[지적 5] 연결 확인 중에 설정이 바뀌면 옛 확인 결과를 새 설정에 붙이지 않는다', async () => {
+    let arrived!: () => void;
+    const connected = new Promise<void>((r) => { arrived = r; });
+    let greet!: () => void;
+    const server = createServer((socket) => {
+      greet = () => socket.write('220 review smtp\r\n');
+      arrived();
+      socket.on('data', (chunk) => {
+        const cmd = chunk.toString();
+        if (cmd.startsWith('EHLO') || cmd.startsWith('HELO')) socket.write('250 review smtp\r\n');
+        if (cmd.startsWith('QUIT')) { socket.write('221 bye\r\n'); socket.end(); }
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const port = (server.address() as { port: number }).port;
+    const input = (v: Awaited<ReturnType<typeof getSmtp>>) => ({ updatedAt: v.updatedAt, host: v.host, port: v.port, sec: v.sec, from: v.from, user: v.user });
+    const before = await inEpoch(pool, epoch, getSmtp);
+    await inEpoch(pool, epoch, (c) => putSmtp(c, { ...input(before), host: '127.0.0.1', port, sec: '없음', user: '' }));
+    const checking = inEpoch(pool, epoch, (c) => checkSmtpSettings(c, 5000));
+    await connected;
+    const current = await inEpoch(pool, epoch, getSmtp);
+    await inEpoch(pool, epoch, (c) => putSmtp(c, { ...input(current), port: 1 }));
+    greet();
+    const result = await checking;
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('설정이 바뀌');
+    const after = await inEpoch(pool, epoch, getSmtp);
+    expect(after.port).toBe(1);
+    expect(after.check).toBeNull();
+    await new Promise<void>((r) => server.close(() => r()));
+    await inEpoch(pool, epoch, (c) => putSmtp(c, { ...input(after), port: smtp.port, user: smtp.user }));
+  });
+
+  test('[지적 6] 15분 재시도는 실제 실패를 확인한 DB 시각부터 센다', async () => {
+    const target = await recipient('lead@example.com');
+    const id = (await lead('POST', `/api/settings/mail/recipients/${target.id}/test`)).body.ids[0] as string;
+    smtp.mode = 'temp_fail';
+    // 서버가 본문을 받고 3초 뒤에 451로 거부한다(느린 서버).
+    smtp.onMessage = async () => { await new Promise((r) => setTimeout(r, 3000)); };
+    try { await deliverMail(pool, epoch, { timeoutMs: 15000 }); }
+    finally { smtp.onMessage = null; smtp.mode = 'accept'; }
+    const row = (await owner.query<{ state: string; afterStart: number; remaining: number }>(
+      `select state,extract(epoch from (next_at - sent_at))::float8 "afterStart",extract(epoch from (next_at - clock_timestamp()))::float8 remaining from mail_outbox where id=$1`, [id])).rows[0];
+    expect(row?.state).toBe('retry_wait');
+    // 호출 시작이 아니라 실패를 안 뒤부터 15분: 시작 기준이면 900초, 지금은 900초 + 서버 대기(약 3초)
+    expect(row?.afterStart).toBeGreaterThan(902);
+    expect(row?.remaining).toBeGreaterThan(895);
+    await deliverMail(pool, epoch, { now: '2099-01-01T00:00:00.000Z', timeoutMs: TIMEOUT });
   }, 30_000);
 });
 

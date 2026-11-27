@@ -61,67 +61,132 @@ async function appendLog(client: PoolClient, outbox: string, state: string, erro
     select project_id,delivery_id,report,email,$2,$3,$4,id,try_no from mail_outbox where id=$1`, [outbox, state, error, at]);
 }
 
+/** 이 시각보다 오래 `sending`에 머문 줄은 결과를 기록하지 못한 것으로 본다(SMTP 응답 대기의 10배 + 2분). */
+const staleSeconds = (timeoutMs: number) => Math.ceil((timeoutMs * 10) / 1000) + 120;
+const RESULT_LOST = '발송 결과를 저장하지 못함 — 수락 여부 불명(받는 쪽에 도착했을 수 있음). 확인 후 다시 보내세요.';
+const RECIPIENT_GONE = '받는 사람이 삭제되어 보내지 않음';
+
 /**
  * 결과를 적는다. 찜한 그 발송(sent_at이 같은 줄)만 고친다.
- * unknown으로 정리된 뒤에 수락 응답이 늦게 기록되면 accepted로 고친다(사실에 더 가깝다).
+ * - 시각은 DB 시계다(시험은 options.now). 15분 재시도는 **결과를 기록하는 지금**부터 센다(리뷰 지적 6).
+ *   왜 DB 시계인가: 이 PC의 시계는 가끔 뒤로 간다(약 32초마다 2.3초). 판정(next_at ≤ 지금)과 기록을 같은 시계로 해야 일찍 다시 보내지 않는다.
+ * - unknown으로 정리된 뒤에 수락 응답이 늦게 기록되면 accepted로 고친다(사실에 더 가깝다).
  */
-async function record(client: PoolClient, c: Claimed, outcome: SendOutcome, now: string): Promise<keyof DeliverResult> {
+async function record(client: PoolClient, c: Claimed, outcome: SendOutcome, now: string | null): Promise<keyof DeliverResult> {
   let state: 'accepted' | 'retry_wait' | 'failed' | 'unknown';
   let error: string | null = null;
   if (outcome.state === 'accepted') state = 'accepted';
   else if (outcome.state === 'unknown') { state = 'unknown'; error = outcome.error; }
   else { state = c.retried ? 'failed' : 'retry_wait'; error = outcome.error; }
-  const nextAt = state === 'retry_wait' ? new Date(Date.parse(now) + RETRY_MINUTES * 60_000).toISOString() : null;
+  const at = (await client.query<{ at: string }>(`select ${iso('coalesce($1::timestamptz,clock_timestamp())')} at`, [now])).rows[0]?.at ?? new Date().toISOString();
   const updated = await client.query(
-    `update mail_outbox set state=$2,error=$3,next_at=$4,retried=retried or $5 where id=$1 and state in ('sending','unknown') and sent_at=$6::timestamptz`,
-    [c.id, state, error, nextAt, state === 'retry_wait', c.sentAt]);
+    `update mail_outbox set state=$2,error=$3,next_at=case when $6 then $4::timestamptz + interval '${String(RETRY_MINUTES)} minutes' end,
+       retried=retried or $6 where id=$1 and state in ('sending','unknown') and sent_at=$5::timestamptz`,
+    [c.id, state, error, at, c.sentAt, state === 'retry_wait']);
   if (!updated.rowCount) return 'discarded';
-  await appendLog(client, c.id, state, error, now);
+  await appendLog(client, c.id, state, error, at);
   await syncMailAlert(client, c.projectId);
   deferChange(client, c.projectId, 'mail', { key: 'log' });
   return state === 'retry_wait' ? 'retry' : state;
 }
 
 const isEpochMismatch = (error: unknown) => (error as { code?: string }).code === 'AW001';
+const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** 보낼 차례인 메일을 한 묶음 보낸다. */
+/**
+ * 결과 기록(리뷰 지적 1). 메일을 다시 보내지 않고 **기록만** 몇 번 다시 시도한다.
+ * 끝내 적지 못하면 그 줄만 unknown으로 적어 드러낸다(알림 포함). 그것도 실패하면 다음 주기의 정리(sweepStale)가 맡는다.
+ * 어느 경우에도 예외를 올리지 않는다. 그래서 한 통의 기록 실패가 다른 메일 발송을 멈추지 않는다.
+ */
+async function recordSafely(pool: Pool, epoch: number, c: Claimed, outcome: SendOutcome, now: string | null): Promise<keyof DeliverResult> {
+  for (const wait of [0, 100, 300]) {
+    if (wait) await pause(wait);
+    try { return await inEpoch(pool, epoch, (client) => record(client, c, outcome, now)); } catch (error) {
+      if (isEpochMismatch(error)) return 'discarded';
+    }
+  }
+  try {
+    return await inEpoch(pool, epoch, async (client) => {
+      const at = (await client.query<{ at: string }>(`select ${iso('coalesce($1::timestamptz,clock_timestamp())')} at`, [now])).rows[0]?.at ?? new Date().toISOString();
+      const updated = await client.query(`update mail_outbox set state='unknown',error=$2,next_at=null where id=$1 and state='sending' and sent_at=$3::timestamptz`, [c.id, RESULT_LOST, c.sentAt]);
+      if (!updated.rowCount) return 'discarded' as const;
+      await appendLog(client, c.id, 'unknown', RESULT_LOST, at);
+      await syncMailAlert(client, c.projectId);
+      deferChange(client, c.projectId, 'mail', { key: 'log' });
+      return 'unknown' as const;
+    });
+  } catch { return 'unknown'; }
+}
+
+/**
+ * 오래 `sending`에 머문 줄을 unknown으로 정리한다(리뷰 지적 1: 프로세스 재시작을 기다리지 않는다).
+ * 살아 있는 발송은 SMTP 응답 대기 시간 안에 끝나므로, 그 10배 + 2분이 지난 줄은 결과를 잃은 것이다.
+ */
+async function sweepStale(client: PoolClient, now: string | null, timeoutMs: number): Promise<number> {
+  const rows = (await client.query<{ id: string; projectId: string; at: string }>(
+    `update mail_outbox set state='unknown',error=$2 where state='sending'
+       and sent_at < coalesce($1::timestamptz,clock_timestamp()) - make_interval(secs => $3)
+     returning id,project_id "projectId",${iso('coalesce($1::timestamptz,clock_timestamp())')} at`, [now, RESULT_LOST, staleSeconds(timeoutMs)])).rows;
+  for (const r of rows) await appendLog(client, r.id, 'unknown', RESULT_LOST, r.at);
+  if (rows[0]) { await syncMailAlert(client, rows[0].projectId); deferChange(client, rows[0].projectId, 'mail', { key: 'log' }); }
+  return rows.length;
+}
+
+/**
+ * 한 통을 찜한다(리뷰 지적 1: 묶음으로 찜하지 않는다). 받는 사람을 지웠으면 보내지 않고 실패로 적는다(리뷰 지적 3).
+ * 돌려주는 것: 보낼 것 / 건너뛴 것 / 없음(null)
+ */
+async function claimOne(client: PoolClient, now: string | null): Promise<{ c: Claimed; mail: OutgoingMail | null; target: (SmtpTarget & { from: string }) | null } | 'skipped' | null> {
+  const row = (await client.query<Omit<Claimed, 'sentAt' | 'reportKey'> & { recipient: string }>(
+    `select id,report,recipient,email,view,pdf,retried,project_id "projectId" from mail_outbox
+     where state='queued' or (state='retry_wait' and next_at<=coalesce($1::timestamptz,clock_timestamp()))
+     order by coalesce(next_at,created_at),created_at,id limit 1 for update skip locked`, [now])).rows[0];
+  if (!row) return null;
+  // 발송 직전에 지금의 받는 사람 목록으로 다시 확인한다. 삭제와 겹치면 삭제가 끝날 때까지 기다린다(for share).
+  const alive = (await client.query('select 1 from mail_recipients where id=$1 for share', [row.recipient])).rowCount;
+  const at = (await client.query<{ at: string }>(`select ${iso('coalesce($1::timestamptz,clock_timestamp())')} at`, [now])).rows[0]?.at ?? new Date().toISOString();
+  if (!alive) {
+    await client.query("update mail_outbox set state='failed',error=$2,next_at=null where id=$1", [row.id, RECIPIENT_GONE]);
+    await appendLog(client, row.id, 'failed', RECIPIENT_GONE, at);
+    await syncMailAlert(client, row.projectId);
+    deferChange(client, row.projectId, 'mail', { key: 'log' });
+    return 'skipped';
+  }
+  await client.query("update mail_outbox set state='sending',next_at=null,sent_at=$2 where id=$1", [row.id, at]);
+  await appendLog(client, row.id, 'sending', null, at);
+  const report = await loadReport(client, row.report);
+  const c: Claimed = { id: row.id, report: row.report, email: row.email, view: row.view, pdf: row.pdf, retried: row.retried, projectId: row.projectId, reportKey: report.reportKey, sentAt: at };
+  const target = await smtpTarget(client);
+  if (!target) return { c, mail: null, target: null };
+  const project = (await client.query<{ name: string }>('select name from projects limit 1')).rows[0]?.name ?? '';
+  const appUrl = (await client.query<{ app_url: string | null }>('select app_url from app_settings where singleton')).rows[0]?.app_url ?? null;
+  // 미리보기와 같은 함수로 만든다. 스냅샷이라 다시 보내도 같은 내용이다(G L407).
+  const rendered = renderMail({ projectName: project, report, view: row.view, to: row.email, appUrl });
+  return { c, mail: { from: target.from, to: row.email, ...rendered }, target };
+}
+
+/**
+ * 보낼 차례인 메일을 최대 BATCH통 보낸다. 한 통씩 「찜하기 커밋 → SMTP → 기록」을 되풀이한다.
+ * - 시각은 DB 시계다. 시험은 options.now로 정한다.
+ * - 옛 세대 번호면 첫 정리 단계에서 AW001을 올린다(아무것도 보내지 않음).
+ */
 export async function deliverMail(pool: Pool, epoch: number, options: DeliverOptions = {}): Promise<DeliverResult> {
   const result: DeliverResult = { accepted: 0, retry: 0, failed: 0, unknown: 0, discarded: 0 };
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const claim = await inEpoch(pool, epoch, async (client) => {
-    const now = await clock(client, options.now);
-    const rows = (await client.query<Omit<Claimed, 'sentAt' | 'reportKey'>>(
-      `select id,report,email,view,pdf,retried,project_id "projectId" from mail_outbox
-       where state='queued' or (state='retry_wait' and next_at<=$1::timestamptz)
-       order by coalesce(next_at,created_at),created_at,id limit ${String(BATCH)} for update skip locked`, [now])).rows;
-    if (!rows.length) return { now, items: [] as { c: Claimed; mail: OutgoingMail | null }[], target: null };
-    const target = await smtpTarget(client);
-    const project = (await client.query<{ name: string }>('select name from projects limit 1')).rows[0]?.name ?? '';
-    const appUrl = (await client.query<{ app_url: string | null }>('select app_url from app_settings where singleton')).rows[0]?.app_url ?? null;
-    const items: { c: Claimed; mail: OutgoingMail | null }[] = [];
-    for (const row of rows) {
-      await client.query("update mail_outbox set state='sending',next_at=null,sent_at=$2 where id=$1", [row.id, now]);
-      await appendLog(client, row.id, 'sending', null, now);
-      const report = await loadReport(client, row.report);
-      const c: Claimed = { ...row, reportKey: report.reportKey, sentAt: now };
-      if (!target) { items.push({ c, mail: null }); continue; }
-      // 미리보기와 같은 함수로 만든다. 스냅샷이라 다시 보내도 같은 내용이다(G L407).
-      const rendered = renderMail({ projectName: project, report, view: row.view, to: row.email, appUrl });
-      items.push({ c, mail: { from: target.from, to: row.email, ...rendered } });
+  const now = options.now ?? null;
+  result.unknown += await inEpoch(pool, epoch, (client) => sweepStale(client, now, timeoutMs));
+  for (let i = 0; i < BATCH; i++) {
+    let claimed: Awaited<ReturnType<typeof claimOne>>;
+    try { claimed = await inEpoch(pool, epoch, (client) => claimOne(client, now)); } catch (error) {
+      // 초기화로 세대가 바뀌었으면 이번 주기를 끝낸다. 그 밖의 찜하기 실패는 아무것도 보내기 전이므로 그대로 올린다.
+      if (isEpochMismatch(error)) break;
+      throw error;
     }
-    return { now, items, target };
-  });
-  for (const { c, mail } of claim.items) {
-    let outcome: SendOutcome;
-    if (!mail || !claim.target) outcome = { state: 'rejected', error: SMTP_MISSING };
-    else outcome = await send(claim.target, mail, c, options, timeoutMs);
-    try {
-      const kind = await inEpoch(pool, epoch, (client) => record(client, c, outcome, claim.now));
-      result[kind]++;
-    } catch (error) {
-      if (!isEpochMismatch(error)) throw error;
-      result.discarded++;
-    }
+    if (!claimed) break;
+    if (claimed === 'skipped') { result.failed++; continue; }
+    const { c, mail, target } = claimed;
+    const outcome: SendOutcome = !mail || !target ? { state: 'rejected', error: SMTP_MISSING } : await send(target, mail, c, options, timeoutMs);
+    result[await recordSafely(pool, epoch, c, outcome, now)]++;
   }
   return result;
 }

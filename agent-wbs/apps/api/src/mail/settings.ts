@@ -11,6 +11,7 @@ import type { PoolClient } from '@awbs/db';
 import { ApiError, assertSameVersion, invalid } from '../changes/http.ts';
 import { deferChange, iso } from '../changes/events.ts';
 import { readSmtpPassword, SMTP_SECRET, storeSmtpPassword } from './secret.ts';
+import { syncMailAlert } from './queue.ts';
 import { checkSmtp, DEFAULT_TIMEOUT_MS, SMTP_SECURITY, type SmtpSecurity, type SmtpTarget } from './smtp.ts';
 
 export interface SmtpView {
@@ -71,10 +72,16 @@ export async function smtpTarget(client: PoolClient): Promise<(SmtpTarget & { fr
 
 /** 연결 확인(G L406 「연결 확인」). 결과를 설정 줄에 적는다. 편집 버전은 그대로다. */
 export async function checkSmtpSettings(client: PoolClient, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  // 확인을 시작한 설정 버전. 확인하는 동안 설정이 바뀌면 결과를 버린다(리뷰 지적 5).
+  // 왜: 연결 확인 결과는 확인한 서버 · 계정에만 맞다. 옛 서버의 「정상」이 새 서버에 붙으면 안 된다.
+  const version = (await getSmtp(client)).updatedAt;
   const target = await smtpTarget(client);
-  const result = target ? await checkSmtp(target, timeoutMs) : { ok: false, error: 'SMTP 서버가 설정되지 않았습니다. 「SMTP 설정」에서 먼저 저장하세요.' };
-  const at = (await client.query<{ at: string }>(`update mail_settings set status=$1,error=$2,checked_at=clock_timestamp() returning ${iso('checked_at')} at`,
-    [result.ok ? 'ok' : 'failed', result.error])).rows[0]?.at;
+  let result = target ? await checkSmtp(target, timeoutMs) : { ok: false, error: 'SMTP 서버가 설정되지 않았습니다. 「SMTP 설정」에서 먼저 저장하세요.' };
+  const stored = await client.query<{ at: string }>(`update mail_settings set status=$1,error=$2,checked_at=clock_timestamp()
+    where settings_version is not distinct from $3::timestamptz returning ${iso('checked_at')} at`, [result.ok ? 'ok' : 'failed', result.error, version]);
+  const exists = (await client.query('select 1 from mail_settings')).rowCount;
+  if (exists && !stored.rowCount) result = { ok: false, error: '연결을 확인하는 동안 SMTP 설정이 바뀌었습니다 — 바뀐 설정으로 다시 확인하세요.' };
+  const at = stored.rows[0]?.at;
   deferChange(client, null, 'mail', { key: 'smtp' });
   return { ok: result.ok, checkedAt: at ?? (await client.query<{ at: string }>(`select ${iso('clock_timestamp()')} at`)).rows[0]?.at ?? new Date().toISOString(), error: result.error };
 }
@@ -134,4 +141,7 @@ export async function deleteRecipient(client: PoolClient, id: string, updatedAt:
   await assertSameVersion(client, before.updatedAt, updatedAt, { current: before });
   await client.query('delete from mail_recipients where id=$1', [id]);
   deferChange(client, null, 'mail', { key: 'recipients' });
+  // 삭제한 사람의 실패는 더 이상 다시 보낼 대상이 아니다. 대시보드 알림 건수를 다시 맞춘다(리뷰 지적 3).
+  const projectId = (await client.query<{ id: string }>('select id from projects limit 1')).rows[0]?.id ?? null;
+  await syncMailAlert(client, projectId);
 }
