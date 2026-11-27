@@ -3,8 +3,9 @@
  * - 같은 Work Package에 Task를 동시에 많이 만들어도 500(INTERNAL)이 나지 않는다(M3-02 보고 §4-2).
  * - 요청 처리 중 DB 연결이 끊겨도 API 프로세스는 죽지 않고, 그 요청만 오류로 끝난 뒤 다음 요청은 새 연결로 처리한다(M3-02 보고 §4-3).
  */
-import { createPool, recreateTestDatabase, runMigrations, seedSystem } from '@awbs/db';
-import { afterAll, beforeAll, describe, expect, inject, test } from 'vitest';
+import { createPool, recreateTestDatabase, runMigrations, seedSystem, type PoolClient } from '@awbs/db';
+import { once } from 'node:events';
+import { afterAll, beforeAll, describe, expect, inject, test, vi } from 'vitest';
 import { buildApp } from '../src/app.ts';
 import { isUnavailable } from '../src/platform/errors.ts';
 import { issueLoginLink } from '../src/platform/credentials.ts';
@@ -19,6 +20,9 @@ appUrl.searchParams.set('options', '-c role=awbs_app');
 appUrl.searchParams.set('application_name', 'robust-app');
 const poolErrors: Error[] = [];
 const pool = createPool(appUrl.href, { max: 20, onError: (error) => { poolErrors.push(error); } });
+const connections = new Set<PoolClient>();
+pool.on('connect', client => { connections.add(client); });
+pool.on('remove', client => { connections.delete(client); });
 const app = buildApp(pool, process.env.ROBUST_DEBUG ? { level: 'error' } : false, { origin, lan: false });
 
 let cookie = '';
@@ -66,7 +70,6 @@ describe('동시 Task 생성', () => {
   });
 });
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const list = () => app.inject({ url: `/api/projects/${projectId}/tasks`, headers: { cookie, origin } });
 const killApp = () => ownerPool.query("select pg_terminate_backend(pid) from pg_stat_activity where application_name='robust-app'");
 
@@ -85,9 +88,10 @@ describe('DB 연결 문제', () => {
   test('요청에 쓰던 연결이 끊기면 그 질의는 UNAVAILABLE로 분류되고, 프로세스는 죽지 않으며 다음 요청은 새 연결로 처리한다', async () => {
     const client = await pool.connect();
     const pid = (await client.query<{ pid: number }>('select pg_backend_pid() as pid')).rows[0]?.pid;
+    const disconnected = once(client, 'error');
     await ownerPool.query('select pg_terminate_backend($1)', [pid]);
     // 끊긴 연결은 사용 중(checked out)인 클라이언트에 error 이벤트를 낸다. 듣는 곳이 없으면 프로세스가 죽는다.
-    await sleep(300);
+    await disconnected;
     const failure = await client.query('select 1').then(() => null, (error: unknown) => error);
     expect(failure).not.toBeNull();
     expect(isUnavailable(failure)).toBe(true);
@@ -95,17 +99,19 @@ describe('DB 연결 문제', () => {
     expect(poolErrors.some((error) => /terminat/i.test(error.message))).toBe(true);
     // 쉬고 있던 연결도 모두 끊는다(DB 재시작과 같은 상황). 다음 요청은 새 연결을 만들어 성공해야 한다.
     await killApp();
-    await sleep(300);
+    await vi.waitFor(() => { expect(pool.totalCount).toBe(0); }, { timeout: 10_000 });
     const response = await list();
     expect(response.statusCode, response.body).toBe(200);
   });
 
   test('DB가 끊긴 순간의 요청은 503이고, 끊긴 뒤의 요청은 다시 200이다', async () => {
     expect((await list()).statusCode).toBe(200);
+    const oldConnections = [...connections];
+    expect(oldConnections.length).toBeGreaterThan(0);
     await killApp();
     const responses = await Promise.all(Array.from({ length: 6 }, () => list()));
     for (const response of responses) expect([200, 503], response.body).toContain(response.statusCode);
-    await sleep(100);
+    await vi.waitFor(() => { expect(oldConnections.filter(client => connections.has(client))).toEqual([]); }, { timeout: 10_000 });
     expect((await list()).statusCode).toBe(200);
   });
 });

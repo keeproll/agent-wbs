@@ -37,8 +37,9 @@ for (const width of [1280, 1920]) {
     await page.getByRole('button', { name: '표', exact: true }).click();
     await tableBox(page).getByRole('button', { name: 'Drizzle Schema 설계' }).click();
     await expect(page.getByRole('region', { name: 'Task 상세' })).toBeVisible();
-    await page.waitForTimeout(300);
-    expect(await overflow(page)).toEqual({ page: false, offenders: [] });
+    await expect.poll(() => page.locator('.split > .wrail, .split > .detail').evaluateAll(elements =>
+      elements.flatMap(el => el.getAnimations()).some(animation => animation.playState === 'running'))).toBe(false);
+    await expect.poll(() => overflow(page)).toEqual({ page: false, offenders: [] });
 
     await page.locator('.page-h').getByRole('button', { name: 'Task 생성' }).click();
     await expect(page.getByRole('dialog', { name: 'Task 생성' })).toBeVisible();

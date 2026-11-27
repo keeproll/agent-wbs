@@ -834,7 +834,7 @@ describe('project 리뷰 지적 회귀(M2-03-REVIEW 1~8)', () => {
       return claimed.json<{ job: { id: string; fence: number } }>().job;
     };
     const current = await claim();
-    expect(await watchRunner(pool, await epoch(), new Date(Date.now() + 61_000))).toBe(1);
+    expect(await watchRunner(pool, await epoch(), new Date(Date.now() + 120_000))).toBe(1);
     expect((await runner(`/api/runner/jobs/${current.id}/release`, { fence: current.fence, hostId: 'host-1', proof: { kind: 'no_process', bootId: 'boot-1' }, at: AT_NOW() })).statusCode).toBe(204);
     expect((await runner(`/api/runner/jobs/${current.id}/reconcile`, { fence: current.fence, evidence: { outcome: 'none', checkedAt: AT_NOW(), detail: { checked: true } } })).statusCode).toBe(204);
     const next = await claim();

@@ -20,7 +20,6 @@ afterEach(async () => {
   execFileSync('chmod', ['-R', 'u+rwx', home]);
   await rm(home, { recursive: true, force: true });
 });
-const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function git(cwd: string, ...args: string[]) {
   return execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgSign=false', ...args],
@@ -49,7 +48,7 @@ const written = async (id: string) => {
   return false;
 };
 
-test('재현 A: 옛 복사가 진행 중이면 초기화는 기다리고, 옛 복사는 취소되며, 그 뒤 새 v1은 지워지지 않는다', async () => {
+test('재현 A: 옛 복사가 진행 중이면 초기화는 기다리고, 옛 복사는 취소되며, 그 뒤 새 v1은 지워지지 않는다', { timeout: 30_000 }, async () => {
   const f = await fixture();
   const internal = f.repo as unknown as { trusted(): Promise<unknown> };
   const original = internal.trusted.bind(f.repo);
@@ -63,9 +62,12 @@ test('재현 A: 옛 복사가 진행 중이면 초기화는 기다리고, 옛 �
   await entered.promise;
   // 다른 인스턴스(같은 프로세스)의 초기화. 옛 복사가 잠금을 쥐고 있으므로 끝나지 않아야 한다.
   const cleaning = settle(reset(f.url, f.base));
-  await pause(300);
-  expect(cleaning.state).toBe('pending');
-  release.resolve(undefined);
+  try {
+    await vi.waitFor(async () => {
+      expect((await readdir(join(home, 'state/git'))).some(name => name.startsWith(`${f.id}.json.lock.`))).toBe(true);
+    }, { timeout: 10_000 });
+    expect(cleaning.state).toBe('pending');
+  } finally { release.resolve(undefined); }
   await vi.waitFor(() => { expect(cleaning.state).toBe('resolved'); }, { timeout: 10_000 });
   expect(cleaning.value?.status).toBe('done');
   // 옛 복사는 초기화가 취소했다. 공개되지 않았다.
@@ -75,7 +77,6 @@ test('재현 A: 옛 복사가 진행 중이면 초기화는 기다리고, 옛 �
   await writeFile(join(f.source, 'prototype/input'), 'new input'); git(f.source, 'add', '.'); git(f.source, 'commit', '-m', 'new'); git(f.source, 'push', f.url, 'main');
   const fresh = await GitRepository.open(home, f.id);
   const published = await fresh.checkoutInput('v1', await fresh.fetch());
-  await pause(100);
   expect(await readFile(join(published, 'prototype/input'), 'utf8')).toBe('new input');
 });
 
@@ -100,10 +101,13 @@ test('재현 B(실제 SIGKILL): 복사 프로세스가 죽으면 초기화가 �
   const c = child(f, 'late');
   await c.stage('files-written');
   const cleaning = settle(reset(f.url, f.base));
-  await pause(300);
-  // 복사가 잠금을 쥔 동안 초기화는 끝나지 않는다.
-  expect(cleaning.state).toBe('pending');
-  c.proc.kill('SIGKILL');
+  try {
+    await vi.waitFor(async () => {
+      expect((await readdir(join(home, 'state/git'))).some(name => name.startsWith(`${f.id}.json.lock.`))).toBe(true);
+    }, { timeout: 10_000 });
+    // 복사가 잠금을 쥔 동안 초기화는 끝나지 않는다.
+    expect(cleaning.state).toBe('pending');
+  } finally { c.proc.kill('SIGKILL'); }
   expect((await c.closed)[1]).toBe('SIGKILL');
   await vi.waitFor(() => { expect(cleaning.state).toBe('resolved'); }, { timeout: 40_000 });
   expect(cleaning.value?.status).toBe('done');

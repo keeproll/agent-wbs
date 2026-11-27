@@ -244,9 +244,10 @@ test('UAT-WBS-05 실제 서버 200·1,000행: 응답 시간과 첫 행 표시 �
     } else {
       domRows = await page.getByRole('table', { name: 'WBS Task 목록' }).locator('.trow:not(.thead)').count();
       await page.evaluate(() => { const el = document.querySelector('.wbs .tbl'); if (el) el.scrollTop = el.scrollHeight; });
-      await page.waitForTimeout(200);
-      await page.evaluate(() => { const el = document.querySelector('.wbs .tbl'); if (el) el.scrollTop = el.scrollHeight; });
-      await expect(page.locator('.wbs .tbl .trow.task').last()).toBeInViewport();
+      await expect(async () => {
+        await page.evaluate(() => { const el = document.querySelector('.wbs .tbl'); if (el) el.scrollTop = el.scrollHeight; });
+        await expect(page.locator('.wbs .tbl .trow.task').last()).toBeInViewport();
+      }).toPass();
     }
     rows.push({ rows: target, concurrentCreate500: made.concurrent500.length, createTaskMedianMs: median(made.times), listTasksMs: listMs, listTasksMedianMs: median(listMs), listBytes: bytes, scheduleMs: schedMs, scheduleMedianMs: median(schedMs), screen, screenFirstRowMs: screenMs, domRows });
     save();

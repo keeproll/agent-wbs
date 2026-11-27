@@ -34,10 +34,11 @@ export const json = (route: Route, status: number, body: unknown, headers: Recor
   route.fulfill({ status, contentType: 'application/json', headers, body: body === null ? '' : JSON.stringify(body) });
 
 /** 응답을 보내지 않는 요청(서버 무응답). release()를 부르면 그때 handler로 응답한다. */
-export function hold(then: Handler): { handler: Handler; release: () => void } {
+export function hold(then: Handler): { handler: Handler; release: () => void; started: Promise<Request> } {
   let open: () => void = () => undefined;
   const gate = new Promise<void>((resolve) => { open = resolve; });
-  return { handler: async (route, request) => { await gate; await then(route, request); }, release: () => { open(); } };
+  const started = Promise.withResolvers<Request>();
+  return { handler: async (route, request) => { started.resolve(request); await gate; await then(route, request); }, release: () => { open(); }, started: started.promise };
 }
 
 export const delay = (ms: number, then: Handler): Handler => async (route, request) => {

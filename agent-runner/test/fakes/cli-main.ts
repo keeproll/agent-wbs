@@ -6,7 +6,7 @@ import type { Call, Scenario } from './cli.ts';
 const [scenarioPath = '', callsPath = '', ...argv] = process.argv.slice(2);
 const scenario = JSON.parse(readFileSync(scenarioPath, 'utf8')) as Scenario;
 
-if (scenario.ignoreSigterm) process.on('SIGTERM', () => undefined);
+if (scenario.ignoreSigterm) process.on('SIGTERM', () => process.stdout.write('SIGTERM ignored\n'));
 
 let stdin = '';
 if (!process.stdin.isTTY) {

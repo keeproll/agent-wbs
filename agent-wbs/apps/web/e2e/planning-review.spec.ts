@@ -123,9 +123,11 @@ test('충돌 창: 최신 불러오기 중에 창을 닫으면(Esc) 늦게 온 �
   const slow = hold((route) => json(route, 200, server.state.proposals.find((p) => p.id === CP2.id)));
   api.on(`GET /api/proposals/${CP2.id}`, slow.handler);
   await dialog.getByRole('button', { name: /최신 내용 불러오기/ }).click();
+  const loading = await slow.started;
+  const cancelled = page.waitForEvent('requestfailed', { predicate: request => request === loading });
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);
   slow.release();
-  await page.waitForTimeout(300);
+  await cancelled;
   await expect(page.getByLabel('승인 의견')).toHaveValue('지키는 의견');
 });

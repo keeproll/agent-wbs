@@ -256,20 +256,18 @@ test('최신 불러오기 대기 중 Esc로 닫으면 불러오기가 취소되�
   const dialog = page.getByRole('alertdialog', { name: '다른 변경이 먼저 저장되었습니다' });
   await expect(dialog).toBeVisible();
 
-  let release: () => void = () => undefined;
-  const gate = new Promise<void>((resolve) => { release = resolve; });
-  api.on('GET /api/tasks/TASK-0001', async (route) => {
-    await gate;
-    await json(route, 200, { taskKey: 'TASK-0001', title: '최신 서버 제목', updatedAt: V2 }).catch(() => undefined);
-  });
+  const slow = hold((route) => json(route, 200, { taskKey: 'TASK-0001', title: '최신 서버 제목', updatedAt: V2 }).catch(() => undefined));
+  api.on('GET /api/tasks/TASK-0001', slow.handler);
   await dialog.getByRole('button', { name: '최신 내용 불러오기 (내 변경 버림)' }).click();
   await expect(dialog.getByRole('button', { name: '최신 내용 불러오기 (내 변경 버림)' })).toBeDisabled();
+  const loading = await slow.started;
+  const cancelled = page.waitForEvent('requestfailed', { predicate: request => request === loading });
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);
   await page.getByLabel('제목').fill('창을 닫은 뒤 새로 작성한 B');
-  release();
+  slow.release();
   // 늦은 응답이 와도 입력·편집 상태는 그대로이고 「불러왔습니다」 안내도 없다.
-  await page.waitForTimeout(300);
+  await cancelled;
   await expect(page.getByLabel('제목')).toHaveValue('창을 닫은 뒤 새로 작성한 B');
   await expect(page.locator('.notice')).toHaveCount(0);
 });

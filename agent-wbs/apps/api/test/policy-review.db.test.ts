@@ -1,5 +1,5 @@
 // Codex 독립 리뷰(M2-08-INDEPENDENT-REVIEW.md)의 재현 검사를 옮긴 회귀 테스트. 지적 1~6은 「지적 N」 이름의 테스트다.
-import { afterAll, beforeAll, expect, test } from 'vitest';
+import { afterAll, beforeAll, expect, test, vi } from 'vitest';
 import { harness, projectWith, attemptFor, type Harness, type ProjectFixture } from './m208-fixture.ts';
 import { inEpoch } from '../src/platform/transaction.ts';
 import { applyRegrade, getModels, putModels, resumeGrade, recordResumeRegrade } from '../src/policy/service.ts';
@@ -153,10 +153,14 @@ test('emitChange serializes commits from two independent transactions', async ()
   const a=await h.pool.connect(), b=await h.pool.connect();
   try {
     await a.query('begin'); await b.query('begin');
+    const pid=(await b.query('select pg_backend_pid() as pid')).rows[0].pid;
     await emitChange(a,f.project,'task','review-first');
     let done=false;
     const pending=emitChange(b,f.project,'task','review-second').then(()=>{done=true;});
-    await new Promise(r=>setTimeout(r,80)); expect(done).toBe(false);
+    await vi.waitFor(async()=>{
+      expect((await h.owner.query("select 1 from pg_stat_activity where pid=$1 and wait_event_type='Lock'",[pid])).rowCount).toBe(1);
+    },{timeout:10_000});
+    expect(done).toBe(false);
     await a.query('commit'); await pending; await b.query('commit');
     const result=(await h.owner.query("select seq,ref from change_events where ref in ('\"review-first\"','\"review-second\"') order by seq")).rows;
     obs('seq commit order',result);
@@ -174,13 +178,11 @@ test('지적 2: 설정 변경과 Task 재판단이 잠금 순서를 뒤집지 �
     const bpid=(await b.query('select pg_backend_pid() as pid')).rows[0].pid;
     const current=await getModels(b);
     const save=putModels(b,{updatedAt:current.updatedAt,models:[{agent:'Claude',id:'claude-opus-5-5',allowed:false}]}).then(async()=>{await b.query('rollback');return 'ok';},async e=>{await b.query('rollback');return e.code;});
-    let waiting=false;
-    for(let n=0;n<100;n++) {
+    await vi.waitFor(async()=>{
       const state=(await h.owner.query('select wait_event_type,query from pg_stat_activity where pid=$1',[bpid])).rows[0];
-      if(state.wait_event_type==='Lock' && state.query.includes('order by id for update')) {waiting=true;break;}
-      await new Promise(r=>setTimeout(r,10));
-    }
-    expect(waiting).toBe(true);
+      expect(state.wait_event_type).toBe('Lock');
+      expect(state.query).toContain('order by id for update');
+    },{timeout:10_000});
     const regrade=applyRegrade(a,{taskKey:'TASK-0002',role:'dev',modelId:'claude-sonnet-5-5',effort:'high',reason:'concurrent review'}).then(async()=>{await a.query('rollback');return 'ok';},async e=>{await a.query('rollback');return e.code;});
     const result=await Promise.all([save,regrade]);
     obs('lock inversion outcome',result);

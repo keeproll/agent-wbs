@@ -319,11 +319,13 @@ test('M3-08 재리뷰 P2: 입력 분석 충돌의 최신 불러오기 중 Esc로
   api.on('GET /api/project', slow.handler);
   await modal.getByRole('button', { name: '최신 내용 불러오기 (내 변경 버림)' }).click();
   await expect.poll(() => api.requests('GET /api/project').length).toBeGreaterThan(1);
+  const loading = await slow.started;
+  const cancelled = page.waitForEvent('requestfailed', { predicate: request => request === loading });
   await page.keyboard.press('Escape');
   await expect(modal).toHaveCount(0);
   await page.getByLabel('팀장 지시').fill('닫은 뒤 새로 쓴 지시');
   slow.release();
-  await page.waitForTimeout(300);
+  await cancelled;
   await expect(page.getByTestId('input-pending')).toBeVisible();
   await expect(page.getByLabel('팀장 지시')).toHaveValue('닫은 뒤 새로 쓴 지시');
   await expect(page.getByText('최신 내용을 불러왔습니다. 내 변경은 적용되지 않았습니다.')).toHaveCount(0);

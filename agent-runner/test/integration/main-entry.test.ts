@@ -6,7 +6,7 @@ import { createServer, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { sealCredential } from '../../src/github/credential.ts';
 import { repositoryIdFor } from '../../src/git/identity.ts';
 import { GitRepository } from '../../src/git/repository.ts';
@@ -52,11 +52,6 @@ function run(env: NodeJS.ProcessEnv) {
   child.stderr.on('data', (c) => (output += String(c)));
   return { child, output: () => output };
 }
-const until = async (check: () => boolean, ms: number) => {
-  const end = Date.now() + ms;
-  while (!check()) { if (Date.now() > end) return false; await new Promise((r) => setTimeout(r, 50)); }
-  return true;
-};
 
 test('main: 실제 DB 모양의 정리 명령 → 그룹 종료 증명 → 로컬·원격 정리 → 동기화·시작 보고 → SIGTERM 정상 종료', { timeout: 60_000 }, async () => {
   // 원격(bare)·Runner 저장소·작업 폴더
@@ -135,7 +130,7 @@ test('main: 실제 DB 모양의 정리 명령 → 그룹 종료 증명 → 로�
   const proc = run({ AWBS_RUNNER_TOKEN: RUNNER_TOKEN, AWBS_URL: wbsUrl, AWBS_HOME: home,
     AWBS_GITHUB_REPO: 'https://github.com/o/r', AWBS_GITHUB_MODE: 'token', AWBS_GITHUB_API_URL: github.url });
   try {
-    expect(await until(() => received.some((r) => r.path === '/api/runner/readiness'), 30_000)).toBe(true);
+    await vi.waitFor(() => { expect(received.some((r) => r.path === '/api/runner/readiness')).toBe(true); }, { timeout: 30_000 });
     const result = received.find((r) => r.path === '/api/runner/commands/cmd-1/result');
     expect(result?.body).toMatchObject({ status: 'done', holds: [{ hostId, bootId, proof: 'group_empty', processGroup: pgid }] });
     await expect(lstat(worktree)).rejects.toMatchObject({ code: 'ENOENT' });
@@ -147,7 +142,7 @@ test('main: 실제 DB 모양의 정리 명령 → 그룹 종료 증명 → 로�
     expect(github.requests.filter((r) => r.method !== 'GET').map((r) => `${r.method} ${r.path}`))
       .toEqual([`PATCH /repos/o/r/pulls/${String(pr)}`, 'DELETE /repos/o/r/git/refs/heads/agent/T1-h1']);
     expect(received.some((r) => r.path === '/api/runner/host' && r.body.hostId === hostId)).toBe(true);
-    expect(await until(() => received.some((r) => r.path === '/api/runner/github/status'), 10_000)).toBe(true);
+    await vi.waitFor(() => { expect(received.some((r) => r.path === '/api/runner/github/status')).toBe(true); }, { timeout: 10_000 });
   } finally {
     proc.child.kill('SIGTERM');
   }
@@ -163,9 +158,9 @@ test('main: 모든 요청이 401이면 외부 신호 없이 스스로 종료 코
   const wbsUrl = await listen(server);
   const home = join(root, 'home');
   const proc = run({ AWBS_RUNNER_TOKEN: RUNNER_TOKEN, AWBS_URL: wbsUrl, AWBS_HOME: home });
-  const closed = once(proc.child, 'close') as Promise<[number | null]>;
-  const finished = await Promise.race([closed.then(([code]) => code), new Promise((r) => setTimeout(() => r('timeout'), 10_000))]);
-  if (finished === 'timeout') proc.child.kill('SIGKILL');
-  expect(finished).toBe(1);
+  const closed = once(proc.child, 'close');
+  try {
+    await vi.waitFor(() => { expect(proc.child.exitCode).toBe(1); }, { timeout: 10_000 });
+  } finally { if (proc.child.exitCode === null) proc.child.kill('SIGKILL'); await closed; }
   expect(proc.output()).toContain('API_ERROR');
 });

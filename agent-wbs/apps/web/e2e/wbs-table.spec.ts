@@ -138,7 +138,6 @@ test('UAT-STATE-02-UI 필터 응답이 늦으면 이전 목록과 상단 진행 
   await filter(page, '상태').selectOption('done');
   await expect(page.locator('.topbar')).toBeVisible();
   // 응답 전: 이전 목록(12건) 그대로
-  await page.waitForTimeout(400);
   await expect.poll(() => taskIds(page)).toHaveLength(12);
   await expect(page.locator('.skp')).toHaveCount(0);
   slow.release();

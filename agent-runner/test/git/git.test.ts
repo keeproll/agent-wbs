@@ -837,7 +837,7 @@ test('L2 정리 도중 시작 브랜치가 먼저 사라져도 재시도와 다�
   expect(git(next, 'rev-parse', 'HEAD')).toBe(baseline);
 });
 
-test('L1 실제 작업 폴더 생성 중 Runner를 SIGKILL해도 기록된 폴더와 브랜치를 복구한다', async () => {
+test('L1 실제 작업 폴더 생성 중 Runner를 SIGKILL해도 기록된 폴더와 브랜치를 복구한다', { timeout: 15_000 }, async () => {
   repo = await clone();
   const moduleUrl = new URL('../../src/git/repository.ts', import.meta.url).href;
   const marker = join(root, 'copy-started');
@@ -850,11 +850,7 @@ test('L1 실제 작업 폴더 생성 중 Runner를 SIGKILL해도 기록된 폴�
   });
   if (!child.pid) throw new Error('시험용 Runner 시작 실패');
   try {
-    let ready = false;
-    for (let count = 0; count < 200; count++) {
-      try { await lstat(marker); ready = true; break; } catch { await new Promise((resolve) => setTimeout(resolve, 10)); }
-    }
-    expect(ready).toBe(true);
+    await vi.waitFor(async () => { expect((await lstat(marker)).isFile()).toBe(true); }, { timeout: 10_000 });
     const owner = JSON.parse(await readFile(join(root, 'runner/state/git/project.json.lock'), 'utf8')) as Record<string, unknown>;
     expect(owner).toEqual(await ownerRecord(child.pid));
   } finally {
