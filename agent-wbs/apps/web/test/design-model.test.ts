@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  approvedDecisions, compatLabel, linkedDecisions, parseRef, pendingLinked, decisionGroups, decisionView, driftMark, driftView, fileRows, itemRows, kindCounts, layers, parseErrors,
+  approvedDecisions, compatLabel, hasRunningJob, linkedDecisions, parseRef, pendingLinked, decisionGroups, decisionView, driftMark, driftView, fileRows, itemRows, kindCounts, layers, parseErrors,
   storeCounts, summaryLine, tabBadges, tableTarget, taskStat, visibleLinks,
   type DecisionItem, type DriftItem, type FileItem, type IfaceItem, type DataItem, type TaskInfo,
 } from '../src/features/design/model.ts';
@@ -206,5 +206,25 @@ describe('M6-05 fix1 계약 보강 표시(M6-07 fix2)', () => {
     expect(parseRef('agent/TASK-0005-h2')).toEqual({ ref: 'agent/TASK-0005-h2', invalid: null });
     expect(parseRef('refs/heads/main')).toEqual({ ref: 'main', invalid: 'refs/heads/main' });
     expect(parseRef('Agent/TASK-0005')).toEqual({ ref: 'main', invalid: 'Agent/TASK-0005' });
+  });
+});
+
+describe('Codex 리뷰 fix2 지적', () => {
+  it('지적 4: 변경 제안 중에는 현재 연결과 승인 후 연결을 따로 보인다', () => {
+    const drifts = [drift({ id: 'r1', displayKey: 'DR-01' }), drift({ id: 'r2', displayKey: 'DR-02', itemKey: 'postgres:tasks' })];
+    const v = decisionView(dec({ authority: 'agent', level: null, status: 'change', itemKey: 'PATCH /api/tasks/:taskKey', driftId: 'r1',
+      change: { choice: 'b', reason: 'c', previousStatus: 'approved', itemKey: 'postgres:tasks', driftId: 'r2' } }), drifts);
+    expect(v.linkL).toBe('PATCH /api/tasks/:taskKey · DR-01');
+    expect(v.chgLinkL).toBe('postgres:tasks · DR-02');
+    expect(decisionView(dec({ status: 'change', change: { choice: 'b', reason: 'c', previousStatus: 'fixed' } }), drifts).chgLinkL).toBe('');
+  });
+  it('지적 6: 대조 안 함이 된 불일치는 실패한 반영 job이 있어도 다시 요청하지 않는다', () => {
+    expect(driftView(drift({ compat: 'unchecked', resolution: { how: 'contract', jobId: 'j', jobStatus: 'failed' } })).canRetry).toBe(false);
+    expect(driftView(drift({ compat: 'breaking', resolution: { how: 'contract', jobId: 'j', jobStatus: 'failed' } })).canRetry).toBe(true);
+  });
+  it('지적 1: 진행 중(queued·running) 반영 job이 있는지', () => {
+    expect(hasRunningJob([drift({ resolution: { how: 'contract', jobId: 'j', jobStatus: 'running' } })])).toBe(true);
+    expect(hasRunningJob([drift({ resolution: { how: 'contract', jobId: 'j' } })])).toBe(true);
+    expect(hasRunningJob([drift({ resolution: { how: 'contract', jobId: 'j', jobStatus: 'failed' } }), drift({ status: 'done', resolution: { jobId: 'k', jobStatus: 'queued' } })])).toBe(false);
   });
 });

@@ -40,9 +40,10 @@ export const LINK = {
    * 설계(M6-07). tab: map·dec·iface·data·own·chg. key는 설계 항목 고정 키(G L1056: REST `METHOD path`, 테이블 `store:name`).
    * 데이터 항목이면 저장소(store)를 key 앞부분에서 함께 싣는다(받는 화면이 그 저장소 목록을 연다).
    */
-  design: (tab?: string, key?: string) => {
+  design: (tab?: string, key?: string, ref?: string | null) => {
     const q = new URLSearchParams();
     if (tab && tab !== 'map') q.set('tab', tab);
+    if (ref && ref !== 'main') q.set('ref', ref); // 브랜치 조회 중이면 그 브랜치를 유지한다
     if (tab === 'data' && key?.includes(':')) q.set('store', key.slice(0, key.indexOf(':')));
     if (key) q.set('sel', key);
     const search = q.toString();

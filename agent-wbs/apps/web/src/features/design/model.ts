@@ -59,7 +59,9 @@ export function decisionView(x: DecisionItem, drifts: readonly DriftItem[] = [])
     canChg: x.authority !== 'free' && ['approved', 'fixed'].includes(x.status) && !(x.authority === 'lead' && x.level !== 'cond'),
     rowC: x.status === 'rejected' ? 'dec-row off' : 'dec-row',
     condL: x.condition ? `${x.condition}${result ? ` (조건 충족 판단: ${result})` : ''}` : '',
-    linkL: linkLabel(x.itemKey ?? x.change?.itemKey, x.driftId ?? x.change?.driftId, drifts),
+    // 현재 연결과 변경 제안의 「승인 후 연결」은 따로 보인다(Codex fix2 지적 4). 승인하면 서버가 change의 연결을 결정에 붙인다.
+    linkL: linkLabel(x.itemKey, x.driftId, drifts),
+    chgLinkL: x.status === 'change' ? linkLabel(x.change?.itemKey, x.change?.driftId, drifts) : '',
   };
 }
 
@@ -126,11 +128,21 @@ export function driftView(d: DriftItem) {
     canContract: open && !waiting && !unchecked,
     canCode: open && (!waiting || jobEnded) && d.taskKey !== null,
     // 결과를 모르는 job(실패·취소 포함)은 같은 요청을 다시 보낼 수 있다. 아직 진행 중이면 서버가 409로 거부한다.
-    canRetry: waiting && (jobEnded || r.jobStatus === undefined),
+    // 대조 안 함이 된 불일치는 계약 반영을 다시 요청할 수 없다(서버 거부, Codex fix2 지적 6).
+    canRetry: waiting && !unchecked && (jobEnded || r.jobStatus === undefined),
     needsDecision: d.compat === 'breaking',
     note: unchecked ? '코드에서 실제 명세를 추출하지 못해 대조하지 않았습니다 — 불일치 0건이 아닙니다. 추출 방법이 생기면 다음 병합 때 대조합니다.' : '',
   };
 }
+
+/**
+ * 열린 불일치에 진행 중(queued·running, 상태 미상 포함) 반영 job이 있는가.
+ * 왜: 서버는 job 상태가 바뀔 때 design 변경 이벤트를 내지 않는다. 있는 동안만 화면이 불일치를 다시 읽는다(Codex fix2 지적 1).
+ */
+export const hasRunningJob = (drifts: readonly DriftItem[]) => drifts.some((d) => {
+  const r = resolution(d);
+  return d.status === 'open' && typeof r.jobId === 'string' && r.jobId !== '' && r.jobStatus !== 'done' && r.jobStatus !== 'failed';
+});
 
 /** 항목 행·상세에 붙일 표시. 열린 불일치(대조함)가 먼저, 대조 안 함만 있으면 그것. */
 export function driftMark(drifts: readonly DriftItem[], itemKey: string): Label | null {

@@ -11,7 +11,7 @@
  * /ownership, /drifts. 항목 상태(계획·구현 중 등)는 담당 Task 상태로 계산하므로 Task 목록도 읽는다(G L452).
  */
 import { useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { useApi } from '../../shared/api/ApiProvider.tsx';
 import { apiKey, useApiQuery } from '../../shared/api/queries.ts';
@@ -26,11 +26,13 @@ import { DecisionsTab } from './DecisionsTab.tsx';
 import { DriftsTab } from './DriftsTab.tsx';
 import { ItemsTab } from './ItemsTab.tsx';
 import {
-  fileRows, isTab, layers, parseErrors, parseRef, pendingDecisions, summaryLine, tabBadges, TABS, visibleLinks,
+  fileRows, hasRunningJob, isTab, layers, parseErrors, parseRef, pendingDecisions, summaryLine, tabBadges, TABS, visibleLinks,
   type DecisionItem, type DriftItem, type Overview, type Tab, type TaskInfo,
 } from './model.ts';
 
 const TITLE = '설계';
+/** 진행 중 반영 job의 상태 다시 읽기 간격 */
+const JOB_POLL_MS = 4_000;
 const SUB = '제품 전체의 기술 결정 · 인터페이스(API · 이벤트) · 데이터(저장소별) — 기준은 저장소의 계약 파일이며, Agent WBS는 읽어서 보여주고 실제 코드와 대조합니다.';
 
 export function DesignPage() {
@@ -66,14 +68,28 @@ function DesignBody({ project }: { project: ProjectState }) {
   const refQuery = ref === 'main' ? {} : { ref };
   const p = { params: { projectId }, query: refQuery };
 
-  const overview = useApiQuery('getDesign', p, { topics: ['design'], enabled: on });
+  // ref마다 내용이 다른 조회는 이전 ref의 자료를 잠시 보여 주지 않는다(keepPrevious: false).
+  // 왜: 브랜치 → main 전환 중 늦은 응답 동안 브랜치 불일치에 main용 처리 버튼이 열린다(Codex fix2 지적 2). 이 조회의 조건은 ref뿐이라 깜빡임은 전환 때만 생긴다.
+  const byRef = { topics: ['design'] as const, enabled: on, keepPrevious: false };
+  const overview = useApiQuery('getDesign', p, byRef);
   const decisions = useApiQuery('listDecisions', { params: { projectId } }, { topics: ['design'], enabled: on });
-  const ifaces = useApiQuery('listInterfaces', p, { topics: ['design', 'task'], enabled: on });
-  const data = useApiQuery('listDataItems', p, { topics: ['design', 'task'], enabled: on });
-  const ownership = useApiQuery('getOwnership', p, { topics: ['design'], enabled: on });
-  const drifts = useApiQuery('listDrifts', p, { topics: ['design'], enabled: on });
+  const ifaces = useApiQuery('listInterfaces', p, { ...byRef, topics: ['design', 'task'] });
+  const data = useApiQuery('listDataItems', p, { ...byRef, topics: ['design', 'task'] });
+  const ownership = useApiQuery('getOwnership', p, byRef);
+  const drifts = useApiQuery('listDrifts', p, byRef);
   const tasks = useApiQuery('listTasks', { params: { projectId } }, { topics: ['task'], enabled: on });
   const queries = [overview, decisions, ifaces, data, ownership, drifts, tasks] as const;
+
+  // 진행 중(queued·running) 반영 job이 있으면 불일치·요약을 4초마다 다시 읽는다(Codex fix2 지적 1).
+  // 왜: 서버는 job 상태가 바뀔 때 design 변경 이벤트를 내지 않아, 실패해도 화면이 「대기」에 머문다(서버 쪽 보완은 보고함).
+  const running = hasRunningJob(drifts.data?.items ?? []);
+  const { refetch: refetchDrifts } = drifts;
+  const { refetch: refetchOverview } = overview;
+  useEffect(() => {
+    if (!running) return;
+    const timer = setInterval(() => { void refetchDrifts(); void refetchOverview(); }, JOB_POLL_MS);
+    return () => { clearInterval(timer); };
+  }, [running, refetchDrifts, refetchOverview]);
 
   const [dirty, setDirty] = useState(false);
   const { guard } = useEditGuard(dirty);

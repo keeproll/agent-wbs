@@ -169,12 +169,12 @@ function Detail({ ctx, iface, item, rows, tasks, go, open }: {
           <pre className="code">{detail.source.raw ?? '(원문 없음)'}</pre>
         </>
       )}
-      {detail && content !== null && <Content content={content as NonNullable<IfaceDetail['content'] | DataDetail['content']>} open={open} />}
+      {detail && content !== null && <Content ctx={ctx} content={content as NonNullable<IfaceDetail['content'] | DataDetail['content']>} open={open} />}
     </div>
   );
 }
 
-function Content({ content, open }: { content: NonNullable<IfaceDetail['content'] | DataDetail['content']>; open: (tab: 'iface' | 'data', key: string) => void }) {
+function Content({ ctx, content, open }: { ctx: DesignCtx; content: NonNullable<IfaceDetail['content'] | DataDetail['content']>; open: (tab: 'iface' | 'data', key: string) => void }) {
   switch (content.type) {
     case 'REST': {
       const tables = tableTarget(content.tables);
@@ -198,7 +198,7 @@ function Content({ content, open }: { content: NonNullable<IfaceDetail['content'
         <>
           {/* 원본 메시지 상세의 「기술 결정」 칸(P L1563). 서버 decisionKeys(M6-05 fix1)를 기술 결정 탭으로 잇는다. */}
           <KV><span className="kv-l">인증</span><span className="kv-v">{content.auth || '—'}</span>
-            <span className="kv-l">기술 결정</span><span className="kv-v mono">{content.decisionKeys?.length ? content.decisionKeys.map((k, i) => <span key={k}>{i > 0 && ', '}<Link to={LINK.design('dec')} className="reflink">{k}</Link></span>) : '—'}</span></KV>
+            <span className="kv-l">기술 결정</span><span className="kv-v mono">{content.decisionKeys?.length ? content.decisionKeys.map((k, i) => <span key={k}>{i > 0 && ', '}<Link to={LINK.design('dec', undefined, ctx.branch)} className="reflink">{k}</Link></span>) : '—'}</span></KV>
           <h3 className="ds-h4">메시지</h3>
           <div className="gtb" style={{ margin: '0 0 10px' }}>{content.messages.map((m) => (
             <div key={m.name} className="gtr" style={{ gridTemplateColumns: 'minmax(130px,.8fr) 148px minmax(200px,2fr)', minWidth: 0 }}><span className="gc mono"><b>{m.name}</b></span><span className="gc">{m.direction}</span><span className="gc mono" style={{ fontSize: 12 }}>{m.schema}</span></div>

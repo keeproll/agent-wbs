@@ -236,6 +236,7 @@ export function installDesign(api: FakeApi, d: DesignData): { writes: { path: st
     return json(route, 200, out as IfaceDetail | DataDetail);
   };
   // 상세 경로는 key마다 다르므로 가로채기 표에 「접두어」로 붙인다(fake-api는 경로 전체 일치라 아래 route로 직접 단다).
+  const openPair = (itemKey: unknown, driftId: unknown) => d.drifts.some((y) => y.id === driftId && y.itemKey === itemKey && y.status === 'open');
   const onDecision = (action: 'approve' | 'reject' | 'change') => (route: Route, req: Request) => {
     const did = new URL(req.url()).pathname.split('/')[4] ?? '';
     const b = body(req);
@@ -245,12 +246,16 @@ export function installDesign(api: FakeApi, d: DesignData): { writes: { path: st
     if (b.updatedAt !== x.updatedAt) return json(route, 409, errorBody('VERSION_CONFLICT', { message: '다른 곳에서 먼저 바뀌었습니다.', details: { current: { updatedAt: x.updatedAt } } }));
     if (action === 'change') {
       if (!['approved', 'fixed'].includes(x.status) || x.authority === 'free' || (x.authority === 'lead' && x.level !== 'cond')) return json(route, 409, errorBody('INVALID_TRANSITION'));
+      // 연결은 같은 프로젝트의 열린 불일치와 정확한 항목 쌍이어야 한다(apps/api/src/design/service.ts 결정 연결 검사).
+      if ((b.itemKey !== undefined || b.driftId !== undefined) && !openPair(b.itemKey, b.driftId)) return json(route, 409, errorBody('INVALID_TRANSITION', { message: '열린 불일치와 같은 항목에만 연결할 수 있습니다.' }));
       x.change = { choice: String(b.choice), reason: String(b.reason), previousStatus: x.status as 'approved' | 'fixed', ...(typeof b.itemKey === 'string' && typeof b.driftId === 'string' ? { itemKey: b.itemKey, driftId: b.driftId } : {}) };
       x.status = 'change';
     } else {
       if (!['pending', 'change'].includes(x.status)) return json(route, 409, errorBody('INVALID_TRANSITION', { message: '승인 또는 변경 대기 중인 결정이 아닙니다.' }));
       const wasChange = x.status === 'change';
       const prev = x.change;
+      // 승인할 때도 연결 대상이 아직 열린 불일치인지 다시 본다(제안과 승인 사이에 닫힐 수 있다).
+      if (action === 'approve' && prev?.driftId && !openPair(prev.itemKey, prev.driftId)) return json(route, 409, errorBody('INVALID_TRANSITION', { message: '연결한 불일치가 이미 닫혔습니다.' }));
       // 변경 제안의 불일치 연결은 승인할 때 결정에 붙는다(M6-05 fix1).
       if (wasChange && prev) { if (action === 'approve') { x.choice = prev.choice; x.status = 'approved'; if (prev.itemKey && prev.driftId) { x.itemKey = prev.itemKey; x.driftId = prev.driftId; } } else x.status = prev.previousStatus; delete x.change; }
       else x.status = action === 'approve' ? 'approved' : 'rejected';

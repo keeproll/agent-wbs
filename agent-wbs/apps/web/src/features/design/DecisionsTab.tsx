@@ -6,7 +6,7 @@
  *   승인 전에는 기존 선택이 그대로 기준이다(서버가 기존 choice를 유지하고 change에 새 선택을 둔다).
  * - 팀장 지정 필수·금지와 Agent 재량 기록은 변경 제안 버튼이 없다(원본 canChg, 서버도 409 INVALID_TRANSITION).
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useApi } from '../../shared/api/ApiProvider.tsx';
 import { formatDateTime } from '../../shared/format.ts';
 import { DISCARD_CONFIRM } from '../../shared/state/useEditGuard.ts';
@@ -76,6 +76,7 @@ function DecisionRow({ x, ctx, onChange }: { x: DecisionItem; ctx: DesignCtx; on
       <p className="dec-p"><span className="muted">근거</span> {x.reason}</p>
       {x.alternatives && <p className="dec-p"><span className="muted">대안</span> {x.alternatives}</p>}
       {v.isChg && <p className="dec-p" style={{ color: 'var(--wn)' }}><span className="muted">변경 제안</span> {v.chgL}</p>}
+      {v.chgLinkL && <p className="dec-p" style={{ color: 'var(--wn)' }}><span className="muted">승인 후 연결</span> <span className="mono">{v.chgLinkL}</span> <span className="tid">— 승인하면 결정이 이 불일치를 가리킵니다</span></p>}
       {v.linkL && <p className="dec-p"><span className="muted">연결</span> <span className="mono">{v.linkL}</span> <span className="tid">— 이 불일치의 호환 깨짐 반영에만 쓸 수 있습니다</span></p>}
       <div className="dec-f">
         <span className="tid">{x.by} · {formatDateTime(x.at)}</span><span className="sp" />
@@ -102,6 +103,12 @@ function ChangeModal({ x, ctx, onClose }: { x: DecisionItem; ctx: DesignCtx; onC
   const notify = useNotice();
   const confirm = useConfirm();
   const [form, setForm] = useState<ChangeForm>({ choice: '', reason: '' });
+  /**
+   * 지금 화면의 초안. useSave는 저장 버튼을 누른 때의 onSuccess를 부르므로, 그 사이 바뀐 초안은 이 ref로 읽는다(Codex fix2 지적 5).
+   * 공통 useSave의 이 동작은 다른 화면에도 해당해 보고했다(fix2.md).
+   */
+  const latest = useRef(form);
+  useEffect(() => { latest.current = form; });
   const [tried, setTried] = useState(false);
   const dirty = form.choice.trim() !== '' || form.reason.trim() !== '' || Boolean(form.link);
   /** 연결할 수 있는 불일치: main의 열린 호환 깨짐(브랜치 불일치는 처리 대상이 아니다). */
@@ -127,7 +134,9 @@ function ChangeModal({ x, ctx, onClose }: { x: DecisionItem; ctx: DesignCtx; onC
       notify(`${x.tdKey} 변경 제안을 올렸습니다 — 팀장 승인 전까지 기존 결정을 유지합니다.`);
       void ctx.reload();
       // 재시도 사이에 입력을 더 고쳤으면 창을 닫지 않는다.
-      if (payload.choice === form.choice.trim() && payload.reason === form.reason.trim()) onClose();
+      // 연결(driftId)도 비교한다(Codex fix2 지적 5). 응답을 기다리는 사이 연결만 바꿨어도 창과 바꾼 값을 남긴다.
+      const now = latest.current;
+      if (payload.choice === now.choice.trim() && payload.reason === now.reason.trim() && (payload.driftId ?? '') === (now.link ?? '')) onClose();
     },
     onConflictReload: async ({ signal }) => { await ctx.reload(signal); },
     onRejected: () => { void ctx.reload(); },

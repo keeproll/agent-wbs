@@ -4,7 +4,7 @@
  */
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
-import { fakeApi, json, type FakeApi } from './support/fake-api.ts';
+import { fakeApi, hold, json, type FakeApi } from './support/fake-api.ts';
 import { designData, emptyDesign, installDesign, type DesignData } from './support/design-data.ts';
 import { mountTasks } from './support/task-api.ts';
 
@@ -471,4 +471,109 @@ test('자동 접근성 검사: 탭마다·상세·창에서 axe 위반 0건', as
   await decRow(page, 'TD-05').getByRole('button', { name: '변경 제안' }).click();
   await expect(page.getByRole('dialog')).toBeVisible();
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+});
+
+/* ---- Codex fix2 리뷰 지적(review-codex-fix2.md) ---- */
+const BRANCH = (d: DesignData) => {
+  d.branch = {
+    ref: 'agent/TASK-0005', files: d.files.slice(0, 1).map((f) => ({ ...f, status: 'draft' as const })),
+    items: d.items.filter((x) => x.taskKey === 'TASK-0005'),
+    drifts: [{ ...d.drifts[0], id: 'r0000000-0000-4000-8000-000000000050', displayKey: 'DR-50', where: 'agent/TASK-0005', resolution: { ref: 'agent/TASK-0005' } } as DesignData['drifts'][number]],
+  };
+};
+
+test('리뷰 1: 반영 job 상태가 바뀌면 새로고침 없이 따라간다(진행 중 job이 있는 동안 다시 읽기)', async ({ page }) => {
+  const { data } = await open(page, '/design?tab=chg', (d) => { const x = d.drifts[0]; if (x) x.resolution = { how: 'contract', jobId: 'job-7', jobStatus: 'queued' }; });
+  const r1 = driftRow(page, 'PATCH /api/tasks/:taskKey');
+  await expect(r1.locator('.vf')).toHaveText('계약 반영 대기');
+  const x = data.drifts[0]; if (x) x.resolution = { how: 'contract', jobId: 'job-7', jobStatus: 'failed' };
+  await expect(r1.locator('.vf')).toHaveText('계약 반영 실패', { timeout: 12_000 });
+  await expect(r1.getByRole('button', { name: '계약 반영 다시 요청' })).toBeVisible();
+});
+
+test('리뷰 2: 브랜치 → main 전환 중 늦게 오는 main 응답 동안 브랜치 불일치에 처리 버튼이 없다', async ({ page }) => {
+  const { api, data } = await open(page, '/design?tab=chg&ref=agent%2FTASK-0005', BRANCH);
+  await expect(driftRow(page, 'PATCH /api/tasks/:taskKey')).toContainText('DR-50');
+  const gate = hold((route) => json(route, 200, { items: data.drifts }));
+  api.on('GET /api/projects/p1/design/drifts', (route, req) => (new URL(req.url()).searchParams.get('ref') ? json(route, 200, { items: data.branch?.drifts ?? [] }) : gate.handler(route, req)));
+  await page.locator('.banner.info').getByRole('button', { name: 'main 보기' }).click();
+  await expect(page).toHaveURL('/design?tab=chg');
+  await page.waitForTimeout(500);
+  await expect(page.getByText('DR-50')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '계약에 반영' })).toHaveCount(0);
+  gate.release();
+  await expect(driftRow(page, 'PATCH /api/tasks/:taskKey')).toContainText('DR-01');
+  await expect(driftRow(page, 'PATCH /api/tasks/:taskKey').getByRole('button', { name: '계약에 반영' })).toBeVisible();
+});
+
+test('리뷰 3: 브랜치에서 메시지 상세의 TD 링크로 가도 ref가 남는다', async ({ page }) => {
+  await open(page, '/design?tab=iface&ref=agent%2FTASK-0005', (d) => { BRANCH(d); d.branch?.items.push(...d.items.filter((x) => x.key === 'WS /runner/ws')); });
+  await page.goto('/design?tab=iface&ref=agent%2FTASK-0005&kind=WebSocket&sel=WS%20%2Frunner%2Fws');
+  await page.getByRole('region', { name: '/runner/ws 상세' }).getByRole('link', { name: 'TD-07' }).click();
+  await expect(page).toHaveURL('/design?tab=dec&ref=agent%2FTASK-0005');
+  await expect(page.locator('.banner.info')).toContainText('agent/TASK-0005');
+});
+
+test('리뷰 4: 연결된 결정을 다른 불일치로 바꾸는 변경 제안은 현재 연결과 승인 후 연결을 함께 보인다', async ({ page }) => {
+  await open(page, '/design?tab=dec', (d) => {
+    for (const x of d.drifts.slice(0, 2)) x.compat = 'breaking';
+    const td5 = d.decisions.find((y) => y.tdKey === 'TD-05');
+    if (td5) {
+      td5.itemKey = 'PATCH /api/tasks/:taskKey'; td5.driftId = D1; td5.status = 'change';
+      td5.change = { choice: 'X', reason: 'Y', previousStatus: 'approved', itemKey: 'postgres:tasks', driftId: 'r0000000-0000-4000-8000-000000000002' };
+    }
+  });
+  const row = decRow(page, 'TD-05');
+  await expect(row).toContainText('연결 PATCH /api/tasks/:taskKey · DR-01');
+  await expect(row).toContainText('승인 후 연결 postgres:tasks · DR-02');
+});
+
+test('리뷰 5: 저장 응답을 기다리는 동안 연결을 바꾸면 성공 뒤에도 창과 바꾼 연결이 남는다', async ({ page }) => {
+  const { api, data } = await open(page, '/design?tab=dec', (d) => { for (const x of d.drifts.slice(0, 2)) x.compat = 'breaking'; });
+  const gate = hold((route) => {
+    const x = data.decisions.find((y) => y.tdKey === 'TD-05');
+    if (x) { x.status = 'change'; x.change = { choice: 'A', reason: 'B', previousStatus: 'approved', itemKey: 'PATCH /api/tasks/:taskKey', driftId: D1 }; x.updatedAt = '2026-11-05T11:00:00.000Z'; }
+    return json(route, 200, x);
+  });
+  api.on(`POST /api/design/decisions/${TD(5)}/change`, gate.handler);
+  await decRow(page, 'TD-05').getByRole('button', { name: '변경 제안' }).click();
+  const dlg = page.getByRole('dialog', { name: 'TD-05 기술 결정 변경 제안' });
+  await dlg.getByLabel('새 선택').fill('A');
+  await dlg.getByLabel('변경 이유').fill('B');
+  await dlg.getByLabel('연결할 불일치').selectOption({ label: 'DR-01 PATCH /api/tasks/:taskKey' });
+  await dlg.getByRole('button', { name: '변경 제안 올리기' }).click();
+  await dlg.getByLabel('연결할 불일치').selectOption({ label: 'DR-02 postgres:tasks' });
+  gate.release();
+  await expect(page.getByText('TD-05 변경 제안을 올렸습니다')).toBeVisible();
+  await expect(dlg).toBeVisible();
+  await expect(dlg.getByLabel('연결할 불일치')).toHaveValue('r0000000-0000-4000-8000-000000000002');
+});
+
+test('리뷰 6: 실패한 호환 깨짐 반영의 다시 요청은 지금 유효한 연결 승인 결정을 다시 고르게 한다', async ({ page }) => {
+  const { writes } = await open(page, '/design?tab=chg', (d) => {
+    const x = d.drifts[0];
+    if (x) { x.compat = 'breaking'; x.resolution = { how: 'contract', jobId: 'job-7', jobStatus: 'failed', decisionId: TD(7) }; }
+    const td7 = d.decisions.find((y) => y.tdKey === 'TD-07');
+    if (td7) { td7.itemKey = 'PATCH /api/tasks/:taskKey'; td7.driftId = D1; td7.status = 'change'; td7.change = { choice: 'Q', reason: 'R', previousStatus: 'approved' }; }
+    const td8 = d.decisions.find((y) => y.tdKey === 'TD-08');
+    if (td8) { td8.itemKey = 'PATCH /api/tasks/:taskKey'; td8.driftId = D1; }
+  });
+  await driftRow(page, 'PATCH /api/tasks/:taskKey').getByRole('button', { name: '계약 반영 다시 요청' }).click();
+  const dlg = page.getByRole('dialog', { name: '호환을 깨는 변경 — 계약에 반영' });
+  await expect(dlg.getByLabel('승인된 기술 결정').locator('option')).toHaveText(['결정을 고르세요', 'TD-08 화면 실시간 갱신 — SSE (Server-Sent Events)']);
+  await dlg.getByLabel('승인된 기술 결정').selectOption({ index: 1 });
+  await dlg.getByRole('button', { name: '반영 요청' }).click();
+  await expect(driftRow(page, 'PATCH /api/tasks/:taskKey').locator('.vf')).toHaveText('계약 반영 대기');
+  expect(writes[0]?.body).toMatchObject({ how: 'contract', decisionId: TD(8) });
+});
+
+test('리뷰 7: 가짜 API도 서버처럼 닫힌 불일치·항목이 다른 연결을 거부한다', async ({ page }) => {
+  await open(page, '/design?tab=dec');
+  const post = (driftId: string, itemKey: string) => page.evaluate(async ([id, dr, ik]) => {
+    const r = await fetch(`/api/design/decisions/${id}/change`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ updatedAt: '2026-10-27T01:05:00.000Z', choice: 'a', reason: 'b', itemKey: ik, driftId: dr }) });
+    return r.status;
+  }, [TD(5), driftId, itemKey] as const);
+  expect(await post('r0000000-0000-4000-8000-000000000003', 'runner.attempt.events')).toBe(409);
+  expect(await post(D1, 'postgres:tasks')).toBe(409);
+  expect(await post(D1, 'PATCH /api/tasks/:taskKey')).toBe(200);
 });

@@ -53,9 +53,12 @@ function DriftRow({ d, ctx }: { d: DriftItem; ctx: DesignCtx }) {
   const notify = useNotice();
   const [asking, setAsking] = useState(false);
   const r = (d.resolution ?? {}) as Record<string, unknown>;
-  /** 호환 깨짐 창에서 고른 결정. 「계약 반영 다시 요청」은 처음 요청에 붙인 결정을 그대로 쓴다. 저장 버튼을 누르는 순간 request()가 읽는다. */
+  /**
+   * 호환 깨짐 창에서 고른 결정. 저장 버튼을 누르는 순간 request()가 읽는다.
+   * 끝난 job의 「다시 요청」도 새 반영 요청이라 지금 유효한 연결 승인 결정을 다시 고른다(Codex fix2 지적 6). 응답을 잃은 같은 요청의 재시도는 useSave가 같은 내용·같은 키로 보낸다.
+   */
   const [picked, setPicked] = useState('');
-  const decisionId = picked || (typeof r.decisionId === 'string' ? r.decisionId : '');
+  const decisionId = picked;
   const resolve = (how: 'contract' | 'code') => ({
     target: `${d.itemKey} ${how === 'contract' ? '계약에 반영' : '코드 수정 요청'}`,
     failTitle: how === 'contract' ? '계약 반영을 요청하지 못했습니다' : '코드 수정을 요청하지 못했습니다',
@@ -75,7 +78,13 @@ function DriftRow({ d, ctx }: { d: DriftItem; ctx: DesignCtx }) {
   const code = useSave(resolve('code'));
   const busy = contract.busy || code.busy;
   const toContract = () => {
-    if (v.needsDecision) { setAsking(true); return; }
+    if (v.needsDecision) {
+      // 이전 요청의 결정이 아직 유효(같은 항목·같은 불일치의 승인)하면 미리 골라 둔다.
+      const old = typeof r.decisionId === 'string' ? r.decisionId : '';
+      setPicked(linkedDecisions(ctx.decisions, d).some((x) => x.id === old) ? old : '');
+      setAsking(true);
+      return;
+    }
     void contract.save();
   };
   return (
@@ -91,7 +100,7 @@ function DriftRow({ d, ctx }: { d: DriftItem; ctx: DesignCtx }) {
       {ctx.branch && v.open && <p className="dec-p muted">브랜치 초안의 불일치입니다 — 처리는 main 대조 결과에서 합니다.</p>}
       {!ctx.branch && (v.canContract || v.canCode || v.canRetry) && (
         <div className="dec-f"><span className="sp" />
-          {v.canRetry && <BusyButton busy={contract.busy} busyLabel="요청 중…" variant="ghost" small title="반영 작업이 끝났는데 해결되지 않았을 때(실패 · 결과 불일치) 다시 요청합니다." onClick={() => { void contract.save(); }}>계약 반영 다시 요청</BusyButton>}
+          {v.canRetry && <BusyButton busy={contract.busy} busyLabel="요청 중…" variant="ghost" small title="반영 작업이 끝났는데 해결되지 않았을 때(실패 · 결과 불일치) 다시 요청합니다." onClick={toContract}>계약 반영 다시 요청</BusyButton>}
           {v.canCode && <BusyButton busy={code.busy} busyLabel="요청 중…" variant="default" small disabled={busy} onClick={() => { void code.save(); }}>코드 수정 요청</BusyButton>}
           {v.canContract && <BusyButton busy={contract.busy && !asking} busyLabel="요청 중…" small disabled={busy} onClick={toContract}>계약에 반영</BusyButton>}
         </div>
@@ -125,7 +134,7 @@ function BreakingModal({ ctx, d, busy, pick, onPick, onCancel, onSubmit }: {
       onCancel={onCancel}
       footer={<>
         <button type="button" className="btn" onClick={onCancel}>취소</button>
-        <BusyButton busy={busy} busyLabel="요청 중…" disabled={!pick} onClick={onSubmit}>반영 요청</BusyButton>
+        <BusyButton busy={busy} busyLabel="요청 중…" disabled={!options.some((x) => x.id === pick)} onClick={onSubmit}>반영 요청</BusyButton>
       </>}
     >
       <p style={{ margin: '0 0 8px' }}><span className="mono muted">{d.displayKey}</span> <b className="mono">{d.itemKey}</b> — {d.text}</p>
