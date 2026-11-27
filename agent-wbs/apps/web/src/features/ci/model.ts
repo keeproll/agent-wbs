@@ -192,6 +192,25 @@ export function queueRows(queue: readonly QueueItem[], titles: ReadonlyMap<strin
   });
 }
 
+/**
+ * 실행 상세의 「병합」 줄(재리뷰 P2-1). 통합 확인 실행의 mergeSha는 「검사한 병합본」일 뿐이다.
+ * 실제로 main에 병합됐는지는 연결된 대기열 행의 서버 상태로만 말한다. 화면이 따로 판정하지 않는다.
+ * - merged → 「병합됨 → main @ 실제 병합 SHA」
+ * - 실제 병합 SHA가 있는데 merged가 아님 → 서버가 MERGE_MISMATCH로 완료를 보류한 상태
+ * - 그 밖 → 대기열 상태 이름 + 병합 전
+ * - 대기열 행이 없으면 병합 여부를 모른다고 쓴다.
+ * ② 통합 확인 실행이 아니거나 mergeSha가 없으면 null(줄 없음).
+ */
+export function mergeLine(run: CiRun, queue: readonly QueueItem[]): string | null {
+  if (run.stage !== 'int' || !run.mergeSha) return null;
+  const tested = `검사한 병합본 ${short(run.mergeSha)}`;
+  const q = queue.find((x) => x.ciRunId === run.id);
+  if (!q) return `대기열 기록 없음 — 병합 여부 미확인 (${tested})`;
+  if (q.status === 'merged') return `병합됨 → main @ ${short(q.actualMergeSha ?? run.mergeSha)}`;
+  if (q.actualMergeSha) return `병합 불일치 — 실제 병합 ${short(q.actualMergeSha)} · 완료 보류 (${tested})`;
+  return `${QUEUE[q.status]?.l ?? String(q.status)} — 병합 전 (${tested})`;
+}
+
 export const lastDeploy = (runs: readonly CiRun[]) => runs.find((r) => r.stage === 'deploy') ?? null;
 
 export function summaryLine(runs: readonly CiRun[], queue: readonly QueueItem[]): string {

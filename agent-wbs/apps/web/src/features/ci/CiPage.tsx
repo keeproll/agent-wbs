@@ -30,9 +30,9 @@ import { AreaLoading, PageSkeleton, useDelayedFlag } from '../../shared/ui/loadi
 import { TableScroll } from '../../shared/ui/TableScroll.tsx';
 import { useTopBar } from '../../shared/ui/feedback.tsx';
 import {
-  detailSteps, formatDuration, retryHeld, githubLabel, lastDeploy, mainStatus, position, prLabel, queueRows, resultLabel, runDurationMs, runRows, short,
+  detailSteps, formatDuration, mergeLine, retryHeld, githubLabel, lastDeploy, mainStatus, position, prLabel, queueRows, resultLabel, runDurationMs, runRows, short,
   stageCounts, stageLabel, STAGE_LABEL, STAGES, summaryLine, tabBadges,
-  type CiRun, type FlakyTest, type QueueRow, type Stage,
+  type CiRun, type FlakyTest, type QueueItem, type QueueRow, type Stage,
 } from './model.ts';
 import './ci.css';
 
@@ -149,6 +149,7 @@ function CiBody({ project }: { project: ProjectState }) {
           }}
           projectId={projectId}
           holds={holds}
+          queue={queue.data.items}
           autoRuns={autoRuns}
         />
       )}
@@ -162,8 +163,8 @@ function CiBody({ project }: { project: ProjectState }) {
 
 /* ---------------- 실행 기록 + 상세 ---------------- */
 
-function RunsTab({ runs, stage, runId, onStage, onSelect, onClose, onStep, projectId, holds, autoRuns }: {
-  runs: CiRun[]; stage: string; runId: string; projectId: string; holds: ReadonlySet<string>; autoRuns: ReadonlySet<string>;
+function RunsTab({ runs, stage, runId, onStage, onSelect, onClose, onStep, projectId, holds, autoRuns, queue }: {
+  runs: CiRun[]; stage: string; runId: string; projectId: string; holds: ReadonlySet<string>; autoRuns: ReadonlySet<string>; queue: readonly QueueItem[];
   onStage: (s: string) => void; onSelect: (id: string) => void; onClose: () => void; onStep: (ids: string[], delta: 1 | -1) => void;
 }) {
   const rows = runRows(runs, stage);
@@ -269,7 +270,7 @@ function RunsTab({ runs, stage, runId, onStage, onSelect, onClose, onStep, proje
         {detail.data === undefined && (detail.isError
           ? <DetailError error={detail.error} retrying={detail.isFetching} onRetry={() => { void detail.refetch(); }} onClose={onClose} />
           : <div className="card"><AreaLoading label="실행 상세 불러오는 중" /></div>)}
-        {detail.data && <RunDetail run={detail.data} pos={pos} onSelect={onSelect} projectId={projectId} held={retryHeld(detail.data, holds)} autoReintegrate={autoRuns.has(detail.data.id)} />}
+        {detail.data && <RunDetail run={detail.data} pos={pos} onSelect={onSelect} projectId={projectId} held={retryHeld(detail.data, holds)} autoReintegrate={autoRuns.has(detail.data.id)} merge={mergeLine(detail.data, queue)} />}
       </div>
     </div>
   );
@@ -290,8 +291,8 @@ function DetailError({ error, retrying, onRetry, onClose }: { error: ApiError | 
   );
 }
 
-function RunDetail({ run, pos, onSelect, projectId, held, autoReintegrate }: {
-  run: CiRun; pos: ReturnType<typeof position>; onSelect: (id: string) => void; projectId: string; held: boolean; autoReintegrate: boolean;
+function RunDetail({ run, pos, onSelect, projectId, held, autoReintegrate, merge }: {
+  run: CiRun; pos: ReturnType<typeof position>; onSelect: (id: string) => void; projectId: string; held: boolean; autoReintegrate: boolean; merge: string | null;
 }) {
   const { client } = useApi();
   const queryClient = useQueryClient();
@@ -330,14 +331,14 @@ function RunDetail({ run, pos, onSelect, projectId, held, autoReintegrate }: {
         <span className="kv-l">시각 · 소요</span><span className="kv-v mono">{formatDateTime(run.startedAt)} · {formatDuration(runDurationMs(run))}</span>
         <span className="kv-l">GitHub</span>
         <span className="kv-v mono" style={{ fontSize: 12.5 }}>{run.githubStatus?.url ? <a href={run.githubStatus.url} target="_blank" rel="noreferrer">{githubLabel(run)}</a> : githubLabel(run)}</span>
-        {run.stage === 'int' && run.mergeSha && <><span className="kv-l">병합</span><span className="kv-v mono">병합됨 → main @ {short(run.mergeSha)}</span></>}
+        {merge && <><span className="kv-l">병합</span><span className="kv-v mono">{merge}</span></>}
         {run.url && <><span className="kv-l">접속 URL</span><span className="kv-v mono">{run.url}</span></>}
       </div>
       {run.note && <p className="fhint" style={{ margin: '0 0 10px' }}>{run.note}</p>}
       {run.failScope === 'baseline' && run.status === 'fail' && (
         <p className="fhint" style={{ margin: '0 0 10px' }}>기준선 실패 — main 기준 커밋에서도 실패했습니다({short(run.baseSha)}). 이 Task의 변경 탓이 아니므로 Task 실패로 세지 않습니다.{autoReintegrate && ' main이 바뀌면 서버가 자동으로 다시 통합 확인합니다.'}</p>
       )}
-      <h4 className="ds-h4">단계</h4>
+      <h3 className="ds-h4">단계</h3>
       {steps.length === 0 ? <p className="empty">보고된 단계가 없습니다.</p> : (
         <div className="gtb" style={{ margin: '0 0 10px' }} role="table" aria-label="단계">
           {steps.map((x, i) => (
@@ -349,8 +350,8 @@ function RunDetail({ run, pos, onSelect, projectId, held, autoReintegrate }: {
           ))}
         </div>
       )}
-      {run.logExcerpt && <><h4 className="ds-h4">실패 로그 (요약)</h4><pre className="code" style={{ whiteSpace: 'pre-wrap' }}>{run.logExcerpt}</pre></>}
-      {run.artifacts.length > 0 && <><h4 className="ds-h4">{shotsTitle}</h4><div className="ds-chips">{run.artifacts.map((z) => <span key={z} className="tag mono">{z}</span>)}</div></>}
+      {run.logExcerpt && <><h3 className="ds-h4">실패 로그 (요약)</h3><pre className="code" style={{ whiteSpace: 'pre-wrap' }}>{run.logExcerpt}</pre></>}
+      {run.artifacts.length > 0 && <><h3 className="ds-h4">{shotsTitle}</h3><div className="ds-chips">{run.artifacts.map((z) => <span key={z} className="tag mono">{z}</span>)}</div></>}
       {run.status === 'fail' && (
         <div className="form-acts" style={{ marginTop: 10 }}>
           <span className="muted" style={{ marginRight: 'auto' }}>{held
@@ -370,7 +371,7 @@ function QueueTab({ rows }: { rows: QueueRow[] }) {
   const mismatches = rows.filter((r) => r.mismatch);
   return (
     <section className="card">
-      <div className="dp-h"><h3>병합 대기열</h3></div>
+      <div className="dp-h"><h2>병합 대기열</h2></div>
       <p className="fhint" style={{ margin: '0 0 8px' }}>검증 PASS인 PR만 들어오고, ② 통합 확인을 한 번에 하나씩 거쳐 통과해야 main에 병합됩니다(GitHub main 보호 규칙: 「agentwbs/int 통과」 필수). 실패하면 병합하지 않고 원인 Task에 재작업을 요청합니다. 대기가 길어지면 여러 PR을 묶어 확인하고, 실패 시 나눠서 원인을 찾습니다.</p>
       {rows.some((r) => r.c === 'sc sc-warn') && (
         <p className="fhint" style={{ margin: '0 0 8px' }}>기준선 실패는 예외입니다 — main 기준 커밋 자체가 실패한 것이라 원인 Task에 재작업을 요청하지 않습니다. Gate에서 기다리는 Task는 main이 고쳐지면 다시 통합 확인합니다.</p>
@@ -419,7 +420,7 @@ function DeployTab({ runs, projectId, openRun }: { runs: CiRun[]; projectId: str
   const url = settings.data ? settings.data.deployUrl ?? '설정되지 않음' : settings.isError ? '불러오지 못함' : '…';
   return (
     <section className="card">
-      <div className="dp-h"><h3>배포 확인</h3><span className={lastRes.c}>{lastRes.l}</span></div>
+      <div className="dp-h"><h2>배포 확인</h2><span className={lastRes.c}>{lastRes.l}</span></div>
       <p className="fhint" style={{ margin: '0 0 8px' }}>「Web Service가 정상 기동하고 브라우저로 접속된다」를 배포로 봅니다. 운영 빌드(Docker 이미지) → docker compose up → health check → Playwright로 실제 URL 접속(로그인 · 핵심 화면 · 주요 API) → 스크린샷. 같은 절차를 이 PC든 다른 서버든 그대로 씁니다.</p>
       <div className="kv" style={{ gridTemplateColumns: '130px minmax(0,1fr)', margin: '0 0 10px' }}>
         <span className="kv-l">접속 URL</span><span className="kv-v mono">{url}</span>
@@ -450,7 +451,7 @@ function PipeTab({ projectId }: { projectId: string }) {
           : <AreaLoading label="파이프라인 정의 불러오는 중" />)}
         {pipe.data && (
           <>
-            <div className="dp-h"><h3>파이프라인 정의</h3><span className="mono muted">{pipe.data.path} · {pipe.data.commit ? `main @ ${short(pipe.data.commit)}` : 'main 커밋 미확인'}</span></div>
+            <div className="dp-h"><h2>파이프라인 정의</h2><span className="mono muted">{pipe.data.path} · {pipe.data.commit ? `main @ ${short(pipe.data.commit)}` : 'main 커밋 미확인'}</span></div>
             <ul className="ds-ul">{RULES.map((x) => <li key={x}>{x}</li>)}</ul>
             {pipe.data.status === 'missing' && <p className="empty">저장소 main에 정의 파일이 없습니다. 첫 커밋에서 만들어지며, 그 전에는 단계를 표시할 수 없습니다.</p>}
             {pipe.data.status === 'error' && (
@@ -467,7 +468,7 @@ function PipeTab({ projectId }: { projectId: string }) {
         )}
       </section>
       <section className="card">
-        <div className="dp-h"><h3>실행 설정</h3></div>
+        <div className="dp-h"><h2>실행 설정</h2></div>
         {settings.isError && !s && <LoadError title="실행 설정" error={settings.error} retrying={settings.isFetching} onRetry={() => { void settings.refetch(); }} />}
         {s && (
           <div className="kv" style={{ gridTemplateColumns: '150px minmax(0,1fr)' }}>
@@ -499,7 +500,7 @@ function serviceLabel(cfg: { path: string; commit: string; status: string; error
 function FlakyTab({ items, projectId }: { items: FlakyTest[]; projectId: string }) {
   return (
     <section className="card">
-      <div className="dp-h"><h3>불안정 테스트</h3></div>
+      <div className="dp-h"><h2>불안정 테스트</h2></div>
       <p className="fhint" style={{ margin: '0 0 8px' }}>가끔만 실패하는 테스트는 재작업을 끝없이 만들 수 있어 격리합니다. 격리된 테스트는 실패해도 통과를 막지 않되 결과는 기록하고, 담당 Task에 수정이 배정됩니다.</p>
       {items.length === 0 && (
         <>

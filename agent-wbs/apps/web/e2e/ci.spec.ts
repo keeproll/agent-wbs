@@ -3,6 +3,7 @@
  * 가짜 API(support/ci-data.ts, 원본 CI_MOCK 값)로 UAT-CI-01·03·04·05·06, UAT-EMPTY-05, UAT-RESP-01·02, UAT-TG-09(CI 링크)를 판정한다.
  * UAT-TASK-10-CI는 ci-task-ref.spec.ts, 시각 비교는 ci-visual.spec.ts.
  */
+import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { errorBody, fakeApi, json, SESSION, type FakeApi } from './support/fake-api.ts';
 import { baselineQueueItem, baselineRun, ciData, guardRun, installCi, mismatchItem, type CiData } from './support/ci-data.ts';
@@ -369,6 +370,40 @@ test.describe('fix1: 기준선 실패 재통합 · 병합 불일치 보류 · �
     await page.getByRole('tab', { name: '파이프라인 정의' }).click();
     await expect(page.getByText('아직 관측되지 않음', { exact: false })).toBeVisible();
   });
+});
+
+test.describe('재리뷰(review2-codex) 재현', () => {
+  test('P2-1: 병합 불일치 실행의 상세는 「병합됨」이라 하지 않고 서버 대기열 상태를 보인다', async ({ page }) => {
+    // 리뷰어 재현 그대로: ② PASS(mergeSha c4e81f0) + 연결 대기열 checking·actualMergeSha dead000
+    await open(page, '/ci/ci-0112', (d) => {
+      const r = { ...d.runs.find((x) => x.id === 'ci-0112')!, startedAt: '2026-11-06T00:00:00Z' } as (typeof d.runs)[number];
+      d.runs = [r];
+      d.queue = [{ ...mismatchItem(), taskKey: 'TASK-0003', pr: 7, ciRunId: 'ci-0112' }];
+    });
+    await expect(page.getByText(/main 확인 필요 · 병합 불일치/)).toBeVisible();
+    const d = detail(page);
+    await expect(d).not.toContainText('병합됨');
+    await expect(d).toContainText('병합 불일치 — 실제 병합 dead000 · 완료 보류 (검사한 병합본 c4e81f0)');
+  });
+
+  test('P2-1: 대기열이 병합됨이면 상세도 「병합됨」', async ({ page }) => {
+    await open(page, '/ci/ci-0112');
+    await expect(detail(page)).toContainText('병합됨 → main @ c4e81f0');
+  });
+
+  for (const width of [1440, 390]) {
+    test(`P3: ${String(width)}px 모든 탭·상세에서 제목 단계를 건너뛰지 않는다(axe heading-order)`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await open(page, '/ci');
+      for (const path of ['/ci', '/ci/ci-0124', '/ci?tab=queue', '/ci?tab=deploy', '/ci?tab=pipe', '/ci?tab=flaky']) {
+        await page.goto(path);
+        await expect(page.locator('.card').first()).toBeVisible();
+        await expect(page.locator('.main [aria-busy="true"], .main [role="status"]')).toHaveCount(0);
+        const axe = await new AxeBuilder({ page }).include('.main').withRules(['heading-order']).analyze();
+        expect(axe.violations.map((v) => `${path} ${v.id} ${v.nodes.map((n) => n.target.join(' ')).join(',')}`), path).toEqual([]);
+      }
+    });
+  }
 });
 
 async function pageOverflow(page: Page) {

@@ -14,3 +14,7 @@
 /* 대기열 시각 칸의 실행 링크: 원본 글자 모양(검은 mono)을 그대로 두고, 가리키면 밑줄로 링크임을 알린다. */
 .ci-at { color: inherit; text-decoration: none; }
 .ci-at:hover, .ci-at:focus-visible { text-decoration: underline; }
+
+/* 제목 순서(재리뷰 P3): 상세의 소제목은 h2(실행 이름) 다음이라 h3다. 원본 h4(P L250)와 같은 굵기로 보이게 한다.
+   탭 카드 제목 h2는 공통 product.css의 .dp-h h2가 원본 .dp-h h3 모양으로 맞춘다. */
+h3.ds-h4 { font-weight: 600; }

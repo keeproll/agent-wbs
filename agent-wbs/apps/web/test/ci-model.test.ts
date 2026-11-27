@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  attemptCiRef, baselineActive, detailSteps, retryHeld, formatDuration, githubLabel, lastDeploy, mainStatus, openFailures, position, queueRows, resultLabel, runDurationMs,
+  attemptCiRef, baselineActive, detailSteps, mergeLine, retryHeld, formatDuration, githubLabel, lastDeploy, mainStatus, openFailures, position, queueRows, resultLabel, runDurationMs,
   runRows, stageCounts, summaryLine, tabBadges,
   type CiRun, type QueueItem,
 } from '../src/features/ci/model.ts';
@@ -196,5 +196,16 @@ describe('빌드·통합 화면 계산(UI-08, P ciVM L4765–4801)', () => {
       expect(retryHeld(run({ id: 'a', stage: 'task', status: 'fail', failScope: 'task', taskKey: 'TASK-0006' }), holds)).toBe(false);
       expect(retryHeld(run({ id: 'a', stage: 'task', status: 'fail', failScope: 'baseline', taskKey: 'TASK-0001' }), holds)).toBe(false);
     });
+  });
+
+  it('재리뷰 P2-1: 상세의 병합 줄은 연결 대기열의 서버 상태 그대로(병합됨일 때만 「병합됨」)', () => {
+    const r = run({ id: 'i', stage: 'int', status: 'pass', pr: 7, mergeSha: sha('c') });
+    const qi = (o: Partial<QueueItem>): QueueItem => ({ id: 'q', pr: 7, taskKey: 'TASK-0003', position: 1, status: 'merged', qaHeadSha: null, syncedHeadSha: null, baseSha: null, ciRunId: 'i', actualMergeSha: sha('c'), ...o } as QueueItem);
+    expect(mergeLine(r, [qi({})])).toBe(`병합됨 → main @ ${'c'.repeat(7)}`);
+    expect(mergeLine(r, [qi({ status: 'checking', actualMergeSha: sha('d') })])).toBe(`병합 불일치 — 실제 병합 ${'d'.repeat(7)} · 완료 보류 (검사한 병합본 ${'c'.repeat(7)})`);
+    expect(mergeLine(r, [qi({ status: 'checking', actualMergeSha: null })])).toBe(`통합 확인 중 — 병합 전 (검사한 병합본 ${'c'.repeat(7)})`);
+    expect(mergeLine(r, [])).toBe(`대기열 기록 없음 — 병합 여부 미확인 (검사한 병합본 ${'c'.repeat(7)})`);
+    expect(mergeLine(run({ id: 'x', stage: 'int', status: 'fail' }), [])).toBeNull();
+    expect(mergeLine(run({ id: 'y', stage: 'task', status: 'pass', mergeSha: sha('c') }), [])).toBeNull();
   });
 });
