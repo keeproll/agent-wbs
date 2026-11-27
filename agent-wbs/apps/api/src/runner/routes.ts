@@ -12,7 +12,8 @@ import { caps, claim, checkedJob, release, requestRun, runGrade, start, retryFai
 import { reportConcurrency, reportHost } from './telemetry.ts';
 import { runnerState } from './state.ts';
 import { installResetRunner } from '../reset/routes.ts';
-import { currentRunnerJob } from '../project/jobs.ts';
+import { currentRunnerJob, steps } from '../project/jobs.ts';
+import { waitingForLead } from '../project/steps.ts';
 
 const params = (r: FastifyRequest) => r.params as { id: string; taskKey: string; attemptId: string };
 const body = <T>(r: FastifyRequest) => r.body as T;
@@ -148,7 +149,8 @@ export function installRunner(app: FastifyInstance, pool: Pool) {
     if (h && !h.closed_at) await repo.release(h, required(h.release_proof), true);
     const planningId = ['bootstrap', 'input_diff'].includes(job.kind) ? job.payload.planningJobId as string | undefined : undefined;
     const canReplace = !planningId || await currentRunnerJob(repo.client, planningId) === job.id
-      && (await repo.client.query<{ status: string }>('select status from planning_jobs where id=$1', [planningId])).rows[0]?.status !== 'done';
+      && (await repo.client.query<{ status: string }>('select status from planning_jobs where id=$1', [planningId])).rows[0]?.status !== 'done'
+      && !waitingForLead(job.kind, await steps(repo.client, planningId));
     if (b.evidence.outcome === 'none' && canReplace) await repo.enqueue(job.project_id, job.epoch, job.kind, job.payload, `reconcile:${job.id}:${job.fence}`, job.generation);
   }, 204);
   route('interruptAttempt', async (repo, r) => {

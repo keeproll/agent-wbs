@@ -1,6 +1,6 @@
 import { changeEvent, enqueueJob, iso, type Db } from './db.ts';
 import { ProjectError } from './errors.ts';
-import { BOOT_STEPS, INPUT_STEPS, LEAD_STEPS, type StepStatus } from './steps.ts';
+import { BOOT_STEPS, INPUT_STEPS, LEAD_STEPS, waitingForLead, type StepStatus } from './steps.ts';
 
 /*
  * Planning 작업(planning_jobs)과 Runner job(runner_jobs)의 관계.
@@ -63,6 +63,9 @@ export async function syncPlanningJob(db: Db, runnerId: string, state: string, e
   if (!id || !['bootstrap', 'input_diff'].includes(runner.kind)) return;
   const job = await lockPlanningJob(db, id);
   if (await currentRunnerJob(db, id) !== runnerId || job.status === 'done') return;
+  const progress = await steps(db, id);
+  // 사람의 결정을 기다릴 때는 Runner의 종료 이유와 관계없이 분석을 실패로 바꾸지 않는다.
+  if (waitingForLead(job.kind, progress)) return;
   if (state === 'queued') {
     if (job.status === 'failed') {
       await db.query("update planning_jobs set status='queued',fail=null where id=$1", [id]);
@@ -71,9 +74,6 @@ export async function syncPlanningJob(db: Db, runnerId: string, state: string, e
     return;
   }
   if (job.status === 'failed') return;
-  const progress = await steps(db, id);
-  // bootstrap은 Runner의 성공 종료 뒤에도 팀장의 기술 결정·초안 승인을 기다릴 수 있다.
-  if (state === 'done' && job.kind === 'bootstrap' && ['tech', 'approve'].some((key) => progress.get(key) === 'run')) return;
   if (state === 'done' && job.kind === 'input_diff' && INPUT_STEPS.every((key) => progress.get(key) === 'done')) {
     await db.query("update planning_jobs set status='done' where id=$1", [id]);
   } else {
