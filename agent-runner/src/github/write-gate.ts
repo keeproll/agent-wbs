@@ -3,7 +3,7 @@ import type { ApiClient } from '../api/client.ts';
 import { normalizeRepoUrl } from '../git/identity.ts';
 import { LEASE_SAFETY_MS } from '../exec/session.ts';
 import type { PushGate } from '../git/repository.ts';
-import { GitHubError, type GitHubClient, type WriteOperation } from './client.ts';
+import { GitHubError, type GitHubClient, type WriteContext, type WriteOperation } from './client.ts';
 
 /*
  * Runner의 모든 외부 쓰기는 같은 관문 하나를 지난다(M5·M7 통합 조정자 판단).
@@ -44,22 +44,32 @@ export function serverWriteGuard(api: ApiClient, job: { id: string; fence: numbe
   };
 }
 
-/** Git push용 관문: 소유 확인 → M4 쓰기 관문 → 소유 확인(관문 검사 중 임대를 잃었을 수 있다). */
-export function pushGate(github: Pick<GitHubClient, 'assertWritable'>, guard: OwnershipGuard = noGuard): PushGate {
-  return async (operation) => {
+/**
+ * Git push용 관문: 소유 확인 → M4 쓰기 관문 → 소유 확인(M4 검사 중 임대를 잃었을 수 있다).
+ * 마지막 소유 확인 뒤 push 메서드는 다른 await 없이 git을 띄운다. signal은 진행 중인 push도 끊는다.
+ */
+export function pushGate(github: Pick<GitHubClient, 'assertWritable'>, guard: OwnershipGuard = noGuard, signal?: AbortSignal): PushGate {
+  const gate: PushGate = async (operation) => {
     await guard();
     await github.assertWritable(operation);
     await guard();
   };
+  gate.signal = signal;
+  return gate;
 }
 
 type RestWrite = (typeof REST_WRITES)[number];
-/** REST 쓰기 메서드 앞에 소유 확인을 붙인 클라이언트 보기. 읽기 메서드와 M4 관문(클라이언트 안의 beforeWrite)은 그대로다. */
-export function ownedGitHub<T extends Partial<Pick<GitHubClient, RestWrite>>>(github: T, guard: OwnershipGuard): T {
+/**
+ * REST 쓰기 메서드에 작업 문맥(소유 확인·중단 신호)을 묶은 클라이언트 보기. 읽기 메서드는 그대로다.
+ * 소유 확인은 메서드 진입 때가 아니라, 조회·M4 검사·토큰 준비를 마친 뒤 실제 전송 바로 앞(클라이언트의 `call`)에서 한다.
+ * 왜: 메서드 안에도 기다리는 단계가 있어, 진입 때 한 확인만으로는 그 사이의 중단·임대 상실을 막지 못한다(Codex 재리뷰 P2).
+ */
+export function ownedGitHub<T extends Partial<Pick<GitHubClient, RestWrite>>>(github: T, guard: OwnershipGuard, signal?: AbortSignal): T {
   const owned: Record<string, unknown> = { ...github };
+  const write: WriteContext = { guard, ...(signal && { signal }) };
   for (const name of REST_WRITES) {
-    const method = github[name] as ((...args: never[]) => Promise<unknown>) | undefined;
-    if (method) owned[name] = async (...args: never[]) => { await guard(); return method.apply(github, args); };
+    const method = github[name] as ((input: unknown, context: WriteContext) => Promise<unknown>) | undefined;
+    if (method) owned[name] = (input: unknown) => method.call(github, input, write);
   }
   return owned as T;
 }

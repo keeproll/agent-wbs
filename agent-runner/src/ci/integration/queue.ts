@@ -64,7 +64,7 @@ export class IntegrationQueue {
   private constructor(deps: IntegrationDeps, lock: FileHandle, journal: Journal | null) {
     const guard: OwnershipGuard = deps.guard ?? (async () => { deps.signal?.throwIfAborted(); });
     // 상태 기록·병합은 소유 확인 뒤 M4 관문(클라이언트 안의 beforeWrite)을 지난다.
-    this.deps = { ...deps, guard, github: ownedGitHub(deps.github, guard) }; this.lock = lock; this.journal = journal;
+    this.deps = { ...deps, guard, github: ownedGitHub(deps.github, guard, deps.signal) }; this.lock = lock; this.journal = journal;
   }
 
   static async open(deps: IntegrationDeps): Promise<IntegrationQueue> {
@@ -136,7 +136,7 @@ export class IntegrationQueue {
       if (syncedHeadSha !== request.qaHeadSha && !proof) return { kind: 'rework', reason: 'invalid_sync', ...previous };
       const moved = await this.current(request, basis.baseSha, head); if (moved) return { ...moved, ...previous };
       if (syncedHeadSha !== head) {
-        try { await repo.pushCommit(syncedHeadSha, request.branch, pushGate(github, this.deps.guard)); }
+        try { await repo.pushCommit(syncedHeadSha, request.branch, pushGate(github, this.deps.guard, this.deps.signal)); }
         catch (error) {
           const changed = await this.current(request, basis.baseSha, head);
           if (changed) return { ...changed, ...previous };

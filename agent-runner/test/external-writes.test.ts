@@ -33,6 +33,15 @@ test('GitHub REST 쓰기(POST·PUT·PATCH·DELETE)는 목록의 메서드 안에
   const sites = [...source.matchAll(/\bcall\('(POST|PUT|PATCH|DELETE)'/g)].map((m) => enclosing(source, m.index));
   expect(new Set(sites.map((s) => s.name))).toEqual(new Set(REST_WRITES));
   for (const site of sites) expect(site.body, site.name).toMatch(/await beforeWrite\(/);
+  // 각 쓰기 요청은 작업 문맥(write: 소유 확인·중단 신호)을 call에 넘긴다. call은 전송 바로 앞에서 소유를 확인한다.
+  const writeCalls = [...source.matchAll(/\bcall\('(?:POST|PUT|PATCH|DELETE)'[^;]*;/g)].map((m) => m[0]);
+  expect(writeCalls).toHaveLength(REST_WRITES.length);
+  for (const line of writeCalls) expect(line).toMatch(/\bwrite\b/);
+  const body = source.slice(source.indexOf('const call = async'), source.indexOf('const ok = async'));
+  expect(body.indexOf('await init.write.guard()')).toBeGreaterThan(body.indexOf('await token()'));
+  // 소유 확인과 전송 사이에 다른 await가 없다.
+  const between = body.slice(body.indexOf('await init.write.guard()') + 'await init.write.guard()'.length, body.indexOf('await send('));
+  expect(between).not.toMatch(/\bawait\b/);
 });
 
 test('Git push는 목록의 메서드 안에만 있고, 각 메서드는 push 전에 필수 관문(gate)을 부른다', () => {
@@ -86,7 +95,8 @@ test('소유 확인이 거부하면 REST 쓰기 다섯 가지 모두 GitHub에 �
   };
   for (const [name, call] of Object.entries(calls)) await expect(call(), name).rejects.toThrow('임대 상실');
   expect(writes).toEqual([]);
-  expect(gate).toBe(0);
+  // M4 검사는 쓰기가 아니다. 소유 확인은 그 뒤, 전송 바로 앞에서 한다(마지막 확인 → 즉시 전송).
+  expect(gate).toBe(5);
 });
 
 test('push 관문은 소유 확인 → M4 관문 → 소유 확인 순서이고, 앞 단계가 거부하면 뒤 단계를 부르지 않는다', async () => {

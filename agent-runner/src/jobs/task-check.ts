@@ -20,7 +20,7 @@ interface TaskCheckDeps {
    * PR을 여는 GitHub 계층(M4 `createGitHubClient`). Runner가 개발 결과를 push한 뒤 같은 head 브랜치의 열린 PR을 쓰거나 새로 연다(조정자 결정 1).
    * null이면 GitHub가 연결되지 않은 것이다. PR 없이 보고하고, 서버는 'PR 정보가 필요합니다'로 통합을 보류한다.
    */
-  github: Pick<GitHubClient, 'ensurePullRequest' | 'permissions' | 'assertWritable'> | null;
+  github: Pick<GitHubClient, 'ensurePullRequest' | 'findPullRequest' | 'permissions' | 'assertWritable'> | null;
 }
 
 /** ① 결과와 이번 시도가 쓴 PR(번호·head 브랜치). 시도 결과 보고에도 그대로 넣는다. */
@@ -35,13 +35,33 @@ export class ExternalWriteBlockedError extends Error {
 export type WriteGuard = OwnershipGuard;
 export { serverWriteGuard };
 
-/** push는 끝났지만 그 뒤 확인에서 멈췄다. 원격 브랜치가 바뀐 사실을 그대로 알린다. */
+/** push 뒤 PR의 상태. 확인한 사실만 말한다. */
+export type PullState = { kind: 'not_requested' } | { kind: 'absent' } | { kind: 'opened'; number: number };
+const describe = (state: PullState) => state.kind === 'not_requested' ? 'PR 생성 요청은 보내지 않았습니다'
+  : state.kind === 'absent' ? '조회로 열린 PR이 없음을 확인했고 다시 요청하지 않았습니다'
+  : `PR #${String(state.number)}은 이미 열려 있습니다`;
+
+/** push는 끝났지만 그 뒤 확인에서 멈췄다. 원격 브랜치가 바뀐 사실과 확인한 PR 상태를 그대로 알린다. */
 export class PushedThenStoppedError extends Error {
   override name = 'PushedThenStoppedError';
   readonly branch: string;
   readonly commit: string;
+  readonly pull: PullState;
+  constructor(branch: string, commit: string, reason: unknown, pull: PullState = { kind: 'not_requested' }) {
+    super(`원격 브랜치 ${branch}에 ${commit.slice(0, 7)}를 이미 push했고, 그 뒤 소유 확인에서 멈췄습니다. ${describe(pull)}: ${reason instanceof Error ? reason.message : String(reason)}`, { cause: reason });
+    this.branch = branch;
+    this.commit = commit;
+    this.pull = pull;
+  }
+}
+
+/** PR 생성 응답을 잃었고 조회로도 확인하지 못했다. 만들어졌는지 모른다(만들지 않았다고 단정하지 않는다). */
+export class PullRequestUnknownError extends Error {
+  override name = 'PullRequestUnknownError';
+  readonly branch: string;
+  readonly commit: string;
   constructor(branch: string, commit: string, reason: unknown) {
-    super(`원격 브랜치 ${branch}에 ${commit.slice(0, 7)}를 이미 push했고, 그 뒤 소유 확인에서 멈춰 PR은 열지 않았습니다: ${reason instanceof Error ? reason.message : String(reason)}`, { cause: reason });
+    super(`원격 브랜치 ${branch}에 ${commit.slice(0, 7)}를 push했습니다. PR 생성 응답을 잃었고 조회도 실패해 PR이 만들어졌는지 모릅니다. 브랜치의 열린 PR을 확인하세요: ${reason instanceof Error ? reason.message : String(reason)}`, { cause: reason });
     this.branch = branch;
     this.commit = commit;
   }
@@ -49,40 +69,56 @@ export class PushedThenStoppedError extends Error {
 
 /**
  * 개발 결과를 agent 브랜치에 push하고 그 브랜치의 PR을 연다. 멱등이다(조정자 결정 1).
- * 외부 쓰기(push·PR 생성·재시도) 직전마다 다음을 거친다.
- * 1. 중단 신호와 서버 기준 소유(`guard`: fence·임대·중단)를 확인한다. 아니면 쓰지 않는다.
- * 2. push 전에는 M4 쓰기 관문(`assertWritable`: 앱에서는 원격 저장소·배포 키 확인)과 권한 3상태를 확인한다.
- *    PR 생성은 M4 계층 안에서 같은 관문을 다시 거친다. 열린 PR을 재사용할 때도 이 push 전 관문은 이미 지났다.
- * - `ensurePullRequest`는 브랜치로 열린 PR을 먼저 찾고, 없을 때만 만든다. 생성 경합(422)도 다시 찾는다.
- * - 생성 응답을 잃으면(통신 실패) 소유를 다시 확인한 뒤 한 번 더 부른다. 다시 찾기부터 하므로 PR이 둘 생기지 않는다.
- * - 재시도할 수 없는 403(실제 권한 부족)만 외부 쓰기 막힘으로 바꾼다. 호출 횟수 제한 403은 M4 오류(재시도 가능·대기 시간)를 그대로 둔다.
- * - push 뒤 확인에서 멈추면 `PushedThenStoppedError`로 「이미 push했다」는 사실을 알린다.
+ * 모든 외부 쓰기는 같은 관문을 지난다(github/write-gate.ts). 「마지막 확인 → 즉시 전송」이다.
+ * - push: 권한 3상태 → pushGate(소유 → M4 원격·배포 키 → 소유) → 다른 await 없이 git push. 중단 신호는 진행 중인 push도 끊는다.
+ * - PR 생성: 열린 PR 조회 → M4 관문 → 토큰 준비 → 소유 확인 → 다른 await 없이 POST(클라이언트의 `call`). 중단 신호는 진행 중인 요청도 끊는다.
+ *   남는 아주 짧은 틈은 PR 생성의 브랜치 기준 멱등 조회가 막는다(같은 브랜치의 PR은 하나).
+ * - 생성 응답을 잃으면(통신 실패) 브랜치로 읽기 조회만 한다. 있으면 그 PR을 쓰고, 없으면 같은 관문으로 한 번 더 요청하고,
+ *   조회도 실패하면 `PullRequestUnknownError`(모름)다. 만들지 않았다고 단정하지 않는다.
+ * - 재시도할 수 없는 403(실제 권한 부족)만 외부 쓰기 막힘으로 바꾼다. 호출 횟수 제한 403은 M4 오류를 그대로 둔다.
+ * - push 뒤 확인에서 멈추면 `PushedThenStoppedError`로 「이미 push했다」와 확인한 PR 상태를 알린다.
  */
 export async function openPullRequest(d: Pick<TaskCheckDeps, 'github' | 'repo'>, job: AttemptContext['job'], head: string,
-  guard: WriteGuard = () => Promise.resolve()): Promise<{ number: number; head: string } | undefined> {
+  guard: WriteGuard = () => Promise.resolve(), signal?: AbortSignal): Promise<{ number: number; head: string } | undefined> {
   const github = d.github;
   if (!github) return undefined;
   const branch = job.payload.branch;
   const blocked = () => new ExternalWriteBlockedError('GitHub 쓰기 권한(contents·pulls)이 없어 PR을 열 수 없습니다. 외부 쓰기 막힘으로 보류합니다.');
   const permissions = github.permissions();
   if (permissions.contents === 'missing' || permissions.pulls === 'missing') throw blocked();
-  // 같은 관문: 소유 확인 → M4 쓰기 관문(원격 저장소·배포 키) → 소유 확인 → push.
-  await d.repo.pushCommit(head, branch, pushGate(github, guard));
+  await d.repo.pushCommit(head, branch, pushGate(github, guard, signal));
   const input = { branch, title: `${job.payload.taskKey} ${job.payload.kind}`, body: `Agent WBS가 ${job.payload.taskKey}의 개발 결과로 연 PR입니다.` };
-  const ensure = async () => {
-    try { await guard(); }
-    catch (error) { throw new PushedThenStoppedError(branch, head, error); }
-    try { return await github.ensurePullRequest(input); }
+  const ensure = async (state: PullState) => {
+    // 클라이언트가 전송 바로 앞에서 부르는 소유 확인. 실패하면 PR 요청을 보내지 않는다.
+    const write = { guard: async () => {
+      try { await guard(); signal?.throwIfAborted(); }
+      catch (error) { throw new PushedThenStoppedError(branch, head, error, state); }
+    }, ...(signal && { signal }) };
+    try { return await github.ensurePullRequest(input, write); }
     catch (error) {
       if (error instanceof GitHubError && error.status === 403 && !error.retryable) throw blocked();
       throw error;
     }
   };
   let pull;
-  try { pull = await ensure(); }
+  try { pull = await ensure({ kind: 'not_requested' }); }
   catch (error) {
     if (!(error instanceof GitHubError) || error.status !== 0) throw error;
-    pull = await ensure();
+    // 응답을 잃었다. 요청이 GitHub에 닿았는지 모르므로 읽기로 대조한다(쓰기 재시도부터 하지 않는다).
+    let found;
+    try { found = await github.findPullRequest(branch); }
+    catch (lookup) { throw new PullRequestUnknownError(branch, head, lookup); }
+    if (found) {
+      if (signal?.aborted) throw new PushedThenStoppedError(branch, head, signal.reason, { kind: 'opened', number: found.number });
+      pull = found;
+    } else {
+      if (signal?.aborted) throw new PushedThenStoppedError(branch, head, signal.reason, { kind: 'absent' });
+      try { pull = await ensure({ kind: 'absent' }); }
+      catch (again) {
+        if (again instanceof GitHubError && again.status === 0) throw new PullRequestUnknownError(branch, head, again);
+        throw again;
+      }
+    }
   }
   if (pull.branch !== branch) throw new Error('PR의 head 브랜치가 이 시도의 브랜치와 다릅니다.');
   return { number: pull.number, head: pull.branch };
@@ -96,7 +132,7 @@ export function bindTaskCheck(d: TaskCheckDeps) {
     // 조정자 결정 1: dev → push → PR 열기 → ①. ①은 PR에 올린 그 커밋을 검사한다.
     const head = await d.repo.importWorktree(work.id, work.branch);
     const guard = serverWriteGuard(d.api, job, epoch, signal);
-    const pullRequest = await openPullRequest(d, job, head, guard);
+    const pullRequest = await openPullRequest(d, job, head, guard, signal);
     signal.throwIfAborted();
     const basis = await d.repo.mainPipeline();
     await d.observeMainPipeline(basis);

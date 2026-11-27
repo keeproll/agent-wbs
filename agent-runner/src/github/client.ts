@@ -31,6 +31,13 @@ export type WriteOperation =
   /** Git push(REST가 아님). 호출자가 push 직전에 `assertWritable`로 같은 관문을 거친다. remote는 push할 원격 주소다. */
   | { kind: 'branch_push'; branch: string; remote: string };
 
+/**
+ * 쓰기 요청 하나의 문맥(작업별). 공유 클라이언트의 전역 관문을 바꾸지 않고 요청에 묶는다.
+ * - guard: 소유 확인(중단·서버 임대). 토큰 준비·M4 검사가 끝난 뒤, 실제 전송 바로 앞에서 부른다. 결과를 캐시하지 않는다.
+ * - signal: 작업 중단 신호. 전송 직전에 다시 보고, 진행 중인 요청도 이 신호로 끊는다.
+ */
+export interface WriteContext { guard?: () => Promise<void>; signal?: AbortSignal }
+
 /** 권한 이름. 원본 가이드 §9.5-4-1의 네 권한(README §4). */
 export type PermissionName = 'contents' | 'pulls' | 'statuses' | 'metadata';
 /**
@@ -391,7 +398,7 @@ export function createGitHubClient(options: GitHubClientOptions) {
   };
 
   /** 응답 상태와 관계없이 돌려준다. 통신 실패만 던진다. */
-  const call = async (method: string, path: string, init: { query?: Record<string, string>; body?: unknown } = {}): Promise<Raw> => {
+  const call = async (method: string, path: string, init: { query?: Record<string, string>; body?: unknown; write?: WriteContext | undefined } = {}): Promise<Raw> => {
     const secret = await token();
     redact = createRedactor([secret.reveal()]);
     const digest = createHash('sha256').update(secret.reveal()).digest('hex');
@@ -407,6 +414,12 @@ export function createGitHubClient(options: GitHubClientOptions) {
       'user-agent': 'agent-wbs-runner',
     });
     if (init.body !== undefined) headers.set('content-type', 'application/json');
+    // 쓰기: 마지막 확인 → 즉시 전송. 소유 확인(guard) 뒤에는 다른 await가 없다(중단 신호 확인은 동기).
+    // 확인과 전송 사이의 남은 아주 짧은 틈은 GitHub 쪽 보호가 막는다: 병합은 기대 head SHA(sha)를 보내 다른 head면 409,
+    // PR 생성은 브랜치 기준 멱등 조회(이미 있으면 그 PR)다. 중단 신호가 오면 진행 중인 요청도 끊는다.
+    if (init.write?.guard) await init.write.guard();
+    init.write?.signal?.throwIfAborted();
+    const timeout = AbortSignal.timeout(timeoutMs);
     try {
       const response = await send(url, {
         method,
@@ -414,7 +427,7 @@ export function createGitHubClient(options: GitHubClientOptions) {
         body: init.body === undefined ? null : JSON.stringify(init.body),
         // 토큰을 다른 주소로 보내지 않는다.
         redirect: 'manual',
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: init.write?.signal ? AbortSignal.any([timeout, init.write.signal]) : timeout,
       });
       const text = await response.text();
       let body: unknown;
@@ -714,13 +727,13 @@ export function createGitHubClient(options: GitHubClientOptions) {
     },
 
     /** Task 브랜치의 열린 PR을 돌려주거나 새로 만든다. 재시도해도 PR이 둘 생기지 않는다. */
-    async ensurePullRequest(input: { branch: string; title: string; body: string }): Promise<PullRequest & { created: boolean }> {
+    async ensurePullRequest(input: { branch: string; title: string; body: string }, write?: WriteContext): Promise<PullRequest & { created: boolean }> {
       if (!BRANCH.test(input.branch)) throw invalid('PR 브랜치는 agent/<TASK> 형식이어야 합니다.');
       const existing = await findOpenPull(input.branch);
       if (existing) return { ...existing, created: false };
       await beforeWrite({ kind: 'pull_create', branch: input.branch });
       const raw = await call('POST', `${repoPath}/pulls`, {
-        body: { title: input.title, head: input.branch, base: 'main', body: input.body },
+        body: { title: input.title, head: input.branch, base: 'main', body: input.body }, write,
       });
       observeWrite(raw, 'pulls', 'pull_create', 'POST PR');
       if (raw.status === 201) return { ...toPull(raw.body as PullJson), created: true };
@@ -734,6 +747,9 @@ export function createGitHubClient(options: GitHubClientOptions) {
 
     getPullRequest,
 
+    /** 브랜치의 열린 PR을 읽기만 한다(쓰기 없음). PR 생성 응답을 잃었을 때 실제로 만들어졌는지 대조한다. */
+    findPullRequest: findOpenPull,
+
     /**
      * REST가 아닌 외부 쓰기(Git push) 직전에 부른다. PR 생성·상태 기록과 같은 `beforeWrite` 관문(앱에서는 배포 키·원격 확인)을 그대로 거친다.
      * 왜: push도 원격을 바꾸는 쓰기다. REST 쓰기만 막으면 「확인할 수 없으면 쓰기를 중단한다」는 M4 경계가 깨진다.
@@ -742,10 +758,10 @@ export function createGitHubClient(options: GitHubClientOptions) {
       await beforeWrite(operation);
     },
 
-    async closePullRequest(pr: number): Promise<void> {
+    async closePullRequest(pr: number, write?: WriteContext): Promise<void> {
       if (!Number.isSafeInteger(pr) || pr < 1) throw invalid('PR 번호가 올바르지 않습니다.');
       await beforeWrite({ kind: 'pull_close', pr });
-      const raw = await call('PATCH', `${repoPath}/pulls/${String(pr)}`, { body: { state: 'closed' } });
+      const raw = await call('PATCH', `${repoPath}/pulls/${String(pr)}`, { body: { state: 'closed' }, write });
       observeWrite(raw, 'pulls', 'pull_close', 'PATCH PR');
       if (raw.status !== 200) throw failure(raw, 'PATCH PR');
     },
@@ -758,11 +774,11 @@ export function createGitHubClient(options: GitHubClientOptions) {
      * 그래서 204가 아니면 `GET /git/ref/heads/<branch>`로 다시 확인한다. 404(참조 없음)일 때만 이미 지워진 것으로 본다.
      * 왜: 거절을 성공으로 바꾸면 브랜치가 남았는데 정리 완료를 보고하게 된다(재리뷰 N3).
      */
-    async deleteBranch(branch: string): Promise<void> {
+    async deleteBranch(branch: string, write?: WriteContext): Promise<void> {
       if (!BRANCH.test(branch)) throw invalid('Agent 브랜치(agent/<TASK>)만 지울 수 있습니다.');
       const ref = `heads/${branch.split('/').map(encodeURIComponent).join('/')}`;
       await beforeWrite({ kind: 'branch_delete', branch });
-      const raw = await call('DELETE', `${repoPath}/git/refs/${ref}`);
+      const raw = await call('DELETE', `${repoPath}/git/refs/${ref}`, { write });
       observeWrite(raw, 'contents', 'branch_delete', 'DELETE ref');
       if (raw.status === 204) return;
       const check = await call('GET', `${repoPath}/git/ref/${ref}`);
@@ -793,7 +809,7 @@ export function createGitHubClient(options: GitHubClientOptions) {
       state: StatusState;
       description?: string;
       targetUrl?: string;
-    }): Promise<void> {
+    }, write?: WriteContext): Promise<void> {
       if (!SHA.test(input.sha)) throw invalid('commit SHA 형식이 올바르지 않습니다.');
       if (!CONTEXTS.includes(input.context)) throw invalid('허용되지 않은 status context입니다.');
       if (!STATES.includes(input.state)) throw invalid('허용되지 않은 status state입니다.');
@@ -805,7 +821,7 @@ export function createGitHubClient(options: GitHubClientOptions) {
         const secret = await token();
         body.description = truncate(createRedactor([secret.reveal()])(input.description), DESCRIPTION_MAX);
       }
-      const raw = await call('POST', `${repoPath}/statuses/${input.sha}`, { body });
+      const raw = await call('POST', `${repoPath}/statuses/${input.sha}`, { body, write });
       observeWrite(raw, 'statuses', 'status', 'POST status');
       if (raw.status !== 201) throw failure(raw, 'POST status');
     },
@@ -833,15 +849,17 @@ export function createGitHubClient(options: GitHubClientOptions) {
      * contracts §4.1 코드 근거 고정 3-5·6. 병합 경로는 이것 하나다.
      * `baseSha`=A(대기열이 고정한 main), `headSha`=H′(②를 통과하고 int를 게시한 PR head).
      */
-    async mergePullRequest(input: { pr: number; baseSha: string; headSha: string }): Promise<MergeOutcome> {
+    async mergePullRequest(input: { pr: number; baseSha: string; headSha: string }, write?: WriteContext): Promise<MergeOutcome> {
       const { pr, baseSha, headSha } = input;
       checkMergeInput(input);
       await beforeWrite({ kind: 'merge', pr, headSha });
       let raw: Raw;
       try {
-        raw = await call('PUT', `${repoPath}/pulls/${String(pr)}/merge`, { body: { sha: headSha, merge_method: 'merge' } });
-      } catch {
-        return reconcileMerge(pr, baseSha, headSha);
+        raw = await call('PUT', `${repoPath}/pulls/${String(pr)}/merge`, { body: { sha: headSha, merge_method: 'merge' }, write });
+      } catch (error) {
+        // 통신 실패(보냈는지 모름, 중단으로 끊긴 요청 포함)만 읽기로 대조한다. 소유 확인 실패·전송 전 중단은 보내지 않았으므로 그대로 던진다.
+        if (error instanceof GitHubError && error.status === 0) return reconcileMerge(pr, baseSha, headSha);
+        throw error;
       }
       observeWrite(raw, 'contents', 'merge', 'PUT merge');
       const message = redact(String((raw.body as { message?: unknown } | undefined)?.message ?? ''));

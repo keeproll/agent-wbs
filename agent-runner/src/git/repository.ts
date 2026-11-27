@@ -171,12 +171,12 @@ async function safePath(path: string): Promise<string> {
   return path;
 }
 
-async function run(cwd: string, args: string[], input?: Buffer | string, extraEnv: NodeJS.ProcessEnv = {}, allowed = [0]): Promise<Buffer> {
-  return (await runWithCode(cwd, args, input, extraEnv, allowed)).output;
+async function run(cwd: string, args: string[], input?: Buffer | string, extraEnv: NodeJS.ProcessEnv = {}, allowed = [0], signal?: AbortSignal): Promise<Buffer> {
+  return (await runWithCode(cwd, args, input, extraEnv, allowed, signal)).output;
 }
 
 /** 허용한 종료 코드면 출력과 코드를 돌려주고, 그 밖은 GitSafetyError. 종료 코드로 답을 구분하는 명령(merge-base --is-ancestor)에 쓴다. */
-async function runWithCode(cwd: string, args: string[], input?: Buffer | string, extraEnv: NodeJS.ProcessEnv = {}, allowed = [0]): Promise<{ code: number; output: Buffer }> {
+async function runWithCode(cwd: string, args: string[], input?: Buffer | string, extraEnv: NodeJS.ProcessEnv = {}, allowed = [0], signal?: AbortSignal): Promise<{ code: number; output: Buffer }> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.excludesFile=/dev/null',
       '-c', 'core.fsmonitor=false', '-c', 'credential.helper=', '-c', 'core.sshCommand=false',
@@ -190,6 +190,8 @@ async function runWithCode(cwd: string, args: string[], input?: Buffer | string,
         GIT_ALLOW_PROTOCOL: 'file:https', GIT_LFS_SKIP_SMUDGE: '1', ...extraEnv,
       },
       stdio: ['pipe', 'pipe', 'pipe'],
+      // 외부 쓰기(push) 중 작업이 중단되면 진행 중인 git을 끊는다. 원격 브랜치 갱신은 git 서버에서 원자적이다(전부 또는 없음).
+      ...(signal && { signal }),
     });
     const output: Buffer[] = [];
     // git 오류 원문에는 URL·인증 정보가 들어갈 수 있으므로 외부에 내보내지 않는다.
@@ -233,7 +235,10 @@ async function groupWritable(path: string): Promise<void> {
 export const MAX_SYNC_CHAIN = 50;
 
 /** push 직전 관문. 실패하면 던진다(push하지 않는다). 모양은 GitHub 클라이언트의 `branch_push` 쓰기 종류와 같다. */
-export type PushGate = (operation: { kind: 'branch_push'; branch: string; remote: string }) => Promise<void>;
+export type PushGate = ((operation: { kind: 'branch_push'; branch: string; remote: string }) => Promise<void>) & {
+  /** 작업 중단 신호. 관문 직후 다시 보고, 진행 중인 push도 끊는다. */
+  signal?: AbortSignal | undefined;
+};
 
 export interface GitLayout {
   /** 예: /srv/agentwbs. 그 아래 `worktrees/<저장소>`·`inputs/<저장소>`를 쓴다. */
@@ -500,10 +505,12 @@ export class GitRepository {
     sha(commit);
     if (branch !== 'main') await this.branch(branch);
     const { source } = await this.trusted();
-    await gate({ kind: 'branch_push', branch, remote: source });
     const env: NodeJS.ProcessEnv = authorization === undefined ? {}
       : { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.extraHeader', GIT_CONFIG_VALUE_0: `AUTHORIZATION: ${authorization}` };
-    await this.git(['push', '--no-verify', '--', source, `${commit}:refs/heads/${branch}`], undefined, env);
+    // 마지막 확인 → 즉시 전송: 관문 뒤에는 다른 await 없이 git을 띄운다(저장소 신뢰 확인은 바로 위에서 끝났다).
+    await gate({ kind: 'branch_push', branch, remote: source });
+    gate.signal?.throwIfAborted();
+    await run(this.path, ['push', '--no-verify', '--', source, `${commit}:refs/heads/${branch}`], undefined, env, [0], gate.signal);
   }
 
   /** 시스템 직접 push는 최초 생성 또는 세 초기화 경로만 바꾸는 단일 부모 커밋에 한한다. 호출자가 GitHub 키 목록과 main을 먼저 대조한다. */
@@ -528,10 +535,13 @@ export class GitRepository {
     if (!(await stat(await safePath(ssh.knownHosts)))?.isFile()) throw new GitSafetyError('서버 키 목록 파일을 확인할 수 없습니다.');
     const remote = `ssh://git@ssh.github.com:443${url.pathname.replace(/\/$/, '').replace(/\.git$/, '')}.git`;
     // 관문에는 등록된 https 원격(GitHub 저장소 주소)을 넘긴다. SSH 주소는 같은 저장소의 다른 표기다.
-    await gate({ kind: 'branch_push', branch: 'main', remote: (await this.trusted()).source });
-    await this.git(['push', '--no-verify', '--', remote, `${commit}:refs/heads/main`], undefined, {
+    const { source } = await this.trusted();
+    // 마지막 확인 → 즉시 전송.
+    await gate({ kind: 'branch_push', branch: 'main', remote: source });
+    gate.signal?.throwIfAborted();
+    await run(this.path, ['push', '--no-verify', '--', remote, `${commit}:refs/heads/main`], undefined, {
       GIT_ALLOW_PROTOCOL: 'ssh', GIT_SSH_COMMAND: systemSshCommand(ssh.knownHosts), GIT_SSH_VARIANT: 'ssh', SSH_AUTH_SOCK: ssh.socket,
-    });
+    }, [0], gate.signal);
   }
 
   async head(): Promise<string> {
