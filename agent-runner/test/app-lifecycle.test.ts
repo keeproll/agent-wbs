@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { ApiError, type ApiClient } from '../src/api/client.ts';
-import { RunnerApp } from '../src/app.ts';
+import { RunnerApp, type RunnerAppDeps } from '../src/app.ts';
 import { sealCredential } from '../src/github/credential.ts';
 import { DeployKeyError } from '../src/github/client.ts';
 import type { HostSources } from '../src/resources/host.ts';
@@ -47,12 +47,24 @@ const hostSources: HostSources = {
   readFile: (path) => Promise.resolve(({ '/etc/machine-id': 'm', '/proc/sys/kernel/random/boot_id': 'b', '/proc/meminfo': 'MemTotal: 1 kB\nSwapTotal: 0 kB\n' } as Record<string, string>)[path] ?? ''),
   hostname: () => 'h', kernel: () => 'k', cores: () => 1, diskFree: () => Promise.resolve(1),
 };
-function app(api: ApiClient = vi.fn() as unknown as ApiClient, githubFetch?: typeof fetch, warn: (message: string) => void = () => undefined) {
+function app(api: ApiClient = vi.fn() as unknown as ApiClient, githubFetch?: typeof fetch, warn: (message: string) => void = () => undefined, jobs?: RunnerAppDeps['jobs']) {
   return new RunnerApp({ state, api, home, version: 't', env: {}, warn, hostSources,
     cliRegistry: { latest: () => Promise.resolve('1.0.0'), install: () => Promise.resolve(), probe: () => Promise.resolve() },
     ...(githubFetch && { github: { repo: { owner: 'o', repo: 'r' }, mode: 'token' as const }, githubFetch }),
+    ...(jobs && { jobs }),
   });
 }
+
+test('M5-05: 조립한 job 실행은 같은 Execution을 사용하고 앱 종료가 진행 중인 흐름도 기다린다', async () => {
+  const a = app(undefined, undefined, undefined, { collect: async () => ({ report: { summary: '', changedFiles: [], evidence: [] } }) });
+  expect(a.jobs).toBeDefined();
+  if (!a.jobs) throw new Error('시도 흐름이 연결되지 않았습니다.');
+  const shutdown = vi.spyOn(a.jobs, 'shutdown').mockResolvedValue();
+  const controller = new AbortController();
+  controller.abort();
+  await a.run(controller.signal);
+  expect(shutdown).toHaveBeenCalledOnce();
+});
 const settle = (p: Promise<unknown>) => { const r = { value: 'pending' }; p.then(() => { r.value = 'resolved'; }, () => { r.value = 'rejected'; }); return r; };
 
 test.each([false, true])('M4-06: 연결 확인과 쓰기 전에 다른 deploy key를 경고하고 중단한다(경고 출력 실패=%s)', async (warningFails) => {

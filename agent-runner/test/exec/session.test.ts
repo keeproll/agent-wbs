@@ -88,6 +88,27 @@ test('기본 격리 거부는 start와 실제 CLI 실행 전에 멈춘다', asyn
   expect(t.fake.calls()).toEqual([]);
 });
 
+test('job 결합은 실제 출력 전달 뒤 확인하고 슬롯 반환 뒤 같은 임대 안에서 결과를 수집한다', async () => {
+  const t = await setup({ lines: [
+    { type: 'item.completed', item: { type: 'agent_message', text: '검증한 결과' } },
+    { type: 'turn.completed' },
+  ] });
+  const events: string[] = [];
+  const result = await t.exec.run(job, {
+    prompt: '추가 지시 데이터',
+    delivered: async () => { expect(t.fake.calls()).toHaveLength(1); events.push('delivered'); },
+    complete: async output => {
+      expect(t.requests.some(r => r.path.endsWith('/slots/release'))).toBe(true);
+      expect(t.sessions).toEqual([]);
+      expect(output.text).toBe('검증한 결과');
+      events.push('complete');
+    },
+  });
+  expect(result.ok).toBe(true);
+  expect(events).toEqual(['delivered', 'complete']);
+  expect(t.fake.calls()[0]?.stdin).toContain('추가 지시 데이터');
+});
+
 test('설치 실패면 시도를 만들지 않고 SUBAGENT_INSTALL_FAILED를 outbox에 남긴다', async () => {
   const t = await setup({ installBad: true });
   await expect(t.exec.run(job)).rejects.toMatchObject({ code: 'SUBAGENT_INSTALL_FAILED' });

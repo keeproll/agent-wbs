@@ -28,6 +28,7 @@ import { UsageTracker } from './resources/usage.ts';
 import type { State } from './state/state.ts';
 import { Execution, type ExecutionOptions } from './exec/session.ts';
 import { Launches } from './exec/launches.ts';
+import { AttemptFlow, type AttemptFlowOptions } from './jobs/attempt-flow.ts';
 
 /** 세션 실행 계층(M5)이 시도 하나를 실행하는 동안 등록하는 보유. 지금(M4)은 비어 있다. */
 export interface ActiveSession extends SessionState {
@@ -67,6 +68,8 @@ export interface RunnerAppDeps {
   inputIntervalMs?: number;
   /** M5 실행은 기존 격리 경계를 그대로 쓴다. 없으면 실제 실행을 거부한다(Q-08). */
   execution?: Pick<ExecutionOptions, 'prepare' | 'isolation' | 'verified'>;
+  /** 검증한 결과 수집 공급원이 연결된 경우에만 시도 흐름을 시작한다. */
+  jobs?: Pick<AttemptFlowOptions, 'collect' | 'taskCheck'>;
 }
 
 /** 서버 정책을 받기 전 입력 확인 기본 주기(5분, 서버 정책 inputCheckMinutes의 기본값과 같음). */
@@ -83,6 +86,7 @@ export const INPUT_INTERVAL_MS = 5 * 60_000;
  */
 export class RunnerApp {
   readonly execution: Execution;
+  readonly jobs: AttemptFlow | undefined;
   readonly runner: Runner;
   readonly heavy: HeavySemaphore;
   readonly reporter: ResourceReporter;
@@ -208,6 +212,15 @@ export class RunnerApp {
       updater: this.updater,
       prepare: () => Promise.reject(new Error('작업 폴더 준비 공급원이 연결되지 않았습니다.')),
       ...d.execution,
+    });
+    if (d.jobs) this.jobs = new AttemptFlow({
+      ...d.jobs, execution: this.execution, runner: this.runner, api: d.api,
+      epoch: () => d.state.snapshot.epoch,
+      identity: { get hostId() { return app.identity.hostId; }, get bootId() { return app.identity.bootId; } },
+      onError: error => {
+        if (authenticationFailed(error)) this.#halt?.(error);
+        else d.warn(`시도 흐름 실패: ${message(error)}`);
+      },
     });
   }
 
@@ -354,13 +367,16 @@ export class RunnerApp {
   }
 
   /** 매일 점검(준비 점검 → CLI 최신 확인·유휴 적용 → 모델)과 주기 보고를 건다. 종료가 시작된 뒤에는 등록하지 않는다. */
-  startSchedules(): void {
+  startSchedules(signal?: AbortSignal): void {
     if (this.#stopping) return;
     const onError = (what: string) => (error: unknown) => {
       // WBS 인증 실패(401/403)는 일반 실패가 아니다. Runner 토큰이 폐기된 것이므로 앱 전체를 멈춘다(contracts §1.1 표).
       if (authenticationFailed(error)) { this.#halt?.(error); return; }
       this.#d.warn(`${what}: ${message(error)}`);
     };
+    if (this.jobs) this.#timers.push(scheduleDaily(async () => {
+      await this.jobs?.poll(this.reporter.caps?.total ?? 0, signal);
+    }, { intervalMs: 1000, onError: onError('시도 예약') }));
     this.#timers.push(scheduleDaily(async () => {
       await this.checkReadiness();
       if (this.#d.cliUpdates !== false) {
@@ -417,7 +433,7 @@ export class RunnerApp {
         if (this.runner.ready) {
           try {
             await this.bootstrap(internal.signal);
-            if (!internal.signal.aborted) this.startSchedules();
+            if (!internal.signal.aborted) this.startSchedules(internal.signal);
           } catch (error) {
             if (internal.signal.aborted) return;
             if (authenticationFailed(error) || (error instanceof DeployKeyError && !error.retryable)) { halt(error); return; }
@@ -436,7 +452,8 @@ export class RunnerApp {
       const timers = this.#timers;
       this.#timers = [];
       await Promise.allSettled(timers.map((timer) => timer.stop()));
-      await this.execution.shutdown();
+      if (this.jobs) await this.jobs.shutdown();
+      else await this.execution.shutdown();
       signal.removeEventListener('abort', onAbort);
       this.#halt = undefined;
     }

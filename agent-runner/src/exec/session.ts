@@ -42,6 +42,22 @@ export interface ExecutionOptions {
   updater?: { tryClaim(): (() => void) | null; applyPending(): Promise<unknown> };
 }
 interface Resume { cwd: string; agent: Agent; model: string; effort: string; sessionId: string }
+export type AttemptOutput = Awaited<ReturnType<typeof runProcess>> & {
+  attemptId: string; cwd: string; headSha: string; ok: boolean; text: string;
+  observation: ReturnType<SubagentObserver['snapshot']>; reserved: number;
+  resultEvent: Extract<CliEvent, { type: 'result' }> | undefined;
+  tokens: { inputTokens: number; cachedInputTokens: number; outputTokens: number };
+};
+export interface AttemptOptions {
+  resume?: boolean;
+  signal?: AbortSignal;
+  prompt?: string;
+  started?: (attemptId: string) => Promise<void>;
+  /** CLI가 지시문을 읽고 출력을 시작한 뒤 한 번만 호출한다. */
+  delivered?: () => Promise<void>;
+  /** 물리 슬롯 반환 뒤에도 같은 임대와 종료 신호를 유지한다. */
+  complete?: (output: AttemptOutput, signal: AbortSignal) => Promise<void>;
+}
 
 /** 서버 등급과 fence(낡은 Runner를 막는 번호표)를 그대로 사용한다. */
 export class Execution {
@@ -105,7 +121,7 @@ export class Execution {
     return controller !== undefined;
   }
 
-  run(job: AttemptJob, options: { resume?: boolean; signal?: AbortSignal } = {}) {
+  run(job: AttemptJob, options: AttemptOptions = {}) {
     const key = `${this.#d.epoch()}:${job.id}`;
     if (this.#jobs.has(key)) return Promise.reject(new Error('이미 실행 중인 job입니다.'));
     this.#jobs.add(key);
@@ -181,7 +197,7 @@ export class Execution {
     }
   }
 
-  async #run(job: AttemptJob, options: { resume?: boolean; signal?: AbortSignal }) {
+  async #run(job: AttemptJob, options: AttemptOptions): Promise<AttemptOutput> {
     const d = this.#d, epoch = d.epoch(), role = job.payload.kind === 'dev' || job.payload.kind === 'rework' ? 'dev' : 'qa';
     if (!d.ready()) throw new Error('Runner 정리가 끝나기 전에는 실행하지 않습니다.');
     if (!d.isolation) throw new IsolationUndecidedError();
@@ -214,7 +230,7 @@ export class Execution {
       }
       const resume = previous && previous.cwd === work.cwd && previous.agent === job.payload.agent && previous.model === grade.model && previous.effort === grade.effort ? previous.sessionId : undefined;
       const definitions = (await this.#call('getTaskSubagents', { epoch, params: { taskKey: job.payload.taskKey }, query: { role } }, signal)).body;
-      const prompt = `${JSON.stringify(job.payload.instructions)}\n\n동시 하위 Agent 예산: ${budget}\n지정 하위 Agent: ${definitions.enabled ? definitions.items.map(i => i.key).join(', ') : '없음'}\n모델: ${grade.model}, Effort: ${grade.effort}\n입력 버전: ${job.payload.inputVersion}`;
+      const prompt = `${JSON.stringify(job.payload.instructions)}\n\n동시 하위 Agent 예산: ${budget}\n지정 하위 Agent: ${definitions.enabled ? definitions.items.map(i => i.key).join(', ') : '없음'}\n모델: ${grade.model}, Effort: ${grade.effort}\n입력 버전: ${job.payload.inputVersion}\n${options.prompt ?? ''}`;
       const launch = buildLaunch(job.payload.agent, d.binaries[job.payload.agent], { ...grade, cwd: work.cwd, prompt, ...(resume && { resume }) }, { env: d.env, ...(d.isolation && { isolation: d.isolation }) });
       const installedSubagents = await installSubagents(work.cwd, job.payload.agent, definitions, grade);
       signal.throwIfAborted();
@@ -224,8 +240,9 @@ export class Execution {
       if (!attemptId) throw new Error('start 응답에 attemptId가 없습니다.');
       this.#running.set(attemptId, controller);
       await this.#report('reportAttemptStatus', { epoch, params: { attemptId }, body: { fence: job.fence, status: 'running', model: grade.model, effort: grade.effort, at: new Date().toISOString(), ...(grade.adjust && { adjust: grade.adjust }) } }, signal);
+      await options.started?.(attemptId);
       const observer = new SubagentObserver(), decoder = new JsonlDecoder(), parse = createParser(job.payload.agent);
-      let reserved = 1 + budget, ok = false, sessionId: string | undefined;
+      let reserved = 1 + budget, ok = false, text = '', sessionId: string | undefined;
       let resultEvent: Extract<CliEvent, { type: 'result' }> | undefined;
       const tokens = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
       session = { attemptId, agent: job.payload.agent, observed: 0, reserved, state: 'ok', children: 1 };
@@ -238,6 +255,7 @@ export class Execution {
           observer.apply(event);
           if (event.type === 'result') { ok = event.ok; resultEvent = event; }
           if (event.type === 'session') sessionId = event.sessionId;
+          if (event.type === 'message') text = event.text;
           if (event.type === 'usage') { tokens.inputTokens += event.inputTokens; tokens.cachedInputTokens += event.cachedInputTokens; tokens.outputTokens += event.outputTokens; }
         }
         const snapshot = observer.snapshot();
@@ -252,13 +270,14 @@ export class Execution {
       };
       await mkdir(join(d.home, 'transcripts'), { recursive: true, mode: 0o700 });
       const transcript = await open(join(d.home, 'transcripts', `${createHash('sha256').update(attemptId).digest('hex')}.jsonl`), 'a', 0o600);
-      let result;
+      let result, delivered = false;
       try {
         result = await runProcess({ launches: this.launches, job: jobRef, launch, signal, register: async record => {
           await this.#report('reportJobProcess', { epoch, params: { id: job.id }, body: { fence: job.fence, processGroup: record.pgid ?? 0, cgroup: record.cgroup } }, signal);
           this.#assertStart(job.payload.agent, active.reserved, active);
         }, stdout: async bytes => {
           await transcript.write(bytes);
+          if (!delivered) { delivered = true; await options.delivered?.(); }
           apply(decoder.push(bytes));
         }, stdoutEnd: endStream });
         await transcript.sync();
@@ -272,6 +291,8 @@ export class Execution {
       await this.#report('releaseJobSlots', { epoch, params: { id: job.id }, body: { fence: job.fence, hostId: d.identity.hostId, proof: result.proof, at: new Date().toISOString() } });
       await this.launches.complete(result.launchId, result.proof);
       await this.launches.complete(preparation.launchId, { kind: 'no_process', bootId: d.identity.bootId });
+      d.sessions.splice(d.sessions.indexOf(session), 1);
+      session = undefined;
       // shortcut: CLI 기록 형식이 검증되기 전에는 실제 사용을 확정하지 않는다. M5-03 실증 뒤 기록 해석기를 연결한다.
       await d.outbox.enqueue('reportSubagentUsage', { epoch, params: { attemptId }, body: { fence: job.fence, confirm: 'partial', items: [] } });
       if (signal.aborted || !ok || result.code !== 0) {
@@ -279,7 +300,9 @@ export class Execution {
         else await this.#report('reportAttemptStatus', { epoch, params: { attemptId }, body: { fence: job.fence, status: 'failed', model: grade.model, effort: grade.effort, at: new Date().toISOString() } });
         await this.#report('releaseJob', { epoch, params: { id: job.id }, body: { fence: job.fence, hostId: d.identity.hostId, proof: result.proof, at: new Date().toISOString() } });
       }
-      return { ...result, attemptId, ...work, ok: ok && result.code === 0 && !signal.aborted, observation: observer.snapshot(), reserved, resultEvent, tokens };
+      const output = { ...result, attemptId, ...work, ok: ok && result.code === 0 && !signal.aborted, text: resultEvent?.text ?? text, observation: observer.snapshot(), reserved, resultEvent, tokens };
+      if (output.ok) await options.complete?.(output, signal);
+      return output;
     } catch (error) {
       if (error instanceof SubagentInstallError || (error instanceof ApiError && error.error?.code === 'SUBAGENT_INSTALL_FAILED')) {
         await this.#report('finishJob', { epoch, params: { id: job.id }, body: { fence: job.fence, status: 'failed', error: { code: 'SUBAGENT_INSTALL_FAILED', message: '하위 Agent 설치를 확인하지 못했습니다.' } } });
