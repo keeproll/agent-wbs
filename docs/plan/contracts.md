@@ -98,16 +98,14 @@
 | 400 | `VALIDATION_FAILED` `DEPENDENCY_SELF` `LIMIT_EXCEEDS_CAP` | 수정 안내, 재시도 없음 |
 | 401/403 | 위 표 | Runner는 중지·경보 |
 | 404 | `TASK_NOT_FOUND` `PROJECT_NOT_FOUND` `WBS_NODE_NOT_FOUND` `DEPENDENCY_NOT_FOUND` `ATTEMPT_NOT_FOUND` `MESSAGE_NOT_FOUND`, 전용 코드가 없는 자원은 `NOT_FOUND`★ `details{resource,id}` | 안내 |
-| 409 | `VERSION_CONFLICT` `EPOCH_MISMATCH` `DEPENDENCY_DUPLICATE` `RECIPIENT_DUPLICATE`★(G§8.5 수신자 중복) `DEPENDENCY_CYCLE` `TASK_HAS_SUCCESSORS` `EXTERNAL_WRITE_BLOCKED`★ `PROJECT_EXISTS` `INPUT_UNCHANGED` `ATTEMPT_CLOSED` `SCHEDULE_CYCLE` `INVALID_TRANSITION`★ `SPLIT_JUDGEMENT_REQUIRED`★ `ACTIVE_TASK_BLOCKED`★ `ORDER_NOT_PRESERVED`★ `GATE_NOT_PASSED`★ `CLAIM_REJECTED`★ `LEASE_LOST`★ `CLEANUP_PENDING`★ `IDEMPOTENCY_CONFLICT`★ `DECISIONS_PENDING`★ | 재시도하지 않고 최신 조회 |
+| 409 | `VERSION_CONFLICT` `EPOCH_MISMATCH` `DEPENDENCY_DUPLICATE` `RECIPIENT_DUPLICATE`★(G§8.5 수신자 중복) `DEPENDENCY_CYCLE` `TASK_HAS_SUCCESSORS` `EXTERNAL_WRITE_BLOCKED`★ `PROJECT_EXISTS` `INPUT_UNCHANGED` `ATTEMPT_CLOSED` `SCHEDULE_CYCLE` `INVALID_TRANSITION`★ `SPLIT_JUDGEMENT_REQUIRED`★ `ACTIVE_TASK_BLOCKED`★ `ORDER_NOT_PRESERVED`★ `GATE_NOT_PASSED`★ `MERGE_MISMATCH`★ `CLAIM_REJECTED`★ `LEASE_LOST`★ `CLEANUP_PENDING`★ `IDEMPOTENCY_CONFLICT`★ `DECISIONS_PENDING`★ | 재시도하지 않고 최신 조회 |
 | 412 | — 사용 안 함(409로 통일) | |
 | 422 | `SUBAGENT_INSTALL_FAILED`(job 결과 코드) | 시도 시작 안 함 |
 | 429 | `RATE_LIMITED`★ | `Retry-After` |
 | 500/503 | `INTERNAL` `UNAVAILABLE`★ | 다시 시도 / Runner 재시도 |
 
 - 표의 「위 표」는 §1 목록의 팀장 인증·Runner 인증 항목을 가리킨다.
-- **표 밖의 409 코드 `MERGE_MISMATCH`** (M7-04 조정자 결정 4, 2026-11-27)
-  - 병합 보고의 실제 부모·tree가 저장된 근거와 다를 때 쓴다(§3.6-6). 받은 쪽은 재시도하지 않고 사람 처리를 기다린다.
-  - 이 코드는 서버에 이미 있다(`ERROR_STATUS`). 그런데 위 표에 넣으면 표를 읽는 시험(`routes.test.ts`의 코드 수 35와 예외 처리)도 함께 고쳐야 한다. 그래서 표에 넣는 일은 그 시험을 고치는 코드 작업과 함께 한다.
+- `MERGE_MISMATCH`(M7-04 조정자 결정 4, 2026-11-27)는 병합 보고의 실제 부모·tree가 저장된 근거와 다를 때 쓴다(§3.6-6). 받은 쪽은 재시도하지 않고 사람 처리를 기다린다.
 - 409를 받으면 재시도하지 않는 이유: 409는 「지금 상태와 맞지 않는다」는 뜻이라, 같은 요청을 다시 보내도 또 실패한다. 최신 상태를 다시 읽어야 한다.
 
 **헷갈리기 쉬운 409 코드 구분**
