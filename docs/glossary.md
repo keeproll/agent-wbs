@@ -168,6 +168,7 @@
 - **orphaned** — host가 바뀌어 효력만 없앤 옛 잠금 상태(감사용). → data-model §2.5-1
 - **OS** — 운영체제(Operating System). 여기서는 리눅스(WSL2).
 - **outbox** — 보낼 것을 먼저 저장해 두고 나중에 보내는 대기함. 끊겨도 다시 보낼 수 있다. → architecture §2
+- **overflow-wrap: anywhere** — 한 줄에 다 들어가지 않는 긴 단어만 줄 끝에서 끊는 CSS 설정. 보통 글의 줄바꿈은 바꾸지 않는다. 보고서 PDF에서 긴 글이 칸 밖으로 넘치지 않게 쓴다.
 - **owner** — 이 프로젝트의 최종 결정권자. → open-questions
 - **P** — 프로토타입. `prototype/uiux/Main.dc.html`.
 - **parser** — 글로 된 파일(YAML·OpenAPI 등)을 읽어 프로그램이 다룰 구조로 바꾸는 코드.
@@ -271,6 +272,7 @@
 - **WBS (Work Breakdown Structure)** — 일을 단계·작업 묶음·Task로 쪼갠 구조. 이 제품의 이름이기도 하다.
 - **Web shell** — 메뉴·헤더·본문 영역을 갖춘 웹 화면의 뼈대(M0-04). 명령줄의 shell과는 다른 뜻이다.
 - **Wizard** — 여러 단계로 나눠 차례로 입력하는 화면. Task 생성 Wizard는 3단계다.
+- **word-break: keep-all** — 한글도 띄어쓰기에서만 줄을 바꾸게 하는 CSS 설정. 기본값은 한글 음절 사이 어디서나 줄을 바꾼다(예: 「개/발」). 보고서 PDF의 표 칸에 쓴다.
 - **worker** — 보고서·메일·알림·감시 같은 뒷일을 맡는 서버 프로세스. → architecture §2
 - **workspace (pnpm workspace)** — 한 저장소 안에 여러 패키지(`apps/web` 등)를 두고 함께 설치·빌드하는 pnpm 기능.
 - **worktree** — 같은 git 저장소를 작업마다 따로 꺼내 둔 작업 폴더. Agent는 이 안에서만 일한다. → architecture §1
@@ -323,7 +325,7 @@
 
 ## ㅂ
 
-- **배치 폭** — 문서를 줄 바꿈·열 너비로 배치할 때 기준이 되는 폭(px). 보고서 PDF는 이 폭과 인쇄 폭(A4 − 여백)의 비율로 줄이거나 키운다. → apps/api/src/pdf/README.md
+- **배치 폭** — 문서를 줄 바꿈·열 너비로 배치할 때 기준이 되는 폭(px). 보고서 PDF는 인쇄 폭(A4 − 좌우 여백 14mm = 182mm ≈ 688px)에 100%로 배치한다. → apps/api/src/pdf/README.md
 - **보수 계산** — 관측이 검증되지 않았을 때 자원 사용을 넉넉하게(1+예산) 잡는 계산.
 - **보조 속도 제한 (secondary rate limit)** — 짧은 시간에 요청이 몰리면 GitHub가 따로 거는 제한. 429나 「속도 제한 403」으로 온다. → contracts §6
 - **보호 경로** — Agent가 바꾸면 안 되는 경로(`prototype/`·`.agentwbs/`). → architecture §4
