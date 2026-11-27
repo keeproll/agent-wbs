@@ -13,6 +13,7 @@ import { basename, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { afterAll, expect, test } from 'vitest';
 import { AGENT_EXEC, AGENT_ROOT, AGENT_USER, agentControl, dedicatedUserIsolation, selectIsolation } from '../../src/cli/dedicated-user.ts';
+import { wrapperAgentGit } from '../../src/git/agent-git.ts';
 import type { IsolationLayer, Launch } from '../../src/cli/isolation.ts';
 import { Launches, processInfo } from '../../src/exec/launches.ts';
 import { GitRepository } from '../../src/git/repository.ts';
@@ -78,6 +79,8 @@ async function workdir(): Promise<string> {
   const script = join(dir, 'kernel-tree.py');
   await copyFile(join(import.meta.dirname, 'kernel-tree.py'), script);
   await chmod(script, 0o644);
+  // ci-run은 실행마다 새 HOME(.awbs-home)을 요구한다(조정자 결정 8). 실제 검사 사본은 GitRepository가 만든다.
+  await mkdir(join(dir, '.awbs-home'), { mode: 0o770 }); await chmod(join(dir, '.awbs-home'), 0o770);
   return dir;
 }
 /** Agent가 만든 파일을 Runner가 지울 수 있게 래퍼 fix-perms로 되돌린 뒤 지운다(실제 agentControl 경로). */
@@ -278,7 +281,7 @@ test.runIf(systemdRun)('새 래퍼 사본 + 실제 사용자 scope: ci-run fake 
   const work = join(area, 'worktrees', 'p1', 'ci-1');
   const controller = new AbortController();
   try {
-    for (const d of [work, join(area, 'inputs'), join(area, 'cli', 'codex', '1.0.0', 'bin'), join(area, 'cli', 'codex', '1.0.0', 'vendor'), join(root, 'node')]) await mkdir(d, { recursive: true });
+    for (const d of [work, join(work, '.awbs-home'), join(area, 'inputs'), join(area, 'cli', 'codex', '1.0.0', 'bin'), join(area, 'cli', 'codex', '1.0.0', 'vendor'), join(root, 'node')]) await mkdir(d, { recursive: true });
     await copyFile(join(import.meta.dirname, 'kernel-tree.py'), join(work, 'kernel-tree.py'));
     for (const f of [join(area, 'cli', 'codex', '1.0.0', 'bin', 'codex'), join(area, 'cli', 'codex', '1.0.0', 'vendor', 'bwrap')]) { await writeFile(f, '#!/bin/sh\necho cli\n'); await chmod(f, 0o755); }
     const conf = join(root, 'agent-exec.conf');
@@ -315,6 +318,55 @@ test.runIf(systemdRun)('새 래퍼 사본 + 실제 사용자 scope: ci-run fake 
     facts.wrapperCopy = { unit, cgroup: relative, inScope: procs.length, descendants: rows.map(r => r.role), proof: result.proof };
   } finally {
     controller.abort();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * 조정자 결정 6(fix2): 새 래퍼 사본(git-inspect·git-bundle)을 실제 사용자 scope 안에서 GitRepository 전용 계정 흐름에 붙인다.
+ * 계정 전환만 fake sudo(Runner 계정 그대로)로 대신한다. 리뷰어 PoC 설정은 Agent 쪽 git에서도 실행되지 않아야 한다(늦은 가져오기 끔).
+ */
+test.runIf(systemdRun)('새 래퍼 사본 + 실제 scope: 결과는 bundle로만 가져오고, 검사는 Agent 쪽 git이 하며, PoC 설정은 실행되지 않는다', async () => {
+  const root = await mkdtemp(join(process.env.AWBS_TEST_TMP ?? tmpdir(), 'wrapper-git-'));
+  const me = spawnSync('id', ['-un'], { encoding: 'utf8' }).stdout.trim();
+  const area = join(root, 'srv');
+  const git = (cwd: string, ...args: string[]) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@x', '-c', 'commit.gpgSign=false', ...args],
+    { cwd, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' } }).stdout.trim();
+  try {
+    for (const d of [join(area, 'worktrees'), join(area, 'inputs'), join(area, 'cli'), join(root, 'node'), join(root, 'src')]) await mkdir(d, { recursive: true });
+    const conf = join(root, 'agent-exec.conf');
+    await writeFile(conf, `AGENT_USER=${me}\nRUNNER_USER=${me}\nRUNNER_HOME=${join(root, 'runner-home')}\nAGENT_ROOT=${area}\nNODE_DIR=${join(root, 'node')}\n`);
+    const exec = join(root, 'awbs-agent-exec');
+    await writeFile(exec, readFileSync(WRAPPER_SOURCE, 'utf8').replace('\nCONF=/etc/agentwbs/agent-exec.conf\n', `\nCONF=${conf}\n`)); await chmod(exec, 0o755);
+    const sudo = join(root, 'fake-sudo');
+    await writeFile(sudo, '#!/bin/bash\n[[ $1 == -n && $2 == -u && $4 == -- ]] || exit 9\nshift 4\nexec env -i "$@"\n'); await chmod(sudo, 0o755);
+    const remote = join(root, 'remote.git');
+    spawnSync('git', ['init', '-q', '--bare', '-b', 'main', remote]);
+    await writeFile(join(root, 'src', 'a.txt'), 'a');
+    git(join(root, 'src'), 'init', '-q', '-b', 'main'); git(join(root, 'src'), 'add', '.'); git(join(root, 'src'), 'commit', '-qm', 'a'); git(join(root, 'src'), 'push', '-q', remote, 'main');
+    const head = git(join(root, 'src'), 'rev-parse', 'HEAD');
+    const repo = await GitRepository.clone(join(root, 'runner'), 'project', remote, { agentRoot: area, restorePermissions: null, agentGit: wrapperAgentGit({ user: me, exec, sudo }) });
+    // 1) 시도 작업 폴더에 Agent가 커밋 → bundle로만 가져온다.
+    const work = await repo.createWorktree('task-1', 'agent/TASK-1', head);
+    await writeFile(join(work, 'b.txt'), 'b'); git(work, 'add', '.'); git(work, 'commit', '-qm', 'agent');
+    const agentHead = git(work, 'rev-parse', 'HEAD');
+    expect(await repo.importWorktree('task-1', 'agent/TASK-1')).toBe(agentHead);
+    // 2) 검사 사본: 깨끗하면 통과, 추적 안 된 파일이 있으면 거부(Agent 쪽 git-inspect).
+    const ci = await repo.createTaskCheckWorktree('ci-1', head);
+    await repo.taskCheckPath('ci-1', head);
+    await writeFile(join(ci, 'extra.txt'), 'x');
+    await expect(repo.taskCheckPath('ci-1', head)).rejects.toThrow('커밋하지 않은 변경');
+    // 3) 리뷰어 PoC: promisor·uploadpack을 심어도 늦은 가져오기를 하지 않아 명령이 실행되지 않는다(Agent 쪽에서도).
+    const poc = await repo.createTaskCheckWorktree('ci-poc', head);
+    const marker = join(root, 'PWNED');
+    git(poc, 'config', 'core.repositoryformatversion', '1'); git(poc, 'config', 'extensions.partialClone', 'x');
+    git(poc, 'config', 'remote.x.url', remote); git(poc, 'config', 'remote.x.promisor', 'true');
+    git(poc, 'config', 'remote.x.uploadpack', `id -un > ${marker}; git-upload-pack`);
+    await writeFile(join(poc, '.git', 'refs', 'heads', 'agent', 'ci-poc'), '1'.repeat(40) + '\n');
+    await expect(repo.taskCheckPath('ci-poc', head)).rejects.toThrow();
+    expect(existsSync(marker)).toBe(false);
+    facts.agentGitCopy = { importedHead: agentHead, untrackedRejected: true, pocMarker: existsSync(marker) };
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });

@@ -102,7 +102,10 @@ keeproll ALL=(awbs-agent) NOPASSWD: /usr/local/libexec/awbs-agent-exec
   - 왜: CLI 묶음 안에는 `rg`·`bwrap` 같은 다른 실행 파일도 있다. `bwrap`은 임의 명령을 띄울 수 있으므로 진입점만 받는다.
     - CLI가 세션 안에서 스스로 부르는 `rg` 등은 같은 계정·같은 scope의 자식이라 따로 허용할 필요가 없다.
   - 다른 Agent의 CLI도 거부한다.
+- `git-inspect --cwd <작업 폴더>`·`git-bundle --cwd <작업 폴더> --branch <이름>`(fix2, 조정자 결정 6): Agent 작업 폴더의 git을 Agent 계정이 돌린다. 시스템·전역 설정 없음, `GIT_ALLOW_PROTOCOL=none`, `GIT_NO_LAZY_FETCH=1`, hook·fsmonitor 끔. Runner는 사용자 scope 안에서 부르고 끝나면 scope를 비운다.
+- `cli-version --tool claude|codex|pnpm -- <진입점>`(fix2, 조정자 결정 8): 새로 설치한 CLI의 `--version`을 Agent 계정으로 실행한다(`install-agent-cli.sh`가 쓴다).
 - `ci-run`(①·CI 검사 명령, 조정자 결정 1, fix1): Agent 코드의 시험·빌드를 Agent 계정으로 실행한다.
+  - `--home <작업 폴더>/.awbs-home`이 필수다(fix2, 조정자 결정 8). 실행마다 새 HOME·TMPDIR(pnpm 저장소 포함)라 다른 Task와 공유하지 않는다.
   - 작업 폴더는 `run`과 같은 규칙(worktrees 안)이다.
   - 명령은 이름(예: `pnpm`)이면 고정 PATH(`<Agent node>:/srv/agentwbs/cli/pnpm/current/bin:/usr/local/bin:/usr/bin:/bin`)에서 찾고, 경로면 작업 폴더 안의 실행 파일만 받는다.
   - 환경 변수는 `LANG`·`LC_ALL`·`TZ`·`CI`·`NODE_ENV`·`FORCE_COLOR`·`NO_COLOR`·`AWBS_REPORT`·`AWBS_REPORT_NONCE`·`AWBS_EVIDENCE_DIR`만, 값은 경로·짧은 낱말 모양만 받는다.
@@ -443,8 +446,11 @@ bash agent-runner/scripts/isolation/remove-agent-user.sh --purge-work     # 작�
   - 계정 삭제(`userdel`)도 같은 구조다. 그래서 위험은 낮다고 보고 고치지 않고 남긴다.
   - 줄이는 방법(제안): 숫자 대신 계정 이름으로 신호 보내기(`sudo -u awbs-agent -- kill -KILL -1`). 이름을 번호로 바꾸는 일과 신호가 한 명령 안에서 일어난다.
 - **`/tmp`·`/var/tmp`·`/dev/shm`에 Agent가 만든 파일은 제거 뒤 숫자 UID로 남는다.** 제거 스크립트는 이 공용 폴더를 지우지 않는다(다른 계정 파일과 섞여 있기 때문). 재부팅하면 `/tmp`·`/dev/shm`은 비워진다.
-- **Agent가 작업 폴더의 git 설정을 바꿀 수 있다.** Runner가 그 폴더에서 git을 실행하면 바뀐 설정이 Runner 권한으로 돌 수 있다.
-  - 지금 `importWorktree`는 bare 저장소에서 `fetch`만 하고 `--upload-pack`을 고정한다. 이 경로가 계정이 다른 폴더에서도 안전한지 M5-02 연결 때 다시 검토한다.
+- **Agent가 작업 폴더의 git 설정을 바꿀 수 있다.** 그래서 Runner 계정 git은 그 폴더에서 돌지 않는다(fix2, 조정자 결정 6).
+  - 작업 폴더 준비는 Runner 전용 준비 폴더(0700)에서 끝낸 뒤 넘기고, HEAD·상태는 래퍼 `git-inspect`, 결과는 래퍼 `git-bundle`(Agent 계정)로만 받는다. 자세한 것은 `src/git/README.md` 「전용 계정 배치의 경계」.
+  - 남은 것: 같은 Agent 계정의 다른 세션은 여전히 검사 사본·작업 폴더를 바꿀 수 있다(목록은 못 보게 막음, 0710). 결과의 무결성(시험이 정말 그 코드로 돌았나)은 같은 계정 안에서는 보장하지 못한다.
+- **래퍼는 Runner를 막는 경계가 아니다.** Runner 계정을 Agent 계정으로 바꾸는 「문」이다. `ci-run`은 고정 PATH의 아무 명령이나 받는다. 결정 4(「`run`은 진입점만」)는 `run` 안의 규칙일 뿐이다.
+- **하위 Agent 정의 설치(`exec/install.ts`)는 Runner 계정이 작업 폴더에 쓴다**(lstat 확인 뒤 쓰기, 링크 바꿔치기 틈). 시도 흐름이 꺼져 있어 지금은 쓰이지 않는다. 시도 흐름을 켜기 전에 Agent 계정 쓰기로 옮겨야 한다(fix2 보고 「새 발견」).
 
 ## 12. 후속 연결 작업
 

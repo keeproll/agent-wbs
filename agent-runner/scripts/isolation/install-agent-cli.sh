@@ -70,7 +70,9 @@ act() {
 FAILED=0
 for agent in claude codex pnpm; do
   pkg=@openai/codex
-  scripts=()
+  # 설치 스크립트: claude만 허용한다. codex·pnpm은 스크립트가 필요 없으므로 아예 끈다(fix2 방어 재점검).
+  # 왜: 옛 npm(10 이하)은 --allow-scripts를 무시하고 모든 설치 스크립트를 이 스크립트를 실행한 Runner 계정으로 돌린다.
+  scripts=(--ignore-scripts)
   if [[ $agent == claude ]]; then pkg=@anthropic-ai/claude-code; scripts=(--allow-scripts=@anthropic-ai/claude-code); fi
   if [[ $agent == pnpm ]]; then pkg=pnpm; fi
   step "$agent ($pkg)"

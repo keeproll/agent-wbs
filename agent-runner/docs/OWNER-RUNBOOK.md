@@ -192,7 +192,7 @@ pnpm -C agent-runner start
 
 ---
 
-## 래퍼·CLI를 바꾼 뒤(fix1: ci-run·진입점 규칙·pnpm)
+## 래퍼·CLI를 바꾼 뒤(fix1: ci-run·진입점 규칙·pnpm / fix2: git-inspect·git-bundle·cli-version·ci-run --home)
 
 래퍼(`awbs-agent-exec`)를 고치면 설치본(`/usr/local/libexec/awbs-agent-exec`)은 저절로 바뀌지 않습니다. 아래를 순서대로 실행합니다.
 sudoers 규칙 한 줄은 바뀌지 않습니다(래퍼 하나만 허용).
@@ -205,7 +205,7 @@ sudoers 규칙 한 줄은 바뀌지 않습니다(래퍼 하나만 허용).
    bash agent-runner/scripts/isolation/setup-agent-user.sh 2>&1 | tee ~/awbs-setup-logs/fix1-setup.log; echo "exit=${PIPESTATUS[0]}"
    ```
 
-3. ①·CI가 쓸 pnpm을 설치합니다(관리자 권한 없음).
+3. ①·CI가 쓸 pnpm을 설치합니다(관리자 권한 없음). 새 CLI의 `--version` 확인은 2번에서 설치한 래퍼로 Agent 계정이 합니다(비밀번호 묻지 않음).
 
    ```bash
    bash agent-runner/scripts/isolation/install-agent-cli.sh 2>&1 | tee ~/awbs-setup-logs/fix1-cli.log; echo "exit=${PIPESTATUS[0]}"
@@ -220,6 +220,7 @@ sudoers 규칙 한 줄은 바뀌지 않습니다(래퍼 하나만 허용).
    ```
 
 - **성공이면:** 2·3단계 `exit=0`, `same`, 확인 스크립트 `결과: FAIL 0개`, pnpm `current → 버전`.
+- **CI 자동 실행은 기본 꺼짐입니다**(조정자 결정 7). 켜려면 `agent-runner/.env`에 `AWBS_CI_AUTO=1` 한 줄을 더하고 Runner를 다시 시작합니다.
 - **실패하면:** 그 단계의 로그 파일과 마지막 `exit=` 줄을 보내 주세요.
 
 ## 되돌리기
