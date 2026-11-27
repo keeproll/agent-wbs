@@ -109,10 +109,14 @@ test('기준 렌더가 실패하거나 렌더러가 없으면 비교 불가로 �
     shoot(f, red);
     const failing: BaselineRenderer = async () => { throw new Error('chromium 없음'); };
     expect(await runNightCheck(night(f, failing), '2026-11-27')).toMatchObject({ status: 'fail', failStep: 'visual', screens: [{ name: 'wbs', status: 'missing' }] });
-    expect(f.final().logExcerpt).toContain('기준 이미지');
+    expect(f.final().logExcerpt).toContain('기준 이미지를 렌더하지 못했습니다: chromium 없음');
     expect(await runNightCheck(night(f), '2026-11-28')).toMatchObject({ status: 'fail', failStep: 'visual', screens: [{ name: 'wbs', status: 'missing' }] });
+    expect(f.final().logExcerpt).toContain('기준 이미지 렌더러가 연결되지 않았습니다');
     const notPng: BaselineRenderer = async () => Buffer.from('not png');
     expect(await runNightCheck(night(f, notPng), '2026-11-29')).toMatchObject({ status: 'fail', screens: [{ name: 'wbs', status: 'missing' }] });
+    expect(f.final().logExcerpt).toContain('PNG가 아닙니다');
+    const dirs = await readdir(join(f.home, 'ci', 'baselines'));
+    for (const dir of dirs) expect(await readdir(join(f.home, 'ci', 'baselines', dir))).toEqual([]);
   } finally { await f.close(); }
 });
 
@@ -125,7 +129,7 @@ test('Playwright 렌더러는 main 파일만 내보내고 밖으로 나가는 �
     route: async (_: string, h: Handler) => { handler = h; },
     goto: async (url: string) => {
       log.push(`goto ${url}`);
-      for (const u of ['http://baseline.invalid/prototype/uiux/app.css', 'https://cdn.example.com/x.js', 'http://baseline.invalid/src/secret.ts']) {
+      for (const u of ['http://baseline.invalid/prototype/uiux/app.css', 'https://cdn.example.com/prototype/uiux/app.css', 'http://baseline.invalid/src/secret.ts']) {
         await handler?.({ request: () => ({ url: () => u }),
           fulfill: async r => { log.push(`fulfill ${u} ${r.contentType} ${r.body.toString()}`); },
           abort: async () => { log.push(`abort ${u}`); } });
@@ -141,12 +145,13 @@ test('Playwright 렌더러는 main 파일만 내보내고 밖으로 나가는 �
   }) };
   const render = createPlaywrightRenderer(chromium);
   const image = await render({ entry: 'prototype/uiux/Main.dc.html', fragment: '#wbs', settings: BASELINE_RENDER,
-    read: async path => { const v = files[path]; if (v === undefined) throw new Error('없음'); return Buffer.from(v); } });
+    // 렌더러 스스로도 경로를 거른다. read가 무엇이든 내주더라도 prototype/uiux 밖은 막아야 한다.
+    read: async path => Buffer.from(files[path] ?? `leaked ${path}`) });
   expect(image).toBe(red);
   expect(log).toContain(`context ${JSON.stringify({ viewport: BASELINE_RENDER.viewport, deviceScaleFactor: 1, locale: 'ko-KR', timezoneId: 'Asia/Seoul', reducedMotion: 'reduce', javaScriptEnabled: true })}`);
   expect(log).toContain('goto http://baseline.invalid/prototype/uiux/Main.dc.html#wbs');
   expect(log).toContain('fulfill http://baseline.invalid/prototype/uiux/app.css text/css body{}');
-  expect(log).toContain('abort https://cdn.example.com/x.js');
+  expect(log).toContain('abort https://cdn.example.com/prototype/uiux/app.css');
   expect(log).toContain('abort http://baseline.invalid/src/secret.ts');
   expect(log.some(l => l.startsWith('style') && l.includes(BASELINE_RENDER.font))).toBe(true);
   expect(log).toContain(`shot ${JSON.stringify({ type: 'png', fullPage: false, animations: 'disabled', caret: 'hide' })}`);

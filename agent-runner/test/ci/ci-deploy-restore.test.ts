@@ -119,3 +119,20 @@ test('대상 확인(runner:target)에서 멈춘 실패는 아무것도 바꾸지
     expect(f.calls).toHaveLength(0);
   } finally { await f.close(); }
 });
+
+test('복구 단계 하나라도 실패하면 서비스가 응답해도 복구 실패다', async () => {
+  const f = await ciFixture();
+  try {
+    const w = world(f);
+    const a = f.main;
+    await runDeployCheck(deploy(f, w.fetch, a));
+    const b = await advance(f, 'b');
+    f.script(async ({ name, env }) => {
+      if (name === 'up') { w.state.running = env.AWBS_DEPLOY_COMMIT ?? null; return { code: env.AWBS_DEPLOY_COMMIT === b ? 1 : 0 }; }
+      return { code: name === 'browser' ? 1 : 0 };
+    });
+    const out = await runDeployCheck(deploy(f, w.fetch, b));
+    expect(w.state.running).toBe(a);
+    expect(out.restore).toMatchObject({ commit: a, status: 'fail', detail: 'browser 실패' });
+  } finally { await f.close(); }
+});

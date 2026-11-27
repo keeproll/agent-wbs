@@ -147,11 +147,13 @@ test('실패하면 마지막 통과 이후 main 커밋을 원인 후보로 남�
   try {
     f.script(async () => ({ code: 0 }));
     await runNightCheck(options(f), '2026-11-27');
+    expect(f.final()).not.toHaveProperty('causeCandidates');
     await file(join(f.source, 'bad'), 'x'); const bad = commit(f.source); git(f.source, 'push', f.remote, 'main');
     f.script(async ({ name }) => ({ code: name === 'e2e' ? 1 : 0 }));
     const result = await runNightCheck(options(f), '2026-11-28');
     expect(result).toMatchObject({ status: 'fail', suspects: [bad] });
     expect(f.final().note).toContain(bad.slice(0, 7));
+    expect(f.final().causeCandidates).toEqual([{ commit: bad }]);
     const third = await runNightCheck(options(f), '2026-11-29');
     expect(third.suspects).toEqual([bad]);
   } finally { await f.close(); }

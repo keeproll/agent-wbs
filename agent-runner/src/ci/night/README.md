@@ -63,6 +63,8 @@ M7-06에서 실제 실행기·API에 연결한다. 지금은 job 처리 흐름�
 
 Runner는 ③④의 각 단계 명령에 아래 환경 변수를 준다.
 
+- ③에만: `AWBS_SCREEN_WIDTH`, `AWBS_SCREEN_HEIGHT` — 앱 화면을 찍을 크기(기준 이미지와 같은 1440×900)
+
 - `AWBS_REPORT`: 단계가 결과를 JSON으로 쓸 파일의 절대 경로
 - `AWBS_EVIDENCE_DIR`: 스크린샷 같은 근거 파일을 둘 폴더의 절대 경로
 - ④에만 주는 변수는 deploy/README.md에 있다.
@@ -108,7 +110,9 @@ Runner는 ③④의 각 단계 명령에 아래 환경 변수를 준다.
   - 왜: 단계가 미리 심은 링크를 Runner가 따라가 쓰면 다른 작업의 근거를 덮어쓴다.
 - 비교 기준(화면 기준 이미지·응답 시간 기준)은 main에 고정된 정의에서만 읽는다. 실행 출력이 바꿀 수 없다.
 - 기준이 있는 측정이 빠지거나 이름이 바뀌면 그 단계는 실패다.
-- 한계: Runner와 단계는 같은 사용자 권한으로 돈다. 확인과 쓰기 사이에 폴더를 바꿔치기하는 경쟁까지 운영체제 수준으로 막지는 않는다.
+- 한계: 지금은 Runner와 단계가 같은 사용자 권한으로 돈다.
+  - 그래서 확인과 쓰기 사이에 폴더를 바꿔치기하는 경쟁(TOCTOU: 확인한 시점과 사용하는 시점 사이의 틈)까지는 이 코드만으로 막지 못한다.
+  - 이 틈은 Q-08에서 단계를 전용 계정으로 실행해 막는다(조정자 결정 10). 전용 계정은 Runner 폴더에 쓸 권한이 없다.
 
 ## 판정 규칙
 
@@ -124,8 +128,9 @@ Runner는 ③④의 각 단계 명령에 아래 환경 변수를 준다.
 - 앞 시도에서 실패했는데 마지막 결과가 통과인 테스트는 「불안정 후보」다.
   - 불안정 후보는 통과를 막지 않는다.
 - 격리된 테스트가 실패하면 결과는 남기되 통과를 막지 않는다.
-  - 격리 목록은 정책의 `ci.quarantined[]`(테스트 이름 목록, 조정자 결정 1)에서 받는다. `policyQuarantine(policy.ci)`로 바꾼다.
-  - 서버 계약에 필드가 추가되기 전에는 필드가 없어 빈 목록이다.
+  - 격리 목록은 정책(`GET /api/runner/policy`)의 `ci.quarantined[]`에서 받는다(조정자 결정 1, M7-04 14b60db).
+    - 값은 `flaky_tests.test_key`다. 단계 보고서 `tests[].key`와 같은 이름이다.
+    - 필수 필드다. `policyQuarantine(policy.ci)`가 판정 집합으로 바꾸고, 없거나 형식이 틀리면 거부한다.
   - 격리를 해제하면 다음 실행부터 다시 판정에 들어간다.
 - 종료 코드가 실패인데 실패 테스트가 하나도 없으면 실패다. 격리로 덮지 않는다.
   - 왜: 테스트가 아닌 다른 이유(설정 오류 등)로 깨진 것까지 격리가 숨기면 안 된다.
@@ -145,20 +150,35 @@ Runner는 ③④의 각 단계 명령에 아래 환경 변수를 준다.
 
 ### 화면 비교
 
-- 기준 이미지는 main 정의의 night 단계 선택 필드 `screens`에 적는다(원칙 A).
+- 기준은 main 정의의 night 단계 선택 필드 `screens`에 적는다(원칙 A).
+  - 값은 `prototype/uiux/` 아래 HTML 파일이다. 화면을 고르는 `#조각`을 붙일 수 있다.
 
 ```yaml
   night:
     - name: visual
       argv: [node, capture.mjs]
       screens:
-        wbs: prototype/uiux/shots/wbs.png
-        task: prototype/uiux/shots/task.png
+        wbs: prototype/uiux/Main.dc.html#wbs
+        task: prototype/uiux/Main.dc.html#task
 ```
 
-- 경로는 `prototype/uiux/` 아래 `.png` 파일만 쓸 수 있다.
-  - 왜: `prototype/`은 보호 경로라 Agent가 Task에서 바꿀 수 없다. 기준을 자기 화면으로 바꾸지 못한다.
-- Runner는 기준 이미지를 고정한 main 커밋의 Git 객체에서 읽는다. 작업 사본이나 단계 출력은 보지 않는다.
+- 기준 이미지는 Runner가 직접 만든다(조정자 결정 8). 커밋한 PNG는 요구하지 않는다.
+  - Runner 소유 렌더러가 고정한 main 커밋의 HTML을 렌더해 PNG로 찍는다.
+    - 렌더러는 단계(정의의 명령)가 아니라 Runner가 실행한다. 그래서 Agent가 만든 코드가 기준을 만들 수 없다.
+  - 렌더 설정은 `BASELINE_RENDER`로 고정한다.
+    - 뷰포트 1440×900, 배율 1
+    - 글꼴 `Noto Sans KR`(CSS로 모든 요소에 강제)
+    - 언어 `ko-KR`, 시간대 `Asia/Seoul`, 애니메이션·커서 끔
+    - 왜: 같은 main이면 언제 렌더해도 같은 기준이 나와야 한다.
+  - 렌더러는 모든 요청을 가로채 main의 `prototype/uiux/` 파일로만 응답하고, 그 밖의 주소(CDN 등)는 막는다.
+    - 왜: 네트워크에서 받은 글꼴·스크립트가 바뀌면 같은 main이라도 기준이 달라진다.
+  - 만든 기준 이미지는 `<AWBS_HOME>/ci/baselines/<main SHA>/`에 보관한다. 같은 main이면 다시 렌더하지 않는다.
+    - 보관본은 링크를 따라가지 않고 읽는다. 손상됐으면 다시 렌더한다.
+  - 렌더가 실패하거나 렌더러가 연결되지 않았으면 그 화면은 `missing`(비교 불가)이고 실패다.
+  - 실제 브라우저 렌더러(`createPlaywrightRenderer`)는 M7-06에서 Playwright의 chromium을 넘겨 연결한다.
+    - Runner에 Playwright 의존성을 더하는 일(lockfile 변경)은 그때 한다.
+- 단계는 앱 화면도 같은 크기로 찍어야 한다. Runner가 `AWBS_SCREEN_WIDTH=1440`, `AWBS_SCREEN_HEIGHT=900`을 준다.
+  - 크기가 다르면 화면 전체가 차이(`diff`, ratio 1)로 기록된다.
 - 단계는 화면 이름과 앱 스크린샷만 보고한다(`screens[]`의 `name`·`actual`).
 - Runner가 두 PNG를 픽셀 단위로 비교한다.
   - 왜: 단계가 「같다」고 말한 것이 아니라 Runner가 직접 비교한 결과를 근거로 남긴다(G L466).
@@ -172,7 +192,6 @@ Runner는 ③④의 각 단계 명령에 아래 환경 변수를 준다.
   - 근거: 프로토타입 CI-0120은 차이 2개가 있어도 통과다(P L3539).
 - 기준이 있는 화면이 보고서에서 빠지거나 이름이 바뀌면 `missing`이고 그 단계는 실패다.
   - 왜: 비교하지 못한 화면을 「차이 없음」으로 보면 안 된다.
-- 계획 문서에는 기준 PNG를 누가 만들어 커밋하는지 아직 없다(보고함).
 - 읽을 수 있는 형식은 8비트 RGB·RGBA, 비interlace PNG다. Playwright 스크린샷 형식이다.
 
 ### 주요 API 응답 시간
@@ -208,10 +227,9 @@ Runner는 ③④의 각 단계 명령에 아래 환경 변수를 준다.
 
 - 실패하면 마지막으로 통과한 야간 점검의 커밋 이후 main에 들어온 커밋을 원인 후보로 남긴다.
   - main의 first-parent(병합 커밋의 첫 번째 부모를 따라간 줄기) 커밋만 센다. PR 하나가 병합 커밋 하나다.
-- 원인 후보는 지금 note에 짧은 SHA로 적는다.
-- CI 보고 계약에 `causeCandidates[{commit}]`가 추가되면(조정자 결정 5, M7-04) 결과 보고에 함께 보낸다.
-  - `causeCandidates(result)`가 그 형식으로 바꿔 준다.
-  - commit을 Task와 잇는 것은 서버가 병합 기록으로 한다.
+- 원인 후보는 결과 보고의 `causeCandidates: [{ commit }]`로 보낸다(조정자 결정 5, M7-04 14b60db). note에도 짧은 SHA로 적는다.
+  - Runner는 커밋만 보낸다. commit을 Task와 잇는 것은 서버가 병합 기록으로 한다.
+  - 후보가 없으면 보내지 않는다. 서버는 생략을 「이전 값 보존」으로, `[]`를 「비움」으로 본다. 새 실행이라 보존할 이전 값이 없다.
 
 ## 근거와 보존
 

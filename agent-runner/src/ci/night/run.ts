@@ -80,18 +80,17 @@ export async function readNightState(home: string): Promise<NightState> {
 }
 
 /**
- * 정책의 격리 목록(`policy.ci.quarantined[]`, 조정자 결정 1)을 판정용 집합으로 바꾼다.
- * 서버 계약에 필드가 추가되기 전에는 필드가 없으므로 빈 집합이다. 형식이 틀리면 추정하지 않고 거부한다.
+ * 정책의 격리 목록(`GET /runner/policy`의 `ci.quarantined[]`, 조정자 결정 1)을 판정용 집합으로 바꾼다.
+ * 값은 `flaky_tests.test_key`로, 단계 보고서의 `tests[].key`와 같은 이름이다. 필수 필드라 없거나 형식이 틀리면 추정하지 않고 거부한다.
  */
 export function policyQuarantine(ci: { quarantined?: unknown }): Set<string> {
-  if (ci.quarantined === undefined) return new Set();
   if (!Array.isArray(ci.quarantined) || !ci.quarantined.every(k => typeof k === 'string' && k !== '')) throw new TypeError('격리 목록 형식이 올바르지 않습니다.');
   return new Set(ci.quarantined as string[]);
 }
 
 /**
  * 원인 후보를 CI 보고 계약 형식(`causeCandidates[{commit}]`, 조정자 결정 5)으로 바꾼다.
- * 서버 계약에 필드가 추가되면 결과 보고에 넣는다. 그 전에는 note에만 짧은 SHA로 남긴다.
+ * Runner는 커밋만 보낸다. commit→Task 연결은 서버가 병합 기록으로 한다(M7-04 14b60db).
  */
 export function causeCandidates(result: Pick<NightResult, 'suspects'>): { commit: string }[] {
   return result.suspects.map(commit => ({ commit }));
@@ -274,6 +273,8 @@ export async function runNightCheck(options: NightOptions, date: string): Promis
     ...(flakyKeys.length && { flakyTests: flakyKeys.map(testKey => ({ testKey, rate: flakyRate(history, testKey), lastFailedAt: tracked[testKey] ?? finishedAt })) }),
     ...(result.note && { note: result.note }),
     ...(logExcerpt && { logExcerpt }),
+    // 새 실행이므로 후보가 없으면 보내지 않는다(서버는 생략을 「이전 값 보존」으로, []를 「비움」으로 본다).
+    ...(result.suspects.length && { causeCandidates: causeCandidates(result) }),
     artifacts: evidence.artifacts,
   });
   // 다른 실행(배포 확인 등)이 동시에 돌 수 있어 미완료 폴더는 남긴다.
