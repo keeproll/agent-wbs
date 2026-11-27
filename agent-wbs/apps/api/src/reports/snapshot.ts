@@ -77,7 +77,7 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
       verif_state: string; act_start: string | null; act_end: string | null; cg: string | null; done_cond: string | null; wbs_node_id: string; sort_order: number; est: string | null }>(
       // 각 관계식은 한 번만 되살린다(CTE MATERIALIZED). 통계가 낡아도 Task마다 다시 되살리는 계획이 나오지 않게 한다(재리뷰 3 문제 3).
       `with t as materialized (select * from ${src.rel('tasks')} x), s as materialized (select task,overview from ${src.rel('task_specs')} x),
-         e as materialized (select distinct on (x.task) x.task,x.est from ${src.rel('task_estimates')} x order by x.task,x.created_at desc,x.id desc)
+         e as materialized (select distinct on (x.task) x.task,x.est from ${src.rel('task_estimates')} x order by x.task,x.record_no desc)
        select t.id,t.task_key key,t.title,t.status,t.work_type,t.primary_domain domain,t.assignee_agent assignee,t.verifier_agent verifier,t.verif_state,
         ${iso('t.act_start')} act_start,${iso('t.act_end')} act_end,t.conflict_group cg,s.overview->>'doneCond' done_cond,t.wbs_node_id,t.sort_order,e.est::text est
        from t left join s on s.task=t.id left join e on e.task=t.id
@@ -392,7 +392,7 @@ async function gateInputsAt(client: PoolClient, src: ReturnType<typeof asOf>, ta
     left join cl on cl.task=t.id
     left join outp on outp.task=t.id
     left join lateral(select c.status,c.spec_revision,iv2.v input_v from cir c left join ivs iv2 on iv2.id=c.input_version
-      where c.project_id=t.project_id and c.task=t.id and c.head_sha=coalesce(t.execution_head_sha,a.head_sha) order by c.created_at desc,c.id desc limit 1) c on true`, [taskIds])).rows;
+      where c.project_id=t.project_id and c.task=t.id and c.head_sha=coalesce(t.execution_head_sha,a.head_sha) order by c.run_no desc limit 1) c on true`, [taskIds])).rows;
   return new Map(rows.map((task) => {
     const basis = { headSha: task.head_sha ?? '', specRevision: task.revision ?? 0, inputVersion: task.input_v ?? 0 };
     return [task.id, {

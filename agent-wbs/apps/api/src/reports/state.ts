@@ -135,7 +135,8 @@ export async function settingsAt(client: PoolClient, a: AsOf) {
   const concRows = await q<Record<string, unknown> & { created_at: Date }>(`select * from ${concRel} c where singleton`);
   const conc = concRows[0] && !(a.source === 'log' && concRel === 'public.concurrency_settings' && concRows[0].created_at.getTime() >= Date.parse(a.before)) ? concRows[0] : undefined;
   // 실행 PC 사양은 T 시점의 마지막 보고를 쓴다. 한도 계산은 실행 화면과 같은 함수(runner/service caps)다.
-  const host = (await q(`select * from ${a.rel('runner_hosts')} h order by seen_at desc,created_at desc,id desc limit 1`))[0];
+  // 「마지막」·「최신」은 벽시계 대신 보고 순번(record_no, CI는 run_no)으로 고른다. 실행 화면(repository.host 등)과 같은 기준이다(M5·M7 순번 정렬 원칙, M6 통합).
+  const host = (await q(`select * from ${a.rel('runner_hosts')} h order by record_no desc limit 1`))[0];
   const repo = { host: () => Promise.resolve(host), settings: () => Promise.resolve(conc) } as unknown as RunnerRepository;
   const manual = conc?.mode === 'manual' ? conc.caps as { total?: number; Claude?: number; Codex?: number } | null : null;
   const cap: { total?: number; Claude?: number; Codex?: number } = host ? wireCaps((await runnerCaps(repo)).caps) : manual ?? {};
@@ -150,7 +151,7 @@ export async function scheduleAt(client: PoolClient, projectId: string, a: AsOf,
   const tasks = await q<{ id: string; task_key: string; wbs_node_id: string; sort_order: number; status: TaskStatus; priority: number; assignee_agent: 'Claude' | 'Codex' | null;
     conflict_group: string | null; fix_start: string | null; act_start: string | null; act_end: string | null; updated_at: string; est: string | null; lo: string | null; hi: string | null }>(
     `with t as materialized (select * from ${a.rel('tasks')} x), p as materialized (select * from ${a.rel('projects')} x),
-       e as materialized (select distinct on (x.task) x.task,x.est,x.lo,x.hi from ${a.rel('task_estimates')} x order by x.task,x.created_at desc,x.id desc)
+       e as materialized (select distinct on (x.task) x.task,x.est,x.lo,x.hi from ${a.rel('task_estimates')} x order by x.task,x.record_no desc)
      select t.id,t.task_key,t.wbs_node_id,t.sort_order,t.status,t.priority,t.assignee_agent,t.conflict_group,to_char(greatest(t.fix_start,p.start_date),'YYYY-MM-DD') fix_start,
        ${isoAt('t.act_start')} act_start,${isoAt('t.act_end')} act_end,${isoAt('t.updated_at')} updated_at,e.est::text est,e.lo::text lo,e.hi::text hi
      from t join p on p.id=t.project_id left join e on e.task=t.id
@@ -164,8 +165,8 @@ export async function scheduleAt(client: PoolClient, projectId: string, a: AsOf,
   const sessions = await q<{ from: string; to: string | null; last: string }>(
     `select ${isoAt('started_at')} "from",${isoAt('ended_at')} "to",${isoAt('last_heartbeat_at')} last from ${a.rel('runner_sessions')} s order by started_at,id`);
   const usage = await q<{ agent: 'Claude' | 'Codex'; remain: string; reset_at: string }>(
-    `select distinct on (agent) agent,remain_pct::text remain,${isoAt('reset_at')} reset_at from ${a.rel('agent_usage')} u order by agent,created_at desc,id desc`);
-  const limit = (await q<{ limit: number }>(`select "limit" from ${a.rel('runner_concurrency_log')} c order by created_at desc,id desc limit 1`))[0]?.limit;
+    `select distinct on (agent) agent,remain_pct::text remain,${isoAt('reset_at')} reset_at from ${a.rel('agent_usage')} u order by agent,record_no desc`);
+  const limit = (await q<{ limit: number }>(`select "limit" from ${a.rel('runner_concurrency_log')} c order by record_no desc limit 1`))[0]?.limit;
   const ratio = Number((await q<{ ratio: string | null }>(
     `select sum(case jsonb_typeof(subagents) when 'number' then (subagents#>>'{}')::numeric else coalesce((subagents->>'observed')::numeric,0) end)/nullif(sum(running),0) ratio
      from ${a.rel('runner_concurrency_log')} c where running>0 and created_at>=${a.t}-make_interval(days=>$1)`, [policy.windowDays]))[0]?.ratio ?? 0);
