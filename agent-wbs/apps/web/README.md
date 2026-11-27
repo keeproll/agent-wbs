@@ -35,6 +35,7 @@ M3-02~08은 이 바탕 위에 각 메뉴의 본문을 얹는다.
 | M3-06 작업 실행 | `W e2e -- exec` ([features/exec/README.md](src/features/exec/README.md)) | `W --filter @awbs/web e2e:api-exec` |
 | M3-07 대시보드·검증·이력 | `W e2e -- verify history dashboard` ([features/verify/README.md](src/features/verify/README.md)) | `W --filter @awbs/web e2e:api:m307` |
 | M3-08 설정 | `W e2e -- settings-core` ([features/settings/README.md](src/features/settings/README.md)) | `W --filter @awbs/web e2e:api-settings` |
+| M6-07 설계 | `W e2e -- design` ([features/design/README.md](src/features/design/README.md)) | — |
 
 - `-- <이름>`은 시험 파일 이름 필터다. 예: `W e2e -- states`는 `states*.spec.ts`만 실행한다.
 - 왜 `scripts/playwright.ts`를 거치나: pnpm이 `--`를 그대로 넘기면 Playwright가 필터를 무시하고 전부 실행하기 때문이다.
@@ -59,6 +60,7 @@ src/
     exec/                  작업 실행(M3-06)
     verify/, history/      검증·이력(M3-07)
     settings/              설정 6탭(M3-08)
+    design/                설계 6탭·Task 연결(M6-07)
   shared/                  ★ 모든 화면이 함께 쓰는 것. 사용법은 shared/README.md
     api/                   API 호출 계층·계약 타입·세션·변경 이벤트 polling
     auth/                  로그인 필요 화면 감싸기, 1회용 링크 해석

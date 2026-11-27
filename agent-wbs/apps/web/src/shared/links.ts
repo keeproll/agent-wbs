@@ -14,6 +14,7 @@
  * | `/change/CP-007` | 변경 제안 상세(CP 키 또는 id) | ChangePage(useParams) |
  * | `/planning?session=<id>` | Planning 세션 | PlanningPage |
  * | `/settings/runner` | 설정 탭 | SettingsPage(useParams) |
+ * | `/design?tab=iface&sel=PATCH+%2Fapi%2Ftasks%2F%3AtaskKey` | 설계 탭·항목 상세(M6-07) | DesignPage(`?tab=&kind=&store=&q=&sel=`) |
  */
 const enc = encodeURIComponent;
 
@@ -35,4 +36,17 @@ export const LINK = {
   /** Planning 세션 */
   planning: (sessionId: string) => `/planning?session=${enc(sessionId)}`,
   settings: (tab?: string) => (tab ? `/settings/${enc(tab)}` : '/settings'),
+  /**
+   * 설계(M6-07). tab: map·dec·iface·data·own·chg. key는 설계 항목 고정 키(G L1056: REST `METHOD path`, 테이블 `store:name`).
+   * 데이터 항목이면 저장소(store)를 key 앞부분에서 함께 싣는다(받는 화면이 그 저장소 목록을 연다).
+   */
+  design: (tab?: string, key?: string, ref?: string | null) => {
+    const q = new URLSearchParams();
+    if (tab && tab !== 'map') q.set('tab', tab);
+    if (ref && ref !== 'main') q.set('ref', ref); // 브랜치 조회 중이면 그 브랜치를 유지한다
+    if (tab === 'data' && key?.includes(':')) q.set('store', key.slice(0, key.indexOf(':')));
+    if (key) q.set('sel', key);
+    const search = q.toString();
+    return `/design${search ? `?${search}` : ''}`;
+  },
 };
