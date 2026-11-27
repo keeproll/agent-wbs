@@ -78,7 +78,7 @@ test('빈 DB와 0014·0016(master)·0017~0027·M6 중간(0029~0034) 단계 DB, M
     // M6·M7 통합: CI 알림도 Telegram 대기열로(0036 awbs_notify_emit)
     '0036_20261127_notify_ci',
     // M6 통합 fix2: 이력 순번 채우기·M6 표 저장 순번(0037)
-    '0037_20261127_record_order']);
+    '0037_20261127_record_order', '0041_20261127_cgroup_empty']);
   // journal 시각 = 1795740000000 + 번호(0021 이후 규칙)
   for (const e of journal.entries.slice(26)) expect(e.when, e.tag).toBe(1795740000000 + Number(e.tag.slice(0, 4)));
   const fresh = await database('fresh');
@@ -196,5 +196,8 @@ test('옛 번호 0041로 CI 마이그레이션을 적용한 DB가 0026 재번호
   const after = await recorded();
   expect(after).toHaveLength(journal.entries.length);
   expect(after).toContain(String(ci.when));
-  expect(after).not.toContain('1795740000041');
+  // 옛 CI 기록의 시각(…041)은 0026 값으로 바뀌어야 한다. 지금 journal에 같은 시각(…041)의 다른 마이그레이션(0041 cgroup_empty)이 있으면
+  // 그 한 줄만 남는다(조정자 배정 번호가 옛 브랜치 번호와 같은 시각을 씀 — fix1 보고 참고).
+  const reused = journal.entries.filter((e) => e.when === 1795740000041).length;
+  expect(after.filter((v) => v === '1795740000041')).toHaveLength(reused);
 }, 60_000);
