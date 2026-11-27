@@ -77,10 +77,16 @@ export async function checkCachedSnapshot(db: PoolClient, cached: SnapshotRow, b
       && (!old.extracted || designJson(shape(old.extracted)) === designJson(shape(next.extracted)))) upgraded = true;
     else conflicts.push({ itemKey: row.item_key, serverState: checked ? 'checked' : 'unchecked', serverContentHash: designHash(oldItem), commit: cached.commit, ref: cached.ref });
   }
+  // M6 통합(M6-05 리뷰2 P3-1): 항목을 하나도 못 낸 정상 파일은 파일 전체가 unchecked(`file:<path>`)다.
+  // 같은 커밋에서 그 파일의 항목을 대조해 보내면, 대조된(contract·extracted가 모두 있는) 새 항목만 upgrade로 받는다.
+  // 왜: Q-b는 「대조 못 함 → 대조함」을 같은 커밋에서 허용한다. 파일 단위 unchecked도 「대조 못 함」이다. 대조 못 한 새 항목은 정보가 늘지 않으므로 계속 막는다.
+  const emptyFiles = new Set(files.filter(file => file.parse_status !== 'error' && !rows.some(row => row.path === file.path)).map(file => file.path));
+  const filledKeys = new Set<string>();
   for (const item of body.items) if (!rows.some(row => row.item_key === item.itemKey) && !recovered.has(item.path)) {
+    if (emptyFiles.has(item.path) && item.contract && item.extracted) { upgraded = true; filledKeys.add(item.itemKey); continue; }
     conflicts.push({ itemKey: item.itemKey, serverState: 'unchecked', serverContentHash: designHash(null), commit: cached.commit, ref: cached.ref });
   }
-  const stableEdges = (edges: typeof before.edges) => edges.filter(edge => !recoveredKeys.has(edge.from) && !recoveredKeys.has(edge.to));
+  const stableEdges = (edges: typeof before.edges) => edges.filter(edge => ![edge.from, edge.to].some(key => recoveredKeys.has(key) || filledKeys.has(key)));
   const stable = { ...before, items: [], edges: stableEdges(before.edges), files: before.files.map(file => recovered.has(file.path) ? after.files.find(next => next.path === file.path) : file) };
   if (conflicts.length || !upgraded && !recovered.size || designJson(stable) !== designJson({ ...after, items: [], edges: stableEdges(after.edges) })) {
     throw new ApiError('VERSION_CONFLICT', { conflicts: conflicts.sort((a, b) => a.itemKey < b.itemKey ? -1 : a.itemKey > b.itemKey ? 1 : 0) }, [], '같은 커밋은 대조하지 못한 결과를 대조된 결과로 올릴 때만 바꿀 수 있습니다.');

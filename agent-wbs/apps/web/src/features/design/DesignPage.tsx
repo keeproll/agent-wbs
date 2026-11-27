@@ -78,6 +78,8 @@ function DesignBody({ project }: { project: ProjectState }) {
   const ownership = useApiQuery('getOwnership', p, byRef);
   const drifts = useApiQuery('listDrifts', p, byRef);
   const tasks = useApiQuery('listTasks', { params: { projectId } }, { topics: ['task'], enabled: on });
+  // 설계 캐시가 있는 기준 목록(M6 통합 listDesignRefs). 고르기 목록을 넓히는 보조 자료라 화면 표시를 기다리게 하지 않는다.
+  const refs = useApiQuery('listDesignRefs', { params: { projectId } }, { topics: ['design'], enabled: on });
   const queries = [overview, decisions, ifaces, data, ownership, drifts, tasks] as const;
 
   // 진행 중(queued·running) 반영 job이 있으면 불일치·요약을 4초마다 다시 읽는다(Codex fix2 지적 1).
@@ -135,8 +137,9 @@ function DesignBody({ project }: { project: ProjectState }) {
   };
   const branch = ref === 'main' ? null : ref;
   const ctx: DesignCtx = { projectId, decisions: decisions.data.items, drifts: drifts.data.items, reload, goTab, setDirty, branch, refQuery };
-  // 고를 수 있는 브랜치: 진행 중 Task의 기본 브랜치 이름(agent/<Task>). 세대 접미사(-hN) 브랜치는 주소로 직접 연다(브랜치 목록 API 없음).
-  const refOptions = ['main', ...tasks.data.tasks.filter((t) => ['running', 'paused', 'qa', 'rework', 'verifying', 'gate'].includes(String(t.lifecycleStatus))).map((t) => `agent/${t.taskKey}`).sort()];
+  // 고를 수 있는 브랜치: 진행 중 Task의 기본 브랜치 이름(agent/<Task>)과 설계 캐시가 있는 ref(세대 접미사 -hN 포함, listDesignRefs).
+  const cachedRefs = (refs.data?.items ?? []).map((r) => r.ref).filter((r) => r !== 'main' && !parseRef(r).invalid);
+  const refOptions = ['main', ...[...new Set([...tasks.data.tasks.filter((t) => ['running', 'paused', 'qa', 'rework', 'verifying', 'gate'].includes(String(t.lifecycleStatus))).map((t) => `agent/${t.taskKey}`), ...cachedRefs])].sort()];
   if (!refOptions.includes(ref)) refOptions.push(ref);
   const decs = decisions.data.items;
   const allDrifts = drifts.data.items;

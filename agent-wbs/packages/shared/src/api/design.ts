@@ -59,3 +59,21 @@ export type DesignItemInput = DesignSnapshotInput['items'][number];
 export function designContentValid(item: DesignItemInput): boolean {
   return Value.Check(contents[item.kind], item.content);
 }
+
+/**
+ * 설계 필드 주소의 방향(M6 통합, M6-05 리뷰2 P3-3). 호환성 판정이 쪽마다 다르다(Q-c).
+ * - request: 받는 쪽(서버)이 읽는 값. 새 필수 필드·선택→필수·타입 변경은 깨짐, 삭제는 호환.
+ * - response: 소비하는 쪽이 읽는 값(REST 응답, Kafka·WebSocket·SSE 메시지). 삭제·필수→선택·타입 변경은 깨짐, 새 필드는 호환.
+ * - data: 그 밖(DB 등). 삭제·타입 변경·새 필수 필드는 깨짐.
+ * 왜 한 곳에 두나: 서버와 Runner가 같은 주소를 다르게 판정하면 같은 변경이 한쪽에서만 깨짐이 된다.
+ * Runner는 이 패키지를 쓰지 않으므로 같은 규칙을 옮겨 두고, 두 쪽 모두 contracts/fixtures/design-direction.json 사례로 시험한다.
+ */
+export const DESIGN_RESPONSE_KINDS: readonly string[] = ['WebSocket', 'SSE', 'Kafka'];
+export const REST_RESPONSE_PREFIXES: readonly string[] = ['/responses', '/response'];
+export const REST_REQUEST_PREFIXES: readonly string[] = ['/parameters', '/requestBody', '/request'];
+const hasPrefix = (path: string, prefixes: readonly string[]) => prefixes.some(prefix => path === prefix || path.startsWith(`${prefix}/`));
+export function designFieldDirection(kind: string, path: string): 'request' | 'response' | 'data' {
+  if (DESIGN_RESPONSE_KINDS.includes(kind)) return 'response';
+  if (kind !== 'REST') return 'data';
+  return hasPrefix(path, REST_RESPONSE_PREFIXES) ? 'response' : hasPrefix(path, REST_REQUEST_PREFIXES) ? 'request' : 'data';
+}

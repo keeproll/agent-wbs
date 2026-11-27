@@ -47,10 +47,10 @@ async function schemaOf(pool: Pool): Promise<string> {
  * - 옛 시각이 새 번호보다 커서 Drizzle만으로는 새 번호 마이그레이션을 건너뛴다. runMigrations의 보충이 채워야 한다.
  */
 const OLD: Record<string, { tag: string; from?: string; fixture?: string }[]> = {
-  'm6-02': [{ tag: '0047_20261127_report_project_name', fixture: 'fixtures/0047_20261127_report_project_name.sql' }],
-  'm6-03': [{ tag: '0049_20261127_mail_queue', from: '0039_20261127_mail_queue' }],
-  'm6-04': [{ tag: '0051_20261127_telegram_transitions', from: '0040_20261127_telegram_transitions' }, { tag: '0052_20261127_telegram_review', from: '0041_20261127_telegram_review' }],
-  'm6-05': [{ tag: '0053_20261127_design_ledger', from: '0042_20261127_design_ledger' }, { tag: '0054_20261127_design_display_keys', from: '0043_20261127_design_display_keys' }],
+  m6_02: [{ tag: '0047_20261127_report_project_name', fixture: 'fixtures/0047_20261127_report_project_name.sql' }],
+  m6_03: [{ tag: '0049_20261127_mail_queue', from: '0039_20261127_mail_queue' }],
+  m6_04: [{ tag: '0051_20261127_telegram_transitions', from: '0040_20261127_telegram_transitions' }, { tag: '0052_20261127_telegram_review', from: '0041_20261127_telegram_review' }],
+  m6_05: [{ tag: '0053_20261127_design_ledger', from: '0042_20261127_design_ledger' }, { tag: '0054_20261127_design_display_keys', from: '0043_20261127_design_display_keys' }],
 };
 
 test('빈 DB와 0014·0016(master)·0017~0025·M6 중간(0036~0042) 단계 DB, M6 옛 번호 DB가 최신으로 올린 뒤 같은 구조가 된다', async () => {
@@ -121,7 +121,7 @@ test('빈 DB와 0014·0016(master)·0017~0025·M6 중간(0036~0042) 단계 DB, M
     }
     expect(await schemaOf(pool), `단계 ${String(stage)}`).toBe(expected);
     // 옛 0047은 내용이 달라(hash 다름) 기록이 하나 더 남는다. 숫자 단계는 개수가 같아야 하고, 모든 단계는 누락이 없어야 한다.
-    const extra = stage === 'm6-02' ? 1 : 0;
+    const extra = stage === 'm6_02' ? 1 : 0;
     expect((await pool.query<{ n: number }>('select count(*)::int n from drizzle.__drizzle_migrations')).rows[0]?.n, `단계 ${String(stage)}`).toBe(journal.entries.length + extra);
     await checkMigrationsApplied(pool);
   }

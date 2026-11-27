@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { required } from '../src/runner/repository.ts';
 import { readFileSync } from 'node:fs';
 import { installRunner } from '../src/runner/routes.ts';
@@ -427,4 +427,74 @@ test('공용 fixture의 정상·위반 보고는 서버에서도 같은 결과�
       expect((await get('/drifts')).body.items).toEqual(expect.arrayContaining([expect.objectContaining({ itemKey: 'file:contracts/db/neo4j/model.cypher', compat: 'unchecked' })]));
     }
   }
+});
+
+test('파일 전체가 unchecked였던 정상 파일도 같은 커밋에서 대조된 항목으로 올릴 수 있다(M6 통합, M6-05 리뷰2 P3-1)', async () => {
+  expect((await report(snapshot(sha('a'), { items: [] }))).status).toBe(204);
+  expect((await get('/drifts')).body.items).toMatchObject([{ itemKey: `file:${path}`, status: 'open' }]);
+  // 대조하지 못한 새 항목은 정보가 늘지 않으므로 계속 막는다.
+  expect((await report(snapshot(sha('a'), { items: [item(null)] }))).body.error.code).toBe('VERSION_CONFLICT');
+  const upgraded = await report(snapshot(sha('a'), { items: [item()] }));
+  expect(upgraded.status, JSON.stringify(upgraded.body)).toBe(204);
+  expect((await get('/drifts')).body.items.find((d: Body) => d.itemKey === `file:${path}`)).toMatchObject({ status: 'done' });
+  expect((await get()).body).toMatchObject({ drifts: 0, files: [{ commit: sha('a'), itemCount: 1 }] });
+  // 올린 뒤에는 대조된 항목이라 다시 바꿀 수 없다.
+  expect((await report(snapshot(sha('a'), { items: [{ ...item(), name: '몰래 바꿈' }] }))).body.error.code).toBe('VERSION_CONFLICT');
+});
+
+describe('반영 job이 최신이 아닌 커밋을 보고할 때(M6 통합, M6-05 리뷰2 P3-2)', () => {
+  const more = [...fields, { path: '/response/name', type: 'string', required: false }];
+  const target = () => ({ ...item(), contract: { fields: more }, extracted: { fields: more } });
+  async function prepare() {
+    expect((await report(snapshot(sha('a'), { items: [item({ fields: more })] }))).status).toBe(204);
+    const drift = (await get('/drifts')).body.items[0];
+    const applyJob = (await apply(drift)).body.jobId as string;
+    await lease(applyJob);
+    return applyJob;
+  }
+
+  test('최신 커밋도 목표와 같으면 완료한다(204인데 열린 채로 남지 않는다)', async () => {
+    const applyJob = await prepare();
+    // merge_followup이 결과와 같은 커밋 b·c를 먼저 보고한다. job이 진행 중이라 불일치는 아직 열려 있다.
+    expect((await report(snapshot(sha('b'), { items: [target()] }))).status).toBe(204);
+    expect((await report(snapshot(sha('c'), { items: [target()] }))).status).toBe(204);
+    expect((await get('/drifts')).body.items[0].status).toBe('open');
+    expect((await report(snapshot(sha('b'), { jobId: applyJob, items: [target()] }))).status).toBe(204);
+    expect((await get('/drifts')).body.items[0]).toMatchObject({ status: 'done' });
+    // 같은 보고를 다시 보내도 같은 결과다(멱등).
+    expect((await report(snapshot(sha('b'), { jobId: applyJob, items: [target()] }))).status).toBe(204);
+  });
+
+  test('최신 커밋이 목표와 다르면 409 INVALID_TRANSITION으로 알리고 완료하지 않는다', async () => {
+    const applyJob = await prepare();
+    expect((await report(snapshot(sha('b'), { items: [target()] }))).status).toBe(204);
+    const other = [...fields, { path: '/response/age', type: 'integer', required: false }];
+    expect((await report(snapshot(sha('c'), { items: [{ ...item(), contract: { fields: other }, extracted: { fields: other } }] }))).status).toBe(204);
+    const stale = await report(snapshot(sha('b'), { jobId: applyJob, items: [target()] }));
+    expect(stale.status).toBe(409);
+    expect(stale.body.error.code).toBe('INVALID_TRANSITION');
+    expect((await h.owner.query("select resolution->>'resultCommit' r from design_drifts where resolution->>'jobId'=$1", [applyJob])).rows[0]?.r ?? null).toBeNull();
+  });
+});
+
+test('반영 job 상태가 바뀌면 design 이벤트가 나간다(M6 통합, M6-07 남은 연결)', async () => {
+  expect((await report(snapshot(sha('a'), { items: [item({ fields: [...fields, { path: '/response/name', type: 'string', required: false }] })] }))).status).toBe(204);
+  const id = (await apply((await get('/drifts')).body.items[0])).body.jobId as string;
+  await lease(id);
+  const events = async () => (await h.owner.query<{ n: number }>("select count(*)::int n from change_events where topic='design' and ref->>'id'=$1", [id])).rows[0]?.n ?? 0;
+  const before = await events();
+  expect((await h.runner('POST', `/api/runner/jobs/${id}/finish`, { fence: 1, status: 'failed' })).status).toBe(204);
+  expect(await events()).toBe(before + 1);
+  expect((await get('/drifts')).body.items[0].resolution.jobStatus).toBe('failed');
+});
+
+test('설계 기준 목록은 캐시가 있는 main과 브랜치(세대 접미사 포함)를 최신 커밋과 함께 준다(M6 통합, M6-07 남은 연결)', async () => {
+  expect((await get('/refs')).body).toEqual({ items: [] });
+  expect((await report(snapshot(sha('a')))).status).toBe(204);
+  expect((await report(snapshot(sha('c')))).status).toBe(204);
+  const ref = 'agent/TASK-0001-h2';
+  expect((await report(snapshot(sha('b'), { jobId: await attemptJob(ref), ref }))).status).toBe(204);
+  const items = (await get('/refs')).body.items as { ref: string; commit: string; at: string }[];
+  expect(items.map(({ ref: r, commit }) => ({ ref: r, commit }))).toEqual([{ ref: 'main', commit: sha('c') }, { ref, commit: sha('b') }]);
+  expect(items.every(x => /Z$/.test(x.at))).toBe(true);
 });

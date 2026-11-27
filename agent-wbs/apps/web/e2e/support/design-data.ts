@@ -227,6 +227,8 @@ export function installDesign(api: FakeApi, d: DesignData): { writes: { path: st
   });
   api.on(`GET ${base}/ownership`, (route) => json(route, 200, { items: d.ownership }));
   api.on(`GET ${base}/drifts`, (route, req) => json(route, 200, { items: at(req).drifts }));
+  // 설계 기준 목록(M6 통합 listDesignRefs): main과 초안이 있는 브랜치
+  api.on(`GET ${base}/refs`, (route) => json(route, 200, { items: [{ ref: 'main', commit: 'a'.repeat(40), at: NOW() }, ...(d.branch ? [{ ref: d.branch.ref, commit: 'b'.repeat(40), at: NOW() }] : [])] }));
   const detail = (iface: boolean) => (route: Route, req: Request) => {
     const key = decodeURIComponent(new URL(req.url()).pathname.split('/').pop() ?? '');
     const x = at(req).items.find((i) => i.key === key && isIface(i) === iface);

@@ -2,7 +2,7 @@ import type { Pool } from '@awbs/db';
 import { required } from '../runner/repository.ts';
 import type { FastifyRequest } from 'fastify';
 import { clientOf, params, read, routes } from '../changes/http.ts';
-import { drifts, items, latestSnapshot, overview, projectExists, decisions } from './read.ts';
+import { drifts, items, latestSnapshot, overview, projectExists, decisions, designRefs } from './read.ts';
 import { createDecision, decide, resolve, saveSnapshot } from './service.ts';
 import type { FastifyInstance } from 'fastify';
 
@@ -26,6 +26,7 @@ export function registerDesignRoutes(app: FastifyInstance, pool: Pool) {
       route(detailId, request => view(request, (db, id) => items(db, id, refOf(request), category, undefined, param(request, 'key'))), params({ ...projectParams, key: { type: 'string', minLength: 1 } }));
     }
     route('getOwnership', request => view(request, async (db, id) => ({ items: (await latestSnapshot(db, id, refOf(request)))?.content.ownership ?? [] })), params(projectParams));
+    route('listDesignRefs', request => view(request, async (db, id) => ({ items: await designRefs(db, id) })), params(projectParams));
     route('listDrifts', request => view(request, async (db, id) => ({ items: await drifts(db, id, refOf(request)) })), params(projectParams));
     route('resolveDrift', async (request, reply) => {
       const result = await resolve(clientOf(request), param(request, 'projectId'), param(request, 'id'), request.body as Parameters<typeof resolve>[3], required(request.platform).currentEpoch);

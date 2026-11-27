@@ -1,4 +1,5 @@
 import { repeatFailure } from '../notify/events.ts';
+import { deferChange } from '../changes/events.ts';
 import type { PoolClient, schema, ExecPolicyRow } from '@awbs/db';
 import { attemptKey, placeModel, modelRanks, taskBranch, type ModelSettings, type Agent, type AttemptKind } from '@awbs/shared';
 import assert from 'node:assert/strict';
@@ -82,11 +83,24 @@ export class RunnerRepository {
   }
   async openJob(taskKey: string) { return (await this.client.query<Job>("select * from runner_jobs where kind='attempt' and payload->>'taskKey'=$1 and state in ('queued','leased','started','reconcile') limit 1", [taskKey])).rows[0]; }
   async lease(job: Job, owner: string, generation: number | null) {
-    return required((await this.client.query<Job>(`update runner_jobs set state='leased',lease_owner=$2,lease_until=clock_timestamp()+interval '60 seconds',fence=fence+1,attempts=attempts+1,generation=$3::int,
+    const leased = required((await this.client.query<Job>(`update runner_jobs set state='leased',lease_owner=$2,lease_until=clock_timestamp()+interval '60 seconds',fence=fence+1,attempts=attempts+1,generation=$3::int,
       payload=case when kind='attempt' then payload||jsonb_build_object('branch',$4::text) else payload end where id=$1 returning *`, [job.id, owner, generation, job.kind === 'attempt' ? taskBranch(String(job.payload.taskKey), generation ?? 1) : null])).rows[0]);
+    this.designJobChanged(leased);
+    return leased;
   }
   async renew(job: string) { return required((await this.client.query<{ lease_until: Date }>("update runner_jobs set lease_until=clock_timestamp()+interval '60 seconds' where id=$1 returning lease_until", [job])).rows[0]).lease_until; }
-  async state(job: string, state: string) { await this.client.query('update runner_jobs set state=$2 where id=$1', [job, state]); }
+  async state(job: string, state: string) {
+    const row = (await this.client.query<Pick<Job, 'id' | 'project_id' | 'kind'>>('update runner_jobs set state=$2 where id=$1 returning id,project_id,kind', [job, state])).rows[0];
+    if (row) this.designJobChanged(row);
+  }
+  /**
+   * 계약 반영 job(design_apply)의 상태가 바뀌면 설계 화면에 알린다(M6 통합, M6-07 남은 연결).
+   * 왜: 화면의 반영 job 상태(queued·running·done·failed)는 불일치 응답의 jobStatus로 보인다. 이벤트가 없으면 화면이 4초 다시 읽기에만 기대게 된다.
+   * 이벤트는 그 트랜잭션이 커밋될 때 함께 나간다(deferChange). 되돌리면 버려진다.
+   */
+  private designJobChanged(job: Pick<Job, 'id' | 'project_id' | 'kind'>) {
+    if (job.kind === 'design_apply' && job.project_id) deferChange(this.client, job.project_id, 'design', { id: job.id });
+  }
   async reserve(job: Job, host: string, boot: string, agent: string, slots: number, heavy: boolean, task?: Task) {
     const existing = await this.hold(job.id);
     if (existing) {

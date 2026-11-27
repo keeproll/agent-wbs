@@ -97,6 +97,14 @@ export function useSave<T, P = undefined>(options: SaveOptions<T, P>): SaveHandl
   const pending = useRef<{ action: 'reload' | 'reapply'; controller: AbortController } | null>(null);
   /** 결과를 모르는 요청(재시도 가능한 실패). 다시 시도는 이 내용과 키로 보낸다. */
   const unresolved = useRef<{ key: string; payload: P; error: ApiError } | null>(null);
+  /**
+   * 응답이 온 뒤에 부르는 콜백(onSuccess·onFieldErrors·onRejected·successNotice)은 **응답 시점의 최신 값**을 쓴다(M6 통합, M6-07 fix2 보고 5).
+   * 왜: 저장 버튼을 누른 때의 콜백은 그때의 초안을 본다. 응답을 기다리는 동안 사용자가 바꾼 초안을 못 보고 「같으면 닫기」가 늘 참이 되어 바꾼 내용이 사라진다.
+   * 예: OverviewTab `if (same(p.d, d)) slot.close()` — d가 응답 시점 초안이어야 「저장한 내용과 지금 초안이 같을 때만 닫는다」가 된다.
+   * 요청 자체(run·request)는 누른 때의 값이다.
+   */
+  const latest = useRef(options);
+  useEffect(() => { latest.current = options; });
   /** 오류 막대의 「다시 시도」가 attempt를 부르기 위한 참조(선언 순서 때문에 ref로 잇는다) */
   const retryRef = useRef<((key: string, payload: P) => Promise<boolean>) | null>(null);
 
@@ -120,11 +128,12 @@ export function useSave<T, P = undefined>(options: SaveOptions<T, P>): SaveHandl
     setBusy(true);
     try {
       const result = await options.run({ idempotencyKey: key, payload });
+      const now = latest.current;
       unresolved.current = null;
       errorBar.clear(owner);
-      options.onFieldErrors?.([]);
-      options.onSuccess?.(result, payload);
-      if (options.successNotice) notify(options.successNotice);
+      now.onFieldErrors?.([]);
+      now.onSuccess?.(result, payload);
+      if (now.successNotice) notify(now.successNotice);
       return true;
     } catch (error) {
       if (!(error instanceof ApiError)) throw error;
@@ -135,8 +144,8 @@ export function useSave<T, P = undefined>(options: SaveOptions<T, P>): SaveHandl
         setConflict({ error, at: Date.now(), failure: null });
         return false;
       }
-      if (error.kind === 'validation') options.onFieldErrors?.(error.fieldErrors);
-      if (error.kind === 'rejected') options.onRejected?.(error);
+      if (error.kind === 'validation') latest.current.onFieldErrors?.(error.fieldErrors);
+      if (error.kind === 'rejected') latest.current.onRejected?.(error);
       showFailure(error, key, payload);
       return false;
     } finally {
@@ -160,16 +169,17 @@ export function useSave<T, P = undefined>(options: SaveOptions<T, P>): SaveHandl
     const payload = pending ? pending.payload : await build({ signal });
     try {
       const result = await options.run({ idempotencyKey: key, payload });
+      const now = latest.current;
       unresolved.current = null;
       errorBar.clear(owner);
-      options.onFieldErrors?.([]);
-      options.onSuccess?.(result, payload);
-      if (options.successNotice) notify(options.successNotice);
+      now.onFieldErrors?.([]);
+      now.onSuccess?.(result, payload);
+      if (now.successNotice) notify(now.successNotice);
     } catch (error) {
       if (error instanceof ApiError) {
         unresolved.current = canRetry(error) ? { key, payload, error } : null;
-        if (error.kind === 'validation') options.onFieldErrors?.(error.fieldErrors);
-        if (error.kind === 'rejected') options.onRejected?.(error);
+        if (error.kind === 'validation') latest.current.onFieldErrors?.(error.fieldErrors);
+        if (error.kind === 'rejected') latest.current.onRejected?.(error);
       }
       throw error;
     }

@@ -31,12 +31,27 @@ export function validShape(value: unknown): value is DesignShape {
   } catch { return false; }
 }
 
+/**
+ * 필드 주소의 방향(M6 통합, M6-05 리뷰2 P3-3). 서버 @awbs/shared designFieldDirection과 같은 규칙이다.
+ * Runner는 그 패키지를 쓰지 않으므로 옮겨 두고, 두 쪽이 같은 사례 파일(agent-wbs/contracts/fixtures/design-direction.json)로 시험한다.
+ * 예전에는 세 접두어 밖의 REST 주소를 요청으로 봤다. 지금은 서버처럼 데이터로 본다(Runner가 만드는 주소에서는 결과가 같다).
+ */
+const RESPONSE_KINDS = ['WebSocket', 'SSE', 'Kafka'];
+const REST_RESPONSE = ['/responses', '/response'];
+const REST_REQUEST = ['/parameters', '/requestBody', '/request'];
+const prefixed = (path: string, prefixes: string[]) => prefixes.some(prefix => path === prefix || path.startsWith(`${prefix}/`));
+export function fieldDirection(kind: string, path: string): 'request' | 'response' | 'data' {
+  if (RESPONSE_KINDS.includes(kind)) return 'response';
+  if (kind !== 'REST') return 'data';
+  return prefixed(path, REST_RESPONSE) ? 'response' : prefixed(path, REST_REQUEST) ? 'request' : 'data';
+}
+
 /** Q-c: 요청은 받는 쪽, 응답·메시지는 소비하는 쪽의 호환성을 본다. 최종 판정은 서버다. */
 export function compareShapes(contract: unknown, extracted: unknown, kind = 'postgres'): DesignDifference | null {
   if (!validShape(contract) || !validShape(extracted)) return { compat: 'unchecked', where: '/', text: '대조 안 함: 계약 또는 실제 명세를 추출하지 못했습니다.' };
   const before = new Map(contract.fields.map(f => [f.path, f]));
   const after = new Map(extracted.fields.map(f => [f.path, f]));
-  const direction = (path: string) => kind === 'REST' ? path.startsWith('/responses/') ? 'response' : 'request' : ['Kafka', 'WebSocket', 'SSE'].includes(kind) ? 'response' : 'data';
+  const direction = (path: string) => fieldDirection(kind, path);
   const changes: string[] = [];
   let breaking = false;
   for (const f of contract.fields) {

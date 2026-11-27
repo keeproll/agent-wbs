@@ -73,7 +73,8 @@ export async function saveSnapshot(db: PoolClient, body: DesignSnapshotInput, pr
   if (cached && (cached.content.hash === hash || await checkCachedSnapshot(db, cached, body))) {
     const terminal = latest && (await db.query(`select 1 from design_drifts d where d.project_id=$1 and d.status='open' and coalesce(d.resolution->>'ref','main')=$2 and d.resolution ? 'jobId'
       and not exists(select 1 from runner_jobs j where j.project_id=d.project_id and j.kind='design_apply' and j.payload->>'driftId'=d.id::text and j.state in ('queued','leased','started','reconcile')) limit 1`, [projectId, ref])).rowCount;
-    if (!latest || !terminal && job.kind !== 'design_apply') return;
+    if (!latest) { if (job.kind === 'design_apply') await completeStaleApply(db, job, body, ref, head); return; }
+    if (!terminal && job.kind !== 'design_apply') return;
   }
   const previous = cached ?? head;
   const oldItems = await snapshotItems(db, previous);
@@ -120,6 +121,7 @@ export async function saveSnapshot(db: PoolClient, body: DesignSnapshotInput, pr
   for (const owner of body.ownership ?? []) await db.query(`insert into design_ownership(project_id,snapshot,item_key,owner) select $1,$2,$3,$4
     where not exists(select 1 from design_ownership where snapshot=$2 and item_key=$3 and owner=$4)`, [projectId, snapshotId, owner.data, owner.source]);
   if (!latest) {
+    if (job.kind === 'design_apply') await completeStaleApply(db, job, body, ref, head);
     deferChange(db, projectId, 'design', { commit: body.commit, ref });
     return;
   }
@@ -157,6 +159,25 @@ export async function saveSnapshot(db: PoolClient, body: DesignSnapshotInput, pr
     await alert(db, projectId, 'design_drift', (await drifts(db, projectId)).some(drift => drift.status === 'open'), '계약과 코드의 불일치 또는 대조하지 못한 항목이 있습니다.');
   }
   deferChange(db, projectId, 'design', { commit: body.commit, ref });
+}
+
+/**
+ * 최신이 아닌 커밋을 보고한 반영 job(M6 통합, M6-05 리뷰2 P3-2).
+ * 예: merge_followup이 결과와 같은 커밋 b·c를 먼저 보고한 뒤 design_apply가 b를 보고한다. 예전에는 204인데 불일치가 열린 채였다.
+ * - 보고한 커밋이 목표 명세를 대조 성공했고(completeApply 규칙), 지금 최신 캐시의 같은 항목도 대조 성공·목표와 같으면 완료한다.
+ * - 최신 캐시가 목표와 다르면 409 INVALID_TRANSITION으로 알린다. Runner는 최신 커밋 기준으로 다시 보고해야 한다.
+ * 왜 최신도 보나: b 뒤에 누가 계약을 다시 바꿨으면(c ≠ 목표) 불일치는 아직 해소되지 않았다. 그때 닫으면 거짓 완료가 된다.
+ */
+async function completeStaleApply(db: PoolClient, job: Job, body: DesignSnapshotInput, ref: string, head: SnapshotRow | undefined) {
+  const row = (await db.query<{ status: string; resolution: Record<string, unknown> }>('select status,resolution from design_drifts where id::text=$1 and project_id=$2', [job.payload.driftId, job.project_id])).rows[0];
+  if (row?.status === 'done' && row.resolution.jobId === job.id && row.resolution.resultCommit) return;
+  const target = row?.resolution.target as DesignShapeInput | undefined;
+  const now = (await snapshotItems(db, head)).find(item => item.item_key === job.payload.itemKey)?.content;
+  if (!now || !now.contract || !now.extracted || compareDesign(now.contract, now.extracted, now.kind).changed
+    || compareDesign(target, now.contract, now.kind).changed || compareDesign(now.contract, target, now.kind).changed) {
+    throw badState('보고한 커밋이 최신이 아니고 최신 설계가 요청한 명세와 다릅니다. 최신 커밋 기준으로 다시 보고하세요.');
+  }
+  await completeApply(db, job, body, ref);
 }
 
 async function completeApply(db: PoolClient, job: Job, body: DesignSnapshotInput, ref: string) {

@@ -543,6 +543,14 @@ const design = [
   }),
   operation({
     ...lead,
+    id: 'listDesignRefs',
+    method: 'GET',
+    path: `${designPath}/refs`,
+    summary: '설계 기준 목록(M6 통합). 설계 캐시가 있는 main·브랜치와 그 최신 커밋. 세대 접미사(-hN)가 붙은 브랜치도 고를 수 있게 한다',
+    responses: { 200: Type.Object({ items: List(Type.Object({ ref: Type.String(), commit: Type.String(), at: c.Timestamp })) }) },
+  }),
+  operation({
+    ...lead,
     id: 'listDrifts',
     method: 'GET',
     path: `${designPath}/drifts`,

@@ -1,0 +1,25 @@
+{
+  "description": "설계 필드 주소의 방향(요청 request · 응답 response · 데이터 data) 판정 규칙. 서버(@awbs/shared designFieldDirection)와 Runner(agent-runner/src/design/shape.ts fieldDirection)가 이 사례를 함께 시험한다(M6 통합, M6-05 리뷰2 P3-3).",
+  "rule": {
+    "responseKinds": ["WebSocket", "SSE", "Kafka"],
+    "restResponsePrefixes": ["/responses", "/response"],
+    "restRequestPrefixes": ["/parameters", "/requestBody", "/request"],
+    "otherwise": "data"
+  },
+  "cases": [
+    { "kind": "REST", "path": "/responses/200/content/application~1json/schema/id", "direction": "response" },
+    { "kind": "REST", "path": "/response/id", "direction": "response" },
+    { "kind": "REST", "path": "/responses", "direction": "response" },
+    { "kind": "REST", "path": "/parameters/query/limit", "direction": "request" },
+    { "kind": "REST", "path": "/requestBody/content/application~1json/schema/name", "direction": "request" },
+    { "kind": "REST", "path": "/request/name", "direction": "request" },
+    { "kind": "REST", "path": "/responsesX/id", "direction": "data" },
+    { "kind": "REST", "path": "/requestBodyX", "direction": "data" },
+    { "kind": "REST", "path": "/headers/x-id", "direction": "data" },
+    { "kind": "Kafka", "path": "/payload/id", "direction": "response" },
+    { "kind": "WebSocket", "path": "/message/text", "direction": "response" },
+    { "kind": "SSE", "path": "/event/data", "direction": "response" },
+    { "kind": "postgres", "path": "/columns/id", "direction": "data" },
+    { "kind": "postgres", "path": "/responses/200", "direction": "data" }
+  ]
+}

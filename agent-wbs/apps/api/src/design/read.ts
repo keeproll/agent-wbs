@@ -28,6 +28,17 @@ export async function latestSnapshot(db: PoolClient, projectId: string, ref = 'm
   return (await db.query<SnapshotRow>("select * from design_snapshots where project_id=$1 and ref=$2 order by coalesce((content->>'sequence')::bigint,0) desc,created_at desc,id desc limit 1", [projectId, ref])).rows[0];
 }
 
+/**
+ * 설계 기준 목록(M6 통합, M6-07 남은 연결 「브랜치 목록 API 없음」). 설계 캐시가 있는 ref마다 가장 최근에 받은 커밋 하나.
+ * main을 먼저, 나머지는 이름 순이다. 왜: 화면이 진행 중 Task의 기본 이름만 알아서, 세대 접미사(-hN)가 붙은 브랜치는 주소로만 열 수 있었다.
+ */
+export async function designRefs(db: PoolClient, projectId: string) {
+  return (await db.query<{ ref: string; commit: string; at: string }>(`select ref,commit,at from (
+      select distinct on (ref) ref,commit,${iso('created_at')} at from design_snapshots where project_id=$1
+      order by ref,coalesce((content->>'sequence')::bigint,0) desc,created_at desc,id desc) s
+    order by ref<>'main',ref`, [projectId])).rows;
+}
+
 export async function snapshotItems(db: PoolClient, snapshot?: SnapshotRow): Promise<ItemRow[]> {
   if (!snapshot) return [];
   return (await db.query<ItemRow>(`select i.id,i.item_key,i.kind,i.content,f.path,f.format,f.parse_status,f.content file_content
