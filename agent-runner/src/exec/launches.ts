@@ -16,8 +16,17 @@ const validPid = (n: number) => Number.isInteger(n) && n > 1 && n <= 2147483647;
 
 /** PID 뒤 괄호 안의 이름에는 공백과 괄호가 들어갈 수 있다. 필드는 마지막 괄호 뒤부터 센다. */
 export async function processInfo(pid: number): Promise<{ ppid: number; pgid: number; sessionId: number; startTime: string; state: string }> {
-  const text = await readFile(`/proc/${pid}/stat`, 'utf8');
+  return parseProcessStat(await readFile(`/proc/${pid}/stat`, 'utf8'));
+}
+
+/**
+ * `/proc/<pid>/stat` 한 줄을 읽는다.
+ * 상태 X(끝나서 회수되는 중)는 「없는 프로세스」(ESRCH)로 알린다. 왜: 이때 부모 0, 그룹·세션 -1이 잠깐 보인다.
+ * 이를 손상으로 던지면 같은 사용자의 다른 프로세스가 끝나는 순간 그룹 정리 전체가 실패한다(review5 전체 시험 간헐 실패의 원인).
+ */
+export function parseProcessStat(text: string): { ppid: number; pgid: number; sessionId: number; startTime: string; state: string } {
   const parts = text.slice(text.lastIndexOf(')') + 2).trim().split(/\s+/);
+  if (parts[0] === 'X') throw Object.assign(new Error('프로세스가 끝나는 중입니다.'), { code: 'ESRCH' });
   const ppid = Number(parts[1]), pgid = Number(parts[2]), sessionId = Number(parts[3]), startTime = parts[19];
   if (!Number.isSafeInteger(ppid) || ppid < 0 || !validPid(pgid) || !validPid(sessionId) || !startTime || !/^\d+$/.test(startTime)) throw new Error('프로세스 식별 정보가 없습니다.');
   return { ppid, pgid, sessionId, startTime, state: parts[0] ?? '' };
