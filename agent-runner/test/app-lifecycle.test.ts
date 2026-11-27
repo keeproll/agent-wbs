@@ -44,7 +44,7 @@ test('Runner 앱 반복이 실제 CI 실행기로 integrate·ci_retry를 예약�
   finally { controller.abort(); await running; await f.close(); }
 });
 
-test('done 정리: CI 실행기가 병합을 확인하면 그 Task 브랜치의 작업 폴더 정리(jobs.merged)를 부르고, 실패는 경고만 남긴다', async () => {
+test('done 정리: CI 실행기가 병합을 확인하면 그 Task 브랜치의 작업 폴더 정리(jobs.release)를 부르고, 실패는 경고만 남긴다', async () => {
   const f = await fixture(), controller = new AbortController();
   const api = (async () => ({ status:204,body:undefined,headers:new Headers() })) as unknown as ApiClient;
   const released: string[] = [], warnings: string[] = [];
@@ -53,7 +53,7 @@ test('done 정리: CI 실행기가 병합을 확인하면 그 Task 브랜치의 
     github:{ repo:{owner:'o',repo:'r'},mode:'gh',baseUrl:f.github.url },
     ci:{ repo:f.repo,execute:(_job,argv,cwd)=>f.deps.execute(argv,cwd),collectTests:f.deps.collectTests },
     jobs:{ collect:async () => ({ report:{ summary:'',changedFiles:[],evidence:[] } }),taskCheck:async () => { throw new Error('실행하지 않음'); },
-      merged:async branch => { released.push(branch); throw new Error('정리 실패 흉내'); } } });
+      release:async branch => { released.push(branch); throw new Error('정리 실패 흉내'); } } });
   vi.spyOn(a.runner,'ready','get').mockReturnValue(true);
   vi.spyOn(a.reporter,'caps','get').mockReturnValue({ total:1,Claude:1,Codex:1,heavy:1 });
   vi.spyOn(a.runner,'run').mockImplementation(signal => new Promise(resolve=>{ signal.addEventListener('abort',()=>resolve()); }));
@@ -74,6 +74,32 @@ test('done 정리: CI 실행기가 병합을 확인하면 그 Task 브랜치의 
     await expect.poll(()=>released,{ timeout:10_000 }).toEqual(['agent/TASK-0001-h1']);
     await expect.poll(()=>warnings.some(w => w.includes('병합 뒤 작업 폴더 정리 실패'))).toBe(true);
   } finally { controller.abort(); await running; await f.close(); }
+});
+
+test('취소·done 정리: 정책의 closedBranches 중 아직 정리하지 않은 브랜치만 같은 정리 함수(jobs.release)로 지우고, 실패한 것은 다음 주기에 다시 한다', async () => {
+  const released: string[] = [];
+  let failOnce = true;
+  const a = app(undefined, undefined, undefined, { collect: async () => ({ report: { summary: '', changedFiles: [], evidence: [] } }),
+    taskCheck: async () => { throw new Error('실행하지 않음'); },
+    release: async branch => { released.push(branch); if (branch === 'agent/TASK-0002-h1' && failOnce) { failOnce = false; throw new Error('정리 실패 흉내'); } } });
+  for (const name of ['checkReadiness','reportModels','reportConcurrency','reportInputs'] as const) vi.spyOn(a,name).mockResolvedValue(undefined as never);
+  vi.spyOn(a.updater, 'check').mockResolvedValue();
+  vi.spyOn(a.updater, 'applyPending').mockResolvedValue();
+  vi.spyOn(a.reporter, 'reportUsage').mockResolvedValue();
+  if (!a.jobs) throw new Error('시도 흐름이 연결되지 않았습니다.');
+  vi.spyOn(a.jobs, 'poll').mockResolvedValue();
+  a.runner.policy = { inputCheckMinutes: 5, inputRecheck: 0, closedBranches: ['agent/TASK-0001-h1', 'agent/TASK-0002-h1'] } as typeof a.runner.policy;
+  vi.useFakeTimers();
+  try {
+    a.startSchedules();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(released).toEqual(['agent/TASK-0001-h1', 'agent/TASK-0002-h1']);
+    if (a.runner.policy) a.runner.policy.closedBranches = ['agent/TASK-0003-h1', 'agent/TASK-0001-h1', 'agent/TASK-0002-h1'];
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(released).toEqual(['agent/TASK-0001-h1', 'agent/TASK-0002-h1', 'agent/TASK-0003-h1', 'agent/TASK-0002-h1']);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(released).toHaveLength(4);
+  } finally { vi.clearAllTimers(); vi.useRealTimers(); }
 });
 
 test('지금 확인 요청 번호가 바뀌면 5분 주기를 기다리지 않고 새 입력 관측을 한다', async () => {

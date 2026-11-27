@@ -103,6 +103,9 @@ keeproll ALL=(awbs-agent) NOPASSWD: /usr/local/libexec/awbs-agent-exec
     - CLI가 세션 안에서 스스로 부르는 `rg` 등은 같은 계정·같은 scope의 자식이라 따로 허용할 필요가 없다.
   - 다른 Agent의 CLI도 거부한다.
 - `git-inspect --cwd <작업 폴더>`·`git-bundle --cwd <작업 폴더> --branch <이름>`(fix2, 조정자 결정 6): Agent 작업 폴더의 git을 Agent 계정이 돌린다. 시스템·전역 설정 없음, `GIT_ALLOW_PROTOCOL=none`, `GIT_NO_LAZY_FETCH=1`, hook·fsmonitor 끔. Runner는 사용자 scope 안에서 부르고 끝나면 scope를 비운다.
+  - 청결 판정(collect-prepare): 추적 파일 변경은 `status --untracked-files=no`로 본다. 추적 안 된 파일은 무시 규칙 없이 모두 뽑고(`ls-files --others`), 무시 여부는 **HEAD 커밋에 든 .gitignore만**으로 정한다. 그 규칙들을 Agent 임시 폴더의 빈 저장소에 같은 경로로 두고 `check-ignore --no-index`로 판정한다.
+  - 왜: `.git/info/exclude`·저장소 설정의 `core.excludesFile`·커밋하지 않은 `.gitignore`는 Agent가 바꿀 수 있다. 그것을 따르면 Agent가 남긴 파일을 청결 확인에서 숨길 수 있다.
+  - Runner가 정한 폴더(맨 위의 `.awbs-home/`·`.awbs-evidence/`)는 커밋 대상이 아니므로 뺀다.
   - fix3: 래퍼 자신이 부르는 git은 그 작업 폴더 하나만 `-c safe.directory=<폴더의 실제 경로>`(명령줄 보호 설정)로 허용한다. 작업 폴더 소유자가 Runner 계정이라 git이 「dubious ownership」으로 거부하기 때문이다. 래퍼는 전역 설정을 쓰지도 바꾸지도 않는다(`GIT_CONFIG_GLOBAL=/dev/null`).
   - `evidence-read --cwd <작업 폴더> --name <이름>`(collect-prepare): QA가 `.awbs-evidence/<이름>`에 남긴 증거 파일을 Agent 계정이 읽어 표준 출력으로 낸다. 일반 파일만, 50 MiB까지. 없으면 종료 코드 3. Runner는 이 출력을 Runner 전용 파일로 받아 올린다(Agent 폴더의 파일을 Runner가 직접 열지 않는다).
 

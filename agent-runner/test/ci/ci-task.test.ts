@@ -299,17 +299,15 @@ test('마지막 명령 도중 중단되면 성공 결과를 반환하지 않는�
 });
 
 test('P1: 무시 파일과 가짜 node_modules를 복사하지 않고 SHA 전용 checkout에 설치한다', async () => {
+  // 커밋된 .gitignore(dist/·node_modules/)로 무시되는 파일은 작업 폴더에 있어도 되고, 검사 사본에는 들어가지 않는다.
   await file(join(work, 'node_modules/.bin/vitest'), '가짜 도구');
   await file(join(work, 'dist/compiled.js'), '가짜 빌드');
-  await file(join(work, 'test/.gitignore'), '*\n');
-  await file(join(work, 'test/hidden.ts'), '숨긴 테스트 조작');
   const initial: string[] = [];
   execute.mockImplementation(async (argv, cwd) => {
     if (argv[1] === 'install') {
       initial.push(cwd);
       await expect(lstat(join(cwd, 'node_modules'))).rejects.toMatchObject({ code: 'ENOENT' });
       await expect(lstat(join(cwd, 'dist'))).rejects.toMatchObject({ code: 'ENOENT' });
-      await expect(lstat(join(cwd, 'test/.gitignore'))).rejects.toMatchObject({ code: 'ENOENT' });
       expect(argv).toEqual(['pnpm', 'install', '--frozen-lockfile']);
       await file(join(cwd, 'node_modules/.bin/vitest'), '정상 도구');
     }
@@ -325,6 +323,15 @@ test('P1: 무시 파일과 가짜 node_modules를 복사하지 않고 SHA 전용
   expect(await repo.recordedWorktrees()).toEqual(['task-1']);
 });
 
+
+test('collect-prepare: 커밋하지 않은 하위 .gitignore로 숨긴 파일이 작업 폴더에 남으면 ①은 runner:worktree 단계에서 실패하고 명령을 돌리지 않는다', async () => {
+  // 예전에는 작업 폴더의 .gitignore를 따라 이 파일이 안 보였다. 지금은 커밋된 .gitignore만 무시 규칙으로 쓴다.
+  await file(join(work, 'test/.gitignore'), '*\n');
+  await file(join(work, 'test/hidden.ts'), '숨긴 테스트 조작');
+  const result = await run();
+  expect(result).toMatchObject({ status: 'fail', failStep: 'runner:worktree', failScope: 'task' });
+  expect(execute).not.toHaveBeenCalled();
+});
 test('P2: 새 설정으로 제외한 테스트는 수집 결과의 전후 차이와 추가 파일을 QA에 남긴다', async () => {
   await file(join(work, 'vitest.config.ts'), 'export default { test: { include: ["nothing/**"], passWithNoTests: true } };');
   const head = commit(work);

@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { lstat, open } from 'node:fs/promises';
-import { join } from 'node:path';
+import { lstat, mkdir, mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { AGENT_EXEC, AGENT_USER } from '../cli/dedicated-user.ts';
 import { clearScope, inUserScope } from '../exec/scope.ts';
 
@@ -133,6 +134,47 @@ export function wrapperAgentGit(cfg: WrapperConfig = { user: AGENT_USER, exec: A
   };
 }
 
+/** 작업 폴더 안 증거 폴더 이름. 준비 때 만든다. 청결 판정은 이 폴더(맨 위)를 뺀다(`untrackedNotIgnored`·래퍼 git-inspect). */
+export const EVIDENCE_DIR = '.awbs-evidence';
+/** 추적 안 된 파일 목록 상한(256 MiB, NUL로 이은 경로). 넘으면 판정하지 않고 실패한다. */
+const UNTRACKED_LIMIT = 256 * 1024 ** 2;
+/** Runner가 정한 폴더(맨 위만). 커밋 대상이 아니므로 청결 판정에서 뺀다. */
+const RUNNER_DIRS = ['.awbs-home/', `${EVIDENCE_DIR}/`];
+
+/**
+ * 추적 안 된 파일 중 「커밋된 .gitignore로 무시되지 않는 것」을 돌려준다(래퍼 git-inspect의 untracked_left와 같은 규칙).
+ * 왜: 무시 규칙을 Agent가 바꿀 수 있는 곳(.git/info/exclude, 전역 excludesFile, 커밋하지 않은 .gitignore 변경)에서 읽으면
+ *   Agent가 패턴을 더해 남긴 파일을 청결 확인에서 숨길 수 있다.
+ * - `untracked`: 무시 규칙 없이 뽑은 추적 안 된 파일(ls-files --others, NUL로 이음).
+ * - `rules`: 커밋(HEAD 또는 검사 대상 커밋)에 들어 있는 .gitignore 파일들의 경로와 내용.
+ * 판정은 규칙만 넣은 빈 임시 저장소에서 `check-ignore --no-index`로 한다. 작업 폴더의 설정·파일은 읽지 않는다.
+ */
+export async function untrackedNotIgnored(untracked: Buffer, rules: { path: string; content: Buffer }[], base = tmpdir()): Promise<string[]> {
+  const paths = untracked.toString('utf8').split('\0').filter(Boolean).filter((path) => !RUNNER_DIRS.some((dir) => path.startsWith(dir)));
+  if (paths.length === 0) return [];
+  const work = await mkdtemp(join(base, 'awbs-ignore-'));
+  const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: work, LANG: 'C.UTF-8', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_OPTIONAL_LOCKS: '0' };
+  const git = (args: string[], options: CaptureOptions = {}) => captureCode({ file: 'git', args: ['-C', work, '-c', 'core.excludesFile=/dev/null', '-c', 'core.hooksPath=/dev/null', ...args], env, cwd: work }, options);
+  try {
+    await git(['init', '-q', '--template=', '.']);
+    for (const rule of rules) {
+      if (rule.path.split('/').some((part) => ['', '.', '..', '.git'].includes(part)) || !rule.path.endsWith('.gitignore')) throw new AgentGitError('무시 규칙 경로가 올바르지 않습니다.');
+      await mkdir(join(work, dirname(rule.path)), { recursive: true });
+      await writeFile(join(work, rule.path), rule.content, { flag: 'wx' });
+    }
+    const judged = join(work, '.git', 'judged');
+    await git(['check-ignore', '--no-index', '--stdin', '-z', '-v', '-n'], { input: `${paths.join('\0')}\0`, allow: [0, 1], out: { path: judged, limit: UNTRACKED_LIMIT * 2 } });
+    const fields = (await readFile(judged, 'utf8')).split('\0');
+    const left: string[] = [];
+    // 경로마다 「규칙 파일·줄·패턴·경로」 네 칸. 패턴이 비었거나 !로 시작하면 무시되지 않은 파일이다.
+    for (let i = 0; i + 3 < fields.length; i += 4) {
+      const pattern = fields[i + 2] ?? '', path = fields[i + 3] ?? '';
+      if (pattern === '' || pattern.startsWith('!')) left.push(path);
+    }
+    return left;
+  } finally { await rm(work, { recursive: true, force: true }); }
+}
+
 /** 같은 계정 git(전용 계정이 없는 배치·시험). 래퍼와 같은 안전 기본값과 같은 출력 모양을 쓴다. */
 export function localAgentGit(options: { timeoutMs?: number } = {}): AgentGit {
   const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
@@ -144,9 +186,20 @@ export function localAgentGit(options: { timeoutMs?: number } = {}): AgentGit {
     async inspect(path) {
       const head = (await git(path, ['rev-parse', '--verify', 'HEAD^{commit}'])).trim();
       if (!SHA.test(head)) throw new AgentGitError('HEAD 모양이 아닙니다.');
-      const status = await git(path, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']);
+      // 추적 파일 변경만 status로 본다. 추적 안 된 파일은 무시 규칙 없이 뽑아 커밋된 .gitignore로만 판정한다(래퍼와 같은 규칙).
+      const status = await git(path, ['status', '--porcelain=v1', '-z', '--untracked-files=no', '--ignore-submodules=none']);
       const flags = (await git(path, ['ls-files', '-v'])).split('\n').some((line) => /^[a-zS] /.test(line));
-      return parseInspect(`head ${head}\ndirty ${status || flags ? '1' : '0'}\n`);
+      const work = await mkdtemp(join(tmpdir(), 'awbs-untracked-'));
+      let left: string[];
+      try {
+        const list = join(work, 'untracked');
+        await git(path, ['ls-files', '--others', '-z'], { path: list, limit: UNTRACKED_LIMIT });
+        const names = (await git(path, ['ls-tree', '-r', '-z', '--name-only', 'HEAD'])).split('\0').filter((name) => name.split('/').at(-1) === '.gitignore');
+        const rules = [];
+        for (const name of names) rules.push({ path: name, content: Buffer.from(await git(path, ['cat-file', 'blob', `HEAD:${name}`])) });
+        left = await untrackedNotIgnored(await readFile(list), rules);
+      } finally { await rm(work, { recursive: true, force: true }); }
+      return parseInspect(`head ${head}\ndirty ${status || flags || left.length ? '1' : '0'}\n`);
     },
     async bundle(path, branch, out) { await git(path, ['bundle', 'create', '--quiet', '-', `refs/heads/${branch}`], { path: out, limit: BUNDLE_LIMIT }); },
   };
@@ -203,8 +256,6 @@ export interface AgentEvidence {
 
 /** 증거 파일 이름. 폴더 구분(/)·숨김 이름(.으로 시작)은 받지 않는다. 래퍼와 같은 규칙이다. */
 export const EVIDENCE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
-/** 작업 폴더 안 증거 폴더 이름. 준비 때 만들고 `.git/info/exclude`로 상태 검사에서 뺀다. */
-export const EVIDENCE_DIR = '.awbs-evidence';
 
 export function wrapperAgentEvidence(cfg: WrapperConfig = { user: AGENT_USER, exec: AGENT_EXEC }): AgentEvidence {
   return {

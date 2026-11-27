@@ -267,6 +267,51 @@ describe.skipIf(!usable)('awbs-agent-exec 실행 래퍼(bash, 실제 실행)', (
     expect(wrapper(['git-inspect', '--cwd', runnerHome]).code).toBe(2);
   });
 
+  test('git-inspect: 추적 안 된 파일은 커밋된 .gitignore로만 무시한다(Agent가 바꾼 무시 설정으로 숨길 수 없음, collect-prepare)', () => {
+    const repo = join(area, 'worktrees', 'p1', 'git-hide');
+    mkdirSync(join(repo, 'sub'), { recursive: true });
+    const g = (...a: string[]) => spawnSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@x', ...a], { encoding: 'utf8' });
+    g('init', '-q', '-b', 'agent/x');
+    writeFileSync(join(repo, '.gitignore'), 'node_modules/\n*.log\n!keep.log\n');
+    writeFileSync(join(repo, 'sub', '.gitignore'), 'gen/\n');
+    writeFileSync(join(repo, 'a'), 'a');
+    g('add', '-A'); g('commit', '-qm', 'a');
+    const dirty = () => wrapper(['git-inspect', '--cwd', repo]).stdout.split('\n')[1];
+    expect(dirty()).toBe('dirty 0');
+    // 커밋된 규칙으로 무시되는 것·Runner가 정한 폴더는 깨끗하다고 본다.
+    for (const path of ['node_modules/x/y.js', 'build.log', 'sub/gen/z.txt', '.awbs-evidence/e.png', '.awbs-home/tmp/t']) {
+      mkdirSync(join(repo, path, '..'), { recursive: true }); writeFileSync(join(repo, path), 'x');
+    }
+    expect(dirty()).toBe('dirty 0');
+    // 숨긴 파일 재현: 남긴 파일을 Agent가 바꿀 수 있는 무시 설정으로 숨겨도 더럽다고 본다.
+    const hidden = (setup: () => void, undo: () => void) => {
+      writeFileSync(join(repo, 'secret.txt'), '남긴 파일');
+      setup();
+      expect(g('status', '--porcelain').stdout, '보통 git status는 숨긴다').not.toContain('secret.txt');
+      expect(dirty()).toBe('dirty 1');
+      undo(); rmSync(join(repo, 'secret.txt'));
+    };
+    mkdirSync(join(repo, '.git', 'info'), { recursive: true });
+    hidden(() => writeFileSync(join(repo, '.git', 'info', 'exclude'), 'secret.txt\n'), () => writeFileSync(join(repo, '.git', 'info', 'exclude'), ''));
+    hidden(() => { writeFileSync(join(repo, 'secret-rules'), 'secret.txt\nsecret-rules\n'); g('config', 'core.excludesFile', join(repo, 'secret-rules')); },
+      () => { g('config', '--unset', 'core.excludesFile'); rmSync(join(repo, 'secret-rules')); });
+    // 새 하위 .gitignore(커밋 안 됨)로 숨기기: `*`는 그 .gitignore 자신과 안의 파일을 모두 git status에서 숨긴다. 커밋된 규칙이 아니므로 남은 파일이다.
+    mkdirSync(join(repo, 'hide'), { recursive: true });
+    writeFileSync(join(repo, 'hide', '.gitignore'), '*\n'); writeFileSync(join(repo, 'hide', 'x'), 'x');
+    expect(g('status', '--porcelain').stdout, '보통 git status는 숨긴다').not.toContain('hide/');
+    expect(dirty()).toBe('dirty 1');
+    rmSync(join(repo, 'hide'), { recursive: true });
+    expect(dirty()).toBe('dirty 0');
+    // 부정 규칙(!keep.log)은 무시하지 않는다.
+    writeFileSync(join(repo, 'keep.log'), 'x');
+    expect(dirty()).toBe('dirty 1');
+    rmSync(join(repo, 'keep.log'));
+    // 커밋된 .gitignore를 고치지 않고(작업 폴더에서만) 바꾸면 그 자체가 추적 파일 변경이다.
+    writeFileSync(join(repo, '.gitignore'), 'node_modules/\n*.log\n!keep.log\nsecret.txt\n');
+    writeFileSync(join(repo, 'secret.txt'), 'x');
+    expect(dirty()).toBe('dirty 1');
+  });
+
   test('agent-file: 하위 Agent 정의만 Agent 계정으로 읽기·쓰기·지우기(fix2 추가)', () => {
     const file = (args: string[], input?: string) => spawnSync(exec, ['agent-file', ...args], { input, encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } });
     const rel = '.codex/agents/code-reviewer.toml';

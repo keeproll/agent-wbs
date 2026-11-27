@@ -42,7 +42,7 @@ export interface AttemptWorkspace {
    */
   settle(job: AttemptJob, verdict: 'PASS' | 'FAIL' | 'BLOCKED' | null): Promise<void>;
   /**
-   * Task가 끝났을 때(병합 확인 → done) 그 Task 브랜치의 개발·검증 폴더를 모두 지운다. 없으면 아무것도 하지 않는다.
+   * Task가 끝났을 때(병합 확인 → done, 또는 취소) 그 Task 브랜치의 개발·검증 폴더를 모두 지운다. 없으면 아무것도 하지 않는다.
    * 왜: QA PASS 뒤 정리가 실패했거나, 병합 전 재작업으로 다시 만든 폴더가 남으면 디스크와 생성 기록이 쌓인다.
    */
   release(branch: string): Promise<void>;
@@ -114,9 +114,9 @@ export function createWorkspace(options: WorkspaceOptions): AttemptWorkspace {
     },
     async release(branch) {
       const git = await repo();
-      for (const id of [`w-${keyOf(branch)}-qa`, `w-${keyOf(branch)}-dev`]) {
-        if ((await git.worktreeState(id)).kind !== 'none') await git.removeWorktree(id);
-      }
+      // 생성 기록을 한 번만 읽고, 그 브랜치의 폴더가 기록에 있을 때만 지운다(정책 목록이 길어도 가볍다).
+      const recorded = new Set(await git.recordedWorktrees());
+      for (const id of [`w-${keyOf(branch)}-qa`, `w-${keyOf(branch)}-dev`]) if (recorded.has(id)) await git.removeWorktree(id);
     },
     async settle(job, verdict) {
       if (role(job) === 'dev') return;

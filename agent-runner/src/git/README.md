@@ -39,6 +39,9 @@ const rejected = await repo.checkTask(latestMain, taskHead);
   - 검사 사본(`createTaskCheckWorktree`)은 실행마다 새 HOME `.awbs-home`(pnpm 저장소 포함)도 이때 만든다. `.git/info/exclude`에 적어 상태 검사에서 뺀다.
 - **결과 가져오기(`importWorktree`)**: Agent 계정 git이 만든 git bundle(데이터 파일)만 받는다(`AgentGit.bundle`, 래퍼 `git-bundle`). Runner bare 저장소에서 `git bundle verify` 뒤 그 파일에서 fetch한다(객체 fsck 검사 켬). Agent 폴더의 `.git`은 읽지 않는다.
 - **검사 사본 확인(`taskCheckPath`)**: HEAD SHA와 「커밋하지 않은 변경 있음」은 Agent 계정 git이 본다(`AgentGit.inspect`, 래퍼 `git-inspect`). 추적 안 된 파일, assume-unchanged·skip-worktree 표시도 변경으로 센다.
+  - 추적 안 된 파일의 무시 여부는 **커밋된 .gitignore만**으로 정한다(`untrackedNotIgnored`, 래퍼는 같은 규칙의 bash). `.git/info/exclude`·저장소 설정·커밋하지 않은 `.gitignore`는 읽지 않는다. 같은 계정 갈래(Runner git + 임시 index)도 같은 규칙이다.
+  - 왜: 그 설정들은 Agent가 바꿀 수 있어 남긴 파일을 숨기는 데 쓸 수 있다. 재현 시험: `test/git/committed-ignore.test.ts`, `test/cli/agent-exec.test.ts`.
+  - 준비 때 `.git/info/exclude`에 적는 `.awbs-home/`·`.awbs-evidence/`는 옛 래퍼(재설치 전)를 위한 것이다. 새 판정은 이 줄에 기대지 않고 두 폴더를 이름으로 뺀다.
 - **시도 흐름이 쓰는 조회(collect-prepare)**:
   - `worktreeState(id)`: 생성 기록과 폴더가 있는지만 본다(lstat). 폴더 내용은 읽지 않는다.
   - `worktreeHead(id)`: 작업 폴더의 HEAD. 전용 계정 배치는 Agent 계정 git(`git-inspect`)으로만 본다.

@@ -5,7 +5,7 @@ import { chmod, link, lstat, mkdir, open, readFile, readdir, rename, rm, statfs,
 import { setTimeout as delay } from 'node:timers/promises';
 import { basename, dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
 import { AGENT_ROOT, restoreAgentPermissions } from '../cli/dedicated-user.ts';
-import { EVIDENCE_DIR, localAgentEvidence, localAgentGit, wrapperAgentEvidence, wrapperAgentGit, type AgentEvidence, type AgentGit } from './agent-git.ts';
+import { EVIDENCE_DIR, localAgentEvidence, localAgentGit, untrackedNotIgnored, wrapperAgentEvidence, wrapperAgentGit, type AgentEvidence, type AgentGit } from './agent-git.ts';
 import { atomicWrite } from '../state/files.ts';
 import { parseCommits, parseRawNumstat, type InputDiff, type InputObservation } from './inputs.ts';
 
@@ -786,7 +786,8 @@ export class GitRepository {
           await mkdir(join(build, '.git', 'info'), { recursive: true, mode: 0o700 });
           await writeFile(join(build, '.git', 'info', 'exclude'), '/.awbs-home/\n', { flag: 'a' });
         }
-        // 검증 폴더면 증거 폴더(.awbs-evidence)를 만들고 상태 검사에서 뺀다(collect-prepare). 증거는 커밋 대상이 아니다.
+        // 검증 폴더면 증거 폴더(.awbs-evidence)를 만든다(collect-prepare). 증거는 커밋 대상이 아니다.
+        // 청결 판정은 이 폴더를 이름으로 뺀다(info/exclude에 기대지 않음). 아래 exclude 줄은 재설치 전 옛 래퍼(git status)를 위한 것이다.
         if (options.evidence) {
           await mkdir(join(build, EVIDENCE_DIR), { mode: 0o770 });
           await mkdir(join(build, '.git', 'info'), { recursive: true, mode: 0o700 });
@@ -1203,9 +1204,13 @@ export class GitRepository {
     try {
       await this.git(['read-tree', head], undefined, env);
       const dirty = await this.git([`--work-tree=${path}`, 'diff', '--no-ext-diff', '--no-textconv', '--name-only', '-z', head, '--'], undefined, env);
-      // 증거 폴더(.awbs-evidence)는 커밋 대상이 아니므로 뺀다. 전용 계정 갈래는 작업 폴더의 .git/info/exclude로 같은 것을 뺀다.
-      const untracked = await this.git([`--work-tree=${path}`, 'ls-files', '--others', '--exclude-standard', `--exclude=/${EVIDENCE_DIR}/`, '-z'], undefined, env);
-      if (dirty.length || untracked.length) throw new GitSafetyError('작업 폴더에 커밋하지 않은 변경이 있습니다.');
+      // 추적 안 된 파일은 무시 규칙 없이 모두 뽑고, 무시 여부는 검사 대상 커밋에 든 .gitignore로만 정한다(전용 계정 갈래의 래퍼 git-inspect와 같은 규칙).
+      // 왜: 작업 폴더의 .gitignore 변경·info/exclude·전역 설정은 Agent가 바꿀 수 있어, 그것으로 남긴 파일을 숨길 수 있다.
+      const untracked = await this.git([`--work-tree=${path}`, 'ls-files', '--others', '-z'], undefined, env);
+      const rules = [];
+      for (const entry of (await this.tree(head)).filter((value) => value.path.split('/').at(-1) === '.gitignore')) rules.push({ path: entry.path, content: await this.blob(entry) });
+      const left = await untrackedNotIgnored(untracked, rules, dirname(this.statePath));
+      if (dirty.length || left.length) throw new GitSafetyError('작업 폴더에 커밋하지 않은 변경이 있습니다.');
     } finally {
       await rm(index, { force: true });
       await rm(`${index}.lock`, { force: true });

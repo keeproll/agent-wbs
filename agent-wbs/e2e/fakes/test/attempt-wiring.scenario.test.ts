@@ -143,7 +143,8 @@ async function setup(options: { host?: 'account' | 'copy'; claude?: Partial<Agen
     ...(jobs.settle && { settle: jobs.settle }) });
   const ci = new CiJobs({ ...f.deps, heavy, directory: join(home, 'ci-jobs'), api: h.runner.api, outbox: runner.outbox,
     runnerId: state.snapshot.runnerId, epoch: () => 1, ready: () => runner.ready, identity, execute: (_job, argv, cwd) => f.deps.execute(argv, cwd), warn: () => undefined });
-  const harness = { f, h, home, repo, runner, execution, flow, ci, calls, errors,
+  const release = async (branch: string) => { if (!jobs.release) throw new Error('정리 함수가 없습니다.'); await jobs.release(branch); };
+  const harness = { f, h, home, repo, runner, execution, flow, ci, calls, errors, release,
     status: async () => (await h.lead('GET', '/api/tasks/TASK-0001')).body.lifecycleStatus as string,
     close: async () => {
       await ci.shutdown(); await flow.shutdown(); await state.close();
@@ -183,10 +184,41 @@ async function fullFlow(t: Harness) {
   // 정리: QA PASS를 보고한 뒤 개발·검증 폴더를 모두 지웠다. ① 검사 사본도 남지 않는다.
   expect(await t.repo.recordedWorktrees()).toEqual([]);
   expect(t.errors).toEqual([]);
+  // done 뒤 서버 정책이 이 브랜치를 끝난 Task 브랜치로 알린다(정리는 이미 했으므로 다시 불러도 아무것도 하지 않는다).
+  await t.runner.poll();
+  expect(t.runner.policy?.closedBranches).toContain(t.f.request.branch);
+  await t.release(t.f.request.branch);
   return head;
 }
 
 describe('같은 계정 배치', () => {
+  test('취소 정리: 끝난 Task(cancelled)이고 열린 보유가 없으면 정책 closedBranches에 오르고, 같은 정리 함수로 개발 폴더를 지운다', async () => {
+    const t = await setup();
+    expect((await t.h.run('TASK-0001')).status).toBe(202);
+    await t.flow.runNext(20);
+    expect(await t.repo.recordedWorktrees()).toEqual([expect.stringMatching(/-dev$/)]);
+    await t.runner.poll();
+    expect(t.runner.policy?.closedBranches ?? []).not.toContain(t.f.request.branch);
+    // QA 인계로 보유가 열려 있는 동안은 Task를 취소로 바꿔도 정리 대상이 아니다.
+    await t.h.rows("update tasks set status='cancelled' where task_key='TASK-0001'");
+    await t.runner.poll();
+    expect(t.runner.policy?.closedBranches ?? []).not.toContain(t.f.request.branch);
+    // 보유가 닫히면(취소 처리 끝) 정리 대상이 된다.
+    await t.h.rows("update runner_jobs set state='cancelled' where state='queued'");
+    await t.h.rows("update execution_holds set lock_state='released',closed_at=clock_timestamp() where closed_at is null");
+    await t.runner.poll();
+    expect(t.runner.policy?.closedBranches).toContain(t.f.request.branch);
+    await t.release(t.f.request.branch);
+    expect(await t.repo.recordedWorktrees()).toEqual([]);
+    // 시도 없이 끝난 job(시작 전 실패)의 브랜치도 오른다. 취소는 시작 전 Task만 되므로 이 경우가 실제 취소의 모양이다.
+    await t.h.rows(`insert into runner_jobs(project_id,kind,payload,state,epoch,dedup_key) select project_id,'attempt',
+      jsonb_build_object('taskKey','TASK-0002','kind','dev','agent','Codex','branch','agent/TASK-0002-h1','baseCommit',repeat('a',40),'inputVersion',1,'instructions','{}'::jsonb),
+      'failed',1,'시작 전 실패' from tasks where task_key='TASK-0002'`);
+    await t.h.rows("update tasks set status='cancelled' where task_key='TASK-0002'");
+    await t.runner.poll();
+    expect(t.runner.policy?.closedBranches).toEqual(expect.arrayContaining([t.f.request.branch, 'agent/TASK-0002-h1']));
+  }, 60_000);
+
   test('실제 prepare·collect로 claim→prepare→세션→①→collect→QA→②→병합→done', async () => {
     const t = await setup();
     await fullFlow(t);

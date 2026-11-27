@@ -231,17 +231,66 @@ git_cwd() {
   printf '%s' "$real"
 }
 
-# 출력: 「head <40자 SHA>」 한 줄, 「dirty 0|1」 한 줄. 커밋하지 않은 변경·추적 안 된 파일·assume-unchanged/skip-worktree 표시가 있으면 dirty 1.
+# 추적 안 된 파일 중 「커밋된 .gitignore로 무시되지 않는 것」이 하나라도 있으면 성공(0), 없으면 1, 판정 못 하면 2.
+# 왜: 무시 규칙을 Agent가 바꿀 수 있는 곳(.git/info/exclude, 전역 excludesFile, 커밋하지 않은 .gitignore 변경)에서 읽으면
+#   Agent가 패턴을 더해 남긴 파일을 청결 확인에서 숨길 수 있다(collect-prepare 방어 점검).
+# 방법:
+#   1. 추적 안 된 파일을 무시 규칙 없이 모두 뽑는다(ls-files --others, --exclude* 없음).
+#   2. HEAD 커밋에 들어 있는 .gitignore만 꺼내 Agent 전용 임시 저장소(규칙만 있는 빈 저장소)에 같은 경로로 둔다.
+#   3. 그 저장소에서 check-ignore --no-index로 판정한다. 작업 폴더의 .gitignore·info/exclude·전역 설정은 읽지 않는다.
+#   Runner가 정한 폴더(.awbs-home/·.awbs-evidence/, 맨 위만)는 커밋 대상이 아니므로 뺀다.
+untracked_left() {
+  local work rc=0
+  # Agent 계정 임시 폴더(설치 스크립트가 만든 $AGENT_HOME/tmp). 없으면 /tmp 안의 개인 폴더(0700, 이름 무작위).
+  if [[ -d $AGENT_HOME/tmp ]]; then work=$(mktemp -d "$AGENT_HOME/tmp/awbs-ignore-XXXXXX") || return 2
+  else work=$(mktemp -d) || return 2; fi
+  untracked_scan "$1" "$work" || rc=$?
+  rm -rf -- "$work"
+  return "$rc"
+}
+
+# 규칙만 있는 저장소의 git. Agent 계정 전용 임시 폴더라 safe.directory가 필요 없다. 시스템·전역 설정 없음.
+rules_git() {
+  env -i HOME="$AGENT_HOME" PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_OPTIONAL_LOCKS=0 LANG=C.UTF-8 \
+    git -C "$1" -c core.excludesFile=/dev/null -c core.hooksPath=/dev/null "${@:2}"
+}
+
+untracked_scan() {
+  local dir=$1 work=$2 path source line pattern code=0 found=1
+  rules_git "$work" init -q --template= rules || return 2
+  agent_git "$dir" ls-tree -r -z --name-only HEAD > "$work/tree" || return 2
+  while IFS= read -r -d '' path; do
+    [[ ${path##*/} == .gitignore ]] || continue
+    mkdir -p -- "$work/rules/$(dirname -- "$path")" || return 2
+    agent_git "$dir" cat-file blob "HEAD:$path" > "$work/rules/$path" || return 2
+  done < "$work/tree"
+  agent_git "$dir" ls-files --others -z > "$work/untracked" || return 2
+  [[ -s $work/untracked ]] || return 1
+  # check-ignore -v -n: 경로마다 「규칙 파일·줄·패턴·경로」 네 칸. 패턴이 비었거나 !로 시작하면 무시되지 않은 파일이다.
+  rules_git "$work/rules" check-ignore --no-index --stdin -z -v -n < "$work/untracked" > "$work/judged" || code=$?
+  ((code == 0 || code == 1)) || return 2
+  while IFS= read -r -d '' source && IFS= read -r -d '' line && IFS= read -r -d '' pattern && IFS= read -r -d '' path; do
+    [[ $path == .awbs-home/* || $path == .awbs-evidence/* ]] && continue
+    if [[ -z $pattern || $pattern == '!'* ]]; then found=0; fi
+  done < "$work/judged"
+  return "$found"
+}
+
+# 출력: 「head <40자 SHA>」 한 줄, 「dirty 0|1」 한 줄.
+# dirty 1: 추적 파일의 커밋하지 않은 변경, 커밋된 .gitignore로 무시되지 않는 추적 안 된 파일, assume-unchanged/skip-worktree 표시 중 하나라도 있음.
 cmd_git_inspect() {
   (($# == 2)) || die "git-inspect --cwd <작업 폴더>만 받습니다."
-  local dir head status flags
+  local dir head status flags rc=0
   dir=$(git_cwd "$@")
   head=$(agent_git "$dir" rev-parse --verify 'HEAD^{commit}') || die "HEAD를 읽지 못했습니다."
   [[ $head =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]] || die "HEAD 모양이 아닙니다."
-  status=$(agent_git "$dir" status --porcelain=v1 -z --untracked-files=all --ignore-submodules=none | tr '\0' '\n') || die "상태를 읽지 못했습니다."
+  # 추적 파일 변경만 본다(--untracked-files=no). 추적 안 된 파일은 아래에서 무시 규칙을 따로 판정한다.
+  status=$(agent_git "$dir" status --porcelain=v1 -z --untracked-files=no --ignore-submodules=none | tr '\0' '\n') || die "상태를 읽지 못했습니다."
   flags=$(agent_git "$dir" ls-files -v | grep -E '^[a-zS] ' || true)
+  untracked_left "$dir" || rc=$?
+  ((rc != 2)) || die "추적 안 된 파일을 판정하지 못했습니다."
   printf 'head %s\n' "$head"
-  if [[ -n $status || -n $flags ]]; then echo 'dirty 1'; else echo 'dirty 0'; fi
+  if [[ -n $status || -n $flags ]] || ((rc == 0)); then echo 'dirty 1'; else echo 'dirty 0'; fi
 }
 
 # 브랜치 하나의 전체 기록을 bundle로 표준 출력에 쓴다. Runner는 이 데이터만 받아 자기 bare 저장소에서 verify 뒤 fetch한다.
