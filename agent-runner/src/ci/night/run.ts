@@ -7,8 +7,8 @@ import { createRedactor, type Redact } from '../../security/redact.ts';
 import { atomicWrite } from '../../state/files.ts';
 import { parsePipeline, type PipelineStep } from '../pipeline.ts';
 import { flakyRate, parseHistory, recordHistory, type FlakyHistory } from './history.ts';
-import { judgeTimings, type TimingJudgement } from './perf.ts';
-import type { CiReport } from './report.ts';
+import { judgeTimingAttempts, type Timing, type TimingJudgement } from './perf.ts';
+import type { CiReport, CiStartBody } from './report.ts';
 import { pruneEvidence } from './retention.ts';
 import { nightDue } from './schedule.ts';
 import { Evidence, excerpt, type CiExecute, type StepAttempt } from './steps.ts';
@@ -16,7 +16,7 @@ import { judgeTests, type TestOutcome } from './tests.ts';
 import { compareImages, decodePng } from './visual.ts';
 
 export interface NightOptions {
-  repo: Pick<GitRepository, 'mainPipeline' | 'createTaskCheckWorktree' | 'taskCheckPath' | 'removeWorktree' | 'mainCommitsSince'>;
+  repo: Pick<GitRepository, 'mainPipeline' | 'pipelineAt' | 'fileAt' | 'createTaskCheckWorktree' | 'taskCheckPath' | 'removeWorktree' | 'mainCommitsSince'>;
   heavy: HeavySemaphore;
   execute: CiExecute;
   report: CiReport;
@@ -30,7 +30,8 @@ export interface NightOptions {
   redact?: Redact;
   signal?: AbortSignal;
 }
-export interface ScreenResult { name: string; status: 'same' | 'diff' | 'missing'; ratio: number }
+/** same=같음, diff=차이(기록만), missing=기준이 있는데 비교 못 함(실패), unchecked=정의에 기준이 없는 화면(기록만). */
+export interface ScreenResult { name: string; status: 'same' | 'diff' | 'missing' | 'unchecked'; ratio: number | null }
 export interface NightStepResult { name: string; status: 'pass' | 'fail' | 'skip'; durationMs: number; attempts: number }
 export interface NightResult {
   runId: string; status: 'pass' | 'fail'; baseSha: string; pipelineSha: string;
@@ -41,9 +42,17 @@ export interface NightResult {
   suspects: string[];
   note: string;
 }
-interface NightState { version: 1; lastDate: string | null; runId: string | null; lastPassSha: string | null; history: FlakyHistory }
+interface NightState {
+  version: 1; lastDate: string | null; runId: string | null; lastPassSha: string | null; history: FlakyHistory;
+  /** 시작을 보내기 전에 저장한 본문. 응답을 잃어도 같은 날짜 키로 같은 본문을 다시 보낸다(원칙 D). */
+  pending: { date: string; body: CiStartBody } | null;
+  /** 서버에 불안정 테스트로 알린 테스트와 실제 마지막 실패 시각. 회복한 뒤에도 낮아진 비율을 보낸다. */
+  tracked: Record<string, string>;
+}
 
-const EMPTY: NightState = { version: 1, lastDate: null, runId: null, lastPassSha: null, history: {} };
+const EMPTY: NightState = { version: 1, lastDate: null, runId: null, lastPassSha: null, history: {}, pending: null, tracked: {} };
+/** Runner가 붙이는 단계 이름 접두어. 정의의 단계 이름(영소문자·숫자·-)에는 `:`이 없어 겹치지 않는다. */
+export const RUNNER_STEP = 'runner:';
 const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 
 export async function readNightState(home: string): Promise<NightState> {
@@ -56,9 +65,14 @@ export async function readNightState(home: string): Promise<NightState> {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return structuredClone(EMPTY);
     throw error;
   }
-  const value = JSON.parse(raw) as NightState;
+  const value = { ...EMPTY, ...JSON.parse(raw) as Partial<NightState> };
+  const pending = value.pending;
   if (value.version !== 1 || ![value.lastDate, value.runId].every(v => v === null || typeof v === 'string') ||
-    !(value.lastPassSha === null || SHA.test(value.lastPassSha))) throw new Error('야간 상태가 손상되었습니다. 원본을 보존하고 확인하세요.');
+    !(value.lastPassSha === null || SHA.test(value.lastPassSha)) ||
+    !(pending === null || pending && typeof pending.date === 'string' && pending.body && typeof pending.body.baseSha === 'string' && SHA.test(pending.body.baseSha)) ||
+    !value.tracked || typeof value.tracked !== 'object' || Object.values(value.tracked).some(v => typeof v !== 'string')) {
+    throw new Error('야간 상태가 손상되었습니다. 원본을 보존하고 확인하세요.');
+  }
   return { ...value, history: parseHistory(value.history) };
 }
 
@@ -102,15 +116,29 @@ export async function runNightCheck(options: NightOptions, date: string): Promis
   if (!Number.isSafeInteger(options.retry) || options.retry < 0) throw new RangeError('재시도 횟수가 올바르지 않습니다.');
   const now = options.now ?? Date.now;
   const redact = options.redact ?? createRedactor();
-  const state = await readNightState(home);
-  const basis = await repo.mainPipeline();
+  let state = await readNightState(home);
+  // 같은 날짜의 시작 본문이 남아 있으면(응답 유실·중단) main이 움직였어도 그 기준과 본문을 그대로 쓴다.
+  let body: CiStartBody;
+  let basis: { baseSha: string; pipelineSha: string; source: string };
+  if (state.pending?.date === date) {
+    body = state.pending.body;
+    const baseSha = body.baseSha ?? '';
+    basis = { baseSha, ...await repo.pipelineAt(baseSha) };
+    if (basis.pipelineSha !== body.pipelineSha) throw new Error('저장한 야간 점검 기준과 정의가 다릅니다. 원본을 보존하고 확인하세요.');
+  } else {
+    basis = await repo.mainPipeline();
+    body = { stage: 'night', ref: 'main', trigger: '야간 일정', baseSha: basis.baseSha, headSha: basis.baseSha, pipelineSha: basis.pipelineSha };
+    state = { ...state, pending: { date, body } };
+    await saveNightState(home, state);
+  }
   const pipeline = parsePipeline(basis.source);
   const install = pipeline.stages.task[0];
   if (!install) throw new Error('설치 단계가 없습니다.');
-  const commands: PipelineStep[] = [install, ...pipeline.stages.night];
-  const started = await report.start({ stage: 'night', ref: 'main', trigger: '야간 일정', baseSha: basis.baseSha, headSha: basis.baseSha, pipelineSha: basis.pipelineSha }, `night:${date}`);
-  // 시작을 서버가 받은 뒤 날짜를 남긴다. 그 사이에 죽으면 같은 키로 다시 시작해 서버가 같은 실행을 돌려준다.
-  await saveNightState(home, { ...state, lastDate: date, runId: started.id });
+  const commands: { name: string; step: PipelineStep }[] = [
+    { name: `${RUNNER_STEP}${install.name}`, step: install }, ...pipeline.stages.night.map(step => ({ name: step.name, step }))];
+  const started = await report.start(body, `night:${date}`);
+  state = { ...state, lastDate: date, runId: started.id };
+  await saveNightState(home, state);
   await report.update(started.id, { fence: null, status: 'run' });
   const evidence = await Evidence.open(home, started.id, redact);
 
@@ -127,23 +155,28 @@ export async function runNightCheck(options: NightOptions, date: string): Promis
   let created = false;
   try {
     const path = await repo.createTaskCheckWorktree(id, basis.baseSha); created = true;
-    for (const [index, command] of commands.entries()) {
+    for (const [index, { name, step: command }] of commands.entries()) {
       const step = result.steps[index];
       if (!step) throw new Error('검사 단계가 없습니다.');
       const begin = performance.now();
       const attempts: StepAttempt[] = [];
       const testRuns: TestOutcome[][] = [];
+      const timingRuns: (Timing[] | undefined)[] = [];
       let passed = false; let reason: string | null = null;
       // 설치는 재시도하지 않는다. 재시도는 실패 테스트를 위한 것이다(G L482).
       const limit = index === 0 ? 1 : 1 + options.retry;
       while (attempts.length < limit) {
         signal?.throwIfAborted();
         await repo.taskCheckPath(id, basis.baseSha);
-        const attempt = await evidence.run(execute, command.argv, path, `${command.name}-${String(attempts.length + 1)}`, {}, signal);
+        const attempt = await evidence.run(execute, command.argv, path, `${name.replace(':', '.')}-${String(attempts.length + 1)}`, {}, signal);
         attempts.push(attempt);
-        await repo.taskCheckPath(id, basis.baseSha);
+        // 각 단계 뒤에도 사본이 커밋과 같아야 한다. 다른 파일로 한 검사를 그 커밋의 근거로 남기지 않는다(원칙 C).
+        try { await repo.taskCheckPath(id, basis.baseSha); } catch (error) {
+          passed = false; reason = `단계가 검사 사본의 커밋 파일을 바꿨습니다: ${error instanceof Error ? error.message : ''}`; break;
+        }
         if (attempt.reportError) { reason = attempt.reportError; break; }
         if (attempt.report?.tests) testRuns.push(attempt.report.tests);
+        timingRuns.push(attempt.report?.timings);
         const judged = testRuns.length ? judgeTests(testRuns, quarantined) : null;
         const code = attempt.result.code;
         // 종료 코드가 실패여도 실패 테스트가 모두 격리된 것이면 통과다. 다른 이유의 실패는 격리로 덮지 않는다.
@@ -157,30 +190,36 @@ export async function runNightCheck(options: NightOptions, date: string): Promis
         result.flaky.push(...judged.flaky); result.quarantinedFailures.push(...judged.quarantinedFailures);
         for (const run of testRuns) for (const t of run) failedOnce[t.key] = (failedOnce[t.key] ?? false) || t.status === 'fail';
       }
-      if (passed && last?.report?.screens) {
-        for (const screen of last.report.screens) {
+      if (passed && (command.screens || last?.report?.screens)) {
+        const reported = new Map((last?.report?.screens ?? []).map(s => [s.name, s.actual]));
+        for (const [screen, baseline] of Object.entries(command.screens ?? {})) {
           try {
-            const diff = compareImages(decodePng(await evidence.file(screen.actual)), decodePng(await evidence.file(screen.expected)));
-            result.screens.push({ name: screen.name, status: diff.sizeMatch && diff.diffPixels === 0 ? 'same' : 'diff', ratio: diff.ratio });
+            const actual = reported.get(screen);
+            if (actual === undefined) throw new Error('화면 스크린샷이 없습니다.');
+            // 기준 이미지는 고정한 main 커밋의 Git 객체에서 읽는다. 단계 출력이 기준을 바꿀 수 없다(원칙 A).
+            const diff = compareImages(decodePng(await evidence.file(actual)), decodePng(await repo.fileAt(basis.baseSha, baseline)));
+            result.screens.push({ name: screen, status: diff.sizeMatch && diff.diffPixels === 0 ? 'same' : 'diff', ratio: diff.ratio });
           } catch {
             // 비교할 화면이 없거나 읽을 수 없으면 비교하지 못한 것이다. 「차이 없음」으로 보지 않는다.
-            result.screens.push({ name: screen.name, status: 'missing', ratio: 1 });
+            result.screens.push({ name: screen, status: 'missing', ratio: null });
           }
         }
-        if (result.screens.some(s => s.status === 'missing')) { passed = false; reason = '비교할 화면 스크린샷이 없습니다.'; }
+        for (const screen of reported.keys()) if (!Object.hasOwn(command.screens ?? {}, screen)) result.screens.push({ name: screen, status: 'unchecked', ratio: null });
+        if (result.screens.some(s => s.status === 'missing')) { passed = false; reason = `비교할 화면이 없습니다: ${result.screens.filter(s => s.status === 'missing').map(s => s.name).join(', ')}`; }
       }
-      if (passed && last?.report?.timings) {
+      if (command.budgetsMs || timingRuns.some(Boolean)) {
         try {
-          const judged = judgeTimings(last.report.timings, command.budgetsMs);
-          result.timings.push(...judged);
-          if (judged.some(t => t.over)) { passed = false; reason = `응답 시간 기준 초과: ${judged.filter(t => t.over).map(t => `${t.name} p95 ${String(t.p95Ms)}ms > ${String(t.budgetMs ?? 0)}ms`).join(', ')}`; }
+          const judged = judgeTimingAttempts(timingRuns.length ? timingRuns : [undefined], command.budgetsMs);
+          result.timings.push(...judged.timings);
+          if (passed && judged.missing.length) { passed = false; reason = `기준이 있는 응답 시간 측정이 없습니다: ${judged.missing.join(', ')}`; }
+          if (judged.timings.some(t => t.over)) { passed = false; reason = `응답 시간 기준 초과: ${judged.timings.filter(t => t.over).map(t => `${t.name} p95 ${String(t.p95Ms)}ms > ${String(t.budgetMs ?? 0)}ms`).join(', ')}`; }
         } catch (error) { passed = false; reason = error instanceof Error ? error.message : '응답 시간 기준이 올바르지 않습니다.'; }
       }
       step.attempts = attempts.length;
       step.durationMs = Math.max(0, Math.round(performance.now() - begin));
       step.status = passed ? 'pass' : 'fail';
       if (!passed) {
-        result.failStep = command.name;
+        result.failStep = name;
         logExcerpt = last ? excerpt(last.result, reason) : reason;
         break;
       }
@@ -197,13 +236,18 @@ export async function runNightCheck(options: NightOptions, date: string): Promis
 
   const finishedAt = new Date(now()).toISOString();
   const history = recordHistory(state.history, failedOnce);
-  const flakyKeys = [...new Set([...result.flaky, ...result.quarantinedFailures])].sort();
+  // 불안정 후보·격리 실패는 추적을 시작한다. 추적 중인 테스트는 이번에 실패했을 때만 마지막 실패 시각을 바꾼다.
+  const tracked = { ...state.tracked };
+  for (const key of [...result.flaky, ...result.quarantinedFailures]) tracked[key] = finishedAt;
+  for (const [key, failed] of Object.entries(failedOnce)) if (failed && Object.hasOwn(tracked, key)) tracked[key] = finishedAt;
+  const flakyKeys = Object.keys(failedOnce).filter(key => Object.hasOwn(tracked, key)).sort();
   if (result.status === 'fail' && state.lastPassSha) result.suspects = await repo.mainCommitsSince(state.lastPassSha, basis.baseSha).catch(() => []);
   result.e2e = tests.total ? tests : null;
-  const diffs = result.screens.filter(s => s.status !== 'same').length;
+  const compared = result.screens.filter(s => s.status !== 'unchecked');
   result.note = [
     result.e2e && `E2E ${String(tests.passed)}/${String(tests.total)}`,
-    result.screens.length && `화면 비교 ${String(result.screens.length)}개 중 ${String(diffs)}개 차이`,
+    compared.length && `화면 비교 ${String(compared.length)}개 중 ${String(compared.filter(s => s.status !== 'same').length)}개 차이`,
+    result.screens.length > compared.length && `기준 없는 화면 ${String(result.screens.length - compared.length)}`,
     result.timings.length && `응답 시간 ${String(result.timings.length)}개 기록 · 기준 없음 ${String(result.timings.filter(t => t.budgetMs === null).length)} · 초과 ${String(result.timings.filter(t => t.over).length)}`,
     result.flaky.length && `불안정 후보 ${String(result.flaky.length)}`,
     result.quarantinedFailures.length && `격리 실패 ${String(result.quarantinedFailures.length)}`,
@@ -211,17 +255,18 @@ export async function runNightCheck(options: NightOptions, date: string): Promis
     result.suspects.length && `원인 후보 커밋 ${result.suspects.map(s => s.slice(0, 7)).join(', ')}`,
   ].filter(Boolean).join(' · ');
   await evidence.finish({ stage: 'night', date, status: result.status, baseSha: basis.baseSha, finishedAt });
-  await saveNightState(home, { version: 1, lastDate: date, runId: started.id, history,
+  await saveNightState(home, { ...state, lastDate: date, runId: started.id, history, tracked, pending: null,
     lastPassSha: result.status === 'pass' ? basis.baseSha : state.lastPassSha });
   await report.update(started.id, {
     fence: null, status: result.status, finishedAt,
     steps: result.steps.map(s => ({ name: s.name, status: s.status, durationMs: s.durationMs })),
     ...(result.e2e && { e2e: result.e2e }),
-    ...(flakyKeys.length && { flakyTests: flakyKeys.map(testKey => ({ testKey, rate: flakyRate(history, testKey), lastFailedAt: finishedAt })) }),
+    ...(flakyKeys.length && { flakyTests: flakyKeys.map(testKey => ({ testKey, rate: flakyRate(history, testKey), lastFailedAt: tracked[testKey] ?? finishedAt })) }),
     ...(result.note && { note: result.note }),
     ...(logExcerpt && { logExcerpt }),
     artifacts: evidence.artifacts,
   });
+  // 다른 실행(배포 확인 등)이 동시에 돌 수 있어 미완료 폴더는 남긴다.
   await pruneEvidence(join(home, 'runs'), now(), { keep: new Set([started.id]) }).catch(() => undefined);
   return result;
 }

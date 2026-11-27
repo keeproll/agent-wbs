@@ -754,6 +754,13 @@ export class GitRepository {
     return this.pipelineOf(sha(commit));
   }
 
+  /** ③ 화면 비교 기준 이미지처럼, 고정한 커밋의 일반 파일 하나를 Git 객체에서 읽는다. 작업 폴더나 단계 출력은 보지 않는다. */
+  async fileAt(commit: string, path: string): Promise<Buffer> {
+    const entry = (await this.tree(sha(commit))).find((value) => value.path === path);
+    if (!entry || !['100644', '100755'].includes(entry.mode)) throw new GitSafetyError(`고정 커밋에 일반 파일 ${path}이 없습니다.`);
+    return this.blob(entry);
+  }
+
   private async pipelineOf(commit: string): Promise<{ pipelineSha: string; source: string }> {
     const entry = (await this.tree(commit)).find((value) => value.path === '.agentwbs/pipeline.yaml');
     if (!entry || !['100644', '100755'].includes(entry.mode)) throw new GitSafetyError('main의 pipeline.yaml은 일반 파일이어야 합니다.');

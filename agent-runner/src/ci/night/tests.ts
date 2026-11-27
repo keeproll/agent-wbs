@@ -22,18 +22,19 @@ function outcomes(attempt: readonly TestOutcome[]): Map<string, 'pass' | 'fail'>
 
 /**
  * 첫 시도와 재시도의 테스트 결과로 판정한다(G L482).
- * 재시도에 다시 나오지 않은 실패 테스트는 마지막 결과를 실패로 둔다. 사라진 테스트를 통과로 보면 실패를 숨길 수 있다.
+ * 시도마다 실제로 보고된 테스트는 그 시도의 결과로 바꾼다. 재시도에서 새로 실패한 테스트도 실패다.
+ * 재시도에 다시 나오지 않은 테스트만 앞의 결과를 그대로 둔다. 사라진 실패를 통과로 보면 실패를 숨길 수 있다.
+ * 왜: 재시도는 불안정 테스트를 가려내려는 것이지 판정을 느슨하게 하려는 것이 아니다.
  */
 export function judgeTests(attempts: readonly (readonly TestOutcome[])[], quarantined: ReadonlySet<string>): TestJudgement {
   const runs = attempts.map(outcomes);
   const final = new Map<string, 'pass' | 'fail'>();
   const failedOnce = new Set<string>();
-  for (const [index, run] of runs.entries()) {
+  for (const run of runs) {
     for (const [key, status] of run) {
       if (status === 'fail') failedOnce.add(key);
-      if (index === 0 || final.get(key) === 'fail') final.set(key, status);
+      final.set(key, status);
     }
-    // 앞에서 실패한 테스트가 이번 시도에 없으면 실패를 유지한다.
   }
   const keys = [...final.keys()].sort();
   const failing = keys.filter(key => final.get(key) === 'fail');

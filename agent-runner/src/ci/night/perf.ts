@@ -25,3 +25,21 @@ export function judgeTimings(timings: readonly Timing[], budgets: Readonly<Recor
     return { name, p95Ms: value, budgetMs, over: budgetMs !== null && value > budgetMs };
   });
 }
+
+/**
+ * 한 단계의 모든 시도에서 잰 응답 시간을 합친다(원칙 B).
+ * - API마다 가장 느린 p95를 남긴다. 어느 시도든 기준을 넘으면 기준 초과다.
+ *   왜: 재시도는 불안정 시험을 가려내려는 것이지 성능 측정을 다시 뽑아 초과를 지우려는 것이 아니다.
+ * - 기준이 있는 API가 마지막 시도에서 빠지거나 이름이 바뀌면 `missing`에 담는다. 호출한 쪽은 실패로 본다(원칙 A).
+ */
+export function judgeTimingAttempts(attempts: readonly (readonly Timing[] | undefined)[], budgets: Readonly<Record<string, number>> = {}): { timings: TimingJudgement[]; missing: string[] } {
+  const worst = new Map<string, TimingJudgement>();
+  for (const timings of attempts) {
+    for (const judged of judgeTimings(timings ?? [], budgets)) {
+      const before = worst.get(judged.name);
+      worst.set(judged.name, before && before.p95Ms >= judged.p95Ms ? { ...before, over: before.over || judged.over } : { ...judged, over: judged.over || Boolean(before?.over) });
+    }
+  }
+  const last = new Set((attempts.at(-1) ?? []).map(t => t.name));
+  return { timings: [...worst.values()], missing: Object.keys(budgets).filter(name => !last.has(name)).sort() };
+}

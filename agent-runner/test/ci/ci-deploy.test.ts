@@ -41,8 +41,8 @@ test('job의 fence로 시작·보고하고 운영 빌드→기동→접속 확�
     expect(f.reports.slice(1).every(r => (r.body as { fence: unknown }).fence === 7)).toBe(true);
     expect(result).toMatchObject({ status: 'pass', url: 'http://localhost:8080' });
     expect(f.final()).toMatchObject({ status: 'pass', url: 'http://localhost:8080', finishedAt: new Date(NOW).toISOString() });
-    expect(f.final().steps?.map(s => [s.name, s.status])).toEqual([['image', 'pass'], ['up', 'pass'], ['browser', 'pass'], ['url-check', 'pass'], ['screenshots', 'pass']]);
-    expect(f.final().artifacts).toEqual(expect.arrayContaining([`runs/${result.runId}/shots/login.png`, `runs/${result.runId}/shots/wbs.png`]));
+    expect(f.final().steps?.map(s => [s.name, s.status])).toEqual([['image', 'pass'], ['up', 'pass'], ['browser', 'pass'], ['runner:url-check', 'pass'], ['runner:screenshots', 'pass']]);
+    expect(f.final().artifacts).toEqual(expect.arrayContaining([`runs/${result.runId}/step/shots/login.png`, `runs/${result.runId}/step/shots/wbs.png`]));
     expect(f.final().note).toContain('스크린샷 2장');
     expect(http.seen).toEqual(expect.arrayContaining(['http://localhost:8080/api/health', 'http://localhost:8080/']));
     const env = f.calls.find(c => c.name === 'image')?.env;
@@ -75,12 +75,12 @@ test('health check가 응답하지 않으면 실패하고, 기다림은 정한 �
     expect(calls).toBe(3);
     const down = server(() => 503);
     const result = await runDeployCheck(options(f, { fetch: down.fetch }));
-    expect(result).toMatchObject({ status: 'fail', failStep: 'url-check' });
+    expect(result).toMatchObject({ status: 'fail', failStep: 'runner:url-check' });
     expect(f.final().logExcerpt).toContain('503');
   } finally { await f.close(); }
 });
 
-test('포트 충돌로 실패하면 원인을 적고 이전 정상 배포는 그대로 둔다', async () => {
+test('포트 충돌로 실패하면 원인을 적고 직전 통과 이미지를 남긴다', async () => {
   const f = await ciFixture();
   try {
     browser(f);
@@ -89,7 +89,7 @@ test('포트 충돌로 실패하면 원인을 적고 이전 정상 배포는 그
     const result = await runDeployCheck(options(f));
     expect(result).toMatchObject({ status: 'fail', failStep: 'up' });
     expect(f.final().note).toContain('포트 8080 사용 중');
-    expect(f.final().note).toContain(`이전 정상 배포는 그대로 (${f.main.slice(0, 7)})`);
+    expect(f.final().note).toContain(`직전 통과 커밋 ${f.main.slice(0, 7)}의 이미지는 남겨 둠`);
     expect(f.calls.some(c => c.name === 'browser' && c.attempt === 2)).toBe(false);
   } finally { await f.close(); }
 });
@@ -98,9 +98,9 @@ test('브라우저 접속 스크린샷이 없거나 PNG가 아니면 배포 확�
   const f = await ciFixture();
   try {
     f.script(async () => ({ code: 0 }));
-    expect(await runDeployCheck(options(f))).toMatchObject({ status: 'fail', failStep: 'screenshots' });
+    expect(await runDeployCheck(options(f))).toMatchObject({ status: 'fail', failStep: 'runner:screenshots' });
     f.script(async ({ name }) => name === 'browser' ? { code: 0, files: { 'x.png': 'text' }, report: { screenshots: ['x.png'] } } : { code: 0 });
-    expect(await runDeployCheck(options(f))).toMatchObject({ status: 'fail', failStep: 'screenshots' });
+    expect(await runDeployCheck(options(f))).toMatchObject({ status: 'fail', failStep: 'runner:screenshots' });
   } finally { await f.close(); }
 });
 
@@ -110,11 +110,11 @@ test('Q-15 결정 전에는 이 PC(loopback) 대상만 확인한다', async () =
     browser(f);
     const http = server();
     const result = await runDeployCheck(options(f, { url: 'https://deploy.example.com', fetch: http.fetch }));
-    expect(result).toMatchObject({ status: 'fail', failStep: 'target' });
+    expect(result).toMatchObject({ status: 'fail', failStep: 'runner:target' });
     expect(f.calls).toHaveLength(0);
     expect(http.seen).toHaveLength(0);
     expect(f.final().note).toContain('Q-15');
-    expect((await runDeployCheck(options(f, { url: null }))).failStep).toBe('target');
+    expect((await runDeployCheck(options(f, { url: null }))).failStep).toBe('runner:target');
   } finally { await f.close(); }
 });
 
