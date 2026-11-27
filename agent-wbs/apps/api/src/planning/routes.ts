@@ -16,7 +16,7 @@ import { recordReplan, scheduleView } from './schedule.ts';
 import { registerSessionRoutes } from './sessions.ts';
 import { registerSplitRoutes } from './split.ts';
 import { deferChange } from '../changes/events.ts';
-import { snapshotHash, wbsSnapshot } from './job-snapshot.ts';
+import { advanceWbs, proposalBasis, snapshotHash, wbsSnapshot } from './job-snapshot.ts';
 import { currentRunnerJob, lockPlanningJob } from '../project/jobs.ts';
 
 /*
@@ -303,11 +303,12 @@ export function registerPlanningRoutes(app: FastifyInstance, pool: Pool): void {
         throw new TaskError('VALIDATION_FAILED', {}, [{ path: 'source', rule: 'inputJob', message: '출처가 이 입력 차이 분석 작업과 다릅니다.' }]);
       }
       await lockGraph(client, projectId);
+      let currentWbs: Awaited<ReturnType<typeof wbsSnapshot>> | undefined;
+      const before = (job.payload as { wbs?: Awaited<ReturnType<typeof wbsSnapshot>> }).wbs;
       if (job.kind === 'input_diff' || job.kind === 'split') {
-        const before = (job.payload as { wbs?: unknown }).wbs;
-        const current = await wbsSnapshot(client, projectId);
-        // shortcut: WBS 전체 변경을 보수적으로 거부한다. 무관한 Task 변경으로 재시도가 잦아지면 대상·인접 그래프만 비교한다.
-        if (snapshotHash(before) !== snapshotHash(current)) {
+        currentWbs = await wbsSnapshot(client, projectId);
+        const splitTask = source.kind === 'split' ? source.id : undefined;
+        if (snapshotHash(proposalBasis(before, body.ops, splitTask)) !== snapshotHash(proposalBasis(currentWbs, body.ops, splitTask))) {
           throw new TaskError('VERSION_CONFLICT', { changes: [] }, [], '분석한 Task의 내용·상태·작업 묶음·의존 관계가 바뀌었습니다. 새 작업으로 다시 분석하세요.');
         }
       }
@@ -335,6 +336,10 @@ export function registerPlanningRoutes(app: FastifyInstance, pool: Pool): void {
           result = await transition(client, row, 'held', 'held', PLANNING, '', { holdReasons: { holdReasons: ev.holdReasons, issues: ev.issues } });
         } else result = (await applyNow(client, request, row, ev, PLANNING)).row;
       } else await requestJudgement(client, row, ev, epochOf(request));
+      if (result.status === 'applied' && before && currentWbs) {
+        const advanced = advanceWbs(currentWbs, await wbsSnapshot(client, projectId), before);
+        await client.query("update runner_jobs set payload=jsonb_set(payload,'{wbs}',$2::jsonb) where id=$1", [job.id, JSON.stringify(advanced)]);
+      }
       return reply.code(201).send({ id: result.id, cpKey: result.cp_key, status: result.status });
     });
 
