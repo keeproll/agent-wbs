@@ -30,6 +30,7 @@ import type { State } from './state/state.ts';
 import { Execution, type ExecutionOptions } from './exec/session.ts';
 import { Launches } from './exec/launches.ts';
 import { CiJobs, type CiJobsOptions } from './ci/jobs.ts';
+import { AttemptFlow, type AttemptFlowOptions } from './jobs/attempt-flow.ts';
 
 /** 세션 실행 계층(M5)이 시도 하나를 실행하는 동안 등록하는 보유. 지금(M4)은 비어 있다. */
 export interface ActiveSession extends SessionState {
@@ -76,6 +77,8 @@ export interface RunnerAppDeps {
   agentRoot?: string | null;
   /** Q-08 승인 전에는 fake 명령 실행기만 주입한다. */
   ci?:Pick<CiJobsOptions,'repo'|'execute'|'collectTests'>;
+  /** 검증한 결과 수집 공급원이 연결된 경우에만 시도 흐름을 시작한다. */
+  jobs?: Pick<AttemptFlowOptions, 'collect' | 'taskCheck'>;
 }
 
 /** 서버 정책을 받기 전 입력 확인 기본 주기(5분, 서버 정책 inputCheckMinutes의 기본값과 같음). */
@@ -92,6 +95,7 @@ export const INPUT_INTERVAL_MS = 5 * 60_000;
  */
 export class RunnerApp {
   readonly execution: Execution;
+  readonly jobs: AttemptFlow | undefined;
   readonly runner: Runner;
   readonly heavy: HeavySemaphore;
   readonly reporter: ResourceReporter;
@@ -231,6 +235,15 @@ export class RunnerApp {
       directory:join(d.home,'state','ci'),epoch:() => d.state.snapshot.epoch,ready:() => this.runner.ready,
       identity:{ get hostId() { return app.identity.hostId; },get bootId() { return app.identity.bootId; } },
       github:this.github.client,heavy:this.heavy,warn:d.warn });
+    if (d.jobs) this.jobs = new AttemptFlow({
+      ...d.jobs, execution: this.execution, runner: this.runner, api: d.api,
+      epoch: () => d.state.snapshot.epoch,
+      identity: { get hostId() { return app.identity.hostId; }, get bootId() { return app.identity.bootId; } },
+      onError: error => {
+        if (authenticationFailed(error)) this.#halt?.(error);
+        else d.warn(`시도 흐름 실패: ${message(error)}`);
+      },
+    });
   }
 
   get identity(): { hostId: string; bootId: string } {
@@ -384,6 +397,9 @@ export class RunnerApp {
       if (authenticationFailed(error)) { this.#halt?.(error); return; }
       this.#d.warn(`${what}: ${message(error)}`);
     };
+    if (this.jobs) this.#timers.push(scheduleDaily(async () => {
+      await this.jobs?.poll(this.reporter.caps?.total ?? 0, signal);
+    }, { intervalMs: 1000, onError: onError('시도 예약') }));
     this.#timers.push(scheduleDaily(async () => {
       await this.checkReadiness();
       if (this.#d.cliUpdates !== false) {
@@ -462,7 +478,8 @@ export class RunnerApp {
       const timers = this.#timers;
       this.#timers = [];
       await Promise.allSettled(timers.map((timer) => timer.stop()));
-      await this.execution.shutdown();
+      if (this.jobs) await this.jobs.shutdown();
+      else await this.execution.shutdown();
       await this.ci?.shutdown();
       signal.removeEventListener('abort', onAbort);
       this.#halt = undefined;

@@ -27,6 +27,9 @@ export async function reportResult(client: PoolClient, attemptId: string, princi
   const qa = a.kind === 'qa' || a.kind === 'reverify';
   if (qa !== Boolean(body.verification) || qa && (body.changedFiles.length || body.failure)) throw new PlatformError('VALIDATION_FAILED');
   const executionFailed = !qa && Boolean(body.failure);
+  const taskCheck = !qa ? (await client.query<{ head_sha: string; status: string; spec_revision: number; input_version: string; fail_scope: string | null }>(`select c.head_sha,c.status,c.spec_revision,c.input_version,c.fail_scope from ci_runs c
+    where c.attempt=$1 and c.stage=1 order by c.run_no desc limit 1`, [a.id])).rows[0] : undefined;
+  const taskCheckFailed = executionFailed && taskCheck?.status === 'fail' && taskCheck.fail_scope === 'task';
   if ((await client.query("select 1 from ci_runs where attempt=$1 and stage=1 and fail_scope='baseline' and status='fail' and run_no=(select max(run_no) from ci_runs where attempt=$1 and stage=1)",[a.id])).rowCount) throw new PlatformError('GATE_NOT_PASSED',{ reasons:['기준선 검사 실패를 먼저 해결해야 합니다.'] });
   const evidenceIds = [...new Set([...body.evidence,...(body.verification?.checklist.flatMap(c => c.evidence ? [c.evidence] : []) ?? [])])];
   const evidence = await client.query('select id from evidence where id::text=any($1::text[]) and task=$2 and attempt=$3', [evidenceIds,task.id,a.id]);
@@ -64,10 +67,9 @@ export async function reportResult(client: PoolClient, attemptId: string, princi
       await client.query('insert into defects(project_id,def_key,verification,blocking,content) values($1,$2,$3,$4,$5)', [task.project_id,`DEF-${String(n).padStart(4,'0')}`,verification.id,defect.blocking,defect.text]);
     }
   } else if (executionFailed) {
-    status = finishAttempt(task.status,a,'failed',false).taskStatus;
+    status = finishAttempt(task.status,a,taskCheckFailed ? 'task-check-failed' : 'failed',false).taskStatus;
   } else {
-    const check = (await client.query<{ head_sha: string; status: string; spec_revision: number; input_version: string }>(`select c.head_sha,c.status,c.spec_revision,c.input_version from ci_runs c
-      where c.attempt=$1 and c.stage=1 order by c.run_no desc limit 1`, [a.id])).rows[0];
+    const check = taskCheck;
     const input = await repo.input(task.project_id,task.src_input_version);
     const valid = check?.status === 'pass' && check.spec_revision === gate.basis.specRevision && check.input_version === input?.id;
     status = finishAttempt(task.status,a,'completed',valid).taskStatus;
@@ -86,7 +88,9 @@ export async function reportResult(client: PoolClient, attemptId: string, princi
   await client.query('update tasks set status=$2,verif_state=$3 where id=$1', [task.id,status,verifState]);
   await repo.historyEvent(task,'시도 결과',{ attemptId:a.id,result:body.verification?.result ?? 'completed',disposition,before:task.status,after:status });
   await repo.event(job,'finished',null,{ attemptId:a.id,disposition });
-  if (executionFailed) await retryFailedAttempt(client,a.id);
+  if (taskCheckFailed) {
+    if (!await handover(client,job.id,'rework',a.id)) await repo.state(job.id,'done');
+  } else if (executionFailed) await retryFailedAttempt(client,a.id);
   else if (!qa) await handover(client,job.id,a.kind === 'dev' ? 'qa' : 'reverify',a.id);
   else if (disposition === 'current' && body.verification?.result === 'FAIL') {
     await repo.alert(task.project_id,`qa-fail:${a.id}`,'QA 검증에 실패했습니다.',{ taskKey:task.task_key,attemptId:a.id },'fail');

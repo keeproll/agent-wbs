@@ -11,6 +11,7 @@ export interface ProcessOptions {
   signal?: AbortSignal;
   graceMs?: number;
   stdout?: (bytes: Buffer) => void | Promise<void>;
+  stderr?: (bytes: Buffer) => void | Promise<void>;
   stdoutEnd?: () => void;
 }
 /** 고정 래퍼만 shell로 읽는다. 실제 명령·인자는 "$@" 배열로 전달하고 문자열로 합치지 않는다. */
@@ -27,11 +28,13 @@ export async function runProcess(o: ProcessOptions): Promise<{ code: number | nu
   const permit = child.stdio[3] as Writable;
   permit.on('error', () => undefined);
   child.stdin?.on('error', () => undefined);
-  child.stderr?.resume();
-  const output = (async () => {
+  if (!o.stderr) child.stderr?.resume();
+  const stdout = (async () => {
     try { if (child.stdout) for await (const bytes of child.stdout) await o.stdout?.(bytes as Buffer); }
     finally { o.stdoutEnd?.(); }
   })();
+  const stderr = (async () => { if (o.stderr && child.stderr) for await (const bytes of child.stderr) await o.stderr(bytes as Buffer); })();
+  const output = Promise.all([stdout, stderr]);
   void output.catch(() => { permit.destroy(); void clean(); });
   const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
     child.once('error', reject);

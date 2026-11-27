@@ -28,7 +28,7 @@ export const definition = { version: 1, stages: {
 } };
 
 export async function fixture(taskBranch = 'agent/task') {
-  const root = await mkdtemp(join(tmpdir(), 'ci-int-'));
+  const root = await mkdtemp(join(process.env.AWBS_TEST_TMP ?? tmpdir(), 'ci-int-'));
   const source = join(root, 'source'); const remote = join(root, 'remote.git'); await mkdir(source);
   git(source, 'init', '-b', 'main');
   await file(join(source, '.agentwbs/pipeline.yaml'), JSON.stringify(definition));

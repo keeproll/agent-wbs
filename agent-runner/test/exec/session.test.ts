@@ -1,5 +1,7 @@
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { afterEach, expect, test } from 'vitest';
 import { ApiError, ApiTransportError, createApiClient } from '../../src/api/client.ts';
@@ -20,9 +22,9 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map(p => rm(p, { recursive: true, force: true })));
 });
 const job: Extract<ClaimedJob, { kind: 'attempt' }> = { id: 'job', kind: 'attempt', fence: 9, leaseUntil: new Date(Date.now() + 60000).toISOString(), payload: { taskKey: 'TASK-0001', kind: 'dev', agent: 'Codex', branch: 'agent/task', baseCommit: 'a'.repeat(40), inputVersion: 1, instructions: { spec: '작업 지시' } } };
-async function setup({ installBad = false, isolation = true, lines, hang = false, recovered = true, startMismatch = false, renewPast = false, closeStdout = false, holdsUnavailable = false, prepare }: { installBad?: boolean; isolation?: boolean; lines?: unknown[]; hang?: boolean; recovered?: boolean; startMismatch?: boolean; renewPast?: boolean; closeStdout?: boolean; holdsUnavailable?: boolean; prepare?: () => Promise<void> } = {}) {
+async function setup({ installBad = false, installGood = false, isolation = true, lines, hang = false, recovered = true, startMismatch = false, renewPast = false, closeStdout = false, holdsUnavailable = false, prepare }: { installBad?: boolean; installGood?: boolean; isolation?: boolean; lines?: unknown[]; hang?: boolean; recovered?: boolean; startMismatch?: boolean; renewPast?: boolean; closeStdout?: boolean; holdsUnavailable?: boolean; prepare?: () => Promise<void> } = {}) {
   job.leaseUntil = new Date(Date.now() + 60000).toISOString();
-  const home = await mkdtemp('/home/keeproll/.orca/bots/agentwbs/archive/2026-11-27/M5-02/session-'); roots.push(home);
+  const home = await mkdtemp(join(process.env.AWBS_TEST_TMP ?? tmpdir(), 'session-')); roots.push(home);
   const fake = installFakeCli(join(home, 'fake'), 'codex', { lines: lines ?? [{ type: 'thread.started', thread_id: 'thread-1' }, { type: 'turn.completed', usage: { input_tokens: 10, cached_input_tokens: 2, output_tokens: 3 } }], hang, closeStdout });
   const state = await State.open(home); states.push(state);
   const requests: { path: string; body: Record<string, unknown>; key: string | null }[] = [];
@@ -44,7 +46,7 @@ async function setup({ installBad = false, isolation = true, lines, hang = false
     let reply: unknown;
     if (path.endsWith('/host')) reply = { mode: 'auto', caps: { total: 6, Codex: 6, Claude: 6, heavy: 1 }, recommended: { total: 6, Codex: 6, Claude: 6, heavy: 1 }, hostChanged: false };
     if (path.endsWith('/run-grade')) reply = { model: 'gpt-6.2-sol', effort: 'high', adjust: null, locked: false, floorEffort: 'low', allowedModels: ['gpt-6.2-sol'], policy: { onUsage: 'wait', lowPct: 20, onRework: 'up1', notifyAt: 2 } };
-    else if (path.endsWith('/subagents')) reply = { enabled: installBad, items: installBad ? [{ id: 'def', key: 'helper', agent: 'Codex', version: 1, hash: '0'.repeat(64), file: 'instruction', sandbox: 'read-only' }] : [] };
+    else if (path.endsWith('/subagents')) reply = { enabled: installBad || installGood, items: installBad || installGood ? [{ id: 'def', key: 'helper', agent: 'Codex', version: 1, hash: installBad ? '0'.repeat(64) : createHash('sha256').update('instruction').digest('hex'), file: 'instruction', sandbox: 'read-only' }] : [] };
     else if (path.endsWith('/start')) {
       if (startMismatch) return Response.json({ error: { code: 'SUBAGENT_INSTALL_FAILED', message: '설치 중 허용 버전이 바뀜', action: '시작', fix: '정의 재조회', errors: [], details: {}, requestId: 'fake' } }, { status: 422 });
       const attemptId = `attempt-${requests.filter(r => r.path.endsWith('/start')).length}`;
@@ -86,6 +88,37 @@ test('기본 격리 거부는 start와 실제 CLI 실행 전에 멈춘다', asyn
   await expect(t.exec.run(job)).rejects.toMatchObject({ code: 'isolation_undecided' });
   expect(t.requests.some(r => r.path.endsWith('/start'))).toBe(false);
   expect(t.fake.calls()).toEqual([]);
+});
+
+test('claim도 run과 같은 하위 Agent 예산을 포함해 canStart를 검사한다', async () => {
+  const t = await setup();
+  const slots: number[] = [];
+  t.options.canStart = (_agent, requested) => { slots.push(requested); return requested === 1 ? { ok: true } : { ok: false, reason: 'limit' }; };
+  expect(await t.exec.claim(6)).toMatchObject({ kind: 'stop_attempt' });
+  expect(slots.length).toBeGreaterThan(0);
+  expect(slots.every(value => value === 3)).toBe(true);
+  expect(t.requests.find(r => r.path.endsWith('/jobs/claim'))?.body.kinds).toEqual(['stop_attempt']);
+});
+
+test('job 결합은 실제 출력 전달 뒤 확인하고 슬롯 반환 뒤 같은 임대 안에서 결과를 수집한다', async () => {
+  const t = await setup({ lines: [
+    { type: 'item.completed', item: { type: 'agent_message', text: '검증한 결과' } },
+    { type: 'turn.completed' },
+  ] });
+  const events: string[] = [];
+  const result = await t.exec.run(job, {
+    prompt: '추가 지시 데이터',
+    delivered: async () => { expect(t.fake.calls()).toHaveLength(1); events.push('delivered'); },
+    complete: async output => {
+      expect(t.requests.some(r => r.path.endsWith('/slots/release'))).toBe(true);
+      expect(t.sessions).toEqual([]);
+      expect(output.text).toBe('검증한 결과');
+      events.push('complete');
+    },
+  });
+  expect(result.ok).toBe(true);
+  expect(events).toEqual(['delivered', 'complete']);
+  expect(t.fake.calls()[0]?.stdin).toContain('추가 지시 데이터');
 });
 
 test('설치 실패면 시도를 만들지 않고 SUBAGENT_INSTALL_FAILED를 outbox에 남긴다', async () => {
@@ -225,6 +258,24 @@ test('① 명령도 임대가 유지되는지 확인한 뒤에만 실행한다',
   await expect(t.exec.command({ id: 'job', fence: 9, epoch: 0 }, 'Codex', { file: t.fake.path, args: [], cwd: t.home, env: {}, stdin: '' })).rejects.toThrow('임대');
   expect(t.fake.calls()).toEqual([]);
   expect(t.heavy.snapshot().running).toBe(0);
+});
+
+test('실제 ① 어댑터에 명령의 stdout·stderr와 종료 코드를 함께 돌려준다', async () => {
+  const t = await setup();
+  installFakeCli(join(t.home, 'fake'), 'codex', { lines: ['검사 출력'], stderr: '검사 진단' });
+  const output = await t.exec.command({ id: 'job', fence: 9, epoch: 0 }, 'Codex', { file: t.fake.path, args: [], cwd: t.home, env: {}, stdin: '' });
+  expect(output).toMatchObject({ code: 0, stdout: '검사 출력\n', stderr: '검사 진단' });
+});
+
+test('세션용 하위 Agent 정의는 실행 중 유지하고 실제 ① 전에 소유 hash를 확인해 걷어 낸다', async () => {
+  const t = await setup({ installGood: true });
+  await t.exec.run(job, {
+    delivered: async () => { expect(await readFile(join(t.home, '.codex/agents/helper.toml'), 'utf8')).toContain('instruction'); },
+    complete: async () => {
+      await expect(readFile(join(t.home, '.codex/agents/helper.toml'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(t.home, '.codex/agents/.awbs-installed.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    },
+  });
 });
 
 test('실행 중 중단은 그룹 종료 뒤 interrupt를 보고하고 새 시도는 다른 attemptId를 쓴다', async () => {

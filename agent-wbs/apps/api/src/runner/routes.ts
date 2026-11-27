@@ -68,7 +68,7 @@ export function installRunner(app: FastifyInstance, pool: Pool) {
     if (!task) throw new PlatformError('TASK_NOT_FOUND');
     const role = (r.query as { role: RunRole }).role;
     const prev = (await repo.history(task.id)).findLast(a => (a.kind === 'dev' || a.kind === 'rework' ? 'dev' : 'qa') === role);
-    const kind = prev && (prev.status === 'interrupted' || prev.status === 'failed') ? prev.kind : role === 'dev' ? task.status === 'rework' ? 'rework' : 'dev' : task.status === 'verifying' ? 'reverify' : 'qa';
+    const kind = ['paused','failed'].includes(task.status) && prev && (prev.status === 'interrupted' || prev.status === 'failed') ? prev.kind : role === 'dev' ? task.status === 'rework' ? 'rework' : 'dev' : task.status === 'verifying' ? 'reverify' : 'qa';
     return (await runGrade(repo, task, kind)).wire;
   });
   route('getExecutionHolds', async (repo, r) => ({ holds: await repo.ownedHolds(principal(r), required(r.platform).epoch) }));

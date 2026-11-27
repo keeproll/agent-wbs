@@ -12,7 +12,7 @@ export const TASK_TRANSITIONS: Readonly<Record<TaskStatus, readonly TaskStatus[]
   planning: ['approval', 'cancelled'],
   approval: ['ready', 'planning', 'cancelled'],
   ready: ['running', 'cancelled'],
-  running: ['qa', 'verifying', 'failed', 'paused'],
+  running: ['qa', 'verifying', 'failed', 'paused', 'rework'],
   paused: ['running', 'qa', 'verifying'],
   qa: ['gate', 'rework', 'paused', 'failed', 'qa'],
   rework: ['running'],
@@ -70,6 +70,7 @@ export interface ClaimInput {
   autoReworkLimit: number;
   taskCheckPassed: boolean;
   integrationFailed: boolean;
+  taskCheckFailed?: boolean;
   evidenceInvalidated: boolean;
   history: readonly AttemptHistory[];
   modelId: string;
@@ -113,9 +114,9 @@ export function claimReasons(input: ClaimInput): string[] {
       if (!input.leaderRequested) reasons.push('팀장 시작 버튼이 필요합니다.');
       break;
     case 'rework':
-      if (!input.integrationFailed && !(previous?.status === 'completed' &&
+      if (!input.integrationFailed && !(input.taskCheckFailed && previous?.status === 'failed' && (previous.kind === 'dev' || previous.kind === 'rework')) && !(previous?.status === 'completed' &&
         previous.verificationDisposition !== 'stale' && (previous.kind === 'qa' || previous.kind === 'reverify') && previous.verificationResult === 'FAIL')) {
-        reasons.push('QA 또는 통합 실패가 필요합니다.');
+        reasons.push('① Task 검사, QA 또는 통합 실패가 필요합니다.');
       }
       if (counts.automaticReworks >= input.autoReworkLimit && !input.leaderRequested) reasons.push('자동 재작업 한도 초과입니다.');
       break;
@@ -174,11 +175,15 @@ export function startAttempt(input: ClaimInput, installed: boolean): TaskStatus 
 
 export function finishAttempt(
   status: TaskStatus, attempt: Pick<Attempt, 'kind' | 'status'>,
-  result: Exclude<AttemptStatus, 'running'>, taskCheckPassed: boolean,
+  result: Exclude<AttemptStatus, 'running'> | 'task-check-failed', taskCheckPassed: boolean,
 ): { taskStatus: TaskStatus; attemptStatus: Exclude<AttemptStatus, 'running'> } {
   if (attempt.status !== 'running') throw new DomainError('ATTEMPT_CLOSED', '이미 종료된 시도입니다.');
   if (status !== ATTEMPT_TASK_STATE[attempt.kind]) {
     throw new DomainError('INVALID_TRANSITION', '열린 현재 단계의 시도만 종료할 수 있습니다.');
+  }
+  if (result === 'task-check-failed') {
+    if (attempt.kind !== 'dev' && attempt.kind !== 'rework') throw new DomainError('INVALID_TRANSITION', '개발·재작업의 ① 실패만 재작업으로 이어집니다.');
+    return { taskStatus: 'rework', attemptStatus: 'failed' };
   }
   if (result === 'failed' || result === 'interrupted') {
     return { taskStatus: result === 'failed' ? 'failed' : 'paused', attemptStatus: result };
