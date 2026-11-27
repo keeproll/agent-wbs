@@ -168,7 +168,7 @@ test('관측 미확인은 새 세션을 막지만 중단 명령은 계속 받는
   const t = await setup();
   t.sessions.push({ attemptId: 'attempt-1', agent: 'Codex', observed: 2, reserved: 3, state: 'unconfirmed', children: 3 });
   expect(await t.exec.claim(10)).toMatchObject({ kind: 'stop_attempt' });
-  expect(t.requests.find(r => r.path.endsWith('/jobs/claim'))?.body).toMatchObject({ kinds: ['stop_attempt'], capacity: 0 });
+  expect(t.requests.find(r => r.path.endsWith('/jobs/claim'))?.body).toMatchObject({ kinds: ['stop_attempt'], capacity: 10 });
 });
 
 test('프로세스가 살아 있는 동안 stdout만 끊겨도 즉시 미확인으로 보유한다', async () => {
@@ -313,3 +313,76 @@ test('review: process 응답을 기다리는 사이 생긴 미확인도 실행 �
   await expect(t.exec.run(job)).rejects.toThrow('unconfirmed_session');
   expect(t.fake.calls()).toEqual([]);
 });
+
+test('review2: ① 명령도 최신 로컬 미확인을 보고 실행을 보류해야 한다', async () => {
+  const t = await setup();
+  t.sessions.push({ attemptId: 'other', agent: 'Codex', observed: 2, reserved: 3, state: 'unconfirmed', children: 3 });
+  const denied = t.options.canStart('Codex', 1, t.sessions);
+  expect(denied).toMatchObject({ ok: false, reason: 'unconfirmed_session' });
+  await expect(t.exec.command({ id: 'job', fence: 9, epoch: 0 }, 'Codex', { file: t.fake.path, args: [], cwd: t.home, env: {}, stdin: '① 검사' })).rejects.toThrow('unconfirmed_session');
+  expect(t.fake.calls()).toHaveLength(0);
+});
+
+test('review2: 무거운 번호표를 기다리다 미확인이 생기면 명령 슬롯도 예약하지 않는다', async () => {
+  const t = await setup();
+  const release = await t.heavy.acquire('다른 작업');
+  const command = t.exec.command({ id: 'job', fence: 9, epoch: 0 }, 'Codex', { file: t.fake.path, args: [], cwd: t.home, env: {}, stdin: '' });
+  const rejected = expect(command).rejects.toThrow('unconfirmed_session');
+  try {
+    for (let i = 0; i < 100 && t.heavy.snapshot().waiting !== 1; i++) await sleep(10);
+    expect(t.heavy.snapshot().waiting).toBe(1);
+    t.sessions.push({ attemptId: 'other', agent: 'Codex', observed: 0, reserved: 1, state: 'unconfirmed', children: 1 });
+  } finally { release(); }
+  await rejected;
+  expect(t.requests.some(r => r.path.endsWith('/slots/acquire'))).toBe(false);
+  expect(t.fake.calls()).toEqual([]);
+  expect(t.heavy.snapshot().running).toBe(0);
+});
+
+test('review2: process 응답 뒤 명령 거부도 종료 증명으로 슬롯을 반환한다', async () => {
+  const t = await setup();
+  const api = t.options.api;
+  t.options.api = async (operation, request) => {
+    const response = await api(operation, request);
+    if (operation === 'reportJobProcess') t.sessions.push({ attemptId: 'other', agent: 'Codex', observed: 0, reserved: 1, state: 'unconfirmed', children: 1 });
+    return response;
+  };
+  await expect(t.exec.command({ id: 'job', fence: 9, epoch: 0 }, 'Codex', { file: t.fake.path, args: [], cwd: t.home, env: {}, stdin: '' })).rejects.toThrow('unconfirmed_session');
+  expect(t.fake.calls()).toEqual([]);
+  expect(t.requests.find(r => r.path.endsWith('/slots/release'))?.body).toMatchObject({ proof: { kind: 'group_empty' } });
+  expect((await t.exec.launches.list()).every(r => r.completedAt)).toBe(true);
+  expect(t.heavy.snapshot().running).toBe(0);
+});
+
+test('review2: 준비 중인 명령도 세션과 같은 로컬 자리를 예약한다', async () => {
+  const t = await setup();
+  t.sessions.push({ attemptId: 'other', agent: 'Codex', observed: 2, reserved: 3, state: 'ok', children: 3 });
+  const release = await t.heavy.acquire('다른 작업');
+  const controller = new AbortController();
+  const command = t.exec.command({ id: 'command', fence: 9, epoch: 0 }, 'Codex', { file: t.fake.path, args: [], cwd: t.home, env: {}, stdin: '' }, controller.signal);
+  const ended = command.catch(() => undefined);
+  try {
+    for (let i = 0; i < 100 && t.heavy.snapshot().waiting !== 1; i++) await sleep(10);
+    expect(t.heavy.snapshot().waiting).toBe(1);
+    await expect(t.exec.run(job)).rejects.toThrow('limit');
+  } finally { controller.abort(); release(); await ended; await t.exec.shutdown(); }
+  expect(t.fake.calls()).toEqual([]);
+});
+
+test('review2: 명령 기록이 사라지면 과거 완료 기록으로 해제하지 않고 미확인 예약을 유지한다', async () => {
+  const t = await setup();
+  await t.exec.run(job);
+  const api = t.options.api;
+  t.options.api = async (operation, request) => {
+    const response = await api(operation, request);
+    if (operation === 'reportJobProcess') {
+      const record = (await t.exec.launches.list()).find(r => !r.completedAt && r.pgid !== null);
+      if (!record) throw new Error('진행 중인 명령 기록이 없습니다.');
+      await rm(join(t.exec.launches.directory, `${record.launchId}.json`));
+    }
+    return response;
+  };
+  await expect(t.exec.command({ id: job.id, fence: job.fence, epoch: 0 }, 'Codex', { file: t.fake.path, args: [], cwd: t.home, env: {}, stdin: '' })).rejects.toThrow();
+  expect(t.heavy.snapshot().running).toBe(1);
+  expect(await t.exec.claim(6)).toMatchObject({ kind: 'stop_attempt' });
+}, 15000);

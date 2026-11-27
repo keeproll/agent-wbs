@@ -147,6 +147,52 @@ describe('runner 실제 PostgreSQL 검증', () => {
     } finally { await exec.shutdown(); await state.close(); await rm(home, { recursive: true, force: true }); }
   });
 
+  test.each(['before', 'after-process'])('review2: 미보고 메모리 보류를 ① 명령에 적용하고 슬롯을 정리한다(%s)', async stage => {
+    const { mkdtemp, rm } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { createApiClient } = await import('../../../../agent-runner/src/api/client.ts');
+    const { Outbox } = await import('../../../../agent-runner/src/api/outbox.ts');
+    const { Secret } = await import('../../../../agent-runner/src/security/secret.ts');
+    const { State } = await import('../../../../agent-runner/src/state/state.ts');
+    const { Execution } = await import('../../../../agent-runner/src/exec/session.ts');
+    const { HeavySemaphore } = await import('../../../../agent-runner/src/resources/heavy.ts');
+    const { ResourceReporter } = await import('../../../../agent-runner/src/resources/reporter.ts');
+    const { installFakeCli } = await import('../../../../agent-runner/test/fakes/cli.ts');
+    const t = await task();
+    const home = await mkdtemp(join(process.env.AWBS_TEST_TMP ?? tmpdir(), 'fix2-review-grade-'));
+    const state = await State.open(home);
+    await state.update(d => { d.epoch = 1; });
+    const fake = installFakeCli(join(home, 'fake'), 'codex', { lines: [{ type: 'thread.started', thread_id: 'new-thread' }, { type: 'turn.completed', usage: {} }] });
+    let commandPhase = false;
+    const api = createApiClient({ baseUrl: 'http://fake.invalid', token: new Secret(bearer), fetch: async (input, init) => {
+      const u = new URL(String(input));
+      const r = await app.inject({ method: init?.method as 'GET' | 'POST', url: u.pathname + u.search, headers: Object.fromEntries(new Headers(init?.headers)), ...(init?.body && { payload: String(init.body) }) });
+      if (commandPhase && stage === 'after-process' && u.pathname.endsWith('/process')) reporter.observe({ cpuPct: 1, memFreeGB: 0, swapUsedGB: 0 });
+      return new Response(r.statusCode === 204 ? null : r.body, { status: r.statusCode, headers: r.headers as Record<string, string> });
+    } });
+    const reporter = new ResourceReporter({ api, epoch: () => 1, heavy: new HeavySemaphore(1) });
+    await reporter.reportHost({ hostId: 'host-a', bootId: 'boot-a', cpu: 'fake', cores: 20, memGB: 32, swapGB: 0, diskFreeGB: 100, os: 'fake' });
+    const exec = new Execution({ canStart: (agent, slots, local) => reporter.canStart(agent, slots, local), home, identity: { hostId: 'host-a', bootId: 'boot-a' }, api, outbox: new Outbox(state, api), epoch: () => 1, ready: () => true, env: { PATH: process.env.PATH }, binaries: { Codex: fake.path, Claude: fake.path }, prepare: async () => {
+      return { cwd: home, headSha: sha };
+    }, budget: () => 0, sessions: [], heavy: new HeavySemaphore(1), isolation: { name: 'fake', flags: () => [], wrap: l => l } });
+    try {
+      await exec.recover();
+      expect((await request(t.key)).statusCode).toBe(202);
+      const claimResponse = await claim();
+      expect(claimResponse.statusCode).toBe(200);
+      const job = claimResponse.json().job;
+      const fullJob = (await owner.query('select * from runner_jobs where id=$1', [job.id])).rows[0];
+      const result = await exec.run({ ...job, kind: 'attempt', payload: fullJob.payload, leaseUntil: fullJob.lease_until.toISOString() });
+      expect(result.ok).toBe(true);
+      commandPhase = true;
+      if (stage === 'before') reporter.observe({ cpuPct: 1, memFreeGB: 0, swapUsedGB: 0 });
+      await expect(exec.command({ id: job.id, fence: job.fence, epoch: 1 }, 'Codex', { file: fake.path, args: [], cwd: home, env: {}, stdin: '① 검사' })).rejects.toThrow('memory_pressure');
+      expect(reporter.canStart('Codex', 1, [])).toMatchObject({ ok: false, reason: 'memory_pressure' });
+      expect(fake.calls()).toHaveLength(1);
+      expect((await hold(job.id)).slot_state).toBe('none');
+    } finally { await exec.shutdown(); await state.close(); await rm(home, { recursive: true, force: true }); }
+  });
+
   test('review: 아직 서버에 보고하지 않은 예산 초과도 새 세션을 막아야 한다', async () => {
     const { mkdtemp, rm } = await import('node:fs/promises');
     const { join } = await import('node:path');
@@ -194,6 +240,68 @@ describe('runner 실제 PostgreSQL 검증', () => {
     } finally {
       await exec.shutdown(); await Promise.allSettled(running); await state.close();
       await owner.query('update concurrency_settings set subagent_budget=$1::jsonb', [JSON.stringify(previousBudget)]);
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test('review2: 여유 3자리에서는 3자리 세션을 하나 더 받을 수 있어야 한다', async () => {
+    const { mkdtemp, rm } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { setTimeout: sleep } = await import('node:timers/promises');
+    const { createApiClient } = await import('../../../../agent-runner/src/api/client.ts');
+    const { Outbox } = await import('../../../../agent-runner/src/api/outbox.ts');
+    const { Secret } = await import('../../../../agent-runner/src/security/secret.ts');
+    const { State } = await import('../../../../agent-runner/src/state/state.ts');
+    const { Execution } = await import('../../../../agent-runner/src/exec/session.ts');
+    const { HeavySemaphore } = await import('../../../../agent-runner/src/resources/heavy.ts');
+    const { ResourceReporter } = await import('../../../../agent-runner/src/resources/reporter.ts');
+    const { installFakeCli } = await import('../../../../agent-runner/test/fakes/cli.ts');
+    const previousBudget = (await owner.query('select subagent_budget from concurrency_settings')).rows[0]?.subagent_budget as object;
+    await owner.query("insert into concurrency_settings(singleton,mode,subagent_budget) values(true,'auto','{\"dev\":2,\"qa\":2}') on conflict(singleton) do update set subagent_budget=excluded.subagent_budget");
+    const firstTask = await task(), secondTask = await task(), thirdTask = await task();
+    const home = await mkdtemp(join(process.env.AWBS_TEST_TMP ?? tmpdir(), 'fix2-review-budget-'));
+    const state = await State.open(home); await state.update(d => { d.epoch = 1; });
+    const fake = installFakeCli(join(home, 'fake'), 'codex', { hang: true, lines: [{ type: 'thread.started', thread_id: 'thread' }] });
+    const claimRequests: unknown[] = [];
+    const api = createApiClient({ baseUrl: 'http://fake.invalid', token: new Secret(bearer), fetch: async (input, init) => {
+      const u = new URL(String(input));
+      if (u.pathname.endsWith('/jobs/claim')) claimRequests.push(JSON.parse(String(init?.body)));
+      const r = await app.inject({ method: init?.method as 'GET' | 'POST', url: u.pathname + u.search, headers: Object.fromEntries(new Headers(init?.headers)), ...(init?.body && { payload: String(init.body) }) });
+      return new Response(r.statusCode === 204 ? null : r.body, { status: r.statusCode, headers: r.headers as Record<string, string> });
+    } });
+    const sessions: import('../../../../agent-runner/src/exec/session.ts').ActiveSession[] = [];
+    const reporter = new ResourceReporter({ api, epoch: () => 1, heavy: new HeavySemaphore(1) });
+    await reporter.reportHost({ hostId: 'host-a', bootId: 'boot-a', cpu: 'fake', cores: 20, memGB: 32, swapGB: 0, diskFreeGB: 100, os: 'fake' });
+    const exec = new Execution({ canStart: (agent, slots, local) => reporter.canStart(agent, slots, local), home, identity: { hostId: 'host-a', bootId: 'boot-a' }, api, outbox: new Outbox(state, api), epoch: () => 1, ready: () => true, env: { PATH: process.env.PATH }, binaries: { Codex: fake.path, Claude: fake.path }, prepare: async () => ({ cwd: home, headSha: sha }), budget: () => 2, sessions, heavy: new HeavySemaphore(1), isolation: { name: 'fake', flags: () => [], wrap: l => l } });
+    const running: Promise<unknown>[] = [];
+    try {
+      await exec.recover();
+      expect((await request(firstTask.key)).statusCode).toBe(202);
+      expect((await request(secondTask.key)).statusCode).toBe(202);
+      expect((await request(thirdTask.key)).statusCode).toBe(202);
+      const firstJob = await exec.claim(6);
+      expect(firstJob?.kind).toBe('attempt');
+      running.push(exec.run(firstJob as Parameters<typeof exec.run>[0]));
+      for (let i = 0; i < 200 && fake.calls().length < 1; i++) await sleep(10);
+      expect(sessions[0]).toMatchObject({ reserved: 3, observed: 0, state: 'ok' });
+      if (!firstJob) throw new Error('첫 job이 없습니다.');
+      const storedHold = (await owner.query('select slots from execution_holds where job=$1', [firstJob.id])).rows[0];
+      expect(storedHold.slots).toBe(3);
+      const localAdmission = reporter.canStart('Codex', 3, sessions);
+      expect(localAdmission.ok).toBe(true);
+      const secondJob = await exec.claim(6);
+      expect(secondJob?.kind).toBe('attempt');
+      expect(claimRequests).toMatchObject([{ capacity: 6 }, { capacity: 6 }]);
+      if (!secondJob || secondJob.kind !== 'attempt') throw new Error('두 번째 job이 없습니다.');
+      running.push(exec.run(secondJob));
+      for (let i = 0; i < 200 && fake.calls().length !== 2; i++) await sleep(10);
+      expect(fake.calls()).toHaveLength(2);
+      expect((await owner.query("select sum(slots)::integer as total from execution_holds where slot_state='active'")).rows).toEqual([{ total: 6 }]);
+      expect((await post('jobs/claim', { kinds: ['attempt'], capacity: 6 })).statusCode).toBe(204);
+      expect(await exec.claim(6)).toBeNull();
+    } finally {
+      await exec.shutdown(); await Promise.allSettled(running); await state.close();
+      await owner.query('update concurrency_settings set subagent_budget=$1::jsonb', [JSON.stringify(previousBudget ?? { dev: 0, qa: 0 })]);
       await rm(home, { recursive: true, force: true });
     }
   });

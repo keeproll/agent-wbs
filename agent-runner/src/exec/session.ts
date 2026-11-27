@@ -17,7 +17,7 @@ import type { HeavySemaphore } from '../resources/heavy.ts';
 import { atomicWrite } from '../state/files.ts';
 import type { ReportId } from '../state/state.ts';
 import { installSubagents, SubagentInstallError } from './install.ts';
-import { Launches, type LaunchJob } from './launches.ts';
+import { Launches, type LaunchJob, type Proof } from './launches.ts';
 import { runProcess } from './process.ts';
 
 export type AttemptJob = Extract<ClaimedJob, { kind: 'attempt' }>;
@@ -51,7 +51,7 @@ export class Execution {
   readonly #controllers = new Set<AbortController>();
   readonly #tasks = new Set<Promise<unknown>>();
   readonly #jobs = new Set<string>();
-  readonly #reservations = new Map<string, SessionState>();
+  readonly #reservations = new Set<SessionState>();
   #recovered = false;
   constructor(options: ExecutionOptions) { this.#d = options; this.launches = new Launches(options.home, options.identity); }
 
@@ -89,13 +89,12 @@ export class Execution {
   async claim(capacity: number): Promise<ClaimedJob | null> {
     if (!this.#d.isolation || !this.#recovered || !this.#d.ready()) return null;
     if (!Number.isSafeInteger(capacity) || capacity < 0) throw new RangeError('실행 용량이 올바르지 않습니다.');
-    const local = [...this.#d.sessions, ...this.#reservations.values()];
-    let available = capacity;
-    while (available > 0 && !(['Claude', 'Codex'] as const).some(agent => this.#d.canStart(agent, available, local).ok)) available--;
+    // 기존 보유는 서버의 claim 트랜잭션에서 빼므로 전체 한도를 그대로 보낸다.
+    const allowed = capacity > 0 && (['Claude', 'Codex'] as const).some(agent => this.#admission(agent, 1).ok);
     const release = this.#d.updater?.tryClaim();
     if (this.#d.updater && !release) return null;
     try {
-      const result = await this.#call('claimJob', { epoch: this.#d.epoch(), idempotencyKey: randomUUID(), body: { kinds: available === 0 ? ['stop_attempt'] : ['attempt', 'stop_attempt'], capacity: available } });
+      const result = await this.#call('claimJob', { epoch: this.#d.epoch(), idempotencyKey: randomUUID(), body: { kinds: allowed ? ['attempt', 'stop_attempt'] : ['stop_attempt'], capacity } });
       return result.status === 200 ? result.body.job : null;
     } finally { release?.(); }
   }
@@ -138,31 +137,46 @@ export class Execution {
     const stopped = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     let release: (() => void) | undefined, gate: (() => void) | null | undefined;
     let stopLease = () => Promise.resolve();
-    let empty = true;
+    let acquired = false, proof: Proof | null = null, launchId: string | undefined;
+    const reservation: SessionState = { attemptId: `command:${job.id}`, agent, reserved: 1, observed: 0, state: 'ok' };
     try {
+      this.#assertStart(agent, 1);
+      this.#reservations.add(reservation);
       const renewed = await this.#call('renewJob', { epoch: job.epoch, params: { id: job.id }, idempotencyKey: randomUUID(), body: { fence: job.fence } }, stopped);
       stopLease = this.#holdLease(job, renewed.body.leaseUntil, controller);
       release = await d.heavy.acquire(job.id, stopped);
       gate = d.updater?.tryClaim();
       if (d.updater && !gate) throw new Error('CLI 업데이트 중에는 명령을 시작하지 않습니다.');
+      this.#assertStart(agent, 1, reservation);
       const wrapped = d.isolation.wrap(launch, agent);
       await this.#report('acquireJobSlots', { epoch: job.epoch, params: { id: job.id }, body: { fence: job.fence, hostId: d.identity.hostId } }, stopped);
-      empty = false;
+      acquired = true;
       const result = await runProcess({ launches: this.launches, job, launch: wrapped, signal: stopped, register: async record => {
+        launchId = record.launchId;
         await this.#report('reportJobProcess', { epoch: job.epoch, params: { id: job.id }, body: { fence: job.fence, processGroup: record.pgid ?? 0, cgroup: record.cgroup } }, stopped);
+        this.#assertStart(agent, 1, reservation);
       } });
-      empty = true;
-      await this.#report('releaseJobSlots', { epoch: job.epoch, params: { id: job.id }, body: { fence: job.fence, hostId: d.identity.hostId, proof: result.proof, at: new Date().toISOString() } });
-      await this.launches.complete(result.launchId, result.proof);
+      proof = result.proof;
       return result;
     } finally {
       await stopLease();
       this.#controllers.delete(controller);
-      if (!empty) {
+      if (acquired && !proof) {
         const records = await this.launches.list().catch(() => []);
-        empty = await this.launches.reconcile({ job: job.id, ...d.identity, processGroup: records.findLast(r => r.job.id === job.id)?.pgid ?? null }) !== null;
+        const record = launchId ? records.find(r => r.launchId === launchId && !r.completedAt) : records.findLast(r => r.job.id === job.id && r.job.epoch === job.epoch && r.job.fence === job.fence && !r.completedAt);
+        if (record) {
+          launchId = record.launchId;
+          proof = await this.launches.reconcile({ job: job.id, ...d.identity, processGroup: record.pgid });
+        }
       }
-      if (empty) { release?.(); gate?.(); }
+      if (!acquired || proof) {
+        try {
+          if (acquired && proof) {
+            await this.#report('releaseJobSlots', { epoch: job.epoch, params: { id: job.id }, body: { fence: job.fence, hostId: d.identity.hostId, proof, at: new Date().toISOString() } });
+            if (launchId) await this.launches.complete(launchId, proof);
+          }
+        } finally { this.#reservations.delete(reservation); release?.(); gate?.(); }
+      } else reservation.state = 'unconfirmed';
     }
   }
 
@@ -186,7 +200,7 @@ export class Execution {
     let grade: ApiResponse<'getRunGrade'>['body'] | undefined;
     try {
       this.#assertStart(job.payload.agent, 1 + budget);
-      this.#reservations.set(job.id, reservation);
+      this.#reservations.add(reservation);
       preparation = await this.launches.create(jobRef);
       grade = (await this.#call('getRunGrade', { epoch, params: { taskKey: job.payload.taskKey }, query: { role } }, signal)).body;
       const work = await d.prepare(job);
@@ -215,7 +229,7 @@ export class Execution {
       const tokens = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
       session = { attemptId, agent: job.payload.agent, observed: 0, reserved, state: 'ok', children: 1 };
       d.sessions.push(session);
-      this.#reservations.delete(job.id);
+      this.#reservations.delete(reservation);
       const active = session;
       const verified = d.isolation ? d.verified?.(job.payload.agent, grade.model, sessionOptions(job.payload.agent, d.isolation, resume ? 'resume' : 'new')) ?? false : false;
       const apply = (records: ReturnType<JsonlDecoder['end']>) => {
@@ -290,7 +304,7 @@ export class Execution {
     } finally {
       await stopLease();
       this.#controllers.delete(controller);
-      this.#reservations.delete(job.id);
+      this.#reservations.delete(reservation);
       if (attemptId) this.#running.delete(attemptId);
       if (session) {
         const proof = physicalCleared || await this.launches.list().then(records => this.launches.reconcile({ job: job.id, ...d.identity, processGroup: records.findLast(r => r.job.id === job.id)?.pgid ?? null }), () => null);
@@ -301,9 +315,13 @@ export class Execution {
     }
   }
 
+  #admission(agent: Agent, slots: number, own?: SessionState) {
+    const local = [...this.#d.sessions, ...this.#reservations].filter(s => s !== own);
+    return this.#d.canStart(agent, slots, local);
+  }
+
   #assertStart(agent: Agent, slots: number, own?: SessionState): void {
-    const local = [...this.#d.sessions, ...this.#reservations.values()].filter(s => s !== own);
-    const result = this.#d.canStart(agent, slots, local);
+    const result = this.#admission(agent, slots, own);
     if (!result.ok) throw new Error(`새 실행을 보류합니다: ${result.reason}`);
   }
 
