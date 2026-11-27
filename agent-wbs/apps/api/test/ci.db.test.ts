@@ -808,3 +808,126 @@ test.each(['reverse','repeat'])('리뷰3: main %s 사슬은 API에서도 거부�
   expect(r.json().error).toMatchObject({ code:'GATE_NOT_PASSED',details:{ reverify:true } });
   expect((await owner.query('select status from tasks where id=$1',[a.id])).rows).toEqual([{ status:'verifying' }]);
 });
+
+
+test('fix4: 팀장이 바꾼 격리 testKey 목록을 Runner policy와 ETag에 반영한다', async () => {
+  const policy=()=>app.inject({ url:'/api/runner/policy',headers:headers() });
+  const first=await policy(); expect(first.statusCode,first.body).toBe(200);
+  expect(first.json().ci.quarantined).toEqual([]);
+  await owner.query("insert into flaky_tests(project_id,test_key,rate,quarantined) values($1,'z-test',0.2,false),($1,'a-test',0.1,true)",[project]);
+  const row=(await get(`projects/${project}/ci/flaky`)).json().items.find((f:{testKey:string})=>f.testKey==='z-test') as {id:string;updatedAt:string};
+  const saved=await app.inject({ method:'PATCH',url:`/api/projects/${project}/ci/flaky/${row.id}`,headers:lead(),payload:{ updatedAt:row.updatedAt,quarantined:true } });
+  expect(saved.statusCode,saved.body).toBe(200);
+  const changed=await app.inject({ url:'/api/runner/policy',headers:{ ...headers(),'if-none-match':String(first.headers.etag) } });
+  expect(changed.statusCode,changed.body).toBe(200);
+  expect(changed.json().ci.quarantined).toEqual(['a-test','z-test']);
+  expect((await app.inject({ url:'/api/runner/policy',headers:{ ...headers(),'if-none-match':String(changed.headers.etag) } })).statusCode).toBe(304);
+  const removed=await app.inject({ method:'PATCH',url:`/api/projects/${project}/ci/flaky/${row.id}`,headers:lead(),payload:{ updatedAt:saved.json().updatedAt,quarantined:false } });
+  expect(removed.statusCode,removed.body).toBe(200);
+  expect((await policy()).json().ci.quarantined).toEqual(['a-test']);
+});
+
+test('fix4: 원인 후보는 병합 SHA·PR 부모로 Task를 찾고 main 부모와 모르는 커밋은 추측하지 않는다', async () => {
+  const { a,tree,extra }=await integration(); await queue(a,'checking',extra);
+  const merged='9'.repeat(40), unknown='d'.repeat(40);
+  expect((await queue(a,'merged',{ ...extra,actualMergeSha:merged,actualTreeSha:tree,mergeParents:[otherSha,sha] })).statusCode).toBe(204);
+  expect((await get(`projects/${project}/ci/runs/${extra.ciRunId}`)).json()).toMatchObject({ mergeCompleted:true,mergeStatus:'merged',taskStatus:'done' });
+  const night=await post('ci/runs',{ stage:'night',ref:'main',trigger:'night',headSha:merged,pipelineSha:pipeline }); const id=night.json().id as string;
+  expect((await get(`projects/${project}/ci/runs/${id}`)).json().causeCandidates).toEqual([]);
+  const candidates=[{ commit:merged },{ commit:sha },{ commit:otherSha },{ commit:unknown }];
+  const h=headers(), payload={ fence:null,status:'run',causeCandidates:candidates };
+  const reported=await patch(id,payload,h); expect(reported.statusCode,reported.body).toBe(204);
+  expect((await patch(id,payload,h)).headers['idempotency-replayed']).toBe('true');
+  const expected=[{ commit:merged,taskKey:a.key },{ commit:sha,taskKey:a.key },{ commit:otherSha,taskKey:null },{ commit:unknown,taskKey:null }];
+  expect((await get(`projects/${project}/ci/runs/${id}`)).json().causeCandidates).toEqual(expected);
+  expect((await get(`projects/${project}/ci/runs?stage=night`)).json().items[0].causeCandidates).toEqual(expected);
+  expect((await patch(id,{ fence:null,causeCandidates:[{ commit:merged,taskKey:a.key }] })).statusCode).toBe(400);
+  expect((await patch(id,{ fence:null,causeCandidates:[{ commit:'invalid' }] })).statusCode).toBe(400);
+  expect((await patch(id,{ fence:null,causeCandidates:[{ commit:merged },{ commit:merged }] })).statusCode).toBe(400);
+  expect((await patch(id,{ fence:null,note:'후보 유지' })).statusCode).toBe(204);
+  expect((await get(`projects/${project}/ci/runs/${id}`)).json().causeCandidates).toEqual(expected);
+  expect((await patch(id,{ fence:null,causeCandidates:[] })).statusCode).toBe(204);
+  expect((await get(`projects/${project}/ci/runs/${id}`)).json().causeCandidates).toEqual([]);
+});
+
+
+test('fix4 판정: 기준 실패 해소는 관측된 정의와 실행 순번으로 서버가 판단한다', async () => {
+  const a=await gateTask();
+  const failed=await start(a,'task',{ attemptId:undefined,pipelineSha:'d'.repeat(40) }); const id=failed.json().id as string;
+  await patch(id,{ fence:1,status:'run' }); await patch(id,{ fence:1,status:'fail',failScope:'baseline' });
+  const check=async(pipelineSha:string)=>{const r=await start(a,'task',{ attemptId:undefined,pipelineSha });await patch(r.json().id as string,{ fence:1,status:'run' });await patch(r.json().id as string,{ fence:1,status:'pass' });};
+  await check('d'.repeat(40));
+  expect((await get(`projects/${project}/ci/runs/${id}`)).json().baselineResolved).toBe(false);
+  await check(pipeline);
+  expect((await get(`projects/${project}/ci/runs/${id}`)).json().baselineResolved).toBe(true);
+  expect((await get('alerts')).json().items).toHaveLength(0);
+});
+
+test('fix4 판정: main 이동 해소와 자동 재통합 대기를 서버 값으로 제공한다', async () => {
+  const { id }=await baselineFailed();
+  const first=(await get(`projects/${project}/ci/runs/${id}`)).json();
+  expect(first).toMatchObject({ baselineResolved:false,autoReintegrate:'pending',retryAllowed:true,retryBlockedReason:null,taskStatus:'gate',mergeStatus:'failed' });
+  expect(first.autoReintegrateReason).toBeTypeOf('string');
+  await observe('d'.repeat(40));
+  expect((await get(`projects/${project}/ci/runs/${id}`)).json()).toMatchObject({ baselineResolved:true,autoReintegrate:'pending',retryAllowed:true });
+});
+
+test('fix4 판정: 대조 보류는 재시도를 막지만 Gate 밖 일반 재시도는 허용한다', async () => {
+  const { a,id }=await baselineFailed();
+  await owner.query("insert into runner_jobs(project_id,epoch,kind,payload,dedup_key,state,generation) select $1,1,'integrate',$2,'integrate:'||verification::text||':held','reconcile',1 from merge_queue where task=$3",[project,{ taskKey:a.key,pr:1 },a.id]);
+  const held=(await get(`projects/${project}/ci/runs/${id}`)).json();
+  expect(held).toMatchObject({ autoReintegrate:'blocked',retryAllowed:false });
+  expect(held.retryBlockedReason).toBeTypeOf('string');
+  expect((await app.inject({ method:'POST',url:`/api/projects/${project}/ci/runs/${id}/retry`,headers:lead() })).statusCode).toBe(409);
+  await owner.query("update tasks set status='verifying' where id=$1",[a.id]);
+  expect((await get(`projects/${project}/ci/runs/${id}`)).json()).toMatchObject({ taskStatus:'verifying',autoReintegrate:'none',retryAllowed:true,retryBlockedReason:null });
+  const retried=await app.inject({ method:'POST',url:`/api/projects/${project}/ci/runs/${id}/retry`,headers:lead() });
+  expect(retried.statusCode,retried.body).toBe(202);
+  expect((await owner.query('select kind from runner_jobs where id=$1',[retried.json().jobId])).rows).toEqual([{ kind:'ci_retry' }]);
+});
+
+test('fix4 판정: 병합 상세는 실행 mergeSha 대신 실제 대기열과 Task 상태를 제공한다', async () => {
+  const { a,id,tree,extra }=await integration(); await queue(a,'checking',extra);
+  await patch(id,{ fence:1,mergeSha:'8'.repeat(40) });
+  expect((await queue(a,'merged',{ ...extra,actualMergeSha:'9'.repeat(40),actualTreeSha:tree,mergeParents:[sha,otherSha] })).statusCode).toBe(409);
+  expect((await get(`projects/${project}/ci/runs/${id}`)).json()).toMatchObject({ mergeSha:'8'.repeat(40),mergeStatus:'checking',mergeCompleted:false,actualMergeSha:'9'.repeat(40),taskStatus:'gate',retryAllowed:false });
+});
+
+
+test('fix4: 보류 병합은 원인으로 확정하지 않고 여러 Task가 맞으면 미확인으로 남긴다', async () => {
+  const { a,tree,extra }=await integration(); await queue(a,'checking',extra);
+  const merge='9'.repeat(40);
+  expect((await queue(a,'merged',{ ...extra,actualMergeSha:merge,actualTreeSha:tree,mergeParents:[otherSha,sha] })).statusCode).toBe(204);
+  const b=await running('qa');
+  const v=(await owner.query("insert into verifications(project_id,attempt,result,head_sha,spec_revision,cmd,expected,actual) values($1,$2,'PASS',$3,1,'test','pass','pass') returning id",[project,b.attempt,sha])).rows[0]?.id as string;
+  await owner.query("insert into merge_queue(project_id,task,pr,position,status,qa_head_sha,synced_head_sha,base_sha,verification,actual_merge_sha,actual_tree_sha,merge_parents) values($1,$2,2,2,'checking',$3,$3,$4,$5,$6,$7,$8)",[project,b.id,sha,otherSha,v,merge,tree,JSON.stringify([otherSha,sha])]);
+  const night=await post('ci/runs',{ stage:'night',ref:'main',trigger:'night',headSha:merge,pipelineSha:pipeline });const id=night.json().id as string;
+  expect((await patch(id,{ fence:null,status:'run',causeCandidates:[{commit:merge}] })).statusCode).toBe(204);
+  expect((await get(`projects/${project}/ci/runs/${id}`)).json().causeCandidates).toEqual([{commit:merge,taskKey:a.key}]);
+  await owner.query("update merge_queue set status='merged' where task=$1",[b.id]);
+  expect((await get(`projects/${project}/ci/runs/${id}`)).json().causeCandidates).toEqual([{commit:merge,taskKey:null}]);
+});
+
+test('fix4 판정: 외부 권한과 검사 커밋 부재도 실제 재시도와 같은 불가 이유를 제공한다', async () => {
+  const night=await post('ci/runs',{ stage:'night',ref:'main',trigger:'night',headSha:sha,pipelineSha:pipeline });const id=night.json().id as string;
+  await patch(id,{fence:null,status:'run'});await patch(id,{fence:null,status:'fail'});
+  expect((await get(`projects/${project}/ci/runs/${id}`)).json()).toMatchObject({retryAllowed:true,retryBlockedReason:null,baselineResolved:null});
+  await owner.query("update external_write_authority set state='blocked' where singleton");
+  const blocked=(await get(`projects/${project}/ci/runs/${id}`)).json();expect(blocked.retryAllowed).toBe(false);expect(blocked.retryBlockedReason).toBeTypeOf('string');
+  expect((await app.inject({method:'POST',url:`/api/projects/${project}/ci/runs/${id}/retry`,headers:lead()})).json().error).toMatchObject({code:'EXTERNAL_WRITE_BLOCKED',details:{generation:1}});
+  const unknown=await post('ci/runs',{ stage:'night',ref:'main',trigger:'night',pipelineSha:pipeline });const missing=unknown.json().id as string;
+  await patch(missing,{fence:null,status:'run'});await patch(missing,{fence:null,status:'fail'});
+  expect((await get(`projects/${project}/ci/runs/${missing}`)).json()).toMatchObject({retryAllowed:false,retryBlockedReason:'다시 검사할 커밋이 기록되지 않았습니다.'});
+});
+
+
+test('fix4 판정: 늦은 옛 기준 실패는 더 나중의 올바른 PASS를 뒤집지 않는다', async () => {
+  const a=await gateTask();
+  const old=await start(a,'task',{attemptId:undefined}), newer=await start(a,'task',{attemptId:undefined});
+  await patch(old.json().id as string,{fence:1,status:'run'});await patch(newer.json().id as string,{fence:1,status:'run'});
+  await patch(newer.json().id as string,{fence:1,status:'pass'});
+  await patch(old.json().id as string,{fence:1,status:'fail',failScope:'baseline'});
+  expect((await get(`projects/${project}/ci/runs/${old.json().id}`)).json().baselineResolved).toBe(true);
+  expect((await get('alerts')).json().items).toHaveLength(0);
+  expect((await owner.query("select resolved_at is not null resolved from notify_events where ref->>'id'=$1",[old.json().id])).rows).toEqual([{resolved:true}]);
+});

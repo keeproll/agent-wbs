@@ -1372,6 +1372,9 @@ export interface Operations {
         })[];
         status?: CiStatus;
         failScope?: "baseline" | "task";
+        causeCandidates?: ({
+          commit: Sha;
+        })[];
         note?: string;
         finishedAt?: Timestamp;
         e2e?: {
@@ -1574,6 +1577,7 @@ export interface Operations {
           nightAt: string;
           retry: number;
           deployUrl: string | null;
+          quarantined: (string)[];
         };
         claudeModels: (string)[];
         cliGrades: ({
