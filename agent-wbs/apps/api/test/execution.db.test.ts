@@ -554,7 +554,7 @@ test('조정자 결정 3(0040): cgroup이 기록된 보유는 같은 경로·그
   await owner.query("update execution_holds set slot_state='none',release_proof='cgroup_empty' where job=$1", [direct.job]);
 });
 
-test('M8 선행: 시계가 뒤로 가도 API의 시도 번호(attemptNo)·검증 순번(seq)과 보고서의 최신 시도·검증은 저장 순서를 따른다', async () => {
+test('M8 선행: 시계가 뒤로 가도 API의 시도 번호(attemptNo)·검증 순번(seq)과 보고서의 최신 시도·검증·FAIL 뒤 메시지·직전 재조정은 서버 순서·연결을 따른다', async () => {
   // QA 시도(번호 1) FAIL → 재검증 시도(번호 2) FAIL. 나중 시도·검증이지만 PC 시계가 뒤로 가서 시각은 2.3초 이르다.
   const a = await running('qa');
   await owner.query("update task_attempts set started_at=now()-interval '10 minutes',ended_at=now()-interval '5 minutes',status='completed' where id=$1", [a.attempt]);
@@ -568,6 +568,17 @@ test('M8 선행: 시계가 뒤로 가도 API의 시도 번호(attemptNo)·검증
   const v2 = ((await owner.query(`insert into verifications(project_id,attempt,result,head_sha,spec_revision,cmd,expected,actual,created_at)
     values($1,$2,'FAIL',$3,1,'pnpm test','성공','최신 FAIL',now()-interval '5 minutes 2.3 seconds') returning id`, [project, second, sha])).rows[0] as { id: string }).id;
   await owner.query("update tasks set status='rework' where id=$1", [a.id]);
+  // 메시지(시계 역행): MSG-901은 재검증 시도(번호 2)를 가리키지만 시각은 첫 FAIL(v1)보다 이르다 → v1의 「FAIL 뒤 메시지」에 들어가야 한다.
+  // MSG-902는 QA 시도(번호 1)를 가리키고 시각은 v2보다 늦다 → v2의 「FAIL 뒤 메시지」에는 들어가면 안 된다(시각으로 보면 들어간다).
+  const msg = (key: string, attempt: string, at: string) => owner.query(`insert into messages(project_id,task,msg_key,attempt,dir,type,to_agent,body,delivery,pending_next,work_state,draft,created_at)
+    values($1,$2,$3,$4,'out','수정 요청','Codex','지시','Sent',false,'',false,${at})`, [project, a.id, key, attempt]);
+  await msg('MSG-901', second, "now()-interval '6 minutes'");
+  await msg('MSG-902', a.attempt, "now()-interval '1 minute'");
+  // 재조정(시계 역행): RP-002가 나중 번호지만 시각은 RP-001보다 2.3초 이르다. 둘 다 사흘 전(기간 시작 전)이다 → 직전·마지막 재조정은 RP-002.
+  const replan = (key: string, end: string, at: string) => owner.query(`insert into replans(project_id,rp_key,trigger,actor,baseline_v,status,before,after,created_at)
+    values($1,$2,'시험','시스템',1,'applied','{"end":null}',$3::jsonb,now()-interval '3 days'-interval '${at}')`, [project, key, JSON.stringify({ end, lo: end, hi: end })]);
+  await replan('RP-001', '2026-12-01', '0 seconds');
+  await replan('RP-002', '2026-12-09', '2.3 seconds');
 
   const attempts = (await get(`tasks/${a.key}/attempts`)).json().items as { id: string; attemptNo: number; startedAt: string }[];
   const byId = new Map(attempts.map((x) => [x.id, x]));
@@ -585,10 +596,15 @@ test('M8 선행: 시계가 뒤로 가도 API의 시도 번호(attemptNo)·검증
   const { buildSnapshot } = await import('../src/reports/snapshot.ts');
   const client = await owner.connect();
   try {
-    const today = new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10);
-    const snap = await buildSnapshot(client, project, { kind: 'custom', from: today, to: today, at: new Date(Date.now() + 1000).toISOString() }, 'live');
+    // 기간: 어제~오늘(KST). 자정 직후에 돌려도 몇 분 전 기록이 기간 안에 든다.
+    const day = (offset: number) => new Date(Date.now() + 9 * 3600_000 - offset * 86_400_000).toISOString().slice(0, 10);
+    const snap = await buildSnapshot(client, project, { kind: 'custom', from: day(1), to: day(0), at: new Date(Date.now() + 1000).toISOString() }, 'live');
     const row = snap.active.find((t) => t.taskKey === a.key);
     expect(row?.lastAttempt?.attemptKey).toBe(`${a.key}-A2`);
     expect(row?.verification?.id).toBe(v2);
+    const fail = (id: string) => snap.failures.find((f) => f.verificationId === id)?.messages.map((m) => m.msgKey);
+    expect(fail(v1)).toEqual(['MSG-901', 'MSG-902']);
+    expect(fail(v2)).toEqual(['MSG-901']);
+    expect([snap.summary.forecast, snap.summary.forecastBefore]).toEqual(['2026-12-09', '2026-12-09']);
   } finally { client.release(); }
 });

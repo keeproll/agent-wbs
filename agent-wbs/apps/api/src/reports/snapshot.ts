@@ -95,10 +95,13 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
        from ${src.rel('verifications')} v join ${src.rel('task_attempts')} a on a.id=v.attempt where v.project_id=$1 order by coalesce(a.ended_at,v.created_at),v.id`, [projectId]),
     q<{ verification: string; text: string; blocking: boolean }>(`select verification,def_key||' '||content text,blocking from ${src.rel('defects')} d where project_id=$1 order by def_key`, [projectId]),
     q<{ verification: string; path: string }>(`select verification,coalesce(reference_path,storage_path) path from ${src.rel('evidence')} e where project_id=$1 and verification is not null order by created_at,id`, [projectId]),
-    q<{ key: string; task: string; dir: 'in' | 'out'; type: string; to_agent: 'Claude' | 'Codex' | null; from_agent: 'Claude' | 'Codex' | null; body: string; delivery: string | null; pending_next: boolean; at: string }>(
-      `select msg_key key,task,dir,type,to_agent,from_agent,body,delivery::text delivery,pending_next,${iso('created_at')} at from ${src.rel('messages')} m where project_id=$1 and not draft order by created_at,id`, [projectId]),
-    q<{ id: string; key: string; trigger: string; baseline_v: number | null; before: { end?: unknown }; after: { end?: unknown; lo?: unknown; hi?: unknown }; at: string }>(
-      `select id,rp_key key,trigger,baseline_v,before,after,${iso('created_at')} at from ${src.rel('replans')} r where project_id=$1 and status='applied' order by created_at,id`, [projectId]),
+    // attempt: 메시지가 가리키는 실행 시도(없으면 null). 「FAIL 뒤 메시지」를 시각이 아니라 이 연결로 판정한다(아래 failures).
+    q<{ key: string; task: string; attempt: string | null; dir: 'in' | 'out'; type: string; to_agent: 'Claude' | 'Codex' | null; from_agent: 'Claude' | 'Codex' | null; body: string; delivery: string | null; pending_next: boolean; at: string }>(
+      `select msg_key key,task,attempt,dir,type,to_agent,from_agent,body,delivery::text delivery,pending_next,${iso('created_at')} at from ${src.rel('messages')} m where project_id=$1 and not draft order by created_at,id`, [projectId]),
+    // no: 재조정 번호(RP-n의 n). 서버가 프로젝트 번호표(counters, 행 잠금·감소 금지 트리거)에서 받으므로 뒤로 가지 않는다.
+    // 「직전 재조정」은 시각이 아니라 이 번호로 고른다(PC 시계가 뒤로 갈 수 있다). 재조정 목록 API도 같은 번호 순이다(planning/routes.ts).
+    q<{ id: string; key: string; no: number; trigger: string; baseline_v: number | null; before: { end?: unknown }; after: { end?: unknown; lo?: unknown; hi?: unknown }; at: string }>(
+      `select id,rp_key key,substring(rp_key from 4)::int no,trigger,baseline_v,before,after,${iso('created_at')} at from ${src.rel('replans')} r where project_id=$1 and status='applied' order by substring(rp_key from 4)::int,id`, [projectId]),
     q<{ replan: string; task: string; kind: 'delayed' | 'advanced' | 'new' | 'excluded'; before: { end?: unknown } | null; after: { end?: unknown } | null }>(
       `select replan,task,kind,before,after from ${src.rel('replan_moves')} m where project_id=$1 order by created_at,id`, [projectId]),
     // 실행 PC 세션·알림도 T 시점 행이다(끝 시각·해소 시각·본문 모두 그때 값, 재리뷰 2 문제 3).
@@ -136,10 +139,11 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
     return { pred: pred?.key ?? '', type: d.type, status: pred?.status ?? 'ready' };
   });
 
+  // 「최신 하나」를 고르는 공통 함수: 서버 번호(no)가 가장 큰 것. 시도 번호·재조정 번호처럼 뒤로 가지 않는 값만 넣는다.
+  const newest = <T extends { no: number }>(list: readonly T[]): T | undefined => list.reduce<T | undefined>((m, x) => (!m || x.no > m.no ? x : m), undefined);
   const attemptsOf = (taskId: string) => attempts.filter((a) => a.task === taskId && upTo(a.started_at));
   // 「최신 하나」는 시각이 아니라 같은 Task의 시도 번호(attempt_no, 뒤로 가지 않음)로 고른다. 시각 순 목록은 표시용이다(PC 시계가 뒤로 갈 수 있다).
   // 검증은 시도 하나에 하나뿐이라 검증의 no는 그 시도의 번호다(서버 gate의 「최신 검증」 판정과 같은 기준).
-  const newest = <T extends { no: number }>(list: readonly T[]): T | undefined => list.reduce<T | undefined>((m, x) => (!m || x.no > m.no ? x : m), undefined);
   const lastVerification = (taskId: string) => {
     const v = newest(verifs.filter((x) => x.task === taskId && upTo(x.at)));
     return v ? { id: v.id, result: v.result, cmd: v.cmd, actual: v.actual } : null;
@@ -159,9 +163,10 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
   const workPct = (list: typeof tasks) => clampPct(Math.round((list.reduce((sum, t) => sum + est(t), 0) / totalEst) * 1000) / 10);
   const doneTo = tasks.filter((t) => upTo(t.act_end));
   const doneFrom = tasks.filter((t) => t.act_end && toMicro(t.act_end) < start);
+  // 기간 경계(upTo·start)는 시각으로 자른다(기간 자르기는 원래 시각 기준). 그 안에서 「직전 하나」는 재조정 번호(no)가 가장 큰 것이다.
   const rpsUpTo = replans.filter((r) => upTo(r.at));
-  const last = rpsUpTo.at(-1);
-  const before = replans.filter((r) => toMicro(r.at) < start).at(-1);
+  const last = newest(rpsUpTo);
+  const before = newest(replans.filter((r) => toMicro(r.at) < start));
   const endOf = (r: (typeof replans)[number] | undefined) => (r && isDate(r.after.end) ? r.after.end : null);
   const inAtts = attempts.filter((a) => inRange(a.started_at));
   const inVerifs = verifs.filter((v) => inRange(v.at));
@@ -224,7 +229,7 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
       series.push({
         day, done: tasks.filter((t) => inDay(t.act_end)).length, attempts: attempts.filter((x) => inDay(x.started_at)).length,
         fails: verifs.filter((v) => v.result === 'FAIL' && inDay(v.at)).length, uptimePct: b > a ? coverage(ms(a), ms(b)).pct : 0,
-        forecast: endOf(replans.filter((r) => toMicro(r.at) < b).at(-1)),
+        forecast: endOf(newest(replans.filter((r) => toMicro(r.at) < b))),
       });
     }
   }
@@ -259,13 +264,17 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
   });
 
   // 6. QA 실패 · 결함 상세
+  const attemptNo = new Map(attempts.map((a) => [a.id, a.no]));
   const failures: ReportSnapshotData['failures'] = inVerifs.filter((v) => v.result === 'FAIL').flatMap((v) => {
     const t = byId.get(v.task);
     if (!t) return [];
     return [{
       verificationId: v.id, taskKey: t.key, title: t.title, agent: v.agent, at: v.at, cmd: v.cmd, expected: v.expected, actual: v.actual,
       defects: defects.filter((d) => d.verification === v.id).map((d) => d.text), evidence: evidence.filter((e) => e.verification === v.id).map((e) => e.path),
-      messages: messages.filter((m) => m.task === v.task && m.dir === 'out' && upTo(m.at) && ms(m.at) >= ms(v.at)).map((m) => ({ msgKey: m.key, delivery: m.delivery ?? '' })),
+      // FAIL 뒤 메시지: 그 FAIL의 시도나 그 뒤 시도(같은 Task, 시도 번호 ≥ FAIL의 시도 번호)를 가리키는 보낸 메시지. 시각은 비교하지 않는다(upTo는 기간 자르기).
+      // 왜 연결로 보나: 메시지와 검증은 같은 순번 공간이 없다. 재작업 지시는 화면이 FAIL 검증의 시도를 붙여 보낸다(ReworkEditor attemptId).
+      messages: messages.filter((m) => m.task === v.task && m.dir === 'out' && upTo(m.at) && m.attempt !== null && (attemptNo.get(m.attempt) ?? 0) >= v.no)
+        .map((m) => ({ msgKey: m.key, delivery: m.delivery ?? '' })),
       reworks: attempts.filter((a) => a.task === v.task && a.kind === 'rework' && upTo(a.started_at) && a.no > v.no).map((a) => ({ attemptKey: a.key, status: a.status })),
     }];
   });
