@@ -93,8 +93,8 @@ AWBS_IMAGE_TAG=6273888 bash /home/keeproll/orca/workspaces/agent-wbs/m8-06/agent
   - GitHub 봉인용 키는 Runner가 실행 중에 만들어 `POST /api/runner/github/key`로 등록하는 키다. 서버 처리기는 gh-cred(PR #22)로 main에 들어왔다. 리허설 9단계에서 token 방식 Runner의 키 등록·봉인 조회가 정상임을 확인했다(실제 GitHub 연결은 확인하지 않음).
   - `agent-runner/src/github/README.md`의 「공개키 등록 API는 아직 계약에 없어」 문장을 사실대로 고쳤다.
 - **F-5 운영 화면 포트 5173 = 개발 vite 포트.** 동시 기동 시 한쪽을 바꾼다(operations §2).
-- **F-6 서버 계약을 바꾸는 배포 때 옛 job 처리 — 지원 명령 없음을 확정, owner가 (A)를 고름(2026-11-28).**
-  - 다섯 질문의 답(지금 코드 기준)은 operations §4.4에 있다. 요약:
+- **F-6 서버 계약을 바꾸는 배포 때 옛 job 처리 — owner (A) 결정 뒤 지원 명령 구현(2026-11-28).**
+  - 아래 다섯 답은 M8-06 당시의 확인 기록이다. 후속 구현을 포함한 현재 절차는 [operations §4.4](operations.md#44-서버-계약을-바꾸는-배포-옛-job-처리)를 따른다.
     1. 수령 중지: 서버 설정은 없고 Runner를 멈추는 것뿐이다.
     2. 실행 중 일: Runner가 멈추면 worker 감시가 **상태를 바꿀 때** `split`·`estimate`·`planning`은 `cancelled`, `input_diff`·`bootstrap`은 `reconcile`이 된다. 보유는 `unconfirmed`로 남는다. `GET /api/runner-state`의 `sessions`는 Task 시도만 보여 주므로 모든 일의 종료 확인 수단이 아니다.
     3. 임대·fence: 일반 Runner 경로는 임대 시각까지 보지만, Planning 경로(`assertJob`)는 fence와 상태만 본다. 그래서 안전한 거절 기준은 시간 경과가 아니라 **실제 상태 변화나 fence 변경**이다. `queued` 옛 일은 그대로 남는다.
@@ -104,12 +104,12 @@ AWBS_IMAGE_TAG=6273888 bash /home/keeproll/orca/workspaces/agent-wbs/m8-06/agent
     - (A) 최소 명령 두 개(`jobs open` 읽기 전용, `jobs reissue` 옛 `queued` 일 취소+재발급)를 만들고, 그 전까지 계약 변경 배포를 하지 않는다. **추천.** 왜: 사람 규칙만으로는 `queued` 옛 일을 볼 수도 바꿀 수도 없다.
     - (B) 명령을 만들지 않고 「계약 변경 배포 금지」 규칙만 둔다. 계약을 바꿔야 하면 프로젝트 초기화로 해결한다. 왜 비추천: 초기화는 프로젝트 자료를 지운다.
     - (C) 서버에 「수령 일시 중지」 설정을 추가하고, 대기 일이 다 소화될 때까지 기다린 뒤 배포한다. 왜 비추천: 대기 일을 볼 명령이 여전히 필요하고, 새 Runner가 옛 입력을 가져가는 문제는 그대로다.
-  - `jobs open`·`jobs reissue`는 **별도 작업에서 추가한다**(M8-06에는 없음). **그 전까지 계약을 바꾸는 배포는 하지 않는다.**
+  - 후속 작업에서 `awbs-entrypoint auth jobs open`·`auth jobs reissue`를 추가했다. 계약 변경 배포는 operations §4.4의 정지·기존 계약에서의 정리·고정 순번 재발급 절차를 따를 때만 진행한다. 대조·종료 미확인 보유가 남으면 배포 금지를 유지한다.
 - **(리뷰 P1-1) 운영 앱이 DB 관리자로 접속하던 문제 — 고침.** api·worker는 `awbs_app_login`으로 접속하고, 관리자 비밀 파일은 앱 컨테이너에 붙지 않는다(1.3의 2·8번).
 - **(리뷰 P1-2) 안내대로 발급한 토큰이 403이던 문제 — 고침.** 토큰을 gh-cred의 `runner:public-key` 명령이 알려 주는 실제 Runner ID로 발급하도록 안내를 바꿨다(1.3의 11번). gh-cred는 main에 병합됐다(PR #22).
 - **(재리뷰 P2-1) 앱 로그인 멤버십에 ADMIN 옵션이 남을 수 있던 문제 — 고침.** `ADMIN FALSE`를 명시하고 준 사람별 멤버십을 모두 회수한 뒤 다시 준다. `db-check`에 `membershipSafe`를 넣었다.
 - **(재리뷰 P2-2) 이미지 ID가 빠진 manifest를 기본 복원이 받아 주던 문제 — 고침.** 두 ID가 없거나 형식이 틀리면 자원을 만들기 전에 종료 코드 6으로 멈춘다(1.3의 5번).
-- **(재리뷰 P2-3) F-6 설명이 코드보다 강하던 문제 — 고침.** 일반 Runner 경로와 Planning 경로(`assertJob`)의 검사 차이, `unconfirmed` 보유, `sessions`의 한계, `reconcile` 대조의 옛 입력을 적고, 안전 거절 기준을 상태 변화·fence 변경으로 한정했다(operations §4.4). 계약 변경 배포 금지 결론은 그대로다.
+- **(재리뷰 P2-3) F-6 설명이 코드보다 강하던 문제 — 고침.** 일반 Runner 경로와 Planning 경로(`assertJob`)의 검사 차이, `unconfirmed` 보유, `sessions`의 한계, `reconcile` 대조의 옛 입력을 적고, 안전 거절 기준을 상태 변화·fence 변경으로 한정했다. 당시에는 계약 변경 배포 금지를 유지했다. 후속 명령 구현 뒤의 현재 조건은 operations §4.4를 따른다.
 - **(리뷰 P1-3) 복원이 지금 소스로 이미지를 자동 빌드하던 문제 — 고침.** compose에서 `build`를 없애고, 복원은 manifest의 꼬리표·ID로만 띄운다(1.3의 5·6번).
 
 ## 3. owner가 할 일
@@ -312,7 +312,7 @@ operations §6 순서를 따른다. 「실제로 보냄」 버튼은 받는 사�
 
 ### 9단계. 결정과 결과 알려 주기
 
-- [x] F-6 선택지: (A)로 정함(2026-11-28). 명령은 별도 작업에서 추가되며, 그 전까지 계약을 바꾸는 배포는 하지 않는다.
+- [x] F-6 선택지: (A)로 정함(2026-11-28). 후속 job 재발급 명령 구현. 계약 변경 배포는 operations §4.4의 절차를 따를 때만 진행한다.
 - [ ] 아래를 보내 준다(비밀값이 보이는 출력은 빼고).
   1. 3단계 `/health/db`와 `db-check` 출력
   2. 5단계 SMTP 「연결 확인」 결과, 테스트 메일 도착 여부, Telegram 테스트 도착 여부

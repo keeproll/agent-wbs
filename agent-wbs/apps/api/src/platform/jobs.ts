@@ -1,8 +1,11 @@
 import type { Pool, PoolClient } from '@awbs/db';
 import { inEpoch } from './transaction.ts';
 import { RunnerRepository, type Job } from '../runner/repository.ts';
-import { followUpJob, lockPlanningJob, currentRunnerJob, steps, log } from '../project/jobs.ts';
-import { BOOT_STEPS, INPUT_STEPS, waitingForLead } from '../project/steps.ts';
+import { lockPlanningJob, currentRunnerJob, log } from '../project/jobs.ts';
+import { resumePlanning } from '../project/service.ts';
+import { ProjectError } from '../project/errors.ts';
+import { TaskError } from '../tasks/errors.ts';
+import { redactText } from './redact.ts';
 import { requestSplit } from '../planning/split.ts';
 import { requestPlanning } from '../planning/sessions.ts';
 import { requestJudgement } from '../planning/jobs.ts';
@@ -45,13 +48,13 @@ async function rebuild(client: PoolClient, job: Job, epoch: number): Promise<str
   await lockGraph(client, project);
   if (job.kind === 'bootstrap' || job.kind === 'input_diff') {
     const analysis = await lockPlanningJob(client, String(job.payload.planningJobId));
-    const progress = await steps(client, analysis.id);
-    const resumeStep = (analysis.kind === 'bootstrap' ? BOOT_STEPS : INPUT_STEPS).find(key => progress.get(key) !== 'done');
     if (analysis.project_id !== project || analysis.kind !== job.kind || !['queued', 'running'].includes(analysis.status) ||
-      await currentRunnerJob(client, analysis.id) !== job.id || waitingForLead(analysis.kind, progress) || !resumeStep || resumeStep === 'approve') {
+      await currentRunnerJob(client, analysis.id) !== job.id) {
       throw new JobsError('현재 분석과 일치하지 않는 job입니다. 변경을 모두 취소했습니다.');
     }
-    const next = await followUpJob(client, analysis, epoch, { resumeStep });
+    await resumePlanning(client, analysis, epoch);
+    const next = await currentRunnerJob(client, analysis.id);
+    if (!next || next === job.id) throw new JobsError('재개할 새 분석 job이 없습니다.');
     await log(client, analysis, `계약 변경 재발급 — ${job.id} → ${next}`);
     return next;
   }
@@ -97,8 +100,11 @@ export async function reissueJobs(pool: Pool, through: string, confirm = false, 
     // heartbeat·세션 시작은 조정 잠금을 쓰지만, 표 잠금으로 별도 세션 쓰기도 검사와 직렬화한다.
     await client.query('lock table runner_sessions in share mode');
     if ((await client.query(`select 1 from runner_sessions s cross join app_settings cfg where cfg.singleton
-      and s.last_heartbeat_at>clock_timestamp()-make_interval(secs=>cfg.heartbeat_seconds*cfg.heartbeat_misses) limit 1`)).rowCount) {
-      throw new JobsError('Runner의 최근 heartbeat가 있습니다. Runner를 정지하고 연결 끊김을 확인하세요.');
+      and (s.ended_at is null or s.last_heartbeat_at>clock_timestamp()-make_interval(secs=>cfg.heartbeat_seconds*cfg.heartbeat_misses+5)) limit 1`)).rowCount) {
+      throw new JobsError('Runner의 열린 세션 또는 최근 heartbeat가 있습니다. Runner 정지와 서버의 세션 종료를 확인하세요.');
+    }
+    if ((await client.query("select 1 from runner_jobs where kind='repo_check' and state in ('leased','started') limit 1")).rowCount) {
+      throw new JobsError('repo_check 임대가 남았습니다. 배포 전에 기존 Runner를 다시 켜 조회를 완료한 뒤 정지하세요.');
     }
     if ((await client.query("select 1 from runner_jobs where state in ('leased','started','reconcile') or state='queued' and lease_until>clock_timestamp() limit 1")).rowCount ||
       (await client.query('select 1 from execution_holds where closed_at is null limit 1')).rowCount) {
@@ -108,19 +114,26 @@ export async function reissueJobs(pool: Pool, through: string, confirm = false, 
     const jobs = (await client.query<Job>("select * from runner_jobs where record_no<=$1::bigint and state='queued' and kind::text=any($2::text[]) order by record_no for update", [through, kinds])).rows;
     const results: { old: string; next: string | null }[] = [];
     for (const job of jobs) {
-      if (!confirm) { results.push({ old: job.id, next: null }); continue; }
-      await client.query("update runner_jobs set state='cancelled',fence=fence+1,lease_owner=null,lease_until=null where id=$1", [job.id]);
-      const next = await rebuild(client, job, epoch);
-      await repo.event(job, 'finished', 'CONTRACT_CHANGED', { replacementJobId: next, through });
-      const replacement = await repo.job(next);
-      if (!replacement || replacement.id === job.id || BigInt(replacement.record_no) <= BigInt(through)) throw new JobsError('새 job 순번을 확인할 수 없습니다. 변경을 모두 취소했습니다.');
-      await repo.event(replacement, 'prepared', 'CONTRACT_CHANGED', { replacesJobId: job.id });
-      const keys = (job.payload.tasks as { taskKey?: string }[] | undefined)?.flatMap(task => task.taskKey ?? []) ?? [];
-      for (const task of (await client.query<{ id: string }>('select id from tasks where project_id=$1 and task_key=any($2::text[]) order by id', [job.project_id, keys])).rows) {
-        await record(client, { projectId: job.project_id as string, taskId: task.id, kind: '계약 변경 재발급', actor: '관리자', text: '현재 입력으로 Runner job 재발급', ref: { code: 'CONTRACT_CHANGED', oldJobId: job.id, jobId: next } });
+      try {
+        await client.query("update runner_jobs set state='cancelled',fence=fence+1,lease_owner=null,lease_until=null where id=$1", [job.id]);
+        const next = await rebuild(client, job, epoch);
+        await repo.event(job, 'finished', 'CONTRACT_CHANGED', { replacementJobId: next, through });
+        const replacement = await repo.job(next);
+        if (!replacement || replacement.id === job.id || BigInt(replacement.record_no) <= BigInt(through)) throw new JobsError('새 job 순번을 확인할 수 없습니다. 변경을 모두 취소했습니다.');
+        await repo.event(replacement, 'prepared', 'CONTRACT_CHANGED', { replacesJobId: job.id });
+        const keys = (job.payload.tasks as { taskKey?: string }[] | undefined)?.flatMap(task => task.taskKey ?? []) ?? [];
+        for (const task of (await client.query<{ id: string }>('select id from tasks where project_id=$1 and task_key=any($2::text[]) order by id', [job.project_id, keys])).rows) {
+          await record(client, { projectId: job.project_id as string, taskId: task.id, kind: '계약 변경 재발급', actor: '관리자', text: '현재 입력으로 Runner job 재발급', ref: { code: 'CONTRACT_CHANGED', oldJobId: job.id, jobId: next } });
+        }
+        results.push({ old: job.id, next: confirm ? next : null });
+      } catch (error) {
+        if ((error as { code?: string }).code === '40P01') throw error;
+        // DB 오류 본문·입력 값은 숨기고, 업무 오류의 코드와 가려진 안내만 보여 준다.
+        const reason = error instanceof JobsError ? error.message : error instanceof TaskError || error instanceof ProjectError
+          ? `${error.code}: ${redactText(error.message)}` : '입력 재생성에 실패했습니다. 원래 대상과 현재 계약 형식을 확인하세요.';
+        throw new JobsError(`${job.id}: ${reason}`);
       }
-      results.push({ old: job.id, next });
     }
     return results;
-  });
+  }, confirm);
 }

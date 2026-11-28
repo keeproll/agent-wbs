@@ -452,10 +452,10 @@ export async function retryBootstrap(db: Db, body: { revision: number } | { revi
   const same = latest === null ? body.revision === null && body.runNo === job.run_no : body.revision === latest;
   if (!same) throw new ProjectError('VERSION_CONFLICT', { details: { current: latest === null ? { revision: null, runNo: job.run_no } : { revision: latest }, changes: [] } });
   await assertCleanupDone(db);
-  return { jobId: await resume(db, job, epoch) };
+  return { jobId: await resumePlanning(db, job, epoch) };
 }
 
-async function resume(db: Db, job: PlanningJob, epoch: number): Promise<string> {
+export async function resumePlanning(db: Db, job: PlanningJob, epoch: number): Promise<string> {
   if (waitingForLead(job.kind, await steps(db, job.id))) {
     throw new ProjectError('INVALID_TRANSITION', { message: '팀장의 기술 결정 또는 초안 승인을 기다리고 있습니다.' });
   }
@@ -680,7 +680,7 @@ export async function retryInputs(db: Db, body: { updatedAt: string; version: nu
     throw new ProjectError('INVALID_TRANSITION', { message: `입력 v${String(body.version)}의 실패한 차이 분석이 없습니다.` });
   }
   await assertCleanupDone(db);
-  const jobId = await resume(db, job, epoch);
+  const jobId = await resumePlanning(db, job, epoch);
   await touchProject(db, project.id);
   return { jobId };
 }
