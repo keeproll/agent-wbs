@@ -240,7 +240,12 @@ operations §6 순서를 따른다. 「실제로 보냄」 버튼은 받는 사�
   - `AWBS_GITHUB_MODE`: 줄이 없으면 기본값 `gh`다. `token`이면 화면에 GitHub 토큰을 저장하는 절차(`/home/keeproll/projects/agent-wbs/docs/runner-github-setup.md`)를 함께 따른다. 실제 GitHub 연결은 아직 어느 방식으로도 이 기록에서 확인하지 않았다.
   - `AWBS_GITHUB_REPO`가 있어야 기본으로 `repo_check`·`github_check`를 받는다. 두 확인에는 유료 호출이 없다.
   - `AWBS_ATTEMPT_AUTO=1`은 개발·검증, `AWBS_CI_AUTO=1`은 통합·재실행·배포 확인이다. 기본 꺼짐이다. 초기 분석은 별도 `AWBS_PLANNING_AUTO=1`과 두 모델 설정(`AWBS_PLANNING_CODEX_MODEL`·`AWBS_PLANNING_CLAUDE_MODEL`)이 있어야 한다.
-  - 유료 검증 전체는 `AWBS_AGENT_CALL_LIMIT=30` 이내로 owner가 정한다(기본 0). `AWBS_AGENT_MAX_EFFORT=high`가 최대다. 초기 분석·Planning·계약 반영·개발·검증·형식 수정 요청이 같은 장부를 쓰며, 하위 Agent는 끈다. 실패도 소비하고 `AWBS_HOME/paid-calls.json`을 재시작·초기화로 지우지 않는다.
+  - 유료 검증 전체는 `AWBS_CALL_LIMIT=30` 이내로 owner가 정한다(기본 0). `AWBS_AGENT_MAX_EFFORT=high`가 최대다. 초기 분석·Planning·계약 반영·개발·검증·형식 수정 요청이 같은 장부를 쓰며, 하위 Agent는 끈다. 실행 허가 직전 차감 뒤 실패·취소도 소비하고 `AWBS_HOME/paid-calls.json`을 재시작·초기화로 지우지 않는다.
+  - M8 검증 동안 owner가 정한 값은 **`AWBS_CALL_LIMIT=30`, `AWBS_AGENT_MAX_EFFORT=high`**다. 기본 한도 0은 유지한다. `AWBS_ATTEMPT_AUTO=1`이어도 한도 0이면 시도·AI 분석·하위 Agent 실행은 꺼지며, 무료 확인·CI는 해당 플래그 조건대로 계속한다. 이전 이름 `AWBS_AGENT_CALL_LIMIT`은 호환용이고 새 이름과 값이 충돌하면 시작 오류다.
+  - 시작 로그와 설정 → Runner · 실행 환경의 「유료 AI 호출 한도」에서 **「유료 호출 한도 0: AI 실행 꺼짐」** 또는 **「유료 호출 한도 도달: AI 실행 꺼짐」**, 사용/전체·남은 횟수·최대 Effort를 확인한다. 호출별 순번·시각·job·모델·Effort·CLI 종료 결과도 보이며, 5초마다 서버 상태를 갱신한다. 프롬프트·인증정보·업무 결과 원문은 이 기록에 넣지 않는다. `unknown`은 결과 미확인으로 보존하며 자동 환불하지 않는다.
+  - 호출 횟수는 해당 작업의 슬롯 확보와 프로세스 등록 뒤 실제 CLI 실행 허가 직전에 차감한다. 그 전에 실패·취소되면 차감하지 않는다. 허가 직전 차감과 실제 실행 사이에 취소·전원 장애가 나면 과소 집계를 피하려고 소비한 채 둔다.
+  - 재부팅으로 bootId가 바뀌면 저장된 start 본문을 새 부팅 정보로 덮어쓰지 않는다. 옛 실행 종료 증거만 보고하고 임대 갱신을 멈춘다. 외부 효과가 가능한 job은 서버 만료 뒤 기존 reconcile 절차로 원격 결과를 확인한다. 다시 호출하거나 성공으로 추정하지 않는다.
+
 - [ ] `runner:public-key` 명령이 있는지 확인(gh-cred, PR #22로 main에 들어옴). 아래 명령이 파일 경로를 보여 주면 된다. 없으면 저장소가 최신 main이 아니므로 멈추고 알려 준다.
 
   ```bash

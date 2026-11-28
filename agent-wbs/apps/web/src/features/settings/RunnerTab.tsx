@@ -271,7 +271,7 @@ function ReadinessCard({ runner }: { runner: ReturnType<typeof useApiQuery<'getR
                 <div key={String(item.key)} className="gtr" style={{ gridTemplateColumns: '180px 70px minmax(160px,1fr) minmax(200px,1.4fr)', minWidth: 0 }}>
                   <span className="gc">{READINESS_LABEL[String(item.key)] ?? String(item.key)}</span>
                   <span className="gc"><span className={st.cls}>{st.label}</span></span>
-                  <span className="gc mono">{item.detail}</span>
+                  <span className="gc mono" style={item.key === 'paid_calls' ? { whiteSpace: 'pre-wrap' } : undefined}>{item.detail}</span>
                   <span className="gc">{item.fix ?? ''}</span>
                 </div>
               );

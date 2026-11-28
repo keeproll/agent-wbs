@@ -23620,7 +23620,8 @@
                             "lfs",
                             "reports",
                             "font",
-                            "render"
+                            "render",
+                            "paid_calls"
                           ]
                         },
                         "status": {
@@ -49351,7 +49352,8 @@
                             "lfs",
                             "reports",
                             "font",
-                            "render"
+                            "render",
+                            "paid_calls"
                           ]
                         },
                         "status": {

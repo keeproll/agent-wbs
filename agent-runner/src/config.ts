@@ -108,9 +108,11 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   const planningAuto = env.AWBS_PLANNING_AUTO === '1';
   if (env.AWBS_PLANNING_AUTO !== undefined && !['0', '1', ''].includes(env.AWBS_PLANNING_AUTO)) problems.push('AWBS_PLANNING_AUTO는 1(켜기) 또는 0(끄기)만 쓸 수 있습니다.');
   if (planningAuto && (!github || !env.AWBS_PLANNING_CODEX_MODEL || !env.AWBS_PLANNING_CLAUDE_MODEL)) problems.push('Planning 자동 실행에는 GitHub 저장소와 AWBS_PLANNING_CODEX_MODEL·AWBS_PLANNING_CLAUDE_MODEL을 설정하세요.');
-  const agentCallLimit = env.AWBS_AGENT_CALL_LIMIT === undefined ? 0 : Number(env.AWBS_AGENT_CALL_LIMIT);
+  if (env.AWBS_CALL_LIMIT !== undefined && env.AWBS_AGENT_CALL_LIMIT !== undefined && env.AWBS_CALL_LIMIT !== env.AWBS_AGENT_CALL_LIMIT) problems.push('AWBS_CALL_LIMIT와 이전 이름 AWBS_AGENT_CALL_LIMIT의 값이 다릅니다.');
+  const callLimit = env.AWBS_CALL_LIMIT ?? env.AWBS_AGENT_CALL_LIMIT ?? '0';
+  const agentCallLimit = Number(callLimit);
   const agentMaxEffort = env.AWBS_AGENT_MAX_EFFORT ?? 'high';
-  try { new PaidCalls(home, /^\d+$/.test(env.AWBS_AGENT_CALL_LIMIT ?? '0') ? agentCallLimit : NaN, agentMaxEffort); }
+  try { new PaidCalls(home, /^\d+$/.test(callLimit) ? agentCallLimit : NaN, agentMaxEffort); }
   catch (error) { problems.push((error as Error).message); }
   let agentRoot: string | null = null;
   try {

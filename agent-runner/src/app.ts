@@ -42,7 +42,7 @@ import { attemptWiring } from './jobs/wiring.ts';
 import { CHECK_KINDS, QueuedJobs } from './jobs/queued.ts';
 import { executeQueued } from './jobs/queued-work.ts';
 import { PLANNING_KINDS } from './planning/index.ts';
-import { PaidCalls } from './exec/paid-calls.ts';
+import { PaidCalls, paidCallDetail } from './exec/paid-calls.ts';
 import { githubStatusBody, type GithubStatusReport } from './github/connector.ts';
 import { parseRepoUrl } from './github/client.ts';
 
@@ -59,6 +59,7 @@ export interface RunnerAppDeps {
   version: string;
   env: NodeJS.ProcessEnv;
   warn: (message: string) => void;
+  info?: (message: string) => void;
   hostSources: HostSources;
   /** 준비 점검 명령 실행기(실제: createRunCommand). 시험은 가짜를 넣는다. */
   run?: RunCommand;
@@ -151,6 +152,7 @@ export class RunnerApp {
   readonly paidCalls: PaidCalls;
   readonly queued: QueuedJobs;
   #repo: Promise<GitRepository> | undefined;
+  #paidMessage: string | undefined;
   #ci:CiJobs|undefined;
   /** CI 처리기. 시험 주입이면 생성 때, 실제 실행기(ciAuto)면 로컬 clone이 생긴 뒤 만든다. */
   get ci():CiJobs|undefined { return this.#ci; }
@@ -174,7 +176,7 @@ export class RunnerApp {
       repoUrl: `https://github.com/${d.github.repo.owner}/${d.github.repo.repo}`, api: d.api, epoch: () => d.state.snapshot.epoch,
       warn: d.warn, env: d.env, repo: () => this.openRepository() }) };
     this.#d = d;
-    this.paidCalls = new PaidCalls(d.home, d.agentCallLimit ?? 0, d.agentMaxEffort ?? 'high');
+    this.paidCalls = new PaidCalls(d.home, d.agentCallLimit ?? 0, d.agentMaxEffort ?? 'high', call => d.info?.(`유료 호출 기록 ${JSON.stringify(call)}`));
     const cliHome = d.agentRoot ?? d.home;
     this.bins = { codex: cliBinary(cliHome, 'Codex'), claude: cliBinary(cliHome, 'Claude') };
     const base = d.run ?? createRunCommand({ env: probeEnv(d.env) });
@@ -294,7 +296,7 @@ export class RunnerApp {
     });
     if (d.ci && d.agentRoot) throw new Error('전용 계정 격리에서는 CI 실행기를 주입할 수 없습니다. 실제 실행기(ciAuto)는 Agent 계정으로만 돈다.');
     this.queued = new QueuedJobs({ home: d.home, api: d.api, outbox: this.runner.outbox, runnerId: d.state.snapshot.runnerId,
-      identity: () => this.identity, epoch: () => d.state.snapshot.epoch, ready: () => this.runner.ready,
+      identity: () => this.identity, epoch: () => d.state.snapshot.epoch, ready: () => this.runner.ready, warn: d.warn,
       kinds: async () => [...(this.github ? CHECK_KINDS : []),
         ...(this.github && d.planningAuto && this.execution.isolation && await this.paidCalls.available() ? [...PLANNING_KINDS, 'design_apply' as const] : []),
         ...(this.github && d.ciAuto && this.execution.isolation ? ['deploy_check' as const, 'merge_followup' as const] : [])],
@@ -423,7 +425,20 @@ export class RunnerApp {
    * 왜: 거부 기록은 contracts §1.2 「다른 4xx는 rejected로 보존하고 readiness 경고로 올린다」의 대상이다.
    */
   async reportReadiness(body: ReadinessReport): Promise<void> {
-    await this.reporter.reportReadiness(withRejectionWarnings(body, this.runner.outbox.readinessWarnings));
+    const paid = await this.#paidItem();
+    await this.reporter.reportReadiness(withRejectionWarnings({ ...body, items: [...body.items.filter(item => item.key !== 'paid_calls'), paid] }, this.runner.outbox.readinessWarnings));
+  }
+
+  async #paidItem(): Promise<ReadinessReport['items'][number]> {
+    let detail: string, status: 'ok' | 'warn' = 'warn';
+    try { const state = await this.paidCalls.snapshot(); detail = paidCallDetail(state); if (state.used < state.limit) status = 'ok'; }
+    catch { detail = '유료 호출 장부 확인 불가: AI 실행 꺼짐. 원본 장부를 보존하고 확인하세요.'; }
+    if (detail !== this.#paidMessage) { this.#d.info?.(detail); this.#paidMessage = detail; }
+    return { key: 'paid_calls', status, detail, fix: status === 'warn' ? 'M8 검증은 owner가 AWBS_CALL_LIMIT=30·최대 high를 정합니다. 한도 0·소진 시 시도와 Planning을 받지 않습니다. 하위 Agent는 꺼져 있습니다.' : '' };
+  }
+
+  async reportPaidCalls(): Promise<void> {
+    await this.reporter.reportReadiness({ at: new Date().toISOString(), items: [await this.#paidItem()] });
   }
 
   /** 준비 점검 12항목. `repo`는 M4-03이 기대는 /proc·flock 점검이다. */
@@ -449,6 +464,7 @@ export class RunnerApp {
    * 왜: 동기화 전에 오는 정리 명령도 「이 PC·이 부팅의 보유인가」를 판단해야 한다.
    */
   async init(): Promise<void> {
+    await this.#paidItem();
     await (this.#ciRecovery ??= GitRepository.recoverTaskChecks(this.#d.home, { agentRoot: this.#d.agentRoot ?? null }));
     const host = await collectHost(this.#d.hostSources, this.#d.home);
     this.#identity = { hostId: host.hostId, bootId: host.bootId };
@@ -574,6 +590,7 @@ export class RunnerApp {
       await this.reportModels();
     }, { onError: onError('매일 점검') }));
     this.#timers.push(scheduleDaily(() => this.reportConcurrency(), { intervalMs: 60_000, onError: onError('동시 실행 보고') }));
+    this.#timers.push(scheduleDaily(() => this.reportPaidCalls(), { intervalMs: 5000, onError: onError('유료 호출 상태 보고') }));
     this.#timers.push(scheduleDaily(() => this.queued.runNext(this.reporter.caps?.total ?? 0, signal), { intervalMs: 1000, onError: onError('저장소·연결·계획·추가 작업') }));
     this.#timers.push(scheduleDaily(() => this.reporter.reportUsage(this.usage), { intervalMs: 60_000, onError: onError('사용량 보고') }));
     if (this.#ci || this.#d.ciAuto) this.#timers.push(scheduleDaily(async () => {

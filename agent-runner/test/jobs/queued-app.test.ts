@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, test } from 'vitest';
 import { RunnerApp, type RunnerAppDeps } from '../../src/app.ts';
-import type { OperationId } from '../../src/api/client.ts';
+import { ApiTransportError, type OperationId } from '../../src/api/client.ts';
 import { buildDesignSnapshot } from '../../src/design/snapshot.ts';
 import type { ClaimedJob } from '../../src/api/generated/client.ts';
 import { GitPushUnknownError, type GitRepository } from '../../src/git/repository.ts';
@@ -122,10 +122,13 @@ test.each([false, true])('design_apply는 관문 뒤 결과를 보고하고, pus
 
 test('기본 조회 작업은 자동 분석이 꺼져 있고 예산이 0이어도 처리한다', { timeout: 10_000 }, async () => {
   const job = cases[0]?.[1](); if (!job) throw new Error('fixture');
-  const { app, server } = await setup(job, false, 0, { execution: { prepare: async () => { throw new Error('무료 확인은 작업 폴더를 쓰지 않는다'); } } });
+  const logs: string[] = [];
+  const { app, server } = await setup(job, false, 0, { info: message => logs.push(message), attemptAuto: true, execution: { prepare: async () => { throw new Error('무료 확인은 작업 폴더를 쓰지 않는다'); } } });
   await expect.poll(() => server.finished.get(job.id), { timeout: 6000 }).toMatchObject({ status: 'done' });
   expect(await app.paidCalls.used()).toBe(0);
   expect(app.execution.isolation).toBeUndefined();
+  expect(logs.some(line => line.includes('유료 호출 한도 0: AI 실행 꺼짐'))).toBe(true);
+  expect(server.calls.filter(call => call.operation === 'reportReadiness').some(call => JSON.stringify(call.body).includes('유료 호출 한도 0: AI 실행 꺼짐'))).toBe(true);
   expect(server.calls.filter(call => call.operation === 'claimJob').every(call => (call.body.kinds as string[]).every(kind => ['repo_check', 'github_check'].includes(kind)))).toBe(true);
 });
 
@@ -139,13 +142,24 @@ test('설정과 다른 등록 저장소는 실제 접근 결과와 함께 불일
 
 test('예산 상한은 재시작·동시 요청에도 유지되고 high 초과와 손상 기록은 거부한다', async () => {
   const home = await mkdtemp(join(tmpdir(), 'paid-calls-')); cleanup.push(() => rm(home, { recursive: true, force: true }));
+  const input = (effort: string) => ({ job: { id: 'job', fence: 1, epoch: 0 }, agent: 'Codex' as const, model: 'fake-model', effort });
   const budget = new PaidCalls(home, 2);
-  expect((await Promise.allSettled([budget.take('high'), budget.take('medium'), budget.take('low')])).map(result => result.status)).toEqual(['fulfilled', 'fulfilled', 'rejected']);
+  expect((await Promise.allSettled([budget.take(input('high')), budget.take(input('medium')), budget.take(input('low'))])).map(result => result.status)).toEqual(['fulfilled', 'fulfilled', 'rejected']);
   expect(await new PaidCalls(home, 2).available()).toBe(false);
-  await expect(new PaidCalls(home, 30).take('xhigh')).rejects.toThrow('AGENT_EFFORT_LIMIT');
-  expect(JSON.parse(await readFile(join(home, 'paid-calls.json'), 'utf8'))).toEqual({ used: 2 });
+  await expect(new PaidCalls(home, 30).take(input('xhigh'))).rejects.toThrow('AGENT_EFFORT_LIMIT');
+  await expect(new PaidCalls(home, 30, 'medium').take(input('high'))).rejects.toThrow('AGENT_EFFORT_LIMIT');
+  expect(await budget.snapshot()).toMatchObject({ used: 2, calls: [
+    { number: 1, job: input('high').job, model: 'fake-model', effort: 'high', result: 'unknown', at: expect.any(String) },
+    { number: 2, effort: 'medium', result: 'unknown' },
+  ] });
+  await writeFile(join(home, 'paid-calls.json'), JSON.stringify({ used: 2 }));
+  const legacy = new PaidCalls(home, 3);
+  expect(await legacy.snapshot()).toMatchObject({ used: 2, calls: [] });
+  await legacy.finish(await legacy.take(input('high')), 'failed', 1);
+  expect(await new PaidCalls(home, 3).snapshot()).toMatchObject({ used: 3, calls: [{ number: 3, result: 'failed', exitCode: 1 }] });
   await writeFile(join(home, 'paid-calls.json'), 'broken');
-  await expect(new PaidCalls(home, 30).take('high')).rejects.toThrow();
+  expect(await new PaidCalls(home, 30).available()).toBe(false);
+  await expect(new PaidCalls(home, 30).take(input('high'))).rejects.toThrow();
   expect(() => new PaidCalls(home, 31)).toThrow();
 });
 
@@ -154,7 +168,10 @@ test('앱의 초기 분석은 예산 2회에서 세 번째 교차 검토 CLI를 
   const { app, server } = await setup(job, true, 2);
   await expect.poll(() => server.finished.has(job.id), { timeout: 6000 }).toBe(true);
   expect(server.finished.get(job.id)).toMatchObject({ status: 'failed' });
-  expect(new Set(server.calls.filter(call => call.operation === 'reportJobProcess').map(call => call.key)).size).toBe(2);
+  // 한도를 넘는 세 번째 waiting 프로세스는 등록되지만 실행 허가는 받지 않는다.
+  expect((await app.paidCalls.snapshot()).calls).toHaveLength(2);
+  await app.reportPaidCalls();
+  expect(server.calls.filter(call => call.operation === 'reportReadiness').some(call => JSON.stringify(call.body).includes('유료 호출 한도 도달: AI 실행 꺼짐'))).toBe(true);
   expect(server.calls.some(call => call.operation === 'submitTechProposals')).toBe(false);
   expect(await app.paidCalls.used()).toBe(2);
 });
@@ -181,4 +198,58 @@ test('CLI가 정상 종료해도 모르는 분석 JSON을 성공으로 꾸미지
   expect(server.finished.get(job.id)).toMatchObject({ status: 'failed' });
   expect(server.calls.some(call => call.operation === 'submitTechProposals')).toBe(false);
   expect(await app.paidCalls.used()).toBe(1);
+});
+
+
+test.each([false, true])('저장된 start 뒤 부팅 변경(%s): 같은 부팅만 재개하고 재부팅이면 갱신 없이 종료 증거를 보고한다', async reboot => {
+  const home = await mkdtemp(join(tmpdir(), 'queued-reboot-')); cleanup.push(() => rm(home, { recursive: true, force: true }));
+  const state = await State.open(home); cleanup.push(() => state.close());
+  const job = { ...bootstrapJob(), ...lease() }, server = queuedServer([job]);
+  const identity = { hostId: 'host', bootId: 'old-boot' };
+  let executions = 0;
+  const options = { home, api: server.api, outbox: new Outbox(state, server.api), runnerId: state.snapshot.runnerId,
+    identity: () => identity, epoch: () => 0, ready: () => true, kinds: async () => ['bootstrap' as const],
+    execute: async () => { if (++executions === 1) throw new ApiTransportError('submitTechProposals'); return { status: 'done' as const, result: {} }; } };
+  await expect(new QueuedJobs(options).runNext(1)).rejects.toThrow();
+  const hold = server.holds.get(job.id); if (!hold) throw new Error('hold');
+  Object.assign(hold, { host_id: 'host', boot_id: 'old-boot', pgid: 123 });
+  // 배포 전 버전이 저장한 start 전용 기록도 복구한다.
+  const savedPath = join(home, 'state/queued-jobs/job.json');
+  const old = JSON.parse(await readFile(savedPath, 'utf8')) as { identity?: unknown }; delete old.identity;
+  await writeFile(savedPath, JSON.stringify(old));
+  const renews = server.calls.filter(call => call.operation === 'renewJob').length;
+  if (reboot) identity.bootId = 'new-boot';
+  const restarted = new QueuedJobs(options);
+  await restarted.runNext(1);
+  if (reboot) {
+    await restarted.runNext(1); await restarted.runNext(1);
+    expect(server.calls.filter(call => call.operation === 'renewJob')).toHaveLength(renews);
+    expect(executions).toBe(1);
+    expect(server.finished.has(job.id)).toBe(false);
+    expect(server.calls.find(call => call.operation === 'releaseJob')?.body.proof).toEqual({ kind: 'boot_changed', bootId: 'old-boot', currentBootId: 'new-boot', processGroup: 123 });
+  } else { expect(executions).toBe(2); expect(server.finished.get(job.id)).toMatchObject({ status: 'done' }); }
+  expect(JSON.parse(await readFile(join(home, 'state/queued-jobs/job.json'), 'utf8'))).toBeNull();
+});
+
+
+test('claim 직후 start 기록 전 재부팅도 옛 임대를 연장하거나 CLI를 실행하지 않는다', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'queued-prestart-reboot-')); cleanup.push(() => rm(home, { recursive: true, force: true }));
+  const state = await State.open(home); cleanup.push(() => state.close());
+  let failRenew = true, executed = false;
+  const job = { ...bootstrapJob(), ...lease() }, server = queuedServer([job], operation => {
+    if (operation === 'renewJob' && failRenew) { failRenew = false; throw new ApiTransportError('renewJob'); }
+    return undefined;
+  });
+  const identity = { hostId: 'host', bootId: 'old-boot' };
+  const options = { home, api: server.api, outbox: new Outbox(state, server.api), runnerId: state.snapshot.runnerId,
+    identity: () => identity, epoch: () => 0, ready: () => true, kinds: async () => ['bootstrap' as const],
+    execute: async () => { executed = true; return { status: 'done' as const, result: {} }; } };
+  await expect(new QueuedJobs(options).runNext(1)).rejects.toThrow();
+  const hold = server.holds.get(job.id); if (!hold) throw new Error('hold');
+  Object.assign(hold, { host_id: 'host', boot_id: 'old-boot' }); identity.bootId = 'new-boot';
+  await new QueuedJobs(options).runNext(1);
+  expect(server.calls.filter(call => call.operation === 'renewJob')).toHaveLength(1);
+  expect(server.calls.some(call => call.operation === 'startJob')).toBe(false);
+  expect(executed).toBe(false);
+  expect(hold.closed_at).toBeTruthy();
 });

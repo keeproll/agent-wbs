@@ -213,8 +213,7 @@ export class Execution {
   async agent(job: LaunchJob, agent: Agent, spec: RunSpec, signal?: AbortSignal) {
     const isolation = await this.#currentIsolation();
     const launch = buildLaunch(agent, this.#d.binaries[agent], { ...spec, noSubagents: true }, { env: this.#d.env, isolation });
-    await this.#d.paidCalls?.take(spec.effort);
-    const task = this.#command(job, agent, launch, signal, false, true);
+    const task = this.#command(job, agent, launch, signal, false, true, spec);
     this.#tasks.add(task);
     try { return await task; } finally { this.#tasks.delete(task); }
   }
@@ -239,8 +238,7 @@ export class Execution {
     const agent = job.payload.agent;
     const isolation = await this.#currentIsolation();
     const launch = buildLaunch(agent, this.#d.binaries[agent], { ...output.grade, cwd: output.cwd, prompt, resume: output.sessionId, ...(this.#d.paidCalls && { noSubagents: true }) }, { env: this.#d.env, isolation });
-    await this.#d.paidCalls?.take(output.grade.effort);
-    const result = await this.#command({ id: job.id, fence: job.fence, epoch }, agent, launch, signal, true, true);
+    const result = await this.#command({ id: job.id, fence: job.fence, epoch }, agent, launch, signal, true, true, output.grade);
     const decoder = new JsonlDecoder(), parse = createParser(agent);
     let ok = false, text = '', resultText: string | undefined;
     for (const record of [...decoder.push(Buffer.from(result.stdout)), ...decoder.end()]) for (const event of parse(record)) {
@@ -254,7 +252,7 @@ export class Execution {
     return { ok: ok && result.code === 0, code: result.code, text: resultText ?? text };
   }
 
-  async #command(job: LaunchJob, agent: Agent, launch: Launch, signal?: AbortSignal, heavyHeld = false, prewrapped = false) {
+  async #command(job: LaunchJob, agent: Agent, launch: Launch, signal?: AbortSignal, heavyHeld = false, prewrapped = false, paid?: Pick<RunSpec, 'model' | 'effort'>) {
     const d = this.#d;
     if (!this.#isolation) throw new IsolationUndecidedError();
     if (!this.#recovered || !d.ready()) throw new Error('Runner 정리가 끝나기 전에는 명령을 실행하지 않습니다.');
@@ -264,6 +262,7 @@ export class Execution {
     let release: (() => void) | undefined, gate: (() => void) | null | undefined;
     let stopLease = () => Promise.resolve();
     let acquired = false, proof: Proof | null = null, launchId: string | undefined;
+    let paidCall: number | undefined, paidFinished = false;
     const reservation: SessionState = { attemptId: `command:${job.id}`, agent, reserved: 1, observed: 0, state: 'ok' };
     try {
       this.#assertStart(agent, 1);
@@ -299,10 +298,15 @@ export class Execution {
         launchId = record.launchId;
         await this.#report('reportJobProcess', { epoch: job.epoch, params: { id: job.id }, body: { fence: job.fence, processGroup: record.pgid ?? 0, cgroup: record.cgroup } }, stopped);
         this.#assertStart(agent, 1, reservation);
+        stopped.throwIfAborted();
+        if (paid) paidCall = await d.paidCalls?.take({ job, agent, model: paid.model, effort: paid.effort });
       } });
       proof = result.proof;
+      if (paidCall !== undefined) { await d.paidCalls?.finish(paidCall, stopped.aborted ? 'cancelled' : result.code === 0 ? 'succeeded' : 'failed', result.code); paidFinished = true; }
       return { ...result, stdout: Buffer.concat(logs.stdout).toString('utf8'), stderr: Buffer.concat(logs.stderr).toString('utf8') };
     } finally {
+      // 종료 기록이 실패하면 시작 시 저장한 unknown과 원래 실행 오류를 보존한다.
+      if (paidCall !== undefined && !paidFinished) await d.paidCalls?.finish(paidCall, stopped.aborted ? 'cancelled' : 'unknown').catch(() => undefined);
       await stopLease();
       this.#controllers.delete(controller);
       if (acquired && !proof) {
@@ -372,6 +376,7 @@ export class Execution {
     let physicalCleared = false;
     const reservation: SessionState = { attemptId: `job:${job.id}`, agent: job.payload.agent, reserved: slots, observed: 0, state: 'ok' };
     let grade: ApiResponse<'getRunGrade'>['body'] | undefined;
+    let paidCall: number | undefined, paidFinished = false;
     try {
       this.#assertStart(job.payload.agent, slots);
       this.#reservations.add(reservation);
@@ -391,7 +396,6 @@ export class Execution {
       const isolation = await this.#currentIsolation();
       const launch = buildLaunch(job.payload.agent, d.binaries[job.payload.agent], { ...grade, cwd: work.cwd, prompt, ...(resume && { resume }), ...(d.paidCalls && { noSubagents: true }) }, { env: d.env, isolation });
       if (d.paidCalls && definitions.enabled && definitions.items.length) throw new Error('전체 유료 호출 한도를 지키려면 하위 Agent를 끄세요.');
-      await d.paidCalls?.take(grade.effort);
       const installedSubagents = await installSubagents(work.cwd, job.payload.agent, definitions, grade, this.agentFiles);
       signal.throwIfAborted();
       this.#assertStart(job.payload.agent, slots, reservation);
@@ -431,11 +435,14 @@ export class Execution {
       };
       await mkdir(join(d.home, 'transcripts'), { recursive: true, mode: 0o700 });
       const transcript = await open(join(d.home, 'transcripts', `${createHash('sha256').update(attemptId).digest('hex')}.jsonl`), 'a', 0o600);
+      const paidGrade = grade;
       let result, delivered = false;
       try {
         result = await runProcess({ launches: this.launches, job: jobRef, launch, signal, register: async record => {
           await this.#report('reportJobProcess', { epoch, params: { id: job.id }, body: { fence: job.fence, processGroup: record.pgid ?? 0, cgroup: record.cgroup } }, signal);
           this.#assertStart(job.payload.agent, active.reserved, active);
+          signal.throwIfAborted();
+          paidCall = await d.paidCalls?.take({ job: jobRef, agent: job.payload.agent, model: paidGrade.model, effort: paidGrade.effort });
         }, stdout: async bytes => {
           await transcript.write(bytes);
           if (!delivered) { delivered = true; await options.delivered?.(); }
@@ -444,6 +451,7 @@ export class Execution {
         await transcript.sync();
       } finally { await transcript.close(); }
       endStream();
+      if (paidCall !== undefined) { await d.paidCalls?.finish(paidCall, signal.aborted ? 'cancelled' : ok && result.code === 0 ? 'succeeded' : 'failed', result.code); paidFinished = true; }
       physicalCleared = true;
       if (sessionId) {
         await mkdir(resumeDir, { recursive: true, mode: 0o700 });
@@ -493,6 +501,8 @@ export class Execution {
       }
       throw error;
     } finally {
+      // 종료 기록이 실패하면 시작 시 저장한 unknown과 원래 실행 오류를 보존한다.
+      if (paidCall !== undefined && !paidFinished) await d.paidCalls?.finish(paidCall, signal.aborted ? 'cancelled' : 'unknown').catch(() => undefined);
       await stopLease();
       this.#controllers.delete(controller);
       this.#reservations.delete(reservation);

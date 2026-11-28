@@ -31,6 +31,7 @@ try {
       version: '0.0.0',
       env: process.env,
       warn: (message) => log.warn(message),
+      info: (message) => log.info(message),
       hostSources: nodeHostSources(),
       // 전용 계정 격리면 CLI를 Agent 작업 영역(/srv/agentwbs/cli)에 설치하고, 설치 점검의 로그인 확인은 Agent 계정으로 한다.
       cliRegistry: createCliRegistry({

@@ -14,11 +14,12 @@ import type { Entry, ReportId } from '../state/state.ts';
 export const CHECK_KINDS = ['repo_check', 'github_check'] as const;
 export const EXTRA_KINDS = ['deploy_check', 'design_apply', 'merge_followup'] as const;
 interface Event { operation: ReportId; request: Entry['request'] }
-interface Saved { version: 1; epoch: number; job: ClaimedJob; events: Record<string, Event>; outputs?: Record<string, unknown>; outcome?: PlanningOutcome }
+interface Saved { version: 1; epoch: number; identity?: { hostId: string; bootId: string }; job: ClaimedJob; events: Record<string, Event>; outputs?: Record<string, unknown>; outcome?: PlanningOutcome }
 export interface QueuedOptions {
   home: string; api: ApiClient; outbox: Outbox; runnerId: string;
   identity: () => { hostId: string; bootId: string }; epoch: () => number; ready: () => boolean;
   kinds: () => Promise<ClaimedJob['kind'][]>;
+  warn?: (message: string) => void;
   execute: (job: ClaimedJob, signal: AbortSignal, report: QueuedJobs['report'], remember: QueuedJobs['remember']) => Promise<PlanningOutcome>;
 }
 
@@ -78,9 +79,22 @@ export class QueuedJobs {
       const claim = await d.api('claimJob', { epoch: d.epoch(), idempotencyKey: randomUUID(), body: { kinds, capacity } });
       if (claim.status === 204) return;
       if (!kinds.includes(claim.body.job.kind)) throw new Error('요청하지 않은 종류의 job을 받았습니다.');
-      this.#saved = { version: 1, epoch: d.epoch(), job: claim.body.job, events: {} }; await this.#save();
+      this.#saved = { version: 1, epoch: d.epoch(), identity: { ...d.identity() }, job: claim.body.job, events: {} }; await this.#save();
     }
     const saved = this.#saved, job = saved.job, epoch = saved.epoch;
+    const started = saved.identity ?? saved.events.start?.request.body;
+    if (started && (started.hostId !== d.identity().hostId || started.bootId !== d.identity().bootId)) {
+      // 새 부팅은 옛 프로세스의 종료만 증명한다. 원격 효과는 모른다. 임대를 늘리지 않고 서버 만료·reconcile에 맡긴다.
+      if (started.hostId !== d.identity().hostId) throw new Error('다른 host의 작업 기록입니다. 임대를 갱신하지 않고 원본을 보존합니다.');
+      const holds = (await d.api('getExecutionHolds', { epoch })).body.holds;
+      for (const hold of holds.filter(h => h.job === job.id && h.fence === job.fence && h.host_id === started.hostId && h.boot_id === started.bootId && !h.closed_at)) {
+        await this.report('reboot-release', 'releaseJob', { epoch, params: { id: job.id }, body: { fence: job.fence, hostId: d.identity().hostId,
+          proof: { kind: 'boot_changed', bootId: String(started.bootId), currentBootId: d.identity().bootId, processGroup: hold.pgid },
+          at: String(saved.events['reboot-release']?.request.body?.at ?? new Date().toISOString()) } });
+      }
+      d.warn?.(`재부팅 복구: ${job.id}의 옛 부팅 종료를 확인했습니다. 임대 갱신을 멈추고 서버의 만료·reconcile 결과 대조를 기다립니다.`);
+      this.#saved = undefined; await this.#save(); return;
+    }
     const at = (label: string) => {
       const stored = saved.events[label]?.request.body?.at;
       return typeof stored === 'string' ? stored : new Date().toISOString();

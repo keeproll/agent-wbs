@@ -16,6 +16,7 @@ import { activeDesignApply, linkDesignApply } from '../design/jobs.ts';
 import { currentRunnerJob, steps } from '../project/jobs.ts';
 import { waitingForLead } from '../project/steps.ts';
 import { designApplyContext } from '../design/service.ts';
+import { deferChange } from '../changes/events.ts';
 
 const params = (r: FastifyRequest) => r.params as { id: string; taskKey: string; attemptId: string };
 const body = <T>(r: FastifyRequest) => r.body as T;
@@ -57,8 +58,11 @@ export function installRunner(app: FastifyInstance, pool: Pool) {
   route('reportHost', (repo, r) => reportHost(repo, body<Parameters<typeof reportHost>[1]>(r)));
   route('reportReadiness', async (repo, r) => {
     const b = body<{ at: string; items: Parameters<RunnerRepository['saveReadiness']>[1]; cli?: { agent: string; version: string; model: string; options: string }[] }>(r);
+    const paid = b.items.find(item => item.key === 'paid_calls');
+    const changed = paid && (await repo.readiness()).find(item => item.key === 'paid_calls')?.detail !== paid.detail;
     await repo.saveReadiness(b.at, b.items);
     for (const cli of b.cli ?? []) await repo.saveObservationConfig(cli.agent, { ...cli, cli: cli.agent });
+    if (changed) deferChange(repo.client, null, 'runner', { key: 'paid_calls' });
   }, 204);
   route('reportModels', async (repo, r) => {
     const b = body<{ agent: Agent; models: Parameters<RunnerRepository['saveModels']>[1] }>(r);

@@ -46,6 +46,7 @@ export const READINESS_LABEL: Record<string, string> = {
   gh: 'GitHub 인증',
   lfs: 'git LFS',
   reports: '보고서 저장 공간',
+  paid_calls: '유료 AI 호출 한도',
   font: '화면 비교 고정 글꼴',
   render: '화면 비교 렌더러 네트워크 차단',
 };

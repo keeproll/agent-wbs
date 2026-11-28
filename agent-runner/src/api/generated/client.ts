@@ -1029,7 +1029,7 @@ export interface Operations {
       body: {
         at: Timestamp;
         items: ({
-          key: "claude" | "codex" | "git" | "node" | "pnpm" | "pg" | "repo" | "disk" | "subs" | "obs" | "gh" | "lfs" | "reports" | "font" | "render";
+          key: "claude" | "codex" | "git" | "node" | "pnpm" | "pg" | "repo" | "disk" | "subs" | "obs" | "gh" | "lfs" | "reports" | "font" | "render" | "paid_calls";
           status: "ok" | "warn" | "fail";
           detail: string;
           fix?: string;

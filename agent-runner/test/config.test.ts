@@ -10,7 +10,9 @@ test('Planning은 별도 opt-in과 모델 설정이 필요하고, 유료 호출�
   expect(loadConfig(base)).toMatchObject({ planningAuto: false, agentCallLimit: 0, agentMaxEffort: 'high' });
   expect(() => loadConfig({ ...base, AWBS_PLANNING_AUTO: '1' })).toThrow('Planning');
   expect(loadConfig({ ...base, AWBS_PLANNING_AUTO: '1', AWBS_GITHUB_REPO: 'https://github.com/o/r', AWBS_PLANNING_CODEX_MODEL: 'fake', AWBS_PLANNING_CLAUDE_MODEL: 'fake', AWBS_AGENT_CALL_LIMIT: '30' })).toMatchObject({ planningAuto: true, agentCallLimit: 30 });
-  for (const limit of ['31', '-1', '1.5', '', 'NaN']) expect(() => loadConfig({ ...base, AWBS_AGENT_CALL_LIMIT: limit })).toThrow('AWBS_AGENT_CALL_LIMIT');
+  for (const limit of ['31', '-1', '1.5', '', 'NaN']) expect(() => loadConfig({ ...base, AWBS_AGENT_CALL_LIMIT: limit })).toThrow('AWBS_CALL_LIMIT');
+  expect(loadConfig({ ...base, AWBS_CALL_LIMIT: '30' }).agentCallLimit).toBe(30);
+  expect(() => loadConfig({ ...base, AWBS_CALL_LIMIT: '30', AWBS_AGENT_CALL_LIMIT: '0' })).toThrow('AWBS_CALL_LIMIT');
   expect(() => loadConfig({ ...base, AWBS_AGENT_MAX_EFFORT: 'xhigh' })).toThrow('AWBS_AGENT_MAX_EFFORT');
 });
 

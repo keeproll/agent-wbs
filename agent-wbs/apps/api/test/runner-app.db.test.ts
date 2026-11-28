@@ -12,6 +12,7 @@ import { chromium, type Browser } from 'playwright-core';
 import { buildApp } from '../src/app.ts';
 import { installRunner } from '../src/runner/routes.ts';
 import { installProjectRunner } from '../src/project/runner-routes.ts';
+import { registerRunnerMessageRoutes } from '../src/messages/routes.ts';
 import { issueLoginLink, issueRunnerToken } from '../src/platform/credentials.ts';
 import { RunnerApp } from '../../../../agent-runner/src/app.ts';
 import { createApiClient } from '../../../../agent-runner/src/api/client.ts';
@@ -32,7 +33,8 @@ let root = '', state: State | undefined, web: ViteDevServer | undefined, browser
 let server: ReturnType<typeof buildApp> | undefined, github: Awaited<ReturnType<typeof startFakeGitHub>> | undefined;
 let running: Promise<void> | undefined;
 let repository: GitRepository | undefined;
-const stop = new AbortController();
+let stop = new AbortController();
+const logs: string[] = [];
 const warnings: string[] = [];
 const out = process.env.AWBS_RUNNER_JOBS_EVIDENCE ?? join(tmpdir(), 'awbs-runner-jobs-evidence');
 beforeAll(async () => {
@@ -56,7 +58,7 @@ test('화면: 저장소 접근 확인 → 연결 확인 → 등록 → 초기 �
   const address = socket.address(); if (!address || typeof address === 'string') throw new Error('port');
   const webPort = address.port; await new Promise<void>(resolve => socket.close(() => resolve()));
   const origin = `http://127.0.0.1:${webPort}`;
-  server = buildApp(pool, false, { origin, lan: false }); installRunner(server, pool); installProjectRunner(server, pool);
+  server = buildApp(pool, false, { origin, lan: false }); installRunner(server, pool); installProjectRunner(server, pool); registerRunnerMessageRoutes(server);
   const apiUrl = await server.listen({ port: 0, host: '127.0.0.1' });
   const source = join(root, 'source'); await mkdir(source);
   const git = (args: string[]) => exec('git', ['-c', 'user.name=Fake', '-c', 'user.email=fake@localhost', ...args], { cwd: source });
@@ -81,14 +83,16 @@ test('화면: 저장소 접근 확인 → 연결 확인 → 등록 → 초기 �
   await owner.query("insert into secrets(key,ciphertext,nonce,key_version,last4) values('github-token',$1,$2,1,'fake')", [encrypted.toString('base64'), nonce.toString('base64')]);
   await owner.query("insert into github_settings(mode,status,secret_key) values('token','unchecked','github-token') on conflict(singleton) do update set mode='token',status='unchecked',secret_key='github-token'");
   const bearer = await issueRunnerToken(pool, state.snapshot.runnerId, 'fake-public-key');
-  const runner = new RunnerApp({ home, state, api: createApiClient({ baseUrl: apiUrl, token: new Secret(bearer) }), version: 'fake',
-    env: { ...process.env, AWBS_PLANNING_CODEX_MODEL: 'gpt-6.2-sol', AWBS_PLANNING_CLAUDE_MODEL: 'claude-sonnet-5-5' }, warn: message => warnings.push(message),
-    hostSources: testHostSources(), run: probe, cliRun: probe, cliUpdates: false, planningAuto: true, agentCallLimit: 30,
-    github: { repo: { owner: 'o', repo: 'r' }, mode: 'token', baseUrl: github.url }, repository: async () => local,
+  const runnerState = state, githubUrl = github.url;
+  const createRunner = (limit: number) => new RunnerApp({ home, state: runnerState, api: createApiClient({ baseUrl: apiUrl, token: new Secret(bearer) }), version: 'fake',
+    env: { ...process.env, AWBS_PLANNING_CODEX_MODEL: 'gpt-6.2-sol', AWBS_PLANNING_CLAUDE_MODEL: 'claude-sonnet-5-5' }, warn: message => warnings.push(message), info: message => logs.push(message),
+    hostSources: testHostSources(), run: probe, cliRun: probe, cliUpdates: false, planningAuto: true, agentCallLimit: limit,
+    github: { repo: { owner: 'o', repo: 'r' }, mode: 'token', baseUrl: githubUrl }, repository: async () => local,
     inputSource: async () => undefined,
     cliRegistry: { latest: async () => '1.0.0', install: async () => undefined, probe: async () => undefined },
     execution: { prepare: async () => { throw new Error('시도는 끔'); }, isolation: { name: 'fake', flags: () => [], wrap: launch => launch } },
   });
+  let runner = createRunner(0);
   running = runner.run(stop.signal); void running.catch(() => undefined);
   await expect.poll(async () => (await owner.query("select status from github_settings where singleton")).rows[0]?.status, { timeout: 15_000 }).toBe('ok');
   await owner.query("update external_write_authority set host_id=$1,state='granted' where singleton", [runner.identity.hostId]);
@@ -114,6 +118,17 @@ test('화면: 저장소 접근 확인 → 연결 확인 → 등록 → 초기 �
   await expect.poll(async () => (await owner.query("select count(*)::int n from runner_jobs where kind='github_check' and state='done'")).rows[0]?.n, { timeout: 10_000 }).toBe(1);
   expect((await owner.query('select checked_at from github_settings where singleton')).rows[0]?.checked_at).not.toEqual(checked);
   await page.screenshot({ path: join(out, '02-github-check.png'), fullPage: true });
+  await page.goto(`${origin}/settings/runner`);
+  await page.getByText(/유료 호출 한도 0: AI 실행 꺼짐/).first().waitFor();
+  await page.getByText(/유료 호출 한도 0: AI 실행 꺼짐/).first().scrollIntoViewIfNeeded();
+  await page.screenshot({ path: join(out, '04-paid-disabled.png'), fullPage: true });
+  expect(await runner.paidCalls.used()).toBe(0);
+  expect(logs.some(line => line.includes('유료 호출 한도 0: AI 실행 꺼짐'))).toBe(true);
+  // owner가 검증 한도 30을 설정하고 재시작하는 운영 절차. 홈·사용량은 유지한다.
+  stop.abort(); await running; await runner.runner.stop('manual');
+  stop = new AbortController(); runner = createRunner(30);
+  running = runner.run(stop.signal); void running.catch(() => undefined);
+  await page.getByText(/0\/30회 사용/).first().waitFor();
   await page.goto(`${origin}/project`);
   // 편집 보호가 복원 제안을 보이면 같은 브라우저의 입력 초안을 복원한다.
   const restore = page.getByRole('button', { name: /복원/ });
@@ -131,8 +146,16 @@ test('화면: 저장소 접근 확인 → 연결 확인 → 등록 → 초기 �
   await page.getByRole('heading', { name: /WBS 초안/ }).waitFor();
   await page.screenshot({ path: join(out, '03-bootstrap-draft.png'), fullPage: true });
   expect(await runner.paidCalls.used()).toBe(8);
+  await runner.reportPaidCalls();
+  await page.goto(`${origin}/settings/runner`);
+  await page.getByText(/8\/30회 사용/).first().waitFor();
+  await page.getByText(/#8 .*결과=succeeded/).first().waitFor();
+  await page.getByText(/8\/30회 사용/).first().scrollIntoViewIfNeeded();
+  await page.screenshot({ path: join(out, '05-paid-audit.png'), fullPage: true });
+  expect((await runner.paidCalls.snapshot()).calls.every(call => call.result === 'succeeded')).toBe(true);
+  expect(logs.filter(line => line.startsWith('유료 호출 기록 '))).toHaveLength(16);
   expect((await owner.query("select count(*)::int n from execution_holds where closed_at is null")).rows[0]?.n).toBe(0);
   expect(warnings.filter(message => message !== 'getRunnerPolicy: 409 CLAIM_REJECTED')).toEqual([]);
-  await writeFile(join(out, 'e2e.json'), JSON.stringify({ repoCheck: 'done', githubCheck: 'done', initialAnalysis: 'done', draft: 1, paidCalls: 8, realPaidCalls: 0, warnings }, null, 2));
+  await writeFile(join(out, 'e2e.json'), JSON.stringify({ repoCheck: 'done', githubCheck: 'done', initialAnalysis: 'done', draft: 1, paidCalls: 8, realPaidCalls: 0, paidDisabledScreen: true, paidAuditScreen: true, warnings }, null, 2));
   await context.close();
 });

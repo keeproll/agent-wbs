@@ -29,16 +29,19 @@
 
 무료 확인은 GitHub 조회만 하므로 기본 켜짐이다. `AWBS_GITHUB_REPO=https://github.com/<owner>/<repo>`는 인증과 작업 저장소의 기준이다. 저장소 확인은 버튼이 넘긴 URL을 따로 확인하되, 설정과 다른 저장소이면 등록을 막는 이유도 보고한다. 연결 확인은 요청의 인증 방식(gh/token)을 반영한다. GitHub 설정이 없으면 위 수신은 시작하지 않는다.
 
-Planning 자동은 `AWBS_PLANNING_AUTO=1`, `AWBS_PLANNING_CODEX_MODEL`, `AWBS_PLANNING_CLAUDE_MODEL`, 확인된 Agent 격리, 남은 호출 예산이 모두 있어야 켜진다. 기본은 꺼짐이다. `AWBS_ATTEMPT_AUTO`의 기존 시도 흐름 의미는 그대로이며, CI 자동에는 배포 확인 수신도 포함한다. 두 기존 플래그로 Planning이 켜지지는 않는다.
+Planning 자동은 `AWBS_PLANNING_AUTO=1`, `AWBS_PLANNING_CODEX_MODEL`, `AWBS_PLANNING_CLAUDE_MODEL`, 확인된 Agent 격리, 남은 호출 예산이 모두 있어야 켜진다. 기본은 꺼짐이다. `AWBS_ATTEMPT_AUTO=1`은 시도 수신을 요청하지만 남은 예산이 있어야 받으며, 하위 Agent는 항상 끈다. CI 자동에는 배포 확인 수신도 포함한다. 두 기존 플래그로 Planning이 켜지지는 않는다.
 
 ## 유료 호출 상한
 
-- `AWBS_AGENT_CALL_LIMIT`: 기본 **0회**, owner가 정하는 검증 전체 예산 **0~30회**. `AWBS_AGENT_MAX_EFFORT`: 기본 **high**, low·medium·high만 허용한다. 상한을 넘는 등급은 실행하지 않는다.
-- Planning·계약 반영·시도·형식 수정 요청이 같은 `PaidCalls`를 쓴다. 실행 전에 `AWBS_HOME/paid-calls.json`에 사용 순번을 동기화한다. 시작 실패·중단도 소비하며, 재시작·프로젝트 초기화로 횟수가 돌아오지 않는다. 이 파일을 지우거나 새 홈으로 한도를 우회하지 않는다.
-- 하위 Agent는 끈다. 시도에 하위 Agent 정의가 켜져 있으면 실행을 거부한다. 별도 유료 세션을 장부 밖에서 만들지 않기 위해서다. 횟수는 돈의 총액 제한이 아니다.
+- `AWBS_CALL_LIMIT`: 기본 **0회**, owner가 정하는 검증 전체 예산 **0~30회**. `AWBS_AGENT_MAX_EFFORT`: 기본 **high**, low·medium·high만 허용한다. 상한을 넘는 등급은 실행하지 않는다.
+- Planning·계약 반영·시도·형식 수정 요청이 같은 `PaidCalls`를 쓴다. 해당 작업의 슬롯 확보와 프로세스 등록을 마친 뒤, 실제 CLI 실행 허가 직전에 `AWBS_HOME/paid-calls.json`에 순번을 동기화한다. 그 전의 슬롯 대기·준비 실패·취소는 차감하지 않는다. 허가 직전 차감 뒤의 실패·중단은 소비하며, 재시작·프로젝트 초기화로 횟수가 돌아오지 않는다. 이 파일을 지우거나 새 홈으로 한도를 우회하지 않는다.
+- 이전 이름 `AWBS_AGENT_CALL_LIMIT`도 읽는다. 두 이름을 함께 쓸 때 값이 다르면 시작을 거부한다. M8 검증 동안 owner 결정은 `AWBS_CALL_LIMIT=30`, `AWBS_AGENT_MAX_EFFORT=high`다. 이 개발 시험은 가짜 CLI만 쓴다.
+- 하위 Agent는 끈다. 시도에 하위 Agent 정의가 켜져 있으면 실행을 거부한다. 별도 유료 세션을 장부 밖에서 만들지 않기 위해서다. 횟수는 Runner가 직접 허가한 CLI의 수이며 돈의 총액 제한이 아니다. Agent나 CI가 셸 안에서 다른 유료 CLI를 직접 실행하는 것까지 가로채지는 않는다. 검증 지시·pipeline에서 그런 실행을 허용하지 않는다.
 - 한도가 소진되면 새 유료 job을 받지 않는다. 처리 중 소진되면 해당 단계 실패를 보고한다. 무료 저장소·연결 확인은 계속한다.
 
-작업 기록은 `state/queued-jobs/job.json`, Planning의 단계·전송 기록은 `state/planning/`에 둔다. 보고는 먼저 기록하고 같은 멱등 키로 보낸다. 임대를 15초마다 연장하며 만료 5초 전에 멈춘다. 모든 push는 서버의 외부 쓰기 권한과 현재 fence를 확인하는 기존 관문을 거친다. Agent 작업 폴더 안 git은 래퍼가 실행한다.
+시작 로그와 설정 → Runner · 실행 환경의 「유료 AI 호출 한도」는 기본값에서 **「유료 호출 한도 0: AI 실행 꺼짐」**, 소진하면 **「유료 호출 한도 도달: AI 실행 꺼짐」**을 표시한다. `AWBS_ATTEMPT_AUTO=1`이어도 한도 0이면 시도 수신과 하위 Agent 실행은 꺼진다. 남은 횟수·최대 Effort와 호출별 순번·시각·job·Agent·모델·Effort·결과를 같은 상태 보고로 5초마다 갱신한다. 호출 시작·종료 로그에도 남는다. 프롬프트·토큰·업무 결과 원문은 기록하지 않는다. `succeeded`·`failed`는 CLI 종료 결과이며 후속 업무 검증 성공을 뜻하지 않는다. 종료를 확인하지 못하면 `unknown`, 실행 뒤 취소는 `cancelled`로 남기고 자동 환불하지 않는다. 재부팅 전의 `unknown`을 성공이나 실패로 꾸미지 않는다.
+
+작업 기록은 `state/queued-jobs/job.json`, Planning의 단계·전송 기록은 `state/planning/`에 둔다. 보고는 먼저 기록하고 같은 멱등 키로 보낸다. 임대를 15초마다 연장하며 만료 5초 전에 멈춘다. 같은 부팅의 재시작은 저장된 보고를 재생한다. bootId가 달라지면 옛 프로세스 종료만 `boot_changed`로 보고하고 임대 갱신·재실행을 멈춘다. 서버 만료 뒤 외부 효과가 가능한 job은 기존 `reconcile` 경로에서 실제 원격 결과를 대조한다. 부팅 변경으로 원격 쓰기 성공 여부를 추측하지 않는다. 모든 push는 서버의 외부 쓰기 권한과 현재 fence를 확인하는 기존 관문을 거친다. Agent 작업 폴더 안 git은 래퍼가 실행한다.
 
 초기 작업 구역에 파일이 없으면 bare 저장소에서 `.gitkeep` 생성 커밋을 만들고 시스템 배포 키로 보낸다. `pipeline.yaml`의 내용을 추측해 만들지는 않는다. 계약 반영은 요청 때 확인한 코드 명세와 현재 main이 같은 경우에만 수행하며, 지정 계약 파일 외 변경이나 검증 실패는 push하지 않는다. push 응답을 잃으면 저장한 결과와 원격 main을 먼저 대조한다. 코드 추출기가 없는 병합 후 snapshot은 「대조 안 함」으로 보고한다.
 
