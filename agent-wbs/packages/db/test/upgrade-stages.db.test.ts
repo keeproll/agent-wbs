@@ -85,6 +85,8 @@ test('빈 DB와 0014·0016(master)·0017~0027·M6 중간(0029~0034) 단계 DB, M
     '0040_20261127_cgroup_empty',
     // Q-13 결정 A: 외부 수신자(0041)
     '0041_20261127_mail_external',
+    // M8 선행 수정: 검증 저장 순번(0046). 0042~0045는 다른 M8 작업이 쓴다.
+    '0046_20261128_verification_order',
     // UAT-TASK-10: 실제 사용한 하위 Agent(배정 번호 0048, 마지막 순번)
     '0048_20261128_subagent_usage']);
   // journal 시각 = 1795740000000 + 번호(0021 이후 규칙)
@@ -92,7 +94,7 @@ test('빈 DB와 0014·0016(master)·0017~0027·M6 중간(0029~0034) 단계 DB, M
   const fresh = await database('fresh');
   await runMigrations(fresh);
   const expected = await schemaOf(fresh);
-  const stages: (number | string)[] = [14, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 29, 30, 31, 33, 34, 35, 36, 37, 38, ...Object.keys(OLD)];
+  const stages: (number | string)[] = [14, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 29, 30, 31, 33, 34, 35, 36, 37, 38, 41, ...Object.keys(OLD)];
   for (const stage of stages) {
     const pool = await database(String(stage));
     const folder = await mkdtemp(join(tmpdir(), `awbs-stage-${String(stage)}-`));
@@ -122,7 +124,7 @@ test('빈 DB와 0014·0016(master)·0017~0027·M6 중간(0029~0034) 단계 DB, M
     if (stage === 23) {
       // 최신 seed에 필요한 관측 칸만 잠시 빌린 뒤 0023 구조로 되돌려 실제 업그레이드를 검사한다.
       await pool.query("alter table projects add column pipeline_observations jsonb not null default '{}'");
-      const sequenceTables = ['planning_jobs','task_estimates','change_proposals','runner_jobs','task_attempts','attempt_observations','runner_hosts','runner_concurrency_log','agent_usage','task_history','ci_steps','runner_sessions','change_proposal_events','planning_job_logs','planning_reviews'];
+      const sequenceTables = ['planning_jobs','task_estimates','change_proposals','runner_jobs','task_attempts','attempt_observations','runner_hosts','runner_concurrency_log','agent_usage','task_history','ci_steps','runner_sessions','change_proposal_events','planning_job_logs','planning_reviews','verifications'];
       for (const table of sequenceTables) await pool.query(`alter table ${table} add column record_no bigint default 1`);
       await pool.query("alter table ci_runs add column note text,add column e2e jsonb,add column github_status jsonb,add column finished_at timestamptz,add column cause_candidates jsonb not null default '[]'");
       await pool.query('alter table merge_queue add column merged_at timestamptz');

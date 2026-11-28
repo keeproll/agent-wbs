@@ -1,16 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
-  attemptCounters, deliveryView, flowOf, flowSteps, nextStep, pickAttempt, runnerReason, sortAttempts, type ExecAttempt, type ExecVerification,
+  attemptCounters, deliveryView, flowOf, flowSteps, nextStep, pickAttempt, runnerReason, sortAttempts, sortVerifications, type ExecAttempt, type ExecVerification,
 } from '../src/features/exec/model.ts';
 
 const at = (key: string, kind: ExecAttempt['kind'], status: ExecAttempt['status'], startedAt: string, extra: Partial<ExecAttempt> = {}): ExecAttempt => ({
-  id: `id-${key}`, attemptKey: key, taskKey: 'TASK-0007', kind, agent: kind === 'qa' || kind === 'reverify' ? 'Codex' : 'Claude', status,
+  // 시도 번호(attemptNo)는 키 끝 숫자(A-3 → 3). 서버도 attemptKey의 끝 번호와 attempt_no를 같은 값으로 매긴다.
+  id: `id-${key}`, attemptKey: key, attemptNo: Number(key.split('-').at(-1)), taskKey: 'TASK-0007', kind, agent: kind === 'qa' || kind === 'reverify' ? 'Codex' : 'Claude', status,
   startedAt, endedAt: status === 'running' ? null : startedAt, modelId: 'opus', effort: 'high', gradeAdjust: null, summary: null, failure: null,
   tokens: null, resumedFrom: null, baseSha: null, headSha: null, changedFiles: [], updatedAt: startedAt,
   subagents: { designated: [], used: null, observed: null }, ...extra,
 });
 const vf = (attempt: ExecAttempt, result: ExecVerification['result']): ExecVerification => ({
-  id: `v-${attempt.attemptKey}`, taskKey: attempt.taskKey, attemptId: attempt.id, result, headSha: 'a'.repeat(40), specRevision: 1, cmd: 'pnpm test',
+  // 저장 순번(seq)은 기본으로 그 시도 번호(검증은 시도 하나에 하나, 시도 순서대로 저장된다). 시험마다 덮어쓸 수 있다.
+  id: `v-${attempt.attemptKey}`, seq: attempt.attemptNo, taskKey: attempt.taskKey, attemptId: attempt.id, result, headSha: 'a'.repeat(40), specRevision: 1, cmd: 'pnpm test',
   expected: '', actual: '', defects: [], invalidated: false, at: attempt.startedAt,
 });
 const T = { lifecycleStatus: 'ready', assigneeAgent: 'Claude', verifierAgent: 'Codex', blocked: false } as const;
@@ -45,10 +47,24 @@ describe('실행 단계 판정(P Sel.flow L4348 → 제품 데이터)', () => {
   it('Task가 완료면 완료 단계', () => {
     expect(flowOf({ ...T, lifecycleStatus: 'done' }, [at('A-1', 'dev', 'completed', '2026-11-01T00:00:00Z')], []).stage).toBe('done');
   });
-  it('시도는 시작 시각 순으로 정렬한다(서버 순서에 기대지 않음)', () => {
+  it('시도는 서버 시도 번호(attemptNo) 순으로 정렬한다(서버 목록 순서·시각에 기대지 않음)', () => {
     const a = at('A-2', 'qa', 'completed', '2026-11-01T01:00:00Z');
     const b = at('A-1', 'dev', 'completed', '2026-11-01T00:00:00Z');
     expect(sortAttempts([a, b]).map((x) => x.attemptKey)).toEqual(['A-1', 'A-2']);
+  });
+  it('시계가 뒤로 가 새 시도의 시작 시각이 더 일러도 최신 시도는 번호가 큰 시도다', () => {
+    // A-3이 나중 시도(번호 3)지만 PC 시계가 뒤로 가서 시작 시각은 A-2보다 2.3초 이르다.
+    const qa = at('A-2', 'qa', 'completed', '2026-11-01T01:00:00.000Z');
+    const rw = at('A-3', 'rework', 'running', '2026-11-01T00:59:57.700Z');
+    expect(sortAttempts([rw, qa]).map((x) => x.attemptKey)).toEqual(['A-2', 'A-3']);
+    const f = flowOf({ ...T, lifecycleStatus: 'rework' }, [rw, qa], [vf(qa, 'FAIL')]);
+    expect(f.last?.attemptKey).toBe('A-3');
+    expect(f.stage).toBe('rework');
+    expect(pickAttempt([qa, rw], null).attempt?.attemptKey).toBe('A-3');
+    // 시도 번호가 10 이상이어도 숫자로 비교한다(문자열 비교면 A-10이 A-9보다 앞선다).
+    const nine = at('A-9', 'qa', 'completed', '2026-11-01T02:00:00Z');
+    const ten = at('A-10', 'rework', 'completed', '2026-11-01T01:59:59Z');
+    expect(sortAttempts([ten, nine]).at(-1)?.attemptKey).toBe('A-10');
   });
 });
 
@@ -239,8 +255,8 @@ describe('메시지 전달 표시(P LBL.dlv L2931, G§4.10)', () => {
   });
 });
 
-describe('검증 순서(리뷰 #7: API는 id 순서라 시각으로 다시 정렬)', () => {
-  it('lastV는 가장 늦은 검증, firstFail은 가장 이른 검증 기준', () => {
+describe('검증 순서(리뷰 #7: API는 id 순서라 서버 저장 순번 seq로 다시 정렬)', () => {
+  it('lastV는 순번이 가장 큰 검증, firstFail은 순번이 가장 작은 검증 기준', () => {
     const qa = at('A-2', 'qa', 'completed', '2026-11-01T01:00:00Z');
     const rv = at('A-4', 'reverify', 'completed', '2026-11-04T00:00:00Z');
     const late = { ...vf(rv, 'FAIL'), id: 'v-a', at: '2026-11-04T01:00:00Z' };
@@ -248,5 +264,30 @@ describe('검증 순서(리뷰 #7: API는 id 순서라 시각으로 다시 정�
     const f = flowOf(T, [qa, rv], [late, early]);
     expect(f.lastV?.id).toBe('v-a');
     expect(f.firstFail).toBe(false);
+  });
+  it('시계가 뒤로 가 새 검증의 시각이 더 일러도 최신 FAIL은 순번이 큰 검증이고, 재작업 지시는 그 검증의 시도에 연결된다', () => {
+    // QA(A-2) FAIL → 재작업(A-3) → 재검증(A-4) FAIL. 재검증 결과는 나중에 저장됐지만(seq 2) PC 시계가 뒤로 가서 시각은 QA보다 이르다.
+    const dev = at('A-1', 'dev', 'completed', '2026-11-01T00:00:00Z');
+    const qa = at('A-2', 'qa', 'completed', '2026-11-01T01:00:00Z');
+    const rw = at('A-3', 'rework', 'completed', '2026-11-01T02:00:00Z');
+    const rv = at('A-4', 'reverify', 'completed', '2026-11-01T03:00:00Z');
+    const old = { ...vf(qa, 'FAIL'), id: 'v-old', seq: 1, at: '2026-11-01T03:00:02.300Z' };
+    const latest = { ...vf(rv, 'FAIL'), id: 'v-new', seq: 2, at: '2026-11-01T03:00:00.000Z' };
+    const f = flowOf({ ...T, lifecycleStatus: 'rework' }, [rv, dev, rw, qa], [latest, old]);
+    expect(f.stage).toBe('rework');
+    expect(f.lastV?.id).toBe('v-new');
+    // ExecCenter는 재작업 지시(ReworkEditor)의 attemptId로 flow.lastV.attemptId를 넘긴다. 옛 QA 시도(A-2)가 아니라 재검증 시도(A-4)여야 한다.
+    expect(f.lastV?.attemptId).toBe(rv.id);
+    expect(f.firstFail).toBe(true);
+    const n = nextStep({ task: { ...T, lifecycleStatus: 'rework' }, flow: f, attempts: [rv, dev, rw, qa], verifications: [latest, old], alerts: [{ key: 'rework-limit:TASK-0007' }], reason: '', limits: { retry: 3, rework: 3 } });
+    expect(n.action).toMatchObject({ op: 'rework' });
+    expect(n.text.startsWith('v-new FAIL')).toBe(true);
+  });
+  it('sortVerifications는 시각이 아니라 seq로 정렬한다', () => {
+    const qa = at('A-2', 'qa', 'completed', '2026-11-01T01:00:00Z');
+    const rv = at('A-4', 'reverify', 'completed', '2026-11-01T03:00:00Z');
+    const a = { ...vf(qa, 'FAIL'), id: 'v-a', seq: 7, at: '2026-11-01T09:00:00Z' };
+    const b = { ...vf(rv, 'PASS'), id: 'v-b', seq: 12, at: '2026-11-01T08:00:00Z' };
+    expect(sortVerifications([b, a]).map((x) => x.id)).toEqual(['v-a', 'v-b']);
   });
 });

@@ -62,15 +62,21 @@ export const GATE_LABEL: Record<string, string> = {
 /** 작업 실행 목록에 보이는 Task 상태(P exVM L6022). 완료는 시도 기록을 보기 위해 넣는다. */
 export const EXEC_STATUSES = ['ready', 'running', 'paused', 'qa', 'rework', 'verifying', 'gate', 'failed', 'done'];
 
+/**
+ * 시도를 서버 시도 번호(attemptNo) 순으로 정렬한다. 마지막이 최신이다.
+ * 왜 시각(startedAt)이 아닌가: 이 PC 시계는 뒤로 갈 수 있어 나중 시도의 시각이 더 이를 수 있다. 시도 번호는 서버가 매기고 뒤로 가지 않는다.
+ * 서버 목록은 id(UUID) 순서라 그 순서에도 기대지 않는다(M3-06 리뷰 #7). 시각은 화면 표시용으로만 쓴다.
+ */
 export const sortAttempts = (attempts: readonly ExecAttempt[]): ExecAttempt[] =>
-  [...attempts].sort((a, b) => a.startedAt.localeCompare(b.startedAt) || a.attemptKey.localeCompare(b.attemptKey, undefined, { numeric: true }));
+  [...attempts].sort((a, b) => a.attemptNo - b.attemptNo);
 
 /**
- * 검증을 시각(at) 순으로 정렬한다. 같은 시각이면 id 순.
- * 왜: 서버 목록은 id(UUID) 순서라 시간 순서가 아니다(M3-06 리뷰 #7). 최신 FAIL을 잘못 고르면 지시가 옛 시도에 연결된다.
+ * 검증을 서버 저장 순번(seq) 순으로 정렬한다. 마지막이 최신이다.
+ * 왜: 서버 목록은 id(UUID) 순서라 시간 순서가 아니고(M3-06 리뷰 #7), 시각(at)은 PC 시계가 뒤로 가면 거꾸로 될 수 있다.
+ * 최신 FAIL을 잘못 고르면 재작업 지시가 옛 시도에 연결된다. 순번은 서버가 저장할 때 매기고 뒤로 가지 않는다.
  */
 export const sortVerifications = (verifications: readonly ExecVerification[]): ExecVerification[] =>
-  [...verifications].sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
+  [...verifications].sort((a, b) => a.seq - b.seq);
 
 export interface Flow {
   stage: Stage;
@@ -85,7 +91,7 @@ export interface Flow {
 const verdictOf = (verifications: readonly ExecVerification[], attempt: ExecAttempt) =>
   sortVerifications(verifications.filter((v) => v.attemptId === attempt.id)).at(-1) ?? null;
 
-/** 현재 단계(P Sel.flow L4348). 시도는 시작 시각 순으로 본다. */
+/** 현재 단계(P Sel.flow L4348). 시도는 서버 시도 번호 순, 검증은 서버 저장 순번 순으로 본다(시각 아님). */
 export function flowOf(task: FlowTask, attemptsIn: readonly ExecAttempt[], verificationsIn: readonly ExecVerification[]): Flow {
   const attempts = sortAttempts(attemptsIn);
   const verifications = sortVerifications(verificationsIn);

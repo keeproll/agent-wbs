@@ -126,6 +126,7 @@ beforeAll(async () => {
   await ownerPool.query("insert into runner_hosts(host_id,boot_id,cpu,cores,mem_gb,swap_gb,disk_gb,os,samples,seen_at) values('host-1','boot-1','cpu',8,32,0,500,'linux',1,now())");
   await ownerPool.query('update schedule_policy set assume_rate=0.5');
   await ownerPool.query("insert into external_write_authority(singleton,host_id,generation,state) values(true,'host-1',1,'granted')");
+  await ownerPool.query("insert into github_settings(mode,status,scopes) values('gh','ok',$1) on conflict(singleton) do nothing", [{ contents: 'verified', pulls: 'verified', statuses: 'verified', metadata: 'verified' }]);
   ({ home, cleanup: cleanupHome } = await tempHome());
 }, 60_000);
 afterAll(async () => { await cleanupHome(); await app.close(); await pool.end(); await ownerPool.end(); });

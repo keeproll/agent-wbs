@@ -7,7 +7,7 @@ export default defineConfig({
   test: {
     include: [
       'apps/api/test/{secrets,log,security,validation,mail,pdf-html,pdf-render,reset}.test.ts',
-      'apps/api/test/{secrets,security,security-review,validation,reset}.db.test.ts',
+      'apps/api/test/{secrets,security,security-review,validation,reset,github-credential}.db.test.ts',
       'e2e/fakes/test/{telegram,mail,pdf}.scenario.test.ts',
       'packages/db/test/snapshot.test.ts',
       'scripts/test/env-init.test.ts',
