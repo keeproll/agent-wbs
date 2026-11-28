@@ -77,8 +77,10 @@ owner Q-04(contracts §3.5)에 따라 원본과 다르게 동작한다.
   - Runner 상태를 모르면 「Runner 상태를 불러오지 못해 …」를 사유로 보인다. 요청은 서버가 판단한다.
 - 시도·검증·메시지·Evidence는 `nextCursor`가 없을 때까지 모든 쪽을 읽는다(`useExecData.ts`의 `readAll` → 공통 `shared/api/allPages.ts`의 `readAllPages`, M3 통합).
   - 왜: 서버 목록은 id(UUID) 순서라 최신 시도가 첫 쪽에 있다는 보장이 없다.
-- 검증은 시각(`at`) 순서로 다시 정렬한다(`sortVerifications`). 같은 시각이면 id 순서.
+- 시도는 서버 시도 번호(`attemptNo`) 순서로, 검증은 서버 저장 순번(`seq`) 순서로 다시 정렬한다(`sortAttempts`·`sortVerifications`). 마지막이 최신이다.
   - 왜: id 순서를 시간 순서로 보면 옛 FAIL을 최신으로 보고, 재작업 지시를 옛 시도에 연결한다.
+  - 왜 시각(`startedAt`·`at`)이 아닌가(M8 선행 수정): 이 PC 시계는 약 32초마다 약 2.3초 뒤로 간다. 나중 기록의 시각이 더 이를 수 있다.
+    번호·순번은 서버가 저장할 때 매기고 뒤로 가지 않는다. 시각은 화면 표시용으로만 쓴다.
 
 ## 5. 공통 부품을 이렇게 썼다
 
@@ -131,10 +133,10 @@ owner Q-04(contracts §3.5)에 따라 원본과 다르게 동작한다.
 - 조건: 1920×1080(배치는 1280×800도), 기기 배율 1, ko-KR, Asia/Seoul, 시계 2026-11-05 20:00 KST, 애니메이션 끔, 마우스는 화면 구석. M3-01과 같다.
 - 차이 계산: pixelmatch `threshold 0.1`, 안티에일리어싱 픽셀 제외.
 - 결과: `~/.orca/bots/agentwbs/archive/2026-11-26/M3-06/visual/`(`[원본 | 구현 | 차이]` PNG와 `summary.md`).
-- 같아야 하는 영역(실패 기준 2~3%): 제목, 왼쪽 목록, 6단계 흐름 카드, 메시지 영역 제목 줄.
+  - 위 보관 폴더는 `AWBS_EXEC_VISUAL_OUT`로 **명시할 때만** 쓴다. 기본 출력은 실행마다 새 임시 폴더(`$TMPDIR/awbs-visual-…`, `e2e/support/visual.ts` `visualOut`)다(리뷰 재발 방지: 기본값이 보관 폴더를 덮어썼다).
+- 같아야 하는 영역(실패 기준 1~3%): 제목, 왼쪽 목록, 6단계 흐름 카드, 메시지 영역 제목 줄, 시도 카드 머리(`UI-06-attempt`)와 그 안의 지정 · 실제 하위 Agent 태그(`UI-06-attempt-tags`, 요소 위치 기준).
 - 예외(기록만):
   - 다음 작업 줄: Mock 「결과 등록」 대신 「실행 중단」 · 자동 진행 문구(owner Q-04).
-  - 시도 카드: 지정 · 실제 하위 Agent 태그가 없다. 계약 `Attempt`에 필드가 없다.
   - 검증 Evidence: 원본은 파일 경로, 계약 `Evidence`는 경로가 없어 「종류 · 해시 앞 12자」 내려받기 링크로 보인다.
   - 메시지 영역: fixture 문구 · 시각 차이, 「읽음 표시」 버튼 추가, 받은 응답의 발신자는 「Agent」(아래 계약 공백).
   - 안내 문장(`.fhint`): 원본 11.5px → 12px(MM-28 본문 12px 이상, 리뷰 #10). `exec.css`.
@@ -144,7 +146,8 @@ owner Q-04(contracts §3.5)에 따라 원본과 다르게 동작한다.
 
 ## 7. 알아 둘 계약 공백(보고함)
 
-- 시도 응답에 지정 · 실제 하위 Agent, CI(Task 검사) 링크가 없다.
+- (해소) 시도 응답의 지정 · 실제 하위 Agent: 계약 `Attempt.subagents`(UAT-TASK-10). 출처는 시작 때 설치한 지정(attempt_subagents), 실행 중 관측(attempt_observations), Runner 사후 보고(`subagent-usage` → attempt_subagent_usage, 0048).
+  - 사후 보고 저장·관측 변화는 서버가 시도 변경 알림(topic `attempt`)을 남겨 열린 화면이 다시 읽는다. 「세션 기록 확인」은 목록의 모든 이름이 확인됐을 때만 보인다.
 - 받은 응답 메시지에 보낸 Agent 필드가 없다(DB의 from_agent가 API에서 빠짐). 화면은 「Agent」로 보이고 특정 Agent로 추측하지 않는다(리뷰 #9).
 - 자동 재시도 · 재작업 카운터 필드가 없다. 화면이 시도 · 검증 기록으로 다시 센다(`attemptCounters`).
 - 전체 시도 목록 API가 없어 왼쪽 목록은 Task마다 `GET /api/tasks/:taskKey/attempts`를 부른다.

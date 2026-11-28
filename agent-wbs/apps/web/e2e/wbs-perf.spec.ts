@@ -1,16 +1,16 @@
 /**
  * UAT-WBS-05 대량 목록 — 200행·1,000행 측정 기록(가상 스크롤).
  * 측정: 첫 행이 보일 때까지(목록 응답 포함), 그려진 DOM 행 수, 맨 아래까지 스크롤해 마지막 Task 도달, 필터 적용 뒤 결과 표시까지.
- * 응답은 가짜 API(브라우저 안에서 즉시 응답)라 화면 그리기 시간을 잰다. 결과: ~/.orca/bots/agentwbs/archive/2026-11-26/M3-02/perf/
+ * 응답은 가짜 API(브라우저 안에서 즉시 응답)라 화면 그리기 시간을 잰다. 결과: 기본은 실행마다 새 임시 폴더(support/visual.ts visualOut), 보관하려면 AWBS_PERF_OUT=~/.orca/bots/agentwbs/archive/2026-11-26/M3-02/perf/ 로 명시
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
+import { visualOut } from './support/visual.ts';
 import { wbsApi } from './support/wbs-api.ts';
 import { bulkList } from './support/wbs-fixture.ts';
 
-const OUT = process.env.AWBS_PERF_OUT ?? join(homedir(), '.orca/bots/agentwbs/archive/2026-11-26/M3-02/perf');
+const OUT = visualOut('AWBS_PERF_OUT', 'M3-02-perf');
 const results: Record<string, unknown>[] = [];
 test.describe.configure({ mode: 'serial' });
 test.use({ viewport: { width: 1920, height: 1080 } });

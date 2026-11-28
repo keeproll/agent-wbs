@@ -1,17 +1,15 @@
 /**
  * M3-05 시각 비교 — 원본 스크린샷(desktop-clock20261105/UI-05·UI-05-02·UI-09, desktop/MOD-07)과 같은 조건으로 찍어 같은 영역을 비교한다.
  * 조건·차이 계산은 M3-01과 같다(apps/web/README.md §5): 1920×1080, 배율 1, ko-KR, Asia/Seoul, 시계 2026-11-05 20:00 KST, 애니메이션 끔.
- * 결과: ~/.orca/bots/agentwbs/archive/2026-11-26/M3-05/visual/ (영역별 [원본 | 구현 | 차이] PNG와 summary.md)
+ * 결과: 기본은 실행마다 새 임시 폴더(support/visual.ts visualOut), 보관하려면 AWBS_VISUAL_OUT_M305=~/.orca/bots/agentwbs/archive/2026-11-26/M3-05/visual/ 로 명시 (영역별 [원본 | 구현 | 차이] PNG와 summary.md)
  * 기준과 예외는 features/planning/README.md 「시각 비교」에 적었다.
  */
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { fakeApi } from './support/fake-api.ts';
 import { CP1, CP2, PLANNING0, PLANNING1, planningServer, RP1 } from './support/planning-data.ts';
-import { compareRegion, hasBaseline, writeSummary, type Box, type VisualResult } from './support/visual.ts';
+import { compareRegion, hasBaseline, writeSummary, type Box, type VisualResult, visualOut } from './support/visual.ts';
 
-const OUT = process.env.AWBS_VISUAL_OUT_M305 ?? join(homedir(), '.orca/bots/agentwbs/archive/2026-11-26/M3-05/visual');
+const OUT = visualOut('AWBS_VISUAL_OUT_M305', 'M3-05-visual');
 
 test.skip(!hasBaseline(), '원본 스크린샷 폴더가 없다(~/.cache/agent-wbs-baseline).');
 test.describe.configure({ mode: 'serial' });

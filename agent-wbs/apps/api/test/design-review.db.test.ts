@@ -27,6 +27,7 @@ beforeEach(async () => {
   project = (await projectWith(h.owner, ['ready'])).project;
   await h.owner.query("insert into runner_hosts(host_id,boot_id,cpu,cores,mem_gb,swap_gb,disk_gb,os,samples,seen_at) values('review-host','review-boot','fake',4,16,0,100,'Linux',1,now())");
   await h.owner.query("insert into external_write_authority(singleton,host_id,state,generation) values(true,'review-host','granted',1)");
+  await h.owner.query("insert into github_settings(mode,status,scopes) values('gh','ok',$1) on conflict(singleton) do nothing", [{ contents: 'verified', pulls: 'verified', statuses: 'verified', metadata: 'verified' }]);
   jobId = required((await h.owner.query<{ id: string }>("insert into runner_jobs(project_id,kind,payload,state,epoch,dedup_key,fence,lease_owner,lease_until,generation) values($1,'merge_followup','{\"pr\":1}','started',1,gen_random_uuid()::text,1,'runner:runner-1',now()+interval '1 hour',1) returning id", [project])).rows[0]).id;
 });
 afterEach(async () => { await h?.close(); });

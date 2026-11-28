@@ -127,7 +127,7 @@ test('같은 하위 Agent의 여러 버전이 한 시도에 있어도 QA 판정�
   const qa = await attemptFor(h.owner, p.project, task, { kind: 'qa', no: 2, status: 'completed' });
   for (const version of [1, 2]) {
     const def = (await h.owner.query<{ id: string }>("insert into subagent_defs(def_key,version,agent,role,tools,sandbox,text,hash,allowed) values('two-versions',$1,'Claude','dev','{}','safe','지시','hash',true) returning id", [version])).rows[0]?.id;
-    await h.owner.query("insert into attempt_subagents(project_id,attempt,subagent,designated,installed,observed_used,version,def_hash) values($1,$2,$3,true,true,true,$4,'hash')", [p.project, dev, def, version]);
+    await h.owner.query("insert into attempt_subagents(project_id,attempt,subagent,designated,installed,observed_used,version,def_hash,confirm) values($1,$2,$3,true,true,true,$4,'hash','confirmed')", [p.project, dev, def, version]);
   }
   await h.owner.query("insert into verifications(project_id,attempt,result,head_sha,spec_revision,cmd,expected,actual) values($1,$2,'FAIL',$3,1,'test','통과','실패')", [p.project, qa, 'a'.repeat(40)]);
   const result = (await h.lead('GET', '/api/settings/agent-usage')).body.subagents.find((d: Body) => d.defKey === 'two-versions');

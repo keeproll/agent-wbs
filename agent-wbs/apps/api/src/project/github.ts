@@ -21,7 +21,7 @@ export async function reportGithubStatus(db: Db, body: GithubReport, principal: 
   await db.query("select pg_advisory_xact_lock(hashtextextended('settings:github',0))");
   const current = await githubSettings(db);
   if (current.mode !== body.mode) {
-    await db.query("insert into github_settings(singleton,mode,status,warning) values(true,$1,'unchecked',$2) on conflict(singleton) do update set warning=excluded.warning", [current.mode, `Runner가 ${body.mode} 방식으로 보고했습니다. 설정의 ${current.mode} 방식으로 다시 확인하세요.`]);
+    await db.query("insert into github_settings(singleton,mode,status,warning) values(true,$1,'unchecked',$2) on conflict(singleton) do update set status=excluded.status,scopes=null,account=null,expires_at=null,checked_at=null,warning=excluded.warning", [current.mode, `Runner가 ${body.mode} 방식으로 보고했습니다. 설정의 ${current.mode} 방식으로 다시 확인하세요.`]);
     if (body.jobId !== undefined) await db.query("update runner_jobs set state='cancelled',lease_until=null where id=$1", [body.jobId]);
     await changeEvent(db, null, { kind: 'github' }, 'settings');
     return;

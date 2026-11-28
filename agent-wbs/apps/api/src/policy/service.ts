@@ -4,9 +4,8 @@ import {
   type Agent, type AttemptKind, type ModelSettings, type ResolveResult, type TaskStatus,
 } from '@awbs/shared';
 import { canonicalJson, ChangeBatch, deferChange, iso } from '../changes/events.ts';
-import { jobPayloadErrors } from '@awbs/shared/api';
 import { ApiError, assertSameVersion, invalid, isUuid, json } from '../changes/http.ts';
-import { judgedTasks } from './judged.ts';
+import { requestEstimate } from '../planning/estimate.ts';
 import { writeResumeRegrade } from './resume.ts';
 import { resolveGrade } from '../runner/service.ts';
 import { RunnerRepository } from '../runner/repository.ts';
@@ -278,21 +277,8 @@ async function requestRejudge(client: PoolClient, changes: ChangeBatch, targets:
   const groups = [...byTask.values()].sort((a, b) => a.taskKey.localeCompare(b.taskKey));
   const projectId = groups[0]?.projectId ?? null;
   const epoch = (await client.query<{ epoch: number }>('select epoch from system_state where id=1')).rows[0]?.epoch ?? 0;
-  // estimate 계약 모양 그대로: tasks[{taskKey,subjectHash,content}] + policy. 재판단 이유·대상 역할은 policy.rejudge(RejudgeRequest).
-  const floors = (await execRow(client)).floors;
-  const allowedModels = Object.fromEntries(AGENTS.map((agent) => [agent, [] as string[]]));
-  for (const row of await modelRows(client)) if (row.allowed) allowedModels[row.agent]?.push(row.model_id);
-  const payload = {
-    tasks: await judgedTasks(client, [...byTask.keys()]),
-    policy: {
-      rejudge: { reason: code, trigger: why, targets: groups.map((g) => ({ taskKey: g.taskKey, roles: [...g.roles].sort() })) },
-      floors, allowedModels,
-    },
-  };
-  const problems = jobPayloadErrors('estimate', payload);
-  if (problems.length) throw new Error(`재판단 작업 payload가 계약과 다릅니다: ${problems.join('; ')}`);
-  await client.query("insert into runner_jobs(project_id,kind,payload,state,epoch,dedup_key) values($1,'estimate',$2::jsonb,'queued',$3,$4)",
-    [projectId, JSON.stringify(payload), epoch, `rejudge:${crypto.randomUUID()}`]);
+  if (!projectId) throw new Error('재판단 프로젝트가 없습니다.');
+  await requestEstimate(client, projectId, [...byTask.keys()], { reason: code, trigger: why, targets: groups.map((g) => ({ taskKey: g.taskKey, roles: [...g.roles].sort() })) }, epoch, `rejudge:${crypto.randomUUID()}`);
   changes.add(projectId, 'planning', { key: 'rejudge' });
 }
 

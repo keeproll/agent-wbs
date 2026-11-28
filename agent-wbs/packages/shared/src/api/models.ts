@@ -340,10 +340,36 @@ export const GradeAdjust = c.Body({
   reason: Text,
 });
 export const AttemptStatus = AnyOf(...v.ATTEMPT_STATUSES);
+/**
+ * 시도의 지정·실제 하위 Agent(UAT-TASK-10, P L1310 「지정 …」「실제 …」 태그). 값은 모두 실제 흐름에서 온다.
+ * - designated: 실행 시작(jobs/start) 때 Runner가 설치한 지정 정의(attempt_subagents). 정의 ID(def_key)와 그때의 버전.
+ * - used: 세션이 끝난 뒤 Runner가 보고한 실제 사용(subagent-usage). 보고 전이면 null. confirmed=세션 기록 확인, partial=일부 관측.
+ *   confirmed는 목록의 모든 이름이 확인 보고로 확인됐을 때만이다. 일부 관측에서만 본 이름이 하나라도 있으면 partial.
+ *   items의 id는 CLI가 부른 이름이다. 우리 정의와 맞으면 정의 ID와 버전, 아니면(예: Claude 기본 Explore) 이름만 있고 version은 null.
+ * - observed: 실행 중 출력 스트림 관측(추정). 마지막 관측 수와 상태. 관측 보고가 없으면 null.
+ */
+export const AttemptSubagents = Type.Object(
+  {
+    designated: List(Type.Object({ id: Type.String(), version: c.Int4Count })),
+    used: Nullable(
+      Type.Object({
+        confirm: AnyOf('confirmed', 'partial'),
+        items: List(Type.Object({ id: Type.String(), version: Nullable(c.Int4Count), count: c.Int4Count })),
+      }),
+    ),
+    observed: Nullable(Type.Object({ count: c.Int4Count, state: AnyOf('ok', 'unconfirmed') })),
+  },
+  { title: 'AttemptSubagents' },
+);
 export const Attempt = Type.Object(
   {
     id: c.Id,
     attemptKey: Type.String(),
+    /**
+     * 같은 Task 안의 시도 번호(1부터, 서버가 시도를 만들 때 매긴다. 바뀌지 않고 뒤로 가지 않는다).
+     * 「최신 시도」는 시각(startedAt)이 아니라 이 번호로 고른다. 시각은 화면 표시용이다(PC 시계가 뒤로 갈 수 있다).
+     */
+    attemptNo: Type.Integer({ minimum: 1, maximum: 2147483647 }),
     taskKey: c.TaskKey,
     kind: c.AttemptKind,
     agent: c.Agent,
@@ -360,6 +386,7 @@ export const Attempt = Type.Object(
     baseSha: Nullable(c.Sha),
     headSha: Nullable(c.Sha),
     changedFiles: List(Type.String()),
+    subagents: AttemptSubagents,
     updatedAt: c.Timestamp,
   },
   { title: 'Attempt' },
@@ -386,6 +413,11 @@ export const Evidence = Type.Object(
 export const Verification = Type.Object(
   {
     id: c.Id,
+    /**
+     * 서버 저장 순번(전체 검증에서 하나뿐, 저장할 때 매겨 바뀌지 않고 뒤로 가지 않는다).
+     * 「최신 검증」과 최신순 정렬은 시각(at)이 아니라 이 값으로 한다. 시각은 화면 표시용이다(PC 시계가 뒤로 갈 수 있다).
+     */
+    seq: c.Count,
     verificationKey: Opt(Type.String()),
     taskKey: c.TaskKey,
     attemptId: c.Id,

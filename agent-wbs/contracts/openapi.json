@@ -25895,7 +25895,7 @@
                       ],
                       "properties": {
                         "id": {
-                          "$ref": "#/components/schemas/Id"
+                          "$ref": "#/components/schemas/SubagentName"
                         },
                         "version": {
                           "anyOf": [
@@ -25920,6 +25920,11 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "count": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 2147483647
                         }
                       },
                       "additionalProperties": false
@@ -36154,6 +36159,7 @@
         "required": [
           "id",
           "attemptKey",
+          "attemptNo",
           "taskKey",
           "kind",
           "agent",
@@ -36170,6 +36176,7 @@
           "baseSha",
           "headSha",
           "changedFiles",
+          "subagents",
           "updatedAt"
         ],
         "properties": {
@@ -36178,6 +36185,11 @@
           },
           "attemptKey": {
             "type": "string"
+          },
+          "attemptNo": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
           },
           "taskKey": {
             "$ref": "#/components/schemas/TaskKey"
@@ -36369,6 +36381,9 @@
               "type": "string"
             }
           },
+          "subagents": {
+            "$ref": "#/components/schemas/AttemptSubagents"
+          },
           "updatedAt": {
             "$ref": "#/components/schemas/Timestamp"
           }
@@ -36383,6 +36398,119 @@
           "reverify"
         ],
         "title": "AttemptKind"
+      },
+      "AttemptSubagents": {
+        "type": "object",
+        "required": [
+          "designated",
+          "used",
+          "observed"
+        ],
+        "properties": {
+          "designated": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "version"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 2147483647
+                }
+              }
+            }
+          },
+          "used": {
+            "anyOf": [
+              {
+                "type": "object",
+                "required": [
+                  "confirm",
+                  "items"
+                ],
+                "properties": {
+                  "confirm": {
+                    "enum": [
+                      "confirmed",
+                      "partial"
+                    ]
+                  },
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "version",
+                        "count"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "version": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 2147483647
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "count": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 2147483647
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "observed": {
+            "anyOf": [
+              {
+                "type": "object",
+                "required": [
+                  "count",
+                  "state"
+                ],
+                "properties": {
+                  "count": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2147483647
+                  },
+                  "state": {
+                    "enum": [
+                      "ok",
+                      "unconfirmed"
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "AttemptSubagents"
       },
       "ChecklistItem": {
         "type": "object",
@@ -50193,6 +50321,13 @@
         ],
         "title": "StepStatus"
       },
+      "SubagentName": {
+        "type": "string",
+        "title": "SubagentName",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[^\\u0000]*[^\\s\\u0000][^\\u0000]*$"
+      },
       "TaskChanged": {
         "type": "object",
         "required": [
@@ -51364,6 +51499,7 @@
         "type": "object",
         "required": [
           "id",
+          "seq",
           "taskKey",
           "attemptId",
           "result",
@@ -51379,6 +51515,11 @@
         "properties": {
           "id": {
             "$ref": "#/components/schemas/Id"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
           },
           "verificationKey": {
             "type": "string"

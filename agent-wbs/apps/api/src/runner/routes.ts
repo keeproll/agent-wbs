@@ -197,6 +197,16 @@ export function installRunner(app: FastifyInstance, pool: Pool) {
       await repo.unconfirm(a.job);
     }
   }, 204);
+  // 실제 사용한 하위 Agent 사후 확정(contracts §3.2·§3.4-4). 세션이 끝난 뒤 오므로 시도·job이 이미 끝났어도 받는다.
+  // 낡은 Runner를 막는 조건은 「그 job의 마지막 fence + 같은 Runner」뿐이다(임대 시각·job 상태는 보지 않는다).
+  route('reportSubagentUsage', async (repo, r) => {
+    const b = body<{ fence: number; confirm: 'confirmed' | 'partial'; items: { id: string; version: number | null; hash: string | null; count?: number }[] }>(r);
+    const a = await repo.attempt(params(r).attemptId);
+    if (!a) throw new PlatformError('ATTEMPT_NOT_FOUND');
+    const job = await repo.job(a.job);
+    if (!job || job.fence !== b.fence || job.lease_owner !== principal(r)) throw new PlatformError('LEASE_LOST');
+    await repo.saveSubagentUsage(a, b.confirm, b.items);
+  }, 204);
   route('requestRun', async (repo, r) => {
     const b = body<{ updatedAt: string; kind: AttemptKind }>(r);
     const task = await repo.task(params(r).taskKey);

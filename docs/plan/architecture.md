@@ -74,32 +74,43 @@
 
 ## 2. 런타임 구성
 
-런타임 구성은 「프로그램이 실제로 돌 때 어떤 프로세스들이 떠 있고 서로 어떻게 연결되는가」다. 아래 그림은 원본 그대로 둔 Mermaid(글로 그림을 그리는 문법) 그림이고, 같은 내용을 [SVG 그림](diagrams/system-overview.svg)으로도 그렸다.
+런타임 구성은 「프로그램이 실제로 돌 때 어떤 프로세스들이 떠 있고 서로 어떻게 연결되는가」다. 아래 그림은 Mermaid(글로 그림을 그리는 문법) 그림이고, 같은 내용을 [SVG 그림](diagrams/system-overview.svg)으로도 그렸다.
+
+- M8-06(2026-11-28)에서 아래 Mermaid 그림을 실제 운영 배치에 맞게 고쳤다. 화면 파일은 `web`(nginx)이 보내고, Telegram 발송은 `api` 프로세스가 한다.
+- SVG 그림은 아직 고치기 전 배치(api가 정적 web을 보내고 worker가 Telegram을 보냄)를 그린다. 둘이 다르면 Mermaid 그림과 아래 글이 기준이다.
 
 ```mermaid
 flowchart LR
-  B[브라우저 · 팀장] -->|REST, 팀장 세션| API
+  B[브라우저 · 팀장] -->|화면 · REST, 팀장 세션| WEB
   subgraph WBS[agent-wbs]
-    API[api 프로세스: Fastify + 정적 web]
-    W[worker 프로세스: 스케줄러 · 메일 · Telegram · PDF · 감시]
+    WEB[web: nginx · 화면 파일 · /api 전달]
+    WEB -->|/api, /health| API
+    API[api 프로세스: Fastify · Telegram 즉시 발송]
+    W[worker 프로세스: 스케줄러 · 메일 · PDF · 감시]
     API --> PG[(PostgreSQL docker)]
     W --> PG
   end
-  R[agent-runner 데몬] -->|REST polling, Bearer + X-Project-Epoch| API
+  R[agent-runner 데몬] -->|REST polling, Bearer + X-Project-Epoch| WEB
   R --> CLI[claude / codex 세션: 세션별 프로세스 그룹]
   R --> GIT[git worktree · docker compose · Playwright]
   R --> GH[GitHub]
   W --> SMTP[SMTP]
-  W --> TG[Telegram Bot API]
+  API --> TG[Telegram Bot API]
 ```
 
 **프로세스별 역할**
 
+- `web` (운영, M8-06)
+  - 내용: nginx가 빌드한 화면 파일을 보내고 `/api`·`/health` 요청을 api로 넘긴다.
+  - api는 web 컨테이너의 네트워크 공간을 같이 쓰고 그 안의 `127.0.0.1:3100`에서만 듣는다. 그래서 loopback 규칙과 Origin 검사를 개발 때와 똑같이 쓴다.
+  - 왜 api가 화면 파일을 보내지 않나: api는 모든 경로에 권한 선언이 있어야 기동한다(§4 「권한 분리」). 화면 경로를 위해 이 체계를 바꿀 필요가 없다.
+  - 자세한 것: `docs/ops/operations.md` §1.3·§1.4
 - `api`
-  - 내용: REST, 세션, 정적 web 서빙(운영)
+  - 내용: REST, 세션, Telegram 알림 대기함 처리(즉시 발송, `apps/api/src/main.ts`의 `startNotifyWorker`, owner Q-16 A)
+  - 개발 때는 vite 개발 서버가 화면을 보내고 `/api`를 api로 넘긴다.
   - 근거: §2.1
 - `worker`
-  - 내용: 보고서 정기 생성·누락 보충, 메일 큐, 알림 outbox, heartbeat 감시, PDF, 파일 삭제 재시도, 무결성 점검(저장된 데이터끼리 모순이 없는지 검사).
+  - 내용: 보고서 정기 생성·누락 보충, 메일 큐, heartbeat 감시, PDF, 파일 삭제 재시도, 무결성 점검(저장된 데이터끼리 모순이 없는지 검사). Telegram 발송은 하지 않는다(api가 한다).
   - 일감은 PostgreSQL 작업 테이블을 `FOR UPDATE SKIP LOCKED`(다른 worker가 잡은 행은 건너뛰고 잠그는 SQL)로 소비한다. (이미 다른 worker가 잡은 행은 건너뛰고 남은 행을 가져가는 SQL 방식이다.)
     - 용어 풀이: SQL = DB에 묻고 고치는 언어.
   - 근거: §4.11 §4.14 §8.5 §9.6-6. 별도 메시지 브로커는 두지 않는다(§2.2 주의)
@@ -473,7 +484,8 @@ owner는 Codex·Claude CLI를 항상 최신으로 쓰라고 정했다. 그런데
 | Agent 작업 영역(Q-08 전용 계정) | `/srv/agentwbs/{cli,worktrees,inputs}` — 전용 계정을 쓰면 작업 폴더·입력 사본·CLI가 여기로 옮겨진다 |
 | 관리 대상 프로젝트 CI compose | project `awbs-ci-<repo>` · 포트는 Runner 할당 |
 
-- 운영: API가 web을 함께 서빙, 호스트 `5173`(G§4.14 기본 접속 주소와 같음). 개발과 동시 기동 시 `AWBS_PORT` 변경.
+- 운영: web(nginx) 컨테이너가 화면을 보내고 `/api`를 api로 넘긴다. 호스트 `127.0.0.1:5173`(G§4.14 기본 접속 주소와 같음). 개발과 동시 기동 시 한쪽의 화면 포트를 바꾼다(운영 `AWBS_WEB_PORT`, 개발 `agent-wbs/.env`의 `AWBS_WEB_PORT`). 자세한 것은 `docs/ops/operations.md` §2.
+- 운영 이름: compose project `awbs-prod`, 컨테이너 `awbs-prod-{postgres,migrate,web,api,worker}`, 볼륨 `awbs-prod-pgdata`·`awbs-prod-data`, 네트워크 `awbs-prod-net`. 개발 이름(`awbs`)과 겹치지 않는다.
 - 데이터 파일을 epoch별로 나누는 이유: 초기화 직후 옛 작업이 늦게 쓴 파일이 새 프로젝트 파일과 섞이지 않게 한다.
 
 **다른 컨테이너와 부딪치지 않기**
@@ -504,14 +516,16 @@ pnpm -C agent-runner start          # 토큰 발급 후
 
 **운영 배포**
 
-- Dockerfile(기반 이미지 digest 고정, Pretendard GOV + Chromium 포함) → compose `api`·`worker`·`postgres`.
+- Dockerfile(기반 이미지 digest 고정, Pretendard GOV + Chromium 포함) → compose `postgres`·`migrate`·`web`·`api`·`worker`(`agent-wbs/deploy/`, M8-06).
+  - 이미지는 `deploy/build.sh`로 커밋 해시 꼬리표를 붙여 만든다. compose에는 이미지를 만드는 항목이 없다(복원·되돌리기 때 지금 소스로 몰래 다시 만들지 않게).
+  - api·worker는 DB 관리자가 아니라 `awbs_app` 권한만 물려받는 로그인 `awbs_app_login`으로 접속한다(data-model §6.1).
   - 용어 풀이: Dockerfile = 컨테이너 이미지를 만드는 설명서; docker compose = 여러 컨테이너를 설정 파일 하나로 띄우는 도구.
 - `GET /health`, `GET /health/db`(P TASK-0001/0002).
 - Runner는 호스트 CLI·worktree를 다루므로 **컨테이너가 아니라** 사용자 systemd 서비스로 실행한다 [결정].
   - Runner 계정에 linger를 켠다(`loginctl enable-linger <계정>`). 왜: 재시작 뒤 아무도 로그인하지 않으면 사용자 systemd가 없어 Runner와 cgroup scope가 뜨지 않는다.
 - 배포 확인(④) 대상은 이 PC의 docker compose다(owner Q-15 A, 2026-11-27 아이템 19). 원격 서버·SSH 대상은 넣지 않는다.
-- 서버 계약을 바꿔 배포할 때는 대기 중인 옛 job(`input_diff`·`split`·`estimate`·`planning`)을 다시 만드는 절차가 필요하다. M8 실환경 시작 전에 정한다.
-- 되돌리기는 커밋 해시로 다시 빌드한다(§4.13 L489).
+- 서버 계약 변경 배포는 관리 CLI `jobs open`·`jobs reissue`로 대기 중인 옛 job을 확인·재발급한다. [운영 안내 §4.4](../ops/operations.md#44-서버-계약을-바꾸는-배포-옛-job-처리)의 절차를 따를 때만 진행하며 종료·대조 미확인 작업이 남으면 배포하지 않는다.
+- 되돌리기는 커밋 해시 꼬리표의 이미지로 다시 띄운다. 없으면 그 커밋으로 다시 빌드한다(§4.13 L489).
 - DB는 배포 전 `pg_dump`로 백업한다 [결정].
 
 ### 6.4 시간

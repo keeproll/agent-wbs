@@ -170,6 +170,16 @@
 - 재개가 실제로 새 `tool_use_id`로 오는가, 같은 호출을 다시 쓰는가. 같은 호출을 쓰면 지금 규칙은 그 task를 모호(미확인)로 둔다.
 - 전경 재개가 실제로 있는가(공식 문서는 재개 하위 Agent가 배경으로 돈다고 설명한다).
 
+## 실제 사용한 하위 Agent 보고 (`usage.ts`, `SubagentUsage`)
+
+화면의 「실제 …」 태그(UAT-TASK-10)에 쓰는 값이다. 세션이 끝나면 `subagent-usage`로 한 번 보고한다.
+
+- Claude: `Agent`(옛 `Task`) 도구 호출 입력의 `subagent_type`을 이름으로 센다. 같은 호출 id는 한 번만 센다.
+- 이름이 없거나 비면 세지 않는다. 기본 이름(`general-purpose`)으로 채우지 않는다.
+- Codex: `exec --json`에는 하위 Agent 이름이 없다. 그래서 빈 목록(모름)을 보낸다.
+- 설치한 지정 정의 이름이면 그 정의의 id·버전·hash를 붙이고, 아니면 이름만 보낸다(예: `Explore`).
+- 확정도는 항상 `partial`(일부 관측)이다. 세션 기록 형식이 검증되기 전에는 `confirmed`로 보내지 않는다.
+
 ## 보유 계산 (`sessionSlots`)
 
 - `resources/concurrency.ts`의 `reservedSlots`를 그대로 쓴다.

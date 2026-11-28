@@ -76,6 +76,17 @@ function chosenOps(review: ReviewRow): WireProposalOp[] | null {
   return review.codex.common ?? [];
 }
 
+export async function requestPlanning(client: PoolClient, id: string, epoch: number): Promise<string> {
+  const row = await loadPlanning(client, id, true);
+  if ((await client.query<{ status: string }>('select status from plannings where id=$1', [id])).rows[0]?.status !== 'analyzing') throw new TaskError('INVALID_TRANSITION');
+  const n = (await client.query<{ n: number }>("select count(*)::int n from runner_jobs where kind=$1 and payload->'planning'->>'id'=$2", ['planning', id])).rows[0]?.n ?? 0;
+  const job = (await client.query<{ id: string }>(
+    "insert into runner_jobs(project_id,kind,payload,state,epoch,dedup_key) values($1,'planning',$2::jsonb,'queued',$3,$4) returning id",
+    [row.project_id, JSON.stringify({ tasks: [], policy: {}, planning: { id, title: row.title, scope: row.scope }, proposal: null }), epoch, `planning:${id}:${String(n + 1)}`])).rows[0];
+  if (!job) throw new Error('Planning job 생성 실패');
+  return job.id;
+}
+
 export function registerSessionRoutes(route: RouteFn, pool: Pool, epochOf: (request: FastifyRequest) => number): void {
   route('listPlannings', 'Planning 목록 조회', async (request) => {
     const query = request.query as { limit?: number; cursor?: string };
@@ -91,9 +102,7 @@ export function registerSessionRoutes(route: RouteFn, pool: Pool, epochOf: (requ
     const client = clientOf(request);
     const body = request.body as { title: string; scope: string };
     const row = await insertPlanning(client, body.title, body.scope);
-    const jobId = (await client.query<{ id: string }>(
-      "insert into runner_jobs(project_id,kind,payload,state,epoch,dedup_key) values($1,'planning',$2::jsonb,'queued',$3,$4) returning id",
-      [row.project_id, JSON.stringify({ tasks: [], policy: {}, planning: { id: row.id, title: body.title, scope: body.scope }, proposal: null }), epochOf(request), `planning:${row.id}`])).rows[0]?.id;
+    const jobId = await requestPlanning(client, row.id, epochOf(request));
     return reply.code(202).send({ id: row.id, jobId });
   });
 

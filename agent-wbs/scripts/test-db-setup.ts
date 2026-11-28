@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { TestProject } from 'vitest/node';
-import { createPool, recreateTestDatabase } from '../packages/db/src/index.ts';
+import { createPool, recreateTestDatabase, runMigrations, seedSystem } from '../packages/db/src/index.ts';
 
 /** 대상 DB가 awbs_test_가 아니면 어떤 테스트도 시작하지 않는다. */
 export default async function setup(project: TestProject): Promise<void> {
@@ -16,4 +16,14 @@ export default async function setup(project: TestProject): Promise<void> {
     if (on !== 'on') throw new Error('시험 DB 서버의 track_commit_timestamp가 꺼져 있습니다. 컨테이너를 `-c track_commit_timestamp=on`으로 다시 띄우세요(compose.yaml 참고).');
   } finally { await pool.end(); }
   project.provide('testDatabaseUrl', url);
+  // 무거운 DB 구조 준비는 공용 준비 단계에서 한 번 끝낸다. 개별 시험의 beforeAll은 준비된 DB를 재사용한다.
+  if (project.vitest.state.getPaths().includes(resolve(project.config.root, 'apps/api/test/github-credential.db.test.ts'))) {
+    const githubUrl = new URL(url);
+    githubUrl.pathname += '_ghcred';
+    await recreateTestDatabase(githubUrl.href);
+    const githubPool = createPool(githubUrl.href, { max: 1, onError: () => undefined });
+    try { await runMigrations(githubPool); await seedSystem(githubPool); }
+    finally { await githubPool.end(); }
+    project.provide('githubCredentialDatabaseUrl', githubUrl.href);
+  }
 }

@@ -26,6 +26,10 @@ test('0021·0022 snapshot이 단계별 구조와 연결을 보존하고 다음 g
   const cgroup = snapshot('0040');
   // Q-13 결정 A: 외부 수신자(0041, mail_recipients·mail_outbox의 external)
   const external = snapshot('0041');
+  // M8 선행 수정: 검증 저장 순번(0046, verifications.record_no)
+  const verifOrder = snapshot('0046');
+  // UAT-TASK-10: 실제 사용한 하위 Agent(0048, attempt_subagent_usage)
+  const usage = snapshot('0048');
   expect(project.prevId).toBe(before.id);
   expect(evidence.prevId).toBe(project.id);
   expect(observation.prevId).toBe(evidence.id);
@@ -66,10 +70,21 @@ test('0021·0022 snapshot이 단계별 구조와 연결을 보존하고 다음 g
   // 0040은 열거형 값 하나만 더한다. 트리거·정리 함수는 손으로 쓴 SQL이다.
   expect(await generateMigration(recovery, cgroup)).toEqual(['ALTER TYPE "public"."release_proof" ADD VALUE \'cgroup_empty\';']);
   expect(external.prevId).toBe(cgroup.id);
-  // 0041은 외부 수신자 열 두 개와 검사 두 개만 더한다. 「다음 generate가 빈 변경」은 마지막 snapshot(0041)으로 확인한다.
+  // 0041은 외부 수신자 열 두 개와 검사 두 개만 더한다.
   expect(await generateMigration(cgroup, external)).toHaveLength(4);
   for (const table of ['mail_recipients', 'mail_outbox']) expect(external.tables[`public.${table}`]?.columns).toHaveProperty('external');
-  expect(await generateMigration(external, generateDrizzleJson(schema, external.id))).toEqual([]);
+  expect(verifOrder.prevId).toBe(external.id);
+  // 0046은 검증 저장 순번 열과 유일 제약만 더한다(기존 행 번호 매기기는 손으로 쓴 SQL).
+  expect(await generateMigration(external, verifOrder)).toEqual([
+    'ALTER TABLE "verifications" ADD COLUMN "record_no" bigserial NOT NULL;',
+    'ALTER TABLE "verifications" ADD CONSTRAINT "verifications_record_no_unique" UNIQUE("record_no");',
+  ]);
+  expect(usage.prevId).toBe(verifOrder.id);
+  // 0048은 표 하나와 FK 셋만 더한다(Drizzle 기준). 범위 FK·색인·권한·트리거는 손으로 쓴 SQL이다. 「다음 generate가 빈 변경」은 마지막 snapshot(0048)으로 확인한다.
+  const added = await generateMigration(verifOrder, usage);
+  expect(added).toHaveLength(4);
+  expect(added[0]).toContain('CREATE TABLE "attempt_subagent_usage"');
+  expect(await generateMigration(usage, generateDrizzleJson(schema, usage.id))).toEqual([]);
   expect(mail.tables['public.mail_outbox']?.columns).toHaveProperty('retried');
   expect(mail.tables['public.mail_settings']?.columns).toHaveProperty('settings_version');
   expect(design.tables['public.mail_outbox']).toEqual(mail.tables['public.mail_outbox']);

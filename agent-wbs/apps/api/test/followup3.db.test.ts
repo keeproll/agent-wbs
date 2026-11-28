@@ -98,7 +98,7 @@ test('설정 사용 현황은 잠금·모델 Task·지정/실제 하위 Agent를
   const a = await attemptFor(h.owner, p.project, p.tasks['TASK-0001'] ?? '', { status: 'completed' });
   const def = (await h.owner.query<{ id: string }>("insert into subagent_defs(def_key,version,agent,role,tools,sandbox,text,hash,allowed,is_demo) values('sf3',1,'Claude','dev','{}','safe','내용','hash',true,false) returning id")).rows[0]?.id;
   await h.owner.query("insert into task_subagents(project_id,task,role,subagent_id,basis) values($1,$2,'dev',$3,'근거')", [p.project, p.tasks['TASK-0001'], def]);
-  await h.owner.query('insert into attempt_subagents(project_id,attempt,subagent,designated,installed,observed_used,version,def_hash) values($1,$2,$3,true,true,true,1,\'hash\')', [p.project, a, def]);
+  await h.owner.query('insert into attempt_subagents(project_id,attempt,subagent,designated,installed,observed_used,version,def_hash,confirm) values($1,$2,$3,true,true,true,1,\'hash\',\'confirmed\')', [p.project, a, def]);
   const usage = await h.lead('GET', '/api/settings/agent-usage');
   expect(usage.status, JSON.stringify(usage.body)).toBe(200);
   expect(usage.body.lockedTasks).toEqual([expect.objectContaining({ taskKey: 'TASK-0001', role: 'dev', modelId: 'claude-opus-5-5' })]);
@@ -142,7 +142,7 @@ test('검증 표시 번호는 결과 필터와 무관하며 대시보드도 같�
   const used = (await h.lead('GET', '/api/settings/agent-usage')).body.subagents.find((d: { defKey: string }) => d.defKey === 'sf3');
   expect(used).toMatchObject({ decisions: 1, failures: 0, reworkRate: 0 });
   const dev = await attemptFor(h.owner, p.project, p.tasks['TASK-0002'] ?? '', { status: 'completed' });
-  await h.owner.query("insert into attempt_subagents(project_id,attempt,subagent,designated,installed,observed_used,version,def_hash) values($1,$2,$3,true,true,true,1,'hash')", [p.project, dev, used.id]);
+  await h.owner.query("insert into attempt_subagents(project_id,attempt,subagent,designated,installed,observed_used,version,def_hash,confirm) values($1,$2,$3,true,true,true,1,'hash','confirmed')", [p.project, dev, used.id]);
   await verify('TASK-0002', 2, 'BLOCKED');
   await verify('TASK-0002', 3, 'FAIL');
   expect((await h.lead('GET', '/api/settings/agent-usage')).body.subagents.find((d: { defKey: string }) => d.defKey === 'sf3')).toMatchObject({ decisions: 1, failures: 0, reworkRate: 0 });

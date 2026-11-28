@@ -3,14 +3,27 @@
  * [원본 | 구현 | 차이] 세 장을 나란히 붙인 PNG를 남긴다.
  * 차이 픽셀: pixelmatch(threshold 0.1, 안티에일리어싱 무시)로 색 차이가 큰 픽셀.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pixelmatch from 'pixelmatch';
 import { PNG } from 'pngjs';
 
 export const BASELINE = process.env.AWBS_BASELINE_DIR ?? join(homedir(), '.cache/agent-wbs-baseline');
-export const OUT = process.env.AWBS_VISUAL_OUT ?? join(homedir(), '.orca/bots/agentwbs/archive/2026-11-26/M3-01/visual');
+/**
+ * 시각 비교·측정 결과 폴더. 기본은 **저장소 밖 임시 폴더, 실행마다 새 폴더**다(`<tmp>/awbs-visual-XXXX/<label>`).
+ * - 실행 폴더는 playwright.config.ts가 실행마다 만들어 `AWBS_VISUAL_RUN_DIR`로 worker에 물려준다(없으면 이 프로세스에서 만든다).
+ * - 봇 보관 폴더(~/.orca/bots/…/archive)에 남기려면 그 시험의 환경 변수(예: AWBS_VISUAL_OUT_M303)로 **명시**한다.
+ * 왜: 기본값이 보관 폴더를 가리켜, 경로를 빠뜨린 실행이 옛 마일스톤의 증거를 두 번 덮어썼다(subagent-tag 리뷰 5).
+ */
+let runDir: string | undefined;
+export function visualOut(envName: string, label: string): string {
+  const explicit = process.env[envName];
+  if (explicit) return explicit;
+  runDir ??= process.env.AWBS_VISUAL_RUN_DIR ?? mkdtempSync(join(tmpdir(), 'awbs-visual-'));
+  return join(runDir, label);
+}
+export const OUT = visualOut('AWBS_VISUAL_OUT', 'M3-01');
 
 export interface Box { x: number; y: number; width: number; height: number }
 
@@ -52,4 +65,23 @@ export function writeSummary(results: VisualResult[], notes: Record<string, stri
   const lines = ['| 영역 | 크기 | 차이 픽셀 | 비율 | 기준 | 차이 원인 |', '|---|---|---:|---:|---|---|'];
   for (const r of results) lines.push(`| ${r.name} | ${r.size} | ${String(r.diffPixels)} | ${(r.ratio * 100).toFixed(2)}% | ${notes[`${r.name}:limit`] ?? ''} | ${notes[r.name] ?? ''} |`);
   writeFileSync(join(out, 'summary.md'), `${lines.join('\n')}\n`);
+}
+
+/**
+ * 시도 머리의 지정 · 실제 하위 Agent 태그 영역(UAT-TASK-10). 구현은 요소 위치로, 원본은 「지정」 태그 왼쪽 위(원본 PNG에서 #EEF3FF로 잰 값)로 맞춘다.
+ * 폭·높이는 구현의 「지정」부터 「실제」 태그 끝까지(+ 가장자리 2px). 태그 글자·폭·색이 다르면 차이가 커진다.
+ */
+export async function subagentTagBoxes(scope: import('@playwright/test').Locator, baseTopLeft: { x: number; y: number }): Promise<{ base: Box; ours: Box }> {
+  const designated = scope.locator('.att-h .tag.sub'), used = scope.locator('.att-h span', { hasText: /^실제 / });
+  // 태그가 없으면 기다리지 않고 바로 실패한다(boundingBox는 요소가 생길 때까지 시험 시간 끝까지 기다린다).
+  if (!(await designated.count()) || !(await used.count())) throw new Error('지정·실제 하위 Agent 태그가 없다');
+  const a = await designated.first().boundingBox();
+  const b = await used.first().boundingBox();
+  if (!a || !b) throw new Error('지정·실제 하위 Agent 태그 위치를 잴 수 없다');
+  const pad = 2;
+  const width = Math.round(b.x + b.width - a.x) + pad * 2, height = Math.round(Math.max(a.height, b.height)) + pad * 2;
+  return {
+    ours: { x: Math.round(a.x) - pad, y: Math.round(a.y) - pad, width, height },
+    base: { x: baseTopLeft.x - pad, y: baseTopLeft.y - pad, width, height },
+  };
 }

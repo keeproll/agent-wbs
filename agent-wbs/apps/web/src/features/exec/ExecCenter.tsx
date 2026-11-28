@@ -18,6 +18,7 @@ import { AreaError } from './AreaError.tsx';
 import { ReworkEditor } from './ReworkEditor.tsx';
 import type { ExecData } from './useExecData.ts';
 import { useTaskCommand } from './useTaskCommand.tsx';
+import { SubagentTags } from '../../shared/ui/SubagentTags.tsx';
 
 type TaskRow = NonNullable<ExecData['task']>;
 
@@ -171,6 +172,7 @@ function AttemptCard({ attempt: a, verification: v, evidence, now }: { attempt: 
         <span className="wt">{KIND_LABEL[a.kind] ?? String(a.kind)}</span>
         <span className="agent"><span className={`ag-mk ${agentClass(agent)}`} aria-hidden="true">{agentInitial(agent)}</span>{agent}</span>
         <span className="tag" title="실제 실행 등급(Runner 보고)">{gradeText(a)}</span>
+        <SubagentTags subagents={a.subagents} running={a.status === 'running'} />
         {adj && (
           <span className={adj.kind === 'down' ? 'sc sc-none' : 'sc sc-warn'} title={adj.reason}>
             {adj.kind === 'up' ? '등급 상향' : adj.kind === 'down' ? '등급 하향' : adj.kind === 'regrade' ? '등급 재판단' : '등급 유지'} {adj.from.model} · {adj.from.effort} → {adj.to.model} · {adj.to.effort} — {adj.reason}

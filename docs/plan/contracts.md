@@ -630,6 +630,8 @@ Runner만 부르는 API다. Runner 토큰과 epoch 헤더가 필요하다(§1).
   - 본문 `{runnerId,hostId,bootId,publicKeyPem,sealedVersion:1}` → 200 `{keyId}`. Runner 인증과 epoch가 필요하다.
   - `publicKeyPem`은 X25519 공개키의 SubjectPublicKeyInfo PEM이다(§6.1).
   - 서버는 인증된 Runner와 보고된 host·boot에 키를 묶는다.
+  - 등록할 `hostId`·`bootId`가 서버의 최신 PC·부팅 보고와 다르면 403 `FORBIDDEN_PRINCIPAL`이다. Runner는 §1의 401/403 규칙대로 멈춘다.
+    - 왜: 토큰이 유효해도 낡은 실행의 신원으로 GitHub 토큰을 받아서는 안 된다. 정상 시작은 host 보고 뒤에 키를 등록한다.
   - `keyId`는 서버가 공개키의 SHA-256 지문으로 계산한다. 같은 등록을 다시 보내면 같은 `keyId`가 온다.
   - Runner는 프로세스를 시작할 때마다 새 키를 만들어 다시 등록한다.
   - 등록은 서버 메모리에만 둔다 [결정]. 서버가 다시 켜지면 등록이 사라지므로, Runner는 credential 조회에서 404를 받으면 다시 등록한다.

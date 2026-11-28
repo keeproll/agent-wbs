@@ -10,15 +10,15 @@
  * - 설정 조회 API가 모두 응답하는지 기록한다(구현되지 않은 API는 결함 보고용으로 남긴다).
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
+import { visualOut } from './support/visual.ts';
 
 const password = process.env.AWBS_E2E_PASSWORD ?? '';
 test.skip(!password, '실제 API 환경이 없다. pnpm --filter @awbs/web e2e:api-settings로 실행한다.');
 test.describe.configure({ mode: 'serial' });
 
-const OUT = process.env.AWBS_REPORT_DIR ?? join(homedir(), '.orca/bots/agentwbs/archive/2026-11-26/M3-08');
+const OUT = visualOut('AWBS_REPORT_DIR', 'M3-08');
 const serverErrors: string[] = [];
 test.beforeEach(({ page }) => {
   page.on('response', (r) => { if (r.status() >= 500) serverErrors.push(`${r.request().method()} ${new URL(r.url()).pathname} ${String(r.status())}`); });

@@ -1,6 +1,7 @@
 import { changeEvent, enqueueJob, iso, type Db } from './db.ts';
 import { ProjectError } from './errors.ts';
 import { BOOT_STEPS, INPUT_STEPS, LEAD_STEPS, waitingForLead, type StepStatus } from './steps.ts';
+import { techSnapshot, wbsSnapshot } from '../planning/job-snapshot.ts';
 
 /*
  * Planning 작업(planning_jobs)과 Runner job(runner_jobs)의 관계.
@@ -89,17 +90,32 @@ export async function syncPlanningJob(db: Db, runnerId: string, state: string, e
 }
 
 /**
- * 같은 Planning 작업의 다음 Runner job을 만든다. 이전 job의 payload(커밋·이전 커밋·버전)를 이어받고
- * 재개 단계·회차·지시만 바꾼다.
+ * 같은 Planning 작업의 다음 Runner job을 현재 DB 입력으로 만든다.
  */
 export async function followUpJob(db: Db, job: PlanningJob, epoch: number, change: { resumeStep: string | null; instruction?: string; base?: Record<string, unknown> }): Promise<string> {
   // 실행 순번은 M2-03이 만든 job의 n 중 최댓값 + 1이다. reconcile이 만든 job(숫자=fence)은 세지 않는다.
-  const previous = (await db.query<{ payload: Record<string, unknown>; n: string }>(
-    `select payload,(select coalesce(max((split_part(dedup_key,':',3))::int),0) from runner_jobs
-       where split_part(dedup_key,':',2)=$1 and split_part(dedup_key,':',1) in ('bootstrap','input_diff')) n
-     from runner_jobs where payload->>'planningJobId'=$1 order by record_no desc limit 1`, [job.id])).rows[0];
+  const previous = (await db.query<{ n: string }>(
+    `select coalesce(max((split_part(dedup_key,':',3))::int),0) n from runner_jobs
+       where split_part(dedup_key,':',2)=$1 and split_part(dedup_key,':',1) in ('bootstrap','input_diff')`, [job.id])).rows[0];
   const count = Number(previous?.n ?? 0);
-  const payload = { ...previous?.payload, ...change.base, planningJobId: job.id, runNo: job.run_no, resumeStep: change.resumeStep, instruction: change.instruction ?? job.instruction };
+  // 재개는 최초 분석의 입력 버전을 유지한다. 첫 생성만 방금 고정한 입력 버전을 고른다.
+  const original = (await db.query<{ payload: { version?: unknown } }>(
+    "select payload from runner_jobs where payload->>'planningJobId'=$1 order by record_no limit 1", [job.id])).rows[0];
+  const version = original?.payload.version;
+  if (original && (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1)) {
+    throw new ProjectError('INVALID_TRANSITION', { message: '원래 분석의 입력 버전을 확인할 수 없습니다.' });
+  }
+  const input = (await db.query<{ v: number; commit_sha: string; previous: string | null }>(
+    `select v,commit_sha,(select commit_sha from input_versions p where p.project_id=i.project_id and p.v=i.v-1) previous
+     from input_versions i where project_id=$1 and ($2<>'bootstrap' or v=1) and ($3::int is null or v=$3) order by v desc limit 1`, [job.project_id, job.kind, version ?? null])).rows[0];
+  if (!input || job.kind === 'input_diff' && !input.previous) throw new ProjectError('INVALID_TRANSITION', { message: '분석할 입력 버전과 이전 입력을 확인할 수 없습니다.' });
+  const context = job.kind === 'input_diff' ? { wbs: await wbsSnapshot(db, job.project_id) } : {
+    techConstraints: (await db.query('select id,name,level,condition from tech_constraints where project_id=$1 order by name,id', [job.project_id])).rows,
+    subagentDefs: (await db.query('select distinct on (def_key) id,def_key as "defKey",version,agent,role from subagent_defs where allowed order by def_key,version desc')).rows,
+    ...await techSnapshot(db, job.project_id),
+  };
+  const payload = { ...context, ...change.base, planningJobId: job.id, runNo: job.run_no, version: input.v, commit: input.commit_sha,
+    previousCommit: input.previous, resumeStep: change.resumeStep, instruction: change.instruction ?? job.instruction };
   const id = await enqueueJob(db, { projectId: job.project_id, kind: job.kind, payload, epoch, dedupKey: `${job.kind}:${job.id}:${String(count + 1)}` });
   await syncPlanningJob(db, id, 'queued');
   return id;

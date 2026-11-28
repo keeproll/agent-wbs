@@ -35,6 +35,7 @@ async function grantExternal() {
   if ((await h.owner.query('select 1 from external_write_authority')).rowCount) return;
   await h.owner.query("insert into runner_hosts(host_id,boot_id,cpu,cores,mem_gb,swap_gb,disk_gb,os,samples,seen_at) values('m605-host','m605-boot','fake',4,16,0,100,'Linux',1,now())");
   await h.owner.query("insert into external_write_authority(singleton,host_id,state,generation) values(true,'m605-host','granted',1)");
+  await h.owner.query("insert into github_settings(mode,status,scopes) values('gh','ok',$1) on conflict(singleton) do nothing", [{ contents: 'verified', pulls: 'verified', statuses: 'verified', metadata: 'verified' }]);
 }
 const lease = (id: string) => h.owner.query("update runner_jobs set state='started',fence=1,lease_owner='runner:runner-1',lease_until=now()+interval '1 hour',generation=1 where id=$1", [id]);
 const apply = (drift: Body, extra: Body = {}) => h.lead('POST', `${base}${project}/design/drifts/${drift.id}/resolve`, { updatedAt: drift.updatedAt, how: 'contract', ...extra });

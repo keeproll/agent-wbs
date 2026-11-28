@@ -136,6 +136,7 @@ const form = useSettingForm({
 - 조건: 1920×1080, 배율 1, ko-KR, Asia/Seoul, 시계 2026-11-05 20:00 KST, 애니메이션 끔. M3-01과 같다.
 - 차이 계산: pixelmatch(threshold 0.1, 안티에일리어싱 제외).
 - 결과: `~/.orca/bots/agentwbs/archive/2026-11-26/M3-08/visual/`에 `[원본 | 구현 | 차이]` 이미지와 `summary.md`.
+  - 위 보관 폴더는 `AWBS_SETTINGS_VISUAL_OUT`로 **명시할 때만** 쓴다. 기본 출력은 실행마다 새 임시 폴더(`$TMPDIR/awbs-visual-…`, `e2e/support/visual.ts` `visualOut`)다(리뷰 재발 방지: 기본값이 보관 폴더를 덮어썼다).
 - 합격 기준(넘으면 시험 실패, 차이 1% 이하):
   - 왼쪽 메뉴(설정 선택 강조), 탭별 제목 「설정」.
   - Agent 역할 · 기본 Workflow 카드(같은 값).

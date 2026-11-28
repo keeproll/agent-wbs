@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
@@ -11,6 +11,7 @@ import { watchRunner } from '../src/runner/watch.ts';
 import { grantExternalAfterReconcile, handover, retryFailedAttempt } from '../src/runner/service.ts';
 import { installRunner } from '../src/runner/routes.ts';
 import { required, RunnerRepository } from '../src/runner/repository.ts';
+import { attemptFor } from './m208-fixture.ts';
 
 // test:db가 안전성을 확인한 주소에서 이 파일 전용 DB를 만든다. 주소가 없으면 준비 단계에서 실패한다.
 describe('runner 실제 PostgreSQL 검증', () => {
@@ -70,6 +71,7 @@ describe('runner 실제 PostgreSQL 검증', () => {
     csrf = (await app.inject({ url: '/api/session', headers: { cookie } })).json<{ csrfToken: string }>().csrfToken;
   });
   beforeEach(async () => {
+    await owner.query("insert into github_settings(mode,status,scopes) values('gh','ok',$1) on conflict(singleton) do nothing", [{ contents: 'verified', pulls: 'verified', statuses: 'verified', metadata: 'verified' }]);
     // 초기화 서비스 대신 전용 DB의 시험 자료만 비운다. 불변 기록 트리거도 이 시험 연결에서만 우회한다.
     await owner.query("set session_replication_role=replica");
     await owner.query("truncate projects, runner_jobs, execution_holds, task_attempts, task_specs, task_grades, tasks, wbs_nodes, task_history, runner_job_events, runner_sessions, runner_hosts, runner_concurrency_log, runner_readiness, agent_usage, agent_models, idempotency_keys, external_write_authority cascade");
@@ -1146,5 +1148,156 @@ describe('runner 실제 PostgreSQL 검증', () => {
       a.release();b.release();
     }
     expect((await owner.query("select count(*)::int as count from execution_holds where lock_state='held'")).rows).toEqual([{ count:1 }]);
+  });
+  /* ---- UAT-TASK-10 지정/실제 하위 Agent 태그: 값의 출처는 실제 흐름(설치 지정·관측·사후 보고)뿐이다 ---- */
+  const attemptsOf = async (key: string) => {
+    const r = await app.inject({ url: `/api/tasks/${key}/attempts`, headers: { cookie } });
+    expect(r.statusCode, r.body).toBe(200);
+    return r.json<{ items: { id: string; subagents: unknown }[] }>().items;
+  };
+  const usage = (attemptId: string, body: object, auth = bearer) =>
+    app.inject({ method: 'POST', url: `/api/runner/attempts/${attemptId}/subagent-usage`, headers: { ...headers(), authorization: `Bearer ${auth}` }, payload: body });
+  async function designatedStart(keys: { key: string; version: number }[]) {
+    const { t, job } = await claimed();
+    const defs: { id: string; key: string; version: number; hash: string }[] = [];
+    for (const k of keys) {
+      const hash = createHash('sha256').update(`${k.key}:${String(k.version)}:${t.key}`).digest('hex');
+      const def = (await owner.query("insert into subagent_defs(def_key,version,agent,role,tools,sandbox,text,hash,allowed) values($1,$2,'Codex','dev','{}','read-only','지침',$3,true) on conflict (def_key,version) do update set hash=excluded.hash returning id",
+        [k.key, k.version, hash])).rows[0] as { id: string };
+      await owner.query("insert into task_subagents(project_id,task,role,subagent_id,basis) values($1,$2,'dev',$3,'시험')", [project, t.id, def.id]);
+      defs.push({ id: def.id, key: k.key, version: k.version, hash });
+    }
+    const s = await start(job, { installedSubagents: defs.map(d => ({ id: d.id, version: d.version, hash: d.hash })) });
+    expect(s.statusCode, s.body).toBe(200);
+    return { t, job, defs, attemptId: s.json<{ attemptId: string }>().attemptId };
+  }
+
+  test('UAT-TASK-10 지정: 시작 때 설치한 지정 정의와 그때 버전이 시도 응답에 나오고, 나중에 Task 지정이 바뀌어도 그대로다', async () => {
+    const { t, defs, attemptId } = await designatedStart([{ key: 'tag-qa', version: 1 }, { key: 'tag-db', version: 2 }]);
+    const [a] = await attemptsOf(t.key);
+    expect(a?.id).toBe(attemptId);
+    expect(a?.subagents).toEqual({ designated: [{ id: 'tag-db', version: 2 }, { id: 'tag-qa', version: 1 }], used: null, observed: null });
+    // Task의 지정을 바꿔도(재판단) 이미 시작한 시도의 지정 기록은 바뀌지 않는다 — 출처는 attempt_subagents다.
+    await owner.query('delete from task_subagents where task=$1 and subagent_id=$2', [t.id, defs[0]?.id]);
+    expect((await attemptsOf(t.key))[0]?.subagents).toMatchObject({ designated: [{ id: 'tag-db', version: 2 }, { id: 'tag-qa', version: 1 }] });
+  });
+
+  test('UAT-TASK-10 실제(실행 중): 마지막 출력 관측 수와 상태가 나온다', async () => {
+    const { t, attemptId } = await designatedStart([{ key: 'tag-obs', version: 1 }]);
+    const report = { at: now(), limit: 4, running: { Claude: 0, Codex: 1 }, subagents: 2, heavyJobs: 0, resources: { cpuPct: 10, memFreeGB: 20, swapGB: 0 }, sessions: [{ attemptId, observed: 2, reserved: 2, state: 'ok' }] };
+    expect((await post('concurrency', report)).statusCode).toBe(200);
+    expect((await attemptsOf(t.key))[0]?.subagents).toMatchObject({ observed: { count: 2, state: 'ok' } });
+    expect((await post('concurrency', { ...report, at: now(), subagents: 1, sessions: [{ attemptId, observed: 1, reserved: 1, state: 'unconfirmed' }] })).statusCode).toBe(200);
+    expect((await attemptsOf(t.key))[0]?.subagents).toMatchObject({ observed: { count: 1, state: 'unconfirmed' } });
+  });
+
+  test('UAT-TASK-10 실제(사후 보고): 이름·버전·횟수를 저장하고 지정 행의 사용 여부를 적으며, 다시 보내면 합친다', async () => {
+    const { t, job, defs, attemptId } = await designatedStart([{ key: 'tag-used', version: 2 }, { key: 'tag-unused', version: 1 }]);
+    const [used, unused] = defs;
+    if (!used || !unused) throw new Error('fixture');
+    const other = await issueRunnerToken(pool, 'runner-usage-other', 'fake');
+    expect((await usage(attemptId, { fence: job.fence + 1, confirm: 'partial', items: [] })).json()).toMatchObject({ error: { code: 'LEASE_LOST' } });
+    expect((await usage(attemptId, { fence: job.fence, confirm: 'partial', items: [] }, other)).json()).toMatchObject({ error: { code: 'LEASE_LOST' } });
+    expect((await usage(randomUUID(), { fence: job.fence, confirm: 'partial', items: [] })).statusCode).toBe(404);
+    // 설치 기록과 다른 버전·hash, 정의 밖 이름에 붙인 버전은 받지 않는다(지어낸 값 차단).
+    expect((await usage(attemptId, { fence: job.fence, confirm: 'partial', items: [{ id: used.id, version: 9, hash: null }] })).json()).toMatchObject({ error: { code: 'VALIDATION_FAILED' } });
+    expect((await usage(attemptId, { fence: job.fence, confirm: 'partial', items: [{ id: 'Explore', version: 1, hash: null }] })).json()).toMatchObject({ error: { code: 'VALIDATION_FAILED' } });
+    expect((await owner.query('select count(*)::int n from attempt_subagent_usage')).rows).toEqual([{ n: 0 }]);
+
+    const first = await usage(attemptId, { fence: job.fence, confirm: 'partial', items: [{ id: used.id, version: 2, hash: used.hash, count: 2 }, { id: 'Explore', version: null, hash: null }] });
+    expect(first.statusCode, first.body).toBe(204);
+    expect((await attemptsOf(t.key))[0]?.subagents).toMatchObject({ used: { confirm: 'partial', items: [{ id: 'tag-used', version: 2, count: 2 }, { id: 'Explore', version: null, count: 1 }] } });
+    const rows = async () => (await owner.query('select d.def_key,s.observed_used,s.confirm from attempt_subagents s join subagent_defs d on d.id=s.subagent where s.attempt=$1 order by d.def_key', [attemptId])).rows;
+    // 일부 관측에 없던 지정은 「모름」(null)이다. 안 썼다고 적지 않는다.
+    expect(await rows()).toEqual([{ def_key: 'tag-unused', observed_used: null, confirm: 'partial' }, { def_key: 'tag-used', observed_used: true, confirm: 'partial' }]);
+
+    // 시도·job이 끝난 뒤에도 그 job의 마지막 fence면 받는다(세션 종료 뒤 사후 확정).
+    await owner.query("update runner_jobs set state='done',lease_until=now()-interval '1 hour' where id=$1", [job.id]);
+    const second = await usage(attemptId, { fence: job.fence, confirm: 'confirmed', items: [{ id: 'tag-used', version: null, hash: null, count: 1 }] });
+    expect(second.statusCode, second.body).toBe(204);
+    // 확인 보고의 이름은 확인 횟수(1)로 바뀐다. Explore는 일부 관측에서만 봤으므로 목록 전체는 여전히 partial이다(리뷰 Codex 3).
+    expect((await attemptsOf(t.key))[0]?.subagents).toMatchObject({ used: { confirm: 'partial', items: [{ id: 'tag-used', version: 2, count: 1 }, { id: 'Explore', version: null, count: 1 }] } });
+    expect(await rows()).toEqual([{ def_key: 'tag-unused', observed_used: false, confirm: 'confirmed' }, { def_key: 'tag-used', observed_used: true, confirm: 'confirmed' }]);
+    // 확정된 뒤 일부 관측 보고가 와도 confirmed는 되돌아가지 않는다.
+    expect((await usage(attemptId, { fence: job.fence, confirm: 'partial', items: [] })).statusCode).toBe(204);
+    expect(await rows()).toEqual([{ def_key: 'tag-unused', observed_used: false, confirm: 'confirmed' }, { def_key: 'tag-used', observed_used: true, confirm: 'confirmed' }]);
+  });
+
+  test('UAT-TASK-10 호환: 지정이 없는 시도에 옛 Runner의 빈 보고(count 없음)가 와도 동작하고, 보여 줄 값이 없으면 null이다', async () => {
+    const { t, job } = await claimed();
+    const s = await start(job);
+    const attemptId = s.json<{ attemptId: string }>().attemptId;
+    expect((await usage(attemptId, { fence: job.fence, confirm: 'partial', items: [] })).statusCode).toBe(204);
+    expect((await attemptsOf(t.key))[0]?.subagents).toEqual({ designated: [], used: null, observed: null });
+    expect((await usage(attemptId, { fence: job.fence, confirm: 'partial', items: [{ id: 'Explore', version: null, hash: null }] })).statusCode).toBe(204);
+    expect((await attemptsOf(t.key))[0]?.subagents).toEqual({ designated: [], used: { confirm: 'partial', items: [{ id: 'Explore', version: null, count: 1 }] }, observed: null });
+  });
+  /* ---- 리뷰 Codex(review-codex.md) 재현: 확인 수준·화면 갱신·입력 경계 ---- */
+  test('리뷰 Codex 1: 일부 관측 사용은 하위 Agent 재작업률 통계에 넣지 않고, 확인된 사용만 센다', async () => {
+    const { t, job, defs, attemptId } = await designatedStart([{ key: 'tag-stat', version: 1 }]);
+    const def = defs[0];
+    if (!def) throw new Error('fixture');
+    expect((await usage(attemptId, { fence: job.fence, confirm: 'partial', items: [{ id: def.id, version: 1, hash: def.hash }] })).statusCode).toBe(204);
+    await owner.query("update task_attempts set status='completed',ended_at=now() where id=$1", [attemptId]);
+    const qa = await attemptFor(owner, project, t.id, { kind: 'qa', no: 2, status: 'completed', agent: 'Codex' });
+    await owner.query("insert into verifications(project_id,attempt,result,head_sha,spec_revision,cmd,expected,actual) values($1,$2,'FAIL',$3,1,'test','통과','실패')", [project, qa, sha]);
+    const stat = async () => {
+      const r = await app.inject({ url: '/api/settings/agent-usage', headers: { cookie } });
+      expect(r.statusCode, r.body).toBe(200);
+      return r.json<{ subagents: { defKey: string; decisions: number; failures: number; reworkRate: number | null }[] }>().subagents.find(d => d.defKey === 'tag-stat');
+    };
+    expect(await stat()).toMatchObject({ decisions: 0, failures: 0, reworkRate: null });
+    // 사용 여부 자체는 사실대로 남는다(일부 관측으로 본 사용).
+    expect((await owner.query('select observed_used,confirm from attempt_subagents where attempt=$1', [attemptId])).rows).toEqual([{ observed_used: true, confirm: 'partial' }]);
+    expect((await usage(attemptId, { fence: job.fence, confirm: 'confirmed', items: [{ id: 'tag-stat', version: null, hash: null }] })).statusCode).toBe(204);
+    expect(await stat()).toMatchObject({ decisions: 1, failures: 1, reworkRate: 1 });
+  });
+
+  test('리뷰 Codex 2: 사용 보고와 관측 변화는 시도 변경 알림을 같은 커밋에 남긴다(같은 관측의 반복은 알리지 않음)', async () => {
+    const { t, job, attemptId } = await designatedStart([{ key: 'tag-notify', version: 1 }]);
+    const events = async () => (await owner.query<{ ref: { taskKey: string; attemptId: string } }>("select ref from change_events where topic='attempt' and ref->>'attemptId'=$1 order by seq", [attemptId])).rows.map(r => r.ref);
+    const before = (await events()).length;
+    const report = { at: now(), limit: 4, running: { Claude: 0, Codex: 1 }, subagents: 2, heavyJobs: 0, resources: { cpuPct: 10, memFreeGB: 20, swapGB: 0 }, sessions: [{ attemptId, observed: 2, reserved: 2, state: 'ok' }] };
+    expect((await post('concurrency', report)).statusCode).toBe(200);
+    expect(await events()).toHaveLength(before + 1);
+    expect((await post('concurrency', { ...report, at: now() })).statusCode).toBe(200);
+    expect(await events()).toHaveLength(before + 1);
+    expect((await post('concurrency', { ...report, at: now(), sessions: [{ attemptId, observed: 1, reserved: 1, state: 'ok' }] })).statusCode).toBe(200);
+    expect(await events()).toHaveLength(before + 2);
+    expect((await usage(attemptId, { fence: job.fence, confirm: 'partial', items: [{ id: 'Explore', version: null, hash: null }] })).statusCode).toBe(204);
+    const all = await events();
+    expect(all).toHaveLength(before + 3);
+    expect(all.at(-1)).toEqual({ taskKey: t.key, attemptId });
+    // 거절된 보고(검증 실패)는 알림을 남기지 않는다.
+    expect((await usage(attemptId, { fence: job.fence, confirm: 'partial', items: [{ id: 'Explore', version: 3, hash: null }] })).statusCode).toBe(400);
+    expect(await events()).toHaveLength(before + 3);
+  });
+
+  test('리뷰 Codex 3: 일부 관측에서만 본 이름은 확인 보고가 와도 confirmed로 올라가지 않는다(순서 무관)', async () => {
+    const subOf = async (key: string) => (await attemptsOf(key))[0]?.subagents;
+    const a = await designatedStart([]);
+    expect((await usage(a.attemptId, { fence: a.job.fence, confirm: 'partial', items: [{ id: 'Explore', version: null, hash: null }, { id: 'Plan', version: null, hash: null, count: 3 }] })).statusCode).toBe(204);
+    expect((await usage(a.attemptId, { fence: a.job.fence, confirm: 'confirmed', items: [{ id: 'Plan', version: null, hash: null }] })).statusCode).toBe(204);
+    expect(await subOf(a.t.key)).toMatchObject({ used: { confirm: 'partial', items: [{ id: 'Explore', count: 1 }, { id: 'Plan', count: 1 }] } });
+    expect((await owner.query('select name,confirm,uses from attempt_subagent_usage where attempt=$1 order by name', [a.attemptId])).rows)
+      .toEqual([{ name: 'Explore', confirm: 'partial', uses: 1 }, { name: 'Plan', confirm: 'confirmed', uses: 1 }]);
+    // 확인 뒤 새 이름이 일부 관측으로 오면 목록은 partial로 내려가고, 확인된 이름의 횟수는 바뀌지 않는다.
+    await owner.query("update runner_jobs set state='done' where id=$1", [a.job.id]);
+    const b = await designatedStart([]);
+    expect((await usage(b.attemptId, { fence: b.job.fence, confirm: 'confirmed', items: [{ id: 'Plan', version: null, hash: null }] })).statusCode).toBe(204);
+    expect(await subOf(b.t.key)).toMatchObject({ used: { confirm: 'confirmed', items: [{ id: 'Plan', count: 1 }] } });
+    expect((await usage(b.attemptId, { fence: b.job.fence, confirm: 'partial', items: [{ id: 'Plan', version: null, hash: null, count: 5 }, { id: 'Explore', version: null, hash: null }] })).statusCode).toBe(204);
+    expect(await subOf(b.t.key)).toMatchObject({ used: { confirm: 'partial', items: [{ id: 'Explore', count: 1 }, { id: 'Plan', count: 1 }] } });
+  });
+
+  test('리뷰 Codex 4: 공백만인 이름·NUL이 든 이름은 500이 아니라 400이고 아무것도 저장하지 않는다', async () => {
+    const { job, attemptId } = await designatedStart([]);
+    for (const id of ['   ', '\t', 'a\u0000b']) {
+      const r = await usage(attemptId, { fence: job.fence, confirm: 'partial', items: [{ id: 'Explore', version: null, hash: null }, { id, version: null, hash: null }] });
+      expect(r.statusCode, `${JSON.stringify(id)} ${r.body}`).toBe(400);
+      expect(r.json()).toMatchObject({ error: { code: 'VALIDATION_FAILED' } });
+    }
+    expect((await owner.query('select count(*)::int n from attempt_subagent_usage where attempt=$1', [attemptId])).rows).toEqual([{ n: 0 }]);
+    expect((await usage(attemptId, { fence: job.fence, confirm: 'partial', items: [{ id: ' Explore ', version: null, hash: null }] })).statusCode).toBe(204);
   });
 });
