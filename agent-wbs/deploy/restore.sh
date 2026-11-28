@@ -8,7 +8,7 @@
 # 비밀 파일은 백업에 없다. 대상 AWBS_PROD_HOME/secrets의 secret-key가 백업한 쪽과 같아야 암호화한 토큰을 열 수 있다.
 #
 # 이미지 규칙: 백업 manifest에 적힌 이미지(꼬리표와 ID)로만 복원한다. 이미지를 새로 만들지 않는다.
-#   - AWBS_IMAGE_TAG를 주지 않으면 manifest의 image_tag를 쓰고, 이 PC의 이미지 ID가 manifest와 같아야 한다.
+#   - AWBS_IMAGE_TAG를 주지 않으면 manifest의 image_tag를 쓰고, manifest의 두 이미지 ID(app·web)가 모두 있어야 하며 이 PC의 이미지 ID와 같아야 한다.
 #   - AWBS_IMAGE_TAG를 직접 주면 그 꼬리표를 쓴다(예: 같은 커밋을 다시 빌드해 ID가 달라진 경우). owner가 판단한 값이다.
 #   - 이미지가 없거나 ID가 다르면 아무것도 만들기 전에 멈춘다.
 #   왜: DB를 백업 시점으로 되돌리면서 새 프로그램을 띄우면, 새 프로그램이 새 마이그레이션을 실행해 「되돌림」이 깨진다.
@@ -49,6 +49,17 @@ else
   tag="$manifest_tag"; explicit=0
 fi
 [[ "$tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || { echo "복원에 쓸 이미지 꼬리표를 정하지 못했습니다(manifest image_tag 없음). AWBS_IMAGE_TAG로 정하세요." >&2; exit 2; }
+# 기본 경로(꼬리표를 직접 주지 않음)는 manifest에 두 이미지 ID가 모두 제 형식으로 있어야 한다. 없으면 대조할 수 없으므로 멈춘다.
+# 왜: 이름(꼬리표)이 같다고 백업 때와 같은 이미지라는 뜻은 아니다. 대조 정보가 빠진 것을 「같음」으로 보면 안 된다.
+# 이미지 ID가 없는 예전 백업은 owner가 쓸 이미지를 확인한 뒤 AWBS_IMAGE_TAG=<꼬리표>로 직접 정한다(docs/ops/operations.md §7.2).
+if [[ $explicit == 0 ]]; then
+  for key in image_id web_image_id; do
+    if [[ ! "$(field "$key")" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+      echo "manifest의 $key 가 없거나 형식이 잘못되었습니다. 백업 때의 이미지를 확인할 수 없어 멈춥니다. 쓸 이미지를 확인한 뒤 AWBS_IMAGE_TAG=<꼬리표>로 직접 정하세요." >&2
+      exit 6
+    fi
+  done
+fi
 for kind in app web; do
   id="$(docker image inspect -f '{{.Id}}' "awbs-$kind:$tag" 2>/dev/null || true)"
   if [[ -z "$id" ]]; then
@@ -56,7 +67,7 @@ for kind in app web; do
     exit 6
   fi
   want="$(field "$([[ $kind == app ]] && echo image_id || echo web_image_id)")"
-  if [[ $explicit == 0 && -n "$want" && "$id" != "$want" ]]; then
+  if [[ $explicit == 0 && "$id" != "$want" ]]; then
     echo "awbs-$kind:$tag 의 이미지 ID가 백업 때와 다릅니다(지금 $id, 백업 $want). 쓸 이미지를 확인한 뒤 AWBS_IMAGE_TAG=<꼬리표>로 직접 정하세요." >&2
     exit 6
   fi

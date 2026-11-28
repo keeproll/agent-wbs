@@ -92,10 +92,10 @@ AWBS_IMAGE_TAG=ef25de2 bash /home/keeproll/orca/workspaces/agent-wbs/m8-06/agent
 - **F-6 서버 계약을 바꾸는 배포 때 옛 job 처리 — 지원 명령 없음을 확정, owner 결정 필요.**
   - 다섯 질문의 답(지금 코드 기준)은 operations §4.4에 있다. 요약:
     1. 수령 중지: 서버 설정은 없고 Runner를 멈추는 것뿐이다.
-    2. 실행 중 일: Runner가 멈추면 임대 만료로 `split`·`estimate`·`planning`은 `cancelled`, `input_diff`는 `reconcile`이 된다. 끝나기를 기다린 뒤 멈추길 권한다.
-    3. 임대·fence: 다시 내줄 때 fence가 오르고 옛 보고는 `LEASE_LOST`로 거부된다. 하지만 `queued` 옛 일은 그대로 남는다.
-    4. 다시 만들기: `queued` 일을 취소·재발급하는 API·CLI가 없다. 분할 요청은 같은 내용의 열린 옛 일을 돌려준다.
-    5. 확인: 대기 일을 보여 주는 지원 명령이 없다.
+    2. 실행 중 일: Runner가 멈추면 worker 감시가 **상태를 바꿀 때** `split`·`estimate`·`planning`은 `cancelled`, `input_diff`·`bootstrap`은 `reconcile`이 된다. 보유는 `unconfirmed`로 남는다. `GET /api/runner-state`의 `sessions`는 Task 시도만 보여 주므로 모든 일의 종료 확인 수단이 아니다.
+    3. 임대·fence: 일반 Runner 경로는 임대 시각까지 보지만, Planning 경로(`assertJob`)는 fence와 상태만 본다. 그래서 안전한 거절 기준은 시간 경과가 아니라 **실제 상태 변화나 fence 변경**이다. `queued` 옛 일은 그대로 남는다.
+    4. 다시 만들기: `queued` 일을 취소·재발급하는 API·CLI가 없다. 분할 요청은 같은 내용의 열린 옛 일을 돌려주고, `reconcile` 대조는 옛 입력으로 새 일을 넣을 수 있다.
+    5. 확인: 대기 일과 종료 미확인 보유를 보여 주는 지원 명령이 없다.
   - **owner 결정이 필요한 것**(선택지)
     - (A) 최소 명령 두 개(`jobs open` 읽기 전용, `jobs reissue` 옛 `queued` 일 취소+재발급)를 만들고, 그 전까지 계약 변경 배포를 하지 않는다. **추천.** 왜: 사람 규칙만으로는 `queued` 옛 일을 볼 수도 바꿀 수도 없다.
     - (B) 명령을 만들지 않고 「계약 변경 배포 금지」 규칙만 둔다. 계약을 바꿔야 하면 프로젝트 초기화로 해결한다. 왜 비추천: 초기화는 프로젝트 자료를 지운다.

@@ -14,7 +14,7 @@
 #   3. 앱을 켠 뒤 같은 API 응답(로그인 → 여러 GET)이 원본과 같은지
 #   4. 복원한 DB의 새 변경이 새 트랜잭션 번호(epoch +1)와 실제 커밋 시각을 받는지
 #   5. 원본·대상 모두 api·worker가 관리자가 아닌 앱 로그인(awbs_app_login)으로 접속하고, 이력을 지울 수 없고, 관리자 비밀 파일이 없는지
-#   6. 없는 이미지 꼬리표로 복원하면 아무것도 만들기 전에 멈추는지(이미지 자동 빌드 없음)
+#   6. 없는 이미지 꼬리표나 이미지 ID가 빠진 manifest로 복원하면 아무것도 만들기 전에 멈추는지(이미지 자동 빌드 없음)
 #   7. 안내대로(runner:public-key → 나온 Runner ID로 토큰 발급) 하면 Runner heartbeat가 204이고, 옛 안내(runner-main)는 403인지
 #      runner:public-key 명령은 gh-cred 작업(agent-runner/scripts/runner-public-key.ts)이 추가한다. 없으면 이 단계에서 멈춘다.
 # 이미지는 미리 build.sh로 만들어 둔다. 이 스크립트는 이미지를 만들지 않는다.
@@ -127,6 +127,20 @@ sed 's/^/   /' "$work/neg.log" | tee -a "$result" >&2
 leftover="$(docker volume ls -q --filter "name=^$neg-" | wc -l)"
 [[ "$neg_code" == 6 && "$leftover" == 0 ]] || { log "   실패: 종료 코드 $neg_code, 남은 볼륨 $leftover 개"; exit 1; }
 log "   멈춤 확인: 종료 코드 6, 만든 볼륨 0개"
+
+log "4-2. 이미지 ID가 빠진 manifest로 복원 시도(꼬리표 생략, 멈춰야 함)"
+noid="$work/backup-noid"
+cp -a "$backup" "$noid"
+sed -i '/^image_id=/d;/^web_image_id=/d' "$noid/manifest.txt"
+set +e
+env -u AWBS_IMAGE_TAG AWBS_STACK="$neg" bash "$here/restore.sh" "$noid" >"$work/neg2.log" 2>&1
+neg_code=$?
+set -e
+sed 's/^/   /' "$work/neg2.log" | tee -a "$result" >&2
+leftover="$(docker volume ls -q --filter "name=^$neg-" | wc -l)"
+[[ "$neg_code" == 6 && "$leftover" == 0 ]] || { log "   실패: 종료 코드 $neg_code, 남은 볼륨 $leftover 개"; exit 1; }
+log "   멈춤 확인: 종료 코드 6, 만든 볼륨 0개"
+rm -rf "$noid"
 
 log "5. 새 DB에 복원(restore.sh → $dst, 꼬리표는 manifest에서)"
 env -u AWBS_IMAGE_TAG AWBS_STACK="$dst" bash "$here/restore.sh" "$backup" 2>&1 | tee -a "$result" >&2

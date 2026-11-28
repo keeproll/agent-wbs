@@ -98,7 +98,7 @@ docker 명령은 언제나 `docker compose -p awbs-prod -f <저장소>/agent-wbs
 - 네트워크: `awbs-prod-net`
 - 화면·API 주소: `http://127.0.0.1:5173` (Runner의 `AWBS_URL`도 이 주소)
 - 비밀 파일·백업 폴더: `~/.agentwbs/prod/` (`secrets/`, `backups/`)
-- 이미지: `awbs-app:<꼬리표>`, `awbs-web:<꼬리표>`. 꼬리표 기본값은 `local`이다.
+- 이미지: `awbs-app:<꼬리표>`, `awbs-web:<꼬리표>`. 꼬리표 기본값은 **없다.** `~/.agentwbs/prod/deploy.env`(`set-image.sh`가 씀)로 정하고, 없으면 compose가 멈춘다(4장).
 
 개발 구성(`agent-wbs/compose.yaml`, project `awbs`)과 이름·볼륨·네트워크·DB가 모두 다르다.
 왜: 개발 시험이 운영 데이터를 지우거나, 운영 백업에 개발 데이터가 섞이지 않게 한다.
@@ -147,13 +147,17 @@ docker 명령은 언제나 `docker compose -p awbs-prod -f <저장소>/agent-wbs
 - 관리자 로그인 `awbs_owner`(superuser, DB의 모든 제한을 넘을 수 있는 관리자)
   - 마이그레이션, 필수 기본 설정 넣기, 앱 로그인 준비, 백업·복원에만 쓴다.
 - 앱 로그인 `awbs_app_login`
-  - `awbs_app`(앱이 쓰는 권한을 모은 역할)의 권한을 물려받기만 한다. `SET ROLE`로 다른 역할이 될 수 없다.
+  - `awbs_app`(앱이 쓰는 권한을 모은 역할)의 권한을 물려받기만 한다. `SET ROLE`로 다른 역할이 될 수 없고, 그 멤버십을 남에게(자기 자신 포함) 다시 줄 수도 없다(멤버십 옵션 `ADMIN FALSE, INHERIT TRUE, SET FALSE`).
+    - 왜 ADMIN까지 막나: ADMIN이 남아 있으면 앱이 스스로 `SET TRUE`로 바꿔 `SET ROLE` 제한을 되돌릴 수 있다.
   - 그래서 보고서 이력(`state_log`·`global_log`·`commit_log`·`commit_real`)을 지우거나 비울 수 없고, 보호 트리거도 끌 수 없다.
   - 왜: 앱이 관리자 권한을 가지면 앱의 잘못된 SQL이나 침입이 DB 제약과 이력 보호 장치까지 끌 수 있다(data-model §6.1).
   - 관리자로 접속한 뒤 `SET ROLE`로 낮추는 방식은 쓰지 않는다. 같은 연결에서 `RESET ROLE`로 되돌릴 수 있기 때문이다.
-- migrate가 시작할 때마다 앱 로그인을 맞춘다(없으면 만들고, 비밀번호를 `db-app-password`와 같게 하고, `awbs_app` 말고 다른 역할을 물려받고 있으면 회수한다).
+- migrate가 시작할 때마다 앱 로그인을 맞춘다.
+  - 없으면 만들고, 비밀번호를 `db-app-password`와 같게 한다.
+  - 이 로그인의 멤버십을 「준 사람」별로 모두 회수한 뒤 `awbs_app` 하나만 위 세 옵션으로 다시 준다.
+  - 왜 준 사람별로 회수하나: PostgreSQL 16은 멤버십을 준 사람마다 따로 둔다. 예전에 앱 로그인이 스스로 준 멤버십은 관리자의 GRANT로 바뀌지 않는다.
 - 확인 명령: `… exec -T api awbs-entrypoint db-check`
-  - `"currentUser":"awbs_app_login","superuser":false`이고 `historyWritable`이 `[]`, 나머지 `…Blocked`가 모두 `true`면 정상이다.
+  - `"currentUser":"awbs_app_login","superuser":false`이고 `historyWritable`이 `[]`, `…Blocked`와 `membershipSafe`가 모두 `true`면 정상이다.
 
 ### 3.4 이미 설치한 운영 구성에서 넘어오기
 
@@ -216,21 +220,30 @@ docker 명령은 언제나 `docker compose -p awbs-prod -f <저장소>/agent-wbs
    - 서버에는 「수령 일시 중지」 설정이 없다.
    - 지원하는 방법은 Runner를 멈추는 것뿐이다: `systemctl --user stop awbs-runner.service`. Runner가 없으면 아무도 일을 가져가지 않는다.
 2. **이미 실행 중인 일은**
-   - Runner가 멈추면 서버는 임대(60초)나 생존 보고가 끊긴 일을 worker의 감시(`apps/api/src/runner/watch.ts`)로 정리한다.
-   - `split`·`estimate`·`planning`은 `cancelled`(코드 `LEASE_LOST`)가 된다.
-   - `input_diff`·`bootstrap`은 바로 지우지 않고 `reconcile`(실제 결과 대조 대기)이 된다.
-   - 실행 중인 일이 있는지는 화면 「Runner · 실행 환경」과 `GET /api/runner-state`의 보유 목록으로 본다. 끝날 때까지 기다린 뒤 Runner를 멈추는 것을 권한다.
+   - Runner가 멈춰도 서버가 바로 일을 끝난 것으로 바꾸지는 않는다. worker의 감시(`apps/api/src/runner/watch.ts`, 약 20초마다)가 「임대(60초)가 지났거나 생존 보고가 끊긴 일」을 찾아 **그때** 상태를 바꾼다.
+     - `split`·`estimate`·`planning`은 `cancelled`(코드 `LEASE_LOST`)가 된다.
+     - `input_diff`·`bootstrap`은 바로 끝내지 않고 `reconcile`(실제 결과 대조 대기)이 된다.
+   - 이때 그 일의 실행 보유(슬롯)는 `unconfirmed`(서버가 실제 프로세스 종료를 확인하지 못함)로 남는다. 그래서 `cancelled`라는 사실만으로 프로세스가 사라졌다고 판단하지 않는다.
+   - 실행 중인 일을 확인하는 수단도 제한적이다.
+     - 화면 「Runner · 실행 환경」과 `GET /api/runner-state`의 `sessions`는 **실행 중인 Task 시도만** 보여 준다. `split`·`estimate`·`planning` 일을 모두 보여 주는 목록이 아니다.
+     - 자원 합계는 보이지만, `sessions`가 비어 있다는 것만으로 모든 일이 끝났다고 볼 수 없다.
+   - 그래서 지금은 「실행 중인 일이 모두 끝났다」를 지원 명령으로 확인할 방법이 없다.
 3. **옛 일의 임대와 fence(낡은 Runner의 보고를 막는 번호표)는**
-   - 서버는 일을 다시 내줄 때마다 fence를 1 올린다. 옛 fence나 끝난 임대로 온 보고는 `LEASE_LOST`로 거부한다(`apps/api/src/runner/service.ts`).
-   - 그래서 이미 정리된 일의 늦은 보고는 따로 무효화하지 않아도 거부된다.
-   - 하지만 **아직 아무도 가져가지 않은 `queued` 일**은 그대로 남는다. 새 Runner가 그 옛 입력을 그대로 가져간다.
+   - 서버는 일을 다시 내줄 때마다 fence를 1 올린다.
+   - 보고를 받는 검사는 경로마다 다르다.
+     - 일반 Runner 경로(`apps/api/src/runner/service.ts`의 검사): fence, 임대 주인, 상태(`leased`·`started`)와 함께 **임대 시각(`lease_until`)이 지났는지**도 본다. 지났으면 `LEASE_LOST`로 거부한다.
+     - Planning 경로(`apps/api/src/planning/jobs.ts`의 `assertJob`, 예: 추정·분할·Planning·초기 분석 보고): **fence와 상태만** 본다. 임대 시각은 보지 않는다. 그래서 임대 시간이 지났어도 감시가 아직 상태를 바꾸지 않았다면 옛 보고가 받아질 수 있다.
+   - 그래서 「안전하게 거절된다」고 말할 수 있는 기준은 **시간 경과가 아니라 실제 상태 변화**다: 그 일이 `leased`·`started`가 아닌 상태(`cancelled`·`reconcile`·`done`·`failed`)로 바뀌었거나, 다시 내줘서 fence가 올랐을 때만이다.
+   - **아직 아무도 가져가지 않은 `queued` 일**은 그대로 남는다. 새 Runner가 그 옛 입력을 그대로 가져간다.
 4. **어떤 일을 어떤 지원 API·CLI로 다시 만드나**
    - `queued` 일을 취소하거나 새 입력으로 다시 만드는 API·CLI는 **없다.**
    - 끝난(실패·취소) 일을 다시 요청하는 화면 기능은 일부 있다: 입력 차이 분석 「다시 시도」(`POST /api/project/inputs/retry`), 초기 분석 「다시 시도」(`POST /api/project/bootstrap/retry`), 분할 요청(`POST /api/tasks/{taskKey}/split`), Planning 시작(`POST /api/plannings`).
    - 그런데 분할 요청은 같은 내용의 열린 일이 있으면 그 옛 일을 돌려준다(`apps/api/src/planning/split.ts`). 그래서 `queued` 옛 일을 바꿔 주지 못한다.
+   - `reconcile` 일의 기존 대조 경로(`POST /api/runner/jobs/{id}/reconcile`, `apps/api/src/runner/routes.ts`)는 결과가 「효과 없음」이면 **옛 입력(payload) 그대로** 새 일을 넣을 수 있다. 계약이 바뀐 뒤라면 이것도 옛 입력이다.
 5. **중복이 없고 옛 보고가 거절되는지 어떻게 확인하나**
-   - 중복 방지는 `runner_jobs.dedup_key` 고유 제약이 맡는다. 옛 보고 거절은 위 3번의 fence 검사가 맡는다.
-   - 대기 중인 일을 종류별로 보여 주는 지원 명령은 **없다.**
+   - 중복 방지는 `runner_jobs.dedup_key` 고유 제약이 맡는다.
+   - 옛 보고 거절은 위 3번의 기준(상태 변화 또는 fence 변경)일 때만 믿을 수 있다.
+   - 대기 중인 일과 종료 미확인 보유를 종류별로 보여 주는 지원 명령은 **없다.**
 
 결론
 
@@ -245,6 +258,11 @@ docker 명령은 언제나 `docker compose -p awbs-prod -f <저장소>/agent-wbs
   - 한 일마다 한 트랜잭션에서: `queued` 일만 고른다 → `cancelled`(코드 `CONTRACT_CHANGED`)로 바꾸고 fence를 1 올린다 → 그 일을 처음 만든 서버 함수로 지금 DB에서 입력을 다시 만들어 새 일을 넣는다(dedup_key 순번 +1) → 이력에 남긴다.
   - Runner가 멈춘 상태에서만 실행한다(열린 세션이 있으면 거부).
 - 그때의 배포 순서: Runner 멈춤 → 백업 → 새 이미지 기동 → `jobs reissue` → `jobs open`으로 확인 → Runner 시작.
+- 만들기로 정한다면 함께 정해야 할 것(지금 정하지 않음)
+  - `queued` 말고도 남은 `leased`·`started`(감시가 아직 바꾸지 않은 것), `reconcile` 일, `unconfirmed` 보유를 어떻게 처리할지.
+  - `reconcile` 대조가 옛 입력으로 새 일을 넣는 경로(위 4번)를 계약 변경 뒤에 어떻게 막거나 바꿀지.
+  - Planning 경로의 보고 검사(`assertJob`)에 임대 시각 검사를 더할지. 이것은 기존 동작을 바꾸는 일이라 별도 범위다.
+  - 「열린 세션이 없다」만으로는 충분하지 않다(위 2번).
 
 ## 5. Runner 서비스 (systemd 사용자 서비스)
 
@@ -399,7 +417,8 @@ docker 명령은 언제나 `docker compose -p awbs-prod -f <저장소>/agent-wbs
   - 왜: 복원이 덮어쓰기라면 실수 한 번에 지금 데이터를 잃는다.
 - 대상의 `secrets/secret-key`는 백업한 쪽과 같아야 한다.
 - **이미지는 백업 때와 같은 것으로만** 띄운다. 이미지를 새로 만들지 않는다.
-  - `AWBS_IMAGE_TAG`를 주지 않으면 `manifest.txt`의 `image_tag`를 쓰고, 이 PC의 이미지 ID가 백업 때와 같아야 한다.
+  - `AWBS_IMAGE_TAG`를 주지 않으면 `manifest.txt`의 `image_tag`를 쓴다. 이때 manifest에 두 이미지 ID(`image_id`, `web_image_id`)가 모두 제 형식(`sha256:` + 16진수 64자)으로 있어야 하고, 이 PC의 이미지 ID와 같아야 한다.
+  - ID가 없는 예전 백업도 기본 경로로는 멈춘다. owner가 쓸 이미지를 확인한 뒤 `AWBS_IMAGE_TAG=<꼬리표>`로 직접 정한다.
   - 같은 커밋을 다시 빌드해 ID가 달라졌다면, owner가 확인한 뒤 `AWBS_IMAGE_TAG=<꼬리표>`로 직접 정한다.
   - 이미지가 없거나 ID가 다르면 아무것도 만들기 전에 멈춘다(종료 코드 6).
   - 왜: DB를 백업 시점으로 되돌리면서 새 프로그램을 띄우면, 새 프로그램이 새 마이그레이션을 실행해 「되돌림」이 깨진다.
@@ -444,7 +463,7 @@ docker 명령은 언제나 `docker compose -p awbs-prod -f <저장소>/agent-wbs
      - `/api/schedule`은 「지금」 시각(`at`)과 지금 기준 계획 진척률(`plannedPct`)을 담으므로 이 두 값만 빼고 비교한다.
   4. 복원한 DB의 새 변경이 새 epoch 번호와 실제 커밋 시각을 받는지
   5. 원본·대상 모두 api·worker가 `awbs_app_login`으로 접속하는지, 관리자가 아니고 이력을 지울 수 없는지, 관리자 비밀 파일이 컨테이너에 없는지
-  6. 없는 이미지 꼬리표로 복원하면 아무것도 만들기 전에 멈추는지
+  6. 없는 이미지 꼬리표나 이미지 ID가 빠진 manifest로 복원하면 아무것도 만들기 전에 멈추는지
   7. 5.1.1대로 발급한 토큰의 heartbeat가 204인지(옛 안내 `runner-main` 토큰은 403), 실제 Runner를 20초 띄웠을 때 서버에 세션이 기록되는지
      - `runner:public-key` 명령(gh-cred)이 있어야 한다. 없으면 이 단계에서 멈춘다.
 - 실행: `AWBS_IMAGE_TAG=<꼬리표> bash <저장소>/agent-wbs/deploy/restore-rehearsal.sh` (이미지는 `build.sh`로 미리 만든다)

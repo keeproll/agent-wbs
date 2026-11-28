@@ -45,7 +45,7 @@ test('ensure로 만든 앱 로그인은 관리자가 아니고 이력을 지우�
   const check = await asApp(checkAppLogin);
   expect(check).toEqual({
     currentUser: APP_LOGIN, superuser: false, historyWritable: [],
-    historyDeleteBlocked: true, setRoleBlocked: true, disableTriggerBlocked: true,
+    historyDeleteBlocked: true, setRoleBlocked: true, disableTriggerBlocked: true, membershipSafe: true,
   });
   expect(appLoginSafe(check)).toBe(true);
   // 앱이 하는 일(awbs_app 권한)은 그대로 된다: 읽기와 보고서 기준점 함수.
@@ -55,15 +55,37 @@ test('ensure로 만든 앱 로그인은 관리자가 아니고 이력을 지우�
   });
 });
 
+test('ADMIN 옵션이 남아 있으면 앱이 스스로 SET을 켤 수 있다 — 검사가 잡고 ensure가 고친다', async () => {
+  await pool.query(`grant awbs_app to ${APP_LOGIN} with admin true, inherit true, set false`);
+  const before = await asApp(checkAppLogin);
+  expect(before.membershipSafe).toBe(false);
+  expect(appLoginSafe(before)).toBe(false);
+  // 리뷰 재현: ADMIN이 남으면 앱 로그인이 자기 멤버십의 SET을 켜고 SET ROLE에 성공한다.
+  await asApp(async (c) => {
+    await c.query(`grant awbs_app to ${APP_LOGIN} with set true`);
+    await c.query('set role awbs_app');
+  });
+  const client = await pool.connect();
+  try { await ensureAppLogin(client, password); } finally { client.release(); }
+  const options = await pool.query<{ admin_option: boolean; inherit_option: boolean; set_option: boolean }>(
+    `select m.admin_option, m.inherit_option, m.set_option from pg_auth_members m
+     where m.member=(select oid from pg_roles where rolname=$1) and m.roleid=(select oid from pg_roles where rolname='awbs_app')`, [APP_LOGIN]);
+  expect(options.rows).toEqual([{ admin_option: false, inherit_option: true, set_option: false }]);
+  expect(appLoginSafe(await asApp(checkAppLogin))).toBe(true);
+  await asApp(async (c) => {
+    await expect(c.query(`grant awbs_app to ${APP_LOGIN} with set true`)).rejects.toMatchObject({ code: '42501' });
+  });
+});
+
 test('ensure는 실수로 준 다른 역할을 회수하고 SET ROLE 불가를 되살린다', async () => {
   await pool.query(`grant awbs_data_owner to ${APP_LOGIN}`);
   await pool.query(`grant awbs_app to ${APP_LOGIN} with set true`);
   expect(appLoginSafe(await asApp(checkAppLogin))).toBe(false);
   const client = await pool.connect();
   try { await ensureAppLogin(client, password); } finally { client.release(); }
-  const parents = await pool.query<{ rolname: string; inherit_option: boolean; set_option: boolean }>(
-    `select r.rolname, m.inherit_option, m.set_option from pg_auth_members m join pg_roles r on r.oid=m.roleid
+  const parents = await pool.query<{ rolname: string; admin_option: boolean; inherit_option: boolean; set_option: boolean }>(
+    `select r.rolname, m.admin_option, m.inherit_option, m.set_option from pg_auth_members m join pg_roles r on r.oid=m.roleid
      where m.member=(select oid from pg_roles where rolname=$1)`, [APP_LOGIN]);
-  expect(parents.rows).toEqual([{ rolname: 'awbs_app', inherit_option: true, set_option: false }]);
+  expect(parents.rows).toEqual([{ rolname: 'awbs_app', admin_option: false, inherit_option: true, set_option: false }]);
   expect(appLoginSafe(await asApp(checkAppLogin))).toBe(true);
 });

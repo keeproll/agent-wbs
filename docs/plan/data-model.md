@@ -1063,7 +1063,7 @@ epoch가 바뀌는 순간(초기화)과 다른 쓰기가 겹쳐도 옛 프로젝
 
 - 표의 소유자는 전용 NOLOGIN 역할(`awbs_data_owner`)이다. 앱이 쓰는 권한은 별도 역할(`awbs_app`)에 모은다.
 - 운영 api·worker는 `awbs_app` 권한을 물려받기만 하는 로그인 `awbs_app_login`으로 접속한다(M8-06).
-  - 멤버십은 `INHERIT TRUE, SET FALSE`다. `SET ROLE`로 다른 역할이 될 수 없다. 관리자로 접속한 뒤 `SET ROLE awbs_app`으로 낮추는 방식은 쓰지 않는다(`RESET ROLE`로 되돌릴 수 있다).
+  - 멤버십은 `ADMIN FALSE, INHERIT TRUE, SET FALSE`다. `SET ROLE`로 다른 역할이 될 수 없고, 멤버십을 다시 줄 수도 없다(ADMIN이 남으면 앱이 스스로 SET을 켤 수 있다). migrate는 준 사람(grantor)별 멤버십을 모두 회수한 뒤 다시 준다. 관리자로 접속한 뒤 `SET ROLE awbs_app`으로 낮추는 방식은 쓰지 않는다(`RESET ROLE`로 되돌릴 수 있다).
   - 로그인은 운영 migrate가 만들고 맞춘다(`packages/db/src/app-login.ts`). 비밀번호는 운영 비밀 파일 `db-app-password`에서만 온다.
   - 확인: `awbs-entrypoint db-check`, 시험 `packages/db/test/app-login.db.test.ts`.
   - NOLOGIN은 그 역할로 직접 로그인할 수 없다는 뜻이다.
