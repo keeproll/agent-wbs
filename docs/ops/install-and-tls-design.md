@@ -1,7 +1,7 @@
 # 설계: 설치 명령 하나 · systemctl 기동/종료 · 전 구간 HTTPS(TLS)
 
-- 상태: **설계안 2판**(코드는 아직 바꾸지 않았다). 구현은 다음 단계에서 별도 작업자가 한다.
-- 기준: main `827b06c`, 작성 2026-11-28. 2판은 Codex 교차 리뷰(P1 6건·P2 5건)를 반영했다. 항목별 대응은 부록 C.
+- 상태: **설계안 3판(설계 마지막 판)**(코드는 아직 바꾸지 않았다). 구현은 다음 단계에서 별도 작업자가 한다. 남은 구현 수준 확인은 8장 「구현 단계 확인 목록」(T-1~T-21)으로 넘긴다.
+- 기준: main `827b06c`, 작성 2026-11-28. 2판은 Codex 교차 리뷰(P1 6건·P2 5건), 3판은 2차 리뷰(P1 4건·P2 2건)를 반영했다. 항목별 대응은 부록 C.
 - owner 지시(요약): ① `install.sh --prefix=/opt` 한 번으로 설치 ② `systemctl start/restart/stop agent-wbs.service`로 기동·종료 ③ Runner도 같은 방식 ④ 모든 통신은 https(TLS). 127.0.0.1 안에서도 http를 쓰지 않는다 ⑤ 사설 인증서가 필요하면 owner에게 요청하고 파일·절차를 알려 준다.
 - 함께 보는 문서: [운영 설정 안내](operations.md), [Agent 실행 격리](../../agent-runner/docs/isolation.md), owner용 인증서 절차 `owner-cert.md`(작업 기록 폴더 `install-tls/`)
 
@@ -145,7 +145,7 @@ systemd: agent-wbs.service ──(docker compose up/down)──▶ 컨테이너 
 ├─ bin/agent-wbs-runner               Runner 관리 명령(preflight 등). root 0755
 ├─ runtime/node-v26.13.0/             Runner 전용 node 배포본 통째(bin/node·npm·npx + pnpm 12.16.1 고정 설치). root 소유
 ├─ runtime/current -> node-v26.13.0   서비스 PATH는 runtime/current/bin
-├─ var/legacy/                        옛 사용자 서비스 파일 보관(이행 되돌리기용, 6.1). root 0700
+├─ var/legacy/<옛 커밋>/               이행 되돌리기용 옛 Runner 복구본(코드·운영 의존성·옛 node·옛 서비스 파일, 6.1). root 소유, 읽기 0755
 ├─ releases/<커밋>/                    agent-runner 소스 + 운영 의존성(node_modules). root 소유·읽기 전용
 ├─ current -> releases/<커밋>
 └─ etc/                               root:root 0755  ※ 덮어쓰지 않는다
@@ -161,7 +161,8 @@ systemd: agent-wbs.service ──(docker compose up/down)──▶ 컨테이너 
 - 어떻게 마련하나
   1. node 공식 배포본(`https://nodejs.org/dist/v26.13.0/node-v26.13.0-linux-x64.tar.xz`)을 받고 같은 곳의 `SHASUMS256.txt`로 sha256을 대조한 뒤 푼다. npm·npx·corepack이 함께 들어 있다.
      - 왜 nvm 폴더를 통째로 복사하지 않나: nvm 폴더에는 사람이 따로 설치한 전역 패키지(이 PC에서는 `codex`)도 들어 있다. 서비스 runtime에 섞이면 안 된다.
-     - 인터넷이 없을 때를 위해 `--node-dist <푼 폴더>`도 받는다. 이때도 `bin/node`·`lib/node_modules/npm`만 복사한다.
+     - 인터넷이 없을 때는 `--node-tarball <파일> --node-shasums <SHASUMS256.txt>`로 **같은 공식 tarball 파일**을 받는다. 미리 받아 둔 파일을 쓸 뿐 내용은 온라인 경로와 같다(배포본 통째, `bin/npm`·`bin/npx` 링크 포함). 리뷰2 P2-5에서 2판의 「`bin/node`·`lib/node_modules/npm`만 복사」는 `bin/npm`·`bin/npx` 링크가 빠져 npm을 못 찾는 것으로 확인돼 **그 방식은 없앴다.**
+     - 어느 경로든 마지막에 서비스 PATH로 `node`·`npm`·`npx`·`pnpm` 실행 점검(3번)을 통과해야 한다.
   2. pnpm은 그 runtime의 npm으로 **버전을 고정해** 설치한다: `npm install --global --prefix <runtime> --registry=https://registry.npmjs.org pnpm@12.16.1`(`agent-runner/package.json`의 `packageManager`와 같은 버전).
      - 왜 corepack 링크를 쓰지 않나: corepack은 처음 쓸 때 pnpm을 몰래 내려받아 사용자 캐시에 둔다. 서비스 실행 중의 숨은 네트워크 의존이 된다.
   3. 설치 점검(서비스와 **같은 PATH·같은 계정**으로): `node --version`(26.13 이상 26 계열), `npm --version`, `pnpm --version`이 모두 `runtime/current/bin` 안의 파일로 찾아지는지, 그리고 Runner 준비 점검(Agent CLI를 실제로 부르지 않는 무과금 점검)이 통과하는지 본다. 하나라도 실패하면 서비스 파일을 설치하지 않는다.
@@ -183,8 +184,9 @@ systemd: agent-wbs.service ──(docker compose up/down)──▶ 컨테이너 
 | `agent-wbs use <꼬리표>` | 되돌리기: `current` 링크와 `AWBS_IMAGE_TAG`를 바꾸고 `systemctl reload` |
 | `agent-wbs compose <인자…>` | 고급: 고정 compose 앞부분(`-p awbs-prod -f … --env-file …`) + 인자 |
 | `agent-wbs preflight`, `agent-wbs wait-docker <초>` | 서비스가 시작 직전에 부르는 점검(3장) |
-| `agent-wbs start`, `agent-wbs stop` | 서비스 파일이 부르는 시작·멈춤 래퍼(3.2). 시작이 `up` 뒤에 실패하면 같은 project를 `down`으로 정리한다 |
-| `agent-wbs renew-cert <새 인증서 폴더>` | 인증서 교체(5.9) |
+| `agent-wbs start`, `stop`, `after-start` | 서비스 파일이 부르는 시작·멈춤·시작 뒤 정리(3.2). 이번 실행에서 `up`을 시도한 뒤 실패·시간 초과·중단되면 `after-start`가 같은 project를 `down`으로 정리한다 |
+| `agent-wbs renew-cert <새 인증서 폴더>` | 같은 CA로 서버 인증서 셋 교체(5.9) |
+| `agent-wbs replace-ca <새 CA 폴더> --old-thumbprint <옛 지문>` | CA 자체 교체(5.9). 새 CA로 검증하고 서버·공개 사본·Runner 신뢰를 함께 바꾼다 |
 | `agent-wbs certcheck` | 인증서 만료 확인. 매일 도는 `agent-wbs-certcheck.timer`가 부른다(5.9) |
 
 ### 2.5 이미지 빌드 방식
@@ -302,6 +304,11 @@ ExecStartPre=/opt/agent-wbs/bin/agent-wbs preflight
 ExecStart=/opt/agent-wbs/bin/agent-wbs start
 ExecReload=/opt/agent-wbs/bin/agent-wbs reload
 ExecStop=/opt/agent-wbs/bin/agent-wbs stop
+# 시작이 실패·시간 초과·중단으로 끝났고, 이번 실행에서 up을 시도했을 때만 정리한다(3판, 리뷰2 P1-1)
+ExecStopPost=/opt/agent-wbs/bin/agent-wbs after-start
+# 시도 표식을 두는 곳. 서비스가 시작할 때마다 새로 만들고 멈추면 지운다(/run/agent-wbs)
+RuntimeDirectory=agent-wbs
+RuntimeDirectoryMode=0700
 TimeoutStartSec=300
 TimeoutStopSec=150
 
@@ -310,12 +317,26 @@ WantedBy=multi-user.target
 ```
 
 - `agent-wbs start|reload|stop`이 부르는 compose 명령(고정 앞부분 `docker compose -p awbs-prod -f /opt/agent-wbs/current/deploy/compose.prod.yaml --env-file /opt/agent-wbs/etc/agent-wbs.env`):
-  - `start`: `up -d --wait --wait-timeout 240 --remove-orphans`. **실패하면 같은 project를 `down --timeout 30`으로 정리하고, `up`의 원래 실패 코드로 끝난다.**
+  - `start`: `up`을 부르기 **직전에** 시도 표식 `$RUNTIME_DIRECTORY/up-attempted`를 만들고 `up -d --wait --wait-timeout 240 --remove-orphans`를 부른다. 실패하면 원래 실패 코드로 끝난다. 정리는 직접 하지 않고 아래 `after-start`에 맡긴다.
+  - `after-start`(`ExecStopPost`): 시도 표식이 있고 systemd가 넘겨 주는 `$SERVICE_RESULT`가 `success`가 아닐 때만 `down --timeout 30`. 정리 `down`이 실패하면 「컨테이너가 남았을 수 있음」을 출력하고 0이 아닌 코드로 끝난다. 그 밖(표식 없음 = preflight 실패, 결과 success = 정상 stop)에는 아무것도 하지 않는다.
   - `reload`: `up -d --wait …`. 실패해도 `down`하지 않는다(이미 돌던 서비스를 업그레이드 실패 때문에 내리지 않는다). 실패 코드만 돌려주고 되돌리기 명령을 안내한다.
   - `stop`: `down --timeout 30`. docker가 응답하지 않거나 `down`이 실패하면 **0이 아닌 코드**로 끝난다(멈추지 못한 것을 「멈춤 성공」으로 보이지 않게).
-- **왜 시작 래퍼가 필요한가(리뷰 P1-2)**: compose가 postgres·web 등을 만든 뒤 migrate나 헬스체크에서 실패하면 `ExecStart`가 실패한다. systemd는 **시작에 성공하지 못한 서비스에는 `ExecStop`을 실행하지 않는다.** 컨테이너는 docker가 가지고 있으므로 그대로 남는다. 그러면 서비스는 failed인데 web이 살아 있어 다음 시작의 포트 점검까지 막힌다.
-  - `ExecStopPost=down`으로 해결하지 않는 이유: preflight 실패(예: 이미지 없음)에도 돌아, 지금 떠 있던 스택을 이유 없이 내릴 수 있다. 래퍼는 **자기가 `up`을 시도한 뒤의 실패에만** 정리한다.
-  - 이 PC 시험(사용자 transient 유닛, 가짜 compose, 부록 A-2): 래퍼 없음 → failed + 자원 남음(리뷰 재현). 래퍼 → `up` 실패 시 failed·종료 코드 1 유지·자원 없음, 성공 시 active, preflight 실패 시 `up`·`down` 모두 실행 안 됨.
+- **왜 이렇게 하나(리뷰 P1-2, 리뷰2 P1-1)**: compose가 postgres·web 등을 만든 뒤 migrate나 헬스체크에서 실패하면 `ExecStart`가 실패한다. systemd는 **시작에 성공하지 못한 서비스에는 `ExecStop`을 실행하지 않는다.** 컨테이너는 docker가 가지고 있으므로 그대로 남는다.
+  - 2판은 래퍼 안에서 `up` 실패를 받아 `down`했다. 그러나 **시작 시간 초과(`TimeoutStartSec`)나 시작 중 `stop`**이면 systemd가 래퍼를 강제로 끝내 그 줄까지 가지 못한다. 리뷰2가 그대로 재현했다(이 PC에서도 재현, 부록 A-3).
+  - `ExecStopPost`는 시작이 어떻게 끝났든(실패·시간 초과·신호) 항상 실행된다. 그래서 정리를 여기로 옮겼다.
+  - 그냥 `ExecStopPost=down`으로 두지 않는 이유: preflight 실패(예: 이미지 없음)에도 돌아, 이미 떠 있던 스택을 이유 없이 내린다. **이번 실행에서 `up`을 시도했다는 표식**이 있을 때만 정리한다. 표식은 `RuntimeDirectory` 안에 있어 서비스가 시작할 때마다 비워진다. 예전 실행의 표식이 남아 있을 수 없다.
+  - 이 PC 시험(사용자 transient 유닛, 가짜 compose, 부록 A-3):
+
+    | 경우 | 결과 | 자원 |
+    | --- | --- | --- |
+    | 2판 래퍼 + `up` 멈춤 → 시간 초과 | failed(timeout) | **남음**(리뷰2 재현) |
+    | 3판 + `up` 멈춤 → 시간 초과 | failed(timeout), `after-start`가 `result=timeout`으로 down | 없음 |
+    | 3판 + `up` 실패 | failed(exit-code) | 없음 |
+    | 3판 + 시작 중 `systemctl stop` | failed(signal), `after-start`가 down | 없음 |
+    | 3판 + preflight 실패, 이미 떠 있던 스택 | failed(exit-code), down 안 함 | **기존 스택 그대로** |
+    | 3판 + 정상 시작 → stop | inactive(success), `ExecStop`이 down, `after-start`는 아무것도 안 함 | 없음 |
+
+  - 남는 경우: `after-start` 자체가 `TimeoutStopSec`(150초) 안에 끝나지 못하거나 docker가 응답하지 않으면 정리를 장담할 수 없다. 이때는 0이 아닌 코드와 「남았을 수 있음」 메시지로 알리고, `agent-wbs status`가 남은 컨테이너를 보여 준다. 실제 compose로 이 경로를 시험하는 것은 구현 확인 목록 T-2.
 - `systemd-analyze verify` 통과(임시 폴더에 만든 파일로, 부록 B). `docker.service` 의존판은 이 PC에서 예상대로 실패.
 - 실행 계정: **root**(서비스 파일에 `User=`를 쓰지 않음).
   - 왜: docker를 부를 수 있는 계정은 사실상 root와 같다(docker 그룹 = root). root로 돌리고 비밀·compose 파일을 root 소유로 두는 편이 「누가 무엇을 고칠 수 있나」가 단순하다.
@@ -332,7 +353,7 @@ WantedBy=multi-user.target
 
 | 명령 | 하는 일 | 데이터 |
 | --- | --- | --- |
-| `systemctl start` | docker 기다림 → preflight → `up -d --wait`(migrate 먼저, 성공해야 api·worker). `up` 뒤 실패면 `down`으로 정리하고 failed | 유지 |
+| `systemctl start` | docker 기다림 → preflight → `up -d --wait`(migrate 먼저, 성공해야 api·worker). `up` 뒤 실패·시간 초과·시작 중 stop이면 `after-start`가 `down`으로 정리하고 failed | 유지 |
 | `systemctl stop` | `down --timeout 30`(api·worker에 종료 신호 → 30초 뒤 강제). docker가 없거나 실패하면 stop도 실패로 표시 | 유지(볼륨 남김) |
 | `systemctl restart` | stop 다음 start. 모든 컨테이너를 새로 만든다 | 유지 |
 | `systemctl reload` | `up -d --wait`. 바뀐 컨테이너만 새로 만든다(업그레이드·설정 변경) | 유지 |
@@ -385,6 +406,8 @@ Environment=NODE_ENV=production
 Environment=AWBS_AGENT_USER=awbs-agent
 EnvironmentFile=/opt/agent-runner/etc/runner.env
 LoadCredential=runner-token:/opt/agent-runner/etc/secrets/runner-token
+# node가 뜨기 전에 지운다. node 안에서 지우면 이미 늦다(5.5)
+UnsetEnvironment=NODE_EXTRA_CA_CERTS NODE_TLS_REJECT_UNAUTHORIZED
 # 옛 사용자 서비스 awbs-runner.service가 켜져 있으면 거부, runtime의 node·npm·pnpm 확인(4.3)
 ExecStartPre=/opt/agent-runner/bin/agent-wbs-runner preflight
 ExecStart=/opt/agent-runner/runtime/current/bin/node src/main.ts
@@ -447,8 +470,8 @@ Runner 설치 단계
 2. `runtime/node` 복사, `releases/<커밋>/`에 소스+운영 의존성(keeproll로 `pnpm install --prod --frozen-lockfile`을 임시 폴더에서 한 뒤 root 소유로 복사).
 3. `etc/runner.env` 만들기(없을 때만). 옛 `agent-runner/.env`가 있으면 **비밀이 아닌 줄만** 옮긴다(`AWBS_GITHUB_MODE`, `AWBS_GITHUB_REPO`, `AWBS_ATTEMPT_AUTO`, `AWBS_CI_AUTO` 등). `AWBS_URL`은 새 https 주소로 쓴다.
 4. 토큰: 4.5.
-5. 옛 사용자 서비스 정리: `awbs-runner.service`(사용자 서비스)를 `disable --now`하고, 서비스 파일은 **지우지 않고** `<P>/agent-runner/var/legacy/awbs-runner.service`로 옮겨 보관한다. 옛 `agent-runner/.env`는 지우지 않는다.
-   - 왜 보관하나: 이행을 되돌릴 때(6.1) 옛 Runner를 다시 띄울 서비스 파일이 필요하다. 되돌리기 기한(O-12)이 지나면 uninstall.sh가 지운다.
+5. 옛 사용자 서비스 정리: `awbs-runner.service`(사용자 서비스)를 `disable --now`하고, 서비스 파일은 **지우지 않고** `<P>/agent-runner/var/legacy/<옛 커밋>/`에 옛 Runner 복구본(코드·의존성·옛 node)과 함께 보관한다(6.1 3-1). 옛 `agent-runner/.env`는 지우지 않는다.
+   - 왜 보관하나: 이행을 되돌릴 때(6.1) 옛 Runner를 다시 띄워야 한다. 서비스 파일만으로는 부족하고 옛 코드·의존성·node까지 있어야 한다(리뷰2 P1-4). 되돌리기 기한(O-12)이 지나면 uninstall.sh가 지운다.
    - 두 Runner가 동시에 켜지지 않게: 새 서비스는 시작 전 점검(`ExecStartPre`)에서 사용자 서비스 `awbs-runner.service`가 active면 시작을 거부한다. 되돌리기 쪽도 새 시스템 서비스가 active면 옛 것을 켜지 않는다.
    - 왜 옛 것을 끄나: 두 Runner가 같은 데이터 폴더를 쓰면 안 된다. 데이터 폴더 잠금이 막아 주지만, 하나가 계속 실패·재시작하며 로그를 쌓는다.
 6. 서비스 파일 설치·`enable`. 시작은 하지 않는다.
@@ -609,12 +632,15 @@ host    all all ::/0         reject
   - 이 PC에서 `https.request({ ca })`로 시스템 CA 없이 연결되는 것을 확인했다(부록 A).
   - **주의(리뷰 확인)**: node 기본 `fetch`의 요청 옵션에 `{ ca }`를 넣는 것은 **동작하지 않는다**(무시된다). `https.request` 기반 어댑터나 undici `Agent`(dispatcher)를 실제로 만들어야 한다. 그래서 W4는 「한 줄 수정」이 아니라 어댑터 구현 + 시험이다.
 - W4 인수 조건(실제 `createApiClient`에 넣은 상태로 시험)
-  - 요청 전에 실패해야 하는 것: production에서 `http://` 주소, CA 파일 없음·읽기 실패·PEM 형식 오류, 검증 끄기 환경(`NODE_TLS_REJECT_UNAUTHORIZED`).
+  - 요청 전에 실패해야 하는 것: production에서 `http://` 주소, CA 파일 없음·읽기 실패·PEM 형식 오류, 검증 끄기 환경(`NODE_TLS_REJECT_UNAUTHORIZED`), **`NODE_EXTRA_CA_CERTS`가 있는 환경**(지우고 진행하지 않는다).
   - 성공: 올바른 CA·이름. 실패: 다른 CA, 다른 이름, 만료 인증서, 평문 서버.
   - 지금 client의 동작을 그대로 지킨다: 수동 redirect(토큰이 다른 주소로 새지 않게), timeout·AbortSignal, FormData 증거 업로드, Response 처리.
   - GitHub 호출(fetch)에는 사설 CA가 섞이지 않는다(GitHub 쪽은 공인 CA만, 사설 CA로 만든 가짜 github 인증서는 거부).
 - GitHub API 호출(`github/client.ts`)은 지금처럼 기본 fetch(시스템 CA)를 쓴다. 우리 CA를 GitHub 쪽에 섞지 않는다.
-- `NODE_EXTRA_CA_CERTS`는 Runner에 쓰지 않는다. Runner 시작 때 환경에 이 값이 있으면 경고하고 지운 뒤(자식 프로세스에 물려지지 않게) 진행한다. 왜: 이 변수는 「시스템 CA + 우리 CA」를 **모든** 연결에서 믿게 만든다. 고정이 아니고, Runner가 띄우는 자식 node 프로세스에도 물려진다.
+- `NODE_EXTRA_CA_CERTS`는 Runner에 쓰지 않는다. **production에서 환경에 이 값이 있으면 요청을 하나도 보내기 전에 시작을 거부한다.**
+  - 2판의 「경고하고 지운 뒤 진행」은 틀렸다(리뷰2 P1-2). node는 이 변수를 **프로세스 시작 때 한 번** 읽어 신뢰 목록에 넣는다. 나중에 `delete process.env.NODE_EXTRA_CA_CERTS`를 해도 자식에게 넘길 값만 없어지고, 이미 들어간 CA는 그대로다. 리뷰2 실측: 지운 뒤에도 추가 CA 수 1→1, 기본 fetch가 사설 CA 서버에 200.
+  - 이중 장치: 서비스 파일에 `UnsetEnvironment=NODE_EXTRA_CA_CERTS`를 넣어 node가 뜨기 전에 systemd가 지운다. `runner.env`에 이 줄이 있으면 Runner preflight(`agent-wbs-runner preflight`)가 거부한다. 그래도 들어오면 Runner 코드가 시작을 거부한다(시험 T-9).
+  - 왜: 이 변수는 「시스템 CA + 우리 CA」를 **모든** 연결에서 믿게 만든다. 고정이 아니고, Runner가 띄우는 자식 node 프로세스에도 물려진다.
 - 설정 검사(Runner `config.ts`): `NODE_ENV=production`이면 `AWBS_URL`이 `https:`가 아니거나 `AWBS_CA_FILE`이 없을 때 시작을 거부한다. `rejectUnauthorized: false`·`NODE_TLS_REJECT_UNAUTHORIZED=0` 같은 「검증 끄기」 설정은 만들지 않고, 환경에 `NODE_TLS_REJECT_UNAUTHORIZED`가 있으면 시작을 거부한다.
 
 ### 5.6 HSTS · 쿠키 · Origin · CSRF · 보안 헤더
@@ -689,7 +715,8 @@ owner가 만들 파일(명령은 owner-cert.md, 이 PC 임시 폴더에서 실�
 
 1. owner: CA 키를 보관 장소에서 꺼내 owner-cert.md 6단계 칸으로 새 폴더(`~/awbs-tls-renew-<날짜>/`)에 web·api·db를 만든다. 칸이 CA 키·CA 인증서 짝, 세 장의 CA 검증, 키 짝, SAN, 기간을 확인한다(이 PC에서 검증함).
 2. `sudo agent-wbs renew-cert <새 폴더>`
-   1. 새 파일 점검: `share/ca.crt`로 검증, 키 짝, SAN(web: 127.0.0.1·localhost, api: api·127.0.0.1, db: postgres), 남은 기간 300일 이상.
+   1. 새 파일 점검: `share/ca.crt`로 검증, 키 짝, SAN(web: 127.0.0.1·localhost, api: api·127.0.0.1, db: postgres), 남은 기간 300일 이상. **CA의 남은 기간도 300일 이상**이어야 한다(`openssl x509 -checkend 25920000`). 실제로 쓸 수 있는 기간은 leaf와 CA 중 **먼저 끝나는 쪽**이기 때문이다(리뷰2 P2-6). 부족하면 「CA 교체 절차」를 안내하고 멈춘다.
+   - 이 명령은 **같은 CA**의 갱신 전용이다. 다른 CA로 만든 파일은 거부한다(정상). CA를 바꿀 때는 아래 `replace-ca`를 쓴다.
    2. 지금 파일을 `var/tls-old/<시각>/`에 복사해 보관.
    3. 새 파일을 `etc/tls/`에 같은 주인·권한으로 원자적 교체.
    4. **`systemctl restart agent-wbs.service`**(전체 down→up). web만 다시 만들지 않는다. 왜: api가 web의 네트워크 공간을 같이 쓰므로 web만 새로 뜨면 api 네트워크가 끊긴다(operations §8). 수십 초의 중단을 받아들인다(O-11).
@@ -701,14 +728,35 @@ owner가 만들 파일(명령은 owner-cert.md, 이 PC 임시 폴더에서 실�
 
 **만료 경고**
 
-- `agent-wbs-certcheck.timer`(매일 1회)가 `agent-wbs certcheck`를 부른다. 남은 기간이 30일 아래면 journal에 경고(`journalctl -u agent-wbs-certcheck`)를 남기고, `agent-wbs status`와 서비스 시작 로그에도 표시한다.
+- owner-cert.md 6단계 칸도 서명 **전에** CA가 397일 이상 남았는지(`-checkend 34300800`) 보고, 모자라면 폴더를 만들기 전에 멈춘다(이 PC에서 만료 5일 남은 CA로 거부 확인, 부록 A-3).
+- `agent-wbs-certcheck.timer`(매일 1회)가 `agent-wbs certcheck`를 부른다. 서버 인증서 셋과 CA 중 **가장 먼저 끝나는 날짜**를 기준으로 남은 기간이 30일 아래면 journal에 경고(`journalctl -u agent-wbs-certcheck`)를 남기고, `agent-wbs status`와 서비스 시작 로그에도 표시한다.
   - 왜 타이머인가: 서비스가 397일 내내 켜져 있으면 시작 때의 preflight 경고는 한 번도 안 보인다.
   - 화면 알림·Telegram으로도 알릴지는 O-11.
 
-**CA 자체를 바꿀 때(10년 뒤 또는 CA 키 분실·노출)** — 별도 절차
+**CA 자체를 바꿀 때(10년 뒤 또는 CA 키 분실·노출)** — 별도 명령 `replace-ca`(리뷰2 P1-3)
 
-- 새 CA로 owner-cert.md 2단계를 새 폴더에 다시 → Windows에 새 CA 등록·옛 CA 삭제(3단계의 삭제 명령) → `renew-cert`가 `share/ca.crt`·`etc/tls/ca.crt`도 바꿈 → Runner의 `etc/ca.crt` 교체 후 `systemctl restart agent-wbs-runner.service` → 서버 restart.
-- CA 키가 노출됐다고 의심되면 날짜를 기다리지 않고 바로 이 절차를 한다.
+2판은 이 경우도 `renew-cert`로 하게 했는데, 두 가지로 깨졌다. ① `renew-cert`는 새 파일을 **지금 CA**로 검증하므로 새 CA의 인증서를 당연히 거부한다. ② Windows 삭제 명령이 이름(`*Agent WBS Local CA*`)으로 찾아서 **옛 CA와 새 CA를 둘 다** 지운다. 그래서 따로 나눈다.
+
+순서(계획된 교체 — 옛 CA가 아직 안전할 때). 옛 CA와 새 CA를 잠깐 **함께** 믿게 둔 채 넘어가서 끊김이 없다.
+
+1. owner: owner-cert.md 2단계 칸의 `OUT=`만 새 폴더(예: `$HOME/awbs-tls-2036`)로 바꿔 새 CA와 서버 인증서 셋을 만든다. 출력의 새 지문을 적어 둔다. **옛 CA의 지문도 적어 둔다**(옛 2단계 기록 파일에 있다).
+2. owner: Windows에 새 CA를 등록한다(owner-cert.md 3-2 칸, 새 지문). 이때 옛 CA는 지우지 않는다.
+3. `sudo agent-wbs replace-ca <새 폴더> --new-thumbprint <새 지문> --old-thumbprint <옛 지문>`
+   1. 새 CA 점검: 자기 서명, `CA:TRUE`, 이름 제약 있음, 지문이 `--new-thumbprint`와 같음, 남은 기간 5년 이상.
+   2. 서버 인증서 셋을 **새 CA로** 검증(키 짝·SAN·기간).
+   3. 지금 파일을 `var/tls-old/<시각>/`에 보관(옛 CA 포함).
+   4. `etc/tls/`(ca 포함)·`share/ca.crt`·(Runner가 있으면) `/opt/agent-runner/etc/ca.crt`를 함께 교체.
+   5. 서버 `restart` → Runner `restart`.
+   6. 새 CA로 실제 접속 확인: web·api·db의 내미는 인증서가 새 CA 체인으로 검증되는지(`openssl s_client -CAfile share/ca.crt`), Runner heartbeat가 다시 들어오는지.
+   7. 하나라도 실패하면 3번 보관본으로 되돌리고 restart 두 번, 실패로 끝낸다. Windows는 두 CA를 다 믿고 있으므로 되돌려도 브라우저가 끊기지 않는다.
+4. owner: 브라우저로 `https://127.0.0.1:8443` 접속(새 CA 체인)을 확인한 **뒤에** Windows에서 옛 CA를 **지문 하나로만** 지운다(owner-cert.md 3-3 칸). 이름으로 찾아 지우지 않는다.
+5. owner: 옛 CA 키를 보관 장소에서 폐기하고, 새 CA 키를 보관한다(owner-cert.md 5단계).
+
+키 노출이 의심될 때(사고). 옛 CA를 믿는 시간을 줄이는 것이 먼저다.
+
+1. owner: Windows에서 옛 CA를 **지문으로 즉시** 지운다(3-3). 이때부터 브라우저는 서버를 믿지 않는다(경고) — 받아들인다.
+2. 위 1~3번(새 CA 만들기·등록·`replace-ca`)을 바로 한다. `replace-ca`의 확인은 같다.
+3. 옛 CA로 서명했을 수 있는 다른 파일이 이 PC나 백업에 있으면 지운다. 이름 제약 때문에 노출된 키로 만들 수 있는 인증서는 `localhost`·`api`·`postgres`·사설 IP 이름뿐이지만, Windows가 이를 지키는지 확인하지 못했으므로(5.8) 지체하지 않는다.
 
 ## 6. 이행
 
@@ -724,6 +772,16 @@ owner가 만들 파일(명령은 owner-cert.md, 이 PC 임시 폴더에서 실�
    - 하는 일: 점검, 그룹, `etc/`(옛 비밀 **복사**, 하나라도 없거나 형식이 틀리면 멈춤), 인증서 복사, 이미지 빌드, `releases/`, Runner runtime(node·npm·pnpm)과 같은 PATH의 준비 점검, 서비스 파일 **검증만**(`systemd-analyze verify`).
    - 하지 않는 일: 서비스 설치·enable, 옛 운영·옛 Runner 멈추기, 토큰.
    - 실패하면 옛 운영은 그대로다. 고친 뒤 같은 명령을 다시 하면 된다(두 번 실행 안전).
+   - **새 판은 원래 저장소가 아니라 별도 폴더에서 실행한다**: `git -C /home/keeproll/projects/agent-wbs worktree add /home/keeproll/awbs-release-<새 커밋> <새 커밋>` 뒤 그 폴더의 `install.sh`. 원래 저장소(`/home/keeproll/projects/agent-wbs`)는 옛 커밋 그대로 둔다. 왜: 옛 사용자 서비스는 원래 저장소의 파일을 그대로 실행한다. 이행 중에 원래 저장소를 새 판으로 바꾸면 되돌릴 코드가 사라진다.
+3-1. 같은 `--prepare`가 **옛 Runner 복구본**을 만든다(리뷰2 P1-4). 서비스 파일만 남겨서는 되돌릴 수 없다. 옛 유닛은 `WorkingDirectory=<저장소>/agent-runner`, `ExecStart=<nvm node> … src/main.ts`로 그 순간의 저장소 파일을 실행하기 때문이다. 새 W4 코드는 production에서 http를 거부하므로, 새 코드로 옛 http 서버에 붙는 「되돌리기」는 성공할 수 없다.
+   - 대상 커밋: 옛 사용자 서비스 파일의 `WorkingDirectory`가 가리키는 저장소의 `HEAD`. 그 저장소의 `agent-runner/`에 커밋하지 않은 변경이 있으면 멈춘다(복구본이 실제로 돌던 코드와 달라지므로).
+   - 만드는 것: `<P>/agent-runner/var/legacy/<옛 커밋>/`
+     - `agent-runner/`: `git archive <옛 커밋> agent-runner`로 꺼낸 소스 + 그 커밋의 lockfile로 설치한 운영 의존성(`pnpm install --prod --frozen-lockfile`, 옛 node로)
+     - `node/`: 옛 서비스 파일의 `@NODE@`가 가리키는 node 배포본(nvm 버전 폴더) 통째. 옛 상태 그대로가 목적이라 2.3의 「nvm 통째 복사 금지」와 달리 그대로 복사한다. 새 서비스는 이것을 쓰지 않는다.
+     - `awbs-runner.service`: 옛 서비스 파일을 `WorkingDirectory=…/legacy/<옛 커밋>/agent-runner`, `ExecStart=…/legacy/<옛 커밋>/node/bin/node --env-file=<옛 .env 경로> src/main.ts`, `PATH=…/legacy/<옛 커밋>/node/bin:…`로 바꾼 판. `systemd-analyze --user verify` 통과해야 한다.
+     - `MANIFEST`: 옛 커밋, 옛 node 버전, 파일 sha256 목록, 옛 서버 이미지 꼬리표(`~/.agentwbs/prod/deploy.env`), 옛 compose 파일 경로.
+   - 복구본 점검(`--prepare` 안에서): 복구본 node로 `node --version`, 복구본 위치에서 Runner 설정 점검만 하는 무과금 명령(서버에 붙지 않음)이 통과해야 한다. 실패하면 `--activate`를 거부한다(되돌릴 수단 없이 전환하지 않는다).
+   - 옛 서버 쪽 보관: 옛 이미지 `awbs-app:<옛 꼬리표>`·`awbs-web:<옛 꼬리표>`는 O-12 기한까지 지우지 않는다. 옛 compose 파일(`<원래 저장소>/agent-wbs/deploy/compose.prod.yaml`, 옛 커밋)도 `var/legacy/<옛 커밋>/server/`에 복사해 둔다.
 
 **나. 전환(여기서부터 중단)**
 
@@ -731,20 +789,20 @@ owner가 만들 파일(명령은 owner-cert.md, 이 PC 임시 폴더에서 실�
 5. 백업: `bash <저장소>/agent-wbs/deploy/backup.sh`.
    - 주의: backup.sh는 끝날 때 api·worker를 **다시 켠다.** 그래서 백업 뒤 6번까지 사이에 화면에서 바꾼 내용은 이 백업에 없다. 이 사이에는 화면을 쓰지 않는다. 되돌리기에서 DB를 복원하면 복원 시점은 이 백업이다.
 6. 옛 서버 멈춤: `docker compose -p awbs-prod -f … --env-file ~/.agentwbs/prod/deploy.env down`(**`-v` 없이**. 볼륨은 남는다). 이것으로 옛 http 5173 리스너도 없어진다.
-7. `sudo bash install.sh --prefix=/opt --activate` — 서비스 파일 설치·enable, 옛 Runner 사용자 서비스 `disable`·파일을 `var/legacy/`로 보관.
+7. `sudo bash install.sh --prefix=/opt --activate` — 3-1의 복구본 점검이 통과했는지 다시 보고, 서비스 파일 설치·enable, 옛 Runner 사용자 서비스 `disable`(원래 사용자 서비스 파일도 `var/legacy/<옛 커밋>/awbs-runner.service.orig`로 보관).
 8. `sudo systemctl start agent-wbs.service` → `curl --cacert /opt/agent-wbs/share/ca.crt https://127.0.0.1:8443/health/db` → 브라우저로 `https://127.0.0.1:8443` → 다시 로그인(쿠키 이름이 바뀜).
 9. `sudo /opt/agent-wbs/bin/agent-wbs runner-enroll --reissue --revoke-from-env /home/keeproll/projects/agent-wbs/agent-runner/.env`
    - 새 토큰 발급·저장이 먼저, 옛 `.env` 토큰 폐기가 나중(4.5). 새 토큰 저장이 실패하면 옛 토큰은 살아 있다.
 10. `sudo systemctl start agent-wbs-runner.service` → 화면의 Runner 상태·heartbeat 확인.
 11. 화면 설정의 「접속 주소」를 `https://127.0.0.1:8443`으로 바꾼다.
-12. 되돌리기 기한(O-12)이 지나면 owner가 옛 `~/.agentwbs/prod/secrets`와 `var/legacy/`를 정리한다(설치기는 지우지 않는다).
+12. 되돌리기 기한(O-12)이 지나면 owner가 옛 `~/.agentwbs/prod/secrets`, `var/legacy/<옛 커밋>/`, 옛 이미지를 정리한다(설치기는 지우지 않는다). 원래 저장소도 그때 새 판으로 바꿔도 된다.
 
 **되돌리기(이행 전 http 방식으로)** — `sudo /opt/agent-wbs/bin/agent-wbs legacy-rollback`이 아래를 순서대로 한다(W3). 폐기한 옛 토큰을 다시 살리지는 않는다. 옛 Runner용으로 **새 토큰**을 발급한다.
 
 1. 새 Runner 서비스 `stop`·`disable`(Runner 먼저. 두 Runner가 동시에 켜지지 않게).
 2. 새 서버 서비스 `stop`·`disable`. `stop`이 실패하면(컨테이너가 남음) 여기서 멈추고 알린다.
-3. 옛 compose로 `up -d --wait`(옛 꼬리표·옛 `deploy.env`·옛 비밀 그대로). 새 판이 마이그레이션을 실행했으면 이 대신 5번 백업을 옛 이미지로 복원한다(operations §7.2, 2.6의 「이행 전 HTTP 이미지 복원」).
-4. `var/legacy/awbs-runner.service`를 `~/.config/systemd/user/`로 되돌리고 keeproll의 `systemctl --user daemon-reload`.
+3. 옛 compose(`var/legacy/<옛 커밋>/server/compose.prod.yaml`)로 `up -d --wait`(옛 꼬리표·옛 `deploy.env`·옛 비밀 그대로). 옛 이미지가 없으면 멈춘다. 새 판이 마이그레이션을 실행했으면 이 대신 5번 백업을 옛 이미지로 복원한다(operations §7.2, 2.6의 「이행 전 HTTP 이미지 복원」).
+4. **복구본을 가리키는** `var/legacy/<옛 커밋>/awbs-runner.service`를 `~/.config/systemd/user/awbs-runner.service`로 놓고 keeproll의 `systemctl --user daemon-reload`. 복구본의 `MANIFEST` sha256이 맞지 않으면 멈춘다. 원래 저장소가 지금 어떤 커밋이든 상관없다.
 5. 옛 `agent-runner/.env`의 `AWBS_URL`이 `http://127.0.0.1:5173`인지 확인(값만 보고 바꾸지 않음. 다르면 멈춤).
 6. 옛 Runner용 새 토큰: Runner ID로 `… exec -T api awbs-entrypoint auth runner-token` → 출력을 화면이 아닌 임시 파일로 받아, `.env`의 `AWBS_RUNNER_TOKEN` 줄만 바꾼 새 `.env`(0600)를 만들어 `mv`. 그 뒤 새 시스템 서비스가 쓰던 토큰(`etc/secrets/runner-token`)을 폐기.
 7. `systemctl --user start awbs-runner.service` → heartbeat 확인.
@@ -779,8 +837,8 @@ owner가 만들 파일(명령은 owner-cert.md, 이 PC 임시 폴더에서 실�
 | --- | --- | --- | --- | --- |
 | W1 서버 TLS | api https 듣기(`AWBS_TLS_*`, 운영에서 필수, TLS 1.3), Origin·쿠키(`__Host-`·Secure)·`localOrigins`·login-link https, entrypoint `sslmode=verify-full`, nginx 8443 TLS·`api-upstream.conf`를 `/api/`·`/health`·`/health/db`에 include·보안 헤더, postgres ssl·pg_hba·`user 999`·소켓 헬스체크, compose secrets·`group_add`, 헬스체크 https, **Dockerfile apt https(CA 묶음 먼저)**. 시험: 기존 단위·e2e + TLS 음성 시험(평문 거부·이름 불일치·CA 없음·TLS1.2 거부·`/health/db`가 DB 장애 때 실패) + `--no-cache` 빌드 로그 http 0줄 | codex | — | **없음** |
 | W2 설치기 | `install.sh`(`--prepare`/`--activate`, 점검, 그룹, etc, 비밀 가져오기(빠지면 멈춤), 인증서·`share/ca.crt` 복사, 빌드, release·current, 서비스 파일, DrvFS prefix 거부), `bin/agent-wbs`(`start`=실패 시 down 정리, `stop`=실패 표시, `renew-cert`, `certcheck`+timer), `uninstall.sh`, 계약 변경 감지, **리허설 TLS화**(주소·Origin·CA·Runner CA·seed-demo CA secret, 두 종류 복원 시험). 시험: 임시 prefix·전용 프로젝트 이름으로 설치→두 번 실행→업그레이드→되돌리기→제거, 시작 실패 뒤 잔여 컨테이너 0, 인증서 교체 뒤 실제 제시 일련번호 확인 | claude | W1과 동시에 시작 가능(compose 파일은 W1이 고치고 W2는 경로만 받는다. 파일 소유를 먼저 나눈다) | 없음 |
-| W3 Runner 서비스 | 시스템 서비스 파일, **runtime(node 공식 배포본+sha256, npm, pnpm 12.16.1 고정)과 같은 PATH의 준비 점검**, Runner 설치 단계·옛 사용자 서비스 보관·두 Runner 동시 실행 거부, 토큰 자동 등록(`runner-enroll`, 새 것 먼저·옛 것 나중), **`legacy-rollback`**. **첫 확인: 실제 시스템 서비스에서 `systemd-run --user --scope`**(User·XDG_RUNTIME_DIR·linger·sudo 허용·scope cgroup 위치·kill 뒤 비었음·Runner 재시작 뒤 대조, owner sudo 필요) | claude | W2의 틀 | 없음 |
-| W4 Runner TLS | `config.ts`(production에서 https·`AWBS_CA_FILE` 필수, `NODE_TLS_REJECT_UNAUTHORIZED` 거부, `NODE_EXTRA_CA_CERTS` 제거, **`AWBS_GITHUB_API_URL` https만**(http fake는 시험 설정만)), **CA 고정 HTTPS 어댑터**(native fetch `{ca}`는 안 됨), `AWBS_RUNNER_TOKEN_FILE`/`CREDENTIALS_DIRECTORY`. 인수 조건은 5.5 목록 | codex | **Runner job 수신 작업 병합 뒤** | 없음 |
+| W3 Runner 서비스 | 시스템 서비스 파일, **runtime(node 공식 배포본+sha256, npm, pnpm 12.16.1 고정)과 같은 PATH의 준비 점검**, Runner 설치 단계·옛 사용자 서비스 보관·두 Runner 동시 실행 거부, 토큰 자동 등록(`runner-enroll`, 새 것 먼저·옛 것 나중), **옛 Runner 복구본(6.1 3-1)과 `legacy-rollback`**. **첫 확인: 실제 시스템 서비스에서 `systemd-run --user --scope`**(User·XDG_RUNTIME_DIR·linger·sudo 허용·scope cgroup 위치·kill 뒤 비었음·Runner 재시작 뒤 대조, owner sudo 필요) | claude | W2의 틀 | 없음 |
+| W4 Runner TLS | `config.ts`(production에서 https·`AWBS_CA_FILE` 필수, `NODE_TLS_REJECT_UNAUTHORIZED`·`NODE_EXTRA_CA_CERTS`가 있으면 **시작 거부**(지우고 진행하지 않음), **`AWBS_GITHUB_API_URL` https만**(http fake는 시험 설정만)), **CA 고정 HTTPS 어댑터**(native fetch `{ca}`는 안 됨), `AWBS_RUNNER_TOKEN_FILE`/`CREDENTIALS_DIRECTORY`. 인수 조건은 5.5 목록 | codex | **Runner job 수신 작업 병합 뒤** | 없음 |
 | W5 외부 TLS 정리 | SMTP `없음` 서버 거부(계약 enum은 유지, 저장·확인·발송 때 거부. 화면에서 선택지 비활성), O-10 결과에 따라 `STARTTLS` 처리, Telegram `https://api.telegram.org` 연결(fake는 시험 설정에서만), O-10 결과에 따라 시스템 SSH push 처리 | codex | O-10 답 | 없음(값 거부만, 표 구조 그대로) |
 | W6 문서·명령서 | operations.md·OWNER-RUNBOOK 갱신, 새 owner 명령서(6.2, 준비/전환/되돌리기 칸 분리) | claude | W1~W4 | — |
 | 교차 리뷰 | W1·W4·W5는 claude가, W2·W3·W6은 codex가 리뷰 | — | — | — |
@@ -808,10 +866,50 @@ owner가 만들 파일(명령은 owner-cert.md, 이 PC 임시 폴더에서 실�
 
 추천은 그대로 두고, 리뷰에서 나온 보충만 적는다.
 
+O-10~O-13은 **추천을 고르는 것만으로 승인되지 않는다.** 리뷰2가 붙인 조건을 함께 승인하는 것이다.
+
+- O-10 (a)를 고르면: ① SSH push는 「TLS가 아닌 **암호화 예외**」로 owner가 **따로 명시 승인**한다. 조건: 지금 코드의 서버 키 확인(`ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=<파일> -o GlobalKnownHostsFile=/dev/null`, `git/repository.ts`)을 그대로 유지한다(시험 T-14). ② STARTTLS는 「처음 인사·협상은 평문, 로그인·본문 전 TLS 강제」를 owner가 **따로 명시 승인**한다. 조건: `requireTLS`를 유지하고 인증서 검증을 끄지 않는다(시험 T-15). 승인 전에는 「모든 통신 TLS」를 다 채운 것으로 세지 않는다.
+- O-11 (a)를 고르면: journal·`status` 경고는 owner가 **직접 봐야 하는 수동 확인**이다(알림이 오지 않는다). 이를 알고 고른다. 만료 판정은 leaf와 **CA 중 먼저 끝나는 날**로 한다(5.9).
+- O-12 (a)를 고르면: 7일 동안 보관하는 것은 **옛 Runner 복구본(코드·운영 의존성·옛 node·서비스 파일), 옛 compose 파일, 옛 이미지 두 개, 옛 `deploy.env`, 옛 비밀**이다(6.1 3-1). 서비스 파일·비밀만으로는 7일이 「복구 보장 기간」이 되지 않는다. 기한 안에 원래 저장소를 새 판으로 바꿔도 되돌리기는 복구본으로 한다.
+- O-13 (a)를 고르면: PC를 켠 뒤 **무인 자동 복구는 약속하지 않는다**는 뜻이다. 무인 부팅·복구가 필요하면 이 선택으로는 채울 수 없고 O-3 (b)가 필요하다.
+- O-6: 추천 (a)가 표에 있다는 사실을 owner 승인으로 보지 않는다(리뷰2 재확인).
+
 - O-2: prefix가 Windows 드라이브(`/mnt/<드라이브>`)면 리눅스 권한이 지켜지지 않아 install.sh가 거부한다(2.2).
 - O-6: 원래 지시는 「모든 통신」이다. (a)를 고르시면 「개발 구성은 이번 범위에서 http 예외」를 owner가 **명시적으로 승인**하신 것으로 기록하고, 그 전에는 지시를 다 채운 것으로 세지 않는다.
 - O-7: SMTP·Telegram 정리(W5)도 M8-05의 실제 알림 시험 전에 끝나야 한다.
 - O-9: 일반 USB는 Windows 드라이브라 리눅스 권한 0600이 지켜지지 않는다. 암호 관리자 첨부 또는 암호화된 저장 장치(BitLocker To Go 등)를 쓰고, 보호를 확인하기 전에는 PC 원본을 지우지 않는다(owner-cert.md 5단계).
+
+## 8. 구현 단계 확인 목록(W1~W6이 코드와 시험으로 증명할 것)
+
+이 설계는 이번 판으로 닫는다. 아래는 문서·임시 시험으로는 끝까지 증명할 수 없어 **구현 작업자가 코드와 자동 시험(또는 기록을 남기는 실행 시험)으로 증명해야 하는 항목**이다. 각 W의 완료 보고에는 해당 T 번호의 시험 이름·명령·결과를 붙인다. 하나라도 통과하지 못하면 그 W는 끝나지 않은 것이다.
+
+공통 규칙: 시험은 전용 이름(`awbs-t<번호>-*`)·임시 prefix·전용 포트로 한다. 운영(`awbs-prod`)·다른 프로젝트·`docker volume prune`·유료 CLI 호출은 쓰지 않는다. sudo가 필요한 시험(T-1 등)은 owner 명령서로 만들어 owner가 실행한다.
+
+| ID | 담당 | 무엇을 증명하나 | 방법 | 통과 조건 |
+| --- | --- | --- | --- | --- |
+| T-1 | W3(owner sudo) | 시스템 서비스(`system.slice`, `User=keeproll`) 안에서 Agent 격리가 그대로 된다 | 시험용 시스템 유닛으로 Runner의 scope 확인 실행·sudo 래퍼 `check`·Agent 가짜 명령 하나 | scope가 `user@1000.service/app.slice/awbs-<uuid>.scope`에 생김, 래퍼가 awbs-agent로 실행, scope kill 뒤 비었음, Runner 재시작 뒤 대조 통과. 실패하면 Runner가 실행을 거부함(실행되면 안 됨) |
+| T-2 | W2 | 시작 실패·**시간 초과**·시작 중 stop 뒤 잔여 컨테이너가 없다(3.2) | 실제 compose, 전용 project. migrate를 일부러 실패/헬스체크를 일부러 느리게(`TimeoutStartSec` 짧게)/시작 중 `systemctl stop` | 세 경우 모두 서비스 failed + 그 project 컨테이너 0개. preflight 실패 때 이미 떠 있던 같은 project는 그대로. docker를 멈춘 상태의 `after-start`는 0이 아닌 코드와 「남았을 수 있음」 |
+| T-3 | W1·W2 | 기존 운영 볼륨을 `postgres user: 999:999`로 연다 | 현재 판 TLS 복원 리허설(2.6)로 운영 백업을 새 이름에 복원 후 기동 | 지문 대조 통과, `pg_stat_ssl`의 ssl=true |
+| T-4 | W1 | 빌드에 평문 http 내려받기가 없다 | `--no-cache` 빌드 로그 검사, Dockerfile의 CA 묶음 COPY → `ca-certificates` 설치 | `http://`로 시작하는 내려받기 줄 0개, `ca-certificates` 설치 단계 정상 종료 |
+| T-5 | W1 | 보안 헤더·CSP가 화면을 깨지 않는다 | e2e 전체(https) | 기존 e2e 모두 통과, 콘솔 CSP 위반 0건(깨지면 Report-Only로 시작하고 기록) |
+| T-6 | W1 | nginx의 모든 api 경로가 TLS·검증을 쓴다 | 설정 정적 검사 + DB를 멈춘 상태의 `/health/db` | `proxy_pass http://` 0줄, 모든 `proxy_pass https://`에 `api-upstream.conf` include, DB 정지 때 `/health/db`가 200이 아님(화면 파일로 떨어지지 않음) |
+| T-7 | W1 | 내부 TLS 음성 시험 | api에 TLS1.2, CA 없는 접속, 이름 불일치, postgres `sslmode=disable`, 평문 TCP | 모두 거부. 소켓 헬스체크는 healthy |
+| T-8 | W4 | Runner CA 고정 어댑터 | 5.5의 인수 조건 목록 전체를 실제 `createApiClient`로 | 목록 전부 통과. GitHub fetch에 사설 CA가 섞이지 않음 |
+| T-9 | W4·W3 | `NODE_EXTRA_CA_CERTS`·`NODE_TLS_REJECT_UNAUTHORIZED`가 있으면 시작 거부 | 그 변수를 넣고 Runner 실행, 시험 서버로 요청이 오는지 관찰. `runner.env`에 그 줄을 넣고 preflight | 종료 코드 0 아님, 시험 서버에 요청 0건, preflight 거부. 서비스 파일에 `UnsetEnvironment` 있음 |
+| T-10 | W3 | runtime이 완전하다 | 공식 tarball sha256 불일치 주입, 오프라인 tarball 경로, 서비스 PATH로 `node`·`npm`·`npx`·`pnpm` | 불일치 거부, 두 경로 모두 네 도구가 runtime 안에서 찾아짐, Runner 준비 점검 통과 |
+| T-11 | W2 | 같은 CA 갱신(`renew-cert`) | 갱신 칸으로 만든 파일로 교체, 일부러 잘못된 키로 한 번 | 교체 뒤 web·api·db가 **내미는** 일련번호가 새 것, 잘못된 키는 교체 전 거부·옛 파일 그대로, CA 남은 기간 300일 미만이면 거부 |
+| T-12 | W2 | CA 교체(`replace-ca`) | 임시 CA 둘로 옛→새 교체, 일부러 실패 주입 | 새 CA leaf만 통과·옛 CA leaf 거부, `share/ca.crt`·Runner CA 함께 바뀜, 실패 때 보관본으로 되돌아가 옛 CA로 접속됨 |
+| T-13 | W3 | 옛 Runner 복구본과 `legacy-rollback` | 임시 저장소를 옛 커밋으로 두고 복구본 생성 → 저장소를 새 커밋으로 바꿈 → 전용 http 옛 스택에 대해 `legacy-rollback` | 옛 코드로 heartbeat 성공, 새 토큰 먼저·옛 토큰 나중, 두 Runner 동시 실행 0회, 6.1의 완료 조건 전부 |
+| T-14 | W5 | 시스템 SSH push가 서버 키 확인을 유지한다(O-10) | `systemSshCommand` 단위 시험 | `StrictHostKeyChecking=yes`, `UserKnownHostsFile=<파일>`, `GlobalKnownHostsFile=/dev/null` 유지. 끄는 옵션 0개 |
+| T-15 | W5 | SMTP·Telegram TLS | 설정 저장·연결 확인·발송 경로 | `없음` 거부, `STARTTLS`는 `requireTLS` 유지(O-10 결과에 따라 거부 가능), 인증서 검증 끄기 0개, Telegram은 `https://api.telegram.org`만(fake http는 시험 설정만) |
+| T-16 | W2 | 설치기 안전장치 | 비밀 하나를 뺀 가져오기, `/mnt/c/…` prefix, 사람 계정으로 `curl --cacert share/ca.crt` | 가져오기 멈춤·새 비밀 생성 0개, DrvFS prefix 거부, 사람 계정 curl 성공 |
+| T-17 | W2 | 설치·업그레이드·제거 | 임시 prefix로 설치 2회, 계약 지문이 다른 판으로 업그레이드, 제거 | 두 번째 설치 변경 0, 계약 변경 시 멈춤(`--contract-change-checked` 없이), 제거 뒤 `etc/`·`var/`·볼륨 남음 |
+| T-18 | W2 | 복원 리허설 두 종류(2.6) | 현재 판 TLS 복원, 이행 전 HTTP 이미지 복원 | 둘 다 지문·API 대조 통과 |
+| T-19 | W2 | 만료 경고 | certcheck에 leaf보다 CA가 먼저 끝나는 시험 CA | CA 만료일 기준으로 경고 |
+| T-20 | owner | Windows 브라우저 | 3-2 등록 뒤 `https://127.0.0.1:8443` | 경고 없음. (참고 관찰: 이름 제약 위반 인증서를 브라우저가 거부하는지 — 보조 장치라 통과 조건 아님) |
+| T-21 | W6 | 새 owner 명령서 | 모든 칸을 임시 prefix·HOME으로 글자 그대로 실행 | 칸마다 기대 출력과 같음, sudo 칸은 `norun` 표시와 이유 |
+
+- 아직 시험하지 않은 것(정직하게): Windows에서 개인키가 든 파일(PFX)을 골랐을 때의 `HasPrivateKey` 분기는 실제 PFX로 시험하지 않았다(3-2 칸의 검사 문장만 있음). T-20과 함께 owner 명령서에서 「`.pfx`를 고르지 않는다」를 안내한다.
 
 ## 부록 A. 이 PC에서 한 검증(임시 폴더·전용 이름)
 
@@ -920,6 +1018,36 @@ web.crt를 고름(그 파일 지문을 넣어도) → 거부됨 → STOP: CA 인
 agent-wbs.service(ExecStart=agent-wbs start 등) exit=0 / agent-wbs-runner.service(runtime/current/bin, ExecStartPre) exit=0
 ```
 
+## 부록 A-3. 3판 추가 검증(2차 리뷰 반영, 2026-11-28)
+
+전체 로그: `install-tls/verify-logs/fix2-*.log`. 사용자 transient 유닛 `awbs-fix2-*`만 썼고 끝난 뒤 0개. sudo·실제 /opt·운영 자원·Windows 신뢰 저장소 변경 없음. 컨테이너는 만들지 않았다.
+
+```text
+[시작 래퍼 3판: 시도 표식 + ExecStopPost]  (fix2-start-wrapper.log, 시험 스크립트 fix2-agent-wbs-start.sh·fix2-agent-wbs-after-start.sh)
+hang-timeout: up=hang timeout=3s → 상태=failed 결과=timeout 자원=없음   log: 시작 실패 정리: result=timeout code=killed status=TERM → down / 정리 완료
+upfail:       up=fail          → 상태=failed 결과=exit-code 자원=없음
+preflightfail:                 → 상태=failed 결과=exit-code 자원=없음(up 안 함)
+ok-then-stop:                  → 상태=inactive 결과=success 자원=없음
+2판 래퍼 + hang(리뷰2 재현)      → 상태=failed 결과=timeout 자원=남음
+이미 떠 있던 스택 + preflight 실패 → 결과=exit-code 기존자원=그대로
+시작 중 stop                    → 상태=failed 결과=signal 자원=없음   log: result=signal … → down / 정리 완료
+
+[6단계 갱신 칸 3판: CA 남은 기간 검사]  (fix2-renew.log)
+2단계(변경 없음) exit=0 / 6단계 정상(10년 CA) exit=0, 세 장 OK
+만료 5일 남은 CA → FAIL CA가 397일 안에 만료됩니다(…). 갱신 대신 CA 교체 절차(설계 5.9)를 하세요. exit=1, 출력 폴더 만들지 않음
+기록 파일 PRIVATE KEY 합계 0
+
+[Windows CA 삭제 칸: 지문 하나만]  (fix2-ps-remove.log, Remove-Item을 출력 함수로 바꿈)
+있는 지문(콜론·소문자 섞음) → 지울 인증서 1개 표시 → WOULD_REMOVE 1개: Cert:\CurrentUser\Root\<그 지문>
+없는 지문 → STOP: 그 지문의 인증서가 현재 사용자 Root에 없습니다
+자리표시 그대로 → STOP: … 40자리를 넣으세요
+(양성 시험은 이 PC 현재 사용자 Root에 이미 있던 다른 루트 하나의 지문을 읽기만 해서 썼다)
+
+[서비스 파일 3판]  (fix2-systemd-verify.log)
+agent-wbs.service(ExecStopPost=agent-wbs after-start, RuntimeDirectory=agent-wbs) exit=0
+agent-wbs-runner.service(UnsetEnvironment=NODE_EXTRA_CA_CERTS NODE_TLS_REJECT_UNAUTHORIZED) exit=0
+```
+
 ## 부록 B. systemd 서비스 파일 검증
 
 임시 폴더에 서비스 파일 초안을 만들어 `systemd-analyze verify`만 했다(설치하지 않음).
@@ -952,6 +1080,19 @@ exit=0
 | P2-10 | `etc/tls/ca.crt`를 owner가 못 읽음 | 2.2(`share/ca.crt`), 5.8 WSL 신뢰, owner-cert.md 4단계(node 예제 삭제) | 권한 대조 |
 | P2-11 | GitHub API http 허용, 시스템 push는 SSH | 5.1 E2·E3, O-10, W4·W5 | 코드 대조 |
 | 추가 | 비밀 가져오기 실패 시 새로 만들지 않기, 중단 전 준비, 백업 시점, 두 Runner 동시 실행, native fetch `{ca}` 무효, Docker Desktop 늦은 기동, oneshot active의 뜻 | 2.6, 6.1, 4.3, 5.5, 3.3 「알아 둘 한계」, O-13 | — |
+
+### 2차 리뷰(2026-11-28) 대응
+
+| # | 리뷰2 지적 | 반영한 곳 | 확인 |
+| --- | --- | --- | --- |
+| P1-1 | 시작 시간 초과·중단 때 래퍼가 정리 못 함 | 3.2(시도 표식 `RuntimeDirectory` + `ExecStopPost=after-start`, `$SERVICE_RESULT`로 판정), 2.4·3.3, T-2 | 사용자 transient 유닛 7가지(A-3). 실제 compose는 T-2 |
+| P1-2 | node 안에서 `NODE_EXTRA_CA_CERTS`를 지워도 신뢰 유지 | 5.5(production 시작 거부, 서비스 `UnsetEnvironment`, preflight), 4.1, W4, T-9 | 리뷰2 실측 인용, 서비스 파일 verify |
+| P1-3 | CA 교체가 새 인증서 거부·Windows 새 CA까지 삭제 | 5.9(`replace-ca` 분리, 두 CA를 잠깐 함께 신뢰, 실제 접속 확인 뒤 옛 CA를 **지문 하나로** 삭제, 사고 때 순서), owner-cert.md 3-3·7, T-12 | 지문 삭제 칸 모의 시험 3가지(A-3) |
+| P1-4 | 서비스 파일만으론 옛 Runner 코드 복구 불가 | 6.1 3-1(옛 커밋 소스·운영 의존성·옛 node·고친 서비스 파일·MANIFEST 복구본, 새 판은 별도 worktree에서 실행, 복구본 점검 실패 시 `--activate` 거부), 되돌리기 3·4, O-12 조건, T-13 | 설계(구현 W3) |
+| P2-5 | 오프라인 복사 목록에 `bin/npm`·`npx` 없음 | 2.3(부분 복사 방식 삭제, 같은 공식 tarball 파일로만), T-10 | 설계 |
+| P2-6 | 갱신 때 CA 남은 기간 미확인 | owner-cert.md 6단계(`-checkend 34300800`, 폴더 만들기 전 거부), 5.9 `renew-cert`(CA 300일)·certcheck(먼저 끝나는 날), T-11·T-19 | 만료 5일 CA로 거부 확인(A-3) |
+| 결정 조건 | O-10~O-13에 승인·보관 조건 | 7장 「O-10~O-13은 추천을 고르는 것만으로 승인되지 않는다」 | — |
+
 
 ## 용어
 
