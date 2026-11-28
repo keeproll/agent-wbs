@@ -44,7 +44,8 @@ test('최초 설치부터 실제 데이터: 빈 DB → 설정·로그인 → 등
       const row = page.locator('.gtr').filter({ has: page.locator('span.mono', { hasText: model }) });
       await expect(row).toHaveCount(1);
       const allow = row.getByRole('button', { name: '허용', exact: true });
-      if (await allow.count()) await allow.click();
+      await expect(allow).toHaveCount(1);
+      await allow.click();
     }
     const models = page.locator('section.card').filter({ has: page.getByRole('heading', { name: 'Agent 실행 정책 — 모델 · Effort' }) });
     await models.getByRole('button', { name: '저장', exact: true }).first().click();
@@ -86,7 +87,7 @@ test('최초 설치부터 실제 데이터: 빈 DB → 설정·로그인 → 등
   await test.step('G§12-6 · UAT-EXEC-01/04/05/06 · 실제 Runner 시도 실행·증거 수집·QA 실패·등급 상향', async () => {
     await page.goto('/exec/TASK-0001');
     await page.getByRole('button', { name: 'Claude 개발 실행 요청', exact: true }).click();
-    await expect.poll(async () => (await h.counts()).attempts).toBe(0);
+    await expect.poll(h.queuedAttempts).toBe(1);
     expect(await h.attempt()).toBe('dev');
     expect(await h.attempt()).toBe('qa');
     await page.reload();
@@ -104,8 +105,7 @@ test('최초 설치부터 실제 데이터: 빈 DB → 설정·로그인 → 등
 
   await test.step('UAT-GATE-01/02 · UAT-CI-02 · ①·②와 실제 fake GitHub 병합 뒤에만 완료', async () => {
     expect((await read<{ lifecycleStatus: string }>(page, 'tasks/TASK-0001')).lifecycleStatus).toBe('gate');
-    const gate = await read(page, 'tasks/TASK-0001/gate');
-    expect(await h.integrate(), JSON.stringify(gate)).toBe('merged');
+    expect(await h.integrate()).toBe('merged');
     await expect.poll(async () => (await read<{ lifecycleStatus: string }>(page, 'tasks/TASK-0001')).lifecycleStatus).toBe('done');
     await page.goto('/ci');
     await expect(page.getByRole('heading', { level: 1, name: '빌드 · 통합' })).toBeVisible();
@@ -123,7 +123,8 @@ test('최초 설치부터 실제 데이터: 빈 DB → 설정·로그인 → 등
     await form.getByRole('button', { name: '보고서 생성', exact: true }).click();
     const doc = page.getByRole('article');
     await expect(doc).toContainText('인수 결과 파일 구현');
-    await expect(doc.locator('.rpt-kpi').first()).toContainText('1건');
+    await expect(doc.locator('.rpt-kpi').first().locator('.rpt-kv')).toHaveText('1건');
+    await expect(doc.locator('.rpt-kpi').first().locator('.rpt-ks')).toHaveText('누적 1 / 2건');
     const id = new URL(page.url()).pathname.split('/').at(-1) ?? '';
     const report = await read<{ snapshot: { summary: { doneCount: number; taskCount: number } } }>(page, `reports/${id}`);
     expect(report.snapshot.summary).toMatchObject({ doneCount: 1, taskCount: 2 });
@@ -134,7 +135,8 @@ test('최초 설치부터 실제 데이터: 빈 DB → 설정·로그인 → 등
     await pdf.saveAs(h.output('report.pdf'));
     await page.getByRole('group', { name: '보고서 보기' }).getByRole('button', { name: '보고용 (요약)', exact: true }).click();
     await expect(doc.getByRole('heading', { name: '요약', exact: true })).toBeVisible();
-    await expect(doc.locator('.rpt-kpi').first()).toContainText('1건');
+    await expect(doc.locator('.rpt-kpi').first().locator('.rpt-kv')).toHaveText('1건');
+    await expect(doc.locator('.rpt-kpi').first().locator('.rpt-ks')).toHaveText('누적 1 / 2건');
     await page.screenshot({ path: h.output('first-run-report.png'), fullPage: true });
     expect((await h.counts()).reports).toBe(1);
   });
@@ -157,6 +159,8 @@ test('최초 설치부터 실제 데이터: 빈 DB → 설정·로그인 → 등
     });
     await page.goto(`/change/${cp.cpKey}`);
     await expect(page.getByRole('region', { name: '영향 분석' })).toContainText(free.taskKey);
+    const stillBlocked = page.getByRole('region', { name: '영향 분석' }).locator('.gtr[data-unblocked="false"]').filter({ hasText: blocked.taskKey });
+    await expect(stillBlocked).toContainText(`계속 차단 — 남은 선행 ${remaining.taskKey} (FS, 계획 중)`);
     let version = cp.updatedAt;
     for (const action of ['submit', 'approve', 'apply']) {
       const preview = await read<{ previewHash: string }>(page, `proposals/${cp.id}/preview`);

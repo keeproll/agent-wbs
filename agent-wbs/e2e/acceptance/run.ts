@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:net';
 import { homedir } from 'node:os';
@@ -10,14 +10,14 @@ import { join, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { setTimeout } from 'node:timers/promises';
 import { writeCoverage } from './coverage.ts';
+import { acceptanceOutput } from './output.ts';
 
 const root = resolve(import.meta.dirname, '../..');
 const web = join(root, 'apps/web');
 const args = process.argv.slice(2);
 const name = `awbs-m801-${randomBytes(4).toString('hex')}`;
-const archive = join(homedir(), '.orca/bots/agentwbs/archive/2026-11-28/M8-01');
-const out = process.env.AWBS_ACCEPTANCE_OUT ?? (args.length ? join(archive, 'partial', name) : archive);
-mkdirSync(out, { recursive: true });
+const out = acceptanceOutput(process.env.AWBS_ACCEPTANCE_OUT);
+console.log(`인수 시험 결과: ${out}`);
 const supplements = writeCoverage(out).map(path => path.replace(/^agent-wbs\//, ''));
 if (args.length === 0) assert(existsSync(process.env.AWBS_BASELINE_DIR ?? join(homedir(), '.cache/agent-wbs-baseline')), '프로토타입 비교 기준 이미지가 없습니다. AWBS_BASELINE_DIR을 확인하세요.');
 const password = randomBytes(24).toString('base64url');

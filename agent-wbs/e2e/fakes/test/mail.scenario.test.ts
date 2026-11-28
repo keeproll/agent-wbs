@@ -625,16 +625,26 @@ describe('리뷰 지적 회귀(fix2)', () => {
     const target = await recipient('lead@example.com');
     const id = (await lead('POST', `/api/settings/mail/recipients/${target.id}/test`)).body.ids[0] as string;
     smtp.mode = 'temp_fail';
-    // 서버가 본문을 받고 3초 뒤에 451로 거부한다(느린 서버).
-    smtp.onMessage = async () => { await new Promise((r) => setTimeout(r, 3000)); };
-    try { await deliverMail(pool, epoch, { timeoutMs: 15000 }); }
-    finally { smtp.onMessage = null; smtp.mode = 'accept'; }
-    const row = (await owner.query<{ state: string; afterStart: number; remaining: number }>(
-      `select state,extract(epoch from (next_at - sent_at))::float8 "afterStart",extract(epoch from (next_at - clock_timestamp()))::float8 remaining from mail_outbox where id=$1`, [id])).rows[0];
+    const entered = Promise.withResolvers<undefined>(), release = Promise.withResolvers<undefined>();
+    smtp.onMessage = async () => {
+      // 이전 시험의 다른 대기 메일은 막지 않고, 이번 발송이 본문을 보낸 때만 멈춘다.
+      if ((await owner.query<{ state: string }>('select state from mail_outbox where id=$1', [id])).rows[0]?.state !== 'sending') return;
+      entered.resolve(undefined); await release.promise;
+    };
+    const sending = deliverMail(pool, epoch, { timeoutMs: 15000 });
+    try {
+      await Promise.race([entered.promise, sending.then(() => { throw new Error('SMTP가 본문을 받기 전에 발송이 끝났습니다.'); })]);
+      expect((await owner.query<{ state: string }>('select state from mail_outbox where id=$1', [id])).rows[0]?.state).toBe('sending');
+    } finally {
+      release.resolve(undefined);
+      try { await sending; } finally { smtp.onMessage = null; smtp.mode = 'accept'; }
+    }
+    // 결과 기록과 다음 시각을 같은 DB 시계로 대조한다. 벽시계 역행·PC 부하에 따른 경과 시간은 판정에 쓰지 않는다.
+    const row = (await owner.query<{ state: string; afterFailure: number }>(
+      `select o.state,extract(epoch from (o.next_at-l.at))::float8 "afterFailure"
+       from mail_outbox o join mail_log l on l.outbox=o.id and l.state='retry_wait' where o.id=$1`, [id])).rows[0];
     expect(row?.state).toBe('retry_wait');
-    // 호출 시작이 아니라 실패를 안 뒤부터 15분: 시작 기준이면 900초, 지금은 900초 + 서버 대기(약 3초)
-    expect(row?.afterStart).toBeGreaterThan(902);
-    expect(row?.remaining).toBeGreaterThan(895);
+    expect(row?.afterFailure).toBe(900);
     await deliverMail(pool, epoch, { now: '2099-01-01T00:00:00.000Z', timeoutMs: TIMEOUT });
   }, 30_000);
 });

@@ -138,6 +138,7 @@ export async function startAcceptance() {
       (select count(*)::int from task_attempts) attempts,(select count(*)::int from reports) reports`)).rows[0];
       assert(row); return row;
     },
+    queuedAttempts: async () => (await owner.query<{ n: number }>("select count(*)::int n from runner_jobs where kind='attempt' and state='queued'")).rows[0]?.n,
     connect: async () => {
       await fake.initialize();
       await resources.reportHost({ ...identity, cpu: 'fake', cores: 20, memGB: 32, swapGB: 0, diskFreeGB: 100, os: 'fake' });
