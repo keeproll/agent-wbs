@@ -119,7 +119,7 @@ test('200 Task·24세션: 중복 요청·32개 동시 claim·시작 재전송에
   expect(repeated.every(r => r.body.attemptId === a.attemptId)).toBe(true);
   expect(await h.runner.startNext(undefined, 48)).toBeUndefined();
   expect(await h.rows('select count(*)::int n from task_attempts')).toEqual([{ n: 24 }]);
-  await measure('동시 부하');
+  await measure('24세션 보유 상태');
 });
 
 test('DB 강제 재시작: 실행·보유를 보존하고 영속 outbox 결과를 재전송해도 후속 QA는 하나다', async () => {
@@ -206,17 +206,22 @@ test('Runner SIGKILL: 자손 종료 증거 전 재개 금지·24개 결과 모�
     await h.watchDisconnected();
     await noInventedResults('unknown');
     expect(await h.rows("select count(*)::int n,sum(slots)::int slots from execution_holds where slot_state='unconfirmed' and closed_at is null")).toEqual([{ n: 24, slots: 24 }]);
+    await Promise.all(running.filter(r => r !== a).map(r => release(r)));
+    expect(await h.rows("select count(*)::int n,sum(slots)::int slots from execution_holds where closed_at is null")).toEqual([{ n: 1, slots: 1 }]);
     const detail = await h.lead('GET', `/api/tasks/${a.job.payload.taskKey}`);
-    expect((await h.lead('POST', `/api/attempts/${a.attemptId}/resume`, { updatedAt: detail.body.updatedAt })).status).toBe(409);
+    const refused = await h.lead('POST', `/api/attempts/${a.attemptId}/resume`, { updatedAt: detail.body.updatedAt });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toMatchObject({ code: 'CLAIM_REJECTED', details: { reasons: expect.arrayContaining(['종료를 확인하지 못한 보유가 있습니다.']) } });
+    expect(refused.body.error.details.reasons).not.toContain('전체 실행 상한 또는 Runner 한도를 넘습니다.');
     const proof = await launches.reconcile({ job: a.job.id, ...identity, processGroup: record.pgid, cgroup: null });
     expect(proof).toMatchObject({ kind: 'group_empty', processGroup: record.pgid }); assert(proof);
     expect(await processGroupEmpty(record.pgid)).toBe(true);
     await release(a, record.pgid); await launches.complete(record.launchId, proof);
-    await Promise.all(running.filter(r => r !== a).map(r => release(r)));
     expect(await h.rows('select count(*)::int n from execution_holds where closed_at is null')).toEqual([{ n: 0 }]);
     await expect(h.runner.api('reportAttemptResult', { ...write(), params: { attemptId: a.attemptId }, body: { fence: a.job.fence + 1, summary: '잘못된 번호표', changedFiles: [], evidence: [] } })).rejects.toMatchObject({ status: 409, error: { code: 'LEASE_LOST' } });
     expect(await h.rows("select count(*)::int n from task_history where kind='중단 뒤 결과 수신'")).toEqual([{ n: 0 }]);
-    await expect(h.runner.api('reportAttemptResult', { ...write(), params: { attemptId: a.attemptId }, body: { fence: a.job.fence, summary: '낡은 결과', changedFiles: [], evidence: [] } })).rejects.toMatchObject({ status: 409, error: { code: 'ATTEMPT_CLOSED' } });
+    const late = { ...write(), params: { attemptId: a.attemptId }, body: { fence: a.job.fence, summary: '낡은 결과', changedFiles: [], evidence: [] } };
+    for (let i = 0; i < 2; i++) await expect(h.runner.api('reportAttemptResult', late)).rejects.toMatchObject({ status: 409, error: { code: 'ATTEMPT_CLOSED' } });
     expect(await h.rows("select ref from task_history where kind='중단 뒤 결과 수신'")).toEqual([{ ref: { attemptId: a.attemptId, summary: '낡은 결과' } }]);
     await noInventedResults('unknown');
     const current = await h.lead('GET', `/api/tasks/${a.job.payload.taskKey}`);

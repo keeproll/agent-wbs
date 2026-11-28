@@ -290,9 +290,15 @@ test('중단 뒤 결과는 소유자·fence를 확인하고 요약만 남긴 뒤
   expect((await post(`attempts/${a.attempt}/result`, body, { ...headers(), authorization: `Bearer ${other}` })).json()).toMatchObject({ error: { code: 'LEASE_LOST' } });
   expect((await post(`attempts/${a.attempt}/result`, { ...body, fence: a.fence + 1 })).json()).toMatchObject({ error: { code: 'LEASE_LOST' } });
   expect((await owner.query("select count(*)::int n from task_history where kind='중단 뒤 결과 수신'")).rows).toEqual([{ n: 0 }]);
-  const late = await post(`attempts/${a.attempt}/result`, body);
+  const lateHeaders = headers();
+  const late = await post(`attempts/${a.attempt}/result`, body, lateHeaders);
   expect(late.statusCode).toBe(409);
   expect(late.json()).toMatchObject({ error: { code: 'ATTEMPT_CLOSED' } });
+  const replay = await post(`attempts/${a.attempt}/result`, body, lateHeaders);
+  expect(replay.statusCode).toBe(409);
+  expect(replay.body).toBe(late.body);
+  expect(replay.headers['idempotency-replayed']).toBe('true');
+  expect((await post(`attempts/${a.attempt}/result`, { ...body, summary: '다른 요약' }, lateHeaders)).json()).toMatchObject({ error: { code: 'IDEMPOTENCY_CONFLICT' } });
   expect((await owner.query("select ref from task_history where kind='중단 뒤 결과 수신'")).rows).toEqual([{ ref: { attemptId: a.attempt, summary: '늦게 도착한 결과' } }]);
   expect((await owner.query('select status,summary,tokens from task_attempts where id=$1', [a.attempt])).rows).toEqual([{ status: 'interrupted', summary: null, tokens: null }]);
   expect((await owner.query('select count(*)::int n from verifications')).rows).toEqual([{ n: 0 }]);
