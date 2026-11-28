@@ -31,9 +31,24 @@ log() { printf '[backup %s] %s\n' "$(date -u +%H:%M:%SZ)" "$*" >&2; }
 psql_db() { docker exec -i "$pg" psql -X -q -v ON_ERROR_STOP=1 -U awbs_owner -d "$db" "$@"; }
 
 if [[ "$(docker inspect -f '{{.State.Running}}' "$pg" 2>/dev/null)" != "true" ]]; then
-  echo "DB 컨테이너 $pg 가 켜져 있지 않습니다. 먼저 켜세요: docker compose -p $AWBS_STACK -f agent-wbs/deploy/compose.prod.yaml up -d --wait postgres" >&2
+  echo "DB 컨테이너 $pg 가 켜져 있지 않습니다. 먼저 켜세요: docker compose -p $AWBS_STACK -f $here/compose.prod.yaml --env-file ${home}/deploy.env up -d --wait postgres" >&2
   exit 1
 fi
+
+# 지금 떠 있는 컨테이너가 실제로 쓰는 이미지(이름과 ID)를 기록한다. 복원은 이 기록으로 같은 이미지를 고른다(restore.sh).
+# 왜 컨테이너에서 읽나: 꼬리표는 나중에 다른 이미지를 가리키도록 바뀔 수 있다. 컨테이너의 이미지 ID는 바뀌지 않는다.
+container_image() { # $1 컨테이너 → "이름 ID"
+  docker inspect -f '{{.Config.Image}} {{.Image}}' "$1" 2>/dev/null || true
+}
+read -r image image_id <<<"$(container_image "$AWBS_STACK-worker")"
+[[ -n "${image:-}" ]] || read -r image image_id <<<"$(container_image "$AWBS_STACK-api")"
+read -r web_image web_image_id <<<"$(container_image "$AWBS_STACK-web")"
+if [[ -z "${image:-}" || -z "${web_image:-}" ]]; then
+  echo "api·worker·web 컨테이너가 없어 어떤 이미지로 돌던 데이터인지 알 수 없습니다. 운영 구성을 띄운 상태에서 백업하세요." >&2
+  exit 1
+fi
+export AWBS_IMAGE_TAG="${image##*:}"
+[[ "${web_image##*:}" == "$AWBS_IMAGE_TAG" ]] || { echo "app($image)과 web($web_image) 꼬리표가 다릅니다. 같은 꼬리표로 띄운 뒤 백업하세요." >&2; exit 1; }
 
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 out="$home/backups/$stamp"
@@ -44,7 +59,7 @@ mapfile -t was_running < <("${compose[@]}" ps --status running --services 2>/dev
 restart() {
   if ((${#was_running[@]})); then
     log "멈췄던 서비스를 다시 켭니다: ${was_running[*]}"
-    "${compose[@]}" start "${was_running[@]}" >&2 || log "다시 켜기 실패. 직접 실행: docker compose -p $AWBS_STACK -f agent-wbs/deploy/compose.prod.yaml up -d"
+    "${compose[@]}" start "${was_running[@]}" >&2 || log "다시 켜기 실패. 직접 실행: AWBS_IMAGE_TAG=$AWBS_IMAGE_TAG docker compose -p $AWBS_STACK -f $here/compose.prod.yaml up -d --wait"
   fi
 }
 trap restart EXIT
@@ -68,19 +83,21 @@ docker exec "$pg" pg_dumpall -U awbs_owner --roles-only --no-role-passwords > "$
 # 덤프를 실제로 읽을 수 있는지 바로 확인한다. 왜: 깨진 백업은 복원할 때에야 알게 되면 늦다.
 docker exec -i "$pg" pg_restore --list < "$out/db.dump" > /dev/null
 
-image="$(docker inspect -f '{{.Config.Image}}' "$AWBS_STACK-worker" 2>/dev/null || true)"
-[[ -n "$image" ]] || image="awbs-app:${AWBS_IMAGE_TAG:-local}"
 log "데이터 파일 볼륨($AWBS_STACK-data)"
 docker run --rm --network none --user node --entrypoint tar \
-  -v "$AWBS_STACK-data:/home/node/.agentwbs:ro" "$image" -C /home/node/.agentwbs -cf - . > "$out/data.tar"
+  -v "$AWBS_STACK-data:/home/node/.agentwbs:ro" "$image_id" -C /home/node/.agentwbs -cf - . > "$out/data.tar"
 
 {
   echo "created_utc=$stamp"
   echo "stack=$AWBS_STACK"
   echo "database=$db"
   echo "image=$image"
-  echo "image_id=$(docker image inspect -f '{{.Id}}' "$image" 2>/dev/null || echo unknown)"
-  echo "git_commit=$(git -C "$here" rev-parse HEAD 2>/dev/null || echo unknown)"
+  echo "image_id=$image_id"
+  echo "web_image=$web_image"
+  echo "web_image_id=$web_image_id"
+  echo "image_tag=$AWBS_IMAGE_TAG"
+  commit="$(docker image inspect -f '{{index .Config.Labels "org.agentwbs.commit"}}' "$image_id" 2>/dev/null || true)"
+  echo "git_commit=${commit:-unknown}"
   echo "server_version=$(psql_db -tAc 'show server_version')"
   echo "track_commit_timestamp=$(psql_db -tAc 'show track_commit_timestamp')"
   echo "xid_at_backup=$xid"

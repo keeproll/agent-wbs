@@ -7,6 +7,12 @@
 #   운영 이름(awbs-prod)으로 되살려야 한다면 옛 볼륨을 owner가 직접 지운 뒤 실행한다(docs/ops/operations.md 「복원」).
 # 비밀 파일은 백업에 없다. 대상 AWBS_PROD_HOME/secrets의 secret-key가 백업한 쪽과 같아야 암호화한 토큰을 열 수 있다.
 #
+# 이미지 규칙: 백업 manifest에 적힌 이미지(꼬리표와 ID)로만 복원한다. 이미지를 새로 만들지 않는다.
+#   - AWBS_IMAGE_TAG를 주지 않으면 manifest의 image_tag를 쓰고, 이 PC의 이미지 ID가 manifest와 같아야 한다.
+#   - AWBS_IMAGE_TAG를 직접 주면 그 꼬리표를 쓴다(예: 같은 커밋을 다시 빌드해 ID가 달라진 경우). owner가 판단한 값이다.
+#   - 이미지가 없거나 ID가 다르면 아무것도 만들기 전에 멈춘다.
+#   왜: DB를 백업 시점으로 되돌리면서 새 프로그램을 띄우면, 새 프로그램이 새 마이그레이션을 실행해 「되돌림」이 깨진다.
+#
 # 순서와 이유
 # 1. 파일 sha256을 manifest와 대조한다. 왜: 옮기다 깨진 파일로 복원하지 않는다.
 # 2. 빈 DB 서버를 처음 띄웠다가 멈추고, 트랜잭션 번호의 epoch(위쪽 32비트)를 백업 쪽보다 1 크게 올린다(pg_resetwal -e).
@@ -34,6 +40,29 @@ export AWBS_DB_NAME="${AWBS_DB_NAME:-$db}"
 if [[ "$AWBS_DB_NAME" != "$db" ]]; then echo "AWBS_DB_NAME($AWBS_DB_NAME)이 백업의 DB 이름($db)과 다릅니다." >&2; exit 2; fi
 epoch="$(field xid_epoch)"
 [[ "$epoch" =~ ^[0-9]+$ ]] || { echo "manifest의 xid_epoch가 없습니다." >&2; exit 2; }
+
+manifest_tag="$(field image_tag)"
+[[ -n "$manifest_tag" ]] || manifest_tag="$(field image | sed -n 's/^awbs-app://p')"
+if [[ -n "${AWBS_IMAGE_TAG:-}" ]]; then
+  tag="$AWBS_IMAGE_TAG"; explicit=1
+else
+  tag="$manifest_tag"; explicit=0
+fi
+[[ "$tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || { echo "복원에 쓸 이미지 꼬리표를 정하지 못했습니다(manifest image_tag 없음). AWBS_IMAGE_TAG로 정하세요." >&2; exit 2; }
+for kind in app web; do
+  id="$(docker image inspect -f '{{.Id}}' "awbs-$kind:$tag" 2>/dev/null || true)"
+  if [[ -z "$id" ]]; then
+    echo "이미지 awbs-$kind:$tag 가 이 PC에 없습니다. 백업한 커밋($(field git_commit))으로 build.sh를 실행해 준비한 뒤, AWBS_IMAGE_TAG=<꼬리표>로 다시 실행하세요." >&2
+    exit 6
+  fi
+  want="$(field "$([[ $kind == app ]] && echo image_id || echo web_image_id)")"
+  if [[ $explicit == 0 && -n "$want" && "$id" != "$want" ]]; then
+    echo "awbs-$kind:$tag 의 이미지 ID가 백업 때와 다릅니다(지금 $id, 백업 $want). 쓸 이미지를 확인한 뒤 AWBS_IMAGE_TAG=<꼬리표>로 직접 정하세요." >&2
+    exit 6
+  fi
+done
+export AWBS_IMAGE_TAG="$tag"
+log "이미지: awbs-app:$tag, awbs-web:$tag ($([[ $explicit == 1 ]] && echo '직접 정함' || echo 'manifest와 ID 같음'))"
 
 log "파일 sha256 대조"
 (cd "$backup" && sed -n 's/^sha256 //p' manifest.txt | sha256sum --check --quiet)
@@ -90,5 +119,8 @@ log "데이터 파일 되살리기($AWBS_STACK-data)"
 "${compose[@]}" run --rm --no-deps -T --entrypoint tar worker -C /home/node/.agentwbs -xf - < "$backup/data.tar"
 chmod 0600 "$backup/fingerprint.restored.tsv"
 
-log "복원 완료. 앱 켜기:"
-echo "AWBS_STACK=$AWBS_STACK docker compose -p $AWBS_STACK -f agent-wbs/deploy/compose.prod.yaml up -d --wait" >&2
+log "복원 완료. 앱 켜기(이 명령 그대로):"
+echo "AWBS_STACK=$AWBS_STACK AWBS_IMAGE_TAG=$tag AWBS_DB_NAME=$db AWBS_PROD_HOME=${AWBS_PROD_HOME:-$HOME/.agentwbs/prod} docker compose -p $AWBS_STACK -f $here/compose.prod.yaml up -d --wait" >&2
+if [[ "$AWBS_STACK" == awbs-prod ]]; then
+  echo "운영 이름으로 되살렸다면 켜기 전에: bash $here/set-image.sh $tag" >&2
+fi

@@ -10,21 +10,24 @@
 #   AWBS_PROD_HOME  비밀 파일·백업을 두는 폴더. 기본 $HOME/.agentwbs/prod (deploy/prod-init.sh가 만든다)
 #   AWBS_WEB_PORT   화면 주소의 포트. 기본 5173. 127.0.0.1에만 연다.
 #   AWBS_DB_NAME    DB 이름. 기본 awbs
-#   AWBS_IMAGE_TAG  이미지 꼬리표. 기본 local. 되돌리기는 커밋 해시로 다시 빌드한다(architecture §6.3).
+#   AWBS_IMAGE_TAG  이미지 꼬리표. **꼭 정한다(기본값 없음).** 보통 $AWBS_PROD_HOME/deploy.env에 적어 두고 --env-file로 넘긴다.
+#
+# 이 파일은 이미지를 만들지 않는다(build 항목 없음, pull_policy: never).
+#   왜: 복원·되돌리기 때 「백업한 그 이미지」 대신 지금 소스로 새 이미지를 몰래 만들면 DB와 프로그램 버전이 어긋난다.
+#   이미지는 deploy/build.sh로 따로 만들고, 쓸 꼬리표는 deploy/set-image.sh로 정한다. 없는 꼬리표면 기동이 멈춘다.
+# DB 로그인은 둘이다(data-model §6.1).
+#   관리자 비밀(db_password)은 postgres·migrate에만 붙인다. api·worker에는 앱 로그인 비밀(db_app_password)만 붙인다.
 name: ${AWBS_STACK:-awbs-prod}
 
 x-app: &app
-  image: awbs-app:${AWBS_IMAGE_TAG:-local}
-  build:
-    context: ..
-    dockerfile: deploy/Dockerfile
-    target: app
+  image: awbs-app:${AWBS_IMAGE_TAG:?AWBS_IMAGE_TAG(이미지 꼬리표)를 정하세요. docs/ops/operations.md 4장}
+  pull_policy: never
   environment: &app-env
     AWBS_DB_HOST: postgres
     AWBS_DB_NAME: ${AWBS_DB_NAME:-awbs}
     LOG_LEVEL: ${LOG_LEVEL:-info}
   secrets:
-    - db_password
+    - db_app_password
     - secret_key
   volumes:
     - awbs-data:/home/node/.agentwbs
@@ -63,10 +66,14 @@ services:
     stop_grace_period: 30s
 
   # 한 번만 돌고 끝나는 준비 단계: 마이그레이션 + 필수 기본 설정. api·worker는 이것이 성공해야 시작한다.
+  # 관리자 비밀과 앱 로그인 비밀을 함께 받는 유일한 앱 컨테이너다. 끝나면 바로 종료한다.
   migrate:
     <<: *app
     container_name: ${AWBS_STACK:-awbs-prod}-migrate
     command: ['migrate']
+    secrets:
+      - db_password
+      - db_app_password
     restart: 'no'
     networks:
       - net
@@ -79,11 +86,8 @@ services:
   # nginx는 거의 다시 시작하지 않으므로 주인을 맡긴다.
   web:
     container_name: ${AWBS_STACK:-awbs-prod}-web
-    image: awbs-web:${AWBS_IMAGE_TAG:-local}
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
-      target: web
+    image: awbs-web:${AWBS_IMAGE_TAG:?AWBS_IMAGE_TAG(이미지 꼬리표)를 정하세요}
+    pull_policy: never
     ports:
       - '127.0.0.1:${AWBS_WEB_PORT:-5173}:8080'
     networks:
@@ -134,8 +138,12 @@ services:
         condition: service_completed_successfully
 
 secrets:
+  # 관리자(awbs_owner, superuser) 비밀번호. postgres·migrate만 쓴다.
   db_password:
     file: ${AWBS_PROD_HOME:-${HOME}/.agentwbs/prod}/secrets/db-password
+  # 앱 로그인(awbs_app_login) 비밀번호. migrate가 이 값으로 로그인을 맞추고, api·worker가 이 값으로 접속한다.
+  db_app_password:
+    file: ${AWBS_PROD_HOME:-${HOME}/.agentwbs/prod}/secrets/db-app-password
   secret_key:
     file: ${AWBS_PROD_HOME:-${HOME}/.agentwbs/prod}/secrets/secret-key
 
