@@ -11,6 +11,7 @@ import { resolveMovedBaselines } from '../ci/decisions.ts';
 import { RunnerRepository } from '../runner/repository.ts';
 import { enqueueIntegration } from '../execution/gate.ts';
 import { reportGithubStatus, type GithubReport } from './github.ts';
+import { installGithubCredentials } from './github-credential.ts';
 
 const body = <T>(ctx: Ctx) => ctx.request.body as T;
 const param = (ctx: Ctx, name: string) => (ctx.request.params as Record<string, string>)[name] ?? '';
@@ -21,6 +22,7 @@ const param = (ctx: Ctx, name: string) => (ctx.request.params as Record<string, 
  * 모든 Runner 경로에 붙이는 시험용 처리기와 경로가 겹치기 때문이다.
  */
 export function installProjectRunner(app: FastifyInstance, pool: Pool): void {
+  installGithubCredentials(app);
   void app.register(async (scope) => {
     installProjectErrors(scope, actionOf);
     routeOf(scope, pool, 'reportGithubStatus', async (ctx) => {

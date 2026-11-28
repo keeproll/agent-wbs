@@ -1,7 +1,7 @@
 import { fromDb, OBSERVATION_GRADE } from '@awbs/db';
 import { concurrency, memoryPressure, parallelWidth, sumHolds, type ObservationKey } from '@awbs/shared';
 import { RunnerRepository, required } from './repository.ts';
-import { caps, wireCaps } from './service.ts';
+import { caps, githubWriteBlocked, wireCaps } from './service.ts';
 
 export async function runnerState(repo: RunnerRepository) {
   const host = await repo.host();
@@ -38,6 +38,7 @@ export async function runnerState(repo: RunnerRepository) {
   }
   const resources = conc?.resources as { cpuPct: number; memFreeGB: number; swapGB: number } | undefined;
   const authority = await repo.authority();
+  const githubBlocked = githubWriteBlocked(await repo.githubSettings(), at);
   return {
     connection: { online: Boolean(session && !session.ended_at && at.getTime()-session.last_heartbeat_at.getTime() < app.heartbeat_seconds*app.heartbeat_misses*1000),
       runnerId: session?.runner_id ?? null, version: null, lastHeartbeatAt: session?.last_heartbeat_at ?? null, sessionStartedAt: session?.started_at ?? null },
@@ -54,6 +55,6 @@ export async function runnerState(repo: RunnerRepository) {
     observation:{ budget:cfg?.budget ?? { dev:0,qa:0 },profiles },
     usage:(await repo.allUsage()).map(u=>({ agent:u.agent,remainPct:Number(u.remain_pct),resetAt:u.reset_at,at:u.created_at })),
     gaps:sessions.filter(s=>s.ended_at).slice(-6).reverse().map(s=>({ from:s.ended_at,to:sessions.find(n=>n.started_at>required(s.ended_at))?.started_at ?? null,reason:s.end_reason ?? 'unknown' })),
-    externalWrite:{ state:authority?.state ?? 'blocked',reason:authority?.blocked_reason ?? null },
+    externalWrite:{ state:githubBlocked ? 'blocked' : authority?.state ?? 'blocked',reason:authority?.state === 'blocked' ? authority.blocked_reason : githubBlocked ? 'GitHub 연결과 권한을 다시 확인하세요.' : authority?.blocked_reason ?? null },
   };
 }

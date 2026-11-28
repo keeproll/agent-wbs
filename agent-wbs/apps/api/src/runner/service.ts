@@ -122,6 +122,11 @@ export function externalWriteAllowed(authority: {state:string;host_id:string;gen
   return Boolean(authority && authority.state==='granted' && authority.host_id===host && generation===authority.generation);
 }
 
+export function githubWriteBlocked(github: Awaited<ReturnType<RunnerRepository['githubSettings']>>, now: Date): boolean {
+  return !github || github.status !== 'ok' || !github.scopes || Object.values(github.scopes).includes('missing') ||
+    Boolean(github.expires_at && new Date(github.expires_at) <= now);
+}
+
 /**
  * job이 없으면(설계 계약 반영처럼 job을 만들기 전의 사전 확인, M6-05) 세대 대조 없이 권한·host만 본다.
  * 왜: 아직 만들지 않은 job은 세대가 없다. 만들 job은 지금 세대로 들어가므로 지금 세대와 같다고 본다(M6 통합 병합).
@@ -130,6 +135,9 @@ export async function assertExternal(repo: RunnerRepository, job?: Pick<Job, 'ge
   const authority = await repo.authority();
   const host = await repo.host();
   if (!externalWriteAllowed(authority,host?.host_id,job ? job.generation : authority?.generation)) throw new PlatformError('EXTERNAL_WRITE_BLOCKED', { generation: authority?.generation });
+  if (githubWriteBlocked(await repo.githubSettings(), await repo.now())) {
+    throw new PlatformError('EXTERNAL_WRITE_BLOCKED', { generation: authority?.generation });
+  }
 }
 
 export async function checkedJob(repo: RunnerRepository, id: string, fence: number, principal: string, reconcile = false) {
@@ -163,7 +171,7 @@ export async function claim(repo: RunnerRepository, kinds: string[], capacity: n
         if (capacity === 0 || reasons.length) continue;
       }
       const authority = await repo.authority();
-      if (EXTERNAL_JOBS.includes(candidate.kind) && authority?.state !== 'granted') continue;
+      if (EXTERNAL_JOBS.includes(candidate.kind) && (authority?.state !== 'granted' || githubWriteBlocked(await repo.githubSettings(), await repo.now()))) continue;
       const hold = await repo.hold(candidate.id);
       // 임대를 바꾸기 전에 거부해야 잘못된 후보 하나가 뒤의 작업까지 막지 않는다.
       if (hold && !hold.closed_at && (hold.slot_state !== 'none' || hold.attempt !== null || (hold.fence ?? 0) > candidate.fence)) rejection(['이전 실행 보유의 정리가 필요합니다.']);

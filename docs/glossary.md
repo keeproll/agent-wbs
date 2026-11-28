@@ -47,11 +47,13 @@
 - **`budgetsMs`** — `pipeline.yaml`의 `night` 단계에 둘 수 있는 선택 필드. 주요 API 이름별 응답 시간 p95 기준(ms)이다. main에 고정된 정의에서만 읽는다. → contracts §3.6-3
 - **C.UTF-8** — 문자열 정렬·문자 분류 규칙(로캘)의 하나. 시험 DB를 이 규칙으로 만들어 컨테이너가 달라도 정렬 결과가 같게 한다. → data-model §6
 - **calcVersion** — 일정 계산 결과에 붙는 번호. 프로젝트 변경 이벤트 수라서, 무엇이든 바뀌면 커진다. 화면이 낡은 계산을 알아채는 데 쓴다. → contracts §4.2
+- **canary(검사 표식)** — 누출 시험에만 넣는 가짜 비밀값. 로그·응답·파일에 같은 값이 남으면 시험이 실패한다. → plan/security-review.md
 - **catalog (DB 카탈로그)** — DB가 자기 테이블·열·제약 정보를 담아 두는 시스템 목록. SQL 계약을 임시 DB에 적용한 뒤 이것을 읽어 구조를 뽑는다.
 - **`causeCandidates`** — 야간 점검 실패의 원인 후보 커밋 목록. 서버가 병합 기록으로 커밋을 Task에 잇는다. → contracts §3.6-2
 - **cgroup** — 리눅스가 프로세스 묶음의 CPU·메모리 사용을 재고 제한하는 기능. → architecture §5
 - **`cgroup.kill`** — cgroup 안의 모든 프로세스를 커널이 한 번에 끝내게 하는 파일. 1을 쓰면 계정과 상관없이 그 묶음이 모두 끝난다. → architecture §5 `exec`
 - **CHECK 제약** — 행을 쓸 때 값이 조건을 만족하는지 DB가 검사하는 제약. 예: `lo<=est<=hi`.
+- **child logger(자식 로거)** — 기존 로그 도구에 고정 필드를 붙인 기록 도구. 고정 필드도 비밀값 검사에 포함한다. → plan/security-review.md
 - **checkout** — git 저장소의 특정 커밋 내용을 작업 폴더에 꺼내 놓은 것.
 - **Chromium** — Chrome의 오픈소스 브라우저. 보고서 HTML을 PDF로 인쇄하는 데 쓴다.
 - **CI** — 빌드·테스트를 자동으로 돌리는 과정. 이 프로젝트에서는 ①~④ 4단계. → architecture §5
@@ -176,10 +178,12 @@
 - **Mermaid** — 텍스트로 흐름도·순서도를 그리는 문법. GitHub가 그림으로 보여 준다.
 - **middleware** — 요청이 실제 처리 코드에 닿기 전에 공통으로 거치는 코드(인증·epoch 검사 등).
 - **migration (마이그레이션)** — DB 테이블 구조를 바꾸는 SQL 파일. 순서대로 한 번씩 적용한다.
+- **MIME** — 메일의 제목·서식 없는 본문·HTML 본문·첨부를 구분하는 표준 형식. → plan/security-review.md
 - **`MigrationGapError`** — 적용 누락 검사에서 journal의 마이그레이션이 DB 기록에 빠져 있을 때 나는 오류. `db:migrate`가 여기서 멈춘다. → data-model §6
 - **Mock** — 가짜 데이터로 움직이는 시안. 프로토타입(P)이 Mock이다. 제품 규칙의 근거로는 G가 우선한다.
 - **Multi Format Schema Object** — AsyncAPI에서 메시지 스키마의 종류와 내용을 함께 적는 객체. Runner는 그 안의 JSON Schema만 해석한다(owner Q-14 A).
 - **multipart** — 파일을 HTTP로 올릴 때 쓰는 요청 형식. → contracts §3.1
+- **mutation test(변이 검사)** — 안전장치를 잠깐 제거한 뒤 시험이 실제로 실패하는지 확인하는 방법. 확인 뒤 원래 코드를 복원한다. → plan/security-review.md
 - **Neo4j** — 노드와 관계로 데이터를 저장하는 그래프 데이터베이스.
 - **Node.js / pnpm** — Node.js는 서버에서 JavaScript·TypeScript를 실행하는 환경, pnpm은 그 패키지 설치 도구.
 - **nodemailer** — Node.js에서 SMTP로 메일을 보내는 라이브러리.
@@ -200,6 +204,7 @@
 - **owner** — 이 프로젝트의 최종 결정권자. → open-questions
 - **P** — 프로토타입. `prototype/uiux/Main.dc.html`.
 - **p95** — 측정값을 작은 순으로 늘어놓았을 때 95% 지점의 값. 「거의 모든 요청이 이 시간 안에 끝난다」는 뜻으로 응답 시간 기준에 쓴다.
+  - M8-02에서는 동작마다 20번 재고 19번째 값으로 판정한다. 한 번의 빠른 응답만으로 통과시키지 않기 위해서다.
 - **parser** — 글로 된 파일(YAML·OpenAPI 등)을 읽어 프로그램이 다룰 구조로 바꾸는 코드.
 - **payload** — 요청이나 job에 실어 보내는 실제 내용.
 - **PC** — 개인용 컴퓨터. 이 문서에서는 Runner와 Agent가 도는 개발 PC(host)를 뜻한다.
@@ -256,6 +261,7 @@
 - **search_path (검색 경로)** — 이름만 쓴 표·함수를 어느 스키마에서 찾을지 정한 목록. 높은 권한 함수는 이것을 고정해 가짜 함수가 끼어들지 못하게 한다. → data-model §6.1
 - **SECURITY DEFINER** — 부르는 사람이 아니라 함수를 만든 역할의 권한으로 실행되는 DB 함수. 초기화·정리 완료처럼 앱이 직접 못 하는 일을 정해진 방법으로만 하게 한다. → data-model §6.1
 - **sealed (봉인 값)** — GitHub 토큰을 Runner 공개키로 잠근 값. 그 Runner의 개인키로만 열 수 있다. 형식은 「봉인 형식 v1」이다. → contracts §6.1
+- **serialization(로그)** — 객체를 로그 한 줄의 문자열로 바꾸는 과정. 로그를 내보내기 직전에 비밀값을 가린다. → plan/security-review.md
 - **seed** — 빈 DB에 처음 넣는 기본 데이터. `system`과 `demo` 두 가지. → data-model §6
 - **semaphore** — 동시에 정해진 개수만 실행되게 막는 번호표 장치. → architecture §5
 - **`serviceDown` (서비스 없음)** — ④ 배포 확인과 자동 복구까지 실패했을 때 보내는 높은 우선순위 알림. 알림 규칙과 무관하게, 전체 알림이 켜져 있으면 보낸다. → data-model §3.7
@@ -263,6 +269,7 @@
 - **SHA-256 / sha256** — 내용으로 256비트 지문(hash)을 만드는 방식. 토큰 저장·파일 무결성 확인에 쓴다.
 - **shell** — 명령줄 문자열을 해석해 실행하는 프로그램(bash 등). 문자열을 이어 붙여 명령을 만들면 입력값이 명령으로 해석될 위험이 있다.
 - **shrink-to-fit** — 쪽보다 넓은 문서를 인쇄할 때 브라우저가 쪽 폭에 맞춰 줄여 찍는 동작. 줄면 글자도 작아진다.
+- **SIGKILL** — 프로세스에 정리할 기회를 주지 않고 즉시 끝내는 운영체제 신호. Runner가 갑자기 죽어도 남은 자손과 보유를 안전하게 정리하는지 시험할 때 쓴다. → milestones M8-02
 - **slice (systemd slice)** — systemd가 프로세스 묶음에 CPU·메모리를 나눠 주는 상위 단위. 사용자 slice 아래에 세션 scope를 만든다.
 - **slot (물리 슬롯)** — PC의 CPU·메모리 같은 실행 자리. 프로그램 실행에 쓸 PC 자리다. 실행 전 예약(`reserved`)과 종료 미확인 보유(`unconfirmed`)도 용량에 포함한다. → data-model §2.5-1
 - **SMTP** — 메일을 보내는 표준 방식(메일 서버). → contracts §4.4

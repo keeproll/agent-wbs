@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createPool } from '@awbs/db';
 import { loadConfig } from '../config.ts';
 import { issueLoginLink, issueRunnerToken, setPassword, revokeRunnerToken } from './credentials.ts';
+import { runnerPublicKey } from './runner-key.ts';
 
 const config = loadConfig(process.env);
 const pool = createPool(config.databaseUrl, { onError: () => undefined });
@@ -25,7 +26,8 @@ try {
     }
     case 'runner-token': {
       if (!runnerId || !publicKeyPath) throw new Error('Runner ID와 공개키 파일 경로가 필요합니다.');
-      process.stdout.write(`${await issueRunnerToken(pool, runnerId, await readFile(publicKeyPath, 'utf8'))}\n`);
+      const publicKey = runnerPublicKey(await readFile(publicKeyPath, 'utf8')).export({ type: 'spki', format: 'pem' });
+      process.stdout.write(`${await issueRunnerToken(pool, runnerId, publicKey)}\n`);
       break;
     }
     case 'revoke-runner': {

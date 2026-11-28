@@ -14,6 +14,7 @@ import {
   appendixTitle, byLabel, docTitle, externalDoc, formatDateTime, internalDoc, KIND, lateLabel, periodLabel, settingsNote, snapLabel, uncertainNote, type ReportHead, type ReportView,
 } from './model.ts';
 import { FONT_FILES, pdfAssets } from './assets.ts';
+import { redact } from '../platform/redact.ts';
 
 const esc = (value: string | number) => String(value).replace(/[&<>"']/g, (c) => `&#${String(c.charCodeAt(0))};`);
 /** 태그 이름·속성은 이 파일이 정한 고정값이다. 바깥 값은 children(이미 esc 처리)으로만 들어온다. */
@@ -159,6 +160,7 @@ export interface ReportHtmlInput extends ReportHead {
 }
 
 export function reportHtml(r: ReportHtmlInput): string {
+  r = redact(r) as ReportHtmlInput;
   const late = lateLabel(r);
   const weekly = r.kind !== 'daily' && r.snapshot.series.length > 1;
   const article = el('article', `class="rpt-doc" aria-label="${esc(`${r.reportKey} 보고서`)}"`,

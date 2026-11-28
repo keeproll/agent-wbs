@@ -39,6 +39,7 @@ export class FakeRunner {
       await this.usage(agent, 100);
     }
     await this.api('reportReadiness', { ...this.write(), body: { at: new Date().toISOString(), items: (['claude','codex','git','node','pnpm','pg','repo','disk','subs'] as const).map(key => ({ key, status: 'ok' as const, detail: '가짜 실행 환경' })) } });
+    await this.api('reportGithubStatus', { ...this.write(), body: { mode: 'gh', ok: true, account: 'fake', scopes: { contents: 'verified', pulls: 'verified', statuses: 'verified', metadata: 'verified' }, expiresAt: null } });
   }
 
   async reconnect() {
@@ -61,8 +62,8 @@ export class FakeRunner {
     await this.api('reportUsage', { ...this.write(), body: { agent, remainPct, ...(resetAt && { resetAt }) } });
   }
 
-  async startNext(headSha?: string): Promise<Running | undefined> {
-    const claimed = await this.api('claimJob', { ...this.write(), body: { kinds: ['attempt'], capacity: 20 } });
+  async startNext(headSha?: string, capacity = 20): Promise<Running | undefined> {
+    const claimed = await this.api('claimJob', { ...this.write(), body: { kinds: ['attempt'], capacity } });
     if (claimed.status === 204) return undefined;
     const job = claimed.body.job;
     assert.equal(job.kind, 'attempt');
