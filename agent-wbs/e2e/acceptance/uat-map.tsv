@@ -52,7 +52,7 @@ UAT-TASK-06|agent-wbs/apps/web/e2e/task-detail-work.spec.ts|agent-wbs/apps/api/t
 UAT-TASK-07|agent-wbs/apps/web/e2e/task-detail-work.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|화면·실제 서버 보충|시나리오 2 · UAT-TASK-07 DB 설계: 권장 섹션, 테이블 추가(컬럼·FK·인덱스) → 관계 테이블 계산, 블록 편집, 섹션 제거 확인
 UAT-TASK-08|agent-wbs/apps/web/e2e/task-detail-work.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|화면·실제 서버 보충|UAT-TASK-08 설계 편집기: 중복 테이블·없는 FK·nullable PK·없는 인덱스 컬럼·중복 Endpoint·잘못된 HTTP/환경변수는 막고 초안 유지, 비밀 값 가림
 UAT-TASK-09|agent-wbs/apps/web/e2e/task-detail-work.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|화면·실제 서버 보충|시나리오 4 · UAT-TASK-09 체크리스트: 빈 내용 추가 거부, 필수/선택·방법·Evidence·비고 표시, 완료 토글 → 진행률·Gate·이력 갱신
-UAT-TASK-10|agent-wbs/apps/web/e2e/ci-task-ref.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|부분 검증(CI 참조); 지정/실제 하위 Agent 태그 미구현(계약 공백), 별도 작업에서 구현|UAT-TASK-10-CI: 실행 탭의 CI 참조는 그 시도의 최신 Task 검사 상세를 연다
+UAT-TASK-10|agent-wbs/apps/web/e2e/subagent-tags.spec.ts|agent-wbs/apps/api/test/runner.db.test.ts|화면·실제 서버 보충(PR #25 지정·실제 하위 Agent 태그)|UAT-TASK-10 실행 탭: 끝난 시도는 지정·실제(세션 기록 확인), 실행 중 시도는 관측 수(추정)
 UAT-TASK-11|agent-wbs/apps/web/e2e/verify-results.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|화면·실제 서버 보충|UAT-TASK-11: 목록 ↑↓·Enter로 열고, 상세 J/K·↑↓로 이동, Esc로 펼치기. 입력 중에는 동작 안 함
 UAT-PLAN-01|agent-wbs/apps/web/e2e/planning-sessions.spec.ts|agent-wbs/apps/api/test/planning-runner.db.test.ts|화면·실제 서버 보충|시나리오 5: 독립 분석 비교 → 미조정은 CP 작성 차단 → 이견 조정 → CP 작성·제출·승인·WBS 반영
 UAT-PLAN-02|agent-wbs/apps/web/e2e/planning-sessions.spec.ts|agent-wbs/apps/api/test/planning-runner.db.test.ts|화면·실제 서버 보충|UAT-PLAN-02: 재조정 이력 — 기록 내용·변경 Task 펼침·재조정 실행(POST /api/replans/run)
