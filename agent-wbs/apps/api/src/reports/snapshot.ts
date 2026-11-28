@@ -96,10 +96,12 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
        from ${src.rel('verifications')} v join ${src.rel('task_attempts')} a on a.id=v.attempt where v.project_id=$1 order by coalesce(a.ended_at,v.created_at),v.id`, [projectId]),
     q<{ verification: string; text: string; blocking: boolean }>(`select verification,def_key||' '||content text,blocking from ${src.rel('defects')} d where project_id=$1 order by def_key`, [projectId]),
     q<{ verification: string; path: string }>(`select verification,coalesce(reference_path,storage_path) path from ${src.rel('evidence')} e where project_id=$1 and verification is not null order by created_at,id`, [projectId]),
-    q<{ key: string; task: string; dir: 'in' | 'out'; type: string; to_agent: 'Claude' | 'Codex' | null; from_agent: 'Claude' | 'Codex' | null; body: string; delivery: string | null; pending_next: boolean; at: string }>(
-      `select msg_key key,task,dir,type,to_agent,from_agent,body,delivery::text delivery,pending_next,${iso('created_at')} at from ${src.rel('messages')} m where project_id=$1 and not draft order by created_at,id`, [projectId]),
-    q<{ id: string; key: string; trigger: string; baseline_v: number | null; before: { end?: unknown }; after: { end?: unknown; lo?: unknown; hi?: unknown }; at: string }>(
-      `select id,rp_key key,trigger,baseline_v,before,after,${iso('created_at')} at from ${src.rel('replans')} r where project_id=$1 and status='applied' order by created_at,id`, [projectId]),
+    q<{ id: string; key: string; task: string; dir: 'in' | 'out'; type: string; to_agent: 'Claude' | 'Codex' | null; from_agent: 'Claude' | 'Codex' | null; body: string; delivery: string | null; pending_next: boolean; at: string }>(
+      `select id,msg_key key,task,dir,type,to_agent,from_agent,body,delivery::text delivery,pending_next,${iso('created_at')} at from ${src.rel('messages')} m where project_id=$1 and not draft order by created_at,id`, [projectId]),
+    // no: 재조정 번호(RP-n의 n). 서버가 프로젝트 번호표(counters, 행 잠금·감소 금지 트리거)에서 받으므로 뒤로 가지 않는다.
+    // 「직전 재조정」은 시각이 아니라 이 번호로 고른다(PC 시계가 뒤로 갈 수 있다). 재조정 목록 API도 같은 번호 순이다(planning/routes.ts).
+    q<{ id: string; key: string; no: number; trigger: string; baseline_v: number | null; before: { end?: unknown }; after: { end?: unknown; lo?: unknown; hi?: unknown }; at: string }>(
+      `select id,rp_key key,substring(rp_key from 4)::int no,trigger,baseline_v,before,after,${iso('created_at')} at from ${src.rel('replans')} r where project_id=$1 and status='applied' order by substring(rp_key from 4)::int,id`, [projectId]),
     q<{ replan: string; task: string; kind: 'delayed' | 'advanced' | 'new' | 'excluded'; before: { end?: unknown } | null; after: { end?: unknown } | null }>(
       `select replan,task,kind,before,after from ${src.rel('replan_moves')} m where project_id=$1 order by created_at,id`, [projectId]),
     // 실행 PC 세션·알림도 T 시점 행이다(끝 시각·해소 시각·본문 모두 그때 값, 재리뷰 2 문제 3).
@@ -137,9 +139,13 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
     return { pred: pred?.key ?? '', type: d.type, status: pred?.status ?? 'ready' };
   });
 
+  // 「최신 하나」를 고르는 공통 함수: 서버 번호(no)가 가장 큰 것. 시도 번호·재조정 번호처럼 뒤로 가지 않는 값만 넣는다.
+  const newest = <T extends { no: number }>(list: readonly T[]): T | undefined => list.reduce<T | undefined>((m, x) => (!m || x.no > m.no ? x : m), undefined);
   const attemptsOf = (taskId: string) => attempts.filter((a) => a.task === taskId && upTo(a.started_at));
+  // 「최신 하나」는 시각이 아니라 같은 Task의 시도 번호(attempt_no, 뒤로 가지 않음)로 고른다. 시각 순 목록은 표시용이다(PC 시계가 뒤로 갈 수 있다).
+  // 검증은 시도 하나에 하나뿐이라 검증의 no는 그 시도의 번호다(서버 gate의 「최신 검증」 판정과 같은 기준).
   const lastVerification = (taskId: string) => {
-    const v = verifs.filter((x) => x.task === taskId && upTo(x.at)).at(-1);
+    const v = newest(verifs.filter((x) => x.task === taskId && upTo(x.at)));
     return v ? { id: v.id, result: v.result, cmd: v.cmd, actual: v.actual } : null;
   };
   const checklistOf = (taskId: string) => {
@@ -157,9 +163,10 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
   const workPct = (list: typeof tasks) => clampPct(Math.round((list.reduce((sum, t) => sum + est(t), 0) / totalEst) * 1000) / 10);
   const doneTo = tasks.filter((t) => upTo(t.act_end));
   const doneFrom = tasks.filter((t) => t.act_end && toMicro(t.act_end) < start);
+  // 기간 경계(upTo·start)는 시각으로 자른다(기간 자르기는 원래 시각 기준). 그 안에서 「직전 하나」는 재조정 번호(no)가 가장 큰 것이다.
   const rpsUpTo = replans.filter((r) => upTo(r.at));
-  const last = rpsUpTo.at(-1);
-  const before = replans.filter((r) => toMicro(r.at) < start).at(-1);
+  const last = newest(rpsUpTo);
+  const before = newest(replans.filter((r) => toMicro(r.at) < start));
   const endOf = (r: (typeof replans)[number] | undefined) => (r && isDate(r.after.end) ? r.after.end : null);
   const inAtts = attempts.filter((a) => inRange(a.started_at));
   const inVerifs = verifs.filter((v) => inRange(v.at));
@@ -222,7 +229,7 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
       series.push({
         day, done: tasks.filter((t) => inDay(t.act_end)).length, attempts: attempts.filter((x) => inDay(x.started_at)).length,
         fails: verifs.filter((v) => v.result === 'FAIL' && inDay(v.at)).length, uptimePct: b > a ? coverage(ms(a), ms(b)).pct : 0,
-        forecast: endOf(replans.filter((r) => toMicro(r.at) < b).at(-1)),
+        forecast: endOf(newest(replans.filter((r) => toMicro(r.at) < b))),
       });
     }
   }
@@ -242,7 +249,7 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
   const gates = await gateInputsAt(client, src, activeTasks.map((t) => t.id));
   const active: ReportSnapshotData['active'] = activeTasks.map((t) => {
     const s = plan.get(t.key);
-    const la = attemptsOf(t.id).at(-1);
+    const la = newest(attemptsOf(t.id));
     const gate = gates.get(t.id);
     const conditions = gate ? completionGate(gate) : [];
     return {
@@ -257,16 +264,50 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
   });
 
   // 6. QA 실패 · 결함 상세
+  // 「FAIL 뒤 메시지」 판정에 쓰는 서버 순서(Codex 리뷰 P2-2). 시각도, 메시지가 가리키는 시도 번호도 쓰지 않는다.
+  // - 검증: 그 검증이 저장된 기록(state_log op='insert'). 메시지: 처음 「보낸 상태」(draft=false)가 된 기록(삽입 또는 초안→전송 변경).
+  // - 순서: 그 기록을 남긴 트랜잭션의 커밋 시계(commit_real.stamp, 커밋 직전 행 잠금 아래 「이전 값 + 1µs 이상」으로 매김 → 뒤로 가지 않음) → 같은 트랜잭션이면 이력 순번(seq).
+  //   아직 정리 단계가 commit_real에 옮기지 않은 가장 최근 커밋은 뒤(nulls last)에 둔다.
+  // - 같은 트랜잭션의 기록끼리도 이력 순번(seq)이 실제 실행 순서다 → 순서를 아는 기록은 늘 이 순서로 비교한다(Codex 재리뷰 P2).
+  // - 벽시계로 앞뒤를 추정하지 않는다(owner 원칙). 다음 경우는 「순서 복원 불가」다(한계, 보고서 4.6):
+  //   · 두 기록이 모두 이력 시작 전 행(0028 seed): seed의 seq는 사건 순서가 아니라 마이그레이션이 훑은 순서다.
+  //   · 어느 한쪽 기록이 아예 없다(기록을 끈 채 넣은 행).
+  //   seed 한쪽과 실제 기록 한쪽은 순서를 안다: seed(이력 시작 전)가 항상 먼저다(seed 트랜잭션의 커밋이 그 뒤 모든 커밋보다 앞).
+  //   복원 불가인 메시지는 「FAIL 뒤 메시지」에 넣지 않고, 그 Task에 「팀장 확인 필요」 경고를 남긴다(지어내지 않는다).
+  //   실제 운영은 빈 DB에서 시작하므로 운영 자료는 모두 이력이 있다.
+  const order = new Map((await q<{ id: string; op: string; ord: number }>(
+    `with firsts as (select distinct on (l.row_id) l.row_id,l.op,l.seq,l.xid from public.state_log l
+       where l.project_id=$1 and ((l.tbl='verifications' and l.op in ('insert','seed')) or (l.tbl='messages' and l.op in ('insert','update','seed') and l.data->>'draft'='false'))
+       order by l.row_id,l.seq)
+     select f.row_id::text id,f.op,(row_number() over (order by c.stamp nulls last,f.seq))::int ord from firsts f left join public.commit_real c on c.xid=f.xid`, [projectId]))
+    .map((r) => [r.id, r]));
+  /** 메시지가 그 FAIL 뒤에 보낸 것인가. null = 순서 복원 불가. */
+  const sentAfter = (messageId: string, verificationId: string): boolean | null => {
+    const m = order.get(messageId), f = order.get(verificationId);
+    if (!m || !f || (m.op === 'seed' && f.op === 'seed')) return null;
+    return m.ord > f.ord;
+  };
+  const unordered = new Map<string, Set<string>>();
   const failures: ReportSnapshotData['failures'] = inVerifs.filter((v) => v.result === 'FAIL').flatMap((v) => {
     const t = byId.get(v.task);
     if (!t) return [];
     return [{
       verificationId: v.id, taskKey: t.key, title: t.title, agent: v.agent, at: v.at, cmd: v.cmd, expected: v.expected, actual: v.actual,
       defects: defects.filter((d) => d.verification === v.id).map((d) => d.text), evidence: evidence.filter((e) => e.verification === v.id).map((e) => e.path),
-      messages: messages.filter((m) => m.task === v.task && m.dir === 'out' && upTo(m.at) && ms(m.at) >= ms(v.at)).map((m) => ({ msgKey: m.key, delivery: m.delivery ?? '' })),
-      reworks: attempts.filter((a) => a.task === v.task && a.kind === 'rework' && upTo(a.started_at) && ms(a.started_at) > ms(v.at)).map((a) => ({ attemptKey: a.key, status: a.status })),
+      // FAIL 뒤 메시지: 같은 Task에서 그 FAIL이 저장된 뒤에 보낸 메시지 전부(원본 P L3848: 시도 지정 조건 없음). 앞뒤는 위 서버 순서로 판정한다.
+      // upTo(m.at)는 기간 자르기(T 전 메시지)다.
+      messages: messages.filter((m) => {
+        if (m.task !== v.task || m.dir !== 'out' || !upTo(m.at)) return false;
+        const after = sentAfter(m.id, v.id);
+        if (after === null) unordered.set(t.key, (unordered.get(t.key) ?? new Set()).add(m.key));
+        return after === true;
+      }).map((m) => ({ msgKey: m.key, delivery: m.delivery ?? '' })),
+      reworks: attempts.filter((a) => a.task === v.task && a.kind === 'rework' && upTo(a.started_at) && a.no > v.no).map((a) => ({ attemptKey: a.key, status: a.status })),
     }];
   });
+  for (const [taskKey, keys] of unordered) {
+    issues.push({ level: 'warn', text: `${taskKey} FAIL 뒤 수정 지시 판정 불가 — 기록 시작 전 메시지 ${String(keys.size)}건(${[...keys].join(', ')})은 FAIL과의 앞뒤 순서를 복원할 수 없어 「후속 조치」에서 뺐습니다. 전체 메시지 표를 확인하세요.`, taskKey });
+  }
 
   // 7. 실행 기록 표
   const attemptRows: ReportSnapshotData['attempts'] = inAtts.flatMap((a) => {

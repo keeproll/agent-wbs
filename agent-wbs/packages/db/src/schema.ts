@@ -986,6 +986,8 @@ export const attemptObservations = pgTable(
 );
 export const verifications = pgTable('verifications', {
   ...row(),
+  /** 저장 순번(0046). 「최신 검증」은 시각이 아니라 이 번호로 고른다(이 PC 시계는 뒤로 갈 수 있다). API의 seq. */
+  record_no: bigserial({ mode: 'number' }).notNull().unique(),
   ...project(),
   attempt: uuid()
     .notNull()

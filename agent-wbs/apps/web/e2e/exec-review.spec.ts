@@ -151,18 +151,19 @@ test('#6 다른 Task로 옮긴 뒤에도 보관 중인 초안이 있으면 창 �
   await expect(msgs(page).getByLabel('메시지 내용')).toHaveValue('보관할 지시');
 });
 
-test('#7 검증은 시각 순으로 본다(API의 id 순서가 아님) — 최신 FAIL과 그 시도에 지시를 연결', async ({ page }) => {
+test('#7 검증·시도는 서버 순번으로 본다(API의 id 순서도 시각도 아님) — 최신 FAIL과 그 시도에 지시를 연결', async ({ page }) => {
   const api = await execApi(page);
   const list = api.state.attempts['TASK-0007'] ?? [];
   const qa = list[1];
   if (!qa) throw new Error('fixture');
-  const rw = attempt('ATT-0007-3', 'TASK-0007', 'rework', 'completed', '2026-11-03T00:00:00.000Z');
-  const rv = attempt('ATT-0007-4', 'TASK-0007', 'reverify', 'completed', '2026-11-04T00:00:00.000Z');
+  // PC 시계가 뒤로 간 경우: 나중 시도(번호 3·4)의 시작 시각이 QA 시도(번호 2, 11-01 04:10)보다 이르다.
+  const rw = attempt('ATT-0007-3', 'TASK-0007', 'rework', 'completed', '2026-11-01T04:09:58.000Z');
+  const rv = attempt('ATT-0007-4', 'TASK-0007', 'reverify', 'completed', '2026-11-01T04:09:59.000Z');
   list.push(rw, rv);
-  // API는 id 순서: 최신(11-04) 검증의 id가 더 작아 먼저 온다
+  // API는 id 순서: 최신(저장 순번 2) 검증의 id가 더 작아 먼저 온다. 그 시각도 옛 검증보다 2.3초 이르다.
   api.state.verifications['TASK-0007'] = [
-    verification('V-a-latest', rv, 'FAIL', { at: '2026-11-04T01:00:00.000Z' }),
-    verification('V-z-oldest', qa, 'FAIL', { at: '2026-11-01T05:00:00.000Z' }),
+    verification('V-a-latest', rv, 'FAIL', { seq: 2, at: '2026-11-01T05:00:00.000Z' }),
+    verification('V-z-oldest', qa, 'FAIL', { seq: 1, at: '2026-11-01T05:00:02.300Z' }),
   ];
   api.state.alerts = [REWORK_ALERT];
   api.on('POST /api/messages', (route) => json(route, 201, message('MSG-010', 'TASK-0007', { updatedAt: '2026-11-05T11:00:00.000Z' })));

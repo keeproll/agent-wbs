@@ -344,6 +344,11 @@ export const Attempt = Type.Object(
   {
     id: c.Id,
     attemptKey: Type.String(),
+    /**
+     * 같은 Task 안의 시도 번호(1부터, 서버가 시도를 만들 때 매긴다. 바뀌지 않고 뒤로 가지 않는다).
+     * 「최신 시도」는 시각(startedAt)이 아니라 이 번호로 고른다. 시각은 화면 표시용이다(PC 시계가 뒤로 갈 수 있다).
+     */
+    attemptNo: Type.Integer({ minimum: 1, maximum: 2147483647 }),
     taskKey: c.TaskKey,
     kind: c.AttemptKind,
     agent: c.Agent,
@@ -386,6 +391,11 @@ export const Evidence = Type.Object(
 export const Verification = Type.Object(
   {
     id: c.Id,
+    /**
+     * 서버 저장 순번(전체 검증에서 하나뿐, 저장할 때 매겨 바뀌지 않고 뒤로 가지 않는다).
+     * 「최신 검증」과 최신순 정렬은 시각(at)이 아니라 이 값으로 한다. 시각은 화면 표시용이다(PC 시계가 뒤로 갈 수 있다).
+     */
+    seq: c.Count,
     verificationKey: Opt(Type.String()),
     taskKey: c.TaskKey,
     attemptId: c.Id,
