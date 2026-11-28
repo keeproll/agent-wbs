@@ -12,6 +12,37 @@ import { Evidence } from '../src/ci/night/steps.ts';
 const token = 'm803-runner-token-0123456789abcdefghijk';
 const password = 'm803 password with spaces';
 
+test('서버 계약이 허용하는 최소 길이의 Telegram 토큰도 자유 글에서 가린다', () => {
+  const telegram = `123456789:${'a'.repeat(20)}`;
+  expect(createRedactor()(`결과 ${telegram}`)).not.toContain(telegram);
+});
+
+test.each(['API /bottleneck 해결', 'sort_key=asc 도입', 'monkey=value', 'primary_key: id', '--sort-key asc', 'public_key=ssh-rsa', `${'normal_'.repeat(100)}sort_key=asc`])('평범한 경로·정렬 키를 보존한다: %s', input => {
+  expect(createRedactor()(input)).toBe(input);
+});
+
+test('YAML의 password 객체 정의는 다음 줄의 type을 비밀번호로 가리지 않는다', () => {
+  const schema = 'properties:\n  password:\n    type: string\n  sort_key: asc';
+  expect(createRedactor()(schema)).toBe(schema);
+});
+
+test.each(['password: hunter2xyz', `SMTP_PASSWORD: "${password}"`, `--password "${password}"`, '--password hunter2xyz',
+  'X-Api-Key: hunter2xyz', "{'password': 'hunter2xyz'}", 'OPENAI_API_KEY=hunter2xyz'])('콜론·명령 인자의 비밀을 가린다: %s', input => {
+  const output = createRedactor()(input);
+  expect(output).not.toContain('hunter2xyz');
+  expect(output).not.toContain(password);
+  expect(output).toContain('[REDACTED]');
+  expect(createRedactor()(output)).toBe(output);
+});
+
+test.each([201, 302, 400])('선언되지 않은 HTTP %s의 오류도 인증 정보를 보관하지 않는다', async status => {
+  const api = createApiClient({ baseUrl: 'http://127.0.0.1:1', token: new Secret(token),
+    fetch: async () => Response.json({ error: { code: 'BAD_PROXY', message: token } }, { status }) });
+  const caught: unknown = await api('reportUsage', { epoch: 1, idempotencyKey: 'test', body: { agent: 'Codex', remainPct: 1 } }).catch((e: unknown) => e);
+  expect(caught).toBeInstanceOf(ApiError);
+  expect(JSON.stringify(caught)).not.toContain(token);
+});
+
 test.each([`SMTP_PASSWORD="${password}"`, `SMTP_PASSWORD='${password}'`, `password="${password}"`, 'AWBS_SECRET_KEY=m803-key-canary'])('따옴표 안의 환경 변수도 가린다: %s', input => {
   const output = createRedactor()(input);
   expect(output).not.toContain(password);

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isUtf8 } from 'node:buffer';
 import { readFile, rm } from 'node:fs/promises';
 import { extname } from 'node:path';
 import { MAX_EVIDENCE_BYTES } from '../state/state.ts';
@@ -10,6 +11,7 @@ import type { GitRepository } from '../git/repository.ts';
 import { reportEvent, type AttemptContext, type AttemptFlowOptions, type AttemptReport } from './attempt-flow.ts';
 import { checklistOf, fixPrompt, isVerify, parseOutput, specRevisionOf, type DevOutput, type Parsed, type QaOutput } from './output.ts';
 import type { AttemptWorkspace } from './workspace.ts';
+import { createRedactor } from '../security/redact.ts';
 
 /*
  * 결과 수집기(contracts §5 · jobs/README.md 「결과 수집과 나가는 값」).
@@ -43,6 +45,10 @@ const MEDIA: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg
   '.txt': 'text/plain', '.log': 'text/plain', '.html': 'text/html', '.pdf': 'application/pdf' };
 
 export function bindCollect(d: CollectDeps): AttemptFlowOptions['collect'] {
+  const redact = createRedactor();
+  const checkPaths = (paths: string[]) => {
+    if (paths.some(path => redact(path) !== path)) throw new CollectError('파일 경로에 비밀값이 있습니다. 원본 경로를 고친 뒤 다시 보고하세요.');
+  };
   return async (context: AttemptContext) => {
     const { job, output, epoch, signal, messages } = context;
     const delivered = messages.map(m => m.id);
@@ -55,6 +61,7 @@ export function bindCollect(d: CollectDeps): AttemptFlowOptions['collect'] {
       await clear();
       const result = parseOutput(job, text, delivered);
       if (!result.ok || !('verdict' in result.value)) return result;
+      checkPaths(result.value.criteria.flatMap(c => c.evidence));
       const missing: string[] = [];
       for (const name of new Set(result.value.criteria.flatMap(c => c.evidence))) {
         const out = git.evidenceTemp();
@@ -82,14 +89,14 @@ export function bindCollect(d: CollectDeps): AttemptFlowOptions['collect'] {
         if (!again.ok) failedRun = again.code;
         parsed = again.ok ? await check(again.text) : { ok: false, problems: [`수정 요청 실행이 실패했습니다(종료 코드 ${String(again.code)}).`] };
       }
-      return await finish(parsed, fixed, failedRun);
+      return redact(await finish(parsed, fixed, failedRun));
     } finally { await clear(); }
 
     async function finish(parsed: Parsed, fixed: boolean, failedRun: number | null | undefined) {
       // 수정 요청 실행 자체가 실패했으면 「형식이 틀렸다」가 아니라 「수정 요청의 결과를 모른다」다(P3-1). 문구를 나눠 적는다.
       const failure = failedRun === undefined ? FORMAT_FAILURE : followUpFailure(failedRun);
       const upload = async (kind: string, value: object) => {
-        const bytes = Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+        const bytes = Buffer.from(`${JSON.stringify(redact(value), null, 2)}\n`);
         const sha256 = createHash('sha256').update(bytes).digest('hex');
         const response = await reportEvent(d, 'uploadEvidence', { epoch, params: { attemptId: output.attemptId },
           body: { file: new Blob([bytes], { type: 'application/json' }), kind, sha256, size: bytes.length, fence: job.fence } }, signal);
@@ -104,6 +111,7 @@ export function bindCollect(d: CollectDeps): AttemptFlowOptions['collect'] {
         // 수정 요청 세션이 파일을 바꾸거나 커밋했으면 검사하지 않은 코드다. 청결은 실제 파일 목록을 Runner bare의 커밋과 대조해 본다.
         if (fixed) await git.taskCheckPath(work.id, head).catch((error: unknown) => { throw new CollectError('수정 요청 뒤 작업 폴더가 검사한 커밋과 다릅니다.', { cause: error }); });
         const changedFiles = await git.changedPaths(job.payload.baseCommit, head);
+        checkPaths(changedFiles);
         if (!parsed.ok) {
           const evidence = await upload('agent-output-invalid', { headSha: head, changedFiles, problems: parsed.problems, fixRequested: fixed });
           return { report: { summary: failedRun === undefined ? '종료 메시지 형식 오류' : '형식 수정 요청 실행 실패', failure, changedFiles, evidence: [evidence] } };
@@ -128,9 +136,11 @@ export function bindCollect(d: CollectDeps): AttemptFlowOptions['collect'] {
       // Agent 증거 파일: Agent 계정으로 받은 사본(Runner 전용 임시 파일)만 올린다. Agent 폴더의 파일을 Runner가 직접 열지 않는다.
       const uploaded = new Map<string, string>();
       for (const [name, path] of files) {
-        const bytes = await readFile(path);
+        const raw = await readFile(path);
+        const media = MEDIA[extname(name).toLowerCase()] ?? 'application/octet-stream';
+        const bytes = isUtf8(raw) && (media.startsWith('text/') || media === 'application/json') ? Buffer.from(redact(raw.toString('utf8'))) : raw;
         const response = await reportEvent(d, 'uploadEvidence', { epoch, params: { attemptId: output.attemptId }, body: {
-          file: new Blob([bytes], { type: MEDIA[extname(name).toLowerCase()] ?? 'application/octet-stream' }), kind: 'agent-evidence',
+          file: new Blob([bytes], { type: media }), kind: 'agent-evidence',
           sha256: createHash('sha256').update(bytes).digest('hex'), size: bytes.length, fence: job.fence } }, signal);
         uploaded.set(name, response.body.id);
       }

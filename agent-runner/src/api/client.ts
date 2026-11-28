@@ -115,11 +115,11 @@ export function createApiClient({ baseUrl, token, fetch: send = fetch }: ApiClie
       text = await response.text();
     } catch { throw new ApiTransportError(id); }
     // 오류는 거부 기록 파일에도 남는다. 서버가 인증 정보를 되비춰도 메모리 밖으로 나가지 않게 한다.
-    const value = response.status >= 400 ? redact(json(text)) : json(text);
+    const value = json(text);
     // 선언한 상태라도 본문이 JSON이 아니면 서버 응답으로 믿지 않는다.
     const hasBody = (op.statuses as Readonly<Record<number, boolean>>)[response.status];
     if (hasBody === undefined || (hasBody && value === undefined)) {
-      throw new ApiError(id, response.status, errorOf(value), redact(response.headers.get('retry-after')));
+      throw new ApiError(id, response.status, errorOf(redact(value)), redact(response.headers.get('retry-after')));
     }
     return { status: response.status, body: value, headers: response.headers } as unknown as ApiResponse<K>;
   };

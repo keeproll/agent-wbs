@@ -3,11 +3,14 @@ import { execFileSync } from 'node:child_process';
 import { rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, expect, test } from 'vitest';
-import type { ApiClient } from '../../src/api/client.ts';
+import type { ApiClient, ApiRequest } from '../../src/api/client.ts';
 import type { Runner } from '../../src/api/runner.ts';
 import type { AttemptJob, AttemptOutput, Execution } from '../../src/exec/session.ts';
 import { bindCollect, CollectError, FORMAT_FAILURE, followUpFailure } from '../../src/jobs/collect.ts';
 import { createWorkspace } from '../../src/jobs/workspace.ts';
+import { State } from '../../src/state/state.ts';
+import { Outbox } from '../../src/api/outbox.ts';
+import { readdir, readFile } from 'node:fs/promises';
 import { commit, file, fixture, git } from '../ci/int-fixture.ts';
 
 const BRANCH = 'agent/TASK-0001-h1';
@@ -53,7 +56,7 @@ async function setup(followUps: string[] = []) {
     return { work, head: await f.repo.importWorktree(ids.id, ids.branch) };
   };
   const context = (kind: AttemptJob['payload']['kind'], text: string, cwd: string, headSha: string) => ({
-    job: job(kind, base), epoch: 1, signal: new AbortController().signal, messages: [],
+    job: job(kind, base), epoch: 1, signal: new AbortController().signal, messages: [] as Parameters<typeof collect>[0]['messages'],
     output: { attemptId: 'a', cwd, headSha, text, sessionId: 's', grade: { model: 'm', effort: 'high' } } as unknown as AttemptOutput,
   });
   return { base, workspace, collect, calls, asked, develop, context };
@@ -70,6 +73,58 @@ test('개발: 변경 파일은 자기보고가 아니라 Runner bare의 git diff
   expect(upload?.request.body).toMatchObject({ kind: 'dev-report', fence: 7 });
   const sent = JSON.parse(await (upload?.request.body?.file as Blob).text()) as Record<string, unknown>;
   expect(sent).toMatchObject({ headSha: head, changedFiles: ['src/result.ts'], followups: ['문서 보강'] });
+});
+
+test('Agent의 summary·응답·selfCheck·followups는 보고·증거·outbox 파일에 비밀을 남기지 않는다', async () => {
+  const t = await setup();
+  const { work } = await t.develop();
+  const secret = `github_pat_${'reviewcanary'.repeat(4)}`;
+  const output = { ...dev, summary: `완료 ${secret}`, selfCheck: [`확인 ${secret}`], followups: [`후속 ${secret}`],
+    responses: [{ messageId: 'message-1', text: `응답 ${secret}`, workState: `진행 ${secret}` }] };
+  const context = t.context('dev', JSON.stringify(output), work.cwd, work.headSha);
+  context.messages = [{ id: 'message-1' }] as typeof context.messages;
+  const result = await t.collect(context);
+  expect(JSON.stringify(result)).not.toContain(secret);
+  expect(result.report.summary).toContain('완료');
+  const state = await State.open(join(f.root, 'outbox-home'));
+  try {
+    await state.update(s => { s.epoch = 1; });
+    const outbox = new Outbox(state, (async () => { throw new Error('전송하지 않는다'); }) as ApiClient);
+    await outbox.enqueue('reportAttemptResult', { epoch: 1, params: { attemptId: 'attempt-1' }, body: { ...result.report, fence: 7 } });
+    for (const call of t.calls) {
+      const blob = call.request.body?.file as Blob;
+      expect(await blob.text()).not.toContain(secret);
+      await outbox.enqueue('uploadEvidence', { epoch: 1, params: { attemptId: 'attempt-1' },
+        body: call.request.body as ApiRequest<'uploadEvidence'>['body'] });
+    }
+    for (const relative of await readdir(join(f.root, 'outbox-home'), { recursive: true })) {
+      const bytes = await readFile(join(f.root, 'outbox-home', relative)).catch(e => { if (e.code === 'EISDIR') return Buffer.alloc(0); throw e; });
+      expect(bytes.toString()).not.toContain(secret);
+    }
+  } finally { await state.close(); }
+});
+
+test('Git에서 관측한 파일 경로에 비밀이 있으면 다른 경로로 가려 보고하지 않는다', async () => {
+  const t = await setup();
+  const { work } = await t.develop();
+  const secret = `github_pat_${'pathcanary'.repeat(5)}`;
+  await file(join(work.cwd, `${secret}.txt`), '결과');
+  commit(work.cwd);
+  const ids = t.workspace.worktree(job('dev', t.base));
+  await f.repo.importWorktree(ids.id, ids.branch);
+  await expect(t.collect(t.context('dev', JSON.stringify(dev), work.cwd, work.headSha))).rejects.toBeInstanceOf(CollectError);
+  expect(t.calls).toEqual([]);
+});
+
+test('QA 증거 파일 이름에 비밀이 있으면 업로드 전에 거부한다', async () => {
+  const t = await setup();
+  await t.develop();
+  const work = await t.workspace.prepare(job('qa', t.base));
+  const name = `github_pat_${'evidencepath'.repeat(4)}.txt`;
+  await writeFile(join(work.cwd, '.awbs-evidence', name), '증거');
+  const output = { ...qa(), criteria: [{ ...qa().criteria[0], evidence: [name] }] };
+  await expect(t.collect(t.context('qa', JSON.stringify(output), work.cwd, work.headSha))).rejects.toBeInstanceOf(CollectError);
+  expect(t.calls).toEqual([]);
 });
 
 test('형식 오류면 같은 세션에 한 번만 수정 요청하고, 고친 결과를 쓴다', async () => {
@@ -115,6 +170,20 @@ test('QA: headSha는 준비 때 고정한 커밋, specRevision은 지시문의 �
   expect(t.calls[1]?.request.body).toMatchObject({ kind: 'agent-evidence', size: Buffer.byteLength('통과 로그\n') });
   expect(await (t.calls[1]?.request.body?.file as Blob).text()).toBe('통과 로그\n');
   expect((t.calls[1]?.request.body?.file as Blob).type).toBe('text/plain');
+});
+
+test('QA의 검증 문장·결함·텍스트 증거도 보고와 업로드 전에 가린다', async () => {
+  const t = await setup();
+  await t.develop();
+  const prepared = await t.workspace.prepare(job('qa', t.base));
+  const secret = `github_pat_${'qacanary'.repeat(6)}`;
+  await writeFile(join(prepared.cwd, '.awbs-evidence', 'log.txt'), `출력 ${secret}`);
+  const output = { verdict: 'FAIL', criteria: [{ acId: 'CL-1', result: 'FAIL', cmd: `검사 ${secret}`, expected: secret, actual: secret, evidence: ['log.txt'] }],
+    defects: [{ text: secret, blocking: true }] };
+  const result = await t.collect(t.context('qa', JSON.stringify(output), prepared.cwd, prepared.headSha));
+  expect(JSON.stringify(result)).not.toContain(secret);
+  expect(t.calls).toHaveLength(2);
+  for (const call of t.calls) expect(await (call.request.body?.file as Blob).text()).not.toContain(secret);
 });
 
 test('QA: 적힌 증거 파일이 없으면 형식 오류로 세어 한 번 수정 요청하고, 링크로 바꾼 증거는 받지 않는다', async () => {

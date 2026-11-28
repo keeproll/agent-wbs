@@ -1,6 +1,6 @@
 import { expect, test, vi } from 'vitest';
 import type { ReportSnapshotData } from '@awbs/shared';
-import { redactText } from '../src/platform/redact.ts';
+import { changedRunnerReference, redactText, redactRunnerInput } from '../src/platform/redact.ts';
 import { renderMail } from '../src/mail/render.ts';
 import { reportHtml } from '../src/pdf/html.ts';
 import { chromiumRenderer } from '../src/pdf/render.ts';
@@ -11,6 +11,32 @@ import { callBot } from '../src/notify/bot.ts';
 const token = `ghp_${'m803canary'.repeat(4)}`;
 const password = 'm803 password with spaces';
 const dirty = `보안 검사 ${token} SMTP_PASSWORD="${password}"`;
+
+test('Runner 입력의 비밀 글만 가리고 계약의 password 속성·지문·바이너리를 보존한다', () => {
+  const file = Buffer.from([0, 255]);
+  const value = { schema: { properties: { password: { type: 'string' } } }, sha256: 'a'.repeat(64), file, summary: `완료 ${token}`, credentials: { password: 'opaque-password' } };
+  expect(redactRunnerInput(value)).toEqual({ ...value, summary: '완료 [REDACTED]', credentials: { password: '[REDACTED]' } });
+  expect(changedRunnerReference(value, redactRunnerInput(value))).toBe(false);
+  const refs = { hosts: [{ hostId: token }], changedFiles: [`src/${token}.txt`] };
+  expect(changedRunnerReference(refs, redactRunnerInput(refs))).toBe(true);
+});
+
+test.each(['API /bottleneck 해결', 'sort_key=asc 도입', 'monkey=value', 'primary_key: id', '--sort-key asc', 'public_key=ssh-rsa', `${'normal_'.repeat(100)}sort_key=asc`])('평범한 경로·정렬 키를 보존한다: %s', input => {
+  expect(redactText(input)).toBe(input);
+});
+
+test('YAML의 password 객체 정의는 다음 줄의 type을 비밀번호로 가리지 않는다', () => {
+  const schema = 'properties:\n  password:\n    type: string\n  sort_key: asc';
+  expect(redactText(schema)).toBe(schema);
+});
+
+test.each([`password: ${password.split(' ')[0]}`, `SMTP_PASSWORD: "${password}"`, `--password "${password}"`, '--password hunter2xyz',
+  'X-Api-Key: hunter2xyz', "{'password': 'hunter2xyz'}", 'OPENAI_API_KEY=hunter2xyz'])('콜론·명령 인자의 비밀을 가린다: %s', input => {
+  expect(redactText(input)).not.toContain('hunter2xyz');
+  expect(redactText(input)).not.toContain(password.split(' ')[0]);
+  expect(redactText(input)).toContain('[REDACTED]');
+  expect(redactText(redactText(input))).toBe(redactText(input));
+});
 
 test('Telegram의 실제 서비스 주소는 네트워크 요청 전에 거부한다', async () => {
   vi.stubEnv('AWBS_TELEGRAM_BOT_API_URL', 'https://api.telegram.org');
