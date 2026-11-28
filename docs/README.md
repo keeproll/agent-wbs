@@ -39,6 +39,10 @@ Agent WBS는 팀장이 일(Task)을 계획하고 승인하면, AI(인공지능) 
 - **[open-questions.md](plan/open-questions.md)**
   - owner가 이미 정해 준 것은 무엇인가(Q-01~Q-16)?
   - 아직 답을 받지 못한 질문은 무엇이고(2026-11-27 기준 없음), 답이 없을 때 어디까지 만들어도 되나?
+- **[ops/operations.md](ops/operations.md)**
+  - 이 PC에서 운영 구성(이미지·compose·Runner 서비스)을 어떻게 띄우고, 백업·복원은 어떻게 하나?
+  - SMTP·Telegram 연결은 화면에서 어떤 순서로 확인하나?
+  - 실제로 확인한 기록과 owner가 할 일은 [ops/M8-06-real-env-record.md](ops/M8-06-real-env-record.md)에 있다.
 - **[glossary.md](glossary.md)**
   - 문서에 나오는 용어와 약어는 무슨 뜻인가?
 
