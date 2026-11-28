@@ -57,6 +57,8 @@ test('UAT-AUTH-02 1회용 링크: 주소에서 토큰을 즉시 지우고 최초
 });
 
 test('UAT-AUTH-03 틀린 비밀번호 반복: 실패 안내, 429는 Retry-After 동안 막고 보호 데이터는 보이지 않는다', async ({ page }) => {
+  // 실제 PC의 벽시계 역행 대신 시험용 시계로 Retry-After 경과를 재현한다.
+  await page.clock.install({ time: new Date('2026-11-28T00:00:00.000Z') });
   const api = await fakeApi(page, { session: false });
   let tries = 0;
   api.on('POST /api/auth/session', (route) => {
@@ -77,6 +79,7 @@ test('UAT-AUTH-03 틀린 비밀번호 반복: 실패 안내, 429는 Retry-After 
   await expect(page.getByRole('alert')).toContainText('로그인 시도가 너무 많습니다');
   await expect(page.getByRole('alert')).toContainText('429 RATE_LIMITED');
   await expect(page.getByRole('button', { name: /초 뒤 다시 시도/ })).toBeDisabled();
+  await page.clock.runFor(3_250);
   await expect(page.getByRole('button', { name: '로그인', exact: true })).toBeEnabled({ timeout: 6_000 });
   expect(tries).toBe(3);
   await expect(page.getByRole('navigation', { name: '주 메뉴' })).toHaveCount(0);
