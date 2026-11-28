@@ -40,7 +40,7 @@ test('Runner 앱 반복이 실제 CI 실행기로 integrate·ci_retry를 예약�
   vi.spyOn(a.updater,'check').mockResolvedValue();
   vi.spyOn(a.updater,'applyPending').mockResolvedValue();
   const running = a.run(controller.signal);
-  try { await expect.poll(()=>claims,{ timeout:10_000 }).toEqual([['integrate','ci_retry']]); }
+  try { await expect.poll(()=>claims.filter(kinds => kinds.includes('integrate')),{ timeout:3000 }).toEqual([['integrate','ci_retry']]); }
   finally { controller.abort(); await running; await f.close(); }
 });
 

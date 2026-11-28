@@ -3,6 +3,7 @@ import { agentIsolationConfig } from './cli/dedicated-user.ts';
 import { isAbsolute, join } from 'node:path';
 import { parseRepoUrl, type GithubMode, type RepoRef } from './github/client.ts';
 import { Secret } from './security/secret.ts';
+import { PaidCalls } from './exec/paid-calls.ts';
 
 export interface GithubSettings {
   repo: RepoRef;
@@ -36,6 +37,9 @@ export interface Config {
    * 왜: 실제 Claude·Codex 호출(유료)이 시작되는 경로다. M8 실호출 전까지는 owner가 명시적으로 켤 때만 돈다.
    */
   attemptAuto: boolean;
+  planningAuto: boolean;
+  agentCallLimit: number;
+  agentMaxEffort: string;
 }
 
 export class ConfigError extends Error {
@@ -101,6 +105,13 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   const attemptAuto = env.AWBS_ATTEMPT_AUTO === '1';
   if (env.AWBS_ATTEMPT_AUTO !== undefined && !['0', '1', ''].includes(env.AWBS_ATTEMPT_AUTO)) problems.push('AWBS_ATTEMPT_AUTO는 1(켜기) 또는 0(끄기)만 쓸 수 있습니다.');
   if (attemptAuto && !github) problems.push('AWBS_ATTEMPT_AUTO=1에는 GitHub 저장소 설정(AWBS_GITHUB_REPO)이 필요합니다. 작업 폴더를 만들 로컬 clone을 그 저장소로 찾습니다.');
+  const planningAuto = env.AWBS_PLANNING_AUTO === '1';
+  if (env.AWBS_PLANNING_AUTO !== undefined && !['0', '1', ''].includes(env.AWBS_PLANNING_AUTO)) problems.push('AWBS_PLANNING_AUTO는 1(켜기) 또는 0(끄기)만 쓸 수 있습니다.');
+  if (planningAuto && (!github || !env.AWBS_PLANNING_CODEX_MODEL || !env.AWBS_PLANNING_CLAUDE_MODEL)) problems.push('Planning 자동 실행에는 GitHub 저장소와 AWBS_PLANNING_CODEX_MODEL·AWBS_PLANNING_CLAUDE_MODEL을 설정하세요.');
+  const agentCallLimit = env.AWBS_AGENT_CALL_LIMIT === undefined ? 0 : Number(env.AWBS_AGENT_CALL_LIMIT);
+  const agentMaxEffort = env.AWBS_AGENT_MAX_EFFORT ?? 'high';
+  try { new PaidCalls(home, /^\d+$/.test(env.AWBS_AGENT_CALL_LIMIT ?? '0') ? agentCallLimit : NaN, agentMaxEffort); }
+  catch (error) { problems.push((error as Error).message); }
   let agentRoot: string | null = null;
   try {
     agentRoot = agentIsolationConfig(env)?.root ?? null;
@@ -109,5 +120,5 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   }
 
   if (!url || problems.length > 0) throw new ConfigError(problems.join('\n'));
-  return { wbsUrl: url.href.replace(/\/+$/, ''), token: new Secret(token), home, logLevel, github, cliUpdates, agentRoot, ciAuto, attemptAuto };
+  return { wbsUrl: url.href.replace(/\/+$/, ''), token: new Secret(token), home, logLevel, github, cliUpdates, agentRoot, ciAuto, attemptAuto, planningAuto, agentCallLimit, agentMaxEffort };
 }

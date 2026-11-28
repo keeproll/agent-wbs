@@ -1369,5 +1369,16 @@
    },
    "source": null
   }
+ },
+ {
+  "id": "getDesignApplyJob",
+  "params": { "id": "00000000-0000-4000-8000-000000000001" },
+  "query": { "fence": 1 },
+  "status": 200,
+  "response": {
+   "sourceCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "path": "contracts/api.yaml",
+   "target": { "fields": [{ "path": "/responses/200/id", "type": "string", "required": true }] }
+  }
  }
 ]

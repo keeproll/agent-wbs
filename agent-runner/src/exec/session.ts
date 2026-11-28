@@ -5,7 +5,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { ApiError, type ApiClient, type ApiRequest, type ApiResponse, type OperationId } from '../api/client.ts';
 import { retryable, retryDelay, type Outbox } from '../api/outbox.ts';
 import type { Agent, ClaimedJob, ExecutionHold } from '../api/generated/client.ts';
-import { buildLaunch, sessionOptions } from '../cli/args.ts';
+import { buildLaunch, sessionOptions, type RunSpec } from '../cli/args.ts';
+import { PaidCalls } from './paid-calls.ts';
 import { createParser } from '../cli/adapters.ts';
 import type { CliEvent } from '../cli/events.ts';
 import { SubagentObserver, sessionSlots } from '../cli/observe.ts';
@@ -64,6 +65,7 @@ export interface ExecutionOptions {
   admissionWaitMs?: number;
   /** 전송 재시도 간격. 시험은 실제 10초 대기 대신 한 번의 재시도와 중단을 주입한다. */
   retryDelay?: typeof retryDelay;
+  paidCalls?: PaidCalls;
 }
 interface Resume { cwd: string; agent: Agent; model: string; effort: string; sessionId: string }
 class ResourceUnavailableError extends Error {}
@@ -160,7 +162,7 @@ export class Execution {
     if (!this.#isolation || !this.#recovered || !this.#d.ready()) return null;
     if (!Number.isSafeInteger(capacity) || capacity < 0) throw new RangeError('실행 용량이 올바르지 않습니다.');
     // 기존 보유는 서버의 claim 트랜잭션에서 빼므로 전체 한도를 그대로 보낸다.
-    const allowed = capacity > 0 && (['dev', 'qa'] as const).some(role =>
+    const allowed = capacity > 0 && (await this.#d.paidCalls?.available() ?? true) && (['dev', 'qa'] as const).some(role =>
       (['Claude', 'Codex'] as const).some(agent => this.#admission(agent, this.#attemptSlots(role)).ok));
     const release = this.#d.updater?.tryClaim();
     if (this.#d.updater && !release) return null;
@@ -207,6 +209,16 @@ export class Execution {
     return task;
   }
 
+  /** Planning도 시도와 같은 격리·슬롯·launch·임대·유료 호출 경계를 쓴다. */
+  async agent(job: LaunchJob, agent: Agent, spec: RunSpec, signal?: AbortSignal) {
+    const isolation = await this.#currentIsolation();
+    const launch = buildLaunch(agent, this.#d.binaries[agent], { ...spec, noSubagents: true }, { env: this.#d.env, isolation });
+    await this.#d.paidCalls?.take(spec.effort);
+    const task = this.#command(job, agent, launch, signal, false, true);
+    this.#tasks.add(task);
+    try { return await task; } finally { this.#tasks.delete(task); }
+  }
+
   /**
    * 형식 수정 요청(contracts §5): 끝난 시도의 같은 CLI 세션을 같은 작업 폴더에서 한 번 더 실행한다.
    * - 같은 job·fence·임대다. 물리 슬롯을 다시 받고(`acquireJobSlots`) 프로세스를 등록한 뒤, 끝나면 종료 증거로 반환한다.
@@ -226,7 +238,8 @@ export class Execution {
     if (!output.sessionId) throw new Error('이어 갈 CLI 세션 ID가 없어 형식 수정 요청을 보낼 수 없습니다.');
     const agent = job.payload.agent;
     const isolation = await this.#currentIsolation();
-    const launch = buildLaunch(agent, this.#d.binaries[agent], { ...output.grade, cwd: output.cwd, prompt, resume: output.sessionId }, { env: this.#d.env, isolation });
+    const launch = buildLaunch(agent, this.#d.binaries[agent], { ...output.grade, cwd: output.cwd, prompt, resume: output.sessionId, ...(this.#d.paidCalls && { noSubagents: true }) }, { env: this.#d.env, isolation });
+    await this.#d.paidCalls?.take(output.grade.effort);
     const result = await this.#command({ id: job.id, fence: job.fence, epoch }, agent, launch, signal, true, true);
     const decoder = new JsonlDecoder(), parse = createParser(agent);
     let ok = false, text = '', resultText: string | undefined;
@@ -271,7 +284,7 @@ export class Execution {
       const current = (await this.#call('getExecutionHolds', { epoch: job.epoch }, stopped)).body.holds
         .find(h => h.job === job.id && h.epoch === job.epoch && h.fence === job.fence && h.host_id === d.identity.hostId && !h.closed_at);
       if (current?.slot_state !== 'reserved') {
-        await this.#report('acquireJobSlots', { epoch: job.epoch, params: { id: job.id }, body: { fence: job.fence, hostId: d.identity.hostId } }, stopped);
+        await this.#report('acquireJobSlots', { epoch: job.epoch, params: { id: job.id }, body: { fence: job.fence, hostId: d.identity.hostId, ...(prewrapped && { agent }) } }, stopped);
       }
       acquired = true;
       const logs: Record<'stdout' | 'stderr', Buffer[]> = { stdout: [], stderr: [] };
@@ -376,7 +389,9 @@ export class Execution {
       const definitions = (await this.#call('getTaskSubagents', { epoch, params: { taskKey: job.payload.taskKey }, query: { role } }, signal)).body;
       const prompt = `${JSON.stringify(job.payload.instructions)}\n\n동시 하위 Agent 예산: ${budget}\n지정 하위 Agent: ${definitions.enabled ? definitions.items.map(i => i.key).join(', ') : '없음'}\n모델: ${grade.model}, Effort: ${grade.effort}\n입력 버전: ${job.payload.inputVersion}\n${options.prompt ?? ''}${work.notes ? `\n${work.notes}` : ''}`;
       const isolation = await this.#currentIsolation();
-      const launch = buildLaunch(job.payload.agent, d.binaries[job.payload.agent], { ...grade, cwd: work.cwd, prompt, ...(resume && { resume }) }, { env: d.env, isolation });
+      const launch = buildLaunch(job.payload.agent, d.binaries[job.payload.agent], { ...grade, cwd: work.cwd, prompt, ...(resume && { resume }), ...(d.paidCalls && { noSubagents: true }) }, { env: d.env, isolation });
+      if (d.paidCalls && definitions.enabled && definitions.items.length) throw new Error('전체 유료 호출 한도를 지키려면 하위 Agent를 끄세요.');
+      await d.paidCalls?.take(grade.effort);
       const installedSubagents = await installSubagents(work.cwd, job.payload.agent, definitions, grade, this.agentFiles);
       signal.throwIfAborted();
       this.#assertStart(job.payload.agent, slots, reservation);
@@ -394,7 +409,7 @@ export class Execution {
       d.sessions.push(session);
       this.#reservations.delete(reservation);
       const active = session;
-      const verified = d.verified?.(job.payload.agent, grade.model, sessionOptions(job.payload.agent, isolation, resume ? 'resume' : 'new')) ?? false;
+      const verified = d.verified?.(job.payload.agent, grade.model, sessionOptions(job.payload.agent, isolation, resume ? 'resume' : 'new', Boolean(d.paidCalls))) ?? false;
       const apply = (records: ReturnType<JsonlDecoder['end']>) => {
         for (const record of records) for (const event of parse(record)) {
           observer.apply(event);
@@ -495,7 +510,7 @@ export class Execution {
   async #serverProof(job: LaunchJob): Promise<Proof> {
     const d = this.#d;
     const holds = (await this.#call('getExecutionHolds', { epoch: job.epoch }, AbortSignal.timeout(10000))).body.holds;
-    const hold = holds.find(h => h.job === job.id && h.epoch === job.epoch && h.fence === job.fence && h.host_id === d.identity.hostId && h.boot_id === d.identity.bootId);
+    const hold = holds.find(h => h.job === job.id && h.epoch === job.epoch && h.fence === job.fence && h.host_id === d.identity.hostId && h.boot_id === d.identity.bootId && !h.closed_at);
     if (!hold) throw new Error('현재 서버 보유의 종료 증명을 확인할 수 없습니다.');
     // 서버가 기록한 cgroup이 있으면 cgroup_empty, 없으면 group_empty를 낸다(조정자 결정 3). 기록과 다르면 증거를 내지 않는다.
     const serverProof = await this.launches.reconcile({ job: job.id, hostId: d.identity.hostId, bootId: d.identity.bootId, processGroup: hold.pgid, cgroup: hold.cgroup });

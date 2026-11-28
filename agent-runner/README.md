@@ -4,7 +4,45 @@
 
 시도 실행과 M7-06의 연결 계약은 [시도 흐름 결합(M5-05)](src/jobs/README.md)에 있다.
 
-개발 PC에서 Agent WBS에 연결하는 상주 프로그램이다. 정리 명령 조회, 정책·메시지 조회, 생존 신호와 세션 시작·종료 보고를 제공한다. 시도 흐름은 작업 폴더·격리·결과 수집 공급원을 연결해야 실행한다. 공급원을 연결하지 않은 기본 실행은 계속 거부한다. Claude·Codex CLI 실행 인자·출력 해석·환경 변수 allowlist는 [src/cli/README.md](src/cli/README.md)에 있다(M5-01).
+개발 PC에서 Agent WBS에 연결하는 상주 프로그램이다. 앱 시작 뒤 서버 동기화·보유 대조·준비 점검을 마치면 아래 job을 받는다. Claude·Codex CLI 실행 인자·출력 해석·환경 변수 allowlist는 [src/cli/README.md](src/cli/README.md)에 있다.
+
+## 작업 수신과 켜짐 조건
+
+계약의 14종을 서버 발급 코드와 대조했다. `QueuedJobs`와 기존 `Execution`·`CiJobs`가 앱의 예약 반복에서 claim한다.
+
+| job | 서버 발급 위치 | claim·실행·보고 | 켜짐 조건 |
+|---|---|---|---|
+| `repo_check` | `project/service.ts` 저장소 확인 | QueuedJobs → GitHub `checkRepository` → repo 결과·finish | GitHub 저장소 설정 시 기본 켜짐 |
+| `github_check` | `settings/routes.ts` 연결 확인 | QueuedJobs → 연결 확인 → jobId·fence 포함 GitHub 보고(서버가 job 종료) | 위와 같음 |
+| `bootstrap` | `project/service.ts`, `project/jobs.ts` 등록·확정·재시도 | QueuedJobs → runPlanningJob → progress·기술 제안·초안·finish | Planning 자동 |
+| `input_diff` | `project/service.ts`, `project/jobs.ts` 입력 분석·재시도 | QueuedJobs → runPlanningJob → progress·CP·finish | Planning 자동 |
+| `planning` | `planning/jobs.ts`, `planning/sessions.ts` 재판단·세션·CP 판단 | QueuedJobs → runPlanningJob → planning API·finish | Planning 자동 |
+| `estimate` | `planning/estimate.ts` 추정·등급 재판단 | QueuedJobs → runPlanningJob → 추정·등급·finish | Planning 자동 |
+| `split` | `planning/split.ts` 분할 요청 | QueuedJobs → runPlanningJob → 분할 CP·finish | Planning 자동 |
+| `attempt` | `runner/service.ts` 수동·자동 시도 | AttemptFlow → Execution.claim·run → status·결과·해제 | `AWBS_ATTEMPT_AUTO=1` |
+| `stop_attempt` | `runner/routes.ts` 중단 요청 | AttemptFlow → Execution.claim·stop → interrupt·해제 | 위와 같음 |
+| `integrate` | `execution/gate.ts` 통합 조건 통과 | CiJobs → IntegrationQueue → CI·병합 대기열 보고 | `AWBS_CI_AUTO=1` |
+| `ci_retry` | `ci/routes.ts` CI 다시 실행 | CiJobs → task/int 검사 → CI·finish | 위와 같음 |
+| `deploy_check` | `ci/routes.ts` 배포 확인 | QueuedJobs → runDeployCheck → CI·finish | 위와 같음 |
+| `design_apply` | `design/service.ts` 계약에 반영 | QueuedJobs → 대상 조회·격리 CLI·파일 대조·시스템 push → snapshot·finish | Planning 자동 + 시스템 배포 키 |
+| `merge_followup` | 계약에 예약됨, 현재 발급 코드 없음 | QueuedJobs → PR 병합·main 이력 확인 → snapshot·finish | CI 자동 |
+
+무료 확인은 GitHub 조회만 하므로 기본 켜짐이다. `AWBS_GITHUB_REPO=https://github.com/<owner>/<repo>`는 인증과 작업 저장소의 기준이다. 저장소 확인은 버튼이 넘긴 URL을 따로 확인하되, 설정과 다른 저장소이면 등록을 막는 이유도 보고한다. 연결 확인은 요청의 인증 방식(gh/token)을 반영한다. GitHub 설정이 없으면 위 수신은 시작하지 않는다.
+
+Planning 자동은 `AWBS_PLANNING_AUTO=1`, `AWBS_PLANNING_CODEX_MODEL`, `AWBS_PLANNING_CLAUDE_MODEL`, 확인된 Agent 격리, 남은 호출 예산이 모두 있어야 켜진다. 기본은 꺼짐이다. `AWBS_ATTEMPT_AUTO`의 기존 시도 흐름 의미는 그대로이며, CI 자동에는 배포 확인 수신도 포함한다. 두 기존 플래그로 Planning이 켜지지는 않는다.
+
+## 유료 호출 상한
+
+- `AWBS_AGENT_CALL_LIMIT`: 기본 **0회**, owner가 정하는 검증 전체 예산 **0~30회**. `AWBS_AGENT_MAX_EFFORT`: 기본 **high**, low·medium·high만 허용한다. 상한을 넘는 등급은 실행하지 않는다.
+- Planning·계약 반영·시도·형식 수정 요청이 같은 `PaidCalls`를 쓴다. 실행 전에 `AWBS_HOME/paid-calls.json`에 사용 순번을 동기화한다. 시작 실패·중단도 소비하며, 재시작·프로젝트 초기화로 횟수가 돌아오지 않는다. 이 파일을 지우거나 새 홈으로 한도를 우회하지 않는다.
+- 하위 Agent는 끈다. 시도에 하위 Agent 정의가 켜져 있으면 실행을 거부한다. 별도 유료 세션을 장부 밖에서 만들지 않기 위해서다. 횟수는 돈의 총액 제한이 아니다.
+- 한도가 소진되면 새 유료 job을 받지 않는다. 처리 중 소진되면 해당 단계 실패를 보고한다. 무료 저장소·연결 확인은 계속한다.
+
+작업 기록은 `state/queued-jobs/job.json`, Planning의 단계·전송 기록은 `state/planning/`에 둔다. 보고는 먼저 기록하고 같은 멱등 키로 보낸다. 임대를 15초마다 연장하며 만료 5초 전에 멈춘다. 모든 push는 서버의 외부 쓰기 권한과 현재 fence를 확인하는 기존 관문을 거친다. Agent 작업 폴더 안 git은 래퍼가 실행한다.
+
+초기 작업 구역에 파일이 없으면 bare 저장소에서 `.gitkeep` 생성 커밋을 만들고 시스템 배포 키로 보낸다. `pipeline.yaml`의 내용을 추측해 만들지는 않는다. 계약 반영은 요청 때 확인한 코드 명세와 현재 main이 같은 경우에만 수행하며, 지정 계약 파일 외 변경이나 검증 실패는 push하지 않는다. push 응답을 잃으면 저장한 결과와 원격 main을 먼저 대조한다. 코드 추출기가 없는 병합 후 snapshot은 「대조 안 함」으로 보고한다.
+
+`pnpm -C agent-runner test -- queued-app`은 가짜 HTTP·CLI로 앱 시작부터 새 10종의 수신·보고를 검사한다. `TEST_DATABASE_URL=<전용 시험 DB> pnpm -C agent-wbs test:db -- runner-app`은 실제 API·PostgreSQL·Runner 앱·브라우저와 가짜 CLI로 저장소 확인 → 연결 확인 → 등록 → 기술 확정 → WBS 초안까지 검증한다. 산출물 위치는 `AWBS_RUNNER_JOBS_EVIDENCE`(기본 `/tmp/awbs-runner-jobs-evidence`)다. 실제 유료 CLI·GitHub·운영 DB는 부르지 않는다.
 
 ```sh
 pnpm -C agent-runner install --frozen-lockfile

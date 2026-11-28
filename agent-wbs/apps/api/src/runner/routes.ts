@@ -15,6 +15,7 @@ import { installResetRunner } from '../reset/routes.ts';
 import { activeDesignApply, linkDesignApply } from '../design/jobs.ts';
 import { currentRunnerJob, steps } from '../project/jobs.ts';
 import { waitingForLead } from '../project/steps.ts';
+import { designApplyContext } from '../design/service.ts';
 
 const params = (r: FastifyRequest) => r.params as { id: string; taskKey: string; attemptId: string };
 const body = <T>(r: FastifyRequest) => r.body as T;
@@ -46,6 +47,7 @@ export function installRunner(app: FastifyInstance, pool: Pool) {
     // 낡은 세대의 생존 보고는 최신 세대 번호만 응답하고 새 실행 상태를 만지지 않는다.
     if (r.platform?.epoch === r.platform?.currentEpoch) await repo.heartbeat(principal(r).slice(7));
   }, 204);
+  route('getDesignApplyJob', async (repo, r) => designApplyContext(repo.client, await checkedJob(repo, params(r).id, (r.query as { fence: number }).fence, principal(r))));
   route('reportSession', async (repo, r) => {
     const b = body<{ runnerId: string; event: string; at: string; reason?: string }>(r);
     const open = (await repo.sessions()).some(s => s.runner_id === b.runnerId && !s.ended_at);
@@ -130,15 +132,19 @@ export function installRunner(app: FastifyInstance, pool: Pool) {
     } else await release(repo, { ...job, fence: b.fence }, b.hostId, b.proof, slotsOnly);
   }, 204);
   route('acquireJobSlots', async (repo, r) => {
-    const b = body<{ fence: number; hostId: string }>(r);
+    const b = body<{ fence: number; hostId: string; agent?: Agent }>(r);
     const job = await checkedJob(repo, params(r).id, b.fence, principal(r));
     const h = await repo.hold(job.id), config = await caps(repo);
-    if (!h || h.host_id !== b.hostId || b.hostId !== config.host.host_id || h.fence !== b.fence || h.slot_state !== 'none' || h.closed_at) throw new PlatformError('INVALID_TRANSITION');
+    if (!h || h.host_id !== b.hostId || b.hostId !== config.host.host_id || h.fence !== b.fence || h.slot_state !== 'none' || h.closed_at && (job.kind === 'attempt' || h.task !== null || h.lock_state !== 'none')) throw new PlatformError('INVALID_TRANSITION');
     const { sumHolds } = await import('@awbs/shared');
     const totals = sumHolds((await repo.holds()).map(h => ({ jobId: h.job, hostId: h.host_id, agent: h.agent, slots: h.slots, heavy: h.heavy, slotState: h.slot_state })), b.hostId, job.id);
     const conc = await repo.concurrency();
-    if (totals.unconfirmedJobs.length || totals.total + h.slots > Math.min(config.caps.total, conc?.limit ?? 6) || totals.perAgent[h.agent] + h.slots > config.caps.perAgent[h.agent] || totals.heavy + 1 > config.caps.heavy) throw new PlatformError('CLAIM_REJECTED', { reasons: ['검사 실행 용량이 부족합니다.'] });
-    await repo.reserve(job, b.hostId, required(config.host.boot_id), h.agent, h.slots, true);
+    const agent = b.agent ?? h.agent;
+    if (agent !== h.agent && !['bootstrap', 'input_diff', 'planning', 'estimate', 'split', 'design_apply'].includes(job.kind)) throw new PlatformError('INVALID_TRANSITION');
+    if (totals.unconfirmedJobs.length || totals.total + h.slots > Math.min(config.caps.total, conc?.limit ?? 6) || totals.perAgent[agent] + h.slots > config.caps.perAgent[agent] || totals.heavy + 1 > config.caps.heavy) throw new PlatformError('CLAIM_REJECTED', { reasons: ['검사 실행 용량이 부족합니다.'] });
+    // 보유의 Agent는 불변이다. 두 독립 분석 사이에는 끝난 보유를 닫고 새 Agent 보유로 바꾼다.
+    if (agent !== h.agent && !h.closed_at) await repo.release(h, h.release_proof ?? 'no_process', true);
+    await repo.reserve(job, b.hostId, required(config.host.boot_id), agent, h.slots, true);
   }, 204);
   route('finishJob', async (repo, r) => {
     const b = body<{ fence: number; status: 'done' | 'failed' | 'cancelled'; result?: object; error?: { code: string; message: string } }>(r);

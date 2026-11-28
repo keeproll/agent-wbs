@@ -325,6 +325,8 @@ export type PushGate = ((operation: { kind: 'branch_push'; branch: string; remot
 };
 
 export interface GitLayout {
+  /** 읽기에도 private 저장소 인증이 필요하다. 토큰은 config·URL에 저장하지 않고 git 자식 환경에만 넣는다. */
+  authorization?: () => Promise<string>;
   /** 예: /srv/agentwbs. 그 아래 `worktrees/<저장소>`·`inputs/<저장소>`를 쓴다. */
   agentRoot?: string | null;
   /**
@@ -364,8 +366,10 @@ export class GitRepository {
   private readonly agentGit: AgentGit | null;
   private readonly agentEvidence: AgentEvidence;
   private registration: Registration | undefined;
+  private readonly authorization: GitLayout['authorization'];
 
   private constructor(home: string, repositoryId: string, layout: GitLayout = {}) {
+    this.authorization = layout.authorization;
     this.home = home;
     this.repositoryId = repositoryId;
     const area = layout.agentRoot ?? home;
@@ -415,7 +419,7 @@ export class GitRepository {
     if (await stat(await safePath(repo.statePath))) throw new GitSafetyError('기존 저장소 등록 기록을 덮어쓰지 않습니다.');
     await mkdir(repo.path, { mode: 0o700 });
     try {
-      await run(home, ['-c', 'init.templateDir=', 'clone', '--bare', '--no-local', '--', source, repo.path]);
+      await run(home, ['-c', 'init.templateDir=', 'clone', '--bare', '--no-local', '--', source, repo.path], undefined, await repo.authEnv());
       // Git LFS가 최초 fetch 때 쓰는 값도 등록 전에 고정한다.
       await run(repo.path, ['config', 'lfs.repositoryformatversion', '0']);
       repo.registration = { source, configHash: await repo.configHash(), worktrees: [] };
@@ -493,9 +497,13 @@ export class GitRepository {
       ...(generation > 0 && { resetGeneration: generation }) };
   }
 
+  private async authEnv(): Promise<NodeJS.ProcessEnv> {
+    return this.authorization ? { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.extraHeader', GIT_CONFIG_VALUE_0: `AUTHORIZATION: ${await this.authorization()}` } : {};
+  }
+
   private async git(args: string[], input?: Buffer | string, env?: NodeJS.ProcessEnv, allowed?: number[]) {
     await this.trusted();
-    return run(this.path, args, input, env, allowed);
+    return run(this.path, args, input, { ...(args[0] === 'fetch' ? await this.authEnv() : {}), ...env }, allowed);
   }
 
   private async configHash(): Promise<string> {
@@ -1256,6 +1264,27 @@ export class GitRepository {
   /** 이 커밋이 Runner bare 저장소에 있는가. 없으면 호출자가 `fetch()`로 받는다. */
   async hasCommit(commit: string): Promise<boolean> {
     return (await this.git(['rev-parse', '--verify', '--quiet', `${sha(commit)}^{commit}`], undefined, undefined, [0, 1])).toString().trim() !== '';
+  }
+
+  /** Runner 전용 bare 저장소에서만 만든다. 이미 있는 파일은 건드리지 않고 빈 작업 구역만 추가한다. */
+  async prepareProject(): Promise<{ commit: string; parent: string }> {
+    const parent = await this.fetch();
+    const entries = await this.tree(parent);
+    const missing = ['src', 'contracts', '.agentwbs'].filter(root => !entries.some(entry => entry.path === root || entry.path.startsWith(`${root}/`)));
+    if (!missing.length) return { commit: parent, parent };
+    const index = await safePath(join(this.path, `agentwbs-index-${randomUUID()}`));
+    const env = { GIT_INDEX_FILE: index };
+    try {
+      await this.git(['read-tree', parent], undefined, env);
+      const empty = (await this.git(['hash-object', '-w', '--stdin'], '')).toString().trim();
+      await this.git(['update-index', '-z', '--index-info'], missing.map(root => `100644 ${empty}\t${root}/.gitkeep\0`).join(''), env);
+      const tree = (await this.git(['write-tree'], undefined, env)).toString().trim();
+      const local = await this.head();
+      if (await this.commitTree(local) === tree && (await this.commitParents(local)).join(' ') === parent) return { commit: local, parent };
+      const commit = sha((await this.git(['commit-tree', tree, '-p', parent, '-m', 'Agent WBS 작업 구역 준비'])).toString().trim());
+      await this.git(['update-ref', 'refs/heads/main', commit, local]);
+      return { commit, parent };
+    } finally { await rm(index, { force: true }); }
   }
 
   /** `importWorktree`가 Runner bare 저장소에 가져온 마지막 결과 커밋. 가져온 적이 없으면 null이다. */

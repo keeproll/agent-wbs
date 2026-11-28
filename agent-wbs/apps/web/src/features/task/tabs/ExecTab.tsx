@@ -43,7 +43,7 @@ export function ExecTab({ task: t, attempts }: { task: TaskDetailData; attempts:
   const atts = attempts.data?.items ?? [];
   const { models } = useGradeSettings();
   // 이 Task의 CI 실행(모든 쪽). 프로젝트 id는 앱 틀이 이미 읽은 getProject 캐시에서 얻는다.
-  const project = useApiQuery('getProject', {}, { topics: ['project'] });
+  const project = useApiQuery('getProject', {}, { topics: ['project', 'planning', 'design', 'task'] });
   const projectId = project.data && 'id' in project.data ? String(project.data.id) : '';
   const ciRuns = useAllPages('listCiRuns', { params: { projectId }, query: { taskKey: t.taskKey } }, { topics: ['ci'], enabled: projectId !== '' });
   /** 원본 gradeL(「Opus 5.5 · 높음」). 설정의 모델 이름을 못 읽으면 id 그대로 */

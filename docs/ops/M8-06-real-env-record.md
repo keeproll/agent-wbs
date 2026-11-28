@@ -203,7 +203,7 @@ AWBS_IMAGE_TAG=6273888 bash /home/keeproll/orca/workspaces/agent-wbs/m8-06/agent
   docker compose -p awbs-prod -f /home/keeproll/projects/agent-wbs/agent-wbs/deploy/compose.prod.yaml --env-file /home/keeproll/.agentwbs/prod/deploy.env exec -T api awbs-entrypoint auth login-link
   ```
 
-- [ ] 화면에서 프로젝트를 등록한다(개발 때와 같은 등록 흐름).
+- [ ] 로그인만 확인한다. 프로젝트 등록은 7단계의 Runner 준비와 아래 「작업 수신 확인」을 마친 뒤 한다.
 
 ### 5단계. 화면 설정(실제 값은 owner가 입력)
 
@@ -231,14 +231,16 @@ operations §6 순서를 따른다. 「실제로 보냄」 버튼은 받는 사�
   pnpm -C /home/keeproll/projects/agent-wbs/agent-runner install --frozen-lockfile
   ```
 
-- [ ] 기존 `.env` 값 확인(비밀이 아닌 줄만 보인다). `.env`가 없으면 아무것도 안 나온다.
+- [ ] 기존 `.env`를 검증하고 켜짐 여부·한도 확인. 토큰이 잘못 붙은 줄도 원문으로 보여 주지 않는다. 토큰을 아직 넣지 않았다면 설정 오류를 해결한 뒤 다시 확인한다.
 
   ```bash
-  grep -E '^(AWBS_URL|AWBS_HOME|AWBS_AGENT_USER|AWBS_GITHUB_MODE|AWBS_GITHUB_REPO|AWBS_ATTEMPT_AUTO|AWBS_CI_AUTO)=' /home/keeproll/projects/agent-wbs/agent-runner/.env
+  pnpm -C /home/keeproll/projects/agent-wbs/agent-runner exec node --env-file-if-exists=.env --input-type=module -e 'import {loadConfig} from "./src/config.ts"; const c=loadConfig(process.env); console.log({githubConfigured:!!c.github,githubMode:c.github?.mode,attemptAuto:c.attemptAuto,ciAuto:c.ciAuto,planningAuto:c.planningAuto,agentCallLimit:c.agentCallLimit,agentMaxEffort:c.agentMaxEffort});'
   ```
 
   - `AWBS_GITHUB_MODE`: 줄이 없으면 기본값 `gh`다. `token`이면 화면에 GitHub 토큰을 저장하는 절차(`/home/keeproll/projects/agent-wbs/docs/runner-github-setup.md`)를 함께 따른다. 실제 GitHub 연결은 아직 어느 방식으로도 이 기록에서 확인하지 않았다.
-  - `AWBS_ATTEMPT_AUTO=1`이나 `AWBS_CI_AUTO=1`이 있으면, 실제 Claude·Codex 호출·CI 실행을 지금 켤지 정한다. 아니면 `0`으로 바꾼다.
+  - `AWBS_GITHUB_REPO`가 있어야 기본으로 `repo_check`·`github_check`를 받는다. 두 확인에는 유료 호출이 없다.
+  - `AWBS_ATTEMPT_AUTO=1`은 개발·검증, `AWBS_CI_AUTO=1`은 통합·재실행·배포 확인이다. 기본 꺼짐이다. 초기 분석은 별도 `AWBS_PLANNING_AUTO=1`과 두 모델 설정(`AWBS_PLANNING_CODEX_MODEL`·`AWBS_PLANNING_CLAUDE_MODEL`)이 있어야 한다.
+  - 유료 검증 전체는 `AWBS_AGENT_CALL_LIMIT=30` 이내로 owner가 정한다(기본 0). `AWBS_AGENT_MAX_EFFORT=high`가 최대다. 초기 분석·Planning·계약 반영·개발·검증·형식 수정 요청이 같은 장부를 쓰며, 하위 Agent는 끈다. 실패도 소비하고 `AWBS_HOME/paid-calls.json`을 재시작·초기화로 지우지 않는다.
 - [ ] `runner:public-key` 명령이 있는지 확인(gh-cred, PR #22로 main에 들어옴). 아래 명령이 파일 경로를 보여 주면 된다. 없으면 저장소가 최신 main이 아니므로 멈추고 알려 준다.
 
   ```bash
@@ -296,6 +298,15 @@ operations §6 순서를 따른다. 「실제로 보냄」 버튼은 받는 사�
   ```
 
 ### 8단계. 첫 백업과 리허설
+
+7단계 뒤 작업 수신도 확인한다. 시작 로그만으로 등록 흐름이 끝났다고 보지 않는다.
+
+- [ ] 프로젝트 화면에서 「저장소 접근 확인」 → private·main 커밋·필수 구조가 실제 보고로 표시됨.
+- [ ] 설정 → Runner → 「연결 확인」 → 마지막 확인 시각이 바뀜. 두 버튼은 유료 CLI를 부르지 않는다.
+- [ ] owner가 분석 예산·모델·격리를 허용한 경우에만 등록 → 초기 분석의 Codex·Claude·교차 검토 완료 → 기술 결정 확인 → WBS 초안까지 확인한다. 한도나 시스템 배포 키가 없으면 보류·실패 이유를 먼저 해결한다.
+- [ ] 사용 호출 수(`AWBS_HOME/paid-calls.json`의 `used`)를 기록한다. 전체 30회·1회 high 이내이며, 초기 분석 이후 시도·형식 수정도 이 수에 포함한다.
+
+이번 수신 연결의 검증은 전용 PostgreSQL 16·실제 API·Runner 앱·브라우저·가짜 CLI로 위 화면 흐름까지다. 실제 유료 CLI, 실제 GitHub 쓰기, 운영 자원, SMTP·Telegram 발송을 검증한 기록으로 바꾸어 읽으면 안 된다. 전체 job 목록과 켜짐 조건은 [Runner README](../../agent-runner/README.md)를 따른다.
 
 - [ ] 첫 백업. 마지막 줄이 백업 폴더다.
 

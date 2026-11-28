@@ -22,6 +22,7 @@ export const GIT_WRITES = ['pushCommit', 'pushSystemCommit'] as const;
  */
 export const WRITE_CALLERS: Readonly<Record<string, string>> = {
   'src/jobs/task-check.ts': '시도(attempt) job: serverWriteGuard(중단·임대) → pushGate·PR 생성',
+  'src/jobs/queued-work.ts': 'bootstrap·design_apply job: serverWriteGuard → pushGate → 시스템 배포 키 push',
   'src/ci/integration/queue.ts': '통합(integrate) job: 의존성 guard(CiJobs가 serverWriteGuard) → pushGate·ownedGitHub(상태·병합)',
   'src/cleanup/remote.ts': '초기화 정리 명령: job 임대가 없다(서버 초기화 세대로 묶임). M4 관문(원격·배포 키)만',
 };

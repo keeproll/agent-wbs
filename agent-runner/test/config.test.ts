@@ -5,6 +5,15 @@ import { loadConfig } from '../src/config.ts';
 
 const AWBS_RUNNER_TOKEN = 'x'.repeat(43);
 
+test('Planning은 별도 opt-in과 모델 설정이 필요하고, 유료 호출은 기본 0·최대 30회와 high 이하다', () => {
+  const base = { AWBS_RUNNER_TOKEN };
+  expect(loadConfig(base)).toMatchObject({ planningAuto: false, agentCallLimit: 0, agentMaxEffort: 'high' });
+  expect(() => loadConfig({ ...base, AWBS_PLANNING_AUTO: '1' })).toThrow('Planning');
+  expect(loadConfig({ ...base, AWBS_PLANNING_AUTO: '1', AWBS_GITHUB_REPO: 'https://github.com/o/r', AWBS_PLANNING_CODEX_MODEL: 'fake', AWBS_PLANNING_CLAUDE_MODEL: 'fake', AWBS_AGENT_CALL_LIMIT: '30' })).toMatchObject({ planningAuto: true, agentCallLimit: 30 });
+  for (const limit of ['31', '-1', '1.5', '', 'NaN']) expect(() => loadConfig({ ...base, AWBS_AGENT_CALL_LIMIT: limit })).toThrow('AWBS_AGENT_CALL_LIMIT');
+  expect(() => loadConfig({ ...base, AWBS_AGENT_MAX_EFFORT: 'xhigh' })).toThrow('AWBS_AGENT_MAX_EFFORT');
+});
+
 test('기본값', () => {
   const config = loadConfig({ AWBS_RUNNER_TOKEN, AWBS_URL: '', AWBS_HOME: '' });
   expect(config).toMatchObject({

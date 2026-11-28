@@ -10,7 +10,7 @@
 - `estimate`: 추정·재추정
 - `split`: 분할 제안
 
-실제 Claude·Codex CLI는 부르지 않는다. Agent는 `PlanningAgent` 포트(바깥 구현을 끼워 넣는 자리)로만 받는다. 실제 CLI 연결은 M5-01·M5-02에서 한다. 시험은 손으로 쓴 가짜 Agent를 쓴다.
+Agent는 `PlanningAgent` 포트(바깥 구현을 끼워 넣는 자리)로 받는다. 앱은 `cli.ts`의 실제 어댑터를 `Execution.agent`에 연결한다. Planning 자동 설정·격리·유료 호출 예산이 있어야 실행한다. 시험은 가짜 Agent 또는 가짜 CLI를 쓴다.
 
 ## 쓰는 법
 
@@ -284,11 +284,12 @@ pnpm -C agent-runner test -- planning
 - 가짜 API는 Runner가 보낸 모든 요청 본문을 `agent-wbs/contracts/openapi.json`의 요청 스키마로 검사한다(`test/planning/schema.ts`).
 - 가짜 Agent·작업 공간은 `test/planning/harness.ts`에 있다. 실제 Claude·Codex·GitHub를 부르지 않는다.
 
-## 아직 연결하지 않은 것
+## 앱 연결
 
-- job 계층 연결(claim·start·renew·finish와 이 함수 호출)은 M5-05에서 한다.
-- `PlanningWorkspace`의 실제 구현(Git 안전 계층 `src/git`과 GitHub 어댑터 `src/github` 묶기)은 아직 없다. 특히 `repo` 단계의 생성 커밋 push는 외부 쓰기 권한 확인(contracts §3.4-5)과 함께 붙여야 한다.
-- `PlanningAgent`의 실제 구현(CLI 호출·출력 파싱)은 M5-01·M5-02 뒤에 붙인다.
+- `app.ts`의 예약 반복 → `jobs/queued.ts`의 claim·start·renew·finish → `jobs/queued-work.ts` → `runPlanningJob`이다.
+- 작업 공간은 기존 Git 안전 계층을 쓴다. 입력은 고정 커밋의 읽기 전용 사본이다. 없는 작업 구역의 생성 커밋은 bare 저장소에서 만들고 기존 외부 쓰기 관문·시스템 배포 키로만 push한다.
+- `cli.ts`는 생성된 보고 스키마에서 질문별 출력 계약을 만들고, 기존 JSONL 해석기의 정상 종료·최종 JSON·출력 스키마를 모두 확인한다. 형식이 틀리면 분석 성공을 지어내지 않는다.
+- 켜짐 조건·전체 호출 예산·시험은 [Runner README](../../README.md)를 따른다.
 
 ## 용어
 

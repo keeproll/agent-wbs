@@ -71,6 +71,19 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
+test('초기 작업 구역 준비는 기존 파일을 보존하고, 없는 구역만 추가하며 재실행에 같은 커밋을 쓴다', async () => {
+  git(source, 'rm', '-r', 'src', 'contracts', '.agentwbs');
+  const parent = await commit('작업 구역 없음');
+  repo = await clone();
+  const prepared = await repo.prepareProject();
+  expect(prepared.parent).toBe(parent);
+  expect(prepared.commit).not.toBe(parent);
+  expect(await repo.changedPaths(parent, prepared.commit)).toEqual(['.agentwbs/.gitkeep', 'contracts/.gitkeep', 'src/.gitkeep']);
+  expect(await repo.fileAt(prepared.commit, 'prototype/docs/guide.md')).toEqual(Buffer.from('원본 입력'));
+  expect(await repo.prepareProject()).toEqual(prepared);
+  expect(git(remote, 'rev-parse', 'main')).toBe(parent);
+});
+
 test('로컬 bare clone과 분리된 Agent worktree를 만들고 재시작 후 다시 연다', async () => {
   repo = await clone();
   expect(await repo.head()).toBe(baseline);
