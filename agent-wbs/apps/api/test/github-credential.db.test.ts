@@ -37,7 +37,7 @@ const verified = { contents: 'verified', pulls: 'verified', statuses: 'verified'
 let bearer: string, other: string, cookie: string, csrf: string;
 let logs = '';
 const makeApp = () => {
-  const app = buildApp(pool, { ...loggerOptions('info'), stream: new Writable({ write(chunk, _encoding, done) { logs += String(chunk); done(); } }) });
+  const app = buildApp(pool, loggerOptions('info', new Writable({ write(chunk, _encoding, done) { logs += String(chunk); done(); } })));
   installProjectRunner(app, pool);
   return app;
 };

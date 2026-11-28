@@ -1,4 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
+import { isUtf8 } from 'node:buffer';
 import assert from 'node:assert/strict';
 import type { Pool, PoolClient } from '@awbs/db';
 import { OPERATIONS, type Operation } from '@awbs/shared/api';
@@ -6,6 +7,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { randomToken, tokenHash, verifyPassword } from './credentials.ts';
 import { installErrors, PlatformError } from './errors.ts';
 import { dropChanges, flushChanges } from '../changes/events.ts';
+import { changedRunnerReference, redactRunnerInput, redactText } from './redact.ts';
 
 export interface SecurityOptions { origin: string; lan: boolean; port?: number }
 interface Session { token_hash: string; expires_at: Date; csrf: string }
@@ -190,10 +192,33 @@ export function installSecurity(app: FastifyInstance, pool: Pool, options: Secur
     context.idempotency = { key, hash, project };
   });
 
+  app.addHook('preHandler', async (request) => {
+    if (request.platform?.operation?.principal !== 'runner') return;
+    const file = (request.body as { file?: unknown } | undefined)?.file;
+    // 파일을 고치면 보고한 지문이 달라진다. 텍스트에 비밀이 남았으면 저장 전에 거부한다.
+    if (Buffer.isBuffer(file) && isUtf8(file) && redactText(file.toString('utf8')) !== file.toString('utf8')) {
+      throw new PlatformError('VALIDATION_FAILED', {}, [{ path: 'file', rule: 'secret', message: '증거 파일의 비밀값을 먼저 가린 뒤 다시 보내세요.' }]);
+    }
+    // 원문으로 멱등 키를 대조한 뒤, 모든 Runner 자유 글을 저장 입구 한 곳에서 가린다.
+    const clean = redactRunnerInput(request.body);
+    if (changedRunnerReference(request.body, clean)) {
+      throw new PlatformError('VALIDATION_FAILED', {}, [{ path: 'body', rule: 'secret', message: '식별자나 파일 경로의 비밀값을 먼저 제거한 뒤 다시 보고하세요.' }]);
+    }
+    // 커밋·트리 지문에 묶인 원문은 바꿔 저장하지 않는다. 비밀이 있으면 원본부터 고쳐야 한다.
+    const anchored = request.platform.operation.id === 'reportDesignSnapshot' ? ['files', 'items', 'components']
+      : request.platform.operation.id === 'reportInputChanges' ? ['changes', 'pipelineObservation'] : [];
+    if (anchored.some(key => JSON.stringify((request.body as Record<string, unknown>)[key]) !== JSON.stringify((clean as Record<string, unknown>)[key]))) {
+      throw new PlatformError('VALIDATION_FAILED', {}, [{ path: 'body', rule: 'secret', message: '커밋에 묶인 원문의 비밀값을 먼저 제거한 뒤 다시 보고하세요.' }]);
+    }
+    request.body = clean;
+  });
+
   app.addHook('onSend', async (request, reply, payload) => {
     const context = request.platform;
     if (context?.operation?.id === 'heartbeat') reply.header('X-Current-Epoch', context.currentEpoch);
-    if (context?.client && reply.statusCode < 400 && context.idempotency) {
+    const commit = reply.statusCode < 400 || (context?.commitOnError === true && reply.statusCode < 500);
+    // 기록을 커밋하는 4xx도 응답을 저장해야 재전송으로 같은 이력을 다시 쓰지 않는다.
+    if (context?.client && commit && context.idempotency) {
       if (payload != null && typeof payload !== 'string') throw new Error('멱등 응답은 JSON 문자열이어야 합니다.');
       const headers: Record<string, string> = {};
       for (const name of ['content-type', 'etag', 'location', 'content-disposition', 'x-current-epoch']) {
@@ -204,7 +229,7 @@ export function installSecurity(app: FastifyInstance, pool: Pool, options: Secur
       const { project, key, hash } = context.idempotency;
       await context.client.query('insert into idempotency_keys(project_id,epoch,principal,key,request_hash,response) values($1,$2,$3,$4,$5,$6)', [project, context.epoch, context.principal, key, hash, saved]);
     }
-    await finish(request, reply.statusCode < 400 || (context?.commitOnError === true && reply.statusCode < 500));
+    await finish(request, commit);
     return payload;
   });
   // onError는 onSend보다 먼저 실행된다. 보류 기록을 커밋하기로 한 요청은 onSend에서 커밋 여부를 정한다.

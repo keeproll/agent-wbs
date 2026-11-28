@@ -1,7 +1,7 @@
 import { defineConfig } from 'vitest/config';
 import base from './vitest.config.ts';
 
-// 실제 DB와 가짜 외부 서비스를 쓴다. 실제 GitHub에는 쓰지 않는다.
+// 실제 DB·가짜 SMTP/Telegram·실제 PDF를 함께 검사한다. 외부 서비스는 부르지 않는다.
 export default defineConfig({
   ...base,
   test: {

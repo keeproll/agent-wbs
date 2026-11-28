@@ -45,7 +45,12 @@ export function installExecution(app: FastifyInstance, pool: Pool, options: Exec
       } });
   };
   const params = (r: FastifyRequest) => r.params as { taskKey: string; attemptId: string; id: string };
-  route('reportAttemptResult',(client,r) => reportResult(client,params(r).attemptId,r.platform?.principal ?? '',r.body as ResultReport),201);
+  route('reportAttemptResult',async (client,r) => {
+    if (await reportResult(client,params(r).attemptId,r.platform?.principal ?? '',r.body as ResultReport) === 'closed') {
+      if (r.platform) r.platform.commitOnError = true;
+      throw new PlatformError('ATTEMPT_CLOSED');
+    }
+  },201);
   route('uploadEvidence',async (client,r) => {
     const created: string[] = []; uploads.set(r,created);
     return uploadEvidence(client,params(r).attemptId,r.platform?.principal ?? '',r.platform?.epoch ?? 0,root,r.body as Parameters<typeof uploadEvidence>[5],created);

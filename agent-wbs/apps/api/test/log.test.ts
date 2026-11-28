@@ -6,10 +6,7 @@ import { loggerOptions } from '../src/log.ts';
 
 let output = '';
 const pool = createPool('postgres://u:p@127.0.0.1:1/awbs_test_x', { onError: () => undefined });
-const app = buildApp(pool, {
-  ...loggerOptions('trace'),
-  stream: { write: (line: string) => void (output += line) },
-});
+const app = buildApp(pool, loggerOptions('trace', { write: (line: string) => void (output += line) }));
 app.addHook('preHandler', async (request) => {
   if (request.url.includes('boom=1')) throw Object.assign(new Error('고장'), { client: { secretKey: 'hunter2' } });
 });
@@ -72,4 +69,10 @@ test('찾을 수 있도록 method·route·상태는 남긴다', async () => {
   expect(output).toContain('"method":"GET"');
   expect(output).toContain('"route":"/health"');
   expect(output).toContain('"statusCode":200');
+});
+
+test('자식 로거의 고정 필드에도 비밀을 남기지 않는다', () => {
+  app.log.child({ password: 'm803-child-password', nested: { botToken: 'm803-child-token' } }).info('자식 로그');
+  expect(output).toContain('자식 로그');
+  expect(output).not.toContain('m803-child');
 });

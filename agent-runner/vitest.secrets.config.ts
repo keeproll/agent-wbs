@@ -7,4 +7,5 @@ export default defineConfig({ test: { include: [
   'test/cli/{env,isolation,isolation-scripts,dedicated-user}.test.ts',
   'test/git/{agent-boundary,agent-permissions,agent-git-hang,agent-access-inventory,inputs}.test.ts',
   'test/ci/{ci-task,ci-night,ci-night-review,ci-deploy-review}.test.ts',
+  'test/jobs/collect.test.ts',
 ] } });

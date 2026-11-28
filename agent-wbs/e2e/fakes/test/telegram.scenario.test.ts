@@ -55,10 +55,11 @@ test.each(['unset', 'http://127.0.0.1:1', 'refused', 'https://api.telegram.org']
   if (endpoint === 'unset') delete process.env.AWBS_TELEGRAM_BOT_API_URL;
   else if (endpoint === 'refused') { await new Promise<void>(resolve => bot?.close(() => resolve())); bot = undefined; }
   else process.env.AWBS_TELEGRAM_BOT_API_URL = endpoint;
-  await active().lead('POST', '/api/notify/telegram/test', { chatId: '-4123456789', targetName: '팀장' });
+  const sent = await active().lead('POST', '/api/notify/telegram/test', { chatId: '-4123456789', targetName: '팀장' });
   const { processNotify } = await import('../../../apps/api/src/notify/worker.ts');
   for (let n = 1; n <= 5; n++) await processNotify(active().pool, 1, new Date(Date.now() + n * 70_000));
-  const log = (await active().lead('GET', `/api/projects/${f.project}/notify/log?kind=test`)).body.items[0];
+  // 시계가 뒤로 가도 이전 연결 테스트 기록을 고르지 않도록 이번 요청 ID로 읽는다.
+  const log = (await active().lead('GET', `/api/projects/${f.project}/notify/log/${String(sent.body.testId)}`)).body;
   expect(log).toMatchObject({ state: 'failed', attempts: 5 });
   expect(log.error).not.toMatch(/중복 도착 가능|^network:/);
 });
@@ -188,7 +189,7 @@ test('telegram: 테스트 전 켜기 거부, 쓰기 전용 토큰, 음수 대화
 test('telegram: 테스트한 조합만 활성화하고 이름 변경은 성공 유지, 토큰은 응답/이력에 없다', async () => {
   let serverLog = '';
   const stream = new Writable({ write(chunk, _encoding, done) { serverLog += String(chunk); done(); } });
-  const { project, saved } = await connect({ logger: { ...loggerOptions('info'), stream } });
+  const { project, saved } = await connect({ logger: loggerOptions('info', stream) });
   const changed = await active().lead('PUT', '/api/notify/telegram', { enabled: true, chatId: '-4123456789', targetName: '새 이름', updatedAt: saved.updatedAt });
   expect(changed.body.test.ok).toBe(true);
   expect((await active().lead('PUT', '/api/notify/telegram', { enabled: true, chatId: '512345678', targetName: '다른 대화', updatedAt: changed.body.updatedAt })).status).toBe(400);

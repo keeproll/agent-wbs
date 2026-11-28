@@ -17,7 +17,7 @@ export default async function setup(project: TestProject): Promise<void> {
   } finally { await pool.end(); }
   project.provide('testDatabaseUrl', url);
   // 무거운 DB 구조 준비는 공용 준비 단계에서 한 번 끝낸다. 개별 시험의 beforeAll은 준비된 DB를 재사용한다.
-  if ((await project.globTestFiles()).testFiles.some(file => file.endsWith('/apps/api/test/github-credential.db.test.ts'))) {
+  if (project.vitest.state.getPaths().includes(resolve(project.config.root, 'apps/api/test/github-credential.db.test.ts'))) {
     const githubUrl = new URL(url);
     githubUrl.pathname += '_ghcred';
     await recreateTestDatabase(githubUrl.href);

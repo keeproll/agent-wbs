@@ -108,7 +108,7 @@ export class Evidence {
       const path = join(this.runnerDir, n === 1 ? name : name.replace(/(\.[a-z]+)$/, `~${String(n)}$1`));
       try {
         const file = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-        try { await file.writeFile(content); } finally { await file.close(); }
+        try { await file.writeFile(this.redact(content)); } finally { await file.close(); }
         return path;
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
     }
@@ -154,7 +154,7 @@ export class Evidence {
   async finish(meta: Record<string, unknown>): Promise<void> {
     await this.ownFolder();
     // rename은 같은 이름의 링크를 따라가지 않고 링크 자체를 바꾼다.
-    await atomicWrite(this.runnerDir, 'run.json', `${JSON.stringify({ runId: this.runId, ...meta })}\n`);
+    await atomicWrite(this.runnerDir, 'run.json', `${JSON.stringify(this.redact({ runId: this.runId, ...meta }))}\n`);
   }
 }
 
