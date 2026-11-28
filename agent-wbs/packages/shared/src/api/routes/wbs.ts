@@ -707,6 +707,14 @@ const overview = [
 
 const auth = [
   operation({
+    id: 'getLoginOptions',
+    method: 'GET',
+    path: '/api/auth/options',
+    principal: 'none',
+    summary: '로그인 방법과 PIN 기준 시간대',
+    responses: { 200: Type.Object({ pinEnabled: Type.Boolean(), pinTimeZone: Type.String() }) },
+  }),
+  operation({
     id: 'login',
     method: 'POST',
     path: '/api/auth/session',

@@ -46,7 +46,13 @@ test('UAT-AUTH-02 실제 1회용 링크: 주소에서 토큰 제거, 세션 발�
 test('UAT-AUTH-01 실제 날짜 PIN: 보호 주소 → 로그인 → 같은 주소로 복귀, pin 세션', async ({ page }) => {
   await page.goto('/settings/report');
   await expect(page).toHaveURL('/login?next=%2Fsettings%2Freport');
-  await fillPin(page, todayPin());
+  expect(await page.evaluate(() => fetch('/api/auth/options').then(response => response.json() as Promise<unknown>))).toEqual({ pinEnabled: true, pinTimeZone: 'Asia/Seoul' });
+  const pin = todayPin();
+  await fillPin(page, `${pin.slice(0, 5)}${String((Number(pin[5]) + 4) % 10)}`);
+  await page.getByRole('button', { name: '로그인' }).click();
+  await expect(page.getByRole('alert')).toContainText('401 LOGIN_FAILED');
+  await expect(page.getByRole('textbox', { name: 'PIN 1번째 숫자', exact: true })).toBeFocused();
+  await page.keyboard.type(pin);
   await page.getByRole('button', { name: '로그인' }).click();
   await expect(page).toHaveURL('/settings/report');
   await expect(page.getByRole('heading', { level: 1, name: '설정' })).toBeVisible();

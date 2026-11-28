@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import type { Pool, PoolClient } from '@awbs/db';
 import { OPERATIONS, type Operation } from '@awbs/shared/api';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { verifyDatePin } from './date-pin.ts';
+import { DEFAULT_PIN_TIME_ZONE, verifyDatePin } from './date-pin.ts';
 import { randomToken, tokenHash } from './credentials.ts';
 import { installErrors, PlatformError } from './errors.ts';
 import { dropChanges, flushChanges } from '../changes/events.ts';
@@ -234,6 +234,9 @@ export function installSecurity(app: FastifyInstance, pool: Pool, options: Secur
   app.addHook('onTimeout', async (request) => { await finish(request, false); });
 
   const cookie = (token: string, maxAge: number, origin: string | undefined) => `awbs_session=${token}; Path=/; Max-Age=${String(maxAge)}; HttpOnly; SameSite=Strict${origin?.startsWith('https:') ? '; Secure' : ''}`;
+  app.get('/api/auth/options', (_request, reply) => reply.header('Cache-Control', 'no-store').send({
+    pinEnabled: options.lan, pinTimeZone: options.pinTimeZone ?? DEFAULT_PIN_TIME_ZONE,
+  }));
   const login = OPERATIONS.find((op) => op.id === 'login');
   assert(login?.body);
   app.post('/api/auth/session', { schema: { body: login.body } }, async (request, reply) => {

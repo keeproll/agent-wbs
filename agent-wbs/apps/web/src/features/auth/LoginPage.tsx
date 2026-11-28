@@ -10,6 +10,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { Navigate, useNavigate, useSearchParams } from 'react-router';
 import { useApi } from '../../shared/api/ApiProvider.tsx';
+import { useApiQuery } from '../../shared/api/queries.ts';
 import { ApiError } from '../../shared/api/client.ts';
 import { safeReturnPath } from '../../shared/auth/login-link.ts';
 import { useDocumentTitle } from '../../shared/layout/Page.tsx';
@@ -34,6 +35,8 @@ function problemText(problem: Problem, wait: number): string {
 export function LoginPage() {
   useDocumentTitle('로그인');
   const { client, session, refreshSession } = useApi();
+  const loginOptions = useApiQuery('getLoginOptions', {}, { enabled: !session, keepPrevious: false });
+  const pinEnabled = loginOptions.data?.pinEnabled === true && !loginOptions.error;
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const next = safeReturnPath(params.get('next'));
@@ -52,6 +55,13 @@ export function LoginPage() {
     const timer = setInterval(() => { setNow(Date.now()); }, 250);
     return () => { clearInterval(timer); };
   }, [waitUntil]);
+
+  useEffect(() => {
+    if (pinEnabled && !busy && wait === 0 && problem && problem.kind !== 'link') {
+      inputs.current[0]?.focus();
+      inputs.current[0]?.select();
+    }
+  }, [busy, pinEnabled, problem, wait]);
 
   if (session) return <Navigate to={next} replace />;
 
@@ -83,7 +93,7 @@ export function LoginPage() {
   };
 
   const enterDigits = (index: number, value: string) => {
-    const numbers = value.replace(/[^0-9]/g, '').slice(0, 6 - index);
+    const numbers = value.normalize('NFKC').replace(/[^0-9]/g, '').slice(0, 6 - index);
     setDigits(previous => previous.map((digit, at) => at === index && numbers === '' ? '' : numbers[at - index] ?? digit));
     if (numbers) inputs.current[Math.min(5, index + numbers.length)]?.focus();
   };
@@ -93,8 +103,12 @@ export function LoginPage() {
       <main className="login-box" aria-labelledby="login-t">
         <div className="brand"><span className="logo" aria-hidden="true">AW</span><span>Agent WBS</span></div>
         <h1 id="login-t">로그인</h1>
-        <p className="page-sub">같은 사무실 네트워크(LAN)에서는 오늘 날짜 PIN으로, 서버를 실행한 이 PC에서는 1회용 링크로 로그인합니다.</p>
-        <div className="banner warn" role="note">LAN 모드에서는 같은 네트워크 누구나 날짜로 접속 가능합니다. 신뢰하는 네트워크에서만 켜세요.</div>
+        <p className="page-sub">{pinEnabled ? '같은 사무실 네트워크(LAN)에서는 오늘 날짜 PIN으로, 서버를 실행한 이 PC에서는 1회용 링크로 로그인합니다.' : '서버를 실행한 이 PC에서는 1회용 링크로 로그인합니다.'}</p>
+        {pinEnabled && <div className="banner warn" role="note">LAN 모드에서는 같은 네트워크 누구나 날짜로 접속 가능합니다. 신뢰하는 네트워크에서만 켜세요.</div>}
+        {loginOptions.isPending && <p role="status">로그인 방법을 확인하고 있습니다.</p>}
+        {loginOptions.error && <div className="banner danger" role="alert">로그인 방법을 확인하지 못했습니다.
+          <BusyButton busy={loginOptions.isFetching} busyLabel="확인 중…" onClick={() => { void loginOptions.refetch(); }}>다시 확인</BusyButton>
+        </div>}
 
         {problem && (
           <div className="banner danger" role="alert" id={errorId}>
@@ -106,20 +120,25 @@ export function LoginPage() {
           </div>
         )}
 
-        <form className="card login-card" onSubmit={(event) => { void submit(event); }} noValidate>
+        {pinEnabled && <form className="card login-card" onSubmit={(event) => { void submit(event); }} noValidate>
           <h2 className="login-h">PIN 번호로 로그인</h2>
-          <p className="fhint" id={hintId}>서버 시간대(기본 Asia/Seoul)의 오늘 날짜를 YYMMDD로 입력하세요. 예: 2026년 11월 28일 → 261128. 자정 앞뒤 5초는 두 날짜를 허용합니다. 이 입력은 LAN 모드에서만 사용할 수 있습니다.</p>
+          <p className="fhint" id={hintId}>서버 시간대({loginOptions.data?.pinTimeZone})의 오늘 날짜를 YYMMDD로 입력하세요. 예: 2026년 11월 28일 → 261128. 자정 앞뒤 5초는 두 날짜를 허용합니다.</p>
           <fieldset className="login-pin" disabled={busy || wait > 0} aria-describedby={`${hintId}${problem ? ` ${errorId}` : ''}`}>
             <legend className="fsel-l">PIN 번호</legend>
             {digits.map((digit, index) => (
               <input key={index} ref={element => { inputs.current[index] = element; }} className="inp mono"
-                type="text" inputMode="numeric" pattern="[0-9]" maxLength={1} required
+                type="text" inputMode="numeric" pattern="[0-9]" required
                 autoComplete={index === 0 ? 'one-time-code' : 'off'} aria-label={`PIN ${String(index + 1)}번째 숫자`}
                 aria-invalid={problem?.kind === 'failed' || undefined} value={digit}
                 onFocus={event => { event.target.select(); }}
-                onChange={event => { enterDigits(index, event.target.value); }}
+                onInput={event => {
+                  const input = event.nativeEvent as InputEvent;
+                  if (!input.isComposing) enterDigits(index, input.data ?? event.currentTarget.value);
+                }}
+                onCompositionEnd={event => { enterDigits(index, event.data || event.currentTarget.value); }}
                 onPaste={event => { event.preventDefault(); enterDigits(index, event.clipboardData.getData('text')); }}
                 onKeyDown={event => {
+                  if (event.nativeEvent.isComposing) return;
                   if (event.key === 'Backspace' && !digit && index > 0) {
                     event.preventDefault(); enterDigits(index - 1, ''); inputs.current[index - 1]?.focus();
                   }
@@ -134,7 +153,7 @@ export function LoginPage() {
               {wait > 0 ? `${String(wait)}초 뒤 다시 시도` : '로그인'}
             </BusyButton>
           </div>
-        </form>
+        </form>}
 
         <section className="card login-card" aria-labelledby="login-link-t">
           <h2 className="login-h" id="login-link-t">이 PC에서 로그인(1회용 링크)</h2>

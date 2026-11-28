@@ -17,7 +17,7 @@ test('UAT-AUTH-01 보호 화면 → 로그인 화면 1개(PIN·새 링크 안내
   await expect(page.getByRole('heading', { name: '이 PC에서 로그인(1회용 링크)' })).toBeVisible();
   await expect(page.getByText(LOGIN_LINK_COMMAND)).toBeVisible();
   // 보호 데이터 요청을 하지 않는다.
-  expect(api.calls().filter((c) => !c.startsWith('GET /api/session'))).toEqual([]);
+  expect(api.calls().filter(c => !['GET /api/session', 'GET /api/auth/options'].includes(c))).toEqual([]);
 
   await fillPin(page, '261128');
   await page.getByRole('button', { name: '로그인' }).click();
@@ -25,6 +25,78 @@ test('UAT-AUTH-01 보호 화면 → 로그인 화면 1개(PIN·새 링크 안내
   await expect(page.getByRole('heading', { level: 1, name: 'WBS' })).toBeVisible();
   const login = api.requests('POST /api/auth/session')[0];
   expect(login?.postDataJSON()).toEqual({ method: 'pin', pin: '261128' });
+});
+
+test('실패 뒤 첫 칸을 선택하고 앞자리가 같은 PIN도 끝까지 다시 입력한다', async ({ page }) => {
+  const api = await fakeApi(page, { session: false });
+  let loggedIn = false;
+  api.on('GET /api/session', route => loggedIn ? json(route, 200, SESSION) : json(route, 401, errorBody('LEAD_UNAUTHORIZED')));
+  api.on('POST /api/auth/session', (route, request) => {
+    loggedIn = (request.postDataJSON() as { pin: string }).pin === '261128';
+    return loggedIn ? route.fulfill({ status: 204 }) : json(route, 401, errorBody('LOGIN_FAILED'));
+  });
+  await page.goto('/login');
+  await fillPin(page, '261127');
+  await page.getByRole('button', { name: '로그인', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('401 LOGIN_FAILED');
+  const first = page.getByRole('textbox', { name: 'PIN 1번째 숫자', exact: true });
+  await expect(first).toBeFocused();
+  expect(await first.evaluate(input => [(input as HTMLInputElement).selectionStart, (input as HTMLInputElement).selectionEnd])).toEqual([0, 1]);
+  await page.keyboard.type('261128');
+  await page.getByRole('button', { name: '로그인', exact: true }).click();
+  await expect(page).toHaveURL('/dashboard');
+  expect(api.requests('POST /api/auth/session').map(request => request.postDataJSON() as unknown)).toEqual([
+    { method: 'pin', pin: '261127' }, { method: 'pin', pin: '261128' },
+  ]);
+});
+
+test('여러 글자 자동완성·IME 입력을 6칸에 나누고 같은 숫자 덮어쓰기도 다음 칸으로 옮긴다', async ({ page }) => {
+  await fakeApi(page, { session: false });
+  await page.goto('/login');
+  const inputs = page.getByRole('group', { name: 'PIN 번호', exact: true }).getByRole('textbox');
+  await inputs.first().focus();
+  await page.keyboard.insertText('261128');
+  for (const [index, digit] of [...'261128'].entries()) await expect(inputs.nth(index)).toHaveValue(digit);
+  await expect(inputs.last()).toBeFocused();
+  await inputs.first().focus();
+  await page.keyboard.insertText('2');
+  await expect(inputs.nth(1)).toBeFocused();
+  await inputs.first().focus();
+  await inputs.first().evaluate(input => {
+    input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    (input as HTMLInputElement).value = '2２６１１２７';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, data: '２６１１２７', inputType: 'insertCompositionText', isComposing: true }));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', isComposing: true, bubbles: true }));
+  });
+  await expect(inputs.first()).toBeFocused();
+  await inputs.first().evaluate(input => {
+    input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '２６１１２７' }));
+  });
+  for (const [index, digit] of [...'261127'].entries()) await expect(inputs.nth(index)).toHaveValue(digit);
+  await expect(inputs.last()).toBeFocused();
+});
+
+test('loopback 모드는 PIN·LAN 경고를 숨기고 이 PC 링크 로그인만 안내한다', async ({ page }) => {
+  const api = await fakeApi(page, { session: false });
+  api.on('GET /api/auth/options', route => json(route, 200, { pinEnabled: false, pinTimeZone: 'Asia/Seoul' }));
+  await page.goto('/login');
+  await expect(page.getByText(LOGIN_LINK_COMMAND)).toBeVisible();
+  await expect(page.getByRole('status')).toHaveCount(0);
+  await expect(page.getByRole('group', { name: 'PIN 번호', exact: true })).toHaveCount(0);
+  await expect(page.getByText(/같은 네트워크 누구나 날짜로 접속 가능/)).toHaveCount(0);
+  expect(api.requests('POST /api/auth/session')).toHaveLength(0);
+});
+
+test('로그인 설정을 읽지 못하면 재시도 안내를 보이고 확인 전에는 PIN 입력을 열지 않는다', async ({ page }) => {
+  const api = await fakeApi(page, { session: false });
+  api.on('GET /api/auth/options', route => json(route, 503, errorBody('UNAVAILABLE')));
+  await page.goto('/login');
+  await expect(page.getByRole('alert')).toContainText('로그인 방법을 확인하지 못했습니다.');
+  await expect(page.getByRole('group', { name: 'PIN 번호', exact: true })).toHaveCount(0);
+  api.on('GET /api/auth/options', route => json(route, 200, { pinEnabled: true, pinTimeZone: 'UTC' }));
+  await page.getByRole('button', { name: '다시 확인' }).click();
+  await expect(page.getByRole('group', { name: 'PIN 번호', exact: true })).toBeVisible();
+  await expect(page.getByText('서버 시간대(UTC)', { exact: false })).toBeVisible();
 });
 
 test('PIN 6칸은 모바일 숫자 키패드·자동 이동·백스페이스·붙여넣기를 지원한다', async ({ page }) => {
@@ -112,6 +184,7 @@ test('UAT-AUTH-03 틀린 PIN 반복: 실패 안내, 429는 Retry-After 동안 �
   await expect(page.getByRole('alert')).toContainText('429 RATE_LIMITED');
   await expect(page.getByRole('button', { name: /초 뒤 다시 시도/ })).toBeDisabled();
   await expect(page.getByRole('button', { name: '로그인', exact: true })).toBeEnabled({ timeout: 6_000 });
+  await expect(page.getByRole('textbox', { name: 'PIN 1번째 숫자', exact: true })).toBeFocused();
   expect(tries).toBe(3);
   await expect(page.getByRole('navigation', { name: '주 메뉴' })).toHaveCount(0);
   expect(api.calls().filter((c) => c.startsWith('GET /api/project') || c.startsWith('GET /api/runner'))).toEqual([]);

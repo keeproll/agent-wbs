@@ -8393,6 +8393,56 @@
         }
       }
     },
+    "/api/auth/options": {
+      "get": {
+        "operationId": "getLoginOptions",
+        "summary": "로그인 방법과 PIN 기준 시간대",
+        "tags": [
+          "none"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "로그인 방법과 PIN 기준 시간대",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "pinEnabled",
+                    "pinTimeZone"
+                  ],
+                  "properties": {
+                    "pinEnabled": {
+                      "type": "boolean"
+                    },
+                    "pinTimeZone": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "INTERNAL"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error",
+            "description": "UNAVAILABLE"
+          }
+        },
+        "x-error-codes": {
+          "500": [
+            "INTERNAL"
+          ],
+          "503": [
+            "UNAVAILABLE"
+          ]
+        }
+      }
+    },
     "/api/auth/session": {
       "post": {
         "operationId": "login",

@@ -6,6 +6,16 @@ import { createPool } from '@awbs/db';
 import { buildApp } from '../src/app.ts';
 
 describe('security 비밀값과 기동 설정', () => {
+  test.each([false, true])('공개 로그인 옵션은 DB·세션 없이 실제 LAN 설정(%s)과 시간대만 알려준다', async lan => {
+    const pool = createPool('postgres://u:p@127.0.0.1:1/awbs_test_unused', { onError: () => undefined });
+    const app = buildApp(pool, false, { origin: 'http://127.0.0.1:3100', lan, pinTimeZone: 'UTC' });
+    try {
+      const result = await app.inject({ url: '/api/auth/options' });
+      expect(result.statusCode).toBe(200);
+      expect(result.headers['cache-control']).toBe('no-store');
+      expect(result.json()).toEqual({ pinEnabled: lan, pinTimeZone: 'UTC' });
+    } finally { await app.close(); await pool.end(); }
+  });
   test.each(['/api/unlisted', '/internal/unlisted'])('권한 선언 없는 %s 경로는 등록할 수 없다', async (url) => {
     const pool = createPool('postgres://u:p@127.0.0.1:1/awbs_test_unused', { onError: () => undefined });
     const app = buildApp(pool);

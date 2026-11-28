@@ -56,6 +56,7 @@ export interface FakeApi {
 /** page 대신 context를 주면 그 context에서 새로 열리는 탭(popup)도 같은 가짜 API를 쓴다. */
 export async function fakeApi(page: Page | BrowserContext, options: { session?: boolean; project?: ResponseOf<'getProject'> } = {}): Promise<FakeApi> {
   const handlers = new Map<string, Handler>([
+    ['GET /api/auth/options', route => json(route, 200, { pinEnabled: true, pinTimeZone: 'Asia/Seoul' } satisfies ResponseOf<'getLoginOptions'>)],
     ['GET /api/session', (route) => (options.session === false ? json(route, 401, errorBody('LEAD_UNAUTHORIZED')) : json(route, 200, SESSION))],
     ['GET /api/project', (route) => json(route, 200, options.project ?? ACTIVE_PROJECT)],
     ['GET /api/runner-state', (route) => json(route, 200, RUNNER)],
