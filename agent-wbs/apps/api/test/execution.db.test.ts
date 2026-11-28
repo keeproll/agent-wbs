@@ -10,6 +10,7 @@ import { installRunner } from '../src/runner/routes.ts';
 import { completeMergedTask, invalidateTaskGate } from '../src/execution/gate.ts';
 import { inEpoch } from '../src/platform/transaction.ts';
 import { RunnerRepository } from '../src/runner/repository.ts';
+import { watchRunner } from '../src/runner/watch.ts';
 
 const db = new URL(inject('testDatabaseUrl'));
 db.pathname += '_execution';
@@ -279,6 +280,24 @@ test('열린 슬롯·낡은 fence·다른 종류 본문·다른 시도의 증거
   expect((await post(`attempts/${a.attempt}/result`,noVerification)).statusCode).toBe(400);
   expect((await report(a,'PASS',{ evidence:[randomUUID()] })).statusCode).toBe(400);
   expect((await owner.query('select * from verifications')).rowCount).toBe(0);
+});
+
+test('중단 뒤 결과는 소유자·fence를 확인하고 요약만 남긴 뒤 ATTEMPT_CLOSED로 거부한다', async () => {
+  const a = await running('qa');
+  await watchRunner(pool, 1, new Date(Date.now() + 600_000));
+  const other = await issueRunnerToken(pool, 'late-result-other', '시험');
+  const body = { ...result(a), summary: '늦게 도착한 결과', tokens: 999, changedFiles: ['늦은-파일.ts'] };
+  expect((await post(`attempts/${a.attempt}/result`, body, { ...headers(), authorization: `Bearer ${other}` })).json()).toMatchObject({ error: { code: 'LEASE_LOST' } });
+  expect((await post(`attempts/${a.attempt}/result`, { ...body, fence: a.fence + 1 })).json()).toMatchObject({ error: { code: 'LEASE_LOST' } });
+  expect((await owner.query("select count(*)::int n from task_history where kind='중단 뒤 결과 수신'")).rows).toEqual([{ n: 0 }]);
+  const late = await post(`attempts/${a.attempt}/result`, body);
+  expect(late.statusCode).toBe(409);
+  expect(late.json()).toMatchObject({ error: { code: 'ATTEMPT_CLOSED' } });
+  expect((await owner.query("select ref from task_history where kind='중단 뒤 결과 수신'")).rows).toEqual([{ ref: { attemptId: a.attempt, summary: '늦게 도착한 결과' } }]);
+  expect((await owner.query('select status,summary,tokens from task_attempts where id=$1', [a.attempt])).rows).toEqual([{ status: 'interrupted', summary: null, tokens: null }]);
+  expect((await owner.query('select count(*)::int n from verifications')).rows).toEqual([{ n: 0 }]);
+  expect((await owner.query('select count(*)::int n from attempt_files')).rows).toEqual([{ n: 0 }]);
+  expect((await get(`tasks/${a.key}`)).json()).toMatchObject({ lifecycleStatus: 'paused' });
 });
 
 test('아직 claim하지 않은 실행 job도 Task 삭제를 막는다', async () => {

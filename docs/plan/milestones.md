@@ -445,6 +445,10 @@ flowchart LR
   - 디렉토리: `agent-wbs/e2e` · 병렬: ∥ · 담당 / 리뷰: Codex / Claude
 - **M8-02** — 장애·부하: DB 재시작·Runner kill·PC 변경·200 Task·수십 세션(fake)
   - 완료 조건(검증): `W test:resilience`
+  - 전용 Debian PostgreSQL 16을 자동 생성한다. 시험 뒤 컨테이너와 익명 볼륨을 함께 지운다. 기존 DB를 재시작하지 않기 위해서다.
+  - 200 Task·24개 동시 세션에서 중복 실행·미확인 보유·낡은 결과 거부를 확인한다. 각 장애 뒤 목록·Runner 상태·보고서 생성·열기를 각각 20번 잰다.
+  - 조정자 확인 기준: 목록·Runner 상태 p95 1초 이하, 보고서 생성·열기 p95 각각 2초 이하. p95는 측정값을 작은 순으로 놓았을 때 95% 지점의 값이다. 한 번의 빠른 응답만으로 통과시키지 않기 위해서다.
+  - 실행 방법과 측정 범위: [장애·부하 시험 안내](../../agent-wbs/e2e/resilience/README.md).
   - 디렉토리: 양쪽 · 병렬: ∥ · 담당 / 리뷰: Codex / Claude
 - **M8-03** — 보안 검토·비밀값 유출 검사
   - 완료 조건(검증): `W test:secrets && R test:secrets` + 리뷰 지적 0건 미해결

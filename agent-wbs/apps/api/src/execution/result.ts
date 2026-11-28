@@ -20,6 +20,16 @@ export async function reportResult(client: PoolClient, attemptId: string, princi
   await repo.lock();
   const a = await repo.attempt(attemptId);
   if (!a) throw new PlatformError('ATTEMPT_NOT_FOUND');
+  if (a.status === 'interrupted') {
+    const job = await repo.job(a.job);
+    if (!job || job.fence !== body.fence || job.lease_owner !== principal) throw new PlatformError('LEASE_LOST');
+    const task = await repo.taskById(a.task);
+    if (!task) throw new PlatformError('TASK_NOT_FOUND');
+    // 만료된 임대의 결과는 적용하지 않는다. 원래 소유자가 보낸 요약만 진단 이력으로 남긴다(contracts §4.3).
+    await repo.historyEvent(task,'중단 뒤 결과 수신',{ attemptId:a.id,summary:body.summary });
+    deferChange(client,task.project_id,'attempt',{ taskKey:task.task_key,attemptId:a.id });
+    return 'closed' as const;
+  }
   const job = await checkedJob(repo,a.job,body.fence,principal);
   if (a.status !== 'running') throw new PlatformError('ATTEMPT_CLOSED');
   const task = await repo.taskById(a.task);
