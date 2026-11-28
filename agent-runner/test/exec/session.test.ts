@@ -178,6 +178,35 @@ test('M5-01 호환: 배경 여부가 빠진 Claude 호출은 전경으로 추정
   expect(result.reserved).toBe(3);
 });
 
+test('실제 사용 보고: Claude가 부른 하위 Agent 이름·횟수를 사후 보고에 싣는다(같은 호출은 한 번, 이름 없는 호출은 세지 않음)', async () => {
+  const call = (id: string, input: object) => ({ type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'tool_use', name: 'Agent', id, input }] } });
+  const t = await setup({ lines: [
+    call('call-1', { subagent_type: 'Explore', prompt: 'a' }),
+    call('call-1', { subagent_type: 'Explore', prompt: 'a' }),
+    call('call-2', { subagent_type: 'Explore', prompt: 'b' }),
+    call('call-3', { subagent_type: 'db-migrator', prompt: 'c' }),
+    call('call-4', { prompt: '이름 없음' }),
+    { type: 'result', subtype: 'success', is_error: false },
+  ] });
+  t.options.binaries.Claude = t.fake.path;
+  await t.exec.run({ ...job, payload: { ...job.payload, agent: 'Claude' } });
+  await t.outbox.flush();
+  const usage = t.requests.filter(r => r.path.endsWith('/subagent-usage'));
+  expect(usage).toHaveLength(1);
+  expect(usage[0]?.path).toBe('/api/runner/attempts/attempt-1/subagent-usage');
+  expect(usage[0]?.body).toEqual({ fence: 9, confirm: 'partial', items: [
+    { id: 'Explore', version: null, hash: null, count: 2 },
+    { id: 'db-migrator', version: null, hash: null, count: 1 },
+  ] });
+});
+
+test('실제 사용 보고: Codex 출력에는 이름이 없어 빈 목록(모름)을 보낸다', async () => {
+  const t = await setup();
+  await t.exec.run(job);
+  await t.outbox.flush();
+  expect(t.requests.find(r => r.path.endsWith('/subagent-usage'))?.body).toEqual({ fence: 9, confirm: 'partial', items: [] });
+});
+
 test.each([{ cwd: '/다른/폴더' }, { agent: 'Claude' }, { model: '다른-model' }, { effort: 'low' }])('CLI resume 로컬 조건이 달라지면 새 세션: %j', async change => {
   const t = await setup();
   await t.exec.run(job);

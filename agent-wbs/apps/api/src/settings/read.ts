@@ -44,7 +44,7 @@ export async function agentUsage(client: PoolClient) {
     cross join lateral(select count(*)::int decisions,count(*) filter(where q.result='FAIL')::int failures from task_attempts a
       join lateral(select v.result from task_attempts qa left join verifications v on v.attempt=qa.id and not exists(select 1 from verification_invalidations i where i.verification=v.id)
         where qa.task=a.task and qa.attempt_no>a.attempt_no and qa.kind in ('qa','reverify') order by qa.attempt_no limit 1) q on true
-      where exists(select 1 from attempt_subagents s join subagent_defs sd on sd.id=s.subagent where s.attempt=a.id and sd.def_key=d.def_key and s.observed_used is true)
+      where exists(select 1 from attempt_subagents s join subagent_defs sd on sd.id=s.subagent where s.attempt=a.id and sd.def_key=d.def_key and s.observed_used is true and s.confirm='confirmed')
       and a.kind in ('dev','rework') and q.result in ('PASS','FAIL')) stats
     order by d.def_key,d.version`)).rows;
   return { lockedTasks, models, subagents };

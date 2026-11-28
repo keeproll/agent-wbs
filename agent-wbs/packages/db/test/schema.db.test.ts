@@ -140,8 +140,8 @@ test('schema: all planned tables and Drizzle columns match the migrated database
         col.getSQLType().replace('bigserial', 'bigint'),
       );
   }
-  // 결정 15의 불변 병합 사실 원장이 추가됐다.
-  expect(tables).toHaveLength(101);
+  // 결정 15의 불변 병합 사실 원장이 추가됐다. 0048: 실제 사용한 하위 Agent(attempt_subagent_usage).
+  expect(tables).toHaveLength(102);
 });
 
 test('schema: previous migration upgrades with data preserved and repeated migrate is inert', async () => {

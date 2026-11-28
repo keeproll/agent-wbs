@@ -7,10 +7,10 @@
  * 환경 변수가 없으면(일반 `W e2e`) 건너뛴다.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { expect, test, type Page } from '@playwright/test';
+import { visualOut } from './support/visual.ts';
 
 const password = process.env.AWBS_E2E_PASSWORD ?? '';
 const api = process.env.AWBS_E2E_API ?? '';
@@ -19,7 +19,7 @@ test.describe.configure({ mode: 'serial' });
 test.use({ viewport: { width: 1920, height: 1080 } });
 
 const PG = process.env.AWBS_E2E_PG_CONTAINER ?? '';
-const OUT = process.env.AWBS_PERF_OUT ?? join(homedir(), '.orca/bots/agentwbs/archive/2026-11-26/M3-02/perf');
+const OUT = visualOut('AWBS_PERF_OUT', 'M3-02-perf');
 const serverErrors: string[] = [];
 
 async function login(page: Page) {

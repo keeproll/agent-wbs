@@ -24,9 +24,10 @@ describe('Claude stream-json 어댑터(fixture)', () => {
   test('하위 Agent: 복수·중첩 생성의 ID와 부모 연결, 끝난 것만 뺀다', () => {
     const { events, o } = observe('subagents');
     expect(events.filter((e) => e.type === 'agent_call')).toEqual([
-      { type: 'agent_call', id: 'toolu_A', parentId: null },
-      { type: 'agent_call', id: 'toolu_B', parentId: null },
-      { type: 'agent_call', id: 'toolu_C', parentId: 'toolu_A' },
+      // agentType: 호출 입력의 subagent_type 원문(실제 사용 보고 재료, UAT-TASK-10)
+      { type: 'agent_call', id: 'toolu_A', parentId: null, agentType: 'fe-implementer' },
+      { type: 'agent_call', id: 'toolu_B', parentId: null, agentType: 'qa' },
+      { type: 'agent_call', id: 'toolu_C', parentId: 'toolu_A', agentType: 'helper' },
     ]);
     // local_bash(배경 명령)는 하위 Agent가 아니다: 해석기는 종류를 그대로 넘기고 reducer가 세지 않는다
     expect(events).toContainEqual(expect.objectContaining({ type: 'task', op: 'started', taskId: 'task_bash', taskType: 'local_bash' }));

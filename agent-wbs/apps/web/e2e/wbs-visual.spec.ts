@@ -2,16 +2,14 @@
  * WBS 화면을 원본 스크린샷과 나란히 비교한다(M3-02 시각 비교).
  * 조건: 원본과 같은 viewport(1920×1080·1280×800), 기기 배율 1, ko-KR, Asia/Seoul, 시계 2026-11-05 20:00 KST, 애니메이션 끔, 마우스는 구석.
  * 자료: e2e/support/wbs-fixture.ts(원본 기본 Mock 12건과 같은 구성).
- * 결과: ~/.orca/bots/agentwbs/archive/2026-11-26/M3-02/visual/ 에 [원본 | 구현 | 차이] PNG와 summary.md.
+ * 결과: 기본은 실행마다 새 임시 폴더(support/visual.ts visualOut), 보관하려면 AWBS_VISUAL_OUT_M302=~/.orca/bots/agentwbs/archive/2026-11-26/M3-02/visual/ 로 명시 에 [원본 | 구현 | 차이] PNG와 summary.md.
  * 차이 기준·예외는 src/features/wbs/README.md 「시각 비교」에 적었다.
  */
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
-import { compareRegion, hasBaseline, writeSummary, type Box, type VisualResult } from './support/visual.ts';
+import { compareRegion, hasBaseline, writeSummary, type Box, type VisualResult, visualOut } from './support/visual.ts';
 import { wbsApi } from './support/wbs-api.ts';
 
-const OUT = process.env.AWBS_VISUAL_OUT_M302 ?? join(homedir(), '.orca/bots/agentwbs/archive/2026-11-26/M3-02/visual');
+const OUT = visualOut('AWBS_VISUAL_OUT_M302', 'M3-02-visual');
 test.skip(!hasBaseline(), '원본 스크린샷 폴더가 없다(~/.cache/agent-wbs-baseline).');
 test.describe.configure({ mode: 'serial' });
 test.use({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 });

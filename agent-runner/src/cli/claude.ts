@@ -30,8 +30,10 @@ export function createClaudeParser(): (event: Json) => CliEvent[] {
       }
       if (b.type === 'tool_use' && AGENT_TOOLS.has(str(b.name) ?? '')) {
         const id = str(b.id);
+        // 부른 하위 Agent 이름(실제 사용 보고 재료). 비었거나 없으면 모른다 — 기본 이름(general-purpose)으로 채우지 않는다.
+        const agentType = isObject(b.input) ? str(b.input.subagent_type) : undefined;
         if (id === undefined || id === '') unlinked(out, 'Agent 도구 호출에 id 없음');
-        else out.push(parent === undefined ? { type: 'agent_call', id } : { type: 'agent_call', id, parentId: parent });
+        else out.push({ type: 'agent_call', id, ...(parent !== undefined && { parentId: parent }), ...(agentType && { agentType }) });
       }
       const toolUseId = b.type === 'tool_result' ? str(b.tool_use_id) : undefined;
       if (toolUseId) out.push({ type: 'tool_result', toolUseId });

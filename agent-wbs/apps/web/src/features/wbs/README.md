@@ -136,6 +136,7 @@ WBS(Work Breakdown Structure, 일을 Phase → Work Package → Task로 나눈 �
 - 조건: viewport 1920×1080(표는 1280×800도), 기기 배율 1, ko-KR, Asia/Seoul, 시계 2026-11-05 20:00 KST, 애니메이션 끔.
 - 차이 계산: M3-01과 같다(pixelmatch, threshold 0.1, 안티에일리어싱 픽셀 제외).
 - 결과: `~/.orca/bots/agentwbs/archive/2026-11-26/M3-02/visual/`에 `[원본 | 구현 | 차이]` 이미지와 `summary.md`.
+  - 위 보관 폴더는 `AWBS_VISUAL_OUT_M302`로 **명시할 때만** 쓴다. 기본 출력은 실행마다 새 임시 폴더(`$TMPDIR/awbs-visual-…`, `e2e/support/visual.ts` `visualOut`)다(리뷰 재발 방지: 기본값이 보관 폴더를 덮어썼다).
 - 합격 기준(넘으면 시험 실패)
   - 같아야 하는 영역은 차이 2~3% 이하: 제목·일정 요약, 도구 막대, 표 머리·그룹 행, Gantt 날짜 눈금·범례, 레일, 상세 머리, Wizard 1단계.
   - 왜 2~3%까지 허용하나: 글꼴 번짐과 원본 캡처의 미세한 위치 차이(1px)가 쌓이기 때문이다.

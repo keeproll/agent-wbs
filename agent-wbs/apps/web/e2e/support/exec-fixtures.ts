@@ -11,6 +11,7 @@
 import type { Page, Route } from '@playwright/test';
 import type { ResponseOf } from '../../src/shared/api/contract.ts';
 import { ACTIVE_PROJECT, errorBody, fakeApi, json, type FakeApi } from './fake-api.ts';
+import { MOCK_SUBAGENTS } from './task-api.ts';
 
 export type Summary = ResponseOf<'listTasks'>['tasks'][number];
 export type Attempt = ResponseOf<'getTaskAttempts'>['items'][number];
@@ -35,7 +36,9 @@ export function attempt(attemptKey: string, taskKey: string, kind: Attempt['kind
     // 시도 번호(attemptNo)는 키 끝 숫자(ATT-0007-3 → 3). 서버도 같은 값으로 매긴다.
     id: `att-${attemptKey}`, attemptKey, attemptNo: Number(attemptKey.split('-').at(-1)), taskKey, kind, agent: kind === 'qa' || kind === 'reverify' ? 'Codex' : 'Claude', status, startedAt,
     endedAt: status === 'running' ? null : startedAt, modelId: kind === 'qa' || kind === 'reverify' ? 'Codex Large' : 'Opus 5.5', effort: '높음', gradeAdjust: null,
-    summary: null, failure: null, tokens: null, resumedFrom: null, baseSha: null, headSha: null, changedFiles: [], updatedAt: startedAt, ...extra,
+    summary: null, failure: null, tokens: null, resumedFrom: null, baseSha: null, headSha: null, changedFiles: [], updatedAt: startedAt,
+    // 지정·실제 하위 Agent는 원본 Mock 같은 시도의 값(없는 키는 빈 값 — 지정 없음·보고 없음)
+    subagents: MOCK_SUBAGENTS.get(attemptKey) ?? { designated: [], used: null, observed: null }, ...extra,
   };
 }
 

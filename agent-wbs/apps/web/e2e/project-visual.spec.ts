@@ -1,17 +1,15 @@
 /**
  * M3-04 시각 비교 — 원본 스크린샷과 같은 조건(1920×1080, 배율 1, ko-KR, Asia/Seoul, 시계 2026-11-05 20:00 KST, 애니메이션 끔)으로
- * 프로젝트 화면을 찍어 같은 영역을 잘라 비교한다. 결과: ~/.orca/bots/agentwbs/archive/2026-11-26/M3-04/visual/
+ * 프로젝트 화면을 찍어 같은 영역을 잘라 비교한다. 결과: 기본은 실행마다 새 임시 폴더(support/visual.ts visualOut), 보관하려면 AWBS_VISUAL_OUT_M304=~/.orca/bots/agentwbs/archive/2026-11-26/M3-04/visual/ 로 명시
  * 차이 기준과 예외는 features/project/README.md 「시각 비교」에 적었다.
  * 데이터는 원본 Mock과 같은 값을 가짜 API로 준다(원본 화면의 글자와 맞추기 위해서다. 제품 데이터는 Runner 보고에서 온다).
  */
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { fakeApi, json, NO_PROJECT } from './support/fake-api.ts';
 import { activeProject, bootProject, decision, GITHUB_OK, MD, PREVIEW, REPO_OK, SHA1, steps } from './support/project-fixtures.ts';
-import { compareRegion, hasBaseline, writeSummary, type Box, type VisualResult } from './support/visual.ts';
+import { compareRegion, hasBaseline, writeSummary, type Box, type VisualResult, visualOut } from './support/visual.ts';
 
-const OUT = process.env.AWBS_VISUAL_OUT_M304 ?? join(homedir(), '.orca/bots/agentwbs/archive/2026-11-26/M3-04/visual');
+const OUT = visualOut('AWBS_VISUAL_OUT_M304', 'M3-04-visual');
 test.skip(!hasBaseline(), '원본 스크린샷 폴더가 없다(~/.cache/agent-wbs-baseline).');
 test.describe.configure({ mode: 'serial' });
 test.use({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 });

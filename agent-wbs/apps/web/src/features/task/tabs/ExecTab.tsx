@@ -2,6 +2,7 @@
  * 실행 탭(UI-03-06) — 실행 시도(Attempt) 기록, 원본 P L1303–1324.
  * 실행 요청·중단·재개는 [작업 실행](M3-06)에서 한다. 여기서는 기록만 읽는다.
  * CI 참조(「Task 검사 … · CI-xxxx」, P L1310): 그 시도의 가장 최근 ① Task 검사 실행. 누르면 빌드·통합 실행 상세(M7-05, UAT-TASK-10-CI).
+ * 지정 · 실제 하위 Agent 태그(P L1310, UAT-TASK-10): 계약 Attempt.subagents. 문구 규칙은 shared/subagents.ts.
  */
 import { Link } from 'react-router';
 import type { UseQueryResult } from '@tanstack/react-query';
@@ -16,6 +17,7 @@ import { LINK } from '../../../shared/links.ts';
 import { useAllPages } from '../../../shared/api/allPages.ts';
 import { useApiQuery } from '../../../shared/api/queries.ts';
 import { attemptCiRef } from '../../ci/model.ts';
+import { SubagentTags } from '../../../shared/ui/SubagentTags.tsx';
 
 type Attempts = UseQueryResult<ResponseOf<'getTaskAttempts'>, ApiError>;
 type Attempt = ResponseOf<'getTaskAttempts'>['items'][number];
@@ -69,6 +71,7 @@ export function ExecTab({ task: t, attempts }: { task: TaskDetailData; attempts:
               <span className="agent"><span className={`ag-mk ${agCls(ag)}`} aria-hidden="true">{agInit(ag)}</span>{ag}</span>
               <span className="tag">{a.modelId ? gradeL(a.modelId, a.effort) : '등급 미기록'}</span>
               {ci && <Link className={ci.c} to={LINK.ci(ci.id)} title="Runner가 실행한 Task 검사 — 클릭하면 빌드 · 통합">{ci.l}</Link>}
+              <SubagentTags subagents={a.subagents} running={String(a.status) === 'running'} />
               {a.gradeAdjust && <span className={a.gradeAdjust.kind === 'down' ? 'sc sc-none' : 'sc sc-warn'}>{a.gradeAdjust.reason}</span>}
               <span className={`st ${st.c}`}><span className="st-d" aria-hidden="true" />{st.l}</span>
               <span className="mono muted">{formatDateTime(a.startedAt)} – {endL(a)}</span>

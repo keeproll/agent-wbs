@@ -1,17 +1,15 @@
 /**
  * M6-07 시각 비교 — 설계(UI-04, 04-02, 04-03, 04-03A, 04-04A, 04-05, 04-06)를 원본 스크린샷과 같은 조건에서 찍어 같은 영역을 비교한다.
- * 결과: ~/.orca/bots/agentwbs/archive/2026-11-27/M6-07/visual/ 에 [원본 | 구현 | 차이] 이미지와 summary.md.
+ * 결과: 기본은 실행마다 새 임시 폴더(support/visual.ts visualOut), 보관하려면 AWBS_VISUAL_OUT_M607=~/.orca/bots/agentwbs/archive/2026-11-27/M6-07/visual/ 로 명시 에 [원본 | 구현 | 차이] 이미지와 summary.md.
  * 조건·차이 기준·예외는 src/features/design/README.md 「시각 비교」에 적었다. 가짜 원장 데이터는 원본 Mock과 같은 값이다(support/design-data.ts).
  */
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { fakeApi } from './support/fake-api.ts';
 import { designData, installDesign } from './support/design-data.ts';
 import { mountTasks } from './support/task-api.ts';
-import { compareRegion, hasBaseline, writeSummary, type Box, type VisualResult } from './support/visual.ts';
+import { compareRegion, hasBaseline, writeSummary, type Box, type VisualResult, visualOut } from './support/visual.ts';
 
-const OUT = process.env.AWBS_VISUAL_OUT_M607 ?? join(homedir(), '.orca/bots/agentwbs/archive/2026-11-27/M6-07/visual');
+const OUT = visualOut('AWBS_VISUAL_OUT_M607', 'M6-07-visual');
 
 test.skip(!hasBaseline(), '원본 스크린샷 폴더가 없다(~/.cache/agent-wbs-baseline).');
 test.describe.configure({ mode: 'serial' });

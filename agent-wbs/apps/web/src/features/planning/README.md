@@ -125,6 +125,7 @@ features/planning/
 ### 시각 비교
 
 - 조건은 M3-01과 같다(apps/web/README §5). 결과는 `~/.orca/bots/agentwbs/archive/2026-11-26/M3-05/visual/`.
+  - 위 보관 폴더는 `AWBS_VISUAL_OUT_M305`로 **명시할 때만** 쓴다. 기본 출력은 실행마다 새 임시 폴더(`$TMPDIR/awbs-visual-…`, `e2e/support/visual.ts` `visualOut`)다(리뷰 재발 방지: 기본값이 보관 폴더를 덮어썼다).
 - 실패 기준(≤ 2%): 화면 머리(제목·설명·버튼·탭) — UI-05·UI-05-02·UI-09.
 - 기록만: 목록·상세·모달. 글자가 다른 이유는 `summary.md`의 「차이 원인」 열과 위 §4 표에 있다.
 

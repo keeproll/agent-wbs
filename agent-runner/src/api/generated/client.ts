@@ -909,6 +909,8 @@ export type Sha256 = string;
 
 export type StepStatus = "wait" | "run" | "done" | "fail";
 
+export type SubagentName = string;
+
 export type TaskKey = string;
 
 export type TaskStatus = "planning" | "approval" | "ready" | "running" | "paused" | "qa" | "rework" | "verifying" | "gate" | "failed" | "done" | "cancelled";
@@ -1387,9 +1389,10 @@ export interface Operations {
         fence: number;
         confirm: "confirmed" | "partial";
         items: ({
-          id: Id;
+          id: SubagentName;
           version: number | null;
           hash: string | null;
+          count?: number;
         })[];
       };
       epoch: number;

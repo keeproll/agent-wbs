@@ -4,6 +4,7 @@ import type { PoolClient, schema, ExecPolicyRow } from '@awbs/db';
 import { attemptKey, placeModel, modelRanks, taskBranch, type ModelSettings, type Agent, type AttemptKind } from '@awbs/shared';
 import assert from 'node:assert/strict';
 import { syncPlanningJob } from '../project/jobs.ts';
+import { PlatformError } from '../platform/errors.ts';
 
 export function required<T>(value: T | null | undefined): T { assert(value !== null && value !== undefined); return value; }
 
@@ -230,6 +231,53 @@ export class RunnerRepository {
   async saveObservationConfig(agent: string, detail: object) { await this.client.query("update agent_models set report=jsonb_set(coalesce(report,'{}'),'{cli}',$2::jsonb) where agent=$1", [agent,JSON.stringify(detail)]); }
   async saveInstalled(task: Task, attemptId: string, defs: { id: string; version: number; hash: string }[]) {
     for (const d of defs) await this.client.query("insert into attempt_subagents(project_id,attempt,subagent,designated,installed,version,def_hash) values($1,$2,$3,true,true,$4,$5)", [task.project_id,attemptId,d.id,d.version,d.hash]);
+  }
+  /**
+   * 실제 사용한 하위 Agent 사후 보고(subagent-usage, UAT-TASK-10 「실제」 태그)를 저장한다.
+   * 설치한 지정 정의(attempt_subagents)와 맞는 이름은 정의 ID·버전·hash를 붙이고, 아니면 이름만 남긴다.
+   * 다시 보내면 합친다: 이름은 늘기만 하고, 횟수는 큰 값, confirmed는 partial로 되돌아가지 않는다.
+   * 지정 정의 행에는 사용 여부(observed_used)와 확정도(confirm)를 함께 적는다. partial 보고에 없는 지정은 「모름」(null)으로 둔다.
+   */
+  async saveSubagentUsage(a: Attempt, confirm: 'confirmed' | 'partial', items: { id: string; version: number | null; hash: string | null; count?: number }[]) {
+    const installed = (await this.client.query<{ subagent: string; key: string; version: number; def_hash: string }>(
+      'select s.subagent,d.def_key as key,s.version,s.def_hash from attempt_subagents s join subagent_defs d on d.id=s.subagent where s.attempt=$1', [a.id])).rows;
+    const merged = new Map<string, { def?: (typeof installed)[number]; uses: number }>();
+    items.forEach((item, i) => {
+      const def = installed.find(d => d.subagent === item.id || d.key === item.id);
+      if (def ? (item.version !== null && item.version !== def.version) || (item.hash !== null && item.hash !== def.def_hash) : item.version !== null || item.hash !== null)
+        throw new PlatformError('VALIDATION_FAILED', {}, [{ path: `items.${String(i)}`, rule: 'installed', message: `하위 Agent ${item.id}의 버전·hash가 이 시도에 설치한 기록과 다릅니다.` }]);
+      const name = def?.key ?? item.id;
+      const prev = merged.get(name);
+      merged.set(name, { ...(def && { def }), uses: Math.min(2147483647, (prev?.uses ?? 0) + (item.count ?? 1)) });
+    });
+    // 이름별 합치기(리뷰 Codex 3). 확인 수준은 이름마다 따로 둔다.
+    // - 확인(confirmed) 보고에 든 이름만 confirmed가 된다. 일부 관측(partial)에서만 본 이름은 partial로 남는다.
+    // - 처음 confirmed가 된 이름의 횟수는 확인 보고 값으로 바꾼다(일부 관측 횟수와 섞지 않음). 확인된 이름은 partial 보고로 바뀌지 않는다.
+    for (const [name, u] of merged) await this.client.query(
+      `insert into attempt_subagent_usage(project_id,attempt,name,subagent,version,def_hash,uses,confirm) values($1,$2,$3,$4,$5,$6,$7,$8)
+       on conflict (attempt,name) do update set
+         uses=case when attempt_subagent_usage.confirm='confirmed' and excluded.confirm<>'confirmed' then attempt_subagent_usage.uses
+           when attempt_subagent_usage.confirm<>'confirmed' and excluded.confirm='confirmed' then excluded.uses
+           else greatest(attempt_subagent_usage.uses,excluded.uses) end,
+         confirm=case when attempt_subagent_usage.confirm='confirmed' then 'confirmed' else excluded.confirm end`,
+      [a.project_id, a.id, name, u.def?.subagent ?? null, u.def?.version ?? null, u.def?.def_hash ?? null, u.uses, confirm]);
+    // 지정 행: 사용 여부(observed_used)는 사실대로 두고, 확인 수준(confirm)은 그 정의의 이름 행을 따른다.
+    // 이름 행이 없으면 보고 전체의 확인 수준을 쓴다(확인 보고에 없으면 「안 씀」, 일부 관측뿐이면 「모름」).
+    // 재작업률 통계는 confirm='confirmed'인 행만 센다(settings/read.ts, 가이드 §6.7-7).
+    await this.client.query(
+      `update attempt_subagents s set
+         confirm=coalesce((select u.confirm from attempt_subagent_usage u where u.attempt=s.attempt and u.subagent=s.subagent),
+           case when s.confirm='confirmed' or $2='confirmed' then 'confirmed' else 'partial' end),
+         observed_used=case when exists(select 1 from attempt_subagent_usage u where u.attempt=s.attempt and u.subagent=s.subagent) then true
+           when $2='confirmed' or s.confirm='confirmed' then false else s.observed_used end
+       where s.attempt=$1`, [a.id, confirm]);
+    // 열린 화면(실행 탭·작업 실행·설정 사용 현황)이 다시 읽게 시도 변경을 알린다(리뷰 Codex 2). 저장과 같은 트랜잭션에서 커밋된다.
+    await this.attemptChanged(a);
+  }
+  /** 시도 표시 값이 바뀌었음을 알린다(화면 구독 topic 'attempt'). */
+  async attemptChanged(a: Pick<Attempt, 'id' | 'task' | 'project_id'>) {
+    const taskKey = (await this.client.query<{ task_key: string }>('select task_key from tasks where id=$1', [a.task])).rows[0]?.task_key;
+    deferChange(this.client, a.project_id, 'attempt', { taskKey: taskKey ?? null, attemptId: a.id });
   }
   async allTasks() { return (await this.client.query<Task>('select * from tasks where deleted_at is null')).rows; }
   async hostHistory() { return (await this.client.query<PgRow<typeof schema.runnerHosts.$inferSelect>>('select * from runner_hosts order by record_no desc limit 20')).rows; }

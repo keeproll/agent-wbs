@@ -13,6 +13,7 @@ import { useApiQuery } from '../../../shared/api/queries.ts';
 import { formatDateTime } from '../../../shared/format.ts';
 import { BusyButton } from '../../../shared/ui/BusyButton.tsx';
 import { useConfirm } from '../../../shared/ui/feedback.tsx';
+import { designatedLabel } from '../../../shared/subagents.ts';
 import type { ResponseOf } from '../../../shared/api/contract.ts';
 import { useEditSlot } from '../edit-slot.tsx';
 import { estimateErrors, overviewErrors } from '../editor-model.ts';
@@ -363,7 +364,7 @@ function GradeSection({ task: t, attempts }: { task: TaskDetailData; attempts: A
         : used.map((a) => (
           <div className="ev" key={a.id} style={{ gridTemplateColumns: '110px 60px minmax(0,1fr)' }}>
             <span className="mono">{a.attemptKey}</span><span className="wt">{ATTEMPT_KIND[String(a.kind)] ?? String(a.kind)}</span>
-            <span>{gradeL({ modelId: a.modelId ?? '', effort: a.effort ?? '' })} {a.gradeAdjust && <span className={a.gradeAdjust.kind === 'down' ? 'sc sc-none' : 'sc sc-warn'}>{a.gradeAdjust.reason}</span>}</span>
+            <span>{gradeL({ modelId: a.modelId ?? '', effort: a.effort ?? '' })} {designatedLabel(a.subagents) && <span className="tag sub">하위 Agent {designatedLabel(a.subagents)}</span>} {a.gradeAdjust && <span className={a.gradeAdjust.kind === 'down' ? 'sc sc-none' : 'sc sc-warn'}>{a.gradeAdjust.reason}</span>}</span>
           </div>
         ))}
       {lock.conflictModal}

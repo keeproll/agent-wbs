@@ -57,6 +57,8 @@ export async function reportConcurrency(repo: RunnerRepository, b: ConcurrencyBo
       { path: `sessions.${String(index)}.observed`, rule: 'maximum', message: '세션 자신을 포함한 슬롯 수는 2147483647 이하여야 합니다.' },
     ]);
     await repo.saveObservation(hold, a.agent, conditions.version, OBSERVATION_GRADE[grade], s.observed, reserved, state, b.at);
+    // 화면의 「실제 실행 중 · 관측 N개」가 바뀌었을 때만 시도 변경을 알린다(리뷰 Codex 2). 같은 값의 반복 보고로 화면을 다시 읽게 하지 않는다.
+    if (!prior || prior.observed !== s.observed || prior.state !== state) await repo.attemptChanged(a);
   }
   await repo.saveConcurrency(config.host.host_id, b);
   return { caps: { ...wireCaps(config.caps), memReserveGB: config.memReserveGB } };

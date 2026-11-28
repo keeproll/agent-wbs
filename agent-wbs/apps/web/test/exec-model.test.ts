@@ -7,7 +7,8 @@ const at = (key: string, kind: ExecAttempt['kind'], status: ExecAttempt['status'
   // 시도 번호(attemptNo)는 키 끝 숫자(A-3 → 3). 서버도 attemptKey의 끝 번호와 attempt_no를 같은 값으로 매긴다.
   id: `id-${key}`, attemptKey: key, attemptNo: Number(key.split('-').at(-1)), taskKey: 'TASK-0007', kind, agent: kind === 'qa' || kind === 'reverify' ? 'Codex' : 'Claude', status,
   startedAt, endedAt: status === 'running' ? null : startedAt, modelId: 'opus', effort: 'high', gradeAdjust: null, summary: null, failure: null,
-  tokens: null, resumedFrom: null, baseSha: null, headSha: null, changedFiles: [], updatedAt: startedAt, ...extra,
+  tokens: null, resumedFrom: null, baseSha: null, headSha: null, changedFiles: [], updatedAt: startedAt,
+  subagents: { designated: [], used: null, observed: null }, ...extra,
 });
 const vf = (attempt: ExecAttempt, result: ExecVerification['result']): ExecVerification => ({
   // 저장 순번(seq)은 기본으로 그 시도 번호(검증은 시도 하나에 하나, 시도 순서대로 저장된다). 시험마다 덮어쓸 수 있다.

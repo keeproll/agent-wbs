@@ -2,22 +2,21 @@
  * M3-08 설정 화면 — 원본 스크린샷과 나란히 비교(시각 비교).
  * 조건은 M3-01 visual.spec.ts와 같다: viewport 1920×1080, 기기 배율 1, ko-KR, Asia/Seoul, 시계 2026-11-05 20:00 KST, 애니메이션 끔, 마우스는 화면 구석.
  * 원본: ~/.cache/agent-wbs-baseline/desktop-clock20261105/UI-12*.png(설정 탭별 첫 화면).
- * 결과: ~/.orca/bots/agentwbs/archive/2026-11-26/M3-08/visual/ 에 [원본 | 구현 | 차이] 이미지와 summary.md.
+ * 결과: 기본은 실행마다 새 임시 폴더(support/visual.ts visualOut), 보관하려면 AWBS_SETTINGS_VISUAL_OUT=~/.orca/bots/agentwbs/archive/2026-11-26/M3-08/visual/ 로 명시 에 [원본 | 구현 | 차이] 이미지와 summary.md.
  * 차이 기준과 예외는 features/settings/README.md 「시각 비교」에 적었다.
  */
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { fakeApi } from './support/fake-api.ts';
 import { RUNNER_FULL, settingsApi } from './support/settings-fixtures.ts';
-import { compareRegion, hasBaseline, type Box, type VisualResult } from './support/visual.ts';
+import { compareRegion, hasBaseline, type Box, type VisualResult, visualOut } from './support/visual.ts';
 
 test.skip(!hasBaseline(), '원본 스크린샷 폴더가 없다(~/.cache/agent-wbs-baseline).');
 test.describe.configure({ mode: 'serial' });
 test.use({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 });
 
-const OUT = process.env.AWBS_SETTINGS_VISUAL_OUT ?? join(homedir(), '.orca/bots/agentwbs/archive/2026-11-26/M3-08/visual');
+const OUT = visualOut('AWBS_SETTINGS_VISUAL_OUT', 'M3-08-visual');
 const rows: { r: VisualResult; limit: number | null; note: string }[] = [];
 
 /** 공용 비교 도구(support/visual.ts)는 M3-01 폴더에 쓰므로, 결과 이미지를 M3-08 폴더로 옮긴다. */

@@ -86,7 +86,9 @@ test('빈 DB와 0014·0016(master)·0017~0027·M6 중간(0029~0034) 단계 DB, M
     // Q-13 결정 A: 외부 수신자(0041)
     '0041_20261127_mail_external',
     // M8 선행 수정: 검증 저장 순번(0046). 0042~0045는 다른 M8 작업이 쓴다.
-    '0046_20261128_verification_order']);
+    '0046_20261128_verification_order',
+    // UAT-TASK-10: 실제 사용한 하위 Agent(배정 번호 0048, 마지막 순번)
+    '0048_20261128_subagent_usage']);
   // journal 시각 = 1795740000000 + 번호(0021 이후 규칙)
   for (const e of journal.entries.slice(26)) expect(e.when, e.tag).toBe(1795740000000 + Number(e.tag.slice(0, 4)));
   const fresh = await database('fresh');

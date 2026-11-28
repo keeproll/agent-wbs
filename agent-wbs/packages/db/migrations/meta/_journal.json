@@ -302,6 +302,13 @@
       "when": 1795740000046,
       "tag": "0046_20261128_verification_order",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1795740000048,
+      "tag": "0048_20261128_subagent_usage",
+      "breakpoints": true
     }
   ]
 }
