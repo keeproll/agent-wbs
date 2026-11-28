@@ -113,8 +113,14 @@ test('변경 제안 실제 서버: 표시 키 주소는 단건 조회로 열리�
 
 test('Planning 실제 서버: 세션 목록은 서버 표시 키(planningKey)를 보인다', async ({ page }) => {
   await login(page, '/planning');
-  const list = (await apiCall(page, 'plannings?limit=200')).body as { items: { planningKey: string; title: string }[] };
-  test.skip(list.items.length === 0, 'demo seed에 Planning 세션이 없다');
+  let list = (await apiCall(page, 'plannings?limit=200')).body as { items: { planningKey: string; title: string }[] };
+  if (list.items.length === 0) {
+    const created = await apiCall(page, 'plannings', 'POST', { title: '인수 시험 Planning', scope: '전체 WBS' });
+    expect(created.status, JSON.stringify(created.body)).toBe(202);
+    await page.reload();
+    list = (await apiCall(page, 'plannings?limit=200')).body as typeof list;
+  }
+  expect(list.items.length).toBeGreaterThan(0);
   const first = list.items[0];
   await expect(page.getByRole('complementary', { name: 'Planning 목록' })).toContainText(`${first?.planningKey ?? ''}${first?.title ?? ''}`);
   console.log(`[Planning 키] ${list.items.map((p) => p.planningKey).join(', ')}`);

@@ -1,0 +1,150 @@
+# UAT ID|화면 시험 파일|서버·Runner 보충 시험 파일|판정 범위|대표 시험 이름 또는 연속 시험의 단계
+UAT-AUTH-01|agent-wbs/apps/web/e2e/acceptance.spec.ts|agent-wbs/apps/api/test/security.db.test.ts|화면·실제 서버 보충|UAT-AUTH-01 · 최초 DB·LAN 날짜 PIN 확인 → 로그인 → 미등록 화면
+UAT-AUTH-02|agent-wbs/apps/web/e2e/states-auth.spec.ts|agent-wbs/apps/api/test/security.db.test.ts|화면·실제 서버 보충|UAT-AUTH-02 1회용 링크: 주소에서 토큰을 즉시 지우고 최초만 성공, 재사용은 LOGIN_FAILED 안내
+UAT-AUTH-03|agent-wbs/apps/web/e2e/states-auth.spec.ts|agent-wbs/apps/api/test/security.db.test.ts|화면·실제 서버 보충|UAT-AUTH-03 틀린 PIN 반복: 실패 안내, 429는 Retry-After 동안 막고 보호 데이터는 보이지 않는다
+UAT-SHELL-01|agent-wbs/apps/web/e2e/settings-core-shell.spec.ts|-|화면|UAT-SHELL-01 설정 6탭: 주소·선택 강조가 함께 바뀌고 새로고침·뒤로 가기가 같은 탭을 복원한다
+UAT-SHELL-02|agent-wbs/apps/web/e2e/project-register.spec.ts|agent-wbs/apps/web/e2e/acceptance.spec.ts|화면·실제 서버 보충|UAT-SHELL-02 등록 전: 프로젝트·설정만 열리고 승인 뒤 잠금이 풀린다
+UAT-SHELL-03|agent-wbs/apps/web/e2e/settings-core-runner.spec.ts|agent-wbs/e2e/fakes/test/runner-basic.scenario.test.ts|화면·실제 서버 보충|UAT-RUNNER-UI a: 헤더·설정 연결 상태와 준비 상태 결과·조치·탭 배지가 일치한다
+UAT-SHELL-04|agent-wbs/apps/web/e2e/visual.spec.ts|-|화면|UI-00 앱 틀: 왼쪽 메뉴·헤더 왼쪽(1920)
+UAT-SHELL-05|agent-wbs/apps/web/e2e/states-shell.spec.ts|-|화면|UAT-SHELL-05 모르는 주소는 404 화면이고 정상 12개 메뉴에 가짜 메뉴를 더하지 않는다
+UAT-RESP-01|agent-wbs/apps/web/e2e/ci.spec.ts|-|화면|${String(width)}px: 페이지는 넘치지 않고 표는 영역 안에서 가로로 밀어 마지막 열까지 읽는다
+UAT-RESP-02|agent-wbs/apps/web/e2e/ci.spec.ts|-|화면|UAT-RESP-02 / UAT-TG-09: 알림 링크(/ci/<id>)로 로그인 후 CI 상세를 잘림 없이 열람한다
+UAT-STATE-01|agent-wbs/apps/web/e2e/dashboard.spec.ts|-|화면|UAT-STATE-01: 첫 응답이 늦으면 대시보드 배치 skeleton 뒤 실제 내용으로 바뀐다
+UAT-STATE-02|agent-wbs/apps/web/e2e/wbs-table.spec.ts|-|화면|UAT-STATE-02-UI 필터 응답이 늦으면 이전 목록과 상단 진행 막대를 유지하고, 응답 뒤 새 조건으로 바꾼다
+UAT-STATE-03|agent-wbs/apps/web/e2e/settings-core-plan.spec.ts|-|화면|UAT-STATE-03: 일정에 영향을 주는 저장 뒤 일정을 다시 읽는 동안 흐리게 하고 클릭을 막으며, 끝나면 되돌린다
+UAT-STATE-04|agent-wbs/apps/web/e2e/states-loading.spec.ts|-|화면|UAT-STATE-04 응답 없음 10초 → 메뉴 제목·원인·마지막 성공 시각·다시 시도, 재시도 성공 시 복구
+UAT-STATE-05|agent-wbs/apps/web/e2e/states-loading.spec.ts|-|화면|UAT-STATE-05 저장 연타 → 요청 1번·처리 중 문구·비활성, 완료 후 실제 결과와 status 안내
+UAT-STATE-06|agent-wbs/apps/web/e2e/task-detail-edit.spec.ts|-|화면|UAT-STATE-06 저장 ${failure}: 데이터 미반영·입력 유지·동작/코드/시각/조치 표시, 다시 시도 성공 때만 편집이 닫힌다
+UAT-STATE-07|agent-wbs/apps/web/e2e/states-errors.spec.ts|-|화면|UAT-STATE-07 서버 검증 400: 고칠 항목 안내, 초안 유지, 다시 시도 버튼 없음, 고친 뒤 저장
+UAT-STATE-08|agent-wbs/apps/web/e2e/task-detail-edit.spec.ts|-|화면|UAT-STATE-08 같은 Task 두 세션: 낡은 버전 저장은 409, 이 Task의 최신 변경·내 변경 표시, 버림/재적용이 각 선택대로
+UAT-STATE-09|agent-wbs/apps/web/e2e/task-detail-edit.spec.ts|-|화면|UAT-STATE-09 편집 중 이동: 탭·다른 Task·메뉴 이동은 확인을 묻고, 취소는 입력·화면 유지, 확인만 버리고 이동
+UAT-STATE-10|agent-wbs/apps/web/e2e/planning-change.spec.ts|-|화면|UAT-STATE-10: 작성 모달 Tab 순환·Esc(입력 있으면 확인)·포커스 복원·접근성 위반 없음
+UAT-PROJECT-01|agent-wbs/apps/web/e2e/project-register.spec.ts|agent-wbs/apps/api/test/project.db.test.ts|화면·실제 서버 보충|UAT-PROJECT-02 주소 형식: 브랜치·폴더 주소는 보내지 않고 이유를 보이며, 서버 400은 칸 아래에 보인다
+UAT-PROJECT-02|agent-wbs/apps/web/e2e/project-register.spec.ts|agent-wbs/apps/api/test/planning-runner.db.test.ts|화면·실제 서버 보충|UAT-PROJECT-02 주소 형식: 브랜치·폴더 주소는 보내지 않고 이유를 보이며, 서버 400은 칸 아래에 보인다
+UAT-PROJECT-03|agent-wbs/apps/web/e2e/acceptance.spec.ts|agent-wbs/apps/api/test/planning-runner.db.test.ts|화면·실제 서버 보충|G§12-29 · UAT-PROJECT-03/04/06 · 분석 보고 → 기술 결정 확정 → WBS 초안 승인
+UAT-PROJECT-04|agent-wbs/apps/web/e2e/project-boot.spec.ts|agent-wbs/apps/api/test/planning-runner.db.test.ts|화면·실제 서버 보충|UAT-PROJECT-UI b: 단계 wait/run/done·보고 로그를 보이고, 시간이 지나도 보고 없이는 넘어가지 않는다
+UAT-PROJECT-05|agent-wbs/apps/web/e2e/project-boot.spec.ts|agent-wbs/apps/api/test/planning-runner.db.test.ts|화면·실제 서버 보충|Runner 끊김이면 멈춤 안내, 단계 실패는 원인·조치와 「다시 시도」(실패 단계 요청)
+UAT-PROJECT-06|agent-wbs/apps/web/e2e/project-boot.spec.ts|agent-wbs/apps/api/test/planning-runner.db.test.ts|화면·실제 서버 보충|시나리오 29 · UAT-PROJECT-06 a: 기술 결정 확정 대기 — 미결이면 확정 거부, 모두 정하면 결정 id·버전으로 확정
+UAT-PROJECT-07|agent-wbs/apps/web/e2e/project-boot.spec.ts|agent-wbs/apps/api/test/planning-runner.db.test.ts|화면·실제 서버 보충|UAT-PROJECT-07: 재분석은 지시와 본 초안 revision을 보내고, 확정 기술 결정은 유지된다
+UAT-PROJECT-08|agent-wbs/apps/web/e2e/project-inputs.spec.ts|agent-wbs/e2e/fakes/test/input-changes.scenario.test.ts|화면·실제 서버 보충|시나리오 31 · UAT-PROJECT-UI d: 변경 커밋 2개·파일 4개를 영역(프로토타입/설계 문서)·추가·삭제로 보인다
+UAT-PROJECT-09|agent-wbs/apps/web/e2e/project-inputs.spec.ts|agent-wbs/e2e/fakes/test/input-changes.scenario.test.ts|화면·실제 서버 보충|UAT-PROJECT-09 a: 「분석 안 함」은 확인 기록을 남기고, 이미 분석한 커밋은 INPUT_UNCHANGED로 거부를 보인다
+UAT-PROJECT-10|agent-wbs/apps/web/e2e/project-inputs.spec.ts|agent-wbs/apps/api/test/planning-runner.db.test.ts|화면·실제 서버 보충|UAT-PROJECT-10: 프로젝트 정보 편집 — 필수·날짜 형식 검사, 저장은 PATCH /api/project(버전·멱등 키), 응답으로 다시 그린다
+UAT-PROJECT-11|agent-wbs/apps/web/e2e/dashboard.spec.ts|agent-wbs/apps/api/test/planning-runner.db.test.ts|화면·실제 서버 보충|UAT-PROJECT-11(대시보드): 진행률/완료율·기간 범위·최초/최신 기준을 구분해 보이고 각 화면으로 연결
+UAT-RESET-01|agent-wbs/apps/web/e2e/project-reset.spec.ts|agent-wbs/apps/api/test/reset.db.test.ts|화면·실제 서버 보충|UAT-RESET-01: 삭제 건수·Runner 정리·제외 경로·설정 유지를 보이고, 이름이 다르면 실행할 수 없다
+UAT-RESET-02|agent-wbs/apps/web/e2e/project-reset.spec.ts|agent-wbs/apps/api/test/reset.db.test.ts|화면·실제 서버 보충|UAT-RESET-02: 내보내기는 zip 내려받기 주소이고(비밀값·수신자 제외 안내), 받지 않아도 초기화할 수 있다
+UAT-RESET-03|agent-wbs/apps/web/e2e/project-reset.spec.ts|agent-wbs/apps/api/test/reset.db.test.ts|화면·실제 서버 보충|시나리오 19 · UAT-RESET-UI a: Runner 끊김에서 초기화 → 등록 화면·정리 대기, 저장소 확인 불가 → 연결 뒤 「정리 완료」
+UAT-RESET-04|agent-wbs/apps/web/e2e/project-reset.spec.ts|agent-wbs/apps/api/test/reset.db.test.ts|화면·실제 서버 보충|UAT-RESET-UI b: 정리 전 등록은 서버가 CLEANUP_PENDING으로 막고, 낡은 초기화 번호는 EPOCH_MISMATCH를 보인다
+UAT-WBS-01|agent-wbs/apps/web/e2e/wbs-table.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|화면·실제 서버 보충|UAT-WBS-01 검색과 8개 선택 필터를 함께 적용하고, 매칭 Task의 상위 Phase·WP를 함께 보이며, 초기화는 검색도 지운다
+UAT-WBS-02|agent-wbs/apps/web/e2e/wbs-table.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|화면·실제 서버 보충|UAT-WBS-02 정렬은 WP 안에서만, 캐럿은 선택을 바꾸지 않고, 모두 접기/펼치기·컬럼 설정(기본 8 + 최근 변경)
+UAT-WBS-03|agent-wbs/apps/web/e2e/task-detail.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|화면·실제 서버 보충|UAT-WBS-03 상세: 260px 레일 순서로 위치·이전/다음, 검색으로 빠지면 「목록 밖」, 펼치기는 표(/wbs)로
+UAT-WBS-04|agent-wbs/apps/web/e2e/wbs-responsive.spec.ts|-|화면|${String(width)}px: 페이지는 넘치지 않고 표 상자 안에서만 가로 스크롤해 마지막 열을 읽는다
+UAT-WBS-05|agent-wbs/apps/web/e2e/wbs-perf.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|화면·실제 서버 보충|${String(count)}행: 가상 스크롤로 모든 행에 접근하고 측정값을 남긴다
+UAT-WIZ-01|agent-wbs/apps/web/e2e/wbs-wizard.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|화면·실제 서버 보충|UAT-WIZ-01 단계별 필수값·시간 0/400 초과·날짜 형식 오류는 다음을 막고, 이전으로 가도 입력을 보존한다
+UAT-WIZ-02|agent-wbs/apps/web/e2e/wbs-wizard.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|화면·실제 서버 보충|UAT-WIZ-02 Work Package는 서버의 실제 목록만 고르고, 그 사이 지워진 WP는 서버가 4xx로 거부해 부분 생성·화면 오류가 없다
+UAT-WIZ-03|agent-wbs/apps/web/e2e/task-detail-flow.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|화면·실제 서버 보충|UAT-WIZ-03 일부: 생성 직후 planning Task를 명세 탭으로 열면 차단 안내·이력과 함께 작업 명세가 보인다
+UAT-WIZ-04|agent-wbs/apps/web/e2e/wbs-wizard.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|화면·실제 서버 보충|UAT-WIZ-04 입력 뒤 닫기: 확인창의 취소는 입력 유지, 「생성 취소」만 초안을 버리고 Task를 만들지 않는다
+UAT-TASK-01|agent-wbs/apps/web/e2e/task-detail.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|화면·실제 서버 보충|UAT-TASK-01 요약: ID·WBS·제목·분류·담당→검증·우선순위·선행·체크·검증·Gate·일정·진척이 서버 값과 같고 상태는 색+글자
+UAT-TASK-02|agent-wbs/apps/web/e2e/task-detail-edit.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|화면·실제 서버 보충|UAT-TASK-02 개요 편집: 필수 검사·같은 Agent 경고, 취소는 원본 보존, 저장은 두 요청과 이력·명세 공유
+UAT-TASK-03|agent-wbs/apps/web/e2e/task-detail-flow.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|화면·실제 서버 보충|UAT-TASK-03 · 시나리오 13 등급: 모델/Effort·근거·주체·고정 구분, 최저선 미달 경고 후 고정 → 재추정 요청, 해제는 Planning 판단
+UAT-TASK-04|agent-wbs/apps/web/e2e/task-detail-flow.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|화면·실제 서버 보충|시나리오 23 일부: 분할 근거·점검 표, 시작 전 Task는 「Planning Agent 분할 제안」, 시작한 Task는 예외 사유 기록
+UAT-TASK-05|agent-wbs/apps/web/e2e/task-detail-work.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|화면·실제 서버 보충|UAT-TASK-05 명세: 6그룹 13섹션, 줄 섹션 편집, AC 표 행 추가·삭제·필수 빈칸 거부, 산출물 칸 보존
+UAT-TASK-06|agent-wbs/apps/web/e2e/task-detail-work.spec.ts|agent-wbs/apps/api/test/planning.db.test.ts|실제 API + 화면 표시 일부(D-27); 의존 편집·오류 경로는 task-detail-work.spec.ts|시나리오 3 의존성: 선행 지정 → 실행 차단 표시, 순환 추가는 경로와 함께 저장 차단, 삭제는 확인 후
+UAT-TASK-07|agent-wbs/apps/web/e2e/task-detail-work.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|화면·실제 서버 보충|시나리오 2 · UAT-TASK-07 DB 설계: 권장 섹션, 테이블 추가(컬럼·FK·인덱스) → 관계 테이블 계산, 블록 편집, 섹션 제거 확인
+UAT-TASK-08|agent-wbs/apps/web/e2e/task-detail-work.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|화면·실제 서버 보충|UAT-TASK-08 설계 편집기: 중복 테이블·없는 FK·nullable PK·없는 인덱스 컬럼·중복 Endpoint·잘못된 HTTP/환경변수는 막고 초안 유지, 비밀 값 가림
+UAT-TASK-09|agent-wbs/apps/web/e2e/task-detail-work.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|화면·실제 서버 보충|시나리오 4 · UAT-TASK-09 체크리스트: 빈 내용 추가 거부, 필수/선택·방법·Evidence·비고 표시, 완료 토글 → 진행률·Gate·이력 갱신
+UAT-TASK-10|agent-wbs/apps/web/e2e/subagent-tags.spec.ts|agent-wbs/apps/api/test/runner.db.test.ts|화면·실제 서버 보충(PR #25 지정·실제 하위 Agent 태그)|UAT-TASK-10 실행 탭: 끝난 시도는 지정·실제(세션 기록 확인), 실행 중 시도는 관측 수(추정)
+UAT-TASK-11|agent-wbs/apps/web/e2e/verify-results.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|화면·실제 서버 보충|UAT-TASK-11: 목록 ↑↓·Enter로 열고, 상세 J/K·↑↓로 이동, Esc로 펼치기. 입력 중에는 동작 안 함
+UAT-PLAN-01|agent-wbs/apps/web/e2e/planning-sessions.spec.ts|agent-wbs/apps/api/test/planning-runner.db.test.ts|화면·실제 서버 보충|시나리오 5: 독립 분석 비교 → 미조정은 CP 작성 차단 → 이견 조정 → CP 작성·제출·승인·WBS 반영
+UAT-PLAN-02|agent-wbs/apps/web/e2e/planning-sessions.spec.ts|agent-wbs/apps/api/test/planning-runner.db.test.ts|화면·실제 서버 보충|UAT-PLAN-02: 재조정 이력 — 기록 내용·변경 Task 펼침·재조정 실행(POST /api/replans/run)
+UAT-CP-01|agent-wbs/apps/web/e2e/planning-change.spec.ts|agent-wbs/apps/api/test/planning.db.test.ts|화면·실제 서버 보충|MOD-07·UAT-CP-01: 7가지 행 추가·삭제(행 id 기준)·필수 검사·서버 문제는 제출 차단·정상은 승인 대기
+UAT-CP-02|agent-wbs/apps/web/e2e/planning-change.spec.ts|agent-wbs/apps/api/test/planning.db.test.ts|화면·실제 서버 보충|UAT-CP-02: 의견 없이 반려·수정 요청은 막고, 의견을 넣으면 처리하고 이력을 남긴다
+UAT-CP-03|agent-wbs/apps/web/e2e/planning-change.spec.ts|agent-wbs/apps/api/test/planning.db.test.ts|화면·실제 서버 보충|UAT-CP-02·03: 승인은 미리보기 hash로, 반영은 확인 뒤 서버 재시뮬레이션 결과로 끝난다
+UAT-EXEC-01|agent-wbs/apps/web/e2e/exec.spec.ts|agent-wbs/e2e/fakes/test/attempt-wiring.scenario.test.ts|화면·실제 서버 보충|b) 첫 시작은 팀장 요청으로만 — 선행 차단이면 막고, 요청은 kind=dev, API 보류 사유를 그대로 보인다
+UAT-EXEC-02|agent-wbs/apps/web/e2e/ci.spec.ts|agent-wbs/e2e/fakes/test/attempt-complete.scenario.test.ts|화면·실제 서버 보충|요약·배지·목록(모든 쪽)·단계 필터가 실제 보고와 일치한다
+UAT-EXEC-03|agent-wbs/apps/web/e2e/exec.spec.ts|agent-wbs/e2e/fakes/test/attempt-flow.scenario.test.ts|화면·실제 서버 보충|a) 왼쪽 Task·시도 / 가운데 다음 작업·기록 / 오른쪽 메시지, 6단계와 현재 단계, 실제 등급
+UAT-EXEC-04|agent-wbs/apps/web/e2e/acceptance.spec.ts|agent-wbs/e2e/fakes/test/attempt-wiring.scenario.test.ts|화면·실제 서버 보충|G§12-6 · UAT-EXEC-01/04/05/06 · 실제 Runner 시도 실행·증거 수집·QA 실패·등급 상향
+UAT-EXEC-05|agent-wbs/apps/web/e2e/exec.spec.ts|agent-wbs/e2e/fakes/test/attempt-complete.scenario.test.ts|화면·실제 서버 보충|c) 실패 사유·FAIL 검증의 명령/결과/Evidence/결함, 이전 시도 보존
+UAT-EXEC-06|agent-wbs/apps/web/e2e/exec.spec.ts|agent-wbs/e2e/fakes/test/attempt-complete.scenario.test.ts|화면·실제 서버 보충|QA·통합 실패의 재작업은 합산 3회이며 BLOCKED·프로세스 재시도는 회차를 늘리지 않는다
+UAT-EXEC-07|agent-wbs/apps/web/e2e/exec.spec.ts|agent-wbs/e2e/fakes/test/attempt-flow.scenario.test.ts|화면·실제 서버 보충|a) 등급 조정 근거(상향)를 보고값대로 표시
+UAT-EXEC-08|agent-wbs/apps/web/e2e/exec.spec.ts|agent-wbs/e2e/fakes/test/attempt-flow.scenario.test.ts|화면·실제 서버 보충|b) 첫 시작은 팀장 요청으로만 — 선행 차단이면 막고, 요청은 kind=dev, API 보류 사유를 그대로 보인다
+UAT-GATE-01|agent-wbs/apps/web/e2e/task-detail.spec.ts|agent-wbs/e2e/fakes/test/attempt-complete.scenario.test.ts|화면·실제 서버 보충|UAT-TASK-01 요약: ID·WBS·제목·분류·담당→검증·우선순위·선행·체크·검증·Gate·일정·진척이 서버 값과 같고 상태는 색+글자
+UAT-GATE-02|agent-wbs/apps/web/e2e/acceptance.spec.ts|agent-wbs/e2e/fakes/test/attempt-complete.scenario.test.ts|화면·실제 서버 보충|UAT-GATE-01/02 · UAT-CI-02 · ①·②와 실제 fake GitHub 병합 뒤에만 완료
+UAT-MSG-01|agent-wbs/apps/web/e2e/exec.spec.ts|agent-wbs/e2e/fakes/test/attempt-flow.scenario.test.ts|화면·실제 서버 보충|MSG-01: Task별 초안 유지·빈 본문 거부·유형/Agent/시도 선택·전송, 전달 상태와 응답 분리
+UAT-MSG-02|agent-wbs/apps/web/e2e/exec.spec.ts|agent-wbs/e2e/fakes/test/attempt-flow.scenario.test.ts|화면·실제 서버 보충|7: 실행 중 추가 지시 → 다음 실행 대기 → 다음 실행 때 전달·ack → 응답(ack는 완료가 아님)
+UAT-MSG-03|agent-wbs/apps/web/e2e/exec.spec.ts|agent-wbs/e2e/fakes/test/attempt-flow.scenario.test.ts|화면·실제 서버 보충|8: Runner 끊김 → 전달 실패(원인) → 재연결 → 재전송
+UAT-VERIFY-01|agent-wbs/apps/web/e2e/verify-results.spec.ts|agent-wbs/apps/api/test/execution.db.test.ts|화면·실제 서버 보충|UAT-VERIFY-01 b: 탭 건수가 서버 데이터와 같다(쪽 나눔 끝까지)
+UAT-VERIFY-02|agent-wbs/apps/web/e2e/verify-evidence-gate.spec.ts|agent-wbs/apps/api/test/execution.db.test.ts|화면·실제 서버 보충|UAT-VERIFY-02: 체크리스트 연결 토글 — 안정 키로 저장하고 Evidence 탭 연결과 건수가 실제 목록과 같다
+UAT-VERIFY-03|agent-wbs/apps/web/e2e/verify-evidence-gate.spec.ts|agent-wbs/apps/api/test/execution.db.test.ts|화면·실제 서버 보충|UAT-VERIFY-03: Task×5조건·사유·합계가 서버 Gate와 같고, 미통과만/전체, Task 선택은 상세로
+UAT-HISTORY-01|agent-wbs/apps/web/e2e/history.spec.ts|agent-wbs/apps/api/test/changes.db.test.ts|화면·실제 서버 보충|UAT-HISTORY-01: 최신순, 전후 값·주체·Task 이동
+UAT-DASH-01|agent-wbs/apps/web/e2e/dashboard.spec.ts|agent-wbs/apps/api/test/project.db.test.ts|화면·실제 서버 보충|UAT-DASH-01 a: KPI 숫자와 WBS 필터 주소가 일치한다
+UAT-RUNNER-01|agent-wbs/apps/web/e2e/settings-core-runner.spec.ts|agent-wbs/e2e/fakes/test/runner-basic.scenario.test.ts|화면·실제 서버 보충|UAT-RUNNER-UI a: 헤더·설정 연결 상태와 준비 상태 결과·조치·탭 배지가 일치한다
+UAT-RUNNER-02|agent-wbs/apps/web/e2e/settings-core-runner.spec.ts|agent-wbs/e2e/fakes/test/runner-basic.scenario.test.ts|가짜 보고 회귀만; 최신 유료 CLI 실측은 M8-04|UAT-RUNNER-UI c·d: 상한 권장 초과 경고·자원·변경 이력, CLI 미검증은 보수 계산 안내이고 고정/하향 버튼이 없다
+UAT-RUNNER-03|agent-wbs/apps/web/e2e/settings-core-runner.spec.ts|agent-wbs/e2e/fakes/test/runner-basic.scenario.test.ts|화면·실제 서버 보충|UAT-RUNNER-UI b: 가동률·중단 구간·남은 사용량/리셋을 보이고 유령 슬롯 행이 없다
+UAT-RUNNER-04|agent-wbs/apps/web/e2e/settings-core-runner.spec.ts|agent-wbs/e2e/fakes/test/runner-basic.scenario.test.ts|화면·실제 서버 보충|UAT-RUNNER-UI c·d: 상한 권장 초과 경고·자원·변경 이력, CLI 미검증은 보수 계산 안내이고 고정/하향 버튼이 없다
+UAT-RUNNER-05|agent-wbs/apps/web/e2e/settings-core-runner.spec.ts|agent-wbs/e2e/fakes/test/runner-basic.scenario.test.ts|화면·실제 서버 보충|UAT-RUNNER-UI e: 예산 변경 응답으로 보유 계산을 갱신하되 관측 미확인 세션은 보유를 줄이지 않는다
+UAT-GITHUB-01|agent-wbs/apps/web/e2e/settings-core-runner.spec.ts|agent-wbs/apps/api/test/project.db.test.ts|화면·실제 서버 보충|UAT-GITHUB-UI a·b: 형식 오류 거부, 권한 누락·복구와 배지, 토큰을 다시 보이지 않음
+UAT-GITHUB-02|agent-wbs/apps/web/e2e/settings-core-runner.spec.ts|agent-wbs/apps/api/test/project.db.test.ts|마스킹 회귀만; 보안 전수 인수는 M8-03|UAT-GITHUB-UI a·b: 형식 오류 거부, 권한 누락·복구와 배지, 토큰을 다시 보이지 않음
+UAT-POLICY-01|agent-wbs/apps/web/e2e/settings-core-agent.spec.ts|agent-wbs/apps/api/test/policy.db.test.ts|화면·실제 서버 보충|UAT-POLICY-01 a: 마지막 허용 모델 해제는 거부하고, 허용 변경·모델 순서를 저장한다
+UAT-POLICY-02|agent-wbs/apps/web/e2e/settings-core-agent.spec.ts|agent-wbs/apps/api/test/policy.db.test.ts|화면·실제 서버 보충|UAT-POLICY-UI a·b: 정의·지시문·버전/hash, 전체 끄기 주의, 개별 허용 해제 저장
+UAT-POLICY-03|agent-wbs/apps/web/e2e/settings-core-plan.spec.ts|agent-wbs/apps/api/test/policy.db.test.ts|화면·실제 서버 보충|UAT-POLICY-03: 분할 상한·하한·파일 상한·10규칙 변경을 저장하고, 테스트 포함·계층별 계약 먼저는 고정이다
+UAT-POLICY-04|agent-wbs/apps/web/e2e/settings-core-plan.spec.ts|agent-wbs/apps/api/test/policy.db.test.ts|화면·실제 서버 보충|UAT-POLICY-04: 정책 기본값(임계값 1일·가정 가동률 60%) 표시와 변경, 불가일 형식·중복 거부, 추가·해제 저장
+UAT-POLICY-05|agent-wbs/apps/web/e2e/settings-core-plan.spec.ts|agent-wbs/apps/api/test/policy.db.test.ts|화면·실제 서버 보충|UAT-POLICY-05: 정합성 점검은 누를 때 서버 결과(항목·상세·시각)를 보이고, 제품에는 Prototype 도구가 없다
+UAT-DESIGN-01|agent-wbs/apps/web/e2e/design.spec.ts|agent-wbs/apps/api/test/design-ledger.db.test.ts|화면·실제 서버 보충|UAT-DESIGN-01 b / 시나리오 28: 요약 줄·탭 배지·승인 대기 배너가 실제 상태와 같다
+UAT-DESIGN-02|agent-wbs/apps/web/e2e/design.spec.ts|agent-wbs/apps/api/test/design-ledger.db.test.ts|화면·실제 서버 보충|UAT-DESIGN-02 / 시나리오 28: TD-03 승인 → 버전 v4·배너 해제, 요청은 버전·멱등 키를 싣는다
+UAT-DESIGN-03|agent-wbs/apps/web/e2e/design.spec.ts|agent-wbs/apps/api/test/design-ledger.db.test.ts|화면·실제 서버 보충|UAT-DESIGN-03 / 시나리오 28: 방식 필터·행 선택 → 레일+상세, 이전·다음, 읽고 쓰는 테이블 ↔ 사용하는 API, 담당 Task 이동
+UAT-DESIGN-04|agent-wbs/apps/web/e2e/design.spec.ts|agent-wbs/apps/api/test/design-ledger.db.test.ts|화면·실제 서버 보충|UAT-DESIGN-04 a: 소유권 · 흐름(원본·복제·동기화·지연 허용)
+UAT-CI-01|agent-wbs/apps/web/e2e/ci.spec.ts|agent-wbs/e2e/fakes/test/attempt-complete.scenario.test.ts|화면·실제 서버 보충|요약·배지·목록(모든 쪽)·단계 필터가 실제 보고와 일치한다
+UAT-CI-02|agent-wbs/apps/web/e2e/acceptance.spec.ts|agent-wbs/e2e/fakes/test/attempt-complete.scenario.test.ts|화면·실제 서버 보충|UAT-GATE-01/02 · UAT-CI-02 · ①·②와 실제 fake GitHub 병합 뒤에만 완료
+UAT-CI-03|agent-wbs/apps/web/e2e/ci.spec.ts|agent-wbs/e2e/fakes/test/attempt-complete.scenario.test.ts|화면·실제 서버 보충|대상 Task/PR·상태·시각, 직렬 통합 안내, Task·실행 링크
+UAT-CI-04|agent-wbs/apps/web/e2e/ci.spec.ts|agent-wbs/e2e/fakes/test/attempt-complete.scenario.test.ts|화면·실제 서버 보충|UAT-CI-04 보호 경로 변경: 첫 보호 검사에서 경로·거부 사유를 남기고 뒤 단계는 건너뜀
+UAT-CI-05|agent-wbs/apps/web/e2e/ci.spec.ts|agent-wbs/e2e/fakes/test/attempt-complete.scenario.test.ts|화면·실제 서버 보충|최근 배포의 시각·결과, 상세 링크는 그 실행을 연다
+UAT-CI-06|agent-wbs/apps/web/e2e/ci.spec.ts|agent-wbs/e2e/fakes/test/attempt-complete.scenario.test.ts|화면·실제 서버 보충|4단계·조건·통과 기준·기준 커밋·야간/재시도/URL 설정을 보인다
+UAT-REPORT-01|agent-wbs/apps/web/e2e/api-report.spec.ts|agent-wbs/e2e/fakes/test/reports.scenario.test.ts|화면·실제 서버 보충|보고서 없음 → 기간 지정 오류 → 생성 → 팀장용 12섹션 → 보고용 전환(내부 용어 0건, 같은 숫자)
+UAT-REPORT-02|agent-wbs/apps/web/e2e/api-report.spec.ts|agent-wbs/e2e/fakes/test/reports.scenario.test.ts|화면·실제 서버 보충|보고서 없음 → 기간 지정 오류 → 생성 → 팀장용 12섹션 → 보고용 전환(내부 용어 0건, 같은 숫자)
+UAT-REPORT-03|agent-wbs/apps/web/e2e/api-report.spec.ts|agent-wbs/e2e/fakes/test/reports.scenario.test.ts|화면·실제 서버 보충|보고서 없음 → 기간 지정 오류 → 생성 → 팀장용 12섹션 → 보고용 전환(내부 용어 0건, 같은 숫자)
+UAT-REPORT-04|agent-wbs/apps/web/e2e/api-report.spec.ts|agent-wbs/e2e/fakes/test/pdf.scenario.test.ts|화면·실제 서버 보충|보고서 없음 → 기간 지정 오류 → 생성 → 팀장용 12섹션 → 보고용 전환(내부 용어 0건, 같은 숫자)
+UAT-REPORT-05|agent-wbs/apps/web/e2e/api-report.spec.ts|agent-wbs/e2e/fakes/test/pdf.scenario.test.ts|화면·실제 서버 보충|PDF 다운로드: 서버 PDF를 받고, 생성 실패면 본문은 그대로 두고 다시 시도·기간 분리 안내를 보인다(M6-02, UAT-REPORT-05)
+UAT-REPORT-06|agent-wbs/apps/web/e2e/acceptance-print.spec.ts|agent-wbs/e2e/fakes/test/reports.scenario.test.ts|화면·실제 서버 보충|UAT-REPORT-06 · 브라우저 인쇄도 메뉴180px·헤더64px 여백 없이 본문·전체 열·부록을 출력한다
+UAT-MAIL-01|agent-wbs/apps/web/e2e/api-mail.spec.ts|agent-wbs/e2e/fakes/test/mail.scenario.test.ts|화면·실제 서버 보충|빈 상태 → SMTP 설정 · 연결 확인 → 받는 사람 추가 오류 → qa@example.com 일간 추가
+UAT-MAIL-02|agent-wbs/apps/web/e2e/api-mail.spec.ts|agent-wbs/e2e/fakes/test/mail.scenario.test.ts|화면·실제 서버 보충|SMTP 인증 실패 → 실패 배너 · 탭 배지 · 대시보드 알림 → 정상 복구 → 「실패 건 모두 다시 보내기」 → 알림 해제
+UAT-MAIL-03|agent-wbs/apps/web/e2e/api-mail.spec.ts|agent-wbs/e2e/fakes/test/mail.scenario.test.ts|화면·실제 서버 보충|보고서 화면: 메일 미리보기 · 메일로 보내기 · 발송 기록 펼침(M6 통합, M6-03 README §9 · 원본 P L2127-2131)
+UAT-MAIL-04|agent-wbs/apps/web/e2e/api-mail.spec.ts|agent-wbs/e2e/fakes/test/mail.scenario.test.ts|화면·실제 서버 보충|「테스트」 → 발송 기록 → 「미리보기」로 HTML 메일 확인
+UAT-MAIL-05|agent-wbs/apps/web/e2e/api-mail.spec.ts|agent-wbs/e2e/fakes/test/mail.scenario.test.ts|화면·실제 서버 보충|SMTP 인증 실패 → 실패 배너 · 탭 배지 · 대시보드 알림 → 정상 복구 → 「실패 건 모두 다시 보내기」 → 알림 해제
+UAT-MAIL-06|agent-wbs/apps/web/e2e/api-mail.spec.ts|agent-wbs/e2e/fakes/test/mail.scenario.test.ts|화면·실제 서버 보충|수락 직후 worker 프로세스가 죽으면(crash) 재시작 때 unknown으로 정리하고 자동 재발송 0
+UAT-TG-01|agent-wbs/apps/web/e2e/telegram.spec.ts|agent-wbs/e2e/fakes/test/telegram.scenario.test.ts|화면·실제 서버 보충|telegram UAT-TG-01/02/03: 테스트 후 활성화, 저장 실패 초안 유지, 토큰은 브라우저 저장소에 없다
+UAT-TG-02|agent-wbs/apps/web/e2e/telegram.spec.ts|agent-wbs/e2e/fakes/test/telegram.scenario.test.ts|화면·실제 서버 보충|telegram UAT-TG-01/02/03: 테스트 후 활성화, 저장 실패 초안 유지, 토큰은 브라우저 저장소에 없다
+UAT-TG-03|agent-wbs/apps/web/e2e/telegram.spec.ts|agent-wbs/e2e/fakes/test/telegram.scenario.test.ts|화면·실제 서버 보충|telegram UAT-TG-03: 세 폼의 ${failure} 저장 실패도 초안을 보존한다
+UAT-TG-04|agent-wbs/apps/web/e2e/telegram.spec.ts|agent-wbs/e2e/fakes/test/telegram.scenario.test.ts|화면·실제 서버 보충|telegram UAT-TG-04/06/EMPTY-08: 후보 선택은 입력만 변경, 모달 초점 복원, 꺼진 미리보기/빈 이력
+UAT-TG-05|agent-wbs/apps/web/e2e/telegram.spec.ts|agent-wbs/e2e/fakes/test/attempt-complete.scenario.test.ts|화면·실제 서버 보충|Runner CI 실행기가 claim부터 실제 병합 보고까지 수행해 자동 완료한다
+UAT-TG-06|agent-wbs/apps/web/e2e/telegram.spec.ts|agent-wbs/e2e/fakes/test/telegram.scenario.test.ts|화면·실제 서버 보충|telegram UAT-TG-04/06/EMPTY-08: 후보 선택은 입력만 변경, 모달 초점 복원, 꺼진 미리보기/빈 이력
+UAT-TG-07|agent-wbs/apps/web/e2e/telegram.spec.ts|agent-wbs/e2e/fakes/test/telegram.scenario.test.ts|화면·실제 서버 보충|telegram: 상태 전이와 outbox는 함께 커밋, 같은 원인만 중복 생략하고 해소 뒤 재발은 새 발송
+UAT-TG-08|agent-wbs/apps/web/e2e/telegram.spec.ts|agent-wbs/e2e/fakes/test/telegram.scenario.test.ts|화면·실제 서버 보충|telegram UAT-TG-08: 서버 자동 재시도 성공이 저장된 테스트 실패 표시를 해소한다
+UAT-TG-09|agent-wbs/apps/web/e2e/ci.spec.ts|agent-wbs/e2e/fakes/test/telegram.scenario.test.ts|화면·실제 서버 보충|UAT-RESP-02 / UAT-TG-09: 알림 링크(/ci/<id>)로 로그인 후 CI 상세를 잘림 없이 열람한다
+UAT-APPROVE-01|agent-wbs/apps/web/e2e/task-detail-flow.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|화면·실제 서버 보충|UAT-APPROVE-01 명세 미완료면 요청 거부(고칠 항목), 채우면 approval → 승인은 ready(실행·완료 안 함), 이력에 주체·시각
+UAT-EXEC-09|agent-wbs/apps/web/e2e/exec.spec.ts|agent-wbs/e2e/fakes/test/attempt-flow.scenario.test.ts|화면·실제 서버 보충|중단 시도 보존·paused, 보유 미해제면 재개 거부 사유, 해제 뒤 같은 단계·등급의 새 시도
+UAT-EXEC-09-RUNNER|agent-wbs/apps/web/e2e/exec.spec.ts|agent-wbs/e2e/fakes/test/attempt-flow.scenario.test.ts|화면·실제 서버 보충|중단 시도 보존·paused, 보유 미해제면 재개 거부 사유, 해제 뒤 같은 단계·등급의 새 시도
+UAT-PROJECT-UI|agent-wbs/apps/web/e2e/project-boot.spec.ts|agent-wbs/apps/api/test/planning-runner.db.test.ts|화면·실제 서버 보충|UAT-PROJECT-UI b: 단계 wait/run/done·보고 로그를 보이고, 시간이 지나도 보고 없이는 넘어가지 않는다
+UAT-RESET-UI|agent-wbs/apps/web/e2e/project-reset.spec.ts|agent-wbs/apps/api/test/reset.db.test.ts|화면·실제 서버 보충|시나리오 19 · UAT-RESET-UI a: Runner 끊김에서 초기화 → 등록 화면·정리 대기, 저장소 확인 불가 → 연결 뒤 「정리 완료」
+UAT-PLAN-UI|agent-wbs/apps/web/e2e/planning-sessions.spec.ts|agent-wbs/apps/api/test/planning-runner.db.test.ts|화면·실제 서버 보충|시나리오 5: 독립 분석 비교 → 미조정은 CP 작성 차단 → 이견 조정 → CP 작성·제출·승인·WBS 반영
+UAT-EXEC-UI|agent-wbs/apps/web/e2e/exec.spec.ts|agent-wbs/e2e/fakes/test/attempt-flow.scenario.test.ts|화면·실제 서버 보충|a) 왼쪽 Task·시도 / 가운데 다음 작업·기록 / 오른쪽 메시지, 6단계와 현재 단계, 실제 등급
+UAT-MSG-UI|agent-wbs/apps/web/e2e/api-exec.spec.ts|agent-wbs/e2e/fakes/test/attempt-flow.scenario.test.ts|화면·실제 서버 보충|실제 API: 실행 중 Task의 3영역·6단계·등급, 메시지 전송 → 다음 실행 대기 → 취소
+UAT-RUNNER-UI|agent-wbs/apps/web/e2e/settings-core-runner.spec.ts|agent-wbs/e2e/fakes/test/runner-basic.scenario.test.ts|화면·실제 서버 보충|UAT-RUNNER-UI a: 헤더·설정 연결 상태와 준비 상태 결과·조치·탭 배지가 일치한다
+UAT-GITHUB-UI|agent-wbs/apps/web/e2e/settings-core-runner.spec.ts|agent-wbs/apps/api/test/project.db.test.ts|화면·실제 서버 보충|UAT-GITHUB-UI a·b: 형식 오류 거부, 권한 누락·복구와 배지, 토큰을 다시 보이지 않음
+UAT-POLICY-UI|agent-wbs/apps/web/e2e/settings-core-agent.spec.ts|agent-wbs/apps/api/test/policy.db.test.ts|화면·실제 서버 보충|UAT-POLICY-UI a·b: 정의·지시문·버전/hash, 전체 끄기 주의, 개별 허용 해제 저장
+UAT-STATE-02-UI|agent-wbs/apps/web/e2e/wbs-table.spec.ts|-|화면|UAT-STATE-02-UI 필터 응답이 늦으면 이전 목록과 상단 진행 막대를 유지하고, 응답 뒤 새 조건으로 바꾼다
+UAT-SHELL-04-UI|agent-wbs/apps/web/e2e/exec.spec.ts|-|화면|${String(width)}px: 3영역 모두 보이고 페이지 가로 스크롤 없음
+UAT-RESP-01-UI|agent-wbs/apps/web/e2e/planning-responsive.spec.ts|-|화면|${String(width)}px: 페이지는 넘치지 않고 CP 표는 상자 안 가로 스크롤로 마지막 열까지 읽는다
+UAT-RESP-02-UI|agent-wbs/apps/web/e2e/planning-responsive.spec.ts|-|화면|UAT-RESP-02-UI: 알림 링크로 CP 상세를 열면(로그인 복귀 포함) 핵심 필드·상태·Diff·근거를 잘림 없이 읽는다
+UAT-EMPTY-01|agent-wbs/apps/web/e2e/task-detail.spec.ts|-|화면|UAT-EMPTY-01 기록 없는 Task: 모든 탭을 열 수 있고 「기록 없음」 문구, 없는 수치를 만들지 않는다
+UAT-EMPTY-02|agent-wbs/apps/web/e2e/planning-change.spec.ts|-|화면|UAT-EMPTY-02: CP가 없으면 비어 있음과 생기는 조건을 안내하고 변경 행을 만들지 않는다
+UAT-EMPTY-03|agent-wbs/apps/web/e2e/exec.spec.ts|-|화면|시도·체크리스트·메시지가 없는 Task: 각 영역 안내, 없는 시도는 고르지 않음
+UAT-EMPTY-04|agent-wbs/apps/web/e2e/dashboard.spec.ts|-|화면|UAT-EMPTY-04(대시보드): 최근 결과·등급 시도·패널이 비면 각 영역에 발생 조건 안내
+UAT-EMPTY-05|agent-wbs/apps/web/e2e/ci.spec.ts|-|화면|기록이 없으면 각 탭에 「없음」과 생기는 조건
+UAT-EMPTY-06|agent-wbs/apps/web/e2e/api-report.spec.ts|-|화면|보고서 없음 → 기간 지정 오류 → 생성 → 팀장용 12섹션 → 보고용 전환(내부 용어 0건, 같은 숫자)
+UAT-EMPTY-07|agent-wbs/apps/web/e2e/api-mail.spec.ts|-|화면|빈 상태 → SMTP 설정 · 연결 확인 → 받는 사람 추가 오류 → qa@example.com 일간 추가
+UAT-EMPTY-08|agent-wbs/apps/web/e2e/telegram.spec.ts|-|화면|telegram UAT-TG-04/06/EMPTY-08: 후보 선택은 입력만 변경, 모달 초점 복원, 꺼진 미리보기/빈 이력
+UAT-EMPTY-09|agent-wbs/apps/web/e2e/design.spec.ts|-|화면|UAT-EMPTY-09: 검색 무매칭은 조건 불일치 안내, 초기화는 검색어도 지운다 / 정의 없음은 생성 조건 안내
+UAT-EMPTY-10|agent-wbs/apps/web/e2e/wbs-table.spec.ts|-|화면|UAT-EMPTY-10 조건에 맞는 Task 없음과 기록 없음을 구분하고, 초기화로 행을 되살리며 새 Task 생성 진입을 둔다
+UAT-RESP-02-TASK|agent-wbs/apps/web/e2e/task-detail-flow.spec.ts|-|화면|UAT-RESP-02-TASK 390px: 알림 링크(로그인 필요) → 로그인 → 지정 Task 상세의 핵심 필드·상태·실패 사유·근거를 잘림 없이 읽는다
+UAT-EMPTY-11|agent-wbs/apps/web/e2e/settings-core-plan.spec.ts|-|화면|UAT-EMPTY-11 (일정): 작업 불가일이 없으면 없음과 추가 방법을 안내한다
+UAT-TASK-10-CI|agent-wbs/apps/web/e2e/ci-task-ref.spec.ts|agent-wbs/e2e/fakes/test/attempt-complete.scenario.test.ts|화면·실제 서버 보충|UAT-TASK-10-CI: 실행 탭의 CI 참조는 그 시도의 최신 Task 검사 상세를 연다

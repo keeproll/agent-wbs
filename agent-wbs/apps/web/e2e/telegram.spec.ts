@@ -144,8 +144,10 @@ test('telegram UI-12-05: 원본 클래스의 연결/규칙/미리보기/주소/�
   await expect(connection.getByText('알림 켜짐', { exact: true })).toBeVisible();
   await expect(connection.getByText('Agent WBS 알림 · @test_bot', { exact: true })).toBeVisible();
   await expect(connection.getByText('팀장 개인 · 개인', { exact: true })).toBeVisible();
-  const badges = await connection.locator('.dp-h .vf').all();
-  const firstBadge = await badges[0]?.boundingBox(), secondBadge = await badges[1]?.boundingBox();
+  await page.evaluate(() => document.fonts.ready);
+  const [firstBadge, secondBadge] = await connection.locator('.dp-h .vf').evaluateAll(elements => elements.map(el => {
+    const { x, y, width } = el.getBoundingClientRect(); return { x, y, width };
+  }));
   expect(firstBadge?.y).toBe(secondBadge?.y);
   expect((secondBadge?.x ?? 0) - (firstBadge?.x ?? 0) - (firstBadge?.width ?? 0)).toBeLessThan(12);
   await expect(page.getByRole('cell', { name: '대기', exact: true })).toHaveCount(1);

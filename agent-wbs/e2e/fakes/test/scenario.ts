@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { inject } from 'vitest';
 import { createPool, recreateTestDatabase, runMigrations, seedSystem } from '../../../packages/db/src/index.ts';
 import { buildApp } from '../../../apps/api/src/app.ts';
@@ -26,8 +29,9 @@ export async function scenario(options: { inputCommit?: string; logger?: Paramet
   const appUrl = new URL(db);
   appUrl.searchParams.set('options', '-c role=awbs_app');
   const pool = createPool(appUrl.href, { onError: () => undefined });
+  const dataRoot = await mkdtemp(join(tmpdir(), 'awbs-scenario-data-'));
   const origin = 'http://127.0.0.1:3100';
-  const app = buildApp(pool, options.logger ?? false, { origin, lan: false });
+  const app = buildApp(pool, options.logger ?? false, { origin, lan: false }, { dataRoot });
   installRunner(app, pool);
   registerRunnerMessageRoutes(app);
   // main.ts와 같은 Runner 경로 묶음(M2-03 프로젝트 보고 포함).
@@ -79,10 +83,10 @@ export async function scenario(options: { inputCommit?: string; logger?: Paramet
       // 실제 감시 함수를 미래 시각으로 실행한다. 3분을 기다리는 대신 같은 만료 판정을 사용한다.
       watchDisconnected: () => watchRunner(pool, 1, new Date(Date.now() + 240_000)),
       recheckCompletion: () => recheckMergedTasks(pool),
-      close: async () => { await app.close(); await pool.end(); await owner.end(); },
+      close: async () => { await app.close(); await pool.end(); await owner.end(); await rm(dataRoot, { recursive: true, force: true }); },
     };
   } catch (error) {
-    await app.close(); await pool.end(); await owner.end(); throw error;
+    await app.close(); await pool.end(); await owner.end(); await rm(dataRoot, { recursive: true, force: true }); throw error;
   }
 }
 

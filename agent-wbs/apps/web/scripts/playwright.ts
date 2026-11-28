@@ -2,5 +2,8 @@
 import { spawnSync } from 'node:child_process';
 
 const args = process.argv.slice(2).filter((arg) => arg !== '--');
-const result = spawnSync('playwright', ['test', ...args], { stdio: 'inherit', shell: process.platform === 'win32' });
+const acceptance = args[0] === 'acceptance';
+const result = spawnSync(acceptance ? process.execPath : 'playwright', acceptance
+  ? ['../../e2e/acceptance/run.ts', ...args.slice(1)] : ['test', ...args],
+{ stdio: 'inherit', shell: !acceptance && process.platform === 'win32' });
 process.exitCode = result.status ?? 1;

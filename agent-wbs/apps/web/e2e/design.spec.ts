@@ -498,7 +498,7 @@ test('리뷰 2: 브랜치 → main 전환 중 늦게 오는 main 응답 동안 �
   api.on('GET /api/projects/p1/design/drifts', (route, req) => (new URL(req.url()).searchParams.get('ref') ? json(route, 200, { items: data.branch?.drifts ?? [] }) : gate.handler(route, req)));
   await page.locator('.banner.info').getByRole('button', { name: 'main 보기' }).click();
   await expect(page).toHaveURL('/design?tab=chg');
-  await page.waitForTimeout(500);
+  await gate.started;
   await expect(page.getByText('DR-50')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '계약에 반영' })).toHaveCount(0);
   gate.release();

@@ -2,6 +2,7 @@
  * 보고서 PDF용 HTML(apps/api/src/pdf/html.ts)의 빠른 시험. 실제 PDF·글꼴·캐시·초기화는 pdf.scenario(`pnpm test:scenario -- pdf`)가 본다.
  */
 import { describe, expect, test } from 'vitest';
+import { readFileSync } from 'node:fs';
 import type { ReportSnapshotData } from '@awbs/shared';
 import { externalPdfLeaks, reportHtml, type ReportHtmlInput } from '../src/pdf/html.ts';
 
@@ -25,6 +26,13 @@ const bodyOf = (html: string) => html.slice(html.indexOf('<body>'));
 const input = (view: 'int' | 'ext'): ReportHtmlInput => ({
   reportKey: 'RPT-W-261026', kind: 'weekly', from: '2026-10-26', to: '2026-11-01', generatedAt: '2026-11-03T22:00:00.000000Z', dueAt: null, reason: '정기 생성',
   view, snapshot,
+});
+
+test.each(['at', 'nx', 'al'])('브라우저 인쇄와 서버 PDF의 %s 열 너비가 같다', kind => {
+  const browser = readFileSync(new URL('../../web/src/features/report/report.css', import.meta.url), 'utf8');
+  const columns = (css: string) => [...css.matchAll(new RegExp(`\\.rpt-trw\\.${kind}\\s*\\{[^}]*?grid-template-columns:([^;}]+)`, 'g'))].at(-1)?.[1]?.replaceAll(/\s/g, '');
+  expect(columns(browser)).toBeDefined();
+  expect(columns(reportHtml(input('int')))).toBe(columns(browser));
 });
 
 describe('보고서 PDF HTML', () => {
