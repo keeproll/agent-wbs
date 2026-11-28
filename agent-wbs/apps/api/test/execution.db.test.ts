@@ -583,8 +583,17 @@ test('M8 선행: 시계가 뒤로 가도 API의 시도 번호(attemptNo)·검증
   // QA 시도(번호 1) FAIL → 재검증 시도(번호 2) FAIL. 나중 시도·검증이지만 PC 시계가 뒤로 가서 시각은 2.3초 이르다.
   const a = await running('qa');
   await owner.query("update task_attempts set started_at=now()-interval '10 minutes',ended_at=now()-interval '5 minutes',status='completed' where id=$1", [a.attempt]);
+  // 메시지(Codex 리뷰 P2-2): 「FAIL 뒤」는 서버 저장 순서로 가른다. 넣는 순서가 곧 서버 순서이고, 시각(created_at)은 일부러 거꾸로 준다.
+  const msg = (key: string, attempt: string | null, at: string, draft = false) => owner.query(`insert into messages(project_id,task,msg_key,attempt,dir,type,to_agent,body,delivery,pending_next,work_state,draft,created_at)
+    values($1,$2,$3,$4,'out','수정 요청','Codex','지시',$5,false,'',$6,${at})`, [project, a.id, key, attempt, draft ? 'Draft' : 'Sent', draft]);
+  // MSG-904: QA 시도가 실행 중일 때 그 시도에 보낸 지시. FAIL(v1)보다 먼저 보냈지만 시각은 v1보다 늦다 → 어느 FAIL의 「뒤 메시지」도 아니다.
+  await msg('MSG-904', a.attempt, "now()-interval '4 minutes'");
   const v1 = ((await owner.query(`insert into verifications(project_id,attempt,result,head_sha,spec_revision,cmd,expected,actual,created_at)
     values($1,$2,'FAIL',$3,1,'pnpm test','성공','옛 FAIL',now()-interval '5 minutes') returning id`, [project, a.attempt, sha])).rows[0] as { id: string }).id;
+  // MSG-903: v1 뒤에 시도를 지정하지 않고 보낸 수정 지시. 시각은 v1보다 이르다 → v1의 「뒤 메시지」다.
+  await msg('MSG-903', null, "now()-interval '6 minutes'");
+  // MSG-905: v2 전에 초안으로 만들고, v2 뒤에 보냈다(초안→전송). 판정은 「보낸」 기록 기준 → v1·v2 모두의 「뒤 메시지」다.
+  await msg('MSG-905', null, "now()-interval '7 minutes'", true);
   const job = ((await owner.query(`insert into runner_jobs(project_id,epoch,kind,payload,dedup_key,state,fence,generation) values($1,1,'attempt',$2,$3,'done',1,1) returning id`,
     [project, { taskKey: a.key, kind: 'reverify', agent: 'Codex', baseCommit: sha, branch: `agent/${a.key}-h1` }, randomUUID()])).rows[0] as { id: string }).id;
   const second = ((await owner.query(`insert into task_attempts(project_id,task,attempt_key,attempt_no,job,base_sha,head_sha,spec_revision,input_version,kind,agent,status,started_at,ended_at,model_id,effort,branch,generation)
@@ -592,13 +601,22 @@ test('M8 선행: 시계가 뒤로 가도 API의 시도 번호(attemptNo)·검증
   [project, a.id, `${a.key}-A2`, job, sha, input, `agent/${a.key}-h1`])).rows[0] as { id: string }).id;
   const v2 = ((await owner.query(`insert into verifications(project_id,attempt,result,head_sha,spec_revision,cmd,expected,actual,created_at)
     values($1,$2,'FAIL',$3,1,'pnpm test','성공','최신 FAIL',now()-interval '5 minutes 2.3 seconds') returning id`, [project, second, sha])).rows[0] as { id: string }).id;
+  await owner.query("update messages set draft=false,delivery='Queued' where msg_key='MSG-905'");
   await owner.query("update tasks set status='rework' where id=$1", [a.id]);
-  // 메시지(시계 역행): MSG-901은 재검증 시도(번호 2)를 가리키지만 시각은 첫 FAIL(v1)보다 이르다 → v1의 「FAIL 뒤 메시지」에 들어가야 한다.
-  // MSG-902는 QA 시도(번호 1)를 가리키고 시각은 v2보다 늦다 → v2의 「FAIL 뒤 메시지」에는 들어가면 안 된다(시각으로 보면 들어간다).
-  const msg = (key: string, attempt: string, at: string) => owner.query(`insert into messages(project_id,task,msg_key,attempt,dir,type,to_agent,body,delivery,pending_next,work_state,draft,created_at)
-    values($1,$2,$3,$4,'out','수정 요청','Codex','지시','Sent',false,'',false,${at})`, [project, a.id, key, attempt]);
-  await msg('MSG-901', second, "now()-interval '6 minutes'");
-  await msg('MSG-902', a.attempt, "now()-interval '1 minute'");
+  // 같은 트랜잭션에서 함께 넣은 검증·메시지(데모·seed 일괄 입력과 같은 처지)는 서버 순서가 없다 → 시각으로 비교한다.
+  // MSG-906은 v3 뒤에 넣었지만 시각은 v3보다 이르다 → v3의 「뒤 메시지」가 아니다(넣은 순서로 보면 들어간다).
+  const b = await running('qa');
+  await owner.query("update task_attempts set started_at=now()-interval '10 minutes',ended_at=now()-interval '3 minutes',status='completed' where id=$1", [b.attempt]);
+  const tx = await owner.connect();
+  const v3 = await (async () => { try {
+    await tx.query('begin');
+    const id = ((await tx.query(`insert into verifications(project_id,attempt,result,head_sha,spec_revision,cmd,expected,actual,created_at)
+      values($1,$2,'FAIL',$3,1,'pnpm test','성공','일괄 FAIL',now()-interval '3 minutes') returning id`, [project, b.attempt, sha])).rows[0] as { id: string }).id;
+    await tx.query(`insert into messages(project_id,task,msg_key,attempt,dir,type,to_agent,body,delivery,pending_next,work_state,draft,created_at)
+      values($1,$2,'MSG-906',null,'out','수정 요청','Codex','일괄','Sent',false,'',false,now()-interval '4 minutes')`, [project, b.id]);
+    await tx.query('commit');
+    return id;
+  } finally { tx.release(); } })();
   // 재조정(시계 역행): RP-002가 나중 번호지만 시각은 RP-001보다 2.3초 이르다. 둘 다 사흘 전(기간 시작 전)이다 → 직전·마지막 재조정은 RP-002.
   const replan = (key: string, end: string, at: string) => owner.query(`insert into replans(project_id,rp_key,trigger,actor,baseline_v,status,before,after,created_at)
     values($1,$2,'시험','시스템',1,'applied','{"end":null}',$3::jsonb,now()-interval '3 days'-interval '${at}')`, [project, key, JSON.stringify({ end, lo: end, hi: end })]);
@@ -628,8 +646,10 @@ test('M8 선행: 시계가 뒤로 가도 API의 시도 번호(attemptNo)·검증
     expect(row?.lastAttempt?.attemptKey).toBe(`${a.key}-A2`);
     expect(row?.verification?.id).toBe(v2);
     const fail = (id: string) => snap.failures.find((f) => f.verificationId === id)?.messages.map((m) => m.msgKey);
-    expect(fail(v1)).toEqual(['MSG-901', 'MSG-902']);
-    expect(fail(v2)).toEqual(['MSG-901']);
+    // 목록 표시 순서는 시각순(표시용)이다. 포함 여부만 서버 순서로 정한다.
+    expect(fail(v1)).toEqual(['MSG-905', 'MSG-903']);
+    expect(fail(v2)).toEqual(['MSG-905']);
+    expect(fail(v3)).toEqual([]);
     expect([snap.summary.forecast, snap.summary.forecastBefore]).toEqual(['2026-12-09', '2026-12-09']);
   } finally { client.release(); }
 });

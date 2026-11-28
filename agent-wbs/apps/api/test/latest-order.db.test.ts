@@ -148,7 +148,7 @@ test('fix3(리뷰 4차 P2 재현): 0037 전에 한 트랜잭션으로 함께 만
   } finally { await old.end(); await rm(folder, { recursive: true, force: true }); }
 }, 120_000);
 
-test('M8 선행(0046): 0041 DB의 기존 검증은 업그레이드 뒤 시도 순서대로 순번을 받고, 새 검증은 그 뒤 번호를 받는다', async () => {
+test('M8 선행(0046): 0041 DB의 기존 검증은 업그레이드 뒤 실제 저장(커밋) 순서대로 순번을 받고(Task가 겹쳐도), 이력 없는 행은 앞에, 새 검증은 그 뒤 번호를 받는다', async () => {
   const old = createPool(url('verif'), { onError: () => undefined });
   const folder = await mkdtemp(join(tmpdir(), 'awbs-latest-verif-'));
   try {
@@ -166,21 +166,37 @@ test('M8 선행(0046): 0041 DB의 기존 검증은 업그레이드 뒤 시도 �
     const input = await one<string>("insert into input_versions(project_id,v,commit_sha,files,md_list,changes,instruction) values($1,1,$2,'[]','[]','[]','') returning id", [project, sha]);
     const phase = await one<string>("insert into wbs_nodes(project_id,node_key,kind,title,sort_order) values($1,'PH','phase','단계',1) returning id", [project]);
     const wp = await one<string>("insert into wbs_nodes(project_id,node_key,kind,parent_id,title,sort_order) values($1,'WP','work_package',$2,'묶음',1) returning id", [project, phase]);
-    const task = await one<string>(`insert into tasks(project_id,task_key,wbs_node_id,sort_order,title,work_type,primary_domain,related_domains,priority,assignee_agent,verifier_agent,status,verif_state,src_input_version)
-      values($1,'TASK-0001',$2,1,'순번','Implementation','BE','{}',1,'Codex','Codex','rework','none',$3) returning id`, [project, wp, input]);
-    // 시도 1(QA)·시도 2(재검증)와 각 검증. 나중 검증의 시각이 2.3초 이르고(시계 역행), id(UUID)도 거꾸로 준다.
-    for (const [no, kind, vid, at] of [[1, 'qa', 'ffffffff-0000-4000-8000-000000000001', '2026-11-27T10:00:02.300Z'], [2, 'reverify', '10000000-0000-4000-8000-000000000002', '2026-11-27T10:00:00.000Z']] as const) {
-      const job = await one<string>("insert into runner_jobs(project_id,epoch,kind,payload,dedup_key,state,fence,generation) values($1,1,'attempt',$2,$3,'done',1,1) returning id",
-        [project, { taskKey: 'TASK-0001', kind, agent: 'Codex', baseCommit: sha, branch: 'agent/TASK-0001-h1' }, `0046-${String(no)}`]);
-      const attempt = await one<string>(`insert into task_attempts(project_id,task,attempt_key,attempt_no,job,base_sha,head_sha,spec_revision,input_version,kind,agent,status,started_at,ended_at,model_id,effort,branch,generation)
-        values($1,$2,$3,$4,$5,$6,$6,1,$7,$8,'Codex','completed',$9,$9,'gpt-6.1-sol','high','agent/TASK-0001-h1',1) returning id`, [project, task, `ATT-0001-${String(no)}`, no, job, sha, input, kind, at]);
-      await old.query("insert into verifications(id,project_id,attempt,result,head_sha,spec_revision,cmd,expected,actual,created_at) values($1,$2,$3,'FAIL',$4,1,'t','e','a',$5)", [vid, project, attempt, sha, at]);
-    }
+    const task = (key: string) => one<string>(`insert into tasks(project_id,task_key,wbs_node_id,sort_order,title,work_type,primary_domain,related_domains,priority,assignee_agent,verifier_agent,status,verif_state,src_input_version)
+      values($1,$2,$3,1,'순번','Implementation','BE','{}',1,'Codex','Codex','rework','none',$4) returning id`, [project, key, wp, input]);
+    const attempt = async (db: Pick<typeof old, 'query'>, taskId: string, key: string, no: number, kind: string) => {
+      const job = (await db.query<{ id: string }>("insert into runner_jobs(project_id,epoch,kind,payload,dedup_key,state,fence,generation) values($1,1,'attempt',$2,$3,'done',1,1) returning id",
+        [project, { taskKey: key, kind, agent: 'Codex', baseCommit: sha, branch: `agent/${key}-h1` }, `0046-${key}-${String(no)}`])).rows[0]?.id;
+      return (await db.query<{ id: string }>(`insert into task_attempts(project_id,task,attempt_key,attempt_no,job,base_sha,head_sha,spec_revision,input_version,kind,agent,status,started_at,ended_at,model_id,effort,branch,generation)
+        values($1,$2,$3,$4,$5,$6,$6,1,$7,$8,'Codex','completed',now(),now(),'gpt-6.1-sol','high',$9,1) returning id`,
+      [project, taskId, `ATT-${key.slice(5)}-${String(no)}`, no, job, sha, input, kind, `agent/${key}-h1`])).rows[0]?.id ?? '';
+    };
+    const verify = (db: Pick<typeof old, 'query'>, id: string, attemptId: string, at: string) =>
+      db.query("insert into verifications(id,project_id,attempt,result,head_sha,spec_revision,cmd,expected,actual,created_at) values($1,$2,$3,'FAIL',$4,1,'t','e','a',$5)", [id, project, attemptId, sha, at]);
+    // (가) 이력 기록이 없는 검증(이력 시작 전 seed 행과 같은 처지): 기록 트리거를 끈 채 넣는다. 가장 작은 번호를 받아야 한다.
+    const t0 = await task('TASK-0000');
+    const raw = await old.connect();
+    try {
+      await raw.query("set session_replication_role='replica'");
+      await verify(raw, '50000000-0000-4000-8000-000000000005', await attempt(raw, t0, 'TASK-0000', 1, 'qa'), '2026-11-27T11:00:00.000Z');
+    } finally { await raw.query("set session_replication_role='origin'"); raw.release(); }
+    // (나) Task가 겹친 실행(리뷰 P2-1 재현): 시도는 TASK-0001 → TASK-0002 순으로 시작했지만, 검증은 TASK-0002 → TASK-0001 순으로 저장됐다.
+    //      그 뒤 TASK-0001 재검증(시도 2)의 검증을 저장한다. 나중 검증일수록 시각은 이르고(시계 역행), id(UUID)도 거꾸로 준다.
+    const t1 = await task('TASK-0001'), t2 = await task('TASK-0002');
+    const a1 = await attempt(old, t1, 'TASK-0001', 1, 'qa');
+    const b1 = await attempt(old, t2, 'TASK-0002', 1, 'qa');
+    await verify(old, 'ffffffff-0000-4000-8000-000000000001', b1, '2026-11-27T10:00:04.600Z');
+    await verify(old, 'eeeeeeee-0000-4000-8000-000000000002', a1, '2026-11-27T10:00:02.300Z');
+    await verify(old, '10000000-0000-4000-8000-000000000003', await attempt(old, t1, 'TASK-0001', 2, 'reverify'), '2026-11-27T10:00:00.000Z');
     await runMigrations(old);
-    expect((await old.query('select a.attempt_no no,v.record_no::int seq from verifications v join task_attempts a on a.id=v.attempt order by v.record_no')).rows)
-      .toEqual([{ no: 1, seq: 1 }, { no: 2, seq: 2 }]);
+    expect((await old.query(`select t.task_key "task",a.attempt_no no,v.record_no::int seq from verifications v join task_attempts a on a.id=v.attempt join tasks t on t.id=a.task order by v.record_no`)).rows)
+      .toEqual([{ task: 'TASK-0000', no: 1, seq: 1 }, { task: 'TASK-0002', no: 1, seq: 2 }, { task: 'TASK-0001', no: 1, seq: 3 }, { task: 'TASK-0001', no: 2, seq: 4 }]);
     // 업그레이드 뒤 새 검증은 기존 번호 다음 번호를 받는다(번호 겹침 없음). 앱 역할도 순번을 쓸 수 있다.
-    expect((await old.query("select nextval('verifications_record_no_seq')::int n")).rows[0]?.n).toBe(3);
+    expect((await old.query("select nextval('verifications_record_no_seq')::int n")).rows[0]?.n).toBe(5);
     expect((await old.query("select has_sequence_privilege('awbs_app','verifications_record_no_seq','USAGE') ok")).rows[0]?.ok).toBe(true);
   } finally { await old.end(); await rm(folder, { recursive: true, force: true }); }
 }, 120_000);
