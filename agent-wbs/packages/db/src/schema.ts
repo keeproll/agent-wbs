@@ -961,6 +961,35 @@ export const attemptSubagents = pgTable(
   },
   (t) => [check('usage_confirmation', sql`${t.confirm} in ('confirmed','partial')`)],
 );
+/**
+ * 실제로 사용한 하위 Agent(Runner 사후 보고 `subagent-usage`, contracts §3.2·G §6.7-7). 0048.
+ * - 한 줄 = 시도 하나에서 CLI가 부른 하위 Agent 이름 하나. 지정 정의가 아닌 것(예: Claude 기본 `Explore`)도 이름 그대로 남는다.
+ * - `subagent`·`version`·`def_hash`는 Runner가 설치한 우리 정의와 맞을 때만 채운다. 모르면 비운다(지어내지 않음).
+ * - `uses`는 그 이름을 부른 횟수(화면 「×n」).
+ * - 시도가 지워지면 함께 지운다(초기화 reset_project가 task_attempts를 지울 때 막히지 않게).
+ */
+export const attemptSubagentUsage = pgTable(
+  'attempt_subagent_usage',
+  {
+    ...row(),
+    project_id: uuid().notNull().references(() => projects.id, { onDelete: 'cascade' }),
+    attempt: uuid()
+      .notNull()
+      .references(() => taskAttempts.id, { onDelete: 'cascade' }),
+    name: text().notNull(),
+    subagent: uuid().references(() => subagentDefs.id, { onDelete: 'restrict' }),
+    version: integer(),
+    def_hash: text(),
+    uses: integer().notNull(),
+    confirm: text().notNull(),
+  },
+  (t) => [
+    ...textChecks('attempt_subagent_usage', t),
+    unique().on(t.attempt, t.name),
+    check('subagent_usage_uses', sql`${t.uses} >= 1`),
+    check('subagent_usage_def', sql`(${t.subagent} is null) = (${t.version} is null) and (${t.subagent} is null) = (${t.def_hash} is null)`),
+  ],
+);
 export const attemptObservations = pgTable(
   'attempt_observations',
   {

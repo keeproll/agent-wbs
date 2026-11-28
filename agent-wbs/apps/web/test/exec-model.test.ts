@@ -6,7 +6,8 @@ import {
 const at = (key: string, kind: ExecAttempt['kind'], status: ExecAttempt['status'], startedAt: string, extra: Partial<ExecAttempt> = {}): ExecAttempt => ({
   id: `id-${key}`, attemptKey: key, taskKey: 'TASK-0007', kind, agent: kind === 'qa' || kind === 'reverify' ? 'Codex' : 'Claude', status,
   startedAt, endedAt: status === 'running' ? null : startedAt, modelId: 'opus', effort: 'high', gradeAdjust: null, summary: null, failure: null,
-  tokens: null, resumedFrom: null, baseSha: null, headSha: null, changedFiles: [], updatedAt: startedAt, ...extra,
+  tokens: null, resumedFrom: null, baseSha: null, headSha: null, changedFiles: [], updatedAt: startedAt,
+  subagents: { designated: [], used: null, observed: null }, ...extra,
 });
 const vf = (attempt: ExecAttempt, result: ExecVerification['result']): ExecVerification => ({
   id: `v-${attempt.attemptKey}`, taskKey: attempt.taskKey, attemptId: attempt.id, result, headSha: 'a'.repeat(40), specRevision: 1, cmd: 'pnpm test',

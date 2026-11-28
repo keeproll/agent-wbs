@@ -13,7 +13,8 @@ import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { fakeApi, json } from './support/fake-api.ts';
 import { mountTasks, newStore } from './support/task-api.ts';
-import { compareRegion, hasBaseline, writeSummary, type Box, type VisualResult } from './support/visual.ts';
+import { ciData, installCi } from './support/ci-data.ts';
+import { compareRegion, hasBaseline, subagentTagBoxes, writeSummary, type Box, type VisualResult } from './support/visual.ts';
 
 const OUT = process.env.AWBS_VISUAL_OUT_M303 ?? join(homedir(), '.orca/bots/agentwbs/archive/2026-11-26/M3-03/visual');
 
@@ -34,10 +35,18 @@ const BASE = {
   bottom: 1063,
 };
 
+const uuid = (key: string) => `00000000-0000-4000-8000-${key.replace(/\D/g, '').padStart(12, '0')}`;
+
 async function openTask(page: Page, tab = '') {
   await page.clock.install({ time: new Date('2026-11-05T20:00:00+09:00') });
   const api = await fakeApi(page);
   mountTasks(api, newStore());
+  if (tab === 'exec') {
+    // 원본 ATT-0004-1의 CI 참조(「Task 검사 통과 · CI-0125」)를 같은 CI 시험 자료로 준다(ci-task-ref.spec과 같은 연결).
+    const data = ciData();
+    for (const r of data.runs) if (r.taskKey === 'TASK-0004' && r.attemptId) r.attemptId = uuid('ATT-0004-1');
+    installCi(api, data, { tasks: false });
+  }
   // 실제 서버처럼 설정의 모델 이름을 준다(등급 표시 「Opus 5.5 · 높음」).
   const models = [['Claude', 'claude-opus-5-5', 'Opus 5.5'], ['Claude', 'claude-sonnet-5-5', 'Sonnet 5.5'], ['Codex', 'codex-large', 'Codex Large'], ['Codex', 'codex-mini', 'Codex Mini']]
     .map(([agent, id, label]) => ({ agent, id, label, rank: 1, allowed: true, isNew: false, efforts: null }));
@@ -91,6 +100,14 @@ for (const [id, tab] of TABS) {
     const height = Math.min(BASE.bottom - BASE.pane.y, 1080 - ours.y - 18, ours.height);
     const width = 1160;
     record(id, LIMITS[id] ?? null, NOTES[id] ?? '', compareRegion(id, `desktop-clock20261105/${id}.png`, { ...BASE.pane, width, height }, png, { x: ours.x, y: ours.y, width, height }, OUT));
+    if (tab === 'exec') {
+      // UAT-TASK-10: 지정 · 실제 하위 Agent 태그만 따로 엄격히 비교한다(원본 「지정」 태그 왼쪽 위: ATT-0004-1 982,562 · ATT-0004-2 840,720).
+      for (const [att, base] of [['ATT-0004-1', { x: 982, y: 562 }], ['ATT-0004-2', { x: 840, y: 720 }]] as const) {
+        const box = await subagentTagBoxes(page.getByRole('article', { name: `실행 ${att}` }), base);
+        const name = `UI-03-06-tags-${att}`;
+        record(name, 0.01, '같아야 함(지정 · 실제 하위 Agent 태그, Attempt.subagents)', compareRegion(name, `desktop-clock20261105/${id}.png`, box.base, png, box.ours, OUT));
+      }
+    }
   });
 }
 
@@ -104,5 +121,5 @@ const NOTES: Record<string, string> = {
   'UI-03E-head': SAME, 'UI-03E-gate': SAME, 'UI-03-02': SAME, 'UI-03-03': SAME, 'UI-03-04': SAME, 'UI-03-05': SAME,
   'UI-03-07': SAME, 'UI-03-08': SAME, 'UI-03-09': SAME,
   'UI-03-01': 'M3 통합: 추정·실제·고정 시작일 칸을 넣었다(원본과 같은 줄 수). 남은 차이는 시험 자료 값·실제 실행 시간 계산',
-  'UI-03-06': '계약 차이: Attempt에 CI 참조(M7-05)·지정/실제 하위 Agent 태그가 없음. 등급·시각 표기는 원본과 같음',
+  'UI-03-06': '지정/실제 하위 Agent 태그는 생겼다(아래 tags 영역에서 엄격 비교). 남은 차이(기존): CI 참조가 원본 버튼 대신 링크 모양(M7-05)이라 줄 위치가 1~2px 다름',
 };

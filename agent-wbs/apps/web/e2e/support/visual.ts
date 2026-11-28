@@ -53,3 +53,22 @@ export function writeSummary(results: VisualResult[], notes: Record<string, stri
   for (const r of results) lines.push(`| ${r.name} | ${r.size} | ${String(r.diffPixels)} | ${(r.ratio * 100).toFixed(2)}% | ${notes[`${r.name}:limit`] ?? ''} | ${notes[r.name] ?? ''} |`);
   writeFileSync(join(out, 'summary.md'), `${lines.join('\n')}\n`);
 }
+
+/**
+ * 시도 머리의 지정 · 실제 하위 Agent 태그 영역(UAT-TASK-10). 구현은 요소 위치로, 원본은 「지정」 태그 왼쪽 위(원본 PNG에서 #EEF3FF로 잰 값)로 맞춘다.
+ * 폭·높이는 구현의 「지정」부터 「실제」 태그 끝까지(+ 가장자리 2px). 태그 글자·폭·색이 다르면 차이가 커진다.
+ */
+export async function subagentTagBoxes(scope: import('@playwright/test').Locator, baseTopLeft: { x: number; y: number }): Promise<{ base: Box; ours: Box }> {
+  const designated = scope.locator('.att-h .tag.sub'), used = scope.locator('.att-h span', { hasText: /^실제 / });
+  // 태그가 없으면 기다리지 않고 바로 실패한다(boundingBox는 요소가 생길 때까지 시험 시간 끝까지 기다린다).
+  if (!(await designated.count()) || !(await used.count())) throw new Error('지정·실제 하위 Agent 태그가 없다');
+  const a = await designated.first().boundingBox();
+  const b = await used.first().boundingBox();
+  if (!a || !b) throw new Error('지정·실제 하위 Agent 태그 위치를 잴 수 없다');
+  const pad = 2;
+  const width = Math.round(b.x + b.width - a.x) + pad * 2, height = Math.round(Math.max(a.height, b.height)) + pad * 2;
+  return {
+    ours: { x: Math.round(a.x) - pad, y: Math.round(a.y) - pad, width, height },
+    base: { x: baseTopLeft.x - pad, y: baseTopLeft.y - pad, width, height },
+  };
+}

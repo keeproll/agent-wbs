@@ -7,7 +7,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { execApi, runnerState, type ExecApi } from './support/exec-fixtures.ts';
-import { compareRegion, hasBaseline, writeSummary, type Box, type VisualResult } from './support/visual.ts';
+import { compareRegion, hasBaseline, subagentTagBoxes, writeSummary, type Box, type VisualResult } from './support/visual.ts';
 
 const OUT = process.env.AWBS_EXEC_VISUAL_OUT ?? join(homedir(), '.orca/bots/agentwbs/archive/2026-11-26/M3-06/visual');
 
@@ -55,7 +55,10 @@ test('UI-06 실행 중 Task(TASK-0005·ATT-0005-1) 1920', async ({ page }) => {
   record('UI-06-rail', 0.03, '같아야 함(Task·시도 목록). 줄바꿈 위치 차이 허용', cmp('UI-06-rail', F, RAIL, png));
   record('UI-06-flow', 0.02, '같아야 함(WBS 번호·제목·상태·6단계)', cmp('UI-06-flow', F, FLOW, png));
   record('UI-06-next', null, '제품 결정: Mock 「결과 등록」 대신 「실행 중단」, 다음 작업 문구에서 Prototype 안내 제거(owner Q-04, G§9.7-3)', cmp('UI-06-next', F, NEXT_ROW, png));
-  record('UI-06-attempt', null, '계약 공백: 지정/실제 하위 Agent 태그 없음(Attempt 응답에 필드 없음). 나머지 배치는 같음', cmp('UI-06-attempt', F, ATT_HEAD, png));
+  record('UI-06-attempt', 0.01, '같아야 함(시도 머리의 지정 be-implementer v3 · 실제 실행 중 관측 2개 태그 포함, Attempt.subagents)', cmp('UI-06-attempt', F, ATT_HEAD, png));
+  // UAT-TASK-10: 태그만 요소 위치로 맞춰 다시 비교(원본 「지정」 태그 왼쪽 위 806,394)
+  const tags = await subagentTagBoxes(page.getByLabel('ATT-0005-1 실행 기록'), { x: 806, y: 394 });
+  record('UI-06-attempt-tags', 0.01, '같아야 함(지정 be-implementer v3 · 실제 실행 중 · 관측 2개 (추정))', cmp('UI-06-attempt-tags', F, tags.base, png, tags.ours));
   record('UI-06-messages', 0.03, '같아야 함(연결 메시지 제목·「메시지 작성」 버튼). 제목은 h4 대신 h2(제목 순서)지만 같은 13px·600', cmp('UI-06-messages', F, { ...MSG, height: 48 }, png));
   record('UI-06-messages-hint', null, '제품 결정: 안내 문장 11.5px → 12px(MM-28 본문 12px 이상, 리뷰 #10), 빈 상태 안내 한 줄 추가', cmp('UI-06-messages-hint', F, { x: MSG.x, y: MSG.y + 48, width: MSG.width, height: 62 }, png));
 });

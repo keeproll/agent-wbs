@@ -26,6 +26,8 @@ test('0021·0022 snapshot이 단계별 구조와 연결을 보존하고 다음 g
   const cgroup = snapshot('0040');
   // Q-13 결정 A: 외부 수신자(0041, mail_recipients·mail_outbox의 external)
   const external = snapshot('0041');
+  // UAT-TASK-10: 실제 사용한 하위 Agent(0048, attempt_subagent_usage)
+  const usage = snapshot('0048');
   expect(project.prevId).toBe(before.id);
   expect(evidence.prevId).toBe(project.id);
   expect(observation.prevId).toBe(evidence.id);
@@ -69,7 +71,12 @@ test('0021·0022 snapshot이 단계별 구조와 연결을 보존하고 다음 g
   // 0041은 외부 수신자 열 두 개와 검사 두 개만 더한다. 「다음 generate가 빈 변경」은 마지막 snapshot(0041)으로 확인한다.
   expect(await generateMigration(cgroup, external)).toHaveLength(4);
   for (const table of ['mail_recipients', 'mail_outbox']) expect(external.tables[`public.${table}`]?.columns).toHaveProperty('external');
-  expect(await generateMigration(external, generateDrizzleJson(schema, external.id))).toEqual([]);
+  expect(usage.prevId).toBe(external.id);
+  // 0048은 표 하나와 FK 셋만 더한다(Drizzle 기준). 범위 FK·색인·권한·트리거는 손으로 쓴 SQL이다. 「다음 generate가 빈 변경」은 마지막 snapshot(0048)으로 확인한다.
+  const added = await generateMigration(external, usage);
+  expect(added).toHaveLength(4);
+  expect(added[0]).toContain('CREATE TABLE "attempt_subagent_usage"');
+  expect(await generateMigration(usage, generateDrizzleJson(schema, usage.id))).toEqual([]);
   expect(mail.tables['public.mail_outbox']?.columns).toHaveProperty('retried');
   expect(mail.tables['public.mail_settings']?.columns).toHaveProperty('settings_version');
   expect(design.tables['public.mail_outbox']).toEqual(mail.tables['public.mail_outbox']);

@@ -9,6 +9,7 @@ import { buildLaunch, sessionOptions } from '../cli/args.ts';
 import { createParser } from '../cli/adapters.ts';
 import type { CliEvent } from '../cli/events.ts';
 import { SubagentObserver, sessionSlots } from '../cli/observe.ts';
+import { SubagentUsage } from '../cli/usage.ts';
 import { JsonlDecoder } from '../cli/stream.ts';
 import type { IsolationLayer, Launch } from '../cli/isolation.ts';
 import { IsolationUndecidedError } from '../cli/isolation.ts';
@@ -385,7 +386,7 @@ export class Execution {
       this.#running.set(attemptId, controller);
       await this.#report('reportAttemptStatus', { epoch, params: { attemptId }, body: { fence: job.fence, status: 'running', model: grade.model, effort: grade.effort, at: new Date().toISOString(), ...(grade.adjust && { adjust: grade.adjust }) } }, signal);
       await options.started?.(attemptId);
-      const observer = new SubagentObserver(), decoder = new JsonlDecoder(), parse = createParser(job.payload.agent);
+      const observer = new SubagentObserver(), usage = new SubagentUsage(), decoder = new JsonlDecoder(), parse = createParser(job.payload.agent);
       let reserved = 1 + budget, ok = false, text = '', sessionId: string | undefined;
       let resultEvent: Extract<CliEvent, { type: 'result' }> | undefined;
       const tokens = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
@@ -397,6 +398,7 @@ export class Execution {
       const apply = (records: ReturnType<JsonlDecoder['end']>) => {
         for (const record of records) for (const event of parse(record)) {
           observer.apply(event);
+          usage.apply(event);
           if (event.type === 'result') { ok = event.ok; resultEvent = event; }
           if (event.type === 'session') sessionId = event.sessionId;
           if (event.type === 'message') text = event.text;
@@ -441,8 +443,9 @@ export class Execution {
         try { await installSubagents(work.cwd, job.payload.agent, { enabled: false, items: [] }, grade, this.agentFiles); }
         catch (error) { throw new Error('실행을 마친 하위 Agent 정의의 소유 hash를 확인할 수 없습니다.', { cause: error }); }
       }
-      // shortcut: CLI 기록 형식이 검증되기 전에는 실제 사용을 확정하지 않는다. M5-03 실증 뒤 기록 해석기를 연결한다.
-      await d.outbox.enqueue('reportSubagentUsage', { epoch, params: { attemptId }, body: { fence: job.fence, confirm: 'partial', items: [] } });
+      // 실제 사용 보고(UAT-TASK-10 「실제」 태그). 출력 스트림에서 본 이름·횟수만 보낸다(SubagentUsage).
+      // shortcut: CLI 세션 기록 형식이 검증되기 전에는 「세션 기록 확인(confirmed)」으로 확정하지 않는다. 항상 partial(일부 관측).
+      await d.outbox.enqueue('reportSubagentUsage', { epoch, params: { attemptId }, body: { fence: job.fence, confirm: 'partial', items: usage.items(definitions.enabled ? definitions.items : []) } });
       if (signal.aborted || !ok || result.code !== 0) {
         if (signal.aborted) await this.#report('interruptAttempt', { epoch, params: { attemptId }, body: { fence: job.fence, reason: 'error', at: new Date().toISOString() } });
         else await this.#report('reportAttemptStatus', { epoch, params: { attemptId }, body: { fence: job.fence, status: 'failed', model: grade.model, effort: grade.effort, at: new Date().toISOString() } });

@@ -1390,6 +1390,7 @@ export interface Operations {
           id: Id;
           version: number | null;
           hash: string | null;
+          count?: number;
         })[];
       };
       epoch: number;

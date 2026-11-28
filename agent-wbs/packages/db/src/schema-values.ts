@@ -17,6 +17,7 @@ export const textValues: Record<string, Record<string, readonly string[] | null>
   planning_reviews: { kind: null },
   change_proposal_events: { kind: null },
   attempt_observations: { grade: ['ok', 'partial', 'unver'] },
+  attempt_subagent_usage: { name: null, confirm: ['confirmed', 'partial'] },
   defect_events: { kind: null },
   task_outputs: { kind: null },
   evidence: { kind: null },

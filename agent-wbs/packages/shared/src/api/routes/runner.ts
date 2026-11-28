@@ -520,10 +520,17 @@ export const runnerOperations = [
     method: 'POST',
     path: '/api/runner/attempts/:attemptId/subagent-usage',
     summary: '실제 사용한 하위 Agent 사후 확정. job이 끝났어도 그 job의 마지막 fence면 받음',
+    /*
+     * items 한 항목 = CLI가 부른 하위 Agent 이름 하나(UAT-TASK-10 「실제」 태그).
+     * - id: 설치한 우리 정의면 그 정의의 id(getTaskSubagents items[].id) 또는 key. 아니면 CLI가 적은 이름 그대로(예: Explore).
+     * - version·hash: 설치한 우리 정의일 때 그 값. 모르면 null. 설치 기록과 다르면 400.
+     * - count: 부른 횟수(화면 「×n」). 생략하면 1. 옛 Runner는 이 필드를 보내지 않는다(호환).
+     * 같은 시도에 다시 보내면 합친다: 이름은 늘기만 하고, 횟수는 큰 값, confirmed는 partial로 되돌아가지 않는다.
+     */
     body: Body({
       fence,
       confirm: AnyOf('confirmed', 'partial'),
-      items: List(Body({ id: c.Id, version: Nullable(c.Int4Count), hash: Nullable(Text) })),
+      items: List(Body({ id: c.Id, version: Nullable(c.Int4Count), hash: Nullable(Text), count: Opt(c.PositiveInt4) })),
     }),
     responses: { 204: null },
   }),

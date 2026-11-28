@@ -25,8 +25,11 @@ export type CliEvent =
   | { type: 'message'; text: string }
   /** Codex 하위 Agent 상태 보고(thread ID 단위) */
   | { type: 'subagent'; id: string; phase: SubagentPhase; parentId?: string | null; status?: string }
-  /** Claude 하위 Agent 도구 호출(Agent·Task). 이 실행(launch)에서 모델이 낸 호출이라는 사실이다. */
-  | { type: 'agent_call'; id: string; parentId?: string | null }
+  /**
+   * Claude 하위 Agent 도구 호출(Agent·Task). 이 실행(launch)에서 모델이 낸 호출이라는 사실이다.
+   * `agentType`: 호출 입력의 `subagent_type`(부른 하위 Agent 이름) 원문. 없으면 비운다(기본값으로 채우지 않음).
+   */
+  | { type: 'agent_call'; id: string; parentId?: string | null; agentType?: string }
   /** Claude 도구 결과. 어느 도구 호출의 결과인지만 담는다. 하위 Agent 호출인지는 reducer가 본다. */
   | { type: 'tool_result'; toolUseId: string }
   /** Claude task 메시지. 값은 원문 그대로이며, 어느 run에 속하는지는 reducer가 판정한다. */

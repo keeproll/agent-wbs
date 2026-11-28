@@ -146,6 +146,21 @@ export function detail(s: TaskStore, key: string): Detail {
   };
 }
 
+/**
+ * 원본 Mock 시도의 하위 Agent 값(P L3341 a.subs · L4115 mockUsed · a.sub/obsSt)을 계약 모양으로 옮긴다.
+ * - 지정: a.subs(정의 ID·버전). 실제: a.used(conf 「세션 기록 확인」=confirmed, 「일부 관측」=partial, v 0=정의 밖 이름 → version null).
+ * - 실행 중 관측: 실행 중 시도의 a.sub(관측 수)·a.obsSt.
+ */
+export function mockSubagents(a: any): Attempt['subagents'] {
+  return {
+    designated: ((a.subs ?? []) as any[]).map((x) => ({ id: x.id as string, version: x.v as number })),
+    used: a.used ? { confirm: a.used.conf === '세션 기록 확인' ? 'confirmed' : 'partial', items: (a.used.list as any[]).map((x) => ({ id: x.id as string, version: x.v ? x.v as number : null, count: x.n as number })) } : null,
+    observed: a.status === '실행 중' ? { count: Number(a.sub) || 0, state: a.obsSt === 'unconf' ? 'unconfirmed' : 'ok' } : null,
+  };
+}
+/** 원본 Mock 시도 키 → 하위 Agent 값(작업 실행 fixture가 같은 값을 쓰게) */
+export const MOCK_SUBAGENTS: ReadonlyMap<string, Attempt['subagents']> = new Map((P.attempts as any[]).map((a) => [a.id as string, mockSubagents(a)]));
+
 export function attempts(s: TaskStore, key: string): Attempt[] {
   return s.attempts.filter((a) => a.task === key).map((a) => ({
     id: uuid(a.id), attemptKey: a.id, taskKey: key, kind: KIND[a.kind] ?? 'dev', agent: a.agent, status: ATT_ST[a.status] ?? 'completed',
@@ -153,6 +168,7 @@ export function attempts(s: TaskStore, key: string): Attempt[] {
     modelId: a.model ?? null, effort: a.effort ?? null,
     gradeAdjust: a.esc ? { kind: a.escKind === 'down' ? 'down' : 'up', from: { model: a.model, effort: a.effort }, to: { model: a.model, effort: a.effort }, reason: a.esc } : null,
     summary: a.summary || null, failure: a.fail || null, tokens: a.tok ? a.tok * 1000 : null, resumedFrom: null, baseSha: null, headSha: null, changedFiles: a.files ?? [], updatedAt: iso(a.start),
+    subagents: mockSubagents(a),
   }));
 }
 
