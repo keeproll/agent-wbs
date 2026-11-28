@@ -1,7 +1,7 @@
 # UAT ID|화면 시험 파일|서버·Runner 보충 시험 파일|판정 범위|대표 시험 이름 또는 연속 시험의 단계
-UAT-AUTH-01|agent-wbs/apps/web/e2e/acceptance.spec.ts|agent-wbs/apps/api/test/security.db.test.ts|화면·실제 서버 보충|UAT-AUTH-01 · 최초 DB·LAN 비밀번호 설정 → 로그인 → 미등록 화면
+UAT-AUTH-01|agent-wbs/apps/web/e2e/acceptance.spec.ts|agent-wbs/apps/api/test/security.db.test.ts|화면·실제 서버 보충|UAT-AUTH-01 · 최초 DB·LAN 날짜 PIN 확인 → 로그인 → 미등록 화면
 UAT-AUTH-02|agent-wbs/apps/web/e2e/states-auth.spec.ts|agent-wbs/apps/api/test/security.db.test.ts|화면·실제 서버 보충|UAT-AUTH-02 1회용 링크: 주소에서 토큰을 즉시 지우고 최초만 성공, 재사용은 LOGIN_FAILED 안내
-UAT-AUTH-03|agent-wbs/apps/web/e2e/states-auth.spec.ts|agent-wbs/apps/api/test/security.db.test.ts|화면·실제 서버 보충|UAT-AUTH-03 틀린 비밀번호 반복: 실패 안내, 429는 Retry-After 동안 막고 보호 데이터는 보이지 않는다
+UAT-AUTH-03|agent-wbs/apps/web/e2e/states-auth.spec.ts|agent-wbs/apps/api/test/security.db.test.ts|화면·실제 서버 보충|UAT-AUTH-03 틀린 PIN 반복: 실패 안내, 429는 Retry-After 동안 막고 보호 데이터는 보이지 않는다
 UAT-SHELL-01|agent-wbs/apps/web/e2e/settings-core-shell.spec.ts|-|화면|UAT-SHELL-01 설정 6탭: 주소·선택 강조가 함께 바뀌고 새로고침·뒤로 가기가 같은 탭을 복원한다
 UAT-SHELL-02|agent-wbs/apps/web/e2e/project-register.spec.ts|agent-wbs/apps/web/e2e/acceptance.spec.ts|화면·실제 서버 보충|UAT-SHELL-02 등록 전: 프로젝트·설정만 열리고 승인 뒤 잠금이 풀린다
 UAT-SHELL-03|agent-wbs/apps/web/e2e/settings-core-runner.spec.ts|agent-wbs/e2e/fakes/test/runner-basic.scenario.test.ts|화면·실제 서버 보충|UAT-RUNNER-UI a: 헤더·설정 연결 상태와 준비 상태 결과·조치·탭 배지가 일치한다

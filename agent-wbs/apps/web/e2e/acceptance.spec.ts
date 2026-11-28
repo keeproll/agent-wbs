@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { startAcceptance, type Acceptance } from '../../../e2e/acceptance/harness.ts';
+import { fillPin, todayPin } from './support/pin.ts';
 
 let h: Acceptance;
 test.skip(!process.env.AWBS_ACCEPTANCE_OUT, 'W e2e -- acceptance로 전용 빈 DB와 함께 실행한다.');
@@ -26,14 +27,15 @@ test('최초 설치부터 실제 데이터: 빈 DB → 설정·로그인 → 등
   page.on('pageerror', error => errors.push(error.message));
   page.on('response', response => { if (response.url().includes('/api/') && response.status() >= 500) errors.push(`${response.url()} ${String(response.status())}`); });
 
-  await test.step('UAT-AUTH-01 · 최초 DB·LAN 비밀번호 설정 → 로그인 → 미등록 화면', async () => {
+  await test.step('UAT-AUTH-01 · 최초 DB·LAN 날짜 PIN 확인 → 로그인 → 미등록 화면', async () => {
     expect(await h.counts()).toEqual({ projects: 0, tasks: 0, attempts: 0, reports: 0 });
-    await h.configurePassword();
     await page.goto('/project');
     await expect(page).toHaveURL(/\/login/);
-    await page.getByLabel('비밀번호').fill(h.password);
+    expect(await read(page, 'auth/options')).toEqual({ pinEnabled: true, pinTimeZone: 'Asia/Seoul' });
+    await fillPin(page, todayPin());
     await page.getByRole('button', { name: '로그인', exact: true }).click();
     await expect(page.getByRole('heading', { name: '프로젝트 등록', exact: true })).toBeVisible();
+    expect((await read<{ method: string }>(page, 'session')).method).toBe('pin');
     await expect(page.getByRole('navigation').getByRole('link', { name: 'WBS', exact: true })).toHaveAttribute('aria-disabled', 'true');
   });
 

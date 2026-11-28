@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
@@ -45,7 +45,6 @@ export async function startAcceptance() {
   const appUrl = new URL(dbUrl); appUrl.searchParams.set('options', '-c role=awbs_app');
   const pool = createPool(appUrl.href, { onError: () => undefined });
   const home = await mkdtemp(join(tmpdir(), 'awbs-acceptance-'));
-  const password = `acceptance-${randomBytes(16).toString('base64url')}`;
   const origin = `http://127.0.0.1:${process.env.AWBS_E2E_PORT ?? ''}`;
   const app = buildApp(pool, false, { origin, lan: true }, { dataRoot: join(home, 'data') });
   installRunner(app, pool); registerRunnerMessageRoutes(app); installProjectRunner(app, pool); installCiRunner(app);
@@ -126,12 +125,6 @@ export async function startAcceptance() {
     return result.body.job;
   };
   return {
-    password,
-    configurePassword: async () => {
-      execFileSync(process.execPath, ['--conditions=awbs-source', 'apps/api/src/platform/auth-cli.ts', 'set-password'], {
-        cwd: root, env: { ...process.env, AWBS_HOST: '127.0.0.2', AWBS_ALLOW_LAN: 'true', AWBS_ORIGIN: origin }, input: `${password}\n`, stdio: ['pipe', 'ignore', 'pipe'],
-      });
-    },
     counts: async () => {
       const row = (await owner.query<{ projects: number; tasks: number; attempts: number; reports: number }>(`select
       (select count(*)::int from projects) projects,(select count(*)::int from tasks) tasks,
