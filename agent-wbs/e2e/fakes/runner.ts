@@ -61,8 +61,8 @@ export class FakeRunner {
     await this.api('reportUsage', { ...this.write(), body: { agent, remainPct, ...(resetAt && { resetAt }) } });
   }
 
-  async startNext(headSha?: string): Promise<Running | undefined> {
-    const claimed = await this.api('claimJob', { ...this.write(), body: { kinds: ['attempt'], capacity: 20 } });
+  async startNext(headSha?: string, capacity = 20): Promise<Running | undefined> {
+    const claimed = await this.api('claimJob', { ...this.write(), body: { kinds: ['attempt'], capacity } });
     if (claimed.status === 204) return undefined;
     const job = claimed.body.job;
     assert.equal(job.kind, 'attempt');

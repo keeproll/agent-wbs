@@ -43,8 +43,9 @@ for (const op of runnerOps) {
     if (op.id === 'reportUsage' && value) {
       assert(request.platform?.client);
       await request.platform.client.query('insert into security_effects(value) values($1)', [value]);
-      if (value === 'failure') throw new Error('Bearer hunter2');
-      if (value === 'rejection') return reply.code(409).send({ error: '업무 처리 거부' });
+      if (value.startsWith('committed-')) request.platform.commitOnError = true;
+      if (value.endsWith('failure')) throw new Error('Bearer hunter2');
+      if (value.endsWith('rejection')) return reply.code(409).send({ error: '업무 처리 거부' });
     }
     if (op.id === 'heartbeat' || op.id === 'reportCommandResult') return reply.code(204).send();
     if (op.id === 'getCommands') return { currentEpoch: request.platform?.currentEpoch, commands: [] };
@@ -203,6 +204,21 @@ test('실패한 업무·직접 보낸 거부 응답은 업무 변경과 멱등 �
     expect((await pool.query('select count(*)::int as n from security_effects where value=$1', [value])).rows).toEqual([{ n: 0 }]);
     expect((await pool.query('select count(*)::int as n from idempotency_keys where key=$1', [headers['idempotency-key']])).rows).toEqual([{ n: 0 }]);
   }
+});
+
+test.each([
+  { value: 'committed-rejection', status: 409, count: 1 },
+  { value: 'committed-failure', status: 500, count: 0 },
+])('commitOnError $status: 저장한 4xx만 재생하고 5xx는 업무·멱등 기록을 되돌린다', async ({ value, status, count }) => {
+  const headers = runnerHeaders();
+  const request = { method: 'POST' as const, url: '/api/runner/usage', headers, payload: { value } };
+  const first = await app.inject(request);
+  const repeated = await app.inject(request);
+  expect([first.statusCode, repeated.statusCode]).toEqual([status, status]);
+  expect(repeated.headers['idempotency-replayed']).toBe(count ? 'true' : undefined);
+  if (count) expect(repeated.body).toBe(first.body);
+  expect((await pool.query('select count(*)::int n from security_effects where value=$1', [value])).rows).toEqual([{ n: count }]);
+  expect((await pool.query('select count(*)::int n from idempotency_keys where key=$1', [headers['idempotency-key']])).rows).toEqual([{ n: count }]);
 });
 
 test('앱을 다시 만들어도 저장한 응답을 재생하고 JSON 필드 순서는 키 충돌로 보지 않는다', async () => {
