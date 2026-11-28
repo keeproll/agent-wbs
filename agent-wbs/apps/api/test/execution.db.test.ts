@@ -603,8 +603,8 @@ test('M8 선행: 시계가 뒤로 가도 API의 시도 번호(attemptNo)·검증
     values($1,$2,'FAIL',$3,1,'pnpm test','성공','최신 FAIL',now()-interval '5 minutes 2.3 seconds') returning id`, [project, second, sha])).rows[0] as { id: string }).id;
   await owner.query("update messages set draft=false,delivery='Queued' where msg_key='MSG-905'");
   await owner.query("update tasks set status='rework' where id=$1", [a.id]);
-  // 같은 트랜잭션에서 함께 넣은 검증·메시지(데모·seed 일괄 입력과 같은 처지)는 서버 순서가 없다 → 시각으로 비교한다.
-  // MSG-906은 v3 뒤에 넣었지만 시각은 v3보다 이르다 → v3의 「뒤 메시지」가 아니다(넣은 순서로 보면 들어간다).
+  // 같은 트랜잭션에서 함께 넣은 검증·메시지도 이력 순번(seq)이 실제 실행 순서다(Codex 재리뷰 P2) → 벽시계로 되돌아가지 않는다.
+  // MSG-906은 v3 뒤에 넣었고 시각만 v3보다 이르다 → v3의 「뒤 메시지」다.
   const b = await running('qa');
   await owner.query("update task_attempts set started_at=now()-interval '10 minutes',ended_at=now()-interval '3 minutes',status='completed' where id=$1", [b.attempt]);
   const tx = await owner.connect();
@@ -649,7 +649,45 @@ test('M8 선행: 시계가 뒤로 가도 API의 시도 번호(attemptNo)·검증
     // 목록 표시 순서는 시각순(표시용)이다. 포함 여부만 서버 순서로 정한다.
     expect(fail(v1)).toEqual(['MSG-905', 'MSG-903']);
     expect(fail(v2)).toEqual(['MSG-905']);
-    expect(fail(v3)).toEqual([]);
+    expect(fail(v3)).toEqual(['MSG-906']);
+    expect(snap.issues.filter((i) => i.text.includes('판정 불가'))).toEqual([]);
     expect([snap.summary.forecast, snap.summary.forecastBefore]).toEqual(['2026-12-09', '2026-12-09']);
+  } finally { client.release(); }
+});
+
+test('M8 선행: 이력이 없어 순서를 복원할 수 없는 메시지는 벽시계로 추정하지 않고 「FAIL 뒤 메시지」에서 빼며 경고한다', async () => {
+  // c: 검증·메시지 모두 이력 시작 전 행(seed 기록만 있음) + 기록이 아예 없는 메시지 → 순서 복원 불가.
+  // d: seed 메시지(이력 시작 전)와 실제 저장된 FAIL → 순서를 안다(seed가 먼저) → 「뒤 메시지」 아님, 경고 없음.
+  const c = await running('qa'), d = await running('qa');
+  for (const x of [c, d]) await owner.query("update task_attempts set started_at=now()-interval '10 minutes',ended_at=now()-interval '5 minutes',status='completed' where id=$1", [x.attempt]);
+  const raw = await owner.connect();
+  const seed = (tbl: string, id: string, data: object) => raw.query("insert into state_log(project_id,tbl,row_id,op,data) values($1,$2,$3,'seed',$4)", [project, tbl, id, data]);
+  const insertMessage = async (task: string, key: string) => ((await raw.query(`insert into messages(project_id,task,msg_key,attempt,dir,type,to_agent,body,delivery,pending_next,work_state,draft,created_at)
+    values($1,$2,$3,null,'out','수정 요청','Codex','옛 지시','Sent',false,'',false,now()-interval '1 minute') returning id`, [project, task, key])).rows[0] as { id: string }).id;
+  const v4 = await (async () => { try {
+    // 기록 트리거를 끄고 넣은 뒤, 0028처럼 seed 기록만 남긴다. 시각은 메시지가 FAIL보다 늦게 준다(시각으로 보면 「뒤」).
+    await raw.query("set session_replication_role='replica'");
+    const id = ((await raw.query(`insert into verifications(project_id,attempt,result,head_sha,spec_revision,cmd,expected,actual,created_at)
+      values($1,$2,'FAIL',$3,1,'pnpm test','성공','옛 FAIL',now()-interval '5 minutes') returning id`, [project, c.attempt, sha])).rows[0] as { id: string }).id;
+    await seed('verifications', id, { id });
+    await seed('messages', await insertMessage(c.id, 'MSG-907'), { draft: false });
+    await insertMessage(c.id, 'MSG-909'); // 기록이 아예 없다
+    await seed('messages', await insertMessage(d.id, 'MSG-908'), { draft: false });
+    return id;
+  } finally { await raw.query("set session_replication_role='origin'"); raw.release(); } })();
+  const v5 = ((await owner.query(`insert into verifications(project_id,attempt,result,head_sha,spec_revision,cmd,expected,actual,created_at)
+    values($1,$2,'FAIL',$3,1,'pnpm test','성공','새 FAIL',now()-interval '5 minutes') returning id`, [project, d.attempt, sha])).rows[0] as { id: string }).id;
+
+  const { buildSnapshot } = await import('../src/reports/snapshot.ts');
+  const client = await owner.connect();
+  try {
+    const day = (offset: number) => new Date(Date.now() + 9 * 3600_000 - offset * 86_400_000).toISOString().slice(0, 10);
+    const snap = await buildSnapshot(client, project, { kind: 'custom', from: day(1), to: day(0), at: new Date(Date.now() + 1000).toISOString() }, 'live');
+    const fail = (id: string) => snap.failures.find((f) => f.verificationId === id)?.messages.map((m) => m.msgKey);
+    expect(fail(v4)).toEqual([]);
+    expect(fail(v5)).toEqual([]);
+    const warns = snap.issues.filter((i) => i.text.includes('판정 불가'));
+    expect(warns.map((i) => [i.level, i.taskKey])).toEqual([['warn', c.key]]);
+    expect(warns[0]?.text).toContain('MSG-907, MSG-909');
   } finally { client.release(); }
 });

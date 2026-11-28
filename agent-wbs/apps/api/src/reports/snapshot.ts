@@ -268,21 +268,26 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
   // - 검증: 그 검증이 저장된 기록(state_log op='insert'). 메시지: 처음 「보낸 상태」(draft=false)가 된 기록(삽입 또는 초안→전송 변경).
   // - 순서: 그 기록을 남긴 트랜잭션의 커밋 시계(commit_real.stamp, 커밋 직전 행 잠금 아래 「이전 값 + 1µs 이상」으로 매김 → 뒤로 가지 않음) → 같은 트랜잭션이면 이력 순번(seq).
   //   아직 정리 단계가 commit_real에 옮기지 않은 가장 최근 커밋은 뒤(nulls last)에 둔다.
-  // - 다음 경우는 서버 순서가 없다 → 그 경우만 예전처럼 시각으로 비교한다(한계, 보고서 4.6).
-  //   · 두 기록이 같은 트랜잭션에서 나왔다: 이력 시작 전 행(0028 seed는 한 트랜잭션), 데모 자료 일괄 입력처럼 한꺼번에 넣은 자료.
-  //     실제 흐름에서는 검증 저장(결과 보고)과 메시지 전송이 서로 다른 트랜잭션이다.
-  //   · 어느 한쪽 기록이 없다(기록을 끈 채 넣은 행).
-  const order = new Map((await q<{ id: string; xid: string; ord: number }>(
+  // - 같은 트랜잭션의 기록끼리도 이력 순번(seq)이 실제 실행 순서다 → 순서를 아는 기록은 늘 이 순서로 비교한다(Codex 재리뷰 P2).
+  // - 벽시계로 앞뒤를 추정하지 않는다(owner 원칙). 다음 경우는 「순서 복원 불가」다(한계, 보고서 4.6):
+  //   · 두 기록이 모두 이력 시작 전 행(0028 seed): seed의 seq는 사건 순서가 아니라 마이그레이션이 훑은 순서다.
+  //   · 어느 한쪽 기록이 아예 없다(기록을 끈 채 넣은 행).
+  //   seed 한쪽과 실제 기록 한쪽은 순서를 안다: seed(이력 시작 전)가 항상 먼저다(seed 트랜잭션의 커밋이 그 뒤 모든 커밋보다 앞).
+  //   복원 불가인 메시지는 「FAIL 뒤 메시지」에 넣지 않고, 그 Task에 「팀장 확인 필요」 경고를 남긴다(지어내지 않는다).
+  //   실제 운영은 빈 DB에서 시작하므로 운영 자료는 모두 이력이 있다.
+  const order = new Map((await q<{ id: string; op: string; ord: number }>(
     `with firsts as (select distinct on (l.row_id) l.row_id,l.op,l.seq,l.xid from public.state_log l
        where l.project_id=$1 and ((l.tbl='verifications' and l.op in ('insert','seed')) or (l.tbl='messages' and l.op in ('insert','update','seed') and l.data->>'draft'='false'))
        order by l.row_id,l.seq)
-     select f.row_id::text id,f.xid::text xid,(row_number() over (order by c.stamp nulls last,f.seq))::int ord from firsts f left join public.commit_real c on c.xid=f.xid`, [projectId]))
+     select f.row_id::text id,f.op,(row_number() over (order by c.stamp nulls last,f.seq))::int ord from firsts f left join public.commit_real c on c.xid=f.xid`, [projectId]))
     .map((r) => [r.id, r]));
-  const sentAfter = (messageId: string, v: { id: string; at: string }, at: string) => {
-    const m = order.get(messageId), f = order.get(v.id);
-    if (!m || !f || m.xid === f.xid) return ms(at) >= ms(v.at);
+  /** 메시지가 그 FAIL 뒤에 보낸 것인가. null = 순서 복원 불가. */
+  const sentAfter = (messageId: string, verificationId: string): boolean | null => {
+    const m = order.get(messageId), f = order.get(verificationId);
+    if (!m || !f || (m.op === 'seed' && f.op === 'seed')) return null;
     return m.ord > f.ord;
   };
+  const unordered = new Map<string, Set<string>>();
   const failures: ReportSnapshotData['failures'] = inVerifs.filter((v) => v.result === 'FAIL').flatMap((v) => {
     const t = byId.get(v.task);
     if (!t) return [];
@@ -291,11 +296,18 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
       defects: defects.filter((d) => d.verification === v.id).map((d) => d.text), evidence: evidence.filter((e) => e.verification === v.id).map((e) => e.path),
       // FAIL 뒤 메시지: 같은 Task에서 그 FAIL이 저장된 뒤에 보낸 메시지 전부(원본 P L3848: 시도 지정 조건 없음). 앞뒤는 위 서버 순서로 판정한다.
       // upTo(m.at)는 기간 자르기(T 전 메시지)다.
-      messages: messages.filter((m) => m.task === v.task && m.dir === 'out' && upTo(m.at) && sentAfter(m.id, v, m.at))
-        .map((m) => ({ msgKey: m.key, delivery: m.delivery ?? '' })),
+      messages: messages.filter((m) => {
+        if (m.task !== v.task || m.dir !== 'out' || !upTo(m.at)) return false;
+        const after = sentAfter(m.id, v.id);
+        if (after === null) unordered.set(t.key, (unordered.get(t.key) ?? new Set()).add(m.key));
+        return after === true;
+      }).map((m) => ({ msgKey: m.key, delivery: m.delivery ?? '' })),
       reworks: attempts.filter((a) => a.task === v.task && a.kind === 'rework' && upTo(a.started_at) && a.no > v.no).map((a) => ({ attemptKey: a.key, status: a.status })),
     }];
   });
+  for (const [taskKey, keys] of unordered) {
+    issues.push({ level: 'warn', text: `${taskKey} FAIL 뒤 수정 지시 판정 불가 — 기록 시작 전 메시지 ${String(keys.size)}건(${[...keys].join(', ')})은 FAIL과의 앞뒤 순서를 복원할 수 없어 「후속 조치」에서 뺐습니다. 전체 메시지 표를 확인하세요.`, taskKey });
+  }
 
   // 7. 실행 기록 표
   const attemptRows: ReportSnapshotData['attempts'] = inAtts.flatMap((a) => {
