@@ -3,7 +3,7 @@ import type { Pool, PoolClient } from '@awbs/db';
 import { errorBody } from '@awbs/shared';
 import { ERROR_STATUS, OPERATIONS, inputErrors, isTimestamp, type ErrorCode, type Operation } from '@awbs/shared/api';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { redact } from '../platform/redact.ts';
+import { redact, redactText } from '../platform/redact.ts';
 import { InputProblem } from './history.ts';
 
 /**
@@ -57,9 +57,9 @@ export function routes(app: FastifyInstance, name: string, register: (route: (id
       if (!api) throw error;
       const op = actions.get(`${request.method} ${request.routeOptions.url ?? ''}`);
       return reply.code(ERROR_STATUS[api.code]).send(errorBody({
-        code: api.code, message: api.message, action: op?.summary ?? name,
-        fix: api.fix ?? (api.code === 'VERSION_CONFLICT' ? '최신 내용을 다시 불러온 뒤 다시 시도하세요.' : '입력과 현재 상태를 확인한 뒤 다시 시도하세요.'),
-        errors: api.errors, details: redact(api.details) as Record<string, unknown>, requestId: request.id,
+        code: api.code, message: redactText(api.message), action: op?.summary ?? name,
+        fix: redactText(api.fix ?? (api.code === 'VERSION_CONFLICT' ? '최신 내용을 다시 불러온 뒤 다시 시도하세요.' : '입력과 현재 상태를 확인한 뒤 다시 시도하세요.')),
+        errors: redact(api.errors) as FieldError[], details: redact(api.details) as Record<string, unknown>, requestId: request.id,
       }));
     });
     register((id, handler, params) => {
