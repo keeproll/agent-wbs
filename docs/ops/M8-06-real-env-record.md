@@ -17,7 +17,7 @@
 ### 1.1 compose 구성 검사 — 통과
 
 ```bash
-AWBS_IMAGE_TAG=ef25de2 docker compose -p awbs-prod -f /home/keeproll/orca/workspaces/agent-wbs/m8-06/agent-wbs/deploy/compose.prod.yaml config --quiet
+AWBS_IMAGE_TAG=b59baf9 docker compose -p awbs-prod -f /home/keeproll/orca/workspaces/agent-wbs/m8-06/agent-wbs/deploy/compose.prod.yaml config --quiet
 ```
 
 - 종료 코드 0. 꼬리표 없이 실행하면 「AWBS_IMAGE_TAG(이미지 꼬리표)를 정하세요」로 멈춘다(의도한 동작).
@@ -28,44 +28,46 @@ AWBS_IMAGE_TAG=ef25de2 docker compose -p awbs-prod -f /home/keeproll/orca/worksp
 
 ### 1.2 이미지 — 통과
 
-- `bash agent-wbs/deploy/build.sh`로 `awbs-app:ef25de2`, `awbs-web:ef25de2`를 만들었다(커밋 `ef25de2`).
+- `bash agent-wbs/deploy/build.sh`로 `awbs-app:b59baf9`, `awbs-web:b59baf9`를 만들었다(커밋 `b59baf9`).
 - 이미지에 커밋 표시(`org.agentwbs.commit`)를 붙인다. 백업 manifest의 `git_commit`이 이 값을 쓴다.
 - 앱 실행 계정은 `node`(uid 1000), 프로그램 파일은 root 소유 읽기 전용이다. 컨테이너 안 Chromium PDF 생성은 1차 기록에서 확인했다.
 
-### 1.3 복원 리허설 — 통과 (2026-11-28 05:10~05:12Z)
+### 1.3 복원 리허설 — 통과 (2026-11-28 05:33~05:35Z, 재리뷰 반영 3차)
 
 ```bash
-AWBS_IMAGE_TAG=ef25de2 bash /home/keeproll/orca/workspaces/agent-wbs/m8-06/agent-wbs/deploy/restore-rehearsal.sh
+AWBS_IMAGE_TAG=b59baf9 bash /home/keeproll/orca/workspaces/agent-wbs/m8-06/agent-wbs/deploy/restore-rehearsal.sh
 ```
 
 1. 원본 `awbs-rh-src`를 띄웠다.
-2. **원본 앱 DB 권한**: `{"currentUser":"awbs_app_login","superuser":false,"historyWritable":[],"historyDeleteBlocked":true,"setRoleBlocked":true,"disableTriggerBlocked":true}`.
+2. **원본 앱 DB 권한**: `{"currentUser":"awbs_app_login","superuser":false,"historyWritable":[],"historyDeleteBlocked":true,"setRoleBlocked":true,"disableTriggerBlocked":true,"membershipSafe":true}`.
    - api·worker 1번 프로세스의 DB 사용자는 `awbs_app_login`이고, 두 컨테이너에 관리자 비밀 파일(`/run/secrets/db_password`)이 없다.
 3. 시험 자료(seed demo)와 64 KiB 데이터 파일 표식을 넣고, 로그인 뒤 API GET 14개를 저장했다.
-4. `backup.sh`: 폴더 700, 파일 600. manifest에 `image=awbs-app:ef25de2`, `image_id`, `web_image`, `web_image_id`, `image_tag=ef25de2`, `git_commit=ef25de2…`, `xid_at_backup=767`, `xid_epoch=0`, 표 107개.
+4. `backup.sh`: 폴더 700, 파일 600. manifest에 `image=awbs-app:b59baf9`, `image_id`, `web_image`, `web_image_id`, `image_tag=b59baf9`, `git_commit=b59baf9…`, `xid_at_backup=766`, `xid_epoch=0`, 표 107개.
 5. **없는 꼬리표로 복원 시도**(`AWBS_IMAGE_TAG=no-such-tag-m806`): 종료 코드 6으로 멈췄고 만든 볼륨은 0개였다.
+   - **이미지 ID가 빠진 manifest**(`image_id`·`web_image_id` 줄을 지운 사본, 꼬리표 생략): 「manifest의 image_id 가 없거나 형식이 잘못되었습니다」로 종료 코드 6, 만든 볼륨 0개.
 6. **꼬리표를 주지 않고 복원**: manifest의 꼬리표를 골라 이미지 ID가 같음을 확인했다(「manifest와 ID 같음」).
-   - 새 서버의 번호 732, 백업 순간의 번호 767 → epoch 0 → 1.
+   - 새 서버의 번호 732, 백업 순간의 번호 766 → epoch 0 → 1.
    - 표 107개의 행 수·내용 지문이 모두 같았다.
 7. 대상 앱 기동: `/health/db` → `{"db":"ok"}`.
 8. **대상 앱 DB 권한**: 원본과 같은 결과. 역할은 백업에서 되살리고(비밀번호 없이), migrate가 대상의 `db-app-password`로 비밀번호를 맞췄다.
 9. 대조: 데이터 파일 표식 같음, API 14개 모두 200·본문 같음(`/api/schedule`은 `at`·`plannedPct` 제외).
 10. 새 변경: epoch 1 번호와 실제 커밋 시각을 받았다. 옛 번호 기록 2개 유지.
 11. **Runner 연결 재현**(operations 5.1.1 순서대로)
-    - `runner:public-key` 명령 → Runner ID `bf5fdcdc-1ce0-47d1-8a8a-63c7e34f3d78`, 공개키 파일 권한 600.
+    - `runner:public-key` 명령 → Runner ID `c0ba1c52-c4aa-4862-8a24-d08c4ffe6b8c`, 공개키 파일 권한 600.
       - 이 명령은 gh-cred 작업(커밋 `4c676e8`, 아직 main 미병합)이 추가한다. 리허설 때만 그 파일(`agent-runner/scripts/runner-public-key.ts`)을 잠시 놓고 실행한 뒤 지웠다. 이 브랜치에는 커밋하지 않았다.
     - 그 식별자로 발급한 토큰의 heartbeat → **204**. 옛 안내(`runner-main`) 토큰 → **403**.
     - 실제 Runner(`agent-runner/src/main.ts`)를 그 토큰으로 20초 띄웠다. 서버에 그 식별자의 세션 기록 1개가 생겼다.
 12. 임시 구성의 컨테이너·볼륨을 모두 지웠다(남은 것 0개).
 
-전체 기록: `/home/keeproll/.orca/bots/agentwbs/archive/2026-11-28/M8-06/rehearsal-run-fix1.log` (이미지 `ef25de2`)
+전체 기록: `/home/keeproll/.orca/bots/agentwbs/archive/2026-11-28/M8-06/rehearsal-run-fix2.log` (이미지 `b59baf9`). 앞선 판: `rehearsal-run-fix1.log`(`ef25de2`)
 - 같은 검사를 `01b1c11`(Runner ID를 이 브랜치의 임시 명령으로 확인하던 판)에서도 한 번 통과했다: `rehearsal-run-fix1-01b1c11.log`
 
 ### 1.4 시험·검사
 
 - `agent-runner`: `pnpm typecheck`·`pnpm lint`·`pnpm test` 통과(코드 변경은 `src/github/README.md` 문장 하나).
   - Runner ID 확인 명령은 gh-cred 작업의 `runner:public-key`를 쓴다(같은 기능을 따로 만들지 않음, 조정자 지시).
-- `agent-wbs`: 새 DB 시험 `packages/db/test/app-login.db.test.ts` 3개 통과(전용 시험 DB 컨테이너).
+- `agent-wbs`: `typecheck`·`lint`·`test`(101 파일 2,063개)·`test:db`(52 파일 853개) 통과. 새 DB 시험 `packages/db/test/app-login.db.test.ts` 4개 포함(전용 시험 DB 컨테이너).
+  - 재리뷰 재현: 멤버십에 ADMIN이 남아 있으면 앱 로그인이 스스로 `SET TRUE` 멤버십을 주고 `SET ROLE`에 성공한다. 검사(`membershipSafe`)가 이를 잡고, migrate의 맞추기가 준 사람별 멤버십을 모두 회수해 `ADMIN FALSE, INHERIT TRUE, SET FALSE` 하나만 남긴다. 그 뒤 앱의 자기 부여는 `42501`로 막힌다.
   - 앱 로그인이 관리자가 아니고, 이력 삭제·비우기·트리거 끄기·`SET ROLE`이 막히고, 앱 일(읽기, 보고서 기준점 함수)은 된다.
   - 실수로 준 다른 역할을 migrate가 회수하고 `SET` 불가를 되살린다.
 
@@ -103,6 +105,9 @@ AWBS_IMAGE_TAG=ef25de2 bash /home/keeproll/orca/workspaces/agent-wbs/m8-06/agent
   - M8-06 범위에서는 (A)의 명령을 만들지 않았다(제안만). 계약 변경 배포는 결정과 구현 뒤에 한다.
 - **(리뷰 P1-1) 운영 앱이 DB 관리자로 접속하던 문제 — 고침.** api·worker는 `awbs_app_login`으로 접속하고, 관리자 비밀 파일은 앱 컨테이너에 붙지 않는다(1.3의 2·8번).
 - **(리뷰 P1-2) 안내대로 발급한 토큰이 403이던 문제 — 고침.** 토큰을 gh-cred의 `runner:public-key` 명령이 알려 주는 실제 Runner ID로 발급하도록 안내를 바꿨다(1.3의 11번). 이 안내는 gh-cred 병합 뒤에 쓴다.
+- **(재리뷰 P2-1) 앱 로그인 멤버십에 ADMIN 옵션이 남을 수 있던 문제 — 고침.** `ADMIN FALSE`를 명시하고 준 사람별 멤버십을 모두 회수한 뒤 다시 준다. `db-check`에 `membershipSafe`를 넣었다.
+- **(재리뷰 P2-2) 이미지 ID가 빠진 manifest를 기본 복원이 받아 주던 문제 — 고침.** 두 ID가 없거나 형식이 틀리면 자원을 만들기 전에 종료 코드 6으로 멈춘다(1.3의 5번).
+- **(재리뷰 P2-3) F-6 설명이 코드보다 강하던 문제 — 고침.** 일반 Runner 경로와 Planning 경로(`assertJob`)의 검사 차이, `unconfirmed` 보유, `sessions`의 한계, `reconcile` 대조의 옛 입력을 적고, 안전 거절 기준을 상태 변화·fence 변경으로 한정했다(operations §4.4). 계약 변경 배포 금지 결론은 그대로다.
 - **(리뷰 P1-3) 복원이 지금 소스로 이미지를 자동 빌드하던 문제 — 고침.** compose에서 `build`를 없애고, 복원은 manifest의 꼬리표·ID로만 띄운다(1.3의 5·6번).
 
 ## 3. owner가 할 일
