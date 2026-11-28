@@ -2,7 +2,7 @@
  * M6-03 메일 단위 시험(DB 없음): SMTP 결과 분류와 메일 본문 규칙.
  * SMTP는 로컬 가짜 서버(e2e/fakes/smtp.ts)다. 실제 메일 서버에는 연결하지 않는다.
  */
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import { internalTerms, type ReportSnapshotData } from '@awbs/shared';
 import { FakeSmtp, mimePart } from '../../../e2e/fakes/smtp.ts';
 import { checkSmtp, describeError, sendSmtp, type SmtpTarget } from '../src/mail/smtp.ts';
@@ -19,6 +19,15 @@ beforeAll(async () => {
 afterAll(async () => { await smtp.stop(); });
 
 describe('SMTP 결과 분류(contracts §4.4: 수락 / 확실한 실패 / 수락 여부 불명)', () => {
+  test('T-15 운영에서는 옛 평문 SMTP 설정도 연결·발송 전에 거부한다', async () => {
+    const before = smtp.connections;
+    vi.stubEnv('NODE_ENV', 'production');
+    try {
+      expect(await checkSmtp(target)).toMatchObject({ ok: false, error: expect.stringContaining('SSL/TLS 또는 STARTTLS') });
+      expect(await sendSmtp(target, mail)).toMatchObject({ state: 'rejected', error: expect.stringContaining('SSL/TLS 또는 STARTTLS') });
+      expect(smtp.connections).toBe(before);
+    } finally { vi.unstubAllEnvs(); }
+  });
   test.each([
     ['accept', 'accepted'],
     ['auth_fail', 'rejected'],

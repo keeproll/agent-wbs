@@ -38,13 +38,16 @@ test.each([`password: ${password.split(' ')[0]}`, `SMTP_PASSWORD: "${password}"`
   expect(redactText(redactText(input))).toBe(redactText(input));
 });
 
-test('Telegram의 실제 서비스 주소는 네트워크 요청 전에 거부한다', async () => {
+test('Telegram 연결 오류에 URL·토큰·외부 오류 본문을 넣지 않는다', async () => {
   vi.stubEnv('AWBS_TELEGRAM_BOT_API_URL', 'https://api.telegram.org');
-  const fetch = vi.fn(async () => { throw new Error('외부 네트워크를 부르면 안 됩니다.'); });
+  const fetch = vi.fn(async () => { throw new Error(`https://api.telegram.org/bot${token}/sendMessage ${password}`); });
   vi.stubGlobal('fetch', fetch);
   try {
-    expect(await callBot(token, 'sendMessage', { text: '시험' })).toMatchObject({ ok: false, error: 'network' });
-    expect(fetch).not.toHaveBeenCalled();
+    const result = await callBot(token, 'sendMessage', { text: '시험' });
+    expect(result).toMatchObject({ ok: false, error: 'network' });
+    expect(JSON.stringify(result)).not.toContain(token);
+    expect(JSON.stringify(result)).not.toContain(password);
+    expect(fetch).toHaveBeenCalledOnce();
   } finally { vi.unstubAllGlobals(); vi.unstubAllEnvs(); }
 });
 

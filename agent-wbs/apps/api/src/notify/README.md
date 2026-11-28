@@ -5,11 +5,10 @@ Telegram은 상태 변화를 알려 주기만 한다. 승인과 조치는 WBS �
 
 ## 실행 범위
 
-Q-16이 정해지기 전에는 실제 Telegram에 연결하지 않는다.
-`AWBS_TELEGRAM_BOT_API_URL`에 명시한 `http://127.0.0.1:<포트>`의 fake Bot API만 호출한다.
-Bot API는 봇 확인과 메시지 전송을 처리하는 HTTP 인터페이스다.
-주소가 없거나 로컬 주소가 아니면 `network` 결과를 돌려준다.
-왜: 실제 봇 값과 운영 연결은 owner 결정 뒤에 붙여야 한다.
+실제 연결은 `https://api.telegram.org`만 쓴다. 인증서와 서버 이름은 시스템 CA로 확인한다.
+Bot API는 봇 확인과 메시지 전송을 처리하는 HTTPS 인터페이스다.
+`AWBS_TELEGRAM_BOT_API_URL`로 다른 외부 주소를 지정하면 연결 전에 `network` 결과를 돌려준다.
+`NODE_ENV=test`일 때만 `http(s)://127.0.0.1:<포트>`의 fake Bot API를 허용한다.
 
 `AWBS_SECRET_KEY`는 기존 GitHub 설정과 같은 32바이트 16진수 암호화 키다.
 토큰은 AES-256-GCM 방식으로 `secrets`에 저장한다.

@@ -15,7 +15,6 @@ export const VIEW_LABEL = { int: '팀장용 (상세)', ext: '보고용 (요약)'
 export const SECURITY = [
   { value: 'STARTTLS', label: 'STARTTLS (587)', port: 587 },
   { value: 'SSL/TLS', label: 'SSL/TLS (465)', port: 465 },
-  { value: '없음', label: '암호화 없음 (사내 릴레이)', port: 25 },
 ] as const;
 
 /**
@@ -79,6 +78,7 @@ export function smtpError(form: SmtpForm, pwSet: boolean): string {
   if (!(Number.isInteger(port) && port > 0 && port < 65536)) return '포트는 1 ~ 65535 사이 숫자입니다.';
   if (!mailOk(from)) return '보내는 주소 형식이 올바르지 않습니다 — 예: Agent WBS <agent-wbs@example.com>';
   if (senderNameProblem(form.from)) return SENDER_NAME_RULE;
+  if (form.sec === '없음') return '암호화 없는 SMTP는 사용할 수 없습니다. SSL/TLS 또는 STARTTLS를 선택하세요.';
   if (!form.pw && !pwSet && form.user.trim()) return '계정을 입력했다면 비밀번호(앱 비밀번호)도 입력하세요.';
   return '';
 }

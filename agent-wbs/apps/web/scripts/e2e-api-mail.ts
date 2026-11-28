@@ -13,12 +13,13 @@ import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:net';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { testCertificates } from '../../../e2e/fakes/tls.ts';
 
 const ROOT = resolve(import.meta.dirname, '../../..');
 // M6 통합: compose.yaml과 같은 Debian postgres:16(정렬 규칙을 맞춘다, M5·M7 통합 결정)과 track_commit_timestamp=on(M6-01 보고서 상태 이력 필수).
 const IMAGE = 'postgres:16@sha256:07abc3f43c9395b0bdbbab36bc25ddb0e8d83cd4fcafb5fb7d6abe14ff156dd8';
-const name = `mail-e2e-pg-${randomBytes(3).toString('hex')}`;
+const name = `awbs-W5-mail-e2e-pg-${randomBytes(3).toString('hex')}`;
 const dbPassword = randomBytes(18).toString('base64url');
 
 const freePort = () => new Promise<number>((done, fail) => {
@@ -33,6 +34,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let api: ChildProcess | undefined;
 let helper: ChildProcess | undefined;
 const temp = mkdtempSync(join(tmpdir(), 'awbs-mail-e2e-'));
+const certs = testCertificates();
 let exitCode = 1;
 try {
   execFileSync('docker', ['run', '-d', '--rm', '--name', name, '-e', 'POSTGRES_USER=awbs_owner', '-e', `POSTGRES_PASSWORD=${dbPassword}`,
@@ -52,6 +54,8 @@ try {
     AWBS_ORIGIN: `http://127.0.0.1:${String(webPort)}`, LOG_LEVEL: 'warn',
     // SMTP 비밀번호 암호화 키(이 시험 전용, 끝나면 DB와 함께 사라진다)
     AWBS_SECRET_KEY: randomBytes(32).toString('hex'),
+    NODE_EXTRA_CA_CERTS: certs.ca,
+    AWBS_E2E_SMTP_TLS_DIR: dirname(certs.ca),
   };
   const node = (args: string[]) => execFileSync('node', ['--conditions=awbs-source', ...args], { cwd: ROOT, env, encoding: 'utf8' });
   node(['packages/db/src/migrate-cli.ts']);
@@ -86,5 +90,6 @@ try {
   api?.kill('SIGTERM');
   rmSync(temp, { recursive: true, force: true });
   spawnSync('docker', ['rm', '-f', '-v', name], { stdio: 'ignore' }); // -v: 익명 볼륨까지 지운다(M6 통합, docker 규칙)
+  certs.close();
   process.exitCode = exitCode;
 }
