@@ -1,0 +1,150 @@
+# Agent WBS 운영 구성(M8-06). 저장소 맨 위 폴더에서 항상 아래처럼 실행한다.
+#   docker compose -p awbs-prod -f agent-wbs/deploy/compose.prod.yaml <명령>
+# 설명서: docs/ops/operations.md
+#
+# 개발 구성(agent-wbs/compose.yaml, project awbs)과 이름·볼륨·네트워크·DB가 모두 다르다.
+# 왜: 개발 시험이 운영 데이터를 지우거나, 운영 백업에 개발 데이터가 섞이지 않게 한다.
+#
+# 바꿀 수 있는 값(셸 환경 변수 또는 --env-file). 비밀값은 여기 넣지 않는다.
+#   AWBS_STACK      이름 앞부분. 기본 awbs-prod. 복원 리허설은 다른 값을 써서 운영과 겹치지 않게 한다. -p 값과 같게 둔다.
+#   AWBS_PROD_HOME  비밀 파일·백업을 두는 폴더. 기본 $HOME/.agentwbs/prod (deploy/prod-init.sh가 만든다)
+#   AWBS_WEB_PORT   화면 주소의 포트. 기본 5173. 127.0.0.1에만 연다.
+#   AWBS_DB_NAME    DB 이름. 기본 awbs
+#   AWBS_IMAGE_TAG  이미지 꼬리표. 기본 local. 되돌리기는 커밋 해시로 다시 빌드한다(architecture §6.3).
+name: ${AWBS_STACK:-awbs-prod}
+
+x-app: &app
+  image: awbs-app:${AWBS_IMAGE_TAG:-local}
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+    target: app
+  environment: &app-env
+    AWBS_DB_HOST: postgres
+    AWBS_DB_NAME: ${AWBS_DB_NAME:-awbs}
+    LOG_LEVEL: ${LOG_LEVEL:-info}
+  secrets:
+    - db_password
+    - secret_key
+  volumes:
+    - awbs-data:/home/node/.agentwbs
+  restart: unless-stopped
+  stop_grace_period: 30s
+  # 컨테이너 안에서 root 권한을 다시 얻지 못하게 한다.
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  postgres:
+    container_name: ${AWBS_STACK:-awbs-prod}-postgres
+    # 개발 구성과 같은 Debian postgres:16 이미지(digest 고정). alpine은 C.UTF-8 정렬 결과가 달라 쓰지 않는다(compose.yaml 주석).
+    image: postgres:16@sha256:07abc3f43c9395b0bdbbab36bc25ddb0e8d83cd4fcafb5fb7d6abe14ff156dd8
+    # 보고서 상태 이력(M6-01)이 실제 커밋 시각을 쓴다(pg_xact_commit_timestamp). 서버 시작 때만 바꿀 수 있는 설정이다.
+    command: ['postgres', '-c', 'track_commit_timestamp=on']
+    environment:
+      LANG: C.UTF-8
+      POSTGRES_USER: awbs_owner
+      POSTGRES_DB: ${AWBS_DB_NAME:-awbs}
+      # 비밀번호는 파일로만 받는다. 처음 볼륨을 만들 때만 쓰인다.
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets:
+      - db_password
+    # 호스트 포트를 열지 않는다. 백업·점검은 `docker compose exec`로 한다. 왜: 열지 않은 포트는 다른 프로그램이 접속할 수 없다.
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - net
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -U awbs_owner -d "$${POSTGRES_DB}"']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  # 한 번만 돌고 끝나는 준비 단계: 마이그레이션 + 필수 기본 설정. api·worker는 이것이 성공해야 시작한다.
+  migrate:
+    <<: *app
+    container_name: ${AWBS_STACK:-awbs-prod}-migrate
+    command: ['migrate']
+    restart: 'no'
+    networks:
+      - net
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # 화면 파일 + /api 전달. 이 컨테이너가 네트워크 공간과 호스트 포트를 가진다. api는 이 공간을 같이 쓴다.
+  # 왜 web이 주인인가: 네트워크 공간을 빌려 쓰는 쪽(api)은 다시 시작해도 괜찮지만, 주인이 다시 시작하면 빌린 쪽 네트워크가 끊긴다.
+  # nginx는 거의 다시 시작하지 않으므로 주인을 맡긴다.
+  web:
+    container_name: ${AWBS_STACK:-awbs-prod}-web
+    image: awbs-web:${AWBS_IMAGE_TAG:-local}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: web
+    ports:
+      - '127.0.0.1:${AWBS_WEB_PORT:-5173}:8080'
+    networks:
+      - net
+    healthcheck:
+      # 화면 → nginx → API → DB까지 한 번에 확인한다.
+      test: ['CMD', 'curl', '-fsS', '-o', '/dev/null', 'http://127.0.0.1:8080/health/db']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  api:
+    <<: *app
+    container_name: ${AWBS_STACK:-awbs-prod}-api
+    command: ['api']
+    environment:
+      <<: *app-env
+      AWBS_HOST: 127.0.0.1
+      AWBS_PORT: '3100'
+      # 브라우저 주소의 Origin. 화면 포트와 반드시 같아야 변경 요청이 통과한다.
+      AWBS_ORIGIN: http://127.0.0.1:${AWBS_WEB_PORT:-5173}
+    network_mode: service:web
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:3100/health/db').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    depends_on:
+      web:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    <<: *app
+    container_name: ${AWBS_STACK:-awbs-prod}-worker
+    command: ['worker']
+    networks:
+      - net
+    # worker는 듣는 포트가 없어 HTTP 헬스체크를 두지 않는다. 대신 Runner 감시·메일 실패는 로그(`docker compose logs worker`)와 화면 알림으로 본다.
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+secrets:
+  db_password:
+    file: ${AWBS_PROD_HOME:-${HOME}/.agentwbs/prod}/secrets/db-password
+  secret_key:
+    file: ${AWBS_PROD_HOME:-${HOME}/.agentwbs/prod}/secrets/secret-key
+
+volumes:
+  pgdata:
+    name: ${AWBS_STACK:-awbs-prod}-pgdata
+  awbs-data:
+    name: ${AWBS_STACK:-awbs-prod}-data
+
+networks:
+  net:
+    name: ${AWBS_STACK:-awbs-prod}-net

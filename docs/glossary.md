@@ -65,6 +65,7 @@
 - **CODEOWNERS** — GitHub에서 특정 경로를 바꿀 때 지정된 사람의 검토를 요구하는 설정. → contracts §4.1
 - **commit / push** — commit은 변경을 git 기록에 남기는 것, push는 그 기록을 원격 저장소(GitHub)에 올리는 것.
 - **commit status / status context** — GitHub 커밋에 붙이는 검사 결과(성공·실패). context는 그 검사의 이름(예: `agentwbs/int`)이다.
+- **compose secrets** — docker compose가 호스트의 파일을 컨테이너 안 `/run/secrets/<이름>`에 붙여 주는 기능. 비밀값이 구성 정보(`docker inspect`)에 남지 않는다. 운영 DB 비밀번호와 `AWBS_SECRET_KEY`를 이렇게 넘긴다. → docs/ops/operations.md §3
 - **controller (cgroup controller)** — cgroup에서 CPU·메모리·프로세스 수 같은 자원을 하나씩 재고 제한하는 기능.
 - **coordinator** — owner와 작업자 사이에서 일을 나누고 전달하는 조정자. → open-questions §0
 - **CP (Change Proposal, 변경 제안)** — Task를 추가·수정·취소·분할하자는 제안. 미리보기 후 승인·반영한다. → data-model §3.6
@@ -182,12 +183,14 @@
 - **Node.js / pnpm** — Node.js는 서버에서 JavaScript·TypeScript를 실행하는 환경, pnpm은 그 패키지 설치 도구.
 - **nodemailer** — Node.js에서 SMTP로 메일을 보내는 라이브러리.
 - **NOLOGIN** — 그 DB 역할로는 직접 로그인할 수 없다는 표시. 표 소유자 역할에 붙여 앱이 소유자 권한을 쓰지 못하게 한다. → data-model §6.1
+- **nginx** — 웹 서버 프로그램. 운영 구성에서 화면 파일을 보내고 `/api`·`/health` 요청을 api로 넘긴다. → docs/ops/operations.md §1.3
 - **nonce** — 암호화할 때마다 새로 만드는 한 번용 난수. 같은 키로도 결과가 매번 달라진다.
 - **nosniff** — `X-Content-Type-Options: nosniff`. 브라우저가 파일 형식을 멋대로 추측해 실행하지 못하게 한다.
 - **NOT NULL / NULL** — NULL은 「값이 없음」이다. NOT NULL 열은 값을 반드시 넣어야 한다.
 - **NULLS NOT DISTINCT** — unique 검사에서 NULL끼리도 같은 값으로 보는 옵션. 보통은 NULL끼리 서로 다르다고 봐서 중복이 통과한다. → data-model §2.8 `idempotency_keys`
 - **OpenAPI** — REST API의 경로·요청·응답을 기계가 읽게 적는 표준 문서 형식. 두 시스템이 공유하는 유일한 것. → architecture §1
 - **orchestration** — 여러 Agent·단계를 정해진 순서로 엮어 실행하는 것.
+- **Origin** — 브라우저 주소의 「프로토콜·호스트·포트」 묶음(예: `http://127.0.0.1:5173`). 서버는 변경 요청의 Origin이 `AWBS_ORIGIN`과 같아야 받는다. → architecture §4
 - **ORM** — Object-Relational Mapping. SQL 대신 코드 객체로 DB를 다루게 해 주는 도구.
 - **orphaned** — host가 바뀌어 효력만 없앤 옛 잠금 상태(감사용). → data-model §2.5-1
 - **OS** — 운영체제(Operating System). 여기서는 리눅스(WSL2).
@@ -201,6 +204,8 @@
 - **PC** — 개인용 컴퓨터. 이 문서에서는 Runner와 Agent가 도는 개발 PC(host)를 뜻한다.
 - **PDF** — 인쇄·배포용 문서 파일 형식.
 - **pdfjs-dist** — PDF 파일을 열어 글자·위치를 꺼내는 라이브러리. 시험이 보고서 PDF의 글자·쪽 크기·글꼴을 확인할 때 쓴다(제품 코드에는 없음). → apps/api/src/pdf/README.md
+- **pg_dump / pg_restore** — PostgreSQL DB를 파일 하나로 뜨는 명령과, 그 파일을 DB로 되살리는 명령. 배포 전 백업에 쓴다. → docs/ops/operations.md §7
+- **pg_resetwal** — 멈춘 PostgreSQL 서버의 내부 기록을 고치는 관리 명령. 복원할 때 트랜잭션 번호의 epoch를 백업 쪽보다 크게 올리는 데만 쓴다. → docs/ops/operations.md §7.2
 - **pgid (process group ID)** — 프로세스 그룹 번호. Agent가 띄운 자식 프로세스까지 한꺼번에 관리·종료하는 데 쓴다. → contracts §3.4
 - **pendingNext** — 메시지를 다음 실행 시작 때 전달하려고 보관했는지 나타내는 필드. 화면의 「다음 실행 대기」가 이 뜻이다.
 - **PID** — 프로세스 번호(Process ID). PID 1은 시스템이 처음 띄운 프로세스.
@@ -293,6 +298,7 @@
 - **typescript-eslint** — TypeScript 코드에 lint 규칙을 적용하는 도구.
 - **TZ** — 프로세스의 시간대(time zone) 설정 환경 변수.
 - **`unchecked` (대조 안 함)** — 계약과 실제 명세를 대조하지 못한 상태. 「일치」나 「호환」이라는 뜻이 아니다. 해석기가 모르는 것은 늘 이 값으로 둔다. → contracts §2.3 「설계」
+- **umask** — 새로 만드는 파일·폴더의 권한에서 미리 빼 둘 권한. `0077`이면 만든 사람만 읽고 쓸 수 있다(파일 0600, 폴더 0700).
 - **Unicode 정규화 (NFC/NFD)** — 겉모양이 같은 글자의 서로 다른 문자 표현(예: 완성형 「한」과 자모를 조합한 「한」)을 하나로 맞추는 처리. `subjectHash` 계산은 이것을 하지 않는다. → data-model §2.3-1
 - **UTF-16 코드 단위 순서** — JavaScript가 문자열을 기본으로 비교하는 순서. `subjectHash` 계산에서 객체 키와 산출물 이름을 이 순서로 정렬한다. → data-model §2.3-1
 - **verified / unverified / missing (GitHub 권한 3상태)** — GitHub 권한 하나의 확인 상태. 확인됨·미확인(추정하지 않음)·부족. 조정자 결정(2026-11-26). → contracts §3.1
@@ -317,6 +323,7 @@
 - **X25519** — 두 쪽이 각자 키 쌍을 갖고 상대 공개키와 자기 개인키로 같은 비밀을 만들어 내는 키 교환 방식. 봉인 형식 v1이 쓴다. → contracts §6.1
 - **x-input-rules (입력 규칙)** — JSON Schema로 쓸 수 없는 입력 검사(예: 설계 kind 중복 금지 `uniqueDesignKind`)를 OpenAPI에 표시하는 확장 항목. 서버가 형식 검증 뒤 실행하고, 어기면 400 VALIDATION_FAILED다. → contracts §2.1
 - **x-oauth-scopes** — classic 토큰·`gh` 로그인으로 GitHub를 부를 때 응답에 오는, 그 토큰의 권한 범위 목록 헤더. fine-grained 토큰에는 없다. → contracts §3.1
+- **xid8 (트랜잭션 번호)** — PostgreSQL이 트랜잭션마다 매기는 64비트 번호. 위쪽 32비트를 epoch라고 한다(프로젝트 초기화 번호 epoch와는 다른 말). 보고서 상태 이력이 이 번호로 커밋 시각을 찾는다. → docs/ops/operations.md §7.2
 - **YAML** — 들여쓰기로 구조를 적는 사람이 읽기 쉬운 설정 파일 형식.
 - **zip** — 여러 파일을 하나로 묶은 압축 파일 형식.
 - **µs** — 마이크로초. 100만분의 1초.
@@ -345,6 +352,7 @@
 ## ㄴ
 
 - **낙관 / 비관** — 추정의 짧은 쪽(lo)과 긴 쪽(hi). → data-model §2.3
+- **네트워크 공간(network namespace)** — 컨테이너가 쓰는 주소·포트의 묶음. 운영 구성에서 api는 web의 네트워크 공간을 같이 써서 `127.0.0.1`에서만 듣는다. → docs/ops/operations.md §1.4
 - **논리 잠금(lock)** — 「이 Task·충돌 묶음은 지금 이 job이 맡고 있다」는 표시. 개발→①→QA 동안 유지한다. → data-model §2.5-1
 
 ## ㄷ
@@ -372,6 +380,7 @@
 - **보조 속도 제한 (secondary rate limit)** — 짧은 시간에 요청이 몰리면 GitHub가 따로 거는 제한. 429나 「속도 제한 403」으로 온다. → contracts §6
 - **보충(fillSkipped)** — Drizzle이 건너뛸 낮은 `when`의 마이그레이션을 먼저 적용하는 단계. 모르는 기록이 있는 DB에서는 하지 않는다. → data-model §6
 - **보호 경로** — Agent가 바꾸면 안 되는 경로(`prototype/`·`.agentwbs/`). → architecture §4
+- **복원 리허설** — 사고 전에 백업을 새 DB에 되살려 앱이 뜨고 데이터가 같은지 미리 해 보는 시험(`agent-wbs/deploy/restore-rehearsal.sh`). → docs/ops/M8-06-real-env-record.md
 - **봉인 형식 v1** — sealed의 바이트 배치와 계산식(X25519 → HKDF-SHA256 → AES-256-GCM)을 정한 이 프로젝트 전용 형식. 서버와 Runner가 공용 고정 벡터로 확인한다. → contracts §6.1
 - **부분 unique** — 조건을 만족하는 행들 사이에서만 겹치지 않게 하는 DB 제약. → data-model §2.5-1
 - **분할** — Task 하나를 여러 Task로 나누는 것. 분할 기준 10규칙과 순서 보장 판정이 있다. → data-model §2.3-2
@@ -452,5 +461,6 @@
 - **하위 Agent 비율** — 실행 세션 하나가 평균 몇 개의 하위 Agent를 띄우는지. 일정 계산이 관측 창 동안의 실제 보고로 계산하고, 관측이 없으면 0으로 둔다. → data-model §2.6
 - **하위 Agent(subagent)** — Agent가 일을 나눠 맡기는 보조 Agent. 정의는 hash로 검증해 설치한다. → architecture D-24
 - **해석 결정** — D-xx 참고.
+- **헬스체크(healthcheck)** — 컨테이너가 정상인지 docker가 주기적으로 묻는 검사. 운영 구성은 postgres(`pg_isready`)·web·api(`/health/db`)에 둔다. → docs/ops/operations.md §1
 - **협조적 검사** — 상대가 규칙을 지킬 때만 통하는 검사. 옛 PC가 이미 보낸 GitHub 요청은 막지 못하므로 자격 증명 폐기와 결과 대조가 최종 방어다.
 - **형식 수정 요청** — Agent 종료 메시지가 계약(JSON Schema)과 맞지 않을 때 같은 세션에 한 번만 보내는 다시 내기 요청. 그래도 틀리면 개발 시도는 실패로 보고하고, QA 시도는 판정을 지어내지 않고 멈춘다. → contracts §5, agent-runner/src/jobs/README.md 「결과 수집」
