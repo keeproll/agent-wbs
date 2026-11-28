@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { createPool, recreateTestDatabase, runMigrations, seedSystem } from '@awbs/db';
+import { createPool } from '@awbs/db';
 import { afterAll, beforeAll, beforeEach, expect, inject, test, vi } from 'vitest';
 import { buildApp } from '../src/app.ts';
 import { loggerOptions } from '../src/log.ts';
@@ -25,8 +25,7 @@ import { startFakeGitHub } from '../../../../agent-runner/test/fakes/github/serv
 import { GitHubModel } from '../../../../agent-runner/test/fakes/github/model.ts';
 import vector from '../../../contracts/fixtures/sealed-v1-vector.json' with { type: 'json' };
 
-const url = new URL(inject('testDatabaseUrl'));
-url.pathname += '_ghcred';
+const url = new URL(inject('githubCredentialDatabaseUrl'));
 const owner = createPool(url.href, { onError: () => undefined });
 const appUrl = new URL(url);
 appUrl.searchParams.set('options', '-c role=awbs_app');
@@ -52,9 +51,6 @@ const report = (body: object) => app.inject({ method: 'POST', url: '/api/runner/
 
 beforeAll(async () => {
   vi.stubEnv('AWBS_SECRET_KEY', 'ab'.repeat(32));
-  await recreateTestDatabase(url.href);
-  await runMigrations(owner);
-  await seedSystem(owner);
   bearer = await issueRunnerToken(pool, identity.runnerId, generateRunnerKeyPair().publicKey);
   other = await issueRunnerToken(pool, 'other-runner', generateRunnerKeyPair().publicKey);
   const link = await issueLoginLink(pool);
@@ -270,4 +266,48 @@ test('연결 실패 중에는 외부 효과 작업을 배정하지 않고 GitHub
   const job = await inEpoch(pool, 1, c => claim(new RunnerRepository(c), ['bootstrap', 'github_check'], 1, 1, `runner:${identity.runnerId}`));
   expect(job?.kind).toBe('github_check');
   expect((await owner.query("select state from runner_jobs where dedup_key='blocked'")).rows).toEqual([{ state: 'queued' }]);
+});
+
+test.each([false, true])('다른 방식의 보고 ok=%s는 이전 정상 상태를 지우고 올바른 재확인까지 쓰기를 막는다', async ok => {
+  expect((await report({ ok: true, expiresAt: '2099-01-01T00:00:00Z' })).statusCode).toBe(204);
+  await expect(gate()).resolves.toBeUndefined();
+  expect((await report({ mode: 'gh', ok, scopes: ok ? verified : null, error: 'main 보호 우회 가능' })).statusCode).toBe(204);
+  expect((await owner.query('select mode,status,scopes,account,expires_at,checked_at,warning from github_settings')).rows[0]).toEqual({
+    mode: 'token', status: 'unchecked', scopes: null, account: null, expires_at: null, checked_at: null,
+    warning: 'Runner가 gh 방식으로 보고했습니다. 설정의 token 방식으로 다시 확인하세요.',
+  });
+  await expect(gate()).rejects.toMatchObject({ code: 'EXTERNAL_WRITE_BLOCKED' });
+  expect((await inEpoch(pool, 1, c => runnerState(new RunnerRepository(c)))).externalWrite.state).toBe('blocked');
+  expect((await report({ ok: true })).statusCode).toBe(204);
+  await expect(gate()).resolves.toBeUndefined();
+});
+
+test('권한이 모두 verified여도 연결 실패나 미확인 상태만으로 외부 쓰기를 막는다', async () => {
+  expect((await report({ ok: false, error: 'ruleset bypass' })).statusCode).toBe(204);
+  expect((await owner.query('select status,scopes from github_settings')).rows[0]).toEqual({ status: 'failed', scopes: verified });
+  await expect(gate()).rejects.toMatchObject({ code: 'EXTERNAL_WRITE_BLOCKED' });
+  await owner.query("update github_settings set status='unchecked'");
+  await expect(gate()).rejects.toMatchObject({ code: 'EXTERNAL_WRITE_BLOCKED' });
+});
+
+test('현재 epoch 헤더라도 이전 세대에 등록한 키는 404와 no-store다', async () => {
+  const keyId = (await register(generateRunnerKeyPair().publicKey)).json<{ keyId: string }>().keyId;
+  expect((await credential(keyId)).statusCode).toBe(200);
+  const changeEpoch = async (epoch: number) => {
+    const client = await owner.connect();
+    try {
+      await client.query('begin');
+      await client.query('select public.lock_epoch_exclusive()');
+      await client.query('update system_state set epoch=$1 where id=1', [epoch]);
+      await client.query('commit');
+    } catch (error) { await client.query('rollback'); throw error; }
+    finally { client.release(); }
+  };
+  try {
+    await changeEpoch(2);
+    const result = await app.inject({ url: `/api/runner/github/credential?keyId=${keyId}`, headers: headers(bearer, '2') });
+    expect(result.statusCode, result.body).toBe(404);
+    expect(result.json().error.code).toBe('NOT_FOUND');
+    expect(result.headers['cache-control']).toBe('no-store');
+  } finally { await changeEpoch(1); }
 });

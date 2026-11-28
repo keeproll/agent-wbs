@@ -1,8 +1,9 @@
 # Runner 최초 등록과 GitHub 토큰 전달
 
 이 안내는 Runner(서버 작업을 PC에서 실행하는 프로그램)를 처음 등록하는 owner(등록 책임 운영자)용이다.
-기준 폴더는 `/home/keeproll/orca/workspaces/agent-wbs/gh-cred`다.
-병합 뒤 다른 폴더에서 운영하면 아래 작업 폴더 경로를 그 폴더의 절대 경로로 바꾼다.
+운영 명령 예시는 저장소가 `/home/keeproll/projects/agent-wbs`에 있는 경우를 기준으로 썼다.
+실제 저장소 위치가 다르면 아래 작업 폴더 경로를 그 폴더의 절대 경로로 바꾼다.
+작업용 브랜치 폴더를 운영 경로로 사용하지 않는다.
 실제 GitHub에 쓰는 실증 명령은 이 안내에 없다.
 
 ## 준비
@@ -25,7 +26,7 @@
 같은 상태 파일을 다른 Runner가 사용 중이면 실행을 거부한다.
 
 ```bash
-cd /home/keeproll/orca/workspaces/agent-wbs/gh-cred
+cd /home/keeproll/projects/agent-wbs
 install -d -m 700 /home/keeproll/.agentwbs
 umask 077
 set -o noclobber
@@ -57,7 +58,7 @@ CLI(터미널에서 실행하는 명령)는 기존 `auth runner-token`을 쓴다
 서버에 접근할 수 있는 owner가 공개키와 ID를 확인한 뒤 실행한다.
 
 ```bash
-cd /home/keeproll/orca/workspaces/agent-wbs/gh-cred/agent-wbs/apps/api
+cd /home/keeproll/projects/agent-wbs/agent-wbs/apps/api
 read -r runner_id < /home/keeproll/.agentwbs/runner.id
 umask 077
 set -o noclobber
@@ -84,7 +85,7 @@ Runner가 다른 PC에 있다면 공개키와 ID만 서버 PC로 옮겨 승인�
 서버는 `agent-wbs/.env`의 DB 주소와 암호 키를 읽는다.
 
 ```bash
-cd /home/keeproll/orca/workspaces/agent-wbs/gh-cred
+cd /home/keeproll/projects/agent-wbs
 pnpm -C agent-wbs --filter @awbs/api dev
 ```
 
@@ -94,7 +95,7 @@ pnpm -C agent-wbs --filter @awbs/api dev
 아래 공개 설정은 시험 저장소 `keeproll/agent-wbs-sandbox`를 지정한다.
 
 ```bash
-cd /home/keeproll/orca/workspaces/agent-wbs/gh-cred
+cd /home/keeproll/projects/agent-wbs
 set +x
 read -r AWBS_RUNNER_TOKEN < /home/keeproll/.agentwbs/runner.token
 export AWBS_RUNNER_TOKEN
@@ -112,6 +113,8 @@ pnpm -C agent-runner start
 자동 시도 실행과 자동 CI(코드 검사 실행)를 켜는 승인은 이 작업의 범위 밖이다.
 
 서버와 Runner의 GitHub 방식이 다르면 같은 방식으로 맞춘 뒤 다시 확인한다.
+다른 방식의 보고는 성공 보고여도 기존 정상 상태를 지우고 외부 쓰기를 막는다.
+왜 이렇게 하나: 설정한 자격과 실제 확인한 자격이 다르면 쓰기를 허용할 근거가 없다.
 GitHub 토큰에는 `Contents`·`Pull requests`·`Commit statuses`의 쓰기 권한이 필요하다.
 `Metadata` 읽기 권한도 필요하다.
 deploy key(저장소 하나에 붙이는 SSH 인증 키) 목록 확인에는 `Administration: read`가 필요하다.
@@ -132,6 +135,14 @@ SSH는 키로 인증하는 보안 통신 방식이다.
 왜 이렇게 하나: 다른 Runner의 공개키에 비밀 토큰을 봉인해 주면 안 된다.
 서버 응답에는 평문 토큰이 없다.
 봉인 응답에는 `Cache-Control: no-store`를 붙여 응답 보관을 막는다.
+
+키 등록에서 `hostId`·`bootId`가 최신 서버 보고와 다르면 403 `FORBIDDEN_PRINCIPAL`이다.
+Runner는 이 경우 시작을 거부한다.
+토큰이 폐기됐다는 뜻만은 아니다.
+다른 Runner가 PC 보고를 바꿨는지도 확인해야 한다.
+왜 이렇게 하나: contracts §1은 WBS의 401/403에서 Runner가 멈추도록 정했다.
+contracts §3.1은 키를 인증된 Runner의 PC·부팅 신원에 묶도록 정했다.
+정상 시작은 PC 보고 뒤에 공개키를 등록하므로 이 순서와 설정을 확인한 뒤 다시 시작한다.
 
 공개키 등록은 서버 메모리에만 남는다.
 Runner 하나의 새 등록은 그 Runner의 이전 등록을 대체한다.
@@ -169,7 +180,7 @@ main 보호 확인과 deploy key 점검은 기존 Runner GitHub 계층이 맡는
 Runner를 중지한 뒤 서버 PC에서 실행한다.
 
 ```bash
-cd /home/keeproll/orca/workspaces/agent-wbs/gh-cred/agent-wbs/apps/api
+cd /home/keeproll/projects/agent-wbs/agent-wbs/apps/api
 node --env-file-if-exists=../../.env --conditions=awbs-source src/platform/auth-cli.ts revoke-runner < /home/keeproll/.agentwbs/runner.token
 rm /home/keeproll/.agentwbs/runner.token
 ```

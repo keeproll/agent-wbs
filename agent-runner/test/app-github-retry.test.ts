@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { RunnerApp } from '../src/app.ts';
-import type { ApiClient } from '../src/api/client.ts';
+import { ApiError, type ApiClient } from '../src/api/client.ts';
 import { DeployKeyError } from '../src/github/client.ts';
 import { State } from '../src/state/state.ts';
 
@@ -61,6 +61,14 @@ test('M1: 다른 키 발견은 재시도하거나 경고로 넘기지 않는다'
   await expect(app.bootstrap()).rejects.toBeInstanceOf(DeployKeyError);
   expect(keys).toHaveBeenCalledOnce(); expect(sleep).not.toHaveBeenCalled();
   expect(warnings).toEqual(['시스템 키 외']);
+});
+
+test.each([401, 403])('키 등록의 WBS %s는 경고로 넘기거나 재시도하지 않고 Runner 시작을 거부한다', async status => {
+  const error = new ApiError('registerGithubKey', status, undefined, null);
+  vi.spyOn(app, 'checkGithub').mockRejectedValue(error);
+  await expect(app.bootstrap()).rejects.toBe(error);
+  expect(sleep).not.toHaveBeenCalled();
+  expect(warnings).toEqual([]);
 });
 
 test.each(['external', 'communication'])('P2: 한 시간 재시도 대기도 종료 신호로 즉시 끝난다: %s', async (stop) => {
