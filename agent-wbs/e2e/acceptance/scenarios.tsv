@@ -1,0 +1,39 @@
+# G§12 번호|화면 시험 파일|서버·Runner 보충 시험 파일|적용 결정
+1|agent-wbs/apps/web/e2e/wbs-wizard.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|-
+2|agent-wbs/apps/web/e2e/task-detail-work.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|-
+3|agent-wbs/apps/web/e2e/task-detail-work.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|-
+4|agent-wbs/apps/web/e2e/task-detail-work.spec.ts|agent-wbs/apps/api/test/execution.db.test.ts|-
+5|agent-wbs/apps/web/e2e/planning-sessions.spec.ts|agent-wbs/apps/api/test/planning-runner.db.test.ts|-
+6|agent-wbs/apps/web/e2e/acceptance.spec.ts|agent-wbs/e2e/fakes/test/attempt-wiring.scenario.test.ts|끝까지 한 시나리오
+7|agent-wbs/apps/web/e2e/exec.spec.ts|agent-wbs/e2e/fakes/test/attempt-flow.scenario.test.ts|Q-07 다음 실행 전달
+8|agent-wbs/apps/web/e2e/exec.spec.ts|agent-wbs/e2e/fakes/test/runner-basic.scenario.test.ts|-
+9|agent-wbs/apps/web/e2e/exec.spec.ts|agent-wbs/e2e/fakes/test/runner-basic.scenario.test.ts|-
+10|agent-wbs/apps/web/e2e/settings-core-runner.spec.ts|agent-wbs/e2e/fakes/test/runner-basic.scenario.test.ts|-
+11|agent-wbs/apps/web/e2e/settings-core-plan.spec.ts|agent-wbs/apps/api/test/policy.db.test.ts|-
+11-1|agent-wbs/apps/web/e2e/settings-core-runner.spec.ts|agent-wbs/apps/api/test/runner.db.test.ts|실제 보고로 대체
+11-2|agent-wbs/apps/web/e2e/settings-core-runner.spec.ts|agent-wbs/apps/api/test/runner.db.test.ts|실제 보고로 대체
+12|agent-wbs/apps/web/e2e/settings-core-agent.spec.ts|agent-wbs/apps/api/test/policy.db.test.ts|모델명은 Runner 보고
+13|agent-wbs/apps/web/e2e/task-detail-work.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|-
+14|agent-wbs/apps/web/e2e/settings-core-agent.spec.ts|agent-wbs/e2e/fakes/test/runner-basic.scenario.test.ts|-
+15|agent-wbs/apps/web/e2e/history.spec.ts|agent-wbs/apps/api/test/changes.db.test.ts|-
+16|agent-wbs/apps/web/e2e/acceptance-print.spec.ts|agent-wbs/e2e/fakes/test/reports.scenario.test.ts|서버 PDF·메일 화면은 별도 실제 API 시험
+17|agent-wbs/apps/web/e2e/project-register.spec.ts|agent-wbs/apps/api/test/project.db.test.ts|D-05:30으로 대체
+18|agent-wbs/apps/web/e2e/project-inputs.spec.ts|agent-wbs/e2e/fakes/test/input-changes.scenario.test.ts|D-05:31로 대체
+19|agent-wbs/apps/web/e2e/project-reset.spec.ts|agent-wbs/apps/api/test/reset.db.test.ts|-
+20|agent-wbs/apps/web/e2e/states-shell.spec.ts|agent-wbs/apps/api/test/project.db.test.ts|D-06:9개 상태; 제품 Mock 도구 없음
+21|agent-wbs/apps/web/e2e/states-errors.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|D-07; 오류 주입은 시험 전용
+22|agent-wbs/apps/web/e2e/settings-core-agent.spec.ts|agent-wbs/apps/api/test/runner.db.test.ts|-
+23|agent-wbs/apps/web/e2e/task-detail-work.spec.ts|agent-wbs/apps/api/test/planning-runner.db.test.ts|D-33~35
+24|agent-wbs/apps/web/e2e/settings-core-shell.spec.ts|agent-wbs/apps/api/test/policy.db.test.ts|-
+25|agent-wbs/apps/web/e2e/api-mail.spec.ts|agent-wbs/e2e/fakes/test/mail.scenario.test.ts|가짜 SMTP
+26|agent-wbs/apps/web/e2e/settings-core-runner.spec.ts|agent-wbs/apps/api/test/runner.db.test.ts|D-26:하향 복귀 안 함; 실측은 M8-04
+27|agent-wbs/apps/web/e2e/wbs-rail.spec.ts|agent-wbs/apps/api/test/tasks.db.test.ts|검증 결과 레일은 verify-results.spec.ts
+28|agent-wbs/apps/web/e2e/design.spec.ts|agent-wbs/apps/api/test/design-ledger.db.test.ts|Q-14
+29|agent-wbs/apps/web/e2e/acceptance.spec.ts|agent-wbs/apps/api/test/planning-runner.db.test.ts|-
+30|agent-wbs/apps/web/e2e/acceptance.spec.ts|agent-wbs/apps/api/test/project.db.test.ts|D-05
+31|agent-wbs/apps/web/e2e/project-inputs.spec.ts|agent-wbs/e2e/fakes/test/input-changes.scenario.test.ts|D-05
+32|agent-wbs/apps/web/e2e/ci.spec.ts|agent-wbs/e2e/fakes/test/attempt-complete.scenario.test.ts|-
+33|agent-wbs/apps/web/e2e/telegram.spec.ts|agent-wbs/e2e/fakes/test/telegram.scenario.test.ts|가짜 Bot API
+34|agent-wbs/apps/web/e2e/telegram.spec.ts|agent-wbs/e2e/fakes/test/telegram.scenario.test.ts|-
+35|agent-wbs/apps/web/e2e/telegram.spec.ts|agent-wbs/e2e/fakes/test/telegram.scenario.test.ts|-
+36|agent-wbs/apps/web/e2e/telegram.spec.ts|agent-wbs/e2e/fakes/test/telegram.scenario.test.ts|Q-16 즉시 발송

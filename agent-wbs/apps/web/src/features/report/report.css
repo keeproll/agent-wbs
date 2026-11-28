@@ -14,3 +14,14 @@
  */
 @media (max-width: 600px) { .rpt-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .rpt-kpi .rpt-kv { overflow-wrap: anywhere; }
+/* 인쇄 본문의 절대 위치는 종이 기준이다. 화면의 main 위치(메뉴·헤더)를 기준으로 잡으면 오른쪽 열이 잘린다. */
+@media print {
+  .main { position: static; }
+  /* 서버 PDF(html.ts)의 인쇄 열 너비와 같다. 화면용 가로 스크롤을 인쇄하면 마지막 열이 빠진다. */
+  .rpt-doc .rpt-tbl, .rpt-doc .rpt-trend { overflow: visible; }
+  .rpt-trw.at { grid-template-columns: 80px 78px 168px 86px 44px minmax(0,1fr) 54px; }
+  .rpt-trw.nx { grid-template-columns: 72px minmax(0,1fr) 72px 92px 128px 128px; }
+  .rpt-trw.al { grid-template-columns: 40px 72px minmax(0,1fr) 60px 88px 40px 60px 58px 64px 44px; }
+  .rpt-tbl [role=cell], .rpt-tbl [role=columnheader] { word-break: keep-all; }
+  .rpt-doc { overflow-wrap: anywhere; }
+}
