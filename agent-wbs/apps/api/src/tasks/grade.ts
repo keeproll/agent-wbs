@@ -1,8 +1,7 @@
 import type { PoolClient } from '@awbs/db';
 import { gradeError } from '@awbs/shared';
-import { jobPayloadErrors } from '@awbs/shared/api';
-import { getExecPolicy, getModels } from '../policy/service.ts';
-import { judgedTasks } from '../policy/judged.ts';
+import { getModels } from '../policy/service.ts';
+import { requestEstimate } from '../planning/estimate.ts';
 import { TaskError } from './errors.ts';
 import { taskDetail } from './read.ts';
 import { record, type Change, type LockedTask } from './write.ts';
@@ -31,22 +30,8 @@ export async function changeGrade(client: PoolClient, task: LockedTask, role: 'd
   const field = `grades.${role}`;
   const why = grade ? '팀장 등급 고정 — 작업량 재추정' : '등급 고정 해제 — Planning Agent 재판단·작업량 재추정';
   await record(client, { projectId: task.project_id, taskId: task.id, kind: '실행 등급', text: why, before: old, after: next, ref: { field, gradeChange } });
-  const policy = await getExecPolicy(client);
-  const payload = {
-    tasks: await judgedTasks(client, [task.id]),
-    policy: {
-      gradeChange,
-      rejudge: { reason: 'grade_changed', trigger: why, targets: [{ taskKey: task.task_key, roles: [role] }] },
-      floors: policy.floors,
-      allowedModels: Object.fromEntries(['Claude', 'Codex'].map(a => [a, models.models.filter(m => m.agent === a && m.allowed).map(m => m.id)])),
-      grades: { ...detail.grades, [role]: next }, estimate: detail.estimate,
-    },
-  };
-  const problems = jobPayloadErrors('estimate', payload);
-  if (problems.length) throw new Error(problems.join('; '));
-  await client.query(`insert into runner_jobs(project_id,kind,payload,state,epoch,dedup_key)
-    values($1,'estimate',$2::jsonb,'queued',(select epoch from system_state where id=1),$3)`,
-  [task.project_id, JSON.stringify(payload), `grade:${crypto.randomUUID()}`]);
+  const epoch = (await client.query<{ epoch: number }>('select epoch from system_state where id=1')).rows[0]?.epoch ?? 0;
+  await requestEstimate(client, task.project_id, [task.id], { reason: 'grade_changed', trigger: why, targets: [{ taskKey: task.task_key, roles: [role] }] }, epoch, `grade:${crypto.randomUUID()}`);
   // 재추정 결과를 submitEstimates로 받으면 기존 경로가 일정을 다시 계산한다. 임의 계수로 시간을 만들지 않는다.
   return [{ field, before: old, after: next }];
 }

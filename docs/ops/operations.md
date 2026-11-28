@@ -212,58 +212,31 @@ docker 명령은 언제나 `docker compose -p awbs-prod -f <저장소>/agent-wbs
 
 ### 4.4 서버 계약을 바꾸는 배포 (옛 job 처리)
 
-「서버 계약을 바꾸는 배포」는 Runner가 받는 일(job)의 입력 모양이나 보고 모양이 바뀌는 배포다.
-대기 중인 옛 job(`input_diff`·`split`·`estimate`·`planning`)의 입력을 새 코드가 해석하지 못할 수 있다.
-아래는 지금 코드(2026-11-28)로 확인한 사실이다.
+Runner 입력·보고 형식이 달라지는 배포는 **이 절차를 따를 때만** 진행한다. owner의 F-6 선택 (A)에 따라 `jobs open`·`jobs reissue`를 구현했다. 자세한 출력·선택 규칙은 [job 재발급 안내](jobs-reissue.md)에 있다.
 
-1. **새 일 수령을 언제 멈추나**
-   - 서버에는 「수령 일시 중지」 설정이 없다.
-   - 지원하는 방법은 Runner를 멈추는 것뿐이다: `systemctl --user stop awbs-runner.service`. Runner가 없으면 아무도 일을 가져가지 않는다.
-2. **이미 실행 중인 일은**
-   - Runner가 멈춰도 서버가 바로 일을 끝난 것으로 바꾸지는 않는다. worker의 감시(`apps/api/src/runner/watch.ts`, 약 20초마다)가 「임대(60초)가 지났거나 생존 보고가 끊긴 일」을 찾아 **그때** 상태를 바꾼다.
-     - `split`·`estimate`·`planning`은 `cancelled`(코드 `LEASE_LOST`)가 된다.
-     - `input_diff`·`bootstrap`은 바로 끝내지 않고 `reconcile`(실제 결과 대조 대기)이 된다.
-   - 이때 그 일의 실행 보유(슬롯)는 `unconfirmed`(서버가 실제 프로세스 종료를 확인하지 못함)로 남는다. 그래서 `cancelled`라는 사실만으로 프로세스가 사라졌다고 판단하지 않는다.
-   - 실행 중인 일을 확인하는 수단도 제한적이다.
-     - 화면 「Runner · 실행 환경」과 `GET /api/runner-state`의 `sessions`는 **실행 중인 Task 시도만** 보여 준다. `split`·`estimate`·`planning` 일을 모두 보여 주는 목록이 아니다.
-     - 자원 합계는 보이지만, `sessions`가 비어 있다는 것만으로 모든 일이 끝났다고 볼 수 없다.
-   - 그래서 지금은 「실행 중인 일이 모두 끝났다」를 지원 명령으로 확인할 방법이 없다.
-3. **옛 일의 임대와 fence(낡은 Runner의 보고를 막는 번호표)는**
-   - 서버는 일을 다시 내줄 때마다 fence를 1 올린다.
-   - 보고를 받는 검사는 경로마다 다르다.
-     - 일반 Runner 경로(`apps/api/src/runner/service.ts`의 검사): fence, 임대 주인, 상태(`leased`·`started`)와 함께 **임대 시각(`lease_until`)이 지났는지**도 본다. 지났으면 `LEASE_LOST`로 거부한다.
-     - Planning 경로(`apps/api/src/planning/jobs.ts`의 `assertJob`, 예: 추정·분할·Planning·초기 분석 보고): **fence와 상태만** 본다. 임대 시각은 보지 않는다. 그래서 임대 시간이 지났어도 감시가 아직 상태를 바꾸지 않았다면 옛 보고가 받아질 수 있다.
-   - 그래서 「안전하게 거절된다」고 말할 수 있는 기준은 **시간 경과가 아니라 실제 상태 변화**다: 그 일이 `leased`·`started`가 아닌 상태(`cancelled`·`reconcile`·`done`·`failed`)로 바뀌었거나, 다시 내줘서 fence가 올랐을 때만이다.
-   - **아직 아무도 가져가지 않은 `queued` 일**은 그대로 남는다. 새 Runner가 그 옛 입력을 그대로 가져간다.
-4. **어떤 일을 어떤 지원 API·CLI로 다시 만드나**
-   - `queued` 일을 취소하거나 새 입력으로 다시 만드는 API·CLI는 **없다.**
-   - 끝난(실패·취소) 일을 다시 요청하는 화면 기능은 일부 있다: 입력 차이 분석 「다시 시도」(`POST /api/project/inputs/retry`), 초기 분석 「다시 시도」(`POST /api/project/bootstrap/retry`), 분할 요청(`POST /api/tasks/{taskKey}/split`), Planning 시작(`POST /api/plannings`).
-   - 그런데 분할 요청은 같은 내용의 열린 일이 있으면 그 옛 일을 돌려준다(`apps/api/src/planning/split.ts`). 그래서 `queued` 옛 일을 바꿔 주지 못한다.
-   - `reconcile` 일의 기존 대조 경로(`POST /api/runner/jobs/{id}/reconcile`, `apps/api/src/runner/routes.ts`)는 결과가 「효과 없음」이면 **옛 입력(payload) 그대로** 새 일을 넣을 수 있다. 계약이 바뀐 뒤라면 이것도 옛 입력이다.
-5. **중복이 없고 옛 보고가 거절되는지 어떻게 확인하나**
-   - 중복 방지는 `runner_jobs.dedup_key` 고유 제약이 맡는다.
-   - 옛 보고 거절은 위 3번의 기준(상태 변화 또는 fence 변경)일 때만 믿을 수 있다.
-   - 대기 중인 일과 종료 미확인 보유를 종류별로 보여 주는 지원 명령은 **없다.**
+1. **수령을 멈추고 열린 일을 확인한다.** 서버에는 수령 일시 중지 설정이 없다. `systemctl --user stop awbs-runner.service`로 Runner를 멈춘 뒤 `… exec -T api awbs-entrypoint auth jobs open`을 실행한다. `queued`·`leased`·`started`·`reconcile` job과 열린 보유 수를 본다. 화면의 `sessions`는 Task 시도만 보여 주므로 전체 job 목록을 대신하지 않는다.
+2. **실행·대조·정리를 기존 계약에서 끝낸다.**
+   - `leased`·`started`는 재발급 대상이 아니며 하나라도 남으면 명령이 거부한다. 감시가 실제 상태를 바꿨는지 확인한다. 단순한 시간 경과로 종료를 판단하지 않는다.
+   - `reconcile` 또는 `unconfirmed`를 포함한 열린 실행 보유도 모두 거부한다. 기존 Runner 종료 증거·대조 절차를 **새 계약 배포 전에** 끝낸다. 대조 결과가 효과 없음이면 옛 payload로 새 queued job이 생길 수 있으므로 정리가 끝난 뒤 목록과 상한을 다시 기록한다. 정리할 수 없으면 배포를 중단한다.
+   - `repo_check`는 임대가 만료돼도 감시가 취소하지 않는다. 남아 있으면 **기존 계약의 Runner를 다시 켜**, 만료된 조회의 재수령·완료 보고를 마친 뒤 다시 정지한다. 새 계약으로 먼저 배포하거나 DB에서 임대를 지우지 않는다.
+   - 열린 Runner 세션(`ended_at` 없음)은 heartbeat가 오래됐어도 무조건 거부한다. 서버가 세션을 실제로 닫아야 한다. 닫힌 세션에도 `연결 확인 주기 × 누락 허용 횟수 + 5초`의 최근 heartbeat 창을 추가로 검사한다. 활성 임대·미완료 초기화/Runner 정리가 없어야 한다. 창을 지났다는 사실만으로 프로세스 종료를 증명하지 않는다.
+3. **상한을 기록하고 백업·배포한다.** 정리 뒤 `jobs open`의 `--through` 순번을 기록한다. 배포 중 새 분석 요청·Task/정책 편집·Runner 시작도 멈춘다. 4.2의 백업·새 이미지 배포를 진행하고 Runner는 계속 정지 상태로 둔다.
+4. **미리보기 후 재발급한다.** §0의 고정 compose 앞부분(`…`)을 그대로 쓴다. 앱 컨테이너 진입점이 `awbs_app_login`으로 실행하므로 관리자 `.env`를 사용하는 `pnpm auth` 명령을 운영에서 사용하지 않는다.
 
-결론
+   ```sh
+   … exec -T api awbs-entrypoint auth jobs open
+   … exec -T api awbs-entrypoint auth jobs reissue --through 123
+   … exec -T api awbs-entrypoint auth jobs reissue --through 123 --confirm
+   ```
 
-- 지금은 서버 계약을 바꾸는 배포를 안전하게 할 지원 명령이 없다.
-- owner가 F-6 선택지 (A)를 골랐다(2026-11-28). 아래 명령은 **별도 작업에서 추가한다. 그 전까지 계약을 바꾸는 배포는 하지 않는다.**
-- 임의의 SQL로 일의 상태나 fence를 바꾸지 않는다. 왜: 상태 전이 검사와 이력 기록을 건너뛰어 다른 불일치를 만든다.
-- 계약이 바뀌지 않는 배포(화면·문서·내부 수정)는 4.2대로 해도 된다.
+   `123`은 기록한 순번으로 바꾼다. 기본은 입력 재생성까지 검증하고 롤백하는 미리보기다. `--confirm`이 있어야 저장한다. 기본 대상은 `bootstrap,input_diff,split,estimate,planning` 중 상한 이하의 queued job뿐이다. `--kinds input_diff,split`로 좁힐 수 있다. 임의 SQL과 예전 제안의 `--reason` 옵션은 사용하지 않는다.
+5. **같은 상한으로 확인하고 시작한다.** 옛 job은 `cancelled`·fence+1·`CONTRACT_CHANGED` 이력을 남기고, 원래 서버 생성/재개 함수가 현재 DB 상태에서 새 입력을 만든다. 분석 전제가 바뀌면 기존 재개 규칙대로 단계를 초기화하고 회차를 올린다. 하나라도 실패하면 전부 되돌리고 job ID와 업무 오류를 표시한다. 재생성이 불가능하면 기존 계약 버전으로 유지하거나 되돌려 해당 업무 상태를 해결한 뒤 다시 미리보기한다. `jobs open`에서 새 queued job을 확인하고 **같은 상한**으로 재실행해 `0개`인지 확인한 뒤 새 계약 Runner를 시작한다. 다른 종류에 옛 계약 job이 남아 있다면 배포하지 않는다.
 
-별도 작업에서 추가할 최소 명령(owner 결정 (A), 이 브랜치에는 없음 — 실환경 기록 2장 F-6). 아래는 M8-06에서 제안한 모양이며, 실제 이름과 동작은 그 작업의 결과를 따른다.
+중복은 종료된 옛 job 제외·고정 순번 상한·dedup_key로 막는다. 미리보기는 행과 이력을 남기지 않지만 DB 순번에는 빈 번호가 생길 수 있다. 상한을 올려 재실행하면 방금 만든 job도 다시 만들 수 있다.
 
-- `awbs-entrypoint jobs open` — 읽기 전용. `queued`·`leased`·`started`·`reconcile` 일을 종류·만든 시각·fence와 함께 보여 준다.
-- `awbs-entrypoint jobs reissue --kinds input_diff,split,estimate,planning --reason contract-change`
-  - 한 일마다 한 트랜잭션에서: `queued` 일만 고른다 → `cancelled`(코드 `CONTRACT_CHANGED`)로 바꾸고 fence를 1 올린다 → 그 일을 처음 만든 서버 함수로 지금 DB에서 입력을 다시 만들어 새 일을 넣는다(dedup_key 순번 +1) → 이력에 남긴다.
-  - Runner가 멈춘 상태에서만 실행한다(열린 세션이 있으면 거부).
-- 그때의 배포 순서: Runner 멈춤 → 백업 → 새 이미지 기동 → `jobs reissue` → `jobs open`으로 확인 → Runner 시작.
-- 그 작업에서 함께 정해야 할 것(M8-06에서 정하지 않음)
-  - `queued` 말고도 남은 `leased`·`started`(감시가 아직 바꾸지 않은 것), `reconcile` 일, `unconfirmed` 보유를 어떻게 처리할지.
-  - `reconcile` 대조가 옛 입력으로 새 일을 넣는 경로(위 4번)를 계약 변경 뒤에 어떻게 막거나 바꿀지.
-  - Planning 경로의 보고 검사(`assertJob`)에 임대 시각 검사를 더할지. 이것은 기존 동작을 바꾸는 일이라 별도 범위다.
-  - 「열린 세션이 없다」만으로는 충분하지 않다(위 2번).
+늦은 보고의 안전 거절 기준은 **실제 상태·fence 변경**이다. 일반 Runner 경로는 fence·임대 주인·상태·임대 끝을 검사한다. Planning `assertJob`은 fence·상태만 검사하며 이번에 임대 시각 검사를 추가하지 않았다. 따라서 재발급으로 실제 cancelled가 되고 fence가 오른 옛 job은 두 경로 모두 `LEASE_LOST`로 거부하지만, 임대 시간 경과 자체를 Planning 보고 거절의 근거로 삼지 않는다.
+
+"열린 세션 없음" 하나만으로는 충분하지 않다. 임대·대조·보유·정리 검사와 실제 Runner 정지를 모두 확인해야 한다. 위 조건이나 지원하지 않는 계약 변경 대상이 남으면 **계약 변경 배포 금지**다. 계약을 바꾸지 않는 화면·문서·내부 수정은 4.2를 따른다.
 
 ## 5. Runner 서비스 (systemd 사용자 서비스)
 
@@ -493,7 +466,7 @@ docker 명령은 언제나 `docker compose -p awbs-prod -f <저장소>/agent-wbs
 - 무중단 교체를 하지 않는다(4.2).
 - 백업은 같은 디스크에 남는다(7.1).
 - 운영과 개발 화면이 같은 포트(5173)를 기본으로 쓴다(2장).
-- 서버 계약을 바꾸는 배포에 필요한 옛 job 재발급 명령이 없다(4.4).
+- 계약 변경 배포는 4.4의 job 확인·정리·재발급 절차를 따를 때만 가능하다. 대조·종료 미확인 보유가 남으면 진행하지 않는다.
 - 실제 GitHub 연결은 M8-06에서 확인하지 않았다. token 방식은 키 등록·봉인 조회까지만 리허설로 확인했다(5.1).
 
 ## 용어
