@@ -193,7 +193,9 @@ export function installSecurity(app: FastifyInstance, pool: Pool, options: Secur
   app.addHook('onSend', async (request, reply, payload) => {
     const context = request.platform;
     if (context?.operation?.id === 'heartbeat') reply.header('X-Current-Epoch', context.currentEpoch);
-    if (context?.client && reply.statusCode < 400 && context.idempotency) {
+    const commit = reply.statusCode < 400 || (context?.commitOnError === true && reply.statusCode < 500);
+    // 기록을 커밋하는 4xx도 응답을 저장해야 재전송으로 같은 이력을 다시 쓰지 않는다.
+    if (context?.client && commit && context.idempotency) {
       if (payload != null && typeof payload !== 'string') throw new Error('멱등 응답은 JSON 문자열이어야 합니다.');
       const headers: Record<string, string> = {};
       for (const name of ['content-type', 'etag', 'location', 'content-disposition', 'x-current-epoch']) {
@@ -204,7 +206,7 @@ export function installSecurity(app: FastifyInstance, pool: Pool, options: Secur
       const { project, key, hash } = context.idempotency;
       await context.client.query('insert into idempotency_keys(project_id,epoch,principal,key,request_hash,response) values($1,$2,$3,$4,$5,$6)', [project, context.epoch, context.principal, key, hash, saved]);
     }
-    await finish(request, reply.statusCode < 400 || (context?.commitOnError === true && reply.statusCode < 500));
+    await finish(request, commit);
     return payload;
   });
   // onError는 onSend보다 먼저 실행된다. 보류 기록을 커밋하기로 한 요청은 onSend에서 커밋 여부를 정한다.
