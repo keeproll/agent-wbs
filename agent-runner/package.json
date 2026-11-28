@@ -8,11 +8,13 @@
     "node": ">=26.13.0 <27"
   },
   "scripts": {
+    "runner:public-key": "node --env-file-if-exists=.env scripts/runner-public-key.ts",
     "start": "node --env-file-if-exists=.env src/main.ts",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint . --max-warnings 0",
     "test": "node scripts/vitest.ts",
+    "test:secrets": "node scripts/vitest.ts --config vitest.secrets.config.ts",
     "test:host": "node scripts/vitest.ts --config vitest.host.config.ts",
     "test:design-contract": "node scripts/vitest.ts --config vitest.design-contract.config.ts",
     "test:cli-update:real": "node --test test/cli-update/npm.real.ts",

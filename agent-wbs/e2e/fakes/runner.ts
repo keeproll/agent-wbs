@@ -39,6 +39,7 @@ export class FakeRunner {
       await this.usage(agent, 100);
     }
     await this.api('reportReadiness', { ...this.write(), body: { at: new Date().toISOString(), items: (['claude','codex','git','node','pnpm','pg','repo','disk','subs'] as const).map(key => ({ key, status: 'ok' as const, detail: '가짜 실행 환경' })) } });
+    await this.api('reportGithubStatus', { ...this.write(), body: { mode: 'gh', ok: true, account: 'fake', scopes: { contents: 'verified', pulls: 'verified', statuses: 'verified', metadata: 'verified' }, expiresAt: null } });
   }
 
   async reconnect() {
