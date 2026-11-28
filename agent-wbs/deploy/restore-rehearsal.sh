@@ -15,7 +15,8 @@
 #   4. 복원한 DB의 새 변경이 새 트랜잭션 번호(epoch +1)와 실제 커밋 시각을 받는지
 #   5. 원본·대상 모두 api·worker가 관리자가 아닌 앱 로그인(awbs_app_login)으로 접속하고, 이력을 지울 수 없고, 관리자 비밀 파일이 없는지
 #   6. 없는 이미지 꼬리표로 복원하면 아무것도 만들기 전에 멈추는지(이미지 자동 빌드 없음)
-#   7. 안내대로(runner-id → 그 ID로 토큰 발급) 하면 Runner heartbeat가 204이고, 옛 안내(runner-main)는 403인지
+#   7. 안내대로(runner:public-key → 나온 Runner ID로 토큰 발급) 하면 Runner heartbeat가 204이고, 옛 안내(runner-main)는 403인지
+#      runner:public-key 명령은 gh-cred 작업(agent-runner/scripts/runner-public-key.ts)이 추가한다. 없으면 이 단계에서 멈춘다.
 # 이미지는 미리 build.sh로 만들어 둔다. 이 스크립트는 이미지를 만들지 않는다.
 #   AWBS_IMAGE_TAG=<꼬리표> bash agent-wbs/deploy/restore-rehearsal.sh
 # 끝나면 임시 구성을 `docker compose down -v`로 지운다(그 구성의 컨테이너·이름 있는 볼륨만). docker volume prune은 쓰지 않는다.
@@ -180,13 +181,12 @@ read -r new_epoch has_time old_rows <<<"$row"
 log "   새 변경: epoch=$new_epoch(백업 $old_epoch) 실제 커밋 시각 기록=$has_time 옛 번호 기록 $old_rows 개 유지"
 [[ "$new_epoch" == "$((old_epoch + 1))" && "$has_time" == t ]] || { log "   실패: 새 변경의 트랜잭션 번호나 커밋 시각이 기대와 다릅니다"; exit 1; }
 
-log "9. Runner 연결 재현(안내대로: runner-id → 그 ID로 토큰 → heartbeat)"
+log "9. Runner 연결 재현(안내대로: runner:public-key → 나온 ID로 토큰 → heartbeat)"
 runner_home="$work/runner/home"
 mkdir -p "$runner_home" && chmod 0700 "$work/runner" "$runner_home"
-runner_id="$(env -i PATH="$PATH" AWBS_HOME="$runner_home" node "$repo/agent-runner/src/runner-id-cli.ts")"
-log "   runner-id → $runner_id"
-openssl genpkey -algorithm X25519 -out "$work/runner/key.pem" 2>/dev/null
-openssl pkey -in "$work/runner/key.pem" -pubout -out "$work/runner/pub.pem"
+[[ -f "$repo/agent-runner/scripts/runner-public-key.ts" ]] || { log "   실패: runner:public-key 명령이 없습니다(gh-cred 병합 필요)"; exit 1; }
+runner_id="$(env -i PATH="$PATH" AWBS_HOME="$runner_home" node "$repo/agent-runner/scripts/runner-public-key.ts" "$work/runner/pub.pem")"
+log "   runner:public-key → Runner ID $runner_id, 공개키 파일 $(stat -c '%a' "$work/runner/pub.pem")"
 token="$(dc "$dst" "$dst_port" exec -T api awbs-entrypoint auth runner-token "$runner_id" /dev/stdin < "$work/runner/pub.pem")"
 old_token="$(dc "$dst" "$dst_port" exec -T api awbs-entrypoint auth runner-token runner-main /dev/stdin < "$work/runner/pub.pem")"
 server_epoch="$(psql_on "$dst" -tAc 'select epoch from public.system_state where id=1')"

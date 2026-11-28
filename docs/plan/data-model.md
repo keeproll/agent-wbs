@@ -1050,10 +1050,22 @@ epoch가 바뀌는 순간(초기화)과 다른 쓰기가 겹쳐도 옛 프로젝
   - `track_commit_timestamp=on`이 꼭 필요하다(compose·시험 DB·운영). 서버를 시작할 때만 바꿀 수 있으므로 띄우는 명령에 넣는다. 꺼져 있으면 시험 준비가 바로 멈춘다.
   - 시험 DB는 `template0`에서 `LC_COLLATE`·`LC_CTYPE`를 C.UTF-8로 만든다(M7-04 결정 9). 컨테이너 기본 언어가 달라도 정렬·한글 정규식 결과가 같아야 하기 때문이다.
   - 시험 컨테이너에만 `fsync=off`·`synchronous_commit=off`·`full_page_writes=off`를 써도 된다. 개발·운영 DB에는 쓰지 않는다.
+- **백업을 다른 DB 서버에 복원할 때의 조건** (M8-06, `agent-wbs/deploy/restore.sh`, `docs/ops/operations.md` §7.2)
+  - 보고서 상태 이력은 트랜잭션 번호(`xid8`)로 커밋 시각을 찾는다(`commit_log`·`commit_real`·`state_log`·`global_log`, §2.7).
+  - 새 DB 서버는 번호를 작은 값부터 다시 매기므로, 그대로 복원하면 새 변경의 번호가 백업 안의 옛 번호와 겹친다. 겹치면 새 변경의 커밋 시계가 남지 않거나(`awbs_stamp_commit`) 옛 시각으로 읽힌다.
+  - 그래서 복원은 새 서버의 번호 epoch(64비트 번호의 위쪽 32비트)를 백업 쪽보다 1 크게 올린 뒤 데이터를 넣는다(`pg_resetwal -e`).
+  - **조건: `pg_resetwal -e`는 업무 데이터를 넣기 전의 새 DB 서버를, 정상 종료한 상태에서만 쓴다.** 강제 옵션(`-f`)은 쓰지 않는다.
+    - 왜: `pg_resetwal`은 WAL(장애 복구용 변경 기록)도 초기화한다. 켜져 있거나 비정상 종료한 서버, 이미 데이터가 있는 서버에 쓰면 데이터가 깨질 수 있다.
+    - 살아 있는 운영 DB의 번호 문제를 이 명령으로 고치지 않는다.
+  - 백업 직전에는 쓰기(api·worker)를 멈추고 `awbs_settle_commits()`를 불러 실제 커밋 시각을 `commit_real`에 옮겨 둔다. 실제 커밋 시각은 `pg_dump`에 담기지 않기 때문이다.
 
 ### 6.1 DB 권한과 보안 검사
 
 - 표의 소유자는 전용 NOLOGIN 역할(`awbs_data_owner`)이다. 앱이 쓰는 권한은 별도 역할(`awbs_app`)에 모은다.
+- 운영 api·worker는 `awbs_app` 권한을 물려받기만 하는 로그인 `awbs_app_login`으로 접속한다(M8-06).
+  - 멤버십은 `INHERIT TRUE, SET FALSE`다. `SET ROLE`로 다른 역할이 될 수 없다. 관리자로 접속한 뒤 `SET ROLE awbs_app`으로 낮추는 방식은 쓰지 않는다(`RESET ROLE`로 되돌릴 수 있다).
+  - 로그인은 운영 migrate가 만들고 맞춘다(`packages/db/src/app-login.ts`). 비밀번호는 운영 비밀 파일 `db-app-password`에서만 온다.
+  - 확인: `awbs-entrypoint db-check`, 시험 `packages/db/test/app-login.db.test.ts`.
   - NOLOGIN은 그 역할로 직접 로그인할 수 없다는 뜻이다.
   - 왜: 앱이 표 소유자나 관리자(superuser) 권한을 가지면 DB 제약과 트리거를 끄고 지나갈 수 있다.
 - 높은 권한으로 실행되는 함수(SECURITY DEFINER)는 모두 안전한 검색 경로(`search_path=pg_catalog,pg_temp`)를 고정하고, PUBLIC의 실행 권한을 회수한다.

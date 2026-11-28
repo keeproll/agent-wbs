@@ -44,11 +44,6 @@ export class ConfigError extends Error {
 
 const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'];
 
-/** Runner 데이터 폴더. `AWBS_HOME`이 비어 있으면 `~/.agentwbs`다. 토큰 없이도 쓸 수 있게 따로 둔다(runner-id 명령). */
-export function resolveHome(env: NodeJS.ProcessEnv): string {
-  return env.AWBS_HOME || join(homedir(), '.agentwbs');
-}
-
 /** 오류 메시지에 입력값을 넣지 않는다(비밀값이 섞였을 수 있다). */
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
   const problems: string[] = [];
@@ -70,7 +65,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     problems.push('AWBS_RUNNER_TOKEN에 Agent WBS에서 발급한 Runner 토큰을 설정하세요.');
   }
 
-  const home = resolveHome(env);
+  const home = env.AWBS_HOME || join(homedir(), '.agentwbs');
   if (!isAbsolute(home)) problems.push('AWBS_HOME은 절대 경로여야 합니다.');
 
   const logLevel = env.LOG_LEVEL || 'info';

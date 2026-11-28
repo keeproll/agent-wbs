@@ -21,12 +21,16 @@ Runner(systemd 사용자 서비스) ──▶ 127.0.0.1:5173/api ─────
 
 - 구성 파일: `agent-wbs/deploy/compose.prod.yaml`
 - 이미지 설명서: `agent-wbs/deploy/Dockerfile`
-- 스크립트: `agent-wbs/deploy/` 아래 `prod-init.sh`, `backup.sh`, `restore.sh`, `restore-rehearsal.sh`
+- 스크립트: `agent-wbs/deploy/` 아래 `prod-init.sh`, `build.sh`, `set-image.sh`, `backup.sh`, `restore.sh`, `restore-rehearsal.sh`
 - Runner 서비스: `agent-runner/deploy/awbs-runner.service.in`, `agent-runner/deploy/install-runner-service.sh`
+- Runner 식별자 확인·공개키 파일: `pnpm -s -C <저장소>/agent-runner runner:public-key <공개키 파일>` (5.1.1, gh-cred 작업이 추가하는 명령)
 
 명령은 모두 **bash**로, Runner 계정(사람 계정, 이 PC에서는 keeproll)으로 실행한다.
-docker 명령은 언제나 `docker compose -p awbs-prod -f <저장소>/agent-wbs/deploy/compose.prod.yaml` 형태로 쓴다.
-왜: `-p`(project 이름)와 `-f`(구성 파일)를 늘 붙이면 이 PC의 다른 컨테이너(개발용 `awbs`, `verum-*`)를 건드리지 않는다.
+docker 명령은 언제나 `docker compose -p awbs-prod -f <저장소>/agent-wbs/deploy/compose.prod.yaml --env-file ~/.agentwbs/prod/deploy.env` 형태로 쓴다.
+이 문서에서 「`… `」로 줄여 쓴 곳은 이 앞부분이다.
+
+- 왜 `-p`·`-f`: 이 PC의 다른 컨테이너(개발용 `awbs`, `verum-*`)를 건드리지 않는다.
+- 왜 `--env-file`: 쓸 이미지 꼬리표(`AWBS_IMAGE_TAG`)가 이 파일에 있다. 꼬리표가 없으면 compose가 바로 멈춘다(4장).
 
 ## 1. 구성 요소
 
@@ -59,6 +63,8 @@ docker 명령은 언제나 `docker compose -p awbs-prod -f <저장소>/agent-wbs
 
 - REST API(화면과 Runner가 부르는 서버 창구)와 Telegram 즉시 알림을 맡는다.
   - Telegram은 Q-16 A 결정대로 상태가 바뀐 트랜잭션이 커밋되면 바로 보낸다.
+  - Telegram 발송 반복 처리는 api 프로세스(`apps/api/src/main.ts`의 `startNotifyWorker`)에서 돈다. worker는 Telegram을 보내지 않는다.
+- DB에는 관리자가 아니라 앱 전용 로그인 `awbs_app_login`으로 접속한다(3장 「DB 로그인 두 개」).
 - api는 web 컨테이너의 네트워크 공간을 같이 쓰고, 그 안의 `127.0.0.1:3100`에서만 듣는다.
   - 왜: api에게는 모든 요청이 같은 PC 안(loopback)에서 온 것으로 보인다. 그래서 개발 때와 같은 보안 규칙(1회용 로그인 링크, Origin 검사)을 그대로 쓴다.
   - 예: api를 `0.0.0.0`에서 듣게 하면 LAN 공개로 판단해 LAN 비밀번호가 반드시 필요해진다.
@@ -72,6 +78,8 @@ docker 명령은 언제나 `docker compose -p awbs-prod -f <저장소>/agent-wbs
 - 메일 첨부 PDF도 worker가 만든다.
 - 듣는 포트가 없어서 HTTP 헬스체크를 두지 않았다.
   - 대신 `docker compose … logs worker`와 화면의 알림으로 상태를 본다.
+
+- worker도 api와 같은 앱 전용 로그인 `awbs_app_login`으로 접속한다.
 
 ### 1.6 Runner
 
@@ -103,19 +111,59 @@ docker 명령은 언제나 `docker compose -p awbs-prod -f <저장소>/agent-wbs
 
 ## 3. 비밀값 규칙
 
-- 비밀값은 **파일**(또는 환경 변수)로만 넘긴다. 이미지·저장소·compose 파일에는 넣지 않는다.
-- 운영 비밀 파일은 두 개이고, `prod-init.sh`가 처음 한 번 만든다. 권한은 0600(만든 사람만 읽고 쓰기)이다.
-  - `~/.agentwbs/prod/secrets/db-password`: DB 비밀번호
-  - `~/.agentwbs/prod/secrets/secret-key`: DB에 SMTP 비밀번호·Telegram 토큰·GitHub 토큰을 암호화해 넣을 때 쓰는 키(`AWBS_SECRET_KEY`)
-- compose는 이 파일을 컨테이너의 `/run/secrets/`에 붙인다. app 이미지의 진입점(`deploy/app-entrypoint.sh`)이 파일을 읽어 그 프로세스에만 넘긴다.
-  - 왜: 환경 변수로 compose 파일에 적으면 `docker inspect`로 누구나 볼 수 있다. 파일로 넘기면 그 값이 구성 정보에 남지 않는다.
+### 3.1 비밀 파일
+
+- 비밀값은 **파일**로 넘긴다. 이미지·저장소·compose 파일에는 넣지 않는다.
+- 운영 비밀 파일은 세 개이고, `prod-init.sh`가 처음 한 번 만든다. 권한은 0600(만든 사람만 읽고 쓰기)이다.
+  - `~/.agentwbs/prod/secrets/db-password`: DB **관리자**(`awbs_owner`) 비밀번호. postgres와 migrate만 쓴다.
+  - `~/.agentwbs/prod/secrets/db-app-password`: **앱 전용 로그인**(`awbs_app_login`) 비밀번호. api·worker가 쓴다.
+  - `~/.agentwbs/prod/secrets/secret-key`: DB에 SMTP 비밀번호·Telegram 토큰·GitHub 토큰을 암호화해 넣을 때 쓰는 키(`AWBS_SECRET_KEY`). api·worker가 쓴다.
+- compose는 필요한 파일만 각 컨테이너의 `/run/secrets/`에 붙인다.
+  - postgres: `db-password`
+  - migrate: `db-password`, `db-app-password`
+  - api·worker: `db-app-password`, `secret-key` (관리자 비밀은 붙이지 않는다)
+- app 이미지의 진입점(`deploy/app-entrypoint.sh`)이 파일을 읽어, 실행할 프로그램 하나의 환경 변수(`DATABASE_URL`, `AWBS_SECRET_KEY`)로 넘긴다.
+  - 정확히 말하면: 비밀값은 이미지·compose 파일·`docker inspect` 구성 정보에는 없다. 하지만 **실행 중인 api·worker 프로그램의 환경에는 있다.** 그 프로그램이 DB에 접속하고 토큰을 풀려면 값이 필요하기 때문이다.
+  - 그래서 컨테이너 안에 들어갈 수 있는 사람(docker 그룹)은 그 값을 볼 수 있다. docker 그룹은 owner 계정만 둔다.
 - 개발용 비밀(`~/.agentwbs/wbs/dev-db-password`, `~/.agentwbs/wbs/secret-key`)과 운영 비밀은 일부러 다른 값이다.
   - 왜: 개발 쪽이 새도 운영 데이터는 열리지 않는다.
-- `secret-key`는 백업과 **다른 곳**(예: 암호 관리자)에 한 번 복사해 둔다.
-  - 왜: 이 키를 잃으면 백업을 복원해도 암호화한 토큰을 열 수 없다. 반대로 백업 파일에 키를 함께 넣으면 백업 하나가 새는 순간 토큰까지 열린다.
 - 컨테이너 안의 앱은 uid 1000(`node`) 계정으로 돈다. 비밀 파일 주인도 uid 1000이어야 읽을 수 있다.
   - 이 PC의 keeproll은 uid 1000이라 그대로 맞는다. 다른 PC로 옮기면 `id -u`로 먼저 확인한다.
 - Runner 토큰(`AWBS_RUNNER_TOKEN`)은 `agent-runner/.env`(권한 0600)에만 둔다. 서비스 파일에는 넣지 않는다.
+
+### 3.2 secret-key 따로 보관하기
+
+- `secret-key`는 백업과 **다른 곳**에 파일째로 한 번 복사해 둔다.
+  - 왜: 이 키를 잃으면 백업을 복원해도 암호화한 토큰을 열 수 없다. 반대로 백업 파일에 키를 함께 넣으면 백업 하나가 새는 순간 토큰까지 열린다.
+- **값을 터미널에 출력하지 않는다**(`cat`으로 보지 않는다).
+  - 왜: 터미널 기록·세션 녹화에 남는다. `clear`는 이미 남은 기록을 지우지 못한다.
+- 방법 예시(하나 고른다)
+  - 암호 관리자의 「파일 첨부·가져오기」로 `~/.agentwbs/prod/secrets/secret-key` 파일을 그대로 올린다.
+  - USB 같은 다른 저장 장치에 파일째로 복사한다: `install -m 0600 ~/.agentwbs/prod/secrets/secret-key /media/<장치>/awbs-secret-key`
+- 비밀값이 보이는 화면·출력은 보고나 메시지에 보내지 않는다.
+
+### 3.3 DB 로그인 두 개
+
+- 관리자 로그인 `awbs_owner`(superuser, DB의 모든 제한을 넘을 수 있는 관리자)
+  - 마이그레이션, 필수 기본 설정 넣기, 앱 로그인 준비, 백업·복원에만 쓴다.
+- 앱 로그인 `awbs_app_login`
+  - `awbs_app`(앱이 쓰는 권한을 모은 역할)의 권한을 물려받기만 한다. `SET ROLE`로 다른 역할이 될 수 없다.
+  - 그래서 보고서 이력(`state_log`·`global_log`·`commit_log`·`commit_real`)을 지우거나 비울 수 없고, 보호 트리거도 끌 수 없다.
+  - 왜: 앱이 관리자 권한을 가지면 앱의 잘못된 SQL이나 침입이 DB 제약과 이력 보호 장치까지 끌 수 있다(data-model §6.1).
+  - 관리자로 접속한 뒤 `SET ROLE`로 낮추는 방식은 쓰지 않는다. 같은 연결에서 `RESET ROLE`로 되돌릴 수 있기 때문이다.
+- migrate가 시작할 때마다 앱 로그인을 맞춘다(없으면 만들고, 비밀번호를 `db-app-password`와 같게 하고, `awbs_app` 말고 다른 역할을 물려받고 있으면 회수한다).
+- 확인 명령: `… exec -T api awbs-entrypoint db-check`
+  - `"currentUser":"awbs_app_login","superuser":false`이고 `historyWritable`이 `[]`, 나머지 `…Blocked`가 모두 `true`면 정상이다.
+
+### 3.4 이미 설치한 운영 구성에서 넘어오기
+
+지금(2026-11-28) 이 PC에는 운영 구성이 아직 없다. 나중에 예전 구성(관리자 비밀 하나)으로 띄운 운영이 있다면 아래 순서로 넘어온다.
+
+1. 백업한다(7.1).
+2. `bash <저장소>/agent-wbs/deploy/prod-init.sh`를 다시 실행한다. 있는 파일은 그대로 두고 `db-app-password`만 새로 만든다.
+3. 새 이미지를 만들고 꼬리표를 정한다(4.2의 2~3번).
+4. `… up -d --wait`를 실행한다. migrate가 앱 로그인을 만들고, api·worker가 새 로그인으로 다시 뜬다.
+5. `… exec -T api awbs-entrypoint db-check`로 확인한다.
 
 ## 4. 처음 설치와 업데이트
 
@@ -125,30 +173,78 @@ docker 명령은 언제나 `docker compose -p awbs-prod -f <저장소>/agent-wbs
 ### 4.1 처음 설치
 
 1. 비밀 파일 만들기: `bash /home/keeproll/projects/agent-wbs/agent-wbs/deploy/prod-init.sh`
-2. 이미지 빌드: `AWBS_IMAGE_TAG=$(git -C /home/keeproll/projects/agent-wbs rev-parse --short HEAD) docker compose -p awbs-prod -f /home/keeproll/projects/agent-wbs/agent-wbs/deploy/compose.prod.yaml build`
-3. 기동: 같은 `AWBS_IMAGE_TAG`를 붙여 `… up -d --wait`
-4. 로그인 링크 받기: `… exec -T api awbs-entrypoint auth login-link` → 나온 주소를 브라우저로 연다(1회용).
-5. 화면에서 프로젝트를 등록하고 설정을 넣는다(6장의 SMTP·Telegram 포함).
-6. Runner 토큰을 발급하고 Runner 서비스를 설치한다(5장).
+2. 이미지 빌드: `bash /home/keeproll/projects/agent-wbs/agent-wbs/deploy/build.sh` → 마지막 줄이 꼬리표(지금 커밋의 짧은 해시)다.
+3. 꼬리표 정하기: `bash /home/keeproll/projects/agent-wbs/agent-wbs/deploy/set-image.sh <꼬리표>` → `~/.agentwbs/prod/deploy.env`에 적힌다.
+4. 기동: `… up -d --wait`
+5. 로그인 링크 받기: `… exec -T api awbs-entrypoint auth login-link` → 나온 주소를 브라우저로 연다(1회용).
+6. 화면에서 프로젝트를 등록하고 설정을 넣는다(6장의 SMTP·Telegram 포함).
+7. Runner 토큰을 발급하고 Runner 서비스를 설치한다(5장).
 
-이미지 꼬리표를 커밋 해시로 붙이는 이유: 되돌릴 때 「어느 커밋으로 만든 이미지인지」를 바로 알 수 있다.
+이미지 규칙과 이유
+
+- 이미지 꼬리표는 커밋 해시다. 왜: 되돌릴 때 「어느 커밋으로 만든 이미지인지」를 바로 알 수 있다.
+- `build.sh`는 커밋하지 않은 변경이 있으면 멈춘다. 왜: 꼬리표와 실제 코드가 달라지면 안 된다.
+- compose 파일에는 이미지를 만드는 항목(`build`)이 없고, 없는 이미지를 받아 오지도 않는다(`pull_policy: never`).
+  - 왜: 복원·되돌리기 때 「그때 쓰던 이미지」 대신 지금 소스로 새 이미지를 몰래 만들면 DB와 프로그램 버전이 어긋난다.
+  - 꼬리표의 이미지가 없으면 기동이 멈춘다. 그때는 그 커밋으로 `build.sh`를 실행해 준비한다.
 
 ### 4.2 업데이트 배포
 
 1. **백업**한다: `bash /home/keeproll/projects/agent-wbs/agent-wbs/deploy/backup.sh`
    - 왜: 배포 전 `pg_dump` 백업은 정해진 규칙이다(architecture §6.3).
 2. 새 커밋으로 빌드한다(4.1의 2번, 새 꼬리표).
-3. 같은 꼬리표로 `up -d --wait`를 실행한다. migrate가 먼저 돌고, 성공하면 api·worker가 새 이미지로 바뀐다.
-4. 화면 접속과 `curl -fsS http://127.0.0.1:5173/health/db`로 확인한다.
+3. 새 꼬리표로 정한다(4.1의 3번).
+4. `… up -d --wait`를 실행한다. migrate가 먼저 돌고, 성공하면 api·worker가 새 이미지로 바뀐다.
+5. 화면 접속과 `curl -fsS http://127.0.0.1:5173/health/db`로 확인한다.
+6. 서버 계약(API 요청·응답 모양)이 바뀐 배포라면 4.4를 먼저 본다.
 
 무중단 교체는 하지 않는다. 몇 초에서 몇십 초 동안 화면이 응답하지 않을 수 있다.
 
 ### 4.3 되돌리기
 
-- 앞 커밋의 꼬리표로 `up -d --wait`를 다시 실행한다. 그 이미지가 지워졌으면 그 커밋을 체크아웃해 다시 빌드한다(architecture §6.3, §4.13 L489).
+- 앞 커밋의 꼬리표로 `set-image.sh`를 실행하고 `… up -d --wait`를 다시 실행한다. 그 이미지가 지워졌으면 그 커밋을 체크아웃해 `build.sh`로 다시 만든다(architecture §6.3, §4.13 L489).
 - 마이그레이션은 앞으로만 간다. 새 버전이 표 구조를 바꿨다면 옛 이미지가 새 구조에서 돌지 못할 수 있다.
-  - 그때는 배포 직전 백업을 7.3의 방법으로 복원한다.
-- 서버 계약을 바꿔 배포할 때 대기 중인 옛 job(`input_diff`·`split`·`estimate`·`planning`)을 다시 만드는 절차는 아직 정하지 않았다(architecture §6.3). M8 실환경 시작 전에 정해야 한다.
+  - 그때는 배포 직전 백업을 7.2의 방법으로 복원한다.
+
+### 4.4 서버 계약을 바꾸는 배포 (옛 job 처리)
+
+「서버 계약을 바꾸는 배포」는 Runner가 받는 일(job)의 입력 모양이나 보고 모양이 바뀌는 배포다.
+대기 중인 옛 job(`input_diff`·`split`·`estimate`·`planning`)의 입력을 새 코드가 해석하지 못할 수 있다.
+아래는 지금 코드(2026-11-28)로 확인한 사실이다.
+
+1. **새 일 수령을 언제 멈추나**
+   - 서버에는 「수령 일시 중지」 설정이 없다.
+   - 지원하는 방법은 Runner를 멈추는 것뿐이다: `systemctl --user stop awbs-runner.service`. Runner가 없으면 아무도 일을 가져가지 않는다.
+2. **이미 실행 중인 일은**
+   - Runner가 멈추면 서버는 임대(60초)나 생존 보고가 끊긴 일을 worker의 감시(`apps/api/src/runner/watch.ts`)로 정리한다.
+   - `split`·`estimate`·`planning`은 `cancelled`(코드 `LEASE_LOST`)가 된다.
+   - `input_diff`·`bootstrap`은 바로 지우지 않고 `reconcile`(실제 결과 대조 대기)이 된다.
+   - 실행 중인 일이 있는지는 화면 「Runner · 실행 환경」과 `GET /api/runner-state`의 보유 목록으로 본다. 끝날 때까지 기다린 뒤 Runner를 멈추는 것을 권한다.
+3. **옛 일의 임대와 fence(낡은 Runner의 보고를 막는 번호표)는**
+   - 서버는 일을 다시 내줄 때마다 fence를 1 올린다. 옛 fence나 끝난 임대로 온 보고는 `LEASE_LOST`로 거부한다(`apps/api/src/runner/service.ts`).
+   - 그래서 이미 정리된 일의 늦은 보고는 따로 무효화하지 않아도 거부된다.
+   - 하지만 **아직 아무도 가져가지 않은 `queued` 일**은 그대로 남는다. 새 Runner가 그 옛 입력을 그대로 가져간다.
+4. **어떤 일을 어떤 지원 API·CLI로 다시 만드나**
+   - `queued` 일을 취소하거나 새 입력으로 다시 만드는 API·CLI는 **없다.**
+   - 끝난(실패·취소) 일을 다시 요청하는 화면 기능은 일부 있다: 입력 차이 분석 「다시 시도」(`POST /api/project/inputs/retry`), 초기 분석 「다시 시도」(`POST /api/project/bootstrap/retry`), 분할 요청(`POST /api/tasks/{taskKey}/split`), Planning 시작(`POST /api/plannings`).
+   - 그런데 분할 요청은 같은 내용의 열린 일이 있으면 그 옛 일을 돌려준다(`apps/api/src/planning/split.ts`). 그래서 `queued` 옛 일을 바꿔 주지 못한다.
+5. **중복이 없고 옛 보고가 거절되는지 어떻게 확인하나**
+   - 중복 방지는 `runner_jobs.dedup_key` 고유 제약이 맡는다. 옛 보고 거절은 위 3번의 fence 검사가 맡는다.
+   - 대기 중인 일을 종류별로 보여 주는 지원 명령은 **없다.**
+
+결론
+
+- 지금은 서버 계약을 바꾸는 배포를 안전하게 할 지원 명령이 없다. **그런 배포는 아래 최소 명령을 만든 뒤에 한다.**
+- 임의의 SQL로 일의 상태나 fence를 바꾸지 않는다. 왜: 상태 전이 검사와 이력 기록을 건너뛰어 다른 불일치를 만든다.
+- 계약이 바뀌지 않는 배포(화면·문서·내부 수정)는 4.2대로 해도 된다.
+
+제안하는 최소 명령(아직 만들지 않음, owner 결정 필요 — 실환경 기록 2장 F-6)
+
+- `awbs-entrypoint jobs open` — 읽기 전용. `queued`·`leased`·`started`·`reconcile` 일을 종류·만든 시각·fence와 함께 보여 준다.
+- `awbs-entrypoint jobs reissue --kinds input_diff,split,estimate,planning --reason contract-change`
+  - 한 일마다 한 트랜잭션에서: `queued` 일만 고른다 → `cancelled`(코드 `CONTRACT_CHANGED`)로 바꾸고 fence를 1 올린다 → 그 일을 처음 만든 서버 함수로 지금 DB에서 입력을 다시 만들어 새 일을 넣는다(dedup_key 순번 +1) → 이력에 남긴다.
+  - Runner가 멈춘 상태에서만 실행한다(열린 세션이 있으면 거부).
+- 그때의 배포 순서: Runner 멈춤 → 백업 → 새 이미지 기동 → `jobs reissue` → `jobs open`으로 확인 → Runner 시작.
 
 ## 5. Runner 서비스 (systemd 사용자 서비스)
 
@@ -161,8 +257,30 @@ docker 명령은 언제나 `docker compose -p awbs-prod -f <저장소>/agent-wbs
 - Agent 전용 계정과 실행 래퍼가 설치돼 있어야 한다(`agent-runner/docs/OWNER-RUNBOOK.md` 1~6단계).
 - `agent-runner/.env`(권한 0600)에 다음이 있어야 한다.
   - `AWBS_URL=http://127.0.0.1:5173`
-  - `AWBS_RUNNER_TOKEN=<운영 서버에서 발급한 토큰>`
+  - `AWBS_RUNNER_TOKEN=<운영 서버에서 발급한 토큰>` (5.1.1)
   - `AWBS_AGENT_USER=awbs-agent` (없어도 서비스 파일이 고정하지만, 다른 값이면 설치를 거부한다)
+- 기존 `.env`에 이미 있는 값도 확인한다(값이 비밀이 아닌 줄만 본다).
+  - `AWBS_GITHUB_MODE`: 지금 운영 검증 범위는 **`gh`**(이 PC의 `gh` 로그인을 쓰는 방식)다. 줄이 없으면 기본값 `gh`다. `token`이면 `gh`로 바꾼다.
+    - 왜: `token` 방식은 서버의 GitHub 봉인 처리기(`POST /api/runner/github/key`, `GET /api/runner/github/credential`)가 있어야 동작한다. 계약과 Runner 쪽 호출 코드는 있지만 서버 처리기는 아직 없다(다른 작업 gh-cred에서 구현 중). **token 방식은 gh-cred 병합 후**에 쓴다.
+  - `AWBS_ATTEMPT_AUTO`, `AWBS_CI_AUTO`: 줄이 없거나 `0`이면 꺼짐이다. `1`이면 실제 Claude·Codex 호출과 CI 실행이 시작된다. 켜는 것은 owner가 정할 때만 한다(OWNER-RUNBOOK 7단계).
+  - 확인 명령(비밀값 줄은 보이지 않는다): `grep -E '^(AWBS_URL|AWBS_AGENT_USER|AWBS_GITHUB_MODE|AWBS_GITHUB_REPO|AWBS_ATTEMPT_AUTO|AWBS_CI_AUTO)=' <저장소>/agent-runner/.env`
+
+#### 5.1.1 Runner 토큰 발급 — 반드시 그 Runner의 ID로
+
+- Runner는 처음 시작할 때 자기 식별자(`runnerId`, 무작위 UUID)를 만들어 `AWBS_HOME/state/runner.json`에 저장한다.
+- Runner 토큰은 이 식별자 하나에 묶인다. 다른 이름(예: `runner-main`)으로 발급한 토큰으로는 서버가 `403 FORBIDDEN_PRINCIPAL`로 거부한다.
+- 그래서 순서는 이렇다. **이 순서는 gh-cred 작업이 병합된 뒤에 쓴다**(`runner:public-key` 명령을 그 작업이 추가한다).
+  1. Runner를 멈춘다(켜져 있다면): `systemctl --user stop awbs-runner.service`
+  2. 공개키 파일 만들기와 식별자 확인: `pnpm -s -C <저장소>/agent-runner runner:public-key <아직 없는 공개키 파일의 절대 경로>` → 출력 한 줄이 식별자다.
+     - 상태 파일의 실제 식별자를 쓴다. 상태 파일이 없으면 Runner가 처음 시작할 때와 같은 방법으로 만든다.
+     - 공개키 파일을 새로 만든다(있으면 덮어쓰지 않고 실패한다). 개인키는 파일로 남기지 않는다.
+     - Runner가 켜져 있으면 데이터 폴더 잠금 때문에 실패한다.
+  3. 그 식별자로 토큰 발급: `… exec -T api awbs-entrypoint auth runner-token <식별자> /dev/stdin < <공개키 파일>`
+     - 왜 Runner 쪽 명령을 쓰나: 식별자를 사람이 지어 넣으면(예: `runner-main`) 실제 Runner의 식별자와 달라 403이 된다.
+- 키 두 종류를 헷갈리지 않는다.
+  - **토큰 발급 때 넣는 공개키**: `auth runner-token`이 요구하는 X25519 공개키 파일이다. 「이 Runner를 승인한다」는 기록으로 저장된다. 서버 인증은 Bearer 토큰이 맡는다.
+  - **GitHub 봉인용 키**: Runner가 실행 중에 새로 만들어 `POST /api/runner/github/key`로 등록하는 키다. 서버가 GitHub 토큰을 이 키로 잠가(봉인) 보낸다(`token` 방식).
+  - main `1ce62aa` 기준으로는 봉인 처리기가 없다. 그래서 지금 검증 범위는 `gh` 방식이고, **token 방식은 gh-cred 병합 후**에 쓴다. 자세한 것은 gh-cred가 추가하는 `docs/runner-github-setup.md`를 따른다.
 
 ### 5.2 설치 스크립트가 하는 일
 
@@ -246,8 +364,8 @@ docker 명령은 언제나 `docker compose -p awbs-prod -f <저장소>/agent-wbs
 
 ### 6.4 잘 안 될 때 볼 곳
 
-- 메일 발송 실패: 「보고서 · 메일」 탭의 발송 기록, `docker compose -p awbs-prod -f … logs worker`
-- Telegram 실패: 「알림」 탭의 전송 이력, `docker compose -p awbs-prod -f … logs api`
+- 메일 발송 실패: 「보고서 · 메일」 탭의 발송 기록, `… logs worker`
+- Telegram 실패: 「알림」 탭의 전송 이력, `… logs api`
 - 컨테이너가 밖으로 나가지 못하는 경우(회사 방화벽 등)는 같은 PC의 브라우저에서 되더라도 실패할 수 있다.
 
 ## 7. 백업 · 복원 · 복원 리허설
@@ -280,6 +398,12 @@ docker 명령은 언제나 `docker compose -p awbs-prod -f <저장소>/agent-wbs
 - **빈 곳에만** 복원한다. 대상의 DB 볼륨이나 데이터 볼륨이 이미 있으면 멈춘다.
   - 왜: 복원이 덮어쓰기라면 실수 한 번에 지금 데이터를 잃는다.
 - 대상의 `secrets/secret-key`는 백업한 쪽과 같아야 한다.
+- **이미지는 백업 때와 같은 것으로만** 띄운다. 이미지를 새로 만들지 않는다.
+  - `AWBS_IMAGE_TAG`를 주지 않으면 `manifest.txt`의 `image_tag`를 쓰고, 이 PC의 이미지 ID가 백업 때와 같아야 한다.
+  - 같은 커밋을 다시 빌드해 ID가 달라졌다면, owner가 확인한 뒤 `AWBS_IMAGE_TAG=<꼬리표>`로 직접 정한다.
+  - 이미지가 없거나 ID가 다르면 아무것도 만들기 전에 멈춘다(종료 코드 6).
+  - 왜: DB를 백업 시점으로 되돌리면서 새 프로그램을 띄우면, 새 프로그램이 새 마이그레이션을 실행해 「되돌림」이 깨진다.
+- 마지막에 보여 주는 기동 명령에는 꼬리표·DB 이름·구성 파일 전체 경로가 모두 들어 있다. 그대로 실행한다.
 
 순서와 이유
 
@@ -288,7 +412,11 @@ docker 명령은 언제나 `docker compose -p awbs-prod -f <저장소>/agent-wbs
    - 왜: 보고서 이력은 트랜잭션 번호(`xid8`)로 커밋 시각을 찾는다(`commit_log`·`commit_real`·`state_log`·`global_log`).
    - 새 DB 서버는 번호를 작은 값부터 다시 매긴다. 그대로 두면 새 변경의 번호가 백업 안의 옛 번호와 겹친다.
    - 겹치면 새 변경의 커밋 시각이 기록되지 않거나 옛 변경의 시각으로 읽혀, 보고서가 틀린 「그때 상태」를 만든다.
-   - 예: 리허설에서 새 서버의 첫 번호는 732였고 백업 순간의 번호는 765였다. epoch를 올리지 않았다면 733~765가 겹쳤다.
+   - 예: 리허설(2026-11-28 04:56Z)에서 새 서버의 번호는 732였고 백업 순간의 번호는 766이었다. epoch를 올리지 않았다면 그 사이 번호가 겹쳤다.
+   - **조건: `pg_resetwal -e`는 「업무 데이터를 넣기 전의 새 DB 서버를 정상 종료한 상태」에서만 쓴다.**
+     - `pg_resetwal`은 WAL(장애 복구용 변경 기록)도 초기화하는 관리 도구다. 서버가 켜져 있거나, 비정상 종료했거나, 이미 업무 데이터가 있는 DB에 쓰면 데이터가 깨질 수 있다([PostgreSQL 16 설명](https://www.postgresql.org/docs/16/app-pgresetwal.html)).
+     - `restore.sh`는 대상 볼륨이 없을 때만 새 서버를 만들고, 정상 종료(`stop`)한 뒤, 강제 옵션(`-f`) 없이 실행한다.
+     - 살아 있는 운영 DB의 번호 문제를 이 명령으로 고치지 않는다.
 3. 역할 → DB(`pg_restore`, 한 트랜잭션) → 지문 대조 → 데이터 파일 순서로 되살린다.
    - 지문이 하나라도 다르면 멈춘다.
 4. api·worker는 켜지 않는다. 켜는 명령을 마지막에 보여 준다.
@@ -296,9 +424,10 @@ docker 명령은 언제나 `docker compose -p awbs-prod -f <저장소>/agent-wbs
 운영 이름(`awbs-prod`) 그대로 되살려야 할 때(디스크 손상 등)
 
 1. 지금 볼륨을 지우기 전에, 가능하면 지금 상태도 백업한다.
-2. `docker compose -p awbs-prod -f … down`으로 멈춘다.
+2. `… down`으로 멈춘다.
 3. `docker volume rm awbs-prod-pgdata awbs-prod-data`로 옛 볼륨을 지운다. **되돌릴 수 없다.** owner가 직접 판단해서 실행한다.
-4. `AWBS_STACK=awbs-prod bash …/restore.sh <백업 폴더>` → `… up -d --wait`
+4. `AWBS_STACK=awbs-prod bash <저장소>/agent-wbs/deploy/restore.sh <백업 폴더>`
+5. 마지막에 나온 대로 `bash <저장소>/agent-wbs/deploy/set-image.sh <꼬리표>` → `… up -d --wait`
 
 ### 7.3 복원 리허설 (`deploy/restore-rehearsal.sh`)
 
@@ -314,19 +443,24 @@ docker 명령은 언제나 `docker compose -p awbs-prod -f <저장소>/agent-wbs
   3. 로그인 뒤 API GET 14개의 응답 코드와 본문
      - `/api/schedule`은 「지금」 시각(`at`)과 지금 기준 계획 진척률(`plannedPct`)을 담으므로 이 두 값만 빼고 비교한다.
   4. 복원한 DB의 새 변경이 새 epoch 번호와 실제 커밋 시각을 받는지
+  5. 원본·대상 모두 api·worker가 `awbs_app_login`으로 접속하는지, 관리자가 아니고 이력을 지울 수 없는지, 관리자 비밀 파일이 컨테이너에 없는지
+  6. 없는 이미지 꼬리표로 복원하면 아무것도 만들기 전에 멈추는지
+  7. 5.1.1대로 발급한 토큰의 heartbeat가 204인지(옛 안내 `runner-main` 토큰은 403), 실제 Runner를 20초 띄웠을 때 서버에 세션이 기록되는지
+     - `runner:public-key` 명령(gh-cred)이 있어야 한다. 없으면 이 단계에서 멈춘다.
+- 실행: `AWBS_IMAGE_TAG=<꼬리표> bash <저장소>/agent-wbs/deploy/restore-rehearsal.sh` (이미지는 `build.sh`로 미리 만든다)
 - 끝나면 임시 구성을 `docker compose -p <임시 이름> … down -v`로 지운다. 그 구성의 컨테이너와 볼륨만 지운다.
 - 기록은 `~/.agentwbs/rehearsal/<시각>/rehearsal-result.txt`에 남는다.
 - 업데이트로 DB 구조가 크게 바뀐 뒤에는 리허설을 다시 한다.
 
 ## 8. 점검과 문제 해결
 
-- 전체 상태: `docker compose -p awbs-prod -f … ps`
-- 로그: `docker compose -p awbs-prod -f … logs --tail 200 api` (`worker`, `web`, `migrate`, `postgres`도 같은 방법)
+- 전체 상태: `… ps`
+- 로그: `… logs --tail 200 api` (`worker`, `web`, `migrate`, `postgres`도 같은 방법)
 - DB까지 확인: `curl -fsS http://127.0.0.1:5173/health/db` → `{"db":"ok",…}`
 - migrate가 실패하면 api·worker가 시작하지 않는다. `logs migrate`로 원인을 본다.
 - api 컨테이너만 다시 시작해도 된다. web(nginx)을 다시 시작하면 api도 함께 다시 시작해야 한다.
   - 왜: api는 web의 네트워크 공간을 빌려 쓴다. 주인(web)이 새로 뜨면 빌린 쪽의 네트워크가 끊긴다.
-  - 명령: `docker compose -p awbs-prod -f … up -d --force-recreate web api`
+  - 명령: `… up -d --force-recreate web api`
 - 지우기 규칙
   - 컨테이너 하나를 지울 때는 `docker rm -f -v <이름>`을 쓴다. 이름 없는 볼륨을 남기지 않는다.
   - `docker volume prune`, `docker system prune`은 쓰지 않는다. 다른 프로젝트의 볼륨까지 지울 수 있다.
@@ -338,9 +472,12 @@ docker 명령은 언제나 `docker compose -p awbs-prod -f <저장소>/agent-wbs
 - 무중단 교체를 하지 않는다(4.2).
 - 백업은 같은 디스크에 남는다(7.1).
 - 운영과 개발 화면이 같은 포트(5173)를 기본으로 쓴다(2장).
+- 서버 계약을 바꾸는 배포에 필요한 옛 job 재발급 명령이 없다(4.4).
+- Runner의 GitHub 연결은 `gh` 방식만 검증 범위다. `token` 방식은 gh-cred 병합 후(5.1).
 
 ## 용어
 
+- **awbs_app_login** — 운영 api·worker 전용 DB 로그인. `awbs_app` 권한만 물려받고 `SET ROLE`은 못 한다.
 - **compose secrets** — compose가 호스트의 파일을 컨테이너 안 `/run/secrets/<이름>`에 붙여 주는 기능. 값이 구성 정보에 남지 않는다.
 - **digest** — 이미지 내용으로 만든 지문(`sha256:…`). 같은 digest면 같은 이미지다.
 - **epoch (트랜잭션 번호)** — PostgreSQL의 64비트 트랜잭션 번호(`xid8`)에서 위쪽 32비트. 프로젝트 초기화 번호(epoch)와는 다른 말이다.

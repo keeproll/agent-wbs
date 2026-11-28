@@ -33,6 +33,7 @@
 - **Avro / Protobuf** — 메시지(이벤트) 데이터의 모양을 정의하는 스키마 형식. Q-14 선택지 (C)에 나온다.
 - **awbs-agent (Agent 전용 계정)** — Agent(Claude·Codex)만 쓰는 리눅스 계정. 로그인 셸과 sudo 권한이 없고 Runner 홈을 읽지 못한다(owner Q-08 B). → architecture §4 「실행 격리」
 - **`awbs_notify_emit()`** — 알림 기록과 Telegram 발송 대기열을 같은 트랜잭션에서 만드는 DB 공통 함수(마이그레이션 0036). 모든 알림이 이 함수 하나를 지난다. → data-model §3.7
+- **awbs_app_login (앱 DB 로그인)** — 운영 api·worker가 쓰는 DB 로그인. `awbs_app` 권한만 물려받고 `SET ROLE`은 못 한다. 관리자 로그인 `awbs_owner`는 마이그레이션·백업·복원에만 쓴다. → data-model §6.1, docs/ops/operations.md §3.3
 - **`AWBS_REPORT`** — ③④ 단계 명령이 결과를 JSON으로 쓰는 파일의 경로를 담은 환경 변수. 보고서에는 이번 시도의 `AWBS_REPORT_NONCE` 값을 그대로 적어야 한다. → contracts §3.6-3
 - **base64url** — 바이트를 URL에 안전한 글자(A–Z, a–z, 0–9, `-`, `_`)로 바꿔 적는 방식. 봉인 값은 끝의 `=`(padding) 없이 쓴다. → contracts §6.1
 - **bare 저장소** — 작업 폴더 없이 git 기록만 담은 저장소. 테스트에서 원격 저장소 대신 쓴다.
