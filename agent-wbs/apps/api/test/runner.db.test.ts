@@ -11,6 +11,7 @@ import { watchRunner } from '../src/runner/watch.ts';
 import { grantExternalAfterReconcile, handover, retryFailedAttempt } from '../src/runner/service.ts';
 import { installRunner } from '../src/runner/routes.ts';
 import { required, RunnerRepository } from '../src/runner/repository.ts';
+import { attemptFor } from './m208-fixture.ts';
 
 // test:db가 안전성을 확인한 주소에서 이 파일 전용 DB를 만든다. 주소가 없으면 준비 단계에서 실패한다.
 describe('runner 실제 PostgreSQL 검증', () => {
@@ -1214,7 +1215,8 @@ describe('runner 실제 PostgreSQL 검증', () => {
     await owner.query("update runner_jobs set state='done',lease_until=now()-interval '1 hour' where id=$1", [job.id]);
     const second = await usage(attemptId, { fence: job.fence, confirm: 'confirmed', items: [{ id: 'tag-used', version: null, hash: null, count: 1 }] });
     expect(second.statusCode, second.body).toBe(204);
-    expect((await attemptsOf(t.key))[0]?.subagents).toMatchObject({ used: { confirm: 'confirmed', items: [{ id: 'tag-used', version: 2, count: 2 }, { id: 'Explore', version: null, count: 1 }] } });
+    // 확인 보고의 이름은 확인 횟수(1)로 바뀐다. Explore는 일부 관측에서만 봤으므로 목록 전체는 여전히 partial이다(리뷰 Codex 3).
+    expect((await attemptsOf(t.key))[0]?.subagents).toMatchObject({ used: { confirm: 'partial', items: [{ id: 'tag-used', version: 2, count: 1 }, { id: 'Explore', version: null, count: 1 }] } });
     expect(await rows()).toEqual([{ def_key: 'tag-unused', observed_used: false, confirm: 'confirmed' }, { def_key: 'tag-used', observed_used: true, confirm: 'confirmed' }]);
     // 확정된 뒤 일부 관측 보고가 와도 confirmed는 되돌아가지 않는다.
     expect((await usage(attemptId, { fence: job.fence, confirm: 'partial', items: [] })).statusCode).toBe(204);
@@ -1229,5 +1231,73 @@ describe('runner 실제 PostgreSQL 검증', () => {
     expect((await attemptsOf(t.key))[0]?.subagents).toEqual({ designated: [], used: null, observed: null });
     expect((await usage(attemptId, { fence: job.fence, confirm: 'partial', items: [{ id: 'Explore', version: null, hash: null }] })).statusCode).toBe(204);
     expect((await attemptsOf(t.key))[0]?.subagents).toEqual({ designated: [], used: { confirm: 'partial', items: [{ id: 'Explore', version: null, count: 1 }] }, observed: null });
+  });
+  /* ---- 리뷰 Codex(review-codex.md) 재현: 확인 수준·화면 갱신·입력 경계 ---- */
+  test('리뷰 Codex 1: 일부 관측 사용은 하위 Agent 재작업률 통계에 넣지 않고, 확인된 사용만 센다', async () => {
+    const { t, job, defs, attemptId } = await designatedStart([{ key: 'tag-stat', version: 1 }]);
+    const def = defs[0];
+    if (!def) throw new Error('fixture');
+    expect((await usage(attemptId, { fence: job.fence, confirm: 'partial', items: [{ id: def.id, version: 1, hash: def.hash }] })).statusCode).toBe(204);
+    await owner.query("update task_attempts set status='completed',ended_at=now() where id=$1", [attemptId]);
+    const qa = await attemptFor(owner, project, t.id, { kind: 'qa', no: 2, status: 'completed', agent: 'Codex' });
+    await owner.query("insert into verifications(project_id,attempt,result,head_sha,spec_revision,cmd,expected,actual) values($1,$2,'FAIL',$3,1,'test','통과','실패')", [project, qa, sha]);
+    const stat = async () => {
+      const r = await app.inject({ url: '/api/settings/agent-usage', headers: { cookie } });
+      expect(r.statusCode, r.body).toBe(200);
+      return r.json<{ subagents: { defKey: string; decisions: number; failures: number; reworkRate: number | null }[] }>().subagents.find(d => d.defKey === 'tag-stat');
+    };
+    expect(await stat()).toMatchObject({ decisions: 0, failures: 0, reworkRate: null });
+    // 사용 여부 자체는 사실대로 남는다(일부 관측으로 본 사용).
+    expect((await owner.query('select observed_used,confirm from attempt_subagents where attempt=$1', [attemptId])).rows).toEqual([{ observed_used: true, confirm: 'partial' }]);
+    expect((await usage(attemptId, { fence: job.fence, confirm: 'confirmed', items: [{ id: 'tag-stat', version: null, hash: null }] })).statusCode).toBe(204);
+    expect(await stat()).toMatchObject({ decisions: 1, failures: 1, reworkRate: 1 });
+  });
+
+  test('리뷰 Codex 2: 사용 보고와 관측 변화는 시도 변경 알림을 같은 커밋에 남긴다(같은 관측의 반복은 알리지 않음)', async () => {
+    const { t, job, attemptId } = await designatedStart([{ key: 'tag-notify', version: 1 }]);
+    const events = async () => (await owner.query<{ ref: { taskKey: string; attemptId: string } }>("select ref from change_events where topic='attempt' and ref->>'attemptId'=$1 order by seq", [attemptId])).rows.map(r => r.ref);
+    const before = (await events()).length;
+    const report = { at: now(), limit: 4, running: { Claude: 0, Codex: 1 }, subagents: 2, heavyJobs: 0, resources: { cpuPct: 10, memFreeGB: 20, swapGB: 0 }, sessions: [{ attemptId, observed: 2, reserved: 2, state: 'ok' }] };
+    expect((await post('concurrency', report)).statusCode).toBe(200);
+    expect(await events()).toHaveLength(before + 1);
+    expect((await post('concurrency', { ...report, at: now() })).statusCode).toBe(200);
+    expect(await events()).toHaveLength(before + 1);
+    expect((await post('concurrency', { ...report, at: now(), sessions: [{ attemptId, observed: 1, reserved: 1, state: 'ok' }] })).statusCode).toBe(200);
+    expect(await events()).toHaveLength(before + 2);
+    expect((await usage(attemptId, { fence: job.fence, confirm: 'partial', items: [{ id: 'Explore', version: null, hash: null }] })).statusCode).toBe(204);
+    const all = await events();
+    expect(all).toHaveLength(before + 3);
+    expect(all.at(-1)).toEqual({ taskKey: t.key, attemptId });
+    // 거절된 보고(검증 실패)는 알림을 남기지 않는다.
+    expect((await usage(attemptId, { fence: job.fence, confirm: 'partial', items: [{ id: 'Explore', version: 3, hash: null }] })).statusCode).toBe(400);
+    expect(await events()).toHaveLength(before + 3);
+  });
+
+  test('리뷰 Codex 3: 일부 관측에서만 본 이름은 확인 보고가 와도 confirmed로 올라가지 않는다(순서 무관)', async () => {
+    const subOf = async (key: string) => (await attemptsOf(key))[0]?.subagents;
+    const a = await designatedStart([]);
+    expect((await usage(a.attemptId, { fence: a.job.fence, confirm: 'partial', items: [{ id: 'Explore', version: null, hash: null }, { id: 'Plan', version: null, hash: null, count: 3 }] })).statusCode).toBe(204);
+    expect((await usage(a.attemptId, { fence: a.job.fence, confirm: 'confirmed', items: [{ id: 'Plan', version: null, hash: null }] })).statusCode).toBe(204);
+    expect(await subOf(a.t.key)).toMatchObject({ used: { confirm: 'partial', items: [{ id: 'Explore', count: 1 }, { id: 'Plan', count: 1 }] } });
+    expect((await owner.query('select name,confirm,uses from attempt_subagent_usage where attempt=$1 order by name', [a.attemptId])).rows)
+      .toEqual([{ name: 'Explore', confirm: 'partial', uses: 1 }, { name: 'Plan', confirm: 'confirmed', uses: 1 }]);
+    // 확인 뒤 새 이름이 일부 관측으로 오면 목록은 partial로 내려가고, 확인된 이름의 횟수는 바뀌지 않는다.
+    await owner.query("update runner_jobs set state='done' where id=$1", [a.job.id]);
+    const b = await designatedStart([]);
+    expect((await usage(b.attemptId, { fence: b.job.fence, confirm: 'confirmed', items: [{ id: 'Plan', version: null, hash: null }] })).statusCode).toBe(204);
+    expect(await subOf(b.t.key)).toMatchObject({ used: { confirm: 'confirmed', items: [{ id: 'Plan', count: 1 }] } });
+    expect((await usage(b.attemptId, { fence: b.job.fence, confirm: 'partial', items: [{ id: 'Plan', version: null, hash: null, count: 5 }, { id: 'Explore', version: null, hash: null }] })).statusCode).toBe(204);
+    expect(await subOf(b.t.key)).toMatchObject({ used: { confirm: 'partial', items: [{ id: 'Explore', count: 1 }, { id: 'Plan', count: 1 }] } });
+  });
+
+  test('리뷰 Codex 4: 공백만인 이름·NUL이 든 이름은 500이 아니라 400이고 아무것도 저장하지 않는다', async () => {
+    const { job, attemptId } = await designatedStart([]);
+    for (const id of ['   ', '\t', 'a\u0000b']) {
+      const r = await usage(attemptId, { fence: job.fence, confirm: 'partial', items: [{ id: 'Explore', version: null, hash: null }, { id, version: null, hash: null }] });
+      expect(r.statusCode, `${JSON.stringify(id)} ${r.body}`).toBe(400);
+      expect(r.json()).toMatchObject({ error: { code: 'VALIDATION_FAILED' } });
+    }
+    expect((await owner.query('select count(*)::int n from attempt_subagent_usage where attempt=$1', [attemptId])).rows).toEqual([{ n: 0 }]);
+    expect((await usage(attemptId, { fence: job.fence, confirm: 'partial', items: [{ id: ' Explore ', version: null, hash: null }] })).statusCode).toBe(204);
   });
 });

@@ -5,8 +5,10 @@ export interface InstalledDefinition { id: string; key: string; version: number;
 /** 서버 `subagent-usage` 보고의 한 항목(contracts §3.2) */
 export interface UsageItem { id: string; version: number | null; hash: string | null; count: number }
 
-/** 서버 계약 `Id`의 길이(1~128자). 넘는 이름은 보고하지 않는다(지어 줄이지 않음). */
+/** 서버 계약 `SubagentName`의 길이(1~128자). 넘는 이름은 보고하지 않는다(지어 줄이지 않음). */
 const MAX_NAME = 128;
+/** 서버가 받는 이름: 공백 아닌 글자 1개 이상, NUL 없음(계약 SubagentName과 같은 규칙). 아니면 「모름」으로 버린다. */
+const validName = (name: string) => /\S/.test(name) && !name.includes('\u0000');
 
 /**
  * 실제로 부른 하위 Agent 이름과 횟수를 출력 스트림에서 모은다(UAT-TASK-10 「실제」 태그의 재료, G §6.7-7).
@@ -26,7 +28,7 @@ export class SubagentUsage {
 
   /** 보고 항목. 설치한 지정 정의 이름이면 그 정의의 id·버전·hash를 붙이고, 아니면 이름만 보낸다. */
   items(installed: readonly InstalledDefinition[]): UsageItem[] {
-    return [...this.#counts].filter(([name]) => name.length <= MAX_NAME).map(([name, count]) => {
+    return [...this.#counts].filter(([name]) => name.length <= MAX_NAME && validName(name)).map(([name, count]) => {
       const def = installed.find(d => d.key === name);
       return def ? { id: def.id, version: def.version, hash: def.hash, count } : { id: name, version: null, hash: null, count };
     });

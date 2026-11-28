@@ -206,6 +206,7 @@
 - 합격 기준: 같아야 하는 영역은 차이 2%(긴 표는 3%) 이하.
 - 예외(기록만): 원본 Mock 버튼이 있는 배포 확인 카드 한 곳. 나머지는 모두 엄격 비교다(fix1에서 계약 값이 채워져 기록만 영역이 줄었다).
 - 결과: `~/.orca/bots/agentwbs/archive/2026-11-27/M7-05/visual-fix1/`에 `[원본 | 구현 | 차이]` 이미지와 `summary.md`.
+  - 위 보관 폴더는 `AWBS_VISUAL_OUT_M705`로 **명시할 때만** 쓴다. 기본 출력은 실행마다 새 임시 폴더(`$TMPDIR/awbs-visual-…`, `e2e/support/visual.ts` `visualOut`)다(리뷰 재발 방지: 기본값이 보관 폴더를 덮어썼다).
 
 ## 9. Runner 보고 값과 「보고 전」 표시(M7-04 fix2)
 

@@ -123,6 +123,7 @@ scripts/                   원본 CSS 옮기기·Playwright 실행·실제 API E
 - **조건**: viewport 1920×1080(앱 틀은 1280×800도), 기기 배율 1, ko-KR, Asia/Seoul, 시계 2026-11-05 20:00 KST, 애니메이션 끔, 마우스는 화면 구석.
 - **차이 계산**: pixelmatch, 색 차이 기준 `threshold 0.1`, 안티에일리어싱(글자 가장자리 번짐) 픽셀은 세지 않는다.
 - **결과**: `~/.orca/bots/agentwbs/archive/2026-11-26/M3-01/visual/`에 `[원본 | 구현 | 차이]` 이미지와 `summary.md`.
+  - 위 보관 폴더는 `AWBS_VISUAL_OUT`로 **명시할 때만** 쓴다. 기본 출력은 실행마다 새 임시 폴더(`$TMPDIR/awbs-visual-…`, `e2e/support/visual.ts` `visualOut`)다(리뷰 재발 방지: 기본값이 보관 폴더를 덮어썼다).
 - **합격 기준**
   - 같아야 하는 영역(메뉴·헤더 왼쪽·접힌 메뉴·skeleton·공용 확인창)은 차이 1~2% 이하. 넘으면 시험이 실패한다.
   - 2%까지 허용하는 이유: 원본 skeleton은 반짝임 애니메이션 도중 찍혀 회색 농도가 조금 다를 수 있다.

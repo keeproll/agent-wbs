@@ -1,6 +1,6 @@
 /**
  * Task 상세 시각 비교(M3-03) — 원본 스크린샷 desktop-clock20261105/UI-03-0N·UI-03E와 같은 조건으로 찍어 같은 영역을 비교한다.
- * 결과: ~/.orca/bots/agentwbs/archive/2026-11-26/M3-03/visual/ ([원본 | 구현 | 차이] 이미지 + summary.md)
+ * 결과: 기본은 실행마다 새 임시 폴더(support/visual.ts visualOut), 보관하려면 AWBS_VISUAL_OUT_M303=~/.orca/bots/agentwbs/archive/2026-11-26/M3-03/visual/ 로 명시 ([원본 | 구현 | 차이] 이미지 + summary.md)
  *
  * 조건: 1920×1080, 기기 배율 1, ko-KR, Asia/Seoul, 시계 2026-11-05 20:00 KST, 애니메이션 끔, 마우스는 구석.
  * 데이터: 원본 화면에서 꺼낸 Mock(fixtures/prototype-mock.json)을 계약 모양으로 바꾼 가짜 서버.
@@ -8,15 +8,13 @@
  *   왜 요소 기준인가: 상세 위 WBS 제목 줄은 M3-02 몫이라 높이가 달라, 화면 좌표를 그대로 쓰면 전부 어긋난다.
  * 기준·예외는 features/task/README.md §6.
  */
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { fakeApi, json } from './support/fake-api.ts';
 import { mountTasks, newStore } from './support/task-api.ts';
 import { ciData, installCi } from './support/ci-data.ts';
-import { compareRegion, hasBaseline, subagentTagBoxes, writeSummary, type Box, type VisualResult } from './support/visual.ts';
+import { compareRegion, hasBaseline, subagentTagBoxes, writeSummary, type Box, type VisualResult, visualOut } from './support/visual.ts';
 
-const OUT = process.env.AWBS_VISUAL_OUT_M303 ?? join(homedir(), '.orca/bots/agentwbs/archive/2026-11-26/M3-03/visual');
+const OUT = visualOut('AWBS_VISUAL_OUT_M303', 'M3-03-visual');
 
 test.skip(!hasBaseline(), '원본 스크린샷 폴더가 없다(~/.cache/agent-wbs-baseline).');
 test.describe.configure({ mode: 'serial' });

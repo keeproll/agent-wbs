@@ -25895,7 +25895,7 @@
                       ],
                       "properties": {
                         "id": {
-                          "$ref": "#/components/schemas/Id"
+                          "$ref": "#/components/schemas/SubagentName"
                         },
                         "version": {
                           "anyOf": [
@@ -50320,6 +50320,13 @@
           "fail"
         ],
         "title": "StepStatus"
+      },
+      "SubagentName": {
+        "type": "string",
+        "title": "SubagentName",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[^\\u0000]*[^\\s\\u0000][^\\u0000]*$"
       },
       "TaskChanged": {
         "type": "object",

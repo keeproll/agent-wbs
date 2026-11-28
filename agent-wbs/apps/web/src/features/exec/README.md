@@ -133,6 +133,7 @@ owner Q-04(contracts §3.5)에 따라 원본과 다르게 동작한다.
 - 조건: 1920×1080(배치는 1280×800도), 기기 배율 1, ko-KR, Asia/Seoul, 시계 2026-11-05 20:00 KST, 애니메이션 끔, 마우스는 화면 구석. M3-01과 같다.
 - 차이 계산: pixelmatch `threshold 0.1`, 안티에일리어싱 픽셀 제외.
 - 결과: `~/.orca/bots/agentwbs/archive/2026-11-26/M3-06/visual/`(`[원본 | 구현 | 차이]` PNG와 `summary.md`).
+  - 위 보관 폴더는 `AWBS_EXEC_VISUAL_OUT`로 **명시할 때만** 쓴다. 기본 출력은 실행마다 새 임시 폴더(`$TMPDIR/awbs-visual-…`, `e2e/support/visual.ts` `visualOut`)다(리뷰 재발 방지: 기본값이 보관 폴더를 덮어썼다).
 - 같아야 하는 영역(실패 기준 1~3%): 제목, 왼쪽 목록, 6단계 흐름 카드, 메시지 영역 제목 줄, 시도 카드 머리(`UI-06-attempt`)와 그 안의 지정 · 실제 하위 Agent 태그(`UI-06-attempt-tags`, 요소 위치 기준).
 - 예외(기록만):
   - 다음 작업 줄: Mock 「결과 등록」 대신 「실행 중단」 · 자동 진행 문구(owner Q-04).
@@ -146,6 +147,7 @@ owner Q-04(contracts §3.5)에 따라 원본과 다르게 동작한다.
 ## 7. 알아 둘 계약 공백(보고함)
 
 - (해소) 시도 응답의 지정 · 실제 하위 Agent: 계약 `Attempt.subagents`(UAT-TASK-10). 출처는 시작 때 설치한 지정(attempt_subagents), 실행 중 관측(attempt_observations), Runner 사후 보고(`subagent-usage` → attempt_subagent_usage, 0048).
+  - 사후 보고 저장·관측 변화는 서버가 시도 변경 알림(topic `attempt`)을 남겨 열린 화면이 다시 읽는다. 「세션 기록 확인」은 목록의 모든 이름이 확인됐을 때만 보인다.
 - 받은 응답 메시지에 보낸 Agent 필드가 없다(DB의 from_agent가 API에서 빠짐). 화면은 「Agent」로 보이고 특정 Agent로 추측하지 않는다(리뷰 #9).
 - 자동 재시도 · 재작업 카운터 필드가 없다. 화면이 시도 · 검증 기록으로 다시 센다(`attemptCounters`).
 - 전체 시도 목록 API가 없어 왼쪽 목록은 Task마다 `GET /api/tasks/:taskKey/attempts`를 부른다.

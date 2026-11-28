@@ -3,14 +3,27 @@
  * [원본 | 구현 | 차이] 세 장을 나란히 붙인 PNG를 남긴다.
  * 차이 픽셀: pixelmatch(threshold 0.1, 안티에일리어싱 무시)로 색 차이가 큰 픽셀.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pixelmatch from 'pixelmatch';
 import { PNG } from 'pngjs';
 
 export const BASELINE = process.env.AWBS_BASELINE_DIR ?? join(homedir(), '.cache/agent-wbs-baseline');
-export const OUT = process.env.AWBS_VISUAL_OUT ?? join(homedir(), '.orca/bots/agentwbs/archive/2026-11-26/M3-01/visual');
+/**
+ * 시각 비교·측정 결과 폴더. 기본은 **저장소 밖 임시 폴더, 실행마다 새 폴더**다(`<tmp>/awbs-visual-XXXX/<label>`).
+ * - 실행 폴더는 playwright.config.ts가 실행마다 만들어 `AWBS_VISUAL_RUN_DIR`로 worker에 물려준다(없으면 이 프로세스에서 만든다).
+ * - 봇 보관 폴더(~/.orca/bots/…/archive)에 남기려면 그 시험의 환경 변수(예: AWBS_VISUAL_OUT_M303)로 **명시**한다.
+ * 왜: 기본값이 보관 폴더를 가리켜, 경로를 빠뜨린 실행이 옛 마일스톤의 증거를 두 번 덮어썼다(subagent-tag 리뷰 5).
+ */
+let runDir: string | undefined;
+export function visualOut(envName: string, label: string): string {
+  const explicit = process.env[envName];
+  if (explicit) return explicit;
+  runDir ??= process.env.AWBS_VISUAL_RUN_DIR ?? mkdtempSync(join(tmpdir(), 'awbs-visual-'));
+  return join(runDir, label);
+}
+export const OUT = visualOut('AWBS_VISUAL_OUT', 'M3-01');
 
 export interface Box { x: number; y: number; width: number; height: number }
 

@@ -1,15 +1,13 @@
 /**
  * M3-06 작업 실행 시각 비교 — 원본 스크린샷(desktop-clock20261105/UI-06*.png, w1280/UI-06.png)과 같은 조건으로 찍어 영역별로 비교한다.
- * 결과: ~/.orca/bots/agentwbs/archive/2026-11-26/M3-06/visual/ ([원본 | 구현 | 차이] PNG + summary.md)
+ * 결과: 기본은 실행마다 새 임시 폴더(support/visual.ts visualOut), 보관하려면 AWBS_EXEC_VISUAL_OUT=~/.orca/bots/agentwbs/archive/2026-11-26/M3-06/visual/ 로 명시 ([원본 | 구현 | 차이] PNG + summary.md)
  * 조건·차이 계산·예외는 features/exec/README.md 「시각 비교」에 적었다.
  */
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { execApi, runnerState, type ExecApi } from './support/exec-fixtures.ts';
-import { compareRegion, hasBaseline, subagentTagBoxes, writeSummary, type Box, type VisualResult } from './support/visual.ts';
+import { compareRegion, hasBaseline, subagentTagBoxes, writeSummary, type Box, type VisualResult, visualOut } from './support/visual.ts';
 
-const OUT = process.env.AWBS_EXEC_VISUAL_OUT ?? join(homedir(), '.orca/bots/agentwbs/archive/2026-11-26/M3-06/visual');
+const OUT = visualOut('AWBS_EXEC_VISUAL_OUT', 'M3-06-visual');
 
 test.skip(!hasBaseline(), '원본 스크린샷 폴더가 없다(~/.cache/agent-wbs-baseline).');
 test.describe.configure({ mode: 'serial' });

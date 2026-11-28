@@ -25,14 +25,14 @@ export async function evidenceList(client: PoolClient, query: PageFilter) {
  * 시도의 지정·실제 하위 Agent(UAT-TASK-10). 모두 실제 기록에서 읽는다. 없으면 빈 목록·null이다(지어내지 않음).
  * - designated: jobs/start 때 설치한 지정 정의(attempt_subagents.designated). 정의 ID와 그때 버전.
  * - used: Runner 사후 보고(attempt_subagent_usage). 보고가 없으면 null. 지정 정의 행의 confirm도 보고가 왔다는 표시다
- *   (빈 목록 보고). 확정도는 한 행이라도 confirmed면 confirmed.
+ *   (빈 목록 보고). 확정도는 모든 이름 행과 보고가 confirmed일 때만 confirmed다. 일부 관측에서만 본 이름이 하나라도 있으면 partial(리뷰 Codex 3).
  * - observed: 마지막 출력 스트림 관측(attempt_observations). 관측 수가 있는 마지막 행의 수와 마지막 행의 상태.
  */
 const ATTEMPT_SUBAGENTS = `jsonb_build_object(
       'designated',coalesce((select jsonb_agg(jsonb_build_object('id',d.def_key,'version',s.version) order by d.def_key)
         from attempt_subagents s join subagent_defs d on d.id=s.subagent where s.attempt=a.id and s.designated),'[]'),
       'used',(select case when count(*)=0 then null else jsonb_build_object(
-          'confirm',case when bool_or(x.confirm='confirmed') then 'confirmed' else 'partial' end,
+          'confirm',case when bool_and(x.confirm='confirmed') then 'confirmed' else 'partial' end,
           'items',coalesce(jsonb_agg(jsonb_build_object('id',x.name,'version',x.version,'count',x.uses) order by x.builtin,x.name) filter (where x.name is not null),'[]')) end
         from (select u.name,u.version,u.uses,u.confirm,u.subagent is null builtin from attempt_subagent_usage u where u.attempt=a.id
           union all select null,null,null,s.confirm,null from attempt_subagents s where s.attempt=a.id and s.confirm is not null) x),

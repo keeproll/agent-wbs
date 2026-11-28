@@ -5,6 +5,8 @@ import * as m from '../models.ts';
 import { operation } from '../operation.ts';
 
 const { AnyOf, Body, Nullable, Opt, List, Text } = c;
+/** 실제 사용 보고의 하위 Agent 이름: 1~128자, 공백 아닌 글자 1개 이상, NUL 없음 */
+const SubagentName = Type.String({ title: 'SubagentName', minLength: 1, maxLength: 128, pattern: '^[^\\u0000]*[^\\s\\u0000][^\\u0000]*$' });
 const runner = { principal: 'runner' } as const;
 const fence = c.Fence;
 const Pid = c.PositiveInt4;
@@ -525,12 +527,14 @@ export const runnerOperations = [
      * - id: 설치한 우리 정의면 그 정의의 id(getTaskSubagents items[].id) 또는 key. 아니면 CLI가 적은 이름 그대로(예: Explore).
      * - version·hash: 설치한 우리 정의일 때 그 값. 모르면 null. 설치 기록과 다르면 400.
      * - count: 부른 횟수(화면 「×n」). 생략하면 1. 옛 Runner는 이 필드를 보내지 않는다(호환).
-     * 같은 시도에 다시 보내면 합친다: 이름은 늘기만 하고, 횟수는 큰 값, confirmed는 partial로 되돌아가지 않는다.
+     * 같은 시도에 다시 보내면 이름마다 합친다: 이름은 늘기만 한다. 확인 보고에 든 이름만 confirmed가 되고(횟수는 확인 값),
+     * 확인된 이름은 뒤의 partial 보고로 바뀌지 않는다. 일부 관측 이름의 횟수는 큰 값. 재작업률 통계는 확인된 사용만 센다.
      */
     body: Body({
       fence,
       confirm: AnyOf('confirmed', 'partial'),
-      items: List(Body({ id: c.Id, version: Nullable(c.Int4Count), hash: Nullable(Text), count: Opt(c.PositiveInt4) })),
+      // 이름은 공백만이거나 NUL이 든 값을 받지 않는다(DB 이름 제약·PostgreSQL text와 같은 경계, 리뷰 Codex 4 — 500 대신 400).
+      items: List(Body({ id: SubagentName, version: Nullable(c.Int4Count), hash: Nullable(Text), count: Opt(c.PositiveInt4) })),
     }),
     responses: { 204: null },
   }),

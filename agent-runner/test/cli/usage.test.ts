@@ -36,3 +36,12 @@ test('서버 Id 길이(128자)를 넘는 이름은 잘라 보내지 않고 뺀�
   const usage = collect([toolUse('c1', { subagent_type: 'x'.repeat(129) }), toolUse('c2', { subagent_type: 'y'.repeat(128) })]);
   expect(usage.items([])).toEqual([{ id: 'y'.repeat(128), version: null, hash: null, count: 1 }]);
 });
+
+test('리뷰 Codex 4: 공백만인 이름·NUL이 든 이름은 서버가 받지 않으므로 보고하지 않고 버린다(모름)', () => {
+  const usage = collect([
+    toolUse('c1', { subagent_type: '   ' }), toolUse('c2', { subagent_type: '\t' }), toolUse('c3', { subagent_type: 'a\u0000b' }),
+    toolUse('c4', { subagent_type: ' Explore ' }),
+  ]);
+  // 앞뒤 공백이 있어도 글자가 있으면 원문 그대로 보낸다(이름을 고쳐 다른 Agent로 만들지 않음).
+  expect(usage.items([])).toEqual([{ id: ' Explore ', version: null, hash: null, count: 1 }]);
+});

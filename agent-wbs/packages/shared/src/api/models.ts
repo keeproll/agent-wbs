@@ -344,6 +344,7 @@ export const AttemptStatus = AnyOf(...v.ATTEMPT_STATUSES);
  * 시도의 지정·실제 하위 Agent(UAT-TASK-10, P L1310 「지정 …」「실제 …」 태그). 값은 모두 실제 흐름에서 온다.
  * - designated: 실행 시작(jobs/start) 때 Runner가 설치한 지정 정의(attempt_subagents). 정의 ID(def_key)와 그때의 버전.
  * - used: 세션이 끝난 뒤 Runner가 보고한 실제 사용(subagent-usage). 보고 전이면 null. confirmed=세션 기록 확인, partial=일부 관측.
+ *   confirmed는 목록의 모든 이름이 확인 보고로 확인됐을 때만이다. 일부 관측에서만 본 이름이 하나라도 있으면 partial.
  *   items의 id는 CLI가 부른 이름이다. 우리 정의와 맞으면 정의 ID와 버전, 아니면(예: Claude 기본 Explore) 이름만 있고 version은 null.
  * - observed: 실행 중 출력 스트림 관측(추정). 마지막 관측 수와 상태. 관측 보고가 없으면 null.
  */
