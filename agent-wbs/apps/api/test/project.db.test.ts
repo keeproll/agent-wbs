@@ -166,6 +166,7 @@ beforeAll(async () => {
   await ownerPool.query('update schedule_policy set assume_rate=0.5');
   // M2-05: 초기 분석·차이 분석은 외부 효과 job이라 현재 PC가 외부 쓰기 권한을 가져야 보고를 받는다.
   await ownerPool.query("insert into external_write_authority(singleton,host_id,generation,state) values(true,'host-1',1,'granted')");
+  await ownerPool.query("insert into github_settings(mode,status,scopes) values('gh','ok',$1) on conflict(singleton) do nothing", [{ contents: 'verified', pulls: 'verified', statuses: 'verified', metadata: 'verified' }]);
 // 테스트 DB를 새로 만들고 마이그레이션 전체를 돌린다. 다른 작업과 PC를 함께 쓸 때 기본 10초를 넘긴 적이 있어 넉넉히 둔다.
 }, 60_000);
 afterAll(async () => { await app.close(); await pool.end(); await ownerPool.end(); });
