@@ -136,6 +136,7 @@ GET /api/runner-state
 GET /api/alerts
 GET /api/system/integrity
 POST /api/auth/session
+GET /api/auth/options
 DELETE /api/auth/session
 GET /api/session
 GET /api/project/repo-checks/:id

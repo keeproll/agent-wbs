@@ -8,11 +8,12 @@
  * 원본의 「Mock: SMTP 인증 실패 / 정상 복구」 버튼 대신 가짜 SMTP 서버의 응답 방식을 바꾼다(UAT-POLICY-05).
  */
 import { expect, test, type Page } from '@playwright/test';
+import { fillPin, todayPin } from './support/pin.ts';
 
-const password = process.env.AWBS_E2E_PASSWORD ?? '';
+const apiAvailable = !!process.env.AWBS_E2E_API;
 const fake = process.env.AWBS_E2E_SMTP ? JSON.parse(process.env.AWBS_E2E_SMTP) as { smtpPort: number; controlPort: number; user: string; password: string } : null;
 const shots = process.env.AWBS_E2E_SHOTS ?? '';
-test.skip(!password || !process.env.AWBS_E2E_API || !fake, '실제 API·가짜 SMTP 환경이 없다. pnpm --filter @awbs/web e2e:api:mail로 실행한다.');
+test.skip(!apiAvailable || !fake, '실제 API·가짜 SMTP 환경이 없다. pnpm --filter @awbs/web e2e:api:mail로 실행한다.');
 test.describe.configure({ mode: 'serial' });
 
 const serverErrors: string[] = [];
@@ -26,7 +27,7 @@ async function login(page: Page, path: string) {
   if (cookies.length) { await page.context().addCookies(cookies); await page.goto(path); return; }
   await page.goto(path);
   await expect(page).toHaveURL(/\/login/);
-  await page.getByLabel('비밀번호').fill(password);
+  await fillPin(page, todayPin());
   await page.getByRole('button', { name: '로그인' }).click();
   await expect(page).toHaveURL(path);
   cookies = await page.context().cookies();

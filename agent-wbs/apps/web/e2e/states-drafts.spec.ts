@@ -1,5 +1,6 @@
 /** 세션 만료 초안 보관·복원(조정자 결정): 화면별 sessionStorage, 재로그인 뒤 같은 화면에서 복원 제안, 비밀값 제외. */
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { fillPin } from './support/pin.ts';
 import { errorBody, fakeApi, json, SESSION, type FakeApi } from './support/fake-api.ts';
 
 const V1 = '2026-11-26T01:00:00.000000Z';
@@ -29,7 +30,7 @@ test('세션이 끊기면 화면별 초안을 sessionStorage에 남기되 비밀
   expect(JSON.stringify(stored)).not.toContain('secret-token-123');
   expect(JSON.stringify(stored)).toContain('보내지 못한 메시지');
 
-  await page.getByLabel('비밀번호').fill('pw');
+  await fillPin(page, '261128');
   await page.getByRole('button', { name: '로그인' }).click();
   await expect(page).toHaveURL('/_states');
   const offer = page.getByRole('region', { name: 'TASK-0001 제목 편집 — 저장하지 못한 초안' });
@@ -48,7 +49,7 @@ test('세션이 끊기면 화면별 초안을 sessionStorage에 남기되 비밀
 
 test('복원 제안을 버리면 초안을 지우고 다시 묻지 않는다', async ({ page }) => {
   await expireWhileEditing(page);
-  await page.getByLabel('비밀번호').fill('pw');
+  await fillPin(page, '261128');
   await page.getByRole('button', { name: '로그인' }).click();
   const offer = page.getByRole('region', { name: 'TASK-0001 제목 편집 — 저장하지 못한 초안' });
   await offer.getByRole('button', { name: '버리기' }).click();
@@ -61,7 +62,7 @@ test('복원 제안을 버리면 초안을 지우고 다시 묻지 않는다', a
 
 const draftKeys = (page: Page) => page.evaluate(() => Object.keys(sessionStorage).filter((k) => k.startsWith('awbs.draft:')));
 async function relogin(page: Page) {
-  await page.getByLabel('비밀번호').fill('pw');
+  await fillPin(page, '261128');
   await page.getByRole('button', { name: '로그인' }).click();
 }
 

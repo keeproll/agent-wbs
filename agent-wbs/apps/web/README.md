@@ -110,7 +110,7 @@ scripts/                   원본 CSS 옮기기·Playwright 실행·실제 API E
 `W --filter @awbs/web e2e:api`가 아래를 모두 하고 끝나면 지운다.
 
 1. 이 시험 전용 PostgreSQL 컨테이너(`m301-e2e-pg-…`)를 빈 포트에 띄운다. 개발용 `awbs-postgres`는 건드리지 않는다.
-2. migration → `seed system` → auth CLI로 LAN 비밀번호 설정 → API를 LAN 모드로 기동 → auth CLI로 1회용 링크 발급.
+2. migration → `seed system` → API를 LAN 모드로 기동 → auth CLI로 1회용 링크 발급.
    - LAN 모드는 `127.0.0.1`이 아닌 주소에서만 켜지므로 API를 `127.0.0.2`(같은 PC의 다른 loopback 주소)에 띄운다.
 3. `e2e/api-auth.spec.ts`(UAT-AUTH-01~03)를 실행한다. 이 파일은 환경 변수가 없으면 건너뛴다.
 
@@ -152,3 +152,5 @@ scripts/                   원본 CSS 옮기기·Playwright 실행·실제 API E
 | 하위 주소(상세 주소) | 메뉴 주소 아래에 붙는 주소. 예: `/wbs/TASK-0007`. 알림 링크가 이 주소로 상세를 연다 |
 | key(React) | 화면 조각의 이름표. 같은 이름표면 화면을 새로 만들지 않고 상태를 유지한다 |
 | 어댑터 | 모양이 다른 두 부품을 이어 주는 작은 변환 코드(예: WBS 상세 자리 `detail-slot.tsx`) |
+
+로그인 화면은 서버의 공개 로그인 옵션을 읽고 LAN 모드일 때 PIN 숫자 6칸과 경고를 표시한다. loopback 모드에서는 이 PC 1회용 링크만 안내한다. PIN은 서버 시간대 `AWBS_PIN_TIME_ZONE`(기본 Asia/Seoul)의 오늘 날짜 YYMMDD다. 자정 앞뒤 5초는 두 날짜를 허용하고 발급된 세션은 날짜가 바뀌어도 원래 만료까지 유지한다. LAN에서는 같은 네트워크 누구나 날짜로 접속 가능하다. 기존 비밀번호 설정은 사용하지 않는다.

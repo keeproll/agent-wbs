@@ -4,12 +4,13 @@ import assert from 'node:assert/strict';
 import type { Pool, PoolClient } from '@awbs/db';
 import { OPERATIONS, type Operation } from '@awbs/shared/api';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { randomToken, tokenHash, verifyPassword } from './credentials.ts';
+import { DEFAULT_PIN_TIME_ZONE, verifyDatePin } from './date-pin.ts';
+import { randomToken, tokenHash } from './credentials.ts';
 import { installErrors, PlatformError } from './errors.ts';
 import { dropChanges, flushChanges } from '../changes/events.ts';
 import { changedRunnerReference, redactRunnerInput, redactText } from './redact.ts';
 
-export interface SecurityOptions { origin: string; lan: boolean; port?: number }
+export interface SecurityOptions { origin: string; lan: boolean; port?: number; pinTimeZone?: string; now?: () => number }
 interface Session { token_hash: string; expires_at: Date; csrf: string }
 interface StoredResponse { status: number; payload: string | null; headers: Record<string, string> }
 interface Context {
@@ -42,11 +43,6 @@ const canonical = (value: unknown): string => {
   return JSON.stringify(value) ?? 'null';
 };
 
-export async function assertLanPassword(pool: Pool): Promise<void> {
-  const result = await pool.query('select 1 from lead_credentials where singleton=true');
-  if (!result.rowCount) throw new Error('LAN 기동 거부: 먼저 auth CLI의 set-password로 비밀번호를 설정하세요.');
-}
-
 /**
  * 기간 지정 보고서 생성을 한 번에 하나씩 처리하는 세션 잠금(M6-01 재리뷰 3 문제 2).
  * 왜: 보고서 요청은 반복 읽기로 열려 읽기 시점이 첫 조회 때 정해진다. 같은 멱등 키 요청이나 번호 발급을 그 뒤에 기다리면,
@@ -75,7 +71,7 @@ export function installSecurity(app: FastifyInstance, pool: Pool, options: Secur
   const localPort = options.port ?? Number(originUrl.port || (originUrl.protocol === 'https:' ? 443 : 80));
   const localOrigins = [`http://127.0.0.1:${String(localPort)}`, `http://[::1]:${String(localPort)}`].map((origin) => new URL(origin).origin);
   // shortcut: 출처별 횟수는 재시작 때 초기화된다. 다중 서버 운영 시 DB 제한으로 옮긴다.
-  const passwordAttempts = new Map<string, { count: number; resetAt: number }>();
+  const pinAttempts = new Map<string, { count: number; resetAt: number }>();
   app.addHook('onRoute', (route) => {
     const methods = Array.isArray(route.method) ? route.method : [route.method];
     for (const method of methods) {
@@ -238,32 +234,33 @@ export function installSecurity(app: FastifyInstance, pool: Pool, options: Secur
   app.addHook('onTimeout', async (request) => { await finish(request, false); });
 
   const cookie = (token: string, maxAge: number, origin: string | undefined) => `awbs_session=${token}; Path=/; Max-Age=${String(maxAge)}; HttpOnly; SameSite=Strict${origin?.startsWith('https:') ? '; Secure' : ''}`;
+  app.get('/api/auth/options', (_request, reply) => reply.header('Cache-Control', 'no-store').send({
+    pinEnabled: options.lan, pinTimeZone: options.pinTimeZone ?? DEFAULT_PIN_TIME_ZONE,
+  }));
   const login = OPERATIONS.find((op) => op.id === 'login');
   assert(login?.body);
   app.post('/api/auth/session', { schema: { body: login.body } }, async (request, reply) => {
     const client = request.platform?.client;
     assert(client);
-    const input = request.body as { method: 'link'; token: string } | { method: 'password'; password: string };
+    const input = request.body as { method: 'link'; token: string } | { method: 'pin'; pin: string };
     if (input.method === 'link') {
       if (!loopback(request.raw.socket.remoteAddress)) throw new PlatformError('LOGIN_FAILED');
       const result = await client.query('update lead_login_tokens set used_at=now() where token_hash=$1 and used_at is null and expires_at>now() returning id', [tokenHash(input.token)]);
       if (!result.rowCount) throw new PlatformError('LOGIN_FAILED');
     } else {
       if (!options.lan) throw new PlatformError('LOGIN_FAILED');
-      const now = Date.now();
-      for (const [address, attempt] of passwordAttempts) if (attempt.resetAt <= now) passwordAttempts.delete(address);
+      const now = (options.now ?? Date.now)();
+      for (const [address, attempt] of pinAttempts) if (attempt.resetAt <= now) pinAttempts.delete(address);
       // 프록시 헤더는 위조할 수 있으므로 실제 소켓 주소로만 구분한다.
       const address = (request.raw.socket.remoteAddress ?? 'unknown').replace(/^::ffff:/, '');
-      const attempt = passwordAttempts.get(address) ?? { count: 0, resetAt: now + 60_000 };
+      const attempt = pinAttempts.get(address) ?? { count: 0, resetAt: now + 60_000 };
       if (attempt.count >= 5) {
         reply.header('Retry-After', Math.max(1, Math.ceil((attempt.resetAt - now) / 1000)));
         throw new PlatformError('RATE_LIMITED');
       }
       attempt.count++;
-      passwordAttempts.set(address, attempt);
-      // 확인부터 세션 발급까지 재설정과 겹치지 않게 자격 증명 행을 잠근다.
-      const stored = (await client.query<{ password_hash: string }>('select password_hash from lead_credentials where singleton=true for share')).rows[0];
-      if (!stored || !await verifyPassword(input.password, stored.password_hash)) throw new PlatformError('LOGIN_FAILED');
+      pinAttempts.set(address, attempt);
+      if (!verifyDatePin(input.pin, now, options.pinTimeZone)) throw new PlatformError('LOGIN_FAILED');
     }
     const old = cookieToken(request);
     if (old) await client.query('delete from lead_sessions where token_hash=$1', [tokenHash(old)]);
@@ -276,7 +273,7 @@ export function installSecurity(app: FastifyInstance, pool: Pool, options: Secur
   app.get('/api/session', (request, reply) => {
     const session = request.platform?.session;
     assert(session);
-    return reply.header('Cache-Control', 'no-store').send({ principal: 'lead', method: session.csrf.startsWith('password.') ? 'password' : 'link', expiresAt: session.expires_at.toISOString(), csrfToken: session.csrf });
+    return reply.header('Cache-Control', 'no-store').send({ principal: 'lead', method: session.csrf.startsWith('link.') ? 'link' : 'pin', expiresAt: session.expires_at.toISOString(), csrfToken: session.csrf });
   });
   app.delete('/api/auth/session', async (request, reply) => {
     const context = request.platform;

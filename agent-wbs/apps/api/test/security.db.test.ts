@@ -4,8 +4,8 @@ import { spawnSync } from 'node:child_process';
 import { OPERATIONS } from '@awbs/shared/api';
 import { afterAll, beforeAll, describe, expect, inject, test } from 'vitest';
 import { buildApp } from '../src/app.ts';
-import { issueLoginLink, issueRunnerToken, setPassword, tokenHash } from '../src/platform/credentials.ts';
-import { assertLanPassword } from '../src/platform/security.ts';
+import { issueLoginLink, issueRunnerToken, tokenHash } from '../src/platform/credentials.ts';
+import { datePin } from '../src/platform/date-pin.ts';
 import { inEpoch } from '../src/platform/transaction.ts';
 
 const origin = 'http://127.0.0.1:3100';
@@ -153,32 +153,21 @@ test('세션 정보는 캐시하지 않고 만료된 세션은 사용할 수 없
   expect((await app.inject({ url: '/api/session', headers: { cookie } })).statusCode).toBe(401);
 });
 
-test('LAN 비밀번호 미설정 기동 거부·시도 제한·세션 교체·로그아웃', async () => {
-  await expect(assertLanPassword(pool)).rejects.toThrow();
-  const main = new URL('../src/main.ts', import.meta.url).pathname;
-  const startup = spawnSync(process.execPath, ['--conditions=awbs-source', main], {
-    env: { DATABASE_URL: appUrl.href, AWBS_HOST: '0.0.0.0', AWBS_ALLOW_LAN: 'true', AWBS_ORIGIN: origin },
-    encoding: 'utf8', timeout: 5000,
-  });
-  expect(startup.status, startup.stderr).toBe(1);
-  expect(startup.stdout).toContain('기동 실패');
-  expect(startup.stdout).not.toContain('Server listening');
-  await setPassword(pool, 'correct horse battery');
-  await expect(assertLanPassword(pool)).resolves.toBeUndefined();
-  expect((await app.inject({ method: 'POST', url: '/api/auth/session', headers: { origin }, payload: { method: 'password', password: 'correct horse battery' } })).statusCode).toBe(401);
+test('PIN은 loopback 기본에서 비활성, LAN에서 시도 제한·세션 교체·로그아웃', async () => {
+  expect((await app.inject({ method: 'POST', url: '/api/auth/session', headers: { origin }, payload: { method: 'pin', pin: datePin(Date.now()) } })).statusCode).toBe(401);
   const lan = buildApp(pool, false, { origin, lan: true });
   try {
-    const login = () => lan.inject({ method: 'POST', url: '/api/auth/session', headers: { origin, cookie }, payload: { method: 'password', password: 'correct horse battery' } });
+    const login = () => lan.inject({ method: 'POST', url: '/api/auth/session', headers: { origin, cookie }, payload: { method: 'pin', pin: datePin(Date.now()) } });
     const response = await login();
     expect(response.statusCode, response.body).toBe(204);
     expect((await app.inject({ url: '/api/session', headers: { cookie } })).statusCode).toBe(401);
     const newCookie = String(response.headers['set-cookie']).split(';')[0] ?? '';
     const session = (await lan.inject({ url: '/api/session', headers: { cookie: newCookie } })).json<{ method: string; csrfToken: string }>();
-    expect(session.method).toBe('password');
+    expect(session.method).toBe('pin');
     const logout = await lan.inject({ method: 'DELETE', url: '/api/auth/session', headers: { cookie: newCookie, origin, 'x-csrf-token': session.csrfToken } });
     expect(logout.statusCode).toBe(204);
     expect((await lan.inject({ url: '/api/session', headers: { cookie: newCookie } })).statusCode).toBe(401);
-    for (let i = 0; i < 4; i++) await lan.inject({ method: 'POST', url: '/api/auth/session', headers: { origin }, payload: { method: 'password', password: 'wrong' } });
+    for (let i = 0; i < 4; i++) await lan.inject({ method: 'POST', url: '/api/auth/session', headers: { origin }, payload: { method: 'pin', pin: '000000' } });
     const limited = await login();
     expect(limited.statusCode).toBe(429);
     expect(Number(limited.headers['retry-after'])).toBeGreaterThan(0);
@@ -234,7 +223,7 @@ test('앱을 다시 만들어도 저장한 응답을 재생하고 JSON 필드 �
   } finally { await restarted.close(); }
 });
 
-test('인증 CLI는 링크의 URL fragment·비밀번호 표준 입력·오류 비밀값 생략을 지원한다', () => {
+test('인증 CLI는 링크의 URL fragment·옛 비밀번호 명령 거부·오류 비밀값 생략을 지원한다', () => {
   const cli = new URL('../src/platform/auth-cli.ts', import.meta.url).pathname;
   const run = (command: string, input = '') => spawnSync(process.execPath, ['--conditions=awbs-source', cli, command], {
     env: { DATABASE_URL: appUrl.href }, encoding: 'utf8', input,
@@ -244,7 +233,8 @@ test('인증 CLI는 링크의 URL fragment·비밀번호 표준 입력·오류 �
   expect(link.stdout).toMatch(/^http:\/\/127\.0\.0\.1:3100\/#login-token=[A-Za-z0-9_-]{43}\n$/);
   expect(link.stderr).toBe('');
   const password = run('set-password', 'CLI password only\n');
-  expect(password.status, password.stderr).toBe(0);
+  expect(password.status, password.stderr).toBe(1);
+  expect(password.stderr).toContain('당일 날짜 6자리 PIN');
   expect(password.stdout + password.stderr).not.toContain('CLI password only');
   const bad = run('unknown-secret-hunter2');
   expect(bad.status).toBe(1);

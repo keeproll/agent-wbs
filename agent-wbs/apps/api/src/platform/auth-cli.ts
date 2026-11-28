@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { createPool } from '@awbs/db';
 import { loadConfig } from '../config.ts';
-import { issueLoginLink, issueRunnerToken, setPassword, revokeRunnerToken } from './credentials.ts';
+import { issueLoginLink, issueRunnerToken, revokeRunnerToken } from './credentials.ts';
 import { jobsCommand } from './jobs-cli.ts';
 import { JobsError } from './jobs.ts';
 import { runnerPublicKey } from './runner-key.ts';
@@ -23,13 +23,8 @@ try {
       process.stdout.write(`${origin}/#login-token=${token}\n`);
       break;
     }
-    case 'set-password': {
-      // 비밀번호가 프로세스 인수·명령 이력에 남지 않게 표준 입력으로만 받는다.
-      const password = readFileSync(0, 'utf8').replace(/\r?\n$/, '');
-      await setPassword(pool, password);
-      process.stdout.write('LAN 비밀번호를 설정했습니다.\n');
-      break;
-    }
+    case 'set-password':
+      throw new JobsError('set-password는 폐지됐습니다. LAN 로그인은 서버 시간대의 당일 날짜 6자리 PIN(YYMMDD)을 입력하세요. 기존 비밀번호 설정은 사용하지 않습니다.');
     case 'runner-token': {
       if (!runnerId || !publicKeyPath) throw new Error('Runner ID와 공개키 파일 경로가 필요합니다.');
       const publicKey = runnerPublicKey(await readFile(publicKeyPath, 'utf8')).export({ type: 'spki', format: 'pem' });
@@ -42,7 +37,7 @@ try {
       process.stdout.write('Runner 토큰을 폐기했습니다.\n');
       break;
     }
-    default: throw new JobsError('명령: login-link | set-password(표준 입력) | runner-token <ID> <공개키 파일> | revoke-runner(표준 입력) | jobs open | jobs reissue');
+    default: throw new JobsError('명령: login-link | runner-token <ID> <공개키 파일> | revoke-runner(표준 입력) | jobs open | jobs reissue');
   }
 } catch (error) {
   process.stderr.write(error instanceof JobsError ? `${error.message}\n` : '관리 명령 실패: 명령·입력·DB 연결 상태를 확인하세요.\n');

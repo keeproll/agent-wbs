@@ -4,6 +4,7 @@
  */
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
+import { fillPin } from './support/pin.ts';
 import { errorBody, fakeApi, hold, json, SESSION, type FakeApi } from './support/fake-api.ts';
 import { detail, mountTasks, newStore, type TaskStore } from './support/task-api.ts';
 
@@ -100,7 +101,7 @@ test('R5 체크리스트 새 항목 입력: 탭 이동은 확인을 묻고, 세�
   api.on('POST /api/tasks/TASK-0004/checklist', (route) => { loggedIn = false; return json(route, 401, errorBody('LEAD_UNAUTHORIZED')); });
   await page.getByRole('button', { name: '추가', exact: true }).click();
   await expect(page).toHaveURL(/\/login/);
-  await page.getByLabel('비밀번호').fill('pw');
+  await fillPin(page, '261128');
   await page.getByRole('button', { name: '로그인' }).click();
   await expect(page).toHaveURL('/wbs/TASK-0004?tab=checklist');
   await page.getByRole('region', { name: /저장하지 못한 초안/ }).getByRole('button', { name: '복원' }).click();

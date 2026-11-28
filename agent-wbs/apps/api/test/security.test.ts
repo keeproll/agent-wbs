@@ -1,18 +1,21 @@
 import { describe, expect, test } from 'vitest';
 import { loadConfig } from '../src/config.ts';
-import { hashPassword, tokenHash, verifyPassword } from '../src/platform/credentials.ts';
+import { tokenHash } from '../src/platform/credentials.ts';
 import { redact } from '../src/platform/redact.ts';
 import { createPool } from '@awbs/db';
 import { buildApp } from '../src/app.ts';
 
 describe('security 비밀값과 기동 설정', () => {
-  test('비밀번호는 최소 12글자이고 한글·이모지도 글자 수로 센다', async () => {
-    for (const password of ['', 'a', 'a'.repeat(11), '😀'.repeat(6)]) {
-      await expect(hashPassword(password)).rejects.toThrow('12');
-    }
-    await expect(hashPassword('한'.repeat(12))).resolves.toMatch(/^scrypt:/);
+  test.each([false, true])('공개 로그인 옵션은 DB·세션 없이 실제 LAN 설정(%s)과 시간대만 알려준다', async lan => {
+    const pool = createPool('postgres://u:p@127.0.0.1:1/awbs_test_unused', { onError: () => undefined });
+    const app = buildApp(pool, false, { origin: 'http://127.0.0.1:3100', lan, pinTimeZone: 'UTC' });
+    try {
+      const result = await app.inject({ url: '/api/auth/options' });
+      expect(result.statusCode).toBe(200);
+      expect(result.headers['cache-control']).toBe('no-store');
+      expect(result.json()).toEqual({ pinEnabled: lan, pinTimeZone: 'UTC' });
+    } finally { await app.close(); await pool.end(); }
   });
-
   test.each(['/api/unlisted', '/internal/unlisted'])('권한 선언 없는 %s 경로는 등록할 수 없다', async (url) => {
     const pool = createPool('postgres://u:p@127.0.0.1:1/awbs_test_unused', { onError: () => undefined });
     const app = buildApp(pool);
@@ -20,13 +23,7 @@ describe('security 비밀값과 기동 설정', () => {
       expect(() => app.post(url, () => ({ reached: true }))).toThrow('권한');
     } finally { await app.close(); await pool.end(); }
   });
-  test('비밀번호는 무작위 소금을 넣은 scrypt 해시로만 보관한다', async () => {
-    const hash = await hashPassword('correct horse battery');
-    expect(hash).not.toContain('correct horse battery');
-    expect(await hashPassword('correct horse battery')).not.toBe(hash);
-    expect(await verifyPassword('correct horse battery', hash)).toBe(true);
-    expect(await verifyPassword('wrong', hash)).toBe(false);
-    expect(await verifyPassword('wrong', 'broken')).toBe(false);
+  test('토큰은 SHA-256 해시로 보관한다', () => {
     expect(tokenHash('a')).toMatch(/^[a-f0-9]{64}$/);
   });
 
@@ -40,7 +37,7 @@ describe('security 비밀값과 기동 설정', () => {
 
   test('중첩 비밀 필드와 문자열 안의 인증 정보도 가린다', () => {
     const result = JSON.stringify(redact({
-      authorization: 'Bearer hunter2', cookie: 'awbs_session=hunter2', password: 'hunter2',
+      authorization: 'Bearer hunter2', cookie: 'awbs_session=hunter2', password: 'hunter2', pin: 'hunter2',
       nested: { botToken: 'hunter2', tokenSet: true },
       message: 'Bearer hunter2 /bot123:hunter2/send postgres://u:hunter2@localhost/db ?token=hunter2',
     }));

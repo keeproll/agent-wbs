@@ -26,6 +26,7 @@ x-app: &app
     AWBS_DB_HOST: postgres
     AWBS_DB_NAME: ${AWBS_DB_NAME:-awbs}
     LOG_LEVEL: ${LOG_LEVEL:-info}
+    AWBS_PIN_TIME_ZONE: ${AWBS_PIN_TIME_ZONE:-Asia/Seoul}
   secrets:
     - db_app_password
     - secret_key

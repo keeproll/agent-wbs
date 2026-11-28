@@ -3,6 +3,7 @@
  * 편집 중 이동 보호(UAT-STATE-09). 시나리오 1의 「읽기/편집 전환」.
  */
 import { expect, test, type Page } from '@playwright/test';
+import { fillPin } from './support/pin.ts';
 import { errorBody, fakeApi, json, SESSION, type FakeApi } from './support/fake-api.ts';
 import { mountTasks, newStore, type TaskStore } from './support/task-api.ts';
 
@@ -165,7 +166,7 @@ test('세션 만료(401) 중 편집: 초안을 탭 안에 보관하고 다시 �
   await page.getByLabel('기술적 제약 편집').fill('세션 끊기기 전 입력');
   await page.getByRole('button', { name: '저장', exact: true }).click();
   await expect(page).toHaveURL(/\/login/);
-  await page.getByLabel('비밀번호').fill('pw');
+  await fillPin(page, '261128');
   await page.getByRole('button', { name: '로그인' }).click();
   await expect(page).toHaveURL('/wbs/TASK-0004?tab=spec');
   const offer = page.getByRole('region', { name: /TASK-0004 편집 중이던 내용 — 저장하지 못한 초안/ });

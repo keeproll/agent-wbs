@@ -3,6 +3,7 @@
  * 분할 근거·제안·예외(시나리오 23 일부), 390px 알림 링크 열람(UAT-RESP-02-TASK), 화면 폭(D-28), 생성 직후 명세 탭(UAT-WIZ-03 일부).
  */
 import { expect, test, type Page } from '@playwright/test';
+import { fillPin } from './support/pin.ts';
 import { errorBody, fakeApi, json, SESSION, type FakeApi } from './support/fake-api.ts';
 import { detail, mountTasks, newStore, type TaskStore } from './support/task-api.ts';
 
@@ -141,7 +142,7 @@ test('UAT-RESP-02-TASK 390px: 알림 링크(로그인 필요) → 로그인 → 
   api.on('POST /api/auth/session', (route) => { loggedIn = true; return route.fulfill({ status: 204 }); });
   await page.goto('/wbs/TASK-0007?tab=verif');
   await expect(page).toHaveURL(/\/login\?next=/);
-  await page.getByLabel('비밀번호').fill('pw');
+  await fillPin(page, '261128');
   await page.getByRole('button', { name: '로그인' }).click();
   await expect(page).toHaveURL('/wbs/TASK-0007?tab=verif');
   const d = page.getByRole('region', { name: 'Task 상세' });

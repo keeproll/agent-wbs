@@ -181,7 +181,7 @@ test('#6 로그아웃이 실패하면 화면에 실패와 다시 시도를 보�
 
   let loggedOut = false;
   api.on('DELETE /api/auth/session', (route) => { loggedOut = true; return route.fulfill({ status: 204 }); });
-  api.on('GET /api/session', (route) => (loggedOut ? json(route, 401, errorBody('LEAD_UNAUTHORIZED')) : json(route, 200, { principal: 'lead', method: 'password', expiresAt: '2026-11-26T13:00:00.000Z', csrfToken: 'x' })));
+  api.on('GET /api/session', (route) => (loggedOut ? json(route, 401, errorBody('LEAD_UNAUTHORIZED')) : json(route, 200, { principal: 'lead', method: 'pin', expiresAt: '2026-11-26T13:00:00.000Z', csrfToken: 'x' })));
   await bar.getByRole('button', { name: '다시 시도' }).click();
   await expect(page).toHaveURL(/\/login/);
 });

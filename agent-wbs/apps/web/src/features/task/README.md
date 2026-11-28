@@ -150,7 +150,7 @@ features/task/
 - `e2e/fixtures/prototype-mock.json`: 원본 화면을 2026-11-05 20:00 KST 시계로 연 뒤 화면 상태의 데이터를 그대로 꺼낸 것이다.
   - 왜: 시각 비교에서 원본과 같은 내용이 보여야 차이가 「모양」 차이만 남는다.
 - `e2e/support/task-api.ts`: 이 Mock을 계약 모양으로 바꿔 돌려주는 가짜 서버다. 저장은 메모리에 반영하고, 버전이 다르면 409를 준다.
-- `scripts/e2e-api-task.ts`: 전용 PostgreSQL 컨테이너(`m303-e2e-pg-…`, DB `awbs_test_m303`)를 띄워 migration → demo seed → 비밀번호 설정 → API를 LAN 모드로 기동하고 `e2e/api-task.spec.ts`를 실행한 뒤 모두 지운다.
+- `scripts/e2e-api-task.ts`: 전용 PostgreSQL 컨테이너(`m303-e2e-pg-…`, DB `awbs_test_m303`)를 띄워 migration → demo seed → API를 LAN 모드로 기동하고 `e2e/api-task.spec.ts`를 실행한 뒤 모두 지운다.
 
 ## 6. 시각 비교
 

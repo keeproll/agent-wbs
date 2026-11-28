@@ -10,9 +10,10 @@
  * 실제 Runner가 없으므로 ack·재전송·재개는 가짜 Runner E2E(exec.spec.ts)에서 확인한다.
  */
 import { expect, test, type Page } from '@playwright/test';
+import { fillPin, todayPin } from './support/pin.ts';
 
-const password = process.env.AWBS_E2E_PASSWORD ?? '';
-test.skip(!password || !process.env.AWBS_E2E_API, '실제 API 환경이 없다. pnpm --filter @awbs/web e2e:api-exec로 실행한다.');
+const apiAvailable = !!process.env.AWBS_E2E_API;
+test.skip(!apiAvailable, '실제 API 환경이 없다. pnpm --filter @awbs/web e2e:api-exec로 실행한다.');
 test.describe.configure({ mode: 'serial' });
 
 const serverErrors: string[] = [];
@@ -24,7 +25,7 @@ test.afterAll(() => { if (serverErrors.length) console.log(`[실제 API 5xx] ${s
 async function login(page: Page, next: string) {
   await page.goto(next);
   await expect(page).toHaveURL(/\/login/);
-  await page.getByLabel('비밀번호').fill(password);
+  await fillPin(page, todayPin());
   await page.getByRole('button', { name: '로그인' }).click();
   await expect(page.getByRole('heading', { name: '작업 실행', level: 1 })).toBeVisible();
 }

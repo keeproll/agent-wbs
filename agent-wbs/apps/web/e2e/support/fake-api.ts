@@ -8,7 +8,7 @@ import type { BrowserContext, Page, Request, Route } from '@playwright/test';
 import type { ErrorCode, ResponseOf } from '../../src/shared/api/contract.ts';
 
 export const SESSION: ResponseOf<'getSession'> = {
-  principal: 'lead', method: 'password', expiresAt: '2026-11-26T13:00:00.000Z', csrfToken: 'password.csrf-test',
+  principal: 'lead', method: 'pin', expiresAt: '2026-11-26T13:00:00.000Z', csrfToken: 'pin.csrf-test',
 };
 
 /** 계약의 active 모양을 모두 채운다(M3-04: 프로젝트 화면이 repo·inputs 등을 읽는다). */
@@ -56,6 +56,7 @@ export interface FakeApi {
 /** page 대신 context를 주면 그 context에서 새로 열리는 탭(popup)도 같은 가짜 API를 쓴다. */
 export async function fakeApi(page: Page | BrowserContext, options: { session?: boolean; project?: ResponseOf<'getProject'> } = {}): Promise<FakeApi> {
   const handlers = new Map<string, Handler>([
+    ['GET /api/auth/options', route => json(route, 200, { pinEnabled: true, pinTimeZone: 'Asia/Seoul' } satisfies ResponseOf<'getLoginOptions'>)],
     ['GET /api/session', (route) => (options.session === false ? json(route, 401, errorBody('LEAD_UNAUTHORIZED')) : json(route, 200, SESSION))],
     ['GET /api/project', (route) => json(route, 200, options.project ?? ACTIVE_PROJECT)],
     ['GET /api/runner-state', (route) => json(route, 200, RUNNER)],

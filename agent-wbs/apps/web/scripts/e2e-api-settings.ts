@@ -8,7 +8,7 @@
  *
  * 하는 일(끝나면 모두 지운다):
  * 1. 이 시험 전용 PostgreSQL 컨테이너(m308-e2e-pg-…)를 빈 포트에 띄운다. 개발용 awbs-postgres는 건드리지 않는다.
- * 2. migration → system seed → auth CLI로 LAN 비밀번호 설정 → API 기동(LAN 모드) → auth CLI로 1회용 링크 발급.
+ * 2. migration → system seed → API 기동(LAN 모드) → auth CLI로 1회용 링크 발급.
  *    LAN 모드는 127.0.0.1이 아닌 주소에서만 켜지므로 API는 127.0.0.2(같은 PC의 다른 loopback 주소)에 띄운다.
  *    화면(preview 서버 127.0.0.1)이 API로 요청을 넘기므로 API가 보는 접속 주소는 127.0.0.1(loopback)이다.
  * 3. Playwright `api-settings` 시험을 실행한다.
@@ -23,7 +23,6 @@ const ROOT = resolve(import.meta.dirname, '../../..');
 const IMAGE = 'postgres:16@sha256:07abc3f43c9395b0bdbbab36bc25ddb0e8d83cd4fcafb5fb7d6abe14ff156dd8';
 const name = `m308-e2e-pg-${randomBytes(3).toString('hex')}`;
 const dbPassword = randomBytes(18).toString('base64url');
-const leadPassword = `e2e-${randomBytes(9).toString('base64url')}`;
 
 const freePort = () => new Promise<number>((done, fail) => {
   const server = createServer();
@@ -49,13 +48,12 @@ try {
   const env = {
     ...process.env,
     DATABASE_URL: `postgres://awbs_owner:${dbPassword}@127.0.0.1:${String(dbPort)}/awbs_e2e`,
-    AWBS_HOST: '127.0.0.2', AWBS_PORT: String(apiPort), AWBS_ALLOW_LAN: 'true',
+    AWBS_HOST: '127.0.0.2', AWBS_PORT: String(apiPort), AWBS_ALLOW_LAN: 'true', AWBS_PIN_TIME_ZONE: 'Asia/Seoul',
     AWBS_ORIGIN: `http://127.0.0.1:${String(webPort)}`, LOG_LEVEL: 'warn',
   };
-  const node = (args: string[], input?: string) => execFileSync('node', ['--conditions=awbs-source', ...args], { cwd: ROOT, env, input, encoding: 'utf8' });
+  const node = (args: string[]) => execFileSync('node', ['--conditions=awbs-source', ...args], { cwd: ROOT, env, encoding: 'utf8' });
   node(['packages/db/src/migrate-cli.ts']);
   node(['packages/db/src/seed-cli.ts', 'system']);
-  node(['apps/api/src/platform/auth-cli.ts', 'set-password'], `${leadPassword}\n`);
   api = spawn('node', ['--conditions=awbs-source', 'apps/api/src/main.ts'], { cwd: ROOT, env, stdio: ['ignore', 'inherit', 'inherit'] });
   for (let i = 0; i < 60; i++) {
     if (await fetch(`http://127.0.0.2:${String(apiPort)}/health`).then((r) => r.ok, () => false)) break;
@@ -70,7 +68,6 @@ try {
       AWBS_E2E_PORT: String(webPort),
       AWBS_E2E_API: `http://127.0.0.2:${String(apiPort)}`,
       AWBS_E2E_LINK_TOKEN: linkA,
-      AWBS_E2E_PASSWORD: leadPassword,
     },
   });
   exitCode = result.status ?? 1;

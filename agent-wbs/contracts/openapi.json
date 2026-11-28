@@ -8393,10 +8393,60 @@
         }
       }
     },
+    "/api/auth/options": {
+      "get": {
+        "operationId": "getLoginOptions",
+        "summary": "로그인 방법과 PIN 기준 시간대",
+        "tags": [
+          "none"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "로그인 방법과 PIN 기준 시간대",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "pinEnabled",
+                    "pinTimeZone"
+                  ],
+                  "properties": {
+                    "pinEnabled": {
+                      "type": "boolean"
+                    },
+                    "pinTimeZone": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "INTERNAL"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error",
+            "description": "UNAVAILABLE"
+          }
+        },
+        "x-error-codes": {
+          "500": [
+            "INTERNAL"
+          ],
+          "503": [
+            "UNAVAILABLE"
+          ]
+        }
+      }
+    },
     "/api/auth/session": {
       "post": {
         "operationId": "login",
-        "summary": "로그인(1회용 링크 loopback / LAN 비밀번호)",
+        "summary": "로그인(1회용 링크 loopback / 날짜 PIN)",
         "tags": [
           "none"
         ],
@@ -8431,17 +8481,19 @@
                     "type": "object",
                     "required": [
                       "method",
-                      "password"
+                      "pin"
                     ],
                     "properties": {
                       "method": {
                         "enum": [
-                          "password"
+                          "pin"
                         ]
                       },
-                      "password": {
+                      "pin": {
                         "type": "string",
-                        "minLength": 1,
+                        "pattern": "^[0-9]{6}$",
+                        "minLength": 6,
+                        "maxLength": 6,
                         "writeOnly": true
                       }
                     },
@@ -8454,7 +8506,7 @@
         },
         "responses": {
           "204": {
-            "description": "로그인(1회용 링크 loopback / LAN 비밀번호)"
+            "description": "로그인(1회용 링크 loopback / 날짜 PIN)"
           },
           "400": {
             "$ref": "#/components/responses/Error",
@@ -8583,7 +8635,7 @@
                     "method": {
                       "enum": [
                         "link",
-                        "password"
+                        "pin"
                       ]
                     },
                     "expiresAt": {

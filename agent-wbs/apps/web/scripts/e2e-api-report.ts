@@ -4,7 +4,7 @@
  *   pnpm --filter @awbs/web e2e:api:report
  *
  * 하는 일(끝나면 모두 지운다): 이 시험 전용 PostgreSQL 컨테이너(report-e2e-pg-…)를 빈 포트에 띄우고,
- * migration → demo seed → 프로젝트 시작일을 원본 값(2026-10-27)으로 → auth CLI 비밀번호 → API(LAN 모드, 127.0.0.2) → Playwright `api-report`.
+ * migration → demo seed → 프로젝트 시작일을 원본 값(2026-10-27)으로 → API(LAN 모드, 127.0.0.2) → Playwright `api-report`.
  * 방식은 scripts/e2e-api-m3int.ts와 같다.
  */
 import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
@@ -19,7 +19,6 @@ const ROOT = resolve(import.meta.dirname, '../../..');
 const IMAGE = 'postgres:16@sha256:07abc3f43c9395b0bdbbab36bc25ddb0e8d83cd4fcafb5fb7d6abe14ff156dd8';
 const name = `report-e2e-pg-${randomBytes(3).toString('hex')}`;
 const dbPassword = randomBytes(18).toString('base64url');
-const leadPassword = `e2e-${randomBytes(9).toString('base64url')}`;
 
 const freePort = () => new Promise<number>((done, fail) => {
   const server = createServer();
@@ -47,13 +46,13 @@ try {
     ...process.env,
     DATABASE_URL: `postgres://awbs_owner:${dbPassword}@127.0.0.1:${String(dbPort)}/awbs_test_report`,
     TEST_DATABASE_URL: `postgres://awbs_owner:${dbPassword}@127.0.0.1:${String(dbPort)}/awbs_test_report`,
-    AWBS_HOST: '127.0.0.2', AWBS_PORT: String(apiPort), AWBS_ALLOW_LAN: 'true',
+    AWBS_HOST: '127.0.0.2', AWBS_PORT: String(apiPort), AWBS_ALLOW_LAN: 'true', AWBS_PIN_TIME_ZONE: 'Asia/Seoul',
     AWBS_ORIGIN: `http://127.0.0.1:${String(webPort)}`, LOG_LEVEL: 'warn',
     // API가 쓰는 파일(Evidence·보고서 PDF, ~/.agentwbs/wbs)을 시험 전용 폴더에 둔다. 실제 사용자 폴더를 건드리지 않는다(M6-02).
     // HOME을 바꾸면 Playwright가 브라우저를 못 찾으므로 원래 설치 위치를 알려 준다.
     HOME: home, PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH ?? join(homedir(), '.cache', 'ms-playwright'),
   };
-  const node = (args: string[], input?: string) => execFileSync('node', ['--conditions=awbs-source', ...args], { cwd: ROOT, env, input, encoding: 'utf8' });
+  const node = (args: string[]) => execFileSync('node', ['--conditions=awbs-source', ...args], { cwd: ROOT, env, encoding: 'utf8' });
   node(['packages/db/src/migrate-cli.ts']);
   const psql = (sql: string) => execFileSync('docker', ['exec', '-i', name, 'psql', '-v', 'ON_ERROR_STOP=1', '-U', 'awbs_owner', '-d', 'awbs_test_report'], { input: sql, stdio: ['pipe', 'ignore', 'inherit'] });
   // 보고서는 기간 끝 시점의 상태를 이력에서 커밋 순서로 되살린다(owner 2026-11-27 아이템 13).
@@ -68,7 +67,6 @@ try {
       + ' insert into commit_real(xid,stamp,committed_at,observed_at) select xid,committed_at,committed_at,committed_at from commit_log on conflict do nothing;',
     stdio: ['pipe', 'ignore', 'inherit'],
   });
-  node(['apps/api/src/platform/auth-cli.ts', 'set-password'], `${leadPassword}\n`);
   api = spawn('node', ['--conditions=awbs-source', 'apps/api/src/main.ts'], { cwd: ROOT, env, stdio: ['ignore', 'inherit', 'inherit'] });
   for (let i = 0; i < 60; i++) {
     if (await fetch(`http://127.0.0.2:${String(apiPort)}/health`).then((r) => r.ok, () => false)) break;
@@ -80,7 +78,6 @@ try {
       ...process.env,
       AWBS_E2E_PORT: String(webPort),
       AWBS_E2E_API: `http://127.0.0.2:${String(apiPort)}`,
-      AWBS_E2E_PASSWORD: leadPassword,
     },
   });
   exitCode = result.status ?? 1;

@@ -3,6 +3,7 @@
  * 390px 휴대폰은 알림 링크로 CP 상세를 잘림 없이 연다(UAT-RESP-01-UI·UAT-RESP-02-UI). `W e2e -- planning`.
  */
 import { expect, test, type Page } from '@playwright/test';
+import { fillPin } from './support/pin.ts';
 import { errorBody, fakeApi, json, SESSION } from './support/fake-api.ts';
 import { planningServer } from './support/planning-data.ts';
 
@@ -62,7 +63,7 @@ test.describe('390px 휴대폰', () => {
     api.on('POST /api/auth/session', (route) => { signedIn = true; return route.fulfill({ status: 204 }); });
     await page.goto('/change/CP-004');
     await expect(page).toHaveURL('/login?next=%2Fchange%2FCP-004');
-    await page.getByLabel('비밀번호').fill('pw');
+    await fillPin(page, '261128');
     await page.getByRole('button', { name: '로그인' }).click();
     await expect(page).toHaveURL('/change/CP-004');
     expect(await page.evaluate(() => window.innerWidth)).toBe(390);

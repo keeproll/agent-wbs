@@ -8,7 +8,7 @@ import { createPool, recreateTestDatabase, runMigrations, seedDemo } from '@awbs
 import { afterAll, beforeAll, expect, inject, test, vi } from 'vitest';
 import { buildApp } from '../src/app.ts';
 import { loggerOptions } from '../src/log.ts';
-import { issueLoginLink, issueRunnerToken, setPassword } from '../src/platform/credentials.ts';
+import { issueLoginLink, issueRunnerToken } from '../src/platform/credentials.ts';
 import { ApiError } from '../src/changes/http.ts';
 import { ProjectError } from '../src/project/errors.ts';
 import { TaskError } from '../src/tasks/errors.ts';
@@ -34,7 +34,6 @@ const origin = 'http://127.0.0.1:3100';
 const github = `github_pat_${'m803canary'.repeat(5)}`;
 const smtp = 'm803-smtp-password-한글';
 const telegram = `123456789:${'m803canary'.repeat(4)}`;
-const password = 'm803 lead login password';
 let logs = '', cookie = '', csrf = '', runner = '', link = '';
 const root = await mkdtemp(join(tmpdir(), 'awbs-m803-export-'));
 const app = buildApp(pool, loggerOptions('info', { write: (line: string) => { logs += line; } }), { origin, lan: false }, { dataRoot: root });
@@ -54,7 +53,6 @@ beforeAll(async () => {
   await recreateTestDatabase(db.href);
   await runMigrations(owner);
   await seedDemo(owner, db.href);
-  await setPassword(pool, password);
   runner = await issueRunnerToken(pool, 'm803-runner', 'fake-public-key');
   link = await issueLoginLink(pool);
   const login = await app.inject({ method: 'POST', url: '/api/auth/session', headers: { origin }, payload: { method: 'link', token: link } });
@@ -229,11 +227,11 @@ test('GitHub·SMTP 설정 응답과 모든 DB 표에 평문이 없고 암호문�
   for (const { tablename } of tables) dump += JSON.stringify((await owner.query(`select * from "${tablename.replaceAll('"', '""')}"`)).rows);
   const outputs = [dump, logs, githubReply.body, smtpReply.body, (await app.inject({ url: '/api/settings/github', headers })).body,
     (await app.inject({ url: '/api/settings/mail/smtp', headers })).body];
-  for (const output of outputs) for (const secret of [github, smtp, telegram, password, runner, link, cookie.split('=')[1] ?? 'missing-cookie']) expect(output).not.toContain(secret);
+  for (const output of outputs) for (const secret of [github, smtp, telegram, runner, link, cookie.split('=')[1] ?? 'missing-cookie']) expect(output).not.toContain(secret);
   const zip = await exportProject(pool, 1, root);
   const decoded = spawnSync('python3', ['-c', 'import sys,zipfile,io; z=zipfile.ZipFile(io.BytesIO(sys.stdin.buffer.read())); print(z.read("data.json").decode())'], { input: zip, encoding: 'utf8' });
   expect(decoded.status, decoded.stderr).toBe(0);
-  for (const secret of [github, smtp, telegram, password, runner, link]) expect(decoded.stdout).not.toContain(secret);
+  for (const secret of [github, smtp, telegram, runner, link]) expect(decoded.stdout).not.toContain(secret);
 });
 
 test.each(['/api/settings/mail/smtp', '/api/project', '/api/tasks/TASK-0001'])('%s 오류의 문장·조치·필드 경로까지 가린다', async url => {
