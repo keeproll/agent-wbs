@@ -3,7 +3,6 @@ import { RunnerApp } from './app.ts';
 import { cliEnvironment, createCliRegistry } from './cli-update/registry.ts';
 import { AGENT_EXEC, AGENT_USER, agentLoginRun } from './cli/dedicated-user.ts';
 import { createRunCommand } from './readiness/command.ts';
-import { attemptWiring } from './jobs/wiring.ts';
 import { ConfigError, loadConfig } from './config.ts';
 import { createLogger } from './log.ts';
 import { nodeHostSources } from './resources/host.ts';
@@ -24,7 +23,6 @@ try {
   try {
     state = await State.open(config.home);
     const api = createApiClient({ baseUrl: config.wbsUrl, token: config.token });
-    const opened = state;
     // 모든 모듈을 RunnerApp 하나에서 조립한다. 공유 인스턴스(HeavySemaphore·ResourceReporter·세션 목록)는 여기서 하나뿐이다.
     const app = new RunnerApp({
       state,
@@ -33,6 +31,7 @@ try {
       version: '0.0.0',
       env: process.env,
       warn: (message) => log.warn(message),
+      info: (message) => log.info(message),
       hostSources: nodeHostSources(),
       // 전용 계정 격리면 CLI를 Agent 작업 영역(/srv/agentwbs/cli)에 설치하고, 설치 점검의 로그인 확인은 Agent 계정으로 한다.
       cliRegistry: createCliRegistry({
@@ -45,6 +44,9 @@ try {
       // 전용 계정(agentRoot)이면 앱이 준비 점검 뒤·실행 직전마다 래퍼 check와 사용자 scope를 확인해 격리를 고른다. 없으면 실행 거부.
       agentRoot: config.agentRoot,
       cliUpdates: config.cliUpdates,
+      planningAuto: config.planningAuto,
+      agentCallLimit: config.agentCallLimit,
+      agentMaxEffort: config.agentMaxEffort,
       // CI 실행기(integrate·ci_retry, 조정자 결정 1·2·7): GitHub 설정이 있고 AWBS_CI_AUTO=1이면 켠다.
       // 명령·시험 목록은 Execution.command → 격리 계층 command(전용 계정이면 래퍼 ci-run, 사용자 scope)로만 돈다.
       // 격리 계층이 없으면(AWBS_AGENT_USER 미설정·점검 실패) 앱이 CI job을 받지 않는다. 로컬 clone이 생기기 전에도 받지 않는다.
@@ -54,10 +56,7 @@ try {
       // 켜면 execution.prepare(시도별 작업 폴더)와 jobs(결과 수집·① 공급원·보고 뒤 정리)를 넘긴다(src/jobs/README.md 「연결 지점」).
       // jobs.taskCheck·collect에는 공급원만 넘긴다. 앱이 자기 GitHub 클라이언트·Execution·Runner·API로 묶는다(여기서 따로 만들지 않는다).
       // 격리 계층이 없으면(AWBS_AGENT_USER 미설정·점검 실패) 켜져 있어도 claim하지 않는다(Execution.claim).
-      ...(config.github && config.attemptAuto && attemptWiring({
-        home: config.home, agentRoot: config.agentRoot, repoUrl: `https://github.com/${config.github.repo.owner}/${config.github.repo.repo}`,
-        api, epoch: () => opened.snapshot.epoch, warn: (message) => log.warn(message), env: process.env,
-      })),
+      attemptAuto: config.attemptAuto,
       ...(config.github && { github: config.github }),
     });
     log.info({ wbsUrl: config.wbsUrl, home: config.home }, 'Runner 시작');

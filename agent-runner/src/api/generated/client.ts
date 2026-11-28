@@ -1029,7 +1029,7 @@ export interface Operations {
       body: {
         at: Timestamp;
         items: ({
-          key: "claude" | "codex" | "git" | "node" | "pnpm" | "pg" | "repo" | "disk" | "subs" | "obs" | "gh" | "lfs" | "reports" | "font" | "render";
+          key: "claude" | "codex" | "git" | "node" | "pnpm" | "pg" | "repo" | "disk" | "subs" | "obs" | "gh" | "lfs" | "reports" | "font" | "render" | "paid_calls";
           status: "ok" | "warn" | "fail";
           detail: string;
           fix?: string;
@@ -1527,6 +1527,31 @@ export interface Operations {
           headSha: Sha;
           pipelineSha: Sha;
         } | null;
+      };
+    };
+  };
+  /** 현재 임대의 계약 반영 대상. 추출을 확인한 원본 커밋·파일·목표만 조회 */
+  getDesignApplyJob: {
+    request: {
+      params: {
+        id: Id;
+      };
+      query: {
+        fence: number;
+      };
+      epoch: number;
+    };
+    responses: {
+      200: {
+        sourceCommit: Sha;
+        path: RepoPath;
+        target: {
+          fields: ({
+            path: string;
+            type: string;
+            required: boolean;
+          })[];
+        };
       };
     };
   };
@@ -2390,6 +2415,7 @@ export interface Operations {
       body: {
         fence: number;
         hostId: string;
+        agent?: Agent;
       };
       epoch: number;
       idempotencyKey: string;
@@ -2945,6 +2971,7 @@ export const OPERATIONS = {
   reportRepoCheck: { method: 'POST', path: '/api/runner/repo-checks/{id}/result', content: 'json', statuses: { 204: false } },
   reportBootstrapProgress: { method: 'POST', path: '/api/runner/bootstrap/{jobId}/progress', content: 'json', statuses: { 204: false } },
   getCiJob: { method: 'GET', path: '/api/runner/ci/jobs/{id}', content: 'none', statuses: { 200: true } },
+  getDesignApplyJob: { method: 'GET', path: '/api/runner/design/jobs/{id}', content: 'none', statuses: { 200: true } },
   startCiRun: { method: 'POST', path: '/api/runner/ci/runs', content: 'json', statuses: { 201: true } },
   updateCiRun: { method: 'PATCH', path: '/api/runner/ci/runs/{id}', content: 'json', statuses: { 204: false } },
   reportMergeQueue: { method: 'POST', path: '/api/runner/ci/queue', content: 'json', statuses: { 204: false } },
@@ -5132,6 +5159,2713 @@ export const DESIGN_SNAPSHOT_SCHEMA = {
         "type": "string",
         "title": "TaskKey",
         "pattern": "^TASK-[0-9]{4,}$"
+      }
+    }
+  }
+} as const;
+
+export const PLANNING_REPORT_SCHEMAS = {
+  "submitEstimates": {
+    "type": "object",
+    "required": [
+      "jobId",
+      "fence",
+      "items"
+    ],
+    "properties": {
+      "jobId": {
+        "$ref": "#/components/schemas/Id"
+      },
+      "fence": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 2147483647
+      },
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "taskKey",
+            "estHours",
+            "loHours",
+            "hiHours",
+            "confidence",
+            "basis",
+            "agreedBy"
+          ],
+          "properties": {
+            "taskKey": {
+              "$ref": "#/components/schemas/TaskKey"
+            },
+            "estHours": {
+              "type": "number",
+              "minimum": 0
+            },
+            "loHours": {
+              "type": "number",
+              "minimum": 0
+            },
+            "hiHours": {
+              "type": "number",
+              "minimum": 0
+            },
+            "tokensK": {
+              "type": "number",
+              "minimum": 0
+            },
+            "confidence": {
+              "$ref": "#/components/schemas/Confidence"
+            },
+            "basis": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "agreedBy": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Agent"
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "minItems": 1
+      }
+    },
+    "additionalProperties": false
+  },
+  "submitDraft": {
+    "type": "object",
+    "required": [
+      "fence",
+      "phases",
+      "wps",
+      "tasks",
+      "deps"
+    ],
+    "properties": {
+      "fence": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 2147483647
+      },
+      "phases": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "ref",
+            "title"
+          ],
+          "properties": {
+            "ref": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
+          },
+          "additionalProperties": false
+        },
+        "minItems": 1
+      },
+      "wps": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "ref",
+            "phaseRef",
+            "title"
+          ],
+          "properties": {
+            "ref": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "phaseRef": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
+          },
+          "additionalProperties": false
+        },
+        "minItems": 1
+      },
+      "tasks": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "ref",
+            "wpRef",
+            "title",
+            "workType",
+            "primaryDomain",
+            "relatedDomains",
+            "priority",
+            "assigneeAgent",
+            "verifierAgent",
+            "estimate",
+            "outputs",
+            "checklist",
+            "grades",
+            "subagents",
+            "splitBasis",
+            "conflictGroup",
+            "designItems"
+          ],
+          "properties": {
+            "ref": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "wpRef": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "workType": {
+              "$ref": "#/components/schemas/WorkType"
+            },
+            "primaryDomain": {
+              "$ref": "#/components/schemas/Domain"
+            },
+            "relatedDomains": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Domain"
+              }
+            },
+            "priority": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 3
+            },
+            "assigneeAgent": {
+              "$ref": "#/components/schemas/Agent"
+            },
+            "verifierAgent": {
+              "$ref": "#/components/schemas/Agent"
+            },
+            "estimate": {
+              "type": "object",
+              "required": [
+                "estHours",
+                "loHours",
+                "hiHours",
+                "confidence",
+                "basis",
+                "agreedBy"
+              ],
+              "properties": {
+                "estHours": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "loHours": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "hiHours": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "tokensK": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "confidence": {
+                  "$ref": "#/components/schemas/Confidence"
+                },
+                "basis": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "agreedBy": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Agent"
+                  },
+                  "minItems": 1,
+                  "uniqueItems": true
+                }
+              },
+              "additionalProperties": false
+            },
+            "overview": {
+              "type": "object",
+              "required": [
+                "purpose",
+                "background",
+                "scope",
+                "out",
+                "precond",
+                "doneCond"
+              ],
+              "properties": {
+                "purpose": {
+                  "type": "string"
+                },
+                "background": {
+                  "type": "string"
+                },
+                "scope": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "out": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "precond": {
+                  "type": "string"
+                },
+                "doneCond": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
+            "spec": {
+              "type": "object",
+              "required": [
+                "req",
+                "work",
+                "steps",
+                "inputs",
+                "outputs",
+                "files",
+                "constraints",
+                "errors",
+                "docs",
+                "verify"
+              ],
+              "properties": {
+                "req": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "work": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "steps": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "inputs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "outputs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "files": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "constraints": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "errors": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "docs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "verify": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": false
+            },
+            "ac": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "given",
+                  "when",
+                  "then",
+                  "method"
+                ],
+                "properties": {
+                  "given": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "when": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "then": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "method": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "outputs": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "kind",
+                  "required",
+                  "verify",
+                  "delivered"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "required": {
+                    "type": "boolean"
+                  },
+                  "verify": {
+                    "type": "string"
+                  },
+                  "delivered": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "checklist": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "content",
+                  "required"
+                ],
+                "properties": {
+                  "content": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "required": {
+                    "type": "boolean"
+                  },
+                  "verifyMethod": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "grades": {
+              "type": "object",
+              "required": [
+                "dev",
+                "qa"
+              ],
+              "properties": {
+                "dev": {
+                  "type": "object",
+                  "required": [
+                    "modelId",
+                    "effort",
+                    "reason"
+                  ],
+                  "properties": {
+                    "modelId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "\\S"
+                    },
+                    "effort": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "\\S"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "\\S"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "qa": {
+                  "type": "object",
+                  "required": [
+                    "modelId",
+                    "effort",
+                    "reason"
+                  ],
+                  "properties": {
+                    "modelId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "\\S"
+                    },
+                    "effort": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "\\S"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "\\S"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            },
+            "subagents": {
+              "type": "object",
+              "required": [
+                "dev",
+                "qa",
+                "basis"
+              ],
+              "properties": {
+                "dev": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Id"
+                  }
+                },
+                "qa": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Id"
+                  }
+                },
+                "basis": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
+            "splitBasis": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "judgedRules": {
+              "type": "object",
+              "required": [
+                "schemaVersion",
+                "items"
+              ],
+              "properties": {
+                "schemaVersion": {
+                  "type": "number",
+                  "const": 1
+                },
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "rule",
+                      "result",
+                      "agreedBy",
+                      "basis",
+                      "judgedAt",
+                      "sourceRef"
+                    ],
+                    "properties": {
+                      "rule": {
+                        "enum": [
+                          "revert",
+                          "contract",
+                          "refactor"
+                        ]
+                      },
+                      "result": {
+                        "enum": [
+                          "met",
+                          "not_met"
+                        ]
+                      },
+                      "agreedBy": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/components/schemas/Agent"
+                        },
+                        "minItems": 2,
+                        "uniqueItems": true
+                      },
+                      "basis": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      "judgedAt": {
+                        "$ref": "#/components/schemas/Timestamp"
+                      },
+                      "sourceRef": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$",
+                        "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "maxItems": 3
+                }
+              },
+              "additionalProperties": false
+            },
+            "conflictGroup": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "designItems": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "itemKey",
+                  "change"
+                ],
+                "properties": {
+                  "itemKey": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "change": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "minItems": 1
+      },
+      "deps": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "predRef",
+            "succRef",
+            "depType"
+          ],
+          "properties": {
+            "predRef": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "succRef": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "depType": {
+              "$ref": "#/components/schemas/DepType"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "additionalProperties": false
+  },
+  "submitTechProposals": {
+    "type": "object",
+    "required": [
+      "fence",
+      "decisions"
+    ],
+    "properties": {
+      "fence": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 2147483647
+      },
+      "decisions": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "area",
+            "title",
+            "choice",
+            "reason",
+            "alternatives"
+          ],
+          "properties": {
+            "area": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "choice": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "alternatives": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "conditionJudgements": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "constraintId",
+            "result",
+            "reason"
+          ],
+          "properties": {
+            "constraintId": {
+              "$ref": "#/components/schemas/Id"
+            },
+            "result": {
+              "enum": [
+                "met",
+                "not_met"
+              ]
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "additionalProperties": false
+  },
+  "submitPlanningAnalysis": {
+    "type": "object",
+    "required": [
+      "jobId",
+      "fence",
+      "agent",
+      "summary",
+      "items"
+    ],
+    "properties": {
+      "jobId": {
+        "$ref": "#/components/schemas/Id"
+      },
+      "fence": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 2147483647
+      },
+      "agent": {
+        "$ref": "#/components/schemas/Agent"
+      },
+      "summary": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "\\S"
+      },
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        }
+      }
+    },
+    "additionalProperties": false
+  },
+  "submitPlanningReviews": {
+    "type": "object",
+    "required": [
+      "jobId",
+      "fence",
+      "reviews"
+    ],
+    "properties": {
+      "jobId": {
+        "$ref": "#/components/schemas/Id"
+      },
+      "fence": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 2147483647
+      },
+      "reviews": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "topic",
+            "kind",
+            "codex",
+            "claude"
+          ],
+          "properties": {
+            "topic": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "kind": {
+              "enum": [
+                "agree",
+                "diff",
+                "일치",
+                "이견"
+              ]
+            },
+            "codex": {
+              "type": "string"
+            },
+            "claude": {
+              "type": "string"
+            },
+            "ops": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/PlanningProposalOp"
+              }
+            },
+            "codexOps": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/PlanningProposalOp"
+              }
+            },
+            "claudeOps": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/PlanningProposalOp"
+              }
+            },
+            "memo": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "minItems": 1
+      }
+    },
+    "additionalProperties": false
+  },
+  "submitPlanningProposal": {
+    "anyOf": [
+      {
+        "type": "object",
+        "required": [
+          "jobId",
+          "fence",
+          "title",
+          "reason",
+          "source",
+          "ops"
+        ],
+        "properties": {
+          "jobId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "fence": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "splitJudgements": {
+            "type": "object",
+            "required": [
+              "schemaVersion",
+              "items"
+            ],
+            "properties": {
+              "schemaVersion": {
+                "type": "number",
+                "const": 1
+              },
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "rule",
+                    "result",
+                    "agreedBy",
+                    "basis",
+                    "judgedAt",
+                    "sourceRef"
+                  ],
+                  "properties": {
+                    "rule": {
+                      "enum": [
+                        "ac_meaning",
+                        "layer_order",
+                        "test_included"
+                      ]
+                    },
+                    "result": {
+                      "enum": [
+                        "met",
+                        "not_met"
+                      ]
+                    },
+                    "agreedBy": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Agent"
+                      },
+                      "minItems": 2,
+                      "uniqueItems": true
+                    },
+                    "basis": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "\\S"
+                    },
+                    "judgedAt": {
+                      "$ref": "#/components/schemas/Timestamp"
+                    },
+                    "sourceRef": {
+                      "type": "string",
+                      "pattern": "^sha256:[0-9a-f]{64}$",
+                      "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "maxItems": 3
+              }
+            },
+            "additionalProperties": false
+          },
+          "taskJudgements": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "taskKey",
+                "judgedRules"
+              ],
+              "properties": {
+                "taskKey": {
+                  "$ref": "#/components/schemas/TaskKey"
+                },
+                "judgedRules": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "items"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "number",
+                      "const": 1
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "rule",
+                          "result",
+                          "agreedBy",
+                          "basis",
+                          "judgedAt",
+                          "sourceRef"
+                        ],
+                        "properties": {
+                          "rule": {
+                            "enum": [
+                              "revert",
+                              "contract",
+                              "refactor"
+                            ]
+                          },
+                          "result": {
+                            "enum": [
+                              "met",
+                              "not_met"
+                            ]
+                          },
+                          "agreedBy": {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/components/schemas/Agent"
+                            },
+                            "minItems": 2,
+                            "uniqueItems": true
+                          },
+                          "basis": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          },
+                          "judgedAt": {
+                            "$ref": "#/components/schemas/Timestamp"
+                          },
+                          "sourceRef": {
+                            "type": "string",
+                            "pattern": "^sha256:[0-9a-f]{64}$",
+                            "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "maxItems": 3
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "source": {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "planning",
+                  "message",
+                  "manual",
+                  "input",
+                  "decision"
+                ]
+              },
+              "id": {
+                "$ref": "#/components/schemas/Id"
+              }
+            },
+            "additionalProperties": false
+          },
+          "ops": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanningProposalOp"
+            },
+            "minItems": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "required": [
+          "jobId",
+          "fence",
+          "title",
+          "reason",
+          "source",
+          "ops"
+        ],
+        "properties": {
+          "jobId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "fence": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "splitJudgements": {
+            "type": "object",
+            "required": [
+              "schemaVersion",
+              "items"
+            ],
+            "properties": {
+              "schemaVersion": {
+                "type": "number",
+                "const": 1
+              },
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "rule",
+                    "result",
+                    "agreedBy",
+                    "basis",
+                    "judgedAt",
+                    "sourceRef"
+                  ],
+                  "properties": {
+                    "rule": {
+                      "enum": [
+                        "ac_meaning",
+                        "layer_order",
+                        "test_included"
+                      ]
+                    },
+                    "result": {
+                      "enum": [
+                        "met",
+                        "not_met"
+                      ]
+                    },
+                    "agreedBy": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Agent"
+                      },
+                      "minItems": 2,
+                      "uniqueItems": true
+                    },
+                    "basis": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "\\S"
+                    },
+                    "judgedAt": {
+                      "$ref": "#/components/schemas/Timestamp"
+                    },
+                    "sourceRef": {
+                      "type": "string",
+                      "pattern": "^sha256:[0-9a-f]{64}$",
+                      "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "maxItems": 3
+              }
+            },
+            "additionalProperties": false
+          },
+          "taskJudgements": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "taskKey",
+                "judgedRules"
+              ],
+              "properties": {
+                "taskKey": {
+                  "$ref": "#/components/schemas/TaskKey"
+                },
+                "judgedRules": {
+                  "type": "object",
+                  "required": [
+                    "schemaVersion",
+                    "items"
+                  ],
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "number",
+                      "const": 1
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "rule",
+                          "result",
+                          "agreedBy",
+                          "basis",
+                          "judgedAt",
+                          "sourceRef"
+                        ],
+                        "properties": {
+                          "rule": {
+                            "enum": [
+                              "revert",
+                              "contract",
+                              "refactor"
+                            ]
+                          },
+                          "result": {
+                            "enum": [
+                              "met",
+                              "not_met"
+                            ]
+                          },
+                          "agreedBy": {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/components/schemas/Agent"
+                            },
+                            "minItems": 2,
+                            "uniqueItems": true
+                          },
+                          "basis": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": "\\S"
+                          },
+                          "judgedAt": {
+                            "$ref": "#/components/schemas/Timestamp"
+                          },
+                          "sourceRef": {
+                            "type": "string",
+                            "pattern": "^sha256:[0-9a-f]{64}$",
+                            "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "maxItems": 3
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "source": {
+            "type": "object",
+            "required": [
+              "kind",
+              "id"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "split"
+                ]
+              },
+              "id": {
+                "$ref": "#/components/schemas/TaskKey"
+              }
+            },
+            "additionalProperties": false
+          },
+          "ops": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanningSplitProposalOp"
+            },
+            "minItems": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    ]
+  },
+  "submitTaskPlan": {
+    "type": "object",
+    "required": [
+      "jobId",
+      "fence",
+      "grades",
+      "subagents",
+      "conflictGroup"
+    ],
+    "properties": {
+      "jobId": {
+        "$ref": "#/components/schemas/Id"
+      },
+      "fence": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 2147483647
+      },
+      "grades": {
+        "type": "object",
+        "required": [
+          "dev",
+          "qa"
+        ],
+        "properties": {
+          "dev": {
+            "type": "object",
+            "required": [
+              "modelId",
+              "effort",
+              "reason"
+            ],
+            "properties": {
+              "modelId": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "effort": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "additionalProperties": false
+          },
+          "qa": {
+            "type": "object",
+            "required": [
+              "modelId",
+              "effort",
+              "reason"
+            ],
+            "properties": {
+              "modelId": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "effort": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "subagents": {
+        "type": "object",
+        "required": [
+          "dev",
+          "qa",
+          "basis"
+        ],
+        "properties": {
+          "dev": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          "qa": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          "basis": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "conflictGroup": {
+        "anyOf": [
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "reason"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "judgedRules": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "items"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "type": "number",
+            "const": 1
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "rule",
+                "result",
+                "agreedBy",
+                "basis",
+                "judgedAt",
+                "sourceRef",
+                "subjectHash"
+              ],
+              "properties": {
+                "rule": {
+                  "enum": [
+                    "revert",
+                    "contract",
+                    "refactor"
+                  ]
+                },
+                "result": {
+                  "enum": [
+                    "met",
+                    "not_met"
+                  ]
+                },
+                "agreedBy": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Agent"
+                  },
+                  "minItems": 2,
+                  "uniqueItems": true
+                },
+                "basis": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "judgedAt": {
+                  "$ref": "#/components/schemas/Timestamp"
+                },
+                "sourceRef": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
+                },
+                "subjectHash": {
+                  "$ref": "#/components/schemas/Sha256"
+                }
+              },
+              "additionalProperties": false
+            },
+            "maxItems": 3
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "additionalProperties": false
+  },
+  "components": {
+    "schemas": {
+      "Id": {
+        "type": "string",
+        "title": "Id",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "TaskKey": {
+        "type": "string",
+        "title": "TaskKey",
+        "pattern": "^TASK-[0-9]{4,}$"
+      },
+      "Confidence": {
+        "enum": [
+          "상",
+          "중",
+          "하"
+        ],
+        "title": "Confidence"
+      },
+      "Agent": {
+        "enum": [
+          "Claude",
+          "Codex"
+        ],
+        "title": "Agent"
+      },
+      "WorkType": {
+        "enum": [
+          "Analysis",
+          "Design",
+          "Implementation",
+          "Configuration",
+          "Test",
+          "Verification",
+          "Documentation",
+          "Integration"
+        ],
+        "title": "WorkType"
+      },
+      "Domain": {
+        "enum": [
+          "FE",
+          "BE",
+          "DB",
+          "DevOps",
+          "API",
+          "QA",
+          "Architecture",
+          "Common"
+        ],
+        "title": "Domain"
+      },
+      "Timestamp": {
+        "type": "string",
+        "title": "Timestamp",
+        "pattern": "^(?:(?:19[7-9][0-9]|[2-9][0-9]{3})-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|02-(?:0[1-9]|1[0-9]|2[0-8]))|(?=19[7-9]|[2-9])(?:[0-9]{2}(?:0[48]|[2468][048]|[13579][26])|(?:[02468][048]|[13579][26])00)-02-29)T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]{1,6})?Z$"
+      },
+      "DepType": {
+        "enum": [
+          "FS",
+          "SS"
+        ],
+        "title": "DepType"
+      },
+      "PlanningProposalOp": {
+        "anyOf": [
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "ref",
+              "t",
+              "preds"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "add"
+                ]
+              },
+              "ref": {
+                "type": "string",
+                "pattern": "^NEW-[0-9]+$"
+              },
+              "t": {
+                "type": "object",
+                "required": [
+                  "title",
+                  "type",
+                  "domain",
+                  "wp",
+                  "priority",
+                  "assignee",
+                  "verifier",
+                  "purpose",
+                  "doneCond"
+                ],
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "type": {
+                    "$ref": "#/components/schemas/WorkType"
+                  },
+                  "domain": {
+                    "$ref": "#/components/schemas/Domain"
+                  },
+                  "rel": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/Domain"
+                    }
+                  },
+                  "wp": {
+                    "$ref": "#/components/schemas/Id"
+                  },
+                  "priority": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 3
+                  },
+                  "assignee": {
+                    "$ref": "#/components/schemas/Agent"
+                  },
+                  "verifier": {
+                    "$ref": "#/components/schemas/Agent"
+                  },
+                  "purpose": {
+                    "type": "string"
+                  },
+                  "doneCond": {
+                    "type": "string"
+                  },
+                  "est": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "lo": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "hi": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "tok": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "conf": {
+                    "$ref": "#/components/schemas/Confidence"
+                  },
+                  "basis": {
+                    "type": "string"
+                  },
+                  "ac": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "given",
+                        "when",
+                        "then"
+                      ],
+                      "properties": {
+                        "given": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "when": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "then": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "method": {
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "srcV": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2147483647
+                  },
+                  "splitBasis": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "scope": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "design": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "content"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "$ref": "#/components/schemas/DesignKind"
+                        },
+                        "content": {
+                          "type": "object",
+                          "patternProperties": {
+                            "^.*$": {}
+                          }
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "maxItems": 4
+                  },
+                  "conflictGroup": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "judgedRules": {
+                    "type": "object",
+                    "required": [
+                      "schemaVersion",
+                      "items"
+                    ],
+                    "properties": {
+                      "schemaVersion": {
+                        "type": "number",
+                        "const": 1
+                      },
+                      "items": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "rule",
+                            "result",
+                            "agreedBy",
+                            "basis",
+                            "judgedAt",
+                            "sourceRef"
+                          ],
+                          "properties": {
+                            "rule": {
+                              "enum": [
+                                "revert",
+                                "contract",
+                                "refactor"
+                              ]
+                            },
+                            "result": {
+                              "enum": [
+                                "met",
+                                "not_met"
+                              ]
+                            },
+                            "agreedBy": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/components/schemas/Agent"
+                              },
+                              "minItems": 2,
+                              "uniqueItems": true
+                            },
+                            "basis": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S"
+                            },
+                            "judgedAt": {
+                              "$ref": "#/components/schemas/Timestamp"
+                            },
+                            "sourceRef": {
+                              "type": "string",
+                              "pattern": "^sha256:[0-9a-f]{64}$",
+                              "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "maxItems": 3
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "additionalProperties": false
+              },
+              "preds": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "pred",
+                    "type"
+                  ],
+                  "properties": {
+                    "pred": {
+                      "$ref": "#/components/schemas/Id"
+                    },
+                    "type": {
+                      "$ref": "#/components/schemas/DepType"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "title"
+                ]
+              },
+              "before": {},
+              "after": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "doneCond"
+                ]
+              },
+              "before": {},
+              "after": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "scopeAdd"
+                ]
+              },
+              "before": {},
+              "after": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "acAdd"
+                ]
+              },
+              "before": {},
+              "after": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "priority"
+                ]
+              },
+              "before": {},
+              "after": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "assignee"
+                ]
+              },
+              "before": {},
+              "after": {
+                "$ref": "#/components/schemas/Agent"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "verifier"
+                ]
+              },
+              "before": {},
+              "after": {
+                "$ref": "#/components/schemas/Agent"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "remove"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "pred",
+              "succ",
+              "type"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "dep-add"
+                ]
+              },
+              "pred": {
+                "$ref": "#/components/schemas/Id"
+              },
+              "succ": {
+                "$ref": "#/components/schemas/Id"
+              },
+              "type": {
+                "$ref": "#/components/schemas/DepType"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "pred",
+              "succ"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "dep-remove"
+                ]
+              },
+              "pred": {
+                "$ref": "#/components/schemas/Id"
+              },
+              "succ": {
+                "$ref": "#/components/schemas/Id"
+              }
+            },
+            "additionalProperties": false
+          }
+        ],
+        "title": "PlanningProposalOp"
+      },
+      "DesignKind": {
+        "enum": [
+          "DB",
+          "API",
+          "FE",
+          "DevOps"
+        ],
+        "title": "DesignKind"
+      },
+      "PlanningSplitProposalOp": {
+        "anyOf": [
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "ref",
+              "t",
+              "preds"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "add"
+                ]
+              },
+              "ref": {
+                "type": "string",
+                "pattern": "^NEW-[0-9]+$"
+              },
+              "t": {
+                "type": "object",
+                "required": [
+                  "title",
+                  "type",
+                  "domain",
+                  "wp",
+                  "priority",
+                  "assignee",
+                  "verifier",
+                  "purpose",
+                  "doneCond",
+                  "splitBasis"
+                ],
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "type": {
+                    "$ref": "#/components/schemas/WorkType"
+                  },
+                  "domain": {
+                    "$ref": "#/components/schemas/Domain"
+                  },
+                  "rel": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/Domain"
+                    }
+                  },
+                  "wp": {
+                    "$ref": "#/components/schemas/Id"
+                  },
+                  "priority": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 3
+                  },
+                  "assignee": {
+                    "$ref": "#/components/schemas/Agent"
+                  },
+                  "verifier": {
+                    "$ref": "#/components/schemas/Agent"
+                  },
+                  "purpose": {
+                    "type": "string"
+                  },
+                  "doneCond": {
+                    "type": "string"
+                  },
+                  "est": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "lo": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "hi": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "tok": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "conf": {
+                    "$ref": "#/components/schemas/Confidence"
+                  },
+                  "basis": {
+                    "type": "string"
+                  },
+                  "ac": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "given",
+                        "when",
+                        "then"
+                      ],
+                      "properties": {
+                        "given": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "when": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "then": {
+                          "type": "string",
+                          "minLength": 1,
+                          "pattern": "\\S"
+                        },
+                        "method": {
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "srcV": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 2147483647
+                  },
+                  "splitBasis": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "scope": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "design": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "content"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "$ref": "#/components/schemas/DesignKind"
+                        },
+                        "content": {
+                          "type": "object",
+                          "patternProperties": {
+                            "^.*$": {}
+                          }
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "maxItems": 4
+                  },
+                  "conflictGroup": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "judgedRules": {
+                    "type": "object",
+                    "required": [
+                      "schemaVersion",
+                      "items"
+                    ],
+                    "properties": {
+                      "schemaVersion": {
+                        "type": "number",
+                        "const": 1
+                      },
+                      "items": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "rule",
+                            "result",
+                            "agreedBy",
+                            "basis",
+                            "judgedAt",
+                            "sourceRef"
+                          ],
+                          "properties": {
+                            "rule": {
+                              "enum": [
+                                "revert",
+                                "contract",
+                                "refactor"
+                              ]
+                            },
+                            "result": {
+                              "enum": [
+                                "met",
+                                "not_met"
+                              ]
+                            },
+                            "agreedBy": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/components/schemas/Agent"
+                              },
+                              "minItems": 2,
+                              "uniqueItems": true
+                            },
+                            "basis": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "\\S"
+                            },
+                            "judgedAt": {
+                              "$ref": "#/components/schemas/Timestamp"
+                            },
+                            "sourceRef": {
+                              "type": "string",
+                              "pattern": "^sha256:[0-9a-f]{64}$",
+                              "description": "판단 입력 지문: sha256:<64 lowercase hex>. 일반 규칙은 JudgedContent를 RFC 8785 JCS로 직렬화한 UTF-8의 SHA-256이다. 분할 전체 판단은 기존 splitSubjectHash(판단을 뺀 ops + splitTasks의 JCS SHA-256)다. 서버 계산과 다르면 VERSION_CONFLICT이며 판단을 저장하지 않는다."
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "maxItems": 3
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "additionalProperties": false
+              },
+              "preds": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "pred",
+                    "type"
+                  ],
+                  "properties": {
+                    "pred": {
+                      "$ref": "#/components/schemas/Id"
+                    },
+                    "type": {
+                      "$ref": "#/components/schemas/DepType"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "title"
+                ]
+              },
+              "before": {},
+              "after": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "doneCond"
+                ]
+              },
+              "before": {},
+              "after": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "scopeAdd"
+                ]
+              },
+              "before": {},
+              "after": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "acAdd"
+                ]
+              },
+              "before": {},
+              "after": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "priority"
+                ]
+              },
+              "before": {},
+              "after": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "assignee"
+                ]
+              },
+              "before": {},
+              "after": {
+                "$ref": "#/components/schemas/Agent"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task",
+              "field",
+              "after"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "modify"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              },
+              "field": {
+                "enum": [
+                  "verifier"
+                ]
+              },
+              "before": {},
+              "after": {
+                "$ref": "#/components/schemas/Agent"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "task"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "remove"
+                ]
+              },
+              "task": {
+                "$ref": "#/components/schemas/TaskKey"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "pred",
+              "succ",
+              "type"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "dep-add"
+                ]
+              },
+              "pred": {
+                "$ref": "#/components/schemas/Id"
+              },
+              "succ": {
+                "$ref": "#/components/schemas/Id"
+              },
+              "type": {
+                "$ref": "#/components/schemas/DepType"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "op",
+              "pred",
+              "succ"
+            ],
+            "properties": {
+              "op": {
+                "enum": [
+                  "dep-remove"
+                ]
+              },
+              "pred": {
+                "$ref": "#/components/schemas/Id"
+              },
+              "succ": {
+                "$ref": "#/components/schemas/Id"
+              }
+            },
+            "additionalProperties": false
+          }
+        ],
+        "title": "PlanningSplitProposalOp"
+      },
+      "Sha256": {
+        "type": "string",
+        "title": "Sha256",
+        "pattern": "^[0-9a-f]{64}$"
       }
     }
   }

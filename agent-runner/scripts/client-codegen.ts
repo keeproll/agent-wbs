@@ -124,6 +124,7 @@ export function generateClient(doc: OpenApiDocument): string {
   const meta: string[] = [];
   const types: string[] = [];
   let designSchema: Schema | undefined;
+  const planningSchemas: Record<string, Schema> = {};
   for (const [path, item] of Object.entries(doc.paths)) {
     for (const [method, op] of Object.entries(item)) {
       if (!op.tags.some((tag) => tag === 'runner' || tag === 'planning')) continue;
@@ -157,6 +158,7 @@ export function generateClient(doc: OpenApiDocument): string {
       if (op.requestBody) {
         const [mime, schema] = single(op.requestBody.content, id);
         if (id === 'reportDesignSnapshot') designSchema = schema;
+        if (['submitDraft', 'submitTechProposals', 'submitPlanningAnalysis', 'submitPlanningReviews', 'submitPlanningProposal', 'submitTaskPlan', 'submitEstimates'].includes(id)) planningSchemas[id] = schema;
         if (mime !== 'application/json' && mime !== 'multipart/form-data') throw new Error(`지원하지 않는 본문: ${mime}`);
         content = mime === 'application/json' ? 'json' : 'multipart';
         request.push(`      body: ${type(schema, '      ')};\n`);
@@ -181,18 +183,19 @@ export function generateClient(doc: OpenApiDocument): string {
   for (let name = queue.shift(); name; name = queue.shift()) {
     components.push(`export type ${name} = ${type(doc.components.schemas[name] as Schema, '')};\n`);
   }
-  const validationSchemas: Record<string, Schema> = {};
-  const collect = (value: unknown): void => {
-    if (Array.isArray(value)) { value.forEach(collect); return; }
+  const validationSchemas: Record<string, Schema> = {}, planningValidation: Record<string, Schema> = {};
+  const collect = (value: unknown, schemas: Record<string, Schema>): void => {
+    if (Array.isArray(value)) { value.forEach(item => collect(item, schemas)); return; }
     if (!value || typeof value !== 'object') return;
     const node = value as Schema;
     if (node.$ref) {
       const name = ref(node.$ref, 'schemas');
-      if (!validationSchemas[name]) { validationSchemas[name] = doc.components.schemas[name] as Schema; collect(validationSchemas[name]); }
+      if (!schemas[name]) { schemas[name] = doc.components.schemas[name] as Schema; collect(schemas[name], schemas); }
     }
-    Object.values(value).forEach(collect);
+    Object.values(value).forEach(item => collect(item, schemas));
   };
-  if (designSchema) collect(designSchema);
+  if (designSchema) collect(designSchema, validationSchemas);
+  Object.values(planningSchemas).forEach(schema => collect(schema, planningValidation));
 
   return [
     '// 생성 파일. 직접 고치지 말고 `pnpm client:generate`를 실행한다.\n/* eslint-disable */\n',
@@ -200,5 +203,6 @@ export function generateClient(doc: OpenApiDocument): string {
     `export interface Operations {\n${types.join('')}}\n`,
     `export const OPERATIONS = {\n${meta.join('')}} as const satisfies Record<keyof Operations, unknown>;\n`,
     ...(designSchema ? [`export const DESIGN_SNAPSHOT_SCHEMA = ${JSON.stringify({ ...designSchema, components: { schemas: validationSchemas } }, null, 2)} as const;\n`] : []),
+    ...(Object.keys(planningSchemas).length ? [`export const PLANNING_REPORT_SCHEMAS = ${JSON.stringify({ ...planningSchemas, components: { schemas: planningValidation } }, null, 2)} as const;\n`] : []),
   ].join('\n');
 }

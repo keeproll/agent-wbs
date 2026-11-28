@@ -185,8 +185,8 @@ docker 명령은 언제나 `docker compose -p awbs-prod -f <저장소>/agent-wbs
 3. 꼬리표 정하기: `bash /home/keeproll/projects/agent-wbs/agent-wbs/deploy/set-image.sh <꼬리표>` → `~/.agentwbs/prod/deploy.env`에 적힌다.
 4. 기동: `… up -d --wait`
 5. 로그인 링크 받기: `… exec -T api awbs-entrypoint auth login-link` → 나온 주소를 브라우저로 연다(1회용).
-6. 화면에서 프로젝트를 등록하고 설정을 넣는다(6장의 SMTP·Telegram 포함).
-7. Runner 토큰을 발급하고 Runner 서비스를 설치한다(5장).
+6. Runner 토큰을 발급하고 Runner 서비스를 설치·시작한다(5장). GitHub 저장소·인증 설정을 넣고 「저장소 접근 확인」「연결 확인」의 실제 보고를 확인한다.
+7. 초기 분석을 허용할 때 아래 호출 한도와 Planning 설정을 넣고 서비스를 다시 시작한 뒤 프로젝트를 등록한다. SMTP·Telegram은 6장을 따른다.
 
 이미지 규칙과 이유
 
@@ -259,8 +259,17 @@ Runner 입력·보고 형식이 달라지는 배포는 **이 절차를 따를 �
   - `AWBS_GITHUB_MODE`: 줄이 없으면 기본값 `gh`(이 PC의 `gh` 로그인을 쓰는 방식)다.
     - `token` 방식은 서버의 GitHub 봉인 처리기(`POST /api/runner/github/key`, `GET /api/runner/github/credential`)를 쓴다. 이 처리기는 gh-cred(PR #22)로 main에 들어왔다. 쓸 때는 `docs/runner-github-setup.md` 절차(화면에 GitHub 토큰 저장)를 따른다.
     - M8-06 리허설은 token 방식의 키 등록·봉인 조회까지만 확인했다. 실제 GitHub 연결은 어느 방식으로도 확인하지 않았다.
-  - `AWBS_ATTEMPT_AUTO`, `AWBS_CI_AUTO`: 줄이 없거나 `0`이면 꺼짐이다. `1`이면 실제 Claude·Codex 호출과 CI 실행이 시작된다. 켜는 것은 owner가 정할 때만 한다(OWNER-RUNBOOK 7단계).
-  - 확인 명령(비밀값 줄은 보이지 않는다): `grep -E '^(AWBS_URL|AWBS_AGENT_USER|AWBS_GITHUB_MODE|AWBS_GITHUB_REPO|AWBS_ATTEMPT_AUTO|AWBS_CI_AUTO)=' <저장소>/agent-runner/.env`
+  - `AWBS_ATTEMPT_AUTO=1`은 개발·검증 시도, `AWBS_CI_AUTO=1`은 통합·CI 재실행·배포 확인을 켠다. 모두 기본 꺼짐이며, 이 두 설정으로 초기 분석이 켜지지는 않는다.
+  - `AWBS_GITHUB_REPO=https://github.com/<owner>/<repo>`가 있으면 무료 `repo_check`·`github_check` 수신은 기본 켜짐이다. 유료 CLI·코드 실행·외부 쓰기가 없어 연결 준비에 사용할 수 있다.
+  - 등록 뒤 초기 분석·이후 Planning은 `AWBS_PLANNING_AUTO=1`과 `AWBS_PLANNING_CODEX_MODEL`·`AWBS_PLANNING_CLAUDE_MODEL`, 확인된 Agent 격리가 필요하다. 모델 ID는 owner가 검증할 값을 직접 정한다.
+  - 모든 유료 Agent 호출의 공통 예산은 `AWBS_CALL_LIMIT`다. 기본 0, 최대 30회다. `AWBS_AGENT_MAX_EFFORT`는 기본 high이며 low·medium·high만 된다. 초기 분석·Planning·계약 반영·개발·검증·형식 수정 요청을 모두 합쳐 센다. 하위 Agent는 끈다. M8 검증 동안 owner가 정한 값은 **`AWBS_CALL_LIMIT=30`, `AWBS_AGENT_MAX_EFFORT=high`**다.
+  - 사용 순번은 `AWBS_HOME/paid-calls.json`에 남고 재시작·프로젝트 초기화로 돌아오지 않는다. 슬롯·프로세스 등록 전 실패·취소는 차감하지 않고, 실제 실행 허가 직전 차감한 뒤의 실패·취소는 소비한다. 한도에서 새 유료 수신을 멈추며, 작업 중 한도에 닿으면 단계 실패를 보고한다. 허가 직전 차감과 실제 실행 사이에 취소·전원 장애가 나도 과소 집계를 피하려고 소비한 채 둔다. 이 파일을 지우거나 홈을 바꾸어 예산을 다시 만들지 않는다.
+  - 최초 분석이 작업 구역을 추가해야 하면 시스템 배포 키가 필요하다. 기존 쓰기 권한·fence·lease 관문을 통과해야 push하며, `pipeline.yaml`을 임의로 만들지는 않는다. job별 전체 연결 표와 재현 시험은 [Runner README](../../agent-runner/README.md)를 따른다.
+  - 확인 명령은 설정을 검증하고 켜짐 여부·한도만 보여 준다. 잘못 붙은 토큰 문자열을 원문으로 출력하지 않는다: `pnpm -C <저장소>/agent-runner exec node --env-file-if-exists=.env --input-type=module -e 'import {loadConfig} from "./src/config.ts"; const c=loadConfig(process.env); console.log({githubConfigured:!!c.github,githubMode:c.github?.mode,attemptAuto:c.attemptAuto,ciAuto:c.ciAuto,planningAuto:c.planningAuto,agentCallLimit:c.agentCallLimit,agentMaxEffort:c.agentMaxEffort});'`
+
+  - `AWBS_ATTEMPT_AUTO=1`이어도 한도 0이면 시도·AI 분석·하위 Agent 실행은 꺼지며, 무료 확인·CI는 해당 플래그 조건대로 계속한다. 이전 이름 `AWBS_AGENT_CALL_LIMIT`은 호환용이고 새 이름과 값이 충돌하면 시작 오류다.
+  - 시작 로그와 설정 → Runner · 실행 환경의 「유료 AI 호출 한도」에서 **「유료 호출 한도 0: AI 실행 꺼짐」** 또는 **「유료 호출 한도 도달: AI 실행 꺼짐」**, 사용/전체·남은 횟수·최대 Effort를 확인한다. 호출별 순번·시각·job·모델·Effort·CLI 종료 결과도 보이며, 5초마다 서버 상태를 갱신한다. 프롬프트·인증정보·업무 결과 원문은 이 기록에 넣지 않는다. `unknown`은 결과 미확인으로 보존하며 자동 환불하지 않는다.
+  - 재부팅으로 bootId가 바뀌면 저장된 start 본문을 새 부팅 정보로 덮어쓰지 않는다. 옛 실행 종료 증거만 보고하고 임대 갱신을 멈춘다. 외부 효과가 가능한 job은 서버 만료 뒤 기존 reconcile 절차로 원격 결과를 확인한다. 다시 호출하거나 성공으로 추정하지 않는다.
 
 #### 5.1.1 Runner 토큰 발급 — 반드시 그 Runner의 ID로
 

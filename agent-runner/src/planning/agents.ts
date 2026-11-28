@@ -5,7 +5,7 @@ import type { DecisionSnapshot, SubagentDef, TechConstraint, WbsSnapshot } from 
 
 /*
  * Planning Agent(계획을 세우는 Agent) 포트.
- * 실제 Claude·Codex CLI 연결은 M5-01·M5-02가 만든다. 이 폴더는 「무엇을 어떤 순서로 묻고, 두 답을 어떻게 합치나」만 맡는다.
+ * 실제 CLI는 cli.ts → Execution.agent로 연결한다. 이 포트는 「무엇을 어떤 순서로 묻고, 두 답을 어떻게 합치나」를 정한다.
  * 시험은 손으로 쓴 가짜 Agent를 쓴다(실제 호출 없음).
  *
  * 두 종류의 질문이 있다.
@@ -58,7 +58,7 @@ export interface CrossReview {
 
 type DraftBody = Omit<ApiRequest<'submitDraft'>['body'], 'fence'>;
 /** 작성자의 초안. 판단 기록은 두 Agent의 독립 판단으로 채우므로 받지 않는다. */
-export type DraftContent = Omit<DraftBody, 'tasks'> & { tasks: Omit<DraftBody['tasks'][number], 'judgedRules'>[] };
+export type DraftContent = Omit<DraftBody, 'tasks'> & { tasks: Omit<DraftBody['tasks'][number], 'judgedRules' | 'estimate'>[] };
 export interface DraftRequest {
   jobId: string; instruction: string; inputPath: string; commit: string; cross: CrossReview; analyses: Record<AgentName, Analysis>;
   techConstraints: TechConstraint[];

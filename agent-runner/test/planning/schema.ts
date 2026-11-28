@@ -11,7 +11,7 @@ type Schema = Record<string, unknown>;
 interface Document { paths: Record<string, Record<string, { requestBody?: { content: Record<string, { schema: Schema }> } }>>; components: { schemas: Record<string, Schema> } }
 
 const document = JSON.parse(readFileSync(new URL('../../../agent-wbs/contracts/openapi.json', import.meta.url), 'utf8')) as Document;
-const KNOWN = new Set(['$ref', 'anyOf', 'const', 'enum', 'format', 'maxItems', 'maxLength', 'maximum', 'minItems', 'minLength', 'minimum', 'exclusiveMinimum',
+const KNOWN = new Set(['$ref', 'anyOf', 'allOf', 'const', 'enum', 'format', 'maxItems', 'maxLength', 'maximum', 'minItems', 'minLength', 'minimum', 'exclusiveMinimum',
   'pattern', 'patternProperties', 'properties', 'required', 'type', 'uniqueItems', 'additionalProperties', 'items', 'title', 'description', 'minProperties', 'nullable', 'default']);
 
 function resolve(schema: Schema): Schema {
@@ -33,6 +33,7 @@ function typeOf(value: unknown): string {
 export function errorsOf(input: Schema, value: unknown, path = '$'): string[] {
   const schema = resolve(input);
   for (const key of Object.keys(schema)) if (!KNOWN.has(key)) throw new Error(`시험 검사기가 모르는 스키마 키워드: ${key} (${path})`);
+  if (Array.isArray(schema.allOf)) return (schema.allOf as Schema[]).flatMap(branch => errorsOf(branch, value, path));
   if (Array.isArray(schema.anyOf)) {
     const branches = (schema.anyOf as Schema[]).map((branch) => errorsOf(branch, value, path));
     return branches.some((e) => e.length === 0) ? [] : [`${path}: 어느 형태와도 맞지 않음 (${branches.map((e) => e[0]).join(' | ')})`];

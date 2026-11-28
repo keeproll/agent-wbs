@@ -21,6 +21,9 @@ export interface RunSpec {
    * 주면 그 안에 있는지도 확인한다. null은 「미확인」이라 쓰지 않는다(owner Q-06).
    */
   modelEfforts?: readonly string[] | null;
+  /** 횟수 제한 검증에서는 CLI가 별도 유료 하위 세션을 열지 못하게 한다. */
+  noSubagents?: boolean;
+  readOnly?: boolean;
 }
 
 export type CliArgumentCode = 'effort_unmapped' | 'effort_unsupported' | 'effort_unconfirmed' | 'model_invalid' | 'resume_invalid' | 'cwd_invalid' | 'prompt_empty';
@@ -65,12 +68,13 @@ function validate(spec: RunSpec): void {
 function agentArgs(agent: Agent, spec: RunSpec, isolation: IsolationLayer): string[] {
   const iso = [...isolation.flags(agent)];
   if (agent === 'Claude') {
-    return [...CLAUDE_FIXED, ...iso, '--model', spec.model, '--effort', spec.effort, ...(spec.resume ? ['--resume', spec.resume] : [])];
+    return [...CLAUDE_FIXED, ...iso, ...(spec.noSubagents ? ['--disallowedTools', 'Agent,Task'] : []), ...(spec.readOnly ? ['--tools', 'Read,Glob,Grep'] : []), '--model', spec.model, '--effort', spec.effort, ...(spec.resume ? ['--resume', spec.resume] : [])];
   }
   // `exec resume`에는 -C·--sandbox가 없다. 그래서 작업 폴더는 프로세스 cwd로, sandbox는 격리 계층의 `-c` 설정으로 넘긴다.
   // 지시문은 `-`로 표준 입력에서 읽게 한다.
   return [
     'exec', ...(spec.resume ? ['resume'] : []), ...CODEX_FIXED, ...iso,
+    ...(spec.noSubagents ? ['-c', 'features.multi_agent=false'] : []), ...(spec.readOnly ? ['-c', 'sandbox_mode="read-only"'] : []),
     '--model', spec.model, '-c', `model_reasoning_effort="${spec.effort}"`,
     ...(spec.resume ? [spec.resume] : []), '-',
   ];
@@ -107,10 +111,11 @@ export type RunKind = 'new' | 'resume';
  *   예: Codex 새 실행 `exec --json …`, 재개 `exec resume --json …`. Claude 재개는 끝에 `--resume`.
  * - 격리 옵션이 바뀌면 조합도 바뀐다(G §6.7 검증 조건).
  */
-export function sessionOptions(agent: Agent, isolation: IsolationLayer, kind: RunKind): string {
+export function sessionOptions(agent: Agent, isolation: IsolationLayer, kind: RunKind, noSubagents = false): string {
   const iso = isolation.flags(agent);
   const words = agent === 'Claude'
     ? [...CLAUDE_FIXED, ...iso, ...(kind === 'resume' ? ['--resume'] : [])]
     : ['exec', ...(kind === 'resume' ? ['resume'] : []), ...CODEX_FIXED, ...iso];
+  if (noSubagents) words.push(...(agent === 'Claude' ? ['--disallowedTools', 'Agent,Task'] : ['-c', 'features.multi_agent=false']));
   return words.join(' ');
 }

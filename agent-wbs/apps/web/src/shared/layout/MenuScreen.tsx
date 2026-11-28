@@ -65,7 +65,7 @@ export function useRefreshError(
 export function MenuScreen({ menu, title, children }: { menu: MenuKey; title?: string; children: (project: ProjectState) => ReactNode }) {
   const label = title ?? menuLabel(menu);
   useDocumentTitle(label);
-  const project = useApiQuery('getProject', {}, { topics: ['project'] });
+  const project = useApiQuery('getProject', {}, { topics: ['project', 'planning', 'design', 'task'] });
   const skeleton = useDelayedFlag(project.isPending && project.fetchStatus === 'fetching');
   useTopBar(useRevisitFetching(project));
   useRefreshError(project, `${label} 최신 내용 불러오기`);

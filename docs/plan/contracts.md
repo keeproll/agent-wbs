@@ -124,7 +124,7 @@
   - 이 경고는 readiness key **`reports`**로 보낸다(M3 서버 후속에서 계약에 추가, main 023ac8f 확인).
     - 거부 기록이 있으면 `warn`이고 `detail`에 기록을 적는다. 없으면 `ok`(「보고 거부 기록 없음」)다.
     - Runner의 `withRejectionWarnings()`가 다른 준비 항목을 덮지 않고 이 항목만 덧붙인다.
-  - 지금 readiness key는 15개다(§3.1).
+  - 지금 readiness key는 16개다(§3.1).
   - 예전 기록: 2026-11-26에는 key가 없어 계약 작업으로 미뤘다(조정자 결정 A).
 - 조회 timeout(정해진 시간 안에 응답이 없으면 포기) 10초, 업로드 120초 [결정].
 - 자동 처리 실패는 팀장 오류 막대가 아니라 반복 시 알림으로 올린다(§0.3 L71).
@@ -484,7 +484,8 @@ Runner만 부르는 API다. Runner 토큰과 epoch 헤더가 필요하다(§1).
 - POST `/runner/sessions`
   - stop은 열린 세션만. `reason=unknown`은 서버만
 - POST `/runner/host` `/readiness` `/models` `/usage` `/concurrency`
-  - readiness key에 `obs`★ `gh`★ `lfs`★ `reports`★ `font`★ `render`★ 추가. 지금 key는 15개다: `claude` `codex` `git` `node` `pnpm` `pg` `repo` `disk` `subs` `obs` `gh` `lfs` `reports` `font` `render`.
+  - readiness key에 `obs`★ `gh`★ `lfs`★ `reports`★ `font`★ `render`★ `paid_calls`★ 추가. 지금 key는 16개다: `claude` `codex` `git` `node` `pnpm` `pg` `repo` `disk` `subs` `obs` `gh` `lfs` `reports` `font` `render` `paid_calls`.
+    - `paid_calls`는 유료 호출 한도·사용/남은 횟수·최대 Effort·하위 Agent 꺼짐·호출별 순번/시각/job/Agent/모델/Effort/CLI 종료 결과를 보고한다. 기본 한도 0·소진·장부 손상은 warn으로 AI 실행 꺼짐을 표시한다. 비밀·프롬프트·업무 결과 원문은 싣지 않는다.
     - `reports`: Runner 보고가 4xx로 거부된 기록(§1.2).
     - `font`: 야간 화면 비교의 고정 글꼴 설치 여부. 없으면 warn이고 화면 비교는 「비교 불가」다(M7-03 결정 12).
     - `render`: 화면 비교 기준 렌더러의 네트워크 차단 방식. 네임스페이스면 ok, 실행 인자 차단만이면 warn이다. 실행은 허용한다(M7-03 결정 16).
@@ -732,12 +733,18 @@ POST /api/runner/jobs/:id/finish {fence,status,result?,error?}
 | kind | payload | 종료 보고 |
 |---|---|---|
 | `repo_check` | url | repo-checks result |
+| `github_check` | mode | jobId·fence 포함 GitHub 상태 보고(서버가 job 종료) |
 | `bootstrap` / `input_diff` | 커밋, 지시, 이전 커밋, 재개 단계 | progress → draft / proposal |
 | `planning` / `estimate` / `split` | `tasks[{taskKey,subjectHash,content}]`, 정책. `planning`은 `proposal{id,ops,targets[{target,subjectHash,before,after}],splitSubjectHash,splitTasks[{taskKey,content}]}\|null`도 포함(아래 판단 payload 규칙) | planning API. 재판단 보고에 hash를 그대로 돌려보냄(data-model §2.3-1) |
 | `attempt` | taskKey, kind, agent, 브랜치, 기준 커밋, 입력 버전, 작업 지시 묶음 | status → result/interrupt |
 | `stop_attempt` | attemptId, 사유 | interrupt |
 | `integrate` / `deploy_check` / `ci_retry` | PR·커밋 | ci runs, queue |
 | `design_apply` / `merge_followup` | 항목·PR(`design_apply`는 `{itemKey, driftId}`) | design snapshot |
+
+Runner 앱의 수신 담당·기본값·유료 호출 한도는 [Runner README](../../agent-runner/README.md)의 14종 표를 따른다. `merge_followup`은 현재 계약에만 있으며 서버 발급 코드는 없다.
+
+- GET `/api/runner/design/jobs/:id?fence=`: `design_apply`의 현재 소유·임대·외부 쓰기 권한을 검사한 뒤 `{sourceCommit,path,target:{fields}}`를 돌려준다. 같은 job에 연결된 열린 불일치이고 최신 main 캐시가 요청의 추출 커밋과 같아야 한다. 다른 job·낡은 fence·추출 불가·코드가 바뀐 목표는 거부한다.
+- POST `/api/runner/jobs/:id/slots/acquire`는 선택 `agent`를 받는다. Planning·계약 반영의 다음 CLI를 실제 Agent의 슬롯으로 계산한다. 이전 물리 슬롯 반환으로 닫힌 비시도 보유는 그대로 보존하고 새 보유를 만든다. `attempt`의 닫힌 보유나 다른 종류의 Agent 교체는 허용하지 않는다.
 
 **판단 payload** (Planning에게 판단을 맡길 때 보내는 내용)
 

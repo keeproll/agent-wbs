@@ -23620,7 +23620,8 @@
                             "lfs",
                             "reports",
                             "font",
-                            "render"
+                            "render",
+                            "paid_calls"
                           ]
                         },
                         "status": {
@@ -26933,6 +26934,162 @@
             "EPOCH_MISMATCH",
             "EXTERNAL_WRITE_BLOCKED",
             "INVALID_TRANSITION"
+          ],
+          "429": [
+            "RATE_LIMITED"
+          ],
+          "500": [
+            "INTERNAL"
+          ],
+          "503": [
+            "UNAVAILABLE"
+          ]
+        }
+      }
+    },
+    "/api/runner/design/jobs/{id}": {
+      "get": {
+        "operationId": "getDesignApplyJob",
+        "summary": "현재 임대의 계약 반영 대상. 추출을 확인한 원본 커밋·파일·목표만 조회",
+        "tags": [
+          "runner"
+        ],
+        "security": [
+          {
+            "runnerToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id"
+            }
+          },
+          {
+            "name": "fence",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ProjectEpoch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "현재 임대의 계약 반영 대상. 추출을 확인한 원본 커밋·파일·목표만 조회",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "sourceCommit",
+                    "path",
+                    "target"
+                  ],
+                  "properties": {
+                    "sourceCommit": {
+                      "$ref": "#/components/schemas/Sha"
+                    },
+                    "path": {
+                      "$ref": "#/components/schemas/RepoPath"
+                    },
+                    "target": {
+                      "type": "object",
+                      "required": [
+                        "fields"
+                      ],
+                      "properties": {
+                        "fields": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "path",
+                              "type",
+                              "required"
+                            ],
+                            "properties": {
+                              "path": {
+                                "type": "string",
+                                "pattern": "^/",
+                                "maxLength": 4096
+                              },
+                              "type": {
+                                "type": "string",
+                                "minLength": 1,
+                                "pattern": "\\S",
+                                "maxLength": 4096
+                              },
+                              "required": {
+                                "type": "boolean"
+                              }
+                            },
+                            "additionalProperties": false
+                          },
+                          "maxItems": 5000
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error",
+            "description": "VALIDATION_FAILED"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error",
+            "description": "RUNNER_UNAUTHORIZED"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error",
+            "description": "NOT_FOUND"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error",
+            "description": "EPOCH_MISMATCH, EXTERNAL_WRITE_BLOCKED, INVALID_TRANSITION, LEASE_LOST, VERSION_CONFLICT"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited",
+            "description": "RATE_LIMITED"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "INTERNAL"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error",
+            "description": "UNAVAILABLE"
+          }
+        },
+        "x-error-codes": {
+          "400": [
+            "VALIDATION_FAILED"
+          ],
+          "401": [
+            "RUNNER_UNAUTHORIZED"
+          ],
+          "404": [
+            "NOT_FOUND"
+          ],
+          "409": [
+            "EPOCH_MISMATCH",
+            "EXTERNAL_WRITE_BLOCKED",
+            "INVALID_TRANSITION",
+            "LEASE_LOST",
+            "VERSION_CONFLICT"
           ],
           "429": [
             "RATE_LIMITED"
@@ -32555,6 +32712,9 @@
                     "type": "string",
                     "minLength": 1,
                     "pattern": "\\S"
+                  },
+                  "agent": {
+                    "$ref": "#/components/schemas/Agent"
                   }
                 },
                 "additionalProperties": false
@@ -49192,7 +49352,8 @@
                             "lfs",
                             "reports",
                             "font",
-                            "render"
+                            "render",
+                            "paid_calls"
                           ]
                         },
                         "status": {

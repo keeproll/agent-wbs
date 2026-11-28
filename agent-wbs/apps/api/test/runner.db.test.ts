@@ -982,6 +982,56 @@ describe('runner 실제 PostgreSQL 검증', () => {
     expect((await release(job,{ kind:'boot_changed',bootId:'boot-a',processGroup:321,currentBootId:'boot-new' })).statusCode).toBe(204);
   });
 
+  test('queued bootstrap 재부팅: start 본문을 재생하지 않고 종료 증거 뒤 만료·reconcile을 보존한다', async () => {
+    const { mkdtemp, rm, readFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { createApiClient, ApiTransportError } = await import('../../../../agent-runner/src/api/client.ts');
+    const { Outbox } = await import('../../../../agent-runner/src/api/outbox.ts');
+    const { Secret } = await import('../../../../agent-runner/src/security/secret.ts');
+    const { State } = await import('../../../../agent-runner/src/state/state.ts');
+    const { QueuedJobs } = await import('../../../../agent-runner/src/jobs/queued.ts');
+    const { bootstrapJob } = await import('../../../../agent-runner/test/planning/harness.ts');
+    const { createPlanningJob } = await import('../src/project/jobs.ts');
+    const { BOOT_STEPS } = await import('../src/project/steps.ts');
+    const planningJobId = await createPlanningJob(owner, { projectId: project, kind: 'bootstrap', instruction: '재부팅 시험', stepKeys: BOOT_STEPS });
+    await owner.query("insert into runner_jobs(project_id,kind,payload,state,epoch,dedup_key) values($1,'bootstrap',$2,'queued',1,'reboot-bootstrap')", [project, { ...bootstrapJob().payload, planningJobId }]);
+    const home = await mkdtemp(join(tmpdir(), 'queued-reboot-db-')), state = await State.open(home);
+    await state.update(d => { d.epoch = 1; });
+    const operations: string[] = [];
+    const api = createApiClient({ baseUrl: 'http://fake.invalid', token: new Secret(bearer), fetch: async (input, init) => {
+      const u = new URL(String(input)); operations.push(u.pathname);
+      const response = await app.inject({ method: init?.method as 'GET' | 'POST', url: u.pathname + u.search, headers: Object.fromEntries(new Headers(init?.headers)), ...(init?.body && { payload: String(init.body) }) });
+      return new Response(response.statusCode === 204 ? null : response.body, { status: response.statusCode, headers: response.headers as Record<string, string> });
+    } });
+    const identity = { hostId: 'host-a', bootId: 'boot-a' };
+    let executed = 0;
+    const options = { home, api, outbox: new Outbox(state, api), runnerId: state.snapshot.runnerId, identity: () => identity,
+      epoch: () => 1, ready: () => true, kinds: async () => ['bootstrap' as const], execute: async (job: { id: string; fence: number }) => {
+        executed++;
+        await api('acquireJobSlots', { epoch: 1, params: { id: job.id }, idempotencyKey: randomUUID(), body: { fence: job.fence, hostId: identity.hostId } });
+        await api('reportJobProcess', { epoch: 1, params: { id: job.id }, idempotencyKey: randomUUID(), body: { fence: job.fence, processGroup: 321, cgroup: null } });
+        throw new ApiTransportError('submitTechProposals');
+      } };
+    try {
+      await expect(new QueuedJobs(options).runNext(1)).rejects.toBeInstanceOf(ApiTransportError);
+      const saved = JSON.parse(await readFile(join(home, 'state/queued-jobs/job.json'), 'utf8')) as { job: { id: string; fence: number } };
+      expect(executed).toBe(1);
+      expect((await owner.query('select state from runner_jobs where id=$1', [saved.job.id])).rows[0]?.state).toBe('started');
+      const reboot = await post('host', { ...identity, bootId: 'boot-new', cpu: 'fake', cores: 20, memGB: 32, swapGB: 0, diskFreeGB: 100, os: 'fake' });
+      expect(reboot.statusCode, reboot.body).toBe(200);
+      identity.bootId = 'boot-new';
+      const renewed = operations.filter(path => path.endsWith('/renew')).length;
+      const restarted = new QueuedJobs(options); await restarted.runNext(1);
+      const released = (await owner.query('select slot_state,closed_at,release_proof from execution_holds where job=$1 and pgid=321', [saved.job.id])).rows[0];
+      expect(released).toMatchObject({ slot_state: 'none', closed_at: expect.any(Date), release_proof: 'boot_changed' });
+      await owner.query("update runner_jobs set lease_until=clock_timestamp()-interval '10 seconds' where id=$1", [saved.job.id]);
+      await watchRunner(pool, 1); await restarted.runNext(1);
+      expect((await owner.query('select state,fence from runner_jobs where id=$1', [saved.job.id])).rows[0]).toEqual({ state: 'reconcile', fence: saved.job.fence });
+      expect(operations.filter(path => path.endsWith('/renew'))).toHaveLength(renewed);
+      expect(executed).toBe(1);
+    } finally { await state.close(); await rm(home, { recursive: true, force: true }); }
+  });
+
   test('PC 변경 전 대기한 job도 새 세대 브랜치를 쓰며 옛 보유 해제 전 로컬 재개를 허용한다', async () => {
     const { t,job }=await claimed();
     await start(job);

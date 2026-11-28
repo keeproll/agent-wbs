@@ -56,7 +56,7 @@ function LogoutButton() {
 
 export function Shell() {
   const [collapsed, setCollapsed] = useState(false);
-  const project = useApiQuery('getProject', {}, { topics: ['project'] });
+  const project = useApiQuery('getProject', {}, { topics: ['project', 'planning', 'design', 'task'] });
   const notify = useNotice();
   const dimmed = useMainDimmed();
   useChangeFeed(true);

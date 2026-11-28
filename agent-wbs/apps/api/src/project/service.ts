@@ -61,7 +61,7 @@ function repoProblems(result: RepoResult): string[] {
   if (!result.structure?.docs.some(isDesignDoc)) problems.push('prototype/docs/ 에 md 문서가 없습니다');
   // 작업 저장소는 private 저장소다(G§4.2). 공개 여부를 확인하지 못한 경우(null)도 통과시키지 않는다.
   if (result.private !== true) problems.push(result.private === false ? '공개 저장소입니다. private 저장소만 등록할 수 있습니다' : 'private 여부를 확인하지 못했습니다');
-  if (result.error && problems.length) problems.push(result.error);
+  if (result.error) problems.push(result.error);
   return problems;
 }
 

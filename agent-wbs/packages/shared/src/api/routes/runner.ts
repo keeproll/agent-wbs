@@ -1,5 +1,5 @@
 import Type from 'typebox';
-import { DesignSnapshot } from '../design.ts';
+import { DesignSnapshot, DesignShape } from '../design.ts';
 import * as c from '../common.ts';
 import * as m from '../models.ts';
 import { operation } from '../operation.ts';
@@ -615,6 +615,16 @@ export const runnerOperations = [
   }),
   operation({
     ...runner,
+    id: 'getDesignApplyJob',
+    method: 'GET',
+    path: '/api/runner/design/jobs/:id',
+    summary: '현재 임대의 계약 반영 대상. 추출을 확인한 원본 커밋·파일·목표만 조회',
+    query: Body({ fence }),
+    responses: { 200: Body({ sourceCommit: c.Sha, path: c.RepoPath, target: DesignShape }) },
+    errors: ['LEASE_LOST', 'VERSION_CONFLICT', 'INVALID_TRANSITION', 'EXTERNAL_WRITE_BLOCKED'],
+  }),
+  operation({
+    ...runner,
     id: 'startCiRun',
     method: 'POST',
     path: '/api/runner/ci/runs',
@@ -892,7 +902,7 @@ export const runnerOperations = [
     method: 'POST',
     path: '/api/runner/jobs/:id/slots/acquire',
     summary: 'CLI·① 실행 전 용량 재획득(none→reserved). 그룹은 생성 뒤 /process',
-    body: Body({ fence, hostId: Text }),
+    body: Body({ fence, hostId: Text, agent: Opt(c.Agent) }),
     responses: { 204: null },
     errors: ['CLAIM_REJECTED'],
   }),

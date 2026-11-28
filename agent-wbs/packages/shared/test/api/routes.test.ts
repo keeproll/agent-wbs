@@ -229,6 +229,8 @@ test('원본·계획에 없는 경로를 만들지 않았다', () => {
     'GET /api/runner/holds',
     // M7-06 조정자 결정 2: 실제 CI 작업의 소유권·QA·재실행 근거를 Runner가 읽는다.
     'GET /api/runner/ci/jobs/:id',
+    // Runner 수신 연결: design_apply의 payload에는 원본 파일·추출 명세가 없어 현재 임대에 묶어 읽는다(contracts §3.2).
+    'GET /api/runner/design/jobs/:id',
     // M6 통합: M6-07 남은 연결 「브랜치 목록 API 없음」(coordinator 지시). 계획 문서(contracts §2.3 설계)에 아직 없어 보고서에 반영 문구를 적었다.
     'GET /api/projects/:projectId/design/refs'];
   const known = new Set([

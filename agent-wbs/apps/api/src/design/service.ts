@@ -26,6 +26,15 @@ export async function designJob(db: PoolClient, jobId: string, fence: number, pr
   return job;
 }
 
+export async function designApplyContext(db: PoolClient, job: Job) {
+  if (job.kind !== 'design_apply' || !job.project_id) throw badState('계약 반영 job이 아닙니다.');
+  const row = (await db.query<{ resolution: { jobId?: string; sourceCommit?: string; target?: DesignShapeInput } }>('select resolution from design_drifts where id::text=$1 and project_id=$2 and item_key=$3 and status=\'open\'', [job.payload.driftId, job.project_id, job.payload.itemKey])).rows[0];
+  const snapshot = await latestSnapshot(db, job.project_id);
+  const item = (await snapshotItems(db, snapshot)).find(value => value.item_key === job.payload.itemKey);
+  if (!row || row.resolution.jobId !== job.id || !snapshot || snapshot.commit !== row.resolution.sourceCommit || !item || item.parse_status === 'error' || !item.content.extracted || item.content.sourceCommit !== snapshot.commit || !row.resolution.target) throw badState('계약 반영의 원본 추출 결과가 최신이 아닙니다. 다시 대조한 뒤 요청하세요.');
+  return { sourceCommit: snapshot.commit, path: item.path, target: row.resolution.target };
+}
+
 function validate(body: DesignSnapshotInput) {
   const errors: { path: string; rule: string; message: string }[] = [];
   const mark = (path: string, rule: string, message: string) => errors.push({ path, rule, message });

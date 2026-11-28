@@ -9,6 +9,7 @@ import { Outbox } from '../../src/api/outbox.ts';
 import { Secret } from '../../src/security/secret.ts';
 import { State } from '../../src/state/state.ts';
 import { Execution } from '../../src/exec/session.ts';
+import { PaidCalls } from '../../src/exec/paid-calls.ts';
 import { HeavySemaphore } from '../../src/resources/heavy.ts';
 import { ResourceReporter } from '../../src/resources/reporter.ts';
 import { installFakeCli } from '../fakes/cli.ts';
@@ -538,4 +539,51 @@ test('M8 전 연결: 재확인이 돌려준 계층으로 이번 실행을 감싼
   t.exec.setIsolation(undefined);
   delete t.options.recheckIsolation;
   expect(await t.exec.claim(6)).toBeNull();
+});
+
+
+test('시도 유료 호출은 실행 직전 차감하고 장부·실제 CLI 횟수가 같으며 두 번째 호출을 막는다', async () => {
+  const t = await setup(); t.options.budget = () => 0;
+  t.options.paidCalls = new PaidCalls(t.home, 1);
+  const first = await t.exec.run(job);
+  expect(first.ok).toBe(true);
+  expect(t.fake.calls()).toHaveLength(1);
+  expect(await t.options.paidCalls.snapshot()).toMatchObject({ used: 1, calls: [
+    { number: 1, job: { id: job.id, fence: job.fence, epoch: 0 }, agent: 'Codex', model: 'gpt-6.2-sol', effort: 'high', result: 'succeeded', exitCode: 0, at: expect.any(String), finishedAt: expect.any(String) },
+  ] });
+  await expect(t.exec.run(job)).rejects.toThrow('AGENT_CALL_LIMIT');
+  expect(t.fake.calls()).toHaveLength(1);
+  expect(await t.options.paidCalls.used()).toBe(1);
+});
+
+test('시도 준비 실패·시작 전 취소는 유료 호출을 차감하지 않는다', async () => {
+  const t = await setup({ prepare: async () => { throw new Error('준비 실패'); } });
+  t.options.paidCalls = new PaidCalls(t.home, 1);
+  await expect(t.exec.run(job)).rejects.toThrow('준비 실패');
+  expect(await t.options.paidCalls.used()).toBe(0);
+  expect(t.fake.calls()).toHaveLength(0);
+  const controller = new AbortController(); controller.abort();
+  await expect(t.exec.run(job, { signal: controller.signal })).rejects.toThrow();
+  expect(await t.options.paidCalls.used()).toBe(0);
+});
+
+test('유료 명령은 heavy 슬롯 대기 중 취소되면 사용량을 소비하지 않는다', async () => {
+  const t = await setup(); t.options.paidCalls = new PaidCalls(t.home, 1);
+  const release = await t.heavy.acquire('other');
+  const controller = new AbortController();
+  const command = t.exec.agent({ id: 'analysis', fence: 1, epoch: 0 }, 'Codex', { cwd: t.home, model: 'gpt-6.2-sol', effort: 'high', prompt: 'fake' }, controller.signal);
+  await expect.poll(() => t.requests.some(request => request.path.endsWith('/renew'))).toBe(true);
+  expect(await t.options.paidCalls.used()).toBe(0);
+  controller.abort(); await expect(command).rejects.toThrow(); release();
+  expect(await t.options.paidCalls.used()).toBe(0);
+  expect(t.fake.calls()).toHaveLength(0);
+});
+
+test('시도 실행 뒤 취소는 이미 허가한 호출을 돌려주지 않고 cancelled로 남긴다', async () => {
+  const t = await setup({ hang: true }); t.options.budget = () => 0;
+  t.options.paidCalls = new PaidCalls(t.home, 1);
+  const controller = new AbortController(), attempt = t.exec.run(job, { signal: controller.signal });
+  await expect.poll(() => t.fake.calls().length).toBe(1);
+  controller.abort(); await attempt.catch(() => undefined);
+  expect(await t.options.paidCalls.snapshot()).toMatchObject({ used: 1, calls: [{ result: 'cancelled' }] });
 });

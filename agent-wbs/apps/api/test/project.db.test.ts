@@ -199,6 +199,9 @@ describe('project 등록(G§4.2 ①, contracts §2.2)', () => {
     expect(failed.status).toBe('failed');
     expect(failed.error).toContain('prototype/uiux/');
     expect(failed.error).toContain('prototype/docs/');
+    const mismatch = await runner(`/api/runner/repo-checks/${id}/result`, { fence: job.fence, access: true, private: true, commit: SHA1, structure: STRUCTURE, error: 'Runner 설정 저장소와 다릅니다' });
+    expect(mismatch.statusCode, mismatch.body).toBe(204);
+    expect((await lead('GET', `/api/project/repo-checks/${id}`)).json()).toMatchObject({ status: 'failed', error: 'Runner 설정 저장소와 다릅니다' });
     const unknown = await lead('GET', '/api/project/repo-checks/00000000-0000-4000-8000-000000000000');
     expect(unknown.statusCode).toBe(404);
     // 실패한 확인으로는 등록할 수 없다.

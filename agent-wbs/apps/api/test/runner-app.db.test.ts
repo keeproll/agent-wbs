@@ -1,0 +1,161 @@
+import { createPool, recreateTestDatabase, runMigrations, seedSystem } from '@awbs/db';
+import { createCipheriv, randomBytes } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { createServer as createNetServer } from 'node:net';
+import { afterAll, beforeAll, expect, inject, test, vi } from 'vitest';
+import { createServer as createViteServer, type ViteDevServer } from 'vite';
+import { chromium, type Browser } from 'playwright-core';
+import { buildApp } from '../src/app.ts';
+import { installRunner } from '../src/runner/routes.ts';
+import { installProjectRunner } from '../src/project/runner-routes.ts';
+import { registerRunnerMessageRoutes } from '../src/messages/routes.ts';
+import { issueLoginLink, issueRunnerToken } from '../src/platform/credentials.ts';
+import { RunnerApp } from '../../../../agent-runner/src/app.ts';
+import { createApiClient } from '../../../../agent-runner/src/api/client.ts';
+import { Secret } from '../../../../agent-runner/src/security/secret.ts';
+import { State } from '../../../../agent-runner/src/state/state.ts';
+import { GitRepository } from '../../../../agent-runner/src/git/repository.ts';
+import { repositoryIdFor } from '../../../../agent-runner/src/git/identity.ts';
+import { startFakeGitHub } from '../../../../agent-runner/test/fakes/github/server.ts';
+import { GitHubModel } from '../../../../agent-runner/test/fakes/github/model.ts';
+import { installPlanningCli, probe, testHostSources } from '../../../../agent-runner/test/jobs/queued-harness.ts';
+
+const db = new URL(inject('testDatabaseUrl')); db.pathname += '_runner_app';
+const owner = createPool(db.href, { max: 4, onError: () => undefined });
+const appDb = new URL(db); appDb.searchParams.set('options', '-c role=awbs_app');
+const pool = createPool(appDb.href, { max: 12, onError: () => undefined });
+const exec = promisify(execFile);
+let root = '', state: State | undefined, web: ViteDevServer | undefined, browser: Browser | undefined;
+let server: ReturnType<typeof buildApp> | undefined, github: Awaited<ReturnType<typeof startFakeGitHub>> | undefined;
+let running: Promise<void> | undefined;
+let repository: GitRepository | undefined;
+let stop = new AbortController();
+const logs: string[] = [];
+const warnings: string[] = [];
+const out = process.env.AWBS_RUNNER_JOBS_EVIDENCE ?? join(tmpdir(), 'awbs-runner-jobs-evidence');
+beforeAll(async () => {
+  await recreateTestDatabase(db.href); await runMigrations(owner); await seedSystem(owner);
+  root = await mkdtemp(join(tmpdir(), 'runner-app-e2e-'));
+  await mkdir(out, { recursive: true });
+}, 60_000);
+afterAll(async () => {
+  stop.abort(); await running?.catch(() => undefined);
+  if (root) await writeFile(join(out, 'diagnostics.json'), JSON.stringify({ warnings, jobs: (await owner.query('select kind,state,fence from runner_jobs')).rows, steps: (await owner.query('select step_key,status,note from planning_job_steps')).rows }, null, 2));
+  await browser?.close(); await web?.close(); await server?.close(); await github?.close(); await state?.close();
+  if (repository) for (const id of await repository.inputIds()) await repository.removeInput(id);
+  await pool.end(); await owner.end(); vi.unstubAllEnvs();
+  if (root) await rm(root, { recursive: true, force: true });
+});
+
+test('화면: 저장소 접근 확인 → 연결 확인 → 등록 → 초기 분석 → 기술 확정 → WBS 초안', { timeout: 120_000 }, async () => {
+  // 별도 포트를 OS에서 받고 바로 반환한다. 운영 포트·다른 작업 DB는 쓰지 않는다.
+  const socket = createNetServer();
+  await new Promise<void>(resolve => socket.listen(0, '127.0.0.1', resolve));
+  const address = socket.address(); if (!address || typeof address === 'string') throw new Error('port');
+  const webPort = address.port; await new Promise<void>(resolve => socket.close(() => resolve()));
+  const origin = `http://127.0.0.1:${webPort}`;
+  server = buildApp(pool, false, { origin, lan: false }); installRunner(server, pool); installProjectRunner(server, pool); registerRunnerMessageRoutes(server);
+  const apiUrl = await server.listen({ port: 0, host: '127.0.0.1' });
+  const source = join(root, 'source'); await mkdir(source);
+  const git = (args: string[]) => exec('git', ['-c', 'user.name=Fake', '-c', 'user.email=fake@localhost', ...args], { cwd: source });
+  await git(['init', '-b', 'main']);
+  for (const path of ['prototype/uiux', 'prototype/docs', 'src', 'contracts', '.agentwbs']) await mkdir(join(source, path), { recursive: true });
+  await writeFile(join(source, 'prototype/uiux/index.html'), '<p>fake UI</p>');
+  await writeFile(join(source, 'prototype/docs/design.md'), '# 시험 설계\n계약을 먼저 정한다.');
+  for (const path of ['src', 'contracts', '.agentwbs']) await writeFile(join(source, path, '.gitkeep'), '');
+  await git(['add', '.']); await git(['commit', '-m', 'fake input']);
+  const commit = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+  const home = join(root, 'runner'); await mkdir(home); state = await State.open(home);
+  await installPlanningCli(home);
+  const local = await GitRepository.clone(home, repositoryIdFor('https://github.com/o/r'), source);
+  repository = local;
+  github = await startFakeGitHub('fake-github');
+  const model = new GitHubModel({ owner: 'o', repo: 'r', private: true, oauthScopes: 'repo', files: ['prototype/uiux/index.html', 'prototype/docs/design.md', 'src/.gitkeep', 'contracts/.gitkeep', '.agentwbs/.gitkeep'] });
+  const old = model.branches.get('main') ?? ''; const record = model.commits.get(old); if (!record) throw new Error('commit');
+  model.commits.set(commit, { ...record, sha: commit }); model.branches.set('main', commit); model.install(github);
+  const secret = '1'.repeat(64); vi.stubEnv('AWBS_SECRET_KEY', secret);
+  const nonce = randomBytes(12), cipher = createCipheriv('aes-256-gcm', Buffer.from(secret, 'hex'), nonce);
+  const encrypted = Buffer.concat([cipher.update('fake-github'), cipher.final(), cipher.getAuthTag()]);
+  await owner.query("insert into secrets(key,ciphertext,nonce,key_version,last4) values('github-token',$1,$2,1,'fake')", [encrypted.toString('base64'), nonce.toString('base64')]);
+  await owner.query("insert into github_settings(mode,status,secret_key) values('token','unchecked','github-token') on conflict(singleton) do update set mode='token',status='unchecked',secret_key='github-token'");
+  const bearer = await issueRunnerToken(pool, state.snapshot.runnerId, 'fake-public-key');
+  const runnerState = state, githubUrl = github.url;
+  const createRunner = (limit: number) => new RunnerApp({ home, state: runnerState, api: createApiClient({ baseUrl: apiUrl, token: new Secret(bearer) }), version: 'fake',
+    env: { ...process.env, AWBS_PLANNING_CODEX_MODEL: 'gpt-6.2-sol', AWBS_PLANNING_CLAUDE_MODEL: 'claude-sonnet-5-5' }, warn: message => warnings.push(message), info: message => logs.push(message),
+    hostSources: testHostSources(), run: probe, cliRun: probe, cliUpdates: false, planningAuto: true, agentCallLimit: limit,
+    github: { repo: { owner: 'o', repo: 'r' }, mode: 'token', baseUrl: githubUrl }, repository: async () => local,
+    inputSource: async () => undefined,
+    cliRegistry: { latest: async () => '1.0.0', install: async () => undefined, probe: async () => undefined },
+    execution: { prepare: async () => { throw new Error('시도는 끔'); }, isolation: { name: 'fake', flags: () => [], wrap: launch => launch } },
+  });
+  let runner = createRunner(0);
+  running = runner.run(stop.signal); void running.catch(() => undefined);
+  await expect.poll(async () => (await owner.query("select status from github_settings where singleton")).rows[0]?.status, { timeout: 15_000 }).toBe('ok');
+  await owner.query("update external_write_authority set host_id=$1,state='granted' where singleton", [runner.identity.hostId]);
+  const webRoot = resolve(import.meta.dirname, '../../web');
+  web = await createViteServer({ root: webRoot, configFile: join(webRoot, 'vite.config.ts'), server: { host: '127.0.0.1', port: webPort, strictPort: true, proxy: { '/api': apiUrl } }, logLevel: 'error' });
+  await web.listen();
+  browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext({ locale: 'ko-KR', timezoneId: 'Asia/Seoul', viewport: { width: 1440, height: 1000 } });
+  const page = await context.newPage();
+  const login = await issueLoginLink(pool);
+  const response = await context.request.post(`${origin}/api/auth/session`, { headers: { origin }, data: { method: 'link', token: login } });
+  expect(response.status(), await response.text()).toBe(204);
+  await page.goto(`${origin}/project`);
+  await page.getByLabel('프로젝트 이름').fill('Runner 연결 검증');
+  await page.getByLabel('GitHub 저장소', { exact: false }).fill('https://github.com/o/r');
+  await page.getByRole('button', { name: '저장소 접근 확인', exact: true }).click();
+  await page.getByTestId('check-line').filter({ hasText: '접근 확인' }).waitFor();
+  await page.screenshot({ path: join(out, '01-repo-check.png'), fullPage: true });
+  await page.getByRole('link', { name: 'GitHub 연결 설정' }).click();
+  await page.getByRole('button', { name: '저장하지 않고 이동', exact: true }).click();
+  const checked = (await owner.query('select checked_at from github_settings where singleton')).rows[0]?.checked_at;
+  await page.getByRole('button', { name: '연결 확인', exact: true }).click();
+  await expect.poll(async () => (await owner.query("select count(*)::int n from runner_jobs where kind='github_check' and state='done'")).rows[0]?.n, { timeout: 10_000 }).toBe(1);
+  expect((await owner.query('select checked_at from github_settings where singleton')).rows[0]?.checked_at).not.toEqual(checked);
+  await page.screenshot({ path: join(out, '02-github-check.png'), fullPage: true });
+  await page.goto(`${origin}/settings/runner`);
+  await page.getByText(/유료 호출 한도 0: AI 실행 꺼짐/).first().waitFor();
+  await page.getByText(/유료 호출 한도 0: AI 실행 꺼짐/).first().scrollIntoViewIfNeeded();
+  await page.screenshot({ path: join(out, '04-paid-disabled.png'), fullPage: true });
+  expect(await runner.paidCalls.used()).toBe(0);
+  expect(logs.some(line => line.includes('유료 호출 한도 0: AI 실행 꺼짐'))).toBe(true);
+  // owner가 검증 한도 30을 설정하고 재시작하는 운영 절차. 홈·사용량은 유지한다.
+  stop.abort(); await running; await runner.runner.stop('manual');
+  stop = new AbortController(); runner = createRunner(30);
+  running = runner.run(stop.signal); void running.catch(() => undefined);
+  await page.getByText(/0\/30회 사용/).first().waitFor();
+  await page.goto(`${origin}/project`);
+  // 편집 보호가 복원 제안을 보이면 같은 브라우저의 입력 초안을 복원한다.
+  const restore = page.getByRole('button', { name: /복원/ });
+  if (await restore.count()) await restore.first().click();
+  await page.getByLabel('프로젝트 이름').fill('Runner 연결 검증');
+  await page.getByLabel('GitHub 저장소', { exact: false }).fill('https://github.com/o/r');
+  await page.getByRole('button', { name: '저장소 접근 확인', exact: true }).click();
+  await page.getByTestId('check-line').filter({ hasText: '접근 확인' }).waitFor();
+  await page.getByRole('button', { name: '등록 · 초기 분석 시작', exact: true }).click();
+  await page.getByRole('heading', { name: /초기 분석/ }).waitFor();
+  await expect.poll(async () => (await owner.query("select count(*)::int n from planning_job_steps where step_key='cross' and status='done'")).rows[0]?.n, { timeout: 20_000 }).toBe(1);
+  await page.getByRole('button', { name: '승인', exact: true }).first().click();
+  await page.getByRole('button', { name: '기술 결정 확정', exact: true }).click();
+  await expect.poll(async () => (await owner.query("select count(*)::int n from wbs_drafts")).rows[0]?.n, { timeout: 20_000 }).toBe(1);
+  await page.getByRole('heading', { name: /WBS 초안/ }).waitFor();
+  await page.screenshot({ path: join(out, '03-bootstrap-draft.png'), fullPage: true });
+  expect(await runner.paidCalls.used()).toBe(8);
+  await runner.reportPaidCalls();
+  await page.goto(`${origin}/settings/runner`);
+  await page.getByText(/8\/30회 사용/).first().waitFor();
+  await page.getByText(/#8 .*결과=succeeded/).first().waitFor();
+  await page.getByText(/8\/30회 사용/).first().scrollIntoViewIfNeeded();
+  await page.screenshot({ path: join(out, '05-paid-audit.png'), fullPage: true });
+  expect((await runner.paidCalls.snapshot()).calls.every(call => call.result === 'succeeded')).toBe(true);
+  expect(logs.filter(line => line.startsWith('유료 호출 기록 '))).toHaveLength(16);
+  expect((await owner.query("select count(*)::int n from execution_holds where closed_at is null")).rows[0]?.n).toBe(0);
+  expect(warnings.filter(message => message !== 'getRunnerPolicy: 409 CLAIM_REJECTED')).toEqual([]);
+  await writeFile(join(out, 'e2e.json'), JSON.stringify({ repoCheck: 'done', githubCheck: 'done', initialAnalysis: 'done', draft: 1, paidCalls: 8, realPaidCalls: 0, paidDisabledScreen: true, paidAuditScreen: true, warnings }, null, 2));
+  await context.close();
+});
