@@ -711,10 +711,10 @@ const auth = [
     method: 'POST',
     path: '/api/auth/session',
     principal: 'none',
-    summary: '로그인(1회용 링크 loopback / LAN 비밀번호)',
+    summary: '로그인(1회용 링크 loopback / 날짜 PIN)',
     body: Type.Union([
       Body({ method: AnyOf('link'), token: c.SecretInput }),
-      Body({ method: AnyOf('password'), password: c.SecretInput }),
+      Body({ method: AnyOf('pin'), pin: Type.String({ pattern: '^[0-9]{6}$', minLength: 6, maxLength: 6, writeOnly: true }) }),
     ]),
     responses: { 204: null },
     errors: ['LOGIN_FAILED', 'RATE_LIMITED'],
@@ -736,7 +736,7 @@ const auth = [
     responses: {
       200: Type.Object({
         principal: AnyOf('lead'),
-        method: AnyOf('link', 'password'),
+        method: AnyOf('link', 'pin'),
         expiresAt: c.Timestamp,
         // 변경 요청의 X-CSRF-Token 값
         csrfToken: Type.String({ minLength: 1 }),

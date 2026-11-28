@@ -4,9 +4,10 @@
  * 환경 변수가 없으면(일반 `W e2e`) 건너뛴다.
  */
 import { expect, test, type Page } from '@playwright/test';
+import { fillPin, todayPin } from './support/pin.ts';
 
-const password = process.env.AWBS_E2E_PASSWORD ?? '';
-test.skip(!password || !process.env.AWBS_E2E_API, '실제 API 환경이 없다. pnpm --filter @awbs/web e2e:api:task로 실행한다.');
+const apiAvailable = !!process.env.AWBS_E2E_API;
+test.skip(!apiAvailable, '실제 API 환경이 없다. pnpm --filter @awbs/web e2e:api:task로 실행한다.');
 test.describe.configure({ mode: 'serial' });
 
 const serverErrors: string[] = [];
@@ -16,7 +17,7 @@ test.beforeEach(({ page }) => {
 test.afterAll(() => { if (serverErrors.length) console.log(`[실제 API 5xx] ${serverErrors.join(' | ')}`); });
 
 /**
- * 서버는 비밀번호 로그인 시도 수를 제한한다(429 RATE_LIMITED). 시험마다 로그인하면 6번째부터 막히므로
+ * 서버는 PIN 로그인 시도 수를 제한한다(429 RATE_LIMITED). 시험마다 로그인하면 6번째부터 막히므로
  * 첫 시험에서 한 번 로그인하고 그 세션(쿠키)을 다음 시험에 다시 쓴다.
  */
 let sessionState: Awaited<ReturnType<import('@playwright/test').BrowserContext['storageState']>> | null = null;
@@ -25,7 +26,7 @@ async function login(page: Page, path: string) {
   await page.goto(path);
   if (!sessionState) {
     await expect(page).toHaveURL(/\/login/);
-    await page.getByLabel('비밀번호').fill(password);
+    await fillPin(page, todayPin());
     await page.getByRole('button', { name: '로그인' }).click();
   }
   await expect(page).toHaveURL(path);

@@ -12,10 +12,11 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
+import { fillPin, todayPin } from './support/pin.ts';
 import { visualOut } from './support/visual.ts';
 
-const password = process.env.AWBS_E2E_PASSWORD ?? '';
-test.skip(!password, '실제 API 환경이 없다. pnpm --filter @awbs/web e2e:api-settings로 실행한다.');
+const apiAvailable = !!process.env.AWBS_E2E_API;
+test.skip(!apiAvailable, '실제 API 환경이 없다. pnpm --filter @awbs/web e2e:api-settings로 실행한다.');
 test.describe.configure({ mode: 'serial' });
 
 const OUT = visualOut('AWBS_REPORT_DIR', 'M3-08');
@@ -28,7 +29,7 @@ test.afterAll(() => { if (serverErrors.length) console.log(`[실제 API 5xx] ${s
 async function login(page: Page, path: string) {
   await page.goto(path);
   await expect(page).toHaveURL(`/login?next=${encodeURIComponent(path)}`);
-  await page.getByLabel('비밀번호').fill(password);
+  await fillPin(page, todayPin());
   await page.getByRole('button', { name: '로그인' }).click();
   await expect(page).toHaveURL(path);
 }

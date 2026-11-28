@@ -158,7 +158,7 @@ test('UAT-STATE-05 저장 연타 → 요청 1번·처리 중 문구·비활성, 
   await expect(page.getByRole('button', { name: '저장 중…' })).toBeDisabled();
   await expect(page.getByTestId('title')).toHaveText('새 제목');
   expect(api.requests('PATCH /api/tasks/TASK-0001')).toHaveLength(1);
-  expect(api.requests('PATCH /api/tasks/TASK-0001')[0]?.headers()['x-csrf-token']).toBe('password.csrf-test');
+  expect(api.requests('PATCH /api/tasks/TASK-0001')[0]?.headers()['x-csrf-token']).toBe('pin.csrf-test');
   await expect(page.getByRole('status').filter({ hasText: 'TASK-0001 제목을 저장했습니다.' })).toBeVisible();
 });
 

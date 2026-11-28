@@ -8,7 +8,7 @@ import type { BrowserContext, Page, Request, Route } from '@playwright/test';
 import type { ErrorCode, ResponseOf } from '../../src/shared/api/contract.ts';
 
 export const SESSION: ResponseOf<'getSession'> = {
-  principal: 'lead', method: 'password', expiresAt: '2026-11-26T13:00:00.000Z', csrfToken: 'password.csrf-test',
+  principal: 'lead', method: 'pin', expiresAt: '2026-11-26T13:00:00.000Z', csrfToken: 'pin.csrf-test',
 };
 
 /** 계약의 active 모양을 모두 채운다(M3-04: 프로젝트 화면이 repo·inputs 등을 읽는다). */

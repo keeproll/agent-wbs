@@ -11,10 +11,10 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { expect, test, type Page } from '@playwright/test';
 import { visualOut } from './support/visual.ts';
+import { todayPin } from './support/pin.ts';
 
-const password = process.env.AWBS_E2E_PASSWORD ?? '';
-const api = process.env.AWBS_E2E_API ?? '';
-test.skip(!password || !api, '실제 API 환경이 없다. pnpm --filter @awbs/web e2e:api-wbs로 실행한다.');
+const apiAvailable = !!process.env.AWBS_E2E_API;
+test.skip(!apiAvailable, '실제 API 환경이 없다. pnpm --filter @awbs/web e2e:api-wbs로 실행한다.');
 test.describe.configure({ mode: 'serial' });
 test.use({ viewport: { width: 1920, height: 1080 } });
 
@@ -25,7 +25,7 @@ const serverErrors: string[] = [];
 async function login(page: Page) {
   page.on('response', (r) => { if (r.status() >= 500) serverErrors.push(`${r.request().method()} ${new URL(r.url()).pathname} ${String(r.status())}`); });
   await page.goto('/login');
-  const status = await page.evaluate(async (pw) => (await fetch('/api/auth/session', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ method: 'password', password: pw }) })).status, password);
+  const status = await page.evaluate(async pin => (await fetch('/api/auth/session', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ method: 'pin', pin }) })).status, todayPin());
   expect(status).toBe(204);
 }
 

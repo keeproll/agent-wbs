@@ -5,7 +5,7 @@
  *
  * 하는 일(끝나면 모두 지운다):
  * 1. 이 시험 전용 PostgreSQL 컨테이너(m302-e2e-pg-…)를 빈 포트에 띄운다. 개발용 DB는 건드리지 않는다.
- * 2. migration → system seed → demo seed(원본 Mock과 같은 Task 12건, 승인된 프로젝트) → LAN 비밀번호 설정 → API 기동(LAN 모드).
+ * 2. migration → system seed → demo seed(원본 Mock과 같은 Task 12건, 승인된 프로젝트) → 날짜 PIN 설정 → API 기동(LAN 모드).
  *    demo seed는 시험용 DB 이름(awbs_test_…)에만 들어간다(packages/db test-database.ts의 안전장치).
  * 3. Playwright `api-wbs` 시험을 실행한다. 측정 결과는 AWBS_PERF_OUT 폴더에 남는다.
  *    1,000행은 API로 만든 Task 한 행을 복사해 이 전용 DB에 직접 넣는다(읽기 응답 측정용). 200행까지는 모두 API로 만든다.
@@ -20,7 +20,6 @@ const ROOT = resolve(import.meta.dirname, '../../..');
 const IMAGE = 'postgres:16@sha256:07abc3f43c9395b0bdbbab36bc25ddb0e8d83cd4fcafb5fb7d6abe14ff156dd8';
 const name = `m302-e2e-pg-${randomBytes(3).toString('hex')}`;
 const dbPassword = randomBytes(18).toString('base64url');
-const leadPassword = `e2e-${randomBytes(9).toString('base64url')}`;
 
 const freePort = () => new Promise<number>((done, fail) => {
   const server = createServer();
@@ -47,14 +46,13 @@ try {
     ...process.env,
     DATABASE_URL: `postgres://awbs_owner:${dbPassword}@127.0.0.1:${String(dbPort)}/awbs_test_m302`,
     TEST_DATABASE_URL: `postgres://awbs_owner:${dbPassword}@127.0.0.1:${String(dbPort)}/awbs_test_m302`,
-    AWBS_HOST: '127.0.0.2', AWBS_PORT: String(apiPort), AWBS_ALLOW_LAN: 'true',
+    AWBS_HOST: '127.0.0.2', AWBS_PORT: String(apiPort), AWBS_ALLOW_LAN: 'true', AWBS_PIN_TIME_ZONE: 'Asia/Seoul',
     AWBS_ORIGIN: `http://127.0.0.1:${String(webPort)}`, LOG_LEVEL: 'warn',
   };
-  const node = (args: string[], input?: string) => execFileSync('node', ['--conditions=awbs-source', ...args], { cwd: ROOT, env, input, encoding: 'utf8' });
+  const node = (args: string[]) => execFileSync('node', ['--conditions=awbs-source', ...args], { cwd: ROOT, env, encoding: 'utf8' });
   node(['packages/db/src/migrate-cli.ts']);
   node(['packages/db/src/seed-cli.ts', 'system']);
   node(['packages/db/src/seed-cli.ts', 'demo']);
-  node(['apps/api/src/platform/auth-cli.ts', 'set-password'], `${leadPassword}\n`);
   api = spawn('node', ['--conditions=awbs-source', 'apps/api/src/main.ts'], { cwd: ROOT, env, stdio: ['ignore', 'inherit', 'inherit'] });
   for (let i = 0; i < 60; i++) {
     if (await fetch(`http://127.0.0.2:${String(apiPort)}/health`).then((r) => r.ok, () => false)) break;
@@ -66,7 +64,6 @@ try {
       ...process.env,
       AWBS_E2E_PORT: String(webPort),
       AWBS_E2E_API: `http://127.0.0.2:${String(apiPort)}`,
-      AWBS_E2E_PASSWORD: leadPassword,
       // 1,000행 측정 준비: 이 전용 컨테이너에 직접 행을 넣는다(API로 800건을 만들면 20분이 넘는다).
       AWBS_E2E_PG_CONTAINER: name,
     },

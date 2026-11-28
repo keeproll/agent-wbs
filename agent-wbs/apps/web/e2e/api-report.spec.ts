@@ -4,11 +4,12 @@
  * 화면 숫자는 같은 세션으로 서버 API를 직접 읽은 스냅샷과 비교한다.
  */
 import { expect, test, type Page } from '@playwright/test';
+import { fillPin, todayPin } from './support/pin.ts';
 import { internalTerms } from '@awbs/shared';
 
-const password = process.env.AWBS_E2E_PASSWORD ?? '';
+const apiAvailable = !!process.env.AWBS_E2E_API;
 const shots = process.env.AWBS_E2E_SHOTS ?? '';
-test.skip(!password || !process.env.AWBS_E2E_API, '실제 API 환경이 없다. pnpm --filter @awbs/web e2e:api:report로 실행한다.');
+test.skip(!apiAvailable, '실제 API 환경이 없다. pnpm --filter @awbs/web e2e:api:report로 실행한다.');
 test.describe.configure({ mode: 'serial' });
 
 const serverErrors: string[] = [];
@@ -22,7 +23,7 @@ async function login(page: Page, path: string) {
   if (cookies.length) { await page.context().addCookies(cookies); await page.goto(path); return; }
   await page.goto(path);
   await expect(page).toHaveURL(/\/login/);
-  await page.getByLabel('비밀번호').fill(password);
+  await fillPin(page, todayPin());
   await page.getByRole('button', { name: '로그인' }).click();
   await expect(page).toHaveURL(path);
   cookies = await page.context().cookies();

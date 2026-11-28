@@ -4,6 +4,7 @@
  */
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
+import { fillPin } from './support/pin.ts';
 import { errorBody, fakeApi, json, NO_PROJECT, SESSION } from './support/fake-api.ts';
 import { EXEC, settingsApi, V2 } from './support/settings-fixtures.ts';
 
@@ -174,7 +175,7 @@ test('세션 만료: 저장 중 401이면 카드 초안을 보관하고, 다시 
   await page.getByRole('group', { name: '재조정 임계값' }).getByRole('button', { name: '3일' }).click();
   await page.getByRole('region', { name: '일정 재조정 정책 · 작업 불가일' }).getByRole('button', { name: '저장', exact: true }).click();
   await expect(page).toHaveURL('/login?next=%2Fsettings%2Fplan');
-  await page.getByLabel('비밀번호').fill('pw');
+  await fillPin(page, '261128');
   await page.getByRole('button', { name: '로그인' }).click();
   await expect(page).toHaveURL('/settings/plan');
   const offer = page.getByRole('region', { name: '설정 — 일정 재조정 정책 — 저장하지 못한 초안' });

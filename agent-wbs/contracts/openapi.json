@@ -8396,7 +8396,7 @@
     "/api/auth/session": {
       "post": {
         "operationId": "login",
-        "summary": "로그인(1회용 링크 loopback / LAN 비밀번호)",
+        "summary": "로그인(1회용 링크 loopback / 날짜 PIN)",
         "tags": [
           "none"
         ],
@@ -8431,17 +8431,19 @@
                     "type": "object",
                     "required": [
                       "method",
-                      "password"
+                      "pin"
                     ],
                     "properties": {
                       "method": {
                         "enum": [
-                          "password"
+                          "pin"
                         ]
                       },
-                      "password": {
+                      "pin": {
                         "type": "string",
-                        "minLength": 1,
+                        "pattern": "^[0-9]{6}$",
+                        "minLength": 6,
+                        "maxLength": 6,
                         "writeOnly": true
                       }
                     },
@@ -8454,7 +8456,7 @@
         },
         "responses": {
           "204": {
-            "description": "로그인(1회용 링크 loopback / LAN 비밀번호)"
+            "description": "로그인(1회용 링크 loopback / 날짜 PIN)"
           },
           "400": {
             "$ref": "#/components/responses/Error",
@@ -8583,7 +8585,7 @@
                     "method": {
                       "enum": [
                         "link",
-                        "password"
+                        "pin"
                       ]
                     },
                     "expiresAt": {

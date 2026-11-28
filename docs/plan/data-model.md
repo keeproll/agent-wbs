@@ -95,7 +95,7 @@
 - `lead_sessions` / `lead_login_tokens` / `lead_credentials`
   - `lead_sessions`: token_hash unique·만료·csrf
   - `lead_login_tokens`: 1회용 hash·만료·used_at
-  - `lead_credentials`: 비밀번호 hash(LAN)
+  - `lead_credentials`: 이전 LAN 비밀번호 해시 표. 2026-11-28부터 날짜 PIN으로 바뀌어 인증에서는 읽거나 쓰지 않는다. 옛 값은 무시하며 기존 마이그레이션과 표는 보존한다. PIN은 저장하지 않는다.
   - 근거: owner Q-01
 - `runner_tokens`
   - token_hash unique, runner_id, public_key, revoked_at

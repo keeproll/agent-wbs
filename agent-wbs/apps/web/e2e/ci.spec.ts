@@ -5,6 +5,7 @@
  */
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
+import { fillPin } from './support/pin.ts';
 import { errorBody, fakeApi, json, SESSION, type FakeApi } from './support/fake-api.ts';
 import { baselineQueueItem, baselineRun, ciData, guardRun, installCi, mismatchItem, type CiData } from './support/ci-data.ts';
 
@@ -504,7 +505,7 @@ test.describe('390px 휴대폰', () => {
     api.on('POST /api/auth/session', (route) => { signedIn = true; return route.fulfill({ status: 204 }); });
     await page.goto('/ci/ci-0124');
     await expect(page).toHaveURL('/login?next=%2Fci%2Fci-0124');
-    await page.getByLabel('비밀번호').fill('pw');
+    await fillPin(page, '261128');
     await page.getByRole('button', { name: '로그인' }).click();
     await expect(page).toHaveURL('/ci/ci-0124');
     expect(await page.evaluate(() => window.innerWidth)).toBe(390);

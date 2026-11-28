@@ -141,7 +141,7 @@ flowchart LR
   - 완료 조건(검증): `W --filter api test -- security` + `W test:db -- security`
     - contracts §8 5종 표
     - 링크 재사용·비loopback 거부
-    - LAN 비밀번호 미설정 기동 거부·횟수 제한
+    - LAN 명시 허용·날짜 PIN·횟수 제한(2026-11-28 owner 변경, 옛 비밀번호 설정은 사용하지 않음)
   - 디렉토리: `apps/api/src/platform` · 병렬: — · 담당 / 리뷰: Codex / Claude
 - **M2-02** — Task·의존성·명세·설계·체크리스트 CRUD(만들기·읽기·고치기·지우기), 동시 수정
   - 완료 조건(검증): `W --filter api test -- tasks` + `W test:db -- tasks`

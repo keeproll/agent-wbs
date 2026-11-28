@@ -436,14 +436,18 @@ G§8.5, §8.5-1, §8.6, §8.7의 표 전체를 그대로 구현한다(재기술�
     - 왜: 프록시 헤더(`X-Forwarded-For` 같은 것)는 요청을 보내는 쪽이 마음대로 꾸밀 수 있다.
   - 실패는 구분 없이 401 `LOGIN_FAILED`.
     - 왜 구분하지 않나: 「토큰이 틀림」과 「만료됨」을 구분해 알려 주면 공격자에게 힌트가 된다.
-- `{method:"password",password}`
-  - LAN 모드만.
-  - 횟수 제한 429, 성공 시 세션 교체.
-  - 비밀번호 분실은 이 PC CLI로 재설정.
-- GET `/api/session` → `{principal:"lead",method:"link"|"password",expiresAt,csrfToken}`.
+- `{method:"pin",pin:"261128"}`
+  - LAN 모드만. PIN은 ASCII 숫자 6자리다. 형식 오류는 400, 날짜 불일치는 401 `LOGIN_FAILED`다.
+  - 서버 시간대 `AWBS_PIN_TIME_ZONE`(기본 `Asia/Seoul`)의 오늘 날짜 YYMMDD와 상수 시간으로 비교한다. 자정 앞뒤 5초는 경계를 사이에 둔 두 날짜 PIN을 허용한다.
+  - 예: 2026-11-28 23:59:55부터 2026-11-29 00:00:05 직전까지 261128·261129를 모두 받는다. 약 2.3초 시계 역행을 흡수한다.
+  - 실제 socket 주소별 60초에 5회(성공 포함), 6번째부터 429와 `Retry-After`. 다른 출처와 링크 로그인은 별개다.
+  - 성공 시 세션을 교체하고 12시간 뒤 만료한다. 날짜 변경은 이미 발급한 세션을 끊지 않는다.
+  - 기존 LAN 비밀번호 설정·해시는 무시하고 `set-password`는 거부한다. PIN 발급·저장·로그 출력은 없다.
+  - 같은 네트워크 누구나 날짜로 접속 가능하다는 한계를 owner가 승인했다.
+- GET `/api/session` → `{principal:"lead",method:"link"|"pin",expiresAt,csrfToken}`.
   - `csrfToken`을 `X-CSRF-Token`에 쓴다.
   - 세션 쿠키 이름은 `awbs_session`.
-- 로그인 화면 1개에 LAN 비밀번호 입력과 「이 PC에서는 새 링크 발급」 안내를 둔다.
+- 로그인 화면 1개에 6칸 PIN 입력(붙여넣기·백스페이스·자동 다음 칸·모바일 숫자 키패드·각 칸 접근성 이름)과 「이 PC에서는 새 링크 발급」 안내를 둔다.
 - Origin 검사는 로그인에도 적용한다.
 
 ### 2.5 착수 승인의 명세 필수 항목

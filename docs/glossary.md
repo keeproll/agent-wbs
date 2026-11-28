@@ -160,7 +160,7 @@
 - **Kafka / Redis** — Kafka는 메시지 브로커(프로그램 사이 메시지를 중계·보관하는 서버), Redis는 메모리 기반 저장소. 이 제품 런타임에는 쓰지 않는다(D-02).
 - **kill -9** — 프로세스를 정리할 틈 없이 즉시 강제 종료하는 명령. 장애 시험에 쓴다.
 - **KST** — 한국 표준시(Asia/Seoul).
-- **LAN** — 같은 사무실·집 안의 네트워크. LAN 접속은 비밀번호로 로그인한다. → architecture §4
+- **LAN** — 같은 사무실·집 안의 네트워크. LAN 접속은 서버 시간대의 오늘 날짜 PIN 6자리(YYMMDD)로 로그인한다. 같은 네트워크 누구나 추측할 수 있다. → architecture §4
 - **leader (프로세스 그룹 대표)** — 프로세스 그룹을 처음 만든 프로세스. 그룹을 정리할 때 이 프로세스의 pid·시작 시각을 대조해 엉뚱한 그룹을 죽이지 않는다. → architecture §4 「외부 쓰기 관문」
 - **lease (임대)** — 「이 job은 정해진 시간 동안 이 Runner가 맡는다」는 표시. 60초, 20초마다 renew. 만료돼도 자원 해제는 아니다. → contracts §3.2
 - **linger** — 로그인하지 않아도 그 계정의 사용자 systemd를 계속 띄워 두는 설정(`loginctl enable-linger <계정>`). Runner와 cgroup scope가 재시작 뒤에도 뜨려면 필요하다. → architecture §6.3

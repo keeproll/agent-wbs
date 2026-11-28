@@ -4,6 +4,7 @@
  */
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
+import { fillPin } from './support/pin.ts';
 import { errorBody, json, SESSION } from './support/fake-api.ts';
 import { attempt, execApi, message, verification } from './support/exec-fixtures.ts';
 
@@ -143,7 +144,7 @@ test('#6 다른 Task로 옮긴 뒤에도 보관 중인 초안이 있으면 창 �
   await expect(page).toHaveURL(/\/login/, { timeout: 10_000 });
   const keys = await page.evaluate(() => Object.keys(sessionStorage).filter((k) => k.startsWith('awbs.draft:')));
   expect(keys).toContain('awbs.draft:exec:TASK-0005:message');
-  await page.getByLabel('비밀번호').fill('pw');
+  await fillPin(page, '261128');
   await page.getByRole('button', { name: '로그인' }).click();
   await rail(page).getByRole('button', { name: /TASK-0005/ }).first().click();
   const offer = page.getByRole('region', { name: /TASK-0005 메시지 작성 — 저장하지 못한 초안/ });
