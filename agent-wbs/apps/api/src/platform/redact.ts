@@ -1,7 +1,7 @@
 const MASK = '[REDACTED]';
-const secretKey = /authorization$|cookie$|password$|passwd$|secret$|token$|api[-_]?key$|private[-_]?key$/i;
+const secretKey = /authorization$|cookie$|pin$|password$|passwd$|secret$|token$|api[-_]?key$|private[-_]?key$/i;
 // 일반 sort_key·primary_key는 보존하고 인증에 쓰는 이름만 가린다.
-const secretName = '(?:(?:[a-z0-9]+[_-])*(?:token|password|passwd|secret|api[-_]?key|private[-_]?key)|(?:bot|access|refresh)[-_]?token|AWBS_SECRET_KEY|AWS_(?:SECRET_ACCESS_KEY|ACCESS_KEY_ID))';
+const secretName = '(?:(?:[a-z0-9]+[_-])*(?:token|pin|password|passwd|secret|api[-_]?key|private[-_]?key)|(?:bot|access|refresh)[-_]?token|AWBS_SECRET_KEY|AWS_(?:SECRET_ACCESS_KEY|ACCESS_KEY_ID))';
 const assignment = `((?:(?<![\\w-])${secretName}["']?[ \\t]*[:=][ \\t]*|--${secretName}(?:=|[ \\t]+)))`;
 
 export function redactText(value: string): string {
@@ -10,8 +10,8 @@ export function redactText(value: string): string {
     .replace(/\/bot\d+:[A-Za-z0-9_-]+/g, `/bot${MASK}`)
     .replace(/\b[0-9]{6,12}:[A-Za-z0-9_-]{20,}/g, MASK)
     .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, `$1${MASK}@`)
-    .replace(/([?&#](?:[\w-]*(?:token|password|secret)|api_?key)=)[^&\s"']+/gi, `$1${MASK}`)
-    .replace(/("[\w-]*(?:authorization|cookie|password|passwd|secret|token|api[-_]?key|private[-_]?key)"\s*:\s*)"(?:[^"\\]|\\.)*"/gi, `$1"${MASK}"`)
+    .replace(/([?&#](?:[\w-]*(?:token|pin|password|secret)|api_?key)=)[^&\s"']+/gi, `$1${MASK}`)
+    .replace(/("[\w-]*(?:authorization|cookie|pin|password|passwd|secret|token|api[-_]?key|private[-_]?key)"\s*:\s*)"(?:[^"\\]|\\.)*"/gi, `$1"${MASK}"`)
     .replace(/^((?:set-)?cookie|(?:proxy-)?authorization):\s*.+$/gim, `$1: ${MASK}`)
     .replace(/\b(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,})/g, MASK)
     .replace(new RegExp(`${assignment}"(?:[^"\\\\]|\\\\.)*(?:"|$)`, 'gi'), `$1"${MASK}"`)

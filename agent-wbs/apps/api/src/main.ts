@@ -2,7 +2,6 @@ import { createPool, waitForDatabase } from '@awbs/db';
 import { buildApp } from './app.ts';
 import { loadConfig } from './config.ts';
 import { loggerOptions } from './log.ts';
-import { assertLanPassword } from './platform/security.ts';
 import { installRunner } from './runner/routes.ts';
 import { startChangePruner } from './changes/events.ts';
 import { registerRunnerMessageRoutes } from './messages/routes.ts';
@@ -51,9 +50,11 @@ try {
       app.log.warn({ attempt, err: error }, 'DB 연결 재시도');
     },
   });
-  if (!isStopping() && config.lan) await assertLanPassword(pool);
+  if (!isStopping() && config.lan) {
+    app.log.warn({ pinTimeZone: config.pinTimeZone }, 'LAN PIN 로그인: 같은 네트워크 누구나 날짜로 접속 가능합니다. 기존 LAN 비밀번호 설정은 사용하지 않습니다.');
+  }
   if (!isStopping() && config.lan && config.origin.startsWith('http:')) {
-    app.log.warn('LAN 평문 HTTP에서는 같은 네트워크의 사용자가 비밀번호와 세션을 볼 수 있습니다. HTTPS를 사용하세요.');
+    app.log.warn('LAN 평문 HTTP에서는 같은 네트워크의 사용자가 PIN과 세션을 볼 수 있습니다. HTTPS를 사용하세요.');
   }
   // 연결을 기다리는 동안 종료 신호를 받았으면 열지 않는다.
   if (!isStopping()) await app.listen({ host: config.host, port: config.port });

@@ -4,6 +4,7 @@
  */
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test } from '@playwright/test';
+import { fillPin } from './support/pin.ts';
 import { errorBody, fakeApi, json, SESSION } from './support/fake-api.ts';
 import { CP2, CP3, cp, planningServer, type Proposal } from './support/planning-data.ts';
 
@@ -279,7 +280,7 @@ test('세션 만료(401) 뒤 다시 로그인하면 승인 의견 복원을 제�
   api.on(`POST /api/proposals/${CP2.id}/reject`, (route) => { signedIn = false; return json(route, 401, errorBody('LEAD_UNAUTHORIZED')); });
   await page.getByRole('button', { name: '반려' }).click();
   await expect(page).toHaveURL('/login?next=%2Fchange%2FCP-002');
-  await page.getByLabel('비밀번호').fill('pw');
+  await fillPin(page, '261128');
   await page.getByRole('button', { name: '로그인' }).click();
   await expect(page).toHaveURL('/change/CP-002');
   const offer = page.getByRole('region', { name: 'CP-002 승인 의견 — 저장하지 못한 초안' });

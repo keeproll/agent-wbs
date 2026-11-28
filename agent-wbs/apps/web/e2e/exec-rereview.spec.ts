@@ -5,6 +5,7 @@
  * - P2: 지시는 보냈고 실행 요청에서 세션이 만료(401)되면, 재로그인·복원 뒤 같은 지시를 다시 만든다.
  */
 import { expect, test, type Page } from '@playwright/test';
+import { fillPin } from './support/pin.ts';
 import { errorBody, hold, json, SESSION } from './support/fake-api.ts';
 import { execApi, message, type ExecApi } from './support/exec-fixtures.ts';
 
@@ -22,7 +23,7 @@ function sessionSwitch(api: ExecApi) {
 }
 async function relogin(page: Page) {
   await expect(page).toHaveURL(/\/login/, { timeout: 10_000 });
-  await page.getByLabel('비밀번호').fill('pw');
+  await fillPin(page, '261128');
   await page.getByRole('button', { name: '로그인' }).click();
 }
 

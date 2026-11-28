@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createServer } from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
-import { createPool, recreateTestDatabase, runMigrations, seedSystem, type PoolClient } from '@awbs/db';
+import { createPool, recreateTestDatabase, runMigrations, seedSystem } from '@awbs/db';
 import { afterAll, beforeAll, expect, inject, test, vi } from 'vitest';
+import { datePin } from '../src/platform/date-pin.ts';
 import { buildApp } from '../src/app.ts';
-import { issueLoginLink, issueRunnerToken, setPassword } from '../src/platform/credentials.ts';
+import { loggerOptions } from '../src/log.ts';
+import { issueLoginLink, issueRunnerToken } from '../src/platform/credentials.ts';
 
 const localOrigin = 'http://127.0.0.1:3100';
 const lanOrigin = 'http://192.168.1.20:9100';
@@ -17,41 +19,72 @@ appUrl.searchParams.set('options', '-c role=awbs_app');
 const pool = createPool(appUrl.href, { max: 8, onError: () => undefined });
 const app = buildApp(pool, false, { origin: lanOrigin, lan: true, port: 3100 });
 let effects = 0;
-let pausePasswordRead: { entered: () => void; resume: Promise<undefined> } | undefined;
-app.addHook('preHandler', async (request) => {
-  const pause = pausePasswordRead;
-  if (!pause || request.routeOptions.url !== '/api/auth/session') return;
-  pausePasswordRead = undefined;
-  const client = request.platform?.client;
-  assert(client);
-  const query = client.query;
-  client.query = function (this: PoolClient, ...args: unknown[]) {
-    this.query = query;
-    return (Reflect.apply(query, this, args) as Promise<unknown>).then(async (result) => {
-      pause.entered();
-      await pause.resume;
-      return result;
-    });
-  } as PoolClient['query'];
-});
 app.post('/api/runner/usage', (request) => ({ count: ++effects, principal: request.platform?.principal }));
 beforeAll(async () => {
   await recreateTestDatabase(dbUrl.href);
   await runMigrations(owner);
   await seedSystem(owner);
-  await setPassword(pool, 'correct horse battery');
 });
 afterAll(async () => { await app.close(); await pool.end(); await owner.end(); });
 
-const passwordLogin = (remoteAddress: string, password = 'correct horse battery') => app.inject({
+const pinLogin = (remoteAddress: string, pin = datePin(Date.now())) => app.inject({
   method: 'POST', url: '/api/auth/session', remoteAddress, headers: { origin: lanOrigin, 'x-forwarded-for': crypto.randomUUID() },
-  payload: { method: 'password', password },
+  payload: { method: 'pin', pin },
 });
 async function linkLogin(origin = localOrigin) {
   return app.inject({ method: 'POST', url: '/api/auth/session', remoteAddress: '127.0.0.1',
     headers: { origin }, payload: { method: 'link', token: await issueLoginLink(pool) } });
 }
 const cookieOf = (response: { headers: { 'set-cookie'?: string | string[] | undefined } }) => String(response.headers['set-cookie']).split(';')[0] ?? '';
+
+test.each(['Asia/Seoul', 'America/Los_Angeles'])('PIN API는 주입 시계와 %s 시간대의 날짜만 허용한다', async pinTimeZone => {
+  const at = Date.parse('2026-11-28T03:00:00Z');
+  const local = buildApp(pool, false, { origin: localOrigin, lan: true, pinTimeZone, now: () => at });
+  const today = pinTimeZone === 'Asia/Seoul' ? '261128' : '261127';
+  const adjacent = pinTimeZone === 'Asia/Seoul' ? ['261127', '261129'] : ['261126', '261128'];
+  try {
+    for (const pin of [today, ...adjacent, '123456']) {
+      const result = await local.inject({ method: 'POST', url: '/api/auth/session', headers: { origin: localOrigin }, payload: { method: 'pin', pin } });
+      expect(result.statusCode).toBe(pin === today ? 204 : 401);
+    }
+    for (const pin of ['abcdef', '12345', '1234567']) {
+      expect((await local.inject({ method: 'POST', url: '/api/auth/session', headers: { origin: localOrigin }, payload: { method: 'pin', pin } })).statusCode).toBe(400);
+    }
+    expect((await local.inject({ method: 'POST', url: '/api/auth/session', headers: { origin: 'http://evil.test' }, payload: { method: 'pin', pin: today } })).statusCode).toBe(403);
+  } finally { await local.close(); }
+});
+
+test('자정 전후와 시계 역행 때 API도 두 날짜를 허용한다', async () => {
+  const midnight = Date.parse('2026-11-28T15:00:00Z');
+  let now = midnight;
+  const local = buildApp(pool, false, { origin: localOrigin, lan: true, now: () => now });
+  try {
+    let address = 1;
+    for (const offset of [-5_001, -5_000, 1, -2_299, 4_999, 5_000]) {
+      now = midnight + offset;
+      for (const pin of ['261128', '261129']) {
+        const result = await local.inject({ method: 'POST', url: '/api/auth/session', remoteAddress: `192.168.1.${String(address++)}`, headers: { origin: localOrigin }, payload: { method: 'pin', pin } });
+        expect(result.statusCode).toBe(offset < -5_000 && pin === '261129' || offset >= 5_000 && pin === '261128' ? 401 : 204);
+      }
+    }
+  } finally { await local.close(); }
+});
+
+test('PIN 성공·실패·형식 오류에서 PIN 값은 로그에 남지 않고 옛 API 이름은 거부한다', async () => {
+  let logs = '';
+  const local = buildApp(pool, loggerOptions('info', { write: line => { logs += line; } }), {
+    origin: localOrigin, lan: true, now: () => Date.parse('2026-11-28T03:00:00Z'),
+  });
+  try {
+    for (const [pin, status] of [['261128', 204], ['123456', 401], ['12345x', 400]] as const) {
+      expect((await local.inject({ method: 'POST', url: '/api/auth/session', headers: { origin: localOrigin }, payload: { method: 'pin', pin } })).statusCode).toBe(status);
+      expect(logs).not.toContain(pin);
+    }
+    expect((await local.inject({ method: 'POST', url: '/api/auth/session', headers: { origin: localOrigin }, payload: { method: 'password', password: 'obsolete' } })).statusCode).toBe(400);
+    expect(logs).not.toContain('obsolete');
+    expect(logs).toContain('/api/auth/session');
+  } finally { await local.close(); }
+});
 
 test.each([3100, 80])('M1: LAN 모드에서도 API 포트 %s의 loopback Origin으로 링크 로그인한다', async (port) => {
   const local = buildApp(pool, false, { origin: lanOrigin, lan: true, port });
@@ -66,13 +99,13 @@ test('M1·M2: LAN 공격자 제한은 다른 출처와 이 PC 링크 로그인�
   const at = Date.now();
   const now = vi.spyOn(Date, 'now').mockReturnValue(at);
   try {
-    const responses = await Promise.all(Array.from({ length: 20 }, () => passwordLogin('192.168.1.50', 'wrong')));
+    const responses = await Promise.all(Array.from({ length: 20 }, () => pinLogin('192.168.1.50', '000000')));
     expect(responses.filter((response) => response.statusCode === 401)).toHaveLength(5);
     expect(responses.filter((response) => response.statusCode === 429)).toHaveLength(15);
-    expect((await passwordLogin('192.168.1.50')).statusCode).toBe(429);
-    expect((await passwordLogin('192.168.1.51')).statusCode).toBe(204);
-    for (let attempt = 0; attempt < 5; attempt++) expect((await passwordLogin('127.0.0.1', 'wrong')).statusCode).toBe(401);
-    expect((await passwordLogin('127.0.0.1', 'wrong')).statusCode).toBe(429);
+    expect((await pinLogin('192.168.1.50')).statusCode).toBe(429);
+    expect((await pinLogin('192.168.1.51')).statusCode).toBe(204);
+    for (let attempt = 0; attempt < 5; attempt++) expect((await pinLogin('127.0.0.1', '000000')).statusCode).toBe(401);
+    expect((await pinLogin('127.0.0.1', '000000')).statusCode).toBe(429);
     const local = await linkLogin();
     expect(local.statusCode, local.body).toBe(204);
     const cookie = cookieOf(local);
@@ -81,7 +114,7 @@ test('M1·M2: LAN 공격자 제한은 다른 출처와 이 PC 링크 로그인�
     const token = await issueLoginLink(pool);
     expect((await app.inject({ method: 'POST', url: '/api/auth/session', remoteAddress: '192.168.1.52', headers: { origin: localOrigin }, payload: { method: 'link', token } })).statusCode).toBe(403);
     now.mockReturnValue(at + 61_000);
-    expect((await passwordLogin('192.168.1.50')).statusCode).toBe(204);
+    expect((await pinLogin('192.168.1.50')).statusCode).toBe(204);
   } finally { now.mockRestore(); }
 });
 
@@ -94,29 +127,20 @@ test('M1: LAN 설정에서도 CLI 링크는 실제 API 포트의 loopback 주소
   expect(response.stdout).toMatch(/^http:\/\/127\.0\.0\.1:3100\/#login-token=/);
 });
 
-test('L1: 비밀번호 확인 중에는 재설정이 자격 증명 행을 동시에 바꾸지 못한다', async () => {
-  const entered = Promise.withResolvers<undefined>();
-  const resume = Promise.withResolvers<undefined>();
-  pausePasswordRead = { entered: () => entered.resolve(undefined), resume: resume.promise };
-  const login = passwordLogin('192.168.1.54');
-  await entered.promise;
-  const other = await owner.connect();
+test('옛 비밀번호 해시는 무시하고 날짜가 바뀌어도 발급된 PIN 세션은 유지한다', async () => {
+  await pool.query("insert into lead_credentials(password_hash) values('obsolete-hash') on conflict(singleton) do update set password_hash=excluded.password_hash");
+  const at = Date.parse('2026-11-28T14:59:59Z');
+  let now = at;
+  const local = buildApp(pool, false, { origin: localOrigin, lan: true, now: () => now });
   try {
-    await other.query('begin');
-    await expect(other.query('select 1 from lead_credentials for update nowait')).rejects.toMatchObject({ code: '55P03' });
-  } finally { await other.query('rollback'); other.release(); resume.resolve(undefined); await login; }
-});
-
-test('L1: 비밀번호 재설정은 비밀번호 세션만 무효화하고 링크 세션은 유지한다', async () => {
-  const password = await passwordLogin('192.168.1.53');
-  expect(password.statusCode).toBe(204);
-  const link = await linkLogin(lanOrigin);
-  expect(link.statusCode).toBe(204);
-  await setPassword(pool, 'a different password');
-  expect((await app.inject({ url: '/api/session', headers: { cookie: cookieOf(password) } })).statusCode).toBe(401);
-  expect((await app.inject({ url: '/api/session', headers: { cookie: cookieOf(link) } })).statusCode).toBe(200);
-  expect((await passwordLogin('192.168.1.53', 'correct horse battery')).statusCode).toBe(401);
-  expect((await passwordLogin('192.168.1.53', 'a different password')).statusCode).toBe(204);
+    const login = await local.inject({ method: 'POST', url: '/api/auth/session', headers: { origin: localOrigin }, payload: { method: 'pin', pin: '261128' } });
+    expect(login.statusCode).toBe(204);
+    now = at + 60_000;
+    expect((await local.inject({ url: '/api/session', headers: { cookie: cookieOf(login) } })).statusCode).toBe(200);
+    expect((await local.inject({ method: 'POST', url: '/api/auth/session', headers: { origin: localOrigin }, payload: { method: 'pin', pin: '261128' } })).statusCode).toBe(401);
+    expect((await local.inject({ method: 'POST', url: '/api/auth/session', headers: { origin: localOrigin }, payload: { method: 'pin', pin: '261129' } })).statusCode).toBe(204);
+    expect((await pool.query('select password_hash from lead_credentials')).rows[0]).toEqual({ password_hash: 'obsolete-hash' });
+  } finally { await local.close(); }
 });
 
 test('L3: Runner 토큰으로 팀장 GET을 호출하면 403이다', async () => {
@@ -166,7 +190,7 @@ test.each([lanOrigin, lanOrigin.replace('http:', 'https:')])('M1·L4: LAN %s 기
   const main = new URL('../src/main.ts', import.meta.url).pathname;
   const port = await freePort();
   const child = spawn(process.execPath, ['--conditions=awbs-source', main], {
-    env: { DATABASE_URL: appUrl.href, AWBS_HOST: '0.0.0.0', AWBS_ALLOW_LAN: 'true', AWBS_ORIGIN: origin, AWBS_PORT: String(port) },
+    env: { DATABASE_URL: appUrl.href, AWBS_HOST: '0.0.0.0', AWBS_ALLOW_LAN: 'true', AWBS_ORIGIN: origin, AWBS_PORT: String(port), AWBS_PIN_TIME_ZONE: 'America/Los_Angeles' },
   });
   let output = '';
   let exited = false;
@@ -180,12 +204,19 @@ test.each([lanOrigin, lanOrigin.replace('http:', 'https:')])('M1·L4: LAN %s 기
       if (exited && !output.includes('Server listening')) throw new Error(`API 서버가 시작 전에 종료되었습니다(exit ${String(child.exitCode)}):\n${output}`);
     }
     assert(child.pid);
+    expect(output).toContain('같은 네트워크 누구나 날짜로 접속 가능');
+    expect(output).toContain('America/Los_Angeles');
     if (origin.startsWith('http:')) {
-      expect(output).toContain('비밀번호와 세션');
+      expect(output).toContain('PIN과 세션');
       expect(output).toContain('같은 네트워크');
       expect(output).toContain('"level":40');
-    } else expect(output).not.toContain('비밀번호와 세션');
+    } else expect(output).not.toContain('PIN과 세션');
     const localOrigin = `http://127.0.0.1:${String(port)}`;
+    const pin = datePin(Date.now(), 'America/Los_Angeles');
+    const pinLogin = await fetch(`${localOrigin}/api/auth/session`, { method: 'POST', headers: { origin, 'content-type': 'application/json' },
+      body: JSON.stringify({ method: 'pin', pin }) });
+    expect(pinLogin.status).toBe(204);
+    expect(output).not.toContain(pin);
     const login = await fetch(`${localOrigin}/api/auth/session`, { method: 'POST', headers: { origin: localOrigin, 'content-type': 'application/json' },
       body: JSON.stringify({ method: 'link', token: await issueLoginLink(pool) }) });
     expect(login.status).toBe(204);

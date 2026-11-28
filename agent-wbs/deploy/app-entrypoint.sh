@@ -12,7 +12,7 @@
 #   api       API 서버(REST·세션·Telegram 즉시 알림)
 #   worker    worker(Runner 생존 감시·보고서 정기 생성·메일 발송·초기화 파일 삭제)
 #   migrate   DB 마이그레이션 + 필수 기본 설정(seed system) + 앱 로그인 준비. 여러 번 실행해도 된다.
-#   auth ...  인증 CLI(login-link | set-password | runner-token <ID> <공개키 파일> | revoke-runner)
+#   auth ...  인증 CLI(login-link | runner-token <ID> <공개키 파일> | revoke-runner)
 #   db-check  앱 로그인의 권한 확인(관리자가 아닌지, 이력을 지울 수 없는지). JSON 한 줄, 안전하지 않으면 종료 코드 1
 #   seed-demo 복원 리허설 전용 시험 자료(DB 이름이 awbs_test_로 시작할 때만 동작)
 set -eu

@@ -174,7 +174,11 @@ test.each<[string, unknown, boolean]>([
   ['putTelegram', { updatedAt: T, enabled: true, targetName: '', chatId: '12345', botToken: '●●●● 등록됨 (끝 4자리)' }, false],
   ['putTelegram', { updatedAt: T, enabled: true, targetName: '', chatId: '12345', botToken: '' }, false],
   ['login', { method: 'link', token: 't', password: 'p' }, false],
-  ['login', { method: 'password', password: 'p' }, true],
+  ['login', { method: 'pin', pin: '261128' }, true],
+  ['login', { method: 'pin', pin: '12345' }, false],
+  ['login', { method: 'pin', pin: '1234567' }, false],
+  ['login', { method: 'pin', pin: '12345x' }, false],
+  ['login', { method: 'password', password: 'p' }, false],
   ['createProposal', { title: 't', reason: 'r', source: { kind: 'manual' }, ops: [{ op: 'modify', task: 'TASK-0001', field: 'status', after: 'done' }] }, false],
   ['createProposal', { title: 't', reason: 'r', source: { kind: 'manual' }, ops: [{ op: 'modify', task: 'TASK-0001', field: 'priority', after: '긴급' }] }, false],
   ['reportInputChanges', { commits: [{ sha: 'e7d41b0', at: T, author: '', message: '' }], files: [{ commitSha: SHA, path: 'prototype/docs/a.md', change: 'added', added: 1, deleted: 0 }] }, false],
@@ -186,7 +190,7 @@ test('응답에 비밀값 필드가 없고 입력 비밀값은 쓰기 전용이�
   const visit = (value: unknown, found: string[]): string[] => {
     if (typeof value !== 'object' || value === null) return found;
     for (const [key, item] of Object.entries(value)) {
-      if (/^(botToken|token|password|secret|credential)$/i.test(key)) found.push(key);
+      if (/^(botToken|token|pin|password|secret|credential)$/i.test(key)) found.push(key);
       if (key === 'writeOnly') found.push(key);
       visit(item, found);
     }

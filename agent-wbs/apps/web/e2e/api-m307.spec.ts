@@ -4,9 +4,10 @@
  * 화면 숫자는 같은 세션으로 서버 API를 직접 읽은 값과 비교한다(UAT-VERIFY-01 b, UAT-VERIFY-02 b, UAT-VERIFY-03, UAT-HISTORY-01).
  */
 import { expect, test, type Page } from '@playwright/test';
+import { fillPin, todayPin } from './support/pin.ts';
 
-const password = process.env.AWBS_E2E_PASSWORD ?? '';
-test.skip(!password || !process.env.AWBS_E2E_API, '실제 API 환경이 없다. pnpm --filter @awbs/web e2e:api:m307로 실행한다.');
+const apiAvailable = !!process.env.AWBS_E2E_API;
+test.skip(!apiAvailable, '실제 API 환경이 없다. pnpm --filter @awbs/web e2e:api:m307로 실행한다.');
 test.describe.configure({ mode: 'serial' });
 
 const serverErrors: string[] = [];
@@ -17,7 +18,7 @@ test.afterAll(() => { if (serverErrors.length) console.log(`[실제 API 5xx] ${s
 
 /**
  * 로그인은 처음 한 번만 화면으로 하고, 다음 시험은 그 세션 쿠키를 다시 쓴다.
- * 왜: 서버는 비밀번호 로그인 횟수를 제한한다(UAT-AUTH-03). 시험마다 로그인하면 429로 로그인 화면에 멈춘다.
+ * 왜: 서버는 PIN 로그인 횟수를 제한한다(UAT-AUTH-03). 시험마다 로그인하면 429로 로그인 화면에 멈춘다.
  */
 let cookies: Awaited<ReturnType<import('@playwright/test').BrowserContext['cookies']>> = [];
 async function login(page: Page, path: string) {
@@ -29,7 +30,7 @@ async function login(page: Page, path: string) {
   }
   await page.goto(path);
   await expect(page).toHaveURL(/\/login/);
-  await page.getByLabel('비밀번호').fill(password);
+  await fillPin(page, todayPin());
   await page.getByRole('button', { name: '로그인' }).click();
   await expect(page).toHaveURL(path);
   cookies = await page.context().cookies();
