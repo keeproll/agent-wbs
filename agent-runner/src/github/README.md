@@ -171,7 +171,7 @@ Runner가 GitHub(git 저장소를 올려 두고 PR·검사·병합을 하는 서
 - 봉인은 「누가 보냈는지」나 「최신 값인지」를 증명하지 않는다. 그것은 Runner API 인증과 키 등록 계약이 맡는다. 이 형식은 RFC 9180 HPKE와 같은 형식이라고 부르지 않는다.
 - 토큰 캐시: `invalidate()` 때마다 세대 번호를 올린다. 무효화 전에 시작한 조회가 늦게 끝나도 그 옛 토큰은 캐시하지도 돌려주지도 않고, 현재 세대로 다시 받는다. 같은 세대의 동시 호출은 조회 한 번을 함께 쓴다.
 - 고정 시험 벡터 `test/github/fixtures/sealed-v1-vector.json`(리뷰의 Python 독립 구현이 만든 값)으로 바이트 배치를 고정했다. 서버 구현도 이 벡터를 통과해야 한다.
-- 공개키 등록 API는 계약(`POST /api/runner/github/key`)과 Runner 호출 코드(`connector.ts`)가 있다. 서버 처리기는 아직 없다(2026-11-28 기준 다른 작업 gh-cred에서 구현 중). 그래서 지금 운영 검증 범위는 `AWBS_GITHUB_MODE=gh`이고 `token` 방식은 gh-cred 병합 후에 쓴다(docs/ops/operations.md §5.1).
+- 공개키 등록 API(`POST /api/runner/github/key`)와 봉인 조회(`GET /api/runner/github/credential`)는 계약·Runner 호출 코드(`connector.ts`)·서버 처리기가 모두 있다(서버 처리기는 gh-cred, PR #22). 설정 절차는 `docs/runner-github-setup.md`, 운영 안내는 `docs/ops/operations.md` §5.1.
 - Runner 토큰을 발급할 때 넣는 공개키(`auth runner-token <ID> <공개키 파일>`, `runner_tokens.public_key`)는 이 봉인 키와 다르다. 지금 서버는 그 값을 저장만 하고 읽지 않는다.
 
 ## 확인 명령

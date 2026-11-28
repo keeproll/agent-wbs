@@ -247,18 +247,19 @@ docker 명령은 언제나 `docker compose -p awbs-prod -f <저장소>/agent-wbs
 
 결론
 
-- 지금은 서버 계약을 바꾸는 배포를 안전하게 할 지원 명령이 없다. **그런 배포는 아래 최소 명령을 만든 뒤에 한다.**
+- 지금은 서버 계약을 바꾸는 배포를 안전하게 할 지원 명령이 없다.
+- owner가 F-6 선택지 (A)를 골랐다(2026-11-28). 아래 명령은 **별도 작업에서 추가한다. 그 전까지 계약을 바꾸는 배포는 하지 않는다.**
 - 임의의 SQL로 일의 상태나 fence를 바꾸지 않는다. 왜: 상태 전이 검사와 이력 기록을 건너뛰어 다른 불일치를 만든다.
 - 계약이 바뀌지 않는 배포(화면·문서·내부 수정)는 4.2대로 해도 된다.
 
-제안하는 최소 명령(아직 만들지 않음, owner 결정 필요 — 실환경 기록 2장 F-6)
+별도 작업에서 추가할 최소 명령(owner 결정 (A), 이 브랜치에는 없음 — 실환경 기록 2장 F-6). 아래는 M8-06에서 제안한 모양이며, 실제 이름과 동작은 그 작업의 결과를 따른다.
 
 - `awbs-entrypoint jobs open` — 읽기 전용. `queued`·`leased`·`started`·`reconcile` 일을 종류·만든 시각·fence와 함께 보여 준다.
 - `awbs-entrypoint jobs reissue --kinds input_diff,split,estimate,planning --reason contract-change`
   - 한 일마다 한 트랜잭션에서: `queued` 일만 고른다 → `cancelled`(코드 `CONTRACT_CHANGED`)로 바꾸고 fence를 1 올린다 → 그 일을 처음 만든 서버 함수로 지금 DB에서 입력을 다시 만들어 새 일을 넣는다(dedup_key 순번 +1) → 이력에 남긴다.
   - Runner가 멈춘 상태에서만 실행한다(열린 세션이 있으면 거부).
 - 그때의 배포 순서: Runner 멈춤 → 백업 → 새 이미지 기동 → `jobs reissue` → `jobs open`으로 확인 → Runner 시작.
-- 만들기로 정한다면 함께 정해야 할 것(지금 정하지 않음)
+- 그 작업에서 함께 정해야 할 것(M8-06에서 정하지 않음)
   - `queued` 말고도 남은 `leased`·`started`(감시가 아직 바꾸지 않은 것), `reconcile` 일, `unconfirmed` 보유를 어떻게 처리할지.
   - `reconcile` 대조가 옛 입력으로 새 일을 넣는 경로(위 4번)를 계약 변경 뒤에 어떻게 막거나 바꿀지.
   - Planning 경로의 보고 검사(`assertJob`)에 임대 시각 검사를 더할지. 이것은 기존 동작을 바꾸는 일이라 별도 범위다.
@@ -278,8 +279,9 @@ docker 명령은 언제나 `docker compose -p awbs-prod -f <저장소>/agent-wbs
   - `AWBS_RUNNER_TOKEN=<운영 서버에서 발급한 토큰>` (5.1.1)
   - `AWBS_AGENT_USER=awbs-agent` (없어도 서비스 파일이 고정하지만, 다른 값이면 설치를 거부한다)
 - 기존 `.env`에 이미 있는 값도 확인한다(값이 비밀이 아닌 줄만 본다).
-  - `AWBS_GITHUB_MODE`: 지금 운영 검증 범위는 **`gh`**(이 PC의 `gh` 로그인을 쓰는 방식)다. 줄이 없으면 기본값 `gh`다. `token`이면 `gh`로 바꾼다.
-    - 왜: `token` 방식은 서버의 GitHub 봉인 처리기(`POST /api/runner/github/key`, `GET /api/runner/github/credential`)가 있어야 동작한다. 계약과 Runner 쪽 호출 코드는 있지만 서버 처리기는 아직 없다(다른 작업 gh-cred에서 구현 중). **token 방식은 gh-cred 병합 후**에 쓴다.
+  - `AWBS_GITHUB_MODE`: 줄이 없으면 기본값 `gh`(이 PC의 `gh` 로그인을 쓰는 방식)다.
+    - `token` 방식은 서버의 GitHub 봉인 처리기(`POST /api/runner/github/key`, `GET /api/runner/github/credential`)를 쓴다. 이 처리기는 gh-cred(PR #22)로 main에 들어왔다. 쓸 때는 `docs/runner-github-setup.md` 절차(화면에 GitHub 토큰 저장)를 따른다.
+    - M8-06 리허설은 token 방식의 키 등록·봉인 조회까지만 확인했다. 실제 GitHub 연결은 어느 방식으로도 확인하지 않았다.
   - `AWBS_ATTEMPT_AUTO`, `AWBS_CI_AUTO`: 줄이 없거나 `0`이면 꺼짐이다. `1`이면 실제 Claude·Codex 호출과 CI 실행이 시작된다. 켜는 것은 owner가 정할 때만 한다(OWNER-RUNBOOK 7단계).
   - 확인 명령(비밀값 줄은 보이지 않는다): `grep -E '^(AWBS_URL|AWBS_AGENT_USER|AWBS_GITHUB_MODE|AWBS_GITHUB_REPO|AWBS_ATTEMPT_AUTO|AWBS_CI_AUTO)=' <저장소>/agent-runner/.env`
 
@@ -287,7 +289,7 @@ docker 명령은 언제나 `docker compose -p awbs-prod -f <저장소>/agent-wbs
 
 - Runner는 처음 시작할 때 자기 식별자(`runnerId`, 무작위 UUID)를 만들어 `AWBS_HOME/state/runner.json`에 저장한다.
 - Runner 토큰은 이 식별자 하나에 묶인다. 다른 이름(예: `runner-main`)으로 발급한 토큰으로는 서버가 `403 FORBIDDEN_PRINCIPAL`로 거부한다.
-- 그래서 순서는 이렇다. **이 순서는 gh-cred 작업이 병합된 뒤에 쓴다**(`runner:public-key` 명령을 그 작업이 추가한다).
+- 그래서 순서는 이렇다(`runner:public-key` 명령은 gh-cred 작업, PR #22가 추가했다).
   1. Runner를 멈춘다(켜져 있다면): `systemctl --user stop awbs-runner.service`
   2. 공개키 파일 만들기와 식별자 확인: `pnpm -s -C <저장소>/agent-runner runner:public-key <아직 없는 공개키 파일의 절대 경로>` → 출력 한 줄이 식별자다.
      - 상태 파일의 실제 식별자를 쓴다. 상태 파일이 없으면 Runner가 처음 시작할 때와 같은 방법으로 만든다.
@@ -298,7 +300,7 @@ docker 명령은 언제나 `docker compose -p awbs-prod -f <저장소>/agent-wbs
 - 키 두 종류를 헷갈리지 않는다.
   - **토큰 발급 때 넣는 공개키**: `auth runner-token`이 요구하는 X25519 공개키 파일이다. 「이 Runner를 승인한다」는 기록으로 저장된다. 서버 인증은 Bearer 토큰이 맡는다.
   - **GitHub 봉인용 키**: Runner가 실행 중에 새로 만들어 `POST /api/runner/github/key`로 등록하는 키다. 서버가 GitHub 토큰을 이 키로 잠가(봉인) 보낸다(`token` 방식).
-  - main `1ce62aa` 기준으로는 봉인 처리기가 없다. 그래서 지금 검증 범위는 `gh` 방식이고, **token 방식은 gh-cred 병합 후**에 쓴다. 자세한 것은 gh-cred가 추가하는 `docs/runner-github-setup.md`를 따른다.
+  - 봉인 처리기는 gh-cred(PR #22)로 들어왔다. 자세한 것은 `docs/runner-github-setup.md`를 따른다.
 
 ### 5.2 설치 스크립트가 하는 일
 
@@ -492,7 +494,7 @@ docker 명령은 언제나 `docker compose -p awbs-prod -f <저장소>/agent-wbs
 - 백업은 같은 디스크에 남는다(7.1).
 - 운영과 개발 화면이 같은 포트(5173)를 기본으로 쓴다(2장).
 - 서버 계약을 바꾸는 배포에 필요한 옛 job 재발급 명령이 없다(4.4).
-- Runner의 GitHub 연결은 `gh` 방식만 검증 범위다. `token` 방식은 gh-cred 병합 후(5.1).
+- 실제 GitHub 연결은 M8-06에서 확인하지 않았다. token 방식은 키 등록·봉인 조회까지만 리허설로 확인했다(5.1).
 
 ## 용어
 

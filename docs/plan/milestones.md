@@ -467,7 +467,7 @@ flowchart LR
   - 디렉토리: 양쪽 · 병렬: Q-13·Q-15·Q-16 gate 후(셋 다 2026-11-27 결정됨: owner SMTP·외부는 PDF만, 이 PC compose, 즉시 발송) · 담당 / 리뷰: Claude / Codex
   - Runner 사용자 systemd 서비스에는 linger가 필요하다(open-questions §3). 서버 계약을 바꿔 배포할 때 옛 job 재발급 절차도 이 전에 정한다.
   - **검증 기록(2026-11-28, 리뷰 반영 2차)** — `AWBS_IMAGE_TAG=<꼬리표> docker compose -p awbs-prod -f agent-wbs/deploy/compose.prod.yaml config` 통과, 복원 리허설 통과(표 107개 행 수·지문, 데이터 파일, API GET 14개, 새 변경의 트랜잭션 번호, 앱 DB 로그인 `awbs_app_login` 권한, 없는 이미지 꼬리표 복원 거부, Runner heartbeat 204). 실환경 기록과 owner 할 일은 [docs/ops/M8-06-real-env-record.md](../ops/M8-06-real-env-record.md), 운영 설명서는 [docs/ops/operations.md](../ops/operations.md).
-    - 옛 job 재발급: 지금 코드에는 지원 API·CLI가 없음을 확인했다. 계약을 바꾸는 배포는 최소 명령을 만든 뒤에 한다(operations §4.4). 선택지와 추천은 실환경 기록 F-6이며 owner 결정 대기다.
+    - 옛 job 재발급: 지금 코드에는 지원 API·CLI가 없음을 확인했다. 계약을 바꾸는 배포는 최소 명령을 만든 뒤에 한다(operations §4.4). owner가 F-6 (A)를 골랐다(2026-11-28). 명령은 별도 작업에서 추가하고, 그 전까지 계약 변경 배포는 하지 않는다.
 
 ## 4. 추적표 — 가이드 절 → 마일스톤
 

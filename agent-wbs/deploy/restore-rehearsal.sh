@@ -16,7 +16,7 @@
 #   5. 원본·대상 모두 api·worker가 관리자가 아닌 앱 로그인(awbs_app_login)으로 접속하고, 이력을 지울 수 없고, 관리자 비밀 파일이 없는지
 #   6. 없는 이미지 꼬리표나 이미지 ID가 빠진 manifest로 복원하면 아무것도 만들기 전에 멈추는지(이미지 자동 빌드 없음)
 #   7. 안내대로(runner:public-key → 나온 Runner ID로 토큰 발급) 하면 Runner heartbeat가 204이고, 옛 안내(runner-main)는 403인지
-#      runner:public-key 명령은 gh-cred 작업(agent-runner/scripts/runner-public-key.ts)이 추가한다. 없으면 이 단계에서 멈춘다.
+#      잘못된 공개키는 토큰을 받지 못하는지, token 방식 Runner의 봉인 키 등록·봉인 조회가 정상(404 아님)인지
 # 이미지는 미리 build.sh로 만들어 둔다. 이 스크립트는 이미지를 만들지 않는다.
 #   AWBS_IMAGE_TAG=<꼬리표> bash agent-wbs/deploy/restore-rehearsal.sh
 # 끝나면 임시 구성을 `docker compose down -v`로 지운다(그 구성의 컨테이너·이름 있는 볼륨만). docker volume prune은 쓰지 않는다.
@@ -198,7 +198,7 @@ log "   새 변경: epoch=$new_epoch(백업 $old_epoch) 실제 커밋 시각 기
 log "9. Runner 연결 재현(안내대로: runner:public-key → 나온 ID로 토큰 → heartbeat)"
 runner_home="$work/runner/home"
 mkdir -p "$runner_home" && chmod 0700 "$work/runner" "$runner_home"
-[[ -f "$repo/agent-runner/scripts/runner-public-key.ts" ]] || { log "   실패: runner:public-key 명령이 없습니다(gh-cred 병합 필요)"; exit 1; }
+[[ -f "$repo/agent-runner/scripts/runner-public-key.ts" ]] || { log "   실패: runner:public-key 명령(agent-runner/scripts/runner-public-key.ts, gh-cred PR #22)이 없습니다"; exit 1; }
 runner_id="$(env -i PATH="$PATH" AWBS_HOME="$runner_home" node "$repo/agent-runner/scripts/runner-public-key.ts" "$work/runner/pub.pem")"
 log "   runner:public-key → Runner ID $runner_id, 공개키 파일 $(stat -c '%a' "$work/runner/pub.pem")"
 token="$(dc "$dst" "$dst_port" exec -T api awbs-entrypoint auth runner-token "$runner_id" /dev/stdin < "$work/runner/pub.pem")"
@@ -220,7 +220,40 @@ set -e
 sessions="$(psql_on "$dst" -tAc "select count(*) from public.runner_sessions where runner_id='$runner_id'")"
 log "   실제 Runner 20초 실행: 서버의 세션 기록 $sessions 개(runner_id=$runner_id)"
 [[ "$sessions" -ge 1 ]] || { log "   실패: Runner 세션이 서버에 기록되지 않았습니다(로그 $work/runner/runner.log)"; exit 1; }
-unset token old_token
+# gh-cred의 키 형식 검사가 앱 로그인 entrypoint(auth)에서도 동작하는지: 공개키가 아닌 파일은 토큰을 내주지 않아야 한다.
+printf 'not a public key\n' > "$work/runner/bad.pem"
+set +e
+dc "$dst" "$dst_port" exec -T api awbs-entrypoint auth runner-token "$runner_id" /dev/stdin < "$work/runner/bad.pem" >/dev/null 2>"$work/runner/bad.err"
+bad_code=$?
+set -e
+log "   잘못된 공개키로 토큰 발급 시도 → 종료 코드 $bad_code (거부돼야 함)"
+[[ "$bad_code" != 0 ]] || { log "   실패: 잘못된 공개키로 토큰이 발급됐습니다"; exit 1; }
+
+# 봉인 키 등록(token 방식): 시험용 GitHub 토큰을 화면 API로 저장하고, Runner를 token 방식으로 잠깐 띄운다.
+# GitHub API 주소는 닫힌 로컬 포트로 둔다. 바깥 GitHub에는 아무 요청도 나가지 않는다.
+origin="http://127.0.0.1:$dst_port"; jar="$work/cookies/dst"
+csrf="$(curl -fsS -b "$jar" "$origin/api/session" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>console.log(JSON.parse(d).csrfToken))')"
+gh_version="$(curl -fsS -b "$jar" "$origin/api/settings/github" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>console.log(JSON.parse(d).updatedAt ?? ""))')"
+gh_put="$(curl -sS -o "$work/runner/gh-put.json" -w '%{http_code}' -X PUT -b "$jar" -H "Origin: $origin" -H "x-csrf-token: $csrf" -H "Idempotency-Key: rehearsal-gh-$(date +%s)" \
+  -H 'Content-Type: application/json' --data "{\"mode\":\"token\",\"token\":\"github_pat_rehearsal_dummy_0000000000\",\"updatedAt\":$( [[ -n "$gh_version" ]] && echo "\"$gh_version\"" || echo null )}" "$origin/api/settings/github")"
+log "   시험용 GitHub 토큰 저장(token 방식) → HTTP $gh_put"
+[[ "$gh_put" == 200 ]] || { log "   실패: GitHub 설정 저장 $(cat "$work/runner/gh-put.json")"; exit 1; }
+since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+set +e
+env -i PATH="$PATH" HOME="$HOME" AWBS_HOME="$runner_home" AWBS_URL="$origin" AWBS_RUNNER_TOKEN="$token" AWBS_CLI_UPDATE=0 \
+  AWBS_GITHUB_REPO=https://github.com/keeproll/agent-wbs-sandbox AWBS_GITHUB_MODE=token AWBS_GITHUB_API_URL=http://127.0.0.1:9 \
+  AWBS_ATTEMPT_AUTO=0 AWBS_CI_AUTO=0 timeout -s TERM 25 node "$repo/agent-runner/src/main.ts" > "$work/runner/runner-token.log" 2>&1
+set -e
+# api 접근 기록(요청 경로와 응답 코드)에서 봉인 키 등록·봉인 조회의 결과를 읽는다.
+codes="$(docker logs --since "$since" "$dst-api" 2>&1 | node -e '
+  let d=""; process.stdin.on("data",c=>d+=c).on("end",()=>{ const url=new Map(), out=[];
+    for (const line of d.split("\n")) { let j; try { j=JSON.parse(line); } catch { continue; }
+      if (j.req) url.set(j.reqId, String(j.req.route ?? ""));
+      if (j.res?.statusCode && /github\/(key|credential)$/.test(url.get(j.reqId) ?? "")) out.push(url.get(j.reqId).replace("/api/runner/github/","")+"="+j.res.statusCode); }
+    console.log(out.join(" ")); });')"
+log "   token 방식 Runner 25초 실행: $codes"
+[[ "$codes" =~ key=20[01] && "$codes" =~ credential=200 ]] || { log "   실패: 봉인 키 등록·조회가 정상이 아닙니다(로그 $work/runner/runner-token.log)"; exit 1; }
+unset token old_token csrf
 
 if ((differ)); then log "결과: 표 지문·데이터 파일·새 변경은 통과, API 본문 $differ 개 다름(위 diff 확인)"; exit 1; fi
 log "결과: 통과(표 지문·데이터 파일·API 응답·새 변경·앱 DB 권한·이미지 고정·Runner 연결 모두 정상)"

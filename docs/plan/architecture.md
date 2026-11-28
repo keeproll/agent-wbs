@@ -525,7 +525,7 @@ pnpm -C agent-runner start          # 토큰 발급 후
   - Runner 계정에 linger를 켠다(`loginctl enable-linger <계정>`). 왜: 재시작 뒤 아무도 로그인하지 않으면 사용자 systemd가 없어 Runner와 cgroup scope가 뜨지 않는다.
 - 배포 확인(④) 대상은 이 PC의 docker compose다(owner Q-15 A, 2026-11-27 아이템 19). 원격 서버·SSH 대상은 넣지 않는다.
 - 서버 계약을 바꿔 배포할 때는 대기 중인 옛 job(`input_diff`·`split`·`estimate`·`planning`)을 다시 만드는 절차가 필요하다.
-  - M8-06에서 지금 코드로 확인한 결과: `queued` 옛 job을 취소·재발급하거나 목록으로 보는 지원 API·CLI가 없다. 그래서 **계약을 바꾸는 배포는 최소 명령(`jobs open`·`jobs reissue`)을 만든 뒤에 한다.** 다섯 질문의 답과 제안은 `docs/ops/operations.md` §4.4, owner 결정 선택지는 `docs/ops/M8-06-real-env-record.md` 2장 F-6.
+  - M8-06에서 지금 코드로 확인한 결과: `queued` 옛 job을 취소·재발급하거나 목록으로 보는 지원 API·CLI가 없다. owner가 F-6 선택지 (A)를 골랐다(2026-11-28): 최소 명령(`jobs open`·`jobs reissue`)은 **별도 작업에서 추가하고, 그 전까지 계약을 바꾸는 배포는 하지 않는다.** 다섯 질문의 답은 `docs/ops/operations.md` §4.4, 선택지는 `docs/ops/M8-06-real-env-record.md` 2장 F-6.
 - 되돌리기는 커밋 해시 꼬리표의 이미지로 다시 띄운다. 없으면 그 커밋으로 다시 빌드한다(§4.13 L489).
 - DB는 배포 전 `pg_dump`로 백업한다 [결정].
 
