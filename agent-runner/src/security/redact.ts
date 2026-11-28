@@ -2,12 +2,15 @@ const MASK = '[REDACTED]';
 
 // `tokensUsed`, `tokenSet`처럼 비밀이 아닌 값은 걸리지 않도록 끝만 본다.
 const SECRET_KEY = /^(proxy-)?authorization$|cookie$|password$|passwd$|secret$|token$|api[-_]?key$|private[-_]?key$/i;
+// 일반 sort_key·primary_key는 보존하고 인증에 쓰는 이름만 가린다.
+const SECRET_NAME = '(?:(?:[a-z0-9]+[_-])*(?:token|password|passwd|secret|api[-_]?key|private[-_]?key)|(?:bot|access|refresh)[-_]?token|AWBS_SECRET_KEY|AWS_(?:SECRET_ACCESS_KEY|ACCESS_KEY_ID))';
+const ASSIGNMENT = `((?:(?<![\\w-])${SECRET_NAME}["']?[ \\t]*[:=][ \\t]*|--${SECRET_NAME}(?:=|[ \\t]+)))`;
 
 const PATTERNS: readonly [RegExp, string][] = [
   [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, `$1 ${MASK}`],
   [/\/bot\d+:[A-Za-z0-9_-]+/g, `/bot${MASK}`],
   // 경로에서 떨어져 나온 Telegram 토큰
-  [/\b\d{6,}:[A-Za-z0-9_-]{30,}/g, MASK],
+  [/\b\d{6,12}:[A-Za-z0-9_-]{20,}/g, MASK],
   [/\b(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,})/g, MASK],
   [/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, `$1${MASK}@`],
   [/([?&](?:access_token|token|password|api_?key)=)[^&\s"']+/gi, `$1${MASK}`],
@@ -17,7 +20,9 @@ const PATTERNS: readonly [RegExp, string][] = [
     `$1"${MASK}"`,
   ],
   [/^((?:set-)?cookie|(?:proxy-)?authorization):\s*.+$/gim, `$1: ${MASK}`],
-  [/\b([A-Z][A-Z0-9_]*_(?:TOKEN|PASSWORD|SECRET|KEY)|PASSWORD|TOKEN|SECRET)=[^\s"']+/g, `$1=${MASK}`],
+  [new RegExp(`${ASSIGNMENT}"(?:[^"\\\\]|\\\\.)*(?:"|$)`, 'gi'), `$1"${MASK}"`],
+  [new RegExp(`${ASSIGNMENT}'[^']*(?:'|$)`, 'gi'), `$1'${MASK}'`],
+  [new RegExp(`${ASSIGNMENT}(?:\\[REDACTED\\]|[^\\s"'&,;{}\\[\\]]+)`, 'gi'), `$1${MASK}`],
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(-----END [A-Z ]*PRIVATE KEY-----|$)/g, MASK],
 ];
 

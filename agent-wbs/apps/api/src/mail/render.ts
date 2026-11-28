@@ -15,6 +15,7 @@
  * 그래서 화면·메일·PDF가 같은 스냅샷에서 같은 숫자를 보인다(milestones §4.0).
  */
 import { externalHtmlLeaks, externalLeaks, externalText, monthDay, parseSender, scrubInternal, reportFigures, type Kpi, type ReportKind, type ReportSnapshotData } from '@awbs/shared';
+import { redact } from '../platform/redact.ts';
 
 export interface MailReport {
   id: string;
@@ -139,6 +140,7 @@ const reportLink = (input: MailInput) => {
 };
 
 export function renderMail(input: MailInput): RenderedMail {
+  input = redact(input) as MailInput;
   const r = input.report;
   const view = mailView(r.kind, input.view);
   // 외부 수신자는 보고용만 받는다(일간은 팀장용만 있어 외부로 보내지 않는다 — queue.ts가 막는다).

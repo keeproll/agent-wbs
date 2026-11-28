@@ -58,7 +58,7 @@ export function installTaskErrors(scope: FastifyInstance, actions: ReadonlyMap<s
     const task = error instanceof TaskError ? error : new TaskError('VALIDATION_FAILED', {}, validationErrors(failure.validation ?? []));
     return reply.code(ERROR_STATUS[task.code]).send(errorBody({
       code: task.code, message: task.message, action, fix: FIXES[task.code] ?? '입력과 현재 상태를 확인한 뒤 다시 시도하세요.',
-      errors: task.errors, details: redact(task.details) as Record<string, unknown>, requestId: request.id,
+      errors: redact(task.errors) as InputError[], details: redact(task.details) as Record<string, unknown>, requestId: request.id,
     }));
   });
 }
