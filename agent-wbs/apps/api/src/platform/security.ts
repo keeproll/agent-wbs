@@ -1,4 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
+import { isUtf8 } from 'node:buffer';
 import assert from 'node:assert/strict';
 import type { Pool, PoolClient } from '@awbs/db';
 import { OPERATIONS, type Operation } from '@awbs/shared/api';
@@ -6,6 +7,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { randomToken, tokenHash, verifyPassword } from './credentials.ts';
 import { installErrors, PlatformError } from './errors.ts';
 import { dropChanges, flushChanges } from '../changes/events.ts';
+import { changedRunnerReference, redactRunnerInput, redactText } from './redact.ts';
 
 export interface SecurityOptions { origin: string; lan: boolean; port?: number }
 interface Session { token_hash: string; expires_at: Date; csrf: string }
@@ -188,6 +190,27 @@ export function installSecurity(app: FastifyInstance, pool: Pool, options: Secur
     }
     checkResetEpoch();
     context.idempotency = { key, hash, project };
+  });
+
+  app.addHook('preHandler', async (request) => {
+    if (request.platform?.operation?.principal !== 'runner') return;
+    const file = (request.body as { file?: unknown } | undefined)?.file;
+    // 파일을 고치면 보고한 지문이 달라진다. 텍스트에 비밀이 남았으면 저장 전에 거부한다.
+    if (Buffer.isBuffer(file) && isUtf8(file) && redactText(file.toString('utf8')) !== file.toString('utf8')) {
+      throw new PlatformError('VALIDATION_FAILED', {}, [{ path: 'file', rule: 'secret', message: '증거 파일의 비밀값을 먼저 가린 뒤 다시 보내세요.' }]);
+    }
+    // 원문으로 멱등 키를 대조한 뒤, 모든 Runner 자유 글을 저장 입구 한 곳에서 가린다.
+    const clean = redactRunnerInput(request.body);
+    if (changedRunnerReference(request.body, clean)) {
+      throw new PlatformError('VALIDATION_FAILED', {}, [{ path: 'body', rule: 'secret', message: '식별자나 파일 경로의 비밀값을 먼저 제거한 뒤 다시 보고하세요.' }]);
+    }
+    // 커밋·트리 지문에 묶인 원문은 바꿔 저장하지 않는다. 비밀이 있으면 원본부터 고쳐야 한다.
+    const anchored = request.platform.operation.id === 'reportDesignSnapshot' ? ['files', 'items', 'components']
+      : request.platform.operation.id === 'reportInputChanges' ? ['changes', 'pipelineObservation'] : [];
+    if (anchored.some(key => JSON.stringify((request.body as Record<string, unknown>)[key]) !== JSON.stringify((clean as Record<string, unknown>)[key]))) {
+      throw new PlatformError('VALIDATION_FAILED', {}, [{ path: 'body', rule: 'secret', message: '커밋에 묶인 원문의 비밀값을 먼저 제거한 뒤 다시 보고하세요.' }]);
+    }
+    request.body = clean;
   });
 
   app.addHook('onSend', async (request, reply, payload) => {

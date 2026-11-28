@@ -13,6 +13,7 @@
     "typecheck": "tsc -p tsconfig.json && pnpm -r run typecheck",
     "lint": "eslint . --max-warnings 0",
     "test": "node scripts/vitest.ts --config vitest.config.ts",
+    "test:secrets": "node scripts/vitest.ts --config vitest.secrets.config.ts",
     "test:db": "node scripts/vitest.ts --config vitest.db.config.ts",
     "test:scenario": "node scripts/vitest.ts --config vitest.scenario.config.ts",
     "test:resilience": "node scripts/vitest.ts --config vitest.resilience.config.ts",
