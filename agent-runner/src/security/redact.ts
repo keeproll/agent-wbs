@@ -17,7 +17,7 @@ const PATTERNS: readonly [RegExp, string][] = [
     `$1"${MASK}"`,
   ],
   [/^((?:set-)?cookie|(?:proxy-)?authorization):\s*.+$/gim, `$1: ${MASK}`],
-  [/\b([A-Z][A-Z0-9_]*_(?:TOKEN|PASSWORD|SECRET|KEY)|PASSWORD|TOKEN|SECRET)=[^\s"']+/g, `$1=${MASK}`],
+  [/\b([\w-]*(?:TOKEN|PASSWORD|PASSWD|SECRET|_KEY|APIKEY|PRIVATEKEY))=(?:"(?:[^"\\]|\\.)*(?:"|$)|'[^']*(?:'|$)|[^\s"']+)/gi, `$1=${MASK}`],
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(-----END [A-Z ]*PRIVATE KEY-----|$)/g, MASK],
 ];
 

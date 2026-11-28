@@ -449,6 +449,7 @@ flowchart LR
 - **M8-03** — 보안 검토·비밀값 유출 검사
   - 완료 조건(검증): `W test:secrets && R test:secrets` + 리뷰 지적 0건 미해결
   - 디렉토리: 양쪽 · 병렬: ∥ · 담당 / 리뷰: Codex / Claude
+  - 검사 경로·수정 근거·Q-08의 남은 위험은 [보안 검토 기록](security-review.md)에 있다.
 - **M8-04** — CLI 실측: Codex·Claude 하위 Agent 관측 항목(§6.7, §11-6·8)
   - 완료 조건(검증): 실환경 기록 + 등급 등록(승인된 모델·호출 한도 안에서만)
   - 디렉토리: `agent-runner` · 병렬: Q-08·Q-12-잔여 gate 후(둘 다 2026-11-27 결정됨) · 담당 / 리뷰: Codex / Claude

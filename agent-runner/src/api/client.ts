@@ -1,4 +1,5 @@
 import type { Secret } from '../security/secret.ts';
+import { createRedactor } from '../security/redact.ts';
 import { OPERATIONS, type ErrorResponse, type Operations } from './generated/client.ts';
 
 export type OperationId = keyof Operations;
@@ -77,6 +78,7 @@ function json(text: string): unknown {
 
 /** 요청 1회. 재시도와 영속 저장은 Outbox가 맡는다. */
 export function createApiClient({ baseUrl, token, fetch: send = fetch }: ApiClientOptions) {
+  const redact = createRedactor([token.reveal()]);
   return async <K extends OperationId>(id: K, request: ApiRequest<K>): Promise<ApiResponse<K>> => {
     const op = OPERATIONS[id];
     const { params, query, body, epoch, idempotencyKey, ifNoneMatch } = request as AnyRequest;
@@ -112,11 +114,12 @@ export function createApiClient({ baseUrl, token, fetch: send = fetch }: ApiClie
       });
       text = await response.text();
     } catch { throw new ApiTransportError(id); }
-    const value = json(text);
+    // 오류는 거부 기록 파일에도 남는다. 서버가 인증 정보를 되비춰도 메모리 밖으로 나가지 않게 한다.
+    const value = response.status >= 400 ? redact(json(text)) : json(text);
     // 선언한 상태라도 본문이 JSON이 아니면 서버 응답으로 믿지 않는다.
     const hasBody = (op.statuses as Readonly<Record<number, boolean>>)[response.status];
     if (hasBody === undefined || (hasBody && value === undefined)) {
-      throw new ApiError(id, response.status, errorOf(value), response.headers.get('retry-after'));
+      throw new ApiError(id, response.status, errorOf(value), redact(response.headers.get('retry-after')));
     }
     return { status: response.status, body: value, headers: response.headers } as unknown as ApiResponse<K>;
   };

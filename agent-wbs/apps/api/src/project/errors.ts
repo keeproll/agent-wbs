@@ -2,7 +2,7 @@ import { errorBody } from '@awbs/shared';
 import { ERROR_STATUS, type ErrorCode } from '@awbs/shared/api';
 import type { FastifyInstance, FastifySchemaValidationError } from 'fastify';
 import { validationErrors } from '../platform/errors.ts';
-import { redact } from '../platform/redact.ts';
+import { redact, redactText } from '../platform/redact.ts';
 import { JcsError } from './hash.ts';
 
 /** 400 `errors[]` 한 줄. path는 본문 안의 위치(예: `tasks.0.wpRef`)다. */
@@ -59,9 +59,9 @@ export function installProjectErrors(scope: FastifyInstance, action: (method: st
     // 형식 검증 오류의 경로·규칙 변환은 공통 처리(platform validationErrors)를 그대로 쓴다(리뷰 8).
     const problem = error instanceof ProjectError ? error : new ProjectError('VALIDATION_FAILED', { errors: validationErrors(failure.validation ?? []) });
     return reply.code(ERROR_STATUS[problem.code]).send(errorBody({
-      code: problem.code, message: problem.message, action: action(request.method, request.routeOptions.url ?? ''),
-      fix: problem.fix ?? FIXES[problem.code] ?? '현재 상태를 다시 불러와 확인한 뒤 다시 시도하세요.',
-      errors: problem.errors, details: redact(problem.details) as Record<string, unknown>, requestId: request.id,
+      code: problem.code, message: redactText(problem.message), action: action(request.method, request.routeOptions.url ?? ''),
+      fix: redactText(problem.fix ?? FIXES[problem.code] ?? '현재 상태를 다시 불러와 확인한 뒤 다시 시도하세요.'),
+      errors: redact(problem.errors) as InputError[], details: redact(problem.details) as Record<string, unknown>, requestId: request.id,
     }));
   });
 }

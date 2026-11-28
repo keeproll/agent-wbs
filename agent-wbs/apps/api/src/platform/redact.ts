@@ -9,8 +9,9 @@ export function redactText(value: string): string {
     .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, `$1${MASK}@`)
     .replace(/([?&#](?:[\w-]*(?:token|password|secret)|api_?key)=)[^&\s"']+/gi, `$1${MASK}`)
     .replace(/("[\w-]*(?:authorization|cookie|password|passwd|secret|token|api[-_]?key|private[-_]?key)"\s*:\s*)"(?:[^"\\]|\\.)*"/gi, `$1"${MASK}"`)
+    .replace(/^((?:set-)?cookie|(?:proxy-)?authorization):\s*.+$/gim, `$1: ${MASK}`)
     .replace(/\b(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,})/g, MASK)
-    .replace(/\b([A-Z][A-Z0-9_]*_(?:TOKEN|PASSWORD|SECRET|KEY)|PASSWORD|TOKEN|SECRET)=[^\s"']+/g, `$1=${MASK}`)
+    .replace(/\b([\w-]*(?:TOKEN|PASSWORD|PASSWD|SECRET|_KEY|APIKEY|PRIVATEKEY))=(?:"(?:[^"\\]|\\.)*(?:"|$)|'[^']*(?:'|$)|[^\s"']+)/gi, `$1=${MASK}`)
     .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(-----END [A-Z ]*PRIVATE KEY-----|$)/g, MASK);
 }
 
