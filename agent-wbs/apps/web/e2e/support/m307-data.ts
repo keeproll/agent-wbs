@@ -45,7 +45,7 @@ export const gates = (): Gate[] => Object.entries(GATE_ROWS).map(([taskKey, s]) 
 
 export const verifications = (): Verification[] => [
   {
-    id: 'v-0007-1', taskKey: 'TASK-0007', attemptId: 'att-0007-2', result: 'FAIL', headSha: 'b'.repeat(40), specRevision: 2,
+    id: 'v-0007-1', seq: 2, taskKey: 'TASK-0007', attemptId: 'att-0007-2', result: 'FAIL', headSha: 'b'.repeat(40), specRevision: 2,
     cmd: 'pnpm --filter web test -- tree', expected: '14건 모두 통과', actual: '12/14 통과 — 필터 시 상위 Phase 행 누락, 1,000행 펼치기 412ms',
     defects: [
       { defKey: 'D-1', text: '필터 적용 시 상위 Phase 행이 사라짐', blocking: true, resolved: false },
@@ -54,7 +54,7 @@ export const verifications = (): Verification[] => [
     invalidated: false, at: kst('2026-11-01 13:35'),
   },
   {
-    id: 'v-0001-1', taskKey: 'TASK-0001', attemptId: 'att-0001-2', result: 'PASS', headSha: 'c'.repeat(40), specRevision: 1,
+    id: 'v-0001-1', seq: 1, taskKey: 'TASK-0001', attemptId: 'att-0001-2', result: 'PASS', headSha: 'c'.repeat(40), specRevision: 1,
     cmd: 'pnpm install && pnpm -r build', expected: '종료 코드 0', actual: '종료 코드 0 (52.4s)', defects: [], invalidated: false, at: kst('2026-10-28 16:20'),
   },
 ] as unknown as Verification[];
@@ -63,7 +63,7 @@ export const attempts = (taskKey: string): Attempt[] => ({
   'TASK-0007': [{ id: 'att-0007-2', attemptKey: 'ATT-0007-2', agent: 'Codex' }, { id: 'att-0007-1', attemptKey: 'ATT-0007-1', agent: 'Claude' }],
   'TASK-0001': [{ id: 'att-0001-2', attemptKey: 'ATT-0001-2', agent: 'Codex' }],
 }[taskKey] ?? []).map((a) => ({
-  ...a, taskKey, kind: 'qa', status: 'completed', startedAt: kst('2026-11-01 13:10'), endedAt: null, modelId: null, effort: null, gradeAdjust: null,
+  ...a, attemptNo: Number(a.attemptKey.split('-').at(-1)), taskKey, kind: 'qa', status: 'completed', startedAt: kst('2026-11-01 13:10'), endedAt: null, modelId: null, effort: null, gradeAdjust: null,
   summary: null, failure: null, tokens: null, resumedFrom: null, baseSha: null, headSha: null, changedFiles: [], updatedAt: kst('2026-11-01 13:10'),
 } as unknown as Attempt));
 

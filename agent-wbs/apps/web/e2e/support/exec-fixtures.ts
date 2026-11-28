@@ -32,7 +32,8 @@ export function summary(taskKey: string, wbsPath: string, title: string, status:
 
 export function attempt(attemptKey: string, taskKey: string, kind: Attempt['kind'], status: Attempt['status'], startedAt: string, extra: Partial<Attempt> = {}): Attempt {
   return {
-    id: `att-${attemptKey}`, attemptKey, taskKey, kind, agent: kind === 'qa' || kind === 'reverify' ? 'Codex' : 'Claude', status, startedAt,
+    // 시도 번호(attemptNo)는 키 끝 숫자(ATT-0007-3 → 3). 서버도 같은 값으로 매긴다.
+    id: `att-${attemptKey}`, attemptKey, attemptNo: Number(attemptKey.split('-').at(-1)), taskKey, kind, agent: kind === 'qa' || kind === 'reverify' ? 'Codex' : 'Claude', status, startedAt,
     endedAt: status === 'running' ? null : startedAt, modelId: kind === 'qa' || kind === 'reverify' ? 'Codex Large' : 'Opus 5.5', effort: '높음', gradeAdjust: null,
     summary: null, failure: null, tokens: null, resumedFrom: null, baseSha: null, headSha: null, changedFiles: [], updatedAt: startedAt, ...extra,
   };
@@ -40,7 +41,8 @@ export function attempt(attemptKey: string, taskKey: string, kind: Attempt['kind
 
 export function verification(id: string, a: Attempt, result: Verification['result'], extra: Partial<Verification> = {}): Verification {
   return {
-    id, taskKey: a.taskKey, attemptId: a.id, result, headSha: 'a'.repeat(40), specRevision: 1, cmd: 'pnpm test', expected: '', actual: '',
+    // 저장 순번(seq)은 기본으로 그 시도 번호(검증은 시도 하나에 하나, 시도 순서대로 저장된다). 시험마다 덮어쓸 수 있다.
+    id, seq: a.attemptNo, taskKey: a.taskKey, attemptId: a.id, result, headSha: 'a'.repeat(40), specRevision: 1, cmd: 'pnpm test', expected: '', actual: '',
     defects: [], invalidated: false, at: a.startedAt, ...extra,
   };
 }

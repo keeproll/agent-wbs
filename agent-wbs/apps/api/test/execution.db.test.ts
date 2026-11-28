@@ -89,6 +89,7 @@ beforeEach(async () => {
   wp = ((await owner.query("insert into wbs_nodes(project_id,node_key,kind,parent_id,title,sort_order) values($1,'WP','work_package',$2,'묶음',1) returning id",[project,phase])).rows[0] as { id: string }).id;
   await owner.query("insert into runner_hosts(host_id,boot_id,cpu,cores,mem_gb,swap_gb,disk_gb,os,samples,seen_at) values('host-a','boot-a','fake',20,32,0,100,'fake',0,now())");
   await owner.query("insert into external_write_authority(singleton,host_id,generation,state) values(true,'host-a',1,'granted')");
+  await owner.query("insert into github_settings(mode,status,scopes) values('gh','ok',$1) on conflict(singleton) do nothing", [{ contents: 'verified', pulls: 'verified', statuses: 'verified', metadata: 'verified' }]);
   await owner.query("insert into agent_models(agent,model_id,rank,allowed,report) values('Codex','gpt-6.1-sol',1,true,'{\"efforts\":[\"high\",\"xhigh\",\"max\"]}')");
   await owner.query("insert into agent_usage(agent,remain_pct,reset_at) values('Codex',100,now())");
   await owner.query("insert into runner_readiness(key,status,detail,fix,at) select key,'ok','','',now() from unnest(array['codex','git','node','pnpm','pg','repo','disk','subs']) key");
@@ -577,4 +578,117 @@ test('조정자 결정 3(0040): cgroup이 기록된 보유는 같은 경로·그
   await owner.query("update execution_holds set slot_state='active',pgid=4245,cgroup=$2 where job=$1", [direct.job, cgroup]);
   await expect(owner.query("update execution_holds set slot_state='none',release_proof='group_empty' where job=$1", [direct.job])).rejects.toThrow(/release proof/);
   await owner.query("update execution_holds set slot_state='none',release_proof='cgroup_empty' where job=$1", [direct.job]);
+});
+
+test('M8 선행: 시계가 뒤로 가도 API의 시도 번호(attemptNo)·검증 순번(seq)과 보고서의 최신 시도·검증·FAIL 뒤 메시지·직전 재조정은 서버 순서·연결을 따른다', async () => {
+  // QA 시도(번호 1) FAIL → 재검증 시도(번호 2) FAIL. 나중 시도·검증이지만 PC 시계가 뒤로 가서 시각은 2.3초 이르다.
+  const a = await running('qa');
+  await owner.query("update task_attempts set started_at=now()-interval '10 minutes',ended_at=now()-interval '5 minutes',status='completed' where id=$1", [a.attempt]);
+  // 메시지(Codex 리뷰 P2-2): 「FAIL 뒤」는 서버 저장 순서로 가른다. 넣는 순서가 곧 서버 순서이고, 시각(created_at)은 일부러 거꾸로 준다.
+  const msg = (key: string, attempt: string | null, at: string, draft = false) => owner.query(`insert into messages(project_id,task,msg_key,attempt,dir,type,to_agent,body,delivery,pending_next,work_state,draft,created_at)
+    values($1,$2,$3,$4,'out','수정 요청','Codex','지시',$5,false,'',$6,${at})`, [project, a.id, key, attempt, draft ? 'Draft' : 'Sent', draft]);
+  // MSG-904: QA 시도가 실행 중일 때 그 시도에 보낸 지시. FAIL(v1)보다 먼저 보냈지만 시각은 v1보다 늦다 → 어느 FAIL의 「뒤 메시지」도 아니다.
+  await msg('MSG-904', a.attempt, "now()-interval '4 minutes'");
+  const v1 = ((await owner.query(`insert into verifications(project_id,attempt,result,head_sha,spec_revision,cmd,expected,actual,created_at)
+    values($1,$2,'FAIL',$3,1,'pnpm test','성공','옛 FAIL',now()-interval '5 minutes') returning id`, [project, a.attempt, sha])).rows[0] as { id: string }).id;
+  // MSG-903: v1 뒤에 시도를 지정하지 않고 보낸 수정 지시. 시각은 v1보다 이르다 → v1의 「뒤 메시지」다.
+  await msg('MSG-903', null, "now()-interval '6 minutes'");
+  // MSG-905: v2 전에 초안으로 만들고, v2 뒤에 보냈다(초안→전송). 판정은 「보낸」 기록 기준 → v1·v2 모두의 「뒤 메시지」다.
+  await msg('MSG-905', null, "now()-interval '7 minutes'", true);
+  const job = ((await owner.query(`insert into runner_jobs(project_id,epoch,kind,payload,dedup_key,state,fence,generation) values($1,1,'attempt',$2,$3,'done',1,1) returning id`,
+    [project, { taskKey: a.key, kind: 'reverify', agent: 'Codex', baseCommit: sha, branch: `agent/${a.key}-h1` }, randomUUID()])).rows[0] as { id: string }).id;
+  const second = ((await owner.query(`insert into task_attempts(project_id,task,attempt_key,attempt_no,job,base_sha,head_sha,spec_revision,input_version,kind,agent,status,started_at,ended_at,model_id,effort,branch,generation)
+    values($1,$2,$3,2,$4,$5,$5,1,$6,'reverify','Codex','completed',now()-interval '10 minutes 2.3 seconds',now()-interval '5 minutes 2.3 seconds','gpt-6.1-sol','high',$7,1) returning id`,
+  [project, a.id, `${a.key}-A2`, job, sha, input, `agent/${a.key}-h1`])).rows[0] as { id: string }).id;
+  const v2 = ((await owner.query(`insert into verifications(project_id,attempt,result,head_sha,spec_revision,cmd,expected,actual,created_at)
+    values($1,$2,'FAIL',$3,1,'pnpm test','성공','최신 FAIL',now()-interval '5 minutes 2.3 seconds') returning id`, [project, second, sha])).rows[0] as { id: string }).id;
+  await owner.query("update messages set draft=false,delivery='Queued' where msg_key='MSG-905'");
+  await owner.query("update tasks set status='rework' where id=$1", [a.id]);
+  // 같은 트랜잭션에서 함께 넣은 검증·메시지도 이력 순번(seq)이 실제 실행 순서다(Codex 재리뷰 P2) → 벽시계로 되돌아가지 않는다.
+  // MSG-906은 v3 뒤에 넣었고 시각만 v3보다 이르다 → v3의 「뒤 메시지」다.
+  const b = await running('qa');
+  await owner.query("update task_attempts set started_at=now()-interval '10 minutes',ended_at=now()-interval '3 minutes',status='completed' where id=$1", [b.attempt]);
+  const tx = await owner.connect();
+  const v3 = await (async () => { try {
+    await tx.query('begin');
+    const id = ((await tx.query(`insert into verifications(project_id,attempt,result,head_sha,spec_revision,cmd,expected,actual,created_at)
+      values($1,$2,'FAIL',$3,1,'pnpm test','성공','일괄 FAIL',now()-interval '3 minutes') returning id`, [project, b.attempt, sha])).rows[0] as { id: string }).id;
+    await tx.query(`insert into messages(project_id,task,msg_key,attempt,dir,type,to_agent,body,delivery,pending_next,work_state,draft,created_at)
+      values($1,$2,'MSG-906',null,'out','수정 요청','Codex','일괄','Sent',false,'',false,now()-interval '4 minutes')`, [project, b.id]);
+    await tx.query('commit');
+    return id;
+  } finally { tx.release(); } })();
+  // 재조정(시계 역행): RP-002가 나중 번호지만 시각은 RP-001보다 2.3초 이르다. 둘 다 사흘 전(기간 시작 전)이다 → 직전·마지막 재조정은 RP-002.
+  const replan = (key: string, end: string, at: string) => owner.query(`insert into replans(project_id,rp_key,trigger,actor,baseline_v,status,before,after,created_at)
+    values($1,$2,'시험','시스템',1,'applied','{"end":null}',$3::jsonb,now()-interval '3 days'-interval '${at}')`, [project, key, JSON.stringify({ end, lo: end, hi: end })]);
+  await replan('RP-001', '2026-12-01', '0 seconds');
+  await replan('RP-002', '2026-12-09', '2.3 seconds');
+
+  const attempts = (await get(`tasks/${a.key}/attempts`)).json().items as { id: string; attemptNo: number; startedAt: string }[];
+  const byId = new Map(attempts.map((x) => [x.id, x]));
+  expect([byId.get(a.attempt)?.attemptNo, byId.get(second)?.attemptNo]).toEqual([1, 2]);
+  expect((byId.get(second)?.startedAt ?? '') < (byId.get(a.attempt)?.startedAt ?? '')).toBe(true);
+  for (const path of [`tasks/${a.key}/verifications`, `verifications?taskKey=${a.key}`]) {
+    const res = await get(path);
+    expect(res.statusCode, res.body).toBe(200);
+    const items = res.json().items as { id: string; seq: number; at: string }[];
+    const old = items.find((x) => x.id === v1), latest = items.find((x) => x.id === v2);
+    expect(latest && old && latest.seq > old.seq, path).toBe(true);
+    expect(latest && old && latest.at < old.at, path).toBe(true);
+  }
+
+  const { buildSnapshot } = await import('../src/reports/snapshot.ts');
+  const client = await owner.connect();
+  try {
+    // 기간: 어제~오늘(KST). 자정 직후에 돌려도 몇 분 전 기록이 기간 안에 든다.
+    const day = (offset: number) => new Date(Date.now() + 9 * 3600_000 - offset * 86_400_000).toISOString().slice(0, 10);
+    const snap = await buildSnapshot(client, project, { kind: 'custom', from: day(1), to: day(0), at: new Date(Date.now() + 1000).toISOString() }, 'live');
+    const row = snap.active.find((t) => t.taskKey === a.key);
+    expect(row?.lastAttempt?.attemptKey).toBe(`${a.key}-A2`);
+    expect(row?.verification?.id).toBe(v2);
+    const fail = (id: string) => snap.failures.find((f) => f.verificationId === id)?.messages.map((m) => m.msgKey);
+    // 목록 표시 순서는 시각순(표시용)이다. 포함 여부만 서버 순서로 정한다.
+    expect(fail(v1)).toEqual(['MSG-905', 'MSG-903']);
+    expect(fail(v2)).toEqual(['MSG-905']);
+    expect(fail(v3)).toEqual(['MSG-906']);
+    expect(snap.issues.filter((i) => i.text.includes('판정 불가'))).toEqual([]);
+    expect([snap.summary.forecast, snap.summary.forecastBefore]).toEqual(['2026-12-09', '2026-12-09']);
+  } finally { client.release(); }
+});
+
+test('M8 선행: 이력이 없어 순서를 복원할 수 없는 메시지는 벽시계로 추정하지 않고 「FAIL 뒤 메시지」에서 빼며 경고한다', async () => {
+  // c: 검증·메시지 모두 이력 시작 전 행(seed 기록만 있음) + 기록이 아예 없는 메시지 → 순서 복원 불가.
+  // d: seed 메시지(이력 시작 전)와 실제 저장된 FAIL → 순서를 안다(seed가 먼저) → 「뒤 메시지」 아님, 경고 없음.
+  const c = await running('qa'), d = await running('qa');
+  for (const x of [c, d]) await owner.query("update task_attempts set started_at=now()-interval '10 minutes',ended_at=now()-interval '5 minutes',status='completed' where id=$1", [x.attempt]);
+  const raw = await owner.connect();
+  const seed = (tbl: string, id: string, data: object) => raw.query("insert into state_log(project_id,tbl,row_id,op,data) values($1,$2,$3,'seed',$4)", [project, tbl, id, data]);
+  const insertMessage = async (task: string, key: string) => ((await raw.query(`insert into messages(project_id,task,msg_key,attempt,dir,type,to_agent,body,delivery,pending_next,work_state,draft,created_at)
+    values($1,$2,$3,null,'out','수정 요청','Codex','옛 지시','Sent',false,'',false,now()-interval '1 minute') returning id`, [project, task, key])).rows[0] as { id: string }).id;
+  const v4 = await (async () => { try {
+    // 기록 트리거를 끄고 넣은 뒤, 0028처럼 seed 기록만 남긴다. 시각은 메시지가 FAIL보다 늦게 준다(시각으로 보면 「뒤」).
+    await raw.query("set session_replication_role='replica'");
+    const id = ((await raw.query(`insert into verifications(project_id,attempt,result,head_sha,spec_revision,cmd,expected,actual,created_at)
+      values($1,$2,'FAIL',$3,1,'pnpm test','성공','옛 FAIL',now()-interval '5 minutes') returning id`, [project, c.attempt, sha])).rows[0] as { id: string }).id;
+    await seed('verifications', id, { id });
+    await seed('messages', await insertMessage(c.id, 'MSG-907'), { draft: false });
+    await insertMessage(c.id, 'MSG-909'); // 기록이 아예 없다
+    await seed('messages', await insertMessage(d.id, 'MSG-908'), { draft: false });
+    return id;
+  } finally { await raw.query("set session_replication_role='origin'"); raw.release(); } })();
+  const v5 = ((await owner.query(`insert into verifications(project_id,attempt,result,head_sha,spec_revision,cmd,expected,actual,created_at)
+    values($1,$2,'FAIL',$3,1,'pnpm test','성공','새 FAIL',now()-interval '5 minutes') returning id`, [project, d.attempt, sha])).rows[0] as { id: string }).id;
+
+  const { buildSnapshot } = await import('../src/reports/snapshot.ts');
+  const client = await owner.connect();
+  try {
+    const day = (offset: number) => new Date(Date.now() + 9 * 3600_000 - offset * 86_400_000).toISOString().slice(0, 10);
+    const snap = await buildSnapshot(client, project, { kind: 'custom', from: day(1), to: day(0), at: new Date(Date.now() + 1000).toISOString() }, 'live');
+    const fail = (id: string) => snap.failures.find((f) => f.verificationId === id)?.messages.map((m) => m.msgKey);
+    expect(fail(v4)).toEqual([]);
+    expect(fail(v5)).toEqual([]);
+    const warns = snap.issues.filter((i) => i.text.includes('판정 불가'));
+    expect(warns.map((i) => [i.level, i.taskKey])).toEqual([['warn', c.key]]);
+    expect(warns[0]?.text).toContain('MSG-907, MSG-909');
+  } finally { client.release(); }
 });

@@ -2,8 +2,9 @@
  * 검증 화면(UI-07)의 화면 없는 계산. 원본 vfVM(P L6334–6369)을 서버 계약 모양에 맞춰 옮겼다.
  *
  * 원본과 다른 점(서버 계약 때문):
- * - 검증 표시 번호(V-0007-1)는 서버가 주지 않는다. 같은 Task의 검증을 시각 순서로 세어 만든 「표시용」 번호다.
+ * - 검증 표시 번호(V-0007-1)는 서버 verificationKey를 쓴다. 없을 때만 같은 Task의 검증을 서버 저장 순번(seq) 순서로 세어 만든다.
  *   검증은 덧붙이기만 하므로(append-only) 번호가 바뀌지 않는다. 선택·주소에는 서버 id를 쓴다.
+ * - 순서(최신순·표시 번호)는 시각(at)이 아니라 서버 저장 순번(seq)으로 정한다. PC 시계가 뒤로 가면 시각 순서가 거꾸로 될 수 있다. 시각은 표시용이다.
  * - 검증 Agent·실행 시도 번호는 검증 응답에 없다. 그 검증의 실행 시도(GET /api/tasks/:taskKey/attempts)에서 읽는다.
  * - Evidence에는 파일 경로가 없다(계약: kind·sha256·size). 그래서 종류와 지문 앞자리로 보이고 원본은 내려받기로 연다.
  */
@@ -19,13 +20,14 @@ export interface AttemptInfo { attemptKey: string; agent: string }
 export interface ResultFilter { result: string; agent: string }
 export const EMPTY_RESULT_FILTER: ResultFilter = { result: '', agent: '' };
 
-const byNewest = (a: { at: string; id: string }, b: { at: string; id: string }) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id);
+/** 최신순: 서버 저장 순번(seq)이 큰 것이 먼저. 순번은 서버가 매기고 뒤로 가지 않는다(시각은 쓰지 않는다). */
+const byNewest = (a: { seq: number }, b: { seq: number }) => b.seq - a.seq;
 
 /** 검증 id → 표시 번호 `V-<Task 번호>-<그 Task의 n번째 검증>` */
 export function verificationKeys(verifs: readonly VerificationItem[]): Map<string, string> {
   const keys = new Map<string, string>();
   const seen = new Map<string, number>();
-  for (const x of [...verifs].sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id))) {
+  for (const x of [...verifs].sort((a, b) => a.seq - b.seq)) {
     const n = (seen.get(x.taskKey) ?? 0) + 1;
     seen.set(x.taskKey, n);
     // M3 통합: 서버 후속 3차가 검증 번호(verificationKey)를 준다. 있으면 그 값을 쓴다(대시보드와 같은 번호, 필터·쪽과 무관).

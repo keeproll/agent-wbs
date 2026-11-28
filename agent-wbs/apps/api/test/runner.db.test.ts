@@ -70,6 +70,7 @@ describe('runner 실제 PostgreSQL 검증', () => {
     csrf = (await app.inject({ url: '/api/session', headers: { cookie } })).json<{ csrfToken: string }>().csrfToken;
   });
   beforeEach(async () => {
+    await owner.query("insert into github_settings(mode,status,scopes) values('gh','ok',$1) on conflict(singleton) do nothing", [{ contents: 'verified', pulls: 'verified', statuses: 'verified', metadata: 'verified' }]);
     // 초기화 서비스 대신 전용 DB의 시험 자료만 비운다. 불변 기록 트리거도 이 시험 연결에서만 우회한다.
     await owner.query("set session_replication_role=replica");
     await owner.query("truncate projects, runner_jobs, execution_holds, task_attempts, task_specs, task_grades, tasks, wbs_nodes, task_history, runner_job_events, runner_sessions, runner_hosts, runner_concurrency_log, runner_readiness, agent_usage, agent_models, idempotency_keys, external_write_authority cascade");

@@ -4,8 +4,8 @@ import {
   type AttemptInfo, type EvidenceItem, type GateItem, type TaskItem, type VerificationItem,
 } from '../src/features/verify/model.ts';
 
-const v = (id: string, taskKey: string, at: string, result: string, attemptId: string): VerificationItem => ({
-  id, taskKey, attemptId, result, headSha: 'a'.repeat(40), specRevision: 1, cmd: 'pnpm test', expected: 'ok', actual: 'ok',
+const v = (id: string, taskKey: string, at: string, result: string, attemptId: string, seq: number): VerificationItem => ({
+  id, seq, taskKey, attemptId, result, headSha: 'a'.repeat(40), specRevision: 1, cmd: 'pnpm test', expected: 'ok', actual: 'ok',
   defects: [], invalidated: false, at,
 } as VerificationItem);
 const ev = (id: string, taskKey: string, verificationId: string | null, checklistItemKey: string | null = null): EvidenceItem => ({
@@ -13,9 +13,9 @@ const ev = (id: string, taskKey: string, verificationId: string | null, checklis
 });
 
 const verifs = [
-  v('v1', 'TASK-0001', '2026-10-28T07:20:00.000Z', 'PASS', 'a1'),
-  v('v2', 'TASK-0007', '2026-11-01T04:35:00.000Z', 'FAIL', 'a2'),
-  v('v3', 'TASK-0007', '2026-11-03T04:35:00.000Z', 'BLOCKED', 'a3'),
+  v('v1', 'TASK-0001', '2026-10-28T07:20:00.000Z', 'PASS', 'a1', 1),
+  v('v2', 'TASK-0007', '2026-11-01T04:35:00.000Z', 'FAIL', 'a2', 2),
+  v('v3', 'TASK-0007', '2026-11-03T04:35:00.000Z', 'BLOCKED', 'a3', 3),
 ];
 const attempts = new Map<string, AttemptInfo>([
   ['a1', { attemptKey: 'ATT-0001-2', agent: 'Codex' }],
@@ -24,7 +24,17 @@ const attempts = new Map<string, AttemptInfo>([
 ]);
 
 describe('검증 화면 계산(UI-07, P vfVM L6334–6369)', () => {
-  it('검증 표시 번호는 Task별 시각 순서(V-0007-1, V-0007-2) — 선택 기준은 서버 id', () => {
+  it('시계가 뒤로 가 새 검증의 시각이 더 일러도 최신순·표시 번호는 서버 저장 순번(seq)을 따른다', () => {
+    // v4는 v3 뒤에 저장됐지만(seq 4) PC 시계가 뒤로 가서 시각은 v3보다 2.3초 이르다.
+    const back = [...verifs, v('v4', 'TASK-0007', '2026-11-03T04:34:57.700Z', 'FAIL', 'a3', 4)];
+    expect(resultRows(back, attempts, { result: '', agent: '' }).map((r) => r.id)).toEqual(['v4', 'v3', 'v2', 'v1']);
+    const keys = verificationKeys(back);
+    expect([keys.get('v2'), keys.get('v3'), keys.get('v4')]).toEqual(['V-0007-1', 'V-0007-2', 'V-0007-3']);
+    const rows = evidenceRows([ev('e3', 'TASK-0007', 'v3'), ev('e4', 'TASK-0007', 'v4')], back);
+    expect(rows.map((r) => r.id)).toEqual(['e4', 'e3']);
+  });
+
+  it('검증 표시 번호는 Task별 저장 순번 순서(V-0007-1, V-0007-2) — 선택 기준은 서버 id', () => {
     const keys = verificationKeys(verifs);
     expect(keys.get('v1')).toBe('V-0001-1');
     expect(keys.get('v2')).toBe('V-0007-1');
