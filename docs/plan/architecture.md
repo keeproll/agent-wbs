@@ -510,7 +510,7 @@ pnpm -C agent-runner start          # 토큰 발급 후
 - Runner는 호스트 CLI·worktree를 다루므로 **컨테이너가 아니라** 사용자 systemd 서비스로 실행한다 [결정].
   - Runner 계정에 linger를 켠다(`loginctl enable-linger <계정>`). 왜: 재시작 뒤 아무도 로그인하지 않으면 사용자 systemd가 없어 Runner와 cgroup scope가 뜨지 않는다.
 - 배포 확인(④) 대상은 이 PC의 docker compose다(owner Q-15 A, 2026-11-27 아이템 19). 원격 서버·SSH 대상은 넣지 않는다.
-- 서버 계약을 바꿔 배포할 때는 대기 중인 옛 job(`input_diff`·`split`·`estimate`·`planning`)을 다시 만드는 절차가 필요하다. M8 실환경 시작 전에 정한다.
+- 서버 계약 변경 배포는 관리 CLI `jobs open`·`jobs reissue`로 대기 중인 옛 job을 확인·재발급한다. 종료·대조 미확인 작업이 남으면 배포하지 않는다([절차](../ops/jobs-reissue.md)).
 - 되돌리기는 커밋 해시로 다시 빌드한다(§4.13 L489).
 - DB는 배포 전 `pg_dump`로 백업한다 [결정].
 

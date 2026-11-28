@@ -42,6 +42,34 @@ async function started(client: PoolClient, task: LockedTask): Promise<boolean> {
   return row?.yes ?? false;
 }
 
+export async function requestSplit(client: PoolClient, task: LockedTask, epoch: number): Promise<string> {
+  assertEditable(task);
+  // 시작한 Task는 나누지 않고 예외 사유를 기록하거나 후속 Task로 제안한다(G§5.2-1).
+  if (await started(client, task)) {
+    throw new TaskError('INVALID_TRANSITION', { taskKey: task.task_key, status: task.status }, [], '이미 시작한 Task는 분할하지 않습니다. 예외 사유를 기록하거나 남은 일을 후속 Task로 제안하세요.');
+  }
+  const detail = await detailOf(client, task.task_key);
+  const tasks = await judgedTasks(client, [task.id]);
+  const wbs = await wbsSnapshot(client, task.project_id);
+  const hash = subjectHash(sourceOf(detail));
+  // 내용이나 등급이 바뀌면 옛 판단을 받지 않으므로 새 분할 job이 필요하다.
+  const marker = tasks[0]?.gradeChange;
+  const key = `split:${task.task_key}:${hash}:${snapshotHash(wbs)}${marker ? `:${marker}` : ''}`;
+  await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [key]);
+  const existing = (await client.query<{ id: string | null; n: number }>(
+    "select (array_agg(id order by record_no desc) filter (where state::text=any($2)))[1] as id,count(*)::int as n from runner_jobs where dedup_key like $1",
+    [`${key}:%`, OPEN])).rows[0];
+  if (existing?.id) return existing.id;
+  const settings = (await client.query<{ split: unknown }>('select split from app_settings where singleton')).rows[0]?.split ?? null;
+  const payload = { tasks, policy: { split: settings }, wbs };
+  const jobId = (await client.query<{ id: string }>(
+    "insert into runner_jobs(project_id,kind,payload,state,epoch,dedup_key) values($1,'split',$2::jsonb,'queued',$3,$4) returning id",
+    [task.project_id, JSON.stringify(payload), epoch, `${key}:${String((existing?.n ?? 0) + 1)}`])).rows[0]?.id;
+  await record(client, { projectId: task.project_id, taskId: task.id, kind: '분할 요청', text: 'Planning Agent에 분할 제안 요청', ref: { field: 'split', jobId } });
+  if (!jobId) throw new Error('분할 job 생성 실패');
+  return jobId;
+}
+
 export function registerSplitRoutes(route: RouteFn, epochOf: (request: FastifyRequest) => number): void {
   route('splitTask', '분할 제안 요청', async (request, reply) => {
     const client = clientOf(request);
@@ -50,29 +78,7 @@ export function registerSplitRoutes(route: RouteFn, epochOf: (request: FastifyRe
     if (found) await lockGraph(client, found.project_id);
     const task = await lockTask(client, keyOf(request));
     await assertVersion(client, task, body.updatedAt);
-    assertEditable(task);
-    // 시작한 Task는 나누지 않고 예외 사유를 기록하거나 후속 Task로 제안한다(G§5.2-1).
-    if (await started(client, task)) {
-      throw new TaskError('INVALID_TRANSITION', { taskKey: task.task_key, status: task.status }, [], '이미 시작한 Task는 분할하지 않습니다. 예외 사유를 기록하거나 남은 일을 후속 Task로 제안하세요.');
-    }
-    const detail = await detailOf(client, task.task_key);
-    const tasks = await judgedTasks(client, [task.id]);
-    const wbs = await wbsSnapshot(client, task.project_id);
-    const hash = subjectHash(sourceOf(detail));
-    // 내용이나 등급이 바뀌면 옛 판단을 받지 않으므로 새 분할 job이 필요하다.
-    const marker = tasks[0]?.gradeChange;
-    const key = `split:${task.task_key}:${hash}:${snapshotHash(wbs)}${marker ? `:${marker}` : ''}`;
-    await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [key]);
-    const existing = (await client.query<{ id: string | null; n: number }>(
-      "select (array_agg(id order by record_no desc) filter (where state::text=any($2)))[1] as id,count(*)::int as n from runner_jobs where dedup_key like $1",
-      [`${key}:%`, OPEN])).rows[0];
-    if (existing?.id) return reply.code(202).send({ jobId: existing.id });
-    const settings = (await client.query<{ split: unknown }>('select split from app_settings where singleton')).rows[0]?.split ?? null;
-    const payload = { tasks, policy: { split: settings }, wbs };
-    const jobId = (await client.query<{ id: string }>(
-      "insert into runner_jobs(project_id,kind,payload,state,epoch,dedup_key) values($1,'split',$2::jsonb,'queued',$3,$4) returning id",
-      [task.project_id, JSON.stringify(payload), epochOf(request), `${key}:${String((existing?.n ?? 0) + 1)}`])).rows[0]?.id;
-    await record(client, { projectId: task.project_id, taskId: task.id, kind: '분할 요청', text: 'Planning Agent에 분할 제안 요청', ref: { field: 'split', jobId } });
+    const jobId = await requestSplit(client, task, epochOf(request));
     return reply.code(202).send({ jobId });
   }, TASK);
 

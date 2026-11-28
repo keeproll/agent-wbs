@@ -124,11 +124,7 @@ export async function createProject(db: Db, body: Registration, epoch: number) {
     [project.id, commit, JSON.stringify({ uiuxFiles: structure.uiuxFiles }), JSON.stringify(structure.docs.filter(isDesignDoc).sort()), body.instruction]);
   const jobId = await createPlanningJob(db, { projectId: project.id, kind: 'bootstrap', instruction: body.instruction, stepKeys: BOOT_STEPS });
   await log(db, { id: jobId, project_id: project.id }, '프로젝트 등록 — Runner의 초기 분석을 기다립니다');
-  const techConstraints = (await db.query('select id,name,level,condition from tech_constraints where project_id=$1 order by created_at,id', [project.id])).rows;
-  const subagentDefs = (await db.query(`select distinct on (def_key) id,def_key as "defKey",version,agent,role from subagent_defs where allowed order by def_key,version desc`)).rows;
-  await enqueueJob(db, { projectId: project.id, kind: 'bootstrap', epoch, dedupKey: `bootstrap:${jobId}:1`,
-    payload: { planningJobId: jobId, runNo: 1, version: 1, commit, previousCommit: null, instruction: body.instruction, resumeStep: null,
-      techConstraints, subagentDefs, ...await techSnapshot(db, project.id) } });
+  await followUpJob(db, await lockPlanningJob(db, jobId), epoch, { resumeStep: null });
   await changeEvent(db, project.id, { kind: 'project', event: 'registered' });
   return { project, jobId };
 }
@@ -667,9 +663,7 @@ export async function analyzeInputs(db: Db, body: { updatedAt: string; commit: s
   }
   const jobId = await createPlanningJob(db, { projectId: project.id, kind: 'input_diff', instruction: body.instr ?? '', stepKeys: INPUT_STEPS });
   await log(db, { id: jobId, project_id: project.id }, `입력 v${String(version)} 고정 — 차이 분석 대기`);
-  await enqueueJob(db, { projectId: project.id, kind: 'input_diff', epoch, dedupKey: `input_diff:${jobId}:1`,
-    payload: { planningJobId: jobId, runNo: 1, version, commit: body.commit, previousCommit: previous.commit_sha, instruction: body.instr ?? '', resumeStep: null,
-      wbs: await wbsSnapshot(db, project.id) } });
+  await followUpJob(db, await lockPlanningJob(db, jobId), epoch, { resumeStep: null });
   await touchProject(db, project.id);
   return { jobId };
 }
