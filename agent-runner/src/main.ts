@@ -3,6 +3,7 @@ import { RunnerApp } from './app.ts';
 import { cliEnvironment, createCliRegistry } from './cli-update/registry.ts';
 import { AGENT_EXEC, AGENT_USER, agentLoginRun } from './cli/dedicated-user.ts';
 import { createRunCommand } from './readiness/command.ts';
+import { attemptWiring } from './jobs/wiring.ts';
 import { ConfigError, loadConfig } from './config.ts';
 import { createLogger } from './log.ts';
 import { nodeHostSources } from './resources/host.ts';
@@ -22,10 +23,12 @@ try {
   let state: State | undefined;
   try {
     state = await State.open(config.home);
+    const api = createApiClient({ baseUrl: config.wbsUrl, token: config.token });
+    const opened = state;
     // 모든 모듈을 RunnerApp 하나에서 조립한다. 공유 인스턴스(HeavySemaphore·ResourceReporter·세션 목록)는 여기서 하나뿐이다.
     const app = new RunnerApp({
       state,
-      api: createApiClient({ baseUrl: config.wbsUrl, token: config.token }),
+      api,
       home: config.home,
       version: '0.0.0',
       env: process.env,
@@ -47,10 +50,14 @@ try {
       // 격리 계층이 없으면(AWBS_AGENT_USER 미설정·점검 실패) 앱이 CI job을 받지 않는다. 로컬 clone이 생기기 전에도 받지 않는다.
       // 기본 꺼짐(조정자 결정 7): .env에 AWBS_CI_AUTO=1을 적어야 켠다.
       ...(config.github && config.ciAuto && { ciAuto: true }),
-      // 시도 흐름(jobs, AttemptFlow)은 아직 켜지 않는다(조정자 답변 2026-11-27).
-      // 왜: 실제 결과 수집기 collect(contracts §5 스키마 검사·수정 요청·git diff·Evidence)와 시도별 작업 폴더 준비 execution.prepare가 아직 없다.
-      // 둘이 생기면 jobs: { collect, taskCheck: <TaskCheckSources> }와 execution: { prepare }를 넘긴다(주입 지점: src/jobs/README.md 「연결 지점」).
-      // jobs.taskCheck에는 ① 공급원만 넘긴다. 앱이 자기 GitHub 클라이언트로 bindTaskCheck를 부른다(여기서 클라이언트를 따로 만들지 않는다).
+      // 시도 흐름(jobs, AttemptFlow): 기본 꺼짐. .env에 AWBS_ATTEMPT_AUTO=1을 적어야 켠다(CI 자동과 같은 방식, M8 실호출 전까지).
+      // 켜면 execution.prepare(시도별 작업 폴더)와 jobs(결과 수집·① 공급원·보고 뒤 정리)를 넘긴다(src/jobs/README.md 「연결 지점」).
+      // jobs.taskCheck·collect에는 공급원만 넘긴다. 앱이 자기 GitHub 클라이언트·Execution·Runner·API로 묶는다(여기서 따로 만들지 않는다).
+      // 격리 계층이 없으면(AWBS_AGENT_USER 미설정·점검 실패) 켜져 있어도 claim하지 않는다(Execution.claim).
+      ...(config.github && config.attemptAuto && attemptWiring({
+        home: config.home, agentRoot: config.agentRoot, repoUrl: `https://github.com/${config.github.repo.owner}/${config.github.repo.repo}`,
+        api, epoch: () => opened.snapshot.epoch, warn: (message) => log.warn(message), env: process.env,
+      })),
       ...(config.github && { github: config.github }),
     });
     log.info({ wbsUrl: config.wbsUrl, home: config.home }, 'Runner 시작');

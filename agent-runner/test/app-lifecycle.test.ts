@@ -44,6 +44,67 @@ test('Runner 앱 반복이 실제 CI 실행기로 integrate·ci_retry를 예약�
   finally { controller.abort(); await running; await f.close(); }
 });
 
+test('done 정리: CI 실행기가 병합을 확인하면 그 Task 브랜치의 작업 폴더 정리(jobs.release)를 부르고, 실패는 경고만 남긴다', async () => {
+  const f = await fixture(), controller = new AbortController();
+  const api = (async () => ({ status:204,body:undefined,headers:new Headers() })) as unknown as ApiClient;
+  const released: string[] = [], warnings: string[] = [];
+  const a = new RunnerApp({ state,api,home,version:'t',env:{},warn:message => { warnings.push(message); },hostSources,
+    cliRegistry:{ latest:async ()=>'1.0.0',install:async()=>undefined,probe:async()=>undefined },
+    github:{ repo:{owner:'o',repo:'r'},mode:'gh',baseUrl:f.github.url },
+    ci:{ repo:f.repo,execute:(_job,argv,cwd)=>f.deps.execute(argv,cwd),collectTests:f.deps.collectTests },
+    jobs:{ collect:async () => ({ report:{ summary:'',changedFiles:[],evidence:[] } }),taskCheck:async () => { throw new Error('실행하지 않음'); },
+      release:async branches => { released.push(...branches); throw new Error('정리 실패 흉내'); } } });
+  vi.spyOn(a.runner,'ready','get').mockReturnValue(true);
+  vi.spyOn(a.reporter,'caps','get').mockReturnValue({ total:1,Claude:1,Codex:1,heavy:1 });
+  vi.spyOn(a.runner,'run').mockImplementation(signal => new Promise(resolve=>{ signal.addEventListener('abort',()=>resolve()); }));
+  for (const name of ['bootstrap','checkReadiness','reportModels','reportConcurrency'] as const) vi.spyOn(a,name).mockResolvedValue(undefined as never);
+  vi.spyOn(a.reporter,'reportUsage').mockResolvedValue();
+  vi.spyOn(a.updater,'check').mockResolvedValue();
+  vi.spyOn(a.updater,'applyPending').mockResolvedValue();
+  if (!a.jobs || !a.ci) throw new Error('시도 흐름·CI 실행기가 연결되지 않았습니다.');
+  vi.spyOn(a.jobs,'poll').mockResolvedValue();
+  let merged = false;
+  vi.spyOn(a.ci,'runNext').mockImplementation(async () => {
+    if (merged) return null;
+    merged = true;
+    return { job:{} as never,result:{ kind:'merged',branch:'agent/TASK-0001-h1' } as never };
+  });
+  const running = a.run(controller.signal);
+  try {
+    await expect.poll(()=>released,{ timeout:10_000 }).toEqual(['agent/TASK-0001-h1']);
+    await expect.poll(()=>warnings.some(w => w.includes('병합 뒤 작업 폴더 정리 실패'))).toBe(true);
+  } finally { controller.abort(); await running; await f.close(); }
+});
+
+test('취소·done 정리: 정책의 closedBranches 전체를 주기마다 같은 정리 함수(jobs.release)로 다시 보고, 실패는 경고만 남긴다(방어 점검 P3-2)', async () => {
+  const calls: string[][] = [];
+  const warnings: string[] = [];
+  let failOnce = true;
+  const a = app(undefined, undefined, message => { warnings.push(message); }, { collect: async () => ({ report: { summary: '', changedFiles: [], evidence: [] } }),
+    taskCheck: async () => { throw new Error('실행하지 않음'); },
+    release: async branches => { calls.push([...branches]); if (failOnce) { failOnce = false; throw new Error('정리 실패 흉내'); } } });
+  for (const name of ['checkReadiness','reportModels','reportConcurrency','reportInputs'] as const) vi.spyOn(a,name).mockResolvedValue(undefined as never);
+  vi.spyOn(a.updater, 'check').mockResolvedValue();
+  vi.spyOn(a.updater, 'applyPending').mockResolvedValue();
+  vi.spyOn(a.reporter, 'reportUsage').mockResolvedValue();
+  if (!a.jobs) throw new Error('시도 흐름이 연결되지 않았습니다.');
+  vi.spyOn(a.jobs, 'poll').mockResolvedValue();
+  a.runner.policy = { inputCheckMinutes: 5, inputRecheck: 0, closedBranches: ['agent/TASK-0001-h1', 'agent/TASK-0002-h1'] } as typeof a.runner.policy;
+  vi.useFakeTimers();
+  try {
+    a.startSchedules();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toEqual([['agent/TASK-0001-h1', 'agent/TASK-0002-h1']]);
+    expect(warnings.some(w => w.includes('끝난 Task의 작업 폴더 정리 실패'))).toBe(true);
+    // 다음 주기에도 같은 목록을 다시 본다. 정리한 뒤 준비(prepare)가 엇갈려 만든 폴더도 이때 지워진다.
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(calls).toHaveLength(2);
+    if (a.runner.policy) a.runner.policy.closedBranches = [];
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(calls).toHaveLength(2);
+  } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+});
+
 test('지금 확인 요청 번호가 바뀌면 5분 주기를 기다리지 않고 새 입력 관측을 한다', async () => {
   const a = app();
   vi.spyOn(a, 'checkReadiness').mockResolvedValue({ at: new Date().toISOString(), items: [] });

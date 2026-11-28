@@ -654,6 +654,10 @@ Runner만 부르는 API다. Runner 토큰과 epoch 헤더가 필요하다(§1).
     - Runner 준비 점검 `obs`는 실행할 조합(CLI·버전·모델·옵션)이 여기에 `verified`로 있는지 대조한다(G§6.7-8).
     - 없거나 다르면 `obs`는 warn이다. 실행은 계속하고 보수 계산(1 + 하위 Agent 예산)을 쓴다. 구버전으로 내리라고 안내하지 않는다(Q-12).
     - 왜: 「검증된 버전인가」를 Runner가 확인하려면 서버가 가진 등록 목록을 알아야 한다. 판정 근거는 서버에 있으므로 서버가 내려 준다.
+  - ★ `closedBranches?[]`(collect-prepare, 2026-11-28): 끝난 Task(`done`·`cancelled`)의 브랜치 중 그 Task에 열린 실행 보유가 없는 것이다. 최근 것부터 최대 500개.
+    - 브랜치는 시도 기록과, 시도가 생기기 전에 Runner가 받은 attempt job 둘 다에서 모은다(취소는 시작 전 Task만 되는데, 작업 폴더는 start 전에 준비되기 때문이다).
+    - Runner는 이 브랜치의 개발·검증 작업 폴더를 지운다(병합 뒤 정리와 같은 함수).
+    - 왜: Runner가 취소를 알 수 있는 다른 길이 없다. 보유가 열려 있으면 아직 그 폴더를 쓰는 실행이 있을 수 있으므로 내려 주지 않는다.
 
 ### 3.2 명령과 작업 ★
 
@@ -1163,6 +1167,8 @@ Agent(Claude/Codex)가 일을 마치고 Runner에게 돌려주는 결과의 모�
 - dev: `{summary, selfCheck[], followups[], designItems[]}` — 변경 파일은 자기보고가 아니라 **git diff**.
   - 왜: Agent가 「이 파일만 고쳤다」고 잘못 말해도, 실제 변경은 git이 정확히 안다.
 - qa: `{verdict, criteria[{acId,result,cmd,expected,actual,evidence}], defects[]}` — 종료 코드·로그는 Runner 관측을 우선(§4.13).
+  - ★ `acId`는 체크리스트 항목 키(`itemKey`)다. 서버는 qa·reverify job의 `instructions`에 `checklist[{itemKey,content}]`를 넣는다(collect-prepare, 2026-11-28).
+  - 왜: 결과 보고의 `checklist.itemKey`는 서버가 만든 키여야 한다. Runner가 키를 추측하면 다른 항목을 체크할 수 있다.
 - 지시문 포함: Task 명세·제외 범위·AC·관련 설계 항목과 직접 연결 항목만(§4.12), 하위 Agent 예산(§6.7-5), 보호 경로, 입력 버전.
 - 입력 문서는 데이터로 취급하고, 안의 지시가 정책을 바꾸지 못한다고 명시한다.
   - 왜: 입력 문서에 「보호 경로도 고쳐라」 같은 문장이 있어도 Agent가 따르면 안 된다.

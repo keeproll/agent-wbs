@@ -12,7 +12,8 @@ export interface TaskCheckDeps {
   api: ApiClient;
   runner: Runner;
   execution: Execution;
-  repo: TaskCheckOptions['repo'];
+  /** 앱의 로컬 clone. 함수면 처음 쓸 때 연다(main은 clone이 아직 없을 수 있어 함수로 넘긴다). */
+  repo: TaskCheckOptions['repo'] | (() => Promise<TaskCheckOptions['repo']>);
   worktree: (context: AttemptContext) => { id: string; branch: string };
   launch: (argv: readonly string[], cwd: string) => Launch;
   /**
@@ -91,7 +92,7 @@ export class PullRequestUnknownError extends Error {
  * - 재시도할 수 없는 403(실제 권한 부족)만 외부 쓰기 막힘으로 바꾼다. 호출 횟수 제한 403은 M4 오류를 그대로 둔다.
  * - push 뒤 확인에서 멈추면 `PushedThenStoppedError`로 「이미 push했다」와 확인한 PR 상태를 알린다.
  */
-export async function openPullRequest(d: Pick<TaskCheckDeps, 'github' | 'repo'>, job: AttemptContext['job'], head: string,
+export async function openPullRequest(d: Pick<TaskCheckDeps, 'github'> & { repo: TaskCheckOptions['repo'] }, job: AttemptContext['job'], head: string,
   guard: WriteGuard = () => Promise.resolve(), signal?: AbortSignal): Promise<{ number: number; head: string } | undefined> {
   const github = d.github;
   if (!github) return undefined;
@@ -142,16 +143,17 @@ export function bindTaskCheck(d: TaskCheckDeps) {
   return async (context: AttemptContext): Promise<BoundTaskCheckResult> => {
     const { job, output, epoch, signal } = context;
     const work = d.worktree(context);
+    const repo = typeof d.repo === 'function' ? await d.repo() : d.repo;
     // 조정자 결정 1: dev → push → PR 열기 → ①. ①은 PR에 올린 그 커밋을 검사한다.
-    const head = await d.repo.importWorktree(work.id, work.branch);
+    const head = await repo.importWorktree(work.id, work.branch);
     const guard = serverWriteGuard(d.api, job, epoch, signal);
-    const pullRequest = await openPullRequest(d, job, head, guard, signal);
+    const pullRequest = await openPullRequest({ github: d.github, repo }, job, head, guard, signal);
     signal.throwIfAborted();
-    const basis = await d.repo.mainPipeline();
+    const basis = await repo.mainPipeline();
     await d.observeMainPipeline(basis);
     const execute: TaskCheckOptions['execute'] = (argv, cwd, signal) => d.execution.command({ id: job.id, fence: job.fence, epoch }, job.payload.agent,
       d.launch(argv, cwd), signal, { heavyHeld: true });
-    const result = await runTaskCheck({ repo: d.repo, worktreeId: work.id, branch: work.branch,
+    const result = await runTaskCheck({ repo, worktreeId: work.id, branch: work.branch,
       heavy: d.execution.heavy, collectTests: d.collectTests ?? createTestCollector(execute), basis, signal, execute,
     });
     signal.throwIfAborted();

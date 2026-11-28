@@ -15,11 +15,15 @@
 #                       명령은 이름(예: pnpm)이면 고정 PATH에서, 경로면 작업 폴더 안에서만 찾는다.
 #                       --home <작업 폴더>/.awbs-home 필수: 실행마다 새 HOME·TMPDIR(pnpm 저장소 포함)를 그 사본 안에 둔다(조정자 결정 8).
 #   git-inspect --cwd <작업 폴더>       작업 폴더의 HEAD와 「커밋하지 않은 변경이 있는가」를 Agent 계정 git으로 본다(조정자 결정 6)
+#   tree-manifest --cwd <작업 폴더> --object-format sha1|sha256
+#                       작업 폴더의 실제 파일 목록(종류·실행 비트·blob hash)을 Agent 계정이 낸다. 청결 판정은 Runner가 이것으로 한다(P2-1).
 #   git-bundle --cwd <작업 폴더> --branch <이름>   그 브랜치의 git bundle(데이터 파일)을 표준 출력으로 낸다(조정자 결정 6)
 #   cli-version --tool claude|codex|pnpm -- <진입점>   새로 설치한 CLI의 --version을 Agent 계정으로 실행한다(조정자 결정 8)
 #   agent-file read|write|remove --cwd <작업 폴더> --path <.claude|.codex>/agents/<이름>
 #                       하위 Agent 정의 파일을 Agent 계정이 읽고(표준 출력)·쓰고(표준 입력)·지운다(fix2 추가, 조정자 지시).
 #                       없는 파일 읽기는 종료 코드 3. Runner는 Agent가 쓸 수 있는 폴더에 직접 쓰지 않는다.
+#   evidence-read --cwd <작업 폴더> --name <이름>
+#                       작업 폴더의 .awbs-evidence/<이름>(QA 증거 파일, 일반 파일·50 MiB까지)을 Agent 계정이 읽어 표준 출력으로 낸다. 없으면 3, 일반 파일이 아니면 4.
 #
 # 주의: 이 래퍼는 Runner를 막는 보안 경계가 아니다. Runner 계정을 Agent 계정으로 바꾸는 「문」이다.
 #   ci-run은 고정 PATH의 아무 명령이나 받는다. 결정 4(「run은 진입점만」)는 run 하위 명령 안의 규칙일 뿐이다.
@@ -209,12 +213,15 @@ cmd_ci_run() {
 # 왜: git은 저장소 설정(.git/config)의 많은 키로 명령을 실행한다(filter·partialClone uploadpack 등). 옵션으로 하나씩 끌 수 없다.
 #   그래서 Agent 작업 폴더의 git은 Agent 계정이 돌린다. 설정이 무엇을 실행하든 Agent 권한이다.
 # 안전 기본값: 시스템·전역 설정 없음, 원격 전송 금지(GIT_ALLOW_PROTOCOL=none), 늦은 가져오기 금지, hook·fsmonitor 끔.
+# safe.directory: 작업 폴더는 Runner 계정이 만든 것이라(.prep-<uuid>에서 준비 뒤 넘김) 소유자가 Agent 계정과 다르다.
+#   git은 소유자가 다른 저장소를 「dubious ownership」으로 거부하므로, 이 한 폴더만 명령줄 설정(보호 설정)으로 허용한다.
+#   왜 명령줄인가: 저장소 설정(.git/config)의 safe.directory는 git이 읽지 않는다. Agent가 저장소 설정으로 넓힐 수 없다.
 agent_git() {
   local dir=$1; shift
   env -i HOME="$AGENT_HOME" USER="$AGENT_USER" LOGNAME="$AGENT_USER" PATH=/usr/bin:/bin \
     GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ALLOW_PROTOCOL=none GIT_NO_LAZY_FETCH=1 \
     GIT_TERMINAL_PROMPT=0 GIT_OPTIONAL_LOCKS=0 LANG=C.UTF-8 \
-    git -C "$dir" -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.excludesFile=/dev/null "$@"
+    git -C "$dir" -c safe.directory="$dir" -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.excludesFile=/dev/null "$@"
 }
 
 git_cwd() {
@@ -226,7 +233,9 @@ git_cwd() {
   printf '%s' "$real"
 }
 
-# 출력: 「head <40자 SHA>」 한 줄, 「dirty 0|1」 한 줄. 커밋하지 않은 변경·추적 안 된 파일·assume-unchanged/skip-worktree 표시가 있으면 dirty 1.
+# 출력: 「head <40자 SHA>」 한 줄, 「dirty 0|1」 한 줄.
+# 주의(collect-prepare P2-1): 이 dirty는 Agent의 .git(설정·index·replace)을 믿는 참고값이다. Agent가 .git을 고치면 속일 수 있다.
+#   청결 판정은 tree-manifest(실제 파일 목록·내용)를 Runner가 자기 bare 저장소의 커밋과 대조해서 한다. 여기서는 HEAD만 판정에 쓴다.
 cmd_git_inspect() {
   (($# == 2)) || die "git-inspect --cwd <작업 폴더>만 받습니다."
   local dir head status flags
@@ -237,6 +246,69 @@ cmd_git_inspect() {
   flags=$(agent_git "$dir" ls-files -v | grep -E '^[a-zS] ' || true)
   printf 'head %s\n' "$head"
   if [[ -n $status || -n $flags ]]; then echo 'dirty 1'; else echo 'dirty 0'; fi
+}
+
+# 작업 폴더의 실제 파일 목록과 내용(collect-prepare P2-1). Agent 계정이 폴더를 직접 훑는다. Agent의 .git은 읽지 않는다.
+# 왜: git status는 Agent가 바꿀 수 있는 .git(clean filter·core.worktree·index의 stat 기록·replace 객체·gitfile)을 믿는다.
+#   그것을 고치면 바뀐 파일을 「깨끗함」으로 보이게 할 수 있다. 디스크의 파일 자체를 보면 .git을 어떻게 고쳐도 속일 수 없다.
+# 입력(표준 입력): 내용 hash가 필요한 경로(Runner bare 저장소의 기대 커밋에 있는 경로), NUL로 구분.
+#   다른 경로는 hash 없이 목록에만 낸다. Runner가 커밋된 .gitignore로 무시 여부를 정한다(node_modules 같은 큰 폴더를 hash하지 않으려고).
+# 출력(표준 출력): 경로마다 「종류 NUL hash NUL 경로 NUL」. 종류는 100644·100755(일반 파일, 소유자 실행 비트)·120000(링크)·other(그 밖).
+#   hash는 git blob hash(--object-format 그대로). 링크는 대상 문자열의 hash다. 필요 없거나 못 구하면 「-」.
+# 링크를 따라가지 않는다(find -P). 맨 위의 .git·.awbs-home·.awbs-evidence만 뺀다. 폴더 자체는 내지 않는다(git도 폴더를 기록하지 않는다).
+# hash는 저장소 밖 빈 임시 저장소에서 `hash-object --no-filters`로 계산한다(시스템·전역 설정 없음). 작업 폴더의 git 설정은 읽지 않는다.
+cmd_tree_manifest() {
+  (($# == 4)) && [[ $1 == --cwd && $3 == --object-format ]] || die "tree-manifest --cwd <작업 폴더> --object-format sha1|sha256만 받습니다."
+  local format=$4 real_cwd work rc=0
+  [[ $format == sha1 || $format == sha256 ]] || die "--object-format은 sha1 또는 sha256입니다."
+  real_cwd=$(inside "$2" "$WORKTREES") || die "작업 폴더는 $WORKTREES 안이어야 합니다."
+  [[ -d $real_cwd ]] || die "작업 폴더가 폴더가 아닙니다."
+  if [[ -d $AGENT_HOME/tmp ]]; then work=$(mktemp -d "$AGENT_HOME/tmp/awbs-manifest-XXXXXX") || die "임시 폴더를 만들지 못했습니다."
+  else work=$(mktemp -d) || die "임시 폴더를 만들지 못했습니다."; fi
+  manifest_scan "$real_cwd" "$format" "$work" || rc=$?
+  rm -rf -- "$work"
+  ((rc == 0)) || die "파일 목록을 만들지 못했습니다."
+}
+
+# 빈 임시 저장소의 git. Agent 계정 전용 임시 폴더라 safe.directory가 필요 없다. 시스템·전역 설정 없음.
+hasher_git() {
+  env -i HOME="$AGENT_HOME" PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_OPTIONAL_LOCKS=0 LANG=C.UTF-8 \
+    git -C "$1" -c core.hooksPath=/dev/null "${@:2}"
+}
+
+manifest_scan() {
+  local dir=$1 format=$2 work=$3 type mode path kind
+  hasher_git "$work" init -q --template= --object-format="$format" hasher || return 1
+  local -A wanted=()
+  while IFS= read -r -d '' path; do wanted[$path]=1; done
+  (cd -- "$dir" && find -P . -mindepth 1 \( -path ./.git -o -path ./.awbs-home -o -path ./.awbs-evidence \) -prune -o ! -type d -printf '%y\0%m\0%P\0') > "$work/list" || return 1
+  # 1) 종류를 정하고, hash할 일반 파일은 한 번에 hash-object로 넘긴다(줄 단위 입력이라 줄바꿈이 든 경로는 other로 둔다).
+  : > "$work/kinds"; : > "$work/paths"
+  while IFS= read -r -d '' type && IFS= read -r -d '' mode && IFS= read -r -d '' path; do
+    kind=other
+    if [[ $type == f ]]; then
+      if (( 8#$mode & 8#100 )); then kind=100755; else kind=100644; fi
+    elif [[ $type == l ]]; then kind=120000; fi
+    if [[ $path == *$'\n'* ]]; then kind=other; fi
+    printf '%s\0%s\0' "$kind" "$path" >> "$work/kinds"
+    if [[ ${wanted[$path]-} && ($kind == 100644 || $kind == 100755) ]]; then printf '%s\n' "$dir/$path" >> "$work/paths"; fi
+  done < "$work/list"
+  hasher_git "$work/hasher" hash-object --no-filters --stdin-paths < "$work/paths" > "$work/hashes" || return 1
+  # 2) 같은 순서로 hash를 붙여 낸다. 링크는 대상 문자열(readlink)을 hash한다.
+  local hash target
+  exec 3< "$work/hashes"
+  while IFS= read -r -d '' kind && IFS= read -r -d '' path; do
+    hash=-
+    if [[ ${wanted[$path]-} ]]; then
+      if [[ $kind == 100644 || $kind == 100755 ]]; then IFS= read -r hash <&3 || { exec 3<&-; return 1; }
+      elif [[ $kind == 120000 ]]; then
+        target=$(readlink -- "$dir/$path") || target=''
+        hash=$(printf '%s' "$target" | hasher_git "$work/hasher" hash-object --no-filters --stdin) || hash=-
+      fi
+    fi
+    printf '%s\0%s\0%s\0' "$kind" "$hash" "$path"
+  done < "$work/kinds"
+  exec 3<&-
 }
 
 # 브랜치 하나의 전체 기록을 bundle로 표준 출력에 쓴다. Runner는 이 데이터만 받아 자기 bare 저장소에서 verify 뒤 fetch한다.
@@ -290,6 +362,24 @@ cmd_agent_file() {
       mv -fT -- "$tmp" "$rel" ;;
     remove) rm -f -- "$rel" ;;
   esac
+}
+
+# Agent가 남긴 검증 증거 파일(collect-prepare). Runner는 Agent가 쓸 수 있는 폴더의 파일을 직접 읽지 않는다.
+# 왜: Runner 계정이 읽으면 Agent가 그 자리를 Runner 파일(토큰 등) 링크로 바꿔 서버로 새어 나가게 할 수 있다. Agent 계정이 읽으면 Agent 권한까지다.
+# 위치는 작업 폴더의 .awbs-evidence/<이름> 하나뿐이다(Runner가 준비 때 만들고 상태 검사에서 뺀다). 일반 파일만, 50 MiB까지.
+# 없으면 종료 코드 3. 내용은 그대로 표준 출력으로 낸다(바이너리 그대로).
+cmd_evidence_read() {
+  (($# == 4)) && [[ $1 == --cwd && $3 == --name ]] || die "evidence-read --cwd <작업 폴더> --name <이름>만 받습니다."
+  local name=$4 real_cwd
+  [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$ ]] || die "증거 파일 이름 모양이 아닙니다."
+  real_cwd=$(inside "$2" "$WORKTREES") || die "작업 폴더는 $WORKTREES 안이어야 합니다."
+  [[ -d $real_cwd ]] || die "작업 폴더가 폴더가 아닙니다."
+  cd -- "$real_cwd"
+  [[ -d .awbs-evidence && ! -L .awbs-evidence ]] || exit 3
+  [[ -e .awbs-evidence/$name || -L .awbs-evidence/$name ]] || exit 3
+  # 일반 파일이 아니면(링크·폴더·FIFO 등) 종료 코드 4. Runner는 이것을 Agent의 형식 문제로 센다(인자 오류 2와 구분).
+  [[ -f .awbs-evidence/$name && ! -L .awbs-evidence/$name ]] || die "일반 파일이 아닙니다." 4
+  head -c 52428801 -- ".awbs-evidence/$name"
 }
 
 cmd_kill_group() {
@@ -366,13 +456,15 @@ case $sub in
   run) cmd_run "$@" ;;
   ci-run) cmd_ci_run "$@" ;;
   git-inspect) cmd_git_inspect "$@" ;;
+  tree-manifest) cmd_tree_manifest "$@" ;;
   git-bundle) cmd_git_bundle "$@" ;;
   cli-version) cmd_cli_version "$@" ;;
   agent-file) cmd_agent_file "$@" ;;
+  evidence-read) cmd_evidence_read "$@" ;;
   kill-group) cmd_kill_group "$@" ;;
   kill-all) cmd_kill_all ;;
   fix-perms) cmd_fix_perms "$@" ;;
   check) cmd_check ;;
   login-status) cmd_login_status "$@" ;;
-  *) die "하위 명령은 run · ci-run · git-inspect · git-bundle · cli-version · agent-file · kill-group · kill-all · fix-perms · check · login-status 중 하나입니다." ;;
+  *) die "하위 명령은 run · ci-run · git-inspect · tree-manifest · git-bundle · cli-version · agent-file · evidence-read · kill-group · kill-all · fix-perms · check · login-status 중 하나입니다." ;;
 esac

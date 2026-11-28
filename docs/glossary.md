@@ -88,6 +88,7 @@
 - **drift** — 두 사본(예: 문서와 openapi.json, 계약과 코드)이 서로 어긋난 상태. → contracts 머리말, data-model §2.8
 - **Drizzle ORM / drizzle-kit** — TypeScript 코드로 DB 테이블을 정의하고 쿼리하는 라이브러리. drizzle-kit은 그 정의에서 마이그레이션 SQL을 만드는 도구.
 - **DTO** — 요청·응답으로 주고받는 데이터 모양. → architecture §3.3
+- **dubious ownership (git)** — 저장소 폴더의 소유자가 지금 git을 돌리는 계정과 다를 때 git이 그 저장소를 거부하는 보호 동작. 작업 폴더는 Runner 계정이 만들어 넘기므로 Agent 계정 git은 그 폴더 하나만 `safe.directory`로 허용한다. → agent-runner/docs/isolation.md
 - **E2E** — 화면부터 서버·DB까지 실제처럼 이어서 하는 끝-끝 테스트.
 - **Effort** — Agent가 얼마나 깊이 생각할지 정하는 단계. 공통 1~5로 맞춘다. → open-questions §0.2
 - **embed (폰트 embed)** — PDF 안에 글꼴 파일을 함께 넣어 어느 PC에서 열어도 같게 보이게 하는 것.
@@ -127,6 +128,7 @@
 - **GET / POST / PUT / PATCH / DELETE** — HTTP 요청의 종류. GET 조회, POST 생성·실행, PUT 통째로 교체, PATCH 일부 수정, DELETE 삭제.
 - **gh** — GitHub 공식 CLI.
 - **Git / GitHub** — git은 코드 변경 기록 도구, GitHub는 git 저장소를 올려 두고 PR·검사·병합을 하는 서비스.
+- **git bundle** — 브랜치의 git 기록을 파일 하나로 묶은 데이터. Runner는 Agent 계정이 만든 bundle만 받아 자기 bare 저장소에서 검사(verify) 뒤 가져온다. Agent 폴더의 `.git`을 직접 읽지 않기 위해서다. → agent-runner/src/git/README.md
 - **git-lfs** — 큰 파일을 git 밖에 저장하는 git 확장.
 - **grep** — 파일에서 문자열을 찾는 명령. 예: 토큰이 로그에 남았는지 찾기.
 - **hash** — 내용을 짧은 문자열로 줄인 지문. 내용이 조금만 바뀌어도 달라진다. → data-model §2.3-1
@@ -240,6 +242,7 @@
 - **ruleset (GitHub)** — GitHub에서 브랜치 보호 규칙을 묶어 적용하는 기능. 현재 요금제의 private 저장소에서는 API가 403이다(Q-09).
 - **run-grade** — 이번 시도에 쓸 모델·Effort를 서버에 묻는 API. → contracts §3.1
 - **`runner:` (단계 이름 접두어)** — Runner가 직접 붙이는 CI 단계 이름의 앞머리(예: `runner:worktree`). `pipeline.yaml`의 단계 이름과 섞이지 않게 한다. → contracts §3.6-2
+- **safe.directory (git 설정)** — 소유자가 다른 저장소도 git이 열도록 허용하는 설정. 명령줄·전역 설정에서만 읽고 저장소 설정(`.git/config`)에서는 읽지 않는다. 그래서 Agent가 저장소 설정으로 넓힐 수 없다.
 - **sandbox** — 프로그램이 파일·네트워크를 건드릴 수 있는 범위를 제한한 실행 환경.
 - **schema (스키마)** — 데이터의 모양(필드·타입·제약)을 정의한 것. DB schema, API schema, JSON Schema 등.
 - **scope (systemd scope)** — systemd가 프로세스 묶음을 하나로 관리하는 단위. cgroup을 만든다. → open-questions §3
@@ -323,6 +326,7 @@
 - **가동률** — 실제로 일할 수 있는 시간의 비율. 일정 계산(낙관·중간·비관)에 쓴다. → architecture D-32
 - **가변 글꼴 (Variable font)** — 파일 하나로 굵기를 자유롭게 바꾸는 글꼴. 화면은 이것을 쓰지만, Chromium PDF에서는 굵은 글자가 Type3 그림 글자가 된다. ↔ 고정 굵기 글꼴
 - **가상 스크롤** — 긴 목록에서 화면에 보이는 행만 그려 빠르게 만드는 기법.
+- **개발 폴더 / 검증 폴더** — Task 브랜치마다 두는 작업 폴더 두 개. 개발 폴더(`w-<hash>-dev`)는 dev·rework가 다시 쓰고, 검증 폴더(`w-<hash>-qa`)는 qa·reverify마다 ①이 검사한 커밋으로 새로 만든다. → agent-runner/src/jobs/README.md 「작업 폴더 규칙」
 - **검증** — QA·재검증 시도가 Task 결과를 확인하는 것. 결과는 `verifications`에 추가 전용으로 남는다. → data-model §2.5
 - **격리 테스트(quarantined)** — 불안정해서 야간 점검 판정에서 따로 다루기로 팀장이 표시한 테스트. Runner는 정책 `ci.quarantined[]`로 받는다. → contracts §3.1
 - **결과 미확정 (병합)** — 병합 요청의 응답을 잃었는데 조회에서 병합이 보이지 않는 상태. 「병합 안 됨」으로 확정하지 않고, 같은 요청을 다시 보내지 않으며, 쓰기 없는 재조회로만 해소한다. → contracts §3.4-6·§4.1
@@ -396,6 +400,7 @@
 - **인수** — owner가 받아들일 수 있는 상태인지 실제 환경에서 확인하는 단계(M8). → milestones §3 M8
 - **일시 장애** — 통신 실패·5xx·속도 제한처럼 잠시 뒤 다시 하면 나을 수 있는 실패. 시작 점검의 deploy key 조회는 최대 3번 다시 하고, 그래도 안 되면 경고만 남긴다. → contracts §3.1
 - **입력 원장** — 팀장 입력(`prototype/`)이 언제 어떻게 바뀌었는지 이어 붙여 기록하는 서버의 장부. 정답은 base와 head 사이의 트리 차이다. → contracts §3.1 입력 변경 보고
+- **입력 사본** — 입력 커밋의 `prototype/`을 읽기 전용(파일 0444, 폴더 0555)으로 꺼내 둔 폴더. Agent가 입력 문서를 읽기만 하게 한다. 위치는 지시문 끝 「[Runner 안내]」에 적힌다. → agent-runner/src/git/README.md 「입력과 Task 검사」
 
 ## ㅈ
 
@@ -448,3 +453,4 @@
 - **하위 Agent(subagent)** — Agent가 일을 나눠 맡기는 보조 Agent. 정의는 hash로 검증해 설치한다. → architecture D-24
 - **해석 결정** — D-xx 참고.
 - **협조적 검사** — 상대가 규칙을 지킬 때만 통하는 검사. 옛 PC가 이미 보낸 GitHub 요청은 막지 못하므로 자격 증명 폐기와 결과 대조가 최종 방어다.
+- **형식 수정 요청** — Agent 종료 메시지가 계약(JSON Schema)과 맞지 않을 때 같은 세션에 한 번만 보내는 다시 내기 요청. 그래도 틀리면 개발 시도는 실패로 보고하고, QA 시도는 판정을 지어내지 않고 멈춘다. → contracts §5, agent-runner/src/jobs/README.md 「결과 수집」

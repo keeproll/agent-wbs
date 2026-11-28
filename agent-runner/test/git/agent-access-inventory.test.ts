@@ -24,6 +24,9 @@ const REPOSITORY_METHODS: Record<string, string> = {
   endReset: 'readdir(이름만, 남은 항목 세기)',
   reset: '기록된 작업 폴더마다 removeWorktree',
   taskCheckPath: '전용 계정: safePath(lstat) + Agent git inspect / 같은 계정 배치만 Runner git rev-parse·diff',
+  // readEvidence도 이 경로를 받아 전용 계정이면 래퍼 evidence-read(Agent 계정), 같은 계정 배치만 직접 읽기(O_NOFOLLOW)로 증거 파일을 받는다.
+  // worktreeHead는 이 경로를 받아 전용 계정이면 Agent git inspect(HEAD만), 같은 계정 배치만 Runner git rev-parse를 한다.
+  worktreeState: 'safePath(lstat) + 폴더가 있는지 lstat만(내용을 읽지 않음)',
 };
 
 /** repository.ts 밖에서 Agent 작업 폴더 안 경로를 만드는(join(cwd, …)) 곳. */
@@ -31,6 +34,7 @@ const OTHER_SITES: Record<string, string> = {
   'ci/collect-tests.ts': 'package.json 읽기(O_NOFOLLOW·O_NONBLOCK·일반 파일·1 MiB)',
   'cli/dedicated-user.ts': 'ci-run --home 경로 문자열만(파일 접근 없음, 래퍼가 Agent 계정으로 확인)',
   'exec/install.ts': '같은 계정 배치(localAgentFiles)만 직접 fs. 전용 계정 배치는 래퍼 agent-file(Agent 계정)로만(fix2 추가)',
+  'git/agent-git.ts': '같은 계정 배치(localAgentEvidence)만 증거 파일 직접 읽기(lstat·O_NOFOLLOW·일반 파일). 전용 계정 배치는 래퍼 evidence-read(Agent 계정)로만(collect-prepare)',
 };
 
 test('repository.ts: Agent 작업 폴더 모음을 쓰는 메서드는 목록의 것뿐이다', () => {
@@ -51,13 +55,21 @@ test('repository.ts 밖에서 작업 폴더 안 경로를 만드는 곳은 목�
 
 test('Runner git이 Agent .git을 저장소로 쓰는 모양(--git-dir=·Agent 경로 fetch)은 같은 계정 배치 갈래에만 남는다', () => {
   const text = readFileSync(join(src, 'git', 'repository.ts'), 'utf8');
-  // taskCheckPath의 같은 계정 갈래(rev-parse, --work-tree diff·ls-files)와 importWorktree의 같은 계정 fetch.
-  expect(text.match(/--git-dir=\$\{join\(path, '\.git'\)\}/g)).toHaveLength(1);
-  expect(text.match(/--work-tree=\$\{path\}/g)).toHaveLength(2);
+  // taskCheckPath·worktreeHead의 같은 계정 갈래(HEAD rev-parse)와 importWorktree의 같은 계정 fetch. 청결 판정은 파일 목록 대조라 --work-tree가 없다(P2-1).
+  expect(text.match(/--git-dir=\$\{join\(path, '\.git'\)\}/g)).toHaveLength(2);
+  expect(text.match(/--work-tree=\$\{path\}/g)).toBeNull();
   expect(text.match(/'--upload-pack=git-upload-pack', '--', join\(path, '\.git'\)/g)).toHaveLength(1);
   // 그 갈래는 모두 「this.agentGit이 없을 때」(같은 계정 배치) 뒤에 있다.
-  const shared = text.slice(text.indexOf('async taskCheckPath'), text.indexOf('async reset('));
-  expect(shared.indexOf('if (this.agentGit)')).toBeLessThan(shared.indexOf('--git-dir='));
+  for (const [from, to] of [['async taskCheckPath', 'async worktreeState'], ['async worktreeHead', 'async hasCommit']] as const) {
+    const branch = text.slice(text.indexOf(from), text.indexOf(to));
+    const guard = Math.max(branch.indexOf('if (this.agentGit)'), branch.indexOf('this.agentGit ?'));
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(branch.indexOf('--git-dir='));
+  }
+  // 청결 판정은 Runner bare의 tree와 파일 목록(manifest) 대조다. Agent의 git status를 판정에 쓰지 않는다.
+  const check = text.slice(text.indexOf('async taskCheckPath'), text.indexOf('async worktreeState'));
+  expect(check).toContain('compareManifest(expected, actual)');
+  expect(check).not.toContain('.dirty');
 });
 
 test('exec/install.ts: 직접 파일 접근은 같은 계정 배치용(localAgentFiles·directory)에만 있고, 설치 본문은 AgentFiles만 쓴다', () => {
@@ -71,4 +83,12 @@ test('exec/install.ts: 직접 파일 접근은 같은 계정 배치용(localAgen
 test('Execution은 전용 계정 배치에서 Agent 계정 파일 접근을 받는다(app.ts 연결)', () => {
   const text = readFileSync(join(src, 'app.ts'), 'utf8');
   expect(text).toContain('...(d.agentRoot && { agentFiles: wrapperAgentFiles() }),');
+});
+
+test('Agent 증거 파일: repository.ts의 기본은 고정 작업 영역이면 래퍼(Agent 계정), 직접 읽기는 같은 계정 배치에만', () => {
+  const text = readFileSync(join(src, 'git', 'repository.ts'), 'utf8');
+  expect(text).toContain("layout.agentEvidence ?? (layout.agentRoot === AGENT_ROOT ? wrapperAgentEvidence() : localAgentEvidence)");
+  const agentGit = readFileSync(join(src, 'git', 'agent-git.ts'), 'utf8');
+  const local = agentGit.slice(agentGit.indexOf('export const localAgentEvidence'));
+  expect(local).toContain('O_NOFOLLOW');
 });

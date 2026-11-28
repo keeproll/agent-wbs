@@ -32,6 +32,11 @@ export interface AttemptFlowOptions {
   }>;
   /** 실제 ①의 종료 결과다. 기준·환경 실패와 Task 코드 실패를 구분한다. */
   taskCheck: (context: AttemptContext) => Promise<TaskCheckResult & { pullRequest?: { number: number; head: string } }>;
+  /**
+   * 결과 보고를 서버가 받아들인 뒤의 정리(작업 폴더 규칙, `jobs/workspace.ts`의 `settle`). 실패해도 이미 보낸 결과는 그대로다.
+   * 왜 보고 뒤인가: 보고 전에 폴더를 지우면, 응답을 잃고 다시 시작할 때 검사한 커밋을 다시 볼 수 없다.
+   */
+  settle?: (context: AttemptContext, report: AttemptReport) => Promise<void>;
   onError?: (error: unknown) => void;
 }
 
@@ -146,6 +151,8 @@ export class AttemptFlow {
         }
         await reportEvent(d, 'reportAttemptResult', { epoch, params: { attemptId: output.attemptId }, body: { ...report, ...pullRequest, fence: job.fence } }, stopped);
         if (resultSucceeded({ ...report, fence: job.fence })) await d.runner.completeMessages(output.attemptId);
+        // 정리 실패는 경고로만 알린다. 남은 폴더는 다음 준비(prepare)나 초기화 정리가 다시 지운다.
+        if (d.settle) await d.settle(context, report).catch((error: unknown) => d.onError?.(error));
       },
     });
   }

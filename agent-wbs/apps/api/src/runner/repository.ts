@@ -68,6 +68,22 @@ export class RunnerRepository {
       where c.task=$1 and c.stage=1 and c.head_sha=$2 order by c.run_no desc limit 1`, [task.id, head ?? null])).rows[0];
     return Boolean(check?.passed);
   }
+  /**
+   * 끝난 Task(done·cancelled)의 브랜치 중 그 Task에 열린 실행 보유가 없는 것. 최근 것부터 500개.
+   * 브랜치는 시도 기록(task_attempts.branch)과, 시도가 생기기 전에 Runner가 받은 attempt job(runner_jobs.payload.branch) 둘 다에서 모은다.
+   * 왜 job도 보나: 취소는 시작 전 Task만 되는데, Runner는 start 전에 작업 폴더를 준비한다. 시작 전 실패로 끝난 job의 폴더도 지워야 한다.
+   * Runner가 그 브랜치의 작업 폴더를 정리한다(collect-prepare). 보유가 열려 있으면 아직 정리 대상이 아니다.
+   */
+  async closedBranches() {
+    return (await this.client.query<{ branch: string }>(`select branch from (
+        select t.id task,a.branch,coalesce(a.ended_at,a.started_at) at from task_attempts a join tasks t on t.id=a.task
+          where t.status in ('done','cancelled') and a.branch is not null
+        union all
+        select t.id,j.payload->>'branch',j.updated_at from runner_jobs j join tasks t on t.project_id=j.project_id and t.task_key=j.payload->>'taskKey'
+          where j.kind='attempt' and t.status in ('done','cancelled') and j.payload ? 'branch') x
+      where not exists(select 1 from execution_holds h where h.task=x.task and h.closed_at is null)
+      group by branch order by max(at) desc, branch limit 500`)).rows.map(r => r.branch);
+  }
   async spec(task: string) { return (await this.client.query<{ revision: number; overview: object; spec: object; ac: unknown[] }>('select revision,overview,spec,ac from task_specs where task=$1', [task])).rows[0]; }
   async input(project: string, id: string | null = null) { return (await this.client.query<{ id: string; v: number; commit_sha: string }>('select id,v,commit_sha from input_versions where project_id=$1 and ($2::uuid is null or id=$2) order by v desc limit 1', [project,id])).rows[0]; }
   async subagents(task: string, role: string) {

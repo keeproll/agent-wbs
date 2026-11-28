@@ -267,6 +267,85 @@ describe.skipIf(!usable)('awbs-agent-exec 실행 래퍼(bash, 실제 실행)', (
     expect(wrapper(['git-inspect', '--cwd', runnerHome]).code).toBe(2);
   });
 
+  test('tree-manifest: Agent의 .git을 읽지 않고 실제 파일의 종류·실행 비트·blob hash를 낸다(collect-prepare P2-1)', () => {
+    const repo = join(area, 'worktrees', 'p1', 'manifest');
+    mkdirSync(join(repo, 'bin'), { recursive: true });
+    const g = (...a: string[]) => spawnSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@x', ...a], { encoding: 'utf8' });
+    g('init', '-q', '-b', 'agent/x');
+    writeFileSync(join(repo, 'a.txt'), 'line1\n'); writeFileSync(join(repo, 'bin', 'run'), '#!/bin/sh\n'); chmodSync(join(repo, 'bin', 'run'), 0o755);
+    symlinkSync('a.txt', join(repo, 'link'));
+    g('add', '-A'); g('commit', '-qm', 'a');
+    mkdirSync(join(repo, '.awbs-evidence'), { recursive: true }); writeFileSync(join(repo, '.awbs-evidence', 'e'), 'x');
+    const tree = new Map(g('ls-tree', '-r', '-z', 'HEAD').stdout.split('\0').filter(Boolean).map(line => {
+      const [meta = '', path = ''] = line.split('\t'); const [mode, , oid] = meta.split(' '); return [path, `${mode ?? ''} ${oid ?? ''}`] as const;
+    }));
+    const manifest = (wanted: string[]) => {
+      const r = spawnSync(exec, ['tree-manifest', '--cwd', repo, '--object-format', 'sha1'], { input: wanted.map(p => `${p}\0`).join(''), env: { PATH: '/usr/bin:/bin' } });
+      expect(r.status, r.stderr.toString()).toBe(0);
+      const f = r.stdout.toString().split('\0'); f.pop();
+      const out = new Map<string, string>();
+      for (let i = 0; i < f.length; i += 3) out.set(f[i + 2] ?? '', `${f[i] ?? ''} ${f[i + 1] ?? ''}`);
+      return out;
+    };
+    // 기준: 커밋과 같다. .git·.awbs-evidence는 내지 않는다. 기대 경로가 아닌 파일은 hash 없이 낸다.
+    writeFileSync(join(repo, 'extra.log'), 'x');
+    const clean = manifest([...tree.keys()]);
+    for (const [path, want] of tree) expect(clean.get(path), path).toBe(want);
+    expect(clean.get('extra.log')).toBe('100644 -');
+    expect([...clean.keys()].some(p => p.startsWith('.git') || p.startsWith('.awbs-evidence'))).toBe(false);
+    rmSync(join(repo, 'extra.log')); rmSync(join(repo, '.awbs-evidence'), { recursive: true });
+    expect(wrapper(['git-inspect', '--cwd', repo]).stdout.split('\n')[1]).toBe('dirty 0');
+    // 리뷰어 재현: 아래 넷은 모두 git status(git-inspect의 참고 dirty)를 「깨끗함」으로 속인다. 실제 파일 hash는 속지 않는다.
+    const inspect = () => wrapper(['git-inspect', '--cwd', repo]).stdout.split('\n')[1];
+    const changedHash = () => manifest(['a.txt']).get('a.txt') !== tree.get('a.txt');
+    const reset = () => { g('checkout', '-q', '--', '.'); g('config', '--unset-all', 'filter.x.clean'); g('config', '--unset-all', 'core.worktree');
+      g('config', '--unset-all', 'core.checkStat'); g('config', '--unset-all', 'core.trustctime'); rmSync(join(repo, '.git', 'info', 'attributes'), { force: true });
+      for (const r of g('replace', '-l').stdout.split('\n').filter(Boolean)) g('replace', '-d', r); g('reset', '-q', '--hard'); };
+    // A. clean filter + index stat 0
+    writeFileSync(join(repo, 'a.txt'), 'changed!\n');
+    mkdirSync(join(repo, '.git', 'info'), { recursive: true });
+    writeFileSync(join(repo, '.git', 'info', 'attributes'), 'a.txt filter=x\n');
+    g('config', 'filter.x.clean', 'git show HEAD:a.txt');
+    const blob = g('rev-parse', 'HEAD:a.txt').stdout.trim();
+    spawnSync('git', ['-C', repo, 'update-index', '--index-info'], { input: `100644 ${blob}\ta.txt\n` });
+    expect(inspect()).toBe('dirty 0');
+    expect(changedHash()).toBe(true);
+    reset();
+    // B. core.worktree를 깨끗한 다른 폴더로
+    const decoy = join(area, 'worktrees', 'p1', 'decoy');
+    mkdirSync(decoy, { recursive: true });
+    for (const name of ['a.txt']) writeFileSync(join(decoy, name), 'line1\n');
+    mkdirSync(join(decoy, 'bin'), { recursive: true }); writeFileSync(join(decoy, 'bin', 'run'), '#!/bin/sh\n'); chmodSync(join(decoy, 'bin', 'run'), 0o755); symlinkSync('a.txt', join(decoy, 'link'));
+    writeFileSync(join(repo, 'a.txt'), 'changed!\n');
+    g('config', 'core.worktree', decoy);
+    expect(inspect()).toBe('dirty 0');
+    expect(changedHash()).toBe(true);
+    reset();
+    // D. stat 위조: 같은 크기로 바꾸고 시각을 되돌림 + checkStat=minimal
+    // index를 파일보다 나중 시각으로 다시 써 둔다(같은 초면 git이 「racy」로 보고 내용을 다시 읽기 때문). Agent도 같은 일을 할 수 있다.
+    spawnSync('sleep', ['1.1']); g('update-index', '--refresh');
+    const before = spawnSync('stat', ['-c', '%Y', join(repo, 'a.txt')], { encoding: 'utf8' }).stdout.trim();
+    g('config', 'core.checkStat', 'minimal'); g('config', 'core.trustctime', 'false');
+    writeFileSync(join(repo, 'a.txt'), 'LINE1\n');
+    spawnSync('touch', ['-d', `@${before}`, join(repo, 'a.txt')]);
+    expect(inspect()).toBe('dirty 0');
+    expect(changedHash()).toBe(true);
+    reset();
+    // E. replace 객체: 바뀐 내용으로 가짜 커밋을 만들어 원래 HEAD를 바꿔 보이게 함
+    const original = g('rev-parse', 'HEAD').stdout.trim();
+    writeFileSync(join(repo, 'a.txt'), 'changed!\n'); writeFileSync(join(repo, 'x.ts'), 'new');
+    g('add', '-A'); g('commit', '-qm', 'fake'); const fake = g('rev-parse', 'HEAD').stdout.trim();
+    g('update-ref', 'refs/heads/agent/x', original); g('replace', original, fake);
+    expect(wrapper(['git-inspect', '--cwd', repo]).stdout).toBe(`head ${original}\ndirty 0\n`);
+    const replaced = manifest([...tree.keys()]);
+    expect(replaced.get('a.txt')).not.toBe(tree.get('a.txt'));
+    expect(replaced.get('x.ts')).toBe('100644 -');
+    // 잘못된 인자는 거부한다.
+    for (const bad of [['--cwd', repo, '--object-format', 'md5'], ['--cwd', runnerHome, '--object-format', 'sha1'], ['--cwd', repo]]) {
+      expect(spawnSync(exec, ['tree-manifest', ...bad], { input: '', env: { PATH: '/usr/bin:/bin' } }).status, bad.join(' ')).toBe(2);
+    }
+  });
+
   test('agent-file: 하위 Agent 정의만 Agent 계정으로 읽기·쓰기·지우기(fix2 추가)', () => {
     const file = (args: string[], input?: string) => spawnSync(exec, ['agent-file', ...args], { input, encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } });
     const rel = '.codex/agents/code-reviewer.toml';
@@ -281,6 +360,43 @@ describe.skipIf(!usable)('awbs-agent-exec 실행 래퍼(bash, 실제 실행)', (
       expect(file(bad, 'x').status, bad.join(' ')).toBe(2);
     }
     expect(file(['write', '--cwd', worktree, '--path', rel], 'x'.repeat(1024 * 1024 + 1)).status).toBe(2);
+  });
+
+  test('evidence-read: .awbs-evidence 안의 일반 파일만 Agent 계정으로 읽어 그대로 낸다(collect-prepare)', () => {
+    const read = (args: string[]) => spawnSync(exec, ['evidence-read', ...args], { env: { PATH: '/usr/bin:/bin' } });
+    const dir = join(worktree, '.awbs-evidence');
+    expect(read(['--cwd', worktree, '--name', 'unit.log']).status).toBe(3);
+    mkdirSync(dir, { recursive: true });
+    expect(read(['--cwd', worktree, '--name', 'unit.log']).status).toBe(3);
+    const bytes = Buffer.from([0, 1, 2, 255, 10]);
+    writeFileSync(join(dir, 'shot.png'), bytes);
+    const ok = read(['--cwd', worktree, '--name', 'shot.png']);
+    expect(ok.status, ok.stderr.toString()).toBe(0);
+    expect(Buffer.compare(ok.stdout, bytes)).toBe(0);
+    // 링크(Runner 파일을 가리키게 바꾼 것)·하위 경로·숨김 이름·작업 영역 밖은 거부한다.
+    writeFileSync(join(runnerHome, 'token'), 'secret');
+    symlinkSync(join(runnerHome, 'token'), join(dir, 'leak.txt'));
+    expect(read(['--cwd', worktree, '--name', 'leak.txt']).status).toBe(4);
+    // FIFO·폴더처럼 일반 파일이 아닌 것도 4(Runner가 Agent의 형식 문제로 센다, 방어 점검 P3-3).
+    spawnSync('mkfifo', [join(dir, 'pipe.log')]);
+    expect(read(['--cwd', worktree, '--name', 'pipe.log']).status).toBe(4);
+    mkdirSync(join(dir, 'sub'));
+    expect(read(['--cwd', worktree, '--name', 'sub']).status).toBe(4);
+    for (const bad of [['--cwd', worktree, '--name', '../a'], ['--cwd', worktree, '--name', '.hidden'], ['--cwd', worktree, '--name', 'a/b'], ['--cwd', runnerHome, '--name', 'token']]) {
+      expect(read(bad).status, bad.join(' ')).toBe(2);
+    }
+    rmSync(dir, { recursive: true });
+    symlinkSync(runnerHome, dir);
+    expect(read(['--cwd', worktree, '--name', 'token']).status).toBe(3);
+    rmSync(dir);
+  });
+
+  test('래퍼 자신의 git은 -c safe.directory=<그 폴더 실제 경로>만 쓰고 전역 설정을 쓰지 않는다(fix3)', () => {
+    const text = readFileSync(join(import.meta.dirname, '..', '..', 'scripts', 'isolation', 'awbs-agent-exec.sh'), 'utf8');
+    expect(text.match(/safe\.directory/g)?.length).toBeGreaterThan(0);
+    expect(text).toContain('git -C "$dir" -c safe.directory="$dir"');
+    expect(text).not.toMatch(/GIT_CONFIG_(COUNT|KEY|VALUE)/);
+    expect(text).not.toMatch(/config --global/);
   });
 
   test('cli-version: 진입점 규칙으로 Agent 계정에서 --version만', () => {

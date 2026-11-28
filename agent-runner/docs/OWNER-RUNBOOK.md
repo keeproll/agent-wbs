@@ -188,11 +188,23 @@ pnpm -C agent-runner start
     ```
 
   - 실패하면 Runner 로그에 `실제 Agent 실행 보류: …`가 한 번 보입니다. 그 줄을 보내 주세요.
-- 참고: 실제 시도 흐름은 결과 수집기(`collect`)가 연결된 뒤에 시작됩니다(`src/jobs/README.md`). 그 전까지 Runner는 시도 job을 받지 않습니다.
+- 참고: 시도 흐름(개발·QA·재작업·재검증 실행)은 **기본 꺼짐**입니다(CI 자동 실행과 같은 방식).
+  - 켜려면 `agent-runner/.env`에 `AWBS_ATTEMPT_AUTO=1` 한 줄을 더하고 Runner를 다시 시작합니다.
+  - 왜 기본 꺼짐인가: 켜면 실제 Claude·Codex 호출(유료)이 시작됩니다. M8 실호출 전까지는 owner가 정할 때만 켭니다.
+  - `AWBS_GITHUB_REPO`도 있어야 합니다. 작업 폴더를 만들 로컬 저장소를 그 주소로 찾기 때문입니다. 없으면 설정 오류로 멈춥니다.
+  - 켜기 전에 아래 「래퍼·CLI를 바꾼 뒤」를 한 번 실행해 설치된 래퍼를 새것으로 바꿔야 합니다(fix3: safe.directory).
+  - 자세한 동작은 `src/jobs/README.md` 「작업 폴더 규칙」·「결과 수집」입니다.
 
 ---
 
-## 래퍼·CLI를 바꾼 뒤(fix1: ci-run·진입점 규칙·pnpm / fix2: git-inspect·git-bundle·cli-version·agent-file·ci-run --home)
+## 래퍼·CLI를 바꾼 뒤(fix1: ci-run·진입점 규칙·pnpm / fix2: git-inspect·git-bundle·cli-version·agent-file·ci-run --home / fix3: safe.directory)
+
+- fix3(2026-11-28): 래퍼의 Agent 계정 git(`git-inspect`·`git-bundle`)과 `ci-run`이 작업 폴더를 「dubious ownership(소유자가 다른 저장소)」으로 거부하던 문제를 고쳤습니다.
+  - 왜 생겼나: 작업 폴더는 Runner 계정(keeproll)이 만들어 넘기므로 소유자가 Agent 계정과 다릅니다. git은 소유자가 다른 저장소를 기본으로 거부합니다.
+  - 고친 방법: 래퍼가 부르는 git만, 그 한 폴더만 명령줄 설정(`-c safe.directory=<폴더>`)으로 허용합니다. 저장소 설정으로는 넓힐 수 없는 보호 설정입니다.
+  - 같은 묶음에 QA 증거 파일 읽기(`evidence-read`)와 실제 파일 목록(`tree-manifest`, 청결 판정을 Agent의 `.git`에 기대지 않게 하는 방어 점검 P2-1)도 더했습니다.
+  - 확인 스크립트(6-2)가 `safe.directory`는 Agent 계정 전역 설정에만 있고 Runner 계정 설정에는 없는지 봅니다. Runner 쪽에 있다고 나오면 `git config --global --unset-all safe.directory`로 지웁니다.
+  - 이 고침이 설치되기 전에는 전용 계정으로 시도 흐름을 돌릴 수 없습니다(HEAD 확인·결과 bundle이 실패).
 
 래퍼(`awbs-agent-exec`)를 고치면 설치본(`/usr/local/libexec/awbs-agent-exec`)은 저절로 바뀌지 않습니다. 아래를 순서대로 실행합니다.
 sudoers 규칙 한 줄은 바뀌지 않습니다(래퍼 하나만 허용).

@@ -34,6 +34,7 @@ import { Launches } from './exec/launches.ts';
 import { CiJobs, type CiJobsOptions } from './ci/jobs.ts';
 import { AttemptFlow, type AttemptFlowOptions } from './jobs/attempt-flow.ts';
 import { bindTaskCheck, type TaskCheckSources } from './jobs/task-check.ts';
+import { bindCollect, type CollectSources } from './jobs/collect.ts';
 import { createTestCollector } from './ci/collect-tests.ts';
 import { wrapperAgentFiles } from './git/agent-git.ts';
 import { ciLaunch } from './ci/launch.ts';
@@ -96,7 +97,18 @@ export interface RunnerAppDeps {
    * `taskCheck`는 실제 ① 공급원(`TaskCheckSources`)을 넘긴다. 앱이 자기 GitHub 클라이언트·Execution·Runner로 `bindTaskCheck`를 부른다.
    * 함수를 직접 넘기는 모양은 시험용이다(실제 ①과 PR 생성을 거치지 않는다).
    */
-  jobs?: Pick<AttemptFlowOptions, 'collect'> & { taskCheck: AttemptFlowOptions['taskCheck'] | TaskCheckSources };
+  jobs?: Pick<AttemptFlowOptions, 'settle'> & {
+    /**
+     * 끝난 Task 브랜치의 작업 폴더 정리(`AttemptWorkspace.release`). 두 곳에서 같은 함수를 부른다.
+     * - CI 처리기가 병합을 확인한 뒤(done으로 가는 길).
+     * - 서버 정책의 `closedBranches`(done·cancelled이고 열린 실행 보유가 없는 Task의 브랜치). 취소된 Task는 이 길로만 알 수 있다.
+     * 실패해도 병합·취소 결과는 그대로다. 경고만 남기고 다음 정책 확인 때 다시 한다. 남은 폴더는 초기화 정리도 지운다.
+     */
+    release?: (branches: readonly string[]) => Promise<void>;
+    /** 결과 수집기. 실제는 공급원(`CollectSources`)을 넘기고, 앱이 자기 Execution·Runner·API로 `bindCollect`를 부른다. 함수는 시험용이다. */
+    collect: AttemptFlowOptions['collect'] | CollectSources;
+    taskCheck: AttemptFlowOptions['taskCheck'] | TaskCheckSources;
+  };
 }
 
 /** 서버 정책을 받기 전 입력 확인 기본 주기(5분, 서버 정책 inputCheckMinutes의 기본값과 같음). */
@@ -262,8 +274,10 @@ export class RunnerApp {
     if (d.ci && d.agentRoot) throw new Error('전용 계정 격리에서는 CI 실행기를 주입할 수 없습니다. 실제 실행기(ciAuto)는 Agent 계정으로만 돈다.');
     if (d.ci && this.github) this.#ci = this.#ciJobs(d.ci);
     const taskCheck = d.jobs?.taskCheck;
-    if (d.jobs && taskCheck) this.jobs = new AttemptFlow({
+    const collect = d.jobs?.collect;
+    if (d.jobs && taskCheck && collect) this.jobs = new AttemptFlow({
       ...d.jobs, execution: this.execution, runner: this.runner, api: d.api,
+      collect: typeof collect === 'function' ? collect : bindCollect({ ...collect, api: d.api, runner: this.runner, execution: this.execution }),
       // 실제 ①은 앱의 GitHub 클라이언트로 PR을 연다. GitHub 설정이 없으면 null(PR 없이 보고, 서버가 통합을 보류).
       taskCheck: typeof taskCheck === 'function' ? taskCheck
         : bindTaskCheck({ ...taskCheck, api: d.api, runner: this.runner, execution: this.execution, github: this.github?.client ?? null }),
@@ -497,8 +511,20 @@ export class RunnerApp {
     if (this.#ci || this.#d.ciAuto) this.#timers.push(scheduleDaily(async () => {
       // 실제 실행기는 격리 계층(전용 계정 + scope)이 있을 때만 CI job을 받는다. 없으면 받아도 실행할 수 없다.
       if (this.#d.ciAuto && !this.execution.isolation) return;
-      await (await this.#ensureCi())?.runNext(this.reporter.caps?.total ?? 0,signal);
+      const outcome = await (await this.#ensureCi())?.runNext(this.reporter.caps?.total ?? 0,signal);
+      // 병합을 확인했으면 그 Task의 개발·검증 폴더를 지운다(done 정리). 실패는 경고만 남긴다.
+      if (outcome?.result?.kind === 'merged' && this.#d.jobs?.release) {
+        await this.#d.jobs.release([outcome.result.branch]).catch((error: unknown) => { this.#d.warn(`병합 뒤 작업 폴더 정리 실패: ${message(error)}`); });
+      }
     },{ intervalMs:1000,onError:onError('통합·CI 재실행') }));
+    // 끝난 Task(done·취소)의 작업 폴더 정리: 서버 정책의 closedBranches 전체를 주기마다 다시 본다(병합 뒤 정리와 같은 함수).
+    // 왜 「이미 정리함」을 기억하지 않나(방어 점검 P3-2): 취소와 준비(prepare)가 엇갈리면, 정리한 뒤에 폴더가 생길 수 있다.
+    //   매번 생성 기록을 한 번 읽어 목록 브랜치의 폴더만 지우므로 가볍다. 없는 폴더는 바로 넘어간다.
+    const release = this.#d.jobs?.release;
+    if (this.jobs && release) this.#timers.push(scheduleDaily(async () => {
+      const branches = this.runner.policy?.closedBranches ?? [];
+      if (branches.length) await release(branches).catch((error: unknown) => { this.#d.warn(`끝난 Task의 작업 폴더 정리 실패: ${message(error)}`); });
+    },{ intervalMs:30_000,onError:onError('끝난 Task 작업 폴더 정리') }));
     // 주기는 서버 정책(inputCheckMinutes)을 따른다. 정책이 없으면 기본 5분(P3-1 임시값).
     const policyMinutes = this.runner.policy?.inputCheckMinutes;
     const inputInterval = this.#d.inputIntervalMs ?? (policyMinutes ? policyMinutes * 60_000 : INPUT_INTERVAL_MS);

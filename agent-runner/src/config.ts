@@ -31,6 +31,11 @@ export interface Config {
    * 왜: CI는 Agent 코드를 실행하는 경로라, 켜는 것은 owner가 명시적으로 정한다.
    */
   ciAuto: boolean;
+  /**
+   * 시도 흐름(AttemptFlow: dev·qa·rework·reverify 실행)을 켤지. `AWBS_ATTEMPT_AUTO=1`일 때만 true(기본 꺼짐, CI 자동과 같은 방식).
+   * 왜: 실제 Claude·Codex 호출(유료)이 시작되는 경로다. M8 실호출 전까지는 owner가 명시적으로 켤 때만 돈다.
+   */
+  attemptAuto: boolean;
 }
 
 export class ConfigError extends Error {
@@ -93,6 +98,9 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   const cliUpdates = env.AWBS_CLI_UPDATE !== '0';
   const ciAuto = env.AWBS_CI_AUTO === '1';
   if (env.AWBS_CI_AUTO !== undefined && !['0', '1', ''].includes(env.AWBS_CI_AUTO)) problems.push('AWBS_CI_AUTO는 1(켜기) 또는 0(끄기)만 쓸 수 있습니다.');
+  const attemptAuto = env.AWBS_ATTEMPT_AUTO === '1';
+  if (env.AWBS_ATTEMPT_AUTO !== undefined && !['0', '1', ''].includes(env.AWBS_ATTEMPT_AUTO)) problems.push('AWBS_ATTEMPT_AUTO는 1(켜기) 또는 0(끄기)만 쓸 수 있습니다.');
+  if (attemptAuto && !github) problems.push('AWBS_ATTEMPT_AUTO=1에는 GitHub 저장소 설정(AWBS_GITHUB_REPO)이 필요합니다. 작업 폴더를 만들 로컬 clone을 그 저장소로 찾습니다.');
   let agentRoot: string | null = null;
   try {
     agentRoot = agentIsolationConfig(env)?.root ?? null;
@@ -101,5 +109,5 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   }
 
   if (!url || problems.length > 0) throw new ConfigError(problems.join('\n'));
-  return { wbsUrl: url.href.replace(/\/+$/, ''), token: new Secret(token), home, logLevel, github, cliUpdates, agentRoot, ciAuto };
+  return { wbsUrl: url.href.replace(/\/+$/, ''), token: new Secret(token), home, logLevel, github, cliUpdates, agentRoot, ciAuto, attemptAuto };
 }

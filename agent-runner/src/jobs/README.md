@@ -48,47 +48,106 @@ claim과 run은 같은 `canStart` 함수에 `1 + 해당 역할의 하위 Agent �
 나머지는 경고로 남긴다.
 `runNext`와 `run`은 오류를 호출자에게 돌려준다.
 
-## 연결 지점(다음 작업: `collect`·`execution.prepare`)
+## 켜는 방법(main.ts, 기본 꺼짐)
 
-지금 `main.ts`는 시도 흐름(`jobs`)을 켜지 않는다(조정자 답변 2026-11-27).
-왜: 실제 결과 수집기 `collect`와 시도별 작업 폴더 준비 `execution.prepare`가 아직 없다.
-둘을 만들면 `main.ts`의 `new RunnerApp({...})`에 아래 두 값만 더하면 된다. 나머지(격리·scope·①·GitHub 클라이언트·CI)는 이미 연결돼 있다.
+`main.ts`는 `.env`에 `AWBS_ATTEMPT_AUTO=1`이 있을 때만 시도 흐름(`jobs`)을 켠다.
+왜: 켜면 실제 Claude·Codex 호출(유료)이 시작된다. M8 실호출 전까지는 owner가 정할 때만 켠다(CI 자동 `AWBS_CI_AUTO`와 같은 방식).
+`AWBS_GITHUB_REPO`도 필요하다.
+왜: 작업 폴더를 만들 로컬 저장소(clone)를 그 주소로 찾는다(`repositoryIdFor`).
+
+켜면 `attemptWiring`(`wiring.ts`)이 만든 두 값을 `new RunnerApp({...})`에 더한다.
 
 ```ts
 new RunnerApp({
   // …지금 값 그대로…
-  execution: { prepare },                    // 1) 시도별 작업 폴더
-  jobs: { collect, taskCheck: sources },     // 2) 결과 수집기 + ① 공급원
+  ...attemptWiring({ home, agentRoot, repoUrl, api, epoch, warn, env }),
+  // = execution: { prepare }        1) 시도별 작업 폴더(workspace.ts)
+  //   jobs: { collect, taskCheck, settle }  2) 결과 수집 공급원(collect.ts) + ① 공급원 + 보고 뒤 정리
 });
 ```
 
-### 1) `execution.prepare(job) → { cwd, headSha }`
+- `collect`와 `taskCheck`에는 공급원(객체)만 넘긴다.
+- 앱이 자기 `Execution`·`Runner`·API(①은 GitHub 클라이언트까지)로 `bindCollect`·`bindTaskCheck`를 부른다.
+  - 왜: 공유 인스턴스가 둘이면 슬롯·보고·관문이 어긋난다. 함수를 직접 넘기는 모양은 시험용이다.
+- 저장소는 처음 쓸 때 연다.
+  - 로컬 clone이 아직 없으면(초기 분석 전) 준비가 실패한다.
+  - 그러면 시도를 만들지 않고 job을 실패로 끝낸다(시작 전 실패, `finishJob(failed)` + `releaseJob(no_process)`).
+- 격리 계층이 없으면(전용 계정 미설치·점검 실패) 켜져 있어도 claim하지 않는다(`Execution.claim`).
 
-- 타입: `ExecutionOptions['prepare']`(`src/exec/session.ts`). `job`은 생성 클라이언트의 `attempt` job(`AttemptJob`)이다.
-- 부르는 곳: `Execution.run`이 등급(`getRunGrade`)을 받은 뒤, 하위 Agent 설치·`startJob` 전에 한 번 부른다.
-- 해야 할 일:
-  - 앱의 `GitRepository`(`GitRepository.open(home, repositoryId, { agentRoot })`)로 작업 폴더를 만든다: `createWorktree(<작업 폴더 id>, <로컬 agent 브랜치>, job.payload.baseCommit)`.
-  - 전용 계정 배치면 작업 폴더가 `/srv/agentwbs/worktrees/<저장소>/<id>` 아래에 0770으로 생긴다. 래퍼가 이 밖의 `--cwd`는 거부한다.
-  - `cwd`는 그 작업 폴더의 절대 경로, `headSha`는 그 폴더의 현재 커밋(전체 SHA)이다.
-  - 같은 Task·역할의 재개(`resume`)는 같은 `cwd`일 때만 CLI 세션을 이어 간다(`Execution`이 비교한다). 그래서 재작업은 같은 작업 폴더 id를 써야 한다.
-- 실패하면 예외를 던진다. `Execution`이 시작 전 실패로 처리한다(`finishJob(failed)` + `releaseJob(no_process)`).
+## 작업 폴더 규칙(`workspace.ts`, `execution.prepare`)
 
-### 2) `jobs.collect(context) → { report, responses? }`
+작업 폴더는 Task 브랜치(`job.payload.branch`)마다 두 개다.
+이름에는 브랜치 이름의 SHA-256 앞 20자리를 쓴다.
+왜: 초기화로 세대가 바뀌면 브랜치 이름도 바뀌므로 옛 세대 폴더와 섞이지 않는다.
 
-- 타입: `AttemptFlowOptions['collect']`(`src/jobs/attempt-flow.ts`). `context`는 `AttemptContext`(`job`·`output`·`epoch`·`signal`·`messages`)다.
-- 부르는 곳: CLI와 자손 종료 확인 → 물리 슬롯 반환 → (dev·rework만) ① 통과 뒤. 같은 임대·같은 중단 신호 안이다.
-- 돌려줄 값: 아래 「결과 수집과 나가는 값」 절 그대로(`report`는 `reportAttemptResult` 본문에서 `fence`만 뺀 값).
-- 해야 할 일(contracts §5): Agent 종료 JSON의 스키마 검사, 형식 오류면 1회 수정 요청(같은 작업 폴더에서 CLI를 한 번 더 — `Execution`을 거쳐야 한다), 변경 파일은 git diff, Evidence는 업로드 뒤 ID.
+- **개발 폴더**(`w-<hash>-dev`): dev·rework가 쓴다.
+  - 있으면 그대로 다시 쓴다. 커밋하지 않은 파일도 지우지 않는다.
+  - 왜: 재시도·재작업이 중단된 작업을 이어 가야 한다. CLI 세션 재개도 같은 cwd일 때만 이어진다(`Execution`이 비교한다).
+  - 없으면 새로 만든다. dev는 `job.payload.baseCommit`에서, rework는 원격 Task 브랜치(①을 통과해 push된 커밋)에서 시작한다.
+  - rework인데 원격 브랜치를 읽지 못하면 실패한다. 시작점을 추측하지 않는다.
+  - 기록은 있는데 폴더가 사라졌으면 기록을 정리하고 다시 만든다.
+- **검증 폴더**(`w-<hash>-qa`): qa·reverify가 쓴다.
+  - 매번 지우고 ①이 검사한 커밋으로 새로 만든다.
+  - 검사한 커밋은 ①이 가져온 결과(`refs/agent-results/<개발 폴더>`)다. 없으면 원격 Task 브랜치다.
+  - 왜: QA는 검사한 코드 그대로에서 시작해야 한다(contracts §4.1 「코드 근거 고정」 1). 경로는 같으므로 재검증도 같은 cwd다.
+- 서버가 준 입력 커밋을 Runner 저장소가 아직 모르면 원격 main을 먼저 받는다(`fetch`).
+- **입력 사본**: 입력 커밋의 `prototype/`을 읽기 전용 사본(`inputs/<저장소>/in-v<입력 버전>-<커밋 12자리>`)으로 만든다.
+  - 이미 있으면 다시 쓴다. `prototype/`이 없는 커밋이면 만들지 않는다.
+  - 위치는 지시문 끝 「[Runner 안내]」에 적는다(`prepare`가 돌려주는 `notes`).
+- 폴더 만들기는 모두 `GitRepository.createWorktree`가 한다.
+  - 전용 계정 배치는 Runner 전용 준비 폴더(`.prep-<uuid>`, 0700)에서 clone → remote remove → checkout을 끝낸다.
+  - 그 뒤 0770으로 바꿔 제자리로 옮긴다(조정자 결정 6). 넘긴 뒤 Runner git은 그 폴더에서 돌지 않는다.
+  - 폴더의 HEAD는 Agent 계정 git(래퍼 `git-inspect`)으로만 본다(`worktreeHead`).
+- 하위 Agent 정의 파일은 이 준비 뒤 `Execution`이 래퍼 `agent-file`(Agent 계정)로 넣는다.
+- ① 공급원의 `worktree(context)`는 개발 폴더의 `{ id, branch }`다. 로컬 Agent 브랜치는 `agent/<폴더 이름>`이다.
 
-### 3) `jobs.taskCheck`: ① 공급원 `TaskCheckSources`
+정리(`settle`)는 결과 보고를 서버가 받아들인 뒤에 한다.
 
-- 함수가 아니라 공급원 객체를 넘긴다. 앱이 자기 GitHub 클라이언트·`Execution`·`Runner`·API로 `bindTaskCheck`를 부른다.
-- `repo`: 1)과 같은 `GitRepository`.
-- `worktree(context)`: 1)에서 만든 작업 폴더의 `{ id, branch }`.
-- `launch(argv, cwd)`: `ciLaunch(argv, cwd, env)`(`src/ci/launch.ts`)를 그대로 쓴다. 전용 계정이면 `Execution.command`가 래퍼 `ci-run`으로 감싼다.
-- `collectTests`: **생략한다.** 생략하면 `bindTaskCheck`가 이 시도의 job으로 묶인 실행기(`Execution.command`)로 `createTestCollector`(`src/ci/collect-tests.ts`)를 쓴다.
-  - 왜: 목록 명령도 Agent 코드(시험 설정)를 실행하므로 같은 job의 슬롯·보유·격리(래퍼 `ci-run`)로 돌아야 한다. 시험만 가짜 수집기를 넣는다.
-- `observeMainPipeline`: 고정한 main의 파이프라인 정의를 입력 관측 API로 보고한다(CI 처리기의 `#observe`와 같은 일).
+- qa·reverify: 검증 폴더를 지운다.
+- 판정이 PASS면 개발 폴더도 지운다. 다음 재작업(② 실패 등)은 원격 Task 브랜치에서 다시 만든다.
+- dev·rework: 지우지 않는다. QA FAIL 뒤 재작업이 같은 폴더를 쓴다.
+- 왜 보고 뒤인가: 보고 전에 지우면, 응답을 잃고 다시 시작할 때 검사한 커밋을 다시 볼 수 없다.
+- 정리 실패는 경고로만 알린다(`onError`). 남은 폴더는 다음 준비나 초기화 정리(`reset`)가 다시 지운다.
+- 병합 뒤(done으로 가는 길): CI 처리기가 병합을 확인하면 앱이 그 Task 브랜치의 개발·검증 폴더를 모두 지운다(`jobs.merged` → `release`).
+  - 왜: QA PASS 뒤 정리가 실패했거나 병합 전 재작업으로 폴더를 다시 만들었으면 남아 있을 수 있다.
+  - 실패해도 병합 결과는 그대로다. 경고만 남긴다.
+- 끝난 Task(done·취소): 서버 정책 `closedBranches`(끝났고 열린 보유가 없는 Task의 브랜치)를 30초마다 보고, 아직 정리하지 않은 브랜치를 같은 함수(`release`)로 지운다.
+  - 왜: 취소는 Runner에게 따로 알려지지 않는다. 취소는 시작 전 Task만 되지만, 작업 폴더는 start 전에 준비되므로 시작 전 실패로 남은 폴더가 있을 수 있다.
+  - 실패한 브랜치는 다음 주기에 다시 한다. Runner를 다시 시작하면 처음부터 다시 보며, 기록에 없는 폴더는 바로 넘어간다.
+
+## 결과 수집(`collect.ts`, `output.ts`)
+
+`collect(context)`는 아래 순서로 일한다.
+
+1. 종료 메시지를 JSON Schema로 검사한다(contracts §5).
+   - 전체가 JSON이거나, 마지막 `json` 코드 블록이어야 한다. 다른 모양은 추측하지 않는다.
+   - 의미 검사도 한다. 업무 응답은 이번에 전달한 메시지에만 쓸 수 있다.
+   - QA 항목은 서버가 준 체크리스트 키로만, 모든 항목을 한 번씩 보고해야 한다. PASS이면 모든 항목이 PASS여야 한다.
+2. 맞지 않으면 **같은 세션에 한 번만** 수정 요청을 보낸다(`Execution.followUp`).
+   - 같은 job·fence·임대다. 물리 슬롯을 다시 받고(`acquireJobSlots`) 프로세스를 등록한 뒤, 끝나면 종료 증거로 반환한다.
+   - 왜: 슬롯을 반환한 뒤 서버 보유 없이 프로세스를 띄우면 PC 자리 계산과 정리 대조가 어긋난다.
+   - 세션 ID가 없으면 수정 요청을 보낼 수 없다. 새 세션을 열지 않는다.
+   - 수정 요청 세션은 하위 Agent 정의 없이 돈다. 첫 실행이 끝날 때 이미 걷어 냈기 때문이다.
+3. 수정 요청 뒤에도 틀리면 역할에 따라 다르게 끝낸다.
+   - dev·rework: `failure`(`Agent 종료 메시지 형식 오류(…)`)로 보고한다. 서버가 실행 실패로 세고 자동 재시도 규칙을 적용한다.
+   - qa·reverify: 판정을 지어내지 않고 멈춘다(`CollectError`, 시도는 interrupted). 서버가 QA 결과에 `failure`를 받지 않기 때문이다.
+4. 개발: 변경 파일은 Agent 자기보고가 아니라 Runner bare 저장소의 git diff다(`changedPaths`).
+   - 이름 변경은 옛 경로와 새 경로를 모두 넣는다.
+   - 입력은 ①이 래퍼 `git-bundle`로 가져와 검사·push한 결과 커밋(`resultHead`)이다. 다시 가져오지 않는다.
+   - 왜: 검사한 커밋과 보고하는 커밋이 같아야 한다.
+   - 수정 요청을 보냈으면 폴더의 HEAD·청결을 Agent 계정 git으로 다시 본다. 바뀌었으면 검사하지 않은 코드이므로 멈춘다.
+5. 검증: `headSha`는 준비 때 고정한 커밋, `specRevision`은 지시문의 명세 버전(`instructions.revision`)이다.
+   - 끝난 폴더의 HEAD·청결을 Agent 계정 git으로 다시 본다(`taskCheckPath`). 다르거나 더러우면 멈춘다.
+   - 체크리스트는 서버가 qa·reverify job의 지시문(`instructions.checklist`)에 준 키만 쓴다.
+6. Evidence: 검증한 종료 메시지와 Runner 관측(headSha·변경 파일 등)을 JSON 파일 하나로 먼저 올리고(`uploadEvidence`), 그 ID를 보고한다.
+   - 종류는 `dev-report`·`qa-report`·`agent-output-invalid`·`agent-evidence`다.
+7. Agent 증거 파일(QA): QA는 검증 폴더의 `.awbs-evidence/` 안에 파일을 두고 `criteria[].evidence`에 파일 이름만 적는다.
+   - Runner는 그 파일을 Agent 계정(래퍼 `evidence-read`)으로만 받아 Runner 전용 임시 파일에 쓴 뒤 올린다(`agent-evidence`).
+   - 왜: Runner 계정이 Agent가 쓸 수 있는 폴더의 파일을 직접 열면, Agent가 그 자리를 Runner 파일(토큰 등) 링크로 바꿔 서버로 새어 나가게 할 수 있다.
+   - 일반 파일만, 파일마다 50 MiB, 모두 20개까지다. 하위 폴더·링크는 받지 않는다.
+   - 적힌 파일이 없으면 형식 오류로 센다(수정 요청 1회 대상).
+   - 체크리스트 항목의 증거는 그 항목의 첫 증거 파일이다. 없으면 QA 보고 JSON이다.
+   - `.awbs-evidence/`는 준비 때 만들고 `.git/info/exclude`로 청결 확인에서 뺀다. 증거는 커밋 대상이 아니다.
 
 ## M7-06 연결 계약
 
@@ -180,10 +239,9 @@ QA는 검사한 `headSha`·`specRevision`·입력 버전을 고정해야 한다.
 QA 종료 때 코드 변경과 작업 폴더의 청결도 다시 확인해야 한다.
 왜: 원문을 그대로 API 결과로 보내면 Agent가 실제로 확인하지 않은 코드가 통과할 수 있다.
 
-M5-05는 이 수집기를 호출하는 경계까지 제공한다.
-실제 Git·Evidence·Agent 출력 수집기는 자동으로 연결하지 않는다.
-시나리오의 수집기는 가짜 CLI의 고정 결과와 실제 Git 변경 목록을 사용하는 시험 공급원이다.
-작업 폴더가 깨끗한지도 실제 Git으로 확인한다.
+실제 수집기는 위 「결과 수집」의 `bindCollect`다.
+기존 시나리오(`attempt-flow.scenario.test.ts`)의 수집기는 가짜 CLI의 고정 결과와 실제 Git 변경 목록을 쓰는 시험 공급원이다.
+실제 연결 시나리오는 `attempt-wiring.scenario.test.ts`다.
 
 수집이 끝나면 메시지 업무 응답을 먼저 보낸다.
 이어서 `POST /api/runner/attempts/:attemptId/result`를 보낸다.
@@ -261,6 +319,17 @@ Planning 호출자는 시도용 `collect`나 `Execution`을 만들 필요가 없
 ## 확인 명령
 
 `pnpm -C agent-wbs test:scenario -- attempt-flow`
+
+`pnpm -C agent-wbs test:scenario -- attempt-wiring`
+
+`attempt-wiring`은 실제 `attemptWiring`(작업 폴더 준비·결과 수집·①)으로 claim → prepare → 세션 → ① → collect → QA → ② → 병합 → done을 돈다.
+
+- 같은 계정 배치 다섯 경우: 끝까지, 형식 수정 요청 1회, 수정 뒤에도 틀림, QA가 폴더를 더럽힘, QA FAIL → 재작업 → 재검증.
+- 전용 계정 배치(host) 한 경우: 래퍼와 사용자 scope로 같은 흐름을 돈다.
+  - 설치된 래퍼가 저장소 래퍼와 같으면 실제 Agent 계정(awbs-agent)으로 돈다.
+  - 다르면(owner가 새 래퍼를 설치하기 전) 새 래퍼 사본과 같은 계정 fake sudo로 돈다. 계정 전환만 대신한다(`dedicated-scope.host.ts`와 같은 방법).
+- fake CLI(`test/fakes/agent-cli.mjs`)는 실제로 파일을 바꾸고 커밋한다. 전용 계정에서는 래퍼 `ci-run`(고정 PATH의 node)으로 뜬다.
+  - 왜: 래퍼 `run`은 실제 Claude·Codex 진입점만 받는다(조정자 결정 4).
 
 전용 테스트 DB(데이터베이스)의 `TEST_DATABASE_URL`을 지정한다.
 fake CLI와 실제 로컬 프로세스를 사용한다.

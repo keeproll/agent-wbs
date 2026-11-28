@@ -2128,6 +2128,7 @@ export interface Operations {
           options: string;
           grade: "verified" | "partial" | "unverified";
         })[];
+        closedBranches?: (string)[];
       };
       304: undefined;
     };

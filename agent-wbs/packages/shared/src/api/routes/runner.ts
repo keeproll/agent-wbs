@@ -760,6 +760,9 @@ export const runnerOperations = [
         cliGrades: List(
           Type.Object({ agent: c.Agent, version: Type.String(), model: Type.String(), options: Type.String(), grade: m.ObservationGrade }),
         ),
+        // collect-prepare: 끝난 Task(done·cancelled)의 시도 브랜치 중 열린 실행 보유가 없는 것(최근 끝난 것부터 최대 500개).
+        // Runner는 이 브랜치의 개발·검증 작업 폴더를 지운다(병합 뒤 정리와 같은 함수). 취소된 Task를 Runner가 알 수 있는 유일한 길이다.
+        closedBranches: Opt(List(Text, { maxItems: 500, uniqueItems: true })),
       }),
       304: null,
     },

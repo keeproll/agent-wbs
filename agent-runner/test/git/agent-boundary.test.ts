@@ -7,7 +7,7 @@ import { access, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, test } from 'vitest';
-import type { AgentGit } from '../../src/git/agent-git.ts';
+import { localManifest, type AgentGit } from '../../src/git/agent-git.ts';
 import { assertRunnerGit, GitRepository, setGitAudit } from '../../src/git/repository.ts';
 
 let root: string, remote: string, head: string, agentRoot: string;
@@ -31,6 +31,8 @@ function silentAgentGit(answer: () => { head: string; dirty: boolean }, bundleFr
   return {
     calls,
     inspect: async (path) => { calls.push(`inspect ${path}`); return answer(); },
+    // 파일 목록은 git을 쓰지 않는다(폴더를 직접 훑는다). 래퍼 tree-manifest와 같은 규칙의 같은 계정 대역.
+    manifest: async (path, format, tracked) => { calls.push(`manifest ${path}`); return localManifest(path, format, tracked); },
     bundle: async (path, branch, out) => {
       calls.push(`bundle ${path} ${branch}`);
       // 실제 Agent 쪽 bundle 대신, 시험이 Runner와 무관한 원본 저장소에서 같은 커밋의 bundle을 만든다.
@@ -56,7 +58,7 @@ test('PoC 1 반대 단언: 검사 사본에 partialClone promisor·uploadpack을
   await repo.taskCheckPath('ci-poc', head);
   await expect(access(marker)).rejects.toMatchObject({ code: 'ENOENT' });
   expect(touched).toEqual([]);
-  expect(agentGit.calls).toEqual([`inspect ${work}`]);
+  expect(agentGit.calls).toEqual([`inspect ${work}`, `manifest ${work}`]);
 });
 
 test('PoC 2 반대 단언: 작업 폴더는 Runner 전용 준비 폴더(0700)에서 clone·checkout을 끝낸 뒤에만 제자리에 나타난다', async () => {
@@ -102,7 +104,7 @@ test('전수 목록: Runner git이 Agent 작업 영역에 닿는 호출은 준�
   await repo.endReset();
   const prep = (op: string) => op === 'clone' ? 'clone cwd=<runner>' : `${op} cwd=<area>/project/.prep-*`;
   expect(calls).toEqual(['clone', 'remote', 'checkout', 'clone', 'remote', 'checkout'].map(prep));
-  expect(agentGit.calls.map((c) => c.split(' ')[0])).toEqual(['bundle', 'inspect']);
+  expect(agentGit.calls.map((c) => c.split(' ')[0])).toEqual(['bundle', 'inspect', 'manifest']);
 });
 
 test('가드: Runner git의 cwd·--git-dir·--work-tree·경로 인자가 Agent 작업 폴더면 거부한다(준비 폴더만 예외)', async () => {

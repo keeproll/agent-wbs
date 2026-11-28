@@ -117,3 +117,20 @@ test('fix2 추가: 전용 계정 배치의 Execution은 하위 Agent 정의를 A
   expect(app(run, '/srv/agentwbs').execution.agentFiles.kind).toBe('agent-account');
   expect(app(run, null).execution.agentFiles.kind).toBe('same-account');
 });
+
+test('시도 흐름 연결(attemptWiring): 앱이 결과 수집·①을 자기 Execution·Runner·API로 묶고, 연결하지 않으면 흐름이 없다(기본 꺼짐)', async () => {
+  const { attemptWiring } = await import('../src/jobs/wiring.ts');
+  const run = vi.fn<RunCommand>(async () => ({ code: 0, stdout: '', stderr: '' }));
+  const base = { state, api, home, version: 't', env: {}, warn: () => undefined, hostSources, cliRegistry: registry, run, cliRun: run, cliUpdates: false,
+    github: { repo: { owner: 'o', repo: 'r' }, mode: 'gh' as const }, githubFetch: vi.fn() as unknown as typeof fetch };
+  expect(new RunnerApp(base).jobs).toBeUndefined();
+  const wiring = attemptWiring({ home, agentRoot: null, repoUrl: 'https://github.com/o/r', api, epoch: () => 1, warn: () => undefined, env: {} });
+  const a = new RunnerApp({ ...base, ...wiring });
+  expect(a.jobs).toBeDefined();
+  const deps = bound.at(-1) as Record<string, unknown>;
+  expect(deps.execution).toBe(a.execution);
+  expect(deps.github).toBe(a.github?.client);
+  // 로컬 clone이 아직 없으면 준비가 실패한다(시도를 만들지 않는 시작 전 실패).
+  await expect(wiring.execution.prepare({ id: 'j', fence: 1, leaseUntil: '', kind: 'attempt', payload: { taskKey: 'TASK-0001', kind: 'dev', agent: 'Claude',
+    branch: 'agent/TASK-0001-h1', baseCommit: 'a'.repeat(40), inputVersion: 1, instructions: {} } })).rejects.toThrow('등록 기록');
+});

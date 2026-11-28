@@ -1,5 +1,9 @@
+import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { open } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, mkdir, mkdtemp, open, readdir, readFile, readlink, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { AGENT_EXEC, AGENT_USER } from '../cli/dedicated-user.ts';
 import { clearScope, inUserScope } from '../exec/scope.ts';
 
@@ -14,7 +18,13 @@ import { clearScope, inUserScope } from '../exec/scope.ts';
  * - bundle: 브랜치의 git bundle(데이터 파일)을 Runner 소유 파일로 받는다. Runner는 자기 bare 저장소에서 verify 뒤 fetch한다.
  */
 export interface AgentGit {
+  /** HEAD와 참고용 dirty. dirty는 Agent의 .git을 믿는 값이라 청결 판정에 쓰지 않는다(P2-1). 판정은 `manifest` 대조다. */
   inspect(path: string): Promise<{ head: string; dirty: boolean }>;
+  /**
+   * 작업 폴더의 실제 파일 목록(래퍼 `tree-manifest`, collect-prepare P2-1). Agent의 .git은 읽지 않는다.
+   * `tracked`(기대 커밋의 경로)만 내용 hash를 낸다. 나머지는 hash 없이 목록에만 오른다.
+   */
+  manifest(path: string, format: ObjectFormat, tracked: readonly string[]): Promise<ManifestEntry[]>;
   /** `out`은 Runner 전용 폴더의 새 파일 경로다(0600으로 만든다). */
   bundle(path: string, branch: string, out: string): Promise<void>;
 }
@@ -24,7 +34,86 @@ const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 export const BUNDLE_LIMIT = 2 * 1024 ** 3;
 const TIMEOUT_MS = 10 * 60_000;
 
-export class AgentGitError extends Error { override name = 'AgentGitError'; }
+export class AgentGitError extends Error {
+  override name = 'AgentGitError';
+  /** 명령의 종료 코드(알면). */
+  exitCode?: number | null;
+  /** 출력이 상한을 넘어 끊었다. */
+  overflow?: boolean;
+}
+/** 증거 파일이 받을 수 없는 모양(링크·일반 파일 아님·상한 초과)이다. 시도 중단이 아니라 Agent의 형식 문제로 센다(P3-3). */
+export class EvidenceRejectedError extends AgentGitError { override name = 'EvidenceRejectedError'; }
+
+export type ObjectFormat = 'sha1' | 'sha256';
+/** 파일 하나. kind는 git tree의 모드 표기(일반 파일 100644·실행 파일 100755·링크 120000), 그 밖은 other. */
+export interface ManifestEntry { kind: '100644' | '100755' | '120000' | 'other'; hash: string | null; path: string }
+/** 파일 목록 출력 상한(256 MiB). 넘으면 판정하지 않고 실패한다. */
+export const MANIFEST_LIMIT = 256 * 1024 ** 2;
+/** 맨 위에서 빼는 폴더. .git은 판정에 쓰지 않고, 나머지 둘은 Runner가 정한 커밋 대상 밖 폴더다. */
+export const MANIFEST_SKIP = ['.git', '.awbs-home', '.awbs-evidence'] as const;
+
+/** 래퍼 `tree-manifest` 출력(「종류 NUL hash NUL 경로 NUL」 반복)을 읽는다. 모양이 다르면 실패한다. */
+export function parseManifest(bytes: Buffer): ManifestEntry[] {
+  const fields = bytes.toString('utf8').split('\0');
+  if (fields.at(-1) !== '') throw new AgentGitError('파일 목록 모양이 다릅니다(끝).');
+  fields.pop();
+  if (fields.length % 3 !== 0) throw new AgentGitError('파일 목록 모양이 다릅니다(칸 수).');
+  const entries: ManifestEntry[] = [];
+  for (let i = 0; i < fields.length; i += 3) {
+    const kind = fields[i] ?? '', hash = fields[i + 1] ?? '', path = fields[i + 2] ?? '';
+    if (!['100644', '100755', '120000', 'other'].includes(kind) || !(hash === '-' || SHA.test(hash)) || path === '' || path.startsWith('/')) {
+      throw new AgentGitError('파일 목록 모양이 다릅니다(항목).');
+    }
+    entries.push({ kind: kind as ManifestEntry['kind'], hash: hash === '-' ? null : hash, path });
+  }
+  return entries;
+}
+
+/** git blob hash(필터 없이). `git hash-object --no-filters`와 같은 값이다. */
+export function blobHash(format: ObjectFormat, content: Buffer): string {
+  return createHash(format === 'sha256' ? 'sha256' : 'sha1').update(`blob ${String(content.length)}\0`).update(content).digest('hex');
+}
+
+/**
+ * 같은 계정 배치·시험용 파일 목록(래퍼 `tree-manifest`와 같은 규칙). 폴더를 직접 훑고 링크를 따라가지 않는다(lstat).
+ * 왜 따로 두나: 같은 계정 배치에는 래퍼가 없다. 규칙이 같아야 두 배치의 판정이 같다.
+ */
+export async function localManifest(root: string, format: ObjectFormat, tracked: readonly string[]): Promise<ManifestEntry[]> {
+  const wanted = new Set(tracked);
+  const entries: ManifestEntry[] = [];
+  const walk = async (rel: string): Promise<void> => {
+    for (const name of await readdir(join(root, rel))) {
+      const path = rel ? `${rel}/${name}` : name;
+      if (!rel && (MANIFEST_SKIP as readonly string[]).includes(name)) continue;
+      const info = await lstat(join(root, path));
+      if (info.isDirectory()) { await walk(path); continue; }
+      const kind: ManifestEntry['kind'] = path.includes('\n') ? 'other' : info.isSymbolicLink() ? '120000' : info.isFile() ? (info.mode & 0o100 ? '100755' : '100644') : 'other';
+      let hash: string | null = null;
+      if (wanted.has(path) && kind === '120000') hash = blobHash(format, Buffer.from(await readlink(join(root, path))));
+      else if (wanted.has(path) && kind !== 'other') hash = blobHash(format, await readFile(join(root, path)));
+      entries.push({ kind, hash, path });
+    }
+  };
+  await walk('');
+  return entries;
+}
+
+/**
+ * 기대 커밋(Runner bare 저장소의 tree)과 실제 파일 목록을 대조한다(P2-1).
+ * - 기대 경로: 종류(일반·실행·링크)와 blob hash가 같아야 한다. 없거나 다르면 `changed`.
+ * - 기대에 없는 경로: `extra`. 호출자가 커밋된 .gitignore로 무시되는지 본다(`untrackedNotIgnored`).
+ * gitlink(160000, 하위 저장소)는 대조할 수 없으므로 `changed`로 센다(추측하지 않는다).
+ */
+export function compareManifest(expected: readonly { mode: string; oid: string; path: string }[], actual: readonly ManifestEntry[]): { changed: string[]; extra: string[] } {
+  const seen = new Map(actual.map((entry) => [entry.path, entry]));
+  const changed: string[] = [];
+  for (const want of expected) {
+    const got = seen.get(want.path);
+    if (!got || got.kind !== want.mode || got.hash !== want.oid) changed.push(want.path);
+    seen.delete(want.path);
+  }
+  return { changed, extra: [...seen.keys()] };
+}
 
 /** `head <sha>` / `dirty 0|1` 두 줄만 받는다. 다른 모양이면 실패. */
 export function parseInspect(stdout: string): { head: string; dirty: boolean } {
@@ -94,9 +183,9 @@ export async function captureCode(command: Spawned, options: CaptureOptions): Pr
       throw new AgentGitError('Agent 계정 명령이 끝난 뒤에도 자손 프로세스가 출력 통로를 쥐고 있어 정리했습니다. 결과를 쓰지 않습니다.');
     }
     await writing;
-    if (overflow) throw new AgentGitError('Agent 계정 명령의 출력이 상한을 넘었습니다.');
+    if (overflow) throw Object.assign(new AgentGitError('Agent 계정 명령의 출력이 상한을 넘었습니다.'), { overflow: true });
     const code = first.code;
-    if (code === null || !(options.allow ?? [0]).includes(code)) throw new AgentGitError(`Agent 계정 명령이 종료 코드 ${String(code)}로 끝났습니다.`);
+    if (code === null || !(options.allow ?? [0]).includes(code)) throw Object.assign(new AgentGitError(`Agent 계정 명령이 종료 코드 ${String(code)}로 끝났습니다.`), { exitCode: code });
     return { code, stdout: Buffer.concat(chunks).toString('utf8') };
   } finally {
     destroy();
@@ -127,8 +216,56 @@ export function wrapperAgentGit(cfg: WrapperConfig = { user: AGENT_USER, exec: A
   const call = async (args: string[], out?: { path: string; limit: number }): Promise<string> => (await wrapperCall(cfg, args, { ...(out && { out }) })).stdout;
   return {
     async inspect(path) { return parseInspect(await call(['git-inspect', '--cwd', path])); },
+    async manifest(path, format, tracked) {
+      const out = join(tmpdir(), `awbs-manifest-${randomUUID()}`);
+      try {
+        await wrapperCall(cfg, ['tree-manifest', '--cwd', path, '--object-format', format], { input: tracked.map((p) => `${p}\0`).join(''), out: { path: out, limit: MANIFEST_LIMIT } });
+        return parseManifest(await readFile(out));
+      } finally { await rm(out, { force: true }); }
+    },
     async bundle(path, branch, out) { await call(['git-bundle', '--cwd', path, '--branch', branch], { path: out, limit: BUNDLE_LIMIT }); },
   };
+}
+
+/** 작업 폴더 안 증거 폴더 이름. 준비 때 만든다. 청결 판정은 이 폴더(맨 위)를 뺀다(`untrackedNotIgnored`·래퍼 git-inspect). */
+export const EVIDENCE_DIR = '.awbs-evidence';
+/** 추적 안 된 파일 목록 상한(256 MiB, NUL로 이은 경로). 넘으면 판정하지 않고 실패한다. */
+const UNTRACKED_LIMIT = 256 * 1024 ** 2;
+/** Runner가 정한 폴더(맨 위만). 커밋 대상이 아니므로 청결 판정에서 뺀다. */
+const RUNNER_DIRS = ['.awbs-home/', `${EVIDENCE_DIR}/`];
+
+/**
+ * 추적 안 된 파일 중 「커밋된 .gitignore로 무시되지 않는 것」을 돌려준다(래퍼 git-inspect의 untracked_left와 같은 규칙).
+ * 왜: 무시 규칙을 Agent가 바꿀 수 있는 곳(.git/info/exclude, 전역 excludesFile, 커밋하지 않은 .gitignore 변경)에서 읽으면
+ *   Agent가 패턴을 더해 남긴 파일을 청결 확인에서 숨길 수 있다.
+ * - `untracked`: 무시 규칙 없이 뽑은 추적 안 된 파일(ls-files --others, NUL로 이음).
+ * - `rules`: 커밋(HEAD 또는 검사 대상 커밋)에 들어 있는 .gitignore 파일들의 경로와 내용.
+ * 판정은 규칙만 넣은 빈 임시 저장소에서 `check-ignore --no-index`로 한다. 작업 폴더의 설정·파일은 읽지 않는다.
+ */
+export async function untrackedNotIgnored(untracked: Buffer, rules: { path: string; content: Buffer }[], base = tmpdir()): Promise<string[]> {
+  const paths = untracked.toString('utf8').split('\0').filter(Boolean).filter((path) => !RUNNER_DIRS.some((dir) => path.startsWith(dir)));
+  if (paths.length === 0) return [];
+  const work = await mkdtemp(join(base, 'awbs-ignore-'));
+  const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: work, LANG: 'C.UTF-8', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_OPTIONAL_LOCKS: '0' };
+  const git = (args: string[], options: CaptureOptions = {}) => captureCode({ file: 'git', args: ['-C', work, '-c', 'core.excludesFile=/dev/null', '-c', 'core.hooksPath=/dev/null', ...args], env, cwd: work }, options);
+  try {
+    await git(['init', '-q', '--template=', '.']);
+    for (const rule of rules) {
+      if (rule.path.split('/').some((part) => ['', '.', '..', '.git'].includes(part)) || !rule.path.endsWith('.gitignore')) throw new AgentGitError('무시 규칙 경로가 올바르지 않습니다.');
+      await mkdir(join(work, dirname(rule.path)), { recursive: true });
+      await writeFile(join(work, rule.path), rule.content, { flag: 'wx' });
+    }
+    const judged = join(work, '.git', 'judged');
+    await git(['check-ignore', '--no-index', '--stdin', '-z', '-v', '-n'], { input: `${paths.join('\0')}\0`, allow: [0, 1], out: { path: judged, limit: UNTRACKED_LIMIT * 2 } });
+    const fields = (await readFile(judged, 'utf8')).split('\0');
+    const left: string[] = [];
+    // 경로마다 「규칙 파일·줄·패턴·경로」 네 칸. 패턴이 비었거나 !로 시작하면 무시되지 않은 파일이다.
+    for (let i = 0; i + 3 < fields.length; i += 4) {
+      const pattern = fields[i + 2] ?? '', path = fields[i + 3] ?? '';
+      if (pattern === '' || pattern.startsWith('!')) left.push(path);
+    }
+    return left;
+  } finally { await rm(work, { recursive: true, force: true }); }
 }
 
 /** 같은 계정 git(전용 계정이 없는 배치·시험). 래퍼와 같은 안전 기본값과 같은 출력 모양을 쓴다. */
@@ -142,10 +279,12 @@ export function localAgentGit(options: { timeoutMs?: number } = {}): AgentGit {
     async inspect(path) {
       const head = (await git(path, ['rev-parse', '--verify', 'HEAD^{commit}'])).trim();
       if (!SHA.test(head)) throw new AgentGitError('HEAD 모양이 아닙니다.');
+      // 참고용 dirty(래퍼 git-inspect와 같음). 청결 판정은 manifest 대조다.
       const status = await git(path, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']);
       const flags = (await git(path, ['ls-files', '-v'])).split('\n').some((line) => /^[a-zS] /.test(line));
       return parseInspect(`head ${head}\ndirty ${status || flags ? '1' : '0'}\n`);
     },
+    manifest: (path, format, tracked) => localManifest(path, format, tracked),
     async bundle(path, branch, out) { await git(path, ['bundle', 'create', '--quiet', '-', `refs/heads/${branch}`], { path: out, limit: BUNDLE_LIMIT }); },
   };
 }
@@ -188,3 +327,59 @@ export function wrapperAgentFiles(cfg: WrapperConfig = { user: AGENT_USER, exec:
     async remove(cwd, rel) { check(rel); await wrapperCall(cfg, ['agent-file', 'remove', '--cwd', cwd, '--path', rel]); },
   };
 }
+
+/**
+ * QA가 남긴 증거 파일(작업 폴더의 `.awbs-evidence/<이름>`)을 Runner 전용 파일로 받는다(collect-prepare).
+ * 전용 계정 배치는 래퍼 `evidence-read`(Agent 계정)로만 읽는다. Runner 계정은 Agent가 쓸 수 있는 폴더의 파일을 직접 열지 않는다.
+ * 왜: Runner가 열면 Agent가 그 자리를 Runner 파일(토큰·설정) 링크로 바꿔 서버로 올리게 만들 수 있다. Agent 계정으로 읽으면 Agent 권한까지다.
+ */
+export interface AgentEvidence {
+  /** `out`(Runner 전용 폴더의 새 파일, 0600)에 내용을 쓴다. 파일이 없으면 false. 일반 파일이 아니거나 `limit`보다 크면 예외다. */
+  read(cwd: string, name: string, out: string, limit: number): Promise<boolean>;
+}
+
+/** 증거 파일 이름. 폴더 구분(/)·숨김 이름(.으로 시작)은 받지 않는다. 래퍼와 같은 규칙이다. */
+export const EVIDENCE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+
+export function wrapperAgentEvidence(cfg: WrapperConfig = { user: AGENT_USER, exec: AGENT_EXEC }): AgentEvidence {
+  return {
+    async read(cwd, name, out, limit) {
+      if (!EVIDENCE_NAME.test(name)) throw new AgentGitError('증거 파일 이름 모양이 아닙니다.');
+      try {
+        const result = await wrapperCall(cfg, ['evidence-read', '--cwd', cwd, '--name', name], { out: { path: out, limit }, allow: [0, 3] });
+        return result.code === 0;
+      } catch (error) {
+        // 4: 일반 파일이 아님(래퍼), overflow: 상한 초과. 그 밖(sudo·scope·시간 초과 등)은 그대로 알린다(결과를 모름).
+        if (error instanceof AgentGitError && (error.exitCode === 4 || error.overflow)) throw new EvidenceRejectedError(`증거 파일 ${name}을 받을 수 없습니다(${error.overflow ? '상한 초과' : '일반 파일이 아님'}).`, { cause: error });
+        throw error;
+      }
+    },
+  };
+}
+
+/** 같은 계정 배치(전용 계정 없음·시험). 링크를 따라가지 않고(O_NOFOLLOW) 일반 파일만 읽는다. */
+export const localAgentEvidence: AgentEvidence = {
+  async read(cwd, name, out, limit) {
+    if (!EVIDENCE_NAME.test(name)) throw new AgentGitError('증거 파일 이름 모양이 아닙니다.');
+    const dir = await lstat(join(cwd, EVIDENCE_DIR)).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return undefined; throw error; });
+    if (!dir) return false;
+    if (!dir.isDirectory() || dir.isSymbolicLink()) throw new EvidenceRejectedError('증거 폴더가 일반 폴더가 아닙니다.');
+    let source;
+    try { source = await open(join(cwd, EVIDENCE_DIR, name), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      if (['ELOOP', 'ENXIO', 'EISDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) throw new EvidenceRejectedError(`증거 파일 ${name}을 받을 수 없습니다(링크이거나 일반 파일이 아님).`, { cause: error });
+      throw new AgentGitError('증거 파일을 열 수 없습니다.', { cause: error });
+    }
+    try {
+      const info = await source.stat();
+      if (!info.isFile()) throw new EvidenceRejectedError(`증거 파일 ${name}을 받을 수 없습니다(일반 파일이 아님).`);
+      if (info.size > limit) throw new EvidenceRejectedError(`증거 파일 ${name}을 받을 수 없습니다(상한 초과).`);
+      const bytes = await source.readFile();
+      if (bytes.length > limit) throw new EvidenceRejectedError(`증거 파일 ${name}을 받을 수 없습니다(상한 초과).`);
+      const target = await open(out, 'wx', 0o600);
+      try { await target.writeFile(bytes); } finally { await target.close(); }
+      return true;
+    } finally { await source.close(); }
+  },
+};
