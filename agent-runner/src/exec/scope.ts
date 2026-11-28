@@ -127,7 +127,11 @@ async function hasMembers(unit: string): Promise<boolean> {
   return false;
 }
 
-const gone = (e: unknown) => (e as NodeJS.ErrnoException).code === 'ENOENT';
+/**
+ * scope 폴더가 없거나(ENOENT) 지금 지워지는 중(ENODEV)이다. systemd가 빈 scope를 지우는 순간 그 안의 파일을 열면 ENODEV가 난다
+ * (실계정 attempt-wiring에서 짧은 ① 명령 뒤 재현). 어느 쪽이든 이것만으로 「비었다」로 보지 않고 /proc 대조로 확인한다(조정자 결정 8).
+ */
+const gone = (e: unknown) => ['ENOENT', 'ENODEV'].includes((e as NodeJS.ErrnoException).code ?? '');
 
 /** scope 안에 살아 있는 프로세스가 없는가. scope가 이미 사라졌으면(systemd가 빈 scope를 지움) 비었다. 읽지 못하면 예외. */
 export async function scopeEmpty(unit: string): Promise<boolean> {

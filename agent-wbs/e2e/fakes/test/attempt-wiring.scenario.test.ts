@@ -3,7 +3,7 @@
 // - 전용 계정(host): 이 PC에 래퍼(/usr/local/libexec/awbs-agent-exec)와 awbs-agent 계정이 있으면 같은 흐름을 실제 래퍼·사용자 scope로 한 번 돈다.
 //   fake CLI는 래퍼 ci-run(Agent 계정, 고정 PATH의 node)으로 띄운다. 유료 호출·sudo 비밀번호·네트워크 없음.
 import { spawnSync } from 'node:child_process';
-import { chmod, copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -91,8 +91,11 @@ async function setup(options: { host?: 'account' | 'copy'; claude?: Partial<Agen
     // fake CLI와 시나리오는 Agent 계정이 읽을 수 있는 곳(입력 사본 모음, Agent는 읽기만)에 둔다.
     const fakeDir = join(cfg.root, 'inputs', `${id}-fake`);
     await mkdir(fakeDir, { mode: 0o750 });
-    await copyFile(AGENT_CLI_SCRIPT, join(fakeDir, 'agent-cli.mjs'));
-    for (const [name, value] of Object.entries(scenarios)) await writeFile(join(fakeDir, `${name}.json`), JSON.stringify(value), { mode: 0o640 });
+    // copyFile은 원본 파일의 그룹(Runner 계정)을 그대로 남겨 Agent 계정이 못 읽는다. 내용을 새 파일로 써서 폴더 그룹(awbs-agent, setgid)을 받는다.
+    await writeFile(join(fakeDir, 'agent-cli.mjs'), await readFile(AGENT_CLI_SCRIPT));
+    for (const [name, value] of Object.entries(scenarios)) { await writeFile(join(fakeDir, `${name}.json`), JSON.stringify(value)); await chmod(join(fakeDir, `${name}.json`), 0o640); }
+    // mkdir·writeFile의 mode는 umask에 깎인다(이 PC는 077). Agent 계정(그룹)이 읽을 수 있게 직접 바꾼다.
+    await chmod(fakeDir, 0o750);
     await chmod(join(fakeDir, 'agent-cli.mjs'), 0o640);
     const real = (path: string) => realpathSync.native(path);
     // 세션도 래퍼 ci-run(Agent 계정)으로 띄운다. 래퍼 run은 실제 CLI 진입점만 받으므로 fake는 이 길로만 돈다(조정자 결정 4).
@@ -161,8 +164,10 @@ async function fullFlow(t: Harness) {
   expect((await t.h.run('TASK-0001')).status).toBe(202);
   expect((await t.flow.runNext(20))?.payload).toMatchObject({ kind: 'dev', agent: 'Claude' });
   // 개발 결과: Agent가 작업 폴더에서 커밋한 것을 ①이 bundle로 가져와 검사·push했다. 변경 파일은 git diff다.
+  // 실패하면 시도 기록·① 기록·흐름 오류를 함께 보여 준다(원인 확인용).
+  expect({ attempts: await t.h.rows("select kind,status,pr,failure from task_attempts order by attempt_no"), ci: await t.h.rows('select stage,status,fail_scope from ci_runs'), errors: t.errors.map(String) })
+    .toMatchObject({ attempts: [{ kind: 'dev', status: 'completed', pr: 1 }] });
   const head = t.f.ref(t.f.request.branch);
-  expect(await t.h.rows("select kind,status,pr from task_attempts order by attempt_no")).toEqual([{ kind: 'dev', status: 'completed', pr: 1 }]);
   expect(await t.h.rows('select path from attempt_files')).toEqual([{ path: 'src/result.ts' }]);
   expect(await t.h.rows("select kind from evidence order by created_at")).toEqual([{ kind: 'dev-report' }]);
   expect(await t.h.rows('select head_sha,status from ci_runs where stage=1')).toEqual([{ head_sha: head, status: 'pass' }]);
