@@ -147,3 +147,40 @@ test('fix3(리뷰 4차 P2 재현): 0037 전에 한 트랜잭션으로 함께 만
     } finally { client.release(); }
   } finally { await old.end(); await rm(folder, { recursive: true, force: true }); }
 }, 120_000);
+
+test('M8 선행(0046): 0041 DB의 기존 검증은 업그레이드 뒤 시도 순서대로 순번을 받고, 새 검증은 그 뒤 번호를 받는다', async () => {
+  const old = createPool(url('verif'), { onError: () => undefined });
+  const folder = await mkdtemp(join(tmpdir(), 'awbs-latest-verif-'));
+  try {
+    await recreateTestDatabase(url('verif'));
+    // 0041까지만 적용한 DB(0046 전).
+    const source = fileURLToPath(new URL('../../../packages/db/migrations/', import.meta.url));
+    await cp(source, folder, { recursive: true });
+    const journal = JSON.parse(await readFile(join(source, 'meta/_journal.json'), 'utf8')) as { entries: { idx: number; tag: string }[] };
+    await writeFile(join(folder, 'meta/_journal.json'), JSON.stringify({ ...journal, entries: journal.entries.filter(e => Number(e.tag.slice(0, 4)) <= 41) }));
+    await runMigrations(old, folder);
+    await seedSystem(old);
+    const sha = 'a'.repeat(40);
+    const one = async <T>(sql: string, args: unknown[]) => (await old.query<{ id: T }>(sql, args)).rows[0]?.id as T;
+    const project = await one<string>("insert into projects(name,repo_url,repo_owner,repo_name,lead_instruction,phase) values('0046','','','','','active') returning id", []);
+    const input = await one<string>("insert into input_versions(project_id,v,commit_sha,files,md_list,changes,instruction) values($1,1,$2,'[]','[]','[]','') returning id", [project, sha]);
+    const phase = await one<string>("insert into wbs_nodes(project_id,node_key,kind,title,sort_order) values($1,'PH','phase','단계',1) returning id", [project]);
+    const wp = await one<string>("insert into wbs_nodes(project_id,node_key,kind,parent_id,title,sort_order) values($1,'WP','work_package',$2,'묶음',1) returning id", [project, phase]);
+    const task = await one<string>(`insert into tasks(project_id,task_key,wbs_node_id,sort_order,title,work_type,primary_domain,related_domains,priority,assignee_agent,verifier_agent,status,verif_state,src_input_version)
+      values($1,'TASK-0001',$2,1,'순번','Implementation','BE','{}',1,'Codex','Codex','rework','none',$3) returning id`, [project, wp, input]);
+    // 시도 1(QA)·시도 2(재검증)와 각 검증. 나중 검증의 시각이 2.3초 이르고(시계 역행), id(UUID)도 거꾸로 준다.
+    for (const [no, kind, vid, at] of [[1, 'qa', 'ffffffff-0000-4000-8000-000000000001', '2026-11-27T10:00:02.300Z'], [2, 'reverify', '10000000-0000-4000-8000-000000000002', '2026-11-27T10:00:00.000Z']] as const) {
+      const job = await one<string>("insert into runner_jobs(project_id,epoch,kind,payload,dedup_key,state,fence,generation) values($1,1,'attempt',$2,$3,'done',1,1) returning id",
+        [project, { taskKey: 'TASK-0001', kind, agent: 'Codex', baseCommit: sha, branch: 'agent/TASK-0001-h1' }, `0046-${String(no)}`]);
+      const attempt = await one<string>(`insert into task_attempts(project_id,task,attempt_key,attempt_no,job,base_sha,head_sha,spec_revision,input_version,kind,agent,status,started_at,ended_at,model_id,effort,branch,generation)
+        values($1,$2,$3,$4,$5,$6,$6,1,$7,$8,'Codex','completed',$9,$9,'gpt-6.1-sol','high','agent/TASK-0001-h1',1) returning id`, [project, task, `ATT-0001-${String(no)}`, no, job, sha, input, kind, at]);
+      await old.query("insert into verifications(id,project_id,attempt,result,head_sha,spec_revision,cmd,expected,actual,created_at) values($1,$2,$3,'FAIL',$4,1,'t','e','a',$5)", [vid, project, attempt, sha, at]);
+    }
+    await runMigrations(old);
+    expect((await old.query('select a.attempt_no no,v.record_no::int seq from verifications v join task_attempts a on a.id=v.attempt order by v.record_no')).rows)
+      .toEqual([{ no: 1, seq: 1 }, { no: 2, seq: 2 }]);
+    // 업그레이드 뒤 새 검증은 기존 번호 다음 번호를 받는다(번호 겹침 없음). 앱 역할도 순번을 쓸 수 있다.
+    expect((await old.query("select nextval('verifications_record_no_seq')::int n")).rows[0]?.n).toBe(3);
+    expect((await old.query("select has_sequence_privilege('awbs_app','verifications_record_no_seq','USAGE') ok")).rows[0]?.ok).toBe(true);
+  } finally { await old.end(); await rm(folder, { recursive: true, force: true }); }
+}, 120_000);

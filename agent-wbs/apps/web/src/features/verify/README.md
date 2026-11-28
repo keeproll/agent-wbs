@@ -123,7 +123,7 @@
 | 대시보드 알림 | 「실행 보기」·「확인」 | 대상별 이름(「TASK-0007 실행 보기」「프로젝트 보기」 등), 「확인」 있음 | M3 통합: 서버 후속 3차 `ackAlert`에 연결(shared/ui/AlertAck.tsx). 확인은 원인을 해소하지 않는다 |
 | 대시보드 패널 왼쪽 칸 | PLN-001·CP-002·ATT-0004-2 | 서버 표시 번호가 있으면 원본과 같다. 없으면 Planning·CP·TASK-0004 | M3 통합: 서버 후속 3차가 planningKey·cpKey·attemptKey·verificationKey를 선택 필드로 준다 |
 | 최근 결과 3·4번째 칸 | ID·Task | Task·Agent | 같은 이유 |
-| 검증 ID | 서버 값 V-0007-1 | 서버 `verificationKey`(없으면 같은 Task 검증을 시각 순서로 센 번호) | M3 통합: 서버 후속 3차가 검증 번호를 준다. 선택·주소에는 서버 id를 쓴다 |
+| 검증 ID | 서버 값 V-0007-1 | 서버 `verificationKey`(없으면 같은 Task 검증을 서버 저장 순번 `seq` 순서로 센 번호) | M3 통합: 서버 후속 3차가 검증 번호를 준다. 선택·주소에는 서버 id를 쓴다 |
 | Evidence 이름 | 파일 경로 | 팀장이 추가한 경로는 그대로, Runner 파일은 「종류 · 지문(sha256) 앞 12자리」 + 「원본 내려받기」 | Runner 업로드 Evidence에는 경로가 없다 |
 | Gate 조건 사유 | 마우스를 올려야 보임(title) | title + 화면 읽기 프로그램용 글자 | 접근성 |
 | 이력 필터 | 검색·Task·유형·주체 | + 기간 시작·끝 | MM-18, G L336 |

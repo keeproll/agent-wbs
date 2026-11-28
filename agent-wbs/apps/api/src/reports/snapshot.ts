@@ -137,8 +137,11 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
   });
 
   const attemptsOf = (taskId: string) => attempts.filter((a) => a.task === taskId && upTo(a.started_at));
+  // 「최신 하나」는 시각이 아니라 같은 Task의 시도 번호(attempt_no, 뒤로 가지 않음)로 고른다. 시각 순 목록은 표시용이다(PC 시계가 뒤로 갈 수 있다).
+  // 검증은 시도 하나에 하나뿐이라 검증의 no는 그 시도의 번호다(서버 gate의 「최신 검증」 판정과 같은 기준).
+  const newest = <T extends { no: number }>(list: readonly T[]): T | undefined => list.reduce<T | undefined>((m, x) => (!m || x.no > m.no ? x : m), undefined);
   const lastVerification = (taskId: string) => {
-    const v = verifs.filter((x) => x.task === taskId && upTo(x.at)).at(-1);
+    const v = newest(verifs.filter((x) => x.task === taskId && upTo(x.at)));
     return v ? { id: v.id, result: v.result, cmd: v.cmd, actual: v.actual } : null;
   };
   const checklistOf = (taskId: string) => {
@@ -241,7 +244,7 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
   const gates = await gateInputsAt(client, src, activeTasks.map((t) => t.id));
   const active: ReportSnapshotData['active'] = activeTasks.map((t) => {
     const s = plan.get(t.key);
-    const la = attemptsOf(t.id).at(-1);
+    const la = newest(attemptsOf(t.id));
     const gate = gates.get(t.id);
     const conditions = gate ? completionGate(gate) : [];
     return {
@@ -263,7 +266,7 @@ export async function buildSnapshot(client: PoolClient, projectId: string, perio
       verificationId: v.id, taskKey: t.key, title: t.title, agent: v.agent, at: v.at, cmd: v.cmd, expected: v.expected, actual: v.actual,
       defects: defects.filter((d) => d.verification === v.id).map((d) => d.text), evidence: evidence.filter((e) => e.verification === v.id).map((e) => e.path),
       messages: messages.filter((m) => m.task === v.task && m.dir === 'out' && upTo(m.at) && ms(m.at) >= ms(v.at)).map((m) => ({ msgKey: m.key, delivery: m.delivery ?? '' })),
-      reworks: attempts.filter((a) => a.task === v.task && a.kind === 'rework' && upTo(a.started_at) && ms(a.started_at) > ms(v.at)).map((a) => ({ attemptKey: a.key, status: a.status })),
+      reworks: attempts.filter((a) => a.task === v.task && a.kind === 'rework' && upTo(a.started_at) && a.no > v.no).map((a) => ({ attemptKey: a.key, status: a.status })),
     }];
   });
 

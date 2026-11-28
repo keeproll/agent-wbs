@@ -148,7 +148,7 @@ export function detail(s: TaskStore, key: string): Detail {
 
 export function attempts(s: TaskStore, key: string): Attempt[] {
   return s.attempts.filter((a) => a.task === key).map((a) => ({
-    id: uuid(a.id), attemptKey: a.id, taskKey: key, kind: KIND[a.kind] ?? 'dev', agent: a.agent, status: ATT_ST[a.status] ?? 'completed',
+    id: uuid(a.id), attemptKey: a.id, attemptNo: Number(String(a.id).split('-').at(-1)), taskKey: key, kind: KIND[a.kind] ?? 'dev', agent: a.agent, status: ATT_ST[a.status] ?? 'completed',
     startedAt: iso(a.start), endedAt: a.end ? iso(`${(a.start as string).slice(0, 10)} ${a.end as string}`) : null,
     modelId: a.model ?? null, effort: a.effort ?? null,
     gradeAdjust: a.esc ? { kind: a.escKind === 'down' ? 'down' : 'up', from: { model: a.model, effort: a.effort }, to: { model: a.model, effort: a.effort }, reason: a.esc } : null,
@@ -160,8 +160,10 @@ const evKind = (p: string) => (/\.(png|jpe?g|gif)$/i.test(p) ? '스크린샷' : 
 export function verifications(s: TaskStore, key: string): { vs: Verification[]; ev: Evidence[] } {
   const vs: Verification[] = [];
   const ev: Evidence[] = [];
+  // 저장 순번(seq): 원본 Mock 검증 전체를 기록 시각 순서로 센 번호(Mock 자료는 시계 역행이 없다).
+  const order = [...s.verifs].sort((a, b) => iso(a.at).localeCompare(iso(b.at)) || String(a.id).localeCompare(String(b.id)));
   for (const v of s.verifs.filter((x) => x.task === key)) {
-    vs.push({ id: uuid(v.id), taskKey: key, attemptId: uuid(v.attempt), result: v.result, headSha: '3f9c2a1b7d', specRevision: 1, cmd: v.cmd, expected: v.expected, actual: v.actual,
+    vs.push({ id: uuid(v.id), seq: order.indexOf(v) + 1, taskKey: key, attemptId: uuid(v.attempt), result: v.result, headSha: '3f9c2a1b7d', specRevision: 1, cmd: v.cmd, expected: v.expected, actual: v.actual,
       defects: (v.defects as string[]).map((d, i) => ({ defKey: `D-${String(i + 1)}`, text: d, blocking: true, resolved: false })), invalidated: false, at: iso(v.at) });
     (v.evidence as string[]).forEach((p, i) => { ev.push({ id: uuid(`${String(v.id)}9${String(i)}`), taskKey: key, attemptId: null, verificationId: uuid(v.id), checklistItemKey: null, kind: evKind(p), sha256: 'a'.repeat(64), size: 1024 }); });
   }

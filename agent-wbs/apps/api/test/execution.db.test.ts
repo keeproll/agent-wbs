@@ -553,3 +553,42 @@ test('조정자 결정 3(0040): cgroup이 기록된 보유는 같은 경로·그
   await expect(owner.query("update execution_holds set slot_state='none',release_proof='group_empty' where job=$1", [direct.job])).rejects.toThrow(/release proof/);
   await owner.query("update execution_holds set slot_state='none',release_proof='cgroup_empty' where job=$1", [direct.job]);
 });
+
+test('M8 선행: 시계가 뒤로 가도 API의 시도 번호(attemptNo)·검증 순번(seq)과 보고서의 최신 시도·검증은 저장 순서를 따른다', async () => {
+  // QA 시도(번호 1) FAIL → 재검증 시도(번호 2) FAIL. 나중 시도·검증이지만 PC 시계가 뒤로 가서 시각은 2.3초 이르다.
+  const a = await running('qa');
+  await owner.query("update task_attempts set started_at=now()-interval '10 minutes',ended_at=now()-interval '5 minutes',status='completed' where id=$1", [a.attempt]);
+  const v1 = ((await owner.query(`insert into verifications(project_id,attempt,result,head_sha,spec_revision,cmd,expected,actual,created_at)
+    values($1,$2,'FAIL',$3,1,'pnpm test','성공','옛 FAIL',now()-interval '5 minutes') returning id`, [project, a.attempt, sha])).rows[0] as { id: string }).id;
+  const job = ((await owner.query(`insert into runner_jobs(project_id,epoch,kind,payload,dedup_key,state,fence,generation) values($1,1,'attempt',$2,$3,'done',1,1) returning id`,
+    [project, { taskKey: a.key, kind: 'reverify', agent: 'Codex', baseCommit: sha, branch: `agent/${a.key}-h1` }, randomUUID()])).rows[0] as { id: string }).id;
+  const second = ((await owner.query(`insert into task_attempts(project_id,task,attempt_key,attempt_no,job,base_sha,head_sha,spec_revision,input_version,kind,agent,status,started_at,ended_at,model_id,effort,branch,generation)
+    values($1,$2,$3,2,$4,$5,$5,1,$6,'reverify','Codex','completed',now()-interval '10 minutes 2.3 seconds',now()-interval '5 minutes 2.3 seconds','gpt-6.1-sol','high',$7,1) returning id`,
+  [project, a.id, `${a.key}-A2`, job, sha, input, `agent/${a.key}-h1`])).rows[0] as { id: string }).id;
+  const v2 = ((await owner.query(`insert into verifications(project_id,attempt,result,head_sha,spec_revision,cmd,expected,actual,created_at)
+    values($1,$2,'FAIL',$3,1,'pnpm test','성공','최신 FAIL',now()-interval '5 minutes 2.3 seconds') returning id`, [project, second, sha])).rows[0] as { id: string }).id;
+  await owner.query("update tasks set status='rework' where id=$1", [a.id]);
+
+  const attempts = (await get(`tasks/${a.key}/attempts`)).json().items as { id: string; attemptNo: number; startedAt: string }[];
+  const byId = new Map(attempts.map((x) => [x.id, x]));
+  expect([byId.get(a.attempt)?.attemptNo, byId.get(second)?.attemptNo]).toEqual([1, 2]);
+  expect((byId.get(second)?.startedAt ?? '') < (byId.get(a.attempt)?.startedAt ?? '')).toBe(true);
+  for (const path of [`tasks/${a.key}/verifications`, `verifications?taskKey=${a.key}`]) {
+    const res = await get(path);
+    expect(res.statusCode, res.body).toBe(200);
+    const items = res.json().items as { id: string; seq: number; at: string }[];
+    const old = items.find((x) => x.id === v1), latest = items.find((x) => x.id === v2);
+    expect(latest && old && latest.seq > old.seq, path).toBe(true);
+    expect(latest && old && latest.at < old.at, path).toBe(true);
+  }
+
+  const { buildSnapshot } = await import('../src/reports/snapshot.ts');
+  const client = await owner.connect();
+  try {
+    const today = new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10);
+    const snap = await buildSnapshot(client, project, { kind: 'custom', from: today, to: today, at: new Date(Date.now() + 1000).toISOString() }, 'live');
+    const row = snap.active.find((t) => t.taskKey === a.key);
+    expect(row?.lastAttempt?.attemptKey).toBe(`${a.key}-A2`);
+    expect(row?.verification?.id).toBe(v2);
+  } finally { client.release(); }
+});

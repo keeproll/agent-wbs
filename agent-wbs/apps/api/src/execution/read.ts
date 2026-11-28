@@ -3,7 +3,7 @@ import type { PoolClient } from '@awbs/db';
 export interface PageFilter { taskKey?: string; result?: string; cursor?: string; limit?: number }
 /** ID를 정렬·커서로 함께 써서 같은 시각에 기록된 행도 빠뜨리지 않는다. */
 export async function verifications(client: PoolClient, query: PageFilter) {
-  const rows = (await client.query(`select v.id,'V-'||substring(t.task_key from 6)||'-'||(select count(*) from verifications prev join task_attempts pa on pa.id=prev.attempt where pa.task=a.task and pa.attempt_no<=a.attempt_no) "verificationKey",t.task_key "taskKey",a.id "attemptId",v.result,v.head_sha "headSha",v.spec_revision "specRevision",v.cmd,v.expected,v.actual,
+  const rows = (await client.query(`select v.id,v.record_no::float8 seq,'V-'||substring(t.task_key from 6)||'-'||(select count(*) from verifications prev join task_attempts pa on pa.id=prev.attempt where pa.task=a.task and pa.attempt_no<=a.attempt_no) "verificationKey",t.task_key "taskKey",a.id "attemptId",v.result,v.head_sha "headSha",v.spec_revision "specRevision",v.cmd,v.expected,v.actual,
     exists(select 1 from verification_invalidations i where i.verification=v.id) invalidated,
     to_char(v.created_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') at,
     coalesce((select jsonb_agg(jsonb_build_object('defKey',d.def_key,'text',d.content,'blocking',d.blocking,'resolved',exists(select 1 from defect_events e where e.defect=d.id and e.kind='resolved')) order by d.def_key) from defects d where d.verification=v.id),'[]') defects
@@ -22,7 +22,7 @@ export async function evidenceList(client: PoolClient, query: PageFilter) {
 }
 
 export async function attempts(client: PoolClient, taskKey: string, query: PageFilter) {
-  const rows = (await client.query(`select a.id,a.attempt_key "attemptKey",t.task_key "taskKey",a.kind,a.agent,a.status,
+  const rows = (await client.query(`select a.id,a.attempt_key "attemptKey",a.attempt_no "attemptNo",t.task_key "taskKey",a.kind,a.agent,a.status,
     to_char(a.started_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') "startedAt",
     to_char(a.ended_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') "endedAt",
     to_char(a.updated_at at time zone 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') "updatedAt",
