@@ -20,6 +20,9 @@ import { redactText } from '../platform/redact.ts';
 export const SMTP_SECURITY = ['STARTTLS', 'SSL/TLS', '없음'] as const;
 export type SmtpSecurity = (typeof SMTP_SECURITY)[number];
 
+export const SMTP_TLS_REQUIRED = '암호화 없는 SMTP는 운영에서 사용할 수 없습니다. SSL/TLS 또는 STARTTLS를 선택하세요.';
+export const insecureSmtp = (sec: string): boolean => process.env.NODE_ENV === 'production' && sec === '없음';
+
 export interface SmtpTarget {
   host: string;
   port: number;
@@ -91,6 +94,7 @@ async function open(conn: SMTPConnection, target: SmtpTarget): Promise<void> {
 
 /** 연결 확인(POST /api/settings/mail/smtp/check). 로그인까지만 하고 끊는다. */
 export async function checkSmtp(target: SmtpTarget, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<{ ok: boolean; error: string | null }> {
+  if (insecureSmtp(target.sec)) return { ok: false, error: SMTP_TLS_REQUIRED };
   const conn = connection(target, timeoutMs);
   conn.on('error', () => undefined);
   try {
@@ -105,6 +109,7 @@ export async function checkSmtp(target: SmtpTarget, timeoutMs = DEFAULT_TIMEOUT_
 
 /** 한 통 보내기. 예외를 던지지 않고 결과 셋 중 하나를 돌려준다. */
 export async function sendSmtp(target: SmtpTarget, mail: OutgoingMail, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<SendOutcome> {
+  if (insecureSmtp(target.sec)) return { state: 'rejected', error: SMTP_TLS_REQUIRED };
   const raw = await new MailComposer({
     from: mail.from, to: mail.to, subject: mail.subject, text: mail.text, html: mail.html,
     ...(mail.attachments?.length ? { attachments: mail.attachments } : {}),

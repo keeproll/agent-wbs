@@ -9,8 +9,9 @@
  * - 조작: `POST /mode/<accept|auth_fail|…>` → 가짜 SMTP 응답 방식을 바꾼다. `GET /messages` → 받은 메일 수 · 받는 사람 · 링크 수 · PDF 첨부 여부.
  * - PDF 첨부는 가짜 PDF다(Q-13 외부 수신자 시험용). 실제 PDF 변환은 mail 시나리오가 확인한다.
  */
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { join } from 'node:path';
 import { createPool } from '../../packages/db/src/index.ts';
 import { generateDueReports } from '../../apps/api/src/reports/service.ts';
 import { deliverMail } from '../../apps/api/src/mail/deliver.ts';
@@ -22,7 +23,9 @@ if (!url || !portFile) throw new Error('DATABASE_URL, SMTP_PORT_FILE가 필요�
 const appUrl = new URL(url);
 appUrl.searchParams.set('options', '-c role=awbs_app');
 const pool = createPool(appUrl.href, { onError: () => undefined });
-const smtp = new FakeSmtp();
+const tlsDir = process.env.AWBS_E2E_SMTP_TLS_DIR;
+if (!tlsDir) throw new Error('AWBS_E2E_SMTP_TLS_DIR이 필요합니다.');
+const smtp = new FakeSmtp({ key: readFileSync(join(tlsDir, 'server.key')), cert: readFileSync(join(tlsDir, 'server.crt')) });
 const smtpPort = await smtp.start();
 const control = createServer((req, res) => {
   const mode = /^\/mode\/([a-z_]+)$/.exec(req.url ?? '')?.[1];

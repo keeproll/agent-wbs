@@ -5,6 +5,7 @@ import { cliAwareRun } from '../src/cli-update/registry.ts';
 import { loadConfig } from '../src/config.ts';
 import { checkGitHost } from '../src/git/probe.ts';
 import { resultRefspec } from '../src/git/publish.ts';
+import { systemSshCommand } from '../src/git/repository.ts';
 import { verifiedFromPolicy } from '../src/readiness/checks.ts';
 import type { RunCommand } from '../src/readiness/command.ts';
 
@@ -74,6 +75,22 @@ test('M4-06: 시스템 키 번호·소켓·서버 키 목록을 함께 받고, �
   expect(() => loadConfig({ ...base, ...fields, AWBS_SYSTEM_DEPLOY_KEY_ID: '0' })).toThrow(/시스템/);
   expect(() => loadConfig({ ...base, ...fields, AWBS_SYSTEM_SSH_AUTH_SOCK: 'relative.sock' })).toThrow(/절대 경로/);
   expect(() => loadConfig({ ...fields, AWBS_RUNNER_TOKEN: 'x'.repeat(43) })).toThrow(/AWBS_GITHUB_REPO/);
+});
+
+test('W5 E2: 운영 GitHub API override는 HTTPS만 허용한다', () => {
+  const base = { NODE_ENV: 'production', AWBS_RUNNER_TOKEN: 'x'.repeat(43), AWBS_GITHUB_REPO: 'https://github.com/acme/app' };
+  expect(() => loadConfig({ ...base, AWBS_GITHUB_API_URL: 'http://127.0.0.1:9' })).toThrow(/https/);
+  expect(loadConfig({ ...base, AWBS_GITHUB_API_URL: 'https://api.github.com' }).github).toMatchObject({ baseUrl: 'https://api.github.com' });
+  expect(loadConfig({ ...base, NODE_ENV: 'test', AWBS_GITHUB_API_URL: 'http://127.0.0.1:9' }).github).toMatchObject({ baseUrl: 'http://127.0.0.1:9' });
+});
+
+test('W5 T-14: 시스템 SSH push는 지정한 서버 키 목록과 엄격한 확인을 유지한다', () => {
+  const command = systemSshCommand('/tmp/awbs-W5-known hosts');
+  expect(command).toContain('-o StrictHostKeyChecking=yes');
+  expect(command).toContain("-o UserKnownHostsFile='/tmp/awbs-W5-known hosts'");
+  expect(command).toContain('-o GlobalKnownHostsFile=/dev/null');
+  expect(command).not.toMatch(/StrictHostKeyChecking=(?:no|off|accept-new)|UserKnownHostsFile=\/dev\/null/);
+  expect(systemSshCommand("/tmp/awbs-W5-owner's hosts")).toContain("UserKnownHostsFile='/tmp/awbs-W5-owner'\\''s hosts'");
 });
 
 test('봉인 형식 v1 고정 벡터: Runner 시험 사본이 공용 계약 fixture와 같다', async () => {

@@ -18,7 +18,7 @@ import { parseSender } from '@awbs/shared';
 
 /** 보내는 사람 이름 규칙 안내(화면 검사와 같은 문구) */
 export const SENDER_NAME_RULE = '보내는 주소는 「이름 <주소>」 또는 「주소」로 적습니다. 이름은 한글 · 영문 · 숫자 · 공백 · 하이픈만, 40자 이하이고 내부 용어(Task ID 등)를 넣을 수 없습니다 — 외부 수신자 메일에 그대로 보입니다.';
-import { checkSmtp, DEFAULT_TIMEOUT_MS, SMTP_SECURITY, type SmtpSecurity, type SmtpTarget } from './smtp.ts';
+import { checkSmtp, DEFAULT_TIMEOUT_MS, insecureSmtp, SMTP_SECURITY, SMTP_TLS_REQUIRED, type SmtpSecurity, type SmtpTarget } from './smtp.ts';
 
 export interface SmtpView {
   host: string; port: number; sec: string; from: string; user: string; pwSet: boolean; updatedAt: string | null;
@@ -52,6 +52,7 @@ export async function putSmtp(client: PoolClient, body: SmtpInput): Promise<Smtp
   await assertSameVersion(client, before.updatedAt, body.updatedAt, { current: before });
   const errors = [];
   if (!isSecurity(body.sec)) errors.push({ path: 'sec', rule: 'enum', message: `보안 방식은 ${SMTP_SECURITY.join(' · ')} 중 하나입니다.` });
+  if (insecureSmtp(body.sec)) errors.push({ path: 'sec', rule: 'enum', message: SMTP_TLS_REQUIRED });
   if (!body.host.trim()) errors.push({ path: 'host', rule: 'required', message: 'SMTP 서버를 입력하세요.' });
   if (!body.from.trim()) errors.push({ path: 'from', rule: 'required', message: '보내는 주소를 입력하세요.' });
   // 보내는 사람은 허용 목록으로만 받는다(Q-13 fix3): 「이름 <주소>」 또는 「주소」, 이름은 한글 · 영문 · 숫자 · 공백 · 하이픈 40자 이하 · 내부 용어 없음.

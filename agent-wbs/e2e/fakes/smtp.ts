@@ -14,6 +14,9 @@
  * 용어: SMTP = 메일을 보내는 표준 방식. 250·354·451·535 = SMTP 응답 번호(2xx 성공, 3xx 계속, 4xx 일시 실패, 5xx 영구 실패).
  */
 import { createServer, type Server, type Socket } from 'node:net';
+import { createServer as createTlsServer, createSecureContext, TLSSocket, type TlsOptions } from 'node:tls';
+
+type SmtpTls = Pick<TlsOptions, 'key' | 'cert'> & { starttls?: boolean };
 
 export type SmtpMode = 'accept' | 'auth_fail' | 'temp_fail' | 'hold' | 'drop' | 'drop_on_mail';
 export interface SmtpMessage { from: string; to: string[]; raw: string; user: string | null }
@@ -30,10 +33,14 @@ export class FakeSmtp {
   connections = 0;
   private readonly server: Server;
   private readonly sockets = new Set<Socket>();
+  private readonly tls: SmtpTls | undefined;
   port = 0;
 
-  constructor() {
-    this.server = createServer((socket) => { this.session(socket); });
+  constructor(tls?: SmtpTls) {
+    this.tls = tls;
+    this.server = tls && !tls.starttls
+      ? createTlsServer(tls, (socket) => { this.session(socket, true); })
+      : createServer((socket) => { this.session(socket); });
   }
 
   async start(): Promise<number> {
@@ -49,7 +56,7 @@ export class FakeSmtp {
     await new Promise<void>((resolve) => this.server.close(() => { resolve(); }));
   }
 
-  private session(socket: Socket) {
+  private session(socket: Socket, secured = false, greet = true) {
     this.connections++;
     this.sockets.add(socket);
     socket.on('close', () => this.sockets.delete(socket));
@@ -86,7 +93,18 @@ export class FakeSmtp {
       const [verb = '', ...rest] = text.split(' ');
       const arg = rest.join(' ');
       switch (verb.toUpperCase()) {
-        case 'EHLO': say('250-fake.smtp.local'); say('250-AUTH PLAIN LOGIN'); say('250 8BITMIME'); return;
+        case 'EHLO':
+          say('250-fake.smtp.local');
+          if (this.tls?.starttls && !secured) say('250-STARTTLS');
+          say('250-AUTH PLAIN LOGIN'); say('250 8BITMIME'); return;
+        case 'STARTTLS': {
+          if (!this.tls?.starttls || secured) { say('454 TLS unavailable'); return; }
+          say('220 Ready to start TLS');
+          socket.removeAllListeners('data');
+          const upgraded = new TLSSocket(socket, { isServer: true, secureContext: createSecureContext(this.tls) });
+          this.session(upgraded, true, false);
+          return;
+        }
         case 'HELO': say('250 fake.smtp.local'); return;
         case 'AUTH': {
           const [method = '', initial] = arg.split(' ');
@@ -130,7 +148,7 @@ export class FakeSmtp {
         line(text);
       }
     });
-    say('220 fake.smtp.local ESMTP');
+    if (greet) say('220 fake.smtp.local ESMTP');
   }
 }
 

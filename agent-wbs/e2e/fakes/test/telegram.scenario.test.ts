@@ -50,10 +50,9 @@ test('telegram fix1 R1·R5: 제목 수정과 경보 확인은 새 실패 보고�
   expect(await active().rows("select dup_count from notify_events where kind='fail' order by dedup_key")).toEqual([{ dup_count: 0 }, { dup_count: 0 }]);
 });
 
-test.each(['unset', 'http://127.0.0.1:1', 'refused', 'https://api.telegram.org'])('telegram fix1 R2: 수락 전 실패 %s는 failed, 중복 경고 없음', async endpoint => {
+test.each(['invalid', 'http://127.0.0.1:1', 'refused', 'https://example.invalid'])('telegram fix1 R2: 수락 전 실패 %s는 failed, 중복 경고 없음', async endpoint => {
   const f = await connect();
-  if (endpoint === 'unset') delete process.env.AWBS_TELEGRAM_BOT_API_URL;
-  else if (endpoint === 'refused') { await new Promise<void>(resolve => bot?.close(() => resolve())); bot = undefined; }
+  if (endpoint === 'refused') { await new Promise<void>(resolve => bot?.close(() => resolve())); bot = undefined; }
   else process.env.AWBS_TELEGRAM_BOT_API_URL = endpoint;
   const sent = await active().lead('POST', '/api/notify/telegram/test', { chatId: '-4123456789', targetName: '팀장' });
   const { processNotify } = await import('../../../apps/api/src/notify/worker.ts');
@@ -157,7 +156,7 @@ test('telegram fix1: 보낸 뒤 응답 유실은 unknown과 중복 가능 이력
 test('telegram fix1: 응답 시간 초과 뒤 연결 전 실패가 이어져도 수락 불명 이력을 유지한다', async () => {
   const f = await connect(); f.delay(5200);
   await active().lead('POST', '/api/notify/telegram/test', { chatId: '-4123456789', targetName: '팀장' });
-  delete process.env.AWBS_TELEGRAM_BOT_API_URL;
+  process.env.AWBS_TELEGRAM_BOT_API_URL = 'invalid';
   const { processNotify } = await import('../../../apps/api/src/notify/worker.ts');
   for (let n = 1; n <= 5; n++) await processNotify(active().pool, 1, new Date(Date.now() + n * 70_000));
   const log = (await active().lead('GET', `/api/projects/${f.project}/notify/log?kind=test`)).body.items[0];
@@ -387,7 +386,7 @@ test('telegram: 수락 전 실패는 횟수 제한 뒤 failed, 수신 대상 이
   const migrated = await active().lead('POST', '/api/notify/telegram/test', { chatId: '-4123456789', targetName: '팀장' });
   expect(migrated.body.error).toBe('chat_migrated');
   expect((await active().lead('GET', '/api/notify/telegram')).body.chatId).toBe('-4123456789');
-  delete process.env.AWBS_TELEGRAM_BOT_API_URL;
+  process.env.AWBS_TELEGRAM_BOT_API_URL = 'invalid';
   const result = await active().lead('POST', '/api/notify/telegram/test', { chatId: '-4123456789', targetName: '팀장' });
   expect(result.body.error).toBe('network');
   const { processNotify } = await import('../../../apps/api/src/notify/worker.ts');

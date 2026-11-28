@@ -86,6 +86,9 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     if (env.AWBS_GITHUB_API_URL && (!api || !/^https?:$/.test(api.protocol) || api.username || api.password || api.search || api.hash)) {
       problems.push('AWBS_GITHUB_API_URL은 계정·질의 문자열이 없는 http(s) 주소여야 합니다.');
     }
+    if (api && env.NODE_ENV === 'production' && api.protocol !== 'https:') {
+      problems.push('운영 AWBS_GITHUB_API_URL은 https 주소여야 합니다.');
+    }
     if (repo && (mode === 'gh' || mode === 'token')) github = { repo, mode, ...(api && { baseUrl: api.href.replace(/\/+$/, '') }) };
   }
   const keyId = env.AWBS_SYSTEM_DEPLOY_KEY_ID;

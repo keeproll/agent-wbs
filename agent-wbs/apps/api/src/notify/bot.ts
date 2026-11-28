@@ -3,14 +3,15 @@ export interface Bot { id: number; username: string; name: string }
 export interface Chat { chatId: string; title: string; type: string; lastAt?: string }
 export interface BotResult { ok: boolean; error: TelegramError | null; retryAfter: number | null; uncertain?: boolean; result?: Record<string, unknown> | unknown[] }
 
-/** Q-16 결정 전에는 명시한 로컬 fake 서버에만 연결한다. */
+/** 운영은 Telegram 공식 HTTPS 주소만, 로컬 fake 주소는 시험에서만 쓴다. */
 export async function callBot(token: string, method: 'getMe' | 'getUpdates' | 'sendMessage', body: object = {}): Promise<BotResult> {
-  const endpoint = process.env.AWBS_TELEGRAM_BOT_API_URL;
-  if (!endpoint) return { ok: false, error: 'network', retryAfter: null };
+  const endpoint = process.env.AWBS_TELEGRAM_BOT_API_URL ?? 'https://api.telegram.org';
   let attempted = false;
   try {
     const url = new URL(endpoint);
-    if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || url.username || url.password || url.search || url.hash) {
+    const official = url.origin === 'https://api.telegram.org';
+    const fake = process.env.NODE_ENV === 'test' && ['http:', 'https:'].includes(url.protocol) && url.hostname === '127.0.0.1';
+    if ((!official && !fake) || url.pathname !== '/' || url.username || url.password || url.search || url.hash) {
       return { ok: false, error: 'network', retryAfter: null };
     }
     attempted = true;

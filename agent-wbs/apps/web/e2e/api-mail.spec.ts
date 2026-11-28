@@ -48,8 +48,9 @@ test('빈 상태 → SMTP 설정 · 연결 확인 → 받는 사람 추가 오�
   await smtp.getByRole('button', { name: '저장' }).click();
   await expect(smtp.getByRole('alert')).toHaveText('SMTP 서버를 입력하세요.');
   await smtp.getByLabel('SMTP 서버').fill('127.0.0.1');
-  await smtp.getByRole('button', { name: '암호화 없음 (사내 릴레이)' }).click();
-  await expect(smtp.getByLabel('포트')).toHaveValue('25');
+  await expect(smtp.getByRole('button', { name: /암호화 없음/ })).toHaveCount(0);
+  await smtp.getByRole('button', { name: 'SSL/TLS (465)' }).click();
+  await expect(smtp.getByLabel('포트')).toHaveValue('465');
   await smtp.getByLabel('포트').fill(String(fake?.smtpPort));
   await smtp.getByLabel('보내는 주소').fill('Agent WBS <agent-wbs@example.com>');
   await smtp.getByLabel('계정').fill(fake?.user ?? '');
